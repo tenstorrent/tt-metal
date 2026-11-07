@@ -138,7 +138,8 @@ class TtV4AttentionBase(LightweightModule):
     def needs_head_to_seq_reshard(self) -> bool:
         """True when the per-chip head shard is too thin for ``sparse_sdpa``, which needs H % 32 == 0 and
         H >= 32. V4-Flash's 64 heads at tp=4 give 16, so it does; V4-Pro's 128 give 32, so it does not.
-        Mirrors ``ttMLA._needs_head_to_seq_reshard``, which solves the same problem for GLM."""
+        ttMLA reshards at every TP > 1 (``ttMLA.reshards_heads_to_seq``); V4 has not been measured
+        that way and keeps the thin-shard rule."""
         heads_local = self.num_heads // self.tp_factor
         return self.tp_factor > 1 and (heads_local < 32 or heads_local % 32 != 0)
 

@@ -162,8 +162,7 @@ namespace ttml::metal {
 // The helpers below mirror the Program-based create_* helpers above, with the same parameter order minus the Program.
 // ---------------------------------------------------------------------------------------------------------------------
 
-// CBs get merged core ranges, as CreateCircularBuffer gives them (Program::add_circular_buffer merges; building from a
-// CBDescriptor does not), so a CB covers the same rectangles as in a Program-built factory.
+// Program(const ProgramDescriptor&) merges a CB's core ranges, as CreateCircularBuffer does, so they go in as given.
 inline tt::tt_metal::CBDescriptor make_cb_descriptor(
     const tt::tt_metal::CoreRangeSet& core_ranges,
     uint32_t cb_index,
@@ -172,7 +171,7 @@ inline tt::tt_metal::CBDescriptor make_cb_descriptor(
     uint32_t num_tiles) {
     return tt::tt_metal::CBDescriptor{
         .total_size = num_tiles * single_tile_size,
-        .core_ranges = core_ranges.merge_ranges(),
+        .core_ranges = core_ranges,
         .format_descriptors = {{tt::tt_metal::CBFormatDescriptor{
             .buffer_index = static_cast<uint8_t>(cb_index),
             .data_format = data_format,
@@ -190,7 +189,7 @@ inline tt::tt_metal::CBDescriptor make_cb_descriptor_bytes(
     uint32_t page_size_bytes = 0U) {
     return tt::tt_metal::CBDescriptor{
         .total_size = total_bytes,
-        .core_ranges = core_ranges.merge_ranges(),
+        .core_ranges = core_ranges,
         .format_descriptors = {{tt::tt_metal::CBFormatDescriptor{
             .buffer_index = static_cast<uint8_t>(cb_index),
             .data_format = data_format,

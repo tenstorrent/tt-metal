@@ -3,12 +3,24 @@
 
 """MiniMax-H3 with a lightx2v Turbo distillation adapter merged into the transformer weights.
 
-`num_inference_steps` counts sigma grid points, so a 4-forward adapter runs at 5 and an 8-forward one at 9.
-The 768p files were distilled at video shift 6, not the checkpoint's 12. A HyperFlow file fixes its own
-grid (see `hyperflow_minimax_h3`); its float32 time-embedder deltas are fused on host, not via bfloat16 LoRA.
+The adapter is a plain low-rank delta over the attention and feed-forward weights, so the generation
+path is the base pipeline's: same packing, schedulers, VAE and audio decode. What changes is the
+transformer's weights, the step count the caller asks for, and for the 768p files the video shift.
+Those three travel together here rather than as switches on the base class.
 
 The adapter is merged on host in float32 and rounded to bfloat16 stochastically: its deltas are mostly
 below half a bfloat16 ulp of the weights, so a round-to-nearest merge would drop them.
+
+A Turbo file publishes no sampling contract in its header. The caller supplies the step count, and
+`num_inference_steps` counts sigma grid points, so a 4-forward adapter runs at 5 and an 8-forward one
+at 9. The model card's shift for the file goes in `video_shift`; the 768p variants were distilled at
+6 against the checkpoint's 12, and a wrong shift is a valid schedule over the wrong grid.
+
+A HyperFlow file does publish a contract (see `hyperflow_minimax_h3`): its own sigma grid, and
+interval `(t, r)` conditioning through a second, adapted time embedder. The step count then comes
+from the file and any other is refused, except during warmup, whose output is discarded and which
+keeps its short schedule. Both time embedders are float32 on device and the file ships their adapters
+in float32, so they are fused in float32 and never rounded to bfloat16.
 """
 
 from __future__ import annotations
@@ -54,7 +66,11 @@ def _file_digest(path: Path) -> str:
 
 
 class MiniMaxH3TurboPipeline(MiniMaxH3Pipeline):
-    """`MiniMaxH3Pipeline` with a Turbo adapter; `lora_strength` multiplies the file's `alpha / rank`."""
+    """`MiniMaxH3Pipeline` whose transformer carries a lightx2v Turbo adapter.
+
+    `lora_strength` multiplies the adapter's own `alpha / rank`, which the loader reads from the file;
+    1.0 runs the adapter as trained.
+    """
 
     def __init__(
         self,
@@ -96,7 +112,11 @@ class MiniMaxH3TurboPipeline(MiniMaxH3Pipeline):
         audio_shift: float | None = None,
         **kwargs,
     ) -> MiniMaxH3TurboPipeline:
-        """Unset adapter arguments fall back to the `MINIMAX_H3_*` environment (see `resolve_adapter_settings`)."""
+        """`lora_path`, `lora_strength`, `video_shift` and `audio_shift` fall back to `MINIMAX_H3_LORA_PATH`,
+        `MINIMAX_H3_LORA_STRENGTH`, `MINIMAX_H3_VIDEO_SHIFT` and `MINIMAX_H3_AUDIO_SHIFT`.
+
+        Everything else is `MiniMaxH3Pipeline.create_pipeline`'s.
+        """
         settings = resolve_adapter_settings(
             lora_path=lora_path,
             lora_strength=lora_strength,
@@ -118,7 +138,8 @@ class MiniMaxH3TurboPipeline(MiniMaxH3Pipeline):
         )
 
     def __call__(self, prompt: str, *, num_inference_steps: int | None = None, **kwargs):
-        """`num_inference_steps=None` takes a HyperFlow adapter's grid, else the base default."""
+        """`num_inference_steps=None` takes a HyperFlow adapter's own grid; a plain Turbo adapter
+        publishes none, so it keeps the base pipeline's default."""
         if num_inference_steps is None and self.hyperflow is not None:
             num_inference_steps = self.hyperflow.num_grid_points
         if num_inference_steps is not None:
@@ -202,7 +223,7 @@ class MiniMaxH3TurboPipeline(MiniMaxH3Pipeline):
         return states
 
     def _read_checkpoint_tensors(self, keys: list[str]) -> dict[str, torch.Tensor]:
-        """A few named tensors from the transformer partition, without reading all 62 GB."""
+        """A few named tensors from the transformer partition, without reading the other 62 GB."""
         directory = self.weights_dir / self.transformer_subfolder
         index = directory / "diffusion_pytorch_model.safetensors.index.json"
         if index.is_file():

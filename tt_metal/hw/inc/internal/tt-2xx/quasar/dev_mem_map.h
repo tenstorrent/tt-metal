@@ -273,10 +273,19 @@
 #error "Dispatch cached semaphore pool must start on a 64B cache line"
 #endif
 
+// Watcher ring buffer head, taken with a cached AMO. Nothing else may share its line: writing back the dirty line
+// would clobber neighbours written through the uncached alias.
+#define MEM_DISPATCH_WATCHER_RING_HEAD MEM_DISPATCH_SEM_REGIONS_END
+#define MEM_DISPATCH_WATCHER_RING_HEAD_END (MEM_DISPATCH_WATCHER_RING_HEAD + 64)
+#if (MEM_DISPATCH_WATCHER_RING_HEAD % 64 != 0)
+#error "Dispatch watcher ring buffer head must start on a 64B cache line"
+#endif
+
 // Everything above shifts with MEM_DISPATCH_MAP_END, so round the whole span up to the 2 kB L1 cache set
 // period: otherwise the kernel config ring and kernel text land on different sets.
-#define MEM_DISPATCH_MAP_END \
-    (MEM_DISPATCH_SEM_REGIONS_BASE + (((MEM_DISPATCH_SEM_REGIONS_END - MEM_DISPATCH_SEM_REGIONS_BASE) + 2047) & ~2047))
+#define MEM_DISPATCH_MAP_END         \
+    (MEM_DISPATCH_SEM_REGIONS_BASE + \
+     (((MEM_DISPATCH_WATCHER_RING_HEAD_END - MEM_DISPATCH_SEM_REGIONS_BASE) + 2047) & ~2047))
 
 // Pre-resolved form of the two layouts, so shared device code names one symbol instead of its own #if.
 #if defined(COMPILE_FOR_DISPATCH_ENGINE)
