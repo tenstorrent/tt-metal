@@ -6424,7 +6424,7 @@ class MTPSpecEngine:
             K=K,
             M=fs.M,
             top_p=sampling["top_p"],
-            topp_edges=getattr(fs, "_kernel", None) is not None,
+            topp_tail=getattr(fs, "_kernel", None) is not None,
         )
         bad = [
             u

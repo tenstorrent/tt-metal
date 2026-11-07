@@ -566,8 +566,9 @@ class FusedSampledDevice(FusedGreedyDevice):
         """
         import ttnn
 
-        if self._kernel is not None and not cert:  # QWEN36_SPEC_ACCEPT_KERNEL_SAMPLED: one program instead of the op graph
-            # (the kernel has no certificate: the cert variant always records the op graph on the same buffers)
+        # QWEN36_SPEC_ACCEPT_KERNEL_SAMPLED: one program instead of the op graph. The kernel has no certificate: the
+        # certificate / mask variant (cert=True, phase 2/3) always records the op graph below on the same buffers.
+        if self._kernel is not None and not cert:
             self._kernel.run()
             return
         B, K, T, R, W, nb, M = self.B, self.K, self.T, self.R, self.W, self.nb, self.M
@@ -937,7 +938,7 @@ def merge_redo(dev_committed, dev_counts, redo_committed, redo_counts, users):
 
 
 def audit_boundary_users(
-    ref, uniforms, committed, counts, drafts, num_valid, *, B, K, M, eps=1e-5, top_p=None, topp_eps=1e-6, topp_edges=True
+    ref, uniforms, committed, counts, drafts, num_valid, *, B, K, M, eps=1e-5, top_p=None, topp_eps=1e-6, topp_tail=True
 ):
     """Users whose device result differs from ``ref`` (fused_sampled_reference) but only by a float32 boundary: an examined draft
     probability within ``eps`` of its uniform (accept test), or the inverse-CDF threshold within ``eps`` (relative to the total)
@@ -946,9 +947,10 @@ def audit_boundary_users(
     With ``top_p`` [B] and a reference built with ``full_norm`` (ref.cert_q, phase 2), a certificate row of the user within
     ``eps`` of the certificate margin (|q - p| < eps) or of the nucleus cut (|cum - (1 - p / q)| < eps) in an examined column is
     the explained reason "cert".
-    With ``top_p`` and ``topp_edges`` (QWEN36_SPEC_ACCEPT_KERNEL_SAMPLED; the engine passes topp_edges only with the kernel on):
+    With ``top_p`` and ``topp_tail`` (QWEN36_SPEC_ACCEPT_KERNEL_SAMPLED; the engine passes topp_tail only with the kernel on):
     also a top-p tail edge, a kept candidate's reverse cumsum within ``topp_eps`` of 1 - top_p on a row either walk examined
-    (the kernel's float32 rounding differs from torch's, so the kept set of such a row can differ by its edge candidate)."""
+    (the kernel's float32 rounding differs from torch's, so the kept set of such a row can differ by its edge candidate).
+    """
     committed, counts = torch.as_tensor(committed).to(torch.int64), torch.as_tensor(counts).to(torch.int64)
     rc, rn = ref.committed.to(torch.int64), ref.counts.to(torch.int64)
     uni = torch.as_tensor(uniforms).reshape(B, K + 2).to(torch.float64)
@@ -990,7 +992,7 @@ def audit_boundary_users(
             if bool((((cdf - thr).abs()) < eps * float(cdf[-1])).any()):
                 out[u] = "pick"
                 continue
-        if top_p is not None and topp_edges:
+        if top_p is not None and topp_tail:
             omp = 1.0 - float(torch.as_tensor(top_p).reshape(-1)[u])
             if omp > 0:
                 rows = max(int(counts[u]), int(rn[u]))  # columns 0 .. rows - 1 were examined by one walk or the other

@@ -4255,7 +4255,8 @@ class Qwen36Model:
         if not handle.post_pending:
             raise ValueError("verify_enqueue_post: the handle has no pending second half")
         bk = None
-        if handle.bucket is not None:  # a row bucket, or a split variant (QWEN36_ATTN_KV_SPLIT gate, B-row width included)
+        # a row bucket, or a split variant (QWEN36_ATTN_KV_SPLIT gate, B-row width included)
+        if handle.bucket is not None:
             bk = (self._vfy_bk_ksp if getattr(handle, "kv_split", False) else self._vfy_bk)[handle.bucket]
         _topk_tid = getattr(self, "_vfy_topk_trace_id", None) if bk is None else bk.topk_trace_id
         _stats_tid = getattr(self, "_vfy_stats_trace_id", None) if bk is None else bk.stats_trace_id
