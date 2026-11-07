@@ -441,11 +441,14 @@
       "task_containers": 0
     },
     "larger-gpqa160-c8": {
-      "batch": 8,
+      "eval": "r1_gpqa_diamond",
       "planned_clients": 8,
+      "batch": 8,
       "max_num_seqs": 8,
       "pool_ids": 20480,
-      "batch_reason": "Smallest validated batch>=8; accepted C8/40 aggregate gain and valid80 capacity"
+      "reason": "Smallest validated batch at or above8 clients; same80 measured C8 configuration benefit; valid160 completion confirms actual occupancy.",
+      "run_id": 42353554865,
+      "evidence": "runs/larger-gpqa160-c8/RESULT.json"
     },
     "early-gpqa160-candidate-dry": {
       "batch": 8,
@@ -625,32 +628,34 @@
   },
   "measured_suites": {
     "r1_gpqa_diamond": {
-      "functional_at": 80,
+      "functional_at": 160,
       "planned_clients": 8,
       "batch": 8,
       "score": {
         "name": "r1_gpqa_diamond exact_match",
-        "value": 0.7,
-        "correct": 56,
-        "completed_samples": 80,
+        "value": 0.71875,
+        "correct": 115,
+        "completed_samples": 160,
         "dataset_samples": 198,
         "scope": "subset",
         "wilson95": [
-          0.5923184607866026,
-          0.7893542873991866
+          0.6445855244726805,
+          0.7826567651397861
         ],
         "published_reference_percent": 84.3,
         "gpu_reference_percent": 83.33,
         "score_gate": false
       },
-      "eval_hours": 4.281694641051452,
+      "eval_hours": 7.474425582055054,
+      "device_job_hours": 7.6466666666666665,
       "request_timeout_seconds": 14400,
       "max_output_tokens": 126976,
       "observed_processed_cache_tokens_max": 127456,
-      "native_prompt_tokens_median": 229,
-      "total_physical_decode_samples": 2114531,
-      "evidence": "runs/gpqa80-c8-saturation-comparison/RESULT.json",
-      "comparison_evidence": "runs/larger-gpqa80-c4-native-logging/RESULT.json"
+      "native_prompt_tokens_median": 231.5,
+      "total_physical_decode_samples": 3597724,
+      "native_reply_count": 160,
+      "evidence": "runs/larger-gpqa160-c8/RESULT.json",
+      "scope": "Valid frozen160; physical positions exclude first-prefill sample and do not prove exact emitted-ID coverage."
     },
     "swe_bench_verified": {
       "functional_at": 2,
@@ -887,5 +892,69 @@
     "c8_runner": "120-qb2-p05t01",
     "scope": "Same frozen80, same TT/image/plugin/sampling/full limits; C4/default10248 pool versus C8/expanded20480 pool on different granted CI hosts, overlapping wall-clock runs. Matched work and output support measured configuration benefit; not an isolated causal concurrency experiment or guarantee for160/198.",
     "comparator_evidence": "runs/gpqa80-c8-saturation-comparison/RESULT.json"
+  },
+  "historical_measured_gpqa80": {
+    "functional_at": 80,
+    "planned_clients": 8,
+    "batch": 8,
+    "score": {
+      "name": "r1_gpqa_diamond exact_match",
+      "value": 0.7,
+      "correct": 56,
+      "completed_samples": 80,
+      "dataset_samples": 198,
+      "scope": "subset",
+      "wilson95": [
+        0.5923184607866026,
+        0.7893542873991866
+      ],
+      "published_reference_percent": 84.3,
+      "gpu_reference_percent": 83.33,
+      "score_gate": false
+    },
+    "eval_hours": 4.281694641051452,
+    "request_timeout_seconds": 14400,
+    "max_output_tokens": 126976,
+    "observed_processed_cache_tokens_max": 127456,
+    "native_prompt_tokens_median": 229,
+    "total_physical_decode_samples": 2114531,
+    "evidence": "runs/gpqa80-c8-saturation-comparison/RESULT.json",
+    "comparison_evidence": "runs/larger-gpqa80-c4-native-logging/RESULT.json"
+  },
+  "validated160_candidate": {
+    "runtime": {
+      "tt_metal_sha": "f57978407eaacf09587f5793b8ae46ca7af839ea",
+      "tti_sha": "8b9623a7f1ccee85c04319e4c83e00f974322201",
+      "vllm_sha": "ca7a18246e4111629ed6cb4a7d1192002749fccf",
+      "docker_image": "ghcr.io/tenstorrent/tt-agentic-bringup-qb2/vllm-tt-metal-src-dev-ubuntu-22.04-amd64@sha256:ae8bf2ac98d004471bc58959995dd25dc04cc76bb250b794d746bc073ac8f7fe",
+      "runner": "120-qb2-p05t01",
+      "full_layers": 60,
+      "planned_clients": 8,
+      "batch": 8,
+      "max_num_seqs": 8,
+      "context": 262144,
+      "pool_ids": 20480,
+      "native_logging_version": 2
+    },
+    "projection": {
+      "measured_eval_hours": 7.474425582055054,
+      "measured_device_hours": 7.6466666666666665,
+      "measured_non_eval_hours": 0.17224108461161247,
+      "queue_allowance_hours": 0.8494444444444444,
+      "postprocessing_reserve_hours": 0.02,
+      "postprocessing_reserve_is_guess": true,
+      "measured_extra_tail_hours": 1.9259350560771094,
+      "projection_hours": 10.44204616718822,
+      "run_timeout_hours": 12,
+      "decision": "go",
+      "functional_at": 160,
+      "scope": "Measured repeat160 plus queue, guessed postprocess reserve and one extra measured longest native request; empirical sensitivity, not a bound.",
+      "evidence": "runs/larger-gpqa160-c8/RESULT.json"
+    },
+    "full198_decision": "stop",
+    "full198_projection_hours": 12.217222242926296,
+    "dry_evidence": "runs/early-gpqa160-candidate-dry/RESULT.json",
+    "status": "valid_rung_and_dry_evidence; coordinator_owns_release_selection_dispatch",
+    "evidence": "runs/larger-gpqa160-c8/RESULT.json"
   }
 }

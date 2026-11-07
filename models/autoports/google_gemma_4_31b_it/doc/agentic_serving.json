@@ -2,25 +2,25 @@
   "workload": {
     "target_concurrency": 8,
     "working_set_tokens": 131072,
-    "typical_context_tokens": 229.0,
-    "source": "Valid C8/80 phase/harness association; capacity separately confirmed at131072 per agent.",
+    "typical_context_tokens": 231.5,
+    "source": "Valid C8/160 phase/harness association and complete native replies; capacity separately confirmed at131072 per agent.",
     "measured_by_eval": {
       "r1_gpqa_diamond": {
         "target_concurrency": 8,
         "observed_peak_running": 8,
         "working_set_tokens": 131072,
         "observed_processed_cache_tokens_max": 127456,
-        "typical_context_tokens": 229.0,
+        "typical_context_tokens": 231.5,
         "prompt_tokens_min": 99,
         "prompt_tokens_max": 2428,
-        "prompt_tokens_total": 21919,
-        "completed_tasks": 80,
-        "total_physical_decode_samples": 2114531,
+        "prompt_tokens_total": 41854,
+        "completed_tasks": 160,
+        "total_physical_decode_samples": 3597724,
         "source": [
-          "doc/agentic_evals/runs/gpqa80-c8-saturation-comparison/RESULT.json",
+          "doc/agentic_evals/runs/larger-gpqa160-c8/RESULT.json",
           "doc/agentic_evals/runs/gpqa-b8-expanded-pool/local-confirmation.json"
         ],
-        "scope": "Valid frozen80 single-turn GPQA at C8. Retained physical positions/work exclude prefill samples and do not prove exact emitted-ID coverage."
+        "scope": "Valid frozen160 single-turn GPQA at C8. Retained positions/work exclude prefill samples; exact API emitted counts are separately native observed, not inferred. Working-set131072 is separately validated capacity."
       },
       "swe_bench_verified": {
         "target_concurrency": 2,
@@ -70,6 +70,23 @@
       "working_set_tokens": 107585,
       "typical_context_tokens": 31755,
       "source": "Conservative observed stress target107585/typical31755 retained from prior quarantined real SWE workload; valid smoke per-suite measurements recorded separately below. No unsupported capacity claim."
+    },
+    "historical_gpqa80_workload": {
+      "target_concurrency": 8,
+      "observed_peak_running": 8,
+      "working_set_tokens": 131072,
+      "observed_processed_cache_tokens_max": 127456,
+      "typical_context_tokens": 229.0,
+      "prompt_tokens_min": 99,
+      "prompt_tokens_max": 2428,
+      "prompt_tokens_total": 21919,
+      "completed_tasks": 80,
+      "total_physical_decode_samples": 2114531,
+      "source": [
+        "doc/agentic_evals/runs/gpqa80-c8-saturation-comparison/RESULT.json",
+        "doc/agentic_evals/runs/gpqa-b8-expanded-pool/local-confirmation.json"
+      ],
+      "scope": "Valid frozen80 single-turn GPQA at C8. Retained physical positions/work exclude prefill samples and do not prove exact emitted-ID coverage."
     }
   },
   "batch_sizes": [

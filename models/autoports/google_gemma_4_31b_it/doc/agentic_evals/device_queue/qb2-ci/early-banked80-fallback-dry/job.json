@@ -142,5 +142,6 @@
   "exit_status": 1,
   "actual_hours": 1.9088888888888889,
   "actual_hours_basis": "CI device job including setup/server/client; evaluation time separate",
-  "workflow_wall_hours": 1.9127777777777777
+  "workflow_wall_hours": 1.9127777777777777,
+  "audit": "runs/early-banked80-fallback-dry/RESULT.json"
 }

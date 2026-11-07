@@ -1,0 +1,22 @@
+{
+  "arm": "frozen-benchmark-release",
+  "device": "local",
+  "status": "queued",
+  "purpose": "Frozen final benchmark matrix and exact4096/128/B1/C1 headline; no repairs or redispatch",
+  "planned_clients": 1,
+  "batch": 1,
+  "max_num_seqs": 1,
+  "predicted_device_hours": 0.0752905511111111,
+  "admission_hours": 0.15,
+  "device_hour_box": 0.15,
+  "freeze": "runs/framed-benchmark-dry/freeze.json",
+  "dry_evidence": "runs/framed-benchmark-dry/RESULT.json",
+  "artifact_root": "bringup/artifacts/framed-benchmark-release-run",
+  "queued_at": "2026-11-07T15:49:20.998727+00:00",
+  "argv": [
+    "python_env/bin/python",
+    "bringup/artifacts/stage12-framed-benchmark-dry/run.py",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/bringup/artifacts/framed-benchmark-release-run"
+  ],
+  "batch_reason": "Smallest supported batch for serial matrix/headline requests; exact dry measured"
+}

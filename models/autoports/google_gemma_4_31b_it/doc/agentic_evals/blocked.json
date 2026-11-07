@@ -1,5 +1,5 @@
 {
-  "status": "stage_active_gpqa80_valid_160_admitted_fallback40_dry_passed",
+  "status": "release_running_frozen160_and_local_matrix",
   "blockers": [
     {
       "id": "local-sandbox-runtime",
@@ -33,13 +33,11 @@
     "account_fallback": null
   },
   "remaining_work": [
-    "Complete admitted160 and reproject198 from measured time",
-    "Complete final-cohort frozen dry and unchanged release including benchmark matrix",
-    "C4/80 normal-rung audit owns eventual paired comparison; no delay to valid80 progression",
-    "One closure review and stage gate"
+    "Complete and audit unchanged GPQA160 release42388198738 and local benchmark release",
+    "One final closure review and stage gates; preserve unresolved disk and checker limitations"
   ],
   "initial_stop_at": "2026-11-06T04:33:36.867416+00:00",
-  "updated_at": "2026-11-07T07:59:46.996210+00:00",
+  "updated_at": "2026-11-07T15:50:54.509629+00:00",
   "completed_preparation": [
     "Fresh autoport registry and suite entries published; full host suite3737 passed15 skipped",
     "Stratified task cohorts frozen before scores",
@@ -47,9 +45,9 @@
   ],
   "live_wait": {
     "run_ids": [
-      42323448662
+      42388198738
     ],
-    "status": "C8/80 complete and banked; C4/80 comparator pending; coordinator owns160 and candidate dry dispatch"
+    "status": "Frozen release running; no repairs or redispatch"
   },
   "release_route_decision_request": {
     "at": "2026-11-06T05:12:13.370191+00:00",
@@ -115,7 +113,7 @@
         }
       }
     },
-    "resolution": "SWE and Terminal measuredstops leave HTTP-onlyGPQA pluslocalbenchmark. Exact early-stop dry is feasible inprinciple with initialrequestID/reply logs; no exception to no-score rule assumed. Actual frozen dry pending."
+    "resolution": "Exact operational dry160 and local matrix passed; selected frozen release running."
   },
   "release_dependency_freeze": {
     "status": "Harbor_pin_live_confirmed",
@@ -192,17 +190,18 @@
     }
   },
   "initial_agent_reply_observability": {
-    "status": "original2_framed_CI_transport_confirmed_fullcap_dry_in_progress",
+    "status": "solved_exact160_dry_passed",
     "observed_at": "2026-11-06T21:49:49.076105+00:00",
     "problem": "StockCI grep-v-i INFO strips native records and responsecontent; workflow remains unchanged",
     "evidence": [
       "runs/ci-native-large-reply-visibility/RESULT.json",
-      "runs/ci-native-large-reply-visibility/AUTOFIX.md"
+      "runs/ci-native-large-reply-visibility/AUTOFIX.md",
+      "runs/early-gpqa160-candidate-dry/RESULT.json"
     ],
     "action": "Fresh AutoDebug/AutoFix source investigation; no runtime or route change authorized implicitly. Normal rungs continue independently.",
     "otlp": "Stock host request-finish spans exist, but collector/read route unavailable; no device profiler used or proposed.",
     "solution": "Model-only explicit native hex logging preserves exact stock records through filter; private observer decodes",
-    "remaining": "Actual f579 original2 transport/exactness passed42334508049. Early frozen40 dry42339332447 is testing fullcap initial8 replies and timely pre-score observation; no dry pass yet.",
+    "remaining": "none for dry; release final integrity audit pending",
     "ci_run_id": 42296943044,
     "ci_observation": "42302118669: two initial IDs and complete replies visible, matching harness outputs; first snapshot already scored, so not a dry pass",
     "diagnosis_effort": "runs/ci-response-log-propagation/plan.md",

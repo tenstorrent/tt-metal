@@ -1,22 +1,22 @@
 {
-  "status": "GPQA80 valid C8 selected with measured same80 configuration benefit;160 admitted;198 reproject after160; tool-suite measured stops",
+  "status": "Valid GPQA160 C8 go; measured full198 stop at functional_at160; tool-suite measured stops unchanged",
   "evals": {
     "r1_gpqa_diamond": {
       "decision": "go",
-      "reason": "Valid frozen80 C8:56/80; complete retained chains classify13 capped failures. Coordinator admits next160 using measured-tail plus0.02h reserve11.656151h; full4h sensitivity13.699195h exceeds12 and is not a bound. Completed C4/80 comparison now matches all80 outputs/chains/work; C8 observed2.614273h/37.9102% shorter with host/pool caveats; admitted160 projection unchanged.",
-      "functional_at": 80,
-      "projected_hours": 11.65615118558173,
-      "score": 0.7,
+      "reason": "Completed valid160 at C8, score115/160 with complete native and retained-phase evidence. Repeat160 empirical projection10.442046h fits12h. Next full198 measured-density plus observed tail projects12.217222h and stops at functional_at160; no score gate.",
+      "functional_at": 160,
+      "projected_hours": 10.44204616718822,
+      "score": 0.71875,
       "confidence_interval_95": [
-        0.5923184607866026,
-        0.7893542873991866
+        0.6445855244726805,
+        0.7826567651397861
       ],
-      "full_suite_decision": "stop_current_projection_reassess_after_valid160",
-      "full_suite_stop_evidence": "runs/full-gpqa-observable/stop.json",
-      "evidence": "runs/gpqa80-c8-saturation-comparison/RESULT.json",
-      "full_suite_prior_stop_scope": "Earlier C2 partial run; not a currentC4/C8 full-suite impossibility claim",
+      "full_suite_decision": "stop",
+      "full_suite_stop_evidence": "runs/larger-gpqa160-c8/RESULT.json",
+      "evidence": "runs/larger-gpqa160-c8/RESULT.json",
+      "full_suite_prior_stop_scope": "Earlier C2 partial stop retained historically; current full198 stop is based on valid160 C8 measurements.",
       "selected_concurrency": 8,
-      "latest_measured_eval_hours": 4.281694641051452,
+      "latest_measured_eval_hours": 7.474425582055054,
       "c8_80_projection": {
         "eval_linear_hours": 5.002363408263773,
         "measured_allocated_non_eval_hours": 0.3315960736458914,
@@ -33,9 +33,10 @@
         "latest_dispatch_empirical_tail": "2026-11-07T03:43:44.820225+00:00",
         "latest_dispatch_full_timeout_sensitivity": "2026-11-07T01:34:36.745865+00:00",
         "assumptions": "Linear doubled40 work, same C8/B8/expandedpool/source, reused image, observed job overhead including AI-summary delay, recent queue allowance. Extra longest observed chain models one more tail wave but is not a bound; new80 tail mix and logging contention unknown. Full4h sensitivity fits12h per-run but misses first-dry reserve if dispatched now.",
-        "candidate80": "42dc40754e465cf8c9ec993027ff59d3c936832c; coordinator must verify immutable source tree/baseline before dispatch."
+        "candidate80": "42dc40754e465cf8c9ec993027ff59d3c936832c; coordinator must verify immutable source tree/baseline before dispatch.",
+        "status": "historical"
       },
-      "projection_scope": "Next160 measured-density extrapolation; no release completion claim",
+      "projection_scope": "Current measured repeat160 release candidate; full198 stopped on measured extrapolation, no guarantee or completed-release claim.",
       "c8_80_comparison": {
         "run_id": 42332785769,
         "status": "completed_valid_same80_gain_confirmed",
@@ -49,7 +50,7 @@
         "task_count": 80,
         "planned_clients": 4,
         "batch": 8,
-        "status": "submitted",
+        "status": "historical",
         "run_id": 42323448662,
         "submitted_at": "2026-11-07T01:19:36Z",
         "url": "https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/42323448662",
@@ -60,27 +61,26 @@
         "source": "runs/larger-gpqa80-c4-native-logging/manifest.json"
       },
       "next_rung": {
-        "tasks": 160,
-        "planned_clients": 8,
-        "batch": 8,
-        "status": "coordinator_admitted",
-        "projected_workflow_hours": 9.699194641051452,
-        "measured_tail_sensitivity_hours": 11.63615118558173,
-        "postprocessing_reserve_hours": 0.02,
-        "admission_projection_hours": 11.65615118558173,
-        "full_timeout_sensitivity_hours": 13.699194641051452,
-        "source": "runs/gpqa80-c8-saturation-comparison/RESULT.json"
+        "tasks": 198,
+        "decision": "stop",
+        "functional_at": 160,
+        "reason": "Projected12.217222h exceeds12h with measured longest native tail.",
+        "evidence": "runs/larger-gpqa160-c8/RESULT.json"
       },
       "full_suite_projection": {
-        "linear_eval_hours": 10.597194236602343,
-        "measured_setup_hours": 0.2863609145041037,
+        "tasks": 198,
+        "decision": "stop",
+        "functional_at": 160,
+        "linear_eval_hours": 9.24960165779313,
+        "measured_non_eval_hours": 0.17224108461161247,
         "queue_allowance_hours": 0.8494444444444444,
-        "point_workflow_hours": 11.73299959555089,
-        "extra_measured_tail_hours": 1.9369565445302779,
-        "measured_tail_sensitivity_hours": 13.669956140081167,
-        "full4h_timeout_sensitivity_hours": 15.73299959555089,
-        "measured_tail_sensitivity_fits12h": false,
-        "scope": "Measured-density extrapolation plus one extra observed longest capped wave; not bound. Full4h request timeout unchanged. Schedule/dry budget admission belongs to coordinator;198 requires preceding valid160."
+        "postprocessing_reserve_hours": 0.02,
+        "postprocessing_reserve_is_guess": true,
+        "measured_extra_tail_hours": 1.9259350560771094,
+        "projection_hours": 12.217222242926296,
+        "run_timeout_hours": 12,
+        "reason": "Measured density extrapolation plus extra observed tail exceeds12h; full198 not dispatched.",
+        "evidence": "runs/larger-gpqa160-c8/RESULT.json"
       },
       "same80_comparison": {
         "comparator_run_id": 42332785769,
@@ -101,6 +101,79 @@
         "c8_runner": "120-qb2-p05t01",
         "scope": "Same frozen80, same TT/image/plugin/sampling/full limits; C4/default10248 pool versus C8/expanded20480 pool on different granted CI hosts, overlapping wall-clock runs. Matched work and output support measured configuration benefit; not an isolated causal concurrency experiment or guarantee for160/198.",
         "comparator_evidence": "runs/gpqa80-c8-saturation-comparison/RESULT.json"
+      },
+      "historical_pre160_forecasts": {
+        "c8_80_projection": {
+          "eval_linear_hours": 5.002363408263773,
+          "measured_allocated_non_eval_hours": 0.3315960736458914,
+          "point_including_device_overhead_hours": 5.333959481909664,
+          "queue_allowance_hours": 0.8494444444444444,
+          "postprocessing_variability_reserve_hours": 0.02,
+          "workflow_point_hours": 6.203403926354108,
+          "empirical_extra_tail_hours": 1.8477571223827778,
+          "empirical_tail_projection_hours": 8.051161048736885,
+          "full_request_timeout_extra_hours": 4,
+          "full_timeout_sensitivity_hours": 10.203403926354108,
+          "run_timeout_hours": 12,
+          "first_dry_reserve_deadline": "2026-11-07T11:46:49+00:00",
+          "latest_dispatch_empirical_tail": "2026-11-07T03:43:44.820225+00:00",
+          "latest_dispatch_full_timeout_sensitivity": "2026-11-07T01:34:36.745865+00:00",
+          "assumptions": "Linear doubled40 work, same C8/B8/expandedpool/source, reused image, observed job overhead including AI-summary delay, recent queue allowance. Extra longest observed chain models one more tail wave but is not a bound; new80 tail mix and logging contention unknown. Full4h sensitivity fits12h per-run but misses first-dry reserve if dispatched now.",
+          "candidate80": "42dc40754e465cf8c9ec993027ff59d3c936832c; coordinator must verify immutable source tree/baseline before dispatch."
+        },
+        "next_rung": {
+          "tasks": 160,
+          "planned_clients": 8,
+          "batch": 8,
+          "status": "coordinator_admitted",
+          "projected_workflow_hours": 9.699194641051452,
+          "measured_tail_sensitivity_hours": 11.63615118558173,
+          "postprocessing_reserve_hours": 0.02,
+          "admission_projection_hours": 11.65615118558173,
+          "full_timeout_sensitivity_hours": 13.699194641051452,
+          "source": "runs/gpqa80-c8-saturation-comparison/RESULT.json"
+        },
+        "full_suite_projection": {
+          "linear_eval_hours": 10.597194236602343,
+          "measured_setup_hours": 0.2863609145041037,
+          "queue_allowance_hours": 0.8494444444444444,
+          "point_workflow_hours": 11.73299959555089,
+          "extra_measured_tail_hours": 1.9369565445302779,
+          "measured_tail_sensitivity_hours": 13.669956140081167,
+          "full4h_timeout_sensitivity_hours": 15.73299959555089,
+          "measured_tail_sensitivity_fits12h": false,
+          "scope": "Measured-density extrapolation plus one extra observed longest capped wave; not bound. Full4h request timeout unchanged. Schedule/dry budget admission belongs to coordinator;198 requires preceding valid160."
+        },
+        "previous_rung": {
+          "task_count": 80,
+          "planned_clients": 4,
+          "batch": 8,
+          "status": "submitted",
+          "run_id": 42323448662,
+          "submitted_at": "2026-11-07T01:19:36Z",
+          "url": "https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/42323448662",
+          "tasks": 80,
+          "projected_workflow_hours": 8.258135529016663,
+          "measured_tail_sensitivity_hours": 9.882468863784997,
+          "full_timeout_sensitivity_hours": 12.258135529016663,
+          "source": "runs/larger-gpqa80-c4-native-logging/manifest.json"
+        },
+        "status": "historical_superseded_by_completed160"
+      },
+      "current160_projection": {
+        "measured_eval_hours": 7.474425582055054,
+        "measured_device_hours": 7.6466666666666665,
+        "measured_non_eval_hours": 0.17224108461161247,
+        "queue_allowance_hours": 0.8494444444444444,
+        "postprocessing_reserve_hours": 0.02,
+        "postprocessing_reserve_is_guess": true,
+        "measured_extra_tail_hours": 1.9259350560771094,
+        "projection_hours": 10.44204616718822,
+        "run_timeout_hours": 12,
+        "decision": "go",
+        "functional_at": 160,
+        "scope": "Measured repeat160 plus queue, guessed postprocess reserve and one extra measured longest native request; empirical sensitivity, not a bound.",
+        "evidence": "runs/larger-gpqa160-c8/RESULT.json"
       }
     },
     "swe_bench_verified": {

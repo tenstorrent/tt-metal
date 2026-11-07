@@ -288,6 +288,10 @@
       "fact": "During scored160, stock job-log endpoint snapshots advanced in roughly2.1MB increments; observed snapshot age reached7.5883min before a fresh10:43:46 decoding event arrived. Successful transfer alone does not prove freshness; do not infer stalled model solely from repeated old snapshots. This is an observed publication pattern, not a guaranteed maximum delay.",
       "evidence": "bringup/artifacts/stage12-gpqa160-observer.log; coordinator comparison of consecutive last_event/bytes/fetch timestamps at2026-11-07T10:44Z",
       "measured_max_snapshot_age_minutes": 7.58833075
+    },
+    {
+      "fact": "Full-cap v2 live framing preserved all160 native request/replies; Docker replay later interleaved two access200 lines into duplicate historical frames. Keep whole-log error flags; exact original live envelope/frame proof can adjudicate duplicates without inventing lost bodies.",
+      "evidence": "runs/larger-gpqa160-c8/RESULT.json"
     }
   ],
   "suite_timings": [
@@ -714,6 +718,27 @@
         0.7893542873991866
       ],
       "evidence": "runs/larger-gpqa80-c4-native-logging/RESULT.json"
+    },
+    {
+      "run_id": 42353554865,
+      "eval": "r1_gpqa_diamond",
+      "tasks": 160,
+      "agents": 8,
+      "batch": 8,
+      "wall_hours": 7.474425582055054,
+      "device_job_hours": 7.6466666666666665,
+      "workflow_hours": 7.651388888888889,
+      "agent_hours": 51.35653030647172,
+      "agent_time_basis": "Native LogRecord.created; overlapping host elapsed, not device compute",
+      "longest_native_request_hours": 1.9259350560771094,
+      "terminal_tail_hours": 1.7649563986547223,
+      "output_cap_failures": 21,
+      "score": 0.71875,
+      "confidence_interval_95": [
+        0.6445855244726805,
+        0.7826567651397861
+      ],
+      "evidence": "runs/larger-gpqa160-c8/RESULT.json"
     }
   ],
   "generic_fixes": [
@@ -901,5 +926,73 @@
     "batch": 8,
     "no_score": true,
     "requires": "Final cohort selection and unchanged releaseprovenance; scored80 and localbenchmarkdry already banked"
+  },
+  "gpqa160_acceptance": {
+    "functional_at": 160,
+    "repeat160_projection": {
+      "measured_eval_hours": 7.474425582055054,
+      "measured_device_hours": 7.6466666666666665,
+      "measured_non_eval_hours": 0.17224108461161247,
+      "queue_allowance_hours": 0.8494444444444444,
+      "postprocessing_reserve_hours": 0.02,
+      "postprocessing_reserve_is_guess": true,
+      "measured_extra_tail_hours": 1.9259350560771094,
+      "projection_hours": 10.44204616718822,
+      "run_timeout_hours": 12,
+      "decision": "go",
+      "functional_at": 160,
+      "scope": "Measured repeat160 plus queue, guessed postprocess reserve and one extra measured longest native request; empirical sensitivity, not a bound.",
+      "evidence": "runs/larger-gpqa160-c8/RESULT.json"
+    },
+    "full198_projection_hours": 12.217222242926296,
+    "full198_decision": "stop",
+    "nested80_exact": true,
+    "caps": {
+      "count": 21,
+      "semantic_ids": [
+        7,
+        12,
+        15,
+        20,
+        21,
+        23,
+        27,
+        35,
+        39,
+        47,
+        54,
+        61,
+        71,
+        86,
+        90,
+        104,
+        139,
+        147,
+        160,
+        191,
+        197
+      ],
+      "new_vs80": [
+        21,
+        23,
+        39,
+        54,
+        71,
+        104,
+        191,
+        197
+      ],
+      "exact_periodic": 20,
+      "nonperiodic_degenerate": 1,
+      "other_incorrect": 24,
+      "interpretation": "All output-cap empty responses count as failures. Long repeating or degenerate tails, not unresolved productive reasoning; limits unchanged."
+    },
+    "limitations": [
+      "21 looping/degenerate cap failures remain scored; no score gate.",
+      "Firstprefill token absent from retained phasechains; physicaldecode is not exact APIusage.",
+      "Post-run replay transport corruption remains explicitly recorded despite complete live original evidence.",
+      "This is scored160 rung evidence, not release or dry selection; parent owns schedule and final selection."
+    ],
+    "evidence": "runs/larger-gpqa160-c8/RESULT.json"
   }
 }

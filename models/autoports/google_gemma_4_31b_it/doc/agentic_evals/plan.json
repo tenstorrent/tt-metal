@@ -6,39 +6,25 @@
   "deadline": "2026-11-08T04:28:49.408645+00:00",
   "schedule": [
     {
-      "phase": "banked_smoke_nightly_and_larger80",
+      "phase": "completed_rungs_and_exact_drys",
       "start_hour": 0,
-      "end_hour": 27.510996203055555
+      "end_hour": 35.33443344916667,
+      "evidence": "runs/larger-gpqa160-c8/RESULT.json"
     },
     {
-      "phase": "scored160_rung",
-      "start_hour": 27.510996203055555,
-      "end_hour": 39.16714738863729
+      "phase": "frozen_release_dispatch",
+      "start_hour": 35.33443344916667,
+      "end_hour": 35.43443344916667
     },
     {
-      "phase": "candidate160_first_dry_in_parallel",
-      "start_hour": 27.510996203055555,
-      "end_hour": 32.6468015620041
+      "phase": "gpqa_release_including_queue_tail_reserve",
+      "start_hour": 35.33443344916667,
+      "end_hour": 45.77647961635489
     },
     {
-      "phase": "fix_reserve",
-      "start_hour": 32.6468015620041,
-      "end_hour": 34.5468015620041
-    },
-    {
-      "phase": "second_dry_if_needed",
-      "start_hour": 34.5468015620041,
-      "end_hour": 39.68260692095265
-    },
-    {
-      "phase": "final_selection_and_closure_reserve",
-      "start_hour": 39.68260692095265,
-      "end_hour": 40.18260692095265
-    },
-    {
-      "phase": "release_dispatch_and_queue_margin",
-      "start_hour": 40.18260692095265,
-      "end_hour": 42.98260692095265
+      "phase": "local_benchmark_release_independent_local_device",
+      "start_hour": 35.33443344916667,
+      "end_hour": 35.484433449166666
     }
   ],
   "release": {
@@ -62,10 +48,20 @@
         }
       ]
     },
-    "projected_hours": null,
-    "dry_run": null,
-    "frozen_configuration": null,
-    "started_at": null,
+    "projected_hours": {
+      "r1_gpqa_diamond": 10.44204616718822,
+      "benchmarks": 0.15
+    },
+    "dry_run": {
+      "passed": true,
+      "eval": "runs/early-gpqa160-candidate-dry/RESULT.json",
+      "benchmark": "runs/framed-benchmark-dry/RESULT.json"
+    },
+    "frozen_configuration": {
+      "gpqa": "runs/early-gpqa160-candidate-dry/freeze.json",
+      "benchmark": "runs/framed-benchmark-dry/freeze.json"
+    },
+    "started_at": "2026-11-07T15:48:58.236342+00:00",
     "benchmark_source": [
       "Qwen/Qwen3-32B"
     ],
@@ -74,7 +70,7 @@
       "client_seconds": 27.11071771394927,
       "device_job_hours": 0.0752905511111111,
       "runtime": "f57978407eaacf09587f5793b8ae46ca7af839ea",
-      "note": "Frozen local arm dry passed; full stage dry pending GPQA. Queue interval includes startup/headline/drain."
+      "note": "Exact local arm dry passed; finalGPQA160 dry passed."
     },
     "go_evals": [
       "r1_gpqa_diamond"
@@ -101,10 +97,10 @@
         "custom_logging_config": null
       }
     },
-    "per_arm_logging_status": "Selected, not finalfreeze; sameeacharm settingsmustbeusedindryandrelease",
+    "per_arm_logging_status": "Frozen exactly per-arm dry settings; no semantic changes permitted",
     "local_benchmark_arm_dry": {
       "passed": true,
-      "combined_dry_passed": false,
+      "combined_dry_passed": true,
       "freeze": "runs/framed-benchmark-dry/freeze.json",
       "evidence": "runs/framed-benchmark-dry/RESULT.json",
       "projected_device_hours": 0.0752905511111111,
@@ -139,7 +135,7 @@
     },
     "prior_dry_procedure": "runs/gpqa-only-release-preparation/plan.md",
     "prepared_candidates": "runs/release-freeze-materialization/prepared.json",
-    "freeze_preparation_status": "Fallback40 frozen and dry passed; final cohort selection pending completed80 measurements. Local benchmark arm dry passed. No release started.",
+    "freeze_preparation_status": "Final160 selected after valid rung and exact operational dry; local benchmark dry passed.",
     "early_banked_fallback_dry": {
       "status": "passed_fallback40_no_score",
       "cohort_tasks": 40,
@@ -162,7 +158,7 @@
       "point_hours": 9.699194641051452,
       "empirical_tail_plus_reserve_hours": 11.65615118558173,
       "full_four_hour_sensitivity_hours": 13.699194641051452,
-      "status": "candidate_only_reassess_after160",
+      "status": "historical80-based forecast superseded by admission",
       "margin_to12_hours": 0.3438488144182692
     },
     "early_banked80_fallback_dry": {
@@ -200,7 +196,36 @@
         "cause": "Malformed replay during stock Docker-log dump after cancellation; live original was complete and hash-validated. No runtime repair needed.",
         "scope": "Final all-log coverage remains flagged; no silent suppression."
       }
-    }
+    },
+    "admission": {
+      "at": "2026-11-07T15:48:53.367236+00:00",
+      "valid160": true,
+      "evidence": "runs/larger-gpqa160-c8/RESULT.json",
+      "tasks": 160,
+      "planned_clients": 8,
+      "batch": 8,
+      "eval_hours": 7.474425582055054,
+      "device_overhead_hours": 0.17224108461161247,
+      "queue_allowance_hours": 0.8494444444444444,
+      "postprocess_reserve_hours": 0.02,
+      "postprocess_reserve_basis": "guess",
+      "extra_tail_hours": 1.9259350560771094,
+      "extra_tail_basis": "measured longest native call; additional to measured complete run, not an upper bound",
+      "projection_hours": 10.44204616718822,
+      "full198_projection_hours": 12.217222242926296,
+      "full198_decision": "stop",
+      "full_four_hour_request_sensitivity_hours": 12.51611111111111,
+      "risk": "Four-hour extra-tail sensitivity exceeds12h; actual request limit unchanged. Admission uses observed whole160 and one extra measured longest call, not a worst-case guarantee.",
+      "dry_evidence": [
+        "runs/early-gpqa160-candidate-dry/RESULT.json",
+        "runs/framed-benchmark-dry/RESULT.json"
+      ],
+      "disk_scope": "GPQA HTTP requests use no task sandboxes or task-storage reserve; Docker/model startup passed exact dry. Filesystem-specific free space remains unknown; preflight limitation preserved."
+    },
+    "status": "running_frozen_no_repairs_or_redispatch",
+    "gpqa_run_id": 42388198738,
+    "gpqa_arm": "release-gpqa160-c8",
+    "benchmark_arm": "frozen-benchmark-release"
   },
   "runs": [
     {
@@ -3828,7 +3853,7 @@
     {
       "arm": "larger-gpqa160-c8",
       "device": "qb2-ci",
-      "status": "device_job_in_progress",
+      "status": "completed_valid",
       "purpose": "Next normal larger rung after valid80",
       "eval": "r1_gpqa_diamond",
       "tasks": [
@@ -4036,14 +4061,20 @@
       "run_id": 42353554865,
       "submitted_at": "2026-11-07T07:59:52Z",
       "url": "https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/42353554865",
-      "workflow_status": "in_progress",
-      "workflow_conclusion": null,
-      "last_observed_at": "2026-11-07T10:30:30.257871+00:00",
+      "workflow_status": "completed",
+      "workflow_conclusion": "success",
+      "last_observed_at": "2026-11-07T15:39:09.965510+00:00",
       "runner": "120-qb2-p05t01",
       "device_job_id": 128346706365,
       "device_job_started_at": "2026-11-07T08:00:09Z",
-      "device_job_completed_at": null,
-      "start": "2026-11-07T08:00:09Z"
+      "device_job_completed_at": "2026-11-07T15:38:57Z",
+      "start": "2026-11-07T08:00:09Z",
+      "end": "2026-11-07T15:38:57Z",
+      "exit_status": 0,
+      "actual_hours": 7.6466666666666665,
+      "actual_hours_basis": "CI device job including setup/server/client; evaluation time separate",
+      "workflow_wall_hours": 7.651388888888889,
+      "audit": "runs/larger-gpqa160-c8/RESULT.json"
     },
     {
       "arm": "early-gpqa160-candidate-dry",
@@ -4715,7 +4746,8 @@
       "exit_status": 1,
       "actual_hours": 1.9088888888888889,
       "actual_hours_basis": "CI device job including setup/server/client; evaluation time separate",
-      "workflow_wall_hours": 1.9127777777777777
+      "workflow_wall_hours": 1.9127777777777777,
+      "audit": "runs/early-banked80-fallback-dry/RESULT.json"
     },
     {
       "arm": "gpqa86-entry-diagnosis",
@@ -5010,10 +5042,242 @@
       "exit_status": 0,
       "actual_hours": 0.04678343194444445,
       "remaining_owners": []
+    },
+    {
+      "device": "qb2-ci",
+      "eval": "r1_gpqa_diamond",
+      "tasks": [
+        152,
+        189,
+        46,
+        87,
+        52,
+        181,
+        31,
+        185,
+        50,
+        187,
+        153,
+        135,
+        81,
+        93,
+        7,
+        42,
+        24,
+        168,
+        20,
+        28,
+        13,
+        94,
+        61,
+        15,
+        123,
+        160,
+        27,
+        29,
+        90,
+        127,
+        121,
+        188,
+        136,
+        174,
+        184,
+        9,
+        80,
+        102,
+        182,
+        173,
+        109,
+        193,
+        192,
+        47,
+        19,
+        18,
+        48,
+        17,
+        36,
+        114,
+        154,
+        73,
+        115,
+        144,
+        166,
+        179,
+        150,
+        91,
+        176,
+        67,
+        86,
+        194,
+        163,
+        63,
+        16,
+        60,
+        131,
+        62,
+        2,
+        139,
+        122,
+        169,
+        167,
+        84,
+        35,
+        147,
+        12,
+        158,
+        56,
+        120,
+        155,
+        41,
+        133,
+        165,
+        76,
+        137,
+        43,
+        162,
+        38,
+        191,
+        78,
+        25,
+        148,
+        196,
+        40,
+        177,
+        145,
+        157,
+        151,
+        98,
+        105,
+        164,
+        1,
+        85,
+        21,
+        118,
+        171,
+        140,
+        126,
+        190,
+        70,
+        71,
+        44,
+        55,
+        79,
+        142,
+        14,
+        180,
+        57,
+        143,
+        146,
+        149,
+        88,
+        104,
+        170,
+        107,
+        110,
+        100,
+        30,
+        66,
+        89,
+        5,
+        172,
+        34,
+        53,
+        141,
+        8,
+        106,
+        101,
+        97,
+        54,
+        39,
+        197,
+        74,
+        23,
+        69,
+        26,
+        68,
+        159,
+        116,
+        95,
+        124,
+        22,
+        138,
+        132,
+        125,
+        65,
+        117,
+        92,
+        108
+      ],
+      "task_count": 160,
+      "planned_clients": 8,
+      "batch": 8,
+      "max_num_seqs": 8,
+      "pool_ids": 20480,
+      "tt_metal_sha": "f57978407eaacf09587f5793b8ae46ca7af839ea",
+      "tti_sha": "8b9623a7f1ccee85c04319e4c83e00f974322201",
+      "vllm_sha": "ca7a18246e4111629ed6cb4a7d1192002749fccf",
+      "image": "ghcr.io/tenstorrent/tt-agentic-bringup-qb2/vllm-tt-metal-src-dev-ubuntu-22.04-amd64@sha256:ae8bf2ac98d004471bc58959995dd25dc04cc76bb250b794d746bc073ac8f7fe",
+      "request_timeout_seconds": 14400,
+      "max_output_tokens": 126976,
+      "cohort_sha256": "e53cd6598138733885c7ac335c37027a871ada186b3c2b6fbcb731f24d2a048c",
+      "cohort_source": "cohorts.json prepared-larger160 registered before scores",
+      "admission_capacity": {
+        "max_num_seqs": 8,
+        "pool_ids": 20480,
+        "working_set_per_agent_tokens": 131072,
+        "evidence": "runs/gpqa-b8-expanded-pool/local-confirmation.json; runs/gpqa80-c8-saturation-comparison/RESULT.json",
+        "task_containers": 0,
+        "resource_overrides": false
+      },
+      "arm": "release-gpqa160-c8",
+      "status": "release_dispatched",
+      "purpose": "Final frozen release evaluation; no repairs or redispatch",
+      "predicted_device_hours": 7.6466666666666665,
+      "predicted_hours": 10.44204616718822,
+      "admission_hours": 10.44204616718822,
+      "device_hour_box": 12,
+      "queue_allowance_hours": 0.8494444444444444,
+      "freeze": "runs/early-gpqa160-candidate-dry/freeze.json",
+      "admitted_at": "2026-11-07T15:48:53.367236+00:00",
+      "batch_reason": "Smallest validated batch>=8; measured valid160 and accepted same80 C8 configuration benefit",
+      "admission": "runs/release-gpqa160-c8/admission.json",
+      "active_own_runs_before_dispatch": [],
+      "pre_dispatch_provenance": {
+        "at": "2026-11-07T15:48:58.236342+00:00",
+        "dispatch_blob": "82613c81987a7093e15ad4477e5b5391a35ba32e",
+        "reusable_workflow_sha": "ba2f03318608be52c5cb2085469598a89dcfa0fc",
+        "actual_run_provenance_required": true
+      },
+      "run_id": 42388198738,
+      "submitted_at": "2026-11-07T15:49:00Z",
+      "url": "https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/42388198738",
+      "workflow_status": "queued"
+    },
+    {
+      "arm": "frozen-benchmark-release",
+      "device": "local",
+      "status": "queued",
+      "purpose": "Frozen final benchmark matrix and exact4096/128/B1/C1 headline; no repairs or redispatch",
+      "planned_clients": 1,
+      "batch": 1,
+      "max_num_seqs": 1,
+      "predicted_device_hours": 0.0752905511111111,
+      "admission_hours": 0.15,
+      "device_hour_box": 0.15,
+      "freeze": "runs/framed-benchmark-dry/freeze.json",
+      "dry_evidence": "runs/framed-benchmark-dry/RESULT.json",
+      "artifact_root": "bringup/artifacts/framed-benchmark-release-run",
+      "queued_at": "2026-11-07T15:49:20.998727+00:00",
+      "argv": [
+        "python_env/bin/python",
+        "bringup/artifacts/stage12-framed-benchmark-dry/run.py",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/bringup/artifacts/framed-benchmark-release-run"
+      ],
+      "batch_reason": "Smallest supported batch for serial matrix/headline requests; exact dry measured"
     }
   ],
-  "status": "valid80_admitted160_with_parallel_candidate_dry",
-  "last_updated": "2026-11-07T10:30:35.741108+00:00",
+  "status": "release_running",
+  "last_updated": "2026-11-07T15:49:20.998727+00:00",
   "stop_reason": null,
   "actual_runs": [],
   "continuations": [
@@ -6086,6 +6350,16 @@
       "workflow_wall_hours": 1.9127777777777777,
       "predicted_workflow_hours": 3.072761903478826,
       "workflow_conclusion": "cancelled"
+    },
+    {
+      "arm": "larger-gpqa160-c8",
+      "run_id": 42353554865,
+      "planned_clients": 8,
+      "batch": 8,
+      "device_job_hours": 7.6466666666666665,
+      "workflow_wall_hours": 7.651388888888889,
+      "predicted_workflow_hours": 9.719194641051452,
+      "workflow_conclusion": "success"
     }
   ],
   "local_idle_intervals": [
@@ -6346,6 +6620,47 @@
         }
       ],
       "reason": "Banked80 permits160 with candidate dry in parallel on granted independent CI allocation."
+    },
+    {
+      "at": "2026-11-07T15:48:53.367236+00:00",
+      "schedule": [
+        {
+          "phase": "banked_smoke_nightly_and_larger80",
+          "start_hour": 0,
+          "end_hour": 27.510996203055555
+        },
+        {
+          "phase": "scored160_rung",
+          "start_hour": 27.510996203055555,
+          "end_hour": 39.16714738863729
+        },
+        {
+          "phase": "candidate160_first_dry_in_parallel",
+          "start_hour": 27.510996203055555,
+          "end_hour": 32.6468015620041
+        },
+        {
+          "phase": "fix_reserve",
+          "start_hour": 32.6468015620041,
+          "end_hour": 34.5468015620041
+        },
+        {
+          "phase": "second_dry_if_needed",
+          "start_hour": 34.5468015620041,
+          "end_hour": 39.68260692095265
+        },
+        {
+          "phase": "final_selection_and_closure_reserve",
+          "start_hour": 39.68260692095265,
+          "end_hour": 40.18260692095265
+        },
+        {
+          "phase": "release_dispatch_and_queue_margin",
+          "start_hour": 40.18260692095265,
+          "end_hour": 42.98260692095265
+        }
+      ],
+      "reason": "Completed160 and exact160/80 dry measurements; finalrelease admission"
     }
   ],
   "dry_route_contingency": {
@@ -6373,11 +6688,7 @@
     }
   },
   "next_ci_dispatch_image": "ghcr.io/tenstorrent/tt-agentic-bringup-qb2/vllm-tt-metal-src-dev-ubuntu-22.04-amd64@sha256:ae8bf2ac98d004471bc58959995dd25dc04cc76bb250b794d746bc073ac8f7fe",
-  "active_runs": [
-    42316311286,
-    42323448662,
-    42327188063
-  ],
+  "active_runs": [],
   "latest_live_progress": {
     "run_id": 42296943044,
     "status": "completed_valid",
@@ -6780,7 +7091,7 @@
       "evidence": "bringup/artifacts/stage12-gpqa20-evals-current.log"
     }
   ],
-  "next_local_job": "Held for frozen release arm; no additional discriminating local work currently justified while CI rungs progress",
+  "next_local_job": "frozen-benchmark-release",
   "next_rung_admission_policy": {
     "updated_at": "2026-11-06T23:06:29.089061+00:00",
     "normal_rung": "Next80 only after valid40 and measured forecast with slow-tail allowance fits before stagehour31.3; never wait for optional C8 comparison, use selected C4 fallback.",
@@ -7394,5 +7705,30 @@
     "batch": 8,
     "no_score": true,
     "requires": "Final cohort selection and unchanged releaseprovenance; scored80 and localbenchmarkdry already banked"
+  },
+  "accepted160": {
+    "at": "2026-11-07T15:48:53.367236+00:00",
+    "valid160": true,
+    "evidence": "runs/larger-gpqa160-c8/RESULT.json",
+    "tasks": 160,
+    "planned_clients": 8,
+    "batch": 8,
+    "eval_hours": 7.474425582055054,
+    "device_overhead_hours": 0.17224108461161247,
+    "queue_allowance_hours": 0.8494444444444444,
+    "postprocess_reserve_hours": 0.02,
+    "postprocess_reserve_basis": "guess",
+    "extra_tail_hours": 1.9259350560771094,
+    "extra_tail_basis": "measured longest native call; additional to measured complete run, not an upper bound",
+    "projection_hours": 10.44204616718822,
+    "full198_projection_hours": 12.217222242926296,
+    "full198_decision": "stop",
+    "full_four_hour_request_sensitivity_hours": 12.51611111111111,
+    "risk": "Four-hour extra-tail sensitivity exceeds12h; actual request limit unchanged. Admission uses observed whole160 and one extra measured longest call, not a worst-case guarantee.",
+    "dry_evidence": [
+      "runs/early-gpqa160-candidate-dry/RESULT.json",
+      "runs/framed-benchmark-dry/RESULT.json"
+    ],
+    "disk_scope": "GPQA HTTP requests use no task sandboxes or task-storage reserve; Docker/model startup passed exact dry. Filesystem-specific free space remains unknown; preflight limitation preserved."
   }
 }
