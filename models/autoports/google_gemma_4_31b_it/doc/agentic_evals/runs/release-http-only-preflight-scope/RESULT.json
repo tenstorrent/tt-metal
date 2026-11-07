@@ -1,0 +1,76 @@
+{
+  "effort": "release-http-only-preflight-scope",
+  "status": "route_scope_resolved_numeric_model_storage_unknown",
+  "device_hours": 0,
+  "device_hour_box": 0,
+  "host_hour_box": 0.25,
+  "disposition": {
+    "harbor_task_disk_admission": "not_applicable_to_frozen_HTTP_only_route",
+    "reason": "No Harbor task environments are selected by evals GPQA or vLLM benchmark driver; tool suites remain measured stops, not silently passed.",
+    "task_sandbox_capacity": "No task sandbox slots required by these HTTP clients; no assertion of host sandbox maximum.",
+    "model_storage": "Operationally demonstrated for observed server/image/cache route; quantitative filesystem-specific headroom/reserve remains unknown.",
+    "blanket_disk_ok_certified": false,
+    "permission_or_release_pass_granted": false
+  },
+  "route": {
+    "tti_sha": "8b9623a7f1ccee85c04319e4c83e00f974322201",
+    "gpqa": "EVALS_COMMON, chat API, max_concurrent8, context262144, release timeout14400; standard selector excludes EVALS_AGENTIC",
+    "benchmark": "Selected stock vLLM HTTP bench serve driver; local frozen benchmark dry uses existing server. Other benchmark drivers, e.g.GenAIPerf Docker, are outside this disposition.",
+    "task_containers_required": 0,
+    "declared_task_storage_applicability": "No selected task.toml environments; not an estimate of total job/server disk demand.",
+    "reserve_bytes": null,
+    "free_bytes_on_model_or_docker_filesystem": null
+  },
+  "policy": {
+    "stock_model_disk_check": "setup_host.check_disk_space: conditional HUGGINGFACE model download check; returns early for other model sources, host_weights_dir, or missing qualifying path; otherwise disk_usage(check_path) freeGiB compared with min_disk_gb.",
+    "stock_model_minimum": "If not explicit: param_count*2+20 non-repacked, param_count*3+20 repacked. This is model download footprint, not Harbor admission reserve.",
+    "stock_task_admission": "Prior pinned Harbor inspection checks Docker availability/info and CPU/memory compose resources; no numeric task disk reserve identified. Absence does not prove reserve0.",
+    "stock_cleanup": "Existing reset-hook rounded freeGB observations do not identify DockerRootDir/mount/reserve. No inferred mapping."
+  },
+  "existing_evidence": {
+    "selected_C8_80": {
+      "run_id": 42332785769,
+      "startup": "runs/gpqa80-c8-saturation-comparison/startup-confirmation.json",
+      "full_layers": 60,
+      "batch": 8,
+      "max_num_seqs": 8,
+      "pool_ids": 20480,
+      "context": 262144,
+      "free_space_reported_GB": 1489,
+      "free_space_report_time": "2026-11-07T03:11:57.6447843Z",
+      "free_space_scope": "Unqualified runner hook units; no filesystem-specific guarantee."
+    },
+    "framed_C8_dry": {
+      "run_id": 42339332447,
+      "image": "sha256:ae8bf2ac98d004471bc58959995dd25dc04cc76bb250b794d746bc073ac8f7fe",
+      "image_pull_line": 1158,
+      "full60_autoport_registration_line": 1359,
+      "free_space_reported_GB": 390,
+      "free_space_report_time": "2026-11-07T04:39:31.3772389Z",
+      "scope": "Observed startup only; no fresh dry/score audit here."
+    },
+    "local_benchmark": "runs/framed-benchmark-dry/RESULT.json confirms full60 B1 existing-server headline and stage11 matrix dry; no task containers."
+  },
+  "remaining_requirement": "A numerical total-server storage/admission inequality cannot be certified from existing data: exact filesystem free bytes, applicable reserve and projected image/cache/log demand are unavailable. This evidence neither invents them nor turns historical disk.ok=false into true. Coordinator may distinguish inapplicable Harbor check from model storage operational evidence while retaining unknown numerical fields; no policy exception inferred.",
+  "historical_preservation": "Earlier tool-suite task-storage inequalities remain unresolved as recorded. Measured stops and historical preflight failures are not rewritten.",
+  "evidence": [
+    "/home/mvasiljevic/gemma4-31b-pipeline-v3/tti-gpqa160-current-c8/reference_config/evals/eval_config.py:11936",
+    "/home/mvasiljevic/gemma4-31b-pipeline-v3/tti-gpqa160-current-c8/llm_module/eval_configs.py:231",
+    "/home/mvasiljevic/gemma4-31b-pipeline-v3/tti-gpqa160-current-c8/llm_module/eval_command.py:489",
+    "/home/mvasiljevic/gemma4-31b-pipeline-v3/tti-gpqa160-current-c8/test_module/llm_tests/llm_eval_tests.py:569",
+    "/home/mvasiljevic/gemma4-31b-pipeline-v3/tti-gpqa160-current-c8/test_module/llm_tests/agentic_eval_tests.py:95",
+    "/home/mvasiljevic/gemma4-31b-pipeline-v3/tti-gpqa160-current-c8/test_module/llm_tests/llm_benchmark_tests.py:35",
+    "/home/mvasiljevic/gemma4-31b-pipeline-v3/tti-gpqa160-current-c8/llm_module/drivers/vllm.py:49",
+    "/home/mvasiljevic/gemma4-31b-pipeline-v3/tti-gpqa160-current-c8/workflows/setup_host.py:492",
+    "/home/mvasiljevic/gemma4-31b-pipeline-v3/tti-gpqa160-current-c8/workflows/setup_host.py:624",
+    "/home/mvasiljevic/gemma4-31b-pipeline-v3/tti-gpqa160-current-c8/workflows/model_spec.py:774",
+    "/home/mvasiljevic/gemma4-31b-pipeline-v3/tti-gpqa160-current-c8/workflows/run_docker_server.py:648",
+    "../ci-disk-admission-basis/RESULT.md",
+    "../gpqa-only-release-preparation/disk-observation.md",
+    "../gpqa80-c8-saturation-comparison/startup-confirmation.json",
+    "../framed-benchmark-dry/RESULT.json",
+    "bringup/artifacts/stage12-eval-observation/42332785769/current.log:577",
+    "bringup/artifacts/stage12-eval-observation/42339332447/current.log:577"
+  ],
+  "actions": "Source and existing evidence inspection only; no new check/probe, device/dispatch/workflow edit, commit or central maintenance."
+}

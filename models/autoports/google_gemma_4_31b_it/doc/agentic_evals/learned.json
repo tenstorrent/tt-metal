@@ -851,5 +851,11 @@
       "finding": "Fresh237prompt/15031retainedoverlap exact. Fourfull60conditional HF/TTtop1match; observedtokens supported byboth. Noactionableconditionalcollapse. Originalservedstate andautonomousHF notproven; doc86hostonly.",
       "device_hours": 0.22576292027777778
     }
+  ],
+  "release_scope_facts": [
+    {
+      "evidence": "runs/release-http-only-preflight-scope/RESULT.json",
+      "fact": "EVALS_COMMON and vLLM benchserve are HTTP-only; Harbor task-storage inequality inapplicable. Server/image/cache/logstorage remains and stockmodeldownloadcheck is conditional, not general reserve proof."
+    }
   ]
 }

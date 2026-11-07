@@ -459,6 +459,13 @@
       "batch": 8,
       "max_num_seqs": 8,
       "batch_reason": "Match scoredB8 numerical path for diagnostic; not a throughput choice"
+    },
+    "early-banked80-fallback-dry": {
+      "planned_clients": 8,
+      "batch": 8,
+      "max_num_seqs": 8,
+      "pool_ids": 20480,
+      "batch_reason": "Smallest validated batch>=8; accepted C8/40 aggregate gain and valid80 capacity"
     }
   },
   "release_limits": {

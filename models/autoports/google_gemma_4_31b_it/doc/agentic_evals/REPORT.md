@@ -171,6 +171,9 @@ Device costs include the device job, not build/queue. Release savings are foreca
 | ci-log-retrieval-recurrence | 0.00000 / 0.00000 | 0.00000 | none/open: Retrieval recovered unchanged: C4 117900405bytes/2.680677s and C8 71606816bytes/2.150588s. Independent same-route probe79.590738s does not justify timeout increase. One failed attempt reached body transfer; … |
 | gpqa80-new-loop-diagnosis | 0.30000 / 0.22576 | 0.00000 | none/open: fresh prompt tokens: 237; retained overlap tokens: 15031; conditional checkpoints: 4; top1 equal: 4 |
 | early-gpqa160-candidate-dry | 2.22332 / unknown | 0.00000 | running/pending: Valid80 banked, exact160 frozen and dispatched parallel to normal160 on separate granted CI allocation. |
+| early-banked80-fallback-dry | 2.22332 / unknown | 0.00000 | running/pending: Free grantedCI slot, separate allocations; normal160 and candidate160dry neverwait. Current40dry cannot prove exactbanked80. |
+| release-http-only-preflight-scope | 0.00000 / 0.00000 | 0.00000 | none/open: task storage: Harbor task-storage admission not applicable to selectedHTTP-only release; model storage: Operationalstartup observed; numerical filesystem/reserve/headroom unknown; blanket disk ok: False |
+| effort-ledger-size-repair | 0.00000 / 0.00000 | 0.00000 | kept/solved: semantic data unchanged: True; canonical hash equal: True; size hook passed: True; scope: Whitespace-onlyserialization, allhistoryretained |
 
 Evidence is written once by each effort; this table summarizes the current coordinator disposition. Unmeasured savings remain unknown or receive zero planning credit.
 

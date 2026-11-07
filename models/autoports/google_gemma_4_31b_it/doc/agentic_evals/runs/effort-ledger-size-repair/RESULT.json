@@ -1,0 +1,37 @@
+{
+  "effort": "effort-ledger-size-repair",
+  "status": "confirmed_semantic_preserving_repair",
+  "device_hours": 0,
+  "device_hour_box": 0,
+  "host_hour_box": 0.1,
+  "confirmation": {
+    "file": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/efforts.json",
+    "before_bytes": 513300,
+    "before_hook_KB": 502,
+    "after_bytes": 343982,
+    "after_hook_KB": 336,
+    "limit_bytes": 512000,
+    "headroom_bytes": 168018,
+    "raw_before_sha256": "d9969429b487970ea573c96ca8a13c533db96302c2a1164a01c3658303093461",
+    "raw_after_sha256": "d15bb0afe5f2122a71d093545f97f59d8d003b1280a220fe11ffc0792ffada8c",
+    "canonical_before_sha256": "0a80da43799f68eff7ffc2dd0398a50b6e0be05a05ff9c07724ff0a443395608",
+    "canonical_after_sha256": "0a80da43799f68eff7ffc2dd0398a50b6e0be05a05ff9c07724ff0a443395608",
+    "parsed_values_equal": true,
+    "ordered_object_pairs_equal": true,
+    "change": "Removed JSON whitespace outside strings only; retained every literal spelling/key order and final newline.",
+    "hook_before_exit": 1,
+    "hook_after_exit": 0,
+    "hook_before_message": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/efforts.json (502 KB) exceeds the 500 KB limit."
+  },
+  "actual_pre_commit_hook": "check-large-files passed",
+  "scope": "Only whitespace outside JSON strings changed in efforts.json; no fields/history/key order/literal spelling changed; no archive required.",
+  "sequence_note": "Coordinator reported512448bytes before registering this effort; current pre-repair ledger independently measured513300bytes after registration. These are different snapshots, not conflicting measurements.",
+  "remaining": "Coordinator must retain compact serialization for subsequent close/rerank writes. No staging/commit by this effort.",
+  "evidence": [
+    "AUTODEBUG.md",
+    "AUTOFIX.md",
+    "scripts/check_file_size.py:35",
+    ".pre-commit-config.yaml:60",
+    "bringup/artifacts/effort-ledger-size-repair/check.json"
+  ]
+}

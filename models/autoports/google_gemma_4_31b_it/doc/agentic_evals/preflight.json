@@ -93,6 +93,14 @@
       "task_containers": 0,
       "task_declared_storage_bytes": 0,
       "scope": "HTTP-only GPQA and benchmark, no Harbor environments to pull/start; serverDocker weights/cache/logstorage remain separate and observations retain limitations."
+    },
+    "release_scope_reconciliation": {
+      "evidence": "runs/release-http-only-preflight-scope/RESULT.json",
+      "task_container_admission_applicable": false,
+      "model_server_startup_observed": true,
+      "model_filesystem_free_bytes": null,
+      "model_storage_reserve_bytes": null,
+      "quantitative_headroom_unknown": true
     }
   },
   "admission": {
@@ -115,6 +123,14 @@
       "max_num_seqs": 8,
       "task_sandboxes": 0,
       "reason": "GPQA HTTP C4 replayandscored10validated; repaired20actual4rows; no task-sandboxlimit applies. ExistingtoolC2admission evidencehistorical."
+    },
+    "current_release_http_scope": {
+      "task_containers": 0,
+      "planned_clients": 8,
+      "max_num_seqs": 8,
+      "pool_ids": 20480,
+      "capacity_evidence": "runs/gpqa-b8-expanded-pool/local-confirmation.json; runs/gpqa80-c8-saturation-comparison/RESULT.json",
+      "scope": "HTTPclients no Harbor sandboxslots; does not assert hostmaximum or numericalstorageheadroom"
     }
   },
   "release_route": {
