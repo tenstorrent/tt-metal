@@ -696,7 +696,7 @@ def _typecast_golden_function(
             elif "quasar" in arch_name:
                 converted = torch.round(input_tensor.float())
             else:
-                converted = torch.floor(input_tensor.float() + 0.5)
+                converted = torch.trunc(input_tensor.float())
         else:
             converted = input_tensor
         return torch.clamp(converted.to(torch.int64), min=0, max=65535).to(torch.uint16)
