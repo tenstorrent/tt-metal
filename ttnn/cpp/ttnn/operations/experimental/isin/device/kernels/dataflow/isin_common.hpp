@@ -48,6 +48,37 @@ struct df_to_std<DataFormat::UInt8> {
 template <DataFormat df>
 using std_type_t = typename df_to_std<df>::std_type;
 
+// Floating-point values are compared on their bits, the way torch compares floats: +0.0 equals -0.0
+// and NaN equals nothing. bfloat16 is held as raw uint16 bits, and kernels build with -ffast-math, so
+// neither the uint16 compare nor a float compare gives those semantics. Integer formats compare directly.
+template <typename bits_type, bits_type magnitude_mask, bits_type positive_inf>
+FORCE_INLINE bool float_bits_equal(bits_type a, bits_type b) {
+    const bits_type a_magnitude = a & magnitude_mask;
+    const bits_type b_magnitude = b & magnitude_mask;
+    if (a_magnitude > positive_inf || b_magnitude > positive_inf) {
+        return false;
+    }
+    if (a_magnitude == 0 && b_magnitude == 0) {
+        return true;
+    }
+    return a == b;
+}
+
+template <DataFormat df, typename number_type>
+FORCE_INLINE bool isin_values_equal(number_type a, number_type b) {
+    if constexpr (df == DataFormat::Float16_b) {
+        return float_bits_equal<uint16_t, 0x7FFF, 0x7F80>(a, b);
+    } else if constexpr (df == DataFormat::Float32) {
+        uint32_t a_bits;
+        uint32_t b_bits;
+        __builtin_memcpy(&a_bits, &a, sizeof(a_bits));
+        __builtin_memcpy(&b_bits, &b, sizeof(b_bits));
+        return float_bits_equal<uint32_t, 0x7FFFFFFF, 0x7F800000>(a_bits, b_bits);
+    } else {
+        return a == b;
+    }
+}
+
 constexpr uint32_t ONE_PAGE = 1;
 constexpr uint32_t FIRST_STICK = 0;
 
