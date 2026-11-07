@@ -157,6 +157,7 @@ class DistributedRMSNorm(Module):
         mesh_axis=0,
         mesh_device=None,
         ccl_manager=None,
+        row_capacity=None,
     ):
         super().__init__()
 
@@ -169,6 +170,9 @@ class DistributedRMSNorm(Module):
         self.ccl_manager = ccl_manager
         self.mesh_width = tuple(mesh_device.shape)[mesh_axis]
         self.TILE_SIZE = 32
+        # Largest per-device row count (batch * N, multiple of 32) one cached program and stats pool
+        # serve; None keeps one per row count.
+        self.row_capacity = row_capacity
 
         self.compute_kernel_config = ttnn.init_device_compute_kernel_config(
             self.mesh_device.arch(),
@@ -212,6 +216,7 @@ class DistributedRMSNorm(Module):
         per_head_norm=False,
         dynamic_weight_includes_static=False,
         dynamic_tile_row_map=None,
+        row_capacity=None,
     ) -> ttnn.Tensor:
         # per_head_norm selects the normalization semantics when the activation is
         # head-split (num_heads_per_device > 1):
@@ -240,7 +245,12 @@ class DistributedRMSNorm(Module):
                 weight = dynamic_weight
             else:
                 weight = ttnn.multiply(weight, dynamic_weight)
-        weight_key = tuple(weight.shape) if weight is not None else None
+        weight_key = (weight.shape[-1], weight.dtype) if weight is not None else None
+        if row_capacity is None:
+            row_capacity = self.row_capacity
+        # Folded per-device rows (batch * N, tile-padded) the stats buffer is sized for: the stats geometry
+        # follows the padded tile rows, so an unpinned call keys on those, not on the logical rows.
+        capacity = row_capacity if row_capacity is not None else x.padded_shape[-3] * x.padded_shape[-2]
 
         # dynamic_bias is the additive half of an adaLN modulation (the `shift`), folded into the same
         # fused op as the scale so the caller needs no separate elementwise add. The device op accepts
@@ -262,15 +272,23 @@ class DistributedRMSNorm(Module):
             self.ccl_manager.get_ag_ping_pong_semaphore(self.mesh_axis),
             topology=self.ccl_manager.topology,
             persistent_output_buffer=self.ccl_manager.get_fused_norm_stats_buffer(
-                # Key includes everything that changes the stats-buffer geometry:
-                # shape, heads-per-device, RoPE presence, and weight presence (weight is
-                # forwarded to create_stats_buffer and affects its sizing). Guards against
-                # a shared-cache collision between two same-shape modules differing only
-                # in affine geometry.
+                # Everything that changes the stats-buffer geometry (width, row capacity, heads per
+                # device, RoPE and weight presence/width), so modules never share a mismatched buffer.
+                # A pinned capacity and a bare row count of the same size take different worker splits
+                # (the op keys its program on both), so row_capacity itself sits next to the capacity.
                 # per_head_norm changes the stats geometry (per-head reduces locally -> no
                 # all-gather scratch), so it MUST be part of the key and forwarded to
                 # create_stats_buffer (which returns None for the per-head/local path).
-                ("rms", tuple(x.shape), num_heads_per_device, per_head_norm, rope_cos is not None, weight_key),
+                (
+                    "rms",
+                    x.shape[-1],
+                    row_capacity,
+                    capacity,
+                    num_heads_per_device,
+                    per_head_norm,
+                    rope_cos is not None,
+                    weight_key,
+                ),
                 lambda: ttnn.experimental.dit_fused_distributed_rmsnorm_create_stats_buffer(
                     x,
                     self.mesh_axis,
@@ -282,6 +300,7 @@ class DistributedRMSNorm(Module):
                     transformation_mat=trans_mat,
                     rope_cos=rope_cos,
                     rope_sin=rope_sin,
+                    row_capacity=row_capacity,
                 ),
             ),
             epsilon=self.norm_eps,
@@ -295,6 +314,7 @@ class DistributedRMSNorm(Module):
             rope_cos=rope_cos,
             rope_sin=rope_sin,
             dtype=dtype,
+            row_capacity=row_capacity,
             **extra,
         )
 
@@ -437,6 +457,53 @@ class DistributedLayerNorm(Module):
         )
 
 
+def dram_group_norm_core_grid(
+    max_grid: ttnn.CoreGrid,
+    *,
+    num_channels: int,
+    num_groups: int,
+    num_virtual_cols: int,
+    nhw: int,
+    num_batches: int = 1,
+) -> ttnn.CoreGrid | None:
+    """Largest valid DRAM ``ttnn.group_norm`` core grid within ``max_grid``, or None if there is none.
+
+    The op splits the channels of each core-grid row over ``num_virtual_cols`` cores, so a row of
+    grid_x cores holds grid_x // num_virtual_cols virtual rows, and it splits Ht = nhw / 32 evenly
+    over all (grid_x // num_virtual_cols) * grid_y virtual rows (``validate_dram_grid`` in
+    groupnorm.cpp). A fixed grid is therefore not valid for every input: with 8 virtual columns an
+    8x8 grid has 8 virtual rows, which does not divide Ht = 507.
+
+    Unlike the op's own ``find_expected_dram_grid``, only grid widths that keep ``num_virtual_cols``
+    are considered, because the weight, bias and mask are laid out for it. Grids with no idle
+    columns (grid_x a multiple of ``num_virtual_cols``) rank first, then grids with more virtual
+    rows (more cores working), then wider grids.
+    """
+    ht = nhw // ttnn.TILE_SIZE
+    best = None
+    best_rank = None
+    for gx in range(1, max_grid.x + 1):
+        width = ttnn.CoreGrid(x=gx, y=1)
+        nvc = ttnn.operations.normalization.dram_group_norm_virtual_columns(width, num_channels, num_groups)
+        if nvc != num_virtual_cols:
+            continue
+        virtual_rows_per_grid_row = gx // num_virtual_cols
+        if virtual_rows_per_grid_row == 0:
+            continue
+        for gy in range(1, max_grid.y + 1):
+            num_virtual_rows = virtual_rows_per_grid_row * gy
+            if num_virtual_rows > ht or ht % num_virtual_rows != 0:
+                continue
+            # Every batch must contribute the same number of rows to each multicast group.
+            if num_virtual_rows >= num_batches and num_virtual_rows % num_batches != 0:
+                continue
+            no_idle_columns = gx % num_virtual_cols == 0
+            rank = (no_idle_columns, num_virtual_rows, gx)
+            if best_rank is None or rank > best_rank:
+                best, best_rank = ttnn.CoreGrid(x=gx, y=gy), rank
+    return best
+
+
 """
 Groupnorm that supports data parallel computation.
 The number of channels and groups will be updated to match the distribution of the data across the mesh.
@@ -467,7 +534,8 @@ class GroupNorm(Module):
             eps: Epsilon value for numerical stability.
             mesh_device: The device to use.
             mesh_axis: The mesh axis to use for sharding.
-            core_grid: The core grid to use.
+            core_grid: The largest core grid to use. Inputs whose height this grid does not
+                evenly divide run on the largest valid grid inside it.
             num_out_blocks: The number of output blocks to use.
             activation_fn: Applied after the norm. ``ttnn.group_norm`` cannot fuse one, so it
                 always runs as a separate op here.
@@ -491,9 +559,15 @@ class GroupNorm(Module):
 
         num_padded_groups = num_groups // self.num_devices * num_padded_channels // num_local_channels
 
+        # The op derives num_virtual_cols from the width of the grid it runs on, which is
+        # self.core_grid or a grid inside it, so the weight, bias and mask are laid out for that
+        # width; forward() only picks grids that keep this value. For any grid at least 8 wide this
+        # equals the value derived from the full device grid.
         self.num_virtual_cols = ttnn.operations.normalization.dram_group_norm_virtual_columns(
-            mesh_device.core_grid, num_padded_channels, num_padded_groups
+            self.core_grid, num_padded_channels, num_padded_groups
         )
+        # (max grid x, max grid y, batch size, H*W) -> the grid the op runs on.
+        self._op_core_grids: dict[tuple[int, int, int, int], ttnn.CoreGrid] = {}
 
         weight_shape = [
             self.num_devices,
@@ -568,6 +642,31 @@ class GroupNorm(Module):
         ]
         return torch.cat(torch_sharded_lst, dim=0)
 
+    def _op_core_grid(self, batch_size: int, spatial_size: int) -> ttnn.CoreGrid:
+        """The grid the op runs on: the largest valid grid within self.core_grid for this input.
+
+        self.core_grid is an upper bound that callers may narrow between calls, so it is part of
+        the cache key.
+        """
+        key = (self.core_grid.x, self.core_grid.y, batch_size, spatial_size)
+        op_core_grid = self._op_core_grids.get(key)
+        if op_core_grid is None:
+            op_core_grid = dram_group_norm_core_grid(
+                self.core_grid,
+                num_channels=self.num_padded_channels,
+                num_groups=self.num_padded_groups,
+                num_virtual_cols=self.num_virtual_cols,
+                nhw=batch_size * math.ceil(spatial_size / ttnn.TILE_SIZE) * ttnn.TILE_SIZE,
+                num_batches=batch_size,
+            )
+            if op_core_grid is None:
+                raise ValueError(
+                    f"GroupNorm: no core grid within {self.core_grid} with num_virtual_cols={self.num_virtual_cols} "
+                    f"fits batch={batch_size}, H*W={spatial_size}, channels={self.num_padded_channels}"
+                )
+            self._op_core_grids[key] = op_core_grid
+        return op_core_grid
+
     def forward(self, x: ttnn.Tensor, num_out_blocks=-1, compute_kernel_config=None) -> ttnn.Tensor:
         batch_size, height, width, channels = x.shape
         x = x.reshape([batch_size, 1, width * height, channels])
@@ -577,7 +676,7 @@ class GroupNorm(Module):
             input_mask=self.mask.data,
             num_groups=self.num_padded_groups,
             epsilon=self.eps,
-            core_grid=self.core_grid,
+            core_grid=self._op_core_grid(batch_size, height * width),
             inplace=False,
             num_out_blocks=num_out_blocks,
             output_layout=ttnn.TILE_LAYOUT,

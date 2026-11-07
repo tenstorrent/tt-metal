@@ -62,10 +62,7 @@ ALWI void hardsigmoid_tile_pack(uint32_t idst) {
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void hardsigmoid_tile_init() {
-    MATH(SFPU_UNARY_INIT_FN(hardsigmoid, sfpu::hardsigmoid_init, (APPROX)));
-    MATH(ckernel::sfpu::hardsigmoid_bf16_tile_init<!DST_ACCUM_MODE>());
-}
+ALWI void hardsigmoid_tile_init() { MATH(SFPU_UNARY_INIT_FN(hardsigmoid, sfpu::hardsigmoid_init, (APPROX))); }
 
 ALWI void hardsigmoid_tile_init_pack() { PACK(SFPU_UNARY_INIT_FN(hardsigmoid, sfpu::hardsigmoid_init, (APPROX))); }
 

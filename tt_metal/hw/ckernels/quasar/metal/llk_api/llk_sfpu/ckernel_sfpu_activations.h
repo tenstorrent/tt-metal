@@ -32,9 +32,6 @@ inline void apply_activation(sfpi::vFloat& v) {
 
 // Whether BF16 DEST runs the generated hardsigmoid kernel as one call over the whole tile.
 inline constexpr bool hardsigmoid_bf16_whole_tile = false;
-// The stock hardsigmoid kernel needs no BF16 setup.
-template <bool bf16_kernel>
-inline void hardsigmoid_bf16_tile_init() {}
 
 template <bool APPROXIMATION_MODE, ActivationType ACTIVATION_TYPE, int ITERATIONS, bool is_fp32_dest_acc_en = true>
 inline void calculate_activation() {

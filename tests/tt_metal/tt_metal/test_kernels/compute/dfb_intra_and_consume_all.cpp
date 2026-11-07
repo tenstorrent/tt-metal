@@ -64,8 +64,12 @@ void kernel_main() {
 
     for (uint32_t i = 0; i < entries_per_neo; i++) {
         dfb_intra.reserve_back(1);
+        // TEN-4746: issue a no-write PACR after reserve_back to order the later push_back.
+        // The PACK thread waits for it below before directly incrementing the reserved L1 entry.
+        ckernel::dummy_pack(dfb_intra.get_id());
 #ifdef UCK_CHLKC_PACK
         {
+            ckernel::tensix_sync();
             volatile uint32_t* entry = reinterpret_cast<volatile uint32_t*>(dfb_intra.get_write_ptr() << 4);
             for (uint32_t w = 0; w < words_per_entry; w++) {
                 entry[w] += 1;
@@ -79,6 +83,8 @@ void kernel_main() {
         copy_tile(dfb::intra_out, 0, 0);
 #ifdef UCK_CHLKC_UNPACK
         if (trisc_id == 0) {
+            // Block this RISC until the UNPACR above retires, so the increments cannot race an unwritten slot.
+            ckernel::tensix_sync();
             volatile uint32_t* entry = reinterpret_cast<volatile uint32_t*>(dfb_intra.get_read_ptr() << 4);
             for (uint32_t w = 0; w < words_per_entry; w++) {
                 entry[w] += 1;

@@ -4,6 +4,7 @@
 set(TTNN_OP_EMBEDDING_SRCS
     device/embedding_device_operation.cpp
     device/embeddings_fused_program_factory.cpp
+    device/embeddings_fused_runtime_rows_program_factory.cpp
     device/embeddings_rm_program_factory.cpp
     device/embeddings_tilized_indices_program_factory.cpp
     device/embedding_program_factory_common.cpp
@@ -15,6 +16,7 @@ set(TTNN_OP_EMBEDDING_API_HEADERS
     device/embedding_device_operation.hpp
     device/embedding_device_operation_types.hpp
     device/embeddings_fused_program_factory.hpp
+    device/embeddings_fused_runtime_rows_program_factory.hpp
     device/embeddings_rm_program_factory.hpp
     device/embeddings_tilized_indices_program_factory.hpp
     device/embedding_program_factory_common.hpp
