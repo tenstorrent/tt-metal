@@ -66,7 +66,7 @@ TILIZED_WTILE_NS = 310  # per W tile of a tile-row, base op
 KEEP_UP_FRACTION = 0.5
 XFER_FIT = {True: (8.4e-6, 77.2e9), False: (9.8e-6, 42.1e9)}  # (fixed s, bytes/s per link): fabric_all_gather fits
 PARTIAL_FACES_ONLY = True
-GAMMA_READ_ALIGN = 64
+GAMMA_READ_ALIGN = 64  # BH DRAM read alignment: cb_gamma page stride (host) and gamma reads (writer CT arg)
 MAX_RUNTIME_ARGS = 341
 # Perf probes only (never set by the op): AGRMS_ABLATE=EMPTY | LOCAL | TRANSPORT stubs one side of the program
 # (kernels/*: AGRMS_ABLATE_*). EMPTY: every kernel returns at once (launch floor). LOCAL: no transport (ports idle,
@@ -625,6 +625,8 @@ def create_mesh_program_descriptor(
     SEM_LOCAL_LOADED = n_streams + 1
     SEM_ARRIVAL = n_streams + 2
     SEM_INV = n_streams + 3  # owner combine: inv_rms returns
+    SEM_PARTIALS_ODD = n_streams + 4  # partials of odd blocks (writer: one counter per block parity)
+    NUM_SEMS = n_streams + 5
 
     all_cores = sorted(set(workers) | port_union, key=lambda c: (c[1], c[0]))
     all_crs = _rects(all_cores)
@@ -696,6 +698,8 @@ def create_mesh_program_descriptor(
         row_gather,
         SEM_INV,
         plan_.get(CB_GATHERED, (0, 0))[0],
+        SEM_PARTIALS_ODD,
+        GAMMA_READ_ALIGN,
     ]
     writer_ct += list(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
     writer_ct += list(
@@ -738,6 +742,7 @@ def create_mesh_program_descriptor(
         fp32_dest,
         str(compute_kernel_config.math_fidelity),
         bool(compute_kernel_config.math_approx_mode),
+        bool(getattr(compute_kernel_config, "dst_full_sync_en", False)),
         k,
         n_groups,
         xfer_rows,
@@ -755,7 +760,7 @@ def create_mesh_program_descriptor(
             if idx != CB_X_LANDING:
                 cbs.append(_cb(idx, pages, page_bytes, cb_dtype[idx], worker_crs))
         cbs.append(_cb(CB_PORT_CHUNKS, 2 * group * run_pages, T_in, x_dtype, port_crs))
-        semaphores = [ttnn.SemaphoreDescriptor(id=i, core_ranges=all_crs, initial_value=0) for i in range(SEM_INV + 1)]
+        semaphores = [ttnn.SemaphoreDescriptor(id=i, core_ranges=all_crs, initial_value=0) for i in range(NUM_SEMS)]
         program = ttnn.ProgramDescriptor(kernels=[], semaphores=semaphores, cbs=cbs)
 
         # ---- per-stream counts: entries of the stream arriving at port (d, l) that touch member m ----

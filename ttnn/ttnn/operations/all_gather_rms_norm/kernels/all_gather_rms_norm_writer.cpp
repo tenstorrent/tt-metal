@@ -13,7 +13,14 @@
 //     face 0 / face 1 row 0 (fp32).
 // exchange_partials_block (symmetric, k <= K_SYM_MAX): every member writes its rows' column-0 partials (faces 0/2)
 //   into slot (r*k + m) of EVERY member's cb_gathered_sumsq (lockstep slot base = this core's own write pointer),
-//   flushes, bumps each member's sem_partials by 1; then waits for k*(blk+1) arrivals and publishes the slots.
+//   flushes, bumps each member's partials semaphore of the block's PARITY by 1; then waits for k * (blocks of that
+//   parity so far) arrivals and publishes the slots.
+//   Why two semaphores: a peer can run one block ahead (its partial(b+1) only needs every partial(b)), so on ONE
+//   cumulative counter a fast peer's increment for b+1 can stand in for a slow peer's increment for b that is still in
+//   flight, and the combine of b reads that peer's slot before it is written (stale partial -> wrong inv_rms; seen
+//   on the golden suite after a program switch). A peer can never be two blocks ahead (partial(b+2) needs this
+//   member's partial(b+1), produced only after combine(b)), so a per-parity count only completes with all k
+//   partials of block b.
 // store_block: per tile-row, in units of <= out_unit tiles (clamped to the cb_out ring end): wait, write, flush, pop.
 
 #include <cstdint>
@@ -42,11 +49,12 @@ constexpr bool combine_owner = get_compile_time_arg_val(15) != 0;  // k > K_SYM_
 constexpr uint32_t row_gather = get_compile_time_arg_val(16);      // owner: gather tiles per owned row, ceil(k / 32)
 constexpr uint32_t sem_inv_id = get_compile_time_arg_val(17);      // owner: inv_rms returns arrived
 constexpr uint32_t gathered_cb_pages = get_compile_time_arg_val(18);
-constexpr auto out_args = TensorAccessorArgs<19>();
+constexpr uint32_t sem_partials_odd_id = get_compile_time_arg_val(19);  // partials of odd blocks (see below)
+constexpr uint32_t GAMMA_READ_ALIGN = get_compile_time_arg_val(20);     // DRAM read alignment (>= one face row)
+constexpr auto out_args = TensorAccessorArgs<21>();
 [[maybe_unused]] constexpr auto gamma_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
 
 constexpr uint32_t FACE_DIM = 16;
-constexpr uint32_t GAMMA_READ_ALIGN = 64;  // BH DRAM read alignment (>= one 16-datum face row)
 
 #ifdef AGRMS_HAS_GAMMA
 template <typename Accessor>
@@ -145,13 +153,14 @@ FORCE_INLINE void zero_unused_gather_rows() {
 struct OwnerExchange {
     uint32_t peers_idx;
     uint32_t member_idx;
-    uint32_t sem_addr;
+    uint32_t sem_addr_par[2];  // partials semaphores by block parity (see exchange_partials_block above)
     uint32_t sem_inv_addr;
     uint32_t tb;
-    uint32_t partials_expected = 0;
+    uint32_t partials_expected[2] = {0, 0};
     uint32_t inv_expected = 0;
 
-    FORCE_INLINE void block(uint32_t rows, uint32_t ofs) {
+    FORCE_INLINE void block(uint32_t rows, uint32_t ofs, uint32_t parity) {
+        const uint32_t sem_addr = sem_addr_par[parity];
         constexpr uint32_t k = w_split_cores;
         const uint32_t face_bytes = tb / 4;
         const uint32_t frow = tb / 64;
@@ -178,8 +187,8 @@ struct OwnerExchange {
         // owner: wait for the k partials of every owned row, publish them to compute
         const uint32_t r0 = (member_idx + k - ofs) % k;
         const uint32_t owned = r0 < rows ? (rows - r0 + k - 1) / k : 0;
-        partials_expected += owned * k;
-        noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sem_addr), partials_expected);
+        partials_expected[parity] += owned * k;
+        noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sem_addr), partials_expected[parity]);
         cb_push_back(cb_gathered_sumsq, slots);
         // owner: return the combined inv_rms of each owned row r into slot r of every member's cb_inv_rms
         cb_reserve_back(cb_inv_rms, rows);
@@ -232,19 +241,21 @@ void kernel_main() {
 #endif
 
     const auto out_acc = TensorAccessor(out_args, out_addr, out_page_bytes);
-    [[maybe_unused]] const uint32_t sem_addr = get_semaphore(sem_partials_id);
-    [[maybe_unused]] uint32_t partials_expected = 0;
+    [[maybe_unused]] const uint32_t sem_par[2] = {get_semaphore(sem_partials_id), get_semaphore(sem_partials_odd_id)};
+    [[maybe_unused]] uint32_t partials_expected[2] = {0, 0};
     [[maybe_unused]] const uint32_t acc_tile_bytes = get_tile_size(cb_partial_sumsq);
-    [[maybe_unused]] OwnerExchange owner_x{peers_idx, member_idx, sem_addr, get_semaphore(sem_inv_id), acc_tile_bytes};
+    [[maybe_unused]] OwnerExchange owner_x{
+        peers_idx, member_idx, {sem_par[0], sem_par[1]}, get_semaphore(sem_inv_id), acc_tile_bytes};
     zero_unused_gather_rows();
 
     uint32_t out_ring_pos = 0;
     for (uint32_t i0 = 0; i0 < n_rows; i0 += block_row_tiles) {
         const uint32_t rows = (n_rows - i0) < block_row_tiles ? (n_rows - i0) : block_row_tiles;
+        [[maybe_unused]] const uint32_t parity = (i0 / block_row_tiles) & 1u;
 
         // ---- exchange_partials_block (symmetric all-gather of the k members' partials) ----
         if constexpr (w_split_cores > 1 && combine_owner) {
-            owner_x.block(rows, i0 % w_split_cores);  // owners rotate per block (compute: same ofs)
+            owner_x.block(rows, i0 % w_split_cores, parity);  // owners rotate per block (compute: same ofs)
         } else if constexpr (w_split_cores > 1) {
             constexpr uint32_t k = w_split_cores;
             cb_wait_front(cb_partial_sumsq, rows);
@@ -261,12 +272,13 @@ void kernel_main() {
             }
             // same NoC, VC and destination: the increments arrive after the data (flush, not barrier)
             noc_async_writes_flushed();
+            const uint32_t sem_addr = sem_par[parity];
             for (uint32_t m = 0; m < k; ++m) {
                 noc_semaphore_inc(peer_addr(peers_idx, m, sem_addr), 1);
             }
             cb_pop_front(cb_partial_sumsq, rows);
-            partials_expected += k;
-            noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sem_addr), partials_expected);
+            partials_expected[parity] += k;
+            noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sem_addr), partials_expected[parity]);
             cb_push_back(cb_gathered_sumsq, k * rows);
         }
 
