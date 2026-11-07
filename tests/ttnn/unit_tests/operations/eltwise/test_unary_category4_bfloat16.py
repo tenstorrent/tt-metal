@@ -11,8 +11,6 @@ from tests.ttnn.unit_tests.operations.eltwise.eltwise_test_utils import (
     generate_bfloat16_bits,
     generate_bfloat16_bits_in_range,
     to_tt_tensor,
-    float_to_bf16_bits,
-    bf16_bits_to_float,
 )
 from tt_py_test_utils_common.utility_functions import is_blackhole
 
@@ -443,7 +441,7 @@ def test_rpow_op(device, exponent):
         # NOT exactly bf16-representable: exercises fill_value's own fp32->bf16
         # conversion instead of trivially agreeing with the CPU reference.
         0.1,
-        -3.4028235e38,  # fp32 max; truncates to bf16's max instead of rounding to -inf
+        -torch.finfo(torch.float32).max,  # Negative fp32 max rounds to -inf in bf16.
         -10.0,
         15.5,
         -29.5,
@@ -456,17 +454,15 @@ def test_fill_op(device, fill_value):
     itself is parametrized across representative bf16 value classes instead of
     the input being swept.
 
-    The device truncates fill_value to bf16 rather than round-to-nearest-even
-    (unlike torch.full_like()'s default conversion), so golden is built from the
-    truncated value to match -- otherwise e.g. 0.1 or fp32 max would spuriously
-    disagree (the latter overflows to inf under RNE, but not under truncation).
+    Scalars round to nearest even, including values that round to infinity.
+    Build the reference in float32 first so values beyond bf16's finite range
+    are converted by torch instead of rejected by its bf16 fill overflow check.
     """
     input_tensor = torch.arange(256 * 256, dtype=torch.float32).view(1, 1, 256, 256).to(torch.bfloat16)
-    device_fill_value = bf16_bits_to_float(float_to_bf16_bits(fill_value))
 
     tt_in = to_tt_tensor(input_tensor, device)
     golden_function = ttnn.get_golden_function(ttnn.fill)
-    golden = golden_function(input_tensor, device_fill_value, device=device)
+    golden = golden_function(input_tensor.float(), fill_value, device=device).to(torch.bfloat16)
 
     tt_result = ttnn.fill(tt_in, fill_value)
     result = ttnn.to_torch(tt_result)
