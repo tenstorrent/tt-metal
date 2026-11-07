@@ -66,7 +66,7 @@ def test_the_cache_check_call_binds_to_the_transformer():
 
 
 def test_every_forward_call_binds_to_the_transformer():
-    for call in _call_sites("self.model.forward", expected=2):
+    for call in _call_sites("self.model.forward", expected=3):
         _bind(TtV4Transformer.forward, call, None)
 
 

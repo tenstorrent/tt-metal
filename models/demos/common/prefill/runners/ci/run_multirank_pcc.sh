@@ -64,6 +64,8 @@ DFLASH_PCC_THRESHOLD=""
 TABLE_WAIT_DEFAULT=3600
 VARIANT_MAX_SEQ_LEN=""
 MTP=0
+# 1 when the model's golden is a tail window of a longer request, which rejects a PREFILL_PCC_GOLDEN_LEN cap.
+TAIL_GOLDEN=0
 DFLASH=0
 # sc1 runs a single galaxy, so both of these exist to shrink the sc4 model down to what one fits.
 SC1_MAX_SEQ_LEN=""
@@ -103,6 +105,7 @@ case "${MODEL}" in
     PCC_THRESHOLD=0.82
     PRODUCER_ENV="export PREFILL_TRACE_DIR=/mnt/weka/model-cache/scratch/zai-org/GLM-5.3-Cache/golden_traces/glm53-1020k-last5120;"
     REQUEST_LEN=1044480
+    TAIL_GOLDEN=1
     if [ "${VARIANT#_mtp}" != "${VARIANT}" ]; then
       MTP=1
       MANIFEST="${MANIFEST_DIR}/glm53${VARIANT}.json"
@@ -112,6 +115,11 @@ case "${MODEL}" in
       MTP_TRACE="${PREFILL_MTP_TRACE_DIR:-/mnt/weka/model-cache/scratch/zai-org/GLM-5.3-Cache/golden_traces/mtp-tail-1M-last5120}"
       PRODUCER_ENV+=" export PREFILL_MTP_TRACE_DIR='${MTP_TRACE}'; export PREFILL_MTP_PCC=${MTP_PCC_THRESHOLD};"
       [ "${CONFIG}" = sc1 ] && TABLE_WAIT_DEFAULT=5400
+    elif [ "${VARIANT}" = _packed ]; then
+      # Two 5,120-token chunks per forward (PREFILL_FORWARD_TOKENS_BUDGET=10240): the producer packs the same
+      # golden request into packed forwards, traced with D2H acks, every chunk's indexer indices crossing ranks.
+      # Same golden and PCC gate: packing moves the MoE output by rounding only (#63555).
+      MANIFEST="${MANIFEST_DIR}/glm53${VARIANT}.json"
     fi
     ;;
   kimi_k3)
@@ -174,8 +182,9 @@ if [ -n "${VARIANT}" ]; then
   [ "${MANIFEST##*/}" = "${RUN_NAME}.json" ] || { echo "${MODEL} has no ${VARIANT#_} variant" >&2; exit 2; }
   [ -f "${MANIFEST}" ] || { echo "no manifest for ${RUN_NAME} at ${MANIFEST}" >&2; exit 2; }
   export PIPELINE_DIR="${PIPELINE_DIR}${VARIANT}"
-  # A windowed (tail) golden rejects a length cap, so MTP, which compares the 1M tail, takes none.
-  [ "${MTP}" = 1 ] || PRODUCER_ENV+=" export PREFILL_PCC_GOLDEN_LEN=${GOLDEN_LEN};"
+  # A windowed (tail) golden rejects a length cap, so a model whose golden is the 1M tail (GLM-5.3, every variant)
+  # takes none.
+  [ "${TAIL_GOLDEN}" = 1 ] || PRODUCER_ENV+=" export PREFILL_PCC_GOLDEN_LEN=${GOLDEN_LEN};"
   PRODUCER_ENV+=" export PREFILL_PRODUCER_MAX_REQUESTS=1; export PREFILL_PRODUCER_MULTI_TURN_PROB=0;"
   PERF_BASELINES=""
   REQUIRE_TPS=0

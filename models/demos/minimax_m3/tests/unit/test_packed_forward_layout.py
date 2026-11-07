@@ -9,7 +9,7 @@ import torch
 
 from models.demos.common.prefill.chunk_layout import rotated_chunk_positions, rotated_chunk_real_counts
 from models.demos.common.prefill.prefill_chunk import PrefillChunk, validate_chunks
-from models.demos.minimax_m3.tt.packed_rows import packed_real_rows
+from models.demos.minimax_m3.tt.packed_rows import packed_real_rows, packed_routed_pad_rows
 
 C, SP = 1024, 8
 S = C // SP
@@ -98,3 +98,15 @@ def test_packed_real_rows_random():
             chunks.append(PrefillChunk(len(chunks), start, start + lengths[randint(0, len(lengths) - 1)]))
         chunks.sort(key=lambda e: e.is_empty)
         assert packed_real_rows(chunks, SP, S) == brute_real_rows(chunks, SP, S)
+
+
+@pytest.mark.parametrize("sp,chunk_local", [(8, 640), (4, 640), (8, 128)])
+def test_packed_routed_pad_rows(sp, chunk_local):
+    """A partial chunk ahead of a full one routes every one of its pad rows; behind it, none."""
+    chunk = sp * chunk_local
+    for start in (0, chunk, 3 * chunk):
+        for n in (32, chunk // 2 + 32, chunk - 32):
+            partial, full = PrefillChunk(0, start, start + n), PrefillChunk(1, 0, chunk)
+            assert packed_routed_pad_rows([full, partial], sp, chunk_local) == 0
+            assert packed_routed_pad_rows([partial, full], sp, chunk_local) == chunk - n
+            assert packed_routed_pad_rows([partial, EMPTY], sp, chunk_local) == 0
