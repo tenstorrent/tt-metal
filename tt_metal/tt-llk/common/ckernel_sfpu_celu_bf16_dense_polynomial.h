@@ -5,14 +5,12 @@
 
 #include "sfpi.h"
 
-// Include polynomial_horner.h before this transport helper.
 namespace ckernel::sfpu::ttpoly::celu
 {
 using namespace ::sfpi;
 using ::sfpi::DataLayout;
 
-// The selected one-sided terminal uses ordered comparison on WH and the
-// original SFPI maximum on BH. Both canonical and compact paths call here.
+// The one-sided clamp compares in order on WH and takes the SFPI maximum on BH.
 template <bool Ordered, std::uint32_t BoundBits>
 __attribute__((always_inline)) inline vFloat dense_lower_clamp(vFloat input)
 {
@@ -30,18 +28,6 @@ __attribute__((always_inline)) inline vFloat dense_lower_clamp(vFloat input)
     {
         return sfpi::max(input, bound);
     }
-}
-
-template <bool Ordered, std::uint32_t BoundBits>
-__attribute__((always_inline)) inline vFloat dense_lower_clamp(vFloat input, vUInt raw)
-{
-    vUInt raw_sign = raw & vUInt(0x8000u);
-    v_if (raw_sign == vUInt(0x8000u))
-    {
-        input = setsgn(input, 1);
-    }
-    v_endif;
-    return dense_lower_clamp<Ordered, BoundBits>(input);
 }
 
 template <typename Config>
@@ -100,13 +86,6 @@ struct dense_polynomial_transport
         }
     }
 
-    // --- dual Horner over one segment (identical op sequence to
-    // --- eval_polynomial_dual: shared coefficient register, MAD(r, x, c) rungs).
-    // A verifier-bound selected reconstruction may request the single-row twin
-    // below when an auxiliary tail leaf would push the dual body's six persistent
-    // lane values beyond Blackhole's eight SFPU LREGs.  Both schedules use these
-    // exact parked fetchers, coefficient bytes, segment predicates, and Horner
-    // order; only cross-lane interleaving changes.
     template <std::uint32_t BASE>
     struct segment_coefficients
     {
@@ -117,49 +96,12 @@ struct dense_polynomial_transport
         }
     };
 
-    template <std::uint32_t SEG>
-    __attribute__((always_inline)) static inline void eval_seg_single(vFloat x, vFloat& r)
-    {
-        constexpr std::uint32_t DEG  = Config::degree(SEG);
-        constexpr std::uint32_t BASE = Config::kCoefficientOffset + SEG * Config::kCoefficientsPerSegment;
-        eval_polynomial_transport<DEG>(segment_coefficients<BASE> {}, x, r);
-    }
-
     // A segment from the smallest positive subnormal owns x > 0. A float compare reads a subnormal
     // x as 0, but TT-NN delivers subnormals to DEST unflushed, so the raw bits decide: -0 reads negative.
     template <std::uint32_t SEG>
     static constexpr bool positive_segment()
     {
         return __builtin_bit_cast(std::uint32_t, Config::lut(SEG)) == 1u;
-    }
-
-    template <std::uint32_t SEG>
-    __attribute__((always_inline)) static inline void cascade_single(vFloat x, vFloat& r)
-    {
-        if constexpr (SEG < Config::kSegments)
-        {
-            vFloat tmp;
-            eval_seg_single<SEG>(x, tmp);
-            if constexpr (positive_segment<SEG>())
-            {
-                // Sign clear and nonzero, as two flag tests: a single x > 0 lets -0 through on the SFPU.
-                vInt bits = as<vInt>(x);
-                v_if (bits >= 0 && bits != 0)
-                {
-                    r = tmp;
-                }
-                v_endif;
-            }
-            else
-            {
-                v_if (x >= lut_fetch<SEG>())
-                {
-                    r = tmp;
-                }
-                v_endif;
-            }
-            cascade_single<SEG + 1>(x, r);
-        }
     }
 
     template <std::uint32_t SEG>
@@ -170,8 +112,6 @@ struct dense_polynomial_transport
         eval_polynomial_transport<DEG>(segment_coefficients<BASE> {}, x1, x2, r1, r2);
     }
 
-    // --- segment cascade (identical predicated-move structure to
-    // --- unroll_segment_dual; boundary compare reads the parked row).
     template <std::uint32_t SEG>
     __attribute__((always_inline)) static inline void cascade_dual(vFloat x1, vFloat x2, vFloat& r1, vFloat& r2)
     {

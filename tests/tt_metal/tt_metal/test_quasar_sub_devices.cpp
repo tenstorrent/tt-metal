@@ -6,6 +6,7 @@
 #include "context/metal_context.hpp"
 #include "hostdevcommon/common_values.hpp"
 
+#include <tt-metalium/allocator.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
@@ -309,8 +310,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, TestSubDeviceShardedL1BufferAllocation
     for (size_t i = 0; i < partitions.size(); ++i) {
         buffers.push_back(make_buffer(partitions[i], SubDeviceId{static_cast<uint8_t>(i)}));
         EXPECT_GE(buffers.back()->address(), l1_unreserved_base);
-        EXPECT_LE(
-            buffers.back()->address() + buffers.back()->get_backing_buffer()->aligned_page_size(), local_l1_limit);
+        EXPECT_LE(buffers.back()->address() + buffers.back()->aligned_page_size(), local_l1_limit);
         ASSERT_EQ(buffers.back()->device_local_config().sub_device_id, SubDeviceId{static_cast<uint8_t>(i)});
         EXPECT_EQ(buffers.back()->device_local_config().sharding_args.shard_spec()->grid(), node_set(partitions[i]));
     }

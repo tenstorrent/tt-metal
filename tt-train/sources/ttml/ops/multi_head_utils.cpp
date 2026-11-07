@@ -5,6 +5,7 @@
 #include "multi_head_utils.hpp"
 
 #include <stdexcept>
+#include <string_view>
 #include <tt-metalium/constants.hpp>
 
 #include "autograd/auto_context.hpp"
@@ -19,46 +20,108 @@
 
 namespace ttml::ops {
 
-std::tuple<autograd::TensorPtr, autograd::TensorPtr, autograd::TensorPtr> heads_creation(
-    const autograd::TensorPtr& qkv, uint32_t num_heads) {
-    // qkv shape is (B, 1, S, E * 3)
-    // q, k, v shapes are (B, num_heads, S, E / num_heads)
+namespace {
+
+// Checks that `width` splits into `num_heads` heads of a tile-aligned head_dim, and returns head_dim.
+// `op_name` and `heads_name` (what `num_heads` counts) only label the error messages.
+uint32_t validate_head_dim(uint32_t width, uint32_t num_heads, std::string_view op_name, std::string_view heads_name) {
+    if (num_heads == 0U) {
+        throw std::invalid_argument(fmt::format("{} expects {} to be positive, got 0.", op_name, heads_name));
+    }
+    if (width % num_heads != 0U) {
+        throw std::invalid_argument(fmt::format(
+            "{} expects the input width ({}) to be divisible by {} ({}).", op_name, width, heads_name, num_heads));
+    }
+    // nlp_create_qkv_heads derives its tile count as head_dim / TILE_WIDTH, so a sub-tile head_dim
+    // silently writes nothing and returns a tile-padded tensor of garbage.
+    const uint32_t head_dim = width / num_heads;
+    if (head_dim % tt::constants::TILE_WIDTH != 0U) {
+        throw std::invalid_argument(fmt::format(
+            "{} expects head_dim (input width {} / {} {} = {}) to be a multiple of {}.",
+            op_name,
+            width,
+            heads_name,
+            num_heads,
+            head_dim,
+            tt::constants::TILE_WIDTH));
+    }
+    return head_dim;
+}
+
+// Splits `qs` (and `kvs`, when given) into heads with nlp_create_qkv_heads:
+// q: (B, num_heads, S, head_dim); k, v: (B, num_kv_heads, S, head_dim).
+// Without `kvs`, `qs` holds [Q | K | V]; with it, `qs` holds Q and `kvs` holds [K | V].
+std::tuple<autograd::TensorPtr, autograd::TensorPtr, autograd::TensorPtr> create_heads(
+    const autograd::TensorPtr& qs,
+    const autograd::TensorPtr& kvs,
+    uint32_t num_heads,
+    uint32_t num_kv_heads,
+    std::string_view op_name) {
+    const uint32_t qs_width = qs->get_value().logical_shape()[-1];
+    if (kvs) {
+        const uint32_t head_dim = validate_head_dim(qs_width, num_heads, op_name, "num_heads");
+        const uint32_t kvs_width = kvs->get_value().logical_shape()[-1];
+        if (kvs_width != 2U * num_kv_heads * head_dim) {
+            throw std::invalid_argument(fmt::format(
+                "{} expects the KV width ({}) to be 2 * {} KV heads * head_dim {}.",
+                op_name,
+                kvs_width,
+                num_kv_heads,
+                head_dim));
+        }
+    } else {
+        if (num_heads == 0U) {
+            throw std::invalid_argument(fmt::format("{} expects num_heads to be positive, got 0.", op_name));
+        }
+        validate_head_dim(qs_width, num_heads + 2U * num_kv_heads, op_name, "num_heads + 2 * num_groups");
+    }
+
     auto [q, k, v] = ttnn::experimental::nlp_create_qkv_heads(
-        qkv->get_value(),
-        std::nullopt,
-        num_heads,
-        num_heads,
-        /* transpose_k */ false,
-        /* kv_tied */ false,
-        /* memory_config */ std::nullopt,
-        /* optional_output_tensors */ std::nullopt);
+        qs->get_value(),
+        kvs ? std::optional<ttnn::Tensor>(kvs->get_value()) : std::nullopt,
+        /*num_q_heads=*/num_heads,
+        /*num_kv_heads=*/num_kv_heads,
+        /*transpose_k_heads=*/false,
+        /*kv_tied=*/false,
+        /*memory_config=*/std::nullopt,
+        /*optional_output_tensors=*/std::nullopt);
 
     auto out_q = autograd::create_tensor(q);
     auto out_k = autograd::create_tensor(k);
     auto out_v = autograd::create_tensor(v);
 
-    autograd::GradFunction grad_q = [out_q, out_k, out_v, qkv]() {
-        auto grad_q = out_q->get_grad();
-        auto grad_k = out_k->get_grad();
-        auto grad_v = out_v->get_grad();
-        // (B, num_heads, S, E / num_heads) -> (B, 1, S, E)
-        grad_q = ttnn::experimental::nlp_concat_heads(grad_q);
-        grad_k = ttnn::experimental::nlp_concat_heads(grad_k);
-        grad_v = ttnn::experimental::nlp_concat_heads(grad_v);
-        auto result = ttnn::concat(std::vector<ttnn::Tensor>({grad_q, grad_k, grad_v}), /* dim */ 3);
-        qkv->add_grad(result);
+    autograd::GradFunction grad_q = [out_q, out_k, out_v, qs, kvs]() {
+        // (B, heads, S, head_dim) -> (B, 1, S, heads * head_dim)
+        auto grad_q = ttnn::experimental::nlp_concat_heads(out_q->get_grad());
+        auto grad_k = ttnn::experimental::nlp_concat_heads(out_k->get_grad());
+        auto grad_v = ttnn::experimental::nlp_concat_heads(out_v->get_grad());
+        if (kvs) {
+            qs->add_grad(grad_q);
+            kvs->add_grad(ttnn::concat(std::vector<ttnn::Tensor>({grad_k, grad_v}), /* dim */ 3));
+        } else {
+            qs->add_grad(ttnn::concat(std::vector<ttnn::Tensor>({grad_q, grad_k, grad_v}), /* dim */ 3));
+        }
     };
 
     // grad_q function depends on gradients of q, k and v
-    auto q_node = autograd::add_backward_node(std::move(grad_q), out_q, qkv);
+    auto q_node = autograd::add_backward_node(std::move(grad_q), out_q, qs, kvs);
     out_q->set_node(q_node);
     // this needs to be added to make sure that gradients for k and v are computed before we run backward for q
     // Only add sync nodes if out_q has a node (i.e., gradients are needed)
     if (q_node.has_value()) {
-        out_k->set_node(autograd::add_backward_node_always([]() {}, out_k, qkv, out_q));
-        out_v->set_node(autograd::add_backward_node_always([]() {}, out_v, qkv, out_q));
+        out_k->set_node(autograd::add_backward_node_always([]() {}, out_k, qs, kvs, out_q));
+        out_v->set_node(autograd::add_backward_node_always([]() {}, out_v, qs, kvs, out_q));
     }
     return {out_q, out_k, out_v};
+}
+
+}  // namespace
+
+std::tuple<autograd::TensorPtr, autograd::TensorPtr, autograd::TensorPtr> heads_creation(
+    const autograd::TensorPtr& qkv, uint32_t num_heads, std::optional<uint32_t> num_groups) {
+    // qkv: (B, 1, S, (num_heads + 2 * num_groups) * head_dim), laid out [Q | K | V].
+    // num_groups defaults to num_heads (standard MHA); num_groups < num_heads selects GQA.
+    return create_heads(qkv, nullptr, num_heads, num_groups.value_or(num_heads), "heads_creation");
 }
 
 autograd::TensorPtr split_heads(const autograd::TensorPtr& x, uint32_t num_heads) {
@@ -67,23 +130,7 @@ autograd::TensorPtr split_heads(const autograd::TensorPtr& x, uint32_t num_heads
         throw std::invalid_argument(
             fmt::format("split_heads expects an input of shape (B, 1, S, E), but dim 1 is {}.", x_shape[1]));
     }
-    if (num_heads == 0U) {
-        throw std::invalid_argument("split_heads expects num_heads to be positive, got 0.");
-    }
-    if (x_shape[3] % num_heads != 0U) {
-        throw std::invalid_argument(fmt::format(
-            "split_heads expects the embedding dim ({}) to be divisible by num_heads ({}).", x_shape[3], num_heads));
-    }
-    // The kernel derives its tile count as head_dim / TILE_WIDTH, so a sub-tile head_dim silently
-    // writes nothing and returns a tile-padded tensor of garbage.
-    if ((x_shape[3] / num_heads) % tt::constants::TILE_WIDTH != 0U) {
-        throw std::invalid_argument(fmt::format(
-            "split_heads expects head_dim (embedding dim {} / num_heads {} = {}) to be a multiple of {}.",
-            x_shape[3],
-            num_heads,
-            x_shape[3] / num_heads,
-            tt::constants::TILE_WIDTH));
-    }
+    validate_head_dim(x_shape[3], num_heads, "split_heads", "num_heads");
     // nlp_create_qkv_heads picks its program factory from the input alone, and the sharded factory
     // divides by num_kv_heads, which is 0 here. Reject rather than take a SIGFPE inside the kernel.
     if (x->get_value().is_sharded()) {
@@ -144,47 +191,8 @@ autograd::TensorPtr heads_fusion(const autograd::TensorPtr& x) {
 
 std::tuple<autograd::TensorPtr, autograd::TensorPtr, autograd::TensorPtr> grouped_heads_creation(
     const autograd::TensorPtr& qs, const autograd::TensorPtr& kvs, uint32_t num_heads, uint32_t num_groups) {
-    // qs shape is (B, 1, S, E)
-    // q shape is (B, num_heads, S, E/num_heads)
-    // kvs shape is (B, 1, S, E*2)
-    // k, v shapes are (B, num_groups, S, E / num_groups)
-    auto [q, k, v] = ttnn::experimental::nlp_create_qkv_heads(
-        qs->get_value(),
-        kvs->get_value(),
-        /*num_q_heads=*/num_heads,
-        /*num_kv_heads=*/num_groups,
-        /*transpose_k_heads=*/false,
-        /*kv_tied=*/false,
-        /*memory_config=*/std::nullopt,
-        /*optional_output_tensors=*/std::nullopt);
-
-    auto out_q = autograd::create_tensor(q);
-    auto out_k = autograd::create_tensor(k);
-    auto out_v = autograd::create_tensor(v);
-
-    autograd::GradFunction grad_q = [out_q, out_k, out_v, qs, kvs]() {
-        auto grad_q = out_q->get_grad();
-        auto grad_k = out_k->get_grad();
-        auto grad_v = out_v->get_grad();
-        // (B, num_heads, S, E / num_heads) -> (B, 1, S, E)
-        grad_q = ttnn::experimental::nlp_concat_heads(grad_q);
-        grad_k = ttnn::experimental::nlp_concat_heads(grad_k);
-        grad_v = ttnn::experimental::nlp_concat_heads(grad_v);
-        qs->add_grad(grad_q);
-        auto kvs_grad = ttnn::concat(std::vector<ttnn::Tensor>({grad_k, grad_v}), /* dim */ 3);
-        kvs->add_grad(kvs_grad);
-    };
-
-    // grad_q function depends on gradients of q, k and v
-    auto q_node = autograd::add_backward_node(std::move(grad_q), out_q, qs, kvs);
-    out_q->set_node(q_node);
-    // this needs to be added to make sure that gradients for k and v are computed before we run backward for q
-    // Only add sync nodes if out_q has a node (i.e., gradients are needed)
-    if (q_node.has_value()) {
-        out_k->set_node(autograd::add_backward_node_always([]() {}, out_k, qs, kvs));
-        out_v->set_node(autograd::add_backward_node_always([]() {}, out_v, qs, kvs));
-    }
-    return {out_q, out_k, out_v};
+    // qs: (B, 1, S, num_heads * head_dim); kvs: (B, 1, S, 2 * num_groups * head_dim), laid out [K | V].
+    return create_heads(qs, kvs, num_heads, num_groups, "grouped_heads_creation");
 }
 
 }  // namespace ttml::ops

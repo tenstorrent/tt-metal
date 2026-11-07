@@ -99,13 +99,13 @@ ttnn::device_operation::ProgramArtifacts UntilizeWithUnpaddingMultiCoreShardedPr
 
     uint32_t num_input_tiles = ntiles_per_block * nblocks_per_core;
     uint32_t num_output_tiles = out_sharded ? (unpad_tensor_w_16 ? 16 : ntiles_per_batch * 2) : ntiles_per_block * 2;
-    uint32_t aligned_page_size = static_cast<uint32_t>(output.buffer()->aligned_page_size());
+    uint32_t aligned_page_size = static_cast<uint32_t>(output.mesh_buffer().aligned_page_size());
 
     bool float32_dtype = input_cb_data_format == tt::DataFormat::Float32 ||
                          input_cb_data_format == tt::DataFormat::UInt32 ||
                          input_cb_data_format == tt::DataFormat::Int32;
 
-    TT_ASSERT(output.buffer() != nullptr, "Output buffer should be allocated on device!");
+    TT_ASSERT(output.is_allocated(), "Output buffer should be allocated on device!");
 
     // ------------------------------------------------------------------------
     // Dataflow buffers.
@@ -226,10 +226,6 @@ ttnn::device_operation::ProgramArtifacts UntilizeWithUnpaddingMultiCoreShardedPr
     // Compute: untilize (general) or eltwise_copy (W==16, dtype-convert only).
     // ------------------------------------------------------------------------
     KernelSpec::CompilerOptions::Defines compute_defines;
-    if (input_cb_data_format == tt::DataFormat::Int32 || input_cb_data_format == tt::DataFormat::UInt32 ||
-        input_cb_data_format == tt::DataFormat::Float32) {
-        compute_defines.emplace("DST_ACCUM_MODE", "1");
-    }
 
     ttnn::ComputeKernelConfig compute_config{
         .math_fidelity = MathFidelity::HiFi4, .math_approx_mode = false, .fp32_dest_acc_en = fp32_dest_acc_en};
