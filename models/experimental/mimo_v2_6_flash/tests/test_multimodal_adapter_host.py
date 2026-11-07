@@ -15,6 +15,7 @@ from models.experimental.mimo_v2_6_flash.tt.model import TtMiMoModel
 
 HIDDEN = 8
 IMAGE = 151655
+EOS = 7  # the fake replica's logits have 8 columns
 
 
 class Replica:
@@ -78,7 +79,7 @@ def adapter(monkeypatch, cls=gv.MiMoV2OmniForCausalLM):
     monkeypatch.setattr(a, "_layer_tables", lambda *args: None)
     monkeypatch.setattr(a, "_group_rows", lambda *args: {})
     if cls is gv.MiMoV2OmniForCausalLM:
-        hf = SimpleNamespace(image_token_id=IMAGE, vision_config={"spatial_merge_size": 2})
+        hf = SimpleNamespace(image_token_id=IMAGE, vision_config={"spatial_merge_size": 2}, eos_token_id=EOS)
         a.setup_multimodal(None, hf, backends=[Backend()])
     return a, replica
 
@@ -134,18 +135,38 @@ def test_image_lists_fallback_and_cache(monkeypatch):
     assert a.mm_encoders[0].backend.calls == calls, "the image was encoded again"
 
 
-def test_bad_input_is_served_as_text(monkeypatch):
+def test_bad_input_fails_the_row(monkeypatch):
+    """Input that cannot be served is never answered from placeholder embeddings (MIMO_MM_STRICT): the row's first
+    token is forced to the end of the turn and take_prefill_errors() reports it; nothing raises out of prefill."""
+    monkeypatch.setattr(gv, "MM_STRICT", True)
     a, replica = adapter(monkeypatch)
-    tokens = torch.zeros(3, 300, dtype=torch.int32)
+    tokens = torch.zeros(4, 300, dtype=torch.int32)
     mm_items = [
         [{"modality": "smell", "identifier": "x", "offset": 0, "length": 4}],  # not a served modality
         [{**image(1, 10), "length": 3}],  # the encoder gives 8 rows for 3 placeholders
         [image(2, 4), image(3, 6)],  # overlapping items
+        None,  # a text request in the same step is served as usual
     ]
-    a.prefill_forward(tokens, [0, 0, 0], [200, 200, 200], None, None, empty_slots=[0, 1, 2], mm_items=mm_items)
-    # Rows 0 and 2 are text (batched); row 1 keeps its placeholder tokens, eagerly (its item still has rows there).
-    assert replica.passes[0] == ("batch", [(0, 200), (2, 200)])
-    assert replica.passes[1][:2] == ("row", 1) and replica.passes[1][4] is None
+    logits = a.prefill_forward(tokens, [0, 0, 0, 0], [200] * 4, None, None, empty_slots=[0, 1, 2, 3], mm_items=mm_items)
+    errors = a.take_prefill_errors()
+    assert sorted(errors) == [0, 1, 2] and a.take_prefill_errors() == {}
+    for row in (0, 1, 2):
+        assert int(logits[row].reshape(-1).argmax()) == EOS and int(torch.isinf(logits[row]).sum()) == 7
+    assert not torch.isinf(logits[3]).any()
+    # A later request whose cached prefix (start 128) holds the item that failed is failed too: that KV is placeholder.
+    tokens = torch.zeros(1, 400, dtype=torch.int32)
+    a.prefill_forward(tokens, [128], [400], None, None, empty_slots=[1], mm_items=[[{**image(1, 10), "length": 3}]])
+    assert list(a.take_prefill_errors()) == [0]
+
+
+def test_bad_input_served_degraded_when_not_strict(monkeypatch):
+    monkeypatch.setattr(gv, "MM_STRICT", False)
+    a, replica = adapter(monkeypatch)
+    tokens = torch.zeros(1, 300, dtype=torch.int32)
+    items = [[{**image(1, 10), "length": 3}]]
+    logits = a.prefill_forward(tokens, [0], [200], None, None, empty_slots=[0], mm_items=items)
+    assert list(a.take_prefill_errors()) == [0] and not torch.isinf(logits).any()
+    assert replica.passes[-1][:2] == ("row", 0) and replica.passes[-1][4] is None
 
 
 def test_items_straddling_chunks_and_slot_reuse(monkeypatch):

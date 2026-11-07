@@ -72,6 +72,21 @@ CHUNK_TRACE_HEADROOM = 1.1
 CHUNK_TRACE_FIRST_ESTIMATE = 21 << 20
 
 
+def _trace_owned(output):
+    """Tell TT_METAL_TRACE_ALLOC_TRACKING that a captured trace's outputs (allocated during its capture, kept for the
+    host to read after each replay) are written by that trace's replays by design, so they are not reported as
+    buffers a replay corrupts. A no-op without the tracking."""
+    try:
+        from ttnn.tools.trace_allocation_tracker import TRACE_ALLOC_TRACKING, TraceAllocationTracker
+    except ImportError:
+        return
+    if not TRACE_ALLOC_TRACKING:
+        return
+    for t in output.values() if isinstance(output, dict) else [output]:
+        if isinstance(t, ttnn.Tensor) and t.is_allocated():
+            TraceAllocationTracker.acknowledge_corruptible(t)
+
+
 def prefill_padded_len(seq_len, start_pos=0, pair_split=False):
     """Tokens are padded so the prefill SDPA chunk (32/128/256) divides the length: 32, 64, 96, then multiples of 128,
     then (from 2048) of 256. Every prefill program keys on one of these lengths (attention.py), so a chunk is padded
@@ -1153,6 +1168,25 @@ class TtMiMoModel:
         ttnn.synchronize_device(self.mesh_device)
         trace["id"] = trace_id
 
+    def recapture_prefill_batch_traces(self):
+        """Capture every traced prefill batch again, after programs were compiled past the captures (their
+        program-cache buffers can sit where an older capture's intermediates are, which its replays overwrite). Each
+        capture runs on zero fill tables and an empty MTP history list, as at warm-up, so it writes only vLLM's null
+        block 0, never the blocks of the last batch it replayed (they may belong to another request by now)."""
+        for (num, padded), trace in self.prefill_traces.items():
+            if trace["id"] is None:
+                continue
+            ttnn.release_trace(self.mesh_device, trace["id"])
+            trace["id"] = None
+            zero = torch.zeros(self.plan.tp, num, -(-padded // self.block_size), dtype=torch.int32)
+            for table in trace["tables"].values():
+                host = kv_lib.per_chip(self.plan, zero, ttnn.int32, ttnn.ROW_MAJOR_LAYOUT, device=False)
+                ttnn.copy_host_to_device_tensor(host, table.fill)
+            if trace["history"] is not None:
+                host = self._history().prefill_list([], num * HISTORY_ROWS, device=False)
+                ttnn.copy_host_to_device_tensor(host, trace["history"])
+            self.capture_prefill_batch_trace(num, padded)
+
     def _replay_prefill_batch(self, trace, chunks):
         """Copy a batch's inputs into its trace's buffers and replay it (non-blocking)."""
         num, padded = len(chunks), max(prefill_padded_len(c[0].numel()) for c in chunks)
@@ -1822,6 +1856,7 @@ class TtMiMoModel:
             output = self._decode_step(inputs, greedy_only, sample)
             self._feed_back(inputs, output, tokens_written=written)
             ttnn.end_trace_capture(self.mesh_device, trace_id, cq_id=0)
+            _trace_owned(output)
             # Every replay reuses the gather phases baked in at capture: back to back, replays only alternate the
             # gather buffers if the step made an even number of fabric reductions (FabricRowGather.advance).
             fabric = getattr(self.plan, "fabric_gather", None)
@@ -1838,6 +1873,7 @@ class TtMiMoModel:
             trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
             output = self.sampler(captured[0]["output"]["logits"], token_input=inputs[0])
             ttnn.end_trace_capture(self.mesh_device, trace_id, cq_id=0)
+            _trace_owned(output)
             sampler = {"id": trace_id, "output": output}
         ttnn.synchronize_device(self.mesh_device)
         self.decode_trace = {

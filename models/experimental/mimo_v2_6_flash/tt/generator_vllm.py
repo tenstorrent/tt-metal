@@ -1050,7 +1050,8 @@ class MiMoV2ForCausalLM:
         """``programs``: each replica's program-cache size before the prefill. A prefill that compiled new programs
         (a chunk length or offset first seen while serving) put their program-cache buffers in memory the replica's
         decode trace may write on replay (tech_reports/.../TraceCorrectness.md, unsafe allocations), so that replica's
-        decode trace is captured again, around them. Every slot is idle during the capture, so no KV is written."""
+        traces are captured again, around them. Every slot is idle during the decode capture and the prefill batches
+        capture on zero fill tables, so no request's KV is written."""
         for lane, model in enumerate(self.models):
             if model.decode_trace is None or model.mesh_device.num_program_cache_entries() == programs[lane]:
                 continue
@@ -1061,6 +1062,10 @@ class MiMoV2ForCausalLM:
             model.release_decode_trace()
             model.release_prefill_chunk_traces()
             model.capture_decode_trace()
+            # The traced prefill batches too (warm-up compiles every prefill program before them, but a multimodal
+            # prefill's encoder can compile programs while serving: TT_METAL_TRACE_ALLOC_TRACKING caught a batch replay
+            # over the device ViT's new program-cache buffers).
+            model.recapture_prefill_batch_traces()
             if model.mtp is not None or model.dflash is not None:
                 model.capture_spec_traces()
             model.capture_prefill_chunk_traces()  # optional, so last: if they no longer fit they are dropped
@@ -2571,16 +2576,72 @@ class MiMoV2ForCausalLM:
 MM_MODALITIES = tuple(m for m in os.environ.get("MIMO_MM_MODALITIES", ",".join(mm.MODALITIES)).split(",") if m)
 
 
+# The device ViT's patch rows per pass (tt/vision; a single image always runs in one pass) and weight dtype.
+VIT_MAX_ROWS = int(os.environ.get("MIMO_VIT_MAX_ROWS", "16384"))
+# Free DRAM per chip (MB) one ViT pass of a row bucket needs (tests/test_vit_dram_headroom_tp8.py measures it): what
+# the multimodal LLM must leave after its KV cache and traces (MiMoV2OmniForCausalLM: KV reservation, startup check).
+# Measured on bhg4 (one row, bf16 weights): 96 / 192 / 368 / 736 MB at 4096 / 8192 / 16384 / 32768 rows (the bisection
+# step is 16 MB); these add ~13 % for a fragmented heap. Plus the ViT's warmed programs (~20 MB per chip).
+VIT_PASS_DRAM_MB = {4096: 112, 8192: 224, 16384: 416, 32768: 832}
+# The largest ViT pass served: images run in one pass (the processor's largest is 32768 patch rows), videos in passes
+# of at most MIMO_VIT_MAX_ROWS.
+VIT_LARGEST_PASS = 32768
+# DRAM per chip the multimodal model takes off the KV pool (MIMO_KV_GB_PER_CHIP) for the ViT's passes. The text
+# model's launches leave ~1.37 GB free per chip at 4 x 1M per row and ~0.87 GB with MTP (8 slots, 1.2 GB trace
+# region), so the default reserves 0.25 GB with speculative decoding and none without (startup checks the rest).
+MM_KV_RESERVE_GB = float(os.environ.get("MIMO_MM_VIT_RESERVE_GB", "0.25" if SPEC_DECODE else "0"))
+# MIMO_MM_STRICT (default on): a prefill row whose multimodal item cannot be served (encoder failure, or a cached
+# prefix holding an item that failed before) is not answered from placeholder embeddings: its first token is forced to
+# the end of the turn, and take_prefill_errors() reports it for the plugin to fail the request.
+MM_STRICT = os.environ.get("MIMO_MM_STRICT", "1") == "1"
+_AUDIO_BACKENDS = {}
+_AUDIO_LOCK = threading.Lock()
+
+
+def _host_audio_backend(model_path):
+    """One host audio encoder per process (~1.7 GB of host weights), shared by the replicas: tt/audio/host_backend."""
+    from .audio.host_backend import HostAudioBackend
+
+    with _AUDIO_LOCK:
+        if model_path not in _AUDIO_BACKENDS:
+            threads = int(os.environ.get("MIMO_AUDIO_THREADS", "8"))
+            _AUDIO_BACKENDS[model_path] = HostAudioBackend(model_path, num_threads=threads)
+        return _AUDIO_BACKENDS[model_path]
+
+
+class _LazyHostAudio:
+    """The host audio encoder, loaded on the first mel it gets: with tt/audio/processor.py the front end sends RVQ
+    codes (AudioCodesBackend's patch encoder), so the engine needs the tokenizer only for a mel."""
+
+    def __init__(self, model_path):
+        self.model_path = model_path
+
+    def embed_audio(self, mel):
+        return _host_audio_backend(self.model_path).embed_audio(mel)
+
+
 def default_encoder_backend(model_path, mesh_device):
-    """The encoder backend of the replica on ``mesh_device`` (its 1x8 row). MIMO_MM_ENCODER: ``hf_host`` (default:
-    the TEMPORARY host backend, tt/multimodal.HFHostBackend, one per process) or ``module.path:factory`` with the same
-    signature (the vision workstream's device ViT plugs in here: it runs on the row that serves the request)."""
-    spec = os.environ.get("MIMO_MM_ENCODER", "hf_host")
+    """The encoder backend of the replica on ``mesh_device`` (its 1x8 row). MIMO_MM_ENCODER:
+
+    * ``tt`` (default): images and videos on the row's device ViT (tt/vision/encoder.MiMoVisionEncoder, its weights
+      cached under MIMO_VISION_CACHE), audio on the host (tt/audio/host_backend.HostAudioBackend, one per process);
+    * ``hf_host``: debug only, the checkpoint's HF modules on the host (tt/multimodal.HFHostBackend);
+    * ``module.path:factory``: factory(model_path, mesh_device) -> an EncoderBackend."""
+    spec = os.environ.get("MIMO_MM_ENCODER", "tt")
+    if spec == "tt":
+        vision = audio = None
+        if "image" in MM_MODALITIES or "video" in MM_MODALITIES:
+            from .vision.encoder import MiMoVisionEncoder
+
+            vision = MiMoVisionEncoder(mesh_device, model_path, max_rows=VIT_MAX_ROWS)
+        if "audio" in MM_MODALITIES:
+            audio = _LazyHostAudio(model_path)
+        return mm.CompositeBackend(vision, audio)
     if spec == "hf_host":
         return mm.HFHostBackend.shared(model_path)
     module, _, name = spec.partition(":")
     if not name:
-        raise ValueError(f"MIMO_MM_ENCODER={spec!r}: hf_host or module.path:factory")
+        raise ValueError(f"MIMO_MM_ENCODER={spec!r}: tt, hf_host or module.path:factory")
     import importlib
 
     return getattr(importlib.import_module(module), name)(model_path, mesh_device)
@@ -2618,7 +2679,34 @@ class MiMoV2OmniForCausalLM(MiMoV2ForCausalLM, *((SupportsMultiModal,) if Suppor
     drafts see the placeholder embeddings there); DFlash's context ring takes the target's hidden states, which see the
     items. Either affects acceptance only."""
 
-    model_capabilities = {**MiMoV2ForCausalLM.model_capabilities, "mm_modalities": MM_MODALITIES}
+    model_capabilities = {
+        **MiMoV2ForCausalLM.model_capabilities,
+        "mm_modalities": MM_MODALITIES,
+        # take_prefill_errors(): rows the last prefill_forward could not serve (MIMO_MM_STRICT); the plugin fails them.
+        "reports_prefill_errors": True,
+    }
+
+    @classmethod
+    def get_max_tokens_all_users(cls, model_name="", num_devices=TP, tt_data_parallel=1, **kwargs):
+        """The text model's KV pool less MIMO_MM_VIT_RESERVE_GB per chip, left free for the device ViT's passes."""
+        tokens = super().get_max_tokens_all_users(model_name, num_devices, tt_data_parallel, **kwargs)
+        if MM_KV_RESERVE_GB <= 0:
+            return tokens
+        default = PAIR_SPLIT_KV_GB_PER_CHIP if KV_PAIR_SPLIT else DEFAULT_KV_GB_PER_CHIP
+        gb = float(os.environ.get("MIMO_KV_GB_PER_CHIP", default))
+        cap = int(max(gb - MM_KV_RESERVE_GB, 0.5) * 1e9 // KV_BYTES_PER_TOKEN)
+        reserved = min(tokens, cap)
+        logger.info(
+            f"MiMo vLLM KV: {MM_KV_RESERVE_GB:g} GB per chip reserved for the ViT (MIMO_MM_VIT_RESERVE_GB): "
+            f"{tokens} -> {reserved} pool tokens per lane ({100 * (tokens - reserved) / max(tokens, 1):.1f}% fewer)"
+        )
+        return reserved
+
+    def take_prefill_errors(self):
+        """{prefill row: reason} of the last prefill_forward's rows that could not be served (MIMO_MM_STRICT): their
+        first token was forced to the end of the turn. The plugin finishes those requests with an error. Clears."""
+        errors, self.prefill_errors = getattr(self, "prefill_errors", {}), {}
+        return errors
 
     @classmethod
     def get_placeholder_str(cls, modality, i):
@@ -2658,9 +2746,13 @@ class MiMoV2OmniForCausalLM(MiMoV2ForCausalLM, *((SupportsMultiModal,) if Suppor
         # items no other slot's request holds leave the cache (the plugin does not say when a request is done; the
         # cache's LRU budget bounds the rest).
         self.mm_slot_items = {}
-        self.mm_failures = 0  # chunks whose multimodal rows fell back to their placeholder tokens
+        self.mm_failures = 0  # rows that could not be served (encoder failure, or a cached failed item)
+        self.mm_failed_ids = set()  # items that failed to encode: a cached prefix holding one holds placeholder KV
+        self.prefill_errors = {}
+        self.mm_eos = int(getattr(hf_config, "eos_token_id", None) or 151645)
+        self.vision_encoders = [getattr(b, "vision", None) for b in backends]
         self._row_mm = self._row_slots = None
-        logger.info(f"MiMo vLLM: multimodal input {MM_MODALITIES}, encoders {[type(b).__name__ for b in backends]}")
+        logger.info(f"MiMo vLLM: multimodal input {MM_MODALITIES}, encoders {backends}")
 
     def _rows_items(self, tokens, prompt_lens, mm_items, pixel_values, grids):
         """Each prefill row's items (tt/multimodal.MMItem, prompt order). A row whose input is malformed is logged
@@ -2679,23 +2771,66 @@ class MiMoV2OmniForCausalLM(MiMoV2ForCausalLM, *((SupportsMultiModal,) if Suppor
                         tokens[i], int(ends[i]), pv, grids[i], self.image_token_id, self.mm_merge_size
                     )
             except Exception as e:  # noqa: BLE001 - a malformed request must not kill the engine
-                logger.error(f"MiMo vLLM: prefill row {i}: multimodal input ignored, served as text: {e}")
+                self._fail_row(i, f"malformed multimodal input: {e}")
                 out[i] = []
         return out
 
+    def log_dram(self, reason, every_s=None):
+        """Log each replica's free DRAM (per chip) and its largest free block, at most every ``every_s`` seconds
+        (MIMO_MM_DRAM_LOG_S, default 300; 0 turns the periodic log off): a slow leak or fragmentation shows up as a
+        trend while serving."""
+        every_s = float(os.environ.get("MIMO_MM_DRAM_LOG_S", "300")) if every_s is None else every_s
+        now = time.monotonic()
+        if every_s <= 0 or now - getattr(self, "_dram_logged", -1e9) < every_s:
+            return
+        self._dram_logged = now
+        parts = []
+        try:  # a log line must never raise out of prefill
+            for lane, model in enumerate(self.models):
+                view = ttnn.get_memory_view(model.mesh_device, ttnn.BufferType.DRAM)
+                free = view.total_bytes_free_per_bank * view.num_banks / 1e6
+                largest = view.largest_contiguous_bytes_free_per_bank * view.num_banks / 1e6
+                parts.append(f"replica {lane} {free:.0f} MB free, largest block {largest:.0f} MB")
+        except Exception:  # noqa: BLE001
+            return
+        logger.info(f"MiMo vLLM DRAM per chip ({reason}): " + "; ".join(parts))
+
     def prefill_forward(self, tokens, start_pos, prompt_lens, page_table, kv_cache, *args, **kwargs):
+        self.log_dram("periodic")
+        self.prefill_errors = {}
         mm_kwargs = [kwargs.pop(k, None) for k in ("mm_items", "pixel_values", "image_grid_thw")]
         items = self._rows_items(tokens, prompt_lens, *mm_kwargs)
         empty_slots = kwargs.get("empty_slots")
         slots = list(range(tokens.shape[0])) if empty_slots is None else [int(s) for s in empty_slots]
         self._track_slot_items(slots, items)
-        if not any(items):
+        if not any(items) and not self.prefill_errors:
             return super().prefill_forward(tokens, start_pos, prompt_lens, page_table, kv_cache, *args, **kwargs)
+        starts = np.asarray(start_pos).reshape(-1).astype(np.int64)
+        for row, row_items in enumerate(items):
+            # A cached prefix (APC) over an item that failed to encode holds that item's placeholder KV.
+            bad = [it.identifier for it in row_items if it.identifier in self.mm_failed_ids and it.offset < starts[row]]
+            if bad:
+                self._fail_row(row, f"its cached prefix holds item {bad[0]}, which failed to encode")
         self._row_mm, self._row_slots = items, slots
         try:
-            return super().prefill_forward(tokens, start_pos, prompt_lens, page_table, kv_cache, *args, **kwargs)
+            logits = super().prefill_forward(tokens, start_pos, prompt_lens, page_table, kv_cache, *args, **kwargs)
         finally:
             self._row_mm = self._row_slots = None
+        if MM_STRICT and self.prefill_errors:
+            # Never a plausible answer from placeholder embeddings: the row's first token ends the turn.
+            for row in self.prefill_errors:
+                logits[row].fill_(float("-inf"))
+                logits[row, ..., self.mm_eos] = 0.0
+        return logits
+
+    def _fail_row(self, row, reason):
+        self.mm_failures += 1
+        self.prefill_errors.setdefault(row, reason)
+        logger.error(
+            f"MiMo vLLM: prefill row {row} cannot be served ({reason}); "
+            + ("its request ends at once and is reported as failed" if MM_STRICT else "served from placeholders")
+            + f" ({self.mm_failures} so far)"
+        )
 
     def _track_slot_items(self, slots, items):
         """Record each prefill row's item identifiers under its slot; a slot whose request changed drops the cached
@@ -2729,11 +2864,8 @@ class MiMoV2OmniForCausalLM(MiMoV2ForCausalLM, *((SupportsMultiModal,) if Suppor
             embeds = rows = None
             logger.error(f"MiMo vLLM: multimodal rows{where} not merged: {type(e).__name__}: {e}")
         if embeds is None or encoder.failures > failures:
-            self.mm_failures += 1
-            logger.error(
-                f"MiMo vLLM: chunk{where} runs with placeholder embeddings for (some of) its multimodal rows: "
-                f"{self.mm_failures} degraded chunks so far"
-            )
+            self.mm_failed_ids.update(it.identifier for it in self._row_mm[row] if it.identifier in encoder.failed)
+            self._fail_row(row, f"a multimodal item of chunk [{start}, {end}) failed to encode")
         if embeds is None:
             return None, None
         logger.info(
@@ -2758,3 +2890,37 @@ class MiMoV2OmniForCausalLM(MiMoV2ForCausalLM, *((SupportsMultiModal,) if Suppor
         for model in self.models:
             model.warm_embeds(lengths)
         logger.info(f"MiMo vLLM: multimodal row merge warmed up for padded lengths {lengths}")
+        # Every ViT program (one set per row bucket) before any trace capture: compiling later puts program binaries
+        # where a trace's replays write (_recapture_after_new_programs stays as the safety net).
+        for lane, vit in enumerate(self.vision_encoders):
+            if vit is not None and hasattr(vit, "warm"):
+                t0 = time.time()
+                vit.warm()
+                logger.info(
+                    f"MiMo vLLM: replica {lane} ViT warmed up ({len(vit.buckets)} buckets) in {time.time() - t0:.1f}s"
+                )
+        self.log_dram("after the prefill warm-up", every_s=0.001)
+
+    def warmup_model_decode(self, *args, **kwargs):
+        """The text model's captures, then a check that every replica keeps the free DRAM its largest ViT pass needs
+        (VIT_PASS_DRAM_MB): a launch that does not is refused here, instead of failing image requests later."""
+        super().warmup_model_decode(*args, **kwargs)
+        if not any(v is not None for v in getattr(self, "vision_encoders", [])):
+            return
+        need = VIT_PASS_DRAM_MB[VIT_LARGEST_PASS]
+        for lane, model in enumerate(self.models):
+            view = ttnn.get_memory_view(model.mesh_device, ttnn.BufferType.DRAM)
+            free = view.total_bytes_free_per_bank * view.num_banks / 2**20
+            largest = view.largest_contiguous_bytes_free_per_bank * view.num_banks / 2**20
+            logger.info(
+                f"MiMo vLLM: replica {lane} keeps {free:.0f} MB of DRAM free per chip (largest block {largest:.0f} MB) "
+                f"for ViT passes of up to {VIT_LARGEST_PASS} rows, which need {need} MB"
+            )
+            if min(free, largest) < need:
+                short = (need - min(free, largest)) / 1024
+                raise RuntimeError(
+                    f"MiMo multimodal: replica {lane} leaves {min(free, largest):.0f} MB of DRAM per chip after its KV "
+                    f"cache and traces, but a {VIT_LARGEST_PASS}-row ViT pass needs {need} MB: raise "
+                    f"MIMO_MM_VIT_RESERVE_GB by at least {short:.2f} (now {MM_KV_RESERVE_GB:g}) or lower "
+                    "MIMO_KV_GB_PER_CHIP by as much"
+                )

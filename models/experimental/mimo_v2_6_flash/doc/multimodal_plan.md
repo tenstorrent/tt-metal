@@ -93,10 +93,17 @@ prefill chunk of the request, each
 * The plugin never says when an item or request is done: the model's embedding cache evicts on its own (an LRU by
   bytes, `MIMO_MM_CACHE_MB`; a slot that takes another request drops its old request's items that no other slot holds).
 * The plugin refuses modalities the model does not declare at request time (a 4xx, never an exception in the engine:
-  an exception in prefill kills it). The model validates what remains as early as it can; an item that still fails
-  to encode in prefill is logged as an ERROR with its identifier, slot and a running count, and its placeholder
-  tokens' embeddings stand in (a degraded answer, not a dead engine). Validation belongs in the processor / request
-  stage wherever possible.
+  an exception in prefill kills it). The model validates what remains as early as it can. A row it still cannot serve
+  (malformed items, an encoder failure, a cached prefix holding an item that failed) is logged as an ERROR with a
+  running count and, with `MIMO_MM_STRICT=1` (the default), never answered from placeholder embeddings: its first
+  token is forced to the end of the turn, and the model, which declares `model_capabilities["reports_prefill_errors"]`,
+  returns `{row: reason}` from `take_prefill_errors()` after `prefill_forward`; **the plugin is to finish those
+  requests with an error** (vLLM's `FINISHED_ERROR`), so a client never scores a silent wrong answer. Validation
+  belongs in the processor / request stage wherever possible.
+* DRAM: the model takes `MIMO_MM_VIT_RESERVE_GB` off the KV pool (default 0.25 with speculative decoding, 0
+  without) and refuses to start when a replica keeps less free DRAM than its largest ViT pass needs after every trace
+  is captured (`VIT_PASS_DRAM_MB`, measured by `tests/test_vit_dram_headroom_tp8.py`); the ViT compiles all its row
+  buckets in the prefill warm-up, before any capture.
 * Class selection: vLLM resolves the MiMo-V2.6-Flash checkpoints (they carry a `vision_config`) to
   `MiMoV2OmniForCausalLM`, so `--hf-overrides '{"architectures": [...]}'` changes nothing, and the plugin's built-in
   map serves both `TTMiMoV2ForCausalLM` and `TTMiMoV2OmniForCausalLM` with the text class (the release path, unchanged).
