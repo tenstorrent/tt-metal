@@ -28,11 +28,14 @@ from models.perf.device_perf_utils import check_device_perf, prep_device_perf_re
 # tt/model_config.py), and the large-input work (the residual stream in L1, fc1 on grouped_matmul
 # with its polynomial GELU, HiFi2 QKV, fc2 and routed w1, SDPA's chunks from a cost model), the dense
 # projections on pirotski_matmul, SDPA on its streaming kernel, and grouped_matmul's streamed data
-# movement with chunked weights (tt/experts.py, tt/mlp.py), no trace, one command queue. The
+# movement with chunked weights (tt/experts.py, tt/mlp.py), the split layer norm's layout written by
+# its producers, QKV below N tile rows on grouped_matmul_w1 and the router front end in one op
+# (tt/router.py, tt/moe.py), no trace, one command queue. The
 # unoptimized port measured 66.7, the matmul work alone 171.0, with #58503 294.1, before the router
 # 300.0, before the routed experts 312.8, with their w2 at HiFi2 609.1, before the large-input work
-# 626.7, before pirotski_matmul, streaming SDPA and the grouped_matmul rewrite 829.4.
-EXPECTED_SEQUENCES_PER_S = 1046.1
+# 626.7, before pirotski_matmul, streaming SDPA and the grouped_matmul rewrite 829.4, before the
+# small-M and MoE glue work 1046.1.
+EXPECTED_SEQUENCES_PER_S = 1124.7
 
 # Wide enough to absorb run-to-run kernel variation, tight enough to catch a real regression.
 MARGIN = 0.03
