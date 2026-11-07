@@ -111,8 +111,10 @@ void set_sender_socket_page_size(SocketSenderInterface& socket, uint32_t page_si
     uint32_t next_write_ptr = align(write_ptr, page_size);
     uint32_t fifo_page_aligned_size = fifo_total_size - fifo_total_size % page_size;
     if (next_write_ptr >= fifo_page_aligned_size) {
-        socket.bytes_sent += fifo_total_size - next_write_ptr;
+        socket.bytes_sent += fifo_total_size - write_ptr;
         next_write_ptr = 0;
+    } else {
+        socket.bytes_sent += next_write_ptr - write_ptr;
     }
     write_ptr = next_write_ptr;
     socket.page_size = page_size;
@@ -125,12 +127,14 @@ void socket_reserve_pages(const SocketSenderInterface& socket, uint32_t num_page
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(socket.bytes_acked_base_addr);
     uint32_t bytes_acked_end = socket.bytes_acked_base_addr + socket.num_downstreams * bytes_acked_size_bytes;
     while (reinterpret_cast<uint32_t>(bytes_acked_ptr) < bytes_acked_end) {
-        uint32_t bytes_free;
+        uint32_t bytes_in_flight;
         do {
             invalidate_l1_cache();
-            // bytes_acked will never be ahead of bytes_sent, so this is safe
-            bytes_free = socket.downstream_fifo_total_size - (socket.bytes_sent - *bytes_acked_ptr);
-        } while (bytes_free < num_bytes);
+            // bytes_acked will never be ahead of bytes_sent; compare in-flight + needed
+            // bytes directly to avoid unsigned underflow when set_sender_socket_page_size
+            // advances bytes_sent for alignment or FIFO tail padding before receiver ack.
+            bytes_in_flight = socket.bytes_sent - *bytes_acked_ptr;
+        } while (bytes_in_flight + num_bytes > socket.downstream_fifo_total_size);
         bytes_acked_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
             reinterpret_cast<uint32_t>(bytes_acked_ptr) + bytes_acked_size_bytes);
     }
@@ -261,8 +265,14 @@ void set_receiver_socket_page_size(SocketReceiverInterface& socket, uint32_t pag
     uint32_t next_fifo_rd_ptr = fifo_start_addr + align(fifo_rd_ptr - fifo_start_addr, page_size);
     uint32_t fifo_page_aligned_size = fifo_total_size - fifo_total_size % page_size;
     uint32_t fifo_limit_page_aligned = fifo_start_addr + fifo_page_aligned_size;
+    uint32_t bytes_adjustment = 0;
     if (next_fifo_rd_ptr >= fifo_limit_page_aligned) {
-        uint32_t bytes_adjustment = fifo_start_addr + fifo_total_size - next_fifo_rd_ptr;
+        bytes_adjustment = fifo_start_addr + fifo_total_size - fifo_rd_ptr;
+        next_fifo_rd_ptr = fifo_start_addr;
+    } else {
+        bytes_adjustment = next_fifo_rd_ptr - fifo_rd_ptr;
+    }
+    if (bytes_adjustment > 0) {
         volatile tt_l1_ptr uint32_t* bytes_sent_ptr =
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(socket.bytes_sent_addr);
         uint32_t bytes_recv;
@@ -271,7 +281,6 @@ void set_receiver_socket_page_size(SocketReceiverInterface& socket, uint32_t pag
             bytes_recv = *bytes_sent_ptr - socket.bytes_acked;
         } while (bytes_recv < bytes_adjustment);
         socket.bytes_acked += bytes_adjustment;
-        next_fifo_rd_ptr = fifo_start_addr;
     }
     fifo_rd_ptr = next_fifo_rd_ptr;
     socket.page_size = page_size;

@@ -585,8 +585,14 @@ void D2HSocket::set_page_size(uint32_t page_size) {
         ((read_ptr_ + page_size - 1) / page_size) * page_size;
     uint32_t fifo_page_aligned_size = fifo_size_ - (fifo_size_ % page_size);
 
+    uint32_t bytes_adjustment = 0;
     if (next_fifo_rd_ptr >= fifo_page_aligned_size) {
-        uint32_t bytes_adjustment = fifo_size_ - next_fifo_rd_ptr;
+        bytes_adjustment = fifo_size_ - read_ptr_;
+        next_fifo_rd_ptr = 0;
+    } else {
+        bytes_adjustment = next_fifo_rd_ptr - read_ptr_;
+    }
+    if (bytes_adjustment > 0) {
         uint32_t bytes_recv = bytes_sent_ - bytes_acked_;
 
         tt::tt_metal::internal::L1EccHaltWatch ecc_watch(mesh_device_);
@@ -601,7 +607,6 @@ void D2HSocket::set_page_size(uint32_t page_size) {
             bytes_sent_ = bytes_sent_value;
         }
         bytes_acked_ += bytes_adjustment;
-        next_fifo_rd_ptr = 0;
     }
     read_ptr_ = next_fifo_rd_ptr;
     page_size_ = page_size;
