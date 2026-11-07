@@ -2733,9 +2733,10 @@ class _LazyHostAudio:
         return _host_audio_backend(self.model_path).embed_audio(mel)
 
 
-# Where the audio patch encoder (RVQ codes -> embeddings) runs (tt/audio/processor.py reads it too): ``device`` (the
-# default) on the replica's row (tt/audio/patch.py), ``frontend`` in the API server, ``engine`` on this process's CPU.
-AUDIO_PATCH = os.environ.get("MIMO_AUDIO_PATCH", "device")
+# Where the audio patch encoder (RVQ codes -> embeddings) runs (tt/audio/processor.py reads it too): ``engine`` (the
+# default) on this process's CPU, ``device`` on the replica's row (tt/audio/patch.py; not the default: with it a row
+# engine failed its prefill batch-trace capture at startup, see tt/audio/processor.py), ``frontend`` in the API server.
+AUDIO_PATCH = os.environ.get("MIMO_AUDIO_PATCH", "engine")
 
 
 def audio_device_patch(model_path, mesh_device):
@@ -2750,7 +2751,8 @@ def audio_device_patch(model_path, mesh_device):
 
 # Where the audio tokenizer encoder (mel -> codes) runs (tt/audio/processor.py reads it too): ``frontend`` (the default;
 # fp32 on the API server's CPU, codes bit-identical to the reference) or ``device`` (the replica's row,
-# tt/audio/tokenizer.py: ~10x faster, but ~3.5-5 % of the code frames differ from the fp32 reference).
+# tt/audio/tokenizer.py: ~10x faster, ~3.5-5 % of the code frames differ from the fp32 reference; in the serving A/B its
+# engine produced bursts of degenerate generations, see tt/audio/processor.py).
 AUDIO_TOKENIZER = os.environ.get("MIMO_AUDIO_TOKENIZER", "frontend")
 
 
