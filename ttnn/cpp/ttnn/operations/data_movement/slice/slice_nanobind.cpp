@@ -48,28 +48,52 @@ ttnn::Tensor slice_small_vector_wrapper(
 
 void bind_slice(nb::module_& mod) {
     const auto* doc = R"doc(
-        Returns a sliced tensor. If the input tensor is on host, the slice will be performed on host, and if its on device it will be performed on device.
+        Returns a slice of the input tensor, given the start and end indices of each dimension and an optional step.
+
+        ``slice_start`` and ``slice_end`` can also be passed positionally as ``ttnn.Tensor`` objects; that overload also
+        takes the ``slice_dim`` and ``num_devices`` keywords.
 
         Args:
-            input_tensor (ttnn.Tensor): Input tensor.
-            slice_start (List[int]): Start indices of input tensor. Values along each dim must be in ``[0, input_tensor_shape[i])``.
-            slice_end (List[int]): End indices of input tensor (exclusive). Values along each dim must be in ``(0, input_tensor_shape[i]]``.
-            slice_step (List[int], optional): Step size for each dim. Defaults to ``None`` (step = 1 for all dims).
+            input_tensor (ttnn.Tensor): Input tensor, on device.
+            slice_start (List[int]): Start indices of input tensor. Negative values count from the end of the dim; other values must be in ``[0, input_tensor_shape[i])``.
+            slice_end (List[int]): End indices of input tensor (exclusive). Negative values count from the end of the dim; other values must be in ``(0, input_tensor_shape[i]]``.
+            slice_step (List[int], optional): Step size for each dim. Defaults to `None`, which uses a step of 1 for every dim.
 
         Keyword Args:
-            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the output tensor. Defaults to the input tensor's memory config.
-            output_tensor (ttnn.Tensor, optional): Pre-allocated output tensor. Its shape must match the slice output. Defaults to ``None``.
-            pad_value (float, optional): Fill value for implicit tile padding on tiled tensors. Padding is undefined by default.
+            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the output tensor. Defaults to `None`, which uses the input tensor's memory configuration.
+            output_tensor (ttnn.Tensor, optional): Pre-allocated output tensor. Its shape must match the slice output. Defaults to `None`.
+            pad_value (float, optional): Fill value for the implicit tile padding of a TILE output. It is applied when a unit-step slice, with start indices in the last two dims that are multiples of 32, changes the size of one of the last two dims to a size that is not a multiple of 32. Defaults to `None`, which leaves the padding undefined.
             sub_core_grids (ttnn.CoreRangeSet, optional): sub core grids for the operation. Defaults to `None`.
 
+        Returns:
+            ttnn.Tensor: the output tensor.
+
         Note:
-            Strided slicing (``slice_step != 1``) is not supported for ``bfloat8_b`` tensors.
+            Supported dtypes and layouts:
+
+            .. list-table::
+               :header-rows: 1
+
+               * - Dtypes
+                 - Layouts
+               * - BFLOAT16, FLOAT32, INT32, UINT32
+                 - TILE, ROW_MAJOR
+               * - UINT16
+                 - TILE, ROW_MAJOR
+               * - UINT8
+                 - ROW_MAJOR
+               * - BFLOAT8_B
+                 - TILE
+
+            ``BFLOAT8_B`` tensors need a ``slice_step`` of 1.
 
             TILE layout tensors must use the standard 32x32 tile, and a pre-allocated ``output_tensor`` must
             carry the same tile as the input.
 
-        Returns:
-            ttnn.Tensor: the output tensor.
+        Memory Support:
+            - Interleaved: DRAM and L1
+            - Sharded: HEIGHT_SHARDED, WIDTH_SHARDED and BLOCK_SHARDED input and output; DRAM-sharded input is also accepted with an interleaved output
+            - ND sharded: input and output, for tensors of rank 2 or more
     )doc";
 
     // TODO: implementing the array version and overloading the nanobind with all the possible array sizes is better
