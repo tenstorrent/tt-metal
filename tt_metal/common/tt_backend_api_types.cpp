@@ -116,7 +116,8 @@ bool is_supported_quasar(tt::DataFormat format) {
         case tt::DataFormat::RawUInt16:
         case tt::DataFormat::RawUInt32:
         case tt::DataFormat::Tf32:
-        case tt::DataFormat::UInt8: return true;
+        case tt::DataFormat::UInt8:
+        case tt::DataFormat::UInt32: return true;
         case tt::DataFormat::Invalid:
         default: return false;
     }
