@@ -10,6 +10,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.demos.muse_glimmer_30b.tt.sampling import lane_seeds, normalize_sampling
 
 
 class MuseGlimmerGenerator:
@@ -46,7 +47,14 @@ class MuseGlimmerGenerator:
     def global_batch_size(self) -> int:
         return self.dp * self.B
 
+    def _release_traces_for_new_prefill(self, prompts):
+        """A prefill of a new length must not run while a decode trace exists (see MuseGlimmerModel.prefill_is_new)."""
+        if self.trace_ids and any(self.models[u // self.B].prefill_is_new(len(p)) for u, p in enumerate(prompts)):
+            logger.info("new prefill length: releasing decode traces (recaptured on the next decode step)")
+            self.release_traces()
+
     def prefill(self, prompts: list[list[int]]) -> torch.Tensor:
+        self._release_traces_for_new_prefill(prompts)
         assert len(prompts) <= self.global_batch_size
         self.page_table_dirty = True
         out = torch.zeros(len(prompts), self.vocab_size, dtype=torch.float32)
@@ -59,6 +67,7 @@ class MuseGlimmerGenerator:
 
     def prefill_tokens(self, prompts: list[list[int]], sampling_params) -> torch.Tensor:
         """Prefill and sample each prompt's first token on device -> LongTensor [n]."""
+        self._release_traces_for_new_prefill(prompts)
         assert len(prompts) <= self.global_batch_size
         self.page_table_dirty = True
         out = torch.zeros(len(prompts), dtype=torch.int64)
@@ -81,21 +90,21 @@ class MuseGlimmerGenerator:
         return out
 
     @staticmethod
-    def _to_sampling_params(sampling: dict | None):
+    def _to_sampling_params(sampling: dict | None, max_top_k: int, seed: int | None = None):
         """Our sampling dict (None => greedy) -> SamplingParams (greedy: temp 0 / top_k 1 / top_p 1, as gemma4)."""
         from models.common.sampling.generator import SamplingParams, format_sampling_params
 
-        sp = sampling or {}
-        t = float(sp.get("temperature", 1.0) or 0.0)
-        if sampling is None or t <= 0:
+        norm = normalize_sampling(sampling, max_top_k)
+        if norm is None:
             return format_sampling_params(SamplingParams(temperature=0.0, top_k=1, top_p=1.0), 32)
+        t, top_p, top_k = norm
         # len(temperature) sets the active lane count; a scalar would leave lanes 1..31 greedy.
-        # top_k <= 0 means "no filter": the sampler clamps k to max_top_k (32).
         return format_sampling_params(
             SamplingParams(
                 temperature=[t] * 32,
-                top_k=int(sp.get("top_k", 32)) or 32,
-                top_p=float(sp.get("top_p", 1.0)),
+                top_k=top_k,
+                top_p=top_p,
+                seed=lane_seeds(seed) if seed is not None else None,
             ),
             32,
         )
@@ -246,7 +255,14 @@ class MuseGlimmerGenerator:
         stop = set(stop_token_ids or [])
         gen = torch.Generator().manual_seed(seed)
 
-        dev_sp = self._to_sampling_params(sampling) if self.device_sampling else None
+        dev_sp = (
+            self._to_sampling_params(sampling, self.models[0].args.max_top_k, seed) if self.device_sampling else None
+        )
+        is_sampled = normalize_sampling(sampling, self.models[0].args.max_top_k) is not None
+        if dev_sp is not None and is_sampled:
+            # make the device draws reproducible from `seed`
+            for m in self.models:
+                m.sampling.seed_manager.reset_seed(dev_sp.seed, list(range(32)))
         t0 = time.time()
         if dev_sp is not None:
             cur = self.prefill_tokens(prompts, dev_sp)

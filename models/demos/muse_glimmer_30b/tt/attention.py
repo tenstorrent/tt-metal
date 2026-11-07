@@ -24,6 +24,7 @@ from models.demos.muse_glimmer_30b.tt.common import (
     sdpa_compute_config,
     shard_mapper,
 )
+from models.demos.muse_glimmer_30b.tt.dflash.kv_rows import write_kv_rows
 from models.demos.muse_glimmer_30b.tt.rms_norm import per_head_rms_norm
 from models.demos.muse_glimmer_30b.tt.weight_packing import pack_o, pack_qkvg
 
@@ -439,7 +440,19 @@ class MuseGlimmerAttention:
         sdpa.deallocate(True)
         return self._gate_oproj(attn, gate)
 
-    def forward_decode(self, x, current_pos, rope, kv_cache, page_table, sdpa_inputs=None):
+    def forward_decode(
+        self,
+        x,
+        current_pos,
+        rope,
+        kv_cache,
+        page_table,
+        sdpa_inputs=None,
+        kv_write_rows=None,
+        sdpa_rows=None,
+        kv_write_page_table=None,
+        kv_write_batch=1,
+    ):
         a = self.args
         k_cache, v_cache = kv_cache
         heads_mem = heads_memcfg(x.shape[-2], a.head_dim)
@@ -491,20 +504,33 @@ class MuseGlimmerAttention:
                 cos_b.deallocate(True)
                 sin_b.deallocate(True)
 
-        k = ttnn.to_memory_config(k, kv_memcfg(batch, a.head_dim))
-        ttnn.experimental.paged_fused_update_cache(
-            k_cache,
-            k,
-            v_cache,
-            v,
-            update_idxs_tensor=current_pos,
-            **({} if page_table is None else {"page_table": page_table}),
-        )
+        if kv_write_rows is not None:
+            write_kv_rows(
+                k_cache,
+                v_cache,
+                k,
+                v,
+                kv_write_rows,
+                kv_write_page_table,
+                num_kv_heads=a.kv_heads_local,
+                block_size=a.block_size,
+                batch=kv_write_batch,
+            )
+        else:
+            k = ttnn.to_memory_config(k, kv_memcfg(batch, a.head_dim))
+            ttnn.experimental.paged_fused_update_cache(
+                k_cache,
+                k,
+                v_cache,
+                v,
+                update_idxs_tensor=current_pos,
+                **({} if page_table is None else {"page_table": page_table}),
+            )
         k.deallocate(True)
         v.deallocate(True)
 
         # SDPA decode splits its cores over all user slots, so run it on the first `sb` only.
-        sb = min(a.max_batch_size, batch)
+        sb = min(a.max_batch_size, batch) if sdpa_rows is None else sdpa_rows
         sdpa_pos, sdpa_pt, own = current_pos, page_table, ()
         if sb < batch:
             if sdpa_inputs is not None:
