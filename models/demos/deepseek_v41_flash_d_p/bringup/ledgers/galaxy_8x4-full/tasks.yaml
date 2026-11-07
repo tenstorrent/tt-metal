@@ -2882,7 +2882,6 @@ tasks:
       acks_early: == 0
       contract_checks_failed: == 0
 - id: P.35
-  hold: 'owner 2026-11-06: later (after P.37)'
   title: 'NORM_IN_MHC: the RMS norm of the collapsed input inside the collapse pass (attn_norm / ffn_norm calls removed)'
   step: perf
   role: perf
@@ -2894,7 +2893,7 @@ tasks:
   - models/demos/deepseek_v41_flash_d_p/tests/
   - ttnn/ttnn/bringup
   brief:
-    details: 'OWNER 2026-11-06 (mHC study, opportunity #3; built on P.34). Under OWN_ROWS each chip holds whole rows, so attn_norm and ffn_norm are local rms_norm calls on the collapsed y (0.70 ms each a chunk, 80 launches). Fold the norm into the pass that writes the collapsed y (after P.34 that is mhc_post''s new collapse output; layer 0''s first collapse in mhc_pre_xing): y * rsqrt(mean(y^2) + eps) * gamma, written as the norm output; optionally also the bfp8 copy q_a reads (0.55 ms of typecasts a chunk). Needs a cross-core row reduction where the collapse is split by column tiles (mhc_pre has a gather-to-root / fold / multicast pattern). perf_proposals.md #10 (NORM_STATS_IN_MHC) predates OWN_ROWS and only moved the statistics; this is the full norm. Expected: about 1.4 ms device (+0.55 with the bfp8 copy) and 80-120 launches a chunk. Setting NORM_IN_MHC (on / off). Each change behind its own setting in tt/settings.py (default on once accepted; off = today''s path) so a regression can be isolated by its switch. Agent rules 18 (at most 110 cores an op) and 19 (no single-card device jobs) hold; forks first; precision at the reference''s level: aim for bit-identical results with the switch on (the same bf16 rounding points; if not bit-identical, every gated metric within its limit and say why). Add fork tests for every fork option you add. Do not profile the model yourself: the orchestrator measures off vs on at 51200 and 512000. Report: ops / launches removed a chunk, device and host ms a chunk before / after. Study: /scratch/dnijemcevic/rebase/mhc/notes.md (per-layer flow, costs, file:line).'
+    details: 'OWNER 2026-11-06 (mHC study, opportunity #3; built on P.34). Under OWN_ROWS each chip holds whole rows, so attn_norm and ffn_norm are local rms_norm calls on the collapsed y (0.70 ms each a chunk, 80 launches). Fold the norm into the pass that writes the collapsed y (after P.34 that is mhc_post''s new collapse output; layer 0''s first collapse in mhc_pre_xing): y * rsqrt(mean(y^2) + eps) * gamma, written as the norm output; optionally also the bfp8 copy q_a reads (0.55 ms of typecasts a chunk). Needs a cross-core row reduction where the collapse is split by column tiles (mhc_pre has a gather-to-root / fold / multicast pattern). perf_proposals.md #10 (NORM_STATS_IN_MHC) predates OWN_ROWS and only moved the statistics; this is the full norm. Expected: about 1.4 ms device (+0.55 with the bfp8 copy) and 80-120 launches a chunk. Setting NORM_IN_MHC (on / off). Each change behind its own setting in tt/settings.py (default on once accepted; off = today''s path) so a regression can be isolated by its switch. Agent rules 18 (at most 110 cores an op) and 19 (no single-card device jobs) hold; forks first; precision at the reference''s level: aim for bit-identical results with the switch on (the same bf16 rounding points; if not bit-identical, every gated metric within its limit and say why). Add fork tests for every fork option you add. Do not profile the model yourself: the orchestrator measures off vs on at 51200 and 512000. Report: ops / launches removed a chunk, device and host ms a chunk before / after. Study: /scratch/dnijemcevic/rebase/mhc/notes.md (per-layer flow, costs, file:line). UPDATE 2026-11-07 (owner released): the tree is now P.43 (defaults: MOE_BLOCK_SRC=main, bf16 KV, WINDOW_KV_KEEP=snapshot128, REINDEX_SERVE=alias, INDEX_K_FORMAT=bfp8, DECODER_SKIP=off; DS41-216: one high_bw_all_gather semaphore pair per mesh axis). Current section times (results/P.43_profile.json, opportunities.md 2026-11-07): attn_norm 0.7, ffn_norm 0.7, ffn_residual 12.7 (includes the snapshot write), experts 97.8 ms a chunk.'
   ab:
     env:
       NORM_IN_MHC: 'off'
@@ -2908,9 +2907,13 @@ tasks:
   gate:
     cmd: BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py
       && DS41_ENGRAM_TABLE=resident scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py
-      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_contract.py && scripts/run_safe_pytest.sh
-      --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_kv_layout.py && scripts/run_safe_pytest.sh
-      --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_adapter_acks.py
+      && DS41_DECODER_SKIP=replay128 DS41_ENGRAM_TABLE=resident scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/test_short_turn.py
+      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_contract.py
+      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_kv_layout.py
+      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_adapter_acks.py
+      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_runner_contract.py
+      && DS41_DECODER_SKIP=replay128 DS41_WINDOW_KV_KEEP=snapshot128 DS41_ENGRAM_TABLE=resident scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_window_snapshot.py
+      && DS41_DECODER_SKIP=exact DS41_WINDOW_KV_KEEP=snapshot128 DS41_ENGRAM_TABLE=resident scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_window_snapshot.py
     metrics:
       err_layer_L*: <= limit
       err_state_*_L*: <= limit
@@ -2918,6 +2921,8 @@ tasks:
       top5_overlap: '>= limit'
       chunk_wall_ms: '> 0'
       device_ms_total: '> 0'
+      short_turn_ms: '> 0'
+      short_turn_device_ms: '> 0'
       acks_early: == 0
       contract_checks_failed: == 0
 - id: P.36
@@ -2925,7 +2930,6 @@ tasks:
   step: perf
   role: perf
   device: true
-  hold: 'owner 2026-11-06: after the owner''s moe_block update lands and after P.34 / P.35 results; owner releases'
   deps:
   - P.35
   paths:
@@ -2934,7 +2938,7 @@ tasks:
   - models/demos/moe_block
   - ttnn/ttnn/bringup
   brief:
-    details: 'OWNER 2026-11-06 (mHC study, opportunity #2; built on P.34 / P.35; after the owner''s moe_block update). The only collective left next to mHC on the 8x4 default path is the MoE x all_to_all after ffn_norm (all_to_all_async_generic over TP, [160, H] -> [640, H/4] into head.x; moe_block.py:720-722, 997-1010): 4.69 ms max chip, 40 launches, ~13.6 ms host with ffn_norm, ~17 ms device idle before it. Have the pass that writes the normalized ffn input send each 1280-column block straight into the peer chip''s head.x over fabric (persistent buffer, same address on every chip): ports, fabric connections, global semaphores and the ready fence as fabric_reduce_scatter / combine_rf do; a slot in the 110-core cap for the ports. The head''s x must be written before the MoE arena is taken. Risks: hangs; the skew wait (~3.7 ms) moves into the head, it does not vanish. Expected: about 2.2 ms device and 80 launches a chunk. Setting FFN_FEED (on / off). Each change behind its own setting in tt/settings.py (default on once accepted; off = today''s path) so a regression can be isolated by its switch. Agent rules 18 (at most 110 cores an op) and 19 (no single-card device jobs) hold; forks first; precision at the reference''s level: aim for bit-identical results with the switch on (the same bf16 rounding points; if not bit-identical, every gated metric within its limit and say why). Add fork tests for every fork option you add. Do not profile the model yourself: the orchestrator measures off vs on at 51200 and 512000. Report: ops / launches removed a chunk, device and host ms a chunk before / after. Study: /scratch/dnijemcevic/rebase/mhc/notes.md (per-layer flow, costs, file:line).'
+    details: 'OWNER 2026-11-06 (mHC study, opportunity #2; built on P.34 / P.35; after the owner''s moe_block update). The only collective left next to mHC on the 8x4 default path is the MoE x all_to_all after ffn_norm (all_to_all_async_generic over TP, [160, H] -> [640, H/4] into head.x; moe_block.py:720-722, 997-1010): 4.69 ms max chip, 40 launches, ~13.6 ms host with ffn_norm, ~17 ms device idle before it. Have the pass that writes the normalized ffn input send each 1280-column block straight into the peer chip''s head.x over fabric (persistent buffer, same address on every chip): ports, fabric connections, global semaphores and the ready fence as fabric_reduce_scatter / combine_rf do; a slot in the 110-core cap for the ports. The head''s x must be written before the MoE arena is taken. Risks: hangs; the skew wait (~3.7 ms) moves into the head, it does not vanish. Expected: about 2.2 ms device and 80 launches a chunk. Setting FFN_FEED (on / off). Each change behind its own setting in tt/settings.py (default on once accepted; off = today''s path) so a regression can be isolated by its switch. Agent rules 18 (at most 110 cores an op) and 19 (no single-card device jobs) hold; forks first; precision at the reference''s level: aim for bit-identical results with the switch on (the same bf16 rounding points; if not bit-identical, every gated metric within its limit and say why). Add fork tests for every fork option you add. Do not profile the model yourself: the orchestrator measures off vs on at 51200 and 512000. Report: ops / launches removed a chunk, device and host ms a chunk before / after. Study: /scratch/dnijemcevic/rebase/mhc/notes.md (per-layer flow, costs, file:line). UPDATE 2026-11-07 (owner released): the tree is now P.43 (defaults: MOE_BLOCK_SRC=main, bf16 KV, WINDOW_KV_KEEP=snapshot128, REINDEX_SERVE=alias, INDEX_K_FORMAT=bfp8, DECODER_SKIP=off; DS41-216: one high_bw_all_gather semaphore pair per mesh axis). Current section times (results/P.43_profile.json, opportunities.md 2026-11-07): attn_norm 0.7, ffn_norm 0.7, ffn_residual 12.7 (includes the snapshot write), experts 97.8 ms a chunk. The default MoE path is now Marko Staletovic''s block (MOE_BLOCK_SRC=main): its x all_to_all_async_generic over TP into the block''s fused head is in tt/moe_block_main_adapter.py (around lines 395-411; the head is mb.fused_head). Target that path; the carried block (moe_block.py) is secondary (make FFN_FEED refuse or fall back there, say which). The 4.69 ms / 13.6 ms / 17 ms figures were measured on the carried block: re-measure on main in the report.'
   ab:
     env:
       FFN_FEED: 'off'
@@ -2948,9 +2952,13 @@ tasks:
   gate:
     cmd: BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py
       && DS41_ENGRAM_TABLE=resident scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py
-      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_contract.py && scripts/run_safe_pytest.sh
-      --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_kv_layout.py && scripts/run_safe_pytest.sh
-      --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_adapter_acks.py
+      && DS41_DECODER_SKIP=replay128 DS41_ENGRAM_TABLE=resident scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/test_short_turn.py
+      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_contract.py
+      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_kv_layout.py
+      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_adapter_acks.py
+      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_runner_contract.py
+      && DS41_DECODER_SKIP=replay128 DS41_WINDOW_KV_KEEP=snapshot128 DS41_ENGRAM_TABLE=resident scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_window_snapshot.py
+      && DS41_DECODER_SKIP=exact DS41_WINDOW_KV_KEEP=snapshot128 DS41_ENGRAM_TABLE=resident scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_window_snapshot.py
     metrics:
       err_layer_L*: <= limit
       err_state_*_L*: <= limit
@@ -2958,6 +2966,8 @@ tasks:
       top5_overlap: '>= limit'
       chunk_wall_ms: '> 0'
       device_ms_total: '> 0'
+      short_turn_ms: '> 0'
+      short_turn_device_ms: '> 0'
       acks_early: == 0
       contract_checks_failed: == 0
 - id: P.37
