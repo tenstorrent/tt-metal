@@ -917,9 +917,13 @@ void kernel_main() {
                 // DOWN_TARGET left the accumulated block in out_interm, so drain it to the output CB
                 // and add the down bias on the way. out_interm is scratch the matmul never pushes --
                 // reload_partials reads it the same way -- so it is indexed directly rather than
-                // fronted. The block is row-major at out_row_width = EC_MAX, so tile i sits in
-                // output column `i % EC_MAX`, which is the bias column.
+                // fronted. Wait for PACK to finish writing the accumulated block into out_interm
+                // before UNPACK reads it. The block is row-major at out_row_width = EC_MAX, so tile i
+                // sits in output column `i % EC_MAX`, which is the bias column.
                 {
+                    PACK((t6_semaphore_post<p_stall::STALL_PACK>(semaphore::PACK_DONE)));
+                    UNPACK((t6_semaphore_wait_on_zero<p_stall::STALL_SYNC>(semaphore::PACK_DONE)));
+                    UNPACK((t6_semaphore_get<>(semaphore::PACK_DONE)));
                     reconfig_data_format(cb_out_interm, cb_down_bias);
                     add_bcast_rows_init(cb_out_interm, cb_down_bias);
                     pack_reconfig_data_format(cb_out_tiles);
