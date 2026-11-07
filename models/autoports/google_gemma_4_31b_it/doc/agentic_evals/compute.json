@@ -1417,6 +1417,56 @@
           "actual_hours": 0.07722610789111867,
           "exit_status": 0,
           "audit": "runs/hex-runtime-benchmark/RESULT.json"
+        },
+        {
+          "arm": "gpqa40-new-loop-diagnosis",
+          "owner": "current_benchmark",
+          "device": "local",
+          "status": "capture_complete",
+          "queued_at": "2026-11-07T01:30:31.967234+00:00",
+          "start": "2026-11-07T01:30:31.967234+00:00",
+          "planned_clients": 1,
+          "batch": 8,
+          "max_num_seqs": 8,
+          "batch_reason": "Conditional diagnosis reproduces B8 serving geometry of C4/40; not a performance comparison",
+          "predicted_hours": 0.12,
+          "effort_total_predicted_hours": 0.2,
+          "effort_total_box_hours": 0.3,
+          "tt_metal_sha": "eef534e5cd6bcaf37957647de4d8d4eff4f0e047",
+          "runtime_source_guard": {
+            "files": 17,
+            "mismatches": 0
+          },
+          "initial_device_owners": [],
+          "plan": "runs/gpqa40-new-loop-diagnosis/plan.md",
+          "scope": "Single fresh native prefix; no score, original first-prefill remains unknown",
+          "end": "2026-11-07T01:35:54.627624+00:00",
+          "actual_hours": 0.08962788611111111,
+          "exit_status": 0,
+          "remaining_owners": [],
+          "next": "freshprefix proof then hostHF, bounded conditionalTT if exact"
+        },
+        {
+          "arm": "gpqa40-new-loop-diagnosis-tt",
+          "owner": "current_benchmark",
+          "device": "local",
+          "status": "complete_pending_comparison",
+          "queued_at": "2026-11-07T01:36:38.183543+00:00",
+          "predicted_hours": 0.08,
+          "remaining_effort_box_hours": 0.21037211388888888,
+          "planned_clients": 1,
+          "batch": 1,
+          "batch_reason": "Conditional full60 direct-prefill logit diagnosis, not served timing",
+          "plan": "runs/gpqa40-new-loop-diagnosis/plan.md",
+          "scope": "Single TT case after HF finishes; no host contention; coordinator launch only",
+          "start": "2026-11-07T01:40:12.379430+00:00",
+          "initial_device_owners": [],
+          "timeout_seconds": 690,
+          "end": "2026-11-07T01:42:59.618903+00:00",
+          "end_basis": "Last process log write including successful meshclose; process exited0 and owners empty at coordinator check",
+          "exit_status": 0,
+          "remaining_owners": [],
+          "actual_hours": 0.04645540916666667
         }
       ]
     },
@@ -3254,7 +3304,7 @@
           "url": "https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/42316311286",
           "workflow_status": "in_progress",
           "workflow_conclusion": null,
-          "last_observed_at": "2026-11-07T01:30:47.973289+00:00",
+          "last_observed_at": "2026-11-07T01:39:54.907767+00:00",
           "runner": "120-qb2-p05t01",
           "device_job_id": 128229759730,
           "device_job_started_at": "2026-11-07T00:08:14Z",
@@ -3404,7 +3454,7 @@
           "url": "https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/42323448662",
           "workflow_status": "in_progress",
           "workflow_conclusion": null,
-          "last_observed_at": "2026-11-07T01:30:05.310431+00:00",
+          "last_observed_at": "2026-11-07T01:40:12.873668+00:00",
           "runner": "qb2-120-p05t02",
           "device_job_id": 128253219243,
           "device_job_started_at": "2026-11-07T01:19:51Z",
@@ -3469,5 +3519,5 @@
       "role": "Read-only status and artifact collection"
     }
   ],
-  "last_updated": "2026-11-06T21:27:56.707029+00:00"
+  "last_updated": "2026-11-07T01:44:40.717055+00:00"
 }

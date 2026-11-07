@@ -151,6 +151,7 @@ Device costs include the device job, not build/queue. Release savings are foreca
 | gpqa40-c8-saturation-comparison | 3.69754 (guess) / unknown | 1.50000 | running/pending: Pending |
 | c4-forty-release-fallback | 0.00000 / 0.00000 | 0.00000 | kept/solved: Held directFF C4 exact40 candidate0b3f934;37 focused tests and fullhooks passed. Not published or selected. |
 | gpqa40-new-loop-diagnosis | 0.20000 (guess) / unknown | 1.00000 | running/pending: Pending |
+| ci-native-large-reply-visibility | 0.08000 (guess) / unknown | 0.00000 | running/pending: Pending |
 
 Evidence is written once by each effort; this table summarizes the current coordinator disposition. Unmeasured savings remain unknown or receive zero planning credit.
 

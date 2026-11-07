@@ -377,6 +377,12 @@
       "max_num_seqs": 8,
       "batch_reason": "Smallest validated batch at or above4; C4 selected and C8 optional comparison cannot delay this normal rung",
       "pool_ids": 10248
+    },
+    "gpqa40-new-loop-diagnosis": {
+      "planned_clients": 1,
+      "batch": 8,
+      "max_num_seqs": 8,
+      "batch_reason": "Conditional diagnosis reproduces B8 serving geometry of C4/40; not a performance comparison"
     }
   },
   "release_limits": {

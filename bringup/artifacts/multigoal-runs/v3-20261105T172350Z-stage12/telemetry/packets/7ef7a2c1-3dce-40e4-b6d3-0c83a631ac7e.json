@@ -80,7 +80,7 @@
   "missing_reasons": {
     "device_metrics": "Live vLLM profiling prohibited; host-wall rooflines are not device-time measurements.",
     "stage12_accuracy": "Banked GPQA40/198; seven capped loops counted as failures. SWE2/500 and Terminal2/89 retain measured stops. Normal80 and C8 comparison running; no frozen dry/release.",
-    "release": "No frozen dry/release yet. Actual CI native request/reply transport confirmed by run42302118669, scored2/2 (Wilson95%34.24\u2013100%). First live snapshot already scored; no-score dry remains unproven. Full-cap transport not measured."
+    "release": "No frozen dry/release yet. Small native CI replies confirmed42302118669; C8/40 exposes damaged large hex record starts. AutoDebug and competing-pipe test reproduce interleaving/filter loss; model-owned bounded-frame candidate under AutoFix, not yet accepted. No-score dry and full-cap transport remain unproven."
   },
   "notes": [
     "Published runtime eef534 measured with complete idle-drained accounting; no frozen release yet. No vLLM profiling.",
