@@ -15,11 +15,17 @@ std::vector<ttnn::Tensor> chunk(const ttnn::Tensor& input_tensor, const uint32_t
     auto size = input_tensor.logical_shape();
     int num_dims = size.rank();
 
+    const int input_dim = dim;
     if (dim < 0) {
         dim += num_dims;
     }
     TT_FATAL(
-        num_dims > dim, "... Invalid dimension for chunk operation, {} needs to be greater than {}", num_dims, dim);
+        dim >= 0 && dim < num_dims,
+        "chunk: dim {} is out of range for a rank {} tensor (expected a value in [{}, {}])",
+        input_dim,
+        num_dims,
+        -num_dims,
+        num_dims - 1);
 
     int size_along_dim = size[dim];
     int chunk_size = tt::div_up(size_along_dim, num_chunks);
