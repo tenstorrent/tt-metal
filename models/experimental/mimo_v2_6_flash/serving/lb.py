@@ -34,6 +34,9 @@ Multimodal requests in OpenRouter's forms (``Shim``; ``--no-request-shim`` turns
 - with ``--fetch-media`` (env ``TT_PROXY_FETCH_MEDIA=1``) the proxy itself downloads a chat request's http(s) image /
   video / audio URLs (bounded time and size) and inlines them as data URIs, answering 400 when a download fails: vLLM
   0.30 turns a media host's 5xx, 408, 429, timeout or DNS failure into a 500, which OpenRouter counts against uptime.
+  It fetches only from public unicast addresses (``blocked_reason``), checks every redirect hop again (at most
+  ``MAX_MEDIA_REDIRECTS``) and connects only to the addresses it checked (``PinnedResolver``). Serve vLLM with
+  ``--allowed-media-domains`` naming no real host so the engines never fetch a URL themselves.
 
 Each setting also reads an env var (``TT_PROXY_*``, see ``Shim.from_env``), the names tt-inference-server's copy of this
 proxy (``vllm-tt-metal/src/engine_proxy.py``) uses.
@@ -47,17 +50,21 @@ import binascii
 import dataclasses
 import hashlib
 import io
+import ipaddress
 import itertools
 import json
 import mimetypes
 import os
 import re
+import socket
 import time
+import urllib.parse
 import wave
 from functools import partial
 from collections import OrderedDict
 
 from aiohttp import ClientConnectorError, ClientError, ClientSession, ClientTimeout, TCPConnector, web
+from aiohttp.abc import AbstractResolver
 
 HOP = {"connection", "keep-alive", "transfer-encoding", "content-length", "content-encoding", "upgrade", "host"}
 PREFIX_PATHS = ("/v1/chat/completions", "/v1/completions", "/v1/responses")
@@ -377,29 +384,136 @@ def media_type(content_type, url):
     return guessed or "application/octet-stream"
 
 
-async def fetch_media(session, urls, timeout_s, max_bytes):
-    """{url: data URI} for every URL, downloaded concurrently, each within ``timeout_s`` and ``max_bytes``. Raises
-    ShimError (answered 400) naming the first URL that failed: non-200, too large, timeout, connection error."""
+# Redirects the downloader follows per URL; each hop's host is resolved and checked again.
+MAX_MEDIA_REDIRECTS = 3
+REDIRECT_STATUSES = (301, 302, 303, 307, 308)
 
-    async def one(url):
-        where = url if len(url) <= 200 else url[:200] + "..."
+
+def blocked_reason(ip):
+    """Why the proxy refuses to download from address ``ip``, or None for a public unicast address. A public endpoint
+    that fetches arbitrary URLs is a probe into the network it runs in, so only globally routable unicast addresses
+    are fetched: not loopback, private (RFC 1918, fc00::/7), link-local (169.254/16 with cloud metadata, fe80::/10),
+    multicast, unspecified, reserved or otherwise non-global (100.64/10, documentation ranges), and not an IPv4
+    address of those kinds inside an IPv6 one (::ffff:a.b.c.d, 6to4, Teredo)."""
+    try:
+        addr = ipaddress.ip_address(str(ip).split("%", 1)[0])
+    except ValueError:
+        return "not an IP address"
+    if addr.version == 6:
+        embedded = addr.ipv4_mapped or addr.sixtofour or (addr.teredo[1] if addr.teredo else None)
+        if embedded is not None and blocked_reason(str(embedded)):
+            return f"embeds {embedded}: {blocked_reason(str(embedded))}"
+    for name, label in (
+        ("is_unspecified", "unspecified"),
+        ("is_loopback", "loopback"),
+        ("is_link_local", "link-local"),
+        ("is_multicast", "multicast"),
+        ("is_private", "private"),
+        ("is_reserved", "reserved"),
+    ):
+        if getattr(addr, name):
+            return label
+    if not addr.is_global:
+        return "not globally routable"
+    return None
+
+
+async def resolve_host(host, port):
+    """The addresses ``host`` resolves to, in getaddrinfo order without repeats (an IP literal is itself)."""
+    try:
+        return [str(ipaddress.ip_address(host))]
+    except ValueError:
+        pass
+    infos = await asyncio.get_running_loop().getaddrinfo(host, port, type=socket.SOCK_STREAM)
+    return list(dict.fromkeys(info[4][0] for info in infos))
+
+
+class PinnedResolver(AbstractResolver):
+    """An aiohttp resolver that answers only the checked host, with only its checked addresses: the connection goes to
+    an address that passed ``blocked_reason``, never to a second, later DNS answer (DNS rebinding)."""
+
+    def __init__(self, host, addresses):
+        self.host, self.addresses = host, list(addresses)
+
+    async def resolve(self, host, port=0, family=socket.AF_INET):
+        if host != self.host:
+            raise OSError(f"{host}: not the host the proxy checked ({self.host})")
+        out = []
+        for address in self.addresses:
+            fam = socket.AF_INET6 if ":" in address else socket.AF_INET
+            if family in (socket.AF_INET, socket.AF_INET6) and fam != family:
+                continue
+            out.append({"hostname": host, "host": address, "port": port, "family": fam, "proto": 0, "flags": 0})
+        if not out:
+            raise OSError(f"{host}: no checked address of family {family}")
+        return out
+
+    async def close(self):
+        pass
+
+
+async def _download(url, timeout_s, max_bytes, max_redirects, policy):
+    """(bytes, MIME type) of one URL, following up to ``max_redirects`` redirects; every hop is checked (scheme, then
+    every address its host resolves to) before anything connects to it, and connects only to those addresses."""
+    where = url if len(url) <= 200 else url[:200] + "..."
+    fail = "Failed to fetch media from URL: "
+    current = url
+    for _ in range(max_redirects + 1):
         try:
-            async with session.get(url, timeout=ClientTimeout(total=timeout_s)) as resp:
+            parts = urllib.parse.urlsplit(current)
+            port = parts.port
+        except ValueError as exc:
+            raise ShimError(f"{fail}invalid URL {current[:200]!r}: {exc} ({where})") from None
+        scheme = parts.scheme.lower()
+        if scheme not in ("http", "https") or not parts.hostname:
+            raise ShimError(f"{fail}only http(s) URLs are fetched, not {current[:80]!r} ({where})")
+        host = parts.hostname
+        try:
+            addresses = await resolve_host(host, port or (443 if scheme == "https" else 80))
+        except OSError as exc:
+            raise ShimError(f"{fail}cannot resolve {host}: {exc} ({where})") from None
+        for address in addresses:
+            reason = policy(address)
+            if reason:
+                raise ShimError(f"{fail}{host} resolves to {address} ({reason}); refused ({where})")
+        connector = TCPConnector(resolver=PinnedResolver(host, addresses), use_dns_cache=False, limit=0)
+        async with ClientSession(connector=connector, timeout=ClientTimeout(total=timeout_s)) as session:
+            async with session.get(current, allow_redirects=False) as resp:
+                if resp.status in REDIRECT_STATUSES:
+                    location = resp.headers.get("Location")
+                    if not location:
+                        raise ShimError(f"{fail}HTTP {resp.status} without a Location ({where})")
+                    current = urllib.parse.urljoin(current, location)
+                    continue
                 if resp.status != 200:
-                    raise ShimError(f"Failed to fetch media from URL: HTTP {resp.status} error ({where})")
+                    raise ShimError(f"{fail}HTTP {resp.status} error ({where})")
                 if resp.content_length is not None and resp.content_length > max_bytes:
-                    raise ShimError(f"Failed to fetch media from URL: larger than {max_bytes} bytes ({where})")
+                    raise ShimError(f"{fail}larger than {max_bytes} bytes ({where})")
                 data = bytearray()
                 async for chunk in resp.content.iter_chunked(1 << 16):
                     data += chunk
                     if len(data) > max_bytes:
-                        raise ShimError(f"Failed to fetch media from URL: larger than {max_bytes} bytes ({where})")
-                mime = media_type(resp.headers.get("Content-Type"), url)
+                        raise ShimError(f"{fail}larger than {max_bytes} bytes ({where})")
+                return bytes(data), media_type(resp.headers.get("Content-Type"), current)
+    raise ShimError(f"{fail}more than {max_redirects} redirects ({where})")
+
+
+async def fetch_media(urls, timeout_s, max_bytes, max_redirects=MAX_MEDIA_REDIRECTS, address_policy=None):
+    """{url: data URI} for every URL, downloaded concurrently, each within ``timeout_s`` (all its hops) and
+    ``max_bytes``. ``address_policy(ip)`` returns why an address is refused (default ``blocked_reason``). Raises
+    ShimError (answered 400) naming the first URL that failed: refused address or scheme, too many redirects, non-200,
+    too large, timeout, connection error."""
+    policy = address_policy or blocked_reason
+
+    async def one(url):
+        where = url if len(url) <= 200 else url[:200] + "..."
+        try:
+            data, mime = await asyncio.wait_for(_download(url, timeout_s, max_bytes, max_redirects, policy), timeout_s)
         except asyncio.TimeoutError:
             raise ShimError(f"Failed to fetch media from URL: no answer within {timeout_s:g} s ({where})") from None
         except ClientError as exc:
             raise ShimError(f"Failed to fetch media from URL: {type(exc).__name__}: {exc} ({where})") from None
-        encoded = await asyncio.get_running_loop().run_in_executor(None, base64.b64encode, bytes(data))
+        encoded = await asyncio.get_running_loop().run_in_executor(None, base64.b64encode, data)
         return url, f"data:{mime};base64," + encoded.decode("ascii")
 
     results = await asyncio.gather(*(one(url) for url in urls), return_exceptions=True)
@@ -428,6 +542,9 @@ class Shim:
     fetch_media: bool = False
     fetch_timeout_s: float = 30.0
     fetch_max_bytes: int = 100 << 20
+    # Also fetch from non-public addresses (loopback, private, link-local...): only for a deployment that is itself
+    # private and fetches from an internal store. Never on a public endpoint.
+    fetch_allow_private: bool = False
 
     @classmethod
     def from_env(cls, **overrides):
@@ -439,6 +556,7 @@ class Shim:
             fetch_media=_env_flag("TT_PROXY_FETCH_MEDIA", False),
             fetch_timeout_s=float(os.environ.get("TT_PROXY_FETCH_TIMEOUT_S") or 30),
             fetch_max_bytes=int(float(os.environ.get("TT_PROXY_FETCH_MAX_MB") or 100) * 2**20),
+            fetch_allow_private=_env_flag("TT_PROXY_FETCH_ALLOW_PRIVATE", False),
         )
         env.update({k: v for k, v in overrides.items() if v is not None})
         return cls(**env)
@@ -472,7 +590,7 @@ def prepare(path, body, shim, chunk_chars):
     return finish(path, body, req, new, chunk_chars)
 
 
-async def prepare_async(path, body, shim, chunk_chars, session):
+async def prepare_async(path, body, shim, chunk_chars):
     """``prepare`` in the proxy: large bodies off the event loop, and with ``shim.fetch_media`` the chat request's
     http(s) media downloaded and inlined. Raises ShimError (answered 400)."""
     loop = asyncio.get_running_loop()
@@ -485,7 +603,9 @@ async def prepare_async(path, body, shim, chunk_chars, session):
     if new is not None and shim.enabled and shim.fetch_media and path == "/v1/chat/completions":
         urls = remote_media_urls(new)
         if urls:
-            new = inline_media(new, await fetch_media(session, urls, shim.fetch_timeout_s, shim.fetch_max_bytes))
+            policy = (lambda _ip: None) if shim.fetch_allow_private else blocked_reason
+            fetched = await fetch_media(urls, shim.fetch_timeout_s, shim.fetch_max_bytes, address_policy=policy)
+            new = inline_media(new, fetched)
             big = True
     return await run(big, finish, path, body, req, new, chunk_chars)
 
@@ -636,7 +756,7 @@ def make_app(router, session_factory=None, shim=None):
         hashes = []
         if request.method == "POST" and request.path in PREFIX_PATHS:
             try:
-                body, hashes = await prepare_async(request.path, body, shim, router.chunk_chars, state["session"])
+                body, hashes = await prepare_async(request.path, body, shim, router.chunk_chars)
             except ShimError as exc:
                 router.stats["shim_rejected"] += 1
                 return web.Response(

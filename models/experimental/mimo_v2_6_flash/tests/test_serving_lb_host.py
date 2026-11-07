@@ -640,9 +640,18 @@ def test_proxy_shim_end_to_end():
 PNG = b"\x89PNG\r\n\x1a\n" + bytes(range(256)) * 10  # 2.5 KB, below the 4096-byte limit used below
 
 
-def media_host():
-    """A local media server: an image, a file without a media Content-Type, 404, a slow answer, and two files above
-    the size limit (one declaring its length, one streamed)."""
+def media_host(hits=None):
+    """A local media server: an image, a file without a media Content-Type, 404, a slow answer, two files above the
+    size limit (one declaring its length, one streamed), and redirects (to the image, to another loopback address,
+    to cloud metadata, to a file: URL, and to itself). ``hits`` collects (path, Host header) of every request."""
+    hits = [] if hits is None else hits
+
+    def logged(handler):
+        async def wrapped(request):
+            hits.append((request.path, request.headers.get("Host")))
+            return await handler(request)
+
+        return wrapped
 
     async def png(_):
         return web.Response(body=PNG, content_type="image/png")
@@ -665,13 +674,33 @@ def media_host():
         await resp.write_eof()
         return resp
 
+    def redirect(location):
+        async def handler(request):
+            port = request.url.port
+            raise web.HTTPFound(location.format(port=port))
+
+        return handler
+
     app = web.Application()
-    app.router.add_get("/cat.png", png)
-    app.router.add_get("/photo.jpg", octet)
-    app.router.add_get("/slow.png", slow)
-    app.router.add_get("/big.mp4", big)
-    app.router.add_get("/streamed.mp4", streamed)
+    for path, handler in (
+        ("/cat.png", png),
+        ("/photo.jpg", octet),
+        ("/slow.png", slow),
+        ("/big.mp4", big),
+        ("/streamed.mp4", streamed),
+        ("/hop", redirect("/cat.png")),
+        ("/to-other-loopback", redirect("http://127.0.0.2:{port}/cat.png")),
+        ("/to-metadata", redirect("http://169.254.169.254/latest/meta-data/")),
+        ("/to-file", redirect("file:///etc/passwd")),
+        ("/loop", redirect("/loop")),
+    ):
+        app.router.add_get(path, logged(handler))
     return app
+
+
+def only_127_0_0_1(ip):
+    """The local test server's address is allowed; every other address gets the default verdict."""
+    return None if ip == "127.0.0.1" else lb.blocked_reason(ip)
 
 
 def chat_with(*parts):
@@ -708,25 +737,30 @@ def test_media_type():
     assert lb.media_type(None, "https://h/x") == "application/octet-stream"
 
 
-def test_fetch_media_inlines_and_fails_with_400_messages(expect_error):
+def test_fetch_media_inlines_and_fails_with_400_messages():
     async def run():
         host = TestServer(media_host(), host="127.0.0.1")
         await host.start_server()
         base = f"http://127.0.0.1:{host.port}"
         out = {}
         try:
-            async with ClientSession() as session:
-                got = await lb.fetch_media(session, [base + "/cat.png", base + "/photo.jpg"], 2.0, 4096 * 4)
-                out["ok"] = got
-                for name in ("missing.png", "slow.png", "big.mp4", "streamed.mp4"):
-                    try:
-                        await lb.fetch_media(session, [base + "/cat.png", base + "/" + name], 0.5, 4096)
-                    except lb.ShimError as exc:
-                        out[name] = str(exc)
+            got = await lb.fetch_media(
+                [base + "/cat.png", base + "/photo.jpg", base + "/hop"], 2.0, 4096 * 4, address_policy=only_127_0_0_1
+            )
+            out["ok"] = got
+            for name in ("missing.png", "slow.png", "big.mp4", "streamed.mp4", "loop", "to-file"):
                 try:
-                    await lb.fetch_media(session, [f"http://127.0.0.1:{free_port()}/x.png"], 2.0, 4096)
+                    await lb.fetch_media(
+                        [base + "/cat.png", base + "/" + name], 0.5, 4096, address_policy=only_127_0_0_1
+                    )
                 except lb.ShimError as exc:
-                    out["refused"] = str(exc)
+                    out[name] = str(exc)
+            try:
+                await lb.fetch_media(
+                    [f"http://127.0.0.1:{free_port()}/x.png"], 2.0, 4096, address_policy=only_127_0_0_1
+                )
+            except lb.ShimError as exc:
+                out["refused"] = str(exc)
         finally:
             await host.close()
         return base, out
@@ -734,10 +768,149 @@ def test_fetch_media_inlines_and_fails_with_400_messages(expect_error):
     base, out = asyncio.run(run())
     assert out["ok"][base + "/cat.png"] == "data:image/png;base64," + base64.b64encode(PNG).decode()
     assert out["ok"][base + "/photo.jpg"].startswith("data:image/jpeg;base64,")
+    assert out["ok"][base + "/hop"] == out["ok"][base + "/cat.png"]  # one redirect, followed
     assert "HTTP 404 error" in out["missing.png"] and "missing.png" in out["missing.png"]
     assert "no answer within 0.5 s" in out["slow.png"]
     assert "larger than 4096 bytes" in out["big.mp4"] and "larger than 4096 bytes" in out["streamed.mp4"]
+    assert "more than 3 redirects" in out["loop"]
+    assert "only http(s) URLs" in out["to-file"]
     assert out["refused"].startswith("Failed to fetch media from URL: ClientConnectorError")
+
+
+BLOCKED = [
+    ("127.0.0.1", "loopback"),
+    ("127.8.9.10", "loopback"),
+    ("::1", "loopback"),
+    ("10.1.2.3", "private"),
+    ("172.16.0.1", "private"),
+    ("192.168.1.1", "private"),
+    ("fc00::1", "private"),
+    ("fd12:3456::1", "private"),
+    ("169.254.169.254", "link-local"),  # cloud metadata
+    ("fe80::1", "link-local"),
+    ("fe80::1%eth0", "link-local"),
+    ("224.0.0.1", "multicast"),
+    ("ff02::1", "multicast"),
+    ("0.0.0.0", "unspecified"),
+    ("::", "unspecified"),
+    ("::ffff:127.0.0.1", "loopback"),  # IPv4-mapped
+    ("::ffff:169.254.169.254", "link-local"),
+    ("2002:a00:1::1", "private"),  # 6to4 around 10.0.0.1
+    ("100.64.0.1", "not globally routable"),  # carrier-grade NAT
+    ("192.0.2.1", ""),  # documentation (private or not global, depending on the Python version)
+    ("240.0.0.1", ""),  # reserved
+]
+
+
+@pytest.mark.parametrize("ip,label", BLOCKED)
+def test_blocked_reason_refuses_non_public_addresses(ip, label):
+    reason = lb.blocked_reason(ip)
+    assert reason, ip
+    assert label in reason
+
+
+@pytest.mark.parametrize("ip", ["8.8.8.8", "93.184.216.34", "2606:4700:4700::1111", "::ffff:8.8.8.8"])
+def test_blocked_reason_allows_public_unicast(ip):
+    assert lb.blocked_reason(ip) is None
+
+
+def test_fetch_refuses_non_public_targets_before_connecting(monkeypatch):
+    """Every refusal happens before a connection: the local server never sees a request."""
+    hits = []
+
+    async def run():
+        host = TestServer(media_host(hits), host="127.0.0.1")
+        await host.start_server()
+        port = host.port
+        urls = [
+            f"http://127.0.0.1:{port}/cat.png",  # loopback literal
+            f"http://localhost:{port}/cat.png",  # a name that resolves to loopback
+            f"http://[::1]:{port}/cat.png",
+            f"http://[::ffff:127.0.0.1]:{port}/cat.png",
+            f"http://0.0.0.0:{port}/cat.png",
+            "http://169.254.169.254/latest/meta-data/",
+            "http://10.0.0.1/x.png",
+            "http://192.168.0.10/x.png",
+            "http://[fd00::1]/x.png",
+            "http://[fe80::1]/x.png",
+            "http://224.0.0.1/x.png",
+            "ftp://example.com/x.png",
+        ]
+        out = {}
+        try:
+            for url in urls:
+                try:
+                    await lb.fetch_media([url], 2.0, 1 << 20)  # the default policy
+                    out[url] = "fetched"
+                except lb.ShimError as exc:
+                    out[url] = str(exc)
+        finally:
+            await host.close()
+        return out
+
+    out = asyncio.run(run())
+    for url, message in out.items():
+        assert message.startswith("Failed to fetch media from URL: "), (url, message)
+        assert "refused" in message or "only http(s)" in message, (url, message)
+    assert hits == []
+
+
+def test_fetch_checks_every_redirect_hop():
+    hits = []
+
+    async def run():
+        host = TestServer(media_host(hits), host="127.0.0.1")
+        await host.start_server()
+        base = f"http://127.0.0.1:{host.port}"
+        out = {}
+        try:
+            for name in ("to-other-loopback", "to-metadata"):
+                try:
+                    await lb.fetch_media([f"{base}/{name}"], 2.0, 1 << 20, address_policy=only_127_0_0_1)
+                except lb.ShimError as exc:
+                    out[name] = str(exc)
+        finally:
+            await host.close()
+        return out
+
+    out = asyncio.run(run())
+    assert "127.0.0.2 (loopback); refused" in out["to-other-loopback"]
+    assert "169.254.169.254 (link-local); refused" in out["to-metadata"]
+    # Only the first hops reached the server; the refused targets never got a connection.
+    assert [path for path, _ in hits] == ["/to-other-loopback", "/to-metadata"]
+
+
+def test_fetch_connects_only_to_the_checked_address(monkeypatch):
+    """DNS rebinding: the name is resolved once, checked, and the connection goes to that address. ``media.test``
+    never resolves through DNS (.test is reserved), so the download works only through the pinned address."""
+    hits, lookups = [], []
+
+    async def fake_resolve(host, port):
+        lookups.append(host)
+        return {"media.test": ["127.0.0.1"], "mixed.test": ["93.184.216.34", "10.0.0.1"]}[host]
+
+    monkeypatch.setattr(lb, "resolve_host", fake_resolve)
+
+    async def run():
+        host = TestServer(media_host(hits), host="127.0.0.1")
+        await host.start_server()
+        out, port = {}, host.port
+        try:
+            url = f"http://media.test:{port}/cat.png"
+            out["pinned"] = await lb.fetch_media([url], 2.0, 1 << 20, address_policy=only_127_0_0_1)
+            try:
+                await lb.fetch_media([f"http://mixed.test:{port}/cat.png"], 2.0, 1 << 20)
+            except lb.ShimError as exc:
+                out["mixed"] = str(exc)
+        finally:
+            await host.close()
+        return port, out
+
+    port, out = asyncio.run(run())
+    assert list(out["pinned"].values()) == ["data:image/png;base64," + base64.b64encode(PNG).decode()]
+    assert hits == [("/cat.png", f"media.test:{port}")]  # the name in Host, the checked address on the wire
+    assert lookups == ["media.test", "mixed.test"]  # one lookup per hop, none by aiohttp
+    assert "10.0.0.1 (private); refused" in out["mixed"]  # one non-public answer refuses the name
 
 
 def test_shim_from_env(monkeypatch):
@@ -755,13 +928,14 @@ def test_shim_from_env(monkeypatch):
 
 
 def test_proxy_fetches_media_when_enabled():
-    async def run(fetch):
+    async def run(fetch, allow_private=True):
         host = TestServer(media_host(), host="127.0.0.1")
         engine = TestServer(echo_engine(), host="127.0.0.1")
         await host.start_server()
         await engine.start_server()
         router = lb.Router([f"http://127.0.0.1:{engine.port}"])
-        proxy = TestServer(lb.make_app(router, shim=lb.Shim(fetch_media=fetch, fetch_timeout_s=0.5)), host="127.0.0.1")
+        shim = lb.Shim(fetch_media=fetch, fetch_timeout_s=0.5, fetch_allow_private=allow_private)
+        proxy = TestServer(lb.make_app(router, shim=shim), host="127.0.0.1")
         await proxy.start_server()
         base, url = f"http://127.0.0.1:{host.port}", f"http://127.0.0.1:{proxy.port}"
         try:
@@ -785,3 +959,8 @@ def test_proxy_fetches_media_when_enabled():
     assert snap["served"] == {next(iter(snap["served"])): 1}  # the failed downloads never reached the engine
     base, out, _ = asyncio.run(run(False))
     assert out["cat.png"][1]["body"]["messages"][0]["content"][0]["image_url"]["url"] == f"{base}/cat.png"
+    # The default: a loopback media host is refused with 400, and the engine is never asked.
+    base, out, snap = asyncio.run(run(True, allow_private=False))
+    status, got = out["cat.png"]
+    assert status == 400 and "(loopback); refused" in got["error"]["message"]
+    assert sum(snap["served"].values()) == 0
