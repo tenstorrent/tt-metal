@@ -64,9 +64,9 @@ def test_finish_hand_values():
         hw,
     )
     assert op.fpu_ns == pytest.approx((6 + 5) / 2)
-    # Measured: 160 rows of 1,064,960 scores in 4.7683 ms on 120 cores, 2 rows per core -> 2 * 1,064,960 elements
-    # per 4,768,300 ns on the busiest core.
-    assert op.topk_ns == pytest.approx(2 * 1000 / (2 * 1_064_960 / 4_768_300))
+    # Measured: 160 rows on 120 cores (2 rows per core); one more score per row costs (4,768.3 - 128.4) us /
+    # (1,064,960 - 5,120) on the busiest core's 2 rows.
+    assert op.topk_ns == pytest.approx(2 * 1000 / (2 * (1_064_960 - 5120) / (4_768_300 - 128_400)))
     assert op.compute_ns == pytest.approx(op.fpu_ns + op.topk_ns)
     assert op.dram_ns == pytest.approx(2.0)
     assert op.dram_cons_ns == pytest.approx(8.0)
@@ -95,7 +95,14 @@ def test_indexer_score_fixed_cost_reproduces_its_measurement():
     ops = {o.name: o for o in m.dsa_ops(prefix=0)}
     fused = sum(ops[n].roofline_cons_ns + ops[n].fabric_cons_ns for n in ("index_k_gather", "index_score"))
     assert fused == pytest.approx(174_700, abs=100)
-    assert sum(o.fixed_ns for o in ops.values()) == ops["index_score"].fixed_ns > 0
+    assert ops["index_score"].fixed_ns > 0
+
+
+@pytest.mark.parametrize("prefix, bound_ns", [(0, 128_400), (1_059_840, 4_768_300)])
+def test_topk_reproduces_its_measured_bounds(prefix, bound_ns):
+    # The top-k model is the line through its two timeline bounds (ao3i.2.2): 5,120 and 1,064,960 scores per row.
+    op = next(o for o in m.dsa_ops(prefix=prefix) if o.name == "index_topk")
+    assert op.topk_ns + op.fixed_ns == pytest.approx(bound_ns)
 
 
 def _hand_anchor():

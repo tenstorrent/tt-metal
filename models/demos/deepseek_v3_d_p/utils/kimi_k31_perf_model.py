@@ -26,12 +26,13 @@ branch ``mvasilijevic/deepseek-v41-prefill``, and of GLM-5.3's sparse MLA, whose
     (``tech_reports/matrix_engine/matrix_engine.md``); 120 cores (Galaxy compute grid 12x10); 1.35 GHz (repository
     constant, an assumption). SFPU primitives (exp) are counted, not timed. Exceptions, implementation measurements
     of K3.1 on this 8x4 (ao3i.2.2, stage 2, real weights; indicative, TDP_LIMIT_MAX=75 W), not capabilities:
-      - the indexer top-k is timed at its *measured* rate (``topk_large_indices``, k=2048, 160 rows of 1,064,960 scores
-        per chip in at most 4.77 ms: >= 35.7 elements/ns per chip on 120 cores). The kernel emits no profiler record;
-        the time is the upper bound from the chip timeline (KVPE write end to ``sparse_sdpa`` start; the top-k runs
-        hidden under the concurrent KVPE gather), so the rate is a lower bound. Rows run one per core, so it is turned
+      - the indexer top-k is timed as *measured*: a fixed cost plus a rate (``topk_large_indices``, k=2048, 160 rows per
+        chip). The kernel emits no profiler record; its time is bounded from the chip timeline (KVPE write end to
+        ``sparse_sdpa`` start; the top-k runs beside the concurrent KVPE gather): <= 128.4 us at 5,120 scores per row
+        and <= 4,768.3 us at 1,064,960. The line through both bounds (``TOPK_FIXED_NS`` + rate) is the model; on the
+        128K prompt (ao3i.2.3) the bounds at all 25 depths lie within 0.93-1.11x of it. Rows run one per core, so the rate is turned
         into a per-core rate (ceil(160/120) rows per core) and applied to ceil(rows/cores) rows on this grid. It
-        replaces V4.1's LoudBox rate (7.1 elements/ns per chip, 640 rows on 110 cores, 256K), >= 6.7x slower here;
+        replaces V4.1's LoudBox rate (7.1 elements/ns per chip, 640 rows on 110 cores, 256K), ~6.7x slower here;
       - the indexer score program (fused with the index-K ring all-gather) has a fixed per-op cost
         (``INDEX_SCORE_FIXED_NS``) that the collective's 14 us latency below omits: measured 174.7 / 182.6 us at prefix
         0 / 5,120 while its modelled work doubles; the constant is the measured 174.7 us less the conservative model
@@ -76,7 +77,10 @@ FIDELITY_PHASES = {"LoFi": 1, "HiFi2": 2, "HiFi3": 3, "HiFi4": 4}
 BYTES = {"bf16": 2.0, "bfp8": 1088 / 1024, "int32": 4.0}
 KVPE_ROW_BYTES = MlaKvCacheGeometry(latent_dim=C.KV_LORA_RANK, rope_dim=C.QK_ROPE_HEAD_DIM).packed_row_bytes
 # Measured topk_large_indices at k=2048 (see module docstring): elements/ns per chip, rows, cores of that chip.
-TOPK_MEASURED_ELEMENTS_PER_NS, TOPK_MEASURED_ROWS, TOPK_MEASURED_CORES = 160 * 1_064_960 / 4_768_300, 160, 120
+# The line through the two top-k bounds: 5,120 scores per row in 128.4 us, 1,064,960 in 4,768.3 us.
+TOPK_MEASURED_ELEMENTS_PER_NS = 160 * (1_064_960 - 5120) / (4_768_300 - 128_400)
+TOPK_MEASURED_ROWS, TOPK_MEASURED_CORES = 160, 120
+TOPK_FIXED_NS = 128_400 - 5120 * 160 / TOPK_MEASURED_ELEMENTS_PER_NS
 INDEX_SCORE_FIXED_NS = 174_700 - 36_700  # measured fused indexer score at prefix 0 minus its conservative model
 TOPK_CORE_ELEMENTS_PER_NS = (
     TOPK_MEASURED_ELEMENTS_PER_NS * -(-TOPK_MEASURED_ROWS // TOPK_MEASURED_CORES) / TOPK_MEASURED_ROWS
@@ -234,6 +238,7 @@ def dsa_ops(prefix: int, chunk: int = CHUNK, hw: Galaxy8x4 = GALAXY) -> list[OpC
             "index_topk",
             topk_elements=q * width,
             topk_rows=q,
+            fixed_ns=TOPK_FIXED_NS,
             sfpu={"topk": q * width},
             dram_bytes=scores + q * topk * BYTES["int32"],
         )
