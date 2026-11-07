@@ -288,6 +288,7 @@ class Gemma4Attention:
                 logical_n=ring_logical_n,
                 kv_actual_global=chunk_offset,
                 gather_buffer_key=self.layer_idx % NUM_SWA_HALO_BUFFER_PAIRS,
+                halo_parity=(self.layer_idx - (self.layer_idx + 1) // 6) % 2,
                 sliding_window_size=sliding_window_size,
                 scale=1.0,
                 compute_kernel_config=sdpa_compute_config,
