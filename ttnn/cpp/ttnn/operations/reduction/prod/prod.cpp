@@ -72,8 +72,14 @@ Tensor prod_impl(
         input_a.layout() == Layout::TILE && input_a.logical_shape().rank() >= 2 &&
         (input_a.logical_shape()[-2] % tt::constants::TILE_HEIGHT != 0 ||
          input_a.logical_shape()[-1] % tt::constants::TILE_WIDTH != 0);
-    const Tensor input_a_padded =
-        needs_padding ? ttnn::fill_implicit_tile_padding(ttnn::clone(input_a), 1.0f) : input_a;
+    const Tensor input_a_padded = needs_padding ? ttnn::fill_implicit_tile_padding(
+                                                      ttnn::clone(
+                                                          input_a,
+                                                          /*dtype=*/std::nullopt,
+                                                          memory_config,
+                                                          /*compute_kernel_config=*/std::nullopt),
+                                                      1.0f)
+                                                : input_a;
     std::size_t rank_st = input_a_padded.logical_shape().rank();
     TT_FATAL(rank_st <= std::numeric_limits<int>::max(), "Rank is too large to convert to int");
     const int old_rank = static_cast<int>(rank_st);
@@ -223,8 +229,14 @@ Tensor prod_nc_impl(
         input.layout() == Layout::TILE && input.logical_shape().rank() >= 2 &&
         (input.logical_shape()[-2] % tt::constants::TILE_HEIGHT != 0 ||
          input.logical_shape()[-1] % tt::constants::TILE_WIDTH != 0);
-    const Tensor input_padded =
-        needs_padding ? ttnn::fill_implicit_tile_padding(ttnn::clone(input), 1.0f) : input;
+    const Tensor input_padded = needs_padding ? ttnn::fill_implicit_tile_padding(
+                                                    ttnn::clone(
+                                                        input,
+                                                        /*dtype=*/std::nullopt,
+                                                        mem_cfg,
+                                                        /*compute_kernel_config=*/std::nullopt),
+                                                    1.0f)
+                                              : input;
 
     if (dims.empty()) {
         return compute_prod_all(input_padded, mem_cfg);
