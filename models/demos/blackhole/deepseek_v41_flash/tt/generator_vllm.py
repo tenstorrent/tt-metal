@@ -687,6 +687,16 @@ class DeepseekV41ForCausalLM(SupportsMultiModal):
         """users per mesh row of the trace the next round runs in (None = the full trace): the smallest load-based bucket that covers the live users."""
         if not self.spec_bucket_sets:
             return None
+        sw = os.environ.get("DSV41_LOAD_TRACES_FILE")
+        if (
+            sw
+        ):  # live switch (A/B of the two modes inside one boot): a file holding 0 forces the full trace, anything else / a missing file = the load-based pick
+            try:
+                with open(sw) as f_:
+                    if f_.read().strip() == "0":
+                        return None
+            except OSError:
+                pass
         need = VS.pick_bucket(self.slots.users_needed(self.U), sorted(self.spec_bucket_sets) + [self.U])
         return need if need < self.U else None
 
