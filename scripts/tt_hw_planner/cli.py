@@ -10275,6 +10275,7 @@ from .commands.capture_inputs import cmd_capture_inputs  # noqa: F401
 
 from .commands.op_synth import cmd_op_synth  # noqa: F401
 from .commands.emit_e2e import cmd_emit_e2e  # noqa: F401
+from ._cli_helpers.workload import add_area_arg  # noqa: F401
 from .commands.optimize import add_cpp_flags, add_workload_flags, cmd_optimize  # noqa: F401
 from .commands.optimize_dashboard import cmd_optimize_dashboard  # noqa: F401
 from .commands.autocommit import wrap as _autocommit_wrap, add_commit_push_args as _add_commit_push_args  # noqa: F401
@@ -11392,6 +11393,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             "Use --all-tasks to emit every supported task."
         ),
     )
+    add_area_arg(pe2e)
     pe2e.add_argument(
         "--all-tasks",
         action="store_true",

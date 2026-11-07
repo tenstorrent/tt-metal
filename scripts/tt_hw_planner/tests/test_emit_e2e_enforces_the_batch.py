@@ -124,7 +124,9 @@ def test_the_gate_server_passes_the_request_to_the_gate(monkeypatch):
     M = importlib.import_module("scripts.tt_hw_planner.e2e_mcp")
     seen = {}
     monkeypatch.setattr(
-        M, "_run_deterministic_gates", lambda d, p, t, batch=1: seen.update(batch=batch) or (False, ["x"])
+        M,
+        "_run_deterministic_gates",
+        lambda d, p, t, batch=1, area=None: seen.update(batch=batch, area=area) or (False, ["x"]),
     )
     fn = getattr(M.termination_check, "fn", M.termination_check)
     assert fn()["can_stop"] is False

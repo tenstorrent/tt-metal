@@ -1498,8 +1498,11 @@ def _signal_quality_gate(demo_dir: Path):
     )
 
 
-# How the `--batch` request reaches the gate's own process (e2e_mcp reads it back by this name).
+# How the `--batch` and `--area` requests reach the gate's own process (e2e_mcp reads them back by
+# these names). Separate from the variables the TESTS read (perf_adapter's BATCH_ENV / AREA_ENV):
+# these carry the operator's request to the gate, which then decides what to hand the tests.
 E2E_MCP_BATCH_ENV = "E2E_MCP_BATCH"
+E2E_MCP_AREA_ENV = "E2E_MCP_AREA"
 # Where the gate streams its tests' output. The out-of-band gate check supervises THIS FILE for
 # forward progress instead of guessing a duration, so both sides must agree on the path: the caller
 # names it, the gate writes there. Unset (any other caller) -> the gate picks its own, as before.
@@ -1713,7 +1716,7 @@ def run_stamp() -> str:
         return ""
 
 
-def _correctness_key(demo_dir: Path, pcc: float, batch: int) -> Optional[str]:
+def _correctness_key(demo_dir: Path, pcc: float, batch: int, area: Optional[int] = None) -> Optional[str]:
     """The correctness verdict's cache key: this demo's sources, plus the bar they were judged against.
 
     None if it cannot be taken (no run identity, or the sources cannot be read) -> never cache."""
@@ -1726,7 +1729,13 @@ def _correctness_key(demo_dir: Path, pcc: float, batch: int) -> Optional[str]:
     if src is None:
         return None
     h = hashlib.sha256()
-    h.update(repr((_GATE_KEY_VERSION, stamp, float(pcc), int(batch), src)).encode())
+    key = (_GATE_KEY_VERSION, stamp, float(pcc), int(batch), src)
+    # Appended only when a size was asked for, so a run that asked for none keeps the key it had and
+    # its cached verdict: a pass at one input size says nothing about another, but a run with no size
+    # axis has nothing to scope.
+    if area:
+        key += (int(area),)
+    h.update(repr(key).encode())
     return h.hexdigest()[:16]
 
 
@@ -1802,7 +1811,7 @@ def _ensure_package_markers(demo_dir: Path) -> list:
     return written
 
 
-def _run_deterministic_gates(demo_dir: Path, pcc: float, timeout_s: int, batch: int = 1):
+def _run_deterministic_gates(demo_dir: Path, pcc: float, timeout_s: int, batch: int = 1, area: Optional[int] = None):
     """Model-agnostic gate runner: G1 native, G2/G3 (run tests/e2e), G4 demo/ structure. Returns (ok, reasons).
 
     batch > 1 is the emit-e2e `--batch` request: the tests are run with it and must report driving it
@@ -1818,7 +1827,7 @@ def _run_deterministic_gates(demo_dir: Path, pcc: float, timeout_s: int, batch: 
     # A pass this run already earned, on code that has not changed since, is still a pass. Re-running
     # it costs the whole round (see _correctness_key). Only a PASS is reused, and only within the run
     # that earned it.
-    _key = _correctness_key(demo_dir, pcc, batch)
+    _key = _correctness_key(demo_dir, pcc, batch, area)
     _cached_pass = _cached_correctness_pass(demo_dir, _key)
     if _cached_pass is not None:
         print("  [gate] correctness unchanged since it passed this run -- reusing that verdict", flush=True)
@@ -1931,10 +1940,14 @@ def _run_deterministic_gates(demo_dir: Path, pcc: float, timeout_s: int, batch: 
     gate_env["PYTHONPATH"] = str(demo_repo_root) + os.pathsep + gate_env.get("PYTHONPATH", "")
     gate_env["TT_METAL_HOME"] = str(demo_repo_root)
     batch = int(batch or 1)
-    if batch > 1:
-        from models.experimental.perf_automation.agent.perf_adapter import BATCH_ENV
+    # THE WORKLOAD THE GATE DRIVES, both halves the same way: the tests read each from the variable
+    # perf_adapter names, and one that was not asked for is not written, so the tests keep their own
+    # default. (batch 1 is "not asked for": it is what a test runs when nothing says otherwise.)
+    from models.experimental.perf_automation.agent.perf_adapter import AREA_ENV, BATCH_ENV
 
-        gate_env[BATCH_ENV] = str(batch)
+    for _v, _env in ((batch if batch > 1 else 0, BATCH_ENV), (int(area or 0), AREA_ENV)):
+        if _v:
+            gate_env[_env] = str(_v)
     pytest_out = ""
     gate_tests = _gate_test_files(demo_dir) or test_files
     # A STOPWATCH CANNOT TELL "HUNG" FROM "SLOW", SO IT MUST NOT BE THE JUDGE.
@@ -2558,7 +2571,7 @@ def cmd_emit_e2e(args) -> int:
     return _emit_e2e_phase_a(args)
 
 
-def _run_emit_e2e_cc(*, model_id, demo_dir, pcc, timeout_s, agent_bin, max_rounds, batch=1) -> int:
+def _run_emit_e2e_cc(*, model_id, demo_dir, pcc, timeout_s, agent_bin, max_rounds, batch=1, area=None) -> int:
     """emit-e2e cc engine: after the builder runs, drive the fix loop through the shared cc harness
     against the e2e_mcp deterministic gate (which REUSES the same G1–G4 `_run_deterministic_gates` the
     legacy loop uses). The gate is the sole stop authority. Returns 0 iff the gate reports can_stop.
@@ -2583,6 +2596,7 @@ def _run_emit_e2e_cc(*, model_id, demo_dir, pcc, timeout_s, agent_bin, max_round
         "E2E_MCP_TIMEOUT": str(timeout_s),
         E2E_GATE_LOG_ENV: str(_gate_progress_log),
         E2E_MCP_BATCH_ENV: str(int(batch or 1)),
+        E2E_MCP_AREA_ENV: str(int(area or 0)),
         "E2E_MODEL_ID": model_id,
         "E2E_ALL_TASKS": _os.environ.get("E2E_ALL_TASKS", "0"),
         "E2E_REQUIRE_TRACE": _os.environ.get("E2E_REQUIRE_TRACE", "1"),
@@ -2807,13 +2821,22 @@ def _emit_e2e_phase_a(args) -> int:
             for _line in _batch_reference.describe().splitlines():
                 print(f"    {_line}")
     _batch_note = _batch_prompt_block(_batch_size, heads=_batch_heads, reference=_batch_reference)
+    # The size the operator asked for, if any. Validated the same way optimize validates it, so the two
+    # commands refuse the same values with the same message.
+    from .._cli_helpers.workload import workload_value
+
+    _area, _area_err = workload_value(args, "area")
+    if _area_err:
+        print("error: " + _area_err)
+        return 1
+    _area_note = _area_prompt_block(_area)
     build_prompt = _build_agent_prompt(
         model_id=model_id,
         demo_dir=demo_dir,
         pcc=pcc,
         parallel_note=_parallel_note,
         trace_note=_trace_note,
-        batch_note=_batch_note,
+        batch_note=_batch_note + _area_note,
         hardware_note=_hardware_prompt_block(
             _resolve_box(getattr(args, "box", None)),
             # From the mesh, NOT from _pc: plan_parallelism returns None for a
@@ -2853,6 +2876,7 @@ def _emit_e2e_phase_a(args) -> int:
         agent_bin=agent_bin,
         max_rounds=max_grade_rounds,
         batch=_batch_size,
+        area=_area,
     )
 
 
@@ -3607,6 +3631,35 @@ def _batch_input_block(batch: int, reference=None) -> str:
             _BATCH_INPUT_SEEDED.format(seed=seed) if seed is not None else _BATCH_INPUT_UNSEEDED.format(batch=batch)
         )
     return "".join(parts)
+
+
+def _area_prompt_block(area: Optional[int]) -> str:
+    """Builder instruction for a model whose inputs have a SIZE as well as a count. Empty when none was
+    asked for (default, unchanged behaviour) -- a model with no such axis must not be handed one.
+
+    The size cannot be read off the checkpoint: a vision or diffusion model runs at whatever resolution
+    it is handed, so the builder picks a default, and that default is a decision the operator never saw.
+    It matters more than a knob usually does, because the size a pipeline is BUILT for decides how it
+    lays its stages out over the mesh -- one built for a smaller default does not run slower at a larger
+    size, it aborts. Stated here, and read back from the environment by the emitted demo so a later run
+    can change it without re-emitting."""
+    if not area:
+        return ""
+    from models.experimental.perf_automation.agent.perf_adapter import AREA_ENV
+
+    return f"""
+INPUT SIZE = {area}. This model's inputs have a SIZE as well as a count. Build the pipeline for inputs
+of {area} -- the side of the equivalent square, the model's OWN resizing rule deciding the exact shape
+from it -- and not for a smaller default of your choosing.
+
+  - Thread the size through everything the pipeline is BUILT for, not only through the inputs it is
+    handed: whatever a stage sizes its buffers, its parallelism or its mesh layout by must be derived
+    from this size, or a run at it aborts instead of running slower.
+  - Take it from ${AREA_ENV} where that is set, falling back to {area}, so a later run can change the
+    size without re-emitting the demo. Name the fallback once, as a module constant.
+  - The correctness gate runs at whatever ${AREA_ENV} says. If the reference it is scored against is
+    too expensive to compute at this size, say so in the README rather than silently gating smaller.
+"""
 
 
 def _batch_prompt_block(batch: int, *, heads: Optional[list] = None, reference=None) -> str:

@@ -779,7 +779,9 @@ def add_workload_flags(popt) -> None:
     """--batch and --area on the optimize parser. The WORKLOAD the run profiles: both reached the tests
     only as environment variables, so an operator had to know the spellings and export them around the
     command, and a run that forgot one silently profiled a different workload than it reported."""
-    from models.experimental.perf_automation.agent.perf_adapter import AREA_ENV, BATCH_ENV
+    from models.experimental.perf_automation.agent.perf_adapter import BATCH_ENV
+
+    from .._cli_helpers.workload import add_area_arg
 
     popt.add_argument(
         "--batch",
@@ -789,14 +791,7 @@ def add_workload_flags(popt) -> None:
         help="samples the profiled run drives (sets %s). Default: whatever the environment already says, "
         "else the demo's own batch." % BATCH_ENV,
     )
-    popt.add_argument(
-        "--area",
-        type=int,
-        default=None,
-        dest="area",
-        help="condition-image side for a model whose cost follows an input SIZE rather than a token count "
-        "(sets %s). Ignored by a model with no such axis." % AREA_ENV,
-    )
+    add_area_arg(popt)
 
 
 def _apply_workload_flags(args) -> str | None:
@@ -804,13 +799,14 @@ def _apply_workload_flags(args) -> str | None:
     keeps whatever the environment already says. Returns an error message for an unusable value, else None."""
     from models.experimental.perf_automation.agent.perf_adapter import AREA_ENV, BATCH_ENV
 
+    from .._cli_helpers.workload import workload_value
+
     for name, env in (("batch", BATCH_ENV), ("area", AREA_ENV)):
-        v = getattr(args, name, None)
-        if v is None:
-            continue
-        if v < 1:
-            return "--%s must be 1 or more" % name
-        os.environ[env] = str(v)
+        v, err = workload_value(args, name)
+        if err:
+            return err
+        if v is not None:
+            os.environ[env] = str(v)
     return None
 
 

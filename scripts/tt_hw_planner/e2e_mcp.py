@@ -34,6 +34,7 @@ _REPO = _THP.parents[1]
 sys.path.insert(0, str(_REPO))
 
 from scripts.tt_hw_planner.commands.emit_e2e import (  # noqa: E402
+    E2E_MCP_AREA_ENV,
     E2E_MCP_BATCH_ENV,
     _recover_if_wedged,
     _run_deterministic_gates,
@@ -70,6 +71,7 @@ _DEMO_DIR = os.environ.get("E2E_MCP_DEMO_DIR", "")
 _PCC = float(os.environ.get("E2E_MCP_PCC", str(E2E_PCC)))
 _TIMEOUT = int(os.environ.get("E2E_MCP_TIMEOUT", "1800"))
 _BATCH = int(os.environ.get(E2E_MCP_BATCH_ENV, "1") or "1")  # the emit-e2e --batch request
+_AREA = int(os.environ.get(E2E_MCP_AREA_ENV, "0") or "0")  # the emit-e2e --area request (0 = none)
 
 # A ROUND THAT CHANGED NOTHING MUST NOT BE BOUGHT TWICE.
 #
@@ -202,7 +204,7 @@ def termination_check() -> dict:
 
     os.environ.pop("E2E_REQUIRE_ON_DEVICE", None)
 
-    ok, reasons = _run_deterministic_gates(demo, _PCC, _TIMEOUT, batch=_BATCH)
+    ok, reasons = _run_deterministic_gates(demo, _PCC, _TIMEOUT, batch=_BATCH, area=_AREA)
     if not ok:
         return _failed(reasons, {"unit": "e2e_gates", "rung": "correctness"}, demo)
 
