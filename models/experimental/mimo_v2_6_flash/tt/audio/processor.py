@@ -18,7 +18,14 @@ Where it runs: vLLM 0.30.0's renderer calls ``_process_multimodal`` (and so this
 its asyncio event loop. Torch kernels release the GIL, so the loop keeps streaming other requests' tokens: while a
 120 s clip took 10.4 s there, a 10 ms text stream's largest gap was 20 ms (12 ms before; 10.9 s with the same work
 on the loop), on bhg4 at load average ~37 (tests/perf/audio_frontend_stall.py). Multimodal items of one API server
-queue behind each other on the one worker: a 5 s clip sent with that 120 s one finished after 10.7 s.
+queue behind each other on the one worker: a 5 s clip sent with that 120 s one finished after 10.7 s (9.7 s with the
+aligned windowed attention, load average ~20). vLLM 0.30 offers no setting for more workers: ``BaseRenderer``
+creates ``ThreadPoolExecutor(max_workers=1)`` and requires it ("must stay single-worker per #38418": the sender-side
+processor cache must see items in the order the engine receives them). The tokenizer encoder is ~98 % of an item's
+time here (30 s on bhg2: 1.63 s, of which resampling 6 ms, the upstream processor 17 ms, ``fp32_mels`` 15 ms), so
+the queueing shrinks only with the encoder's own time: MIMO_AUDIO_FRONTEND_THREADS=16 takes 30 s / 120 s from 1.74
+/ 8.0 s to 0.97 / 4.8 s on an idle host (tt/audio/host_backend.py), at the cost of 16 cores while it runs next to
+the row engines' own CPU work (not measured under serving load).
 Each API server process (one per row engine, or per DP rank) loads its own copy of the tokenizer encoder (1.2 GB of
 fp32 weights) on its first audio item, never at startup: an API server's OpenMP / oneDNN state must not be touched
 before vLLM forks its engine-core processes (vllm/multimodal/audio.py).
@@ -29,8 +36,8 @@ hit skips the processor entirely (``_cached_apply_hf_processor``), so a repeated
 MIMO_AUDIO_PATCH says where the patch encoder (codes -> LLM embeddings) runs; the API server and the engine read it:
 
 * ``device`` (the default): on the engine's row (tt/audio/patch.py, TP=8): the item reaches the engine as
-  ``audio_codes`` int32 [n_codes, 20] and the engine's ``AudioCodesBackend`` runs the device patch encoder: 16 / 11
-  / 32 / 62 ms for 5 / 30 / 120 / 300 s of audio (host embedding sum and transfers included; PCC 0.9998 against the
+  ``audio_codes`` int32 [n_codes, 20] and the engine's ``AudioCodesBackend`` runs the device patch encoder: 15 / 11
+  / 29 / 60 ms for 5 / 30 / 120 / 300 s of audio on bhg2 (host embedding sum and transfers included; PCC 0.9998 against the
   host bf16 patch encoder, 0.9999 against fp32), where the host patch encoder takes 35 / 145 / 610 ms of CPU (bf16,
   8 threads, bhg4) during which the engine's row stands still. An engine without the device encoder (no mesh, or
   MIMO_MM_MODALITIES without audio) falls back to the host one.
