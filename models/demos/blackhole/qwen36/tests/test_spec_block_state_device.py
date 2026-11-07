@@ -400,3 +400,203 @@ def test_copy_traces_match_the_eager_block_ops(device, geo_block):
     assert torch.equal(rec_at(12), recs[12]) and torch.equal(
         conv_at(12), carries[12]
     ), "a block outside the copies changed"
+
+
+def _layers(device, g, block, num_blocks, n):
+    """A SpecGdnBlockState over ``n`` GDN layers of geometry g, layer i in group i with its own K and V buffers, each
+    with a bound B=1 scratch (rec_state, conv_carry) and in-replay snapshot buffers of 3 slots."""
+    sts = [_state(device, g, block, num_blocks) for _ in range(n)]
+    st = sts[0][0]
+    st.layers = [(i, s[1], i) for i, s in enumerate(sts)]
+    st.layer_groups = {i: i for i in range(n)}
+    st.G = n
+    st.book = sbs.SpecBlockBook(st.layout, n, 8, T, "none")
+    st.model = SimpleNamespace(_paged_kv_caches=[(s[2], s[3]) for s in sts], mesh_device=device)
+    tile = lambda x, dt: ttnn.from_torch(x, dtype=dt, layout=ttnn.TILE_LAYOUT, device=device)
+    for _, dn, _ in st.layers:
+        dn.rec_state = tile(torch.zeros(1, g.Nv, 128, 128), ttnn.float32)
+        dn.conv_carry = tile(torch.zeros(1, 3, g.C), ttnn.bfloat16)
+        dn._snap_rec = tile(torch.randn(3, g.Nv, 128, 128), ttnn.float32)
+        dn._snap_conv_rm = ttnn.from_torch(
+            torch.randn(1, 9, g.C).bfloat16(), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device
+        )
+    return st, sts
+
+
+@pytest.mark.parametrize("geo_block", CASES, ids=lambda c: f"{c[0].id}_b{c[1]}")
+def test_block_io_kernel_matches_the_op_chains(device, geo_block):
+    """GdnBlockIO (kernels/gdn_block_io.cpp): the scratch write, the snapshot write and the restore of two GDN layers in
+    two groups move the same pages and bytes as _write_rec / _write_carry / _read_rec / _read_carry, into blocks of
+    both phases, and leave every other block as it was."""
+    from models.demos.blackhole.qwen36.tt.gdn_block_io import GdnBlockIO
+
+    g, block = geo_block
+    st, sts = _layers(device, g, block, 24, 2)
+    io = GdnBlockIO(st, st.model._paged_kv_caches)
+    assert io.reason() is None and io.zero_reason() is None
+    torch.manual_seed(13)
+    recs = [torch.randn(1, g.Nv, 128, 128) for _ in st.layers]
+    carries = [torch.randn(1, 3, g.C).bfloat16() for _ in st.layers]
+    for (_, dn, _), r, c in zip(st.layers, recs, carries):
+        ttnn.copy_host_to_device_tensor(ttnn.from_torch(r, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT), dn.rec_state)
+        ttnn.copy_host_to_device_tensor(ttnn.from_torch(c, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT), dn.conv_carry)
+    raw = lambda t, b: ttnn.to_torch(ttnn.slice(t, (b, 0, 0, 0), [b + 1] + [int(x) for x in list(t.shape)[1:]])).float()
+    same = lambda a, b: torch.allclose(a, b, rtol=0, atol=0, equal_nan=True)
+    before = {(i, b): (raw(s[2], b), raw(s[3], b)) for i, s in enumerate(sts) for b in range(24)}
+    # kernel into (6, 7) and (11, 10); the op chains into (8, 9) and (13, 12): same phase pairwise
+    io.write([6, 7])
+    io.write([11, 10])
+    with sbs._PageTables(st) as pts:
+        for (_, dn, gg), blocks in ((st.layers[0], (8, 13)), (st.layers[1], (9, 12))):
+            for b in blocks:
+                st._write_rec(dn, b, dn.rec_state, pts)
+                rm = ttnn.to_layout(dn.conv_carry, ttnn.ROW_MAJOR_LAYOUT)
+                st._write_carry(dn, b, rm, pts)
+    pairs = {0: ((6, 8), (11, 13)), 1: ((7, 9), (10, 12))}
+    for i, (_, dn, _) in enumerate(st.layers):
+        k, v = sts[i][2], sts[i][3]
+        for kb, eb in pairs[i]:
+            assert torch.equal(ttnn.to_torch(st._read_rec(dn, kb)).reshape(recs[i].shape).float(), recs[i]), f"{i} {kb}"
+            assert torch.equal(ttnn.to_torch(st._read_carry(dn, kb)).reshape(1, 3, g.C), carries[i]), f"{i} {kb}"
+            assert same(raw(k, kb), raw(k, eb)) and same(raw(v, kb), raw(v, eb)), f"layer {i}: block {kb} vs {eb}"
+    written = {0: {6, 8, 11, 13}, 1: {7, 9, 10, 12}}
+    for (i, b), (bk, bv) in before.items():
+        if b not in written[i]:
+            assert same(raw(sts[i][2], b), bk) and same(raw(sts[i][3], b), bv), f"layer {i} block {b} changed"
+    # snapshot slot 1 into (15, 14)
+    io.write_snapshot([15, 14], 1)
+    for (_, dn, _), b in zip(st.layers, (15, 14)):
+        snap = ttnn.to_torch(dn._snap_rec).float()[1:2]
+        rows = ttnn.to_torch(dn._snap_conv_rm)[:, 3:6]
+        assert torch.equal(ttnn.to_torch(st._read_rec(dn, b)).reshape(snap.shape).float(), snap), f"snapshot {b}"
+        assert torch.equal(ttnn.to_torch(st._read_carry(dn, b)).reshape(1, 3, g.C), rows), f"snapshot conv {b}"
+    # restore (6, 7) into cleared scratch
+    for _, dn, _ in st.layers:
+        ttnn.copy_host_to_device_tensor(
+            ttnn.from_torch(torch.zeros(1, g.Nv, 128, 128), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT), dn.rec_state
+        )
+        ttnn.copy_host_to_device_tensor(
+            ttnn.from_torch(torch.ones(1, 3, g.C).bfloat16(), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT),
+            dn.conv_carry,
+        )
+    io.restore([6, 7])
+    for (_, dn, _), r, c in zip(st.layers, recs, carries):
+        assert torch.equal(ttnn.to_torch(dn.rec_state).reshape(r.shape).float(), r), "restore: state"
+        assert torch.equal(ttnn.to_torch(dn.conv_carry).reshape(1, 3, g.C), c), "restore: conv"
+
+
+@pytest.mark.parametrize("block", [2048, 1024])
+def test_block_io_zero_matches_zero_blocks(device, block):
+    """GdnBlockIO.zero: every listed block of every K and V buffer is zeroed (more ids than one program takes), every
+    other block keeps its bytes."""
+    from models.demos.blackhole.qwen36.tt.gdn_block_io import ZERO_MAX_BLOCKS, GdnBlockIO
+
+    num_blocks = 48
+    ones = lambda: ttnn.from_torch(
+        torch.ones(num_blocks, 1, block, 256),
+        dtype=ttnn.bfloat8_b,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    kv = [(ones(), ones()), (ones(), ones())]
+    st = SimpleNamespace(mesh=device, layers=[], layout=None, G=0)
+    io = GdnBlockIO(st, kv)
+    assert io.zero_reason() is None
+    listed = [1, 2, 3, 5, 8, 13, 21, 34, 40, 41, 42, 43, 44, 45, 46, 47] + list(range(22, 22 + ZERO_MAX_BLOCKS - 10))
+    io.zero(listed)
+    for n, (k, v) in enumerate(kv):
+        for name, t in (("K", k), ("V", v)):
+            host = ttnn.to_torch(t).float()
+            for b in range(num_blocks):
+                if b in listed:
+                    assert not host[b].any(), f"{name}{n} block {b} was not zeroed"
+                else:
+                    assert torch.equal(host[b], torch.ones_like(host[b])), f"{name}{n} block {b} changed"
+
+
+@pytest.mark.parametrize("geo_block", CASES, ids=lambda c: f"{c[0].id}_b{c[1]}")
+def test_block_io_window_matches_materialize(device, geo_block):
+    """GdnBlockIO.window (the boundary conv writes): the conv rows after token t of row u's verify window land in block
+    b's conv history of every layer of the entry's group, as materialize writes them; the other group's layer and
+    the recurrent pages stay as they were."""
+    from models.demos.blackhole.qwen36.tt.gdn_block_io import GdnBlockIO
+
+    g, block = geo_block
+    st, sts = _layers(device, g, block, 24, 2)
+    io = GdnBlockIO(st, st.model._paged_kv_caches)
+    B = 8
+    torch.manual_seed(17)
+    windows = [torch.randn(B, 3 + T, g.C).bfloat16() for _ in st.layers]
+    for (_, dn, _), w in zip(st.layers, windows):
+        dev = ttnn.from_torch(w, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+        dn.verify_win_cur = lambda dev=dev: dev
+    assert io.window_reason() is None
+    rec = torch.randn(1, g.Nv, 128, 128)
+    rec_dev = ttnn.from_torch(rec, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    with sbs._PageTables(st) as pts:
+        for _, dn, _ in st.layers:
+            for b in (5, 6, 9):
+                st._write_rec(dn, b, rec_dev, pts)
+    conv_at = lambda dn, b: ttnn.to_torch(st._read_carry(dn, b)).reshape(3, g.C)
+    before = {(i, b): conv_at(dn, b) for i, (_, dn, _) in enumerate(st.layers) for b in (5, 6, 9)}
+    # (u, t, group, block): blocks of both phases, every window column, both groups
+    entries = [(0, 0, 0, 5), (7, 3, 0, 6), (3, 1, 1, 9), (2, 2, 1, 6)]
+    io.window(entries)
+    for i, (_, dn, gg) in enumerate(st.layers):
+        mine = {b: (u, t) for u, t, eg, b in entries if eg == gg}
+        for b in (5, 6, 9):
+            if b in mine:
+                u, t = mine[b]
+                assert torch.equal(conv_at(dn, b), windows[i][u, t + 1 : t + 4]), f"layer {i} block {b}"
+            else:
+                assert torch.equal(conv_at(dn, b), before[(i, b)]), f"layer {i} block {b} changed"
+            got = ttnn.to_torch(st._read_rec(dn, b)).reshape(rec.shape).float()
+            assert torch.equal(got, rec), f"layer {i} block {b}: recurrent pages changed"
+
+
+@pytest.mark.parametrize("geo_block", CASES, ids=lambda c: f"{c[0].id}_b{c[1]}")
+def test_block_io_chain_selects_by_the_device_count(device, geo_block):
+    """GdnBlockIO.chain (the chained copies): with the result buffer, an entry copies src's state and conv history (or
+    the window rows after token t) into dst in every layer of its group only when row u's count is in its counts;
+    without it, every entry runs. Layers of the other group and unselected destinations keep their bytes."""
+    from models.demos.blackhole.qwen36.tt.gdn_block_io import GdnBlockIO
+    from models.demos.blackhole.qwen36.tt.spec_chain import RES_COUNTS
+
+    g, block = geo_block
+    st, sts = _layers(device, g, block, 24, 2)
+    io = GdnBlockIO(st, st.model._paged_kv_caches)
+    B = 8
+    torch.manual_seed(19)
+    windows = [torch.randn(B, 3 + T, g.C).bfloat16() for _ in st.layers]
+    for (_, dn, _), w in zip(st.layers, windows):
+        dev = ttnn.from_torch(w, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+        dn.verify_win_cur = lambda dev=dev: dev
+    blocks = (9, 10, 12, 13, 15, 16, 21)
+    recs = {(i, b): torch.randn(1, g.Nv, 128, 128) for i in range(2) for b in blocks}
+    carries = {(i, b): torch.randn(1, 3, g.C).bfloat16() for i in range(2) for b in blocks}
+    with sbs._PageTables(st) as pts:
+        for i, (_, dn, _) in enumerate(st.layers):
+            for b in blocks:
+                r = ttnn.from_torch(recs[(i, b)], dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+                st._write_rec(dn, b, r, pts)
+                c = ttnn.from_torch(carries[(i, b)], dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+                st._write_carry(dn, b, c, pts)
+    rec_at = lambda dn, b: ttnn.to_torch(st._read_rec(dn, b)).reshape(1, g.Nv, 128, 128).float()
+    conv_at = lambda dn, b: ttnn.to_torch(st._read_carry(dn, b)).reshape(1, 3, g.C)
+    res = torch.zeros(3, 32, dtype=torch.int32)
+    res[RES_COUNTS, 2], res[RES_COUNTS, 5], res[RES_COUNTS, 4] = 3, 2, 1
+    res_dev = ttnn.from_torch(res, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    # (u, group, src, dst, t, counts): selected from the window, not selected, selected from src's conv history
+    entries = [(2, 0, 21, 9, 1, (2, 3, 4)), (5, 1, 13, 12, None, (3, 4)), (4, 1, 15, 10, None, (1,))]
+    io.chain(entries, res_dev)
+    (_, dn0, _), (_, dn1, _) = st.layers
+    assert torch.equal(rec_at(dn0, 9), recs[(0, 21)]) and torch.equal(conv_at(dn0, 9), windows[0][2:3, 2:5])
+    assert torch.equal(rec_at(dn1, 9), recs[(1, 9)]) and torch.equal(conv_at(dn1, 9), carries[(1, 9)]), "other group"
+    assert torch.equal(rec_at(dn1, 12), recs[(1, 12)]) and torch.equal(conv_at(dn1, 12), carries[(1, 12)]), "unselected"
+    assert torch.equal(rec_at(dn1, 10), recs[(1, 15)]) and torch.equal(conv_at(dn1, 10), carries[(1, 15)])
+    assert torch.equal(rec_at(dn0, 10), recs[(0, 10)]), "other group"
+    # host-selected: every entry runs
+    io.chain([(5, 1, 13, 16, None, (3, 4)), (3, 0, 15, 13, 3, (4,))])
+    assert torch.equal(rec_at(dn1, 16), recs[(1, 13)]) and torch.equal(conv_at(dn1, 16), carries[(1, 13)])
+    assert torch.equal(rec_at(dn0, 13), recs[(0, 15)]) and torch.equal(conv_at(dn0, 13), windows[0][3:4, 4:7])

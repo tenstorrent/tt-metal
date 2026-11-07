@@ -699,6 +699,8 @@ class SpecGdnBlockState:
                 mesh_mapper=rep,
             )
         self._up = {}  # host copy of the last upload of pages_dev / windows_dev
+        self._io = None  # GdnBlockIO (bind_block_io): the block writes and the restore as one program each
+        self._io_zero = None  # GdnBlockIO for the zeroing
         self._tables_moved = False  # the last upload held a row's chained state moves
         self.moves_counts = None  # (wait=False) -> engine-row accepted counts the staged moves follow, None until read
         self.chain_copies = []  # capture_chain_copies: (row, group, src, dst, window column or None, counts)
@@ -814,6 +816,10 @@ class SpecGdnBlockState:
             return
         for e in todo:
             self.book.forget_block(e[3])
+        if self._window_io() is not None:
+            with self._timed("chained block copies (kernel)", len(todo)):
+                self._io.chain(todo, result)
+            return
         with self._timed("chained block copies", len(todo)), _PageTables(self) as pts:
             if result is None:
                 for u, g, src, dst, t, _ in todo:
@@ -913,9 +919,27 @@ class SpecGdnBlockState:
         """Once the staged verify is enqueued and the window parity flipped (verify_win_cur is the window it writes):
         enqueue the conv writes it left due behind it."""
         due = self.book.take_pending()
+        if due and self._window_io() is not None:
+            with self._timed("boundary conv writes (kernel)", len(due)):
+                self._io.window(due)
+            return
         with self._timed("boundary conv writes", len(due)), _PageTables(self) as pts:
             for u, t, g, b in due:
                 self.materialize(u, t, g, b, pts)
+
+    def _window_io(self):
+        """self._io when the verify windows fit GdnBlockIO.window (checked once: the window pair exists only after
+        prepare_spec_verify), else None."""
+        if getattr(self, "_io", None) is None:
+            return None
+        ok = getattr(self, "_window_ok", None)
+        if ok is None:
+            from loguru import logger
+
+            why = self._io.window_reason()
+            ok = self._window_ok = why is None
+            logger.info(f"[mamba_spec] block I/O kernel: boundary conv writes {'on' if ok else f'off ({why})'}")
+        return self._io if ok else None
 
     def _timed(self, kind, n):
         """QWEN36_MAMBA_SPEC_TIMING=1: synchronize around a block operation and log its milliseconds (the synchronizes
@@ -968,6 +992,10 @@ class SpecGdnBlockState:
         fp32, conv_carry [1, K - 1, C] bf16). Same contract as GdnPrefixStateCache.restore."""
         import ttnn
 
+        if getattr(self, "_io", None) is not None:
+            with self._timed("prefill block restores (kernel)", len(self.layers)):
+                self._io.restore([self.book.prefill_block(g, u) for g in range(self.G)])
+            return
         ct = getattr(self, "_copy_traces", None)
         if ct is not None:  # the copy traces (_CopyTraces.restore)
             with self._timed("prefill block restores (trace)", len(self.layers)):
@@ -998,6 +1026,12 @@ class SpecGdnBlockState:
         would leave in the scratch (TPGatedDeltaNet.copy_snapshot_to takes the same slices for the prefix cache)."""
         import ttnn
 
+        if getattr(self, "_io", None) is not None:
+            with self._timed("checkpoint snapshot writes (kernel)", len(self.layers)):
+                self._io.write_snapshot(blocks, k)
+            for b in blocks:
+                self.book.forget_block(int(b))
+            return
         if self._replay_write(blocks, "checkpoint snapshot writes", k):
             return
         dram = ttnn.DRAM_MEMORY_CONFIG
@@ -1016,6 +1050,12 @@ class SpecGdnBlockState:
     def _write_scratch(self, blocks, kind):
         import ttnn
 
+        if getattr(self, "_io", None) is not None:
+            with self._timed(f"{kind} (kernel)", len(self.layers)):
+                self._io.write(blocks)
+            for b in blocks:
+                self.book.forget_block(int(b))
+            return
         if self._replay_write(blocks, kind):
             return
         with self._timed(kind, len(self.layers)), _PageTables(self) as pts:
@@ -1054,11 +1094,15 @@ class SpecGdnBlockState:
         from models.demos.blackhole.qwen36.tt.tp_common import GDN_SNAP_SLOTS
 
         try:
-            if getattr(self, "_wt_pending", None) is None:
+            if getattr(self, "_io", None) is not None:
+                pass  # the block I/O kernel writes: no write traces
+            elif getattr(self, "_wt_pending", None) is None:
                 self._wt_pending = _WriteTrace(self)
             # one per in-replay snapshot slot: a prefill checkpoint inside a replay is written from its slot
-            if getattr(self, "_swt_pending", None) is None and all(
-                getattr(dn, "_snap_rec", None) is not None for _, dn, _ in self.layers
+            if (
+                getattr(self, "_io", None) is None
+                and getattr(self, "_swt_pending", None) is None
+                and all(getattr(dn, "_snap_rec", None) is not None for _, dn, _ in self.layers)
             ):
                 self._swt_pending = {k: _WriteTrace(self, snap=k) for k in range(GDN_SNAP_SLOTS)}
             if getattr(self, "_ct_pending", None) is None:
@@ -1117,6 +1161,22 @@ class SpecGdnBlockState:
         except Exception as e:  # noqa: BLE001
             logger.error(f"[mamba_spec] block copy trace capture failed ({e!r}): eager copies")
 
+    def bind_block_io(self):
+        """Route the prefill block write, the checkpoint writes, the restore and the zeroing through GdnBlockIO (one
+        program each) when the bound scratch and the views fit its contract; else they keep the op chains and traces."""
+        from loguru import logger
+
+        from models.demos.blackhole.qwen36.tt.gdn_block_io import GdnBlockIO
+
+        io = GdnBlockIO(self, self.model._paged_kv_caches)
+        why, zero_why = io.reason(), io.zero_reason()
+        self._io = io if why is None else None
+        self._io_zero = io if zero_why is None else None
+        logger.info(
+            f"[mamba_spec] block I/O kernel: moves {'on' if why is None else f'off ({why})'}, "
+            f"zeroing {'on' if zero_why is None else f'off ({zero_why})'}"
+        )
+
     def warmup(self):
         """Run every eager program of the block paths once on vLLM's null block 0 (prefill write and restore on the
         bound B=1 scratch, the conv write from the window, the whole-block copy and zeroing), so none compiles after
@@ -1127,8 +1187,11 @@ class SpecGdnBlockState:
         model = self.model
         prev = model._bind_gdn_prefill_scratch()
         try:
+            self.bind_block_io()
             self.write_prefill(WARMUP_REQ)
             self.restore(WARMUP_REQ)
+            if self._io is not None and all(getattr(dn, "_snap_rec", None) is not None for _, dn, _ in self.layers):
+                self.write_checkpoint_snapshot([0] * self.G, 0)
         finally:
             model._unbind_gdn_prefill_scratch(prev)
         with _PageTables(self) as pts:
@@ -1222,6 +1285,9 @@ class SpecGdnBlockState:
         table repeats the last block to fill the source's length)."""
         import ttnn
 
+        if getattr(self, "_io_zero", None) is not None:
+            self._io_zero.zero(ids)
+            return
         kv = self.model._paged_kv_caches
         k0 = kv[0][0]
         if self._zeros is None:
