@@ -242,7 +242,7 @@ std::shared_ptr<MeshBuffer> MeshBuffer::create(
             }},
         mesh_buffer_config);
 
-    if (mesh_device->get_device_ids().empty()) {
+    if (!mesh_device->impl().has_local_devices()) {
         auto mesh_buffer =
             std::shared_ptr<MeshBuffer>(new MeshBuffer(mesh_buffer_config, device_local_config, 0, 0, mesh_device));
         mesh_buffer->initialize_device_buffers();
@@ -341,15 +341,20 @@ void MeshBuffer::initialize_device_buffers() {
     // built now, only the reference (first local) buffer, which dispatch reads, is built here; get_device_buffer()
     // builds the others on first use.
     const bool build_all = build_all_device_buffers_at_allocation(*mesh_device);
+    // The view's devices and the buffers are both in row-major order over the mesh shape: walk them together by
+    // index, without a coordinate lookup per device.
+    const auto& view = mesh_device->get_view().impl();
+    auto& buffers = buffers_.values();
+    TT_ASSERT(view.shape() == buffers_.shape(), "MeshBuffer and its mesh view differ in shape");
     bool is_reference = true;
-    for (auto& [coord, device_buffer] : buffers_) {
-        if (mesh_device->impl().is_local(coord)) {
-            device_buffer = MaybeRemote<std::shared_ptr<Buffer>>::local(
-                build_all || is_reference
-                    ? create_device_buffer_at_lockstep_address(*this, mesh_device->impl().get_device(coord))
-                    : nullptr);
+    size_t index = 0;
+    for (const auto& device : view) {
+        if (device.is_local()) {
+            buffers[index] = MaybeRemote<std::shared_ptr<Buffer>>::local(
+                build_all || is_reference ? create_device_buffer_at_lockstep_address(*this, device.value()) : nullptr);
             is_reference = false;
         }
+        ++index;
     }
 
     // In HYBRID mode, mirror the lockstep L1 allocation into each device's lockstep allocator

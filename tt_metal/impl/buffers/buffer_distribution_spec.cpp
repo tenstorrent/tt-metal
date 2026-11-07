@@ -277,13 +277,15 @@ uint32_t BufferDistributionSpec::num_contiguous_pages(uint32_t page_id, uint32_t
 
 std::tuple<uint32_t, CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, uint32_t>
 BufferDistributionSpec::core_groups_tuple() const {
+    auto groups = core_groups();
+    const auto num_cores_with_data = groups.cores_with_data.num_cores();
     return {
-        core_groups_.cores_with_data.num_cores(),
-        core_groups_.cores_with_data,
-        core_groups_.cores_in_group_1,
-        core_groups_.cores_in_group_2,
-        core_groups_.num_shards_per_core_in_group_1,
-        core_groups_.num_shards_per_core_in_group_2,
+        num_cores_with_data,
+        std::move(groups.cores_with_data),
+        std::move(groups.cores_in_group_1),
+        std::move(groups.cores_in_group_2),
+        groups.num_shards_per_core_in_group_1,
+        groups.num_shards_per_core_in_group_2,
     };
 }
 
@@ -297,33 +299,33 @@ void BufferDistributionSpec::init_precomputed_data() {
     }
 
     cores_with_data_ = std::vector<CoreCoord>(cores_.begin(), cores_.begin() + num_cores_with_data());
+}
 
-    if (num_shards() != 0) {
-        auto cores_with_data = CoreRangeSet(cores_with_data_);
-
-        auto num_cores_with_more_shards = num_shards() % num_cores();
-        if (num_cores_with_more_shards == 0) {
-            core_groups_ = CoreGroups{
-                .cores_with_data = cores_with_data,
-                .cores_in_group_1 = std::move(cores_with_data),
-                .num_shards_per_core_in_group_1 = num_shards() / num_cores(),
-            };
-        } else {
-            std::vector<CoreCoord> cores_with_more_shards(cores_.begin(), cores_.begin() + num_cores_with_more_shards);
-            std::vector<CoreCoord> cores_with_less_shards;
-            if (num_shards() / num_cores() != 0) {
-                cores_with_less_shards =
-                    std::vector<CoreCoord>(cores_.begin() + num_cores_with_more_shards, cores_.end());
-            }
-            core_groups_ = CoreGroups{
-                .cores_with_data = std::move(cores_with_data),
-                .cores_in_group_1 = CoreRangeSet(cores_with_more_shards),
-                .cores_in_group_2 = CoreRangeSet(cores_with_less_shards),
-                .num_shards_per_core_in_group_1 = (num_shards() / num_cores()) + 1,
-                .num_shards_per_core_in_group_2 = num_shards() / num_cores(),
-            };
-        }
+BufferDistributionSpec::CoreGroups BufferDistributionSpec::core_groups() const {
+    if (num_shards() == 0) {
+        return {};
     }
+    auto cores_with_data = CoreRangeSet(cores_with_data_);
+    auto num_cores_with_more_shards = num_shards() % num_cores();
+    if (num_cores_with_more_shards == 0) {
+        return CoreGroups{
+            .cores_with_data = cores_with_data,
+            .cores_in_group_1 = std::move(cores_with_data),
+            .num_shards_per_core_in_group_1 = num_shards() / num_cores(),
+        };
+    }
+    std::vector<CoreCoord> cores_with_more_shards(cores_.begin(), cores_.begin() + num_cores_with_more_shards);
+    std::vector<CoreCoord> cores_with_less_shards;
+    if (num_shards() / num_cores() != 0) {
+        cores_with_less_shards = std::vector<CoreCoord>(cores_.begin() + num_cores_with_more_shards, cores_.end());
+    }
+    return CoreGroups{
+        .cores_with_data = std::move(cores_with_data),
+        .cores_in_group_1 = CoreRangeSet(cores_with_more_shards),
+        .cores_in_group_2 = CoreRangeSet(cores_with_less_shards),
+        .num_shards_per_core_in_group_1 = (num_shards() / num_cores()) + 1,
+        .num_shards_per_core_in_group_2 = num_shards() / num_cores(),
+    };
 }
 
 UncompressedBufferPageMapping BufferDistributionSpec::compute_page_mapping() const {
