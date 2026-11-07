@@ -7,6 +7,7 @@
 #include <tt-metalium/device_types.hpp>
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
@@ -127,6 +128,7 @@ public:
             dropped_bytes_ = 0;
             stall_count_ = 0;
             num_kernel_zones_ = 0;
+            start_ns_ = std::chrono::steady_clock::now().time_since_epoch().count();
         }
         callback_ = streaming_profiler::RegisterCallback(
             [this](const streaming_profiler::Batch<streaming_profiler::Zone>& batch) { on_batch(batch); },
@@ -177,6 +179,12 @@ private:
             if (zone.runtime_id() == 0 || !zone.descriptor().name.ends_with("-KERNEL")) {
                 continue;
             }
+            // Zones of launches that started before start() can still be in flight to the host (a few ms, longer
+            // right after a mesh opens). Counting them would shift the per-RISC launch numbering on the cores whose
+            // zones arrived late, and a record would then span one core's launch k and another's launch k-1.
+            if (zone.start_time().time_since_epoch().count() < start_ns_) {
+                continue;
+            }
             const streaming_profiler::Core core = zone.core();
             const auto processor = static_cast<uint32_t>(core.processor);
             const uint32_t core_key =
@@ -212,6 +220,7 @@ private:
     uint64_t dropped_bytes_ = 0;
     uint64_t stall_count_ = 0;
     uint64_t num_kernel_zones_ = 0;
+    int64_t start_ns_ = 0;  // steady_clock at start(); earlier zones are ignored
     streaming_profiler::Callback callback_;
 };
 

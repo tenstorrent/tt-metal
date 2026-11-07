@@ -484,11 +484,13 @@ def _test_uses_perf_profiler(request):
 def _streaming_profiler_for_test(request):
     """Turn the streaming profiler on for this test's device open when the test times device programs. Call with no
     device open and fabric DISABLED; returns whether it was turned on, to pass to _streaming_profiler_off."""
-    import ttnn
-
     if os.environ.get("TT_METAL_STREAMING_PROFILER") is not None or os.environ.get("TT_METAL_DEVICE_PROFILER"):
         return False
-    if ttnn.get_arch_name() != "blackhole" or not _test_uses_perf_profiler(request):
+    if not _test_uses_perf_profiler(request):  # pure Python; checked first since the autouse fixture runs it per test
+        return False
+    import ttnn
+
+    if ttnn.get_arch_name() != "blackhole":
         return False
     ttnn.device.SetStreamingProfilerEnabled(True)
     return True
@@ -499,6 +501,23 @@ def _streaming_profiler_off(enabled):
 
     if enabled:
         ttnn.device.SetStreamingProfilerEnabled(False)
+
+
+@pytest.fixture(autouse=True)
+def _streaming_profiler_for_self_opened_devices(request):
+    """Tests that time device programs but open their devices themselves (not through the device fixtures, which
+    handle it around their own open) get the streaming profiler for the duration of the test. The test is expected to
+    close its devices and set fabric back to DISABLED before it returns."""
+    if {"device", "mesh_device"} & set(request.fixturenames):
+        yield
+        return
+    enabled = _streaming_profiler_for_test(request)
+    yield
+    if enabled:
+        try:
+            _streaming_profiler_off(enabled)
+        except RuntimeError as error:
+            logger.warning(f"Could not turn the streaming profiler off after {request.node.nodeid}: {error}")
 
 
 @pytest.fixture(scope="function")
