@@ -260,6 +260,39 @@ static_assert(!device_operation::SupportsPerCoreAllocation<per_core_opt_in_test:
 static_assert(device_operation::SupportsPerCoreAllocation<per_core_opt_in_test::OptedIn>);
 static_assert(!device_operation::SupportsPerCoreAllocation<per_core_opt_in_test::OptedOut>);
 
+// place_output_tensors calls compute_output_topologies only with the signature HasComputeOutputTopologies names, and
+// warns about any other member of that name (HasIgnoredComputeOutputTopologies) instead of skipping it silently.
+namespace output_topologies_hook_test {
+struct Attributes {};
+struct Args {};
+using Labels = std::vector<tt::tt_metal::TensorTopology>;
+struct Op {
+    using operation_attributes_t = Attributes;
+    using tensor_args_t = Args;
+};
+struct NoHook : Op {};
+struct Hook : Op {
+    static Labels compute_output_topologies(const Attributes&, const Args&);
+};
+struct WrongReturnType : Op {
+    static tt::tt_metal::TensorTopology compute_output_topologies(const Attributes&, const Args&);
+};
+struct WrongArguments : Op {
+    static Labels compute_output_topologies(const Args&);
+};
+struct NotStatic : Op {
+    Labels compute_output_topologies(const Attributes&, const Args&) const;
+};
+}  // namespace output_topologies_hook_test
+
+static_assert(!device_operation::HasComputeOutputTopologies<output_topologies_hook_test::NoHook>);
+static_assert(!device_operation::HasIgnoredComputeOutputTopologies<output_topologies_hook_test::NoHook>);
+static_assert(device_operation::HasComputeOutputTopologies<output_topologies_hook_test::Hook>);
+static_assert(!device_operation::HasIgnoredComputeOutputTopologies<output_topologies_hook_test::Hook>);
+static_assert(device_operation::HasIgnoredComputeOutputTopologies<output_topologies_hook_test::WrongReturnType>);
+static_assert(device_operation::HasIgnoredComputeOutputTopologies<output_topologies_hook_test::WrongArguments>);
+static_assert(device_operation::HasIgnoredComputeOutputTopologies<output_topologies_hook_test::NotStatic>);
+
 TEST(LaunchOperationTest, MeshDeviceOperationAdapterGetName) {
     using ::ttnn::operations::examples::ExampleDeviceOperation;
     EXPECT_EQ(
