@@ -15,13 +15,12 @@ The walk starts where the last pipeline rank starts (24/24/24/21 over 4 Galaxies
 upstream ranks hand over. Two layer kinds cover what AttnRes costs across the model:
 
   * **Boundary layer** (the rank's first): the most expensive AttnRes layer of the stack, and every AttnRes
-    program it has — the seal of the inherited live stream, the 25-site `inter_block` at the largest sealed
-    count of any full block, which carries the read that straddles the rank boundary as its first site and
-    returns it whole, and the post-attention read. The last block has one more snapshot but only 9 layers, so
-    it batches 19 sites, not 24.
+    program it has — the one-site `inter_block` over the inherited set and the read that straddles the rank
+    boundary, taken from it exactly as the undivided walk takes it (tt_metal_tracker-ao3i.9); the seal of the
+    inherited live stream; the 24-site `inter_block` at the largest sealed count of any full block; and the
+    post-attention read. The last block has one more snapshot but only 9 layers, so it batches 19 sites, not 24.
   * **Ordinary layer** (the ones after it): two reads, each settling the module write the walk deferred into
-    it. 85 of the 93 layers are this, and it is about 60% of AttnRes time over the model, which the boundary
-    layer alone weights at under 10%.
+    it. 85 of the 93 layers are this, and it is about 60% of AttnRes time over the model.
 
 AttnRes runs through the production code path: `TtAttnResResidual` over `TtAttnResWalk`, built the way
 `TtKimiK3Transformer`'s residual factory builds it on a non-first rank, and driven in `TtKimiK3Block.forward`'s
@@ -97,9 +96,15 @@ _GALAXY = "SP8xTP4"
 # its own reference and, following the host CPU, a wider band. Untraced timings carry the host's dispatch jitter, so
 # the untraced boundary layer takes the wider band too (run 41946792821 read it at 372 us). Galaxies off the pool can
 # sit outside the band; run them with ATTN_RES_PERF_REPORT_ONLY=1.
+#
+# The boundary layer was 394 us while it scored the straddling read as a closed site of the next block's batch.
+# Taking that read as the undivided walk does (a one-site `inter_block` over the inherited set, then the read) makes
+# a split stack bit-identical to the undivided one and costs one more stats/mix pair and read: measured off the CI
+# pool on bh-glx-110-c10u14 (2026-11-07), interleaved A/B, traced 392.9 -> 591.8 us and untraced 374.8 -> 644.6 us,
+# where the old code read 392.9 against its 394 CI reference. Provisional until CI runs re-baseline it.
 _GALAXY_REFERENCE_E2E_US = {
-    "traced": {"boundary": 394.0, "ordinary": 118.0},
-    "untraced": {"boundary": 394.0, "ordinary": 150.0},
+    "traced": {"boundary": 592.0, "ordinary": 118.0},
+    "untraced": {"boundary": 592.0, "ordinary": 150.0},
 }
 # LoudBox references, per SKU: a run opts in with ATTN_RES_PERF_SKU, so a box of another SKU never
 # gates against them. To gate a layout, add its CI numbers here and drop it from _REPORT_ONLY_LAYOUTS.
