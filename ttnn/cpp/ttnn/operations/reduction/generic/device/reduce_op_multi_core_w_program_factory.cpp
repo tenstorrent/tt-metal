@@ -10,6 +10,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/bfloat16.hpp>
+#include <algorithm>
 #include <bit>
 #include <cmath>
 #include <limits>
@@ -86,6 +87,289 @@ bool reduce_w_has_second_core_group(
     return !std::get<3>(reduce_w_split_work(attrs, a, reduce_w_num_rows(attrs, a, output))).ranges().empty();
 }
 
+// Column split. A reduce with fewer tile rows than cores leaves most of the grid idle, so each row's
+// Wt tiles are cut into column blocks on separate cores. Every core reduces its block to one partial
+// tile and sends it to the row's first core, which combines the partials into the output tile.
+constexpr uint32_t k_min_wt_for_column_split = 256;
+constexpr uint32_t k_min_wt_per_column_part = 8;
+// The first core of a row holds all of that row's partials in L1 at once.
+constexpr uint32_t k_max_column_parts = 64;
+
+struct ReduceWColumnSplit {
+    uint32_t parts = 1;    // column blocks per tile row; 1 leaves the reduce un-split
+    uint32_t part_wt = 0;  // tiles in every block but the last
+    uint32_t last_wt = 0;  // tiles in the last block
+    bool active() const { return parts > 1; }
+    bool has_middle() const { return parts > 2 || last_wt == part_wt; }
+    bool has_last() const { return last_wt != part_wt; }
+};
+
+ReduceWColumnSplit reduce_w_column_split(
+    const ReduceParams& attrs, const tt::tt_metal::MeshTensor& a, const tt::tt_metal::MeshTensor& output) {
+    using namespace tt::tt_metal;
+    // AVG reduces each block with the 1/W scaler, so its partials add up to the mean.
+    const bool combinable = attrs.math_op == ReduceOpMath::SUM || attrs.math_op == ReduceOpMath::AVG ||
+                            attrs.math_op == ReduceOpMath::MAX || attrs.math_op == ReduceOpMath::MIN;
+    const bool float_input =
+        a.dtype() == DataType::BFLOAT16 || a.dtype() == DataType::FLOAT32 || is_block_float(a.dtype());
+    if (!combinable || !float_input || attrs.row_major_w_dense_path || attrs.negate ||
+        attrs.sub_core_grids.has_value() || a.memory_config().is_sharded() || output.memory_config().is_sharded()) {
+        return {};
+    }
+    const auto& shape = a.padded_shape();
+    const uint32_t rows = shape[0] * shape[1] * tt::div_up(shape[2], a.tensor_spec().tile().get_height());
+    const uint32_t Wt = tt::div_up(shape[3], a.tensor_spec().tile().get_width());
+    const auto grid = a.device().compute_with_storage_grid_size();
+    const uint32_t grid_cores = grid.x * grid.y;
+    if (rows == 0 || 2 * rows > grid_cores || Wt < k_min_wt_for_column_split) {
+        return {};
+    }
+    const uint32_t parts = std::min({grid_cores / rows, Wt / k_min_wt_per_column_part, k_max_column_parts});
+    if (parts < 2) {
+        return {};
+    }
+    const uint32_t part_wt = tt::div_up(Wt, parts);
+    const uint32_t used_parts = tt::div_up(Wt, part_wt);
+    return {.parts = used_parts, .part_wt = part_wt, .last_wt = Wt - ((used_parts - 1) * part_wt)};
+}
+
+ttnn::device_operation::ProgramArtifacts reduce_w_column_split_artifacts(
+    const ReduceParams& attrs,
+    const tt::tt_metal::MeshTensor& a,
+    const tt::tt_metal::MeshTensor& output,
+    const ReduceWColumnSplit& split) {
+    using namespace tt::tt_metal;
+    using namespace tt::tt_metal::experimental;
+    const auto& shape = a.padded_shape();
+    const uint32_t Wt = tt::div_up(shape[3], a.tensor_spec().tile().get_width());
+    const uint32_t rows = shape[0] * shape[1] * tt::div_up(shape[2], a.tensor_spec().tile().get_height());
+    const uint32_t num_cores = rows * split.parts;
+    const auto& device = a.device();
+
+    const bool fp32_dest_acc_en =
+        std::get<2>(get_compute_kernel_config_args(device.arch(), attrs.compute_kernel_config));
+    const tt::DataFormat in_format = datatype_to_dataformat_converter(a.dtype());
+    const tt::DataFormat scaler_format =
+        in_format == tt::DataFormat::Float32 ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
+    const tt::DataFormat out_format = datatype_to_dataformat_converter(output.dtype());
+    // Partials leave Dest for L1 between the two stages, so they keep Dest's precision.
+    const tt::DataFormat partial_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
+    const bool fp32_sfpu_reduce = use_sfpu_reduce_path(a.dtype(), attrs.math_op, attrs.use_sfpu_reduce) &&
+                                  a.dtype() == DataType::FLOAT32 && fp32_dest_acc_en;
+
+    const DFBSpecName IN_DFB{"in"};
+    const DFBSpecName SCALER_DFB{"scaler"};
+    const DFBSpecName PARTIAL_DFB{"partial"};
+    const DFBSpecName GATHER_DFB{"gather"};
+    const DFBSpecName OUT_DFB{"out"};
+    const SemaphoreSpecName GATHERED_SEM{"gathered"};
+    const KernelSpecName READER{"reader"};
+    const KernelSpecName WRITER{"writer"};
+    const KernelSpecName COMPUTE_FIRST{"compute_g1"};
+    const KernelSpecName COMPUTE_MIDDLE{"compute_g2"};
+    const KernelSpecName COMPUTE_LAST{"compute_g3"};
+    const TensorParamName INPUT_TENSOR{"input"};
+    const TensorParamName OUTPUT_TENSOR{"output"};
+
+    // Core i reduces block i % parts of tile row i / parts.
+    const auto grid = device.compute_with_storage_grid_size();
+    const std::vector<CoreCoord> cores = grid_to_cores(num_cores, grid.x, grid.y, false);
+    std::vector<CoreRange> all_ranges, first_ranges, middle_ranges, last_ranges;
+    for (uint32_t i = 0; i < num_cores; ++i) {
+        const uint32_t part = i % split.parts;
+        auto& group = part == 0                                       ? first_ranges
+                      : (part == split.parts - 1 && split.has_last()) ? last_ranges
+                                                                      : middle_ranges;
+        group.emplace_back(cores[i]);
+        all_ranges.emplace_back(cores[i]);
+    }
+    const CoreRangeSet all_cores(std::move(all_ranges));
+
+    ProgramSpec spec;
+    spec.name = "reduce_multi_core_w_column_split";
+    auto make_dfb = [](const DFBSpecName& name, tt::DataFormat format, uint32_t entries) {
+        return DataflowBufferSpec{
+            .unique_id = name,
+            .entry_size = tt::tile_size(format),
+            .num_entries = entries,
+            .data_format_metadata = format,
+        };
+    };
+    const uint32_t reader_tiles_per_batch = reduce_reader_batch(split.last_wt);
+    spec.dataflow_buffers.push_back(make_dfb(IN_DFB, in_format, reduce_reader_input_cb_tiles(reader_tiles_per_batch)));
+    spec.dataflow_buffers.push_back(make_dfb(SCALER_DFB, scaler_format, 1));
+    spec.dataflow_buffers.push_back(make_dfb(PARTIAL_DFB, partial_format, 1));
+    // The other cores of a row write their partials straight into fixed slots of this buffer on the
+    // row's first core, so it holds one slot per block and is never recycled.
+    spec.dataflow_buffers.push_back(make_dfb(GATHER_DFB, partial_format, split.parts));
+    spec.dataflow_buffers.push_back(make_dfb(OUT_DFB, out_format, 1));
+    spec.semaphores.push_back(SemaphoreSpec{.unique_id = GATHERED_SEM, .target_nodes = all_cores});
+    spec.tensor_parameters.push_back(TensorParameter{.unique_id = INPUT_TENSOR, .spec = a.tensor_spec()});
+    spec.tensor_parameters.push_back(TensorParameter{.unique_id = OUTPUT_TENSOR, .spec = output.tensor_spec()});
+
+    const std::map<std::string, std::string> reduce_defines =
+        reduce_op_utils::get_defines(attrs.math_op, ReduceOpDim::W);
+
+    spec.kernels.push_back(KernelSpec{
+        .unique_id = READER,
+        .source = "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/dataflow/"
+                  "reader_unary_reduce_universal_start_id.cpp",
+        .compiler_options = {.defines = KernelSpec::CompilerOptions::Defines(reduce_defines)},
+        .dfb_bindings =
+            {
+                DFBBinding{.dfb_spec_name = IN_DFB, .accessor_name = "in0", .endpoint_type = DFBEndpointType::PRODUCER},
+                DFBBinding{
+                    .dfb_spec_name = SCALER_DFB, .accessor_name = "scaler", .endpoint_type = DFBEndpointType::PRODUCER},
+            },
+        .tensor_bindings = {TensorBinding{.tensor_parameter_name = INPUT_TENSOR, .accessor_name = "src"}},
+        .compile_time_args = {{"tiles_per_batch", reader_tiles_per_batch}},
+        .runtime_arg_schema =
+            {.runtime_arg_names = {"num_tiles", "start_id"}, .common_runtime_arg_names = {"scaler_bits"}},
+        .hw_config = ttnn::create_reader_datamovement_config(),
+    });
+
+    spec.kernels.push_back(KernelSpec{
+        .unique_id = WRITER,
+        .source = "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/dataflow/writer_reduce_w_column_split.cpp",
+        .dfb_bindings =
+            {
+                DFBBinding{
+                    .dfb_spec_name = PARTIAL_DFB,
+                    .accessor_name = "partial",
+                    .endpoint_type = DFBEndpointType::CONSUMER},
+                DFBBinding{
+                    .dfb_spec_name = GATHER_DFB, .accessor_name = "gather", .endpoint_type = DFBEndpointType::PRODUCER},
+                DFBBinding{
+                    .dfb_spec_name = OUT_DFB, .accessor_name = "out", .endpoint_type = DFBEndpointType::CONSUMER},
+            },
+        .semaphore_bindings = {SemaphoreBinding{.semaphore_spec_name = GATHERED_SEM, .accessor_name = "gathered"}},
+        .tensor_bindings = {TensorBinding{.tensor_parameter_name = OUTPUT_TENSOR, .accessor_name = "dst"}},
+        .compile_time_args = {{"num_parts", split.parts}},
+        .runtime_arg_schema = {.runtime_arg_names = {"part", "first_x", "first_y", "out_page"}},
+        .hw_config = ttnn::create_writer_datamovement_config(),
+    });
+
+    // Same hardware config as the un-split factory, plus full-fp32 unpack of the partials.
+    auto compute_hw = ttnn::to_compute_hardware_config(attrs.compute_kernel_config);
+    compute_hw.sfpu_precision_mode = Precision::Precise;
+    compute_hw.double_buffer_dest = true;
+    if (fp32_sfpu_reduce) {
+        compute_hw.unpack_modes.emplace(IN_DFB, UnpackMode::UnpackToDest);
+    }
+    if (fp32_dest_acc_en) {
+        if (in_format == tt::DataFormat::Float32) {
+            compute_hw.unpack_modes.emplace(IN_DFB, UnpackMode::UnpackToSrc);
+        }
+        if (scaler_format == tt::DataFormat::Float32) {
+            compute_hw.unpack_modes.emplace(SCALER_DFB, UnpackMode::UnpackToSrc);
+        }
+        compute_hw.unpack_modes.emplace(GATHER_DFB, UnpackMode::UnpackToDest);
+    }
+
+    // Every block is reduced with the user scaler; a post-multiply is applied once, after the combine,
+    // so a negative scalar cannot change which partial wins a MAX or MIN.
+    auto make_compute = [&](const KernelSpecName& unique_id, uint32_t block_wt, bool combine) {
+        std::map<std::string, std::string> defines = reduce_defines;
+        if (combine) {
+            defines["REDUCE_W_COMBINE"] = "1";
+            if (attrs.scaler_mode == ScalerMode::PostMul) {
+                defines["REDUCE_W_COMBINE_POST_MUL"] = "1";
+            }
+        }
+        return KernelSpec{
+            .unique_id = unique_id,
+            .source = "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/compute/reduce.cpp",
+            .compiler_options =
+                {.defines = KernelSpec::CompilerOptions::Defines(defines),
+                 .opt_level = tt::tt_metal::KernelBuildOptLevel::O3},
+            .dfb_bindings =
+                {
+                    DFBBinding{
+                        .dfb_spec_name = IN_DFB, .accessor_name = "in0", .endpoint_type = DFBEndpointType::CONSUMER},
+                    DFBBinding{
+                        .dfb_spec_name = SCALER_DFB,
+                        .accessor_name = "scaler",
+                        .endpoint_type = DFBEndpointType::CONSUMER},
+                    DFBBinding{
+                        .dfb_spec_name = PARTIAL_DFB,
+                        .accessor_name = "out",
+                        .endpoint_type = DFBEndpointType::PRODUCER},
+                    DFBBinding{
+                        .dfb_spec_name = GATHER_DFB,
+                        .accessor_name = "gather",
+                        .endpoint_type = DFBEndpointType::CONSUMER},
+                    DFBBinding{
+                        .dfb_spec_name = OUT_DFB,
+                        .accessor_name = "result",
+                        .endpoint_type = DFBEndpointType::PRODUCER},
+                },
+            .compile_time_args =
+                {{"Ht", 1u},
+                 {"Wt", block_wt},
+                 {"NC", 1u},
+                 {"enable_fp32_sfpu", fp32_sfpu_reduce ? 1u : 0u},
+                 {"num_parts", split.parts}},
+            .runtime_arg_schema = {.common_runtime_arg_names = {"post_mul_scaler_bits"}},
+            .hw_config = compute_hw,
+        };
+    };
+    spec.kernels.push_back(make_compute(COMPUTE_FIRST, split.part_wt, true));
+    spec.work_units.push_back(WorkUnitSpec{
+        .name = "wu_first",
+        .kernels = {READER, WRITER, COMPUTE_FIRST},
+        .target_nodes = CoreRangeSet(std::move(first_ranges))});
+    if (split.has_middle()) {
+        spec.kernels.push_back(make_compute(COMPUTE_MIDDLE, split.part_wt, false));
+        spec.work_units.push_back(WorkUnitSpec{
+            .name = "wu_middle",
+            .kernels = {READER, WRITER, COMPUTE_MIDDLE},
+            .target_nodes = CoreRangeSet(std::move(middle_ranges))});
+    }
+    if (split.has_last()) {
+        spec.kernels.push_back(make_compute(COMPUTE_LAST, split.last_wt, false));
+        spec.work_units.push_back(WorkUnitSpec{
+            .name = "wu_last",
+            .kernels = {READER, WRITER, COMPUTE_LAST},
+            .target_nodes = CoreRangeSet(std::move(last_ranges))});
+    }
+
+    ProgramRunArgs run_args;
+    KernelRunArgs reader_run_args{.kernel = READER};
+    KernelRunArgs writer_run_args{.kernel = WRITER};
+    for (uint32_t i = 0; i < num_cores; ++i) {
+        const uint32_t row = i / split.parts;
+        const uint32_t part = i % split.parts;
+        const CoreCoord first = device.worker_core_from_logical_core(cores[row * split.parts]);
+        AddRuntimeArgsForNode(
+            reader_run_args.runtime_arg_values,
+            cores[i],
+            {{"num_tiles", part == split.parts - 1 ? split.last_wt : split.part_wt},
+             {"start_id", (row * Wt) + (part * split.part_wt)}});
+        AddRuntimeArgsForNode(
+            writer_run_args.runtime_arg_values,
+            cores[i],
+            {{"part", part},
+             {"first_x", static_cast<uint32_t>(first.x)},
+             {"first_y", static_cast<uint32_t>(first.y)},
+             {"out_page", row}});
+    }
+    reader_run_args.common_runtime_arg_values = {{"scaler_bits", std::bit_cast<uint32_t>(attrs.scaler)}};
+    run_args.kernel_run_args.push_back(std::move(reader_run_args));
+    run_args.kernel_run_args.push_back(std::move(writer_run_args));
+    const KernelRunArgs::CommonRuntimeArgValues post_mul_args{
+        {"post_mul_scaler_bits", std::bit_cast<uint32_t>(attrs.post_mul_scaler)}};
+    for (const auto& compute : spec.kernels) {
+        if (compute.unique_id == COMPUTE_FIRST || compute.unique_id == COMPUTE_MIDDLE ||
+            compute.unique_id == COMPUTE_LAST) {
+            run_args.kernel_run_args.push_back(
+                KernelRunArgs{.kernel = compute.unique_id, .common_runtime_arg_values = post_mul_args});
+        }
+    }
+    run_args.tensor_args.emplace(INPUT_TENSOR, TensorArgument{a});
+    run_args.tensor_args.emplace(OUTPUT_TENSOR, TensorArgument{output});
+    return ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)};
+}
+
 }  // namespace
 
 ttnn::device_operation::ProgramArtifacts
@@ -98,6 +382,9 @@ ReduceDeviceOperation::ReduceMultiCoreWProgramFactory::create_program_artifacts(
     using namespace tt::tt_metal::experimental;
     const auto& a = tensor_args.mesh_tensor();
     const auto& output = tensor_return_value.mesh_tensor();
+    if (const auto split = reduce_w_column_split(operation_attributes, a, output); split.active()) {
+        return reduce_w_column_split_artifacts(operation_attributes, a, output, split);
+    }
     const bool rm_path = operation_attributes.row_major_w_dense_path;
     const auto& shape = a.padded_shape();
     const auto& logical_shape = a.logical_shape();
@@ -790,8 +1077,10 @@ ReduceDeviceOperation::ReduceMultiCoreWProgramFactory::override_runtime_argument
     const KernelSpecName READER{"reader"};
     const KernelSpecName COMPUTE_G1{"compute_g1"};
     const KernelSpecName COMPUTE_G2{"compute_g2"};
+    const KernelSpecName COMPUTE_G3{"compute_g3"};
     const TensorParamName INPUT_TENSOR{"input"};
     const TensorParamName OUTPUT_TENSOR{"output"};
+    const auto split = reduce_w_column_split(operation_attributes, a, output);
 
     // compute_program_hash excludes the scalars, so a cache hit must re-apply them.
     ProgramRunArgs params;
@@ -802,9 +1091,13 @@ ReduceDeviceOperation::ReduceMultiCoreWProgramFactory::override_runtime_argument
     const KernelRunArgs::CommonRuntimeArgValues post_mul_args{
         {"post_mul_scaler_bits", std::bit_cast<uint32_t>(operation_attributes.post_mul_scaler)}};
     params.kernel_run_args.push_back(KernelRunArgs{.kernel = COMPUTE_G1, .common_runtime_arg_values = post_mul_args});
-    if (reduce_w_has_second_core_group(operation_attributes, a, output)) {
+    if (split.active() ? split.has_middle() : reduce_w_has_second_core_group(operation_attributes, a, output)) {
         params.kernel_run_args.push_back(
             KernelRunArgs{.kernel = COMPUTE_G2, .common_runtime_arg_values = post_mul_args});
+    }
+    if (split.active() && split.has_last()) {
+        params.kernel_run_args.push_back(
+            KernelRunArgs{.kernel = COMPUTE_G3, .common_runtime_arg_values = post_mul_args});
     }
 
     params.tensor_args.emplace(INPUT_TENSOR, TensorArgument{a});
