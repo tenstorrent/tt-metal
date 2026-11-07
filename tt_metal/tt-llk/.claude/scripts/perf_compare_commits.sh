@@ -46,6 +46,8 @@
 #                             Keep these constant across the commits you compare:
 #                             they are not part of the cache key, so changing them
 #                             mid-comparison silently compares unlike runs.
+#   TT_LLK_DISABLE_ASSERTS    1 (default, as CI perf) builds without LLK_ASSERT;
+#                             0 keeps asserts in. Part of the cache key.
 #   RESET_BETWEEN_RUNS=1      tt-smi -r between iterations
 #   ALLOW_CROSS_HOST=1        reuse cached runs measured on another host (invalid
 #                             comparison; only for inspecting old data)
@@ -191,6 +193,13 @@ if [ "$SPEED_OF_LIGHT" = 1 ]; then
     VARIANT=sol
     PYTEST_VARIANT_ARGS+=(--speed-of-light)
 fi
+TT_LLK_DISABLE_ASSERTS="${TT_LLK_DISABLE_ASSERTS:-1}"
+case "$TT_LLK_DISABLE_ASSERTS" in
+1) VARIANT="$VARIANT-noassert" ;;
+0) ;;
+*) die "TT_LLK_DISABLE_ASSERTS must be 0 or 1, got '$TT_LLK_DISABLE_ASSERTS'" ;;
+esac
+export TT_LLK_DISABLE_ASSERTS
 
 # --- resolve both sides to full commit hashes
 cd "$LLK_PRIMARY"
