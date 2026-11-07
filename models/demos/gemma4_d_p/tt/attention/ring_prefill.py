@@ -135,40 +135,48 @@ def write_chunk_to_global_ring_cache(
     num_layers=1,
     slot_idx=0,
     prefill_metadata=None,
+    input_rows=None,
 ):
-    """Append one packed global-attention chunk to its CP-local history."""
+    """Append one packed global-attention chunk to its CP-local history.
 
+    input_rows: (offset, rows) to write only that row window of every head of `chunk` (one request of a batched
+    step's stacked rows); the chunk must already be in the cache dtype.
+    """
+
+    _write_chunk_to_ring_cache(
+        cache, chunk, mesh_config, kv_actual_global, layer_idx, num_layers, slot_idx, prefill_metadata, input_rows
+    )
+
+
+def _write_chunk_to_ring_cache(
+    cache, chunk, mesh_config, kv_actual_global, layer_idx, num_layers, slot_idx, prefill_metadata, input_rows
+):
+    if input_rows is not None and chunk.dtype != cache.dtype:
+        raise ValueError("a windowed write needs the chunk in the cache dtype (cast the stacked tensor once)")
     original_chunk = chunk
-
     if chunk.dtype != cache.dtype:
         chunk = ttnn.typecast(chunk, cache.dtype)
-
     if prefill_metadata is not None:
-        slot_idx_t = prefill_metadata.slot_idx
-        kv_actual_global_t = prefill_metadata.kv_actual_global
-
-        ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
-            cache=cache,
-            input=chunk,
-            slot_idx=slot_idx_t,
-            layer_idx=layer_idx,
-            num_layers=num_layers,
-            kv_actual_global=kv_actual_global_t,
-            cluster_axis=mesh_config.cp_axis,
-        )
-    else:
-        ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
-            cache=cache,
-            input=chunk,
-            slot_idx=slot_idx,
-            layer_idx=layer_idx,
-            num_layers=num_layers,
-            kv_actual_global=kv_actual_global,
-            cluster_axis=mesh_config.cp_axis,
-        )
-
+        slot_idx, kv_actual_global = prefill_metadata.slot_idx, prefill_metadata.kv_actual_global
+    offset, rows = input_rows if input_rows is not None else (0, None)
+    ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
+        cache=cache,
+        input=chunk,
+        slot_idx=slot_idx,
+        layer_idx=layer_idx,
+        num_layers=num_layers,
+        kv_actual_global=kv_actual_global,
+        cluster_axis=mesh_config.cp_axis,
+        input_row_offset=offset,
+        input_rows=rows,
+    )
     if chunk is not original_chunk:
         chunk.deallocate(True)
+
+
+def lane_buffer_key(key, lane):
+    """Receive-buffer key of a batched step's request `lane`; lane 0 keeps the unbatched key."""
+    return key if lane == 0 else (key, lane)
 
 
 def global_ring_prefill_attention(
@@ -186,8 +194,13 @@ def global_ring_prefill_attention(
     program_config=None,
     layer_idx=0,
     num_layers=1,
+    lane=0,
 ):
-    """Attend over the packed cache: K is its first GLOBAL_HEAD_DIM columns and V its last GLOBAL_HEAD_DIM."""
+    """Attend over the packed cache: K is its first GLOBAL_HEAD_DIM columns and V its last GLOBAL_HEAD_DIM.
+
+    lane is the request's position in a batched step; each lane gathers into its own receive buffer, so one
+    request's gather cannot overwrite the buffer the previous request's SDPA is still reading.
+    """
     mesh_device = mesh_config.device
     if program_config is None:
         sdpa_grid = ccl_manager.compute_grid_size
@@ -229,7 +242,12 @@ def global_ring_prefill_attention(
     gather_seq = ring_cache_seq_len(max_seq_len, cp) * cp
     # The fused gather's bank-owned schedule needs an interleaved output; the packed cache itself is ND-sharded.
     buffer_kv = ccl_manager.get_ring_gather_buffer(
-        "ring_kv", num_local_kv_heads, gather_seq, GLOBAL_PACKED_DIM, cache_kv.dtype, ttnn.DRAM_MEMORY_CONFIG
+        lane_buffer_key("ring_kv", lane),
+        num_local_kv_heads,
+        gather_seq,
+        GLOBAL_PACKED_DIM,
+        cache_kv.dtype,
+        ttnn.DRAM_MEMORY_CONFIG,
     )
     # ring_mla rather than ring_joint_scaled_dot_product_attention: only ring_mla reads K and V out of one packed
     # tensor (MLA-style latent V; here Gemma4's [K | V] rows). Both call the same device op,
@@ -356,41 +374,14 @@ def write_chunk_to_sliding_ring_cache(
     num_layers=1,
     slot_idx=0,
     prefill_metadata=None,
+    input_rows=None,
 ):
-    """Append one sliding-attention chunk (K and V) to its CP-local history."""
+    """Append one sliding-attention chunk (K and V) to its CP-local history (input_rows: as for the global cache)."""
 
     for cache, chunk in ((cache_k, tt_k), (cache_v, tt_v)):
-        original_chunk = chunk
-
-        if chunk.dtype != cache.dtype:
-            chunk = ttnn.typecast(chunk, cache.dtype)
-
-        if prefill_metadata is not None:
-            slot_idx_t = prefill_metadata.slot_idx
-            kv_actual_global_t = prefill_metadata.kv_actual_global
-
-            ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
-                cache=cache,
-                input=chunk,
-                slot_idx=slot_idx_t,
-                layer_idx=layer_idx,
-                num_layers=num_layers,
-                kv_actual_global=kv_actual_global_t,
-                cluster_axis=mesh_config.cp_axis,
-            )
-        else:
-            ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
-                cache=cache,
-                input=chunk,
-                slot_idx=slot_idx,
-                layer_idx=layer_idx,
-                num_layers=num_layers,
-                kv_actual_global=kv_actual_global,
-                cluster_axis=mesh_config.cp_axis,
-            )
-
-        if chunk is not original_chunk:
-            chunk.deallocate(True)
+        _write_chunk_to_ring_cache(
+            cache, chunk, mesh_config, kv_actual_global, layer_idx, num_layers, slot_idx, prefill_metadata, input_rows
+        )
 
 
 def sliding_ring_prefill_attention(
@@ -416,6 +407,10 @@ def sliding_ring_prefill_attention(
 ):
     """Attend this rank's Q shard over the cached prefix via the CP ring, with separate K and V caches.
 
+    With a prefill_metadata of num_lanes > 1, tt_q holds that many requests' rows stacked request-major and one call
+    serves them all (request b reads slot_idx[b] with prefix kv_actual_global[b]); the output stacks the same way.
+    K split 1, one halo batch per request.
+
     ``logical_n`` fixes the cache capacity at capture. Device metadata supplies
     the valid prefix on each replay; ``kv_actual_global`` is the prefix before
     this chunk when metadata is updated here.
@@ -424,11 +419,18 @@ def sliding_ring_prefill_attention(
     the output stays CP-sharded exactly like the input.
     """
     mesh_device = mesh_config.device
+    num_lanes = prefill_metadata.num_lanes
     if program_config is None:
         sdpa_grid = ccl_manager.compute_grid_size
         q_chunk, k_chunk, k_splits, _ = ring_sdpa_chunk_sizes(
-            tt_q.shape[-2], sliding=True, num_heads=tt_q.shape[1], grid=(sdpa_grid.x - 1, sdpa_grid.y)
+            tt_q.shape[-2] // num_lanes,
+            sliding=True,
+            num_heads=tt_q.shape[1],
+            grid=(sdpa_grid.x - 1, sdpa_grid.y),
         )
+        # A lanes call runs one unit per (request, head, Q chunk) and does not split K.
+        if num_lanes > 1:
+            k_splits = 1
         program_config = ring_prefill_program_config(
             mesh_device, ccl_manager, head_dim, q_chunk_size=q_chunk, k_chunk_size=k_chunk, k_splits=k_splits
         )
@@ -439,10 +441,22 @@ def sliding_ring_prefill_attention(
     halo_tokens = -(-(sliding_window_size - 1) // k_chunk) * k_chunk
     gather_seq = max(halo_tokens, TILE_HEIGHT)
     buffer_k = ccl_manager.get_ring_gather_buffer(
-        (gather_buffer_key, "ring_k"), num_local_kv_heads, gather_seq, head_dim, cache_k.dtype, cache_k.memory_config()
+        (gather_buffer_key, "ring_k"),
+        num_local_kv_heads,
+        gather_seq,
+        head_dim,
+        cache_k.dtype,
+        cache_k.memory_config(),
+        batch=num_lanes,
     )
     buffer_v = ccl_manager.get_ring_gather_buffer(
-        (gather_buffer_key, "ring_v"), num_local_kv_heads, gather_seq, head_dim, cache_v.dtype, cache_v.memory_config()
+        (gather_buffer_key, "ring_v"),
+        num_local_kv_heads,
+        gather_seq,
+        head_dim,
+        cache_v.dtype,
+        cache_v.memory_config(),
+        batch=num_lanes,
     )
 
     out = ttnn.experimental.gemma4.sliding_ring_sdpa(

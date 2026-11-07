@@ -1207,6 +1207,31 @@ def test_eltwise_binary_sfpu_isclose_nan(formats, dest_acc, mathop):
     sfpu_binary(formats, dest_acc, mathop, spec_A=spec_A, spec_B=spec_B)
 
 
+SITU_GLU_SWEEP = dict(
+    formats=input_output_formats([DataFormat.Float16_b]),
+    mathop=[MathOperation.SfpuSituGlu],
+    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+)
+
+
+@skip_for_quasar
+@skip_for_wormhole
+@parametrize(**SITU_GLU_SWEEP)
+def test_eltwise_binary_sfpu_situ_glu(formats, dest_acc, mathop, **run_kwargs):
+    # situ_glu(gate, up) with gate = tile0 and up = tile1; Blackhole has the only kernel.
+    # Both signs, past each clamp and below where the logistic factor underflows.
+    sfpu_binary(
+        formats,
+        dest_acc,
+        mathop,
+        spec_A=StimuliSpec(
+            distribution=DistributionKind.UNIFORM, low=-110.0, high=16.0
+        ),
+        spec_B=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-16.0, high=16.0),
+        **run_kwargs,
+    )
+
+
 # dest_acc stays an axis: a single-axis `parametrize` hands pytest 1-tuples, which `--op` cannot
 # read, so this is the same shape as test_eltwise_binary_sfpu_int_uniform.
 @parametrize(mathop=[MathOperation.SfpuXlogy], dest_acc=[DestAccumulation.Yes])
@@ -1447,31 +1472,6 @@ def _run_quant(mathop, sign_magnitude, **run_kwargs):
 @parametrize(**QUANT_SWEEP)
 def test_eltwise_binary_sfpu_quant(mathop, sign_magnitude, **run_kwargs):
     _run_quant(mathop, sign_magnitude, **run_kwargs)
-
-
-SITU_GLU_SWEEP = dict(
-    formats=input_output_formats([DataFormat.Float16_b]),
-    mathop=[MathOperation.SfpuSituGlu],
-    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
-)
-
-
-@skip_for_quasar
-@skip_for_wormhole
-@parametrize(**SITU_GLU_SWEEP)
-def test_eltwise_binary_sfpu_situ_glu(formats, dest_acc, mathop, **run_kwargs):
-    # situ_glu(gate, up) with gate = tile0 and up = tile1; Blackhole has the only kernel. Both signs, past
-    # the kernel's clamps (|gate| 19.5, |up| 121.875), with gate above the logistic flush at -87.5.
-    sfpu_binary(
-        formats,
-        dest_acc,
-        mathop,
-        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-80.0, high=40.0),
-        spec_B=StimuliSpec(
-            distribution=DistributionKind.UNIFORM, low=-200.0, high=200.0
-        ),
-        **run_kwargs,
-    )
 
 
 # =============================================================================

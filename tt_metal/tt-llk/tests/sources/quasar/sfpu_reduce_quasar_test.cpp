@@ -16,6 +16,17 @@
 using namespace ckernel;
 #include "params.h" // POOL_TYPE, REDUCE_DIM, BLOCK_CT_DIM, BLOCK_RT_DIM, is_fp32_dest_acc_en
 
+// A column reduce keeps tiles independent, so a long run is split into full Dest sections; a row
+// reduce needs its whole block in Dest at once and runs as a single section.
+inline std::uint32_t reduce_section_tiles(const std::uint32_t tile_cnt)
+{
+    if constexpr (REDUCE_DIM == ckernel::ReduceDim::REDUCE_COL)
+    {
+        return tiles_per_dest_section<dest_sync, is_fp32_dest_acc_en>(tile_cnt);
+    }
+    return tile_cnt;
+}
+
 // SFPU reduce on Quasar: collapse a Dest block along one axis with SUM, AVG, MAX or MIN.
 //
 // Three programs in one file, one per thread:
@@ -33,7 +44,7 @@ using namespace ckernel;
 // Perf run types. Operands reach Dest through the unpack-to-dest engine, so there is no SrcA/SrcB
 // handshake here - the Dest dvalid chain is the only producer/consumer token. That means the two
 // isolate modes have nothing to mock: MATH_ISOLATE simply leaves the unpack thread idle, and
-// UNPACK_ISOLATE / L1_CONGESTION leave the math thread idle.
+// UNPACK_ISOLATE leaves the math thread idle.
 //
 // Each thread declares the shared chain only for L1_TO_L1 and zeroes its own wait mask otherwise,
 // so no run type inherits the chain from a previous one on the same device. Each also programs its
@@ -59,6 +70,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const Operand& buffer_A             = params.buffer_A;
     const std::uint32_t TILE_CNT        = params.TILE_CNT;
 #endif
+    const std::uint32_t section_tiles = reduce_section_tiles(TILE_CNT);
+    const std::uint32_t num_sections  = dest_section_count(TILE_CNT, section_tiles);
 
     {
         START_PERF_MEASURE("INIT")
@@ -90,9 +103,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
         // PACK_ISOLATE, which packs whatever Dest already holds.
         if constexpr (PERF_RUN_TYPE != PerfRunType::MATH_ISOLATE && PERF_RUN_TYPE != PerfRunType::PACK_ISOLATE)
         {
-            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
+            for (std::uint32_t pass = 0; pass < LOOP_FACTOR * num_sections; ++pass)
             {
-                _llk_unpack_unary_operand_to_dest_block_(0 /*l1_tile_idx*/, 0 /*dst_tile_idx*/, TILE_CNT);
+                _llk_unpack_unary_operand_to_dest_block_((pass % num_sections) * section_tiles /*l1_tile_idx*/, 0 /*dst_tile_idx*/, section_tiles);
                 if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
                 {
                     // Hand Dest to the SFPU.
@@ -134,6 +147,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t TILE_CNT    = params.TILE_CNT;
     const std::uint32_t DST_INDEX   = params.DST_INDEX;
 #endif
+    const std::uint32_t section_tiles = reduce_section_tiles(TILE_CNT);
+    const std::uint32_t num_sections  = dest_section_count(TILE_CNT, section_tiles);
 
     {
         START_PERF_MEASURE("INIT")
@@ -157,15 +172,15 @@ void run_kernel(RUNTIME_PARAMETERS params)
     }
     {
         START_PERF_MEASURE("TILE_LOOP")
-        // Skipped for UNPACK_ISOLATE / L1_CONGESTION (nothing to clear) and for PACK_ISOLATE.
-        if constexpr (PERF_RUN_TYPE != PerfRunType::UNPACK_ISOLATE && PERF_RUN_TYPE != PerfRunType::L1_CONGESTION && PERF_RUN_TYPE != PerfRunType::PACK_ISOLATE)
+        // Skipped for UNPACK_ISOLATE (nothing to clear) and for PACK_ISOLATE.
+        if constexpr (PERF_RUN_TYPE != PerfRunType::UNPACK_ISOLATE && PERF_RUN_TYPE != PerfRunType::PACK_ISOLATE)
         {
-            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
+            for (std::uint32_t pass = 0; pass < LOOP_FACTOR * num_sections; ++pass)
             {
                 if constexpr (REDUCE_DIM == ckernel::ReduceDim::REDUCE_COL)
                 {
                     // A column lives inside one tile, so each tile reduces onto its own row 0.
-                    for (std::uint32_t tile = 0; tile < TILE_CNT; ++tile)
+                    for (std::uint32_t tile = 0; tile < section_tiles; ++tile)
                     {
                         SFPU_UNARY_CALL(
                             dest_sync,
@@ -232,6 +247,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t TILE_CNT        = params.TILE_CNT;
     const std::uint32_t DST_INDEX       = params.DST_INDEX;
 #endif
+    const std::uint32_t section_tiles = reduce_section_tiles(TILE_CNT);
+    const std::uint32_t num_sections  = dest_section_count(TILE_CNT, section_tiles);
 
     {
         START_PERF_MEASURE("INIT")
@@ -241,9 +258,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
         const auto bfd_pack = ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Pack0>(
             ckernel::tensor_shape_from_num_faces(TEST_FACE_R_DIM, num_faces), L1_ADDRESS(buffer_Res[0]), formats.pack_dst);
 
-        // Configure pack engine 0 and set it up for TILE_CNT tiles.
+        // Configure pack engine 0 and set it up for one section of tiles.
         _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(static_cast<DataFormat>(formats.pack_src), ckernel::ReluConfig::none());
-        _llk_pack_init_(bfd_pack, ckernel::DEFAULT_TENSOR_SHAPE, TILE_CNT);
+        _llk_pack_init_(bfd_pack, ckernel::DEFAULT_TENSOR_SHAPE, section_tiles);
 
         // PACK is the consumer at the end of the chain.
         if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
@@ -258,11 +275,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
     }
     {
         START_PERF_MEASURE("TILE_LOOP")
-        if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1 || PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
+        if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1 || PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
-            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
+            for (std::uint32_t pass = 0; pass < LOOP_FACTOR * num_sections; ++pass)
             {
-                _llk_pack_(DST_INDEX, 0 /*start_l1_tile_idx*/, ckernel::DEFAULT_TENSOR_SHAPE);
+                _llk_pack_(DST_INDEX, (pass % num_sections) * section_tiles /*start_l1_tile_idx*/, ckernel::DEFAULT_TENSOR_SHAPE);
                 if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
                 {
                     _llk_pack_dest_dvalid_section_done_<dest_sync, is_fp32_dest_acc_en>();

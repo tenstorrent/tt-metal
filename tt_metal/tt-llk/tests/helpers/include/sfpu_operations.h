@@ -16,9 +16,6 @@
 // 1. Include the metal header below: #include "llk_sfpu/<operation>.h"
 // 2. Add the operation enum to SfpuType in llk_sfpu_types.h
 // 3. Add the if constexpr branches in call_unary_sfpu_operation_init() and call_unary_sfpu_operation() below
-#ifdef ARCH_BLACKHOLE
-#include "llk_sfpu/ckernel_sfpu_situ_glu.h"
-#endif
 #include "llk_sfpu/ckernel_sfpu_abs.h"
 #include "llk_sfpu/ckernel_sfpu_activations.h"
 #include "llk_sfpu/ckernel_sfpu_add1.h"
@@ -95,6 +92,9 @@
 #include "llk_sfpu/ckernel_sfpu_sign.h"
 #include "llk_sfpu/ckernel_sfpu_signbit.h"
 #include "llk_sfpu/ckernel_sfpu_silu.h"
+#ifdef ARCH_BLACKHOLE
+#include "llk_sfpu/ckernel_sfpu_situ_glu.h"
+#endif
 #include "llk_sfpu/ckernel_sfpu_snake_beta.h"
 #include "llk_sfpu/ckernel_sfpu_softplus.h"
 #ifndef SOFTPLUS_TEST_BETA

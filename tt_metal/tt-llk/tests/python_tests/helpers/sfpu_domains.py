@@ -1152,6 +1152,8 @@ BINARY_SPECIALS_READY_OPS: frozenset[MathOperation] = frozenset(
 _BINARY_SPECIALS_NOT_READY: frozenset[MathOperation] = frozenset(
     {
         MathOperation.SfpuElwdiv,
+        # The SFPU returns +0 where torch's zero is -0, and the stock kernel's NaN class is its own.
+        MathOperation.SfpuSituGlu,
         MathOperation.SfpuXlogy,
         MathOperation.SfpuElwpow,
         MathOperation.SfpuBinaryFmod,
@@ -1163,9 +1165,6 @@ _BINARY_SPECIALS_NOT_READY: frozenset[MathOperation] = frozenset(
         MathOperation.SfpuMaskPosinf,
         MathOperation.SfpuLogsigmoid,
         MathOperation.SfpuCopyDest,
-        # The SFPU returns +0 where torch's zero is -0, and a NaN gives +inf through the BF16 round, so
-        # torch's class does not hold at every special pair.
-        MathOperation.SfpuSituGlu,
     }
 )
 
