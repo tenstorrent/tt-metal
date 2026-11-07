@@ -207,6 +207,7 @@ inline __attribute__((always_inline)) void write(const std::uint32_t value)
     {
         if constexpr (F.scope == RegisterScope::Thread)
         {
+            detail::setc16_check_address<cfg_word_addr>();
             TT_SETC16(cfg_word_addr, (value << F.shamt(S)) & detail::ThreadCfgWordMask);
         }
         else
