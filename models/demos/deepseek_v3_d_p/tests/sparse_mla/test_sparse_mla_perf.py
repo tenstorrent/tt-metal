@@ -16,8 +16,8 @@ K3.1's packet size), GLM-5.3 (last full indexer layer) and a GLM-5.3 shared laye
 top-k). Untraced: fastest of UNTRACED_SAMPLES calls after UNTRACED_WARMUP discarded ones. Traced: one timed replay of
 the captured trace. Each (case, box, scenario, mode) is gated two-sided against PERF_TARGETS_MS ± PERF_MARGIN[mode] (a
 case without targets only reports), and the traced output must match the untraced one (one extra untimed run of each,
-for triage). Each layer runs standalone (no next-layer KV prefetch overlapped with its attention), as the first layer of
-a stage.
+for triage, plus one untimed eager forward with a per-op host profile). Each layer runs standalone (no next-layer KV
+prefetch overlapped with its attention), as the first layer of a stage.
 
 test_mla_chunked_perf: the exploration matrix (QuietBox, LoudBox, Galaxy; skipped on CI), reports only.
 GLM-5.3 (last full indexer layer, 21-slot index cache) and K3.1 x warm/cold/long x sparse with a BF16 or
@@ -72,10 +72,10 @@ GATE_CASES = {
 }
 # Host time of one chunk forward through device synchronization, in ms, per case: (warm untraced, warm traced, long
 # untraced, long traced). From CI (LOGURU_LEVEL=ERROR, TT_METAL_SHM_TRACKING_DISABLED=1, one pytest process per model as
-# the jobs run them), 2-3 runs per case on 2026-11-07. Traced is their mean. Untraced is the fastest run: some runs land
-# in a slow mode that adds 1-2 ms to every sample of a test (under investigation; the gate prints enqueue time and a
-# per-op host profile to find it). The GLM-5.3 shared layer has no cache-length-dependent work, and its warm case has
-# only been seen in the slow mode on Galaxy, so it takes the long case's untraced time.
+# the jobs run them), 2-3 runs per case on 2026-11-07. Traced is their mean. Untraced is the fastest of the runs'
+# per-run minimums: some runs land in a slow mode that adds 1-2 ms to every sample of a test (under investigation; the
+# gate prints enqueue time and a per-op host profile to find it). The GLM-5.3 shared layer has no cache-length-dependent
+# work, and its warm case has only been seen in the slow mode on Galaxy, so it takes the long case's untraced time.
 _TARGETS_MS = {
     "Galaxy": {
         "kimi_k3_1": (3.99, 3.10, 7.23, 6.71),
@@ -389,7 +389,8 @@ def _time_untraced(mesh_device, case, start, cpus=None, repeat=None, enqueue=Non
 
 def _op_host_profile(mesh_device, case, start, top=12):
     """One untimed eager forward with each ttnn op call timed on the host: a CI diagnostic for untraced host-time noise
-    (which ops grow when a run is slow). Returns a printable summary."""
+    (which ops grow when a run is slow). Times are inclusive (a Python op that calls other ttnn ops counts them too) and
+    cover only ops called through ttnn's FastOperation wrapper (CI runs in fast-runtime mode). Returns a summary."""
     from ttnn.decorators import FastOperation
 
     per_op, original = {}, FastOperation.__call__
@@ -402,22 +403,26 @@ def _op_host_profile(mesh_device, case, start, top=12):
             calls, total = per_op.get(self.python_fully_qualified_name, (0, 0.0))
             per_op[self.python_fully_qualified_name] = (calls + 1, total + time.perf_counter() - t)
 
-    entries = mesh_device.num_program_cache_entries()
-    FastOperation.__call__ = timed
+    entries, out = mesh_device.num_program_cache_entries(), None
     try:
-        t0 = time.perf_counter()
-        out = case.forward(start)
-        t1 = time.perf_counter()
+        FastOperation.__call__ = timed
+        try:
+            t0 = time.perf_counter()
+            out = case.forward(start)
+            t1 = time.perf_counter()
+        finally:
+            FastOperation.__call__ = original
+        ttnn.synchronize_device(mesh_device)
+        t2 = time.perf_counter()
     finally:
-        FastOperation.__call__ = original
-    ttnn.synchronize_device(mesh_device)
-    t2 = time.perf_counter()
-    ttnn.deallocate(out)
+        if out is not None:
+            ttnn.deallocate(out)
     rows = sorted(per_op.items(), key=lambda kv: -kv[1][1])[:top]
     ops = ", ".join(f"{name.rsplit('.', 1)[-1]} {calls}x {total * 1e3:.3f}" for name, (calls, total) in rows)
     return (
         f"forward() {(t1 - t0) * 1e3:.3f} ms, sync {(t2 - t1) * 1e3:.3f} ms, "
-        f"{sum(c for c, _ in per_op.values())} op calls, {sum(t for _, t in per_op.values()) * 1e3:.3f} ms in ops, "
+        f"{sum(c for c, _ in per_op.values())} op calls, "
+        f"{sum(t for _, t in per_op.values()) * 1e3:.3f} ms in ops (inclusive), "
         f"program cache +{mesh_device.num_program_cache_entries() - entries}; top ops (ms): {ops}"
     )
 

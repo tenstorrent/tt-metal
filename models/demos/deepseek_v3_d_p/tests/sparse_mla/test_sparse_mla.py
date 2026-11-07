@@ -451,9 +451,13 @@ def run_sparse_mla_determinism_case(
             continue
 
         logger.debug(f"[{variant.name}] sparse MLA determinism run {run_idx + 1}: comparing with baseline")
-        exact = torch.equal(baseline, current)
-        _, msg = assert_with_pcc(baseline.float(), current.float(), 0.9999)
-        logger.info(f"[{variant.name}] determinism run0 vs run{run_idx}: exact={exact} pcc={msg}")
+        if not torch.equal(baseline, current):
+            _, pcc = comp_pcc(baseline.float(), current.float(), 0.0)
+            pytest.fail(
+                f"[{variant.name}] determinism run {run_idx} differs from run 0: "
+                f"{(baseline != current).sum().item()} elements, PCC {pcc}"
+            )
+        logger.info(f"[{variant.name}] determinism run0 vs run{run_idx}: bit-exact")
     logger.info(f"[{variant.name}] sparse MLA determinism complete")
 
 
