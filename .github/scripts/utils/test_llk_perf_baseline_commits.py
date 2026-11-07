@@ -8,10 +8,12 @@
 from __future__ import annotations
 
 import re
+import shutil
 import subprocess
 from pathlib import Path
 
 import pytest
+import yaml
 
 SCRIPTS = Path(__file__).resolve().parent.parent
 CLASSIFY = SCRIPTS / "llk-perf-inputs-changed.sh"
@@ -124,6 +126,21 @@ def test_classify_counts_functional_tests_that_perf_tests_import():
     }
     for name in imported:
         assert _classify(f"tt_metal/tt-llk/tests/python_tests/{name}.py") == "true", name
+
+
+def test_classify_in_the_merge_gates_checkout(tmp_path):
+    """The merge gate classifies in a sparse checkout; a perf test it cannot see makes every
+    functional test read as harmless, and the gate is skipped without an error."""
+    root = SCRIPTS.parent.parent
+    jobs = yaml.safe_load((root / ".github/workflows/merge-gate.yaml").read_text())["jobs"]
+    checkout = next(s for s in jobs["llk-perf-merge-gate-changes"]["steps"] if "sparse-checkout" in s.get("with", {}))
+    for path in checkout["with"]["sparse-checkout"].split():
+        shutil.copytree(root / path, tmp_path / path)
+    script = tmp_path / CLASSIFY.relative_to(root)
+    out = subprocess.run(
+        ["bash", str(script)], input="tt_metal/tt-llk/tests/python_tests/test_pack.py\n", capture_output=True, text=True
+    )
+    assert out.stdout.strip() == "true", out.stderr
 
 
 def _git(repo, *args):
