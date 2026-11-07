@@ -306,6 +306,7 @@ def test_avg_pool2d_global_rejects_zero_batch(device, expect_error):
         )
 
 
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 @pytest.mark.parametrize(
     "out_dtype, in_c",
     [
