@@ -68,10 +68,21 @@ template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 inline void calculate_digamma() {
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat x = sfpi::dst_reg[0];
+        // For 0 <= x < 0.01 (below the [0.01, 102] LUT fit floor, issue #59462),
+        // evaluate the LUT at x + 1 in [1.0, 1.01] and apply digamma(x) = digamma(x + 1) - 1/x.
+        sfpi::vFloat x_lut = x;
+        v_if(x >= 0.0f && x < 0.01f) { x_lut = x + 1.0f; }
+        v_endif;
         // Piecewise-rational LUT, fit on [0.01, 102].
         sfpi::vFloat result =
             piecewise_rational_eval<DIGAMMA_NUM_DEGREE, DIGAMMA_DEN_DEGREE, DIGAMMA_NUM_SEGMENTS, DIGAMMA_LUT_SIZE>(
-                DIGAMMA_LUT, x);
+                DIGAMMA_LUT, x_lut);
+        v_if(x >= 0.0f && x < 0.01f) {
+            result = result - _sfpu_reciprocal_<2>(x);
+            v_if(x == 0.0f) { result = -std::numeric_limits<float>::infinity(); }
+            v_endif;
+        }
+        v_endif;
 
         // Large-x asymptotic (Bernoulli series). Above the LUT fit range the rational
         // extrapolates poorly (issue #45520: "behaves bad for x>1000"); the asymptotic
