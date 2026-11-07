@@ -260,3 +260,39 @@ def test_padded_slice_rm_uint8_pads_with_zeros(device):
     actual = ttnn.experimental.padded_slice(tt_input, begins, ends, [1, 1, 1, 1], memory_config=output_mem_config)
     passed, message = assert_equal(expected, ttnn.to_torch(actual))
     assert passed, message
+
+
+# Validation checked only the shape of a preallocated output. The factory sizes its sticks from the
+# output tensor, so a float32 output for a bfloat16 input was silently filled with wrong values.
+@pytest.mark.parametrize(
+    "output_dtype, should_raise",
+    [(ttnn.bfloat16, False), (ttnn.float32, True)],
+    ids=["matching_dtype", "float32_output"],
+)
+def test_padded_slice_preallocated_output_dtype(output_dtype, should_raise, device, expect_error):
+    begins, ends, step = [0, 0, 0, 0], [1, 1, 8, 32], [1, 1, 1, 1]
+    output_mem_config = _height_sharded_memory_config(device, 4, 32, 2)
+    src = _bf16_pattern((1, 1, 16, 32), 0)
+    tt_input = ttnn.from_torch(
+        src, device=device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    tt_output = ttnn.from_torch(
+        torch.zeros(1, 1, 8, 32),
+        device=device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        dtype=output_dtype,
+        memory_config=output_mem_config,
+    )
+
+    if should_raise:
+        with expect_error(RuntimeError, "Preallocated output tensor must have dtype"):
+            ttnn.experimental.padded_slice(
+                tt_input, begins, ends, step, memory_config=output_mem_config, output_tensor=tt_output
+            )
+        return
+
+    ttnn.experimental.padded_slice(
+        tt_input, begins, ends, step, memory_config=output_mem_config, output_tensor=tt_output
+    )
+    passed, message = assert_equal(src[:, :, :8, :], ttnn.to_torch(tt_output))
+    assert passed, message
