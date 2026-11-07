@@ -34,8 +34,8 @@ random.seed(0)
 parameters = {
     "nightly": {
         "input_spec": gen_sharded_spec_unary(16, max_tensor_size_per_core=20 * 1024, layouts=["TILE_LAYOUT"]),
-        "grad_dtype": [ttnn.bfloat16],
-        "input_a_dtype": [ttnn.bfloat16],
+        "grad_dtype": [ttnn.float32, ttnn.bfloat16],
+        "input_a_dtype": [ttnn.float32, ttnn.bfloat16],
     },
 }
 
