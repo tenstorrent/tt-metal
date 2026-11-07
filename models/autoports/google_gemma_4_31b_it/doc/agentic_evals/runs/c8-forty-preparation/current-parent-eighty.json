@@ -1,0 +1,13 @@
+{
+  "status": "held_not_published_or_dispatched",
+  "sha": "42dc40754e465cf8c9ec993027ff59d3c936832c",
+  "parent": "9b4b88c0ac2762d75e824818ec7428c594dba0f0",
+  "tree": "8247a31aa050417ab48935c706cb6cd3985e8bd5",
+  "identical_tested_reference": "ff1fac4b00357a82df8066969d5f8f2f103ebb8c",
+  "previous_held_sha": "14615c6c0e5589dd6cd235e872252f8715046704",
+  "branch": "refs/heads/prep/c8-eighty-after-current-c4-eighty",
+  "change": "Parent-only rechain of unchanged tested C8/80 tree; production delta versus current C4/80 only concurrency4to8 and pool20480. Limits/task lists unchanged.",
+  "validation": "Entire tree equality to previously tested candidate; inherited37 focused tests/full hooks, not newly rerun",
+  "admission": "Requires valid C8/40 completed audit and measured projection within first dry reserve; normal C4/80 never delayed",
+  "at": "2026-11-07T02:17:31.820810+00:00"
+}

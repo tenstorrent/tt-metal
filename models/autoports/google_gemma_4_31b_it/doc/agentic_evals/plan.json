@@ -75,11 +75,11 @@
       "Qwen/Qwen3-32B"
     ],
     "benchmark_current_runtime_measurement": {
-      "source": "runs/hex-runtime-benchmark/RESULT.json",
-      "client_seconds": 27.21482825197745,
-      "device_job_hours": 0.07722610789111867,
-      "runtime": "eef534e5cd6bcaf37957647de4d8d4eff4f0e047",
-      "note": "Normal validation includes headline/startup; not frozen release; supported idle drain completes accounting."
+      "source": "runs/framed-benchmark-dry/RESULT.json",
+      "client_seconds": 27.11071771394927,
+      "device_job_hours": 0.0752905511111111,
+      "runtime": "f57978407eaacf09587f5793b8ae46ca7af839ea",
+      "note": "Frozen local arm dry passed; full stage dry pending GPQA. Queue interval includes startup/headline/drain."
     },
     "go_evals": [
       "r1_gpqa_diamond"
@@ -4290,13 +4290,16 @@
     },
     {
       "start": "2026-11-06T13:49:36.657891+00:00",
-      "end": null,
-      "reason": "Replaycompleted; nextGPQAcapacity planbeingprepared, CIcontinues"
+      "end": "2026-11-06T13:55:57.747519+00:00",
+      "reason": "Replaycompleted; nextGPQAcapacity planbeingprepared, CIcontinues",
+      "closure_evidence": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/device_queue/local/gpqa-c4-capacity/job.json"
     },
     {
       "start": "2026-11-06T14:04:00Z",
       "reason": "Four-context GPQA envelope completed; local remaining informative checks require retained real failing histories or new task timing evidence. Three CI runs keep available permitted workload busy; no redundant local benchmark.",
-      "next": "Exact failed native-history diagnostic or measured new serving gap when collected"
+      "next": "Exact failed native-history diagnostic or measured new serving gap when collected",
+      "end": "2026-11-06T15:30:17.826650+00:00",
+      "closure_evidence": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/device_queue/local/astropy-prefix-discriminator/job.json"
     },
     {
       "start": "2026-11-06T17:31:21.034834+00:00",
@@ -4305,8 +4308,15 @@
     },
     {
       "start": "2026-11-06T17:41:41.588322+00:00",
+      "end": "2026-11-06T18:41:38.092147+00:00",
+      "reason": "Bounded cache hypothesis comparison complete; no supported local fix to test. CI carries currentGPQA20/SWE5 rungs; next meaningful localwork depends on their retained trajectories or frozenrelease.",
+      "closure_evidence": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/device_queue/local/phase-archive-idle-race/job.json"
+    },
+    {
+      "start": "2026-11-07T02:05:26.668952+00:00",
       "end": null,
-      "reason": "Bounded cache hypothesis comparison complete; no supported local fix to test. CI carries currentGPQA20/SWE5 rungs; next meaningful localwork depends on their retained trajectories or frozenrelease."
+      "reason": "Frozen local benchmark dry completed; independent CI normal80 and C8/40 hold devices. Further local serving changes would invalidate frozen arm; no supported outstanding local hypothesis currently justifies another device run. CI image build access remains external prerequisite.",
+      "evidence": "runs/framed-benchmark-dry/RESULT.json"
     }
   ],
   "schedule_history": [
@@ -5176,5 +5186,10 @@
     "reason": "Valid40; doubled measured work already includes7cap failures, plus one extra measured longest-cap wave and .85hqueue fits12h and firstdry31.3. This is measured planning sensitivity, not guarantee; full4h additive scenario12.258h is retained. Request/output limits unchanged. Reassess live whole-run forecast against firstdry; preserve partial evidence if projected nonfit.",
     "predicted_finish_with_measured_tail": "2026-11-07T11:12:32.887910+00:00",
     "first_dry_deadline": "2026-11-07T11:46:49+00:00"
+  },
+  "held_current_parent_c8_eighty": {
+    "sha": "42dc40754e465cf8c9ec993027ff59d3c936832c",
+    "evidence": "runs/c8-forty-preparation/current-parent-eighty.json",
+    "status": "held_no_dispatch"
   }
 }
