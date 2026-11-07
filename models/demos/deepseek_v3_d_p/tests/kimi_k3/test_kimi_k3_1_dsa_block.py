@@ -20,7 +20,8 @@ parameters each, ~59 GB per layer, and the MoE is unchanged from K3 and covered 
 attention, norms, AttnRes and KDA are the model's own.
 
 Windows: the first DSA layer alone (layer 3, a first rank with its embedding); the same layer as a
-pipeline stage's KV-only last layer (layer 92's role); and layers 0-3, so the KDA carries and the DSA
+pipeline stage's KV-only last layer (layer 92's role); layers 3-7, two DSA layers in KV slots 0 and 1
+of both caches, so a slot collision leaves a zero row; and layers 0-3, so the KDA carries and the DSA
 index cache meet in one forward.
 
 The caches and KDA slabs come from the serving allocator (`KimiK31Adapter.allocate_kv_cache`: TP-deduped
@@ -70,6 +71,7 @@ class _DenseFfnK31(KimiK31Config):
 WINDOWS = {
     "dsa_L3": (3, 1, False),
     "dsa_L3_kv_only": (3, 1, True),
+    "dsa_L3_L7": (3, 5, False),
     "hybrid_L0_3": (0, 4, False),
 }
 

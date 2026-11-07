@@ -34,7 +34,7 @@ K31_KVPE_BYTES_PER_TOKEN = 704
 K31_INDEX_BYTES_PER_TOKEN = 4 * 1088 // 32  # 136
 
 
-def _params(first, count, num_users=1, sparse_kv_cache_format=None):
+def _params(first, count, num_users=1, sparse_kv_cache_format=None, tp_shard_kv=True):
     return PrefillRunParams(
         mesh_shape=MESH,
         num_layers=count,
@@ -51,7 +51,7 @@ def _params(first, count, num_users=1, sparse_kv_cache_format=None):
         weight_cache_path=None,
         sp_axis=SP_AXIS,
         tp_axis=TP_AXIS,
-        tp_shard_kv=True,
+        tp_shard_kv=tp_shard_kv,
         sparse_kv_cache_format=sparse_kv_cache_format,
     )
 
@@ -80,6 +80,12 @@ def test_kvpe_format_must_match_the_attention(model, requested, expect_error):
     """Rejected from the config and format alone, before anything is allocated (hence no device)."""
     with expect_error(ValueError, "cannot use"):
         _allocate(get_adapter(model), None, _params(0, 24, sparse_kv_cache_format=requested))
+
+
+def test_kimi_k3_1_needs_tp_deduped_caches(expect_error):
+    """Sparse ttMLA only reads the TP-deduped layout, so a replicated K3.1 allocation is refused (no device)."""
+    with expect_error(ValueError, "TP-deduped"):
+        _allocate(get_adapter("kimi_k3_1"), None, _params(0, 24, tp_shard_kv=False))
 
 
 def test_kimi_k3_1_defaults_to_scaled_fp8_and_k3_stays_dense():
