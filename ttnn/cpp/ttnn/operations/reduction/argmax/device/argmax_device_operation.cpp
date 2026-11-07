@@ -6,6 +6,7 @@
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/device_operation.hpp"
 #include "argmax_utils.hpp"
+#include "argmax_tile_multi_core_split.hpp"
 
 using namespace tt::tt_metal;
 
@@ -23,6 +24,41 @@ bool uses_multicore_path(const ArgmaxParams& args, const ArgmaxInputs& tensor_ar
     const int32_t rank = static_cast<int32_t>(tensor_args.input.logical_shape().rank());
     const int32_t normalized_dim = normalize_dim(static_cast<int32_t>(args.dim.value()), rank);
     return normalized_dim == rank - 1;
+}
+
+// TILE input over the last dim of a rank >= 2 tensor, when the split puts it on more than one core.
+// Other TILE inputs keep the single-core TILE readers. Quasar keeps them too: this program has not run there.
+bool uses_tile_multicore_path(const ArgmaxParams& args, const ArgmaxInputs& tensor_args) {
+    const auto& input = tensor_args.input;
+    if (input.layout() != Layout::TILE || !args.dim.has_value()) {
+        return false;
+    }
+    const int32_t rank = static_cast<int32_t>(input.logical_shape().rank());
+    if (rank < 2 || normalize_dim(static_cast<int32_t>(args.dim.value()), rank) != rank - 1) {
+        return false;
+    }
+    if (input.dtype() != DataType::BFLOAT16 && input.dtype() != DataType::FLOAT32) {
+        return false;
+    }
+    if (input.memory_config().memory_layout() != TensorMemoryLayout::INTERLEAVED ||
+        input.device()->arch() == tt::ARCH::QUASAR) {
+        return false;
+    }
+    const auto& padded = input.padded_shape();
+    const uint32_t tile_width = input.tensor_spec().tile().get_width();
+    const uint32_t tile_height = input.tensor_spec().tile().get_height();
+    const uint32_t padded_width = padded[padded.rank() - 1];
+    const uint32_t tile_cols = padded_width / tile_width;
+    const uint32_t tile_rows = static_cast<uint32_t>(padded.volume() / (padded_width * tile_height));
+    uint32_t num_cores = 0;
+    if (args.sub_core_grids.has_value()) {
+        num_cores = args.sub_core_grids->num_cores();
+    } else {
+        const auto grid = input.device()->compute_with_storage_grid_size();
+        num_cores = grid.x * grid.y;
+    }
+    const auto split = argmax_tile_multi_core_split(tile_rows, tile_cols, num_cores);
+    return split.cores_per_group * split.num_groups > 1;
 }
 
 }  // namespace
@@ -77,6 +113,9 @@ ArgMaxDeviceOperation::program_factory_t ArgMaxDeviceOperation::select_program_f
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     if (uses_multicore_path(args, tensor_args)) {
         return ArgMaxMultiCoreProgramFactory{};
+    }
+    if (uses_tile_multicore_path(args, tensor_args)) {
+        return ArgMaxTileMultiCoreProgramFactory{};
     }
     return ArgMaxSingleCoreProgramFactory{};
 }
@@ -204,7 +243,8 @@ void ArgMaxDeviceOperation::validate_on_program_cache_miss(
             input_tensor_a.layout());
     }
 
-    if (uses_multicore_path(args, tensor_args) && args.sub_core_grids.has_value()) {
+    if ((uses_multicore_path(args, tensor_args) || uses_tile_multicore_path(args, tensor_args)) &&
+        args.sub_core_grids.has_value()) {
         ReduceOpDeviceGridValidationOptions grid_opts;
         grid_opts.sub_grid_contained_in_device_grid = &args.sub_core_grids.value();
         grid_opts.sub_grid_label = "Multicore argmax sub_core_grids";
