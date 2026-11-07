@@ -350,7 +350,11 @@ GgufMatmulProgramFactory::cached_program_t GgufMatmulProgramFactory::create(
         std::string(kKernels) + (tq2 ? "gguf_matmul_tq2_compute.cpp" : "gguf_matmul_compute.cpp"),
         compute,
         ComputeConfig{
-            .math_fidelity = tq2 ? MathFidelity::HiFi3 : MathFidelity::HiFi2,  // HiFi3: exact block-float products
+            // TQ2_0: HiFi3 for exact block-float products. A decoded MXFP4 weight has a 2-bit significand, which
+            // LoFi's SrcA bits hold: HiFi2's second phase would add 0, so LoFi gives the same output, half the MVMULs.
+            .math_fidelity = tq2                                      ? MathFidelity::HiFi3
+                             : weight.dtype() == DataType::GGUF_MXFP4 ? MathFidelity::LoFi
+                                                                      : MathFidelity::HiFi2,
             .fp32_dest_acc_en = true,
             .dst_full_sync_en = true,
             .compile_args = tq2 ? std::vector<uint32_t>{k_tiles, chunk, one_row ? 1u : 0u, window}
