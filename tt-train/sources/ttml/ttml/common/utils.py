@@ -279,6 +279,31 @@ def build_causal_mask(T: int, device: bool = False):
     return ttml.autograd.Tensor.from_numpy(m, ttnn.Layout.TILE, ttnn.DataType.BFLOAT16)
 
 
+def scaled_dot_product_attention_auto(query, key, value, mask=None):
+    """Fused SDPA when q_seq == k_seq and the mask is None or [1, 1, q_seq, q_seq], composite otherwise."""
+    # TODO: #39558
+    q_seq = query.shape()[2]
+    fused = q_seq == key.shape()[2] and (mask is None or list(mask.shape()) == [1, 1, q_seq, q_seq])
+    sdpa = (
+        ttml.ops.attention.scaled_dot_product_attention
+        if fused
+        else ttml.ops.attention.scaled_dot_product_attention_composite
+    )
+    return sdpa(query, key, value, mask)
+
+
+def build_rope_params_from_config(config, head_dim: int) -> "ttml.ops.rope.RotaryEmbeddingParams":
+    """RoPE tables for a Llama or Qwen3 config."""
+    scaling = ttml.ops.rope.RopeScalingParams()
+    rs = config.rope_scaling
+    if rs.scaling_factor != 0.0 and rs.original_context_length != 0:
+        scaling.scaling_factor = rs.scaling_factor
+        scaling.high_freq_factor = rs.high_freq_factor
+        scaling.low_freq_factor = rs.low_freq_factor
+        scaling.original_context_length = rs.original_context_length
+    return ttml.ops.rope.build_rope_params(config.max_position_embeddings, head_dim, config.rope_theta, scaling)
+
+
 def deallocate_tensors(tensors) -> None:
     if tensors is None:
         return

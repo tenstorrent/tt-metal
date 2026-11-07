@@ -19,8 +19,16 @@ import ttml
 import ttnn
 
 from ttml.common.config import DeviceConfig, TransformerConfig
+from ttml.common.utils import build_mesh, no_grad, run_mode
 from ttml.modules import RunMode
-from ttml.trainers.grpo_trainer import RolloutBatch, grpo_ttml_model, save_checkpoint
+from ttml.trainers.grpo_trainer import (
+    RolloutBatch,
+    grpo_ttml_model,
+    layout_microbatch,
+    place_old_nlog_probs,
+    policy_nlog_probs,
+    save_checkpoint,
+)
 from ttml.trainers.grpo_trainer.grpo_ttml_model import setup_ttml_model
 from ttml.trainers.grpo_trainer.ttml_rollout_sampler import TTMLRolloutSampler
 
@@ -222,3 +230,99 @@ def test_save_checkpoint_round_trip_qwen3(tmp_path):
     _assert_same_parameters(model, loaded)
 
     ttml.autograd.AutoContext.get_instance().reset_graph()
+
+
+DESCRIBE = " Name its capital and describe that city in two sentences."
+MIXED_LENGTH_QUESTIONS = [
+    "France." + DESCRIBE,
+    "Japan. I am planning a long trip there next spring and would like to visit the city where the government sits."
+    + DESCRIBE,
+    "Brazil. "
+    + "It is the largest country in South America and many people assume its capital is Rio. " * 4
+    + DESCRIBE,
+]
+
+
+def _teacher_forced_logprobs(model, sampler: TTMLRolloutSampler, batch: RolloutBatch):
+    inputs, targets, mask, Tp = layout_microbatch(batch.prompts, batch.completions, sampler._pad_token)
+    B = inputs.shape[0]
+    layout = sampler._batch_layout
+    with run_mode(model, RunMode.EVAL), no_grad():
+        nlog = policy_nlog_probs(model, inputs, targets, mapper=layout.mapper)
+        teacher = -np.asarray(nlog.to_numpy(ttnn.DataType.FLOAT32, composer=layout.composer), dtype=np.float32)
+        teacher = teacher.reshape(B, Tp)
+    ttml.autograd.AutoContext.get_instance().reset_graph()
+    sampled = -place_old_nlog_probs(batch.prompts, batch.completions, batch.logprobs, Tp)
+    return teacher, sampled, mask
+
+
+def _rollout_vs_teacher_forced(
+    transformer_config, model_source, template_kwargs, device_config, temperature, completions_per_prompt=1
+):
+    """Per row: (padding gap, mean |diff|, max |diff|) of the sampler's log-probs against the teacher-forced pass."""
+    np.random.seed(0)  # the sampler draws its sampling seeds from np.random
+    model, tokenizer = setup_ttml_model(transformer_config, device_config, model_source)
+    sampler = TTMLRolloutSampler(model, tokenizer, MAX_COMPLETION_LENGTH, temperature, completions_per_prompt)
+    prompts = [
+        tokenizer.encode(_to_capitals_chat_prompt(tokenizer, q, **template_kwargs), add_special_tokens=False)
+        for q in MIXED_LENGTH_QUESTIONS
+    ]
+    gaps = max(len(p) for p in prompts) - np.array([len(p) for p in prompts])
+    assert gaps.max() >= 32, f"prompts are too close in length to exercise padding: {gaps}"
+
+    batch = sampler.generate(prompts)
+    teacher, sampled, mask = _teacher_forced_logprobs(model, sampler, batch)
+
+    lengths = np.array([len(p) for p in batch.prompts])
+    rows = []
+    for b, completion in enumerate(batch.completions):
+        assert len(completion) > 1, f"row {b}: need a multi-token completion, got {completion}"
+        row_mask = mask[b] > 0
+        diff = np.abs(teacher[b, row_mask] - sampled[b, row_mask])
+        rows.append((int(lengths.max() - lengths[b]), float(diff.mean()), float(diff.max())))
+    return rows
+
+
+def _assert_rows_match_teacher_forced(rows):
+    for b, (gap, mean, max_diff) in enumerate(rows):
+        assert max_diff < 0.5, (
+            f"row {b} (padding gap {gap}): sampler vs teacher-forced log-prob "
+            f"mean |diff| = {mean:.4f}, max |diff| = {max_diff:.4f}"
+        )
+
+
+@pytest.mark.requires_device
+@pytest.mark.slow
+@pytest.mark.parametrize("temperature", [0.0, 1.0], ids=["greedy", "t1"])
+@pytest.mark.parametrize(
+    "transformer_config, model_source, template_kwargs",
+    [
+        (LLAMA_1B_TRANSFORMER_CONFIG, HF_LLAMA_MODEL_ID, {}),
+        (QWEN3_TRANSFORMER_CONFIG, HF_QWEN3_MODEL_ID, {"enable_thinking": False}),
+    ],
+    ids=["llama", "qwen3"],
+)
+def test_rollout_logprobs_match_teacher_forced_for_mixed_prompt_lengths(
+    transformer_config, model_source, template_kwargs, temperature
+):
+    rows = _rollout_vs_teacher_forced(transformer_config, model_source, template_kwargs, DEVICE_CONFIG, temperature)
+    _assert_rows_match_teacher_forced(rows)
+
+
+@pytest.mark.requires_device
+@pytest.mark.slow
+@pytest.mark.parametrize("parallelism", ["enable_ddp", "enable_fsdp"])
+def test_rollout_logprobs_match_teacher_forced_on_two_devices(fresh_device_mesh, parallelism):
+    """The batch is sharded over a [1, 2] mesh, so each device holds rows of mixed prompt lengths."""
+    device_config = DeviceConfig({"device_config": {parallelism: True, "mesh_shape": [1, 2]}})
+    mesh = build_mesh(device_config)
+    with fresh_device_mesh(mesh.shape, mesh.axis_names, what="per-row RoPE rollout on two devices"):
+        rows = _rollout_vs_teacher_forced(
+            QWEN3_TRANSFORMER_CONFIG,
+            HF_QWEN3_MODEL_ID,
+            {"enable_thinking": False},
+            device_config,
+            temperature=0.0,
+            completions_per_prompt=2,
+        )
+    _assert_rows_match_teacher_forced(rows)

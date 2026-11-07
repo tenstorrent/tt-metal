@@ -97,6 +97,7 @@ class TTMLRolloutSampler(RolloutSampler):
         self._num_layers = cfg.num_hidden_layers
         self._max_seq_len = cfg.max_position_embeddings
         self._num_kv_groups = cfg.num_key_value_heads if self._kind == "llama" else None
+        self._decode_query_rows = TILE_SIZE if self._kind == "llama" else 1
         self._head_dim = cfg.hidden_size // cfg.num_attention_heads if self._kind == "llama" else None
 
         self._pad_token = resolve_pad_token_id(tokenizer)
@@ -171,11 +172,24 @@ class TTMLRolloutSampler(RolloutSampler):
         self._kv_cache_B = B_local
         return self._kv_cache
 
-    def _forward(self, x: Any, mask: Any, kv: Any, new_tokens: int) -> Any:
+    def _forward(self, x: Any, mask: Any, kv: Any, new_tokens: int, unpadded_token_positions: Any = None) -> Any:
         """Call the model with the right kwarg for its KV interface."""
         if self._kind == "llama":
-            return self._model(x, mask, kv_cache=kv, new_tokens=new_tokens)
-        return self._model(x, mask, past_key_values=kv)
+            return self._model(
+                x, mask, kv_cache=kv, new_tokens=new_tokens, unpadded_token_positions=unpadded_token_positions
+            )
+        return self._model(x, mask, past_key_values=kv, unpadded_token_positions=unpadded_token_positions)
+
+    def _unpadded_token_positions_decode(self, positions: np.ndarray) -> "ttml.autograd.Tensor":
+        """``[B, query_rows]`` RoPE positions: row ``b`` starts at ``positions[b]``."""
+        assert (
+            positions.max() < self._max_seq_len
+        ), f"RoPE position {positions.max()} >= max_seq_len {self._max_seq_len}"
+        ids = positions[:, None] + np.arange(self._decode_query_rows)[None, :]
+        ids[:, 1:] = np.minimum(ids[:, 1:], self._max_seq_len - 1)
+        return ttml.autograd.Tensor.from_numpy(
+            ids.astype(np.uint32), ttnn.Layout.ROW_MAJOR, ttnn.DataType.UINT32, self._batch_layout.mapper
+        )
 
     def _cache_position(self, kv: Any) -> int:
         """How many tokens the cache currently holds (per row)."""
@@ -225,7 +239,7 @@ class TTMLRolloutSampler(RolloutSampler):
         tokens ``[prefill_end, cur_pos]``) stays 1.
         """
         B = len(pad_positions)
-        padded_q = TILE_SIZE if self._kind == "llama" else 1
+        padded_q = self._decode_query_rows
 
         mask = np.zeros((B, 1, padded_q, cache_len), dtype=np.float32)
         # Row 0: allow positions [0, cur_pos] (causal cap by construction).
@@ -373,7 +387,7 @@ class TTMLRolloutSampler(RolloutSampler):
                     prompt_np[b, : len(seq)] = np.asarray(seq, dtype=np.uint32)
 
                 input_tensor = self._tokens_to_tensor(prompt_np, B)
-                # Llama's forward_kv slices the KV cache to the mask width and uses the composite SDPA, so it needs a mask.
+                # Llama's forward_kv slices the KV cache to the mask width, so it needs a mask.
                 # Qwen3's prefill uses the fused SDPA, which treats None as causal.
                 prefill_mask = build_causal_mask(prefill_width, device=True) if self._kind == "llama" else None
                 logits = self._forward(input_tensor, prefill_mask, kv, new_tokens=cache_advance)
@@ -426,7 +440,10 @@ class TTMLRolloutSampler(RolloutSampler):
                     else:
                         token_input = last_input
 
-                    logits = self._forward(token_input, decode_mask, kv, new_tokens=1)
+                    unpadded_token_positions = self._unpadded_token_positions_decode(pred_pos + 1 + i)
+                    logits = self._forward(
+                        token_input, decode_mask, kv, new_tokens=1, unpadded_token_positions=unpadded_token_positions
+                    )
 
                     step_seed = int(np.random.randint(low=1, high=int(1e7)))
                     sampled = ttml.ops.sample.sample_op(logits, temperature, step_seed, logits_mask, seed_axes)
@@ -452,7 +469,7 @@ class TTMLRolloutSampler(RolloutSampler):
                     # on the Qwen3 path.
                     if self._kind == "llama":
                         deallocate_tensors([token_input])
-                    deallocate_tensors([decode_mask, logits, sampled, nlog_2d])
+                    deallocate_tensors([decode_mask, unpadded_token_positions, logits, sampled, nlog_2d])
                     last_input = ttml.autograd.Tensor(last_token_col, False)
 
                     # Chunked async stop detection: every CHUNK steps, sync the

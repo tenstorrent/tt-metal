@@ -166,8 +166,6 @@ def _build_llama(tf_config: TransformerConfig, device_config: DeviceConfig, mode
         attention_dropout=tf_config.dropout_prob,
         mlp_dropout=tf_config.dropout_prob,
         runner_type=RunnerType.from_string(str(tf_config.runner_type)),
-        # The sampler's decode masks differ per row, which only the composite kernel accepts.
-        use_composite_sdpa=True,
     )
     if len(tokenizer) > llama_cfg.vocab_size:
         raise ValueError(f"the tokenizer has {len(tokenizer)} tokens but the checkpoint embeds {llama_cfg.vocab_size}")
