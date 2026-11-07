@@ -164,6 +164,8 @@ def test_moe_weights_cold_warm_cache(mesh_device, device_params, gate_mode):
         n_expert_groups=DeepSeekV3Config.NUM_EXPERT_GROUPS,
         n_limited_groups=DeepSeekV3Config.NUM_LIMITED_GROUPS,
         route_scale=DeepSeekV3Config.ROUTE_SCALE,
+        dispatch_fwd_vc_pages=64,
+        combine_fwd_vc_pages=64,
     )
     output1_tt, _ = moe_from_weights(create_input(), return_intermediates=False)
     output1 = to_torch_tp(output1_tt)
@@ -231,6 +233,8 @@ def test_moe_weights_cold_warm_cache(mesh_device, device_params, gate_mode):
         n_expert_groups=DeepSeekV3Config.NUM_EXPERT_GROUPS,
         n_limited_groups=DeepSeekV3Config.NUM_LIMITED_GROUPS,
         route_scale=DeepSeekV3Config.ROUTE_SCALE,
+        dispatch_fwd_vc_pages=64,
+        combine_fwd_vc_pages=64,
     )
     profiler.end("cold_load")
     output2_tt, _ = moe_cold(create_input(), return_intermediates=False)
@@ -271,6 +275,8 @@ def test_moe_weights_cold_warm_cache(mesh_device, device_params, gate_mode):
         n_expert_groups=DeepSeekV3Config.NUM_EXPERT_GROUPS,
         n_limited_groups=DeepSeekV3Config.NUM_LIMITED_GROUPS,
         route_scale=DeepSeekV3Config.ROUTE_SCALE,
+        dispatch_fwd_vc_pages=64,
+        combine_fwd_vc_pages=64,
     )
     profiler.end("warm_load")
     output3_tt, _ = moe_warm(create_input(), return_intermediates=False)
