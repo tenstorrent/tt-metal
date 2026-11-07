@@ -168,9 +168,7 @@ inline void thread_sync_init() {
         g_kernel_barrier[i].generation = 0;
     }
     // Hardware faults a post to an uninitialized semaphore, so these must be set before any barrier
-    // runs. ttsim does not model these registers and aborts on the write, so compute
-    // sync_threads(), sync_dm_compute_threads(), and ClusterSemaphore are unsupported there.
-#if !defined(TT_METAL_TTSIM)
+    // runs.
     tensix_global_sem_init(COMPUTE_BARRIER_ARRIVED_SEM_IDX, 0);
     tensix_global_sem_init(COMPUTE_BARRIER_GENERATION_SEM_IDX, 0);
     tensix_global_sem_init(DM_COMPUTE_BARRIER_ARRIVED_SEM_IDX, 0);
@@ -180,7 +178,6 @@ inline void thread_sync_init() {
     for (uint32_t i = 0; i < TENSIX_GLOBAL_SEM_USER_COUNT; i++) {
         tensix_global_sem_init(i, 0 /*value*/);
     }
-#endif
 #endif
 }
 #endif  // !COMPILE_FOR_TRISC
