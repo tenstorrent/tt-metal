@@ -260,6 +260,7 @@ tt::tt_metal::ProgramDescriptor GroupedMatmulW2DeviceOperation::create_descripto
         const CoreCoord start = noc(lane_start);
         const CoreCoord end = noc(lane_end);
         std::vector<uint32_t> lane_coords;
+        lane_coords.reserve(2 * map.lane_cores);
         for (uint32_t index = 0; index < map.lane_cores; ++index) {
             const CoreCoord core = noc(map.lane_core(lane, index));
             lane_coords.push_back(core.x);
@@ -268,6 +269,7 @@ tt::tt_metal::ProgramDescriptor GroupedMatmulW2DeviceOperation::create_descripto
         const CoreCoord sender_noc = noc(sender);
 
         std::vector<CoreCoord> input_cores;
+        input_cores.reserve(map.lane_cores + 1);
         for (uint32_t index = 0; index < map.lane_cores; ++index) {
             input_cores.push_back(map.lane_core(lane, index));
         }

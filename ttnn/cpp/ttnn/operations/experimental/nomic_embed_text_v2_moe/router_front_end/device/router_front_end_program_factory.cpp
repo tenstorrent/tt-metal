@@ -93,6 +93,7 @@ std::vector<CoreBlocks> assign_blocks(const Tensor& input, uint32_t num_blocks, 
         uint32_t column = shard_spec->grid.ranges().front().start_coord.x;
         for (uint32_t first = 0; first < num_blocks; first += shard_blocks, ++column) {
             std::vector<CoreCoord> cores;
+            cores.reserve(grid.y);
             for (uint32_t y = 0; y < grid.y; ++y) {
                 cores.emplace_back(column, y);
             }
@@ -125,6 +126,7 @@ tt::tt_metal::ProgramDescriptor RouterFrontEndDeviceOperation::create_descriptor
     const std::vector<CoreBlocks> assignment =
         assign_blocks(tensor_args.input, layout.num_blocks, device->compute_with_storage_grid_size());
     std::vector<CoreRange> core_ranges;
+    core_ranges.reserve(assignment.size());
     for (const CoreBlocks& item : assignment) {
         core_ranges.emplace_back(item.core);
     }
