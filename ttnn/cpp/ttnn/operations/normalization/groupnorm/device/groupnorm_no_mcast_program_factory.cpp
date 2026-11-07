@@ -1539,7 +1539,7 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
                 CoreCoord mcast_first_end = device->worker_core_from_logical_core(mcast_group_first.back());
 
                 if (reader_noc == NOC::NOC_1) {
-                    std::swap(mcast_start, mcast_end);
+                    std::swap(mcast_first_start, mcast_first_end);
                 }
                 mcast_sender_args.push_back(mcast_first_start.x);
                 mcast_sender_args.push_back(mcast_first_start.y);
@@ -1552,7 +1552,7 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
                 CoreCoord mcast_last_end = device->worker_core_from_logical_core(mcast_group_last.back());
 
                 if (reader_noc == NOC::NOC_1) {
-                    std::swap(mcast_start, mcast_end);
+                    std::swap(mcast_last_start, mcast_last_end);
                 }
                 mcast_sender_args.push_back(mcast_last_start.x);
                 mcast_sender_args.push_back(mcast_last_start.y);
