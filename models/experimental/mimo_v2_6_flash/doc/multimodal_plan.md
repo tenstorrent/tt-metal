@@ -193,7 +193,8 @@ At 2 fps a request's ViT takes ~0.5 s and its prefill ~3.9 s (c=1, 26K tokens); 
 
 At temperature 0 with thinking on, MiMo's reasoning on VGI-Bench's long videos often never answers: on a question it
 cannot settle (the smoke questions are false-premise ones, "This does not happen in the video" is right) it re-checks
-the same scenes until the token limit. That is greedy decoding, not TT's numerics. One row engine on bhg2, smoke docs
+the same scenes until the token limit. That comes with greedy decoding; nothing points at TT's numerics (no GPU
+provider decodes greedily with thinking on, so there is no greedy GPU run to compare with). One row engine on bhg2, smoke docs
 0-4 (128-147K tokens) and the 7 other public questions on the same 7 videos, max_tokens 16384 (2026-11-07):
 
 | Decoding / input | No answer by 16384 tokens |
