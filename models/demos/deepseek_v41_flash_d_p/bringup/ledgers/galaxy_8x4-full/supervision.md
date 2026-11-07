@@ -1660,3 +1660,4 @@ https://claude.ai/artifact/V6jTfy2imD5wQz6UQXPPbR.
 - 2026-11-07 19:28 FULL GATES P.37-P.43: all PASS (err_final_hidden 0.1313, top-5 1.0, acks_early 0, contract_checks_failed 0); results commits ea1b2e676fe..a19b96d338c pushed. full_pending now empty.
 - 2026-11-07 20:56 OWNER: push to dnijemcevic/model_bringup authorized ('by all means'); fast-forward f123afcc5a1..HEAD; both branches at the same commit. README points at model_bringup.
 - 2026-11-07 21:23 OWNER: MoE-main routed weights (80 files, 305.8 GB) added to the weight-cache filter and pushed to the /data master in 973 s; master = local = 200 files, 611.5 GB.
+- 2026-11-07 21:26 OWNER: released P.35 (NORM_IN_MHC) and P.36 (FFN_FEED; retargeted to MOE_BLOCK_SRC=main), both on P.43's gate; opportunities.md regenerated from results/P.43_profile.json (old list: /scratch/dnijemcevic/rebase/opportunities_20261028.md). Run --until P.36.
