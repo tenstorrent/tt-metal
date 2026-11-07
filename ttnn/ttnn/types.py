@@ -29,7 +29,7 @@ mxint4 = DataType.MXINT4
 mxint2 = DataType.MXINT2
 MX_DTYPES = (mxfp8_e4m3, mxfp8_e5m2, mxfp6_e2m3, mxfp6_e3m2, mxfp4, mxint8, mxint4, mxint2)
 
-# GGUF (llama.cpp) quantized weights, TILE layout [K, N], made with ttnn.from_gguf.
+# GGUF quantized weights, TILE layout [K, N], made with ttnn.from_gguf.
 gguf_q8_0 = DataType.GGUF_Q8_0
 gguf_q4_0 = DataType.GGUF_Q4_0
 gguf_iq4_nl = DataType.GGUF_IQ4_NL
