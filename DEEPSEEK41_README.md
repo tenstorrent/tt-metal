@@ -107,8 +107,20 @@ Run-to-run noise is about ±1 ms device and ±3 ms wall.
 | P.43 | skip-mode tail start, contract check | ~0 | ~0 | noise |
 | **Now** | | **189.0** | **204.4** | **+11.7 ms (+6.6%) device, +10.4 ms (+5.4%) wall** |
 
-By section, P.37 → now: attention 44.1 → 48.2 (+4.1), ffn_residual 5.1 → 11.7 (+6.6), experts 106.8 → 107.7 (noise),
-compressor 1.8 → 2.0, indexer 7.0 → 6.9.
+By section (device ms), P.37 baseline → now (P.43):
+
+| Section | P.37 | Now | Change |
+|---|---|---|---|
+| attention | 44.12 | 48.17 | +4.05 (bf16 KV, P.38) |
+| ffn_residual (now includes the snapshot write) | 5.06 | 11.69 | +6.63 (snapshot rewrite, P.42) |
+| experts (MoE) | 106.80 | 107.72 | +0.92 (noise) |
+| compressor | 1.77 | 2.01 | +0.24 |
+| indexer | 6.97 | 6.88 | -0.09 |
+| attn_residual | 5.30 | 5.31 | +0.01 |
+| kv | 0.72 | 0.73 | +0.01 |
+| **device_ms_total** | **177.27** | **189.02** | **+11.75** |
+| chunk_wall_ms | 194.0 | 204.4 | +10.4 |
+| host overhead | 16.7 | 15.4 | -1.3 (noise) |
 
 Both costs are recoverable:
 - **bf16 KV (~4 ms)** is the temporary format for the first e2e run. Back to 4-bit (`CKV_FORMAT=bfp4_rows`) once
