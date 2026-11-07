@@ -104,17 +104,18 @@ ttnn::device_operation::ProgramArtifacts PadRmShardedWidthOnlyProgramFactory::cr
     uint32_t W_padding_front_bytes = input_tensor_start[3] * input_tensor.element_size();
 
     uint32_t padding_value_as_u32;
+    const float pad_value_float = detail::pad_value_as_float(pad_value);
     if (input_tensor.dtype() == tt::tt_metal::DataType::BFLOAT16) {
-        uint16_t bfloat_pad_value_bits = std::bit_cast<uint16_t>(bfloat16(pad_value));
+        uint16_t bfloat_pad_value_bits = std::bit_cast<uint16_t>(bfloat16(pad_value_float));
         padding_value_as_u32 = *reinterpret_cast<uint32_t*>(&bfloat_pad_value_bits);
     } else if (input_tensor.dtype() == tt::tt_metal::DataType::FLOAT32) {
-        padding_value_as_u32 = *reinterpret_cast<const uint32_t*>(&pad_value);
+        padding_value_as_u32 = *reinterpret_cast<const uint32_t*>(&pad_value_float);
     } else if (input_tensor.dtype() == tt::tt_metal::DataType::UINT16) {
-        padding_value_as_u32 = pack_two_uint16_into_uint32({0, float_to_uint16(pad_value)});
+        padding_value_as_u32 = pack_two_uint16_into_uint32({0, float_to_uint16(pad_value_float)});
     } else if (
         input_tensor.dtype() == tt::tt_metal::DataType::INT32 ||
         input_tensor.dtype() == tt::tt_metal::DataType::UINT32) {
-        padding_value_as_u32 = static_cast<uint32_t>(pad_value);  // for INT32 and UINT32
+        padding_value_as_u32 = detail::pad_value_as_u32(pad_value);  // for INT32 and UINT32
     } else {
         TT_THROW("ttnn.pad: unsupported data type for pad_rm_sharded_stickwise");
     }

@@ -874,6 +874,54 @@ def test_pad_tile(shape, padding, dtype, device):
     assert torch.equal(out_tt, torch_output)
 
 
+@pytest.mark.parametrize("value", [7, 16777217, 2147483000, -2147483000])
+@pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
+def test_pad_int32_exact_value(device, value, layout):
+    torch.manual_seed(0)
+    input_shape = (1, 1, 30, 40)
+    padded_shape = (1, 1, 32, 64)
+
+    torch_input = torch.randint(-(2**31), 2**31, input_shape, dtype=torch.int32)
+    ttnn_input = ttnn.from_torch(torch_input, dtype=ttnn.int32, layout=layout, device=device)
+    output = ttnn.to_torch(ttnn.pad(ttnn_input, list(padded_shape), [0, 0, 0, 0], value=value))
+
+    expected = torch.full(padded_shape, value, dtype=torch.int32)
+    expected[:, :, : input_shape[2], : input_shape[3]] = torch_input
+    assert output.shape == torch.Size(padded_shape)
+    assert torch.equal(output, expected)
+
+
+@pytest.mark.parametrize("value", [16777217, 2147483000, -2147483000])
+def test_pad_int32_exact_value_tile_growth(device, value):
+    torch.manual_seed(0)
+    input_shape = (1, 1, 32, 32)
+    padded_shape = (1, 1, 64, 64)
+
+    torch_input = torch.randint(-(2**31), 2**31, input_shape, dtype=torch.int32)
+    ttnn_input = ttnn.from_torch(torch_input, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
+    output = ttnn.to_torch(ttnn.pad(ttnn_input, list(padded_shape), [0, 0, 0, 0], value=value))
+
+    expected = torch.full(padded_shape, value, dtype=torch.int32)
+    expected[:, :, : input_shape[2], : input_shape[3]] = torch_input
+    assert torch.equal(output, expected)
+
+
+@pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
+def test_pad_bf16_float_value(device, layout):
+    torch.manual_seed(0)
+    input_shape = (1, 1, 30, 40)
+    padded_shape = (1, 1, 32, 64)
+
+    torch_input = torch.rand(input_shape).bfloat16().float()
+    ttnn_input = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, layout=layout, device=device)
+    output = ttnn.to_torch(ttnn.pad(ttnn_input, list(padded_shape), [0, 0, 0, 0], value=1.5))
+
+    expected = torch.full(padded_shape, 1.5, dtype=torch.float32)
+    expected[:, :, : input_shape[2], : input_shape[3]] = torch_input
+    assert output.shape == torch.Size(padded_shape)
+    assert torch.equal(output, expected)
+
+
 def pad_reference(input_torch, padded_shape, input_tensor_start, pad_value):
     """PyTorch reference for ttnn.pad using shape-based API."""
     rank = len(padded_shape)

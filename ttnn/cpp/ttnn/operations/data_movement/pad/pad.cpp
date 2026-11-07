@@ -29,7 +29,7 @@ enum class PadRoute { Auto, Native, Codegen };
 ttnn::Tensor pad_with_route(
     const ttnn::Tensor& input_tensor,
     const ttsl::SmallVector<PadSpecDim>& padding,
-    float value,
+    ttnn::PadValue value,
     bool use_multicore,
     const std::optional<MemoryConfig>& memory_config_arg,
     const std::optional<CoreRangeSet>& sub_core_grids,
@@ -65,7 +65,7 @@ ttnn::Tensor pad_via_interleaved_composite(
     const ttnn::Tensor& input_tensor,
     std::span<const uint32_t> output_padded_shape,
     std::span<const uint32_t> input_tensor_start,
-    const float value,
+    const ttnn::PadValue value,
     const bool use_multicore,
     const MemoryConfig& output_memory_config,
     const std::optional<CoreRangeSet>& sub_core_grids) {
@@ -116,7 +116,7 @@ ttnn::Tensor pad_leading_dimension_via_reshape(
     const ttnn::Tensor& input_tensor,
     int dim,
     const PadSpecDim& pad_spec,
-    const float value,
+    const ttnn::PadValue value,
     const bool use_multicore,
     const std::optional<CoreRangeSet>& sub_core_grids,
     const PadRoute route) {
@@ -152,7 +152,7 @@ ttnn::Tensor pad_leading_dimension_via_reshape(
 ttnn::Tensor pad_leading_dimensions(
     const ttnn::Tensor& input_tensor,
     ttsl::SmallVector<PadSpecDim>& padding,
-    const float value,
+    const ttnn::PadValue value,
     const bool use_multicore,
     const std::optional<CoreRangeSet>& sub_core_grids,
     const PadRoute route) {
@@ -184,7 +184,7 @@ ttnn::Tensor pad_leading_dimensions(
 ttnn::Tensor apply_leading_dimension_padding(
     const ttnn::Tensor& input_tensor,
     ttsl::SmallVector<PadSpecDim>& padding,
-    const float value,
+    const ttnn::PadValue value,
     const bool use_multicore,
     const std::optional<CoreRangeSet>& sub_core_grids,
     const PadRoute route) {
@@ -195,7 +195,7 @@ ttnn::Tensor pad_impl(
     const ttnn::Tensor& input_tensor,
     std::span<const uint32_t> output_padded_shape,
     std::span<const uint32_t> input_tensor_start,
-    const float value,
+    const ttnn::PadValue value,
     const bool use_multicore,
     const std::optional<MemoryConfig>& memory_config_arg,
     const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt) {
@@ -205,7 +205,10 @@ ttnn::Tensor pad_impl(
         if (eq_spans(input_logical_shape, output_padded_shape)) {
             return input_tensor;
         }
-        return input_tensor.pad(ttnn::Shape(output_padded_shape), ttnn::Shape{input_tensor_start}, value);
+        return input_tensor.pad(
+            ttnn::Shape(output_padded_shape),
+            ttnn::Shape{input_tensor_start},
+            ttnn::prim::detail::pad_value_as_float(value));
     }
 
     // on device
@@ -358,7 +361,7 @@ std::array<uint32_t, 4> trailing_4d_after_padding(const ttsl::SmallVector<PadSpe
 ttnn::Tensor pad_impl(
     const ttnn::Tensor& input_tensor,
     ttsl::SmallVector<PadSpecDim> padding,
-    const float value,
+    const ttnn::PadValue value,
     const bool use_multicore,
     const std::optional<MemoryConfig>& memory_config_arg,
     const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt) {
@@ -443,7 +446,7 @@ std::tuple<ttnn::Shape, ttnn::Shape> compute_requested_shape(
 ttnn::Tensor invoke_rm(
     const ttnn::Tensor& input_tensor,
     const ttsl::SmallVector<PadSpecDim>& padding_vec,
-    const float value,
+    const ttnn::PadValue value,
     const bool use_multicore,
     const std::optional<MemoryConfig>& memory_config_arg,
     const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt) {
@@ -487,7 +490,7 @@ std::optional<ttnn::Tensor> pad_tile_codegen(
     const ttsl::SmallVector<PadSpecDim>& padding_vec,
     const ttnn::Shape& requested_logical_shape,
     const ttnn::Shape& requested_padded_shape,
-    const float value,
+    const ttnn::PadValue value,
     const bool use_multicore,
     const std::optional<MemoryConfig>& memory_config_arg,
     const std::optional<CoreRangeSet>& sub_core_grids,
@@ -533,7 +536,7 @@ std::optional<ttnn::Tensor> pad_tile_codegen(
         // fill_pad casts a float straight to a 32-bit integer, which is undefined out of range; the packed word is
         // the clamped value the pad kernel writes, so border lanes and padding hold the same bits.
         const bool int32_input = input_4d.dtype() == DataType::INT32 || input_4d.dtype() == DataType::UINT32;
-        const ttnn::PadValue fill_value = int32_input ? ttnn::PadValue{params.packed_pad_value} : ttnn::PadValue{value};
+        const ttnn::PadValue fill_value = int32_input ? ttnn::PadValue{params.packed_pad_value} : value;
         source = ttnn::prim::fill_pad(input_4d, fill_value, output_mem_config);
     }
     auto output = ttnn::prim::pad_codegen(source, params);
@@ -543,7 +546,7 @@ std::optional<ttnn::Tensor> pad_tile_codegen(
 ttnn::Tensor invoke_tile(
     const ttnn::Tensor& input_tensor,
     const ttsl::SmallVector<PadSpecDim>& padding_vec,
-    const float value,
+    const ttnn::PadValue value,
     const bool use_multicore,
     const std::optional<MemoryConfig>& memory_config_arg,
     const std::optional<CoreRangeSet>& sub_core_grids,
@@ -561,7 +564,7 @@ ttnn::Tensor invoke_tile(
     // Consistent with behavior expected by callers
     if (input_tensor.storage_type() != StorageType::DEVICE) {
         ttnn::Shape zeros(ttsl::SmallVector<uint32_t>(input_logical_shape.rank(), 0));
-        return input_tensor.pad(requested_padded_shape, zeros, value);
+        return input_tensor.pad(requested_padded_shape, zeros, ttnn::prim::detail::pad_value_as_float(value));
     }
 
     if (route != PadRoute::Native) {
@@ -637,7 +640,7 @@ ttnn::Tensor invoke_tile(
 ttnn::Tensor pad_with_route(
     const ttnn::Tensor& input_tensor,
     const ttsl::SmallVector<PadSpecDim>& padding,
-    const float value,
+    const ttnn::PadValue value,
     const bool use_multicore,
     const std::optional<MemoryConfig>& memory_config_arg,
     const std::optional<CoreRangeSet>& sub_core_grids,
@@ -725,7 +728,7 @@ void require_codegen_supported(
 ttnn::Tensor pad_force_native(
     const ttnn::Tensor& input_tensor,
     const ttsl::SmallVector<std::array<uint32_t, 2>>& padding,
-    const float value,
+    const ttnn::PadValue value,
     const bool use_multicore,
     const std::optional<MemoryConfig>& memory_config_arg,
     const std::optional<CoreRangeSet>& sub_core_grids) {
@@ -736,7 +739,7 @@ ttnn::Tensor pad_force_native(
 ttnn::Tensor pad_force_codegen(
     const ttnn::Tensor& input_tensor,
     const ttsl::SmallVector<std::array<uint32_t, 2>>& padding,
-    const float value,
+    const ttnn::PadValue value,
     const bool use_multicore,
     const std::optional<MemoryConfig>& memory_config_arg,
     const std::optional<CoreRangeSet>& sub_core_grids) {
@@ -762,7 +765,24 @@ ttnn::Tensor pad(
     return operations::data_movement::detail::pad_with_route(
         input_tensor,
         padding,
-        value,
+        ttnn::PadValue{value},
+        use_multicore,
+        memory_config_arg,
+        sub_core_grids,
+        operations::data_movement::detail::PadRoute::Auto);
+}
+
+ttnn::Tensor pad(
+    const ttnn::Tensor& input_tensor,
+    const ttsl::SmallVector<operations::data_movement::PadSpecDim>& padding,
+    const int value,
+    const bool use_multicore,
+    const std::optional<MemoryConfig>& memory_config_arg,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
+    return operations::data_movement::detail::pad_with_route(
+        input_tensor,
+        padding,
+        ttnn::PadValue{static_cast<uint32_t>(value)},
         use_multicore,
         memory_config_arg,
         sub_core_grids,
@@ -787,9 +807,46 @@ ttnn::Tensor pad(
 
 ttnn::Tensor pad(
     const ttnn::Tensor& input_tensor,
+    const ttsl::SmallVector<std::array<uint32_t, 2>>& padding,
+    const int value,
+    const bool use_multicore,
+    const std::optional<MemoryConfig>& memory_config_arg,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
+    using PadSpecDim = operations::data_movement::PadSpecDim;
+    ttsl::SmallVector<PadSpecDim> padding_impl;
+    std::transform(padding.begin(), padding.end(), std::back_inserter(padding_impl), [](auto& p) {
+        return PadSpecDim(p[0], p[1]);
+    });
+
+    return ttnn::pad(input_tensor, padding_impl, value, use_multicore, memory_config_arg, sub_core_grids);
+}
+
+// legacy API
+ttnn::Tensor pad(
+    const ttnn::Tensor& input_tensor,
     const ttnn::Array4D& output_padded_shape,
     const ttnn::Array4D& input_tensor_start,
     const float value,
+    const bool use_multicore,
+    const std::optional<MemoryConfig>& memory_config_arg,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
+    using PadSpecDim = operations::data_movement::PadSpecDim;
+    ttsl::SmallVector<PadSpecDim> padding_impl;
+    const auto& log_shape = input_tensor.logical_shape();
+    for (uint32_t i = 0; i < output_padded_shape.size(); ++i) {
+        padding_impl.emplace_back(
+            input_tensor_start.at(i), output_padded_shape.at(i) - log_shape[i] - input_tensor_start.at(i));
+    }
+
+    return ttnn::pad(input_tensor, padding_impl, value, use_multicore, memory_config_arg, sub_core_grids);
+}
+
+// legacy API
+ttnn::Tensor pad(
+    const ttnn::Tensor& input_tensor,
+    const ttnn::Array4D& output_padded_shape,
+    const ttnn::Array4D& input_tensor_start,
+    const int value,
     const bool use_multicore,
     const std::optional<MemoryConfig>& memory_config_arg,
     const std::optional<CoreRangeSet>& sub_core_grids) {

@@ -35,8 +35,24 @@ ttnn::Tensor pad(
 
 ttnn::Tensor pad(
     const ttnn::Tensor& input_tensor,
+    const ttsl::SmallVector<operations::data_movement::PadSpecDim>& padding,
+    int value,
+    bool use_multicore = true,
+    const std::optional<MemoryConfig>& memory_config_arg = std::nullopt,
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
+
+ttnn::Tensor pad(
+    const ttnn::Tensor& input_tensor,
     const ttsl::SmallVector<std::array<uint32_t, 2>>& padding,
     float value,
+    bool use_multicore = true,
+    const std::optional<MemoryConfig>& memory_config_arg = std::nullopt,
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
+
+ttnn::Tensor pad(
+    const ttnn::Tensor& input_tensor,
+    const ttsl::SmallVector<std::array<uint32_t, 2>>& padding,
+    int value,
     bool use_multicore = true,
     const std::optional<MemoryConfig>& memory_config_arg = std::nullopt,
     const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
@@ -47,6 +63,16 @@ ttnn::Tensor pad(
     const ttnn::Array4D& output_padded_shape,
     const ttnn::Array4D& input_tensor_start,
     float value,
+    bool use_multicore = true,
+    const std::optional<MemoryConfig>& memory_config_arg = std::nullopt,
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
+
+// legacy API
+ttnn::Tensor pad(
+    const ttnn::Tensor& input_tensor,
+    const ttnn::Array4D& output_padded_shape,
+    const ttnn::Array4D& input_tensor_start,
+    int value,
     bool use_multicore = true,
     const std::optional<MemoryConfig>& memory_config_arg = std::nullopt,
     const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);

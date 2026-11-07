@@ -27,7 +27,7 @@ namespace ttnn::operations::data_movement::detail {
 ttnn::Tensor pad_force_native(
     const ttnn::Tensor& input_tensor,
     const ttsl::SmallVector<std::array<uint32_t, 2>>& padding,
-    float value,
+    ttnn::PadValue value,
     bool use_multicore,
     const std::optional<MemoryConfig>& memory_config_arg,
     const std::optional<CoreRangeSet>& sub_core_grids);
@@ -38,7 +38,7 @@ ttnn::Tensor pad_force_native(
 ttnn::Tensor pad_force_codegen(
     const ttnn::Tensor& input_tensor,
     const ttsl::SmallVector<std::array<uint32_t, 2>>& padding,
-    float value,
+    ttnn::PadValue value,
     bool use_multicore,
     const std::optional<MemoryConfig>& memory_config_arg,
     const std::optional<CoreRangeSet>& sub_core_grids);

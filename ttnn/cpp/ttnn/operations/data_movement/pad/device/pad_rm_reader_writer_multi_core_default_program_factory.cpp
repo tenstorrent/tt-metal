@@ -100,17 +100,20 @@ ttnn::device_operation::ProgramArtifacts PadRmReaderWriterMultiCoreDefaultProgra
     auto cores_in_order = corerange_to_cores(all_cores, num_cores, true);
 
     // construct const buffer with the pad_value
-    bool not_pad_by_zero = pad_value != 0;
+    bool not_pad_by_zero = detail::pad_value_as_float(pad_value) != 0;
 
     TT_ASSERT(output.is_allocated(), "Output buffer should be allocated on device!");
 
     uint32_t packed_pad_value;
     if (a.dtype() == DataType::INT32 || a.dtype() == DataType::UINT32) {
-        packed_pad_value = pad_value;
+        packed_pad_value = detail::pad_value_as_u32(pad_value);
     } else if (a.dtype() == DataType::UINT16) {
-        packed_pad_value = pack_two_uint16_into_uint32({float_to_uint16(pad_value), float_to_uint16(pad_value)});
+        packed_pad_value = pack_two_uint16_into_uint32(
+            {float_to_uint16(detail::pad_value_as_float(pad_value)),
+             float_to_uint16(detail::pad_value_as_float(pad_value))});
     } else {
-        packed_pad_value = pack_two_bfloat16_into_uint32({bfloat16(pad_value), bfloat16(pad_value)});
+        packed_pad_value = pack_two_bfloat16_into_uint32(
+            {bfloat16(detail::pad_value_as_float(pad_value)), bfloat16(detail::pad_value_as_float(pad_value))});
     }
 
     Group<DataflowBufferSpec> dataflow_buffers;
