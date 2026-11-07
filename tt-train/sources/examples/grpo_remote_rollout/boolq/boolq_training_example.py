@@ -27,7 +27,7 @@ import ttnn
 from datasets import load_dataset
 from loguru import logger
 from transformers import AutoTokenizer
-from ttml.common.config import DeviceConfig, get_model_config, load_config
+from ttml.common.config import DeviceConfig, TrainingConfig, get_model_config, load_config
 from ttml.trainers import GRPOTrainer, get_grpo_config
 from grpo_remote_rollout.utils.llama_grpo_completer import LlamaCompleterRemoteRollout, LlamaCompletionCtx
 from grpo_remote_rollout.utils.llama_ttt_presets import bf16_attn_bfp8_mlp_optimizations, llama_stop_and_pad
@@ -113,6 +113,8 @@ def _ttml_main() -> None:
     autograd_ctx.initialize_distributed_context(*sys.argv)
 
     device_config, raw = _load_device_config()
+    # TrainingConfig checks the precision block, so a typo stops the run before anything is built.
+    precision = TrainingConfig(raw).precision
     mesh_device = _open_ttml_device(device_config)
 
     model_id = raw["training_config"]["model_id"]
@@ -153,6 +155,7 @@ def _ttml_main() -> None:
             mesh_device=mesh_device,
             model_source=model_id,
             enable_ddp=device_config.enable_ddp,
+            precision=precision,
         )
 
         client = MPIRolloutClient(peer_rank=TTT_RANK, bridge=bridge)
@@ -172,6 +175,7 @@ def _ttml_main() -> None:
                 WeightSyncCallback(completer, every=weight_sync_every),
             ],
             model_source=model_id,
+            precision=precision,
         )
         trainer.train()
     finally:

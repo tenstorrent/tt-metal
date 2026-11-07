@@ -81,6 +81,9 @@ class MuonWithAdamW(ttml.optimizers.OptimizerBase):
                 muon_params[name] = tensor
             else:
                 adamw_params[name] = tensor
+        # Muon updates bf16 parameters only (fp32 master weights don't work with it); checked before either inner
+        # optimizer is built, with this optimizer's name in the message.
+        ttml.optimizers.require_bf16_parameters(muon_params, "MuonWithAdamW")
 
         # TODO: add FSDP-aware Muon.
         muon_dict = {"type": "MuonComposite", "lr": 0.02, "momentum": 0.95, "ns_steps": 5, **muon_cfg}

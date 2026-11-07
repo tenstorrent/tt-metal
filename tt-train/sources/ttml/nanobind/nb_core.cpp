@@ -147,8 +147,20 @@ void py_module(nb::module_& m) {
         nb::arg("training_config"),
         nb::arg("parameters"),
         "Apply training_config.precision before creating the optimizer: precision.master_dtype to the parameters, "
-        "and precision.reduce_dtype (None when unset) as the dtype the gradient syncs sum in by default. Returns the "
-        "master dtype applied, or None.");
+        "and precision.reduce_dtype (None when unset) as the dtype the gradient syncs sum in by default. With "
+        "reduce_dtype float32, the trainable parameters' gradients also accumulate in fp32 "
+        "(Tensor.accumulates_grad_in_fp32); otherwise that is cleared on them. Returns the master dtype applied, or "
+        "None.");
+
+    m.def(
+        "validate_precision_config",
+        [](nb::dict training_config) {
+            ttml::core::validate_precision_config(ttml::nanobind::util::obj_to_yaml(training_config));
+        },
+        nb::arg("training_config"),
+        "Check training_config.precision without applying it: a map of known keys (master_dtype, reduce_dtype), each "
+        "\"bfloat16\" or \"float32\". Raises the error apply_precision_config would, so a script that calls it right "
+        "after loading its config stops on a typo before building the model.");
 
     {
         auto py_distributed = static_cast<nb::module_>(m.attr("distributed"));

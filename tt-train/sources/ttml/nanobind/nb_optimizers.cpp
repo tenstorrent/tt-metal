@@ -200,6 +200,16 @@ void py_module(nb::module_& m) {
     m.attr("_py_optimizer_registry") = py_registry;
 
     m.def(
+        "require_bf16_parameters",
+        [](const serialization::NamedParameters& parameters, const std::string& optimizer_name) {
+            require_bf16_parameters(parameters, optimizer_name);
+        },
+        nb::arg("parameters"),
+        nb::arg("optimizer_name"),
+        "Raise unless every trainable parameter is stored in bf16, for an optimizer whose update exists only for bf16 "
+        "parameters; the message names optimizer_name and the first parameter that isn't.");
+
+    m.def(
         "create_optimizer",
         [py_registry](nb::dict config, serialization::NamedParameters params) -> nb::object {
             auto type = nb::cast<std::string>(config.attr("get")("type", "AdamW"));

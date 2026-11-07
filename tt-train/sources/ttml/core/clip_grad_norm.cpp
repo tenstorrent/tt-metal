@@ -5,6 +5,7 @@
 #include "core/clip_grad_norm.hpp"
 
 #include "core/compute_kernel_config.hpp"
+#include "core/parameter_dtype.hpp"
 #include "serialization/serializable.hpp"
 #include "ttnn/operations/moreh/moreh_clip_grad_norm/moreh_clip_grad_norm.hpp"
 #include "ttnn/tensor/tensor.hpp"
@@ -13,6 +14,8 @@ namespace ttml::core {
 
 autograd::TensorPtr clip_grad_norm(
     const serialization::NamedParameters& parameters, float max_norm, float p_norm_type, bool error_if_nonfinite) {
+    // moreh_clip_grad_norm takes bf16 gradients; the optimizer step that follows reads the clipped bf16 ones.
+    cast_fp32_gradients_to_bf16(parameters);
     std::vector<ttnn::Tensor> grads;
     grads.reserve(parameters.size());
     for (const auto& [_, tensor] : parameters) {

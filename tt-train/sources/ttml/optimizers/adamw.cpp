@@ -6,6 +6,8 @@
 
 #include <fmt/format.h>
 
+#include <tt-logger/tt-logger.hpp>
+
 #include "autograd/auto_context.hpp"
 #include "autograd/autocast_tensor.hpp"
 #include "core/debug.hpp"
@@ -20,6 +22,22 @@ namespace {
 autograd::TensorPtr zeros_state_like(const autograd::TensorPtr& parameter) {
     return autograd::create_tensor(
         core::zeros_like(parameter->get_value(autograd::PreferredPrecision::NATIVE)), /* requires_grad */ false);
+}
+// Stochastic rounding applies to bf16 parameters only; an fp32 parameter keeps the low bits it would recover. One
+// warning when it is on and some trainable parameter is fp32 (precision.master_dtype: float32), so a config asking for
+// both learns that the flag does nothing there.
+void warn_if_stochastic_rounding_does_nothing(const serialization::NamedParameters& parameters) {
+    for (const auto& [name, tensor_ptr] : parameters) {
+        if (tensor_ptr->get_requires_grad() &&
+            tensor_ptr->get_value(autograd::PreferredPrecision::NATIVE).dtype() == ttnn::DataType::FLOAT32) {
+            log_warning(
+                tt::LogAlways,
+                "AdamW: stochastic_rounding has no effect on fp32 parameters such as '{}' (precision.master_dtype: "
+                "float32 keeps the bits it would recover); it applies to bf16 parameters only",
+                name);
+            return;
+        }
+    }
 }
 }  // namespace
 
@@ -38,6 +56,9 @@ AdamW::AdamW(
     }
     if (m_amsgrad) {
         init_max_exp_avg_sq();
+    }
+    if (m_stochastic_rounding) {
+        warn_if_stochastic_rounding_does_nothing(m_parameters);
     }
 
     init_param_groups(param_group_defaults(config), std::move(param_groups));

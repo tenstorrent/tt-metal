@@ -176,6 +176,8 @@ struct TrainingConfig {
 TrainingConfig parse_config(const YAML::Node &yaml_config) {
     TrainingConfig config;
     auto training_config = yaml_config["training_config"];
+    // Checked before anything is built, so a typo under precision stops the run early.
+    ttml::core::validate_precision_config(training_config);
     config.project_name = training_config["project_name"].as<std::string>("tt_train_nano_gpt");
     config.seed = training_config["seed"].as<uint32_t>();
     config.model_save_interval = training_config["model_save_interval"].as<uint32_t>(config.model_save_interval);
@@ -377,7 +379,6 @@ int main(int argc, char **argv) {
     CLI11_PARSE(app, argc, argv);
 
     auto yaml_config = YAML::LoadFile(training_config_name);
-
     TrainingConfig training_config = parse_config(yaml_config);
     training_config.model_config = expand_config_path(training_config.model_config);
 
@@ -704,6 +705,26 @@ int main(int argc, char **argv) {
         ttml::utils::MemoryUsageTracker::snapshot("MODEL_CREATION");
     }
 
+    // Before anything is loaded and the optimizer is created, so the loaders write the stored dtype (an fp32 file keeps
+    // its bits in fp32 master weights) and the optimizer state follows it. Save-and-exit exports the loaded weights in
+    // the dtype the model builds, so it skips the conversion. 3-tier workers keep bf16 parameters for RemoteOptimizer,
+    // since the optimizer worker holds the fp32 master weights, and take only the reduce dtype: with float32 their
+    // micro-batches add up in fp32, and RemoteOptimizer sends the sum in bf16.
+    if (save_and_exit_path.empty()) {
+        const auto &training_config_node = yaml_config["training_config"];
+        if (!is_three_tier_training(multihost_config)) {
+            if (auto master_dtype =
+                    ttml::core::apply_precision_config(training_config_node, get_model_parameters(model))) {
+                fmt::print("Master dtype: {}\n", *master_dtype);
+            }
+        } else {
+            (void)ttml::core::apply_reduce_dtype_config(training_config_node, get_model_parameters(model));
+        }
+        if (auto reduce_dtype = ttml::autograd::ctx().get_gradient_reduce_dtype()) {
+            fmt::print("Reduce dtype: {}\n", *reduce_dtype);
+        }
+    }
+
     if (!safetensors_path.empty()) {
         fmt::print("Loading model from safetensors path: {}\n", safetensors_path);
         model->load_from_safetensors(safetensors_path);
@@ -719,18 +740,6 @@ int main(int argc, char **argv) {
         serializer.serialize(save_and_exit_path);
         fmt::println("Model saved to {}", save_and_exit_path);
         std::exit(0);
-    }
-
-    // Before the checkpoint is loaded and the optimizer is created, so both follow the stored dtype. 3-tier workers
-    // keep bf16 parameters for RemoteOptimizer; the optimizer worker holds the fp32 master weights.
-    if (!is_three_tier_training(multihost_config)) {
-        if (auto master_dtype =
-                ttml::core::apply_precision_config(yaml_config["training_config"], get_model_parameters(model))) {
-            fmt::print("Master dtype: {}\n", *master_dtype);
-        }
-        if (auto reduce_dtype = ttml::autograd::ctx().get_gradient_reduce_dtype()) {
-            fmt::print("Reduce dtype: {}\n", *reduce_dtype);
-        }
     }
 
     // Load model parameters if in eval mode and model path exists

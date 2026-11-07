@@ -9,6 +9,7 @@
 #include "common.hpp"
 #include "core/distributed/distributed.hpp"
 #include "core/distributed/socket_manager.hpp"
+#include "core/parameter_dtype.hpp"
 #include "datasets/utils.hpp"
 #include "models/distributed/gpt2.hpp"
 #include "models/gpt2.hpp"
@@ -26,7 +27,7 @@ void send_aggregated_gradients_from_workers_to_optimizer(
     const std::shared_ptr<ttml::core::distributed::DistributedContext> &workers_and_aggregator_ctx,
     const std::shared_ptr<ttml::core::distributed::DistributedContext> &aggregator_and_optimizer_ctx,
     const SortedParameters &sorted_model_parameters,
-    int workers,
+    uint32_t workers,
     bool is_ddp = false) {
     Rank optimizer_rank{aggregator_and_optimizer_ctx->rank().get() + 1};
     for (auto &[name, tensor_ptr] : sorted_model_parameters) {
@@ -34,19 +35,29 @@ void send_aggregated_gradients_from_workers_to_optimizer(
             continue;
         }
 
+        // Each worker sends a bf16 gradient (RemoteOptimizer rounds an fp32 one first). add_grad sums them, in fp32
+        // when apply_reduce_dtype_config set fp32 accumulation on the parameter, and the mean is sent in bf16.
         // TODO: allow usage of tensor from model parameters (avoids redundant storage of a model)
-        auto tensor = ttnn::empty_like(tensor_ptr->get_value());
-        tensor = socket_manager.recv(tensor, workers_and_aggregator_ctx, ttml::core::distributed::Rank{0});
-        for (int worker_id = 1; worker_id < workers; ++worker_id) {
-            auto tensor_to_add = ttnn::empty_like(tensor_ptr->get_value());
-            tensor_to_add = socket_manager.recv(
-                tensor_to_add, workers_and_aggregator_ctx, ttml::core::distributed::Rank{worker_id});
-            tensor = ttnn::add(tensor, tensor_to_add);
+        const auto value_dtype = tensor_ptr->get_value().dtype();
+        for (uint32_t worker_id = 0; worker_id < workers; ++worker_id) {
+            auto tensor = ttnn::empty_like(tensor_ptr->get_value());
+            tensor_ptr->add_grad(socket_manager.recv(
+                tensor, workers_and_aggregator_ctx, ttml::core::distributed::Rank{static_cast<int>(worker_id)}));
         }
-        tensor = ttnn::multiply(tensor, 1.0F / static_cast<float>(workers));
+        const float inv_workers = 1.0F / static_cast<float>(workers);
+        auto tensor = tensor_ptr->get_grad();
         if (is_ddp) {
-            tensor = ttml::ttnn_fixed::distributed::all_reduce(tensor);
+            tensor = ttml::ttnn_fixed::distributed::all_reduce(ttnn::multiply(tensor, inv_workers));
+            if (tensor.dtype() != value_dtype) {
+                tensor = ttnn::typecast(tensor, value_dtype);
+            }
+        } else if (tensor.dtype() != value_dtype) {
+            tensor = ttnn::multiply(tensor, inv_workers, value_dtype);
+        } else {
+            tensor = ttnn::multiply(tensor, inv_workers);
         }
+        // Freed here: the aggregator holds one parameter's gradient at a time.
+        tensor_ptr->set_grad(ttnn::Tensor());
         socket_manager.send(tensor, aggregator_and_optimizer_ctx, optimizer_rank);
     }
 }
@@ -143,6 +154,12 @@ int main(int argc, char **argv) {
     auto sorted_model_parameters = SortedParameters(model_parameters.begin(), model_parameters.end());
 
     auto workers = config.num_mh_workers;
+    // The aggregator sums the workers' gradients into its own bf16 parameters' gradients, in fp32 with reduce_dtype
+    // float32; master weights live on the optimizer worker.
+    if (const auto reduce_dtype =
+            ttml::core::apply_reduce_dtype_config(yaml_config["training_config"], model_parameters)) {
+        fmt::print("[aggregator] Reduce dtype: {}\n", *reduce_dtype);
+    }
 
     auto workers_and_aggregator_ranks =
         three_tier_arch::get_workers_and_aggregator_ranks(static_cast<uint32_t>(distributed_ctx->rank().get()));

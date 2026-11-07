@@ -44,6 +44,12 @@ template <typename Config>
 // parameters. Of the optimizers, only fused AdamW updates fp32 parameters.
 void require_bf16_parameters(const serialization::NamedParameters& parameters, std::string_view optimizer_name);
 
+// zero_grad() for optimizers that keep a zero gradient on every trainable parameter that had one, so a parameter that
+// gets no gradient still takes its momentum and weight decay: zeros in the value's dtype, or in fp32 for a parameter
+// that accumulates its gradient in fp32 (autograd::Tensor::accumulates_grad_in_fp32), which the next add then needs no
+// cast of.
+void install_zero_gradients(const serialization::NamedParameters& parameters);
+
 class OptimizerBase {
 public:
     [[nodiscard]] virtual std::string get_name() const = 0;
@@ -57,6 +63,9 @@ public:
 
     virtual void zero_grad() = 0;
 
+    // With precision.reduce_dtype float32 a trainable parameter's gradient can arrive in fp32 (accumulated in fp32). An
+    // optimizer whose kernels take bf16 gradients calls core::cast_fp32_gradients_to_bf16() on its parameters at the
+    // start of step(); one that reads fp32 gradients, as fused AdamW does, doesn't.
     virtual void step() = 0;
 
     [[nodiscard]] virtual serialization::StateDict get_state_dict() const = 0;

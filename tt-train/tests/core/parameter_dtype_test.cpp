@@ -14,6 +14,7 @@
 #include "core/tt_tensor_utils.hpp"
 #include "optimizers/adamw.hpp"
 #include "test_utils/optimizer_state.hpp"
+#include "test_utils/program_cache.hpp"
 #include "test_utils/random_data.hpp"
 #include "ttnn/operations/copy/typecast/typecast.hpp"
 
@@ -28,6 +29,12 @@ public:
     }
     static void TearDownTestSuite() {
         autograd::ctx().close_device();
+    }
+
+protected:
+    // Tests store gradient sync defaults; the next test starts from none.
+    void TearDown() override {
+        autograd::ctx().set_gradient_reduce_dtype(std::nullopt);
     }
 };
 
@@ -74,7 +81,43 @@ TEST_F(ParameterDtypeTest, ReadsMasterDtypeFromTheTrainingConfig) {
     EXPECT_THAT(
         [&] { apply("precision: float32"); },
         ThrowsMessage<std::runtime_error>(HasSubstr("training_config.precision must be a map")));
-    autograd::ctx().set_gradient_reduce_dtype(std::nullopt);
+}
+
+// A runner checks the block right after loading its config, so a typo stops the run before the model is built. The
+// check applies nothing: the stored reduce default and the parameters stay as they were.
+TEST_F(ParameterDtypeTest, ValidatesThePrecisionConfigWithoutApplyingIt) {
+    auto parameter = autograd::create_tensor(random_values(ttnn::DataType::BFLOAT16), /* requires_grad */ true);
+    autograd::ctx().set_gradient_reduce_dtype(ttnn::DataType::BFLOAT16);
+    for (const char* training_config :
+         {"seed: 5489",
+          "precision: ~",
+          "precision: {}",
+          "precision: {master_dtype: ~}",
+          "precision: {master_dtype: float32, reduce_dtype: float32}",
+          "precision: {master_dtype: bfloat16, reduce_dtype: bfloat16}"}) {
+        EXPECT_NO_THROW(core::validate_precision_config(YAML::Load(training_config))) << training_config;
+    }
+    EXPECT_EQ(autograd::ctx().get_gradient_reduce_dtype(), ttnn::DataType::BFLOAT16);
+    EXPECT_EQ(native(parameter).dtype(), ttnn::DataType::BFLOAT16);
+    EXPECT_FALSE(parameter->accumulates_grad_in_fp32());
+
+    const auto validate = [](const char* training_config) {
+        core::validate_precision_config(YAML::Load(training_config));
+    };
+    EXPECT_THAT(
+        [&] { validate("precision: {params_dtype: float32}"); },
+        ThrowsMessage<std::runtime_error>(
+            HasSubstr("Unknown key precision.params_dtype (supported: master_dtype, reduce_dtype)")));
+    EXPECT_THAT(
+        [&] { validate("precision: {master_dtype: float16}"); },
+        ThrowsMessage<std::runtime_error>(HasSubstr(R"(precision.master_dtype must be "bfloat16" or "float32")")));
+    // The second key is checked too, not only the first.
+    EXPECT_THAT(
+        [&] { validate("precision: {master_dtype: float32, reduce_dtype: float16}"); },
+        ThrowsMessage<std::runtime_error>(HasSubstr(R"(precision.reduce_dtype must be "bfloat16" or "float32")")));
+    EXPECT_THAT(
+        [&] { validate("precision: float32"); },
+        ThrowsMessage<std::runtime_error>(HasSubstr("training_config.precision must be a map")));
 }
 
 TEST_F(ParameterDtypeTest, AppliesThePrecisionConfig) {
@@ -173,4 +216,119 @@ TEST_F(ParameterDtypeTest, AppliesReduceDtypeAsTheGradientSyncDefault) {
     autograd::ctx().close_device();
     EXPECT_EQ(autograd::ctx().get_gradient_reduce_dtype(), std::nullopt);
     autograd::ctx().open_device();
+}
+
+// With reduce_dtype float32, the trainable parameters' gradients accumulate in fp32; every other config clears that
+// on them. Frozen parameters keep whatever they had.
+TEST_F(ParameterDtypeTest, SetsFp32GradAccumulationOnTrainableParametersWithAnFp32Reduce) {
+    auto trainable = autograd::create_tensor(random_values(ttnn::DataType::BFLOAT16), /* requires_grad */ true);
+    auto frozen = autograd::create_tensor(random_values(ttnn::DataType::BFLOAT16), /* requires_grad */ false);
+    auto frozen_marked = autograd::create_tensor(random_values(ttnn::DataType::BFLOAT16), /* requires_grad */ false);
+    frozen_marked->set_accumulate_grad_in_fp32(true);
+    const serialization::NamedParameters parameters{
+        {"trainable", trainable}, {"frozen", frozen}, {"frozen_marked", frozen_marked}};
+    const auto apply = [&](const char* training_config) {
+        (void)core::apply_precision_config(YAML::Load(training_config), parameters);
+    };
+
+    apply("precision: {reduce_dtype: float32}");
+    EXPECT_TRUE(trainable->accumulates_grad_in_fp32());
+    EXPECT_FALSE(frozen->accumulates_grad_in_fp32());
+
+    apply("precision: {reduce_dtype: bfloat16}");
+    EXPECT_FALSE(trainable->accumulates_grad_in_fp32());
+
+    apply("precision: {reduce_dtype: float32}");
+    apply("seed: 5489");
+    EXPECT_FALSE(trainable->accumulates_grad_in_fp32());
+    EXPECT_TRUE(frozen_marked->accumulates_grad_in_fp32());
+}
+
+// The 3-tier workers and aggregator keep bf16 parameters (the optimizer worker holds the master weights) but add their
+// gradients up in fp32: only the reduce dtype applies, whatever master_dtype says, and the whole block is still
+// checked.
+TEST_F(ParameterDtypeTest, AppliesOnlyTheReduceDtypeToParametersKeptInBf16) {
+    auto trainable = autograd::create_tensor(random_values(ttnn::DataType::BFLOAT16), /* requires_grad */ true);
+    auto frozen = autograd::create_tensor(random_values(ttnn::DataType::BFLOAT16), /* requires_grad */ false);
+    const serialization::NamedParameters parameters{{"trainable", trainable}, {"frozen", frozen}};
+    const auto apply = [](const char* training_config, const serialization::NamedParameters& on) {
+        return core::apply_reduce_dtype_config(YAML::Load(training_config), on);
+    };
+
+    EXPECT_EQ(apply("precision: {master_dtype: float32, reduce_dtype: float32}", parameters), ttnn::DataType::FLOAT32);
+    EXPECT_EQ(native(trainable).dtype(), ttnn::DataType::BFLOAT16);
+    EXPECT_TRUE(trainable->accumulates_grad_in_fp32());
+    EXPECT_FALSE(frozen->accumulates_grad_in_fp32());
+    EXPECT_EQ(autograd::ctx().get_gradient_reduce_dtype(), ttnn::DataType::FLOAT32);
+
+    // Without the key nothing is stored and fp32 accumulation is cleared, as apply_precision_config does.
+    EXPECT_EQ(apply("precision: {master_dtype: float32}", parameters), std::nullopt);
+    EXPECT_FALSE(trainable->accumulates_grad_in_fp32());
+    EXPECT_EQ(autograd::ctx().get_gradient_reduce_dtype(), std::nullopt);
+
+    // A wrong master_dtype name is still an error, raised before anything changes.
+    (void)apply("precision: {reduce_dtype: float32}", parameters);
+    EXPECT_THAT(
+        [&] { (void)apply("precision: {master_dtype: float16, reduce_dtype: bfloat16}", parameters); },
+        ThrowsMessage<std::runtime_error>(HasSubstr(R"(precision.master_dtype must be "bfloat16" or "float32")")));
+    EXPECT_EQ(autograd::ctx().get_gradient_reduce_dtype(), ttnn::DataType::FLOAT32);
+    EXPECT_TRUE(trainable->accumulates_grad_in_fp32());
+}
+
+// Stochastic rounding does nothing for fp32 parameters, so fused AdamW asked for both warns once, at construction.
+TEST_F(ParameterDtypeTest, AdamWWarnsOnceWhenStochasticRoundingMeetsFp32Parameters) {
+    const auto construct = [](const serialization::NamedParameters& parameters, bool stochastic_rounding) {
+        ::testing::internal::CaptureStdout();
+        ::testing::internal::CaptureStderr();
+        {
+            optimizers::AdamW optimizer(
+                parameters, optimizers::AdamWConfig{.stochastic_rounding = stochastic_rounding});
+        }
+        const auto output = ::testing::internal::GetCapturedStdout() + ::testing::internal::GetCapturedStderr();
+        size_t warnings = 0;
+        for (size_t at = output.find("stochastic_rounding has no effect"); at != std::string::npos;
+             at = output.find("stochastic_rounding has no effect", at + 1)) {
+            ++warnings;
+        }
+        return warnings;
+    };
+    const serialization::NamedParameters fp32_parameters{
+        {"first", autograd::create_tensor(random_values(ttnn::DataType::FLOAT32), /* requires_grad */ true)},
+        {"second", autograd::create_tensor(random_values(ttnn::DataType::FLOAT32), /* requires_grad */ true)}};
+    const serialization::NamedParameters bf16_parameters{
+        {"only", autograd::create_tensor(random_values(ttnn::DataType::BFLOAT16), /* requires_grad */ true)}};
+
+    EXPECT_EQ(construct(fp32_parameters, /* stochastic_rounding */ true), 1U);
+    EXPECT_EQ(construct(fp32_parameters, /* stochastic_rounding */ false), 0U);
+    EXPECT_EQ(construct(bf16_parameters, /* stochastic_rounding */ true), 0U);
+}
+
+// The bf16-only gradient consumers call this right before they read the gradients. An fp32 gradient is replaced by its
+// bf16 cast, the same bits ttnn::typecast gives; a bf16 gradient, a parameter without one and a second call are left
+// alone.
+TEST_F(ParameterDtypeTest, CastsFp32GradientsToBf16Once) {
+    auto fp32_grad = autograd::create_tensor(random_values(ttnn::DataType::BFLOAT16), /* requires_grad */ true);
+    auto bf16_grad = autograd::create_tensor(random_values(ttnn::DataType::BFLOAT16), /* requires_grad */ true);
+    auto no_grad = autograd::create_tensor(random_values(ttnn::DataType::BFLOAT16), /* requires_grad */ true);
+    const auto fp32_values = random_values(ttnn::DataType::FLOAT32);
+    fp32_grad->set_grad(fp32_values);
+    bf16_grad->set_grad(random_values(ttnn::DataType::BFLOAT16));
+    const auto bf16_address = bf16_grad->get_grad().buffer()->address();
+    const serialization::NamedParameters parameters{
+        {"fp32_grad", fp32_grad}, {"bf16_grad", bf16_grad}, {"no_grad", no_grad}};
+
+    core::cast_fp32_gradients_to_bf16(parameters);
+
+    ASSERT_EQ(fp32_grad->get_grad().dtype(), ttnn::DataType::BFLOAT16);
+    const auto expected = core::to_xtensor(ttnn::typecast(fp32_values, ttnn::DataType::BFLOAT16));
+    EXPECT_EQ(test_utils::count_bit_mismatches(expected, core::to_xtensor(fp32_grad->get_grad())), 0U);
+    // The values are random fp32 ones, so the cast changed them: the check above isn't a copy of the input.
+    EXPECT_GT(test_utils::count_bit_mismatches(expected, core::to_xtensor(fp32_values)), 0U);
+    EXPECT_EQ(bf16_grad->get_grad().buffer()->address(), bf16_address);
+    EXPECT_FALSE(no_grad->is_grad_initialized());
+
+    const auto cast_address = fp32_grad->get_grad().buffer()->address();
+    core::cast_fp32_gradients_to_bf16(parameters);
+    EXPECT_EQ(fp32_grad->get_grad().buffer()->address(), cast_address);
+    EXPECT_EQ(bf16_grad->get_grad().buffer()->address(), bf16_address);
 }

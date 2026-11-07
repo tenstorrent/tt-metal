@@ -14,7 +14,7 @@ import ttnn
 
 import ttml
 from ttml.common.config import DeviceConfig, TransformerConfig
-from ttml.common.utils import no_grad, round_up_to_tile
+from ttml.common.utils import apply_precision, no_grad, round_up_to_tile
 from ttml.models import RunnerType
 from ttml.models.llama import Llama, LlamaConfig, load_from_safetensors
 from huggingface_hub import snapshot_download
@@ -47,9 +47,11 @@ class LlamaCompletionCtx:
 
 def load_checkpoint(model: Any, checkpoint_path: str, dp_mapper: Any = None) -> None:
     """Load a ``model.safetensors`` the GRPO trainer saved, under TTML's parameter names, into *model*.
-    Raise before writing anything if a parameter is missing, e.g. in a checkpoint saved before a rename."""
+    Raise before writing anything if a parameter is missing, e.g. in a checkpoint saved before a rename.
+
+    Each value loads in the dtype its parameter is stored in, so fp32 master weights (``precision.master_dtype:
+    float32``, applied before this) resume with the saved fp32 values and bf16 parameters get them rounded once."""
     from safetensors.numpy import load_file
-    import ml_dtypes
 
     checkpoint = load_file(checkpoint_path)
     parameters = model.parameters()
@@ -60,13 +62,7 @@ def load_checkpoint(model: Any, checkpoint_path: str, dp_mapper: Any = None) -> 
         )
 
     for name, param in parameters.items():
-        arr = checkpoint[name].astype(ml_dtypes.bfloat16)
-        if arr.ndim == 1:
-            arr = arr.reshape(1, 1, 1, -1)
-        elif arr.ndim == 2:
-            arr = arr.reshape(1, 1, arr.shape[0], arr.shape[1])
-        restored = ttml.autograd.Tensor.from_numpy(arr, ttnn.Layout.TILE, ttnn.DataType.BFLOAT16, dp_mapper)
-        param.assign(restored)
+        ttml.autograd.assign_numpy(param, checkpoint[name], mapper=dp_mapper)
 
     print(f"Loaded {len(parameters)} parameters from {checkpoint_path}")
 
@@ -93,6 +89,9 @@ class LlamaGRPOCompleter(GRPOCompleter):
         model_source: A HuggingFace model ID; a local directory holding a HuggingFace checkpoint
             (``.safetensors``, ``config.json`` and the tokenizer); or a checkpoint directory saved
             by the GRPO trainer, recognised by its ``trainer_state.json``.
+        precision: The YAML's ``training_config.precision`` block as a dict, applied right after the
+            model is built and before its weights load (pass the same block to ``GRPOTrainer``).
+            ``None`` applies nothing.
     """
 
     def setup_device(self, device_config: DeviceConfig) -> Any:
@@ -119,6 +118,8 @@ class LlamaGRPOCompleter(GRPOCompleter):
         transformer_config: TransformerConfig,
         device_config: DeviceConfig,
         model_source: str,
+        *,
+        precision: Optional[dict] = None,
     ) -> None:
         tf_config = transformer_config
         dev_config = device_config
@@ -161,6 +162,7 @@ class LlamaGRPOCompleter(GRPOCompleter):
             )
 
         tt_model = Llama(llama_cfg)
+        apply_precision(tt_model, precision)  # before any weights load
 
         if dev_config.enable_ddp:
             # NOTE: TP is intentionally disabled here. The cross_entropy_loss call below

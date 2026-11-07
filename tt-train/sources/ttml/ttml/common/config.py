@@ -7,6 +7,7 @@ import os
 import yaml
 from dataclasses import dataclass
 from typing import Union
+import ttml
 from ttml.common.utils import get_tt_metal_runtime_root
 from ttml.fsdp import _compile_replicate_patterns
 
@@ -70,8 +71,12 @@ class TrainingConfig:
         if isinstance(yaml_config, str):
             tc = load_config(yaml_config)
         elif isinstance(yaml_config, dict):
-            tc = yaml_config.get("training_config", {})
+            tc = yaml_config.get("training_config") or {}
 
+        # Checked here, before any model is built, so a typo under precision stops the run early. The block itself is
+        # applied later by whoever creates the optimizer (create_optimizer, the trainers, the GRPO completers).
+        ttml.core.validate_precision_config(tc)
+        self.precision = tc.get("precision")
         self.seed = int(tc.get("seed", 42))
         self.batch_size = int(tc.get("batch_size", 64))
         self.validation_batch_size = int(tc.get("validation_batch_size", max(self.batch_size // 2, 1)))

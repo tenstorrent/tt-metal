@@ -32,6 +32,19 @@ void require_bf16_parameters(const serialization::NamedParameters& parameters, s
     }
 }
 
+void install_zero_gradients(const serialization::NamedParameters& parameters) {
+    for (const auto& [name, tensor_ptr] : parameters) {
+        if (!tensor_ptr->get_requires_grad() || !tensor_ptr->is_grad_initialized()) {
+            continue;
+        }
+        const auto& value = tensor_ptr->get_value();
+        tensor_ptr->set_grad(
+            tensor_ptr->accumulates_grad_in_fp32()
+                ? ttnn::moreh_full_like(value, 0.F, ttnn::DataType::FLOAT32, value.layout(), value.memory_config())
+                : core::zeros_like(value));
+    }
+}
+
 OptimizerBase::OptimizerBase(serialization::NamedParameters&& parameters) : m_parameters(std::move(parameters)) {
 }
 

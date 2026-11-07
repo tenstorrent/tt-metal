@@ -59,7 +59,22 @@ void Tensor::add_grad(const ttnn::Tensor& grad) {
     // It is important to not use inline addition here
     // m_grad might share memory with other tensors
     constexpr ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> none{};
+    if (m_accumulate_grad_in_fp32 || m_grad.dtype() == ttnn::DataType::FLOAT32) {
+        // Both operands in fp32, for the exact fp32 sum (see core::as_fp32). Promoting first frees a bf16 m_grad before
+        // the add when nothing else holds it.
+        m_grad = core::as_fp32(m_grad);
+        m_grad = ttnn::add(m_grad, core::as_fp32(grad), std::nullopt, std::nullopt, std::nullopt, none, none, none);
+        return;
+    }
     m_grad = ttnn::add(m_grad, grad, std::nullopt, std::nullopt, std::nullopt, none, none, none);
+}
+
+void Tensor::set_accumulate_grad_in_fp32(bool accumulate_in_fp32) {
+    m_accumulate_grad_in_fp32 = accumulate_in_fp32;
+}
+
+bool Tensor::accumulates_grad_in_fp32() const {
+    return m_accumulate_grad_in_fp32;
 }
 
 void Tensor::backward(bool retain_graph) {

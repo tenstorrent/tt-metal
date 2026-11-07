@@ -261,6 +261,7 @@ if __name__ == "__main__":
         device_config=device_config,
         model_source=model_source,
         memory_efficient=args.memory_efficient,
+        precision=training_config.precision,
     )
 
     grpo_trainer = GRPOTrainer(
@@ -271,6 +272,7 @@ if __name__ == "__main__":
         optimizer_dict=optimizer_dict,
         callbacks=[EvalCallback(completer, completion_ctx, eval_dataset, args.eval_examples)],
         model_source=model_source,
+        precision=training_config.precision,
     )
     grpo_trainer.train()
     logging.info("REVERSE TEXT GRPO TRAINING COMPLETE")

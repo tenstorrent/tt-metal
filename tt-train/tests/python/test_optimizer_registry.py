@@ -8,8 +8,11 @@ import numpy as np
 import pytest
 import ttml
 import ttnn
+from ttml.common.config import TrainingConfig
 from ttml.common.utils import create_optimizer
 from ttml.modules import AbstractModuleBase, Parameter
+
+from tensor_helpers import stored_dtypes
 
 
 def _make_python_optimizer_class():
@@ -364,6 +367,20 @@ def test_muon_with_adamw_group_options_cover_both_inner_optimizers(expect_error)
     assert opt.adamw_optimizer().get_param_groups()[0]["weight_decay"] == pytest.approx(0.05)
 
 
+@pytest.mark.requires_device
+def test_muon_with_adamw_rejects_fp32_master_weights(expect_error):
+    """Muon updates bf16 parameters only, so MuonWithAdamW refuses fp32 master weights with a message naming it, before
+    it builds either inner optimizer; with bf16 parameters it builds as before."""
+    from ttml.common.muon_optimizer import MuonWithAdamW
+
+    model = _make_block_model()  # attention/weight and mlp/weight go to Muon
+    MuonWithAdamW({}, model.parameters())
+
+    ttml.core.apply_precision_config({"precision": {"master_dtype": "float32"}}, model.parameters())
+    with expect_error(RuntimeError, "MuonWithAdamW supports bf16 parameters only, but parameter .* is stored as"):
+        MuonWithAdamW({}, model.parameters())
+
+
 def test_registry_reads_variant_only_adamw_options():
     """Stochastic Rounding (AdamW) and Kahan Summation (AdamWComposite) are parsed only for the config that has the
     field, so a renamed field would silently drop its YAML key."""
@@ -376,10 +393,6 @@ def test_registry_reads_variant_only_adamw_options():
     for kahan_summation, num_buffers in ((True, len(params)), (False, 0)):
         opt = ttml.optimizers.create_optimizer({"type": "AdamWComposite", "kahan_summation": kahan_summation}, params)
         assert len(opt.get_state_dict()["kahan_compensation"]) == num_buffers
-
-
-def _stored_dtypes(model) -> set:
-    return {t.get_value(ttml.autograd.PreferredPrecision.NATIVE).dtype for t in model.parameters().values()}
 
 
 @pytest.mark.requires_device
@@ -402,7 +415,7 @@ def test_create_optimizer_applies_master_dtype(precision, expected):
 
     create_optimizer(model, {"training_config": training_config})
 
-    assert _stored_dtypes(model) == {expected}
+    assert stored_dtypes(model) == {expected}
 
 
 class _ModelWithoutParameters:
@@ -435,6 +448,74 @@ def test_create_optimizer_stores_the_reduce_dtype(gradient_reduce_default, preci
     create_optimizer(_ModelWithoutParameters(), config)
 
     assert ttml.autograd.AutoContext.get_instance().get_gradient_reduce_dtype() == expected
+
+
+@pytest.mark.parametrize(
+    "precision, expected",
+    [({"reduce_dtype": "float32"}, True), ({"reduce_dtype": "bfloat16"}, False), ({}, False)],
+)
+def test_apply_precision_config_sets_fp32_grad_accumulation(gradient_reduce_default, precision, expected):
+    """With reduce_dtype float32 the trainable parameters' gradients accumulate in fp32; any other config clears that.
+    Frozen parameters are left alone. Empty tensors, so this needs no device."""
+    trainable, frozen = ttml.autograd.Tensor(), ttml.autograd.Tensor()
+    trainable.set_requires_grad(True)
+    trainable.set_accumulate_grad_in_fp32(not expected)
+    parameters = ttml.NamedParameters()
+    parameters["trainable"] = trainable
+    parameters["frozen"] = frozen
+
+    ttml.core.apply_precision_config({"precision": precision}, parameters)
+
+    assert trainable.accumulates_grad_in_fp32() is expected
+    assert frozen.accumulates_grad_in_fp32() is False
+
+
+@pytest.mark.parametrize(
+    "training_config",
+    [
+        {},
+        {"precision": None},
+        {"precision": {}},
+        {"precision": {"master_dtype": None}},
+        {"precision": {"master_dtype": "float32", "reduce_dtype": "float32"}},
+        {"precision": {"master_dtype": "bfloat16", "reduce_dtype": "bfloat16"}},
+    ],
+)
+def test_validate_precision_config_accepts_a_valid_block_and_applies_nothing(gradient_reduce_default, training_config):
+    """A runner checks the block right after loading its config; the check stores nothing. No device needed."""
+    gradient_reduce_default(ttnn.DataType.BFLOAT16)
+
+    ttml.core.validate_precision_config(training_config)
+
+    assert ttml.autograd.AutoContext.get_instance().get_gradient_reduce_dtype() == ttnn.DataType.BFLOAT16
+
+
+@pytest.mark.parametrize(
+    "precision, message",
+    [
+        ({"params_dtype": "float32"}, "Unknown key precision.params_dtype"),
+        ({"master_dtype": "float16"}, 'precision.master_dtype must be "bfloat16" or "float32"'),
+        (
+            {"master_dtype": "float32", "reduce_dtype": "float16"},
+            'precision.reduce_dtype must be "bfloat16" or "float32"',
+        ),
+        ("float32", "training_config.precision must be a map"),
+    ],
+)
+def test_validate_precision_config_rejects_what_apply_would(expect_error, precision, message):
+    """The early check raises the error apply_precision_config would, before any model is built. No device needed."""
+    with expect_error(RuntimeError, message):
+        ttml.core.validate_precision_config({"precision": precision})
+
+
+def test_training_config_checks_the_precision_block_and_exposes_it(expect_error):
+    """TrainingConfig, which the runners build right after loading the YAML, checks the precision block, so a typo stops
+    the run before the model is built, and hands the block on as ``.precision``. No device needed."""
+    precision = {"master_dtype": "float32", "reduce_dtype": "float32"}
+    assert TrainingConfig({"training_config": {"precision": precision}}).precision == precision
+    assert TrainingConfig({"training_config": {}}).precision is None
+    with expect_error(RuntimeError, "Unknown key precision.master_dtpye"):
+        TrainingConfig({"training_config": {"precision": {"master_dtpye": "float32"}}})
 
 
 def test_create_optimizer_rejects_an_unknown_precision_key(expect_error):

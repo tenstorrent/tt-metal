@@ -160,6 +160,7 @@ if __name__ == "__main__":
             device_config=device_config,
             model_source=model_id,
             memory_efficient=args.memory_efficient,
+            precision=training_config.precision,
         )
     else:
         completer = LlamaGRPOCompleter(
@@ -171,6 +172,7 @@ if __name__ == "__main__":
             transformer_config=transformer_config,
             device_config=device_config,
             model_source=model_id,
+            precision=training_config.precision,
         )
 
     grpo_trainer = GRPOTrainer(
@@ -180,6 +182,7 @@ if __name__ == "__main__":
         reward_funcs=[accuracy_reward, brevity_reward],
         optimizer_dict=optimizer_dict,
         model_source=model_id,
+        precision=training_config.precision,
     )
     grpo_trainer.train()
     logging.info("BOOLQ GRPO TRAINING COMPLETE")

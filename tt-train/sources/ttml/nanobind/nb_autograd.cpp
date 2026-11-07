@@ -84,6 +84,16 @@ void py_module(nb::module_& m) {
         py_tensor.def("clean_node", &Tensor::clean_node, "Clean(unset) node");
         py_tensor.def("add_grad", &Tensor::add_grad, nb::arg("grad"), "Add to gradient");
         py_tensor.def(
+            "set_accumulate_grad_in_fp32",
+            &Tensor::set_accumulate_grad_in_fp32,
+            nb::arg("accumulate_in_fp32"),
+            "Whether add_grad sums this tensor's gradients in fp32 from the second add on. apply_precision_config sets "
+            "it on trainable parameters with reduce_dtype float32.");
+        py_tensor.def(
+            "accumulates_grad_in_fp32",
+            &Tensor::accumulates_grad_in_fp32,
+            "Whether add_grad sums this tensor's gradients in fp32.");
+        py_tensor.def(
             "set_requires_grad", &Tensor::set_requires_grad, nb::arg("requires_grad"), "Set gradient requirement flag");
         py_tensor.def(
             "get_value",

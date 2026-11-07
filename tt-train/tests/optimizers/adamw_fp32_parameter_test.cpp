@@ -26,7 +26,9 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "xtensor/core/xtensor_forward.hpp"
 
+using ttml::test_utils::adamw::bf16_rounded;
 using ttml::test_utils::adamw::error_metrics;
+using ttml::test_utils::adamw::to_tt_fp32;
 
 struct AdamWFp32ParameterCase {
     std::array<std::size_t, 4> shape;  // (B, H, S, C)
@@ -37,12 +39,15 @@ struct AdamWFp32ParameterCase {
     float weight_decay{0.0f};
     bool amsgrad{false};
     std::string name;
+    // The gradient is passed in fp32, unrounded, as accumulating it in fp32 leaves it; otherwise generated as bf16.
+    bool fp32_grad{false};
 };
 
 // Custom printer for AdamWFp32ParameterCase used by gtest to make test output readable
 void PrintTo(const AdamWFp32ParameterCase& pc, std::ostream* os) {
     *os << fmt::format(
-        "AdamWFp32ParameterCase(name='{}', shape=[{},{},{},{}], lr={}, beta1={}, beta2={}, eps={}, wd={}, amsgrad={})",
+        "AdamWFp32ParameterCase(name='{}', shape=[{},{},{},{}], lr={}, beta1={}, beta2={}, eps={}, wd={}, amsgrad={}, "
+        "fp32_grad={})",
         pc.name,
         pc.shape[0],
         pc.shape[1],
@@ -53,7 +58,8 @@ void PrintTo(const AdamWFp32ParameterCase& pc, std::ostream* os) {
         pc.beta2,
         pc.epsilon,
         pc.weight_decay,
-        pc.amsgrad);
+        pc.amsgrad,
+        pc.fp32_grad);
 }
 
 class AdamWFp32ParameterComparisonTest : public ::testing::TestWithParam<AdamWFp32ParameterCase> {
@@ -75,11 +81,7 @@ static ttnn::Tensor to_tt_bf16(const xt::xarray<bfloat16>& x) {
     return ttml::core::from_xtensor<bfloat16, ttnn::DataType::BFLOAT16>(x, &ttml::autograd::ctx().get_device());
 }
 
-static ttnn::Tensor to_tt_fp32(const xt::xarray<float>& x) {
-    return ttml::core::from_xtensor<float, ttnn::DataType::FLOAT32>(x, &ttml::autograd::ctx().get_device());
-}
-
-// CPU reference: AdamW on fp32 weights, with bf16 gradients
+// CPU reference: AdamW on fp32 weights, with the gradient values the device reads
 class CPUAdamWFp32 {
 public:
     CPUAdamWFp32(float lr, float beta1, float beta2, float epsilon, float weight_decay, bool amsgrad) :
@@ -113,8 +115,8 @@ public:
         m_beta_powers = {beta1_pow, beta2_pow};
     }
 
-    // Perform one optimization step
-    // grads should be bf16 precision (truncated)
+    // Perform one optimization step with the gradient's values as the device reads them (a bf16 gradient's, or an fp32
+    // one's unrounded)
     void step(const xt::xarray<float>& grads) {
         m_steps++;
 
@@ -192,10 +194,18 @@ static void run_steps_and_compare(const AdamWFp32ParameterCase& pc, uint32_t ste
     xt::xarray<float> max_v0 =
         ttml::test_utils::make_uniform_xarray<float>(pc.shape, 0.0F, 1.0F, seed_max_second_moment);
 
-    // Generate gradient directly as bfloat16
-    xt::xarray<bfloat16> g0_bf16 =
-        ttml::test_utils::make_uniform_xarray<bfloat16>(pc.shape, bfloat16{-1.0F}, bfloat16{1.0F}, seed_grad);
-    auto g0_bf16_tt = to_tt_bf16(g0_bf16);
+    // Generate the gradient directly as bfloat16, or as fp32 values that bf16 can't hold
+    xt::xarray<float> g0;
+    ttnn::Tensor g0_tt;
+    if (pc.fp32_grad) {
+        g0 = ttml::test_utils::make_uniform_xarray<float>(pc.shape, -1.0F, 1.0F, seed_grad);
+        g0_tt = to_tt_fp32(g0);
+    } else {
+        xt::xarray<bfloat16> g0_bf16 =
+            ttml::test_utils::make_uniform_xarray<bfloat16>(pc.shape, bfloat16{-1.0F}, bfloat16{1.0F}, seed_grad);
+        g0 = xt::cast<float>(g0_bf16);
+        g0_tt = to_tt_bf16(g0_bf16);
+    }
 
     // Initial step count (non-zero to test bias correction with accumulated steps)
     const size_t initial_steps = 10;
@@ -230,10 +240,23 @@ static void run_steps_and_compare(const AdamWFp32ParameterCase& pc, uint32_t ste
     opt.set_state_dict(state);
 
     // Run both optimizers for the specified number of steps
+    // For an fp32 gradient, the reference fed the gradient rounded to bf16 first, to check that the rounding would
+    // show.
+    std::optional<CPUAdamWFp32> rounded_cpu_opt;
+    xt::xarray<float> g0_rounded;
+    if (pc.fp32_grad) {
+        rounded_cpu_opt.emplace(cpu_opt);
+        g0_rounded = bf16_rounded(g0);
+    }
     for (uint32_t i = 0; i < steps; ++i) {
-        theta->set_grad(g0_bf16_tt);
-        cpu_opt.step(xt::cast<float>(g0_bf16));
+        theta->set_grad(g0_tt);
+        cpu_opt.step(g0);
+        if (rounded_cpu_opt) {
+            rounded_cpu_opt->step(g0_rounded);
+        }
         opt.step();
+        // Fused AdamW reads an fp32 gradient as it is, without casting it.
+        EXPECT_EQ(theta->get_grad().dtype(), g0_tt.dtype());
     }
 
     // Compare the fp32 parameter with the CPU reference's weights
@@ -256,6 +279,12 @@ static void run_steps_and_compare(const AdamWFp32ParameterCase& pc, uint32_t ste
 
     EXPECT_LT(mean_error, mean_error_tolerance);
     EXPECT_LT(max_error, max_error_tolerance);
+    if (pc.fp32_grad) {
+        EXPECT_GT(
+            error_metrics(rounded_cpu_opt->get_master_weights(), device_master_weights_cpu).mean_error,
+            mean_error_tolerance)
+            << "the step must read the gradient unrounded";
+    }
 }
 
 static std::string CaseName(const ::testing::TestParamInfo<AdamWFp32ParameterCase>& info) {
@@ -335,6 +364,24 @@ INSTANTIATE_TEST_SUITE_P(
     AdamWFp32ParameterAMSGrad, AdamWFp32ParameterComparisonTest, ::testing::ValuesIn(kAMSGradCases), CaseName);
 
 // ====================================================================
+// fp32 gradients
+// fp32 master weights with a gradient accumulated in fp32. A large lr and a small beta1 make the gradient's bf16
+// rounding move the update past the fp32 tolerance, so the cases also show the step reads it unrounded.
+// ====================================================================
+
+static const AdamWFp32ParameterCase kFp32GradientCases[] = {
+    {{1, 1, 128, 512}, 1e-2f, 0.5f, 0.9f, 1e-8f, 0.0f, false, "Fp32Grad_lr1e2", true},
+    {{1, 8, 64, 128}, 1e-2f, 0.5f, 0.9f, 1e-8f, 0.1f, false, "Fp32Grad_WeightDecay", true},
+    {{1, 4, 64, 128}, 1e-2f, 0.5f, 0.9f, 1e-8f, 0.0f, true, "Fp32Grad_AMSGrad", true},
+};
+
+INSTANTIATE_TEST_SUITE_P(
+    AdamWFp32ParameterFp32Gradient,
+    AdamWFp32ParameterComparisonTest,
+    ::testing::ValuesIn(kFp32GradientCases),
+    CaseName);
+
+// ====================================================================
 // Program-cache hits
 // lr, the betas, the beta powers, epsilon and weight decay are not part of the program hash, so a hit must re-apply
 // them with the new buffer addresses; at fp32 precision each of them moves the update far past the tolerance. Each
@@ -345,7 +392,9 @@ class AdamWFp32ParameterCacheHitTest : public ttml::test_utils::ProgramCacheSuit
 
 namespace {
 
+using ttml::test_utils::CacheExpectation;
 using ttml::test_utils::count_bit_mismatches;
+using ttml::test_utils::expect_cache;
 using ttml::test_utils::two_core_group_rows_shape;
 using namespace ttml::test_utils::adamw;
 
@@ -365,12 +414,14 @@ constexpr Tolerances kFp32Tolerances{1e-7f, 1e-6f};
 constexpr Tolerances kBf16Tolerances{1e-3f, 1e-2f};
 
 // The tensors of one launch as fused AdamW passes them for an fp32 parameter: fp32 parameter and states and a bf16
-// gradient. With bf16 parameter and states the same call runs the op's bf16 program.
+// gradient. With bf16 parameter and states the same call runs the op's bf16 program. An fp32 gradient holds random fp32
+// values, which bf16 can't hold, as a gradient accumulated in fp32 does.
 AdamWLaunchTensors make_launch_tensors(
     const std::vector<uint32_t>& shape,
     bool amsgrad,
     uint32_t seed,
-    ttnn::DataType state_dtype = ttnn::DataType::FLOAT32) {
+    ttnn::DataType state_dtype = ttnn::DataType::FLOAT32,
+    ttnn::DataType grad_dtype = ttnn::DataType::BFLOAT16) {
     using ttml::test_utils::make_uniform_xarray;
     auto upload = [state_dtype](const xt::xarray<float>& values) {
         return store(
@@ -380,7 +431,9 @@ AdamWLaunchTensors make_launch_tensors(
     };
     AdamWLaunchTensors tensors{
         upload(make_uniform_xarray<float>(shape, -1.0F, 1.0F, seed)),
-        store(to_tt_bf16(make_uniform_xarray<bfloat16>(shape, bfloat16{-1.0F}, bfloat16{1.0F}, seed + 1U))),
+        grad_dtype == ttnn::DataType::FLOAT32
+            ? store(to_tt_fp32(make_uniform_xarray<float>(shape, -1.0F, 1.0F, seed + 1U)))
+            : store(to_tt_bf16(make_uniform_xarray<bfloat16>(shape, bfloat16{-1.0F}, bfloat16{1.0F}, seed + 1U))),
         upload(make_uniform_xarray<float>(shape, -1.0F, 1.0F, seed + 2U)),
         upload(make_uniform_xarray<float>(shape, 0.0F, 1.0F, seed + 3U)),
         std::nullopt};
@@ -513,4 +566,71 @@ TEST_F(AdamWFp32ParameterCacheHitTest, NewScalarsOnFreshStates_OneTile) {
 
     run_new_scalars_on_fresh_states(/*amsgrad=*/false, kScalarsB, shape);
     expect_bitwise_equal(bf16_after, read_back(bf16), "the bf16 launch's buffers after the fp32 launches");
+}
+
+// An accumulated gradient can be fp32. Fused AdamW reads it as it is: its circular buffer takes the gradient's format,
+// and the program hash keys the gradient's dtype, so the same shape compiles a program for each gradient dtype and a
+// cached one is never run on the other's tiles (they differ in size). Launch A (bf16 gradient) compiles; launch B (fp32
+// gradient, same shape) must compile too and match the reference fed the unrounded gradient, which its bf16 rounding
+// would miss; launches C and D rerun A's and B's tensors on fresh copies and must hit the cache and give the same bits.
+TEST_F(AdamWFp32ParameterCacheHitTest, Fp32GradientHasAProgramOfItsOwn_TwoCoreGroups) {
+    const auto shape = two_core_group_rows_shape(32U);
+    // A large lr and a small beta1 make the bf16 rounding of the gradient visible above the fp32 tolerance.
+    const auto& scalars = kScalarsB;
+
+    struct Launch {
+        uint32_t seed;
+        ttnn::DataType grad_dtype;
+        CacheExpectation cache;
+        const char* name;
+    };
+    const std::array<Launch, 4> launches = {{
+        {3000U, ttnn::DataType::BFLOAT16, CacheExpectation::Miss, "launch A (bf16 gradient)"},
+        {4000U, ttnn::DataType::FLOAT32, CacheExpectation::Miss, "launch B (fp32 gradient)"},
+        {3000U, ttnn::DataType::BFLOAT16, CacheExpectation::Hit, "launch C (launch A again)"},
+        {4000U, ttnn::DataType::FLOAT32, CacheExpectation::Hit, "launch D (launch B again)"},
+    }};
+    std::vector<AdamWValues> after;
+    for (size_t i = 0; i < launches.size(); ++i) {
+        const auto& launch = launches[i];
+        const auto tensors =
+            make_launch_tensors(shape, /*amsgrad=*/false, launch.seed, ttnn::DataType::FLOAT32, launch.grad_dtype);
+        const auto entries_before = ttml::autograd::ctx().get_device().num_program_cache_entries();
+        launch_adamw(tensors, scalars);
+        expect_cache(entries_before, launch.cache, launch.name);
+        after.push_back(read_back(tensors));
+        if (launch.cache == CacheExpectation::Hit) {
+            expect_bitwise_equal(after[i - 2U], after.back(), launch.name);
+            continue;
+        }
+        expect_close_to_reference(adamw_reference(tensors, scalars), after.back(), kFp32Tolerances, launch.name);
+        if (launch.grad_dtype == ttnn::DataType::FLOAT32) {
+            auto rounded = tensors;
+            rounded.grad.before = bf16_rounded(tensors.grad.before);
+            ASSERT_GT(count_bit_mismatches(tensors.grad.before, rounded.grad.before), 0U);
+            EXPECT_GT(
+                error_metrics(adamw_reference(rounded, scalars).param, after.back().param).mean_error,
+                kFp32Tolerances.mean_error)
+                << "the step must read the gradient unrounded";
+        }
+    }
+}
+
+// A bf16 parameter with an fp32 gradient (bf16 master weights, fp32 accumulation): its own program again, and the bf16
+// tolerances of the parameter.
+TEST_F(AdamWFp32ParameterCacheHitTest, Bf16ParameterWithFp32Gradient_OneTile) {
+    const std::vector<uint32_t> shape = {1U, 1U, 32U, 32U};
+
+    const auto bf16 = make_launch_tensors(shape, /*amsgrad=*/false, 5000U, ttnn::DataType::BFLOAT16);
+    auto entries_before = ttml::autograd::ctx().get_device().num_program_cache_entries();
+    launch_adamw(bf16, kScalarsA);
+    expect_cache(entries_before, CacheExpectation::Miss, "bf16 gradient");
+    expect_close_to_reference(adamw_reference(bf16, kScalarsA), read_back(bf16), kBf16Tolerances, "bf16 gradient");
+
+    const auto fp32 =
+        make_launch_tensors(shape, /*amsgrad=*/false, 6000U, ttnn::DataType::BFLOAT16, ttnn::DataType::FLOAT32);
+    entries_before = ttml::autograd::ctx().get_device().num_program_cache_entries();
+    launch_adamw(fp32, kScalarsA);
+    expect_cache(entries_before, CacheExpectation::Miss, "fp32 gradient");
+    expect_close_to_reference(adamw_reference(fp32, kScalarsA), read_back(fp32), kBf16Tolerances, "fp32 gradient");
 }
