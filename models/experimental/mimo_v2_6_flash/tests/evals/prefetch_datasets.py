@@ -10,7 +10,6 @@
   tau2      tau2-bench's data assets at the installed tau2 commit (openbench's tau_bench_* tasks), into
             $MM_DATASETS/tau2 (run_eval.sh passes it as TAU2_DATA_DIR).
   gpqa      openbench's GPQA-Diamond source (nmayorga7/gpqa_diamond) into the HF datasets cache.
-  gpqa_csv  simple-evals' gpqa_diamond.csv (the dataset Artificial Analysis cites) into $MM_DATASETS.
 
 Every other benchmark is warmed by running it once through run_eval.sh with --dry-run --limit 5 (lmms-eval's own
 loading code path). Writes a manifest (counts, bytes) to $MM_DATASETS/prefetch_manifest.json.
@@ -19,7 +18,6 @@ loading code path). Writes a manifest (counts, bytes) to $MM_DATASETS/prefetch_m
 """
 
 import argparse
-import csv
 import json
 import os
 import shutil
@@ -133,24 +131,6 @@ def fetch_tau2(root):
     _manifest_update(root, "tau2", {"dir": str(target), "commit": commit, "airline_tasks": n})
 
 
-def fetch_gpqa_csv(root):
-    """simple-evals' GPQA Diamond CSV, the dataset Artificial Analysis cites (gpqa_aa reads MM_GPQA_CSV)."""
-    import urllib.request
-
-    path = os.path.join(root, "gpqa_diamond.csv")
-    if not os.path.exists(path):
-        url = "https://openaipublic.blob.core.windows.net/simple-evals/gpqa_diamond.csv"
-        with urllib.request.urlopen(url, timeout=60) as resp:
-            data = resp.read()
-        with open(path + ".part", "wb") as f:
-            f.write(data)
-        os.replace(path + ".part", path)
-    with open(path, encoding="utf-8") as f:
-        rows = sum(1 for _ in csv.DictReader(f))
-    print(f"GPQA Diamond (simple-evals CSV): {rows} questions in {path}")
-    _manifest_update(root, "gpqa_diamond_csv", {"questions": rows, "path": path})
-
-
 def fetch_gpqa(root):
     import datasets
 
@@ -161,7 +141,7 @@ def fetch_gpqa(root):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("what", nargs="+", choices=["videomme", "tau2", "gpqa", "gpqa_csv"])
+    ap.add_argument("what", nargs="+", choices=["videomme", "tau2", "gpqa"])
     ap.add_argument("--durations", default="short", help="Video-MME durations, comma-separated (short,medium,long)")
     ap.add_argument("--workers", type=int, default=1)
     args = ap.parse_args()
@@ -174,8 +154,6 @@ def main():
             fetch_videomme(hf_home, root, args.durations.split(","), args.workers)
         elif what == "tau2":
             fetch_tau2(root)
-        elif what == "gpqa_csv":
-            fetch_gpqa_csv(root)
         else:
             fetch_gpqa(root)
 

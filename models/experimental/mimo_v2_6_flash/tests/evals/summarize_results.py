@@ -92,12 +92,10 @@ def inspect_summary(out):
 
 
 REFERENCE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "aa_reference.json")
-# Where each bench's headline score sits in its summary, and its item count for the interval (distinct items: tau2's
-# repeats are the same tasks, so they do not narrow it).
+# Where each bench's headline score sits in its summary, and a cap on its item count for the interval (None: the
+# scored items).
 SCORE_KEYS = {
     "mmmu_pro_aa": ("aa_accuracy,none", None),
-    "gpqa_aa": ("aa_choice/accuracy", 198),
-    "tau2_telecom_aa": ("tau_bench_scorer/mean", 114),
 }
 
 
@@ -133,6 +131,26 @@ def compare(bench, metrics, n_samples, reference_file=REFERENCE_FILE):
         out.update(delta=round(delta, 4), ci95_delta=[round(delta - 1.96 * se, 4), round(delta + 1.96 * se, 4)])
         out["within_95ci"] = abs(delta) <= 1.96 * se
     return out
+
+
+def bar_check(bench, metrics, reference_file=REFERENCE_FILE):
+    """A media bench against its acceptance bar (aa_reference.json "acceptance_bars": comparable models' published
+    numbers, weaker evidence than a same-protocol reference)."""
+    with open(reference_file) as f:
+        bar = (json.load(f).get("acceptance_bars") or {}).get(bench)
+    if not bar or not metrics or bar["metric"] not in metrics:
+        return None
+    value = float(metrics[bar["metric"]])
+    passed = value >= bar["bar"] if bar["direction"] == "min" else value <= bar["bar"]
+    sign = ">=" if bar["direction"] == "min" else "<="
+    return {
+        "value": value,
+        "bar": bar["bar"],
+        "rule": f"{sign} {bar['bar']} {bar['unit']}",
+        "passed": passed,
+        "evidence": "weaker: comparable models, other protocols",
+        "basis": bar["basis"],
+    }
 
 
 def comparison_line(c):
@@ -186,6 +204,7 @@ def main():
         **body,
     }
     summary["vs_artificial_analysis"] = compare(args.bench, summary.get("metrics"), summary.get("n_samples"))
+    summary["acceptance_bar"] = bar_check(args.bench, summary.get("metrics"))
     path = os.path.join(args.out, "summary.json")
     with open(path, "w") as f:
         json.dump(summary, f, indent=1, default=str)
@@ -194,6 +213,10 @@ def main():
     line = comparison_line(summary["vs_artificial_analysis"])
     if line:
         print(f"{args.bench}: {line}")
+    bar = summary["acceptance_bar"]
+    if bar:
+        verdict = "meets" if bar["passed"] else "MISSES"
+        print(f"{args.bench}: TT {bar['value']:.2f} {verdict} the bar {bar['rule']} ({bar['evidence']})")
     if not summary.get("metrics"):
         sys.exit(f"no metrics in the harness output; see {args.out}/run.log")
 

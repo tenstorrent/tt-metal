@@ -10,19 +10,15 @@
 #
 # Benches (harness, task, defaults):
 #   mmmu_pro          lmms-eval  mmmu_pro_standard_cot (1730 q, 10 options, CoT)   thinking off
+#   mmmu_pro_aa       lmms-eval  mmmu_pro_aa: Artificial Analysis's protocol (1730, AA prompt + regex, thinking on);
+#                                the summary prints TT vs AA's 73.06%, the delta and 95% intervals
 #   ocrbench          lmms-eval  ocrbench (1000)                                    thinking off
 #   videomme_short    lmms-eval  videomme_short (900 q / 300 videos, no subtitles)  thinking off
 #   mmau_mini         lmms-eval  mmau_test_mini (1000)                              thinking off
 #   librispeech_clean lmms-eval  librispeech_test_clean (2620, WER)                 thinking off
-#   mmmu_pro_aa       lmms-eval  mmmu_pro_aa: Artificial Analysis's protocol (1730, AA prompt + regex, thinking on)
 #   gpqa_diamond      inspect    gpqa_shuffled.py (198 q x 10 epochs, T=0.5, per-question shuffle = OpenRouter's)
 #   gpqa_openbench    openbench  gpqa_diamond (openbench as published: fixed permutation)
-#   gpqa_aa           inspect    aa_tasks.py: Artificial Analysis's protocol (198 q, simple-evals CSV, AA prompt + regex)
-#   tau2_airline      inspect    aa_tasks.py: OpenRouter's (airline, 50 tasks, T=0, 1 trial)
-#   tau2_telecom_aa   inspect    aa_tasks.py: Artificial Analysis's (telecom, 114 tasks x 3 trials, <= 100 steps)
-# tau2's user simulator: --user-model (inspect model string), default anthropic/claude-haiku-5-5 (ANTHROPIC_API_KEY,
-# read from $MM_ANTHROPIC_ENV, default /data/ttuser-agentx/.anthropic_env, if not set). AA used Qwen3 235B A22B 2507.
-# Benches with an Artificial Analysis reference (aa_reference.json) print TT vs AA, the delta and 95% intervals.
+#   tau2_airline      openbench  tau_bench_airline (50 tasks, T=0; user simulator --user-model, needs its key)
 # The text benches send no reasoning switch (the model's default, thinking on), as OpenRouter's harness does.
 #
 # Targets: "vllm" (our server; reasoning switch = chat_template_kwargs.enable_thinking, API key from API_KEY or none)
@@ -72,13 +68,6 @@ EVALENV=${MM_EVALENV:-/data/ttuser-agentx/mm/evalenv}
 MM_DATASETS=${MM_DATASETS:-/data/ttuser-agentx/mm/datasets}
 export HF_HOME=${HF_HOME:-$MM_DATASETS/hf}
 export TAU2_DATA_DIR=${TAU2_DATA_DIR:-$MM_DATASETS/tau2}
-# A file exporting ANTHROPIC_API_KEY for tau2's Claude user simulator, read if present (never echoed).
-ANTHROPIC_ENV=${MM_ANTHROPIC_ENV:-/data/ttuser-agentx/.anthropic_env}
-# shellcheck disable=SC1090
-[ -z "${ANTHROPIC_API_KEY:-}" ] && [ -f "$ANTHROPIC_ENV" ] && source "$ANTHROPIC_ENV"
-# GPQA's simple-evals CSV, fetched once by prefetch_datasets.py (else gpqa_aa downloads it).
-[ -f "${MM_DATASETS:-/data/ttuser-agentx/mm/datasets}/gpqa_diamond.csv" ] && \
-    export MM_GPQA_CSV=${MM_GPQA_CSV:-${MM_DATASETS:-/data/ttuser-agentx/mm/datasets}/gpqa_diamond.csv}
 HF_ENV=${MM_HF_ENV:-/data/ttuser-agentx/.hf_env}
 # shellcheck disable=SC1090
 [ -f "$HF_ENV" ] && source "$HF_ENV"
@@ -167,42 +156,26 @@ run_inspect() {  # $1 "inspect" | "bench", $2 task spec, then extra args
         --model "$MODEL" --base-url "$BASE_URL" --target "$TARGET" --thinking default --start "$START" --cmd "$CMDLINE"
 }
 
-user_model() {  # tau2's user simulator: --user-model, else Claude Haiku 5.5 (ANTHROPIC_API_KEY), mockllm in a dry run
-    if [ -z "$USER_MODEL" ]; then
-        if [ "$DRY" = 1 ]; then USER_MODEL=mockllm/model
-        else USER_MODEL=anthropic/claude-haiku-5-5
-        fi
-    fi
-    case $USER_MODEL in
-        anthropic/*)
-            [ -n "${ANTHROPIC_API_KEY:-}" ] || { echo "$USER_MODEL needs ANTHROPIC_API_KEY (or $ANTHROPIC_ENV)" >&2; exit 2; } ;;
-        openrouter/*)
-            [ -n "${OPENROUTER_API_KEY:-}" ] || { echo "$USER_MODEL needs OPENROUTER_API_KEY" >&2; exit 2; } ;;
-    esac
-    echo "tau2 user simulator: $USER_MODEL" | tee -a "$OUT/run.log"
-}
-
 case $BENCH in
     mmmu_pro) run_lmms mmmu_pro_standard_cot off ;;
     ocrbench) run_lmms ocrbench off ;;
     videomme_short)
         [ -d "$HF_HOME/videomme/data" ] || { echo "run prefetch_datasets.py videomme --durations short first" >&2; exit 2; }
         run_lmms videomme_short off ;;
+    mmmu_pro_aa) run_lmms mmmu_pro_aa on ;;
     mmau_mini) run_lmms mmau_test_mini off ;;
     librispeech_clean) run_lmms librispeech_test_clean off ;;
     gpqa_diamond) run_inspect inspect "$HERE/openbench_tasks/gpqa_shuffled.py@gpqa_diamond_shuffled" -T "epochs=${EPOCHS:-10}" ;;
     gpqa_openbench) run_inspect bench gpqa_diamond --epochs "${EPOCHS:-10}" ;;
-    gpqa_aa) run_inspect inspect "$HERE/openbench_tasks/aa_tasks.py@gpqa_diamond_aa" -T "epochs=${EPOCHS:-1}" ;;
-    mmmu_pro_aa) run_lmms mmmu_pro_aa on ;;
-    tau2_airline | tau2_telecom_aa)
-        user_model
-        if [ "$BENCH" = tau2_airline ]; then
-            run_inspect inspect "$HERE/openbench_tasks/aa_tasks.py@tau2_airline_openrouter" -T "user_model=$USER_MODEL" \
-                ${EPOCHS:+-T "trials=$EPOCHS"}
-        else
-            run_inspect inspect "$HERE/openbench_tasks/aa_tasks.py@tau2_telecom_aa" -T "user_model=$USER_MODEL" \
-                ${EPOCHS:+-T "trials=$EPOCHS"}
-        fi ;;
+    tau2_airline)
+        if [ -z "$USER_MODEL" ]; then
+            if [ "$DRY" = 1 ]; then USER_MODEL=mockllm/model
+            elif [ -n "${OPENROUTER_API_KEY:-}" ]; then USER_MODEL=openrouter/openai/gpt-4.1
+            elif [ -n "${OPENAI_API_KEY:-}" ]; then USER_MODEL=openai/gpt-4.1
+            else echo "tau2_airline needs a user-simulator model: set OPENROUTER_API_KEY or OPENAI_API_KEY, or --user-model" >&2; exit 2
+            fi
+        fi
+        run_inspect bench tau_bench_airline --alpha -T "user_model=$USER_MODEL" ${EPOCHS:+--epochs "$EPOCHS"} ;;
     *) echo "unknown bench $BENCH" >&2; usage ;;
 esac
 echo "summary: $OUT/summary.json"
