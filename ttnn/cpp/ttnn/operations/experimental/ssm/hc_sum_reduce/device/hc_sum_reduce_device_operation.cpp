@@ -48,8 +48,9 @@ tt::tt_metal::TensorSpec HCSumReduceDeviceOperation::compute_output_specs(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     constexpr uint32_t latent = 32;
     const auto& input_tensor_a = tensor_args.input;
-    const auto& shape_a = input_tensor_a.padded_shape();
-    Shape output_shape({shape_a[0], shape_a[1], shape_a[2], shape_a[3] / latent});
+    const auto& logical_shape = input_tensor_a.logical_shape();
+    const auto& padded_shape = input_tensor_a.padded_shape();
+    Shape output_shape({logical_shape[0], logical_shape[1], logical_shape[2], padded_shape[3] / latent});
     return tt::tt_metal::TensorSpec(
         output_shape, TensorLayout(args.dtype, PageConfig(Layout::TILE), args.memory_config));
 }

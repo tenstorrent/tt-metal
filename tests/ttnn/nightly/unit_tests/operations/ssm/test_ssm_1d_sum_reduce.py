@@ -9,7 +9,7 @@ import ttnn
 import pytest
 from loguru import logger
 
-from tt_py_test_utils_common.utility_functions import tt2torch_tensor, comp_pcc
+from tt_py_test_utils_common.utility_functions import comp_pcc
 
 
 def run_ssm_1d_sum_reduce(H: int, W: int, latent_size: int, dtype, in_mem_config, out_mem_config, device):
@@ -22,10 +22,11 @@ def run_ssm_1d_sum_reduce(H: int, W: int, latent_size: int, dtype, in_mem_config
     x = ttnn.Tensor(x, dtype).to(ttnn.TILE_LAYOUT).to(device, in_mem_config)
     actual = ttnn.experimental.hc_sum_reduce(x, memory_config=out_mem_config, dtype=dtype)
 
-    assert list(actual.padded_shape) == [1, 1, H, W // latent_size]
     assert actual.dtype == dtype
 
-    actual = tt2torch_tensor(actual)
+    actual = ttnn.to_torch(actual)
+    assert list(actual.shape) == [1, 1, H, W // latent_size]
+
     passing_pcc, output_pcc = comp_pcc(actual, expected, 0.9997)
     logger.debug(f"Out passing={passing_pcc}")
     logger.debug(f"Output pcc={output_pcc}")
@@ -58,6 +59,9 @@ def run_ssm_1d_sum_reduce(H: int, W: int, latent_size: int, dtype, in_mem_config
         (32, 163840, 32),
         (128, 1024, 32),
         (64, 163840, 32),
+        (40, 1024, 32),
+        (1, 1024, 32),
+        (33, 1024, 32),
     ),
 )
 def test_ssm_reduce(H, W, latent_size, dtype, out_mem_config, in_mem_config, device):
