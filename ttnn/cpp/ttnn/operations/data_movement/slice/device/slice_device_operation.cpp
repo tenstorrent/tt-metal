@@ -227,12 +227,15 @@ void SliceDeviceOperation::validate_on_program_cache_miss(
         // The input is read up to its slice end; the output is written from offset 0 up to its length.
         const uint32_t input_end = rank1_unstrided ? args.slice_end[0] : 0;
         const uint32_t output_end = rank1_unstrided ? args.slice_end[0] - args.slice_start[0] : 0;
+        // compute_output_specs builds the output TensorSpec with input_tensor.dtype(), so the output
+        // element size is the input's; TensorSpec has no element_size() of its own.
+        const uint32_t element_size = tensor_args.input.element_size();
         ttnn::operations::data_movement::check_rank1_nd_shard_aligned(
             "Slice",
             "input",
             tensor_args.input.memory_config(),
             tensor_args.input.padded_shape(),
-            tensor_args.input.element_size(),
+            element_size,
             rank1_unstrided,
             input_end);
         ttnn::operations::data_movement::check_rank1_nd_shard_aligned(
@@ -240,7 +243,7 @@ void SliceDeviceOperation::validate_on_program_cache_miss(
             "output",
             output_spec.memory_config(),
             output_spec.padded_shape(),
-            output_spec.element_size(),
+            element_size,
             rank1_unstrided,
             output_end);
     }
