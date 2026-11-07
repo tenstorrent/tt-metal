@@ -462,6 +462,7 @@ class _ExchangeCall:
                 if hops > 0:
                     dst = ttnn.MeshCoordinate(coord[0], (coord[1] + step) % ex.ring)
                     fabric_args += ttnn.setup_fabric_connection(
+                        mesh_device=mesh,
                         src_fabric_node_id=src,
                         dst_fabric_node_id=mesh.get_fabric_node_id(dst),
                         link_idx=0,
@@ -488,19 +489,27 @@ class FusedDecodeSampling(TTSampling):
         self._force_argmax_sampling = False
         self._params_key = None
 
-    def reset_params(self, k, p, temp, enable_log_probs=None, num_logprobs=None, empty_slots=None):
+    def reset_params(
+        self, k, p, temp, enable_log_probs=None, num_logprobs=None, empty_slots=None, log_probs_enable_temperature=None
+    ):
         """Re-upload the parameter tensors only when the request parameters changed (the generator may reload the
         same parameters every step). TTSampling.reset_params skips the upload for force-argmax requests; the stock
         path (prefill sampling) still reads k / p / temp then, so upload them for every change and set the
         force-argmax flag afterwards."""
-        key = repr((k, p, temp, enable_log_probs, num_logprobs, empty_slots))
+        key = repr((k, p, temp, enable_log_probs, num_logprobs, empty_slots, log_probs_enable_temperature))
         if key == self._params_key:
             return
         allow = self._allow_force_argmax_sampling
         self._allow_force_argmax_sampling = False
         try:
             super().reset_params(
-                k, p, temp, enable_log_probs=enable_log_probs, num_logprobs=num_logprobs, empty_slots=empty_slots
+                k,
+                p,
+                temp,
+                enable_log_probs=enable_log_probs,
+                num_logprobs=num_logprobs,
+                empty_slots=empty_slots,
+                log_probs_enable_temperature=log_probs_enable_temperature,
             )
         finally:
             self._allow_force_argmax_sampling = allow

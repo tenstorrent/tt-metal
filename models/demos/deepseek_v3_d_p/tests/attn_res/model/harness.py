@@ -14,6 +14,8 @@ draws several things from one stream keeps its own draw order and stays reproduc
 across changes here.
 """
 
+from pathlib import Path
+
 import pytest
 import torch
 
@@ -41,7 +43,7 @@ PROJ_STD = 0.02
 # gives it nor see the L1 fragmentation the fallback causes. 1152 is what K3 sets.
 L1_SMALL_SIZE = 1152
 
-# `ttnn.all_reduce` and the gather kernel's own fabric writes both need an initialized
+# The block statistics' gather and the read's exchange both need an initialized
 # fabric context on a real mesh; without it they die in the control plane rather than
 # returning wrong numbers. 2D is what the rest of this model runs on and what the op's
 # own unit test pins, and the two must agree — the op picks its route from the config.
@@ -50,6 +52,17 @@ L1_SMALL_SIZE = 1152
 EXACT_BOX = {"require_exact_physical_num_devices": True}
 
 FABRIC = {"fabric_config": ttnn.FabricConfig.FABRIC_2D, "l1_small_size": L1_SMALL_SIZE, **EXACT_BOX}
+
+# How a Galaxy runs the 4x4 arms: half its chips, as one 16-chip subtorus. Set on the command
+# line, since the visible chips are fixed when the process opens the cluster.
+SUBTORUS_4X4_ENV = {
+    "TT_VISIBLE_DEVICES": "2,3,6,7,10,11,14,15,18,19,22,23,26,27,30,31",
+    "TT_MESH_GRAPH_DESC_PATH": str(
+        Path(__file__).resolve().parents[3]
+        / "experimental_descriptors"
+        / "single_bh_galaxy_subtorus_xy4_graph_descriptor.textproto"
+    ),
+}
 
 
 def placements():
@@ -91,11 +104,24 @@ def placements():
             torus_xy_device_params(l1_small_size=L1_SMALL_SIZE, **EXACT_BOX),
             id="torusxy-mesh-8x4",
         ),
+        # A 4x4 pipeline stage, SC1's shape: a Galaxy carved to 16 chips with
+        # `SUBTORUS_4X4_ENV`. The arms that do not match the carve drop out like the others.
+        pytest.param(
+            (4, 4),
+            torus_x_device_params(l1_small_size=L1_SMALL_SIZE, **EXACT_BOX),
+            id="torusx-mesh-4x4",
+        ),
+        pytest.param(
+            (4, 4),
+            torus_xy_device_params(l1_small_size=L1_SMALL_SIZE, **EXACT_BOX),
+            id="torusxy-mesh-4x4",
+        ),
     ]
 
 
-# The op was brought up and measured only on Blackhole, and its mixture runs on
-# `ttnn.experimental.deepseek_prefill.attn_res_weighted_reduce_nc`, which has no Wormhole coverage.
+# The op was brought up and measured only on Blackhole, and its fused ops
+# (`ttnn.experimental.deepseek_prefill.attn_res_block_stats`, `attn_res_block_mix` and
+# `attn_res_gather_softmax`) have no Wormhole coverage; `attn_res_block_stats` refuses any other arch.
 blackhole_only = pytest.mark.skipif(not is_blackhole(), reason="Kimi K3 AttnRes is brought up on Blackhole only")
 
 
@@ -154,7 +180,7 @@ def read_block(op, tt_block, tt_prefix, tt_queries):
     soon as it is composed, so the block holds one output at a time — a caller that needs
     them together builds its own list.
     """
-    partials, shifts, masses = op.inter_block(tt_block, tt_queries)
+    partials, shifts, masses, _ = op.inter_block(tt_block, tt_queries)
     try:
         for site, tt_query in enumerate(tt_queries):
             merged = op.merge(partials, shifts, masses, tt_prefix, tt_query, site)

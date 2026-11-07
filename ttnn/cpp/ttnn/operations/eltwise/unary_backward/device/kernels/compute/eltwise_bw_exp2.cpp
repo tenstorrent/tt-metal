@@ -2,8 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// grad * d/dx exp2(x), evaluated over BF16 DEST by exp2_bw_tile.
-
 #include <cstdint>
 
 #include "api/compute/compute_kernel_hw_startup.h"
