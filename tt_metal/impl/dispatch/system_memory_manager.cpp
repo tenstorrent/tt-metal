@@ -134,6 +134,8 @@ SystemMemoryManager::SystemMemoryManager(MetalEnvImpl& env, MetalContext& ctx, C
     prefetch_q_dev_fences(num_hw_cqs),
     // The ring starts zeroed, which reads as phase 0, so the first lap writes phase 1.
     prefetch_q_phases(num_hw_cqs, 1) {
+    // Sized once: CQs of the device may be driven from different threads.
+    this->deferred_commands_.resize(num_hw_cqs);
     this->prefetch_q_windows.reserve(num_hw_cqs);
     this->completion_q_windows.reserve(num_hw_cqs);
 
@@ -418,6 +420,12 @@ void SystemMemoryManager::set_issue_queue_size(const uint8_t cq_id, const uint32
 }
 
 void SystemMemoryManager::set_bypass_mode(const bool enable, const bool clear) {
+    if (enable && !this->bypass_enable) {
+        // Deferred commands belong before what bypass mode captures.
+        for (uint8_t cq_id = 0; cq_id < this->deferred_commands_.size(); cq_id++) {
+            this->flush_deferred_commands(cq_id);
+        }
+    }
     this->bypass_enable = enable;
     if (clear) {
         this->bypass_buffer.clear();
@@ -516,6 +524,29 @@ ChipId SystemMemoryManager::get_device_id() const { return this->device_id; }
 std::vector<SystemMemoryCQInterface>& SystemMemoryManager::get_cq_interfaces() { return this->cq_interfaces; }
 
 void* SystemMemoryManager::issue_queue_reserve(uint32_t cmd_size_B, const uint8_t cq_id) {
+    this->flush_deferred_commands(cq_id);
+    return this->issue_queue_reserve_impl(cmd_size_B, cq_id);
+}
+
+void SystemMemoryManager::defer_commands(std::shared_ptr<const std::vector<uint32_t>> commands, const uint8_t cq_id) {
+    this->flush_deferred_commands(cq_id);
+    this->deferred_commands_.at(cq_id) = std::move(commands);
+}
+
+void SystemMemoryManager::flush_deferred_commands(const uint8_t cq_id) {
+    if (!this->deferred_commands_[cq_id]) {
+        return;
+    }
+    const auto commands = std::move(this->deferred_commands_[cq_id]);
+    const uint32_t size = commands->size() * sizeof(uint32_t);
+    this->issue_queue_reserve_impl(size, cq_id);
+    this->cq_write(commands->data(), size, this->get_issue_queue_write_ptr(cq_id));
+    this->issue_queue_push_back(size, cq_id);
+    this->fetch_queue_reserve_back(cq_id);
+    this->fetch_queue_write(size, cq_id);
+}
+
+void* SystemMemoryManager::issue_queue_reserve_impl(uint32_t cmd_size_B, const uint8_t cq_id) {
     if (is_mock_device()) {
         thread_local std::array<char, 65536> dummy_buffer{};
         return dummy_buffer.data();

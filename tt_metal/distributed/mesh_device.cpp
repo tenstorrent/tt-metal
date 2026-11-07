@@ -155,6 +155,18 @@ MeshCoordinate compute_system_mesh_offset(const MeshDeviceView& view, const Syst
     TT_THROW("Failed to find offset for mesh device view");
 }
 
+// A sub-device manager switch during trace capture is recorded into the trace instead of sent
+// (FDMeshCommandQueue::record_end encodes each segment under the manager it ran in).
+template <typename CommandQueues>
+std::optional<MeshTraceId> capturing_trace_id(const CommandQueues& command_queues) {
+    for (const auto& cq : command_queues) {
+        if (cq != nullptr && cq->trace_id().has_value()) {
+            return cq->trace_id();
+        }
+    }
+    return std::nullopt;
+}
+
 }  // namespace
 
 MeshDeviceImpl::ScopedDevices::ScopedDevices(
@@ -304,24 +316,41 @@ std::vector<AllocatorImpl*> MeshDeviceImpl::trace_allocators(SubDeviceManagerId 
 // NOLINTNEXTLINE(readability-make-member-function-const)
 void MeshDeviceImpl::register_active_trace(const MeshTraceId& trace_id) {
     validate_sub_device_manager_tracker();
-    const auto manager_id = sub_device_manager_tracker_->get_active_sub_device_manager_id();
-    for (auto* allocator : this->trace_allocators(manager_id)) {
-        allocator->register_active_trace(manager_id, trace_id);
+    for (const auto manager_id : this->trace_manager_ids(trace_id)) {
+        for (auto* allocator : this->trace_allocators(manager_id)) {
+            allocator->register_active_trace(manager_id, trace_id);
+        }
     }
 }
 
 // NOLINTNEXTLINE(readability-make-member-function-const)
 void MeshDeviceImpl::unregister_active_trace(const MeshTraceId& trace_id) {
     validate_sub_device_manager_tracker();
-    const auto manager_id = sub_device_manager_tracker_->get_active_sub_device_manager_id();
-    for (auto* allocator : this->trace_allocators(manager_id)) {
-        allocator->unregister_active_trace(manager_id, trace_id);
+    for (const auto manager_id : this->trace_manager_ids(trace_id)) {
+        for (auto* allocator : this->trace_allocators(manager_id)) {
+            allocator->unregister_active_trace(manager_id, trace_id);
+        }
     }
+    switching_traces_.erase(trace_id);
+}
+
+std::set<SubDeviceManagerId> MeshDeviceImpl::trace_manager_ids(const MeshTraceId& trace_id) const {
+    auto switching = switching_traces_.find(trace_id);
+    if (switching == switching_traces_.end()) {
+        return {sub_device_manager_tracker_->get_active_sub_device_manager_id()};
+    }
+    std::set<SubDeviceManagerId> manager_ids = switching->second.through;
+    manager_ids.insert(switching->second.start);
+    return manager_ids;
 }
 
 std::unordered_map<size_t, std::string> MeshDeviceImpl::get_unsafe_tracked_ids(const MeshTraceId& trace_id) const {
     validate_sub_device_manager_tracker();
-    return this->get_unsafe_tracked_ids(sub_device_manager_tracker_->get_active_sub_device_manager_id(), trace_id);
+    std::unordered_map<size_t, std::string> result;
+    for (const auto manager_id : this->trace_manager_ids(trace_id)) {
+        result.merge(this->get_unsafe_tracked_ids(manager_id, trace_id));
+    }
+    return result;
 }
 std::unordered_map<size_t, std::string> MeshDeviceImpl::get_unsafe_tracked_ids(
     SubDeviceManagerId manager_id, const MeshTraceId& trace_id) const {
@@ -1396,6 +1425,36 @@ void MeshDeviceImpl::remove_sub_device_manager(SubDeviceManagerId sub_device_man
     auto lock = lock_api();
     TT_FATAL(!command_list_builder_active_, "Cannot remove a sub-device manager while a CommandListBuilder is active");
     validate_sub_device_manager_tracker();
+    // A capture that switched through it needs it to encode the trace, and a live trace that switches through it to
+    // replay.
+    if (const auto capturing = capturing_trace_id(mesh_command_queues_)) {
+        const auto switching = switching_traces_.find(*capturing);
+        TT_FATAL(
+            switching == switching_traces_.end() || switching->second.start != sub_device_manager_id,
+            "Cannot remove sub-device manager {}: trace {} being captured switches through it",
+            *sub_device_manager_id,
+            *capturing);
+    }
+    for (const auto& [trace_id, trace] : switching_traces_) {
+        TT_FATAL(
+            !trace.through.contains(sub_device_manager_id),
+            "Cannot remove sub-device manager {}: trace {} switches through it",
+            *sub_device_manager_id,
+            *trace_id);
+    }
+    // Its own traces go with it.
+    std::erase_if(switching_traces_, [&](const auto& entry) {
+        const auto& [trace_id, trace] = entry;
+        if (trace.start != sub_device_manager_id) {
+            return false;
+        }
+        for (const auto manager_id : trace.through) {
+            for (auto* allocator : this->trace_allocators(manager_id)) {
+                allocator->unregister_active_trace(manager_id, trace_id);
+            }
+        }
+        return true;
+    });
     sub_device_manager_tracker_->remove_sub_device_manager(sub_device_manager_id);
     this->allocator_impl()->unregister_active_traces(sub_device_manager_id);
 }
@@ -1410,13 +1469,56 @@ void MeshDeviceImpl::load_sub_device_manager(SubDeviceManagerId sub_device_manag
         !::tt::tt_metal::experimental::DispatchContext::get().is_fast_dispatch_session_active(),
         "Sub-device managers are not supported with manual Fast Dispatch: a session opened with "
         "DispatchContext::initialize_fast_dispatch is active.");
+    this->check_switch_during_capture(sub_device_manager_id);
+    const auto from_manager_id = sub_device_manager_tracker_->get_active_sub_device_manager_id();
     sub_device_manager_tracker_->load_sub_device_manager(sub_device_manager_id);
+    this->record_switch_during_capture(from_manager_id, sub_device_manager_id);
 }
 void MeshDeviceImpl::clear_loaded_sub_device_manager() {
     auto lock = lock_api();
     TT_FATAL(!command_list_builder_active_, "Cannot clear the sub-device manager while a CommandListBuilder is active");
     validate_sub_device_manager_tracker();
+    this->check_switch_during_capture(sub_device_manager_tracker_->get_default_sub_device_manager_id());
+    const auto from_manager_id = sub_device_manager_tracker_->get_active_sub_device_manager_id();
     sub_device_manager_tracker_->clear_loaded_sub_device_manager();
+    this->record_switch_during_capture(
+        from_manager_id, sub_device_manager_tracker_->get_default_sub_device_manager()->id());
+}
+void MeshDeviceImpl::check_switch_during_capture(SubDeviceManagerId to_manager_id) const {
+    const auto trace_id = capturing_trace_id(mesh_command_queues_);
+    // Loading the active manager again changes nothing, so it's allowed with any number of CQs.
+    if (!trace_id || to_manager_id == sub_device_manager_tracker_->get_active_sub_device_manager_id()) {
+        return;
+    }
+    // Only the capturing CQ records the switch (FDMeshCommandQueue::reset_worker_state).
+    TT_FATAL(this->num_hw_cqs() == 1, "Switching sub-device managers in a trace needs one hardware command queue");
+    // The trace is registered with every manager it switches through, by its id: that id must be free there.
+    const auto switching = switching_traces_.find(*trace_id);
+    const auto start = switching == switching_traces_.end()
+                           ? sub_device_manager_tracker_->get_active_sub_device_manager_id()
+                           : switching->second.start;
+    auto* to_manager = sub_device_manager_tracker_->find_sub_device_manager(to_manager_id);
+    TT_FATAL(
+        to_manager_id == start || to_manager == nullptr || to_manager->get_trace(*trace_id) == nullptr,
+        "Trace {} cannot switch to sub-device manager {}: that manager already has a trace with this id",
+        **trace_id,
+        *to_manager_id);
+}
+void MeshDeviceImpl::record_switch_during_capture(
+    SubDeviceManagerId from_manager_id, SubDeviceManagerId to_manager_id) {
+    const auto capturing = capturing_trace_id(mesh_command_queues_);
+    if (!capturing || from_manager_id == to_manager_id) {
+        return;
+    }
+    const auto trace_id = *capturing;
+    auto& trace = switching_traces_.try_emplace(trace_id, SwitchingTrace{.start = from_manager_id}).first->second;
+    if (to_manager_id != trace.start) {
+        trace.through.insert(to_manager_id);
+    }
+}
+void MeshDeviceImpl::set_active_sub_device_manager_view(SubDeviceManagerId sub_device_manager_id) {
+    validate_sub_device_manager_tracker();
+    sub_device_manager_tracker_->set_active_sub_device_manager_view(sub_device_manager_id);
 }
 
 CoreCoord MeshDeviceImpl::dram_grid_size() const {
@@ -1687,6 +1789,13 @@ void MeshDeviceImpl::release_mesh_trace(const MeshTraceId& trace_id) {
     TracyTTMetalReleaseMeshTrace(*this, this->get_device_ids(), *trace_id);
 
     validate_sub_device_manager_tracker();
+    if (auto switching = switching_traces_.find(trace_id); switching != switching_traces_.end()) {
+        TT_FATAL(
+            sub_device_manager_tracker_->get_active_sub_device_manager_id() == switching->second.start,
+            "Release trace {} in sub-device manager {}, which it was captured in",
+            *trace_id,
+            *switching->second.start);
+    }
     {
         // Serializes the trace-pool erase with the trace check in acquire_command_list_builder.
         auto lock = lock_api();
@@ -1732,6 +1841,12 @@ void MeshDeviceImpl::begin_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id
 
         // Create an empty trace buffer here. This will get initialized in end_trace
         auto* active_sub_device_manager = sub_device_manager_tracker_->get_active_sub_device_manager();
+        // A live trace that switches managers holds its id in every manager it switches through.
+        TT_FATAL(
+            !switching_traces_.contains(trace_id),
+            "Trace {} already exists and switches sub-device managers on device {}",
+            *trace_id,
+            this->mesh_id_);
         TT_FATAL(
             active_sub_device_manager->get_trace(trace_id) == nullptr,
             "Trace already exists for tid {} on device {}'s active sub-device manager {}",
@@ -1751,6 +1866,21 @@ void MeshDeviceImpl::begin_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id
 
 void MeshDeviceImpl::end_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id) {
     TracyTTMetalEndMeshTrace(*this, this->get_device_ids(), *trace_id);
+
+    // A capture that switched sub-device managers ends in the one it began in: the switch back is recorded too. If it
+    // cannot switch (the current manager still has sub-device-local allocations), this throws before anything changes
+    // and the capture stays open: free them and end it again. (The CQ check is repeated below the cleanup, where main
+    // has it, so a capture on another CQ still registers the trace as before.)
+    if (auto switching = switching_traces_.find(trace_id);
+        switching != switching_traces_.end() &&
+        sub_device_manager_tracker_->get_active_sub_device_manager_id() != switching->second.start) {
+        TT_FATAL(
+            this->mesh_command_queues_[cq_id]->trace_id() == trace_id,
+            "CQ {} is not being used for tracing tid {}",
+            (uint32_t)cq_id,
+            trace_id);
+        this->load_sub_device_manager(switching->second.start);
+    }
 
     // Register the trace on any exit, including thrown exceptions, so subsequent allocations are treated
     // conservatively until the trace is released.

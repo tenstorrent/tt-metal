@@ -131,8 +131,6 @@ TEST_F(UnitMeshCQSingleCardTraceFixture, TensixTestSubDeviceIllegalOperations) {
 
     // Capture the trace
     auto tid_1 = mesh_device->begin_mesh_trace(mesh_device->mesh_command_queue());
-    // Can not load a sub-device manager while tracing
-    EXPECT_THROW(mesh_device->load_sub_device_manager(sub_device_manager_2), std::exception);
     distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), waiter_workload_1, false);
     distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), syncer_workload_1, false);
     distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), incrementer_workload_1, false);

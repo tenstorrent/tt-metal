@@ -290,6 +290,18 @@ void reset_worker_dispatch_state_on_device(
     bool reset_launch_msg_state,
     ttsl::Span<const vector_aligned<uint32_t>> setup_commands);
 
+// reset_worker_dispatch_state_on_device in two steps: the reset commands are the same on every device of a mesh.
+vector_aligned<uint32_t> build_worker_dispatch_reset_commands(
+    distributed::MeshDevice* mesh_device,
+    const DispatchArray<uint32_t>& expected_num_workers_completed,
+    const DispatchArray<LaunchMessageRingBufferState>& worker_launch_message_buffer_state,
+    bool reset_launch_msg_state);
+void write_worker_dispatch_reset_commands(
+    SystemMemoryManager& manager,
+    uint8_t cq_id,
+    ttsl::Span<const uint32_t> reset_commands,
+    ttsl::Span<const vector_aligned<uint32_t>> setup_commands);
+
 void set_num_worker_sems_on_dispatch(
     SystemMemoryManager& manager,
     uint8_t cq_id,

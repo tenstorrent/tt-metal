@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "impl/buffers/buffer_impl.hpp"
+#include <tt_stl/cleanup.hpp>
 #include <tt_stl/fmt.hpp>
 #include "fd_mesh_command_queue.hpp"
 
@@ -160,6 +161,26 @@ dispatch_telemetry_types::SMCDispatchCoreCoords build_smc_dispatch_core_coords(D
                                ? pack_logical_dispatch_core(dcm.dispatcher_s_core(chip, channel, cq_id))
                                : dispatch_telemetry_types::INVALID_SMC_DISPATCH_CORE_COORDS;
     return coords;
+}
+
+// Writes `commands` to one device as one fetch queue entry, after a sub-device manager switch's held-back commands,
+// if any.
+void write_fetch_entry(
+    SystemMemoryManager& manager,
+    uint8_t cq_id,
+    const vector_aligned<uint32_t>& commands,
+    const std::shared_ptr<const std::vector<uint32_t>>& deferred) {
+    const uint32_t size = commands.size() * sizeof(uint32_t);
+    const uint32_t deferred_size = deferred ? deferred->size() * sizeof(uint32_t) : 0;
+    manager.issue_queue_reserve(deferred_size + size, cq_id);
+    const uint32_t write_ptr = manager.get_issue_queue_write_ptr(cq_id);
+    if (deferred) {
+        manager.cq_write(deferred->data(), deferred_size, write_ptr);
+    }
+    manager.cq_write(commands.data(), size, write_ptr + deferred_size);
+    manager.issue_queue_push_back(deferred_size + size, cq_id);
+    manager.fetch_queue_reserve_back(cq_id);
+    manager.fetch_queue_write(deferred_size + size, cq_id);
 }
 
 }  // namespace
@@ -1314,6 +1335,17 @@ void FDMeshCommandQueue::reset_worker_state(
     uint32_t num_sub_devices,
     const std::vector<std::pair<CoreRangeSet, uint32_t>>& core_go_message_mapping,
     ttsl::Span<const uint32_t> workers_per_sub_device) {
+    if (trace_id_.has_value()) {
+        // A manager switch during capture (one hardware CQ, MeshDeviceImpl::check_switch_during_capture): record_end
+        // writes it into the trace, so nothing is sent to the devices here. Host dispatch state is left alone: capture
+        // doesn't use it, and record_end restores the state from before the capture.
+        trace_nodes_.push_back(MeshTraceNode{
+            .sub_device_manager_switch = SubDeviceManagerSwitch{
+                .from_manager_id = mesh_device_->get_active_sub_device_manager_id(),
+                .workers_per_sub_device = {workers_per_sub_device.begin(), workers_per_sub_device.end()},
+                .core_go_message_mapping = core_go_message_mapping}});
+        return;
+    }
     for (auto* device : mesh_device_->impl().get_devices()) {
         TT_FATAL(!device->sysmem_manager().get_bypass_mode(), "Cannot reset worker state during trace capture");
     }
@@ -1362,17 +1394,33 @@ void FDMeshCommandQueue::reset_worker_state(
     }
     std::rotate(sub_device_setup_commands_.begin(), cached, std::next(cached));
     cached = sub_device_setup_commands_.begin();
+    // Old-manager completion counts remain dynamic. The cached tail still resets GO mailboxes and retains all barriers.
+    // The reset is the same on every device: build it once. With one hardware CQ, when it and the setup fit one fetch,
+    // each device holds them back for its next program, which takes them into its own fetch queue entry when it is
+    // packed for several devices (write_program_commands_to_devices); any other command writes them first
+    // (SystemMemoryManager::issue_queue_reserve). With more CQs they go out now: another CQ's programs may need this
+    // CQ's reset of the shared launch message state.
+    const auto reset_commands = program_dispatch::build_worker_dispatch_reset_commands(
+        mesh_device_,
+        expected_num_workers_completed_,
+        cq_shared_state_->worker_launch_message_buffer_state,
+        reset_launch_msg_state);
+    const uint32_t max_fetch_size =
+        mesh_device_->impl().metal_context().dispatch_mem_map().max_prefetch_command_size();
+    const bool defer = mesh_device_->num_hw_cqs() == 1;
     for (size_t i = 0; i < devices.size(); ++i) {
-        // Old-manager completion counts remain dynamic. The cached tail still resets GO mailboxes
-        // and retains all barriers; batching changes only host submission granularity.
-        program_dispatch::reset_worker_dispatch_state_on_device(
-            mesh_device_,
-            devices[i]->sysmem_manager(),
-            id_,
-            expected_num_workers_completed_,
-            cq_shared_state_->worker_launch_message_buffer_state,
-            reset_launch_msg_state,
-            cached->device_batches[i]);
+        const auto& batches = cached->device_batches[i];
+        const size_t setup_size = batches.empty() ? 0 : batches.front().size();
+        if (defer && batches.size() <= 1 && (reset_commands.size() + setup_size) * sizeof(uint32_t) <= max_fetch_size) {
+            auto commands = std::make_shared<std::vector<uint32_t>>(reset_commands.begin(), reset_commands.end());
+            if (!batches.empty()) {
+                commands->insert(commands->end(), batches.front().begin(), batches.front().end());
+            }
+            devices[i]->sysmem_manager().defer_commands(std::move(commands), id_);
+            continue;
+        }
+        program_dispatch::write_worker_dispatch_reset_commands(
+            devices[i]->sysmem_manager(), id_, reset_commands, batches);
     }
     program_dispatch::reset_config_buf_mgrs_and_expected_workers(
         mesh_device_->impl().metal_env().get_hal(),
@@ -1393,6 +1441,7 @@ void FDMeshCommandQueue::write_program_commands_to_devices(
     ProgramCommandSequence& program_cmd_seq,
     bool stall_first,
     bool stall_before_program) {
+    const uint32_t max_fetch_size = program_cmd_seq.ctx->dispatch_mem_map().max_prefetch_command_size();
     if (host_transfer_stats_->enabled() && !devices.empty()) {
         const auto target = this->get_target_device_type();
         if (target != tt::TargetDevice::Mock && target != tt::TargetDevice::Emule) {
@@ -1403,18 +1452,19 @@ void FDMeshCommandQueue::write_program_commands_to_devices(
     }
     if (devices.size() > 1) {
         const auto size = program_cmd_seq.get_one_shot_fetch_size(stall_first, stall_before_program, true);
-        if (size <= program_cmd_seq.ctx->dispatch_mem_map().max_prefetch_command_size()) {
+        if (size <= max_fetch_size) {
             // Every local device receives the same bytes. Pack the fragments once before the device copies.
             static thread_local vector_aligned<uint32_t> packed;
             program_dispatch::pack_program_command_sequence(
                 program_cmd_seq, stall_first, stall_before_program, true, packed);
             for (auto* device : devices) {
                 auto& manager = device->sysmem_manager();
-                manager.issue_queue_reserve(size, id_);
-                manager.cq_write(packed.data(), size, manager.get_issue_queue_write_ptr(id_));
-                manager.issue_queue_push_back(size, id_);
-                manager.fetch_queue_reserve_back(id_);
-                manager.fetch_queue_write(size, id_);
+                // A sub-device manager switch's held-back commands share the program's fetch queue entry.
+                std::shared_ptr<const std::vector<uint32_t>> deferred;
+                if (manager.deferred_commands_size(id_) + size <= max_fetch_size) {
+                    deferred = manager.take_deferred_commands(id_);
+                }
+                write_fetch_entry(manager, id_, packed, deferred);
             }
             return;
         }
@@ -1877,7 +1927,20 @@ void FDMeshCommandQueue::record_begin(const MeshTraceId& trace_id, const std::sh
     swap(this->dummy_prefetcher_cache_manager_, this->prefetcher_cache_manager_);
 }
 
+namespace {
+
+// A switch recorded in the trace, written before the segment after it.
+struct PendingManagerSwitch {
+    size_t switch_node = 0;
+    DispatchArray<uint32_t> workers_completed{};
+    DispatchArray<LaunchMessageRingBufferState> launch_message_buffer_state{};
+};
+
+}  // namespace
+
 void FDMeshCommandQueue::record_end() {
+    // Like record_begin: encoding views each segment's sub-device manager in turn.
+    auto lock = lock_api_function_();
     MetalContext& metal_ctx = mesh_device_->impl().metal_context();
     const auto& hal = mesh_device_->impl().metal_env().get_hal();
 
@@ -1912,7 +1975,66 @@ void FDMeshCommandQueue::record_end() {
     size_t max_trace_size = 0;
     std::set<SubDeviceId> sub_device_ids;
     std::optional<std::unordered_map<SubDeviceId, TraceWorkerDescriptor>> overall_trace_worker_descriptors;
+    // A capture that switched sub-device managers is encoded in segments split at the switches, each like a trace of
+    // its own under the manager it ran in, since a switch drains the workers and resets their state. The capture
+    // starts and ends in the same manager (begin/end_mesh_trace find the trace under the active one).
+    struct Segment {
+        MeshCoordinateRange range;
+        size_t begin = 0;
+        size_t end = 0;
+        SubDeviceManagerId manager_id;
+        bool first = false;
+        bool last = false;
+    };
+    const SubDeviceManagerId end_manager_id = mesh_device_->get_active_sub_device_manager_id();
+    auto restore_manager_view = ttsl::make_cleanup(
+        [this, end_manager_id]() { mesh_device_->impl().set_active_sub_device_manager_view(end_manager_id); });
+    std::vector<Segment> segments;
     for (const auto& range : device_ranges) {
+        size_t begin = 0;
+        for (size_t end = 0; end <= trace_nodes_.size(); end++) {
+            if (end < trace_nodes_.size() && !trace_nodes_[end].sub_device_manager_switch) {
+                continue;
+            }
+            const bool last = end == trace_nodes_.size();
+            segments.push_back(
+                {range,
+                 begin,
+                 end,
+                 last ? end_manager_id : trace_nodes_[end].sub_device_manager_switch->from_manager_id,
+                 begin == 0,
+                 last});
+            begin = end + 1;
+        }
+    }
+    const bool has_manager_switches = segments.size() > device_ranges.size();
+    // As load_sub_device_manager sends it outside a trace: wait for the previous manager's workers, reset their launch
+    // message read pointers, then set up the next manager's worker counts and GO mailboxes. Like every traced command
+    // of a device range, the setup is built once for the range: its cores are in virtual coordinates, the same on
+    // every device.
+    std::optional<PendingManagerSwitch> pending_switch;
+    auto write_manager_switch = [&](const Segment& next, SystemMemoryManager& sysmem_manager) {
+        const auto& manager_switch = *trace_nodes_[pending_switch->switch_node].sub_device_manager_switch;
+        mesh_device_->impl().set_active_sub_device_manager_view(manager_switch.from_manager_id);
+        program_dispatch::reset_worker_dispatch_state_on_device(
+            mesh_device_,
+            sysmem_manager,
+            this->id_,
+            pending_switch->workers_completed,
+            pending_switch->launch_message_buffer_state,
+            /*reset_launch_msg_state=*/true,
+            program_dispatch::build_sub_device_setup_commands(
+                static_cast<Device*>(  // NOLINT(cppcoreguidelines-pro-type-static-cast-downcast)
+                    internal::get_device(*mesh_device_, next.range.start_coord())),
+                manager_switch.workers_per_sub_device,
+                manager_switch.core_go_message_mapping,
+                /*reset_launch_msg_state=*/true));
+        mesh_device_->impl().set_active_sub_device_manager_view(next.manager_id);
+        pending_switch.reset();
+    };
+    for (const auto& segment : segments) {
+        const auto& range = segment.range;
+        mesh_device_->impl().set_active_sub_device_manager_view(segment.manager_id);
         // NOTE: TraceNode objects may be shared across device ranges (when a program's device range
         // spans multiple partition ranges). Each iteration of this loop mutates
         // node.dispatch_metadata (sync_count, prefetcher_cache_info, etc.) on shared nodes. This is
@@ -1932,7 +2054,8 @@ void FDMeshCommandQueue::record_end() {
         };
         DispatchArray<UnusedNodeData> unused_nodes;
 
-        for (auto& mesh_node : trace_nodes_) {
+        for (size_t mesh_node_idx = segment.begin; mesh_node_idx < segment.end; mesh_node_idx++) {
+            auto& mesh_node = trace_nodes_[mesh_node_idx];
             bool used = false;
             for (size_t program_idx = 0; program_idx < mesh_node.trace_nodes.size(); ++program_idx) {
                 auto& [device_range, node] = mesh_node.trace_nodes[program_idx];
@@ -1976,9 +2099,14 @@ void FDMeshCommandQueue::record_end() {
 
         // Each device range produces an independent trace byte stream, so reset the prefetcher
         // cache manager to give each range a clean slate.
-        this->reset_prefetcher_cache_manager();
+        if (segment.first) {
+            this->reset_prefetcher_cache_manager();
+        }
 
         auto& sysmem_manager_for_trace = internal::get_device(*mesh_device_, range.start_coord())->sysmem_manager();
+        if (pending_switch.has_value()) {
+            write_manager_switch(segment, sysmem_manager_for_trace);
+        }
         auto& worker_launch_message_buffer_state = cq_shared_state_->worker_launch_message_buffer_state;
         for (uint32_t sub_device_id = 0; sub_device_id < mesh_device_->num_sub_devices(); sub_device_id++) {
             worker_launch_message_buffer_state[sub_device_id].reset();
@@ -2135,6 +2263,23 @@ void FDMeshCommandQueue::record_end() {
                 trace_worker_descriptors[sub_device_id].num_traced_programs_needing_go_signal_multicast++;
             }
             trace_worker_descriptors[sub_device_id].num_completion_worker_cores += num_workers;
+        }
+
+        if (!segment.last) {
+            pending_switch = PendingManagerSwitch{
+                .switch_node = segment.end, .launch_message_buffer_state = worker_launch_message_buffer_state};
+            for (const auto& [sub_device_id, trace_worker_descriptor] : trace_worker_descriptors) {
+                pending_switch->workers_completed[*sub_device_id] = trace_worker_descriptor.num_completion_worker_cores;
+            }
+            continue;
+        }
+        if (has_manager_switches) {
+            // The last switch reset every sub-device of the end manager on device, so the replay starts them all from a
+            // reset, used by the trace or not.
+            for (uint32_t sub_device_id = 0; sub_device_id < mesh_device_->num_sub_devices(); sub_device_id++) {
+                trace_worker_descriptors[SubDeviceId{static_cast<uint8_t>(sub_device_id)}].reset_launch_msg_at_start =
+                    true;
+            }
         }
 
         auto& bypass_data = sysmem_manager_for_trace.get_bypass_data();

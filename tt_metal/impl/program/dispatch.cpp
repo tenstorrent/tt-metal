@@ -3542,17 +3542,14 @@ void reset_config_buf_mgrs_and_expected_workers(
     std::fill(expected_num_workers_completed.begin(), expected_num_workers_completed.begin() + num_entries_to_reset, 0);
 }
 
-void reset_worker_dispatch_state_on_device(
+vector_aligned<uint32_t> build_worker_dispatch_reset_commands(
     distributed::MeshDevice* mesh_device,
-    SystemMemoryManager& manager,
-    uint8_t cq_id,
     const DispatchArray<uint32_t>& expected_num_workers_completed,
     const DispatchArray<LaunchMessageRingBufferState>& worker_launch_message_buffer_state,
-    bool reset_launch_msg_state,
-    ttsl::Span<const vector_aligned<uint32_t>> setup_commands) {
+    bool reset_launch_msg_state) {
     auto num_sub_devices = mesh_device->num_sub_devices();
 
-    MetalContext& metal_ctx = manager.metal_context();
+    MetalContext& metal_ctx = MetalContext::instance(mesh_device->impl().get_context_id());
     tt::tt_metal::DeviceCommandCalculator calculator(metal_ctx);
     if (reset_launch_msg_state) {
         for (int i = 0; i < num_sub_devices; ++i) {
@@ -3570,13 +3567,7 @@ void reset_worker_dispatch_state_on_device(
     }
 
     const uint32_t reset_size = calculator.write_offset_bytes();
-    const uint32_t first_setup_size = setup_commands.empty() ? 0 : setup_commands.front().size() * sizeof(uint32_t);
-    const bool combine_setup = setup_batch::can_combine_setup(
-        reset_size, first_setup_size, metal_ctx.dispatch_mem_map().max_prefetch_command_size());
-    const uint32_t cmd_sequence_sizeB = reset_size + (combine_setup ? first_setup_size : 0);
-
-    void* cmd_region = manager.issue_queue_reserve(cmd_sequence_sizeB, cq_id);
-    HugepageDeviceCommand command_sequence(metal_ctx, cmd_region, cmd_sequence_sizeB);
+    HostMemDeviceCommand command_sequence(metal_ctx, reset_size);
     DispatcherSelect dispatcher_for_go_signal = DispatcherSelect::DISPATCH_MASTER;
     if (reset_launch_msg_state) {
         if (metal_ctx.get_dispatch_query_manager().dispatch_s_enabled()) {
@@ -3626,6 +3617,23 @@ void reset_worker_dispatch_state_on_device(
             expected_num_workers);
     }
     TT_ASSERT(command_sequence.write_offset_bytes() == reset_size);
+    const auto* words = static_cast<const uint32_t*>(command_sequence.data());
+    return vector_aligned<uint32_t>(words, words + reset_size / sizeof(uint32_t));
+}
+
+void write_worker_dispatch_reset_commands(
+    SystemMemoryManager& manager,
+    uint8_t cq_id,
+    ttsl::Span<const uint32_t> reset_commands,
+    ttsl::Span<const vector_aligned<uint32_t>> setup_commands) {
+    MetalContext& metal_ctx = manager.metal_context();
+    const uint32_t reset_size = reset_commands.size() * sizeof(uint32_t);
+    const uint32_t first_setup_size = setup_commands.empty() ? 0 : setup_commands.front().size() * sizeof(uint32_t);
+    const bool combine_setup = setup_batch::can_combine_setup(
+        reset_size, first_setup_size, metal_ctx.dispatch_mem_map().max_prefetch_command_size());
+    const uint32_t cmd_sequence_sizeB = reset_size + (combine_setup ? first_setup_size : 0);
+    manager.issue_queue_reserve(cmd_sequence_sizeB, cq_id);
+    manager.cq_write(reset_commands.data(), reset_size, manager.get_issue_queue_write_ptr(cq_id));
     if (combine_setup && first_setup_size != 0) {
         manager.cq_write(
             setup_commands.front().data(), first_setup_size, manager.get_issue_queue_write_ptr(cq_id) + reset_size);
@@ -3642,6 +3650,19 @@ void reset_worker_dispatch_state_on_device(
         manager.fetch_queue_reserve_back(cq_id);
         manager.fetch_queue_write(size, cq_id);
     }
+}
+
+void reset_worker_dispatch_state_on_device(
+    distributed::MeshDevice* mesh_device,
+    SystemMemoryManager& manager,
+    uint8_t cq_id,
+    const DispatchArray<uint32_t>& expected_num_workers_completed,
+    const DispatchArray<LaunchMessageRingBufferState>& worker_launch_message_buffer_state,
+    bool reset_launch_msg_state,
+    ttsl::Span<const vector_aligned<uint32_t>> setup_commands) {
+    const auto reset_commands = build_worker_dispatch_reset_commands(
+        mesh_device, expected_num_workers_completed, worker_launch_message_buffer_state, reset_launch_msg_state);
+    write_worker_dispatch_reset_commands(manager, cq_id, reset_commands, setup_commands);
 }
 
 static HostMemDeviceCommand build_set_num_worker_sems_on_dispatch(
