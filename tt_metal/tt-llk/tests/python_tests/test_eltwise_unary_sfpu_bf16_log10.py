@@ -13,8 +13,9 @@ from helpers.param_config import build_param_id
 _BF16_EXHAUSTIVE_OPS = [
     (MathOperation.Log10, ApproximationMode.No, 1),
 ]
-# Both boards run the generated kernel, and it stores torch's class at every special input.
+# Boards where the op keeps its stock kernel, which this sweep does not test.
 _BF16_STOCK_BOARDS = {}
+# Per board, the word stored at each special input class where the kernel returns stock's result.
 _BF16_STOCK_SPECIALS = {}
 
 
@@ -40,21 +41,17 @@ _BF16_REPLACED_INSTANCES = {
 _BF16_SETUP_PARAMS = replaced_instance_params(_unary, _BF16_REPLACED_INSTANCES)
 
 
+# The stock test's own DEST sync axis (test_eltwise_unary_sfpu's dest_sync parametrize).
+@pytest.mark.parametrize("dest_sync", [DestSync.Half])
 @pytest.mark.parametrize(
     ",".join(_unary._UNARY_SWEEP_ARGNAMES),
     _BF16_SETUP_PARAMS,
     ids=[build_param_id(_unary._UNARY_SWEEP_ARGNAMES, p) for p in _BF16_SETUP_PARAMS],
 )
 def test_eltwise_unary_sfpu_bf16_replaced_instances(
-    formats, approx_mode, mathop, fast_mode, dest_acc, input_dimensions
+    formats, approx_mode, mathop, fast_mode, dest_acc, input_dimensions, dest_sync
 ):
     """Every instance the BF16 kernel replaces, on BF16 and FP32 data, against the sweep's golden."""
     _unary.test_eltwise_unary_sfpu(
-        formats,
-        approx_mode,
-        mathop,
-        fast_mode,
-        dest_acc,
-        input_dimensions,
-        DestSync.Half,
+        formats, approx_mode, mathop, fast_mode, dest_acc, input_dimensions, dest_sync
     )

@@ -143,7 +143,9 @@ def run_model(
     skip_upstream_reference=False,
     overlap_routed_expert_with_combine=False,
     moe_transport="direct",
-    combine_fwd_reduction=None,
+    *,
+    dispatch_fwd_vc_pages,
+    combine_fwd_vc_pages,
 ):
     """TtMoe PCC body — shared by every per-model test in this file.
 
@@ -169,7 +171,7 @@ def run_model(
     None keeping the gate config's default. ``skip_upstream_reference`` drops the vendored-model
     cross-check. ``overlap_routed_expert_with_combine`` goes straight to TtMoe: off unless the caller passes
     routed_expert_combine_overlap_arg for a model that opts in (Kimi K2.7, GLM 5.3, Mistral Small 4).
-    ``moe_transport`` and ``combine_fwd_reduction`` go straight to TtMoe too.
+    ``moe_transport`` and the two channel depths go straight to TtMoe too; every caller passes both.
 
     A HASH_HOST / HASH_DEVICE ``gate_fallback_mode`` selects hash routing: the tid2eid table and
     per-token ids are built here and handed to both sides, and the torch reference takes the
@@ -567,7 +569,8 @@ def run_model(
         rms_norm_eps=rms_norm_eps,
         overlap_routed_expert_with_combine=overlap_routed_expert_with_combine,
         moe_transport=moe_transport,
-        combine_fwd_reduction=combine_fwd_reduction,
+        dispatch_fwd_vc_pages=dispatch_fwd_vc_pages,
+        combine_fwd_vc_pages=combine_fwd_vc_pages,
     )
     ttnn.synchronize_device(mesh_device)
     profiler.end("tt_moe_creation")
@@ -966,6 +969,8 @@ def test_ds_moe(
         request,
         is_balanced=is_balanced,
         padded_percent=padded_percent,
+        dispatch_fwd_vc_pages=64,
+        combine_fwd_vc_pages=64,
     )
 
 
@@ -1081,6 +1086,8 @@ def test_glm_moe(
         is_balanced=is_balanced,
         padded_percent=padded_percent,
         overlap_routed_expert_with_combine=routed_expert_combine_overlap_arg(GLM53Config),
+        dispatch_fwd_vc_pages=64,
+        combine_fwd_vc_pages=64,
     )
 
 
@@ -1114,7 +1121,8 @@ def test_glm_moe_fabric2d(variant, config_only, mesh_device, device_params, num_
         request=request,
         overlap_routed_expert_with_combine=routed_expert_combine_overlap_arg(GLM53Config),
         moe_transport="fabric2d",
-        combine_fwd_reduction=GLM53Config.COMBINE_FWD_REDUCTION,
+        dispatch_fwd_vc_pages=GLM53Config.MOE_FWD_VC_PAGES,
+        combine_fwd_vc_pages=GLM53Config.MOE_FWD_VC_PAGES,
     )
 
 
@@ -1231,6 +1239,8 @@ def test_kimi_moe(
         gate_fallback_mode=gate_fallback_mode,
         request=request,
         overlap_routed_expert_with_combine=routed_expert_combine_overlap_arg(KimiK27Config),
+        dispatch_fwd_vc_pages=64,
+        combine_fwd_vc_pages=64,
     )
 
 
@@ -1261,7 +1271,8 @@ def test_kimi_moe_fabric2d(variant, config_only, mesh_device, device_params, num
         request=request,
         overlap_routed_expert_with_combine=routed_expert_combine_overlap_arg(KimiK27Config),
         moe_transport="fabric2d",
-        combine_fwd_reduction=KimiK27Config.COMBINE_FWD_REDUCTION,
+        dispatch_fwd_vc_pages=KimiK27Config.MOE_FWD_VC_PAGES,
+        combine_fwd_vc_pages=KimiK27Config.MOE_FWD_VC_PAGES,
     )
 
 
@@ -1368,6 +1379,8 @@ def test_kimi_k3_moe(
         final_output_pcc=0.965,
         routed_activation=ROUTED_EXPERT_ACTIVATION_BY_NAME[KimiK3Config.ROUTED_EXPERT_ACTIVATION],
         shared_activation=KimiK3Config.SHARED_EXPERT_ACTIVATION,
+        dispatch_fwd_vc_pages=64,
+        combine_fwd_vc_pages=64,
     )
 
 
@@ -1469,6 +1482,8 @@ def test_mistral4_moe(
         shared_output_pcc=0.998,
         routed_output_pcc=0.972,
         final_output_pcc=0.992,
+        dispatch_fwd_vc_pages=64,
+        combine_fwd_vc_pages=64,
     )
 
 
@@ -1587,4 +1602,6 @@ def test_dsv4_moe(
         gate_up_scale=11.25,
         score_func=score_func,
         skip_upstream_reference=True,
+        dispatch_fwd_vc_pages=64,
+        combine_fwd_vc_pages=64,
     )

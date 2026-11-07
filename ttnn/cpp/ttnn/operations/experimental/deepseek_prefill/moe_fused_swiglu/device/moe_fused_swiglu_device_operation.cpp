@@ -389,13 +389,13 @@ void MoeFusedSwiGluDeviceOperation::validate_on_program_cache_miss(
         }
         for (const auto& [name, tensor] : alias_candidates) {
             TT_FATAL(
-                output.buffer()->address() != tensor->buffer()->address(),
+                output.mesh_buffer().address() != tensor->mesh_buffer().address(),
                 "moe_fused_swiglu: output must not alias {}; device readers can overlap output writeback",
                 name);
         }
         if (tensor_arguments.expert_region_offsets.has_value()) {
             TT_FATAL(
-                output.buffer()->address() != tensor_arguments.expert_region_offsets->buffer()->address(),
+                output.mesh_buffer().address() != tensor_arguments.expert_region_offsets->mesh_buffer().address(),
                 "moe_fused_swiglu: output must not alias expert_region_offsets");
         }
     }

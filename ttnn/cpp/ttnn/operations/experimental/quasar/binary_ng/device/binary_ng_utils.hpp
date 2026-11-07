@@ -141,31 +141,24 @@ struct NativeTuning {
     // and consumer transact at different granularities.
     NativeKnob dm_batch{"TTNN_QSR_DM_BATCH"};
     NativeKnob tiles_per_cycle{"TTNN_QSR_TILES_PER_CYCLE"};  // tiles per tile_regs_acquire in the compute
-    // TTNN_QSR_DRAM_BATCH=0 keeps one tile per step beside DRAM.
-    bool dram_batch = true;
 };
 
 // The user DM cores of a Quasar cluster, which the reader and the writer threads share.
 inline constexpr uint32_t kNativeUserDmCores = 6;
 
-// The largest compute batch of a native compute kernel: the tiles that one DST section holds at the factory's compute
+// The max batch size of a native compute kernel: the tiles that one DST section holds at the factory's compute
 // config, 8 slots in a 16-bit DST and 4 in a 32-bit DST. The FPU kernel takes one slot per tile, and the SFPU kernel
 // two, the copies of the two operands. The legacy binary_ng runs the SFPU kernel at 2 in a 16-bit DST, as 4 fails on
 // Blackhole for a reason not yet known.
 uint32_t native_max_tiles_per_cycle(bool sfpu, bool dst_32bit);
 
-// What a program moves over the NoC, and from where, and which compute kernel it runs in which DST mode. A borrowed
-// operand moves nothing.
+// What a program moves over the NoC, and which compute kernel it runs in which DST mode. A borrowed operand moves
+// nothing.
 struct NativeMoves {
     bool inputs = false;     // a or b is read over the NoC
     bool output = false;     // c is written over the NoC
-    bool dram = false;       // a, b or c is in DRAM, interleaved or sharded
     bool sfpu = false;       // the SFPU compute kernel runs the op
     bool dst_32bit = false;  // the DST is 32-bit (fp32_dest_acc_en)
-    // The most tiles a compute thread draws, set only where a, b and c are interleaved, an input is in DRAM and nothing
-    // is borrowed: there the rule batches by it.
-    uint32_t tiles_per_compute_thread = 0;
-    bool batch_pays = true;  // false where batching measured slower
 };
 
 // The values one program runs with.
@@ -181,22 +174,16 @@ struct NativeConfig {
 // The compute count of every program: the knob, else the rule's 4.
 uint32_t native_compute_threads(const NativeTuning& tuning);
 
-// Each set knob, else the rule's value for what the program moves. The rule takes the most threads and, with
-// every operand in L1, these batches: C = 4; R = C when an input moves, else 1; W = min(C, 6 - R) when the output
-// moves, else 1, so R + W fits the 6 user DM cores; DM batch 8; compute batch native_max_tiles_per_cycle on the SFPU
-// kernel where R <= C and W <= C, and on the FPU kernel at R = C = W = 1 only, else 1. Beside a DRAM operand both
-// batches are bit_floor(min(native_max_tiles_per_cycle, NativeMoves::tiles_per_compute_thread)) where that share is
-// at least 4, R <= C, W <= C, NativeMoves::batch_pays holds and TTNN_QSR_DRAM_BATCH is not 0, else 1. Ring depth is
-// two batches per thread, a multiple of each. A borrowed input runs R = 1 and a borrowed output W = 1, whatever is
-// set. Off DRAM the rule does not batch the FPU kernel above ring stride 1 until those splits are measured; a set
-// batch still runs.
+// Each set knob, else the rule's value: C = 4; R = C where an input moves, else 1; W = min(C, 6 - R) where the output
+// moves, else 1, whatever is set. The DM batch is native_max_tiles_per_cycle, and so is the compute batch where R <= C
+// and W <= C, else 1; ring depth is two batches per thread.
 NativeConfig resolve_native_config(const NativeTuning& tuning, NativeMoves moves);
 
 // "8 (rule)" or "8 (TTNN_QSR_DM_BATCH)": a value the knob or the rule gave, with its source, for messages.
 std::string describe_native_value(const NativeKnob& knob, uint32_t value);
 
 // Parsed once into a function-local static. Knobs are TTNN_QSR_{NATIVE, IMPLICIT_SYNC, READER_THREADS,
-// COMPUTE_THREADS, WRITER_THREADS, ENTRIES_PER_THREAD, DM_BATCH, TILES_PER_CYCLE, DRAM_BATCH}. Topology invariants are
+// COMPUTE_THREADS, WRITER_THREADS, ENTRIES_PER_THREAD, DM_BATCH, TILES_PER_CYCLE}. Topology invariants are
 // asserted only when `enabled`, so a bad knob cannot take down the fallback reference arm.
 const NativeTuning& native_tuning();
 }  // namespace ttnn::operations::experimental::quasar::binary_ng

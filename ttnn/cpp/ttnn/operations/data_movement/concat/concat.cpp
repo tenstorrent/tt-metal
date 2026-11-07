@@ -195,7 +195,7 @@ MassagedConcat build_non_aligned_last_dim_concat(
         return std::all_of(tensors.begin(), tensors.end(), [&](const ttnn::Tensor& tensor) {
             auto storage_type = tensor.storage_type();
             if (storage_type == ttnn::StorageType::DEVICE) {
-                return tensor.padded_shape()[dim] * tensor.element_size() % tensor.buffer()->alignment() == 0;
+                return tensor.padded_shape()[dim] * tensor.element_size() % tensor.mesh_buffer().alignment() == 0;
             }
             TT_THROW(
                 "ttnn.concat: expected a tensor with device storage, but got a tensor with storage type"
@@ -227,7 +227,7 @@ MassagedConcat build_unsqueeze_squeeze_1D_rm_unaligned_concat(const MemoryConfig
             }
             bool res = std::any_of(tensors.begin(), tensors.end(), [](const ttnn::Tensor& tensor) {
                 return tensor.layout() == ttnn::ROW_MAJOR_LAYOUT and tensor.logical_shape().rank() == 1 and
-                       tensor.logical_shape()[0] * tensor.element_size() % tensor.buffer()->alignment() != 0;
+                       tensor.logical_shape()[0] * tensor.element_size() % tensor.mesh_buffer().alignment() != 0;
             });
             concat_db_print(res, "unsqueeze_squeeze_1D_concat required");
             return res;
@@ -318,7 +318,7 @@ ttnn::Tensor concat_native(
         // Match the factory's CB page alignment (concat_program_factory.cpp uses
         // common_align_len = max(input_alignment, output_alignment)).
         const uint64_t buf_align = std::max<uint64_t>(
-            first_tensor.buffer()->alignment(), device->allocator()->get_alignment(mem_config.buffer_type()));
+            first_tensor.mesh_buffer().alignment(), device->allocator()->get_alignment(mem_config.buffer_type()));
         const uint64_t l1_capacity =
             device->l1_size_per_core() - device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
 
