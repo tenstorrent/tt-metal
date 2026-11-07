@@ -16,6 +16,11 @@
 //                 does not declare produces no dfb::/tensor:: token at all, so the references must
 //                 not reach C++ name lookup. The legacy kernel guarded these with
 //                 `if constexpr (batchB > 0)`, which still looks names up in the discarded branch.
+//   * IN0_TP_GATHER - in0 is all-gathered over tensor parallelism inside the program
+//                 (all_gather_matmul_prefill): its K splits into gather_slices slices, the TP ranks' shards. The K
+//                 blocks run slice by slice in gather_slice_order (this rank's slice first); this rank's blocks are
+//                 read from its own shard (tensor in0_local), the others' from the gathered in0 once the gather has
+//                 counted this core's rows of that K block into the slice's counter (a persistent global semaphore).
 //   * FUSE_OP   - the CCL fused-op receiver. MatmulOpReceiver consumes *positional* runtime args
 //                 through an index it advances by reference, and it lives outside this op's
 //                 directory (ttnn/operations/ccl/kernel_common/worker_sync_utils.hpp), so it cannot
@@ -176,6 +181,25 @@ void kernel_main() {
     const auto s0 = TensorAccessor(tensor::in0);
 #endif  // IN0_SHARDED
 
+#ifdef IN0_TP_GATHER
+    static_assert(num_blocks_h_dim == 1 && num_blocks_w_dim == 1, "IN0_TP_GATHER: one output block per core");
+    static_assert(in0_last_ktile_w == 0 && in0_last_ktile_h == 0, "IN0_TP_GATHER: K is tile aligned");
+    static_assert(in0_B == 1 && batchB == 0, "IN0_TP_GATHER: one batch");
+    constexpr uint32_t gather_slices = get_arg(args::gather_slices);
+    constexpr uint32_t gather_blocks_per_slice = get_arg(args::gather_blocks_per_slice);
+    constexpr uint32_t gather_slice_tiles = get_arg(args::gather_slice_tiles);  // K tiles per slice (shard width)
+    // Arrivals per K block of a slice: this core's tile rows.
+    constexpr uint32_t gather_block_arrivals = get_arg(args::gather_block_arrivals);
+    static_assert(gather_slices * gather_blocks_per_slice == num_blocks_inner_dim, "K blocks split into the slices");
+    static_assert(gather_blocks_per_slice * in0_block_w == gather_slice_tiles, "a slice is whole K blocks");
+    const auto s0_local = TensorAccessor(tensor::in0_local);
+    // Byte i: the slice the i-th group of gather_blocks_per_slice K blocks reads; slice gather_local_slice first.
+    const uint32_t gather_slice_order = get_arg(args::gather_slice_order);
+    const uint32_t gather_local_slice = get_arg(args::gather_local_slice);
+    // The rows this core reads start at this tile row of in0 (and of the shard).
+    const uint32_t gather_first_row = in0_tensor_start_tile_id / in0_tensor_stride_h;
+#endif  // IN0_TP_GATHER
+
     // sparsity accessor
 #ifdef SPARSITY
     DataflowBuffer dfb_sparsity(dfb::sparsity);
@@ -287,6 +311,55 @@ void kernel_main() {
                         const uint32_t in0_start_address =
                             dfb_in0.get_write_ptr();  // copy start address of block, to be used for mcasting
 
+#ifdef IN0_TP_GATHER
+                        {
+                            const uint32_t slice =
+                                (gather_slice_order >> (8 * (block / gather_blocks_per_slice))) & 0xFF;
+                            const uint32_t slice_block = block % gather_blocks_per_slice;
+                            if (slice != gather_local_slice) {
+                                // The slice's counter (the rank `distance` ranks behind this one sends it) counts, per
+                                // K block in order, each of this core's rows landed: wait for this block's.
+                                const uint32_t distance = (gather_local_slice + gather_slices - slice) % gather_slices;
+                                const uint32_t counter = get_arg(args::gather_counters)[distance - 1];
+                                auto* count = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(counter);
+                                noc_semaphore_wait_min(count, (slice_block + 1) * gather_block_arrivals);
+                                if (slice_block + 1 == gather_blocks_per_slice) {
+                                    // No rank counts the next call's rows before this rank's next call starts.
+                                    noc_semaphore_inc(
+                                        get_noc_addr(counter), 0u - gather_blocks_per_slice * gather_block_arrivals);
+                                    noc_async_atomic_barrier();
+                                }
+                            }
+                            const uint32_t k0 = slice_block * in0_block_w;
+                            for (uint32_t h = 0; h < in0_block_h; ++h) {
+                                const uint32_t row = gather_first_row + h;
+                                if (slice == gather_local_slice) {
+                                    uint32_t page = row * gather_slice_tiles + k0;
+                                    for (uint32_t w = 0; w < in0_block_w; ++w) {
+                                        noc.async_read(
+                                            s0_local,
+                                            dfb_in0,
+                                            in0_single_tile_size_bytes,
+                                            {.page_id = page++},
+                                            {.offset_bytes = in0_write_offset});
+                                        in0_write_offset += in0_aligned_tile_size_bytes;
+                                    }
+                                } else {
+                                    uint32_t page = row * in0_tensor_stride_h + slice * gather_slice_tiles + k0;
+                                    for (uint32_t w = 0; w < in0_block_w; ++w) {
+                                        noc.async_read(
+                                            s0,
+                                            dfb_in0,
+                                            in0_single_tile_size_bytes,
+                                            {.page_id = page++},
+                                            {.offset_bytes = in0_write_offset});
+                                        in0_write_offset += in0_aligned_tile_size_bytes;
+                                    }
+                                }
+                            }
+                            noc.async_read_barrier();
+                        }
+#else
                         // Copy in0 block into the in0 buffer, as the default kernel
                         uint32_t in0_tensor_row_start_tile_id = in0_tensor_current_inner_dim_block_start_tile_id;
                         for (uint32_t h = 0; h < in0_block_h; ++h) {
@@ -328,6 +401,7 @@ void kernel_main() {
 
                         // Barrier! make sure the reads are done
                         noc.async_read_barrier();
+#endif  // IN0_TP_GATHER
 #else
 #ifdef EXTRACT_SHARD_SUB_BLOCKS
                         {

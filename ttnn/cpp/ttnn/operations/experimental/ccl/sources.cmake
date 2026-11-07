@@ -59,6 +59,9 @@ set(TTNN_OP_EXPERIMENTAL_CCL_SRCS
     reduce_scatter_minimal_async/device/reduce_scatter_minimal_async_program.cpp
     reduce_scatter_minimal_direct/reduce_scatter_minimal_direct.cpp
     matmul_reduce_scatter_prefill/matmul_reduce_scatter_prefill.cpp
+    all_gather_matmul_prefill/all_gather_matmul_prefill.cpp
+    all_gather_matmul_prefill/device/all_gather_matmul_prefill_device_operation.cpp
+    all_gather_matmul_prefill/device/all_gather_matmul_prefill_program_factory.cpp
     matmul_reduce_scatter_prefill/device/matmul_reduce_scatter_prefill_device_operation.cpp
     matmul_reduce_scatter_prefill/device/matmul_reduce_scatter_prefill_planner.cpp
     matmul_reduce_scatter_prefill/device/matmul_reduce_scatter_prefill_program_factory.cpp
@@ -138,6 +141,9 @@ set(TTNN_OP_EXPERIMENTAL_CCL_API_HEADERS
     reduce_scatter_minimal_direct/device/reduce_scatter_minimal_direct_factory.hpp
     reduce_scatter_minimal_direct/reduce_scatter_minimal_direct.hpp
     matmul_reduce_scatter_prefill/matmul_reduce_scatter_prefill.hpp
+    all_gather_matmul_prefill/all_gather_matmul_prefill.hpp
+    all_gather_matmul_prefill/device/all_gather_matmul_prefill_device_operation.hpp
+    all_gather_matmul_prefill/device/all_gather_matmul_prefill_device_operation_types.hpp
     matmul_reduce_scatter_prefill/device/matmul_reduce_scatter_prefill_device_operation.hpp
     matmul_reduce_scatter_prefill/device/matmul_reduce_scatter_prefill_device_operation_types.hpp
     matmul_reduce_scatter_prefill/device/matmul_reduce_scatter_prefill_planner.hpp
@@ -168,6 +174,7 @@ set(TTNN_OP_EXPERIMENTAL_CCL_NANOBIND_SRCS
     reduce_scatter_minimal_async/reduce_scatter_minimal_async_nanobind.cpp
     reduce_scatter_minimal_direct/reduce_scatter_minimal_direct_nanobind.cpp
     matmul_reduce_scatter_prefill/matmul_reduce_scatter_prefill_nanobind.cpp
+    all_gather_matmul_prefill/all_gather_matmul_prefill_nanobind.cpp
     strided_reduce_scatter_async/strided_reduce_scatter_async_nanobind.cpp
     minimal_matmul_strided_reduce_scatter_async/minimal_matmul_strided_reduce_scatter_async_nanobind.cpp
     all_gather_matmul_async/all_gather_matmul_async_nanobind.cpp

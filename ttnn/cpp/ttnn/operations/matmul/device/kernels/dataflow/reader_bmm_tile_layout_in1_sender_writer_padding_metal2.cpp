@@ -18,6 +18,8 @@
 //   IN1_DRAM_WIDTH_SHARDED    -- in1 is read bank-by-bank from DRAM using tensor::in1's base address
 //   IN1_DRAM_HEIGHT_SHARDED   -- ditto, one complete [K, N] matrix per bank
 //   SPARSITY                  -- the sparsity operand (dfb::sparsity + tensor::sparsity) is bound
+//   IN1_K_SLICE_ORDER         -- in0 is all-gathered inside the program (IN0_TP_GATHER on the in0 sender): the K
+//                                blocks run slice by slice in gather_slice_order, and in1's K rows follow them.
 //   IN1_MCAST_CHUNKS=<n>      -- (interleaved, multicast in1 only) each K-block is read, published and
 //                                multicast in n column chunks, one in1_mcast piecewise round per K-block;
 //                                receivers and compute must get the same n
@@ -454,6 +456,18 @@ void kernel_main() {
 #ifndef IN1_SHARDED
                         uint64_t in1_start_address = 0;
 #endif
+#ifdef IN1_K_SLICE_ORDER
+                        {
+                            // in0 is all-gathered inside the program (IN0_TP_GATHER on the in0 sender): the K blocks
+                            // run slice by slice in its order, and in1's K rows follow.
+                            constexpr uint32_t blocks_per_slice = get_arg(args::gather_blocks_per_slice);
+                            const uint32_t slice =
+                                (get_arg(args::gather_slice_order) >> (8 * (block / blocks_per_slice))) & 0xFF;
+                            in1_tensor_current_inner_dim_block_start_tile_id =
+                                in1_tensor_current_w_dim_block_tile_id +
+                                (slice * blocks_per_slice + block % blocks_per_slice) * in1_tensor_next_block_stride;
+                        }
+#endif  // IN1_K_SLICE_ORDER
 #ifdef FUSE_OP_ALL_GATHER
                         fused_op_receiver.update_current_block_start_tile_id(
                             block, in1_tensor_current_inner_dim_block_start_tile_id, in1_batch_tile_id);
