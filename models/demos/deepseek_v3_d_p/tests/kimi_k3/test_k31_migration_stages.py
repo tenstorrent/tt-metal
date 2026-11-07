@@ -117,3 +117,16 @@ def test_registry_serves_k31_with_raw_basis_index_keys():
     assert resolve_has_indexer(config)
     # K3.1's decode keeps indexer keys in the model's basis; the migrated cache must match.
     assert not index_hadamard_basis(config)
+
+
+def test_kv_chunk_matches_k31_decode_page():
+    """Migration copies raw bytes, so prefill's KV chunk must be decode's page: K3.1's decode keeps GLM's scaled-fp8
+    cache, 32 positions at a 704-byte stride (tt-blaze ``k31_glm_kv_cache``). Prefill's row is 656 packed bytes,
+    one native page each, padded to the 64-byte DRAM alignment."""
+    from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat, MlaKvCacheGeometry
+
+    geometry = MlaKvCacheGeometry.from_config(kimi_k3_1_hf_config())
+    assert MlaKvCacheFormat.SCALED_FP8.storage_width(geometry) == 656
+    dram_alignment = 64
+    aligned_row = -(-656 // dram_alignment) * dram_alignment
+    assert 32 * aligned_row == 22528  # GLM_SCALED_KV_PAGE_BYTES on the decode side
