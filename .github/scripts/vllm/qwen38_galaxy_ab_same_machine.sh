@@ -12,7 +12,10 @@
 #                      (GREEDY 1 runs the greedy client); empty: A1 B1 A2 B2 from the four below
 #   AB_ENV_A/B         KEY=VALUE pairs of setting A/B
 #   AB_ARGS_A/B        vLLM server args of setting A/B
-#   AB_BENCH           benchmark runs, separated by spaces, each CONCURRENCY:PROMPTS
+#   AB_BENCH           benchmark runs, separated by spaces, each CONCURRENCY:PROMPTS[:prefixP]; prefixP = P distinct
+#                      30,720-token prefixes, each in PROMPTS / P shuffled prompts with its own 512-token suffix and 64
+#                      output tokens (prefix_repetition: the prefix cache holds P x 30,720 tokens or recomputes);
+#                      without it, random 2,000-token prompts with 200 output tokens
 #   AB_TT_CONFIG       JSON for --additional-config '{"tt": ...}'
 #   AB_CHAT_KWARGS     JSON for --default-chat-template-kwargs
 #   AB_SERVER_TIMEOUT  minutes to wait for /health
@@ -79,16 +82,22 @@ run_arm() {
   fi
   echo "$tag startup_s $(( SECONDS - t0 ))" >> "$OUT/ab_startup.txt"
   for run in ${AB_BENCH:-32:128 8:32}; do
-    local c=${run%%:*} n=${run##*:}
-    # The spec-decode counters around each benchmark give its draft acceptance.
-    curl -sf http://localhost:8000/metrics > "$OUT/ab_${tag}_metrics_pre_c${c}.txt" || true
-    vllm bench serve --backend vllm --model "$AB_MODEL" --tokenizer "$HF_MODEL_LOCAL" \
-      --dataset-name random --random-input-len 2000 --random-output-len 200 \
+    local c n ds name data
+    IFS=':' read -r c n ds <<< "$run"
+    name="c${c}" data=(--dataset-name random --random-input-len 2000 --random-output-len 200)
+    if [ -n "$ds" ]; then
+      name="c${c}_${ds}"
+      data=(--dataset-name prefix_repetition --prefix-repetition-prefix-len 30720 --prefix-repetition-suffix-len 512
+        --prefix-repetition-output-len 64 --prefix-repetition-num-prefixes "${ds#prefix}")
+    fi
+    # The spec-decode and prefix-cache counters around each benchmark give its draft acceptance and hit rate.
+    curl -sf http://localhost:8000/metrics > "$OUT/ab_${tag}_metrics_pre_${name}.txt" || true
+    vllm bench serve --backend vllm --model "$AB_MODEL" --tokenizer "$HF_MODEL_LOCAL" "${data[@]}" \
       --num-prompts "$n" --max-concurrency "$c" --ignore-eos \
       --percentile-metrics ttft,tpot,itl,e2el --save-result \
-      --result-filename "$OUT/ab_${tag}_bench_c${c}.json" > "$OUT/ab_${tag}_bench_c${c}.log" 2>&1 \
-      || { echo "=== $tag: benchmark c$c failed"; tail -20 "$OUT/ab_${tag}_bench_c${c}.log"; FAILED=1; }
-    curl -sf http://localhost:8000/metrics > "$OUT/ab_${tag}_metrics_post_c${c}.txt" || true
+      --result-filename "$OUT/ab_${tag}_bench_${name}.json" > "$OUT/ab_${tag}_bench_${name}.log" 2>&1 \
+      || { echo "=== $tag: benchmark $name failed"; tail -20 "$OUT/ab_${tag}_bench_${name}.log"; FAILED=1; }
+    curl -sf http://localhost:8000/metrics > "$OUT/ab_${tag}_metrics_post_${name}.txt" || true
   done
   if [ "$greedy" = "1" ]; then
     python3 .github/scripts/vllm/qwen38_galaxy_ab_client.py --model "$AB_MODEL" \

@@ -65,13 +65,19 @@ def counter(path, name):
     return sum(float(line.rsplit(" ", 1)[1]) for line in lines if line.startswith(name))
 
 
-def acceptance(out, tag, c):
-    pre, post = out / f"ab_{tag}_metrics_pre_c{c}.txt", out / f"ab_{tag}_metrics_post_c{c}.txt"
-    names = ("vllm:spec_decode_num_accepted_tokens_total", "vllm:spec_decode_num_draft_tokens_total")
-    vals = [counter(p, n) for p in (pre, post) for n in names]
+def ratio(out, tag, name, num, den):
+    """(num delta) / (den delta) of two vLLM counters between the metrics before and after benchmark ``name``."""
+    pre, post = out / f"ab_{tag}_metrics_pre_{name}.txt", out / f"ab_{tag}_metrics_post_{name}.txt"
+    vals = [counter(p, n) for p in (pre, post) for n in (num, den)]
     if None in vals or vals[3] == vals[1]:
         return None
     return (vals[2] - vals[0]) / (vals[3] - vals[1])
+
+
+def acceptance(out, tag, c):
+    return ratio(
+        out, tag, f"c{c}", "vllm:spec_decode_num_accepted_tokens_total", "vllm:spec_decode_num_draft_tokens_total"
+    )
 
 
 def chain_stats(out, tag):
@@ -111,9 +117,9 @@ def main():
     g = {t: load(out / f"ab_{t}_greedy.json") for t in tags}
     chains = {t: chain_stats(out, t) for t in tags}
     steps = {t: step_timing(out, t) for t in tags}
-    concurrencies = sorted(
-        {int(p.name.split("_c")[-1].split(".")[0]) for p in out.glob("ab_*_bench_c*.json")}, reverse=True
-    )
+    names = {p.name.split("_bench_")[-1][: -len(".json")] for p in out.glob("ab_*_bench_c*.json")}
+    concurrencies = sorted({int(n[1:]) for n in names if n[1:].isdigit()}, reverse=True)
+    prefixed = sorted(n for n in names if not n[1:].isdigit())
     rows = [
         ("Server start, s", lambda t: str(startup.get(t, "n/a"))),
     ]
@@ -125,6 +131,18 @@ def main():
             (f"Bench c{c}: TTFT p50, ms", lambda t, b=b: fmt(b[t] and b[t].get("median_ttft_ms"), nd=0)),
             (f"Bench c{c}: TTFT p99, ms", lambda t, b=b: fmt(b[t] and b[t].get("p99_ttft_ms"), nd=0)),
             (f"Bench c{c}: draft acceptance", lambda t, c=c: fmt(acceptance(out, t, c), nd=3)),
+        ]
+
+    for name in prefixed:
+        b = {t: load(out / f"ab_{t}_bench_{name}.json") for t in tags}
+        hits = lambda t, name=name: ratio(out, t, name, "vllm:prefix_cache_hits_total", "vllm:prefix_cache_queries_total")
+        rows += [
+            (f"Bench {name}: duration, s", lambda t, b=b: fmt(b[t] and b[t].get("duration"))),
+            (f"Bench {name}: TTFT mean, ms", lambda t, b=b: fmt(b[t] and b[t].get("mean_ttft_ms"), nd=0)),
+            (f"Bench {name}: TTFT p50, ms", lambda t, b=b: fmt(b[t] and b[t].get("median_ttft_ms"), nd=0)),
+            (f"Bench {name}: TTFT p99, ms", lambda t, b=b: fmt(b[t] and b[t].get("p99_ttft_ms"), nd=0)),
+            (f"Bench {name}: TPOT p50, ms", lambda t, b=b: fmt(b[t] and b[t].get("median_tpot_ms"), nd=2)),
+            (f"Bench {name}: prefix cache hit rate (tokens)", lambda t, hits=hits: fmt(hits(t), nd=3)),
         ]
 
     def gfield(fn):
