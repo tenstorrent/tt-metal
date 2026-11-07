@@ -20,7 +20,6 @@
   team: runtime
   budget_type: merge_gate
   owner_id: U099A7FMKL2 # Manish Sudumbrekar
-
 - name: runtime validation smoke cpu-only
   # Host-only (no-silicon) subset of the smoke binary: test cases whose names carry
   # the CPU_ prefix. Runs on a GitHub-hosted runner (github_hosted_cpu) so scarce

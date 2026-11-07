@@ -14,7 +14,8 @@
 //                            2=write_to_receiver(r)+push_back (1:1 uses r=0),
 //                            3=write_to_receiver+push_back_to_receiver (per-receiver credit),
 //                            4=decoupled: reserve(n) + write_broadcast(n) + flush + push_back(n),
-//                            5=per-receiver credit interleaved across receivers (entry-major)
+//                            5=per-receiver credit interleaved across receivers (entry-major),
+//                            6=write_strided_and_push_back
 //   args::data_pattern     - 0=multicast counter layout, 1=strided per-receiver layout,
 //                            2=per-receiver constant layout (see prefetcher_pipe_test_utils.hpp)
 //   args::do_barrier       - 1 to call barrier() after pushing all entries
@@ -63,6 +64,9 @@ void kernel_main() {
     static_assert(
         write_primitive != 5 || data_pattern == pattern_multicast_counter,
         "interleaved per-receiver credit expects multicast counter staging");
+    static_assert(
+        write_primitive != 6 || data_pattern == pattern_strided_per_receiver,
+        "write_strided_and_push_back expects strided staging");
 
     if constexpr (write_primitive == 0) {
         for (uint32_t i = 0; i < num_entries; ++i) {
@@ -121,6 +125,13 @@ void kernel_main() {
                 gdfb.flush_writes(noc);
                 gdfb.push_back_to_receiver(r, 1, noc);
             }
+        }
+    } else if constexpr (write_primitive == 6) {
+        const uint32_t num_recv = gdfb.num_receivers();
+        const uint32_t row_bytes = num_recv * entry_size;
+        for (uint32_t i = 0; i < num_entries; ++i) {
+            gdfb.reserve_back(1);
+            gdfb.write_strided_and_push_back(noc, staging, 1, 1, 1, entry_size, {.offset_bytes = i * row_bytes});
         }
     }
 

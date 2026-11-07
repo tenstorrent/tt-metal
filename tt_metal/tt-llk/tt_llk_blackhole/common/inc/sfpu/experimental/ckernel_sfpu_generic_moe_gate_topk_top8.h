@@ -156,9 +156,9 @@ inline void _generic_moe_gate_top8_sort_quarter_face_()
     // even columns and four from odd columns. Fill the unused half of the
     // existing 16-to-8 network with negative infinity.
     TTI_SFPLOAD(p_sfpu::LREG0, 0, ADDR_MOD_7, generic_moe_gate_bias_tile + load_offset + 0);
-    TTI_SFPLOADI(p_sfpu::LREG1, InstrModLoadStore::FP16B, generic_moe_gate_neg_inf_bf16);
+    TTI_SFPLOADI(p_sfpu::LREG1, sfpi::SFPLOADI_MOD0_FLOATB, generic_moe_gate_neg_inf_bf16);
     TTI_SFPLOAD(p_sfpu::LREG2, 0, ADDR_MOD_7, generic_moe_gate_bias_tile + load_offset + 2);
-    TTI_SFPLOADI(p_sfpu::LREG3, InstrModLoadStore::FP16B, generic_moe_gate_neg_inf_bf16);
+    TTI_SFPLOADI(p_sfpu::LREG3, sfpi::SFPLOADI_MOD0_FLOATB, generic_moe_gate_neg_inf_bf16);
 
     TTI_SFPLOAD(p_sfpu::LREG4, InstrModLoadStore::LO16_ONLY, ADDR_MOD_7, generic_moe_gate_indices_tile + load_offset + 0);
     TTI_SFPLOADI(p_sfpu::LREG5, sfpi::SFPLOADI_MOD0_FLOATB, 0);

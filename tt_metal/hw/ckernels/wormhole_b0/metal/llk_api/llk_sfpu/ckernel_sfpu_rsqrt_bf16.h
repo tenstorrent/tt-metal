@@ -6,9 +6,6 @@
 namespace ckernel::sfpu {
 struct RsqrtBf16Config {
     static constexpr uint32_t kKind = 1u;
-    static constexpr uint32_t kMagic = 0x5f1110a0u;
-    static constexpr uint32_t kC1Bits = 0x401214c9u;
-    static constexpr uint32_t kC2Bits = 0x40103626u;
     static constexpr uint32_t kBodySlots = 28u;
 };
 }  // namespace ckernel::sfpu
@@ -29,10 +26,10 @@ inline bool bf16_dest_rsqrt() {
     return false;
 #endif
 }
+// Each call records replay slots 0-15, below replay_buf_offset = 16.
 template <int ITERATIONS = 32>
-inline void calculate_rsqrt_bf16() {
+__attribute__((noinline)) inline void calculate_rsqrt_bf16() {
     ckernel::sfpu::bf16::rsqrt::calculate_newton_root<ckernel::sfpu::RsqrtBf16Config, ITERATIONS>();
 }
-inline void init_rsqrt_bf16() { ckernel::sfpu::bf16::rsqrt::init_newton_root<ckernel::sfpu::RsqrtBf16Config>(); }
 
 }  // namespace ckernel::sfpu
