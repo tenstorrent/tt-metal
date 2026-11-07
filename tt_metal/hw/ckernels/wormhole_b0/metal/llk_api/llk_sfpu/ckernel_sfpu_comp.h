@@ -154,9 +154,10 @@ inline void calculate_comp() {
     }
 }
 
-// Each mode writes the constant that the untaken side would have produced up front and
-// keeps only the taken arm under a v_if. That drops the SFPCOMPC the v_else compiles to,
-// and lets the default be materialised once outside the predicate.
+// Each mode stores the constant that the untaken side would have produced up front and
+// keeps only the taken arm under a v_if, stored straight to Dest. That drops the SFPCOMPC
+// the v_else compiles to and the two SFPMOVs a result register would need: the default
+// comes from LCONST_0, and the 1 is loaded once outside the loop.
 template <bool APPROXIMATION_MODE, SfpuType COMP_MODE, int ITERATIONS = 8>
 inline void calculate_comp_int() {
     // res is pre-set below, so an unhandled COMP_MODE would silently zero the whole tile
@@ -167,50 +168,54 @@ inline void calculate_comp_int() {
             (COMP_MODE == SfpuType::less_than_zero) or (COMP_MODE == SfpuType::greater_than_zero) or
             (COMP_MODE == SfpuType::less_than_equal_zero) or (COMP_MODE == SfpuType::greater_than_equal_zero),
         "calculate_comp_int supports only the six comparison-to-zero modes");
+    const vInt zero = 0;
+    const vInt one = 1;
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         vInt v = dst_reg[0];
-        vInt zero = 0;
-        vInt res = zero;
 
         // a[i] == 0
         if constexpr (COMP_MODE == SfpuType::equal_zero) {
-            v_if(v == zero) { res = 1; }
+            dst_reg[0] = zero;
+            v_if(v == zero) { dst_reg[0] = one; }
             v_endif;
         }
 
         // a[i] != 0
         if constexpr (COMP_MODE == SfpuType::not_equal_zero) {
-            res = 1;
-            v_if(v == zero) { res = zero; }
+            dst_reg[0] = one;
+            v_if(v == zero) { dst_reg[0] = zero; }
             v_endif;
         }
 
         // a[i] < 0
         if constexpr (COMP_MODE == SfpuType::less_than_zero) {
-            v_if(v < zero) { res = 1; }
+            dst_reg[0] = zero;
+            v_if(v < zero) { dst_reg[0] = one; }
             v_endif;
         }
 
         // a[i] > 0
         if constexpr (COMP_MODE == SfpuType::greater_than_zero) {
-            v_if(v > zero) { res = 1; }
+            dst_reg[0] = zero;
+            v_if(v > zero) { dst_reg[0] = one; }
             v_endif;
         }
 
         // a[i] <= 0
         if constexpr (COMP_MODE == SfpuType::less_than_equal_zero) {
-            v_if(v <= zero) { res = 1; }
+            dst_reg[0] = zero;
+            v_if(v <= zero) { dst_reg[0] = one; }
             v_endif;
         }
 
         // a[i] >= 0
         if constexpr (COMP_MODE == SfpuType::greater_than_equal_zero) {
-            v_if(v >= zero) { res = 1; }
+            dst_reg[0] = zero;
+            v_if(v >= zero) { dst_reg[0] = one; }
             v_endif;
         }
 
-        dst_reg[0] = res;
         dst_reg++;
     }
 }
@@ -220,19 +225,20 @@ inline void calculate_comp_uint16() {
     static_assert((COMP_MODE == SfpuType::equal_zero) or (COMP_MODE == SfpuType::not_equal_zero));
     // UInt16 values live in the low 16 bits of the dest word; DataLayout::U16 loads/stores them
     // directly (SFPLOAD/SFPSTORE mod = UINT16), matching the InstrModLoadStore::LO16 path.
+    // Default stored first, taken arm stored under the predicate (see calculate_comp_int).
+    const vUInt zero = 0;
+    const vUInt one = 1;
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         vUInt v = dst_reg[0].mode<sfpi::DataLayout::U16>();
         if constexpr (COMP_MODE == SfpuType::equal_zero) {
-            vUInt r = 0;
-            v_if(v == 0) { r = 1; }
+            dst_reg[0].mode<sfpi::DataLayout::U16>() = zero;
+            v_if(v == 0) { dst_reg[0].mode<sfpi::DataLayout::U16>() = one; }
             v_endif;
-            dst_reg[0].mode<sfpi::DataLayout::U16>() = r;
         } else {
-            vUInt r = 1;
-            v_if(v == 0) { r = 0; }
+            dst_reg[0].mode<sfpi::DataLayout::U16>() = one;
+            v_if(v == 0) { dst_reg[0].mode<sfpi::DataLayout::U16>() = zero; }
             v_endif;
-            dst_reg[0].mode<sfpi::DataLayout::U16>() = r;
         }
         dst_reg++;
     }
@@ -243,26 +249,29 @@ inline void calculate_eqz_uint32() {
     // UInt32 values occupy the full dest word; DataLayout::U32 loads/stores them
     // directly (SFPLOAD/SFPSTORE mod = UINT32). eqz/nez are representation-agnostic
     // (only a compare against the all-zero word), so a plain unsigned compare works.
+    // Default stored first, taken arm stored under the predicate (see calculate_comp_int).
+    const vUInt zero = 0;
+    const vUInt one = 1;
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         vUInt v = dst_reg[0].mode<sfpi::DataLayout::U32>();
-        vUInt r = 0;
-        v_if(v == 0) { r = 1; }
+        dst_reg[0].mode<sfpi::DataLayout::U32>() = zero;
+        v_if(v == 0) { dst_reg[0].mode<sfpi::DataLayout::U32>() = one; }
         v_endif;
-        dst_reg[0].mode<sfpi::DataLayout::U32>() = r;
         dst_reg++;
     }
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS>
 inline void calculate_nez_uint32() {
+    const vUInt zero = 0;
+    const vUInt one = 1;
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         vUInt v = dst_reg[0].mode<sfpi::DataLayout::U32>();
-        vUInt r = 1;
-        v_if(v == 0) { r = 0; }
+        dst_reg[0].mode<sfpi::DataLayout::U32>() = one;
+        v_if(v == 0) { dst_reg[0].mode<sfpi::DataLayout::U32>() = zero; }
         v_endif;
-        dst_reg[0].mode<sfpi::DataLayout::U32>() = r;
         dst_reg++;
     }
 }
