@@ -121,6 +121,10 @@ using RequestedIntermeshPorts =
 
 class MeshGraph {
 public:
+    // Per-mesh fabric config resolution, identical on every rank: per_mesh_fabric_config[mesh] governs that mesh or
+    // switch (the owning ranks gather the map so every rank sees every mesh's config); entries must be concrete (not
+    // MGD_DEFAULT), and no entry means it takes its own declared dim_types. The file-path constructors apply their one
+    // fabric_config to every mesh, resolving MGD_DEFAULT per mesh.
     explicit MeshGraph(
         tt::tt_metal::ClusterType cluster_type,
         const std::string& mesh_graph_desc_file_path,
@@ -130,6 +134,11 @@ public:
         const tt::Cluster& cluster,
         const std::string& mesh_graph_desc_file_path,
         std::optional<FabricConfig> fabric_config = std::nullopt);
+
+    explicit MeshGraph(
+        const MeshGraphDescriptor& mesh_graph_descriptor,
+        const std::map<MeshId, FabricConfig>& per_mesh_fabric_config = {},
+        bool is_ubb_galaxy = false);
     ~MeshGraph() = default;
 
     void print_connectivity() const;
@@ -195,11 +204,6 @@ public:
         tt::ARCH arch,
         std::uint32_t num_connections_per_direction);
 
-    explicit MeshGraph(
-        const MeshGraphDescriptor& mesh_graph_descriptor,
-        std::optional<FabricConfig> fabric_config = std::nullopt,
-        bool is_ubb_galaxy = false);
-
     // Get the number of active channels the user has requested between meshes
     const RequestedIntermeshConnections& get_requested_intermesh_connections() const;
 
@@ -235,7 +239,9 @@ public:
     }
 
     // File path when the graph was loaded from textproto; unset for programmatic / auto-discovered MGDs.
-    std::optional<std::filesystem::path> get_mesh_graph_descriptor_path() const { return mesh_graph_desc_file_path_; }
+    std::optional<std::filesystem::path> get_mesh_graph_descriptor_path() const {
+        return mesh_graph_descriptor_.has_value() ? mesh_graph_descriptor_->get_file_path() : std::nullopt;
+    }
 
 private:
     MeshGraph() = default;
@@ -246,7 +252,9 @@ private:
         const MeshCoordinateRange& mesh_coord_range,
         FabricType fabric_type) const;
     void initialize_from_mgd(
-        const MeshGraphDescriptor& mgd, std::optional<FabricConfig> fabric_config, bool is_ubb_galaxy);
+        const MeshGraphDescriptor& mgd,
+        bool is_ubb_galaxy,
+        const std::map<MeshId, FabricConfig>& per_mesh_fabric_config);
 
     void add_to_connectivity(
         MeshId src_mesh_id,
@@ -282,9 +290,6 @@ private:
 
     // Store the MeshGraphDescriptor instance if created from a descriptor file
     std::optional<MeshGraphDescriptor> mesh_graph_descriptor_;
-
-    // Store the file path if MeshGraph was created from a descriptor file
-    std::optional<std::filesystem::path> mesh_graph_desc_file_path_;
 };
 
 }  // namespace tt::tt_fabric

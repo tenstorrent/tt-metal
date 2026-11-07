@@ -27,6 +27,7 @@ from llkaudit.checks.noc_sync import NocSync
 from llkaudit.checks.reconfig_stall import ReconfigStall
 from llkaudit.checks.semaphore_handshake import SemaphoreHandshake
 from llkaudit.checks.srcreg_bank import SrcRegBank
+from llkaudit.checks.tensix_risc_order import TensixRiscOrder
 from llkaudit.factbase import FactBase
 
 
@@ -4307,6 +4308,575 @@ def test_is_mop_word_is_anchored_not_a_substring():
     # a name that merely CONTAINS the token is not an opcode-value macro
     assert not registry.is_mop_word("MY_TT_OP_WRAPPER")
     assert not registry.is_mop_word("")
+
+
+_FC = "tt_llk_blackhole/common/inc/cunpack_common.h"
+_FA = "tt_llk_blackhole/llk_lib/llk_unpack_A.h"
+_ZS = "UNP0_ADDR_CTRL_ZW_REG_1_Zstride_ADDR32"
+
+
+def _store_side(extra_before_store=()):
+    """configure_unpack_AB: polls UNPACK_SYNC (wait_for_idle), then stores Z-stride."""
+    return [
+        fn("wait_for_idle", _FC, 190, 199),
+        call(
+            _FC,
+            194,
+            "semaphore_read",
+            func="wait_for_idle",
+            arg0="semaphore::UNPACK_SYNC",
+        ),
+        fn("configure_unpack_AB", _FC, 700, 900),
+        call(_FC, 786, "wait_for_idle", func="configure_unpack_AB"),
+        *extra_before_store,
+        pw(_FC, 806, "get_cfg_pointer", _ZS, func="configure_unpack_AB"),
+    ]
+
+
+def _wrcfg(off, func, file=_FC, tok=_ZS, name="TTI_WRCFG"):
+    text = f"{name}(p_gpr_unpack::TMP_LO, p_cfg::WRCFG_32b, {tok})"
+    if name == "TTI_SETC16":
+        text = f"TTI_SETC16({tok}, 0x0)"
+    return macro(file, off, name, text, func=func)
+
+
+def _tile_done_case(release_after_tile_done=False):
+    """_llk_unpack_A_ releases UNPACK_SYNC, then calls tile_done, whose WRCFG sits
+    behind a stalled SEMPOST (or, fixed, the release comes after tile_done)."""
+    get_off, done_off = (40, 30) if release_after_tile_done else (30, 40)
+    return _store_side() + [
+        fn("unpack_to_dest_tile_done", _FC, 970, 999),
+        call(
+            _FC,
+            978,
+            "t6_semaphore_post",
+            text="t6_semaphore_post<p_stall::UNPACK0>",
+            func="unpack_to_dest_tile_done",
+            arg0="semaphore::UNPACK_TO_DEST",
+        ),
+        _wrcfg(980, "unpack_to_dest_tile_done"),
+        fn("_llk_unpack_A_", _FA, 10, 60),
+        call(
+            _FA,
+            get_off,
+            "t6_semaphore_get",
+            func="_llk_unpack_A_",
+            arg0="semaphore::UNPACK_SYNC",
+        ),
+        call(_FA, done_off, "unpack_to_dest_tile_done", func="_llk_unpack_A_"),
+    ]
+
+
+def _order(facts):
+    return TensixRiscOrder().run(FactBase("blackhole", facts))
+
+
+@case
+def test_order_write_after_release_flagged_and_held():
+    out = _order(_tile_done_case())
+    assert len(out) == 1, out
+    f = out[0]
+    assert f.hint == "TENSIX_WRITE_AFTER_RELEASE", f.hint
+    assert f.function == "configure_unpack_AB" and "UNPACK_SYNC" in f.detail, f.detail
+    assert (
+        "unpack_to_dest_tile_done" in f.evidence[0]
+        and "held: after t6_semaphore_post" in f.evidence[0]
+    ), f.evidence
+
+
+@case
+def test_order_release_after_the_write_is_clean():
+    # SEMGET after tile_done: the poll cannot return before the WRCFG executes.
+    assert _order(_tile_done_case(release_after_tile_done=True)) == []
+
+
+@case
+def test_order_writer_without_release_flagged():
+    # A reconfig that waits on UNPACK0 and then writes the register, with no
+    # SEMGET after it: nothing the store's poll waits for comes after the write.
+    F = "tt_llk_blackhole/llk_lib/llk_unpack_common.h"
+    facts = _store_side() + [
+        fn("_llk_unpack_reconfig_data_format_srca_impl_", F, 230, 260),
+        macro(
+            F,
+            235,
+            "TTI_STALLWAIT",
+            "TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::UNPACK0)",
+            func="x",
+        ),
+        call(
+            F,
+            251,
+            "cfg_reg_rmw_tensix",
+            text="cfg_reg_rmw_tensix<UNP0_ADDR_CTRL_ZW_REG_1_Zstride_RMW>",
+            func="_llk_unpack_reconfig_data_format_srca_impl_",
+        ),
+    ]
+    out = _order(facts)
+    assert len(out) == 1 and out[0].hint == "TENSIX_WRITE_NO_RELEASE", out
+    assert "held: after TTI_STALLWAIT" in out[0].evidence[0], out[0].evidence
+
+
+@case
+def test_order_same_function_write_then_store():
+    facts = _store_side(extra_before_store=[_wrcfg(800, "configure_unpack_AB")])
+    out = _order(facts)
+    assert len(out) == 1 and out[0].hint == "TENSIX_WRITE_SAME_FN", out
+
+
+@case
+def test_order_tensix_sync_orders_earlier_writes_only():
+    sync = call(_FC, 790, "tensix_sync", func="configure_unpack_AB")
+    # a drain before the store orders writes issued before it ...
+    assert _order(_tile_done_case() + [sync]) == []
+    # ... but not a write the same function issues after the drain
+    out = _order(
+        _store_side(extra_before_store=[sync, _wrcfg(800, "configure_unpack_AB")])
+    )
+    assert len(out) == 1 and out[0].hint == "TENSIX_WRITE_SAME_FN", out
+
+
+@case
+def test_order_drain_in_every_caller_counts():
+    F = "tt_llk_blackhole/llk_lib/llk_unpack_common.h"
+    facts = _tile_done_case() + [
+        fn("_llk_unpack_hw_configure_", F, 60, 90),
+        call(F, 70, "tensix_sync", func="_llk_unpack_hw_configure_"),
+        call(F, 80, "configure_unpack_AB", func="_llk_unpack_hw_configure_"),
+    ]
+    assert _order(facts) == []
+
+
+@case
+def test_order_thread_config_write_not_matched():
+    # SETC16 writes ThreadConfig, which no RISC cfg[] store reaches.
+    facts = _store_side() + [
+        fn("switch_config_context", _FC, 170, 185),
+        _wrcfg(176, "switch_config_context", tok=_ZS, name="TTI_SETC16"),
+    ]
+    assert _order(facts) == []
+
+
+@case
+def test_order_release_between_writer_and_store_in_one_function():
+    # if/else arms: writer + SEMGET in one arm, poll + store in the other; across
+    # calls the SEMGET orders the writer before the store.
+    F = "tt_llk_blackhole/llk_lib/llk_unpack_tilize.h"
+    B = "THCON_SEC0_REG3_Base_address_ADDR32"
+    facts = [
+        fn("wait_for_next_context", _FC, 160, 170),
+        call(
+            _FC,
+            165,
+            "semaphore_read",
+            func="wait_for_next_context",
+            arg0="semaphore::UNPACK_SYNC",
+        ),
+        fn("_llk_unpack_tilize_", F, 200, 360),
+        macro(
+            F,
+            271,
+            "TTI_CFGSHIFTMASK",
+            f"TTI_CFGSHIFTMASK(1, 3, 31, 0, 3, {B})",
+            func="_llk_unpack_tilize_",
+        ),
+        call(
+            F,
+            299,
+            "t6_semaphore_get",
+            func="_llk_unpack_tilize_",
+            arg0="semaphore::UNPACK_SYNC",
+        ),
+        call(F, 306, "wait_for_next_context", func="_llk_unpack_tilize_"),
+        pw(F, 319, "get_cfg_pointer", B, func="_llk_unpack_tilize_"),
+    ]
+    assert _order(facts) == []
+
+
+@case
+def test_order_runtime_offset_store_matches_same_reg():
+    w = "THCON_SEC0_REG2_Unpack_if_sel_cntx0_ADDR32"
+    s = "THCON_SEC0_REG2_Out_data_format_ADDR32"
+    assert registry.same_register(w, s, True, {})  # `s + i` may reach w
+    assert not registry.same_register(w, s, False, {})  # a fixed word does not
+    assert not registry.same_register(
+        "THCON_SEC0_REG5_Dest_cntx0_address_ADDR32", s, True, {}
+    )
+
+
+def _helper_writer(off=950):
+    """A helper whose only body is a same-register WRCFG."""
+    return [fn("write_zstride", _FC, 940, 960), _wrcfg(off, "write_zstride")]
+
+
+@case
+def test_order_callee_write_after_drain_flagged():
+    # tensix_sync(); write_zstride(); cfg[...] = v: the helper's write is queued
+    # after the drain, so the drain does not order it.
+    sync = call(_FC, 790, "tensix_sync", func="configure_unpack_AB")
+    helper = call(_FC, 795, "write_zstride", func="configure_unpack_AB")
+    out = _order(_store_side(extra_before_store=[sync, helper]) + _helper_writer())
+    assert len(out) == 1 and out[0].hint == "TENSIX_WRITE_SAME_FN", out
+    # the same helper called BEFORE the drain is ordered by it
+    helper_early = call(_FC, 788, "write_zstride", func="configure_unpack_AB")
+    facts = _store_side(extra_before_store=[helper_early, sync]) + _helper_writer()
+    assert _order(facts) == []
+
+
+def _caller_with_drain(writer_call_off, drain_off):
+    F = "tt_llk_blackhole/llk_lib/llk_unpack_common.h"
+    return [
+        fn("_llk_unpack_hw_configure_", F, 60, 90),
+        call(F, writer_call_off, "write_zstride", func="_llk_unpack_hw_configure_"),
+        call(F, drain_off, "tensix_sync", func="_llk_unpack_hw_configure_"),
+        call(F, 80, "configure_unpack_AB", func="_llk_unpack_hw_configure_"),
+    ]
+
+
+@case
+def test_order_caller_drain_between_writer_call_and_store_call_is_clean():
+    facts = _store_side() + _helper_writer() + _caller_with_drain(65, 70)
+    assert _order(facts) == []
+
+
+@case
+def test_order_caller_writer_call_after_caller_drain_flagged():
+    facts = _store_side() + _helper_writer() + _caller_with_drain(75, 70)
+    out = _order(facts)
+    assert len(out) == 1 and out[0].hint == "TENSIX_WRITE_NO_RELEASE", out
+
+
+@case
+def test_order_drain_beyond_caller_depth_is_not_credited():
+    # store fn <- L1 <- L2 <- L3(tensix_sync): L3 is past CALLER_DEPTH = 2, so the
+    # writer stays a NO_RELEASE finding instead of being cleared.
+    F = "tt_llk_blackhole/llk_lib/llk_unpack_common.h"
+    facts = (
+        _store_side()
+        + _helper_writer()
+        + [
+            fn("l1", F, 10, 19),
+            call(F, 15, "configure_unpack_AB", func="l1"),
+            fn("l2", F, 20, 29),
+            call(F, 25, "l1", func="l2"),
+            fn("l3", F, 30, 39),
+            call(F, 32, "tensix_sync", func="l3"),
+            call(F, 35, "l2", func="l3"),
+        ]
+    )
+    out = _order(facts)
+    assert len(out) == 1 and out[0].hint == "TENSIX_WRITE_NO_RELEASE", out
+
+
+@case
+def test_order_release_after_poll_does_not_order():
+    # wait_for_idle(); WRCFG; t6_semaphore_get(UNPACK_SYNC); cfg[...] = v: the
+    # poll returned before the write and the release were issued.
+    get = call(
+        _FC,
+        800,
+        "t6_semaphore_get",
+        func="configure_unpack_AB",
+        arg0="semaphore::UNPACK_SYNC",
+    )
+    facts = _store_side(extra_before_store=[_wrcfg(795, "configure_unpack_AB"), get])
+    out = _order(facts)
+    assert len(out) == 1 and out[0].hint == "TENSIX_WRITE_SAME_FN", out
+
+
+@case
+def test_order_callee_write_after_poll_flagged():
+    # wait_for_idle(); write_zstride(); cfg[...] = v, where the helper releases
+    # UNPACK_SYNC after its write: that release follows the poll, so it does
+    # not order the write.
+    helper = call(_FC, 795, "write_zstride", func="configure_unpack_AB")
+    rel = call(
+        _FC,
+        955,
+        "t6_semaphore_get",
+        func="write_zstride",
+        arg0="semaphore::UNPACK_SYNC",
+    )
+    out = _order(_store_side(extra_before_store=[helper]) + _helper_writer() + [rel])
+    assert len(out) == 1 and out[0].hint == "TENSIX_WRITE_SAME_FN", out
+    # called before the poll, the helper's own release orders it
+    helper_early = call(_FC, 780, "write_zstride", func="configure_unpack_AB")
+    facts = (
+        _store_side(extra_before_store=[]) + [helper_early] + _helper_writer() + [rel]
+    )
+    assert _order(facts) == []
+
+
+@case
+def test_order_literal_word_offset_kept():
+    R = "THCON_SEC0_REG1_Row_start_section_size_ADDR32"
+    a32 = {R: 68}
+    w = macro(
+        _FC, 1, "TTI_WRCFG", f"TTI_WRCFG(p_gpr_pack::TMP_LO, p_cfg::WRCFG_32b, {R} + 2)"
+    )
+    ns, tok = registry.ordered_write_target(w)
+    assert (ns, tok) == ("cfg", f"{R}+2"), tok
+    assert registry.resolve_word(tok, a32)[0] == 70
+    s0 = registry.risc_store_target(pw(_FC, 2, "get_cfg_pointer", f"{R} + 0"))
+    s2 = registry.risc_store_target(pw(_FC, 3, "get_cfg_pointer", f"{R}+0x2"))
+    assert s0 == ("cfg", R, False) and s2 == ("cfg", f"{R}+2", False), (s0, s2)
+    assert not registry.same_register(tok, s0[1], False, a32)
+    assert registry.same_register(tok, s2[1], False, a32)
+    assert registry.same_register(tok, s2[1], False, {})  # equal normalized tokens
+    # a runtime offset stays outside the token
+    sr = registry.risc_store_target(pw(_FC, 4, "get_cfg_pointer", f"{R} + i"))
+    assert sr == ("cfg", R, True), sr
+
+
+_FT = "tt_llk_wormhole_b0/llk_lib/llk_unpack_tilize.h"
+_BA = "THCON_SEC0_REG3_Base_address_ADDR32"
+
+
+def _store_then_writer(release=False, poll=False):
+    """One per-tile function: RISC store to Base_address, then a same-register
+    REG2FLOP held behind a stall (call N's writer meets call N+1's store)."""
+    F = "tt_llk_wormhole_b0/common/inc/cunpack_common.h"
+    facts = [
+        fn("unpack_tilize_to_dest_impl", _FT, 170, 240),
+        pw(_FT, 195, "get_cfg_pointer", _BA, func="unpack_tilize_to_dest_impl"),
+        macro(
+            _FT,
+            210,
+            "TTI_STALLWAIT",
+            "TTI_STALLWAIT(p_stall::STALL_TDMA, p_stall::UNPACK)",
+            func="unpack_tilize_to_dest_impl",
+        ),
+        macro(
+            _FT,
+            219,
+            "TTI_REG2FLOP",
+            f"TTI_REG2FLOP(1, 0, 0, 0, {_BA} - THCON_CFGREG_BASE_ADDR32, p_gpr_unpack::TMP0)",
+            func="unpack_tilize_to_dest_impl",
+        ),
+    ]
+    if poll:
+        facts += [
+            fn("wait_for_idle", F, 190, 199),
+            call(
+                F,
+                194,
+                "semaphore_read",
+                func="wait_for_idle",
+                arg0="semaphore::UNPACK_SYNC",
+            ),
+            call(_FT, 180, "wait_for_idle", func="unpack_tilize_to_dest_impl"),
+        ]
+    if release:
+        facts.append(
+            call(
+                _FT,
+                230,
+                "t6_semaphore_get",
+                func="unpack_tilize_to_dest_impl",
+                arg0="semaphore::UNPACK_SYNC",
+            )
+        )
+    return facts
+
+
+@case
+def test_order_writer_after_store_in_same_function_flagged():
+    # call N's writer is issued before call N+1's store; with no release it is
+    # unordered, like a writer in another function.
+    out = _order(_store_then_writer())
+    assert len(out) == 1 and out[0].hint == "TENSIX_WRITE_NO_RELEASE", out
+    assert "llk_unpack_tilize.h:219" in out[0].evidence[0], out[0].evidence
+
+
+@case
+def test_order_writer_after_store_released_before_next_poll_is_clean():
+    # a SEMGET after the writer, and a poll before the store: call N+1's poll
+    # waits for call N's SEMGET, so the writer has executed.
+    assert _order(_store_then_writer(release=True, poll=True)) == []
+
+
+def _partial_poll_case(n, store_tok, writer_tok):
+    """Store behind wait_for_next_context(n); the writer is in another function
+    and is followed by a SEMGET of UNPACK_SYNC."""
+    F = "tt_llk_blackhole/llk_lib/llk_unpack_AB.h"
+    return [
+        fn("wait_for_next_context", _FC, 160, 170),
+        call(
+            _FC,
+            165,
+            "semaphore_read",
+            func="wait_for_next_context",
+            arg0="semaphore::UNPACK_SYNC",
+        ),
+        fn("_llk_unpack_AB_", F, 300, 340),
+        call(F, 310, "wait_for_next_context", func="_llk_unpack_AB_", arg0=str(n)),
+        pw(F, 320, "get_cfg_pointer", store_tok, func="_llk_unpack_AB_"),
+        fn("_llk_unpack_writer_", F, 400, 440),
+        _wrcfg(410, "_llk_unpack_writer_", file=F, tok=writer_tok),
+        call(
+            F,
+            420,
+            "t6_semaphore_get",
+            func="_llk_unpack_writer_",
+            arg0="semaphore::UNPACK_SYNC",
+        ),
+    ]
+
+
+@case
+def test_order_partial_poll_does_not_clear_a_shared_word():
+    # wait_for_next_context(2) returns while the last SEMGET may be pending, so it
+    # does not order a write to a word both contexts use.
+    out = _order(_partial_poll_case(2, _ZS, _ZS))
+    assert len(out) == 1 and out[0].hint == "TENSIX_WRITE_AFTER_RELEASE", out
+    assert "UNPACK_SYNC (partial)" in out[0].detail, out[0].detail
+    # a full poll does
+    assert _order(_partial_poll_case(1, _ZS, _ZS)) == []
+
+
+@case
+def test_order_partial_poll_clears_a_per_context_word():
+    assert _order(_partial_poll_case(2, _BA, _BA)) == []
+
+
+@case
+def test_order_per_context_word_needs_a_single_context():
+    a32 = {
+        _BA: 76,
+        "THCON_SEC0_REG3_Base_cntx1_address_ADDR32": 77,
+        "THCON_SEC0_REG5_Dest_cntx0_address_ADDR32": 84,
+        "THCON_SEC0_REG5_Dest_cntx1_address_ADDR32": 84,
+    }
+    assert registry.is_per_context_word(_BA, a32)
+    assert registry.is_per_context_word(
+        "THCON_SEC0_REG3_Base_cntx1_address_ADDR32", a32
+    )
+    # Dest_cntx0/1 share one word: not per-context
+    assert not registry.is_per_context_word(
+        "THCON_SEC0_REG5_Dest_cntx0_address_ADDR32", a32
+    )
+    assert not registry.is_per_context_word(_ZS, a32)
+
+
+@case
+def test_order_callers_mixing_full_and_partial_polls_keep_the_poll():
+    # every caller polls UNPACK_SYNC, one fully and one partially: the store is
+    # still behind a poll, graded partial.
+    F = "tt_llk_blackhole/llk_lib/llk_unpack_common.h"
+    G = "tt_llk_blackhole/llk_lib/llk_unpack_AB.h"
+    facts = [
+        fn("wait_for_next_context", _FC, 160, 170),
+        call(
+            _FC,
+            165,
+            "semaphore_read",
+            func="wait_for_next_context",
+            arg0="semaphore::UNPACK_SYNC",
+        ),
+        fn("_llk_unpack_configure_addresses_", F, 360, 380),
+        pw(F, 368, "get_cfg_pointer", _BA, func="_llk_unpack_configure_addresses_"),
+        fn("a_", G, 10, 30),
+        call(G, 12, "wait_for_next_context", func="a_", arg0="1"),
+        call(G, 14, "_llk_unpack_configure_addresses_", func="a_"),
+        fn("b_", G, 40, 60),
+        call(G, 42, "wait_for_next_context", func="b_", arg0="2"),
+        call(G, 44, "_llk_unpack_configure_addresses_", func="b_"),
+        fn("_llk_unpack_writer_", G, 400, 440),
+        _wrcfg(410, "_llk_unpack_writer_", file=G, tok=_BA),
+        call(
+            G,
+            420,
+            "t6_semaphore_get",
+            func="_llk_unpack_writer_",
+            arg0="semaphore::UNPACK_SYNC",
+        ),
+    ]
+    assert _order(facts) == []  # per-context word: the partial poll orders it
+    shared = [
+        dict(f, index_text=_ZS) if f["family"] == "pointer_write" else f for f in facts
+    ]
+    shared = [
+        (
+            _wrcfg(410, "_llk_unpack_writer_", file=G, tok=_ZS)
+            if f.get("name") == "TTI_WRCFG"
+            else f
+        )
+        for f in shared
+    ]
+    out = _order(shared)
+    assert len(out) == 1 and out[0].hint == "TENSIX_WRITE_AFTER_RELEASE", out
+
+
+@case
+def test_order_evidence_names_caller_sites_for_diff_scoping():
+    # The Z-stride pair is decided by where _llk_unpack_A_ issues its SEMGET, so a
+    # diff touching only llk_unpack_A.h must keep the finding.
+    from llkaudit.cli import scope_to_changed
+
+    out = _order(_tile_done_case())
+    assert len(out) == 1, out
+    assert any(e.startswith("llk_unpack_A.h:") for e in out[0].evidence), out[
+        0
+    ].evidence
+    kept = scope_to_changed(
+        [out[0].__dict__], ["tt_llk_blackhole/llk_lib/llk_unpack_A.h"]
+    )
+    assert len(kept) == 1, kept
+
+
+@case
+def test_order_store_to_a_local_index_is_unresolved():
+    facts = _store_side() + [
+        fn("_llk_unpack_A_", _FA, 10, 60),
+        pw(_FA, 20, "get_cfg_pointer", "upk0_reg", func="_llk_unpack_A_"),
+    ]
+    out = [f for f in _order(facts) if f.function == "_llk_unpack_A_"]
+    assert len(out) == 1 and out[0].hint == "UNRESOLVED_TARGET", out
+    # a generic MMIO pointer (MOP template) is not a config store
+    mop = {
+        **pw(
+            _FA,
+            30,
+            "volatile std::uint32_t* mop_cfg_base",
+            "1",
+            prov="cast",
+            func="_llk_unpack_A_",
+        )
+    }
+    assert registry.unresolved_store_ns(mop) is None
+
+
+@case
+def test_order_gpr_literal_offset_kept():
+    T = "p_gpr_pack::TILE_HEADER"
+    w = macro(_FC, 1, "TTI_SETDMAREG", f"TTI_SETDMAREG(0, 0, 0, LO_16({T}))")
+    w1 = macro(_FC, 2, "TTI_SETDMAREG", f"TTI_SETDMAREG(0, 0, 0, LO_16({T} + 0x1))")
+    assert registry.ordered_write_target(w) == ("gpr", T)
+    assert registry.ordered_write_target(w1) == ("gpr", f"{T}+1")
+    s0 = registry.risc_store_target(pw(_FC, 3, "get_regfile_pointer", f"{T} + 0"))
+    s1 = registry.risc_store_target(pw(_FC, 4, "get_regfile_pointer", f"{T} + 1"))
+    assert s0 == ("gpr", T, False) and s1 == ("gpr", f"{T}+1", False), (s0, s1)
+    assert not registry.same_register(T, s1[1], False, {})
+    assert registry.same_register(f"{T}+1", s1[1], False, {})
+
+
+@case
+def test_order_runtime_offset_store_end_to_end():
+    # a `FIELD_ADDR32 + i` store spans the words of its REG, so a same-REG writer
+    # issued after the release it waits for is reported; a fixed-index store is not.
+    w = "THCON_SEC0_REG2_Unpack_if_sel_cntx0_ADDR32"
+    s = "THCON_SEC0_REG2_Out_data_format_ADDR32"
+
+    def case_(index):
+        return [
+            dict(f, index_text=index) if f["family"] == "pointer_write" else f
+            for f in _tile_done_case()
+            if not (f.get("name") == "TTI_WRCFG")
+        ] + [_wrcfg(980, "unpack_to_dest_tile_done", tok=w)]
+
+    out = _order(case_(f"{s} + i"))
+    assert len(out) == 1 and out[0].hint == "TENSIX_WRITE_AFTER_RELEASE", out
+    assert _order(case_(s)) == []
 
 
 def main():

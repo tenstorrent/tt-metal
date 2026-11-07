@@ -177,9 +177,19 @@ def _detected_ops(found, changed_files):
 
 
 def _harness_compiles(side, arch, log, jobs):
-    """Compile one ordinary op on ``side``: a failure means harness skew, not the PR."""
-    built = detect.compile_all(side, arch, "unary", log, jobs, only_ops=("neg",))
-    return built in (0, runner.NO_TESTS_COLLECTED)
+    """Compile ordinary unary and typecast variants to detect harness skew."""
+    unary = detect.compile_all(side, arch, "unary", log, jobs, only_ops=("neg",))
+    if unary not in (0, runner.NO_TESTS_COLLECTED):
+        return False
+    typecast = detect.compile_all(
+        side,
+        arch,
+        "typecast",
+        log,
+        jobs,
+        extra_pytest_args=("-k", "Float16_b and UInt16"),
+    )
+    return typecast == 0
 
 
 class NotMeasured(Exception):
@@ -306,6 +316,7 @@ def cmd_run(args):
             + "."
         )
     print(f"ops: {ops}  not covered: {not_covered}")
+    harness = overlay.harness_changes(plan, ops)
 
     perf_rows = {}
     if args.no_perf:
@@ -393,12 +404,13 @@ def cmd_run(args):
         ops={"measured": ops, "not_covered": not_covered, "why": why},
         perf=perf_rows,
         accuracy=acc,
+        harness_changed=harness,
         notes=notes,
     )
     if args.check:
         found = report.findings([summary])
         for f in found:
-            print(f"REGRESSION {f['text']}")
+            print(f"{'NOT RUN' if f['kind'] == 'not run' else 'REGRESSION'} {f['text']}")
         if found:
             sys.exit(1)
         print("no regressions")
@@ -475,7 +487,8 @@ def main(argv=None):
     run.add_argument(
         "--check",
         action="store_true",
-        help="exit 1 when the report has a regression (a ⚠️), 2 when nothing could be measured",
+        help="exit 1 when the report has a ⚠️ (a regression, or an op that did not run on the "
+        "PR side), 2 when nothing could be measured",
     )
     run.add_argument("--pr", help="PR number, for the reproduce commands in the report")
     run.add_argument(

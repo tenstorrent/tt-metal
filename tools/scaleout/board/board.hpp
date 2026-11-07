@@ -8,8 +8,8 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
-#include <umd/device/types/arch.hpp>
-#include <umd/device/types/cluster_descriptor_types.hpp>
+#include <tt-umd/types/arch.hpp>
+#include <tt-umd/types/cluster_descriptor_types.hpp>
 #include <tt_stl/strong_type.hpp>
 
 // Forward declaration and hash specialization for AsicChannel
