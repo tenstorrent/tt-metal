@@ -27,6 +27,13 @@
 
 void kernel_main() {
     uint32_t num_tiles = get_arg(args::num_tiles);
+#ifdef UNARY_RUNTIME_SCALARS
+    // Scalar parameters the chain takes at runtime instead of as literals (get_runtime_scalar_defines). Other
+    // programs that build this kernel do not declare these args, so they are read only when the define is set.
+    [[maybe_unused]] const uint32_t packed_scalar1 = get_arg(args::packed_scalar1);
+    [[maybe_unused]] const uint32_t packed_scalar2 = get_arg(args::packed_scalar2);
+    [[maybe_unused]] const uint32_t packed_scalar3 = get_arg(args::packed_scalar3);
+#endif
 
     DataflowBuffer dfb_in(dfb::in);
     DataflowBuffer dfb_out(dfb::out);
