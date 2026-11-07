@@ -137,9 +137,8 @@ struct RingAttentionRankSlab {
 };
 
 // sparse_ring_sdpa's dense-row partials, forwarded one hop toward their owner by the gather writers once the gather is
-// done (the tail of ring_attention_all_gather_writer.cpp). Units are head-major (u = head x n_dense_blocks + block);
-// head h's n_dense_blocks units are split over SDPA cores h x cores_per_head .. as base or base + 1 each (the first
-// ones one more).
+// done (the tail of ring_attention_all_gather_writer.cpp). Units are head-major (u = head x n_dense_blocks + block),
+// split over the SDPA cores in flat order as units_base or units_base + 1 each (the first units_extra one more).
 struct RingAttentionDenseReturn {
     // Unit u's partial_tiles pages are consecutive pages of one DRAM bank: page ((u / n_banks) * partial_tiles + t) *
     // n_banks + u % n_banks; the receive buffer holds side * n_units + u.
@@ -151,7 +150,8 @@ struct RingAttentionDenseReturn {
     uint32_t arrival_minus_addr = 0;
     uint32_t arrival_plus_addr = 0;
     uint32_t n_cores = 0;
-    uint32_t cores_per_head = 0;
+    uint32_t units_base = 0;
+    uint32_t units_extra = 0;
     uint32_t n_dense_blocks = 0;
     std::vector<uint32_t> core_x;  // NoC x of each SDPA grid column, NoC y of each row
     std::vector<uint32_t> core_y;

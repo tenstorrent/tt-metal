@@ -1043,7 +1043,9 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
         uint32_t q_in, k_in, v_in, identity_scale_in, col_identity, qk_im, max_A, exp_max_diff, out, stats_in, prev_out,
             recip_scratch, sum_in, sparse_plan, pooled_bias, block_counts, key_bias, sum_identity, dense_in;
     };
-    const auto lay_out_cbs = [&](uint32_t slots, uint32_t kv_pages, bool pairs, const auto& alloc) -> CbLayout {
+    // group: Q blocks a step holds at full width (kResidentGroup; more for dense units, see below).
+    const auto lay_out_cbs =
+        [&](uint32_t slots, uint32_t kv_pages, bool pairs, uint32_t group, const auto& alloc) -> CbLayout {
         const auto tile_cb = [&](uint32_t num_tiles, uint32_t tile_size, tt::DataFormat data_format) {
             return alloc(tile_size, num_tiles, data_format);
         };
@@ -1057,7 +1059,7 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
         // per column, which normalization collapses with col_identity.
         l.sum_identity = tile_cb(1, scalar_tile_size, scalar_df);
         const uint32_t qk_im_cb_tiles =
-            std::max(qk_tiles, std::min(slots, kResidentGroup) * Sq_chunk_t * Sk_chunk_t * (pairs ? 2u : 1u));
+            std::max(qk_tiles, std::min(slots, group) * Sq_chunk_t * Sk_chunk_t * (pairs ? 2u : 1u));
         const uint32_t res_stats_tiles = statistics_tiles * slots;
         l.qk_im = tile_cb(qk_im_cb_tiles, qk_im_tile_size, qk_im_df);
         // Staging CBs (max, out, sum): one accumulator set per slot, updated in place and never pushed or popped
@@ -1087,11 +1089,16 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
                                              : std::numeric_limits<uint32_t>::max();  // inactive
         return l;
     };
-    const auto cb_bytes_for_slots = [&](uint32_t slots, uint32_t kv_pages, bool pairs) -> uint64_t {
+    const auto cb_bytes_for_slots =
+        [&](uint32_t slots, uint32_t kv_pages, bool pairs, uint32_t group = kResidentGroup) -> uint64_t {
         uint64_t bytes = 0;
         uint32_t index = 0;
         lay_out_cbs(
-            slots, kv_pages, pairs, [&](uint32_t page_size_bytes, uint32_t num_pages, tt::DataFormat) -> uint32_t {
+            slots,
+            kv_pages,
+            pairs,
+            group,
+            [&](uint32_t page_size_bytes, uint32_t num_pages, tt::DataFormat) -> uint32_t {
                 bytes += static_cast<uint64_t>(page_size_bytes) * num_pages;
                 return index++;
             });
@@ -1167,7 +1174,28 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
         NH,
         NHK,
         NHV);
-    const uint32_t resident_slots = tt::div_up(max_q_per_core, num_q_passes);
+    const uint32_t pass_slots = tt::div_up(max_q_per_core, num_q_passes);
+    // Dense builds: a dense batch takes up to all of a core's dense units and a step up to all of a batch's units (one
+    // step per piece pays the step's fixed cost once), as far as that fits L1 next to the pass split's choice (the
+    // same passes, K/V depth and pair steps): more slots first (fewer batches), then wider steps.
+    uint32_t dense_slots = pass_slots;
+    uint32_t step_members = kResidentGroup;
+    if (dense_h) {
+        const uint32_t du_max = tt::div_up(dense_units, num_cores);
+        for (uint32_t n = std::min(kResidentMaxSlots, std::max(pass_slots, du_max)); n > pass_slots; --n) {
+            if (cb_bytes_for_slots(n, kv_cb_pages, pair_steps) <= usable_l1) {
+                dense_slots = n;
+                break;
+            }
+        }
+        for (uint32_t g = std::min(dense_slots, du_max); g > kResidentGroup; --g) {
+            if (cb_bytes_for_slots(dense_slots, kv_cb_pages, pair_steps, g) <= usable_l1) {
+                step_members = g;
+                break;
+            }
+        }
+    }
+    const uint32_t resident_slots = dense_slots;
     log_debug(
         tt::LogOp,
         "SparseRingSDPA: {} Q blocks per core at most, {} pass(es) of at most {}, {} K/V pages, pair steps {} "
@@ -1177,10 +1205,10 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
         resident_slots,
         kv_cb_pages,
         pair_steps ? "on" : "off",
-        cb_bytes_for_slots(resident_slots, kv_cb_pages, pair_steps),
+        cb_bytes_for_slots(resident_slots, kv_cb_pages, pair_steps, step_members),
         usable_l1);
 
-    const CbLayout cbs = lay_out_cbs(resident_slots, kv_cb_pages, pair_steps, allocate_cb);
+    const CbLayout cbs = lay_out_cbs(resident_slots, kv_cb_pages, pair_steps, step_members, allocate_cb);
     const uint32_t cb_q_in = cbs.q_in;
     const uint32_t cb_k_in = cbs.k_in;
     const uint32_t cb_v_in = cbs.v_in;
@@ -1437,6 +1465,8 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
         {"block_tiles", block_tiles},
         // Q blocks per core per pass, and the pass count (the same on every core).
         {"resident_slots", resident_slots},
+        // Q blocks a step holds at full width (the score scratch's capacity; kResidentGroup without dense units).
+        {"step_members", step_members},
         {"num_q_passes", num_q_passes},
         // Pair steps (see pair_steps_eligible above) and the K/V CB depth in pieces.
         {"pair_steps", pair_steps ? 1u : 0u},
@@ -1616,26 +1646,19 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
         }
     }
 
-    // Dense units: every head's n_dense_blocks units on dense_cores_per_head cores of their own (cores h x that ..,
-    // base or base + 1 units each, the first ones one more), so a head's cores share its local pieces in one dense
-    // group; the cores past NH x dense_cores_per_head hold none.
+    // Dense units: base or base + 1 per core over every core, in flat core order (the first dense_units_extra cores one
+    // more). Units are head-major, so most cores hold one head's units; a core across a head boundary holds two.
     const uint32_t n_dense_blocks = dense_units / NH;
-    const uint32_t dense_cores_per_head = dense_h ? num_cores / NH : 0;
-    TT_FATAL(!dense_h || dense_cores_per_head > 0, "SparseRingSDPA: dense_blocks need a core per head");
+    const uint32_t dense_units_base = dense_units / num_cores;
+    const uint32_t dense_units_extra = dense_units % num_cores;
     const auto dense_range = [&](uint32_t i) -> std::pair<uint32_t, uint32_t> {
-        if (!dense_h || i >= NH * dense_cores_per_head) {
-            return {0, 0};
-        }
-        const uint32_t h = i / dense_cores_per_head;
-        const uint32_t c = i % dense_cores_per_head;
-        const uint32_t base = n_dense_blocks / dense_cores_per_head;
-        const uint32_t extra = n_dense_blocks % dense_cores_per_head;
-        const uint32_t start = h * n_dense_blocks + c * base + std::min(c, extra);
-        return {start, start + base + (c < extra ? 1u : 0u)};
+        const uint32_t start = i * dense_units_base + std::min(i, dense_units_extra);
+        return {start, start + dense_units_base + (i < dense_units_extra ? 1u : 0u)};
     };
-    // Dense groups: a head's cores with units, when each runs the same batches per owner (sparse_dense::for_each_batch
-    // over resident_slots): they stream identical piece sequences, and a batch waits for one owner's arrivals on every
-    // member, so the owners' hop chains stay independent. Else they read their own pieces.
+    // Dense groups: the cores holding units of head h only, when each runs the same batches per owner
+    // (sparse_dense::for_each_batch over resident_slots): they stream identical piece sequences, and a batch waits for
+    // one owner's arrivals on every member, so the owners' hop chains stay independent. The others (a core across a
+    // head boundary, or members with other batches) read their own pieces.
     std::vector<std::vector<uint32_t>> dense_group_args(num_cores, std::vector<uint32_t>{0u, 0u, 0u, 0u, 0u});
     if (dense_sems.has_value()) {
         const auto n_batches = [&](uint32_t i) {
@@ -1651,8 +1674,9 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
         };
         for (uint32_t h = 0; h < NH; ++h) {
             std::vector<uint32_t> members;
-            for (uint32_t i = h * dense_cores_per_head; i < (h + 1) * dense_cores_per_head; ++i) {
-                if (dense_range(i).second > dense_range(i).first) {
+            for (uint32_t i = 0; i < num_cores; ++i) {
+                const auto [lo, hi] = dense_range(i);
+                if (lo < hi && lo / n_dense_blocks == h && (hi - 1) / n_dense_blocks == h) {
                     members.push_back(i);
                 }
             }
@@ -1907,8 +1931,9 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
         dr.ready_minus_addr = ready_minus_addr;
         dr.arrival_minus_addr = arrival_minus_addr;
         dr.arrival_plus_addr = arrival_plus_addr;
-        dr.n_cores = NH * dense_cores_per_head;  // the cores holding dense units, in flat order
-        dr.cores_per_head = dense_cores_per_head;
+        dr.n_cores = num_cores;
+        dr.units_base = dense_units_base;
+        dr.units_extra = dense_units_extra;
         dr.n_dense_blocks = n_dense_blocks;
         for (uint32_t x = 0; x < grid_size.x; ++x) {
             dr.core_x.push_back(mesh_device->worker_core_from_logical_core({x, 0}).x);

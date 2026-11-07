@@ -260,14 +260,14 @@ void kernel_main() {
     };
 
     // Dense return block: [n_sends, staging, receive, ready semaphore, the receivers' arrival semaphore (this
-    // direction's side), dense cores, cores per head, dense blocks per head, grid x, grid y, receive side, units
-    // (padded to banks), link stride, link, tiles per partial, bytes per tile, DRAM banks, tiles per packet], the NoC x
-    // of each grid column, the NoC y of each grid row, then per send (owner record k, its first block in a head, its
-    // blocks).
+    // direction's side), SDPA cores, units per core, dense blocks per head, grid x, grid y, receive side, units
+    // (padded to banks), link stride, link, tiles per partial, bytes per tile, DRAM banks, tiles per packet, cores
+    // with one more unit], the NoC x of each grid column, the NoC y of each grid row, then per send (owner record k,
+    // its first block in a head, its blocks).
     [[maybe_unused]] const uint32_t dense_args = arg_idx;
     if constexpr (has_dense_return) {
         const uint32_t n_sends = get_arg_val<uint32_t>(arg_idx);
-        arg_idx += 18 + get_arg_val<uint32_t>(arg_idx + 8) + get_arg_val<uint32_t>(arg_idx + 9) + 3 * n_sends;
+        arg_idx += 19 + get_arg_val<uint32_t>(arg_idx + 8) + get_arg_val<uint32_t>(arg_idx + 9) + 3 * n_sends;
     }
 
     size_t arg_for_fab = arg_idx;
@@ -661,7 +661,7 @@ void kernel_main() {
         const uint32_t ready_addr = arg(3);
         const uint32_t arrival_addr = arg(4);
         const uint32_t n_cores = arg(5);
-        const uint32_t cores_per_head = arg(6);
+        const uint32_t units_base = arg(6);
         const uint32_t n_dense_blocks = arg(7);
         const uint32_t grid_x = arg(8);
         const uint32_t grid_y = arg(9);
@@ -673,9 +673,10 @@ void kernel_main() {
         const uint32_t tile_bytes = arg(15);
         const uint32_t n_banks = arg(16);
         const uint32_t packet_tiles = arg(17);
+        const uint32_t units_extra = arg(18);
         // Unit u's tiles are consecutive pages of bank u % n_banks (sparse_dense::banked_page).
         const auto unit_page = [&](uint32_t u) { return (u / n_banks) * partial_tiles * n_banks + u % n_banks; };
-        const uint32_t xs = dense_args + 18;
+        const uint32_t xs = dense_args + 19;
         const uint32_t ys = xs + grid_x;
         const uint32_t sends = ys + grid_y;
         const uint32_t scratch = get_local_cb_interface(cb_output_id).fifo_limit -
@@ -698,16 +699,23 @@ void kernel_main() {
             for (uint32_t r = 0, more = 1; more != 0; ++r) {
                 more = 0;
                 for (uint32_t c = link, j = 0; c < n_cores; c += stride, ++j) {
-                    // Core c's units (head c / cores_per_head) and the owner's run in that head.
-                    const uint32_t h = c / cores_per_head;
-                    const uint32_t ci = c % cores_per_head;
-                    const uint32_t base = n_dense_blocks / cores_per_head;
-                    const uint32_t extra = n_dense_blocks % cores_per_head;
-                    const uint32_t c_start = h * n_dense_blocks + ci * base + (ci < extra ? ci : extra);
-                    const uint32_t c_end = c_start + base + (ci < extra ? 1 : 0);
-                    const uint32_t us = h * n_dense_blocks + block_offset;
-                    const uint32_t u = (c_start > us ? c_start : us) + r;
-                    if (u >= c_end || u >= us + n_blocks) {
+                    // Core c's r-th unit of the owner: its units [c_start, c_end) meet the owner's run of every head
+                    // they span, in head order (sparse_dense::for_each_batch's order).
+                    const uint32_t c_start = c * units_base + (c < units_extra ? c : units_extra);
+                    const uint32_t c_end = c_start + units_base + (c < units_extra ? 1 : 0);
+                    uint32_t u = c_end;
+                    for (uint32_t h = c_start / n_dense_blocks, left = r; c_start < c_end && h * n_dense_blocks < c_end;
+                         ++h) {
+                        const uint32_t us = h * n_dense_blocks + block_offset;
+                        const uint32_t a = c_start > us ? c_start : us;
+                        const uint32_t b = c_end < us + n_blocks ? c_end : us + n_blocks;
+                        if (a < b && left < b - a) {
+                            u = a + left;
+                            break;
+                        }
+                        left -= a < b ? b - a : 0;
+                    }
+                    if (u >= c_end) {
                         continue;
                     }
                     more = 1;

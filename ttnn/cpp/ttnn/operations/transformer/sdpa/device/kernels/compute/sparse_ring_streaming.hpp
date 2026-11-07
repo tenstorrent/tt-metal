@@ -1063,9 +1063,10 @@ void sdpa_ring_resident(
     // scratch holds max(qk_tiles, slots x Sq_chunk_t x kBlockTiles); the max/alpha scratches and the max/sum slot
     // CBs hold Sq_chunk_t per slot; the out slot CB holds Sq_chunk_t x vDHt per slot. The step pushes and pops the
     // scratches at full capacity and the slot CBs are filled at full capacity, so the counts must match exactly.
-    // The score scratch holds kGroupCap full-width chunks (the factory's kResidentGroup); a step packs as many
-    // compact members as fit in kQkCap.
-    constexpr uint32_t kGroupCap = resident_slots < 4 ? resident_slots : 4;
+    // The score scratch holds kGroupCap full-width chunks (the factory's step_members: kResidentGroup, more with dense
+    // units); a step packs as many compact members as fit in kQkCap.
+    constexpr uint32_t kStepMembers = get_named_compile_time_arg_val("step_members");
+    constexpr uint32_t kGroupCap = resident_slots < kStepMembers ? resident_slots : kStepMembers;
     constexpr uint32_t kQkTiles = Sq_chunk_t * Sk_chunk_t;
     // Pair steps: a step covers two consecutive pieces of a head, so it holds two pieces' widths per member (the
     // factory doubles the scratch the same way) and the run tables have room for both pieces' runs.
