@@ -30,7 +30,7 @@ inline void rand_init(std::uint32_t seed) {
     if (seed == 0xFFFFFFFF) {
         seed = 0xFFFFFFFE;
     }
-    init_prng_seed(seed);
+    init_prng_seed_sfpu(seed);
 }
 
 inline void make_lane_salt() {
@@ -123,7 +123,30 @@ inline void rand_rows() {
     }
 }
 
-template <bool APPROXIMATION_MODE>
+template <bool NORMALIZE_PER_ROW>
+inline void rand_tile_rows() {
+    constexpr std::uint32_t row_instruction_count = NORMALIZE_PER_ROW ? 17 : 16;
+    constexpr std::uint32_t replay_start = 0;
+
+    load_replay_buf<Exec>(replay_start, row_instruction_count, [] { rand_row<NORMALIZE_PER_ROW>(); });
+#pragma GCC unroll 7
+    for (int d = 1; d < 8; d++) {
+        TTI_REPLAY(replay_start, row_instruction_count, 0, 0);
+    }
+#pragma GCC unroll 3
+    for (int face = 1; face < 4; face++) {
+        // Each face draws a fresh first sample, as a call per face does.
+        rand_prng<p_sfpu::LREG0>();
+        TTI_SFPIADD(0, p_sfpu::LREG3, p_sfpu::LREG0, sfpi::SFPIADD_MOD1_CC_NONE);
+        begin_mix_uint32_mul24();
+#pragma GCC unroll 8
+        for (int d = 0; d < 8; d++) {
+            TTI_REPLAY(replay_start, row_instruction_count, 0, 0);
+        }
+    }
+}
+
+template <bool APPROXIMATION_MODE, bool WHOLE_TILE = false>
 inline void rand(std::uint32_t from, std::uint32_t scale) {
     constexpr std::uint32_t exponent_shift = 23;
     constexpr std::uint32_t exponent_mask = 0xFF;
@@ -165,7 +188,13 @@ inline void rand(std::uint32_t from, std::uint32_t scale) {
     TTI_SFPIADD(0, p_sfpu::LREG3, p_sfpu::LREG0, sfpi::SFPIADD_MOD1_CC_NONE);
     begin_mix_uint32_mul24();
 
-    if (normalize_per_row) {
+    if constexpr (WHOLE_TILE) {
+        if (normalize_per_row) {
+            rand_tile_rows<true>();
+        } else {
+            rand_tile_rows<false>();
+        }
+    } else if (normalize_per_row) {
         rand_rows<true>();
     } else {
         rand_rows<false>();
