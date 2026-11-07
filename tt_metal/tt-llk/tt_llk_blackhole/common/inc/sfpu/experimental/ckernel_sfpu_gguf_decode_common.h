@@ -90,12 +90,16 @@ sfpi_inline vUInt bits(const vUInt w, const int lsb, const int width)
     return (w << static_cast<unsigned>(32 - lsb - width)) >> static_cast<unsigned>(32 - width);
 }
 
-// Prepared formats (fp16_rows > 0): the fp32 copy of fp16 field F of column 16a + 2c + b, written with the page; Q4_K
-// and Q5_K: by k4_group, past the page.
+// The formats whose group step (sfpu_gguf_decode_group) converts the fp16 d and dmin of a group once, past the page.
+template <int FMT>
+constexpr bool group_scales = FMT == Q4_K || FMT == Q5_K || FMT == Q2_K;
+
+// Prepared formats (fp16_rows > 0): the fp32 copy of fp16 field F of column 16a + 2c + b, written with the page;
+// group_scales formats: by the group step, past the page.
 template <int FMT>
 constexpr int pf32_idx(const int F, const int b, const int a)
 {
-    if constexpr (FMT == Q4_K || FMT == Q5_K)
+    if constexpr (group_scales<FMT>)
     {
         return CO + static_cast<int>(page_layout<static_cast<Format>(FMT)>().rows) / 2 + 2 * (2 * F + b) + a;
     }
