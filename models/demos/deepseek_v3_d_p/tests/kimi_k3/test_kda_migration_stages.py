@@ -330,3 +330,59 @@ def test_driver_cache_plan_follows_cache_kind(model, tmp_path, monkeypatch):
     plan = _cache_plan(table, None)
     assert [entry["config_id"] for entry in plan] == list(range(len(expected)))
     assert [(entry["kind"], sorted(entry["rows"]), entry["head_dim"]) for entry in plan] == expected
+
+
+def test_producer_scores_the_k31_index_cache_against_the_trace(tmp_path, monkeypatch):
+    """The runner gate's index check on K3.1 (tt_metal_tracker-ao3i.5.3): it reads the trace's single-file
+    `indexer/indexer_k_layer_N` golden, walks config 1 at the DSA layers only (K3.1 has no `indexer_types`, and
+    its other rows hold KDA state), and scores the device keys after undoing their Hadamard rotation."""
+    import json
+
+    import torch
+    from safetensors.torch import save_file
+
+    from models.demos.common.prefill.runners import prefill_producer
+    from models.demos.deepseek_v3_d_p.tt.mla.indexer import normalized_hadamard_matrix
+
+    real_len = 64
+    adapter = get_adapter("kimi_k3_1")
+    table = ttnn.experimental.disaggregation.import_from_protobuf_file(
+        _published_table("kimi_k3_1", tmp_path, monkeypatch)
+    )
+    monkeypatch.setattr(prefill_producer, "ADAPTER", adapter)
+    monkeypatch.setattr(prefill_producer, "NUM_LAYERS", 24)
+    monkeypatch.setattr(prefill_producer, "MTP_LEVELS", 0)
+    for name in ("PREFILL_PCC_TAIL_WINDOW", "PREFILL_PCC_WINDOW_END", "PREFILL_PCC_GOLDEN_OFFSET"):
+        monkeypatch.delenv(name, raising=False)
+
+    trace = tmp_path / "trace"
+    (trace / "kv_cache").mkdir(parents=True)
+    (trace / "indexer").mkdir()
+    (trace / "metadata.json").write_text(json.dumps({"n_prompt_tokens": real_len}))
+    generator = torch.Generator().manual_seed(531)
+    hadamard = normalized_hadamard_matrix(128).float()
+    device = {}
+    mla = [layer for layer in KimiK3Config.mla_layer_ids() if layer < 24]
+    for layer in mla:
+        kvpe, key = torch.randn(real_len, 576, generator=generator), torch.randn(real_len, 128, generator=generator)
+        save_file(
+            {f"kv_post_transform_layer_{layer}": kvpe.bfloat16()}, trace / "kv_cache" / f"layer_{layer}.safetensors"
+        )
+        save_file(
+            {f"indexer_k_layer_{layer}": key.bfloat16()}, trace / "indexer" / f"indexer_k_layer_{layer}.safetensors"
+        )
+        device[0, layer] = kvpe.bfloat16().float()
+        device[1, layer] = key.bfloat16().float() @ hadamard  # as TtIndexer.write_k stores it
+
+    reads = []
+
+    def read_kv_slice(table, device_map, config_id, layer, slot_id, read_len, head_dim, decode, *, start=0):
+        reads.append((config_id, layer))
+        return device[config_id, layer][start:read_len]
+
+    monkeypatch.setattr(prefill_producer, "_read_kv_slice", read_kv_slice)
+    device_map = {(0, chip): chip for chip in range(_MESH[0] * _MESH[1])}
+    mins = prefill_producer._read_slot_kv_and_check_pcc(table, device_map, 0, real_len, trace)
+
+    assert mins == pytest.approx({"kvpe": 1.0, "index": 1.0}, abs=1e-4)
+    assert sorted(layer for config, layer in reads if config == 1) == mla
