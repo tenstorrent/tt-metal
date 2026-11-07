@@ -57,7 +57,7 @@ Accuracy criteria (FTZ = flush-to-zero, SNB = smallest normal bfloat16)
 | celu                  | alpha > 1            | -alpha*SNB < x < 0 | exactly 0                   |
 |                       | alpha = 2^k          | elsewhere          | ULP ≤ 1                     |
 |                       | alpha = 0.1          | elsewhere          | ULP ≤ 2                     |
-| rpow                  | all                  | |x| >= 2^116       | xfail (#55129)              |
+| rpow                  | all                  | |x| >= 2^116       | exact (#55129)              |
 |                       |                      | exact result < SNB | exactly 0                   |
 |                       |                      | overflow           | +inf                        |
 |                       | exponent = 2^k       | elsewhere          | ULP ≤ 1                     |
@@ -265,8 +265,8 @@ def test_celu(device, alpha, ulp_threshold):
 # rpow — exponent ** x via 2 ** (x * log2(exponent))
 # ─────────────────────────────────────────────────────────────────────────────
 
-# The float32 kernel splits x with x * 4097 (a Veltkamp split), which overflows
-# to inf for |x| >= FLT_MAX / 4097, just above 2^116.
+# The float32 kernel used to split x with x * 4097 (a Veltkamp split), which
+# overflowed to inf for |x| >= FLT_MAX / 4097, just above 2^116 (#55129).
 RPOW_SPLIT_OVERFLOW = 2.0**116
 
 RPOW_EXPONENTS = [0.5, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.5, 8.0, 9.0, 10.0]
@@ -314,14 +314,12 @@ def test_rpow(device, exponent):
 
 
 @pytest.mark.parametrize("exponent", [0.5, 1.0, 2.0])
-@pytest.mark.xfail(strict=True, reason="#55129: float32 pow overflows its Veltkamp split (x * 4097) for |x| >= 2^116")
 def test_rpow_split_overflow(device, exponent):
-    """rpow(x, exponent) for |x| >= 2^116.
+    """rpow(x, exponent) for |x| >= 2^116 (#55129).
 
-    | Input range  | Check           | Device returns                            |
-    |--------------|-----------------|-------------------------------------------|
-    | |x| >= 2^116 | matches golden: | 0 where the golden is +inf, +inf where it |
-    |              | 0, 1 or +inf    | is 0, and 0 or +inf where it is 1         |
+    | Input range  | Check                             |
+    |--------------|-----------------------------------|
+    | |x| >= 2^116 | exact: the golden is 0, 1 or +inf |
     """
     input_tensor = generate_float32_bits()
     input_tensor = input_tensor[input_tensor.abs() >= RPOW_SPLIT_OVERFLOW].reshape(1, -1)
