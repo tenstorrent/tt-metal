@@ -112,7 +112,17 @@ def test_fused_norm_decode(mesh_device, device_params, case, monkeypatch):
         g_rm = ttnn.from_torch(
             gs[0].reshape(1, 1, -1, 32), device=mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16
         )
-        ref = ttnn.rms_norm(tx, weight=g_rm, epsilon=EPS)
+        ref = ttnn.rms_norm(
+            tx,
+            weight=g_rm,
+            epsilon=EPS,
+            compute_kernel_config=ttnn.init_device_compute_kernel_config(
+                mesh_device.arch(),
+                math_fidelity=ttnn.MathFidelity.HiFi4,
+                math_approx_mode=True,
+                fp32_dest_acc_en=False,
+            ),
+        )
         if scalars[0] != 1.0:
             ref = ttnn.mul(ref, scalars[0])
         ref = ttnn.to_torch(ref).float()

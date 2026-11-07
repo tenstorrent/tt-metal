@@ -29,7 +29,7 @@ from models.demos.minimax_m3.config import MeshConfig
 from models.demos.minimax_m3.tt.weight_cache import CACHE_DUMP_MODE
 from models.demos.minimax_m3.utils.general_utils import get_cache_file_name, get_default_num_links
 
-from .compute_configs import rms_norm_compute_config
+from .compute_configs import bf16_stats_rms_norm_compute_config, rms_norm_compute_config
 from .residual import use_distributed_norm
 
 
@@ -146,7 +146,10 @@ class RMSNorm(nn.Module):
 
     def forward(self, x):
         if not self.is_distributed:
-            return ttnn.rms_norm(x, weight=self.tt_weight, epsilon=self.eps, compute_kernel_config=self.compute_config)
+            compute_config = self.compute_config
+            if compute_config is None:
+                compute_config = bf16_stats_rms_norm_compute_config(self.mesh_device)
+            return ttnn.rms_norm(x, weight=self.tt_weight, epsilon=self.eps, compute_kernel_config=compute_config)
 
         # Distributed: program_config/stats memory_config are None on the interleaved path (M3's
         # residual is DRAM-interleaved) and derived from the shard spec on the L1-sharded path.

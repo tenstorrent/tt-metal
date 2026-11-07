@@ -178,10 +178,16 @@ def test_o_proj_fused_rs(monkeypatch, precise):
         assert kw["compute_kernel_config"].math_fidelity == ttnn.MathFidelity.LoFi and kw["dtype"] is None
 
 
-def test_qk_norm(monkeypatch):
+@pytest.mark.parametrize("precise", ["1", "0"])
+def test_qk_norm(monkeypatch, precise):
+    monkeypatch.setenv(PRECISE_NORMS_ENV, precise)
     calls = _recorder(monkeypatch, "rms_norm")
     operations.apply_qk_norm_per_head(_T("q", shape=(1, 16, 1024, 128)), _T("g"), 1e-6)
-    assert calls[0][2]["compute_kernel_config"] is rms_norm_compute_config(_Dev())
+    config = calls[0][2]["compute_kernel_config"]
+    if precise == "1":
+        assert config is rms_norm_compute_config(_Dev())
+    else:
+        assert not config.fp32_dest_acc_en and config.math_approx_mode
 
 
 def test_index_projections(monkeypatch):
