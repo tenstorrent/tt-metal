@@ -162,11 +162,17 @@ ALWI void pack_untilize_block(
  * | Template   | block_ct_dim  | Width of a single block in tiles                  | uint32_t   | 1 to max (DEST size)      | False (default = 8)   |
  * | Template   | full_ct_dim   | Width of a full input in tiles                    | uint32_t   | Divisible by block_ct_dim | False                 |
  * | Template   | diagonal      | Diagonal packing (unused on Blackhole; must be false) | bool   | false                     | False                 |
- * | Template   | narrow_row    | Whether the provided input is narrow              | bool       | true/false                | False                 |
- * | Template   | row_num_datums| Number of datums per row                          | uint32_t   | >= 1                      | False                 |
+ * | Template   | narrow_row    | Pack only row_num_datums datums per row (see note) | bool      | true/false                | False                 |
+ * | Template   | row_num_datums| Datums per output row when narrow_row is set      | uint32_t   | 1 to FACE_C_DIM (see note)| False                 |
  * | Template   | dense         | Packs two 2-face tiles in a single 4-face region  | bool       | true/false                | False (default false) |
  * | Template   | is_fp32_dest_acc_en | Whether DEST is in fp32 accumulation mode   | bool       |                           | False                 |
  * | Function   | out           | Output operand (row-major destination; format+geometry) | LLKOperand |                     | True                  |
+ *
+ * NOTE: narrow_row limits. Checked at compile time (static_assert in the LLK init): row_num_datums is between 1
+ * and FACE_C_DIM, and several blocks (block_ct_dim < full_ct_dim) require row_num_datums == FACE_C_DIM. Checked only
+ * with LLK asserts enabled (LLK_ASSERT, compiled out otherwise): full_ct_dim * row_num_datums must span a multiple
+ * of 16 bytes in the output format (Blackhole advances the L1 row address in 16-byte units), and several blocks
+ * also require num_faces == 1.
  */
 // clang-format on
 template <
@@ -213,8 +219,8 @@ ALWI void pack_untilize_dest_init(LLKOperand<OutFormat, OutShape> /*out*/) {
  * | Template   | block_ct_dim       | Width of a single block in tiles                               | uint32_t   | 1 to max (DEST size)                    | False (default = 8)   |
  * | Template   | full_ct_dim        | Width of a full input in tiles                                 | uint32_t   | Divisible by block_ct_dim               | False                 |
  * | Template   | diagonal           | Diagonal packing (unused on Blackhole; must be false)          | bool       | false                                   | False                 |
- * | Template   | narrow_row         | Whether the provided input is narrow                           | bool       | true/false                              | False                 |
- * | Template   | row_num_datums     | Number of datums per row                                        | uint32_t   | >= 1                                    | False                 |
+ * | Template   | narrow_row         | Pack only row_num_datums datums per row (limits: see init)     | bool       | true/false                              | False                 |
+ * | Template   | row_num_datums     | Datums per output row when narrow_row is set                    | uint32_t   | 1 to FACE_C_DIM                         | False                 |
  * | Template   | tile_dst_ct_offset | Compile-time offset of the tile index in DEST from which to pack | uint32_t | 0 to 7 (0 to 3 if fp32 dest enabled)    | False (default = 0)   |
  * | Template   | dense              | Packs two 2-face tiles in a single 4-face region               | bool       | true/false                              | False (default false) |
  * | Template   | is_fp32_dest_acc_en | Whether DEST is in fp32 accumulation mode                     | bool       |                                         | False                 |
