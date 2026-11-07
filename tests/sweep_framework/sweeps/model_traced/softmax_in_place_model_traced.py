@@ -46,6 +46,16 @@ if model_traced_params:
     parameters["model_traced"] = model_traced_params
 
 
+def invalidate_vector(test_vector) -> tuple:
+    import os
+
+    # Profiler crash (Invalid packet type in DeviceProfiler::readRiscProfilerResults)
+    # on wormhole_b0 N300 for the model_traced suite, refs #48775
+    if test_vector.get("suite_name") == "model_traced" and os.environ.get("ARCH_NAME") == "wormhole_b0":
+        return True, "Disabled: profiler crash (Invalid packet type) on wormhole_b0 N300, refs #48775"
+    return False, None
+
+
 def mesh_device_fixture():
     mesh_shape = get_model_traced_mesh_shape()
     device = create_mesh_device(mesh_shape)
