@@ -2,17 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Regression test for a Blackhole TRISC hang in ckernel::disable_gathering().
-//
-// Turning gathering off while fetch is on a wrong path into code the TRISC has already gathered hangs the
-// TRISC for good. MATH sets that up on purpose against the library's disable_gathering()/enable_gathering():
-//  1. It runs a block of 64 Tensix NOPs twice, so it is gathered.
-//  2. It trains a stale branch prediction for the instruction right after disable_gathering()'s gathering-off
-//     write, with the NOP block as its target. The prediction comes from a `jal` written into spare L1 at an
-//     address that the branch predictor cannot tell apart from that instruction.
-//  3. It stalls execute on GFR_LEAD dependent L1 loads just before disable_gathering(), so fetch runs ahead
-//     and meets the stale prediction early. Without a fix, fetch follows it into the NOP block as gathering
-//     goes off, the TRISC never gets back, and the test times out.
+// Blackhole: a stale branch prediction into gathered code at disable_gathering() must not hang the TRISC.
+// MATH gathers a NOP block, trains a prediction into it, then stalls on GFR_LEAD loads before the bracket.
 
 #include <cstdint>
 
