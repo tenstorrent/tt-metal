@@ -75,7 +75,7 @@ bool is_close_packed_vectors(
 }
 
 // Pearson correlation coefficient between two equally-sized float vectors.
-// Empty inputs are treated as a failure (caller has nothing to validate against).
+// Empty inputs and non-finite PCC values fail.
 // Zero-variance handling: PCC is mathematically undefined when either input is
 // constant. We pass only when *both* sides are constant AND element-wise equal
 // (so constant-input identity checks still work); a constant device output
@@ -117,6 +117,10 @@ inline bool check_pcc(const std::vector<float>& a, const std::vector<float>& b, 
     }
     const double pcc = (n * sum_ab - sum_a * sum_b) / std::sqrt(denom_a * denom_b);
 
+    if (!std::isfinite(pcc)) {
+        log_error(tt::LogTest, "check_pcc: PCC is {}", std::isnan(pcc) ? "NaN" : "infinite");
+        return false;
+    }
     if (pcc < min_pcc) {
         log_error(tt::LogTest, "check_pcc: PCC = {} < min_pcc = {}", pcc, min_pcc);
         return false;
