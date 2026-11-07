@@ -41,23 +41,36 @@ tt-train is built using the `build_metal.sh` script from the tt-metal root direc
 
 # Run
 ## MNIST
+Set `training_config.num_epochs` in
+[`configs/training_configs/mnist.yaml`](configs/training_configs/mnist.yaml).
+Training and evaluation use the fixed checkpoint path `/tmp/mnist_mlp.msgpack`;
+the executable currently ignores `training_config.model_path` in the YAML.
+Run training first to create the checkpoint for evaluation.
+
 ### Training
 ```
 # Navigate to the root directory of the repository
-./build/sources/examples/mnist_mlp/mnist_mlp --model_path mnist_mlp.msgpack --num_epochs 10
+export TT_METAL_RUNTIME_ROOT="$PWD"
+./build/tt-train/sources/examples/mnist_mlp/mnist_mlp --config tt-train/configs/training_configs/mnist.yaml
 ```
 ### Evaluation
 ```
 # Navigate to the root directory of the repository
-./build/sources/examples/mnist_mlp/mnist_mlp --model_path mnist_mlp.msgpack -e 1
+export TT_METAL_RUNTIME_ROOT="$PWD"
+./build/tt-train/sources/examples/mnist_mlp/mnist_mlp --config tt-train/configs/training_configs/mnist.yaml --eval 1
 ```
 
 ## NanoGPT Shakespeare
 ### Training
 ```
 # Navigate to the root directory of the repository
-TT_LOGGER_LEVEL=FATAL ./build/sources/examples/nano_gpt/nano_gpt
+export TT_METAL_RUNTIME_ROOT="$PWD"
+TT_LOGGER_LEVEL=FATAL ./build/tt-train/sources/examples/nano_gpt/nano_gpt \
+    --config tt-train/configs/training_configs/training_shakespeare_nanogpt_char.yaml
 ```
+
+This character-level config uses `data/shakespeare.txt`, downloaded by the
+TT-Train CMake configuration, without a separate tokenization step.
 
 Training loss example from [wandb project](https://wandb.ai/tenstorrent-ml/tt_train_nano_gpt):
 ![NanoGPT training wandb chart](./images/nano-gpt-training-example.png)
