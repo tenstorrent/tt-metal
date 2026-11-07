@@ -59,6 +59,9 @@ constexpr bool stage = get_compile_time_arg_val(10) != 0;         // regime N bf
 // OVERLAP (Refinement 4): x * gamma is computed into cb_x_gamma while the k partials are exchanged (the combine wait),
 // so the normalize after the combine is one multiply (x*gamma) * inv_rms instead of two. Regime A, k > 1, gamma.
 constexpr bool prescale = get_compile_time_arg_val(11) != 0;
+// Local work (Refinement 5): symmetric combine on ROW-form partials (the owner path's collapse_rows_to_row0 /
+// combine_rows_block, every member combining every row): the exchange ships 2 face rows per message, not 2 faces.
+constexpr bool row_partials = get_compile_time_arg_val(12) != 0;
 
 // rsqrt(sum * (1/W) + eps) on column 0 of DST[dst] — the reduce() post_reduce_op (base op FinalizeInvRms).
 #ifdef TRISC_MATH
@@ -187,15 +190,17 @@ ALWI void collapse_rows_to_row0(uint32_t rows) {
 }
 
 // combine_rows_block: per owned row, column-reduce its row_gather gather tiles (reduce_tile COL, 1.0 scaler: row 0 =
-// sum over the members), transpose row 0 -> column 0 in DEST, finalize column 0 -> cb_inv_owned.
+// sum over the members), transpose row 0 -> column 0 in DEST, finalize column 0 -> out_cb (owner: cb_inv_owned, sent
+// back to the members; row_partials: cb_inv_rms, every member combines every row itself).
+template <uint32_t out_cb = cb_inv_owned>
 ALWI void combine_rows_block(uint32_t owned, FinalizeInvRms finalize) {
     cb_wait_front(cb_gathered_sumsq, owned * row_gather);
     cb_wait_front(cb_ones, 1);
     for (uint32_t j = 0; j < owned; ++j) {
-        cb_reserve_back(cb_inv_owned, 1);
+        cb_reserve_back(out_cb, 1);
         reconfig_data_format(cb_gathered_sumsq, cb_ones);  // REDUCE_COL: data -> srcA, scaler -> srcB
-        pack_reconfig_data_format(cb_inv_owned);
-        reduce_init<PoolType::SUM, ReduceDim::REDUCE_COL>(cb_gathered_sumsq, cb_ones, cb_inv_owned);
+        pack_reconfig_data_format(out_cb);
+        reduce_init<PoolType::SUM, ReduceDim::REDUCE_COL>(cb_gathered_sumsq, cb_ones, out_cb);
         tile_regs_acquire();
         for (uint32_t g = 0; g < row_gather; ++g) {
             reduce_tile<PoolType::SUM, ReduceDim::REDUCE_COL>(cb_gathered_sumsq, cb_ones, j * row_gather + g, 0, 0);
@@ -206,9 +211,9 @@ ALWI void combine_rows_block(uint32_t owned, FinalizeInvRms finalize) {
         finalize(0);
         tile_regs_commit();
         tile_regs_wait();
-        pack_tile(0, cb_inv_owned);
+        pack_tile(0, out_cb);
         tile_regs_release();
-        cb_push_back(cb_inv_owned, 1);
+        cb_push_back(out_cb, 1);
     }
     cb_pop_front(cb_gathered_sumsq, owned * row_gather);
 }
@@ -448,13 +453,21 @@ void kernel_main() {
 #endif
                 owner_combine_block(rows, member_idx, i0 % w_split_cores, finalize);  // owners rotate per block
             } else {
-                collapse_sumsq_block<cb_partial_sumsq>(rows, NoOp{});
+                if constexpr (row_partials) {
+                    collapse_rows_to_row0(rows);
+                } else {
+                    collapse_sumsq_block<cb_partial_sumsq>(rows, NoOp{});
+                }
 #ifdef AGRMS_HAS_GAMMA
                 if constexpr (prescale) {
                     prescale_gamma_block(rows, core_w, gamma_pages);
                 }
 #endif
-                combine_partials_block(rows, finalize);
+                if constexpr (row_partials) {
+                    combine_rows_block<cb_inv_rms>(rows, finalize);
+                } else {
+                    combine_partials_block(rows, finalize);
+                }
             }
             cb_wait_front(cb_inv_rms, rows);
         }

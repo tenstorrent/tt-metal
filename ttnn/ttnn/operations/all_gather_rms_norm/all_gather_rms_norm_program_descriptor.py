@@ -76,6 +76,11 @@ K_SYM_MAX = int(
     os.environ.get("AGRMS_K_SYM_MAX", "8")
 )  # (env: perf probes) symmetric all-gather of partials up to this k; per-row owner combine beyond (base op)
 ROW_GATHER = 32  # owner combine: members per row-form gather tile (one 32-datum row each)
+# Local work (Refinement 5): the symmetric combine ships each member's partial in ROW form (the owner combine's
+# ones-row x sumsq^T collapse: row 0 = the 32 row sums) as two face rows (2 x 64 B at fp32) into row m of every peer's
+# gather tile, instead of the column-0 faces 0/2 (2 x 1 KiB). Same k^2 messages per tile-row, 1/16 of the bytes: the
+# exchange was NoC-bound (every member core sends at once). 0 = the column-form exchange (A/B only).
+ROW_PARTIALS = os.environ.get("AGRMS_ROW_PARTIALS", "1") == "1"
 OCC_TILES_PER_MEMBER = 4  # member width floor (except the smallest candidate)
 COMBINE_TILE_COST = 3  # per tile-row combine cost (x-tile equivalents), base op
 OWNER_MEMBER_COST = 0.4  # owner combine: per member (x-tile equivalents), base op
@@ -470,6 +475,11 @@ def out_unit_of(geo: Geometry, width):
     return min(width, OUT_UNIT_CAP)
 
 
+def row_partials_on(split: Split):
+    """Symmetric combine with row-form partials (writer / compute CT `row_partials`)."""
+    return ROW_PARTIALS and 1 < split.k and not split.combine_owner
+
+
 def prescale_on(geo: Geometry, sz: Sizes, split: Split, native: bool = False):
     """x * gamma during the combine wait (compute CT `prescale`): needs a combine wait to hide under (k > 1), gamma, and
     the resident landing block as x (regime A, round-robin split; native shards normalize in segments)."""
@@ -499,7 +509,8 @@ def cb_plan(geo: Geometry, sz: Sizes, split: Split, native: bool = False):
             plan_[CB_INV_OWNED] = (owned, sz.T_acc)
         else:
             depth_g = 2 if split.blocks_max > 1 else 1  # lockstep slot reuse (base op mechanism cap)
-            plan_[CB_GATHERED] = (depth_g * k * b, sz.T_acc)
+            per_row = _div_up(k, ROW_GATHER) if row_partials_on(split) else k  # gather tiles vs k column tiles
+            plan_[CB_GATHERED] = (depth_g * per_row * b, sz.T_acc)
     if prescale_on(geo, sz, split, native):
         plan_[CB_X_GAMMA] = (b * split.w_pitch, sz.T_acc)  # one block of x * gamma
     if geo.regime_n:
@@ -905,7 +916,8 @@ def create_mesh_program_descriptor(
     owner = 1 if split.combine_owner else 0
     row_gather = _div_up(k, ROW_GATHER)
     compute_ct = [k, w_pitch, BLOCK_ROW_TILES, 1 if geo.regime_n else 0, unit, geo.out_w_tiles, owner, row_gather]
-    compute_ct += [1 if native_h else 0, geo.Wt_lp, 1 if stage else 0, 1 if prescale else 0]
+    row_partials = 1 if row_partials_on(split) else 0
+    compute_ct += [1 if native_h else 0, geo.Wt_lp, 1 if stage else 0, 1 if prescale else 0, row_partials]
     writer_ct = [
         out_page,
         geo.out_w_tiles,
@@ -929,6 +941,7 @@ def create_mesh_program_descriptor(
         SEM_PARTIALS_ODD,
         GAMMA_READ_ALIGN,
         1 if native is not None else 0,  # output packed into the resident output shard (no NoC writes)
+        row_partials,
     ]
     writer_ct += list(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
     writer_ct += list(
@@ -965,6 +978,7 @@ def create_mesh_program_descriptor(
         BLOCK_ROW_TILES,
         OUT_UNIT_CAP,
         K_SYM_MAX,
+        ROW_PARTIALS,
         RELAY_LAG,
         ITEM_MIN_CHUNKS,
         FAR_ROW_SPLIT,

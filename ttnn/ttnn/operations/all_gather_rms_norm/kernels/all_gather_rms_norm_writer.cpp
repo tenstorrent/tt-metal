@@ -54,7 +54,10 @@ constexpr uint32_t gathered_cb_pages = get_compile_time_arg_val(18);
 constexpr uint32_t sem_partials_odd_id = get_compile_time_arg_val(19);  // partials of odd blocks (see below)
 constexpr uint32_t GAMMA_READ_ALIGN = get_compile_time_arg_val(20);     // DRAM read alignment (>= one face row)
 constexpr bool out_native = get_compile_time_arg_val(21) != 0;          // cb_out_tiles backed on the output shard
-constexpr auto out_args = TensorAccessorArgs<22>();
+// Local work (Refinement 5): symmetric exchange of ROW-form partials (row 0 = the 32 row sums, as the owner combine
+// ships them): two face rows into row member_idx of the row's gather tile on every peer, not faces 0/2.
+constexpr bool row_partials = get_compile_time_arg_val(22) != 0;
+constexpr auto out_args = TensorAccessorArgs<23>();
 [[maybe_unused]] constexpr auto gamma_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
 
 constexpr uint32_t FACE_DIM = 16;
@@ -132,7 +135,7 @@ FORCE_INLINE void zero_fill_range(uint64_t zeros, uint32_t a, uint32_t end) {
 }
 FORCE_INLINE void zero_unused_gather_rows() {
     constexpr uint32_t row_unused0 = w_split_cores % TILE_DIM;
-    if constexpr (combine_owner && row_unused0 != 0) {
+    if constexpr ((combine_owner || row_partials) && row_unused0 != 0) {
         const uint32_t tb = get_tile_size(cb_gathered_sumsq);
         const uint32_t fb = tb / 4;
         const uint32_t frow = tb / 64;
@@ -264,16 +267,37 @@ void kernel_main() {
                 owner_x.block(rows, i0 % w_split_cores, parity);  // owners rotate per block (compute: same ofs)
             } else if constexpr (w_split_cores > 1) {
                 constexpr uint32_t k = w_split_cores;
-                cb_wait_front(cb_partial_sumsq, rows);
+                {
+                    AGRMS_ZONE("AG_W_PWAIT");
+                    cb_wait_front(cb_partial_sumsq, rows);
+                }
+                AGRMS_ZONE("AG_W_XSEND");
                 const uint32_t src = get_read_ptr(cb_partial_sumsq);
-                cb_reserve_back(cb_gathered_sumsq, k * rows);
+                constexpr uint32_t slots_per_row = row_partials ? row_gather : k;
+                cb_reserve_back(cb_gathered_sumsq, slots_per_row * rows);
                 const uint32_t slot_base = get_write_ptr(cb_gathered_sumsq);
-                for (uint32_t m = 0; m < k; ++m) {
-                    for (uint32_t r = 0; r < rows; ++r) {
-                        send_acc_tile(
-                            src + r * acc_tile_bytes,
-                            peer_addr(peers_idx, m, slot_base + (r * k + member_idx) * acc_tile_bytes),
-                            acc_tile_bytes);
+                if constexpr (row_partials) {
+                    // row r of the block: gather tile(s) r * row_gather, row member_idx (faces 0/1 row 0 -> 2 writes)
+                    const uint32_t face_bytes = acc_tile_bytes / 4;
+                    const uint32_t frow = acc_tile_bytes / 64;
+                    const uint32_t row_off = gather_row_offset(member_idx, acc_tile_bytes);
+                    for (uint32_t m = 0; m < k; ++m) {
+                        for (uint32_t r = 0; r < rows; ++r) {
+                            const uint32_t s0 = src + r * acc_tile_bytes;
+                            const uint64_t dst =
+                                peer_addr(peers_idx, m, slot_base + r * row_gather * acc_tile_bytes + row_off);
+                            noc_async_write(s0, dst, frow);
+                            noc_async_write(s0 + face_bytes, dst + face_bytes, frow);
+                        }
+                    }
+                } else {
+                    for (uint32_t m = 0; m < k; ++m) {
+                        for (uint32_t r = 0; r < rows; ++r) {
+                            send_acc_tile(
+                                src + r * acc_tile_bytes,
+                                peer_addr(peers_idx, m, slot_base + (r * k + member_idx) * acc_tile_bytes),
+                                acc_tile_bytes);
+                        }
                     }
                 }
                 // same NoC, VC and destination: the increments arrive after the data (flush, not barrier)
@@ -284,9 +308,12 @@ void kernel_main() {
                 }
                 cb_pop_front(cb_partial_sumsq, rows);
                 partials_expected[parity] += k;
-                noc_semaphore_wait_min(
-                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sem_addr), partials_expected[parity]);
-                cb_push_back(cb_gathered_sumsq, k * rows);
+                {
+                    AGRMS_ZONE("AG_W_SWAIT");
+                    noc_semaphore_wait_min(
+                        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sem_addr), partials_expected[parity]);
+                }
+                cb_push_back(cb_gathered_sumsq, slots_per_row * rows);
             }
         }
         AGRMS_ZONE("AG_W_STORE");
