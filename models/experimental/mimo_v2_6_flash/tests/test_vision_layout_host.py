@@ -38,7 +38,7 @@ def blocked_attention(q, k, v, geo, window, sinks):
     heads, rows, d = q.shape
     nb = rows // BLOCK
     halo = window // BLOCK
-    mask, ind = band_masks(geo, window, heads)
+    mask, ind = band_masks(geo, window)
     qb = q.reshape(heads, nb, BLOCK, d).permute(1, 0, 2, 3).reshape(nb, heads * BLOCK, d)
 
     def windows(t):
@@ -46,10 +46,10 @@ def blocked_attention(q, k, v, geo, window, sinks):
         blocks = torch.cat([pad, t, pad]).reshape(nb + 2 * halo, BLOCK, d)
         return torch.cat([blocks[s : s + nb] for s in range(2 * halo + 1)], dim=1)
 
-    s = qb @ windows(k).transpose(1, 2) + mask.reshape(nb, heads * BLOCK, -1).double()
+    s = (qb @ windows(k).transpose(1, 2)).reshape(nb, heads, BLOCK, -1) + mask.double()
     if sinks is not None:
-        sink_rows = sinks.repeat_interleave(BLOCK).view(1, -1, 1)
-        s = s + ind.reshape(nb, heads * BLOCK, -1).double() * sink_rows
+        s = s + ind.double() * sinks.view(1, heads, 1, 1)
+    s = s.reshape(nb, heads * BLOCK, -1)
     o = torch.softmax(s, dim=-1) @ windows(v)
     return o.reshape(nb, heads, BLOCK, d).permute(1, 0, 2, 3).reshape(heads, rows, d)
 

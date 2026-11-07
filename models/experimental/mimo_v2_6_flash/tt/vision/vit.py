@@ -109,31 +109,29 @@ def plan_passes(grid_thw, max_rows):
     return passes
 
 
-def band_masks(geo, window, heads):
-    """Window-attention mask and sink indicator, each [blocks, 1, heads * BLOCK, BLOCK + 2 * window] bf16.
+def band_masks(geo, window):
+    """Window-attention mask and sink indicator, each [blocks, 1, BLOCK, BLOCK + 2 * window] bf16 (shared by the
+    heads: the scores are viewed as [blocks, heads, BLOCK, span]).
 
-    Block b's queries are rows b*BLOCK .. +BLOCK (repeated per head, head-major), its keys rows b*BLOCK - window ..
-    b*BLOCK + BLOCK + window. ``mask``: 0 where key j is visible from query i (same sequence, |i - j| <= window,
-    0 <= j < rows), MASK_NEG elsewhere. ``sink``: 1 where a visible key is its sequence's first row."""
+    Block b's queries are rows b*BLOCK .. +BLOCK, its keys rows b*BLOCK - window .. b*BLOCK + BLOCK + window.
+    ``mask``: 0 where key j is visible from query i (same sequence, |i - j| <= window, 0 <= j < rows), MASK_NEG
+    elsewhere. ``sink``: 1 where a visible key is its sequence's first row."""
     rows = geo.rows
     nb = rows // BLOCK
     span = BLOCK + 2 * window
-    bounds = geo.seq_bounds()
-    seq_id = torch.empty(rows, dtype=torch.int64)
-    is_first = torch.zeros(rows, dtype=torch.bool)
-    for s, (a, b) in enumerate(zip(bounds[:-1], bounds[1:])):
-        seq_id[a:b] = s
-        if a < geo.n:
-            is_first[a] = True
-    i = torch.arange(rows).view(nb, BLOCK, 1)
-    j = (torch.arange(nb) * BLOCK - window).view(nb, 1, 1) + torch.arange(span).view(1, 1, span)
-    inside = (j >= 0) & (j < rows)
-    jc = j.clamp(0, rows - 1)
-    visible = inside & ((i - j).abs() <= window) & (seq_id[i] == seq_id[jc])
-    mask = torch.where(visible, 0.0, MASK_NEG)
-    sink = (visible & is_first[jc]).float()
-    expand = lambda t: t.unsqueeze(1).repeat(1, heads, 1, 1).reshape(nb, 1, heads * BLOCK, span)
-    return expand(mask).bfloat16(), expand(sink).bfloat16()
+    bounds = torch.tensor(geo.seq_bounds(), dtype=torch.int32)
+    seq_id = torch.bucketize(torch.arange(rows, dtype=torch.int32), bounds[1:], right=True)
+    is_first = torch.zeros(rows + 1, dtype=torch.bool)
+    is_first[bounds[:-1][bounds[:-1] < geo.n].long()] = True
+    i = torch.arange(rows, dtype=torch.int32).view(nb, BLOCK, 1)
+    j = (torch.arange(nb, dtype=torch.int32) * BLOCK - window).view(nb, 1, 1) + torch.arange(
+        span, dtype=torch.int32
+    ).view(1, 1, span)
+    jc = j.clamp(0, rows - 1).long()
+    visible = (j >= 0) & (j < rows) & ((i - j).abs() <= window) & (seq_id[i.long()] == seq_id[jc])
+    mask = torch.zeros(visible.shape, dtype=torch.bfloat16).masked_fill_(~visible, MASK_NEG)
+    sink = (visible & is_first[jc]).to(torch.bfloat16)
+    return mask.unsqueeze(1), sink.unsqueeze(1)
 
 
 class PassInputs:
@@ -173,7 +171,7 @@ class PassInputs:
             False: dev(to_row.reshape(1, rows).to(torch.int32), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT),
         }
         self.cu = dev(torch.tensor(geo.seq_bounds(), dtype=torch.int32), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT)
-        mask, sink = band_masks(geo, cfg.window_size, cfg.num_heads // plan.tp)
+        mask, sink = band_masks(geo, cfg.window_size)
         self.mask = dev(mask)
         self.sink = dev(sink)
         # The halo around the first / last window block's keys (masked out; zeros keep them finite).
@@ -257,7 +255,10 @@ class TtVisionBlock:
         self.bu = load("bu", plan.shard(-1), ttnn.bfloat16)
         self.wd = load("wd", plan.shard(-2))
         self.bd = load("bd", plan.shard(-1), ttnn.bfloat16)
-        self.sink = load("sink", plan.shard(-1), ttnn.bfloat16) if self.has_sink else None
+        self.sink = None
+        if self.has_sink:  # [1, heads, BLOCK, span]: head h's sink everywhere in its slice
+            sink = load("sink", plan.shard(-1), ttnn.bfloat16)
+            self.sink = ttnn.reshape(sink, (1, self.local_heads, BLOCK, BLOCK + 2 * cfg.window_size))
         eps = cfg.rms_norm_eps
         self.norm1 = TtRMSNorm(plan, sd and sd[p + "norm1.weight"], eps, name("norm1"))
         self.norm2 = TtRMSNorm(plan, sd and sd[p + "norm2.weight"], eps, name("norm2"))
@@ -380,14 +381,17 @@ class TtVisionBlock:
         )
         qb_t.deallocate(True)
         kw.deallocate(True)
-        if self.sink is not None:
+        span = scores.shape[-1]
+        scores = ttnn.reshape(scores, (nb, heads, BLOCK, span))  # the same tiles, heads as a batch dim
+        mask = inp.mask
+        if self.sink is not None:  # the mask plus each head's sink on its frames' first keys
             sink = ttnn.mul(inp.sink, self.sink, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-            mask = ttnn.add(inp.mask, sink, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            mask = ttnn.add(sink, inp.mask, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             sink.deallocate(True)
-        else:
-            mask = inp.mask
         masked = ttnn.add(scores, mask, dtype=ttnn.float32, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         scores.deallocate(True)
+        if mask is not inp.mask:
+            mask.deallocate(True)
         probs = ttnn.softmax(
             masked,
             dim=-1,
@@ -396,9 +400,7 @@ class TtVisionBlock:
             compute_kernel_config=self.attn_config,
         )
         masked.deallocate(True)
-        if mask is not inp.mask:
-            mask.deallocate(True)
-        probs_bf16 = ttnn.typecast(probs, ttnn.bfloat16)
+        probs_bf16 = ttnn.reshape(ttnn.typecast(probs, ttnn.bfloat16), (nb, 1, heads * BLOCK, span))
         probs.deallocate(True)
         ob = ttnn.matmul(probs_bf16, vw, memory_config=ttnn.DRAM_MEMORY_CONFIG, compute_kernel_config=self.attn_config)
         probs_bf16.deallocate(True)

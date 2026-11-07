@@ -31,6 +31,8 @@ in [doc/tp8_dp4_plan.md](doc/tp8_dp4_plan.md).
 | `tt/verify_sampler.py`, `reference/sample_verify.py` | Speculative acceptance on device (the plugin's `fused_sample`): the verify's accept walk on the device sampler's candidates (`kernels/sample_verify.cpp`; greedy only, `kernels/greedy_verify.cpp`, past the sampler's users), and its host layouts and integer mirror |
 | `tt/spec_inputs.py`, `tt/spec_chain.py`, `reference/spec_inputs.py`, `reference/spec_chain.py` | A verify's and a draft's packed inputs, derived on device; the MTP or DFlash draft chained behind the verify and its acceptance (`kernels/spec_chain.cpp`), with one result page per pass; their torch / integer mirrors |
 | `tt/generator_vllm.py` | `MiMoV2ForCausalLM`, the vllm-tt-plugin model class: DP=4 as in-process lanes, vLLM-owned hybrid KV (1 global + 5 SWA KV cache groups). Launch and results in [doc/vllm_integration/README.md](doc/vllm_integration/README.md) |
+| `reference/vision.py`, `reference/vision_inputs.py` | fp32 MiMo ViT (`visual.*`), bit-identical to HF's `MiMoVisionTransformer` except the merger norm (RMSNorm as vLLM, not HF's LayerNorm); vLLM's `MiMoV2OmniMultiModalProcessor` on the host for inputs as served |
+| `tt/vision/` | The ViT on one 1x8 row, TP=8 (`vit.py`), and `MiMoVisionEncoder` (`encoder.py`: `embed_image` / `embed_video` -> host bf16 [n, 4096]) |
 | `tests/` | TP=8 x DP=4 tests on the 4x8 mesh; `tests/perf/` perf scripts and tt-kernel-agent check / bench commands. Results in [doc/tp8_dp4_plan.md](doc/tp8_dp4_plan.md) |
 
 ## Running
@@ -51,6 +53,8 @@ pytest models/experimental/mimo_v2_6_flash/tests/test_model_tp8_dp4.py          
 pytest models/experimental/mimo_v2_6_flash/tests/test_model_chunked_tp8_dp4.py    # 48 layers: chunked, prefix hit
 pytest models/experimental/mimo_v2_6_flash/tests/test_model_traced_tp8_dp4.py     # traced decode, device greedy loop
 pytest models/experimental/mimo_v2_6_flash/tests/test_dflash_tp8.py               # DFlash drafter vs the fp32 reference
+pytest models/experimental/mimo_v2_6_flash/tests/test_vision_reference_host.py    # ViT reference == HF, host only
+TT_VISIBLE_DEVICES=<row chips> pytest models/experimental/mimo_v2_6_flash/tests/test_vision_tp8.py  # ViT on one row
 python models/experimental/mimo_v2_6_flash/tests/perf/decode_bandwidth.py --steps 32 --repeats 5
 python models/experimental/mimo_v2_6_flash/tests/perf/prefill_time.py             # 4K prompt, 32K in 4K chunks, one row
 ```

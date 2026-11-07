@@ -46,6 +46,36 @@ def case_inputs(path, case):
     raise ValueError(case)
 
 
+def dram_mb(mesh):
+    """DRAM allocated per chip (MB); allocation is host bookkeeping, so no device sync is needed."""
+    mv = ttnn.get_memory_view(mesh, ttnn.BufferType.DRAM)
+    return mv.total_bytes_allocated_per_bank * mv.num_banks / 1e6
+
+
+class PeakTracker:
+    """Approximate per-chip DRAM peak of a call: the allocation right after the ops that hold the most temporaries
+    (softmax of the window attention, SDPA, the all-reduces)."""
+
+    def __init__(self, mesh):
+        self.mesh = mesh
+        self.peak = 0.0
+        self.active = False
+        for owner, name in ((ttnn, "softmax"), (ttnn.transformer, "scaled_dot_product_attention")):
+            setattr(owner, name, self._wrap(getattr(owner, name)))
+        from models.experimental.mimo_v2_6_flash.tt.common import MeshPlan
+
+        MeshPlan.all_reduce = self._wrap(MeshPlan.all_reduce)
+
+    def _wrap(self, fn):
+        def wrapper(*args, **kwargs):
+            out = fn(*args, **kwargs)
+            if self.active:
+                self.peak = max(self.peak, dram_mb(self.mesh))
+            return out
+
+        return wrapper
+
+
 def main():
     p = argparse.ArgumentParser()
     p.add_argument("--cases", default="448,1024,max,video32")
@@ -78,16 +108,23 @@ def main():
     try:
         kwargs = {} if a.max_rows is None else {"max_rows": a.max_rows}
         weight_dtype = ttnn.bfloat16 if a.weights == "bf16" else ttnn.bfloat8_b
+        tracker = PeakTracker(mesh)
         for preset in presets:
+            base_mb = dram_mb(mesh)
             t0 = time.time()
             enc = MiMoVisionEncoder(mesh, path, weight_dtype=weight_dtype, numerics=preset, **kwargs)
-            logger.info(f"{preset}: encoder ready in {time.time() - t0:.1f} s")
+            weights_mb = dram_mb(mesh) - base_mb
+            logger.info(f"{preset}: encoder ready in {time.time() - t0:.1f} s, weights {weights_mb:.1f} MB per chip")
             for c in cases:
                 kind, pv, grid = fields(c)
                 fn = enc.embed_image if kind == "image" else enc.embed_video
                 t0 = time.time()
+                idle_mb = dram_mb(mesh)
+                tracker.peak, tracker.active = idle_mb, True
                 out = fn(pv, grid)
+                tracker.active = False
                 first = time.time() - t0
+                left_mb = dram_mb(mesh) - idle_mb
                 times = []
                 for _ in range(a.repeats):
                     t0 = time.time()
@@ -95,8 +132,16 @@ def main():
                     times.append(time.time() - t0)
                 r = results[c]
                 r.update(grid=ref.as_grid_list(grid), patches=pv.shape[0], tokens=out.shape[0])
-                r[preset] = {"first_s": first, "ms": 1000 * statistics.median(times), "out": out}
-                logger.info(f"{preset} {c}: {r['grid']} first {first:.2f} s, median {r[preset]['ms']:.1f} ms")
+                r[preset] = {
+                    "first_s": first,
+                    "ms": 1000 * statistics.median(times),
+                    "out": out,
+                    "act_mb": tracker.peak - idle_mb,
+                }
+                logger.info(
+                    f"{preset} {c}: {r['grid']} first {first:.2f} s, median {r[preset]['ms']:.1f} ms, "
+                    f"activation peak ~{r[preset]['act_mb']:.0f} MB per chip, left allocated {left_mb:.1f} MB"
+                )
             del enc
     finally:
         ttnn.close_mesh_device(mesh)
@@ -123,12 +168,14 @@ def main():
 
     cols = ["case", "grid", "patches", "tokens"]
     cols += [f"{p} (ms)" for p in presets] + [f"{p} first call (s)" for p in presets]
+    cols += [f"{p} activations (MB/chip)" for p in presets]
     cols += [f"CPU {d} (s)" for d in cpu_dtypes] + [f"{p} PCC vs fp32" for p in presets if "fp32" in cpu_dtypes]
     lines = ["| " + " | ".join(cols) + " |", "|" + "---|" * len(cols)]
     for c in cases:
         r = results[c]
         row = [c, str(r["grid"]), str(r["patches"]), str(r["tokens"])]
         row += [f"{r[p]['ms']:.1f}" for p in presets] + [f"{r[p]['first_s']:.2f}" for p in presets]
+        row += [f"{r[p]['act_mb']:.0f}" for p in presets]
         row += [f"{r[f'cpu_{d}_s']:.1f}" if f"cpu_{d}_s" in r else "not measured" for d in cpu_dtypes]
         if "fp32" in cpu_dtypes:
             row += [f"{r[p]['pcc']:.4f}" if "pcc" in r[p] else "not measured" for p in presets]
