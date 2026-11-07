@@ -76,6 +76,20 @@ void SDPAOperation::validate_on_program_cache_miss(const SDPAParams& attrs, cons
                 Sq == Sk, "Causal SDPA requires Q and K to have the same sequence length. Got Q: {}, K: {}", Sq, Sk);
         }
 
+        // A non-causal sliding window is centred on the Q position (window / 2 tokens each side). A Q row whose
+        // window lies entirely past the last K row has nothing to attend to, and the kernels then run an empty K loop
+        // that never produces the output chunk.
+        if (!attrs.is_causal && attrs.sliding_window_size.value_or(0) > 0 && !is_windowed_mode(attrs.windowed_mode)) {
+            const uint32_t half_window = attrs.sliding_window_size.value() / 2;
+            TT_FATAL(
+                Sq <= Sk + half_window,
+                "Non-causal sliding window SDPA needs every Q row to reach a K row: Q length {} must be at most "
+                "K length {} + sliding_window_size / 2 ({})",
+                Sq,
+                Sk,
+                half_window);
+        }
+
         if (use_mla) {
             // Head dim v validation
             TT_FATAL(
