@@ -7,7 +7,7 @@ failure count, tokens, an OpenRouter cost estimate and the wall clock.
 
 Layouts understood: run_suite.sh (<endpoint>/<bench>/full/) and a flat <endpoint>/<bench>/. A request counts as
 answered when its doc is in the step's journal (only successful responses are journaled), as failed otherwise.
-"Answered only" is computed for the per-item-mean metrics (OCRBench, MMAU, Video-MME, MMMU-Pro AA); LibriSpeech's WER
+"Answered only" is computed for the per-item-mean metrics (OCRBench, MMAU, Video-MME, MMMU-Pro AA, VGI-Bench); LibriSpeech's WER
 is corpus-level and shown as the harness computed it.
 
   compare_runs.py <run dir> [--prices '{"gmicloud": [0.112, 0.224], "xiaomi": [0.14, 0.28]}'] [--json out.json]
@@ -29,8 +29,13 @@ BENCHES = {  # bench -> (lmms task, harness metric key, per-sample correctness, 
         100.0,
     ),
     "mmmu_pro_aa": ("mmmu_pro_aa", "aa_accuracy,none", lambda r: r["aa_accuracy"], 100.0),
+    "vgi_bench": ("vgi_bench", "vgi_accuracy,none", lambda r: r["vgi_accuracy"], 100.0),
 }
-HARNESS_SCALE = {"ocrbench": 100.0, "mmmu_pro_aa": 100.0}  # these report a fraction; the rest are already percent
+HARNESS_SCALE = {
+    "ocrbench": 100.0,
+    "mmmu_pro_aa": 100.0,
+    "vgi_bench": 100.0,
+}  # these report a fraction; the rest are already percent
 
 
 def step_dir(endpoint_dir, bench):
