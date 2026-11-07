@@ -153,6 +153,23 @@ PreprocessedPyTensor parse_py_tensor(nb::ndarray<nb::array_api> py_tensor, std::
 
     DataType data_type = optional_data_type.value_or(get_ttnn_datatype_from_dtype(py_tensor_dtype));
 
+    if (data_type == DataType::INVALID) {
+        auto torch_dtype_name = [&]() -> const char* {
+            if (py_tensor_dtype.code == static_cast<uint8_t>(nb::dlpack::dtype_code::Float) &&
+                py_tensor_dtype.bits == 64) {
+                return "torch.float64";
+            }
+            if (py_tensor_dtype.code == static_cast<uint8_t>(nb::dlpack::dtype_code::UInt) &&
+                py_tensor_dtype.bits == 64) {
+                return "torch.uint64";
+            }
+            return "this torch dtype";
+        }();
+        TT_THROW(
+            "{} is not supported by ttnn; pass an explicit dtype to convert it, e.g. dtype=ttnn.float32",
+            torch_dtype_name);
+    }
+
     nb::detail::ndarray_config config(decltype(py_tensor)::Config{});
     config.dtype = get_dtype_from_ttnn_datatype(data_type);
     config.order = nb::c_contig::value;  // force row-major contiguous
