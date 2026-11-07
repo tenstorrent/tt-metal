@@ -21,7 +21,7 @@ namespace ttnn::operations::experimental::deepseek_prefill::update_padded_kv_cac
 
 struct UpdatePaddedKvCacheDeviceOperation {
     struct operation_attributes_t {
-        // Cache slot is linearized as users-outer, layers-inner:
+        // A contiguous cache slot is linearized as users-outer, layers-inner (a paged cache goes through its table):
         //   batch_idx = slot_idx * num_layers + layer_idx
         // layer_idx is hashed (structural): it takes only num_layers distinct values, so one cached
         // program per layer is reused across users and chunks.
@@ -70,6 +70,9 @@ struct UpdatePaddedKvCacheDeviceOperation {
         std::optional<Tensor> rope;
         // Optional FP32 scales: selects mixed-field ROW_MAJOR FP8 packing.
         std::optional<Tensor> scales;
+        // Optional page table [rows, width] INT32 (kernels/paged_kv_table.hpp): `cache` is then a page pool and
+        // slot_idx selects the row.
+        std::optional<Tensor> paged_kv_table;
     };
 
     using spec_return_value_t = tt::tt_metal::TensorSpec;
@@ -148,6 +151,7 @@ ttnn::Tensor update_padded_kv_cache(
     const std::optional<ttnn::Tensor>& rope = std::nullopt,
     const std::optional<ttnn::Tensor>& scales = std::nullopt,
     uint32_t input_row_offset = 0,
-    std::optional<uint32_t> input_rows = std::nullopt);
+    std::optional<uint32_t> input_rows = std::nullopt,
+    const std::optional<ttnn::Tensor>& paged_kv_table = std::nullopt);
 
 }  // namespace ttnn::prim

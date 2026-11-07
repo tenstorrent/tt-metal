@@ -18,7 +18,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.common.utility_functions import is_blackhole
+from models.common.utility_functions import is_blackhole, skip_with_watcher
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
     fabric2d_device_params,
     torus_x_device_params,
@@ -32,6 +32,7 @@ from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import (
     init_kvpe_cache,
     init_mla_kv_cache,
 )
+from tests.ttnn.profiling.realtime_profiler_utils import profile_realtime_program_merged, require_realtime_profiler
 
 # MLA KVPE head dim (kv_lora_rank=512 + qk_rope_head_dim=64). The op is a pure page copy, so a
 # gathered cache slot must byte-match the input we sent (read back through the same dtype
@@ -1841,3 +1842,761 @@ def test_update_padded_kv_cache_split_rejects_transposed_tiles(mesh_device, scal
     if not scaled_fp8:
         with expect_error(RuntimeError, "ordinary face order"):
             ttnn.experimental.deepseek_prefill.update_padded_kv_cache(cache, upload(512, True), rope=rope, **kwargs)
+
+
+# ---------------------------------------------------------------------------------------------------------------------
+# Paged cache (device/kernels/paged_kv_table.hpp): `cache` is a pool of single-head pages and a page-table row per
+# request maps each global logical page to a physical page in the pool of the rank that holds it.
+
+PAGE_UNMAPPED = -1
+
+
+def _paged_kv_table_tensor(mesh_device, table):
+    """[rows, width] INT32 page table, ROW_MAJOR in DRAM, replicated: every chip reads its own pages' entries."""
+    return ttnn.from_torch(
+        table.to(torch.int32),
+        device=mesh_device,
+        dtype=ttnn.int32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+
+
+def _page_pool(mesh_device, *, page_size, sp_axis, num_pages, num_layers, dtype, layout):
+    """A pool of `num_pages` pages of every layer per chip. init_kvpe_cache shards its seq_len across the SP ranks
+    and folds its "layers" into dim 0, so seq_len = page_size * sp gives one page per entry and the layers are the
+    pool's page x layer entries."""
+    return init_kvpe_cache(
+        kvpe_cache_head_dim=KVPE_HEAD_DIM,
+        mesh_device=mesh_device,
+        seq_len=page_size * mesh_device.shape[sp_axis],
+        mesh_shape=list(mesh_device.shape),
+        sp_axis=sp_axis,
+        num_kvpe_cache_layers=num_pages * num_layers,
+        dtype=dtype,
+        layout=layout,
+    )
+
+
+def _shuffled_paged_kv_tables(*, num_users, pages_per_user, mapped_pages, page_size, chunk_local, sp, seed):
+    """Per-user rows mapping global page q to a shuffled physical page of the rank that owns q.
+
+    Pages >= mapped_pages stay unmapped. Each rank allocates its pages from its own pool, with spare pages left over
+    so that untouched pool entries are part of the check. Returns (table [num_users, pages_per_user], pool pages per
+    rank)."""
+    owner = [(q * page_size // chunk_local) % sp for q in range(mapped_pages)]
+    needed = max(sum(1 for r in owner if r == rank) for rank in range(sp)) * num_users
+    num_pages = needed + 3
+    gen = torch.Generator().manual_seed(seed)
+    free = {rank: torch.randperm(num_pages, generator=gen).tolist() for rank in range(sp)}
+    table = torch.full((num_users, pages_per_user), PAGE_UNMAPPED, dtype=torch.int32)
+    for u in range(num_users):
+        for q in range(mapped_pages):
+            table[u, q] = free[owner[q]].pop()
+    return table, num_pages
+
+
+def _natural_from_pool(pool_host, table, *, user, layer, num_layers, n_tokens, page_size, chunk_local, sp):
+    """Rebuild a request's natural-order KV from the chip-concatenated pool [pages * layers, 1, sp * page, D].
+    Positions whose page is unmapped or outside the pool read as zeros: a write must leave nothing for them."""
+    num_pages = pool_host.shape[0] // num_layers
+    g = torch.arange(n_tokens)
+    phys = table[user, g // page_size].long()
+    mapped = (phys >= 0) & (phys < num_pages)
+    rank = (g // chunk_local) % sp
+    entry = phys.clamp(0, num_pages - 1) * num_layers + layer
+    out = pool_host[entry, 0, rank * page_size + g % page_size, :].clone()
+    out[~mapped] = 0
+    return out
+
+
+def _unreferenced_pool_rows(pool_host, table, *, num_layers, num_pages, page_size, chunk_local, sp):
+    """Pool rows no request maps to: they must stay zero."""
+    used = torch.zeros(num_pages * num_layers, sp, dtype=torch.bool)
+    for u in range(table.shape[0]):
+        for q in range(table.shape[1]):
+            phys = int(table[u, q])
+            if not 0 <= phys < num_pages:
+                continue
+            rank = (q * page_size // chunk_local) % sp
+            used[phys * num_layers : (phys + 1) * num_layers, rank] = True
+    rows = []
+    for entry in range(num_pages * num_layers):
+        for rank in range(sp):
+            if not used[entry, rank]:
+                rows.append(pool_host[entry, 0, rank * page_size : (rank + 1) * page_size, :])
+    return torch.cat(rows) if rows else torch.zeros(0)
+
+
+# The CI-selected subset (CI runs the 2x4 ids, and every id on 2x2): the small multi-chunk prefill, its valid_global
+# clamp, and a repr chunk long enough that cores walk rows across page and slab boundaries, on the column axis so that
+# on 2x4 a slab jump skips more than one other rank.
+_PAGED_CI_CASES = {("small", "padded_partial", 0), ("small", "clamped", 0), ("repr", "padded_partial", 1)}
+
+
+@pytest.mark.parametrize("mesh_device", [(2, 2), (2, 4), (8, 4)], ids=["2x2", "2x4", "8x4"], indirect=True)
+@pytest.mark.parametrize("sp_axis", [0, 1], ids=["sp_rows", "sp_cols"])
+@pytest.mark.parametrize("dtype, layout", DTYPE_LAYOUT_CASES, ids=DTYPE_LAYOUT_IDS)
+@pytest.mark.parametrize("page_size", [32, 64], ids=["page32", "page64"])
+@pytest.mark.parametrize(
+    "config_name, num_users, num_layers, new_isl_tiles_per_dev, cache_tokens_per_dev",
+    [("small", 2, 3, 4, 512), ("repr", 2, 2, 20, 6400)],
+    ids=["small", "repr"],
+)
+@pytest.mark.parametrize(
+    "scenario", ["padded_partial", "partial_tail", "clamped"], ids=["padded_partial", "partial_tail", "clamped"]
+)
+@pytest.mark.parametrize("path", ["metadata", "scalar"], ids=["metadata", "scalar"])
+@pytest.mark.timeout(0)
+def test_update_padded_kv_cache_paged(
+    mesh_device,
+    sp_axis,
+    dtype,
+    layout,
+    page_size,
+    config_name,
+    num_users,
+    num_layers,
+    new_isl_tiles_per_dev,
+    cache_tokens_per_dev,
+    scenario,
+    path,
+    is_ci_env,
+    is_ci_v2_env,
+):
+    """The multi-iteration prefill of test_update_padded_kv_cache_multi_iteration_prefill against a paged pool.
+
+    Pages are shuffled within each rank's pool and only the pages under the written prefix are mapped; pad rows hold a
+    nonzero value. ``padded_partial`` overwrites every pad row of an earlier chunk. ``partial_tail`` ends on a partial
+    chunk, so its pad rows past the last mapped page fall on unmapped pages, and maps one written page of user 0 to the
+    first entry past the pool: those rows must be dropped. ``clamped`` is partial_tail written with valid_global, with
+    the pages under the last chunk's padded tail mapped too: the rows past the clamp must stay zero. Every (user,
+    layer) prefix rebuilt through the page table must byte-match the inputs sent, every pool row no request maps to
+    must stay zero, and one program per layer is reused."""
+    if dtype == ttnn.fp8_e4m3 and not is_blackhole():
+        pytest.skip("FP8_E4M3 is Blackhole-only")
+    if sp_axis == 1 and layout != ttnn.ROW_MAJOR_LAYOUT:
+        pytest.skip("the column axis runs on the row-major layout, which walks the most rows per page")
+    if (is_ci_env or is_ci_v2_env) and (config_name, scenario, sp_axis) not in _PAGED_CI_CASES:
+        pytest.skip("CI runs the subset in _PAGED_CI_CASES")
+    tp_axis = 1 - sp_axis
+    sp = mesh_device.shape[sp_axis]
+    tile = ttnn.TILE_SIZE
+    C = new_isl_tiles_per_dev * tile
+    chunk_global = C * sp
+    # The first chunk ends three tiles into a slab, so the later chunks start mid-page with 64-token pages. In the repr
+    # config on the row-major layout (several rows per core) they also cross a slab boundary inside one core's run of
+    # rows on both the 13x10 and the 12x10 worker grid; with one row per core (tiled, or small) the crossing falls at a
+    # core's first row. padded_partial's last chunk is full, so the rows past those crossings are real rows the check
+    # compares.
+    last_isl = sp * C if scenario == "padded_partial" else C + tile
+    new_actual_isls = [(sp - 1) * C + 3 * tile, 2 * C, last_isl]
+    assert all(isl <= chunk_global for isl in new_actual_isls)
+    cum_total = sum(new_actual_isls)
+    cache_global = cache_tokens_per_dev * sp
+    assert cum_total <= cache_global
+
+    clamp = scenario == "clamped"
+    # Under the clamp, the pages the last chunk's padding would reach are mapped, so a write past the clamp shows.
+    check_len = cum_total - last_isl + chunk_global if clamp else cum_total
+    mapped_pages = -(-check_len // page_size)
+    table, num_pages = _shuffled_paged_kv_tables(
+        num_users=num_users,
+        pages_per_user=cache_global // page_size,
+        mapped_pages=mapped_pages,
+        page_size=page_size,
+        chunk_local=C,
+        sp=sp,
+        seed=1,
+    )
+    out_of_pool_page = None if scenario == "padded_partial" else 1
+    if out_of_pool_page is not None:
+        # The entry is the pool's page count, the first one past it. The ND-sharded pool's accessor maps page ids
+        # modulo each dim, so a write through it, were it not dropped, would land on physical page 0 of its rank:
+        # whichever row holds that page trades it for the displaced one, leaving page 0 unreferenced, so it must stay
+        # zero.
+        rank = (out_of_pool_page * page_size // C) % sp
+        owned = [q for q in range(table.shape[1]) if (q * page_size // C) % sp == rank]
+        holders = (table[:, owned] == 0).nonzero().tolist()
+        if holders:
+            u, k = holders[0]
+            table[u, owned[k]] = table[0, out_of_pool_page]
+        table[0, out_of_pool_page] = num_pages
+    logger.info(
+        f"sp={sp} chunk_local={C} page={page_size} mapped pages/user={mapped_pages} pool pages/chip={num_pages} "
+        f"table width={table.shape[1]}"
+    )
+
+    torch.manual_seed(0)
+    sent = {
+        (u, l): torch.randn(cum_total, KVPE_HEAD_DIM, dtype=torch.bfloat16)
+        for u in range(num_users)
+        for l in range(num_layers)
+    }
+    pool = _page_pool(
+        mesh_device,
+        page_size=page_size,
+        sp_axis=sp_axis,
+        num_pages=num_pages,
+        num_layers=num_layers,
+        dtype=dtype,
+        layout=layout,
+    )
+    tt_table = _paged_kv_table_tensor(mesh_device, table)
+
+    input_shard_dims = [None, None]
+    input_shard_dims[sp_axis] = 2
+    concat_dims = [None, None]
+    concat_dims[sp_axis] = 2
+    concat_dims[tp_axis] = 1
+    composer = ttnn.ConcatMesh2dToTensor(mesh_device, dims=tuple(concat_dims), mesh_shape=mesh_device.shape)
+
+    mesh_device.enable_program_cache()
+    entries_after_init = mesh_device.num_program_cache_entries()
+
+    expected = {key: torch.zeros(check_len, KVPE_HEAD_DIM, dtype=torch.bfloat16) for key in sent}
+    kv_actual = 0
+    for new_actual_isl in new_actual_isls:
+        positions = _rotated_chip_positions(kv_actual, sp, C)
+        flat = [positions[c][r] for c in range(sp) for r in range(C)]
+        valid_end = kv_actual + new_actual_isl
+        gather_idx = torch.tensor([min(g, cum_total - 1) for g in flat], dtype=torch.long)
+        pad_mask = torch.tensor([g >= valid_end for g in flat])
+        valid_rows = (~pad_mask).nonzero(as_tuple=True)[0]
+        flat_t = torch.tensor(flat, dtype=torch.long)
+        for u in range(num_users):
+            for l in range(num_layers):
+                chunk = sent[(u, l)][gather_idx].clone()
+                chunk[pad_mask] = 3.0
+                tt_input = _make_input(
+                    chunk.reshape(1, 1, chunk_global, KVPE_HEAD_DIM),
+                    dtype,
+                    layout,
+                    mesh_device,
+                    ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=input_shard_dims),
+                )
+                inp_rb = ttnn.to_torch(tt_input, mesh_composer=composer).to(torch.bfloat16)[0, 0]
+                expected[(u, l)][flat_t[valid_rows]] = inp_rb[valid_rows]
+                if path == "metadata":
+                    slot_t, kv_t = _make_meta_tensors(mesh_device, kv_actual_global=kv_actual, slot_idx=u)
+                    valid_t = _make_scalar_tensor(mesh_device, valid_end) if clamp else None
+                    ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
+                        pool,
+                        tt_input,
+                        slot_t,
+                        kv_t,
+                        layer_idx=l,
+                        num_layers=num_layers,
+                        cluster_axis=sp_axis,
+                        valid_global=valid_t,
+                        paged_kv_table=tt_table,
+                    )
+                    for t in (slot_t, kv_t, valid_t):
+                        if t is not None:
+                            ttnn.deallocate(t)
+                else:
+                    ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
+                        pool,
+                        tt_input,
+                        slot_idx=u,
+                        layer_idx=l,
+                        num_layers=num_layers,
+                        kv_actual_global=kv_actual,
+                        cluster_axis=sp_axis,
+                        valid_global=valid_end if clamp else None,
+                        paged_kv_table=tt_table,
+                    )
+        kv_actual = valid_end
+    ttnn.synchronize_device(mesh_device)
+
+    # FP8 inputs pass through a typecast, which caches programs of its own.
+    if dtype != ttnn.fp8_e4m3:
+        assert mesh_device.num_program_cache_entries() == entries_after_init + num_layers, (
+            f"one cached program per layer must serve every user and iteration; expected "
+            f"{entries_after_init + num_layers} entries, got {mesh_device.num_program_cache_entries()}"
+        )
+
+    if out_of_pool_page is not None:
+        for l in range(num_layers):
+            expected[(0, l)][out_of_pool_page * page_size : (out_of_pool_page + 1) * page_size] = 0
+    pool_host = ttnn.to_torch(pool, mesh_composer=composer).to(torch.bfloat16)[:, :1, :, :]
+    for u in range(num_users):
+        for l in range(num_layers):
+            recon = _natural_from_pool(
+                pool_host,
+                table,
+                user=u,
+                layer=l,
+                num_layers=num_layers,
+                n_tokens=check_len,
+                page_size=page_size,
+                chunk_local=C,
+                sp=sp,
+            )
+            assert torch.equal(recon, expected[(u, l)]), (
+                f"user {u} layer {l}: paged prefix does not byte-match the inputs sent "
+                f"(max abs diff {(recon.float() - expected[(u, l)].float()).abs().max().item()})"
+            )
+    untouched = _unreferenced_pool_rows(
+        pool_host, table, num_layers=num_layers, num_pages=num_pages, page_size=page_size, chunk_local=C, sp=sp
+    )
+    assert untouched.numel() > 0 and not untouched.any(), "a pool row no request maps to was written"
+
+
+# Lanes of one stacked input: (table row, chunks written before the lane, extra start tokens). The last lane starts one
+# tile past a chunk boundary, mid-page, so its write runs into the next chunk's pages.
+_PAGED_WINDOW_LANES = [(0, 0, 0), (2, 1, 0), (1, 2, ttnn.TILE_SIZE)]
+
+
+@pytest.mark.parametrize("mesh_device", [(2, 4), (8, 4)], ids=["2x4", "8x4"], indirect=True)
+@pytest.mark.parametrize("dtype, layout", DTYPE_LAYOUT_CASES[:2], ids=DTYPE_LAYOUT_IDS[:2])
+@pytest.mark.timeout(0)
+def test_update_padded_kv_cache_paged_input_row_window(mesh_device, dtype, layout):
+    """Windowed writes of a stacked input into a paged pool match slice-then-write bit for bit, and the windows share
+    one program whatever their offsets: the window picks the input rows, the page table where they land."""
+    sp_axis, page_size, num_layers, layer_idx = 0, 64, 2, 1
+    sp = mesh_device.shape[sp_axis]
+    C = 2 * page_size
+    # One spare tile: the stacked input is not a whole number of pages, only each window has to be.
+    stacked_local = C * len(_PAGED_WINDOW_LANES) + ttnn.TILE_SIZE
+    pages_per_row = (max(depth for _, depth, _ in _PAGED_WINDOW_LANES) + 2) * C * sp // page_size
+    table, num_pages = _shuffled_paged_kv_tables(
+        num_users=len(_PAGED_WINDOW_LANES),
+        pages_per_user=pages_per_row,
+        mapped_pages=pages_per_row,
+        page_size=page_size,
+        chunk_local=C,
+        sp=sp,
+        seed=7,
+    )
+    pools = [
+        _page_pool(
+            mesh_device,
+            page_size=page_size,
+            sp_axis=sp_axis,
+            num_pages=num_pages,
+            num_layers=num_layers,
+            dtype=dtype,
+            layout=layout,
+        )
+        for _ in range(2)
+    ]
+    tt_table = _paged_kv_table_tensor(mesh_device, table)
+    shard_dims = [None, None]
+    shard_dims[sp_axis] = 2
+    mapper = ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=shard_dims)
+    torch.manual_seed(5)
+    stacked = _make_input(
+        torch.randn(1, 1, sp * stacked_local, KVPE_HEAD_DIM, dtype=torch.bfloat16), dtype, layout, mesh_device, mapper
+    )
+
+    def write(pool, tensor, row, kv_actual, **window):
+        # The window exists on the tensor-metadata form only, the one traced prefill uses.
+        slot_t, kv_t = _make_meta_tensors(mesh_device, kv_actual_global=kv_actual, slot_idx=row)
+        ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
+            pool,
+            tensor,
+            slot_idx=slot_t,
+            kv_actual_global=kv_t,
+            layer_idx=layer_idx,
+            num_layers=num_layers,
+            cluster_axis=sp_axis,
+            paged_kv_table=tt_table,
+            **window,
+        )
+        ttnn.deallocate(slot_t)
+        ttnn.deallocate(kv_t)
+
+    mesh_device.enable_program_cache()
+    lanes = [(row, depth * C * sp + extra, i * C) for i, (row, depth, extra) in enumerate(_PAGED_WINDOW_LANES)]
+    for row, kv_actual, offset in lanes:
+        sliced = ttnn.slice(stacked, (0, 0, offset, 0), (1, 1, offset + C, KVPE_HEAD_DIM))
+        write(pools[0], sliced, row, kv_actual)
+        ttnn.deallocate(sliced)
+    entries_before = mesh_device.num_program_cache_entries()
+    for row, kv_actual, offset in lanes:
+        write(pools[1], stacked, row, kv_actual, input_row_offset=offset, input_rows=C)
+    ttnn.synchronize_device(mesh_device)
+    assert mesh_device.num_program_cache_entries() == entries_before + 1, (
+        f"{len(lanes)} same-size windows should add one program, added "
+        f"{mesh_device.num_program_cache_entries() - entries_before}"
+    )
+
+    reference, windowed = (
+        [ttnn.to_torch(t).to(torch.float32) for t in ttnn.get_device_tensors(pool.cpu())] for pool in pools
+    )
+    for chip, (a, b) in enumerate(zip(reference, windowed)):
+        assert torch.count_nonzero(a) > 0, f"chip {chip}: the reference wrote nothing"
+        assert torch.equal(a, b), f"chip {chip}: windowed paged write differs from slice + paged write"
+    logger.success(f"{len(lanes)} windows of a {stacked_local}-row stacked input match slice + write through the table")
+
+
+@pytest.mark.parametrize("mesh_device", [(2, 4)], ids=["2x4"], indirect=True)
+@pytest.mark.parametrize("path", ["metadata", "scalar"], ids=["metadata", "scalar"])
+@pytest.mark.timeout(0)
+def test_update_padded_kv_cache_paged_table_swap(mesh_device, path):
+    """One cached program serves a new page table: the slot whose row is the first past one row per DRAM bank
+    (interleaved row r sits in bank r % banks at offset r // banks rows, so only such a row depends on the compiled
+    row stride) is written through table A, then through a wider table B (the row stride is compiled in, so this
+    compiles a new program), then through table C of B's width at another address (a cache hit). Each write must land
+    on its table's pages and leave the others' alone. Both call forms: they read the table through accessors at
+    different compile-arg offsets."""
+    from models.demos.common.prefill.runners.migration import get_num_dram_banks
+
+    sp_axis = 0
+    sp = mesh_device.shape[sp_axis]
+    C, page_size = 128, 32
+    slot = get_num_dram_banks(mesh_device)
+    num_users = slot + 1
+    chunk_global = C * sp
+    pages = chunk_global // page_size
+    tables, num_pages = [], 0
+    for seed, width in ((1, pages), (2, pages + 16), (3, pages + 16)):
+        table, n = _shuffled_paged_kv_tables(
+            num_users=num_users,
+            pages_per_user=width,
+            mapped_pages=pages,
+            page_size=page_size,
+            chunk_local=C,
+            sp=sp,
+            seed=seed,
+        )
+        # Disjoint page ranges per table, so a write through one table cannot pass for another's.
+        tables.append(torch.where(table >= 0, table + len(tables) * n, table))
+        num_pages = len(tables) * n
+    pool = _page_pool(
+        mesh_device,
+        page_size=page_size,
+        sp_axis=sp_axis,
+        num_pages=num_pages,
+        num_layers=1,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+    )
+    composer = ttnn.ConcatMesh2dToTensor(mesh_device, dims=(2, 1), mesh_shape=mesh_device.shape)
+    shard = ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=[2, None])
+    mesh_device.enable_program_cache()
+
+    sent, entries, tt_tables = [], [], []
+    for k, table in enumerate(tables):
+        torch.manual_seed(10 + k)
+        sent.append(torch.randn(chunk_global, KVPE_HEAD_DIM, dtype=torch.bfloat16))
+        tt_input = _make_input(
+            sent[-1].reshape(1, 1, chunk_global, KVPE_HEAD_DIM),
+            ttnn.bfloat16,
+            ttnn.ROW_MAJOR_LAYOUT,
+            mesh_device,
+            shard,
+        )
+        # Kept alive, so table C cannot reuse table B's memory.
+        tt_tables.append(_paged_kv_table_tensor(mesh_device, table))
+        if path == "metadata":
+            slot_t, kv_t = _make_meta_tensors(mesh_device, kv_actual_global=0, slot_idx=slot)
+            ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
+                pool,
+                tt_input,
+                slot_t,
+                kv_t,
+                layer_idx=0,
+                num_layers=1,
+                cluster_axis=sp_axis,
+                paged_kv_table=tt_tables[-1],
+            )
+        else:
+            ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
+                pool,
+                tt_input,
+                slot_idx=slot,
+                layer_idx=0,
+                num_layers=1,
+                kv_actual_global=0,
+                cluster_axis=sp_axis,
+                paged_kv_table=tt_tables[-1],
+            )
+        ttnn.synchronize_device(mesh_device)
+        entries.append(mesh_device.num_program_cache_entries())
+    assert tt_tables[2].buffer_address() != tt_tables[1].buffer_address()
+    assert entries[1] == entries[0] + 1, "a wider table must compile its own program (its row stride is compiled in)"
+    assert entries[2] == entries[1], "a table of the same width at a new address must hit the cached program"
+
+    pool_host = ttnn.to_torch(pool, mesh_composer=composer).to(torch.bfloat16)[:, :1, :, :]
+    for k, table in enumerate(tables):
+        recon = _natural_from_pool(
+            pool_host,
+            table,
+            user=slot,
+            layer=0,
+            num_layers=1,
+            n_tokens=chunk_global,
+            page_size=page_size,
+            chunk_local=C,
+            sp=sp,
+        )
+        assert torch.equal(recon, sent[k]), f"the write through table {'ABC'[k]} did not land on its pages"
+
+
+@pytest.mark.parametrize("mesh_device", [(2, 4)], ids=["2x4"], indirect=True)
+@pytest.mark.timeout(0)
+def test_update_padded_kv_cache_paged_row_end(mesh_device):
+    """A metadata-path write that runs past the end of its table row (the host cannot bound it there) writes only the
+    pages the row maps. The row ends inside the table window chip 0 loads for the chunk, its width is not a whole
+    DRAM read group, and the padding after it in the row's DRAM page holds a valid page id: a wider table freed just
+    before leaves it there, and the narrow table reuses its memory. A lookup past the row's end would find that page
+    and write it."""
+    sp_axis, tp_axis = 0, 1
+    sp = mesh_device.shape[sp_axis]
+    C, page_size, width = 128, 32, 18
+    chunk_global = C * sp
+    # Each rank's pages in order, so the last page of every pool is one no row maps: the decoy, which must stay zero.
+    owner = [(q * page_size // C) % sp for q in range(width)]
+    table = torch.tensor([[owner[:q].count(owner[q]) for q in range(width)]], dtype=torch.int32)
+    num_pages = max(owner.count(rank) for rank in range(sp)) + 1
+    decoy_page = num_pages - 1
+    pool = _page_pool(
+        mesh_device,
+        page_size=page_size,
+        sp_axis=sp_axis,
+        num_pages=num_pages,
+        num_layers=1,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+    )
+    decoy = _paged_kv_table_tensor(mesh_device, torch.full((1, 32), decoy_page, dtype=torch.int32))
+    decoy_address = decoy.buffer_address()
+    ttnn.deallocate(decoy)
+    tt_table = _paged_kv_table_tensor(mesh_device, table)
+    assert tt_table.buffer_address() == decoy_address, "the narrow table must reuse the wider one's memory"
+
+    concat_dims = [None, None]
+    concat_dims[sp_axis] = 2
+    concat_dims[tp_axis] = 1
+    composer = ttnn.ConcatMesh2dToTensor(mesh_device, dims=tuple(concat_dims), mesh_shape=mesh_device.shape)
+    # The chunk covers [512, 768): chip 0 writes pages 16-19, of which 18-19 lie past the row's end inside its table
+    # window.
+    kv_actual = 512
+    torch.manual_seed(0)
+    tt_input = _make_input(
+        torch.randn(1, 1, chunk_global, KVPE_HEAD_DIM, dtype=torch.bfloat16),
+        ttnn.bfloat16,
+        ttnn.ROW_MAJOR_LAYOUT,
+        mesh_device,
+        ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=[2, None]),
+    )
+    sent = ttnn.to_torch(tt_input, mesh_composer=composer).to(torch.bfloat16)[0, 0]
+    slot_t, kv_t = _make_meta_tensors(mesh_device, kv_actual_global=kv_actual, slot_idx=0)
+    ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
+        pool, tt_input, slot_t, kv_t, layer_idx=0, num_layers=1, cluster_axis=sp_axis, paged_kv_table=tt_table
+    )
+    ttnn.synchronize_device(mesh_device)
+
+    end = width * page_size
+    positions = _rotated_chip_positions(kv_actual, sp, C)
+    flat = torch.tensor([positions[c][r] for c in range(sp) for r in range(C)], dtype=torch.long)
+    expected = torch.zeros(end, KVPE_HEAD_DIM, dtype=torch.bfloat16)
+    inside = flat < end
+    expected[flat[inside]] = sent[inside]
+    pool_host = ttnn.to_torch(pool, mesh_composer=composer).to(torch.bfloat16)[:, :1, :, :]
+    recon = _natural_from_pool(
+        pool_host, table, user=0, layer=0, num_layers=1, n_tokens=end, page_size=page_size, chunk_local=C, sp=sp
+    )
+    assert torch.equal(recon, expected), "the mapped part of the row does not hold the write"
+    untouched = _unreferenced_pool_rows(
+        pool_host, table, num_layers=1, num_pages=num_pages, page_size=page_size, chunk_local=C, sp=sp
+    )
+    assert not untouched.any(), "a write past the row's end landed in the pool"
+
+
+@pytest.mark.parametrize("mesh_device", [(2, 4)], ids=["2x4"], indirect=True)
+@pytest.mark.timeout(0)
+def test_update_padded_kv_cache_paged_rejects(mesh_device, expect_error):
+    """Paged writes reject what the page table cannot express. A good write runs first, so the rejects that keep the
+    program key (the slot, the capacity, the table's dtype) run on the cache-hit validator."""
+    sp_axis = 0
+    sp = mesh_device.shape[sp_axis]
+    C, page_size, num_layers = 128, 64, 1
+    pool = _page_pool(
+        mesh_device,
+        page_size=page_size,
+        sp_axis=sp_axis,
+        num_pages=8,
+        num_layers=num_layers,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+    )
+    shard = ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=[2, None])
+
+    def make(rows, heads=1):
+        return _make_input(
+            torch.zeros(1, heads, rows * sp, KVPE_HEAD_DIM, dtype=torch.bfloat16),
+            ttnn.bfloat16,
+            ttnn.ROW_MAJOR_LAYOUT,
+            mesh_device,
+            shard,
+        )
+
+    tt_input = make(C)
+    width = 2 * C * sp // page_size  # two chunks
+    good = _paged_kv_table_tensor(mesh_device, torch.zeros(2, width, dtype=torch.int32))
+    as_uint32 = ttnn.from_torch(
+        torch.zeros(2, width, dtype=torch.int64),
+        device=mesh_device,
+        dtype=ttnn.uint32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+
+    def write(table=good, update=tt_input, slot_idx=0, kv_actual_global=0, cache=pool, **kwargs):
+        kwargs.setdefault("cluster_axis", sp_axis)
+        ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
+            cache,
+            update,
+            slot_idx=slot_idx,
+            layer_idx=0,
+            num_layers=num_layers,
+            kv_actual_global=kv_actual_global,
+            paged_kv_table=table,
+            **kwargs,
+        )
+
+    write()
+    with expect_error(RuntimeError, r"slot_idx \(2\) out of range"):
+        write(slot_idx=2)
+    # The second chunk fills the row exactly; one tile later it overflows.
+    write(kv_actual_global=C * sp)
+    with expect_error(RuntimeError, "overflow global cache capacity"):
+        write(kv_actual_global=C * sp + 32)
+    with expect_error(RuntimeError, "paged_kv_table must be INT32"):
+        write(table=as_uint32)
+    # Two rows per chip: every chip would read another request's row 0.
+    sharded = ttnn.from_torch(
+        torch.zeros(2 * mesh_device.get_num_devices(), width, dtype=torch.int32),
+        device=mesh_device,
+        dtype=ttnn.int32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0),
+    )
+    with expect_error(RuntimeError, "paged_kv_table must be replicated"):
+        write(table=sharded)
+    with expect_error(RuntimeError, "a paged cache does not support tp_axis"):
+        write(tp_axis=1)
+    with expect_error(RuntimeError, "a paged cache requires an explicit cluster_axis"):
+        write(cluster_axis=None)
+    # A per-chip chunk of 96 rows splits a 64-token page across two chips.
+    with expect_error(RuntimeError, "whole number of"):
+        write(update=make(96))
+    # With an input row window the window is the chunk: 96 rows of the 128-row input split a page the same way.
+    slot_t, kv_t = _make_meta_tensors(mesh_device, kv_actual_global=0, slot_idx=0)
+    with expect_error(RuntimeError, "whole number of"):
+        ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
+            pool,
+            tt_input,
+            slot_t,
+            kv_t,
+            layer_idx=0,
+            num_layers=num_layers,
+            cluster_axis=sp_axis,
+            paged_kv_table=good,
+            input_row_offset=0,
+            input_rows=96,
+        )
+    two_head_pool = ttnn.from_torch(
+        torch.zeros(8, 2, page_size, KVPE_HEAD_DIM, dtype=torch.bfloat16),
+        device=mesh_device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+    with expect_error(RuntimeError, "single-head pages"):
+        write(cache=two_head_pool, update=make(C, heads=2))
+
+
+@pytest.mark.parametrize("mesh_device", [(2, 4)], ids=["2x4"], indirect=True)
+@pytest.mark.parametrize("page_size", [32, 64], ids=["page32", "page64"])
+@skip_with_watcher("Watcher perturbs kernel timing; perf checks are not meaningful with it enabled.")
+@pytest.mark.timeout(0)
+def test_update_padded_kv_cache_paged_perf(mesh_device, page_size, is_ci_env, is_ci_v2_env):
+    """A paged write of MiniMax-M3's per-chip K chunk (1024 rows of 128, bfloat8_b) against a contiguous one. Device
+    time is the slowest chip's, median of 7. The bound is absolute: paging adds a fixed cost per write (on every core, a
+    table read per slab its chip's rows touch, and a lookup per page), and a ratio on so short an op would gate on
+    noise."""
+    if is_ci_env or is_ci_v2_env:
+        pytest.skip("a timing gate: it needs the realtime profiler, which a CI runner need not have")
+    require_realtime_profiler("update_padded_kv_cache paged perf")
+    sp_axis = 0
+    sp = mesh_device.shape[sp_axis]
+    C, head_dim, cache_global = 1024, 128, 65536
+    pages = cache_global // page_size
+    contiguous = init_kvpe_cache(
+        kvpe_cache_head_dim=head_dim,
+        mesh_device=mesh_device,
+        seq_len=cache_global,
+        mesh_shape=list(mesh_device.shape),
+        sp_axis=sp_axis,
+        num_kvpe_cache_layers=1,
+        dtype=ttnn.bfloat8_b,
+        layout=ttnn.TILE_LAYOUT,
+    )
+    table, num_pages = _shuffled_paged_kv_tables(
+        num_users=1,
+        pages_per_user=pages,
+        mapped_pages=pages,
+        page_size=page_size,
+        chunk_local=C,
+        sp=sp,
+        seed=3,
+    )
+    pool = init_kvpe_cache(
+        kvpe_cache_head_dim=head_dim,
+        mesh_device=mesh_device,
+        seq_len=page_size * sp,
+        mesh_shape=list(mesh_device.shape),
+        sp_axis=sp_axis,
+        num_kvpe_cache_layers=num_pages,
+        dtype=ttnn.bfloat8_b,
+        layout=ttnn.TILE_LAYOUT,
+    )
+    tt_table = _paged_kv_table_tensor(mesh_device, table)
+    shard = ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=[2, None])
+    tt_input = _make_input(
+        torch.randn(1, 1, C * sp, head_dim, dtype=torch.bfloat16), ttnn.bfloat8_b, ttnn.TILE_LAYOUT, mesh_device, shard
+    )
+    # A mid-slab start: the boundary chip's write straddles two slabs and loads both table windows; the slowest-chip
+    # time includes it.
+    kv_actual = 5 * C * sp + C // 2
+
+    def write(cache, **paging):
+        return ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
+            cache,
+            tt_input,
+            slot_idx=0,
+            layer_idx=0,
+            num_layers=1,
+            kv_actual_global=kv_actual,
+            cluster_axis=sp_axis,
+            **paging,
+        )
+
+    paging = dict(paged_kv_table=tt_table)
+    write(contiguous)
+    write(pool, **paging)
+    ttnn.synchronize_device(mesh_device)
+    contiguous_ns, paged_ns = [], []
+    for _ in range(7):
+        _, records = profile_realtime_program_merged(mesh_device, lambda: write(contiguous))
+        contiguous_ns.append(max(r["duration_ns"] for r in records.values()))
+        _, records = profile_realtime_program_merged(mesh_device, lambda: write(pool, **paging))
+        paged_ns.append(max(r["duration_ns"] for r in records.values()))
+    contiguous_us = sorted(contiguous_ns)[3] / 1e3
+    paged_us = sorted(paged_ns)[3] / 1e3
+    ratio = paged_us / contiguous_us
+    logger.info(
+        f"paged perf page={page_size}: contiguous {contiguous_us:.2f} us, paged {paged_us:.2f} us, "
+        f"ratio {ratio:.3f}"
+    )
+    assert (
+        paged_us - contiguous_us <= 1.0
+    ), f"a paged write costs {paged_us - contiguous_us:.2f} us more than a contiguous one"
