@@ -21,8 +21,7 @@
 // row offsets; in1_tile_index/in1_k_stride count weight tiles. The destination
 // must be zero before execution. Use the existing pack init/uninit pair for
 // the result's 16-row tile layout.
-// As in the CB API, kt_dim must be even and in [2, 256]: the unpacker's MOP
-// consumes two K tiles per iteration. All kt_dim source tiles must be in DEST.
+// As in the CB API, kt_dim is in [1, 256]. All kt_dim source tiles must be in DEST.
 
 namespace ckernel {
 

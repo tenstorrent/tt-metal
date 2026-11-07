@@ -53,10 +53,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
     _llk_math_pack_sync_init_<dest_sync, is_fp32_dest_acc_en>();
     _llk_math_eltwise_unary_datacopy_init_wrapper_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, false /*is_int_fpu_en*/, PackMode::Default>(
-        TILE_NUM_FACES, formats.math);
+        ckernel::DEFAULT_TENSOR_SHAPE, formats.math);
 
-    constexpr int iterations   = GATED_REDUCE_ROWS <= 4 ? 2 : GATED_REDUCE_ROWS <= 8 ? 4 : 8;
-    constexpr auto vector_mode = GATED_REDUCE_ROWS <= 16 ? VectorMode::R : VectorMode::RC;
+    constexpr int iterations    = GATED_REDUCE_ROWS <= 4 ? 2 : GATED_REDUCE_ROWS <= 8 ? 4 : 8;
+    constexpr auto vector_mode  = GATED_REDUCE_ROWS <= 16 ? VectorMode::R : VectorMode::RC;
     constexpr auto gated_reduce = sfpu::calculate_gated_reduce<
         GATED_REDUCE_GATE,
         GATED_REDUCE_UP,

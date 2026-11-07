@@ -2061,6 +2061,7 @@ class MoeRoutedExpert:
                         link_idx = 0 if col_idx < num_columns // 2 else 1
                         fabric_rt_args_ref = program.kernels[fabric_kernel_idx].runtime_args[fc.x][fc.y]
                         fabric_conn_args = ttnn.setup_fabric_connection(
+                            mesh_device,
                             fabric_node_id,
                             dest_fabric_node_id,
                             link_idx,
