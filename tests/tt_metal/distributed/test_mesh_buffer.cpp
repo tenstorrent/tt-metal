@@ -463,11 +463,7 @@ TEST_F(MeshBufferTest2x4, Deallocation) {
 }
 
 TEST(MeshBufferTest, DeallocationWithoutMeshDevice) {
-    // Repeated device init takes very long on TG. Lower the number of iterations.
-    int iterations = 100;
-    if (tt::tt_metal::MetalContext::instance().get_cluster().is_galaxy_cluster()) {
-        iterations = 10;
-    }
+    constexpr int iterations = 100;
 
     for (int i = 0; i < iterations; i++) {
         MeshDeviceConfig config(MeshShape(1, 1));
@@ -484,11 +480,7 @@ TEST(MeshBufferTest, DeallocationWithoutMeshDevice) {
 }
 
 TEST(MeshBufferTest, DeallocationWithMeshDeviceClosed) {
-    // Repeated device init takes very long on TG. Lower the number of iterations.
-    int iterations = 100;
-    if (tt::tt_metal::MetalContext::instance().get_cluster().is_galaxy_cluster()) {
-        iterations = 10;
-    }
+    constexpr int iterations = 100;
 
     for (int i = 0; i < iterations; i++) {
         MeshDeviceConfig config(MeshShape(1, 1));

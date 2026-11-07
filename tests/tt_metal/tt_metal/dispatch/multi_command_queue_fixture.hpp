@@ -39,11 +39,9 @@ protected:
         init_max_dfbs();
         auto* enable_remote_chip = getenv("TT_METAL_ENABLE_REMOTE_CHIP");
 
-        // Check to deal with TG systems
         const ChipId device_id =
-            (enable_remote_chip or tt::tt_metal::MetalContext::instance().get_cluster().is_galaxy_cluster())
-                ? *tt::tt_metal::MetalContext::instance().get_cluster().user_exposed_chip_ids().begin()
-                : *tt::tt_metal::MetalContext::instance().get_cluster().mmio_chip_ids().begin();
+            enable_remote_chip ? *tt::tt_metal::MetalContext::instance().get_cluster().user_exposed_chip_ids().begin()
+                               : *tt::tt_metal::MetalContext::instance().get_cluster().mmio_chip_ids().begin();
         this->create_device(device_id, DEFAULT_TRACE_REGION_SIZE);
     }
 
@@ -133,10 +131,9 @@ protected:
         std::vector<ChipId> chip_ids;
         auto* enable_remote_chip = getenv("TT_METAL_ENABLE_REMOTE_CHIP");
 
-        // Check to deal with TG systems
+        // Check to deal with UBB Galaxy systems
         if (enable_remote_chip or
-            tt::tt_metal::MetalContext::instance().get_cluster().get_board_type(0) == BoardType::UBB or
-            tt::tt_metal::MetalContext::instance().get_cluster().is_galaxy_cluster()) {
+            tt::tt_metal::MetalContext::instance().get_cluster().get_board_type(0) == BoardType::UBB) {
             for (ChipId id : tt::tt_metal::MetalContext::instance().get_cluster().user_exposed_chip_ids()) {
                 chip_ids.push_back(id);
             }

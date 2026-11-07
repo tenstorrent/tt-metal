@@ -203,8 +203,7 @@ private:
 
 protected:
     static void SetUpTestSuite() {
-        if (tt::tt_metal::MetalContext::instance().get_cluster().is_ubb_galaxy() ||
-            tt::tt_metal::MetalContext::instance().get_cluster().is_galaxy_cluster()) {
+        if (tt::tt_metal::MetalContext::instance().get_cluster().is_ubb_galaxy()) {
             should_skip_ = true;
             return;
         }
@@ -255,9 +254,8 @@ protected:
     static void SetUpTestSuite() {
         // Check specifically for Wormhole Galaxy
         arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
-        bool is_wormhole_galaxy = (arch_ == tt::ARCH::WORMHOLE_B0) &&
-                                  (tt::tt_metal::MetalContext::instance().get_cluster().is_ubb_galaxy() ||
-                                   tt::tt_metal::MetalContext::instance().get_cluster().is_galaxy_cluster());
+        bool is_wormhole_galaxy =
+            (arch_ == tt::ARCH::WORMHOLE_B0) && tt::tt_metal::MetalContext::instance().get_cluster().is_ubb_galaxy();
 
         if (is_wormhole_galaxy) {
             should_skip_ = true;
