@@ -54,8 +54,11 @@ inline void _llk_unpack_AB_matmul_mop_config_(
     // in0/inA - loaded to SrcB
     // in1/inB - loaded to SrcA
 
-    const bool reuse_a                      = ct_dim >= rt_dim;
-    const std::uint32_t replay_buf_prog_len = (reuse_a && unpA_partial_face) ? 18 : ((!reuse_a && unpB_partial_face) ? 18 : 12);
+    const bool reuse_a = ct_dim >= rt_dim;
+
+    // RDCFG does not wait for its GPR write on Blackhole. Allow one wait per
+    // context, and keep the broadcast bodies padded to the same length.
+    const std::uint32_t replay_buf_prog_len = (reuse_a && unpA_partial_face) ? 20 : ((!reuse_a && unpB_partial_face) ? 20 : 14);
     const std::uint32_t replay_buf_run_len  = replay_buf_prog_len / 2;
 
     if (reuse_a)
@@ -86,10 +89,12 @@ inline void _llk_unpack_AB_matmul_mop_config_(
                     TTI_NOP;
                     TTI_NOP;
                     TTI_NOP;
+                    TTI_NOP;
                 }
                 else
                 {
                     TTI_RDCFG(p_gpr_unpack::TMP0, THCON_SEC0_REG3_Base_address_ADDR32);
+                    TTI_STALLWAIT(p_stall::STALL_THCON, p_stall::CFGEXU);
                     TTI_ADDDMAREG(0, p_gpr_unpack::TMP0, p_gpr_unpack::TMP0, p_gpr_unpack::TILE_SIZE_A);
                     TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::THCON);
                     TTI_WRCFG(p_gpr_unpack::TMP0, 0, THCON_SEC0_REG3_Base_address_ADDR32);
@@ -116,10 +121,12 @@ inline void _llk_unpack_AB_matmul_mop_config_(
                     TTI_NOP;
                     TTI_NOP;
                     TTI_NOP;
+                    TTI_NOP;
                 }
                 else
                 {
                     TTI_RDCFG(p_gpr_unpack::TMP0, THCON_SEC0_REG3_Base_cntx1_address_ADDR32);
+                    TTI_STALLWAIT(p_stall::STALL_THCON, p_stall::CFGEXU);
                     TTI_ADDDMAREG(0, p_gpr_unpack::TMP0, p_gpr_unpack::TMP0, p_gpr_unpack::TILE_SIZE_A);
                     TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::THCON);
                     TTI_WRCFG(p_gpr_unpack::TMP0, 0, THCON_SEC0_REG3_Base_cntx1_address_ADDR32);
@@ -156,10 +163,12 @@ inline void _llk_unpack_AB_matmul_mop_config_(
                     TTI_NOP;
                     TTI_NOP;
                     TTI_NOP;
+                    TTI_NOP;
                 }
                 else
                 {
                     TTI_RDCFG(p_gpr_unpack::TMP0, THCON_SEC1_REG3_Base_address_ADDR32);
+                    TTI_STALLWAIT(p_stall::STALL_THCON, p_stall::CFGEXU);
                     TTI_ADDDMAREG(0, p_gpr_unpack::TMP0, p_gpr_unpack::TMP0, p_gpr_unpack::TMP_LO);
                     TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::THCON);
                     TTI_WRCFG(p_gpr_unpack::TMP0, 0, THCON_SEC1_REG3_Base_address_ADDR32);
@@ -186,10 +195,12 @@ inline void _llk_unpack_AB_matmul_mop_config_(
                     TTI_NOP;
                     TTI_NOP;
                     TTI_NOP;
+                    TTI_NOP;
                 }
                 else
                 {
                     TTI_RDCFG(p_gpr_unpack::TMP0, THCON_SEC1_REG3_Base_cntx1_address_ADDR32);
+                    TTI_STALLWAIT(p_stall::STALL_THCON, p_stall::CFGEXU);
                     TTI_ADDDMAREG(0, p_gpr_unpack::TMP0, p_gpr_unpack::TMP0, p_gpr_unpack::TMP_LO);
                     TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::THCON);
                     TTI_WRCFG(p_gpr_unpack::TMP0, 0, THCON_SEC1_REG3_Base_cntx1_address_ADDR32);
