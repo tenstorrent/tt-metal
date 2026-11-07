@@ -6,7 +6,8 @@
 
 #include <bit>
 #include <cstdint>
-#include <vector>
+#include <optional>
+#include <tt-metalium/program_descriptors.hpp>
 
 #include "gumbel_sample_device_operation_types.hpp"
 #include "metal/ttnn_all_includes.hpp"
@@ -24,42 +25,25 @@ inline uint32_t compute_rand_scale_bits(float lower, float upper) {
     return scale_bits;
 }
 
-struct GumbelSampleSharedVariables {
-    tt::tt_metal::KernelHandle reader_kernel_id{};
-    tt::tt_metal::KernelHandle writer_kernel_id{};
-    tt::tt_metal::KernelHandle compute_kernel_group_1_id{};
-    tt::tt_metal::KernelHandle compute_kernel_group_2_id{};
-    bool has_compute_group_2{};
-    // Everything the cache-hit patch needs per core, derived once at build: the work split is a
-    // function of hashed quantities only, and this op dispatches once per generated token, so
-    // re-deriving it per hit would be paid thousands of times per rollout. Caching also
-    // single-sources the stream-id derivation, whose divergence would only show on cache hits.
-    struct CoreRuntimeInfo {
-        tt::tt_metal::CoreCoord core;
-        uint32_t rand_stream_id{};
-        bool in_compute_group_1{};
-    };
-    std::vector<CoreRuntimeInfo> core_info;
-};
-
-// Builds a MESH WORKLOAD (one program per mesh coordinate) rather than a single broadcast program:
-// the RNG seed must differ per device on data-parallel axes. Same pattern as
-// RingSDPAFwProgramFactory.
+// Builds one program PER MESH COORDINATE rather than a single broadcast program: the RNG stream
+// must differ per device on data-parallel axes, so create_descriptor() takes the device's
+// coordinate and the framework calls it once per device. On a cache hit only
+// override_runtime_arguments() runs: seed, the temperature value, the mask batch stride and, in
+// position mode, the token count are left out of the program hash, so it re-applies them together
+// with every buffer address, on every core.
 struct GumbelSampleProgramFactory {
-    using shared_variables_t = GumbelSampleSharedVariables;
-    using cached_mesh_workload_t = ttnn::device_operation::AdaptedCachedMeshWorkload<shared_variables_t>;
-
-    static cached_mesh_workload_t create_mesh_workload(
+    static tt::tt_metal::ProgramDescriptor create_descriptor(
         const operation_attributes_t& operation_attributes,
-        const ttnn::MeshCoordinateRangeSet& tensor_coords,
         const tensor_args_t& tensor_args,
-        tensor_return_value_t& tensor_return_value);
+        tensor_return_value_t& tensor_return_value,
+        const std::optional<ttnn::MeshCoordinate>& mesh_coordinate);
 
     static void override_runtime_arguments(
-        cached_mesh_workload_t& cached_workload,
+        tt::tt_metal::Program& program,
         const operation_attributes_t& operation_attributes,
         const tensor_args_t& tensor_args,
-        tensor_return_value_t& tensor_return_value);
+        tensor_return_value_t& tensor_return_value,
+        const std::optional<ttnn::MeshCoordinate>& mesh_coordinate);
 };
 
 }  // namespace ttml::metal::ops::gumbel_sample::device
