@@ -208,9 +208,12 @@ for k in cands, k <= K_CAP:
     fits(k)      = worker_footprint(k, nb) <= budget and port_footprint(nb, w_pitch) <= budget
     total(k)     = nb · (w_pitch + C(k))             # x-tile equivalents per core
     tail(k)      = w_pitch + C(k)                     # what remains after the last landing
-T_xfer_est = t0 + (G−1)·S / (B_chip · L)   # ring (8.4 µs, 77.2 GB/s); line (9.8 µs, 42.1 GB/s): fabric_all_gather fits
-keep_up(k) = total(k) · 310 ns <= KEEP_UP_FRACTION · T_xfer_est      # KEEP_UP_FRACTION = 0.5
-k* = argmin tail(k) over {fits ∧ keep_up}; ties → fewer blocks (nb).
+T_xfer(k) = t0 + (1 + 0.55·(pk(k)/pk_ref − 1)) · (G−1)·S / (B_chip · L)   # ring (8.4 µs, 77.2 GB/s); line (9.8 µs, 42.1 GB/s)
+            # pk(k) = packets per gathered row (every link part of every slice cut at the member boundaries into runs of
+            # <= run_pages tiles); pk_ref = the unsplit link runs. PACKET_TIME_SHARE = 0.55 (Refinement 4, calibrated)
+keep_up(k) = total(k) · 310 ns <= KEEP_UP_FRACTION · T_xfer(k)      # KEEP_UP_FRACTION = 0.5
+k* = argmin [T_xfer(k) + tail(k) · 310 ns] over {fits ∧ keep_up}; ties → fewer blocks (nb).
+     (Refinement 4: the estimated end of the call. With equal packet counts it reduces to the Phase 0 argmin tail.)
      If no candidate keeps up: argmin total(k) over {fits}. If none fits: RuntimeError.
 ```
 
@@ -220,7 +223,7 @@ Perf-flagged shapes on the fused grid (QB2, 11×10 = 110 cores; union of port co
 |---|---|---|---|---|---|---|---|---|---|
 | 640×384 [FOCUS] | 20 | 12 / 48 | 8 (6) | symmetric | 13 (12) | 2 | 104 (96) | 9 | 5.6 vs 18.0 |
 | 640×512 | 20 | 16 / 64 | 8 (8) | symmetric | 13 (12) | 2 | 104 (96) | 11 | 6.8 vs 21.1 |
-| 640×1792 | 20 | 56 / 224 | 12 (19, 19, 18) | owner | 8 (8) | 3 | 96 | 26.8 | 24.9 vs 53.0 |
+| 640×1792 | 20 | 56 / 224 | ~~12 (19, 19, 18) owner~~ → **8 (28)** since Refinement 4 | symmetric | 13 (12) | 2 | 104 (96) | 31 | 19.2 vs 53.0 |
 
 At |P| = 8 every case keeps its k, blocks per core and regime. No row is idle and no group is ragged beyond one block. This is the base op's split **rule** re-run on the fused grid with one deliberate deviation: the objective is the tail, not the total. That deviation applies because rows land progressively, so all but the last block hide under the transport (the base op had no exchange to hide under).
 
@@ -308,18 +311,18 @@ Algebraic permission used: none that changes floating-point order. The combine s
 
 | Lamp | Kind | Why the default may be wrong here | Nearby alternative to measure |
 |------|------|-----------------------------------|-------------------------------|
-| Overlap: `block_row_tiles = 1` | OVERLAP | per-block fixed cost (combine round + inits) paid `num_blocks` times; on row-rich shapes the transport is long enough to hide coarser blocks | `block_row_tiles = 2` on (1,1,2048,1280) and the 1792 case |
+| ~~Overlap: `block_row_tiles = 1`~~ | OVERLAP | **measured (Refinement 4)**: 2 is worse on the focus (24.57 → 28.84 µs) and on 640×1792 (78.38 → 89.57 µs): a 2-row block waits for its later row. 1 stays (env `AGRMS_BLOCK_ROW_TILES`, live knob) | — |
 | Grid sync: symmetric k = 8 on the focus | OVERLAP | 64 partial messages per row per group; at 6 tiles per member the combine is comparable to the compute | k = 4 (12 tiles, 1 block) and k = 12 owner (4 tiles) on the focus |
-| `KEEP_UP_FRACTION = 0.5`, cost constants | OVERLAP | the constants are the base op's (HiFi2 16-bit DEST perf profile) and the example's transport fit; the focus runs HiFi4 fp32-DEST | sweep k* ± one candidate on all three perf cases |
+| ~~`KEEP_UP_FRACTION = 0.5`, cost constants~~ | OVERLAP | **done (Refinement 4)**: the k sweep showed the transport itself depends on k (640×1792 TRANSPORT-only 76.2 µs at k = 12 vs 70.0 at k = 8: 10 vs 8 packets per slice-row). The objective is now the packet-aware estimated end (see Regime / split selection): 640×1792 L2 k = 12 owner → 8 (86.1 → 81.5 µs before the prescale), L1 k = 28 → 16 (145.0 → 108.0 µs). Focus sweep k = 4 / 8 / 12: 26.0 / 25.1 / 34.4 µs (k = 8 kept) | — |
 | `relay_lag = 1` | OVERLAP / TRANSPORT | a relay item may still be in flight one step later (fence skew between chips) | `relay_lag` 0 and 2 |
 | `xfer_rows` (`item_min_chunks = 4`) | TRANSPORT | larger items mean fewer router stalls but coarser relay and notification latency | `item_min_chunks` 2 and 8 |
 | ~~Far-half link split by columns~~ | TRANSPORT | **done (Refinement 3)**: the far half is split between the directions by tile-row parity, 6-tile packets on the focus (31.47 → 29.38 µs). Scatter packets are moot after it: a packet is one member's 6-tile run, two runs (12 tiles) do not fit one 7-tile payload, and the item's fused increment ends a packet anyway | — |
 | Port-mediated notifications | OVERLAP | a landed row is announced only when the port reader reaches that item | fused inc straight to the member's semaphore when a unit is ≥ 4 chunks |
-| Own slice sent only after **all** local members loaded | OVERLAP | the first own packet waits for the slowest local member's DRAM read (hidden today by the ~5 µs fence) | per-row-group readiness flags |
+| ~~Own slice sent only after **all** local members loaded~~ | OVERLAP | **measured null (Refinement 4)**: on every chip the ports' `AG_LOCAL_WAIT` ends (4.2–5.1 µs) before their ready fence `AG_FENCE` (4.6–10.3 µs): the fence binds the first packet, not the load. Not built | — |
 | Members nested in slices | OVERLAP | on 1792, k = 12 nested gives 19 tiles per member. A non-nested k (e.g. 5 on 512: 13 tiles) shortens the tail at the cost of split packets at slice edges. | non-nested k on 512 / 1792 |
 | `port_cb_bytes = 112 KiB` | TRANSPORT | items here are short (4–7 chunks), not the multi-MiB shards the example tuned on | re-measured in Refinement 3 (`AGRMS_PORT_CB_KIB`): 56 KiB 31.3, 224 KiB 26.3 / 30.0 vs 112 KiB 25.1 / 29.4 µs: 112 stays |
 | Compute lookahead off | OVERLAP | the combine wait of block b is unused | non-blocking `cb_pages_available_at_front` check of block b+1 |
-| x·γ pre-scale in the combine wait | OVERLAP | pass 2 is two FPU passes on the critical last block | fp32 scratch of one block; pass 2 = one mul-bcast (gate on the precision baseline) |
+| ~~x·γ pre-scale in the combine wait~~ | OVERLAP | **done (Refinement 4)**: `cb_x_gamma` (T_acc, one block), compute CT `prescale` (regime A, k > 1, gamma, round-robin split). Focus 25.09 → 24.57 µs, 640×1792 k = 8 81.47 → 78.41 µs, precision baseline unchanged | — |
 
 ## Dataflow Strategy
 
@@ -385,6 +388,7 @@ T_in = T_out = input tile bytes; T_acc = 4096 (`fp32_dest_acc_en=True`) / 2048 (
 | `cb_inv_rms` | 7 | T_acc | `block_row_tiles` | spans row | T_acc | compute (k = 1 / symmetric) or writer (owner return) | compute | finalize → end of normalize |
 | `cb_x_aligned` (regime N) | 8 | T_in (bf16 when staged) | `compose_depth · out_unit` | streams W | input dtype (Float16_b when staged) | reader | compute | per unit |
 | `cb_x_stage` (regime N, bfp8) | 12 | 2048 | `STAGE_ROWS · land_w_tiles` (one landed row) | spans W | Float16_b | compute (copy of the row's landing tiles) | reader (compose) | per row |
+| `cb_x_gamma` (regime A, k > 1, gamma, round-robin; Refinement 4) | 13 | T_acc | `block_row_tiles · w_pitch` | spans the block: x·γ packed during the combine wait | T_acc | compute (prescale) | compute (normalize) | one block |
 | `cb_out_tiles` | 9 | T_out | `out_depth · out_unit` | streams W | output dtype | compute | writer | per unit |
 | `cb_port_chunks` (ports only) | 10 | `run_pages · T_in` | `2 · group` | streams items | input dtype | port reader | port sender | per batch |
 
@@ -547,3 +551,29 @@ What still binds the transport (focus, per-packet zones): the sender's per-packe
 0.10 µs send, 30 packets), the relay tail (the last relayed item waits ~2 µs on its upstream: steps 5–6 carry only
 relay items), and the start: the own-slice DRAM load before the first packet (`AG_LOCAL_WAIT` ~1.6 µs, the OVERLAP
 lamp "per-row-group readiness", Refinement 4's scope) plus the first batch read (~0.6 µs).
+
+## Refinement 4 — OVERLAP: the exposed tail and the split around the ports (implementer, QB2 1×4 ring, FABRIC_2D_TORUS_XY)
+
+Member zones (`AG_C_SUMSQ` / `AG_C_COMBINE` / `AG_C_NORM` on compute, `AG_W_XCHG` / `AG_W_STORE` on the writer, gated
+by `AGRMS_PROFILE_ZONES`) put the exposed tail after the **last landing**, not in a delayed transport (TRANSPORT-only
+and full runs have the same last-landing time):
+- focus (k = 8, 6-tile members): ~5 µs = ~1.5 µs land → partial exchange complete (the row's latest member gates it) +
+  ~0.5 µs combine / finalize + ~1.3 µs normalize (two FPU multiplies per tile) + ~1 µs store;
+- 640×1792 (k = 8, 28-tile members): ~11 µs = ~1.6 µs Σx² + ~2.3 µs exchange + ~5.7 µs normalize + ~1 µs store.
+
+What landed:
+1. **x·γ pre-scale** in the combine wait (design lamp): the normalize after the combine is one bcast-col multiply of
+   `cb_x_gamma`. x·γ is packed at T_acc, so the rounding count equals the fused chain's (x·inv_rms stays in DEST
+   there). Regime N streams composed tiles, native shards normalize in segments, and k = 1 has no combine wait, so all
+   three keep the fused chain.
+2. **Packet-aware split objective** (`select_split`, `packets_per_row`, `PACKET_TIME_SHARE = 0.55`): the estimated
+   end of the call replaces the tail alone. Shapes whose candidates cut the link runs into the same number of packets
+   select as before (focus, 640×512 L2: k = 8). The changed selections were checked on device where they matter most:
+   640×1792 L2 (k = 12 owner → 8) and L1 (k = 28 → 16), 640×512 L1 (k = 8 → 12 owner: 47.30 → 47.02 µs).
+
+Measured and not kept as defaults: `block_row_tiles = 2` (worse, see lamps), `out_unit` 1 / 2 (25.00 / 25.20 vs 25.09
+µs: within ~0.1 µs, cap 16 kept), symmetric k = 12 / 16 on 640×1792 (87.2 / 85.2 µs vs 81.5 at k = 8).
+Not built: member-direct landing notifications (fusing the increment into each member's last packet puts an atomic on
+every packet, against rule 4's router stall; for the tail they would only save the port's notify hop, and they would
+un-gate earlier rows, which are not on the critical path here), the compute lookahead (no effect on the last block),
+and the Linear line-end notify loop (not on the flagged cases, untouched).

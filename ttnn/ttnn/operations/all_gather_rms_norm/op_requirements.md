@@ -185,7 +185,7 @@ shave the sender's per-packet path further (batch `cb_wait_front`, pre-built hea
 to shorten the relay tail. Not done here: both are below ~1–2 µs, and the full call is now within ~5 µs of the
 LOCAL-only time, which Refinements 4–5 own.
 
-### [ ] Refinement 4 — OVERLAP: shorten the exposed tail and co-tune the split around the ports (perf, flagged cases)
+### [x] Refinement 4 — OVERLAP: shorten the exposed tail and co-tune the split around the ports (perf, flagged cases)
 
 **Type**: perf
 
@@ -209,6 +209,20 @@ No SUPPORTED change.
 **Done when**: measured on the focus case, the exposed time (full − TRANSPORT-only, same build) drops and the full-op
 fastest chip improves (`eval.ccl_perf compare` win). The 640×1792 case improves toward its target. The golden suite
 stays green. No regression across the same guard set as Refinement 3.
+**Outcome**: fastest chip (`ccl_perf compare`: win on all three, slowest chip lower too): focus **25.09 → 24.57 µs**
+(exposed beyond TRANSPORT-only 19.81: 5.27 → 4.76 µs), 640×512 **35.55 → 34.20 µs**, 640×1792 **86.06 → 78.38 µs**
+(target 47.3). Two levers landed. (1) x·γ pre-scale during the combine wait (`cb_x_gamma`), so one multiply is left
+after the combine: focus −0.52, 640×1792 −3.06 µs. (2) The split objective is now packet-aware: estimated end =
+T_xfer(k) + tail, and the byte term scales with the packets a member split cuts the link runs into. The k sweep showed
+the transport itself depends on k (640×1792 TRANSPORT-only 70.0 µs at k = 8 vs 76.2 at the rule's old k = 12). The new
+rule picks k = 8 there (81.5 vs 86.1 µs before the pre-scale) and k = 16 instead of 28 on 640×1792 L1 (145.0 → 108.0 µs).
+Measured nulls / losses kept off: `block_row_tiles` 2 (28.8 / 89.6 µs), `out_unit` 1–2 (±0.1 µs), focus k = 4 / 12
+(26.0 / 34.4 µs), per-row-group readiness (the ready fence ends after the own-slice load on every chip, so the load
+never binds). Still binding: the last landed row's chain. Focus ~4.8 µs: ~1.5 µs land → all k partials exchanged
+(the row's latest member gates it), then combine, one-multiply normalize, store. 640×1792: Σx² + normalize of 28-tile
+members. Next would be member-direct landing notifications and a cheaper exchange (fewer messages per row, e.g. a
+2-level combine). Not done here: the notifications put an atomic on every packet (rule 4 router stall) for a
+port-notify hop of a few hundred ns, and the combine topology is Refinement 5's scope.
 
 ### [ ] Refinement 5 — Local work: cut the members' compute + combine time (perf, focus case)
 

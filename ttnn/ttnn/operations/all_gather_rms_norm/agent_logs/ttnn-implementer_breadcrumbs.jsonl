@@ -6,3 +6,4 @@
 {"event":"test_run","status":"pass","what":"far row split: acceptance 29/29; focus 31.47->29.38us, transport-only 26.37->24.01","ts":"2026-11-07T07:14:03+00:00"}
 {"event":"test_run","status":"pass","what":"walker restructure (members outer, incremental placement): acceptance+native 35/35; focus 29.38->26.98us","ts":"2026-11-07T07:25:22+00:00"}
 {"event":"test_run","status":"pass","what":"host segment tables: 35/35; focus 26.98->25.08us","ts":"2026-11-07T07:31:10+00:00"}
+{"event":"test_run","status":"pass","details":"Refinement 4: focus 25.09->24.57, 512 35.55->34.20, 1792 86.06->78.38 us; unit 47+13 pass; golden slice 88 pass/88 skip","ts":"2026-11-07T08:42:15+00:00"}

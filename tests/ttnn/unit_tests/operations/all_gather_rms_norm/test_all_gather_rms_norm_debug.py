@@ -67,14 +67,24 @@ def _split_of(mesh_device, shape, *, ring, L, dtype=ttnn.bfloat16):
 @pytest.mark.parametrize("mesh_device", [(1, 4)], indirect=True, ids=["mesh1x4"])
 def test_split_pins(mesh_device):
     """The split rule on the fused grid picks the design's k for the perf shapes (op_design.md -> Regime / split
-    selection): 640x384 / 640x512 symmetric k = 8, 640x1792 owner k = 12."""
+    selection): 640x384 / 640x512 / 640x1792 symmetric k = 8 on 2 links (Refinement 4: the packet-aware objective
+    moved 640x1792 off k = 12 owner, 86.1 -> 81.5 us measured), and 640x1792 owner k = 16 on 1 link (145.0 us at the
+    old k = 28 -> 108.0 us). The x * gamma prescale is on for every one of them (regime A, k > 1, gamma)."""
     from ttnn.operations.all_gather_rms_norm import all_gather_rms_norm_program_descriptor as pd
 
     if pd.FORCE_K:
         pytest.skip("AGRMS_FORCE_K set")
-    for shape, k, owner in (((1, 1, 640, 384), 8, False), ((1, 1, 640, 512), 8, False), ((1, 1, 640, 1792), 12, True)):
-        sp = _split_of(mesh_device, shape, ring=True, L=2)
-        assert (sp.k, sp.combine_owner) == (k, owner), f"{shape}: k={sp.k} owner={sp.combine_owner}"
+    for shape, L, k, owner in (
+        ((1, 1, 640, 384), 2, 8, False),
+        ((1, 1, 640, 512), 2, 8, False),
+        ((1, 1, 640, 1792), 2, 8, False),
+        ((1, 1, 640, 1792), 1, 16, True),
+    ):
+        sp = _split_of(mesh_device, shape, ring=True, L=L)
+        assert (sp.k, sp.combine_owner) == (k, owner), f"{shape} L{L}: k={sp.k} owner={sp.combine_owner}"
+        geo = pd.derive_geometry(shape, 4)
+        sz = pd.Sizes(ttnn.tile_size(ttnn.bfloat16), 4096, 192, 10, 7, 4, True)
+        assert pd.prescale_on(geo, sz, sp) == pd.PRESCALE_GAMMA
 
 
 @pytest.mark.parametrize("device_params", DEVICE_PARAMS, indirect=True, ids=["torus_xy"])

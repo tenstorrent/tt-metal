@@ -86,6 +86,10 @@ KEEP_UP_FRACTION = 0.5
 # 640x384 keeps up (0.83) native 34.9 vs fallback 41.4 us; HEIGHT 2048x384 (0.39) 68.2 vs 93.4; HEIGHT 128x512 (1.8)
 # 27.6 vs 20.2; WIDTH 64x512 k=64 (1.9) 32.6 vs 14.3; WIDTH 32x4096 k=103 (1.1) 32.7 vs 24.9.
 NATIVE_KEEP_UP_FRACTION = 1.0
+# Share of the transport byte term that scales with the packet count (the ports are packet-rate bound, Refinement 3).
+# Calibrated (Refinement 4) on 640x1792 ring L2: k = 12 cuts the link runs into 10 packets per slice-row instead of 8
+# (ratio 1.25) and its TRANSPORT-only ablation measured 76.2 vs 70.0 us at k = 8: 6.2 / (0.25 * 44.6 us) = 0.55.
+PACKET_TIME_SHARE = 0.55
 XFER_FIT = {True: (8.4e-6, 77.2e9), False: (9.8e-6, 42.1e9)}  # (fixed s, bytes/s per link): fabric_all_gather fits
 PARTIAL_FACES_ONLY = True
 GAMMA_READ_ALIGN = 64  # BH DRAM read alignment: cb_gamma page stride (host) and gamma reads (writer CT arg)
@@ -514,11 +518,27 @@ def port_footprint(sz: Sizes, split: Split):
     return split.blocks_max * BLOCK_ROW_TILES * split.w_pitch * sz.T_in + 2 * sz.group * sz.run_pages * sz.T_in
 
 
-def transfer_time(geo: Geometry, sz: Sizes, ring: bool, L: int):
-    """Modelled transport time (s): fabric_all_gather fit for the G - 1 slices a chip receives."""
+def transfer_time(geo: Geometry, sz: Sizes, ring: bool, L: int, packet_ratio: float = 1.0):
+    """Modelled transport time (s): fabric_all_gather fit for the G - 1 slices a chip receives. packet_ratio scales the
+    byte term for a member split that cuts the link runs into more packets (the ports are packet-rate bound)."""
     S = geo.M * geo.num_images * geo.W_local * sz.T_in / (TILE * TILE)
     t0, rate = XFER_FIT[ring]
-    return t0 + (geo.G - 1) * S / (rate * L)
+    return t0 + (1.0 + PACKET_TIME_SHARE * (packet_ratio - 1.0)) * (geo.G - 1) * S / (rate * L)
+
+
+def packets_per_row(geo: Geometry, ws, L: int, run_pages: int):
+    """Fabric packets per gathered row: every link part of every slice, cut at the member boundaries ws into runs of
+    <= run_pages tiles (the port walk's chunking; see cpr_of in create_mesh_program_descriptor)."""
+    n = 0
+    for q in range(geo.G):
+        for l in range(L):
+            c0, c1 = link_cols(geo.Wt_lp, L, l, 0)[:2]
+            t0, t1 = q * geo.Wt_lp + c0, q * geo.Wt_lp + c1
+            for m in range(len(ws) - 1):
+                a, b = max(t0, ws[m]), min(t1, ws[m + 1])
+                if a < b:
+                    n += _div_up(b - a, run_pages)
+    return n
 
 
 def combine_cost(k: int, owner: bool):
@@ -532,9 +552,11 @@ def native_keeps_up(geo: Geometry, sz: Sizes, split: Split, ring: bool, L: int):
 
 
 def select_split(geo: Geometry, sz: Sizes, n_workers: int, budget: int, ring: bool, L: int):
-    """op_design.md -> Regime / split selection. Objective: the tail after the last landing, among the splits that
-    keep up with the transport; else the smallest total; else RuntimeError."""
-    T_xfer = transfer_time(geo, sz, ring, L)
+    """op_design.md -> Regime / split selection. Objective (OVERLAP, Refinement 4): the estimated end of the call =
+    transport time of this split (packet-aware: member boundaries that cut the link runs into more packets slow the
+    packet-rate-bound ports) + the tail after the last landing, among the splits that keep up with that transport;
+    else the smallest total; else RuntimeError. With equal packet counts this is the Phase 0 tail objective."""
+    p_ref = packets_per_row(geo, [0, geo.land_w_tiles], L, sz.run_pages)  # unsplit link runs
     k_cap = min((MAX_RUNTIME_ARGS - 16) // 2, n_workers)  # port reader RT args carry 2k + O(G) values
     fits, keeps = [], []
     for k in nested_candidates(geo):
@@ -554,9 +576,10 @@ def select_split(geo: Geometry, sz: Sizes, n_workers: int, budget: int, ring: bo
         C = combine_cost(k, owner)
         total = rows_max * (w_pitch + C)
         tail = BLOCK_ROW_TILES * (w_pitch + C)
+        T_xfer = transfer_time(geo, sz, ring, L, packets_per_row(geo, ws, L, sz.run_pages) / p_ref)
         fits.append((total, rows_max, split))
         if total * TILIZED_WTILE_NS * 1e-9 <= KEEP_UP_FRACTION * T_xfer:
-            keeps.append((tail, rows_max, split))
+            keeps.append((T_xfer + tail * TILIZED_WTILE_NS * 1e-9, rows_max, split))
     if keeps:
         return min(keeps, key=lambda t: (t[0], t[1]))[2]
     if fits:

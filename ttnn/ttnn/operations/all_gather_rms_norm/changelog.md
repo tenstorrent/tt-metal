@@ -139,3 +139,49 @@
 - Tests added: 3 cases in `test_all_gather_rms_norm.py` for the row-split edges: `160x384-ring-L2-rowsplit_tail` and
   `96x384-ring-L1-rowsplit_tail` (a 1-row last item, one direction's far half empty), and `96x1792-ring-L2-rowsplit_xr1`
   (1-row items, every other far item empty).
+
+## Refinement 4 — OVERLAP: shorten the exposed tail and co-tune the split around the ports (perf, flagged cases)
+- Date: 2026-11-07
+- What was done (OVERLAP; measured with `perf_measure.py`, fastest chip, `eval.ccl_perf compare`):
+  - Breakdown first. Gated member zones (`AG_C_SUMSQ` / `AG_C_COMBINE` / `AG_C_NORM`, `AG_W_XCHG` / `AG_W_STORE`)
+    show the exposed time is the chain after the **last landing**, not a transport slowed by the local work (the last
+    landing happens at the same time as in TRANSPORT-only). Focus ~5 µs: ~1.5 exchange (the row's latest member gates
+    it) + ~0.5 combine + ~1.3 normalize + ~1 store. 640×1792 ~11 µs: normalize of 28-tile members ~5.7 µs.
+  - **x·γ pre-scale** in the combine wait (design lamp). Compute CT `prescale` (regime A, k > 1, gamma, round-robin
+    split; `prescale_on`): `BinaryFpu` Mul with gamma row-broadcast from its compact pages → `cb_x_gamma` (CB 13,
+    T_acc, one block), between the partial collapse and the combine. The normalize after the combine is one
+    bcast-col multiply. Knob `AGRMS_PRESCALE=0` for A/B. Focus 25.09 → 24.57 µs, 640×1792 (k = 8) 81.47 → 78.41 µs.
+  - **Packet-aware split objective** (`select_split`): the estimated end of the call, T_xfer(k) + tail(k)·310 ns.
+    T_xfer(k) scales the byte term by `1 + 0.55·(packets(k)/packets_ref − 1)` (`packets_per_row`: link parts cut at
+    member boundaries into run_pages chunks; `PACKET_TIME_SHARE` calibrated on 640×1792: TRANSPORT-only 76.2 µs at
+    k = 12 vs 70.0 at k = 8). keep-up uses the same T_xfer(k). With equal packet counts the selection is unchanged.
+    640×1792 L2 k = 12 owner → 8 symmetric (86.06 → 81.47 µs before the pre-scale). Off-focus checks of changed
+    selections: 640×1792 L1 k = 28 → 16 (145.0 → 108.0 µs), 640×512 L1 k = 8 → 12 (47.30 → 47.02 µs).
+  - Measured, defaults kept: `block_row_tiles` 2 (focus 28.84, 640×1792 89.57 µs; env `AGRMS_BLOCK_ROW_TILES`),
+    `out_unit` cap 1 / 2 (25.00 / 25.20 vs 25.09; env `AGRMS_OUT_UNIT_CAP`), focus k = 4 / 12 (26.01 / 34.37),
+    640×1792 k = 4 / 12-sym / 16-sym (89.2 / 87.2 / 85.2 vs 81.5 at k = 8). Per-row-group readiness: measured null
+    (the ports' own-slice wait ends 4.2–5.1 µs, before their ready fence at 4.6–10.3 µs, on every chip), not built.
+  - Not built: member-direct landing notifications (an atomic on every packet vs rule 4; only a port-notify hop on
+    the tail), the compute lookahead (no effect on the last block), and the Linear line-end notify loop (not on the
+    flagged cases, untouched).
+  - Reused: the compute pipeline (sum_squares / collapse / combine helpers), the eltwise_chain BinaryFpu path, the
+    cb_plan L1 fit check, the split candidate set. Added: `cb_x_gamma`, `prescale_gamma_block` /
+    `normalize_prescaled`, `prescale_on`, `packets_per_row`, `PACKET_TIME_SHARE`.
+- Perf (fastest chip, QB2 1×4 ring, 2 links): 640×384 [FOCUS] 25.09 → **24.57 µs** (slowest 26.53 → 25.88);
+  640×512 35.55 → **34.20 µs** (37.45 → 36.45); 640×1792 86.06 → **78.38 µs** (89.63 → 81.46). Focus TRANSPORT-only
+  19.81 µs (same build), so the exposed time went 5.27 → 4.76 µs.
+- Still binding (finding): the last landed row's chain. Focus: ~1.5 µs land → exchange complete, then combine,
+  normalize, store. 640×1792: Σx² + normalize of 28-tile members.
+- Accuracy achieved: acceptance PCC gates (bf16 0.995, fp32 0.999, bf8b 0.99) met on every unit case. The precision
+  baseline test is green: x·γ at T_acc keeps the fused chain's rounding count, also with 16-bit DEST
+  (`test_all_gather_rms_norm_fp16_dest` passes).
+- Golden test progress: slice of 176 cells (bf16, gamma bf16 RM, INTERLEAVED, both fp32_dest_acc_en, both cluster
+  axes, L = 1 / 2, Linear (the ring cells are pruned at collection here), on the shapes whose split can change:
+  640×512 / 640×896 / 640×1536 / 640×1792 / 1×640×1792, 2048×384 / 2048×1280, 128×4096, 4×1×512×512, 32×8192): 88 passed,
+  88 skipped, 0 failed. The three loose perf cases pass their golden check in `perf_measure.py`. Unit dir:
+  acceptance + precision 47 passed / 1 skipped, native shard + debug 13/13.
+- Issues encountered: `test_split_pins` pinned the old rule's 640×1792 choice (k = 12 owner). It now pins k = 8 on
+  2 links and k = 16 owner on 1 link. The owner combine stays numerically covered by the 32×1792 fp32 L1 and
+  96×1792 L2 acceptance cases.
+- Tests added: `test_split_pins` updated (4 pins + the prescale gate). `perf_ablation_all_gather_rms_norm.py` gains
+  `AGRMS_PERF_NUM_LINKS`.

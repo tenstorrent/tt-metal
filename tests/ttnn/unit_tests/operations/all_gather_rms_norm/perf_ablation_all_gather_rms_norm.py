@@ -62,6 +62,8 @@ def test_perf_ablation(inputs, axes, extras, mesh_cache, request):
     mesh = mesh_cache.get(shape, trace_region_size=ccl_perf.TRACE_REGION_SIZE)
     if os.environ.get("AGRMS_PERF_SHAPE"):
         inputs = (tuple(int(v) for v in os.environ["AGRMS_PERF_SHAPE"].split(",")),)
+    if os.environ.get("AGRMS_PERF_NUM_LINKS"):
+        axes = dict(axes, num_links=int(os.environ["AGRMS_PERF_NUM_LINKS"]))
     if os.environ.get("AGRMS_PERF_MEMORY_LAYOUT"):
         import ttnn
 
