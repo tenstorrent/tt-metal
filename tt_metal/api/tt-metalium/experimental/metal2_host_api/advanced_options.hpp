@@ -246,6 +246,13 @@ struct KernelAdvancedOptions {
 };
 
 // Describes a resource allocation within a program's SRAM arena parameter.
+//
+// With this allocation, runtime gives ownership and lifetime management of the resource's memory to the user,
+// and only places the resource in the arena. Runtime does not check for overlapping allocations in an arena.
+//
+// See these fields for more details:
+// - DFBAdvancedOptions::allocation_override: DFB placement, invariants, and overlap rules.
+// - ScratchpadAdvancedOptions::allocation_override: scratchpad placement, invariants, and overlap rules.
 struct SRAMArenaAllocation {
     // Invariant: arena identifies a parameter declared in ProgramAdvancedOptions::sram_arena_parameters.
     SRAMArenaParamName arena;
