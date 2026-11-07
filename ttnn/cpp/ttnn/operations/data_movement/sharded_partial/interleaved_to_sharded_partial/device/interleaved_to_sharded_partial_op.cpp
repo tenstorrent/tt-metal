@@ -67,6 +67,9 @@ tt::tt_metal::TensorSpec InterleavedToShardedPartialDeviceOperation::compute_out
     shape[0] = 1;
     shape[1] = 1;
     shape[2] = new_height;
+    // Slices are cut along the padded rows, but every row is copied at full width, so the output keeps
+    // the input's logical width (the TILE layout pads it back to the same tile-aligned width).
+    shape[-1] = input_tensor.logical_shape()[-1];
 
     auto mem_config = MemoryConfig(
         operation_attributes.output_mem_config.memory_layout(),
