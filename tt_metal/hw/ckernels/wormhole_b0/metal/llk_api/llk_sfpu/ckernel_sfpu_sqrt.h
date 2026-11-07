@@ -19,9 +19,11 @@ namespace sfpu {
 // Fast and accurate approximation algorithms for computing floating point square root. Numerical Algorithms (2024).
 // https://doi.org/10.1007/s11075-024-01932-7
 
-// x's bits with the sign shifted out: `_bits_without_sign_(x) != 0` is a magnitude test that
-// treats -0.0 and +0.0 alike, which a bare `as<vInt>(x) != 0` does not.
-sfpi_inline sfpi::vInt _bits_without_sign_(const sfpi::vFloat x) { return sfpi::as<sfpi::vInt>(x) << 1; }
+// Zero/nonzero magnitude-test bits: only +/-0 map to zero.
+// Float-mode SFPABS clears the sign except for -NaN, which remains nonzero.
+// Use this only for == 0 / != 0 tests, not as an unconditional sign-bit mask.
+// SFPABS is one instruction; a shift needs a copy first because x stays live.
+sfpi_inline sfpi::vInt _bits_without_sign_(const sfpi::vFloat x) { return sfpi::as<sfpi::vInt>(sfpi::abs(x)); }
 
 // Computes the square root or reciprocal square root of a positive floating point value x.
 template <bool APPROXIMATE = false, bool RECIPROCAL = false, bool FAST_APPROX = false>
@@ -133,20 +135,16 @@ inline void _calculate_sqrt_internal_() {
     }
 }
 
-bool bf16_dest_sqrt();
-template <int ITERATIONS>
-void calculate_sqrt_bf16();
-void init_sqrt_bf16();
+}  // namespace sfpu
+}  // namespace ckernel
+
+#include "ckernel_sfpu_sqrt_bf16.h"
+
+namespace ckernel {
+namespace sfpu {
+
 // Whether BF16 DEST runs the generated sqrt kernel as one call over the whole tile.
 inline constexpr bool sqrt_bf16_whole_tile = true;
-// Sets up the generated BF16 sqrt kernel for the instance it serves.
-template <bool bf16_kernel>
-inline void sqrt_bf16_tile_init() {
-    if constexpr (bf16_kernel) {
-        init_sqrt_bf16();
-    }
-}
-
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8, bool fp32_dest_acc_en, bool FAST_APPROX>
 inline void calculate_sqrt() {
     if constexpr (!fp32_dest_acc_en && !FAST_APPROX && !APPROXIMATION_MODE && ITERATIONS == 32) {
@@ -173,5 +171,3 @@ void sqrt_init() {
 
 }  // namespace sfpu
 }  // namespace ckernel
-
-#include "ckernel_sfpu_sqrt_bf16.h"

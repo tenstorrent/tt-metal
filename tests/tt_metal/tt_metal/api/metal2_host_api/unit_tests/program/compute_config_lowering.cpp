@@ -28,6 +28,7 @@ using test_helpers::MakeMinimalGen2ComputeKernel;
 using test_helpers::MakeMinimalGen2DMKernel;
 using test_helpers::MakeMinimalValidProgramSpec;
 using test_helpers::MakeMinimalWorkUnit;
+using test_helpers::ProgramSpecTestBlackhole;
 using test_helpers::ProgramSpecTestGen1;
 using test_helpers::ProgramSpecTestQuasar;
 
@@ -56,8 +57,9 @@ TEST_F(ProgramSpecTestQuasar, CPU_ComputeHardwareConfigDefaultsMapToInternalDefa
     const auto& built = std::get<experimental::quasar::QuasarComputeConfig>(built_variant);
     EXPECT_EQ(built.math_fidelity, MathFidelity::HiFi4);
     EXPECT_FALSE(built.fp32_dest_acc_en);
-    EXPECT_FALSE(built.dst_full_sync_en);  // double_buffer_dest defaults true -> !true
-    EXPECT_FALSE(built.math_approx_mode);  // sfpu_precision_mode defaults Precise
+    EXPECT_FALSE(built.dst_full_sync_en);   // double_buffer_dest defaults true -> !true
+    EXPECT_FALSE(built.math_approx_mode);   // sfpu_precision_mode defaults Precise
+    EXPECT_FALSE(built.enable_trisc0_rvv);  // config_2xx unset
 }
 
 // Gen1 counterpart of the compute-config translation-stability tests (the Gen2 pair lives in the
@@ -74,6 +76,39 @@ TEST_F(ProgramSpecTestGen1, CPU_ComputeHardwareConfigDefaultsMapToInternalDefaul
     EXPECT_FALSE(built.dst_full_sync_en);   // double_buffer_dest defaults true -> !true
     EXPECT_FALSE(built.bfp8_pack_precise);  // bfp_pack_precision_mode defaults Approximate
     EXPECT_FALSE(built.math_approx_mode);   // sfpu_precision_mode defaults Precise
+    EXPECT_FALSE(built.enable_trisc2_rvv);  // config_12x unset
+}
+
+// The generation-specific RVV opt-ins must reach the internal configs. MakeProgramFromSpec also
+// compiles, so each test runs on a mock architecture that supports its opt-in.
+TEST_F(ProgramSpecTestQuasar, CPU_Config2xxTrisc0RvvMapsToInternal) {
+    ProgramSpec spec = MakeMinimalValidProgramSpec();
+    for (auto& kernel : spec.kernels) {
+        if (kernel.is_compute_kernel()) {
+            std::get<ComputeHardwareConfig>(kernel.hw_config).config_2xx =
+                ComputeHardwareConfig::Compute2XXConfig{.enable_unpack_rvv = true};
+        }
+    }
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+
+    const auto built_variant = program.impl().get_kernel_by_spec_name("compute_kernel")->config();
+    const auto& built = std::get<experimental::quasar::QuasarComputeConfig>(built_variant);
+    EXPECT_TRUE(built.enable_trisc0_rvv);
+}
+
+TEST_F(ProgramSpecTestBlackhole, CPU_Config12xTrisc2RvvMapsToInternal) {
+    ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
+    for (auto& kernel : spec.kernels) {
+        if (kernel.is_compute_kernel()) {
+            std::get<ComputeHardwareConfig>(kernel.hw_config).config_12x =
+                ComputeHardwareConfig::Compute12XConfig{.enable_pack_rvv = true};
+        }
+    }
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+
+    const auto built_variant = program.impl().get_kernel_by_spec_name("compute_kernel")->config();
+    const auto& built = std::get<ComputeConfig>(built_variant);
+    EXPECT_TRUE(built.enable_trisc2_rvv);
 }
 
 TEST_F(ProgramSpecTestQuasar, CPU_ComputeHardwareConfigInversionAndEnumMapToInternal) {
@@ -98,7 +133,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_ComputeHardwareConfigInversionAndEnumMapToInte
 
 TEST_F(ProgramSpecTestQuasar, CPU_UnpackToDestModePlacedAtDfbIdSlot) {
     // Regression test for the unpack_to_dest_mode sizing bug: the JIT consumer
-    // iterates hal::get_num_dataflow_buffers() slots, so BuildUnpackToDestModeVector
+    // iterates the device's num_dataflow_buffers() slots, so BuildUnpackToDestModeVector
     // must size the vector to that count and place each user-supplied mode at slot dfb_id.
     // Pre-fix code sized the vector to the number of DFBs, which produced silent
     // OOB reads downstream when num_dfbs < max_dfbs.
@@ -140,7 +175,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_UnpackToDestModePlacedAtDfbIdSlot) {
     const auto built_config_variant = consumer_kernel->config();
     const auto& built_config = std::get<experimental::quasar::QuasarComputeConfig>(built_config_variant);
 
-    EXPECT_EQ(built_config.unpack_to_dest_mode.size(), tt::tt_metal::hal::get_num_dataflow_buffers());
+    EXPECT_EQ(built_config.unpack_to_dest_mode.size(), env_->get_device_properties().num_dataflow_buffers());
     EXPECT_EQ(built_config.unpack_to_dest_mode[impl.get_dfb_handle("dfb_1")], UnpackToDestMode::UnpackToDestFp32);
     EXPECT_EQ(built_config.unpack_to_dest_mode[impl.get_dfb_handle("dfb_0")], UnpackToDestMode::Default);
 }

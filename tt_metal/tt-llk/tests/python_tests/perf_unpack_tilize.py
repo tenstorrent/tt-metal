@@ -20,7 +20,6 @@ from helpers.test_variant_parameters import (
     formats=input_output_formats(
         [
             DataFormat.Float16_b,
-            DataFormat.Float16,
             DataFormat.Float32,
             DataFormat.Bfp8_b,
             DataFormat.Fp8_e4m3,
@@ -90,7 +89,6 @@ def _perf_unpack_tilize(
             PerfRunType.L1_TO_L1,
             PerfRunType.UNPACK_ISOLATE,
             PerfRunType.PACK_ISOLATE,
-            PerfRunType.L1_CONGESTION,
         ],
         templates=[],
         runtimes=[

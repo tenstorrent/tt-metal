@@ -7,6 +7,7 @@
 #include <cstddef>
 #include <cstdint>
 #include "dataflow_buffer_config.h"
+#include "core_config.h"  // MaxDMProcessorsPerCoreType, ReservedDMProcessorsPerCoreType
 #ifndef COMPILE_FOR_TRISC
 #include "internal/tt-2xx/quasar/overlay/remapper_api.hpp"
 #endif
@@ -15,51 +16,65 @@
 struct LocalDFBInterface;
 struct TxnDFBDescriptor;
 
-// Global DFB interface array
-#if defined(COMPILE_FOR_TRISC) && defined(UCK_CHLKC_PACK)
-extern thread_local LocalDFBInterface g_dfb_interface[dfb::MAX_ACTIVE_DFBS_PACK];
+// Global DFB interface array. Compute TRISCs keep only the active DFBs, in a compact array reached
+// through g_dfb_logical_to_compact; DM harts index by logical id.
+#if defined(COMPILE_FOR_TRISC)
+extern thread_local LocalDFBInterface g_dfb_interface[dfb::MAX_ACTIVE_DFBS_TRISC];
 extern thread_local uint8_t g_dfb_logical_to_compact[dfb::NUM_DFBS];
 #else
 extern thread_local LocalDFBInterface g_dfb_interface[dfb::NUM_DFBS];
 #endif
 
-// Cached L1 byte address of the DFB config region; set once during setup_local_dfb_interfaces
-// so DataflowBuffer::DataflowBuffer() can call dfb_ensure_ready without a separate parameter.
+// Cached L1 byte address of the DFB config region, or 0 when the launch has no DFBs; set by
+// setup_local_dfb_interfaces so DataflowBuffer::DataflowBuffer() can call dfb_ensure_ready without a
+// separate parameter.
 extern thread_local uintptr_t g_dfb_config_base_addr;
 #ifndef COMPILE_FOR_TRISC
 extern volatile TxnDFBDescriptor g_txn_dfb_descriptor[32];
 extern overlay::RemapperAPI g_remapper_configurator;
 #endif
 
-#if defined(COMPILE_FOR_TRISC) && defined(UCK_CHLKC_PACK)
-
-// ring_size is uint32 L1-aligned units so a DFB can span full Quasar L1 (~4 MB).
-// Cursor byte-offset is not stored: it is derived from wr_entry_idx (advances in lockstep
-// with stride_size / stride_size_tiles).
+#if defined(COMPILE_FOR_TRISC)
+// Compute-thread slot (pack and unpack). ring_size is uint32 L1-aligned units so a DFB can span
+// full Quasar L1 (~4 MB). cursor_entry_idx is the write cursor on pack and the read cursor on
+// unpack; its byte offset is not stored but derived (advances in lockstep with stride_size /
+// stride_size_tiles).
 struct DFBTCSlot {
     uint32_t base_addr;
     uint32_t ring_size;
-    uint16_t wr_entry_idx;
+    uint16_t cursor_entry_idx;
     uint16_t base_entry_idx;
     dfb::PackedTileCounter packed_tile_counter;
 } __attribute__((packed));
+#else
+struct DFBTCSlot {
+    uint32_t ptr;
+    uint32_t base_addr;
+    uint32_t limit;
+    dfb::PackedTileCounter packed_tile_counter;
+    uint8_t _align[3];  // pad 13 → 16B so every slot in tc_slots[] is 4B-aligned
+};
 
-extern thread_local DFBTCSlot g_dfb_tc_slots[dfb::MAX_PACK_TC_SLOTS];
+#endif
 
-// Preserve the iface.tc_slots[i] API while allocating only the slots each active Pack DFB needs.
-// slot_base indexes that DFB's contiguous slice of g_dfb_tc_slots.
+#if defined(COMPILE_FOR_TRISC)
+static_assert(sizeof(DFBTCSlot) == 13, "DFBTCSlot (TRISC) size is incorrect");
+// Compute TRISCs draw their tile-counter slots from one shared pool per thread, so an interface entry
+// holds only the index of its contiguous slice (slot_base) and keeps the iface.tc_slots[i] API.
+extern thread_local DFBTCSlot g_dfb_tc_slots[dfb::MAX_TRISC_TC_SLOTS];
 struct DFBTCSlotSpan {
     uint8_t slot_base;
-
     inline __attribute__((always_inline)) DFBTCSlot& operator[](uint32_t index) {
         return g_dfb_tc_slots[slot_base + index];
     }
-
     inline __attribute__((always_inline)) const DFBTCSlot& operator[](uint32_t index) const {
         return g_dfb_tc_slots[slot_base + index];
     }
 } __attribute__((packed));
+static_assert(sizeof(DFBTCSlotSpan) == 1, "DFBTCSlotSpan size is incorrect");
+#endif
 
+#if defined(COMPILE_FOR_TRISC) && defined(UCK_CHLKC_PACK)
 struct LocalDFBInterface {
     uint16_t entry_size;
     uint16_t stride_size;
@@ -73,22 +88,8 @@ struct LocalDFBInterface {
     uint16_t jump;        // cursor jump in entries, taken on each TC rotation
     DFBTCSlotSpan tc_slots;
 } __attribute__((packed));
-
-static_assert(sizeof(DFBTCSlot) == 13, "DFBTCSlot (pack TRISC) size is incorrect");
-static_assert(sizeof(DFBTCSlotSpan) == 1, "DFBTCSlotSpan (pack TRISC) size is incorrect");
 static_assert(sizeof(LocalDFBInterface) == 18, "LocalDFBInterface (pack TRISC) size is incorrect");
-
 #elif defined(COMPILE_FOR_TRISC)
-
-// Same compact layout as pack: uint32 ring_size, cursor offset derived from rd_entry_idx.
-struct DFBTCSlot {
-    uint32_t base_addr;
-    uint32_t ring_size;
-    uint16_t rd_entry_idx;
-    uint16_t base_entry_idx;
-    dfb::PackedTileCounter packed_tile_counter;
-} __attribute__((packed));
-
 struct LocalDFBInterface {
     uint16_t entry_size;
     uint16_t stride_size;
@@ -100,24 +101,10 @@ struct LocalDFBInterface {
     uint16_t block_size;
     uint16_t split_tc;
     uint16_t jump;
-    DFBTCSlot tc_slots[dfb::MAX_NUM_TILE_COUNTERS_TO_RR];
+    DFBTCSlotSpan tc_slots;
 } __attribute__((packed));
-
-static_assert(sizeof(DFBTCSlot) == 13, "DFBTCSlot (unpack TRISC) size is incorrect");
-static_assert(sizeof(LocalDFBInterface) == 94, "LocalDFBInterface (unpack TRISC) size is incorrect");
-
+static_assert(sizeof(LocalDFBInterface) == 17, "LocalDFBInterface (unpack TRISC) size is incorrect");
 #else
-
-// Per–tile-counter slot (DM). A DM hart is either producer or consumer of a DFB, never both, so
-// one cursor (`ptr`) serves as its write or read pointer.
-struct DFBTCSlot {
-    uint32_t ptr;
-    uint32_t base_addr;
-    uint32_t limit;
-    dfb::PackedTileCounter packed_tile_counter;
-    uint8_t _align[3];  // pad 13 → 16B so every slot in tc_slots[] is 4B-aligned
-};
-
 struct LocalDFBInterface {
     uint32_t entry_size;
     uint32_t stride_size;
@@ -146,13 +133,43 @@ struct LocalDFBInterface {
 static_assert(sizeof(DFBTCSlot) == 16, "DFBTCSlot size is incorrect");
 static_assert(sizeof(LocalDFBInterface) == 128, "LocalDFBInterface size is incorrect");
 
+namespace dfb {
+constexpr uint8_t NUM_KERNEL_DM_HARTS = MaxDMProcessorsPerCoreType - ReservedDMProcessorsPerCoreType;
+static_assert(NUM_KERNEL_DM_HARTS == MAX_PRODUCERS_PER_DFB, "kernel DMs and DFB producer slots must agree");
+}  // namespace dfb
+
+// Implicit-sync progress of this DM on one DFB. A DM hart is either a producer or a consumer of a given DFB,
+// never both (DM self-loops are rejected), so one struct covers whichever side it is.
+// Firmware hands it to DM0 when the kernel returns and zeroes it for the next launch (dfb_dm_kernel_exit).
+struct DFBImplicitProgress {
+    uint16_t loop;      // completed txn-id batches, mod 2^16 like the tile counters
+    uint8_t pos;        // entries issued into the current batch, < num_entries_per_txn_id
+    uint8_t share;      // entries per op; DM0 needs it to split the last batch over the counters
+    uint8_t txn_idx;    // index into txn_ids[] of the current batch
+    uint8_t share_pos;  // STRIDED side: entries of the current op issued so far
+    uint8_t _pad[2];
+};
+static_assert(sizeof(DFBImplicitProgress) == 8, "DFBImplicitProgress size is incorrect");
+extern thread_local DFBImplicitProgress g_dfb_progress[dfb::NUM_DFBS];
+
+// Kernel-exit handoff from each kernel DM to DM0.
+// A record holds a DM's loop, pos and share on one implicit-sync DFB side, indexed by the
+// side's lowest txn id. A DM signals that its records are written through its run state
+// (RUN_SYNC_MSG_DFB_DRAINING). The run state alone is not enough: DM0 can read a DM's DONE from
+// before it started this launch. So a slot holds DFB_EXIT_RECORD_NONE until its DM writes it, and
+// DM0 puts DFB_EXIT_RECORD_NONE back once it has used the record, or at the end of the launch for a side
+// it never flushed.
+extern uint32_t g_dfb_exit_record[dfb::NUM_KERNEL_DM_HARTS][NUM_DFB_POOL_TXN_IDS];
+// Never a record: pos is below num_entries_per_txn_id, which is at most 255.
+constexpr uint32_t DFB_EXIT_RECORD_NONE = 0xFFFFFFFFu;
+
 #endif
 
 #if defined(COMPILE_FOR_TRISC)
 // Byte-offset (L1 units) of the current FIFO cursor from slot.base_addr.
-// wr/rd_entry_idx and the former wr/rd_offset advance in lockstep:
+// cursor_entry_idx and the former byte offset advance in lockstep:
 //   entry += n * stride_size_tiles;  offset += n * stride_size;
-// so offset is recoverable without storing it (saves 4B/slot on pack TLS).
+// so offset is recoverable without storing it (saves 4B/slot in compute-TRISC TLS).
 inline __attribute__((always_inline)) uint32_t
 dfb_slot_cursor_offset_units(const LocalDFBInterface& intf, const DFBTCSlot& slot, uint32_t entry_idx) {
     const uint32_t delta_entries = entry_idx - static_cast<uint32_t>(slot.base_entry_idx);
@@ -161,7 +178,7 @@ dfb_slot_cursor_offset_units(const LocalDFBInterface& intf, const DFBTCSlot& slo
 #endif
 
 inline LocalDFBInterface& get_local_dfb_interface(uint32_t logical_dfb_id) {
-#if defined(COMPILE_FOR_TRISC) && defined(UCK_CHLKC_PACK)
+#if defined(COMPILE_FOR_TRISC)
     return g_dfb_interface[g_dfb_logical_to_compact[logical_dfb_id]];
 #else
     return g_dfb_interface[logical_dfb_id];
@@ -178,7 +195,8 @@ struct TxnDFBDescriptor {
         uint8_t tiles_to_post;
         uint8_t tiles_to_ack;
     } __attribute__((packed));
-    uint8_t _pad[12];  // pad 20 → 32 bytes
+    dfb_dm0_finish_info_t finish;  // read only by DM0's kernel-exit flush, not by the ISR
+    uint8_t _pad[9];               // pad 23 → 32 bytes
 };
 static_assert(sizeof(TxnDFBDescriptor) == 32, "TxnDFBDescriptor size is incorrect");
 static_assert(
@@ -193,3 +211,6 @@ static_assert(
 static_assert(
     offsetof(TxnDFBDescriptor, tiles_to_post) == offsetof(dfb_dm0_txn_descriptor_image_t, tiles_to_post_or_ack),
     "TxnDFBDescriptor tiles_to_post must match dfb_dm0_txn_descriptor_image_t tiles_to_post_or_ack");
+static_assert(
+    offsetof(TxnDFBDescriptor, finish) == offsetof(dfb_dm0_txn_descriptor_image_t, finish),
+    "TxnDFBDescriptor finish must match dfb_dm0_txn_descriptor_image_t finish");
