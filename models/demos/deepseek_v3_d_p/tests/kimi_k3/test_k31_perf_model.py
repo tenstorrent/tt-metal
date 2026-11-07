@@ -56,18 +56,14 @@ def test_finish_hand_values():
             matmul_flop=3 * 4096,  # 3 LoFi cycles, x2 at HiFi2 -> 6 core-cycles
             fidelity="HiFi2",
             eltwise=5 * 128,  # 5 core-cycles
-            topk_elements=3 * 1000,  # 3 rows of 1000 on 2 cores -> 2 rows on the busiest core
-            topk_rows=3,
+            topk_ns=7.0,  # measured time, added to compute as is
             dram_bytes=1024,
             dram_bytes_cons=4096,
         ),
         hw,
     )
     assert op.fpu_ns == pytest.approx((6 + 5) / 2)
-    # Measured: 160 rows on 120 cores (2 rows per core); one more score per row costs (4,768.3 - 128.4) us /
-    # (1,064,960 - 5,120) on the busiest core's 2 rows.
-    assert op.topk_ns == pytest.approx(2 * 1000 / (2 * (1_064_960 - 5120) / (4_768_300 - 128_400)))
-    assert op.compute_ns == pytest.approx(op.fpu_ns + op.topk_ns)
+    assert op.compute_ns == pytest.approx((6 + 5) / 2 + 7.0)
     assert op.dram_ns == pytest.approx(2.0)
     assert op.dram_cons_ns == pytest.approx(8.0)
 
@@ -89,20 +85,29 @@ def test_dsa_core_target_doubles_only_modelled_work():
     assert e.target_ns == max(2 * max(fpu, dram, fabric) + measured, e.conservative_ns)
 
 
-def test_indexer_score_fixed_cost_reproduces_its_measurement():
-    # The fused indexer score program (index-K ring gather + score) measured 174.7 us at prefix 0 (ao3i.2.2);
-    # the conservative model with the fixed cost reproduces it there, and the cost is added once per layer.
+def test_indexer_score_fixed_cost_reproduces_its_floor():
+    # The fused indexer score program (index-K ring gather + score): every chip took >= 128.2 us at prefix 0
+    # (ao3i.2.2); the conservative model of the fused pair with the fixed cost reproduces that floor.
     ops = {o.name: o for o in m.dsa_ops(prefix=0)}
     fused = sum(ops[n].roofline_cons_ns + ops[n].fabric_cons_ns for n in ("index_k_gather", "index_score"))
-    assert fused == pytest.approx(174_700, abs=100)
-    assert ops["index_score"].fixed_ns > 0
+    assert fused == pytest.approx(128_200, abs=100)
 
 
-@pytest.mark.parametrize("prefix, bound_ns", [(0, 128_400), (1_059_840, 4_768_300)])
-def test_topk_reproduces_its_measured_bounds(prefix, bound_ns):
-    # The top-k model is the line through its two timeline bounds (ao3i.2.2): 5,120 and 1,064,960 scores per row.
-    op = next(o for o in m.dsa_ops(prefix=prefix) if o.name == "index_topk")
-    assert op.topk_ns + op.fixed_ns == pytest.approx(bound_ns)
+@pytest.mark.parametrize(
+    "prefix, topk_us, gather_us",
+    [
+        (0, 128.4, 57.3),  # the top-k outlasts the gather
+        # (160 x 1,064,960 bf16 scores + 160 x 2,048 int32 indices) / 512 GB/s = 668.2 us of DRAM; the gather hides it
+        (1_059_840, 668.2, 9027.0),
+    ],
+)
+def test_topk_and_kvpe_gather_count_once(prefix, topk_us, gather_us):
+    # They run concurrently on separate sub-devices: the conservative core holds the longer of the two, not both.
+    e = m.dsa_core(prefix)
+    each = {o.name: (o.roofline_cons_ns + o.fabric_cons_ns) / 1e3 for o in e.ops}
+    assert each["index_topk"] == pytest.approx(topk_us, abs=1.0)
+    assert each["kvpe_gather"] == pytest.approx(gather_us, abs=1.0)
+    assert e.conservative_ns / 1e3 == pytest.approx(sum(each.values()) - min(topk_us, gather_us), abs=2.0)
 
 
 def _hand_anchor():
