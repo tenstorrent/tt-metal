@@ -35,29 +35,30 @@ from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import NUM_FACES, TILE_COUNT
 from helpers.utils import passed_test, result_tensor
 
-# WEDGES REAL BLACKHOLE — skipped on all backends. BH-card tt-exalens callstacks: MATH stalls
-# in _llk_math_pack_sync_init_->tensix_sync (the Tensix pipe won't drain) during the cleanup,
-# while UNPACK (hw_cleanup::finish) and PACK (hw_cleanup::start) block on the MATH-orchestrated
-# three-thread mailbox rendezvous waiting for it. The hw_cleanup LLK is correct for its real
-# (model-level) usage; the gap is test-side -- this standalone driver fires three independent
-# run_kernels and does not reproduce the compute-kernel framework's ordering/preconditions the
-# rendezvous is written against. ttsim can't model it either (UnimplementedFunctionality:
-# tensix_cfg_wr32 reg=281, the cfg-bank reprogram). A hang cascades on hardware, so keep it
-# skipped until the test supplies that framework context.
-pytestmark = [
-    blackhole_only,
-    pytest.mark.skip(
-        reason="Wedges real BH: standalone test doesn't reproduce the framework flow-control the "
-        "hw_cleanup three-thread mailbox rendezvous needs (the LLK itself is model-proven). "
-        "ttsim also can't model the cfg-bank reprogram (reg 281)."
-    ),
-]
+pytestmark = blackhole_only
+
+# WEDGES REAL BLACKHOLE — applied to the on-device test (test_hw_cleanup) only, which is therefore
+# skipped on all backends; the build-only test below is collected and compiles. BH-card tt-exalens
+# callstacks: MATH stalls in _llk_math_pack_sync_init_->tensix_sync (the Tensix pipe won't drain)
+# during the cleanup, while UNPACK (hw_cleanup::finish) and PACK (hw_cleanup::start) block on the
+# MATH-orchestrated three-thread mailbox rendezvous waiting for it. The hw_cleanup LLK is correct
+# for its real (model-level) usage; the gap is test-side -- this standalone driver fires three
+# independent run_kernels and does not reproduce the compute-kernel framework's
+# ordering/preconditions the rendezvous is written against. ttsim can't model it either
+# (UnimplementedFunctionality: tensix_cfg_wr32 reg=281, the cfg-bank reprogram). A hang cascades
+# on hardware, so keep the on-device test skipped until it supplies that framework context.
+_WEDGES_REAL_BLACKHOLE = pytest.mark.skip(
+    reason="Wedges real BH: standalone test doesn't reproduce the framework flow-control the "
+    "hw_cleanup three-thread mailbox rendezvous needs (the LLK itself is model-proven). "
+    "ttsim also can't model the cfg-bank reprogram (reg 281)."
+)
 
 # Single config: the canonical geometry cleanup itself restores (one 32x32 tile,
 # four faces, Float16_b in and out).
 NUM_FACES_VALUE = 4
 
 
+@_WEDGES_REAL_BLACKHOLE
 @parametrize(
     formats=input_output_formats([DataFormat.Float16_b]),
     dest_acc=[DestAccumulation.No],
@@ -110,3 +111,63 @@ def test_hw_cleanup(formats, dest_acc, input_dimensions):
     # All 1024 lanes of the single tile are defined (full identity datacopy), so
     # validate the whole tile at the Float16_b format tolerance.
     assert passed_test(golden_tensor, res_tensor, formats.output_format)
+
+
+def test_hw_cleanup_builds_at_o2():
+    """Guards the -O2 build of the hw_cleanup driver.
+
+    tt-metal builds compute kernels at -O3 by default but lets a kernel choose O0/O1/O2/Os/Oz
+    (``KernelBuildOptLevel``). ``addr_mod_t::set()`` expands to SETC16 with an immediate
+    operand, so its index has to be a compile-time constant; a runtime-indexed loop over it
+    only compiled because -O3 happened to unroll it completely, and was a hard
+    "impossible constraint in asm" error at -O2. This builds the same driver at -O2
+    (``sources/hw_cleanup_o2_build_test.cpp``) and never runs it.
+
+    Only -O2 is guarded; the other levels are not swept here. -O0, -Os and -Oz do not build
+    this translation unit with or without the constant-index calls: at those levels the
+    SETC16 value operands of every ``addr_mod_t::set()`` caller (the datacopy init included)
+    fail the same asm constraint, and at -O0 so do other immediate-operand instructions
+    (SETRWC, SEMPOST). That is a property of the instruction macros, not of the hw_cleanup
+    header.
+    """
+    formats = input_output_formats([DataFormat.Float16_b])[0]
+    input_dimensions = [32, 32]
+    src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
+        stimuli_format_A=formats.input_format,
+        input_dimensions_A=input_dimensions,
+        stimuli_format_B=formats.input_format,
+        input_dimensions_B=input_dimensions,
+    )
+    configuration = TestConfig(
+        "sources/hw_cleanup_o2_build_test.cpp",
+        formats,
+        runtimes=[
+            TILE_COUNT(tile_cnt_A),
+            NUM_FACES(NUM_FACES_VALUE),
+        ],
+        variant_stimuli=StimuliConfig(
+            src_A,
+            formats.input_format,
+            src_B,
+            formats.input_format,
+            formats.output_format,
+            tile_count_A=tile_cnt_A,
+            tile_count_B=tile_cnt_B,
+            tile_count_res=tile_cnt_A,
+            num_faces=NUM_FACES_VALUE,
+        ),
+        dest_acc=DestAccumulation.No,
+    )
+    # Build only: the assertion is that the -O2 build succeeds.
+    configuration.prepare()
+
+    elf_dir = (
+        TestConfig.ARTEFACTS_DIR
+        / configuration.test_name
+        / configuration.variant_id
+        / "elf"
+    )
+    missing = [
+        n for n in ("unpack", "math", "pack") if not (elf_dir / f"{n}.elf").is_file()
+    ]
+    assert not missing, f"-O2 build did not produce {missing} (looked in {elf_dir})"
