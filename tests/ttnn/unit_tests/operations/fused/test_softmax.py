@@ -1482,3 +1482,104 @@ def test_scale_mask_softmax_scale_not_exact_in_float32(device, scale):
 
     assert torch.equal(output, expected)
     assert torch.allclose(output, torch_output, atol=1e-2)
+
+
+@pytest.mark.parametrize("start_coord", [(0, 0), (1, 0), (0, 1)])
+@pytest.mark.parametrize("orientation", [ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR])
+@pytest.mark.parametrize("mask_kind", ["none", "broadcast"])
+def test_softmax_sharded_offset_core_grids(device, start_coord, orientation, mask_kind):
+    """Regression test for Issue #64575: height-sharded softmax on core grids offset from (0, 0).
+    Verifies that work units and runtime args are emitted for the actual shard grid rather
+    than assuming origin (0, 0), and compares results shard-by-shard against PyTorch golden.
+    """
+    torch.manual_seed(0)
+
+    # 2x2 grid of cores (4 cores total)
+    grid_w, grid_h = 2, 2
+    num_cores = grid_w * grid_h
+    start_x, start_y = start_coord
+    end_x, end_y = start_x + grid_w - 1, start_y + grid_h - 1
+
+    device_grid = device.compute_with_storage_grid_size()
+    if end_x >= device_grid.x or end_y >= device_grid.y:
+        pytest.skip(f"Offset grid [{start_x}..{end_x}, {start_y}..{end_y}] exceeds device grid ({device_grid.x}, {device_grid.y})")
+
+    block_h = 2
+    block_w = 4
+    subblock_w = 2
+    H = 32 * block_h * num_cores
+    W = 32 * block_w
+    scale = 0.125
+    in_dtype = ttnn.bfloat16
+
+    torch_input = torch.randn((1, 1, H, W), dtype=torch.bfloat16) * 4
+    if mask_kind == "none":
+        torch_input = torch_input * scale
+
+    torch_mask = torch.zeros((1, 1, 1, W), dtype=torch.bfloat16)
+    torch_mask[..., W // 2 :] = -1e4
+
+    grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(start_x, start_y), ttnn.CoreCoord(end_x, end_y))})
+    shard_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(grid, [H // num_cores, W], orientation),
+    )
+    program_config = ttnn.SoftmaxShardedMultiCoreProgramConfig(
+        compute_with_storage_grid_size=(grid_w, grid_h),
+        subblock_w=subblock_w,
+        block_h=block_h,
+        block_w=block_w,
+    )
+
+    ttnn_input = ttnn.from_torch(
+        torch_input, dtype=in_dtype, layout=ttnn.TILE_LAYOUT, device=device, memory_config=shard_config
+    )
+    device_input = ttnn.to_torch(ttnn.to_memory_config(ttnn_input, ttnn.DRAM_MEMORY_CONFIG)).float()
+
+    if mask_kind == "none":
+        torch_output = F.softmax(device_input, dim=-1)
+        ttnn_output = ttnn.softmax_in_place(ttnn_input, program_config=program_config)
+    else:
+        torch_output = F.softmax(device_input * scale + torch_mask.float(), dim=-1)
+        ttnn_mask = ttnn.from_torch(torch_mask, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+        ttnn_output = ttnn.scale_mask_softmax_in_place(ttnn_input, scale, ttnn_mask, program_config=program_config)
+
+    ttnn_output_torch = ttnn.to_torch(ttnn.to_memory_config(ttnn_output, ttnn.DRAM_MEMORY_CONFIG)).float()
+
+    # Full tensor check
+    row_sums = ttnn_output_torch.sum(dim=-1)
+    assert torch.allclose(row_sums, torch.ones_like(row_sums), atol=0.02), f"row sums {row_sums.min()}..{row_sums.max()}"
+    assert_numeric_metrics(
+        torch_output,
+        ttnn_output_torch,
+        pcc_threshold=0.999,
+        rtol=0.09,
+        atol=0.01,
+        frobenius_threshold=0.05,
+    )
+
+    # Shard-by-shard verification: ensure every single shard was updated and matches PyTorch golden
+    shard_h = H // num_cores
+    for shard_idx in range(num_cores):
+        start_row = shard_idx * shard_h
+        end_row = (shard_idx + 1) * shard_h
+
+        ttnn_shard = ttnn_output_torch[..., start_row:end_row, :]
+        torch_shard = torch_output[..., start_row:end_row, :]
+        input_shard = device_input[..., start_row:end_row, :]
+
+        # Verify shard is not left unchanged (bug symptom on offset grids)
+        assert not torch.allclose(ttnn_shard, input_shard, atol=1e-3), (
+            f"Shard {shard_idx} was left unchanged with raw input logits!"
+        )
+
+        # Verify shard matches PyTorch golden within tolerances
+        assert_numeric_metrics(
+            torch_shard,
+            ttnn_shard,
+            pcc_threshold=0.999,
+            rtol=0.09,
+            atol=0.01,
+            frobenius_threshold=0.05,
+        )
