@@ -15,7 +15,8 @@ token prefix and reads the first chunk's cache), every output and cache finite, 
 the same sequence bit-identical to the first. In the DSA-only window, chunk 1's output must change when only
 chunk 0's tokens do: the stack-level proof that a later chunk reads the earlier chunks' kvpe cache. It does
 not prove the index-key read (an indexer ignoring its cached keys would still pass); that is left to
-`sparse_mla/test_sparse_mla.py`'s chunked kimi_k3_1 case against the CPU reference (not in CI; see ao3i.6).
+`sparse_mla/test_sparse_mla.py`'s chunked kimi_k3_1 case against the CPU reference (CI: the Kimi-K3 accuracy
+suite, `k3_accuracy_suite` section [5/5] `k31_dsa_mla`, in tests/pipeline_reorg/blaze_models_prefill_tests.yaml).
 
 Synthetic weights from `synthetic.py`, with its one substitution: every layer's FFN is K3's dense FFN
 (a synthetic LatentMoE layer is ~59 GB; the MoE is unchanged from K3 and covered by K3's tests).

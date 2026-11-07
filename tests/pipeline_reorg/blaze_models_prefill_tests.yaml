@@ -304,7 +304,7 @@
   # galaxy allocations were spending ~22 min of setup to run ~7 min of tests. Measured test-step
   # times on run 36717057668: 77 / 150 / 114 / 92 s.
   #
-  # fabric_profile torus_xy is required by [2/4]..[4/4]. [1/4] is host-only -- no mesh device, no
+  # fabric_profile torus_xy is required by [2/5]..[5/5]. [1/5] is host-only -- no mesh device, no
   # fabric -- and rides along for free rather than paying its own setup. It keeps its mpirun wrapper:
   # the runner's container hook drives the step through its host-execution path and does not handle
   # a bare command (it failed 4 runs out of 4, 0 s in, before pytest ran).
@@ -409,7 +409,7 @@
     echo "===== all 5 sections passed ====="
   test_type: k3_accuracy_suite
   # Per-section tokens retained: `-f test-type=<old token>` still selects this job.
-  test_tags: [kimi_k3, kda, mla, determinism, k3_contracts, k3_kda, k3_mla, k3_mla_trace, sparse_mla, k31_sparse_mla]
+  test_tags: [kimi_k3, kimi_k3_1, kda, mla, determinism, k3_contracts, k3_kda, k3_mla, k3_mla_trace, sparse_mla, k31_sparse_mla]
   test_group: module
   skus:
     bh_sc1:
