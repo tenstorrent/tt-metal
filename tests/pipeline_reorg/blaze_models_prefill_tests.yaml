@@ -396,7 +396,7 @@
     k3_mla || exit $?
     echo "===== [4/5] (Kimi-K3-2.8T) MLA chunked accuracy 55k@5k vs golden trace ====="
     k3_mla_trace || exit $?
-    echo "===== [5/5] (Kimi-K3.1) sparse MLA accuracy, chunked, pad-overflow and determinism 5k ====="
+    echo "===== [5/5] (Kimi-K3.1) sparse MLA accuracy, chunked, pad-overflow, determinism 5k and at production shapes ====="
     k31_sparse_mla || exit $?
     echo "===== all 5 sections passed ====="
   test_type: k3_accuracy_suite
@@ -684,7 +684,7 @@
       '
     )
 
-    echo "===== [1/5] (GLM-5.3-744B) sparse MLA accuracy + determinism, incl. chunked 5k@1k ====="
+    echo "===== [1/5] (GLM-5.3-744B) sparse MLA accuracy + determinism, incl. chunked 5k@1k and production-shape determinism ====="
     glm_dsa_mla || exit $?
     echo "===== [2/5] (GLM-5.3-744B) sparse KV push plan + push, incl. real 1M top-k ====="
     glm_sparse_kv_push || exit $?

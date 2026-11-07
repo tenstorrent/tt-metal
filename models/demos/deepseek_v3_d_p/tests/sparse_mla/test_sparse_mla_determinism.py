@@ -5,16 +5,17 @@
 scaled by SP on smaller boxes), the scaled-FP8 KVPE cache, each model's fabric packet size, for K3.1 (last DSA layer's
 slot of 24), GLM-5.3 (last full indexer layer) and a GLM-5.3 shared layer.
 
-Like the ring joint SDPA determinism tests, each case runs RUNS forwards back to back with every output kept on device
-(no sync or readback in between, so runs overlap as in production), then syncs once and compares: every eager output
-must equal the first bit for bit. The same for RUNS replays of one captured trace (each replay's output cloned on
-device, since every replay writes the same buffer), and the traced output must equal the eager one.
+Like the ring joint SDPA determinism tests, each case enqueues RUNS forwards back to back with every output kept on
+device (no host sync or readback in between), then syncs once and compares: every eager output must equal the first
+bit for bit. The same for RUNS replays of one captured trace, each copied on device into a buffer allocated before the
+capture (every replay writes the same output buffer), and the traced output must equal the eager one.
 
 Prefixes:
   * zero: the perf gate's caches, zero-initialised. The indexer then scores the whole prefix equally, so top-k breaks
     many ties.
   * filled: the prefix written by real chunk forwards of distinct inputs, as in production (warm only: the long prefix
-    would take 100 forwards).
+    would take 100 forwards). Not for the GLM-5.3 shared layer: its top-k comes from a full layer's forward at the
+    final start, so it cannot run the earlier chunks.
 """
 
 import pytest
@@ -42,6 +43,29 @@ RUNS = 10
 PREFIXES = [("warm", "zero"), ("warm", "filled"), ("long", "zero")]
 
 
+def _params():
+    """The perf gate's cases x PREFIXES, without a filled prefix for a shared layer."""
+    params = []
+    for gate in _gate_params():
+        mesh, dp, variant, case_name = gate.values
+        for scenario, prefix in PREFIXES:
+            if prefix == "filled" and GATE_CASES.get(case_name, (None, False))[1]:
+                continue
+            params.append(
+                pytest.param(
+                    mesh,
+                    dp,
+                    variant,
+                    case_name,
+                    scenario,
+                    prefix,
+                    marks=gate.marks,
+                    id=f"{gate.id}-{scenario}-{prefix}",
+                )
+            )
+    return params
+
+
 def _fill_prefix(mesh_device, case, cache: int, chunk: int, hidden_size: int):
     """Write the prefix [0, cache) with chunk forwards of distinct inputs, like a real prefill before `cache`."""
     x = case.x
@@ -55,28 +79,30 @@ def _fill_prefix(mesh_device, case, cache: int, chunk: int, hidden_size: int):
                 layout=ttnn.TILE_LAYOUT,
                 mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=[-2, -1]),
             )
-            ttnn.deallocate(case.forward(start))
-            ttnn.deallocate(case.x)
+            try:
+                ttnn.deallocate(case.forward(start))
+            finally:
+                ttnn.deallocate(case.x)
     finally:
         case.x = x
     ttnn.synchronize_device(mesh_device)
 
 
-def _read_back(mesh_device, outputs):
-    """Sync once, then read each kept output back per device and free it."""
-    ttnn.synchronize_device(mesh_device)
-    host = []
-    for out in outputs:
-        host.append(_device_tensors(out))
-        ttnn.deallocate(out)
-    return host
-
-
 def _eager_outputs(mesh_device, case, start):
-    return _read_back(mesh_device, [case.forward(start) for _ in range(RUNS)])
+    """RUNS forwards back to back, every output kept on device; then one sync and the per-device outputs."""
+    outputs = []
+    try:
+        for _ in range(RUNS):
+            outputs.append(case.forward(start))
+        ttnn.synchronize_device(mesh_device)
+        return [_device_tensors(out) for out in outputs]
+    finally:
+        for out in outputs:
+            ttnn.deallocate(out)
 
 
 def _replay_outputs(mesh_device, case, start):
+    """RUNS replays of one captured forward back to back, each copied on device; then one sync and the outputs."""
     controller = SubDeviceTraceController(mesh_device)
     case.mla.set_trace_controller(controller)
     capture_out, capturing, outputs = None, False, []
@@ -84,22 +110,25 @@ def _replay_outputs(mesh_device, case, start):
         # Compile under the controller, and allocate each replay's copy now: a buffer allocated while the trace is
         # live can land on its scratch and be overwritten by the next replay.
         out = case.forward(start)
-        outputs = [ttnn.clone(out) for _ in range(RUNS)]
-        ttnn.deallocate(out)
+        try:
+            for _ in range(RUNS):
+                outputs.append(ttnn.clone(out))
+        finally:
+            ttnn.deallocate(out)
         ttnn.synchronize_device(mesh_device)
         controller.begin_capture()
         capturing = True
         capture_out = case.forward(start)
         controller.end_capture()
         capturing = False
-        for copy in outputs:
-            controller.replay()
+        for copy in outputs:  # same CQ: each copy runs after its replay, before the next replay
+            controller.replay(sync=False)
             ttnn.copy(capture_out, copy)
-        outputs, kept = [], outputs
-        return _read_back(mesh_device, kept)
+        ttnn.synchronize_device(mesh_device)
+        return [_device_tensors(copy) for copy in outputs]
     finally:
-        for out in outputs:
-            ttnn.deallocate(out)
+        for copy in outputs:
+            ttnn.deallocate(copy)
         if capturing:
             try:
                 controller.end_capture()
@@ -113,11 +142,21 @@ def _replay_outputs(mesh_device, case, start):
                 ttnn.deallocate(capture_out)
 
 
-def _differences(what, reference, outputs):
+def _bit_equal(a, b):
+    """Bitwise equality (a NaN equals the same NaN), not numeric: compare the raw bits of each element."""
+    if a.dtype != b.dtype or a.shape != b.shape:
+        return False
+    if a.is_floating_point():
+        bits = {1: torch.uint8, 2: torch.int16, 4: torch.int32, 8: torch.int64}[a.element_size()]
+        return torch.equal(a.contiguous().view(bits), b.contiguous().view(bits))
+    return torch.equal(a, b)
+
+
+def _differences(what, reference, outputs, first=1):
     """One line per run that is not bit-exact with `reference`: the devices that differ and their PCC."""
     lines = []
-    for run, devices in enumerate(outputs):
-        bad = [d for d, (a, b) in enumerate(zip(reference, devices)) if not torch.equal(a, b)]
+    for run, devices in enumerate(outputs, start=first):
+        bad = [d for d, (a, b) in enumerate(zip(reference, devices)) if not _bit_equal(a, b)]
         if bad:
             pcc = min(comp_pcc(reference[d], devices[d], 0.0)[1] for d in bad)
             lines.append(f"{what} {run}: {len(bad)}/{len(devices)} devices differ (first {bad[:4]}), min PCC {pcc:.6f}")
@@ -126,11 +165,10 @@ def _differences(what, reference, outputs):
 
 @pytest.mark.timeout(900)
 @pytest.mark.parametrize(
-    "mesh_device, device_params, variant, case_name",
-    _gate_params(),
+    "mesh_device, device_params, variant, case_name, scenario, prefix",
+    _params(),
     indirect=["mesh_device", "device_params", "variant"],
 )
-@pytest.mark.parametrize("scenario, prefix", PREFIXES, ids=[f"{s}-{p}" for s, p in PREFIXES])
 def test_sparse_mla_determinism(mesh_device, device_params, variant, case_name, config_only, scenario, prefix):
     label = f"{case_name} sparse MLA {_BOX[0]} {scenario} {prefix} prefix"
     sp, _ = mesh_device.shape
@@ -153,5 +191,5 @@ def test_sparse_mla_determinism(mesh_device, device_params, variant, case_name, 
     eager = _eager_outputs(mesh_device, case, cache)
     replays = _replay_outputs(mesh_device, case, cache)
     failures = _differences("eager run", eager[0], eager[1:]) + _differences("replay", replays[0], replays[1:])
-    failures += _differences("traced vs eager, replay", eager[0], replays[:1])
+    failures += _differences("traced vs eager, replay", eager[0], replays[:1], first=0)
     assert not failures, f"{label} is not deterministic:\n  " + "\n  ".join(failures)
