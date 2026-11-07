@@ -4,6 +4,7 @@
 
 #include <tt_stl/fmt.hpp>
 #include <tt-metalium/experimental/tensor_layout_apis_with_custom_alignment.hpp>
+#include <tt-metalium/math.hpp>
 
 #include <tt_stl/assert.hpp>
 
@@ -15,22 +16,14 @@ namespace tt::tt_metal::experimental {
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
 
-size_t round_up(size_t value, size_t multiple) {
-    if (multiple == 0) {
-        return value;
-    }
-
-    return ((value + multiple - 1) / multiple) * multiple;
-};
-
 std::tuple<bool, bool> get_inner_hw_overpadded(
     const tt::tt_metal::Shape& logical_shape,
     const tt::tt_metal::Shape& legacy_padded_shape,
     const PageConfig& page_config) {
     if (page_config.get_layout() == Layout::TILE) {
         const auto& tile = page_config.get_tile();
-        const uint32_t min_padded_h = round_up(logical_shape[-2], tile.get_height());
-        const uint32_t min_padded_w = round_up(logical_shape[-1], tile.get_width());
+        const uint32_t min_padded_h = tt::round_up(logical_shape[-2], tile.get_height());
+        const uint32_t min_padded_w = tt::round_up(logical_shape[-1], tile.get_width());
         return {legacy_padded_shape[-2] > min_padded_h, legacy_padded_shape[-1] > min_padded_w};
     }
     // Always true for non-tile layouts; alignment is the standard padding mechanism for row-major tensors
