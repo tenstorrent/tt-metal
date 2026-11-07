@@ -14,11 +14,10 @@ test_sparse_mla_perf: the CI gate (Galaxy, LoudBox). Warm and long with the prod
 (SPxTP-sharded), torus XY on Galaxy and Fabric2D on LoudBox, for GATE_CASES: K3.1 (last DSA layer's slot of 24, at
 K3.1's packet size), GLM-5.3 (last full indexer layer) and a GLM-5.3 shared layer (no indexer; reuses that layer's
 top-k). Untraced: fastest of UNTRACED_SAMPLES calls after UNTRACED_WARMUP discarded ones. Traced: one timed replay of
-the captured trace. Each (case, box, scenario, mode) is gated
-against PERF_TARGETS_MS: traced two-sided ± PERF_MARGIN, untraced only above target + PERF_MARGIN (a case without
-targets only reports), and the traced output must match the untraced one (one extra untimed run of each, for
-triage). Each layer runs standalone (no next-layer KV
-prefetch overlapped with its attention), as the first layer of a stage.
+the captured trace. Each (case, box, scenario, mode) is gated against PERF_TARGETS_MS: traced two-sided ± PERF_MARGIN,
+untraced only above target + PERF_MARGIN (a case without targets only reports), and the traced output must match the
+untraced one (one extra untimed run of each, for triage). Each layer runs standalone (no next-layer KV prefetch
+overlapped with its attention), as the first layer of a stage.
 
 test_mla_chunked_perf: the exploration matrix (QuietBox, LoudBox, Galaxy; skipped on CI), reports only.
 GLM-5.3 (last full indexer layer, 21-slot index cache) and K3.1 x warm/cold/long x sparse with a BF16 or
