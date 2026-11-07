@@ -171,6 +171,11 @@ class LTXAudioDecoderAdapter:
         mel.use_trace = voc.use_trace = voc.use_trace_bwe = False
         try:
             voc(mel(audio_spatial))
+        except BaseException:
+            # Eager preparation also owns persistent device caches. Keep preflight
+            # refusals outside this handler so existing captures remain intact.
+            self.release_traces()
+            raise
         finally:
             mel.use_trace, voc.use_trace, voc.use_trace_bwe = flags
         # Set only after successful eager warmup. Capture failure is propagated, never
