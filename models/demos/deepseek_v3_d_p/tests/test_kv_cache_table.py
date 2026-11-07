@@ -369,6 +369,180 @@ def test_kimi_runner_kv_cache_table(mesh_device, seq_len, num_users, num_layers,
     )
 
 
+# sp x tp -- Kimi-K3 / K3.1 merged KV chunk table, published as the runner publishes it and read back by config kind.
+_K3_STAGE_LAYERS = 8  # layers 0-7: full-attention layers 3 and 7 (MLA on K3, Gated DSA on K3.1), KDA on the other six
+_K3_STAGE_USERS = 2
+_K3_STAGE_SEQ_LEN = 40_960  # the K3.1 cache constraints: a multiple of the 8192-token bank stripe and the 5120 chunk
+
+
+@pytest.mark.parametrize("mesh_device", [(8, 4)], ids=["8x4"], indirect=True)
+@pytest.mark.parametrize("device_params", [torus_xy_device_params()], ids=["torus-xy"], indirect=True)
+@pytest.mark.parametrize("model", ["kimi_k3", "kimi_k3_1"])
+@pytest.mark.skipif(not is_blackhole(), reason="Kimi-K3 requires Blackhole")
+@pytest.mark.timeout(0)
+def test_kimi_k3_kv_cache_table(mesh_device, device_params, model, tmp_path, monkeypatch):
+    """Every chunk of every config of the published table holds the bytes of the cache it names.
+
+    The caches come from the adapter's allocator for a 0-7 stage, are filled with values distinct per slot, slab,
+    position and KDA segment, and the table is built by `setup_kv_chunk_table` in mock-migration mode (Gate 1's
+    runner side), then read back from the protobuf file it wrote. Configs are found by `cache_kind`, as every
+    consumer must: K3 publishes kvpe / KDA recurrent / KDA convolution as 00-02, K3.1 inserts its DSA index
+    cache at 01 and moves the KDA state to 02-03.
+    """
+    from types import SimpleNamespace
+
+    from models.demos.common.prefill.adapter import get_adapter
+    from models.demos.common.prefill.runners.migration import setup_kv_chunk_table
+    from models.demos.common.prefill.runners.prefill_producer import _decode_kv_chunk
+    from models.demos.deepseek_v3_d_p.tests.kda.utils import kda_state_patterns, native_state_from_global
+    from models.demos.deepseek_v3_d_p.tt.kda.state_adapter import (
+        assemble_convolution,
+        assemble_recurrent,
+        convolution_segment_to_torch,
+        device_scalar,
+        recurrent_segment_to_torch,
+    )
+    from models.demos.deepseek_v3_d_p.tt.kimi_k3.runtime import TtKimiK3Runtime
+    from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import kda_position, kda_segments_per_layer
+    from models.demos.deepseek_v3_d_p.utils.test_utils import gather_cache_natural, unrotate_cache_layer
+    from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import assert_bit_identical
+
+    sp_axis, tp_axis = 0, 1
+    mesh_shape = tuple(mesh_device.shape)
+    sp, tp = mesh_shape
+    adapter = get_adapter(model)
+    hf_config = adapter.load_hf_config()
+    params = SimpleNamespace(
+        first_layer_idx=0,
+        num_layers=_K3_STAGE_LAYERS,
+        num_users=_K3_STAGE_USERS,
+        max_seq_len=_K3_STAGE_SEQ_LEN,
+        mesh_shape=mesh_shape,
+        sp_axis=sp_axis,
+        tp_axis=tp_axis,
+        tp_shard_kv=True,
+        sparse_kv_cache_format=None,  # the adapter's default: scaled FP8 on K3.1, none (bf8 TILE) on K3
+        chunk_size=PREFILL_CHUNK_TOKENS,
+        dflash_enabled=False,
+    )
+    caches = adapter.allocate_kv_cache(mesh_device=mesh_device, hf_config=hf_config, params=params)
+    token_caches = {"kvpe": caches.kvpe.storage}
+    if caches.index is not None:
+        token_caches["index"] = caches.index
+    assert list(token_caches) == (["kvpe", "index"] if model == "kimi_k3_1" else ["kvpe"])
+    # The table builder reads the layout from the cache's declared topology: TP-deduped, as the model writes it.
+    assert all(is_tp_deduped_kv_cache(cache, mesh_shape) for cache in token_caches.values())
+
+    # Token caches: random logical rows written through the cache's own encoding.
+    torch.manual_seed(0)
+    shard = ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=mesh_shape, dims=(2, 1))  # sp -> seq, tp -> dim 1
+
+    def _on_device(host, dtype=ttnn.bfloat16):
+        return ttnn.from_torch(
+            host,
+            device=mesh_device,
+            dtype=dtype,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=shard,
+        )
+
+    batch, _, local_rows, _ = caches.kvpe.storage.shape
+    rows_shape = (batch, tp, sp * local_rows)
+    latent, rope = (_on_device(torch.randn(*rows_shape, width)) for width in (512, 64))
+    sources = {"kvpe": caches.kvpe.pack(latent, rope)}
+    if caches.index is not None:
+        sources["index"] = _on_device(torch.randn(*rows_shape, caches.index.shape[-1]), dtype=ttnn.bfloat8_b)
+    for kind, source in sources.items():
+        cache = token_caches[kind]
+        topology = cache.tensor_topology()  # the copy would replace it with the source's
+        ttnn.copy(source, cache)
+        cache.update_tensor_topology(topology)
+        ttnn.deallocate(source)
+    ttnn.deallocate(latent)
+    ttnn.deallocate(rope)
+
+    # KDA state: a per-(slot, layer) pattern exported through the slabs' own per-layer copy.
+    kda = caches.kda_states
+    geometry = kda.geometry
+    patterns = {
+        (slot, layer): kda_state_patterns(geometry, slot, layer)
+        for slot in range(params.num_users)
+        for layer in kda.layer_ids
+    }
+    for (slot, layer), (recurrent, convolution) in patterns.items():
+        state = native_state_from_global(mesh_device, geometry, recurrent, convolution, tp_axis)
+        index = device_scalar(mesh_device, slot)
+        kda.export_layer(state, index, layer)
+        for tensor in (index, state.recurrent, state.convolution):
+            ttnn.deallocate(tensor)
+    ttnn.synchronize_device(mesh_device)
+
+    # Publish exactly as the runner does at startup with PREFILL_ENABLE_MIGRATION=0.
+    table_path = tmp_path / f"{model}_kv_chunk_table.pb"
+    monkeypatch.setenv("PREFILL_ENABLE_MIGRATION", "0")
+    monkeypatch.setenv("PREFILL_MIGRATION_EXPORT_TO_FILE", "0")
+    monkeypatch.setenv("PREFILL_MIGRATION_TABLE_PATH", str(table_path))
+    monkeypatch.setenv("PREFILL_MIGRATION_DEVICE_MAP_PATH", str(tmp_path / "device_map.json"))
+    runtime = TtKimiK3Runtime.__new__(TtKimiK3Runtime)
+    runtime.config, runtime.hf_config, runtime.mesh_device = params, hf_config, mesh_device
+    setup_kv_chunk_table(
+        runtime,
+        caches,
+        mesh_device,
+        mesh_shape,
+        rank=0,
+        num_ranks=1,
+        first_layer_idx=0,
+        num_my_layers=params.num_layers,
+    )
+    table = ttnn.experimental.disaggregation.import_from_protobuf_file(str(table_path))
+
+    kinds = [adapter.cache_kind(config_id) for config_id in range(table.num_configs())]
+    token_kinds = list(token_caches)
+    assert kinds == [*token_kinds, "kda_recurrent", "kda_convolution"]
+    config_of = {kind: config_id for config_id, kind in enumerate(kinds)}
+
+    # Token configs: each 32-token chunk decodes (as the migration driver and producer decode it) to the cache's rows.
+    natural_positions = blockcyclic_positions(sp * tp, PREFILL_CHUNK_TOKENS, _K3_STAGE_SEQ_LEN)
+    for kind in token_kinds:
+        config_id = config_of[kind]
+        cache = caches.kvpe if kind == "kvpe" else caches.index  # gather_cache_natural decodes an MlaKvCache
+        head_dim = adapter.cache_head_dim(config_id)
+        shard_major, _ = gather_cache_natural(cache, mesh_device, tp_shard_kv=True)  # [slot * slabs + slab, seq, D]
+        layers = sorted(adapter.cache_layer_rows(config_id, params.num_layers))
+        assert layers == [3, 7], kind
+        for slot in range(params.num_users):
+            for slab, layer in enumerate(layers):
+                expected = unrotate_cache_layer(
+                    shard_major[slot * len(layers) + slab], natural_positions, _K3_STAGE_SEQ_LEN
+                ).to(torch.bfloat16)
+                for position in range(0, _K3_STAGE_SEQ_LEN, NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK):
+                    raw = table.read_device_chunk(layer=layer, position=position, slot=slot, config_id=config_id)
+                    assert_equal(
+                        _decode_kv_chunk(raw, head_dim).to(torch.bfloat16),
+                        expected[position : position + NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK],
+                    )
+        logger.info(f"[{model}] config {config_id:02d} ({kind}) readback verified over layers {layers}")
+
+    # KDA configs: every segment of every (layer, slot), reassembled from the segment numbering alone.
+    for kind, segment_to_torch, assemble, part in (
+        ("kda_recurrent", recurrent_segment_to_torch, assemble_recurrent, 0),
+        ("kda_convolution", convolution_segment_to_torch, assemble_convolution, 1),
+    ):
+        config_id = config_of[kind]
+        assert sorted(adapter.cache_layer_rows(config_id, params.num_layers)) == list(kda.layer_ids), kind
+        for (slot, layer), pattern in patterns.items():
+            segments = {
+                segment: segment_to_torch(
+                    table.read_device_chunk(layer, kda_position(geometry, kind, segment), slot, config_id), geometry
+                )
+                for segment in range(kda_segments_per_layer(geometry, kind))
+            }
+            assert_bit_identical(pattern[part], assemble(segments, geometry), name=f"{kind} slot{slot} L{layer}")
+        logger.info(f"[{model}] config {config_id:02d} ({kind}) readback verified over layers {list(kda.layer_ids)}")
+
+
 # sp x tp
 @pytest.mark.parametrize(
     "mesh_device",
