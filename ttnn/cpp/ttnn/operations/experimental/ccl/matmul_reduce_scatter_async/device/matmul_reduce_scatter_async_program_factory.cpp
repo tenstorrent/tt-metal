@@ -113,9 +113,10 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor(
         reduce_scatter_fused_op_signaler->fused_op_receiver_signal_semaphores,
         reduce_scatter_fused_op_signaler->fused_op_signaler_mode);
 
-    // Matmul
+    // Build separately so the merge validates the actual CCL and matmul worker sets.
+    tt::tt_metal::ProgramDescriptor matmul_desc;
     ttnn::prim::ccl_fusion::matmul_multi_core_reuse_mcast_2d_optimized_helper(
-        desc,
+        matmul_desc,
         tensor_args.input,
         tensor_args.weight,
         tensor_args.bias,
@@ -126,7 +127,8 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor(
         untilize_out,
         matmul_fused_op_signaler);
 
-    return desc;
+    // Keep reduce-scatter kernels first for the cache-hit semaphore overrides.
+    return tt::tt_metal::merge_program_descriptors({desc, matmul_desc});
 }
 
 }  // namespace
