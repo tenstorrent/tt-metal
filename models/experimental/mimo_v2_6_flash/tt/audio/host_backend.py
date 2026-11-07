@@ -20,6 +20,7 @@ of a step into one padded batch, which can change an item's last code frame; ref
 the previous value, under a lock (calls from several threads run one at a time).
 """
 
+import os
 import threading
 
 import torch
@@ -42,7 +43,7 @@ class CausalAudioTokenizerEncoder(ref.AudioTokenizerEncoder):
 
 
 class HostAudioBackend:
-    """``embed_audio(mel) -> bf16 [n_tokens, 4096]`` on the host.
+    """``embed_audio(mel)`` / ``embed_audio_codes(codes)`` -> bf16 [n_tokens, 4096] on the host.
 
     Args:
         model_path: the HF checkpoint directory (``config.json``, ``model.safetensors.index.json`` and the shards
@@ -52,6 +53,8 @@ class HostAudioBackend:
             ``torch.float32`` (embeddings bit-identical to the fp32 reference before the final bf16 cast).
         fast_attention: run the tokenizer encoder's full-attention layers with ``is_causal`` (bit-identical,
             ~5 % faster); False runs the reference's masked attention everywhere.
+        tokenizer, patch: which halves to load. The engine needs only the patch encoder when the processor
+            tokenizes in the front end (tt/audio/processor.py); the front end only the tokenizer encoder.
         weights: ``reference.audio.load_audio_weights(model_path)`` output, to share one load between instances.
 
     Host memory: ~1.7 GB of weights (308M tokenizer-encoder parameters in fp32, 236M patch-encoder parameters in
@@ -61,13 +64,27 @@ class HostAudioBackend:
     5 s 0.35 s, 30 s 1.74 s, 120 s 8.9 s, 300 s 28.4 s, 600 s 62 s; the tokenizer encoder is 90-98 % of it.
     """
 
-    def __init__(self, model_path, *, num_threads=8, patch_dtype=torch.bfloat16, fast_attention=True, weights=None):
-        weights = weights if weights is not None else ref.load_audio_weights(model_path)
+    def __init__(
+        self,
+        model_path,
+        *,
+        num_threads=8,
+        patch_dtype=torch.bfloat16,
+        fast_attention=True,
+        tokenizer=True,
+        patch=True,
+        weights=None,
+    ):
+        if weights is None:
+            weights = ref.load_audio_weights(model_path, tokenizer=tokenizer, patch=patch)
         self.cfg = ref.MiMoAudioConfig.from_model_path(model_path)
         self.num_threads = num_threads
-        encoder_cls = CausalAudioTokenizerEncoder if fast_attention else ref.AudioTokenizerEncoder
-        self.encoder = encoder_cls(weights, self.cfg, torch.float32)
-        self.patch = ref.AudioPatchEncoder(weights, self.cfg, patch_dtype)
+        self.encoder = self.patch = None
+        if tokenizer:
+            encoder_cls = CausalAudioTokenizerEncoder if fast_attention else ref.AudioTokenizerEncoder
+            self.encoder = encoder_cls(weights, self.cfg, torch.float32)
+        if patch:
+            self.patch = ref.AudioPatchEncoder(weights, self.cfg, patch_dtype)
         self._lock = threading.Lock()
 
     def num_tokens(self, mel_frames):
@@ -83,12 +100,36 @@ class HostAudioBackend:
             raise ValueError(f"audio_features must be [T, {n_mels}], got {tuple(mel.shape)}")
         return mel.float().contiguous()
 
+    def _as_codes(self, codes):
+        codes = torch.as_tensor(codes)
+        if codes.dim() == 3 and codes.shape[0] == 1:
+            codes = codes[0]
+        sizes = torch.tensor(self.cfg.codebook_sizes)
+        if (
+            codes.dim() != 2
+            or codes.shape[1] != self.cfg.audio_channels
+            or codes.shape[0] < 1
+            or codes.is_floating_point()
+            or bool((codes < 0).any())
+            or bool((codes >= sizes).any())
+        ):
+            raise ValueError(f"audio_codes must be [T, {self.cfg.audio_channels}] RVQ codes, got {tuple(codes.shape)}")
+        return codes.long()
+
     @torch.inference_mode()
     def codes(self, mel):
         """[T, 128] mel -> RVQ codes [n_codes, 20] (int64, 25 Hz)."""
         mel = self._as_mel(mel, self.cfg.n_mels)
         with self._lock, _threads(self.num_threads):
             return ref.tokenize_audio_batch([mel], self.encoder)[0]
+
+    @torch.inference_mode()
+    def embed_audio_codes(self, codes):
+        """[n_codes, 20] RVQ codes (the TT processor's ``audio_codes`` for one item) -> bf16 [ceil(n_codes / 4), 4096]."""
+        codes = self._as_codes(codes)
+        with self._lock, _threads(self.num_threads):
+            out = self.patch(ref.pad_and_group_codes(codes, self.cfg))
+        return out.to(torch.bfloat16).contiguous()
 
     @torch.inference_mode()
     def embed_audio(self, mel):
@@ -99,6 +140,30 @@ class HostAudioBackend:
             out = self.patch(ref.pad_and_group_codes(codes, self.cfg))
         assert out.shape[0] == ref.audio_token_len(mel.shape[0], self.cfg)
         return out.to(torch.bfloat16).contiguous()
+
+
+class AudioCodesBackend:
+    """An encoder backend plus ``embed_audio_codes``: ``backend``'s methods for everything else, and the patch
+    encoder (a patch-only HostAudioBackend, one per process and checkpoint, loaded on the first call) for the RVQ
+    codes the TT processor (tt/audio/processor.py) computes in the front end."""
+
+    _patch = {}
+    _patch_lock = threading.Lock()
+
+    def __init__(self, backend, model_path, num_threads=None):
+        self.backend, self.model_path = backend, model_path
+        self.num_threads = num_threads if num_threads is not None else int(os.environ.get("MIMO_AUDIO_THREADS", "8"))
+
+    def __getattr__(self, name):
+        return getattr(self.backend, name)
+
+    def embed_audio_codes(self, codes):
+        with AudioCodesBackend._patch_lock:
+            patch = AudioCodesBackend._patch.get(self.model_path)
+            if patch is None:
+                patch = HostAudioBackend(self.model_path, num_threads=self.num_threads, tokenizer=False)
+                AudioCodesBackend._patch[self.model_path] = patch
+        return patch.embed_audio_codes(codes)
 
 
 class _threads:
