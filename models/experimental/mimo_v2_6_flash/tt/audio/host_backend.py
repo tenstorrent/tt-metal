@@ -67,6 +67,24 @@ class CausalAudioTokenizerEncoder(ref.AudioTokenizerEncoder):
         return out
 
 
+def as_codes(codes, cfg):
+    """An item's ``audio_codes`` (vLLM may hand [1, T, 20]) -> int64 [T, 20], checked against the codebook sizes."""
+    codes = torch.as_tensor(codes)
+    if codes.dim() == 3 and codes.shape[0] == 1:
+        codes = codes[0]
+    sizes = torch.tensor(cfg.codebook_sizes)
+    if (
+        codes.dim() != 2
+        or codes.shape[1] != cfg.audio_channels
+        or codes.shape[0] < 1
+        or codes.is_floating_point()
+        or bool((codes < 0).any())
+        or bool((codes >= sizes).any())
+    ):
+        raise ValueError(f"audio_codes must be [T, {cfg.audio_channels}] RVQ codes, got {tuple(codes.shape)}")
+    return codes.long()
+
+
 class HostAudioBackend:
     """``embed_audio(mel)`` / ``embed_audio_codes(codes)`` -> bf16 [n_tokens, 4096] on the host.
 
@@ -131,20 +149,7 @@ class HostAudioBackend:
         return mel.float().contiguous()
 
     def _as_codes(self, codes):
-        codes = torch.as_tensor(codes)
-        if codes.dim() == 3 and codes.shape[0] == 1:
-            codes = codes[0]
-        sizes = torch.tensor(self.cfg.codebook_sizes)
-        if (
-            codes.dim() != 2
-            or codes.shape[1] != self.cfg.audio_channels
-            or codes.shape[0] < 1
-            or codes.is_floating_point()
-            or bool((codes < 0).any())
-            or bool((codes >= sizes).any())
-        ):
-            raise ValueError(f"audio_codes must be [T, {self.cfg.audio_channels}] RVQ codes, got {tuple(codes.shape)}")
-        return codes.long()
+        return as_codes(codes, self.cfg)
 
     @torch.inference_mode()
     def codes(self, mel):
@@ -173,21 +178,28 @@ class HostAudioBackend:
 
 
 class AudioCodesBackend:
-    """An encoder backend plus ``embed_audio_codes``: ``backend``'s methods for everything else, and the patch
-    encoder (a patch-only HostAudioBackend, one per process and checkpoint, loaded on the first call) for the RVQ
-    codes the TT processor (tt/audio/processor.py) computes in the front end."""
+    """An encoder backend plus ``embed_audio_codes``: ``backend``'s methods for everything else, and for the RVQ codes
+    the TT processor (tt/audio/processor.py) computes in the front end the row's device patch encoder
+    (``device_patch``, tt/audio/patch.py) or, without one, the host patch encoder (a patch-only HostAudioBackend, one
+    per process and checkpoint, loaded on the first call)."""
 
     _patch = {}
     _patch_lock = threading.Lock()
 
-    def __init__(self, backend, model_path, num_threads=None):
-        self.backend, self.model_path = backend, model_path
+    def __init__(self, backend, model_path, num_threads=None, device_patch=None):
+        self.backend, self.model_path, self.device_patch = backend, model_path, device_patch
         self.num_threads = num_threads if num_threads is not None else int(os.environ.get("MIMO_AUDIO_THREADS", "8"))
 
     def __getattr__(self, name):
         return getattr(self.backend, name)
 
+    def __repr__(self):
+        patch = "host" if self.device_patch is None else type(self.device_patch).__name__
+        return f"AudioCodesBackend({self.backend!r}, patch={patch})"
+
     def embed_audio_codes(self, codes):
+        if self.device_patch is not None:
+            return self.device_patch.embed_audio_codes(codes)
         with AudioCodesBackend._patch_lock:
             patch = AudioCodesBackend._patch.get(self.model_path)
             if patch is None:

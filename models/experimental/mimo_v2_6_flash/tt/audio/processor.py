@@ -7,9 +7,11 @@
 video timestamps; unchanged) and then replaces each audio item's ``audio_features`` mel [T, 128] by its RVQ codes
 (25 Hz) computed in fp32 as the HF module computes them (reference/audio.py, tt/audio/host_backend.py:
 bit-identical) from the fp32 mel (vLLM casts the processor's mel to bf16 before it leaves the processor, which
-changed 8 of the 126 code frames of a 5 s clip; ``fp32_mels``), and by default by the LLM embeddings the patch
-encoder makes from them (below). The tokenizer encoder, 90-98 % of the audio work (1.6 s for 30 s of audio at 8
-threads), so leaves the engine process, where it held up every other request of the engine.
+changed 8 of the 126 code frames of a 5 s clip; ``fp32_mels``), or with MIMO_AUDIO_PATCH=frontend by the LLM
+embeddings the patch encoder makes from them (below). The tokenizer encoder, 90-98 % of the host audio work (1.6 s
+for 30 s of audio at 8 threads), so leaves the engine process, where it held up every other request of the engine.
+It stays on the host CPU: its RVQ decisions sit at fp32 rounding level, so only a bit-identical fp32 computation
+keeps every code (tests/perf/audio_codes_margin.py).
 
 Where it runs: vLLM 0.30.0's renderer calls ``_process_multimodal`` (and so this processor) through
 ``make_async(..., executor=self._mm_executor)``, a single-worker ThreadPoolExecutor of the API server process, not on
@@ -26,14 +28,18 @@ hit skips the processor entirely (``_cached_apply_hf_processor``), so a repeated
 
 MIMO_AUDIO_PATCH says where the patch encoder (codes -> LLM embeddings) runs; the API server and the engine read it:
 
-* ``frontend`` (the default): here, after the tokenizer encoder. The item reaches the engine as ``audio_embeds``
-  bf16 [n_tokens, 4096], bit for bit what the engine's host patch encoder makes from the codes, and the engine only
-  uploads it. On the engine's host CPU the patch encoder held up every request of the engine's row for its duration
-  (bf16, 8 threads: 35 / 145 / 610 ms for 5 / 30 / 120 s of audio on bhg4, ~10 % of the tokenizer's time); here it
-  adds that to the item's processing, off the event loop. The processor cache and the engine transfer then hold
-  8 KiB per token instead of 80 B of codes per 25 Hz frame (a 30 s clip: 1.5 MB).
-* ``engine``: the item reaches the engine as ``audio_codes`` int32 [n_codes, 20] and the engine runs the patch
-  encoder on its host (``AudioCodesBackend.embed_audio_codes``).
+* ``device`` (the default): on the engine's row (tt/audio/patch.py, TP=8): the item reaches the engine as
+  ``audio_codes`` int32 [n_codes, 20] and the engine's ``AudioCodesBackend`` runs the device patch encoder: 16 / 11
+  / 32 / 62 ms for 5 / 30 / 120 / 300 s of audio (host embedding sum and transfers included; PCC 0.9998 against the
+  host bf16 patch encoder, 0.9999 against fp32), where the host patch encoder takes 35 / 145 / 610 ms of CPU (bf16,
+  8 threads, bhg4) during which the engine's row stands still. An engine without the device encoder (no mesh, or
+  MIMO_MM_MODALITIES without audio) falls back to the host one.
+* ``frontend``: here, after the tokenizer encoder. The item reaches the engine as ``audio_embeds`` bf16
+  [n_tokens, 4096], bit for bit what the engine's host patch encoder makes from the codes, and the engine only
+  uploads it: the engine's row no longer waits for the host patch encoder, the item's processing here takes ~10 %
+  longer. The processor cache and the engine transfer then hold 8 KiB per token instead of 80 B of codes per 25 Hz
+  frame (a 30 s clip: 1.5 MB).
+* ``engine``: codes, and the engine runs the host patch encoder (``AudioCodesBackend.embed_audio_codes``).
 
 MIMO_AUDIO_FRONTEND_THREADS (default 8): torch threads of the encoders in the front end (vLLM runs the processor
 with OMP_NUM_THREADS threads, 1 when unset).
@@ -51,9 +57,10 @@ from ...reference import audio as ref
 from .host_backend import HostAudioBackend
 
 FRONTEND_THREADS = int(os.environ.get("MIMO_AUDIO_FRONTEND_THREADS", "8"))
-PATCH_WHERE = os.environ.get("MIMO_AUDIO_PATCH", "frontend")
-if PATCH_WHERE not in ("frontend", "engine"):
-    raise ValueError(f"MIMO_AUDIO_PATCH={PATCH_WHERE!r}: frontend or engine")
+PATCH_PLACES = ("device", "frontend", "engine")
+PATCH_WHERE = os.environ.get("MIMO_AUDIO_PATCH", "device")
+if PATCH_WHERE not in PATCH_PLACES:
+    raise ValueError(f"MIMO_AUDIO_PATCH={PATCH_WHERE!r}: one of {PATCH_PLACES}")
 FRONTEND_PATCH = PATCH_WHERE == "frontend"
 _tokenizers = {}
 _tokenizers_lock = threading.Lock()

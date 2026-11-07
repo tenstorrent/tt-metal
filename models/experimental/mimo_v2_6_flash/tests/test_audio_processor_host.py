@@ -6,12 +6,12 @@
 Through vLLM 0.30.0's own renderer (the API server's input path, built from the checkpoint with the TT platform and
 MiMoV2OmniForCausalLM, so the registered processor is ours), on LibriSpeech clips (16 kHz files, resampled by vLLM):
 
-* with MIMO_AUDIO_PATCH=engine each audio item reaches the engine as ``audio_codes`` int32 [n, 20], without
-  ``audio_features``, and the codes are the fp32 reference's for the item's mel (two items in one request: each
-  tokenized on its own);
-* by default (MIMO_AUDIO_PATCH=frontend) it reaches the engine as ``audio_embeds`` bf16 [n_tokens, 4096]: bit for
-  bit what the engine's host patch encoder makes from those codes, and tt/multimodal.encode_item hands them over
-  unchanged (no encoder call);
+* by default (MIMO_AUDIO_PATCH=device, also =engine) each audio item reaches the engine as ``audio_codes`` int32
+  [n, 20], without ``audio_features``, and the codes are the fp32 reference's for the item's mel (two items in one
+  request: each tokenized on its own);
+* with MIMO_AUDIO_PATCH=frontend it reaches the engine as ``audio_embeds`` bf16 [n_tokens, 4096]: bit for bit what
+  the engine's host patch encoder makes from those codes, and tt/multimodal.encode_item hands them over unchanged
+  (no encoder call);
 * ``audio_token_lens`` and the placeholder range are unchanged (rows of the patch encoder's output);
 * the engine side (``AudioCodesBackend.embed_audio_codes``, through tt/multimodal.encode_item) gives the embeddings
   today's engine-side path gives from the mel: bit-identical to the TEMPORARY HF host backend (fp32) with an fp32
@@ -96,13 +96,13 @@ def _two_items(setup, frontend_patch):
 
 @pytest.fixture(scope="module")
 def front(setup):
-    """MIMO_AUDIO_PATCH=engine: the front end sends codes."""
+    """MIMO_AUDIO_PATCH=device (the default) or engine: the front end sends codes."""
     return _two_items(setup, False)
 
 
 @pytest.fixture(scope="module")
 def front_embeds(setup, front):
-    """MIMO_AUDIO_PATCH=frontend (the default): the front end sends embeddings."""
+    """MIMO_AUDIO_PATCH=frontend: the front end sends embeddings."""
     return _two_items(setup, True)
 
 
