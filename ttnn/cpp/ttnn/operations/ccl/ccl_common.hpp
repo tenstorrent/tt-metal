@@ -14,6 +14,7 @@
 #include "ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
+#include <tt-metalium/mesh_buffer.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/program_descriptors.hpp>
 #include "ttnn/types.hpp"
@@ -441,7 +442,7 @@ public:
         this->slice_dim_is_width = input_tensor.padded_shape().rank() - 1 == slice_dim;
         this->is_sharded = input_tensor.is_sharded();
 
-        this->input_page_size = input_tensor.buffer()->page_size();
+        this->input_page_size = input_tensor.mesh_buffer().page_size();
 
         if (row_major) {
             this->num_cols = input_tensor.padded_shape()[-1];

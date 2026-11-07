@@ -37,10 +37,10 @@ DeepseekMoEPostCombineTilizeDeviceOperation::DeepseekMoEPostCombineTilizeProgram
      * Tensors
      */
     const ttnn::Tensor& input_tensor = tensor_args.input_tensor;
-    uint32_t input_row_page_size = static_cast<uint32_t>(input_tensor.buffer()->page_size());
+    uint32_t input_row_page_size = static_cast<uint32_t>(input_tensor.mesh_buffer().page_size());
 
     const ttnn::Tensor& output_tensor = tensor_return_value;
-    const uint32_t output_tile_page_size = static_cast<uint32_t>(output_tensor.buffer()->page_size());
+    const uint32_t output_tile_page_size = static_cast<uint32_t>(output_tensor.mesh_buffer().page_size());
     const auto& output_shape = output_tensor.padded_shape();
 
     const auto& input = input_tensor.mesh_tensor();

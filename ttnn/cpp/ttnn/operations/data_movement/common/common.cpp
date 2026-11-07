@@ -19,6 +19,7 @@
 
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/mesh_buffer.hpp>
 
 namespace ttnn::operations::data_movement {
 
@@ -337,7 +338,7 @@ int common_tm_bw_model(
     auto element_size_bytes = input_tensor.element_size();
     bool input_is_2d_sharded =
         input_tensor.memory_config().is_sharded() && input_tensor.memory_config().shard_spec().has_value();
-    bool input_is_dram = input_tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM;
+    bool input_is_dram = input_tensor.memory_config().buffer_type() == tt::tt_metal::BufferType::DRAM;
     bool input_is_tiled = input_tensor.layout() == Layout::TILE;
     uint32_t input_size_bytes = input_shape.volume() * element_size_bytes;
 
@@ -373,7 +374,7 @@ int common_tm_bw_model(
 
     uint32_t num_read_transactions = std::ceil((float)input_size_bytes / (float)input_transaction_size);
 
-    bool output_is_dram = output_tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM;
+    bool output_is_dram = output_tensor.memory_config().buffer_type() == tt::tt_metal::BufferType::DRAM;
     bool output_is_tiled = output_tensor.layout() == Layout::TILE;
     bool output_2d_is_sharded =
         output_tensor.memory_config().is_sharded() && output_tensor.memory_config().shard_spec().has_value();
@@ -910,7 +911,7 @@ uint32_t per_shard_page_size_bytes(const ttnn::Tensor& t, uint32_t row_bytes) {
         return spec.shape[1] * t.element_size();
     }
     if (mc.is_sharded()) {
-        return static_cast<uint32_t>(t.buffer()->aligned_page_size());
+        return static_cast<uint32_t>(t.mesh_buffer().aligned_page_size());
     }
     return row_bytes;
 }
