@@ -21,8 +21,9 @@ using namespace ckernel::packer;
  * @brief Configure the ADDR_MOD slots used by the untilize pack MOP.
  *
  * ADDR_MOD_0 keeps y_src on the current Dest face-row (used by every inner-loop PACR); ADDR_MOD_1
- * advances y_src by one row and is used by the row-closing PACR.
+ * advances y_src to the next output row and is used by the row-closing PACR.
  */
+template <bool src_is_tilize = false>
 inline void _llk_pack_untilize_configure_addrmod_()
 {
     // In DST_STRIDED_MODE, y_src tracks the row within each Dest face and W tracks
@@ -34,11 +35,9 @@ inline void _llk_pack_untilize_configure_addrmod_()
     }
         .set(ADDR_MOD_0);
 
-    // ADDR_MOD_1: used by the row-closing PACR (set_last_inner_loop_instr).
-    // y_src.incr=1 advances to the next Dest face-row after packing, folding the
-    // explicit INCADCXY end_op into the PACR itself.
+    // Advance past both interleaved tilize rows, or one ordinary face row.
     addr_mod_pack_t {
-        .y_src = {.incr = 1, .clr = 0},
+        .y_src = {.incr = src_is_tilize ? 2 : 1, .clr = 0},
     }
         .set(ADDR_MOD_1);
 }
@@ -51,17 +50,18 @@ dense is used with num_faces == 2 and even block_ct_dim, where two 16x32 (or sma
  * @brief Build and program the packer MOP template for an untilize (tilized -> row-major) pack.
  *
  * Programs a MOP that walks face rows in the outer loop and tiles within the block in the inner loop,
- * using DST_STRIDED_MODE so each PACR packs a row from each tile, plus a replay buffer that advances
+ * selecting the Dest access mode for its source layout, plus a replay buffer that advances
  * the L1 destination address by the per-row stride.
  *
  * @tparam block_ct_dim: Number of input tiles per block.
  * @tparam narrow_row: True when faces occupy only the first column of the tile (single packer interface).
  * @tparam dense: True to pack two tiles into one 32x32 dest region using all interfaces; requires num_faces == 2 and even block_ct_dim.
+ * @tparam src_is_tilize: Dest holds row-interleaved non-8-bit Blackhole tilize output; requires num_faces == 4.
  * @param face_r_dim: Number of rows per face.
  * @param num_faces: Faces per tile, valid values = <1, 2, 4>
  * @note @ref _llk_pack_untilize_configure_addrmod_ must have programmed the ADDR_MOD slots.
  */
-template <std::uint32_t block_ct_dim, bool narrow_row = false, bool dense = false>
+template <std::uint32_t block_ct_dim, bool narrow_row = false, bool dense = false, bool src_is_tilize = false>
 inline void _llk_pack_untilize_mop_config_(const std::uint32_t face_r_dim = FACE_R_DIM, const std::uint32_t num_faces = 4)
 {
     static_assert(!dense || (block_ct_dim % 2 == 0), "block_ct_dim must be even when dense");
@@ -76,6 +76,18 @@ inline void _llk_pack_untilize_mop_config_(const std::uint32_t face_r_dim = FACE
     */
     constexpr std::uint32_t MOP_INNER_LOOP = dense ? block_ct_dim / 2 : block_ct_dim;
     const std::uint32_t MOP_OUTER_LOOP     = face_r_dim;
+
+    static_assert(!src_is_tilize || (!dense && !narrow_row), "Tilize source requires non-dense, full-width packing");
+    if constexpr (src_is_tilize)
+    {
+        // Keep unsupported face counts rejected even with LLK_ASSERT disabled.
+        if (num_faces != 4)
+        {
+            LLK_ASSERT(false, "Tilize source requires four faces");
+            __builtin_trap();
+        }
+    }
+    constexpr std::uint32_t DEST_ACCESS_MODE = src_is_tilize ? p_pacr::DST_ACCESS_NORMAL_MODE : p_pacr::DST_ACCESS_STRIDED_MODE;
 
     // For narrow row, the faces are stored in the first column of the tile, therefore requiring only one packer interface.
     const std::uint32_t PACK_INTF_SEL = (dense)                          ? p_pacr::ALL_INTF_ACTIVE
@@ -100,7 +112,7 @@ inline void _llk_pack_untilize_mop_config_(const std::uint32_t face_r_dim = FACE
         TT_OP_PACR(
             p_pacr::CFG_CTXT_0,
             p_pacr::NO_ROW_PAD_ZERO,
-            p_pacr::DST_ACCESS_STRIDED_MODE,
+            DEST_ACCESS_MODE,
             ADDR_MOD_0,
             p_pacr::ADDR_CNT_CTXT_0,
             0,
@@ -142,22 +154,11 @@ inline void _llk_pack_untilize_mop_config_(const std::uint32_t face_r_dim = FACE
 
     /*
     Close the row in the block by setting the Last bit to 1 in the last inner loop instruction.
-    Use ADDR_MOD_1 so the packer auto-advances y_src by 1 (next row in face) post-PACR.
+    ADDR_MOD_1 advances to the next output row in the selected source layout.
     Revisit after #22820 to convert last_loop_op to constexpr.
     */
     std::uint32_t last_loop_op = TT_OP_PACR(
-        p_pacr::CFG_CTXT_0,
-        p_pacr::NO_ROW_PAD_ZERO,
-        p_pacr::DST_ACCESS_STRIDED_MODE,
-        ADDR_MOD_1,
-        p_pacr::ADDR_CNT_CTXT_0,
-        0,
-        PACK_INTF_SEL,
-        0,
-        0,
-        p_pacr::NO_CTXT_CTRL,
-        0,
-        1);
+        p_pacr::CFG_CTXT_0, p_pacr::NO_ROW_PAD_ZERO, DEST_ACCESS_MODE, ADDR_MOD_1, p_pacr::ADDR_CNT_CTXT_0, 0, PACK_INTF_SEL, 0, 0, p_pacr::NO_CTXT_CTRL, 0, 1);
 
     tmp.set_last_inner_loop_instr(last_loop_op);
 
@@ -177,6 +178,7 @@ inline void _llk_pack_untilize_mop_config_(const std::uint32_t face_r_dim = FACE
  * @tparam narrow_row: True when packing fewer than TILE_C_DIM datums per row.
  * @tparam row_num_datums: Number of datums per output row when narrow_row is set.
  * @tparam dense: True to pack two tiles into one dest region; requires num_faces == 2 and even block_ct_dim.
+ * @tparam src_is_tilize: Dest holds row-interleaved non-8-bit Blackhole tilize output; requires num_faces == 4.
  * @param pack_src_format: Source (dest register) data format.
  * @param pack_dst_format: Destination (L1) data format.
  * @param face_r_dim: Number of rows per face.
@@ -189,7 +191,8 @@ template <
     std::uint32_t full_ct_dim    = block_ct_dim,
     bool narrow_row              = false,
     std::uint32_t row_num_datums = TILE_C_DIM,
-    bool dense                   = false>
+    bool dense                   = false,
+    bool src_is_tilize           = false>
 inline void _llk_pack_untilize_init_(
     const std::uint32_t pack_src_format, const std::uint32_t pack_dst_format, const std::uint32_t face_r_dim = FACE_R_DIM, const std::uint32_t num_faces = 4)
 {
@@ -206,9 +209,9 @@ inline void _llk_pack_untilize_init_(
         static_assert(row_num_datums < TILE_C_DIM, "row_num_datums must be set to less than TILE_C_DIM for narrow_row packing");
     }
 
-    _llk_pack_untilize_configure_addrmod_();
+    _llk_pack_untilize_configure_addrmod_<src_is_tilize>();
 
-    _llk_pack_untilize_mop_config_<block_ct_dim, narrow_row, dense>(face_r_dim, num_faces);
+    _llk_pack_untilize_mop_config_<block_ct_dim, narrow_row, dense, src_is_tilize>(face_r_dim, num_faces);
 
     // Set CH0 Zstride = 2x16x16 faces, .z_src = {.incr = 1} jumps 2 faces
     std::uint32_t x_stride       = datum_size_in_bytes(pack_src_format);

@@ -102,6 +102,10 @@ class FuserSentinel:
             for node, sources in block.dest_sources.items():
                 self._dest_sources.setdefault(node, set()).update(sources)
 
+    def dest_sources_for(self, node):
+        """Return the producers of the Dest tiles consumed by this node."""
+        return frozenset(self._dest_sources.get(node, ()))
+
     @staticmethod
     def _single_dest_format(formats, node) -> Optional[DataFormat]:
         if len(formats) > 1:
