@@ -186,8 +186,9 @@ class AudioCodesBackend:
     _patch = {}
     _patch_lock = threading.Lock()
 
-    def __init__(self, backend, model_path, num_threads=None, device_patch=None):
-        self.backend, self.model_path, self.device_patch = backend, model_path, device_patch
+    def __init__(self, backend, model_path, num_threads=None, device_patch=None, device_tokenizer=None):
+        self.backend, self.model_path = backend, model_path
+        self.device_patch, self.device_tokenizer = device_patch, device_tokenizer
         self.num_threads = num_threads if num_threads is not None else int(os.environ.get("MIMO_AUDIO_THREADS", "8"))
 
     def __getattr__(self, name):
@@ -195,7 +196,17 @@ class AudioCodesBackend:
 
     def __repr__(self):
         patch = "host" if self.device_patch is None else type(self.device_patch).__name__
-        return f"AudioCodesBackend({self.backend!r}, patch={patch})"
+        tok = "host" if self.device_tokenizer is None else type(self.device_tokenizer).__name__
+        return f"AudioCodesBackend({self.backend!r}, tokenizer={tok}, patch={patch})"
+
+    def embed_audio(self, mel):
+        """A mel item (``audio_features``, or ``audio_mel_bits`` from a front end with MIMO_AUDIO_TOKENIZER=device): the
+        row's device tokenizer encoder and the host RVQ, then ``embed_audio_codes``; without a device tokenizer the
+        wrapped backend's ``embed_audio`` (the host encoders)."""
+        if self.device_tokenizer is None:
+            return self.backend.embed_audio(mel)
+        mel = HostAudioBackend._as_mel(mel, self.device_tokenizer.cfg.n_mels)
+        return self.embed_audio_codes(self.device_tokenizer.codes(mel))
 
     def embed_audio_codes(self, codes):
         if self.device_patch is not None:

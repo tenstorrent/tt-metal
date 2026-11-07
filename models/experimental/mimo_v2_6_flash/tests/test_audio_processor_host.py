@@ -16,6 +16,8 @@ MiMoV2OmniForCausalLM, so the registered processor is ours), on LibriSpeech clip
 * the engine side (``AudioCodesBackend.embed_audio_codes``, through tt/multimodal.encode_item) gives the embeddings
   today's engine-side path gives from the mel: bit-identical to the TEMPORARY HF host backend (fp32) with an fp32
   patch encoder, and to ``HostAudioBackend.embed_audio`` with the default bf16 one;
+* with MIMO_AUDIO_TOKENIZER=device it reaches the engine as ``audio_mel_bits``: the fp32 mel's int32 bits, exactly,
+  with no encoder run in the front end, and tt/multimodal.encode_item hands the backend's ``embed_audio`` that mel;
 * a repeated clip is a processor-cache hit: the same hash, and the front end does not encode it again.
 
 Needs MIMO_MODEL_PATH with ``audio_tokenizer/``, MIMO_AUDIO_CLIPS, vllm and torchaudio.
@@ -166,13 +168,46 @@ def test_front_end_emits_embeds(setup, front, front_embeds):
         logger.info(f"{clip}: front-end embeddings {tuple(embeds.shape)} == the engine's patch encoder on the codes")
 
 
+def test_front_end_device_tokenizer_sends_the_mel(setup, monkeypatch):
+    """MIMO_AUDIO_TOKENIZER=device: the item carries the fp32 mel bit for bit and the front end encodes nothing."""
+    from models.experimental.mimo_v2_6_flash.tt import multimodal as mm
+
+    module, clips = setup["module"], setup["clips"]
+    calls = []
+    for name in ("tokenize_mels", "embed_mels"):
+        monkeypatch.setattr(module, name, lambda mels, path: calls.append(len(mels)))
+    monkeypatch.setattr(module, "DEVICE_TOKENIZER", True)
+    setup["renderer"].clear_mm_cache()
+    out = process(setup["renderer"], [clips["speech_5s"]["raw"], clips["speech_65s"]["raw"]])
+    setup["renderer"].clear_mm_cache()
+    assert calls == [], calls
+
+    class Capture:
+        def embed_audio(self, mel):
+            self.mel = mel
+            return torch.zeros(ref.audio_token_len(mel.shape[0]), 4096)
+
+    for k, clip in enumerate(("speech_5s", "speech_65s")):
+        data = out["mm_kwargs"]["audio"][k].get_data()
+        assert sorted(f for f in data if f.startswith("audio_")) == ["audio_mel_bits", "audio_token_lens"], sorted(data)
+        bits, mel = data["audio_mel_bits"], clips[clip]["mel"]
+        assert bits.dtype == torch.int32 and torch.equal(bits.view(torch.float32), mel), clip
+        n = int(data["audio_token_lens"])
+        backend = Capture()
+        item = mm.MMItem("audio", clip, 10, n, None, {"audio_mel_bits": bits, "audio_token_lens": torch.tensor(n)})
+        mm.encode_item(backend, mm.parse_item(item))
+        assert torch.equal(backend.mel, mel), clip
+    logger.info("MIMO_AUDIO_TOKENIZER=device: the fp32 mels reach the engine bit for bit, nothing encoded in front")
+
+
 def test_repeated_clip_is_a_cache_hit(setup, front_embeds, monkeypatch):
     clips, renderer, module = setup["clips"], setup["renderer"], setup["module"]
     calls = []
     for name in ("tokenize_mels", "embed_mels"):
         fn = getattr(module, name)
         monkeypatch.setattr(module, name, lambda mels, path, fn=fn: calls.append(len(mels)) or fn(mels, path))
-    first = process(renderer, [clips["speech_5s"]["raw"]])  # processed by ``front_embeds`` already
+    first = process(renderer, [clips["speech_5s"]["raw"]])  # encoded now, or still cached from an earlier test
+    calls.clear()
     second = process(renderer, [clips["speech_5s"]["raw"]])
     assert first["mm_hashes"]["audio"] == second["mm_hashes"]["audio"] == front_embeds["mm_hashes"]["audio"][:1]
     assert calls == [], calls

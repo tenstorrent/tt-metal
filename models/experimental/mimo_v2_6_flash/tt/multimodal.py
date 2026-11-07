@@ -39,8 +39,8 @@ MODALITIES = ("image", "video", "audio")
 REQUIRED_FIELDS = {
     "image": ("pixel_values", "image_grid_thw"),
     "video": ("pixel_values_videos", "video_grid_thw"),
-    # the mel, its RVQ codes, or the LLM embeddings the front end made from them (tt/audio/processor.py)
-    "audio": ("audio_features|audio_codes|audio_embeds",),
+    # the mel (or its exact fp32 bits), its RVQ codes, or the LLM embeddings the front end made (tt/audio/processor.py)
+    "audio": ("audio_features|audio_mel_bits|audio_codes|audio_embeds",),
 }
 
 
@@ -251,6 +251,11 @@ def encode_item(backend, item):
             raise MMInputError(f"audio item {item.identifier}: audio_embeds must be finite floats")
     elif _field(item.data, "audio_codes") is not None:
         out = backend.embed_audio_codes(_field(item.data, "audio_codes"))
+    elif _field(item.data, "audio_mel_bits") is not None:  # the fp32 mel as int32 bits (MIMO_AUDIO_TOKENIZER=device)
+        bits = torch.as_tensor(_field(item.data, "audio_mel_bits"))
+        if bits.dtype != torch.int32:
+            raise MMInputError(f"audio item {item.identifier}: audio_mel_bits must be int32, got {bits.dtype}")
+        out = backend.embed_audio(bits.contiguous().view(torch.float32))
     else:
         out = backend.embed_audio(_field(item.data, "audio_features"))
     if out.dim() != 2 or out.shape[0] != item.num_embeds:

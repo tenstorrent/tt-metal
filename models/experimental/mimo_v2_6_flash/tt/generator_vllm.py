@@ -2635,6 +2635,22 @@ def audio_device_patch(model_path, mesh_device):
     return TtAudioPatchEncoder.from_checkpoint(mesh_device, model_path, cache_dir=default_cache_dir(model_path))
 
 
+# Where the audio tokenizer encoder (mel -> codes) runs (tt/audio/processor.py reads it too): ``frontend`` (the default;
+# fp32 on the API server's CPU, codes bit-identical to the reference) or ``device`` (the replica's row,
+# tt/audio/tokenizer.py: ~10x faster, but ~3.5-5 % of the code frames differ from the fp32 reference).
+AUDIO_TOKENIZER = os.environ.get("MIMO_AUDIO_TOKENIZER", "frontend")
+
+
+def audio_device_tokenizer(model_path, mesh_device):
+    """The replica's device audio tokenizer encoder (tt/audio/tokenizer.py, cached under MIMO_AUDIO_CACHE) with
+    MIMO_AUDIO_TOKENIZER=device and audio served, else None."""
+    if "audio" not in MM_MODALITIES or AUDIO_TOKENIZER != "device":
+        return None
+    from .audio.tokenizer import TtAudioTokenizerEncoder, default_cache_dir
+
+    return TtAudioTokenizerEncoder.from_checkpoint(mesh_device, model_path, cache_dir=default_cache_dir(model_path))
+
+
 def default_encoder_backend(model_path, mesh_device):
     """The encoder backend of the replica on ``mesh_device`` (its 1x8 row). MIMO_MM_ENCODER:
 
@@ -2756,7 +2772,12 @@ class MiMoV2OmniForCausalLM(MiMoV2ForCausalLM, *((SupportsMultiModal,) if Suppor
             backends = [default_encoder_backend(model_path, m.mesh_device) for m in self.models]
             # + embed_audio_codes: the row's device patch encoder (MIMO_AUDIO_PATCH=device), else the host one
             backends = [
-                AudioCodesBackend(b, model_path, device_patch=audio_device_patch(model_path, m.mesh_device))
+                AudioCodesBackend(
+                    b,
+                    model_path,
+                    device_patch=audio_device_patch(model_path, m.mesh_device),
+                    device_tokenizer=audio_device_tokenizer(model_path, m.mesh_device),
+                )
                 for b, m in zip(backends, self.models)
             ]
         self.mm_cache = mm.EmbeddingCache()
@@ -2771,6 +2792,7 @@ class MiMoV2OmniForCausalLM(MiMoV2ForCausalLM, *((SupportsMultiModal,) if Suppor
         self.mm_eos = int(getattr(hf_config, "eos_token_id", None) or 151645)
         self.vision_encoders = [getattr(b, "vision", None) for b in backends]
         self.audio_patches = [getattr(b, "device_patch", None) for b in backends]
+        self.audio_tokenizers = [getattr(b, "device_tokenizer", None) for b in backends]
         self._row_mm = self._row_slots = None
         logger.info(f"MiMo vLLM: multimodal input {MM_MODALITIES}, encoders {backends}")
 
@@ -2918,6 +2940,14 @@ class MiMoV2OmniForCausalLM(MiMoV2ForCausalLM, *((SupportsMultiModal,) if Suppor
                 vit.warm()
                 logger.info(
                     f"MiMo vLLM: replica {lane} ViT warmed up ({len(vit.buckets)} buckets) in {time.time() - t0:.1f}s"
+                )
+        for lane, tok in enumerate(getattr(self, "audio_tokenizers", [])):
+            if tok is not None:
+                t0 = time.time()
+                tok.warm()
+                logger.info(
+                    f"MiMo vLLM: replica {lane} audio tokenizer encoder warmed up ({len(tok.buckets)} buckets) in "
+                    f"{time.time() - t0:.1f}s"
                 )
         for lane, patch in enumerate(getattr(self, "audio_patches", [])):
             if patch is not None:
