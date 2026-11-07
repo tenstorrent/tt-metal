@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
+from models.demos.vision.detection.rtdetr.tt.backbone import interleaved_memory_config, l1_budget_bytes, padded_volume
 from models.demos.vision.detection.rtdetr.tt.encoder import TtRTDetrSelfAttention
 
 
@@ -120,6 +121,7 @@ class TtRTDetrDecoderSelfAttention(TtRTDetrSelfAttention):
 
 class TtRTDetrMultiscaleDeformableAttention:
     def __init__(self, config, parameters, device, dtype):
+        self.l1_budget = l1_budget_bytes(device)
         self.num_heads = config.decoder_attention_heads
         self.n_points = config.decoder_n_points
         self.d_model = config.d_model
@@ -184,8 +186,8 @@ class TtRTDetrMultiscaleDeformableAttention:
             device=device,
         )
 
-    @staticmethod
     def _deformable_attention(
+        self,
         value: ttnn.Tensor,
         value_spatial_shapes: ttnn.Tensor,
         value_spatial_shapes_list: tuple[tuple[int, int], ...],
@@ -209,9 +211,10 @@ class TtRTDetrMultiscaleDeformableAttention:
         )
         value_list = ttnn.split(value, level_sizes, dim=1)
 
+        # The grid is fp32, twice the bytes of the bf16 the budget helper assumes.
         sampling_locations = ttnn.to_memory_config(
             sampling_locations,
-            ttnn.L1_MEMORY_CONFIG,
+            interleaved_memory_config(self.l1_budget, 2 * padded_volume(sampling_locations)),
         )
         sampling_grids = sampling_locations * 2.0 - 1.0
         sampling_grids = ttnn.permute(sampling_grids, (0, 2, 1, 3, 4, 5))
@@ -222,14 +225,14 @@ class TtRTDetrMultiscaleDeformableAttention:
         sampling_grids = ttnn.to_layout(
             sampling_grids,
             ttnn.ROW_MAJOR_LAYOUT,
-            dtype=ttnn.bfloat16,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
+            dtype=ttnn.float32,
+            memory_config=interleaved_memory_config(self.l1_budget, 2 * padded_volume(sampling_grids)),
         )
         sampling_grid_list = ttnn.split(sampling_grids, 1, dim=2)
 
         attention_weights = ttnn.to_memory_config(
             attention_weights,
-            ttnn.L1_MEMORY_CONFIG,
+            interleaved_memory_config(self.l1_budget, padded_volume(attention_weights)),
         )
         attention_weights = ttnn.permute(attention_weights, (0, 2, 1, 3, 4))
         attention_weights = ttnn.reshape(
@@ -240,7 +243,7 @@ class TtRTDetrMultiscaleDeformableAttention:
             attention_weights,
             ttnn.ROW_MAJOR_LAYOUT,
             dtype=ttnn.bfloat16,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
+            memory_config=interleaved_memory_config(self.l1_budget, padded_volume(attention_weights)),
         )
         attention_weights_list = ttnn.split(attention_weights, 1, dim=2)
 
@@ -268,7 +271,9 @@ class TtRTDetrMultiscaleDeformableAttention:
                 mode="bilinear",
                 padding_mode="zeros",
                 align_corners=False,
-                memory_config=ttnn.L1_MEMORY_CONFIG,
+                memory_config=interleaved_memory_config(
+                    self.l1_budget, sampling_grid_l.shape[0] * sampling_grid_l.shape[1] * hidden_dim
+                ),
             )
             sampled_values = ttnn.reshape(
                 sampled_values,
@@ -285,7 +290,7 @@ class TtRTDetrMultiscaleDeformableAttention:
             output = ttnn.add(
                 output,
                 level_output,
-                memory_config=ttnn.L1_MEMORY_CONFIG,
+                memory_config=interleaved_memory_config(self.l1_budget, padded_volume(output)),
             )
 
         output = ttnn.reshape(output, (batch_size, num_heads, num_queries, hidden_dim))
@@ -294,7 +299,7 @@ class TtRTDetrMultiscaleDeformableAttention:
         output = ttnn.to_layout(
             output,
             ttnn.TILE_LAYOUT,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
+            memory_config=interleaved_memory_config(self.l1_budget, padded_volume(output)),
         )
 
         return output
@@ -329,7 +334,14 @@ class TtRTDetrMultiscaleDeformableAttention:
             ),
         )
 
-        sampling_offsets = ttnn.linear(hidden_states, self.sampling_offsets_weight, bias=self.sampling_offsets_bias)
+        # Sampling locations stay fp32 down to grid_sample: a bf16 coordinate in [-1, 1] is off by a
+        # sizeable fraction of a pixel on the larger feature maps.
+        sampling_offsets = ttnn.linear(
+            hidden_states,
+            self.sampling_offsets_weight,
+            bias=self.sampling_offsets_bias,
+            dtype=ttnn.float32,
+        )
         sampling_offsets = ttnn.reshape(
             sampling_offsets,
             (batch_size, num_queries, self.num_heads, self.n_levels, self.n_points, 2),
@@ -351,6 +363,7 @@ class TtRTDetrMultiscaleDeformableAttention:
         )
 
         num_reference_levels = reference_points.shape[-2]
+        reference_points = ttnn.typecast(reference_points, ttnn.float32)
         reference_points_xy = reference_points[..., :2]
         reference_points_wh = reference_points[..., 2:]
         reference_points_xy = ttnn.reshape(

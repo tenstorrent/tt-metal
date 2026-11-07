@@ -5,7 +5,14 @@
 import torch
 
 import ttnn
-from models.demos.vision.detection.rtdetr.tt.backbone import TtRTDetrResNetConvLayer
+from models.demos.vision.detection.rtdetr.tt.backbone import (
+    DRAM_ROW_MAJOR,
+    DRAM_TILE,
+    L1_TILE,
+    ConvInputSpec,
+    TtRTDetrResNetConvLayer,
+    add_memory_config,
+)
 
 
 class TtRTDetrConvNormLayer(TtRTDetrResNetConvLayer):
@@ -21,6 +28,10 @@ class TtRTDetrConvNormLayer(TtRTDetrResNetConvLayer):
         stride: tuple[int, int],
         padding: tuple[int, int],
         activation: str,
+        batch_size: int,
+        input_height: int,
+        input_width: int,
+        input_spec: ConvInputSpec,
     ):
         super().__init__(
             config=config,
@@ -33,11 +44,24 @@ class TtRTDetrConvNormLayer(TtRTDetrResNetConvLayer):
             stride=stride,
             padding=padding,
             activation=activation,
+            batch_size=batch_size,
+            input_height=input_height,
+            input_width=input_width,
+            input_spec=input_spec,
         )
 
 
 class TtRTDetrHybridEncoder:
-    def __init__(self, config, parameters, device, dtype):
+    def __init__(
+        self,
+        config,
+        parameters,
+        device,
+        dtype,
+        batch_size: int,
+        spatial_shapes: list[tuple[int, int]],
+        input_spec: ConvInputSpec = DRAM_TILE,
+    ):
         self.in_channels = config.encoder_in_channels
         self.feat_strides = config.feat_strides
         self.encoder_hidden_dim = config.encoder_hidden_dim
@@ -56,14 +80,25 @@ class TtRTDetrHybridEncoder:
                 parameters=parameters.aifi[ix],
                 device=device,
                 dtype=dtype,
+                height=spatial_shapes[feature_index][0],
+                width=spatial_shapes[feature_index][1],
             )
-            for ix in range(len(self.encode_proj_layers))
+            for ix, feature_index in enumerate(self.encode_proj_layers)
         ]
+
+        # AIFI writes its output tiled to DRAM.
+        feature_specs = [input_spec for _ in spatial_shapes]
+        if self.encoder_layers > 0:
+            for feature_index in self.encode_proj_layers:
+                feature_specs[feature_index] = DRAM_TILE
 
         # top-down FPN
         self.lateral_convs = []
         self.fpn_blocks = []
+        top_spec = feature_specs[-1]
         for ix in range(self.num_fpn_stages):
+            top_height, top_width = spatial_shapes[self.num_fpn_stages - ix]
+            fused_height, fused_width = spatial_shapes[self.num_fpn_stages - ix - 1]
             lateral_conv = TtRTDetrConvNormLayer(
                 config=config,
                 parameters=parameters.lateral_convs[ix],
@@ -75,20 +110,29 @@ class TtRTDetrHybridEncoder:
                 stride=(1, 1),
                 padding=(0, 0),
                 activation=config.activation_function,
+                batch_size=batch_size,
+                input_height=top_height,
+                input_width=top_width,
+                input_spec=top_spec,
             )
             fpn_block = TtRTDetrCSPRepLayer(
                 config=config,
                 parameters=parameters.fpn_blocks[ix],
                 device=device,
                 dtype=dtype,
+                batch_size=batch_size,
+                input_height=fused_height,
+                input_width=fused_width,
             )
             self.lateral_convs.append(lateral_conv)
             self.fpn_blocks.append(fpn_block)
+            top_spec = fpn_block.output_spec
 
         # bottom-up PAN
         self.downsample_convs = []
         self.pan_blocks = []
         for ix in range(self.num_pan_stages):
+            top_height, top_width = spatial_shapes[ix]
             downsample_conv = TtRTDetrConvNormLayer(
                 config=config,
                 parameters=parameters.downsample_convs[ix],
@@ -100,13 +144,21 @@ class TtRTDetrHybridEncoder:
                 stride=(2, 2),
                 padding=(1, 1),
                 activation=config.activation_function,
+                batch_size=batch_size,
+                input_height=top_height,
+                input_width=top_width,
+                input_spec=top_spec,
             )
             pan_block = TtRTDetrCSPRepLayer(
                 config=config,
                 parameters=parameters.pan_blocks[ix],
                 device=device,
                 dtype=dtype,
+                batch_size=batch_size,
+                input_height=downsample_conv.output_height,
+                input_width=downsample_conv.output_width,
             )
+            top_spec = pan_block.output_spec
             self.downsample_convs.append(downsample_conv)
             self.pan_blocks.append(pan_block)
 
@@ -231,8 +283,24 @@ class TtRTDetrHybridEncoder:
 
 
 class TtRTDetrRepVggBlock:
-    def __init__(self, config, parameters, device, dtype):
+    def __init__(
+        self,
+        config,
+        parameters,
+        device,
+        dtype,
+        batch_size: int,
+        input_height: int,
+        input_width: int,
+        input_spec: ConvInputSpec = L1_TILE,
+    ):
         hidden_channels = int(config.encoder_hidden_dim * config.hidden_expansion)
+        conv_input = {
+            "batch_size": batch_size,
+            "input_height": input_height,
+            "input_width": input_width,
+            "input_spec": input_spec,
+        }
 
         if config.activation_function == "silu":
             self.activation = ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU)
@@ -248,6 +316,7 @@ class TtRTDetrRepVggBlock:
             stride=(1, 1),
             padding=(1, 1),
             activation="identity",
+            **conv_input,
         )
         self.conv2 = TtRTDetrConvNormLayer(
             config=config,
@@ -260,7 +329,16 @@ class TtRTDetrRepVggBlock:
             stride=(1, 1),
             padding=(0, 0),
             activation="identity",
+            **conv_input,
         )
+
+        # The add keeps its tiled output sharded in L1 unless it is sent to DRAM.
+        self.add_memory_config = add_memory_config(
+            device,
+            batch_size * input_height * input_width * hidden_channels,
+            first_input_spec=self.conv1.output_spec,
+        )
+        self.output_spec = DRAM_TILE if self.add_memory_config is not None else L1_TILE
 
     def __call__(
         self,
@@ -271,16 +349,37 @@ class TtRTDetrRepVggBlock:
     ) -> tuple[ttnn.Tensor, int, int]:
         hidden_states_1, output_height, output_width = self.conv1(hidden_states, batch_size, input_height, input_width)
         hidden_states_2, _, _ = self.conv2(hidden_states, batch_size, input_height, input_width)
-        hidden_states = ttnn.add(hidden_states_1, hidden_states_2, activations=[self.activation])
+        hidden_states = ttnn.add(
+            hidden_states_1,
+            hidden_states_2,
+            activations=[self.activation],
+            memory_config=self.add_memory_config,
+        )
 
         return hidden_states, output_height, output_width
 
 
 class TtRTDetrCSPRepLayer:
-    def __init__(self, config, parameters, device, dtype):
+    def __init__(
+        self,
+        config,
+        parameters,
+        device,
+        dtype,
+        batch_size: int,
+        input_height: int,
+        input_width: int,
+        input_spec: ConvInputSpec = DRAM_ROW_MAJOR,
+    ):
         in_channels = config.encoder_hidden_dim * 2
         out_channels = config.encoder_hidden_dim
         hidden_channels = int(out_channels * config.hidden_expansion)
+        conv_input = {
+            "batch_size": batch_size,
+            "input_height": input_height,
+            "input_width": input_width,
+            "input_spec": input_spec,
+        }
 
         self.conv1 = TtRTDetrConvNormLayer(
             config=config,
@@ -293,6 +392,7 @@ class TtRTDetrCSPRepLayer:
             stride=(1, 1),
             padding=(0, 0),
             activation=config.activation_function,
+            **conv_input,
         )
         self.conv2 = TtRTDetrConvNormLayer(
             config=config,
@@ -305,16 +405,31 @@ class TtRTDetrCSPRepLayer:
             stride=(1, 1),
             padding=(0, 0),
             activation=config.activation_function,
+            **conv_input,
         )
-        self.bottlenecks = [
-            TtRTDetrRepVggBlock(
+        self.bottlenecks = []
+        bottleneck_spec = self.conv1.output_spec
+        for ix in range(len(parameters.bottlenecks)):
+            bottleneck = TtRTDetrRepVggBlock(
                 config=config,
                 parameters=parameters.bottlenecks[ix],
                 device=device,
                 dtype=dtype,
+                batch_size=batch_size,
+                input_height=self.conv1.output_height,
+                input_width=self.conv1.output_width,
+                input_spec=bottleneck_spec,
             )
-            for ix in range(3)
-        ]
+            self.bottlenecks.append(bottleneck)
+            bottleneck_spec = bottleneck.output_spec
+
+        # The add keeps its tiled output sharded in L1 unless it is sent to DRAM.
+        self.add_memory_config = add_memory_config(
+            device,
+            batch_size * self.conv1.output_height * self.conv1.output_width * hidden_channels,
+            first_input_spec=bottleneck_spec,
+        )
+        self.output_spec = DRAM_TILE if self.add_memory_config is not None else L1_TILE
         self.conv3 = None
         if hidden_channels != out_channels:
             self.conv3 = TtRTDetrConvNormLayer(
@@ -328,7 +443,12 @@ class TtRTDetrCSPRepLayer:
                 stride=(1, 1),
                 padding=(0, 0),
                 activation=config.activation_function,
+                batch_size=batch_size,
+                input_height=self.conv1.output_height,
+                input_width=self.conv1.output_width,
+                input_spec=self.output_spec,
             )
+            self.output_spec = self.conv3.output_spec
 
     def __call__(
         self,
@@ -346,7 +466,7 @@ class TtRTDetrCSPRepLayer:
 
         hidden_states_2, _, _ = self.conv2(hidden_states, batch_size, input_height, input_width)
 
-        hidden_states = ttnn.add(hidden_states_1, hidden_states_2)
+        hidden_states = ttnn.add(hidden_states_1, hidden_states_2, memory_config=self.add_memory_config)
 
         if self.conv3 is not None:
             hidden_states, output_height, output_width = self.conv3(
@@ -357,12 +477,23 @@ class TtRTDetrCSPRepLayer:
 
 
 class TtRTDetrAIFILayer:
-    def __init__(self, config, parameters, device, dtype):
+    def __init__(self, config, parameters, device, dtype, height: int, width: int):
         self.device = device
         self.dtype = dtype
         self.encoder_hidden_dim = config.encoder_hidden_dim
-        self.positional_encoding_temp = config.positional_encoding_temperature
-        self.position_embedding_cache = {}
+        self.height = height
+        self.width = width
+        self.position_embeddings = ttnn.from_torch(
+            self._build_2d_sinusoidal_position_embedding(
+                height=height,
+                width=width,
+                embed_dim=self.encoder_hidden_dim,
+                temperature=config.positional_encoding_temperature,
+            ),
+            dtype=dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+        )
 
         self.layers = [
             TtRTDetrEncoderLayer(config, parameters=parameters.layers[ix], device=device, dtype=dtype)
@@ -401,27 +532,14 @@ class TtRTDetrAIFILayer:
         )
         return position_embedding.to(torch.float32).unsqueeze(0)
 
-    def _build_sinusoidal_position_embedding(self, height: int, width: int) -> ttnn.Tensor:
-        cache_key = (height, width)
-        if cache_key not in self.position_embedding_cache:
-            position_embedding = self._build_2d_sinusoidal_position_embedding(
-                height=height,
-                width=width,
-                embed_dim=self.encoder_hidden_dim,
-                temperature=self.positional_encoding_temp,
-            )
-            self.position_embedding_cache[cache_key] = ttnn.from_torch(
-                position_embedding,
-                dtype=self.dtype,
-                layout=ttnn.TILE_LAYOUT,
-                device=self.device,
-            )
-
-        return self.position_embedding_cache[cache_key]
-
     def __call__(
         self, hidden_states: ttnn.Tensor, batch_size: int, height: int, width: int
     ) -> tuple[ttnn.Tensor, int, int]:
+        if (height, width) != (self.height, self.width):
+            raise ValueError(
+                f"AIFI position embeddings were built for {(self.height, self.width)}, got {(height, width)}"
+            )
+
         hidden_states = ttnn.to_memory_config(
             hidden_states,
             ttnn.DRAM_MEMORY_CONFIG,
@@ -435,10 +553,8 @@ class TtRTDetrAIFILayer:
             (batch_size, height * width, self.encoder_hidden_dim),
         )
 
-        position_embeddings = self._build_sinusoidal_position_embedding(height, width)
-
         for layer in self.layers:
-            hidden_states = layer(hidden_states, position_embeddings=position_embeddings)
+            hidden_states = layer(hidden_states, position_embeddings=self.position_embeddings)
 
         hidden_states = ttnn.reshape(
             hidden_states,

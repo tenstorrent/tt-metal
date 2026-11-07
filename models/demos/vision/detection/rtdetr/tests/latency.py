@@ -183,3 +183,12 @@ def test_rtdetr_v2_batch_1_trace_latency(device):
 )
 def test_rtdetr_batch_1_e2e_latency(device):
     run_rtdetr_batch_1_e2e_latency(device, model_version=1)
+
+
+@pytest.mark.parametrize(
+    "device_params",
+    [{"l1_small_size": 16384, "trace_region_size": 1 << 26}],
+    indirect=True,
+)
+def test_rtdetr_v2_batch_1_e2e_latency(device):
+    run_rtdetr_batch_1_e2e_latency(device, model_version=2)
