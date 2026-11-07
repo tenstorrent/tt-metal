@@ -152,6 +152,10 @@ class KDAProgramConfig:
     # Blackhole di/dt: at most this many cores run the layer's matmuls (the projections) at once. They take the widest
     # full-height block of worker columns within it (matmul_grid: 11 x 10 of the 12 x 10 grid at 110).
     max_matmul_cores: int = 110
+    # With a tuned input projection, TP > 1 and a TP-sharded input, the TP all-gather of the input runs inside the
+    # input projection's program, on the worker column beside the matmul grid, and the matmul starts with this rank's
+    # own K slice while the others arrive (ttnn.experimental.all_gather_matmul_prefill).
+    fuse_tp_gather: bool = True
 
     def __post_init__(self) -> None:
         if self.input_projection_gate_heads is not None and self.input_projection_gate_heads < 0:

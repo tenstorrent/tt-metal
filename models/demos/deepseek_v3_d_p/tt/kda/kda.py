@@ -28,9 +28,9 @@ from models.demos.deepseek_v3_d_p.tt.kda.config import (
     convolution_tail_shape,
     decay_projection_program_config,
     l1_when_it_fits,
-    output_gate_program_config,
     matmul_core_grid,
     matmul_grid,
+    output_gate_program_config,
     padded_projection_width,
     tuned_projection_matmul_configs,
     validate_convolution_page_channels,
@@ -132,6 +132,51 @@ class _HistoryExchange:
 
 
 _history_exchanges: dict[tuple[int, int], _HistoryExchange] = {}
+
+
+@dataclass
+class _TpGather:
+    """Persistent state of the input projection's in-program TP all-gather (ttnn.experimental.all_gather_matmul_prefill).
+
+    Peers write this rank's gathered input and bump its counters, possibly before this rank's call starts (once it has
+    started its previous one), so both outlive every call. The ready semaphore lives on the gather column beside the
+    matmul grid, the slice counters on the matmul's first column (its in0 senders), in L1_SMALL when the device has one.
+
+    Every KDA layer on a mesh shares one: the gather's entry handshake orders calls, not layers. The gathered input
+    stays valid after the call for the layer's other readers of the full-width input (the output gate beside the
+    relay).
+    """
+
+    gathered: ttnn.Tensor
+    ready: ttnn.GlobalSemaphore
+    counters: list[ttnn.GlobalSemaphore]
+
+    @classmethod
+    def shared(cls, mesh_device: ttnn.MeshDevice, rows: int, width: int, ranks: int, matmul_grid) -> _TpGather:
+        """The mesh's gather for this geometry, allocated on first use (mesh ids are never reused)."""
+        key = (mesh_device.id(), rows, width, ranks, matmul_grid.x, matmul_grid.y)
+        if key not in _tp_gathers:
+            gather_column = ttnn.CoreRangeSet(
+                [ttnn.CoreRange(ttnn.CoreCoord(matmul_grid.x, 0), ttnn.CoreCoord(matmul_grid.x, matmul_grid.y - 1))]
+            )
+            in0_senders = ttnn.CoreRangeSet(
+                [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, matmul_grid.y - 1))]
+            )
+            _tp_gathers[key] = cls(
+                gathered=ttnn.allocate_tensor_on_device(
+                    ttnn.Shape([1, rows, width]),
+                    ttnn.bfloat16,
+                    ttnn.TILE_LAYOUT,
+                    mesh_device,
+                    ttnn.DRAM_MEMORY_CONFIG,
+                ),
+                ready=persistent_semaphores(mesh_device, 1, gather_column)[0],
+                counters=persistent_semaphores(mesh_device, ranks - 1, in0_senders),
+            )
+        return _tp_gathers[key]
+
+
+_tp_gathers: dict[tuple, _TpGather] = {}
 
 
 @dataclass(frozen=True)
@@ -315,6 +360,25 @@ class ttKDA:
             if program_config.tuned_projection_matmuls
             else (None, None)
         )
+        # The TP all-gather of a sharded input runs inside the input projection's program (fuse_tp_gather), on the
+        # worker column right of the matmul grid.
+        self._tp_gather = None
+        device_grid = mesh_device.compute_with_storage_grid_size()
+        if (
+            program_config.fuse_tp_gather
+            and self.tensor_parallel_size > 1
+            and self.input_projection_program_config is not None
+            and self._matmul_grid.x < device_grid.x
+        ):
+            self._tp_gather = _TpGather.shared(
+                mesh_device,
+                self.active_seq_len_local,
+                self.config.hidden_size,
+                self.tensor_parallel_size,
+                self._matmul_grid,
+            )
+            # Two senders per link share the gather column.
+            self._tp_gather_links = max(1, min(self._tp_num_links, self._matmul_grid.y // 2))
         decay_width = self.config.num_heads * self.config.head_k_dim
         self.decay_program_config = decay_projection_program_config(
             self._matmul_grid,
@@ -510,17 +574,44 @@ class ttKDA:
         if state.convolution.dtype != ttnn.bfloat16 or state.convolution.layout != ttnn.ROW_MAJOR_LAYOUT:
             raise ValueError("convolution state must be BF16 row-major")
 
+    def _fuses_tp_gather(self, hidden_states: ttnn.Tensor) -> bool:
+        """Whether this TP-sharded input is gathered inside the input projection's program."""
+        return self._tp_gather is not None and hidden_states.shape[-1] == self._tp_input_width
+
     def _project_inputs(
         self,
         hidden_states: ttnn.Tensor,
     ) -> _ProjectedInputs:
-        """Run the fused input projection and locate its semantic columns."""
+        """Run the fused input projection and locate its semantic columns.
+
+        A TP-sharded input (_fuses_tp_gather) is gathered inside the projection's program, into _TpGather.gathered.
+        """
         config = self.config
         weights = self.weights
         # The tuned schedule writes the projection to L1: it is only read back by this layer (the QKV, decay, beta
         # and output-gate columns, all in place), and its DRAM write would otherwise sit after the last K block,
         # outside the compute.
-        projected = ttnn.linear(
+        if self._fuses_tp_gather(hidden_states):
+            gather = self._tp_gather
+            projected = ttnn.experimental.all_gather_matmul_prefill(
+                hidden_states,
+                weights.input_projection,
+                gather.gathered,
+                gather.ready,
+                gather.counters,
+                cluster_axis=self.tensor_parallel_axis,
+                program_config=self.input_projection_program_config,
+                num_links=self._tp_gather_links,
+                compute_kernel_config=self.input_projection_compute_config,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+            )
+        else:
+            projected = self._project_full_width_input(hidden_states)
+        return self._locate_projected_columns(projected)
+
+    def _project_full_width_input(self, hidden_states: ttnn.Tensor) -> ttnn.Tensor:
+        weights = self.weights
+        return ttnn.linear(
             hidden_states,
             weights.input_projection,
             program_config=self.input_projection_program_config,
@@ -530,6 +621,9 @@ class ttKDA:
             ),
             compute_kernel_config=self.input_projection_compute_config,
         )
+
+    def _locate_projected_columns(self, projected: ttnn.Tensor) -> _ProjectedInputs:
+        config = self.config
         auxiliary_start = self._convolution_width
         return _ProjectedInputs(
             projected=projected,
@@ -695,8 +789,13 @@ class ttKDA:
         # convolution's history-exchange entry barrier below keeps every rank from relaying until all have reserved it:
         # keep an SP barrier between this reservation and the recurrence.
         self.recurrence.reserve_affine_relay()
-        hidden_states, gathered = self._gather_tp_input(hidden_states)
-        inputs = self._project_inputs(hidden_states)
+        if self._fuses_tp_gather(hidden_states):
+            inputs = self._project_inputs(hidden_states)
+            # The gathered input persists across calls (_TpGather): the output gate beside the relay reads it.
+            hidden_states, gathered = self._tp_gather.gathered, False
+        else:
+            hidden_states, gathered = self._gather_tp_input(hidden_states)
+            inputs = self._project_inputs(hidden_states)
         # With side windows the output gate's projection beside the relay reads it too.
         if gathered and self._side_windows is None:
             ttnn.deallocate(hidden_states)
