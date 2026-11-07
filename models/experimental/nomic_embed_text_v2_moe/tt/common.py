@@ -433,6 +433,7 @@ def layer_norm(
     keep_sharded: bool = False,
     consume_input: bool = False,
     in_place: bool = True,
+    grid: ttnn.CoreCoord | None = None,
 ) -> ttnn.Tensor | tuple[ttnn.Tensor, ttnn.Tensor | None]:
     """layer_norm(x + residual) over the last axis of x, (B, 1, S, W), written where memory_config says.
 
@@ -447,13 +448,16 @@ def layer_norm(
     output lands decides the L1 plans after it: in place it takes x's slot, otherwise the highest free block
     it fits, below x and the residual or in a hole above them (tt/block.py).
 
+    grid is the core grid the producers build the split layout over (sharded_norm_layout); None means the
+    device's whole grid.
+
     Returns:
         The output; with keep_sharded=True, (output, its block-sharded form, or None where there is
         none or the output is already in that layout).
     """
     width_tiles = x.shape[-1] // ttnn.TILE_SIZE
     rows = m_tiles(x.shape)
-    split = sharded_norm_split(rows, width_tiles, x.device().compute_with_storage_grid_size())
+    split = sharded_norm_split(rows, width_tiles, grid or x.device().compute_with_storage_grid_size())
     if split is None:
         weight, bias = parameters.for_input(x)
         out = ttnn.layer_norm(

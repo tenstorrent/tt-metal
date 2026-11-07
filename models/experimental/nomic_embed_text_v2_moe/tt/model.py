@@ -179,6 +179,7 @@ class TtNomicBertModel(LightweightModule):
             compute_kernel_config=self.tt_config.compute_kernel_config(OpGroup.NORM),
             keep_sharded=True,
             consume_input=True,
+            grid=self.tt_config.core_grid,
         )
         out = self.encoder(normalized, rot_mats, mask, free_input=True, hidden_sharded=normalized_sharded)
         self.rotary_tables.release(rot_mats)
