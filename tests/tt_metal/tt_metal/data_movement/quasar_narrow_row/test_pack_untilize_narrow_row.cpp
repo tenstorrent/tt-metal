@@ -87,13 +87,7 @@ const char* engine_name(EngineMode e) {
     return "unknown";
 }
 
-bool should_skip_test() {
-    const auto arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
-    if (arch != tt::ARCH::QUASAR) {
-        return true;
-    }
-    return std::getenv("TT_METAL_SIMULATOR") == nullptr;
-}
+bool should_skip_test() { return tt::get_arch_from_string(tt::test_utils::get_umd_arch_name()) != tt::ARCH::QUASAR; }
 
 // Unique, bit-stable Float16_b stimulus: each datum names its own position in the PADDED
 // untilized matrix, so a datum that lands in the wrong place is caught by value, not just by
@@ -417,7 +411,7 @@ class QuasarNarrowRowUntilize : public QuasarMeshDeviceSingleCardFixture {};
 TEST_F(QuasarNarrowRowUntilize, WidthAndTileRowSweep) {
     using namespace unit_tests::dm::quasar_narrow_row;
     if (should_skip_test()) {
-        GTEST_SKIP() << "Test requires Quasar simulator";
+        GTEST_SKIP() << "Test requires Quasar";
     }
     auto buffers = make_buffers(devices_[0], /*max_ct_dim=*/8);
     for (std::uint32_t ct_dim : {1u, 2u, 4u, 8u}) {
@@ -437,7 +431,7 @@ TEST_F(QuasarNarrowRowUntilize, WidthAndTileRowSweep) {
 TEST_F(QuasarNarrowRowUntilize, SubFaceWidths) {
     using namespace unit_tests::dm::quasar_narrow_row;
     if (should_skip_test()) {
-        GTEST_SKIP() << "Test requires Quasar simulator";
+        GTEST_SKIP() << "Test requires Quasar";
     }
     auto buffers = make_buffers(devices_[0], /*max_ct_dim=*/2);
     // ct_dim 1 is the case that actually tests the claim: it produces 2 B to 40 B rows, below
@@ -466,7 +460,7 @@ TEST_F(QuasarNarrowRowUntilize, SubFaceWidths) {
 TEST_F(QuasarNarrowRowUntilize, EngineParity) {
     using namespace unit_tests::dm::quasar_narrow_row;
     if (should_skip_test()) {
-        GTEST_SKIP() << "Test requires Quasar simulator";
+        GTEST_SKIP() << "Test requires Quasar";
     }
     auto buffers = make_buffers(devices_[0], /*max_ct_dim=*/8);
     struct Shape {
