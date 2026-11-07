@@ -26,10 +26,10 @@ Single-card only (mesh 1x1) — shapes match one Galaxy chip's shard; SP mesh co
 import pytest
 import torch
 from loguru import logger
+from ttnn.operations.transformer_golden import sparse_attention_ref_msa
 
 import ttnn
 from models.common.utility_functions import comp_pcc
-from tests.ttnn.unit_tests.operations.sdpa.sparse_sdpa_msa_test_utils import sparse_attention_ref_msa
 
 from ..test_factory import parametrize_mesh_with_fabric
 

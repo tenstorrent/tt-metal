@@ -25,6 +25,7 @@ from loguru import logger
 import ttnn
 from models.common.utility_functions import comp_pcc
 from models.demos.minimax_m3.config import MeshConfig
+from models.demos.minimax_m3.tests.unit.sparse_attention_ref import sparse_attention_ref_msa_sampled_tokens
 from models.demos.minimax_m3.tt.attention.config import AttentionConfig
 from models.demos.minimax_m3.tt.attention.msa import index_branch_forward, msa_indexer_sparse
 from models.demos.minimax_m3.tt.attention.operations import (
@@ -39,7 +40,6 @@ from models.demos.minimax_m3.tt.model import create_rope_setup
 from models.demos.minimax_m3.utils.general_utils import get_default_num_links
 from models.demos.minimax_m3.utils.model_variant import load_config, select_variant
 from models.demos.minimax_m3.utils.weight_conversion import convert_hf_qkv_to_meta_format_partial
-from tests.ttnn.unit_tests.operations.sdpa.sparse_sdpa_msa_test_utils import sparse_attention_ref_msa_sampled_tokens
 
 from ..test_factory import parametrize_mesh_with_fabric
 
