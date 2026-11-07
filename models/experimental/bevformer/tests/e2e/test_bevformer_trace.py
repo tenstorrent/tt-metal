@@ -19,7 +19,7 @@ from models.experimental.bevformer.tests.common import (
     build_reference_bevformer,
     frame_metas,
     random_image_batch,
-    to_conv_layout,
+    to_image_layout,
     turn_rig,
 )
 from models.experimental.bevformer.tt.model_preprocessing import create_bevformer_parameters
@@ -58,7 +58,7 @@ def _sequence(generator):
 
 
 def _host_image(images):
-    return to_conv_layout(images, None, ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
+    return to_image_layout(images, None)
 
 
 def _to_torch(tensors):

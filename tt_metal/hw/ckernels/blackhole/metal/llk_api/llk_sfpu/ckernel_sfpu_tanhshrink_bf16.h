@@ -4,10 +4,6 @@
 #pragma once
 #include <cstdint>
 namespace ckernel::sfpu {
-struct TanhshrinkBf16Config {};
-}  // namespace ckernel::sfpu
-
-namespace ckernel::sfpu {
 
 // The kernel is fitted on BF16 data; the SFPU reads DEST in the math thread's SrcB format, as BF16 for
 // Float16_b and the block formats sharing its exponent.

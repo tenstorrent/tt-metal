@@ -88,10 +88,11 @@ tensor_return_value_t MoeUngroupDeviceOperation::create_output_tensors(
     return ttnn::create_device_tensor(spec, device);
 }
 
+// Hashes what the default key hashes (every attribute, the full spec of every tensor). It is custom only to skip the
+// canonical key string the default key also builds on every dispatch.
 ttsl::hash::hash_t MoeUngroupDeviceOperation::compute_program_hash(
     const operation_attributes_t& attrs, const tensor_args_t& args) {
-    return tt::tt_metal::operation::hash_operation<MoeUngroupDeviceOperation>(
-        attrs, args.expert_out.dtype(), args.expert_out.logical_shape());
+    return tt::tt_metal::operation::hash_operation<MoeUngroupDeviceOperation>(attrs, args);
 }
 
 }  // namespace ttml::metal::ops::moe_ungroup::device

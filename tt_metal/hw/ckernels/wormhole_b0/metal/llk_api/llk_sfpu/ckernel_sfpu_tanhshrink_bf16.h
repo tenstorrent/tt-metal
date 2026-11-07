@@ -38,8 +38,7 @@ inline bool bf16_dest_tanhshrink() {
     return false;
 #endif
 }
-// Each call records replay slots 0-31, overwriting what an init recorded there (matmul and reduce
-// record from replay_buf_offset = 16).
+// Each call records replay slots 0-31, overwriting what an init recorded there (from 16).
 template <int ITERATIONS = 32>
 __attribute__((noinline)) inline void calculate_tanhshrink_bf16() {
     ckernel::sfpu::bf16::tanhshrink::calculate_signed_abs_affine<ckernel::sfpu::TanhshrinkBf16Config, ITERATIONS>();

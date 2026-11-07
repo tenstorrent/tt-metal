@@ -646,9 +646,8 @@ def test_resnet50_linear(device):
         # Matrix-vector: (m, k) x (k) -> (m)
         ((32, 32), (32,), (32,)),  # Standard bias shape
         ((32, 32), (32,), (1,)),  # Broadcast bias
-        # GH Issue #16599
-        pytest.param((32, 1, 32), (32, 32), (1, 32), marks=pytest.mark.xfail),  # 4D tensors with no bias
-        ((32, 2, 32), (32, 32), (1, 32)),  # 4D tensors with no bias
+        ((32, 1, 32), (32, 32), (1, 32)),  # 3D input with bias
+        ((32, 2, 32), (32, 32), (1, 32)),  # 3D input with bias
     ],
 )
 def test_vector_linear(device, shape_a, shape_b, shape_bias) -> None:
