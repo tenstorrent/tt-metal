@@ -373,9 +373,20 @@ class PassInputs:
 
 
 class HostRVQ:
-    """The reference's 20-stage residual VQ in fp32 on the host (``AudioTokenizerEncoder.quantize``, same code)."""
+    """The reference's 20-stage residual VQ in fp32 on the host (``AudioTokenizerEncoder.quantize``, same code), on
+    blocks of ``rows`` rows: the ops are per row and give every row the codes of one call over all rows
+    (tests/test_audio_host_backend_host.py: 300 s of speech in blocks of 1000-4096 rows at 1 and 8 threads), while the
+    blocks' [rows, 1024] temporaries stay in cache: 41K frames (a 27 min video's track) took 0.87 s instead of 3.27 s
+    at 8 threads on bhg2, with the same codes."""
 
-    quantize = ref.AudioTokenizerEncoder.quantize
+    reference_quantize = ref.AudioTokenizerEncoder.quantize
+    rows = 4096
+
+    def quantize(self, h):
+        if h.shape[0] <= self.rows:
+            return self.reference_quantize(h)
+        blocks = [self.reference_quantize(h[i : i + self.rows]) for i in range(0, h.shape[0], self.rows)]
+        return torch.cat(blocks, dim=1)
 
     def __init__(self, weights, cfg):
         self.rvq_dtype = torch.float32

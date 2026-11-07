@@ -141,7 +141,10 @@ second at ~280 merged tokens a frame pair (16-34K tokens on Video-MME short) and
 * `tt/video_audio.py`: a video's audio track decoded from the video's bytes and interleaved per temporal grid at 6.25
   tokens a second, as the checkpoint's processor does (`video_audio` items; `MIMO_VIDEO_AUDIO`, default on when audio
   is served; per request / server `mm_processor_kwargs: {"mimo_video_audio": true|false}`); the engine interleaves the
-  ViT rows and the audio patch encoder's rows (`tt/multimodal.py interleave_video_audio`).
+  ViT rows and the audio patch encoder's rows (`tt/multimodal.py interleave_video_audio`). The track follows
+  `MIMO_AUDIO_TOKENIZER` like an audio item: `device` (default) sends its fp32 mel bit for bit (`va_audio_mel_bits`)
+  and the request's row tokenizes it (device tokenizer encoder, host RVQ, codes remembered by item identifier:
+  `MIMO_MM_TRACK_CODES_MB`); `frontend` tokenizes it in the API server (`va_audio_codes`).
 * `tt/video_prompt.py`: the checkpoint processor's video prompt (`MIMO_VIDEO_PROMPT=hf`, default) instead of
   upstream's extra outer `<|vision_start|> .. <|vision_end|>`.
 
@@ -157,7 +160,15 @@ URL itself `VLLM_MAX_MEDIA_DOWNLOAD_SIZE_MB=400` and `VLLM_VIDEO_FETCH_TIMEOUT=3
 in the API server, where vLLM processes multimodal items one at a time. On bhg2's CPU (10.5 / 27.3 / 40.3 min videos,
 129.5 / 133.2 / 145.8K tokens; 2026-11-07): vLLM's OpenCV decode at 2 fps 6-20 s, the audio track's decode 1-4 s, the
 frame resize 1.2-4.4 s (OpenCV, `MIMO_VIDEO_RESIZE=cv2`, default; torch's 10-25 s), the checkpoint processor and mel
-3-4 s, and the fp32 CPU audio tokenizer 56-204 s (~5 s a minute of audio, 75-84 % of the front end). The next question on
+3-4 s, and the fp32 CPU audio tokenizer 56-204 s (~5 s a minute of audio, 75-84 % of the front end). That tokenizer now
+runs on the request's row (`MIMO_AUDIO_TOKENIZER=device`, the default; `tests/perf/video_audio_device.py`, bhg2 row 1,
+27.3 / 40.3 min videos): the front end takes 21 / 40 s instead of 151 / 230 s (vLLM's decode 13 / 29 s of it; the
+40 min host run shared the CPU with a host test), and the engine's encode of the item 16.4 / 21.5 s instead of
+6.8 / 7.0 s (ViT 6.0-6.2 s, device tokenizer encoder 8.9 / 13.2 s, host RVQ 0.9 / 1.4 s, patch encoder 0.3 / 0.5 s;
+the row's other requests wait meanwhile, as for the ViT), with the same prompt (133188 / 145825 tokens), 95.8 / 96.2 %
+of the code frames equal to the front end's fp32 codes, the audio rows at PCC 0.999 and the frame rows identical. An
+item encoded again (embeddings evicted from the engine's cache) takes 6.7 / 6.9 s: its codes are remembered. The
+next question on
 a video hits vLLM's processor cache (0.1-0.3 s; the track's decode is cached too, `MIMO_VIDEO_AUDIO_CACHE_MB`) and the
 prefix cache (129024 of 129538 tokens): 9.9 s end to end on the 10.5 min video, nearly all of it vLLM decoding the video
 again. A client that sends `"uuid": <video id>` in the video part of every request on a video, and `"video_url": null`
@@ -176,7 +187,7 @@ Video-MME short docs 0-59, one row engine at concurrency 8 (Xiaomi's API: 75.0 %
 | Xiaomi's sizes (307200 a frame, every second at 2 fps) + audio + `hf` (the defaults) | 71.7 | 0 | 30.1K | 25.9 s / - |
 
 At 2 fps a request's ViT takes ~0.5 s and its prefill ~3.9 s (c=1, 26K tokens); the front end's audio tokenizer adds
-~2.5 s a request (CPU, 8 threads).
+~2.5 s a request (CPU, 8 threads; these runs predate the track's device tokenizer, so they tokenized in the front end).
 
 ## Workstreams
 

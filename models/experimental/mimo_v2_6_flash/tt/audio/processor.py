@@ -63,7 +63,8 @@ WER 1.793 %, 1 degenerate output (the same item), no burst, TT_METAL_TRACE_ALLOC
 streamed requests at concurrency 8: LibriSpeech, MMAU, 30 s and 120 s clips): p50 4.54 -> 1.08 s, p95 6.62 -> 1.85 s
 (30 s clip 5.86 -> 0.57 s). An earlier device run (before the verify-trace warm-up fix f4c26ced179) had 12 degenerate
 generations in two bursts of in-flight requests (WER 2.557 %). MMAU test-mini (that earlier run, host patch encoder):
-61.7 % frontend, 62.3 % device. ``frontend`` keeps the bit-identical host path.
+61.7 % frontend, 62.3 % device. ``frontend`` keeps the bit-identical host path. A video's audio track follows the
+same setting (tt/video_audio.py: ``va_audio_mel_bits`` or ``va_audio_codes``).
 
 MIMO_AUDIO_FRONTEND_THREADS (default 8): torch threads of the encoders in the front end (vLLM runs the processor
 with OMP_NUM_THREADS threads, 1 when unset).

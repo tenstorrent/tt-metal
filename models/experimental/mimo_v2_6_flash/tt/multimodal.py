@@ -226,11 +226,83 @@ class EncoderBackend(Protocol):
         ...
 
 
+def mel_from_bits(bits, what):
+    """An item's fp32 mel sent as its int32 bits (``audio_mel_bits`` / ``va_audio_mel_bits``: vLLM casts floating
+    processor outputs to the model dtype, integers never) -> float32 [T, 128], bit for bit."""
+    bits = torch.as_tensor(bits)
+    if bits.dtype != torch.int32:
+        raise MMInputError(f"{what}: mel bits must be int32, got {bits.dtype}")
+    return bits.contiguous().view(torch.float32)
+
+
+class TrackCodes:
+    """RVQ codes of video audio tracks the engine tokenized (``va_audio_mel_bits``), by item identifier, least
+    recently used first out past MIMO_MM_TRACK_CODES_MB (default 64; int16, 1.6 MB for a 27 min track). A video whose
+    embeddings left the EmbeddingCache (its next question, or a chunk start moved back into it) re-runs its ViT
+    passes but not its tokenizer encoder, as with codes from the front end (MIMO_AUDIO_TOKENIZER=frontend)."""
+
+    def __init__(self, budget_bytes=None):
+        if budget_bytes is None:
+            budget_bytes = int(float(os.environ.get("MIMO_MM_TRACK_CODES_MB", "64")) * 2**20)
+        self.budget, self.used = budget_bytes, 0
+        self.entries = collections.OrderedDict()
+        self.lock = threading.Lock()
+
+    def get(self, identifier):
+        with self.lock:
+            codes = self.entries.get(identifier)
+            if codes is not None:
+                self.entries.move_to_end(identifier)
+            return codes
+
+    def put(self, identifier, codes):
+        codes = codes.to(torch.int16)  # codebooks of at most 1024 entries
+        size = codes.numel() * codes.element_size()
+        with self.lock:
+            old = self.entries.pop(identifier, None)
+            if old is not None:
+                self.used -= old.numel() * old.element_size()
+            if size > self.budget:
+                return
+            self.entries[identifier] = codes
+            self.used += size
+            while self.used > self.budget:
+                _, out = self.entries.popitem(last=False)
+                self.used -= out.numel() * out.element_size()
+
+
+TRACK_CODES = TrackCodes()
+
+
+def video_audio_codes(backend, item):
+    """A video item's audio track as RVQ codes [n_codes, 20]: ``va_audio_codes`` from the front end
+    (MIMO_AUDIO_TOKENIZER=frontend), else its fp32 mel (``va_audio_mel_bits``, the default) through
+    ``backend.audio_codes`` (the row's device tokenizer encoder and the host RVQ), remembered in TRACK_CODES."""
+    codes = _field(item.data, "va_audio_codes")
+    if codes is not None:
+        return torch.as_tensor(codes)
+    bits = _field(item.data, "va_audio_mel_bits")
+    if bits is None:
+        raise MMInputError(f"video item {item.identifier}: an audio track without va_audio_codes / va_audio_mel_bits")
+    if item.identifier is not None:
+        codes = TRACK_CODES.get(item.identifier)
+        if codes is not None:
+            return codes
+    if not hasattr(backend, "audio_codes"):
+        raise MMInputError("this backend has no audio tokenizer encoder (audio_codes)")
+    codes = backend.audio_codes(mel_from_bits(bits, f"video item {item.identifier}"))
+    if item.identifier is not None:
+        TRACK_CODES.put(item.identifier, codes)
+    return codes
+
+
 def interleave_video_audio(backend, item, frames):
     """A video with its audio track (tt/video_audio.py): the frames' rows ``frames`` [T * n_per_grid, hidden] and the
-    audio's (``va_audio_codes`` through ``backend.embed_audio_codes``) in the order of the item's embedding rows, as
-    vLLM 0.30's MiMoV2OmniForCausalLM.embed_multimodal lays them out: per group of T / n_segs grids, the group's frames,
-    then the group's audio segment (``video_audio_seg_lens``), the segments taken from the start of the audio in turn.
+    audio's (its codes, ``video_audio_codes``, through ``backend.embed_audio_codes``) in the order of the item's
+    embedding rows, as vLLM 0.30's MiMoV2OmniForCausalLM.embed_multimodal lays them out: per group of T / n_segs grids,
+    the group's frames, then the group's audio segment (``video_audio_seg_lens``), the segments taken from the start of
+    the audio in turn. Where the codes come from (the front end, or the engine's tokenizer from the mel) changes
+    nothing here.
     """
     data = item.data
     grid = torch.as_tensor(_field(data, "video_grid_thw")).reshape(-1, 3)
@@ -238,12 +310,9 @@ def interleave_video_audio(backend, item, frames):
         raise MMInputError(f"video item {item.identifier}: {grid.shape[0]} grids with an audio track")
     n_segs = int(torch.as_tensor(_field(data, "video_audio_n_segs")).reshape(-1)[0])
     seg_lens = [int(x) for x in torch.as_tensor(_field(data, "video_audio_seg_lens")).reshape(-1)[:n_segs]]
-    codes = _field(data, "va_audio_codes")
-    if codes is None:
-        raise MMInputError(f"video item {item.identifier}: an audio track without va_audio_codes")
     if not hasattr(backend, "embed_audio_codes"):
         raise MMInputError("this backend has no audio patch encoder (embed_audio_codes)")
-    audio = backend.embed_audio_codes(torch.as_tensor(codes))
+    audio = backend.embed_audio_codes(video_audio_codes(backend, item))
     t = int(grid[0, 0])
     if n_segs <= 0 or t % n_segs or frames.shape[0] % t:
         raise MMInputError(f"video item {item.identifier}: {t} grids in {n_segs} audio groups")
@@ -285,10 +354,7 @@ def encode_item(backend, item):
     elif _field(item.data, "audio_codes") is not None:
         out = backend.embed_audio_codes(_field(item.data, "audio_codes"))
     elif _field(item.data, "audio_mel_bits") is not None:  # the fp32 mel as int32 bits (MIMO_AUDIO_TOKENIZER=device)
-        bits = torch.as_tensor(_field(item.data, "audio_mel_bits"))
-        if bits.dtype != torch.int32:
-            raise MMInputError(f"audio item {item.identifier}: audio_mel_bits must be int32, got {bits.dtype}")
-        out = backend.embed_audio(bits.contiguous().view(torch.float32))
+        out = backend.embed_audio(mel_from_bits(_field(item.data, "audio_mel_bits"), f"audio item {item.identifier}"))
     else:
         out = backend.embed_audio(_field(item.data, "audio_features"))
     if out.dim() != 2 or out.shape[0] != item.num_embeds:
