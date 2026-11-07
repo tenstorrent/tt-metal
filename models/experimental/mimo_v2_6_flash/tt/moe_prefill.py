@@ -71,7 +71,7 @@ class GroupedExperts:
             [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(per_row * self.TEAM - 1, grid.y - 1))]
         )
         self.semaphores = [ttnn.SemaphoreDescriptor(id=i, core_ranges=self.ranges, initial_value=0) for i in (0, 1)]
-        self.w_dtype = moe.w_gate_up.dtype
+        self.w_dtype = moe.prefill_w_gate_up.dtype
         self.w_tile_bytes = ttnn.Tile([TILE, TILE]).get_tile_size(self.w_dtype)
         self.gu_tiles = 2 * self.kt
         self.wd_tiles = self.ikt * self.cols
@@ -161,7 +161,7 @@ class GroupedExperts:
         row-major [teams, PLAN_WORDS] (DRAM) -> fills ``out`` ([K * T, H] bf16 row-major) with every pair's weighted
         expert output."""
         moe = self.moe
-        w_gu, w_d = moe.w_gate_up, moe.w_down
+        w_gu, w_d = moe.prefill_w_gate_up, moe.prefill_w_down
         for t in (w_gu, w_d):
             assert is_dram_interleaved(t) and t.layout == ttnn.TILE_LAYOUT
         for t in (x_rm, row_tokens, row_weights, row_dest, out):
@@ -709,14 +709,14 @@ class PrefillExperts:
                 compute_kernel_config=moe.expert_config,
             )
             xa = ttnn.slice(packed, (0, g0, 0, 0), (1, g1, TILE, H))
-            gate_up = ttnn.sparse_matmul(xa, moe.w_gate_up, program_config=moe.gate_up_program, **mm)
+            gate_up = ttnn.sparse_matmul(xa, moe.prefill_w_gate_up, program_config=moe.gate_up_program, **mm)
             xa.deallocate(True)
             act = moe._swiglu(ttnn.reshape(gate_up, (1, g1 - g0, TILE, 2 * I)))
             w = ttnn.slice(row_weight_tt, (0, g0, 0, 0), (1, g1, TILE, 1))
             act_w = ttnn.mul(act, w, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             act.deallocate(True)
             w.deallocate(True)
-            outs.append(ttnn.sparse_matmul(act_w, moe.w_down, program_config=moe.down_program, **mm))
+            outs.append(ttnn.sparse_matmul(act_w, moe.prefill_w_down, program_config=moe.down_program, **mm))
             act_w.deallocate(True)
             ids.deallocate(True)
         packed.deallocate(True)

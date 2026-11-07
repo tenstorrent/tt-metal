@@ -1,7 +1,9 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""MiMo MoE decode against prefill on the same tokens, one Galaxy row (TP=8), BFP4 experts.
+"""MiMo MoE decode against prefill on the same tokens, one Galaxy row (TP=8), BFP4 experts. With BFP8 experts (the
+layers model.expert_bfp8_layers names: the same streams with twice the bytes per tile, HiFi2 instead of LoFi), prefill
+keeps a BFP4 copy as in the model, so decode is checked against the fp32 reference MoE on the host instead.
 
 Each step takes 4 (or 8: the deduplicated stream's 8-row tiles) real users (layer-1 MoE inputs of the golden prompts)
 in the first rows of a 32-row tile and runs
@@ -86,10 +88,11 @@ def ulps(a, b, *operands):
     return ((a - b).abs() / torch.exp2(torch.floor(torch.log2(mag)) - 7)).max().item()
 
 
+@pytest.mark.parametrize("expert_dtype", ["bfp4", "bfp8"])
 @pytest.mark.parametrize("users", [4, 8])
 @pytest.mark.parametrize("device_params", [GALAXY_DEVICE_PARAMS], indirect=True)
 @pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=True)
-def test_moe_decode_vs_prefill(mesh_device, users):
+def test_moe_decode_vs_prefill(mesh_device, users, expert_dtype):
     USERS = users
     golden_path()  # skips without the golden file
     torch.manual_seed(0)
@@ -99,17 +102,21 @@ def test_moe_decode_vs_prefill(mesh_device, users):
     assert inputs.shape[0] >= STEPS * USERS
 
     plan = MeshPlan(dp_submeshes(mesh_device)[0])
+    bfp8 = expert_dtype == "bfp8"
+    experts = ref.LazyExperts(ckpt, LAYER, torch.bfloat16)
+    router = ckpt.router(LAYER)
     moe = TtMiMoMoE(
         plan,
         cfg,
         LAYER,
-        ckpt.router(LAYER),
-        ref.LazyExperts(ckpt, LAYER, torch.bfloat16),
+        router,
+        experts,
         cache_dir=cache_dir("model_bfp4experts"),
-        expert_dtype=ttnn.bfloat4_b,
+        expert_dtype=ttnn.bfloat8_b if bfp8 else ttnn.bfloat4_b,
+        prefill_expert_dtype=ttnn.bfloat4_b if bfp8 else None,
     )
     moe.set_decode_users(USERS)
-    assert moe.gate_up_stream is not None, f"BFP4 experts with {USERS} users take the streaming decode path"
+    assert moe.gate_up_stream is not None, f"{expert_dtype} experts with {USERS} users take the streaming decode path"
     red = moe.reduce_expand
     assert red.can_norm
     gamma = ckpt.norms(LAYER + 1)["input_layernorm"]  # the next layer's input norm, as in the model
@@ -138,8 +145,12 @@ def test_moe_decode_vs_prefill(mesh_device, users):
         # Decode first: an output buffer the decode leaves unwritten then cannot hold the prefill result.
         moe.fabric_gather = False
         out = read(plan, moe.forward_decode(x_tt, mask))
-        # prefill's ring all-reduce may round differently per chip
-        expected = read(plan, moe.forward(x_tt, mask), same_on_chips=False)
+        if bfp8:  # the fp32 reference with the checkpoint's experts (BFP8 holds them almost exactly)
+            expected = torch.zeros(TILE, cfg.hidden_size)
+            if active:
+                expected[active] = ref.moe(x[active].bfloat16().float(), router, experts, cfg)
+        else:  # prefill's ring all-reduce may round differently per chip
+            expected = read(plan, moe.forward(x_tt, mask), same_on_chips=False)
         y = read(plan, moe.forward_decode(x_tt, mask, residual=r_tt))
         y_ag, h_ag = read_normed(plan, moe.forward_decode(x_tt, mask, residual=r_tt, norm=norm))
         moe.fabric_gather = True

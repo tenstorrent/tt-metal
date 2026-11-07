@@ -162,6 +162,7 @@ class TtMiMoDecoderLayer:
         attn_dtype=ttnn.bfloat8_b,
         mlp_dtype=ttnn.bfloat8_b,
         expert_dtype=ttnn.bfloat8_b,
+        prefill_expert_dtype=None,
     ):
         """``weights``: dict from reference.model.load_layer_weights, or None to load from a warm cache.
         ``rope_setups``: {"swa": MiMoRotarySetup, "full": MiMoRotarySetup}."""
@@ -181,7 +182,14 @@ class TtMiMoDecoderLayer:
         )
         if self.is_moe:
             self.mlp = TtMiMoMoE(
-                plan, cfg, layer_idx, w.get("router"), w.get("experts"), cache_dir=cache_dir, expert_dtype=expert_dtype
+                plan,
+                cfg,
+                layer_idx,
+                w.get("router"),
+                w.get("experts"),
+                cache_dir=cache_dir,
+                expert_dtype=expert_dtype,
+                prefill_expert_dtype=prefill_expert_dtype,
             )
         else:
             self.mlp = TtMiMoDenseMLP(plan, layer_idx, w.get("mlp"), cache_dir=cache_dir, weight_dtype=mlp_dtype)
