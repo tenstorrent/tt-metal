@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import math
+import os
 
 import torch
 
@@ -206,6 +207,25 @@ class MiniMaxH3Attention(Module):
             and self.exp_ring_num_passes <= self.exp_ring_max_passes
         )
         self._exp_sdpa_program_configs: dict[int, ttnn.SDPAProgramConfig | None] = {}
+        # Ring attention through the release's WH core loop (wh_sdpa_minimax_h3.py) on Wormhole with an 8-column
+        # grid; MINIMAX_H3_WH_SDPA=0 keeps the ttnn ring SDPA.
+        self.wh_sdpa = None
+        self.wh_sdpa_ring = False
+        if (
+            os.environ.get("MINIMAX_H3_WH_SDPA", "1") == "1"
+            and not is_blackhole()
+            and mesh_device.compute_with_storage_grid_size().x == 8
+        ):
+            from .wh_sdpa_minimax_h3 import WhSdpa
+
+            self.wh_sdpa = WhSdpa(mesh_device)
+            # The fused ring gather needs a fabric ring on the SP axis and its 2 x num_links sender cores.
+            self.wh_sdpa_ring = (
+                os.environ.get("MINIMAX_H3_SDPA_RING", "1") == "1"
+                and self.ccl_manager is not None
+                and self.ccl_manager.topology == ttnn.Topology.Ring
+                and 2 * self.ccl_manager.num_links == len(self.wh_sdpa.senders)
+            )
 
         self.sdpa_compute_kernel_config = ttnn.init_device_compute_kernel_config(
             mesh_device.arch(),
@@ -220,6 +240,23 @@ class MiniMaxH3Attention(Module):
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
         )
+        # Wormhole default (MINIMAX_H3_MM_FP32_DEST=0): to_qkv with fp32 dest off and a 4x2 subblock; to_out keeps
+        # fp32 dest (its K loop waits on the relay, not on DST). Same switch as the transformer block's ff1.
+        self.qkv_compute_kernel_config = self.mm_compute_kernel_config
+        self.qkv_block_size = None  # None: the per-call M-keyed `agmm_block_size` default
+        # "1" = fp32 dest everywhere (Blackhole default), "0" = ff1 and to_qkv off (Wormhole default), "ff1" / "qkv"
+        # = only that one off.
+        _fp32_dest_env = os.environ.get("MINIMAX_H3_MM_FP32_DEST", "1" if is_blackhole() else "0")
+        if _fp32_dest_env == "0" or "qkv" in _fp32_dest_env:
+            self.qkv_compute_kernel_config = ttnn.init_device_compute_kernel_config(
+                mesh_device.arch(),
+                math_fidelity=ttnn.MathFidelity.HiFi2,
+                math_approx_mode=True,
+                fp32_dest_acc_en=False,
+                packer_l1_acc=True,
+            )
+            _b = [int(x) for x in os.environ.get("MINIMAX_H3_QKV_BLOCKS", "12,7,8,4,2").split(",")]
+            self.qkv_block_size = (_b[0], _b[1], _b[2], (_b[3], _b[4]))
 
     # ------------------------------------------------------------------ weights
 
@@ -510,10 +547,13 @@ class MiniMaxH3Attention(Module):
 
         q_1BNF, k_1BNF, v_1BNF = self.to_qkv(
             spatial_1BND,
-            compute_kernel_config=self.mm_compute_kernel_config,
+            compute_kernel_config=self.qkv_compute_kernel_config,
             parallel_config=matmul_parallel_config,
             default_block_size=(
-                agmm_block_size(self.hidden_size, 3 * self.inner_dim // tp_factor, spatial_1BND.padded_shape[-2])
+                (
+                    self.qkv_block_size
+                    or agmm_block_size(self.hidden_size, 3 * self.inner_dim // tp_factor, spatial_1BND.padded_shape[-2])
+                )
                 if self.use_fused_agmm
                 else None
             ),
@@ -546,7 +586,32 @@ class MiniMaxH3Attention(Module):
         # Sequence is fractured across SP, so attention must gather K/V around the ring.
         # The packed sequence is one attention document and logical_n masks the pad tail, so no mask.
         exp_program_config = self._exp_sdpa_program_config(q_BHNE.shape[2])
-        if exp_program_config is not None:
+        if self.wh_sdpa is not None and self.use_ring and self.wh_sdpa.supports(q_BHNE.shape, k_BHNE.shape):
+            # The release's WH SDPA core loop (wh_sdpa_minimax_h3.py) on all 8 columns. With the fused ring gather
+            # (default; MINIMAX_H3_SDPA_RING=0 turns it off) the op gathers K and V^T around the SP ring over the
+            # fabric while it attends, a head's keys once that head has landed; otherwise gather first, then attend.
+            # Same result either way (the keys keep their order).
+            vt_BHEN = ttnn.transpose(v_BHNE, -2, -1)
+            if self.wh_sdpa_ring:
+                spatial_BHNE = self.wh_sdpa.ring(
+                    q_BHNE,
+                    k_BHNE,
+                    vt_BHEN,
+                    logical_n,
+                    axis=self.sp_mesh_axis,
+                    links=self.ccl_manager.num_links,
+                )
+                ttnn.deallocate(vt_BHEN)
+            else:
+                k_full = self.ccl_manager.all_gather(k_BHNE, dim=2, mesh_axis=self.sp_mesh_axis, use_hyperparams=False)
+                vt_full = self.ccl_manager.all_gather(
+                    vt_BHEN, dim=3, mesh_axis=self.sp_mesh_axis, use_hyperparams=False
+                )
+                ttnn.deallocate(vt_BHEN)
+                spatial_BHNE = self.wh_sdpa(q_BHNE, k_full, vt_full, logical_n)
+                ttnn.deallocate(k_full)
+                ttnn.deallocate(vt_full)
+        elif exp_program_config is not None:
             spatial_BHNE, _prompt, _lse = ttnn.transformer.exp_ring_joint_scaled_dot_product_attention(
                 q_BHNE,
                 k_BHNE,

@@ -696,6 +696,20 @@ def get_matmul_config(M, K, N, core_grid, default_block_size=None, use_heuristic
     config_tuple = None
     grid_x = getattr(core_grid, "x", None)
     grid_y = getattr(core_grid, "y", None)
+    # A 4-tuple default_block_size (M_block, K_block, N_block, (subblock_h, subblock_w)) is an explicit, complete
+    # blocking from the caller and is used as given, ahead of the swept (M, K, N) tables: the tables were swept at one
+    # compute config (fp32 dest on, 4 DST tiles, 2x2 subblocks) and a caller that changes the compute config is the only
+    # one that passes a subblock. A 3-tuple keeps its legacy meaning: a fallback for when the tables miss, at 2x2.
+    if default_block_size is not None and len(default_block_size) == 4:
+        M_block_size, K_block_size, N_block_size, (subblock_h, subblock_w) = default_block_size
+        return ttnn.MinimalMatmulConfig(
+            M_block_size=M_block_size,
+            K_block_size=K_block_size,
+            N_block_size=N_block_size,
+            subblock_h=subblock_h,
+            subblock_w=subblock_w,
+            compute_with_storage_grid_size=core_grid,
+        )
     grid_dict = _grid_config_lookup.get((grid_x, grid_y))
     if grid_dict is not None:
         config_tuple = grid_dict.get((M, K, N))
@@ -1046,6 +1060,15 @@ else:
 fused_mmrs_configs = {
     ttnn.CoreCoord(8, 9): {
         (9472, 5120, 1280): FusedMMRSConfig(ttnn.CoreCoord(8, 7), 8, 8, 8, 2, 2, None, 1),
+        # MiniMax-H3 ff2 at 15 s / 768P on the Wormhole 4x8 galaxy (TP ring of 4, 4 links), on the 13824-row
+        # bucket (MINIMAX_H3_BUCKET_LADDER_4X8's 110592). The 8x7 matmul grid leaves 16 cores for the
+        # reduce-scatter; M is never transposed here, so a core walks 62 M tiles (61.7, the last block
+        # partial) by 21 N tiles. Measured in test_minimax_h3_transformer_block_perf (FSDP, transient CCL,
+        # 7 timed calls): unfused minimal_matmul + reduce_scatter_minimal_async + addcmul 244.3 ms per block;
+        # fused (M, K, N blocks) (6, 7, 8) 242.1, (6, 4, 8) 242.4, (4, 7, 8) 242.8, (2, 7, 8) 249.7; (8, 7, 8)
+        # and (6, 14, 8) do not fit L1. (6, 7, 8) is also the blocking swept best-fitting at M = 13664.
+        # Fused vs unfused block output on identical inputs: PCC 0.99997 on every device.
+        (13824, 3584, 5376): FusedMMRSConfig(ttnn.CoreCoord(8, 7), 6, 7, 8, 2, 2, None, 1),
     },
     ttnn.CoreCoord(12, 10): {
         # Wan2.2 720p ff2, single galaxy, swept 2026-08-24 (windowed): Mt_per_core=37, M_block=8

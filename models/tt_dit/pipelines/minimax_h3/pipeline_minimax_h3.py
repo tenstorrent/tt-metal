@@ -152,6 +152,9 @@ MINIMAX_H3_PIXEL_STD = _MINIMAX_H3_PIXEL_STD
 # clean -- posterior mean, no fp16 round trip, no noise augmentation -- unlike the visual
 # conditioning rows, which sit at max(t, 0.999). See `references.py`.
 MINIMAX_H3_AUDIO_CONDITION_TIMESTEP = 1.0
+# `prepare_modulation`'s stacked timestep rows are padded to a multiple of this, so its programs (and the per-step
+# row lookup's) are the same for every step count up to it: the warmup's short denoise compiles them.
+ADALN_PREPARED_ROWS = 256
 
 # Read from the two scheduler_config.json files, which hold nothing else. Distillation adapters may
 # need other shifts.
@@ -203,8 +206,13 @@ MINIMAX_H3_BUCKET_LADDER = (22528, 31744, 44032, 61440, 86016, 120832)
 MINIMAX_H3_REF2VA_BUCKET_LADDER = (32768, 61440, 86016, 118784, 176128, 245760, 326656)
 
 # 4x8 ladders: SP=8 aligns to 256, so rungs sit at most ~15% apart. Same top-rung rule as above. #N
+# 110592 is the 15 s / 768P rung: 13824 rows per device, so a 15 s request with a prompt of up to ~1500
+# tokens (109062 rows + prompt) lands on it rather than on 111616 (13952 rows). 13952 is 436 tiles, 4 x
+# the prime 109: on the WH 8-wide matmul grids its 55 M tiles per core miss the blockings swept at 54
+# (13664 rows), and its ring SDPA takes 55 q chunks of 256 a head, 770 on 63 cores, 13 rounds where 54
+# chunks fill 12 exactly. 13824 keeps both: 54 M tiles per core and 54 q chunks.
 MINIMAX_H3_BUCKET_LADDER_4X8 = (
-18944, 20224, 21760, 23296, 25088, 26880, 28928, 31232, 33536, 36096, 38912, 41984, 45312, 48896, 52736, 56832, 61184, 66048, 71168, 76800, 82688, 89088, 96000, 103424, 111616, 120320
+18944, 20224, 21760, 23296, 25088, 26880, 28928, 31232, 33536, 36096, 38912, 41984, 45312, 48896, 52736, 56832, 61184, 66048, 71168, 76800, 82688, 89088, 96000, 103424, 110592, 111616, 120320
 )  # fmt: skip
 MINIMAX_H3_REF2VA_BUCKET_LADDER_4X8 = (
     24064, 28416, 33536, 39680, 46848, 55296, 65280, 76800, 90368, 106496, 125440, 147712, 173824,
@@ -336,10 +344,13 @@ _PRESETS_BH: dict[tuple[int, ...], dict] = {
 # Wormhole Galaxy. Same axes as Blackhole -- the shape arguments for TP=4 are architectural, not
 # per-chip -- but two things differ and both are memory, not parallelism:
 #
-#   * `coresident: False`. A Wormhole chip has 12 GB of DRAM against Blackhole's 32 GB, and the DiT
-#     alone fills it. Keeping the text encoder resident beside it (~1.6 GB/device) overflows by a
-#     couple of MB, so each stage is evicted before the next loads. The cost is a text-encoder
-#     reload per request, which is the trade the Residency note above describes.
+#   * `coresident: True` with `evict_vae_for_denoise`. A Wormhole chip has 12 GB of DRAM against Blackhole's 32 GB.
+#     With `dit_fsdp` the DiT is ~2 GB a device, so it, the text encoder (~2 GB) and the audio decoder (0.56 GB) stay
+#     resident across requests; the video VAE decoder (4.9 GB of fp32 weights) does not fit beside a denoise (the
+#     first step OOMs), so it is dropped before each denoise and reloaded for the decode (~2.9 s a request). Measured
+#     device 0 at the 15 s rung: 7.3 GB after the first denoise step, 10.4 GB after the decode with all four
+#     resident. Before (`coresident: False`, every stage evicted) a request also reloaded the text encoder (3.0 s),
+#     the DiT (3.8 s) and the audio decoder (0.4 s).
 #   * `num_links: 4`, matching the 4 KB router payload the Wormhole Galaxy meshes open with.
 #   * ref2va arena caps for a 12 GB chip. The transformer rebuilds a cap-sized source table every
 #     forward (sum of caps x hidden/TP x bf16): the Blackhole caps make that 322336 rows = 866 MB per
@@ -358,7 +369,9 @@ _PRESETS_WH: dict[tuple[int, ...], dict] = {
         "sp_axis": 1,
         "num_links": 4,
         "topology": ttnn.Topology.Ring,
-        "coresident": False,
+        "coresident": True,
+        "evict_vae_for_denoise": True,
+        "park_vae_decoder": True,
         "dit_fsdp": True,
         "bucket_denoise": True,
         "use_persistent_ccl_buffers": False,
@@ -543,6 +556,15 @@ class MiniMaxH3Pipeline:
             env_audio_t_shard == "1" if env_audio_t_shard is not None else preset.get("audio_t_shard", False)
         )
         self.coresident = coresident
+        # Coresident presets whose video VAE decoder does not fit beside a denoise: it is dropped before each denoise
+        # and reloads for the decode (everything else stays resident across requests).
+        self.evict_vae_for_denoise = coresident and preset.get("evict_vae_for_denoise", False)
+        # ... and keeps 1/SP of its decoder's weights through the denoise, gathered back over the fabric for the decode
+        # instead of reloaded from the host.
+        self.park_vae_decoder = (
+            self.evict_vae_for_denoise
+            and os.environ.get("MINIMAX_H3_PARK_VAE", "1" if preset.get("park_vae_decoder", False) else "0") == "1"
+        )
         self.trace_denoise = self.trace_denoise and self.coresident
         bucket_denoise = preset.get("bucket_denoise", False) if bucket_denoise is None else bucket_denoise
         self.bucket_denoise = self.trace_denoise or bucket_denoise
@@ -568,6 +590,7 @@ class MiniMaxH3Pipeline:
         self._tt_audio_out_idx = StateTensor()
         self._tt_timestep = StateTensor()
         self._tt_endpoint_timestep = StateTensor()
+        self._tt_modulation_rows = StateTensor()
         self._tt_logical_n = StateTensor()
         # True during `warmup`, whose output is discarded.
         self._warming = False
@@ -1565,6 +1588,11 @@ class MiniMaxH3Pipeline:
             dtype="fp32",  # the whole VAE checkpoint is fp32 and the port keeps it there
             get_torch_state_dict=lambda: state,
         )
+        if self.park_vae_decoder and module is self._vae.decoder:
+            # Park and unpark once at each host load, so the slice and gather programs compile with the load (the
+            # warmup) rather than at the first request's decode.
+            module.park_weights(self.ccl_manager, self.sp_axis)
+            module.unpark_weights()
 
     @property
     def vae(self) -> MiniMaxH3Vae:
@@ -2143,6 +2171,14 @@ class MiniMaxH3Pipeline:
         `condition_spec` is the only thing the tasks differ by here, and only `ref2va` passes one.
         """
         transformer = self._prepare_transformer()
+        if self.evict_vae_for_denoise:
+            for module in self._vae.modules:
+                if not module.is_loaded():
+                    continue
+                if self.park_vae_decoder and module is self._vae.decoder:
+                    module.park_weights(self.ccl_manager, self.sp_axis)
+                else:
+                    module.deallocate_weights()
         dram_probe.report("after transformer load, before denoise")
         with self._track_cache_misses(on_event, "denoising"):
             video_rows, audio_rows = self._denoise(
@@ -2917,6 +2953,32 @@ class MiniMaxH3Pipeline:
                 )
 
         upload_levels(step_levels(0))
+        # Every step's adaLN tables in one projection a block (one FSDP gather of its weight a denoise, not a step);
+        # each forward then picks its step's rows by an embedding lookup. The stacked rows are padded to a multiple
+        # of ADALN_PREPARED_ROWS so the programs do not depend on the step count (the warmup compiles them). The
+        # prepared table lives for one request, so traced runs keep the per-step projection.
+        precompute_modulation = not traced and os.environ.get("MINIMAX_H3_ADALN_PRECOMPUTE", "1") != "0"
+        if precompute_modulation:
+            levels = [step_levels(i) for i in range(len(timesteps))]
+            num_slots = levels[0][0].numel()
+
+            def stacked(k: int) -> ttnn.Tensor:
+                rows = torch.cat([lv[k].reshape(-1) for lv in levels])
+                rows = torch.nn.functional.pad(rows, (0, -rows.numel() % ADALN_PREPARED_ROWS))
+                return from_torch(rows.reshape(1, 1, -1, 1), device=self.mesh_device, dtype=ttnn.float32)
+
+            stacked_ts = stacked(0)
+            stacked_ep = None if endpoints is None else stacked(1)
+            transformer.prepare_modulation(stacked_ts, stacked_ep)
+            ttnn.deallocate(stacked_ts)
+            if stacked_ep is not None:
+                ttnn.deallocate(stacked_ep)
+
+            def modulation_rows(i: int) -> dict:
+                rows = torch.arange(i * num_slots, (i + 1) * num_slots, dtype=torch.int32)
+                self._tt_modulation_rows.update(self._replicated_indices(rows), traced=False)
+                return {"modulation_rows": self._tt_modulation_rows.value}
+
         if _is_host_rank():
             _tqdm_spacer()
         # Untraced only: a capture replays these buffers, so they must outlive it. The sync at the
@@ -2954,6 +3016,7 @@ class MiniMaxH3Pipeline:
                         traced=traced,
                         **tilerow_kwargs,
                         **({} if endpoints is None else {"endpoint_timestep": self._tt_endpoint_timestep.value}),
+                        **(modulation_rows(i) if precompute_modulation else {}),
                     )
                 except RuntimeError as err:
                     if "Out of Memory" in str(err):
@@ -2979,6 +3042,8 @@ class MiniMaxH3Pipeline:
                     t_steady += t_step
                 on_event(DenoiseStep(step=i + 1, total=len(timesteps), sigma=float(t)))
 
+            if precompute_modulation:
+                transformer.release_modulation()
             state.warm = True
             steady_steps = max(len(timesteps) - 1, 1)
             self._log(

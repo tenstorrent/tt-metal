@@ -9,6 +9,7 @@ import os
 import torch
 
 import ttnn
+from models.common.utility_functions import is_blackhole
 
 from ....layers.feedforward import ParallelFeedForward
 from ....layers.linear import ColParallelLinear
@@ -151,8 +152,29 @@ class MiniMaxH3TransformerBlock(Module):
         self.use_fused_agmm = ccl_manager.topology == ttnn.Topology.Ring and self.tp_factor > 1
         self._fold_norm_weight = os.environ.get("MINIMAX_H3_FOLD_NORM_WEIGHT", "1") == "1"
         self._eye_tables: dict[int, ttnn.Tensor] = {}
+        # `prepare_modulation`'s projection of every step's temb, row-major [1, 1, steps * slots, adaLN width].
+        self._projected_steps: list[ttnn.Tensor] = []
         # ff1 packs gate and up together for the fused SwiGLU, so its per-device N is 2 * ffn_dim / tp.
         self._ff1_kn = (hidden_size, 2 * ffn_dim // self.tp_factor)
+        self.ff1_block_size = None  # None: the per-call M-keyed `agmm_block_size` default
+        # Wormhole default (MINIMAX_H3_MM_FP32_DEST=0): run ff1 with fp32 dest accumulation off, which frees 8 DST tiles
+        # per half and allows a 2x4 subblock (6 unpacks per 8 tile-MACs instead of 4 per 4), at the cost of bf16 partial
+        # sums between K blocks. ff2, to_out and the adaLN projection keep fp32 dest. The blocking is the 15 s / 768P
+        # mesh-bench winner on the 8x8 AGMM grid.
+        self.ff1_compute_kernel_config = None
+        # "1" = fp32 dest everywhere (Blackhole default), "0" = ff1 and to_qkv off (Wormhole default), "ff1" / "qkv"
+        # = only that one off.
+        _fp32_dest_env = os.environ.get("MINIMAX_H3_MM_FP32_DEST", "1" if is_blackhole() else "0")
+        if _fp32_dest_env == "0" or "ff1" in _fp32_dest_env:
+            self.ff1_compute_kernel_config = ttnn.init_device_compute_kernel_config(
+                mesh_device.arch(),
+                math_fidelity=ttnn.MathFidelity.HiFi2,
+                math_approx_mode=True,
+                fp32_dest_acc_en=False,
+                packer_l1_acc=True,
+            )
+            _b = [int(x) for x in os.environ.get("MINIMAX_H3_FF1_BLOCKS", "8,7,16,2,4").split(",")]
+            self.ff1_block_size = (_b[0], _b[1], _b[2], (_b[3], _b[4]))
 
     # ------------------------------------------------------------------ weights
 
@@ -180,12 +202,40 @@ class MiniMaxH3TransformerBlock(Module):
 
     # ------------------------------------------------------------------ modulation
 
-    def _modulation_tables(self, temb: ttnn.Tensor) -> list[ttnn.Tensor]:
+    def _project(self, temb: ttnn.Tensor) -> ttnn.Tensor:
+        """adaln_proj(silu(temb)) as [1, 1, rows, MODALITY_NUM * 6 * hidden_local], row-major."""
+        # silu at temb's precision, then cast to the projection's dtype -- the reference's
+        # `self.linear(silu(temb).to(self.linear.weight.dtype))`. Casting here also keeps the
+        # resulting tables bfloat16, so the bf16 one-hot gathers below reproduce their rows exactly.
+        activated = ttnn.silu(temb)
+        if activated.dtype != ttnn.bfloat16:
+            activated = ttnn.typecast(activated, ttnn.bfloat16)
+        projected = self.adaln_proj(activated, compute_kernel_config=self.mm_compute_kernel_config)
+        return ttnn.to_layout(projected, ttnn.ROW_MAJOR_LAYOUT)
+
+    def prepare_modulation(self, temb_steps: ttnn.Tensor) -> None:
+        """Project every denoising step's temb at once; `forward(modulation_rows=...)` then picks one step's rows.
+
+        `temb_steps` is [1, 1, rows, time_embed_dim], the rows of all steps (and any padding). temb depends on the
+        timesteps only, which the scheduler fixes before the first step, so one projection (and one FSDP gather of
+        the 2688 x 24192 weight a device) serves the whole denoise instead of one a step.
+        """
+        self.release_modulation()
+        projected = self._project(temb_steps)
+        self._projected_steps.append(ttnn.reshape(projected, (projected.shape[2], projected.shape[3])))
+
+    def release_modulation(self) -> None:
+        for t in self._projected_steps:
+            ttnn.deallocate(t)
+        self._projected_steps.clear()
+
+    def _modulation_tables(self, temb: ttnn.Tensor, rows_index: ttnn.Tensor | None = None) -> list[ttnn.Tensor]:
         """Project `temb` into the six per-(timestep, modality) modulation tables.
 
         `temb` is [1, 1, num_timesteps, time_embed_dim]. Returns six [num_timesteps * MODALITY_NUM,
         hidden_local] tables, row `t * MODALITY_NUM + modality`, matching the row order that
-        `adaln_indices` addresses.
+        `adaln_indices` addresses. With `rows_index` ([1, num_timesteps] uint32), the projection is
+        instead those rows of `prepare_modulation`'s (an embedding lookup: a copy, so bit-identical).
 
         The SiLU runs at `temb`'s own (float32) precision and only its result is cast
         down to the bfloat16 projection, as the reference is explicit about: every block reads the
@@ -193,21 +243,18 @@ class MiniMaxH3TransformerBlock(Module):
         identically at every sampling step and accumulates over the denoising trajectory.
         """
         num_timesteps = temb.shape[2]
-        # silu at temb's precision, then cast to the projection's dtype -- the reference's
-        # `self.linear(silu(temb).to(self.linear.weight.dtype))`. Casting here also keeps the
-        # resulting tables bfloat16, so the bf16 one-hot gathers below reproduce their rows exactly.
-        activated = ttnn.silu(temb)
-        if activated.dtype != ttnn.bfloat16:
-            activated = ttnn.typecast(activated, ttnn.bfloat16)
-
-        # [1, 1, num_timesteps, MODALITY_NUM * 6 * hidden_local] per device
-        projected = self.adaln_proj(activated, compute_kernel_config=self.mm_compute_kernel_config)
+        # [1, 1, num_timesteps, MODALITY_NUM * 6 * hidden_local] per device, row-major
+        if rows_index is None:
+            projected = self._project(temb)
+        else:
+            if not self._projected_steps:
+                raise RuntimeError("modulation_rows needs prepare_modulation first")
+            projected = ttnn.embedding(rows_index, self._projected_steps[0], layout=ttnn.ROW_MAJOR_LAYOUT)
 
         # Fold the modality axis into rows: [num_timesteps, mod, param, h] -> [t * mod, param * h].
         # Done in row-major because the row count changes and num_timesteps is tiny (a handful of
         # rows), so the layout round-trip is negligible.
         rows = num_timesteps * MODALITY_NUM
-        projected = ttnn.to_layout(projected, ttnn.ROW_MAJOR_LAYOUT)
         projected = ttnn.reshape(projected, (1, 1, rows, NUM_MODULATION_PARAMS * self.hidden_local))
         projected = ttnn.to_layout(projected, ttnn.TILE_LAYOUT)
 
@@ -284,6 +331,7 @@ class MiniMaxH3TransformerBlock(Module):
         rope_sin: ttnn.Tensor,
         onehot: ttnn.Tensor | None = None,
         tilerow: tuple[ttnn.Tensor, ttnn.Tensor] | None = None,
+        modulation_rows: ttnn.Tensor | None = None,
     ) -> ttnn.Tensor:
         """
         spatial_1BND: fractured N on SP, fractured hidden_size on TP
@@ -295,9 +343,12 @@ class MiniMaxH3TransformerBlock(Module):
         onehot / tilerow: the shared one-hot gather matrix (built here when absent) and the `(tile_map, selector)`
             pair from `tilerow_tables`; without the pair the norms take the per-token gather.
 
+        modulation_rows: [1, num_timesteps] uint32, the rows of `prepare_modulation`'s projection to take the tables
+            from instead of projecting `temb` (which then only gives the slot count).
+
         Returns the block output, fractured N on SP and hidden_size on TP.
         """
-        tables = self._modulation_tables(temb)
+        tables = self._modulation_tables(temb, modulation_rows)
 
         if onehot is None:
             onehot = self._onehot(self._gather_indices(adaln_indices), tables[0].shape[0])
@@ -358,7 +409,11 @@ class MiniMaxH3TransformerBlock(Module):
         # Async only supports Ring topology"), so a line-cabled mesh has to take the unfused path
         # below. Gated here rather than left to fail, because the assert fires on the first denoise
         # step of the first request -- long after warmup reports the model loaded.
-        ff1_block_size = agmm_block_size(*self._ff1_kn, normed.padded_shape[-2]) if self.use_fused_agmm else None
+        ff1_block_size = (
+            (self.ff1_block_size or agmm_block_size(*self._ff1_kn, normed.padded_shape[-2]))
+            if self.use_fused_agmm
+            else None
+        )
         ff2_shape = (normed.shape[2], self.ffn_dim // self.tp_factor, self.hidden_size)
         # The grid is what decides whether a swept blocking or a rule pick can be resolved at all,
         # so it has to reach the gate: without it every tile-aligned M looked servable, and Wormhole
@@ -381,6 +436,7 @@ class MiniMaxH3TransformerBlock(Module):
                 default_block_size=ff1_block_size,
                 force_transpose=False,
                 use_persistent_buffer=self.use_persistent_ccl_buffers,
+                ff1_compute_kernel_config=self.ff1_compute_kernel_config,
             )
         ff_out = self.ff(
             normed,
@@ -389,5 +445,6 @@ class MiniMaxH3TransformerBlock(Module):
             default_block_size=ff1_block_size,
             force_transpose=False,
             use_persistent_buffer=self.use_persistent_ccl_buffers,
+            ff1_compute_kernel_config=self.ff1_compute_kernel_config,
         )
         return ttnn.addcmul(residual, ff_out, modulation(_GATE_MLP))
