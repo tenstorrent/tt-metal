@@ -4,14 +4,12 @@
 
 import ttnn
 import pytest
-from tt_py_test_utils_common.utility_functions import skip_for_blackhole
 
 from tests.ttnn.unit_tests.operations.sdpa.sdpa_test_utils import (
     run_sdpa_decode_sink_impl,
 )
 
 
-@skip_for_blackhole("Failing on Blackhole, Issue #27193")
 @pytest.mark.parametrize(
     "batch, seq_len, nh, nkv, dim",
     [
