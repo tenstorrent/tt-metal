@@ -1415,12 +1415,13 @@ def _read_slot_kv_and_check_pcc_mla(table, device_map: dict, slot_id: int, real_
         full_layers = _full_indexer_layer_indices(NUM_LAYERS)
         index_rows = []
         if index_golden_present(trace_dir):
-            index_rows = [
-                (layer, trace_dir) for layer in (range(n_index_layers) if full_layers is None else full_layers)
-            ]
-            assert full_layers is None or max(full_layers) < n_index_layers, (
+            # Without an `indexer_types` map every layer that owns a KV slab runs its own indexer: all of a
+            # dense DSA stack, only the DSA layers of a hybrid one (Kimi-K3.1's other rows hold KDA state).
+            index_layers = sorted(expected_slabs) if full_layers is None else full_layers
+            index_rows = [(layer, trace_dir) for layer in index_layers]
+            assert max(index_layers) < n_index_layers, (
                 f"config 1 has {n_index_layers} rows but layers [0,{NUM_LAYERS}) put a full indexer at layer "
-                f"{max(full_layers)}. On the layer axis the extent must cover the deepest full-indexer "
+                f"{max(index_layers)}. On the layer axis the extent must cover the deepest full-indexer "
                 f"layer; a compacted (rank-axis) table reaching here would read another layer's keys."
             )
         else:

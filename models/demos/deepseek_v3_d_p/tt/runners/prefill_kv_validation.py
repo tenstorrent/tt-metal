@@ -122,13 +122,14 @@ def index_golden_present(trace_dir, layer_idx: int | None = None) -> bool:
 
     Some vLLM dumps store only ``dsa/dsa_topk_indices_layer_*``, so a trace can hold a valid KVPE golden
     and no indexer key at all. Callers use this to skip index-cache validation instead of failing on the
-    empty ``torch.cat([])`` the loader would hit. Lives next to the loader so the ``dsa/indexer_k_layer_*``
-    layout stays encoded in exactly one place."""
-    from pathlib import Path
-
-    dsa_dir = Path(trace_dir) / "dsa"
-    pattern = "indexer_k_layer_*" if layer_idx is None else f"indexer_k_layer_{layer_idx}"
-    return dsa_dir.is_dir() and any(dsa_dir.glob(pattern))
+    empty ``torch.cat([])`` the loader would hit. Lives next to the loader so the two indexer-key layouts
+    (GLM's row-sharded ``dsa/indexer_k_layer_N/``, Kimi-K3.1's single ``indexer/indexer_k_layer_N.safetensors``)
+    stay encoded in exactly one place."""
+    layer = "*" if layer_idx is None else layer_idx
+    root = Path(trace_dir)
+    return any(root.glob(f"dsa/indexer_k_layer_{layer}")) or any(
+        root.glob(f"indexer/indexer_k_layer_{layer}.safetensors")
+    )
 
 
 def _rebase_index_k_rope(golden_ik: "torch.Tensor", hf_config, position0: int = 0) -> "torch.Tensor":
@@ -180,15 +181,24 @@ def _load_golden_index_k(
     hf_config=None,
     position0: int | None = None,
 ) -> "torch.Tensor":
-    """[total_len, index_head_dim] golden indexer key for one layer, from the vLLM trace's row-sharded
-    dsa/indexer_k_layer_N/rows_<start>_<end>.safetensors shards (concatenated by start row). Mirrors
-    _load_golden_kv_post but reads the dsa/ subdir and the indexer_k_layer_N key. ``rope_layout`` is
+    """[total_len, index_head_dim] golden indexer key for one layer (post-LayerNorm, natural basis), format-
+    agnostic as _load_golden_kv_post: Kimi-K3.1's single indexer/indexer_k_layer_N.safetensors, else GLM's
+    row-sharded dsa/indexer_k_layer_N/rows_<start>_<end>.safetensors (concatenated by start row). ``rope_layout`` is
     the pairing the TRACE stored; ``interleaved`` is the device's own, ``half_split`` is re-based.
     ``position0`` is the prompt position of the first returned row, which re-basing rotates by. It
     defaults to ``start``; a windowed (tail) trace stores position ``capture_start + r`` at row r, so
     pass the absolute position there."""
+    from safetensors import safe_open
+
     key = f"indexer_k_layer_{layer_idx}"
-    golden = _load_sharded_rows(Path(trace_dir) / "dsa" / key, key, start, total_len)
+    single = Path(trace_dir) / "indexer" / f"{key}.safetensors"
+    if single.exists():
+        with safe_open(single, framework="pt") as f:
+            golden = f.get_slice(key)[start : start + total_len].to(torch.float32)
+        if golden.shape[0] != total_len:
+            raise FileNotFoundError(f"{single} covers only {golden.shape[0]} of rows [{start},{start + total_len})")
+    else:
+        golden = _load_sharded_rows(Path(trace_dir) / "dsa" / key, key, start, total_len)
     if rope_layout == "interleaved":
         return golden
     if rope_layout != "half_split":
