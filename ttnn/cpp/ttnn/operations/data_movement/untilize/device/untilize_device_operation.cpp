@@ -20,6 +20,7 @@
 #include "ttnn/operations/core/work_split/work_split_tilize.hpp"
 #include "ttnn/common/constants.hpp"
 #include <tt-metalium/buffer_distribution_spec.hpp>
+#include <tt-metalium/experimental/tensor_layout_apis_with_custom_alignment.hpp>
 
 using namespace tt::tt_metal;
 
@@ -278,7 +279,7 @@ UntilizeDeviceOperation::spec_return_value_t UntilizeDeviceOperation::compute_ou
 
     return {tt::tt_metal::TensorSpec(
         input_tensor.logical_shape(),
-        TensorLayout::fromPaddedShape(
+        tt::tt_metal::experimental::tensor_layout_from_padded_shape(
             output_dtype,
             PageConfig(Layout::ROW_MAJOR),
             operation_attributes.output_mem_config,
@@ -394,9 +395,7 @@ UntilizeDeviceOperation::create_op_performance_model(
     const auto& output_tensor = output;
     uint32_t tile_width = input_tensor.tensor_spec().tile().get_width();
     uint32_t tile_height = input_tensor.tensor_spec().tile().get_height();
-    uint32_t single_tile_size = tile_width * tile_height * input_tensor.element_size();
-    uint32_t num_tiles =
-        std::ceil(static_cast<float>(input_tensor.physical_volume()) / static_cast<float>(single_tile_size));
+    uint32_t num_tiles = static_cast<uint32_t>(input_tensor.physical_volume() / (tile_width * tile_height));
     int compute_cycles = 0;
     const int max_tiles_per_row = 8;
     const int latency_untilize = 390;      // measured latency for untilize_block
