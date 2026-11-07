@@ -98,6 +98,56 @@ def test_moreh_clip_grad_norm(
             assert pass_input_i
 
 
+@pytest.mark.parametrize("norm_type", [float("inf"), float("-inf"), 0.0])
+@pytest.mark.parametrize("max_norm", [1.0, 0.5])
+@pytest.mark.parametrize(
+    "input_shapes",
+    [
+        [(1, 1, TILE_HEIGHT, TILE_WIDTH)],
+        [(2, 3, 2 * TILE_HEIGHT - 7, 3 * TILE_WIDTH - 5), (1, 1, TILE_HEIGHT - 1, TILE_WIDTH - 1)],
+        [(1, 2, TILE_HEIGHT + 3, TILE_WIDTH), (1, 1, TILE_HEIGHT, 2 * TILE_WIDTH - 9), (1, 1, 5, 7)],
+    ],
+)
+def test_moreh_clip_grad_norm_special_norm_type(input_shapes, max_norm, norm_type, device):
+    """norm_type in {inf, -inf, 0} does not go through Sum[|e|^p]^(1/p); the per-tensor norms
+    (max, min, nonzero count) are combined with the same order, exactly as torch does."""
+    torch.manual_seed(2023)
+
+    cpu_dtype = torch.float32
+    npu_dtype = ttnn.bfloat16
+
+    cpu_inputs = []
+    npu_inputs = []
+    for input_shape in input_shapes:
+        param = torch.nn.Parameter(torch.empty(input_shape, dtype=cpu_dtype))
+        # Round-trip through bfloat16 so torch and ttnn see identical gradients: max / min are
+        # order statistics, so a single rounding difference would change the result.
+        grad = torch.empty(input_shape, dtype=cpu_dtype).uniform_(-2.5, 2.5).bfloat16().float()
+        # Plant a few exact zeros so the -inf and 0 orders exercise their edge values.
+        grad.flatten()[::97] = 0.0
+        param.grad = grad
+        cpu_inputs.append(param)
+        npu_inputs.append(ttnn.from_torch(grad.bfloat16(), dtype=npu_dtype, layout=ttnn.TILE_LAYOUT, device=device))
+
+    cpu_total_norm = torch.nn.utils.clip_grad_norm_(cpu_inputs, max_norm, norm_type)
+    npu_total_norm = ttnn.operations.moreh.clip_grad_norm(npu_inputs, max_norm, norm_type)
+    actual_total_norm = ttnn.to_torch(npu_total_norm).reshape(1)
+
+    rtol = atol = 0.02
+    pass_total_norm, out_total_norm = comp_allclose_and_pcc(
+        actual_total_norm, cpu_total_norm.reshape(1), rtol=rtol, atol=atol
+    )
+    logger.debug(f"total_norm's {out_total_norm}")
+    assert pass_total_norm
+
+    for i, cpu_input in enumerate(cpu_inputs):
+        expected_input_i = cpu_input.grad
+        actual_input_i = ttnn.to_torch(npu_inputs[i])
+        pass_input_i, out_input_i = comp_allclose_and_pcc(expected_input_i, actual_input_i, rtol=rtol, atol=atol)
+        logger.debug(f"inputs[{i}]-shape[{input_shapes[i]}]'s {out_input_i}")
+        assert pass_input_i
+
+
 @pytest.mark.parametrize("error_if_nonfinite", [True, False])
 def test_moreh_clip_grad_norm_with_error_if_nonfinite(error_if_nonfinite, device, expect_error):
     torch.manual_seed(2023)
