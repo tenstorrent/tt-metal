@@ -19,8 +19,8 @@ SCRIPT_DIR="$(dirname "${BASH_SOURCE[0]}")"
 setup_precommit() {
     echo "Setting up pre-commit hooks..."
 
-    # Install from the git root so the hook uses tt-metal's .pre-commit-config.yaml (which
-    # already covers tt-llk), not tt_metal/tt-llk/.pre-commit-config.yaml.
+    # tt-llk has no pre-commit config of its own: install the hook from the tt-metal repository
+    # root, whose .pre-commit-config.yaml carries the LLK hooks scoped to tt_metal/tt-llk/.
     local repo_root
     if ! repo_root="$(git -C "$SCRIPT_DIR" rev-parse --show-toplevel 2>/dev/null)"; then
         echo "WARNING: Not in a git repository, skipping pre-commit setup"
