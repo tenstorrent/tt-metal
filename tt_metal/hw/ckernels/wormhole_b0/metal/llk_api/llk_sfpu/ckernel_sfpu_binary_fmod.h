@@ -39,65 +39,41 @@ sfpi_inline void calculate_fmod_int32_body(
 }
 
 template <bool is_fp32_dest_acc_en>
-sfpi_inline sfpi::vFloat _sfpu_binary_fmod_(sfpi::vFloat in0, sfpi::vFloat in1) {
-    // fmod(a, b) = a - trunc(a/b) * b
-
-    sfpi::vFloat a = in0;
-    sfpi::vFloat b = in1;
+sfpi_inline sfpi::vFloat _sfpu_binary_fmod_(sfpi::vFloat a, sfpi::vFloat b) {
+    // fmod(a, b) = a - trunc(a/b) * b, evaluated on the magnitudes. The reciprocal
+    // works on copyman(-1, b) and re-applies the sign, the multiply and the MAD round
+    // symmetrically, and _trunc_body_ masks the sign bit through, so every lane of this
+    // chain equals the signed chain up to the sign of a. That collapses the four
+    // sign-dependent correction branches into unsigned ones; the sign of a is applied
+    // once at the end.
+    sfpi::vFloat a_abs = sfpi::abs(a);
     sfpi::vFloat b_abs = sfpi::abs(b);
 
-    // Compute reciprocal 1/b
-    sfpi::vFloat recip = ckernel::sfpu::sfpu_reciprocal_iter<2>(b);
+    sfpi::vFloat recip = ckernel::sfpu::sfpu_reciprocal_iter<2>(b_abs);
+    sfpi::vFloat trunc_div = _trunc_body_(a_abs * recip);
+    sfpi::vFloat result = a_abs - trunc_div * b_abs;
 
-    // Compute a/b = a * (1/b)
-    sfpi::vFloat div_result = a * recip;
-
-    sfpi::vFloat trunc_div = _trunc_body_(div_result);
-
-    // Compute fmod = a - trunc(a/b) * b
-    sfpi::vFloat result = a - trunc_div * b;
-
-    // Post-correction - fmod result must satisfy |result| < |b|
-    // If |result| >= |b|, the truncation was wrong by 1
-    sfpi::vFloat result_abs = sfpi::abs(result);
-
-    // If result >= b, we truncated too low, add/subtract b to correct
-    v_if(result_abs >= b_abs) {
-        // Determine correction direction based on sign of result
-        v_if(result >= sfpi::vFloat(0.0f)) {
-            result = result - b_abs;  // result was positive and too big
-        }
-        v_else {
-            result = result + b_abs;  // result was negative and too big (magnitude)
-        }
-        v_endif;
-    }
+    // Post-correction: the reciprocal error can put trunc(a/b) one (or, for quotients
+    // above 2^22, several) unit(s) off. The result must satisfy 0 <= result < |b|:
+    // result >= |b| means the truncation was too low, result < 0 too high. The second
+    // negative step keeps the correction identical to the signed kernel, which adds |b|
+    // once for |result| >= |b| and once more for a result still below zero.
+    v_if(result >= b_abs) { result = result - b_abs; }
     v_endif;
-
-    // Sign correction - fmod result must have same sign as 'a' (or be zero)
-    // If a > 0 and result < 0, the truncation was 1 too high, need to add b
-    // If a < 0 and result > 0, the truncation was 1 too low, need to subtract b
-    // This fixes cases where a/b ≈ 0.9999999 but rounds to 1 due to reciprocal error
-    v_if(a >= sfpi::vFloat(0.0f)) {
-        // a is positive, result should be >= 0
-        v_if(result < sfpi::vFloat(0.0f)) {
-            result = result + b_abs;  // over-truncated
-        }
-        v_endif;
-    }
-    v_else {
-        // a is negative, result should be <= 0
-        v_if(result > sfpi::vFloat(0.0f)) {
-            result = result - b_abs;  // under-truncated
-        }
-        v_endif;
-    }
+    v_if(result < sfpi::vFloat(0.0f)) { result = result + b_abs; }
+    v_endif;
+    v_if(result < sfpi::vFloat(0.0f)) { result = result + b_abs; }
     v_endif;
 
     // Handle special cases using conditional assignment (NOT early return!)
     // When a == b, fmod(a, b) = 0
     v_if(a == b) { result = sfpi::vFloat(0.0f); }
     v_endif;
+
+    // fmod takes the sign of a. SFPMUL rather than copysgn: a zero result stays +0, as
+    // the signed MAD chain produced it, since SFPMAD flushes -0 to +0. Placed after the
+    // a == b override so that a dies here and the sign copy needs no register move.
+    result = result * sfpi::copysgn(sfpi::vFloat(1.0f), a);
 
     // Handle division by zero - return NaN
     v_if(b == sfpi::vFloat(0.0f)) { result = sfpi::vFloat(std::numeric_limits<float>::quiet_NaN()); }
