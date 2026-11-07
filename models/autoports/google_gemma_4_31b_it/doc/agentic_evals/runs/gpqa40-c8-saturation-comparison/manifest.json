@@ -55,7 +55,7 @@
   "job_timeout_hours": 18,
   "arm": "gpqa40-c8-saturation-comparison",
   "owner": "local_serving_check",
-  "status": "prepared_waiting_image_confirmation",
+  "status": "device_job_in_progress",
   "prepared_at": "2026-11-07T00:03:00.546412+00:00",
   "planned_clients": 8,
   "batch_reason": "Smallest validated batch at or above8; expandedpool C8 capacity and exactscored20 confirmed; C4 remains selected outside this experimental arm",
@@ -89,5 +89,16 @@
     "static_config": "models/autoports/google_gemma_4_31b_it/tt/native_logging.json"
   },
   "scope": "Optional scored saturation comparison, not release or selection ofC8. Normal80 never waits.",
-  "plan": "runs/gpqa40-c8-saturation-comparison/plan.md"
+  "plan": "runs/gpqa40-c8-saturation-comparison/plan.md",
+  "run_id": 42316311286,
+  "submitted_at": "2026-11-07T00:07:54Z",
+  "url": "https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/42316311286",
+  "workflow_status": "in_progress",
+  "workflow_conclusion": null,
+  "last_observed_at": "2026-11-07T00:10:49.224796+00:00",
+  "runner": "120-qb2-p05t01",
+  "device_job_id": 128229759730,
+  "device_job_started_at": "2026-11-07T00:08:14Z",
+  "device_job_completed_at": null,
+  "start": "2026-11-07T00:08:14Z"
 }

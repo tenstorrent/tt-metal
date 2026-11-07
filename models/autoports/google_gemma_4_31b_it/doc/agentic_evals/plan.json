@@ -2643,7 +2643,7 @@
       "url": "https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/42296943044",
       "workflow_status": "in_progress",
       "workflow_conclusion": null,
-      "last_observed_at": "2026-11-06T23:55:07.144988+00:00",
+      "last_observed_at": "2026-11-07T00:11:19.423088+00:00",
       "runner": "qb2-120-p05t02",
       "device_job_id": 128164656843,
       "device_job_started_at": "2026-11-06T21:28:17Z",
@@ -2710,7 +2710,7 @@
       "device": "qb2-ci",
       "eval": "r1_gpqa_diamond",
       "workflow": "evals",
-      "status": "device_job_in_progress",
+      "status": "completed_valid_transport_confirmation_not_dry",
       "planned_clients": 2,
       "configured_concurrency_ceiling": 4,
       "batch": 8,
@@ -2744,17 +2744,29 @@
       "run_id": 42302118669,
       "submitted_at": "2026-11-06T22:06:35Z",
       "url": "https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/42302118669",
-      "workflow_status": "in_progress",
-      "workflow_conclusion": null,
-      "last_observed_at": "2026-11-06T23:55:16.672564+00:00",
+      "workflow_status": "completed",
+      "workflow_conclusion": "success",
+      "last_observed_at": "2026-11-07T00:05:24.379755+00:00",
       "build_runner": "tt-ubuntu-2204-large-stable-44qvs-runner-hzfl4",
       "build_started_at": "2026-11-06T22:06:53Z",
       "build_completed_at": "2026-11-06T23:02:56Z",
       "runner": "120-qb2-p04t05",
       "device_job_id": 128205993830,
       "device_job_started_at": "2026-11-06T23:53:54Z",
-      "device_job_completed_at": null,
-      "start": "2026-11-06T23:53:54Z"
+      "device_job_completed_at": "2026-11-07T00:04:44Z",
+      "start": "2026-11-06T23:53:54Z",
+      "end": "2026-11-07T00:04:44Z",
+      "exit_status": 0,
+      "actual_hours": 0.18055555555555555,
+      "actual_hours_basis": "CI device job including setup/server/client; evaluation time separate",
+      "workflow_wall_hours": 1.9694444444444446,
+      "audit": "runs/ci-native-log-confirmation/audit.json",
+      "eval_hours": 0.0707097658177372,
+      "score": 1.0,
+      "score_wilson95": [
+        0.3423802275066531,
+        1.0
+      ]
     },
     {
       "arm": "hex-runtime-benchmark",
@@ -2882,7 +2894,7 @@
       "job_timeout_hours": 18,
       "arm": "gpqa40-c8-saturation-comparison",
       "owner": "local_serving_check",
-      "status": "prepared_waiting_image_confirmation",
+      "status": "device_job_in_progress",
       "prepared_at": "2026-11-07T00:03:00.546412+00:00",
       "planned_clients": 8,
       "batch_reason": "Smallest validated batch at or above8; expandedpool C8 capacity and exactscored20 confirmed; C4 remains selected outside this experimental arm",
@@ -2916,11 +2928,22 @@
         "static_config": "models/autoports/google_gemma_4_31b_it/tt/native_logging.json"
       },
       "scope": "Optional scored saturation comparison, not release or selection ofC8. Normal80 never waits.",
-      "plan": "runs/gpqa40-c8-saturation-comparison/plan.md"
+      "plan": "runs/gpqa40-c8-saturation-comparison/plan.md",
+      "run_id": 42316311286,
+      "submitted_at": "2026-11-07T00:07:54Z",
+      "url": "https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/42316311286",
+      "workflow_status": "in_progress",
+      "workflow_conclusion": null,
+      "last_observed_at": "2026-11-07T00:10:49.224796+00:00",
+      "runner": "120-qb2-p05t01",
+      "device_job_id": 128229759730,
+      "device_job_started_at": "2026-11-07T00:08:14Z",
+      "device_job_completed_at": null,
+      "start": "2026-11-07T00:08:14Z"
     }
   ],
   "status": "SWE5_completed_validity_audit_GPQA20_repair_building",
-  "last_updated": "2026-11-07T00:03:00.546412+00:00",
+  "last_updated": "2026-11-07T00:12:04.209919+00:00",
   "stop_reason": null,
   "actual_runs": [],
   "continuations": [
@@ -3727,6 +3750,21 @@
       "audit": "runs/gpqa20-c8-expanded-pool-comparison/audit.json",
       "valid": true,
       "selected": false
+    },
+    {
+      "arm": "ci-native-log-confirmation",
+      "run_id": 42302118669,
+      "planned_clients": 2,
+      "batch": 8,
+      "device_job_hours": 0.18055555555555555,
+      "workflow_wall_hours": 1.9694444444444446,
+      "predicted_workflow_hours": 1.5749017312072424,
+      "workflow_conclusion": "success",
+      "eval_hours": 0.0707097658177372,
+      "score": 1.0,
+      "audit": "runs/ci-native-log-confirmation/audit.json",
+      "valid": true,
+      "dry_pass": false
     }
   ],
   "local_idle_intervals": [
@@ -3895,9 +3933,9 @@
     },
     "tool_suite_exception": "not applicable to current go set; historical operator question retained",
     "initial_agent_identity": {
-      "status": "stock_config_confirmed_locally_actual_dry_pending",
-      "reason": "Prior first18 replies used two peer ports; aggregate k>=4 does not establish initial4. The80min partial-to-final window is not an all-initial-replies window. Supported stock logging investigation underway. Schedule reserve retained but dry admission requires actual proof.",
-      "evidence": "runs/first-agent-reply-observability/confirmation.json",
+      "status": "actual_CI_native_ID_reply_transport_confirmed_frozen_dry_pending",
+      "reason": "CI original2 smoke proves native initial IDs and full replies; first available snapshot already scored. Frozen larger-list run still must prove timely initial replies and cancellation before score.",
+      "evidence": "runs/ci-native-log-confirmation/audit.json",
       "solution": "InitialReceived IDs matched to full nonstreaming JSONresponse IDs viaacceptedstocklogging; useactualfrozenCIlog, notaggregatek alone"
     }
   },
@@ -3923,29 +3961,16 @@
   },
   "active_runs": [
     42296943044,
-    42302118669
+    42316311286
   ],
   "latest_live_progress": {
-    "observed_at": "2026-11-06T23:08:57.977077+00:00",
-    "gpqa40": {
-      "run_id": 42296943044,
-      "last_published_event": "2026-11-06T23:05:27.6437824Z",
-      "last_counter": "4/40 at evaluation elapsed1:25:09",
-      "active_rows": 4,
-      "status": "running; counters may lag; no new score/projection"
-    },
-    "gpqa20_c8": {
-      "run_id": 42293808766,
-      "last_published_event": "2026-11-06T23:08:39.3358797Z",
-      "last_counter": "17/20",
-      "active_rows": 2,
-      "status": "running; no scored acceptance"
-    },
-    "native_log_confirmation": {
-      "run_id": 42302118669,
-      "device_job_id": 128205993830,
-      "status": "queued; build complete .9341667h"
-    }
+    "run_id": 42296943044,
+    "observed_at": "2026-11-07T00:11:40.733454+00:00",
+    "completed": 33,
+    "total": 40,
+    "last_event": "2026-11-07T00:07:31.9028085Z",
+    "active_rows": 4,
+    "basis": "Stock live log progress; not valid final score or slow-tail bound"
   },
   "current_runtime_benchmark": {
     "evidence": "runs/hex-runtime-benchmark/RESULT.json",
@@ -4256,13 +4281,13 @@
   },
   "candidate_release_lists": {
     "r1_gpqa_diamond": {
-      "tasks": 10,
-      "source": "cohorts.json r1_gpqa_diamond.rungs.server-sized-gpqa-c2",
-      "reason": "C4 accepted by current-runtime paired10, while nested20C2 rung continues. Full198 remains non-fitting.",
+      "tasks": 20,
+      "source": "cohorts.json r1_gpqa_diamond.rungs.larger-gpqa20-c4-retention-retry",
+      "reason": "Largest banked selected C4 rung20; normal40 in progress. Candidate only; continue sequential growth when measured timing admits.",
       "frozen": false,
       "planned_clients": 4,
       "batch": 8,
-      "configuration_evidence": "runs/gpqa-c4-scored10/RESULT.json"
+      "configuration_evidence": "runs/larger-gpqa20-c4-retention-retry/audit.json"
     },
     "terminal_bench_2_1": {
       "decision": "stop",
@@ -4315,9 +4340,9 @@
       "banked": false
     },
     "next": "Settle retained same20/same5 validity; held40 candidate launches only after valid20 and next-run projection fits before first dry. Freeze go set promptly when largest fitting rungs settle.",
-    "first_dry_latest_start_hour": 22,
+    "first_dry_latest_start_hour": 32,
     "release_dispatch_latest_target_hour": 45.2,
-    "reserve_note": "Original conservative firstdry/fix/seconddry reserves retained while exact tool dry route remains unresolved; no unearned reduction in queue/tail allowance."
+    "reserve_note": "Current schedule supersedes historical stagehour22 cutoff: first dry32, release queue45.2\u201348. Historical repair forecasts remain labeled snapshots."
   },
   "progress_observations": [
     {
@@ -4623,5 +4648,12 @@
     "same20_slower_percent": 14.862358471371294,
     "evidence": "runs/gpqa20-c8-expanded-pool-comparison/audit.json",
     "next": "Separate40 experiment planned; normal40/80 proceed onC4 independently"
+  },
+  "ci_native_transport_confirmation": {
+    "evidence": "runs/ci-native-log-confirmation/audit.json",
+    "passed": true,
+    "dry_pass": false,
+    "queue_hours": 0.8494444444444444,
+    "remaining": "Actual frozen no-score dry and full-cap logging transport remain unproved"
   }
 }

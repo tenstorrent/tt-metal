@@ -3073,7 +3073,7 @@
           "url": "https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/42296943044",
           "workflow_status": "in_progress",
           "workflow_conclusion": null,
-          "last_observed_at": "2026-11-06T23:55:07.144988+00:00",
+          "last_observed_at": "2026-11-07T00:11:19.423088+00:00",
           "runner": "qb2-120-p05t02",
           "device_job_id": 128164656843,
           "device_job_started_at": "2026-11-06T21:28:17Z",
@@ -3086,7 +3086,7 @@
           "device": "qb2-ci",
           "eval": "r1_gpqa_diamond",
           "workflow": "evals",
-          "status": "device_job_in_progress",
+          "status": "completed_valid_transport_confirmation_not_dry",
           "planned_clients": 2,
           "configured_concurrency_ceiling": 4,
           "batch": 8,
@@ -3120,17 +3120,29 @@
           "run_id": 42302118669,
           "submitted_at": "2026-11-06T22:06:35Z",
           "url": "https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/42302118669",
-          "workflow_status": "in_progress",
-          "workflow_conclusion": null,
-          "last_observed_at": "2026-11-06T23:55:16.672564+00:00",
+          "workflow_status": "completed",
+          "workflow_conclusion": "success",
+          "last_observed_at": "2026-11-07T00:05:24.379755+00:00",
           "build_runner": "tt-ubuntu-2204-large-stable-44qvs-runner-hzfl4",
           "build_started_at": "2026-11-06T22:06:53Z",
           "build_completed_at": "2026-11-06T23:02:56Z",
           "runner": "120-qb2-p04t05",
           "device_job_id": 128205993830,
           "device_job_started_at": "2026-11-06T23:53:54Z",
-          "device_job_completed_at": null,
-          "start": "2026-11-06T23:53:54Z"
+          "device_job_completed_at": "2026-11-07T00:04:44Z",
+          "start": "2026-11-06T23:53:54Z",
+          "end": "2026-11-07T00:04:44Z",
+          "exit_status": 0,
+          "actual_hours": 0.18055555555555555,
+          "actual_hours_basis": "CI device job including setup/server/client; evaluation time separate",
+          "workflow_wall_hours": 1.9694444444444446,
+          "audit": "runs/ci-native-log-confirmation/audit.json",
+          "eval_hours": 0.0707097658177372,
+          "score": 1.0,
+          "score_wilson95": [
+            0.3423802275066531,
+            1.0
+          ]
         },
         {
           "eval": "r1_gpqa_diamond",
@@ -3189,7 +3201,7 @@
           "job_timeout_hours": 18,
           "arm": "gpqa40-c8-saturation-comparison",
           "owner": "local_serving_check",
-          "status": "prepared_waiting_image_confirmation",
+          "status": "device_job_in_progress",
           "prepared_at": "2026-11-07T00:03:00.546412+00:00",
           "planned_clients": 8,
           "batch_reason": "Smallest validated batch at or above8; expandedpool C8 capacity and exactscored20 confirmed; C4 remains selected outside this experimental arm",
@@ -3223,7 +3235,18 @@
             "static_config": "models/autoports/google_gemma_4_31b_it/tt/native_logging.json"
           },
           "scope": "Optional scored saturation comparison, not release or selection ofC8. Normal80 never waits.",
-          "plan": "runs/gpqa40-c8-saturation-comparison/plan.md"
+          "plan": "runs/gpqa40-c8-saturation-comparison/plan.md",
+          "run_id": 42316311286,
+          "submitted_at": "2026-11-07T00:07:54Z",
+          "url": "https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/42316311286",
+          "workflow_status": "in_progress",
+          "workflow_conclusion": null,
+          "last_observed_at": "2026-11-07T00:10:49.224796+00:00",
+          "runner": "120-qb2-p05t01",
+          "device_job_id": 128229759730,
+          "device_job_started_at": "2026-11-07T00:08:14Z",
+          "device_job_completed_at": null,
+          "start": "2026-11-07T00:08:14Z"
         }
       ]
     }

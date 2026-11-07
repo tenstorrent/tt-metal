@@ -36,6 +36,8 @@ The published eef534 benchmark arm passed eight exact4096/128 B1/C1 requests:754
 
 The C8 same20 comparison completed valid16/20 (95%58.40–91.93%) with all20 visible outputs and retained chains identical to C4. It took1.786983evaluation hours,14.86% longer thanC4, and1.910556device-job hours; total effort2.382776hours versus3.5box. Eight-agent capacity is retained as an option, but C4 remains selected and zero release speed saving is credited. A separate registered40 saturation comparison is budgeted because the20-run tail spent5443hostseconds with only two active agents; its benefit is unknown and normal rungs never wait. See `runs/gpqa20-c8-expanded-pool-comparison/audit.json`.
 
+CI native logging confirmation passed on the published image: both initial request IDs had complete replies matching the harness, with lossless phase accounting. The smoke scored2/2 (95%34.24–100%) in0.070710evaluation hours; device cost0.180556h versus0.182957h predicted. Build0.934167h and queue0.849444h brought workflow time to1.969444h. Its first live snapshot already contained scores, so this is not a dry pass. Full-cap response transport remains unmeasured. See `runs/ci-native-log-confirmation/audit.json`.
+
 ## Effort predictions and results
 
 Device costs include the device job, not build/queue. Release savings are forecasts on the then-planned lists; guesses are marked. Later measured stops can retire those savings. Complete confirmations and their original scope remain in each result linked by efforts.json.
@@ -140,7 +142,7 @@ Device costs include the device job, not build/queue. Release savings are foreca
 | gpqa160-198-publication | 0.00000 / 0.00000 | 0.00000 | kept/solved: variants: 4; tests per variant: 36; hooks: passed; source and cohort guards: passed |
 | ci-response-log-propagation | 0.09000 (guess) / 0.12060 | 0.00000 | kept/open: local exactness: True; expected decode ids exact: 583; full native json equal: True; filter roundtrip: True |
 | ci-response-log-publication | 0.00000 / 0.00000 | 0.00000 | kept/solved: tt sha: eef534e5cd6bcaf37957647de4d8d4eff4f0e047; tti sha: 483509781a0898395208fe0fdc14f54eb3ff8857; published: source-only FF separate checkouts, dedicated branches; host tests: 37 |
-| ci-native-log-confirmation | 0.18296 / unknown | 0.00000 | running/pending: Pending |
+| ci-native-log-confirmation | 0.18296 / 0.18056 | 0.00000 | kept/solved: native transport: True; dry pass: False; full cap transport measured: False |
 | hex-runtime-benchmark | 0.07605 / 0.15386 | 0.00000 | kept/solved: headline ttft ms: 754.1133353515761; headline decode tps: 35.31515153764353; native texts exact: 8; matrix completed: 8 |
 | logging-future-cohort-preparation | 0.00000 / 0.00000 | 0.00000 | none/solved: candidates: 4; focused tests each: 37; hooks: pass; registered ids exact: True |
 | c8-forty-preparation | 0.00000 / 0.00000 | 0.00000 | none/solved: c8 forty sha: e5a9a7638a1f46f22c0d89acf2ac333da5d53c02; focused tests: 37; hooks: passed; both eighty descendant trees exact: True |

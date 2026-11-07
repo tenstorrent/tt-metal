@@ -219,6 +219,10 @@
     {
       "fact": "C8 same20 exact work is14.86% slower;100319 two-active steps dominate5443hostseconds. Capacity gain alone cannot establish larger-list speedup.",
       "evidence": "runs/gpqa20-c8-expanded-pool-comparison/audit.json"
+    },
+    {
+      "fact": "Native hex logger survives unchanged CI filter, both initial request IDs/full replies match harness. First live snapshot already scored2/2; successful transport alone does not establish dry cancellation window. Postbuild shared queue .849444h.",
+      "evidence": "runs/ci-native-log-confirmation/audit.json"
     }
   ],
   "suite_timings": [
@@ -537,6 +541,24 @@
         0.919342337420202
       ],
       "evidence": "runs/gpqa20-c8-expanded-pool-comparison/audit.json"
+    },
+    {
+      "run_id": 42302118669,
+      "eval": "r1_gpqa_diamond",
+      "tasks": 2,
+      "agents": 2,
+      "batch": 8,
+      "wall_hours": 0.0707097658177372,
+      "device_job_hours": 0.18055555555555555,
+      "workflow_hours": 1.9694444444444446,
+      "agent_hours": null,
+      "timeouts": 0,
+      "score": 1.0,
+      "wilson95": [
+        0.3423802275066531,
+        1.0
+      ],
+      "evidence": "runs/ci-native-log-confirmation/audit.json"
     }
   ],
   "generic_fixes": [

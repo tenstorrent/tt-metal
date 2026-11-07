@@ -80,7 +80,7 @@
   "missing_reasons": {
     "device_metrics": "Live vLLM profiling prohibited; host-wall rooflines are not device-time measurements.",
     "stage12_accuracy": "Banked GPQA20/198, SWE2/500, Terminal2/89. SWE5 invalid external retrieval; measured stop5/functional2. Terminal10 measured nonfit/functional2. GPQA40 running; no dry/release.",
-    "release": "No frozen dry/release yet. CI INFO log filter diagnosed; model-only lossless logging repair passed local3/583ID exactness. ActualCI originalsmoke2 confirmation42302118669 pending; no-score dry remains unproven."
+    "release": "No frozen dry/release yet. Actual CI native request/reply transport confirmed by run42302118669, scored2/2 (Wilson95%34.24\u2013100%). First live snapshot already scored; no-score dry remains unproven. Full-cap transport not measured."
   },
   "notes": [
     "Published runtime eef534 measured with complete idle-drained accounting; no frozen release yet. No vLLM profiling.",
@@ -91,6 +91,6 @@
     "Six full60 conditional HF/TT prefill and forced incremental-decode checkpoints support captured loop continuations; no originalservedstate or autonomousHF claim. Evidence: runs/gpqa-loop-logits-discriminator/RESULT.json and runs/gpqa-decode-state-discriminator/RESULT.json.",
     "SWE retained5: raw1/5 (Wilson95%3.62\u201362.45%), invalid Xarray external retrieval; functional2 retained, no retry/advance. Eval8190.434942s; native Astropy cap32768 with18047-token periodic suffix. Nine discarded outputs and failed phase archive limit attribution. Evidence: runs/nightly-swe-decode-retention/audit.json.",
     "Selected headline remains unbuffered B1. Stock response debug buffers SSE (measured experiment excluded from decoderateclaims); enabled only for nonstreamingGPQA. Evidence: runs/response-logging-runtime-benchmark/AUTOFIX.md.",
-    "C8 same20 valid16/20; all outputs/retained chains exact versusC4, but1.786983eval hours is14.86% slower. Capacity retained, C4 selected, no speed saving credited. Separate40 comparison planned; not an extra independent accuracy sample. Evidence: runs/gpqa20-c8-expanded-pool-comparison/audit.json."
+    "C8 same20 valid16/20; all outputs/retained chains exact versusC4, but1.786983eval hours is14.86% slower. Capacity retained, C4 selected, no speed saving credited. Separate40 comparison running42316311286; not an extra independent accuracy sample. Evidence: runs/gpqa20-c8-expanded-pool-comparison/audit.json."
   ]
 }

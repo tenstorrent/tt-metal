@@ -5,11 +5,13 @@
   "tti_sha": "483509781a0898395208fe0fdc14f54eb3ff8857",
   "plugin_sha": "ca7a18246e4111629ed6cb4a7d1192002749fccf",
   "image": "ghcr.io/tenstorrent/tt-agentic-bringup-qb2/vllm-tt-metal-src-dev-ubuntu-22.04-amd64@sha256:bf1ada4081f7fa338ed8495a02324390d3b6124861cd625a0d2fb2d6a255d425",
-  "status": "build_success_device_queued",
+  "status": "build_and_device_pull_confirmed",
   "evidence": "bringup/artifacts/native-log-image-proof/build-live.log:39907-39920",
   "build_started_at": "2026-11-06T22:06:53Z",
   "build_completed_at": "2026-11-06T23:02:56Z",
-  "device_pull_verified": false,
+  "device_pull_verified": true,
   "build_hours": 0.9341666666666667,
-  "device_job_id": 128205993830
+  "device_job_id": 128205993830,
+  "device_pull_evidence": "bringup/artifacts/stage12-eval-observation/42302118669/current.log:1003,1273",
+  "device_pull_at": "2026-11-06T23:56:34.0576121Z"
 }

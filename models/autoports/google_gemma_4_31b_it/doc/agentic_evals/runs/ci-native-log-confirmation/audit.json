@@ -1,0 +1,306 @@
+{
+  "run_id": 42302118669,
+  "status": "actual_ci_native_transport_confirmed_scored_smoke_valid_not_dry",
+  "confirmation_pass": true,
+  "dry_pass": false,
+  "score": {
+    "name": "r1_gpqa_diamond exact_match",
+    "value": 1.0,
+    "correct": 2,
+    "completed_samples": 2,
+    "dataset_samples": 198,
+    "scope": "subset",
+    "wilson95": [
+      0.3423802275066531,
+      1.0
+    ],
+    "published_reference_percent": 84.3,
+    "gpu_reference_percent": 83.33,
+    "score_gate": false
+  },
+  "runtime": {
+    "tt_metal_sha": "eef534e5cd6bcaf37957647de4d8d4eff4f0e047",
+    "tti_sha": "483509781a0898395208fe0fdc14f54eb3ff8857",
+    "plugin_sha": "ca7a18246e4111629ed6cb4a7d1192002749fccf",
+    "image": "ghcr.io/tenstorrent/tt-agentic-bringup-qb2/vllm-tt-metal-src-dev-ubuntu-22.04-amd64@sha256:bf1ada4081f7fa338ed8495a02324390d3b6124861cd625a0d2fb2d6a255d425",
+    "image_pull_verified": true,
+    "full_layers": 60,
+    "planned_clients": 2,
+    "configured_concurrency_ceiling": 4,
+    "max_observed_active_rows": 2,
+    "batch": 8,
+    "max_num_seqs": 8,
+    "context": 262144,
+    "pool_ids": 10248,
+    "implementation": "gemma4-31b-autoport-v3"
+  },
+  "cohort": {
+    "configured_ids": [
+      152,
+      189
+    ],
+    "semantic_dataset_ids": [
+      152,
+      189
+    ],
+    "source": "cohorts.json r1_gpqa_diamond.rungs.smoke; same two original frozen IDs",
+    "score_independent": true
+  },
+  "limits": {
+    "model_args": {
+      "model": "google/gemma-4-31B-it",
+      "base_url": "http://127.0.0.1:8000/v1/chat/completions",
+      "tokenizer_backend": "huggingface",
+      "max_length": 262080,
+      "timeout": 14400,
+      "revision": "842da3794eaa0b77d5f08bae87a17459d91ff475",
+      "num_concurrent": 4,
+      "trust_remote_code": true
+    },
+    "generation": {
+      "stream": false,
+      "max_gen_toks": 126976,
+      "until": [],
+      "do_sample": true,
+      "temperature": 1.0,
+      "top_k": 20,
+      "top_p": 0.95,
+      "seed": 42
+    },
+    "thinking": true,
+    "task_resources": "HTTP-only stock EVALS_COMMON, no task sandbox/resources changes"
+  },
+  "transport": {
+    "initial_requests_identified": true,
+    "both_complete_server_json_replies": true,
+    "decoded_response_bodies_match_harness_visible_outputs": true,
+    "versioned_hex_envelopes": 16,
+    "unique_native_responses": 2,
+    "non_chat_empty_body_markers": 6,
+    "identical_duplicate_response_records": 2,
+    "malformed_complete_reply_records": 0,
+    "observer_source_coverage_compromised": false,
+    "observer_truncation_events": 0,
+    "observer_error_events": 0,
+    "initial_requests": [
+      {
+        "id": "chatcmpl-b74cba7b3d6198aa",
+        "timestamp": "2026-11-07T00:00:17.7843319Z",
+        "line": 1832,
+        "server_response_records": [
+          {
+            "timestamp": "2026-11-07T00:04:24.9022204Z",
+            "line_start": 7326,
+            "line_end": 7326,
+            "json_sha256": "04ffd4b5d0e51426e90b7e17e45bf7bc57df7406d7492958f5fea5ba8d619b09",
+            "json_characters": 16804,
+            "complete_json_wrapper": true,
+            "single_finished_chat_choice": true,
+            "finish_reason": "stop",
+            "visible_empty": false
+          },
+          {
+            "timestamp": "2026-11-07T00:04:34.5036663Z",
+            "line_start": 13929,
+            "line_end": 13929,
+            "json_sha256": "04ffd4b5d0e51426e90b7e17e45bf7bc57df7406d7492958f5fea5ba8d619b09",
+            "json_characters": 16804,
+            "complete_json_wrapper": true,
+            "single_finished_chat_choice": true,
+            "finish_reason": "stop",
+            "visible_empty": false
+          }
+        ],
+        "complete_server_reply_observed": true,
+        "client_acknowledgement": "unknown"
+      },
+      {
+        "id": "chatcmpl-99d250e96b546331",
+        "timestamp": "2026-11-07T00:00:17.7909469Z",
+        "line": 1834,
+        "server_response_records": [
+          {
+            "timestamp": "2026-11-07T00:02:40.7655225Z",
+            "line_start": 4995,
+            "line_end": 4995,
+            "json_sha256": "0d952a6a0d97b5aaf8100c295924e95cd970e3d050528f29527778ad9081f161",
+            "json_characters": 10870,
+            "complete_json_wrapper": true,
+            "single_finished_chat_choice": true,
+            "finish_reason": "stop",
+            "visible_empty": false
+          },
+          {
+            "timestamp": "2026-11-07T00:04:34.3360350Z",
+            "line_start": 11569,
+            "line_end": 11569,
+            "json_sha256": "0d952a6a0d97b5aaf8100c295924e95cd970e3d050528f29527778ad9081f161",
+            "json_characters": 10870,
+            "complete_json_wrapper": true,
+            "single_finished_chat_choice": true,
+            "finish_reason": "stop",
+            "visible_empty": false
+          }
+        ],
+        "complete_server_reply_observed": true,
+        "client_acknowledgement": "unknown"
+      }
+    ],
+    "native_results": [
+      {
+        "semantic_dataset_index": 152,
+        "request_id": "chatcmpl-b74cba7b3d6198aa",
+        "native_prompt_tokens": 485,
+        "native_completion_tokens": 5480,
+        "finish_reason": "stop",
+        "visible_nonempty": true,
+        "native_content_matches_harness": true,
+        "native_token_ids_available": false,
+        "retained_physical_decode_samples": 5480,
+        "physical_chain_sha256": "91db49df3ca27dff16f00486a88998fb91f361a3991c86e0a7e90cac277a6bf3",
+        "score": 1,
+        "response_json_characters": 16804
+      },
+      {
+        "semantic_dataset_index": 189,
+        "request_id": "chatcmpl-99d250e96b546331",
+        "native_prompt_tokens": 298,
+        "native_completion_tokens": 3151,
+        "finish_reason": "stop",
+        "visible_nonempty": true,
+        "native_content_matches_harness": true,
+        "native_token_ids_available": false,
+        "retained_physical_decode_samples": 3151,
+        "physical_chain_sha256": "85cfc91b638a3b1490cecb05003852e180a435b6adaec4c0d8d4922ffe6ebcab",
+        "score": 1,
+        "response_json_characters": 10870
+      }
+    ],
+    "scope": "Actual unchanged CI INFO filtering preserves model-owned hex envelopes; UTF8/JSON decode roundtrip succeeds. Native responses have matching initial request IDs; harness visible responses match exactly. Generic observer alone does not prove client acknowledgement.",
+    "full_cap_transport_measured": false,
+    "empty_visible_transport_measured_in_this_ci_run": false
+  },
+  "phase_integrity": {
+    "artifact": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/runs/ci-native-log-confirmation/collected/workflow_logs_evals_gemma-4-31B-it_bh-qb-ge_gemma4-31b-autoport-v3/tt_triage/gemma4-phase-147-1794009560717206561.jsonl",
+    "sha256": "915826b184ecb7f7e1cce522d8fd3c00e4b1ece76db06b846559de60be14fddf",
+    "raw_bytes": 5691548,
+    "frames": 249,
+    "paired_contiguous_steps": 5482,
+    "step_range": [
+      1,
+      5482
+    ],
+    "duplicates": 0,
+    "errors_or_loss_flags": [],
+    "final_pending_steps": 0,
+    "physical_chains": [
+      {
+        "first_pos": 298,
+        "last_pos": 3448,
+        "first_step": 3,
+        "first_ns": 2964666579697373,
+        "rows": [
+          0
+        ],
+        "last_ns": 2964809161687782,
+        "last_step": 3153,
+        "physical_decode_samples": 3151,
+        "ids_sha256": "85cfc91b638a3b1490cecb05003852e180a435b6adaec4c0d8d4922ffe6ebcab",
+        "last4096_unique": 427,
+        "periodic_suffixes": {
+          "1": 2,
+          "2": 2,
+          "4": 4,
+          "8": 8,
+          "16": 16
+        },
+        "native_prompt_matches": [
+          189
+        ]
+      },
+      {
+        "first_pos": 485,
+        "last_pos": 5964,
+        "first_step": 3,
+        "first_ns": 2964666579697373,
+        "rows": [
+          0,
+          1
+        ],
+        "last_ns": 2964913216673502,
+        "last_step": 5482,
+        "physical_decode_samples": 5480,
+        "ids_sha256": "91db49df3ca27dff16f00486a88998fb91f361a3991c86e0a7e90cac277a6bf3",
+        "last4096_unique": 364,
+        "periodic_suffixes": {
+          "1": 2,
+          "2": 2,
+          "4": 4,
+          "8": 8,
+          "16": 16
+        },
+        "native_prompt_matches": [
+          152
+        ]
+      }
+    ],
+    "token_retention": {
+      "scope": "decode_device_only_physical_rows",
+      "row_index": "index_in_sampled_decode_token_ids",
+      "positions": "processed_input_position; sample_predicts_position_plus_one",
+      "inactive_rows": "positions_less_than_zero_are_not_request_tokens",
+      "prefill_tokens_retained": false,
+      "host_sampled_tokens_retained": false,
+      "request_ids_available": false,
+      "client_emission_verified": false,
+      "diagnostic_disabled": false,
+      "diagnostic_failures": 0,
+      "diagnostic_reason": null,
+      "position_identity_uncertain": false,
+      "loss": false,
+      "export_failed": false,
+      "file_exhausted": false,
+      "pending_incomplete": false
+    },
+    "coverage_limits": "Phase contains decode physical samples only, excludes first prefill token, and may include asynchronous un-emitted samples. Native APItoken_ids null, so no claim exact per-token emitted-ID coverage. Usage and finish_reason observed directly from full native JSON."
+  },
+  "timing": {
+    "evaluation_seconds": 254.55515694385394,
+    "evaluation_hours": 0.0707097658177372,
+    "device_job_hours": 0.18055555555555555,
+    "workflow_hours": 1.9694444444444446,
+    "build_hours": 0.9341666666666667,
+    "postbuild_queue_hours": 0.8494444444444444,
+    "initial_build_queue_hours": 0.005,
+    "device_non_eval_hours": 0.10984578973781835,
+    "predicted_device_hours": 0.1829572867627979,
+    "predicted_workflow_hours": 1.5749017312072424,
+    "box_device_hours": 0.6,
+    "basis": "Host wall only; build/queue separate from device-job hold"
+  },
+  "no_score_observation": {
+    "first_available_snapshot_completed": 2,
+    "total": 2,
+    "score_markers_observed": 1,
+    "fetch_finished_at": "2026-11-07T00:05:33.865290+00:00",
+    "latest_event_lag_seconds": 51.636042,
+    "dry_pass": false,
+    "reason": "First available snapshot already both complete and includes scoring; transport success is not timely no-score observation or cancellation proof."
+  },
+  "remaining_limits": [
+    "Full126976-token response transport/size remains unmeasured; these stop completions are3151/5480tokens.",
+    "Both CI visible responses are nonempty; empty-visible branch had local confirmation only.",
+    "External live log lag has no guaranteed bound; this run does not establish exact dry cancellation timing.",
+    "Per-token client emission cannot be equated to retained physical rows; prefill and asynchronous extras remain separate."
+  ],
+  "evidence": [
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/runs/ci-native-log-confirmation/collected/workflow_logs_evals_gemma-4-31B-it_bh-qb-ge_gemma4-31b-autoport-v3/reports_output/evals/google__gemma-4-31B-it_p300x2_evals/eval-attempt-d75f553208c44cf99b7bd7ab64edd0fc/eval_id_gemma4-31b-autoport-v3_gemma-4-31B-it_p300x2/google__gemma-4-31B-it/samples_r1_gpqa_diamond_2026-11-07T00-04-24.915489.jsonl",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/runs/ci-native-log-confirmation/collected/workflow_logs_evals_gemma-4-31B-it_bh-qb-ge_gemma4-31b-autoport-v3/reports_output/evals/google__gemma-4-31B-it_p300x2_evals/eval-attempt-d75f553208c44cf99b7bd7ab64edd0fc/eval_id_gemma4-31b-autoport-v3_gemma-4-31B-it_p300x2/google__gemma-4-31B-it/results_2026-11-07T00-04-24.915489.json",
+    "bringup/artifacts/stage12-eval-observation/42302118669/observer-20261107T000533885854Z.json",
+    "bringup/artifacts/stage12-eval-observation/42302118669/current.log",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/runs/ci-native-log-confirmation/manifest.json",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/runs/ci-native-log-confirmation/image-build.json",
+    "bringup/artifacts/ci-native-log-final-audit/analyze.py"
+  ],
+  "audit_device_hours": 0
+}
