@@ -17,11 +17,12 @@ the programs a call can run are a fixed set; ``warm()`` compiles them all (or a 
 binaries in DRAM (~20 MB per chip for all buckets). Calls after that compile nothing.
 
 Traces: passes of the buckets up to ``trace_max_rows`` (``MIMO_VIT_TRACE_MAX_ROWS``, default 4096: images up to
-1024x1024; 0 turns tracing off) replay a trace instead of enqueueing ~1000 ops from the host (a small image: ~44 ms
-eager, a few ms traced; bit-identical). ``warm()`` also allocates their persistent inputs and outputs (a few MB per
-chip in all), before the LLM's traces are captured; ``capture_traces()`` captures them after the LLM's (a bucket not
-captured by then is captured on its first call). Each trace takes trace region DRAM (``trace_info()``); a capture that
-does not fit leaves its bucket eager. Larger passes run eagerly and leave no device tensor behind.
+1024x1024; 0 turns tracing off) replay a trace instead of enqueueing ~900 ops from the host (bit-identical; a
+448x448 image takes 18.8 ms end to end on bhg2, 16.3 ms of it device time). ``warm()`` also allocates their
+persistent inputs and outputs (29 MiB per chip for the 9 buckets), before the LLM's traces are captured;
+``capture_traces()`` captures them after the LLM's (a bucket not captured by then is captured on its first call). They
+take 71 MiB of trace region per chip (``trace_info()``); a capture that does not fit leaves its bucket eager. Larger
+passes run eagerly and leave no device tensor behind.
 
 Weights: converted from the checkpoint on first use into ``cache_dir`` (``MIMO_VISION_CACHE``/<checkpoint name> by
 default; never the LLM's cache) under the same lock as the LLM's weights: 201 MB per chip in BF16, less with
