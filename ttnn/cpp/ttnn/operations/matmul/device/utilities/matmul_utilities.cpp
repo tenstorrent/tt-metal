@@ -5,8 +5,11 @@
 #include "ttnn/operations/matmul/device/utilities/matmul_utilities.hpp"
 
 #include <algorithm>
+#include <array>
 #include <limits>
+#include <mutex>
 #include <set>
+#include <tuple>
 
 #include "tt-metalium/allocator.hpp"
 #include "tt-metalium/experimental/device.hpp"
@@ -18,6 +21,7 @@
 #include "ttnn/operations/core/program_cache_l1.hpp"
 #include "ttnn/tensor/shape/shape.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
+#include <tt-logger/tt-logger.hpp>
 #include <internal/mesh_device.hpp>
 
 namespace ttnn::operations::matmul::utilities {
@@ -330,6 +334,112 @@ void validate_matmul_reuse_work_split(
         "num_output_blocks_total ({}) must be >= num_cores ({}); some cores would have no work",
         num_output_blocks_total,
         num_cores);
+}
+
+namespace {
+
+// Significant bits (leading one included) a value of `dtype` carries once unpacked into a source register.
+// FLOAT32 is held as TF32 in the source registers. Other dtypes are not modelled.
+std::optional<uint32_t> matmul_src_significant_bits(tt::tt_metal::DataType dtype) {
+    switch (dtype) {
+        case tt::tt_metal::DataType::BFLOAT4_B: return 3;
+        case tt::tt_metal::DataType::BFLOAT8_B: return 7;
+        case tt::tt_metal::DataType::BFLOAT16: return 8;
+        case tt::tt_metal::DataType::FLOAT32: return 11;
+        default: return std::nullopt;
+    }
+}
+
+std::optional<uint32_t> num_fidelity_phases(tt::tt_metal::MathFidelity fidelity) {
+    switch (fidelity) {
+        case tt::tt_metal::MathFidelity::LoFi: return 1;
+        case tt::tt_metal::MathFidelity::HiFi2: return 2;
+        case tt::tt_metal::MathFidelity::HiFi3: return 3;
+        case tt::tt_metal::MathFidelity::HiFi4: return 4;
+        default: return std::nullopt;
+    }
+}
+
+tt::tt_metal::MathFidelity fidelity_from_num_phases(uint32_t num_phases) {
+    switch (num_phases) {
+        case 1: return tt::tt_metal::MathFidelity::LoFi;
+        case 2: return tt::tt_metal::MathFidelity::HiFi2;
+        case 3: return tt::tt_metal::MathFidelity::HiFi3;
+        case 4: return tt::tt_metal::MathFidelity::HiFi4;
+        default: TT_THROW("Invalid number of fidelity phases: {}", num_phases);
+    }
+}
+
+}  // namespace
+
+tt::tt_metal::MathFidelity get_lowest_equivalent_matmul_fidelity(
+    tt::ARCH arch,
+    tt::tt_metal::DataType in0_dtype,
+    tt::tt_metal::DataType in1_dtype,
+    tt::tt_metal::MathFidelity requested) {
+    if (arch != tt::ARCH::WORMHOLE_B0 && arch != tt::ARCH::BLACKHOLE) {
+        return requested;
+    }
+    // Multiplier width per phase: 5 bits of SrcA (in1), 7 bits of SrcB (in0), leading one included.
+    constexpr uint32_t srca_slice_bits = 5;
+    constexpr uint32_t srcb_slice_bits = 7;
+    const auto srca_bits = matmul_src_significant_bits(in1_dtype);
+    const auto srcb_bits = matmul_src_significant_bits(in0_dtype);
+    const auto requested_phases = num_fidelity_phases(requested);
+    if (!srca_bits || !srcb_bits || !requested_phases) {
+        return requested;
+    }
+    const bool srca_lo_used = *srca_bits > srca_slice_bits;
+    const bool srcb_lo_used = *srcb_bits > srcb_slice_bits;
+    // Phase i multiplies: 0 = A hi x B hi, 1 = A lo x B hi, 2 = A hi x B lo, 3 = A lo x B lo.
+    const std::array<bool, 4> phase_contributes = {true, srca_lo_used, srcb_lo_used, srca_lo_used && srcb_lo_used};
+    uint32_t needed_phases = 1;
+    for (uint32_t phase = 0; phase < *requested_phases; ++phase) {
+        if (phase_contributes[phase]) {
+            needed_phases = phase + 1;
+        }
+    }
+    return fidelity_from_num_phases(needed_phases);
+}
+
+void warn_if_matmul_fidelity_has_zero_phases(
+    std::string_view op_name,
+    const Tensor& input_tensor_a,
+    const Tensor& input_tensor_b,
+    tt::tt_metal::MathFidelity requested) {
+    if (input_tensor_a.storage_type() != ttnn::StorageType::DEVICE || input_tensor_a.device() == nullptr) {
+        return;  // Op validation reports this.
+    }
+    const auto arch = input_tensor_a.device()->arch();
+    const auto equivalent =
+        get_lowest_equivalent_matmul_fidelity(arch, input_tensor_a.dtype(), input_tensor_b.dtype(), requested);
+    if (equivalent == requested) {
+        return;
+    }
+    // Validation can run on every call (e.g. on program cache hits), so warn once per combination.
+    static std::mutex warned_mutex;
+    static std::set<std::tuple<tt::tt_metal::DataType, tt::tt_metal::DataType, tt::tt_metal::MathFidelity>> warned;
+    {
+        std::lock_guard<std::mutex> lock(warned_mutex);
+        if (!warned.emplace(input_tensor_a.dtype(), input_tensor_b.dtype(), requested).second) {
+            return;
+        }
+    }
+    log_warning(
+        tt::LogOp,
+        "{}: math_fidelity={} with input_tensor_a (in0) {} and input_tensor_b (in1) {} runs {} fidelity phases, "
+        "but only the first {} can change the result: the others multiply mantissa bits that are always zero for "
+        "these dtypes. Set math_fidelity={} in compute_kernel_config for bit-identical output with fewer math "
+        "cycles. First seen with input shapes {} and {}; reported once per dtype and fidelity combination.",
+        op_name,
+        requested,
+        input_tensor_a.dtype(),
+        input_tensor_b.dtype(),
+        *num_fidelity_phases(requested),
+        *num_fidelity_phases(equivalent),
+        equivalent,
+        input_tensor_a.logical_shape(),
+        input_tensor_b.logical_shape());
 }
 
 }  // namespace ttnn::operations::matmul::utilities

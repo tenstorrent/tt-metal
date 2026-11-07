@@ -219,6 +219,11 @@ void SparseMatmulDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(
         input_tensor_a.device() == input_tensor_b.device() && input_tensor_a.device() == sparsity.device(),
         "All sparse matmul inputs must be on the same device");
+    warn_if_matmul_fidelity_has_zero_phases(
+        "sparse_matmul",
+        input_tensor_a,
+        input_tensor_b,
+        ttnn::get_math_fidelity(operation_attributes.compute_kernel_config));
     TT_FATAL(
         input_tensor_a.layout() == ttnn::Layout::TILE,
         "Input tensor A must be TILE layout, got {}",

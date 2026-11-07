@@ -6,6 +6,7 @@
 
 #include <bit>
 #include <optional>
+#include <string_view>
 #include <vector>
 
 #include "ttnn/tensor/tensor.hpp"
@@ -368,6 +369,30 @@ void validate_matmul_reuse_work_split(
     const MatmulMultiCoreReuseProgramConfig& program_config,
     const tt::tt_metal::MemoryConfig& output_mem_config,
     const std::optional<tt::tt_metal::CoreRangeSet>& core_range_set = std::nullopt);
+
+// Lowest math fidelity that gives bit-identical matmul results to `requested` for these operand dtypes.
+//
+// On Wormhole and Blackhole each fidelity phase multiplies one slice of SrcA (5 bits) by one slice of SrcB
+// (7 bits): LoFi = A hi x B hi, HiFi2 adds A lo x B hi, HiFi3 adds A hi x B lo, HiFi4 adds A lo x B lo.
+// Matmul unpacks in0 to SrcB and in1 to SrcA. An operand whose values fit entirely in its register's high
+// slice (in1 = bfloat4_b; in0 = bfloat8_b or bfloat4_b) has an all-zero low slice, so every phase that
+// reads that low slice adds nothing. Trailing phases that add nothing can be dropped by lowering the
+// fidelity. A zero phase followed by a useful one (bf16 in0 x bfloat4_b in1 at HiFi3, see #39627) cannot.
+//
+// Returns `requested` for architectures, dtypes or fidelities this model does not cover.
+tt::tt_metal::MathFidelity get_lowest_equivalent_matmul_fidelity(
+    tt::ARCH arch,
+    tt::tt_metal::DataType in0_dtype,
+    tt::tt_metal::DataType in1_dtype,
+    tt::tt_metal::MathFidelity requested);
+
+// Logs a warning, once per (in0 dtype, in1 dtype, fidelity), when `requested` runs fidelity phases that
+// cannot change the result. See get_lowest_equivalent_matmul_fidelity.
+void warn_if_matmul_fidelity_has_zero_phases(
+    std::string_view op_name,
+    const Tensor& input_tensor_a,
+    const Tensor& input_tensor_b,
+    tt::tt_metal::MathFidelity requested);
 
 }  // namespace ttnn::operations::matmul::utilities
 
