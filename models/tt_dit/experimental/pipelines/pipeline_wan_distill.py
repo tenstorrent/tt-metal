@@ -99,6 +99,9 @@ class WanDistillPipelineI2V(WanPipelineI2V):
     CACHE_NAMESPACE = "Wan2.2-Distill-lightx2v-4step"
     RANDOM_CACHE_NAMESPACE = "Wan2.2-Distill-random"
     DISTILL_BOUNDARY_RATIO = 0.5
+    # CFG is baked into the distill.
+    DEFAULT_GUIDANCE_SCALE = 1.0
+    DEFAULT_GUIDANCE_SCALE_2 = 1.0
 
     @classmethod
     def _config_overrides(cls) -> dict[str, object]:
