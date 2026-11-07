@@ -159,7 +159,7 @@ from ..reference.spec_decode import (
     plan_verify_passes,
     planned_drafts,
 )
-from .common import fabric_config
+from .common import MM_ENCODER_L1_BUDGET, fabric_config, set_mm_l1_budget
 from .attention import PAIR_SPLIT_OPS, page_table_width, verify_grouped, verify_variant, verify_variants
 from .device_sampler import CANDIDATES_PER_CHIP, MAX_USERS, stream_states
 from .generator import MiMoGalaxyGenerator
@@ -2921,6 +2921,9 @@ class MiMoV2OmniForCausalLM(MiMoV2ForCausalLM, *((SupportsMultiModal,) if Suppor
         self.audio_patches = [getattr(b, "device_patch", None) for b in backends]
         self.audio_tokenizers = [getattr(b, "device_tokenizer", None) for b in backends]
         self._row_mm = self._row_slots = None
+        if any(e is not None for e in self.vision_encoders + self.audio_patches + self.audio_tokenizers):
+            # Encoders that keep L1 on the device: the prefill linears' blocks must fit next to it (common.dram_linear).
+            set_mm_l1_budget(MM_ENCODER_L1_BUDGET)
         # Traced passes that take multimodal rows: set before warmup_model_prefill sets up any trace.
         if MM_TRACE and not DFLASH and all(hasattr(m, "enable_trace_embeds") for m in self.models):
             for m in self.models:
