@@ -545,11 +545,15 @@ void bind_sdpa(nb::module_& mod) {
             chunk_start_idx (int, optional): Legacy: absolute sequence index for this chunk.
                 Must be a multiple of program_config.q_chunk_size.
                 Must be a multiple of program_config.k_chunk_size (workaround for https://github.com/tenstorrent/tt-metal/issues/35225)
+                Without a program_config the chunk sizes are 32, so the start must be a multiple of 32.
                 Omit when using chunk_start_idx_tensor.
             chunk_start_idx_tensor (ttnn.Tensor, optional): Flexible: device tensor [1] int32
                 holding the chunk start index; read at runtime. Use for trace or prefix caching.
                 Must be a multiple of program_config.q_chunk_size.
                 Must be a multiple of program_config.k_chunk_size (workaround for https://github.com/tenstorrent/tt-metal/issues/35225)
+                The value lives on device, so it cannot be checked on the host: an offset that is not a multiple
+                of both chunk sizes gives wrong results (it trips an ASSERT when the watcher is enabled).
+                Without a program_config the chunk sizes are 32.
 
         Keyword args:
             scale (float, optional): Defaults to `None`.

@@ -368,6 +368,10 @@ void kernel_main() {
             cb_chunk_writer.push_back(1);
 
             const uint32_t q_chunk_size = Sq_chunk_t * tt::constants::TILE_HEIGHT;
+            // The device-side start cannot be validated on the host; the kernels only support offsets that
+            // are a multiple of q_chunk_size and k_chunk_size.
+            ASSERT(chunk_start_idx % q_chunk_size == 0);
+            ASSERT(chunk_start_idx % (Sk_chunk_t * tt::constants::TILE_HEIGHT) == 0);
             chunked_q_chunk_offset_phase_1_local = chunk_start_idx / q_chunk_size;
             if (num_phases == 2) {
                 chunked_q_chunk_offset_phase_2_local = chunked_q_chunk_offset_phase_1_local;
