@@ -106,6 +106,12 @@ def _format_core_location(device_label: str | None, location: OnChipCoordinate |
     return f"{device_label}:{location.to_user_str()}"
 
 
+@dataclass
+class RunningKernel:
+    name: str
+    risc_location: RiscLocation  # one RISC running the kernel
+
+
 class RunningOperationAggregation:
     """Mutable accumulator for all cores running operations under the same host assigned ID."""
 
@@ -128,10 +134,13 @@ class RunningOperationAggregation:
         self.previous_operation_parameters = previous_operation_parameters
         self.core_locations: set[str] = set()
         self.device_labels: set[str] = set()
+        self.kernels: dict[int, RunningKernel] = {}
 
-    def add_core(self, device_label: str, location: OnChipCoordinate) -> None:
-        self.core_locations.add(_format_core_location(device_label, location))
+    def add_core(self, device_label: str, risc_location: RiscLocation, core: DispatcherCoreData) -> None:
+        self.core_locations.add(_format_core_location(device_label, risc_location.location))
         self.device_labels.add(device_label)
+        if core.kernel is not None:
+            self.kernels[core.watcher_kernel_id] = RunningKernel(core.kernel.name, risc_location)
 
 
 @dataclass
@@ -258,7 +267,8 @@ def run(args, context: Context) -> RunningOpsAggregation:
 
             aggregation.add_core(
                 device_description_serializer(check_result.device_description),
-                check_result.location,
+                RiscLocation(check_result.location, check_result.neo_id, check_result.risc_name),
+                dispatcher_core_data,
             )
         except Exception as e:
             log_check(False, f"Failed to aggregate one core's running-op data: {e}")
