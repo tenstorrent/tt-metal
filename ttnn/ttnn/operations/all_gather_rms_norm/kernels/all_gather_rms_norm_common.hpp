@@ -11,6 +11,7 @@
 // (env AGRMS_PROFILE_ZONES=1). Left on, they fill the profiler DRAM buffers under the eval perf harness (per-block
 // markers on every member core, 500 calls) and add marker cost to the headline device time.
 #ifdef AGRMS_PROFILE_ZONES
+#include "tools/profiler/kernel_profiler.hpp"
 #define AGRMS_ZONE(name) DeviceZoneScopedN(name)
 #else
 #define AGRMS_ZONE(name)
@@ -30,4 +31,5 @@ constexpr uint32_t cb_out_tiles = 9;       // normalized output tiles
 constexpr uint32_t cb_port_chunks = 10;    // port cores only: chunk staging between port reader and sender
 constexpr uint32_t cb_x_in = 11;           // native HEIGHT shard: the resident input shard (zero-copy, own slice)
 constexpr uint32_t cb_x_stage = 12;        // regime N bfloat8_b: bf16 staging of one landed row (compute -> reader)
+constexpr uint32_t cb_x_gamma = 13;        // prescale (Refinement 4): x * gamma of one block, T_acc (compute only)
 }  // namespace agrms_cb

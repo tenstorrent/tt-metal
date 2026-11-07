@@ -258,33 +258,38 @@ void kernel_main() {
         [[maybe_unused]] const uint32_t parity = (i0 / block_row_tiles) & 1u;
 
         // ---- exchange_partials_block (symmetric all-gather of the k members' partials) ----
-        if constexpr (w_split_cores > 1 && combine_owner) {
-            owner_x.block(rows, i0 % w_split_cores, parity);  // owners rotate per block (compute: same ofs)
-        } else if constexpr (w_split_cores > 1) {
-            constexpr uint32_t k = w_split_cores;
-            cb_wait_front(cb_partial_sumsq, rows);
-            const uint32_t src = get_read_ptr(cb_partial_sumsq);
-            cb_reserve_back(cb_gathered_sumsq, k * rows);
-            const uint32_t slot_base = get_write_ptr(cb_gathered_sumsq);
-            for (uint32_t m = 0; m < k; ++m) {
-                for (uint32_t r = 0; r < rows; ++r) {
-                    send_acc_tile(
-                        src + r * acc_tile_bytes,
-                        peer_addr(peers_idx, m, slot_base + (r * k + member_idx) * acc_tile_bytes),
-                        acc_tile_bytes);
+        {
+            AGRMS_ZONE("AG_W_XCHG");
+            if constexpr (w_split_cores > 1 && combine_owner) {
+                owner_x.block(rows, i0 % w_split_cores, parity);  // owners rotate per block (compute: same ofs)
+            } else if constexpr (w_split_cores > 1) {
+                constexpr uint32_t k = w_split_cores;
+                cb_wait_front(cb_partial_sumsq, rows);
+                const uint32_t src = get_read_ptr(cb_partial_sumsq);
+                cb_reserve_back(cb_gathered_sumsq, k * rows);
+                const uint32_t slot_base = get_write_ptr(cb_gathered_sumsq);
+                for (uint32_t m = 0; m < k; ++m) {
+                    for (uint32_t r = 0; r < rows; ++r) {
+                        send_acc_tile(
+                            src + r * acc_tile_bytes,
+                            peer_addr(peers_idx, m, slot_base + (r * k + member_idx) * acc_tile_bytes),
+                            acc_tile_bytes);
+                    }
                 }
+                // same NoC, VC and destination: the increments arrive after the data (flush, not barrier)
+                noc_async_writes_flushed();
+                const uint32_t sem_addr = sem_par[parity];
+                for (uint32_t m = 0; m < k; ++m) {
+                    noc_semaphore_inc(peer_addr(peers_idx, m, sem_addr), 1);
+                }
+                cb_pop_front(cb_partial_sumsq, rows);
+                partials_expected[parity] += k;
+                noc_semaphore_wait_min(
+                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sem_addr), partials_expected[parity]);
+                cb_push_back(cb_gathered_sumsq, k * rows);
             }
-            // same NoC, VC and destination: the increments arrive after the data (flush, not barrier)
-            noc_async_writes_flushed();
-            const uint32_t sem_addr = sem_par[parity];
-            for (uint32_t m = 0; m < k; ++m) {
-                noc_semaphore_inc(peer_addr(peers_idx, m, sem_addr), 1);
-            }
-            cb_pop_front(cb_partial_sumsq, rows);
-            partials_expected[parity] += k;
-            noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sem_addr), partials_expected[parity]);
-            cb_push_back(cb_gathered_sumsq, k * rows);
         }
+        AGRMS_ZONE("AG_W_STORE");
 
         // ---- store_block ----
         if constexpr (out_native) {

@@ -43,10 +43,13 @@ CB_OUT = 9  # normalized output tiles
 CB_PORT_CHUNKS = 10  # ports: chunk staging
 CB_X_IN = 11  # native HEIGHT shard: the resident input shard (zero-copy; own-slice columns read in place)
 CB_X_STAGE = 12  # regime N, bfloat8_b (Refinement 2): bf16 staging of the landed row (compute -> reader compose)
+CB_X_GAMMA = 13  # prescale (Refinement 4): x * gamma of one block (T_acc), compute -> compute
 
 # ---- Blocking-model knobs (op_design.md -> Blocking Model). Every extent below derives from these. ----
-BLOCK_ROW_TILES = 1  # tile-rows per block (rows land progressively: one row per block)
-OUT_UNIT_CAP = 16  # writer / compose unit (tiles)
+BLOCK_ROW_TILES = int(
+    os.environ.get("AGRMS_BLOCK_ROW_TILES", "1")
+)  # (env: perf probes) tile-rows per block (rows land progressively: one row per block)
+OUT_UNIT_CAP = int(os.environ.get("AGRMS_OUT_UNIT_CAP", "16"))  # (env: perf probes) writer / compose unit (tiles)
 OUT_DEPTH = 2  # cb_out_tiles depth in units
 COMPOSE_DEPTH = 2  # cb_x_aligned depth in units (regime N)
 STAGE_ROWS = 1  # cb_x_stage depth in landed rows (regime N bfp8; >1 needs compute look-ahead, not built)
@@ -65,6 +68,10 @@ FAR_ROW_SPLIT = os.environ.get("AGRMS_FAR_ROW_SPLIT", "1") == "1"
 RELAY_LAG = int(
     os.environ.get("AGRMS_RELAY_LAG", "2")
 )  # (env: perf probes) steps between a relay item's upstream send and its relay (>= 1)
+# OVERLAP (Refinement 4): x * gamma is computed while the k partials are exchanged (the combine wait), so only one
+# multiply (x*gamma) * inv_rms is left after the combine. Regime A, k > 1, gamma, round-robin split (prescale_on).
+# 0 = the fused two-multiply normalize after the combine (A/B only).
+PRESCALE_GAMMA = os.environ.get("AGRMS_PRESCALE", "1") == "1"
 K_SYM_MAX = int(
     os.environ.get("AGRMS_K_SYM_MAX", "8")
 )  # (env: perf probes) symmetric all-gather of partials up to this k; per-row owner combine beyond (base op)
@@ -459,7 +466,13 @@ def out_unit_of(geo: Geometry, width):
     return min(width, OUT_UNIT_CAP)
 
 
-def cb_plan(geo: Geometry, sz: Sizes, split: Split):
+def prescale_on(geo: Geometry, sz: Sizes, split: Split, native: bool = False):
+    """x * gamma during the combine wait (compute CT `prescale`): needs a combine wait to hide under (k > 1), gamma, and
+    the resident landing block as x (regime A, round-robin split; native shards normalize in segments)."""
+    return PRESCALE_GAMMA and sz.has_gamma and not geo.regime_n and split.k > 1 and not native
+
+
+def cb_plan(geo: Geometry, sz: Sizes, split: Split, native: bool = False):
     """{cb index: (pages, page bytes)} of a worker core (cb_port_chunks is the ports' only extra CB)."""
     b = BLOCK_ROW_TILES
     k = split.k
@@ -483,6 +496,8 @@ def cb_plan(geo: Geometry, sz: Sizes, split: Split):
         else:
             depth_g = 2 if split.blocks_max > 1 else 1  # lockstep slot reuse (base op mechanism cap)
             plan_[CB_GATHERED] = (depth_g * k * b, sz.T_acc)
+    if prescale_on(geo, sz, split, native):
+        plan_[CB_X_GAMMA] = (b * split.w_pitch, sz.T_acc)  # one block of x * gamma
     if geo.regime_n:
         # staged (bfp8): the compose writes 2-byte datums, so cb_x_aligned holds bf16 tiles
         plan_[CB_X_ALIGNED] = (COMPOSE_DEPTH * unit, sz.T_stage or sz.T_in)
@@ -750,7 +765,7 @@ def create_mesh_program_descriptor(
     native = native_shard_split(geo, input_tensor, output_tensor) if NATIVE_SHARD else None
     if native is not None:
         resident = {CB_OUT} | ({CB_X_IN} if native.kind == "height" else set())  # shard-backed: not CB budget
-        nplan = cb_plan(geo, sz, native.split)
+        nplan = cb_plan(geo, sz, native.split, native=True)
         fits = sum(pg * pb for i, (pg, pb) in nplan.items() if i not in resident) <= budget
         if not fits or port_footprint(sz, native.split) > budget or not set(native.cores) <= allowed:
             native = None
@@ -801,7 +816,8 @@ def create_mesh_program_descriptor(
 
     out_w = geo.out_w_tiles if geo.regime_n else w_pitch  # tiles normalized / stored per row (pitch)
     unit = out_unit_of(geo, out_w)
-    plan_ = cb_plan(geo, sz, split)
+    plan_ = cb_plan(geo, sz, split, native=native is not None)
+    prescale = prescale_on(geo, sz, split, native=native is not None)
     if native is not None:
         plan_.pop(CB_OUT)  # backed on the output shard below
 
@@ -866,7 +882,7 @@ def create_mesh_program_descriptor(
     owner = 1 if split.combine_owner else 0
     row_gather = _div_up(k, ROW_GATHER)
     compute_ct = [k, w_pitch, BLOCK_ROW_TILES, 1 if geo.regime_n else 0, unit, geo.out_w_tiles, owner, row_gather]
-    compute_ct += [1 if native_h else 0, geo.Wt_lp, 1 if stage else 0]
+    compute_ct += [1 if native_h else 0, geo.Wt_lp, 1 if stage else 0, 1 if prescale else 0]
     writer_ct = [
         out_page,
         geo.out_w_tiles,
@@ -910,6 +926,7 @@ def create_mesh_program_descriptor(
         CB_INV_OWNED: t_acc,
         CB_X_ALIGNED: ttnn.bfloat16 if stage else x_dtype,
         CB_X_STAGE: ttnn.bfloat16,
+        CB_X_GAMMA: t_acc,
         CB_OUT: x_dtype,
         CB_X_IN: x_dtype,
     }
@@ -921,6 +938,9 @@ def create_mesh_program_descriptor(
         PROFILE_ZONES,
         FORCE_K,
         NATIVE_SHARD,
+        PRESCALE_GAMMA,
+        BLOCK_ROW_TILES,
+        OUT_UNIT_CAP,
         K_SYM_MAX,
         RELAY_LAG,
         ITEM_MIN_CHUNKS,

@@ -56,6 +56,9 @@ constexpr uint32_t row_gather = get_compile_time_arg_val(7);      // owner: gath
 constexpr bool own_in_shard = get_compile_time_arg_val(8) != 0;   // native HEIGHT: own slice read from cb_x_in
 constexpr uint32_t Wt_lp = get_compile_time_arg_val(9);           // tiles per slice (cb_x_in row pitch)
 constexpr bool stage = get_compile_time_arg_val(10) != 0;         // regime N bfp8: bf16 staging row for the compose
+// OVERLAP (Refinement 4): x * gamma is computed into cb_x_gamma while the k partials are exchanged (the combine wait),
+// so the normalize after the combine is one multiply (x*gamma) * inv_rms instead of two. Regime A, k > 1, gamma.
+constexpr bool prescale = get_compile_time_arg_val(11) != 0;
 
 // rsqrt(sum * (1/W) + eps) on column 0 of DST[dst] — the reduce() post_reduce_op (base op FinalizeInvRms).
 #ifdef TRISC_MATH
@@ -269,6 +272,32 @@ constexpr auto gamma_in = input(
     DataFormatReconfig::Enabled,
     TileAddressing::Offset);
 using TimesGamma = MulGammaRowBcast<gamma_in>;
+
+// prescale_gamma_block: x * gamma (gamma row-broadcast from its compact faces-0/1 row-0 pages) of the block's resident
+// landing tiles -> cb_x_gamma (T_acc: no extra rounding against the fused chain, whose x * inv_rms stays in DEST).
+// Runs between collapse (partial out) and combine (partials in): it hides under the partial exchange.
+ALWI void prescale_gamma_block(uint32_t rows, uint32_t width, uint32_t gamma_pages) {
+    cb_wait_front(cb_gamma, gamma_pages);  // resident slice (writer, once): a no-op after the first block
+    constexpr auto x_in = input(
+        cb_x_landing,
+        WaitPolicy::None,
+        PopPolicy::None,
+        InputTileMapping::Block,
+        DataFormatReconfig::Enabled,
+        TileAddressing::Strided);
+    constexpr auto g_in = input(cb_gamma, BroadcastDim::Row, WaitPolicy::None, PopPolicy::None, InputTileMapping::Row);
+    using XTimesGamma = BinaryFpu<BinaryFpuOp::Mul, x_in, g_in>;
+    eltwise_chain(
+        IterationShape::grid(rows, width), XTimesGamma{StridedTileRange{0, w_pitch}}, PackTile<output(cb_x_gamma)>{});
+}
+
+// normalize_prescaled: (x * gamma) streamed from cb_x_gamma, times inv_rms (bcast col) -> cb_out_tiles
+ALWI void normalize_prescaled(uint32_t rows, uint32_t width) {
+    constexpr auto inv_rms_in =
+        input(cb_inv_rms, BroadcastDim::Col, WaitPolicy::None, PopPolicy::None, InputTileMapping::Col);
+    using XgTimesInvRms = BinaryFpu<BinaryFpuOp::Mul, input(cb_x_gamma), inv_rms_in>;
+    eltwise_chain(IterationShape::grid(rows, width), XgTimesInvRms{}, PackTile<output(cb_out_tiles)>{});
+}
 #endif
 
 // regime A: x = resident landing tiles of the block, grid(rows, width) Strided by w_pitch
@@ -402,17 +431,34 @@ void kernel_main() {
 
     for (uint32_t i0 = 0; i0 < n_rows; i0 += block_row_tiles) {
         const uint32_t rows = (n_rows - i0) < block_row_tiles ? (n_rows - i0) : block_row_tiles;
-        sum_squares_block(i0, rows, core_w, own_c0);
-        if constexpr (w_split_cores == 1) {
-            collapse_sumsq_block<cb_inv_rms>(rows, finalize);
-        } else if constexpr (combine_owner) {
-            collapse_rows_to_row0(rows);
-            owner_combine_block(rows, member_idx, i0 % w_split_cores, finalize);  // owners rotate per block
-        } else {
-            collapse_sumsq_block<cb_partial_sumsq>(rows, NoOp{});
-            combine_partials_block(rows, finalize);
+        {
+            AGRMS_ZONE("AG_C_SUMSQ");
+            sum_squares_block(i0, rows, core_w, own_c0);
         }
-        cb_wait_front(cb_inv_rms, rows);
+        {
+            AGRMS_ZONE("AG_C_COMBINE");
+            if constexpr (w_split_cores == 1) {
+                collapse_sumsq_block<cb_inv_rms>(rows, finalize);
+            } else if constexpr (combine_owner) {
+                collapse_rows_to_row0(rows);
+#ifdef AGRMS_HAS_GAMMA
+                if constexpr (prescale) {
+                    prescale_gamma_block(rows, core_w, gamma_pages);
+                }
+#endif
+                owner_combine_block(rows, member_idx, i0 % w_split_cores, finalize);  // owners rotate per block
+            } else {
+                collapse_sumsq_block<cb_partial_sumsq>(rows, NoOp{});
+#ifdef AGRMS_HAS_GAMMA
+                if constexpr (prescale) {
+                    prescale_gamma_block(rows, core_w, gamma_pages);
+                }
+#endif
+                combine_partials_block(rows, finalize);
+            }
+            cb_wait_front(cb_inv_rms, rows);
+        }
+        AGRMS_ZONE("AG_C_NORM");
 #ifdef AGRMS_HAS_GAMMA
         cb_wait_front(cb_gamma, gamma_pages);  // resident slice (writer, once): a no-op after the first block
 #endif
@@ -444,6 +490,10 @@ void kernel_main() {
                 normalize_segment<cb_x_landing>(i, StridedTileRange{i * w_pitch, w_pitch}, 0, core_w);
                 pad_out_row(out_pad);
             }
+        } else if constexpr (prescale) {
+#ifdef AGRMS_HAS_GAMMA
+            normalize_prescaled(rows, core_w);
+#endif
         } else {
             normalize_resident(rows, core_w);
         }
