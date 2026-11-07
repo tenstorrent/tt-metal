@@ -62,6 +62,9 @@ TRACE_100K = GOLDEN_ROOT / "structured_traces" / "kimi_k3_100k_vllm"
 TRACE_1M = GOLDEN_ROOT / "k3_vllm_code_debug_1M"
 # The K3.1 golden; its path lives with the adapter, which hands the same trace to the runner's PCC gate.
 TRACE_K31 = Path(KimiK31Adapter.prefill_trace_default)
+# Its 128K sibling (kimi_k31_pro_128k_v2: 126976 prompt + 4096 decoded tokens), converted for layers 0-23 only
+# (`convert_golden.py --layers 24`): K3's long-context check scores those layers. Test-only; no runner gate reads it.
+TRACE_K31_128K = TRACE_K31.parent / "kimi_k31_pro_128k_v2_conv2_l24"
 
 # `kv_cache/layer_N.safetensors` is the one stream whose file stem is not its tensor key; every
 # other group names the file after the key it holds.
