@@ -4,7 +4,7 @@ For a Claude Code session (and its human) picking up this model. Give this file 
 the bring-up is, its current state and defaults, how to set up, run and measure it, the prefill → decode (PD) serving
 hand-off, the open questions, and where everything is.
 
-Facts are as of 2026-11-07, branch `dnijemcevic/model_bringup_rebased`, tree `902322e6f77` (task P.42). Items marked
+Facts are as of 2026-11-07, branch `dnijemcevic/model_bringup` (same as `dnijemcevic/model_bringup_rebased`), through task P.43 with every full gate passed. Items marked
 **(unverified)** were not checked against code or a run while this was written.
 
 ## 1. What this is
@@ -161,7 +161,7 @@ readable by other users.
 ```bash
 # 1. Checkout (origin = github.com/tenstorrent/tt-metal); steps 1-3 were not re-run for this doc (unverified as a sequence)
 git clone https://github.com/tenstorrent/tt-metal.git && cd tt-metal
-git checkout dnijemcevic/model_bringup_rebased
+git checkout dnijemcevic/model_bringup
 git submodule update --init --recursive
 # tt_ops_code_gen has update=none in .gitmodules. Without it the fork tests that import `eval` fail (the root symlink eval -> it)
 git -c submodule.tt_metal/third_party/tt_ops_code_gen.update=checkout submodule update --init tt_metal/third_party/tt_ops_code_gen
