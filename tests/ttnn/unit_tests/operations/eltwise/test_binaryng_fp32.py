@@ -236,3 +236,49 @@ def test_ng_scalar_fp32(device, ttnn_function):
 
     status = torch.allclose(z_torch, tt_out, atol=1e-10, rtol=1e-5, equal_nan=False)
     assert status
+
+
+@pytest.mark.parametrize("ttnn_dtype", [ttnn.bfloat16, ttnn.float32])
+@pytest.mark.parametrize("input_shape", [torch.Size([1, 1, 32, 64]), torch.Size([1, 1, 32, 40])])
+def test_bias_gelu_scalar_activations(input_shape, ttnn_dtype, device):
+    x_torch = (torch.rand(input_shape) * 4.0 - 2.0).to(torch.float32)
+    bias = -2.0
+
+    x_tt = ttnn.from_torch(x_torch, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    # The reference has to see what the device saw, so use the host-quantised input.
+    x_host = ttnn.to_torch(x_tt).float()
+    rtol, atol = (1e-2, 1e-2) if ttnn_dtype == ttnn.bfloat16 else (1e-5, 1e-5)
+
+    # No activation: control.
+    assert_allclose(torch.nn.functional.gelu(x_host + bias), ttnn.bias_gelu(x_tt, bias), rtol=rtol, atol=atol)
+
+    # activations=[relu] must be applied after the gelu.
+    assert_allclose(
+        torch.relu(torch.nn.functional.gelu(x_host + bias)),
+        ttnn.bias_gelu(x_tt, bias, activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU)]),
+        rtol=rtol,
+        atol=atol,
+    )
+
+
+@pytest.mark.parametrize("ttnn_dtype", [ttnn.bfloat16, ttnn.float32])
+@pytest.mark.parametrize("input_shape", [torch.Size([1, 1, 32, 64]), torch.Size([1, 1, 32, 40])])
+def test_bias_gelu_scalar_input_a_activations(input_shape, ttnn_dtype, device):
+    x_torch = (torch.rand(input_shape) * 4.0 - 2.0).to(torch.float32)
+    bias = -2.0
+
+    x_tt = ttnn.from_torch(x_torch, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    # The reference has to see what the device saw, so use the host-quantised input.
+    x_host = ttnn.to_torch(x_tt).float()
+    rtol, atol = (1e-2, 1e-2) if ttnn_dtype == ttnn.bfloat16 else (1e-5, 1e-5)
+
+    # No activation: control.
+    assert_allclose(torch.nn.functional.gelu(x_host + bias), ttnn.bias_gelu(x_tt, bias), rtol=rtol, atol=atol)
+
+    # input_tensor_a_activations=[sigmoid] must be applied to the operand before the add.
+    assert_allclose(
+        torch.nn.functional.gelu(torch.sigmoid(x_host) + bias),
+        ttnn.bias_gelu(x_tt, bias, input_tensor_a_activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.SIGMOID)]),
+        rtol=rtol,
+        atol=atol,
+    )
