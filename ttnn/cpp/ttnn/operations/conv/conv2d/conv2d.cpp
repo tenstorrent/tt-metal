@@ -53,7 +53,8 @@ Result conv2d_L1(
     const std::optional<const ttnn::Tensor>& bias_tensor_,
     const std::optional<const Conv2dConfig>& conv_config_,
     const std::optional<const DeviceComputeKernelConfig>& compute_config_,
-    const std::optional<const MemoryConfig>& memory_config) {
+    const std::optional<const MemoryConfig>& memory_config,
+    const std::optional<std::array<uint32_t, 2>>& weight_fold_stride = std::nullopt) {
     Conv2dConfig conv_config = conv_config_.value_or(Conv2dConfig());
     const DataType output_dtype = dtype.value_or(input_tensor_.dtype());
     std::array<uint32_t, 4> padding_n4 = sliding_window::get_pair_n4_padding(padding);
@@ -61,7 +62,7 @@ Result conv2d_L1(
     std::optional<ttnn::Tensor> bias_tensor = bias_tensor_;
     bool mm_conv = use_matmul_for_1x1_conv(kernel_size, stride, padding_n4, dilation, groups, conv_config);
     // Store the original stride size for weight folding
-    auto orig_stride = stride;
+    auto orig_stride = weight_fold_stride.value_or(stride);
 
     auto input_tensor = fold_input_tensor_if_required(
         input_tensor_,
@@ -413,6 +414,7 @@ class Conv2dSliceAttr : public ttnn::operations::op_slicing::OpSliceAttr {
     Conv2dConfig conv_config;
     DeviceComputeKernelConfig compute_config;
     MeshDevice* device;
+    std::optional<std::array<uint32_t, 2>> weight_fold_stride;
 
 public:
     Conv2dSliceAttr(
@@ -432,7 +434,8 @@ public:
         OptionalRefTensor bias_tensor,
         const Conv2dConfig& conv_config,
         const DeviceComputeKernelConfig& compute_config,
-        MeshDevice* device) :
+        MeshDevice* device,
+        std::optional<std::array<uint32_t, 2>> weight_fold_stride = std::nullopt) :
         batch_size(batch_size),
         input_shape(input_shape),
         input_channels(input_channels),
@@ -449,7 +452,8 @@ public:
         bias_tensor(bias_tensor),
         conv_config(conv_config),
         compute_config(compute_config),
-        device(device) {}
+        device(device),
+        weight_fold_stride(weight_fold_stride) {}
 
     std::tuple<std::tuple<IOShape, IOShape>, std::array<uint32_t, 4>> get_input_slice_and_padding(
         const IOShape& output_slice_start, const IOShape& output_slice_end) const {
@@ -702,7 +706,8 @@ public:
             bias_tensor,
             conv_config_l1,
             compute_config,
-            std::nullopt);
+            std::nullopt,
+            weight_fold_stride);
         weight_tensor = std::get<3>(conv2d_result);
         if (bias_tensor.has_value()) {
             bias_tensor->get() = std::get<4>(conv2d_result).value();
@@ -752,6 +757,7 @@ Result conv2d_DRAM(
         !conv_config.override_output_sharding_config,
         "Conv2D DRAM slicing doesn't support override_output_sharding_config.");
 
+    const std::array<uint32_t, 2> orig_stride = stride;
     // Fold the input tensor if required - this may update mm_conv after folding
     ttnn::Tensor input_tensor_on_device = fold_input_tensor_if_required(
         input_tensor,
@@ -792,7 +798,8 @@ Result conv2d_DRAM(
             bias_tensor,
             conv_config,
             compute_config_,
-            memory_config_);
+            memory_config_,
+            orig_stride);
     }
 
     // DRAM slicing path - only executed when mm_conv is false
@@ -854,7 +861,8 @@ Result conv2d_DRAM(
         bias_tensor_on_device.has_value() ? std::make_optional(std::ref(bias_tensor_on_device.value())) : std::nullopt,
         conv_config,
         compute_config,
-        device);
+        device,
+        orig_stride);
 
     std::vector<std::reference_wrapper<Tensor>> output_tensors = {std::ref(dram_output_tensor)};
     ttnn::operations::op_slicing::run_sliced_op(
