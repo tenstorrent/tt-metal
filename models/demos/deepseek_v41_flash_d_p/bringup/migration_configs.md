@@ -30,7 +30,7 @@ the re-index aliases and the 128-row window snapshot real (both were "to do" in 
 
 | # | Config | Layers (alias entries) | Rows / record | Row format, bytes | Record bytes | Records per (slot, layer) | `max_sequence_length` declared | Tensor type | Served range | Device group |
 |---|---|---|---|---|---|---|---|---|---|---|
-| 0 | `0_window_kv` | 0-39 | 32 | bf16 x 512, row-major, 1024 B | 32,768 | 4 (positions 0, 32, 64, 96) | the prefill max sequence length (see P.43 below) | Snapshot | 128 rows: position p at row p % 128 for p in [cap - 128, cap); rows with no such p are zero | whole mesh (32 chips) |
+| 0 | `0_window_kv` | 0-39 | 32 | bf16 x 512, row-major, 1024 B | 32,768 | 4 (positions 0, 32, 64, 96) | 128 (P.43) | Snapshot | 128 rows: position p at row p % 128 for p in [cap - 128, cap); rows with no such p are zero | whole mesh (32 chips) |
 | 1 | `1_compress_kv_r2` | 2, 8, 14 | 16 | bf16 x 512, row-major, 1024 B | 16,384 | max_seq / 32 | max_seq | History | [0, cap) | one chip (TP-dedup) |
 | 2 | `2_index_k_r2` | 2, 8, 14 | 16 | Blaze fp8 row, 192 B | 3,072 | max_seq / 32 | max_seq | History | [0, cap) | mesh row (TP-replicated) |
 | 3 | `3_compress_kv_r1` | 20 | 32 | bf16 x 512, row-major, 1024 B | 32,768 | max_seq / 32 | max_seq | History | [0, cap) | one chip (TP-dedup) |
@@ -90,17 +90,14 @@ All in `tt/settings.py` (environment variable `DS41_<NAME>`). Verified by callin
 | `CKV_FORMAT` | `bf16` | `bfp4_rows`: changes what attention reads and the values' precision, **not the table**. The served records stay bf16 rows (holding 4-bit-rounded values). Checked: `served_configs` gives the same table |
 | `KV_BLOCK_SIZE` | 64 | Changes only cap (and so which window rows the snapshot holds and how many history records decode reads). Set it to the deployed worker's value |
 
-## Pending in P.43 (running now, 2026-11-07)
+## Changed in P.43 (committed 2026-11-07)
 
-- **The snapshot's declared length.** Today (P.42) `0_window_kv` declares `max_sequence_length` = the prefill max
-  sequence length, with records only at positions 0-96. This was a deviation from the brief: tt-metal's table
-  refuses a lookup at or past the declared length (`kv_chunk_address_table.cpp:138`), and the framework's contract
-  test looked up every config at every chunk. tt-d-gen's loader reads it as a 128-position snapshot anyway
-  (`kv_chunk_table.cpp conformSnapshot -> SnapshotOfExtent(128)`).
-- P.43 fixes the framework contract check so it treats Snapshot configs as tt-d-gen does (DS41-218: checked only at
-  the last chunk), then declares `max_sequence_length` = 128, which is what decode's table declares.
-- P.43 also derives the last chunk's start from cap under `DECODER_SKIP=exact` / `replay128` (new switch
-  `SKIP_TAIL_START`), so every layer's snapshot exists in those modes too. `DECODER_SKIP` stays `off` by default.
+- `0_window_kv` now declares `max_sequence_length` = 128, as decode's table does. P.42 had declared the prefill max
+  sequence length, because the framework contract check looked up every config at every chunk and tt-metal's table
+  refuses a lookup past the declared length. P.43 made the check treat Snapshot configs as tt-d-gen does (DS41-218:
+  checked only at the request's last chunk).
+- Under `DECODER_SKIP=exact` / `replay128` the last chunk's start now comes from cap (`SKIP_TAIL_START=cap`), so
+  every layer's snapshot exists in those modes too. `DECODER_SKIP` stays `off` by default.
 
 ## Open points
 

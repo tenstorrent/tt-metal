@@ -25,9 +25,9 @@ decode machine (tt-blaze) generates the tokens after a hand-off.
 | Seed run | QuietBox 2x2, partial (layers 0-3, 14, 20, 21, 24, scaled model): `bringup/spec.yaml`, ledger in `bringup/` |
 | Last full run | X.3 PASS 2026-11-05 (full 56,320-token ladder, every limit holds) |
 | Accuracy now (rung `last`) | err_final_hidden 0.1313 (limit 0.242), top-5 1.0 (P.40 / P.41 agents' ladder runs; P.42 left every layer's error identical to the digit) |
-| Perf now (one 5,120-token chunk at 51,200, P.42 tree) | device 188.74 ms, wall 206.5 ms, host overhead 17.8 ms (section 4) |
-| Tasks done in the last two days | P.37-P.42 accepted and committed (section 3); their full gates are still pending (they run before the final task) |
-| Running now | P.43 (decode hand-off clean-up), orchestrator `--until P.43` |
+| Perf now (one 5,120-token chunk at 51,200, P.43 tree) | device 189.02 ms, wall 204.4 ms, host overhead 15.4 ms (section 4); +11.7 ms device since the contract work began (section 4, regression table) |
+| Tasks done in the last two days | P.37-P.43 accepted and committed (section 3); their full gates are still pending (they run before the final task) |
+| Running now | Nothing; the orchestrator stopped after P.43 (`--until P.43`) |
 | PD hand-off | Our served table: `bringup/migration_configs.md`. Decode reviewed it (Brian Liu); Kartik Paigwar proposed a different final contract (section 8) |
 | Held | P.35, P.36, O.1, Z.1, F.1; the QuietBox run |
 
@@ -74,22 +74,49 @@ the chips spend; wall = host clock for the chunk; host overhead = wall - device.
 | P.41 | One bfp8 index-key copy, no bf16 copy; served rows built from it | `98463fd81bc` | device 184.93 → 183.80 ms, indexer 7.06 → 6.83 ms; copies 127.95 → 44.39 MB a chip a slot at 1M; accuracy identical |
 | DS41-216 fix | One `high_bw_all_gather` semaphore pair per mesh axis (section 9) | in `902322e6f77` | Stress tests: 2,048 wrong replicas → 0 |
 | P.42 | Re-index layers as aliases of layer 20; window KV as a 128-row snapshot at cap (decode's review) | `902322e6f77` | device 184.13 → 188.74 ms (+4.6: the snapshot writes, in section ffn_residual 5.06 → 11.69), wall 202.9 → 206.5; window + copies 1,377 → 20 MiB a chip a slot at 1M; accuracy identical |
-| P.43 | **Running.** (1) `SKIP_TAIL_START=cap\|end`: under `DECODER_SKIP=exact` / `replay128` the last chunk's start comes from cap (replay128 tail at min(end - 128, cap - 128); exact start <= min(end - 2688, cap - 2668)), so every layer's snapshot is computed. (2) The framework contract check treats Snapshot configs as tt-d-gen does (DS41-218). (3) `0_window_kv` declared as 128 rows | not committed | Gate adds `test_window_snapshot.py` under exact and replay128 |
+| P.43 | Decode hand-off clean-up. (1) `SKIP_TAIL_START=cap` (default; `end` = old): under `DECODER_SKIP=exact` / `replay128` the last chunk starts from cap (replay128 at or before min(end - 128, cap - 128); exact at or before min(end - 2688, cap - 2668)); a later last chunk is refused (ValueError); every layer's snapshot is written in both modes. (2) The framework contract check (`testing/contract.py`) checks Snapshot configs only at the request's last chunk, as tt-d-gen ships them (DS41-218); new host unit test `test_contract_acks.py`; full `test_contract` passes (acks_early 0). (3) `0_window_kv` declares `max_sequence_length` 128. Owner accepted (2026-11-07) the snapshot test's limit for the 8 layers with official per-position references taken from the official reference's own error (DS41-193 method; layer 20 rows [0, 64): 0.144 -> ~0.180). Under replay128, layers 21-39's snapshot rows are 0.97-2.2x their limit by design (DS41-221: the tail's window starts empty), recorded, not gated | `f087d1b682a` | device 190.0 → 189.0, wall 208.0 → 204.4 (no change: the harness never marks a last chunk, so the skip does not act); accuracy identical |
 
 Owner process notes: P.41 accepted by the owner 2026-11-07 09:25; P.42 held until DS41-216 was root-caused, then
-re-measured on the fixed tree (17:19) and committed (17:26).
+re-measured on the fixed tree (17:19) and committed (17:26). P.43 accepted 18:45 (commit rebased onto the README commit `cf686613dff`, so `f50b38ac87f` in the orchestrator log is now `f087d1b682a`).
 
 ## 4. Perf and accuracy headline (current defaults)
 
-One 5,120-token chunk at 51,200, P.42 tree, `ENGRAM_TABLE=resident`, from `ab/P.42/table.md` (2026-11-07 17:07):
+One 5,120-token chunk at 51,200, P.43 tree, `ENGRAM_TABLE=resident`, from `ab/P.43/table.md` (2026-11-07 18:25;
+section split below from `ab/P.42/table.md`, unchanged by P.43):
 
 | Number | Value |
 |---|---|
-| device_ms_total (profiled) | 188.74 ms |
-| chunk_wall_ms (clean warm, median of 10) | 206.5 ms (spread 54.6; warm runs 202.7-207.7) |
-| host overhead (wall - device) | 17.8 ms |
-| last chunk after the golden 51,200 prefix (quick run) | wall 188.0 ms |
-| host dispatch | 1,823 launch calls, 127.9 ms profiled launch time |
+| device_ms_total (profiled) | 189.02 ms |
+| chunk_wall_ms (clean warm, median of 10) | 204.4 ms |
+| host overhead (wall - device) | 15.4 ms |
+| last chunk after the golden 51,200 prefix (quick run) | wall 186.9 ms |
+
+### What got slower since the contract work began (P.38 on)
+
+Baseline P.37 (Marko's MoE block, before the contract work). Each row is that task's A/B at 51,200 (on - off).
+Run-to-run noise is about ±1 ms device and ±3 ms wall.
+
+| Task | Change | Device ms | Wall ms | Where |
+|---|---|---|---|---|
+| P.37 (baseline) | MoE block switch | **177.3** | **194.0** | |
+| P.38 | compressed + window KV in bf16 (were 4-bit / 8-bit) | +4.5 | +7.4 | attention +5.8 |
+| P.39 | index keys as Blaze 8-bit rows | ~0 | ~0 | noise |
+| P.40 | index keys scored in bfp8 | ~0 | ~0 | noise |
+| P.41 | drop the bf16 index-key copy | ~0 | ~0 | indexer -0.2 |
+| P.42 | 128-row window snapshot, layer-20 aliases | +4.6 | +3.6 | ffn_residual +6.6 (the snapshot rewrite), attention -1.8 |
+| P.43 | skip-mode tail start, contract check | ~0 | ~0 | noise |
+| **Now** | | **189.0** | **204.4** | **+11.7 ms (+6.6%) device, +10.4 ms (+5.4%) wall** |
+
+By section, P.37 → now: attention 44.1 → 48.2 (+4.1), ffn_residual 5.1 → 11.7 (+6.6), experts 106.8 → 107.7 (noise),
+compressor 1.8 → 2.0, indexer 7.0 → 6.9.
+
+Both costs are recoverable:
+- **bf16 KV (~4 ms)** is the temporary format for the first e2e run. Back to 4-bit (`CKV_FORMAT=bfp4_rows`) once
+  decode reads it.
+- **The snapshot rewrite (~6.6 ms a chunk)** happens on every chunk because prefill cannot tell the last chunk
+  (tt-d-gen's chunk header has no last flag). With a last-chunk flag, or N (the prompt length) in the metadata as
+  Kartik's contract proposes, it runs once per request. The same signal lets the decoder skip act
+  (`DECODER_SKIP=exact`: layers 21-39 skipped on every chunk but the last).
 
 | Section | Device ms |
 |---|---|
@@ -213,8 +240,8 @@ for t in test_kv_layout test_adapter_acks test_runner_contract test_runner_smoke
   BRINGUP_SPEC=$S scripts/run_safe_pytest.sh --run-all --no-precompile $T/$t.py || break; done
 ```
 
-- On the P.42 tree `test_contract` fails with "40 of 800 blocks changed after their layer was acknowledged"
-  (DS41-218: the framework check is stricter than tt-d-gen for Snapshot configs). P.43 fixes the check.
+- `test_contract` passes on the P.43 tree (acks_early 0, contract_checks_failed 0). On P.42 it failed with 40 early
+  acks (DS41-218: the check was stricter than tt-d-gen for Snapshot configs); P.43 fixed the check.
 
 ## 7. Accuracy
 
@@ -316,7 +343,8 @@ Exact entries: `models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md`.
 | DS41-216 | Stale gather rows: one `high_bw_all_gather` semaphore pair was shared by both mesh axes. TP and SP link workers share cores on 22 of 32 chips, so one axis's counts were taken by the other's call; whole TP columns got wrong rows, even after a full sync | Fixed in `902322e6f77`: one pair per axis (`tt/ccl._sems(mesh, axis)`). Stress tests `tests/test_gather_stress.py`, `tests/test_window_gather_stress.py` (skewed chips, 512 iterations): 2,048 wrong replicas → 0. Notes: `/scratch/dnijemcevic/rebase/ds41_216/NOTES.md` Upstream doc request: https://github.com/tenstorrent/tt-metal/issues/64805 (documentation fix PR, reviewer Marko Staletovic). |
 | DS41-220 | Stock `ttnn.all_gather` over the whole mesh (cluster_axis None) of a ROW_MAJOR tensor returns before every row has landed (TILE is fine) | Upstream https://github.com/tenstorrent/tt-metal/issues/64801, assigned to Sheran Cardoza (stock CCL owner, ops-data-movement). Standalone repro `/scratch/dnijemcevic/rebase/ds41_216/test_all_gather_mesh_rm_repro.py`. The model never does this call |
 | DS41-217 | `slice_write` refuses a sharded output | Worked around: `update_padded_kv_cache` at start 0 |
-| DS41-218 | Framework contract check stricter than tt-d-gen for Snapshot configs (acks_early 40) | Fix in P.43 |
+| DS41-218 | Framework contract check stricter than tt-d-gen for Snapshot configs (acks_early 40) | Fixed in P.43 |
+| DS41-221 | Under `DECODER_SKIP=replay128`, layers 21-39's snapshot rows are 0.97-2.2x their limit (the tail model's window starts empty; same effect as DS41-207) | By design; recorded, not gated. `exact` is within limits |
 | DS41-219 | tt-d-gen PD prefill stops at prompt_len - 1; cap may differ from decode's | Open (section 8) |
 | DS41-211..215 | Main block's shared expert ran bf16 (fixed P.37); bf16 table + per-chip window needs the sdpa fork's `kv_window` (P.38); stock fp8 cast vs Blaze recipe (P.39); reading fp8 bytes (P.39); bfp8 copy at non-aligned starts (P.41) | Fixed / documented |
 | SFPI ICE | sparse_sdpa row_bfp4 at H=32 does not build: SFPI 7.90-7.93 internal compiler error (tenstorrent/tt-metal#64605). H=64 (the 8x4) builds. Owner-waived in the spec's `fork_waivers` | Report draft `/scratch/dnijemcevic/rebase/sfpi_ice_report.md` (not filed); reproducer `ttnn/ttnn/bringup/sdpa/docs/sfpi_ice/` |
@@ -357,7 +385,7 @@ $B gate <task> --spec $S [--unit U | --continue | --status | --no-commit | --com
 $B rerun --from <task> --spec $S            # reset it and everything downstream, then sweep
 ```
 
-- The run is started by `/scratch/dnijemcevic/run_ds41_8x4_rebased.sh` (today `resume --until P.43`) in a tmux
+- The run is started by `/scratch/dnijemcevic/run_ds41_8x4_rebased.sh` (last used `resume --until P.43`) in a tmux
   session; it sources `/scratch/dnijemcevic/node_env.sh` and works in `/scratch/dnijemcevic/tt-metal-rebase`.
 - **A/B accept flow (perf picks, P.\*).** (1) An agent makes the change behind a `tt/settings.py` switch. (2) The
   orchestrator measures off and on, one process a side: a quick run (last chunk after the golden prefix, accuracy vs
