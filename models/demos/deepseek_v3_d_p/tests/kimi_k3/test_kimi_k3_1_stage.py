@@ -664,30 +664,26 @@ PERF_PASSES = 5  # after the capture's warm pass; K3's test_prefill_perf times 5
 DEEP_START = MAX_SEQ_LEN - CHUNK
 
 
-def _trace_prompt() -> list[int]:
-    """The trace's prompt token ids, padded to whole chunks with the producer's pad id; skips when absent."""
+def _trace_prompt() -> tuple[list[int], int]:
+    """(the trace's prompt token ids padded to whole chunks with the producer's pad id, the prompt's length);
+    skips when the trace is absent."""
     if not PROMPT_TRACE.is_file():
         pytest.skip(f"no K3.1 10K trace metadata at {PROMPT_TRACE}")
     metadata = json.loads(PROMPT_TRACE.read_text())
     ids = metadata["token_ids"]
     assert len(ids) == metadata["n_prompt_tokens"], f"{len(ids)} token ids for {metadata['n_prompt_tokens']} tokens"
-    return ids + [MTP_PAD_TOKEN_ID] * (-len(ids) % CHUNK)
+    return ids + [MTP_PAD_TOKEN_ID] * (-len(ids) % CHUNK), len(ids)
 
 
-def _profiled_replay(runtime, mesh_device, chunk_input, kv_caches, slot, start, end, path: Path):
+def _profiled_replay(runtime, mesh_device, chunk_input, kv_caches, slot, start, end, path: Path) -> None:
     """One traced chunk under the real-time profiler; writes its programs (dispatch order, per-chip ns) to `path`.
-    Returns the chunk's output. A profiler failure (no records, or dropped records: a partial set) is logged and
-    leaves no file rather than a partial one."""
+    Fails when the profiler delivers no records or drops some (a partial set), rather than write a partial file."""
     programs = {}
 
     def run():
-        return _replay(runtime, mesh_device, chunk_input, kv_caches, slot, start, end)
+        _replay(runtime, mesh_device, chunk_input, kv_caches, slot, start, end)
 
-    try:
-        out, records = profile_realtime_program(mesh_device, run, collect_all=True)
-    except RuntimeError as error:
-        logger.error(f"STAGE_PROFILE {path.name}: unavailable: {error}")
-        return None
+    _, records = profile_realtime_program(mesh_device, run, collect_all=True)
     for record in records:  # arrival order is dispatch order
         program = programs.setdefault(
             record["runtime_id"], {"runtime_id": record["runtime_id"], "kernel_sources": record["kernel_sources"]}
@@ -699,7 +695,6 @@ def _profiled_replay(runtime, mesh_device, chunk_input, kv_caches, slot, start, 
         f"STAGE_PROFILE {path.name}: {len(programs)} programs, {len(records)} records, "
         f"sum of per-program max over chips {critical_path / 1e6:.3f} ms"
     )
-    return out
 
 
 @pytest.mark.skipif(not is_blackhole(), reason="Kimi-K3.1 runs on Blackhole only")
@@ -708,8 +703,7 @@ def _profiled_replay(runtime, mesh_device, chunk_input, kv_caches, slot, start, 
 @pytest.mark.parametrize("stage", range(NUM_STAGES), ids=[f"stage{s}" for s in range(NUM_STAGES)])
 def test_kimi_k3_1_stage_prompt_perf(stage, mesh_device, device_params, monkeypatch):
     handoff_dir = _handoff_dir()
-    prompt = _trace_prompt()
-    prompt_len = json.loads(PROMPT_TRACE.read_text())["n_prompt_tokens"]
+    prompt, prompt_len = _trace_prompt()
     chunks = [(c * CHUNK, min((c + 1) * CHUNK, prompt_len)) for c in range(len(prompt) // CHUNK)]
     with _served_stage(stage, SYSTEM_MAX_USERS, handoff_dir, mesh_device, monkeypatch) as (
         runtime,
@@ -720,14 +714,17 @@ def test_kimi_k3_1_stage_prompt_perf(stage, mesh_device, device_params, monkeypa
         slot = SYSTEM_MAX_USERS - 1
 
         def replay(chunk, start, end, profile_label=None):
+            """One chunk, timed (`STAGE_PERIOD`) or profiled, its layer acks checked; returns its output (None when
+            profiled or on the last rank)."""
             chunk_input = _chunk_input(runtime, mesh_device, handoff_dir, stage, chunk, prompt)
+            out = None
             if profile_label is None:
                 t0 = time.perf_counter()
                 out = _replay(runtime, mesh_device, chunk_input, kv_caches, slot, start, end)
                 logger.info(f"STAGE_PERIOD stage {stage} [{start}, {end}) {(time.perf_counter() - t0) * 1e3:.3f} ms")
             else:
                 path = handoff_dir / f"stage{stage}.{profile_label}.programs.json"
-                out = _profiled_replay(runtime, mesh_device, chunk_input, kv_caches, slot, start, end, path)
+                _profiled_replay(runtime, mesh_device, chunk_input, kv_caches, slot, start, end, path)
             acks = _read_acks(d2h_service, acks_per_chunk)
             assert set(acks) == {(slot, start, end)}, f"ack records {sorted(set(acks))} for chunk {(slot, start, end)}"
             return out
