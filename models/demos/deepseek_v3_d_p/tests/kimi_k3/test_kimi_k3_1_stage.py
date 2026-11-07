@@ -37,6 +37,7 @@ Overrides for a capacity sweep: `$K31_STAGE_USERS` (num_users) and `$K31_STAGE_W
 from __future__ import annotations
 
 import contextlib
+import json
 import os
 import struct
 import threading
@@ -52,7 +53,7 @@ from models.common.utility_functions import is_blackhole
 from models.demos.common.prefill.adapter import PrefillRunParams, get_adapter
 from models.demos.common.prefill.prefill_chunk import metadata_size_bytes
 from models.demos.common.prefill.runners.migration import setup_kv_chunk_table
-from models.demos.common.prefill.runners.runner_utils import compute_layer_split, d2d_activation_rows
+from models.demos.common.prefill.runners.runner_utils import MTP_PAD_TOKEN_ID, compute_layer_split, d2d_activation_rows
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_1_config import KimiK31Config
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import torus_xy_device_params
 from models.demos.deepseek_v3_d_p.tests.kimi_k3.stage_handoff import (
@@ -62,6 +63,7 @@ from models.demos.deepseek_v3_d_p.tests.kimi_k3.stage_handoff import (
 )
 from models.demos.deepseek_v3_d_p.tests.test_prefill_chunk_traced_vs_eager import _packed_metadata_msg
 from models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert import TtRoutedExpert
+from tests.ttnn.profiling.realtime_profiler_utils import profile_realtime_program
 
 ADAPTER = get_adapter("kimi_k3_1")
 MESH = (8, 4)
@@ -372,13 +374,19 @@ def _handoff_path(handoff_dir: Path, stage: int, chunk: int) -> Path:
     return handoff_dir / f"stage{stage}.chunk{chunk}.activation.bin"
 
 
-def _chunk_input(runtime, mesh_device, handoff_dir: Path, stage: int, chunk: int) -> ttnn.Tensor:
-    """Stage 0: the chunk's token ids. Later stages: what the previous stage sent for this chunk."""
+def _random_prompt(runtime) -> list[int]:
+    """The handoff test's prompt: HANDOFF_CHUNKS chunks of deterministic random token ids."""
+    ids = torch.randint(
+        0, runtime.hf_config.vocab_size, (HANDOFF_CHUNKS * CHUNK,), generator=torch.Generator().manual_seed(31)
+    )
+    return ids.tolist()
+
+
+def _chunk_input(runtime, mesh_device, handoff_dir: Path, stage: int, chunk: int, prompt: list[int]) -> ttnn.Tensor:
+    """Stage 0: the chunk's token ids of `prompt` (whole chunks, padded). Later stages: what the previous stage
+    sent for this chunk."""
     if stage == 0:
-        ids = torch.randint(
-            0, runtime.hf_config.vocab_size, (HANDOFF_CHUNKS * CHUNK,), generator=torch.Generator().manual_seed(31)
-        )
-        return runtime.make_chunk_input(ids[chunk * CHUNK : (chunk + 1) * CHUNK].tolist())
+        return runtime.make_chunk_input(prompt[chunk * CHUNK : (chunk + 1) * CHUNK])
     path = _handoff_path(handoff_dir, stage - 1, chunk)
     if not path.is_file():
         pytest.fail(f"{path} is missing: run stage {stage - 1} into $K31_HANDOFF_DIR={handoff_dir} first")
@@ -462,13 +470,11 @@ def _handoff_dir() -> Path:
     return handoff_dir
 
 
-@pytest.mark.skipif(not is_blackhole(), reason="Kimi-K3.1 runs on Blackhole only")
-@pytest.mark.timeout(0)
-@pytest.mark.parametrize("mesh_device, device_params", PLACEMENT, indirect=True)
-@pytest.mark.parametrize("stage", range(NUM_STAGES), ids=[f"stage{s}" for s in range(NUM_STAGES)])
-def test_kimi_k3_1_stage_handoff(stage, mesh_device, device_params, monkeypatch):
-    handoff_dir = _handoff_dir()
-    num_users = int(os.getenv("K31_STAGE_USERS", SYSTEM_MAX_USERS))
+@contextlib.contextmanager
+def _served_stage(stage: int, num_users: int, handoff_dir: Path, mesh_device, monkeypatch):
+    """PP4 rank `stage` with real weights and the runner pieces built between compile and capture: the D2H
+    layer-ack service and the migration export (see above). Yields (runtime, kv_caches, d2h_service, acks per
+    chunk) once the capture's warm-pass acks are read."""
     weight_cache_path = _cached_stage(stage)
     first_layer_idx, num_layers = STAGES[stage]
     d2h_service = None
@@ -509,12 +515,28 @@ def test_kimi_k3_1_stage_handoff(stage, mesh_device, device_params, monkeypatch)
         acks_per_chunk = runtime.warmup_ack_count()
         assert acks_per_chunk >= num_layers, f"{acks_per_chunk} acks per chunk for {num_layers} layers"
         _read_acks(d2h_service, acks_per_chunk)  # the capture's warm pass
+        yield runtime, kv_caches, d2h_service, acks_per_chunk
 
+
+@pytest.mark.skipif(not is_blackhole(), reason="Kimi-K3.1 runs on Blackhole only")
+@pytest.mark.timeout(0)
+@pytest.mark.parametrize("mesh_device, device_params", PLACEMENT, indirect=True)
+@pytest.mark.parametrize("stage", range(NUM_STAGES), ids=[f"stage{s}" for s in range(NUM_STAGES)])
+def test_kimi_k3_1_stage_handoff(stage, mesh_device, device_params, monkeypatch):
+    handoff_dir = _handoff_dir()
+    num_users = int(os.getenv("K31_STAGE_USERS", SYSTEM_MAX_USERS))
+    with _served_stage(stage, num_users, handoff_dir, mesh_device, monkeypatch) as (
+        runtime,
+        kv_caches,
+        d2h_service,
+        acks_per_chunk,
+    ):
+        prompt = _random_prompt(runtime)
         outputs, states = {}, {}
         for slot in (num_users - 1, 0):
             for chunk in range(HANDOFF_CHUNKS):
                 start, end = chunk * CHUNK, (chunk + 1) * CHUNK
-                chunk_input = _chunk_input(runtime, mesh_device, handoff_dir, stage, chunk)
+                chunk_input = _chunk_input(runtime, mesh_device, handoff_dir, stage, chunk, prompt)
                 out = _replay(runtime, mesh_device, chunk_input, kv_caches, slot, start, end)
                 acks = _read_acks(d2h_service, acks_per_chunk)
                 assert set(acks) == {
@@ -581,6 +603,7 @@ def test_kimi_k3_1_stage_kvpe(stage, mesh_device, device_params):
     with _built_stage(stage, KVPE_USERS, weight_cache_path, mesh_device) as (runtime, kv_caches):
         kvpe = kv_caches.kvpe.storage
         fresh = kvpe.cpu()  # the allocator's zero fill
+        prompt = _random_prompt(runtime)
 
         def run(slot, reset_kvpe_before=()):
             """The prompt's chunks on `slot`; the stage's outbound activations on host (None on the last rank)."""
@@ -588,7 +611,7 @@ def test_kimi_k3_1_stage_kvpe(stage, mesh_device, device_params):
             for chunk in range(HANDOFF_CHUNKS):
                 if chunk in reset_kvpe_before:
                     ttnn.copy_host_to_device_tensor(fresh, kvpe)
-                chunk_input = _chunk_input(runtime, mesh_device, handoff_dir, stage, chunk)
+                chunk_input = _chunk_input(runtime, mesh_device, handoff_dir, stage, chunk, prompt)
                 start, end = chunk * CHUNK, (chunk + 1) * CHUNK
                 out = _replay(runtime, mesh_device, chunk_input, kv_caches, slot, start, end)
                 outputs.append(None if out is None else compose_activation(mesh_device, out))
@@ -614,3 +637,107 @@ def test_kimi_k3_1_stage_kvpe(stage, mesh_device, device_params):
         mismatched = (control != outputs[1]).float().mean().item()
         assert torch.equal(run(1)[1], outputs[1]), f"stage {stage}: the prompt rerun after the reset differs"
         logger.info(f"STAGE_KVPE stage {stage}: kvpe reset before chunk 1 changes {mismatched:.1%} of its output")
+
+
+# --- The 10K scenario, stage by stage: traced chunk periods and a device-profiler record per program ----------
+#
+# Miguel's 10K vLLM trace prompt (8,192 tokens: two chunks, the second padded past the prompt as the producer
+# pads it) through each stage as it is served (`_served_stage`), stage 0 from the prompt's token ids and each
+# later stage from the previous stage's saved handoff, so every stage routes its experts on the real prompt.
+# Run the stages in order into one $K31_HANDOFF_DIR.
+#
+# Timing follows K3's `test_prefill_perf`: whole passes of the prompt (every chunk, in order, as a request
+# arrives), each traced replay synchronized and timed on host (`STAGE_PERIOD` lines; one stage's chunk time is
+# its retire period in the PP4 pipeline). Then one more pass under the real-time device profiler, one program
+# record per chip, and the same for one chunk at the deepest position of the per-user cache (the 1M probe of
+# ao3i.1.6). Each profiled chunk's programs go to `stage{s}.{label}.programs.json` in dispatch order with each
+# chip's [start, end] ns on that chip's clock, for attribution off device: programs overlap (sub-device regions),
+# so durations alone do not partition the chunk, and a program without records (the DSA indexer's top-k on its
+# sub-device) shows only as a gap in a chip's timeline.
+#
+#     for s in 0 1 2 3; do K31_HANDOFF_DIR=/path/perf10k scripts/run_safe_pytest.sh \
+#         "models/demos/deepseek_v3_d_p/tests/kimi_k3/test_kimi_k3_1_stage.py::test_kimi_k3_1_stage_prompt_perf[blackhole-stage$s-torus-xy-8x4]"; done
+PROMPT_TRACE = Path(
+    "/mnt/weka/model-weights/llm/ref-data/debug_traces/kimi_k31_pro_10k_v2/vllm-d06690a4-10240tok/metadata.json"
+)
+PERF_PASSES = 5  # after the capture's warm pass; K3's test_prefill_perf times 5 iterations
+DEEP_START = MAX_SEQ_LEN - CHUNK
+
+
+def _trace_prompt() -> tuple[list[int], int]:
+    """(the trace's prompt token ids padded to whole chunks with the producer's pad id, the prompt's length);
+    skips when the trace is absent."""
+    if not PROMPT_TRACE.is_file():
+        pytest.skip(f"no K3.1 10K trace metadata at {PROMPT_TRACE}")
+    metadata = json.loads(PROMPT_TRACE.read_text())
+    ids = metadata["token_ids"]
+    assert len(ids) == metadata["n_prompt_tokens"], f"{len(ids)} token ids for {metadata['n_prompt_tokens']} tokens"
+    return ids + [MTP_PAD_TOKEN_ID] * (-len(ids) % CHUNK), len(ids)
+
+
+def _profiled_replay(runtime, mesh_device, chunk_input, kv_caches, slot, start, end, path: Path) -> None:
+    """One traced chunk under the real-time profiler; writes its programs (dispatch order, per-chip ns) to `path`.
+    Fails when the profiler delivers no records or drops some (a partial set), rather than write a partial file."""
+    programs = {}
+
+    def run():
+        _replay(runtime, mesh_device, chunk_input, kv_caches, slot, start, end)
+
+    _, records = profile_realtime_program(mesh_device, run, collect_all=True)
+    for record in records:  # arrival order is dispatch order
+        program = programs.setdefault(
+            record["runtime_id"], {"runtime_id": record["runtime_id"], "kernel_sources": record["kernel_sources"]}
+        )
+        program.setdefault("chip_ns", {})[record["chip_id"]] = (record["start_ns"], record["end_ns"])
+    path.write_text(json.dumps(list(programs.values())))
+    critical_path = sum(max(end - start for start, end in p["chip_ns"].values()) for p in programs.values())
+    logger.info(
+        f"STAGE_PROFILE {path.name}: {len(programs)} programs, {len(records)} records, "
+        f"sum of per-program max over chips {critical_path / 1e6:.3f} ms"
+    )
+
+
+@pytest.mark.skipif(not is_blackhole(), reason="Kimi-K3.1 runs on Blackhole only")
+@pytest.mark.timeout(0)
+@pytest.mark.parametrize("mesh_device, device_params", PLACEMENT, indirect=True)
+@pytest.mark.parametrize("stage", range(NUM_STAGES), ids=[f"stage{s}" for s in range(NUM_STAGES)])
+def test_kimi_k3_1_stage_prompt_perf(stage, mesh_device, device_params, monkeypatch):
+    handoff_dir = _handoff_dir()
+    prompt, prompt_len = _trace_prompt()
+    chunks = [(c * CHUNK, min((c + 1) * CHUNK, prompt_len)) for c in range(len(prompt) // CHUNK)]
+    with _served_stage(stage, SYSTEM_MAX_USERS, handoff_dir, mesh_device, monkeypatch) as (
+        runtime,
+        kv_caches,
+        d2h_service,
+        acks_per_chunk,
+    ):
+        slot = SYSTEM_MAX_USERS - 1
+
+        def replay(chunk, start, end, profile_label=None):
+            """One chunk, timed (`STAGE_PERIOD`) or profiled, its layer acks checked; returns its output (None when
+            profiled or on the last rank)."""
+            chunk_input = _chunk_input(runtime, mesh_device, handoff_dir, stage, chunk, prompt)
+            out = None
+            if profile_label is None:
+                t0 = time.perf_counter()
+                out = _replay(runtime, mesh_device, chunk_input, kv_caches, slot, start, end)
+                logger.info(f"STAGE_PERIOD stage {stage} [{start}, {end}) {(time.perf_counter() - t0) * 1e3:.3f} ms")
+            else:
+                path = handoff_dir / f"stage{stage}.{profile_label}.programs.json"
+                _profiled_replay(runtime, mesh_device, chunk_input, kv_caches, slot, start, end, path)
+            acks = _read_acks(d2h_service, acks_per_chunk)
+            assert set(acks) == {(slot, start, end)}, f"ack records {sorted(set(acks))} for chunk {(slot, start, end)}"
+            return out
+
+        for index in range(PERF_PASSES):
+            for chunk, (start, end) in enumerate(chunks):
+                out = replay(chunk, start, end)
+                if out is not None and index == 0:
+                    host = save_activation(mesh_device, out, _handoff_path(handoff_dir, stage, chunk))
+                    assert torch.isfinite(host).all(), f"stage {stage} chunk {chunk}: non-finite output"
+        for chunk, (start, end) in enumerate(chunks):
+            replay(chunk, start, end, profile_label=f"chunk{chunk}")
+        # The deep probe: the last chunk of the per-user cache, fed chunk 0's input (timing, not values).
+        for _ in range(PERF_PASSES):
+            replay(0, DEEP_START, DEEP_START + CHUNK)
+        replay(0, DEEP_START, DEEP_START + CHUNK, profile_label="deep")
