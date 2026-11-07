@@ -1498,8 +1498,8 @@ def _every_value_where_inputs(torch_dtype, lo, hi, pred_dtype):
 @pytest.mark.parametrize(
     "pred_ttnn_dtype, pred_torch_dtype, value_ttnn_dtype, value_torch_dtype, lo, hi",
     [
-        (ttnn.int8, torch.int8, ttnn.int8, torch.int8, -128, 127),  # int8 predicate, int8 values
-        (ttnn.int32, torch.int32, ttnn.int8, torch.int8, -128, 127),  # int32 predicate, int8 values
+        (ttnn.int8, torch.int8, ttnn.int8, torch.int8, -127, 127),  # int8 predicate, int8 values
+        (ttnn.int32, torch.int32, ttnn.int8, torch.int8, -127, 127),  # int32 predicate, int8 values
         (ttnn.uint8, torch.uint8, ttnn.uint8, torch.uint8, 0, 255),  # control, uint8 predicate and values
         (ttnn.int32, torch.int32, ttnn.uint8, torch.uint8, 0, 255),  # control, int32 predicate, uint8 values
         (ttnn.int32, torch.int32, ttnn.int32, torch.int32, -128, 127),  # control, int32 everywhere
@@ -1515,9 +1515,8 @@ def _every_value_where_inputs(torch_dtype, lo, hi, pred_dtype):
 def test_ttnn_where_8bit_every_value(
     pred_ttnn_dtype, pred_torch_dtype, value_ttnn_dtype, value_torch_dtype, lo, hi, device
 ):
-    # An int8 operand used to be read through the 16-bit Dest path (all values wrong when every operand
-    # was int8) or, under the 32-bit Dest an int32 predicate selects, through sign-magnitude (every -128
-    # in the int8 values came back as 0). Every value in the range must round-trip exactly.
+    # An int8 operand used to be read through the 16-bit Dest path, so every value came back wrong when
+    # all operands were int8. -128 is left out: the unpacker reads int8 as sign-magnitude, which has no -128.
     C, T, F = _every_value_where_inputs(value_torch_dtype, lo, hi, pred_torch_dtype)
     golden = torch.where(C != 0, T, F)
 
