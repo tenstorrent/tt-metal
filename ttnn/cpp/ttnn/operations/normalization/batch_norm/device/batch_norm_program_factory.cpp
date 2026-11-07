@@ -366,8 +366,9 @@ ttnn::device_operation::ProgramArtifacts BatchNormOperation::BatchNormFactory::c
     // math_approx_mode, fp32_dest_acc_en and dst_full_sync_en -- into hw_config; packer_l1_acc and
     // throttle_level are deliberately not translated. ComputeHardwareConfig has no packer_l1_acc field,
     // so the value this op resolves for it stays unapplied, as it also was under the descriptor API.
-    const bool fp32_dest_acc_en = ttnn::get_fp32_dest_acc_en(operation_attributes.compute_kernel_config);
-    const bool use_sfpu_kernel = fp32_dest_acc_en || any_float32;
+    const bool fp32_dest_acc_en =
+        ttnn::get_fp32_dest_acc_en(operation_attributes.compute_kernel_config) || any_float32;
+    const bool use_sfpu_kernel = fp32_dest_acc_en;
 
     Group<DFBBinding> compute_dfb_bindings{
         DFBBinding{
@@ -460,6 +461,7 @@ ttnn::device_operation::ProgramArtifacts BatchNormOperation::BatchNormFactory::c
     }
 
     auto compute_hw_config = ttnn::to_compute_hardware_config(operation_attributes.compute_kernel_config);
+    compute_hw_config.enable_32_bit_dest = fp32_dest_acc_en;
     if (fp32_dest_acc_en) {
         // Re-key of the legacy unpack_to_dest_mode vector, which was indexed by CB id. Every DFB the
         // compute kernel consumes is listed; the writer-facing output is producer-only, so it gets no
