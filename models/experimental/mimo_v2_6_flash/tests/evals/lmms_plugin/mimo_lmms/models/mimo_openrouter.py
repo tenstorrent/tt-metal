@@ -10,8 +10,9 @@ the documented OpenRouter forms, the same bytes to every endpoint:
 
   image  image_url, data:image/png;base64 (or jpeg with image_format=jpeg)
   audio  input_audio {data: base64 WAV (16-bit mono, resampled to audio_rate), format: "wav"}
-  video  video_url, data:video/mp4;base64 of the file (re-encoded once, same resolution, when above video_max_mb;
-         the transcode is cached next to the journal so every endpoint gets the same bytes)
+  video  video_url, data:video/mp4;base64 of the file with its audio track (re-encoded once, same resolution, audio
+         kept as AAC, when above video_max_mb; the transcode is cached next to the journal so every endpoint gets the
+         same bytes); an http(s) video is sent by URL, as is
 
 Media come first in the user turn, then the task's text. Reasoning is switched per `thinking`: "off" / "on" / "default"
 (send nothing). On target "vllm" the switch is chat_template_kwargs.enable_thinking; on "openrouter" it is
@@ -347,7 +348,8 @@ class OpenRouterChat(lmms):
                     ext, "video/mpeg"
                 )
         os.makedirs(self.video_cache, exist_ok=True)
-        key = hashlib.sha256(f"{os.path.abspath(path)}:{size}:{self.video_max_bytes}".encode()).hexdigest()[:24]
+        key = f"{os.path.abspath(path)}:{size}:{self.video_max_bytes}:with-audio"  # older caches dropped the audio
+        key = hashlib.sha256(key.encode()).hexdigest()[:24]
         out = os.path.join(self.video_cache, key + ".mp4")
         with self._lock:
             transcode_lock = self._transcode_locks.setdefault(out, threading.Lock())
@@ -358,7 +360,7 @@ class OpenRouterChat(lmms):
             return f.read(), "video/mp4"
 
     def _transcode(self, path, size, out):
-        """Re-encode `path` (same resolution and frame rate, H.264, no audio) into the cache file `out`."""
+        """Re-encode `path` (same resolution and frame rate, H.264, audio kept as AAC) into the cache file `out`."""
         ffmpeg = shutil.which("ffmpeg")
         if ffmpeg is None:
             try:  # the static binary of the imageio-ffmpeg wheel
@@ -372,7 +374,8 @@ class OpenRouterChat(lmms):
         # A per-process / per-thread temporary name: other processes (another endpoint's run sharing the cache)
         # may encode the same video at the same time; the last os.replace wins with identical bytes.
         tmp = f"{out}.{os.getpid()}.{threading.get_ident()}.tmp.mp4"
-        # Same resolution and frame rate, H.264 at a quality setting, no audio track (the eval is video-only).
+        # Same resolution and frame rate, H.264 at a quality setting, the audio track kept: OpenRouter's providers
+        # (Xiaomi) feed a video's audio to the model, and some benchmarks ask what was said.
         cmd = [
             ffmpeg,
             "-hide_banner",
@@ -381,7 +384,10 @@ class OpenRouterChat(lmms):
             "-y",
             "-i",
             path,
-            "-an",
+            "-c:a",
+            "aac",
+            "-b:a",
+            "128k",
             "-c:v",
             "libx264",
             "-preset",
