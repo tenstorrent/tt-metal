@@ -7,7 +7,7 @@ using ::sfpi::DataLayout;
 // A nonzero Magic makes the constants immediates of the call; zero reads the pool the caller programmed
 // (Prgm0 the magic, Prgm1 -0.5 without SharedPool, Prgm2 1.5).
 template <bool SharedPool, unsigned Iterations = 2, unsigned Magic = 0u>
-inline vFloat half_angle_root(vFloat x) {
+__attribute__((always_inline)) inline vFloat half_angle_root(vFloat x) {
     // Same shared one- or two-step recurrence.
     static_assert(Iterations == 1 || Iterations == 2);
     vFloat out = x;
@@ -36,15 +36,10 @@ inline vFloat half_angle_root(vFloat x) {
     v_endif;
     return out;
 }
-// Held reads the leading coefficient as an immediate where SharedPool would read it from Prgm1.
-template <unsigned DEGREE, bool SharedPool, typename Coefficient, bool Held = false>
-inline vFloat half_angle_ratio(vFloat coordinate, Coefficient coefficient) {
+template <unsigned DEGREE, bool SharedPool, typename Coefficient>
+__attribute__((always_inline)) inline vFloat half_angle_ratio(vFloat coordinate, Coefficient coefficient) {
     vFloat ratio;
-    if constexpr (SharedPool && !Held) {
-        ratio = vConstFloatPrgm1;
-    } else {
-        ratio = coefficient(DEGREE);
-    }
+    ratio = coefficient(DEGREE);
 #pragma GCC unroll 12
     for (int k = DEGREE - 1; k >= 0; --k) {
         ratio =
@@ -53,7 +48,7 @@ inline vFloat half_angle_ratio(vFloat coordinate, Coefficient coefficient) {
     return ratio;
 }
 template <unsigned Mask, unsigned Value, unsigned Excluded, unsigned Class>
-inline void half_angle_negative_nan(vUInt raw_u16, vFloat& y) {
+__attribute__((always_inline)) inline void half_angle_negative_nan(vUInt raw_u16, vFloat& y) {
     vUInt exponent_and_sign = raw_u16 & vUInt(Mask);
     v_if(exponent_and_sign == vUInt(Value) && raw_u16 != vUInt(Excluded)) {
         static_assert(Class <= 4u, "half-angle raw terminal requires a nonfinite/zero class");
@@ -72,18 +67,13 @@ inline void half_angle_negative_nan(vUInt raw_u16, vFloat& y) {
     v_endif;
 }
 template <typename Config, typename Root, typename Ratio>
-inline vFloat half_angle_evaluate(vFloat x, Root root_fn, Ratio ratio_fn) {
+__attribute__((always_inline)) inline vFloat half_angle_evaluate(vFloat x, Root root_fn, Ratio ratio_fn) {
     vFloat ax = setsgn(x, 0);
-    // Evaluate the arithmetic body without an outer condition frame.  The
-    // root recurrence has its own target guard, and nesting it under a false
-    // valid-domain predicate is not a verifier-safe Blackhole CC schedule.
-    // Invalid lanes are overwritten after all arithmetic temporaries retire.
     vFloat coordinate = (Config::kLimit - ax) * Config::kCoordinateScale;
     vFloat root = root_fn(coordinate);
 
-    // Both zones consume the same verified ratio leaf.  Select its coordinate
-    // and multiplicative root first, then issue one shared polynomial body;
-    // duplicating that body in two SFPU predicates records both copies.
+    // Both zones share one polynomial body: select its coordinate and root first, as a body per
+    // predicate records both copies.
     v_if(ax < Config::kSplit) {
         coordinate = ax * ax;
         root = ax;

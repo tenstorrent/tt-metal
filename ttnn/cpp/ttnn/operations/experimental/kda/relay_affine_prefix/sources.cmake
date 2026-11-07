@@ -1,0 +1,9 @@
+set(TTNN_OP_EXPERIMENTAL_KDA_RELAY_AFFINE_PREFIX_API_HEADERS relay_affine_prefix.hpp)
+
+set(TTNN_OP_EXPERIMENTAL_KDA_RELAY_AFFINE_PREFIX_SRCS
+    relay_affine_prefix.cpp
+    device/relay_affine_prefix_device_operation.cpp
+    device/relay_affine_prefix_program_factory.cpp
+)
+
+set(TTNN_OP_EXPERIMENTAL_KDA_RELAY_AFFINE_PREFIX_NANOBIND_SRCS relay_affine_prefix_nanobind.cpp)

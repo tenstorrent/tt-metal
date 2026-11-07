@@ -16,6 +16,7 @@
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include "ttnn/common/constants.hpp"
 #include "ttnn/operation.hpp"
+#include "ttnn/operations/data_movement/common/common.hpp"
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
@@ -63,7 +64,7 @@ ttnn::device_operation::ProgramArtifacts UntilizeWithUnpaddingSingleCoreProgramF
     int32_t num_tiles = a.physical_volume() / TILE_HW;
 
     // This should allocate a DRAM buffer on the device
-    TT_ASSERT(output.buffer() != nullptr, "Output buffer should be allocated on device!");
+    TT_ASSERT(output.is_allocated(), "Output buffer should be allocated on device!");
 
     auto input_w = input_shape.rank() >= 4 ? input_shape[-4] : 1;
     auto input_z = input_shape.rank() >= 3 ? input_shape[-3] : 1;
@@ -169,6 +170,9 @@ ttnn::device_operation::ProgramArtifacts UntilizeWithUnpaddingSingleCoreProgramF
               (std::uint32_t)((
                   input_dfb_data_format == tt::DataFormat::Float32 or input_dfb_data_format == tt::DataFormat::UInt32 or
                   input_dfb_data_format == tt::DataFormat::Int32))},
+             {"one_byte_dtype",
+              (std::uint32_t)(input_dfb_data_format == tt::DataFormat::UInt8 ||
+                              input_dfb_data_format == tt::DataFormat::Int8)},
              {"unpadded_stick_size", unpadded_stick_size}},
         .runtime_arg_schema =
             {.runtime_arg_names =
@@ -191,7 +195,7 @@ ttnn::device_operation::ProgramArtifacts UntilizeWithUnpaddingSingleCoreProgramF
 
     KernelSpec::CompilerOptions::Defines compute_kernel_defines;
     ComputeHardwareConfig compute_hw_config{.enable_32_bit_dest = fp32_dest_acc_en};
-    if (fp32_dest_acc_en) {
+    if (operations::data_movement::needs_fp32_unpack_to_dest(fp32_dest_acc_en, a.dtype())) {
         compute_hw_config.unpack_modes = {{SC_IN, UnpackMode::UnpackToDest}};
     }
 

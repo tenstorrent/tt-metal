@@ -10,6 +10,7 @@
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
+#include "internal/tensor/transfer_noc_addr.h"
 #include "experimental/kernel_args.h"
 
 // Named RTAs: num_output_pages, num_ranges, output_page_offset
@@ -36,7 +37,8 @@ void kernel_main() {
     TensorAccessor input(tensor::input);
     Noc noc;
     DataflowBuffer dfb(dfb::output_shard);
-    const uint32_t input_shard_addr = input.get_bank_base_address();
+    // Raw: bank-relative base on remote L1/DRAM banks (no handle form yet).
+    const uint32_t input_shard_addr = tensor_accessor::detail::TransferAccess::bank_base(input);
     uint32_t l1_write_addr = dfb.get_write_ptr() + output_page_offset * page_size;
 
     // The per-range block begins after the input-grid coordinate table.

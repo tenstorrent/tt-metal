@@ -12,17 +12,15 @@ import torch
 
 import ttnn
 from tt_py_test_utils_common.utility_functions import run_for_blackhole
-from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import make_actual_start
+from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import encode_tail, make_actual_start
 from tests.ttnn.nightly.unit_tests.operations.experimental.kda.recurrent_chunk_scan_test_utils import (
     device_protocol,
     host_protocol,
     initial_state,
     recurrent_oracle,
+    group_summary_nd_sharded,
     summary_oracle,
     to_device,
-)
-from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import (
-    height_sharded_memory_config,
 )
 from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import (
     qkv_device_inputs,
@@ -43,7 +41,7 @@ def test_reset_replaces_large_carry_exactly(mesh_device):
     for tensor in host:
         tensor.zero_()
     host[2][:] = torch.eye(32)
-    host[5].fill_(1)
+    host[5].fill_(0)  # complement form: final_decay = expm1(0) means no decay
     host[6][:] = torch.eye(32)
     inputs = device_protocol(host, mesh_device)
     seed = to_device(torch.full((1, 32, 32), float(2**26)), mesh_device)
@@ -69,6 +67,44 @@ def _assert_immutable(tensors: list[ttnn.Tensor], before: list[list[torch.Tensor
     for tensor, snapshots in zip(tensors, before, strict=True):
         for expected, actual in zip(snapshots, _shards(tensor), strict=True):
             assert_bit_identical(expected, actual, name="immutable SP input")
+
+
+def _rank_oracle(
+    host: tuple[torch.Tensor, ...],
+    head_seed: torch.Tensor,
+    tail_seed: torch.Tensor,
+    heads: int,
+    groups: int,
+    chunks: int,
+    split: int,
+) -> tuple:
+    """Expected summary parts, entries, outputs, final states and straddling-group compositions of a rank whose
+    chronological head ends at local chunk ``split``."""
+    expected_parts = segmented_summary_oracle(host, groups, chunks, split)
+    expected_entries, expected_output, expected_final, compositions = [], [], [], {}
+    for head in range(heads):
+        state = head_seed[head : head + 1]
+        for group in range(groups):
+            folded = head * groups + group
+            group_start = group * chunks
+            protocol = tuple(t[folded : folded + 1] for t in host)
+            if group_start == split:
+                state = tail_seed[head : head + 1]
+            expected_entries.append(state)
+            inside = split - group_start
+            if 0 < inside < chunks:
+                head_output, _ = recurrent_oracle(tuple(t[:, :inside] for t in protocol), state)
+                tail_output, state = recurrent_oracle(
+                    tuple(t[:, inside:] for t in protocol), tail_seed[head : head + 1]
+                )
+                expected_output.append(torch.cat((head_output, tail_output), dim=1))
+                full_a, full_b = summary_oracle(protocol)
+                compositions[folded] = (full_a[0], full_b[0])
+            else:
+                group_output, state = recurrent_oracle(protocol, state)
+                expected_output.append(group_output)
+            expected_final.append(state)
+    return expected_parts, expected_entries, expected_output, expected_final, compositions
 
 
 @pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True)
@@ -100,7 +136,7 @@ def test_sp_summary_prefix_and_scan(mesh_device: ttnn.MeshDevice, axis: int, gro
         owned = [*inputs, head_tt, tail_tt, actual_start]
         before = [_shards(t) for t in owned]
         memory = (
-            height_sharded_memory_config(mesh_device, heads * groups, dim, dim)
+            group_summary_nd_sharded(mesh_device, 2, heads * groups, dim, dim)
             if dim == 128
             else ttnn.DRAM_MEMORY_CONFIG
         )
@@ -110,15 +146,13 @@ def test_sp_summary_prefix_and_scan(mesh_device: ttnn.MeshDevice, axis: int, gro
             actual_start=actual_start,
             sequence_parallel_axis=axis,
             memory_config=memory,
+            tail=True,
         )
-        assert len(summaries) == 4
-        assert all(t.dtype == ttnn.bfloat16 and t.memory_config() == memory for t in summaries)
+        assert summaries.dtype == ttnn.bfloat16 and summaries.memory_config() == memory
         entries = ttnn.experimental.kda.affine_exclusive_scan(
-            *summaries[:2],
+            summaries,
             head_tt,
             groups,
-            tail_a=summaries[2],
-            tail_b=summaries[3],
             tail_entry_states=tail_tt,
             actual_start=actual_start,
             sequence_parallel_axis=axis,
@@ -140,7 +174,12 @@ def test_sp_summary_prefix_and_scan(mesh_device: ttnn.MeshDevice, axis: int, gro
         assert entries.dtype == final.dtype == ttnn.float32
         assert output.dtype == ttnn.bfloat16
         assert all(t.memory_config() == ttnn.DRAM_MEMORY_CONFIG for t in (entries, output, final))
-        got_summaries = [_shards(t) for t in summaries]
+        # Per device: head A, head B, tail A, tail B from the packed [2, N, K, 2K] rows.
+        # Every expected value depends only on a rank's split, so each distinct split is computed once.
+        oracles = {}
+        got_summaries = list(
+            zip(*((s[0, ..., :dim], s[0, ..., dim:], s[1, ..., :dim], s[1, ..., dim:]) for s in _shards(summaries)))
+        )
         for shard, (got_entries, got_output, got_final) in enumerate(
             zip(_shards(entries), _shards(output), _shards(final), strict=True)
         ):
@@ -151,28 +190,14 @@ def test_sp_summary_prefix_and_scan(mesh_device: ttnn.MeshDevice, axis: int, gro
                 if rank == first_rank and actual_start_value % local_rows
                 else groups * chunks
             )
-            expected_parts = segmented_summary_oracle(host, groups, chunks, split)
-            expected_entries, expected_output, expected_final = [], [], []
+            if split not in oracles:
+                oracles[split] = _rank_oracle(host, head_seed, tail_seed, heads, groups, chunks, split)
+            expected_parts, expected_entries, expected_output, expected_final, compositions = oracles[split]
             for head in range(heads):
-                state = head_seed[head : head + 1]
                 for group in range(groups):
                     folded = head * groups + group
                     group_start = group * chunks
-                    protocol = tuple(t[folded : folded + 1] for t in host)
-                    if group_start == split:
-                        state = tail_seed[head : head + 1]
-                    expected_entries.append(state)
                     inside = split - group_start
-                    if 0 < inside < chunks:
-                        head_output, _ = recurrent_oracle(tuple(t[:, :inside] for t in protocol), state)
-                        tail_output, state = recurrent_oracle(
-                            tuple(t[:, inside:] for t in protocol), tail_seed[head : head + 1]
-                        )
-                        expected_output.append(torch.cat((head_output, tail_output), dim=1))
-                    else:
-                        group_output, state = recurrent_oracle(protocol, state)
-                        expected_output.append(group_output)
-                    expected_final.append(state)
                     for part in range(4):
                         live = group_start < split if part < 2 else (group + 1) * chunks > split
                         if live:
@@ -184,10 +209,10 @@ def test_sp_summary_prefix_and_scan(mesh_device: ttnn.MeshDevice, axis: int, gro
                             )
                     if 0 < inside < chunks:
                         a, b, tail_a, tail_b = [parts[shard][folded].float() for parts in got_summaries]
-                        full_a, full_b = summary_oracle(protocol)
-                        assert_accurate(full_a[0], tail_a @ a, name="summary composition A", nrmse_threshold=0.004)
+                        full_a, full_b = compositions[folded]
+                        assert_accurate(full_a, tail_a @ a, name="summary composition A", nrmse_threshold=0.004)
                         assert_accurate(
-                            full_b[0], tail_a @ b + tail_b, name="summary composition B", nrmse_threshold=0.005
+                            full_b, tail_a @ b + tail_b, name="summary composition B", nrmse_threshold=0.005
                         )
             for expected, actual, name in (
                 (torch.cat(expected_entries), got_entries, "entries"),
@@ -201,7 +226,7 @@ def test_sp_summary_prefix_and_scan(mesh_device: ttnn.MeshDevice, axis: int, gro
                     nrmse_threshold=0.015,
                 )
         _assert_immutable(owned, before)
-        current = [*owned, *summaries, entries, output, final]
+        current = [*owned, summaries, entries, output, final]
         if previous:
             for old, new in zip(previous, current, strict=True):
                 assert all(
@@ -250,16 +275,31 @@ def test_sp_rectangular_recurrent_reset(mesh_device, axis, key_dim, value_dim):
 
 @pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True)
 @pytest.mark.parametrize("axis", [0, 1])
-def test_sp_convolution_rebinds_histories(mesh_device, axis):
-    widths = (32, 32, 32)
+@pytest.mark.parametrize(
+    ("widths", "page_channels", "channel_chunk_size"),
+    [
+        pytest.param((32, 32, 32), None, 96, id="token-paged"),
+        # 3-tile blocks over 2-tile pages: the predecessor read starts and ends inside a page.
+        pytest.param((128, 128, 128), 64, 96, id="channel-paged-64"),
+        pytest.param((64, 64, 128), 32, 128, id="channel-paged-32"),
+    ],
+)
+def test_sp_convolution_rebinds_histories(mesh_device, axis, widths, page_channels, channel_chunk_size):
     previous = []
     cache_entries = None
     for actual_start_value in (0, 32, 64, 96, 32):
         (host, history, taps), (input_tt, history_tt, taps_tt) = qkv_device_inputs(
-            mesh_device, widths=widths, sequence=64, history_rows=3, seed=2011 + actual_start_value
+            mesh_device,
+            widths=widths,
+            sequence=64,
+            history_rows=3,
+            seed=2011 + actual_start_value,
+            page_channels=page_channels,
         )
         predecessor = history + 2
-        predecessor_tt = to_device(predecessor, mesh_device, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
+        predecessor_tt = to_device(
+            encode_tail(predecessor, page_channels), mesh_device, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT
+        )
         # Match the BF16 payload used by the native operation exactly.
         predecessor = predecessor.bfloat16()
         actual_start = make_actual_start(mesh_device, actual_start_value)
@@ -270,10 +310,11 @@ def test_sp_convolution_rebinds_histories(mesh_device, axis):
             history_tt,
             *taps_tt,
             *widths,
-            program_config=ttnn.QkvCausalConv1dSiluProgramConfig(channel_chunk_size=96),
+            program_config=ttnn.QkvCausalConv1dSiluProgramConfig(channel_chunk_size=channel_chunk_size),
             actual_start=actual_start,
             sequence_parallel_axis=axis,
             predecessor_carry=predecessor_tt,
+            page_channels=page_channels,
         )
         ttnn.synchronize_device(mesh_device)
         if cache_entries is None:
@@ -320,27 +361,24 @@ def test_sp_payload_contracts(mesh_device, expect_error):
     for kwargs in ({"actual_start": actual_start}, {"tail_entry_states": seed}):
         with expect_error(TypeError, "incompatible function arguments"):
             ttnn.experimental.kda.recurrent_chunk_scan(*inputs, seed, **kwargs)
-    a, b, tail_a, tail_b = ttnn.experimental.kda.summarize_chunk_recurrence(*inputs, actual_start=actual_start)
-    assert all(t.dtype == ttnn.bfloat16 for t in (a, b, tail_a, tail_b))
+    summaries = ttnn.experimental.kda.summarize_chunk_recurrence(*inputs, actual_start=actual_start, tail=True)
+    head_only = ttnn.experimental.kda.summarize_chunk_recurrence(*inputs, actual_start=actual_start)
     with expect_error(TypeError, "incompatible function arguments"):
         ttnn.experimental.kda.summarize_chunk_recurrence(*inputs, actual_start=None)
     with expect_error(TypeError, "incompatible function arguments"):
-        ttnn.experimental.kda.reduce_affine_transforms(a, b, 1, actual_start=None, local_rows=128)
-    for missing in ("actual_start", "tail_a", "tail_b", "tail_entry_states"):
-        kwargs = dict(actual_start=actual_start, tail_a=a, tail_b=b, tail_entry_states=seed)
-        del kwargs[missing]
-        with expect_error(TypeError, "incompatible function arguments"):
-            ttnn.experimental.kda.affine_exclusive_scan(a, b, seed, 1, local_rows=128, **kwargs)
+        ttnn.experimental.kda.affine_exclusive_scan(summaries, seed, 1, local_rows=128, tail_entry_states=seed)
+    # A sequence-parallel mesh can split at runtime, so the scan needs the tail slot and its seed.
+    with expect_error(RuntimeError, "summaries need a tail slot when the sequence-parallel axis has more than one"):
+        ttnn.experimental.kda.affine_exclusive_scan(head_only, seed, 1, actual_start=actual_start, local_rows=128)
+    with expect_error(RuntimeError, "tail_entry_states is required exactly when the summaries hold a tail slot"):
+        ttnn.experimental.kda.affine_exclusive_scan(summaries, seed, 1, actual_start=actual_start, local_rows=128)
     for local_rows in (0, 31, 32):
         with expect_error(RuntimeError, "local_rows"):
             ttnn.experimental.kda.affine_exclusive_scan(
-                a,
-                b,
+                summaries,
                 to_device(initial_state(1, 32, 32), mesh_device),
                 2,
                 actual_start=actual_start,
-                tail_a=a,
-                tail_b=b,
                 tail_entry_states=to_device(initial_state(1, 32, 32), mesh_device),
                 local_rows=local_rows,
             )
@@ -423,27 +461,25 @@ def test_sp_affine_rectangular_live_slots(mesh_device, axis, dtype):
                             ranks[rank][2][folded] = ranks[rank][3][folded] = torch.nan
                 expected.append(torch.stack(entries))
             dims = [None, None]
-            dims[axis] = 0
-            tensors = [
-                ttnn.from_torch(
-                    torch.cat([rank[part] for rank in ranks]),
-                    device=mesh_device,
-                    dtype=dtype,
-                    layout=ttnn.TILE_LAYOUT,
-                    mesh_mapper=ttnn.ShardTensor2dMesh(
-                        mesh_device, mesh_shape=tuple(mesh_device.shape), dims=tuple(dims)
-                    ),
-                )
-                for part in range(4)
-            ]
+            # Packed [2, N, K, K+V] summaries of every rank, concatenated along N and sharded back by SP rank.
+            packed = torch.cat(
+                [torch.stack([torch.cat(rank[0:2], dim=-1), torch.cat(rank[2:4], dim=-1)]) for rank in ranks],
+                dim=1,
+            )
+            dims[axis] = 1
+            summaries = ttnn.from_torch(
+                packed,
+                device=mesh_device,
+                dtype=dtype,
+                layout=ttnn.TILE_LAYOUT,
+                mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=tuple(dims)),
+            )
             head_tt, tail_tt = to_device(head_seed, mesh_device), to_device(tail_seed, mesh_device)
             actual_start = make_actual_start(mesh_device, first_rank * local_rows + local_rows - 32 * split_chunk)
             result = ttnn.experimental.kda.affine_exclusive_scan(
-                *tensors[:2],
+                summaries,
                 head_tt,
                 groups,
-                tail_a=tensors[2],
-                tail_b=tensors[3],
                 tail_entry_states=tail_tt,
                 actual_start=actual_start,
                 sequence_parallel_axis=axis,
@@ -456,7 +492,7 @@ def test_sp_affine_rectangular_live_slots(mesh_device, axis, dtype):
                     name=f"affine live slots {dtype} rank={first_rank} split={split_chunk}",
                     nrmse_threshold=0.01,
                 )
-            for tensor in (*tensors, head_tt, tail_tt, actual_start, result):
+            for tensor in (summaries, head_tt, tail_tt, actual_start, result):
                 ttnn.deallocate(tensor)
 
 

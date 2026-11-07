@@ -238,10 +238,7 @@ ALWI void asin_tile(uint32_t idst) {
  * Please refer to documentation for any_init.
  */
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
-ALWI void asin_tile_init() {
-    MATH(SFPU_UNARY_INIT_FN(asin, sfpu::asin_acos_init, (is_fp32_dest_acc_en)));
-    MATH(ckernel::sfpu::asin_bf16_tile_init<!is_fp32_dest_acc_en>());
-}
+ALWI void asin_tile_init() { MATH(SFPU_UNARY_INIT_FN(asin, sfpu::asin_acos_init, (is_fp32_dest_acc_en))); }
 
 // clang-format off
 /**

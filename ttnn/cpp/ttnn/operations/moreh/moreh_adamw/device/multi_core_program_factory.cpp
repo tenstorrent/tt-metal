@@ -372,16 +372,16 @@ void MorehAdamWDeviceOperation::MorehAdamWProgramFactory::override_runtime_argum
     constexpr uint32_t kLrIdx = 5, kBeta1ExpIdx = 10, kBeta2ExpIdx = 11, kReaderStepIdx = 12;
 
     const std::array<uint32_t, 5> reader_addrs{
-        param_in.buffer()->address(),
-        tensor_args.grad.buffer()->address(),
-        tensor_args.exp_avg_in.buffer()->address(),
-        tensor_args.exp_avg_sq_in.buffer()->address(),
-        max_exp_avg_sq_in.has_value() ? max_exp_avg_sq_in->buffer()->address() : 0u};
+        param_in.mesh_buffer().address(),
+        tensor_args.grad.mesh_buffer().address(),
+        tensor_args.exp_avg_in.mesh_buffer().address(),
+        tensor_args.exp_avg_sq_in.mesh_buffer().address(),
+        max_exp_avg_sq_in.has_value() ? max_exp_avg_sq_in->mesh_buffer().address() : 0u};
     const std::array<uint32_t, 4> writer_addrs{
-        param_out.buffer()->address(),
-        exp_avg_out.buffer()->address(),
-        exp_avg_sq_out.buffer()->address(),
-        max_exp_avg_sq_out.has_value() ? max_exp_avg_sq_out->buffer()->address() : 0u};
+        param_out.mesh_buffer().address(),
+        exp_avg_out.mesh_buffer().address(),
+        exp_avg_sq_out.mesh_buffer().address(),
+        max_exp_avg_sq_out.has_value() ? max_exp_avg_sq_out->mesh_buffer().address() : 0u};
 
     const uint32_t step = operation_attributes.step;
     const uint32_t f2u_lr = std::bit_cast<uint32_t>(operation_attributes.lr);
