@@ -19,11 +19,15 @@ namespace tt::tt_metal::distributed {
  *  1. destructor / signal handler – cleans up resources on normal exit,
  *     std::exit(), SIGINT, SIGTERM.
  *
- *  2. Stale-PID cleanup – on first use, scans /dev/shm for resources whose owning
- *     PID is no longer alive (handles SIGKILL, hard crashes, power loss).
+ *  2. Lease cleanup – on first use, scans /dev/shm for manifests whose lifetime
+ *     flock can be acquired (handles SIGKILL and hard crashes across PID namespaces).
  *
- * A manifest file /dev/shm/tt_socket_manifest_<pid> is maintained so that the
- * stale cleanup can discover descriptor files (whose names don't embed a PID).
+ * A unique /dev/shm/tt_socket_manifest_v2_<token> records resources, including
+ * descriptor files. A separate .lock file remains locked while that manifest is
+ * atomically replaced. Cleanup never infers ownership from PIDs in resource names.
+ * Legacy manifests and resources without a lease require manual cleanup after
+ * confirming that their owners have exited. All processes sharing /dev/shm must
+ * use the lease-aware tracker to prevent older binaries' unsafe PID-based sweep.
  */
 class ShmResourceTracker {
 public:

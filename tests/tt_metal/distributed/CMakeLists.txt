@@ -1,6 +1,35 @@
 # Include source file lists (module owners maintain sources.cmake)
 include(sources.cmake)
 
+# Keep these host-only process tests separate: no parent may initialize the
+# process-global tracker before the tests fork their owners.
+add_executable(
+    shm_resource_tracker_tests
+    test_shm_resource_tracker.cpp
+    ${PROJECT_SOURCE_DIR}/tt_metal/distributed/shm_resource_tracker.cpp
+)
+target_include_directories(shm_resource_tracker_tests PRIVATE ${PROJECT_SOURCE_DIR}/tt_metal/api)
+target_link_libraries(
+    shm_resource_tracker_tests
+    PRIVATE
+        tt-logger::tt-logger
+        gtest_main
+        pthread
+)
+set_target_properties(
+    shm_resource_tracker_tests
+    PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY
+            ${PROJECT_BINARY_DIR}/test/tt_metal/distributed
+)
+add_test(NAME shm_resource_tracker_tests COMMAND shm_resource_tracker_tests)
+set_tests_properties(
+    shm_resource_tracker_tests
+    PROPERTIES
+        TIMEOUT
+            30
+)
+
 add_executable(distributed_unit_tests)
 target_sources(distributed_unit_tests PRIVATE ${DISTRIBUTED_UNIT_TEST_SOURCES})
 
