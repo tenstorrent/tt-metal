@@ -804,6 +804,7 @@ class MiMoV2ForCausalLM:
         self.pair_split = KV_PAIR_SPLIT
         self.group_block_sizes = block_sizes
         self.layer_groups = groups
+        self.swa_groups = {g for layer, g in zip(self.models[0].layers, groups) if layer.is_swa}
         compact_rope = self.max_seq_len > ROPE_TABLE_FULL_WIDTH_MAX_LEN
         # The replicas' RoPE tables are equal: computed once on the host (~2.5 s at 1M), uploaded to each.
         rope_host = self.models[0].decode_rope_tables_host(compact_rope) if DEVICE_ROPE else None
@@ -1050,10 +1051,14 @@ class MiMoV2ForCausalLM:
         one batched forward writes every row's K / V before any row's attention reads them; here every row is a pass
         of its own, so the reader must run after the writer, or it attends whatever the blocks held before (another
         request's K / V: the reader's answer is garbage). Each KV cache group's table is checked (block ids are per
-        lane, and a block belongs to one group at a time); vLLM's null block 0 is shared by design and skipped."""
+        lane, and a block belongs to one group at a time); vLLM's null block 0 is shared by design and skipped. A
+        sliding-window group's row is read only in the window in front of the start (TtMiMoModel._window_blocks): the
+        entries below it may name blocks vLLM freed (SlidingWindowManager) and gave to another row of the step, which
+        that row writes but this one never reads."""
         block_sizes = getattr(self, "group_block_sizes", None)
         if not block_sizes or tables is None or not any(p[3] > 0 for p in placed):
             return {}
+        swa_groups = getattr(self, "swa_groups", set())
         reads, writes = {}, {}
         for i, lane, _, start, end, cached in placed:
             group_rows = self._group_rows(tables, i)
@@ -1066,7 +1071,8 @@ class MiMoV2ForCausalLM:
                 first = max(start, cached * BLOCK_SIZE) // bs
                 writes[i, g] = row[first : -(-end // bs)]
                 if start > 0:
-                    reads[i, g] = row[: start // bs]
+                    lo = max(start - SWA_WINDOW, 0) // bs if g in swa_groups else 0
+                    reads[i, g] = row[lo : start // bs]
         out = {}
         for i, lane, *_ in placed:
             for j, other, *_ in placed:

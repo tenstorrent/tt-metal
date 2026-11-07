@@ -46,7 +46,7 @@ def shared_prefix_tables(writer_end, reader_hit, reader_end):
 
 
 def with_tables(monkeypatch, a, tables, replica, traced_rows=()):
-    a.layer_groups, a.group_block_sizes = [0, 1], dict(BLOCK_SIZES)
+    a.layer_groups, a.group_block_sizes, a.swa_groups = [0, 1], dict(BLOCK_SIZES), {1}
     monkeypatch.setattr(a, "_layer_tables", lambda *args: tables)
     monkeypatch.setattr(a, "_group_rows", gv.MiMoV2ForCausalLM._group_rows.__get__(a))
     calls = []
@@ -159,3 +159,26 @@ def test_null_block_is_not_a_dependency(monkeypatch):
     tokens = torch.zeros(2, 2048, dtype=torch.int32)
     a.prefill_forward(tokens, [1920, 1024], [2000, 2048], None, None, empty_slots=[0, 1])
     assert [c[0] for c in calls] == [0, 1], calls
+
+
+def test_freed_sliding_window_blocks_are_not_a_dependency(monkeypatch):
+    """vLLM frees a running request's sliding-window blocks below its window and may hand them to another request,
+    but the request's table row keeps their ids. Row 0 (continuing at 1920) still lists SWA blocks 300.. for [0, 512),
+    which row 1 now writes ([0, 512) of a new request); row 0 reads only its window [1792, 1920) of the SWA group, so
+    the two are independent and keep their order (no cycle when row 1 also lists a stale block row 0 writes)."""
+    a, replica = adapter(monkeypatch, gv.MiMoV2ForCausalLM)
+    rows = [{}, {}]
+    rows[0][0] = list(range(100, 100 + 2048 // 128))  # its own global blocks
+    rows[0][1] = list(range(300, 308)) + list(range(400, 400 + (2048 - 512) // 64))  # stale ids 300.. below the window
+    rows[1][0] = list(range(500, 504))
+    rows[1][1] = list(range(300, 308))  # reallocated: row 1 writes [0, 512) into them
+    calls = with_tables(monkeypatch, a, tables_for(rows), replica)
+    tokens = torch.zeros(2, 2048, dtype=torch.int32)
+    a.prefill_forward(tokens, [1920, 0], [2048, 600], None, None, empty_slots=[0, 1])
+    assert [c[0] for c in calls] == [0, 1], calls
+    # The same block inside row 0's window is a real dependency: row 0 reads [1792, 1920) of the SWA group.
+    rows[0][1][1792 // 64] = 301
+    calls.clear()
+    monkeypatch.setattr(a, "_layer_tables", lambda *args: tables_for(rows))
+    a.prefill_forward(tokens, [1920, 0], [2048, 600], None, None, empty_slots=[0, 1])
+    assert [c[0] for c in calls] == [1, 0], calls
