@@ -2,20 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <stdexcept>
-#include <fstream>
-#include <sstream>
-#include <ostream>
-#include <filesystem>
 #include <limits>
 #include <algorithm>
-#include <unordered_set>
 #include <unordered_map>
 #include <set>
-#include <queue>
-#include <memory>
 #include <cctype>
-#include <functional>
 #include <optional>
 #include <array>
 #include <cstring>
@@ -24,14 +15,10 @@
 
 #include "protobuf/physical_grouping_descriptor.pb.h"
 #include <tt-metalium/experimental/fabric/physical_grouping_descriptor.hpp>
-#include <tt-metalium/experimental/fabric/mesh_graph_descriptor.hpp>
 #include <tt-metalium/experimental/fabric/topology_solver.hpp>
 #include <tt-metalium/experimental/fabric/topology_mapper_utils.hpp>
 #include <tt-metalium/experimental/fabric/physical_system_descriptor.hpp>
-#include <tt-logger/tt-logger.hpp>
 #include <map>
-
-#include <google/protobuf/text_format.h>
 
 namespace tt::tt_fabric {
 

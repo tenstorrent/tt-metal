@@ -3,7 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 // Metal 2.0 (declarative API) D1 DM consumer.
-// Variant of dfb_consumer.cpp that pre-increments the TC acked counter.
+// Variant of dfb_consumer.cpp whose acked cursor starts at a near-wrap value
+// (the producer kernel preloads the hardware counters).
 
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/noc.h"
@@ -33,11 +34,10 @@ void kernel_main() {
     if constexpr (kPreloadAckedValue > 0) {
 #ifdef ARCH_QUASAR
         if (consumer_idx == 0) {
-            preload_acked_counter(dfb, kPreloadAckedValue);
-            // Cross-kernel rendezvous (see dfb_producer_with_tc_preload_2_0.cpp): signal
-            // "consumer ready" then wait for the producer so neither side enters its data
-            // loop until both POSTED (producer) and ACKED (here) are preloaded — occupancy
-            // is then provably 0 and the first entry is not consumed prematurely.
+            // The producer preloads both hardware counters; this side only sets its cursor.
+            preload_acked_cursor(dfb, kPreloadAckedValue);
+            // Tell the producer the cursor is set, then wait until the counters are preloaded
+            // before consuming anything.
             Semaphore prod_ready(sem::prod_ready);
             Semaphore cons_ready(sem::cons_ready);
             cons_ready.set(1);
