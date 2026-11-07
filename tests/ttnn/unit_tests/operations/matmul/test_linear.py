@@ -1769,3 +1769,15 @@ def test_linear_in0_column_offset_rejects_invalid_window(
     config = _in0_column_window_config(1, 1, 4) if program_config == "mcast2d" else None
     with expect_error(RuntimeError, message):
         ttnn.linear(wide, weight, program_config=config, transpose_a=transpose_a, in0_column_offset=offset)
+
+
+@pytest.mark.parametrize("bias_dtype", [ttnn.int32, ttnn.uint32])
+def test_linear_rejects_integer_bias(device, bias_dtype, expect_error):
+    torch.manual_seed(0)
+    a = ttnn.from_torch(torch.randn(1, 64, 64), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    b = ttnn.from_torch(torch.randn(64, 64), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    bias = ttnn.from_torch(
+        torch.randint(0, 10, (1, 64), dtype=torch.int32), dtype=bias_dtype, layout=ttnn.TILE_LAYOUT, device=device
+    )
+    with expect_error(RuntimeError, "Unsupported data format for bias"):
+        ttnn.linear(a, b, bias=bias)
