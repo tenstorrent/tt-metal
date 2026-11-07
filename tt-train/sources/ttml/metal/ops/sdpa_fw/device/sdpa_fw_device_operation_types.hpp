@@ -14,6 +14,9 @@ struct SDPAForwardParams {
     AttentionMaskType mask_type{AttentionMaskType::Causal};
     float dropout_probability{0.0F};
     bool has_gate{false};
+    // Query rows to compute and the key rows they attend to; std::nullopt = whole sequence.
+    std::optional<SeqTileRange> q_range;
+    std::optional<SeqTileRange> k_range;
 };
 
 struct SDPAForwardInputs {

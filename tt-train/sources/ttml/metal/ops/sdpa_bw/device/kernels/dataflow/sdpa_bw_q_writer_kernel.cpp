@@ -108,8 +108,13 @@ void kernel_main() {
 #endif
     }
 #else
+    // Query rows written by this launch, in tiles of each (batch, head) sequence.
+    const uint32_t q_begin = get_arg_val<uint32_t>(runtime_args_counter++);
+    const uint32_t q_count = get_arg_val<uint32_t>(runtime_args_counter++);
+
     const uint32_t end_row = start_row + num_rows_to_process;
-    for (uint32_t r = start_row; r < end_row; ++r) {
+    for (uint32_t unit = start_row; unit < end_row; ++unit) {
+        const uint32_t r = ranged_row(unit, Ht, q_begin, q_count);
         const uint32_t q_start_idx = r * qWt;
 
         // Write grad_query row

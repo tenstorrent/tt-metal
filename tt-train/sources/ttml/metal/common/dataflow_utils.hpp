@@ -28,6 +28,12 @@ inline constexpr uint32_t round_up(uint32_t a, uint32_t b) {
     return ((a + b - 1U) / b) * b;
 }
 
+// Global tile row of work unit `unit` when each (batch, head) sequence of Ht tiles contributes only its rows
+// [begin, begin + count). For the whole sequence (begin = 0, count = Ht) this returns `unit`.
+inline uint32_t ranged_row(uint32_t unit, uint32_t Ht, uint32_t begin, uint32_t count) {
+    return (unit / count) * Ht + begin + unit % count;
+}
+
 // Resolve a semaphore id to its volatile L1 pointer. Wraps the boilerplate
 // reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(...)) used at
 // every cross-RISC / cross-core sync site.

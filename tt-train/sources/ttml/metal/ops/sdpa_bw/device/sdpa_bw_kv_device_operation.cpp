@@ -252,11 +252,13 @@ ttml::metal::ops::sdpa_bw::device::SDPABackwardKVDeviceOperation::tensor_return_
     const ttnn::Tensor& u_scaler,
     const float dropout_probability,
     const std::optional<ttnn::Tensor>& preallocated_grad_key,
-    const std::optional<ttnn::Tensor>& preallocated_grad_value) {
+    const std::optional<ttnn::Tensor>& preallocated_grad_value,
+    const std::optional<ttml::metal::SeqTileRange>& q_range,
+    const std::optional<ttml::metal::SeqTileRange>& k_range) {
     using OperationType = ttml::metal::ops::sdpa_bw::device::SDPABackwardKVDeviceOperation;
 
-    auto operation_attributes =
-        OperationType::operation_attributes_t{.mask_type = mask_type, .dropout_probability = dropout_probability};
+    auto operation_attributes = OperationType::operation_attributes_t{
+        .mask_type = mask_type, .dropout_probability = dropout_probability, .q_range = q_range, .k_range = k_range};
 
     auto tensor_args = OperationType::tensor_args_t{
         .grad_output = grad_output,
