@@ -14,7 +14,8 @@ where only 24 of 93 layers own a slab, so this class overrides it -- along with 
 ``num_kv_cache_layers``, ``kv_slot_layer_ids``, ``layer_split_boundaries`` and
 ``pipeline_activation_planes`` -- to answer in MLA-slot space. The same override also allocates the
 KDA layers' migration state (``KimiK3KvCaches.kda_states``), which ``TtKimiK3Runtime`` exposes as
-migration stages 1 and 2 next to kvpe at 0 (issue #57403).
+migration stages 1 and 2 next to kvpe at 0 (issue #57403); on Kimi-K3.1 the DSA index cache is stage 1
+and the KDA state moves to 2 and 3.
 
 MoE scope (issue #51336): the latent-MoE structure -- routed experts at the reduced 3584 hidden,
 896 experts / top-16, a latent RMSNorm, and one shared expert at 6144. Every FFN site runs the
@@ -29,6 +30,7 @@ is correct but not yet tuned at their 6144 / 33792 widths. One deliberate limit 
 
 from __future__ import annotations
 
+import functools
 from pathlib import Path
 from typing import Callable
 
@@ -278,24 +280,35 @@ class KimiK3Adapter(MLAPrefillAdapter):
         """
         return 1 + boundary_layer_idx // KimiK3Config.ATTN_RES_BLOCK_SIZE
 
-    # --- migration table configs: 0 = kvpe, 1 = KDA recurrent, 2 = KDA convolution ---
+    # --- migration table configs: kvpe, the DSA index cache on K3.1, then KDA recurrent and convolution ---
+    # K3: 0 kvpe / 1 recurrent / 2 convolution. K3.1: 0 kvpe / 1 index / 2 recurrent / 3 convolution.
     kda_golden_default = (
         "/mnt/weka/model-cache/stable/deepseek-prefill-cache/golden/structured_traces/k3_vllm_code_debug_1M_head_tail"
     )
 
+    @functools.cached_property
+    def _table_kinds(self) -> tuple[str, ...]:
+        """Table config order, as `TtKimiK3Runtime.kv_migration_stages` emits it. The index cache is there
+        exactly when the config has the DSA indexer, the same test `allocate_kv_cache` sizes it by."""
+        from models.demos.deepseek_v3_d_p.tt.mla.indexer import resolve_has_indexer
+
+        index = ("index",) if resolve_has_indexer(self.load_hf_config()) else ()
+        return ("kvpe", *index, "kda_recurrent", "kda_convolution")
+
     def cache_kind(self, config_id: int) -> str:
         """What table config `config_id` describes; consumers must not infer this from the config count."""
-        kinds = ("kvpe", "kda_recurrent", "kda_convolution")
+        kinds = self._table_kinds
         return kinds[config_id] if 0 <= config_id < len(kinds) else "other"
 
     def cache_layer_rows(self, config_id: int, num_layers: int) -> dict[int, int]:
         """Global layer -> published table row, for the layers `num_layers` deep that own a row.
 
         Every config is published on the model's layer axis (`kv_table_layer_rows` /
-        `kda_table_layer_rows`), so the map is the identity over the layers of that config's kind.
+        `kda_table_layer_rows`), so the map is the identity over the layers of that config's kind. K3.1's
+        index cache sits on the full-attention layers, as kvpe does: every DSA layer owns its indexer.
         """
         kind = self.cache_kind(config_id)
-        if kind == "kvpe":
+        if kind in ("kvpe", "index"):
             ids = KimiK3Config.mla_layer_ids()
         elif kind in ("kda_recurrent", "kda_convolution"):
             ids = KimiK3Config.kda_layer_ids()
@@ -304,9 +317,13 @@ class KimiK3Adapter(MLAPrefillAdapter):
         return {layer: layer for layer in ids if layer < num_layers}
 
     def cache_head_dim(self, config_id: int):
-        """Row width of a token-addressed cache; None for the KDA state, which has no token axis."""
-        if self.cache_kind(config_id) == "kvpe":
+        """Logical row width of a token-addressed cache (the chunk bytes tell its encoding); None for the KDA
+        state, which has no token axis."""
+        kind = self.cache_kind(config_id)
+        if kind == "kvpe":
             return KimiK3Config.KV_LORA_RANK + KimiK3Config.QK_ROPE_HEAD_DIM
+        if kind == "index":
+            return self.model_config.INDEX_HEAD_DIM
         return None
 
     def layer_position_range(self, layer_idx: int, real_len: int) -> tuple[int, int]:
