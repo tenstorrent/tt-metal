@@ -71,11 +71,35 @@ static uint32_t compute_L1_usage_for_slice_config(
             continue;
         }
 
+        // EMPTY_SLICE_FIX: a window that receives no input (conv_transpose2d gap rows when the stride exceeds the dilated
+        // kernel, conv2d rows that lie entirely in padding) used to be skipped without advancing the output cursor, so every
+        // later window recomputed the same empty range and the rest of the output was never written (and the L1 estimate
+        // never saw those windows). Grow the window, in steps of the slice rounding, until it reaches an input row or
+        // column (forward first, then backward for a trailing window), so the op computes the gap rows itself.
+        const bool slice_by_height = dram_slice_config.slice_type == Op2DSliceConfig::SliceType::DRAM_HEIGHT;
+        auto window_has_input = [&](uint32_t ws, uint32_t we) {
+            auto [in_start, in_end] = slice_by_height
+                                          ? op_slice_attr->get_input_slice({ws, 0}, {we, output_width})
+                                          : op_slice_attr->get_input_slice({0, ws}, {output_height, we});
+            const int s = slice_by_height ? static_cast<int>(std::get<0>(in_start)) : static_cast<int>(std::get<1>(in_start));
+            const int e = slice_by_height ? static_cast<int>(std::get<0>(in_end)) : static_cast<int>(std::get<1>(in_end));
+            const int limit = slice_by_height ? static_cast<int>(input_height) : static_cast<int>(input_width);
+            return std::max(0, s) < std::min(limit, e);
+        };
+        uint32_t window_start = output_slice_dim_start;
+        uint32_t window_end = output_slice_dim_end;
+        while (!window_has_input(window_start, window_end) && window_end < output_sliced_dim) {
+            window_end = std::min(output_sliced_dim, window_end + slice_rounding_value);
+        }
+        while (!window_has_input(window_start, window_end) && window_start > 0) {
+            window_start -= std::min(window_start, slice_rounding_value);
+        }
+
         uint32_t output_slice_height_start, output_slice_height_end, input_slice_height_start, input_slice_height_end;
         uint32_t output_slice_width_start, output_slice_width_end, input_slice_width_start, input_slice_width_end;
         if (dram_slice_config.slice_type == Op2DSliceConfig::SliceType::DRAM_HEIGHT) {
-            output_slice_height_start = output_slice_dim_start;
-            output_slice_height_end = output_slice_dim_end;
+            output_slice_height_start = window_start;
+            output_slice_height_end = window_end;
             output_slice_width_start = 0;
             output_slice_width_end = output_width;
             auto [input_slice_start, input_slice_end] = op_slice_attr->get_input_slice(
@@ -97,8 +121,8 @@ static uint32_t compute_L1_usage_for_slice_config(
         } else {
             output_slice_height_start = 0;
             output_slice_height_end = output_height;
-            output_slice_width_start = output_slice_dim_start;
-            output_slice_width_end = output_slice_dim_end;
+            output_slice_width_start = window_start;
+            output_slice_width_end = window_end;
 
             auto [input_slice_start, input_slice_end] = op_slice_attr->get_input_slice(
                 {output_slice_height_start, output_slice_width_start},
@@ -122,7 +146,7 @@ static uint32_t compute_L1_usage_for_slice_config(
                 {output_slice_height_start, output_slice_width_start},
                 {output_slice_height_end, output_slice_width_end},
                 dram_slice_config));
-        output_slice_dim_start += output_slice_size;
+        output_slice_dim_start = window_end;  // EMPTY_SLICE_FIX
         slice_index++;
     }
     return max_memory_consumed;
@@ -398,11 +422,35 @@ void run_sliced_op(
             continue;
         }
 
+        // EMPTY_SLICE_FIX: a window that receives no input (conv_transpose2d gap rows when the stride exceeds the dilated
+        // kernel, conv2d rows that lie entirely in padding) used to be skipped without advancing the output cursor, so every
+        // later window recomputed the same empty range and the rest of the output was never written (and the L1 estimate
+        // never saw those windows). Grow the window, in steps of the slice rounding, until it reaches an input row or
+        // column (forward first, then backward for a trailing window), so the op computes the gap rows itself.
+        const bool slice_by_height = dram_slice_config.slice_type == Op2DSliceConfig::SliceType::DRAM_HEIGHT;
+        auto window_has_input = [&](uint32_t ws, uint32_t we) {
+            auto [in_start, in_end] = slice_by_height
+                                          ? op_slice_attr->get_input_slice({ws, 0}, {we, output_width})
+                                          : op_slice_attr->get_input_slice({0, ws}, {output_height, we});
+            const int s = slice_by_height ? static_cast<int>(std::get<0>(in_start)) : static_cast<int>(std::get<1>(in_start));
+            const int e = slice_by_height ? static_cast<int>(std::get<0>(in_end)) : static_cast<int>(std::get<1>(in_end));
+            const int limit = slice_by_height ? static_cast<int>(input_height) : static_cast<int>(input_width);
+            return std::max(0, s) < std::min(limit, e);
+        };
+        uint32_t window_start = output_slice_dim_start;
+        uint32_t window_end = output_slice_dim_end;
+        while (!window_has_input(window_start, window_end) && window_end < output_sliced_dim) {
+            window_end = std::min(output_sliced_dim, window_end + slice_rounding_value);
+        }
+        while (!window_has_input(window_start, window_end) && window_start > 0) {
+            window_start -= std::min(window_start, slice_rounding_value);
+        }
+
         uint32_t output_slice_height_start, output_slice_height_end, input_slice_height_start, input_slice_height_end;
         uint32_t output_slice_width_start, output_slice_width_end, input_slice_width_start, input_slice_width_end;
         if (dram_slice_config.slice_type == Op2DSliceConfig::SliceType::DRAM_HEIGHT) {
-            output_slice_height_start = output_slice_dim_start;
-            output_slice_height_end = output_slice_dim_end;
+            output_slice_height_start = window_start;
+            output_slice_height_end = window_end;
             output_slice_width_start = 0;
             output_slice_width_end = output_width;
             auto [input_slice_start, input_slice_end] = op_slice_attr->get_input_slice(
@@ -424,8 +472,8 @@ void run_sliced_op(
         } else {
             output_slice_height_start = 0;
             output_slice_height_end = output_height;
-            output_slice_width_start = output_slice_dim_start;
-            output_slice_width_end = output_slice_dim_end;
+            output_slice_width_start = window_start;
+            output_slice_width_end = window_end;
 
             auto [input_slice_start, input_slice_end] = op_slice_attr->get_input_slice(
                 {output_slice_height_start, output_slice_width_start},
@@ -527,7 +575,7 @@ void run_sliced_op(
                     batch_size, output_slice_height_end, output_slice_width_end, output_channels},
                 ttsl::SmallVector<uint32_t>{1, 1, 1, 1});
         }
-        output_slice_dim_start += output_slice_size;
+        output_slice_dim_start = window_end;  // EMPTY_SLICE_FIX
         slice_index++;
     }
 }
