@@ -3,7 +3,7 @@
   "run_id": "fd5fbe5a-7c1a-4995-aa51-fd89114fe560",
   "stage": "12-agentic-evals",
   "attempt_id": "7ef7a2c1-3dce-40e4-b6d3-0c83a631ac7e",
-  "kind": "vllm",
+  "kind": "layer",
   "workload": {
     "input_tokens": 4096,
     "output_tokens": 128,
@@ -80,7 +80,8 @@
   "missing_reasons": {
     "device_metrics": "Live vLLM profiling prohibited; host-wall rooflines are not device-time measurements.",
     "stage12_accuracy": "Banked GPQA40/198; seven capped loops counted as failures. SWE2/500 and Terminal2/89 retain measured stops. Normal80 and C8 comparison running; no frozen dry/release.",
-    "release": "Local frozen benchmark arm passed. No combined frozen dry/release: GPQA final cohort still pending; f579 CI transport blocked by two stock EPEL proxy403 image-build failures with zero TT device hours."
+    "release": "Local frozen benchmark arm passed. No combined frozen dry/release: GPQA final cohort still pending; f579 CI transport blocked by two stock EPEL proxy403 image-build failures with zero TT device hours.",
+    "layer_types": "Template kind=layer is preserved as required metadata; this is stage12 full-model vLLM serving, not a layer measurement. No layer values measured."
   },
   "notes": [
     "Published runtime f579 measured on frozen local benchmark arm with complete idle-drained accounting; combined dry/release still pending. No vLLM profiling.",
