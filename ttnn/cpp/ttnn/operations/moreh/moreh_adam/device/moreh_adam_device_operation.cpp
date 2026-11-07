@@ -46,6 +46,34 @@ void MorehAdamOperation::validate_inputs(
     if (tensor_args.output_tensors.at(3).has_value()) {
         check_tensor(tensor_args.output_tensors.at(3).value(), "moreh_adam", "max_exp_avg_sq_out");
     }
+
+    const auto& param_shape = params_in.logical_shape();
+    const auto check_shape = [&](const Tensor& tensor, const char* name) {
+        TT_FATAL(
+            tensor.logical_shape() == param_shape,
+            "moreh_adam: {} shape {} must match the param shape {}",
+            name,
+            tensor.logical_shape(),
+            param_shape);
+    };
+    check_shape(grad, "grad");
+    check_shape(exp_avg_in, "exp_avg_in");
+    check_shape(exp_avg_sq_in, "exp_avg_sq_in");
+    if (tensor_args.max_exp_avg_sq_in.has_value()) {
+        check_shape(tensor_args.max_exp_avg_sq_in.value(), "max_exp_avg_sq_in");
+    }
+    if (tensor_args.output_tensors.at(0).has_value()) {
+        check_shape(tensor_args.output_tensors.at(0).value(), "param_out");
+    }
+    if (tensor_args.output_tensors.at(1).has_value()) {
+        check_shape(tensor_args.output_tensors.at(1).value(), "exp_avg_out");
+    }
+    if (tensor_args.output_tensors.at(2).has_value()) {
+        check_shape(tensor_args.output_tensors.at(2).value(), "exp_avg_sq_out");
+    }
+    if (tensor_args.output_tensors.at(3).has_value()) {
+        check_shape(tensor_args.output_tensors.at(3).value(), "max_exp_avg_sq_out");
+    }
 }
 
 void MorehAdamOperation::validate_on_program_cache_miss(
