@@ -15,9 +15,9 @@ test_sparse_mla_perf: the CI gate (Galaxy, LoudBox). Warm and long with the prod
 K3.1's packet size), GLM-5.3 (last full indexer layer) and a GLM-5.3 shared layer (no indexer; reuses that layer's
 top-k). Untraced: fastest of UNTRACED_SAMPLES calls after UNTRACED_WARMUP discarded ones. Traced: one replay of the
 captured trace. Each (case, box, scenario, mode) is gated against PERF_TARGETS_MS: traced two-sided ± PERF_MARGIN,
-untraced only above target + PERF_MARGIN (a box without targets only reports), and the traced output must match the
-untraced one. Each layer runs standalone
-(no next-layer KV prefetch overlapped with its attention), as the first layer of a stage.
+untraced only above target + PERF_MARGIN (a case without targets only reports), and the traced output must match the
+untraced one. Each layer runs standalone (no next-layer KV prefetch overlapped with its attention), as the first layer
+of a stage.
 
 test_mla_chunked_perf: the exploration matrix (QuietBox, LoudBox, Galaxy; skipped on CI), reports only.
 GLM-5.3 (last full indexer layer, 21-slot index cache) and K3.1 x warm/cold/long x sparse with a BF16 or
@@ -73,10 +73,9 @@ GATE_CASES = {
 # Host time of one chunk forward through device synchronization, in ms, per case: (warm untraced, warm traced, long
 # untraced, long traced). From CI (LOGURU_LEVEL=ERROR, TT_METAL_SHM_TRACKING_DISABLED=1, one pytest process per model as
 # the jobs run them), two runs on 2026-11-07: traced is their mean, untraced the slower of the two, since untraced is
-# only a ceiling. K3.1 on Galaxy has no CI run yet: bh-glx-120-c02u02 (14kw, CPUs pinned, median of 3 runs, 2026-11-06).
+# only a ceiling. K3.1 on Galaxy is report-only until it has a CI run.
 _TARGETS_MS = {
     "Galaxy": {
-        "kimi_k3_1": (4.20, 3.24, 7.57, 6.93),
         "glm_5_3": (4.79, 2.70, 7.09, 6.30),
         "glm_5_3-no_indexer": (4.22, 2.19, 3.60, 2.25),
     },
@@ -92,9 +91,9 @@ PERF_TARGETS_MS = {
     for case, row in rows.items()
     for (scenario, mode), ms in zip([(s, m) for s in SCENARIO_CACHE_TOKENS for m in MODES], row)
 }
-# Traced is device-bound and steady (within ~1% run to run on CI), so it is gated both ways. Untraced is host-bound,
-# and on CI's shared hosts the same case moved up to ~23% between runs with the main thread on one CPU throughout, so it
-# is only a ceiling that catches large host-time regressions.
+# Traced is device-bound and steady (within 1.5% run to run on CI), so it is gated both ways. Untraced is host-bound:
+# on CI's shared hosts the same case moved up to 23% (Galaxy) and 37% (LoudBox, faster in the second run) between runs,
+# with the main thread on one CPU throughout. So it is only a ceiling above the slower run, for large regressions.
 PERF_MARGIN = {"untraced": 0.25, "traced": 0.03}
 PERF_TWO_SIDED = {"untraced": False, "traced": True}
 # Traced output must match the untraced output of the same forward.
@@ -455,7 +454,8 @@ def test_sparse_mla_perf(mesh_device, device_params, variant, case_name, config_
         within = target_ms is not None and lower <= measured_ms <= upper
         print(  # print, not logger: CI runs perf jobs at LOGURU_LEVEL=ERROR
             f"{label} {mode}: {measured_ms:.3f} ms "
-            f"(max {max(samples[mode]):.3f}); target {target_ms} ms {'±' if PERF_TWO_SIDED[mode] else '+'}{margin:.0%}; "
+            f"(max {max(samples[mode]):.3f}); target {target_ms} ms {'±' if PERF_TWO_SIDED[mode] else '+'}"
+            f"{margin:.0%}; "
             f"samples {' '.join(f'{x:.3f}' for x in samples[mode])}"
         )
         emit_perf_metrics(
@@ -485,11 +485,12 @@ def test_sparse_mla_perf(mesh_device, device_params, variant, case_name, config_
         if target_ms is None:
             unmeasured.append(f"{mode} {measured_ms:.3f} ms")
         elif not within:
-            direction = "faster than the target, re-centre it" if measured_ms < lower else "slower than the target"
-            failures.append(
-                f"{mode}: {measured_ms:.3f} ms outside [{lower:.3f}, {upper:.3f}] "
-                f"(target {target_ms:.3f} ms {'±' if PERF_TWO_SIDED[mode] else '+'}{margin:.0%}); {direction}"
-            )
+            if not PERF_TWO_SIDED[mode]:
+                bound = f"above the ceiling {upper:.3f} ms (target {target_ms:.3f} ms +{margin:.0%})"
+            else:
+                direction = "faster than the target, re-centre it" if measured_ms < lower else "slower than the target"
+                bound = f"outside [{lower:.3f}, {upper:.3f}] (target {target_ms:.3f} ms ±{margin:.0%}); {direction}"
+            failures.append(f"{mode}: {measured_ms:.3f} ms {bound}")
     if trace_pcc < TRACE_PCC:
         failures.append(f"traced output differs from untraced: min per-device PCC {trace_pcc:.6f}")
     assert not failures, f"{label}: " + "; ".join(failures)
