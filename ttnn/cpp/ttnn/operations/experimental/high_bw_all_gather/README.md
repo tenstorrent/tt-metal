@@ -140,7 +140,21 @@ barrier across every participating device before the first dispatch. The op
 does not allocate semaphores or call `Synchronize` when the pair is supplied.
 
 Successful kernels consume their ready and data-valid counts back to zero, so
-the same pair can be reused for adjacent invocations. Program-cache hits may
+the same pair can be reused for adjacent invocations **with the same
+`cluster_axis`** (the same ring geometry).
+
+Do not share one pair between gathers on different `cluster_axis` values
+(axis 0, axis 1, or `None`). Give each axis its own pair. The counters are plain
+counts at one L1 address, and the link workers of gathers on different axes can
+sit on the same cores: on an 8x4 Blackhole Galaxy with Fabric2D Torus, a TP-axis
+gather and an SP-axis gather share cores on 22 of 32 chips. With a shared pair,
+a neighbour's ready or data-valid increment meant for the next gather on the
+other axis is consumed by the gather still running. Its fence then opens early,
+and a sender writes a peer's output while the peer's earlier work still owns
+those bytes. The output keeps wrong rows, and they stay wrong after
+`Synchronize`. The failure shows only when devices reach the gather at
+different times, so a test where every device is in step does not catch it
+(#64805). Program-cache hits may
 also bind a different valid pair: semaphore addresses are excluded from the
 program hash and patched into runtime arguments on every call. If an invocation
 is aborted or fails after dispatch, the owner must join the affected subdevice,

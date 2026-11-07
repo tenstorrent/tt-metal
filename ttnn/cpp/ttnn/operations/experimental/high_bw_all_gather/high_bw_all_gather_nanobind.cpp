@@ -100,7 +100,10 @@ void bind_experimental_high_bw_all_gather_operation(nb::module_& mod) {
                     the complete worker-core restriction before the first call.
                 data_valid_semaphore: Optional caller-owned persistent relay/completion semaphore.
                     Supplying both semaphore handles selects the allocation-free, no-internal-sync
-                    dispatch path intended for sub-device overlap.
+                    dispatch path intended for sub-device overlap. A pair may be reused only by calls
+                    with the same ``cluster_axis``. Use a separate pair for each axis (and for
+                    ``cluster_axis=None``): gathers on different axes can share worker cores, and a
+                    shared pair lets one gather consume the other's counts, so its output keeps wrong rows.
         )doc",
         &high_bw_all_gather,
         nb::arg("input_tensor").noconvert(),
