@@ -7,6 +7,7 @@
 #include "ttnn/operations/data_movement/transpose/transpose.hpp"
 #include "ttnn/operations/data_movement/transpose/device/transpose_utils.hpp"
 #include "ttnn/operations/data_movement/permute/device/permute_device_operation.hpp"
+#include "ttnn/operations/data_movement/common/common.hpp"
 
 #include <tt-metalium/hal.hpp>
 #include "ttnn/tensor/tensor_utils.hpp"
@@ -231,6 +232,9 @@ ttnn::Tensor permute(
         return new_order;
     };
     auto itensor = (input_tensor.logical_shape().rank() < 4) ? ttnn::unsqueeze_to_4D(input_tensor) : input_tensor;
+    if (input_rank < 4) {
+        operations::data_movement::shift_shard_dims(itensor, static_cast<int>(4 - input_rank));
+    }
     auto iorder = normalized_dims.size() < 4 ? adjust_order(normalized_dims) : normalized_dims;
 
     const auto input_layout = input_tensor.layout();
@@ -248,6 +252,7 @@ ttnn::Tensor permute(
 
     if (input_rank < 4) {
         output_tensor = ttnn::squeeze_from_4D(output_tensor, input_rank);
+        operations::data_movement::shift_shard_dims(output_tensor, -static_cast<int>(4 - input_rank));
     }
 
     return output_tensor;

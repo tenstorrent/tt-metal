@@ -166,6 +166,15 @@ PermuteDeviceOperation::create_op_performance_model(
     return result;
 }
 
+std::vector<tt::tt_metal::TensorTopology> PermuteDeviceOperation::compute_output_topologies(
+    const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
+    auto topology = permuted_tensor_topology(tensor_args.input_tensor.tensor_topology(), attributes.dims);
+    if (!topology.has_value()) {
+        return {};
+    }
+    return {std::move(*topology)};
+}
+
 PermuteDeviceOperation::tensor_return_value_t PermuteDeviceOperation::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     if (tensor_args.optional_output_tensor.has_value()) {
