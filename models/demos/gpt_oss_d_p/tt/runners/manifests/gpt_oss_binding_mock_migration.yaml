@@ -19,10 +19,8 @@ global_env:
   PREFILL_NUM_USERS: "2"
   LOGURU_LEVEL: "INFO"
 
-  PREFILL_ENABLE_MIGRATION: "0"
-  PREFILL_MIGRATION_WAIT_READY_MS: "120000"
   PREFILL_MIGRATION_TABLE_PATH: "/tmp/prefill_kv_chunk_table.pb"
-  PREFILL_MIGRATION_DEVICE_MAP_PATH: "/tmp/prefill_kv_device_map.json"
+  PREFILL_MIGRATION_DEVICE_MAP_PATH: "/tmp/prefill_device_map.txt"
   PREFILL_MIGRATION_CMD_QUEUE: "/mig_ep1_cmd"
   PREFILL_MIGRATION_TABLE_QUEUE: "/mig_ep1_table"
   PREFILL_MIGRATION_RESP_QUEUE: "/mig_ep1_resp"

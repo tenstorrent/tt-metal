@@ -4,7 +4,8 @@
 """KV chunk address table builder for the MiniMax-M3 GQA prefill cache.
 
 Describes the on-device KV layout as a ``KvChunkAddressTable`` so the migration worker can copy the right
-chunks. ``TtPrefillRuntime.build_kv_chunk_table`` calls this; the runner publishes the serialized table.
+chunks. ``TtPrefillRuntime.build_kv_chunk_table`` calls this; the runner writes the serialized table to a file
+and migration_driver publishes it.
 
 The worker treats a chunk's device group as REPLICAS (reads one member, writes the same bytes to all
 destinations). M3's ``k`` / ``v`` are TP-head-sharded — column ``c`` holds a different head, not a replica —
@@ -125,14 +126,10 @@ def build_and_serialize_kv_chunk_table(
     # model/env), so its dtypes and the slot fold generalize to the gathered stages.
     # The migration worker copies raw chunk bytes and blaze's decode index_k is bfp8 (DsaIndexerDirectKCacheUpdate
     # only supports bfp8 tiles): a bf16 source would overrun its rows.
-    from models.demos.common.prefill.runners.migration import migration_file_export_enabled, migration_publish_enabled
-
-    # Both transports hand the table to the KVM (publish, or file export).
-    migrating = migration_publish_enabled() or migration_file_export_enabled()
-    if kv_cache.index_k.dtype != ttnn.bfloat8_b and migrating:
+    if kv_cache.index_k.dtype != ttnn.bfloat8_b:
         raise ValueError(
             f"KV migration needs a bfloat8_b index_k (the decode peer's dtype), got {kv_cache.index_k.dtype}; "
-            "unset M3_INDEX_CACHE_BF16 for migrating runs"
+            "unset M3_INDEX_CACHE_BF16"
         )
     index_k = kv_cache.index_k
     for name, t in (("k", kv_cache.k), ("v", kv_cache.v), ("index_k", index_k)):

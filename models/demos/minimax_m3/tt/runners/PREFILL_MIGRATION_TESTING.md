@@ -113,8 +113,8 @@ python -m models.demos.common.prefill.runners.prefill_producer \
   --manifest $M3/m3_producer_mock_migration.yaml
 ```
 
-**Expect:** runner `[migration] merged KV chunk table -> /tmp/m3_kv_chunk_table.pb (no worker handshake)`
-and `[migration] rank 0: local device map -> …`;
+**Expect:** runner `[migration] merged KV chunk table -> /tmp/m3_kv_chunk_table.pb`
+and `[migration] device map (32 chips, ranks [0]) exported to …`;
 producer `[producer] layer acks 240/240`, per-layer `K=… V=… index_k=…`, then
 `[producer] slot N M3 KV PCC over [0,10240) across 60 layers` and `[producer] KV cache PCC PASSED`
 (threshold `PREFILL_STANDALONE_CHUNKED_PCC`, producer default `0.93` — different from the runner's `0.88`
@@ -155,8 +155,8 @@ per-slot PCC pass.
 Three processes on one host — the shm queues and UMD access are host-local, so they must co-locate. Loopback
 means the destination endpoint id equals the endpoint's own, routed through its internal A→B worker pair.
 
-**One endpoint launch per runner launch.** A worker terminates on a second `SET_TABLE`
-(`control_thread.cpp:1368`), and the runner publishes a table at startup, so a second runner against a live
+**One endpoint launch per driver launch.** A worker terminates on a second `SET_TABLE`
+(`control_thread.cpp:1368`), and the driver publishes the table at startup, so a second driver against a live
 endpoint kills both workers.
 
 ```bash
@@ -164,7 +164,7 @@ endpoint kills both workers.
 pkill -f migration_endpoint ; pkill prun ; pkill prted ; pkill prte
 rm -f /dev/shm/mig_ep1_* /dev/shm/ep_1_[ab]_* \
       /dev/shm/tt_h2d_* /dev/shm/tt_d2h_* /dev/shm/tt_prefill_layer_completions_* \
-      /tmp/m3_kv_chunk_table.pb /tmp/m3_kv_device_map.json /tmp/m3_migration_done.sentinel
+      /tmp/m3_kv_chunk_table.pb /tmp/m3_kv_device_map.txt /tmp/m3_migration_done.sentinel
 
 # ---- Terminal A — migration endpoint (leave running) ----
 cd /data/philei/tt-metal && ./m3_gate2_endpoint.sh
@@ -175,7 +175,7 @@ cd /data/philei/tt-metal && ./m3_gate2_check.sh
 # ---- Terminal B — runner ----
 $RUN $M3/m3_binding_loopback_migration_1rank.yaml $HOST:1
 
-# ---- Terminal C — prefill + migrate (only after B prints WORKER_READY + LayerAck ready) ----
+# ---- Terminal C — prefill + migrate (only after B logs the merged KV chunk table) ----
 export PREFILL_MIGRATION_CLIENT_DIR="$MIG/python"
 python -m models.demos.common.prefill.runners.migration_driver \
   --manifest $M3/m3_producer_loopback_migration.yaml
@@ -196,10 +196,16 @@ Terminal B before starting C (the table build is 691200 entries set one Python c
 minutes of silence first):
 
 ```
-[migration] delivered 32 local device-map entries -> /ep_1_a_cmd     (and again for /ep_1_b_cmd)
+[migration] device map (32 chips, ranks [0]) exported to /tmp/m3_kv_device_map.txt
 [migration] KV chunk address table serialized to /tmp/m3_kv_chunk_table.pb (configs=9, entries=691200)
-[migration] WORKER_READY: table=/tmp/m3_kv_chunk_table.pb
 [migration] layer-completion routing up: rank=0/1 master=0 ring=/tt_prefill_layer_completion_ring_0 source=host on_layer_complete callback (owns scheduler shm /tt_prefill_layer_completions_m3_prefill)
+```
+
+Terminal C then delivers the device map and publishes the table before prefilling:
+
+```
+[migration] delivered 32 local device-map entries -> /ep_1_a_cmd     (and again for /ep_1_b_cmd)
+[migration] WORKER_READY: table=/tmp/m3_kv_chunk_table.pb
 ```
 
 **Every verdict is logged by the DRIVER (terminal C), not the runner** — the runner-side
@@ -226,8 +232,8 @@ TT_VISIBLE_DEVICES splits come from `topology_configuration/pipeline_prefill_req
 Migration-wise everything is the same flow at 2 ranks: both ranks join the per-cache stage-layout
 all-gathers (`kv_migration_stages` reports one `KvCacheStage` per cache — k, v, index_k), rank 0
 builds ONE merged 60-layer 9-config table (each stage's chunks at ITS cache's base address, global layer
-indices) and publishes it. Both ranks are on this host, so the producer/driver read-backs cover all 60
-layers once they merge the two rank-scoped device maps.
+indices) and writes it. Both ranks are on this host, so they write one device map for it, and the
+producer/driver read-backs cover all 60 layers.
 
 Because num_ranks>1, the table path must be on shared storage — the bindings use
 `/data/philei/tmp/m3_kv_chunk_table_pp.pb` (`mkdir -p /data/philei/tmp` once). The weight cache for the
@@ -251,8 +257,8 @@ python -m models.demos.common.prefill.runners.prefill_producer \
 ```
 
 **Expect:** rank 0 `[migration] merged KV chunk table -> /data/philei/tmp/m3_kv_chunk_table_pp.pb`
-(configs=9, layers=60); each rank `local device map -> /tmp/m3_kv_device_map_r<rank>.json`; producer
-merges both maps (`merged 2 device maps: 32 chips total`), then per-layer `K=… V=… index_k=…` across
+(configs=9, layers=60); `device map (32 chips, ranks [0, 1]) exported to /tmp/m3_kv_device_map.txt`;
+producer `read device map /tmp/m3_kv_device_map.txt: 32 chips`, then per-layer `K=… V=… index_k=…` across
 `60/60 local layers` and `KV cache PCC PASSED`.
 
 ### P2 — pipeline loopback migration (endpoint + 2-rank runner + driver)
@@ -262,26 +268,26 @@ Same three-terminal flow as Gate 2 — the endpoint launch (`./m3_gate2_endpoint
 artifacts to the between-runs cleanup:
 
 ```bash
-rm -f /tmp/m3_kv_device_map_r*.json /data/philei/tmp/m3_kv_chunk_table_pp.pb
+rm -f /tmp/m3_kv_device_map.txt* /data/philei/tmp/m3_kv_chunk_table_pp.pb
 ```
 
 ```bash
 # ---- Terminal B — 2-rank runner ----
 $RUN $M3/m3_binding_loopback_migration_intragalaxy_2rank.yaml $HOST:2
 
-# ---- Terminal C — prefill + migrate (after B prints WORKER_READY + LayerAck ready) ----
+# ---- Terminal C — prefill + migrate (after B rank 0 logs the merged KV chunk table) ----
 export PREFILL_MIGRATION_CLIENT_DIR="$MIG/python"
 python -m models.demos.common.prefill.runners.migration_driver \
   --manifest $M3/m3_producer_loopback_migration_2rank.yaml
 ```
 
-**Expect:** both ranks deliver their device maps to the co-located workers; rank 0
-`[migration] merged KV chunk table …` then `WORKER_READY`; driver `MIGRATE slot 0->2 / 1->3 complete`,
+**Expect:** runner rank 0 `[migration] merged KV chunk table …`; the driver delivers the host's device map
+to the co-located workers, then `WORKER_READY`, `MIGRATE slot 0->2 / 1->3 complete`,
 source `check_pcc` over 60 layers, and `--verify-migration=dst-bytes` byte-equal across all 9 configs.
 Run once more with `--verify-migration=dst-golden` for the golden-anchored destination check.
 
 The merged table has 2× the single-rank entry count spread over both stages; the one-`table.set()`-per-
-entry Python build still takes minutes of silence in terminal B before `WORKER_READY`.
+entry Python build still takes minutes of silence in terminal B before the table is written.
 
 ---
 
@@ -335,7 +341,7 @@ Configuration notes:
 * **Queue names.** `--prefill_endpoint_id 1` gives `/mig_ep1_{cmd,table,resp}`. The runner's own defaults are
   the older `/prefill_mig_{cmd,tbl,rsp}_1`, so the binding sets `PREFILL_MIGRATION_{CMD,TABLE,RESP}_QUEUE`
   explicitly. Those are the master-only SET_TABLE / WORKER_READY channel; the device map goes to the
-  workers' own `/dev/shm/ep_1_{a,b}_*` queues, which the runner discovers by globbing.
+  workers' own `/dev/shm/ep_1_{a,b}_*` queues, which the driver discovers by globbing.
 
 ---
 
@@ -368,11 +374,8 @@ exits mid-prefill; too high and it blocks on chunks that never come — no PCC e
 - **Config-id order is the src↔dst contract.** Loopback is self-consistent (one table is both source and
   destination). A real prefill→decode run needs the decode endpoint to publish its configs in the same order
   (`k_h0..N-1`, `v_h0..N-1`, `index_k`). Not exercised here.
-- **The JSON device map is written on BOTH paths now.** The real-migration branch delivers the map to the
-  workers over the client AND writes the sidecar, so producer-side `check_pcc` and the driver's
-  `--verify-migration` read-backs work in Gate 2 too. With num_ranks>1 each rank writes a rank-scoped
-  sidecar (`<stem>_r<rank>.json`); readers glob and merge them — clear stale `_r*.json` between runs whose
-  topology changed.
+- **The device map is one plain-text file per host.** Ranks sharing a host each write a `<path>.r<rank>`
+  sidecar and merge them into `<path>`, so every reader on that host sees all of its chips.
 - **Table build is ~9× the DeepSeek entry count** (9 configs, 691200 entries). It runs once at startup;
   slowness there is Python `table.set()` overhead, not a correctness problem.
 - `_migration_client not importable` → `PREFILL_MIGRATION_CLIENT_DIR` must point at `$MIG/python`, in the

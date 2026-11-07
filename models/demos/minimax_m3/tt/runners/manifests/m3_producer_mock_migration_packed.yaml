@@ -1,7 +1,7 @@
 # MiniMax-M3 — Gate 1 with packed forwards: push 2 slots x 10 chunks of 1024 tokens, 4 chunks per forward
 # (the last forward carries both slots), then read the KV back device-lessly and PCC it against the golden.
 #
-# Pairs with m3_binding_mock_migration_packed_1rank.yaml (PREFILL_ENABLE_MIGRATION=0). No migration endpoint.
+# Pairs with m3_binding_mock_migration_packed_1rank.yaml. No migration endpoint.
 #
 #   python -m models.demos.common.prefill.runners.prefill_producer \
 #     --manifest models/demos/minimax_m3/tt/runners/manifests/m3_producer_mock_migration_packed.yaml
@@ -34,7 +34,7 @@ migration:
 
 env:
   PREFILL_MIGRATION_TABLE_PATH: /tmp/m3_kv_chunk_table.pb        # [MATCH RUNNER]
-  PREFILL_MIGRATION_DEVICE_MAP_PATH: /tmp/m3_kv_device_map.json  # [MATCH RUNNER]
+  PREFILL_MIGRATION_DEVICE_MAP_PATH: /tmp/m3_kv_device_map.txt  # [MATCH RUNNER]
   # Must match the runner — decides the index_k chunk size, hence the read-back decoder.
   M3_INDEX_CACHE_BF16: "0"
   PREFILL_STANDALONE_CHUNKED_PCC: "0.88"

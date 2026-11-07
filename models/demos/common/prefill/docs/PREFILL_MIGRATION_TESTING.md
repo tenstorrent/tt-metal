@@ -62,12 +62,12 @@ export HOSTSP=<H0>:1,<H1>:1       # runner + driver: the --host list, passed to 
 Two shape constraints apply: `MAX_SEQ_LEN % CHUNK_SIZE == 0` and `CHUNK_SIZE % (SP*32) == 0` (each SP shard
 stays 32-token-block aligned).
 
-**`PREFILL_ENABLE_MIGRATION` picks the table's consumer, not whether one is built.** Every run all-gathers
-the per-rank stage layouts and rank 0 builds one merged table spanning every rank's layers. `1` (Gate 2)
-hands it to a live migration worker over the client queues (`deliver_device_map_and_gather_stage_layouts`)
-and blocks on the worker's ready; `0` (Gate 1, mock migration) leaves it on disk for an offline reader such as
-`prefill_producer`. Both run on 1, 2 or 4 ranks — see *Covering every rank* below for what that costs on the
-read-back side.
+**The runner writes two files and never talks to a migration worker.** Every run all-gathers the per-rank
+stage layouts and rank 0 writes one merged table spanning every rank's layers to
+`PREFILL_MIGRATION_TABLE_PATH` (shared storage past one rank). Each host writes one plain-text device map
+holding the chips of every rank on that host to `PREFILL_MIGRATION_DEVICE_MAP_PATH` (host-local past one
+rank; default `/tmp/prefill_device_map.txt`). The KV migration service in deployment, `prefill_producer`
+and `migration_driver` all read those same two files.
 
 ---
 
@@ -98,18 +98,16 @@ global_env:
   PREFILL_H2D_SERVICE_ID: "my_prefill"
   PREFILL_NUM_USERS: "4"           # must cover every dst slot: src 0,1 -> dst 2,3
 
-  PREFILL_ENABLE_MIGRATION: "1"
-  PREFILL_MIGRATION_WAIT_READY_MS: "120000"   # worker handshake, AFTER attach succeeds
-  PREFILL_MIGRATION_ATTACH_WAIT_S: "0"        # seconds to wait for the shm queues to appear; 0/unset = forever
+  PREFILL_MIGRATION_ATTACH_WAIT_S: "0"        # driver: seconds to wait for the shm queues to appear; 0/unset = forever
   PREFILL_MIGRATION_TABLE_PATH: "/tmp/prefill_kv_chunk_table.pb"
-  PREFILL_MIGRATION_DEVICE_MAP_PATH: "/tmp/prefill_kv_device_map.json"
+  PREFILL_MIGRATION_DEVICE_MAP_PATH: "/tmp/prefill_device_map.txt"
   PREFILL_MIGRATION_CMD_QUEUE: "/mig_ep1_cmd"      # endpoint default is /mig_ep<id>_{cmd,table,resp}
   PREFILL_MIGRATION_TABLE_QUEUE: "/mig_ep1_table"
   PREFILL_MIGRATION_RESP_QUEUE: "/mig_ep1_resp"
   PREFILL_MIGRATION_CLIENT_DIR: "<tt-llm-engine>/disaggregation/migration/build_RelWithDebInfo/python"
 ```
 
-Nothing about validation appears here: the runner publishes the KV-chunk table and the device map and
+Nothing about validation appears here: the runner exports the KV-chunk table and the device map to files and
 that is the whole of its involvement. Both read-backs — the source `check_pcc` and the destination
 `--verify-migration` — run out in the driver process against those two published artefacts.
 
@@ -429,9 +427,8 @@ asserts when a chunk overruns the cache — it no longer derives from a chunk co
 In the binding, replace the migration block with:
 
 ```yaml
-  PREFILL_ENABLE_MIGRATION: "0"
   PREFILL_MIGRATION_TABLE_PATH: "/tmp/prefill_kv_chunk_table.pb"
-  PREFILL_MIGRATION_DEVICE_MAP_PATH: "/tmp/prefill_kv_device_map.json"
+  PREFILL_MIGRATION_DEVICE_MAP_PATH: "/tmp/prefill_device_map.txt"
   PREFILL_NUM_USERS: "2"
 ```
 
@@ -451,16 +448,11 @@ python -m models.demos.common.prefill.runners.prefill_producer --manifest $MANIF
 Expect `[producer] KV cache PCC PASSED` (threshold `PREFILL_STANDALONE_CHUNKED_PCC`, producer default
 `0.93`).
 
-This gate is not a prerequisite for the producer's golden PCC on the real-migration path, because the runner
-serialises the device map there too: **every rank on either path** publishes its own host-local JSON sidecar.
-It has to: `deliver_device_map_and_gather_stage_layouts` hands the map to the co-located *worker* over the
-migration client and leaves nothing on disk, while every device-less read-back resolves chips from the JSON.
-`PREFILL_MIGRATION_EXPORT_TO_FILE=1` is the third transport — a plain-text map at
-`PREFILL_MIGRATION_DEVICE_MAP_PATH` for a worker that reads it off disk — and it suppresses the JSON sidecar,
-so a device-less read-back cannot run alongside it.
+The producer reads the per-host device map, so it sees every chip on its host. With several runner ranks on
+one galaxy, run one producer there (`-np 1`); it reads every stage on that host.
 
 A reader that polls 60 s and logs `device map ... not found; skipping KV read` loses every PCC and the
-`--dump-src-kv` reference with nothing raising; check the sidecar before suspecting the table. Beware the
+`--dump-src-kv` reference with nothing raising; check the map before suspecting the table. Beware the
 inverse too: a *stale* map left in `/tmp` by an earlier run makes the same misconfiguration look like it
 works. Gate 1 remains the cheapest way to separate a table problem from a transport problem.
 
@@ -478,7 +470,8 @@ fans out from there, always in rank order with rank 0 first: the endpoint gets `
 driver is launched with `run_migration_driver.sh <manifest> <same list>`, which places one process per host
 (*Covering every rank*, above). Host order must be identical in all three.
 
-Launch order is A → B (wait for `WORKER_READY`) → C. Between runs, clear stale state:
+Launch order is A → B (wait for rank 0's `[migration] merged KV chunk table -> …`) → C, and C logs `WORKER_READY`.
+Between runs, clear stale state:
 
 ```bash
 pkill -f migration_endpoint ; pkill prte
@@ -493,7 +486,7 @@ cd <tt-llm-engine>/disaggregation/migration
 
 ls /dev/shm/mig_ep1_*      # all three queues must exist BEFORE starting B
 
-# ---- Terminal B — runner (wait for WORKER_READY before starting C) ----
+# ---- Terminal B — runner (wait for the merged KV chunk table line before starting C) ----
 cd $TT_METAL_HOME && $RUN $BINDING $HOST:1            # multi-host: $RUN $BINDING $HOSTSP
                                                       # (with an N-rank $BINDING)
 
@@ -601,23 +594,23 @@ attempts to set any of them by hand.
 
 | Process | Role |
 |---|---|
-| `migration_endpoint` | Owns the outward queues `/mig_ep<id>_{cmd,table,resp}` the runner talks to; relays commands inward and `WORKER_READY` outward. Copies no KV itself. |
+| `migration_endpoint` | Owns the outward queues `/mig_ep<id>_{cmd,table,resp}` the driver talks to; relays commands inward and `WORKER_READY` outward. Copies no KV itself. |
 | `migration_worker` × 2 | The processes that touch DRAM: sender ("A") and loopback receiver ("B"), each with queues `/ep_<id>_{a,b}_{cmd,table,resp}`. Started by an MPI launcher — `prte` holds a pool of *slots* (one per process), `prun` requests them. |
 
 A worker reports `WORKER_READY` only once it holds the KV chunk table, the device map, and its A↔B link. The
-runner supplies the first two, then waits — it cannot distinguish a slow worker from an absent one.
+driver supplies the first two, then waits — it cannot distinguish a slow worker from an absent one.
 
 ---
 
-## Troubleshooting: the runner sits at startup with no error
+## Troubleshooting: the driver sits at startup with no error
 
 ```
 [migration] still waiting for endpoint queues (/mig_ep1_cmd) after 45s (no timeout) — ...
 ```
 
 The **attach** wait, repeating every 15s: the shm queues do not exist yet. This is not the `wait_ready`
-handshake below, so `PREFILL_MIGRATION_WAIT_READY_MS` has no effect on it. Unbounded by default because the
-runner often reaches table-publish before `migration_endpoint` has created its queues — bound it when a hang
+handshake below. Unbounded by default because the
+driver can start before `migration_endpoint` has created its queues — bound it when a hang
 costs more than a race:
 
 ```bash
@@ -628,15 +621,15 @@ Permission problems fail on the first attempt rather than looping, so a heartbea
 queues are genuinely absent: the worker for this host never came up, or the queue names do not match the
 endpoint's.
 
-## Troubleshooting: the runner times out in `wait_ready`
+## Troubleshooting: the driver times out in `wait_ready`
 
 ```
-RuntimeError: MigrationLayerClient::wait_ready: timeout after 120000ms
+RuntimeError: MigrationLayerClient::wait_ready: timeout after 300000ms
 ```
 
 This is the phase **after** attach: the queues were found and opened, and the workers are not answering on
 them. If instead there is no error at all and the log just repeats `still waiting for ...`, that is the
-attach wait above and `PREFILL_MIGRATION_WAIT_READY_MS` will not change it.
+attach wait above.
 
 Almost always: the two workers were never started, so nothing can answer. Confirm in the endpoint log
 (`/tmp/launch_mig_ep_<id>_*.log`; it holds binary bytes, so `grep` needs `-a`):
