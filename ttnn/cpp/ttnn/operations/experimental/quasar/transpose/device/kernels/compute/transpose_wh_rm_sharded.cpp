@@ -126,9 +126,12 @@ ALWI void transpose_with_pack_untilize(uint32_t cb_tilize, DFB& cb_out_buf) {
             // Self-loop (ht<=8): wait for, then pop, the column this kernel just pushed.
             release_out_column(cb_out_buf, Ht);
         } else {
+#ifndef ARCH_QUASAR
             // Producer-side barrier on the just-pushed column (reads the received-tiles counter this
-            // kernel bumped; returns immediately).
+            // kernel bumped; returns immediately). Quasar binds compute as producer only of the staging
+            // DFB, so it skips this.
             cb_out_buf.wait_front(Ht);
+#endif
         }
         tile_idx = tile_idx - HtWt + 1;
     }
@@ -153,7 +156,12 @@ void kernel_main() {
     //
     // However, changing these conditions makes yolov4 and transpose tests fail with a PCC error. For the error to be
     // present in BH, it needs to be run in the full model sweep, but for WH_B0 it can be seen in isolation.
+#ifdef ARCH_QUASAR
+    // No narrow-row pack on Quasar: pack whole tiles into staging; the writer drops each row's padding.
+    constexpr bool use_narrow_row = false;
+#else
     constexpr bool use_narrow_row = last_output_row_num_datums < TILE_WIDTH ? true : false;
+#endif
     constexpr uint32_t row_size = last_output_row_num_datums < TILE_WIDTH ? last_output_row_num_datums : TILE_WIDTH;
 
     DataflowBuffer cb_in_buf(dfb::cb_in);

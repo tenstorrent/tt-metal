@@ -5,8 +5,8 @@
 // Row-major WH transpose: each block of Ht x Wt tiles is tilized, transposed tile by tile, and
 // pack-untilized back to rows.
 //   - dfb::in0 / dfb::tilize / dfb::out: the tilize input, the tilized tiles the transpose reads,
-//     and the pack destination. With OUT_STAGING (sharded path, Ht > 8) the pack destination is
-//     dfb::out_staging instead.
+//     and the pack destination. With OUT_STAGING (sharded path, Ht > 8 or Quasar) the pack destination
+//     is dfb::out_staging instead.
 //   - Ht / Wt / HtWt are compile-time args. num_hw_blocks_per_core is a runtime arg on the
 //     non-sharded path; under SHARDED it is a compile-time arg, as are the output-row and
 //     pack-page settings.
@@ -129,7 +129,12 @@ void kernel_main() {
     //
     // However, changing these conditions makes yolov4 and transpose tests fail with a PCC error. For the error to be
     // present in BH, it needs to be run in the full model sweep, but for WH_B0 it can be seen in isolation.
+#ifdef ARCH_QUASAR
+    // No narrow-row pack on Quasar: pack whole tiles into staging; the writer drops each row's padding.
+    constexpr bool use_narrow_row = false;
+#else
     constexpr bool use_narrow_row = last_output_row_num_datums < TILE_WIDTH ? true : false;
+#endif
     constexpr uint32_t row_size = last_output_row_num_datums < TILE_WIDTH ? last_output_row_num_datums : TILE_WIDTH;
 
 #else
@@ -139,13 +144,14 @@ void kernel_main() {
     constexpr auto dfb_in = dfb::in0;
     constexpr auto dfb_tilize = dfb::tilize;
 #ifdef OUT_STAGING
-    // Sharded path only, when Ht > 8: pack into the staging buffer the writer drains into the
+    // Sharded path only, when Ht > 8 or on Quasar: pack into the staging buffer the writer drains into the
     // output shard. (temporary fix until pack_untilize is fully fixed)
     constexpr auto dfb_out_idx = dfb::out_staging;
 #else
     constexpr auto dfb_out_idx = dfb::out;
 #endif
 
+    DataflowBuffer dfb_in_buf(dfb_in);
     DataflowBuffer dfb_tilize_buf(dfb_tilize);
     DataflowBuffer dfb_out(dfb_out_idx);
 
@@ -163,7 +169,7 @@ void kernel_main() {
             compute_kernel_lib::tilize_config::InitUninitMode::InitAndUninit,
             compute_kernel_lib::tilize_config::WaitMode::WaitBlock,
             compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure,
-            compute_kernel_lib::tilize_config::Fp32Mode::Lossless>(Ht);
+            compute_kernel_lib::tilize_config::Fp32Mode::Lossless>(dfb_in_buf, dfb_tilize_buf, Ht);
 
         // transpose
         dfb_tilize_buf.wait_front(HtWt);
