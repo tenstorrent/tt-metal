@@ -61,8 +61,8 @@ class RolloutBatch:
         completions: B ragged completion token IDs (one per prompt in
             single-generation mode; per prompt-completion pair otherwise).
         logprobs: [B, max_completion_length] float32. Per-generated-token
-            log pi_old(a_t | s_t): the full-vocab log_softmax of the raw logits,
-            without temperature/top_k/top_p. Padding positions are don't-care; the
+            log pi_old(a_t | s_t): the full-vocab log_softmax of logits / temperature
+            (unscaled at temperature 0), without top_k/top_p. Padding positions are don't-care; the
             trainer masks them out.
     """
 
@@ -927,7 +927,7 @@ def layout_microbatch(
 
 
 def policy_nlog_probs(
-    model: Any, inputs: np.ndarray, targets: np.ndarray, *, mapper: Any = None
+    model: Any, inputs: np.ndarray, targets: np.ndarray, *, mapper: Any = None, temperature: float = 1.0
 ) -> ttml.autograd.Tensor:
     """Teacher-forced forward over the :func:`layout_microbatch` tensors.
     Returns ``-log pi(target)`` of shape ``[B_local, Tp]``.
@@ -941,6 +941,8 @@ def policy_nlog_probs(
     # The composite SDPA has no causal default, so a model built with it needs the mask.
     mask = build_causal_mask(Tp, device=True) if getattr(model.config, "use_composite_sdpa", False) else None
     logits = model(x, mask)
+    if temperature > 0 and temperature != 1.0:
+        logits = logits * (1.0 / temperature)
     tgt = ttml.autograd.Tensor.from_numpy(targets, ttnn.Layout.ROW_MAJOR, ttnn.DataType.UINT32, mapper)
     nlog = ttml.ops.loss.cross_entropy_loss(logits, tgt, ttml.ops.ReduceType.NONE)
     return ttml.ops.reshape.reshape(nlog, [B_local, Tp])
@@ -1484,7 +1486,9 @@ class GRPOTrainer:
         """Teacher-forced forward with grad over the :func:`layout_microbatch`
         tensors. Returns ``-log pi(target)`` of shape ``[B_local, Tp]``.
         """
-        return policy_nlog_probs(self.model, inputs, targets, mapper=self._batch_layout.mapper)
+        return policy_nlog_probs(
+            self.model, inputs, targets, mapper=self._batch_layout.mapper, temperature=self.config.temperature
+        )
 
     def _compute_loss_and_backward(
         self,

@@ -428,7 +428,9 @@ def test_save_checkpoint_round_trip_llama(patch_llama_weight_loading, tmp_path):
 def test_policy_forward_is_causal(patch_llama_weight_loading):
     """A change to the last token changes no earlier -log pi; full attention would change them."""
     model, _ = grpo_ttml_model.setup_ttml_model(TINY_TRANSFORMER_CONFIG, DEVICE_CONFIG, HF_MODEL_ID)
-    policy = SimpleNamespace(model=model, _batch_layout=SimpleNamespace(mapper=None))
+    policy = SimpleNamespace(
+        model=model, config=SimpleNamespace(temperature=1.0), _batch_layout=SimpleNamespace(mapper=None)
+    )
     inputs = np.tile(np.arange(1, 33, dtype=np.uint32), (2, 1))
     inputs[1, -1] = 7
 
@@ -907,6 +909,29 @@ def test_train_loop_checkpoint_records_step_lr(monkeypatch):
     run = _run_train_loop_on_host(monkeypatch)
     step_lrs = [metrics["lr"] for metrics in run.metrics_by_step.values()]
     assert run.saved_lrs == step_lrs == [_BASE_LR, _BASE_LR / 2]
+
+
+@pytest.mark.requires_device
+@pytest.mark.parametrize("temperature", [0.0, 1.0, 0.5])
+def test_compute_policy_nlog_probs_divides_logits_by_temperature(temperature):
+    B, Tp, V = 2, 32, 128
+    rng = np.random.default_rng(0)
+    logits_np = rng.normal(scale=3.0, size=(B, 1, Tp, V)).astype(np.float32)
+    targets = rng.integers(0, V, size=(B, Tp)).astype(np.uint32)
+    trainer = GRPOTrainer.__new__(GRPOTrainer)
+    trainer.config = SimpleNamespace(temperature=temperature)
+    trainer._batch_layout = SimpleNamespace(mapper=None)
+    trainer.model = lambda x, mask: ttml.autograd.Tensor.from_numpy(logits_np, ttnn.Layout.TILE, ttnn.DataType.BFLOAT16)
+    trainer.model.config = SimpleNamespace(use_composite_sdpa=False)
+
+    nlog = trainer._compute_policy_nlog_probs(np.zeros((B, Tp), dtype=np.uint32), targets)
+
+    z = logits_np[:, 0] / (temperature if temperature > 0 else 1.0)
+    z_max = z.max(axis=-1, keepdims=True)
+    log_sum_exp = np.log(np.exp(z - z_max).sum(axis=-1)) + z_max[..., 0]
+    expected = log_sum_exp - np.take_along_axis(z, targets[..., None].astype(np.int64), axis=-1)[..., 0]
+    np.testing.assert_allclose(nlog.to_numpy(ttnn.DataType.FLOAT32), expected, rtol=2e-2, atol=5e-2)
+    ttml.autograd.AutoContext.get_instance().reset_graph()
 
 
 def _make_muon_with_adamw():
