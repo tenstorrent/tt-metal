@@ -295,6 +295,9 @@ ProgramDescriptor build_halo_program(
         block_stride  // Block stride
     };
     KernelDescriptor::Defines reader_defines;
+    if (input_tensor.device()->arch() == tt::ARCH::WORMHOLE_B0 && !skip_untilize) {
+        reader_defines.emplace_back("HALO_FLUSH_BLOCK_WRITES", "1");
+    }
     std::vector<uint32_t> core_0_reader_ct_args = common_reader_ct_args;
     std::vector<uint32_t> core_1_reader_ct_args = common_reader_ct_args;
 
@@ -420,7 +423,8 @@ tt::tt_metal::WorkloadDescriptor UntilizeWithHaloProgramFactory::create_workload
         is_in_tiled,
         UNTILIZE_BLOCK_SIZE,
         shard_grid,
-        shard_spec.orientation);
+        shard_spec.orientation,
+        device->arch() == tt::ARCH::WORMHOLE_B0);
 
     const auto& pad_config0 = kernel_config.pad_config0;
     const auto& pad_config1 = kernel_config.pad_config1;
