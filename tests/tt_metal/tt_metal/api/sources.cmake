@@ -2,6 +2,7 @@
 # Module owners should update this file when adding/removing/renaming source files
 
 set(UNIT_TESTS_API_SOURCES
+    allocator/test_address_ranges.cpp
     allocator/test_free_list_opt_allocator.cpp
     allocator/test_l1_banking_allocator.cpp
     allocator/test_overlapped_bank_manager.cpp
