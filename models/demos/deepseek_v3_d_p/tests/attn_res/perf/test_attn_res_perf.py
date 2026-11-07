@@ -90,21 +90,22 @@ _WALL_SAMPLES = 30
 _REPORT_ONLY = os.environ.get("ATTN_RES_PERF_REPORT_ONLY") == "1"
 _LOUDBOX_PERF_SKU = "bh_loudbox"
 _GALAXY = "SP8xTP4"
-# Galaxy end-to-end time (us) of each layer's AttnRes on the CI pool (bh_sc1_high_power), from runs 41501648694,
-# 41501662481 and 41501677551. Production prefill runs untraced, so untraced is held to the traced reference where
-# it reaches it. The untraced ordinary layer does not: its reads are host-dispatch bound on the 8x4 mesh, so it has
-# its own reference and, following the host CPU, a wider band. Untraced timings carry the host's dispatch jitter, so
-# the untraced boundary layer takes the wider band too (run 41946792821 read it at 372 us). Galaxies off the pool can
-# sit outside the band; run them with ATTN_RES_PERF_REPORT_ONLY=1.
+# Galaxy end-to-end time (us) of each layer's AttnRes. The ordinary layer's references are from the CI pool
+# (bh_sc1_high_power), runs 41501648694, 41501662481 and 41501677551. Production prefill runs untraced, and untraced
+# reads are host-dispatch bound on the 8x4 mesh, so each untraced layer has its own reference and, following the host
+# CPU, the wider band; untraced timings also carry the host's dispatch jitter. Galaxies off the pool can sit outside
+# the band; run them with ATTN_RES_PERF_REPORT_ONLY=1.
 #
-# The boundary layer was 394 us while it scored the straddling read as a closed site of the next block's batch.
-# Taking that read as the undivided walk does (a one-site `inter_block` over the inherited set, then the read) makes
-# a split stack bit-identical to the undivided one and costs one more stats/mix pair and read: measured off the CI
-# pool on bh-glx-110-c10u14 (2026-11-07), interleaved A/B, traced 392.9 -> 591.8 us and untraced 374.8 -> 644.6 us,
-# where the old code read 392.9 against its 394 CI reference. Provisional until CI runs re-baseline it.
+# The boundary layer was 394 us traced and untraced (run 41946792821 read untraced at 372 us) while it scored the
+# straddling read as a closed site of the next block's batch. Taking that read as the undivided walk does (a one-site
+# `inter_block` over the inherited set, then the read) makes a split stack bit-identical to the undivided one and
+# costs three more programs (a stats/mix pair and a read). Measured off the CI pool on bh-glx-110-c10u14 (2026-11-07),
+# interleaved A/B: traced 392.9 -> 591.8 us and untraced 374.8 -> 644.6 us, where the old code read 392.9 against its
+# 394 CI reference. Untraced no longer reaches traced, so it has its own reference. Both boundary references are
+# provisional until CI runs re-baseline them.
 _GALAXY_REFERENCE_E2E_US = {
     "traced": {"boundary": 592.0, "ordinary": 118.0},
-    "untraced": {"boundary": 592.0, "ordinary": 150.0},
+    "untraced": {"boundary": 645.0, "ordinary": 150.0},
 }
 # LoudBox references, per SKU: a run opts in with ATTN_RES_PERF_SKU, so a box of another SKU never
 # gates against them. To gate a layout, add its CI numbers here and drop it from _REPORT_ONLY_LAYOUTS.
