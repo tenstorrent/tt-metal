@@ -16,8 +16,9 @@ migration = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(migration)
 
 PLAIN = "actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2"
-PINNED = f"tenstorrent/tt-metal/.github/actions/cachew-checkout@{migration.ACTION_SHA} # cachew checkout"
-STALE = "tenstorrent/tt-metal/.github/actions/cachew-checkout@" + "0" * 40 + " # cachew checkout"
+PINNED = f"{migration.ACTION_REPO}@{migration.ACTION_SHA} # cachew checkout"
+STALE = migration.ACTION_REPO + "@" + "f" * 40 + " # cachew checkout"
+LEGACY = "tenstorrent/tt-metal/.github/actions/cachew-checkout@" + "8" * 40 + " # cachew checkout"
 
 
 class MigrationTests(unittest.TestCase):
@@ -71,6 +72,31 @@ jobs:
     runs-on: tt-ubuntu-2204-large-stable
     steps:
       - uses: {PLAIN} cachew: keep
+"""
+        self.assertEqual(migration.rewrite(before), expected)
+
+    def test_legacy_tt_metal_pins_move_to_the_published_action(self):
+        before = f"""on: push
+jobs:
+  build:
+    runs-on: tt-ubuntu-2204-large-stable
+    steps:
+      - uses: {LEGACY}
+  hosted:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: {LEGACY}
+"""
+        expected = f"""on: push
+jobs:
+  build:
+    runs-on: tt-ubuntu-2204-large-stable
+    steps:
+      - uses: {PINNED}
+  hosted:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: {PLAIN}
 """
         self.assertEqual(migration.rewrite(before), expected)
 
