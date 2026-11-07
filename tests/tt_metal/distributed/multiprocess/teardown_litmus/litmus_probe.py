@@ -21,6 +21,7 @@ Env (all optional):
   PROBE_MESH_ROWS / PROBE_MESH_COLS   the mesh shape (default 8x4); PROBE_MESH_SHAPE_VICTIM "RxC" on the victim
   PROBE_START_DELAY_S / PROBE_START_DELAY_RANK   sleep before importing ttnn on that rank (a late rank)
   PROBE_PIDDIR     directory for rank_<r>.pid files, so the test can signal one rank from outside
+  PROBE_CORE_UNLIMITED=1   raise the core limit before an abort, so the kernel writes a core (P8)
 """
 
 from __future__ import annotations
@@ -65,6 +66,14 @@ def do_fault() -> None:
     if SCENARIO == "raise":
         raise RuntimeError(f"injected failure at {PHASE}")  # the Python exception path: unwinds, atexit runs
     if SCENARIO == "abort":
+        if env("PROBE_CORE_UNLIMITED", "0") == "1":
+            import resource
+
+            try:
+                resource.setrlimit(resource.RLIMIT_CORE, (resource.RLIM_INFINITY, resource.RLIM_INFINITY))
+                mark("core limit raised")
+            except (ValueError, OSError) as e:
+                mark(f"core limit not raised: {e}")
         os.abort()  # the TT_FATAL / std::terminate shape: SIGABRT, no atexit
     if SCENARIO == "exit_nofinalize":
         os._exit(1)

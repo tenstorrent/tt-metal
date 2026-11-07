@@ -44,6 +44,7 @@ from litmus_common import (
     rc_contains,
     run_case,
     solve_cmd,
+    MGD_QUAD,
 )
 
 
@@ -244,6 +245,82 @@ def test_sigterm_at_ttrun_ends():
 @known("P18: a phase-1 (solve) rank killed leaves generate_rank_bindings and prterun forever")
 def test_solve_rank_killed_ends():
     r = run_case("solve_rank_killed", {}, DEADLINE_HANG, cmd=solve_cmd(), phase1_kill=True)
+    ended(r)
+    nonzero(r)
+    clean(r)
+
+
+# ---------------------------------------------------------------------------------------------------------------
+# the rest of the plan's open errors that one host can show
+# ---------------------------------------------------------------------------------------------------------------
+def rank_saw(r, rank: int, marker: str) -> None:
+    """The rank printed this marker at some point (not necessarily its last one)."""
+    assert any(
+        f"[probe r={rank} " in line and marker in line for line in r.log.splitlines()
+    ), f"rank {rank} never printed {marker!r}; it ended at {r.reached.get(rank)!r}\n{r.log[-3000:]}"
+
+
+@known(
+    "P3: the survivor of a dead peer crashes inside its own close (the context barrier throws out of close_impl), so the device is never closed; fix: no collective in close after a detected failure"
+)
+def test_survivor_closes_after_peer_death_ulfm():
+    """Opt-in ULFM so the death is delivered as an error (the only mode in which the survivor runs on); rank 1 killed
+    with the mesh open, rank 0 records the error and goes on to close: its close must complete."""
+    r = run_case(
+        "survivor_close_ulfm",
+        {"PROBE_SCENARIO": "sigkill", "PROBE_PHASE": "after_open", "PROBE_ON_ERROR": "continue"},
+        DEADLINE_HANG,
+        cmd=legacy_cmd("--with-ft ulfm"),
+    )
+    rank_saw(r, 0, "close_done")
+    ended(r)
+    clean(r)
+
+
+@known(
+    "P8: an aborting rank holds the whole job for as long as its core dump takes (38 s on the sandbox with the core limit raised); fix: P1, no SIGABRT on the error path"
+)
+def test_abort_with_core_dump_ends_quickly():
+    """P8's shape: rank 1 aborts with the mesh open and the core limit raised. The job must still end within 20 s
+    with a non-zero code: a slow core dump (apport) holds every other rank for its whole length."""
+    r = run_case(
+        "abort_with_core",
+        {"PROBE_SCENARIO": "abort", "PROBE_PHASE": "after_open", "PROBE_CORE_UNLIMITED": "1"},
+        DEADLINE_END,
+    )
+    ended(r)
+    nonzero(r)
+    assert r.wall_s < 20, f"P8: the aborting rank's core dump held the job for {r.wall_s:.0f} s\n{r.log[-2000:]}"
+    clean(r)
+
+
+@known(
+    "P9: an unsatisfiable mesh graph descriptor makes generate_rank_bindings TT_FATAL on rank 0 while rank 1 waits forever in phase 1"
+)
+def test_unsat_mgd_solve_ends():
+    """A quad-galaxy descriptor asked of the dual-galaxy mock: phase 1 cannot place it and must end non-zero."""
+    r = run_case("unsat_mgd", {}, DEADLINE_HANG, cmd=solve_cmd(mgd=MGD_QUAD))
+    ended(r)
+    nonzero(r)
+    clean(r)
+
+
+@known(
+    "P10: the operation timeout does not cover startup; rank 0 waits the whole 20 s for a late rank with TT_METAL_OPERATION_TIMEOUT_SECONDS=1; fix: bounded discovery (P16) or the launcher's clock (P5)"
+)
+def test_late_rank_in_open_bounded():
+    r = run_case(
+        "late_rank_op_timeout",
+        {"PROBE_START_DELAY_S": "20", "PROBE_START_DELAY_RANK": "1", "TT_METAL_OPERATION_TIMEOUT_SECONDS": "1"},
+        DEADLINE_END,
+    )
+    ended(r)
+    assert r.wall_s < 15, f"rank 0 waited {r.wall_s:.0f} s for the late rank with the timeout at 1 s\n{r.log[-2000:]}"
+
+
+@known("P17: a mesh-shape disagreement between ranks (4x4 against 8x4) is accepted silently and the job exits 0")
+def test_shape_mismatch_refused():
+    r = run_case("shape_mismatch", {"PROBE_MESH_SHAPE_VICTIM": "4x4"}, DEADLINE_END)
     ended(r)
     nonzero(r)
     clean(r)

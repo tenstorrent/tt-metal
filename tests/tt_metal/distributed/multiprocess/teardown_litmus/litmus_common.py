@@ -133,12 +133,15 @@ def legacy_cmd(mpi_extra: str = "", mapping: Path = MAPPING) -> list:
     ]
 
 
-def solve_cmd(mpi_extra: str = "") -> list:
+MGD_QUAD = ROOT / "tt_metal/fabric/mesh_graph_descriptors/32x4_quad_galaxy_torus_xy_graph_descriptor.textproto"
+
+
+def solve_cmd(mpi_extra: str = "", mgd: Path = MGD) -> list:
     """tt-run in new mode: phase 1 (generate_rank_bindings on the mock descriptors) then the ranks."""
     return [
         TTRUN,
         "--mesh-graph-descriptor",
-        str(MGD),
+        str(mgd),
         "--mock-cluster-rank-binding",
         str(MAPPING),
         "--mpi-args",

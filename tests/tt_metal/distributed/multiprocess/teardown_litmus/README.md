@@ -30,6 +30,11 @@ the failure message names the error; the marker is dropped in the PR that fixes 
 | `test_ctrl_c_in_init_leaves_nothing` | SIGINT at tt-run while a rank waits in the context init for a late peer | nothing left 3 s later | fails today, P6 |
 | `test_sigterm_at_ttrun_ends` | SIGTERM at tt-run in a deadlock | the job ends, nothing left | fails today, P7 |
 | `test_solve_rank_killed_ends` | a phase-1 rank killed | tt-run ends non-zero, nothing left | fails today, P18 |
+| `test_survivor_closes_after_peer_death_ulfm` | rank 1 killed with the mesh open, ULFM opted in so the survivor runs on | rank 0's close completes | fails today, P3 |
+| `test_abort_with_core_dump_ends_quickly` | rank 1 aborts with the core limit raised | the job ends non-zero within 20 s | fails today, P8 (38 s) |
+| `test_unsat_mgd_solve_ends` | a quad-galaxy descriptor on the dual-galaxy mock | phase 1 ends non-zero | fails today, P9 |
+| `test_late_rank_in_open_bounded` | rank 1 late by 20 s, operation timeout 1 s | rank 0 does not wait the whole 20 s | fails today, P10 |
+| `test_shape_mismatch_refused` | rank 1 opens 4x4 against 8x4 | exit non-zero | fails today, P17 |
 
 ## MPI only (`test_teardown_litmus_mpi.py`)
 
@@ -52,6 +57,9 @@ recompiled against it; otherwise the build's `teardown_mpi_probe` and the `mpiru
 | `test_mpi_hang_never_ends` | a rank spins, no wall clock | the job ends | fails today, P5 |
 | `test_mpi_wrong_interface_ends` | `btl_tcp_if_include nosuchif` | the job ends | fails today, P14 |
 | `test_mpi_exit_nofinalize_sm_layer_ends` | a rank `_exit`s with the shared-memory layer on | the job ends | fails today, P2 |
+| `test_mpi_singleton_leaves_no_shm` | the C probe alone, no launcher | nothing new in /dev/shm | fails today, P11 |
+| `test_mpi_killed_job_leaves_no_shm` | default transports, SIGKILL at mpirun | no sm_segment left | fails today, P11 |
+| `test_multihost_scripts_use_tcp_only_transport` | static: every bare mpirun in tests/scripts/multihost/*.sh | carries `--mca btl self,tcp` | fails today, P15 (run_dual_t3k_tests.sh) |
 
 Every row kills whatever it left (its own process group, then any launcher or probe process of this user
 that appeared during the row) before the next one starts, so a hang in one row cannot fail the next.
@@ -66,3 +74,10 @@ In CI this is group `teardown-litmus` of `tests/scripts/multihost/run_fabric_cpu
 `fabric-cpu-teardown-litmus` of `tests/pipeline_reorg/fabric_cpu_only_unit_tests.yaml` (the
 `fabric-cpu-only-unit-tests` job of `tm-fabric-tests-impl.yaml`). Deadlines: `TT_LITMUS_DEADLINE` (a row that
 must end, 90 s) and `TT_LITMUS_DEADLINE_HANG` (a row that hangs today, 60 s).
+
+## Not in this lane
+
+Three of the plan's errors need two hosts and stay in the plan's Slurm lanes (tt-blaze `tools/teardown_probe`,
+lanes L1c and L4c): P19 (a lost prted), P20 (a dead peer aborting the survivor through the TCP transport) and
+P22 (a frozen prted). The hardware half of P3 (the device accepted by the next open without a tt-smi reset) is
+the plan's array R5.

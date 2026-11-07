@@ -12,6 +12,7 @@ the error id of the teardown plan (tt-blaze tools/teardown_probe) and fail until
 
 from __future__ import annotations
 
+import re
 import signal
 import sys
 from pathlib import Path
@@ -21,7 +22,19 @@ import pytest
 sys.path.insert(
     0, str(Path(__file__).resolve().parent)
 )  # litmus_common lives next to this file, whatever the import mode
-from litmus_common import known, DEADLINE_END, DEADLINE_HANG, clean, ended, mpi_cmd, nonzero, rank_reached, run_case
+from litmus_common import (
+    ROOT,
+    known,
+    DEADLINE_END,
+    DEADLINE_HANG,
+    clean,
+    ended,
+    mpi_cmd,
+    mpi_probe_path,
+    nonzero,
+    rank_reached,
+    run_case,
+)
 
 NP = {"PROBE_NP": "3"}
 
@@ -145,3 +158,48 @@ def test_mpi_exit_nofinalize_sm_layer_ends():
     )
     ended(r)
     clean(r)
+
+
+# ---- the OpenMPI housekeeping rows and the launch-line rule -----------------------------------------------------
+@known("P11: a singleton (no launcher) never finalizes its shared-memory segment; tt-metal #63870")
+def test_mpi_singleton_leaves_no_shm():
+    """The C probe started on its own, no mpirun: one rank, exit 0, and /dev/shm must hold nothing new."""
+    r = run_case("mpi_singleton", {"PROBE_SCENARIO": "clean", "PROBE_NP": "1"}, DEADLINE_END, cmd=[mpi_probe_path()])
+    ended(r)
+    assert r.exit == 0, str(r)
+    assert not r.shm_leaked, f"R3: the singleton left {r.shm_leaked}"
+
+
+@known("P11: a job killed with the shared-memory layer on leaves its 16 MB sm_segment files in /dev/shm")
+def test_mpi_killed_job_leaves_no_shm():
+    """Default transports (shared memory on), a rank spins, SIGKILL at mpirun: whatever else is left (P7), the
+    segments must not be."""
+    r = run_case(
+        "mpi_sigkill_sm",
+        {**NP, "PROBE_SCENARIO": "victim_hang"},
+        DEADLINE_END,
+        cmd=mpi_cmd(btl=""),
+        launcher_signal=signal.SIGKILL,
+        signal_after=3,
+    )
+    assert not r.shm_leaked, f"R3: /dev/shm segments leaked: {r.shm_leaked}"
+
+
+@known(
+    "P15: every bare mpirun (one not started by tt-run) must carry --mca btl self,tcp, the line tt-run uses; run_dual_t3k_tests.sh launches with the default transports"
+)
+def test_multihost_scripts_use_tcp_only_transport():
+    """Static: each mpirun launch in tests/scripts/multihost/*.sh carries the tcp-only transport, on the line or
+    through the argument variable the script builds with it."""
+    bad = []
+    for sh in sorted((ROOT / "tests/scripts/multihost").glob("*.sh")):
+        text = sh.read_text()
+        has_rule = "--mca btl self,tcp" in text
+        for n, line in enumerate(text.splitlines(), 1):
+            code = line.split("#", 1)[0]
+            if not re.search(r"(^|\s)mpirun(-ulfm)?\s", code):
+                continue
+            if "--mca btl self,tcp" in code or (has_rule and "mpirun_args" in code):
+                continue
+            bad.append(f"{sh.name}:{n}: {code.strip()[:100]}")
+    assert not bad, "mpirun launches without --mca btl self,tcp:\n" + "\n".join(bad)
