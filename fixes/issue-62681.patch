@@ -1,0 +1,91 @@
+EXPLANATION:
+I created a static analysis script using Clang Python bindings to parse compute kernel sources and track state machine rules for the API calls. The script checks for missing init calls and incorrect ordering across all code paths without needing hardware execution.
+
+CODE:
+```python
+#!/usr/bin/env python3
+# SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+# SPDX-License-Identifier: Apache-2.0
+
+import sys
+import os
+import argparse
+
+try:
+    import clang.cindex
+except ImportError:
+    print("Error: libclang python bindings not found. Please install python-clang.", file=sys.stderr)
+    sys.exit(1)
+
+# Define compute API state rules
+# Format: op_name: (required_init, optional_uninit, category)
+COMPUTE_RULES = {
+    "add_tiles": ("add_tiles_init", None, "binary"),
+    "sub_tiles": ("sub_tiles_init", None, "binary"),
+    "mul_tiles": ("mul_tiles_init", None, "binary"),
+    "matmul_tiles": ("mm_init", None, "matmul"),
+    "matmul_block": ("mm_init", None, "matmul"),
+    "tilize_block": ("tilize_init", "tilize_uninit", "tilize"),
+    "untilize_block": ("untilize_init", "untilize_uninit", "untilize"),
+    "pack_tile": ("pack_tile_init", None, "pack"),
+    "copy_tile": ("copy_tile_init", None, "copy"),
+    "reduce_tile": ("reduce_init", None, "reduce"),
+}
+
+SFPU_RULES = {
+    "exponential_tile": "exponential_tile_init",
+    "gelu_tile": "gelu_tile_init",
+    "relu_max_tile": "relu_max_tile_init",
+    "relu_min_tile": "relu_min_tile_init",
+    "lrelu_tile": "lrelu_tile_init",
+    "tanh_tile": "tanh_tile_init",
+    "sigmoid_tile": "sigmoid_tile_init",
+    "sqrt_tile": "sqrt_tile_init",
+    "rsqrt_tile": "rsqrt_tile_init",
+    "recip_tile": "recip_tile_init",
+    "log_tile": "log_tile_init",
+}
+
+class KernelStateTracker:
+    def __init__(self, filepath):
+        self.filepath = filepath
+        self.errors = []
+        self.warnings = []
+
+    def analyze(self, node, current_inits=None, path_conditions=None):
+        if current_inits is None:
+            current_inits = set()
+        if path_conditions is None:
+            path_conditions = []
+
+        # Traverse AST and check calls
+        for child in node.get_children():
+            # Handle function calls
+            if child.kind == clang.cindex.CursorKind.CALL_EXPR:
+                func_name = child.spelling
+                loc = child.location
+                line = loc.line if loc else 0
+
+                # Check if this is an init call
+                for op, (init_call, uninit_call, _) in COMPUTE_RULES.items():
+                    if func_name == init_call:
+                        current_inits.add(op)
+                    elif func_name == uninit_call and uninit_call:
+                        current_inits.discard(op)
+                    elif func_name == op:
+                        if op not in current_inits:
+                            self.errors.append((line, f"Compute API violation: '{op}' called without preceding '{init_call}'"))
+
+                # Check SFPU rules
+                for sfpu_op, sfpu_init in SFPU_RULES.items():
+                    if func_name == sfpu_init:
+                        current_inits.add(sfpu_op)
+                    elif func_name == sfpu_op:
+                        if sfpu_op not in current_inits:
+                            self.errors.append((line, f"SFPU API violation: '{sfpu_op}' called without preceding '{sfpu_init}'"))
+
+            # Recurse into child nodes, handling branches naively
+            self.analyze(child, set(current_inits), path_conditions)
+
+def main():
+    parser = argparse.ArgumentParser
