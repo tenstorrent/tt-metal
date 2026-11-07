@@ -13,7 +13,9 @@
 #include <set>
 #include <sstream>
 #include <string>
+#include <string_view>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -132,7 +134,9 @@ void process_named_args(Program& program, const KernelDescriptor& kernel_descrip
 
     // Build namespace maps for JIT header generation.
     // Names use "ns.field" convention -- split on '.' to produce namespace hierarchy.
-    auto validate_identifier = [](const std::string& id, const std::string& context) {
+    // A fused kernel carries thousands of named args, so names are checked and split as views into the descriptor;
+    // only the namespace maps below copy them.
+    auto validate_identifier = [](std::string_view id, std::string_view context) {
         TT_FATAL(
             !id.empty() && (std::isalpha(id[0]) || id[0] == '_') &&
                 std::all_of(id.begin(), id.end(), [](char c) { return std::isalnum(c) || c == '_'; }),
@@ -140,9 +144,9 @@ void process_named_args(Program& program, const KernelDescriptor& kernel_descrip
             context,
             id);
     };
-    auto split_name = [&validate_identifier](const std::string& name) -> std::pair<std::string, std::string> {
+    auto split_name = [&validate_identifier](std::string_view name) -> std::pair<std::string_view, std::string_view> {
         auto dot = name.find('.');
-        if (dot == std::string::npos) {
+        if (dot == std::string_view::npos) {
             validate_identifier(name, "field");
             return {"", name};
         }
@@ -164,14 +168,14 @@ void process_named_args(Program& program, const KernelDescriptor& kernel_descrip
         uint32_t common_index = static_cast<uint32_t>(kernel_descriptor.common_runtime_args.size());
         for (const auto& arg : named_args.named_common_runtime_args) {
             auto [ns, field] = split_name(arg.name);
-            rt_ns_map[ns].push_back({field, common_index, 1, RuntimeArgDispatch::COMMON});
+            rt_ns_map[std::string(ns)].push_back({std::string(field), common_index, 1, RuntimeArgDispatch::COMMON});
             common_index += 1;
         }
         // Common arrays: N contiguous slots each
         for (const auto& arg : named_args.named_common_runtime_arg_arrays) {
             auto [ns, field] = split_name(arg.name);
             uint32_t len = static_cast<uint32_t>(arg.values.size());
-            rt_ns_map[ns].push_back({field, common_index, len, RuntimeArgDispatch::COMMON});
+            rt_ns_map[std::string(ns)].push_back({std::string(field), common_index, len, RuntimeArgDispatch::COMMON});
             common_index += len;
         }
 
@@ -182,14 +186,15 @@ void process_named_args(Program& program, const KernelDescriptor& kernel_descrip
         }
         for (const auto& arg : named_args.named_per_core_runtime_args) {
             auto [ns, field] = split_name(arg.name);
-            rt_ns_map[ns].push_back({field, per_core_index, 1, RuntimeArgDispatch::PER_CORE});
+            rt_ns_map[std::string(ns)].push_back({std::string(field), per_core_index, 1, RuntimeArgDispatch::PER_CORE});
             per_core_index += 1;
         }
         // Per-core arrays: N contiguous slots each
         for (const auto& arg : named_args.named_per_core_runtime_arg_arrays) {
             auto [ns, field] = split_name(arg.name);
             uint32_t len = arg.core_values.empty() ? 0 : static_cast<uint32_t>(arg.core_values[0].second.size());
-            rt_ns_map[ns].push_back({field, per_core_index, len, RuntimeArgDispatch::PER_CORE});
+            rt_ns_map[std::string(ns)].push_back(
+                {std::string(field), per_core_index, len, RuntimeArgDispatch::PER_CORE});
             per_core_index += len;
         }
 
@@ -198,10 +203,16 @@ void process_named_args(Program& program, const KernelDescriptor& kernel_descrip
 
     // CT namespace map: blaze_ct_args::ns::field (plain constexpr values)
     NamedCTArgNamespaces ct_ns_map;
-    std::set<std::string> emitted_ct_args;
+    std::unordered_set<std::string_view> emitted_ct_args;
+    emitted_ct_args.reserve(
+        named_args.named_compile_time_args.size() + kernel_descriptor.named_compile_time_args.size());
+    // Consecutive names usually share a namespace (one op's args), so the last namespace's entries are kept at hand.
+    std::string_view last_ns;
+    std::vector<std::pair<std::string, uint32_t>>* last_ns_entries = nullptr;
     // New names are unique; legacy entries may repeat with the same value. Names cannot span both fields.
     for (const auto* args : {&named_args.named_compile_time_args, &kernel_descriptor.named_compile_time_args}) {
-        std::unordered_map<std::string, uint32_t> seen_ct_args;
+        std::unordered_map<std::string_view, uint32_t> seen_ct_args;
+        seen_ct_args.reserve(args->size());
         for (const auto& [name, value] : *args) {
             const auto [it, inserted] = seen_ct_args.emplace(name, value);
             TT_FATAL(
@@ -223,10 +234,14 @@ void process_named_args(Program& program, const KernelDescriptor& kernel_descrip
                 "blaze_named_compile_time_args.",
                 name);
             auto [ns, field] = split_name(name);
-            ct_ns_map[ns].emplace_back(field, value);
+            if (last_ns_entries == nullptr || ns != last_ns) {
+                last_ns = ns;
+                last_ns_entries = &ct_ns_map[std::string(ns)];
+            }
+            last_ns_entries->emplace_back(std::string(field), value);
         }
     }
-    kernel->set_named_ct_arg_namespaces(ct_ns_map);
+    kernel->set_named_ct_arg_namespaces(std::move(ct_ns_map));
 }
 
 void validate_cached_runtime_arg_counts(
