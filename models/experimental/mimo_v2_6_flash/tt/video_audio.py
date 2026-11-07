@@ -10,8 +10,8 @@ by the frames' times, and writes ``<|mimo_video_start|> (timestamp <|vision_star
 the same from the item's ``video_audio_n_segs`` / ``video_audio_seg_lens``. vLLM's API has no way to ask for it (its
 ``use_audio_in_video`` adds the audio as a separate item and placeholder), so here:
 
-* ``VideoAudioMixin.apply``: with MIMO_VIDEO_AUDIO=1 (or a request's / the server's ``mm_processor_kwargs``
-  ``{"mimo_video_audio": true}``) each video's audio track is decoded from the video's own bytes (vLLM's ``load_audio``),
+* ``VideoAudioMixin.apply``: with MIMO_VIDEO_AUDIO=1 (the default when audio is served, MIMO_MM_MODALITIES; a request's
+  / the server's ``mm_processor_kwargs`` ``{"mimo_video_audio": true|false}`` overrides it) each video's audio track is decoded from the video's own bytes (vLLM's ``load_audio``),
   resampled to 24 kHz mono (vLLM's resampler, as its parser does for audio items) and kept in the video's loader
   metadata (``mimo_audio``), which goes into the item's hash and survives vLLM's processor cache with the frames
   (tt/video_input.py). A video without an audio track (or whose track fails to decode) stays a plain video (logged).
@@ -34,7 +34,16 @@ import numpy as np
 import torch
 from loguru import logger
 
-VIDEO_AUDIO = os.environ.get("MIMO_VIDEO_AUDIO", "0") == "1"
+
+def _default_video_audio():
+    """On (Xiaomi's API takes a video's audio track: +6.25 tokens a second) when the model serves audio
+    (MIMO_MM_MODALITIES), whose tokenizer and patch encoder the track needs. Video-MME short docs 0-59, 2 fps, 280 tokens
+    a frame pair: 70.0 / 68.3 % with the track, 63.3 / 65.0 / 65.0 % without (Xiaomi's API: 75.0 %)."""
+    modalities = os.environ.get("MIMO_MM_MODALITIES", "image,video,audio").split(",")
+    return "1" if "audio" in modalities else "0"
+
+
+VIDEO_AUDIO = os.environ.get("MIMO_VIDEO_AUDIO", _default_video_audio()) == "1"
 AUDIO_KEY = "mimo_audio"  # 24 kHz mono float32 waveform of the video's audio track, in its loader metadata
 SAMPLE_RATE = 24000
 # The request / server mm_processor_kwargs key (not ``video_audio``: vLLM passes the kwargs on to the checkpoint's

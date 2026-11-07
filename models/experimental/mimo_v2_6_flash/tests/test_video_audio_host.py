@@ -167,7 +167,7 @@ def test_video_with_its_audio_track(processor):
 
 def test_without_audio(processor):
     vocab = processor.info.get_tokenizer().get_vocab()
-    for data, kwargs in ((clip(), {}), (clip(with_audio=False), {"mimo_video_audio": True})):
+    for data, kwargs in ((clip(), {"mimo_video_audio": False}), (clip(with_audio=False), {"mimo_video_audio": True})):
         ids, ph, item = run(processor, data, **kwargs)
         assert vocab["<|mimo_audio_start|>"] not in ids[ph.offset : ph.offset + ph.length]
         assert "va_audio_codes" not in item
@@ -182,3 +182,18 @@ def test_audio_track_shorter_than_the_picture(processor):
     seg_lens = item["video_audio_seg_lens"].data.reshape(-1)[:n_segs].tolist()
     assert n_segs == SECONDS * FPS // 2 and min(seg_lens) > 0, seg_lens
     assert ids[ph.offset : ph.offset + ph.length].count(vocab["<|audio_pad|>"]) == sum(seg_lens)
+
+
+def test_switch(monkeypatch):
+    """MIMO_VIDEO_AUDIO (on by default when audio is served) is the default; a request's or the server's
+    mm_processor_kwargs ``mimo_video_audio`` overrides it either way."""
+    from models.experimental.mimo_v2_6_flash.tt import video_audio
+
+    for default in (True, False):
+        monkeypatch.setattr(video_audio, "VIDEO_AUDIO", default)
+        assert video_audio.wanted({}) is default and video_audio.wanted(None) is default
+        assert video_audio.wanted({"mimo_video_audio": True}) and not video_audio.wanted({"mimo_video_audio": False})
+    monkeypatch.setenv("MIMO_MM_MODALITIES", "image,video")
+    assert video_audio._default_video_audio() == "0"
+    monkeypatch.setenv("MIMO_MM_MODALITIES", "image,video,audio")
+    assert video_audio._default_video_audio() == "1"
