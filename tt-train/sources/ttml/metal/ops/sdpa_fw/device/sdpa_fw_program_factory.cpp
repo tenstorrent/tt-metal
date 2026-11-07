@@ -29,7 +29,9 @@ constexpr auto kComputeKernelPath =
 // writer runtime args
 constexpr uint32_t kOutputBufferIdx = 0;
 constexpr uint32_t kIntermediateBufferIdx = 1U;
+constexpr uint32_t kWriterArgScratch = 2U;  // partials scratch (split units); set at create, never patched
 
+const std::string kSplitUnitsDefKey = "SPLIT_UNITS";
 const std::string kReturnIntermediates = "RETURN_INTERMEDIATES";
 const std::string kUseAttnMaskDefKey = "USE_ATTN_MASK";
 const std::string kCausalMaskDefKey = "CAUSAL_MASK";
@@ -47,8 +49,9 @@ struct SDPAForwardKernels {
 };
 
 // Runtime args: the buffer addresses (reader, writer), then the core's item runs for all three kernels:
-// num_runs, (first_item, num_items) per run.
+// num_units, three words per unit (sdpa_fw_config.hpp).
 void assign_per_core_runtime_args(
+    tt::tt_metal::IDevice* device,
     tt::tt_metal::Program& program,
     const SDPAForwardKernels& kernels,
     const tt::tt_metal::Buffer* query_buffer,
@@ -58,27 +61,33 @@ void assign_per_core_runtime_args(
     const tt::tt_metal::Buffer* gate_buffer,
     const tt::tt_metal::Buffer* output_buffer,
     const tt::tt_metal::Buffer* intermediates_buffer,
+    const tt::tt_metal::Buffer* scratch_buffer,
     uint32_t num_cores_y,
-    const std::vector<CoreItemRuns>& per_core_runs) {
-    for (uint32_t i = 0; i < per_core_runs.size(); i++) {
+    const std::vector<CoreUnits>& per_core_units) {
+    for (uint32_t i = 0; i < per_core_units.size(); i++) {
         const tt::tt_metal::CoreCoord core = {i / num_cores_y, i % num_cores_y};
-        const auto& runs = per_core_runs[i];
+        const auto& units = per_core_units[i];
 
-        std::vector<uint32_t> work_args{static_cast<uint32_t>(runs.size())};
-        for (const auto& run : runs) {
-            work_args.push_back(run.first_item);
-            work_args.push_back(run.num_items);
+        std::vector<uint32_t> work_args{static_cast<uint32_t>(units.size())};
+        for (const auto& unit : units) {
+            const tt::tt_metal::CoreCoord merger_noc = device->worker_core_from_logical_core(
+                tt::tt_metal::CoreCoord{unit.merger_core / num_cores_y, unit.merger_core % num_cores_y});
+            append_unit_words(work_args, unit, merger_noc.x, merger_noc.y);
         }
         std::vector<uint32_t> reader_args = {
             query_buffer->address(),
             key_buffer->address(),
             value_buffer->address(),
             get_address_or_zero(mask_buffer),
-            get_address_or_zero(gate_buffer)};
+            get_address_or_zero(gate_buffer),
+            get_address_or_zero(scratch_buffer)};
         reader_args.insert(reader_args.end(), work_args.begin(), work_args.end());
         SetRuntimeArgs(program, kernels.reader, core, reader_args);
 
-        std::vector<uint32_t> writer_args = {output_buffer->address(), get_address_or_zero(intermediates_buffer)};
+        std::vector<uint32_t> writer_args(kWriterArgScratch + 1U);
+        writer_args[kOutputBufferIdx] = output_buffer->address();
+        writer_args[kIntermediateBufferIdx] = get_address_or_zero(intermediates_buffer);
+        writer_args[kWriterArgScratch] = get_address_or_zero(scratch_buffer);
         writer_args.insert(writer_args.end(), work_args.begin(), work_args.end());
         SetRuntimeArgs(program, kernels.writer, core, writer_args);
 
@@ -145,9 +154,11 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
     const uint32_t minus_one = std::bit_cast<uint32_t>(-1.0F);  // used to transform mask from 1/0 to 0/-1
     const uint32_t custom_inf = std::bit_cast<uint32_t>(1e9F);  // used to transform mask from 0/-1 to 0/-1e9F
 
-    const uint32_t num_cores = std::min(num_available_cores, num_work_units(shape, chunks, num_available_cores));
+    const SDPAForwardSchedule schedule = schedule_for(args.program_config, shape, chunks, num_available_cores);
+    const auto& per_core_units = schedule.per_core;
+    const uint32_t num_cores = static_cast<uint32_t>(per_core_units.size());
     const auto all_cores = tt::tt_metal::num_cores_to_corerangeset(num_cores, compute_with_storage_grid_size);
-    const std::vector<CoreItemRuns> per_core_runs = split_work(shape, chunks, num_cores, num_available_cores);
+    const bool split_units = schedule.num_slots > 0U;
 
     // DST is the register file the math unit computes in: 4 tiles per half in fp32 mode (8 in bf16);
     // the kernels run half-sync, so one pass gets one half.
@@ -172,14 +183,49 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
     // -------------------------------------------------------------------------
 
     // Depths and formats come from the CB plan in sdpa_fw_config.cpp, the same table l1_bytes summed when
-    // resolve_chunks checked the L1 budget. The mask, gate and intermediates CBs are only created when the
-    // config uses them (depth 0 otherwise).
-    for (const SDPAForwardCb& cb : cb_plan(cb_tiles(shape, chunks))) {
+    // resolve_chunks checked the L1 budget. The mask, gate, intermediates and split-unit CBs are only
+    // created when the config uses them (depth 0 otherwise).
+    for (const SDPAForwardCb& cb : cb_plan(cb_tiles(shape, chunks, split_units))) {
         if (cb.tiles > 0U) {
             create_circular_buffer(program, all_cores, cb.index, cb.format, tt::tile_size(cb.format), cb.tiles);
         }
     }
 
+    // Split units: the partials travel through DRAM scratch, one slot per sender, fp32, and the merger
+    // waits on one of its core's semaphores until every sender has bumped it. The scratch is owned by the
+    // cached program, so it lives as long as the cache entry: num_slots * rows * (vWt + 2) fp32 tiles.
+    // An item is cut only when it is heavier than a core's fair share, so the cut items' pieces, and the
+    // slots, number at most num_cores: 120 * 4 * 6 tiles = 11 MiB at D=128 with 4-row items, scaling with
+    // the rows of an item, and less in practice (the default picks need about 60 slots). Shapes with
+    // enough items per core cut nothing and own none. The scratch is DRAM whatever the inputs' placement.
+    // Allocating it per call instead would need the output specs to run the chunk pick and the scheduler on
+    // every launch (the slot count is the schedule's) and a third return tensor through the op; the knob
+    // doc points workloads with many distinct shapes to max_pieces = 1 meanwhile.
+    std::optional<ttnn::Tensor> scratch;
+    if (split_units) {
+        const uint32_t partial_rows = schedule.num_slots * rows;
+        scratch = ttnn::create_device_tensor(
+            tt::tt_metal::TensorSpec(
+                ttnn::Shape(
+                    {1U,
+                     1U,
+                     partial_rows * tt::constants::TILE_HEIGHT,
+                     partial_tiles_per_row(shape) * tt::constants::TILE_WIDTH}),
+                tt::tt_metal::TensorLayout(
+                    tt::tt_metal::DataType::FLOAT32,
+                    tt::tt_metal::Layout::TILE,
+                    tt::tt_metal::MemoryConfig(
+                        tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::DRAM))),
+            device);
+    }
+    // The mergers' semaphores, one per merger a core may hold; the kernels take their ids at fixed
+    // compile-arg positions, so a program without split units passes zeros there.
+    std::vector<uint32_t> semaphore_ids(kMaxMergersPerCore, 0U);
+    if (split_units) {
+        for (uint32_t& id : semaphore_ids) {
+            id = tt::tt_metal::CreateSemaphore(program, all_cores, 0);
+        }
+    }
     // -------------------------------------------------------------------------
     // 3) Create reader/writer kernels
     // -------------------------------------------------------------------------
@@ -225,6 +271,7 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
         enchantum::to_string(output_buffer->buffer_type()));
 
     auto* intermediates_buffer = args.return_intermediates ? output.back().buffer() : nullptr;
+    auto* scratch_buffer = scratch.has_value() ? scratch->buffer() : nullptr;
     if (intermediates_buffer != nullptr) {
         TT_FATAL(
             intermediates_buffer->buffer_type() == ttnn::BufferType::DRAM,
@@ -256,6 +303,9 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
     if (args.has_gate) {
         defines[kHasGateDefKey] = "1";
     }
+    if (split_units) {
+        defines[kSplitUnitsDefKey] = "1";
+    }
 
     // Per-arch math fidelity. Wormhole has HW bug TT #38306: HiFi4 + fp32_dest_acc + matmul_block
     // corrupts FP32 dest accumulation, so we use HiFi3 there. Blackhole is unaffected and uses HiFi4.
@@ -275,11 +325,13 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
         Sq_chunk_t,       // query tile-rows per Q chunk
         heads_per_item,   // Q heads stacked in one item
     };
+    reader_compile_args.insert(reader_compile_args.end(), semaphore_ids.begin(), semaphore_ids.end());
     tt::tt_metal::TensorAccessorArgs(query_buffer).append_to(reader_compile_args);
     tt::tt_metal::TensorAccessorArgs(key_buffer).append_to(reader_compile_args);
     tt::tt_metal::TensorAccessorArgs(value_buffer).append_to(reader_compile_args);
     tt::tt_metal::TensorAccessorArgs(mask_buffer).append_to(reader_compile_args);
     tt::tt_metal::TensorAccessorArgs(gate_buffer).append_to(reader_compile_args);
+    tt::tt_metal::TensorAccessorArgs(scratch_buffer).append_to(reader_compile_args);
 
     kernels.reader = create_reader_kernel(
         program,
@@ -295,8 +347,10 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
         Sq_chunk_t,      // query tile-rows per Q chunk
         heads_per_item,  // Q heads stacked in one item
     };
+    writer_compile_args.insert(writer_compile_args.end(), semaphore_ids.begin(), semaphore_ids.end());
     tt::tt_metal::TensorAccessorArgs(output_buffer).append_to(writer_compile_args);
     tt::tt_metal::TensorAccessorArgs(intermediates_buffer).append_to(writer_compile_args);
+    tt::tt_metal::TensorAccessorArgs(scratch_buffer).append_to(writer_compile_args);
     kernels.writer = create_writer_kernel(
         program, all_cores, /* writer_compile_args */ writer_compile_args, defines, kWriterKernelPath);
 
@@ -348,6 +402,7 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
     // 5) Assign runtime args for each core
     // -------------------------------------------------------------------------
     assign_per_core_runtime_args(
+        device,
         program,
         kernels,
         query_buffer,
@@ -357,8 +412,9 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
         gate_buffer,
         output_buffer,
         intermediates_buffer,
+        scratch_buffer,
         num_cores_y,
-        per_core_runs);
+        per_core_units);
 
     // -------------------------------------------------------------------------
     // 6) Return the fully configured program & relevant shared variables
@@ -369,7 +425,8 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
          /* sdpa_fw_writer_kernel      = */ kernels.writer,
          /* sdpa_fw_compute_kernel     = */ kernels.compute,
          /* num_cores                  = */ num_cores,
-         /* num_cores_y                = */ num_cores_y}};
+         /* num_cores_y                = */ num_cores_y,
+         /* scratch                    = */ std::move(scratch)}};
 }
 
 void SDPAForwardProgramFactory::override_runtime_arguments(
@@ -394,8 +451,8 @@ void SDPAForwardProgramFactory::override_runtime_arguments(
     auto* intermediates_buffer =
         operation_attributes.return_intermediates ? tensor_return_value.back().buffer() : nullptr;
 
-    // Only address arguments need updating here; tile counts remain the same as in create().
-    // No runtime args to update for compute kernels.
+    // Only the input/output addresses change between runs; the scratch tensor is owned by the cached
+    // program, so its address and the work lists stay as create() set them.
     auto& reader_runtime_args = GetRuntimeArgs(program, sdpa_fw_reader_kernel);
     auto& writer_runtime_args = GetRuntimeArgs(program, sdpa_fw_writer_kernel);
 

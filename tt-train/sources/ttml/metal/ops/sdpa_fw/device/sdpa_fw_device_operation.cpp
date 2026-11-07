@@ -210,10 +210,12 @@ void SDPAForwardDeviceOperation::validate_on_program_cache_miss(
 
     // Program config: knob checks and the L1 budget of a fully specified config. The unset knobs are picked
     // by the program factory on a cache miss (this validator also runs on cache hits).
+    const auto grid = query.device()->compute_with_storage_grid_size();
     check_chunks(
         args.program_config,
         shape_of(query, key, value, args.mask_type, args.has_gate, args.return_intermediates),
-        available_l1_bytes(*query.device()));
+        available_l1_bytes(*query.device()),
+        grid.x * grid.y);
 }
 
 spec_return_value_t SDPAForwardDeviceOperation::compute_output_specs(

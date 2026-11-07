@@ -15,14 +15,12 @@
 
 namespace ttml::metal::ops::ring_sdpa_fw {
 
-// Ring SDPA keeps the chunking main ran: one query tile-row per item and, as main's pick_sk_chunk_t, the
-// largest of four, two or one K/V tiles per step that divides the per-device sequence (a ring shard can be
-// a tile or two long). With that, the causal pairs land on the cores exactly as on main. The kernels it
-// runs are the shared sdpa_fw ones, so sdpa_fw_op_test drives this config through the ring steps on one
-// device (the Galaxy ring test is the only multi-device coverage). The chunk knobs for ring come with the
-// cost-based scheduler (https://github.com/tenstorrent/tt-metal/pull/62646) and its own ring CI run.
-SDPAForwardProgramConfig ring_chunking(uint32_t seq_len) {
-    const uint32_t St = seq_len / tt::constants::TILE_HEIGHT;
+// Ring SDPA keeps the program main ran: one query tile-row per item, the largest of four, two or one K/V
+// tiles per step that divides the per-device sequence (a ring shard can be a tile or two long), and the
+// causal pairs on the cores as on main (causal_pairs; never cut). The kernels it runs are the shared
+// sdpa_fw ones, so sdpa_fw_op_test drives this config through the ring steps on one device (the Galaxy
+// ring test is the only multi-device coverage).
+SDPAForwardProgramConfig ring_program_config(uint32_t St) {
     uint32_t Sk_chunk_t = 4U;
     while (Sk_chunk_t > 1U && St % Sk_chunk_t != 0U) {
         Sk_chunk_t /= 2U;
@@ -30,8 +28,18 @@ SDPAForwardProgramConfig ring_chunking(uint32_t seq_len) {
     return SDPAForwardProgramConfig{
         .q_chunk_size = tt::constants::TILE_HEIGHT,
         .k_chunk_size = Sk_chunk_t * tt::constants::TILE_HEIGHT,
-        .heads_per_item = 1U};
+        .heads_per_item = 1U,
+        .max_pieces = 1U,
+        .causal_pairs = true};
 }
+
+namespace {
+
+SDPAForwardProgramConfig ring_program_config_of(const ttnn::Tensor& query) {
+    return ring_program_config(query.padded_shape()[-2] / tt::constants::TILE_HEIGHT);
+}
+
+}  // namespace
 
 RingSDPAFwProgramFactory::cached_mesh_workload_t RingSDPAFwProgramFactory::create_mesh_workload(
     const operation_attributes_t& operation_attributes,
@@ -75,11 +83,13 @@ RingSDPAFwProgramFactory::cached_mesh_workload_t RingSDPAFwProgramFactory::creat
 
         // Create SDPA forward operation with the effective mask type
         // No explicit mask tensor needed - SDPA kernel generates causal mask internally
+        // Main's program (see ring_program_config): no cuts either way, and a split schedule would allocate
+        // its partials scratch through the mesh device, once per coordinate and replicated on every device.
         sdpa_fw::device::operation_attributes_t sdpa_attrs{
             .return_intermediates = true,
             .mask_type = effective_mask_type,
             .dropout_probability = 0.0F,
-            .program_config = ring_chunking(query.padded_shape()[-2])};
+            .program_config = ring_program_config_of(query)};
 
         sdpa_fw::device::tensor_args_t sdpa_tensor_args{
             .query = query,
@@ -146,7 +156,7 @@ void RingSDPAFwProgramFactory::override_runtime_arguments(
             .return_intermediates = true,
             .mask_type = effective_mask_type,
             .dropout_probability = 0.0F,
-            .program_config = ring_chunking(query.padded_shape()[-2])};
+            .program_config = ring_program_config_of(query)};
 
         sdpa_fw::tensor_args_t sdpa_tensor_args{
             .query = query,
