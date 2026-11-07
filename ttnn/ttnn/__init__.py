@@ -536,6 +536,7 @@ from ttnn.operations.normalization import (
     LayerNormDeviceOperation,
     LayerNormMultiCoreProgramFactory,
     LayerNormShardedProgramFactory,
+    LayerNormWidthSplitProgramFactory,
     create_group_norm_input_mask,
     create_group_norm_input_negative_mask,
     create_group_norm_weight_bias_rm,

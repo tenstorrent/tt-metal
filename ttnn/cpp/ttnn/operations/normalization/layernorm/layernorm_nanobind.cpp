@@ -341,14 +341,17 @@ void bind_normalization_layernorm_device_operation(nb::module_& mod) {
             Selects the appropriate program factory based on input tensor's memory layout.
 
             Returns LayerNormShardedProgramFactory for sharded inputs,
-            LayerNormMultiCoreProgramFactory for non-sharded inputs.
+            LayerNormWidthSplitProgramFactory on Blackhole for non-sharded RMSNorm inputs whose few
+            tile rows are split across the width of several cores, and
+            LayerNormMultiCoreProgramFactory for other non-sharded inputs.
 
             Args:
                 operation_attributes (LayerNormParams): Operation parameters.
                 tensor_args (LayerNormInputs): Input tensors.
 
             Returns:
-                Union[LayerNormMultiCoreProgramFactory, LayerNormShardedProgramFactory]:
+                Union[LayerNormMultiCoreProgramFactory, LayerNormShardedProgramFactory,
+                      LayerNormWidthSplitProgramFactory]:
                     The appropriate program factory for the input tensor.
             )doc");
 }
@@ -373,6 +376,7 @@ void bind_normalization_layernorm_program_factory(nb::module_& mod) {
     // nanobind needs it registered to convert the variant, but the factory builds a ProgramSpec and
     // that type family is not exposed to Python.
     nb::class_<ttnn::prim::LayerNormShardedProgramFactory>(mod, "LayerNormShardedProgramFactory");
+    nb::class_<ttnn::prim::LayerNormWidthSplitProgramFactory>(mod, "LayerNormWidthSplitProgramFactory");
 }
 
 void bind_normalization_layernorm(nb::module_& mod) {
