@@ -287,6 +287,7 @@ class TtMiMoModel:
         self.verify_traces = {}
         self._verify_groups = None
         self._verify_active = None
+        self.verify_inputs = None  # the verify traces' persistent inputs (_verify_inputs)
         self.mtp = None  # the MTP drafter (setup_mtp)
         self.dflash = None  # the DFlash drafter (setup_dflash, tt/dflash.py)
         self.spec_inputs = None  # the packed verify / draft uploads (setup_mtp / setup_dflash, tt/spec_inputs.py)
@@ -1726,6 +1727,10 @@ class TtMiMoModel:
             # The drafter's programs too (its setup made the chain): they compile before any capture (TtMiMoMTP.warm,
             # TtDFlash.warm).
             (self.mtp if self.mtp is not None else self.dflash).warm()
+        if (self.mtp is not None or self.dflash is not None) and self.layer_groups is not None:
+            # Every verify variant's programs, and the verify traces' inputs, before any capture too
+            # (capture_verify_trace runs after the decode and prefill captures).
+            self.warm_verify()
         ttnn.synchronize_device(self.mesh_device)
         captured = []
         for sample in variants:
@@ -1846,9 +1851,7 @@ class TtMiMoModel:
         captured before, followed by the MTP history's verify write (``_verify_step``), which reads the tokens and
         positions the relay left."""
         assert self.verify_trace is None and self.layer_groups is not None, "a verify serves vLLM's KV blocks"
-        empty = torch.full((self.max_batch,), -1, dtype=torch.int32)
-        host = self.prepare_decode_inputs_host(torch.zeros(self.max_batch, dtype=torch.int32), empty, serial=True)
-        inputs = [ttnn.to_device(t, self.mesh_device, memory_config=ttnn.DRAM_MEMORY_CONFIG) for t in host]
+        inputs = self._verify_inputs()
         # One capture per attended-group count (attention.verify_variants), every one on the same inputs; the widest
         # last, which is self.verify_trace.
         for variant in verify_variants():
@@ -1860,14 +1863,40 @@ class TtMiMoModel:
         self.verify_trace = self.verify_traces[verify_variants()[-1]]
         self._verify_active = verify_variants()[-1]
 
-    def _capture_verify_variant(self, inputs):
-        """capture_verify_trace for one verify variant (``_verify_groups``) on the trace inputs ``inputs``."""
-        rope = self.rope_tables is not None
+    def _verify_inputs(self):
+        """The verify traces' persistent inputs (every variant's), made on first use: by ``warm_verify``, before any
+        capture (a buffer allocated after a capture can sit where that trace's replays write)."""
+        if self.verify_inputs is None:
+            empty = torch.full((self.max_batch,), -1, dtype=torch.int32)
+            host = self.prepare_decode_inputs_host(torch.zeros(self.max_batch, dtype=torch.int32), empty, serial=True)
+            self.verify_inputs = [
+                ttnn.to_device(t, self.mesh_device, memory_config=ttnn.DRAM_MEMORY_CONFIG) for t in host
+            ]
+        return self.verify_inputs
+
+    def warm_verify(self):
+        """Compile every verify variant (attention.verify_variants) with an idle eager run on the verify traces'
+        inputs, before the first capture (capture_decode_trace): capture_verify_trace runs after the decode and prefill
+        captures, and a program compiled then keeps buffers (and its first run allocates the inputs) where those
+        traces' replays write. Every slot idle: no K / V written."""
+        inputs = self._verify_inputs()
+        for variant in verify_variants():
+            self._verify_groups = variant
+            self._warm_verify_variant(inputs)
+        self._verify_groups = None
+
+    def _warm_verify_variant(self, inputs):
+        """An idle eager verify step of the variant ``_verify_groups`` (warm_verify; a cache hit in a capture)."""
         # The packed uploads still hold the last served step (a recapture): idle them, so the runs below write no K / V.
         self.spec_inputs.reset()
         self._relay()
-        self.spec_inputs.derive_verify(inputs, rope)
+        self.spec_inputs.derive_verify(inputs, self.rope_tables is not None)
         self._release(self._verify_step(inputs))
+
+    def _capture_verify_variant(self, inputs):
+        """capture_verify_trace for one verify variant (``_verify_groups``) on the trace inputs ``inputs``."""
+        rope = self.rope_tables is not None
+        self._warm_verify_variant(inputs)
         ttnn.synchronize_device(self.mesh_device)
         fabric = getattr(self.plan, "fabric_gather", None)
         phase = fabric.phase if fabric is not None else None
@@ -1876,6 +1905,7 @@ class TtMiMoModel:
         self.spec_inputs.derive_verify(inputs, rope)
         output = self._verify_step(inputs)
         ttnn.end_trace_capture(self.mesh_device, trace_id, cq_id=0)
+        _trace_owned(output)  # its outputs, read after each replay, as the decode trace's
         # As the decode traces (capture_decode_trace): an even number of fabric reductions, so verify and decode
         # replays interleave on the gather phases they were captured with.
         fabric = getattr(self.plan, "fabric_gather", None)
