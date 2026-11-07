@@ -82,6 +82,8 @@ void AutoContext::close_device() {
     // from this one would point at addresses the next mesh hands out to other buffers.
     m_ccl_resources.reset();
     m_device_constants.clear();
+    // Its axes and sizes were derived from the mesh being closed.
+    m_parallelism_context.reset();
     m_device = nullptr;
     // Drop the process-global fabric config that open_device_mesh may have
     // installed via enable_fabric(). Without this, fabric stays armed for
@@ -130,6 +132,10 @@ void AutoContext::initialize_distributed_context(int argc, char** argv) {
 
     tt::tt_metal::distributed::multihost::DistributedContext::create(argc, argv);
     m_distributed_context = tt::tt_metal::distributed::multihost::DistributedContext::get_current_world();
+}
+
+bool AutoContext::is_distributed_context_initialized() const {
+    return m_distributed_context != nullptr;
 }
 
 core::TTProfiler& AutoContext::get_profiler() {
