@@ -316,6 +316,24 @@ def _device_tensors(tensor):
     return [ttnn.to_torch(t) for t in ttnn.get_device_tensors(tensor)]
 
 
+# Diagnostics for host-time noise on CI: the CPU the main thread last ran on after each untraced sample.
+_HOST_CPUS = []
+
+
+def _host_cpu():
+    try:
+        with open("/proc/thread-self/stat") as f:
+            return int(f.read().rsplit(")", 1)[1].split()[36])  # field 39: processor
+    except (OSError, ValueError, IndexError):
+        return -1
+
+
+def _host_state():
+    affinity = sorted(os.sched_getaffinity(0))
+    span = f"{affinity[0]}-{affinity[-1]}" if affinity else "none"
+    return f"{len(affinity)} CPUs allowed ({span}), {os.cpu_count()} online, load {os.getloadavg()[0]:.1f}"
+
+
 def _time_untraced(mesh_device, case, start):
     """Host ms of each timed eager forward through sync, and the last forward's per-device output."""
     for _ in range(UNTRACED_WARMUP):  # the first call compiles
@@ -327,6 +345,7 @@ def _time_untraced(mesh_device, case, start):
         out = case.forward(start)
         ttnn.synchronize_device(mesh_device)
         samples.append((time.perf_counter() - t0) * 1e3)
+        _HOST_CPUS.append(_host_cpu())
         if i == UNTRACED_SAMPLES - 1:
             reference = _device_tensors(out)
         ttnn.deallocate(out)
@@ -393,7 +412,9 @@ def test_sparse_mla_perf(mesh_device, device_params, variant, case_name, config_
     )
     start = cache
     samples = {}
+    _HOST_CPUS.clear()
     samples["untraced"], eager_out = _time_untraced(mesh_device, case, start)
+    print(f"{label} host: {_host_state()}; untraced sample CPUs {' '.join(map(str, _HOST_CPUS))}")
     samples["traced"], traced_out = _time_traced(mesh_device, case, start)
     trace_pcc = min(comp_pcc(a, b, TRACE_PCC)[1] for a, b in zip(eager_out, traced_out))
 
