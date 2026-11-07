@@ -23,6 +23,7 @@ set(UNIT_TESTS_LLK_SRC
     test_norm_fidelity.cpp
     test_quasar_mailboxes.cpp
     test_quasar_bfd_datacopy.cpp
+    test_rand_sfpu_compute.cpp
     test_reconfig.cpp
     test_reduce.cpp
     test_rmsnorm_chunked.cpp
