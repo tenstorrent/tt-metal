@@ -1256,6 +1256,31 @@ class TestEdgeCases:
         ttnn_out = ttnn.to_torch(ttnn_out)
         assert_equal(torch_out, ttnn_out)
 
+    @pytest.mark.parametrize(
+        "a_mem, b_mem, out_mem",
+        [
+            (ttnn.L1_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG),
+            (ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG),
+            (ttnn.L1_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG),
+            (ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG),
+        ],
+        ids=["L1+DRAM->L1", "DRAM+L1->L1", "L1+DRAM->DRAM", "DRAM+L1->DRAM"],
+    )
+    @pytest.mark.parametrize("width", [8, 16, 24, 32, 48])
+    def test_rm_mixed_l1_dram_inputs(self, device, a_mem, b_mem, out_mem, width):
+        """Issue #61625: RM width-concat where inputs live in different memory types.
+        L1 and DRAM have different buffer alignments; the reader writes per-input page sizes
+        back-to-back, so common_align_len must account for every input's alignment, not just
+        inputs[0]'s. Previously, L1+DRAM->L1 with widths that fit in one L1-aligned page but
+        not a DRAM-aligned page overflowed the output page and corrupted the next row.
+        """
+        ta = torch.rand(1, 1, 288, width, dtype=torch.bfloat16)
+        tb = torch.rand(1, 1, 288, width, dtype=torch.bfloat16)
+        a = ttnn.from_torch(ta, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=a_mem)
+        b = ttnn.from_torch(tb, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=b_mem)
+        out = ttnn.to_torch(ttnn.concat([a, b], dim=-2, memory_config=out_mem))
+        assert_equal(torch.cat([ta, tb], dim=-2), out)
+
 
 # ===========================================================================
 # 8. Groups parameter (height-sharded only)
