@@ -7,6 +7,37 @@
 #include "api/dataflow/dataflow_api.h"
 #include <ttnn/operations/pool/device/kernels/experimental_device_api.hpp>
 
+template <uint32_t element_size>
+FORCE_INLINE void copy_strided_row(uint32_t out_addr, uint32_t in_addr, uint32_t num_elements, uint32_t out_step) {
+    if constexpr (element_size == 2) {
+        volatile tt_l1_ptr uint16_t* out_stick = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(out_addr);
+        const volatile tt_l1_ptr uint16_t* in_stick = reinterpret_cast<const volatile tt_l1_ptr uint16_t*>(in_addr);
+        uint32_t out_index = 0;
+        for (uint32_t j = 0; j < num_elements; ++j) {
+            out_stick[out_index] = in_stick[j];
+            out_index += out_step;
+        }
+    } else if constexpr (element_size == 4) {
+        volatile tt_l1_ptr uint32_t* out_stick = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_addr);
+        const volatile tt_l1_ptr uint32_t* in_stick = reinterpret_cast<const volatile tt_l1_ptr uint32_t*>(in_addr);
+        uint32_t out_index = 0;
+        for (uint32_t j = 0; j < num_elements; ++j) {
+            out_stick[out_index] = in_stick[j];
+            out_index += out_step;
+        }
+    } else {
+        volatile tt_l1_ptr uint8_t* out_stick = reinterpret_cast<volatile tt_l1_ptr uint8_t*>(out_addr);
+        const volatile tt_l1_ptr uint8_t* in_stick = reinterpret_cast<const volatile tt_l1_ptr uint8_t*>(in_addr);
+        uint32_t out_index = 0;
+        for (uint32_t j = 0; j < num_elements; ++j) {
+            for (uint32_t byte = 0; byte < element_size; ++byte) {
+                out_stick[out_index * element_size + byte] = in_stick[j * element_size + byte];
+            }
+            out_index += out_step;
+        }
+    }
+}
+
 void kernel_main() {
     const uint32_t dst_addr = get_arg_val<uint32_t>(0);
     const uint32_t output_stick_size = get_arg_val<uint32_t>(1);
@@ -116,18 +147,11 @@ void kernel_main() {
             sticks_written++;
 #ifdef LAST_DIM_STRIDED
             // fill the read output row with the input with stride
-            volatile tt_l1_ptr uint8_t* out_stick = reinterpret_cast<volatile tt_l1_ptr uint8_t*>(
-                cb_out.get_read_ptr() + output_offset + page_begins_offset);
-            volatile tt_l1_ptr uint8_t* in_stick =
-                reinterpret_cast<volatile tt_l1_ptr uint8_t*>(cb_in.get_read_ptr() + src_offset + alignment_offset);
-            uint32_t out_index = 0;
-            for (uint32_t j = 0; j < input_stick_size / element_size; j++) {
-                // general writing for all data types byte by byte
-                for (uint32_t byte = 0; byte < element_size; byte++) {
-                    out_stick[out_index * element_size + byte] = in_stick[j * element_size + byte];
-                }
-                out_index += rev_stride[0];
-            }
+            copy_strided_row<element_size>(
+                cb_out.get_read_ptr() + output_offset + page_begins_offset,
+                cb_in.get_read_ptr() + src_offset + alignment_offset,
+                input_stick_size / element_size,
+                rev_stride[0]);
             noc.async_write(cb_out, s0, output_stick_size, {.offset_bytes = output_offset}, {.page_id = dst_stick_id});
             output_offset += output_stick_size;
 #else
