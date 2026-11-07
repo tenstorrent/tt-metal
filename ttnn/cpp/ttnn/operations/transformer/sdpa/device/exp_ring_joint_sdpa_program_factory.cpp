@@ -1484,6 +1484,7 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
     // The mux's map goes in program-local L1 (a circular buffer on the mux cores), so it stays clear of persistent
     // L1 there; its addresses are offsets until the mux publishes the map's base.
     auto mux_kernel_config = tt::tt_fabric::FabricMuxConfig(
+        *mesh_device,
         num_mux_full_size_channels,
         num_mux_header_only_channels,
         num_mux_buffers_per_channel,
@@ -1541,7 +1542,7 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
     fabric_mux_connection_ct_args(num_mux_clients_per_group, mux_kernel_config, writer_fabric_compile_time_args);
 
     // All-gather CT args for the fabric writer (integrated K/V all-gather on MUX client columns)
-    const uint32_t ag_page_size = input_tensor_k.buffer()->page_size();
+    const uint32_t ag_page_size = input_tensor_k.mesh_buffer().page_size();
     const size_t ag_packet_size_bytes = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes(*mesh_device);
     constexpr uint32_t max_scatter_addresses = 4;
     const uint32_t ag_packet_size_in_pages =
@@ -1873,7 +1874,7 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
             if (backward_coord.has_value()) {
                 const auto dst_node_id = mesh_device->get_fabric_node_id(backward_coord.value());
                 auto mux_rt_args = mux_kernel_config.get_fabric_mux_run_time_args(
-                    src_node_id, dst_node_id, link, desc, mux_backward_logical_cores[link]);
+                    *mesh_device, src_node_id, dst_node_id, link, desc, mux_backward_logical_cores[link]);
                 KernelDescriptor::RTArgList mux_args;
                 mux_args.append(mux_rt_args);
                 mux_kernel.emplace_runtime_args(mux_backward_logical_cores[link], mux_args);
@@ -1881,7 +1882,7 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
             if (forward_coord.has_value()) {
                 const auto dst_node_id = mesh_device->get_fabric_node_id(forward_coord.value());
                 auto mux_rt_args = mux_kernel_config.get_fabric_mux_run_time_args(
-                    src_node_id, dst_node_id, link, desc, mux_forward_logical_cores[link]);
+                    *mesh_device, src_node_id, dst_node_id, link, desc, mux_forward_logical_cores[link]);
                 KernelDescriptor::RTArgList mux_args;
                 mux_args.append(mux_rt_args);
                 mux_kernel.emplace_runtime_args(mux_forward_logical_cores[link], mux_args);

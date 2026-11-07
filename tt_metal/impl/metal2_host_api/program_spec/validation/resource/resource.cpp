@@ -21,11 +21,14 @@ void ValidateResourceSpecs(
     const NumBanksFromBufferType& num_banks_from_buffer_type) {
     const ProgramSpec& spec = ctx.spec;
     const CollectedSpecData& collected = ctx.collected;
+    for (const auto& parameter : spec.advanced_options.sram_arena_parameters) {
+        ValidateSRAMArenaParameter(parameter);
+    }
     for (const auto& dfb : spec.dataflow_buffers) {
         ValidateDFBSpec(dfb, collected, l1_alignment, arch, num_banks_from_buffer_type);
     }
     for (const auto& scratchpad : spec.scratchpads) {
-        ValidateScratchpadSpec(scratchpad, arch);
+        ValidateScratchpadSpec(scratchpad, collected, l1_alignment, arch);
     }
     for (const auto& sem : spec.semaphores) {
         ValidateSemaphoreSpec(sem, arch);
@@ -47,6 +50,7 @@ void ValidateResourceUsage(const ValidationContext& ctx, tt::ARCH arch) {
     ValidateTensorParametersUsed(ctx);
     ValidatePerNodeTensorPlacement(ctx);
     ValidatePrefetcherPipesUsed(ctx);
+    ValidateSRAMArenaParametersUsed(ctx);
 }
 
 }  // namespace tt::tt_metal::experimental

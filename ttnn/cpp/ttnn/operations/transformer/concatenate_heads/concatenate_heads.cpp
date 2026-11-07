@@ -13,7 +13,8 @@ using namespace tt::tt_metal;
 
 namespace ttnn::transformer {
 
-ttnn::Tensor concatenate_heads(const Tensor& input_tensor, const std::optional<MemoryConfig>& memory_config) {
+ttnn::Tensor concatenate_heads(
+    const Tensor& input_tensor, const std::optional<MemoryConfig>& memory_config, bool runtime_rows) {
     // Additional validation for concatenate_heads wrapper
     const auto& input_logical_shape = input_tensor.logical_shape();
     const auto head_size = input_logical_shape[-1];
@@ -53,7 +54,7 @@ ttnn::Tensor concatenate_heads(const Tensor& input_tensor, const std::optional<M
             actual_input.device());
     }
 
-    auto output = ttnn::prim::nlp_concat_heads(actual_input, memory_config);
+    auto output = ttnn::prim::nlp_concat_heads(actual_input, memory_config, runtime_rows);
 
     return ttnn::squeeze(output, 1);
 }
