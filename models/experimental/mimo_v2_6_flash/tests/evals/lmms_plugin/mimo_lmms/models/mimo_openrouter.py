@@ -236,6 +236,7 @@ class OpenRouterChat(lmms):
         max_retries=3,
         max_new_tokens=None,
         temperature=None,
+        top_p=None,
         journal=None,
         image_format="png",
         audio_rate=24000,
@@ -261,6 +262,7 @@ class OpenRouterChat(lmms):
         self.retry_cap_s = float(retry_cap_s)
         self.max_new_tokens = int(max_new_tokens) if max_new_tokens not in (None, "", "None") else None
         self.temperature = float(temperature) if temperature not in (None, "", "None") else None
+        self.top_p = float(top_p) if top_p not in (None, "", "None") else None
         self.image_format = image_format.upper()
         self.audio_rate = int(audio_rate)
         self.video_max_bytes = int(float(video_max_mb) * 1024 * 1024)
@@ -442,8 +444,9 @@ class OpenRouterChat(lmms):
             req["max_tokens"] = int(max_tokens)
         temperature = self.temperature if self.temperature is not None else gen_kwargs.get("temperature", 0)
         req["temperature"] = float(temperature or 0)
-        if gen_kwargs.get("top_p") is not None and req["temperature"] > 0:
-            req["top_p"] = float(gen_kwargs["top_p"])
+        top_p = self.top_p if self.top_p is not None else gen_kwargs.get("top_p")
+        if top_p is not None and req["temperature"] > 0:
+            req["top_p"] = float(top_p)
         if self.thinking != "default":
             on = self.thinking == "on"
             if self.target == "openrouter":

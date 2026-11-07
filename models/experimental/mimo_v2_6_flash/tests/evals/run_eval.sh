@@ -111,6 +111,10 @@ run_lmms() {  # $1 task, $2 default thinking
     [ -n "$PROVIDER" ] && args="$args,provider=${PROVIDER//,/+}"
     [ -n "$MAX_TOKENS" ] && args="$args,max_new_tokens=$MAX_TOKENS"
     [ -n "$RETRIES" ] && args="$args,max_retries=$RETRIES"
+    # MM_TEMPERATURE / MM_TOP_P override the task's sampling for every request (e.g. 1.0 / 0.95, the model card's
+    # recommendation, which Xiaomi's endpoint applies even when a request asks for temperature 0).
+    [ -n "${MM_TEMPERATURE:-}" ] && args="$args,temperature=$MM_TEMPERATURE"
+    [ -n "${MM_TOP_P:-}" ] && args="$args,top_p=$MM_TOP_P"
     local extra=()
     [ -n "$LIMIT" ] && extra+=(--limit "$LIMIT")
     # --include_path although the plugin also lists its tasks: lmms-eval 0.7.4 adds a plugin's task dir only after
