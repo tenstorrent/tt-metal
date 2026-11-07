@@ -74,11 +74,14 @@ def linear_program_config(device, rows, in_features, out_features, activation=No
     that to pay off and splits its rows alone, in blocks of up to 4 tile rows. The inner
     dimension goes in blocks of up to 8 tiles, which bounds the input's circular buffer in L1."""
     grid = device.compute_with_storage_grid_size()
-    return _linear_program_config((grid.x, grid.y), rows, in_features, out_features, activation)
+    # Each core's whole share of the rows in one block sizes the circular buffers by that share,
+    # which a reduced grid's L1 does not hold; there blocks of at most 8 tile rows divide it.
+    max_block_h = 8 if reduced_grid(device) else None
+    return _linear_program_config((grid.x, grid.y), rows, in_features, out_features, activation, max_block_h)
 
 
 @functools.lru_cache
-def _linear_program_config(grid, rows, in_features, out_features, activation):
+def _linear_program_config(grid, rows, in_features, out_features, activation, max_block_h=None):
     grid = ttnn.CoreCoord(*grid)
     tile = ttnn.TILE_SIZE
     rows_t = -(-rows // tile)
@@ -95,7 +98,7 @@ def _linear_program_config(grid, rows, in_features, out_features, activation):
             in0_block_w=in0_block_w,
             out_subblock_h=1,
             out_subblock_w=max(w for w in range(1, 5) if per_core_n % w == 0),
-            out_block_h=per_core_m,
+            out_block_h=per_core_m if max_block_h is None else largest_divisor(per_core_m, max_block_h),
             out_block_w=per_core_n,
             per_core_M=per_core_m,
             per_core_N=per_core_n,
@@ -122,7 +125,8 @@ def _linear_program_config(grid, rows, in_features, out_features, activation):
 
 def l1_linear(x, linear, activation=None, dtype=None):
     """``linear`` (a preprocessed Linear's ``weight`` and optional ``bias``) applied to ``x`` into L1,
-    with the bias and ``activation``, a ``ttnn.UnaryOpType``, inside the matmul.
+    DRAM on a reduced grid (activation_memory_config), with the bias and ``activation``, a
+    ``ttnn.UnaryOpType``, inside the matmul.
 
     A matmul with a program config defaults to LoFi; the compute config here is the one ttnn.linear
     picks for bfloat16 operands without a program config: HiFi2, fp32 accumulation for an fp32
@@ -135,7 +139,7 @@ def l1_linear(x, linear, activation=None, dtype=None):
         linear.weight,
         bias=getattr(linear, "bias", None),
         dtype=dtype,
-        memory_config=ttnn.L1_MEMORY_CONFIG,
+        memory_config=activation_memory_config(x.device()),
         program_config=linear_program_config(x.device(), rows, x.shape[-1], linear.weight.shape[-1], activation),
         compute_kernel_config=_linear_compute_config(x.device().arch(), fp32_output),
     )
@@ -210,6 +214,25 @@ def dst_tiles(fp32_dest_acc_en):
     """The tiles a matmul's output subblock may hold: the destination register's half that one
     subblock gets holds 8 tiles, 4 when they are fp32."""
     return 4 if fp32_dest_acc_en else 8
+
+
+# The backbone's and FPN's L1 plan (model_config) is sized for P100's 11x10 grid; a grid with fewer
+# cores runs them from DRAM instead (model_config.tt_resnet_kwargs and tt_fpn_kwargs).
+FULL_GRID_CORES = 110
+
+
+def reduced_grid(device):
+    """Whether ``device``'s grid has fewer cores than the backbone's L1 plan is sized for. Its
+    convs and pools then also keep their config tensors in DRAM: on a few cores L1_SMALL holds
+    only a few banks, which they overflow."""
+    grid = device.compute_with_storage_grid_size()
+    return grid.x * grid.y < FULL_GRID_CORES
+
+
+def activation_memory_config(device):
+    """Where the decoder and head keep their activations: L1 on the full grid, DRAM on a reduced
+    one, whose L1 they would fill."""
+    return ttnn.DRAM_MEMORY_CONFIG if reduced_grid(device) else ttnn.L1_MEMORY_CONFIG
 
 
 def grid_shard_tiles(device, rows):
@@ -364,7 +387,10 @@ class TTConv2D:
             # count is fixed here. Width slices of a TILE output are whole tiles wide, so a
             # conv whose output is W wide takes at most ceil(W / TILE_SIZE) of them.
             assert dram_conv_slices is not None, "a spatial conv with dram_activation needs dram_conv_slices"
-            if dram_height_slices:
+            # A count of 0 leaves it to conv2d, in height slices: its width slices of a large batch
+            # come down to a few pixels, each output row a segment of its own, whose reader
+            # indices then outgrow the circular buffer conv2d sizes for them.
+            if dram_height_slices or dram_conv_slices == 0:
                 slice_type, num_slices = ttnn.Conv2dDRAMSliceHeight, dram_conv_slices
             else:
                 slice_type = ttnn.Conv2dDRAMSliceWidth
@@ -396,7 +422,9 @@ class TTConv2D:
             self.linear_weight = ttnn.to_device(self.weight, self.device)
             self.linear_bias = None if self.bias is None else ttnn.to_device(self.bias, self.device)
             self.linear_program_config = self._linear_program_config(grid, fp32_dest_acc_en)
-            if l1_output:
+            # On a reduced grid an output shard near L1_OUTPUT_MAX_SHARD_BYTES leaves too little
+            # L1 for the ops that follow.
+            if l1_output and not reduced_grid(device):
                 # bfloat8_b is counted as 2 bytes too, which only overstates its shard.
                 self.output_element_bytes = 4 if output_dtype == ttnn.float32 else 2
                 self._l1_output_config(grid, fp32_dest_acc_en)
@@ -429,6 +457,9 @@ class TTConv2D:
         )
         self.linear_output_memory_config = grid_height_sharded(self.device, per_core_m, self.out_channels)
         self.output_in_l1 = True
+
+    # The most tiles of a 2D linear's output block per core on a reduced grid.
+    REDUCED_GRID_OUT_BLOCK_TILES = 128
 
     # A widening linear whose activation gives each grid row fewer tile rows than this keeps
     # ttnn.linear's own split: layer4's 512 -> 2048 runs faster on it than on the 2D split.
@@ -472,15 +503,24 @@ class TTConv2D:
         cols = largest_divisor(out_t, min(grid.x, 8))
         per_core_n = out_t // cols
         block_h = 16
+        per_core_m = math.ceil(rows_t / grid.y)
+        if math.ceil(per_core_m / block_h) * block_h > rows_t:
+            # On a grid one row high, rounding the rows up to whole blocks would ask each core for
+            # more rows than the tensor has; the blocks divide its rows instead.
+            block_h = largest_divisor(per_core_m, block_h)
+        if reduced_grid(self.device):
+            # A reduced grid's few columns leave each core a wide output block, whose output and
+            # intermediate circular buffers outgrow L1 at 16 tile rows.
+            block_h = largest_divisor(per_core_m, max(1, min(block_h, self.REDUCED_GRID_OUT_BLOCK_TILES // per_core_n)))
         subblock_w = largest_divisor(per_core_n, max_subblock)
         return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
             compute_with_storage_grid_size=(cols, grid.y),
             in0_block_w=largest_divisor(in_t, 4),
-            out_subblock_h=2 if 2 * subblock_w <= max_subblock else 1,
+            out_subblock_h=2 if 2 * subblock_w <= max_subblock and block_h % 2 == 0 else 1,
             out_subblock_w=subblock_w,
             out_block_h=block_h,
             out_block_w=per_core_n,
-            per_core_M=math.ceil(math.ceil(rows_t / grid.y) / block_h) * block_h,
+            per_core_M=math.ceil(per_core_m / block_h) * block_h,
             per_core_N=per_core_n,
             transpose_mcast=False,
             fused_activation=relu,

@@ -21,7 +21,7 @@ import ttnn
 
 import torch
 from ..model_config import DeformableAttentionConfig
-from .tt_common import grid_linear_kwargs, l1_if_fits, signpost
+from .tt_common import grid_linear_kwargs, l1_if_fits, reduced_grid, signpost
 
 from loguru import logger
 
@@ -140,6 +140,14 @@ def multi_scale_deformable_attn_fused(
 
     attention_weights = ttnn.to_layout(attention_weights, ttnn.ROW_MAJOR_LAYOUT)
     reference_points = ttnn.to_layout(reference_points, ttnn.ROW_MAJOR_LAYOUT)
+
+    if num_valid_queries_tensor is None and not num_valid_queries and reduced_grid(value.device()):
+        # Without counts each core takes its list of tiles as runtime args, which on a few cores
+        # outgrows their limit. With counts on device a core gets only its index and derives its run.
+        bs, num_queries = attention_weights.shape[0], attention_weights.shape[1]
+        num_valid_queries_tensor = ttnn.full(
+            (bs,), num_queries, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=value.device()
+        )
 
     if value_memory == "dram":
         target_memory_config = ttnn.DRAM_MEMORY_CONFIG

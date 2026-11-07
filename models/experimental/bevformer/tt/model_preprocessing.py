@@ -30,7 +30,7 @@ from models.experimental.bevformer.model_config import (
     tt_fpn_kwargs,
     tt_resnet_kwargs,
 )
-from models.experimental.bevformer.tt.tt_common import conv_output_size, is_pointwise
+from models.experimental.bevformer.tt.tt_common import conv_output_size, is_pointwise, reduced_grid
 from models.experimental.bevformer.tt.tt_resnet import TTResNet
 
 # --- Shared helpers ---------------------------------------------------------------------------
@@ -308,7 +308,10 @@ def create_fpn_parameters(model, input_tensors, tt_kwargs=None):
     ``conv_args`` holds, per conv, the attributes ``TTConv2D`` reads, as
     ``create_resnet_parameters`` records them for the backbone.
     """
-    level_shapes = [(t.shape[0], t.shape[2], t.shape[3]) for t in input_tensors]
+    tt_kwargs = tt_fpn_kwargs() if tt_kwargs is None else tt_kwargs
+    # A per-camera FPN (tt_fpn_kwargs) runs its convs on one camera at a time.
+    batch_size = 1 if tt_kwargs.get("per_camera", False) else None
+    level_shapes = [(batch_size or t.shape[0], t.shape[2], t.shape[3]) for t in input_tensors]
     shapes = list(level_shapes)
     batch, height, width = level_shapes[-1]
     for fpn_conv in model.fpn_convs[len(level_shapes) :]:
@@ -334,7 +337,6 @@ def create_fpn_parameters(model, input_tensors, tt_kwargs=None):
             )
         )
 
-    tt_kwargs = tt_fpn_kwargs() if tt_kwargs is None else tt_kwargs
     dram_activation_levels = tt_kwargs["dram_activation_levels"]
 
     def conv_weights(conv_module, dram_activation):
@@ -499,7 +501,7 @@ def create_bevformer_parameters(model, img, device, dtype=WEIGHT_DTYPE):
     recorded = []
     hook = model.img_backbone.register_forward_hook(lambda _module, _inputs, outputs: recorded.append(outputs))
     try:
-        backbone = create_resnet_parameters(model.img_backbone, images)
+        backbone = create_resnet_parameters(model.img_backbone, images, tt_resnet_kwargs(reduced_grid(device)))
     finally:
         hook.remove()
     features = [feature.as_subclass(torch.Tensor) for feature in recorded[-1]]
@@ -524,7 +526,9 @@ def create_bevformer_parameters(model, img, device, dtype=WEIGHT_DTYPE):
             }
         ),
         backbone=backbone,
-        neck=create_fpn_parameters(model.img_neck, features),
+        neck=create_fpn_parameters(
+            model.img_neck, features, tt_fpn_kwargs(len(model.img_neck.fpn_convs), reduced_grid(device))
+        ),
         transformer=create_perception_transformer_parameters(model.transformer, device, dtype),
         head=create_head_parameters(model.head, device, dtype),
         bev_queries=upload(model.bev_embedding.weight),
