@@ -318,6 +318,12 @@ enum class BinaryOp : std::uint8_t
     DIV           = 3,
     RSUB          = 4,
     POW           = 5,
+    // swiglu_oai has a Blackhole kernel only: the harness dispatches it on Blackhole.
+    // SWIGLU_OAI is also a kernel define (hybrid_program_factory.cpp): the member is spelled with it set aside.
+#pragma push_macro("SWIGLU_OAI")
+#undef SWIGLU_OAI
+    SWIGLU_OAI = 65,
+#pragma pop_macro("SWIGLU_OAI")
     XLOGY         = 6,
     RSHFT         = 7,
     LSHFT         = 8,
@@ -395,12 +401,6 @@ enum class BinaryOp : std::uint8_t
     DEQUANT_INT8              = 60,
     // _float_to_int32_positive_ on raw fp32 words (in0 -> out), the conversion inside the pow kernels.
     FLOAT_TO_INT32_POSITIVE = 61,
-    // swiglu_oai has a Blackhole kernel only: the harness dispatches it on Blackhole.
-    // SWIGLU_OAI is also a kernel define (hybrid_program_factory.cpp): the member is spelled with it set aside.
-#pragma push_macro("SWIGLU_OAI")
-#undef SWIGLU_OAI
-    SWIGLU_OAI = 65,
-#pragma pop_macro("SWIGLU_OAI")
 };
 
 enum class PackMode : std::uint8_t

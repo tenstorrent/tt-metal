@@ -1207,6 +1207,29 @@ def test_eltwise_binary_sfpu_isclose_nan(formats, dest_acc, mathop):
     sfpu_binary(formats, dest_acc, mathop, spec_A=spec_A, spec_B=spec_B)
 
 
+SWIGLU_OAI_SWEEP = dict(
+    formats=input_output_formats([DataFormat.Float16_b]),
+    mathop=[MathOperation.SfpuSwigluOai],
+    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+)
+
+
+@skip_for_quasar
+@skip_for_wormhole
+@parametrize(**SWIGLU_OAI_SWEEP)
+def test_eltwise_binary_sfpu_swiglu_oai(formats, dest_acc, mathop, **run_kwargs):
+    # swiglu_oai(gate, up) with gate = tile0 and up = tile1; Blackhole has the only kernel.
+    # Both signs, past each clamp and below where the logistic factor underflows.
+    sfpu_binary(
+        formats,
+        dest_acc,
+        mathop,
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-65.0, high=11.0),
+        spec_B=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-11.0, high=11.0),
+        **run_kwargs,
+    )
+
+
 # dest_acc stays an axis: a single-axis `parametrize` hands pytest 1-tuples, which `--op` cannot
 # read, so this is the same shape as test_eltwise_binary_sfpu_int_uniform.
 @parametrize(mathop=[MathOperation.SfpuXlogy], dest_acc=[DestAccumulation.Yes])
@@ -1447,29 +1470,6 @@ def _run_quant(mathop, sign_magnitude, **run_kwargs):
 @parametrize(**QUANT_SWEEP)
 def test_eltwise_binary_sfpu_quant(mathop, sign_magnitude, **run_kwargs):
     _run_quant(mathop, sign_magnitude, **run_kwargs)
-
-
-SWIGLU_OAI_SWEEP = dict(
-    formats=input_output_formats([DataFormat.Float16_b]),
-    mathop=[MathOperation.SfpuSwigluOai],
-    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
-)
-
-
-@skip_for_quasar
-@skip_for_wormhole
-@parametrize(**SWIGLU_OAI_SWEEP)
-def test_eltwise_binary_sfpu_swiglu_oai(formats, dest_acc, mathop, **run_kwargs):
-    # swiglu_oai(gate, up) with gate = tile0 and up = tile1; Blackhole has the only kernel.
-    # Both signs, past each clamp and below where the logistic factor underflows.
-    sfpu_binary(
-        formats,
-        dest_acc,
-        mathop,
-        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-65.0, high=11.0),
-        spec_B=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-11.0, high=11.0),
-        **run_kwargs,
-    )
 
 
 # =============================================================================
@@ -2427,9 +2427,6 @@ _BINARY_EDGE_OPS = sorted(
     key=lambda op: op.name,
 )
 
-# Ops whose BinaryOp member and kernel exist on Blackhole only; elsewhere the edge sweep skips them.
-_BLACKHOLE_ONLY_BINARY_OPS = frozenset({MathOperation.SfpuSwigluOai})
-
 assert _BINARY_EDGE_OPS, (
     "no float binary op reaching sfpu_binary() has an entry in "
     "sfpu_domains._OP_SINGULARITIES or in BINARY_SPECIALS_READY_OPS, so "
@@ -2462,11 +2459,6 @@ def test_eltwise_binary_sfpu_edges(formats, dest_acc, mathop, edge_class):
     One variant per (op, class) rather than per op: see the comment above _EDGE_CLASSES for
     why a single tensor holding every pole cannot report which behaviour changed.
     """
-    if (
-        mathop in _BLACKHOLE_ONLY_BINARY_OPS
-        and TestConfig.CHIP_ARCH != ChipArchitecture.BLACKHOLE
-    ):
-        pytest.skip(reason=f"{mathop.name} has a kernel on Blackhole only")
     skip_if_32bit_input_without_dest_acc(formats, dest_acc)
 
     # Cat B. Two independent gates, both must pass: BINARY_SPECIALS_READY_OPS says the golden

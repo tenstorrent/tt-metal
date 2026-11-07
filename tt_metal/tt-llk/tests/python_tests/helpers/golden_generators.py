@@ -4288,23 +4288,6 @@ class BinarySFPUGolden(EltwiseBinaryGolden):
             }
         )
 
-    def _swiglu_oai(self, t1, t2):
-        # The exact product of activations/products/swiglu_oai.json's leaves in float64,
-        # each at its input as the SFPU reads it (a subnormal as 0).
-        a, b = (
-            torch.tensor(
-                0.0 if abs(float(t)) < 2.0**-126 else float(t), dtype=torch.float64
-            )
-            for t in (t1, t2)
-        )
-        return float(
-            (
-                torch.clamp(a, min=None, max=7.0)
-                / (1 + torch.exp(-1.702 * torch.clamp(a, min=None, max=7.0)))
-            )
-            * (torch.clamp(b, min=-7.0, max=7.0) + 1)
-        )
-
     def __call__(
         self,
         operation: MathOperation,
@@ -4628,6 +4611,23 @@ class BinarySFPUGolden(EltwiseBinaryGolden):
         return DataFormat.Float16_b
 
     # Operation methods are covered by Eltwise Binary Golden
+    def _swiglu_oai(self, t1, t2):
+        # The exact product of the leaves in float64,
+        # each at its input as the SFPU reads it (a subnormal as 0).
+        a, b = (
+            torch.tensor(
+                0.0 if abs(float(t)) < 2.0**-126 else float(t), dtype=torch.float64
+            )
+            for t in (t1, t2)
+        )
+        return float(
+            (
+                torch.clamp(a, min=None, max=7.0)
+                / (1 + torch.exp(-1.702 * torch.clamp(a, min=None, max=7.0)))
+            )
+            * (torch.clamp(b, min=-7.0, max=7.0) + 1)
+        )
+
     def _xlogy(self, x, y):
         # xlogy(x, y) = x * log(y), computed in fp32 to mirror the SFPU log path. The random
         # sweeps drive strictly-positive y, where the result is always finite; the y = +0 and
