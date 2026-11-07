@@ -51,10 +51,16 @@ void MorehGroupNormBackwardInputGradOperation::validate_tensors(
         C = input_grad.value().padded_shape()[1];
         TT_FATAL(C % num_groups == 0, "input_grad_shape[1] must be divisible by num_groups.");
     }
-    // gamma_grad (1, 1, 1, C)
+    // gamma (1, 1, 1, C), with C the input's channel count: the reader loads one value per input
+    // channel, so a narrower gamma would be read past its end.
     if (gamma.has_value()) {
-        C = gamma.value().logical_shape()[-1];
-        TT_FATAL(C % num_groups == 0, "gamma_shape[-1] must be divisible by num_groups.");
+        const auto input_channels = input.logical_shape()[1];
+        const auto& gamma_shape = gamma.value().logical_shape();
+        TT_FATAL(
+            gamma_shape[-1] == input_channels && gamma_shape.volume() == input_channels,
+            "moreh_group_norm_backward: gamma shape {} must be (1, 1, 1, {}) to match the input's channels",
+            gamma_shape,
+            input_channels);
     }
 
     // mean (1, 1, N, num_groups)
