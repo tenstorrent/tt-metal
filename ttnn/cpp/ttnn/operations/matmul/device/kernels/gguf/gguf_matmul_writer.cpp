@@ -9,7 +9,7 @@
 // (gguf_matmul_program_factory.cpp Role): whole and finish write the bf16 output tile (c_16); a tail sends its fp32
 // partial (c_17) into its slot of the finishing core's c_18 and counts it on that core's semaphore; a head moves its
 // partial into this core's c_20; a finish first waits for its partials and hands them to the compute kernel. Codebook
-// formats: the writer also runs the second half of the grid lookups of each record the reader asks for, between its own
+// formats: the writer also runs its part of the grid lookups of each record the reader asks for, between its own
 // waits. Compile args: K tiles, tiles per chunk, input semaphore, partial semaphore, format id, the lookup request,
 // answer and page address semaphores, the input's and the output's TensorAccessorArgs. Runtime args: collector, input
 // address, output address, multicast rectangle (NoC x / y start, x / y end, in this writer's NoC order), cores in it,
@@ -60,10 +60,11 @@ void kernel_main() {
     const uint32_t me_x = my_x[noc.get_noc_id()], me_y = my_y[noc.get_noc_id()];
 
     // Codebook formats: per request of the reader (the record's first page in address_sem, then the count of requests
-    // in request_sem), the second half of the index words of each page; the count served goes to answer_sem.
+    // in request_sem), index-word parts [GGUF_READER_PARTS, GGUF_READER_PARTS + GGUF_WRITER_PARTS) of each page; the
+    // count served goes to answer_sem.
     constexpr PageLayout L = page_layout<FMT>();
     constexpr uint32_t P = L.group_tiles / L.page_tiles, page = L.rows * 64;
-    constexpr bool split = is_codebook<FMT>() && P > 1;
+    constexpr bool split = is_codebook<FMT>() && P > 1 && GGUF_WRITER_PARTS > 0;
     Semaphore requests(request_sem), answers(answer_sem), address(address_sem);
     uint32_t served = 0;
     [[maybe_unused]] const std::uint16_t* table = nullptr;
@@ -82,12 +83,14 @@ void kernel_main() {
                 const uint32_t first = address.value();
                 invalidate_l1_cache();
                 for (uint32_t p = 0; p < P; p++) {
-                    lookup_grid<FMT>(
-                        reinterpret_cast<const uint32_t*>(first + p * page + index_offset<FMT>()),
-                        table,
-                        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(first + p * page),
-                        1,
-                        2);
+                    for (uint32_t q = GGUF_READER_PARTS; q < GGUF_READER_PARTS + GGUF_WRITER_PARTS; q++) {
+                        lookup_grid<FMT>(
+                            reinterpret_cast<const uint32_t*>(first + p * page + index_offset<FMT>()),
+                            table,
+                            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(first + p * page),
+                            q,
+                            GGUF_LOOKUP_PARTS);
+                    }
                 }
                 asm volatile("fence" ::: "memory");
                 answers.set(++served);
