@@ -12,14 +12,15 @@
 // block and then its count (b / senders + 1) through the same command buffer, so the count lands after the data.
 // A core counts itself ready for block j as soon as block j - slots has been consumed (an idle core: received). The
 // output (c_16, subblocks of sh x sw tiles in compute order) is written to DRAM whenever this kernel would wait. K
-// split: band 1 sends its fp32 sums per unit of rows (c_17) into c_18 of its partner in band 0 and counts them in the
-// partner's partial semaphore.
+// split: band 1 sends its fp32 sums per unit of rows (c_17) into its partner's c_18 in band 0, a ring of two units:
+// the partner grants each slot once its compute has freed it (counted in the sender's partial semaphore) and counts
+// the units that landed in its own.
 // Compile args: K tiles, N tiles, mc, kb, K blocks, M chunks, slots (<= 4), band cores, four slot ready semaphores, two
 // block count semaphores, a source semaphore, senders (1 or 2), ur, the partial semaphore, then the input's and the
 // output's TensorAccessorArgs. Runtime args: input address, output address, band rectangle (NoC x / y start, x / y
 // end, in this writer's NoC order), first M tile of the band, first N tile, N tiles (0: no output), sh, sw, role (0, or
 // 1 + the sender's index), the two senders' NoC x, y, first K tile of the band, K split role (0: none, 1: send sums,
-// 2: add the partner's), the partner's NoC x, y.
+// 2: add the partner's), the partner's NoC x, y, the plan's N tiles per core (a unit of sums is ur x that).
 
 #include <cstdint>
 
@@ -82,9 +83,11 @@ void kernel_main() {
     const uint32_t partner_x = get_arg_val<uint32_t>(18), partner_y = get_arg_val<uint32_t>(19);
     volatile tt_l1_ptr uint32_t* partial_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(partial_sem));
-    const uint32_t unit_tiles = ur * nc, unit_bytes = unit_tiles * 4096;
+    const uint32_t unit_tiles = ur * get_arg_val<uint32_t>(20), unit_bytes = unit_tiles * 4096;  // ur x the planned nc
     const uint32_t partial_units = active && krole ? mchunks * units : 0;
-    uint32_t units_sent = 0, units_got = 0;
+    uint32_t units_sent = 0, units_got = 0, units_granted = 0;
+    constexpr uint32_t kRecvUnits = 2;  // c_18 holds two units of sums
+    const uint32_t recv_base = get_write_ptr(cb_recv);
 
     const uint32_t in0_base = get_write_ptr(cb_in0);
     const uint32_t source_addr = get_semaphore(source_sem);
@@ -96,10 +99,13 @@ void kernel_main() {
     uint32_t subs_done = 0, chunk = 0, row = 0, col = 0;
     auto drain = [&]() {
         if (krole == 1) {
-            while (units_sent < partial_units && cb_pages_available_at_front(cb_send, unit_tiles)) {
+            // A unit goes into ring slot units_sent % kRecvUnits of the partner's c_18 once the partner has granted
+            // it (credits counted in this core's partial semaphore).
+            while (units_sent < partial_units && *partial_ptr > units_sent &&
+                   cb_pages_available_at_front(cb_send, unit_tiles)) {
                 noc_async_write(
                     get_read_ptr(cb_send),
-                    get_noc_addr(partner_x, partner_y, get_write_ptr(cb_recv) + units_sent * unit_bytes),
+                    get_noc_addr(partner_x, partner_y, recv_base + (units_sent % kRecvUnits) * unit_bytes),
                     unit_bytes);
                 noc_async_write_barrier();  // the sums have landed before they are counted
                 noc_semaphore_inc(partner_sem, 1);
@@ -107,7 +113,13 @@ void kernel_main() {
                 units_sent++;
             }
         } else if (krole == 2) {
-            while (units_got < partial_units && *partial_ptr > units_got) {
+            // Grants the partner a slot once compute has freed it, then pushes each unit that has landed.
+            while (units_granted < partial_units && units_granted < units_got + kRecvUnits &&
+                   cb_pages_reservable_at_back(cb_recv, (units_granted - units_got + 1) * unit_tiles)) {
+                noc_semaphore_inc(partner_sem, 1);
+                units_granted++;
+            }
+            while (units_got < units_granted && *partial_ptr > units_got) {
                 cb_reserve_back(cb_recv, unit_tiles);
                 cb_push_back(cb_recv, unit_tiles);
                 units_got++;

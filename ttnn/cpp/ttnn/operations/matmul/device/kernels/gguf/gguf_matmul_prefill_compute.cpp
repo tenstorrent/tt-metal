@@ -138,7 +138,7 @@ void kernel_main() {
                         cb_wait_front(cb_acc, ur * nc);
                         if (krole == 2) {
                             // Own sums + the partner's, in fp32 on the SFPU, two tiles at a time.
-                            cb_wait_front(cb_recv, ur * nc);
+                            cb_wait_front(cb_recv, ur * nca);
                             for (uint32_t i = 0; i < ur * nc; i += 2) {
                                 const uint32_t n2 = ur * nc - i < 2 ? 1 : 2;
                                 tile_regs_acquire();
@@ -160,7 +160,7 @@ void kernel_main() {
                                 tile_regs_release();
                                 cb_push_back(cb_out, n2);
                             }
-                            cb_pop_front(cb_recv, ur * nc);
+                            cb_pop_front(cb_recv, ur * nca);
                         } else {
                             copy_init(cb_acc);
                             for (uint32_t i = 0; i < ur * nc; i += sub) {
@@ -176,6 +176,11 @@ void kernel_main() {
                                 }
                                 tile_regs_release();
                                 cb_push_back(to, sub);
+                            }
+                            if (krole == 1 && nca > nc) {
+                                // Units of sums are ur x nca tiles, so that they never wrap around the rings.
+                                cb_reserve_back(cb_send, ur * (nca - nc));
+                                cb_push_back(cb_send, ur * (nca - nc));
                             }
                         }
                         cb_pop_front(cb_acc, ur * nc);
