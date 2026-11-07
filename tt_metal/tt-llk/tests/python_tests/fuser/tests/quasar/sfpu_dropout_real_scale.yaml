@@ -1,0 +1,53 @@
+# dropout at p = 0 with scale 1 / (1 - 0.3): unlike 2.0, its fp32 low half is non-zero, so this
+# covers the lower SFPLOADI of the scale. Float32 end to end and unpacked straight to Dest (SrcA
+# would cut the input to tf32), so the kernel matches the golden bit for bit; the tight tolerance
+# then catches a scale missing its low half (1.421875 instead of 1.4285714, 4.7e-3 relative), which
+# the default atol/rtol and PCC let through.
+
+dest_acc: true
+
+operands:
+  - name: "input_A"
+    dims: [32, 32]
+    format: [Float32]
+    stimuli:
+      include:
+        - [-8.0, -2.01]
+        - [-1.99, -1.01]
+        - [-0.99, -0.51]
+        - [-0.49, -0.01]
+        - [0.0101, 0.49]
+        - [0.51, 0.99]
+        - [1.01, 1.99]
+        - [2.01, 8.0]
+        - -8000.0
+        - -100.0
+        - -2.0
+        - -1.0
+        - -0.5
+        - 0.0
+        - 1.0e-40
+        - 0.0001
+        - 0.5
+        - 1.0
+        - 2.0
+        - 100.0
+        - 8000.0
+  - name: "sfpu_out"
+    dims: [32, 32]
+    format: Float32
+    atol: 0.0
+    rtol: 1.0e-6
+
+operations:
+  - math:
+      - {type: "Fpu", in0: "input_A", operation: "Datacopy", unpacker: "UnpackerA", math_fidelity: "LoFi", unpack_to_dest: true, block_size: [32, 32]}
+      - type: "UnarySfpu"
+        operation: [Dropout]
+        approximation_mode: false
+        iterations: 32
+        dropout_probability: 0
+        dropout_scale: 1.4285714285714286
+        block_size: [32, 32]
+    pack:
+      - {output: "sfpu_out", packer: "Packer", block_size: [32, 32]}

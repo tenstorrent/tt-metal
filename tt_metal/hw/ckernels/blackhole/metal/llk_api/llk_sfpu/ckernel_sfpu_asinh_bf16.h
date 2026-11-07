@@ -5,7 +5,6 @@
 #include <cstdint>
 namespace ckernel::sfpu {
 struct AsinhBf16Config {
-    // Fit: degree-8 polynomial on [-10, 10], 2 segments, max pure (continuous) ULP 0.886.
     static constexpr float kNegative[] = {
         __builtin_bit_cast(float, 0x3f80336au),
         __builtin_bit_cast(float, 0x3b8c467cu),
@@ -54,8 +53,9 @@ inline bool bf16_dest_asinh() {
     return false;
 #endif
 }
+// Each call records replay slots 0-8, below replay_buf_offset = 16.
 template <int ITERATIONS = 32>
-inline void calculate_asinh_bf16() {
+__attribute__((noinline)) inline void calculate_asinh_bf16() {
     ckernel::sfpu::bf16::asinh::calculate_symmetric_factored_log<ckernel::sfpu::AsinhBf16Config, ITERATIONS>();
 }
 

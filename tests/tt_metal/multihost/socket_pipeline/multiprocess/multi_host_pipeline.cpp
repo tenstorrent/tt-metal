@@ -23,6 +23,7 @@
 #include <numeric>
 #include <optional>
 #include <tt-metalium/experimental/fabric/physical_system_descriptor.hpp>
+#include <internal/mesh_device.hpp>
 #include "tt_metal/fabric/physical_system_discovery.hpp"
 #include "tt_metal/llrt/tt_cluster.hpp"
 
@@ -1113,7 +1114,7 @@ void run_single_galaxy_pipeline(
     barrier();
     if (is_pipeline_start) {
         const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
-        auto start_device_id = mesh_device->get_device(start_coord)->id();
+        auto start_device_id = internal::get_device(*mesh_device, start_coord)->id();
         auto start_core_coord = mesh_device->worker_core_from_logical_core(logical_coord);
         std::vector<uint64_t> latencies = std::vector<uint64_t>(num_iterations, 0);
         uint32_t base_addr = latency_measurement_address;

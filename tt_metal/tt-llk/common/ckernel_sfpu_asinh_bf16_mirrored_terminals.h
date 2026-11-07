@@ -8,7 +8,7 @@ using namespace ::sfpi;
 using ::sfpi::DataLayout;
 
 template <int CODE>
-inline vFloat target_raw_terminal_value(vFloat computed, float constant = 0.0f)
+__attribute__((always_inline)) inline vFloat target_raw_terminal_value(vFloat computed, float constant = 0.0f)
 {
     static_assert(CODE >= 0 && CODE <= 6, "unsupported raw terminal class");
     if constexpr (CODE == 0)
@@ -43,7 +43,7 @@ inline vFloat target_raw_terminal_value(vFloat computed, float constant = 0.0f)
 
 // A NaN of either sign takes one class: its sign is not information.
 template <int Code>
-inline void nan_class_terminal(vUInt raw_u16, vFloat& result)
+__attribute__((always_inline)) inline void nan_class_terminal(vUInt raw_u16, vFloat& result)
 {
     vUInt exponent_delta = (raw_u16 ^ vUInt(0x00ffu)) & vUInt(0x00ffu);
     v_if (exponent_delta == 0u)

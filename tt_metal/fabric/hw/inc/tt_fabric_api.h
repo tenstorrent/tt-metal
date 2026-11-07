@@ -193,6 +193,41 @@ inline std::uint8_t fabric_set_2d_mcast_route(
     return maps.bytes()[root_y];
 }
 
+// The destination landing of a multicast packet (fabric_set_2d_intermesh_landing_route below): the tree rebuilt
+// rooted at this chip. Out of line and cold (GCC: optimized for size, placed apart), so the full multicast encoder is
+// not inlined into the router's receive path; unicast and intermediate landings stay inline.
+__attribute__((noinline, cold)) inline void fabric_set_2d_intermesh_landing_mcast_route(
+    volatile tt_l1_ptr HybridMeshPacketHeader* packet_header,
+    const routing_l1_info_t& routing_table,
+    uint8_t mesh_y_size,
+    uint8_t mesh_x_size) {
+    // Destination landing, multicast: rebuild the tree rooted at this chip, with the rectangle still
+    // measured from the retained anchor in dst_start_node_id. A multi-output root needs no special
+    // handling here, since a landing is already an RX fanout point.
+    const uint16_t anchor_dev_id = packet_header->dst_start_chip_id;
+    ASSERT(anchor_dev_id < (uint32_t)mesh_y_size * mesh_x_size);
+
+    // Reuse the worker encoder, but root its X tree at this landing column. Local staging avoids
+    // volatile updates while pruning; only the completed map is copied over the source-mesh map.
+    constexpr uint32_t route_buffer_bytes = sizeof(HybridMeshPacketHeader::route_buffer);
+    const uint32_t map_bytes = (uint32_t)mesh_y_size + mesh_x_size;
+    route_2d_detail::Route2DMapStaging<route_buffer_bytes> maps(map_bytes);
+    encode_2d_mcast_maps<route_2d_detail::AlignedMcastTreeEdgeReader>(
+        maps.bytes(),
+        routing_table.route_table_2d.mcast_trees,
+        mesh_y_size,
+        mesh_x_size,
+        anchor_dev_id / mesh_x_size,
+        anchor_dev_id % mesh_x_size,
+        routing_table.my_mesh_coord_x,
+        packet_header->mcast_params[eth_chan_directions::NORTH],
+        packet_header->mcast_params[eth_chan_directions::SOUTH],
+        packet_header->mcast_params[eth_chan_directions::EAST],
+        packet_header->mcast_params[eth_chan_directions::WEST]);
+
+    route_2d_detail::copy_2d_map_to_l1(packet_header->route_buffer, maps.word_data(), map_bytes);
+}
+
 // Intermesh landing encode. Runs on the boundary-facing router before ordinary decode, replacing the
 // incoming source-mesh maps with ones built from this mesh's destination-major route table:
 //
@@ -231,35 +266,11 @@ inline void fabric_set_2d_intermesh_landing_route(
         return;
     }
 
-    // Destination landing, multicast: rebuild the tree rooted at this chip, with the rectangle still
-    // measured from the retained anchor in dst_start_node_id. A multi-output root needs no special
-    // handling here, since a landing is already an RX fanout point.
-    const uint16_t anchor_dev_id = packet_header->dst_start_chip_id;
-    ASSERT(anchor_dev_id < (uint32_t)mesh_y_size * mesh_x_size);
-
-    // Reuse the worker encoder, but root its X tree at this landing column. Local staging avoids
-    // volatile updates while pruning; only the completed map is copied over the source-mesh map.
-    constexpr uint32_t route_buffer_bytes = sizeof(HybridMeshPacketHeader::route_buffer);
-    const uint32_t map_bytes = (uint32_t)mesh_y_size + mesh_x_size;
-    route_2d_detail::Route2DMapStaging<route_buffer_bytes> maps(map_bytes);
-    encode_2d_mcast_maps<route_2d_detail::AlignedMcastTreeEdgeReader>(
-        maps.bytes(),
-        routing_table.route_table_2d.mcast_trees,
-        mesh_y_size,
-        mesh_x_size,
-        anchor_dev_id / mesh_x_size,
-        anchor_dev_id % mesh_x_size,
-        routing_table.my_mesh_coord_x,
-        packet_header->mcast_params[eth_chan_directions::NORTH],
-        packet_header->mcast_params[eth_chan_directions::SOUTH],
-        packet_header->mcast_params[eth_chan_directions::EAST],
-        packet_header->mcast_params[eth_chan_directions::WEST]);
-
-    route_2d_detail::copy_2d_map_to_l1(packet_header->route_buffer, maps.word_data(), map_bytes);
+    fabric_set_2d_intermesh_landing_mcast_route(packet_header, routing_table, mesh_y_size, mesh_x_size);
 }
 
 // Single-hop poke: the destination is exactly one fabric hop away, so this writes LOCAL_DELIVER at
-// the destination's map slot on the hop's axis. Z uses the Y-axis slot.
+// the destination's map slot. Z uses the express axis's slot.
 inline void fabric_set_single_hop_unicast_route_from_direction(
     volatile tt_l1_ptr HybridMeshPacketHeader* packet_header,
     eth_chan_directions next_hop_direction,
@@ -281,12 +292,21 @@ inline void fabric_set_single_hop_unicast_route_from_direction(
     const uint32_t dst_y = dst_dev_id / mesh_x_size;
     const uint32_t dst_x = dst_dev_id % mesh_x_size;
 
-    // The receiving router's decode axis matches the hop axis: N/S/Z hops read the Y byte, E/W hops
-    // the X byte. Other map slots are intentionally left untouched under the one-hop contract.
+    // The receiving router's decode axis matches the hop axis: N/S hops read the Y byte, E/W hops the
+    // X byte, and Z hops whichever byte a Z-facing router decodes (Fabric2DRoutingConfig::decode_action).
+    // Other map slots are intentionally left untouched under the one-hop contract.
     switch (next_hop_direction) {
         case eth_chan_directions::NORTH:
         case eth_chan_directions::SOUTH:
-        case eth_chan_directions::Z: packet_header->route_buffer[dst_y] = Routing2DCodec::ACTION_LOCAL_DELIVER; break;
+            packet_header->route_buffer[dst_y] = Routing2DCodec::ACTION_LOCAL_DELIVER;
+            break;
+        case eth_chan_directions::Z:
+            if (Fabric2DRoutingConfig::express_on(Fabric2DAxis::X)) {
+                packet_header->route_buffer[mesh_y_size + dst_x] = Routing2DCodec::ACTION_LOCAL_DELIVER;
+            } else {
+                packet_header->route_buffer[dst_y] = Routing2DCodec::ACTION_LOCAL_DELIVER;
+            }
+            break;
         case eth_chan_directions::EAST:
         case eth_chan_directions::WEST:
             packet_header->route_buffer[mesh_y_size + dst_x] = Routing2DCodec::ACTION_LOCAL_DELIVER;
