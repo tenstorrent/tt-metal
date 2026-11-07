@@ -6,8 +6,9 @@
 `convert_golden.py` rewrites Miguel's chunked vLLM trace into the per-stream layout `golden.GoldenTrace`
 reads. Pinned here: the conversion round-trips through both readers that consume a golden — K3's
 `GoldenTrace` (the *_matches_golden tests) and the runner producer's KV loaders (the PCC gate) — and the
-converted K3.1 golden is the source trace row for row on the streams those gates score (all 24 DSA
-layers' KV, the FFN output of layers 23 and 92), and enters at the K3.1 checkpoint's own token embedding.
+converted K3.1 golden is the source trace row for row where it copies a stream (all 24 DSA layers' KV, which
+the runner gate scores; the FFN output of layers 23 and 92, which no gate scores, pinned as the input of the
+rebuild), and enters at the K3.1 checkpoint's own token embedding.
 
 And `decoder_output_layer_i` means what it means in K3's golden (`test_golden_contract.py`): the AttnRes running
 sum after layer i, restarted at each seal, which is what the stack's layer tap returns. The K3.1 tracer records
@@ -129,11 +130,13 @@ def test_k31_golden_enters_at_the_k31_token_embedding(k31_trace):
 
 
 def test_k31_golden_serves_the_runner_gate(k31_trace):
-    """What the runner gate and the depth tests score is in the golden, as the source trace's prompt rows.
+    """What the runner gate scores is in the golden, as the source trace's prompt rows; so is the FFN output the
+    running sum is rebuilt from.
 
-    The producer compares the prompt span (`load_trace_golden_span`) of every DSA layer's kvpe; the depth
-    tests read the last layer's decoder output, 23 for the 24-layer leg and 92 for the full model. Both
-    through the readers those consumers use.
+    The producer compares the prompt span (`load_trace_golden_span`) of every DSA layer's kvpe, read through the
+    producer's own loaders. `ffn_output` of layers 23 and 92 (the tracer's `decoder_output`) is pinned to the
+    source; no gate scores it. The `decoder_output` the depth tests score is the rebuilt running sum, pinned by
+    `test_k31_block_ends_match_the_sealed_snapshots`.
     """
     trace_dir = k31_trace.path
     prompt = k31_trace.metadata["n_prompt_tokens"]
