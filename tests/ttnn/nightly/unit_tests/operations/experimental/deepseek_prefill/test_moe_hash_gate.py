@@ -179,6 +179,58 @@ def _hash_gate_case(device, seed, seq_len, total_experts, n_activated_experts, r
     )
 
 
+@pytest.mark.parametrize("score_func", SCORE_FUNCS)
+@pytest.mark.parametrize("n_activated_experts", [17, 24, 32])
+@pytest.mark.parametrize("seq_len", SEQ_LENS[:3], ids=SEQ_LEN_IDS[:3])
+def test_moe_hash_gate_more_than_16_activated_experts(device, seq_len, n_activated_experts, score_func):
+    total_experts, route_scale, vocab_size, epsilon = 256, 1.5, 2048, 1e-20
+    torch.manual_seed(42)
+    logits = distinct_logits((1, 1, seq_len, total_experts))
+    input_ids = torch.randint(0, vocab_size, (seq_len,), dtype=torch.int64)
+    tid2eid = torch.stack([torch.randperm(total_experts)[:n_activated_experts] for _ in range(vocab_size)])
+    ref_indices, ref_weights = hash_gate_golden_act(
+        logits, input_ids, tid2eid, route_scale, epsilon, n_activated_experts, score_func
+    )
+    height_tiles = (seq_len + TILE_H - 1) // TILE_H
+    ids_padded = torch.zeros(height_tiles * TILE_H, dtype=torch.int64)
+    ids_padded[:seq_len] = input_ids
+    tid2eid_padded = torch.zeros(vocab_size, 32, dtype=torch.int16)
+    tid2eid_padded[:, :n_activated_experts] = tid2eid.to(torch.int16)
+    ttnn_weights_out, ttnn_indices_out = ttnn.experimental.deepseek_prefill.moe_hash_gate(
+        ttnn.from_torch(logits, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device),
+        ttnn.from_torch(
+            ids_padded.reshape(height_tiles, TILE_H).to(torch.int32),
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=device,
+        ),
+        ttnn.from_torch(tid2eid_padded, dtype=ttnn.uint16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device),
+        n_activated_experts=n_activated_experts,
+        route_scale=route_scale,
+        epsilon=epsilon,
+        score_func=score_func,
+    )
+    tt_weights = ttnn.to_torch(ttnn_weights_out)[:1, :1, :seq_len, :n_activated_experts]
+    tt_indices = ttnn.to_torch(ttnn_indices_out)[:1, :1, :seq_len, :n_activated_experts]
+    assert_gate_output(
+        tt_indices,
+        tt_weights,
+        ref_indices,
+        ref_weights,
+        n_activated_experts,
+        total_experts,
+        seq_len,
+        False,
+        exact_recall=True,
+        pcc_threshold=0.999,
+    )
+    tt_row_sums = tt_weights.float().reshape(-1, n_activated_experts).sum(-1)
+    ref_row_sums = ref_weights.float().reshape(-1, n_activated_experts).sum(-1)
+    assert torch.allclose(
+        tt_row_sums, ref_row_sums, rtol=1e-2, atol=0
+    ), f"max relative row-sum error {((tt_row_sums - ref_row_sums).abs() / ref_row_sums.abs()).max().item():.4f}"
+
+
 def test_moe_hash_gate_program_cache_hit_patches_addresses(device):
     """A second call with new logits, ids, and tid2eid must hit the cache and still match its own golden."""
     device.enable_program_cache()
