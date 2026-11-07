@@ -34,9 +34,7 @@ def test_bw_hardsigmoid(input_shapes, device):
 
 
 # Exhaustive BF16 accuracy of ttnn.hardsigmoid_bw: every BF16 bit pattern with each gradient in HARDSIGMOID_BW_GRADS.
-#
-# The SFPU may read a subnormal operand as zero, so an output may match torch at the operands or at the
-# operands with subnormals flushed; the pack stores NaN as +inf and -0 as +0, so classes compare as stored.
+# An output may match torch at the operands or with subnormals flushed; classes compare as the pack stores them.
 HARDSIGMOID_BW_GRADS = [
     "1",
     "-1",
@@ -55,6 +53,8 @@ HARDSIGMOID_BW_GRADS = [
     "3.3895313892515355e+38",
     "-3.3895313892515355e+38",
 ]
+# The kernel's largest error over every gradient on silicon, rounded up: a rounding regression exceeds it.
+HARDSIGMOID_BW_MAX_ULP = 0.34
 HARDSIGMOID_BW_SMALLEST_NORMAL = 2.0**-126
 
 
@@ -158,14 +158,13 @@ def test_hardsigmoid_bw_exhaustive_bfloat16(grad, device):
         _hardsigmoid_bw_pure_ulp(_hardsigmoid_bw_reference(g, x, True), actual),
     )
     worst = ulp.argmax()
-    assert ulp.max().item() < 1.0, (
-        f"{(ulp >= 1.0).sum().item()} outputs at or beyond 1 ulp or of the wrong class; worst at "
+    assert ulp.max().item() < HARDSIGMOID_BW_MAX_ULP, (
+        f"{(ulp >= HARDSIGMOID_BW_MAX_ULP).sum().item()} outputs at or beyond {HARDSIGMOID_BW_MAX_ULP} ulp or of the wrong class; worst at "
         f"x={x.flatten()[worst].item()}, grad={g.flatten()[worst].item()}: "
         f"expected {_hardsigmoid_bw_reference(g, x, False).flatten()[worst].item()}, got {actual.flatten()[worst].item()}"
     )
 
 
-# The calls the fused program serves.
 HARDSIGMOID_BW_FUSED_CALLS = (
     "interleaved_tiles",
     "interleaved_l1",
@@ -256,18 +255,7 @@ def _hardsigmoid_bw_placements(shape):
 @pytest.mark.parametrize(
     "call",
     [
-        "interleaved_tiles",
-        "interleaved_l1",
-        "height_sharded",
-        "width_sharded",
-        "block_sharded",
-        "height_sharded_dram",
-        "width_sharded_dram",
-        "nd_sharded",
-        "nd_sharded_dram",
-        "sharded_to_interleaved",
-        "interleaved_to_sharded",
-        "mixed_placements",
+        *HARDSIGMOID_BW_FUSED_CALLS,
         "broadcast_grad",
         "row_major",
         "mixed_layouts",
