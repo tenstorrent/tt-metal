@@ -5,13 +5,16 @@
 #pragma once
 
 #include <variant>
+#include <cstdint>
 #include "ttnn/tensor/tensor.hpp"
 
 namespace ttnn::operations::ternary {
 
 // Type alias for scalar or tensor values
-// Supports float, int, and Tensor types
-using TensorScalarVariant = std::variant<float, int, Tensor>;
+// int64 comes before float on purpose: the nanobind variant caster tries alternatives in
+// order, so with float first every python int landed in the float alternative and was
+// dead past 2^24. int64 holds the full int32 and uint32 ranges exactly.
+using TensorScalarVariant = std::variant<std::int64_t, float, Tensor>;
 
 // Scalar variant for addcmul(float, int32, uint32)
 using ScalarVariant = std::variant<float, int32_t, uint32_t>;
