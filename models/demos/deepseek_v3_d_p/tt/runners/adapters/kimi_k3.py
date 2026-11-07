@@ -302,11 +302,10 @@ class KimiK3Adapter(MLAPrefillAdapter):
         (`modeling_kimi_linear.py`) raises `ImportError` at module import without `fla-core`, which
         is not installed here — `AutoConfig(trust_remote_code=True)` therefore fails before it can
         return anything. `kimi_k3_hf_config` carries the same attributes the MLA and MoE paths read.
-        `max_seq` is a placeholder; the runner overwrites `max_seq_len` on the result.
+        `max_seq` is a placeholder; the runner overwrites `max_seq_len` on the result. Goes through
+        `config_builder`, so a variant (Kimi-K3.1) swaps the config there alone.
         """
-        from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import kimi_k3_hf_config
-
-        return kimi_k3_hf_config()
+        return self.config_builder()
 
     def build_runtime(self, *, mesh_device, hf_config, params):
         """Construct the Kimi-K3 stack and return its runtime.
