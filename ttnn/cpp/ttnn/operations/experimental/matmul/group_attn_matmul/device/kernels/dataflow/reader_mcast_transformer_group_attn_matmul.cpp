@@ -13,10 +13,6 @@
 #include "experimental/kernel_args.h"
 
 void kernel_main() {
-    uint32_t has_work_for_mcast_kv_heads = get_arg(args::has_work_for_mcast_kv_heads);
-    if (has_work_for_mcast_kv_heads == 0) {
-        return;
-    }
     uint32_t has_work_for_q_heads = get_arg(args::has_work_for_q_heads);
     const bool has_work_for_q_heads_bool = has_work_for_q_heads == 1;
 
@@ -46,20 +42,14 @@ void kernel_main() {
     uint32_t in1_mcast_dest_noc_start_y = get_arg(args::in1_mcast_dest_noc_start_y);
     uint32_t in1_mcast_dest_noc_end_x = get_arg(args::in1_mcast_dest_noc_end_x);
     uint32_t in1_mcast_dest_noc_end_y = get_arg(args::in1_mcast_dest_noc_end_y);
-    uint32_t in1_mcast_num_dests = get_arg(args::in1_mcast_num_dests);
     uint32_t in1_mcast_num_cores = get_arg(args::in1_mcast_num_cores);
-    uint32_t in1_mcast_grid_size = get_arg(args::in1_mcast_grid_size);
+    const bool in1_sender_in_receiver_grid = get_arg(args::in1_sender_in_receiver_grid) != 0;
     Semaphore<> sender_sem(sem::in1_mcast_sender);
     Semaphore<> receiver_sem(sem::in1_mcast_receiver);
 
     uint32_t in1_mcast_sender_size_bytes = get_arg(args::in1_mcast_sender_size_bytes);
     uint32_t in1_mcast_sender_id = get_arg(args::in1_mcast_sender_id);
-    uint32_t in1_mcast_sender_num_x = get_arg(args::in1_mcast_sender_num_x);
-    uint32_t in1_mcast_sender_num_y = get_arg(args::in1_mcast_sender_num_y);
-    // The sender NOC coordinate tables follow as varargs: the num_x x entries first, then the num_y y entries.
-
     constexpr bool transpose_hw_bool = get_arg(args::transpose_hw) == 1;
-    constexpr bool row_major = (bool)get_arg(args::row_major);
     constexpr uint32_t out_subblock_w = get_arg(args::out_subblock_w);
 
     Noc noc;
@@ -83,35 +73,15 @@ void kernel_main() {
     // Pre-compute sender core coordinates for each tile_row_id (for receiver to increment sender semaphore)
     uint32_t sender_sem_noc_x_vec[num_rows_in_one_tile];
     uint32_t sender_sem_noc_y_vec[num_rows_in_one_tile];
-    if constexpr (row_major) {
-        uint32_t x = 0, y = 0;
-        for (uint32_t i = 0; i < num_rows_in_one_tile; ++i) {
-            sender_sem_noc_x_vec[i] = get_vararg(x);
-            sender_sem_noc_y_vec[i] = get_vararg(in1_mcast_sender_num_x + y);
-            ++x;
-            if (x == in1_mcast_sender_num_x) {
-                x = 0;
-                ++y;
-            }
-        }
-    } else {
-        uint32_t x = 0, y = 0;
-        for (uint32_t i = 0; i < num_rows_in_one_tile; ++i) {
-            sender_sem_noc_x_vec[i] = get_vararg(x);
-            sender_sem_noc_y_vec[i] = get_vararg(in1_mcast_sender_num_x + y);
-            ++y;
-            if (y == in1_mcast_sender_num_y) {
-                y = 0;
-                ++x;
-            }
-        }
+    for (uint32_t i = 0; i < num_rows_in_one_tile; ++i) {
+        sender_sem_noc_x_vec[i] = get_vararg(2 * i);
+        sender_sem_noc_y_vec[i] = get_vararg(2 * i + 1);
     }
 
     uint32_t local_noc_x = my_x[noc.get_noc_id()];
     uint32_t local_noc_y = my_y[noc.get_noc_id()];
     UnicastEndpoint local_src;
 
-    const bool in1_sender_in_receiver_grid = in1_mcast_sender_id < in1_mcast_grid_size;
     bool mcast_in1_to_local_dfb = false;
 #ifdef IN1_SHARDED
     // Only used for sharded
@@ -223,9 +193,9 @@ void kernel_main() {
 #endif
 
                                 // wait until all in1 mcast destinations have atomically incremented the in1
-                                // semaphore_addr (i.e. its value should be in1_mcast_num_dests), then reset the
+                                // semaphore_addr (i.e. its value should be in1_mcast_num_cores), then reset the
                                 // semaphore_addr value back to zero for the next block
-                                sender_sem.wait(in1_mcast_num_dests);
+                                sender_sem.wait(in1_mcast_num_cores);
                                 sender_sem.set(0);
 
                                 // Now we have the block in the DFB address, we can mcast to dests!
