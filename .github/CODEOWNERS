@@ -219,6 +219,7 @@ tt_metal/impl/per_core_allocation/ @yugaoTT @cfjchu @tenstorrent/codeowner-bypas
 tt_metal/impl/profiler/ @mo-tenstorrent @akerteszTT @yusufbashiTT @tenstorrent/codeowner-bypass
 tt_metal/impl/program/ @abhullar-tt @tt-asaigal @tt-aho @tenstorrent/metalium-runtime-performance @tenstorrent/codeowner-bypass
 tt_metal/impl/sources.cmake @abhullar-tt @jbaumanTT @tt-asaigal @tt-aho @cfjchu @riverwuTT @akerteszTT @tenstorrent/codeowner-bypass
+tt_metal/impl/sram_arena/ @riverwuTT @akerteszTT @tenstorrent/codeowner-bypass
 tt_metal/impl/sub_device/ @abhullar-tt @tt-asaigal @tt-aho @tenstorrent/metalium-runtime-performance @tenstorrent/codeowner-bypass
 tt_metal/impl/tensor/ @akerteszTT @riverwuTT @aliaksei-sala @tenstorrent/codeowner-bypass
 tt_metal/impl/threading/ @cfjchu @tt-asaigal @msudumbrekar-TT @ezaiakinTT @tenstorrent/codeowner-bypass
