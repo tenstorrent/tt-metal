@@ -14,8 +14,8 @@
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
-#include <tt-metalium/tt_align.hpp>
 #include <tt-metalium/math.hpp>
+#include <internal/mesh_device.hpp>
 #include "ttnn/operations/experimental/ccl/send_recv_async/send_recv_utils.hpp"
 
 using namespace tt::constants;
@@ -39,7 +39,8 @@ SenderConnections collect_sender_connections(
     const auto* socket_mesh_device = mesh_socket.get_config_buffer()->device();
     SenderConnections connections;
     for (const auto& connection : mesh_socket.get_config().socket_connection_config) {
-        if (socket_mesh_device->get_device(connection.sender_core.device_coord)->id() == target_device->id()) {
+        if (tt::tt_metal::internal::get_device(*socket_mesh_device, connection.sender_core.device_coord)->id() ==
+            target_device->id()) {
             connections.core_coords.push_back(connection.sender_core.core_coord);
             connections.sender_fabric_node_ids.push_back(
                 input_tensor.device()->get_fabric_node_id(connection.sender_core.device_coord));
@@ -80,8 +81,8 @@ ProgramDescriptor SendDirectAsyncProgramFactory::create_descriptor(
 
     // cores must not exceed available fabric links
     {
-        auto available_link_indices =
-            tt::tt_fabric::get_forwarding_link_indices(receiver_fabric_node_ids[0], sender_fabric_node_ids[0]);
+        auto available_link_indices = tt::tt_fabric::get_forwarding_link_indices(
+            *input_tensor.device(), receiver_fabric_node_ids[0], sender_fabric_node_ids[0]);
         uint32_t num_available_links = available_link_indices.size();
 
         TT_FATAL(
@@ -94,11 +95,11 @@ ProgramDescriptor SendDirectAsyncProgramFactory::create_descriptor(
 
     auto max_alignment = std::max(
         target_device->allocator()->get_alignment(mesh_socket.get_config().socket_mem_config.socket_storage_type),
-        input_tensor.buffer()->alignment());
+        input_tensor.mesh_buffer().alignment());
 
-    auto input_page_size = input_tensor.buffer()->aligned_page_size();
+    auto input_page_size = input_tensor.mesh_buffer().aligned_page_size();
     auto socket_aligned_page_size = tt::align(input_page_size, max_alignment);
-    auto total_num_pages = input_tensor.buffer()->num_pages();
+    auto total_num_pages = input_tensor.mesh_buffer().num_pages();
 
     uint32_t pages_per_core = total_num_pages / num_cores;
     uint32_t remainder_pages = total_num_pages % num_cores;
@@ -250,11 +251,11 @@ ProgramDescriptor SendDirectAsyncProgramFactory::create_descriptor(
         reader.runtime_args.emplace_back(
             sender_core_coord,
             KernelDescriptor::CoreRuntimeArgs{
-                input_tensor.buffer()->address(),  // smuggled-rta-ok: patched in override_runtime_arguments
-                pages_for_this_core,               // num_pages
-                page_start_offset,                 // page_start_offset
-                num_whole_packets,                 // num_whole_packets
-                num_pages_remainder,               // num_pages_remainder
+                input_tensor.mesh_buffer().address(),  // smuggled-rta-ok: patched in override_runtime_arguments
+                pages_for_this_core,                   // num_pages
+                page_start_offset,                     // page_start_offset
+                num_whole_packets,                     // num_whole_packets
+                num_pages_remainder,                   // num_pages_remainder
             });
 
         std::vector<uint32_t> writer_rt_args = {
@@ -267,10 +268,12 @@ ProgramDescriptor SendDirectAsyncProgramFactory::create_descriptor(
 
         const auto& sender_fabric_node_id = sender_fabric_node_ids[core_idx];
         const auto& receiver_fabric_node_id = receiver_fabric_node_ids[core_idx];
-        auto link_indices = tt::tt_fabric::get_forwarding_link_indices(sender_fabric_node_id, receiver_fabric_node_id);
+        auto link_indices = tt::tt_fabric::get_forwarding_link_indices(
+            *input_tensor.device(), sender_fabric_node_id, receiver_fabric_node_id);
 
         uint32_t selected_link_index = link_indices[core_idx % link_indices.size()];
         tt::tt_fabric::append_fabric_connection_rt_args<ProgramDescriptor>(
+            *input_tensor.device(),
             sender_fabric_node_id,
             receiver_fabric_node_id,
             selected_link_index,
@@ -302,7 +305,7 @@ void SendDirectAsyncProgramFactory::override_runtime_arguments(
     // Everything else in the runtime args (page counts, offsets, fabric connection trailers) derives
     // from the tensor spec and socket topology, both of which are in the program hash — so on a cache
     // hit only these two base addresses can have moved.
-    const uint32_t input_base_addr = input_tensor.buffer()->address();
+    const uint32_t input_base_addr = input_tensor.mesh_buffer().address();
     const uint32_t socket_config_addr = mesh_socket.get_config_buffer()->address();
 
     for (const auto& sender_core_coord :

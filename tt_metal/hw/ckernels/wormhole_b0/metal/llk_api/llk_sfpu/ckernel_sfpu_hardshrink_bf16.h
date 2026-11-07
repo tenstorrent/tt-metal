@@ -29,12 +29,10 @@ inline bool bf16_dest_hardshrink() {
     return false;
 #endif
 }
+// Each call records replay slots 0-12, below replay_buf_offset = 16.
 template <int ITERATIONS = 32>
-inline void calculate_hardshrink_bf16() {
+__attribute__((noinline)) inline void calculate_hardshrink_bf16() {
     ckernel::sfpu::bf16::hardshrink::calculate_simple_forward<ckernel::sfpu::HardshrinkBf16Config, ITERATIONS>();
-}
-inline void init_hardshrink_bf16() {
-    ckernel::sfpu::bf16::hardshrink::init_simple_forward<ckernel::sfpu::HardshrinkBf16Config>();
 }
 
 }  // namespace ckernel::sfpu

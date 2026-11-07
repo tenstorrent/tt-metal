@@ -9,6 +9,7 @@
 #include "ckernel.h"
 #include "llk_defs.h"
 #include "llk_memory_checks.h"
+#include "quasar_test_common.h"
 #include "sfpu_stub.h"
 #include "tensor_shape.h"
 
@@ -27,12 +28,15 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const FormatConfig& formats = params.formats;
 #endif
 #ifndef SPEED_OF_LIGHT
-    const std::uint32_t TEST_FACE_R_DIM = params.TEST_FACE_R_DIM;
-    const std::uint32_t num_faces       = params.num_faces;
-    const Operand& buffer_A             = params.buffer_A;
-    const Operand& buffer_B             = params.buffer_B;
-    const std::uint32_t TILE_CNT        = params.TILE_CNT;
+    const std::uint32_t TEST_FACE_R_DIM    = params.TEST_FACE_R_DIM;
+    const std::uint32_t num_faces          = params.num_faces;
+    const Operand& buffer_A                = params.buffer_A;
+    const Operand& buffer_B                = params.buffer_B;
+    const std::uint32_t TILE_CNT           = params.TILE_CNT;
+    const std::uint32_t NUM_TILES_IN_BLOCK = params.NUM_TILES_IN_BLOCK;
 #endif
+    // One DEST section per block of NUM_TILES_IN_BLOCK tiles.
+    const std::uint32_t num_blocks = dest_section_count(TILE_CNT, NUM_TILES_IN_BLOCK);
     // allocate srcA (order matters: A before B)
     const auto bfd_a = ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Unp0>(
         ckernel::tensor_shape_from_num_faces(TEST_FACE_R_DIM, num_faces), L1_ADDRESS(buffer_A[0]), formats.unpack_A_src);
@@ -50,17 +54,18 @@ void run_kernel(RUNTIME_PARAMETERS params)
         _llk_unpack_dest_init_();
         _llk_unpack_unary_operand_to_dest_init_(bfd_a);
         // Seed the semaphores this thread posts (max N = sections in flight: 1 in SyncFull, 2 in SyncHalf) in front of
-        // its first wait and post on them, then raise the startup barrier behind the seeds. Math passes it before its
-        // first wait on UNPACK_MATH, so no SEMINIT lands on a pending SEMWAIT and no post precedes its SEMINIT (seen on
-        // the emulator as the unpacker running through every tile before the packer's first read).
+        // its first wait and post on them. Math spins until the first UNPACK_MATH post before its first wait, so no
+        // SEMINIT lands on a pending SEMWAIT.
         constexpr std::uint32_t N = (dest_sync == ckernel::DstSync::SyncFull) ? 1 : 2;
         _llk_sync_init_(semaphore::UNPACK_MATH, N /*max*/, 0 /*init*/);
         _llk_sync_init_(semaphore::UNPACK_PACK, N /*max*/, 0 /*init*/);
-        _llk_sync_barrier_raise_(semaphore::UNPACK_INIT);
-        for (std::uint32_t i = 0; i < TILE_CNT; ++i)
+        for (std::uint32_t block = 0; block < num_blocks; ++block)
         {
             _llk_sync_wait_<p_stall::STALL_UNPACK, p_stall::STALL_ON_MAX>(semaphore::UNPACK_PACK);
-            _llk_unpack_unary_operand_to_dest_tile_(i /*l1_tile_idx*/, 0 /*dst_tile_idx*/);
+            for (std::uint32_t tile = 0; tile < NUM_TILES_IN_BLOCK; ++tile)
+            {
+                _llk_unpack_unary_operand_to_dest_tile_(block * NUM_TILES_IN_BLOCK + tile /*l1_tile_idx*/, tile /*dst_tile_idx*/);
+            }
             _llk_sync_post_<p_stall::UNPACK0>(semaphore::UNPACK_PACK);
             _llk_sync_post_<p_stall::UNPACK0>(semaphore::UNPACK_MATH);
             if constexpr (dest_sync == ckernel::DstSync::SyncHalf)
@@ -77,7 +82,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             bfd_a, bfd_b, ckernel::DEFAULT_TENSOR_SHAPE, 1 /*num_tiles_per_unpack*/); // tiny-tiles not yet supported with reduce
         for (std::uint32_t i = 0; i < TILE_CNT; ++i)
         {
-            _llk_unpack_reduce_(i, 0, ckernel::DEFAULT_TENSOR_SHAPE);
+            _llk_unpack_reduce_<POOL_TYPE, REDUCE_DIM>(i, 0, ckernel::DEFAULT_TENSOR_SHAPE);
         }
     }
 }
@@ -99,20 +104,25 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const FormatConfig& formats = params.formats;
 #endif
 #ifndef SPEED_OF_LIGHT
-    const std::uint32_t TILE_CNT = params.TILE_CNT;
+    const std::uint32_t TILE_CNT           = params.TILE_CNT;
+    const std::uint32_t NUM_TILES_IN_BLOCK = params.NUM_TILES_IN_BLOCK;
 #endif
+    const std::uint32_t num_blocks = dest_section_count(TILE_CNT, NUM_TILES_IN_BLOCK);
 
     if constexpr (unpack_to_dest)
     {
-        // Middleman only, no FPU work. Seed MATH_PACK (the semaphore this thread posts), then pass the startup barrier
-        // the unpack thread raises behind its seeds of UNPACK_MATH / UNPACK_PACK, so the first wait below is armed only
-        // once those exist. Per section: wait for the unpacker's data, hand the section to pack (MATH_PACK post and, in
-        // SyncHalf, the math-side bank flip), then release the unpacker's data-ready credit.
+        // Middleman only, no FPU work. Seed MATH_PACK (the semaphore this thread posts). Per section: wait for the
+        // unpacker's data (first section: spin until its first UNPACK_MATH post, so the wait is armed only after its
+        // seed), hand the section to pack (MATH_PACK post and, in SyncHalf, the math-side bank flip), then release the
+        // unpacker's data-ready credit.
         _llk_math_pack_sync_init_<dest_sync>();
-        _llk_sync_barrier_pass_(semaphore::UNPACK_INIT);
-        for (std::uint32_t i = 0; i < TILE_CNT; ++i)
+        for (std::uint32_t block = 0; block < num_blocks; ++block)
         {
             _llk_math_wait_for_dest_available_();
+            if (block == 0)
+            {
+                _llk_sync_spin_until_posted_(semaphore::UNPACK_MATH);
+            }
             _llk_sync_wait_<p_stall::STALL_MATH | p_stall::STALL_SFPU | p_stall::STALL_SYNC, p_stall::STALL_ON_ZERO>(semaphore::UNPACK_MATH);
             _llk_math_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
             _llk_sync_get_<p_stall::MATH, p_stall::WAIT_SFPU>(semaphore::UNPACK_MATH);
@@ -122,16 +132,19 @@ void run_kernel(RUNTIME_PARAMETERS params)
     {
         DataFormat src_format = static_cast<DataFormat>(formats.math);
 
-        _llk_math_srcAB_hw_configure_<false /*EN_IMPLIED_MATH_FORMAT*/, is_fp32_dest_acc_en>(src_format, src_format);
+        _llk_math_srcAB_hw_configure_<is_fp32_dest_acc_en>(src_format, src_format);
         _llk_math_pack_sync_init_<dest_sync>();
         _llk_math_reduce_init_<POOL_TYPE, REDUCE_DIM, is_fp32_dest_acc_en, MATH_FIDELITY>(
             static_cast<DataFormat>(formats.math),
             static_cast<DataFormat>(formats.math),
             ckernel::DEFAULT_TENSOR_SHAPE); // tiny-tiles not yet supported with reduce
-        for (std::uint32_t i = 0; i < TILE_CNT; ++i)
+        for (std::uint32_t block = 0; block < num_blocks; ++block)
         {
             _llk_math_wait_for_dest_available_();
-            _llk_math_reduce_<POOL_TYPE, REDUCE_DIM>(0 /*dest_idx*/, ckernel::DEFAULT_TENSOR_SHAPE);
+            for (std::uint32_t tile = 0; tile < NUM_TILES_IN_BLOCK; ++tile)
+            {
+                _llk_math_reduce_<POOL_TYPE, REDUCE_DIM>(tile /*dest_idx*/, ckernel::DEFAULT_TENSOR_SHAPE);
+            }
             _llk_math_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
         }
     }
@@ -153,26 +166,32 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const FormatConfig& formats = params.formats;
 #endif
 #ifndef SPEED_OF_LIGHT
-    const std::uint32_t TEST_FACE_R_DIM = params.TEST_FACE_R_DIM;
-    const std::uint32_t num_faces       = params.num_faces;
-    const Operand& buffer_Res           = params.buffer_Res;
-    const std::uint32_t TILE_CNT        = params.TILE_CNT;
+    const std::uint32_t TEST_FACE_R_DIM    = params.TEST_FACE_R_DIM;
+    const std::uint32_t num_faces          = params.num_faces;
+    const Operand& buffer_Res              = params.buffer_Res;
+    const std::uint32_t TILE_CNT           = params.TILE_CNT;
+    const std::uint32_t NUM_TILES_IN_BLOCK = params.NUM_TILES_IN_BLOCK;
 #endif
-    const auto bfd_pack = ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Pack0>(
+    const std::uint32_t num_blocks = dest_section_count(TILE_CNT, NUM_TILES_IN_BLOCK);
+    const auto bfd_pack            = ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Pack0>(
         ckernel::tensor_shape_from_num_faces(TEST_FACE_R_DIM, num_faces), L1_ADDRESS(buffer_Res[0]), formats.pack_dst);
 
     _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(static_cast<DataFormat>(formats.pack_src), ckernel::ReluConfig::none());
     _llk_pack_init_(bfd_pack, ckernel::DEFAULT_TENSOR_SHAPE, 1 /*num_tiles_per_pack*/);
+    // Start on bank 0 like math: a previous program that ran an odd number of SyncHalf sections leaves the packer on bank 1.
+    _llk_pack_dest_init_<p_pacr::PACK0, dest_sync>();
     if constexpr (unpack_to_dest)
     {
         // Pack side of the unpack-to-dest handshake, as tt-metal's llk_pack_dest_section_done: behind the PACK0 drain,
         // release the bank to the unpacker (UNPACK_PACK, the count it stalls on) and the section to math (MATH_PACK);
         // in SyncHalf move the packer's DEST read base to the other bank. No ZEROACC: the unpacker overwrites the bank.
-        _llk_pack_dest_init_<p_pacr::PACK0, dest_sync>();
-        for (std::uint32_t i = 0; i < TILE_CNT; ++i)
+        for (std::uint32_t block = 0; block < num_blocks; ++block)
         {
             _llk_packer_wait_for_math_done_();
-            _llk_pack_(0 /*dest_idx*/, i, ckernel::DEFAULT_TENSOR_SHAPE);
+            for (std::uint32_t tile = 0; tile < NUM_TILES_IN_BLOCK; ++tile)
+            {
+                _llk_pack_(tile /*dest_idx*/, block * NUM_TILES_IN_BLOCK + tile, ckernel::DEFAULT_TENSOR_SHAPE);
+            }
             _llk_sync_get_<p_stall::PACK0>(semaphore::UNPACK_PACK);
             _llk_sync_get_<p_stall::PACK0>(semaphore::MATH_PACK);
             if constexpr (dest_sync == ckernel::DstSync::SyncHalf)
@@ -186,10 +205,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
     else
     {
         _llk_pack_reduce_mask_config_<REDUCE_DIM>(ckernel::DEFAULT_TENSOR_SHAPE);
-        for (std::uint32_t i = 0; i < TILE_CNT; ++i)
+        for (std::uint32_t block = 0; block < num_blocks; ++block)
         {
             _llk_packer_wait_for_math_done_();
-            _llk_pack_(0 /*dest_idx*/, i, ckernel::DEFAULT_TENSOR_SHAPE);
+            for (std::uint32_t tile = 0; tile < NUM_TILES_IN_BLOCK; ++tile)
+            {
+                _llk_pack_(tile /*dest_idx*/, block * NUM_TILES_IN_BLOCK + tile, ckernel::DEFAULT_TENSOR_SHAPE);
+            }
             _llk_pack_dest_semaphore_section_done_<p_pacr::PACK0, dest_sync, is_fp32_dest_acc_en>();
         }
         _llk_pack_reduce_mask_clear_();

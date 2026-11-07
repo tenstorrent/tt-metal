@@ -73,11 +73,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 if constexpr (BROADCAST_TYPE == BroadcastType::NONE)
                 {
                     // SrcA plus a SrcB zerosrc dvalid every face, including dest_acc=No (tenstorrent/budabackend#1230).
-                    _perf_unpack_loop_set_valid<true /*set_a*/, true /*set_b*/>(tile_iters * num_faces /*iterations*/);
+                    _perf_unpack_stream_set_valid<true /*set_a*/, true /*set_b*/, PERF_RUN_TYPE>(tile_iters * num_faces /*iterations*/);
                 }
                 else if constexpr (BROADCAST_TYPE == BroadcastType::ROW)
                 {
-                    _perf_unpack_loop_set_valid<false /*set_a*/, true /*set_b*/>(tile_iters * num_faces /*iterations*/);
+                    _perf_unpack_stream_set_valid<false /*set_a*/, true /*set_b*/, PERF_RUN_TYPE>(tile_iters * num_faces /*iterations*/);
                 }
                 else if constexpr (BROADCAST_TYPE == BroadcastType::COL)
                 {
@@ -90,7 +90,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 }
                 else
                 {
-                    _perf_unpack_loop_set_valid<true /*set_a*/, true /*set_b*/>(tile_iters /*iterations*/);
+                    _perf_unpack_stream_set_valid<true /*set_a*/, true /*set_b*/, PERF_RUN_TYPE>(tile_iters /*iterations*/);
                 }
             }
         }
@@ -160,8 +160,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const int NUM_BLOCKS                   = params.NUM_BLOCKS;
     const std::uint32_t NUM_TILES_IN_BLOCK = params.NUM_TILES_IN_BLOCK;
     const std::uint32_t TILE_CNT           = params.TILE_CNT;
-    // --speed-of-light emits ZERO_POINT as a constexpr and leaves RuntimeParams empty.
-    const std::uint32_t ZERO_POINT = params.ZERO_POINT;
+    // --speed-of-light emits ZERO_POINT and OUT_ZERO_POINT as constexprs and leaves RuntimeParams empty.
+    const std::uint32_t ZERO_POINT     = params.ZERO_POINT;
+    const std::uint32_t OUT_ZERO_POINT = params.OUT_ZERO_POINT;
 #endif
     const bool is_int_fpu_en         = false;
     constexpr DataCopyType copy_type = (BROADCAST_TYPE == BroadcastType::NONE || unpack_to_dest) ? DataCopyType::A2D : DataCopyType::B2D;
@@ -181,9 +182,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
         _llk_math_pack_sync_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
         _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
         _llk_math_eltwise_unary_datacopy_init_wrapper_<copy_type, is_fp32_dest_acc_en, BROADCAST_TYPE, is_int_fpu_en, PackMode::Default>(
-            num_faces, formats.math);
+            ckernel::make_tensor_shape_from_legacy(FACE_R_DIM, num_faces), formats.math);
         test_utils::call_binary_sfpu_operation_init<APPROX_MODE, is_fp32_dest_acc_en, SFPU_BINARY_OPERATION, ITERATIONS, formats.math, SFPU_SIGN_MAGNITUDE>(
-            ZERO_POINT);
+            ZERO_POINT, OUT_ZERO_POINT);
         PROFILER_SYNC();
     }
     {
@@ -191,7 +192,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
         }
-        else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
+        else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE)
         {
             if constexpr (unpack_to_dest)
             {
@@ -219,11 +220,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
             }
             else if constexpr (BROADCAST_TYPE == BroadcastType::NONE)
             {
-                _perf_math_loop_clear_valid<true /*clear_a*/, true /*clear_b*/>(tile_iters * num_faces /*iterations*/);
+                _perf_math_stream_clear_valid<true /*clear_a*/, true /*clear_b*/, PERF_RUN_TYPE>(tile_iters * num_faces /*iterations*/);
             }
             else if constexpr (BROADCAST_TYPE == BroadcastType::ROW)
             {
-                _perf_math_loop_clear_valid<false /*clear_a*/, true /*clear_b*/>(tile_iters * num_faces /*iterations*/);
+                _perf_math_stream_clear_valid<false /*clear_a*/, true /*clear_b*/, PERF_RUN_TYPE>(tile_iters * num_faces /*iterations*/);
             }
             else if constexpr (BROADCAST_TYPE == BroadcastType::COL)
             {
@@ -235,7 +236,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             }
             else
             {
-                _perf_math_loop_clear_valid<true /*clear_a*/, true /*clear_b*/>(tile_iters /*iterations*/);
+                _perf_math_stream_clear_valid<true /*clear_a*/, true /*clear_b*/, PERF_RUN_TYPE>(tile_iters /*iterations*/);
             }
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
@@ -350,7 +351,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
         {
         }
-        else if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
+        else if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
             {

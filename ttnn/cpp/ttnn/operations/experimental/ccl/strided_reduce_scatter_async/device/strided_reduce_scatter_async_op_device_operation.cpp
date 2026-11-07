@@ -25,7 +25,7 @@ void StridedReduceScatterAsyncDeviceOperation::validate_on_program_cache_hit(
     // Lightweight validation for cache hits
     const auto& input_tensor = tensor_args.input_tensor;
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Input tensor must be on device");
-    TT_FATAL(input_tensor.buffer() != nullptr, "Input tensor must have a buffer");
+    TT_FATAL(input_tensor.is_allocated(), "Input tensor must have a buffer");
 }
 
 void StridedReduceScatterAsyncDeviceOperation::validate_on_program_cache_miss(
@@ -194,12 +194,15 @@ ttsl::hash::hash_t StridedReduceScatterAsyncDeviceOperation::compute_program_has
         operation_attributes.mm_block_wt,
         operation_attributes.mm_N_full_block_wt,
         operation_attributes.chunk_width_in_mm_blocks,
-        input_tensor.logical_shape(),
-        input_tensor.padded_shape(),
-        input_tensor.tensor_spec().page_config(),
-        input_tensor.dtype(),
-        input_tensor.layout(),
-        input_tensor.memory_config());
+        input_tensor.tensor_spec(),
+        // Caller-supplied buffers: their memory configs drive defines and accessor CTAs, and the cache-hit
+        // validator never checks them, so their specs (and presence) have to be keyed.
+        tensor_args.optional_intermediate_tensor.has_value()
+            ? std::optional<tt::tt_metal::TensorSpec>{tensor_args.optional_intermediate_tensor->tensor_spec()}
+            : std::nullopt,
+        tensor_args.optional_output_tensor.has_value()
+            ? std::optional<tt::tt_metal::TensorSpec>{tensor_args.optional_output_tensor->tensor_spec()}
+            : std::nullopt);
 }
 
 }  // namespace ttnn::operations::experimental::ccl::strided_reduce_scatter_async::detail

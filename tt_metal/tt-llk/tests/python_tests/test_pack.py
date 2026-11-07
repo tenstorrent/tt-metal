@@ -31,7 +31,6 @@ from helpers.llk_params import (
     DestSync,
     PackerReluType,
     PerfRunType,
-    format_dict,
 )
 from helpers.param_config import (
     get_num_blocks_and_num_tiles_in_block,
@@ -53,7 +52,7 @@ from helpers.test_variant_parameters import (
     TILIZE,
     generate_input_dim,
 )
-from helpers.utils import passed_test
+from helpers.utils import passed_test, result_tensor
 
 PACK_FORMATS = input_output_formats(
     [
@@ -236,12 +235,7 @@ def test_pack(
 
     res_from_L1 = configuration.run().result
 
-    assert len(res_from_L1) == len(
-        golden_tensor
-    ), "Result tensor and golden tensor are not of the same length"
-
-    torch_format = format_dict[formats.output_format]
-    res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
+    res_tensor = result_tensor(res_from_L1, formats.output_format, golden_tensor)
 
     test_passed = passed_test(
         golden_tensor, res_tensor, formats.output_format, print_errors=False

@@ -23,16 +23,16 @@
 #include <tt_stl/assert.hpp>
 
 #include <tt-metalium/experimental/sockets/d2h_socket.hpp>
-#include <umd/device/cluster.hpp>
-#include <umd/device/io_window/io_window.hpp>
-#include <umd/device/pcie/tlb_handle.hpp>
-#include <umd/device/pcie/tlb_window.hpp>
-#include <umd/device/types/core_coordinates.hpp>
-#include <umd/device/types/io_window_config.hpp>
+#include <tt-umd-workload/cluster.hpp>
+#include <tt-umd/io_window/io_window.hpp>
+#include <tt-umd/pcie/tlb_handle.hpp>
+#include <tt-umd/pcie/tlb_window.hpp>
+#include <tt-umd/types/core_coordinates.hpp>
+#include <tt-umd/types/io_window_config.hpp>
 
 #include "context/metal_context.hpp"
 #include "llrt/tt_cluster.hpp"
-#include "llrt/zone_meta.hpp"
+#include "llrt/observability_event_meta.hpp"
 #include "impl/streaming_profiler/spsc_packet.h"
 
 namespace tt::tt_metal::streaming_profiler {
@@ -217,13 +217,13 @@ Receiver::~Receiver() {
         programs_->verify_completeness(d);
     }
     log_report();
-    const uint64_t foreign = llrt::ZoneMetaRegistry::instance().foreign_sections();
-    const uint64_t collisions = llrt::ZoneMetaRegistry::instance().collisions();
+    const uint64_t foreign = llrt::ObservabilityEventMetaRegistry::instance().foreign_sections();
+    const uint64_t collisions = llrt::ObservabilityEventMetaRegistry::instance().collisions();
     if (collisions != 0 || foreign != 0) {
         log_warning(
             tt::LogMetal,
-            "[streaming profiler] zone names: {} id collisions, {} foreign metadata sections ignored (the JIT "
-            "cache holds ELFs from a different .tt_zone_meta layout)",
+            "[streaming profiler] event names: {} id collisions, {} foreign metadata sections ignored (the JIT "
+            "cache holds ELFs from a different .tt_event_descriptor_meta layout)",
             collisions,
             foreign);
     }
