@@ -12,7 +12,8 @@ CPU truth by `sparse_mla/test_sparse_mla.py`; this test covers the seam K3.1 add
 There is no K3.1 CPU reference or golden, so the bar is the K3 layer tests' structural one: two
 5120-token chunks of chunked prefill (the second chunk's indexer selects its top-2048 from a 10240
 token prefix and reads the first chunk's cache), every output and cache finite, and a second run of
-the same sequence bit-identical to the first.
+the same sequence bit-identical to the first. In the DSA-only window, chunk 1's output must change when only
+chunk 0's tokens do: the stack-level proof that a later chunk reads the earlier chunks from its caches.
 
 Synthetic weights from `synthetic.py`, with its one substitution: every layer's FFN is K3's dense FFN
 (a synthetic LatentMoE layer is ~59 GB; the MoE is unchanged from K3 and covered by K3's tests).
@@ -106,6 +107,14 @@ def test_k31_dsa_block_finite_and_deterministic(model, mesh_device, device_param
             logger.info(f"{window}: run {run}")
             outputs = _run_sequence(stack, mesh_device, ids, kvpe, index)
             runs.append((outputs, _shards(mesh_device, kvpe.storage), _shards(mesh_device, index)))
+        # Prefix dependence, where nothing but the caches crosses a chunk: a window of DSA layers only (no
+        # KDA carry; AttnRes opens a fresh walk per chunk). Change only chunk 0's tokens: chunk 1's output
+        # can move only through its attention reading chunk 0 from the kvpe and index caches.
+        reads_prefix_only_from_caches = not kv_only and not stack.schedule.rank_kda_layer_ids()
+        if reads_prefix_only_from_caches:
+            logger.info(f"{window}: chunk 0 re-tokenized, chunk 1 unchanged")
+            other_prefix = token_ids(CHUNK, seed=8) + ids[CHUNK:]
+            prefix_outputs = _run_sequence(stack, mesh_device, other_prefix, kvpe, index)
         l1_small = ttnn.get_memory_view(mesh_device, ttnn.BufferType.L1_SMALL)
         logger.info(f"{window}: L1_SMALL after the runs: {l1_small.total_bytes_allocated_per_bank} B/bank allocated")
     finally:
@@ -135,3 +144,6 @@ def test_k31_dsa_block_finite_and_deterministic(model, mesh_device, device_param
             assert torch.equal(out, again), f"chunk {chunk}: output differs between identical runs"
     assert torch.equal(kvpe_raw.view(torch.uint8), kvpe_raw_again.view(torch.uint8)), "KVPE cache not deterministic"
     assert torch.equal(index_raw, index_raw_again), "index cache not deterministic"
+    if reads_prefix_only_from_caches:
+        assert not torch.equal(prefix_outputs[0], outputs[0]), "chunk 0's output ignores chunk 0's tokens"
+        assert not torch.equal(prefix_outputs[1], outputs[1]), "chunk 1 does not read chunk 0 from the DSA caches"
