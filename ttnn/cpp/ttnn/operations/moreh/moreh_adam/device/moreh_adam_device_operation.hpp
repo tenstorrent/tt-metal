@@ -66,6 +66,11 @@ struct MorehAdamOperation {
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
 
+    // Preallocated outputs keep their own topology; outputs the op allocates take the union of all inputs. See
+    // ttnn::operations::preallocated_or_union_output_topologies.
+    static std::vector<tt::tt_metal::TensorTopology> compute_output_topologies(
+        const operation_attributes_t&, const tensor_args_t&);
+
     static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
 };
 }  // namespace ttnn::operations::moreh::moreh_adam
