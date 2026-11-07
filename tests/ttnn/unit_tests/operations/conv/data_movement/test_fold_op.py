@@ -384,6 +384,38 @@ def test_fold_with_permute_reshape_on_device(device, n, c, h, w, pad_h, pad_w, s
     assert_with_pcc(torch_output_tensor, tt_output_tensor, 1)
 
 
+@pytest.mark.parametrize("c", [4, 8])
+@pytest.mark.parametrize(
+    "hw,stride",
+    [
+        (48, 2),
+        (96, 3),
+        (224, 14),
+        (24, 6),
+        (48, 3),
+        (40, 5),
+        (48, 6),
+        (56, 7),
+        (72, 9),
+        (80, 10),
+        (48, 12),
+        (120, 15),
+        (518, 14),
+    ],
+)
+def test_fold_transpose_stride_not_dividing_padded_hw(device, c, hw, stride):
+    # The transpose path pads H and W to a tile multiple and then divides them by the stride, so strides that do not
+    # divide the padded size (6 or 14 with 48 or 518, say) need the extra padding too.
+    torch.manual_seed(0)
+    torch_input = torch.randn((1, c, hw, hw), dtype=torch.bfloat16)
+    expected = fold_torch(torch_input.permute(0, 2, 3, 1), stride, stride)
+    tt_input = ttnn.from_torch(
+        torch_input, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
+    )
+    tt_output = ttnn.fold(tt_input, stride, stride, use_transpose_as_fold=True, output_shape=tuple(expected.shape))
+    assert torch.equal(ttnn.to_torch(tt_output), expected)
+
+
 @pytest.mark.parametrize(
     "act_shape,stride_h,stride_w",
     [
