@@ -122,7 +122,6 @@ enum class EnvVarID {
     TT_METAL_FORCE_JIT_COMPILE,                         // Force JIT compilation
     TT_METAL_DISABLE_SFPLOADMACRO,                      // Disable use of SFPLOADMACRO instructions
     TT_METAL_DRAM_BACKED_CQ,                            // Store command queues in device DRAM
-    TT_METAL_SIMULATOR_DIRECT_TENSOR_WRITES,            // Simulator tensor preload bypasses FD CQ copies
     TT_METAL_SIMULATOR_SERVE_OVER_SOCKETS,              // Serve simulated chips over sockets
     TT_METAL_SIMULATOR_DRAM_UNCAPPED,                   // Quasar emulator: address all the DRAM the descriptor declares
     TT_METAL_QUASAR_NOC_API_VERSION,                    // Quasar NOC API version
@@ -957,14 +956,6 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         case EnvVarID::TT_METAL_DRAM_BACKED_CQ:
             this->dram_backed_cq_env_var_set = true;
             this->dram_backed_cq = is_env_enabled(value);
-            break;
-
-        // TT_METAL_SIMULATOR_DIRECT_TENSOR_WRITES
-        // Use synchronous direct buffer writes for simulator tensor preloads instead of FD CQ copies.
-        // Default: false
-        // Usage: export TT_METAL_SIMULATOR_DIRECT_TENSOR_WRITES=1
-        case EnvVarID::TT_METAL_SIMULATOR_DIRECT_TENSOR_WRITES:
-            this->simulator_direct_tensor_writes = is_env_enabled(value);
             break;
 
         // TT_METAL_SIMULATOR_SERVE_OVER_SOCKETS

@@ -1,9 +1,5 @@
 include(sources.cmake)
 
-if(TT_UMD_BUILD_SIMULATION)
-    list(APPEND IMPL_SRC ${CMAKE_CURRENT_SOURCE_DIR}/buffers/simulator_direct_write.cpp)
-endif()
-
 # Include helper functions and generate headers from flatbuffer schemas
 include(flatbuffers)
 

@@ -424,9 +424,6 @@ class RunTimeOptions {
     bool dram_backed_cq_env_var_set = false;
     bool dram_backed_cq = false;
 
-    // Bypass FD CQ payload copies for simulator tensor preloads (TT_METAL_SIMULATOR_DIRECT_TENSOR_WRITES=1)
-    bool simulator_direct_tensor_writes = false;
-
     // Serve simulation devices over sockets for a debug tool to attach; enable with TT_METAL_SIMULATOR_SERVE_OVER_SOCKETS=1.
     bool simulator_serve_over_sockets = false;
 
@@ -1051,8 +1048,6 @@ public:
     bool is_dram_backed_cq_specified() const { return dram_backed_cq_env_var_set; }
     bool get_dram_backed_cq() const { return dram_backed_cq; }
     void set_dram_backed_cq(bool enable) { dram_backed_cq = enable; }
-
-    bool get_simulator_direct_tensor_writes() const { return simulator_direct_tensor_writes; }
 
     bool get_simulator_serve_over_sockets() const { return simulator_serve_over_sockets; }
     void set_simulator_serve_over_sockets(bool enable) { simulator_serve_over_sockets = enable; }
