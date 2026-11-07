@@ -69,11 +69,13 @@ Decisions:
    frames). It runs TP=8 on the requesting row's 1×8 submesh, so no cross-row traffic and each row keeps its own
    copy (~170 MB/chip). Audio starts on the host (fp32/bf16 torch): its RVQ step is an argmin over codebooks, so
    device numerics could flip codes; it moves to device only if host latency is a problem. As built: the tokenizer
-   encoder (mel -> codes) runs in fp32 in vLLM's front end (tt/audio/processor.py), bit-identical to the reference;
-   its RVQ decisions sit at fp32 rounding level (an fp64 encoder already changes a code frame per 30-300 s clip,
-   tests/perf/audio_codes_margin.py), so it stays on the host. The patch encoder (codes -> embeddings) runs TP=8 on
-   the requesting row (tt/audio/patch.py, 57 MB/chip; ``MIMO_AUDIO_PATCH=device``) or on the engine's host CPU
-   (``engine``, the default: with the device patch encoder a row engine failed its prefill batch-trace capture at startup).
+   encoder (mel -> codes) runs TP=8 on the requesting row (tt/audio/tokenizer.py, split bf16 activations, fp32
+   elementwise; ``MIMO_AUDIO_TOKENIZER=device``, the default): ~4 % of its code frames differ from the fp32 reference
+   (Blackhole matmul accumulation), at no cost in accuracy (bhg2 serving A/B: LibriSpeech test-clean WER 1.79 % vs
+   1.97 % for the bit-identical fp32 host encoder in vLLM's front end, ``frontend``), and the front end no longer
+   queues audio behind long clips. The patch encoder (codes -> embeddings) runs TP=8 on the row too
+   (tt/audio/patch.py, 57 MB/chip; ``MIMO_AUDIO_PATCH=device``, the default) or on the engine's host CPU
+   (``engine``). Both take 0.1 GB more of MIMO_MM_VIT_RESERVE_GB by default.
 4. **Speculative decoding.** MTP / DFlash drafters see placeholder-token embeddings at multimodal positions in the
    first milestone (affects acceptance only, never output). Fix later if acceptance drops measurably.
 5. **Chunked prefill and APC.** Items may straddle chunks (vLLM's chunked multimodal input stays on): each chunk

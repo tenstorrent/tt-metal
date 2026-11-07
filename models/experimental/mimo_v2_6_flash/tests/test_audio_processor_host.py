@@ -6,7 +6,7 @@
 Through vLLM 0.30.0's own renderer (the API server's input path, built from the checkpoint with the TT platform and
 MiMoV2OmniForCausalLM, so the registered processor is ours), on LibriSpeech clips (16 kHz files, resampled by vLLM):
 
-* by default (MIMO_AUDIO_PATCH=engine, also =device) each audio item reaches the engine as ``audio_codes`` int32
+* with MIMO_AUDIO_TOKENIZER=frontend (MIMO_AUDIO_PATCH device or engine) each item reaches the engine as ``audio_codes`` int32
   [n, 20], without ``audio_features``, and the codes are the fp32 reference's for the item's mel (two items in one
   request: each tokenized on its own);
 * with MIMO_AUDIO_PATCH=frontend it reaches the engine as ``audio_embeds`` bf16 [n_tokens, 4096]: bit for bit what
@@ -16,7 +16,7 @@ MiMoV2OmniForCausalLM, so the registered processor is ours), on LibriSpeech clip
 * the engine side (``AudioCodesBackend.embed_audio_codes``, through tt/multimodal.encode_item) gives the embeddings
   today's engine-side path gives from the mel: bit-identical to the TEMPORARY HF host backend (fp32) with an fp32
   patch encoder, and to ``HostAudioBackend.embed_audio`` with the default bf16 one;
-* with MIMO_AUDIO_TOKENIZER=device it reaches the engine as ``audio_mel_bits``: the fp32 mel's int32 bits, exactly,
+* by default (MIMO_AUDIO_TOKENIZER=device) it reaches the engine as ``audio_mel_bits``: the fp32 mel's int32 bits, exactly,
   with no encoder run in the front end, and tt/multimodal.encode_item hands the backend's ``embed_audio`` that mel;
 * a repeated clip is a processor-cache hit: the same hash, and the front end does not encode it again.
 
@@ -87,18 +87,19 @@ def process(renderer, items):
 def _two_items(setup, frontend_patch):
     """One request with two audio items through the renderer, from an empty processor cache."""
     module = setup["module"]
-    saved, module.FRONTEND_PATCH = module.FRONTEND_PATCH, frontend_patch
+    saved = module.FRONTEND_PATCH, module.DEVICE_TOKENIZER
+    module.FRONTEND_PATCH, module.DEVICE_TOKENIZER = frontend_patch, False  # the front end's own tokenizer encoder
     try:
         setup["renderer"].clear_mm_cache()
         clips = setup["clips"]
         return process(setup["renderer"], [clips["speech_5s"]["raw"], clips["speech_65s"]["raw"]])
     finally:
-        module.FRONTEND_PATCH = saved
+        module.FRONTEND_PATCH, module.DEVICE_TOKENIZER = saved
 
 
 @pytest.fixture(scope="module")
 def front(setup):
-    """MIMO_AUDIO_PATCH=engine (the default) or device: the front end sends codes."""
+    """MIMO_AUDIO_TOKENIZER=frontend, MIMO_AUDIO_PATCH=device or engine: the front end sends codes."""
     return _two_items(setup, False)
 
 

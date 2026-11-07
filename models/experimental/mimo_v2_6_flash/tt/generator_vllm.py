@@ -2700,7 +2700,16 @@ VIT_LARGEST_PASS = 32768
 # DRAM per chip the multimodal model takes off the KV pool (MIMO_KV_GB_PER_CHIP) for the ViT's passes. The text
 # model's launches leave ~1.37 GB free per chip at 4 x 1M per row and ~0.87 GB with MTP (8 slots, 1.2 GB trace
 # region), so the default reserves 0.25 GB with speculative decoding and none without (startup checks the rest).
-MM_KV_RESERVE_GB = float(os.environ.get("MIMO_MM_VIT_RESERVE_GB", "0.25" if SPEC_DECODE else "0"))
+# The device audio encoders (MIMO_AUDIO_TOKENIZER / MIMO_AUDIO_PATCH=device, the defaults) keep 113 + 57 MB of weights
+# and ~25 MB of tables and programs per chip: 0.1 GB more (bhg2 row 1, MTP: 0.25 left 798 MB for the 832 MB ViT pass,
+# 0.35 left 862 MB).
+_AUDIO_ON_DEVICE = "audio" in MM_MODALITIES and "device" in (
+    os.environ.get("MIMO_AUDIO_TOKENIZER", "device"),
+    os.environ.get("MIMO_AUDIO_PATCH", "device"),
+)
+MM_KV_RESERVE_GB = float(
+    os.environ.get("MIMO_MM_VIT_RESERVE_GB", f"{(0.25 if SPEC_DECODE else 0) + (0.1 if _AUDIO_ON_DEVICE else 0):g}")
+)
 # MIMO_MM_STRICT (default on): a prefill row whose multimodal item cannot be served (encoder failure, or a cached
 # prefix holding an item that failed before) is not answered from placeholder embeddings: its first token is forced to
 # the end of the turn, and take_prefill_errors() reports it for the plugin to fail the request.
@@ -2745,10 +2754,9 @@ class _LazyHostAudio:
         return _host_audio_backend(self.model_path).embed_audio(mel)
 
 
-# Where the audio patch encoder (RVQ codes -> embeddings) runs (tt/audio/processor.py reads it too): ``engine`` (the
-# default) on this process's CPU, ``device`` on the replica's row (tt/audio/patch.py; not the default: with it a row
-# engine failed its prefill batch-trace capture at startup, see tt/audio/processor.py), ``frontend`` in the API server.
-AUDIO_PATCH = os.environ.get("MIMO_AUDIO_PATCH", "engine")
+# Where the audio patch encoder (RVQ codes -> embeddings) runs (tt/audio/processor.py reads it too): ``device`` (the
+# default) on the replica's row (tt/audio/patch.py), ``engine`` on this process's CPU, ``frontend`` in the API server.
+AUDIO_PATCH = os.environ.get("MIMO_AUDIO_PATCH", "device")
 
 
 def audio_device_patch(model_path, mesh_device):
@@ -2761,11 +2769,11 @@ def audio_device_patch(model_path, mesh_device):
     return TtAudioPatchEncoder.from_checkpoint(mesh_device, model_path, cache_dir=default_cache_dir(model_path))
 
 
-# Where the audio tokenizer encoder (mel -> codes) runs (tt/audio/processor.py reads it too): ``frontend`` (the default;
-# fp32 on the API server's CPU, codes bit-identical to the reference) or ``device`` (the replica's row,
-# tt/audio/tokenizer.py: ~10x faster, ~3.5-5 % of the code frames differ from the fp32 reference; in the serving A/B its
-# engine produced bursts of degenerate generations, see tt/audio/processor.py).
-AUDIO_TOKENIZER = os.environ.get("MIMO_AUDIO_TOKENIZER", "frontend")
+# Where the audio tokenizer encoder (mel -> codes) runs (tt/audio/processor.py reads it too): ``device`` (the default;
+# the replica's row, tt/audio/tokenizer.py: ~10x faster, ~3.5-5 % of the code frames differ from the fp32 reference,
+# LibriSpeech WER / degenerate outputs equal to the host's in the serving A/B, see tt/audio/processor.py) or
+# ``frontend`` (fp32 on the API server's CPU, codes bit-identical to the reference).
+AUDIO_TOKENIZER = os.environ.get("MIMO_AUDIO_TOKENIZER", "device")
 
 
 def audio_device_tokenizer(model_path, mesh_device):
