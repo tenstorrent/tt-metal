@@ -888,6 +888,7 @@ def run_conv1d_route(
     fp32_accum=False,
     packer_l1_acc=False,
     pcc=0.99,
+    core_grid=None,
 ):
     """Run ttnn.conv1d and check it against the torch golden.
 
@@ -895,6 +896,7 @@ def run_conv1d_route(
     through DRAM width slicing rather than forcing L1_FULL). shard_layout=None selects
     auto-shard. input_in_dram places the input in DRAM; set False to keep it in L1.
     act_block_h sets act_block_h_override (used to force out_subblock_h_ntiles > 1).
+    core_grid pins the shard grid (row-major shard orientation, so grid columns split the channels).
     """
     torch.manual_seed(0)
     torch_input_ncl = torch.randn(batch_size, in_channels, input_length, dtype=torch.bfloat16).float()
@@ -925,6 +927,10 @@ def run_conv1d_route(
     )
     if act_block_h is not None:
         conv_config.act_block_h_override = act_block_h
+    if core_grid is not None:
+        conv_config.core_grid = core_grid
+        conv_config.override_sharding_config = True
+        conv_config.transpose_shards = False
     compute_config = ttnn.init_device_compute_kernel_config(
         device.arch(),
         math_fidelity=math_fidelity,
@@ -1150,5 +1156,76 @@ def test_conv1d_depthwise_bf16_with_fp32_accum_unchanged(device):
         output_dtype=ttnn.bfloat16,
         fp32_accum=True,
         packer_l1_acc=True,
+        pcc=0.999,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Kernel-window reads wider than one NoC burst.
+#
+# The activation reader fetches the kernel window of one output position (kernel_w * channels *
+# element size, dilation 1). A window up to NOC_MAX_BURST_SIZE (8192 B on Wormhole, 16384 B on
+# Blackhole), the largest single NoC packet, takes one single-packet read; a wider window is read
+# with noc.async_read.
+#
+# The circular buffers need about 3 * 64 * channels * kernel_w bytes of L1, so the shapes are small in
+# channels and long in kernel_w. Every case is over the burst on Wormhole, and the fp32 ones on
+# Blackhole as well (bf16 needs 2x the channels * kernel_w there, which does not fit L1).
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 1 << 15}], indirect=True)
+@pytest.mark.parametrize(
+    "in_channels, kernel_size, dtype",
+    [
+        (256, 17, ttnn.bfloat16),  # 8704 B
+        (384, 17, ttnn.bfloat16),  # 13056 B
+        (32, 129, ttnn.bfloat16),  # 8256 B
+        (32, 129, ttnn.float32),  # 16512 B: over the Blackhole burst too
+    ],
+)
+def test_conv1d_window_read_over_noc_burst(device, in_channels, kernel_size, dtype):
+    run_conv1d_route(
+        device,
+        batch_size=1,
+        in_channels=in_channels,
+        out_channels=32,
+        input_length=256 + kernel_size - 1,
+        kernel_size=kernel_size,
+        stride=1,
+        padding=0,
+        input_in_dram=False,
+        activations_dtype=dtype,
+        output_dtype=dtype,
+        fp32_accum=True,
+        pcc=0.999,
+    )
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 1 << 15}], indirect=True)
+@pytest.mark.parametrize(
+    "in_channels, kernel_size, dtype, channel_cores",
+    [
+        (512, 17, ttnn.bfloat16, 2),  # 256 channels per core: 8704 B
+        (32, 129, ttnn.float32, 1),  # 16512 B
+    ],
+)
+def test_conv1d_block_sharded_window_read_over_noc_burst(device, in_channels, kernel_size, dtype, channel_cores):
+    """Same, through the block-sharded (2D multicast) reader. The grid columns split the channels."""
+    run_conv1d_route(
+        device,
+        batch_size=1,
+        in_channels=in_channels,
+        out_channels=32,
+        input_length=256 + kernel_size - 1,
+        kernel_size=kernel_size,
+        stride=1,
+        padding=0,
+        shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+        core_grid=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(channel_cores - 1, 7))}),
+        input_in_dram=False,
+        activations_dtype=dtype,
+        output_dtype=dtype,
+        fp32_accum=True,
         pcc=0.999,
     )
