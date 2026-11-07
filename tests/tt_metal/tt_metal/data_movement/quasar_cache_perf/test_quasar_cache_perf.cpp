@@ -31,14 +31,14 @@ bool should_skip_test() { return std::getenv("TT_METAL_SIMULATOR") == nullptr; }
 // on a single DM core, then reads back and verifies the byte pattern landed.
 bool run_cache_write(distributed::MeshDevice& mesh_device, std::uint32_t size_bytes, std::uint32_t write_path) {
     constexpr CoreCoord core = {0, 0};
-    const experimental::NodeCoord node{0, 0};
+    const NodeCoord node{0, 0};
 
     // Pre-fill destination with a sentinel so a no-op run fails the read-back.
     std::vector<std::uint32_t> init_data((size_bytes + 3) / 4, 0xA5A5A5A5);
     slow_dispatch::WriteToL1(mesh_device, core, BASE_ADDR, init_data);
 
-    const experimental::KernelSpecName DM_KERNEL{"cache_write_perf"};
-    experimental::KernelSpec dm_kernel_spec{
+    const KernelSpecName DM_KERNEL{"cache_write_perf"};
+    KernelSpec dm_kernel_spec{
         .unique_id = DM_KERNEL,
         .source = "tests/tt_metal/tt_metal/data_movement/quasar_cache_perf/kernels/cache_write_perf.cpp",
         .num_threads = 1,
@@ -46,16 +46,16 @@ bool run_cache_write(distributed::MeshDevice& mesh_device, std::uint32_t size_by
             {
                 .runtime_arg_names = {"base_addr", "size_bytes", "write_path", "num_iterations", "test_id"},
             },
-        .hw_config = experimental::DataMovementHardwareConfig{},
+        .hw_config = DataMovementHardwareConfig{},
     };
-    experimental::WorkUnitSpec main_wu{.name = "main", .kernels = {DM_KERNEL}, .target_nodes = node};
-    experimental::ProgramSpec spec{.name = "cache_write_perf", .kernels = {dm_kernel_spec}, .work_units = {main_wu}};
+    WorkUnitSpec main_wu{.name = "main", .kernels = {DM_KERNEL}, .target_nodes = node};
+    ProgramSpec spec{.name = "cache_write_perf", .kernels = {dm_kernel_spec}, .work_units = {main_wu}};
     Program program = experimental::MakeProgramFromSpec(mesh_device, spec);
 
-    experimental::ProgramRunArgs params;
-    params.kernel_run_args = {experimental::ProgramRunArgs::KernelRunArgs{
+    ProgramRunArgs params;
+    params.kernel_run_args = {ProgramRunArgs::KernelRunArgs{
         .kernel = DM_KERNEL,
-        .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+        .runtime_arg_values = MakeRuntimeArgsForSingleNode(
             node,
             {{"base_addr", BASE_ADDR},
              {"size_bytes", size_bytes},

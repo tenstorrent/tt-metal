@@ -8,11 +8,11 @@
 
 #include "device_fixture.hpp"
 
-namespace tt::tt_metal::experimental::test_helpers {
+namespace tt::tt_metal::test_helpers {
 
 // Real-hardware fixture for the Metal 2.0 Host API integration tests.
 // Targets Wormhole B0 and Blackhole; requires TT_METAL_SLOW_DISPATCH_MODE=1.
-class ProgramSpecHWTest : public tt::tt_metal::MeshDeviceFixture {
+class ProgramSpecHWTest : public MeshDeviceFixture {
 protected:
     void SetUp() override {
         MeshDeviceFixture::SetUp();
@@ -26,4 +26,4 @@ protected:
     }
 };
 
-}  // namespace tt::tt_metal::experimental::test_helpers
+}  // namespace tt::tt_metal::test_helpers

@@ -6,8 +6,8 @@
 #include "ternary_op_utils.hpp"
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/math.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 #include "ttnn/operations/eltwise/binary/common/binary_op_utils.hpp"
 #include "ttnn/operations/eltwise/binary_ng/device/binary_ng_utils.hpp"
@@ -1695,7 +1695,7 @@ ttnn::device_operation::ProgramArtifacts TernaryDeviceOperation::TernaryProgramF
     };
 }
 
-tt::tt_metal::experimental::ProgramRunArgs TernaryDeviceOperation::TernaryProgramFactory::override_runtime_arguments(
+ProgramRunArgs TernaryDeviceOperation::TernaryProgramFactory::override_runtime_arguments(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output,

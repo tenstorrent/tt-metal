@@ -4,7 +4,7 @@
 
 #include "impl/metal2_host_api/program_spec/validation/resource/resource.hpp"
 
-namespace tt::tt_metal::experimental {
+namespace tt::tt_metal {
 
 void ValidateResourceBindings(const KernelSpec& kernel, const ValidationContext& ctx, tt::ARCH arch) {
     ValidateDFBBindings(kernel, ctx);
@@ -49,4 +49,4 @@ void ValidateResourceUsage(const ValidationContext& ctx, tt::ARCH arch) {
     ValidatePrefetcherPipesUsed(ctx);
 }
 
-}  // namespace tt::tt_metal::experimental
+}  // namespace tt::tt_metal

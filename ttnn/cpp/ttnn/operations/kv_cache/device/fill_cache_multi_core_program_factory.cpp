@@ -14,7 +14,6 @@
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 
 using namespace tt::tt_metal;
-using namespace tt::tt_metal::experimental;
 
 namespace ttnn::prim {
 
@@ -261,7 +260,7 @@ ttnn::device_operation::ProgramArtifacts FillCacheMultiCoreProgramFactory::creat
     return ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)};
 }
 
-tt::tt_metal::experimental::ProgramRunArgs FillCacheMultiCoreProgramFactory::override_runtime_arguments(
+ProgramRunArgs FillCacheMultiCoreProgramFactory::override_runtime_arguments(
     const KvCacheParams& operation_attributes,
     const KvCacheInputs& tensor_args,
     Tensor& tensor_return_value,

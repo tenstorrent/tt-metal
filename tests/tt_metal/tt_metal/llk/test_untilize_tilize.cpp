@@ -212,7 +212,7 @@ static void validate_result(
 //   - TilizeType::UNPACK_A (compute kernel: tilize.cpp, optionally with FAST_TILIZE)
 void run_single_core_tilize_program(distributed::MeshDevice& mesh_device, const TestConfig& test_config) {
     auto& cq = mesh_device.mesh_command_queue();
-    const experimental::NodeCoord node{0, 0};
+    const NodeCoord node{0, 0};
 
     const std::uint32_t num_tiles = test_config.num_tiles_r * test_config.num_tiles_c;
     const std::uint32_t input_dram_buffer_size = test_config.input_single_tile_size * num_tiles;
@@ -231,19 +231,19 @@ void run_single_core_tilize_program(distributed::MeshDevice& mesh_device, const 
 
     const tt::DataFormat output_buf_format = test_config.output_fmt;
 
-    const experimental::DFBSpecName INPUT_DFB{"input_dfb"};
-    const experimental::DFBSpecName OUTPUT_DFB{"output_dfb"};
-    const experimental::KernelSpecName READER{"reader"};
-    const experimental::KernelSpecName WRITER{"writer"};
-    const experimental::KernelSpecName COMPUTE{"compute"};
+    const DFBSpecName INPUT_DFB{"input_dfb"};
+    const DFBSpecName OUTPUT_DFB{"output_dfb"};
+    const KernelSpecName READER{"reader"};
+    const KernelSpecName WRITER{"writer"};
+    const KernelSpecName COMPUTE{"compute"};
 
-    experimental::DataflowBufferSpec input_dfb_spec{
+    DataflowBufferSpec input_dfb_spec{
         .unique_id = INPUT_DFB,
         .entry_size = test_config.input_single_tile_size,
         .num_entries = num_tiles,
         .data_format_metadata = test_config.input_fmt,
     };
-    experimental::DataflowBufferSpec output_dfb_spec{
+    DataflowBufferSpec output_dfb_spec{
         .unique_id = OUTPUT_DFB,
         .entry_size = test_config.output_single_tile_size,
         .num_entries = num_tiles,
@@ -281,7 +281,7 @@ void run_single_core_tilize_program(distributed::MeshDevice& mesh_device, const 
         is_unpack_a_tilize ? "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary_push_n_2_0.cpp"
                            : "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary_2_0.cpp";
 
-    experimental::KernelSpec::RuntimeArgSchema reader_schema;
+    KernelSpec::RuntimeArgSchema reader_schema;
     if (is_unpack_a_tilize) {
         reader_schema.runtime_arg_names = {
             "src_addr", "src_dram_bank_id", "num_tiles", "ublock_size_tiles", "reader_only"};
@@ -289,52 +289,52 @@ void run_single_core_tilize_program(distributed::MeshDevice& mesh_device, const 
         reader_schema.runtime_arg_names = {"src_addr", "bank_id", "num_tiles"};
     }
 
-    experimental::DataMovementHardwareConfig reader_hw_config;
+    DataMovementHardwareConfig reader_hw_config;
     if (mesh_device.arch() == tt::ARCH::QUASAR) {
-        reader_hw_config = experimental::DataMovementHardwareConfig{};
+        reader_hw_config = DataMovementHardwareConfig{};
     } else {
-        reader_hw_config = experimental::DataMovementHardwareConfig{
+        reader_hw_config = DataMovementHardwareConfig{
             .config_1xx =
-                experimental::DataMovementHardwareConfig::DataMovement1XXConfig{
+                DataMovementHardwareConfig::DataMovement1XXConfig{
                     .processor = tt_metal::DataMovementProcessor::RISCV_1,
                     .noc = tt_metal::NOC::RISCV_1_default,
                 },
         };
     }
-    experimental::KernelSpec reader_spec{
+    KernelSpec reader_spec{
         .unique_id = READER,
         .source = reader_kernel_path,
         .num_threads = 1,
-        .dfb_bindings = {experimental::ProducerOf(INPUT_DFB, "out")},
+        .dfb_bindings = {ProducerOf(INPUT_DFB, "out")},
         .runtime_arg_schema = reader_schema,
         .hw_config = reader_hw_config,
     };
 
-    experimental::DataMovementHardwareConfig writer_hw_config;
+    DataMovementHardwareConfig writer_hw_config;
     if (mesh_device.arch() == tt::ARCH::QUASAR) {
-        writer_hw_config = experimental::DataMovementHardwareConfig{};
+        writer_hw_config = DataMovementHardwareConfig{};
     } else {
-        writer_hw_config = experimental::DataMovementHardwareConfig{
+        writer_hw_config = DataMovementHardwareConfig{
             .config_1xx =
-                experimental::DataMovementHardwareConfig::DataMovement1XXConfig{
+                DataMovementHardwareConfig::DataMovement1XXConfig{
                     .processor = tt_metal::DataMovementProcessor::RISCV_0,
                     .noc = tt_metal::NOC::RISCV_0_default,
                 },
         };
     }
-    experimental::KernelSpec writer_spec{
+    KernelSpec writer_spec{
         .unique_id = WRITER,
         .source =
 
             "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary_2_0.cpp",
         .num_threads = 1,
-        .dfb_bindings = {experimental::ConsumerOf(OUTPUT_DFB, "in")},
+        .dfb_bindings = {ConsumerOf(OUTPUT_DFB, "in")},
         .runtime_arg_schema = {.runtime_arg_names = {"dst_addr", "bank_id", "num_tiles"}},
         .hw_config = writer_hw_config,
     };
 
     std::string compute_kernel;
-    experimental::KernelSpec::CompileTimeArgs compute_cta_bindings = {
+    KernelSpec::CompileTimeArgs compute_cta_bindings = {
         {"per_core_block_cnt", test_config.num_tiles_r},
         {"per_core_block_tile_cnt", test_config.num_tiles_c},
     };
@@ -356,7 +356,7 @@ void run_single_core_tilize_program(distributed::MeshDevice& mesh_device, const 
         log_fatal(tt::LogTest, "run_single_core_tilize_program: unsupported config (UNPACK_A_B uses dedicated helper)");
     }
 
-    experimental::KernelSpec::CompilerOptions::Defines compute_defines;
+    KernelSpec::CompilerOptions::Defines compute_defines;
     if (test_config.explicit_untilize_geometry) {
         const auto num_faces = test_config.tile_shape_in_faces_r * test_config.tile_shape_in_faces_c;
         compute_defines.emplace("EXPLICIT_FACE_R_DIM", std::to_string(test_config.face_r_dim));
@@ -370,12 +370,12 @@ void run_single_core_tilize_program(distributed::MeshDevice& mesh_device, const 
         compute_defines.emplace("FAST_UNTILIZE", "1");
     }
 
-    experimental::ComputeHardwareConfig compute_hw_config;
-    compute_hw_config = experimental::ComputeHardwareConfig{
+    ComputeHardwareConfig compute_hw_config;
+    compute_hw_config = ComputeHardwareConfig{
         .enable_32_bit_dest = test_config.fp32_dest_acc_en,
         .double_buffer_dest = !test_config.dst_full_sync_en,
     };
-    experimental::KernelSpec compute_spec{
+    KernelSpec compute_spec{
         .unique_id = COMPUTE,
         .source = compute_kernel,
         .num_threads = 1,
@@ -384,26 +384,26 @@ void run_single_core_tilize_program(distributed::MeshDevice& mesh_device, const 
             {{
                  .dfb_spec_name = INPUT_DFB,
                  .accessor_name = "in",
-                 .endpoint_type = experimental::DFBEndpointType::CONSUMER,
-                 .access_pattern = experimental::DFBAccessPattern::STRIDED,
+                 .endpoint_type = DFBEndpointType::CONSUMER,
+                 .access_pattern = DFBAccessPattern::STRIDED,
              },
              {
                  .dfb_spec_name = OUTPUT_DFB,
                  .accessor_name = "out",
-                 .endpoint_type = experimental::DFBEndpointType::PRODUCER,
-                 .access_pattern = experimental::DFBAccessPattern::STRIDED,
+                 .endpoint_type = DFBEndpointType::PRODUCER,
+                 .access_pattern = DFBAccessPattern::STRIDED,
              }},
         .compile_time_args = compute_cta_bindings,
         .hw_config = compute_hw_config,
     };
 
-    experimental::WorkUnitSpec wu{
+    WorkUnitSpec wu{
         .name = "main",
         .kernels = {READER, WRITER, COMPUTE},
         .target_nodes = node,
     };
 
-    experimental::ProgramSpec spec{
+    ProgramSpec spec{
         .name = "tilize_untilize",
         .kernels = {reader_spec, writer_spec, compute_spec},
         .dataflow_buffers = {input_dfb_spec, output_dfb_spec},
@@ -417,11 +417,11 @@ void run_single_core_tilize_program(distributed::MeshDevice& mesh_device, const 
                                               : test_config.src0_data;
     distributed::EnqueueWriteMeshBuffer(cq, src0_dram_buffer, src0_vec, /*blocking=*/true);
 
-    experimental::ProgramRunArgs params;
+    ProgramRunArgs params;
     if (is_unpack_a_tilize) {
-        params.kernel_run_args.push_back(experimental::ProgramRunArgs::KernelRunArgs{
+        params.kernel_run_args.push_back(ProgramRunArgs::KernelRunArgs{
             .kernel = READER,
-            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+            .runtime_arg_values = MakeRuntimeArgsForSingleNode(
                 node,
                 {{"src_addr", dram_buffer_src0_addr},
                  {"src_dram_bank_id", 0u},
@@ -430,18 +430,18 @@ void run_single_core_tilize_program(distributed::MeshDevice& mesh_device, const 
                  {"reader_only", 0u}}),
         });
     } else {
-        params.kernel_run_args.push_back(experimental::ProgramRunArgs::KernelRunArgs{
+        params.kernel_run_args.push_back(ProgramRunArgs::KernelRunArgs{
             .kernel = READER,
-            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+            .runtime_arg_values = MakeRuntimeArgsForSingleNode(
                 node, {{"src_addr", dram_buffer_src0_addr}, {"bank_id", 0u}, {"num_tiles", num_tiles}}),
         });
     }
-    params.kernel_run_args.push_back(experimental::ProgramRunArgs::KernelRunArgs{
+    params.kernel_run_args.push_back(ProgramRunArgs::KernelRunArgs{
         .kernel = WRITER,
-        .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+        .runtime_arg_values = MakeRuntimeArgsForSingleNode(
             node, {{"dst_addr", dram_buffer_dst_addr}, {"bank_id", 0u}, {"num_tiles", num_tiles}}),
     });
-    params.kernel_run_args.push_back(experimental::ProgramRunArgs::KernelRunArgs{.kernel = COMPUTE});
+    params.kernel_run_args.push_back(ProgramRunArgs::KernelRunArgs{.kernel = COMPUTE});
     experimental::SetProgramRunArgs(program, params);
 
     LaunchProgram(mesh_device, std::move(program));
@@ -563,7 +563,7 @@ void run_single_core_unpack_tilizeA_B_program(distributed::MeshDevice& mesh_devi
 // (column-wise max within each tile), producing output tiles with only row 0 populated.
 void run_single_core_unpack_tilizeA_B_reduce_program(
     distributed::MeshDevice& mesh_device, const TestConfig& test_config) {
-    const experimental::NodeCoord node{0, 0};
+    const NodeCoord node{0, 0};
 
     const std::uint32_t num_tiles_in = test_config.num_tiles_r * test_config.num_tiles_c;
     const std::uint32_t num_tiles_out = num_tiles_in;  // each tile reduced independently, same count as input
@@ -583,53 +583,53 @@ void run_single_core_unpack_tilizeA_B_reduce_program(
     auto out_tensor = MeshTensor::allocate_on_device(
         mesh_device, make_flat_tensor_spec(test_config.output_single_tile_size, num_tiles_out));
 
-    const experimental::DFBSpecName INP_DATA_DFB{"inp_data_dfb"};
-    const experimental::DFBSpecName INP_SCALER_DFB{"inp_scaler_dfb"};
-    const experimental::DFBSpecName OUT_DFB{"out_dfb"};
-    const experimental::KernelSpecName READER{"reader"};
-    const experimental::KernelSpecName WRITER{"writer"};
-    const experimental::KernelSpecName COMPUTE{"compute"};
-    const experimental::TensorParamName IN_TENSOR{"in_tensor"};
-    const experimental::TensorParamName OUT_TENSOR{"out_tensor"};
+    const DFBSpecName INP_DATA_DFB{"inp_data_dfb"};
+    const DFBSpecName INP_SCALER_DFB{"inp_scaler_dfb"};
+    const DFBSpecName OUT_DFB{"out_dfb"};
+    const KernelSpecName READER{"reader"};
+    const KernelSpecName WRITER{"writer"};
+    const KernelSpecName COMPUTE{"compute"};
+    const TensorParamName IN_TENSOR{"in_tensor"};
+    const TensorParamName OUT_TENSOR{"out_tensor"};
 
-    experimental::DataflowBufferSpec inp_data_dfb_spec{
+    DataflowBufferSpec inp_data_dfb_spec{
         .unique_id = INP_DATA_DFB,
         .entry_size = test_config.input_single_tile_size,
         .num_entries = std::max(2u, test_config.num_tiles_c),
         .data_format_metadata = test_config.input_fmt,
     };
     const std::uint32_t scaler_tile_size = tt::datum_size(test_config.input_fmt) * 32 * 32;
-    experimental::DataflowBufferSpec inp_scaler_dfb_spec{
+    DataflowBufferSpec inp_scaler_dfb_spec{
         .unique_id = INP_SCALER_DFB,
         .entry_size = scaler_tile_size,
         .num_entries = 2,
         .data_format_metadata = test_config.input_fmt,
     };
-    experimental::DataflowBufferSpec out_dfb_spec{
+    DataflowBufferSpec out_dfb_spec{
         .unique_id = OUT_DFB,
         .entry_size = test_config.output_single_tile_size,
         .num_entries = std::max(2u, test_config.num_tiles_c),
         .data_format_metadata = test_config.output_fmt,
     };
 
-    experimental::DataMovementHardwareConfig reader_hw_config;
+    DataMovementHardwareConfig reader_hw_config;
     if (mesh_device.arch() == tt::ARCH::QUASAR) {
-        reader_hw_config = experimental::DataMovementHardwareConfig{
+        reader_hw_config = DataMovementHardwareConfig{
             .config_2xx =
-                experimental::DataMovementHardwareConfig::DataMovement2XXConfig{
+                DataMovementHardwareConfig::DataMovement2XXConfig{
                     .disable_dfb_implicit_sync_for_all = true,
                 },
         };
     } else {
-        reader_hw_config = experimental::DataMovementHardwareConfig{
+        reader_hw_config = DataMovementHardwareConfig{
             .config_1xx =
-                experimental::DataMovementHardwareConfig::DataMovement1XXConfig{
+                DataMovementHardwareConfig::DataMovement1XXConfig{
                     .processor = tt_metal::DataMovementProcessor::RISCV_1,
                     .noc = tt_metal::NOC::RISCV_1_default,
                 },
         };
     }
-    experimental::KernelSpec reader_spec{
+    KernelSpec reader_spec{
         .unique_id = READER,
         .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary_8bank_2_0.cpp",
         .num_threads = 1,
@@ -638,58 +638,58 @@ void run_single_core_unpack_tilizeA_B_reduce_program(
             {{
                  .dfb_spec_name = INP_DATA_DFB,
                  .accessor_name = "out_data",
-                 .endpoint_type = experimental::DFBEndpointType::PRODUCER,
-                 .access_pattern = experimental::DFBAccessPattern::STRIDED,
+                 .endpoint_type = DFBEndpointType::PRODUCER,
+                 .access_pattern = DFBAccessPattern::STRIDED,
              },
              {
                  .dfb_spec_name = INP_SCALER_DFB,
                  .accessor_name = "out_scaler",
-                 .endpoint_type = experimental::DFBEndpointType::PRODUCER,
-                 .access_pattern = experimental::DFBAccessPattern::STRIDED,
+                 .endpoint_type = DFBEndpointType::PRODUCER,
+                 .access_pattern = DFBAccessPattern::STRIDED,
              }},
         .tensor_bindings = {{.tensor_parameter_name = IN_TENSOR, .accessor_name = "src_tensor"}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_tiles", "scaler"}},
         .hw_config = reader_hw_config,
     };
 
-    experimental::DataMovementHardwareConfig writer_hw_config;
+    DataMovementHardwareConfig writer_hw_config;
     if (mesh_device.arch() == tt::ARCH::QUASAR) {
-        writer_hw_config = experimental::DataMovementHardwareConfig{
+        writer_hw_config = DataMovementHardwareConfig{
             .config_2xx =
-                experimental::DataMovementHardwareConfig::DataMovement2XXConfig{
+                DataMovementHardwareConfig::DataMovement2XXConfig{
                     .disable_dfb_implicit_sync_for_all = true,
                 },
         };
     } else {
-        writer_hw_config = experimental::DataMovementHardwareConfig{
+        writer_hw_config = DataMovementHardwareConfig{
             .config_1xx =
-                experimental::DataMovementHardwareConfig::DataMovement1XXConfig{
+                DataMovementHardwareConfig::DataMovement1XXConfig{
                     .processor = tt_metal::DataMovementProcessor::RISCV_0,
                     .noc = tt_metal::NOC::RISCV_0_default,
                 },
         };
     }
-    experimental::KernelSpec writer_spec{
+    KernelSpec writer_spec{
         .unique_id = WRITER,
         .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary_8bank_2_0.cpp",
         .num_threads = 1,
-        .dfb_bindings = {experimental::ConsumerOf(OUT_DFB, "in")},
+        .dfb_bindings = {ConsumerOf(OUT_DFB, "in")},
         .tensor_bindings = {{.tensor_parameter_name = OUT_TENSOR, .accessor_name = "dst_tensor"}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_tiles"}},
         .hw_config = writer_hw_config,
     };
 
-    experimental::KernelSpec::CompilerOptions::Defines compute_defines = {
+    KernelSpec::CompilerOptions::Defines compute_defines = {
         {"REDUCE_OP", "PoolType::MAX"},
         {"REDUCE_DIM", "ReduceDim::REDUCE_COL"},
     };
 
-    experimental::ComputeHardwareConfig compute_hw_config;
-    compute_hw_config = experimental::ComputeHardwareConfig{
+    ComputeHardwareConfig compute_hw_config;
+    compute_hw_config = ComputeHardwareConfig{
         .enable_32_bit_dest = test_config.fp32_dest_acc_en,
         .double_buffer_dest = !test_config.dst_full_sync_en,
     };
-    experimental::KernelSpec compute_spec{
+    KernelSpec compute_spec{
         .unique_id = COMPUTE,
         .source = "tests/tt_metal/tt_metal/test_kernels/compute/unpack_tilizeA_B_reduce.cpp",
         .num_threads = 1,
@@ -698,33 +698,33 @@ void run_single_core_unpack_tilizeA_B_reduce_program(
             {{
                  .dfb_spec_name = INP_DATA_DFB,
                  .accessor_name = "in_data",
-                 .endpoint_type = experimental::DFBEndpointType::CONSUMER,
-                 .access_pattern = experimental::DFBAccessPattern::STRIDED,
+                 .endpoint_type = DFBEndpointType::CONSUMER,
+                 .access_pattern = DFBAccessPattern::STRIDED,
              },
              {
                  .dfb_spec_name = INP_SCALER_DFB,
                  .accessor_name = "in_scaler",
-                 .endpoint_type = experimental::DFBEndpointType::CONSUMER,
-                 .access_pattern = experimental::DFBAccessPattern::STRIDED,
+                 .endpoint_type = DFBEndpointType::CONSUMER,
+                 .access_pattern = DFBAccessPattern::STRIDED,
              },
              {
                  .dfb_spec_name = OUT_DFB,
                  .accessor_name = "out",
-                 .endpoint_type = experimental::DFBEndpointType::PRODUCER,
-                 .access_pattern = experimental::DFBAccessPattern::STRIDED,
+                 .endpoint_type = DFBEndpointType::PRODUCER,
+                 .access_pattern = DFBAccessPattern::STRIDED,
              }},
         .compile_time_args =
             {{"per_core_block_cnt", test_config.num_tiles_r}, {"per_core_block_tile_cnt", test_config.num_tiles_c}},
         .hw_config = compute_hw_config,
     };
 
-    experimental::WorkUnitSpec wu{
+    WorkUnitSpec wu{
         .name = "main",
         .kernels = {READER, WRITER, COMPUTE},
         .target_nodes = node,
     };
 
-    experimental::ProgramSpec spec{
+    ProgramSpec spec{
         .name = "unpack_tilizeA_B_reduce",
         .kernels = {reader_spec, writer_spec, compute_spec},
         .dataflow_buffers = {inp_data_dfb_spec, inp_scaler_dfb_spec, out_dfb_spec},
@@ -744,22 +744,22 @@ void run_single_core_unpack_tilizeA_B_reduce_program(
     float scaler_f = 1.0f;
     std::vector<std::uint32_t> scaler_tile_vec = create_constant_vector_of_bfloat16(scaler_tile_size, scaler_f);
 
-    experimental::ProgramRunArgs params;
+    ProgramRunArgs params;
     params.kernel_run_args = {
-        experimental::ProgramRunArgs::KernelRunArgs{
+        ProgramRunArgs::KernelRunArgs{
             .kernel = READER,
-            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+            .runtime_arg_values = MakeRuntimeArgsForSingleNode(
                 node, {{"num_tiles", num_tiles_in}, {"scaler", *reinterpret_cast<std::uint32_t*>(&scaler_f)}}),
         },
-        experimental::ProgramRunArgs::KernelRunArgs{
+        ProgramRunArgs::KernelRunArgs{
             .kernel = WRITER,
-            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(node, {{"num_tiles", num_tiles_out}}),
+            .runtime_arg_values = MakeRuntimeArgsForSingleNode(node, {{"num_tiles", num_tiles_out}}),
         },
-        experimental::ProgramRunArgs::KernelRunArgs{.kernel = COMPUTE},
+        ProgramRunArgs::KernelRunArgs{.kernel = COMPUTE},
     };
     params.tensor_args = {
-        {IN_TENSOR, experimental::ProgramRunArgs::TensorArgument{in_tensor}},
-        {OUT_TENSOR, experimental::ProgramRunArgs::TensorArgument{out_tensor}},
+        {IN_TENSOR, ProgramRunArgs::TensorArgument{in_tensor}},
+        {OUT_TENSOR, ProgramRunArgs::TensorArgument{out_tensor}},
     };
     experimental::SetProgramRunArgs(program, params);
 
@@ -1062,7 +1062,7 @@ static void run_quasar_tilize_untilize_test(
     bool is_tilize = (mode == QuasarTestMode::TILIZE);
 
     auto& cq = mesh_device.mesh_command_queue();
-    const experimental::NodeCoord node{0, 0};
+    const NodeCoord node{0, 0};
 
     constexpr std::uint32_t face_c_dim = tt::constants::FACE_WIDTH;
     const std::uint32_t num_faces = tile_shape_in_faces[0] * tile_shape_in_faces[1];
@@ -1094,19 +1094,19 @@ static void run_quasar_tilize_untilize_test(
     // per tile-row, so the DFBs must hold all tiles.
     std::uint32_t dfb_num_entries = tilize_cross_tile_rows ? num_tiles : std::max(2u, num_tiles_c);
 
-    const experimental::DFBSpecName INPUT_DFB{"input_dfb"};
-    const experimental::DFBSpecName OUTPUT_DFB{"output_dfb"};
-    const experimental::KernelSpecName READER{"reader"};
-    const experimental::KernelSpecName WRITER{"writer"};
-    const experimental::KernelSpecName COMPUTE{"compute"};
+    const DFBSpecName INPUT_DFB{"input_dfb"};
+    const DFBSpecName OUTPUT_DFB{"output_dfb"};
+    const KernelSpecName READER{"reader"};
+    const KernelSpecName WRITER{"writer"};
+    const KernelSpecName COMPUTE{"compute"};
 
-    experimental::DataflowBufferSpec input_dfb_spec{
+    DataflowBufferSpec input_dfb_spec{
         .unique_id = INPUT_DFB,
         .entry_size = input_single_tile_size,
         .num_entries = dfb_num_entries,
         .data_format_metadata = input_data_format,
     };
-    experimental::DataflowBufferSpec output_dfb_spec{
+    DataflowBufferSpec output_dfb_spec{
         .unique_id = OUTPUT_DFB,
         .entry_size = output_single_tile_size,
         .num_entries = dfb_num_entries,
@@ -1119,30 +1119,30 @@ static void run_quasar_tilize_untilize_test(
         output_dfb_spec.tile_format_metadata = tile;
     }
 
-    experimental::KernelSpec reader_spec{
+    KernelSpec reader_spec{
         .unique_id = READER,
         .source =
 
             "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/dram/direct_reader_unary_2_0.cpp",
         .num_threads = 1,
-        .dfb_bindings = {experimental::ProducerOf(INPUT_DFB, "out")},
+        .dfb_bindings = {ProducerOf(INPUT_DFB, "out")},
         .runtime_arg_schema = {.runtime_arg_names = {"src_addr", "src_bank_id", "num_tiles", "dram_page_stride"}},
-        .hw_config = experimental::DataMovementHardwareConfig{},
+        .hw_config = DataMovementHardwareConfig{},
     };
 
-    experimental::KernelSpec writer_spec{
+    KernelSpec writer_spec{
         .unique_id = WRITER,
         .source =
 
             "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/dram/direct_writer_unary_2_0.cpp",
         .num_threads = 1,
-        .dfb_bindings = {experimental::ConsumerOf(OUTPUT_DFB, "in")},
+        .dfb_bindings = {ConsumerOf(OUTPUT_DFB, "in")},
         .runtime_arg_schema = {.runtime_arg_names = {"dst_addr", "dst_bank_id", "num_tiles", "dram_page_stride"}},
-        .hw_config = experimental::DataMovementHardwareConfig{},
+        .hw_config = DataMovementHardwareConfig{},
     };
 
     std::string compute_kernel;
-    experimental::KernelSpec::CompileTimeArgs compute_cta_bindings;
+    KernelSpec::CompileTimeArgs compute_cta_bindings;
     switch (mode) {
         case QuasarTestMode::TILIZE:
             compute_kernel = tilize_cross_tile_rows
@@ -1170,15 +1170,15 @@ static void run_quasar_tilize_untilize_test(
         }
     }
 
-    experimental::ComputeHardwareConfig compute_hw_config;
-    compute_hw_config = experimental::ComputeHardwareConfig{
+    ComputeHardwareConfig compute_hw_config;
+    compute_hw_config = ComputeHardwareConfig{
         .enable_32_bit_dest = fp32_dest_acc_en,
         .double_buffer_dest = !dst_full_sync_en,
     };
     if (unpack_to_dest) {
         compute_hw_config.unpack_modes = {{INPUT_DFB, tt::tt_metal::UnpackMode::UnpackToDest}};
     }
-    experimental::KernelSpec compute_spec{
+    KernelSpec compute_spec{
         .unique_id = COMPUTE,
         .source = compute_kernel,
         .num_threads = 1,
@@ -1186,26 +1186,26 @@ static void run_quasar_tilize_untilize_test(
             {{
                  .dfb_spec_name = INPUT_DFB,
                  .accessor_name = "in",
-                 .endpoint_type = experimental::DFBEndpointType::CONSUMER,
-                 .access_pattern = experimental::DFBAccessPattern::STRIDED,
+                 .endpoint_type = DFBEndpointType::CONSUMER,
+                 .access_pattern = DFBAccessPattern::STRIDED,
              },
              {
                  .dfb_spec_name = OUTPUT_DFB,
                  .accessor_name = "out",
-                 .endpoint_type = experimental::DFBEndpointType::PRODUCER,
-                 .access_pattern = experimental::DFBAccessPattern::STRIDED,
+                 .endpoint_type = DFBEndpointType::PRODUCER,
+                 .access_pattern = DFBAccessPattern::STRIDED,
              }},
         .compile_time_args = compute_cta_bindings,
         .hw_config = compute_hw_config,
     };
 
-    experimental::WorkUnitSpec wu{
+    WorkUnitSpec wu{
         .name = "main",
         .kernels = {READER, WRITER, COMPUTE},
         .target_nodes = node,
     };
 
-    experimental::ProgramSpec spec{
+    ProgramSpec spec{
         .name = "quasar_tilize_untilize",
         .kernels = {reader_spec, writer_spec, compute_spec},
         .dataflow_buffers = {input_dfb_spec, output_dfb_spec},
@@ -1247,27 +1247,27 @@ static void run_quasar_tilize_untilize_test(
     const std::uint32_t src_tile_stride_bytes = src_dram_buffer_size / num_tiles;
     const std::uint32_t dst_tile_stride_bytes = dst_dram_buffer_size / num_tiles;
 
-    experimental::ProgramRunArgs params;
+    ProgramRunArgs params;
     params.kernel_run_args = {
-        experimental::ProgramRunArgs::KernelRunArgs{
+        ProgramRunArgs::KernelRunArgs{
             .kernel = READER,
-            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+            .runtime_arg_values = MakeRuntimeArgsForSingleNode(
                 node,
                 {{"src_addr", dram_buffer_src_addr},
                  {"src_bank_id", 0u},
                  {"num_tiles", num_tiles},
                  {"dram_page_stride", src_tile_stride_bytes}}),
         },
-        experimental::ProgramRunArgs::KernelRunArgs{
+        ProgramRunArgs::KernelRunArgs{
             .kernel = WRITER,
-            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+            .runtime_arg_values = MakeRuntimeArgsForSingleNode(
                 node,
                 {{"dst_addr", dram_buffer_dst_addr},
                  {"dst_bank_id", 0u},
                  {"num_tiles", num_tiles},
                  {"dram_page_stride", dst_tile_stride_bytes}}),
         },
-        experimental::ProgramRunArgs::KernelRunArgs{.kernel = COMPUTE},
+        ProgramRunArgs::KernelRunArgs{.kernel = COMPUTE},
     };
     experimental::SetProgramRunArgs(program, params);
 

@@ -42,10 +42,10 @@ static void run_intra_tensix_dfb_program(
         num_threads);
     const uint32_t entries_per_neo = num_entries / num_threads;
 
-    const experimental::DFBSpecName INTRA_DFB{"intra_dfb"};
-    const experimental::KernelSpecName COMPUTE{"compute"};
+    const DFBSpecName INTRA_DFB{"intra_dfb"};
+    const KernelSpecName COMPUTE{"compute"};
 
-    experimental::DataflowBufferSpec intra_dfb_spec{
+    DataflowBufferSpec intra_dfb_spec{
         .unique_id = INTRA_DFB,
         .entry_size = entry_size,
         .num_entries = num_entries,
@@ -54,7 +54,7 @@ static void run_intra_tensix_dfb_program(
 
     // Self-looped: register both PRODUCER and CONSUMER bindings on the same kernel.
     // The kernel only references dfb::out; both bindings resolve to the same DFB.
-    experimental::KernelSpec compute_spec{
+    KernelSpec compute_spec{
         .unique_id = COMPUTE,
         .source =
 
@@ -65,14 +65,14 @@ static void run_intra_tensix_dfb_program(
                 {
                     .dfb_spec_name = INTRA_DFB,
                     .accessor_name = "out",
-                    .endpoint_type = experimental::DFBEndpointType::PRODUCER,
-                    .access_pattern = experimental::DFBAccessPattern::STRIDED,
+                    .endpoint_type = DFBEndpointType::PRODUCER,
+                    .access_pattern = DFBAccessPattern::STRIDED,
                 },
                 {
                     .dfb_spec_name = INTRA_DFB,
                     .accessor_name = "in",
-                    .endpoint_type = experimental::DFBEndpointType::CONSUMER,
-                    .access_pattern = experimental::DFBAccessPattern::STRIDED,
+                    .endpoint_type = DFBEndpointType::CONSUMER,
+                    .access_pattern = DFBAccessPattern::STRIDED,
                 },
             },
         .compile_time_args =
@@ -80,16 +80,16 @@ static void run_intra_tensix_dfb_program(
                 {"entries_per_neo", entries_per_neo},
                 {"words_per_entry", words_per_entry},
             },
-        .hw_config = experimental::ComputeHardwareConfig{},
+        .hw_config = ComputeHardwareConfig{},
     };
 
-    experimental::WorkUnitSpec wu{
+    WorkUnitSpec wu{
         .name = "main",
         .kernels = {COMPUTE},
         .target_nodes = core_range_set,
     };
 
-    experimental::ProgramSpec spec{
+    ProgramSpec spec{
         .name = "intra_tensix_dfb",
         .kernels = {compute_spec},
         .dataflow_buffers = {intra_dfb_spec},
@@ -98,8 +98,8 @@ static void run_intra_tensix_dfb_program(
 
     Program program = experimental::MakeProgramFromSpec(mesh_device, spec);
 
-    experimental::ProgramRunArgs run_params;
-    run_params.kernel_run_args = {experimental::ProgramRunArgs::KernelRunArgs{.kernel = COMPUTE}};
+    ProgramRunArgs run_params;
+    run_params.kernel_run_args = {ProgramRunArgs::KernelRunArgs{.kernel = COMPUTE}};
     experimental::SetProgramRunArgs(program, run_params);
 
     const uint32_t total_size = num_entries * entry_size;
@@ -139,34 +139,34 @@ TEST_F(UnitMeshFixture, C2_2_0_DMTriscSelfLoopDM_DoubleRelu) {
 
     constexpr uint32_t entry_size = 2 * 32 * 32;  // bf16 tile = 2048 B
     constexpr uint32_t num_entries = 4;
-    const m2::NodeCoord node{0, 0};
+    const NodeCoord node{0, 0};
 
-    const m2::DFBSpecName DFB_IN{"dfb_in"};
-    const m2::DFBSpecName DFB_SELF{"dfb_self"};
-    const m2::DFBSpecName DFB_OUT{"dfb_out"};
-    const m2::KernelSpecName PRODUCER{"producer"};
-    const m2::KernelSpecName CONSUMER{"consumer"};
-    const m2::KernelSpecName COMPUTE{"compute"};
-    const m2::TensorParamName IN_TENSOR{"in_tensor"};
-    const m2::TensorParamName OUT_TENSOR{"out_tensor"};
+    const DFBSpecName DFB_IN{"dfb_in"};
+    const DFBSpecName DFB_SELF{"dfb_self"};
+    const DFBSpecName DFB_OUT{"dfb_out"};
+    const KernelSpecName PRODUCER{"producer"};
+    const KernelSpecName CONSUMER{"consumer"};
+    const KernelSpecName COMPUTE{"compute"};
+    const TensorParamName IN_TENSOR{"in_tensor"};
+    const TensorParamName OUT_TENSOR{"out_tensor"};
 
     const auto tensor_spec = make_flat_dram_tensor_spec(entry_size, num_entries, DataType::BFLOAT16);
     auto in_tensor = MeshTensor::allocate_on_device(this->device(), tensor_spec);
     auto out_tensor = MeshTensor::allocate_on_device(this->device(), tensor_spec);
 
-    m2::DataflowBufferSpec dfb_in{
+    DataflowBufferSpec dfb_in{
         .unique_id = DFB_IN,
         .entry_size = entry_size,
         .num_entries = num_entries,
         .data_format_metadata = tt::DataFormat::Float16_b,
     };
-    m2::DataflowBufferSpec dfb_self{
+    DataflowBufferSpec dfb_self{
         .unique_id = DFB_SELF,
         .entry_size = entry_size,
         .num_entries = num_entries,
         .data_format_metadata = tt::DataFormat::Float16_b,
     };
-    m2::DataflowBufferSpec dfb_out{
+    DataflowBufferSpec dfb_out{
         .unique_id = DFB_OUT,
         .entry_size = entry_size,
         .num_entries = num_entries,
@@ -179,20 +179,20 @@ TEST_F(UnitMeshFixture, C2_2_0_DMTriscSelfLoopDM_DoubleRelu) {
     compute.dfb_bindings = {
         {.dfb_spec_name = DFB_IN,
          .accessor_name = "in",
-         .endpoint_type = m2::DFBEndpointType::CONSUMER,
-         .access_pattern = m2::DFBAccessPattern::STRIDED},
+         .endpoint_type = DFBEndpointType::CONSUMER,
+         .access_pattern = DFBAccessPattern::STRIDED},
         {.dfb_spec_name = DFB_SELF,
          .accessor_name = "self",
-         .endpoint_type = m2::DFBEndpointType::PRODUCER,
-         .access_pattern = m2::DFBAccessPattern::STRIDED},
+         .endpoint_type = DFBEndpointType::PRODUCER,
+         .access_pattern = DFBAccessPattern::STRIDED},
         {.dfb_spec_name = DFB_SELF,
          .accessor_name = "self",
-         .endpoint_type = m2::DFBEndpointType::CONSUMER,
-         .access_pattern = m2::DFBAccessPattern::STRIDED},
+         .endpoint_type = DFBEndpointType::CONSUMER,
+         .access_pattern = DFBAccessPattern::STRIDED},
         {.dfb_spec_name = DFB_OUT,
          .accessor_name = "out",
-         .endpoint_type = m2::DFBEndpointType::PRODUCER,
-         .access_pattern = m2::DFBAccessPattern::STRIDED},
+         .endpoint_type = DFBEndpointType::PRODUCER,
+         .access_pattern = DFBAccessPattern::STRIDED},
     };
     compute.compile_time_args = {{"per_core_tile_cnt", num_entries}};
 
@@ -204,9 +204,9 @@ TEST_F(UnitMeshFixture, C2_2_0_DMTriscSelfLoopDM_DoubleRelu) {
     disable_implicit_sync_for(producer, DFB_IN);
     disable_implicit_sync_for(consumer, DFB_OUT);
 
-    m2::WorkUnitSpec wu{.name = "wu", .kernels = {PRODUCER, CONSUMER, COMPUTE}, .target_nodes = node};
+    WorkUnitSpec wu{.name = "wu", .kernels = {PRODUCER, CONSUMER, COMPUTE}, .target_nodes = node};
 
-    m2::ProgramSpec spec{
+    ProgramSpec spec{
         .name = "c2_2_0",
         .kernels = {producer, consumer, compute},
         .dataflow_buffers = {dfb_in, dfb_self, dfb_out},
@@ -218,27 +218,27 @@ TEST_F(UnitMeshFixture, C2_2_0_DMTriscSelfLoopDM_DoubleRelu) {
         .work_units = {wu},
     };
 
-    Program program = m2::MakeProgramFromSpec(this->device(), spec);
+    Program program = experimental::MakeProgramFromSpec(this->device(), spec);
 
-    m2::ProgramRunArgs params;
+    ProgramRunArgs params;
     params.kernel_run_args = {
-        m2::ProgramRunArgs::KernelRunArgs{
+        ProgramRunArgs::KernelRunArgs{
             .kernel = PRODUCER,
             .runtime_arg_values =
-                m2::MakeRuntimeArgsForSingleNode(node, {{"chunk_offset", 0u}, {"entries_per_core", num_entries}}),
+                MakeRuntimeArgsForSingleNode(node, {{"chunk_offset", 0u}, {"entries_per_core", num_entries}}),
         },
-        m2::ProgramRunArgs::KernelRunArgs{
+        ProgramRunArgs::KernelRunArgs{
             .kernel = CONSUMER,
             .runtime_arg_values =
-                m2::MakeRuntimeArgsForSingleNode(node, {{"chunk_offset", 0u}, {"entries_per_core", num_entries}}),
+                MakeRuntimeArgsForSingleNode(node, {{"chunk_offset", 0u}, {"entries_per_core", num_entries}}),
         },
-        m2::ProgramRunArgs::KernelRunArgs{.kernel = COMPUTE},
+        ProgramRunArgs::KernelRunArgs{.kernel = COMPUTE},
     };
     params.tensor_args = {
         {IN_TENSOR, std::cref(in_tensor)},
         {OUT_TENSOR, std::cref(out_tensor)},
     };
-    m2::SetProgramRunArgs(program, params);
+    experimental::SetProgramRunArgs(program, params);
 
     // Positive bf16 inputs → double-relu identity.
     const uint32_t total_bytes = entry_size * num_entries;
@@ -289,10 +289,10 @@ static void run_intra_tensix_dfb_program_2_0(
     const uint32_t words_per_entry = entry_size / sizeof(uint32_t);
     const uint32_t total_bytes = num_entries * entry_size;
 
-    const m2::DFBSpecName DFB{"intra_dfb"};
-    const m2::KernelSpecName COMPUTE{"compute"};
+    const DFBSpecName DFB{"intra_dfb"};
+    const KernelSpecName COMPUTE{"compute"};
 
-    m2::DataflowBufferSpec dfb_spec{
+    DataflowBufferSpec dfb_spec{
         .unique_id = DFB,
         .entry_size = entry_size,
         .num_entries = num_entries,
@@ -310,12 +310,12 @@ static void run_intra_tensix_dfb_program_2_0(
     compute.dfb_bindings = {
         {.dfb_spec_name = DFB,
          .accessor_name = "out",
-         .endpoint_type = m2::DFBEndpointType::PRODUCER,
-         .access_pattern = m2::DFBAccessPattern::STRIDED},
+         .endpoint_type = DFBEndpointType::PRODUCER,
+         .access_pattern = DFBAccessPattern::STRIDED},
         {.dfb_spec_name = DFB,
          .accessor_name = "in",
-         .endpoint_type = m2::DFBEndpointType::CONSUMER,
-         .access_pattern = m2::DFBAccessPattern::STRIDED},
+         .endpoint_type = DFBEndpointType::CONSUMER,
+         .access_pattern = DFBAccessPattern::STRIDED},
     };
     compute.compile_time_args = {{"entries_per_neo", entries_per_neo}, {"words_per_entry", words_per_entry}};
 
@@ -323,22 +323,22 @@ static void run_intra_tensix_dfb_program_2_0(
     // working legacy M2 helper on main (run_intra_tensix_dfb_program). With a
     // bare NodeCoord the framework takes a different scheduling path that
     // exposes a PACK/UNPACK write race for some Neos' L1 slices.
-    const m2::NodeRangeSet node_set{m2::NodeRange{m2::NodeCoord{0, 0}, m2::NodeCoord{0, 0}}};
-    m2::ProgramSpec spec{
+    const NodeRangeSet node_set{NodeRange{NodeCoord{0, 0}, NodeCoord{0, 0}}};
+    ProgramSpec spec{
         .name = "intra_tensix_2_0",
         .kernels = {compute},
         .dataflow_buffers = {dfb_spec},
         .tensor_parameters = {},
-        .work_units = {m2::WorkUnitSpec{.name = "main", .kernels = {COMPUTE}, .target_nodes = node_set}},
+        .work_units = {WorkUnitSpec{.name = "main", .kernels = {COMPUTE}, .target_nodes = node_set}},
     };
 
-    Program program = m2::MakeProgramFromSpec(mesh_device, spec);
+    Program program = experimental::MakeProgramFromSpec(mesh_device, spec);
 
     // Kernel has no runtime args; pass kernel_spec_name only (matches legacy
     // pattern in main's run_intra_tensix_dfb_program).
-    m2::ProgramRunArgs params;
+    ProgramRunArgs params;
     params.kernel_run_args = {{.kernel = COMPUTE}};
-    m2::SetProgramRunArgs(program, params);
+    experimental::SetProgramRunArgs(program, params);
 
     // DFB is the first L1 allocation in the program → lands at the base L1
     // allocator address. Same trick the legacy intra test uses.
@@ -371,16 +371,16 @@ TEST_F(UnitMeshFixture, TensixIntraAndRemapperTest_4Neo_DM1Sx4B_2_0) {
     constexpr uint32_t num_entries = 16;
     constexpr uint32_t num_neos = 4;
     constexpr uint32_t entries_per_neo = num_entries / num_neos;  // = 4
-    const m2::NodeCoord node{0, 0};
+    const NodeCoord node{0, 0};
 
-    const m2::DFBSpecName DFB_REMAPPER{"dfb_remapper"};
-    const m2::DFBSpecName DFB_INTRA{"dfb_intra"};
-    const m2::KernelSpecName PRODUCER{"producer"};
-    const m2::KernelSpecName COMPUTE{"compute"};
-    const m2::TensorParamName IN_TENSOR{"in_tensor"};
+    const DFBSpecName DFB_REMAPPER{"dfb_remapper"};
+    const DFBSpecName DFB_INTRA{"dfb_intra"};
+    const KernelSpecName PRODUCER{"producer"};
+    const KernelSpecName COMPUTE{"compute"};
+    const TensorParamName IN_TENSOR{"in_tensor"};
 
     // dfb_remapper: DM->Tensix 1S × 4B ALL, implicit_sync=true.
-    m2::DataflowBufferSpec dfb_remapper{
+    DataflowBufferSpec dfb_remapper{
         .unique_id = DFB_REMAPPER,
         .entry_size = entry_size,
         .num_entries = num_entries,
@@ -388,7 +388,7 @@ TEST_F(UnitMeshFixture, TensixIntraAndRemapperTest_4Neo_DM1Sx4B_2_0) {
         // implicit sync default = enabled; do not disable.
     };
     // dfb_intra: PACK->UNPACK self-loop, 4×4 STRIDED, implicit sync off (INTRA requirement).
-    m2::DataflowBufferSpec dfb_intra_spec{
+    DataflowBufferSpec dfb_intra_spec{
         .unique_id = DFB_INTRA,
         .entry_size = entry_size,
         .num_entries = num_entries,
@@ -409,16 +409,16 @@ TEST_F(UnitMeshFixture, TensixIntraAndRemapperTest_4Neo_DM1Sx4B_2_0) {
     compute.dfb_bindings = {
         {.dfb_spec_name = DFB_REMAPPER,
          .accessor_name = "consume",
-         .endpoint_type = m2::DFBEndpointType::CONSUMER,
-         .access_pattern = m2::DFBAccessPattern::ALL},
+         .endpoint_type = DFBEndpointType::CONSUMER,
+         .access_pattern = DFBAccessPattern::ALL},
         {.dfb_spec_name = DFB_INTRA,
          .accessor_name = "intra",
-         .endpoint_type = m2::DFBEndpointType::PRODUCER,
-         .access_pattern = m2::DFBAccessPattern::STRIDED},
+         .endpoint_type = DFBEndpointType::PRODUCER,
+         .access_pattern = DFBAccessPattern::STRIDED},
         {.dfb_spec_name = DFB_INTRA,
          .accessor_name = "intra",
-         .endpoint_type = m2::DFBEndpointType::CONSUMER,
-         .access_pattern = m2::DFBAccessPattern::STRIDED},
+         .endpoint_type = DFBEndpointType::CONSUMER,
+         .access_pattern = DFBAccessPattern::STRIDED},
     };
     compute.compile_time_args = {
         {"num_entries_consumer", num_entries},
@@ -426,7 +426,7 @@ TEST_F(UnitMeshFixture, TensixIntraAndRemapperTest_4Neo_DM1Sx4B_2_0) {
         {"words_per_entry", entry_size / sizeof(uint32_t)},
     };
 
-    m2::ProgramSpec spec{
+    ProgramSpec spec{
         .name = "intra_and_remapper_2_0",
         .kernels = {producer, compute},
         .dataflow_buffers = {dfb_remapper, dfb_intra_spec},
@@ -434,23 +434,23 @@ TEST_F(UnitMeshFixture, TensixIntraAndRemapperTest_4Neo_DM1Sx4B_2_0) {
             {
                 {.unique_id = IN_TENSOR, .spec = in_tensor.tensor_spec()},
             },
-        .work_units = {m2::WorkUnitSpec{
+        .work_units = {WorkUnitSpec{
             .name = "wu",
             .kernels = {PRODUCER, COMPUTE},
             .target_nodes = node,
         }},
     };
 
-    Program program = m2::MakeProgramFromSpec(this->device(), spec);
+    Program program = experimental::MakeProgramFromSpec(this->device(), spec);
 
-    m2::ProgramRunArgs params;
+    ProgramRunArgs params;
     params.kernel_run_args = {
         {.kernel = PRODUCER,
          .runtime_arg_values =
-             m2::MakeRuntimeArgsForSingleNode(node, {{"chunk_offset", 0u}, {"entries_per_core", num_entries}})},
+             MakeRuntimeArgsForSingleNode(node, {{"chunk_offset", 0u}, {"entries_per_core", num_entries}})},
     };
     params.tensor_args = {{IN_TENSOR, std::cref(in_tensor)}};
-    m2::SetProgramRunArgs(program, params);
+    experimental::SetProgramRunArgs(program, params);
 
     // Finalize before launch so the counters each DFB owns are known while the pre-launch snapshot is taken.
     program.impl().finalize_dataflow_buffer_configs();
@@ -610,10 +610,10 @@ TEST_F(UnitMeshFixture, TensixIntraIsolatesOverlayTCs) {
         static_cast<uint32_t>(this->device().allocator()->get_base_allocator_addr(HalMemType::L1));
     const uint32_t scratch_l1_addr = dfb_l1_addr + total_bytes;
 
-    const m2::DFBSpecName DFB{"intra_dfb"};
-    const m2::KernelSpecName COMPUTE{"compute"};
+    const DFBSpecName DFB{"intra_dfb"};
+    const KernelSpecName COMPUTE{"compute"};
 
-    m2::DataflowBufferSpec dfb_spec{
+    DataflowBufferSpec dfb_spec{
         .unique_id = DFB,
         .entry_size = entry_size,
         .num_entries = num_entries,
@@ -625,12 +625,12 @@ TEST_F(UnitMeshFixture, TensixIntraIsolatesOverlayTCs) {
     compute.dfb_bindings = {
         {.dfb_spec_name = DFB,
          .accessor_name = "out",
-         .endpoint_type = m2::DFBEndpointType::PRODUCER,
-         .access_pattern = m2::DFBAccessPattern::STRIDED},
+         .endpoint_type = DFBEndpointType::PRODUCER,
+         .access_pattern = DFBAccessPattern::STRIDED},
         {.dfb_spec_name = DFB,
          .accessor_name = "in",
-         .endpoint_type = m2::DFBEndpointType::CONSUMER,
-         .access_pattern = m2::DFBAccessPattern::STRIDED},
+         .endpoint_type = DFBEndpointType::CONSUMER,
+         .access_pattern = DFBAccessPattern::STRIDED},
     };
     compute.compile_time_args = {
         {"scratch_l1_address", scratch_l1_addr},
@@ -656,16 +656,16 @@ TEST_F(UnitMeshFixture, TensixIntraIsolatesOverlayTCs) {
         {"step3", steps[3]},
     };
 
-    const m2::NodeRangeSet node_set{m2::NodeRange{m2::NodeCoord{0, 0}, m2::NodeCoord{0, 0}}};
-    m2::ProgramSpec spec{
+    const NodeRangeSet node_set{NodeRange{NodeCoord{0, 0}, NodeCoord{0, 0}}};
+    ProgramSpec spec{
         .name = "intra_overlay_isolation_2_0",
         .kernels = {compute},
         .dataflow_buffers = {dfb_spec},
         .tensor_parameters = {},
-        .work_units = {m2::WorkUnitSpec{.name = "main", .kernels = {COMPUTE}, .target_nodes = node_set}},
+        .work_units = {WorkUnitSpec{.name = "main", .kernels = {COMPUTE}, .target_nodes = node_set}},
     };
 
-    Program program = m2::MakeProgramFromSpec(this->device(), spec);
+    Program program = experimental::MakeProgramFromSpec(this->device(), spec);
     program.impl().finalize_dataflow_buffer_configs();
 
     auto intra_dfb = program.impl().get_dataflow_buffer(program.impl().get_dfb_handle(*DFB));
@@ -681,9 +681,9 @@ TEST_F(UnitMeshFixture, TensixIntraIsolatesOverlayTCs) {
     // rather than silently sampling the wrong counter.
     ASSERT_EQ(client_l_tc, client_l_tc_arg);
 
-    m2::ProgramRunArgs params;
+    ProgramRunArgs params;
     params.kernel_run_args = {{.kernel = COMPUTE}};
-    m2::SetProgramRunArgs(program, params);
+    experimental::SetProgramRunArgs(program, params);
 
     // Kernel only exercises TC push/pop credits; L1 payload is untouched.
     std::vector<uint32_t> scratch_zero(scratch_words, 0);
@@ -808,10 +808,10 @@ TEST_F(UnitMeshFixture, TensixIntraRemapperTeardownDoesNotAliasOverlay) {
         static_cast<uint32_t>(this->device().allocator()->get_base_allocator_addr(HalMemType::L1));
     const uint32_t scratch_l1_addr = dfb_l1_addr + total_bytes;
 
-    const m2::DFBSpecName DFB{"intra_dfb"};
-    const m2::KernelSpecName COMPUTE{"compute"};
+    const DFBSpecName DFB{"intra_dfb"};
+    const KernelSpecName COMPUTE{"compute"};
 
-    m2::DataflowBufferSpec dfb_spec{
+    DataflowBufferSpec dfb_spec{
         .unique_id = DFB,
         .entry_size = entry_size,
         .num_entries = num_entries,
@@ -823,12 +823,12 @@ TEST_F(UnitMeshFixture, TensixIntraRemapperTeardownDoesNotAliasOverlay) {
     compute.dfb_bindings = {
         {.dfb_spec_name = DFB,
          .accessor_name = "out",
-         .endpoint_type = m2::DFBEndpointType::PRODUCER,
-         .access_pattern = m2::DFBAccessPattern::STRIDED},
+         .endpoint_type = DFBEndpointType::PRODUCER,
+         .access_pattern = DFBAccessPattern::STRIDED},
         {.dfb_spec_name = DFB,
          .accessor_name = "in",
-         .endpoint_type = m2::DFBEndpointType::CONSUMER,
-         .access_pattern = m2::DFBAccessPattern::STRIDED},
+         .endpoint_type = DFBEndpointType::CONSUMER,
+         .access_pattern = DFBAccessPattern::STRIDED},
     };
     compute.compile_time_args = {
         {"scratch_l1_address", scratch_l1_addr},
@@ -838,16 +838,16 @@ TEST_F(UnitMeshFixture, TensixIntraRemapperTeardownDoesNotAliasOverlay) {
         {"unpack_spin", unpack_spin},
     };
 
-    const m2::NodeRangeSet node_set{m2::NodeRange{m2::NodeCoord{0, 0}, m2::NodeCoord{0, 0}}};
-    m2::ProgramSpec spec{
+    const NodeRangeSet node_set{NodeRange{NodeCoord{0, 0}, NodeCoord{0, 0}}};
+    ProgramSpec spec{
         .name = "intra_remapper_teardown_race",
         .kernels = {compute},
         .dataflow_buffers = {dfb_spec},
         .tensor_parameters = {},
-        .work_units = {m2::WorkUnitSpec{.name = "main", .kernels = {COMPUTE}, .target_nodes = node_set}},
+        .work_units = {WorkUnitSpec{.name = "main", .kernels = {COMPUTE}, .target_nodes = node_set}},
     };
 
-    Program program = m2::MakeProgramFromSpec(this->device(), spec);
+    Program program = experimental::MakeProgramFromSpec(this->device(), spec);
     program.impl().finalize_dataflow_buffer_configs();
 
     auto intra_dfb = program.impl().get_dataflow_buffer(program.impl().get_dfb_handle(*DFB));
@@ -858,9 +858,9 @@ TEST_F(UnitMeshFixture, TensixIntraRemapperTeardownDoesNotAliasOverlay) {
     ASSERT_EQ(client_l_tc, client_l_tc_arg);
     const uint32_t alias_tc = client_l_tc & 0xFu;
 
-    m2::ProgramRunArgs params;
+    ProgramRunArgs params;
     params.kernel_run_args = {{.kernel = COMPUTE}};
-    m2::SetProgramRunArgs(program, params);
+    experimental::SetProgramRunArgs(program, params);
 
     std::vector<uint32_t> scratch_zero(1, 0);
     slow_dispatch::WriteToL1(this->device(), CoreCoord(0, 0), scratch_l1_addr, scratch_zero);

@@ -174,7 +174,7 @@ struct RunConfig {
 bool run_narrow_row(
     const std::shared_ptr<distributed::MeshDevice>& mesh_device, const Buffers& buffers, const RunConfig& cfg) {
     auto& cq = mesh_device->mesh_command_queue();
-    const experimental::NodeCoord node{0, 0};
+    const NodeCoord node{0, 0};
 
     // Outgrowing the buffers is silent otherwise: the stimulus resize() below would TRUNCATE
     // while the reader still streams cfg.ct_dim tiles, and the gather would write past out_l1
@@ -229,13 +229,13 @@ bool run_narrow_row(
     }
 
     // ---- program ------------------------------------------------------------------------
-    const experimental::DFBSpecName SRC_DFB{"src_dfb"};
-    const experimental::DFBSpecName PAD_DFB{"pad_dfb"};
-    const experimental::KernelSpecName READER{"reader"};
-    const experimental::KernelSpecName COMPUTE{"narrow_row_untilize"};
-    const experimental::KernelSpecName COMPACT{"narrow_row_compact"};
+    const DFBSpecName SRC_DFB{"src_dfb"};
+    const DFBSpecName PAD_DFB{"pad_dfb"};
+    const KernelSpecName READER{"reader"};
+    const KernelSpecName COMPUTE{"narrow_row_untilize"};
+    const KernelSpecName COMPACT{"narrow_row_compact"};
 
-    experimental::DataflowBufferSpec src_dfb_spec{
+    DataflowBufferSpec src_dfb_spec{
         .unique_id = SRC_DFB,
         .entry_size = TILE_BYTES,
         .num_entries = ct_dim,
@@ -243,36 +243,36 @@ bool run_narrow_row(
     };
     // The untilized output is addressed in ROWS, not tiles: one entry per output row, TILE_H
     // of them. Same convention the shipping pack_untilize consumers use.
-    experimental::DataflowBufferSpec pad_dfb_spec{
+    DataflowBufferSpec pad_dfb_spec{
         .unique_id = PAD_DFB,
         .entry_size = pad_row_bytes,
         .num_entries = OUT_ROWS,
         .data_format_metadata = tt::DataFormat::Float16_b,
     };
 
-    experimental::KernelSpec reader_spec{
+    KernelSpec reader_spec{
         .unique_id = READER,
         .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/dram/direct_reader_unary_2_0.cpp",
         .num_threads = 1,
-        .dfb_bindings = {experimental::ProducerOf(SRC_DFB, "out")},
+        .dfb_bindings = {ProducerOf(SRC_DFB, "out")},
         .runtime_arg_schema = {.runtime_arg_names = {"src_addr", "src_bank_id", "num_tiles", "dram_page_stride"}},
-        .hw_config = experimental::DataMovementHardwareConfig{},
+        .hw_config = DataMovementHardwareConfig{},
     };
 
-    experimental::KernelSpec compute_spec{
+    KernelSpec compute_spec{
         .unique_id = COMPUTE,
         .source = "tests/tt_metal/tt_metal/data_movement/quasar_narrow_row/kernels/narrow_row_untilize_compute.cpp",
         .num_threads = 1,
-        .dfb_bindings = {experimental::ConsumerOf(SRC_DFB, "src"), experimental::ProducerOf(PAD_DFB, "pad")},
+        .dfb_bindings = {ConsumerOf(SRC_DFB, "src"), ProducerOf(PAD_DFB, "pad")},
         .compile_time_args = {{"ct_dim", ct_dim}, {"out_rows", OUT_ROWS}},
-        .hw_config = experimental::ComputeHardwareConfig{},
+        .hw_config = ComputeHardwareConfig{},
     };
 
-    experimental::KernelSpec compact_spec{
+    KernelSpec compact_spec{
         .unique_id = COMPACT,
         .source = "tests/tt_metal/tt_metal/data_movement/quasar_narrow_row/kernels/narrow_row_compact_dm.cpp",
         .num_threads = 1,
-        .dfb_bindings = {experimental::ConsumerOf(PAD_DFB, "pad")},
+        .dfb_bindings = {ConsumerOf(PAD_DFB, "pad")},
         .runtime_arg_schema =
             {
                 .runtime_arg_names =
@@ -284,10 +284,10 @@ bool run_narrow_row(
                      "dest_coords",
                      "num_channels"},
             },
-        .hw_config = experimental::DataMovementHardwareConfig{},
+        .hw_config = DataMovementHardwareConfig{},
     };
 
-    experimental::ProgramSpec spec{
+    ProgramSpec spec{
         .name = "pack_untilize_narrow_row",
         .kernels = {reader_spec, compute_spec, compact_spec},
         .dataflow_buffers = {src_dfb_spec, pad_dfb_spec},
@@ -295,18 +295,18 @@ bool run_narrow_row(
     };
     Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
 
-    experimental::ProgramRunArgs params;
+    ProgramRunArgs params;
     params.kernel_run_args = {
-        experimental::ProgramRunArgs::KernelRunArgs{
+        ProgramRunArgs::KernelRunArgs{
             .kernel = READER,
-            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+            .runtime_arg_values = MakeRuntimeArgsForSingleNode(
                 node,
                 {{"src_addr", src_addr}, {"src_bank_id", 0u}, {"num_tiles", ct_dim}, {"dram_page_stride", TILE_BYTES}}),
         },
-        experimental::ProgramRunArgs::KernelRunArgs{.kernel = COMPUTE},
-        experimental::ProgramRunArgs::KernelRunArgs{
+        ProgramRunArgs::KernelRunArgs{.kernel = COMPUTE},
+        ProgramRunArgs::KernelRunArgs{
             .kernel = COMPACT,
-            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+            .runtime_arg_values = MakeRuntimeArgsForSingleNode(
                 node,
                 {{"dst_addr", out_addr},
                  {"pad_row_bytes", pad_row_bytes},

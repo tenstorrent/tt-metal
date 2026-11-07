@@ -54,43 +54,43 @@ BenchResult run_bench(distributed::MeshDevice& mesh_device, const BenchParams& p
     const CoreCoord dst_logical = mesh_device.compute_with_storage_grid_size().x > 1 ? CoreCoord{1, 0} : core;
     const CoreCoord dst_virtual = mesh_device.worker_core_from_logical_core(dst_logical);
     const CoreRangeSet crs(CoreRange(core, core));
-    const experimental::NodeCoord node{core.x, core.y};
+    const NodeCoord node{core.x, core.y};
 
     const bool needs_streamer = p.scenario == SCENARIO_COUPLED_IDLE || p.scenario == SCENARIO_CROSS_HART_TRID;
     const std::vector<std::string> rta_names = {
         "scenario", "num_writes", "write_bytes", "iters", "src_addr", "dst_x", "dst_y", "dst_addr", "result_addr"};
-    const experimental::KernelSpecName MEASURER{"measurer"};
-    const experimental::KernelSpecName STREAMER{"streamer"};
+    const KernelSpecName MEASURER{"measurer"};
+    const KernelSpecName STREAMER{"streamer"};
 
-    std::vector<experimental::KernelSpec> kernels = {experimental::KernelSpec{
+    std::vector<KernelSpec> kernels = {KernelSpec{
         .unique_id = MEASURER,
         .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_write_barrier_bench_dm.cpp",
         .num_threads = 1,
         .runtime_arg_schema = {.runtime_arg_names = rta_names},
-        .hw_config = experimental::DataMovementHardwareConfig{},
+        .hw_config = DataMovementHardwareConfig{},
     }};
-    std::vector<experimental::KernelSpecName> wu_kernels = {MEASURER};
+    std::vector<KernelSpecName> wu_kernels = {MEASURER};
     if (needs_streamer) {
-        kernels.push_back(experimental::KernelSpec{
+        kernels.push_back(KernelSpec{
             .unique_id = STREAMER,
             .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_write_barrier_bench_streamer_dm.cpp",
             .num_threads = 1,
             .runtime_arg_schema = {.runtime_arg_names = rta_names},
-            .hw_config = experimental::DataMovementHardwareConfig{},
+            .hw_config = DataMovementHardwareConfig{},
         });
         wu_kernels.push_back(STREAMER);
     }
 
-    experimental::ProgramSpec spec{
+    ProgramSpec spec{
         .name = "dfb_write_barrier_bench",
         .kernels = kernels,
-        .work_units = {experimental::WorkUnitSpec{.name = "main", .kernels = wu_kernels, .target_nodes = crs}},
+        .work_units = {WorkUnitSpec{.name = "main", .kernels = wu_kernels, .target_nodes = crs}},
     };
     Program program = experimental::MakeProgramFromSpec(mesh_device, spec);
 
     // The streamer writes to a different half of the destination than the measurer would, but the
     // contents never matter here, so both share one source and one destination.
-    auto args = experimental::MakeRuntimeArgsForSingleNode(
+    auto args = MakeRuntimeArgsForSingleNode(
         node,
         {{"scenario", static_cast<uint32_t>(p.scenario)},
          {"num_writes", p.num_writes},
@@ -101,11 +101,11 @@ BenchResult run_bench(distributed::MeshDevice& mesh_device, const BenchParams& p
          {"dst_y", static_cast<uint32_t>(dst_virtual.y)},
          {"dst_addr", static_cast<uint32_t>(dst_buffer->address())},
          {"result_addr", static_cast<uint32_t>(result_buffer->address())}});
-    experimental::ProgramRunArgs run_args;
-    run_args.kernel_run_args = {experimental::ProgramRunArgs::KernelRunArgs{.kernel = MEASURER, .runtime_arg_values = args}};
+    ProgramRunArgs run_args;
+    run_args.kernel_run_args = {ProgramRunArgs::KernelRunArgs{.kernel = MEASURER, .runtime_arg_values = args}};
     if (needs_streamer) {
         run_args.kernel_run_args.push_back(
-            experimental::ProgramRunArgs::KernelRunArgs{.kernel = STREAMER, .runtime_arg_values = args});
+            ProgramRunArgs::KernelRunArgs{.kernel = STREAMER, .runtime_arg_values = args});
     }
     experimental::SetProgramRunArgs(program, run_args);
 

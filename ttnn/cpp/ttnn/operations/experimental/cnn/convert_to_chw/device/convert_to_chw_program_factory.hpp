@@ -18,7 +18,7 @@ struct ConvertToCHWProgramFactory {
     static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
         const ConvertToCHWParams& operation_attributes, const Tensor& tensor_args, Tensor& tensor_return_value);
 
-    static tt::tt_metal::experimental::ProgramRunArgs override_runtime_arguments(
+    static tt::tt_metal::ProgramRunArgs override_runtime_arguments(
         const ConvertToCHWParams& operation_attributes,
         const Tensor& tensor_args,
         Tensor& output,

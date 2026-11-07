@@ -44,16 +44,16 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, MultiDmAddTwoInts) {
     distributed::MeshWorkload workload;
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
 
-    const experimental::KernelSpecName KERNEL_0{"kernel_0"};
-    const experimental::KernelSpecName KERNEL_1{"kernel_1"};
-    const experimental::KernelSpecName KERNEL_2{"kernel_2"};
-    const experimental::KernelSpecName KERNEL_3{"kernel_3"};
+    const KernelSpecName KERNEL_0{"kernel_0"};
+    const KernelSpecName KERNEL_1{"kernel_1"};
+    const KernelSpecName KERNEL_2{"kernel_2"};
+    const KernelSpecName KERNEL_3{"kernel_3"};
 
     const uint32_t result_base = MetalContext::instance().hal().get_dev_addr(
         HalProgrammableCoreType::TENSIX, HalL1MemAddrType::DEFAULT_UNRESERVED);
 
-    auto make_dm_kernel_spec = [](const experimental::KernelSpecName& id, uint32_t num_threads, uint32_t l1_addr) {
-        return experimental::KernelSpec{
+    auto make_dm_kernel_spec = [](const KernelSpecName& id, uint32_t num_threads, uint32_t l1_addr) {
+        return KernelSpec{
             .unique_id = id,
             .source =
 
@@ -64,7 +64,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, MultiDmAddTwoInts) {
                 {
                     .runtime_arg_names = {"a", "b"},
                 },
-            .hw_config = experimental::DataMovementHardwareConfig{},
+            .hw_config = DataMovementHardwareConfig{},
         };
     };
 
@@ -73,46 +73,44 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, MultiDmAddTwoInts) {
     auto k2 = make_dm_kernel_spec(KERNEL_2, 2, result_base + (2 * sizeof(int)));
     auto k3 = make_dm_kernel_spec(KERNEL_3, 2, result_base + (2 * sizeof(int)));
 
-    experimental::WorkUnitSpec wu_core0{
+    WorkUnitSpec wu_core0{
         .name = "wu_core0",
         .kernels = {KERNEL_0, KERNEL_1, KERNEL_2},
-        .target_nodes = experimental::NodeCoord{0, 0},
+        .target_nodes = NodeCoord{0, 0},
     };
-    experimental::WorkUnitSpec wu_core1{
+    WorkUnitSpec wu_core1{
         .name = "wu_core1",
         .kernels = {KERNEL_0, KERNEL_1, KERNEL_3},
-        .target_nodes = experimental::NodeCoord{1, 0},
+        .target_nodes = NodeCoord{1, 0},
     };
 
-    experimental::ProgramSpec spec{
+    ProgramSpec spec{
         .name = "multi_dm_add_two_ints",
         .kernels = {k0, k1, k2, k3},
         .work_units = {wu_core0, wu_core1},
     };
-    Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
+    Program program = tt_metal::experimental::MakeProgramFromSpec(*mesh_device, spec);
 
-    experimental::ProgramRunArgs params;
+    ProgramRunArgs params;
     params.kernel_run_args = {
-        experimental::ProgramRunArgs::KernelRunArgs{
+        ProgramRunArgs::KernelRunArgs{
             .kernel = KERNEL_0,
             .runtime_arg_values =
-                {{"a", {{experimental::NodeCoord{0, 0}, 1}, {experimental::NodeCoord{1, 0}, 1}}},
-                 {"b", {{experimental::NodeCoord{0, 0}, 2}, {experimental::NodeCoord{1, 0}, 2}}}}},
-        experimental::ProgramRunArgs::KernelRunArgs{
+                {{"a", {{NodeCoord{0, 0}, 1}, {NodeCoord{1, 0}, 1}}},
+                 {"b", {{NodeCoord{0, 0}, 2}, {NodeCoord{1, 0}, 2}}}}},
+        ProgramRunArgs::KernelRunArgs{
             .kernel = KERNEL_1,
             .runtime_arg_values =
-                {{"a", {{experimental::NodeCoord{0, 0}, 3}, {experimental::NodeCoord{1, 0}, 3}}},
-                 {"b", {{experimental::NodeCoord{0, 0}, 4}, {experimental::NodeCoord{1, 0}, 4}}}}},
-        experimental::ProgramRunArgs::KernelRunArgs{
+                {{"a", {{NodeCoord{0, 0}, 3}, {NodeCoord{1, 0}, 3}}},
+                 {"b", {{NodeCoord{0, 0}, 4}, {NodeCoord{1, 0}, 4}}}}},
+        ProgramRunArgs::KernelRunArgs{
             .kernel = KERNEL_2,
-            .runtime_arg_values =
-                experimental::MakeRuntimeArgsForSingleNode(experimental::NodeCoord{0, 0}, {{"a", 5}, {"b", 6}})},
-        experimental::ProgramRunArgs::KernelRunArgs{
+            .runtime_arg_values = MakeRuntimeArgsForSingleNode(NodeCoord{0, 0}, {{"a", 5}, {"b", 6}})},
+        ProgramRunArgs::KernelRunArgs{
             .kernel = KERNEL_3,
-            .runtime_arg_values =
-                experimental::MakeRuntimeArgsForSingleNode(experimental::NodeCoord{1, 0}, {{"a", 7}, {"b", 8}})},
+            .runtime_arg_values = MakeRuntimeArgsForSingleNode(NodeCoord{1, 0}, {{"a", 7}, {"b", 8}})},
     };
-    experimental::SetProgramRunArgs(program, params);
+    tt_metal::experimental::SetProgramRunArgs(program, params);
 
     workload.add_program(device_range, std::move(program));
     distributed::EnqueueMeshWorkload(cq, workload, true);

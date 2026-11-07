@@ -13,7 +13,7 @@
 namespace ttnn::operations::moreh::moreh_abs_pow {
 
 using namespace tt::tt_metal;
-namespace m2 = tt::tt_metal::experimental;
+namespace m2 = tt::tt_metal;
 
 static constexpr const char* READER_KERNEL_PATH =
     "ttnn/cpp/ttnn/operations/moreh/moreh_abs_pow/device/kernels/reader_moreh_abs_pow.cpp";

@@ -14,16 +14,16 @@
 #include <variant>
 
 #include <tt-metalium/experimental/metal2_host_api/advanced_options.hpp>
-#include <tt-metalium/experimental/metal2_host_api/arg_value.hpp>
-#include <tt-metalium/experimental/metal2_host_api/kernel_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/dataflow_buffer_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/tensor_parameter.hpp>
-#include <tt-metalium/experimental/metal2_host_api/node_coord.hpp>
-#include <tt-metalium/experimental/metal2_host_api/utility/group.hpp>
-#include <tt-metalium/experimental/metal2_host_api/utility/table.hpp>
+#include <tt-metalium/workload/utils/arg_value.hpp>
+#include <tt-metalium/workload/specification/kernel_spec.hpp>
+#include <tt-metalium/workload/specification/dataflow_buffer_spec.hpp>
+#include <tt-metalium/workload/specification/tensor_parameter.hpp>
+#include <tt-metalium/vocabulary/node_coord.hpp>
+#include <tt-metalium/workload/utils/group.hpp>
+#include <tt-metalium/workload/utils/table.hpp>
 #include <tt-metalium/tensor/mesh_tensor.hpp>
 
-namespace tt::tt_metal::experimental {
+namespace tt::tt_metal {
 
 // ============================================================================
 //  ProgramRunArgs API
@@ -112,7 +112,7 @@ struct ProgramRunArgs {
         // Advanced options (see advanced_options.hpp).
         // Companion to KernelAdvancedOptions on the schema side; holds
         // positional vararg values.
-        AdvancedKernelRunArgs advanced_options;
+        experimental::AdvancedKernelRunArgs advanced_options;
     };
     // For SetProgramRunArgs, a KernelRunArgs must be specified for ALL kernels in the ProgramSpec
     //  (except for kernels that have no runtime or common runtime arguments, scalar or array).
@@ -165,7 +165,7 @@ struct ProgramRunArgs {
     ////////////////////////////////////////////////////////////////////////
     // Companion to ProgramAdvancedOptions on the schema side; holds the
     // experimental PrefetcherPipe arguments.
-    AdvancedProgramRunArgs advanced_options;
+    experimental::AdvancedProgramRunArgs advanced_options;
 };
 
 //-----------------------------------------------------
@@ -239,4 +239,4 @@ inline KernelRunArgs::RuntimeArgValues MakeRuntimeArgsForSingleNode(
     return runtime_arg_values;
 }
 
-}  // namespace tt::tt_metal::experimental
+}  // namespace tt::tt_metal

@@ -7,10 +7,10 @@
 #include <string>
 
 #include <tt-metalium/experimental/metal2_host_api/advanced_options.hpp>
-#include <tt-metalium/experimental/metal2_host_api/node_coord.hpp>
+#include <tt-metalium/vocabulary/node_coord.hpp>
 #include <tt_stl/strong_type.hpp>
 
-namespace tt::tt_metal::experimental {
+namespace tt::tt_metal {
 
 // ============================================================================
 //  SemaphoreSpec API
@@ -44,7 +44,7 @@ struct SemaphoreSpec {
     //////////////////////////////////////////////////////////////////////////////
     // Advanced options (see advanced_options.hpp)
     //////////////////////////////////////////////////////////////////////////////
-    SemaphoreAdvancedOptions advanced_options;
+    experimental::SemaphoreAdvancedOptions advanced_options;
 };
 
-}  // namespace tt::tt_metal::experimental
+}  // namespace tt::tt_metal

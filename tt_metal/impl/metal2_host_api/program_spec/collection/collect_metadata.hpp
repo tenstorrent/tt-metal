@@ -4,10 +4,10 @@
 
 #pragma once
 
-#include <tt-metalium/experimental/metal2_host_api/kernel_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/workload/specification/kernel_spec.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
 
-namespace tt::tt_metal::experimental {
+namespace tt::tt_metal {
 
 // Data structure built up from ProgramSpec to enable fast lookups
 struct CollectedSpecData {
@@ -27,7 +27,8 @@ struct CollectedSpecData {
     std::unordered_map<SemaphoreSpecName, const SemaphoreSpec*> semaphore_by_name;
     std::unordered_map<ScratchpadSpecName, const ScratchpadSpec*> scratchpad_by_name;
     std::unordered_map<TensorParamName, const TensorParameter*> tensor_parameter_by_name;
-    std::unordered_map<PrefetcherPipeParamName, const PrefetcherPipeParameter*> prefetcher_pipe_by_name;
+    std::unordered_map<experimental::PrefetcherPipeParamName, const experimental::PrefetcherPipeParameter*>
+        prefetcher_pipe_by_name;
 
     // ------------------------------------------------------------------------
     // Resource -> Users lookups.
@@ -41,7 +42,8 @@ struct CollectedSpecData {
     // - Every pointer is non-nullptr, and the pointers in each vector are unique within the vector.
     // - Every pointer p is the registered DFB: dfb_by_name[p->unique_id] == p.
     // - Every element lists this pipe in its advanced_options.prefetcher_pipe_relays.
-    std::unordered_map<PrefetcherPipeParamName, std::vector<const DataflowBufferSpec*>> prefetcher_pipe_relays;
+    std::unordered_map<experimental::PrefetcherPipeParamName, std::vector<const DataflowBufferSpec*>>
+        prefetcher_pipe_relays;
 
     // Scratchpad binders (derived from kernel scratchpad bindings).
     // Tracks which kernels bind a given ScratchpadSpec.
@@ -145,4 +147,4 @@ struct CollectedSpecData {
 //
 CollectedSpecData CollectSpecData(const ProgramSpec& spec);
 
-}  // namespace tt::tt_metal::experimental
+}  // namespace tt::tt_metal

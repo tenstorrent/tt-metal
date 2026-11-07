@@ -28,12 +28,12 @@
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "hal_types.hpp"
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
-#include <tt-metalium/experimental/metal2_host_api/kernel_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/dataflow_buffer_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/data_movement_hardware_config.hpp>
-#include <tt-metalium/experimental/metal2_host_api/node_coord.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
+#include <tt-metalium/workload/specification/kernel_spec.hpp>
+#include <tt-metalium/workload/specification/dataflow_buffer_spec.hpp>
+#include <tt-metalium/workload/specification/data_movement_hardware_config.hpp>
+#include <tt-metalium/vocabulary/node_coord.hpp>
 #include "debug_tools_fixture.hpp"
 
 using namespace tt;
@@ -41,25 +41,25 @@ using namespace tt::tt_metal;
 
 namespace {
 
-const experimental::DFBSpecName SCRATCH_DFB{"scratch"};
-const experimental::KernelSpecName PRODUCER{"zero_mode_producer"};
-const experimental::KernelSpecName CONSUMER{"zero_mode_consumer"};
+const DFBSpecName SCRATCH_DFB{"scratch"};
+const KernelSpecName PRODUCER{"zero_mode_producer"};
+const KernelSpecName CONSUMER{"zero_mode_consumer"};
 constexpr uint32_t kScratchBytes = 8 * 1024;
 constexpr uint32_t kZeroBytes = 2 * 1024;
 
-experimental::DataMovementHardwareConfig make_hw_config() {
-    return experimental::DataMovementHardwareConfig{
+DataMovementHardwareConfig make_hw_config() {
+    return DataMovementHardwareConfig{
         .config_2xx =
-            experimental::DataMovementHardwareConfig::DataMovement2XXConfig{
+            DataMovementHardwareConfig::DataMovement2XXConfig{
                 .disable_dfb_implicit_sync_for_all = true,
             },
     };
 }
 
 Program make_program(const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
-    const experimental::NodeCoord node{0, 0};
+    const NodeCoord node{0, 0};
 
-    experimental::DataflowBufferSpec scratch_spec{
+    DataflowBufferSpec scratch_spec{
         .unique_id = SCRATCH_DFB,
         .entry_size = kScratchBytes,
         .num_entries = 1,
@@ -67,7 +67,7 @@ Program make_program(const std::shared_ptr<distributed::MeshDevice>& mesh_device
     };
 
     // Producer issues the L1 zero and (only on the violation path) a NoC write before the barrier.
-    experimental::KernelSpec producer_spec{
+    KernelSpec producer_spec{
         .unique_id = PRODUCER,
         .source =
             std::filesystem::path{"tests/tt_metal/tt_metal/test_kernels/dataflow/watcher_zero_mode_violation.cpp"},
@@ -75,45 +75,45 @@ Program make_program(const std::shared_ptr<distributed::MeshDevice>& mesh_device
         .dfb_bindings =
             {{.dfb_spec_name = SCRATCH_DFB,
               .accessor_name = "scratch",
-              .endpoint_type = experimental::DFBEndpointType::PRODUCER,
-              .access_pattern = experimental::DFBAccessPattern::STRIDED}},
+              .endpoint_type = DFBEndpointType::PRODUCER,
+              .access_pattern = DFBAccessPattern::STRIDED}},
         .runtime_arg_schema = {.runtime_arg_names = {"should_trip", "zero_bytes"}},
         .hw_config = make_hw_config(),
     };
 
     // Consumer drains the DFB (different RISC than the producer, as DFBs require).
-    experimental::KernelSpec consumer_spec{
+    KernelSpec consumer_spec{
         .unique_id = CONSUMER,
         .source = std::filesystem::path{"tests/tt_metal/tt_metal/test_kernels/dataflow/zero_memory_api_consumer.cpp"},
         .num_threads = 1,
         .dfb_bindings =
             {{.dfb_spec_name = SCRATCH_DFB,
               .accessor_name = "scratch",
-              .endpoint_type = experimental::DFBEndpointType::CONSUMER,
-              .access_pattern = experimental::DFBAccessPattern::STRIDED}},
+              .endpoint_type = DFBEndpointType::CONSUMER,
+              .access_pattern = DFBAccessPattern::STRIDED}},
         .hw_config = make_hw_config(),
     };
 
-    experimental::ProgramSpec spec{
+    ProgramSpec spec{
         .name = "watcher_zero_mode_guard",
         .kernels = {producer_spec, consumer_spec},
         .dataflow_buffers = {scratch_spec},
         .work_units = {{.name = "main", .kernels = {PRODUCER, CONSUMER}, .target_nodes = node}},
     };
-    return experimental::MakeProgramFromSpec(*mesh_device, spec);
+    return tt_metal::experimental::MakeProgramFromSpec(*mesh_device, spec);
 }
 
 void set_args(Program& program, uint32_t should_trip) {
-    const experimental::NodeCoord node{0, 0};
-    experimental::ProgramRunArgs params;
+    const NodeCoord node{0, 0};
+    ProgramRunArgs params;
     params.kernel_run_args = {
-        experimental::ProgramRunArgs::KernelRunArgs{
+        ProgramRunArgs::KernelRunArgs{
             .kernel = PRODUCER,
-            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
-                node, {{"should_trip", should_trip}, {"zero_bytes", kZeroBytes}}),
+            .runtime_arg_values =
+                MakeRuntimeArgsForSingleNode(node, {{"should_trip", should_trip}, {"zero_bytes", kZeroBytes}}),
         },
     };
-    experimental::SetProgramRunArgs(program, params);
+    tt_metal::experimental::SetProgramRunArgs(program, params);
 }
 
 void RunZeroModeTest(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {

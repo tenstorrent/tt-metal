@@ -17,7 +17,7 @@
 #include "impl/metal2_host_api/helpers.hpp"
 #include "impl/metal2_host_api/program_spec/validation/resource/resource.hpp"
 
-namespace tt::tt_metal::experimental {
+namespace tt::tt_metal {
 
 namespace {
 
@@ -55,7 +55,7 @@ void ValidateBorrowedMemory(
         dfb.unique_id,
         tp_name);
     TT_FATAL(
-        !per_core_allocation::is_per_core_allocation(tensor_spec.memory_config()),
+        !experimental::per_core_allocation::is_per_core_allocation(tensor_spec.memory_config()),
         "DFB '{}' borrows memory from TensorParameter '{}', which is per-node allocated. A borrowed-memory DFB "
         "needs the backing tensor at the same address on every node.",
         dfb.unique_id,
@@ -752,4 +752,4 @@ void ValidateDFBAliasing(const ValidationContext& ctx) {
     }
 }
 
-}  // namespace tt::tt_metal::experimental
+}  // namespace tt::tt_metal

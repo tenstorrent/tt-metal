@@ -77,53 +77,53 @@ void RunTest(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::Mes
         }
     }
 
-    std::vector<experimental::KernelSpec> kernel_specs;
-    std::vector<experimental::KernelSpecName> kernel_names;
-    experimental::ProgramRunArgs params;
+    std::vector<KernelSpec> kernel_specs;
+    std::vector<KernelSpecName> kernel_names;
+    ProgramRunArgs params;
     auto add_dm_kernel =
         [&](const char* name, uint32_t num_threads, std::optional<tt::tt_metal::DataMovementProcessor> gen1_processor) {
             auto gen1_proc = gen1_processor.value_or(tt::tt_metal::DataMovementProcessor::RISCV_0);
             auto gen1_noc = (gen1_proc == tt::tt_metal::DataMovementProcessor::RISCV_1)
                                 ? tt::tt_metal::NOC::RISCV_1_default
                                 : tt::tt_metal::NOC::RISCV_0_default;
-            experimental::DataMovementHardwareConfig dm_cfg;
+            DataMovementHardwareConfig dm_cfg;
             if (is_quasar) {
-                dm_cfg = experimental::DataMovementHardwareConfig{};
+                dm_cfg = DataMovementHardwareConfig{};
             } else {
-                dm_cfg = experimental::DataMovementHardwareConfig{
+                dm_cfg = DataMovementHardwareConfig{
                     .config_1xx =
-                        experimental::DataMovementHardwareConfig::DataMovement1XXConfig{
+                        DataMovementHardwareConfig::DataMovement1XXConfig{
                             .processor = gen1_proc,
                             .noc = gen1_noc,
                         },
                 };
             }
-            kernel_specs.push_back(experimental::KernelSpec{
-                .unique_id = experimental::KernelSpecName{name},
+            kernel_specs.push_back(KernelSpec{
+                .unique_id = KernelSpecName{name},
                 .source = kernel_path_metal2,
                 .num_threads = num_threads,
                 .runtime_arg_schema = {.common_runtime_arg_names = {"sync_flag_addr"}},
                 .hw_config = dm_cfg,
             });
             kernel_names.emplace_back(name);
-            params.kernel_run_args.push_back(experimental::ProgramRunArgs::KernelRunArgs{
-                .kernel = experimental::KernelSpecName{name},
+            params.kernel_run_args.push_back(ProgramRunArgs::KernelRunArgs{
+                .kernel = KernelSpecName{name},
                 .common_runtime_arg_values = {{"sync_flag_addr", tensix_sync_addr}},
             });
         };
 
-    const experimental::KernelSpecName compute_kernel_name{"wp_compute"};
-    experimental::ComputeHardwareConfig compute_config;
+    const KernelSpecName compute_kernel_name{"wp_compute"};
+    ComputeHardwareConfig compute_config;
     if (is_quasar) {
         constexpr uint32_t kQuasarUserDmCores = 6;
         add_dm_kernel("wp_dm", kQuasarUserDmCores, std::nullopt);
-        compute_config = experimental::ComputeHardwareConfig{};
+        compute_config = ComputeHardwareConfig{};
     } else {
         add_dm_kernel("wp_brisc", 1, tt::tt_metal::DataMovementProcessor::RISCV_0);
         add_dm_kernel("wp_ncrisc", 1, tt::tt_metal::DataMovementProcessor::RISCV_1);
-        compute_config = experimental::ComputeHardwareConfig{};
+        compute_config = ComputeHardwareConfig{};
     }
-    kernel_specs.push_back(experimental::KernelSpec{
+    kernel_specs.push_back(KernelSpec{
         .unique_id = compute_kernel_name,
         .source = kernel_path_metal2,
         .num_threads = is_quasar ? 4u : 1u,
@@ -131,22 +131,22 @@ void RunTest(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::Mes
         .hw_config = compute_config,
     });
     kernel_names.emplace_back(compute_kernel_name);
-    params.kernel_run_args.push_back(experimental::ProgramRunArgs::KernelRunArgs{
+    params.kernel_run_args.push_back(ProgramRunArgs::KernelRunArgs{
         .kernel = compute_kernel_name,
         .common_runtime_arg_values = {{"sync_flag_addr", tensix_sync_addr}},
     });
-    experimental::WorkUnitSpec wu{
+    WorkUnitSpec wu{
         .name = "main",
         .kernels = kernel_names,
-        .target_nodes = experimental::NodeRange{CoreRange(xy_start, xy_end)},
+        .target_nodes = NodeRange{CoreRange(xy_start, xy_end)},
     };
-    experimental::ProgramSpec spec{
+    ProgramSpec spec{
         .name = "watcher_waypoints",
         .kernels = kernel_specs,
         .work_units = {wu},
     };
-    Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
-    experimental::SetProgramRunArgs(program, params);
+    Program program = tt_metal::experimental::MakeProgramFromSpec(*mesh_device, spec);
+    tt_metal::experimental::SetProgramRunArgs(program, params);
     workload.add_program(device_range, std::move(program));
 
     // Dispatch non-blocking: kernels post waypoint then spin on sync flag

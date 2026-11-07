@@ -20,7 +20,7 @@
 #include "impl/metal2_host_api/helpers.hpp"
 #include "impl/metal2_host_api/llk_metadata.hpp"
 
-namespace tt::tt_metal::experimental {
+namespace tt::tt_metal {
 
 namespace {
 
@@ -300,4 +300,4 @@ void WireDFBAliases(const ProgramSpec& spec, const DFBNameToIdMap& dfb_name_to_i
     }
 }
 
-}  // namespace tt::tt_metal::experimental
+}  // namespace tt::tt_metal

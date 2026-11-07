@@ -6,7 +6,7 @@
 #include <optional>
 #include <utility>
 #include <vector>
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
 #include <cstdint>
 #include "ttnn/metal_v2_artifacts.hpp"
 #include "update_cache_device_operation_types.hpp"
@@ -25,7 +25,7 @@ struct FillCacheMultiCoreProgramFactory {
     // CustomProgramSpecFactoryConcept cache-hit hook: returns the per-dispatch ProgramRunArgs the
     // framework applies via UpdateProgramRunArgs. Re-applies only the hash-excluded, attribute-derived
     // writer cache_start_id plus the tensor bindings; shape-derived args stay at their cache-miss values.
-    static tt::tt_metal::experimental::ProgramRunArgs override_runtime_arguments(
+    static tt::tt_metal::ProgramRunArgs override_runtime_arguments(
         const KvCacheParams& operation_attributes,
         const KvCacheInputs& tensor_args,
         Tensor& tensor_return_value,

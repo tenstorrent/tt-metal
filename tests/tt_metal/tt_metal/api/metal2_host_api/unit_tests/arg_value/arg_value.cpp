@@ -23,12 +23,12 @@
 
 #include <fmt/format.h>
 
-#include <tt-metalium/experimental/metal2_host_api/arg_value.hpp>
+#include <tt-metalium/workload/utils/arg_value.hpp>
 #include <tt_stl/reflection.hpp>
 
 namespace {
 
-namespace m2 = tt::tt_metal::experimental;
+namespace m2 = tt::tt_metal;
 using m2::ArgValue;
 
 enum UnscopedEnum { kUnscoped = 7 };

@@ -41,24 +41,24 @@ TEST_F(LLKQuasarMeshDeviceSingleCardFixture, QuasarMailboxMinimal) {
     // TUs, so nothing enforces this at compile time.
     constexpr std::uint32_t MAILBOX_MIN_EXPECTED_VALUE = 0xfacefaceu;
 
-    const experimental::NodeCoord node{WORKER_CORE.x, WORKER_CORE.y};
-    const experimental::KernelSpecName COMPUTE{"compute"};
+    const NodeCoord node{WORKER_CORE.x, WORKER_CORE.y};
+    const KernelSpecName COMPUTE{"compute"};
 
-    const experimental::KernelSpec compute_spec{
+    const KernelSpec compute_spec{
         .unique_id = COMPUTE,
         .source = "tests/tt_metal/tt_metal/test_kernels/misc/circular_buffer/quasar_mailbox_minimal_compute.cpp",
         .num_threads = 1,
         .runtime_arg_schema = {.runtime_arg_names = {"result_l1_addr"}},
-        .hw_config = experimental::ComputeHardwareConfig{},
+        .hw_config = ComputeHardwareConfig{},
     };
 
-    const experimental::WorkUnitSpec wu{
+    const WorkUnitSpec wu{
         .name = "main",
         .kernels = {COMPUTE},
         .target_nodes = node,
     };
 
-    const experimental::ProgramSpec spec{
+    const ProgramSpec spec{
         .name = "quasar_mailbox_minimal",
         .kernels = {compute_spec},
         .work_units = {wu},
@@ -71,12 +71,11 @@ TEST_F(LLKQuasarMeshDeviceSingleCardFixture, QuasarMailboxMinimal) {
     std::vector<std::uint32_t> result_init(1, 0);
     slow_dispatch::WriteToL1(this->device(), WORKER_CORE, result_l1_addr, result_init);
 
-    experimental::ProgramRunArgs params;
+    ProgramRunArgs params;
     params.kernel_run_args = {
-        experimental::ProgramRunArgs::KernelRunArgs{
+        ProgramRunArgs::KernelRunArgs{
             .kernel = COMPUTE,
-            .runtime_arg_values =
-                experimental::MakeRuntimeArgsForSingleNode(node, {{"result_l1_addr", result_l1_addr}}),
+            .runtime_arg_values = MakeRuntimeArgsForSingleNode(node, {{"result_l1_addr", result_l1_addr}}),
         },
     };
     experimental::SetProgramRunArgs(program, params);
@@ -109,39 +108,39 @@ TEST_F(LLKQuasarMeshDeviceSingleCardFixture, QuasarDmToTriscMailbox) {
 
     const std::vector<std::uint32_t> expected_result = {DM_MBX_VAL_UNPACK, DM_MBX_VAL_MATH, DM_MBX_VAL_PACK};
 
-    const experimental::NodeCoord node{WORKER_CORE.x, WORKER_CORE.y};
-    const experimental::KernelSpecName WRITER{"writer"};
-    const experimental::KernelSpecName COMPUTE{"compute"};
+    const NodeCoord node{WORKER_CORE.x, WORKER_CORE.y};
+    const KernelSpecName WRITER{"writer"};
+    const KernelSpecName COMPUTE{"compute"};
 
     // num_threads = 1: the DM allocator skips reserved DM0/DM1 (cluster orchestrator / DFB init)
     // and hands out the lowest free DM core, i.e. DM2. The kernel gates on hartid == 2 so exactly
     // that one core performs the writes.
-    const experimental::KernelSpec writer_spec{
+    const KernelSpec writer_spec{
         .unique_id = WRITER,
         .source = "tests/tt_metal/tt_metal/test_kernels/misc/circular_buffer/quasar_dm_mailbox_scratch_writer.cpp",
         .num_threads = 1,
         .compile_time_args =
             {{"value_unpack", DM_MBX_VAL_UNPACK}, {"value_math", DM_MBX_VAL_MATH}, {"value_pack", DM_MBX_VAL_PACK}},
-        .hw_config = experimental::DataMovementHardwareConfig{},
+        .hw_config = DataMovementHardwareConfig{},
     };
 
     // num_threads = 1 places the compute kernel on Tensix engine 0 (NEO0) of the cluster -- the
     // same NEO whose mailboxes the DM kernel writes.
-    const experimental::KernelSpec compute_spec{
+    const KernelSpec compute_spec{
         .unique_id = COMPUTE,
         .source = "tests/tt_metal/tt_metal/test_kernels/misc/circular_buffer/quasar_dm_mailbox_scratch_compute.cpp",
         .num_threads = 1,
         .runtime_arg_schema = {.runtime_arg_names = {"result_l1_addr"}},
-        .hw_config = experimental::ComputeHardwareConfig{},
+        .hw_config = ComputeHardwareConfig{},
     };
 
-    const experimental::WorkUnitSpec wu{
+    const WorkUnitSpec wu{
         .name = "main",
         .kernels = {WRITER, COMPUTE},
         .target_nodes = node,
     };
 
-    const experimental::ProgramSpec spec{
+    const ProgramSpec spec{
         .name = "quasar_dm_to_trisc_mailbox",
         .kernels = {writer_spec, compute_spec},
         .work_units = {wu},
@@ -155,12 +154,11 @@ TEST_F(LLKQuasarMeshDeviceSingleCardFixture, QuasarDmToTriscMailbox) {
     std::vector<std::uint32_t> result_init(expected_result.size(), 0);
     slow_dispatch::WriteToL1(this->device(), WORKER_CORE, result_l1_addr, result_init);
 
-    experimental::ProgramRunArgs params;
+    ProgramRunArgs params;
     params.kernel_run_args = {
-        experimental::ProgramRunArgs::KernelRunArgs{
+        ProgramRunArgs::KernelRunArgs{
             .kernel = COMPUTE,
-            .runtime_arg_values =
-                experimental::MakeRuntimeArgsForSingleNode(node, {{"result_l1_addr", result_l1_addr}}),
+            .runtime_arg_values = MakeRuntimeArgsForSingleNode(node, {{"result_l1_addr", result_l1_addr}}),
         },
     };
     experimental::SetProgramRunArgs(program, params);
@@ -200,11 +198,11 @@ TEST_F(LLKQuasarMeshDeviceSingleCardFixture, QuasarCbL1ReadApi) {
 
     const std::uint32_t tile_page_size = tt::tile_size(CB_API_DATA_FORMAT);
 
-    const experimental::NodeCoord node{WORKER_CORE.x, WORKER_CORE.y};
-    const experimental::DFBSpecName IN_DFB{"in_dfb"};
-    const experimental::KernelSpecName COMPUTE{"compute"};
+    const NodeCoord node{WORKER_CORE.x, WORKER_CORE.y};
+    const DFBSpecName IN_DFB{"in_dfb"};
+    const KernelSpecName COMPUTE{"compute"};
 
-    const experimental::DataflowBufferSpec in_dfb_spec{
+    const DataflowBufferSpec in_dfb_spec{
         .unique_id = IN_DFB,
         .entry_size = tile_page_size,
         .num_entries = 2,
@@ -214,7 +212,7 @@ TEST_F(LLKQuasarMeshDeviceSingleCardFixture, QuasarCbL1ReadApi) {
     // The DFB has no other toucher -- the host preloads it and the kernel only reads it -- so
     // compute binds it as both PRODUCER and CONSUMER (self-loop). That is what finalizes the DFB
     // config (base_addr, entry_size, ...) and gets it written to L1.
-    const experimental::KernelSpec compute_spec{
+    const KernelSpec compute_spec{
         .unique_id = COMPUTE,
         .source = "tests/tt_metal/tt_metal/test_kernels/misc/circular_buffer/quasar_cb_l1_read_api_compute.cpp",
         .num_threads = 1,
@@ -222,24 +220,24 @@ TEST_F(LLKQuasarMeshDeviceSingleCardFixture, QuasarCbL1ReadApi) {
             {{
                  .dfb_spec_name = IN_DFB,
                  .accessor_name = "in",
-                 .endpoint_type = experimental::DFBEndpointType::PRODUCER,
+                 .endpoint_type = DFBEndpointType::PRODUCER,
              },
              {
                  .dfb_spec_name = IN_DFB,
                  .accessor_name = "in",
-                 .endpoint_type = experimental::DFBEndpointType::CONSUMER,
+                 .endpoint_type = DFBEndpointType::CONSUMER,
              }},
         .runtime_arg_schema = {.runtime_arg_names = {"result_l1_addr"}},
-        .hw_config = experimental::ComputeHardwareConfig{},
+        .hw_config = ComputeHardwareConfig{},
     };
 
-    const experimental::WorkUnitSpec wu{
+    const WorkUnitSpec wu{
         .name = "main",
         .kernels = {COMPUTE},
         .target_nodes = node,
     };
 
-    const experimental::ProgramSpec spec{
+    const ProgramSpec spec{
         .name = "quasar_cb_l1_read_api",
         .kernels = {compute_spec},
         .dataflow_buffers = {in_dfb_spec},
@@ -273,12 +271,11 @@ TEST_F(LLKQuasarMeshDeviceSingleCardFixture, QuasarCbL1ReadApi) {
     std::vector<CbApiDataT> result_init(expected_result.size(), 0);
     slow_dispatch::WriteToL1(this->device(), WORKER_CORE, result_l1_addr, result_init);
 
-    experimental::ProgramRunArgs params;
+    ProgramRunArgs params;
     params.kernel_run_args = {
-        experimental::ProgramRunArgs::KernelRunArgs{
+        ProgramRunArgs::KernelRunArgs{
             .kernel = COMPUTE,
-            .runtime_arg_values =
-                experimental::MakeRuntimeArgsForSingleNode(node, {{"result_l1_addr", result_l1_addr}}),
+            .runtime_arg_values = MakeRuntimeArgsForSingleNode(node, {{"result_l1_addr", result_l1_addr}}),
         },
     };
     experimental::SetProgramRunArgs(program, params);

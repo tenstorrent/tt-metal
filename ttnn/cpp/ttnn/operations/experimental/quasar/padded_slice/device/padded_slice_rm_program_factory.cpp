@@ -26,14 +26,14 @@
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
 
 using namespace tt::tt_metal;
 
 namespace ttnn::prim::qsr {
 
-using namespace tt::tt_metal::experimental;
+using namespace tt::tt_metal;
 
 // Per-core reader/writer arg vectors (geometry unchanged from the shared RM factory). Reader vector:
 //   [0]=src abs addr (aligned-down)+width_offset, [1]=padded_stick, [2]=unpadded_stick, [3]=stick_offset,

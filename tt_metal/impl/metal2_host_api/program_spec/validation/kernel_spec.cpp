@@ -19,7 +19,7 @@
 #include "impl/metal2_host_api/helpers.hpp"
 #include "impl/metal2_host_api/program_spec/validation/resource/resource.hpp"
 
-namespace tt::tt_metal::experimental {
+namespace tt::tt_metal {
 
 namespace {
 
@@ -148,4 +148,4 @@ void ValidateKernelSpec(const KernelSpec& kernel, const ValidationContext& ctx, 
     ValidateKernelHardwareConfig(kernel, ctx, arch);
 }
 
-}  // namespace tt::tt_metal::experimental
+}  // namespace tt::tt_metal

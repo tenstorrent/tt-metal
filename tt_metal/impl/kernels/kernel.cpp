@@ -364,11 +364,10 @@ void Kernel::process_semaphore_binding_handles(
 }
 
 void Kernel::process_watcher_node_ranges(
-    const std::function<
-        void(const std::string& accessor_name, const std::vector<experimental::NodeRange>& node_ranges)>& dfb_callback,
-    const std::function<void(
-        const std::string& accessor_name, const std::vector<experimental::NodeRange>& node_ranges)>& semaphore_callback)
-    const {
+    const std::function<void(const std::string& accessor_name, const std::vector<NodeRange>& node_ranges)>&
+        dfb_callback,
+    const std::function<void(const std::string& accessor_name, const std::vector<NodeRange>& node_ranges)>&
+        semaphore_callback) const {
     for (const auto& [accessor_name, handle] : this->dataflow_buffer_binding_handles_) {
         dfb_callback(accessor_name, handle.watcher_node_ranges);
     }
@@ -738,12 +737,12 @@ uint64_t Kernel::compute_hash() const {
     };
     // Baked into the generated header with Watcher NoC sanitizing. Empty otherwise, and then not hashed, so kernel
     // hashes without Watcher are unchanged.
-    auto hash_watcher_node_ranges = [&](const std::vector<experimental::NodeRange>& node_ranges) {
+    auto hash_watcher_node_ranges = [&](const std::vector<NodeRange>& node_ranges) {
         if (node_ranges.empty()) {
             return;
         }
         hasher.update(static_cast<uint64_t>(node_ranges.size()));
-        for (const experimental::NodeRange& range : node_ranges) {
+        for (const NodeRange& range : node_ranges) {
             hasher.update(static_cast<uint64_t>(range.start_coord.x));
             hasher.update(static_cast<uint64_t>(range.start_coord.y));
             hasher.update(static_cast<uint64_t>(range.end_coord.x));

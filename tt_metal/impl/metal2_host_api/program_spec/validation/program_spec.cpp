@@ -15,7 +15,7 @@
 
 #include "impl/metal2_host_api/program_spec/validation/validate_spec.hpp"
 
-namespace tt::tt_metal::experimental {
+namespace tt::tt_metal {
 
 void ValidateProgramMisc(const ValidationContext& ctx) {
     const ProgramSpec& spec = ctx.spec;
@@ -24,4 +24,4 @@ void ValidateProgramMisc(const ValidationContext& ctx) {
     TT_FATAL(!spec.kernels.empty(), "A ProgramSpec must have at least one KernelSpec");
 }
 
-}  // namespace tt::tt_metal::experimental
+}  // namespace tt::tt_metal

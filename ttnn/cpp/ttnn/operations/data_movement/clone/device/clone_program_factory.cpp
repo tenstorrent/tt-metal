@@ -16,7 +16,6 @@ namespace ttnn::operations::data_movement::clone {
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
-using namespace tt::tt_metal::experimental;
 
 ttnn::device_operation::ProgramArtifacts CloneProgramFactory::create_program_artifacts(
     const CloneOperation::operation_attributes_t& operation_attributes,

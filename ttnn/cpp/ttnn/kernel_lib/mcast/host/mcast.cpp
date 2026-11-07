@@ -138,10 +138,10 @@ void Mcast::attach(
 uint32_t Mcast::next_semaphore_id() const { return impl_->next_semaphore_id(); }
 
 void Mcast::attach(
-    tt::tt_metal::experimental::ProgramSpec& spec,
-    tt::tt_metal::experimental::ProgramRunArgs& args,
+    tt::tt_metal::ProgramSpec& spec,
+    tt::tt_metal::ProgramRunArgs& args,
     std::string_view prefix,
-    std::span<const tt::tt_metal::experimental::KernelSpecName> kernels) const {
+    std::span<const tt::tt_metal::KernelSpecName> kernels) const {
     impl_->attach(spec, args, prefix, kernels);
 }
 

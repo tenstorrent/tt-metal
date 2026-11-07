@@ -12,8 +12,8 @@
 #include "tt-metalium/kernel_types.hpp"
 #include "tt-metalium/tt_backend_api_types.hpp"
 #include "ttnn/tensor/types.hpp"
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
 #include <tt-metalium/work_split.hpp>
 
 #include <bit>
@@ -27,7 +27,7 @@ using AccumulationProgramFactory = AccumulationDeviceOperation::AccumulationProg
 
 namespace {
 
-using namespace tt::tt_metal::experimental;
+using namespace tt::tt_metal;
 
 // The constants below carry a per-factory prefix so this file and the sibling EMA factory can
 // safely share a translation unit: both are sources of the unity-built ttnn_op_reduction target,
@@ -250,7 +250,6 @@ ttnn::device_operation::ProgramArtifacts AccumulationProgramFactory::create_prog
     Tensor& tensor_return_value) {
     using namespace tt;
     using namespace tt::tt_metal;
-    using namespace tt::tt_metal::experimental;
 
     const auto& input_tensor{tensor_args.input_tensor.mesh_tensor()};
     const auto& output_tensor{tensor_return_value.mesh_tensor()};
@@ -450,7 +449,6 @@ ttnn::device_operation::ProgramArtifacts AccumulationProgramFactory::create_tile
     Tensor& tensor_return_value) {
     using namespace tt;
     using namespace tt::tt_metal;
-    using namespace tt::tt_metal::experimental;
 
     const auto& input_tensor{tensor_args.input_tensor.mesh_tensor()};
     const auto& output_tensor{tensor_return_value.mesh_tensor()};

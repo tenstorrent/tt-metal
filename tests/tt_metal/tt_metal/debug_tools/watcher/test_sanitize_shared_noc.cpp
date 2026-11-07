@@ -92,11 +92,11 @@ void RunSharedNocCmdBufTest(
     distributed::WriteShard(cq, ncrisc_dst, zeros, zero_coord);
     distributed::WriteShard(cq, flags, flags_clear, zero_coord);
 
-    experimental::KernelSpec::CompilerOptions::Defines defines;
+    KernelSpec::CompilerOptions::Defines defines;
     if (fixture->IsSlowDispatch()) {
         defines["WATCHER_KERNEL_SLOW_DISPATCH"] = "1";
     }
-    auto make_kernel = [&](const experimental::KernelSpecName& name,
+    auto make_kernel = [&](const KernelSpecName& name,
                            DataMovementProcessor processor,
                            const std::shared_ptr<distributed::MeshBuffer>& src,
                            const std::shared_ptr<distributed::MeshBuffer>& dst,
@@ -105,7 +105,7 @@ void RunSharedNocCmdBufTest(
                            bool do_write,
                            bool wait_for_other_first,
                            bool signal_done_early) {
-        return experimental::KernelSpec{
+        return KernelSpec{
             .unique_id = name,
             .source = kKernel,
             .compiler_options = {.defines = defines},
@@ -119,24 +119,24 @@ void RunSharedNocCmdBufTest(
                  {"wait_for_other_first", wait_for_other_first},
                  {"signal_done_early", signal_done_early}},
             .hw_config =
-                experimental::DataMovementHardwareConfig{
+                DataMovementHardwareConfig{
                     .config_1xx =
-                        experimental::DataMovementHardwareConfig::DataMovement1XXConfig{
+                        DataMovementHardwareConfig::DataMovement1XXConfig{
                             .processor = processor,
                             .noc = NOC::NOC_0,
                             .noc_mode = NOC_MODE::DM_DEDICATED_NOC,
-                            .dedicated_noc_sharing = experimental::DedicatedNocSharing::SHARED_DISJOINT_TRAFFIC,
+                            .dedicated_noc_sharing = DedicatedNocSharing::SHARED_DISJOINT_TRAFFIC,
                         },
                 },
         };
     };
-    const experimental::KernelSpecName brisc_name{"brisc_writer"};
-    const experimental::KernelSpecName ncrisc_name{ncrisc_writes ? "ncrisc_writer" : "ncrisc_reader"};
+    const KernelSpecName brisc_name{"brisc_writer"};
+    const KernelSpecName ncrisc_name{ncrisc_writes ? "ncrisc_writer" : "ncrisc_reader"};
     const uint32_t brisc_flag_addr = l1_addr(flags);
     const uint32_t ncrisc_flag_addr = brisc_flag_addr + sizeof(uint32_t);
     // When both write, BRISC goes first and reports the core done up front, since NCRISC's write then trips
     // the watcher and both kernels hang.
-    experimental::ProgramSpec spec{
+    ProgramSpec spec{
         .name = "watcher_shared_noc_cmd_buf",
         .kernels =
             {make_kernel(
@@ -159,15 +159,15 @@ void RunSharedNocCmdBufTest(
                  /*do_write=*/ncrisc_writes,
                  /*wait_for_other_first=*/ncrisc_writes,
                  /*signal_done_early=*/false)},
-        .work_units = {experimental::WorkUnitSpec{
+        .work_units = {WorkUnitSpec{
             .name = "main",
             .kernels = {brisc_name, ncrisc_name},
-            .target_nodes = experimental::NodeCoord{core},
+            .target_nodes = NodeCoord{core},
         }},
     };
 
     distributed::MeshWorkload workload;
-    workload.add_program(device_range, experimental::MakeProgramFromSpec(*mesh_device, spec));
+    workload.add_program(device_range, tt_metal::experimental::MakeProgramFromSpec(*mesh_device, spec));
 
     if (!ncrisc_writes) {
         fixture->RunProgram(mesh_device, workload, /*wait_for_dump=*/true);

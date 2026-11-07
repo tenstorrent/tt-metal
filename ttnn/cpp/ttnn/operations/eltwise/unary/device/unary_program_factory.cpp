@@ -73,20 +73,20 @@ bool pack_first_op_scalars(
 bool needs_tmp0_dfb(UnaryOpType t) { return t == UnaryOpType::LOGIT; }
 
 // ---- Resource names ----
-const tt::tt_metal::experimental::KernelSpecName READER{"reader"};
-const tt::tt_metal::experimental::KernelSpecName WRITER{"writer"};
-const tt::tt_metal::experimental::KernelSpecName COMPUTE{"compute"};
-const tt::tt_metal::experimental::DFBSpecName IN_DFB{"in"};      // legacy index c_0
-const tt::tt_metal::experimental::DFBSpecName TMP0_DFB{"tmp0"};  // legacy index c_1 (LOGIT only)
-const tt::tt_metal::experimental::DFBSpecName OUT_DFB{"out"};    // legacy index c_2
+const KernelSpecName READER{"reader"};
+const KernelSpecName WRITER{"writer"};
+const KernelSpecName COMPUTE{"compute"};
+const DFBSpecName IN_DFB{"in"};      // legacy index c_0
+const DFBSpecName TMP0_DFB{"tmp0"};  // legacy index c_1 (LOGIT only)
+const DFBSpecName OUT_DFB{"out"};    // legacy index c_2
 // DRAM read work queue (see kernels/dataflow/dram_read.hpp).
-const tt::tt_metal::experimental::DFBSpecName CHUNK_COUNT_DFB{"chunk_count"};  // reader to compute
-const tt::tt_metal::experimental::DFBSpecName CHUNK_RANGE_DFB{"chunk_range"};  // reader to writer
-const tt::tt_metal::experimental::DFBSpecName REQUESTS_DFB{"requests"};        // the scheduler's request table
-const tt::tt_metal::experimental::SemaphoreSpecName REPLY_SEM{"reply"};
-const tt::tt_metal::experimental::SemaphoreSpecName CLEARED_SEM{"cleared"};
-const tt::tt_metal::experimental::TensorParamName INPUT{"input"};
-const tt::tt_metal::experimental::TensorParamName OUTPUT{"output"};
+const DFBSpecName CHUNK_COUNT_DFB{"chunk_count"};  // reader to compute
+const DFBSpecName CHUNK_RANGE_DFB{"chunk_range"};  // reader to writer
+const DFBSpecName REQUESTS_DFB{"requests"};        // the scheduler's request table
+const SemaphoreSpecName REPLY_SEM{"reply"};
+const SemaphoreSpecName CLEARED_SEM{"cleared"};
+const TensorParamName INPUT{"input"};
+const TensorParamName OUTPUT{"output"};
 
 uint32_t get_shards_per_width(const ShardSpec& shard_spec, TensorMemoryLayout memory_layout) {
     auto num_cores = shard_spec.grid.num_cores();
@@ -392,12 +392,11 @@ void enumerate_core_rt_args(
 // The per-dispatch run args: every runtime arg on every core, plus both tensor bindings.
 // create_program_artifacts and override_runtime_arguments both return this. The legacy cache-hit
 // override re-applied every slot the miss path wrote, so both paths share one builder and cannot drift.
-tt::tt_metal::experimental::ProgramRunArgs make_run_args(
+tt::tt_metal::ProgramRunArgs make_run_args(
     const UnaryDeviceOperation::operation_attributes_t& operation_attributes,
     const UnaryDeviceOperation::tensor_args_t& tensor_args,
     const Tensor& output) {
     using namespace tt::tt_metal;
-    using namespace tt::tt_metal::experimental;
     using namespace CMAKE_UNIQUE_NAMESPACE;
 
     const auto& input = tensor_args.input;
@@ -466,7 +465,6 @@ ttnn::device_operation::ProgramArtifacts UnaryDeviceOperation::ProgramFactory::c
     tensor_return_value_t& output) {
     using namespace tt;
     using namespace tt::tt_metal;
-    using namespace tt::tt_metal::experimental;
     using namespace CMAKE_UNIQUE_NAMESPACE;
 
     const auto& input = tensor_args.input;
@@ -808,7 +806,7 @@ ttnn::device_operation::ProgramArtifacts UnaryDeviceOperation::ProgramFactory::c
     };
 }
 
-tt::tt_metal::experimental::ProgramRunArgs UnaryDeviceOperation::ProgramFactory::override_runtime_arguments(
+tt::tt_metal::ProgramRunArgs UnaryDeviceOperation::ProgramFactory::override_runtime_arguments(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output,

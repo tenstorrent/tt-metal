@@ -12,8 +12,8 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/work_split.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
 #include "ttnn/operation.hpp"
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 #include "ttnn/operations/reduction/reduce_op_validation.hpp"
@@ -22,7 +22,7 @@ namespace ttnn::prim {
 
 namespace {
 
-using namespace tt::tt_metal::experimental;
+using namespace tt::tt_metal;
 
 constexpr auto SAMPLING_READER_SOURCE =
     "ttnn/cpp/ttnn/operations/reduction/sampling/device/kernels/dataflow/reader_values_indices_tensor.cpp";
@@ -99,7 +99,6 @@ DataflowBufferSpec make_dfb(
 ttnn::device_operation::ProgramArtifacts SamplingProgramFactory::create_program_artifacts(
     const SamplingParams& operation_attributes, const SamplingInputs& tensor_args, Tensor& output_tensor) {
     using namespace tt::tt_metal;
-    using namespace tt::tt_metal::experimental;
 
     const auto& input_values_tensor = tensor_args.input_values.mesh_tensor();
     const auto& input_indices_tensor = tensor_args.input_indices.mesh_tensor();
