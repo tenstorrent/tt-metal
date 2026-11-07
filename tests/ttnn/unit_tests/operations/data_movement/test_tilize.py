@@ -1286,3 +1286,10 @@ def test_tilize_uint8_tall_narrow_program_cache_addr_change(device, shape):
 
     assert entries == 1, "tilize should build exactly one program for a fixed config"
     device.disable_and_clear_program_cache()
+
+
+def test_tilize_host_tensor_is_rejected(device, expect_error):
+    host_tensor = ttnn.from_torch(torch.rand((1, 1, 64, 64), dtype=torch.bfloat16), layout=ttnn.ROW_MAJOR_LAYOUT)
+
+    with expect_error(RuntimeError, "must be allocated on a device"):
+        ttnn.tilize(host_tensor)
