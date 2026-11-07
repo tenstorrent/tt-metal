@@ -382,6 +382,9 @@ inline constexpr std::array<const std::uint32_t*, 2> _llk_math_face_compressed_m
  * @param dst_index: Tile index in DST that the result is written to.
  * @param kt_dim: Inner dimension in tiles, an even number in [2, 256].
  * @note Call @ref _llk_math_face_compressed_mm_init_ first, with the same ct_dim.
+ * @note Over split-K calls into one DST, pass finalize only on the last call, on this thread and the unpack thread:
+ *       the merge adds the partial rows into the accumulation rows without clearing them, so a later call keeps
+ *       accumulating onto the merged partials and a second merge adds them again.
  * @note On the unpack thread, pair with @ref _llk_unpack_AB_face_compressed_mm_.
  */
 template <std::uint32_t ct_dim = 1, bool finalize = true>

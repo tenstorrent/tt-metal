@@ -112,13 +112,19 @@ ALWI void face_compressed_mm_block_init_short(
  * fidelity: LoFi only
  * throttle: not supported
  *
+ * Split-K: back-to-back calls after one init accumulate into the same DST tile, each streaming its own meta
+ * buffer. Pass finalize = true only on the last call: the ct_dim == 1 merge adds the partial rows into the
+ * accumulation rows without clearing them, so finalizing every call counts the earlier partials twice. Pass
+ * clear_src = true only on the first call: the activation fills the same SrcB rows every call, and a later
+ * clear of both SrcB banks would meet math still holding one of them.
+ *
  * Return value: None
  *
  * | Argument           | Description                                                                                    | Type     | Valid Range                                      | Required              |
  * |--------------------|------------------------------------------------------------------------------------------------|----------|--------------------------------------------------|-----------------------|
  * | ct_dim             | The width of the output matrix in tiles                                                        | uint32_t | 1 to 16 (compile-time)                           | False (default 1)     |
- * | finalize           | Whether to merge the split-accumulation partials (applied only when ct_dim == 1)               | bool     | true/false                                       | False (default true)  |
- * | clear_src          | Whether to clear SrcB before unpacking (the activation fills only part of SrcB)                | bool     | true/false                                       | False (default true)  |
+ * | finalize           | Whether to merge the split-accumulation partials (ct_dim == 1 only); split-K: last call only   | bool     | true/false                                       | False (default true)  |
+ * | clear_src          | Clear SrcB before unpacking (the activation fills only part of it); split-K: first call only   | bool     | true/false                                       | False (default true)  |
  * | in0_cb_id          | The identifier of the input activation circular buffer (CB)                                    | uint32_t | 0 to 31                                          | True                  |
  * | in1_cb_id          | The identifier of the compressed-weight circular buffer (CB)                                   | uint32_t | 0 to 31                                          | True                  |
  * | base_address_meta  | The L1 address of the compressed-weight meta buffer                                            | uint32_t | Valid L1 address                                 | True                  |
@@ -159,8 +165,8 @@ ALWI void face_compressed_mm_block(
  * | Argument           | Description                                                                                    | Type     | Valid Range                                      | Required              |
  * |--------------------|------------------------------------------------------------------------------------------------|----------|--------------------------------------------------|-----------------------|
  * | ct_dim             | The width of the output matrix in tiles                                                        | uint32_t | 1 to 16 (compile-time)                           | False (default 1)     |
- * | clear_src          | Whether to clear SrcB before unpacking (the activation fills only part of SrcB)                | bool     | true/false                                       | False (default true)  |
- * | finalize           | Whether this unpack performs the split-accumulation finalize (ct_dim == 1)                     | bool     | true/false                                       | False (default true)  |
+ * | clear_src          | Clear SrcB before unpacking (the activation fills only part of it); split-K: first call only   | bool     | true/false                                       | False (default true)  |
+ * | finalize           | Whether the unpack runs the split-accumulation finalize (ct_dim == 1); split-K: last call only | bool     | true/false                                       | False (default true)  |
  * | in0_cb_id          | The identifier of the input activation circular buffer (CB)                                    | uint32_t | 0 to 31                                          | True                  |
  * | in1_cb_id          | The identifier of the compressed-weight circular buffer (CB)                                   | uint32_t | 0 to 31                                          | True                  |
  * | base_address_meta  | The L1 address of the compressed-weight meta buffer                                            | uint32_t | Valid L1 address                                 | True                  |
@@ -198,7 +204,7 @@ ALWI void face_compressed_mm_block_unpack(
  * | Argument           | Description                                                                                    | Type     | Valid Range                                      | Required              |
  * |--------------------|------------------------------------------------------------------------------------------------|----------|--------------------------------------------------|-----------------------|
  * | ct_dim             | The width of the output matrix in tiles                                                        | uint32_t | 1 to 16 (compile-time)                           | False (default 1)     |
- * | finalize           | Whether to merge the split-accumulation partials (applied only when ct_dim == 1)               | bool     | true/false                                       | False (default true)  |
+ * | finalize           | Whether to merge the split-accumulation partials (ct_dim == 1 only); split-K: last call only   | bool     | true/false                                       | False (default true)  |
  * | in0_cb_id          | The identifier of the input activation circular buffer (CB)                                    | uint32_t | 0 to 31                                          | True                  |
  * | in1_cb_id          | The identifier of the compressed-weight circular buffer (CB)                                   | uint32_t | 0 to 31                                          | True                  |
  * | base_address_meta  | The L1 address of the compressed-weight meta buffer                                            | uint32_t | Valid L1 address                                 | True                  |
