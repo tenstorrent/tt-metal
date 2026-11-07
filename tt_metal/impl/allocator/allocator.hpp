@@ -77,6 +77,7 @@ public:
 
     void deallocate_buffer(Buffer* buffer);
     void deallocate_buffers();
+    void deallocate_and_release_buffers();
 
     std::unordered_set<Buffer*> get_allocated_buffers() const;
     size_t get_num_allocated_buffers() const;
@@ -193,6 +194,7 @@ private:
     void retire_buffer_if_unreferenced(size_t buffer_unique_id);
     void clear_trace_allocation_state();
     bool in_corruptible_allocation_scope() const;
+    void deallocate_all_banks();
 
     mutable std::mutex mutex_;
 
