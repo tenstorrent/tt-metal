@@ -271,6 +271,10 @@
     {
       "fact": "An incomplete live log can split a multi-frame native response. Wait for hash-checked completion; a fresh local fetch alone cannot establish upstream freshness. Final cancellation log can confirm no aggregation despite pre-stop log lag. Fallback40 initial8 includes four full126976-token empty-visible replies; all were preserved before cancellation.",
       "evidence": "runs/early-banked40-fallback-dry/RESULT.json"
+    },
+    {
+      "fact": "Whole-request CI log timeouts can occur after tens of MB of body transfer. Recurrence recovered unchanged at2\u20133s for71\u2013118MB; one independent79.59s success does not justify increasing90s timeout. Preserve prior successful snapshot across failed partial transfers; transfer success does not establish upstream freshness.",
+      "evidence": "runs/ci-log-retrieval-recurrence/RESULT.json"
     }
   ],
   "suite_timings": [

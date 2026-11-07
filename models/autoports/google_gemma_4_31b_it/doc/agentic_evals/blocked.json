@@ -1,5 +1,5 @@
 {
-  "status": "stage_active_two_gpqa80_runs_and_early40_dry",
+  "status": "stage_active_gpqa80_runs_fallback40_dry_passed",
   "blockers": [
     {
       "id": "local-sandbox-runtime",
@@ -251,5 +251,16 @@
     "passed": true,
     "evidence": "runs/early-banked40-fallback-dry/RESULT.json",
     "remaining": "Final cohort choice and its clean dry, then unchanged release"
+  },
+  "log_retrieval_recurrence": {
+    "observed_at": "2026-11-07T06:50:42Z",
+    "run_ids": [
+      42323448662,
+      42332785769
+    ],
+    "status": "recovered_unchanged_cause_unresolved",
+    "action": "Existing AutoFix procedure: unchanged automatic retry, no speculative patch or device action. Recheck successful retrieval.",
+    "prior_diagnosis": "runs/ci-log-download-timeout/AUTOFIX.md",
+    "evidence": "runs/ci-log-retrieval-recurrence/RESULT.json"
   }
 }

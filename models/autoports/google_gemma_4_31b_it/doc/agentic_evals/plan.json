@@ -3162,7 +3162,7 @@
       "url": "https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/42323448662",
       "workflow_status": "in_progress",
       "workflow_conclusion": null,
-      "last_observed_at": "2026-11-07T06:27:37.784630+00:00",
+      "last_observed_at": "2026-11-07T06:42:48.240594+00:00",
       "runner": "qb2-120-p05t02",
       "device_job_id": 128253219243,
       "device_job_started_at": "2026-11-07T01:19:51Z",
@@ -3591,7 +3591,7 @@
       "url": "https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/42332785769",
       "workflow_status": "in_progress",
       "workflow_conclusion": null,
-      "last_observed_at": "2026-11-07T06:27:36.985294+00:00",
+      "last_observed_at": "2026-11-07T06:42:47.205322+00:00",
       "runner": "120-qb2-p05t01",
       "device_job_id": 128282923304,
       "device_job_started_at": "2026-11-07T03:11:07Z",
@@ -3778,8 +3778,8 @@
       "workflow_wall_hours": 1.7991666666666666
     }
   ],
-  "status": "SWE5_completed_validity_audit_GPQA20_repair_building",
-  "last_updated": "2026-11-07T06:31:27.101664+00:00",
+  "status": "active_gpqa80_rung_and_c8_comparison_fallback40_dry_passed",
+  "last_updated": "2026-11-07T06:42:55.502100+00:00",
   "stop_reason": null,
   "actual_runs": [],
   "continuations": [
@@ -5948,5 +5948,19 @@
       }
     ],
     "admission": "Held until preceding rung valid and measured schedule fits;198 rebase/reconfirm required if160 accepted first"
+  },
+  "dry_reserve_repricing_inputs": {
+    "status": "prepared_not_schedule_change",
+    "measured_fallback40_device_hours": 1.795,
+    "forecast_device_hours": 2.179353196028669,
+    "ratio": 0.8236388682986046,
+    "observed_queue_hours": 0.0038888888888888888,
+    "retained_queue_allowance_hours": 0.8494444444444444,
+    "initial_cohort_warning": "Larger lists have different initial8 IDs because the stock harness iterates selected indices ascending. Do not transfer exact first-response duration or no-score window. Reprice after completed80 and use tail allowance; keep room for fix and second dry.",
+    "evidence": [
+      "runs/early-banked40-fallback-dry/RESULT.json",
+      "plan.json:dry_initial_order_preparation"
+    ],
+    "admission": "No new rung or final list admitted by this calculation."
   }
 }
