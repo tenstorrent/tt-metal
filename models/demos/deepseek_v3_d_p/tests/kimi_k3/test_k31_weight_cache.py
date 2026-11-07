@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Builds Kimi-K3.1's TTNN weight cache (8x4, TP axis 1) for a window of layers, from the real checkpoint.
+"""Builds one layer of Kimi-K3.1's TTNN weight cache (8x4, TP axis 1) from the real checkpoint.
 
 Not a test of behaviour, a producer: constructing `TtKimiK3Transformer` with real weights and a
 `weight_cache_path` writes every tensorbin and, per layer, the completion marker
@@ -9,10 +9,11 @@ Not a test of behaviour, a producer: constructing `TtKimiK3Transformer` with rea
 (`cache_root(..., KimiK31Adapter)`, keyed by checkpoint), so a layer already marked is a cache hit and
 costs only its load; a marked attention layer missing its indexer is rebuilt attention-only.
 
-The window is `$K31_CACHE_LAYERS` (`N` or `FIRST-LAST`, inclusive) so a 93-layer build runs as short
-device jobs that release the device lock between them: a cold MoE layer reads ~59 GB of routed experts.
+The layer is `$K31_CACHE_LAYER`, one per run, so a 93-layer build runs as short device jobs that release
+the device lock between them; a cold MoE layer holds ~59 GB of routed experts in host memory. Run it under
+`umask 0002`: the cache is on a shared tree, and only files 664 / directories 2775 are readable by others.
 
-    K31_CACHE_LAYERS=3 scripts/run_safe_pytest.sh models/demos/deepseek_v3_d_p/tests/kimi_k3/test_k31_weight_cache.py
+    umask 0002; K31_CACHE_LAYER=3 scripts/run_safe_pytest.sh models/demos/deepseek_v3_d_p/tests/kimi_k3/test_k31_weight_cache.py
 """
 
 from __future__ import annotations
@@ -39,18 +40,16 @@ from models.demos.deepseek_v3_d_p.tt.runners.adapters.kimi_k3_1 import KimiK31Ad
 SP_AXIS, TP_AXIS = 0, 1
 # Weights do not depend on the sequence length; this only sizes construction-time buffers.
 SEQ_LEN = 5120
-LAYERS_ENV = "K31_CACHE_LAYERS"
+LAYER_ENV = "K31_CACHE_LAYER"
 
 
-def _window() -> range | None:
-    spec = os.getenv(LAYERS_ENV)
+def _layer() -> int | None:
+    spec = os.getenv(LAYER_ENV)
     if not spec:
         return None
-    first, _, last = spec.partition("-")
-    window = range(int(first), int(last or first) + 1)
-    if not window or window.start < 0 or window.stop > KimiK31Config.NUM_LAYERS:
-        raise ValueError(f"${LAYERS_ENV}={spec!r} is not a layer window within 0..{KimiK31Config.NUM_LAYERS - 1}")
-    return window
+    if not spec.isdigit() or int(spec) >= KimiK31Config.NUM_LAYERS:
+        raise ValueError(f"${LAYER_ENV}={spec!r} is not one layer index in 0..{KimiK31Config.NUM_LAYERS - 1}")
+    return int(spec)
 
 
 @pytest.mark.timeout(1800)
@@ -67,21 +66,21 @@ def _window() -> range | None:
     indirect=True,
 )
 def test_build_k31_weight_cache(mesh_device, device_params):
-    window = _window()
-    if window is None:
-        pytest.skip(f"a cache build: set ${LAYERS_ENV} to the layers to build")
+    layer = _layer()
+    if layer is None:
+        pytest.skip(f"a cache build: set ${LAYER_ENV} to the layer to build")
     checkpoint = Path(os.getenv(KimiK31Adapter.env_var) or KimiK31Adapter.hf_model_default)
     if not (checkpoint / "model.safetensors.index.json").is_file():
         pytest.skip(f"K3.1 checkpoint not on this box ({checkpoint}); set ${KimiK31Adapter.env_var}")
     cache = cache_root(checkpoint, tuple(mesh_device.shape), TP_AXIS, KimiK31Adapter)
     assert cache is not None, f"caching is disabled (${KimiK31Adapter.ttnn_cache_env} is empty)"
-    logger.info(f"K3.1 weight cache: building layers {window.start}..{window.stop - 1} into {cache}")
+    logger.info(f"K3.1 weight cache: building layer {layer} into {cache}")
 
     root = resolve_model_root(checkpoint)
-    is_last = window.stop == KimiK31Config.NUM_LAYERS
-    # Every window is built as a first rank, because a non-first rank must start on an AttnRes block
+    is_last = layer == KimiK31Config.NUM_LAYERS - 1
+    # Every layer is built as a first rank, because a non-first rank must start on an AttnRes block
     # edge. The model-level tensors are therefore always passed in full: each is written once, by the
-    # first window to build it, and is a cache hit (its torch tensor ignored) for every later one.
+    # first layer to build it, and is a cache hit (its torch tensor ignored) for every later one.
     globals_ = load_tensors(
         checkpoint, {"embed_weight": f"{root}embed_tokens.weight", "norm_weight": f"{root}norm.weight"}
     )
@@ -90,7 +89,7 @@ def test_build_k31_weight_cache(mesh_device, device_params):
         "norm_weight": globals_["norm_weight"] if is_last else None,
         "attn_res_weights": load_attn_res_state_dict(checkpoint, KimiK31Config.NUM_LAYERS, root),
         "attn_res_prefix": root,
-        "layers": [load_layer_state_dict_cached(checkpoint, idx, cache, model_cfg=KimiK31Config) for idx in window],
+        "layers": [load_layer_state_dict_cached(checkpoint, layer, cache, model_cfg=KimiK31Config)],
     }
 
     TtKimiK3Transformer(
@@ -98,9 +97,9 @@ def test_build_k31_weight_cache(mesh_device, device_params):
         kimi_k3_1_hf_config(max_seq=SEQ_LEN),
         KimiK31Config,
         state_dict,
-        num_layers=len(window),
+        num_layers=1,
         seq_len=SEQ_LEN,
-        first_layer_idx=window.start,
+        first_layer_idx=layer,
         is_first_rank=True,
         is_last_rank=is_last,
         sp_axis=SP_AXIS,
@@ -109,10 +108,14 @@ def test_build_k31_weight_cache(mesh_device, device_params):
         weight_cache_path=cache,
     )
 
-    missing = [idx for idx in window if not layer_is_cached(cache, idx, KimiK31Config)]
-    assert not missing, f"layers {missing} have no complete cache after the build"
+    assert layer_is_cached(cache, layer, KimiK31Config), f"layer {layer} has no complete cache after the build"
     # The runner reads `{root}/{name}_bh_32dev/{sp}x{tp}`; point it at this checkpoint's cache, as K3's is.
+    # Re-pointed when it names another checkpoint's cache (a re-export gets a new id), so the runner never
+    # loads stale tensors; until this checkpoint's cache is complete, its completeness check then fails.
     link = cache.parent.parent / f"{mesh_device.shape[0]}x{mesh_device.shape[1]}"
+    if link.is_symlink() and link.resolve() != cache.resolve():
+        logger.warning(f"re-pointing {link} from {link.resolve()} to {cache}")
+        link.unlink()
     if not link.is_symlink():
         link.symlink_to(cache.relative_to(cache.parent.parent))
-    logger.info(f"K3.1 weight cache: layers {window.start}..{window.stop - 1} complete at {cache}")
+    logger.info(f"K3.1 weight cache: layer {layer} complete at {cache}")
