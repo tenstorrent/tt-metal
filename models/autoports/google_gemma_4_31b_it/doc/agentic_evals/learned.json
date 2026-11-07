@@ -236,6 +236,10 @@
         "GitHub jobs API128229759730 at2026-11-07T02:52UTC: Run tests completed02:46:54; AI job summary in_progress"
       ],
       "timing": "Record eval and CI job/workflow wall separately; postprocessing contributes to release projection."
+    },
+    {
+      "fact": "Operator9 old-image reuse for f579 rejected: all3 model logging files baked into TT image, no TT-tree overlay in stock test route. Immutable ref flags cannot replace image-owned bytes.",
+      "evidence": "runs/ci-native-large-reply-visibility/decision9-image-reuse.json"
     }
   ],
   "suite_timings": [

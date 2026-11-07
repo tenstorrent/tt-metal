@@ -1,0 +1,114 @@
+{
+  "status": "NOT_SUPPORTED",
+  "conclusion": "Old bf1ada image cannot execute frozen f579 logging candidate through unchanged stock workflow. None of its three changed TT files reaches the container from the dispatched commits.",
+  "operator_decision": "AGENTS.md decision9 / bringup/run_contract.json ci_image_build_f5797840,2026-11-07T02:40Z",
+  "scope": "Host-only source/provenance audit; no device, dispatch, pull, push, source edit or workflow edit",
+  "device_hours": 0,
+  "candidate_tt_sha": "f57978407eaacf09587f5793b8ae46ca7af839ea",
+  "image_tt_sha": "eef534e5cd6bcaf37957647de4d8d4eff4f0e047",
+  "tti_sha": "483509781a0898395208fe0fdc14f54eb3ff8857",
+  "image": "ghcr.io/tenstorrent/tt-agentic-bringup-qb2/vllm-tt-metal-src-dev-ubuntu-22.04-amd64@sha256:bf1ada4081f7fa338ed8495a02324390d3b6124861cd625a0d2fb2d6a255d425",
+  "files": [
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/tests/test_native_log_formatter.py",
+      "container_path": "/home/container_app_user/tt-metal/models/autoports/google_gemma_4_31b_it/tests/test_native_log_formatter.py",
+      "owner": "baked TT image tree",
+      "replaced_by_test_job_mount": false,
+      "hashes_sha256": {
+        "eef534e5cd6bcaf37957647de4d8d4eff4f0e047": "da3c6726ffcee480ebf5e93da86fa2e04348c97c14809d4c5359830354009907",
+        "f57978407eaacf09587f5793b8ae46ca7af839ea": "8b69ed85c09266073ba2ad304be01db329b93998650bbf749be51cd0882070e3"
+      },
+      "role": "Model host test; not executed by normal GPQA harness. TTI /app/tests mount does not replace this TT test path."
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/tt/native_log_formatter.py",
+      "container_path": "/home/container_app_user/tt-metal/models/autoports/google_gemma_4_31b_it/tt/native_log_formatter.py",
+      "owner": "baked TT image tree",
+      "replaced_by_test_job_mount": false,
+      "hashes_sha256": {
+        "eef534e5cd6bcaf37957647de4d8d4eff4f0e047": "e6384e897a84665bf11cc5433e3ce5aa15d2783a16b9f6b7d3d1b3aad03f8135",
+        "f57978407eaacf09587f5793b8ae46ca7af839ea": "b3fab5ef1cbf13d2907378e2d58e98dedd716fe8d8932b3a9513387b5cb37c13"
+      },
+      "role": "Model handler import resolved under TT_METAL_HOME."
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/tt/native_logging.json",
+      "container_path": "/home/container_app_user/tt-metal/models/autoports/google_gemma_4_31b_it/tt/native_logging.json",
+      "owner": "baked TT image tree",
+      "replaced_by_test_job_mount": false,
+      "hashes_sha256": {
+        "eef534e5cd6bcaf37957647de4d8d4eff4f0e047": "63c98a2e6773642cbe757d7f82c868fafceee639156c975606aa6c927e8baa8c",
+        "f57978407eaacf09587f5793b8ae46ca7af839ea": "eeffa2897a4e5037db8e4f08dda3dc00bbb89227b0042a3b62053ac293a2a101"
+      },
+      "role": "Absolute logging-config path in mounted runtime model spec refers to image-owned file; JSON contents are not injected by that spec."
+    }
+  ],
+  "import_semantics": {
+    "old_config": "logging.StreamHandler + NativeHexFormatter produces TTNATIVEHEX1",
+    "candidate_config": "NativeFramedHandler qualified models.autoports.google_gemma_4_31b_it.tt.native_log_formatter path produces TTNATIVEHEX2",
+    "why_ref_flags_insufficient": "With image override, stock test job neither checks out candidate TT nor overlays its model directory. A pointer to the same absolute JSON path continues loading eef534 bytes."
+  },
+  "proofs": [
+    {
+      "source": "tt-inference-server@483509781a0898395208fe0fdc14f54eb3ff8857:vllm-tt-metal/vllm.tt-metal.src.dev.Dockerfile",
+      "lines": "102-113,189-207,236-245",
+      "fact": "Builder checks out TT ref and removes its .git; runtime copies full TT tree, sets TT_METAL_HOME=/home/container_app_user/tt-metal and PYTHONPATH=TT_METAL_HOME:APP_DIR."
+    },
+    {
+      "source": "tt-inference-server@483509781a0898395208fe0fdc14f54eb3ff8857:workflows/run_docker_server.py",
+      "lines": "648-687,759-800",
+      "fact": "Only cache/weights, optional Quetzal package, runtime model JSON and TTI app/reference_config, app/utils, app/tests, app/src mounts; no TT autoport replacement on this route."
+    },
+    {
+      "source": "tt-inference-server@483509781a0898395208fe0fdc14f54eb3ff8857:workflows/model_specs/dev/llm.yaml",
+      "lines": "7650",
+      "fact": "logging-config.pylogging_config_file is absolute /home/container_app_user/tt-metal/models/autoports/google_gemma_4_31b_it/tt/native_logging.json."
+    },
+    {
+      "source": "tt-inference-server@483509781a0898395208fe0fdc14f54eb3ff8857:vllm-tt-metal/src/run_vllm_api_server.py",
+      "lines": "442-473",
+      "fact": "RUNTIME_MODEL_SPEC_JSON_PATH selects the mounted model specification, not the content of files named by its arguments."
+    },
+    {
+      "source": "doc/agentic_evals/setup/shield-on-dispatch.yml",
+      "lines": "286-355",
+      "fact": "Explicit docker-image skips TT resolution/build; test job receives independent TTI ref and selected image, not a TT source overlay."
+    },
+    {
+      "source": "doc/agentic_evals/setup/shield-run-tests.yml",
+      "lines": "79-97,336-361",
+      "fact": "Test job checks out shield and requested TTI, enables dev-mode and passes override-docker-image; no TT checkout step."
+    },
+    {
+      "source": "bringup/artifacts/stage12-eval-observation/42302118669/current.log",
+      "lines": "1277-1297",
+      "fact": "Actual bf1ada image inspect and complete Docker invocation corroborate cache/model-JSON and four TTI app mounts; no TT-tree or Quetzal mount."
+    },
+    {
+      "source": "doc/agentic_evals/runs/ci-native-log-confirmation/image-build.json",
+      "fact": "Completed build128182363262 and actual pull bind bf1ada to eef534+TTI483509+ca7a182."
+    }
+  ],
+  "prior_evidence_read": [
+    "doc/agentic_evals/runs/ci-image-reuse/RESULT.md",
+    "doc/agentic_evals/runs/repaired-image-reuse/RESULT.md",
+    "doc/agentic_evals/runs/ci-native-log-confirmation/image-build.json"
+  ],
+  "retry": {
+    "last_dispatch": "2026-11-07T02:02:32Z",
+    "minimum_spacing_minutes": 90,
+    "earliest_dispatch": "2026-11-07T03:32:32Z",
+    "conditions": [
+      "Free slot",
+      "Unchanged stock build and same immutable SHAs",
+      "Coordinator budget/admission",
+      "Do not delay dry"
+    ]
+  },
+  "fallback": "Operator-authorized CI-proven eef534/bf1ada route for dry/release if f579 build unavailable; label f579 local-only/CI-unverified. No reinterpretation of old image as f579.",
+  "limits": [
+    "No new image inspection/pull was performed; proof uses pinned build/mount source and previously confirmed build/pull provenance.",
+    "Installed local vLLM logger file-reading/dictConfig behavior was inspected as corroboration only, not claimed as new CI-image byte measurement.",
+    "Prior final RESULT/AUTOFIX left unchanged; this is the separate decision9 follow-up."
+  ]
+}

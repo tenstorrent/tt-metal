@@ -1,5 +1,5 @@
 {
-  "status": "stage_active_gpqa80_and_c8_forty_comparison",
+  "status": "stage_active_two_gpqa80_runs",
   "blockers": [
     {
       "id": "local-sandbox-runtime",
@@ -34,12 +34,12 @@
   },
   "remaining_work": [
     "Complete80 and project next GPQA rung from measured time",
-    "Accept or reject C8 from same40 scored comparison",
+    "Accept or reject C8 on same80; C8 same40 accepted",
     "Frozen configuration, actual clean dry and immutable release including benchmark matrix",
     "One closure review and stage gate"
   ],
   "initial_stop_at": "2026-11-06T04:33:36.867416+00:00",
-  "updated_at": "2026-11-07T02:03:50.473688+00:00",
+  "updated_at": "2026-11-07T03:16:47.611140+00:00",
   "completed_preparation": [
     "Fresh autoport registry and suite entries published; full host suite3737 passed15 skipped",
     "Stratified task cohorts frozen before scores",
@@ -48,9 +48,9 @@
   "live_wait": {
     "run_ids": [
       42323448662,
-      42316311286
+      42332785769
     ],
-    "status": "Normal C4/80 and optional C8/40 devicejobs active"
+    "status": "Normal C4/80 and optional C8/80 device jobs active"
   },
   "release_route_decision_request": {
     "at": "2026-11-06T05:12:13.370191+00:00",
@@ -203,7 +203,7 @@
     "action": "Fresh AutoDebug/AutoFix source investigation; no runtime or route change authorized implicitly. Normal rungs continue independently.",
     "otlp": "Stock host request-finish spans exist, but collector/read route unavailable; no device profiler used or proposed.",
     "solution": "Model-only explicit native hex logging preserves exact stock records through filter; private observer decodes",
-    "remaining": "Two unchanged stock image builds failed EPEL proxy403 before devices. Need restored build access or exact f579 image provenance; operator question pending.",
+    "remaining": "Operator9 permits stock unchanged retry no sooner than90min; exact changed-file provenance required for old-image reuse. Optional candidate must not delay dry/release on CI-proven eef route.",
     "ci_run_id": 42296943044,
     "ci_observation": "42302118669: two initial IDs and complete replies visible, matching harness outputs; first snapshot already scored, so not a dry pass",
     "diagnosis_effort": "runs/ci-response-log-propagation/plan.md",
@@ -214,6 +214,13 @@
     "prior_confirmation_attempt": {
       "run_id": 42326665396,
       "outcome": "EPELproxy403 imagebuildfailure, noTTdevicejob"
+    },
+    "operator_decision": {
+      "source": "AGENTS.md decision9; bringup/run_contract.json ci_image_build_f5797840",
+      "applied_at": "2026-11-07T03:16:47.611140+00:00",
+      "status": "answered",
+      "next_build_retry_not_before": "2026-11-07T03:32:32Z",
+      "fallback": "CI-proven eef534 route; local f579 benchmark arm separately frozen"
     }
   }
 }

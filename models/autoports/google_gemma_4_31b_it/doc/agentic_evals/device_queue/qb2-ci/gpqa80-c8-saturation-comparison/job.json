@@ -106,7 +106,7 @@
   },
   "arm": "gpqa80-c8-saturation-comparison",
   "owner": "current_benchmark",
-  "status": "dispatched",
+  "status": "device_job_in_progress",
   "prepared_at": "2026-11-07T03:07:21.228732+00:00",
   "planned_clients": 8,
   "batch_reason": "Smallest validated batch at or above8; accepted same40 measured gain with expandedpool20480",
@@ -156,5 +156,12 @@
   "run_id": 42332785769,
   "submitted_at": "2026-11-07T03:10:50Z",
   "url": "https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/42332785769",
-  "workflow_status": "in_progress"
+  "workflow_status": "in_progress",
+  "workflow_conclusion": null,
+  "last_observed_at": "2026-11-07T03:17:25.529417+00:00",
+  "runner": "120-qb2-p05t01",
+  "device_job_id": 128282923304,
+  "device_job_started_at": "2026-11-07T03:11:07Z",
+  "device_job_completed_at": null,
+  "start": "2026-11-07T03:11:07Z"
 }

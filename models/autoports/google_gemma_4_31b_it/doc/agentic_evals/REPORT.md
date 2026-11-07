@@ -156,6 +156,7 @@ Device costs include the device job, not build/queue. Release savings are foreca
 | ci-native-large-reply-visibility | 0.24472 / 0.05917 | 0.00000 | kept/open: success: False; local exactness passed: True; result: Atomic framed handler passes local exact native pair and competing-writer transport. Two stock CI image builds fail EPEL proxy403 before device; actual C… |
 | framed-benchmark-dry | 0.07723 / 0.07529 | 0.00000 | none/solved: success: True; result: Frozen local benchmark arm passed; 8/8 exact headline outputs vs eef; phase complete and devices closed. No combined dry/release claim.; credited saving hours: 0 |
 | gpqa80-c8-saturation-comparison | 5.33396 / unknown | 2.27891 | running/pending: Final valid40 gain accepted; empirical-tail and devicebox projections fit firstdry reserve. NormalC4/80 continues. |
+| framed-logger-image-provenance | 0.00000 / 0.00000 | 0.00000 | none/solved: Old-image reuse rejected: all3changed files baked into image and no stock TT-tree overlay. Exact immutable image required; optional candidate cannot delay fallback. |
 
 Evidence is written once by each effort; this table summarizes the current coordinator disposition. Unmeasured savings remain unknown or receive zero planning credit.
 
