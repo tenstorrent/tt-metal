@@ -5,7 +5,7 @@ and on `main` daily. This page explains how to run it locally and how to manage 
 
 ## Running locally (dev container — recommended)
 
-The dev container ships clang-tidy 20 and all required tools. No extra installation needed.
+The dev container ships clang-tidy 23 and all required tools. No extra installation needed.
 
 ```sh
 docker pull ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-24.04-dev-amd64:latest
@@ -35,15 +35,17 @@ cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
 
 # Scan specific file(s)
 run-clang-tidy -p ./build -quiet -use-color \
+  -clang-tidy-binary clang-tidy-23 \
   -header-filter "$(pwd)" \
   -source-filter "$(pwd)" \
   -exclude-header-filter "(.*CPM.*|.*tt-train.*|.*third_party.*)" \
   ./path/to/your/file.cpp
 ```
 
-The key flags: `-p ./build` points to `compile_commands.json`; `-header-filter` and
-`-source-filter` restrict scanning to the repo tree; `-exclude-header-filter` skips
-third-party headers.
+The key flags: `-p ./build` points to `compile_commands.json`; `-clang-tidy-binary`
+pins the version explicitly rather than relying on the `clang-tidy` default;
+`-header-filter` and `-source-filter` restrict scanning to the repo tree;
+`-exclude-header-filter` skips third-party headers.
 
 ## Prerequisites (without the dev container)
 
@@ -52,8 +54,8 @@ If you are building outside the dev container, you need:
 | Tool | Version | Ubuntu package |
 |------|---------|----------------|
 | clang / clang++ | **20** | `apt install clang-20` |
-| clang-tidy | **20** | `apt install clang-tidy-20` |
-| run-clang-tidy | **20** | `apt install clang-tools-20` |
+| clang-tidy | **23** | `apt install clang-tidy-23` |
+| run-clang-tidy, clang-apply-replacements | **23** | `apt install clang-tools-23` |
 | cmake | ≥ 3.22 | `apt install cmake` |
 | ninja | any | `apt install ninja-build` |
 
@@ -120,7 +122,7 @@ some_call();                           — suppress the following line
 
 If the check has FIX-ITs (see the "Offers fixes" column on the checks page), use the
 parallel preset: it exports fixes to YAML files first, then applies them all at once
-with `clang-apply-replacements-20`. This avoids the race condition where parallel
+with `clang-apply-replacements-23`. This avoids the race condition where parallel
 clang-tidy instances corrupt headers that are included by multiple TUs.
 
 ```sh
@@ -130,7 +132,7 @@ cmake --build --preset clang-tidy-fix-parallel --target clean
 cmake --build --preset clang-tidy-fix-parallel
 
 # Step 2: apply all collected fixes atomically
-clang-apply-replacements-20 .build/clang-tidy-fix-parallel/fixes
+clang-apply-replacements-23 .build/clang-tidy-fix-parallel/fixes
 ```
 
 This will take several hours on a 12-core machine. When complete, review the diffs and

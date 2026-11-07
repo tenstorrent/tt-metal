@@ -217,12 +217,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # unversioned ones, and consults ClangSA.analyzer_binary() even when only
 # clang-tidy runs, where a None crashes compilation-database parsing. Three
 # workflows each fixed that up themselves before running it; do it once here.
-# Nothing in the build picks a compiler by bare name: build_metal.sh passes an
-# explicit path, CMakePresets pins clang-tidy-20, and CMake's own default probe
-# looks for cc/c++.
-RUN for tool in clang clang++ clang-tidy; do \
-        update-alternatives --install "/usr/bin/$tool" "$tool" "/usr/bin/${tool}-20" 100; \
-    done && \
+# clang/clang++ default to v20: nothing picks the compiler by bare name anyway
+# (build_metal.sh passes an explicit path, CMake's own default probe looks for
+# cc/c++), so this is just for CodeChecker/ClangSA. clang-tidy defaults to v23
+# so local runs (CMakePresets' clang-tidy preset, bare `run-clang-tidy`) match
+# what CI enforces.
+RUN update-alternatives --install /usr/bin/clang clang /usr/bin/clang-20 100 && \
+    update-alternatives --install /usr/bin/clang++ clang++ /usr/bin/clang++-20 100 && \
+    update-alternatives --install /usr/bin/clang-tidy clang-tidy /usr/bin/clang-tidy-23 100 && \
+    update-alternatives --set clang-tidy /usr/bin/clang-tidy-23 && \
     clang --version && clang-tidy --version
 
 #############################################################
