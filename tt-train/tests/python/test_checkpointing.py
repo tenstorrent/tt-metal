@@ -38,6 +38,10 @@ def _make_optimizer(name: str, params: "ttml.NamedParameters") -> "ttml.optimize
     if name == "AdamW":
         cfg = ttml.optimizers.AdamWConfig.make(lr=1e-3, beta1=0.9, beta2=0.999, epsilon=1e-8, weight_decay=0.0)
         return ttml.optimizers.AdamW(params, cfg)
+    if name == "AdamW+fp32":
+        # fp32 master weights: the trainable parameters are stored in fp32, and fused AdamW keeps fp32 moments.
+        ttml.core.store_trainable_parameters_as(params, ttnn.DataType.FLOAT32)
+        return _make_optimizer("AdamW", params)
     if name == "MuonComposite":
         cfg = ttml.optimizers.MuonConfig.make(lr=1e-3, momentum=0.95, ns_steps=5)
         return ttml.optimizers.MuonComposite(params, cfg)
@@ -110,7 +114,7 @@ def _scalars(opt) -> dict:
 
 
 @pytest.mark.requires_device
-@pytest.mark.parametrize("optimizer_name", ["AdamW", "MuonComposite", "MuonWithAdamW"])
+@pytest.mark.parametrize("optimizer_name", ["AdamW", "AdamW+fp32", "MuonComposite", "MuonWithAdamW"])
 def test_save_load_roundtrip(tmp_path, optimizer_name):
     """Save a trained model+optimizer to disk, restore into a fresh pair, and verify exact recovery."""
     ctx = ttml.autograd.AutoContext.get_instance()
@@ -205,17 +209,6 @@ def test_partial_load_skips_absent_groups(tmp_path):
     ctx.reset_graph()
 
 
-def _store_as(model: TwoLayer, dtype) -> None:
-    """Store every parameter as ``dtype``, as a run that trains in that precision does. New parameters are bf16."""
-    precision = (
-        ttml.autograd.PreferredPrecision.FULL
-        if dtype == ttnn.DataType.FLOAT32
-        else ttml.autograd.PreferredPrecision.HALF
-    )
-    for t in model.parameters().values():
-        t.set_value(t.get_value(precision))
-
-
 @pytest.mark.requires_device
 @pytest.mark.parametrize(
     "saved_dtype, resumed_dtype",
@@ -229,7 +222,7 @@ def test_resume_keeps_the_models_dtype(tmp_path, saved_dtype, resumed_dtype):
 
     ttml.init.manual_seed(0)
     orig = TwoLayer()
-    _store_as(orig, saved_dtype)
+    ttml.core.store_trainable_parameters_as(orig.parameters(), saved_dtype)
     opt = _make_optimizer("AdamW", orig.parameters())
     _train_steps(orig, opt, n=1, x_np=x_np)
     path = str(tmp_path / "ckpt.pkl")
@@ -237,7 +230,7 @@ def test_resume_keeps_the_models_dtype(tmp_path, saved_dtype, resumed_dtype):
     ctx.reset_graph()
 
     restored = TwoLayer()
-    _store_as(restored, resumed_dtype)
+    ttml.core.store_trainable_parameters_as(restored.parameters(), resumed_dtype)
     restored_opt = _make_optimizer("AdamW", restored.parameters())
     checkpointing.load_checkpoint(path, model_params=restored.parameters(), optimizer=restored_opt)
 
@@ -337,3 +330,39 @@ def test_bad_file_raises(tmp_path, expect_error):
         pickle.dump({"not": "a checkpoint"}, f)
     with expect_error(ValueError, "not a ttml checkpoint or unsupported format"):
         checkpointing.read_header(str(wrong_format))
+
+
+@pytest.mark.requires_device
+def test_param_groups_survive_checkpoint(tmp_path):
+    """Per-group options and initial LRs are written to the checkpoint and restored into a fresh AdamW."""
+    from ttml.common.schedulers import CosineAnnealingScheduler
+
+    def make(model):
+        params = model.parameters()
+        biases = [name for name in params.keys() if name.endswith("/bias")]
+        cfg = ttml.optimizers.AdamWConfig.make(lr=1e-3, beta1=0.9, beta2=0.999, epsilon=1e-8, weight_decay=0.1)
+        return ttml.optimizers.AdamW(params, cfg, param_groups=[{"params": biases, "lr": 2e-3, "weight_decay": 0.0}])
+
+    x_np = np.random.default_rng(0).standard_normal((1, 1, DIM, DIM)).astype(np.float32)
+    ttml.init.manual_seed(0)
+    orig = TwoLayer()
+    opt = make(orig)
+    sched = CosineAnnealingScheduler(opt, T_max=10, eta_min=1e-4)
+    for _ in range(3):
+        _train_steps(orig, opt, n=1, x_np=x_np)
+        sched.step()
+    opt.set_param_group_option(1, "beta2", 0.95)
+
+    path = str(tmp_path / "ckpt.pkl")
+    checkpointing.save_checkpoint(path, header={"step": 3}, model_params=orig.parameters(), optimizer=opt)
+    ttml.autograd.AutoContext.get_instance().reset_graph()
+
+    restored = TwoLayer()
+    opt2 = make(restored)
+    checkpointing.load_checkpoint(path, model_params=restored.parameters(), optimizer=opt2)
+
+    for got, want in zip(opt2.get_param_groups(), opt.get_param_groups()):
+        assert got["params"] == want["params"]
+        for key in ("lr", "beta1", "beta2", "epsilon", "weight_decay"):
+            assert got[key] == pytest.approx(want[key], rel=1e-6), key
+    assert opt2.get_initial_group_lrs() == pytest.approx([1e-3, 2e-3], rel=1e-6)

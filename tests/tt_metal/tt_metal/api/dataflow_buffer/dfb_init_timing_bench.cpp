@@ -808,7 +808,7 @@ void run_benchmark_case_seven(DfbInitTimingBenchContext& ctx) {
     constexpr uint16_t NEO2 = (1u << 10);
     constexpr uint16_t NEO3 = (1u << 11);
 
-    Program program = CreateProgram();
+    Program program = CreateProgram(*ctx.mesh_device);
 
     // -----------------------------------------------------------------------
     // 1Sx1S DFBs (IDs 0–15): STRIDED producer, STRIDED consumer, no remapper.
@@ -1032,7 +1032,7 @@ void run_benchmark_case_six(DfbInitTimingBenchContext& ctx) {
     constexpr uint16_t NEO2 = (1u << 10);
     constexpr uint16_t NEO3 = (1u << 11);
 
-    Program program = CreateProgram();
+    Program program = CreateProgram(*ctx.mesh_device);
 
     // -----------------------------------------------------------------------
     // 1Sx2A DFBs (IDs 0–15): STRIDED producer, ALL consumer — 16 × 1-to-2 remapper
@@ -1139,6 +1139,7 @@ void run_benchmark_case_six(DfbInitTimingBenchContext& ctx) {
 
     // Host preflight: catch stale builds where blobs still carry entry_size=1024.
     program.impl().finalize_dataflow_buffer_configs();
+    program.impl().prepare_ephemeral_allocation(device);
     program.impl().allocate_dataflow_buffers(device);
     const CoreCoord bench_core(0, 0);
     const auto dfbs = program.impl().dataflow_buffers_on_core(bench_core);
@@ -1174,8 +1175,8 @@ void run_benchmark_case_six(DfbInitTimingBenchContext& ctx) {
 // Single DFB via CreateDataflowBuffer: DM4 (STRIDED producer) → Neo0 (ALL consumer),
 // 1-to-1 remapper, num_entries=1, entry_size=2048, copy_tile drain.
 // Producer uses explicit reserve_back/push_back (implicit_sync=false), matching
-// DMTensixTest1xDFB1Sx1S. With implicit_sync=true the DM kernel hangs in finish()
-// at handle_final_credits WTP1 waiting for ISR-posted producer TC credits.
+// DMTensixTest1xDFB1Sx1S. With implicit_sync=true the DM kernel used to hang in the
+// per-object finish waiting for ISR-posted producer TC credits.
 // Pass/fail here isolates ALL+remapper consumer TC init from multi-DFB TC pressure.
 void run_benchmark_case_six_debug(DfbInitTimingBenchContext& ctx) {
     IDevice* device = ctx.device;
@@ -1187,7 +1188,7 @@ void run_benchmark_case_six_debug(DfbInitTimingBenchContext& ctx) {
     constexpr uint16_t DM4  = (1u << 4);
     constexpr uint16_t NEO0 = (1u << 8);
 
-    Program program = CreateProgram();
+    Program program = CreateProgram(*ctx.mesh_device);
 
     experimental::dfb::CreateDataflowBuffer(
         program,
@@ -1234,6 +1235,7 @@ void run_benchmark_case_six_debug(DfbInitTimingBenchContext& ctx) {
         NUM_ENTRIES);
 
     program.impl().finalize_dataflow_buffer_configs();
+    program.impl().prepare_ephemeral_allocation(device);
     program.impl().allocate_dataflow_buffers(device);
     const CoreCoord bench_core(0, 0);
     const auto dfbs = program.impl().dataflow_buffers_on_core(bench_core);
@@ -1279,7 +1281,7 @@ void run_benchmark_case_six_debug_implicit_sync(DfbInitTimingBenchContext& ctx) 
     constexpr uint16_t DM4  = (1u << 4);
     constexpr uint16_t NEO0 = (1u << 8);
 
-    Program program = CreateProgram();
+    Program program = CreateProgram(*ctx.mesh_device);
 
     experimental::dfb::CreateDataflowBuffer(
         program,

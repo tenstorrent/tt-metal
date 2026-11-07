@@ -11,6 +11,7 @@
 #include <string_view>
 #include <tt-logger/tt-logger.hpp>
 #include <tt_stl/overloaded.hpp>
+#include "ttnn/core.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 #include <unordered_map>
@@ -215,7 +216,9 @@ void enqueue_mesh_workload(
                 [&](const Tensor& t) { spec_copies.emplace_back(t.tensor_spec()); }, tensor_args);
         }
 
-        auto trace_id = tt::tt_metal::experimental::inspector::GetCurrentMeshTraceId(mesh_device);
+        // Metal has no implicit queue selection; pass the thread's current TTNN queue explicitly.
+        auto trace_id = tt::tt_metal::experimental::inspector::GetCurrentMeshTraceId(
+            mesh_device->mesh_command_queue(ttnn::core::get_current_command_queue_id_for_thread().get()));
         tt::tt_metal::experimental::inspector::EmitMeshWorkloadDebugEntry(
             workload, runtime_id, operation_name, std::move(spec_copies), trace_id);
     }
@@ -224,7 +227,12 @@ void enqueue_mesh_workload(
         return;
     }
 
-    tt::tt_metal::distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
+    if (is_recording_command_list()) [[unlikely]] {
+        record_to_command_list(
+            get_operation_name<mesh_device_operation_t>(operation_attributes), mesh_device, workload);
+    } else {
+        tt::tt_metal::distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
+    }
 
     ttnn::graph::track_mesh_workload_execution(workload, mesh_device, runtime_id);
 

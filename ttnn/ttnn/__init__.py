@@ -181,6 +181,7 @@ from ttnn._ttnn.fabric import (
 from ttnn._ttnn import cluster
 
 from ttnn._ttnn.global_semaphore import (
+    experimental_create_global_semaphore_at_address,
     create_global_semaphore,
     get_global_semaphore_address,
     reset_global_semaphore_value,
@@ -218,6 +219,13 @@ from ttnn._ttnn.d2d_stream_service import (
     D2DStageGateDescriptor,
     D2DStageGateMode,
     D2D_STAGE_GATE_UNGATED_SLOT,
+    PCIeCoreLocation,
+    D2DReceiverCoordDescriptor,
+    D2DReceiverDescriptor,
+    D2DRankDescriptor,
+    D2DPipelineDescriptor,
+    D2DPipelineDescriptorFile,
+    d2d_pipeline_descriptor_path,
 )
 
 from ttnn._ttnn.layer_ack_service import (
@@ -237,6 +245,16 @@ from ttnn.types import (
     bfloat4_b,
     bfloat16,
     fp8_e4m3,
+    mxfp8_e4m3,
+    mxfp8_e5m2,
+    mxfp6_e2m3,
+    mxfp6_e3m2,
+    mxfp4,
+    mxint8,
+    mxint4,
+    mxint2,
+    MX_DTYPES,
+    is_mx_dtype,
     float32,
     MathFidelity,
     MemoryConfig,
@@ -391,6 +409,11 @@ from ttnn.core import (
 )
 
 tile_size = ttnn._ttnn.tensor.tile_size
+experimental_create_sram_tensor_view = ttnn._ttnn.tensor.experimental_create_sram_tensor_view
+NodeLocalSpan = ttnn._ttnn.tensor.NodeLocalSpan
+PerNodeDeviceLocalMemorySpan = ttnn._ttnn.tensor.PerNodeDeviceLocalMemorySpan
+PerNodeMeshDeviceMemorySpan = ttnn._ttnn.tensor.PerNodeMeshDeviceMemorySpan
+experimental_allocate_single_device_tensor = ttnn._ttnn.tensor.experimental_allocate_single_device_tensor
 element_size = ttnn._ttnn.tensor.element_size
 
 import ttnn.reflection
@@ -484,6 +507,8 @@ ttnn.Tensor.__ge__ = lambda self, *args, **kwargs: ttnn.ge(self, *args, **kwargs
 ttnn.Tensor.__lt__ = lambda self, *args, **kwargs: ttnn.lt(self, *args, **kwargs)
 ttnn.Tensor.__le__ = lambda self, *args, **kwargs: ttnn.le(self, *args, **kwargs)
 ttnn.Tensor.__getitem__ = lambda self, *args, **kwargs: ttnn.operations.core.__getitem__(self, *args, **kwargs)
+
+as_tensor_cache_repair = ttnn.operations.core.as_tensor_cache_repair
 
 from ttnn.operations.matmul import (
     MatmulMultiCoreReuseProgramConfig,
@@ -597,12 +622,27 @@ experimental.rgb_to_yuv = rgb_to_yuv
 experimental.yuv_bt601_coefficients = yuv_bt601_coefficients
 experimental.yuv_bt709_coefficients = yuv_bt709_coefficients
 
+# Sparse KV push: which of a requester's needed rows a push sends, and the cores it needs per link
+from ttnn._ttnn.operations.experimental import SparseKvPushPart, SPARSE_KV_PUSH_CORES_PER_LINK
+
+experimental.SparseKvPushPart = SparseKvPushPart
+experimental.SPARSE_KV_PUSH_CORES_PER_LINK = SPARSE_KV_PUSH_CORES_PER_LINK
+
 # PrefetcherPipe (Metal 2.0 durable cross-program remote DFB). Experimental-only surface.
 from ttnn._ttnn import prefetcher_pipe as _prefetcher_pipe
 
 experimental.PrefetcherPipeSpace = _prefetcher_pipe.PrefetcherPipeSpace
 experimental.PrefetcherPipe = _prefetcher_pipe.PrefetcherPipe
+experimental.PrefetcherPipeL1Source = _prefetcher_pipe.PrefetcherPipeL1Source
+experimental.PrefetcherPipeSpaceConfig = _prefetcher_pipe.PrefetcherPipeSpaceConfig
 experimental.create_prefetcher_pipe_space = _prefetcher_pipe.create_prefetcher_pipe_space
+experimental.create_prefetcher_pipe_spaces = _prefetcher_pipe.create_prefetcher_pipe_spaces
+
+# Command lists (Metal 2.0 replacement for trace). Experimental-only surface.
+from ttnn._ttnn.operations import command_list as _command_list
+
+experimental.CommandListBuilder = _command_list.CommandListBuilder
+experimental.CommandList = _command_list.CommandList
 
 Conv1dConfig = ttnn._ttnn.operations.conv.Conv2dConfig
 

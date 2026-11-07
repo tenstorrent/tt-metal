@@ -7,6 +7,7 @@
 #include "minimal_matmul_device_operation_types.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/ccl/ccl_op_fusion.hpp"
+#include <tt-metalium/program_descriptors.hpp>
 
 namespace ttnn::experimental::prim {
 
@@ -15,19 +16,16 @@ namespace ttnn::experimental::prim {
 //
 // It survives because minimal_matmul_strided_reduce_scatter_async builds one fused Program holding
 // both the reduce-scatter and the matmul kernels: it calls minimal_matmul_factory_helper_common
-// with its own Program&, stores the returned shared_variables_t, and re-enters
-// override_runtime_arguments through cached_program_t::proxy.
+// with its own ProgramDescriptor&, stores the returned shared_variables_t, and the fused factory
+// re-applies hash-excluded semaphore addresses itself.
 //
 struct MinimalMatmulProgramFactory {
     struct shared_variables_t {
-        uint32_t num_cores{};
-        std::vector<CoreCoord> cores;
         tt::tt_metal::KernelHandle in0_sender_kernels_id{};
         tt::tt_metal::KernelHandle in0_receiver_kernels_id{};
         tt::tt_metal::KernelHandle in1_sender_kernels_id{};
         tt::tt_metal::KernelHandle in1_receiver_kernels_id{};
         tt::tt_metal::KernelHandle compute_kernels_id{};
-        bool transpose_core_grid{};
         bool read_local_slice_from_input{};
         // Fused concatenation: in0's K is sourced from input_tensor + optional_input_tensor (no
         // materialized concat). When set, optional_input_tensor feeds the in3 address on re-runs.
@@ -46,7 +44,7 @@ struct MinimalMatmulProgramFactory {
 // tensors (N_chunks) and a vector of output tensors, so it serves both the single-output and the
 // minimal_matmul_split shapes.
 MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_common(
-    tt::tt_metal::Program& program,
+    tt::tt_metal::ProgramDescriptor& program,
     const Tensor& input_tensor,
     const Tensor& weight_tensor,
     const std::optional<const Tensor>& bias_tensor,

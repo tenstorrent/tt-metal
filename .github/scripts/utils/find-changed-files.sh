@@ -31,6 +31,7 @@ LLK_QUASAR_CHANGED=false
 LLK_TESTS_CHANGED=false
 LLK_UNIT_TESTS_CHANGED=false
 LLK_PERF_CHANGED=false
+LLK_HARDWARE_FREE_CHANGED=false
 LLK_CI_CHANGED=false
 TTSIM_CI_CHANGED=false
 WORKFLOWS_CHANGED=false
@@ -82,7 +83,8 @@ while IFS= read -r FILE; do
         .github/time_budget.yaml)
             TTSIM_CI_CHANGED=true
             ;;
-        .clang-tidy|**/.clang-tidy)
+        .clang-tidy|**/.clang-tidy|\
+        cmake/clang-tidy.d/.clang-tidy.v23-new-checks.yaml)
             CLANG_TIDY_CONFIG_CHANGED=true
             ;;
         tt_stl/**/*.@(h|hpp|c|cpp))
@@ -105,6 +107,16 @@ while IFS= read -r FILE; do
             ;;
         tt_metal/tt-llk/tt_llk_quasar/**|tt_metal/tt-llk/tests/sources/quasar/**|tt_metal/tt-llk/tests/python_tests/quasar/**|tt_metal/hw/ckernels/quasar/**)
             LLK_QUASAR_CHANGED=true
+            ;;
+        # Host-only tests, and the gate modules they import. Before the perf and
+        # tests catch-alls: those would start the card perf and smoke jobs.
+        tt_metal/tt-llk/tests/hardware_free/**|tt_metal/tt-llk/tests/run_hardware_free.sh)
+            LLK_HARDWARE_FREE_CHANGED=true
+            ;;
+        tt_metal/tt-llk/perf/**)
+            LLK_HARDWARE_FREE_CHANGED=true
+            TTMETALIUM_CHANGED=true
+            ANY_CODE_CHANGED=true
             ;;
         tt_metal/tt-llk/tests/**/perf/**|tt_metal/tt-llk/tests/**/*perf*)
             LLK_PERF_CHANGED=true
@@ -133,7 +145,7 @@ while IFS= read -r FILE; do
         tt_metal/tt-llk/tests/**)
             LLK_TESTS_CHANGED=true
             ;;
-        .github/workflows/llk-*.yaml|.github/workflows/build-quasar-perf.yml|.github/scripts/llk-*.sh|tests/pipeline_reorg/llk_unit_tests.yaml|tests/pipeline_reorg/llk_merge_gate_tests.yaml|tests/pipeline_reorg/llk_pr_gate_tests.yaml)
+        .github/workflows/llk-*.yaml|.github/workflows/build-quasar-perf.yml|.github/scripts/llk-*.sh|tests/pipeline_reorg/llk_unit_tests.yaml|tests/pipeline_reorg/llk_merge_gate_tests.yaml|tests/pipeline_reorg/llk_pr_gate_tests.yaml|tests/pipeline_reorg/llk_hardware_free_tests.yaml)
             LLK_CI_CHANGED=true
             ;;
         tt_metal/**/*.@(h|hpp|inl|c|cpp|cc|py))
@@ -276,7 +288,8 @@ while IFS= read -r FILE; do
         .github/workflows/clang-tidy-reusable.yaml|\
         .github/workflows/pr-gate.yaml|\
         .github/workflows/build-docker-artifact.yaml|\
-        .github/workflows/resolve-docker-pull-refs.yaml)
+        .github/workflows/resolve-docker-pull-refs.yaml|\
+        cmake/clang-tidy-export-fixes-wrapper.sh)
             CLANG_TIDY_KEY_WORKFLOW_CHANGED=true
             ;;
     esac
@@ -413,6 +426,7 @@ declare -A changes=(
     [llk-tests-changed]=$LLK_TESTS_CHANGED
     [llk-unit-tests-changed]=$LLK_UNIT_TESTS_CHANGED
     [llk-perf-changed]=$LLK_PERF_CHANGED
+    [llk-hardware-free-changed]=$LLK_HARDWARE_FREE_CHANGED
     [llk-ci-changed]=$LLK_CI_CHANGED
     [ttsim-ci-changed]=$TTSIM_CI_CHANGED
 )

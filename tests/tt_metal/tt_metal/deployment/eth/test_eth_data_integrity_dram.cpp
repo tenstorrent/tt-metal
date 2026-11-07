@@ -170,8 +170,8 @@ static bool run_test_integrity_dram(
     const uint32_t send_bank_id = next_bank_id++;
 
     map<shared_ptr<distributed::MeshDevice>, shared_ptr<tt_metal::Program>> programs = {
-        {send_mesh_device, make_shared<Program>()},
-        {recv_mesh_device, make_shared<Program>()},
+        {send_mesh_device, make_shared<Program>(CreateProgram(*send_mesh_device))},
+        {recv_mesh_device, make_shared<Program>(CreateProgram(*recv_mesh_device))},
     };
 
     /* Receivers */

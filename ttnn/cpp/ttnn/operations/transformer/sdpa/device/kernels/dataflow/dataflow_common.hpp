@@ -12,7 +12,7 @@
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
-#include <tt-metalium/constants.hpp>
+#include "api/tile_constants.h"
 #include "api/debug/assert.h"
 #include "cpp/ttnn/operations/transformer/sdpa/device/kernels/q_chunk_remapping.hpp"
 #include "cpp/ttnn/operations/transformer/sdpa/device/kernels/sliding_window_geometry.hpp"
@@ -1559,7 +1559,16 @@ void write_block(
     cb.pop_front(num_tiles);
 }
 
-template <typename TensorAccessorType>
+// Heads-concat output ([B, 1, S, NH*cols]) of a chunk whose rows run through consecutive heads (GQA Q-head crossing
+// with a q chunk that does not divide S): after the last row of a head, the next row is row 0 of the head one to the
+// right, so the tile id moves back head_rows rows and right cols tiles. Unsigned wraparound is intended. The drains
+// take head_rows as a template parameter (0 = rows never wrap to another head): a runtime check in their row loop moved
+// Llama 3.1 8B prefill (fp32 DEST, 256-tile chunks) by up to 10%, either way.
+FORCE_INLINE uint32_t head_wrap_tile_skip(uint32_t cols, uint32_t row_stride, uint32_t head_rows) {
+    return cols - head_rows * row_stride;
+}
+
+template <uint32_t head_rows = 0, typename TensorAccessorType>
 void write_block(
     Noc noc,
     const TensorAccessorType& out_writer,
@@ -1570,10 +1579,13 @@ void write_block(
     const uint32_t out_tile_id,
     const uint32_t tile_bytes,
     const uint32_t barrier_threshold,
-    const uint32_t row_stride = 0) {
+    const uint32_t row_stride = 0,
+    const uint32_t first_row_in_head = 0) {
     uint32_t barrier_count = 0;
     uint32_t tile_id = out_tile_id;
     const uint32_t row_skip = (row_stride ? row_stride : cols) - cols;
+    [[maybe_unused]] const uint32_t head_skip = head_wrap_tile_skip(cols, row_stride ? row_stride : cols, head_rows);
+    [[maybe_unused]] uint32_t row_in_head = first_row_in_head;
 
     CircularBuffer cb(cb_out);
     cb.wait_front(out_chunk_tiles);
@@ -1591,6 +1603,12 @@ void write_block(
             }
         }
         tile_id += row_skip;
+        if constexpr (head_rows != 0) {
+            if (++row_in_head == head_rows) {
+                row_in_head = 0;
+                tile_id += head_skip;
+            }
+        }
     }
     noc.async_write_barrier();
     cb.pop_front(out_chunk_tiles);
@@ -1602,7 +1620,7 @@ void write_block(
 // are padding — popped but not written. Periodic barrier_threshold flushes guard the NoC ack
 // queue; the final write barrier ensures DRAM arrival before return. Single-chip never
 // sets a non-zero trid → drain flushes trid 0 (the default trid all writes here carry).
-template <typename TensorAccessorType>
+template <uint32_t head_rows = 0, typename TensorAccessorType>
 void write_block_row_grouped(
     Noc noc,
     const TensorAccessorType& out_writer,
@@ -1614,11 +1632,14 @@ void write_block_row_grouped(
     const uint32_t tile_bytes,
     const uint32_t sbh,
     const uint32_t barrier_threshold,
-    const uint32_t row_stride = 0) {
+    const uint32_t row_stride = 0,
+    const uint32_t first_row_in_head = 0) {
     constexpr uint32_t default_trid = 0;
     uint32_t tile_id = out_tile_id;
     uint32_t barrier_count = 0;
     const uint32_t row_skip = (row_stride ? row_stride : cols) - cols;
+    [[maybe_unused]] const uint32_t head_skip = head_wrap_tile_skip(cols, row_stride ? row_stride : cols, head_rows);
+    [[maybe_unused]] uint32_t row_in_head = first_row_in_head;
 
     const uint32_t num_full_groups = total_rows / sbh;
     const uint32_t remainder_rows = total_rows - num_full_groups * sbh;
@@ -1642,6 +1663,12 @@ void write_block_row_grouped(
                     }
                 }
                 tile_id += row_skip;
+                if constexpr (head_rows != 0) {
+                    if (++row_in_head == head_rows) {
+                        row_in_head = 0;
+                        tile_id += head_skip;
+                    }
+                }
             }
         }
         // Flush THIS drain's writes (default trid) before pop so compute can safely reuse the L1 slot.

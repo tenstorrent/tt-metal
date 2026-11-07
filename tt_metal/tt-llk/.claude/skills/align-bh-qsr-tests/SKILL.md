@@ -146,7 +146,10 @@ Optional packaging: split a QSR lumped family so it pairs with an existing BH fa
 Homogeneous CSV schema is per **module** name (`perf_eltwise_binary_sfpu`, `perf_eltwise_binary_sfpu_quasar`), not per family wrapper. Do not bump `helpers/perf/test_schemas.py` unless templates/runtimes grow a new column. After sweep-axis edits:
 
 ```bash
-cd tests && python3 -m pytest python_tests/test_perf_header_gate.py -q
+cd tests/python_tests
+LLK_HARDWARE_FREE=1 CHIP_ARCH=wormhole python3 -m pytest -c pytest.ini --rootdir=. --confcutdir=. \
+  -p helpers.llk_pytest_plugin \
+  ../hardware_free/perf/test_perf_header_gate.py -q
 ```
 
 ## Commands
