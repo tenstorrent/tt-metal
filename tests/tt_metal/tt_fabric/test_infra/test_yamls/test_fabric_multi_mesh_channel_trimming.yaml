@@ -1,0 +1,43 @@
+# Channel trimming on a multi-mesh system, run as one process per mesh (tt-run).
+#
+# Each test runs twice: first capturing which router channels the traffic uses, then on a fabric rebuilt with
+# only those channels. Every process captures and replays its own profile (channel_trimming_capture/rank_<N>.yaml);
+# the harness fails a replay whose rank has no capture of its own.
+#
+# On a multi-mesh system every inter-mesh router moves traffic arriving from another mesh from VC0 onto VC1 and
+# forwards it into its own mesh. Inter-mesh all-to-all sends most of its traffic past the entry chip, so that
+# forwarding is used on every inter-mesh link. 256 packets run any sender whose credits aren't returned out of
+# buffer slots.
+Tests:
+
+  - name: "ChannelTrimmingMultiMeshAllToAllInter"
+    sync: true
+    fabric_setup:
+      topology: Mesh
+      enable_channel_trimming: true
+
+    defaults:
+      ftype: unicast
+      ntype: unicast_write
+      size: 1024
+      num_packets: 256
+
+    patterns:
+      - type: all_to_all
+        mesh_scope: inter_mesh
+
+  - name: "ChannelTrimmingMultiMeshAllToAllIntra"
+    sync: true
+    fabric_setup:
+      topology: Mesh
+      enable_channel_trimming: true
+
+    defaults:
+      ftype: unicast
+      ntype: unicast_write
+      size: 1024
+      num_packets: 256
+
+    patterns:
+      - type: all_to_all
+        mesh_scope: intra_mesh

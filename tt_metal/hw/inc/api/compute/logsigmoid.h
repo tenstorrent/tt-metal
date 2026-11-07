@@ -44,15 +44,16 @@ ALWI void logsigmoid_tile(uint32_t idst_in0, uint32_t idst_in1, uint32_t idst_ou
 /**
  * Initialize logsigmoid operation.
  * Must be called before logsigmoid_tile.
+ * On Wormhole this loads polynomial coefficients into vConstFloatPrgm0..2, the registers exp_tile_init
+ * (and other SFPU inits) also program. Call it after those inits, right before logsigmoid_tile, and call
+ * exp_tile_init again after it before the next exp_tile.
  *
  * Return value: None
  */
-ALWI void logsigmoid_tile_init() { MATH((SFPU_BINARY_INIT(unused))); }
+ALWI void logsigmoid_tile_init() { MATH((SFPU_BINARY_INIT_FN(unused, sfpu::logsigmoid_init, (APPROX)))); }
 
-// Blackhole and Wormhole only: ckernel_sfpu_logsigmoid_bf16.h exists under those ckernel trees.
-// Quasar keeps the op's own kernel.
-#if defined(ARCH_BLACKHOLE) || defined(ARCH_WORMHOLE)
-
+// The generated kernel exists on Blackhole and Wormhole, where TT-NN runs it; Quasar keeps the op's own kernel, and
+// a call there fails to build.
 // clang-format off
 /**
  * Performs element-wise computation of log_sigmoid on each element of a tile in DEST, which holds
@@ -68,20 +69,27 @@ ALWI void logsigmoid_tile_init() { MATH((SFPU_BINARY_INIT(unused))); }
  * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
-template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
-ALWI void log_sigmoid_tile(uint32_t idst) {
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE, bool on_board = false>
+ALWI void log_sigmoid_tile([[maybe_unused]] uint32_t idst) {
+#if defined(ARCH_BLACKHOLE) || defined(ARCH_WORMHOLE)
     static_assert(!is_fp32_dest_acc_en, "log_sigmoid_tile evaluates BF16 DEST");
     MATH(SFPU_UNARY_CALL(DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_logsigmoid_bf16, (32), idst, VectorMode::None));
+#else
+    static_assert(on_board, "log_sigmoid_tile: Blackhole and Wormhole only");
+#endif
 }
 
 /**
  * Please refer to documentation for any_init.
  */
+template <bool on_board = false>
 ALWI void log_sigmoid_tile_init() {
+#if defined(ARCH_BLACKHOLE) || defined(ARCH_WORMHOLE)
     MATH(SFPU_UNARY_INIT(unused));
     MATH(sfpu::init_logsigmoid_bf16());
+#else
+    static_assert(on_board, "log_sigmoid_tile_init: Blackhole and Wormhole only");
+#endif
 }
-
-#endif  // ARCH_BLACKHOLE || ARCH_WORMHOLE
 
 }  // namespace ckernel
