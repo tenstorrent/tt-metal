@@ -17,8 +17,10 @@ namespace ckernel {
  * ClampToNegative (default): Inputs below ~-88.5 are clamped to -88.5. Safer but slightly slower.
  * None: No input clamping. Faster, but inputs below ~-88.5 will produce incorrect outputs. They
  *     will be guaranteed to be negative, so consider enabling packer ReLU when using this mode.
+ * ClampBoth: As ClampToNegative, and overflow returns +inf when is_fp32_dest_acc_en.
  */
 enum class InputClamping : uint8_t {
+    ClampBoth = 2,
     ClampToNegative = 1,
     None = 0,
 };
@@ -38,10 +40,9 @@ template <
     uint32_t scale = 0x3F800000,
     InputClamping input_clamping = InputClamping::ClampToNegative, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void exp_tile_init() {
+    static_assert(input_clamping != InputClamping::ClampBoth || scale == 0x3F800000, "ClampBoth is unscaled only");
     MATH(SFPU_UNARY_INIT_FN(
-        exponential,
-        sfpu::exp_init,
-        (approx, scale, (input_clamping == InputClamping::ClampToNegative), is_fp32_dest_acc_en)));
+        exponential, sfpu::exp_init, (approx, scale, (input_clamping != InputClamping::None), is_fp32_dest_acc_en)));
 }
 
 // clang-format off
@@ -67,7 +68,7 @@ ALWI void exp_tile_init() {
  * |-------------------------|----------------------------------------------------------------|----------|------------------|---------|
  * | approx                  | Enable approximate mode.                                       | bool     | true, false      | false   |
  * | scale_en                | Enable input scaling by a constant factor in approximate or non-approximate mode | bool     | true, false      | false   |
- * | input_clamping          | If approx, controls whether very negative inputs are clamped to prevent incorrect outputs | InputClamping | ClampToNegative, None | ClampToNegative |
+ * | input_clamping          | If approx, which inputs are clamped                            | InputClamping | ClampBoth, ClampToNegative, None | ClampToNegative |
  * | iterations              | Number of iterations over 32-SFPU lanes to run                 | int      | Positive integer | 8       |
  *
  * | Argument    | Description                                                                | Type     | Valid Range                                           | Required |
@@ -87,7 +88,12 @@ ALWI void exp_tile(uint32_t idst, VectorMode vector_mode = VectorMode::RC, uint1
         DST_SYNC_MODE,
         is_fp32_dest_acc_en,
         calculate_exponential,
-        (approx, is_fp32_dest_acc_en, scale_en, iterations, (input_clamping == InputClamping::ClampToNegative)),
+        (approx,
+         is_fp32_dest_acc_en,
+         scale_en,
+         iterations,
+         (input_clamping != InputClamping::None),
+         (input_clamping == InputClamping::ClampBoth)),
         idst,
         vector_mode,
         scale));
@@ -105,8 +111,9 @@ template <
     uint32_t scale = 0x3F800000,
     InputClamping input_clamping = InputClamping::ClampToNegative, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void exp_packthread_tile_init() {
+    static_assert(input_clamping != InputClamping::ClampBoth || scale == 0x3F800000, "ClampBoth is unscaled only");
     PACK(llk_math_eltwise_unary_sfpu_init<SfpuType::exponential>(
-        sfpu::exp_init<approx, scale, (input_clamping == InputClamping::ClampToNegative), is_fp32_dest_acc_en>));
+        sfpu::exp_init<approx, scale, (input_clamping != InputClamping::None), is_fp32_dest_acc_en>));
 }
 
 /**
@@ -124,7 +131,12 @@ ALWI void exp_packthread_tile(
         DST_SYNC_MODE,
         is_fp32_dest_acc_en,
         calculate_exponential,
-        (approx, is_fp32_dest_acc_en, scale_en, iterations, (input_clamping == InputClamping::ClampToNegative)),
+        (approx,
+         is_fp32_dest_acc_en,
+         scale_en,
+         iterations,
+         (input_clamping != InputClamping::None),
+         (input_clamping == InputClamping::ClampBoth)),
         idst,
         vector_mode,
         scale));

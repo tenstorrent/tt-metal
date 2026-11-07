@@ -368,6 +368,11 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
                     std::bit_cast<uint32_t>(1.0f / param0)),
                 fmt::format("fmod_tile({});", idst)};
         case UnaryOpType::EXP:
+            if ((uint32_t)param0 == 2) {
+                return {
+                    "exp_tile_init<1u, 0x3F800000, InputClamping::ClampBoth>();",
+                    fmt::format("exp_tile<1u, false, InputClamping::ClampBoth>({});", idst)};
+            }
             return {
                 fmt::format("exp_tile_init<{}u>();", (uint32_t)param0),
                 fmt::format("exp_tile<{1}u>({0});", idst, (uint32_t)param0)};

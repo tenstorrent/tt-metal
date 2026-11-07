@@ -704,12 +704,43 @@ sfpi_inline sfpi::vFloat _ckernel_sfpu_exp_accurate_(sfpi::vFloat val, const std
     return result;
 }
 
+template <std::uint32_t y>
+sfpi_inline void _exp_approx_saturate_round_() {
+    TTI_SFP_STOCH_RND(0, 0, 0, y, y, sfpi::SFPSTOCHRND_MOD1_FP32_TO_UINT16);
+    TTI_SFPSHFT(15, y, y, 1);
+    TTI_SFP_STOCH_RND(0, 0, 0, y, y, sfpi::SFPSTOCHRND_MOD1_FP32_TO_FP16A);
+}
+
+template <int ITERATIONS>
+inline void _calculate_exponential_approx_saturate_() {
+    static_assert(ITERATIONS % 2 == 0, "rows go in pairs");
+#pragma GCC unroll 4
+    for (int d = 0; d < ITERATIONS; d += 2) {
+        TTI_SFPLOAD(p_sfpu::LREG0, 0, ADDR_MOD_7, 0);
+        TTI_SFPSWAP(0, p_sfpu::LREG14, p_sfpu::LREG0, 9);
+        TTI_SFPMAD(p_sfpu::LREG12, p_sfpu::LREG0, p_sfpu::LREG13, p_sfpu::LREG1, 0);
+        TTI_SFPLOAD(p_sfpu::LREG2, 0, ADDR_MOD_7, 2);
+        _exp_approx_saturate_round_<p_sfpu::LREG1>();
+        TTI_SFPSWAP(0, p_sfpu::LREG14, p_sfpu::LREG2, 9);
+        TTI_SFPMAD(p_sfpu::LREG12, p_sfpu::LREG2, p_sfpu::LREG13, p_sfpu::LREG3, 0);
+        TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG1, 9);
+        _exp_approx_saturate_round_<p_sfpu::LREG3>();
+        TTI_SFPSTORE(p_sfpu::LREG1, 0, ADDR_MOD_7, 0);
+        TTI_SFPSWAP(0, p_sfpu::LREG2, p_sfpu::LREG3, 9);
+        TTI_SFPNOP;
+        TTI_SFPSTORE(p_sfpu::LREG3, 0, ADDR_MOD_7, 2);
+        sfpi::dst_reg++;
+        sfpi::dst_reg++;
+    }
+}
+
 template <
     bool APPROXIMATION_MODE,
     bool is_fp32_dest_acc_en,
     bool SCALE_EN = false,
     int ITERATIONS = 8,
-    bool CLAMP_NEGATIVE = true>
+    bool CLAMP_NEGATIVE = true,
+    bool SATURATE_POSITIVE = false>
 void calculate_exponential(const uint exp_base_scale_factor = p_sfpu::kCONST_1_FP16B) {
     if constexpr (!APPROXIMATION_MODE) {
         if constexpr (!is_fp32_dest_acc_en) {
@@ -735,6 +766,10 @@ void calculate_exponential(const uint exp_base_scale_factor = p_sfpu::kCONST_1_F
 #endif
         }
     } else if constexpr (APPROXIMATION_MODE && CLAMP_NEGATIVE) {
+        static_assert(!(SATURATE_POSITIVE && SCALE_EN), "SATURATE_POSITIVE assumes the unscaled A and B - C");
+        if constexpr (SATURATE_POSITIVE && is_fp32_dest_acc_en) {
+            _calculate_exponential_approx_saturate_<ITERATIONS>();
+        } else {
 #ifdef DISABLE_SFPLOADMACRO
         for (int d = 0; d < ITERATIONS; d++) {
             TTI_SFPLOAD(p_sfpu::LREG0, 0, ADDR_MOD_7, 0);
@@ -869,6 +904,7 @@ void calculate_exponential(const uint exp_base_scale_factor = p_sfpu::kCONST_1_F
         // TTI_SFPNOP;
         // TTI_SFPNOP;
 #endif
+        }
     }
 #ifdef DISABLE_SFPLOADMACRO
     else if constexpr (APPROXIMATION_MODE) {
