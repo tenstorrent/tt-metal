@@ -70,7 +70,37 @@ OPS = ("attn_res_block_stats", "attn_res_block_mix", "attn_res_gather_softmax")
 # One iteration's programs in dispatch order, each gated on its own.
 STEPS = tuple(f"{batch}/{op}" for batch in BATCHES for op in OPS)
 
-_REFERENCE_US = {layout: dict.fromkeys(STEPS) for layout in ("SP8xTP4", "SP4xTP4")}  # TODO re-baseline
+# Device kernel duration (us) per step, as CI hardware (bh_sc1_high_power) measures it. None reports without gating.
+#
+# PROVISIONAL -- re-measure on a high-power Galaxy. Until tt_metal_tracker-ao3i.10 the boundary was one 25-site batch
+# over C = 7 with the owed read closed. The block step (C = 7, 24 sites) keeps that batch's references, the nearest
+# high-power measurement of its shape; the owed step (C = 6, one site) has none yet and only reports.
+#
+# The 25-site references: SP8xTP4 is the mean of two CI Galaxies' medians over 20 synced blocks, runs 41962421284 and
+# 42058182913: block_stats 139.0 / 119.0, block_mix 275.5 / 275.6, gather_softmax 67.5 / 68.2. SP4xTP4 has no CI job:
+# it was measured on a Galaxy off the CI pool (bh-glx-120-b07u02, 2026-11-05), which runs the end-to-end boundary layer
+# of `test_attn_res_perf.py` at ~416 us against its 394 us CI reference, and is scaled by 394 / 416. Local medians,
+# synced: block_stats 209.9 / 218.4 / 208.4, block_mix 568.4 / 570.2 / 570.2, gather_softmax 120.2 / 121.2 / 123.4.
+# Locally, run with ATTN_RES_PERF_REPORT_ONLY=1.
+_CI_OVER_LOCAL = 394.0 / 416.0
+_REFERENCE_US = {
+    "SP8xTP4": {
+        "owed/attn_res_block_stats": None,
+        "owed/attn_res_block_mix": None,
+        "owed/attn_res_gather_softmax": None,
+        "block/attn_res_block_stats": 129.0,
+        "block/attn_res_block_mix": 275.6,
+        "block/attn_res_gather_softmax": 67.9,
+    },
+    "SP4xTP4": {
+        "owed/attn_res_block_stats": None,
+        "owed/attn_res_block_mix": None,
+        "owed/attn_res_gather_softmax": None,
+        "block/attn_res_block_stats": round(209.9 * _CI_OVER_LOCAL, 1),
+        "block/attn_res_block_mix": round(570.2 * _CI_OVER_LOCAL, 1),
+        "block/attn_res_gather_softmax": round(121.2 * _CI_OVER_LOCAL, 1),
+    },
+}
 
 
 def _assert_within_margin(what: str, measured_us: float, reference_us: float, margin: float) -> None:
