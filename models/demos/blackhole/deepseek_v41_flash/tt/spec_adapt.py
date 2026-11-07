@@ -134,6 +134,11 @@ class AdaptiveVerify:
         """
         times, since = self._tab(bucket)
         cands = self.candidates(max_pos)
+        if (
+            bucket is not None and bucket in self.btimes
+        ):  # a decode bucket may hold runners of a subset of the k's (DSV41_LOAD_TRACE_KS)
+            sub = [k for k in cands if k in self.btimes[bucket]] or [k for k in self.ks if k in self.btimes[bucket]]
+            cands = sub or cands
         if len(cands) == 1:
             return cands[0]
         kf = os.environ.get("DSV41_VLLM_SPEC_KFILE")
@@ -186,3 +191,10 @@ class AdaptiveVerify:
             since[q] = 0 if q == k else since.get(q, 0) + 1
         key = k if bucket is None else (bucket, k)
         self.k_hist[key] = self.k_hist.get(key, 0) + 1
+
+
+def nearest_runner_k(ks, kv):
+    """k of the bucket runner that verifies a block of ``kv`` drafts when the bucket holds only the k's ``ks``: the smallest k >= kv (the block is padded; a pad draft is accepted only when it equals the
+    target's own argmax, so the committed tokens are the target's either way), else the largest k (the block is cut)."""
+    ks = sorted(ks)
+    return next((q for q in ks if q >= kv), ks[-1])

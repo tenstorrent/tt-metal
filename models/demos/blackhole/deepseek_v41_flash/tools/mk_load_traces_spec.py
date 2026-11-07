@@ -38,6 +38,10 @@ def add(full, extra=None):
             "DSV41_ATTN_FRONT_SMALL": "1",
             "DSV41_DROP_LAST_ROUTING": "1",
         }
+        if (
+            key == "b16"
+        ):  # the enlarged APC store leaves 49.5 MiB/bank free; a bucket runner costs ~14: one runner (k=3) of the B=4 bucket
+            env_add["DSV41_LOAD_TRACE_KS"] = "3"
         env_add.update(extra or {})
         e["env_vars"].update(env_add)
         d.setdefault("env_vars", e["env_vars"])

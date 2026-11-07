@@ -418,7 +418,10 @@ class DeepseekV41ForCausalLM(SupportsMultiModal):
                         continue
                     dview = dr.view_users(Ub)
                     rset = {}
-                    for k_ in sp.ks:
+                    lt_ks = [int(x) for x in os.environ.get("DSV41_LOAD_TRACE_KS", "").split(",") if x]
+                    for k_ in [
+                        q for q in sp.ks if not lt_ks or q in lt_ks
+                    ]:  # DSV41_LOAD_TRACE_KS: the k's of the bucket runners (default all: DRAM ~14 MiB/bank per runner)
                         br = SpecRunner(generator.m, k_, drafter=dview, Ub=Ub)
                         br.prepare(
                             torch.zeros(VS.MESH_ROWS * Ub, br.n, dtype=torch.long),
@@ -1998,7 +2001,20 @@ class DeepseekV41ForCausalLM(SupportsMultiModal):
         elif self.spec_bucket_sets:
             need = self._load_bucket()
             if need is not None:
-                runner, Ub = self.spec_bucket_sets[need][kv], need
+                rs_ = self.spec_bucket_sets[need]
+                if (
+                    kv not in rs_
+                ):  # the bucket holds a subset of the k's: the nearest runner at or above kv (shorter blocks are padded: a pad draft is only accepted when it equals the target's own token), else the largest
+                    from models.demos.blackhole.deepseek_v41_flash.tt.spec_adapt import nearest_runner_k
+
+                    kv = nearest_runner_k(rs_, kv)
+                    n = kv + 1
+                    tokens = (
+                        tokens[:, :n]
+                        if tokens.shape[1] >= n
+                        else torch.nn.functional.pad(tokens, (0, n - tokens.shape[1]))
+                    )
+                runner, Ub = rs_[kv], need
         B = VS.MESH_ROWS * Ub if runner is not base_runner else self.B
         row_of = None if runner is base_runner else {int(q): r for r, q in enumerate(runner.phys.tolist())}
         X = torch.zeros(B, n, dtype=torch.long)

@@ -7,7 +7,7 @@ keeps the live users inside the smallest bucket (vllm_state.SlotTable.claim_rowa
 import torch
 
 from models.demos.blackhole.deepseek_v41_flash.tt import vllm_state as VS
-from models.demos.blackhole.deepseek_v41_flash.tt.spec_adapt import AdaptiveVerify
+from models.demos.blackhole.deepseek_v41_flash.tt.spec_adapt import AdaptiveVerify, nearest_runner_k
 
 
 class FakeRunner:
@@ -88,3 +88,12 @@ def test_straggler_pins_the_bigger_bucket_until_it_finishes():
     for p in sorted(st.live):
         st.live.discard(p)
     assert st.users_needed(4) == 1
+
+
+def test_nearest_runner_rule():
+    assert nearest_runner_k([3], 0) == 3  # shorter block: padded up to the only runner
+    assert nearest_runner_k([3], 3) == 3
+    assert nearest_runner_k([3], 5) == 3  # longer block: cut
+    assert nearest_runner_k([3, 5], 4) == 5
+    assert nearest_runner_k([5, 3], 2) == 3
+    assert nearest_runner_k([3, 5], 5) == 5
