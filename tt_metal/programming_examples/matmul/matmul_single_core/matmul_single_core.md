@@ -3,7 +3,7 @@
 We'll build a program that will perform matmul operations on two tensors with equal-size inner dimension. We will then go through specific sections of the program.
 
 The full example program is in
-[matmul_single_core.cpp](../../../tt_metal/programming_examples/matmul_single_core/matmul_single_core.cpp)
+[matmul_single_core.cpp](matmul_single_core.cpp)
 
 To build and execute, you may use the following commands:
 Then run the following:
@@ -34,7 +34,7 @@ We want a just a single core, so we will restrict the core range to be just one 
 distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
 distributed::MeshWorkload workload;
 distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
-Program program{};
+Program program = CreateProgram(*mesh_device);
 CoreCoord core({0, 0});
 ```
 

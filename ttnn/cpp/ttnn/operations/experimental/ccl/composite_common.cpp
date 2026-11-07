@@ -334,7 +334,7 @@ bool use_composite_all_to_all(
     // the current native implementation works for very specific cases
     bool use_native =
         (input_tensor.layout() == ttnn::Layout::TILE &&
-         input_tensor.buffer()->buffer_type() == ttnn::BufferType::DRAM &&
+         input_tensor.memory_config().buffer_type() == ttnn::BufferType::DRAM &&
          input_tensor.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::INTERLEAVED &&
          (!memory_config.has_value() ||
           memory_config.value().memory_layout() == tt::tt_metal::TensorMemoryLayout::INTERLEAVED) &&
@@ -505,6 +505,14 @@ ttnn::Tensor composite_all_to_all(
     for (auto& tensor : broadcasted_tensors) {
         tensor.deallocate();
     }
+
+    // TensorTopology: no relabel site in this composite, and none is needed. prim::all_broadcast over the whole mesh
+    // labels every copy Replicate on every axis (ccl_topology_utils); mesh_partition's hook labels each whole-mesh
+    // slice `{N}, [Shard{out_dim}]` through mesh_partition_output_topology (the shared scatter rule in its partition
+    // kind: a whole-mesh partition of a label that shards no other dim, spelled over the storage's row-major
+    // coordinates); the concat above takes the union of those identical labels and the layout / dtype /
+    // memory-config conversions below carry their input's label. The result reads `{N}, [Shard{out_dim}]`: out_dim
+    // scattered in device order, in_dim re-gathered -- the honest all_to_all label.
 
     // Convert back to tiled
     if (is_tiled_and_not_tile_aligned) {

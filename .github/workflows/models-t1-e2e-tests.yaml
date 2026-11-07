@@ -36,6 +36,7 @@ on:
           - deepseek-v3-tg
           - deepseek-v3-b1
           - z-image-turbo
+          - ideogram-4
           - resnet50
       sku:
         description: "Select SKU to test (not all models are configured for all SKUs. If a combination is non-existent no test will be run)"
@@ -55,7 +56,9 @@ on:
           - "bh_quietbox_2 (BH QB2)"
           - "bh_galaxy (BH Galaxy)"
           - "bh_sc1 (BH Single Galaxy)"
+          - "bh_sc1_high_power (BH SC1 High Power)"
           - "bh_sc4 (BH Supercluster 4)"
+          - "bh_sc4_high_power (BH SC4 High Power)"
           # Dispatch-only: excluded from scheduled ALL_SKUS so cron runs don't allocate
           # scarce SC16 hardware. Enabled in package-and-release via release-build-test-publish.
           - "bh_sc16 (BH Supercluster 16)"
@@ -107,7 +110,7 @@ jobs:
       - name: Resolve SKU and model selection
         id: resolve
         run: |
-          ALL_SKUS="wh_n150,wh_n300,wh_llmbox,wh_llmbox_perf,wh_galaxy,wh_galaxy_perf,bh_p150,bh_p300,bh_quietbox_2,bh_galaxy,bh_sc1,bh_sc4"
+          ALL_SKUS="wh_n150,wh_n300,wh_llmbox,wh_llmbox_perf,wh_galaxy,wh_galaxy_perf,bh_p150,bh_p300,bh_quietbox_2,bh_galaxy,bh_sc1,bh_sc1_high_power,bh_sc4,bh_sc4_high_power"
           EVENT="${{ github.event_name }}"
           if [[ "$EVENT" == "workflow_dispatch" ]]; then
             SKU_INPUT="${{ inputs.sku || 'all' }}"

@@ -1,0 +1,114 @@
+{
+ "version": 1,
+ "op": "ttnn.transformer.fused_recurrent_gated_delta_rule",
+ "cases": {
+  "qwen27b_tp4/B1/T1/s0": {
+   "o": "96f557d3b517d71f9c5a43e2eb91681445b3c3268a1c03a5512b6c884baafcfd",
+   "state": "40ed7c6679eb45537369bc37730e1beed497a0df42dc2ed2fc089d252ae9db96",
+   "pcc_o": 0.9999986,
+   "pcc_state": 0.9999998,
+   "commit": "e863cb9ac94",
+   "device": "p300c bh-qbge-15",
+   "date": "2026-10-13"
+  },
+  "qwen27b_tp4/B1/T1/zero": {
+   "o": "a73ed4d9e8f18d25ea9f8a393f09f26bb401cd38fa325d3e0b8dc06831858b9a",
+   "state": "d9043af7a606a5da1516d686572141021fc98a43e19e8c7828aca5a6b8e20499",
+   "pcc_o": 0.9999996,
+   "pcc_state": 0.9999998,
+   "commit": "e863cb9ac94",
+   "device": "p300c bh-qbge-15",
+   "date": "2026-10-13"
+  },
+  "qwen27b_tp4/B8/T1/s0": {
+   "o": "3c682468bab877d9692e4f127464b0b96bb2311f6fcad788cd4e20deedd782b4",
+   "state": "d972fe4a613a4febdb37d272f98f4fd148ecb475cd641be54ea4761de3ef1480",
+   "pcc_o": 0.9999997,
+   "pcc_state": 0.9999998,
+   "commit": "e863cb9ac94",
+   "device": "p300c bh-qbge-15",
+   "date": "2026-10-13"
+  },
+  "qwen27b_tp4/B8/T1/zero": {
+   "o": "2e600eb97132e240bf3ffd7cf295fb7890d57e9eb2505029936bf8219f7a733c",
+   "state": "7fb121d68d734c4d0a9e88b356b87829004d6dcb6b7c277ab81342efc38fa7bc",
+   "pcc_o": 0.9999997,
+   "pcc_state": 0.9999998,
+   "commit": "e863cb9ac94",
+   "device": "p300c bh-qbge-15",
+   "date": "2026-10-13"
+  },
+  "qwen27b_tp4/B1/T8/s0": {
+   "o": "59431e6d0b3cb9944e131ec77fb03347873338ddf4fd21a39f578177fcca77f5",
+   "state": "ca5a697234c92536587a7813d5f3ecaaa387a20727626032c627292272f0ab2c",
+   "pcc_o": 0.9999994,
+   "pcc_state": 0.9999995,
+   "commit": "e863cb9ac94",
+   "device": "p300c bh-qbge-15",
+   "date": "2026-10-13"
+  },
+  "qwen27b_tp4/B1/T8/zero": {
+   "o": "60a78585de163a8db12ec4c6d7b5607b2eb11628caa058e4a3e52d7f02e5e20d",
+   "state": "55b1e4c16c64a5ae526e91c13377373239c0154582aecb83c50019f1659a4b7f",
+   "pcc_o": 0.999999,
+   "pcc_state": 0.9999995,
+   "commit": "e863cb9ac94",
+   "device": "p300c bh-qbge-15",
+   "date": "2026-10-13"
+  },
+  "qwen27b_tp8/B1/T1/s0": {
+   "o": "3cf638f6751819383f6a80ba0587290d3d67594a94a00fcea068d8dfad2f56c8",
+   "state": "a885b1699377ebde43c318af4f97498d08d3a068f759e3a56fc710f6569fad2b",
+   "pcc_o": 0.9999995,
+   "pcc_state": 0.9999998,
+   "commit": "e863cb9ac94",
+   "device": "p300c bh-qbge-15",
+   "date": "2026-10-13"
+  },
+  "qwen27b_tp8/B1/T1/zero": {
+   "o": "148050db28de1e9848d5b9982fcef141a7f3f699b28e4d937298910977137599",
+   "state": "f84f22f004c7991f9cdaa6c8f1b1064018e6a3d3e8b5e942bf0070e7846ba4fb",
+   "pcc_o": 0.9999998,
+   "pcc_state": 0.9999998,
+   "commit": "e863cb9ac94",
+   "device": "p300c bh-qbge-15",
+   "date": "2026-10-13"
+  },
+  "qwen9b_tp1/B1/T1/s0": {
+   "o": "c260cefd6a7a1f57008124bb6b957ff70868d4fe798e7a47531763df858bd056",
+   "state": "9270bf8621ec098605b728e4bb49847f59394041c293adb64a09ec6e36d73e04",
+   "pcc_o": 0.9999996,
+   "pcc_state": 0.9999998,
+   "commit": "e863cb9ac94",
+   "device": "p300c bh-qbge-15",
+   "date": "2026-10-13"
+  },
+  "qwen9b_tp1/B1/T1/zero": {
+   "o": "25dc0401c0dd936ffc3612a81ef232cbc23c62d06dbaf51dc685dd7804194dfa",
+   "state": "0fe8f74cc09f13d0e309980e37f25e989984a8e5719e2dc3ea97deb84e21c72e",
+   "pcc_o": 0.9999996,
+   "pcc_state": 0.9999998,
+   "commit": "e863cb9ac94",
+   "device": "p300c bh-qbge-15",
+   "date": "2026-10-13"
+  },
+  "qwen35b_a3b_tp4/B4/T4/s0": {
+   "o": "ed08622ebf71795f0bc2a378983450f5470eaa7125c83e08da69157b15135930",
+   "state": "128565ddeade3177cbac304f05818211fc1386d0feeae04f009c0e66cbecf9f3",
+   "pcc_o": 0.9999993,
+   "pcc_state": 0.9999996,
+   "commit": "e863cb9ac94",
+   "device": "p300c bh-qbge-15",
+   "date": "2026-10-13"
+  },
+  "qwen35b_a3b_tp4/B4/T4/zero": {
+   "o": "d7a5e75e81f95b976a0bd6ddd912d7574fa983494cb39f5afe9efb905f7fa838",
+   "state": "f8d3378ba98b1bfc947ab61ba354640edac8fefe274071792769b2e330e1cbbd",
+   "pcc_o": 0.9999993,
+   "pcc_state": 0.9999996,
+   "commit": "e863cb9ac94",
+   "device": "p300c bh-qbge-15",
+   "date": "2026-10-13"
+  }
+ }
+}

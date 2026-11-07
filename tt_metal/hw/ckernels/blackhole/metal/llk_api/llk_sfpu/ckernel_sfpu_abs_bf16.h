@@ -28,10 +28,10 @@ inline bool bf16_dest_abs() {
     return false;
 #endif
 }
+// Each call records replay slots 0-5, below replay_buf_offset = 16.
 template <int ITERATIONS = 32>
-inline void calculate_abs_bf16() {
+__attribute__((noinline)) inline void calculate_abs_bf16() {
     ckernel::sfpu::bf16::abs::calculate_abs_value<ckernel::sfpu::AbsBf16Config, ITERATIONS>();
 }
-inline void init_abs_bf16() { ckernel::sfpu::bf16::abs::init_abs_value<ckernel::sfpu::AbsBf16Config>(); }
 
 }  // namespace ckernel::sfpu

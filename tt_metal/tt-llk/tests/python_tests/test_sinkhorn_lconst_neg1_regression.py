@@ -32,7 +32,7 @@ from helpers.llk_params import DestAccumulation, format_dict
 from helpers.stimuli_config import StimuliConfig
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import generate_input_dim
-from helpers.tilize_untilize import tilize
+from helpers.tilize_untilize import tilize_block
 
 pytestmark = [skip_for_wormhole, skip_for_quasar]
 
@@ -62,12 +62,13 @@ def test_sinkhorn_restores_lconst_neg1():
 
     src_A = _inputs()
     src_B = torch.zeros(ELEMENTS_PER_TILE, dtype=torch.float32)
-    tilized_A = tilize(src_A, formats.input_format).flatten()
+    input_dimensions = [32, 32]
+    tilized_A = tilize_block(src_A, input_dimensions, formats.input_format).flatten()
 
     configuration = TestConfig(
         "sources/sinkhorn_lconst_neg1_regression_test.cpp",
         formats,
-        templates=[generate_input_dim([32, 32], [32, 32])],
+        templates=[generate_input_dim(input_dimensions, input_dimensions)],
         runtimes=[],
         variant_stimuli=StimuliConfig(
             tilized_A,

@@ -13,18 +13,24 @@
  *************************************************************************/
 
 // Unified cores, shared by the CB-id API below and the LLKOperand API (experimental/2_0/). Reduce unpack is
-// FORMAT-FREE at the op level (formats set at compute_kernel_hw_startup), so the cores take only operand A's
-// tile geometry (init) / the two runtime L1 addresses (exec). Callers resolve these from a CB id or a
-// descriptor.
+// FORMAT-FREE at the op level (formats set at compute_kernel_hw_startup), so the cores take the operands' tile
+// geometry (init) / the two runtime L1 addresses (exec). Callers resolve these from a CB id or a descriptor.
 template <PoolType pool_type, ReduceDim reduce_dim>
-inline void llk_unpack_AB_reduce_init_impl(const ckernel::TensorShape& tensor_shape) {
+inline void llk_unpack_AB_reduce_init_impl(
+    const ckernel::TensorShape& tensor_shape, const ckernel::TensorShape& tensor_shape_b) {
     SAN_HOOK(init<OperationUnpackReduce>(
         StateVal<OperationUnpackReduce::PoolType>(to_underlying(pool_type)),
         StateVal<OperationUnpackReduce::ReduceDim>(to_underlying(reduce_dim)),
         StateVal<OperationUnpackReduce::FaceHeight>(tensor_shape.face_r_dim),
         StateVal<OperationUnpackReduce::NumFaces>(tensor_shape.total_num_faces())));
 
-    _llk_unpack_AB_reduce_init_<pool_type, reduce_dim>(tensor_shape);
+    _llk_unpack_AB_reduce_init_<pool_type, reduce_dim>(tensor_shape, tensor_shape_b);
+}
+
+// Scaler shaped like the data.
+template <PoolType pool_type, ReduceDim reduce_dim>
+inline void llk_unpack_AB_reduce_init_impl(const ckernel::TensorShape& tensor_shape) {
+    llk_unpack_AB_reduce_init_impl<pool_type, reduce_dim>(tensor_shape, tensor_shape);
 }
 
 template <PoolType pool_type, ReduceDim reduce_dim>
@@ -38,8 +44,9 @@ template <PoolType pool_type, ReduceDim reduce_dim>
 inline void llk_unpack_AB_reduce_init(const std::uint32_t operandA, const std::uint32_t operandB) {
     const std::uint32_t operandA_id = get_operand_id(operandA);
     const ckernel::TensorShape tensor_shape = get_operand_tensor_shape(operandA_id);
+    const std::uint32_t operandB_id = get_operand_id(operandB);
 
-    llk_unpack_AB_reduce_init_impl<pool_type, reduce_dim>(tensor_shape);
+    llk_unpack_AB_reduce_init_impl<pool_type, reduce_dim>(tensor_shape, get_operand_tensor_shape(operandB_id));
 }
 
 template <PoolType pool_type, ReduceDim reduce_dim>

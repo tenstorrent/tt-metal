@@ -52,7 +52,9 @@ TT_METAL_ENABLE_CHANNEL_TRIMMING_CAPTURE_ENV = "TT_METAL_ENABLE_CHANNEL_TRIMMING
 TT_METAL_FABRIC_TRIMMING_PROFILE_ENV = "TT_METAL_FABRIC_TRIMMING_PROFILE"
 TT_METAL_FABRIC_TRIMMING_OVERRIDE_ENV = "TT_METAL_FABRIC_TRIMMING_OVERRIDE"
 TT_METAL_LOGS_PATH_ENV = "TT_METAL_LOGS_PATH"
-CHANNEL_TRIMMING_CAPTURE_FILENAME = "channel_trimming_capture.yaml"
+# The exporter writes one rank_<N>.yaml per MPI world rank into this directory, and the profile
+# importer accepts the directory (each rank loads its own file).
+CHANNEL_TRIMMING_CAPTURE_SUBDIR = "channel_trimming_capture"
 REDUCE_TO_ONE_ROTATED_ROOTS = ((1, 0), (1, 1), (2, 0), (2, 1))
 DEFAULT_REDUCE_TO_ONE_NUM_WARMUP_SAMPLES = 15
 DEFAULT_REDUCE_TO_ONE_NUM_PERF_SAMPLES = 30
@@ -615,8 +617,8 @@ def build_channel_trim_capture_dir(
     return capture_dir
 
 
-def get_channel_trim_capture_yaml_path(capture_dir: Path) -> Path:
-    return capture_dir / "generated" / "reports" / CHANNEL_TRIMMING_CAPTURE_FILENAME
+def get_channel_trim_capture_profile_dir(capture_dir: Path) -> Path:
+    return capture_dir / "generated" / "reports" / CHANNEL_TRIMMING_CAPTURE_SUBDIR
 
 
 def is_header_row(row: list[str]) -> bool:
@@ -1832,22 +1834,23 @@ def main() -> int:
                                 compute_block_size=compute_block_size,
                             )
                             capture_dir.mkdir(parents=True, exist_ok=True)
-                            capture_yaml = get_channel_trim_capture_yaml_path(capture_dir)
+                            capture_profile_dir = get_channel_trim_capture_profile_dir(capture_dir)
 
                             capture_env = env.copy()
                             capture_env[TT_METAL_ENABLE_CHANNEL_TRIMMING_CAPTURE_ENV] = "1"
                             capture_env[TT_METAL_LOGS_PATH_ENV] = str(capture_dir)
                             run_pytest(test_target, capture_env, repo_root)
 
-                            if not capture_yaml.exists():
+                            if not any(capture_profile_dir.glob("rank_*.yaml")):
                                 raise RuntimeError(
-                                    "Channel trimming capture did not produce the expected YAML: " f"{capture_yaml}"
+                                    "Channel trimming capture did not produce any rank_*.yaml under: "
+                                    f"{capture_profile_dir}"
                                 )
 
-                            env[TT_METAL_FABRIC_TRIMMING_PROFILE_ENV] = str(capture_yaml)
+                            env[TT_METAL_FABRIC_TRIMMING_PROFILE_ENV] = str(capture_profile_dir)
                             run_setup_details = ("Channel trimming mode: capture + replay per sweep point.",)
                             run_notes.append(
-                                "Channel trimming replay profile: " + to_repo_relative(capture_yaml, repo_root)
+                                "Channel trimming replay profile: " + to_repo_relative(capture_profile_dir, repo_root)
                             )
 
                         before = set(list_profile_logs(report_root))
