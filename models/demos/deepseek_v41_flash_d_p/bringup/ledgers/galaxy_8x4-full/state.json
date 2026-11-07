@@ -3754,24 +3754,61 @@
   },
   "attempt": 1,
   "attempts": 0,
-  "duration_s": 0.0,
+  "duration_s": 1.7,
   "full_pending": true,
   "history": [
    {
     "s": 0.0,
     "status": "PASS",
     "t": "2026-11-07T09:25:30"
+   },
+   {
+    "reused": [
+     "P.41#test_ladder",
+     "P.41#test_profile",
+     "P.41#test_short_turn",
+     "P.41#test_contract",
+     "P.41#test_kv_layout",
+     "P.41#test_adapter_acks"
+    ],
+    "s": 1.7,
+    "status": "PASS",
+    "t": "2026-11-07T19:04:59"
    }
   ],
-  "last_run": "2026-11-07T09:25:30",
+  "last_run": "2026-11-07T19:04:59",
   "log": "/scratch/dnijemcevic/bringup/deepseek_v41_flash_d_p/runs/galaxy_8x4-full/run1/logs/P.41.log",
   "rc": 0,
   "reason": [],
   "role": "perf",
-  "stamp": null,
-  "started": "2026-11-07T09:25:30",
+  "stamp": {
+   "reused": [
+    "P.41#test_ladder",
+    "P.41#test_profile",
+    "P.41#test_short_turn",
+    "P.41#test_contract",
+    "P.41#test_kv_layout",
+    "P.41#test_adapter_acks"
+   ],
+   "units": {
+    "P.41#test_adapter_acks": "8a834134931a25ae",
+    "P.41#test_contract": "f83e4ba84930e8d7",
+    "P.41#test_kv_layout": "eb18dc0728eb6ff5",
+    "P.41#test_ladder": "e65559e3c102e097",
+    "P.41#test_profile": "ef9b2f8a871fe9b6",
+    "P.41#test_short_turn": "53bb3aa814a9abd6"
+   }
+  },
+  "started": "2026-11-07T19:04:57",
   "status": "PASS",
-  "units": null,
+  "units": {
+   "P.41#test_adapter_acks": "PASS",
+   "P.41#test_contract": "PASS",
+   "P.41#test_kv_layout": "PASS",
+   "P.41#test_ladder": "PASS",
+   "P.41#test_profile": "PASS",
+   "P.41#test_short_turn": "PASS"
+  },
   "waiting": null
  },
  "P.42": {
@@ -3797,7 +3834,7 @@
   "attempt": 2,
   "attempts": 0,
   "duration_s": 1.8,
-  "full_pending": true,
+  "full_pending": false,
   "history": [
    {
     "s": 0.0,
