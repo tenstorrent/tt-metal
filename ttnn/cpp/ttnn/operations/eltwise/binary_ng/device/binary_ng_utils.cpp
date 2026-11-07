@@ -589,13 +589,10 @@ std::pair<std::string, std::string> get_sfpu_init_fn(OpConfig::SfpuBinaryOp sfpu
                     fmt::format("ne_int_tile<DataFormat::{}>", *int_data_format)};
             }
             return {"ne_binary_tile_init();", "ne_binary_tile"};
-        case WHERE: {
-            const char* data_format = (dtype == DataType::INT32)     ? "Int32"
-                                      : (dtype == DataType::UINT32)  ? "UInt32"
-                                      : (dtype == DataType::FLOAT32) ? "Float32"
-                                                                     : "Float16_b";
-            return {"where_tile_init();", fmt::format("where_tile<DataFormat::{}>", data_format)};
-        }
+        case WHERE:
+            // The where_tile<DataFormat::X> variant depends on the DEST width, which only the program factory
+            // knows; it sets BINARY_SFPU_OP (and WHERE_DATA_FORMAT) for WHERE_TTS / WHERE_TST itself.
+            return {"where_tile_init();", ""};
         case ISCLOSE: return {"isclose_binary_tile_init();", "isclose_binary_tile<(bool)ISCLOSE_EQUAL_NAN>"};
         case SITU_GLU: return {"situ_glu_tile_init();", "situ_glu_tile"};
         default: TT_THROW("Unsupported sfpu binary op {}", sfpu_binary_op);
