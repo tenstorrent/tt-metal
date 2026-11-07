@@ -1,0 +1,28 @@
+{
+  "observed_at": "2026-11-07T03:21:09.775678+00:00",
+  "run_id": 42332785769,
+  "status": "startup_confirmed_not_final_audit",
+  "task_count": 80,
+  "list_matches_registered_cohort": true,
+  "planned_clients": 8,
+  "batch": 8,
+  "max_num_seqs": 8,
+  "full_layers": 60,
+  "context": 262144,
+  "pool_ids": 20480,
+  "module": "models.autoports.google_gemma_4_31b_it.tt.generator_vllm:Gemma4ForCausalLM",
+  "image_digest": "sha256:bf1ada4081f7fa338ed8495a02324390d3b6124861cd625a0d2fb2d6a255d425",
+  "tt_metal_sha": "eef534e5cd6bcaf37957647de4d8d4eff4f0e047",
+  "tti_sha": "42dc40754e465cf8c9ec993027ff59d3c936832c",
+  "limits_match": true,
+  "native_hex_logging": true,
+  "evidence": "bringup/artifacts/stage12-eval-observation/42332785769/current.log",
+  "event_lines": {
+    "serving_pool_budget": 1284,
+    "autoport_registration": 1359,
+    "serving_cache_allocation": 1366
+  },
+  "score": null,
+  "dry_pass": false,
+  "snapshot_sha256": "2dea66973fbac81bb94685a975b49877c3dcc250384826ebcfee6c325b91fb65"
+}

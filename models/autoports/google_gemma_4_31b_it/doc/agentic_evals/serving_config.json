@@ -424,6 +424,13 @@
       "max_num_seqs": 8,
       "batch_reason": "Smallest validated batch at or above8; accepted C8/40 matched-work speed gain, explicit validated expandedpool20480",
       "pool_ids": 20480
+    },
+    "ci-native-framed-confirmation-retry90m": {
+      "batch": 8,
+      "planned_clients": 2,
+      "max_num_seqs": 8,
+      "pool_ids": 10248,
+      "batch_reason": "Two original smoke tasks; smallest validated batch>=2, current C4 ceiling unchanged"
     }
   },
   "release_limits": {
