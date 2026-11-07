@@ -38,8 +38,9 @@ class KimiK31Adapter(KimiK3Adapter):
     ttnn_cache_default = "/mnt/weka/model-cache/scratch/moonshotai/Kimi-K3.1-Cache/Kimi-K3.1-Cache-prefill"
     # Miguel's 8192-token vLLM trace of K3.1 (kimi_k31_pro_10k_v2: all 93 decoder outputs, KV and indexer
     # keys of all 24 DSA layers), rewritten into K3's per-stream layout by tests/kimi_k3/convert_golden.py.
-    # Under scratch/ because stable/, where K3's golden sits, is writable by storage-wg only.
-    prefill_trace_default = "/mnt/weka/model-cache/scratch/moonshotai/Kimi-K3.1-Cache/golden/kimi_k31_pro_10k_v2"
+    # Under scratch/ because stable/, where K3's golden sits, is writable by storage-wg only. `_conv2`: converter
+    # version 2, whose decoder_output is K3's running sum (the version-1 directory holds the tracer's FFN output).
+    prefill_trace_default = "/mnt/weka/model-cache/scratch/moonshotai/Kimi-K3.1-Cache/golden/kimi_k31_pro_10k_v2_conv2"
     # Explicit: __init_subclass__ fills it only when None, and K3's is already set, so it would be inherited.
     test_prefill_trace_default = prefill_trace_default
     # The trace holds no KDA state snapshots.
