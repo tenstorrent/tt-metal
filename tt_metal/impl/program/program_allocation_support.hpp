@@ -32,6 +32,7 @@ struct EphemeralAllocationMetadata {
         // maximum address amongst all of its target cores This vector is sorted from lower to higher address spaces
         //
         // When allocating, l1_regions is always non-empty as it is initialized by `prepare_ephemeral_allocation`.
+        // These projected intervals are not exact per-core occupancy; the first can be an empty base sentinel.
         std::vector<std::pair<uint64_t, uint64_t>> l1_regions;
 
         // If address is the end of the last L1 region, the last region is extended by size bytes,
@@ -61,6 +62,8 @@ struct EphemeralAllocationMetadata {
 };
 
 // Registers regions of allocation sharing the same allocation.
+// New ranges must be registered before any live allocations; invalidate existing allocations before adding ranges.
+// Registering an already known range is always permitted.
 //
 // side-effect: mutates metadata
 void register_ephemeral_allocation(EphemeralAllocationMetadata& metadata, const CoreRangeSet& cores);
@@ -69,20 +72,19 @@ void register_ephemeral_allocation(EphemeralAllocationMetadata& metadata, const 
 //
 // It prevents further persistent-l1 space allocations when they could intersect with program-local allocations.
 // Also sets the base address of all the regions.
+// Existing projected intervals are retained when preparing another arena.
 //
 // side-effect:
 //  - starts each region that has no allocations at its base address.
 //  - "seal" persistent_l1 to prevent collision between address spaces during allocation.
 void prepare_ephemeral_allocation(EphemeralAllocationMetadata& metadata, PersistentL1Arena& persistent_l1);
 
-// TODO(#62451):
-// The allocation logic should be unified in the future but we unfortunately have different allocation routine for now.
-// The dfb allocation maybe erroneous and thus should be fixed while we unify the two.
-
 // Performs lockstep allocation of a circular buffer or dataflow buffer across `cores`.
 //
 // Returns the start of the allocation, aligned to `alignment`; [address, address + size) is reserved on every core
 // of `cores`. The address is read from the regions whose core_range exactly matches a range of `cores`.
+// Every intersecting region's waterline records at least the end of this allocation. Thus exact-range lookups
+// account for all previous allocations on shared cores without serializing allocations on disjoint cores.
 //
 // When an empty `cores` is supplied, no allocation will be performed. The return value forwards
 // `PersistentL1Arena::high_water_mark` of an empty CoreRangeSet, when recorded by the last
@@ -98,36 +100,13 @@ void prepare_ephemeral_allocation(EphemeralAllocationMetadata& metadata, Persist
 //    firmware-reserved L1).
 //  - when `cores` is not empty, [address, address + size) is reserved exclusively for the caller on every core of
 //    `cores`: it overlaps neither persistent L1 nor any other allocation made through `metadata`.
-//    TODO(#62451): can currently be violated when allocations are placed on overlapping core ranges.
 //
 // side-effect:
 //  - mutates `metadata` regions that have core_range intersecting with `cores`.
 DeviceAddr allocate_dfb(
     EphemeralAllocationMetadata& metadata, const CoreRangeSet& cores, uint64_t size, uint32_t alignment);
 
-// Performs lockstep allocation of a scratchpad across `cores`.
-//
-// Returns the start of the allocation, aligned to `alignment`; [address, address + size) is reserved on every core
-// of `cores`. The address is above every region whose core_range intersects `cores`, so it never overlaps an earlier
-// allocation, but may reserve more than needed.
-//
-// When an empty `cores` is supplied, no allocation will be performed. The return value forwards
-// `PersistentL1Arena::high_water_mark` of an empty CoreRangeSet, when recorded by the last
-// `prepare_ephemeral_allocation()` call.
-//
-// pre-condition:
-//  - the cores are empty or
-//      - every range of `cores` has been registered in `metadata` with register_ephemeral_allocation().
-//  - prepare_ephemeral_allocation() has been called on `metadata`, and no region has been added since.
-//
-// post-condition:
-//  - the returned address is at or above the start of the address range for user-facing memory objects (outside
-//    firmware-reserved L1).
-//  - when `cores` is not empty, [address, address + size) is reserved exclusively for the caller on every core of
-//    `cores`: it overlaps neither persistent L1 nor any other allocation made through `metadata`.
-//
-// side-effect:
-//  - mutates `metadata` regions that have core_range intersecting with `cores`.
+// Uses the same allocation algorithm and contract as allocate_dfb for a scratchpad.
 DeviceAddr allocate_scratchpad(
     EphemeralAllocationMetadata& metadata, const CoreRangeSet& cores, uint64_t size, uint32_t alignment);
 
