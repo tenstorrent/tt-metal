@@ -116,6 +116,13 @@ class CCLManager:
         self.ring_attention_ccl_semaphore_handles = [
             ttnn.create_global_semaphore(mesh_device, core_range_set, 0) for _ in range(3)
         ]
+        # Sliding attention's neighbour halo gives every predecessor of a receiver its own arrival semaphore
+        # (at most one per CP rank), so a rank already running the next sliding layer cannot stand in for a
+        # slower predecessor. Sliding layers get their own list: the two all-gather semaphores, then those.
+        cp_size = tuple(mesh_device.shape)[mesh_config.cp_axis]
+        self.sliding_ring_attention_ccl_semaphore_handles = self.ring_attention_ccl_semaphore_handles[:2] + [
+            ttnn.create_global_semaphore(mesh_device, core_range_set, 0) for _ in range(cp_size)
+        ]
         self._ring_gather_buffers = {}
         # #64697 experiment: a second halo semaphore for odd sliding layers.
         self.kv64697_alt_halo_semaphore = (

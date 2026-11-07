@@ -14,6 +14,7 @@
 #include "ttnn/operations/experimental/gemma4/sliding_ring_sdpa/device/sliding_halo_exchange.hpp"
 
 #include <algorithm>
+#include <tuple>
 #include <array>
 #include <bit>
 #include <cstddef>
@@ -157,6 +158,43 @@ std::vector<ring_joint::ChunkedSlidingHaloExchange> plan_halo_exchanges(
         transport_rank,
         args.all_gather_operation_attributes.topology == ttnn::ccl::Topology::Linear,
         tt::tt_fabric::is_1d_fabric_config(tt::tt_fabric::GetFabricConfig()));
+}
+
+// Halo arrival semaphore key (semaphores[kHaloArrivalSemaphoreBase + key]) that `source`'s hop-`hop` payload
+// increments on its receiver. Every predecessor of a receiver must get a distinct key, so that the receiver's
+// count for a key has exactly one sender. With one shared counter, a predecessor already running the next
+// sliding layer could supply the "second" arrival while the other predecessor's data was still in flight
+// (#64697). Source-keyed layouts key by source slab, like their buffer blocks, so that one line multicast
+// (same address on every receiver) is still the same key everywhere; a receiver's predecessors are
+// consecutive ring positions and ring_size % hop_count == 0, so their keys differ. Other layouts key by hop.
+uint32_t halo_arrival_key(const ring_joint::ChunkedSlidingHaloLayout& layout, uint32_t source, uint32_t hop) {
+    if (layout.remote_hop_count() <= 1) {
+        return 0;
+    }
+    if (layout.source_keyed()) {
+        return source % ring_joint::chunked_sliding_halo_hop_count(layout.halo_tile_rows, layout.q_local_tile_rows);
+    }
+    return hop - 1;
+}
+
+// The keys `receiver`'s collector waits on, one per remote predecessor (hop 1 first).
+std::vector<uint32_t> halo_collected_arrival_keys(
+    const ring_joint::ChunkedSlidingHaloLayout& layout, uint32_t receiver) {
+    const uint32_t ring_size = layout.ring_size;
+    const uint32_t remote_hops = layout.remote_hop_count();
+    std::vector<uint32_t> keys;
+    keys.reserve(remote_hops);
+    for (uint32_t hop = 1; hop <= remote_hops; ++hop) {
+        const uint32_t source = (receiver + ring_size - hop % ring_size) % ring_size;
+        const uint32_t key = halo_arrival_key(layout, source, hop);
+        TT_FATAL(
+            std::find(keys.begin(), keys.end(), key) == keys.end(),
+            "Sliding halo predecessors of ring device {} share arrival key {}",
+            receiver,
+            key);
+        keys.push_back(key);
+    }
+    return keys;
 }
 
 // A one-hop or multicast halo spreads each exchange over every link; a unicast multi-hop halo gives each
@@ -415,18 +453,51 @@ void apply_ring_joint_scalar_runtime_args(
         plan_halo_exchanges(args, runtime_chunked_sliding_layout, ring_write_plan.transport_rank);
 
     // Semaphores are not in the program hash, so a cache hit may come with different ones: re-apply the halo
-    // semaphore's address to every halo reader and writer.
-    const uint32_t halo_semaphore_address =
-        static_cast<uint32_t>(args.all_gather_operation_attributes.semaphore.at(2).address());
+    // semaphore addresses to every halo reader and writer. Mirrors sliding_halo_exchange_helper: the reader
+    // header slot holds the first arrival semaphore, each writer its exchange's key, and the collector's
+    // reader closes its args with one semaphore per predecessor key.
+    const auto& semaphores = args.all_gather_operation_attributes.semaphore;
+    const auto arrival_semaphore_address = [&](uint32_t key) {
+        return static_cast<uint32_t>(semaphores.at(halo_rt::kHaloArrivalSemaphoreBase + key).address());
+    };
+    const auto collected_keys =
+        halo_collected_arrival_keys(runtime_chunked_sliding_layout, ring_write_plan.transport_rank);
     for (uint32_t exchange = 0; exchange < halo_exchanges.size(); ++exchange) {
-        for (const auto& [kernel_index, arg_index] :
-             {std::pair{kNeighborHaloReaderKernelIndex + 2 * exchange, halo_rt::kNeighborReaderSemaphoreArg},
-              std::pair{kNeighborHaloWriterKernelIndex + 2 * exchange, halo_rt::kNeighborWriterSemaphoreArg}}) {
+        const uint32_t writer_key =
+            halo_arrival_key(runtime_chunked_sliding_layout, ring_write_plan.transport_rank, halo_exchanges[exchange].hop);
+        for (const auto& [kernel_index, arg_index, address] :
+             {std::tuple{
+                  kNeighborHaloReaderKernelIndex + 2 * exchange,
+                  halo_rt::kNeighborReaderSemaphoreArg,
+                  arrival_semaphore_address(0)},
+              std::tuple{
+                  kNeighborHaloWriterKernelIndex + 2 * exchange,
+                  halo_rt::kNeighborWriterSemaphoreArg,
+                  arrival_semaphore_address(writer_key)}}) {
             for (auto& col_args : GetRuntimeArgs(program, kernel_index)) {
                 for (auto& core_args : col_args) {
                     if (core_args.size() > arg_index) {  // skip cores that don't run this kernel
-                        write_runtime_arg(core_args, arg_index, halo_semaphore_address, "halo.semaphore");
+                        write_runtime_arg(core_args, arg_index, address, "halo.semaphore");
                     }
+                }
+            }
+        }
+        if (halo_exchanges[exchange].hop != 1) {
+            continue;  // only the hop-1 exchange collects (SlidingHaloConfig::collects_arrivals)
+        }
+        for (auto& col_args : GetRuntimeArgs(program, kNeighborHaloReaderKernelIndex + 2 * exchange)) {
+            for (auto& core_args : col_args) {
+                if (core_args.size() == 0) {
+                    continue;
+                }
+                TT_FATAL(
+                    core_args.size() > halo_rt::kNeighborReaderRuntimeArgHeaderCount + collected_keys.size(),
+                    "Sliding halo collector args are too short for {} arrival semaphores",
+                    collected_keys.size());
+                const uint32_t first = core_args.size() - collected_keys.size();
+                for (uint32_t i = 0; i < collected_keys.size(); ++i) {
+                    write_runtime_arg(
+                        core_args, first + i, arrival_semaphore_address(collected_keys[i]), "halo.arrival_semaphore");
                 }
             }
         }
@@ -2217,6 +2288,9 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
             .link_base = lane_index % lane_span,
             .arrivals_expected = halo_remote_hops,
             .rendezvous_noc = halo_rendezvous,
+            .arrival_key = halo_arrival_key(chunked_sliding_halo_layout, transport_rank, plan.hop),
+            .collected_keys = plan.hop == 1 ? halo_collected_arrival_keys(chunked_sliding_halo_layout, transport_rank)
+                                            : std::vector<uint32_t>{},
             .waits_for_predecessor = exchange_waits,
             .signals_successor = exchange_signals,
             .chain_semaphore_id = halo_chain_semaphore_id,

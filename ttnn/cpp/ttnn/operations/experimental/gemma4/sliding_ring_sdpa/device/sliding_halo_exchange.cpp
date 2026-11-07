@@ -78,10 +78,23 @@ void sliding_halo_exchange_helper(
     using tt::tt_metal::WriterConfigDescriptor;
 
     TT_FATAL(!input_tensors.empty() && input_tensors.size() == output_tensors.size(), "Invalid halo tensor list");
+    // semaphores[0]/[1]: backward/forward all-gather. semaphores[2 + key]: halo arrival semaphores, one per
+    // predecessor key (see SlidingHaloConfig::arrival_key). A one-hop halo needs one, so 3 in total.
+    uint32_t arrival_keys_needed = halo.arrival_key + 1;
+    for (const uint32_t key : halo.collected_keys) {
+        arrival_keys_needed = std::max(arrival_keys_needed, key + 1);
+    }
     TT_FATAL(
-        semaphores.size() >= 3,
-        "Neighbor halo requires three global semaphores: backward all-gather, forward all-gather, and dedicated halo. "
-        "Sliding-window models must allocate 3 semaphores; non-halo models may allocate 2");
+        semaphores.size() >= halo_rt::kHaloArrivalSemaphoreBase + arrival_keys_needed,
+        "Neighbor halo needs {} global semaphores (2 all-gather + {} halo arrival, one per predecessor key), got {}",
+        halo_rt::kHaloArrivalSemaphoreBase + arrival_keys_needed,
+        arrival_keys_needed,
+        semaphores.size());
+    TT_FATAL(
+        !halo.collects_arrivals() || halo.collected_keys.size() == halo.arrivals_expected,
+        "Neighbor halo collector waits on {} arrival keys but expects {} arrivals",
+        halo.collected_keys.size(),
+        halo.arrivals_expected);
     TT_FATAL(
         halo.derives_cache_batch_on_device() == halo.derives_start_on_device(),
         "Neighbor halo slot_id and kv_actual_isl metadata must be supplied together");
@@ -238,9 +251,11 @@ void sliding_halo_exchange_helper(
     }
     halo_signaler.initialized_all_gather = true;
 
-    // semaphores[0]/[1] coordinate the backward/forward all-gather directions. Keep halo
-    // arrivals on semaphores[2] so the protocols cannot consume each other's signals.
-    const auto& halo_semaphore = semaphores.at(2);
+    // semaphores[0]/[1] coordinate the backward/forward all-gather directions. Halo arrivals use
+    // semaphores[2 + key] so the protocols cannot consume each other's signals, and so that each
+    // predecessor of a receiver signals its own semaphore.
+    const auto& halo_semaphore = semaphores.at(halo_rt::kHaloArrivalSemaphoreBase);
+    const auto& arrival_semaphore = semaphores.at(halo_rt::kHaloArrivalSemaphoreBase + halo.arrival_key);
     for (uint32_t link = 0; link < num_links; ++link) {
         KernelDescriptor::RTArgList reader_args;
         reader_args.push_back(
@@ -259,8 +274,8 @@ void sliding_halo_exchange_helper(
         const CoreCoord arrival_core = halo.has_rendezvous() ? halo.rendezvous_noc[link] : worker_physical;
         writer_args.push_back(arrival_core.x);
         writer_args.push_back(arrival_core.y);
-        writer_args.push_back(
-            static_cast<uint32_t>(halo_semaphore.address()));  // smuggled-rta-ok: persistent GlobalSemaphore address
+        writer_args.push_back(static_cast<uint32_t>(
+            arrival_semaphore.address()));  // smuggled-rta-ok: persistent GlobalSemaphore address
 
         writer_args.push_back(link);
 
@@ -412,6 +427,14 @@ void sliding_halo_exchange_helper(
         std::vector<uint32_t> signaler_args;
         halo_signaler.push_all_gather_fused_op_rt_args(signaler_args, num_links, link, 0);
         reader_args.append(signaler_args);
+        // The collector's arrival semaphores close its args (re-patched from the end on every dispatch).
+        if (halo.collects_arrivals()) {
+            for (const uint32_t key : halo.collected_keys) {
+                reader_args.push_back(static_cast<uint32_t>(
+                    semaphores.at(halo_rt::kHaloArrivalSemaphoreBase + key)
+                        .address()));  // smuggled-rta-ok: persistent GlobalSemaphore address
+            }
+        }
         reader_kernel.emplace_runtime_args(worker_cores[link], reader_args);
 
         for (const auto& output : output_tensors) {

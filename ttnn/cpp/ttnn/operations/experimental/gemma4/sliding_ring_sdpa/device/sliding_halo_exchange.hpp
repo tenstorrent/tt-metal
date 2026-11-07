@@ -49,6 +49,13 @@ struct SlidingHaloConfig {
     // expects one arrival per remote predecessor. Empty rendezvous_noc: each worker's own core.
     uint32_t arrivals_expected = 1;
     std::vector<CoreCoord> rendezvous_noc;
+    // Arrival semaphores are semaphores[kHaloArrivalSemaphoreBase + key]. This exchange's writer increments
+    // key arrival_key on its receivers; the collecting reader waits for one arrival on each of
+    // collected_keys (one per remote predecessor, all distinct). One sender per (receiver, key) is what
+    // makes the count unambiguous: a predecessor running a layer ahead can only add to its own key, never
+    // satisfy another predecessor's (see halo_arrival_key).
+    uint32_t arrival_key = 0;
+    std::vector<uint32_t> collected_keys;
     // A halo with more hops than fabric links time-shares a link. An ERISC exposes one worker
     // sender channel per direction, and concurrent workers on it stall each other, but SEQUENTIAL
     // reuse is the fabric's own protocol: close() persists the producer cursor and the next open()
@@ -83,6 +90,8 @@ struct SlidingHaloConfig {
 
 // Halo reader/writer runtime-arg layout (sliding_halo_{reader,writer}.cpp).
 namespace halo_rt {
+// semaphores[0]/[1] are the all-gather directions; halo arrival semaphores start here.
+constexpr uint32_t kHaloArrivalSemaphoreBase = 2;
 constexpr uint32_t kNeighborReaderRuntimeArgHeaderCount = 2;
 // The halo GlobalSemaphore's address: not in the program hash, so re-patched on every dispatch.
 constexpr uint32_t kNeighborReaderSemaphoreArg = 0;

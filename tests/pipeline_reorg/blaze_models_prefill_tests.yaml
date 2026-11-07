@@ -1236,12 +1236,12 @@
     export TT_CACHE_PATH=/mnt/models/huggingface/tt_cache/gemma4_d_p/google--gemma-4-31B-it
     export PREFILL_TRACE_DIR=/mnt/models/huggingface/gpu_traces/gemma4_d_p/gutenberg-135
     export OMP_NUM_THREADS=16 MKL_NUM_THREADS=16
-    # SCRATCH #64697: ten runs on the same host, odd = baseline, even = alt halo sem; fast diag vs a clean reference.
+    # SCRATCH #64697: ten runs on the same host, all with the per-source halo arrival semaphore fix; fast diag vs a clean reference.
     export KV64697_FAST_DIAG=1 KV64697_REF_DIAG=$TT_METAL_HOME/models/demos/gemma4_d_p/tests/kv64697_ref_diag.txt
     rc=0
     for run in 1 2 3 4 5 6 7 8 9 10; do
       echo "KV64697 RUN $run on $(hostname)"
-      export KV64697_BARRIER=none KV64697_ALT_HALO_SEM=$(( (run + 1) % 2 ))
+      export KV64697_BARRIER=none KV64697_ALT_HALO_SEM=0
       echo "KV64697 VARIANT run=$run BARRIER=$KV64697_BARRIER ALT_HALO_SEM=$KV64697_ALT_HALO_SEM"
       mpirun -x KV64697_BARRIER -x KV64697_ALT_HALO_SEM -x KV64697_FAST_DIAG -x KV64697_REF_DIAG --bind-to none --pernode --tag-output \
         python3 -m pytest \

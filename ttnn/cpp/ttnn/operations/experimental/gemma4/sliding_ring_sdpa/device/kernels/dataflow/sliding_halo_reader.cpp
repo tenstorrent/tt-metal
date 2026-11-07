@@ -72,7 +72,7 @@ void kernel_main() {
     constexpr auto kv_meta_args = TensorAccessorArgs<kv_meta_args_offset>();
 
     uint32_t arg_idx = 0;
-    const size_t incoming_ready_sem = get_arg_val<uint32_t>(arg_idx++);
+    arg_idx++;  // halo_rt::kNeighborReaderSemaphoreArg: arrivals use the per-predecessor arrival_sems below
     const uint32_t worker_link = get_arg_val<uint32_t>(arg_idx++);
 
     std::array<uint32_t, num_inputs> input_stride_pages;
@@ -197,6 +197,13 @@ void kernel_main() {
     auto input_accessors = make_abstract_tensor_accessor_wrappers(input_accessors_tuple);
 
     OpSignaler op_signaler(arg_idx);
+    // The collector's per-predecessor arrival semaphores close the args (sliding_halo_exchange.cpp).
+    std::array<uint32_t, collects_arrivals ? arrivals_expected : 1> arrival_sems{};
+    if constexpr (collects_arrivals) {
+        for (uint32_t i = 0; i < arrivals_expected; ++i) {
+            arrival_sems[i] = get_arg_val<uint32_t>(arg_idx++);
+        }
+    }
 
     Noc noc;
     CircularBuffer cb_output(cb_output_id);
@@ -237,13 +244,20 @@ void kernel_main() {
 
     if constexpr (collects_arrivals) {
         // Wait for every hop of this halo, not just one: with a multi-hop halo the SDPA must not
-        // start its K loop until the whole compact buffer has landed.
-        noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(incoming_ready_sem), arrivals_expected);
+        // start its K loop until the whole compact buffer has landed. Each predecessor signals its own
+        // semaphore, so a predecessor already running the NEXT sliding layer (whose increment can land
+        // early) can only advance its own count. With one shared counter it could stand in for a slower
+        // predecessor whose data has not landed yet, and the SDPA would read a stale halo block.
+        for (uint32_t i = 0; i < arrivals_expected; ++i) {
+            noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(arrival_sems[i]), 1);
+        }
         constexpr uint32_t predecessor_ring_id = my_ring_id == 0 ? ring_size - 1 : my_ring_id - 1;
         op_signaler.synchronize_workers_and_signal_op(predecessor_ring_id);
-        // Consume exactly the arrivals gated on. The wrapping atomic decrement preserves a
-        // concurrent remote increment for the next exchange; a read-modify-write could lose it.
-        noc_semaphore_inc(get_noc_addr(incoming_ready_sem), static_cast<uint32_t>(0u - arrivals_expected));
+        // Consume exactly the arrival gated on. The wrapping atomic decrement preserves a concurrent
+        // remote increment for the next exchange; a read-modify-write could lose it.
+        for (uint32_t i = 0; i < arrivals_expected; ++i) {
+            noc_semaphore_inc(get_noc_addr(arrival_sems[i]), static_cast<uint32_t>(0u - 1u));
+        }
         noc_async_atomic_barrier();
     }
 }

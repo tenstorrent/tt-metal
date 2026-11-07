@@ -57,6 +57,29 @@ def _fork_supports(kwargs, joint_tensors):
     )
 
 
+# The fork gives each halo predecessor its own arrival semaphore: it needs 2 all-gather semaphores plus up to one
+# per ring device, where the shared op takes 3. Extras are created once per mesh device and kept, so a semaphore
+# outlives every program (and trace) that bakes its address.
+_extra_halo_semaphores = {}
+
+
+def _fork_semaphores(kwargs):
+    semaphores = list(kwargs["multi_device_global_semaphore"])
+    mesh_device = kwargs["mesh_device"]
+    needed = 2 + tuple(mesh_device.shape)[kwargs["cluster_axis"]]
+    if len(semaphores) >= needed:
+        return semaphores
+    device, extra = _extra_halo_semaphores.get(id(mesh_device), (None, []))
+    if device is not mesh_device:
+        extra = []
+    grid = mesh_device.compute_with_storage_grid_size()
+    cores = ttnn.num_cores_to_corerangeset(grid.x * grid.y, grid, row_wise=True)
+    while len(extra) < needed - len(semaphores):
+        extra.append(ttnn.create_global_semaphore(mesh_device, cores, 0))
+    _extra_halo_semaphores[id(mesh_device)] = (mesh_device, extra)
+    return semaphores + extra[: needed - len(semaphores)]
+
+
 def _call_fork(q, k, v, kwargs):
     return ttnn.experimental.gemma4.sliding_ring_sdpa(
         q,
@@ -70,7 +93,7 @@ def _call_fork(q, k, v, kwargs):
         scale=kwargs.get("scale"),
         compute_kernel_config=kwargs.get("compute_kernel_config"),
         dim=kwargs["dim"],
-        multi_device_global_semaphore=kwargs["multi_device_global_semaphore"],
+        multi_device_global_semaphore=_fork_semaphores(kwargs),
         num_links=kwargs["num_links"],
         cluster_axis=kwargs["cluster_axis"],
         mesh_device=kwargs["mesh_device"],
@@ -287,7 +310,9 @@ def _sliding_ring_sdpa_call(
         sliding_window_size=sliding_window_size,
         compute_kernel_config=compute_kernel_config,
         dim=2,
-        multi_device_global_semaphore=ccl_semaphore_handles,
+        multi_device_global_semaphore=_fork_semaphores(
+            {"multi_device_global_semaphore": ccl_semaphore_handles, "mesh_device": mesh_device, "cluster_axis": sp_axis}
+        ),
         num_links=num_links,
         cluster_axis=sp_axis,
         mesh_device=mesh_device,

@@ -16,6 +16,8 @@ from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
 
+import os
+
 import ttnn
 
 from .global_kv_cache import GLOBAL_HEAD_DIM, GLOBAL_PACKED_DIM
@@ -460,6 +462,10 @@ def sliding_ring_prefill_attention(
         multi_device_global_semaphore=(
             ccl_manager.ring_attention_ccl_semaphore_handles[:2] + [ccl_manager.kv64697_alt_halo_semaphore]
             if halo_parity and ccl_manager.kv64697_alt_halo_semaphore is not None
+            else getattr(
+                ccl_manager, "sliding_ring_attention_ccl_semaphore_handles", ccl_manager.ring_attention_ccl_semaphore_handles
+            )
+            if os.environ.get("KV64697_SHARED_HALO_SEM", "0") != "1"
             else ccl_manager.ring_attention_ccl_semaphore_handles
         ),
         num_links=ccl_manager.num_links,
