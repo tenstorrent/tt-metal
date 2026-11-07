@@ -386,6 +386,9 @@ class Flux1Transformer(Module):
         """
         tp_axis = self.parallel_config.tensor_parallel.mesh_axis
 
+        # diffusers scales guidance by 1000 inside the transformer; callers pass the raw guidance scale.
+        if guidance is not None:
+            guidance = guidance * 1000.0
         time_embed = self.time_text_embed(timestep=timestep, guidance=guidance, pooled_projection=pooled)
         ttnn.silu(time_embed, output_tensor=time_embed)
         time_embed = time_embed.reshape([time_embed.shape[-2], 1, time_embed.shape[-1]])
