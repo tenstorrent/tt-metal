@@ -375,6 +375,9 @@ UntilizeDeviceOperation::program_factory_t UntilizeDeviceOperation::select_progr
         return UntilizeMultiCoreParallelizeColumnProgramFactory{};
     }
     if (pf_option == 1) {
+        if (!input_is_sharded && !output_is_sharded) {
+            return UntilizeMultiCoreBlockProgramFactory{};
+        }
         return UntilizeSingleCoreProgramFactory{};
     }
 
