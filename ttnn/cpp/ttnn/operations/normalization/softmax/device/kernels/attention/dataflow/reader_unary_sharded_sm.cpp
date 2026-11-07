@@ -59,18 +59,25 @@ void kernel_main() {
 
     constexpr std::uint32_t fused_head = get_arg(args::fused_head);
     constexpr std::uint32_t mask_block_ht = get_arg(args::mask_block_ht);
+    // Each batch occupies mask_block_ht * block_wt tiles in the mask tensor. When a shard spans multiple
+    // batches, we must advance the mask start by this amount per batch so we do not re-read batch 0's mask
+    // for batch 1, or read past the end of the mask tensor.
+    constexpr std::uint32_t tiles_per_batch = mask_block_ht * block_wt;
 
     for (std::uint32_t f = 0; f < fused_head; f++) {
-        mask_id = mask_start_tile_id;
+        std::uint32_t batch_mask_start = mask_start_tile_id + f * tiles_per_batch;
 
         for (std::uint32_t h = 0; h < mask_block_ht; h++) {
             dfb_attn_obj.reserve_back(block_wt);
             std::uint32_t write_offset = 0;
             for (std::uint32_t w = 0; w < block_wt; w++) {
+                // Wrap within the mask row so non-square masks (block_wt > mask_block_ht) do not read past
+                // the end of the row. The mask row repeats every mask_block_ht tiles.
+                std::uint32_t mask_row_offset = (h * block_wt + w) % mask_block_ht;
+                std::uint32_t wrapped_mask_id = batch_mask_start + mask_row_offset;
                 noc.async_read(
-                    addr_mask, dfb_attn_obj, mask_tile_bytes, {.page_id = mask_id}, {.offset_bytes = write_offset});
+                    addr_mask, dfb_attn_obj, mask_tile_bytes, {.page_id = wrapped_mask_id}, {.offset_bytes = write_offset});
                 write_offset += mask_tile_bytes;
-                ++mask_id;
             }
             noc.async_read_barrier();
             dfb_attn_obj.push_back(block_wt);
