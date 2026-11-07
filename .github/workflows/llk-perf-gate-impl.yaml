@@ -142,7 +142,9 @@ env:
 jobs:
   llk-perf-gate:
     name: "Compare perf: current vs main"
-    runs-on: ubuntu-slim
+    # Not ubuntu-slim: its 15-minute cap is shorter than a warehouse read plus the download retries.
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
     outputs:
       gate_exit_code: ${{ steps.compare.outputs.gate_exit_code }}
     steps:
@@ -164,7 +166,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install pandas snowflake-connector-python cryptography
+          pip install -c tt_metal/tt-llk/perf/constraints.txt pandas snowflake-connector-python cryptography
 
       - name: Check the measurement is complete
         id: measured
@@ -490,6 +492,8 @@ jobs:
 
       - name: Add stage 2 to the report
         if: ${{ !cancelled() && hashFiles('stage2/**/stage2.json') != '' && hashFiles('perf_gate_report.md') != '' }}
+        # Report-only: a stage-2 fault must not fail the gate.
+        continue-on-error: true
         env:
           ARCH: ${{ inputs.arch }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -503,7 +507,8 @@ jobs:
           python3 ${{ env.LLK_PATH }}/perf/placement_check.py gate \
             --results 'stage2/**/stage2.json' --bases 'stage2/**/stage2.base' --legs "$LEGS" \
             --stage1 perf_gate_report.regressions.csv --gate-base "$GATE_BASE" \
-            --arch "$ARCH" --report stage2.md || true
+            --arch "$ARCH" --report stage2.md \
+            || echo "Stage 2 could not build its report (exit $?); see the job log." > stage2.md
           printf '\n' >> perf_gate_report.md
           cat stage2.md >> perf_gate_report.md
 
