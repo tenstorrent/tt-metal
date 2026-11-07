@@ -237,3 +237,33 @@ def test_concat_head_subcoregrids(
             input_sub_core_grids,
             compute_sub_core_grids,
         )
+
+
+@pytest.mark.parametrize("use_sub_core_grids", [True, False], ids=["sub_core_grids", "default_grid"])
+def test_concat_head_rejects_col_major_shards(use_sub_core_grids, device, expect_error):
+    batch, n_local_heads, padded_local_heads, head_dim = 16, 8, 32, 128
+    shard_grid = ttnn.CoreRangeSet({num_to_corerange(batch)})
+    mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(shard_grid, [padded_local_heads, head_dim], ttnn.ShardOrientation.COL_MAJOR),
+    )
+    concat_head_input = ttnn.from_torch(
+        torch.rand(1, batch, padded_local_heads, head_dim),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=mem_config,
+    )
+    sub_core_grids = (
+        ttnn.num_cores_to_corerangeset_in_subcoregrids(
+            shard_grid.bounding_box().start, n_local_heads, shard_grid, row_wise=True
+        )
+        if use_sub_core_grids
+        else None
+    )
+
+    with expect_error(RuntimeError, "Input shard orientation must be ROW_MAJOR"):
+        ttnn.experimental.nlp_concat_heads_decode(
+            concat_head_input, num_heads=n_local_heads, sub_core_grids=sub_core_grids
+        )
