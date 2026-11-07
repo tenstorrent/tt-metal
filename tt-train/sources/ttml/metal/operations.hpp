@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "ops/all_gather_weight_minimal_matmul_async/all_gather_weight_minimal_matmul_async.hpp"
 #include "ops/cross_entropy_bw/cross_entropy_bw.hpp"
 #include "ops/cross_entropy_fw/cross_entropy_fw.hpp"
 #include "ops/frobenius_normalize/frobenius_normalize.hpp"
