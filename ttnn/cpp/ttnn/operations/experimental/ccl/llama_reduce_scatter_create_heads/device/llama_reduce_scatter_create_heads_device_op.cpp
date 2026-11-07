@@ -187,8 +187,13 @@ tt::tt_metal::operation::Hash LlamaReduceScatterCreateHeadsDeviceOperation::comp
         attributes.topology,
         attributes.use_noc1_only,
         attributes.use_optimal_ccl_for_llama,
-        tensor_args.input_tensor.dtype(),
-        tensor_args.input_tensor.memory_config(),
+        // qkv_memory_config sets the Q/K/V_OUTPUT_CORE_XY defines; subdevice_id picks the worker cores.
+        attributes.qkv_memory_config,
+        attributes.subdevice_id,
+        // The input's logical shape sets input_block_size and ncores_input, which size CBs and CTAs and pick
+        // the SCHEDULE define; the packet buffer's shard grid selects the packet-worker cores.
+        tensor_args.input_tensor.tensor_spec(),
+        tensor_args.intermediate_packet_buffer.tensor_spec(),
         tensor_args.input_tensor.device()->id());
 }
 

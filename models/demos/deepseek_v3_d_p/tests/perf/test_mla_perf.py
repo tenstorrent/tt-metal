@@ -66,9 +66,9 @@ _MISTRAL4_MLA_CHUNKED_NS_UNCALIBRATED = 3_301_775
 _CMD_MISTRAL4_CHUNKED_8X1 = (
     "pytest models/demos/deepseek_v3_d_p/tests/test_mla.py::test_mistral4_mla_chunked_prefill_loudbox"
 )
-# CI LoudBox run 37547491707 (LoFi chunked ring SDPA; was 8_944_184 from run 36924353598). SDPA is
-# most of this total and CCL is 0, so the row tracks the depth-proportional term almost alone.
-_MISTRAL4_MLA_CHUNKED_LB_8X1_NS = 8_122_154
+# CI LoudBox measurement (LoFi chunked ring SDPA). SDPA is most of this total and CCL is 0, so the
+# row tracks the depth-proportional term almost alone.
+_MISTRAL4_MLA_CHUNKED_LB_8X1_NS = 7_878_336
 
 
 @pytest.mark.timeout(0)

@@ -21,8 +21,7 @@ Run on Wormhole:
         pytest tests/ttnn/nightly/unit_tests/operations/experimental/quasar/test_binary_ng_resnet_add.py
 
 Run on the Quasar simulator:
-    TT_METAL_SIMULATOR=<path>/libttsim.so TT_SIMULATOR_LOCALHOST=1 ARCH_NAME=quasar CHIP_ARCH=quasar \
-        TT_METAL_SLOW_DISPATCH_MODE=1 \
+    TT_METAL_SIMULATOR=<path>/libttsim.so TT_SIMULATOR_LOCALHOST=1 TT_METAL_SLOW_DISPATCH_MODE=1 \
         pytest tests/ttnn/nightly/unit_tests/operations/experimental/quasar/test_binary_ng_resnet_add.py
 """
 
@@ -53,7 +52,7 @@ def _block_sharded_config(shard_shape, core_grid):
     )
 
 
-# PCC thresholds. We NEVER weaken these below what the descriptor path achieves for the same config.
+# PCC thresholds. Never weaken these.
 _PCC = {ttnn.bfloat16: 0.9997}
 
 

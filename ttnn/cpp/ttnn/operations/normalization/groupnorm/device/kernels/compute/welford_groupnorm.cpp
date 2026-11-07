@@ -189,7 +189,7 @@ void kernel_main() {
     DataflowBuffer dfb_in(dfb_in_id);
     DataflowBuffer dfb_in0(dfb_in0_id);
     DataflowBuffer dfb_in0_welford(dfb_in0_welford_id);
-    DataflowBuffer dfb_normalize_in_fp32(dfb_normalize_in_fp32_id);
+    const DataflowBuffer dfb_normalize_in_fp32(dfb_normalize_in_fp32_id);
     DataflowBuffer dfb_ex_global_fp32(dfb_ex_global_fp32_id);
     DataflowBuffer dfb_ex2pe_fp32(dfb_ex2pe_fp32_id);
     DataflowBuffer dfb_input_mask(dfb_input_mask_id);
@@ -287,10 +287,11 @@ void kernel_main() {
             uint32_t channels_left = num_channels_per_group;
 
             for (uint32_t nt = 0; nt < per_core_N; ++nt) {
-                const uint32_t stats_input_tile = mt * per_core_N + nt;
-                dfb_in0.wait_front(sfpu_two_pass_l1_replay ? stats_input_tile + 1 : 1);
+                const uint32_t stats_input_tile = (mt * per_core_N) + nt;
+                dfb_in0.wait_front(static_cast<uint16_t>(sfpu_two_pass_l1_replay ? stats_input_tile + 1 : 1));
                 if constexpr (welford_fp32_alias) {
-                    dfb_in0_welford.wait_front(sfpu_two_pass_l1_replay ? stats_input_tile + 1 : 1);
+                    dfb_in0_welford.wait_front(
+                        static_cast<uint16_t>(sfpu_two_pass_l1_replay ? stats_input_tile + 1 : 1));
                 }
 #ifdef TILIZE_IN
                 transpose_init(dfb_in_id);
@@ -370,10 +371,11 @@ void kernel_main() {
             uint32_t min_group = 0;
             uint32_t channels_left = num_channels_per_group;
             for (uint32_t nt = 0; nt < per_core_N; ++nt) {
-                const uint32_t stats_input_tile = mt * per_core_N + nt;
-                dfb_in0.wait_front(sfpu_two_pass_l1_replay ? stats_input_tile + 1 : 1);
+                const uint32_t stats_input_tile = (mt * per_core_N) + nt;
+                dfb_in0.wait_front(static_cast<uint16_t>(sfpu_two_pass_l1_replay ? stats_input_tile + 1 : 1));
                 if constexpr (welford_fp32_alias) {
-                    dfb_in0_welford.wait_front(sfpu_two_pass_l1_replay ? stats_input_tile + 1 : 1);
+                    dfb_in0_welford.wait_front(
+                        static_cast<uint16_t>(sfpu_two_pass_l1_replay ? stats_input_tile + 1 : 1));
                 }
 #ifdef TILIZE_IN
                 transpose_init(dfb_in_id);
@@ -457,7 +459,7 @@ void kernel_main() {
         add_init(dfb_ex_global_id, dfb_eps_id);
         for (uint32_t g = 0; g < num_groups; ++g) {
             tile_regs_acquire();
-            add_tiles(dfb_ex_global_id, dfb_eps_id, g * stats_tiles_per_group + 1, 0, dst0);
+            add_tiles(dfb_ex_global_id, dfb_eps_id, (g * stats_tiles_per_group) + 1, 0, dst0);
 
             // 1/[sqrt(Var + eps)]
             rsqrt_tile_init();
@@ -524,7 +526,7 @@ void kernel_main() {
                         // // a/b. (x-u) * 1/[sqrt(Var + eps)]
                         if constexpr (fp32_sfpu_normalizer) {
                             constexpr uint32_t data_dst = 0;
-                            constexpr uint32_t mean_dst = 1;
+                            constexpr uint32_t norm_mean_dst = 1;
                             constexpr uint32_t inv_std_dst = 2;
                             tile_regs_acquire();
 #ifdef TILIZE_IN
@@ -538,11 +540,11 @@ void kernel_main() {
 #endif
                             reconfig_data_format_srca(dfb_normalize_in_fp32_id, dfb_ex_global_fp32_id);
                             copy_init(dfb_ex_global_fp32_id);
-                            copy_tile(dfb_ex_global_fp32_id, g * stats_tiles_per_group, mean_dst);
+                            copy_tile(dfb_ex_global_fp32_id, g * stats_tiles_per_group, norm_mean_dst);
                             reconfig_data_format_srca(dfb_ex_global_fp32_id, dfb_ex2pe_fp32_id);
                             copy_init(dfb_ex2pe_fp32_id);
                             copy_tile(dfb_ex2pe_fp32_id, g, inv_std_dst);
-                            sfpu_normalize_bcast_scalar(data_dst, mean_dst, inv_std_dst);
+                            sfpu_normalize_bcast_scalar(data_dst, norm_mean_dst, inv_std_dst);
                             tile_regs_commit();
                             tile_regs_wait();
                             pack_tile(data_dst, dfb_xmm_id);

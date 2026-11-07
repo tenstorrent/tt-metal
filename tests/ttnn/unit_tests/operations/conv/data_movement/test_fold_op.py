@@ -417,6 +417,15 @@ def test_fold(act_shape, stride_h, stride_w, device):
     torch.testing.assert_close(actual, expected)
 
 
+@pytest.mark.parametrize("dtype", [ttnn.int32, ttnn.uint32, ttnn.uint8])
+def test_fold_rejects_unsupported_row_major_dtype(device, dtype, expect_error):
+    tt_input = ttnn.from_torch(
+        torch.zeros((1, 16, 16, 32), dtype=torch.int32), dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device
+    )
+    with expect_error(RuntimeError, r"row-major output dtype \(.*\) must match the input dtype"):
+        ttnn.fold(tt_input, 2, 2)
+
+
 def run_fold_sharded_test(device, act_shape, stride_h, stride_w, padding, core_grid, layout=ttnn.ROW_MAJOR_LAYOUT):
     torch.manual_seed(0)
 
@@ -501,3 +510,16 @@ def test_fold_tile_partial_tile_width_rejected(device, expect_error):
     ttnn_in = ttnn.from_torch(x, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device)
     with expect_error(RuntimeError, "stride_w|logical W"):
         ttnn.fold(ttnn_in, 32, 32)
+
+
+def test_fold_transpose_rejects_empty_grid(device, expect_error):
+    x = torch.rand((1, 3, 32, 32), dtype=torch.bfloat16)
+    in_sharded_memory_config = ttnn.create_sharded_memory_config(
+        x.shape,
+        core_grid=ttnn.CoreGrid(y=1, x=2),
+        strategy=ttnn.ShardStrategy.HEIGHT,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    tt_in = ttnn.from_torch(x, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=in_sharded_memory_config)
+    with expect_error(RuntimeError, "core_grid must contain at least one core"):
+        ttnn.fold(tt_in, 2, 2, use_transpose_as_fold=True, padding=[0, 0, 0, 0, 0, 1], grid_size=ttnn.CoreRangeSet([]))

@@ -4,7 +4,9 @@
 
 #include <tt-metalium/experimental/sockets/h2d_socket.hpp>
 #include "tt_metal/distributed/h2d_socket_impl.hpp"
+#include <internal/mesh_device.hpp>
 #include <internal/service/service_core_manager.hpp>
+#include <internal/l1_ecc_halt.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include "tt_metal/distributed/mesh_socket_utils.hpp"
 #include <tt-metalium/experimental/sockets/named_shm.hpp>
@@ -12,9 +14,11 @@
 #include <tt-metalium/experimental/sockets/hd_socket_descriptor.hpp>
 #include "tt_metal/distributed/pcie_core_writer.hpp"
 #include <tt-metalium/experimental/sockets/shm_resource_tracker.hpp>
+#include <tt-umd/driver_atomics.hpp>
 #include "tt_metal/impl/buffers/h2d_socket_internal.hpp"
 #include "impl/context/metal_context.hpp"
 #include "impl/context/metal_env_impl.hpp"
+#include "impl/dispatch/host_transfer_stats.hpp"
 #include "distributed/mesh_device_impl.hpp"
 #include "tt_metal/hw/inc/hostdev/socket.h"
 #include "tt_metal/llrt/tt_cluster.hpp"
@@ -22,7 +26,7 @@
 #ifdef TT_METAL_USE_EMULE
 #include "emulated_program_runner.hpp"  // emule::pump_device
 #endif
-#include <tt-metalium/tt_align.hpp>
+#include <tt-metalium/math.hpp>
 #include <tt-metalium/experimental/per_core_allocation/buffer.hpp>
 #include <tt-metalium/experimental/per_core_allocation/mesh_buffer.hpp>
 #include <tt-umd/io_window/io_window.hpp>
@@ -31,7 +35,6 @@
 #include <cstdlib>
 #include <cstring>
 #include <stdexcept>
-#include <sys/mman.h>
 #include <unistd.h>
 
 namespace tt::tt_metal::distributed {
@@ -56,7 +59,7 @@ void advance_h2d_simulator_socket_device(MeshDevice* mesh_device, const MeshCoor
         return;
     }
 
-    cluster.advance_device_execution(mesh_device->get_device(device_coord)->id());
+    cluster.advance_device_execution(internal::get_device(*mesh_device, device_coord)->id());
 }
 
 }  // namespace
@@ -100,10 +103,11 @@ H2DSocketImpl::PinnedBufferInfo H2DSocketImpl::init_bytes_acked_buffer(
     pinned_memory_ =
         tt::tt_metal::experimental::PinnedMemory::Create(*mesh_device, device_range, bytes_acked_buffer_view, true);
 
-    const auto& noc_addr = pinned_memory_->get_noc_addr(mesh_device->get_device(recv_core_.device_coord)->id());
+    const auto& noc_addr =
+        pinned_memory_->get_noc_addr(internal::get_device(*mesh_device, recv_core_.device_coord)->id());
     TT_FATAL(noc_addr.has_value(), "Failed to get NOC address for bytes_acked pinned memory.");
     TT_FATAL(
-        noc_addr.value().device_id == mesh_device->get_device(recv_core_.device_coord)->id(),
+        noc_addr.value().device_id == internal::get_device(*mesh_device, recv_core_.device_coord)->id(),
         "Pinned Memory used for H2D sockets must be mapped to the same device as the receiver core. H2D Sockets cannot "
         "communicate with remote devices");
     return PinnedBufferInfo{
@@ -138,7 +142,8 @@ H2DSocketImpl::PinnedBufferInfo H2DSocketImpl::init_host_data_buffer(
     pinned_memory_ =
         tt::tt_metal::experimental::PinnedMemory::Create(*mesh_device, device_range, host_buffer_view, true);
 
-    const auto& noc_addr = pinned_memory_->get_noc_addr(mesh_device->get_device(recv_core_.device_coord)->id());
+    const auto& noc_addr =
+        pinned_memory_->get_noc_addr(internal::get_device(*mesh_device, recv_core_.device_coord)->id());
     TT_FATAL(noc_addr.has_value(), "Failed to get NOC address for data pinned memory.");
 
     return PinnedBufferInfo{
@@ -173,8 +178,9 @@ void H2DSocketImpl::init_config_buffer(const std::shared_ptr<MeshDevice>& mesh_d
     // On a claimed service core the worker-grid BankManager can't reach L1; allocate from the service-core allocator.
     std::optional<DeviceAddr> preallocated_addr;
     auto& svc = mesh_device->impl().metal_context().get_service_core_manager();
-    auto* recv_device =
-        mesh_device->is_local(recv_core_.device_coord) ? mesh_device->get_device(recv_core_.device_coord) : nullptr;
+    auto* recv_device = mesh_device->is_local(recv_core_.device_coord)
+                            ? internal::get_device(*mesh_device, recv_core_.device_coord)
+                            : nullptr;
     if (recv_device && svc.claimed_cores(recv_device->id()).contains(recv_core_.core_coord)) {
         svc_config_l1_addr_ = svc.allocate_l1(recv_device, recv_core_.core_coord, config_buffer_size);
         preallocated_addr = svc_config_l1_addr_;
@@ -193,8 +199,9 @@ void H2DSocketImpl::init_data_buffer(const std::shared_ptr<MeshDevice>& mesh_dev
     }
 
     auto& svc = mesh_device->impl().metal_context().get_service_core_manager();
-    auto* recv_device =
-        mesh_device->is_local(recv_core_.device_coord) ? mesh_device->get_device(recv_core_.device_coord) : nullptr;
+    auto* recv_device = mesh_device->is_local(recv_core_.device_coord)
+                            ? internal::get_device(*mesh_device, recv_core_.device_coord)
+                            : nullptr;
     if (recv_device && svc.claimed_cores(recv_device->id()).contains(recv_core_.core_coord)) {
         const uint64_t alloc_size = fifo_size_ + pcie_alignment;
         DeviceAddr raw_addr = svc.allocate_l1(recv_device, recv_core_.core_coord, alloc_size);
@@ -291,14 +298,14 @@ void H2DSocketImpl::write_socket_metadata(
         // L2CPU has no MeshBuffer-backed config and no fast-dispatch path; write the
         // struct directly to the caller-provided LIM address.
         const auto& cluster = mesh_device->impl().metal_env().get_cluster();
-        const uint32_t device_id = mesh_device->get_device(recv_core_.device_coord)->id();
+        const uint32_t device_id = internal::get_device(*mesh_device, recv_core_.device_coord)->id();
         cluster.write_core(&md, sizeof(md), tt_cxy_pair(device_id, recv_core_.core_coord), config_buffer_address_);
         return;
     }
 
     if (svc_config_l1_addr_.has_value()) {
         // WriteShard can't reach service cores, so write L1 directly. config_buffer_address_ isn't assigned yet.
-        auto* device = mesh_device->get_device(recv_core_.device_coord);
+        auto* device = internal::get_device(*mesh_device, recv_core_.device_coord);
         std::span<const uint8_t> bytes(reinterpret_cast<const uint8_t*>(&md), sizeof(md));
         tt::tt_metal::detail::WriteToDeviceL1(
             device, recv_core_.core_coord, static_cast<uint32_t>(config_buffer_->address()), bytes);
@@ -331,7 +338,7 @@ void H2DSocketImpl::init_receiver_tlb(const std::shared_ptr<MeshDevice>& mesh_de
         // recv_core_.core_coord is already a TRANSLATED L2CPU NOC coord, so no
         // logical->virtual translation is applied. The window is anchored at the LIM
         // base rather than at 0, because LIM does not start at 0.
-        recv_device_id = mesh_device->get_device(recv_core_.device_coord)->id();
+        recv_device_id = internal::get_device(*mesh_device, recv_core_.device_coord)->id();
         recv_virtual_core = recv_core_.core_coord;
         if (!cluster.is_mock_or_emulated()) {
             receiver_core_window_ = cluster.get_driver()->create_io_window(
@@ -344,7 +351,7 @@ void H2DSocketImpl::init_receiver_tlb(const std::shared_ptr<MeshDevice>& mesh_de
         // Per-device translation (see metal_SocDescriptor::dram_bank_endpoint_coords): the
         // mesh-level translation validates that every device agrees and throws when they do not,
         // which a logical DRAM coord on a harvested mesh does not.
-        IDevice* recv_device = mesh_device->get_device(recv_core_.device_coord);
+        IDevice* recv_device = internal::get_device(*mesh_device, recv_core_.device_coord);
         recv_device_id = recv_device->id();
         recv_virtual_core = recv_device->virtual_core_from_logical_core(recv_core_.core_coord, recv_umd_core_type);
     }
@@ -440,6 +447,7 @@ H2DSocketImpl::H2DSocketImpl(
     pinned_memory_(nullptr),
     h2d_mode_(h2d_mode),
     mesh_device_(mesh_device.get()),
+    transfer_stats_(&mesh_device->impl().metal_context().host_transfer_stats()),
     rank_owns_endpoint_(rank_owns_host_socket_endpoint(mesh_device.get(), recv_core)) {
     MeshCoordinateRangeSet recv_device_range_set;
     recv_device_range_set.merge(MeshCoordinateRange(recv_core_.device_coord));
@@ -501,6 +509,7 @@ H2DSocketImpl::H2DSocketImpl(
     pcie_alignment_(mesh_device->impl().metal_env().get_hal().get_alignment(HalMemType::HOST)),
     pinned_memory_(nullptr),
     mesh_device_(mesh_device.get()),
+    transfer_stats_(&mesh_device->impl().metal_context().host_transfer_stats()),
     rank_owns_endpoint_(rank_owns_host_socket_endpoint(mesh_device.get(), recv_core)),
     dram_l1_noc_offset_(dram_l1_noc_offset),
     recv_core_type_(RecvCoreType::Dram) {
@@ -543,11 +552,11 @@ H2DSocketImpl::H2DSocketImpl(
     md.h2d.data_addr_hi = 0;
     md.h2d.pcie_xy_enc = bytes_acked_info.pcie_xy_enc;
 
-    const CoreCoord virtual_core = mesh_device->get_device(recv_core_.device_coord)
+    const CoreCoord virtual_core = internal::get_device(*mesh_device, recv_core_.device_coord)
                                        ->virtual_core_from_logical_core(recv_core_.core_coord, CoreType::DRAM);
     mesh_device->impl().metal_env().get_cluster().write_core(
-        mesh_device->get_device(recv_core_.device_coord)->id(),
-        tt_cxy_pair(mesh_device->get_device(recv_core_.device_coord)->id(), virtual_core),
+        internal::get_device(*mesh_device, recv_core_.device_coord)->id(),
+        tt_cxy_pair(internal::get_device(*mesh_device, recv_core_.device_coord)->id(), virtual_core),
         std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(&md), sizeof(md)),
         static_cast<uint64_t>(config_buffer_address_) + dram_l1_noc_offset_);
 }
@@ -565,6 +574,7 @@ H2DSocketImpl::H2DSocketImpl(
     pinned_memory_(nullptr),
     h2d_mode_(h2d_mode),
     mesh_device_(&mesh_device),
+    transfer_stats_(&mesh_device.impl().metal_context().host_transfer_stats()),
     rank_owns_endpoint_(rank_owns_host_socket_endpoint(&mesh_device, recv_l2cpu)),
     is_l2cpu_(true) {
     // Helpers below still take a shared_ptr; the socket itself stores only a raw
@@ -596,7 +606,7 @@ H2DSocketImpl::H2DSocketImpl(
     // core and pick up that core's TLB base. Check membership rather than trust it.
     {
         const auto& cluster = mesh_device.impl().metal_env().get_cluster();
-        const uint32_t device_id = mesh_device_ptr->get_device(recv_core_.device_coord)->id();
+        const uint32_t device_id = internal::get_device(*mesh_device_ptr, recv_core_.device_coord)->id();
         const auto l2cpu_cores =
             cluster.get_soc_desc(device_id).get_cores(tt::CoreType::L2CPU, tt::CoordSystem::TRANSLATED);
         const bool is_l2cpu_core = std::any_of(l2cpu_cores.begin(), l2cpu_cores.end(), [this](const auto& c) {
@@ -720,7 +730,7 @@ H2DSocketImpl::~H2DSocketImpl() noexcept {
             config_buffer_.reset();
             data_buffer_.reset();
             auto& svc = mesh_device_->impl().metal_context().get_service_core_manager();
-            auto* recv_device = mesh_device_->get_device(recv_core_.device_coord);
+            auto* recv_device = internal::get_device(*mesh_device_, recv_core_.device_coord);
             if (svc_config_l1_addr_.has_value()) {
                 svc.deallocate_l1(recv_device, recv_core_.core_coord, svc_config_l1_addr_.value());
             }
@@ -754,7 +764,9 @@ H2DSocketImpl::~H2DSocketImpl() noexcept {
 
 void H2DSocketImpl::reserve_bytes(uint32_t num_bytes) {
     uint32_t bytes_free = fifo_size_ - (bytes_sent_ - bytes_acked_);
+    tt::tt_metal::internal::L1EccHaltWatch ecc_watch(mesh_device_);
     while (bytes_free < num_bytes) {
+        ecc_watch.poll();
         advance_h2d_simulator_socket_device(mesh_device_, recv_core_.device_coord);
         tt_driver_atomics::mfence();
         volatile uint32_t bytes_acked_value = bytes_acked_ptr_[0];
@@ -797,6 +809,12 @@ bool H2DSocketImpl::acked_past(uint32_t watermark) {
     volatile uint32_t bytes_acked_value = bytes_acked_ptr_[0];
     bytes_acked_ = bytes_acked_value;
     return bytes_sent_ - bytes_acked_ <= bytes_since_watermark;
+}
+
+void H2DSocketImpl::count_staged_bytes(uint32_t num_bytes) {
+    if (transfer_stats_ != nullptr && transfer_stats_->enabled()) {
+        transfer_stats_->add_bytes(HostTransferCategory::SocketPull, num_bytes);
+    }
 }
 
 void H2DSocketImpl::push_bytes(uint32_t num_bytes) {
@@ -870,7 +888,9 @@ void H2DSocketImpl::barrier(std::optional<uint32_t> timeout_ms) {
     refresh_connector_write_state();
     volatile uint32_t bytes_acked_value = bytes_acked_ptr_[0];
     auto start_time = std::chrono::high_resolution_clock::now();
+    tt::tt_metal::internal::L1EccHaltWatch ecc_watch(mesh_device_);
     while (bytes_sent_ - bytes_acked_value != 0) {
+        ecc_watch.poll();
         refresh_connector_write_state();
         advance_h2d_simulator_socket_device(mesh_device_, recv_core_.device_coord);
         tt_driver_atomics::mfence();
@@ -880,6 +900,7 @@ void H2DSocketImpl::barrier(std::optional<uint32_t> timeout_ms) {
                                   std::chrono::high_resolution_clock::now() - start_time)
                                   .count();
             if (elapsed_ms > timeout_ms.value()) {
+                ecc_watch.check_now();
                 TT_THROW(
                     "Timeout waiting for device to send acknowledgement over H2D socket. Bytes sent: {}, Bytes "
                     "acknowledged: {}",
@@ -899,11 +920,13 @@ void H2DSocketImpl::write(void* data, uint32_t num_pages) {
     this->reserve_bytes(num_bytes);
 
     if (h2d_mode_ == H2DMode::HOST_PUSH) {
+        ScopedHostTransfer transfer_stats(transfer_stats_, HostTransferCategory::SocketPush, num_bytes);
         pcie_writer(data, num_bytes, data_addr);
         tt_driver_atomics::sfence();
     } else {
         uint32_t* data_ptr = host_buffer_.get() + (write_ptr_ / sizeof(uint32_t));
         std::memcpy(data_ptr, data, num_bytes);
+        this->count_staged_bytes(num_bytes);
     }
     this->push_bytes(num_bytes);
     this->notify_receiver();
@@ -930,11 +953,13 @@ bool H2DSocketImpl::try_write(void* data, uint32_t num_pages) {
 
     auto data_addr = aligned_data_buf_start_ + write_ptr_;
     if (h2d_mode_ == H2DMode::HOST_PUSH) {
+        ScopedHostTransfer transfer_stats(transfer_stats_, HostTransferCategory::SocketPush, num_bytes);
         pcie_writer(data, num_bytes, data_addr);
         tt_driver_atomics::sfence();
     } else {
         uint32_t* data_ptr = host_buffer_.get() + (write_ptr_ / sizeof(uint32_t));
         std::memcpy(data_ptr, data, num_bytes);
+        this->count_staged_bytes(num_bytes);
     }
     this->push_bytes(num_bytes);
     this->notify_receiver();
@@ -967,9 +992,15 @@ uint32_t H2DSocketImpl::try_stage(const uint8_t* const* pages, uint32_t num_page
         if (h2d_mode_ == H2DMode::HOST_PUSH) {
             stage_buffer_.resize(num_bytes);
             gather(stage_buffer_.data());
+            ScopedHostTransfer transfer_stats(transfer_stats_, HostTransferCategory::SocketPush, num_bytes);
             pcie_writer(stage_buffer_.data(), num_bytes, aligned_data_buf_start_ + write_ptr_);
+            // publish_staged() fences the pages later. With stats on, fence here so the timed push includes it.
+            if (transfer_stats_ != nullptr && transfer_stats_->enabled()) {
+                tt_driver_atomics::sfence();
+            }
         } else {
             gather(reinterpret_cast<uint8_t*>(host_buffer_.get()) + write_ptr_);
+            this->count_staged_bytes(num_bytes);
         }
         this->push_bytes(num_bytes);
         staged += run;

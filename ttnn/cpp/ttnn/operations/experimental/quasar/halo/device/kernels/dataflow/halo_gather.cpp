@@ -299,15 +299,24 @@ void kernel_main() {
     const uint16_t my_noc_x = my_x[noc.get_noc_id()];
     const uint16_t my_noc_y = my_y[noc.get_noc_id()];
 
+#ifndef SKIP_UNTILIZE
+    // Blocks the compute untilizes on this core: the last block the gather config references + 1, which can be
+    // fewer than the input shard holds (e.g. the padded tail rows of the last core).
+    const uint32_t total_blocks = get_arg(args::total_blocks);
+#endif
+
 #ifdef SRC_PRODUCER
     // reader0 fake-pushes the borrowed SRC DFB: the input shard is already resident
     // (borrowed_from = IN), so we only need to advance the FIFO front pointer so the
-    // compute's wait_front(src) succeeds.  No data is moved. src_cb lives to kernel exit: its destructor
-    // waits for the compute to pop the whole shard, which needs this reader to drain untilize_out first.
-    constexpr uint32_t input_npages = get_arg(args::input_npages);
+    // compute's wait_front(src) succeeds.  No data is moved. Push exactly the pages the compute pops
+    // (total_blocks blocks), not the whole shard: src_cb lives to kernel exit and its destructor waits for
+    // the compute to pop everything pushed, which needs this reader to drain untilize_out first.
+    const uint32_t src_npages = total_blocks * total_tiles_in_single_block;
     DataflowBuffer src_cb(dfb::src);
-    src_cb.reserve_back(static_cast<uint16_t>(input_npages));
-    src_cb.push_back(static_cast<uint16_t>(input_npages));
+    if (src_npages > 0) {
+        src_cb.reserve_back(static_cast<uint16_t>(src_npages));
+        src_cb.push_back(static_cast<uint16_t>(src_npages));
+    }
 #endif
 
     // ----- Padding fill -----
@@ -356,6 +365,17 @@ void kernel_main() {
     uint16_t current_config_index = 0;
     uint16_t number_of_segments_remaining = config[current_config_index++];
 
+#ifndef SKIP_UNTILIZE
+    // The compute untilizes every block in [0, total_blocks) and sends this reader the ones at
+    // block_start_offset, block_start_offset + block_stride, ...  This reader has to pop all of them, including
+    // blocks after its last referenced one (or all of them if it has no transfers); otherwise the compute's
+    // untilize_out drain never completes.
+    DataflowBuffer in_cb(dfb::untilize_out);
+    const uint32_t own_blocks =
+        total_blocks > block_start_offset ? (total_blocks - block_start_offset + block_stride - 1) / block_stride : 0;
+    uint32_t own_blocks_popped = 0;
+#endif
+
     if (number_of_segments_remaining != 0) {
         // The gather source: untilized tiles (tiled path) or the resident input shard (skip path).
         uint32_t in_base_l1_addr = 0;
@@ -367,7 +387,6 @@ void kernel_main() {
 
 #ifndef SKIP_UNTILIZE
         {
-            DataflowBuffer in_cb(dfb::untilize_out);
             in_cb.wait_front(total_tiles_in_single_block);
             in_base_l1_addr = in_cb.get_read_ptr();
 
@@ -388,6 +407,7 @@ void kernel_main() {
                     while (src_offset >= block_boundary_offset) {
                         noc.async_write_barrier();
                         in_cb.pop_front(total_tiles_in_single_block);
+                        own_blocks_popped++;
                         in_cb.wait_front(total_tiles_in_single_block);
                         in_base_l1_addr = in_cb.get_read_ptr();
                         block_boundary_offset += block_size_height * block_stride;
@@ -407,6 +427,7 @@ void kernel_main() {
                 number_of_segments_remaining--;
             }
             in_cb.pop_front(total_tiles_in_single_block);
+            own_blocks_popped++;
         }
 #else
         {
@@ -443,6 +464,14 @@ void kernel_main() {
         }
 #endif
     }
+
+#ifndef SKIP_UNTILIZE
+    // Pop the blocks no transfer referenced (no data to send).
+    for (; own_blocks_popped < own_blocks; own_blocks_popped++) {
+        in_cb.wait_front(total_tiles_in_single_block);
+        in_cb.pop_front(total_tiles_in_single_block);
+    }
+#endif
 
     noc.async_read_barrier();
     noc.async_write_barrier();
