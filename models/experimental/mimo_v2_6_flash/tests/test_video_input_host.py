@@ -8,7 +8,8 @@
   items it processes, so the metadata must travel with the frames); the video block vLLM writes (from the item's
   fields) equals the checkpoint processor's own for the same frame times, token for token; MIMO_VIDEO_TIMESTAMPS=vllm
   gives upstream's prompt; profiling's dummy videos get metadata and go through.
-* Pixel caps: MIMO_VIDEO_MAX_PIXELS caps every frame's merged tokens; MIMO_VIDEO_TOTAL_MAX_PIXELS a clip's.
+* Pixel caps: MIMO_VIDEO_MAX_PIXELS caps every frame; MIMO_VIDEO_TOTAL_MAX_PIXELS a clip (spread over its frames);
+  the defaults give Xiaomi's API's frame sizes; frames are resized before the processor exactly as it would.
 """
 
 import os
@@ -150,13 +151,44 @@ def test_pixel_caps(processors, monkeypatch, frame_cap, total_cap):
 
     frames = vi.sample_video(num_frames=64, size=(1280, 720))
     meta = loader_metadata(64)
+    monkeypatch.setattr(video_input, "VIDEO_MAX_PIXELS", None)
+    monkeypatch.setattr(video_input, "VIDEO_TOTAL_MAX_PIXELS", None)
     full = run(processors["ours"], (frames, meta))[2]["video_grid_thw"].data.tolist()
-    assert full == [32, 44, 80]  # 880 merged tokens a grid
+    assert full == [32, 44, 80]  # the checkpoint's sizes: 880 merged tokens a grid
     monkeypatch.setattr(video_input, "VIDEO_MAX_PIXELS", frame_cap)
     monkeypatch.setattr(video_input, "VIDEO_TOTAL_MAX_PIXELS", total_cap)
     t, h, w = run(processors["ours"], (frames, meta))[2]["video_grid_thw"].data.tolist()
-    per_grid = h * w // 4
-    if frame_cap:
-        assert per_grid * 1024 <= frame_cap and per_grid >= 200, (t, h, w)
-    else:
-        assert t * per_grid * 1024 <= total_cap and t * per_grid >= 0.8 * total_cap / 1024, (t, h, w)
+    frame_px = h * w * 256
+    cap = frame_cap or total_cap // 64  # the clip total is spread over its frames
+    assert frame_px <= cap and frame_px >= 0.8 * cap, (t, h, w)
+
+
+def test_xiaomi_frame_sizes(processors):
+    """The defaults are Xiaomi's API's: a 1280x720 frame is 736x384 (276 merged tokens a grid), and a 523 s clip
+    sampled at 2 fps (1046 frames) gets 268435456 / 1046 pixels a frame (231 tokens a grid), as its token counts show.
+    """
+    from models.experimental.mimo_v2_6_flash.tt.video_input import processor_frame_size
+
+    p = processors["ours"].info.get_hf_processor().mimo_processor
+    resize = (p._vid_kw, p.patch_size * p.merge_size)
+    assert processor_frame_size(*resize, 720, 1280, 64) == (384, 736)
+    h, w = processor_frame_size(*resize, 720, 1280, 1046)
+    assert h * w // 1024 == 231, (h, w)
+    _, _, item = run(processors["ours"], (vi.sample_video(num_frames=64, size=(1280, 720)), loader_metadata(64)))
+    t, gh, gw = item["video_grid_thw"].data.tolist()
+    assert (t, gh * gw // 4) == (32, 276)
+
+
+def test_frames_resized_before_the_processor_as_it_would(processors):
+    """mimo_video resizes the frames to the processor's size first (chunks of RESIZE_CHUNK, so a long clip's frames never
+    exist as full-size floats); the processor's own resize is then the identity, and its pixels equal what it makes
+    from the full-size frames."""
+    from models.experimental.mimo_v2_6_flash.tt import video_input
+
+    frames = vi.sample_video(num_frames=40, size=(1280, 720))
+    meta = loader_metadata(40)
+    _, _, item = run(processors["ours"], (frames, meta))
+    hf = processors["ours"].info.get_hf_processor()
+    full = torch.from_numpy(frames).permute(0, 3, 1, 2).float()
+    ref = hf(videos=[(full, video_input.loader_timestamps(meta, 40))], return_tensors="pt")
+    assert torch.equal(item["pixel_values_videos"].data.float(), ref["pixel_values_videos"].to(torch.bfloat16).float())

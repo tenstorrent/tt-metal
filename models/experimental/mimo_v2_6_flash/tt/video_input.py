@@ -19,10 +19,16 @@ most N frames) and returns them with their source indices and fps (``frames_indi
   made uniform: the first sampled frame's time and the sampled frames' mean interval, each rounded so it and a
   grid's span (two frames) are exact in bf16 (and so in every fp32 / fp64 sum both sides make): within 0.4 % of the
   true times. ``vllm`` keeps upstream's 1 fps labels.
-* ``VideoInfoMixin`` also applies MIMO_VIDEO_MAX_PIXELS, which caps a frame's pixels (the checkpoint allows
-  8388608, so a 1280x720 frame keeps 880 merged tokens; Xiaomi's API sends such frames at ~280: 286720 pixels) and
-  MIMO_VIDEO_TOTAL_MAX_PIXELS a clip's (checkpoint: 268435456); the processor shrinks every frame of a clip to
-  ``min(frame cap, total cap * 2 / frames)``. Unset: the checkpoint's values.
+* ``VideoInfoMixin`` also applies Xiaomi's API's frame sizes (measured on its token counts, which these reproduce
+  exactly): every frame at most MIMO_VIDEO_MAX_PIXELS (307200: a 1280x720 frame becomes 736x384, 276 merged tokens a
+  frame pair; the checkpoint allows 8388608, 880) and at most MIMO_VIDEO_TOTAL_MAX_PIXELS / frames (268435456, the
+  checkpoint's clip total: a 523 s clip sampled at 2 fps gets 231 tokens a pair). The checkpoint's processor divides
+  its clip total by frame pairs, not frames, so it gets half the value. ``0`` turns a cap off (the checkpoint's).
+* ``mimo_video`` resizes the frames to the size the processor will give them before turning them into floats, a few
+  at a time, with the processor's own interpolation (the processor's resize is then the identity): a long clip's
+  frames as floats at full size (4800 frames of a 40-minute 720p clip at 2 fps: 53 GB) never exist.
+
+Frame sampling is vLLM's loader's: Xiaomi's is ``--media-io-kwargs '{"video": {"num_frames": -1, "fps": 2}}'``.
 """
 
 import os
@@ -35,13 +41,16 @@ if VIDEO_TIMESTAMPS not in ("loader", "vllm"):
     raise ValueError(f"MIMO_VIDEO_TIMESTAMPS={VIDEO_TIMESTAMPS!r}: loader or vllm")
 
 
-def _env_pixels(name):
+def _env_pixels(name, default):
     value = os.environ.get(name)
-    return int(float(value)) if value else None
+    value = int(float(value)) if value else default
+    return value or None
 
 
-VIDEO_MAX_PIXELS = _env_pixels("MIMO_VIDEO_MAX_PIXELS")
-VIDEO_TOTAL_MAX_PIXELS = _env_pixels("MIMO_VIDEO_TOTAL_MAX_PIXELS")
+# Xiaomi's API's frame sizes (module docstring); 0 keeps the checkpoint's.
+VIDEO_MAX_PIXELS = _env_pixels("MIMO_VIDEO_MAX_PIXELS", 307200)
+VIDEO_TOTAL_MAX_PIXELS = _env_pixels("MIMO_VIDEO_TOTAL_MAX_PIXELS", 268435456)
+RESIZE_CHUNK = 32  # frames turned into floats and resized at a time
 
 
 def loader_timestamps(metadata, num_frames):
@@ -89,14 +98,48 @@ def upstream_timestamps(num_frames):
     return torch.arange(num_frames, dtype=torch.float32)
 
 
-def mimo_video(video, metadata=None):
+def processor_frame_size(vid_kw, factor, height, width, num_frames, temporal_patch=2):
+    """(h, w) the checkpoint's processor gives every frame of a ``num_frames`` clip (MiMoVLProcessor.process_video)."""
+    from vllm.transformers_utils.processors.mimo_v2_omni import _smart_resize
+
+    max_px = max(
+        vid_kw["min_pixels"],
+        min(vid_kw["total_max_pixels"] * temporal_patch // max(num_frames, 1), vid_kw["max_pixels"]),
+    )
+    return _smart_resize(height, width, factor, vid_kw["min_pixels"], max_px)
+
+
+def _resized_frames(video, size):
+    """[T, H, W, C] uint8 frames -> float [T, C, h, w] at ``size``, RESIZE_CHUNK frames at a time, with the
+    processor's interpolation (_transform_batch: bilinear, align_corners=False), which maps each frame on its own."""
+    import torch.nn.functional as F
+
+    frames = torch.from_numpy(np.asarray(video)) if not isinstance(video, torch.Tensor) else video
+    if not (frames.ndim == 4 and frames.shape[-1] in (1, 3, 4)):
+        return _frames_tchw(frames)
+    out = []
+    for k in range(0, frames.shape[0], RESIZE_CHUNK):
+        chunk = frames[k : k + RESIZE_CHUNK].permute(0, 3, 1, 2).float()
+        if tuple(chunk.shape[-2:]) != tuple(size):
+            chunk = F.interpolate(chunk, tuple(size), mode="bilinear", align_corners=False)
+        out.append(chunk)
+    return torch.cat(out)
+
+
+def mimo_video(video, metadata=None, resize=None):
     """A video as the checkpoint's processor takes it: (frames float [T, C, H, W], times float32 [T]), the loader's
-    times with MIMO_VIDEO_TIMESTAMPS=loader and metadata that describes the frames, else upstream's."""
+    times with MIMO_VIDEO_TIMESTAMPS=loader and metadata that describes the frames, else upstream's. ``resize``:
+    (vid_kw, factor) of the processor, to resize the frames to its size first (module docstring)."""
     if isinstance(video, tuple) and len(video) == 2 and all(isinstance(v, torch.Tensor) for v in video):
         return video
     if isinstance(video, tuple) and len(video) == 2 and (video[1] is None or isinstance(video[1], dict)):
         video, metadata = video
-    frames = _frames_tchw(video)
+    shape = tuple(getattr(video, "shape", ()))
+    if resize is not None and len(shape) == 4 and shape[-1] in (1, 3, 4):
+        size = processor_frame_size(*resize, shape[1], shape[2], shape[0])
+        frames = _resized_frames(video, size)
+    else:
+        frames = _frames_tchw(video)
     times = loader_timestamps(metadata, frames.shape[0]) if VIDEO_TIMESTAMPS == "loader" else None
     return frames, (upstream_timestamps(frames.shape[0]) if times is None else times)
 
@@ -112,7 +155,9 @@ class VideoTimestampsMixin:
         if not videos:
             return data, passthrough
         metadata = _metadata_list(mm_items.get("video"), len(videos))
-        out = [None if v is None else mimo_video(v, m) for v, m in zip(videos, metadata)]
+        processor = self.info.get_hf_processor().mimo_processor
+        resize = (processor._vid_kw, processor.patch_size * processor.merge_size)
+        out = [None if v is None else mimo_video(v, m, resize) for v, m in zip(videos, metadata)]
         return {**data, "videos": out}, passthrough
 
 
@@ -127,11 +172,12 @@ class VideoInfoMixin:
 
     def get_hf_processor(self, **kwargs):
         processor = super().get_hf_processor(**kwargs)
-        kw = processor.mimo_processor._vid_kw
+        p = processor.mimo_processor
+        kw = p._vid_kw
         if VIDEO_MAX_PIXELS:
             kw["max_pixels"] = VIDEO_MAX_PIXELS
-        if VIDEO_TOTAL_MAX_PIXELS:
-            kw["total_max_pixels"] = VIDEO_TOTAL_MAX_PIXELS
+        if VIDEO_TOTAL_MAX_PIXELS:  # the processor divides it by frame pairs (process_video): half for "per frame"
+            kw["total_max_pixels"] = VIDEO_TOTAL_MAX_PIXELS // (p.temporal_patch_size * p.temporal_compression_ratio)
         return processor
 
 
