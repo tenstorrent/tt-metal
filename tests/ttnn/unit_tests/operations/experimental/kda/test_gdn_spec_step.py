@@ -1130,6 +1130,21 @@ def test_ring_page_idx_wrong_shape_rejected(device, expect_error):
         c.run(ring_page_idx=_ring_idx_dev(device, torch.zeros(B, T, dtype=torch.int32)))
 
 
+def test_ring_pool2_of_smaller_tiles_rejected(device, expect_error):
+    """The kernels read ring_pool2 with ring's page size (32x32 tiles): a ring_pool2 of 16x32 tiles, FLOAT32 and with
+    enough pages, is refused on the host."""
+    g, B, T = GEOS[0], 2, 4
+    c = Case(device, g, B, T, seed=1, R=round_up32(B * T))
+    gen = torch.Generator().manual_seed(2)
+    lay = RingLayout(c, "two_pools", gen)
+    pools0, _ = _use_layout(device, c, lay, gen)
+    pool2 = ttnn.from_torch(
+        pools0[1], dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, tile=ttnn.Tile((16, 32)), device=device
+    )
+    with expect_error(RuntimeError, "ring_pool2 must use 32x32 tiles"):
+        c.run(ring_page_idx=_ring_idx_dev(device, lay.index_host(c)), ring_pool2=pool2)
+
+
 @pytest.mark.parametrize("device_params", [{"trace_region_size": 16_000_000}], indirect=True)
 @pytest.mark.parametrize("B,T", [(8, 4)])
 def test_ring_page_idx_trace_follows_index(device, B, T):
