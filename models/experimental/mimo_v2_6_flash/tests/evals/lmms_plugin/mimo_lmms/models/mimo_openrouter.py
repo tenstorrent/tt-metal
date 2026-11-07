@@ -271,6 +271,7 @@ class OpenRouterChat(lmms):
         self.video_cache = os.path.splitext(self.journal)[0] + "_video_cache"
         self.raw_log = os.path.splitext(self.journal)[0] + ".raw.jsonl" if _truthy(raw_log) else None
         self._lock = threading.Lock()
+        self._transcode_locks = {}  # one lock per cached transcode: Video-MME asks 3 questions per video concurrently
         self._done = self._load_journal()
         self.stats = {"requests": 0, "from_journal": 0, "ok": 0, "failed": 0, "retried": 0, "status": {}}
         self.stats.update(input_tokens=0, output_tokens=0, reasoning_tokens=0, finish_length=0, empty_content=0)
@@ -348,40 +349,47 @@ class OpenRouterChat(lmms):
         os.makedirs(self.video_cache, exist_ok=True)
         key = hashlib.sha256(f"{os.path.abspath(path)}:{size}:{self.video_max_bytes}".encode()).hexdigest()[:24]
         out = os.path.join(self.video_cache, key + ".mp4")
-        if not os.path.exists(out):
-            ffmpeg = shutil.which("ffmpeg")
-            if ffmpeg is None:
-                try:  # the static binary of the imageio-ffmpeg wheel
-                    import imageio_ffmpeg
-
-                    ffmpeg = imageio_ffmpeg.get_ffmpeg_exe()
-                except Exception:  # noqa: BLE001 - no ffmpeg anywhere: raise below
-                    ffmpeg = None
-            if ffmpeg is None:
-                raise RuntimeError(
-                    f"{path} is {size} bytes (> video_max_mb) or not mp4/webm/mov, and ffmpeg is missing"
-                )
-            tmp = out + ".tmp.mp4"
-            # Same resolution and frame rate, H.264 at a quality setting, no audio track (the eval is video-only).
-            cmd = [
-                ffmpeg,
-                "-hide_banner",
-                "-loglevel",
-                "error",
-                "-y",
-                "-i",
-                path,
-                "-an",
-                "-c:v",
-                "libx264",
-                "-preset",
-                "veryfast",
-            ]
-            cmd += ["-crf", "28", "-pix_fmt", "yuv420p", "-movflags", "+faststart", tmp]
-            subprocess.run(cmd, check=True, capture_output=True)
-            os.replace(tmp, out)
+        with self._lock:
+            transcode_lock = self._transcode_locks.setdefault(out, threading.Lock())
+        with transcode_lock:
+            if not os.path.exists(out):
+                self._transcode(path, size, out)
         with open(out, "rb") as f:
             return f.read(), "video/mp4"
+
+    def _transcode(self, path, size, out):
+        """Re-encode `path` (same resolution and frame rate, H.264, no audio) into the cache file `out`."""
+        ffmpeg = shutil.which("ffmpeg")
+        if ffmpeg is None:
+            try:  # the static binary of the imageio-ffmpeg wheel
+                import imageio_ffmpeg
+
+                ffmpeg = imageio_ffmpeg.get_ffmpeg_exe()
+            except Exception:  # noqa: BLE001 - no ffmpeg anywhere: raise below
+                ffmpeg = None
+        if ffmpeg is None:
+            raise RuntimeError(f"{path} is {size} bytes (> video_max_mb) or not mp4/webm/mov, and ffmpeg is missing")
+        # A per-process / per-thread temporary name: other processes (another endpoint's run sharing the cache)
+        # may encode the same video at the same time; the last os.replace wins with identical bytes.
+        tmp = f"{out}.{os.getpid()}.{threading.get_ident()}.tmp.mp4"
+        # Same resolution and frame rate, H.264 at a quality setting, no audio track (the eval is video-only).
+        cmd = [
+            ffmpeg,
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-y",
+            "-i",
+            path,
+            "-an",
+            "-c:v",
+            "libx264",
+            "-preset",
+            "veryfast",
+        ]
+        cmd += ["-crf", "28", "-pix_fmt", "yuv420p", "-movflags", "+faststart", tmp]
+        subprocess.run(cmd, check=True, capture_output=True)
+        os.replace(tmp, out)
 
     def _video_part(self, path):
         if path.startswith(("http://", "https://")):
