@@ -53,10 +53,12 @@ class MoEFused:
         down_bal_plan,
         gate_up_readers=3,
         down_readers=3,
+        k_grouped=False,
     ):
         """router: the verify pass's router LinearStream (out_mode 4, one core). real_inter: the unpadded intermediate
         size per device. down_bal_plan: (bank_cols, seg_inter) of the balanced down layout (experts/weights.py
-        load_decode_down_bal). Placement (fused_decode/stream.py row_placement): per DRAM bank its gate_up_readers
+        load_decode_down_bal). k_grouped: the expert decode copies are K-grouped BFP4 (transposed tiles,
+        experts/weights.py DecodeExpertWeights.k_grouped). Placement (fused_decode/stream.py row_placement): per DRAM bank its gate_up_readers
         nearest row cores to gate|up (those whose pairs are all padding dropped), the rest of the row's cores to down,
         as many as its columns need (4 per core)."""
         # the balanced down layout was planned for these reader counts (fused_decode/stream.py down_bal_plan defaults
@@ -81,6 +83,7 @@ class MoEFused:
             real_inter=real_inter,
             rot=EXPERT_BANK_ROT,
             placed=gp,
+            k_grouped=k_grouped,
         )
         g_used = {(c.x, c.y) for c, *_ in self.gate_up.assignments}
         dp = [(c, b, r) for b in sorted(rp) for r, c in enumerate([c for c in rp[b] if (c.x, c.y) not in g_used])]
@@ -94,6 +97,7 @@ class MoEFused:
             placed=dp,
             bank_cols=down_bal_plan[0],
             seg_inter=down_bal_plan[1],
+            k_grouped=k_grouped,
         )
         self.G, self.D = self.gate_up.cores, self.down.cores
         self.R = router.cores

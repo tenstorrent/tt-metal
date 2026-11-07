@@ -97,12 +97,15 @@ class ExpertGateUpUnion(_BankStreamOp):
         weight_dtype=ttnn.bfloat4_b,
         rot=0,
         placed=None,
+        k_grouped=False,
     ):
         """dense_silu: plain silu(g) * u (a dense MLP run as one union expert, e.g. the DFlash drafter).
         real_inter: the unpadded intermediate size; cores whose column pairs are all padding are dropped (their act
         tiles stay zero, as do the matching down weights). rot: the weights' bank rotation (_BankStreamOp); placed:
-        explicit reader cores (_BankStreamOp)."""
+        explicit reader cores (_BankStreamOp). k_grouped: K-grouped BFP4 weights, every tile stored transposed
+        (fused_decode/stream.py stream_gate_up_layout transposed=True)."""
         super().__init__(mesh_device, readers, rot=rot, placed=placed)
+        self.k_grouped = k_grouped
         self.dense_silu = dense_silu
         self.max_experts = max_experts
         self.rows = rows
@@ -186,7 +189,10 @@ class ExpertGateUpUnion(_BankStreamOp):
             writer_rt,
             compute_ct,
             "gate_up_union",
-            defines=[("ROWS", str(M))] + ([("DENSE_SILU", "1")] if self.dense_silu else []) + list(extra_defines or []),
+            defines=[("ROWS", str(M))]
+            + ([("DENSE_SILU", "1")] if self.dense_silu else [])
+            + ([("W_TRANSPOSED", "1")] if self.k_grouped else [])
+            + list(extra_defines or []),
         )
         return program, [w_stream, x, union, weights, ident, act]
 
@@ -212,13 +218,16 @@ class ExpertDownUnion(_BankStreamOp):
         placed=None,
         bank_cols=None,
         seg_inter=None,
+        k_grouped=False,
     ):
         """num_buffers: weight blocks in the reader's ring (2 when the blocks are large). rot: the weights' bank
         rotation (_BankStreamOp). skip_pad: drop the cores whose output columns are all past `hidden` (padding).
         bank_cols (the balanced layout, fused_decode/stream.py down_bank_columns / stream_down_bal_layout; `placed`
         only): (first output column, count) per DRAM bank, split over that bank's placed cores (<= 4 columns each, a
         per-core count: runtime args); seg_inter: the K tiles per segment before the bias tile (the unpadded
-        intermediate's, not inter_pad's)."""
+        intermediate's, not inter_pad's). k_grouped: K-grouped BFP4 weights, every tile stored transposed
+        (fused_decode/stream.py stream_down_layout transposed=True)."""
+        self.k_grouped = k_grouped
         self.balanced = bank_cols is not None
         if self.balanced:
             assert placed is not None
@@ -344,6 +353,7 @@ class ExpertDownUnion(_BankStreamOp):
             "down_union",
             compute_rt=compute_rt if self.balanced else None,
             defines=list(extra_defines)
+            + ([("W_TRANSPOSED", "1")] if self.k_grouped else [])
             + (
                 [
                     ("D_NCOLS_ARG", str(5 + len(extra_reader_rt or []))),

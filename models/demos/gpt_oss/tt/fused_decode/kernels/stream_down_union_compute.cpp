@@ -26,7 +26,11 @@ void kernel_main() {
     constexpr uint32_t ncols = cols;
 #endif
 
+#ifdef W_TRANSPOSED
+    constexpr bool transpose = true;  // K-grouped weight tiles, stored [n, k] (the identity tile is symmetric)
+#else
     constexpr bool transpose = false;
+#endif
     constexpr auto dest_layout = CustomMmDestLayout::DefaultSplitAcc;
     custom_mm_block_init<transpose, dest_layout>(cb_in0, cb_w, cb_out);
 

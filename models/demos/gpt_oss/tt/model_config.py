@@ -329,7 +329,8 @@ class ModelArgs:
 
         fused_decode: the model about to be built uses the fused decode layers (fused_decode/), whose
         decode-only weights are only written by a fused build; a marker from a non-fused build of the same
-        model (e.g. batch > 1 on the same mesh) does not cover them."""
+        model (e.g. batch > 1 on the same mesh) does not cover them, nor does one that holds no fused decode expert
+        tensors of the requested format (fused_decode/config.py fused_expert_cache_tag: dtypes and BFP4 rounding)."""
         if os.getenv("GPT_OSS_FORCE_MODEL_LOAD") == "1":
             return False
         cache_path = self.weight_cache_path(dtype)
@@ -350,10 +351,28 @@ class ModelArgs:
             return False
         if fused_decode and meta.get("fused_decode_weights") != self.FUSED_DECODE_WEIGHTS_VERSION:
             return False
+        if fused_decode and self._fused_decode_expert_dtype() not in self._recorded_expert_dtypes(meta):
+            return False
         if dense_moe and meta.get("dense_moe_decode_weights") != self.DENSE_MOE_DECODE_WEIGHTS_VERSION:
             return False
         # Belt-and-suspenders: the cache dir must still actually hold tensor files.
         return any(cache_path.glob("*.tensorbin"))
+
+    def _fused_decode_expert_dtype(self):
+        """The fused decode's expert tensors' marker tag (fused_decode/config.py fused_expert_cache_tag): the
+        decode-only copies' or the ND experts' dtypes and BFP4 rounding."""
+        from models.demos.gpt_oss.tt.fused_decode.config import fused_expert_cache_tag
+
+        hf = getattr(self, "hf_config", None)
+        return fused_expert_cache_tag(self.mesh_device.shape[1], getattr(hf, "num_local_experts", 32))
+
+    @staticmethod
+    def _recorded_expert_dtypes(meta):
+        """The fused decode expert formats a cache marker records (a marker from before the record: ttnn-rounded BFP4
+        decode copies)."""
+        if "fused_decode_expert_dtypes" in meta:
+            return list(meta["fused_decode_expert_dtypes"])
+        return ["bfp4"] if meta.get("fused_decode_weights") else []
 
     def mark_weight_cache_complete(self, dtype, fused_decode=False, dense_moe=False):
         """Record that the ttnn weight cache for this (model, dtype, mesh shape) was fully
@@ -383,6 +402,10 @@ class ModelArgs:
                             self.FUSED_DECODE_WEIGHTS_VERSION
                             if fused_decode
                             else previous.get("fused_decode_weights", False)
+                        ),
+                        "fused_decode_expert_dtypes": sorted(
+                            set(self._recorded_expert_dtypes(previous))
+                            | ({self._fused_decode_expert_dtype()} if fused_decode else set())
                         ),
                         "dense_moe_decode_weights": (
                             self.DENSE_MOE_DECODE_WEIGHTS_VERSION

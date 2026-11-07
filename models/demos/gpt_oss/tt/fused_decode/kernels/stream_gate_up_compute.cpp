@@ -69,7 +69,11 @@ void kernel_main() {
     constexpr uint32_t inv_alpha = get_compile_time_arg_val(10);  // float bits
     constexpr uint32_t one = get_compile_time_arg_val(11);        // float bits
 
+#ifdef W_TRANSPOSED
+    constexpr bool transpose = true;  // K-grouped weight tiles, stored [n, k]
+#else
     constexpr bool transpose = false;
+#endif
     constexpr auto dest_layout = CustomMmDestLayout::DefaultSplitAcc;
     custom_mm_block_init<transpose, dest_layout>(cb_x, cb_w, cb_act);
 

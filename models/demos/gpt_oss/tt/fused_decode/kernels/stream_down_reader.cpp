@@ -6,7 +6,9 @@
 // Per DRAM bank the down weights are stored expert-major, then output column, then K tile (I_pad / 32 weight tiles
 // + 1 bias tile), so one (expert, column) segment is contiguous. For every output column this core owns, the
 // segments of the k routed experts are read back to back into one K = k * seg_tiles block: the compute kernel
-// reduces the score-weighted expert sum as a single matmul over that block.
+// reduces the score-weighted expert sum as a single matmul over that block. A segment is read as full_packets
+// packets of packet_bytes plus a tail packet of tail_bytes (BFP4: one packet; BFP8: 25 tiles of 1088 B exceed the
+// NOC burst, so 13 + 12 tiles); the tail packets of a column are issued after its full ones, one size change each way.
 //
 // runtime args: [w_addr, idx_addr, bank_id, vc, reader_offset_bytes]
 
@@ -29,11 +31,16 @@ void kernel_main() {
     constexpr uint32_t expert_stride = get_compile_time_arg_val(5);
     constexpr uint32_t tile_bytes = get_compile_time_arg_val(6);
     constexpr auto idx_args = TensorAccessorArgs<7>();
+    constexpr uint32_t packet_bytes = get_compile_time_arg_val(idx_args.next_compile_time_args_offset());
+    constexpr uint32_t tail_bytes = get_compile_time_arg_val(idx_args.next_compile_time_args_offset() + 1);
 
     constexpr uint32_t seg_bytes = seg_tiles * tile_bytes;
     constexpr uint32_t block_tiles = num_sel * seg_tiles;
     constexpr uint32_t block_bytes = num_sel * seg_bytes;
-    static_assert(seg_bytes <= NOC_MAX_BURST_SIZE, "one expert segment must fit one NOC packet");
+    constexpr uint32_t full_packets = (seg_bytes - tail_bytes) / packet_bytes;
+    static_assert(full_packets >= 1 && full_packets * packet_bytes + tail_bytes == seg_bytes, "segment packet split");
+    static_assert(tail_bytes < packet_bytes, "the tail packet is the short one");
+    static_assert(packet_bytes <= NOC_MAX_BURST_SIZE, "a segment packet must fit one NOC burst");
 
     cb_reserve_back(cb_idx, 1);
     const uint32_t idx_l1 = get_write_ptr(cb_idx);
@@ -48,7 +55,7 @@ void kernel_main() {
 
     const uint64_t w_base = get_noc_addr_from_bank_id<true>(bank_id, w_addr);
     reset_noc_trid_barrier_counter(NOC_CLEAR_OUTSTANDING_REQ_MASK, noc_index);
-    noc_async_read_one_packet_set_state<true>(w_base, seg_bytes, vc);
+    noc_async_read_one_packet_set_state<true>(w_base, packet_bytes, vc);
 
     constexpr uint32_t num_buffers = 3;
     constexpr uint32_t extra_in_flight = 1;
@@ -63,9 +70,25 @@ void kernel_main() {
     for (uint32_t c = 0; c < cols; ++c) {
         noc_async_read_set_trid(trid);
         for (uint32_t e = 0; e < num_sel; ++e) {
-            noc_async_read_one_packet_with_state_with_trid(w_base, offsets[e] + c * seg_bytes, l1_write, trid);
-            l1_write += seg_bytes;
+            uint32_t src = offsets[e] + c * seg_bytes;
+            uint32_t dst = l1_write + e * seg_bytes;
+            for (uint32_t p = 0; p < full_packets; ++p) {
+                noc_async_read_one_packet_with_state_with_trid(w_base, src, dst, trid);
+                src += packet_bytes;
+                dst += packet_bytes;
+            }
         }
+        if constexpr (tail_bytes > 0) {
+            // The packet size is command-buffer state (the transaction id is not touched).
+            constexpr uint32_t tail_offset = full_packets * packet_bytes;
+            noc_async_read_one_packet_set_state<true>(w_base, tail_bytes, vc);
+            for (uint32_t e = 0; e < num_sel; ++e) {
+                noc_async_read_one_packet_with_state_with_trid(
+                    w_base, offsets[e] + c * seg_bytes + tail_offset, l1_write + e * seg_bytes + tail_offset, trid);
+            }
+            noc_async_read_one_packet_set_state<true>(w_base, packet_bytes, vc);
+        }
+        l1_write += block_bytes;
         if (free_blocks == num_buffers - extra_in_flight) {
             noc_async_read_barrier_with_trid(trid_to_wait);
             cb_push_back(cb_w, block_tiles);

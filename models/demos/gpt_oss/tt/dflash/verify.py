@@ -135,6 +135,8 @@ class FusedVerify:
             exclude=[(x, 9) for x in range(mesh.compute_with_storage_grid_size().x)],
         )
         ex = mlp0.experts
+        # the verify MoE streams the target's BFP4 decode expert copies (fused_decode/union.py)
+        assert ex.decode_weights.dtype == ttnn.bfloat4_b, "DFlash needs the BFP4 expert decode copies"
         inter_pad = ex.decode_weights.intermediate_padded
         # the QKV program's attention cores: clear of the QKV writers and the boundary cores
         taken = {(c.x, c.y) for c in ttnn.corerange_to_cores(self.qkv.cores, row_wise=True)}
@@ -181,7 +183,7 @@ class FusedVerify:
         for li, L in enumerate(self.layers):
             e = L.mlp.experts
             self.down_bal[li], bal_plan = load_decode_down_bal(
-                mesh, e.config, e.mesh_config, e.decode_weights, e.weight_dtype, e.tensor_cache_path
+                mesh, e.config, e.mesh_config, e.decode_weights, e.tensor_cache_path
             )
         self.moe_fused = MoEFused(
             mesh,
@@ -196,6 +198,7 @@ class FusedVerify:
             down_readers=DOWN_READERS,
             real_inter=cfg.intermediate_size // tp,
             down_bal_plan=bal_plan,
+            k_grouped=ex.decode_weights.k_grouped,
         )
         # LM head, two stages: the BFP4 head keeps each row's LM_PRESCREEN best columns per core; the device's best
         # per row are rescored with the BF8 weights (laid out round-robin over the banks for the rescore's reads)
