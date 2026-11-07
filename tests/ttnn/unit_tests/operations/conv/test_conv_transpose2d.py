@@ -11,6 +11,7 @@ from tt_py_test_utils_common.utility_functions import (
     is_blackhole,
 )
 import ttnn
+from tests.ttnn.utils_for_testing import check_with_pcc_without_tensor_printout
 
 from tests.ttnn.nightly.unit_tests.operations.conv.test_conv_transpose2d import (
     run_conv_transpose2d,
@@ -703,4 +704,5 @@ def test_conv_transpose2d_padding_larger_than_kernel_reach(device, case):
     )
     assert (out_h, out_w) == tuple(torch_out.shape[2:])
     result = ttnn.to_torch(tt_out).float().reshape(1, out_h, out_w, O).permute(0, 3, 1, 2)
-    torch.testing.assert_close(result, torch_out, atol=0.5, rtol=0.05)
+    passing, pcc_msg = check_with_pcc_without_tensor_printout(result, torch_out, pcc=0.999)
+    assert passing, pcc_msg
