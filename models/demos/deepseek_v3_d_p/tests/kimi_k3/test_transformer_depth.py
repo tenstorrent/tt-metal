@@ -456,8 +456,9 @@ def test_synthetic_depth_writes_every_slot(model, mesh_device, device_params):
 #   bf8 indexer key cache, the K3 manifest's knobs), run eager so the tap can read every layer. The model is
 #   too large for one galaxy, so the ladder walks the PP4 stages: L1/L5/L12 are prefixes of stage 0, L24 is
 #   stage 0, and stages 1-3 each start from the previous stage's activation saved by
-#   `test_kimi_k3_1_stage_handoff` (`$K31_HANDOFF_DIR`, the served traced chain on the same prompt); stage 3
-#   builds layer 92 whole (`full_last_layer`) so it has a residual to score. Together: all 93 layers.
+#   `test_kimi_k3_1_stage_handoff` (`$K31_HANDOFF_DIR`, the served traced chain on the same prompt); stage 3,
+#   and a prefix (a single-rank stack), builds its last layer whole (`full_last_layer`) so it has a residual
+#   to score. Together: all 93 layers.
 # * The prompt is the handoff test's, the trace's 8192 prompt ids then its 2048 decoded ids, teacher-forced:
 #   two chunks, so chunk 1's DSA layers read chunk 0's KV and its KDA layers continue chunk 0's carry. The bar
 #   is held per chunk on prompt rows (chunk 0 [0, 5120), chunk 1 [5120, 8192)), as the chunked K3 test holds it
@@ -488,7 +489,6 @@ def test_k31_depth_ladder_matches_golden(rung, mesh_device, device_params):
     trace = resolve_trace(TRACE_K31)
     assert trace is not None, f"no K3.1 golden at {TRACE_K31}"
     stage, num_layers = K31_RUNGS[rung]
-    is_last = stage == k31_stage.NUM_STAGES - 1
     chunk, num_chunks = k31_stage.CHUNK, k31_stage.HANDOFF_CHUNKS
     prompt = k31_stage._teacher_forced_prompt()
     prompt_len = len(trace.metadata["token_ids"])
@@ -497,7 +497,7 @@ def test_k31_depth_ladder_matches_golden(rung, mesh_device, device_params):
         stage,
         1,
         k31_stage._weight_cache_path(),
-        full_last_layer=is_last,
+        full_last_layer=True,  # the last rank's last layer whole, so it has a residual to score
         num_layers=num_layers,
         max_seq_len=CACHE_LEN,
         use_trace=False,
