@@ -279,43 +279,53 @@ std::unordered_map<CoreCoord, std::vector<detail::CompressedStrideBlock>> create
             size_t best_pattern_len = 0;
             uint32_t best_num_repeats = 1;
             std::vector<Stride> best_meta_strides;
+            const size_t remaining = static_cast<size_t>(page_strides.cend() - it);
 
-            // Find the longest repeating pattern starting at the current position `it`
-            for (size_t pattern_len = 1; it + pattern_len <= page_strides.cend(); ++pattern_len) {
-                auto pattern_begin = it;
-                uint32_t num_repeats = 1;
-
-                // First, find how many times the pattern is structurally repeated
-                while (true) {
-                    auto next_block_start = it + num_repeats * pattern_len;
-                    if (next_block_start + pattern_len > page_strides.cend()) {
-                        break;  // Not enough elements for another full repetition
+            // Block r of a pattern repeats block 0 if it is structurally equal and its start coords/data advance by
+            // r times the step from block 0 to block 1.
+            auto block_repeats = [&](size_t pattern_len, uint32_t r, const std::vector<Stride>& meta_strides) {
+                auto current_block_start = it + r * pattern_len;
+                for (size_t i = 0; i < pattern_len; ++i) {
+                    const auto& original_page_stride = *(it + i);
+                    const auto& current_page_stride = *(current_block_start + i);
+                    const auto& pattern_meta_stride = meta_strides[i];
+                    CoreCoord expected_core = {
+                        original_page_stride.start_core.x + (r * pattern_meta_stride.core.x),
+                        original_page_stride.start_core.y + (r * pattern_meta_stride.core.y)};
+                    uint32_t expected_data = original_page_stride.start_data + (r * pattern_meta_stride.data);
+                    if (!are_strides_structurally_equal(original_page_stride, current_page_stride) ||
+                        current_page_stride.start_core != expected_core ||
+                        current_page_stride.start_data != expected_data) {
+                        return false;
                     }
-
-                    bool structurally_equal = true;
-                    for (size_t i = 0; i < pattern_len; ++i) {
-                        if (!are_strides_structurally_equal(*(pattern_begin + i), *(next_block_start + i))) {
-                            structurally_equal = false;
-                            break;
-                        }
-                    }
-
-                    if (!structurally_equal) {
-                        break;
-                    }
-                    num_repeats++;
                 }
+                return true;
+            };
 
-                if (num_repeats <= 1) {
+            // Find the repeating pattern starting at `it` that covers the most strides; on a tie the shortest pattern
+            // wins. A pattern needs at least two blocks, and one that cannot cover more than the best so far is
+            // skipped, so the search stops once the best pattern covers everything that is left.
+            for (size_t pattern_len = 1; 2 * pattern_len <= remaining; ++pattern_len) {
+                if ((remaining / pattern_len) * pattern_len <= best_pattern_len * best_num_repeats) {
                     continue;
                 }
 
-                // Now, validate that the start coords/data progress with a consistent stride
+                bool first_repeat_equal = true;
+                for (size_t i = 0; i < pattern_len; ++i) {
+                    if (!are_strides_structurally_equal(*(it + i), *(it + pattern_len + i))) {
+                        first_repeat_equal = false;
+                        break;
+                    }
+                }
+                if (!first_repeat_equal) {
+                    continue;
+                }
+
                 auto first_repeat_begin = it + pattern_len;
                 std::vector<Stride> meta_strides;
                 meta_strides.reserve(pattern_len);
                 for (size_t i = 0; i < pattern_len; i++) {
-                    const auto& base_ps = *(pattern_begin + i);
+                    const auto& base_ps = *(it + i);
                     const auto& repeat_ps = *(first_repeat_begin + i);
                     meta_strides.push_back(
                         {.core =
@@ -324,35 +334,19 @@ std::unordered_map<CoreCoord, std::vector<detail::CompressedStrideBlock>> create
                          .data = repeat_ps.start_data - base_ps.start_data});
                 }
 
-                bool all_repeats_valid = true;
-                for (uint32_t r = 1; r < num_repeats; ++r) {
-                    auto current_block_start = it + r * pattern_len;
-                    for (size_t i = 0; i < pattern_len; ++i) {
-                        const auto& original_page_stride = *(pattern_begin + i);
-                        const auto& current_page_stride = *(current_block_start + i);
-                        const auto& pattern_meta_stride = meta_strides[i];
-
-                        CoreCoord expected_core = {
-                            original_page_stride.start_core.x + (r * pattern_meta_stride.core.x),
-                            original_page_stride.start_core.y + (r * pattern_meta_stride.core.y)};
-                        uint32_t expected_data = original_page_stride.start_data + (r * pattern_meta_stride.data);
-
-                        if (current_page_stride.start_core != expected_core ||
-                            current_page_stride.start_data != expected_data) {
-                            all_repeats_valid = false;
-                            num_repeats = r;  // This pattern is only valid for r repetitions
-                            break;
-                        }
-                    }
-                    if (!all_repeats_valid) {
-                        break;
-                    }
+                uint32_t num_repeats = 2;
+                while ((num_repeats + 1) * pattern_len <= remaining &&
+                       block_repeats(pattern_len, num_repeats, meta_strides)) {
+                    num_repeats++;
                 }
 
-                if (num_repeats > 1 && (pattern_len * num_repeats) > (best_pattern_len * best_num_repeats)) {
+                if ((pattern_len * num_repeats) > (best_pattern_len * best_num_repeats)) {
                     best_pattern_len = pattern_len;
                     best_num_repeats = num_repeats;
-                    best_meta_strides = meta_strides;
+                    best_meta_strides = std::move(meta_strides);
+                }
+                if (best_pattern_len * best_num_repeats == remaining) {
+                    break;
                 }
             }
 
@@ -441,13 +435,20 @@ std::unordered_map<CoreCoord, std::vector<detail::CompressedStrideBlock>> get_co
         invalid_mapping_output[total_page_number * i] = 0;
     }
 
+    // Buffer::shard_spec() returns a copy, so read the grid and orientation once rather than per page.
+    const auto input_shard_spec = input_buffer->shard_spec();
+    const CoreCoord input_shard_grid = input_shard_spec.grid().ranges()[0].grid_size();
+    const bool input_col_major = input_shard_spec.orientation() == ShardOrientation::COL_MAJOR;
+    const auto output_shard_spec = output_buffer->shard_spec();
+    const CoreCoord output_shard_grid = output_shard_spec.grid().ranges()[0].grid_size();
+    const bool output_col_major = output_shard_spec.orientation() == ShardOrientation::COL_MAJOR;
+
     // find input invalid base pages if applicable
     for (auto mapped_page : input_buffer_page_mapping) {
         auto core = input_buffer_page_mapping.all_cores[mapped_page.core_id];
-        CoreCoord shard_grid = input_buffer->shard_spec().grid().ranges()[0].grid_size();
-        bool is_last_in_row = (core.x == shard_grid.x - 1);
-        if (input_buffer->shard_spec().orientation() == ShardOrientation::COL_MAJOR) {
-            is_last_in_row = (core.y == shard_grid.y - 1);
+        bool is_last_in_row = (core.x == input_shard_grid.x - 1);
+        if (input_col_major) {
+            is_last_in_row = (core.y == input_shard_grid.y - 1);
         }
         uint32_t base_start_page = mapped_page.host_page * input_pages_per_original;
         uint32_t valid_pages = input_pages_per_original;
@@ -466,10 +467,9 @@ std::unordered_map<CoreCoord, std::vector<detail::CompressedStrideBlock>> get_co
     // find output invalid base pages if applicable
     for (auto mapped_page : output_buffer_page_mapping) {
         auto core = output_buffer_page_mapping.all_cores[mapped_page.core_id];
-        CoreCoord shard_grid = output_buffer->shard_spec().grid().ranges()[0].grid_size();
-        bool is_last_in_row = (core.x == shard_grid.x - 1);
-        if (output_buffer->shard_spec().orientation() == ShardOrientation::COL_MAJOR) {
-            is_last_in_row = (core.y == shard_grid.y - 1);
+        bool is_last_in_row = (core.x == output_shard_grid.x - 1);
+        if (output_col_major) {
+            is_last_in_row = (core.y == output_shard_grid.y - 1);
         }
         uint32_t base_start_page = mapped_page.host_page * output_pages_per_original;
         uint32_t valid_pages = output_pages_per_original;
@@ -526,23 +526,24 @@ std::unordered_map<CoreCoord, std::vector<detail::CompressedStrideBlock>> get_co
     std::vector<std::vector<std::optional<std::pair<CoreCoord, uint32_t>>>> output_core_to_vector_input_core_page(
         output_cores.size());
 
+    // One pass over the host pages, in ascending order, so each core's vector receives the same writes in
+    // the same order as a per-core scan of every host page would give, without the cores x pages cost.
+    std::unordered_map<CoreCoord, std::vector<uint32_t>> output_core_ids;
     for (uint32_t core_id = 0; core_id < output_cores.size(); core_id++) {
-        auto& cur_output_core_pages = output_core_to_vector_input_core_page[core_id];
-
-        // Find all host pages that map to this output core
-        for (uint32_t host_page = 0; host_page < host_page_to_output_core_mapping.size(); host_page++) {
-            if (host_page_to_output_core_mapping[host_page].first == output_cores[core_id]) {
-                // This host page belongs to current output core
-                // Get corresponding input core and page
-                auto input_mapping = host_page_to_input_core_mapping[host_page];
-
-                // Add to vector if needed
-                uint32_t device_page = host_page_to_output_core_mapping[host_page].second;
-                if (cur_output_core_pages.size() <= device_page) {
-                    cur_output_core_pages.resize(device_page + 1);
-                }
-                cur_output_core_pages[device_page] = input_mapping;
+        output_core_ids[output_cores[core_id]].push_back(core_id);
+    }
+    for (uint32_t host_page = 0; host_page < host_page_to_output_core_mapping.size(); host_page++) {
+        const auto& [output_core, device_page] = host_page_to_output_core_mapping[host_page];
+        auto it = output_core_ids.find(output_core);
+        if (it == output_core_ids.end()) {
+            continue;
+        }
+        for (uint32_t core_id : it->second) {
+            auto& cur_output_core_pages = output_core_to_vector_input_core_page[core_id];
+            if (cur_output_core_pages.size() <= device_page) {
+                cur_output_core_pages.resize(device_page + 1);
             }
+            cur_output_core_pages[device_page] = host_page_to_input_core_mapping[host_page];
         }
     }
 
