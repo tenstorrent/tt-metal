@@ -71,6 +71,7 @@ void DitFusedDistributedGroupnormDeviceOperation::validate_on_program_cache_miss
     {
         const auto& mask = tensor_args.input_mask.value();
         TT_FATAL(mask.layout() == Layout::TILE, "input_mask layout must be TILE, got {}", mask.layout());
+        TT_FATAL(mask.physical_volume() > 0, "input_mask must be non-empty, got shape {}", mask.padded_shape());
         TT_FATAL(mask.storage_type() == StorageType::DEVICE, "input_mask must be on device");
         TT_FATAL(mask.is_allocated(), "input_mask must be allocated");
         TT_FATAL(input.device() == mask.device(), "input and input_mask must be on the same device");
@@ -105,6 +106,7 @@ void DitFusedDistributedGroupnormDeviceOperation::validate_on_program_cache_miss
             name,
             t.dtype());
         TT_FATAL(t.layout() == Layout::ROW_MAJOR, "{} layout must be ROW_MAJOR, got {}", name, t.layout());
+        TT_FATAL(t.physical_volume() > 0, "{} must be non-empty, got shape {}", name, t.padded_shape());
         TT_FATAL(
             t.padded_shape()[3] == TILE_WIDTH,
             "{} inner dim must equal TILE_WIDTH ({}), got {}",
