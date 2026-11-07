@@ -37,11 +37,12 @@ from models.demos.deepseek_v3_d_p.tt.tt_prefill_block import TtPrefillBlock
 
 @pytest.mark.parametrize(
     "model_cfg, expected",
-    [(KimiK3Config, True), (KimiK26Config, False), (None, False)],
-    ids=["kimi_k3_gated", "kimi_k2_6_ungated", "no_model_cfg"],
+    [(KimiK3Config, True), (KimiK31Config, True), (KimiK26Config, False), (None, False)],
+    ids=["kimi_k3_gated", "kimi_k3_1_gated", "kimi_k2_6_ungated", "no_model_cfg"],
 )
 def test_block_cache_check_forwards_the_output_gate(monkeypatch, tmp_path, model_cfg, expected):
-    """K3 asks for `g_proj`; nothing else does, including a caller that passes no config at all."""
+    """K3 and K3.1 (K3's Gated DSA keeps the output gate) ask for `g_proj`; nothing else does, including a
+    caller that passes no config at all."""
     seen = {}
 
     def _spy(cache_path, prefix, has_indexer=False, has_output_gate=False):
