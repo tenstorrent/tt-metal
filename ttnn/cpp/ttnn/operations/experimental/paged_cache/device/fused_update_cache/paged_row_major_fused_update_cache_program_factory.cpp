@@ -51,6 +51,7 @@ const DFBSpecName RM_PAGE_TABLE{"page_table"};
 const DFBSpecName RM_UNTILIZED_CACHE{"untilized_cache"};
 const DFBSpecName RM_UNTILIZED_CACHE2{"untilized_cache2"};
 const DFBSpecName RM_OUT_TILES{"out_tiles"};
+const DFBSpecName RM_CONVERTED_INPUT{"converted_input"};
 
 const SemaphoreSpecName RM_IN0_SEQUENTIAL{"in0_sequential_mode"};
 
@@ -99,7 +100,8 @@ PagedRowMajorFusedUpdateCacheProgramFactory::compute_row_major_fused_offsets(
     const auto& input_tensor1 = tensor_args.input_tensor1;
     const auto& input_tensor2 = tensor_args.input_tensor2;
     const bool fp32_dest_acc_en = CMAKE_UNIQUE_NAMESPACE_ROW_MAJOR::enable_fp32_dest_acc(
-        *input_tensor1.device(), operation_attributes.compute_kernel_config);
+                                      *input_tensor1.device(), operation_attributes.compute_kernel_config) ||
+                                  cache_tensor1.dtype() == DataType::FLOAT32;
 
     const uint32_t Wt = cache_tensor1.padded_shape()[-1] / TILE_WIDTH;
     const uint32_t Wbytes = fp32_dest_acc_en ? cache_tensor1.padded_shape()[-1] * sizeof(float)
@@ -148,11 +150,14 @@ ttnn::device_operation::ProgramArtifacts PagedRowMajorFusedUpdateCacheProgramFac
     const tt::DataFormat input_dfb_data_format = tt_metal::datatype_to_dataformat_converter(input_tensor1.dtype());
     const uint32_t input_single_tile_size = tt::tile_size(input_dfb_data_format);
 
-    const bool fp32_dest_acc_en = enable_fp32_dest_acc(*device, operation_attributes.compute_kernel_config);
+    const bool preserve_fp32_cache = cache_tensor1.dtype() == DataType::FLOAT32;
+    const bool fp32_dest_acc_en =
+        enable_fp32_dest_acc(*device, operation_attributes.compute_kernel_config) || preserve_fp32_cache;
 
     const tt::DataFormat interm_dfb_data_format =
         fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
     const uint32_t interm_single_tile_size = tt::tile_size(interm_dfb_data_format);
+    const bool convert_input = input_dfb_data_format != interm_dfb_data_format;
 
     const uint32_t B = input_tensor1.padded_shape()[1];
     const uint32_t num_heads = cache_tensor1.padded_shape()[1];
@@ -198,6 +203,7 @@ ttnn::device_operation::ProgramArtifacts PagedRowMajorFusedUpdateCacheProgramFac
     const uint32_t St = cache_tensor1.padded_shape()[-2] / TILE_HEIGHT;
     const uint32_t Wbytes = fp32_dest_acc_en ? cache_tensor1.padded_shape()[-1] * sizeof(float)
                                              : cache_tensor1.padded_shape()[-1] * 2;  // 2 bytes for bfloat16
+    const uint32_t input_Wbytes = input_tensor1.padded_shape()[-1] * input_tensor1.element_size();
     const uint32_t cache_total_num_tiles = cache_tensor1.physical_volume() / TILE_HW;
     const uint32_t cache_batch_num_tiles =
         operation_attributes.share_cache
@@ -310,6 +316,14 @@ ttnn::device_operation::ProgramArtifacts PagedRowMajorFusedUpdateCacheProgramFac
         }
         dataflow_buffers.push_back(std::move(page_table_dfb));
     }
+    if (convert_input) {
+        dataflow_buffers.push_back(DataflowBufferSpec{
+            .unique_id = RM_CONVERTED_INPUT,
+            .entry_size = Wbytes,
+            .num_entries = num_heads,
+            .data_format_metadata = interm_dfb_data_format,
+        });
+    }
 
     // The optional buffers and the tensors behind them exist only under their host flag, and the
     // kernels name them from blocks the preprocessor has to remove on the off-path: a discarded
@@ -321,6 +335,9 @@ ttnn::device_operation::ProgramArtifacts PagedRowMajorFusedUpdateCacheProgramFac
         if (index_is_dram) {
             optional_resource_defines.emplace("INDEX_IS_DRAM", "1");
         }
+    }
+    if (convert_input) {
+        optional_resource_defines.emplace("CONVERT_INPUT", "1");
     }
     if (is_paged_cache) {
         optional_resource_defines.emplace("IS_PAGED_CACHE", "1");
@@ -407,6 +424,18 @@ ttnn::device_operation::ProgramArtifacts PagedRowMajorFusedUpdateCacheProgramFac
                 });
             }
         }
+        if (convert_input) {
+            reader_dfb_bindings.push_back(DFBBinding{
+                .dfb_spec_name = RM_CONVERTED_INPUT,
+                .accessor_name = "converted_input",
+                .endpoint_type = DFBEndpointType::PRODUCER,
+            });
+            writer_dfb_bindings.push_back(DFBBinding{
+                .dfb_spec_name = RM_CONVERTED_INPUT,
+                .accessor_name = "converted_input",
+                .endpoint_type = DFBEndpointType::CONSUMER,
+            });
+        }
         if (is_paged_cache) {
             reader_dfb_bindings.push_back(DFBBinding{
                 .dfb_spec_name = RM_PAGE_TABLE,
@@ -454,6 +483,8 @@ ttnn::device_operation::ProgramArtifacts PagedRowMajorFusedUpdateCacheProgramFac
                     {"page_table_stick_size", page_table_stick_size},
                     {"St", St},
                     {"batch_size", B},
+                    {"Wbytes", Wbytes},
+                    {"input_Wbytes", input_Wbytes},
                 },
             .runtime_arg_schema =
                 {.runtime_arg_names = {"has_work", "cache_start_id", "my_batch_idx", "wait_to_start"}},
@@ -511,12 +542,10 @@ ttnn::device_operation::ProgramArtifacts PagedRowMajorFusedUpdateCacheProgramFac
         // reproduces it exactly.
         ComputeHardwareConfig compute_hw{.enable_32_bit_dest = fp32_dest_acc_en};
         if (fp32_dest_acc_en) {
-            // A 32-bit Dest requires an explicit unpack mode for every Float32 buffer the compute
-            // kernel consumes. Legacy named none, which resolved to unpacking into SrcA/B. The input
-            // buffer is absent from this list because the row-major compute kernel never reads it.
             const auto require_unpack_mode = [&](const DFBSpecName& dfb, tt::DataFormat format) {
                 if (format == tt::DataFormat::Float32) {
-                    compute_hw.unpack_modes.emplace(dfb, UnpackMode::UnpackToSrc);
+                    compute_hw.unpack_modes.emplace(
+                        dfb, preserve_fp32_cache ? UnpackMode::UnpackToDest : UnpackMode::UnpackToSrc);
                 }
             };
             require_unpack_mode(RM_CACHE_TILES, cache_dfb_data_format);
