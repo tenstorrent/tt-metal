@@ -67,8 +67,9 @@ elseif(ENABLE_DISTRIBUTED)
 else()
     message(STATUS "Multihost compute with MPI disabled, using single host context.")
     set(USE_MPI FALSE)
-    list(APPEND DISTRIBUTED_SRC multihost/single_host_context.cpp)
 endif()
+# Also used by MPI builds when the process was not launched as part of an MPI job.
+list(APPEND DISTRIBUTED_SRC multihost/single_host_context.cpp)
 
 # The host-to-host hop is MPI one-sided RMA and there is no version of it without one, so
 # these two follow USE_MPI while the device legs build unconditionally.

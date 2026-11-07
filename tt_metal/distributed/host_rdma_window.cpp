@@ -22,6 +22,21 @@ std::string mpi_error_text(const char* what, int rc) {
     return std::string(what) + " failed: " + std::string(buf, static_cast<size_t>(len));
 }
 
+// Any MPI call before MPI_Init or after MPI_Finalize aborts the process. MPI is up on every rank of a job or on
+// none, so every rank returns from here together and none is left alone in a collective.
+bool mpi_ready(std::string& err) {
+    int initialized = 0;
+    int finalized = 0;
+    if (MPI_Initialized(&initialized) == MPI_SUCCESS && initialized != 0 && MPI_Finalized(&finalized) == MPI_SUCCESS &&
+        finalized == 0) {
+        return true;
+    }
+    err =
+        "MPI is not initialized. Host-to-host sockets need an MPI job: launch with tt-run or mpirun, or set "
+        "TT_METAL_MPI_INIT=always";
+    return false;
+}
+
 }  // namespace
 
 struct RdmaWindow::Impl {
@@ -41,6 +56,9 @@ struct RdmaWindow::Impl {
 RdmaWindow::RdmaWindow() : impl_(std::make_unique<Impl>()) {}
 
 bool RdmaWindow::agree_value(uint64_t local, std::string& err) {
+    if (!mpi_ready(err)) {
+        return false;
+    }
     uint64_t lo = 0;
     uint64_t hi = 0;
     if (const int rc = MPI_Allreduce(&local, &lo, 1, MPI_UINT64_T, MPI_MIN, MPI_COMM_WORLD); rc != MPI_SUCCESS) {
@@ -55,6 +73,9 @@ bool RdmaWindow::agree_value(uint64_t local, std::string& err) {
 }
 
 bool RdmaWindow::agree(bool local_ok, std::string& err) {
+    if (!mpi_ready(err)) {
+        return false;
+    }
     const uint8_t mine = local_ok ? 1 : 0;
     uint8_t all = 0;
     if (const int rc = MPI_Allreduce(&mine, &all, 1, MPI_UINT8_T, MPI_MIN, MPI_COMM_WORLD); rc != MPI_SUCCESS) {
@@ -70,6 +91,10 @@ bool RdmaWindow::agree(bool local_ok, std::string& err) {
 std::unique_ptr<RdmaWindow> RdmaWindow::create(
     uint8_t* region_base, uint64_t region_bytes, uint32_t expect_rank, uint32_t expect_size, std::string& err) {
     err.clear();
+    if (!mpi_ready(err)) {
+        err = "RdmaWindow::create: " + err;
+        return nullptr;
+    }
     std::unique_ptr<RdmaWindow> w(new RdmaWindow());
     Impl& im = *w->impl_;
     im.comm = MPI_COMM_WORLD;

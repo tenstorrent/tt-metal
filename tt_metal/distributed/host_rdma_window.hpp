@@ -47,6 +47,7 @@ public:
 
     // True only when every rank passed. Collective, so a rank that already failed locally must
     // still call it: RdmaWindow::create is collective too and would hang the ranks that passed.
+    // Without MPI initialized it skips the collective and returns false with err set.
     static bool agree(bool local_ok, std::string& err);
 
     // True only when every rank passed the SAME value. Collective, with agree()'s rule: a rank
