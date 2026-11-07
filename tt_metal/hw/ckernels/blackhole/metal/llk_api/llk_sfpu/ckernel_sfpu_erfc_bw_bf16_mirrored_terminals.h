@@ -27,7 +27,6 @@ inline vFloat target_raw_terminal_value(vFloat computed, float constant = 0.0f) 
     }
 }
 
-// Existing effective-class negative-infinity finalizer.
 template <int Code>
 inline void negative_infinity_terminal(vFloat input, vFloat& result) {
     if constexpr (Code != 5) {
@@ -37,7 +36,6 @@ inline void negative_infinity_terminal(vFloat input, vFloat& result) {
     }
 }
 
-// Keep the selected BH conjunction and WH nested predicate distinct.
 template <int Code, bool Nested>
 inline void negative_nan_class_terminal(vUInt raw_u16, vFloat& result) {
     static_assert(Code >= 0 && Code <= 4, "negative NaN requires a class result");

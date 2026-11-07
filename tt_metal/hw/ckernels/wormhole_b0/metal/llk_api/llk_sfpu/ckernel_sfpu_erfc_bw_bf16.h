@@ -50,7 +50,6 @@ constexpr uint32_t LUT_SIZE = LUT_SIZE_BF16;
 constexpr float ASYMPTOTIC_EXP_ARG_SCALE = -1.0000000000000000e+00f;
 constexpr float ASYMPTOTIC_SCALE = 1.0000000000000000e+00f;
 
-// Typed domain actions.
 struct TtDomainActionRecord {
     float bound;
     uint8_t direction;
