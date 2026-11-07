@@ -40,3 +40,39 @@ def test_isin_spans_two_subchunks(dtype, size, device):
     torch_result = torch.isin(elements, test_elements)
     ttnn_result = ttnn.to_torch(ttnn.experimental.isin(elements_ttnn, test_elements_ttnn))
     assert torch.equal(ttnn_result != 0, torch_result)
+
+
+def _isin_inputs(device, shape=(190,)):
+    elements = torch.arange(190, dtype=torch.int64).reshape(shape)
+    test_elements = torch.arange(100, 190, 7, dtype=torch.int64)
+    elements_ttnn = ttnn.from_torch(elements, device=device, dtype=ttnn.uint16, layout=ttnn.ROW_MAJOR_LAYOUT)
+    test_elements_ttnn = ttnn.from_torch(test_elements, device=device, dtype=ttnn.uint16, layout=ttnn.ROW_MAJOR_LAYOUT)
+    return elements, test_elements, elements_ttnn, test_elements_ttnn
+
+
+def test_isin_preallocated_output(device):
+    elements, test_elements, elements_ttnn, test_elements_ttnn = _isin_inputs(device)
+    out = ttnn.from_torch(
+        torch.full((190,), 7, dtype=torch.int64), device=device, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT
+    )
+    ttnn.experimental.isin(elements_ttnn, test_elements_ttnn, out=out)
+    assert torch.equal(ttnn.to_torch(out) != 0, torch.isin(elements, test_elements))
+
+
+# The writer stores the whole flat mask into out, so any other shape or layout must be rejected.
+@pytest.mark.parametrize(
+    "elements_shape, out_shape, out_layout",
+    [
+        ((190,), (64,), ttnn.ROW_MAJOR_LAYOUT),
+        ((190,), (1, 190), ttnn.ROW_MAJOR_LAYOUT),
+        ((2, 95), (2, 95), ttnn.ROW_MAJOR_LAYOUT),
+        ((190,), (190,), ttnn.TILE_LAYOUT),
+    ],
+)
+def test_isin_rejects_mismatched_preallocated_output(elements_shape, out_shape, out_layout, device, expect_error):
+    _, _, elements_ttnn, test_elements_ttnn = _isin_inputs(device, elements_shape)
+    out = ttnn.from_torch(
+        torch.zeros(out_shape, dtype=torch.int64), device=device, dtype=ttnn.uint32, layout=out_layout
+    )
+    with expect_error(RuntimeError, "Preallocated output"):
+        ttnn.experimental.isin(elements_ttnn, test_elements_ttnn, out=out)
