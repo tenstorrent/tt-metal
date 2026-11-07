@@ -161,7 +161,10 @@ ttsl::hash::hash_t InterleavedToShardedDeviceOperation::compute_program_hash(
     if (tensor_args.output_tensor.has_value()) {
         hash = ttsl::hash::hash_objects(hash, tensor_args.output_tensor->tensor_spec());
     }
-    return hash;
+    return ttsl::hash::hash_objects(
+        hash,
+        InterleavedToShardedProgramFactory::uses_bank_segments(
+            input_tensor, compute_output_specs(operation_attributes, tensor_args)));
 }
 
 Tensor interleaved_to_sharded(
