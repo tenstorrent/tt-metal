@@ -13,7 +13,8 @@
 // level codes already (gguf_host_packing.cpp), each K tile without its index words, and no lookups run. Compile args:
 // format id, c_0 pages, one-page groups per unit, staging slots, the lookup request, answer and page address
 // semaphores, reads in flight, then the weight's TensorAccessorArgs.
-// Runtime args: weight address, N tiles, runs, then per run its N tile, first and end K group.
+// Runtime args: weight address, N tiles, runs, then per run its N tile, first and end K group. With GGUF_PREFILL:
+// weight address, N tiles, first N tile, N tiles of this core, K groups, M chunks, first K group.
 
 #include <cstdint>
 
@@ -56,6 +57,24 @@ void kernel_main() {
 
     const auto weights = TensorAccessor(weight_args, get_arg_val<uint32_t>(0));
     const uint32_t n_tiles = get_arg_val<uint32_t>(1);
+#ifdef GGUF_PREFILL
+    // Prefill (gguf_matmul_prefill_program_factory.cpp): N tiles [n0, n0 + nc); per M chunk, per K group, the nc
+    // records.
+    const uint32_t n0 = get_arg_val<uint32_t>(2), nc = get_arg_val<uint32_t>(3);
+    const uint32_t groups = get_arg_val<uint32_t>(4), g0 = get_arg_val<uint32_t>(6);
+    const uint32_t total = get_arg_val<uint32_t>(5) * groups * nc;
+    uint32_t group = 0, column = 0;
+    auto next_record = [&]() {
+        const uint32_t id = (g0 + group) * n_tiles + n0 + column;
+        if (++column == nc) {
+            column = 0;
+            if (++group == groups) {
+                group = 0;
+            }
+        }
+        return id;
+    };
+#else
     const uint32_t runs = get_arg_val<uint32_t>(2);
     uint32_t total = 0;
     for (uint32_t r = 0; r < runs; r++) {
@@ -70,6 +89,7 @@ void kernel_main() {
         }
         return id;
     };
+#endif
 
     Noc noc;
     CircularBuffer pages(tt::CBIndex::c_0);
