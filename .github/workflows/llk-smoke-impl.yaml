@@ -42,6 +42,7 @@ on:
           the LLK legs test the same tree as every other leg.
 
 permissions:
+  actions: read
   checks: write
   contents: read
 
@@ -53,6 +54,7 @@ jobs:
     runs-on: ubuntu-slim
     outputs:
       matrix: ${{ steps.hardware-matrix.outputs.matrix }}
+      split-durations: ${{ steps.upload-durations.outcome == 'success' }}
     env:
       TESTS_YAML_PATH: ./tests/pipeline_reorg/llk_pr_gate_tests.yaml
     steps:
@@ -64,6 +66,7 @@ jobs:
           sparse-checkout: |
             .github
             tests/pipeline_reorg
+            tt_metal/tt-llk/perf
           sparse-checkout-cone-mode: true
       - name: Install dependencies
         run: pip3 install PyYAML
@@ -111,6 +114,26 @@ jobs:
           print(f"Hardware legs: {len(kept)} (dropped {len(rows) - len(kept)} simulator legs)")
           PY
 
+      - name: Fetch test durations from main
+        id: durations
+        continue-on-error: true
+        timeout-minutes: 2
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: .github/scripts/llk-fetch-test-durations.sh pr-gate.yaml main push split-durations
+      # The legs read the outcome of this upload, so an artifact fault here
+      # falls back to cutting by count instead of skipping every leg.
+      - name: Upload test durations for the legs
+        id: upload-durations
+        if: steps.durations.outputs.found == 'true'
+        continue-on-error: true
+        timeout-minutes: 2
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: split-durations
+          path: split-durations
+
   llk-smoke-exec:
     needs: load-test-matrix
     if: ${{ needs.load-test-matrix.outputs.matrix != '[]' }}
@@ -150,13 +173,38 @@ jobs:
           else
             echo "CHIP_ARCH=unknown" >> "$GITHUB_ENV"
           fi
+      - name: Download test durations
+        if: needs.load-test-matrix.outputs.split-durations == 'true'
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: split-durations
+          path: split-durations
+      - name: Use the test durations for --splits
+        if: needs.load-test-matrix.outputs.split-durations == 'true'
+        shell: bash
+        run: |
+          if [[ -f "split-durations/$CHIP_ARCH.json" ]]; then
+            cp "split-durations/$CHIP_ARCH.json" "$LLK_PATH/tests/python_tests/.test_durations"
+          fi
       - name: Run tests
         shell: bash
         working-directory: ${{ env.LLK_PATH }}
         env:
           PYTEST_MARKERS: ${{ inputs.pytest-markers }}
+          PYTEST_ADDOPTS: --store-durations --clean-durations
         run: |
           ${{ matrix.test-group.cmd }}
+
+      # Only push runs on main are read back, and a fault must not fail a leg.
+      - name: Upload test durations
+        if: github.event_name == 'push'
+        continue-on-error: true
+        timeout-minutes: 2
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: test-durations-${{ env.CHIP_ARCH }}-${{ matrix.test-group.split_group }}
+          path: ${{ env.LLK_PATH }}/tests/python_tests/.test_durations
+          include-hidden-files: true
 
       - name: Upload test logs on failure
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0

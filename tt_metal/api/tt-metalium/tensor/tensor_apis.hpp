@@ -42,7 +42,12 @@ HostTensor to_tensor_spec(const HostTensor& tensor, const TensorSpec& dest_spec)
 
 namespace host_buffer {
 
+// HostTensor overloads also appear in distributed_tensor_apis.hpp during the deprecation period.
 // TODO(#40348): This function has single device assumptions over inheritely multi-device constructs.
+[[deprecated(
+    "Include <tt-metalium/experimental/distributed_tensor/distributed_tensor_apis.hpp> instead. "
+    "This API will be removed from this header after 2026-12-01.")]]
+// NOLINTNEXTLINE(readability-redundant-declaration)
 HostBuffer get_host_buffer(const HostTensor& tensor);
 
 template <typename T>
@@ -52,9 +57,17 @@ template <typename T>
 ttsl::Span<T> get_as(HostBuffer& buffer);
 
 template <typename T>
+[[deprecated(
+    "Include <tt-metalium/experimental/distributed_tensor/distributed_tensor_apis.hpp> instead. "
+    "This API will be removed from this header after 2026-12-01.")]]
+// NOLINTNEXTLINE(readability-redundant-declaration)
 ttsl::Span<const T> get_as(const HostTensor& tensor);
 
 template <typename T>
+[[deprecated(
+    "Include <tt-metalium/experimental/distributed_tensor/distributed_tensor_apis.hpp> instead. "
+    "This API will be removed from this header after 2026-12-01.")]]
+// NOLINTNEXTLINE(readability-redundant-declaration)
 ttsl::Span<T> get_as(HostTensor& tensor);
 
 }  // namespace host_buffer
