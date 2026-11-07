@@ -27,7 +27,7 @@
       "sc4": {
         "probe": "@1020k",
         "8kw": {
-          "throughput_tok_s": 31031,
+          "throughput_tok_s": 30640,
           "ttft_s": 26.89,
           "chunk_time_ms": 583
         }
