@@ -6,6 +6,7 @@
 same blocks times the same bf16 input in float64: PCC >= 0.9999 and the largest error within 1 % of the largest
 output, the bounds of the llama.cpp backend's GGUF gate."""
 
+import statistics
 import time
 
 import numpy as np
@@ -174,24 +175,114 @@ def test_refusals(device, expect_error):
         ttnn.matmul(x, w_l1)
 
 
+PERF_SHAPES = [(4096, 4096), (4096, 12288)]
+PERF_ITERATIONS, PERF_REPLAYS = 100, 7
+
+
+def _time_op(device, op):
+    """Time per op in µs, min and median over PERF_REPLAYS replays of a trace of PERF_ITERATIONS ops; the last
+    output."""
+    op()
+    trace = ttnn.begin_trace_capture(device, cq_id=0)
+    for _ in range(PERF_ITERATIONS):
+        out = op()
+    ttnn.end_trace_capture(device, trace, cq_id=0)
+    ttnn.execute_trace(device, trace, cq_id=0, blocking=True)
+    times = []
+    for _ in range(PERF_REPLAYS):
+        start = time.perf_counter()
+        ttnn.execute_trace(device, trace, cq_id=0, blocking=True)
+        times.append((time.perf_counter() - start) / PERF_ITERATIONS * 1e6)
+    ttnn.release_trace(device, trace)
+    return min(times), statistics.median(times), out
+
+
+# Every format with --runslow; q4_0, q4_K and q6_K by default.
+_PERF_DTYPES = [
+    pytest.param(
+        d, id=_name(d), marks=() if d in (ttnn.gguf_q4_0, ttnn.gguf_q4_k, ttnn.gguf_q6_k) else pytest.mark.slow
+    )
+    for d in ttnn.GGUF_DTYPES
+]
+
+
 @pytest.mark.parametrize("device_params", [{"trace_region_size": 32 << 20}], indirect=True)
-@pytest.mark.parametrize("dtype", [ttnn.gguf_q4_0, ttnn.gguf_q4_k, ttnn.gguf_q6_k], ids=_name)
-@pytest.mark.parametrize("k, n", [(4096, 4096), (4096, 12288)])
+@pytest.mark.parametrize("dtype", _PERF_DTYPES)
+@pytest.mark.parametrize("k, n", PERF_SHAPES)
 def test_perf(device, dtype, k, n):
-    """Decode (M = 1) time per op from a trace of 100 ops: µs and weight bytes / time."""
-    iterations = 100
+    """Decode (M = 1): µs per op and GGUF weight bytes / time."""
     blocks = _blocks(dtype, k, n)
     w = ttnn.from_gguf(blocks, (k, n), dtype, device=device)
     x = ttnn.from_torch(torch.randn(1, k).bfloat16(), layout=ttnn.TILE_LAYOUT, device=device)
-    ttnn.matmul(x, w)
-    trace = ttnn.begin_trace_capture(device, cq_id=0)
-    for _ in range(iterations):
-        out = ttnn.matmul(x, w)
-    ttnn.end_trace_capture(device, trace, cq_id=0)
-    ttnn.execute_trace(device, trace, cq_id=0, blocking=True)
-    start = time.perf_counter()
-    ttnn.execute_trace(device, trace, cq_id=0, blocking=True)
-    seconds = (time.perf_counter() - start) / iterations
-    ttnn.release_trace(device, trace)
+    fastest, median, out = _time_op(device, lambda: ttnn.matmul(x, w))
     _check(ttnn.to_torch(out), ttnn.to_torch(x), blocks, dtype, k, n)
-    print(f"GGUF {_name(dtype)} [K, N] = [{k}, {n}]: {seconds * 1e6:.1f} µs, {blocks.nbytes / seconds / 1e9:.0f} GB/s")
+    print(
+        f"GGUF {_name(dtype)} [K, N] = [{k}, {n}]: {fastest:.1f} µs (median {median:.1f}), "
+        f"{blocks.nbytes / fastest / 1e3:.0f} GB/s"
+    )
+
+
+# The block-float baseline at the same shapes: the DRAM-sharded decode matmul as tt_transformers configures it on
+# Blackhole for Qwen3-8B / Llama-3.1-8B (test_matmul_dram_sharded_multicore.py BH_SHAPES): activation and output
+# shard grids and widths, in0_block_w, readers per DRAM bank; BFP4 LoFi, BFP8 HiFi2.
+# Activation grid: cores row-major, or an 8 x 8 rectangle.
+_DRAM_SHARDED = {(4096, 4096): (32, 4, 32, 4, 4, 2), (4096, 12288): ((8, 8), 2, 64, 6, 2, 4)}
+
+
+@pytest.mark.parametrize("device_params", [{"trace_region_size": 32 << 20}], indirect=True)
+@pytest.mark.parametrize("dtype, fidelity", [("bfloat4_b", "LoFi"), ("bfloat8_b", "HiFi2")])
+@pytest.mark.parametrize("k, n", PERF_SHAPES)
+def test_perf_block_float(device, dtype, fidelity, k, n):
+    """ttnn.linear with a BFP4 / BFP8 DRAM-sharded weight, M = 1 (one 32-row tile): µs per op and weight GB/s."""
+    x_cores, x_width, out_cores, out_width, block_w, readers = _DRAM_SHARDED[(k, n)]
+    grid = device.compute_with_storage_grid_size()
+
+    def width_sharded(cores, width):
+        if isinstance(cores, tuple):
+            end = ttnn.CoreCoord(cores[0] - 1, cores[1] - 1)
+            shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), end)})
+        else:
+            shard_grid = ttnn.num_cores_to_corerangeset(cores, grid, row_wise=True)
+        spec = ttnn.ShardSpec(shard_grid, (32, width * 32), ttnn.ShardOrientation.ROW_MAJOR)
+        return ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, spec)
+
+    banks = device.dram_grid_size().x
+    bank_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(banks - 1, 0))})
+    w_spec = ttnn.ShardSpec(bank_grid, (k, n // banks), ttnn.ShardOrientation.ROW_MAJOR)
+    w_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.DRAM, w_spec)
+    w = ttnn.from_torch(
+        torch.randn(k, n), dtype=getattr(ttnn, dtype), layout=ttnn.TILE_LAYOUT, device=device, memory_config=w_config
+    )
+    x = ttnn.from_torch(
+        torch.randn(32, k),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=width_sharded(x_cores, x_width),
+    )
+    program_config = ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
+        in0_block_w=block_w,
+        per_core_M=1,
+        per_core_N=out_width,
+        fused_activation=None,
+        num_workers_per_dram_bank=readers,
+        use_multicore_pipeline=True,
+    )
+    compute_config = ttnn.init_device_compute_kernel_config(
+        device.arch(), math_fidelity=getattr(ttnn.MathFidelity, fidelity), fp32_dest_acc_en=False, packer_l1_acc=True
+    )
+    fastest, median, _ = _time_op(
+        device,
+        lambda: ttnn.linear(
+            x,
+            w,
+            program_config=program_config,
+            memory_config=width_sharded(out_cores, out_width),
+            dtype=ttnn.bfloat16,
+            compute_kernel_config=compute_config,
+        ),
+    )
+    weight_bytes = k * n * (4.5 if dtype == "bfloat4_b" else 8.5) / 8
+    print(
+        f"{dtype} [K, N] = [{k}, {n}]: {fastest:.1f} µs (median {median:.1f}), {weight_bytes / fastest / 1e3:.0f} GB/s"
+    )
