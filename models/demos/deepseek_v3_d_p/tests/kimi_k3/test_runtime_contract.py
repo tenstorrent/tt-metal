@@ -261,6 +261,7 @@ def _mocked_layer(monkeypatch, tensor_parallel_size: int):
         setattr(layer, name, None)
     layer._history_exchange = SimpleNamespace(buffer=None, semaphores=None)
     layer._tp_gather_kwargs = None
+    layer._side_windows = None
     layer._validate_forward = Mock()
     layer._validate_runtime_bound = Mock()
     projected = SimpleNamespace(projected=object(), decay_rank_offset=0, output_gate_offset=0, beta_offset=0)
@@ -268,7 +269,9 @@ def _mocked_layer(monkeypatch, tensor_parallel_size: int):
     calls.project_inputs.return_value = projected
     layer._compute_decay = calls.compute_decay
     layer.recurrence = calls.recurrence
-    calls.recurrence.return_value = SimpleNamespace(output=object(), final_state="final_recurrent")
+    calls.recurrence.return_value = SimpleNamespace(
+        output=object(), final_state="final_recurrent", beside_relay=None, final_carry=None
+    )
     layer._kda_rms_norm = calls.norm
     layer._project_output = calls.project_output
     calls.project_output.return_value = "output"
