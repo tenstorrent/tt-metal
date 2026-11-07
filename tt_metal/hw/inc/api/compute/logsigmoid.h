@@ -7,45 +7,43 @@
 #include "api/compute/common_globals.h"
 #ifdef TRISC_MATH
 #include "ckernel_sfpu_logsigmoid.h"
-#include "llk_math_eltwise_binary_sfpu_macros.h"
+#include "llk_math_eltwise_unary_sfpu_macros.h"
 #endif
 
 namespace ckernel {
 
 // clang-format off
 /**
- * Performs logsigmoid operation: logsigmoid(x) = -softplus(-x) = -log(1 + exp(-x))
+ * Performs logsigmoid in place: logsigmoid(x) = min(x, 0) - log1p(exp(-|x|)).
+ *
+ * The DST register buffer must be acquired before this call. The output overwrites
+ * the input tile at `idst`.
  *
  * Return value: None
  *
  * | Argument       | Description                                       | Type     | Valid Range                                           | Required |
  * |----------------|---------------------------------------------------|----------|-------------------------------------------------------|----------|
- * | idst_in0       | Index of tile in DST with input (x)               | uint32_t | Must be less than the size of the DST register buffer | True     |
- * | idst_in1       | Index of tile in DST with exp(-x)                 | uint32_t | Must be less than the size of the DST register buffer | True     |
- * | idst_out       | Index of tile in DST for output                   | uint32_t | Must be less than the size of the DST register buffer | True     |
+ * | idst           | Index of the input/output tile in DST             | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
-ALWI void logsigmoid_tile(uint32_t idst_in0, uint32_t idst_in1, uint32_t idst_out) {
-    MATH((SFPU_BINARY_CALL(
+ALWI void logsigmoid_tile(uint32_t idst) {
+    MATH((SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         calculate_logsigmoid,
-        (APPROX, 8 /* ITERATIONS */),
-        idst_in0,
-        idst_in1,
-        idst_out,
+        (APPROX, DST_ACCUM_MODE, 8 /* ITERATIONS */),
+        idst,
         VectorMode::RC)));
 }
 
 /**
- * Initialize logsigmoid operation.
+ * Initialize logsigmoid operation: loads the constants that logsigmoid_tile reads.
  * Must be called before logsigmoid_tile.
- * On Wormhole this loads polynomial coefficients into vConstFloatPrgm0..2, the registers exp_tile_init
- * (and other SFPU inits) also program. Call it after those inits, right before logsigmoid_tile, and call
- * exp_tile_init again after it before the next exp_tile.
  *
  * Return value: None
  */
-ALWI void logsigmoid_tile_init() { MATH((SFPU_BINARY_INIT_FN(unused, sfpu::logsigmoid_init, (APPROX)))); }
+ALWI void logsigmoid_tile_init() {
+    MATH((SFPU_UNARY_INIT_FN(logsigmoid, sfpu::logsigmoid_init, (APPROX, DST_ACCUM_MODE))));
+}
 
 }  // namespace ckernel

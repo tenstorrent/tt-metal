@@ -859,6 +859,20 @@ LogicalNot:
 - {input: Float32, output: Float16_b, approx: 'No', dest: 'Yes', measured: 0, note: 'bh: max 0 ULP, 1 variants / 4k lanes'}
 - {input: Float32, output: Float32, approx: 'No', dest: 'No', measured: 0, note: 'bh: max 0 ULP, 1 variants / 4k lanes'}
 - {input: Float32, output: Float32, approx: 'No', dest: 'Yes', measured: 0, note: 'bh: max 0 ULP, 1 variants / 4k lanes'}
+Logsigmoid:
+- {input: Float16, output: Float16, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 1}]}
+- {input: Float16, output: Float16_b, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 1}]}
+- {input: Float16, output: Float32, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 1}]}
+- {input: Float16_b, output: Float16, dest: 'Yes', domains: [{low: -.inf, high: -65536.0}, {low: -65536.0, high: .inf, ulp: 0}]}
+- {input: Float16_b, output: Float16_b, dest: 'No', domains: [{low: -.inf, high: .inf, ulp: 1}]}
+- {input: Float16_b, output: Float16_b, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float16_b, output: Float32, dest: 'No', domains: [{low: -.inf, high: .inf, ulp: 65536}]}
+- {input: Float16_b, output: Float32, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 2}]}
+- {input: Float32, output: Float16, dest: 'Yes', domains: [{low: -.inf, high: -65536.0}, {low: -65536.0, high: .inf, ulp: 1}]}
+- {input: Float32, output: Float16_b, dest: 'No', domains: [{low: -.inf, high: .inf, ulp: 1}]}
+- {input: Float32, output: Float16_b, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float32, output: Float32, dest: 'No', domains: [{low: -.inf, high: .inf, ulp: 65536}]}
+- {input: Float32, output: Float32, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 2}]}
 Lrelu:
 - {input: Float16, output: Float16, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 0}]}
 - {input: Float16, output: Float16_b, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 1}]}
@@ -1464,15 +1478,6 @@ SfpuLerp:
 - {input: Float16_b, output: Float16_b, dest: 'No', measured: 0, note: 'bh: max 0 ULP, 2 variants / 8k lanes'}
 - {input: Float16_b, output: Float16_b, dest: 'Yes', measured: 1, note: 'bh: max 1 ULP, 2 variants / 8k lanes'}
 - {input: Float32, output: Float32, dest: 'Yes', measured: 3072, note: 'bh: max 3072 ULP, 2 variants / 8k lanes'}
-SfpuLogsigmoid:
-- {output: Float16_b, metric: TOLERANCE, measured: 2, note: 'wh figure, no bh driver reaches this row; max 2 ULP, 3 variants / 81920 lanes'}
-- {output: Float32, metric: TOLERANCE, measured: 131072, note: 'wh figure, no bh driver reaches this row; max 131072 ULP, 3 variants / 81920 lanes'}
-- {input: Float16_b, output: Float16_b, dest: 'No', measured: 2, note: 'bh: max 2 ULP, 1 variants / 33k lanes'}
-- {input: Float16_b, output: Float16_b, dest: 'Yes', measured: 2, note: 'bh: max 2 ULP, 1 variants / 33k lanes'}
-- {input: Float16_b, output: Float32, dest: 'No', measured: 131072, note: 'bh: max 131072 ULP, 1 variants / 33k lanes'}
-- {input: Float16_b, output: Float32, dest: 'Yes', measured: 88931, note: 'bh: max 88931 ULP, 1 variants / 33k lanes'}
-- {input: Float32, output: Float16_b, dest: 'Yes', measured: 2, note: 'bh: max 2 ULP, 1 variants / 16k lanes'}
-- {input: Float32, output: Float32, dest: 'Yes', measured: 89026, note: 'bh: max 89026 ULP, 1 variants / 16k lanes'}
 SfpuMask:
 - {output: Float16_b, metric: TOLERANCE, measured: 0, note: 'wh figure, no bh driver reaches this row; 0 ULP, 3 variants / 6144 lanes'}
 - {output: Float32, metric: TOLERANCE, measured: 0, note: 'wh figure, no bh driver reaches this row; 0 ULP, 3 variants / 6144 lanes'}
