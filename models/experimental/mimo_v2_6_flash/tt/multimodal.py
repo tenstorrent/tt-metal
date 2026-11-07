@@ -39,7 +39,8 @@ MODALITIES = ("image", "video", "audio")
 REQUIRED_FIELDS = {
     "image": ("pixel_values", "image_grid_thw"),
     "video": ("pixel_values_videos", "video_grid_thw"),
-    "audio": ("audio_features|audio_codes",),  # the mel, or its RVQ codes (tt/audio/processor.py)
+    # the mel, its RVQ codes, or the LLM embeddings the front end made from them (tt/audio/processor.py)
+    "audio": ("audio_features|audio_codes|audio_embeds",),
 }
 
 
@@ -242,6 +243,12 @@ def encode_item(backend, item):
             _field(item.data, "pixel_values_videos"),
             torch.as_tensor(_field(item.data, "video_grid_thw")).reshape(-1, 3),
         )
+    elif _field(item.data, "audio_embeds") is not None:
+        out = torch.as_tensor(_field(item.data, "audio_embeds"))  # encoded in the front end: upload only
+        if out.dim() == 3 and out.shape[0] == 1:
+            out = out[0]
+        if not out.is_floating_point() or not bool(torch.isfinite(out).all()):
+            raise MMInputError(f"audio item {item.identifier}: audio_embeds must be finite floats")
     elif _field(item.data, "audio_codes") is not None:
         out = backend.embed_audio_codes(_field(item.data, "audio_codes"))
     else:

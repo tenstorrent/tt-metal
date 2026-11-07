@@ -3,9 +3,10 @@
 
 """Host audio backend (tt/audio/host_backend.py): no device.
 
-* Its tokenizer encoder (fp32, ``is_causal`` attention on the full layers) gives the reference's RVQ codes exactly,
-  on every clip from reference/make_audio_clips.py (5 s to 600 s, one to ten 6000-frame segments), at the backend's
-  thread count (8; the reference runs at MIMO_AUDIO_THREADS).
+* Its tokenizer encoder (fp32, ``is_causal`` attention on the full layers, key-block-aligned windowed layers) gives
+  the reference's RVQ codes exactly, on every clip from reference/make_audio_clips.py (5 s to 600 s, one to ten
+  6000-frame segments), at the backend's thread count (8; the reference runs at MIMO_AUDIO_THREADS), and the
+  reference's hidden states bit for bit.
 * ``embed_audio`` returns bf16 [audio_token_len(T), 4096]: with an fp32 patch encoder bit for bit the reference's
   embeddings cast to bf16, with the default bf16 patch encoder PCC >= 0.9995 against them.
 * It restores the caller's torch thread count and validates the mel's shape.
@@ -66,6 +67,21 @@ def test_codes_identical_to_reference(setup, backends, clip):
     assert torch.get_num_threads() == THREADS
     assert torch.equal(got, want), (got != want).any(1).float().mean()
     logger.info(f"{clip}: {mel.shape[0]} mel frames, {got.shape[0]} code frames identical to the reference")
+
+
+@pytest.mark.parametrize("clip", ("speech_30s", "speech_65s", "speech_300s"))
+def test_hidden_identical_to_reference(setup, backends, clip):
+    """The encoder's cheaper attention (is_causal full layers, key-block-aligned windowed layers) leaves the 25 Hz
+    hidden states bit-identical, not only the codes: one segment over 512 queries, two segments, five segments."""
+    if clip not in setup["mels"]:
+        pytest.skip(f"{clip}.wav not in the clips directory")
+    mel, cfg = setup["mels"][clip], setup["cfg"]
+    lens = torch.tensor(ref.segment_lengths(mel.shape[0], cfg.segment_size))
+    with torch.inference_mode():
+        want, _ = ref.AudioTokenizerEncoder(setup["weights"], cfg, torch.float32).features(mel, lens)
+        got, _ = backends[0].encoder.features(mel, lens)
+    assert torch.equal(got, want), (got - want).abs().max()
+    logger.info(f"{clip}: {lens.tolist()} mel frames per segment, {got.shape[0]} hidden rows identical")
 
 
 @pytest.mark.parametrize("clip", ("speech_5s", "speech_65s"))
