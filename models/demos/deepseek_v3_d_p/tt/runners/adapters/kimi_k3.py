@@ -190,6 +190,10 @@ class KimiK3Adapter(MLAPrefillAdapter):
                 f"{self.name}: a {'DSA' if has_indexer else 'dense MLA'} model cannot use a {kvpe_format} kvpe "
                 "cache; sparse_sdpa reads only sparse formats and the dense MLA path only bf8 TILE"
             )
+        # Sparse ttMLA always writes and gathers TP-deduped kvpe and index caches; a TP-replicated allocation would
+        # be written in the deduped layout with nothing to catch it.
+        if has_indexer and not self._dense_tp_shard_kv(params):
+            raise ValueError(f"{self.name}: DSA layers need TP-deduped KV caches; set tp_shard_kv")
 
         schedule = KimiK3LayerSchedule.build(KimiK3Config, params.first_layer_idx, params.num_layers)
         kvpe = index = None

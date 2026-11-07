@@ -115,6 +115,7 @@ def _model_args_from_hf(config: SparseMLAConfig, seq_len: int) -> ModelArgs:
         index_topk=config.index_topk,
         index_rope_interleave=config.index_rope_interleave,
         index_rope_dim=getattr(config, "index_rope_dim", None),
+        index_k_norm_eps=getattr(config, "index_k_norm_eps", ModelArgs.index_k_norm_eps),
         mla_use_nope=bool(getattr(config, "mla_use_nope", False)),
         mla_use_output_gate=_is_gated(config),
     )

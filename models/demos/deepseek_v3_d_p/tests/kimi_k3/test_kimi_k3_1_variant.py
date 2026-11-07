@@ -64,3 +64,19 @@ def test_kimi_k3_1_flags():
     assert not K31.supports_dflash  # Kimi-K3-DSpark targets K3
     assert not K31.passes_indexer_indices  # every DSA layer runs its own indexer
     assert K31.reference_attention_cls is None  # no K3.1 CPU reference; K3's MLA has no indexer
+
+
+def test_kimi_k3_1_indexer_k_norm_uses_its_rms_norm_eps():
+    """vLLM's KimiK3DSAIndexerKNorm takes config.rms_norm_eps (1e-5); DS-V3.2 / GLM keep the reference's 1e-6.
+    The CPU reference reads the same config field the device indexer does."""
+    from models.demos.deepseek_v3_d_p.reference.cpu_deepseek_v32.reference import _model_args_from_hf
+    from models.demos.deepseek_v3_d_p.reference.deepseek_v3_2_config import deepseek_v32_hf_config
+    from models.demos.deepseek_v3_d_p.reference.glm_5_3_config import glm_5_3_hf_config
+    from models.demos.deepseek_v3_d_p.reference.kimi_k3_1_config import kimi_k3_1_hf_config
+
+    k31 = kimi_k3_1_hf_config()
+    assert k31.index_k_norm_eps == KimiK31Config.RMS_NORM_EPS == 1e-5
+    assert _model_args_from_hf(k31, 5120).index_k_norm_eps == 1e-5
+    for config in (deepseek_v32_hf_config(), glm_5_3_hf_config()):
+        assert not hasattr(config, "index_k_norm_eps")
+        assert _model_args_from_hf(config, 5120).index_k_norm_eps == 1e-6

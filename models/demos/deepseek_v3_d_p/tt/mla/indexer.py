@@ -357,6 +357,8 @@ class TtIndexerBase:
         if self._index_rope_dim is None:
             self._index_rope_dim = 64
         assert self._index_rope_dim in (0, 64), f"indexer rope width must be 0 (NoPE) or 64; got {self._index_rope_dim}"
+        # k_norm epsilon: absent -> 1e-6 (DS-V3.2 / GLM); Kimi-K3.1 sets its rms_norm_eps (vLLM KimiK3DSAIndexerKNorm).
+        self._index_k_norm_eps = getattr(config, "index_k_norm_eps", 1e-6)
         self.seq_len = seq_len
         # Keep the index tensor width fixed at the configured maximum, except on small-cache test /
         # deployment configurations where the cache itself cannot contain that many entries.  This
@@ -724,7 +726,7 @@ class TtIndexerBase:
             k,
             weight=self._idx_knorm_w,
             bias=self._idx_knorm_b,
-            epsilon=1e-6,
+            epsilon=self._index_k_norm_eps,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             compute_kernel_config=self.default_compute_kernel_config,
         )

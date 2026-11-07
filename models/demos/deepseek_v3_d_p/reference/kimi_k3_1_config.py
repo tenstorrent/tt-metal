@@ -44,6 +44,8 @@ def kimi_k3_1_hf_config(max_seq: int = 8192):
     cfg.index_topk = KimiK31Config.INDEX_TOPK
     cfg.index_rope_dim = KimiK31Config.INDEX_ROPE_DIM
     cfg.index_rope_interleave = True
+    # vLLM's KimiK3DSAIndexerKNorm (LayerNorm) takes config.rms_norm_eps, not DS-V3.2's 1e-6.
+    cfg.index_k_norm_eps = cfg.rms_norm_eps
     # Overlap the indexer TopK with the sparse-KV gather, as GLM-5.3 (serial on SP=1).
     cfg.sparse_mla_overlap_profile = "auto"
     return cfg
