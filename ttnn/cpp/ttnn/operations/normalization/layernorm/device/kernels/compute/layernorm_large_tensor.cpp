@@ -102,7 +102,6 @@ void kernel_main() {
 #else
     constexpr auto dfb_beta_id = dfb_out_id;
 #endif
-    constexpr auto dfb_xmm_id = dfb::xmm;  // x minus mean
 #ifndef RMSNORM
     constexpr auto dfb_ex_id = dfb::ex;  // E[x]
 #else
@@ -143,20 +142,10 @@ void kernel_main() {
     constexpr bool do_fuse_pre_add = false;
 #endif
 
-#ifdef FUSE_PRE_ADD
-#ifdef RMSNORM
-    constexpr auto dfb_x_id = dfb_xmm_id;
-#else
-    constexpr auto dfb_x_id = dfb::x;
-#endif
-#endif
-
     constexpr auto in_input = ckl::input(
         dfb_in_id, ckl::WaitPolicy::PerBlockSize, ckl::PopPolicy::PerBlockSize, ckl::InputTileMapping::Block);
     constexpr auto inb_input = ckl::input(
         dfb_inb_id, ckl::WaitPolicy::PerBlockSize, ckl::PopPolicy::PerBlockSize, ckl::InputTileMapping::Block);
-    constexpr auto xmm_input = ckl::input(
-        dfb_xmm_id, ckl::WaitPolicy::PerBlockSize, ckl::PopPolicy::PerBlockSize, ckl::InputTileMapping::Block);
     constexpr auto fusion_input = ckl::input(
         dfb_fusion_id, ckl::WaitPolicy::PerBlockSize, ckl::PopPolicy::PerBlockSize, ckl::InputTileMapping::Block);
     constexpr auto gamma_input = ckl::input(
@@ -197,7 +186,6 @@ void kernel_main() {
     DataflowBuffer dfb_ex2pe(dfb_ex2pe_id);
     DataflowBuffer dfb_accumulate(dfb_accumulate_id);
     DataflowBuffer dfb_ex2(dfb_ex2_id);
-    DataflowBuffer dfb_xmm(dfb_xmm_id);
 #ifdef FUSE_GAMMA
     DataflowBuffer dfb_gamma(dfb_gamma_id);
 #else
@@ -217,7 +205,7 @@ void kernel_main() {
 #endif
 
 #ifdef FUSE_PRE_ADD
-    compute_kernel_hw_startup(dfb_in_id, dfb_inb_id, dfb_x_id);
+    compute_kernel_hw_startup(dfb_in_id, dfb_inb_id, dfb_xmm2_id);
 #else
     // Always call compute_kernel_hw_startup regardless of TILIZE_IN.
     // This initializes llk_pack_dest_init, which sets up the MATH-PACK DST semaphore
@@ -431,7 +419,7 @@ void kernel_main() {
 #ifndef RMSNORM
             dfb_ex.wait_front(1);
 #endif
-            retarget_packer(dfb_xmm_id);
+            retarget_packer(dfb_im_or_out_id);
             ckl::eltwise_chain(
                 block_shape,
                 ckl::Optional<
@@ -447,21 +435,15 @@ void kernel_main() {
                 ckl::Optional<
                     do_fuse_pre_add,  // FUSE_PRE_ADD: + b (DEST-reuse), else stripped
                     ckl::DestReuseBinary<ckl::BinaryFpuOp::Add, inb_input, ckl::DestReuseType::DEST_TO_SRCB>>{dfb_inb},
-                // Note: We shouldn't have to pack to
-                // an intermediate buffer. We should be able to
-                // do a binary dest with reuse (as we used
-                // to). However, tt-llk #868 is preventing
-                // that from working at the moment.
-                ckl::PackTile<ckl::output(dfb_xmm_id, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize)>{
-                    dfb_xmm});
-
-            retarget_packer(dfb_im_or_out_id);
-            ckl::eltwise_chain(
-                block_shape,
-                ckl::BinaryFpu<
+                // FromInput: SrcA would otherwise keep dfb_in's (or dfb_inb's) format and truncate the
+                // fp32 x - E[x] in DEST to it. ex2pe is an intermediate (Float32 under fp32_dest_acc_en,
+                // i.e. Tf32 in SrcA), so this keeps DEST's precision on the operand HiFi2 fully covers.
+                ckl::DestReuseBinary<
                     ckl::BinaryFpuOp::Mul,
-                    xmm_input,
-                    ckl::input(dfb_ex2pe_id, ckl::WaitPolicy::Upfront, ckl::PopPolicy::None)>{dfb_xmm, dfb_ex2pe},
+                    ckl::input(dfb_ex2pe_id, ckl::WaitPolicy::Upfront, ckl::PopPolicy::None),
+                    ckl::DestReuseType::DEST_TO_SRCA,
+                    ckl::Dst::D0,
+                    ckl::DestOperandFormat::FromInput>{dfb_ex2pe},
                 ckl::Optional<activate_after_normalize, FusedActivation>{},
                 ckl::PackTile<ckl::output(
                     dfb_im_or_out_id, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize)>{dfb_im_or_out});
