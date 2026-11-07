@@ -2187,7 +2187,8 @@
   test_tags: [kimi_k3, runner, kv_cache]
   test_group: disagg_prefill
   skus:
-    bh_sc4:
+    bh_sc4_high_power:
+      # THROWAWAY (power investigation): K3 SC4 on the 14 kW pool instead of the 8 kW one.
       # Weight load dominates and it is NFS-bandwidth-bound, not compute-bound: the TTNN cache is
       # 1.5 TB of tensorbins on the models share and all four ranks stream their slice of it at once,
       # so the phase runs at roughly line rate and its cost swings with whatever else is on the mount.

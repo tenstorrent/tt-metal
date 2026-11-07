@@ -196,6 +196,7 @@ shield:
     bh_p150: 60
   demo:
     bh_sc4: 380
+    bh_sc4_high_power: 200
     bh_sc1: 120
     bh_sc1_high_power: 210
 
