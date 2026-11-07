@@ -9,10 +9,7 @@ import numpy as np
 from math import prod
 from loguru import logger
 
-from tt_py_test_utils_common.utility_functions import skip_for_blackhole
 
-
-@skip_for_blackhole("Not tested / built for Blackhole")
 @pytest.mark.parametrize("num_tiles", [1, 12, 64, 128])
 def test_eltwise_exp(device, num_tiles):
     shape = [1, num_tiles, 32, 32]
