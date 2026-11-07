@@ -9,6 +9,12 @@ KV chunk address table that carries the MLA kvpe cache, as two extra configs:
 | 1 | `"01"` | KDA recurrent state | synthetic, `chunk_n_tokens = 96` | `[128, 32]` FP32 V-band, 16384 B |
 | 2 | `"02"` | KDA convolution tail | synthetic, `chunk_n_tokens = 64` | `[3, 64]` BF16 rectangle, 384 B |
 
+Kimi-K3.1 publishes four: its Gated DSA layers add the indexer key cache as `"01"` (tokens, 32 per chunk,
+`[32, 128]` bfp8, 4352 B, on the same layer rows and slabs as kvpe, whose chunk is scaled FP8, 32 x 704 B),
+and the two KDA configs move to `"02"` and `"03"` unchanged. Consumers find a config by the adapter's
+`cache_kind`, never by its number. `tests/test_kv_cache_table.py::test_kimi_k3_kv_cache_table` publishes
+both tables from device caches through the runner's `setup_kv_chunk_table` and reads every chunk back.
+
 Every config is published on the model's layer axis (rows 3, 7, 11, ... for kvpe; every other row
 for KDA). A KDA config has no token axis, so it uses the synthetic axis it shares with decode
 (tt-blaze `blaze/models/kimi_k3/cache_migration.py`, tt-blaze #6203): both states span one window of
