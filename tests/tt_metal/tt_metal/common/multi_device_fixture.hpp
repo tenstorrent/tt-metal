@@ -164,14 +164,26 @@ protected:
                 config_.fabric_tensix_config,
                 config_.fabric_udm_mode);
         }
-        mesh_device_ = MeshDevice::create(
-            MeshDeviceConfig(requested_mesh_shape, config_.mesh_offset),
+        // Fabric requires every device in the system to be active, so a smaller fabric mesh is opened as a submesh of
+        // the full system mesh.
+        const bool open_as_submesh =
+            tt::tt_metal::MetalContext::instance().get_fabric_config() != tt_fabric::FabricConfig::DISABLED &&
+            requested_mesh_shape.mesh_size() < system_mesh_shape.mesh_size();
+        auto mesh_device = MeshDevice::create(
+            open_as_submesh ? MeshDeviceConfig(system_mesh_shape)
+                            : MeshDeviceConfig(requested_mesh_shape, config_.mesh_offset),
             config_.l1_small_size,
             config_.trace_region_size,
             config_.num_cqs,
             core_type,
             {},
             config_.worker_l1_size);
+        if (open_as_submesh) {
+            parent_mesh_device_ = std::move(mesh_device);
+            mesh_device_ = parent_mesh_device_->create_submesh(requested_mesh_shape, config_.mesh_offset);
+        } else {
+            mesh_device_ = std::move(mesh_device);
+        }
     }
 
     void TearDown() override {
@@ -180,6 +192,10 @@ protected:
         }
         mesh_device_->close();
         mesh_device_.reset();
+        if (parent_mesh_device_) {
+            parent_mesh_device_->close();
+            parent_mesh_device_.reset();
+        }
         if (config_.fabric_config != tt_fabric::FabricConfig::DISABLED) {
             tt_fabric::SetFabricConfig(tt_fabric::FabricConfig::DISABLED);
         }
@@ -188,6 +204,7 @@ protected:
     void init_max_dfbs() { max_dfbs_ = tt::tt_metal::MetalContext::instance().hal().get_num_dataflow_buffers(); }
 
     std::shared_ptr<tt::tt_metal::distributed::MeshDevice> mesh_device_;
+    std::shared_ptr<tt::tt_metal::distributed::MeshDevice> parent_mesh_device_;
     uint32_t max_dfbs_{};
 
     Config config_;
@@ -321,26 +338,6 @@ protected:
             .fabric_config = tt_fabric::FabricConfig::FABRIC_2D,
             .fabric_tensix_config = tt_fabric::FabricTensixConfig::UDM,
             .fabric_udm_mode = tt_fabric::FabricUDMMode::ENABLED}) {}
-
-    void SetUp() override {
-        // When Fabric is enabled, it requires all devices in the system to be active.
-        // For Blackhole P150_X8 systems (8 independent chips), opening 4 devices leaves 4 inactive, causing a fatal error.
-        // For T3K (4 N300 boards = 8 chips), opening 4 MMIO devices automatically activates all 8 chips, so it works.
-        // Skip the test only on Blackhole systems with more than 4 devices.
-        const auto cluster_type = tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type();
-        const size_t num_devices = tt::tt_metal::MetalContext::instance().get_cluster().number_of_devices();
-        const size_t requested_devices = 4;  // 1x4 mesh
-
-        if (cluster_type == tt::tt_metal::ClusterType::P150_X8 && num_devices > requested_devices) {
-            GTEST_SKIP() << fmt::format(
-                "Skipping MeshDevice1x4Fabric2DUDMFixture test on P150_X8: "
-                "System has {} independent Blackhole devices but test only requests {}. "
-                "Fabric requires all devices to be active.",
-                num_devices,
-                requested_devices);
-        }
-        MeshDeviceFixtureBase::SetUp();
-    }
 };
 
 class MeshDevice2x4Fabric2DUDMFixture : public MeshDeviceFixtureBase {

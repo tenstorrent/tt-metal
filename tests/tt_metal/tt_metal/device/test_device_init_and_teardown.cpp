@@ -146,7 +146,8 @@ struct ScopedFabricConfig {
 
 }  // namespace
 
-// FabricFirmwareInitializer rejects a single-host open with fewer than two chips.
+// A single-host 1x1 fabric open is rejected: by DeviceManager when other chips in the fabric mesh stay closed, and by
+// FabricFirmwareInitializer on a 1-chip cluster.
 TEST(DeviceInitFabric, RejectsSingleHost1ChipMesh) {
     if (get_physical_architecture() == tt::ARCH::Invalid) {
         GTEST_SKIP() << "No TT hardware detected";
@@ -163,9 +164,11 @@ TEST(DeviceInitFabric, RejectsSingleHost1ChipMesh) {
         GTEST_SKIP() << "Galaxy opens the full cluster when fabric is enabled, so a 1x1 mesh never hits this guard";
     }
     if (cluster.mmio_chip_ids().size() != cluster.all_chip_ids().size()) {
-        GTEST_SKIP() << "Clusters with remote chips fatal earlier when fabric is launched on a subset of devices";
+        GTEST_SKIP() << "Clusters with remote chips open every chip when fabric is enabled";
     }
 
+    const char* expected_error =
+        cluster.number_of_devices() > 1 ? "is not active" : "requires at least 2 participating chips";
     ScopedFabricConfig fabric(tt::tt_fabric::FabricConfig::FABRIC_1D);
     EXPECT_THAT(
         [] {
@@ -173,7 +176,7 @@ TEST(DeviceInitFabric, RejectsSingleHost1ChipMesh) {
                 distributed::MeshDevice::create(distributed::MeshDeviceConfig(distributed::MeshShape{1, 1}));
             mesh_device->close();
         },
-        ThrowsMessage<std::runtime_error>(HasSubstr("requires at least 2 participating chips")));
+        ThrowsMessage<std::runtime_error>(HasSubstr(expected_error)));
 }
 
 constexpr const char* kTdpLimitEnvVar = "TT_METAL_TDP_LIMIT_WATTS";
