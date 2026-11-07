@@ -179,6 +179,14 @@ def test_xiaomi_frame_sizes(processors):
     assert (t, gh * gw // 4) == (32, 276)
 
 
+def test_video_items_bounded_only_by_the_context(processors):
+    """vLLM sizes its encoder cache from the processing info's per-item bounds and refuses a longer item; upstream's
+    video bound (114688) refused a VGI-Bench clip of 124078 embedding rows. A video's bound is the context."""
+    upstream = processors["upstream"].info.get_mm_max_tokens_per_item(1048576, {"video": 1})
+    ours = processors["ours"].info.get_mm_max_tokens_per_item(1048576, {"video": 1})
+    assert upstream["video"] < 124078 and ours["video"] == 1048576 and ours["image"] == upstream["image"]
+
+
 def test_frames_resized_before_the_processor_as_it_would(processors):
     """mimo_video resizes the frames to the processor's size first (chunks of RESIZE_CHUNK, so a long clip's frames never
     exist as full-size floats); the processor's own resize is then the identity, and its pixels equal what it makes
