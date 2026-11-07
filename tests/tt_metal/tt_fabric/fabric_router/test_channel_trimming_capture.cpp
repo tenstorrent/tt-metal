@@ -36,6 +36,7 @@
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 #include "context/metal_env_accessor.hpp"
 #include "impl/context/metal_context.hpp"
+#include "impl/dispatch/slow_dispatch.hpp"
 #include "tt_metal/fabric/erisc_datamover_builder.hpp"
 #include "tt_metal/fabric/fabric_builder_context.hpp"
 #include "tt_metal/fabric/fabric_context.hpp"

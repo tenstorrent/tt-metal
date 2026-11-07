@@ -7,7 +7,6 @@
 #include <tt_stl/reflection.hpp>
 #include <cstdint>
 #include <vector>
-#include <algorithm>
 #include <numeric>
 #include <unordered_map>
 #include <string_view>
@@ -23,6 +22,7 @@
 #include "tt_metal/hw/inc/hostdev/fabric_edm_packet_header.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_status.h"
 #include "impl/context/metal_context.hpp"
+#include "impl/dispatch/slow_dispatch.hpp"
 #include "tt_metal/fabric/fabric_host_utils.hpp"
 #include "tt_metal/fabric/fabric_context.hpp"
 
