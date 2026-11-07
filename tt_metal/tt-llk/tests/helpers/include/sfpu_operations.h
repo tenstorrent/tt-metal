@@ -140,7 +140,7 @@ constexpr std::uint32_t EXP_WITH_BASE_SCALE_FP32 = EXP_WITH_BASE_SCALE_BF16 << 1
 constexpr int EXP_APPROX_CLAMP_ITERATIONS = 8;
 
 // Lrelu's slope, 0.1f (LRELU_NEGATIVE_SLOPE in sfpu_dispatch_constants.py). A test's params.h may define
-// another; test_eltwise_unary_sfpu_bf16_leaky_relu.py sets 0.01f, the slope the BF16 kernel serves.
+// another, as a generated BF16 sweep does at the slope its kernel serves.
 #ifndef LRELU_SLOPE_BITS
 #define LRELU_SLOPE_BITS 0x3dcccccdu
 #endif
@@ -1242,14 +1242,7 @@ void call_unary_sfpu_operation(std::uint32_t dst_index, std::uint32_t math_forma
     }
     else if constexpr (OPERATION == SfpuType::lrelu)
     {
-        SFPU_UNARY_CALL(
-            DST_SYNC_MODE,
-            DST_ACCUM_MODE,
-            calculate_lrelu,
-            (APPROX_MODE, ITERATIONS, DST_ACCUM_MODE),
-            dst_index,
-            vector_mode,
-            LRELU_SLOPE_BITS);
+        SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_lrelu, (APPROX_MODE, ITERATIONS, DST_ACCUM_MODE), dst_index, vector_mode, LRELU_SLOPE_BITS);
     }
     else if constexpr (OPERATION == SfpuType::add_int32)
     {

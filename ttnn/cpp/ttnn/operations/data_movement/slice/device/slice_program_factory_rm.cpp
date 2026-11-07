@@ -72,10 +72,10 @@ inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_
         accumulated_total_per_dim[i] = num_total_dim * accumulated_total_per_dim[i - 1];
     }
 
-    auto src_buffer_alignment = input_tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM
+    auto src_buffer_alignment = input_tensor.memory_config().buffer_type() == tt::tt_metal::BufferType::DRAM
                                     ? ::hal::get_dram_alignment()
                                     : ::hal::get_l1_alignment();
-    auto dst_buffer_alignment = output_tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM
+    auto dst_buffer_alignment = output_tensor.memory_config().buffer_type() == tt::tt_metal::BufferType::DRAM
                                     ? ::hal::get_dram_alignment()
                                     : ::hal::get_l1_alignment();
     auto alignment = std::max(src_buffer_alignment, dst_buffer_alignment);
@@ -181,14 +181,14 @@ struct SliceDfbSizing {
 // (misalign path uses a whole-stick memmove that doesn't compose with chunk boundaries).
 SliceDfbSizing compute_dfb_size(
     const Tensor& input,
-    const Tensor& output,
+    const TensorSpec& output,
     const Shape& output_tensor_start,
     const uint32_t num_sticks_per_core_group_1,
     const uint32_t num_sticks_per_core_group_2) {
-    auto src_buffer_alignment = input.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM
+    auto src_buffer_alignment = input.memory_config().buffer_type() == tt::tt_metal::BufferType::DRAM
                                     ? ::hal::get_dram_alignment()
                                     : ::hal::get_l1_alignment();
-    auto dst_buffer_alignment = output.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM
+    auto dst_buffer_alignment = output.memory_config().buffer_type() == tt::tt_metal::BufferType::DRAM
                                     ? ::hal::get_dram_alignment()
                                     : ::hal::get_l1_alignment();
     const auto single_alignment = std::max(src_buffer_alignment, dst_buffer_alignment);
@@ -340,10 +340,11 @@ ttnn::device_operation::ProgramArtifacts SliceRmProgramFactory::create_program_a
     tt::DataFormat dfb_data_format =
         ttnn::operations::data_movement::get_slice_dfb_data_format(input.dtype(), device->arch());
 
-    // DFB sizing (incl. chunking) derives from padded_shape + slice_start + alignment, all of which
-    // fold into compute_program_hash(), so cache entries stay distinct per unique DFB layout.
+    // DFB sizing (incl. chunking) derives from padded_shape + slice_start + alignment + the L1 free
+    // now, all of which fold into compute_program_hash(), so cache entries stay distinct per unique
+    // DFB layout.
     const auto sizing = ttnn::operations::data_movement::compute_dfb_size(
-        input, output, args.slice_start, num_sticks_per_core_group_1, num_sticks_per_core_group_2);
+        input, output.tensor_spec(), args.slice_start, num_sticks_per_core_group_1, num_sticks_per_core_group_2);
 
     const std::uint32_t num_dims = static_cast<std::uint32_t>(input.padded_shape().rank());
 
@@ -542,6 +543,12 @@ tt::tt_metal::experimental::ProgramRunArgs SliceRmProgramFactory::override_runti
     Tensor& output,
     const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
     return slice_row_major_run_args(tensor_args, output);
+}
+
+uint32_t SliceRmProgramFactory::dfb_entry_size(
+    const SliceParams& args, const SliceInputs& tensor_args, const TensorSpec& output) {
+    return ttnn::operations::data_movement::compute_dfb_size(tensor_args.input, output, args.slice_start, 0, 0)
+        .dfb_entry_size;
 }
 
 }  // namespace ttnn::prim
