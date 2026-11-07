@@ -3566,3 +3566,105 @@ def test_native_prediction_tables_cover_their_cases():
     ), f"height_67 gives each compute thread {per_thread} tiles, not 2 or more batches of {_RULE_TILES_PER_CYCLE}"
     for table_name, table in (("_OP_TAIL_SHARDS", _OP_TAIL_SHARDS), ("_FP32_TAIL_SHARDS", _FP32_TAIL_SHARDS)):
         assert any(entry[0].startswith("height_67/") for entry in table), f"height_67 is not in {table_name}"
+_NEW_NATIVE_OP_SRC = """
+import os, pathlib, sys
+import torch, ttnn
+
+OPS = {
+    "squared_difference": ttnn.experimental.quasar.squared_difference,
+    "rsub": ttnn.experimental.quasar.rsub,
+    "hypot": ttnn.experimental.quasar.hypot,
+    "logical_and": ttnn.experimental.quasar.logical_and,
+    "logical_or": ttnn.experimental.quasar.logical_or,
+    "logical_xor": ttnn.experimental.quasar.logical_xor,
+    "ldexp": ttnn.experimental.quasar.ldexp,
+    "logaddexp": ttnn.experimental.quasar.logaddexp,
+    "bias_gelu": ttnn.experimental.quasar.bias_gelu,
+    "pow": ttnn.experimental.quasar.pow,
+    "logaddexp2": ttnn.experimental.quasar.logaddexp2,
+}
+SHAPES = [("4x32", (4 * 32, 32 * 32)), ("1x2080", (32, 2080 * 32))]
+EXPECT = os.environ["ARM_EXPECT"]
+OUT_PATH = pathlib.Path(os.environ["ARM_OUT"])
+root = pathlib.Path(os.environ.get("TT_METAL_LOGS_PATH") or os.environ.get("TT_METAL_HOME") or os.getcwd())
+
+results = {}
+device = ttnn.open_device(device_id=0)
+try:
+    for shape_tag, shape in SHAPES:
+        torch.manual_seed(0)
+        a_base = torch.randn(shape, dtype=torch.float32)
+        b_base = torch.randn(shape, dtype=torch.float32)
+        for dtype_name, dtype_tt, bit_dtype in (
+            ("bf16", ttnn.bfloat16, torch.int16),
+            ("fp32", ttnn.float32, torch.int32),
+        ):
+            for op_name, op_fn in OPS.items():
+                if dtype_name == "fp32" and op_name == "rsub":
+                    continue
+                if op_name.startswith("logical_"):
+                    a = a_base.abs() + 0.5
+                    b = b_base.abs() + 0.5
+                    a.view(-1)[::2] = 0.0
+                    b.view(-1)[::4] = 0.0
+                    b.view(-1)[1::4] = 0.0
+                else:
+                    a = a_base.abs() + 0.5 if op_name == "pow" else a_base
+                    b = torch.clamp(b_base.round(), -4.0, 4.0) if op_name == "ldexp" else b_base
+                ta = ttnn.from_torch(a, dtype=dtype_tt, layout=ttnn.TILE_LAYOUT, device=device)
+                tb = ttnn.from_torch(b, dtype=dtype_tt, layout=ttnn.TILE_LAYOUT, device=device)
+                out = op_fn(ta, tb, dtype=dtype_tt)
+                results[f"{shape_tag}/{dtype_name}/{op_name}"] = ttnn.to_torch(out).contiguous().view(bit_dtype).cpu()
+                del ta, tb, out
+finally:
+    ttnn.close_device(device)
+
+sources = [
+    ln.split("source:", 1)[1].strip()
+    for ln in (root / "generated" / "inspector" / "kernels.yaml").read_text().splitlines()
+    if "source:" in ln
+]
+binary_ng = [s for s in sources if "/binary_ng/device/kernels" in s]
+qsr = [s for s in binary_ng if "kernels_qsr/" in s]
+dfb = [s for s in binary_ng if "kernels_dfb/" in s]
+other = len(binary_ng) - len(qsr) - len(dfb)
+if EXPECT == "qsr" and (dfb or other or not qsr):
+    print(f"FAIL: expected kernels_qsr only, got qsr={len(qsr)} dfb={len(dfb)} other={other}")
+    sys.exit(1)
+if EXPECT == "dfb" and (qsr or other or not dfb):
+    print(f"FAIL: expected kernels_dfb only, got qsr={len(qsr)} dfb={len(dfb)} other={other}")
+    sys.exit(1)
+torch.save(results, OUT_PATH)
+print("PASS")
+"""
+
+
+@pytest.mark.skipif(not _native_enabled(), reason="native factory off: TTNN_QSR_NATIVE=0, or not Quasar")
+def test_native_admitted_11_ops_are_bit_identical_to_metal_v2(tmp_path):
+    """The 11 remaining ops admitted in #62914 must bind kernels_qsr/ and match TTNN_QSR_NATIVE=0 bit-for-bit."""
+    qsr_pt = tmp_path / "qsr.pt"
+    dfb_pt = tmp_path / "dfb.pt"
+    base_env = {k: v for k, v in os.environ.items() if not k.startswith("TTNN_QSR_")}
+    for expect, native_knob, out_file in (("qsr", "1", qsr_pt), ("dfb", "0", dfb_pt)):
+        logs = tmp_path / f"logs_{expect}"
+        logs.mkdir()
+        env = {
+            **base_env,
+            "TTNN_QSR_NATIVE": native_knob,
+            "TT_METAL_LOGS_PATH": str(logs),
+            "ARM_EXPECT": expect,
+            "ARM_OUT": str(out_file),
+        }
+        p = subprocess.run(
+            [sys.executable, "-c", _NEW_NATIVE_OP_SRC],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=1800,
+        )
+        assert p.returncode == 0 and "PASS" in p.stdout, f"{expect} arm failed:\n{p.stdout}\n{p.stderr[-2000:]}"
+    qsr_res = torch.load(qsr_pt, weights_only=True)
+    dfb_res = torch.load(dfb_pt, weights_only=True)
+    assert set(qsr_res) == set(dfb_res) and len(qsr_res) == 42
+    mismatched = [k for k in sorted(qsr_res) if not torch.equal(qsr_res[k], dfb_res[k])]
+    assert not mismatched, f"native output bits differ from Metal 2.0 factory on: {mismatched}"
