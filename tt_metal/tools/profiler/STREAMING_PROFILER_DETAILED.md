@@ -208,6 +208,10 @@ Everything except `TT_METAL_STREAMING_PROFILER` itself applies in mode 3 only.
 | `TT_METAL_STREAMING_PROFILER_OPS_CSV=<path>` | Per-op CSV consumer (one row per op; see §1.7). |
 | `TT_METAL_STREAMING_PROFILER_ZONE_CSV=<path>` | Per-zone CSV consumer (one row per zone). |
 
+Both CSVs also carry each record's time on the synchronized timeline (§2.5), in ns of `steady_clock`: `time[ns]` on
+each zone row, `SYNCED START [ns]` and `SYNCED END [ns]` on each op row. Unlike the device cycle columns, they compare
+across chips.
+
 A plain `TT_METAL_STREAMING_PROFILER=1` run therefore drains and decodes but writes nothing; that is the configuration the
 knee sweeps use, since every consumer adds host-side cost.
 
