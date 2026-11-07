@@ -78,7 +78,14 @@ sfpi_inline void iq4_params()
     }
 }
 
-// IQ4_NL and IQ4_XS through SFPLOADMACRO (body_macro_iq4).
+// IQ4_NL and IQ4_XS through SFPLOADMACRO (body_macro_iq4), and its coefficients.
+constexpr std::uint32_t IQ4M_C4    = 0x3ACFE2C4;
+constexpr std::uint32_t IQ4M_C3    = 0x3CFEA8FD;
+constexpr std::uint32_t IQ4M_C2    = 0xBFAF9B4E;
+constexpr std::uint32_t IQ4M_C1    = 0x41C16401;
+constexpr std::uint32_t IQ4M_C0K   = 0xC4CFD224; // c0 - 1536
+constexpr std::uint32_t IQ4M_NEG_K = 0x44C0;     // 1536, bf16
+
 template <int FMT>
 constexpr bool iq4_macro_body = LOADMACRO && (FMT == IQ4_NL || FMT == IQ4_XS);
 
@@ -102,19 +109,24 @@ inline void macro_init_iq4()
     TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_UPPER, (store << 8) | round);
     TTI_SFPCONFIG(0, 5, 0);
     TTI_SFPCONFIG(0xF00, 8, sfpi::SFPCONFIG_MOD1_ARG_IMM);
+    // c4, c3, c2 of body_macro_iq4 in L12..L14, which no other decode code of these formats writes.
+    TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_LOWER, IQ4M_C4 & 0xFFFF);
+    TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_UPPER, IQ4M_C4 >> 16);
+    TTI_SFPCONFIG(0, 12, 0);
+    TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_LOWER, IQ4M_C3 & 0xFFFF);
+    TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_UPPER, IQ4M_C3 >> 16);
+    TTI_SFPCONFIG(0, 13, 0);
+    TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_LOWER, IQ4M_C2 & 0xFFFF);
+    TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_UPPER, IQ4M_C2 >> 16);
+    TTI_SFPCONFIG(0, 14, 0);
     TTI_SFPNOP;
 }
 
 // IQ4_NL / IQ4_XS through SFPLOADMACRO: a degree-4 polynomial of q whose constant term carries K = -1536, so a TF32
 // round gives kv + K exactly and S (kv + K) + M with M = -K S equals kv S (zeros may differ in sign from body()).
 // Seven slots per output (make_qplan), Horner in L[3 + k % 2] with c4, c3, c2, c1 in L12, L13, L14, L11 and c0K in L7,
-// whose low five bits are also the shift amount -28. S, M in L5, L6. L11 is restored to -1.0 at the end.
-constexpr std::uint32_t IQ4M_C4    = 0x3ACFE2C4;
-constexpr std::uint32_t IQ4M_C3    = 0x3CFEA8FD;
-constexpr std::uint32_t IQ4M_C2    = 0xBFAF9B4E;
-constexpr std::uint32_t IQ4M_C1    = 0x41C16401;
-constexpr std::uint32_t IQ4M_C0K   = 0xC4CFD224; // c0 - 1536
-constexpr std::uint32_t IQ4M_NEG_K = 0x44C0;     // 1536, bf16
+// whose low five bits are also the shift amount -28. S, M in L5, L6. macro_init_iq4 sets c4, c3, c2 once; the body sets
+// c1, c0K and restores L11 to -1.0 at the end.
 
 enum : int
 {
@@ -153,6 +165,10 @@ constexpr qplan make_qplan()
         base[s + 10] = {QS_OUT, 16 * h + 8 * a + i, 0, 0};
         base[s + 12] = {QS_STEP, t, v, 4};
     }
+    // Scale group 0's S, M in slots 2, 3, 5, free before output 0's steps (its first MAD reads them at slot 14).
+    base[2] = {QS_SCALE, 5, PS + pidx(0, 0, 0), 0};
+    base[3] = {QS_SCALE, 6, PS + pidx(0, 0, 0), 0};
+    base[5] = {QS_NEGK, 6, 0, 0};
     for (int q = 0; q < QBASE; q++)
     {
         p.s[p.n++]  = base[q];
@@ -223,16 +239,7 @@ sfpi_inline void body_macro_iq4()
 {
     lreg_bits<0, IQ4M_C1>();
     TTI_SFPCONFIG(0, 11, 0);
-    lreg_bits<0, IQ4M_C4>();
-    TTI_SFPCONFIG(0, 12, 0);
-    lreg_bits<0, IQ4M_C3>();
-    TTI_SFPCONFIG(0, 13, 0);
-    lreg_bits<0, IQ4M_C2>();
-    TTI_SFPCONFIG(0, 14, 0);
     lreg_bits<7, IQ4M_C0K>();
-    TTI_SFPLOAD(5, sfpi::SFPLOAD_MOD0_FMT_SRCB, ADDR_MOD_7, 2 * (PS + pidx(0, 0, 0)));
-    TTI_SFPLOAD(6, sfpi::SFPLOAD_MOD0_FMT_SRCB, ADDR_MOD_7, 2 * (PS + pidx(0, 0, 0)));
-    TTI_SFPMULI(IQ4M_NEG_K, 6, 0);
     qslots_issue(std::make_integer_sequence<int, qplan_iq4.n> {});
     TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_FLOATB, 0xBF80);
     TTI_SFPCONFIG(0, 11, 0);

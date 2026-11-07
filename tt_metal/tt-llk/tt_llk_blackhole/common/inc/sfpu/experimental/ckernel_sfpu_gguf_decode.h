@@ -234,7 +234,7 @@ inline void sfpu_gguf_decode_tile_ti(const std::uint32_t dst_index, const std::u
  *
  * @tparam FMT: ckernel::gguf::Format of the pages.
  * @note Call after _llk_math_eltwise_unary_sfpu_init_, and again after other SFPU code that programs the load macros
- *       or programmable constant 2.
+ *       or the programmable constants (IQ4_NL / IQ4_XS: 0..2; the others: 2).
  */
 template <int FMT>
 inline void sfpu_gguf_decode_init()
