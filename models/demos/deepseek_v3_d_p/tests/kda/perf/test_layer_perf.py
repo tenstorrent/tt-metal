@@ -82,8 +82,10 @@ _ACTUAL_START_OVERRIDE = os.environ.get("KDA_PERF_ACTUAL_START")
 # prefix, and every full chunk of it then wraps onto its first rank, which adds the final-carry barrier and
 # broadcast that a rank-aligned start skips. Production always passes actual_end, so the gate does too. An
 # untraced call also pays its host dispatch, which a block of 10 calls does not fully hide. Host dispatch varies more
-# from run to run than the device does, hence the untraced gate's wider margin.
-_GALAXY_PERF_REFERENCE_MS = {"traced": 1.418, "untraced": 1.435}
+# from run to run than the device does, hence the untraced gate's wider margin. Traced: mean of 3 runs on
+# bh-glx-120-b07u02 with the CI job's settings, where main measures 1.417 (CI 1.418). Untraced: that plus CI's 17 us
+# untraced overhead on main, since this host dispatches slower than CI's (main untraced 1.526 here, 1.435 on CI).
+_GALAXY_PERF_REFERENCE_MS = {"traced": 1.307, "untraced": 1.324}
 _GALAXY_UNTRACED_PERF_MARGIN = 0.06
 _GALAXY_TP = 4
 _GALAXY_HEADS_PER_CHIP = KimiK3Config.KDA_NUM_HEADS // _GALAXY_TP
