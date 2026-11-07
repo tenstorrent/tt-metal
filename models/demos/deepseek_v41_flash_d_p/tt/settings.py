@@ -942,7 +942,7 @@ TABLE = {
         "runner refuses it)",
     ),
     "DECODER_SKIP": Setting(
-        "replay128",
+        "off",
         ("off", "exact", "replay128"),
         "P.30 (owner 2026-11-03, the Causal Encoder-Decoder's decoder skip, arXiv 2609.19969; default off until the "
         "owner decides). off = every layer on every chunk (the caller's ``last`` is ignored). exact = on a chunk the "
