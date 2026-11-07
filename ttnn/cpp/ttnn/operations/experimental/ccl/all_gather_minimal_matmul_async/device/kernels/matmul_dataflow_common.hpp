@@ -12,6 +12,32 @@
 #include "api/dataflow/noc_semaphore.h"
 #include "api/core_local_mem.h"
 
+// ---------------------------------------------------------------------------------------------
+// Per-stage cycle accounting for the device profiler. Compiled only into profiler builds
+// (PROFILE_KERNEL); each AGMM_TIME costs two wall-clock reads, and the totals are emitted once at
+// kernel end as timestamped data (zone names agmm-*). Zero cost otherwise.
+#if defined(PROFILE_KERNEL)
+#include "api/debug/kernel_profiler.hpp"
+#define AGMM_PROF 1
+FORCE_INLINE uint32_t agmm_clock() {
+    return *reinterpret_cast<volatile tt_reg_ptr uint32_t*>(RISCV_DEBUG_REG_WALL_CLOCK_L);
+}
+struct AgmmTimer {
+    uint64_t& acc;
+    uint32_t start;
+    FORCE_INLINE AgmmTimer(uint64_t& a) : acc(a), start(agmm_clock()) {}
+    FORCE_INLINE ~AgmmTimer() { acc += static_cast<uint32_t>(agmm_clock() - start); }
+};
+#define AGMM_CAT2(a, b) a##b
+#define AGMM_CAT(a, b) AGMM_CAT2(a, b)
+#define AGMM_TIME(acc) AgmmTimer AGMM_CAT(agmm_timer_, __LINE__)(acc)
+#define AGMM_REPORT(name, acc) DeviceTimestampedData(name, acc)
+#else
+#define AGMM_TIME(acc)
+#define AGMM_REPORT(name, acc)
+#endif
+// ---------------------------------------------------------------------------------------------
+
 namespace detail {
 template <typename... Args, uint32_t... Indexes>
 auto make_tensor_accessor_tuple_impl(
@@ -185,12 +211,35 @@ void compute_actual_k_block(
 }
 
 #ifdef USE_MUX
+// Number of scatter-write headers rotated per direction. Headers live in a per-RISC pool of 8
+// (NUM_PACKET_HEADERS / 2 on Wormhole); each fabric-sender core allocates one direction only:
+// kNumScatterHdrs scatter + 1 unicast + 1 standalone sem-inc + 1 fused write+sem-inc, plus the
+// Ring barrier header the kernel allocates, must stay <= 8: 3 + 3 + 1 = 7.
+constexpr uint32_t kNumScatterHdrs = 3;
+
 struct PacketHeaders {
-    volatile tt::tt_fabric::LowLatencyPacketHeader* scatter_hdr;
+    volatile tt::tt_fabric::LowLatencyPacketHeader* scatter_hdr;  // == scatter_hdrs[0] (in1 FSDP path)
     volatile tt::tt_fabric::LowLatencyPacketHeader* unicast_hdr;
     volatile tt::tt_fabric::LowLatencyPacketHeader* sem_inc_hdr;
+    volatile tt::tt_fabric::LowLatencyPacketHeader* scatter_hdrs[kNumScatterHdrs];
+    volatile tt::tt_fabric::LowLatencyPacketHeader* fused_hdr;  // 2-tile scatter write + sem inc
 };
 
+// Ships one half (left or right) of the in0 block in the CB at in0_start_address to the ring
+// neighbour through the mux, as 4 KB scatter packets (num_tiles_to_write_per_packet tiles each),
+// then raises the neighbour's out-ready semaphore.
+//
+// Two changes against the original single-header loop:
+//  * kNumScatterHdrs scatter headers rotate. A header may only be rewritten once the packet it
+//    carried has left the NIU, so the kernel tracks which headers were written since the last NoC
+//    flush (hdrs_in_flight) and flushes only when one of them is about to be reused: once per
+//    kNumScatterHdrs scatter packets, and before every reuse of the single unicast header that
+//    carries an odd row's lead tile (a half block of 1 tile per row reuses it every row).
+//  * The semaphore increment rides in the last data packet (fused scatter-write + atomic-inc,
+//    which carries exactly 2 write chunks), so the standalone header-only packet, its mux/router
+//    slot and its extra flush disappear. Each M row is packetised so its last packet has 2 tiles
+//    whenever the row has >= 2 tiles (an odd row sends its single tile first); only a 1-tile row
+//    falls back to a unicast write followed by the standalone increment.
 template <typename TensorAccessorType, typename ConnectionHandleType>
 FORCE_INLINE void forward_half_block_to_fabric_neighbor(
     Noc noc,
@@ -210,70 +259,104 @@ FORCE_INLINE void forward_half_block_to_fabric_neighbor(
     bool write_left_half,
     uint32_t m_tile_end,
     bool do_write) {
-    auto* pkt_scatter_hdr = pkt_hdrs.scatter_hdr;
-    auto* pkt_unicast_hdr = pkt_hdrs.unicast_hdr;
-    auto* pkt_hdr_sem_inc = pkt_hdrs.sem_inc_hdr;
+    const uint32_t half_k_block_tiles = write_left_half ? k_left_tiles : k_right_tiles;
+    const uint32_t other_half_k_block_tiles = write_left_half ? k_right_tiles : k_left_tiles;
+    const uint32_t row_stride_bytes = (half_k_block_tiles + other_half_k_block_tiles) * page_size;
+    const uint32_t num_rows = (m_tile_end > m_tile_start) ? std::min(m_block_tiles, m_tile_end - m_tile_start) : 0;
 
-    uint32_t half_k_block_tiles = write_left_half ? k_left_tiles : k_right_tiles;
-    uint32_t other_half_k_block_tiles = write_left_half ? k_right_tiles : k_left_tiles;
-    uint32_t tiles_to_read = m_block_tiles * half_k_block_tiles;
-    uint32_t tiles_read = 0;
-    uint32_t tile_id_start = m_tile_start * output_tensor_Wt + k_tile_start;
-    uint32_t row_offset = 0;
-    uint32_t pages_read_in_row = 0;
-    size_t l1_read_addr = in0_start_address + (write_left_half ? 0 : (k_left_tiles * page_size));
-    while (tiles_read < tiles_to_read) {
-        if (m_tile_start >= m_tile_end) {
-            break;
-        }
-        uint32_t tiles_remaining_to_read = tiles_to_read - tiles_read;
-        uint32_t tiles_to_put_in_current_packet = std::min(tiles_remaining_to_read, num_tiles_to_write_per_packet);
-        bool reached_half_block_end = false;
+    size_t row_l1_addr = in0_start_address + (write_left_half ? 0 : (k_left_tiles * page_size));
+    uint32_t row_tile_id = m_tile_start * output_tensor_Wt + k_tile_start;
+    uint32_t scatter_idx = 0;
+    bool sem_sent = false;
+    // Bit i: scatter header i written since the last flush; kUnicastBit: the unicast header.
+    constexpr uint32_t kUnicastBit = 1u << kNumScatterHdrs;
+    uint32_t hdrs_in_flight = 0;
 
-        uint16_t chunk_sizes[3] = {page_size, page_size, page_size};
-        uint64_t noc_addrs[4] = {0, 0, 0, 0};
-        for (uint32_t i = 0; i < tiles_to_put_in_current_packet; i++) {
-            uint32_t tile_id = tile_id_start + row_offset + pages_read_in_row;
-            pages_read_in_row++;
-            if (pages_read_in_row >= half_k_block_tiles) {
-                row_offset += output_tensor_Wt;
-                pages_read_in_row = 0;
-                reached_half_block_end = true;
-                tiles_to_put_in_current_packet = i + 1;  // break early because not contiguous in L1
-                m_tile_start++;
-            }
-            noc_addrs[i] = tt::tt_fabric::linear::addrgen_detail::get_noc_address(output_addrgen, tile_id, 0);
-        }
-        if (do_write) {
-            if (tiles_to_put_in_current_packet > 1) {
-                fabric_unicast_noc_scatter_write_with_state<
-                    UnicastScatterWriteUpdateMask::DstAddrs | UnicastScatterWriteUpdateMask::ChunkSizes |
-                    UnicastScatterWriteUpdateMask::PayloadSize>(
-                    mux_connection_handle,
-                    pkt_scatter_hdr,
-                    l1_read_addr,
-                    NocUnicastScatterCommandHeader(noc_addrs, chunk_sizes, tiles_to_put_in_current_packet),
-                    page_size * tiles_to_put_in_current_packet);
-            } else {
+    for (uint32_t row = 0; row < num_rows; row++) {
+        const bool last_row = (row + 1 == num_rows);
+        uint32_t tiles_left = half_k_block_tiles;
+        size_t l1_read_addr = row_l1_addr;
+        uint32_t tile_id = row_tile_id;
+
+        // Odd row: lead with the single tile so every later packet, and so the row's last one,
+        // holds an even number of tiles.
+        if (tiles_left & 1) {
+            if (do_write) {
+                if (hdrs_in_flight & kUnicastBit) {
+                    // The previous odd row's packet may still be reading this header: wait for it.
+                    noc.async_writes_flushed();
+                    hdrs_in_flight = 0;
+                }
+                const uint64_t dst = tt::tt_fabric::linear::addrgen_detail::get_noc_address(output_addrgen, tile_id, 0);
                 fabric_unicast_noc_unicast_write_with_state<UnicastWriteUpdateMask::DstAddr>(
-                    mux_connection_handle, pkt_unicast_hdr, l1_read_addr, NocUnicastCommandHeader{noc_addrs[0]});
+                    mux_connection_handle, pkt_hdrs.unicast_hdr, l1_read_addr, NocUnicastCommandHeader{dst});
+                hdrs_in_flight |= kUnicastBit;
             }
-
-            noc.async_writes_flushed();
-            tiles_read += tiles_to_put_in_current_packet;
-            l1_read_addr += (tiles_to_put_in_current_packet * page_size);
-            if (reached_half_block_end) {
-                l1_read_addr += (other_half_k_block_tiles * page_size);
-            }
+            l1_read_addr += page_size;
+            tile_id += 1;
+            tiles_left -= 1;
         }
+
+        while (tiles_left > 0) {
+            uint32_t take = std::min(tiles_left, num_tiles_to_write_per_packet);
+            take &= ~1u;  // packets are even-sized from here on
+            const bool final_packet = last_row && (take == tiles_left);
+            if (final_packet && take > 2) {
+                take -= 2;  // leave exactly 2 tiles for the fused write + semaphore packet
+            }
+            uint64_t noc_addrs[4] = {0, 0, 0, 0};
+            uint16_t chunk_sizes[3] = {page_size, page_size, page_size};
+            for (uint32_t i = 0; i < take; i++) {
+                noc_addrs[i] = tt::tt_fabric::linear::addrgen_detail::get_noc_address(output_addrgen, tile_id + i, 0);
+            }
+            if (do_write) {
+                if (final_packet && take == 2) {
+                    fabric_unicast_noc_fused_scatter_write_atomic_inc_with_state<
+                        UnicastFusedScatterWriteAtomicIncUpdateMask::WriteDstAddrs |
+                        UnicastFusedScatterWriteAtomicIncUpdateMask::SemaphoreDstAddr>(
+                        mux_connection_handle,
+                        pkt_hdrs.fused_hdr,
+                        l1_read_addr,
+                        tt::tt_fabric::NocUnicastScatterAtomicIncFusedCommandHeader(
+                            {noc_addrs[0], noc_addrs[1]}, out_ready_sem_noc_addr_in_pkt, {page_size}, 1, true));
+                    sem_sent = true;
+                } else {
+                    if (hdrs_in_flight & (1u << scatter_idx)) {
+                        // About to rewrite a header whose previous packet may still be leaving the
+                        // NIU: everything issued since the last flush must have left it.
+                        noc.async_writes_flushed();
+                        hdrs_in_flight = 0;
+                    }
+                    fabric_unicast_noc_scatter_write_with_state<
+                        UnicastScatterWriteUpdateMask::DstAddrs | UnicastScatterWriteUpdateMask::ChunkSizes |
+                        UnicastScatterWriteUpdateMask::PayloadSize>(
+                        mux_connection_handle,
+                        pkt_hdrs.scatter_hdrs[scatter_idx],
+                        l1_read_addr,
+                        NocUnicastScatterCommandHeader(noc_addrs, chunk_sizes, take),
+                        page_size * take);
+                    hdrs_in_flight |= 1u << scatter_idx;
+                    scatter_idx = (scatter_idx + 1 == kNumScatterHdrs) ? 0 : scatter_idx + 1;
+                }
+            }
+            l1_read_addr += take * page_size;
+            tile_id += take;
+            tiles_left -= take;
+        }
+        row_l1_addr += row_stride_bytes;
+        row_tile_id += output_tensor_Wt;
     }
 
-    // unicast output ready semaphore
-    fabric_unicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
-        mux_connection_handle,
-        pkt_hdr_sem_inc,
-        tt::tt_fabric::NocUnicastAtomicIncCommandHeader{out_ready_sem_noc_addr_in_pkt, 0});
+    if (!sem_sent) {
+        // Empty half block (M padding) or a 1-tile row: standalone semaphore increment.
+        noc.async_writes_flushed();
+        fabric_unicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
+            mux_connection_handle,
+            pkt_hdrs.sem_inc_hdr,
+            tt::tt_fabric::NocUnicastAtomicIncCommandHeader{out_ready_sem_noc_addr_in_pkt, 0});
+    }
 
+    // Every packet of this half block has left the NIU: the headers and the CB slot may be reused.
     noc.async_writes_flushed();
 }
 
@@ -1003,34 +1086,49 @@ FORCE_INLINE PacketHeaders allocate_and_init_packet_headers(
     if (!valid) {
         return hdrs;
     }
-    hdrs.scatter_hdr = PacketHeaderPool::allocate_header();
+    for (uint32_t i = 0; i < kNumScatterHdrs; i++) {
+        hdrs.scatter_hdrs[i] = PacketHeaderPool::allocate_header();
+    }
+    hdrs.scatter_hdr = hdrs.scatter_hdrs[0];
     hdrs.unicast_hdr = PacketHeaderPool::allocate_header();
     hdrs.sem_inc_hdr = PacketHeaderPool::allocate_header();
+    hdrs.fused_hdr = PacketHeaderPool::allocate_header();
 
     {
         uint16_t page_size = tt::tt_fabric::linear::addrgen_detail::get_page_size(in0_reader);
         uint64_t dummy_addrs[4] = {0, 0, 0, 0};
         uint16_t chunk_sizes[3] = {page_size, page_size, page_size};
+        const uint8_t hops = static_cast<uint8_t>(unicast_route_info.distance_in_hops);
 
-        fabric_unicast_noc_scatter_write_set_state<
-            UnicastScatterWriteUpdateMask::ChunkSizes | UnicastScatterWriteUpdateMask::PayloadSize>(
-            hdrs.scatter_hdr,
-            static_cast<uint8_t>(unicast_route_info.distance_in_hops),
-            NocUnicastScatterCommandHeader(dummy_addrs, chunk_sizes, num_tiles_to_write_per_packet),
-            page_size * num_tiles_to_write_per_packet);
+        for (uint32_t i = 0; i < kNumScatterHdrs; i++) {
+            fabric_unicast_noc_scatter_write_set_state<
+                UnicastScatterWriteUpdateMask::ChunkSizes | UnicastScatterWriteUpdateMask::PayloadSize>(
+                hdrs.scatter_hdrs[i],
+                hops,
+                NocUnicastScatterCommandHeader(dummy_addrs, chunk_sizes, num_tiles_to_write_per_packet),
+                page_size * num_tiles_to_write_per_packet);
+            ccl_routing_utils::fabric_set_line_unicast_route(hdrs.scatter_hdrs[i], unicast_route_info);
+        }
 
         fabric_unicast_noc_unicast_write_set_state<UnicastWriteUpdateMask::PayloadSize>(
-            hdrs.unicast_hdr, static_cast<uint8_t>(unicast_route_info.distance_in_hops), nullptr, in3_tile_size);
+            hdrs.unicast_hdr, hops, nullptr, in3_tile_size);
+        ccl_routing_utils::fabric_set_line_unicast_route(hdrs.unicast_hdr, unicast_route_info);
 
         fabric_unicast_noc_unicast_atomic_inc_set_state<
             UnicastAtomicIncUpdateMask::Val | UnicastAtomicIncUpdateMask::Flush>(
-            hdrs.sem_inc_hdr,
-            static_cast<uint8_t>(unicast_route_info.distance_in_hops),
-            tt::tt_fabric::NocUnicastAtomicIncCommandHeader{0, static_cast<uint32_t>(1)});
-
-        ccl_routing_utils::fabric_set_line_unicast_route(hdrs.scatter_hdr, unicast_route_info);
-        ccl_routing_utils::fabric_set_line_unicast_route(hdrs.unicast_hdr, unicast_route_info);
+            hdrs.sem_inc_hdr, hops, tt::tt_fabric::NocUnicastAtomicIncCommandHeader{0, static_cast<uint32_t>(1)});
         ccl_routing_utils::fabric_set_line_unicast_route(hdrs.sem_inc_hdr, unicast_route_info);
+
+        // Fused 2-tile scatter write + semaphore increment (flush before inc, like sem_inc_hdr).
+        fabric_unicast_noc_fused_scatter_write_atomic_inc_set_state<
+            UnicastFusedScatterWriteAtomicIncUpdateMask::WriteChunkSizes |
+            UnicastFusedScatterWriteAtomicIncUpdateMask::Val | UnicastFusedScatterWriteAtomicIncUpdateMask::Flush |
+            UnicastFusedScatterWriteAtomicIncUpdateMask::PayloadSize>(
+            hdrs.fused_hdr,
+            hops,
+            tt::tt_fabric::NocUnicastScatterAtomicIncFusedCommandHeader({0, 0}, 0, {page_size}, 1, true),
+            static_cast<uint16_t>(2 * page_size));
+        ccl_routing_utils::fabric_set_line_unicast_route(hdrs.fused_hdr, unicast_route_info);
     }
 
     return hdrs;
