@@ -299,6 +299,7 @@ class MathOperation(Enum):
     # Fused GLU activations over (gate, up): silu(min(gate, limit)) * clamp(up, -limit, limit) and
     # SiTU-GLU (softcapped gate * sigmoid(gate) * softcapped up).
     SfpuClampedSiluGlu = OpSpec("CLAMPED_SILU_GLU", MathOpType.SFPU_BINARY)
+    SfpuSiluGlu = OpSpec("SILU_GLU", MathOpType.SFPU_BINARY)
     SfpuSituGlu = OpSpec("SITU_GLU", MathOpType.SFPU_BINARY)
     SfpuGcd = OpSpec("GCD", MathOpType.SFPU_BINARY)
     SfpuLcm = OpSpec("LCM", MathOpType.SFPU_BINARY)
@@ -307,6 +308,7 @@ class MathOperation(Enum):
     # The other two entry points of ckernel_sfpu_mask.h: calculate_mask_posinf fills +inf
     # where the float mask is zero, calculate_int_mask zeroes Int32 data where the mask is 0.
     SfpuMaskPosinf = OpSpec("MASK_POSINF", MathOpType.SFPU_BINARY)
+    SfpuGegluTanh = OpSpec("GEGLU_TANH", MathOpType.SFPU_BINARY)
     SfpuIntMask = OpSpec("INT_MASK", MathOpType.SFPU_BINARY)
     SfpuAtan2 = OpSpec("ATAN2", MathOpType.SFPU_BINARY)
     SfpuCopyDest = OpSpec("COPY_DEST", MathOpType.SFPU_BINARY)
@@ -345,10 +347,6 @@ class MathOperation(Enum):
     SfpuRemainderUint32 = OpSpec("REMAINDER_UINT32", MathOpType.SFPU_BINARY)
     SfpuLgammaStirlingFp32 = OpSpec("LGAMMA_STIRLING_FP32", MathOpType.SFPU_BINARY)
     SfpuFmodInt32 = OpSpec("FMOD_INT32", MathOpType.SFPU_BINARY)
-    # Generated from activations/products/geglu_tanh.json.
-    SfpuGegluTanh = OpSpec("GEGLU_TANH", MathOpType.SFPU_BINARY)
-    # Generated from activations/products/silu_glu.json.
-    SfpuSiluGlu = OpSpec("SILU_GLU", MathOpType.SFPU_BINARY)
 
     # =============================================================================
     # SFPU TERNARY OPERATIONS
@@ -846,8 +844,7 @@ class PerfRunType(Enum):
     UNPACK_ISOLATE = 2
     MATH_ISOLATE = 3
     PACK_ISOLATE = 4
-    L1_CONGESTION = 5
-    SFPU_ISOLATE = 6
+    SFPU_ISOLATE = 5
 
 
 # Single pytest case runs every PerfRunType so the module CSV has one
@@ -859,7 +856,6 @@ PERF_RUN_TYPES_QUASAR = [
         PerfRunType.UNPACK_ISOLATE,
         PerfRunType.MATH_ISOLATE,
         PerfRunType.PACK_ISOLATE,
-        PerfRunType.L1_CONGESTION,
     ],
 ]
 

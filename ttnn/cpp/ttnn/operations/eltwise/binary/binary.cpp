@@ -1389,7 +1389,7 @@ Tensor divide_(
 }
 namespace {
 
-// multiply(gate, up) runs as one fused binary_ng program when gate carries exactly its row's activation on that board.
+// Fused SFPU ops for multiply(activation(gate), up), one row per op and board.
 struct FusedActivationRoute {
     operations::unary::UnaryOpType gate_activation;
     operations::binary::BinaryOpType op;

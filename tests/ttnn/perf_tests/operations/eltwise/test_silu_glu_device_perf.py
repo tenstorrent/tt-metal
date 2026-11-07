@@ -2,10 +2,10 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Device time of ttnn.silu_glu's one binary_ng program against the multiply program it replaces.
+"""Device kernel time of ttnn.silu_glu's one binary_ng program against the composite it replaces, on the same BF16
+operands, each call first checked to launch the path it names."""
 
-Each call is first asserted to launch the path it names; the fused program must be faster by more than MARGIN.
-"""
+import os
 
 import pandas as pd
 
@@ -41,6 +41,11 @@ MARGIN = 0.05
 # The operands' range per input: twice the leaf's clamp, its ratio's hold, or 16 for an unclamped leaf.
 REACH = (32.0, 32.0)
 PATH = "tests/ttnn/perf_tests/operations/eltwise/test_silu_glu_device_perf.py"
+# The profiled calls run only inside the device profiler, which the device-perf test launches: run on their
+# own, they would hold the device that the profiler's run of them then waits for.
+IN_PROFILER = pytest.mark.skipif(
+    os.environ.get("TT_METAL_DEVICE_PROFILER") != "1", reason="runs inside the device profiler only"
+)
 
 
 def _inputs(height, width, device):
@@ -67,6 +72,7 @@ def _calls(a, b, out):
     }
 
 
+@IN_PROFILER
 def test_silu_glu_profiled_calls(device):
     """Each call's path, then the calls the device-perf test profiles, between signposts that name each one."""
     from tracy import signpost

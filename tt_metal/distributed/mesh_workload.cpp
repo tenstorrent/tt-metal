@@ -11,6 +11,7 @@
 #include <cstdint>
 #include "impl/buffers/buffer_impl.hpp"
 #include <tt_metal/impl/program/program_command_sequence.hpp>
+#include "distributed/mesh_command_queue_base.hpp"
 #include "distributed/mesh_device_impl.hpp"
 #include "impl/context/metal_context.hpp"
 #include "impl/context/metal_env_impl.hpp"
@@ -216,6 +217,7 @@ void MeshWorkloadImpl::load_binaries(MeshCommandQueue& mesh_cq) {
             }
             kernel_bin_buf_ =
                 MeshBuffer::create(global_kernel_bin_buf_config, device_local_kernel_bin_buf_config, mesh_device);
+            MeshCommandQueueBase::ScopedProgramBinaryUpload program_binary_upload;
             // Iterate over the sub-grids and EnqueueWriteMeshBuffer to each sub-grid that runs an individual program
             for (auto& [device_range, program] : this->programs_) {
                 std::size_t kernel_bin_size =
