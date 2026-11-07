@@ -505,7 +505,7 @@ def k31_layer_pcc(layer: int) -> float:
 # device misses rank >= 1500 of 2048 by trace score: near-ties a bf8 key/query moves across the cut. From layer 55
 # on, 6-11% of misses come from the trace's top half, in rows owned mostly by newline/','/'.' tokens: the
 # frequent-token hidden-state error that sets in at layers 48-59 (tt_metal_tracker-ao3i.5.5), not the indexer
-# (its key cache stays >= 0.992 there). 0.95, the CSA chunked floor, would fail layers 3, 7 and 51-92 on that.
+# (its key cache stays >= 0.992 there). 0.95, the CSA chunked floor, would fail layers 3, 7, 51 and 63-92 on that.
 K31_TOPK_RECALL = 0.9
 
 
@@ -530,14 +530,21 @@ def k31_topk_rows(mesh_device, indices, rows: int) -> torch.Tensor:
 
 
 def topk_recall(got: torch.Tensor, want: torch.Tensor) -> torch.Tensor:
-    """Per row |got ∩ want| / |want| over `want`'s valid (>= 0) entries; `got` entries outside [0, 2^31) match
-    nothing. Both `[rows, k]` int64; rows with no valid `want` entry read NaN."""
+    """Per row the fraction of `want`'s valid (>= 0) keys that occur in `got`, i.e. |got ∩ want| / |want| as sets
+    (a key `got` holds twice counts once). Both `[rows, k]` int64; `got`'s 0xFFFFFFFF sentinel matches nothing.
+    Rows with no valid `want` entry read NaN."""
     rows = torch.arange(want.shape[0]).unsqueeze(1) << 32
     valid = want >= 0
-    want_keys = (rows + want)[valid]
-    got_keys = torch.where((got >= 0) & (got < 2**31), rows + got, -1)
-    hits = torch.isin(got_keys, want_keys).sum(dim=1)
-    return hits / valid.sum(dim=1)
+    return (torch.isin(rows + want, rows + got) & valid).sum(dim=1) / valid.sum(dim=1)
+
+
+def test_topk_recall_counts_each_trace_key_once():
+    """Hand-checked: a duplicated device index does not stand in for a missed key, keys never match across rows,
+    and the no-key sentinel matches nothing."""
+    none = 0xFFFFFFFF
+    got = torch.tensor([[0, 0, 2], [0, 1, 2], [3, 4, 5], [0, none, none]])
+    want = torch.tensor([[0, 1, 2], [0, 1, 2], [0, 1, 2], [0, -1, -1]])
+    assert topk_recall(got, want).tolist() == pytest.approx([2 / 3, 1.0, 0.0, 1.0])
 
 
 # rung -> (golden, PP4 stage, layer count; None = the whole stage). "L24-128k" is K3's long-context check
