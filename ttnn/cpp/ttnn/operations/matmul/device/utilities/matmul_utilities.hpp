@@ -387,7 +387,7 @@ void add_row_mop_define_if_supported(
 /*
  * Column chunks per interleaved in1 K-block for the 2D-multicast sender (IN1_MCAST_CHUNKS), 0 for whole blocks;
  * Blackhole only; each chunk is a whole number of out_subblock_w subblocks of at most 128 tiles and at least 4 KiB
- * per K-row.
+ * per K-row: 4..8 chunks when one divides the subblocks, else up to 12.
  */
 uint32_t in1_mcast_column_chunks(
     tt::ARCH arch, uint32_t in1_block_h, uint32_t in1_block_w, uint32_t out_subblock_w, uint32_t in1_tile_bytes);

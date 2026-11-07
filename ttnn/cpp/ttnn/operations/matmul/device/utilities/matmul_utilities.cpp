@@ -353,21 +353,31 @@ void add_row_mop_define_if_supported(
 
 uint32_t in1_mcast_column_chunks(
     tt::ARCH arch, uint32_t in1_block_h, uint32_t in1_block_w, uint32_t out_subblock_w, uint32_t in1_tile_bytes) {
-    constexpr uint32_t max_chunks = 8, min_chunks = 4;
+    // Preferred chunk counts first; past them, up to max_fallback_chunks when none of them divides the subblocks
+    // (e.g. 9 subblocks of 1 x 4 at per_core_N 36: 9 one-subblock chunks).
+    constexpr uint32_t max_chunks = 8, min_chunks = 4, max_fallback_chunks = 12;
     constexpr uint32_t max_chunk_tiles = 128;  // reads in flight per transaction id (kernel static_assert)
-    // Each K-row of a chunk is multicast separately: below this many bytes per row the extra multicasts cost
-    // more than the early start gains (e.g. 1x4 subblocks of bfloat4_b tiles at kb 16).
+    // Below this many bytes per K-row of a chunk, the reads and multicasts per chunk cost more than the early start
+    // gains (e.g. 1x4 subblocks of bfloat4_b tiles at kb 16).
     constexpr uint32_t min_chunk_row_bytes = 4096;
     if (arch != tt::ARCH::BLACKHOLE || in1_block_w % out_subblock_w != 0) {
         return 0;
     }
     const uint32_t num_subblocks = in1_block_w / out_subblock_w;
-    for (uint32_t chunks = std::min(num_subblocks, max_chunks); chunks >= min_chunks; --chunks) {
+    auto fits = [&](uint32_t chunks) {
         if (num_subblocks % chunks != 0) {
-            continue;
+            return false;
         }
         const uint32_t chunk_w = in1_block_w / chunks;
-        if (chunk_w * in1_block_h <= max_chunk_tiles && chunk_w * in1_tile_bytes >= min_chunk_row_bytes) {
+        return chunk_w * in1_block_h <= max_chunk_tiles && chunk_w * in1_tile_bytes >= min_chunk_row_bytes;
+    };
+    for (uint32_t chunks = std::min(num_subblocks, max_chunks); chunks >= min_chunks; --chunks) {
+        if (fits(chunks)) {
+            return chunks;
+        }
+    }
+    for (uint32_t chunks = max_chunks + 1; chunks <= std::min(num_subblocks, max_fallback_chunks); ++chunks) {
+        if (fits(chunks)) {
             return chunks;
         }
     }

@@ -125,9 +125,21 @@ void kernel_main() {
                     // Operand 1
                     dfb_in1.reserve_back(in1_block_num_tiles);
 
+#ifdef IN1_MCAST_CHUNKS
+                    // The sender multicasts the block in IN1_MCAST_CHUNKS column chunks, one piecewise round,
+                    // publishing the count sent after each: hand each chunk to compute as soon as it has landed.
+                    static_assert(in1_block_num_tiles % IN1_MCAST_CHUNKS == 0, "a chunk is a whole number of columns");
+                    receiver.signal_ready();
+                    for (uint32_t chunk = 1; chunk <= IN1_MCAST_CHUNKS; ++chunk) {
+                        receiver.wait_pieces(chunk);
+                        dfb_in1.push_back(in1_block_num_tiles / IN1_MCAST_CHUNKS);
+                    }
+                    receiver.finish_pieces();
+#else
                     receiver.receive();
 
                     dfb_in1.push_back(in1_block_num_tiles);
+#endif  // IN1_MCAST_CHUNKS
                 }
 
 #ifdef FUSE_BIAS

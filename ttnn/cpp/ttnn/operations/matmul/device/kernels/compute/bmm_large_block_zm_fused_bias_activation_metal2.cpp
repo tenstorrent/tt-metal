@@ -344,6 +344,11 @@ void kernel_main() {
     static_assert(in1_num_subblocks % IN1_MCAST_CHUNKS == 0, "an in1 chunk is a whole number of output subblocks");
     constexpr uint32_t in1_chunk_subblocks = in1_num_subblocks / IN1_MCAST_CHUNKS;
     constexpr uint32_t in1_chunk_num_tiles = in1_block_num_tiles / IN1_MCAST_CHUNKS;
+    // The reader lays the block out chunk-major: chunk c is the in1_chunk_num_tiles tiles from tile
+    // c * in1_chunk_num_tiles, row-major with in1_k_stride tiles per K-row.
+    constexpr uint32_t in1_k_stride = in1_block_w / IN1_MCAST_CHUNKS;
+#else
+    constexpr uint32_t in1_k_stride = in1_block_w;
 #endif
 
     constexpr bool spill = num_blocks_inner_dim > 1;
@@ -354,6 +359,16 @@ void kernel_main() {
     constexpr bool l1_acc_in_place = !untilize_out && !in0_transpose_tile && num_blocks_inner_dim > 2;
 #else
     constexpr bool l1_acc_in_place = false;
+#endif
+    // Chunk-major order: with in1 delivered in column chunks and several rows of subblocks, a K block that is not the
+    // last walks its subblocks column by column (every row of a chunk before the next chunk), so each chunk carries
+    // in0_num_subblocks subblocks of compute instead of one and the first block keeps pace with the delivery. Only with
+    // the partials packed in place (slots are addressed by subblock); the last block packs the output row by row, the
+    // order the writer drains it in.
+#ifdef IN1_MCAST_CHUNKS
+    constexpr bool chunk_major_blocks = l1_acc_in_place && in0_num_subblocks > 1;
+#else
+    constexpr bool chunk_major_blocks = false;
 #endif
 
     compute_kernel_hw_startup<SrcOrder::Reverse>(in0_dfb_id, in1_dfb_id, mm_partials_dfb_id);
@@ -471,10 +486,15 @@ void kernel_main() {
                     }
 #endif
 
-                    uint32_t in0_index_subblock_offset = 0;
-                    for (uint32_t in0_subblock = 0; in0_subblock < in0_num_subblocks; in0_subblock++) {
-                        uint32_t in1_index_subblock_offset = 0;
-                        for (uint32_t in1_subblock = 0; in1_subblock < in1_num_subblocks; in1_subblock++) {
+                    const bool chunk_major = chunk_major_blocks && !last_out;
+                    for (uint32_t row = 0; row < in0_num_subblocks; row++) {
+                        for (uint32_t col = 0; col < in1_num_subblocks; col++) {
+                            // The subblock this step computes: row by row, or column by column (chunk_major).
+                            const uint32_t step = row * in1_num_subblocks + col;
+                            const uint32_t in0_subblock = chunk_major ? step % in0_num_subblocks : row;
+                            const uint32_t in1_subblock = chunk_major ? step / in0_num_subblocks : col;
+                            const uint32_t in0_index_subblock_offset = in0_subblock * in0_subblock_num_tiles;
+                            const uint32_t in1_index_subblock_offset = in1_subblock * out_subblock_w;
                             // When last_subblock_padded is true the last in1 subblock has
                             // (out_subblock_w - last_subblock_w_valid) padded lanes whose in1 tiles were
                             // never pushed by the reader. Narrow matmul_block so the unpacker only touches
@@ -509,19 +529,26 @@ void kernel_main() {
 #ifndef SKIP_COMPUTE
                             // Compute output sub-block: accumulate the in0_block_w inner-dim steps into DST. Step k
                             // reads in0 tile in0_index_subblock_offset + k (in0 rows are in0_block_w tiles wide) and
-                            // in1 tile in1_index_subblock_offset + k * in1_block_w (in1 rows are in1_block_w wide).
+                            // in1 tile in1_tile_index + k * in1_k_stride: the subblock's first column in its K-row 0,
+                            // in the row-major block or (IN1_MCAST_CHUNKS) in its chunk of the chunk-major block.
+#ifdef IN1_MCAST_CHUNKS
+                            const uint32_t in1_tile_index = (in1_subblock / in1_chunk_subblocks) * in1_chunk_num_tiles +
+                                                            (in1_subblock % in1_chunk_subblocks) * out_subblock_w;
+#else
+                            const uint32_t in1_tile_index = in1_index_subblock_offset;
+#endif
                             matmul_block_k(
                                 in0_dfb_id,
                                 in1_dfb_id,
                                 in0_index_subblock_offset,
-                                in1_index_subblock_offset,
+                                in1_tile_index,
                                 0,
                                 in1_transpose_tile,
                                 effective_subblock_w,
                                 out_subblock_h,
                                 in0_block_w,
                                 in0_block_w,
-                                in1_block_w);
+                                in1_k_stride);
 
 #endif  // SKIP_COMPUTE
 
@@ -621,10 +648,7 @@ void kernel_main() {
                                     mm_partials_dfb.push_back(out_subblock_num_tiles);
                                 }
                             }
-
-                            in1_index_subblock_offset += out_subblock_w;
                         }
-                        in0_index_subblock_offset += in0_subblock_num_tiles;
                     }
 
 #ifdef PACKER_L1_ACC

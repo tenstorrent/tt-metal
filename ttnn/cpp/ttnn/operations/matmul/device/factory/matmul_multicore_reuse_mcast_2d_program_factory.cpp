@@ -712,6 +712,20 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_spe
         }
     }
 
+    // Interleaved, multicast in1 goes out in column chunks that compute starts on as they land: one piecewise round
+    // of the in1 multicast pipe per K-block.
+    if (!in1_is_sharded && in1_receiver.num_cores() > 0) {
+        const uint32_t in1_chunks = operations::matmul::utilities::in1_mcast_column_chunks(
+            device.arch(), in0_block_w, in1_block_w, out_subblock_w, in1_single_tile_size);
+        if (in1_chunks > 0) {
+            const std::string chunks = std::to_string(in1_chunks);
+            mm_kernel_defines["IN1_MCAST_CHUNKS"] = chunks;
+            mm_kernel_in1_sender_writer_defines["IN1_MCAST_CHUNKS"] = chunks;
+            mm_kernel_in1_receiver_writer_defines["IN1_MCAST_CHUNKS"] = chunks;
+            mm_kernel_in1_receiver_writer_other_noc_setup_defines["IN1_MCAST_CHUNKS"] = chunks;
+        }
+    }
+
     if (output_is_sharded) {
         // The in1 writer pops batch * out_shard_tiles tiles in one wait_front/pop_front call, which takes a uint16_t.
         TT_FATAL(
