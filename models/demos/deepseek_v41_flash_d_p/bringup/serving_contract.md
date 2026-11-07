@@ -48,15 +48,57 @@ Tests: `test_cache_starts.py` (layer 0 from `embed` with the server's ids at sta
 
 Build these served caches, in this table order (a config is present when a served layer has it):
 
-| config | layers (full model) | rows per 32-token record | width | content (checkpoint inference/model.py) |
-|---|---|---|---|---|
-| 0_window_kv | every layer, 0-39 | 32 | 512 | window KV per position: kv_norm(wkv x), RoPE, fp8 q-dq (`Attention._window_kv`) |
-| 1_compress_kv_r2 | 2, 8, 14 | 16 | 512 | latent per 2-token group, RoPE at the group's first token, fp4 q-dq (`_compress_kv`) |
-| 2_index_k_r2 | 2, 8, 14 | 16 | 192 B (fp8 row) | index key per group: k_norm(wk latent), RoPE (`Indexer`); Blaze decode's scaled e4m3 row (below) |
-| 3_compress_kv_r1 | 20 | 32 | 512 | as above, ratio 1 |
-| 4_index_k_r1 | 20, 24, 28, 32, 36 | 32 | 192 B (fp8 row) | as above, ratio 1; the re-index layers 24-36 hold layer 20's rows, byte for byte |
+| config | tensor type | layers (full model) | rows per 32-token record | width | positions served | content (checkpoint inference/model.py) |
+|---|---|---|---|---|---|---|
+| 0_window_kv | snapshot | every layer, 0-39 | 32 | 512 (1024 B a row) | 0, 32, 64, 96 (4 records of 32,768 B) | window KV snapshot at cap: row p % 128 = position p, p in [cap - 128, cap) (`Attention._window_kv`: kv_norm(wkv x), RoPE, fp8 q-dq) |
+| 1_compress_kv_r2 | KV | 2, 8, 14 | 16 | 512 | decode pulls [0, cap) | latent per 2-token group, RoPE at the group's first token, fp4 q-dq (`_compress_kv`) |
+| 2_index_k_r2 | KV | 2, 8, 14 | 16 | 192 B (fp8 row) | decode pulls [0, cap) | index key per group: k_norm(wk latent), RoPE (`Indexer`); Blaze decode's scaled e4m3 row (below) |
+| 3_compress_kv_r1 | KV | 20 | 32 | 512 | decode pulls [0, cap) | as above, ratio 1 |
+| 4_index_k_r1 | KV | 20, 24, 28, 32, 36 | 32 | 192 B (fp8 row) | decode pulls [0, cap) | as above, ratio 1; the entries of the re-index layers 24-36 are ALIASES of layer 20's records |
 
-**Index keys (P.39, owner 2026-11-06, PD migration first cut: compatibility with Blaze decode for now).** Setting
+**P.42 (OWNER-AUTHORIZED CONTRACT CHANGE 2026-11-07, decode's review, Brian Liu, #blaze-deepseek-v4 2026-11-06;
+tt-d-gen jazpur/dsv4-replay-window 48b79127fb1).** Two settings (tt/settings.py), each old behaviour kept:
+- **The cap.** cap = (prompt_len - 1) // kv_block_size x kv_block_size (tt-d-gen prefix_indexer.hpp
+  reusable_prefix_cap; kv_block_size = setting `KV_BLOCK_SIZE`, 64 deployed). Decode receives rows [0, cap) of the
+  history caches (1_ .. 4_) and the window snapshot, and replays [cap, prompt_len) itself. Prefill computes and
+  attends every position up to prompt_len as before (positions >= cap attend normally); only what is served is
+  clamped. Deploy: a 3000-token prompt gives cap 2944.
+- **Window snapshot (`WINDOW_KV_KEEP=snapshot128`, default; old values full / ring / none kept).** Per slot and layer
+  (all 40) a 128-row ring, bf16 ROW_MAJOR 512 wide: position p at row p % 128, written only for p < cap (rows of no
+  position < cap, a prompt shorter than 128 + 64, are zero). 4 records of 32 rows (32,768 B) per (slot, layer), each
+  in one DRAM bank (the record rule), the same bytes on every chip (one device group: the whole mesh). Published as
+  0_window_kv with `KvChunkTensorType.Snapshot` (tt-d-gen#1955's tagging; the branch's KV Manager has it:
+  kv_manager/include/kv_tensor_type.hpp, cached_tensor_mode.hpp `movesTensor`, the prefill reader ships snapshot
+  configs with the last chunk's acks of a recurrent model, prefill_reader.cpp:235). Records exist at positions 0, 32,
+  64, 96 only; the config's declared max_sequence_length stays PREFILL_MAX_SEQ_LEN (not 128): tt-metal's
+  KvChunkAddressTable refuses a lookup at or past it (kv_chunk_address_table.cpp:138) and the bring-up framework's
+  contract test reads every config at every chunk's first and last block (testing/contract.py); tt-d-gen's loader
+  reads a snapshot config whose records end before its declared length as that extent, 128
+  (kv_manager/src/control_plane/maps/kv_chunk_table.cpp conformSnapshot -> SnapshotOfExtent), which is what decode's
+  table declares (engine/tests/integration/dsv4_tables.py "swa" snapshot, 128). The model keeps its own last 192 rows
+  a layer (P.32's ring) for attention and rewrites the snapshot from them after each layer's window write, before
+  the layer's ack, on every chunk (tt-d-gen's chunk header has no last flag; the last chunk's is the one shipped).
+  The pulled-back last chunk (max_seq - chunk, ...) needs a carry about a chunk behind the previous end, outside the
+  ring: each layer also keeps the 128 rows before max_seq - chunk when a chunk writes them (`TtWindowCache.pin`).
+  Known conflict: the bring-up framework's contract test (testing/contract.py) re-reads every config's first block
+  after the request and counts a change as an early ack; the snapshot's record 0 is rewritten by the next chunk by
+  design, so it reports acks_early = 40 (one per layer) until that check skips Snapshot configs.
+- **Re-index aliases (`REINDEX_SERVE=alias`, default; copy = P.39's copies).** 4_index_k_r1 still covers 20, 24, 28,
+  32, 36, but the entries of 24-36 are layer 20's records: the same noc_addr, size and device group at the same
+  (slot, position), so they resolve to layer 20's bytes. No slab of their own, nothing written for them. Checked
+  against tt-d-gen at 48b79127fb1: no code refuses several entries at one address. The table import keeps per
+  coordinate entries only (make_kv_chunk_table.cpp:1060 refuses a duplicate COORDINATE, not an address);
+  KvChunkTable::create / validConfigs (kv_chunk_table.cpp) check ids, chunk_n_tokens and num_slots;
+  migration_strategy_builder.cpp looks entries up per (slot, layer, position) and books per layer; the chunk index
+  builder (kv_chunk_index_builder.cpp:191) takes each entry's address as is; tableWithinDramGeometry checks
+  alignment and bank bounds only. tt-metal's KvChunkAddressTable (kv_chunk_address_table.cpp) has no address
+  uniqueness check either. An acked re-index layer's records were final at layer 20's ack, earlier in the same chunk.
+- **Memory per chip per slot (8x4, SP 8).** Window KV: full 1.25 GiB at 1M (40 x 1M / 32 x 1 KiB) -> snapshot128
+  20 MiB (40 x (192 ring + 192 pin + 128 snapshot) KiB) at any length, plus one 6 MiB gather buffer a model.
+  Re-index copies: 96 MiB at 1M -> 0.
+
+**Index keys (P.39, owner 2026-11-06, PD migration first cut: compatibility with Blaze decode for now; P.42 replaced
+the re-index copies with aliases, above).** Setting
 `INDEX_K_SERVED` (tt/settings.py): `fp8_row192` (default) or `bf16` (the earlier contract: bf16 rows of 128, 256 B,
 on the KV sources 2, 8, 14 / 20 only, records 16 x 256 / 32 x 256 B). Under `fp8_row192` an index row is tt-blaze's
 indexer key cache row (blaze/ops/dsa_indexer_direct_k_cache_update, `SCALED_ROW_BYTES` 192), uint8 [.., 192]
@@ -87,7 +129,8 @@ are not served: topk / candidates are recomputed every chunk, and no partial gro
 (a multiple of 32) or at the decode boundary (a multiple of 64), with ratio <= 2.
 
 Rules:
-- **Per position, never overwritten.** The KV Manager ships every acked layer's [actual_start, actual_end) by token
+- **Per position, never overwritten** (the per-position (KV) configs; under P.42 the window KV is the snapshot above,
+  rewritten every chunk). The KV Manager ships every acked layer's [actual_start, actual_end) by token
   position (prefill_reader.cpp:121-155), record by record (migration_strategy_builder.cpp:143-166), while later
   chunks run. A follow-up starts at any 64-aligned prefix (prefix_indexer.hpp:75-78) and needs the window KV of
   [start - 127, start). The reference's 128-slot ring (spec state window_kv) can serve neither: keep the window KV of

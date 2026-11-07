@@ -1,0 +1,58 @@
+{
+ "used": [
+  {
+   "id": "DS41-183",
+   "how": "the A/B measure ran detached through devjob, not under a tool timeout",
+   "traced": null,
+   "cited": false
+  },
+  {
+   "id": "DS41-218",
+   "how": "explained the test_contract acks_early 40 as the framework's Snapshot-config conflict (tt-d-gen prefill_reader.cpp:235); no model change made to hide it",
+   "traced": true,
+   "cited": true
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "the bring-up framework (testing/contract.py) has no rule for tensor_type Snapshot configs: they are shipped only with the last chunk in tt-d-gen, but the ack check treats them as per-position (now DS41-218)",
+  "at tt-d-gen 48b79127fb1 a PD prefill's last chunk ends at prompt_len - 1 (prompt_compute_end), which makes it unclear which length the decode cap uses (now DS41-219)",
+  "an orchestrator-side edit (the owner queueing P.43 in tasks.yaml / approvals.yaml) made during an attempt is blamed on the agent as an out-of-path change"
+ ],
+ "overseer": [
+  {
+   "id": "OV-3",
+   "answer": "done",
+   "evidence": "no padding or inflated work: the snapshot is the contract's 128 rows; attempt 2 changed no code"
+  },
+  {
+   "id": "OV-23",
+   "answer": "done",
+   "evidence": "no Python-built op added or touched (stock C++ slice / concat / all_gather and the C++ fork update_padded_kv_cache); attempt 2 changed no code"
+  },
+  {
+   "id": "OV-25",
+   "answer": "done",
+   "evidence": "no fork suite run; only the model-level measure (reused)"
+  }
+ ],
+ "cited_only": [
+  "DS41-219"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "P.42",
+  "role": "perf",
+  "attempt": 2,
+  "agent": "bringup-engineer",
+  "t": "2026-11-07T11:40:43",
+  "head": "98463fd81bc",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/knowledge_use/P.42.perf.2.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/repo_map.md"
+  ]
+ }
+}

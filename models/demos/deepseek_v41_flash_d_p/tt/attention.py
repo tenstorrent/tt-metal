@@ -215,6 +215,7 @@ class WindowTables:
         self.zero_carry = _upload(mesh, torch.zeros(1, 1, WINDOW, 512), ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT)
         self._scalars = {}
         self._rings = {}  # WINDOW_KV_KEEP=none (P.32): {layer: the working WindowRing every slot's cache shares}
+        self._snap_buf = None  # WINDOW_KV_KEEP=snapshot128 (P.42): the snapshot gather's load-time output
         # GLUE_FOLD=on (P.19): the server-order index row of the latest start, sliced once for every cache write of
         # the chunk (window caches, compressed caches); the device scalars memoized likewise (tt/served.DeviceScalars)
         self.fold = settings.get("GLUE_FOLD") == "on"
@@ -417,6 +418,22 @@ class WindowTables:
             out[cls] = _upload(self.mesh, ids.to(torch.int32), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, (0, 1))
         return out
 
+    def snapshot_gather_buf(self) -> tuple:
+        """WINDOW_KV_KEEP=snapshot128 (P.42): the outputs of the snapshot's ring gathers, bf16 ROW_MAJOR, allocated once
+        at load time (the first snapshot cache) and shared by every layer and slot: [1, 1, TP x 192, 512] (over TP) and
+        [1, 1, N x 192, 512] (then over SP: every chip's ring, chip-linear); None for an axis of size 1. Reused by
+        every call: under CCL_IMPL=fabric the gather's ready fence keeps a chip from writing a peer's buffer before the
+        peer started that gather (so after its previous slices of it), sound with each axis on its own semaphore pair
+        (tt/ccl._sems, DS41-216)."""
+        if self._snap_buf is None:
+            g = self.geo
+            alloc = lambda rows: ttnn.allocate_tensor_on_device(
+                ttnn.Shape([1, 1, rows, 512]), ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, self.mesh, DRAM
+            )
+            # (the TP gather's output, then the SP gather's: chip-linear r TP + c, chip q's ring at rows q 192)
+            self._snap_buf = (alloc(g.tp * RING) if g.tp > 1 else None, alloc(g.n * RING) if g.sp > 1 else None)
+        return self._snap_buf
+
     def shared_ring(self, layer: int) -> "WindowRing":
         """WINDOW_KV_KEEP=none (P.32): layer's working ring (made at the first slot's state, then shared): what the
         running request's next chunk reads; no slot keeps window rows of its own."""
@@ -451,11 +468,19 @@ class WindowTables:
 
 
 RING = WINDOW + 64  # WINDOW_KV_KEEP=ring (P.32): rows kept a layer, the window + the server's kv_block_size
+SNAP = WINDOW  # WINDOW_KV_KEEP=snapshot128 (P.42): rows of the served window snapshot a layer (position p at p % 128)
 
 
 def window_keep() -> str:
-    """WINDOW_KV_KEEP (P.32): full | ring | none."""
+    """WINDOW_KV_KEEP (P.32, P.42): snapshot128 | full | ring | none."""
     return settings.get("WINDOW_KV_KEEP")
+
+
+def snapshot_cap(end: int, block: int | None = None) -> int:
+    """P.42: the decode handoff's cap of a prompt ending at ``end`` (tt-d-gen prefix_indexer.hpp reusable_prefix_cap):
+    the last kv_block boundary strictly below ``end`` (KV_BLOCK_SIZE; 0 for an empty prompt)."""
+    b = int(settings.get("KV_BLOCK_SIZE")) if block is None else int(block)
+    return (int(end) - 1) // b * b if end > 0 else 0
 
 
 def ring_cores() -> tuple:
@@ -562,24 +587,42 @@ class TtWindowCache:
     ):
         """``keep`` (WINDOW_KV_KEEP, P.32; None: the setting): full = the served slab of every position; ring = a
         WindowRing of this cache's own (no slab); none = ``ring``, the model's working ring of this layer shared by
-        its slots (WindowTables.shared_ring; a ring of its own when not given)."""
+        its slots (WindowTables.shared_ring; a ring of its own when not given); snapshot128 (P.42) = a ring of its own
+        as ``ring`` plus the served snapshot ``snap`` (``slab``: the engine's (slot, layer) of the 0_window_kv snapshot
+        tensor, [.., 1, 128, 512]; None = an own one, the ladder), written by ``write_snapshot``."""
         self.mesh, self.tables, self.geo = mesh, tables, tables.geo
         g = self.geo
         self.rows = g.cache_rows(max_seq)
         self.max_seq = self.rows * g.n
         self.tp_axis = TP_AXIS if g.tp > 1 else None
         self.keep = keep = keep or window_keep()
-        assert keep in ("full", "ring", "none"), keep
+        assert keep in ("full", "ring", "none", "snapshot128"), keep
         # WINDOW_KV_KEEP=ring | none (P.32): the ring (``ring_owned``: freed with this cache), the carry it took before
         # this chunk's write overwrote it ((start, [1, 1, 128, 512]) handed to ``carry``), and whether this cache ever
         # held a row (a slot that never did starts its window at its first chunk: TtDS41Model.begin_chunk), and where
         # that first chunk started (``origin``, DS41-208: a chunk at or before it restarts the slot's window there)
         self.ring, self.ring_owned, self._pending, self.history = None, False, None, False
         self.origin = None
+        # WINDOW_KV_KEEP=snapshot128 (P.42): the served snapshot (CacheSlab of 128 rows) and the cap it was last written
+        # at (host bookkeeping, None: never)
+        self.snap, self.snap_cap, self.snap_missing = None, None, None
+        # snapshot128: the pulled-back last chunk's carry, kept apart (``pin``, a WindowRing holding only positions
+        # [pin_at - 128, pin_at), pin_at = max_seq - chunk: the one start the server sends whose carry the ring of 192
+        # cannot hold, prefill_writer.cpp:63-67); None: not kept
+        self.pin, self.pin_at = None, None
         if keep == "full":
             if slab is None:
                 slab = CacheSlab(alloc_served(mesh, self.WIDTH, self.rows, 32, 1, dedup=True), owned=True)
             assert (slab.rows, slab.width) == (self.rows, self.WIDTH), (slab.rows, slab.width, self.rows)
+        elif keep == "snapshot128":
+            if slab is None:
+                slab = CacheSlab(alloc_served(mesh, self.WIDTH, SNAP, 32, 1, dedup=False), owned=True)
+            assert (slab.rows, slab.width) == (SNAP, self.WIDTH), (slab.rows, slab.width)
+            self.snap, slab = slab, None
+            self.ring_owned, self.ring = True, WindowRing(mesh, self.WIDTH)
+            tables.snapshot_gather_buf()  # (load time)
+            if self.max_seq - g.chunk > 0:
+                self.pin, self.pin_at = WindowRing(mesh, self.WIDTH), self.max_seq - g.chunk
         else:
             assert slab is None, f"WINDOW_KV_KEEP={keep}: no served 0_window_kv slab (the engine's is every position)"
             self.ring_owned = keep == "ring" or ring is None
@@ -717,6 +760,7 @@ class TtWindowCache:
                 a, b = max(lo - start, r * g.w), min(hi - start, (r + 1) * g.w)
                 if a < b:
                     self.ring.put(rows_rm, a - r * g.w, start + a, b - a, end, r * g.tp)
+                self._pin_put(rows_rm, 0, start + r * g.w, g.w, end, r * g.tp)
             self._after_ring_write(end)
             return
         ttnn.bringup.update_padded_kv_cache(
@@ -781,6 +825,7 @@ class TtWindowCache:
             lo, hi = self._ring_span(start, end)
             self._before_ring_write(start)
             self.ring.put(kv_rm, lo - start, lo, hi - lo, end, None)
+            self._pin_put(kv_rm, 0, start, g.chunk, end, None)
             self._after_ring_write(end)
             return
         idx = self.tables.srv_row(k)
@@ -823,7 +868,31 @@ class TtWindowCache:
             a, b = max(lo - start, q * q_rows), min(hi - start, (q + 1) * q_rows)
             if a < b:
                 self.ring.put(own_rm, a - q * q_rows, start + a, b - a, end, q)
+            self._pin_put(own_rm, 0, start + q * q_rows, q_rows, end, q)
         self._after_ring_write(end)
+
+    def _pin_put(self, src: ttnn.Tensor, row0: int, p0: int, n: int, valid: int, owner: int | None) -> None:
+        """snapshot128: rows [row0, row0 + n) of ``src`` are positions [p0, p0 + n) (valid below ``valid``); the part in
+        [pin_at - 128, pin_at) (and below ceil32(valid)) into the pin, held by ``owner``."""
+        if self.pin is None:
+            return
+        a = max(p0, self.pin_at - WINDOW, 0)
+        b = min(p0 + n, self.pin_at, -(-int(valid) // 32) * 32)
+        if a < b:
+            self.pin.put(src, row0 + a - p0, a, b - a, valid, owner)
+
+    def _carry_ring(self, start: int) -> "WindowRing":
+        """The ring a carry ending at ``start`` is read from: the pin for the pulled-back start when the ring does not
+        hold it and the pin does (snapshot128), else the ring."""
+        p0 = start - min(WINDOW, start)
+        if (
+            self.pin is not None
+            and start == self.pin_at
+            and not self.ring.holds(p0, start)
+            and self.pin.holds(p0, start)
+        ):
+            return self.pin
+        return self.ring
 
     @staticmethod
     def _ring_span(start: int, end: int) -> tuple[int, int]:
@@ -873,17 +942,18 @@ class TtWindowCache:
             return True
         if self._kept(start):
             return True
-        ring = self.ring
+        ring = self._carry_ring(start)
         if self.keep == "none" and (ring.writer is not self or ring.end != start):
             return False
         return self.history and ring.holds(start - min(WINDOW, start), start)
 
-    def _ring_carry(self, start: int) -> ttnn.Tensor:
+    def _ring_carry(self, start: int, lo: int = 0) -> ttnn.Tensor:
         """The carry [start - 128, start) from the ring ([1, 1, 128, 512] bf16 ROW_MAJOR, replicated; zeros before
-        position 0): the ring rows in order on every chip; blocks held by one chip gathered from it (the same local rows
-        of every chip gathered over the mesh, the owner's kept). Refuses rows the ring does not hold."""
-        g, ring = self.geo, self.ring
-        n = min(WINDOW, start)
+        position ``lo`` (default 0; P.42's snapshot: below the rows the ring holds)): the ring rows in order on every
+        chip; blocks held by one chip gathered from it (the same local rows of every chip gathered over the mesh, the
+        owner's kept). Refuses rows the ring does not hold."""
+        g, ring = self.geo, self._carry_ring(start)
+        n = min(WINDOW, start - max(0, int(lo)))
         p0 = start - n
         if not ring.holds(p0, start) or (self.keep == "none" and ring.writer is not self):
             raise ValueError(
@@ -961,10 +1031,105 @@ class TtWindowCache:
 
     def served_bytes(self) -> int:
         """Window KV bytes a chip this slot keeps (WINDOW_KV_KEEP: full the served slab, ring its ring, none 0: the
-        shared working ring is the model's, not the slot's)."""
+        shared working ring is the model's, not the slot's; snapshot128 its ring + the served 128-row snapshot)."""
         if self.keep == "full":
             return self.rows * self.WIDTH * 2
-        return self.ring.nbytes if self.ring_owned else 0
+        snap = SNAP * self.WIDTH * 2 if self.snap is not None else 0
+        pin = self.pin.nbytes if self.pin is not None else 0
+        return (self.ring.nbytes if self.ring_owned else 0) + snap + pin
+
+    # ------------------------------------------------------------------ WINDOW_KV_KEEP=snapshot128 (P.42)
+    def write_snapshot(self, end: int) -> None:
+        """The served snapshot after a chunk ending at ``end`` (device ops only; after the layer's window write, before
+        its ack): position p at row p % 128 for p in [cap - 128, cap), cap = snapshot_cap(end), read from the ring
+        (``_snapshot_rows``: blocks held by one chip gathered from it, so every chip holds the same bytes); rows of no
+        position < cap (cap < 128) zero; rows of p >= cap never written. One stock-path write of the 128 rows
+        (ttnn.bringup.update_padded_kv_cache, start 0: every chip the same rows; slice_write takes no sharded output),
+        on the ring's small grid (WINDOW_RING_CORES). Rows the ring does not hold (a window truncated
+        at a replay start, DECODER_SKIP=replay128 / exact) are zero (noted in ``snap_missing``)."""
+        cap = snapshot_cap(end)
+        lo = cap
+        while lo > max(0, cap - SNAP) and self.history and self.ring.holds(lo - 32, lo):
+            lo -= 32
+        self.snap_missing = (max(0, cap - SNAP), lo) if lo > max(0, cap - SNAP) else None
+        rows = self._snapshot_rows(cap, lo) if lo < cap else self.tables.zero_carry
+        # every chip writes the same 128 rows at local row 0 of its (slot, layer) slab: kv_actual_global 0 is the
+        # uniform per-device offset 0 on every SP row (and TP column: no tp_axis); the input is replicated
+        snap = self.snap
+        ttnn.bringup.update_padded_kv_cache(
+            snap.tensor,
+            rows,
+            slot_idx=snap.slot,
+            layer_idx=snap.row,
+            num_layers=snap.layers,
+            kv_actual_global=0,
+            cluster_axis=SP_AXIS,
+            max_grid=self.ring.grid,
+        )
+        if rows is not self.tables.zero_carry:
+            dealloc(rows)
+        self.snap_cap = cap
+
+    def _snapshot_rows(self, cap: int, lo: int) -> ttnn.Tensor:
+        """[1, 1, 128, 512] bf16 ROW_MAJOR, replicated, in SNAPSHOT order: row k = position p with p % 128 == k for p in
+        [lo, cap) (lo 32-aligned, the ring holds [lo, cap)), zeros elsewhere. Read from the ring (position p at ring row
+        p % 192); when a block is held by one chip (``write_own``), every chip's whole ring gathered over the mesh in
+        the model's all_gathers (tt/ccl.all_gather, TP then SP) into the load-time buffers
+        (``WindowTables.snapshot_gather_buf``; chip q's ring
+        at rows [q 192, (q + 1) 192)), the owner's rows taken. The 32-row pieces sliced straight into snapshot row order
+        (contiguous ones merged) and concatenated: no rotation, no layout change, no intermediate before the gather.
+        Small ops on the ring's grid (WINDOW_RING_CORES)."""
+        ring, cores = self.ring, self.ring.cores
+        owners = {q: ring.own[(q // 32) % ring.BLOCKS] for q in range(lo, cap, 32)}
+        src, stride = ring.t, 0  # (position p of owner q: src row q stride + p % 192)
+        temps = []
+        if any(o is not None for o in owners.values()):
+            # (the model's gathers (CCL_IMPL), TP then SP, into the load-time outputs; under fabric each axis on its
+            # own semaphore pair (tt/ccl._sems, DS41-216: one pair for both axes left wrong rows on whole TP columns).
+            # A gather that takes no output (CCL_IMPL=stock) returns a tensor of its own, freed below.)
+            tp_out, sp_out = self.tables.snapshot_gather_buf()
+            src, stride = ring.t, RING
+            for out, axis in ((tp_out, TP_AXIS), (sp_out, SP_AXIS)):
+                if out is not None:
+                    got = ccl.all_gather(src, 2, axis, out=out)
+                    if got.buffer_address() != out.buffer_address():
+                        temps.append(got)
+                        src = got
+                    else:
+                        src = out
+        runs = []  # (src row, rows) or (None, rows) for zeros, in snapshot row order
+        for k0 in range(0, SNAP, 32):
+            p = cap - SNAP + ((k0 - cap) % SNAP)  # the position of [cap - 128, cap) at snapshot rows [k0, k0 + 32)
+            piece = (None, 32) if p < lo else ((owners[p] or 0) * stride + p % RING, 32)
+            last = runs[-1] if runs else None
+            if last is not None and piece[0] is None and last[0] is None:
+                runs[-1] = (None, last[1] + 32)
+            elif last is not None and None not in (piece[0], last[0]) and last[0] + last[1] == piece[0]:
+                runs[-1] = (last[0], last[1] + 32)
+            else:
+                runs.append(piece)
+        parts = []
+        for r0, m in runs:  # (never a full-range slice: the sources have >= 192 rows, K-1)
+            if r0 is None:
+                z = self.tables.zero_carry
+                parts.append(ttnn.slice(z, [0, 0, 0, 0], [1, 1, m, self.WIDTH], sub_core_grids=sub_cores(z)))
+            else:
+                parts.append(
+                    ttnn.slice(src, [0, 0, r0, 0], [1, 1, r0 + m, self.WIDTH], memory_config=DRAM, sub_core_grids=cores)
+                )
+        if len(parts) == 1:
+            out = parts[0]
+        else:
+            out = ttnn.concat(parts, dim=2, memory_config=DRAM, sub_core_grids=cores)
+            for t in parts:
+                dealloc(t)
+        for t in temps:
+            dealloc(t)
+        return out
+
+    def snapshot_host(self) -> torch.Tensor:
+        """The served snapshot [128, 512] bf16 of every chip (chip-linear list), host (tests)."""
+        return self.snap.host_rows()
 
     def _ring_natural(self, p0: int, p1: int) -> torch.Tensor:
         """Host: positions [p0, p1) of the ring (each block from its owner's copy), zeros where it holds none."""
@@ -1071,6 +1236,8 @@ class TtWindowCache:
             self._free_pending()
             self.origin = None  # (a loaded prefix: its rows existed before p0)
             ring = self.ring
+            if self.pin is not None:  # (snapshot128: a loaded prefix brings no pulled-back carry)
+                self.pin.reset()
             lo, hi = self._ring_span(p0, p0 + n)
             host = torch.zeros(RING, self.WIDTH)
             ring.reset()
@@ -1158,6 +1325,11 @@ class TtWindowCache:
             elif self.ring.writer is self:
                 self.ring.reset()
             self.history, self.origin = False, None
+            if self.snap is not None:  # (snapshot128, P.42: the own snapshot; never the engine's)
+                self.snap.free()
+                self.snap_cap = None
+            if self.pin is not None:
+                self.pin.free()
             return
         self.slab.free()
 

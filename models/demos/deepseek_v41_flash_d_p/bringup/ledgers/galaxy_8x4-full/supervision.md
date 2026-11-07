@@ -1647,3 +1647,10 @@ https://claude.ai/artifact/V6jTfy2imD5wQz6UQXPPbR.
   runner_contract against it: PASS (00:48).
 - 00:48 P.40 queued by the owner (INDEX_K_FORMAT bf16 vs bfp8 vs bfp4 A/B; adds bfp8; default stays bfp4); orchestrator
   started --until P.40 (tmux ds41run).
+- 2026-11-07 09:25 OWNER: P.41 accepted (owner). P.42: accept automatically if a win (quick gate passes, accuracy within limits, chunk wall / device time within noise); otherwise stop and ask.
+- 2026-11-07 10:12 OWNER: queued P.43 (replay128 tail starts at cap-128 so every layer's snapshot exists; switch REPLAY128_TAIL_START end128|cap128; DECODER_SKIP stays off). Run script now --until P.43.
+- 2026-11-07 10:27 OWNER: P.43 widened to both skip modes (exact: last chunk start <= cap-2668; replay128: tail at cap-128); switch SKIP_TAIL_START end|cap. Owner raises the not-last chunk flag with tt-d-gen.
+- 2026-11-07 11:36 SUPERVISOR: my P.43 edits to tasks.yaml/approvals.yaml during P.42 tripped the path check (P.42 attempt 2 told to revert them). Reverted them myself; saved in /scratch/dnijemcevic/rebase/p43_ledger.patch, reapply after P.42 is committed. Run script back to --until P.42.
+- 2026-11-07 13:11 OWNER: P.42 not committed until DS41-216 (stale gather rows) is root-caused and fixed. Fix agent started on the uncommitted P.42 tree (notes: /scratch/dnijemcevic/rebase/ds41_216/). Orchestrator stays waiting at P.42.
+- 2026-11-07 17:08 DS41-220 filed upstream: tenstorrent/tt-metal#64801 (assigned mstaletovicTT); standalone repro in /scratch/dnijemcevic/rebase/ds41_216/. P.42 decide --rerun: A/B re-measured on the DS41-216-fixed tree.
+- 2026-11-07 17:19 SUPERVISOR: P.42 re-measured on the DS41-216-fixed tree: device +4.6 ms (was +7.7), wall +3.6 ms, accuracy identical; waiting for owner. P.43 (bundled: skip tail start + contract check for snapshots + 128-row declaration) applied to the ledger; run script --until P.43.

@@ -176,15 +176,21 @@ def _to_fp32(t: ttnn.Tensor) -> ttnn.Tensor:
     return out
 
 
-def _sems(mesh):
+def _sems(mesh, axis: int):
     """high_bw_all_gather's caller-owned semaphores (zero, left zero by every call; L1_SMALL, which the spec's
-    device_params reserve): one pair per mesh, the whole worker grid."""
-    hit = _SEMS.get(id(mesh))
+    device_params reserve): one (ready, data_valid) pair per mesh AXIS, the whole worker grid. Never one pair for both
+    axes (DS41-216): the op's link workers of a TP gather and of an SP gather share cores (22 of 32 chips of the 8x4),
+    and its counters are plain counts at one L1 address, so a neighbour's started / shard-landed increment for the
+    next gather on the other axis is taken by the running one: its fence opens early (a sender writes a peer's output
+    before the peer started the call, while the peer's earlier ops still own those bytes) and the output keeps wrong
+    rows, whole TP columns after the SP gather (tests/test_gather_stress.py hb_shared vs hb_axis). The fence is sound
+    only for calls that use the counters in the same roles: one ring geometry (one axis) a pair."""
+    hit = _SEMS.get((id(mesh), axis))
     if hit is None or hit[0] is not mesh:
         g = mesh.compute_with_storage_grid_size()
         crs = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(g.x - 1, g.y - 1))})
         sems = [ttnn.create_global_semaphore(mesh, crs, 0, ttnn.BufferType.L1_SMALL) for _ in range(2)]
-        hit = _SEMS[id(mesh)] = (mesh, sems)
+        hit = _SEMS[(id(mesh), axis)] = (mesh, sems)
     return hit[1]
 
 
@@ -221,7 +227,9 @@ def setup(mesh) -> None:
         return
     from ttnn.bringup.fabric_reduce_scatter_ttnn import prepare
 
-    _sems(mesh)
+    for axis in range(len(tuple(mesh.shape))):  # (one pair per axis, DS41-216)
+        if mesh.shape[axis] > 1:
+            _sems(mesh, axis)
     if mesh.shape[TP_AXIS] > 1:  # the partial sums reduce over the TP axis only
         prepare(mesh, cluster_axis=TP_AXIS, num_links=rs_links(mesh))
 
@@ -258,7 +266,7 @@ def all_gather(
         out = _site_out(mesh, site, shape, t.dtype, t.layout)
     if out is None:  # (EXPERTS_XG_PINNED: the caller's persistent output)
         out = ttnn.allocate_tensor_on_device(ttnn.Shape(shape), t.dtype, t.layout, mesh, DRAM)
-    s0, s1 = _sems(mesh)
+    s0, s1 = _sems(mesh, cluster_axis)  # (the axis's own pair: DS41-216)
     res = ttnn.experimental.high_bw_all_gather(
         t, dim, out, cluster_axis=cluster_axis, num_links=AG_LINKS, ready_semaphore=s0, data_valid_semaphore=s1
     )

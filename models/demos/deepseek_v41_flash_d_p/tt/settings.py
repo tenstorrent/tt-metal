@@ -961,8 +961,8 @@ TABLE = {
         "the harness, the engine) runs every layer in both values",
     ),
     "WINDOW_KV_KEEP": Setting(
-        "full",
-        ("full", "ring", "none"),
+        "snapshot128",
+        ("snapshot128", "full", "ring", "none"),
         "P.32 (owner 2026-11-04 / 11-05, the memory half of DeepSeek-V4.1-Flash's bounded window, arXiv 2609.19969: "
         "SWA KV is not persisted; default full until the owner decides). What a slot keeps of every layer's window KV. "
         "full = every position of every layer (the served 0_window_kv cache, 1.25 GiB a chip a slot at 1M on 8x4; the "
@@ -977,7 +977,35 @@ TABLE = {
         "start class 0) under DECODER_SKIP=exact / replay128 (the caller pulls back: exact >= 2688 tokens, replay128 128) "
         "and is refused (ValueError) under DECODER_SKIP=off, never computed from missing rows (a slot that never held a "
         "window row starts its window at the chunk: the timing harnesses). The serving runtime (tt/runners) refuses ring "
-        "and none until tt-d-gen reads the ring (its 0_window_kv contract is every position)",
+        "and none until tt-d-gen reads the ring (its 0_window_kv contract is every position). "
+        "snapshot128 = P.42 (OWNER 2026-11-07, decode's review; the default): the model keeps ring's 192 rows a slot "
+        "and layer for its own attention (every position up to the prompt's end attends normally), and serves a "
+        "128-row snapshot per slot and layer (all layers) as 0_window_kv, tensor_type snapshot: position p at row "
+        "p % 128, written only for p < cap = (end - 1) // KV_BLOCK_SIZE x KV_BLOCK_SIZE (decode receives [0, cap) of "
+        "the history caches and replays [cap, prompt_len)); rows of no position < cap (a prompt shorter than 128 + 64) "
+        "are zero. bf16 ROW_MAJOR 512 wide, 32-row records in one DRAM bank (4 records of 32 KiB a layer), the same bytes "
+        "on every chip (one device group). Rewritten from the ring after the layer's window write on every chunk the "
+        "caller does not mark not-last (begin_chunk last=False skips it; tt-d-gen's chunk header has no last flag, so "
+        "the serving runtime writes it on every chunk and the snapshot is final at the last chunk's acks). Not written "
+        "for the layers DECODER_SKIP=replay128 runs on its tail model (their windows are truncated there by design)",
+    ),
+    "KV_BLOCK_SIZE": Setting(
+        64,
+        None,
+        "P.42: the serving engine's kv_block_size (tt-d-gen worker config dynamo.disagg.prefill.json kv_block_size; "
+        "64 in every shipped config, 32 legal). The decode handoff's cap = (prompt_len - 1) // kv_block_size x "
+        "kv_block_size (prefix_indexer.hpp reusable_prefix_cap): WINDOW_KV_KEEP=snapshot128 serves the window rows "
+        "below it. Set it to the deployed worker's value",
+    ),
+    "REINDEX_SERVE": Setting(
+        "alias",
+        ("alias", "copy"),
+        "P.42 (OWNER 2026-11-07, decode's review): how 4_index_k_r1 serves the re-index layers (24 / 28 / 32 / 36, "
+        "INDEX_K_SERVED=fp8_row192). alias (the default) = their table entries are layer 20's records (same noc_addr "
+        "and size, same positions, same device group): no slab of their own, nothing written for them (tt-d-gen's KV "
+        "Manager reads each entry where it points; no check there or in tt-metal's table refuses entries sharing an "
+        "address). copy = the path before (P.39): each re-index layer has its own slab, written with layer 20's rows "
+        "in the same chunk (~96 MiB a chip a slot at 1M on 8x4)",
     ),
     "WINDOW_RING_CORES": Setting(
         8,

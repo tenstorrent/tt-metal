@@ -31,6 +31,13 @@ own code (tt-d-gen tools/launch_harness/tables.py, kv_manager/tools/kv_dump_comp
   - slot A after turn 1 vs the golden; its reused prefix [0, resident) byte-identical at the end; its last block
     [resident, turn 1) PCC >= 0.99 (validation.py:55-61 comparison_ranges)
   - the pulled-back chunk: rows below its start unchanged, layer 0's window_kv rewritten with the same bytes
+  - WINDOW_KV_KEEP=snapshot128 (P.42, owner-authorized contract change 2026-11-07): 0_window_kv is the 128-row
+    snapshot; each slot's final one and slot A's after turn 1 hold the golden window KV of [cap - 128, cap) at row
+    p % 128, cap = (end - 1) // 64 x 64 (caches.snapshot_failures; rows of no position < cap zero). Ends: 2536 / 3036
+    (not multiples of 64), 10240. The snapshot is rewritten every chunk by design: the reused-prefix byte rule, the
+    last-block rule, kv_dump_compare's bytecmp / reassemble and the pulled-back rewrite rule (layer 0's per-position
+    window KV) apply to per-position caches only; under snapshot128 the pulled-back rule has no per-position window
+    cache to check (reported in the log)
 Fail fast (run_child): the run is killed ~3 s after the feeder exits non-zero, after AFTER_FEEDER_S without progress
 once it exits 0, when no log grows for STALL_S, or after CHILD_TIMEOUT_S. The precompile pass (UP_FRONT_COLLECT=1)
 skips the body.
@@ -287,6 +294,13 @@ def kv_checks(
         for cfg in C.served_configs(layers):
             d = C.load_dump(out / "final", cfg, s)
             finals[(s, cfg["name"])] = d
+            if cfg.get("snapshot"):  # P.42: the request's final snapshot at its cap
+                for layer in cfg["layers"]:
+                    mine = {k: b for k, b in d.items() if k[0] == layer}
+                    fails += C.snapshot_failures(
+                        kvc, gk, cfg, mine, layer, C.snapshot_cap(e), thr, f"slot {s} [0, {e})"
+                    )
+                continue
             for layer in cfg["layers"]:
                 got, pad = C.valid_and_pad(d, cfg, layer, 0, e)
                 if cfg["rows"] == 32 and not cfg.get("fp8"):  # the server's own reassembly agrees with ours on a
@@ -304,6 +318,13 @@ def kv_checks(
         prefix = R.follow_up_resident(t1, follow)
         for cfg in C.served_configs(layers):
             a = C.load_dump(out / "snap_s0_t0", cfg, slot_a)
+            if cfg.get("snapshot"):  # P.42: slot A's snapshot after turn 1, at its cap
+                for layer in cfg["layers"]:
+                    mine = {k: b for k, b in a.items() if k[0] == layer}
+                    fails += C.snapshot_failures(
+                        kvc, gk, cfg, mine, layer, C.snapshot_cap(t1), thr, f"slot {slot_a} turn 1"
+                    )
+                continue
             for layer in cfg["layers"]:
                 got, _ = C.valid_and_pad(a, cfg, layer, 0, t1)
                 fails += C.golden_failures(kvc, gk, cfg, got, layer, 0, t1, thr, f"slot {slot_a} turn 1")
@@ -329,7 +350,9 @@ def kv_checks(
                     fails.append(f"kv_dump_compare bytecmp slot {slot_a} [0, {prefix}): {r['findings'][:3]}")
     else:
         fails.append("snapshot snap_s0_t0 not taken")
-    if overlap is not None and snaps.get("snap_overlap", {}).get("taken"):
+    if overlap is not None and C.served_configs(layers)[0].get("snapshot"):
+        log("pulled-back rewrite rule: n/a under WINDOW_KV_KEEP=snapshot128 (no per-position window KV is served)")
+    elif overlap is not None and snaps.get("snap_overlap", {}).get("taken"):
         lo, hi = overlap["lo"], overlap["hi"]
         cfg = C.served_configs(layers)[0]
         b = C.load_dump(out / "snap_overlap", cfg, slot_a)

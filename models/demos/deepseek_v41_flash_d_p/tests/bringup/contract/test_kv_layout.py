@@ -28,6 +28,11 @@ stage_layouts)). No chunk runs. Pass:
     copy, so the recipe and the stock cast are applied to the keys the rows are built from: the golden's bf16 keys
     rounded to bfloat8_b by tt-metal's host rule (dequantized; ckv_bfp4_ttnn/tests/reference.round_values, which
     ttnn.bringup.bfp_round equals for bf16 inputs). Every other check, tolerance and limit unchanged.
+  - P.42 (owner-authorized contract change 2026-11-07): WINDOW_KV_KEEP=snapshot128 makes 0_window_kv a Snapshot
+    config, [slots x layers, 1, 128, 512] (4 records a (slot, layer), every chip the same bytes: the table's device
+    group is the whole mesh, no record past position 128); REINDEX_SERVE=alias gives the re-index layers no slab of
+    their own: their 4_index_k_r1 entries equal layer 20's (caches.table_rules), so the encoding check above reads
+    layer 20's bytes through them
 """
 
 import pytest

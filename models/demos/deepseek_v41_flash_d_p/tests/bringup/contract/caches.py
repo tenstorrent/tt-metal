@@ -34,6 +34,16 @@ and ``blaze_rows`` is Blaze's torch recipe (tt-blaze 8223e7f9963e tests/blaze/mi
 test_dsa_indexer_direct_k_cache_update.py:_quantize_scaled_keys). test_kv_layout.py checks the served bytes against
 the stock per_token_cast_to_fp8 exactly (the writer tt-blaze's test compares with) and against the recipe within one
 e4m3 step (the cast lands one step higher at ~1 % of values and keeps e4m3 subnormals the recipe flushes, P.39).
+
+WINDOW_KV_KEEP=snapshot128 (P.42, the default; owner 2026-11-07, decode's review): 0_window_kv is a SNAPSHOT config
+(``snapshot``): per (slot, layer) 128 rows in 4 records at positions 0, 32, 64, 96 (no record past 128), position p
+at row p % 128 for p in [cap - 128, cap), cap = R.reusable_prefix_cap(R.KV_BLOCK, end) of the request's end (decode
+receives [0, cap) and replays the rest); rows of no position < cap zero; the same bytes on every chip (one device
+group, the whole mesh). ``snapshot_failures`` compares it with the golden window KV of those positions (the
+positions in natural order through ``golden_failures``: a dumped layer every row, else the positions the golden's
+rings hold). REINDEX_SERVE=alias (P.42, the default): 4_index_k_r1's re-index layers (``alias``) have table entries
+equal to their key source's (noc_addr, size, device group) at the same (slot, position): ``table_rules`` checks that
+and takes those records out of the overlap check (they ARE the source's records).
 """
 
 from __future__ import annotations
@@ -92,6 +102,28 @@ def key_source(layer: int) -> int | None:
     return max(j for j in a["kv_source_layers"] if j <= layer)
 
 
+def window_keep() -> str:
+    """WINDOW_KV_KEEP (P.32 / P.42; the model's setting): snapshot128 | full | ring | none."""
+    from models.demos.deepseek_v41_flash_d_p.tt.settings import settings
+
+    return settings.get("WINDOW_KV_KEEP")
+
+
+def reindex_alias() -> bool:
+    """REINDEX_SERVE=alias (P.42; the model's setting): the re-index layers' index-key entries alias the source's."""
+    from models.demos.deepseek_v41_flash_d_p.tt.settings import settings
+
+    return settings.get("REINDEX_SERVE") == "alias"
+
+
+SNAP = 128  # P.42: the snapshot's rows (positions 0..127 of the table config)
+
+
+def snapshot_cap(end: int) -> int:
+    """P.42: the cap of a request ending at ``end`` (tt-d-gen reusable_prefix_cap at the server's kv_block_size)."""
+    return R.reusable_prefix_cap(R.KV_BLOCK, end)
+
+
 def served_prefix() -> list[int]:
     """Layers the runner tests serve: the spec's layers from 0 up to the first gap (the whole model in a full run;
     0-3 in this partial run, whose later layers need golden inputs the runner cannot give). Runner layer k = model
@@ -110,6 +142,8 @@ def served_configs(layers: list[int]) -> list[dict]:
     a = model_args()
     head, idx = int(a["head_dim"]), int(a["index_head_dim"])
     out = [{"name": CONFIG_ORDER[0], "kind": "window", "ratio": 1, "rows": 32, "width": head, "layers": list(layers)}]
+    if window_keep() == "snapshot128":  # P.42: the 128-row snapshot at cap
+        out[0].update(snapshot=True)
     fp8 = index_k_fp8()
     for r, (cn, ik) in ((2, CONFIG_ORDER[1:3]), (1, CONFIG_ORDER[3:5])):
         src = [i for i in layers if is_kv_source(i) and ratio(i) == r]
@@ -119,6 +153,8 @@ def served_configs(layers: list[int]) -> list[dict]:
             if fp8:  # P.39: Blaze's rows, also under the re-index layers that read these keys
                 of = {j: key_source(j) for j in layers if key_source(j) in src}
                 c.update(fp8=True, layers=sorted(src + list(of)), of=of)
+                if of and reindex_alias():  # P.42: their entries are the source's records
+                    c.update(alias=True)
             out.append(c)
     for c in out:
         c["split"] = c["width"] - ROPE
@@ -641,15 +677,39 @@ def table_rules(table_path: str, layers: list[int], num_users: int, bank_limits:
         except ValueError as e:
             fails.append(f"{name}: {e}")
             continue
+        span = SNAP if w.get("snapshot") else R.MAX_SEQ  # (P.42: a snapshot's records are positions 0..96)
         miss = [
             (s, l, p)
             for s in range(num_users)
             for l in w["layers"]
-            for p in range(0, R.MAX_SEQ, R.RECORD_TOKENS)
+            for p in range(0, span, R.RECORD_TOKENS)
             if (s, l, p) not in entries or entries[(s, l, p)][1] == 0
         ]
         if miss:
             fails.append(f"{name}: {len(miss)} (slot, layer, position) records missing, e.g. {miss[:3]}")
+        if w.get("snapshot"):  # P.42: tensor_type SNAPSHOT, no record past its 128 positions, one group of every chip
+            extra = [k for k, e in entries.items() if e[1] and k[2] >= SNAP]
+            if extra:
+                fails.append(f"{name}: snapshot records past position {SNAP}: {len(extra)}, e.g. {extra[:3]}")
+            if snapshot_type(table_path, idx) != "Snapshot":
+                fails.append(f"{name}: tensor_type {snapshot_type(table_path, idx)}, expected Snapshot")
+            mesh_chips = {(n.mesh_id, n.chip_id) for h in t.fabric_node_hosts for n in [h]}
+            bad_dg = {e[2] for e in entries.values() if e[1] and set(groups.get(e[2], [])) != mesh_chips}
+            if bad_dg:
+                fails.append(f"{name}: snapshot records in device groups {sorted(bad_dg)}, not the whole mesh")
+        alias = {}
+        if w.get("alias"):  # P.42 REINDEX_SERVE=alias: a re-index layer's entry == its key source's, same position
+            for (s, l, p), e in entries.items():
+                src = w["of"].get(l)
+                if src is None or not e[1]:
+                    continue
+                alias[(s, l, p)] = True
+                if entries.get((s, src, p)) != e:
+                    fails.append(
+                        f"{name}: alias layer {l} slot {s} position {p}: entry {e} != its source layer {src}'s "
+                        f"{entries.get((s, src, p))}"
+                    )
+                    break
         wrong = [k for k, e in entries.items() if e[1] and e[1] != cfg.chunk_size_bytes]
         if wrong:
             fails.append(f"{name}: {len(wrong)} records not chunk_size_bytes {cfg.chunk_size_bytes}, e.g. {wrong[:3]}")
@@ -665,6 +725,8 @@ def table_rules(table_path: str, layers: list[int], num_users: int, bank_limits:
             lo = lim[0] if lim else 0
             if off < lo or off + size > hi:
                 bad_bank.append((k, hex(off), size))
+            if k in alias:  # (P.42: the source's own record, checked above)
+                continue
             for chip in groups.get(dg, []):
                 chips.setdefault((*chip, bank), []).append((off, off + size, (name, *k)))
         if bad_align:
@@ -684,6 +746,32 @@ def table_rules(table_path: str, layers: list[int], num_users: int, bank_limits:
     return fails
 
 
+def snapshot_type(table_path: str, config_idx: int) -> str:
+    """P.42: the config's tensor_type as tt-metal's import reads it ("Kv" | "Snapshot")."""
+    import ttnn
+
+    t = ttnn.experimental.disaggregation.import_from_protobuf_file(table_path)
+    return str(t.config(config_idx).tensor_type).split(".")[-1]
+
+
+def snapshot_failures(kvc, gk: GoldenKV, cfg: dict, recs: dict, layer: int, cap: int, thr, what: str) -> list[str]:
+    """P.42: a served snapshot (``recs``: its 4 records {(layer, pos): bytes}) vs the golden window KV of positions
+    [cap - 128, cap) at row p % 128 (``golden_failures`` on those rows in position order: a dumped layer every row,
+    against the official drift on the same rows under GoldenKV(window="drift"); another layer the positions its ring
+    snapshots hold), and every row of no position < cap zero."""
+    snap = assemble(recs, cfg, layer, 0, SNAP)
+    lo = max(0, cap - SNAP)
+    held = {q % SNAP for q in range(lo, cap)}
+    out = []
+    empty = [r for r in range(SNAP) if r not in held and np.any(snap[r] != 0)]
+    if empty:
+        out.append(f"{what}: snapshot layer {layer} cap {cap}: rows {empty[:4]} of no position < cap not zero")
+    if cap > lo:
+        nat = snap[np.arange(lo, cap) % SNAP]
+        out += golden_failures(kvc, gk, cfg, nat, layer, lo, cap, thr, f"{what} snapshot cap {cap}")
+    return out
+
+
 # ---------------------------------------------------------------- table read-back (on the device host)
 class TableReader:
     """KV records through the exported table, as the KV Manager reads them (out of band, over UMD)."""
@@ -696,29 +784,37 @@ class TableReader:
         self.dmap = dmap
         self.cid = {self.table.config_name(i): i for i in range(self.table.num_configs())}
         self.replica_mismatch = []
+        self.replica_detail = []  # (.., chips whose bytes differ from the group's first, group size, ``where``)
+        self.where = ""  # (the caller's label of the current reads)
+        # P.42: snapshot configs (their records are positions 0..96 whatever range is asked)
+        self.snap = {
+            n for n, i in self.cid.items() if str(self.table.config(i).tensor_type).split(".")[-1] == "Snapshot"
+        }
 
     def record(self, name: str, slot: int, layer: int, pos: int) -> bytes:
         """One 32-token record; every chip of its device group must hold the same bytes (the KVM reads any one)."""
         loc = self.table.lookup(layer, pos, slot, self.cid[name])
         if not loc.size_bytes:
             raise KeyError(f"{name}: no table entry for slot {slot} layer {layer} position {pos}")
-        raws = []
+        raws, keys = [], []
         for n in self.table.get_device_group(loc.device_group_index).fabric_node_ids:
             key = (int(n.mesh_id), int(n.chip_id))
             if key in self.dmap:
                 raws.append(bytes(self.D.read_dram_umd(self.dmap[key], loc.noc_addr, loc.size_bytes)))
+                keys.append(key)
         if not raws:
             raise KeyError(f"no chip of device group {loc.device_group_index} in the device map")
         if any(r != raws[0] for r in raws[1:]):
             self.replica_mismatch.append((name, slot, layer, pos))
+            self.replica_detail.append(
+                (name, slot, layer, pos, [k for k, r in zip(keys, raws) if r != raws[0]], len(raws), self.where)
+            )
         return raws[0]
 
     def records(self, name: str, slot: int, layers, lo: int, hi: int) -> dict:
-        return {
-            (l, p): self.record(name, slot, l, p)
-            for l in layers
-            for p in range(R.align_down(lo, 32), R.ceil_to(hi, 32), 32)
-        }
+        """The records covering [lo, hi) of each layer (a snapshot config, P.42: its 4 records, any range)."""
+        span = range(0, SNAP, 32) if name in self.snap else range(R.align_down(lo, 32), R.ceil_to(hi, 32), 32)
+        return {(l, p): self.record(name, slot, l, p) for l in layers for p in span}
 
     def dump(self, out_dir: Path, slot: int, layers: list[int], lo: int, hi: int) -> None:
         """kv_dram_poke --dump files <out>/<config>/s<slot>_l<layer>_p<pos>.bin for the records covering [lo, hi) of
