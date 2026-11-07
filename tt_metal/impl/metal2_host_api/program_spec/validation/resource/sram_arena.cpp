@@ -18,8 +18,8 @@ void ValidateSRAMArenaParameter(const SRAMArenaParameter& parameter) {
         parameter.unique_id);
     if (const auto* range = std::get_if<RangeLockstepSRAMArenaProperties>(&parameter.properties)) {
         TT_FATAL(
-            !range->banks_to_be_allocated_on.empty(),
-            "SRAMArenaParameter '{}' has empty banks_to_be_allocated_on; at least one node is required.",
+            !range->allocation_node_set.empty(),
+            "SRAMArenaParameter '{}' has empty allocation_node_set; at least one node is required.",
             parameter.unique_id);
     }
 }
@@ -47,7 +47,7 @@ void ValidateSRAMArenaAllocation(
     const auto& properties = it->second->properties;
     if (const auto* range = std::get_if<RangeLockstepSRAMArenaProperties>(&properties)) {
         TT_FATAL(
-            range->banks_to_be_allocated_on.contains(occupied_nodes),
+            range->allocation_node_set.contains(occupied_nodes),
             "{} allocates from SRAMArenaParameter '{}', which does not cover every occupied node.",
             resource,
             source.arena);

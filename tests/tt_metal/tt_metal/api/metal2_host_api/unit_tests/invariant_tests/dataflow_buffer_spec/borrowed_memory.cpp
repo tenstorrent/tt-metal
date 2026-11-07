@@ -144,7 +144,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_SRAMArenaDFBExactFitAtZeroOffset) {
         .unique_id = SRAMArenaParamName{"arena"},
         .properties =
             RangeLockstepSRAMArenaProperties{
-                .banks_to_be_allocated_on = NodeRangeSet{NodeRange{NodeCoord{0, 0}, NodeCoord{0, 0}}},
+                .allocation_node_set = NodeRangeSet{NodeRange{NodeCoord{0, 0}, NodeCoord{0, 0}}},
                 .per_bank_size = 2 * alignment,
             },
     }};
@@ -167,7 +167,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_SRAMArenaDFBExactFitAtNonzeroOffset) {
         .unique_id = SRAMArenaParamName{"arena"},
         .properties =
             RangeLockstepSRAMArenaProperties{
-                .banks_to_be_allocated_on = NodeRangeSet{NodeRange{NodeCoord{0, 0}, NodeCoord{0, 0}}},
+                .allocation_node_set = NodeRangeSet{NodeRange{NodeCoord{0, 0}, NodeCoord{0, 0}}},
                 .per_bank_size = 3 * alignment,
             },
     }};
@@ -190,7 +190,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_SRAMArenaDFBExtraAllocationNodes) {
         .unique_id = SRAMArenaParamName{"arena"},
         .properties =
             RangeLockstepSRAMArenaProperties{
-                .banks_to_be_allocated_on = NodeRangeSet{NodeRange{NodeCoord{0, 0}, NodeCoord{1, 0}}},
+                .allocation_node_set = NodeRangeSet{NodeRange{NodeCoord{0, 0}, NodeCoord{1, 0}}},
                 .per_bank_size = 2 * alignment,
             },
     }};
@@ -213,7 +213,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_SRAMArenaDFBMissingOccupiedNode) {
         .unique_id = SRAMArenaParamName{"arena"},
         .properties =
             RangeLockstepSRAMArenaProperties{
-                .banks_to_be_allocated_on = NodeRangeSet{NodeRange{NodeCoord{0, 0}, NodeCoord{0, 0}}},
+                .allocation_node_set = NodeRangeSet{NodeRange{NodeCoord{0, 0}, NodeCoord{0, 0}}},
                 .per_bank_size = 2 * alignment,
             },
     }};
@@ -237,7 +237,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_SRAMArenaDFBExceedsCapacity) {
         .unique_id = SRAMArenaParamName{"arena"},
         .properties =
             RangeLockstepSRAMArenaProperties{
-                .banks_to_be_allocated_on = NodeRangeSet{NodeRange{NodeCoord{0, 0}, NodeCoord{0, 0}}},
+                .allocation_node_set = NodeRangeSet{NodeRange{NodeCoord{0, 0}, NodeCoord{0, 0}}},
                 .per_bank_size = 2 * alignment - 1,
             },
     }};
@@ -263,7 +263,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_SRAMArenaDFBOffsetCausesOverrun) {
         .unique_id = SRAMArenaParamName{"arena"},
         .properties =
             RangeLockstepSRAMArenaProperties{
-                .banks_to_be_allocated_on = NodeRangeSet{NodeRange{NodeCoord{0, 0}, NodeCoord{0, 0}}},
+                .allocation_node_set = NodeRangeSet{NodeRange{NodeCoord{0, 0}, NodeCoord{0, 0}}},
                 .per_bank_size = 3 * alignment - 1,
             },
     }};
@@ -290,7 +290,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_SRAMArenaDFBMisalignedOffset) {
         .unique_id = SRAMArenaParamName{"arena"},
         .properties =
             RangeLockstepSRAMArenaProperties{
-                .banks_to_be_allocated_on = NodeRangeSet{NodeRange{NodeCoord{0, 0}, NodeCoord{0, 0}}},
+                .allocation_node_set = NodeRangeSet{NodeRange{NodeCoord{0, 0}, NodeCoord{0, 0}}},
                 .per_bank_size = 4 * alignment,
             },
     }};

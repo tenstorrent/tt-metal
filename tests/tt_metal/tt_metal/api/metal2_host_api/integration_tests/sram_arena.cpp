@@ -168,7 +168,7 @@ protected:
             GetParam() == AllocationMode::Lockstep
                 ? SRAMArenaProperties{LockstepSRAMArenaProperties{.per_bank_size = reservation_bytes}}
                 : SRAMArenaProperties{RangeLockstepSRAMArenaProperties{
-                      .banks_to_be_allocated_on = nodes, .per_bank_size = reservation_bytes}};
+                      .allocation_node_set = nodes, .per_bank_size = reservation_bytes}};
         const auto report_spec = ReportSpec(nodes, alignment);
         ProgramSpec spec;
         spec.name = "SRAMArenaScratchpadUpdates";
@@ -325,7 +325,7 @@ protected:
             GetParam() == AllocationMode::Lockstep
                 ? SRAMArenaProperties{LockstepSRAMArenaProperties{.per_bank_size = fixture_reservation_bytes}}
                 : SRAMArenaProperties{RangeLockstepSRAMArenaProperties{
-                      .banks_to_be_allocated_on = nodes, .per_bank_size = fixture_reservation_bytes}};
+                      .allocation_node_set = nodes, .per_bank_size = fixture_reservation_bytes}};
         const TensorSpec report_spec = ReportSpec(nodes, alignment);
         const TensorSpec output_spec = OutputSpec(1, fixture_entry_size);
         ProgramSpec spec;
@@ -476,7 +476,7 @@ TEST_F(SRAMArenaRangeLockstep, ScratchpadDefaultOffset) {
     const uint32_t reservation_bytes_per_bank =
         offset + scratch_bytes + alignment;  // Includes a trailing sentinel region.
     const RangeLockstepSRAMArenaProperties properties{
-        .banks_to_be_allocated_on = node_set, .per_bank_size = reservation_bytes_per_bank};
+        .allocation_node_set = node_set, .per_bank_size = reservation_bytes_per_bank};
     const auto report_spec = ReportSpec(node_set, alignment);
 
     ProgramSpec spec;
@@ -523,7 +523,7 @@ TEST_F(SRAMArenaRangeLockstep, DFBDefaultOffset) {
     const uint32_t offset = 0;
     const uint32_t reservation_bytes_per_bank = offset + dfb_bytes + alignment;  // Includes a trailing sentinel region.
     const RangeLockstepSRAMArenaProperties properties{
-        .banks_to_be_allocated_on = node_set, .per_bank_size = reservation_bytes_per_bank};
+        .allocation_node_set = node_set, .per_bank_size = reservation_bytes_per_bank};
     const auto report_spec = ReportSpec(node_set, alignment);
     const auto output_spec = OutputSpec(node_set.num_cores(), entry_size);
 
@@ -580,7 +580,7 @@ TEST_F(SRAMArenaRangeLockstep, ScratchpadNonzeroOffset) {
     const uint32_t reservation_bytes_per_bank =
         offset + scratch_bytes + alignment;  // Includes a trailing sentinel region.
     const RangeLockstepSRAMArenaProperties properties{
-        .banks_to_be_allocated_on = node_set, .per_bank_size = reservation_bytes_per_bank};
+        .allocation_node_set = node_set, .per_bank_size = reservation_bytes_per_bank};
     const auto report_spec = ReportSpec(node_set, alignment);
 
     ProgramSpec spec;
@@ -627,7 +627,7 @@ TEST_F(SRAMArenaRangeLockstep, DFBNonzeroOffset) {
     const uint32_t offset = alignment;
     const uint32_t reservation_bytes_per_bank = offset + dfb_bytes + alignment;  // Includes a trailing sentinel region.
     const RangeLockstepSRAMArenaProperties properties{
-        .banks_to_be_allocated_on = node_set, .per_bank_size = reservation_bytes_per_bank};
+        .allocation_node_set = node_set, .per_bank_size = reservation_bytes_per_bank};
     const auto report_spec = ReportSpec(node_set, alignment);
     const auto output_spec = OutputSpec(node_set.num_cores(), entry_size);
 
@@ -688,7 +688,7 @@ TEST_F(SRAMArenaRangeLockstep, BorrowingAcrossNodes) {
     const uint32_t reservation_bytes_per_bank =
         dfb_offset + dfb_bytes + alignment;  // Includes a trailing sentinel region.
     const RangeLockstepSRAMArenaProperties properties{
-        .banks_to_be_allocated_on = node_set, .per_bank_size = reservation_bytes_per_bank};
+        .allocation_node_set = node_set, .per_bank_size = reservation_bytes_per_bank};
     const auto report_spec = ReportSpec(node_set, alignment);
     const auto output_spec = OutputSpec(node_set.num_cores(), entry_size);
 
@@ -768,7 +768,7 @@ TEST_F(SRAMArenaRangeLockstep, SharedByScratchpadAndDFB) {
     const uint32_t reservation_bytes_per_bank =
         dfb_offset + dfb_bytes + alignment;  // Includes a trailing sentinel region.
     const RangeLockstepSRAMArenaProperties properties{
-        .banks_to_be_allocated_on = node_set, .per_bank_size = reservation_bytes_per_bank};
+        .allocation_node_set = node_set, .per_bank_size = reservation_bytes_per_bank};
     const auto report_spec = ReportSpec(node_set, alignment);
     const auto output_spec = OutputSpec(node_set.num_cores(), entry_size);
 

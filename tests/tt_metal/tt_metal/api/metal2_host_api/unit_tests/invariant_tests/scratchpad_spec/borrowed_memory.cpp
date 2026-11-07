@@ -51,7 +51,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_SRAMArenaScratchpadExactFitAtZeroOffset) {
         .unique_id = SRAMArenaParamName{"arena"},
         .properties =
             RangeLockstepSRAMArenaProperties{
-                .banks_to_be_allocated_on = NodeRangeSet{NodeRange{NodeCoord{0, 0}, NodeCoord{0, 0}}},
+                .allocation_node_set = NodeRangeSet{NodeRange{NodeCoord{0, 0}, NodeCoord{0, 0}}},
                 .per_bank_size = 2 * alignment,
             },
     }};
@@ -72,7 +72,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_SRAMArenaScratchpadExactFitAtNonzeroOffset) {
         .unique_id = SRAMArenaParamName{"arena"},
         .properties =
             RangeLockstepSRAMArenaProperties{
-                .banks_to_be_allocated_on = NodeRangeSet{NodeRange{NodeCoord{0, 0}, NodeCoord{0, 0}}},
+                .allocation_node_set = NodeRangeSet{NodeRange{NodeCoord{0, 0}, NodeCoord{0, 0}}},
                 .per_bank_size = 3 * alignment,
             },
     }};
@@ -93,7 +93,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_SRAMArenaScratchpadExtraAllocationNodes) {
         .unique_id = SRAMArenaParamName{"arena"},
         .properties =
             RangeLockstepSRAMArenaProperties{
-                .banks_to_be_allocated_on = NodeRangeSet{NodeRange{NodeCoord{0, 0}, NodeCoord{1, 0}}},
+                .allocation_node_set = NodeRangeSet{NodeRange{NodeCoord{0, 0}, NodeCoord{1, 0}}},
                 .per_bank_size = 2 * alignment,
             },
     }};
@@ -114,7 +114,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_SRAMArenaScratchpadMissingOccupiedNode) {
         .unique_id = SRAMArenaParamName{"arena"},
         .properties =
             RangeLockstepSRAMArenaProperties{
-                .banks_to_be_allocated_on = NodeRangeSet{NodeRange{NodeCoord{0, 0}, NodeCoord{0, 0}}},
+                .allocation_node_set = NodeRangeSet{NodeRange{NodeCoord{0, 0}, NodeCoord{0, 0}}},
                 .per_bank_size = 2 * alignment,
             },
     }};
@@ -140,7 +140,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_SRAMArenaScratchpadExceedsCapacity) {
         .unique_id = SRAMArenaParamName{"arena"},
         .properties =
             RangeLockstepSRAMArenaProperties{
-                .banks_to_be_allocated_on = NodeRangeSet{NodeRange{NodeCoord{0, 0}, NodeCoord{0, 0}}},
+                .allocation_node_set = NodeRangeSet{NodeRange{NodeCoord{0, 0}, NodeCoord{0, 0}}},
                 .per_bank_size = 2 * alignment - 1,
             },
     }};
@@ -168,7 +168,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_SRAMArenaScratchpadOffsetCausesOverrun) {
         .unique_id = SRAMArenaParamName{"arena"},
         .properties =
             RangeLockstepSRAMArenaProperties{
-                .banks_to_be_allocated_on = NodeRangeSet{NodeRange{NodeCoord{0, 0}, NodeCoord{0, 0}}},
+                .allocation_node_set = NodeRangeSet{NodeRange{NodeCoord{0, 0}, NodeCoord{0, 0}}},
                 .per_bank_size = 3 * alignment - 1,
             },
     }};
@@ -197,7 +197,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_SRAMArenaScratchpadMisalignedOffset) {
         .unique_id = SRAMArenaParamName{"arena"},
         .properties =
             RangeLockstepSRAMArenaProperties{
-                .banks_to_be_allocated_on = NodeRangeSet{NodeRange{NodeCoord{0, 0}, NodeCoord{0, 0}}},
+                .allocation_node_set = NodeRangeSet{NodeRange{NodeCoord{0, 0}, NodeCoord{0, 0}}},
                 .per_bank_size = 4 * alignment,
             },
     }};
@@ -236,7 +236,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_SRAMArenaScratchpadMissingMiddleBinderNode) {
     ProgramSpec spec =
         MakeSpecWithOneScratchpadBinderPerNodeForTest({NodeCoord{0, 0}, NodeCoord{2, 0}, NodeCoord{1, 0}}, alignment);
     const RangeLockstepSRAMArenaProperties arena_properties{
-        .banks_to_be_allocated_on = NodeRangeSet{NodeRange({0, 0}, {1, 0})}, .per_bank_size = alignment};
+        .allocation_node_set = NodeRangeSet{NodeRange({0, 0}, {1, 0})}, .per_bank_size = alignment};
     spec.advanced_options.sram_arena_parameters = {
         {.unique_id = SRAMArenaParamName{"arena"}, .properties = arena_properties}};
     spec.scratchpads[0].advanced_options.allocation_override =

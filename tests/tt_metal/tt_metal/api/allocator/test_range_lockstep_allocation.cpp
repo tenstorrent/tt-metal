@@ -183,7 +183,7 @@ TEST_F(HybridAllocatorTest, PlacesRangeLockstepSRAMArenaBesideAPerCoreHog) {
     std::shared_ptr<distributed::MeshBuffer> per_core_hog =
         allocate_per_core_l1_mesh_buffer_on_node(*mesh_device, CoreCoord(0, 0), per_bank_size);
     const experimental::RangeLockstepSRAMArenaProperties properties{
-        .banks_to_be_allocated_on = CoreRangeSet(CoreCoord(1, 0)), .per_bank_size = per_bank_size};
+        .allocation_node_set = CoreRangeSet(CoreCoord(1, 0)), .per_bank_size = per_bank_size};
     EXPECT_NO_THROW((void)experimental::SRAMArena::allocate(*mesh_device, properties));
 }
 

@@ -48,7 +48,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_SRAMArenaParameterValidRangeLockstep) {
     const uint32_t alignment = fixture_device.allocator()->get_alignment(BufferType::L1);
     auto spec = MakeProgramSpecWithArenaScratchpadForTest();
     const RangeLockstepSRAMArenaProperties properties{
-        .banks_to_be_allocated_on = NodeRangeSet{NodeRange({0, 0}, {0, 0})}, .per_bank_size = alignment};
+        .allocation_node_set = NodeRangeSet{NodeRange({0, 0}, {0, 0})}, .per_bank_size = alignment};
     spec.advanced_options.sram_arena_parameters = {
         {.unique_id = SRAMArenaParamName{"arena"}, .properties = properties}};
     EXPECT_NO_THROW(MakeProgramFromSpec(fixture_device, spec));
@@ -75,7 +75,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_SRAMArenaParameterZeroRangeLockstepSize) {
         .unique_id = SRAMArenaParamName{"arena"},
         .properties =
             RangeLockstepSRAMArenaProperties{
-                .banks_to_be_allocated_on = NodeRangeSet{NodeRange{NodeCoord{0, 0}, NodeCoord{0, 0}}},
+                .allocation_node_set = NodeRangeSet{NodeRange{NodeCoord{0, 0}, NodeCoord{0, 0}}},
                 .per_bank_size = 0,
             },
     }};
@@ -94,7 +94,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_SRAMArenaParameterEmptyRangeLockstepNodes) {
         .unique_id = SRAMArenaParamName{"arena"},
         .properties =
             RangeLockstepSRAMArenaProperties{
-                .banks_to_be_allocated_on = NodeRangeSet{},
+                .allocation_node_set = NodeRangeSet{},
                 .per_bank_size = alignment,
             },
     }};
@@ -102,7 +102,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_SRAMArenaParameterEmptyRangeLockstepNodes) {
     EXPECT_THAT(
         [&] { MakeProgramFromSpec(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr(
-            "SRAMArenaParameter 'arena' has empty banks_to_be_allocated_on; at least one node is required.")));
+            "SRAMArenaParameter 'arena' has empty allocation_node_set; at least one node is required.")));
 }
 
 TEST_F(ProgramSpecTestQuasar, CPU_SRAMArenaParameterZeroSizeUsedByScratchpad) {

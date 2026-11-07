@@ -33,7 +33,7 @@ protected:
 };
 
 RangeLockstepSRAMArenaProperties ArenaProperties(uint32_t per_bank_size) {
-    return {.banks_to_be_allocated_on = NodeRangeSet{NodeRange({0, 0}, {1, 0})}, .per_bank_size = per_bank_size};
+    return {.allocation_node_set = NodeRangeSet{NodeRange({0, 0}, {1, 0})}, .per_bank_size = per_bank_size};
 }
 
 ProgramSpec ArenaDFBSpec(uint32_t entry_size, uint32_t num_entries, uint32_t offset) {
@@ -48,8 +48,8 @@ ProgramSpec ArenaDFBSpec(uint32_t entry_size, uint32_t num_entries, uint32_t off
         SRAMArenaAllocation{.arena = SRAMArenaParamName{"arena"}, .offset = offset};
     spec.advanced_options.sram_arena_parameters = {
         {.unique_id = SRAMArenaParamName{"arena"}, .properties = ArenaProperties(4096)}};
-    spec.work_units = {test_helpers::MakeMinimalWorkUnit(
-        "work", ArenaProperties(4096).banks_to_be_allocated_on, {"producer", "consumer"})};
+    spec.work_units = {
+        test_helpers::MakeMinimalWorkUnit("work", ArenaProperties(4096).allocation_node_set, {"producer", "consumer"})};
     return spec;
 }
 

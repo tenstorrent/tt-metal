@@ -31,7 +31,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_SRAMArenaDFBUndeclaredName) {
         .unique_id = SRAMArenaParamName{"arena"},
         .properties =
             RangeLockstepSRAMArenaProperties{
-                .banks_to_be_allocated_on = NodeRangeSet{NodeRange{NodeCoord{0, 0}, NodeCoord{0, 0}}},
+                .allocation_node_set = NodeRangeSet{NodeRange{NodeCoord{0, 0}, NodeCoord{0, 0}}},
                 .per_bank_size = 2 * alignment,
             },
     }};
@@ -53,7 +53,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_SRAMArenaScratchpadUndeclaredName) {
         .unique_id = SRAMArenaParamName{"arena"},
         .properties =
             RangeLockstepSRAMArenaProperties{
-                .banks_to_be_allocated_on = NodeRangeSet{NodeRange{NodeCoord{0, 0}, NodeCoord{0, 0}}},
+                .allocation_node_set = NodeRangeSet{NodeRange{NodeCoord{0, 0}, NodeCoord{0, 0}}},
                 .per_bank_size = 2 * alignment,
             },
     }};
@@ -86,7 +86,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_SRAMArenaUnusedRangeLockstepParameterFails) {
     distributed::MeshDevice& fixture_device = *mesh_device_;
     auto spec = MakeMinimalValidProgramSpec();
     const RangeLockstepSRAMArenaProperties properties{
-        .banks_to_be_allocated_on = NodeRangeSet{NodeRange({0, 0}, {0, 0})}, .per_bank_size = 4096};
+        .allocation_node_set = NodeRangeSet{NodeRange({0, 0}, {0, 0})}, .per_bank_size = 4096};
     spec.advanced_options.sram_arena_parameters = {
         {.unique_id = SRAMArenaParamName{"unused"}, .properties = properties}};
     EXPECT_THAT(

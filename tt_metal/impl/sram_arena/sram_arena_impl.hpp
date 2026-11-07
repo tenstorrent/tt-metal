@@ -49,7 +49,7 @@ struct RangeLockstepSRAMArena {
 
     auto size() const { return config.per_bank_size; }
 
-    auto banks_allocated() const { return config.banks_to_be_allocated_on; }
+    auto banks_allocated() const { return config.allocation_node_set; }
 };
 
 struct SRAMArenaImpl {
@@ -97,7 +97,7 @@ struct SRAMArenaImpl {
     static SRAMArenaImpl allocate(distributed::MeshDevice& device, RangeLockstepSRAMArenaProperties properties) {
         TT_FATAL(properties.per_bank_size > 0, "SRAMArena::allocate requires a non-zero per-bank size");
 
-        auto num_banks = properties.banks_to_be_allocated_on.num_cores();
+        auto num_banks = properties.allocation_node_set.num_cores();
         TT_FATAL(num_banks > 0, "SRAMArena::allocate requires a non-empty bank set");
         const DeviceAddr total_size = DeviceAddr{properties.per_bank_size} * num_banks;
 
@@ -105,7 +105,7 @@ struct SRAMArenaImpl {
         BufferShardingArgs shardingArgs{BufferDistributionSpec{
             Shape{num_banks, 1},
             Shape{1, 1},
-            properties.banks_to_be_allocated_on,
+            properties.allocation_node_set,
             ShardOrientation::ROW_MAJOR,
         }};
         range_lockstep_allocation::set_range_lockstep_allocation(shardingArgs, true);

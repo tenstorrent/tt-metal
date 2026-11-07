@@ -28,7 +28,7 @@ namespace {
 using test_helpers::ProgramRunArgsTestGen1;
 
 RangeLockstepSRAMArenaProperties AllocationProperties() {
-    return {.banks_to_be_allocated_on = NodeRangeSet{NodeRange({0, 0}, {1, 0})}, .per_bank_size = 4096};
+    return {.allocation_node_set = NodeRangeSet{NodeRange({0, 0}, {1, 0})}, .per_bank_size = 4096};
 }
 
 ProgramSpec BorrowedScratchpadSpec(bool shared = false) {
@@ -41,7 +41,7 @@ ProgramSpec BorrowedScratchpadSpec(bool shared = false) {
     spec.advanced_options.sram_arena_parameters = {
         {.unique_id = SRAMArenaParamName{"arena"}, .properties = AllocationProperties()}};
     spec.work_units = {
-        test_helpers::MakeMinimalWorkUnit("work", AllocationProperties().banks_to_be_allocated_on, {"writer"})};
+        test_helpers::MakeMinimalWorkUnit("work", AllocationProperties().allocation_node_set, {"writer"})};
     if (shared) {
         auto reader = test_helpers::MakeMinimalGen1DMKernel("reader", DataMovementProcessor::RISCV_1);
         reader.scratchpad_bindings = spec.kernels[0].scratchpad_bindings;
@@ -55,7 +55,7 @@ ProgramSpec BorrowedScratchpadSpec(bool shared = false) {
 ProgramSpec MakeScratchpadSpecWithArenaNodesForTest(const NodeRangeSet& nodes) {
     ProgramSpec spec = BorrowedScratchpadSpec();
     spec.advanced_options.sram_arena_parameters[0].properties =
-        RangeLockstepSRAMArenaProperties{.banks_to_be_allocated_on = nodes, .per_bank_size = 4096};
+        RangeLockstepSRAMArenaProperties{.allocation_node_set = nodes, .per_bank_size = 4096};
     return spec;
 }
 
@@ -147,7 +147,7 @@ TEST_F(ProgramRunArgsTestGen1, CPU_SRAMArenaScratchpadKindMismatch) {
 TEST_F(ProgramRunArgsTestGen1, CPU_SRAMArenaScratchpadNodeMismatch) {
     // The allocation node set must match the declared node set.
     auto properties = AllocationProperties();
-    properties.banks_to_be_allocated_on = NodeRangeSet{NodeRange({0, 0}, {2, 0})};
+    properties.allocation_node_set = NodeRangeSet{NodeRange({0, 0}, {2, 0})};
     auto arena = SRAMArena::allocate(*mesh_device_, properties);
     auto program = MakeProgramFromSpec(*mesh_device_, BorrowedScratchpadSpec());
     EXPECT_THAT(

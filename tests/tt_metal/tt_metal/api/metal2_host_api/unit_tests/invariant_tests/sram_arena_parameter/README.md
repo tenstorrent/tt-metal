@@ -32,7 +32,7 @@ struct RangeLockstepSRAMArenaProperties {
     using size_type = uint32_t;
 
     // Invariant: Must be non-empty.
-    NodeRangeSet banks_to_be_allocated_on;
+    NodeRangeSet allocation_node_set;
 
     // Invariant: Must be greater than 0.
     size_type per_bank_size;

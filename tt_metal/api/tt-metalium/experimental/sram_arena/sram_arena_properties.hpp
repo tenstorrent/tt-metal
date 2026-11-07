@@ -32,7 +32,7 @@ struct RangeLockstepSRAMArenaProperties {
     // Nodes whose SRAM banks participate in the allocation.
     //
     // Invariant: must be non-empty.
-    NodeRangeSet banks_to_be_allocated_on;
+    NodeRangeSet allocation_node_set;
 
     // Number of bytes to reserve in each participating bank.
     //

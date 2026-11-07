@@ -46,7 +46,7 @@ bool SRAMArenaImpl::matches_properties(const SRAMArenaProperties& properties) co
     const auto& range = std::get<RangeLockstepSRAMArena>(layout);
     const auto* expected = std::get_if<RangeLockstepSRAMArenaProperties>(&properties);
     return expected != nullptr && range.config.per_bank_size == expected->per_bank_size &&
-           same_node_set(range.config.banks_to_be_allocated_on, expected->banks_to_be_allocated_on);
+           same_node_set(range.config.allocation_node_set, expected->allocation_node_set);
 }
 
 SRAMArena SRAMArena::allocate(distributed::MeshDevice& device, LockstepSRAMArenaProperties properties) {
