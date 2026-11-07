@@ -3119,10 +3119,14 @@ class MiMoV2OmniForCausalLM(MiMoV2ForCausalLM, *((SupportsMultiModal,) if Suppor
         super().warmup_model_decode(*args, **kwargs)
         if not any(v is not None for v in getattr(self, "vision_encoders", [])):
             return
+        # The plugin calls this once untraced and then with enable_trace (the base signature is
+        # (kv_cache, enable_trace, max_batch_size)): the ViT traces must wait for the traced call, or every buffer the
+        # text model's captures allocate afterwards sits where a ViT replay writes its temporaries.
+        enable_trace = kwargs.get("enable_trace", args[1] if len(args) > 1 else False)
         # The ViT's traced buckets (their persistent buffers were allocated in the prefill warm-up, before the text
         # model's captures), captured after every text-model trace: a replay writes its temporaries where they were
         # at capture, which must not hold anything allocated later. A bucket that does not fit stays eager.
-        for lane, vit in enumerate(self.vision_encoders):
+        for lane, vit in enumerate(self.vision_encoders if enable_trace else []):
             if vit is not None and hasattr(vit, "capture_traces"):
                 t0 = time.time()
                 sizes = vit.capture_traces()
