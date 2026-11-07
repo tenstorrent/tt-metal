@@ -5,7 +5,7 @@ namespace ckernel::sfpu::ttpoly::atanh {
 using namespace ::sfpi;
 using ::sfpi::DataLayout;
 template <uint32_t NUM_DEGREE, uint32_t DEN_DEGREE, bool PIN_TOP = false>
-inline void eval_rational_parity_numer_denom(
+__attribute__((always_inline)) inline void eval_rational_parity_numer_denom(
     const float* num_coeffs,
     const float* den_coeffs,
     vFloat x,
@@ -52,8 +52,6 @@ inline void eval_rational_parity_numer_denom(
     out_denom = denom;
 }
 
-// Selected scalar path, preserving the canonical pin lifetime and raw-load
-// placement. Upstream caller owns SFPU start/done and the 32-row DST window.
 template <uint32_t NumDegree, uint32_t DenDegree, uint32_t BoundBits, int RawClass, bool PinTop, bool RawEarly>
 inline void mirrored_parity_rational_tile(const float* num_coeffs, const float* den_coeffs) {
     static_assert(NumDegree == 11 && DenDegree == 4);

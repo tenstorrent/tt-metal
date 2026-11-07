@@ -4,7 +4,7 @@
 
 import pytest
 from conftest import skip_for_blackhole, skip_for_coverage, skip_for_wormhole
-from fuser.config_parser import FUSER_CONFIG_DIR, FuserConfigSchema
+from fuser.config_parser import FUSER_CONFIG_DIR
 from fuser.sweep import collect_fuser_cases
 from helpers.llk_params import PERF_RUN_TYPES_QUASAR
 
@@ -28,6 +28,6 @@ def test_fuser(
     regenerate_cpp,
     testrun_uid,
 ):
-    config = FuserConfigSchema.load(case_name, case_configs[case_name])
+    config = case_configs[case_name]
     config.global_config.regenerate_cpp = regenerate_cpp
     config.run_perf_test(run_type, session_id=testrun_uid)

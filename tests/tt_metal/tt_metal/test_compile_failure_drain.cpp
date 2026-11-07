@@ -43,7 +43,9 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
 
+#include "distributed/mesh_device_impl.hpp"
 #include "jit_build/build.hpp"
+#include "impl/context/metal_context.hpp"
 #include "impl/program/program_impl.hpp"
 #include "tt_metal/jit_build/build_env_manager.hpp"
 
@@ -88,7 +90,9 @@ void add_tile_cbs(Program& program, const CoreRange& cores) {
 // so the use-after-free never triggers. Same pattern as ClearKernelCache in
 // test_compile_program.cpp.
 void clear_kernel_cache(distributed::MeshDevice& mesh_device) {
-    const std::string kernel_root = BuildEnvManager::get_instance()
+    const std::string kernel_root = mesh_device.impl()
+                                        .metal_context()
+                                        .build_env_manager()
                                         .get_device_build_env(mesh_device.build_id())
                                         .build_env.get_out_kernel_root_path();
     std::error_code ec;
@@ -102,7 +106,7 @@ TEST_F(UnitMeshAnyDispatchFixture, CompileProgramWithFailingKernelThrowsCleanly)
     // Sanity: prove the "good" compute kernel actually compiles on this device/arch, so the
     // throw below is attributable to the deliberately-broken kernel and not the valid ones.
     {
-        Program good = CreateProgram();
+        Program good = CreateProgram(this->device());
         add_tile_cbs(good, CoreRange(CoreCoord(0, 0), CoreCoord(0, 0)));
         CreateKernel(good, kGoodComputeKernel, CoreCoord(0, 0), ComputeConfig{.compile_args = {1u, 0u}});
         EXPECT_NO_THROW(good.impl().compile(&this->device()));
@@ -115,7 +119,7 @@ TEST_F(UnitMeshAnyDispatchFixture, CompileProgramWithFailingKernelThrowsCleanly)
     // Repro program: a grid of valid compute kernels (unique compile args -> each misses the
     // JIT cache and really compiles, staying in flight) plus one uncompilable data-movement
     // kernel whose build step throws mid-flight.
-    Program program = CreateProgram();
+    Program program = CreateProgram(this->device());
 
     // A small grid keeps several compute kernels (3 TRISC build steps each) genuinely in
     // flight when the bad kernel's step throws, without inflating CI compile time.

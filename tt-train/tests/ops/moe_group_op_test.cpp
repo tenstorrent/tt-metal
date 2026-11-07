@@ -6,15 +6,18 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <cstring>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/math.hpp>
+#include <tuple>
 #include <vector>
 
 #include "autograd/auto_context.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "metal/ops/moe_group/moe_group.hpp"
 #include "moe_test_utils.hpp"
+#include "test_utils/program_cache.hpp"
 
 namespace {
 
@@ -43,15 +46,9 @@ uint32_t cursor_align_elems() {
     return tt::tt_metal::hal::get_l1_alignment() / sizeof(uint16_t);
 }
 
-uint32_t device_grid_cores() {
-    auto& device = ttml::autograd::ctx().get_device();
-    auto grid = device.compute_with_storage_grid_size();
-    return static_cast<uint32_t>(grid.x) * static_cast<uint32_t>(grid.y);
-}
-
 // Mirrors moe_group_device_operation.cpp's t_cap formula.
 uint32_t compute_t_cap(uint32_t e_local, uint32_t k, uint32_t d, uint32_t b, uint32_t s) {
-    const uint32_t num_total_cores = device_grid_cores();
+    const uint32_t num_total_cores = ttml::test_utils::num_worker_cores();
     const uint32_t cur_align = cursor_align_elems();
     const uint32_t unaligned =
         std::min(e_local, k) * d * b * s + e_local * (kTileH + (cur_align - 1U) * num_total_cores);
@@ -60,7 +57,7 @@ uint32_t compute_t_cap(uint32_t e_local, uint32_t k, uint32_t d, uint32_t b, uin
 
 // num_workers as picked by split_work_to_cores(grid, total_tiles).
 uint32_t compute_num_workers(uint32_t e_local, uint32_t k, uint32_t d, uint32_t b, uint32_t s) {
-    const uint32_t grid = device_grid_cores();
+    const uint32_t grid = ttml::test_utils::num_worker_cores();
     const uint32_t t_cap = compute_t_cap(e_local, k, d, b, s);
     return std::min(t_cap / kTileH, grid);
 }
@@ -183,8 +180,18 @@ GroupReference moe_group_reference(
 
 // Build host inputs (dispatched + scores already bf16-roundtripped on the test
 // device, so the host reference compares apples-to-apples against device output).
+// Row-index broadcast, the default, keeps moe_group reorder checks (EXPECT_FLOAT_EQ on grouped rows)
+// trivially debuggable: out row N must equal the constant float(N).
 ttml::test_utils::moe::MoeHostInputs make_inputs(
-    uint32_t D, uint32_t B, uint32_t S, uint32_t H, uint32_t E, uint32_t K) {
+    uint32_t D,
+    uint32_t B,
+    uint32_t S,
+    uint32_t H,
+    uint32_t E,
+    uint32_t K,
+    ttml::test_utils::moe::DispatchedPattern dispatched_pattern =
+        ttml::test_utils::moe::DispatchedPattern::RowIndexBroadcast,
+    uint32_t seed = 42U) {  // MoeHostInputConfig's default seed
     return ttml::test_utils::moe::make_moe_host_inputs({
         .D = D,
         .B = B,
@@ -192,14 +199,13 @@ ttml::test_utils::moe::MoeHostInputs make_inputs(
         .H = H,
         .E = E,
         .K = K,
-        // Row-index broadcast keeps moe_group reorder checks (EXPECT_FLOAT_EQ on grouped rows)
-        // trivially debuggable: out row N must equal the constant float(N).
-        .dispatched_pattern = ttml::test_utils::moe::DispatchedPattern::RowIndexBroadcast,
+        .dispatched_pattern = dispatched_pattern,
         .roundtrip_device = &ttml::autograd::ctx().get_device(),
+        .seed = seed,
     });
 }
 
-// Run the device op + return host-side outputs as plain arrays.
+// Host-side copies of the device op's outputs, as plain arrays.
 struct DeviceOutputs {
     std::vector<float> grouped;         // [T_cap * H]
     std::vector<float> grouped_scores;  // [T_cap]
@@ -211,22 +217,14 @@ struct DeviceOutputs {
     uint32_t H{};
 };
 
-DeviceOutputs run_op(
-    const ttml::test_utils::moe::MoeHostInputs& host, const std::vector<uint16_t>& local_expert_ids, uint32_t k) {
-    auto& dev = ttml::autograd::ctx().get_device();
-    const uint32_t E_local = static_cast<uint32_t>(local_expert_ids.size());
-    const uint32_t H = static_cast<uint32_t>(host.dispatched.shape(3));
-
-    auto dev_in = ttml::test_utils::moe::to_device_inputs(host, local_expert_ids, &dev);
-
-    auto [grouped, grouped_scores, k_slot, counts, offsets, plan] = ttml::metal::moe_group(
-        dev_in.dispatched_bf16, dev_in.metadata_u16, dev_in.scores_bf16, dev_in.leids_u16, E_local, k);
+DeviceOutputs read_outputs(const ttml::metal::MoeGroupResult& result) {
+    const auto& [grouped, grouped_scores, k_slot, counts, offsets, plan] = result;
 
     DeviceOutputs out;
-    out.H = H;
     auto grouped_rm = ttnn::to_layout(grouped, ttnn::ROW_MAJOR_LAYOUT);
     auto grouped_xt = ttml::core::to_xtensor(grouped_rm);
     out.T_cap = static_cast<uint32_t>(grouped_xt.shape(2));
+    out.H = static_cast<uint32_t>(grouped_xt.shape(3));
     out.grouped.assign(grouped_xt.begin(), grouped_xt.end());
 
     auto gs_xt = ttml::core::to_xtensor(grouped_scores);
@@ -247,8 +245,23 @@ DeviceOutputs run_op(
     return out;
 }
 
-void check_against_reference(
+// Run the device op + return host-side outputs as plain arrays.
+DeviceOutputs run_op(
     const ttml::test_utils::moe::MoeHostInputs& host, const std::vector<uint16_t>& local_expert_ids, uint32_t k) {
+    auto& dev = ttml::autograd::ctx().get_device();
+    const uint32_t E_local = static_cast<uint32_t>(local_expert_ids.size());
+
+    auto dev_in = ttml::test_utils::moe::to_device_inputs(host, local_expert_ids, &dev);
+
+    return read_outputs(ttml::metal::moe_group(
+        dev_in.dispatched_bf16, dev_in.metadata_u16, dev_in.scores_bf16, dev_in.leids_u16, E_local, k));
+}
+
+void expect_outputs_match_reference(
+    const DeviceOutputs& out,
+    const ttml::test_utils::moe::MoeHostInputs& host,
+    const std::vector<uint16_t>& local_expert_ids,
+    uint32_t k) {
     const uint32_t D = static_cast<uint32_t>(host.dispatched.shape(0));
     const uint32_t B = static_cast<uint32_t>(host.dispatched.shape(1));
     const uint32_t S = static_cast<uint32_t>(host.dispatched.shape(2));
@@ -261,8 +274,6 @@ void check_against_reference(
     const uint32_t num_workers = compute_num_workers(E_local, k, D, B, S);
     const uint32_t t_cap = compute_t_cap(E_local, k, D, B, S);
     auto ref = moe_group_reference(disp_rt, host.metadata, host.scores, local_expert_ids, k, num_workers, t_cap);
-
-    auto out = run_op(host, local_expert_ids, k);
 
     ASSERT_EQ(out.T_cap, ref.t_cap);
     ASSERT_EQ(out.counts.size(), ref.counts.size());
@@ -307,6 +318,11 @@ void check_against_reference(
             EXPECT_FLOAT_EQ(got, exp) << "grouped[" << i << ", " << hh << "] (plan=" << src << ")";
         }
     }
+}
+
+void check_against_reference(
+    const ttml::test_utils::moe::MoeHostInputs& host, const std::vector<uint16_t>& local_expert_ids, uint32_t k) {
+    expect_outputs_match_reference(run_op(host, local_expert_ids, k), host, local_expert_ids, k);
 }
 
 }  // namespace
@@ -354,4 +370,116 @@ TEST_F(MoeGroupTest, LargeELocal) {
     leids.reserve(32);
     for (uint16_t i = 0; i < 32; ++i) leids.push_back(i);
     check_against_reference(make_inputs(D, B, S, H, E, K), leids, K);
+}
+
+// ============================================================================
+// Program-cache hits
+// ============================================================================
+// moe_group keys its programs on its attributes (e_local, k, D, B, S, H, and T_cap, which also depends on the grid) and
+// on the specs of its four inputs, so a launch on new tensors of the same shapes reuses the program. Each test clears
+// the cache so that its first launch builds the program, then launches again on new inputs while every tensor of the
+// first launch stays alive: the hit must read the new inputs, write the new outputs and leave the first launch's
+// outputs as they were. The two launches differ in every input: hidden rows and scores (seeds), routing (launch A
+// draws K = 2 of E = 4 experts per token, so about half the tokens reach each local expert; launch B has E = 2, so
+// every token reaches both) and the local expert ids. So every output differs too, counts and offsets included.
+// ============================================================================
+
+namespace {
+
+using ttml::test_utils::expect_new_buffer;
+
+constexpr uint32_t kCacheTestELocal = 2U;
+constexpr uint32_t kCacheTestK = 2U;
+
+// moe_group splits the T_cap / 32 tile-rows of `grouped` over the cores, and the D * B * S tokens over the same cores
+// in contiguous scan slices of ceil(tokens / cores). Returns the smallest S, a multiple of 32, for which there are more
+// than twice as many tile-rows as cores, and not a multiple of the core count, so that split_work_to_cores hands out
+// two core groups (two combined, writer and tilize kernels) on any grid; and for which the last core's scan slice is
+// not empty, so that every core reads metadata and scores and scatters plan, grouped_scores and k_slot entries.
+uint32_t two_core_group_s(uint32_t D, uint32_t B) {
+    const uint32_t cores = ttml::test_utils::num_worker_cores();
+    for (uint32_t s = kTileH;; s += kTileH) {
+        const uint32_t tile_rows = compute_t_cap(kCacheTestELocal, kCacheTestK, D, B, s) / kTileH;
+        const uint32_t tokens = D * B * s;
+        const uint32_t scan_slice = (tokens + cores - 1U) / cores;  // the scan runs on min(tile_rows, cores) cores
+        if (tile_rows > 2U * cores && tile_rows % cores != 0U && (cores - 1U) * scan_slice < tokens) {
+            return s;
+        }
+    }
+}
+
+ttml::metal::MoeGroupResult launch_moe_group(const ttml::test_utils::moe::MoeDeviceInputs& in) {
+    return ttml::metal::moe_group(
+        in.dispatched_bf16, in.metadata_u16, in.scores_bf16, in.leids_u16, kCacheTestELocal, kCacheTestK);
+}
+
+template <typename T>
+bool same_bits(const std::vector<T>& a, const std::vector<T>& b) {
+    return a.size() == b.size() && (a.empty() || std::memcmp(a.data(), b.data(), a.size() * sizeof(T)) == 0);
+}
+
+// Bit for bit: the rows of `grouped` past offsets[e_local] are never written, and whatever they hold must stay.
+void expect_same_outputs(const DeviceOutputs& actual, const DeviceOutputs& expected) {
+    EXPECT_TRUE(same_bits(actual.grouped, expected.grouped)) << "grouped";
+    EXPECT_TRUE(same_bits(actual.grouped_scores, expected.grouped_scores)) << "grouped_scores";
+    EXPECT_EQ(actual.k_slot, expected.k_slot) << "k_slot";
+    EXPECT_EQ(actual.counts, expected.counts) << "counts";
+    EXPECT_EQ(actual.offsets, expected.offsets) << "offsets";
+    EXPECT_EQ(actual.plan, expected.plan) << "plan";
+}
+
+// Launch A builds the program. Launch B, on new inputs of the same shapes while every tensor of launch A stays alive,
+// must reuse it.
+void expect_cache_hit_with_fresh_tensors(uint32_t D, uint32_t B, uint32_t S, uint32_t H) {
+    using ttml::test_utils::moe::DispatchedPattern;
+    auto& device = ttml::test_utils::device_with_empty_program_cache();
+
+    const std::vector<uint16_t> leids_a = {0, 1};
+    const auto host_a = make_inputs(D, B, S, H, /*E=*/4U, kCacheTestK, DispatchedPattern::UniformRandom, 1001U);
+    const auto in_a = ttml::test_utils::moe::to_device_inputs(host_a, leids_a, &device);
+    const auto entries_before_miss = device.num_program_cache_entries();
+    const auto out_a = launch_moe_group(in_a);
+    ASSERT_GT(device.num_program_cache_entries(), entries_before_miss) << "launch A must build a program";
+    const auto values_a = read_outputs(out_a);
+    {
+        SCOPED_TRACE("launch A");
+        expect_outputs_match_reference(values_a, host_a, leids_a, kCacheTestK);
+    }
+
+    const std::vector<uint16_t> leids_b = {1, 0};
+    const auto host_b = make_inputs(D, B, S, H, /*E=*/2U, kCacheTestK, DispatchedPattern::UniformRandom, 2002U);
+    const auto in_b = ttml::test_utils::moe::to_device_inputs(host_b, leids_b, &device);
+    const auto entries_before_hit = device.num_program_cache_entries();
+    const auto out_b = launch_moe_group(in_b);
+    EXPECT_EQ(device.num_program_cache_entries(), entries_before_hit) << "launch B must reuse launch A's program";
+    expect_new_buffer(in_a.dispatched_bf16, in_b.dispatched_bf16, "dispatched");
+    expect_new_buffer(in_a.metadata_u16, in_b.metadata_u16, "metadata");
+    expect_new_buffer(in_a.scores_bf16, in_b.scores_bf16, "scores");
+    expect_new_buffer(in_a.leids_u16, in_b.leids_u16, "local_expert_ids");
+    expect_new_buffer(std::get<0>(out_a), std::get<0>(out_b), "grouped");
+    expect_new_buffer(std::get<1>(out_a), std::get<1>(out_b), "grouped_scores");
+    expect_new_buffer(std::get<2>(out_a), std::get<2>(out_b), "k_slot");
+    expect_new_buffer(std::get<3>(out_a), std::get<3>(out_b), "counts");
+    expect_new_buffer(std::get<4>(out_a), std::get<4>(out_b), "offsets");
+    expect_new_buffer(std::get<5>(out_a), std::get<5>(out_b), "plan");
+    {
+        SCOPED_TRACE("launch B");
+        expect_outputs_match_reference(read_outputs(out_b), host_b, leids_b, kCacheTestK);
+    }
+
+    SCOPED_TRACE("launch A's outputs after launch B");
+    expect_same_outputs(read_outputs(out_a), values_a);
+}
+
+}  // namespace
+
+TEST_F(MoeGroupTest, CacheHitFreshTensorsTwoCoreGroups) {
+    constexpr uint32_t D = 1, B = 1, H = 64;
+    expect_cache_hit_with_fresh_tensors(D, B, two_core_group_s(D, B), H);
+}
+
+TEST_F(MoeGroupTest, CacheHitFreshTensorsPartialGrid) {
+    // BasicShape's tokens with NonTileAlignedH's H: fewer T_cap tile-rows than cores, so a single core group on part
+    // of the grid.
+    expect_cache_hit_with_fresh_tensors(/*D=*/2, /*B=*/1, /*S=*/32, /*H=*/80);
 }
