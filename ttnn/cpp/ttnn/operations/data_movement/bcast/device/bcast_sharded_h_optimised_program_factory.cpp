@@ -40,7 +40,8 @@ ttnn::device_operation::ProgramArtifacts BcastShardedHOptimisedProgramFactory::c
     const std::uint32_t N = ashape.rank() >= 4 ? ashape[-4] : 1;
     const std::uint32_t C = ashape.rank() >= 3 ? ashape[-3] : 1;
     const std::uint32_t H = ashape[-2];
-    const std::uint32_t bN = bshape.rank() >= 4 ? bshape[-4] : 1;
+    // b's tiles are ordered by N, then C, so each (n, c) is one batch of b.
+    const std::uint32_t bN = get_batch_size(bshape);
     const std::uint32_t NC = N * C;
 
     MeshDevice* device = a.device();
