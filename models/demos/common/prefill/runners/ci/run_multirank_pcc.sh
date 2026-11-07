@@ -147,15 +147,17 @@ case "${MODEL}" in
     ;;
   kimi_k3_1)
     # Kimi-K3 with its 24 MLA layers changed to DSA: same depths, slots and gate as kimi_k3 above.
-    # The adapter's defaults already name the K3.1 weights, cache and golden, so nothing is exported.
+    # The adapter's defaults already name the K3.1 weights, cache and golden, so no path is exported.
     export PIPELINE_DIR="${PREFILL_SUMMARIES/prefill_summaries/kimi_k3_1_prefill_runner_kv}"
     MANIFEST="${MANIFEST_DIR}/kimi_k3_1.json"
     SC1_NUM_LAYERS=24
     SC1_NUM_USERS=$(manifest_env PREFILL_NUM_USERS)
     RUNNER_ENV="export TT_METAL_SHM_TRACKING_DISABLED=1; export LOGURU_LEVEL=ERROR;"
-    # The golden is the 8192-token prompt of a vLLM capture, so the request stays inside it: one whole
-    # chunk, all of it PCC'd.
-    REQUEST_LEN=${CHUNK_SIZE}
+    # The golden is the 8192-token prompt of a vLLM capture. As for kimi_k3, only the span the golden
+    # covers is PCC'd and the tail is timed; two chunks so the gate reads one chunk's KV from the next.
+    GOLDEN_LEN=8192
+    PRODUCER_ENV="export PREFILL_PCC_GOLDEN_LEN=${GOLDEN_LEN};"
+    REQUEST_LEN=$((2 * CHUNK_SIZE))
     ;;
   mistral4)
     export PIPELINE_DIR="${PREFILL_SUMMARIES/prefill_summaries/mistral4_pp4_kv}"
@@ -264,7 +266,7 @@ emit_summary() {
   python3 "${TT_METAL_HOME}/models/demos/common/prefill/runners/ci/summarize_ci_run.py" \
     --ranklogs "${RANKLOGS}" --real-chunks "${REAL_CHUNKS}" \
     --chunk-size "${CHUNK_SIZE}" --pipeline-ranks "${EXPECTED_RANKS:-1}" \
-    --probe-chunks="${PROBE_CHUNKS}" \
+    --probe-chunks "${PROBE_CHUNKS}" \
     --summary-name "${RUN_NAME}_${CONFIG}" \
     || echo "summary generation failed (non-fatal)"
 }

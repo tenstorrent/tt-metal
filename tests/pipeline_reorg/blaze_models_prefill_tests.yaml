@@ -2351,9 +2351,9 @@
   sp_config: sc1
 
 # K3.1 mirror of the leg above: the same launcher, depth 24 (ends on a DSA layer) and stage-0 slots.
-# Its golden is an 8192-token vLLM prompt, so the request is one 5k chunk, all of it PCC'd; no perf
-# baseline yet, so its throughput is reported, not gated.
-- name: "(Kimi-K3.1) disaggregated prefill L24 KV accuracy 5k@5k, SC1"
+# Its golden is an 8192-token vLLM prompt: the request is two 5k chunks, the golden's 8k is PCC'd and
+# the tail timed, as K3 does at 55k of 1M. No perf baseline yet, so throughput is reported, not gated.
+- name: "(Kimi-K3.1) disaggregated prefill L24 KV accuracy 8k@5k + perf 10k@5k, SC1"
   cmd: |
     set -euo pipefail
     export TT_METAL_HOME="${TT_METAL_HOME:-/home/user/tt-metal}"
@@ -2370,7 +2370,7 @@
   skus:
     bh_sc1_high_power:
       # K3's 60: its L24 leg was still in bringup at 38 min on CI (run 34831600450), where weight load
-      # is NFS-bound. Locally the whole launcher took 6.7 min (bringup ~6 min, one 206 ms chunk).
+      # is NFS-bound. Locally the whole launcher took 6.5 min (bringup ~6 min, two ~207 ms chunks).
       timeout: 60
   owner_id: U0ACLAM77PS  # Kosta Grujcic, K3's suite owner; K3.1's owner to be confirmed
   team: shield
