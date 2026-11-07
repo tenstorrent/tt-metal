@@ -54,6 +54,7 @@ from models.demos.common.prefill.runners.runner_utils import (
     open_mesh_device,
 )
 from models.demos.deepseek_v3_d_p.tt.mla.utils import mtp_lookahead_positions
+from models.demos.deepseek_v3_d_p.tt.moe_impl import moe_block_mesh_params
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat
 from models.demos.deepseek_v3_d_p.utils.sub_device_trace import CapturedCall
 
@@ -166,6 +167,11 @@ CHUNK_TIMEOUT_SECONDS = float(os.environ.get("TT_PREFILL_CHUNK_TIMEOUT_SECONDS",
 # Env-overridable so re-bisecting does not need a rebuild. #54834's fix removed the AttnRes floor
 # that used to make this a narrow band; what is left is MLA's chunked-attention ceiling.
 _L1_SMALL_SIZE = int(os.environ.get("PREFILL_L1_SMALL_SIZE", ADAPTER.l1_small_size))
+# The MoE block (tt/moe_impl.py: GLM-5.3 and Kimi-K3's default MoE; $MOE_IMPL=ttmoe opts out): its fabric payload (one
+# combine row) and L1_SMALL room for its persistent words and semaphores, fixed at mesh open.
+_FABRIC_PAYLOAD_SIZE, _L1_SMALL_SIZE = moe_block_mesh_params(
+    ADAPTER.model_config, ADAPTER.fabric_payload_size(), _L1_SMALL_SIZE
+)
 if MTP_LEVELS:
     _L1_SMALL_SIZE += 512
 USE_TRACE = os.environ.get("PREFILL_USE_TRACE", "0") == "1"
@@ -1150,7 +1156,7 @@ def main() -> None:
 
     mesh_device = open_mesh_device(
         GLOBAL_MESH_SHAPE,
-        ADAPTER.fabric_payload_size(),
+        _FABRIC_PAYLOAD_SIZE,
         l1_small_size=_L1_SMALL_SIZE,
         trace_region_size=_TRACE_REGION_SIZE,
     )

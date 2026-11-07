@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -30,6 +31,27 @@ PROJECTION_ARTIFACTS = ("input_projection_head_major", "decay_output_projection"
 # the matmul bias. The softplus gate and every other weight stay BF16.
 _FP32_ARTIFACTS = frozenset(("decay_scale_flat", "decay_bias_flat"))
 
+# KDA_CACHE_V2_FALLBACK=1 (measurement only, off by default): a cache-only load whose v3 tensorbin is missing reads the
+# layer's v2 one instead and typecasts the bounded gate's scale / offset (BF16 in v2) to FP32 on the device; the cache
+# checks accept a layer whose KDA tensorbins are all v2. Nothing is written. A shared cache whose layers were not all
+# rebuilt after the v3 bump (#62891) then still loads: the gate's scale / offset carry v2's BF16 rounding (see above),
+# every other KDA weight is the same as v3's.
+V2_FALLBACK = os.environ.get("KDA_CACHE_V2_FALLBACK", "0") == "1"
+_V2 = 2
+
+
+def _v2_file_suffix(name: str, config: KDAConfig, projection_dtype: ttnn.DataType) -> str:
+    dtype = projection_dtype if name in PROJECTION_ARTIFACTS else ttnn.bfloat16
+    return f"_dtype_{dtype.name}_layout_{ttnn.TILE_LAYOUT.name}.tensorbin"
+
+
+def v2_cache_globs(cache_name_prefix: str, config: KDAConfig, projection_dtype: ttnn.DataType) -> tuple[str, ...]:
+    """current_cache_globs for the v2 schema (V2_FALLBACK)."""
+    return tuple(
+        f"{cache_name_prefix}.{name}.v{_V2}.*{_v2_file_suffix(name, config, projection_dtype)}"
+        for name in _cache_artifact_names(config)
+    )
+
 
 def _artifact_dtype(name: str, config: KDAConfig, projection_dtype: ttnn.DataType) -> ttnn.DataType:
     if name in PROJECTION_ARTIFACTS:
@@ -44,6 +66,13 @@ def _cache_file_suffix(name: str, config: KDAConfig, projection_dtype: ttnn.Data
 
 def _cache_stem_head(cache_name_prefix: str, name: str) -> str:
     return f"{cache_name_prefix}.{name}.v{_CACHE_SCHEMA_VERSION}"
+
+
+def _v2_stem(stem: str) -> str:
+    """A v3 cache stem (or path) with its schema version v2."""
+    head, sep, tail = stem.rpartition(f".v{_CACHE_SCHEMA_VERSION}.")
+    assert sep, stem
+    return f"{head}.v{_V2}.{tail}"
 
 
 def _parallel_geometry(device: ttnn.Device | ttnn.MeshDevice, tensor_parallel_axis: int) -> tuple[tuple[int, int], int]:
@@ -139,7 +168,9 @@ class KDAWeights:
             stem = _cache_stem(cache_name_prefix, name, config, mesh_shape, tensor_parallel_axis)
             pattern = f"{stem}{_cache_file_suffix(name, config, projection_dtype)}"
             if not checker.pattern_exists(pattern, "KDA"):
-                return False
+                v2 = f"{_v2_stem(stem)}{_v2_file_suffix(name, config, projection_dtype)}"
+                if not (V2_FALLBACK and checker.pattern_exists(v2, "KDA")):
+                    return False
         return True
 
     @classmethod
@@ -332,6 +363,12 @@ def _materialize_kda_tensor(
         if cache_file is None:
             raise ValueError("cache-only KDA weight loading requires tensor_cache_path")
         serialized_cache_file = Path(f"{cache_file}{_cache_file_suffix(name, config, projection_dtype)}")
+        if V2_FALLBACK and not serialized_cache_file.is_file():
+            v2_file = Path(f"{_v2_stem(str(cache_file))}{_v2_file_suffix(name, config, projection_dtype)}")
+            if v2_file.is_file():
+                t = ttnn.load_tensor(v2_file, device=device)
+                want = _artifact_dtype(name, config, projection_dtype)
+                return ttnn.typecast(t, want) if t.dtype != want else t
         return ttnn.load_tensor(serialized_cache_file, device=device)
 
     return ttnn.as_tensor(
