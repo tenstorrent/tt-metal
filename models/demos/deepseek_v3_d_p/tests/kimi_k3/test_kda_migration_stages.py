@@ -240,17 +240,14 @@ def _gathered(stage):
     ]
 
 
-@pytest.mark.parametrize("model", ["kimi_k3", "kimi_k3_1"])
-def test_adapter_answers_match_the_published_table(model, tmp_path, monkeypatch):
-    """Single-galaxy 24-layer rank: every config of the table `build_kv_chunk_table` publishes holds exactly
-    the kind, layer rows, row width and position window the adapter reports for it (the real populate walks,
-    host-only)."""
+def _published_table(model, tmp_path, monkeypatch) -> str:
+    """The table `build_kv_chunk_table` publishes for a single-galaxy 24-layer rank, host-only (the real
+    populate walks over gathered stage layouts)."""
     from models.demos.deepseek_v3_d_p.tt.runners import kv_chunk_table
     from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import PREFILL_CHUNK_TOKENS
 
     monkeypatch.setattr(kv_chunk_table, "is_tp_deduped_kv_cache", lambda *_: False)
     monkeypatch.setattr(ttnn, "distributed_context_get_rank", lambda: 0)
-    adapter = get_adapter(model)
     runtime = _runtime(0, 24, model=model)
     runtime.mesh_device = None
     runtime.config.__dict__.update(
@@ -263,9 +260,15 @@ def test_adapter_answers_match_the_published_table(model, tmp_path, monkeypatch)
     if caches.index is not None:
         caches.index.__dict__.update(shape=(1, 1, 32, 128), dtype=ttnn.bfloat8_b)
     caches.kda_states = None  # the KDA configs are described by the gathered layouts alone
-    table = ttnn.experimental.disaggregation.import_from_protobuf_file(
-        runtime.build_kv_chunk_table(caches, str(tmp_path / f"{model}.pb"), stage_layouts=layouts)
-    )
+    return runtime.build_kv_chunk_table(caches, str(tmp_path / f"{model}.pb"), stage_layouts=layouts)
+
+
+@pytest.mark.parametrize("model", ["kimi_k3", "kimi_k3_1"])
+def test_adapter_answers_match_the_published_table(model, tmp_path, monkeypatch):
+    """Every config of the published table holds exactly the kind, layer rows, row width and position window
+    the adapter reports for it."""
+    adapter = get_adapter(model)
+    table = ttnn.experimental.disaggregation.import_from_protobuf_file(_published_table(model, tmp_path, monkeypatch))
 
     tensor_type = ttnn.experimental.disaggregation.KvChunkTensorType
     kinds = [adapter.cache_kind(i) for i in range(table.num_configs())]
@@ -285,3 +288,23 @@ def test_adapter_answers_match_the_published_table(model, tmp_path, monkeypatch)
         else:
             assert cfg.tensor_type == tensor_type.Snapshot and head_dim is None
             assert all(adapter.layer_position_range(layer, 100) == (0, cfg.max_sequence_length) for layer in rows)
+
+
+@pytest.mark.parametrize("model", ["kimi_k3", "kimi_k3_1"])
+def test_kda_state_readback_walks_the_model_kda_configs(model, tmp_path, monkeypatch):
+    """The read-back tool picks the KDA configs by the model's adapter: 1/2 on K3, 2/3 on K3.1 (never the
+    index cache). With no local device every published layer is reported remote, so nothing is read."""
+    import json
+
+    from models.demos.deepseek_v3_d_p.tt.runners.kda_state_readback import main
+
+    table = _published_table(model, tmp_path, monkeypatch)
+    (tmp_path / "device_map.json").write_text("{}")
+    out = tmp_path / "readback.json"
+    argv = ["--table", table, "--device-map", str(tmp_path / "device_map.json"), "--real-len", "1024"]
+    argv += ["--model", model, "--golden", str(tmp_path), "--num-layers", "24", "--json", str(out)]
+    assert main(argv) == 2  # no layer reachable from this host
+    walked = {(r["config"], r["kind"]) for r in json.loads(out.read_text())["layers"]}
+    first_kda = 2 if model == "kimi_k3_1" else 1
+    assert walked == {(first_kda, "kda_recurrent"), (first_kda + 1, "kda_convolution")}
+    assert {r["status"] for r in json.loads(out.read_text())["layers"]} == {"remote"}
