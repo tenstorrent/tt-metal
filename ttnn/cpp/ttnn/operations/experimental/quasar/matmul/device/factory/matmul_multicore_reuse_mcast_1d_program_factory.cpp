@@ -216,7 +216,11 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
 
     uint32_t in3_block_tiles = out_block_w;
     uint32_t in3_CB_tiles = in3_block_tiles;  // No double buffer
-    uint32_t in3_CB_size = in3_CB_tiles * bias_single_tile_size;
+    const uint32_t bias_aligned_tile_size =
+        bias_is_sharded
+            ? bias_single_tile_size
+            : operations::experimental::quasar::matmul::utilities::get_interleaved_tile_stride(bias_single_tile_size);
+    uint32_t in3_CB_size = in3_CB_tiles * bias_aligned_tile_size;
 
     CoreCoord start_core = sub_device_start_core;
     uint32_t start_core_x = start_core.x;
@@ -884,7 +888,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
         uint32_t src3_cb_index = tt::CBIndex::c_3;
         tt_metal::CircularBufferConfig cb_src3_config =
             tt_metal::CircularBufferConfig(in3_CB_size, {{src3_cb_index, bias_data_format}})
-                .set_page_size(src3_cb_index, bias_single_tile_size)
+                .set_page_size(src3_cb_index, bias_aligned_tile_size)
                 .set_tile_dims(src3_cb_index, bias_tile);
 
         if (bias_is_sharded) {
@@ -896,8 +900,8 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
             LogOp,
             "CB {} :: PS = {}, NP = {}, TOTAL = {}",
             src3_cb_index,
-            bias_single_tile_size,
-            in3_CB_size / bias_single_tile_size,
+            bias_aligned_tile_size,
+            in3_CB_size / bias_aligned_tile_size,
             in3_CB_size);
     }
 
@@ -1266,7 +1270,9 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
 
     uint32_t in3_block_tiles = out_block_w;
     uint32_t in3_CB_tiles = in3_block_tiles;  // No double buffer
-    uint32_t in3_CB_size = in3_CB_tiles * bias_single_tile_size;
+    const uint32_t bias_aligned_tile_size =
+        operations::experimental::quasar::matmul::utilities::get_interleaved_tile_stride(bias_single_tile_size);
+    uint32_t in3_CB_size = in3_CB_tiles * bias_aligned_tile_size;
 
     CoreCoord start_core = sub_device_start_core;
 
@@ -1776,15 +1782,15 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
         uint32_t src3_cb_index = tt::CBIndex::c_3;
         tt_metal::CircularBufferConfig cb_src3_config =
             tt_metal::CircularBufferConfig(in3_CB_size, {{src3_cb_index, bias_data_format}})
-                .set_page_size(src3_cb_index, bias_single_tile_size)
+                .set_page_size(src3_cb_index, bias_aligned_tile_size)
                 .set_tile_dims(src3_cb_index, bias_tile);
         tt_metal::CreateCircularBuffer(program, all_cores, cb_src3_config);
         log_debug(
             LogOp,
             "CB {} :: PS = {}, NP = {}, TOTAL = {}",
             src3_cb_index,
-            bias_single_tile_size,
-            in3_CB_size / bias_single_tile_size,
+            bias_aligned_tile_size,
+            in3_CB_size / bias_aligned_tile_size,
             in3_CB_size);
     }
 
@@ -3069,7 +3075,11 @@ void override_program_parameters(
 
     uint32_t in3_block_tiles = out_block_w;
     uint32_t in3_CB_tiles = in3_block_tiles;  // No double buffer
-    uint32_t in3_CB_size = in3_CB_tiles * bias_single_tile_size;
+    const uint32_t bias_aligned_tile_size =
+        bias_is_sharded
+            ? bias_single_tile_size
+            : operations::experimental::quasar::matmul::utilities::get_interleaved_tile_stride(bias_single_tile_size);
+    uint32_t in3_CB_size = in3_CB_tiles * bias_aligned_tile_size;
 
     CoreCoord start_core = sub_device_start_core;
     uint32_t start_core_x = start_core.x;
@@ -3730,7 +3740,7 @@ void override_program_parameters(
         cb_desc.format_descriptors.push_back(CBFormatDescriptor{
             .buffer_index = tt::CBIndex::c_3,
             .data_format = bias_data_format,
-            .page_size = bias_single_tile_size,
+            .page_size = bias_aligned_tile_size,
             .tile = bias_tile_desc});
         if (bias_is_sharded) {
             cb_desc.tensor = &*bias_tensor;
@@ -4110,7 +4120,9 @@ void override_program_parameters(
 
     uint32_t in3_block_tiles = out_block_w;
     uint32_t in3_CB_tiles = in3_block_tiles;  // No double buffer
-    uint32_t in3_CB_size = in3_CB_tiles * bias_single_tile_size;
+    const uint32_t bias_aligned_tile_size =
+        operations::experimental::quasar::matmul::utilities::get_interleaved_tile_stride(bias_single_tile_size);
+    uint32_t in3_CB_size = in3_CB_tiles * bias_aligned_tile_size;
 
     CoreCoord start_core = sub_device_start_core;
 
@@ -4613,7 +4625,7 @@ void override_program_parameters(
         cb_desc.format_descriptors.push_back(CBFormatDescriptor{
             .buffer_index = tt::CBIndex::c_3,
             .data_format = bias_data_format,
-            .page_size = bias_single_tile_size,
+            .page_size = bias_aligned_tile_size,
             .tile = bias_tile_desc});
         desc.cbs.push_back(std::move(cb_desc));
     }
@@ -5790,9 +5802,13 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifacts(
         dataflow_buffers.push_back(std::move(interm0_dfb));
     }
     if (bias_tensor.has_value()) {
+        const uint32_t bias_aligned_tile_size =
+            bias_is_sharded
+                ? bias_single_tile_size
+                : operations::experimental::quasar::matmul::utilities::get_interleaved_tile_stride(bias_single_tile_size);
         m2::DataflowBufferSpec bias_dfb{
             .unique_id = RO_BIAS_DFB,
-            .entry_size = bias_single_tile_size,
+            .entry_size = bias_aligned_tile_size,
             .num_entries = in3_CB_tiles,
             .data_format_metadata = bias_data_format,
             .tile_format_metadata = bias_tile,
@@ -6823,9 +6839,11 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in1_artifacts(
         dataflow_buffers.push_back(std::move(interm0_dfb));
     }
     if (bias_tensor.has_value()) {
+        const uint32_t bias_aligned_tile_size =
+            operations::experimental::quasar::matmul::utilities::get_interleaved_tile_stride(bias_single_tile_size);
         dataflow_buffers.push_back(m2::DataflowBufferSpec{
             .unique_id = RO_BIAS_DFB,
-            .entry_size = bias_single_tile_size,
+            .entry_size = bias_aligned_tile_size,
             .num_entries = in3_CB_tiles,
             .data_format_metadata = bias_data_format,
             .tile_format_metadata = bias_tile,

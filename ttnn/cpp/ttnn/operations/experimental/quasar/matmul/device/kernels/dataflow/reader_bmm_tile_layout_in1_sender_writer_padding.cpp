@@ -99,7 +99,7 @@ void kernel_main() {
     constexpr uint32_t in3_tensor_stride_w = get_compile_time_arg_val(29);
 
     constexpr uint32_t cb_id_in3 = get_named_compile_time_arg_val("cb_bias");
-    constexpr uint32_t bias_single_tile_size_bytes = get_tile_size(cb_id_in3);
+    const uint32_t bias_single_tile_size_bytes = get_local_cb_interface(cb_id_in3).fifo_page_size;
     constexpr const uint32_t in3_tile_hw = get_tile_hw(cb_id_in3);
 
 #ifndef BIAS_SHARDED
