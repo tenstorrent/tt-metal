@@ -82,6 +82,24 @@ def normalized_hadamard_matrix(dim: int) -> torch.Tensor:
     return (matrix * (dim**-0.5)).to(torch.bfloat16)
 
 
+def score_compute_kernel_config(config, arch) -> ttnn.DeviceComputeKernelConfig | None:
+    """The indexer score matmul's compute config from ``config.index_score_math_fidelity``.
+
+    Absent -> None: the op's own default (LoFi for bf8 x bf8), which DS-V3.2 / GLM run. Kimi-K3.1 sets HiFi2
+    (tt_metal_tracker-ao3i.2.7). Only the fidelity varies: bf16 dest without L1 accumulation are the op's defaults and
+    the only modes it is validated for."""
+    fidelity = getattr(config, "index_score_math_fidelity", None)
+    if fidelity is None:
+        return None
+    return ttnn.init_device_compute_kernel_config(
+        arch,
+        math_fidelity=getattr(ttnn.MathFidelity, fidelity),
+        math_approx_mode=False,
+        fp32_dest_acc_en=False,
+        packer_l1_acc=False,
+    )
+
+
 class TtIndexerBase:
     """Shared implementation foundation for DSA and compressed indexer variants.
 
@@ -359,6 +377,7 @@ class TtIndexerBase:
         assert self._index_rope_dim in (0, 64), f"indexer rope width must be 0 (NoPE) or 64; got {self._index_rope_dim}"
         # k_norm epsilon: absent -> 1e-6 (DS-V3.2 / GLM); Kimi-K3.1 sets its rms_norm_eps (vLLM KimiK3DSAIndexerKNorm).
         self._index_k_norm_eps = getattr(config, "index_k_norm_eps", 1e-6)
+        self._score_compute_kernel_config = score_compute_kernel_config(config, mesh_device.arch())
         self.seq_len = seq_len
         # Keep the index tensor width fixed at the configured maximum, except on small-cache test /
         # deployment configurations where the cache itself cannot contain that many entries.  This
@@ -978,6 +997,7 @@ class TtIndexerBase:
             block_cyclic_chunk_local=q_dev.shape[2],
             # The full mesh stripes the key cache over every device already.
             block_cyclic_cache_tp_sharded=False,
+            compute_kernel_config=self._score_compute_kernel_config,
         )
         if host_start is not None:
             _fused_ring_host_timing["calls"] += 1
