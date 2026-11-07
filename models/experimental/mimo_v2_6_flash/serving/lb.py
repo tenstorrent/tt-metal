@@ -399,8 +399,12 @@ def blocked_reason(ip):
         addr = ipaddress.ip_address(str(ip).split("%", 1)[0])
     except ValueError:
         return "not an IP address"
+    if addr.version == 6 and addr.ipv4_mapped is not None:
+        # ::ffff:a.b.c.d connects to a.b.c.d: judge that address (Python versions
+        # disagree on the mapped form's own flags).
+        addr = addr.ipv4_mapped
     if addr.version == 6:
-        embedded = addr.ipv4_mapped or addr.sixtofour or (addr.teredo[1] if addr.teredo else None)
+        embedded = addr.sixtofour or (addr.teredo[1] if addr.teredo else None)
         if embedded is not None and blocked_reason(str(embedded)):
             return f"embeds {embedded}: {blocked_reason(str(embedded))}"
     for name, label in (
