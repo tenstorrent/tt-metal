@@ -400,16 +400,8 @@ void DeviceManager::add_devices_to_pool(const std::vector<ChipId>& device_ids) {
         }
     }
 
-    std::vector<Device*> activated_devices;
-    activated_devices.reserve(devices_to_activate.size());
-    for (const auto& device_id : devices_to_activate) {
-        if (not this->is_device_active(device_id)) {
-            this->activate_device(device_id);
-            activated_devices.push_back(this->get_device(device_id));
-        }
-    }
-
-    // Only can launch Fabric if all devices in the local fabric meshes are active
+    // Only can launch Fabric if all devices in the local fabric meshes are active.
+    // Checked before activating any device so that a rejected open leaves no devices open.
     tt_fabric::FabricConfig fabric_config = ctx_.get_fabric_config();
     if (tt_fabric::is_tt_fabric_config(fabric_config) and
         tt_fabric::has_flag(ctx_.get_fabric_manager(), tt_fabric::FabricManagerMode::INIT_FABRIC) and
@@ -422,7 +414,7 @@ void DeviceManager::add_devices_to_pool(const std::vector<ChipId>& device_ids) {
                     tt_fabric::FabricNodeId(mesh_id, fabric_chip_id));
                 // Fabric currently requires all devices to be active
                 TT_FATAL(
-                    this->is_device_active(device_id),
+                    devices_to_activate.contains(device_id) || this->is_device_active(device_id),
                     "Fabric is being used but Device {} is not active. "
                     "This may indicate that the fabric was launched on a subset of the devices available in the "
                     "system, which is currently not supported. "
@@ -434,6 +426,15 @@ void DeviceManager::add_devices_to_pool(const std::vector<ChipId>& device_ids) {
                     "submeshes = mesh_device.create_submeshes(ttnn.MeshShape(2,8))",
                     device_id);
             }
+        }
+    }
+
+    std::vector<Device*> activated_devices;
+    activated_devices.reserve(devices_to_activate.size());
+    for (const auto& device_id : devices_to_activate) {
+        if (not this->is_device_active(device_id)) {
+            this->activate_device(device_id);
+            activated_devices.push_back(this->get_device(device_id));
         }
     }
 

@@ -1202,9 +1202,10 @@ def test_device_submesh(mesh_device):
 
 
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
-@pytest.mark.parametrize("mesh_device", [pytest.param((8, 1), id="8x1_grid")], indirect=True)
+@pytest.mark.parametrize("mesh_device", [pytest.param((8, 4), id="8x4_grid")], indirect=True)
 def test_device_line_all_gather_8x1(mesh_device):
     rows, cols, tile_size = 8, 1, 32
+    mesh_device = mesh_device.create_submesh(ttnn.MeshShape(rows, cols))
     full_tensor = torch.rand((1, 1, tile_size * rows, tile_size * cols), dtype=torch.bfloat16)
 
     ttnn_tensor = ttnn.from_torch(
@@ -1368,7 +1369,7 @@ def test_shard_and_concat_2d_non_divisible(mesh_device):
 
 
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
-@pytest.mark.parametrize("mesh_device", [pytest.param((8, 1), id="8x1_grid")], indirect=True)
+@pytest.mark.parametrize("mesh_device", [pytest.param((8, 4), id="8x4_grid")], indirect=True)
 def test_line_all_gather_column_major(mesh_device):
     """
     The input tensor is size [1, 1, 32, 32*8] and it will get sharded onto an 8-row (8x1) device-mesh as follows:
@@ -1386,6 +1387,7 @@ def test_line_all_gather_column_major(mesh_device):
     Each of the 8 devices will have a result output tensor of size [1, 1, 32, 32*8]
     """
     rows, cols, tile_size = 8, 1, 32
+    mesh_device = mesh_device.create_submesh(ttnn.MeshShape(rows, cols))
     full_tensor = torch.rand((1, 1, tile_size, tile_size * rows), dtype=torch.bfloat16)
 
     ttnn_tensor = ttnn.from_torch(
