@@ -857,5 +857,12 @@
       "evidence": "runs/release-http-only-preflight-scope/RESULT.json",
       "fact": "EVALS_COMMON and vLLM benchserve are HTTP-only; Harbor task-storage inequality inapplicable. Server/image/cache/logstorage remains and stockmodeldownloadcheck is conditional, not general reserve proof."
     }
-  ]
+  ],
+  "gpqa86_entry_diagnostic": {
+    "evidence": "runs/gpqa86-entry-diagnosis/RESULT.json",
+    "device_hours": 0.17440725777777777,
+    "forecast_hours": 0.2,
+    "scope": "Four full60 conditional checkpoints after exact fresh-prefix overlap; not autonomous generation or original served-state replay",
+    "finding": "No actionable TT-specific conditional divergence; no change; original failure remains"
+  }
 }

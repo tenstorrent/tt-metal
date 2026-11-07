@@ -7287,5 +7287,12 @@
     "host_reference_seconds": 763.5924175960245,
     "configuration_change": false,
     "remaining_local_work": "No nextdevice change supported by this diagnostic; grantedCI rung/dry active. Local benchmarkrelease retains provenfreeze and awaits finalrelease selection."
+  },
+  "gpqa86_entry_diagnostic": {
+    "evidence": "runs/gpqa86-entry-diagnosis/RESULT.json",
+    "device_hours": 0.17440725777777777,
+    "forecast_hours": 0.2,
+    "scope": "Four full60 conditional checkpoints after exact fresh-prefix overlap; not autonomous generation or original served-state replay",
+    "finding": "No actionable TT-specific conditional divergence; no change; original failure remains"
   }
 }
