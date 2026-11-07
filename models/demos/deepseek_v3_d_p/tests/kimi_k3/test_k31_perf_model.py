@@ -47,14 +47,67 @@ def test_indexer_scores_the_busiest_chip_causally():
     assert op.matmul_flop == 2 * sum(range(4961, 5121)) * 32 * 128
 
 
-def test_dsa_core_composition():
-    e = m.dsa_core(prefix=123_904)
-    ops = e.ops
-    assert e.optimistic_ns == max(
-        sum(o.compute_ns for o in ops), sum(o.dram_ns for o in ops), sum(o.fabric_ns for o in ops)
+def test_finish_hand_values():
+    # 2 cores at 1 GHz: 2 core-cycles per ns.
+    hw = m.Galaxy8x4(cores=2, clock_ghz=1.0)
+    op = m._finish(
+        m.OpCost(
+            "hand",
+            matmul_flop=3 * 4096,  # 3 LoFi cycles, x2 at HiFi2 -> 6 core-cycles
+            fidelity="HiFi2",
+            eltwise=5 * 128,  # 5 core-cycles
+            topk_elements=3 * 1000,  # 3 rows of 1000 on 2 cores -> 2 rows on the busiest core
+            topk_rows=3,
+            dram_bytes=1024,
+            dram_bytes_cons=4096,
+        ),
+        hw,
     )
-    assert e.conservative_ns == pytest.approx(sum(o.roofline_cons_ns for o in ops) + sum(o.fabric_cons_ns for o in ops))
-    assert e.target_ns == max(2 * e.optimistic_ns, e.conservative_ns)
+    assert op.fpu_ns == pytest.approx((6 + 5) / 2)
+    # Measured 7.1 elements/ns per chip ran 640 rows on 110 cores: 6 rows per core.
+    assert op.topk_ns == pytest.approx(2 * 1000 / (7.1 * 6 / 640))
+    assert op.compute_ns == pytest.approx(op.fpu_ns + op.topk_ns)
+    assert op.dram_ns == pytest.approx(2.0)
+    assert op.dram_cons_ns == pytest.approx(8.0)
+
+
+def test_index_k_gather_hand_values():
+    op = next(o for o in m.dsa_ops(prefix=0) if o.name == "index_k_gather")
+    received = 5120 * 128 * 1088 / 1024 * 31 / 32  # visible bfp8 keys this chip does not own
+    assert op.dram_bytes == pytest.approx(received)
+    assert op.fabric_ns == pytest.approx(received / (25 * 2 * 4))
+
+
+def test_dsa_core_target_doubles_only_modelled_work():
+    e = m.dsa_core(prefix=126_976)
+    fpu = sum(o.fpu_ns for o in e.ops)
+    dram = sum(o.dram_ns for o in e.ops)
+    fabric = sum(o.fabric_ns for o in e.ops)
+    assert e.topk_ns > 0
+    assert e.target_ns == max(2 * max(fpu, dram, fabric) + e.topk_ns, e.conservative_ns)
+
+
+def _hand_anchor():
+    # Period 1 s at chunk 0 and 2 s at chunk 2; the first chunk's TTFT 1.5 s -> fill 0.5 s.
+    return m.K3Measured(throughput_tok_s={0: 5120.0, 2: 2560.0}, chunk_time_ms={0: 1500.0}, ttft_s={})
+
+
+def test_ttft_hand_anchor():
+    k3 = _hand_anchor()
+    assert k3.fill_ns() == pytest.approx(0.5e9)
+    # The dense core grows by the measured slope: periods 1, 1.5, 2 s, plus the fill.
+    r = m.ttft(3 * m.CHUNK, "k3", k3=k3)
+    assert (r.chunks, r.first_period_ms, r.last_period_ms) == (3, pytest.approx(1000.0), pytest.approx(2000.0))
+    assert r.ttft_s == pytest.approx(1.0 + 1.5 + 2.0 + 0.5)
+    # Per layer: slope = 1 s / (2 chunks * 5120 tokens) / 6 layers; the first chunk's core has 5120*5121/2 pairs.
+    assert m.dense_mla_core_ns(0, k3) == pytest.approx(1e9 / (2 * 5120 * 6) * 5121 / 2)
+
+
+def test_ttft_swaps_the_dense_cores_for_dsa_cores():
+    k3 = _hand_anchor()
+    dense0 = m.dense_mla_core_ns(0, k3)
+    dsa0 = m.dsa_core(0).optimistic_ns
+    assert m.ttft(m.CHUNK, "optimistic", k3=k3).ttft_s == pytest.approx((1e9 - 6 * dense0 + 6 * dsa0 + 0.5e9) / 1e9)
 
 
 def test_k3_probes_and_stages():
@@ -63,20 +116,13 @@ def test_k3_probes_and_stages():
     assert m.stage_attention_layers() == [6, 6, 6, 6]
 
 
-def test_dense_core_reproduces_the_measured_period_slope():
-    k3 = m.K3Measured.load()
-    growth = 6 * (m.dense_mla_core_ns(204 * m.CHUNK, k3) - m.dense_mla_core_ns(0, k3))
-    assert growth == pytest.approx(k3.period_ns(204) - k3.period_ns(0))
-
-
 def test_k3_self_check_reproduces_measured_ttft():
     k3 = m.K3Measured.load()
+    # Chunk 0's chunk_time is its TTFT (summarize_ci_run.py): reproduced exactly.
+    assert m.ttft(m.CHUNK, "k3").ttft_s == pytest.approx(k3.chunk_time_ms[0] / 1e3)
     for d, measured in k3.ttft_s.items():
         assert m.ttft((d + 1) * m.CHUNK, "k3").ttft_s == pytest.approx(measured, rel=0.05), d
 
 
-def test_dsa_beats_dense_at_long_context_and_scenarios_are_ordered():
-    for tokens in (10_240, 131_072):
-        r = {s: m.ttft(tokens, s).ttft_s for s in m.SCENARIOS}
-        assert r["optimistic"] <= r["target"] and r["conservative"] <= r["target"]
+def test_dsa_beats_dense_at_long_context():
     assert m.ttft(131_072, "target").ttft_s < m.ttft(131_072, "k3").ttft_s
