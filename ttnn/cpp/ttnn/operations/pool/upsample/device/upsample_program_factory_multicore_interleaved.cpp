@@ -140,7 +140,10 @@ ttnn::device_operation::ProgramArtifacts UpsampleMultiCoreInterleavedProgramFact
         };
     }
 
-    metal2::KernelSpec::CompileTimeArgs reader_cta{{"aligned_input_unit_size", aligned_input_unit_size}};
+    // The staging entry may be DRAM-aligned even when the input row lives in L1.
+    // Read only the input's own page; a longer read can cross the end of L1.
+    const auto input_read_size = static_cast<std::uint32_t>(input.buffer()->aligned_page_size());
+    metal2::KernelSpec::CompileTimeArgs reader_cta{{"aligned_input_unit_size", input_read_size}};
 
     metal2::KernelSpec reader{
         .unique_id = READER,
