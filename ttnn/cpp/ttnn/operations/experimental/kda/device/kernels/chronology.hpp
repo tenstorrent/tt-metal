@@ -5,6 +5,10 @@
 #include <cstdint>
 #include "api/tile_constants.h"
 namespace kda_chronology {
+// The sp_rank compile-time argument of a reader that reads its rank from the "sp_rank" tensor (one program for the
+// whole mesh; kda_factory_detail::sp_rank_from_tensor on the host).
+constexpr uint32_t rank_from_tensor = 0xFFFFFFFF;
+
 // The four-tap convolution retains three preceding tokens.
 constexpr uint32_t history_rows = 3;
 

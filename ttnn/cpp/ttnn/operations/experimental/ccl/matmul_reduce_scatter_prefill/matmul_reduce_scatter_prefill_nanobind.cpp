@@ -94,6 +94,8 @@ void bind_matmul_reduce_scatter_prefill(nb::module_& mod) {
             l1_headroom (int, optional): bytes of each core's L1 the plan always leaves free. Defaults to 64 KiB.
                 The plan also stays below every L1 tensor live at the call (L1 operands, resident tensors) and leaves
                 room for an L1 output it allocates.
+            core_grid (ttnn.CoreCoord, optional): run on the ``[0, x) x [0, y)`` block of worker cores instead of the
+                full grid, e.g. beside a program on the other columns' sub-device. Defaults to the full grid.
 
         Returns:
             ttnn.Tensor: bfloat16 TILE output, the scattered dim divided by the group size.
@@ -113,7 +115,8 @@ void bind_matmul_reduce_scatter_prefill(nb::module_& mod) {
         nb::arg("compute_kernel_config") = nb::none(),
         nb::arg("memory_config") = nb::none(),
         nb::arg("output_tensor") = nb::none(),
-        nb::arg("l1_headroom") = nb::none());
+        nb::arg("l1_headroom") = nb::none(),
+        nb::arg("core_grid") = nb::none());
 
     mod.def(
         "_matmul_reduce_scatter_prefill_last_plan",

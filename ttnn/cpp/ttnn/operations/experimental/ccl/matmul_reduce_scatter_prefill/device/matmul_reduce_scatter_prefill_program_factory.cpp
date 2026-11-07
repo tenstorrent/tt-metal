@@ -387,9 +387,9 @@ ProgramDescriptor MatmulReduceScatterPrefillProgramFactory::create_descriptor(
     const int32_t scatter_dim = attrs.scatter_dim;
     const uint32_t block_m = scatter_dim == -2 ? Mt / G : Mt;
     const uint32_t block_n = scatter_dim == -2 ? Nt : Nt / G;
-    const CoreCoord grid = mesh->compute_with_storage_grid_size();
-    const auto gx = static_cast<uint32_t>(grid.x);
-    const auto gy = static_cast<uint32_t>(grid.y);
+    // The worker block the plan was solved for (the full grid unless the caller gave core_grid).
+    const uint32_t gx = attrs.plan_inputs.gx;
+    const uint32_t gy = attrs.plan_inputs.gy;
     const uint32_t W = waves.n;
     const uint32_t win_m = waves.win_m;
     const uint32_t win_n = waves.win_n;

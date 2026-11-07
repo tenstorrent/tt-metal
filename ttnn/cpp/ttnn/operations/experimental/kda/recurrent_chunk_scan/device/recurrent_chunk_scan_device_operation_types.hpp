@@ -62,6 +62,8 @@ struct RecurrentChunkScanInputs {
     std::optional<Tensor> tail_entry_states;
     Tensor actual_start;
     std::optional<Tensor> actual_end;
+    // Each device's rank along the sequence-parallel axis (UINT32 row-major scalar): one program for the whole mesh.
+    std::optional<Tensor> sp_rank;
 };
 
 }  // namespace ttnn::experimental::prim

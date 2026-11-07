@@ -168,6 +168,9 @@ void bind_recurrent_chunk_scan(nb::module_& mod) {
                 and update its contents before replay of a captured trace.
             sequence_parallel_axis (int, optional): Mesh axis partitioning the
                 sequence. Native mesh coordinates supply each device's rank.
+            sp_rank (ttnn.Tensor, optional): Each device's UINT32 row-major scalar rank along
+                ``sequence_parallel_axis``. With it one program serves the whole mesh, which the host queues
+                faster; without it each SP rank gets its own program.
             groups_per_head (int, optional): Groups folded into the leading
                 dimension. Defaults to 1.
             memory_config (ttnn.MemoryConfig, optional): Output memory configuration:
@@ -220,8 +223,8 @@ void bind_recurrent_chunk_scan(nb::module_& mod) {
             bool tail,
             bool init,
             bool emit_outputs,
-            const std::optional<ttnn::MemoryConfig>& emit_memory_config)
-            -> std::variant<ttnn::Tensor, std::vector<ttnn::Tensor>> {
+            const std::optional<ttnn::MemoryConfig>& emit_memory_config,
+            const std::optional<ttnn::Tensor>& sp_rank) -> std::variant<ttnn::Tensor, std::vector<ttnn::Tensor>> {
             auto outputs = ttnn::experimental::kda::summarize_chunk_recurrence(
                 v_beta,
                 kd,
@@ -239,7 +242,8 @@ void bind_recurrent_chunk_scan(nb::module_& mod) {
                 tail,
                 init,
                 emit_outputs,
-                emit_memory_config);
+                emit_memory_config,
+                sp_rank);
             if (emit_outputs) {
                 return outputs;
             }
@@ -264,7 +268,8 @@ void bind_recurrent_chunk_scan(nb::module_& mod) {
         nb::arg("tail") = false,
         nb::arg("init") = true,
         nb::arg("emit_outputs") = false,
-        nb::arg("emit_memory_config") = nb::none());
+        nb::arg("emit_memory_config") = nb::none(),
+        nb::arg("sp_rank") = nb::none());
 }
 
 }  // namespace ttnn::operations::experimental::kda::recurrent_chunk_scan::detail

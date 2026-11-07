@@ -19,7 +19,8 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> entry_correction(
     const std::optional<ttnn::Tensor>& actual_end,
     uint32_t sequence_parallel_axis,
     const std::optional<ttnn::MemoryConfig>& memory_config,
-    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config) {
+    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
+    const std::optional<ttnn::Tensor>& sp_rank) {
     TT_FATAL(
         final_b.storage_type() == StorageType::DEVICE && final_b.is_allocated(),
         "entry_correction: final_b must be an allocated device tensor");
@@ -43,7 +44,8 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> entry_correction(
         actual_end,
         sequence_parallel_axis,
         local_rows,
-        cores);
+        cores,
+        sp_rank);
 }
 
 }  // namespace ttnn::experimental::kda

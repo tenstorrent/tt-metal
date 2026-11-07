@@ -79,6 +79,18 @@ TT_KERNEL void reader(uint32_t work_item_start, uint32_t work_item_count, uint32
         writer_control.reserve_back(1);
         auto* words = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(control.get_write_ptr());
         auto* writer_words = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(writer_control.get_write_ptr());
+        // With one program for the whole mesh, the device's rank is in the sp_rank tensor.
+        uint32_t rank = sp_rank;
+        if constexpr (sp_rank == kda_chronology::rank_from_tensor) {
+            noc.async_read(
+                TensorAccessor(*tensor::get_token_if_present<"sp_rank">()),
+                control,
+                sizeof(uint32_t),
+                {.page_id = 0},
+                {});
+            noc.async_read_barrier();
+            rank = words[0];
+        }
         // Read both bounds together, each into its own channel's slot, so compute waits for one round trip.
         if constexpr (has_actual_start) {
             const auto start_tensor = TensorAccessor(*tensor::get_token_if_present<"actual_start">());
@@ -92,9 +104,9 @@ TT_KERNEL void reader(uint32_t work_item_start, uint32_t work_item_count, uint32
             noc.async_read_barrier();
         }
         const uint32_t start = has_actual_start ? words[0] : 0;
-        auto topology = kda_chronology::derive(start, sp_rank, sp_size, local_rows);
+        auto topology = kda_chronology::derive(start, rank, sp_size, local_rows);
         if constexpr (has_actual_end) {
-            topology = kda_chronology::derive_interval(start, writer_words[0], sp_rank, sp_size, local_rows);
+            topology = kda_chronology::derive_interval(start, writer_words[0], rank, sp_size, local_rows);
         }
         valid_chunks = topology.chunk_count();
         partial_chunk = topology.partial_chunk();
