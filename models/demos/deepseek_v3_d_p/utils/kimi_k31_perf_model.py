@@ -26,17 +26,19 @@ branch ``mvasilijevic/deepseek-v41-prefill``, and of GLM-5.3's sparse MLA, whose
     (``tech_reports/matrix_engine/matrix_engine.md``); 120 cores (Galaxy compute grid 12x10); 1.35 GHz (repository
     constant, an assumption). SFPU primitives (exp) are counted, not timed. Exceptions, implementation measurements
     of K3.1 on this 8x4 (ao3i.2.2, stage 2, real weights; indicative, TDP_LIMIT_MAX=75 W), not capabilities:
-      - the indexer top-k is timed as *measured*: a fixed cost plus a rate (``topk_large_indices``, k=2048, 160 rows per
-        chip). The kernel emits no profiler record; its time is bounded from the chip timeline (KVPE write end to
-        ``sparse_sdpa`` start; the top-k runs beside the concurrent KVPE gather): <= 128.4 us at 5,120 scores per row
-        and <= 4,768.3 us at 1,064,960. The line through both bounds (``TOPK_FIXED_NS`` + rate) is the model; on the
-        128K prompt (ao3i.2.3) the bounds at all 25 depths lie within 0.93-1.11x of it. Rows run one per core, so the rate is turned
-        into a per-core rate (ceil(160/120) rows per core) and applied to ceil(rows/cores) rows on this grid. It
-        replaces V4.1's LoudBox rate (7.1 elements/ns per chip, 640 rows on 110 cores, 256K), ~6.7x slower here;
+      - the indexer top-k (``topk_large_indices``, k=2048, 160 rows per chip) runs on its own sub-device concurrently
+        with the KVPE gather and emits no profiler record. Its time is bounded on the chip timeline by the region from
+        the KVPE write's end to ``sparse_sdpa``'s start, which also holds the gather. At 5,120 scores per row the
+        region (<= 128.4 us) outlasts the gather (39 us): that is the top-k's identifiable time, ``TOPK_NS``. Deeper,
+        the region is the gather's own duration (1M: 4,768 us region vs 4,734 us gather), so the top-k's rate is not
+        identified (only >= 35.7 elements/ns per chip: 160 x 1,064,960 scores within the gather) and is not modelled;
+        a standalone ``topk_large_indices`` at 160 x 5,120 and 160 x 1,064,960 on 120 cores would measure it. This
+        replaces V4.1's LoudBox rate (7.1 elements/ns per chip), which the 1M bound contradicts;
       - the indexer score program (fused with the index-K ring all-gather) has a fixed per-op cost
-        (``INDEX_SCORE_FIXED_NS``) that the collective's 14 us latency below omits: measured 174.7 / 182.6 us at prefix
-        0 / 5,120 while its modelled work doubles; the constant is the measured 174.7 us less the conservative model
-        of the fused pair there (36.7 us).
+        (``INDEX_SCORE_FIXED_NS``) that the collective's 14 us latency below omits: every chip pays a floor of
+        128.2 us at prefix 0 (138.4 at 5,120) while its modelled work doubles; the constant is that floor less the
+        conservative model of the fused pair there (36.7 us). The 30-80 us chip spread above the floor (waiting on
+        ring peers) is not a fixed cost and is not modelled.
   * DRAM: 512 GB/s per chip (``ttnn/core/operation.cpp``). Optimistic traffic reads each selected KV row once per
     chip (union of the queries' selections); conservative traffic reads each query's rows with no reuse.
   * fabric: optimistic = per-chip ingress bound at 25 GB/s per link per direction x 2 links x 4 torus ports; this
@@ -46,7 +48,8 @@ branch ``mvasilijevic/deepseek-v41-prefill``, and of GLM-5.3's sparse MLA, whose
 
 Layer composition (``dsa_core``), as V4.1: optimistic = max(sum compute, sum optimistic DRAM, sum fabric) (all
 resources saturated in parallel) + the fixed per-op costs; conservative = sum over ops of max(compute, conservative
-DRAM) + fixed cost + sum fabric; target = max(2 x ideal + measured, conservative), where ideal is the optimistic bound
+DRAM) + fixed cost + calibrated fabric, except the top-k and the KVPE gather, which run concurrently on separate
+sub-devices and count once, as the longer of the two; target = max(2 x ideal + measured, conservative), where ideal is the optimistic bound
 without the measured terms (top-k, fixed costs): V4.1's G2 target (2 x optimistic) doubles only modelled ideal work,
 never an already measured time.
 
@@ -76,15 +79,10 @@ CHUNK = 5120  # K3 prefill chunk (``tests/kimi_k3/test_prefill_perf.py``), the C
 FIDELITY_PHASES = {"LoFi": 1, "HiFi2": 2, "HiFi3": 3, "HiFi4": 4}
 BYTES = {"bf16": 2.0, "bfp8": 1088 / 1024, "int32": 4.0}
 KVPE_ROW_BYTES = MlaKvCacheGeometry(latent_dim=C.KV_LORA_RANK, rope_dim=C.QK_ROPE_HEAD_DIM).packed_row_bytes
-# Measured topk_large_indices at k=2048 (see module docstring): elements/ns per chip, rows, cores of that chip.
-# The line through the two top-k bounds: 5,120 scores per row in 128.4 us, 1,064,960 in 4,768.3 us.
-TOPK_MEASURED_ELEMENTS_PER_NS = 160 * (1_064_960 - 5120) / (4_768_300 - 128_400)
-TOPK_MEASURED_ROWS, TOPK_MEASURED_CORES = 160, 120
-TOPK_FIXED_NS = 128_400 - 5120 * 160 / TOPK_MEASURED_ELEMENTS_PER_NS
-INDEX_SCORE_FIXED_NS = 174_700 - 36_700  # measured fused indexer score at prefix 0 minus its conservative model
-TOPK_CORE_ELEMENTS_PER_NS = (
-    TOPK_MEASURED_ELEMENTS_PER_NS * -(-TOPK_MEASURED_ROWS // TOPK_MEASURED_CORES) / TOPK_MEASURED_ROWS
-)
+# Measured on K3.1 8x4 (see module docstring), ns: the top-k's identifiable time (bound at 5,120 scores per row; rate
+# not identified), and the fused indexer score's fixed cost (chip floor at prefix 0 minus its conservative model).
+TOPK_NS = 128_400
+INDEX_SCORE_FIXED_NS = 128_200 - 36_700
 STAGES = ((0, 24), (24, 48), (48, 72), (72, 93))  # PP4 layer ranges, half-open, 0-based
 
 
@@ -127,15 +125,13 @@ class OpCost:
     fidelity: str = "HiFi2"
     eltwise: float = 0.0
     sfpu: dict = field(default_factory=dict)
-    topk_elements: float = 0.0  # timed at TOPK_CORE_ELEMENTS_PER_NS, one row per core
-    topk_rows: float = 0.0
     fixed_ns: float = 0.0  # measured per-op cost, added as is (not a resource bound)
     dram_bytes: float = 0.0
     dram_bytes_cons: float | None = None
     fabric_ns: float = 0.0
     fabric_cons_ns: float = 0.0
     fpu_ns: float = 0.0
-    topk_ns: float = 0.0
+    topk_ns: float = 0.0  # measured top-k time (TOPK_NS), not derived from work
     compute_ns: float = 0.0  # fpu_ns + topk_ns
     dram_ns: float = 0.0
     dram_cons_ns: float = 0.0
@@ -150,9 +146,6 @@ def _finish(op: OpCost, hw: Galaxy8x4) -> OpCost:
     fpu = op.matmul_flop * FIDELITY_PHASES[op.fidelity] / hw.matmul_flop_per_cycle_core
     fpu += op.eltwise / hw.eltwise_per_cycle_core
     op.fpu_ns = fpu / per_ns
-    if op.topk_elements:
-        rows_per_core = -(-op.topk_rows // hw.cores)
-        op.topk_ns = rows_per_core * (op.topk_elements / op.topk_rows) / TOPK_CORE_ELEMENTS_PER_NS
     op.compute_ns = op.fpu_ns + op.topk_ns
     op.dram_ns = op.dram_bytes / hw.dram_bytes_per_ns
     op.dram_cons_ns = (op.dram_bytes if op.dram_bytes_cons is None else op.dram_bytes_cons) / hw.dram_bytes_per_ns
@@ -236,9 +229,7 @@ def dsa_ops(prefix: int, chunk: int = CHUNK, hw: Galaxy8x4 = GALAXY) -> list[OpC
     ops.append(
         OpCost(
             "index_topk",
-            topk_elements=q * width,
-            topk_rows=q,
-            fixed_ns=TOPK_FIXED_NS,
+            topk_ns=TOPK_NS,
             sfpu={"topk": q * width},
             dram_bytes=scores + q * topk * BYTES["int32"],
         )
@@ -296,7 +287,10 @@ def dsa_core(prefix: int, chunk: int = CHUNK, hw: Galaxy8x4 = GALAXY) -> CoreEst
     ops = dsa_ops(prefix, chunk, hw)
     fpu, topk, fixed = (sum(getattr(o, a) for o in ops) for a in ("fpu_ns", "topk_ns", "fixed_ns"))
     dram, fabric = sum(o.dram_ns for o in ops), sum(o.fabric_ns for o in ops)
-    conservative = sum(o.roofline_cons_ns for o in ops) + sum(o.fabric_cons_ns for o in ops)
+    cons = {o.name: o.roofline_cons_ns + o.fabric_cons_ns for o in ops}
+    # The top-k and the KVPE gather run concurrently (separate sub-devices): one term, the longer of the two.
+    concurrent = max(cons.pop("index_topk"), cons.pop("kvpe_gather"))
+    conservative = sum(cons.values()) + concurrent
     optimistic = max(fpu + topk, dram, fabric) + fixed
     return CoreEstimate(max(fpu, dram, fabric), topk + fixed, optimistic, conservative, tuple(ops))
 
