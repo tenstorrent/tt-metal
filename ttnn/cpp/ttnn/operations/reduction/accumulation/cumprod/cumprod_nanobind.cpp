@@ -26,7 +26,7 @@ void bind_reduction_cumprod_operation(nb::module_& mod) {
 
 
         Args:
-            input (ttnn.Tensor): input tensor. Must be on the device.
+            input_tensor (ttnn.Tensor): input tensor. Must be on the device.
             dim (int): dimension along which to compute cumulative product
 
         Keyword Args:

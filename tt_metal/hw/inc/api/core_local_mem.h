@@ -8,6 +8,7 @@
 #include "api/dataflow/noc.h"
 #endif
 #include "api/lock.h"
+#include "internal/local_mem/address_access.h"
 #include "internal/profiler/noc_debugging_metadata.hpp"
 #include "internal/profiler/noc_debugging_profiler.hpp"
 #include "internal/debug/sanitize.h"
@@ -28,6 +29,8 @@
  */
 template <typename T, typename AddressType = uintptr_t>
 class CoreLocalMem {
+    friend struct local_mem::detail::AddressAccess;
+
     using difference_type = std::ptrdiff_t;
 
     static_assert(std::is_integral<AddressType>::value, "AddressType must be an integral type");
@@ -62,18 +65,6 @@ public:
      */
     CoreLocalMem& operator=(const CoreLocalMem&) = default;
 
-    /** @brief Get the raw pointer to the structure in the core's local memory
-     *
-     * @return The raw pointer to the structure in the core's local memory
-     */
-    tt_l1_ptr T* get_unsafe_ptr() const { return reinterpret_cast<tt_l1_ptr T*>(address_); }
-
-    /** @brief Get the memory address
-     *
-     * @return The address
-     */
-    AddressType get_address() const { return address_; }
-
     /** @brief Get the element at the given index
      *
      * @param index The index of the element to get
@@ -81,7 +72,7 @@ public:
      */
     T& operator[](uint32_t index) const {
         DEBUG_SANITIZE_L1_ADDR(address_ + index * sizeof(T), sizeof(T));
-        return get_unsafe_ptr()[index];
+        return unsafe_ptr()[index];
     }
 
     /** @brief Dereference operator to get reference to the value
@@ -90,7 +81,7 @@ public:
      */
     T& operator*() const {
         DEBUG_SANITIZE_L1_ADDR(address_, sizeof(T));
-        return get_unsafe_ptr()[0];
+        return unsafe_ptr()[0];
     }
 
     /** @brief Arrow operator for struct/class member access
@@ -99,7 +90,7 @@ public:
      */
     tt_l1_ptr T* operator->() const {
         DEBUG_SANITIZE_L1_ADDR(address_, sizeof(T));
-        return get_unsafe_ptr();
+        return unsafe_ptr();
     }
 
     CoreLocalMem& operator+=(difference_type offset) {
@@ -152,7 +143,7 @@ public:
      * @param num_elements Number of T elements to lock.
      */
     [[nodiscard]] auto scoped_lock(size_t num_elements) const {
-        uint32_t addr = static_cast<uint32_t>(get_address());
+        uint32_t addr = static_cast<uint32_t>(address_);
         uint32_t num_bytes = static_cast<uint32_t>(num_elements * sizeof(T));
         scoped_lock_acquire_cache_ops(static_cast<uintptr_t>(addr), num_bytes);
         RECORD_SCOPED_LOCK_EVENT(NocDebuggingEventMetadata::NocDebugEventType::MEM_LOCK, addr, num_bytes);
@@ -171,41 +162,15 @@ public:
     explicit operator bool() const { return address_ != 0; }
 
 private:
+    tt_l1_ptr T* unsafe_ptr() const { return reinterpret_cast<tt_l1_ptr T*>(address_); }
+
     AddressType address_;
 };
 
-// TRISC cores can use CoreLocalMem for L1 pointer access, but noc_traits_t is
-// intentionally omitted since only DM cores have NOC access
+// NoC endpoint traits (DM only): internal/local_mem/noc_traits.h. TRISC cores can use CoreLocalMem for L1 pointer
+// access, but only DM cores have NoC access.
 #if !defined(COMPILE_FOR_TRISC)
-template <typename T, typename AddressType>
-struct noc_traits_t<CoreLocalMem<T, AddressType>> {
-    struct src_args_type {
-        AddressType offset_bytes = 0;
-    };
-    struct dst_args_type {
-        AddressType offset_bytes = 0;
-    };
-    struct dst_args_mcast_type {};
-
-    template <Noc::AddressType address_type>
-    static auto src_addr(const CoreLocalMem<T, AddressType>& src, const Noc&, const src_args_type& args) {
-        static_assert(address_type == Noc::AddressType::LOCAL_L1, "CoreLocalMem can only be used as local L1 source");
-        return src.get_address() + args.offset_bytes;
-    }
-    template <Noc::AddressType address_type>
-    static auto dst_addr(const CoreLocalMem<T, AddressType>& dst, const Noc& noc, const dst_args_type& args) {
-        static_assert(address_type == Noc::AddressType::LOCAL_L1, "CoreLocalMem can only be used as local L1 dest");
-        return dst.get_address() + args.offset_bytes;
-    }
-    template <Noc::AddressType address_type>
-    static auto dst_addr_mcast(
-        const CoreLocalMem<T, AddressType>& dst, const Noc& noc, const dst_args_mcast_type& args) {
-        static_assert(false, "CoreLocalMem cannot be used as NoC mcast destination");
-    }
-};
-
-template <typename T, typename AddressType>
-inline constexpr bool noc_zero_l1_endpoint_v<CoreLocalMem<T, AddressType>> = true;
+#include "internal/local_mem/noc_traits.h"
 #ifdef ARCH_QUASAR
 #include "internal/tt-2xx/noc_zero_l1.inl"
 #else

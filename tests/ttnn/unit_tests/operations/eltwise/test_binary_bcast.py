@@ -1047,21 +1047,9 @@ def test_binary_subcoregrid(dtype_pt, dtype_tt, nb, nc, nh, nw, device):
     inp_a = torch.rand(*shape).to(dtype_pt)
     inp_b = torch.rand(*shape).to(dtype_pt)
 
-    a = ttnn.Tensor(
-        inp_a.flatten().tolist(),
-        shape,
-        dtype_tt,
-        ttnn.TILE_LAYOUT,
-        device,
-    )
+    a = ttnn.from_torch(inp_a.reshape(shape), dtype=dtype_tt, layout=ttnn.TILE_LAYOUT, device=device)
 
-    b = ttnn.Tensor(
-        inp_b.flatten().tolist(),
-        shape,
-        dtype_tt,
-        ttnn.TILE_LAYOUT,
-        device,
-    )
+    b = ttnn.from_torch(inp_b.reshape(shape), dtype=dtype_tt, layout=ttnn.TILE_LAYOUT, device=device)
     out_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)
 
     out_tt = ttnn.gt(
@@ -4298,21 +4286,9 @@ def test_binary_inplace_ops_with_subcore_grids(dtype_pt, dtype_tt, nb, nc, nh, n
     inp_a = torch.rand(*shape).to(dtype_pt)
     inp_b = torch.rand(*shape).to(dtype_pt)
 
-    a = ttnn.Tensor(
-        inp_a.flatten().tolist(),
-        shape,
-        dtype_tt,
-        ttnn.TILE_LAYOUT,
-        device,
-    )
+    a = ttnn.from_torch(inp_a.reshape(shape), dtype=dtype_tt, layout=ttnn.TILE_LAYOUT, device=device)
 
-    b = ttnn.Tensor(
-        inp_b.flatten().tolist(),
-        shape,
-        dtype_tt,
-        ttnn.TILE_LAYOUT,
-        device,
-    )
+    b = ttnn.from_torch(inp_b.reshape(shape), dtype=dtype_tt, layout=ttnn.TILE_LAYOUT, device=device)
 
     out_tt = ttnn_fn(
         a,
@@ -4358,21 +4334,9 @@ def test_div_composite_ops_with_subcore_grids(dtype_pt, dtype_tt, nb, nc, nh, nw
     inp_a = torch.rand(*shape).to(dtype_pt)
     inp_b = torch.rand(*shape).to(dtype_pt)
 
-    a = ttnn.Tensor(
-        inp_a.flatten().tolist(),
-        shape,
-        dtype_tt,
-        ttnn.TILE_LAYOUT,
-        device,
-    )
+    a = ttnn.from_torch(inp_a.reshape(shape), dtype=dtype_tt, layout=ttnn.TILE_LAYOUT, device=device)
 
-    b = ttnn.Tensor(
-        inp_b.flatten().tolist(),
-        shape,
-        dtype_tt,
-        ttnn.TILE_LAYOUT,
-        device,
-    )
+    b = ttnn.from_torch(inp_b.reshape(shape), dtype=dtype_tt, layout=ttnn.TILE_LAYOUT, device=device)
 
     out_tt = ttnn.div(
         a,
@@ -4427,21 +4391,9 @@ def test_remainder_composite_ops_with_subcore_grids(dtype_pt, dtype_tt, nb, nc, 
     inp_a = torch.rand(*shape).to(dtype_pt)
     inp_b = torch.rand(*shape).to(dtype_pt)
 
-    a = ttnn.Tensor(
-        inp_a.flatten().tolist(),
-        shape,
-        dtype_tt,
-        ttnn.TILE_LAYOUT,
-        device,
-    )
+    a = ttnn.from_torch(inp_a.reshape(shape), dtype=dtype_tt, layout=ttnn.TILE_LAYOUT, device=device)
 
-    b = ttnn.Tensor(
-        inp_b.flatten().tolist(),
-        shape,
-        dtype_tt,
-        ttnn.TILE_LAYOUT,
-        device,
-    )
+    b = ttnn.from_torch(inp_b.reshape(shape), dtype=dtype_tt, layout=ttnn.TILE_LAYOUT, device=device)
 
     out_tt = ttnn.remainder(
         a,
@@ -5082,3 +5034,54 @@ def test_binary_specless_sharded_output_mixed_layout_aligns_non_sharded_axis(
     else:
         assert shard_h % ttnn.TILE_SIZE == 0, f"WIDTH_SHARDED shard_h={shard_h} must be tile-aligned"
     assert_with_ulp(expected_result=torch.add(a, b), actual_result=ttnn.to_torch(result))
+
+
+@pytest.mark.parametrize(
+    "layout_a, layout_b", [(ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT), (ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT)]
+)
+def test_binary_mixed_layout_keeps_sub_core_grids(layout_a, layout_b, device):
+    """The layout conversion a mixed-layout binary op launches must receive the caller's sub_core_grids too."""
+    torch.manual_seed(0)
+    torch_a = torch.rand(64, 128, dtype=torch.bfloat16)
+    torch_b = torch.rand(64, 128, dtype=torch.bfloat16)
+    a = ttnn.from_torch(torch_a, layout=layout_a, device=device)
+    b = ttnn.from_torch(torch_b, layout=layout_b, device=device)
+    grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 1), ttnn.CoreCoord(4, 4))])
+
+    ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
+    try:
+        out = ttnn.add(a, b, sub_core_grids=grid)
+    finally:
+        graph = ttnn.graph.end_graph_capture()
+    device_ops = [
+        node
+        for node in graph
+        if node.get("node_type") == "function_start"
+        and node.get("params", {}).get("name", "").endswith("DeviceOperation")
+    ]
+    assert len(device_ops) >= 2
+    for node in device_ops:
+        assert "<CoreRangeSet>" in str(node.get("arguments")), node["params"]["name"]
+    assert_with_pcc(torch_a + torch_b, ttnn.to_torch(out), 0.9999)
+
+
+def test_binary_sharded_row_major_with_sub_core_grids(device):
+    """Sharded row-major inputs are tilized and untilized in place; a sub_core_grids argument must not break that."""
+    torch.manual_seed(0)
+    shard_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0))])
+    memory_config = ttnn.create_sharded_memory_config(
+        (32, 64),
+        core_grid=shard_grid,
+        strategy=ttnn.ShardStrategy.HEIGHT,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+    torch_a = torch.rand(128, 64, dtype=torch.bfloat16)
+    torch_b = torch.rand(128, 64, dtype=torch.bfloat16)
+    a = ttnn.from_torch(torch_a, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=memory_config)
+    b = ttnn.from_torch(torch_b, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=memory_config)
+    grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(4, 4))])
+
+    out = ttnn.add(a, b, sub_core_grids=grid)
+
+    assert_with_pcc(torch_a + torch_b, ttnn.to_torch(out), 0.9999)

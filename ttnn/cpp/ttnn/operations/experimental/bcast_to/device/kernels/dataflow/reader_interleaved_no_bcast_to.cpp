@@ -6,32 +6,29 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
-    uint32_t arg_index = 0;
-    uint32_t src_addr = get_arg_val<uint32_t>(arg_index++);
-    uint32_t start_n = get_arg_val<uint32_t>(arg_index++);
-    uint32_t start_c = get_arg_val<uint32_t>(arg_index++);
-    uint32_t start_t = get_arg_val<uint32_t>(arg_index++);
-    uint32_t start_th = get_arg_val<uint32_t>(arg_index++);
-    uint32_t start_tw = get_arg_val<uint32_t>(arg_index++);
-    uint32_t num_tiles = get_arg_val<uint32_t>(arg_index++);
-    uint32_t n_stride = get_arg_val<uint32_t>(arg_index++);
-    uint32_t c_stride = get_arg_val<uint32_t>(arg_index++);
-    uint32_t N = get_arg_val<uint32_t>(arg_index++);
-    uint32_t C = get_arg_val<uint32_t>(arg_index++);
-    uint32_t Ht = get_arg_val<uint32_t>(arg_index++);
-    uint32_t Wt = get_arg_val<uint32_t>(arg_index++);
+    uint32_t start_n = get_arg(args::start_n);
+    uint32_t start_c = get_arg(args::start_c);
+    uint32_t start_t = get_arg(args::start_t);
+    uint32_t start_th = get_arg(args::start_th);
+    uint32_t start_tw = get_arg(args::start_tw);
+    uint32_t num_tiles = get_arg(args::num_tiles);
+    uint32_t n_stride = get_arg(args::n_stride);
+    uint32_t c_stride = get_arg(args::c_stride);
+    uint32_t N = get_arg(args::N);
+    uint32_t C = get_arg(args::C);
+    uint32_t Ht = get_arg(args::Ht);
+    uint32_t Wt = get_arg(args::Wt);
 
-    constexpr auto cb_id_src = get_compile_time_arg_val(0);
-    constexpr auto src_args = TensorAccessorArgs<1>();
     constexpr uint32_t onetile = 1;
 
-    const auto src = TensorAccessor(src_args, src_addr);
+    const auto src = TensorAccessor(tensor::input);
     Noc noc;
-    CircularBuffer cb_src(cb_id_src);
-    const uint32_t src_tile_bytes = cb_src.get_tile_size();
+    DataflowBuffer dfb_src(dfb::src);
+    const uint32_t src_tile_bytes = dfb_src.get_tile_size();
 
     uint32_t HtWt = Ht * Wt;
 
@@ -45,10 +42,10 @@ void kernel_main() {
     for (uint32_t n = start_n; n < N && num_tiles_read < num_tiles; ++n, start_c = 0) {
         for (uint32_t c = start_c; c < C && num_tiles_read < num_tiles; ++c, start_t = 0) {
             for (uint32_t t = start_t; t < HtWt && num_tiles_read < num_tiles; ++t) {
-                cb_src.reserve_back(onetile);
-                noc.async_read(src, cb_src, src_tile_bytes, {.page_id = tile_offset++}, {.offset_bytes = 0});
+                dfb_src.reserve_back(onetile);
+                noc.async_read(src, dfb_src, src_tile_bytes, {.page_id = tile_offset++}, {.offset_bytes = 0});
                 noc.async_read_barrier();
-                cb_src.push_back(onetile);
+                dfb_src.push_back(onetile);
                 ++num_tiles_read;
             }
             tile_offset += next_channel_shift;
