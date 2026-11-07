@@ -8,6 +8,7 @@ question (--unfinished-log DIR prints the newest inspect log that did not finish
 import argparse
 import glob
 import json
+import math
 import os
 import subprocess
 import sys
@@ -90,6 +91,65 @@ def inspect_summary(out):
     return summary
 
 
+REFERENCE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "aa_reference.json")
+# Where each bench's headline score sits in its summary, and its item count for the interval (distinct items: tau2's
+# repeats are the same tasks, so they do not narrow it).
+SCORE_KEYS = {
+    "mmmu_pro_aa": ("aa_accuracy,none", None),
+    "gpqa_aa": ("aa_choice/accuracy", 198),
+    "tau2_telecom_aa": ("tau_bench_scorer/mean", 114),
+}
+
+
+def wilson(p, n, z=1.96):
+    """95% Wilson interval of a proportion p measured on n items."""
+    if not n:
+        return None
+    center = (p + z * z / (2 * n)) / (1 + z * z / n)
+    half = z * math.sqrt(p * (1 - p) / n + z * z / (4 * n * n)) / (1 + z * z / n)
+    return [round(center - half, 4), round(center + half, 4)]
+
+
+def compare(bench, metrics, n_samples, reference_file=REFERENCE_FILE):
+    """TT score vs the Artificial Analysis reference: both scores, the delta, the TT 95% interval (Wilson) and the
+    delta's 95% interval (normal approximation of two independent proportions, each on its own item count)."""
+    if bench not in SCORE_KEYS or not metrics:
+        return None
+    key, n_items = SCORE_KEYS[bench]
+    if key not in metrics:
+        return None
+    with open(reference_file) as f:
+        ref = json.load(f).get(bench) or {}
+    tt = float(metrics[key])
+    n = n_samples.get("effective") if isinstance(n_samples, dict) else n_samples
+    if n_items:  # a limited run scores fewer items; a full one never more than the distinct ones
+        n = min(n_items, n) if n else n_items
+    out = {"tt": round(tt, 4), "n_tt": n, "ci95_tt": wilson(tt, n), "reference": "Artificial Analysis"}
+    aa, n_ref = ref.get("score"), ref.get("n")
+    out.update(aa=aa, n_aa=n_ref, reference_note=ref.get("note") or ref.get("metric"), reference_url=ref.get("url"))
+    if aa is not None and n:
+        delta = tt - aa
+        se = math.sqrt(tt * (1 - tt) / n + (aa * (1 - aa) / n_ref if n_ref else 0.0))
+        out.update(delta=round(delta, 4), ci95_delta=[round(delta - 1.96 * se, 4), round(delta + 1.96 * se, 4)])
+        out["within_95ci"] = abs(delta) <= 1.96 * se
+    return out
+
+
+def comparison_line(c):
+    if c is None:
+        return None
+    pct = lambda v: "n/a" if v is None else f"{100 * v:.2f}%"  # noqa: E731
+    line = f"TT {pct(c['tt'])} (95% CI {pct(c['ci95_tt'][0])}-{pct(c['ci95_tt'][1])}, n={c['n_tt']})"
+    if c.get("aa") is None:
+        return line + f" | AA: none published ({c.get('reference_note')})"
+    lo, hi = c["ci95_delta"]
+    return (
+        line
+        + f" | AA {pct(c['aa'])} (n={c['n_aa']}) | delta {100 * c['delta']:+.2f} pt (95% CI {100 * lo:+.2f}"
+        + f" to {100 * hi:+.2f}) {'within' if c['within_95ci'] else 'OUTSIDE'} the interval"
+    )
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--unfinished-log")
@@ -125,11 +185,15 @@ def main():
         "versions": _versions(),
         **body,
     }
+    summary["vs_artificial_analysis"] = compare(args.bench, summary.get("metrics"), summary.get("n_samples"))
     path = os.path.join(args.out, "summary.json")
     with open(path, "w") as f:
         json.dump(summary, f, indent=1, default=str)
     json.dump({k: summary.get(k) for k in ("bench", "metrics", "n_samples", "wall_s")}, sys.stdout, default=str)
     print()
+    line = comparison_line(summary["vs_artificial_analysis"])
+    if line:
+        print(f"{args.bench}: {line}")
     if not summary.get("metrics"):
         sys.exit(f"no metrics in the harness output; see {args.out}/run.log")
 

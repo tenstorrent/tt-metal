@@ -1,0 +1,19 @@
+{
+  "_source": "Artificial Analysis, MiMo-V2.6-Flash (reasoning variant, benchmarked on Xiaomi's first-party API): https://artificialanalysis.ai/models/mimo-v2-6-flash, model record read 2026-11-07 (intelligenceIndex 26.73). Methodology: https://artificialanalysis.ai/methodology/intelligence-benchmarking. Xiaomi's API serves MiMo-V2.6-Flash (HF: MiMo-V2.6-Flash-RL); we serve MiMo-V2.6-Flash-MOPD (RL plus a short MOPD stage), so weights may differ.",
+  "mmmu_pro_aa": {
+    "score": 0.730635838150289,
+    "n": 1730,
+    "metric": "pass@1, 1 repeat (1264 of 1730)",
+    "url": "https://artificialanalysis.ai/models/mimo-v2-6-flash"
+  },
+  "gpqa_aa": {
+    "score": null,
+    "n": 198,
+    "note": "Artificial Analysis publishes no GPQA Diamond score for MiMo-V2.6-Flash (field null; GPQA left the Intelligence Index in v4.2, before this model's release)."
+  },
+  "tau2_telecom_aa": {
+    "score": null,
+    "n": 114,
+    "note": "Artificial Analysis publishes no tau2-bench Telecom score for MiMo-V2.6-Flash (field null; superseded by tau3-Banking before v4.1)."
+  }
+}
