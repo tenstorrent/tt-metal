@@ -25,10 +25,25 @@ namespace ckernel {
  * | Argument       | Description                                                                 | Type     | Valid Range                                           | Required |
  * |----------------|-----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
  * | idst           | The index of the tile in DST register buffer to perform remainder operation | uint32_t | Must be less than the size of the DST register buffer | True     |
+ *
+ * Template parameter infinite_divisor selects the instantiation for a +-inf denominator (its
+ * reciprocal is 0); set it when the denominator passed to remainder_tile_init is infinite.
  */
 // clang-format on
+template <bool infinite_divisor = false>
 ALWI void remainder_tile(uint32_t idst) {
+#ifdef ARCH_QUASAR
+    // The Quasar kernel has no infinite-divisor instantiation yet.
     MATH(SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_remainder, (APPROX), idst, VectorMode::RC));
+#else
+    MATH(SFPU_UNARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_remainder,
+        (APPROX, 8 /*ITERATIONS*/, infinite_divisor),
+        idst,
+        VectorMode::RC));
+#endif
 }
 
 /**
