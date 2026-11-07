@@ -14,8 +14,9 @@ test_sparse_mla_perf: the CI gate (Galaxy, LoudBox). Warm and long with the prod
 (SPxTP-sharded), torus XY on Galaxy and Fabric2D on LoudBox, for GATE_CASES: K3.1 (last DSA layer's slot of 24, at
 K3.1's packet size), GLM-5.3 (last full indexer layer) and a GLM-5.3 shared layer (no indexer; reuses that layer's
 top-k). Untraced: fastest of UNTRACED_SAMPLES calls after UNTRACED_WARMUP discarded ones. Traced: one replay of the
-captured trace. Each (case, box, scenario, mode) is gated two-sided against PERF_TARGETS_MS ± PERF_MARGIN[mode], and
-the traced output must match the untraced one.
+captured trace. Each (case, box, scenario, mode) is gated two-sided against PERF_TARGETS_MS ± PERF_MARGIN[mode] (a
+box without targets only reports), and the traced output must match the untraced one. Each layer runs standalone, in a
+one-slot KVPE cache: without the next layer's KV prefetch overlapped with its attention, as the first layer of a stage.
 
 test_mla_chunked_perf: the exploration matrix (QuietBox, LoudBox, Galaxy; skipped on CI), reports only.
 GLM-5.3 (last full indexer layer, 21-slot index cache) and K3.1 x warm/cold/long x sparse with a BF16 or
@@ -23,6 +24,7 @@ scaled-FP8 cache / dense ring-MLA baseline. Narrow with -k, e.g. -k "glm_5_3 and
 """
 
 import copy
+import gc
 import os
 import time
 from dataclasses import dataclass
@@ -32,6 +34,7 @@ import pytest
 import ttnn
 from models.common.utility_functions import comp_pcc, skip_with_llk_assert, skip_with_watcher
 from models.demos.deepseek_v3_d_p.reference.cpu_deepseek_v32 import random_mla_weights
+from models.demos.deepseek_v3_d_p.reference.glm_5_3_config import GLM53Config
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_1_config import KimiK31Config
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
     fabric2d_device_params,
@@ -68,12 +71,13 @@ GATE_CASES = {
 }
 # Host time of one chunk forward through device synchronization, in ms, measured as CI runs perf jobs:
 # LOGURU_LEVEL=ERROR and TT_METAL_SHM_TRACKING_DISABLED=1, one pytest process per variant (-k kimi_k3_1, -k glm_5_3)
-# as the jobs run them. Galaxy: bh-glx-120-c02u02, 14kw, 2026-11-06, median of 3 runs. LoudBox: not measured yet.
+# as the jobs run them. Galaxy: bh-glx-120-c02u02, 14kw, 2026-11-06, median of 3 runs, CPUs pinned (taskset; unpinned
+# processes on this host share 4 CPUs with the Weka client). LoudBox: not measured yet (report only).
 _GALAXY_TARGETS_MS = {
     # case: (warm untraced, warm traced, long untraced, long traced)
     "kimi_k3_1": (4.20, 3.24, 7.57, 6.93),
-    "glm_5_3": (4.25, 2.87, 7.38, 6.55),
-    "glm_5_3-no_indexer": (2.84, 2.06, 2.91, 2.14),
+    "glm_5_3": (4.20, 2.85, 7.37, 6.47),
+    "glm_5_3-no_indexer": (3.06, 2.26, 3.10, 2.32),
 }
 PERF_TARGETS_MS = {
     (case, "Galaxy", scenario, mode): ms
@@ -240,7 +244,12 @@ def build_sparse_perf_case(
         return_indexer_indices=True,
     )
     ttnn.deallocate(out)
+    # Free the full layer before building the shared one: ttMLA holds reference cycles, so without a collection its
+    # buffers would linger and could be freed mid-measurement.
     ttnn.deallocate(index_kv_cache)
+    ttnn.deallocate(kvpe_cache.storage)
+    del case, mla, kvpe_cache, index_kv_cache
+    gc.collect()
     shared_layer_idx = [i for i, mode in enumerate(config.indexer_types) if mode == "shared"][-1]
     shared = ttMLA(
         config,
@@ -275,8 +284,8 @@ _BOX_BY_DEVICE_COUNT = {
     8: ("LoudBox", (2, 4), fabric2d_device_params),
 }
 _BOX = _BOX_BY_DEVICE_COUNT.get(detect_num_devices())
-# Kimi-K3.1 opens at its own fabric packet size; the others keep the default maximum.
-_FABRIC_PAYLOAD = {"kimi_k3_1": KimiK31Config}
+# Each model opens the fabric at its production packet size.
+_FABRIC_PAYLOAD = {"kimi_k3_1": KimiK31Config, "glm_5_3": GLM53Config}
 
 
 def _gate_params():
@@ -286,20 +295,20 @@ def _gate_params():
                 (8, 4),
                 {},
                 "kimi_k3_1",
-                False,
+                "kimi_k3_1",
                 marks=pytest.mark.skip(reason="sparse MLA perf gate runs on Galaxy and LoudBox only"),
             )
         ]
     name, mesh, device_params = _BOX
     params = []
-    for case, (variant, shared_layer) in GATE_CASES.items():
+    for case, (variant, _) in GATE_CASES.items():
         payload = _FABRIC_PAYLOAD.get(variant)
         dp = device_params(
             fabric_payload_size=moe_fabric_payload(payload) if payload else None,
             worker_l1_size=ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE,
             trace_region_size=16 * 1024 * 1024,
         )
-        params.append(pytest.param(mesh, dp, variant, shared_layer, id=f"{name.lower()}-{mesh[0]}x{mesh[1]}-{case}"))
+        params.append(pytest.param(mesh, dp, variant, case, id=f"{name.lower()}-{mesh[0]}x{mesh[1]}-{case}"))
     return params
 
 
@@ -359,14 +368,14 @@ def _time_traced(mesh_device, case, start):
 @skip_with_watcher("Watcher perturbs kernel timing")
 @pytest.mark.timeout(900)
 @pytest.mark.parametrize(
-    "mesh_device, device_params, variant, shared_layer",
+    "mesh_device, device_params, variant, case_name",
     _gate_params(),
     indirect=["mesh_device", "device_params", "variant"],
 )
 @pytest.mark.parametrize("scenario", list(SCENARIO_CACHE_TOKENS))
-def test_sparse_mla_perf(mesh_device, device_params, variant, shared_layer, config_only, scenario):
+def test_sparse_mla_perf(mesh_device, device_params, variant, case_name, config_only, scenario):
     box = _BOX[0]
-    case_name = variant.name + ("-no_indexer" if shared_layer else "")
+    shared_layer = GATE_CASES[case_name][1]
     label = f"{case_name} sparse MLA {box} {scenario}"
     if box == "Galaxy":
         require_high_power(f"{label} perf")
@@ -388,7 +397,7 @@ def test_sparse_mla_perf(mesh_device, device_params, variant, shared_layer, conf
     samples["traced"], traced_out = _time_traced(mesh_device, case, start)
     trace_pcc = min(comp_pcc(a, b, TRACE_PCC)[1] for a, b in zip(eager_out, traced_out))
 
-    failures = []
+    failures, unmeasured = [], []
     for mode in MODES:
         measured_ms = min(samples[mode])
         target_ms = PERF_TARGETS_MS.get((case_name, box, scenario, mode))
@@ -423,7 +432,7 @@ def test_sparse_mla_perf(mesh_device, device_params, variant, shared_layer, conf
             },
         )
         if target_ms is None:
-            failures.append(f"{mode}: no target for {box} {scenario}; measured {measured_ms:.3f} ms")
+            unmeasured.append(f"{mode} {measured_ms:.3f} ms")
         elif not within:
             lower, upper = target_ms * (1 - margin), target_ms * (1 + margin)
             direction = "faster than the target, re-centre it" if measured_ms < lower else "slower than the target"
@@ -434,6 +443,8 @@ def test_sparse_mla_perf(mesh_device, device_params, variant, shared_layer, conf
     if trace_pcc < TRACE_PCC:
         failures.append(f"traced output differs from untraced: min per-device PCC {trace_pcc:.6f}")
     assert not failures, f"{label}: " + "; ".join(failures)
+    if unmeasured:  # report-only until this box has targets
+        pytest.skip(f"{label}: no targets yet; measured " + ", ".join(unmeasured))
 
 
 # ============================================================================
