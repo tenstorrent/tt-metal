@@ -5,8 +5,10 @@
 import pytest
 import torch
 import ttnn
+from conftest import requires_hybrid_allocator
 
 
+@requires_hybrid_allocator
 @pytest.mark.parametrize("k,n", [(1024, 1280), (8192, 1024)])
 def test_dram_sharded_matmul_preserves_nonparticipant_l1(per_core_mesh_device, k, n):
     device = per_core_mesh_device
