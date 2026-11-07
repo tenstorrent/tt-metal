@@ -656,6 +656,24 @@ def test_stride_slice_four_dim(dims, begins, ends, strides, layout, dtype, devic
     assert_with_pcc(torch_output, ttnn_output, 0.99)
 
 
+@pytest.mark.parametrize("shape", [(1, 1, 7, 37), (2, 3, 5, 45), (1, 2, 3, 5, 33), (2, 1, 2, 4, 61)])
+@pytest.mark.parametrize("step", [2, 3, 4])
+@pytest.mark.parametrize("begin", [0, 1])
+@pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32, ttnn.int32, ttnn.uint16])
+def test_stride_slice_last_dim_word_copy(shape, step, begin, layout, dtype, device):
+    if layout == ttnn.TILE_LAYOUT and dtype == ttnn.uint16:
+        pytest.skip("Skipping test for tiled layout with uint16 dtype")
+    torch.manual_seed(2005)
+    torch_input = random_torch_tensor(dtype, shape)
+    torch_output = torch_input[..., begin::step]
+
+    ttnn_input = ttnn.from_torch(torch_input, device=device, layout=layout, dtype=dtype)
+    ttnn_output = ttnn.to_torch(ttnn_input[..., begin::step])
+
+    assert_equal(torch_output, ttnn_output)
+
+
 @pytest.mark.parametrize("dims", [[1, 56, 56, 96]])
 @pytest.mark.parametrize("begins", [[0, 0, 0, 0], [0, 0, 0, 90]])
 @pytest.mark.parametrize("ends", [[1, -1, 56, 96], [1, 56, 56, 95], [-1, 1, -1, -1]])

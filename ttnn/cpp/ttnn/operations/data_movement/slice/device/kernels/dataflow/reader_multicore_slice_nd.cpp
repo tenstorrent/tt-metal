@@ -54,6 +54,35 @@
 #include "api/tensor/noc_traits.h"
 #include "experimental/kernel_args.h"
 
+// Compacts the selected columns of one row to the start of the same buffer. The output index never
+// exceeds the input index, so a forward copy is safe in place.
+template <typename Row>
+FORCE_INLINE void compact_strided_columns(Row row, uint32_t start, uint32_t end, uint32_t step, uint32_t output_w) {
+    uint32_t out_col = 0;
+    for (uint32_t input_col = start; input_col < end && out_col < output_w; input_col += step) {
+        row[out_col++] = row[input_col];
+    }
+}
+
+template <typename Lock>
+FORCE_INLINE void compact_strided_columns_by_size(
+    Lock& lock, uint32_t element_size, uint32_t start, uint32_t end, uint32_t step, uint32_t output_w) {
+    if (element_size == 2) {
+        compact_strided_columns(lock.template get_ptr<volatile uint16_t>(), start, end, step, output_w);
+    } else if (element_size == 4) {
+        compact_strided_columns(lock.template get_ptr<volatile uint32_t>(), start, end, step, output_w);
+    } else {
+        auto row = lock.template get_ptr<volatile uint8_t>();
+        uint32_t out_col = 0;
+        for (uint32_t input_col = start; input_col < end && out_col < output_w; input_col += step) {
+            for (uint32_t byte_idx = 0; byte_idx < element_size; ++byte_idx) {
+                row[out_col * element_size + byte_idx] = row[input_col * element_size + byte_idx];
+            }
+            out_col++;
+        }
+    }
+}
+
 void kernel_main() {
     // Runtime arguments - first get basic parameters
     uint32_t tensor_rank = get_arg(args::tensor_rank);
@@ -139,20 +168,13 @@ void kernel_main() {
                 // the lock, at the end of this block and so before push_back, writes the reorganized row
                 // back to SRAM, where the writer kernel reads it.
                 auto lock = dfb_out.scoped_write_lock(1);
-                auto src_ptr = lock.get_ptr<volatile uint8_t>();
-                auto dst_ptr = lock.get_ptr<volatile uint8_t>();
-
-                uint32_t out_col = 0;
-                for (uint32_t input_col = get_vararg(slice_starts_base + last_dim);
-                     input_col < get_vararg(slice_ends_base + last_dim) &&
-                     out_col < get_vararg(output_dims_base + last_dim);
-                     input_col += get_vararg(slice_steps_base + last_dim)) {
-                    // Copy element by element for the slice
-                    for (uint32_t byte_idx = 0; byte_idx < element_size; ++byte_idx) {
-                        dst_ptr[out_col * element_size + byte_idx] = src_ptr[input_col * element_size + byte_idx];
-                    }
-                    out_col++;
-                }
+                compact_strided_columns_by_size(
+                    lock,
+                    element_size,
+                    get_vararg(slice_starts_base + last_dim),
+                    get_vararg(slice_ends_base + last_dim),
+                    get_vararg(slice_steps_base + last_dim),
+                    get_vararg(output_dims_base + last_dim));
             }
 
             dfb_out.push_back(1);
