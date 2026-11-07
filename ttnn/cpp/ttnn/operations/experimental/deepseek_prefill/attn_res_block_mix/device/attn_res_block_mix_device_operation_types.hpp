@@ -14,8 +14,6 @@ namespace ttnn::experimental::prim {
 
 struct AttnResBlockMixParams {
     uint32_t num_sites;
-    // The leading sites with nothing live to fold in: their partials come out normalized.
-    uint32_t num_closed_sites;
     float eps;
     tt::tt_metal::MemoryConfig output_mem_config;
     ttnn::DeviceComputeKernelConfig compute_kernel_config;

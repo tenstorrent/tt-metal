@@ -291,10 +291,9 @@ class TtAttnRes(LightweightModule):
             compute_kernel_config=STATS_FIDELITY,
         )
 
-        partials, shifts, masses, _ = ttnn.experimental.deepseek_prefill.attn_res_block_mix(
+        return ttnn.experimental.deepseek_prefill.attn_res_block_mix(
             sealed, stats, num_sites=len(queries), eps=self.eps
         )
-        return partials, shifts, masses
 
     def _exchange_semaphore(self):
         """Arrival semaphore for the fused read's exchange.
