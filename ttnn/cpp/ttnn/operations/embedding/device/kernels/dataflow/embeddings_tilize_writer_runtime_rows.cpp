@@ -10,7 +10,7 @@
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
 #include "experimental/kernel_args.h"
-#include "ttnn/operations/embedding/device/kernels/embeddings_fused_split.hpp"
+#include "ttnn/operations/common/shared_with_host/runtime_length.hpp"
 
 void kernel_main() {
     // RUNTIME ARGS
@@ -22,7 +22,8 @@ void kernel_main() {
     constexpr uint32_t batch = get_arg(args::batch);
     constexpr uint32_t num_cores = get_arg(args::num_cores);
 
-    const auto [start_block, end_block] = embeddings_fused_block_range(core_idx, blocks_per_batch, batch, num_cores);
+    const auto [start_block, end_block] =
+        ttnn::runtime_length::balanced_range(core_idx, batch * blocks_per_batch, num_cores);
     const uint32_t start_id = start_block * num_tiles_per_block;
     const uint32_t end_id = end_block * num_tiles_per_block;
 
