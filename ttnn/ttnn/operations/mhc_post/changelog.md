@@ -553,3 +553,131 @@ from Refinement 2. Its value is 1.12e-5 before this round and 1.11e-5 after, aga
 
 - The coefficient expansion and the stats-tile hand-off are RISC / NoC code and bypass no helper.
 - Each raw site above carries a kernel-head justification comment with its measured numbers.
+
+## Perf 2
+- Date: 2026-11-06/07. Perf tournament round 2: coordinator plus 6 parallel `perf-part-optimizer` bake-offs.
+- Focus: the perf-flagged LOOSE_CASES entry, optimized exactly. That is collapse, bf16 X and F, packed mixes,
+  HiFi2, fp32_dest_acc_en, approx off, T160 C5120, Blackhole, R=5 × Q=21, block_c=2, 1 row per core.
+  Every one of these settings is in SUPPORTED, and SUPPORTED is unchanged by this round.
+- **Outcome:** 6 ideas measured.
+  - 2 graduated: the mix c-pair window, with one carve-out, and the load-macro combine add.
+  - 1 WIN not graduated, because it conflicts with the pair window and regresses on the focus shape.
+  - 1 small win not graduated, because it is at noise level.
+  - 2 NULL and 1 REGRESSION.
+- **The focus shape is unchanged within its noise.** Before: 69.9 µs, median of 12 runs (range 61.3–71.0,
+  bimodal). After: 65.8 µs, median of 5 (61.3–70.8). No focus speedup is claimed. The off-focus shapes are
+  faster (see the guard set below).
+
+### Measured breakdown (before; focus, zones + ablation)
+- Whole op: 73.3 / 63.7 / 71.1 µs over 3 fresh runs. It is bimodal, roughly 62–65 µs or ~70 µs.
+- Ablations: payload stubbed, synchronization kept, 2 runs each.
+
+  | stubbed | ns |
+  |---|---|
+  | F/X/W reads | 59,631 / 59,680 |
+  | X'/y writes | 60,361 / 60,401 |
+  | all reads + writes | 59,714 / 59,735 |
+  | W reads only | 60,151 / 60,190 |
+
+  So with every DRAM transfer stubbed the op still takes 59.7 µs. That floor is compute, startup, tail and
+  synchronization. DM adds 4–13 µs of straggle on top of it.
+- Floor timeline (DM stubbed):
+  - **startup, ~10.8 µs to the first mix:** coefficient share 3.2 µs + reader expansion 4.2 µs + compute
+    `pack_coefficients` ~3 µs;
+  - **body, 39–41 µs on an 8-c-tile core:** `compute_mix` 31 µs (3.9 µs per c-tile), collapse 5 µs,
+    project 3 µs;
+  - **tail, ~8 µs:** leader + root combine 3.6 µs, hc 4.1 µs, writes.
+- DM ceiling (`/perf-ceiling-dm`):
+  - The tensors total 18.9 MB, with every tensor moved once.
+  - The body moves them in ~40 µs, about 475 GB/s, which is about 93% of the 512 GB/s peak. The body is
+    effectively at the DRAM roofline. The stragglers are cores at x=11/13/14 (a whole W column group late
+    together) and the y=2 row.
+- Ranked by measured headroom:
+  1. `compute_mix` (31 µs, ablation-ranked by the subagents: fp32 unpack-to-dest copies 9.1 µs, SFPU 8.1,
+     bf16 copies 6.5, ss round trip 3.1);
+  2. startup, ~11 µs;
+  3. tail, ~8 µs;
+  4. DRAM straggle, 4–13 µs;
+  5. collapse, 5 µs.
+
+### Portfolio and verdicts
+Every variant below was asserted bit-identical to the real op.
+
+| idea (dir) | verdict | best option | measured | domain |
+|---|---|---|---|---|
+| `mix_reuse` | **WIN on compute**, REGRESSION on the focus whole op | v2: c-pair window (A_j / B_j / ss shared across 2 c-tiles, 13 copies + 5 packs per 2 tiles instead of 16 + 6) | `compute_mix` 31.0 → 25.4 µs; focus whole op 69.9 (median of 12) → 73.9 (median of 6, alternating) | fused mix, all modes; bit-identical (incl. odd extents, extent 1, `f_differs_x`) |
+| `mix_collapse_fuse` | NULL | fold y into the mix (SFPU bf16 rounding of X', running y via L1) | mix +5.6–6.0 µs vs collapse −5.4 µs; collapse T4096 C1792 compute +14.5 % | collapse. By-product: comb_3j packed −0.35 µs compute, whole op inside noise |
+| `mix_operand_path` | WIN on compute, REGRESSION on the focus whole op | v3: B_j / ss handed to the unpacker early, cross-half A_j prefetch, bf16 F/X via unpacker 1 → srcB with a zero srcA add | `compute_mix` 31.4 → 25.4 µs (TRISC_1); focus 67.0 → 72.4 µs (median of 3); stats T160 −7.5 %, HiFi4 collapse −5.8 % | fused mix; `f_differs_x` not implemented; relies on fp32 DEST (the A2D MOP is an add) |
+| `startup_coef` | REGRESSION | v3: coefficients pipelined by group (the reader pushes each expanded group and compute packs it meanwhile) | first mix 11.4 → 8.3 µs; focus whole op +8.9 %, collapse separate T160 +17.4 %; collapse T640 −3.2 % | the v19 control (v3 with the mix held back 3 µs) returns to baseline, so the earlier start itself costs time on a DRAM-bound body |
+| `dram_straggler` | NULL | 11 reader variants: trid prefetch, W one block ahead, W split across the group, W rotated, NoC1 for W / X / all; writer twin w1 (flush instead of write barrier) | all reader variants flat or worse (67.8–95.5k); w1: focus inside noise, plain T640 C7168 −6 %, collapse T640 C7168 **+4.3 %** | the body is DRAM-bound and bank balance is fine (max/mean 1.14), so moving bytes only moves the wait |
+| `tail_hc` | WIN (small) | `fuse3_sum`: stats packed twice for an in-core hc hand-off, plus a load-macro combine add | tail after the last ship 7.52 → 6.89 µs; whole op flat (67.3 vs 68.7k, median of 3) | exp variants NULL (latency-bound, ~37 cycles per exp); hc front 1.09 µs, Sinkhorn 2.05 µs, fixed 0.87 µs |
+
+### Graduated (commit 1f6a964d408)
+- **Mix c-pair window (`mix_reuse` v2), the unified path:**
+  - Where it runs: `mix_block_fused` on every fused-mix call (bf16 streams, Blackhole) in plain, stats and
+    collapse, except one carve-out.
+  - What it replaced: the old single-tile loop body is now `mix_tile`. That is not a dual path: `mix_tile`
+    is the pair window's odd-tail window and also serves the carve-out.
+  - **Carve-out (measured material regression): collapse with the single-pass projection (HiFi1/2).**
+    Written `not (collapse and proj_passes == 1)` in `_mix_pair_window`.
+    - Measured, pair window on vs off, 3 alternating runs, medians:
+
+      | collapse shape | change |
+      |---|---|
+      | T160 C5120 HiFi2 (focus) | **+5.0 % (73.2 vs 69.7 µs)** |
+      | T4096 C1792 | **+2.5 % (+8.8 to +17.5 µs in every pair)** |
+      | T640 C5120 | +4 % (noisy) |
+      | T640 C7168 | flat |
+
+    - Mechanism: the HiFi2 collapse body is already DRAM-bound, so a faster mix only moves the contention
+      onto the stragglers, and the combine/hc tail follows them. The exact-projection collapse is
+      compute-bound and wins.
+  - Guard set, pair window on vs off (3 alternating runs, medians):
+
+    | shape | change |
+    |---|---|
+    | plain T4096 C1792 | **−6.3 %** (346.5 vs 369.8 µs) |
+    | plain T640 C7168 | **−5.7 %** (223.0 vs 236.6 µs) |
+    | collapse T160 HiFi4 | **−4.7 %** (151.2 vs 158.7 µs, every pair) |
+    | stats T160 HiFi2 | flat (63.2 vs 62.1, noise) |
+    | plain T160 | flat (47.2 vs 48.3) |
+
+  - fp32 streams run the per-term chain, which is untouched.
+  - Code size: +4.6 KB of compute ELF. Profiled builds of HiFi4 stats / collapse and fp32 plain still load.
+- **Load-macro combine add (`tail_hc` "sum"):**
+  - `dest_sum` uses `mhc_lm_add_d1` (D0 ← 1.0·D1 + D0, same fma and slot order, bit-identical) on Blackhole.
+  - Measured: the slowest leader's sum after its last slot drops from 1,347 to 942 ns.
+  - Carve-out (inexpressible): non-Blackhole keeps `add_binary_tile`, because the load-macro / replay API
+    is Blackhole-only.
+- **Not graduated:**
+  - `tail_hc` fuse3: −0.15 µs, at noise level, and it would rewrite the writer ↔ compute hc hand-off.
+  - `mix_operand_path` v3: it rewrites the same loop as the pair window, so the two conflict. It also
+    regresses the focus shape and lacks `f_differs_x`. Combining the srcB / prefetch pipeline with the pair
+    window is a round-3 candidate.
+  - comb_3j packed: it conflicts with the pair window's coefficient layout and saves only −0.35 µs.
+- Instrumentation: the new code sits inside the existing `compute_mix` and `compute_lead_combine` /
+  `compute_root_combine` zones, so no zone is lost.
+- Golden: `eval/golden_tests/mhc_post/` gives 482 passed plus the pre-existing `test_hc_scalars_are_runtime`
+  gate defect (1.11e-5 vs 1e-5, same value as before this round). Unit tests pass 30 / 30. The
+  `mix_reuse` bench (11 cases) is bit-identical against the integrated op.
+
+### What is hot now (round 3)
+- At the focus shape the body is DRAM-bound (~475 GB/s), so compute and startup speedups do not reach the
+  end of the op on their own. Three measured, bit-identical compute wins are on the shelf for when it is
+  not DRAM-bound:
+  - pair window: −5.6 µs `compute_mix`;
+  - operand pipeline: −6 µs;
+  - startup: −3.1 µs to the first mix.
+- To move the focus shape, remove bytes or straggle rather than compute:
+  - the W stream on the first row is 2.6 MB, read under the only row;
+  - the whole late x=13 W column group points at placement, not at the DM schedule.
+- Fewer DRAM bytes per wave, or a different column-group placement, is the lever. Round 2 ruled out every
+  reader schedule change (11 variants).
+
+### Helper bypasses
+| helper | kind | what was missing / hard | helper ns | raw ns | site |
+|---|---|---|---|---|---|
+| eltwise_chain (fused mix, extends the Perf 1 raw-loop bypass) | capability | A chain owns one DEST acquire per iteration with a fixed element→slot map. It cannot keep two output accumulators (D0 / D1) live across a term sequence while reusing one coefficient slot (D3: A_j, then B_j, then ss) for both. So it cannot share the fp32 unpack-to-dest coefficient / ss copies across two output tiles. Each such copy is a ~190-cycle unpack ↔ math serialization point. | 31,000 (`compute_mix`, single-tile windows) | 25,400 | mhc_post_compute.cpp:394 (`mix_pair`), mhc_mix_lm.hpp:278 (`mhc_r_*` passes) |
+| `add_binary_tile` (SFPU binary add, used by a raw combine loop) | capability | There is no load-macro form of the SFPU binary add. sfpi / LLK issue load, load, add, store one per cycle on the single SFPU issue slot, and cannot overlap the add and store with the next vector's loads. | 1,347 (slowest leader's post-arrival sum) | 942 | mhc_post_compute.cpp:683 (`dest_sum`), mhc_mix_lm.hpp:315 (`add_d1_impl`) |
+
+- Each raw site carries a kernel-head justification comment with these measured numbers.
