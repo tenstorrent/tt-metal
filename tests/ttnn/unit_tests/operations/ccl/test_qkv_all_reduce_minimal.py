@@ -84,7 +84,7 @@ def run_all_reduce_qkv_heads_fuse_perf_impl(
     # create global semaphore handles
     num_buffers = 2
     ccl_semaphore_handles = [
-        ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, i) for i in range(num_buffers)
+        ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0) for _ in range(num_buffers)
     ]
 
     logger.info(f"Output shape: {output_shape}")
@@ -558,3 +558,118 @@ def test_all_reduce_qkv_heads_fuse_perf_6U(
         validate_all=validate_all,
         linear=False,
     )
+
+
+@pytest.mark.parametrize(
+    "mesh_device",
+    [(1, 4)],
+    indirect=True,
+)
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+        }
+    ],
+    indirect=True,
+)
+def test_all_reduce_qkv_heads_cache_hit_uses_new_semaphore(mesh_device):
+    """Regression test for #63648: a program-cache hit must use the new GlobalSemaphore."""
+    if mesh_device.get_num_devices() < 4:
+        pytest.skip("Requires at least 4 devices")
+
+    n_dev = 4
+    grid = mesh_device.compute_with_storage_grid_size()
+    all_cores = ttnn.CoreRangeSet(
+        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))}
+    )
+
+    def cores(x0, y0, x1, y1):
+        return ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(x0, y0), ttnn.CoreCoord(x1, y1))})
+
+    def width_sharded(width):
+        return ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(cores(1, 0, 1, 0), [32, width], ttnn.ShardOrientation.ROW_MAJOR),
+        )
+
+    qkv_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(cores(1, 1, 3, 1), [32, 32], ttnn.ShardOrientation.ROW_MAJOR),
+    )
+    replicate = ttnn.replicate_tensor_to_mesh_mapper(mesh_device)
+
+    host = torch.zeros((1, n_dev, 1, 128))
+    host[0, 0, 0] = torch.arange(128)
+    for d in range(1, n_dev):
+        host[0, d, 0] = d
+    x = ttnn.from_torch(
+        host.to(torch.bfloat16),
+        device=mesh_device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=width_sharded(128),
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(0, 1), mesh_shape=(1, n_dev)),
+    )
+    scratch = ttnn.from_torch(
+        torch.zeros((1, 1, 1, 128 * n_dev), dtype=torch.bfloat16),
+        device=mesh_device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=width_sharded(128 * n_dev),
+        mesh_mapper=replicate,
+    )
+    offset = ttnn.from_torch(
+        torch.zeros((1, 1), dtype=torch.int32),
+        device=mesh_device,
+        dtype=ttnn.int32,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=replicate,
+    )
+    sem_a = ttnn.create_global_semaphore(mesh_device, all_cores, 0)
+    sem_b = ttnn.create_global_semaphore(mesh_device, all_cores, 0)
+
+    reduced = sum(ttnn.to_torch(t).float() for t in ttnn.get_device_tensors(x))
+    refs = [
+        reduced[..., :64].reshape(1, 1, 2, 32),
+        reduced[..., 64:96].reshape(1, 1, 1, 32),
+        reduced[..., 96:].reshape(1, 1, 1, 32),
+    ]
+
+    def run_and_verify(sem):
+        outputs = ttnn.experimental.all_reduce_create_qkv_heads(
+            input_tensor=x,
+            buffer_tensor=scratch,
+            batch_offset=offset,
+            cluster_axis=1,
+            mesh_device=mesh_device,
+            multi_device_global_semaphore=sem,
+            num_heads=2,
+            memory_config=width_sharded(128),
+            topology=ttnn.Topology.Linear,
+            num_links=1,
+            num_kv_heads=1,
+            slice_size=1,
+            final_memory_config=qkv_config,
+            dtype=ttnn.bfloat16,
+        )
+        ttnn.synchronize_device(mesh_device)
+        for out, ref in zip(list(outputs)[1:], refs):
+            for t in ttnn.get_device_tensors(out):
+                got = ttnn.to_torch(t).float().reshape(ref.shape)
+                assert torch.equal(got, ref)
+
+    run_and_verify(sem_a)
+    num_entries = mesh_device.num_program_cache_entries()
+
+    # Poison sem_a with a non-zero sentinel after its call completes; a cache hit with sem_b
+    # must update writer runtime arg 1 to sem_b instead of waiting on sem_a.
+    ttnn.reset_global_semaphore_value(sem_a, 17)
+    ttnn.synchronize_device(mesh_device)
+
+    run_and_verify(sem_b)
+    assert mesh_device.num_program_cache_entries() == num_entries

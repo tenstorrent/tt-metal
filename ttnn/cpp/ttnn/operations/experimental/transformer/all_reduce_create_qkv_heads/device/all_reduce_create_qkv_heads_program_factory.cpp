@@ -35,6 +35,13 @@ using namespace tt::tt_metal;
 
 namespace {
 
+// Kernel indices in ProgramDescriptor::kernels push order.
+constexpr uint32_t kReductionReaderKernelIdx = 0;
+constexpr uint32_t kReductionWriterKernelIdx = 1;
+constexpr uint32_t kReductionComputeKernelIdx = 2;
+constexpr uint32_t kWorkerSenderReaderKernelIdx = 3;
+constexpr uint32_t kWorkerSenderWriterKernelIdx = 4;
+
 // Helper function to convert cores to corerangeset
 CoreRangeSet cores_to_corerangeset(const std::vector<CoreCoord>& cores) {
     std::vector<CoreRange> core_ranges;
@@ -598,6 +605,7 @@ ProgramDescriptor AllReduceCreateQkvHeadsMeshWorkloadFactory::create_descriptor(
     for (const auto& core : output_cores_vec) {
         reduction_compute_kernel_desc.runtime_args.emplace_back(core, reduction_kernel_rt_args);
     }
+    KernelHandle reduction_compute_kernel_id = desc.kernels.size();
     desc.kernels.push_back(std::move(reduction_compute_kernel_desc));
 
     // Now prepare rt args for the reader and writer kernels
@@ -882,7 +890,84 @@ ProgramDescriptor AllReduceCreateQkvHeadsMeshWorkloadFactory::create_descriptor(
         patch_arg_at_index_4(desc.kernels[reduction_writer_kernel_id], core, i);
     }
 
+    TT_FATAL(
+        reduction_reader_kernel_id == kReductionReaderKernelIdx &&
+            reduction_writer_kernel_id == kReductionWriterKernelIdx &&
+            reduction_compute_kernel_id == kReductionComputeKernelIdx &&
+            worker_sender_reader_kernel_id == kWorkerSenderReaderKernelIdx &&
+            worker_sender_writer_kernel_id == kWorkerSenderWriterKernelIdx,
+        "Unexpected kernel descriptor push order in AllReduceCreateQkvHeadsMeshWorkloadFactory");
+
     return desc;
+}
+
+void AllReduceCreateQkvHeadsMeshWorkloadFactory::override_runtime_arguments(
+    tt::tt_metal::Program& program,
+    const AllReduceCreateQkvHeadsParams& operation_attributes,
+    const AllReduceCreateQkvHeadsInputs& tensor_args,
+    AllReduceCreateQkvHeadsResult& tensor_return_value,
+    const std::optional<ttnn::MeshCoordinate>& coord) {
+    (void)coord;
+    const auto& input = tensor_args.input_tensor;
+    const auto& buffer_tensor = tensor_args.buffer_tensor;
+    const auto& batch_tensor = tensor_args.batch_offset_tensor;
+    const auto& output = tensor_return_value.all_reduce;
+    const auto& q_output = tensor_return_value.q;
+    const auto& k_output = tensor_return_value.k;
+    const auto& v_output = tensor_return_value.v;
+
+    const uint32_t input_base_addr = input.mesh_buffer().address();
+    const uint32_t semaphore_addr = operation_attributes.semaphore.address();
+    const uint32_t q_base_addr = q_output.mesh_buffer().address();
+    const uint32_t k_base_addr = k_output.mesh_buffer().address();
+    const uint32_t v_base_addr = v_output.mesh_buffer().address();
+    const uint32_t batch_base_addr = batch_tensor.mesh_buffer().address();
+
+    auto& worker_reader_args_by_core = tt::tt_metal::GetRuntimeArgs(program, kWorkerSenderReaderKernelIdx);
+    for (auto& args_by_y : worker_reader_args_by_core) {
+        for (auto& args : args_by_y) {
+            if (!args.empty()) {
+                args[0] = input_base_addr;
+            }
+        }
+    }
+
+    auto& worker_writer_args_by_core = tt::tt_metal::GetRuntimeArgs(program, kWorkerSenderWriterKernelIdx);
+    for (auto& args_by_y : worker_writer_args_by_core) {
+        for (auto& args : args_by_y) {
+            if (args.size() > 1) {
+                args[1] = semaphore_addr;
+            }
+        }
+    }
+
+    auto patch_reduction_kernel_addrs = [&](uint32_t kernel_id) {
+        auto& args_by_core = tt::tt_metal::GetRuntimeArgs(program, kernel_id);
+        for (auto& args_by_y : args_by_core) {
+            for (auto& args : args_by_y) {
+                if (args.size() > 3) {
+                    args[0] = q_base_addr;
+                    args[1] = k_base_addr;
+                    args[2] = v_base_addr;
+                    args[3] = batch_base_addr;
+                }
+            }
+        }
+    };
+    patch_reduction_kernel_addrs(kReductionReaderKernelIdx);
+    patch_reduction_kernel_addrs(kReductionWriterKernelIdx);
+
+    for (const auto& cb : program.circular_buffers()) {
+        if (!cb->globally_allocated()) {
+            continue;
+        }
+        const auto& indices = cb->buffer_indices();
+        if (indices.contains(static_cast<uint8_t>(tt::CBIndex::c_1))) {
+            tt::tt_metal::UpdateDynamicCircularBufferAddress(program, cb->id(), *buffer_tensor.buffer());
+        } else if (indices.contains(static_cast<uint8_t>(tt::CBIndex::c_2))) {
+            tt::tt_metal::UpdateDynamicCircularBufferAddress(program, cb->id(), *output.buffer());
+        }
+    }
 }
 
 }  // namespace ttnn::experimental::prim
