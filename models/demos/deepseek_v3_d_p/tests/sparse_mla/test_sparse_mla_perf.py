@@ -15,8 +15,8 @@ test_sparse_mla_perf: the CI gate (Galaxy, LoudBox). Warm and long with the prod
 K3.1's packet size), GLM-5.3 (last full indexer layer) and a GLM-5.3 shared layer (no indexer; reuses that layer's
 top-k). Untraced: fastest of UNTRACED_SAMPLES calls after UNTRACED_WARMUP discarded ones. Traced: one replay of the
 captured trace. Each (case, box, scenario, mode) is gated two-sided against PERF_TARGETS_MS ± PERF_MARGIN[mode] (a
-box without targets only reports), and the traced output must match the untraced one. Each layer runs standalone, in a
-one-slot KVPE cache: without the next layer's KV prefetch overlapped with its attention, as the first layer of a stage.
+box without targets only reports), and the traced output must match the untraced one. Each layer runs standalone
+(no next-layer KV prefetch overlapped with its attention), as the first layer of a stage.
 
 test_mla_chunked_perf: the exploration matrix (QuietBox, LoudBox, Galaxy; skipped on CI), reports only.
 GLM-5.3 (last full indexer layer, 21-slot index cache) and K3.1 x warm/cold/long x sparse with a BF16 or
@@ -513,7 +513,7 @@ def _matrix_params():
 
 @skip_with_llk_assert("LLK assertions perturb kernel timing")
 @skip_with_watcher("Watcher perturbs kernel timing")
-@pytest.mark.skipif(CI_RUN, reason="exploration matrix; CI runs the K3.1 gate above")
+@pytest.mark.skipif(CI_RUN, reason="exploration matrix; CI runs test_sparse_mla_perf")
 @pytest.mark.timeout(0)
 @pytest.mark.parametrize(
     "mesh_device, device_params, variant, scenario, attn_mode, kv_cache_format, tp_shard_kv",
