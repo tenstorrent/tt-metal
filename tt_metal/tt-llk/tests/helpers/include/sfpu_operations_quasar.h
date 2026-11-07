@@ -5,6 +5,7 @@
 #pragma once
 
 #include <cstdint>
+#include <type_traits>
 
 #include "ckernel.h"
 #include "llk_defs.h"
@@ -150,12 +151,42 @@
 
 namespace test_utils
 {
+
 using namespace ckernel;
 using namespace ckernel::math;
 using namespace ckernel::sfpu;
 
 template <auto>
 inline constexpr bool unhandled_op = false;
+
+template <sfpi::DataLayout L>
+using layout_c = std::integral_constant<sfpi::DataLayout, L>;
+
+// Calls fn(layout_c<L>{}) with the explicit SFPLOAD/SFPSTORE layout of a float Dest. A 32-bit Dest is F32 whatever
+// the family; a 16-bit Dest follows the family (F16a / F16b). Other families (MX) have no explicit layout: HW-implied.
+template <bool EN_32BIT_DEST, typename Fn>
+inline void dispatch_dest_float_layout(const DataFormat family, Fn&& fn)
+{
+    if constexpr (EN_32BIT_DEST)
+    {
+        fn(layout_c<sfpi::DataLayout::F32> {});
+    }
+    else
+    {
+        switch (family)
+        {
+            case DataFormat::Float16:
+                fn(layout_c<sfpi::DataLayout::F16a> {});
+                break;
+            case DataFormat::Float16_b:
+                fn(layout_c<sfpi::DataLayout::F16b> {});
+                break;
+            default:
+                fn(layout_c<sfpi::DataLayout::Default> {});
+                break;
+        }
+    }
+}
 
 // Mirrored by EMA_ALPHA_BITS / EMA_BETA_BITS in helpers/sfpu_dispatch_constants.py.
 inline constexpr std::uint32_t kEmaAlphaBits = 0x3F19999Au; // 0.6f
@@ -766,15 +797,12 @@ void call_unary_sfpu_operation_quasar(
     }
     else if constexpr (OPERATION == SfpuType::exponential)
     {
-        SFPU_UNARY_CALL_TINY_TILE(
-            DST_SYNC,
-            is_fp32_dest_acc_en,
-            TILE_SHAPE,
-            calculate_exponential,
-            (APPROX, is_fp32_dest_acc_en, false, ITERATIONS),
-            dst_index,
-            vector_mode,
-            p_sfpu::kCONST_1_FP16B);
+        ::ckernel::_sfpu_check_<DST_SYNC, is_fp32_dest_acc_en, TILE_SHAPE>(dst_index, vector_mode);
+        // sfpu_format is the Dest family; pick the explicit SFPLOAD/SFPSTORE layout for it.
+        dispatch_dest_float_layout<is_fp32_dest_acc_en>(
+            sfpu_format,
+            [&](auto l)
+            { ckernel::sfpu::ExpDest<APPROX, is_fp32_dest_acc_en, decltype(l)::value, ITERATIONS>::template run<TILE_SHAPE>(dst_index, vector_mode); });
     }
     else if constexpr (OPERATION == SfpuType::gelu)
     {
@@ -841,7 +869,9 @@ void call_unary_sfpu_operation_quasar(
     }
     else if constexpr (OPERATION == SfpuType::square)
     {
-        SFPU_UNARY_CALL_TINY_TILE(DST_SYNC, is_fp32_dest_acc_en, TILE_SHAPE, calculate_square, (ITERATIONS), dst_index, vector_mode);
+        ::ckernel::_sfpu_check_<DST_SYNC, is_fp32_dest_acc_en, TILE_SHAPE>(dst_index, vector_mode);
+        dispatch_dest_float_layout<is_fp32_dest_acc_en>(
+            sfpu_format, [&](auto l) { ckernel::sfpu::SquareDest<decltype(l)::value, ITERATIONS>::template run<TILE_SHAPE>(dst_index, vector_mode); });
     }
     else if constexpr (is_trig_op(OPERATION))
     {
@@ -1718,29 +1748,19 @@ void call_binary_sfpu_operation_quasar(std::uint32_t src0_tile, std::uint32_t sr
     {
         if (math_format == DataFormat::Int32)
         {
-            SFPU_BINARY_CALL_TINY_TILE(
-                DST_SYNC,
-                is_fp32_dest_acc_en,
-                TILE_SHAPE,
-                calculate_add_int,
-                (false, ITERATIONS, DataFormat::Int32, 0, SIGN_MAGNITUDE_FORMAT),
-                src0_tile,
-                src1_tile,
-                dst_tile,
-                vector_mode);
+            ::ckernel::_sfpu_binary_check_<DST_SYNC, is_fp32_dest_acc_en, TILE_SHAPE>(src0_tile, src1_tile, dst_tile, vector_mode);
+            ckernel::sfpu::AddIntDest<SIGN_MAGNITUDE_FORMAT, ITERATIONS, TILE_SHAPE>::template run<TILE_SHAPE>(src0_tile, src1_tile, dst_tile, vector_mode);
         }
         else
         {
-            SFPU_BINARY_CALL_TINY_TILE(
-                DST_SYNC,
-                is_fp32_dest_acc_en,
-                TILE_SHAPE,
-                calculate_sfpu_binary,
-                (APPROXIMATION_MODE, BinaryOp::ADD, is_fp32_dest_acc_en, dst_rounding_mode, ITERATIONS),
-                src0_tile,
-                src1_tile,
-                dst_tile,
-                vector_mode);
+            ::ckernel::_sfpu_binary_check_<DST_SYNC, is_fp32_dest_acc_en, TILE_SHAPE>(src0_tile, src1_tile, dst_tile, vector_mode);
+            dispatch_dest_float_layout<is_fp32_dest_acc_en>(
+                math_format,
+                [&](auto l)
+                {
+                    ckernel::sfpu::AddDest<is_fp32_dest_acc_en, dst_rounding_mode, decltype(l)::value, ITERATIONS, TILE_SHAPE>::template run<TILE_SHAPE>(
+                        src0_tile, src1_tile, dst_tile, vector_mode);
+                });
         }
     }
     else if constexpr (OP == BinaryOp::SUB)

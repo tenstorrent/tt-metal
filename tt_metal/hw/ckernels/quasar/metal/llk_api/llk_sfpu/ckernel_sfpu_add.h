@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <type_traits>
 
+#include "ckernel_sfpu_dest.h"
 #include "ckernel_sfpu_srcs.h"
 #include "ckernel_trisc_common.h"
 #include "cmath_common.h"
@@ -72,6 +73,24 @@ inline void calculate_add_int(
         Operand{static_cast<int>(dst_index_in1 * dst_tile_size_sfpi)},
         Operand{static_cast<int>(dst_index_out * dst_tile_size_sfpi)});
 }
+
+/** @brief Dest Int32 ADD op type: keeps the explicit-I32, index-walked loop of @ref calculate_add_int. */
+template <
+    bool SIGN_MAGNITUDE_FORMAT = false,
+    int ITERATIONS = SFPU_ITERATIONS,
+    trisc::DstTileShape TILE_SHAPE = trisc::DstTileShape::Tile32x32>
+struct AddIntDest : SfpuDestBinaryOp<AddIntDest<SIGN_MAGNITUDE_FORMAT, ITERATIONS, TILE_SHAPE>> {
+    static void calculate(
+        const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
+        calculate_add_int<
+            false /*APPROXIMATION_MODE*/,
+            ITERATIONS,
+            DataFormat::Int32,
+            0 /*INSTRUCTION_MODE*/,
+            SIGN_MAGNITUDE_FORMAT,
+            TILE_SHAPE>(dst_index_in0, dst_index_in1, dst_index_out);
+    }
+};
 
 // ADD math for a SrcS layout: float layouts add floats; I32 adds sign-magnitude Int32, which is how SrcS holds it.
 template <sfpi::DataLayout LAYOUT>
