@@ -30,6 +30,7 @@ from tests.nightly.blackhole.sdpa.test_ring_joint_sdpa import (
     assert_pcc_rmse,
     build_kv_pad_rotation_inputs,
     close_ring_joint_sdpa_runtime,
+    create_global_semaphores,
     fa_rand,
     gpt_oss_chunked_mesh_config,
     open_ring_joint_sdpa_runtime,
@@ -57,6 +58,22 @@ def _fork_supports(kwargs, joint_tensors):
     )
 
 
+def _fork_semaphores(semaphores, mesh_device, cluster_axis):
+    """The fork needs 2 + ring_size semaphores (the shared op takes 3). The extras live on the mesh device, so they
+    outlive the programs and traces that bake their addresses but not the device."""
+    semaphores = list(semaphores)
+    missing = 2 + tuple(mesh_device.shape)[cluster_axis] - len(semaphores)
+    if missing <= 0:
+        return semaphores
+    extra = getattr(mesh_device, "_gemma4_extra_halo_semaphores", [])
+    if len(extra) < missing:
+        grid = mesh_device.compute_with_storage_grid_size()
+        cores = ttnn.num_cores_to_corerangeset(grid.x * grid.y, grid, row_wise=True)
+        extra = extra + create_global_semaphores(mesh_device, cores, 0, count=missing - len(extra))
+        mesh_device._gemma4_extra_halo_semaphores = extra
+    return semaphores + extra[:missing]
+
+
 def _call_fork(q, k, v, kwargs):
     return ttnn.experimental.gemma4.sliding_ring_sdpa(
         q,
@@ -70,7 +87,9 @@ def _call_fork(q, k, v, kwargs):
         scale=kwargs.get("scale"),
         compute_kernel_config=kwargs.get("compute_kernel_config"),
         dim=kwargs["dim"],
-        multi_device_global_semaphore=kwargs["multi_device_global_semaphore"],
+        multi_device_global_semaphore=_fork_semaphores(
+            kwargs["multi_device_global_semaphore"], kwargs["mesh_device"], kwargs["cluster_axis"]
+        ),
         num_links=kwargs["num_links"],
         cluster_axis=kwargs["cluster_axis"],
         mesh_device=kwargs["mesh_device"],
@@ -287,7 +306,7 @@ def _sliding_ring_sdpa_call(
         sliding_window_size=sliding_window_size,
         compute_kernel_config=compute_kernel_config,
         dim=2,
-        multi_device_global_semaphore=ccl_semaphore_handles,
+        multi_device_global_semaphore=_fork_semaphores(ccl_semaphore_handles, mesh_device, sp_axis),
         num_links=num_links,
         cluster_axis=sp_axis,
         mesh_device=mesh_device,

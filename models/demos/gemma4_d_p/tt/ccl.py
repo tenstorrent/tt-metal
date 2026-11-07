@@ -111,10 +111,14 @@ class CCLManager:
         # asserts ccl_core_grid_offset.x < sdpa_grid.x, so both must derive from this
         # same grid (Blackhole is wider than 8x8).
         self.ring_attention_ccl_core_grid_offset = (self.compute_grid_size.x - 1, 0)
-        # Three semaphores are needed: two for forward/backward all-gather
-        # and one for neighbor-halo exchange.
+        # Global layers' ring SDPA: forward/backward all-gather, plus the shared op's halo slot (sliding
+        # layers use the fork and their own list below).
         self.ring_attention_ccl_semaphore_handles = [
             ttnn.create_global_semaphore(mesh_device, core_range_set, 0) for _ in range(3)
+        ]
+        # Sliding layers: the 2 all-gather semaphores, then one halo-arrival semaphore per CP rank.
+        self.sliding_ring_attention_ccl_semaphore_handles = self.ring_attention_ccl_semaphore_handles[:2] + [
+            ttnn.create_global_semaphore(mesh_device, core_range_set, 0) for _ in range(mesh_config.cp_degree)
         ]
         self._ring_gather_buffers = {}
 
