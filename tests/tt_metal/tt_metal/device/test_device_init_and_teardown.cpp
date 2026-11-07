@@ -9,7 +9,6 @@
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
-#include <map>
 #include <optional>
 #include <string>
 #include <variant>

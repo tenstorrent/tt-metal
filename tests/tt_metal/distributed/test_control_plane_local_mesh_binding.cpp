@@ -3,8 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <gtest/gtest.h>
-#include <fstream>
-#include <optional>
 #include <memory>
 #include <filesystem>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
@@ -13,8 +11,6 @@
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <impl/context/metal_context.hpp>
 #include "gmock/gmock.h"
-#include <fmt/format.h>
-#include "utils.hpp"
 #include <tt-umd/types/cluster_descriptor_types.hpp>
 #include <llrt/tt_cluster.hpp>
 
