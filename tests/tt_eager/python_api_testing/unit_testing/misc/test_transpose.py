@@ -976,20 +976,21 @@ def test_transpose_4d_wh_tile(shape, device):
     assert_with_pcc(torch_output, tt_output, 0.9999)
 
 
-@pytest.mark.skip("Issue: #16141 Skipping due to hang on to_layout to tile where input shape has 1 in it.")
 @pytest.mark.parametrize(
     "config",
     [
-        [[1, 1370, 1, 3, 1280], [0, -2], ttnn.TILE_LAYOUT],  # hang
-        [[1, 50, 1, 3, 768], [0, -2], ttnn.TILE_LAYOUT],  # hang
-        [[1, 50, 1, 3, 1024], [0, -2], ttnn.TILE_LAYOUT],  # hang
-        [[1, 197, 1, 3, 768], [0, -2], ttnn.TILE_LAYOUT],  # hang
-        [[1, 197, 1, 3, 1024], [0, -2], ttnn.TILE_LAYOUT],  # hang
-        [[2, 7, 2, 7, 384], [-4, -3], ttnn.TILE_LAYOUT],  # hang
+        [[1, 1370, 1, 3, 1280], [0, -2], ttnn.TILE_LAYOUT],
+        [[1, 50, 1, 3, 768], [0, -2], ttnn.TILE_LAYOUT],
+        [[1, 50, 1, 3, 1024], [0, -2], ttnn.TILE_LAYOUT],
+        [[1, 197, 1, 3, 768], [0, -2], ttnn.TILE_LAYOUT],
+        [[1, 197, 1, 3, 1024], [0, -2], ttnn.TILE_LAYOUT],
+        [[2, 7, 2, 7, 384], [-4, -3], ttnn.TILE_LAYOUT],
     ],
 )
 @pytest.mark.parametrize("memory_config", [ttnn.L1_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG])
-def test_transpose_failures(config, memory_config, device):
+def test_transpose_rank5_tile(config, memory_config, device):
+    if memory_config == ttnn.L1_MEMORY_CONFIG and config[0] == [1, 1370, 1, 3, 1280]:
+        pytest.skip("Tile-padded input (about 112 MB) does not fit in L1")
     torch.manual_seed(2005)
     torch_input = torch.randn(config[0], dtype=torch.bfloat16)
     torch_output = torch_input.transpose(config[1][0], config[1][1])
