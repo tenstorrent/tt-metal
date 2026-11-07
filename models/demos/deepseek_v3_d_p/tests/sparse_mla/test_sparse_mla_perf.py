@@ -300,6 +300,80 @@ _BOX = _BOX_BY_DEVICE_COUNT.get(detect_num_devices())
 _FABRIC_PAYLOAD = {"kimi_k3_1": KimiK31Config, "glm_5_3": GLM53Config}
 
 
+def _cpu_busy(interval_s=0.5):
+    """Host-wide busy fraction of each CPU over `interval_s`, from /proc/stat; {} if unavailable."""
+
+    def read():
+        with open("/proc/stat") as f:
+            return {
+                int(cols[0][3:]): [int(x) for x in cols[1:]]
+                for cols in (line.split() for line in f)
+                if cols and cols[0].startswith("cpu") and cols[0][3:].isdigit()
+            }
+
+    try:
+        before = read()
+        time.sleep(interval_s)
+        after = read()
+    except (OSError, ValueError):
+        return {}
+    busy = {}
+    for cpu, t1 in after.items():
+        d = [b - a for a, b in zip(before.get(cpu, t1), t1)]
+        total = sum(d)
+        if total > 0:
+            busy[cpu] = 1.0 - (d[3] + d[4]) / total  # idle + iowait
+    return busy
+
+
+def _smt_siblings(cpu):
+    try:
+        with open(f"/sys/devices/system/cpu/cpu{cpu}/topology/thread_siblings_list") as f:
+            text = f.read().strip()
+    except OSError:
+        return {cpu}
+    out = set()
+    for part in text.split(","):
+        lo, _, hi = part.partition("-")
+        out.update(range(int(lo), int(hi or lo) + 1))
+    return out
+
+
+# CPUs at least this busy before the device opens are taken to be another process's busy-poll threads (on Weka hosts,
+# wekanode polls 2 CPUs at ~98%: DIIM-604 / DIIM-761) and are excluded, with their SMT siblings.
+BUSY_POLL_FRACTION = 0.9
+MIN_ALLOWED_CPUS = 8
+
+
+@pytest.fixture(autouse=True)
+def avoid_busy_poll_cpus():
+    """Keep this process's threads off CPUs another process busy-polls, before the device opens and creates its threads.
+
+    Untraced time is host dispatch; a dispatch thread that lands on (or next to) a busy-poll CPU adds about 1 ms per
+    forward until it moves, which shows up on CI as a slow mode that comes and goes. Every existing thread gets the new
+    mask, and threads created later inherit it. Prints what it found either way.
+    """
+    allowed = os.sched_getaffinity(0)
+    busy = _cpu_busy()
+    hot = {cpu for cpu, frac in busy.items() if frac >= BUSY_POLL_FRACTION}
+    excluded = set().union(*(_smt_siblings(cpu) for cpu in hot)) & allowed if hot else set()
+    keep = allowed - excluded
+    applied = bool(excluded) and len(keep) >= MIN_ALLOWED_CPUS
+    if applied:
+        for tid in os.listdir("/proc/self/task"):
+            try:
+                os.sched_setaffinity(int(tid), keep)
+            except OSError:
+                pass
+    top = sorted(busy.items(), key=lambda kv: -kv[1])[:6]
+    print(  # print, not logger: CI runs perf jobs at LOGURU_LEVEL=ERROR
+        f"host CPUs: busiest {', '.join(f'{c}:{f:.0%}' for c, f in top) or 'unavailable'}; "
+        f"busy-poll {_cpu_ranges(sorted(hot)) or 'none'}; "
+        + (f"excluded {_cpu_ranges(sorted(excluded))}, now {len(keep)} CPUs" if applied else "affinity unchanged")
+    )
+    yield
+
+
 def _gate_params():
     if _BOX is None:
         return [
