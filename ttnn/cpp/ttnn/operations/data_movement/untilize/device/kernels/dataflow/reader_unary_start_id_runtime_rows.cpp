@@ -11,7 +11,7 @@
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
 #include "experimental/kernel_args.h"
-#include "ttnn/operations/data_movement/untilize/device/kernels/untilize_row_split.hpp"
+#include "ttnn/operations/common/shared_with_host/runtime_length.hpp"
 
 void kernel_main() {
     // RUNTIME ARGS
@@ -22,7 +22,7 @@ void kernel_main() {
     constexpr uint32_t tiles_per_row = get_arg(args::tiles_per_row);
     constexpr uint32_t num_cores = get_arg(args::num_cores);
 
-    const auto [row_start, row_end] = untilize_row_range(core_idx, num_tile_rows, num_cores);
+    const auto [row_start, row_end] = ttnn::runtime_length::chunked_range(core_idx, num_tile_rows, num_cores);
     const uint32_t start_id = row_start * tiles_per_row;
     const uint32_t end_page_id = row_end * tiles_per_row;
 

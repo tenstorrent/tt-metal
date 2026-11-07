@@ -14,7 +14,7 @@
 #include "api/tensor/noc_traits.h"
 #include "ttnn/operations/embedding/device/kernels/dataflow/embeddings_common.hpp"
 #include "experimental/kernel_args.h"
-#include "ttnn/operations/embedding/device/kernels/embeddings_fused_split.hpp"
+#include "ttnn/operations/common/shared_with_host/runtime_length.hpp"
 
 void kernel_main() {
     Noc noc;
@@ -32,7 +32,8 @@ void kernel_main() {
     const uint32_t core_idx = get_arg(args::core_idx);
     const uint32_t blocks_per_batch = get_arg(args::blocks_per_batch);
 
-    const auto [start_block, end_block] = embeddings_fused_block_range(core_idx, blocks_per_batch, batch, num_cores);
+    const auto [start_block, end_block] =
+        ttnn::runtime_length::balanced_range(core_idx, batch * blocks_per_batch, num_cores);
     const uint32_t input_start_id = start_block / blocks_per_batch;
     const uint32_t input_start_offset = (start_block % blocks_per_batch) * input_block_size_bytes;
     const uint32_t num_blocks = end_block - start_block;
@@ -103,9 +104,10 @@ void kernel_main() {
             for (uint32_t k = 0; k < tile_height; ++k) {
                 input_token_t token;
                 {
-                    // The NoC rewrites this scratchpad with each new index block, so on Quasar the DM
-                    // core's L2 may still hold the previous block; scoped_lock invalidates the line
-                    // before the read. No-op on WH/BH.
+                    // On Quasar the data-movement core reads L1 through a cache. The NoC writes each
+                    // new index block straight into L1, so a plain load could return the previous
+                    // block's stale cached line; scoped_lock invalidates that line before the read.
+                    // No-op on Wormhole and Blackhole.
                     auto index_lock = index_scratch.scoped_lock(k, 1);
                     token = index_scratch[k];
                 }
