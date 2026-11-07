@@ -25,9 +25,12 @@ scaled-FP8 cache / dense ring-MLA baseline. Narrow with -k, e.g. -k "glm_5_3 and
 """
 
 import copy
+import ctypes
+import errno
 import gc
 import os
 import resource
+import threading
 import time
 from dataclasses import dataclass
 
@@ -300,90 +303,95 @@ _BOX = _BOX_BY_DEVICE_COUNT.get(detect_num_devices())
 _FABRIC_PAYLOAD = {"kimi_k3_1": KimiK31Config, "glm_5_3": GLM53Config}
 
 
-def _cpu_busy(interval_s=0.5):
-    """Host-wide busy fraction of each CPU over `interval_s`, from /proc/stat; {} if unavailable."""
+class _SchedAttr(ctypes.Structure):
+    _fields_ = [
+        ("size", ctypes.c_uint32),
+        ("sched_policy", ctypes.c_uint32),
+        ("sched_flags", ctypes.c_uint64),
+        ("sched_nice", ctypes.c_int32),
+        ("sched_priority", ctypes.c_uint32),
+        ("sched_runtime", ctypes.c_uint64),
+        ("sched_deadline", ctypes.c_uint64),
+        ("sched_period", ctypes.c_uint64),
+        ("sched_util_min", ctypes.c_uint32),
+        ("sched_util_max", ctypes.c_uint32),
+    ]
 
-    def read():
-        with open("/proc/stat") as f:
-            return {
-                int(cols[0][3:]): [int(x) for x in cols[1:]]
-                for cols in (line.split() for line in f)
-                if cols and cols[0].startswith("cpu") and cols[0][3:].isdigit()
-            }
 
+_SYS_SCHED_SETATTR, _SYS_SCHED_GETATTR = 314, 315  # x86_64
+_SCHED_FLAG_KEEP_ALL, _SCHED_FLAG_UTIL_CLAMP_MIN = 0x08 | 0x10, 0x20
+_UCLAMP_MAX = 1024
+_UCLAMP_RESET = 0xFFFFFFFF  # back to the kernel default (Linux >= 5.11)
+
+
+def _cpufreq_governor(cpu):
     try:
-        before = read()
-        time.sleep(interval_s)
-        after = read()
-    except (OSError, ValueError):
-        return {}
-    busy = {}
-    for cpu, t1 in after.items():
-        d = [b - a for a, b in zip(before.get(cpu, t1), t1)]
-        total = sum(d)
-        if total > 0:
-            busy[cpu] = 1.0 - (d[3] + d[4]) / total  # idle + iowait
-    return busy
-
-
-def _smt_siblings(cpu):
-    try:
-        with open(f"/sys/devices/system/cpu/cpu{cpu}/topology/thread_siblings_list") as f:
-            text = f.read().strip()
+        with open(f"/sys/devices/system/cpu/cpu{max(cpu, 0)}/cpufreq/scaling_governor") as f:
+            return f.read().strip()
     except OSError:
-        return {cpu}
-    out = set()
-    for part in text.split(","):
-        lo, _, hi = part.partition("-")
-        out.update(range(int(lo), int(hi or lo) + 1))
-    return out
+        return "unknown"
 
 
-# CPUs at least this busy are another process's busy-poll threads (on Weka hosts wekanode polls 2 CPUs at ~98%:
-# DIIM-604); the dispatching thread's core avoids them.
-BUSY_POLL_FRACTION = 0.9
+def _set_util_min(libc, tid, value):
+    """sched_setattr(uclamp_min) on one thread, keeping its policy and parameters; returns 0 or an errno."""
+    attr = _SchedAttr(
+        size=ctypes.sizeof(_SchedAttr),
+        sched_flags=_SCHED_FLAG_KEEP_ALL | _SCHED_FLAG_UTIL_CLAMP_MIN,
+        sched_util_min=value,
+    )
+    return 0 if libc.syscall(_SYS_SCHED_SETATTR, tid, ctypes.byref(attr), 0) == 0 else ctypes.get_errno()
 
 
-def _isolate_dispatch_core():
-    """Give the main (dispatching) thread a physical core to itself; returns a function that restores every mask.
+def _tids():
+    return [int(t) for t in os.listdir("/proc/self/task")]
 
-    Untraced time is host dispatch on this thread. tt-metal's real-time profiler runs unpinned threads that poll
-    continuously; when one shares the main thread's core (SMT sibling), dispatch runs ~30% slower until the scheduler
-    moves it, which shows up as a sticky slow mode. Pin the main thread to one CPU whose core no busy-poll CPU shares,
-    and move every other thread of this process off that core (a thread pinned only there goes to another CPU).
+
+def _full_clock():
+    """Ask schedutil for full clock on every thread of this process while timing; returns (message, restore).
+
+    Untraced time is host dispatch, and a forward/sync loop blocks for part of each iteration, so a utilization-driven
+    governor (schedutil) can leave the dispatching core at a low frequency for a long time. On the EPYC dev host
+    (acpi-cpufreq: 3.25 GHz base with boost to 3.8 GHz, lower states 2.3 and 1.5 GHz) that shows up as discrete untraced slow levels (GLM
+    shared layer 1.8 vs 2.8 ms, same work, main-thread CPU time == wall). A minimum utilization clamp (uclamp_min) makes
+    schedutil request the policy maximum while the thread runs. It needs no privilege and changes no affinity. Other
+    governors ignore it: `performance` already runs at the maximum; active intel_pstate/amd-pstate (EPP) do not use it.
+
+    Threads created while it is set inherit the clamp from their creator, so restore() resets every thread of the
+    process to the kernel default (Linux >= 5.11), not only the ones seen here; nothing in tt-metal sets a clamp of its
+    own. Child processes started meanwhile (e.g. kernel compiles) also inherit it and keep it until they exit.
     """
-    main = os.getpid()
-    allowed = sorted(os.sched_getaffinity(0))
-    hot = {cpu for cpu, frac in _cpu_busy().items() if frac >= BUSY_POLL_FRACTION}
-    current = _host_cpu()
-    candidates = [current] + [c for c in allowed if c != current]
-    cpu = next((c for c in candidates if c in allowed and not (_smt_siblings(c) & hot)), None)
-    if cpu is None:
-        return "no free core; affinity unchanged", lambda: None
-    core = _smt_siblings(cpu)
-    spare = [c for c in allowed if c not in core and c not in hot] or [c for c in allowed if c not in core]
-    saved, moved = {}, 0
-    for tid in (int(t) for t in os.listdir("/proc/self/task")):
-        try:
-            mask = os.sched_getaffinity(tid)
-            saved[tid] = mask
-            if tid == main:
-                os.sched_setaffinity(tid, {cpu})
-            elif mask & core:
-                keep = mask - core
-                os.sched_setaffinity(tid, keep or {spare[moved % len(spare)]})
-                moved += 1
-        except OSError:
-            pass  # thread exited
+    governor = _cpufreq_governor(_host_cpu())
+    effect = "" if governor == "schedutil" else f" (no effect under governor {governor})"
+    if os.uname().machine != "x86_64":
+        return f"governor {governor}; clock clamp unsupported on {os.uname().machine}", lambda: None
+    libc = ctypes.CDLL(None, use_errno=True)
+    main = threading.get_native_id()
+    tids = _tids()
+    clamped, errors = 0, {}
+    for tid in tids:
+        err = _set_util_min(libc, tid, _UCLAMP_MAX)
+        if err == 0:
+            clamped += 1
+        elif err != errno.ESRCH:  # ESRCH: the thread exited
+            errors.setdefault(os.strerror(err), []).append("main" if tid == main else tid)
 
     def restore():
-        for tid, mask in saved.items():
-            try:
-                os.sched_setaffinity(tid, mask)
-            except OSError:
-                pass
+        tids = _tids()
+        failed = {}
+        for tid in tids:
+            err = _set_util_min(libc, tid, _UCLAMP_RESET)
+            if err not in (0, errno.ESRCH):
+                failed.setdefault(os.strerror(err), []).append(tid)
+        if failed:  # e.g. EINVAL on kernels before 5.11; the clamp then stays set on those threads
+            print(
+                f"uclamp_min reset failed on {sum(map(len, failed.values()))}/{len(tids)} threads: "
+                + "; ".join(f"{e} ({', '.join(map(str, t[:4]))})" for e, t in failed.items())
+            )
 
-    return f"main on CPU {cpu} (core {_cpu_ranges(sorted(core))}), {moved} other threads moved off it", restore
+    status = f"uclamp_min {_UCLAMP_MAX} on {clamped}/{len(tids)} threads{effect}"
+    if errors:
+        status += "; failed: " + "; ".join(f"{e} ({', '.join(map(str, t[:4]))})" for e, t in errors.items())
+    return f"governor {governor}; {status}", restore
 
 
 def _gate_params():
@@ -634,9 +642,9 @@ def test_sparse_mla_perf(request, mesh_device, device_params, variant, case_name
         shared_layer=shared_layer,
     )
     start = cache
-    isolation, restore_affinity = _isolate_dispatch_core()
-    request.addfinalizer(restore_affinity)
-    print(f"{label} host: {isolation}")
+    clock, restore_clock = _full_clock()
+    request.addfinalizer(restore_clock)
+    print(f"{label} host: {clock}")
     samples = {}
     cpus = []
     eager_repeat, traced_repeat = [], []
