@@ -353,8 +353,9 @@ inline void llk_pack_block_per_tile(const std::uint32_t start_tile_index, const 
 
 // guard_dest_straddle: for a caller whose start tile index is not a constant 0: two block-float tiles that straddle a four tile boundary of DEST (tiles 3 and 4)
 // read 6 cycles slower as a closed block than packed one by one, so they take the per-tile path. Off by default, the check costs instructions in the callers that pass 0.
+// Out of line, a short block pays the call and the descriptor checks (+0.7 % on a groupnorm).
 template <bool is_fp32_dest_acc_en, bool guard_dest_straddle = false>
-inline void llk_pack_block(std::uint32_t start_tile_index, std::uint32_t output, std::uint32_t ntiles) {
+__attribute__((always_inline)) inline void llk_pack_block(std::uint32_t start_tile_index, std::uint32_t output, std::uint32_t ntiles) {
     std::uint8_t output_id = get_output_id(output);
 #ifndef LLK_PACK_W_OFFSET
     _llk_pack_close_fast_untilize_<DST_SYNC_MODE>();
