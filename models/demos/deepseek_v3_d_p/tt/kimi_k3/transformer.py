@@ -435,10 +435,6 @@ class TtKimiK3Transformer(LightweightModule):
             def attn_input_tap(local_idx, hidden):
                 on_layer_hidden(first + local_idx - 1, hidden)
 
-        if index_kv_cache is not None and not self.has_indexer:
-            raise ValueError("Kimi-K3 has no DSA indexer; index_kv_cache must be None")
-        if index_kv_cache is None and self.has_indexer and self.schedule.num_mla_layers:
-            raise ValueError("Kimi-K3.1's DSA layers write and read an indexer key cache; pass index_kv_cache")
         if return_intermediates:
             raise NotImplementedError("Kimi-K3 does not implement return_intermediates")
         if (
@@ -449,6 +445,10 @@ class TtKimiK3Transformer(LightweightModule):
             or mtp_geometry is not None
         ):
             raise ValueError("Kimi-K3 has no MTP predictor; MTP forward arguments must be left at their defaults")
+        if index_kv_cache is not None and not self.has_indexer:
+            raise ValueError("Kimi-K3 has no DSA indexer; index_kv_cache must be None")
+        if index_kv_cache is None and self.has_indexer and self.schedule.num_mla_layers:
+            raise ValueError("Kimi-K3.1's DSA layers write and read an indexer key cache; pass index_kv_cache")
         # The constructor argument is the channel `TtPrefillTransformer` uses (it reads
         # `self.padding_side` and takes no per-call value), so defaulting the keyword to "right"
         # here made a `padding_side="left"` model mask the wrong end of every chunk.
