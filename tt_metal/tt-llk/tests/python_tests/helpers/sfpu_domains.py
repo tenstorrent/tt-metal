@@ -1142,6 +1142,8 @@ BINARY_SPECIALS_READY_OPS: frozenset[MathOperation] = frozenset(
         # (special, special) grid on Blackhole once the harness runs isclose_init.
         MathOperation.SfpuIsclose,
         MathOperation.SfpuIscloseEqualNan,
+        # A NaN reaches the product through a multiply-add; the kernel gives its golden's class.
+        MathOperation.SfpuGegluTanh,
     }
 )
 
@@ -1163,6 +1165,9 @@ _BINARY_SPECIALS_NOT_READY: frozenset[MathOperation] = frozenset(
         MathOperation.SfpuMaskPosinf,
         MathOperation.SfpuLogsigmoid,
         MathOperation.SfpuCopyDest,
+        # At these special pairs (gate, up) the kernel and its golden differ: (-100, +inf) gives nan where
+        # the golden gives -inf; (-100, -inf) gives nan where the golden gives +inf.
+        MathOperation.SfpuSiluGlu,
     }
 )
 

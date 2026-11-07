@@ -16,6 +16,12 @@
 // 1. Include the metal header below: #include "llk_sfpu/<operation>.h"
 // 2. Add the operation enum to SfpuType in llk_sfpu_types.h
 // 3. Add the if constexpr branches in call_unary_sfpu_operation_init() and call_unary_sfpu_operation() below
+#ifdef ARCH_BLACKHOLE
+#include "llk_sfpu/ckernel_sfpu_silu_glu.h"
+#endif
+#ifdef ARCH_BLACKHOLE
+#include "llk_sfpu/ckernel_sfpu_geglu_tanh.h"
+#endif
 #include "llk_sfpu/ckernel_sfpu_abs.h"
 #include "llk_sfpu/ckernel_sfpu_activations.h"
 #include "llk_sfpu/ckernel_sfpu_add1.h"
@@ -1903,6 +1909,18 @@ void call_binary_sfpu_operation_init([[maybe_unused]] std::uint32_t zero_point =
         // polynomial coefficients the Wormhole kernel keeps in vConstFloatPrgm0..2.
         SFPU_BINARY_INIT_FN(add1, logsigmoid_init, (APPROXIMATION_MODE));
     }
+#ifdef ARCH_BLACKHOLE
+    else if constexpr (BINOP == BinaryOp::GEGLU_TANH)
+    {
+        SFPU_BINARY_INIT_FN_NO_ARGS(unused, sfpu::geglu_tanh_init);
+    }
+#endif
+#ifdef ARCH_BLACKHOLE
+    else if constexpr (BINOP == BinaryOp::SILU_GLU)
+    {
+        SFPU_BINARY_INIT_FN_NO_ARGS(unused, sfpu::silu_glu_init);
+    }
+#endif
     else
     {
         // BinaryOps without a dedicated SfpuType use the baseline binary addrmod setup.
@@ -2377,6 +2395,29 @@ void call_binary_sfpu_operation(
             dst_index_out,
             vector_mode);
     }
+#ifdef ARCH_BLACKHOLE
+    else if constexpr (BINOP == BinaryOp::GEGLU_TANH)
+    {
+        // geglu_tanh(gate, up) with gate = in0 and up = in1; DST_ACCUM_MODE selects the in-kernel BF16 round.
+        SFPU_BINARY_CALL(
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            calculate_geglu_tanh,
+            (DST_ACCUM_MODE, PER_FACE_ITERATIONS),
+            dst_index_in0,
+            dst_index_in1,
+            dst_index_out,
+            vector_mode);
+    }
+#endif
+#ifdef ARCH_BLACKHOLE
+    else if constexpr (BINOP == BinaryOp::SILU_GLU)
+    {
+        // silu_glu(gate, up) with gate = in0 and up = in1; DST_ACCUM_MODE selects the in-kernel BF16 round.
+        SFPU_BINARY_CALL(
+            DST_SYNC_MODE, DST_ACCUM_MODE, calculate_silu_glu, (DST_ACCUM_MODE, PER_FACE_ITERATIONS), dst_index_in0, dst_index_in1, dst_index_out, vector_mode);
+    }
+#endif
     // Integer relational eq/ne: XOR-based exact compare over Int32 dest bits.
     else if constexpr (BINOP == BinaryOp::EQ_INT || BINOP == BinaryOp::NE_INT)
     {
