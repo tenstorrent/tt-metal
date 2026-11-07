@@ -30,6 +30,9 @@
 #   MNBT             --max-num-batched-tokens, the prefill chunk (default 4096, as tt-inference-server's MiMo spec)
 #   APC_RETENTION    --prefix-cache-retention-interval (default 1024; vLLM's 0 keeps a SWA layer's cached KV only at the
 #                    end of each prompt, see doc/vllm_integration/README.md)
+#   TT_PROXY_*       lb.py's request shim (see its docstring): TT_PROXY_FETCH_MEDIA=1 downloads http(s) media in the
+#                    proxy (400 on failure; set it when serving image / video / audio), TT_PROXY_MAX_REQUEST_MB (256),
+#                    TT_PROXY_PCM_SAMPLE_RATE (24000), TT_PROXY_REQUEST_SHIM=0 turns the rewrites off
 #   MIMO_KV_GB_PER_CHIP  the model's KV pool per chip; unset, the model's default (6.7 with the global KV pair split,
 #                    vLLM's default: 4 x 1M per row), which is what tt-inference-server's MiMo spec sets
 #   STOP_TIMEOUT     seconds the engines get to stop on SIGINT before SIGKILL (default 120)

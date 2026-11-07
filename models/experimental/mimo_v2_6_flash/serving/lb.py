@@ -30,7 +30,13 @@ Multimodal requests in OpenRouter's forms (``Shim``; ``--no-request-shim`` turns
   needing none of that is forwarded byte for byte;
 - vLLM's 422 (a media URL that could not be fetched) is answered as 400 with vLLM's message (``map_error``): OpenRouter
   counts 400 as the caller's error, 422 in neither list;
-- a body above ``--max-request-mb`` is refused with 413.
+- a body above ``--max-request-mb`` is refused with 413;
+- with ``--fetch-media`` (env ``TT_PROXY_FETCH_MEDIA=1``) the proxy itself downloads a chat request's http(s) image /
+  video / audio URLs (bounded time and size) and inlines them as data URIs, answering 400 when a download fails: vLLM
+  0.30 turns a media host's 5xx, 408, 429, timeout or DNS failure into a 500, which OpenRouter counts against uptime.
+
+Each setting also reads an env var (``TT_PROXY_*``, see ``Shim.from_env``), the names tt-inference-server's copy of this
+proxy (``vllm-tt-metal/src/engine_proxy.py``) uses.
 
 Usage: lb.py --port 8000 --backends 127.0.0.1:8001,127.0.0.1:8002,...
 """
@@ -43,19 +49,22 @@ import hashlib
 import io
 import itertools
 import json
+import mimetypes
+import os
 import re
 import time
 import wave
+from functools import partial
 from collections import OrderedDict
 
-from aiohttp import ClientConnectorError, ClientSession, ClientTimeout, TCPConnector, web
+from aiohttp import ClientConnectorError, ClientError, ClientSession, ClientTimeout, TCPConnector, web
 
 HOP = {"connection", "keep-alive", "transfer-encoding", "content-length", "content-encoding", "upgrade", "host"}
 PREFIX_PATHS = ("/v1/chat/completions", "/v1/completions", "/v1/responses")
 SAMPLE = re.compile(r"^([a-zA-Z_:][a-zA-Z0-9_:]*)(?:\{(.*)\})?(\s.*)$")  # name, labels, value [timestamp]
 LABEL = re.compile(r'([a-zA-Z_][a-zA-Z0-9_]*)="((?:[^"\\]|\\.)*)"')
 PROBE_TIMEOUT_S = 10.0  # an engine's /health or /metrics answer; generation requests have no timeout
-OFFLOAD_BYTES = 256 << 10  # bodies above this are parsed / rewritten / keyed in a worker thread, off the event loop
+OFFLOAD_BYTES = 256 << 10  # bodies above this are parsed / rewritten / keyed in a worker thread
 
 # Content-part keys whose value is media: a URL or base64 string, or a dict holding one under "url" / "data".
 MEDIA_KEYS = ("image_url", "video_url", "audio_url", "input_audio", "file_data")
@@ -309,6 +318,102 @@ def error_body(status, message, kind):
     return json.dumps({"error": {"message": message, "type": kind, "code": status}}).encode()
 
 
+# Content-part keys whose http(s) URL the proxy may download and inline (OpenRouter's audio is base64 only; vLLM's own
+# audio_url form can be a URL).
+REMOTE_MEDIA_KEYS = ("image_url", "video_url", "audio_url")
+
+
+def _part_url(value):
+    if isinstance(value, str):
+        return value
+    if isinstance(value, dict) and isinstance(value.get("url"), str):
+        return value["url"]
+    return None
+
+
+def remote_media_urls(req):
+    """The distinct http(s) URLs of a chat request's image / video / audio parts, in prompt order."""
+    urls = []
+    for message in req.get("messages") or []:
+        content = message.get("content") if isinstance(message, dict) else None
+        for part in content if isinstance(content, list) else []:
+            if not isinstance(part, dict):
+                continue
+            for key in REMOTE_MEDIA_KEYS:
+                url = _part_url(part.get(key))
+                if url and url.lower().startswith(("http://", "https://")) and url not in urls:
+                    urls.append(url)
+    return urls
+
+
+def inline_media(req, data_uris):
+    """``req`` with every media URL in ``data_uris`` ({url: data URI}) replaced by its data URI (``req`` untouched)."""
+    messages = []
+    for message in req.get("messages") or []:
+        content = message.get("content") if isinstance(message, dict) else None
+        if isinstance(content, list):
+            parts = []
+            for part in content:
+                if isinstance(part, dict):
+                    for key in REMOTE_MEDIA_KEYS:
+                        url = _part_url(part.get(key))
+                        if url in data_uris:
+                            value = part[key]
+                            new = data_uris[url] if isinstance(value, str) else dict(value, url=data_uris[url])
+                            part = dict(part, **{key: new})
+                parts.append(part)
+            message = dict(message, content=parts)
+        messages.append(message)
+    return dict(req, messages=messages)
+
+
+def media_type(content_type, url):
+    """The MIME type for a downloaded file's data URI: the server's media Content-Type, else a guess from the URL's
+    extension, else application/octet-stream (vLLM decodes by content, not by the declared type)."""
+    declared = (content_type or "").split(";", 1)[0].strip().lower()
+    if declared.startswith(("image/", "video/", "audio/")):
+        return declared
+    guessed = mimetypes.guess_type(url.split("?", 1)[0])[0]
+    return guessed or "application/octet-stream"
+
+
+async def fetch_media(session, urls, timeout_s, max_bytes):
+    """{url: data URI} for every URL, downloaded concurrently, each within ``timeout_s`` and ``max_bytes``. Raises
+    ShimError (answered 400) naming the first URL that failed: non-200, too large, timeout, connection error."""
+
+    async def one(url):
+        where = url if len(url) <= 200 else url[:200] + "..."
+        try:
+            async with session.get(url, timeout=ClientTimeout(total=timeout_s)) as resp:
+                if resp.status != 200:
+                    raise ShimError(f"Failed to fetch media from URL: HTTP {resp.status} error ({where})")
+                if resp.content_length is not None and resp.content_length > max_bytes:
+                    raise ShimError(f"Failed to fetch media from URL: larger than {max_bytes} bytes ({where})")
+                data = bytearray()
+                async for chunk in resp.content.iter_chunked(1 << 16):
+                    data += chunk
+                    if len(data) > max_bytes:
+                        raise ShimError(f"Failed to fetch media from URL: larger than {max_bytes} bytes ({where})")
+                mime = media_type(resp.headers.get("Content-Type"), url)
+        except asyncio.TimeoutError:
+            raise ShimError(f"Failed to fetch media from URL: no answer within {timeout_s:g} s ({where})") from None
+        except ClientError as exc:
+            raise ShimError(f"Failed to fetch media from URL: {type(exc).__name__}: {exc} ({where})") from None
+        encoded = await asyncio.get_running_loop().run_in_executor(None, base64.b64encode, bytes(data))
+        return url, f"data:{mime};base64," + encoded.decode("ascii")
+
+    results = await asyncio.gather(*(one(url) for url in urls), return_exceptions=True)
+    for result in results:
+        if isinstance(result, BaseException):
+            raise result
+    return dict(results)
+
+
+def _env_flag(name, default):
+    value = os.environ.get(name)
+    return default if value in (None, "") else value.strip().lower() in ("1", "true", "yes", "on")
+
+
 @dataclasses.dataclass
 class Shim:
     enabled: bool = True
@@ -319,21 +424,70 @@ class Shim:
     pcm_channels: int = 1
     fix_flac: bool = True
     max_request_bytes: int = 256 << 20
+    # Download http(s) media in the proxy (off by default: a text-only deployment never needs it).
+    fetch_media: bool = False
+    fetch_timeout_s: float = 30.0
+    fetch_max_bytes: int = 100 << 20
+
+    @classmethod
+    def from_env(cls, **overrides):
+        """Defaults from the TT_PROXY_* env vars (as tt-inference-server sets them per model spec), then overrides."""
+        env = dict(
+            enabled=_env_flag("TT_PROXY_REQUEST_SHIM", True),
+            pcm_sample_rate=int(os.environ.get("TT_PROXY_PCM_SAMPLE_RATE") or 24000),
+            max_request_bytes=int(float(os.environ.get("TT_PROXY_MAX_REQUEST_MB") or 256) * 2**20),
+            fetch_media=_env_flag("TT_PROXY_FETCH_MEDIA", False),
+            fetch_timeout_s=float(os.environ.get("TT_PROXY_FETCH_TIMEOUT_S") or 30),
+            fetch_max_bytes=int(float(os.environ.get("TT_PROXY_FETCH_MAX_MB") or 100) * 2**20),
+        )
+        env.update({k: v for k, v in overrides.items() if v is not None})
+        return cls(**env)
+
+
+def rewrite(path, body, shim):
+    """(parsed request, its rewrite): (None, None) when the body is not a JSON object on a prefix path; the rewrite is
+    the parsed request itself when the shim changes nothing."""
+    req = parse_json(body) if path in PREFIX_PATHS else None
+    if req is None:
+        return None, None
+    if shim.enabled and path == "/v1/chat/completions":
+        return req, rewrite_chat(req, shim)
+    return req, req
+
+
+def finish(path, body, req, new, chunk_chars):
+    """(body to forward, prefix hashes): the original bytes unless the request was rewritten."""
+    if req is None:
+        return body, []
+    if new is not req:
+        body = json.dumps(new, ensure_ascii=False).encode()
+    text = prefix_text_of(path, new)
+    return body, ([] if text is None else chunk_hashes(text, chunk_chars))
 
 
 def prepare(path, body, shim, chunk_chars):
-    """(body to forward, prefix hashes) for a POST: the shim's rewrite of a chat request (the original bytes when
-    nothing changed) and its prefix keys. Raises ShimError (answered 400)."""
-    req = parse_json(body) if path in PREFIX_PATHS else None
-    if req is None:
-        return body, []
-    if shim.enabled and path == "/v1/chat/completions":
-        new = rewrite_chat(req, shim)
-        if new is not req:
-            req = new
-            body = json.dumps(req, ensure_ascii=False).encode()
-    text = prefix_text_of(path, req)
-    return body, ([] if text is None else chunk_hashes(text, chunk_chars))
+    """(body to forward, prefix hashes) for a POST, without media downloads: the shim's rewrite of a chat request (the
+    original bytes when nothing changed) and its prefix keys. Raises ShimError (answered 400)."""
+    req, new = rewrite(path, body, shim)
+    return finish(path, body, req, new, chunk_chars)
+
+
+async def prepare_async(path, body, shim, chunk_chars, session):
+    """``prepare`` in the proxy: large bodies off the event loop, and with ``shim.fetch_media`` the chat request's
+    http(s) media downloaded and inlined. Raises ShimError (answered 400)."""
+    loop = asyncio.get_running_loop()
+
+    async def run(big, fn, *args):
+        return await loop.run_in_executor(None, partial(fn, *args)) if big else fn(*args)
+
+    big = len(body) > OFFLOAD_BYTES  # parsing / hashing a media body inline would stall every stream
+    req, new = await run(big, rewrite, path, body, shim)
+    if new is not None and shim.enabled and shim.fetch_media and path == "/v1/chat/completions":
+        urls = remote_media_urls(new)
+        if urls:
+            new = inline_media(new, await fetch_media(session, urls, shim.fetch_timeout_s, shim.fetch_max_bytes))
+            big = True
+    return await run(big, finish, path, body, req, new, chunk_chars)
 
 
 def chunk_hashes(text, chunk_chars):
@@ -469,7 +623,7 @@ class Router:
 
 
 def make_app(router, session_factory=None, shim=None):
-    shim = shim or Shim()
+    shim = shim or Shim.from_env()
     state = {}
 
     async def proxy(request: web.Request):
@@ -482,10 +636,7 @@ def make_app(router, session_factory=None, shim=None):
         hashes = []
         if request.method == "POST" and request.path in PREFIX_PATHS:
             try:
-                if len(body) > OFFLOAD_BYTES:  # a media body: parsing and hashing it would stall every stream
-                    body, hashes = await asyncio.to_thread(prepare, request.path, body, shim, router.chunk_chars)
-                else:
-                    body, hashes = prepare(request.path, body, shim, router.chunk_chars)
+                body, hashes = await prepare_async(request.path, body, shim, router.chunk_chars, state["session"])
             except ShimError as exc:
                 router.stats["shim_rejected"] += 1
                 return web.Response(
@@ -592,16 +743,23 @@ def main():
     ap.add_argument("--slack", type=int, default=2, help="in-flight requests a prefix holder may run above the least")
     ap.add_argument("--index-chunks", type=int, default=262144, help="LRU capacity of the prefix index")
     ap.add_argument("--down-s", type=float, default=5.0, help="how long an engine that refused a connection is skipped")
-    ap.add_argument("--max-request-mb", type=float, default=256, help="larger request bodies are refused with 413")
-    ap.add_argument("--pcm-sample-rate", type=int, default=24000, help="assumed rate of input_audio pcm16 / pcm24")
+    ap.add_argument("--max-request-mb", type=float, help="larger bodies are refused with 413 (default 256)")
+    ap.add_argument("--pcm-sample-rate", type=int, help="assumed rate of input_audio pcm16 / pcm24 (default 24000)")
     ap.add_argument("--no-request-shim", action="store_true", help="forward requests and errors unchanged")
+    ap.add_argument("--fetch-media", action="store_true", help="download http(s) media in the proxy (400 on failure)")
+    ap.add_argument("--fetch-timeout-s", type=float, help="per-URL download limit (default 30)")
+    ap.add_argument("--fetch-max-mb", type=float, help="per-URL size limit (default 100)")
     a = ap.parse_args()
     backends = [b if b.startswith("http") else f"http://{b}" for b in a.backends.split(",")]
     router = Router(backends, a.chunk_chars, a.min_match_chars, a.slack, a.index_chunks, a.down_s)
-    shim = Shim(
-        enabled=not a.no_request_shim,
+    mib = lambda v: None if v is None else int(v * 2**20)  # noqa: E731
+    shim = Shim.from_env(
+        enabled=False if a.no_request_shim else None,
         pcm_sample_rate=a.pcm_sample_rate,
-        max_request_bytes=int(a.max_request_mb * 2**20),
+        max_request_bytes=mib(a.max_request_mb),
+        fetch_media=True if a.fetch_media else None,
+        fetch_timeout_s=a.fetch_timeout_s,
+        fetch_max_bytes=mib(a.fetch_max_mb),
     )
     web.run_app(make_app(router, shim=shim), host=a.host, port=a.port, access_log=None)
 

@@ -633,3 +633,155 @@ def test_proxy_shim_end_to_end():
     assert status == 413 and out["error"]["code"] == 413
     assert snap["prefix"]["errors_mapped"] == 1 and snap["prefix"]["shim_rejected"] == 1
     assert snap["prefix"]["too_large"] == 1
+
+
+# ---------------------------------------------------------------- downloading http(s) media in the proxy
+
+PNG = b"\x89PNG\r\n\x1a\n" + bytes(range(256)) * 10  # 2.5 KB, below the 4096-byte limit used below
+
+
+def media_host():
+    """A local media server: an image, a file without a media Content-Type, 404, a slow answer, and two files above
+    the size limit (one declaring its length, one streamed)."""
+
+    async def png(_):
+        return web.Response(body=PNG, content_type="image/png")
+
+    async def octet(_):
+        return web.Response(body=PNG, content_type="application/octet-stream")
+
+    async def slow(_):
+        await asyncio.sleep(3)
+        return web.Response(body=PNG, content_type="image/png")
+
+    async def big(_):
+        return web.Response(body=bytes(5000), content_type="video/mp4")
+
+    async def streamed(request):
+        resp = web.StreamResponse(headers={"Content-Type": "video/mp4"})
+        await resp.prepare(request)
+        for _ in range(10):
+            await resp.write(bytes(1000))
+        await resp.write_eof()
+        return resp
+
+    app = web.Application()
+    app.router.add_get("/cat.png", png)
+    app.router.add_get("/photo.jpg", octet)
+    app.router.add_get("/slow.png", slow)
+    app.router.add_get("/big.mp4", big)
+    app.router.add_get("/streamed.mp4", streamed)
+    return app
+
+
+def chat_with(*parts):
+    return {"model": "m", "messages": [{"role": "user", "content": [*parts, {"type": "text", "text": "Describe."}]}]}
+
+
+def test_remote_media_urls_and_inline_media():
+    req = chat_with(
+        {"type": "image_url", "image_url": {"url": "https://h/a.png", "detail": "low"}},
+        {"type": "video_url", "video_url": {"url": "HTTP://h/v.mp4"}},
+        {"type": "image_url", "image_url": {"url": "https://h/a.png"}},  # a repeat: fetched once
+        {"type": "image_url", "image_url": {"url": "data:image/png;base64,AAAA"}},
+        {"type": "audio_url", "audio_url": "https://h/s.wav"},
+        {"type": "image_url", "image_url": {"url": "file:///etc/passwd"}},  # never fetched by the proxy
+    )
+    assert lb.remote_media_urls(req) == ["https://h/a.png", "HTTP://h/v.mp4", "https://h/s.wav"]
+    snapshot = json.dumps(req)
+    out = lb.inline_media(
+        req, {"https://h/a.png": "data:image/png;base64,QQ==", "https://h/s.wav": "data:audio/wav;base64,UQ=="}
+    )
+    parts = out["messages"][0]["content"]
+    assert parts[0]["image_url"] == {"url": "data:image/png;base64,QQ==", "detail": "low"}
+    assert parts[1]["video_url"] == {"url": "HTTP://h/v.mp4"} and parts[2]["image_url"]["url"].startswith("data:")
+    assert (
+        parts[4]["audio_url"] == "data:audio/wav;base64,UQ==" and parts[5]["image_url"]["url"] == "file:///etc/passwd"
+    )
+    assert json.dumps(req) == snapshot
+    assert lb.remote_media_urls({"model": "m", "messages": [{"role": "user", "content": "https://h/a.png"}]}) == []
+
+
+def test_media_type():
+    assert lb.media_type("image/png; charset=binary", "https://h/x") == "image/png"
+    assert lb.media_type("application/octet-stream", "https://h/x.jpg?sig=1") == "image/jpeg"
+    assert lb.media_type(None, "https://h/x") == "application/octet-stream"
+
+
+def test_fetch_media_inlines_and_fails_with_400_messages(expect_error):
+    async def run():
+        host = TestServer(media_host(), host="127.0.0.1")
+        await host.start_server()
+        base = f"http://127.0.0.1:{host.port}"
+        out = {}
+        try:
+            async with ClientSession() as session:
+                got = await lb.fetch_media(session, [base + "/cat.png", base + "/photo.jpg"], 2.0, 4096 * 4)
+                out["ok"] = got
+                for name in ("missing.png", "slow.png", "big.mp4", "streamed.mp4"):
+                    try:
+                        await lb.fetch_media(session, [base + "/cat.png", base + "/" + name], 0.5, 4096)
+                    except lb.ShimError as exc:
+                        out[name] = str(exc)
+                try:
+                    await lb.fetch_media(session, [f"http://127.0.0.1:{free_port()}/x.png"], 2.0, 4096)
+                except lb.ShimError as exc:
+                    out["refused"] = str(exc)
+        finally:
+            await host.close()
+        return base, out
+
+    base, out = asyncio.run(run())
+    assert out["ok"][base + "/cat.png"] == "data:image/png;base64," + base64.b64encode(PNG).decode()
+    assert out["ok"][base + "/photo.jpg"].startswith("data:image/jpeg;base64,")
+    assert "HTTP 404 error" in out["missing.png"] and "missing.png" in out["missing.png"]
+    assert "no answer within 0.5 s" in out["slow.png"]
+    assert "larger than 4096 bytes" in out["big.mp4"] and "larger than 4096 bytes" in out["streamed.mp4"]
+    assert out["refused"].startswith("Failed to fetch media from URL: ClientConnectorError")
+
+
+def test_shim_from_env(monkeypatch):
+    for name in ("TT_PROXY_REQUEST_SHIM", "TT_PROXY_FETCH_MEDIA", "TT_PROXY_MAX_REQUEST_MB", "TT_PROXY_FETCH_MAX_MB"):
+        monkeypatch.delenv(name, raising=False)
+    assert lb.Shim.from_env() == lb.Shim()
+    monkeypatch.setenv("TT_PROXY_FETCH_MEDIA", "1")
+    monkeypatch.setenv("TT_PROXY_MAX_REQUEST_MB", "0.5")
+    monkeypatch.setenv("TT_PROXY_PCM_SAMPLE_RATE", "16000")
+    shim = lb.Shim.from_env(fetch_timeout_s=5)
+    assert shim.fetch_media and shim.max_request_bytes == 1 << 19 and shim.pcm_sample_rate == 16000
+    assert shim.fetch_timeout_s == 5 and shim.enabled
+    monkeypatch.setenv("TT_PROXY_REQUEST_SHIM", "0")
+    assert not lb.Shim.from_env().enabled
+
+
+def test_proxy_fetches_media_when_enabled():
+    async def run(fetch):
+        host = TestServer(media_host(), host="127.0.0.1")
+        engine = TestServer(echo_engine(), host="127.0.0.1")
+        await host.start_server()
+        await engine.start_server()
+        router = lb.Router([f"http://127.0.0.1:{engine.port}"])
+        proxy = TestServer(lb.make_app(router, shim=lb.Shim(fetch_media=fetch, fetch_timeout_s=0.5)), host="127.0.0.1")
+        await proxy.start_server()
+        base, url = f"http://127.0.0.1:{host.port}", f"http://127.0.0.1:{proxy.port}"
+        try:
+            async with ClientSession() as session:
+                out = {}
+                for name in ("cat.png", "missing.png", "slow.png"):
+                    body = chat_with({"type": "image_url", "image_url": {"url": f"{base}/{name}"}})
+                    out[name] = await raw_post(session, url, json.dumps(body).encode())
+                return base, out, router.snapshot()
+        finally:
+            await proxy.close()
+            await engine.close()
+            await host.close()
+
+    base, out, snap = asyncio.run(run(True))
+    status, got = out["cat.png"]
+    image = got["body"]["messages"][0]["content"][0]["image_url"]["url"]
+    assert status == 200 and image == "data:image/png;base64," + base64.b64encode(PNG).decode()
+    assert out["missing.png"][0] == 400 and "HTTP 404" in out["missing.png"][1]["error"]["message"]
+    assert out["slow.png"][0] == 400 and "no answer within" in out["slow.png"][1]["error"]["message"]
+    assert snap["served"] == {next(iter(snap["served"])): 1}  # the failed downloads never reached the engine
+    base, out, _ = asyncio.run(run(False))
+    assert out["cat.png"][1]["body"]["messages"][0]["content"][0]["image_url"]["url"] == f"{base}/cat.png"
