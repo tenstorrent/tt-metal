@@ -15,7 +15,6 @@
 #include "api/tensor/noc_traits.h"
 #include "ttnn/operations/experimental/deepseek_prefill/attn_res_block_mix/device/kernels/attn_res_block_mix_items.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/attn_res_block_mix/device/kernels/attn_res_block_mix_partials.hpp"
-#include "ttnn/cpp/ttnn/kernel_lib/l1_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/tile_column_dataflow.hpp"
 
 void kernel_main() {
@@ -25,22 +24,19 @@ void kernel_main() {
     constexpr uint32_t num_sites = get_named_compile_time_arg_val("num_sites");
     constexpr uint32_t sites_per_group = get_named_compile_time_arg_val("sites_per_group");
     constexpr uint32_t num_groups = get_named_compile_time_arg_val("num_groups");
-    constexpr uint32_t num_closed_sites = get_named_compile_time_arg_val("num_closed_sites");
     constexpr uint32_t Wt = get_named_compile_time_arg_val("Wt");
     constexpr auto stats_args = TensorAccessorArgs<0>();
     constexpr auto sealed_args = TensorAccessorArgs<stats_args.next_compile_time_args_offset()>();
     constexpr auto partials_args = TensorAccessorArgs<sealed_args.next_compile_time_args_offset()>();
-    constexpr auto closed_args = TensorAccessorArgs<partials_args.next_compile_time_args_offset()>();
 
-    // Common args: the statistics, the partials, the closed sites' reads, then one
-    // (address, first page) pair per candidate.
-    constexpr uint32_t kCandidateArgs = 3;
+    // Common args: the statistics, the partials, then one (address, first page) pair per
+    // candidate.
+    constexpr uint32_t kCandidateArgs = 2;
 
     constexpr uint32_t cb_stats = get_named_compile_time_arg_val("cb_stats");
     constexpr uint32_t cb_exp = get_named_compile_time_arg_val("cb_exp");
     constexpr uint32_t cb_values = get_named_compile_time_arg_val("cb_values");
     constexpr uint32_t cb_weights = get_named_compile_time_arg_val("cb_weights");
-    constexpr uint32_t cb_closed_mask = get_named_compile_time_arg_val("cb_closed_mask");
     constexpr uint32_t cb_partials_odd = get_named_compile_time_arg_val("cb_partials_odd");
     constexpr uint32_t stats_tile_bytes = get_tile_size(cb_stats);
     constexpr uint32_t value_tile_bytes = get_tile_size(cb_values);
@@ -53,20 +49,6 @@ void kernel_main() {
     CircularBuffer cb_partials_odd_obj(cb_partials_odd);
     auto stats_accessor = TensorAccessor(stats_args, get_common_arg_val<uint32_t>(0));
     auto partials_accessor = TensorAccessor(partials_args, get_common_arg_val<uint32_t>(1));
-    auto closed_accessor = TensorAccessor(closed_args, get_common_arg_val<uint32_t>(2));
-
-    if constexpr (num_closed_sites > 0) {
-        // 1.0f in every row of a closed site's column (1 + r for site r), 0 elsewhere. Compute
-        // holds it for every row.
-        CircularBuffer cb_mask_obj(cb_closed_mask);
-        cb_mask_obj.reserve_back(1);
-        dataflow_kernel_lib::zero_tile(cb_mask_obj);
-        for (uint32_t col = 1; col <= num_closed_sites; ++col) {
-            dataflow_kernel_lib::fill_tile_column<cb_closed_mask, uint32_t>(
-                cb_mask_obj.get_write_ptr(), col, 0x3F800000);
-        }
-        cb_mask_obj.push_back(1);
-    }
 
     for_each_attn_res_block_mix_item([&](const AttnResBlockMixItem& item) {
         // The row's statistics, partial-major: one tensor-parallel rank's statistics for every
@@ -112,11 +94,10 @@ void kernel_main() {
         cb_exp_obj.wait_front(num_candidates);
         const uint32_t exp_base = cb_exp_obj.get_read_ptr();
         auto write_group = [&](uint32_t group) {
-            write_partials_group<Ht, Wt, num_closed_sites, sites_per_group>(
+            write_partials_group<Ht, Wt, sites_per_group>(
                 noc,
                 cb_partials_odd_obj,
                 partials_accessor,
-                closed_accessor,
                 value_tile_bytes,
                 item,
                 group * sites_per_group,

@@ -18,9 +18,6 @@
 // Each step is an eltwise chain. The folds across partials and candidates (the sum, max and
 // mass) are one dest session apiece, in fp32 dest on the SFPU; see attn_res_score_chain.hpp.
 //
-// A closed site has no live stream to fold in, so its weights are e_c / mass and its partial
-// is the read's value.
-//
 // The mixture MACs each candidate tile into one dest accumulator per site, the weight a
 // column broadcast of the site's own weight tile. The run's candidate tiles are read from
 // DRAM once and stay in their buffer until every site group has used them.
@@ -35,7 +32,6 @@
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/binary/sfpu/basic.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/binary/sfpu/minmax.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/broadcast/bcast.hpp"
-#include "ttnn/cpp/ttnn/kernel_lib/eltwise/core/optional.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/math.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/scalar.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/attn_res_gather_softmax/device/kernels/attn_res_score_chain.hpp"
@@ -58,9 +54,6 @@ constexpr uint32_t cb_summed = get_named_compile_time_arg_val("cb_summed");
 constexpr uint32_t cb_exp = get_named_compile_time_arg_val("cb_exp");
 constexpr uint32_t cb_values = get_named_compile_time_arg_val("cb_values");
 constexpr uint32_t cb_weights = get_named_compile_time_arg_val("cb_weights");
-constexpr uint32_t cb_mass = get_named_compile_time_arg_val("cb_mass");
-constexpr uint32_t cb_closed_mask = get_named_compile_time_arg_val("cb_closed_mask");
-constexpr uint32_t cb_factor = get_named_compile_time_arg_val("cb_factor");
 constexpr uint32_t cb_shift_out = get_named_compile_time_arg_val("cb_shift_out");
 constexpr uint32_t cb_mass_out = get_named_compile_time_arg_val("cb_mass_out");
 constexpr uint32_t cb_partials = get_named_compile_time_arg_val("cb_partials");  // even site groups, for the writer
@@ -75,9 +68,6 @@ constexpr uint32_t inv_hidden_size = get_named_compile_time_arg_val("inv_hidden_
 constexpr uint32_t eps = get_named_compile_time_arg_val("eps");
 constexpr uint32_t sites_per_group = get_named_compile_time_arg_val("sites_per_group");
 constexpr uint32_t num_groups = get_named_compile_time_arg_val("num_groups");
-constexpr uint32_t num_closed_sites = get_named_compile_time_arg_val("num_closed_sites");
-constexpr bool has_closed_sites = num_closed_sites > 0;
-constexpr uint32_t kOne = 0x3F800000;  // 1.0f
 
 using Buffer = DataflowBufferFor<dfb::AccessPattern::UNKNOWN, dfb::AccessPattern::UNKNOWN>;
 
@@ -89,10 +79,7 @@ struct ScoreBuffers {
     Buffer scores{cb_scores};
     Buffer shift{cb_shift};
     Buffer shift_out{cb_shift_out};
-    Buffer mass{cb_mass};
     Buffer mass_out{cb_mass_out};
-    Buffer closed_mask{cb_closed_mask};
-    Buffer factor{cb_factor};
     Buffer exp{cb_exp};
 };
 
@@ -101,20 +88,6 @@ template <Dst Slot>
 ALWI auto centred_exp(Buffer& scores, uint32_t c) {
     return std::make_tuple(
         CopyTile<tile_at(cb_scores), Slot>{scores, c}, SubBinary<Slot, Dst::D1, Slot>{}, Exp<Approx::Exact, Slot>{});
-}
-
-// Per site, what its exponentials are scaled by: 1 / mass in a closed site's column, 1 in
-// the rest. The mask is 1 in the closed sites' columns and 0 elsewhere.
-void closed_site_factor(ScoreBuffers& b) {
-    eltwise_chain(
-        IterationShape::one_tile(),
-        CopyTile<input(cb_mass, WaitPolicy::Upfront, PopPolicy::AtEnd)>{b.mass},
-        Recip<>{},
-        SubUnary<>{kOne},
-        CopyTile<input(cb_closed_mask, WaitPolicy::None, PopPolicy::None), Dst::D1>{b.closed_mask},
-        MulBinary<Dst::D0, Dst::D1, Dst::D0>{},
-        AddUnary<>{kOne},
-        PackTile<output(cb_factor)>{b.factor});
 }
 
 // The row's exponentials (packed, one tile per candidate) for the writer to spread into
@@ -190,23 +163,15 @@ void score_row(ScoreBuffers& b) {
             return std::tuple_cat(
                 centred_exp<Dst::D2>(b.scores, c + 1), std::make_tuple(AddBinary<Dst::D0, Dst::D2, Dst::D0>{}));
         }),
-        std::make_tuple(
-            PackTile<output(cb_mass_out)>{b.mass_out}, Optional<has_closed_sites, PackTile<output(cb_mass)>>{b.mass}));
+        std::make_tuple(PackTile<output(cb_mass_out)>{b.mass_out}));
 
-    if constexpr (has_closed_sites) {
-        closed_site_factor(b);
-    }
-
-    // The exponentials, in the weights' dtype; a closed site's over its mass.
+    // The exponentials, in the weights' dtype.
     eltwise_chain(
         IterationShape::tiles(num_candidates),
         CopyTile<input(cb_shift, WaitPolicy::Upfront, PopPolicy::AtEnd), Dst::D1>{b.shift},
         CopyTile<input(cb_scores, WaitPolicy::Upfront, PopPolicy::AtEnd, InputTileMapping::Block)>{b.scores},
         SubBinary<Dst::D0, Dst::D1, Dst::D0>{},
         Exp<>{},
-        Optional<has_closed_sites, CopyTile<input(cb_factor, WaitPolicy::Upfront, PopPolicy::AtEnd), Dst::D2>>{
-            b.factor},
-        Optional<has_closed_sites, MulBinary<Dst::D0, Dst::D2, Dst::D0>>{},
         PackTile<output(cb_exp)>{b.exp});
 }
 
@@ -259,10 +224,6 @@ void mix_run(uint32_t num_tiles) {
 void kernel_main() {
     compute_kernel_hw_startup(cb_stats, cb_summed, cb_scores);
     ScoreBuffers buffers;
-    if constexpr (has_closed_sites) {
-        // Built once by the reader and held for every row.
-        buffers.closed_mask.wait_front(1);
-    }
     for_each_attn_res_block_mix_item([&](const AttnResBlockMixItem& item) {
         score_row(buffers);
         mix_run(item.num_tiles());
