@@ -565,8 +565,8 @@ std::unique_ptr<ComputeMeshRouterBuilder> ComputeMeshRouterBuilder::build(
         // An idle TX queue returns the acknowledgements for its paired RX queue only in a keepalive. At the
         // firmware's period (8000 cycles) that caps one-way traffic; 1000 lifts the cap and costs the link nothing
         // measurable.
-        constexpr uint32_t k_BlackholeEthTxqSeqUpdateTimeout = 1000;
-        edm_builder->set_eth_txq_seq_update_timeout(k_BlackholeEthTxqSeqUpdateTimeout);
+        // Diagnostic (autotriage, not for merge): keepalive override removed to test whether it adds ~3 s per
+        // FABRIC_1D mesh open on Blackhole QuietBox 2.
     }
 
     // Create tensix builder if needed
