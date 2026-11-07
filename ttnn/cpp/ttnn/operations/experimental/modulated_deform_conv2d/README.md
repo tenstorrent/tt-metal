@@ -119,12 +119,13 @@ sharded input       each core takes the blocks of its own shard; a core with an 
 Within a core the loop order is:
 
 ```text
-for pass in 0 .. K*K * chunks:        kernel position kk, then channel chunk
-    load the pass's (chunk x C_out) slice of the weight
-    for block in the core's blocks:
-        gather the block's corners for (kk, chunk)
-        build its columns, multiply by the slice, accumulate into the block's output
-after the last pass: bias, ReLU, write every block's output
+for wave in the core's waves:             all of its blocks where L1 allows (§8)
+    for pass in 0 .. K*K * chunks:        kernel position kk, then channel chunk
+        load the pass's (chunk x C_out) slice of the weight
+        for block in the wave's blocks:
+            gather the block's corners for (kk, chunk)
+            build its columns, multiply by the slice, accumulate into the block's output
+    after the last pass: bias, ReLU, write every block's output
 ```
 
 Kernel positions run outermost so one weight slice serves all of a core's blocks before the next
@@ -132,8 +133,8 @@ replaces it. An input wider than one chunk (8 tiles, 256 channels) takes one pas
 position, the chunk being the widest of at most 8 channel tiles that divides `C / 32`: the corner
 blocks and two weight slices then stay small enough for L1.
 
-Every core keeps the outputs of all its blocks in L1 across passes. That, not the columns, is what
-bounds the op's L1 (§8).
+Every core keeps the outputs and geometry of a wave's blocks in L1 across passes. That, not the
+columns, is what bounds the op's L1 (§8).
 
 ---
 
@@ -195,15 +196,15 @@ rows of cores.
 | `c_3`, `c_10` | each reader's scalar tiles, 2 deep | `2 * 4` | bf16 tile |
 | `c_4` | a block's tilized corners | `4 * chunk` | bf16 tile |
 | `c_5`, `c_21` | each reader's geometry inputs, one block | 5 | fp32 tile |
-| `c_6`, `c_11` | each reader's blocks' corner pages, for the whole run | one per block | int32 tile |
-| `c_7`, `c_12` | each reader's blocks' corner weights, for the whole run | 4 per block | bf16 tile |
+| `c_6`, `c_11` | each reader's blocks' corner pages, for the wave | one per block | int32 tile |
+| `c_7`, `c_12` | each reader's blocks' corner weights, for the wave | 4 per block | bf16 tile |
 | `c_8` | the kernel positions' offsets | 2 | fp32 tile |
 | `c_22` | the geometry's fp32 intermediates | 5 | fp32 tile |
 | `c_13`, `c_14` | the input band's two halves (interleaved input) | band / 2 | input row |
 | `c_15` | weight slices, 2 deep | `2 * chunk * C_out/32` | bf16 tile |
 | `c_16`, `c_17` | each reader's output, 1 or 2 blocks deep | `C_out/32` per block | bf16 tile |
 | `c_18` | a block's columns of one pass | `chunk` | bf16 tile |
-| `c_19` | every block's output accumulator | `blocks * C_out/32` | bf16 tile |
+| `c_19` | the wave's output accumulators | `wave blocks * C_out/32` | bf16 tile |
 | `c_20` | the bias | `C_out/32` | bf16 tile |
 
 ---
@@ -211,9 +212,14 @@ rows of cores.
 ## 8. L1 budget and program cache
 
 The buffers are sized from the L1 the circular buffers can reach at the call, less the output's
-per-bank bytes when the output goes to L1, rounded down to 32 KB. The budget picks the output depth
-and whether the input band fits, and the op fails with the L1 it needs when the fixed buffers do not
-fit:
+per-bank bytes when the output goes to L1, rounded down to 32 KB. The budget picks the wave: a core
+keeps the geometry and output accumulators of as many of its blocks as fit, all of them where they
+do. Every core then runs its blocks in the same number of waves, as each pass's weight slice is
+multicast to all of them, and each wave reloads the slices; a core with fewer blocks runs shorter or
+empty waves. On a full Blackhole grid BEVFormer's DCNs run in one wave; a reduced grid, or a large
+input, takes several. A sharded input runs in one wave. The budget then picks the output depth and,
+in one wave only, whether the input band fits, and the op fails with the L1 it needs when even a
+wave of one block does not fit:
 
 ```text
 modulated_deform_conv2d: needs N KB of L1 per core, M KB free: ...
