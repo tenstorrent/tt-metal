@@ -9,14 +9,6 @@
 #include "ckernel_defs.h"
 #include "sfpi.h"
 
-// Shared S60 runtime for the structural family
-//
-//     y = copysign(min(P(abs(x)), clamp_max), x).
-//
-// The generated Config owns the polynomial degree, every fitted coefficient,
-// the clamp, and the complete typed class contract.  This runtime owns only
-// the family algorithm.  It intentionally has no operation-name dispatch.
-
 namespace ckernel::sfpu::bf16::tanh
 {
 
@@ -52,15 +44,12 @@ sfpi_inline sfpi::vFloat signed_abs_finish(sfpi::vFloat x, sfpi::vFloat magnitud
 {
     sfpi::vInt input_exponent = sfpi::exexp(x, sfpi::ExponentMode::Biased);
     sfpi::vFloat clamp_max    = signed_abs_fp32_from_bits(Config::kClampMaxBits);
-    // Preserve the existing SFPSWAP clamp, including overflow ordering.
-    auto clamped        = sfpi::min_max(magnitude, clamp_max);
-    magnitude           = clamped.first;
-    clamp_max           = clamped.second;
-    sfpi::vFloat result = sfpi::copysgn(magnitude, x);
+    auto clamped              = sfpi::min_max(magnitude, clamp_max);
+    magnitude                 = clamped.first;
+    clamp_max                 = clamped.second;
+    sfpi::vFloat result       = sfpi::copysgn(magnitude, x);
     if constexpr (signed_abs_explicit_terminal<Config, SymmetricTerminal>())
     {
-        // The admitted action pair compares the decoded raw coordinate. One
-        // predicate owns both finite tails and signed exponent-FF terminals.
         sfpi::vFloat bound    = signed_abs_fp32_from_bits(Config::kTerminalBoundBits);
         sfpi::vFloat terminal = signed_abs_fp32_from_bits(Config::kClampMaxBits);
         v_if (input_exponent == 255 || sfpi::abs(x) > bound)
@@ -71,8 +60,6 @@ sfpi_inline sfpi::vFloat signed_abs_finish(sfpi::vFloat x, sfpi::vFloat magnitud
     }
     else if constexpr (!Config::kIntrinsicExceptional)
     {
-        // Decoded BF16 ingress retains nonfinite sign on both targets. Saturate
-        // explicitly: Horner overflow and unordered min cannot own this terminal.
         v_if (input_exponent == 255)
         {
             sfpi::vFloat terminal = signed_abs_fp32_from_bits(Config::kClampMaxBits);
@@ -82,14 +69,6 @@ sfpi_inline sfpi::vFloat signed_abs_finish(sfpi::vFloat x, sfpi::vFloat magnitud
     }
     // TTNN input DAZ maps both zero signs and every BF16 subnormal to +0.
     return sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::Nearest);
-}
-
-template <typename Config>
-inline void init_signed_abs()
-{
-    sfpi::vConstFloatPrgm0 = signed_abs_fp32_from_bits(Config::kCoefficientBits[Config::kDegree]);
-    sfpi::vConstFloatPrgm1 = signed_abs_fp32_from_bits(Config::kCoefficientBits[Config::kDegree - 1u]);
-    sfpi::vConstFloatPrgm2 = signed_abs_fp32_from_bits(Config::kCoefficientBits[Config::kDegree - 2u]);
 }
 
 // SFPLOADIs a coefficient costs at each use: none for +0 and +-1, which constant
@@ -108,10 +87,8 @@ constexpr std::uint32_t signed_abs_load_slots(std::uint32_t bits)
     return (bits & 0x1fffu) == 0u && exponent >= 127u - 14u && exponent <= 127u + 15u ? 1u : 2u;
 }
 
-// The immediate coefficient (below the three in programmable registers) that the
-// pair loop holds in a register for the whole call, or kDegree for none: of those
-// that cost the most SFPLOADIs, the one of highest degree, for which sfpi needs no
-// register copy before the clamp.
+// The immediate coefficient the pair loop holds in a register for the whole call (the costliest to load,
+// highest degree first), or kDegree for none.
 template <typename Config>
 constexpr std::uint32_t signed_abs_held_index()
 {
@@ -128,14 +105,15 @@ constexpr std::uint32_t signed_abs_held_index()
     return held;
 }
 
+// The negated (BH NaN) form reads only Prgm0 from its init: Prgm1 and Prgm2 are loaded by the call.
 template <typename Config, std::uint32_t Index, bool Negated = false>
 sfpi_inline sfpi::vFloat signed_abs_pair_coefficient()
 {
-    if constexpr (Index == Config::kDegree - 1u)
+    if constexpr (!Negated && Index == Config::kDegree - 1u)
     {
         return sfpi::vConstFloatPrgm1;
     }
-    else if constexpr (Index == Config::kDegree - 2u)
+    else if constexpr (!Negated && Index == Config::kDegree - 2u)
     {
         return sfpi::vConstFloatPrgm2;
     }

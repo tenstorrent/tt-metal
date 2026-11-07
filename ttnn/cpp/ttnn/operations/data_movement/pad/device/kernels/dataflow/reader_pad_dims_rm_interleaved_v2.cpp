@@ -8,6 +8,7 @@
 #include "api/dataflow/noc.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/scratchpad.h"
+#include "internal/local_mem/address_access.h"
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
@@ -22,7 +23,7 @@
 
 inline __attribute__((always_inline)) void fill_pad_dfb_with_val(
     Scratchpad<uint32_t>& pad, const uint32_t num_bytes, const uint32_t val) {
-    volatile tt_l1_ptr uint32_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(pad.get_base_address());
+    volatile tt_l1_ptr uint32_t* ptr = &pad[0];
 
     // Round up so a non-4-byte-aligned tail stick is fully filled (the loop-back read consumes all num_bytes).
     const uint32_t num_words = (num_bytes + sizeof(uint32_t) - 1) / sizeof(uint32_t);
@@ -36,7 +37,7 @@ inline __attribute__((always_inline)) void read_input_stick_into_l1(
     Noc& noc,
     const StreamState& s,
     uint32_t& i_page,
-    uint32_t l1_write_addr,
+    CoreLocalMem<uint32_t> dst,
     const uint32_t num_input_pages_in_row,
     const uint32_t stick_size_bytes) {
     if (num_input_pages_in_row == 1) {
@@ -44,12 +45,11 @@ inline __attribute__((always_inline)) void read_input_stick_into_l1(
         // `noc_async_read_sharded` derives pages-per-row from the (rank-squeezed) dspec shape,
         // which is wrong when an outer dim is sharded and the width is a single page (the
         // width-page dim gets squeezed away and an inner dim is mistaken for the row width).
-        noc.async_read(
-            s, CoreLocalMem<uint32_t>(l1_write_addr), stick_size_bytes, {.page_id = i_page, .offset_bytes = 0}, {});
+        noc.async_read(s, dst, stick_size_bytes, {.page_id = i_page, .offset_bytes = 0}, {});
     } else {
         const uint32_t stick_id = i_page / num_input_pages_in_row;
         tt::data_movement::common::noc_async_read_sharded(
-            noc, l1_write_addr, s, stick_id, /*offset=*/0, /*size=*/stick_size_bytes);
+            noc, dst, s, stick_id, /*offset=*/0, /*size=*/stick_size_bytes);
     }
     i_page += num_input_pages_in_row;
 }
@@ -96,11 +96,6 @@ void kernel_main() {
     const auto s = TensorAccessor(tensor::src);
     Noc noc;
 
-    const uint32_t pad_val_addr = pad.get_base_address();
-#ifdef PAD_ALIGN_DFB
-    const uint32_t pad_align_addr = pad_align.get_base_address();
-#endif
-
     fill_pad_dfb_with_val(pad, stick_size_padded, packed_pad_value);
     // The fill above is baby-RISCV CPU stores; the per-stick loop below loop-back noc.async_read's the pad
     // scratchpad as its source. The stores must be made visible to the NoC before that first read, but the
@@ -109,7 +104,9 @@ void kernel_main() {
     // Quasar DM: CPU stores land in the RISC's L1D/L2, and the NoC sources TL1 directly. A local load does
     // NOT publish to TL1 here (and ckernel::load_blocking is unavailable on Quasar), so flush the filled
     // range so the reads see the fill. No-op on WH/BH. Matches fill_rm_interleaved.cpp / common.hpp (#51763).
-    flush_l2_cache_range(static_cast<uintptr_t>(pad_val_addr), static_cast<size_t>(stick_size_padded));
+    flush_l2_cache_range(
+        static_cast<uintptr_t>(local_mem::detail::AddressAccess::address(pad.local_mem())),
+        static_cast<size_t>(stick_size_padded));
 #else
     // WH/BH: a baby-RISCV store can retire before its write-request lands in L1, and the RISCV core and NoC
     // are different L1 clients with no program-order guarantee (WormholeB0/TensixTile/BabyRISCV/
@@ -118,7 +115,8 @@ void kernel_main() {
     // word count: floor(size/4)-1 would fence on the word before a non-4B tail (racing its store) and
     // underflow for a sub-4B stick. stick_size_padded > 0, so the ceil count is >= 1 and never underflows.
     constexpr uint32_t pad_last_word = (stick_size_padded + sizeof(uint32_t) - 1) / sizeof(uint32_t) - 1;
-    (void)ckernel::load_blocking(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(pad_val_addr) + pad_last_word);
+    volatile tt_l1_ptr uint32_t* pad_last_word_ptr = &pad.local_mem()[pad_last_word];
+    (void)ckernel::load_blocking(pad_last_word_ptr);
 #endif
 
     uint32_t i_page = start_page_id;
@@ -133,21 +131,15 @@ void kernel_main() {
                               (curr_n >= front_pad_n and curr_n < N);
             {
                 CoreLocalMem<uint32_t> dst(l1_write_addr);
-                noc.async_read(
-                    UnicastEndpoint{},
-                    dst,
-                    stick_size_padded,
-                    {.noc_x = (uint32_t)my_x[noc.get_noc_id()],
-                     .noc_y = (uint32_t)my_y[noc.get_noc_id()],
-                     .addr = pad_val_addr},
-                    {.offset_bytes = 0});
+                // Loop-back read of this core's pad scratchpad.
+                noc.async_read(pad, dst, stick_size_padded, {.offset_bytes = 0}, {.offset_bytes = 0});
                 noc.async_read_barrier();
             }
             if (read_stick) {
 #ifdef PAD_ALIGN_DFB
                 if constexpr (front_padding) {
-                    uint32_t temp_addr = pad_align.get_base_address();
-                    read_input_stick_into_l1(noc, s, i_page, temp_addr, num_input_pages_in_row, stick_size_bytes);
+                    read_input_stick_into_l1(
+                        noc, s, i_page, pad_align.local_mem(), num_input_pages_in_row, stick_size_bytes);
                     noc.async_read_barrier();
                     // Relocate the staged stick with the shared CPU copy (common.hpp): on Quasar DM it reads
                     // the source through the uncached L1 alias (the NoC just wrote it; a stale D$ line could
@@ -157,24 +149,26 @@ void kernel_main() {
                     // usual memmove + load_blocking drain, and it casts through uintptr_t (the bare
                     // (void*)(uint32_t) cast is -Werror=int-to-pointer-cast on Quasar's rv64 DM RISCs).
                     tt::data_movement::common::copy_via_memmove<false>(
-                        l1_write_addr + stick_size_padded_front, pad_align.get_base_address(), stick_size_bytes);
+                        CoreLocalMem<uint32_t>(l1_write_addr + stick_size_padded_front),
+                        pad_align.local_mem(),
+                        stick_size_bytes);
                 } else if constexpr (unaligned) {
-                    uint32_t temp_addr = pad_align.get_base_address();
-                    read_input_stick_into_l1(noc, s, i_page, temp_addr, num_input_pages_in_row, stick_size_bytes);
+                    read_input_stick_into_l1(
+                        noc, s, i_page, pad_align.local_mem(), num_input_pages_in_row, stick_size_bytes);
                     noc.async_read_barrier();
                     CoreLocalMem<uint32_t> dst(l1_write_addr);
-                    noc.async_read(
-                        UnicastEndpoint{},
-                        dst,
-                        stick_size_bytes,
-                        {.noc_x = (uint32_t)my_x[noc.get_noc_id()],
-                         .noc_y = (uint32_t)my_y[noc.get_noc_id()],
-                         .addr = pad_align_addr},
-                        {.offset_bytes = 0});
+                    // Loop-back read of this core's realignment staging scratchpad.
+                    noc.async_read(pad_align, dst, stick_size_bytes, {.offset_bytes = 0}, {.offset_bytes = 0});
                 } else
 #endif
                 {
-                    read_input_stick_into_l1(noc, s, i_page, l1_write_addr, num_input_pages_in_row, stick_size_bytes);
+                    read_input_stick_into_l1(
+                        noc,
+                        s,
+                        i_page,
+                        CoreLocalMem<uint32_t>(l1_write_addr),
+                        num_input_pages_in_row,
+                        stick_size_bytes);
                 }
             }
             l1_write_addr += stick_size_padded_aligned;

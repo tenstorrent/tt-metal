@@ -4,8 +4,9 @@
 
 #pragma once
 
-#include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
 #include "ttnn/device_operation.hpp"
+#include "ttnn/metal_v2_artifacts.hpp"
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
@@ -28,15 +29,14 @@ struct RandnDeviceOperation {
     using tensor_return_value_t = Tensor;
 
     struct ProgramFactory {
-        static tt::tt_metal::ProgramDescriptor create_descriptor(
+        static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
             const operation_attributes_t& operation_attributes,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& output);
 
-        // Redraws the per-core seeds (hash-excluded) and re-applies the output address in place on
-        // every cache hit; supersedes the address binding. No rebuild.
-        static void override_runtime_arguments(
-            tt::tt_metal::Program& program,
+        // Redraws the per-core seeds (hash-excluded) and re-supplies the output tensor binding on
+        // every cache hit; the framework refreshes nothing else on this concept. No rebuild.
+        static tt::tt_metal::experimental::ProgramRunArgs override_runtime_arguments(
             const operation_attributes_t& operation_attributes,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& output,
