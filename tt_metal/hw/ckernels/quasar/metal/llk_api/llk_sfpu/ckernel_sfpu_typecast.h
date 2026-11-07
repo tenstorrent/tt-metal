@@ -55,8 +55,8 @@ inline void init_typecast() {
     }
         .set(ADDR_MOD_6);
     // Largest |x| whose nearest-even result still fits the int16 convert, which saturates at 32767.
-    // 32768 stays on SFPCAST. Loaded once: the immediate does not fit one SFPLOADI, and the loop
-    // was re-emitting the pair on every pass. Float16_b does not read it.
+    // 32768 stays on SFPCAST. Loaded once: the immediate does not fit one SFPLOADI.
+    // Float16_b does not read it.
     sfpi::vConstFloatPrgm0 = 32767.5f;
 }
 
