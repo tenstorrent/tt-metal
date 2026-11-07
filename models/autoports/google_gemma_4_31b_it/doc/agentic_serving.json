@@ -1,26 +1,26 @@
 {
   "workload": {
-    "target_concurrency": 4,
+    "target_concurrency": 8,
     "working_set_tokens": 131072,
-    "typical_context_tokens": 241,
-    "source": "Current release-go GPQA valid20: C4 observed, median native input241tokens, max observed processed-cache extent127456tokens; working-set stress rounded to separately measured131072-history capacity. Tool-suite stops and prior stress retained separately; no exact hidden API-emission count asserted.",
+    "typical_context_tokens": 229.5,
+    "source": "Valid C8/40 matched-work scored comparison; expanded pool capacity separately confirmed at131072 per agent. Prompt lengths from complete phase/harness association, not reconstructed missing native JSON.",
     "measured_by_eval": {
       "r1_gpqa_diamond": {
-        "target_concurrency": 4,
-        "observed_peak_running": 4,
+        "target_concurrency": 8,
+        "observed_peak_running": 8,
         "working_set_tokens": 131072,
         "observed_processed_cache_tokens_max": 127456,
-        "typical_context_tokens": 241,
-        "native_prompt_tokens_min": 156,
-        "native_prompt_tokens_max": 642,
-        "native_prompt_tokens_total": 5659,
-        "completed_tasks": 20,
-        "total_physical_decode_samples": 367509,
+        "typical_context_tokens": 229.5,
+        "prompt_tokens_min": 99,
+        "prompt_tokens_max": 2428,
+        "prompt_tokens_total": 12139,
+        "completed_tasks": 40,
+        "total_physical_decode_samples": 1102630,
         "source": [
-          "doc/agentic_evals/runs/larger-gpqa20-c4-retention-retry/audit.json",
-          "doc/agentic_evals/runs/gpqa-c4-capacity/RESULT.json"
+          "doc/agentic_evals/runs/gpqa40-c8-saturation-comparison/audit.json",
+          "doc/agentic_evals/runs/gpqa-b8-expanded-pool/local-confirmation.json"
         ],
-        "scope": "Current go suite single-turn GPQA; processing/cache positions are not emitted APIusage. C8 candidate unselected."
+        "scope": "Current go suite single-turn GPQA. Measured40 C8 selected;80 confirmation pending. Retained positions/work are not complete API-emission proof."
       },
       "swe_bench_verified": {
         "target_concurrency": 2,

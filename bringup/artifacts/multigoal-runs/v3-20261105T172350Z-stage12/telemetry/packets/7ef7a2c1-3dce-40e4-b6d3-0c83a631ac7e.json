@@ -46,7 +46,7 @@
         0.47032439137301096,
         0.7577702083276673
       ],
-      "evidence": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/runs/larger-gpqa40-c4-response-logging/audit.json"
+      "evidence": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/runs/gpqa40-c8-saturation-comparison/audit.json"
     },
     {
       "name": "terminal_bench_2_1",
@@ -79,7 +79,7 @@
   ],
   "missing_reasons": {
     "device_metrics": "Live vLLM profiling prohibited; host-wall rooflines are not device-time measurements.",
-    "stage12_accuracy": "Banked GPQA40/198; seven capped loops counted as failures. SWE2/500 and Terminal2/89 retain measured stops. Normal80 and C8 comparison running; no frozen dry/release.",
+    "stage12_accuracy": "Banked GPQA40/198, C8 same40 accepted; seven capped loops count as failures. C4/80 and C8/80 remain unbanked in progress. SWE2/500 and Terminal2/89 retain measured stops.",
     "release": "Local frozen benchmark arm passed. No combined frozen dry/release: GPQA final cohort still pending; f579 CI transport blocked by two stock EPEL proxy403 image-build failures with zero TT device hours.",
     "layer_types": "Template kind=layer is preserved as required metadata; this is stage12 full-model vLLM serving, not a layer measurement. No layer values measured."
   },
@@ -92,8 +92,10 @@
     "Six full60 conditional HF/TT prefill and forced incremental-decode checkpoints support captured loop continuations; no originalservedstate or autonomousHF claim. Evidence: runs/gpqa-loop-logits-discriminator/RESULT.json and runs/gpqa-decode-state-discriminator/RESULT.json.",
     "SWE retained5: raw1/5 (Wilson95%3.62\u201362.45%), invalid Xarray external retrieval; functional2 retained, no retry/advance. Eval8190.434942s; native Astropy cap32768 with18047-token periodic suffix. Nine discarded outputs and failed phase archive limit attribution. Evidence: runs/nightly-swe-decode-retention/audit.json.",
     "Selected headline remains unbuffered B1. Stock response debug buffers SSE (measured experiment excluded from decoderateclaims); enabled only for nonstreamingGPQA. Evidence: runs/response-logging-runtime-benchmark/AUTOFIX.md.",
-    "C8 same20 valid16/20; all outputs/retained chains exact versusC4, but1.786983eval hours is14.86% slower. Capacity retained, C4 selected, no speed saving credited. Separate40 comparison running42316311286; not an extra independent accuracy sample. Evidence: runs/gpqa20-c8-expanded-pool-comparison/audit.json.",
+    "C8 same20 valid16/20; all outputs/retained chains exact versusC4, but1.786983eval hours is14.86% slower. C4 stayed selected on20; later C8/40 comparison is complete and accepted on40. Repeated tasks are not extra independent accuracy samples. Evidence: runs/gpqa20-c8-expanded-pool-comparison/audit.json.",
     "Valid C4/40:25/40,3.640636eval hours; normal80 dispatched42323448662 on measured9.882469h sensitivity. Full4h additive scenario12.258136h exceeds12; projection is not bound.",
-    "New doc160 period3: exact4699-token overlap from fresh native capture; four conditional HF/TT checkpoints agree, no actionable discrepancy, no serving change. Cost.136083deviceh. No autonomousHF/originalstateclaim. Evidence: runs/gpqa40-new-loop-diagnosis/RESULT.json."
+    "New doc160 period3: exact4699-token overlap from fresh native capture; four conditional HF/TT checkpoints agree, no actionable discrepancy, no serving change. Cost.136083deviceh. No autonomousHF/originalstateclaim. Evidence: runs/gpqa40-new-loop-diagnosis/RESULT.json.",
+    "C8/40 valid25/40 in2.501182eval hours:31.298% shorter thanC4 with equal1102630 active decode work/all40 visible outputs;39/40 hidden chains exact. C8 selected at40,80 gain unconfirmed. Evidence: runs/gpqa40-c8-saturation-comparison/audit.json",
+    "C8/80 comparison42332785769 dispatched on eef534/TTI42dc4075 with measured8.051161h empirical-tail projection and7.5device-hour box; full4h tail sensitivity10.203404h. No release claim."
   ]
 }

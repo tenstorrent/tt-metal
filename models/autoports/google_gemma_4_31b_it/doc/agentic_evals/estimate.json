@@ -1,11 +1,11 @@
 {
-  "status": "GPQA40 valid;80 submitted; SWE and Terminal measured stops",
+  "status": "GPQA40 valid C8 selected; normalC4/80 active, C8/80 comparison prepared; tool-suite measured stops",
   "evals": {
     "r1_gpqa_diamond": {
       "decision": "go",
-      "reason": "All40 official samples valid, complete phase archive,7 capped exact-loop failures. Score is reported, not gated.80 admitted on measured extra-wave projection; final release list remains unselected.",
+      "reason": "Valid same40 C8 scored pair25/40 with complete retained work and matched visible outputs,31.298% shorter. Seven periodic cap failures count.80 remains next rung; no final release list yet.",
       "functional_at": 40,
-      "projected_hours": 6.241833334768334,
+      "projected_hours": 8.051161048736885,
       "score": 0.625,
       "confidence_interval_95": [
         0.47032439137301096,
@@ -27,10 +27,34 @@
       },
       "full_suite_decision": "pending_current_configuration_larger_rungs",
       "full_suite_stop_evidence": "runs/full-gpqa-observable/stop.json",
-      "evidence": [
-        "runs/larger-gpqa40-c4-response-logging/audit.json"
-      ],
-      "full_suite_prior_stop_scope": "Earlier C2 partial run; not a currentC4/C8 full-suite impossibility claim"
+      "evidence": "runs/gpqa40-c8-saturation-comparison/audit.json",
+      "full_suite_prior_stop_scope": "Earlier C2 partial run; not a currentC4/C8 full-suite impossibility claim",
+      "selected_concurrency": 8,
+      "latest_measured_eval_hours": 2.5011817041318865,
+      "c8_80_projection": {
+        "eval_linear_hours": 5.002363408263773,
+        "measured_allocated_non_eval_hours": 0.3315960736458914,
+        "point_including_device_overhead_hours": 5.333959481909664,
+        "queue_allowance_hours": 0.8494444444444444,
+        "postprocessing_variability_reserve_hours": 0.02,
+        "workflow_point_hours": 6.203403926354108,
+        "empirical_extra_tail_hours": 1.8477571223827778,
+        "empirical_tail_projection_hours": 8.051161048736885,
+        "full_request_timeout_extra_hours": 4,
+        "full_timeout_sensitivity_hours": 10.203403926354108,
+        "run_timeout_hours": 12,
+        "first_dry_reserve_deadline": "2026-11-07T11:46:49+00:00",
+        "latest_dispatch_empirical_tail": "2026-11-07T03:43:44.820225+00:00",
+        "latest_dispatch_full_timeout_sensitivity": "2026-11-07T01:34:36.745865+00:00",
+        "assumptions": "Linear doubled40 work, same C8/B8/expandedpool/source, reused image, observed job overhead including AI-summary delay, recent queue allowance. Extra longest observed chain models one more tail wave but is not a bound; new80 tail mix and logging contention unknown. Full4h sensitivity fits12h per-run but misses first-dry reserve if dispatched now.",
+        "candidate80": "42dc40754e465cf8c9ec993027ff59d3c936832c; coordinator must verify immutable source tree/baseline before dispatch."
+      },
+      "projection_scope": "Candidate80 C8 empirical sensitivity, not frozen release; actual80 pending",
+      "c8_80_comparison": {
+        "run_id": 42332785769,
+        "status": "submitted",
+        "source": "runs/gpqa80-c8-saturation-comparison/manifest.json"
+      }
     },
     "swe_bench_verified": {
       "decision": "stop",

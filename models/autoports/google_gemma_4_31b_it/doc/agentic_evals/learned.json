@@ -227,6 +227,15 @@
     {
       "fact": "40-run has7 capped loops vs2 on20. Longest capped chain1.624333h;33minutes single-active tail. All nested20 visibleoutputs match; one retained physical chain differs, so no cross-cohort physical exactness claim.",
       "evidence": "runs/larger-gpqa40-c4-response-logging/audit.json"
+    },
+    {
+      "fact": "Stock reusable run-tests workflow starts AI job summary unconditionally under always()&&!cancelled(), despite outer dispatch run-ai-summary=false. Eval/server cleanup can finish before workflow artifacts are uploaded. This external summary is not validation evidence or the pipeline worker.",
+      "evidence": [
+        "setup/shield-run-tests.yml:486",
+        "runs/gpqa40-c8-saturation-comparison/dispatch-command.json",
+        "GitHub jobs API128229759730 at2026-11-07T02:52UTC: Run tests completed02:46:54; AI job summary in_progress"
+      ],
+      "timing": "Record eval and CI job/workflow wall separately; postprocessing contributes to release projection."
     }
   ],
   "suite_timings": [
@@ -582,6 +591,25 @@
         0.7577702083276673
       ],
       "evidence": "runs/larger-gpqa40-c4-response-logging/audit.json"
+    },
+    {
+      "run_id": 42316311286,
+      "eval": "r1_gpqa_diamond",
+      "tasks": 40,
+      "agents": 8,
+      "batch": 8,
+      "wall_hours": 2.5011817041318865,
+      "device_job_hours": 2.832777777777778,
+      "workflow_hours": 2.838611111111111,
+      "agent_hours": null,
+      "timeouts": 0,
+      "capped_failures": 7,
+      "score": 0.625,
+      "confidence_interval_95": [
+        0.47032439137301096,
+        0.7577702083276673
+      ],
+      "evidence": "runs/gpqa40-c8-saturation-comparison/audit.json"
     }
   ],
   "generic_fixes": [
