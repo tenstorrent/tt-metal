@@ -35,7 +35,7 @@ protected:
 };
 
 // Matmul tests are based on GPT2-S model with batch size 64
-TEST_F(GPT2SBatch64Test, Matmul) {
+TEST_F(GPT2SBatch64Test, NIGHTLY_Matmul) {
     std::vector<MatmulTest> tests = {
         {{{64, 12, 64, 1024}, {64, 12, 1024, 64}, false, false}, ExpectedResult::OK},
         {{{64, 12, 1024, 64}, {64, 12, 1024, 64}, false, true}, ExpectedResult::OK},
