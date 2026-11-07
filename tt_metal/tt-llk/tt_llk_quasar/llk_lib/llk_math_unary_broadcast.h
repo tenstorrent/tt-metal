@@ -92,6 +92,8 @@ template <BroadcastType BROADCAST_TYPE, bool EN_32BIT_DEST, bool unpack_to_dest>
 inline void _llk_math_eltwise_unary_broadcast_mop_config_(const TensorShape& tensor_shape)
 {
     static_assert(BROADCAST_TYPE != BroadcastType::NONE, "Broadcast type cannot be NONE");
+    // The unpack-to-dest MOVs move the DEST_NORM (hi16) and DEST_32B_LOW (lo16) planes of a 32-bit DEST.
+    static_assert(!unpack_to_dest || EN_32BIT_DEST, "Unary broadcast with unpack_to_dest requires a 32-bit Dest");
 
     if constexpr (unpack_to_dest)
     {
@@ -243,7 +245,8 @@ inline void _llk_math_eltwise_unary_broadcast_mop_config_(const TensorShape& ten
  * @tparam EN_32BIT_DEST: True if the Dest register is in 32-bit mode, values = <true/false>
  * @tparam unpack_to_dest: UNP path wrote to dest
  * @param tensor_shape: Passed to addrmod / MOP setup
- * @note On the unpack thread, pair with @ref _llk_unpack_unary_broadcast_operands_init_ (T0) with matching BROADCAST_TYPE/unpack_to_dest.
+ * @note On the unpack thread (T0), pair with @ref _llk_unpack_unary_broadcast_operands_init_ (unpack_to_dest=false) or
+ *       @ref _llk_unpack_unary_broadcast_operands_to_dest_init_ (unpack_to_dest=true, 32-bit Dest only) with matching BROADCAST_TYPE.
  * @note @ref _llk_math_eltwise_unary_broadcast_ runs the configured op with matching template args.
  */
 template <BroadcastType BROADCAST_TYPE, bool EN_32BIT_DEST, bool unpack_to_dest>

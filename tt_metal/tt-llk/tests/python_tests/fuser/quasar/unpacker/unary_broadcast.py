@@ -65,7 +65,7 @@ class UnaryBroadcastUnpacker(Unpacker):
             + compute_unit.src_a.bfd_alloc_and_program(
                 BfdResource.UNP1, result_name="bfd_id"
             )
-            + f"_llk_unpack_unary_broadcast_operands_init_<p_unpacr::UNP_B, {broadcast_type}, {en_32bit_dest}, false>"
+            + f"_llk_unpack_unary_broadcast_operands_init_<p_unpacr::UNP_B, {broadcast_type}, {en_32bit_dest}>"
             "(bfd_id, 1);\n}\n"
         )
 
@@ -77,7 +77,7 @@ class UnaryBroadcastUnpacker(Unpacker):
         block: BlockData,
     ) -> str:
         return (
-            f"_llk_unpack_unary_broadcast_operands_<p_unpacr::UNP_B, false>"
+            "_llk_unpack_unary_broadcast_operands_<p_unpacr::UNP_B>"
             f"({block.tile_id_src_a});\n"
         )
 
