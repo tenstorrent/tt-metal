@@ -55,6 +55,28 @@ def fabric_router_config():
     return router
 
 
+KV_BLOCK_SIZE_ENV = "QWEN36_KV_BLOCK_SIZE"
+KV_BLOCK_SIZE_DEFAULT = 64
+
+
+def kv_block_size():
+    """QWEN36_KV_BLOCK_SIZE (default 64): tokens per paged KV block for the callers that size a cache or a page table
+    before one exists (demo and test allocations, the vLLM spec gate, the prefill warmup without a cache). Code that
+    holds a paged cache reads the block size from its shape (get_block_size), so this value only has to match the
+    cache that is allocated. A positive multiple of the 32-row tile: paged cache updates write whole tiles."""
+    bs = _env_int(KV_BLOCK_SIZE_ENV, KV_BLOCK_SIZE_DEFAULT)
+    if bs <= 0 or bs % 32:
+        raise ValueError(f"{KV_BLOCK_SIZE_ENV}={bs}: need a positive multiple of 32")
+    return bs
+
+
+def mamba_spec_enabled():
+    """QWEN36_MAMBA_SPEC (default "0"): the vLLM classes declare their KV cache layout to vLLM (get_kv_cache_spec): one
+    FullAttentionSpec per attention layer and one MambaSpec per GDN layer, instead of the plugin's single
+    FullAttentionSpec. Off keeps the plugin's fallback."""
+    return os.environ.get("QWEN36_MAMBA_SPEC", "0") == "1"
+
+
 def verify_device_topk_m():
     """Device-side top-k for the sampled verify (QWEN36_VERIFY_DEVICE_TOPK, default 1 = on; 0 turns it off): 0 when off, else
     M = QWEN36_VERIFY_TOPK_M (default 64) candidates per vocab shard. Read by the model (third verify trace),

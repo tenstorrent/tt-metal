@@ -108,6 +108,7 @@ from models.demos.blackhole.qwen36.tt.tp_common import (
     GDN_SNAP_SLOTS,
     engine_spec_buckets,
     join_logits_one_copy_enabled,
+    kv_block_size,
     pack_u32_rows,
     prefill_host_tolist_enabled,
     prefill_masked_big_enabled,
@@ -566,8 +567,10 @@ def spec_round_up(n, mult=32):
     return -(-int(n) // mult) * mult
 
 
-def spec_table_width(max_seq_len, draft_len, block_size=64):
-    """Page-table width (blocks) the engine needs: max_seq_len + K + 1 lookahead (no padding; fits vLLM's pool)."""
+def spec_table_width(max_seq_len, draft_len, block_size=None):
+    """Page-table width (blocks) the engine needs: max_seq_len + K + 1 lookahead (no padding; fits vLLM's pool).
+    ``block_size`` None = kv_block_size() (QWEN36_KV_BLOCK_SIZE)."""
+    block_size = kv_block_size() if block_size is None else block_size
     return -(-(int(max_seq_len) + int(draft_len) + 1) // int(block_size))
 
 
@@ -597,7 +600,7 @@ def mtp_prefill_inputs(prompt_ids, chunk_start, bucket, page_table_row, block_si
     ``bucket``-row prefill (the spec short trace's ``spec_inputs``): the same values _warm_mtp_chunk /
     Qwen36Model.ttnn_mtp_prefill_forward upload eagerly.
 
-    Returns int32 torch (tokens [1, bucket], full table [1, buf_blocks], chunk table [1, bucket // block_size]):
+    Returns int32 torch (tokens [1, bucket], full table [1, buf_blocks], chunk table [1, ceil(bucket / block_size)]):
     tokens: slot i (segment row i) fuses with prompt token chunk_start + i + 1, so row i holds
     prompt_ids[chunk_start + 1 + i] for i < n = min(bucket, Tp - 1 - chunk_start) and 0 past it (slot Tp-1 is left to
     _warm_mtp_last); chunk table: the user's blocks of the window, entries past ceil((chunk_start + n) / block_size)
@@ -606,9 +609,9 @@ def mtp_prefill_inputs(prompt_ids, chunk_start, bucket, page_table_row, block_si
     that only holds slot Tp-1): every row then pads to the scratch block."""
     Tp = len(prompt_ids)
     row = torch.as_tensor(page_table_row).reshape(1, -1).to(torch.int32)
-    bpb = bucket // block_size
+    bpb = -(-bucket // block_size)  # same window as _ShortPrefillTrace.blocks_per_bucket
     blk0 = chunk_start // block_size
-    assert chunk_start % block_size == 0 and bucket % block_size == 0
+    assert chunk_start % block_size == 0
     width = max(buf_blocks, blk0 + bpb)
     if row.shape[1] < width:
         row = torch.cat([row, torch.zeros(1, width - row.shape[1], dtype=torch.int32)], dim=1)
@@ -695,7 +698,7 @@ def spec_memory_costs(
     tp,
     batch_size,
     draft_len,
-    block_size=64,
+    block_size=None,
     kv_dtype_bytes=2,
     nb=None,
     max_seq_len=None,
@@ -714,13 +717,15 @@ def spec_memory_costs(
     KV blocks themselves (per_token x tokens), weights, trace-internal intermediates.
     Dims follow the model: TILE tensors pad their last two dims to 32; ROW_MAJOR are exact.
     ``fixed`` scales with B only through page tables / selectors / feed rows (all small). Page-table width nb =
-    ``nb`` or ceil(max_seq_len / block_size); with neither, page tables count 0. ``num_layers`` overrides
+    ``nb`` or ceil(max_seq_len / block_size); with neither, page tables count 0. ``block_size`` None = kv_block_size().
+    ``num_layers`` overrides
     num_hidden_layers (truncated test models); ``mask_buckets`` the engine's last-row selector buckets.
     ``buckets``: the verify/drafter row buckets (QWEN36_SPEC_BUCKETS; None reads the env, default "1,2,4,8" = on, "8" = off = none beyond B). Each bucket
     b < B adds to ``fixed.verify_io`` its persistent trace outputs (normed, logits TILE, RM copy, shard logits; b*T rows, TILE pads
     to 32) and to ``engine_buffers`` its anchor hidden [1,1,b,dim/tp]. Per-bucket page-table slices are not persistent.
     """
     tp, B, K = int(tp), int(batch_size), int(draft_len)
+    block_size = kv_block_size() if block_size is None else int(block_size)
     T, rows = K + 1, B * (K + 1)
     dim = int(_cfg(text_config, "hidden_size"))
     vocab = int(_cfg(text_config, "vocab_size"))
