@@ -33,6 +33,20 @@ def fast_untilize_formats():
     ]
 
 
+# Bfp2_b is the third compressed block-float input the unpacker accepts. It is
+# kept out of fast_untilize_formats() so the perf sweeps stay unchanged, and
+# runs on a small dims set: one single-unit row (ct=4) and one decomposed row
+# (ct=7 -> units 4+3).
+FAST_UNTILIZE_BFP2_B_DIMS = [(1, 4), (2, 4), (1, 7)]
+
+
+def fast_untilize_bfp2_b_formats():
+    return [
+        InputOutputFormat(DataFormat.Bfp2_b, DataFormat.Float16_b),
+        InputOutputFormat(DataFormat.Bfp2_b, DataFormat.Float32),
+    ]
+
+
 def fast_untilize_dest_acc_modes(formats):
     if formats.output_format == DataFormat.Float32:
         return [DestAccumulation.Yes]
