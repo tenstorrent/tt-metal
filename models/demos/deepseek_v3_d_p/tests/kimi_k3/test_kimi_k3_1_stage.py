@@ -423,16 +423,13 @@ def _final_hidden_path(handoff_dir: Path, chunk: int) -> Path:
 
 
 @functools.cache
-def _read_trace_metadata() -> dict:
-    with (TRACE_10K / "metadata.json").open(encoding="utf-8") as handle:
-        return json.load(handle)
-
-
 def _trace_metadata() -> dict:
-    """`TRACE_10K`'s metadata (token ids, step counts), read once; skips when the trace is absent."""
+    """`TRACE_10K`'s metadata (token ids, step counts), read once; skips when the trace is absent (a skip raises,
+    so it is not cached)."""
     if not (TRACE_10K / "metadata.json").is_file():
         pytest.skip(f"no K3.1 10K trace at {TRACE_10K}")
-    return _read_trace_metadata()
+    with (TRACE_10K / "metadata.json").open(encoding="utf-8") as handle:
+        return json.load(handle)
 
 
 def _trace_stream(name: str) -> torch.Tensor:
