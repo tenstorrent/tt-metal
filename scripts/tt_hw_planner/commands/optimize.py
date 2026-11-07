@@ -775,6 +775,45 @@ def add_cpp_flags(popt) -> None:
     )
 
 
+def add_workload_flags(popt) -> None:
+    """--batch and --area on the optimize parser. The WORKLOAD the run profiles: both reached the tests
+    only as environment variables, so an operator had to know the spellings and export them around the
+    command, and a run that forgot one silently profiled a different workload than it reported."""
+    from models.experimental.perf_automation.agent.perf_adapter import AREA_ENV, BATCH_ENV
+
+    popt.add_argument(
+        "--batch",
+        type=int,
+        default=None,
+        dest="batch",
+        help="samples the profiled run drives (sets %s). Default: whatever the environment already says, "
+        "else the demo's own batch." % BATCH_ENV,
+    )
+    popt.add_argument(
+        "--area",
+        type=int,
+        default=None,
+        dest="area",
+        help="condition-image side for a model whose cost follows an input SIZE rather than a token count "
+        "(sets %s). Ignored by a model with no such axis." % AREA_ENV,
+    )
+
+
+def _apply_workload_flags(args) -> str | None:
+    """--batch / --area into the variables the tests read. Set only when asked, so a run without the flags
+    keeps whatever the environment already says. Returns an error message for an unusable value, else None."""
+    from models.experimental.perf_automation.agent.perf_adapter import AREA_ENV, BATCH_ENV
+
+    for name, env in (("batch", BATCH_ENV), ("area", AREA_ENV)):
+        v = getattr(args, name, None)
+        if v is None:
+            continue
+        if v < 1:
+            return "--%s must be 1 or more" % name
+        os.environ[env] = str(v)
+    return None
+
+
 def _apply_cpp_flags(args) -> str | None:
     """--max-cpp-attempts / --cpp-only into the variables perf_mcp reads (_kernel_cap / _cpp_only).
 
@@ -812,7 +851,7 @@ def cmd_optimize(args) -> int:
     # mismatched sample count between the two manufactured a false gain from noise on every run.
     if getattr(args, "fullpipe_samples", None) is not None:
         os.environ["PERF_MCP_FULLPIPE_SAMPLES"] = str(args.fullpipe_samples)
-    _cpp_err = _apply_cpp_flags(args)
+    _cpp_err = _apply_cpp_flags(args) or _apply_workload_flags(args)
     if _cpp_err:
         print("error: " + _cpp_err)
         return 1

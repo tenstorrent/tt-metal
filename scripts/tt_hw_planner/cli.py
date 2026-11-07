@@ -10275,7 +10275,7 @@ from .commands.capture_inputs import cmd_capture_inputs  # noqa: F401
 
 from .commands.op_synth import cmd_op_synth  # noqa: F401
 from .commands.emit_e2e import cmd_emit_e2e  # noqa: F401
-from .commands.optimize import add_cpp_flags, cmd_optimize  # noqa: F401
+from .commands.optimize import add_cpp_flags, add_workload_flags, cmd_optimize  # noqa: F401
 from .commands.optimize_dashboard import cmd_optimize_dashboard  # noqa: F401
 from .commands.autocommit import wrap as _autocommit_wrap, add_commit_push_args as _add_commit_push_args  # noqa: F401
 from ._cli_helpers.trace_replays import add_trace_replays_arg, apply_trace_replays
@@ -11621,6 +11621,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         "AFTER always read the same value, so any setting stays internally comparable.",
     )
     add_cpp_flags(popt)
+    add_workload_flags(popt)
     popt.add_argument(
         "--fresh",
         action="store_true",

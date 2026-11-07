@@ -374,6 +374,11 @@ def resolve_batch(pipeline, requested: int = 0) -> int:
 # samples on a `--batch 32` request: nothing read the report back against the request.
 BATCH_ENV = "TT_PERF_BATCH"
 BATCH_REPORT = "PERF_BATCH_STREAMS"
+# THE OTHER HALF OF THE WORKLOAD, for a model whose cost follows an input SIZE rather than a token
+# count -- a diffusion pipeline's condition area, say. Named here for the same reason as the batch:
+# a test reads it to size its inputs and the tool writes it to ask for a size, and the two have to be
+# the same spelling. A model with no such axis simply never reads it.
+AREA_ENV = "TT_PERF_AREA"
 
 
 def batch_report_line(batch: int) -> str:
