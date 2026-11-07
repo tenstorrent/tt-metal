@@ -308,3 +308,28 @@ def test_kda_state_readback_walks_the_model_kda_configs(model, tmp_path, monkeyp
     first_kda = 2 if model == "kimi_k3_1" else 1
     assert walked == {(first_kda, "kda_recurrent"), (first_kda + 1, "kda_convolution")}
     assert {r["status"] for r in json.loads(out.read_text())["layers"]} == {"remote"}
+
+
+@pytest.mark.parametrize("model", ["kimi_k3", "kimi_k3_1"])
+def test_driver_cache_plan_follows_cache_kind(model, tmp_path, monkeypatch):
+    """The migration driver plans each published config by the adapter's `cache_kind`: rows on the model layer
+    axis, a decode width for the token caches only (kvpe, and K3.1's index cache at 01), none for the KDA
+    Snapshot configs (01/02 on K3, 02/03 on K3.1), which its dump skips and its byte verify walks whole."""
+    from models.demos.common.prefill.runners import prefill_producer
+    from models.demos.common.prefill.runners.migration_driver import _cache_plan, _layer_runs
+
+    adapter = get_adapter(model)
+    table = ttnn.experimental.disaggregation.import_from_protobuf_file(_published_table(model, tmp_path, monkeypatch))
+    monkeypatch.setattr(prefill_producer, "ADAPTER", adapter)
+    monkeypatch.setattr(prefill_producer, "NUM_LAYERS", 24)
+
+    mla = [layer for layer in KimiK3Config.mla_layer_ids() if layer < 24]
+    kda = [layer for layer in KimiK3Config.kda_layer_ids() if layer < 24]
+    index = [("index", mla, 128)] if model == "kimi_k3_1" else []
+    expected = [("kvpe", mla, 576), *index, ("kda_recurrent", kda, None), ("kda_convolution", kda, None)]
+    plan = _cache_plan(table, None)
+    assert [entry["config_id"] for entry in plan] == list(range(len(expected)))
+    assert [(entry["kind"], sorted(entry["rows"]), entry["head_dim"]) for entry in plan] == expected
+    # One /migrate per run of equal position ranges: K3.1's layers group exactly as K3's.
+    runs = _layer_runs(range(KimiK3Config.NUM_LAYERS), 56_320, adapter.layer_position_range)
+    assert runs == _layer_runs(range(KimiK3Config.NUM_LAYERS), 56_320, KimiK3Adapter().layer_position_range)
