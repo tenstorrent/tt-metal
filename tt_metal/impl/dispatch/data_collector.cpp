@@ -144,9 +144,13 @@ void DataCollector::RecordProgramMetadata(ProgramImpl& program) {
         const auto& hal = env_.get_hal();
         for (uint32_t i = 0; i < hal.get_programmable_core_type_count(); i++) {
             for (const auto& [handle, kernel] : program.get_kernels(i)) {
+                const KernelSource& source = kernel->kernel_source();
+                // A kernel created from a source string keeps that whole string in source_, so record its name.
                 // insert(const string&) allocates only on a miss; on a hit it just returns the
                 // existing node, so this allocation is only done once per unique source.
-                const std::string& stored_path = *unique_kernel_sources_.insert(kernel->kernel_source().source_).first;
+                const std::string& stored_path = source.source_type_ == KernelSource::FILE_PATH
+                                                     ? *unique_kernel_sources_.insert(source.source_).first
+                                                     : *unique_kernel_sources_.insert(kernel->name()).first;
                 kernel_sources.emplace_back(stored_path);
             }
         }
