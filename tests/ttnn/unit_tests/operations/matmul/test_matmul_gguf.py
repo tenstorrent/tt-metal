@@ -142,6 +142,19 @@ def test_decode_tq2_0_long_k(device, m):
     _run(device, ttnn.gguf_tq2_0, (1, 1, m), 10240, 2048)
 
 
+# The formats of the prefill program (gguf_matmul_prefill_program_factory.cpp); the others take the input in 32-row
+# blocks.
+PREFILL_DTYPES = [
+    ttnn.gguf_q8_0,
+    ttnn.gguf_q4_0,
+    ttnn.gguf_q4_1,
+    ttnn.gguf_q5_0,
+    ttnn.gguf_q5_1,
+    ttnn.gguf_q4_k,
+    ttnn.gguf_q6_k,
+]
+
+
 @pytest.mark.parametrize("m", [128, 512])
 @pytest.mark.parametrize("dtype", ttnn.GGUF_DTYPES, ids=_name)
 def test_prefill(device, dtype, m):
@@ -189,6 +202,17 @@ def test_expanded_refusals(expect_error):
         ttnn.from_gguf(blocks, (256, 32), ttnn.gguf_tq1_0_expanded)
     with expect_error(RuntimeError, "bytes of blocks"):
         ttnn.from_gguf(_blocks(ttnn.gguf_iq2_xs, 256, 32), (256, 32), ttnn.gguf_iq2_xxs_expanded)
+
+
+# The prefill program's blockings: a K split (few rows), a padded odd number of row blocks with N tiles that leave
+# cores idle, M in chunks, K = 12288. Every format with --runslow; q4_0 by default.
+@pytest.mark.parametrize(
+    "dtype",
+    [pytest.param(d, id=_name(d), marks=() if d == ttnn.gguf_q4_0 else pytest.mark.slow) for d in PREFILL_DTYPES],
+)
+@pytest.mark.parametrize("m, k, n", [(128, 4096, 4096), (200, 4096, 1056), (2048, 4096, 4096), (640, 12288, 4096)])
+def test_prefill_blockings(device, dtype, m, k, n):
+    _run(device, dtype, (1, m), k, n)
 
 
 def test_leading_dims_and_bias(device):
@@ -344,3 +368,53 @@ def test_perf_block_float(device, dtype, fidelity, k, n):
     print(
         f"{dtype} [K, N] = [{k}, {n}]: {fastest:.1f} µs (median {median:.1f}), {weight_bytes / fastest / 1e3:.0f} GB/s"
     )
+
+
+PREFILL_PERF_SHAPES = [(4096, 4096), (4096, 12288), (12288, 4096)]
+PREFILL_PERF_ROWS = [128, 512, 2048]
+HIFI2_PEAK_TFLOPS = 304.0  # the matmul peak of the 11 x 10 grid at HiFi2
+
+
+def _print_prefill(name, m, k, n, fastest, median):
+    tflops = 2 * m * k * n / fastest / 1e6
+    print(
+        f"{name} M = {m}, [K, N] = [{k}, {n}]: {fastest:.1f} µs (median {median:.1f}), {tflops:.1f} TFLOP/s, "
+        f"{100 * tflops / HIFI2_PEAK_TFLOPS:.1f} % of the HiFi2 peak"
+    )
+
+
+@pytest.mark.parametrize("device_params", [{"trace_region_size": 32 << 20}], indirect=True)
+@pytest.mark.parametrize(
+    "dtype",
+    [
+        pytest.param(d, id=_name(d), marks=() if d in (ttnn.gguf_q4_0, ttnn.gguf_q4_k) else pytest.mark.slow)
+        for d in PREFILL_DTYPES
+    ],
+)
+@pytest.mark.parametrize("k, n", PREFILL_PERF_SHAPES)
+def test_perf_prefill(device, dtype, k, n):
+    """Prefill (M = 128, 512, 2048 rows): µs per op, TFLOP/s and the fraction of the HiFi2 peak."""
+    blocks = _blocks(dtype, k, n)
+    w = ttnn.from_gguf(blocks, (k, n), dtype, device=device)
+    for m in PREFILL_PERF_ROWS:
+        x = ttnn.from_torch(torch.randn(m, k).bfloat16(), layout=ttnn.TILE_LAYOUT, device=device)
+        fastest, median, out = _time_op(device, lambda: ttnn.matmul(x, w))
+        if m == PREFILL_PERF_ROWS[0]:
+            _check(ttnn.to_torch(out), ttnn.to_torch(x), blocks, dtype, k, n)
+        _print_prefill(f"GGUF {_name(dtype)}", m, k, n, fastest, median)
+        ttnn.deallocate(x)
+
+
+@pytest.mark.parametrize("device_params", [{"trace_region_size": 32 << 20}], indirect=True)
+@pytest.mark.parametrize("k, n", PREFILL_PERF_SHAPES)
+def test_perf_prefill_block_float(device, k, n):
+    """The block-float prefill baseline: ttnn.matmul with an interleaved BFP8 weight, default program config, HiFi2."""
+    w = ttnn.from_torch(torch.randn(k, n), dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device)
+    compute_config = ttnn.init_device_compute_kernel_config(
+        device.arch(), math_fidelity=ttnn.MathFidelity.HiFi2, fp32_dest_acc_en=False, packer_l1_acc=True
+    )
+    for m in PREFILL_PERF_ROWS:
+        x = ttnn.from_torch(torch.randn(m, k).bfloat16(), layout=ttnn.TILE_LAYOUT, device=device)
+        fastest, median, _ = _time_op(device, lambda: ttnn.matmul(x, w, compute_kernel_config=compute_config))
+        _print_prefill("bfloat8_b", m, k, n, fastest, median)
+        ttnn.deallocate(x)
