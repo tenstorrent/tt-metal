@@ -294,7 +294,7 @@ def read_counters(
     return pd.DataFrame(all_results)
 
 
-# Quasar has no BRISC: the host programs the bank registers (counters.h configure_hardware) through NEO0's register window
+# Quasar has no BRISC: the host programs the bank registers through NEO0's register window
 # before a counting launch, so no TRISC runs counter code before the windows. Offsets: perf_counters/registers.h.
 _QUASAR_NEO0_WINDOW = 0x01800000
 _QUASAR_BANK_REGS = {0: (0x0, 0x4), 1: (0x18, 0x1C), 2: (0xC, 0x10), 4: (0x8C, 0x90)}

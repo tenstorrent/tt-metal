@@ -262,6 +262,7 @@ inline __attribute__((always_inline)) void route_l1_client(std::uint32_t cmd)
 }
 #endif
 
+#if !defined(ARCH_QUASAR) // Quasar has no BRISC: the host configures its banks (counters.py)
 // The bank registers the readout needs: reference period, continuous mode and the L1 mux group. Registers only: BRISC's
 // reads of an L1 config before the release alone moved the TRISCs' timing.
 inline void configure_hardware()
@@ -273,14 +274,12 @@ inline void configure_hardware()
     llk::perf::configure(llk::perf::bank_regs(Bank::FPU));
     llk::perf::configure(llk::perf::bank_regs(Bank::TDMA_UNPACK));
     llk::perf::configure(llk::perf::bank_regs(Bank::TDMA_PACK));
-#if !defined(ARCH_QUASAR) // no L1 counter bank on Quasar
     llk::perf::set_l1_mux(L1_MUX_GROUP);
     llk::perf::configure(llk::perf::bank_regs(Bank::L1));
-#endif
 }
 
-// Runs on BRISC before it releases the TRISCs. Quasar has no BRISC: the host configures its counting launches
-// (counters.py). The zone arms start the counters and the readouts write the results and the config they used.
+// Runs on BRISC before it releases the TRISCs. The zone arms start the counters and the readouts write the results and
+// the config they used.
 inline void configure_from_brisc()
 {
     if (counted_zones() != 0)
@@ -288,6 +287,7 @@ inline void configure_from_brisc()
         configure_hardware();
     }
 }
+#endif
 
 #else
 // Counters off: the launch hooks brisc.cpp and trisc.cpp call compile to nothing.
@@ -464,7 +464,7 @@ inline __attribute__((always_inline)) void read_all_counters([[maybe_unused]] st
         }
 #endif
         const BankRegsRef regs = llk::perf::bank_regs(static_cast<Bank>(bank_id));
-        // No mux write: it is fixed once by configure_hardware and cannot be re-aimed afterwards.
+        // No mux write: it is fixed once before the launch and cannot be re-aimed afterwards.
         // Without the readback the read samples the previous counter; a poll that never converges stores the sentinel.
         const bool selected     = llk::perf::select<MODE_REG_POLL_LIMIT>(regs, static_cast<std::uint16_t>(counter_id));
         counter_counts[out_idx] = selected ? llk::perf::read_count(regs) : COUNTER_SELECT_MISSED;
