@@ -293,6 +293,14 @@ class EmbeddingCache:
                 _, out = self.entries.popitem(last=False)
                 self.used -= out.numel() * out.element_size()
 
+    def discard(self, identifiers):
+        """Drop these identifiers' entries (a request that is done with them)."""
+        with self.lock:
+            for identifier in identifiers:
+                out = self.entries.pop(identifier, None)
+                if out is not None:
+                    self.used -= out.numel() * out.element_size()
+
     def __contains__(self, identifier):
         with self.lock:
             return identifier in self.entries
@@ -303,33 +311,30 @@ class EmbeddingCache:
 
 class ItemEncoder:
     """Embeddings of a row's items through the cache, encoding a miss with ``backend`` (what chunk_embeds'
-    ``embeddings_of`` takes). An item that cannot be encoded logs an error once and keeps its placeholder tokens'
-    embeddings (None): the request is served, degraded, rather than raising out of prefill."""
+    ``embeddings_of`` takes). Last resort only: an item that cannot be encoded logs an ERROR (every time, with its
+    identifier and the running count ``failures``) and keeps its placeholder tokens' embeddings (None), so the engine
+    survives, but that request's answer is wrong. Validate requests before they reach prefill wherever possible."""
 
     def __init__(self, backend, cache=None):
         self.backend = backend
         self.cache = cache if cache is not None else EmbeddingCache()
         self.failed = set()
+        self.failures = 0
 
-    def __call__(self, item):
+    def __call__(self, item, context=""):
         emb = self.cache.get(item.identifier)
-        if emb is not None:
-            if emb.shape[0] != item.num_embeds:
-                raise MMInputError(
-                    f"{item.modality} item {item.identifier}: cached {emb.shape[0]} rows, the prompt has "
-                    f"{item.num_embeds}"
-                )
+        if emb is not None and emb.shape[0] == item.num_embeds:
             return emb
         try:
             emb = encode_item(self.backend, item)
         except Exception as e:  # noqa: BLE001 - any encoder failure must not kill the engine
-            key = item.identifier or id(item)
-            if key not in self.failed:
-                self.failed.add(key)
-                logger.error(
-                    f"MiMo multimodal: {item.modality} item {item.identifier} at [{item.offset}, {item.end}) not "
-                    f"encoded, its placeholder tokens stand in: {type(e).__name__}: {e}"
-                )
+            self.failed.add(item.identifier or id(item))
+            self.failures += 1
+            logger.error(
+                f"MiMo multimodal: ENCODER FAILURE #{self.failures}{context}: {item.modality} item "
+                f"{item.identifier} at prompt [{item.offset}, {item.end}) was not encoded; its placeholder tokens "
+                f"stand in, so this request's answer is degraded: {type(e).__name__}: {e}"
+            )
             return None
         self.cache.put(item.identifier, emb)
         return emb

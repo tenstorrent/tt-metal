@@ -49,38 +49,64 @@ request ─► vLLM processor (CPU, upstream) ─► plugin: per-request MM item
 
 Decisions:
 
-1. **LLM input.** Add an embeddings input to the prefill chunk (`_prefill_chunk(..., embeds=...)`): a host bf16
-   [padded, 4096] tensor uploaded with the same layout `ttnn.embedding` produces, used only for chunks that contain
-   multimodal rows. Text-only chunks keep the device embedding and the traced chunk path. Chunks with multimodal rows
-   run eagerly at first; tracing them (an embeddings input buffer) is a later optimization.
+1. **LLM input.** An embeddings input to the prefill chunk (`TtMiMoModel.prefill_enqueue(..., embeds=, embed_rows=)`):
+   host bf16 rows for the chunk's multimodal positions, uploaded row-major and merged into the device embedding of the
+   chunk's tokens by one exact gather (`ttnn.embedding` over [token rows; uploaded rows]), so the pass starts from
+   exactly the layout `ttnn.embedding` produces and pad rows stay the tokens'. Used only for chunks that contain
+   multimodal rows; text-only chunks keep the device embedding, prefill batches and the traced chunk path. Chunks
+   with multimodal rows run eagerly on their own; tracing them (an embeddings input buffer) is a later optimization.
 2. **Model class.** A new `MiMoV2OmniForCausalLM` TT class (subclass of the text `MiMoV2ForCausalLM` in
-   `tt/generator_vllm.py`, registered with the upstream processor) selected by
-   `--hf-overrides '{"architectures": ["MiMoV2OmniForCausalLM"]}'`. The text-only release path stays byte-identical.
+   `tt/generator_vllm.py`, registered with the upstream processor) selected by `TT_MODEL_CLASS_OVERRIDES` (see the
+   plugin contract). The text-only release path stays byte-identical.
 3. **Encoders.** ViT on device (it dominates: a 1024² image is 4096 patches × 28 layers; video multiplies that by
    frames). It runs TP=8 on the requesting row's 1×8 submesh, so no cross-row traffic and each row keeps its own
    copy (~170 MB/chip). Audio starts on the host (fp32/bf16 torch): its RVQ step is an argmin over codebooks, so
    device numerics could flip codes; it moves to device only if host latency is a problem.
 4. **Speculative decoding.** MTP / DFlash drafters see placeholder-token embeddings at multimodal positions in the
    first milestone (affects acceptance only, never output). Fix later if acceptance drops measurably.
-5. **Chunked prefill and APC.** The plugin already sets `disable_chunked_mm_input`, so an item never straddles a
-   chunk. With APC, an item fully inside the cached prefix arrives without tensors; MiMo's chunk realignment can move a
-   chunk start back into such an item, which the embedding cache covers (else recompute from the request's features).
+5. **Chunked prefill and APC.** Items may straddle chunks (vLLM's chunked multimodal input stays on): each chunk
+   takes the rows of its range from every item, and the embedding cache keeps an item encoded once across chunks.
+   With APC the plugin restores an item's tensors, so a chunk start MiMo's realignment moves back into a cached item
+   either hits the embedding cache or recomputes it.
 
 ## Plugin contract (vllm-tt-plugin → model)
 
-`prefill_forward(..., **kwargs)` receives, when the model declares multimodal support, `mm_items`: a list aligned with
-the prefill rows; entry `i` is `None` (text-only) or a list in prompt order of
+`prefill_forward(..., **kwargs)` receives, when the model declares `model_capabilities["mm_modalities"]` (class
+attribute; the plugin reads it from the class), `mm_items` and no `pixel_values` / `image_grid_thw`: a list aligned
+with the prefill rows; entry `i` is `None` (text-only) or ALL of that request's items in prompt order, sent with every
+prefill chunk of the request, each
 
 ```python
 {"modality": "image" | "video" | "audio", "identifier": str,      # vLLM mm hash, stable across chunks / requests
  "offset": int, "length": int,                                   # PlaceholderRange in the full prompt
  "is_embed": torch.BoolTensor | None,                            # None = all `length` rows are embeddings
- "data": dict[str, torch.Tensor] | None}                         # processor fields; None when stripped by APC
+ "data": dict[str, torch.Tensor]}                                # processor fields; always present
 ```
 
-The existing image-only `pixel_values` / `image_grid_thw` lists stay for the other models. The model declares the
-modalities it accepts (`model_capabilities()["mm_modalities"]`); the plugin rejects others at request time with a
-clear error instead of `NotImplementedError` in the engine (an exception in prefill kills the engine).
+* `data` is always present, also for items inside an APC-cached prefix (the TT scheduler restores the fields vLLM
+  strips), so an item can always be recomputed.
+* Items may straddle chunks: a model taking `mm_items` keeps vLLM's chunked multimodal input (forcing
+  `disable_chunked_mm_input` made vLLM refuse to start: images up to 8192 tokens, videos up to 114688, against a 4096
+  budget). The model embeds the rows of `[start_pos, prompt_lens)` from each item's `offset` / `is_embed`, including
+  rows of a chunk start it moved back itself (MiMo's 128-token alignment), and caches each item's embeddings so a
+  straddling item is encoded once (`tt/multimodal.py`).
+* The plugin never says when an item or request is done: the model's embedding cache evicts on its own (an LRU by
+  bytes, `MIMO_MM_CACHE_MB`; a slot that takes another request drops its old request's items that no other slot holds).
+* The plugin refuses modalities the model does not declare at request time (a 4xx, never an exception in the engine:
+  an exception in prefill kills it). The model validates what remains as early as it can; an item that still fails
+  to encode in prefill is logged as an ERROR with its identifier, slot and a running count, and its placeholder
+  tokens' embeddings stand in (a degraded answer, not a dead engine). Validation belongs in the processor / request
+  stage wherever possible.
+* Class selection: vLLM resolves the MiMo-V2.6-Flash checkpoints (they carry a `vision_config`) to
+  `MiMoV2OmniForCausalLM`, so `--hf-overrides '{"architectures": [...]}'` changes nothing, and the plugin's built-in
+  map serves both `TTMiMoV2ForCausalLM` and `TTMiMoV2OmniForCausalLM` with the text class (the release path, unchanged).
+  Serve multimodal with
+  `TT_MODEL_CLASS_OVERRIDES=TTMiMoV2OmniForCausalLM=models.experimental.mimo_v2_6_flash.tt.generator_vllm:MiMoV2OmniForCausalLM`.
+  The class registers vLLM's upstream processor (`@MULTIMODAL_REGISTRY.register_processor` with
+  `MiMoV2OmniMultiModalProcessor` / `MiMoV2OmniProcessingInfo` / `MiMoV2OmniDummyInputsBuilder`) and implements
+  `get_placeholder_str` (chat rendering calls it on the TT class).
+* Models that do not declare `mm_modalities` keep the image-only `pixel_values` / `image_grid_thw` lists.
+  `MiMoV2OmniForCausalLM` also accepts them (items found by their placeholder runs).
 
 ## Workstreams
 
