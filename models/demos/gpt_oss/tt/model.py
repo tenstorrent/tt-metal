@@ -14,6 +14,7 @@ from models.demos.gpt_oss.utils.substate import substate
 from models.tt_transformers.tt.common import copy_host_to_device, rope_scaling_model_factory
 from models.tt_transformers.tt.rope import RotarySetup
 
+from . import opt_switches
 from .fused_decode.config import fused_decode_supported
 from .fused_decode.inputs import DecodeInputs
 from .fused_decode.terminal import DecodeTerminal, FusedSamplingGenerator
@@ -499,6 +500,16 @@ class Model:
             normed.deallocate(True)
         else:
             hidden_states = self.norm(hidden_states)
+            if (
+                mode == Mode.DECODE
+                and opt_switches.on("DECODE_LMHEAD_DRAM")
+                and hidden_states.memory_config().buffer_type != ttnn.BufferType.DRAM
+            ):
+                # GPT_OSS_OPT_DECODE_LMHEAD_DRAM: the auto-configured LM head matmul reads
+                # its [32, hidden] input from DRAM (as prefill and the batched decode path do) instead of L1.
+                normed = hidden_states
+                hidden_states = ttnn.to_memory_config(normed, ttnn.DRAM_MEMORY_CONFIG)
+                normed.deallocate(True)
         logits = ttnn.matmul(hidden_states, self.lm_head_weight, dtype=ttnn.bfloat8_b)
         hidden_states.deallocate(True)
         self._prefill_sampling_active = False

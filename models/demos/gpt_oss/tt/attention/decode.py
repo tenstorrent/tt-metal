@@ -3,6 +3,7 @@
 
 import ttnn
 
+from ..experts.operations import decode_tp_all_reduce, use_decode_ar
 from ..fused_decode.config import (
     OPROJ_DECODE_WEIGHT_DTYPE,
     OPROJ_STREAM_READERS,
@@ -35,6 +36,7 @@ def decode_forward(
     return_partial=False,
     batched_qkv=None,
     batched_oproj=None,
+    dsmm=None,
 ):
     """
     Decode forward pass - optimized for single token (seq_len=1).
@@ -129,6 +131,9 @@ def decode_forward(
     else:
         if batched_qkv is not None:
             xqkv_fused = batched_qkv(hidden_states)
+        elif dsmm is not None:
+            # GPT_OSS_OPT_DECODE_DSMM: DRAM-sharded QKV (the SDPA config below is unchanged).
+            xqkv_fused = dsmm[0](hidden_states)
         else:
             xqkv_fused = ttnn.matmul(hidden_states, weights.wqkv, dtype=ttnn.bfloat16, memory_config=qkv_memory_config)
         ttnn.add(xqkv_fused, weights.wqkv_bias, output_tensor=xqkv_fused)
@@ -263,6 +268,26 @@ def decode_forward(
         tt_sdpa_out.deallocate(True)
         return partial
 
+    if dsmm is not None and not return_partial:
+        # GPT_OSS_OPT_DECODE_DSMM: DRAM-sharded o_proj on the unpadded weight, bias added, BF8 out
+        # ([1, 1, 32, hidden] width-sharded); no slice of the 2944-wide CCL padding.
+        tt_out = dsmm[1](tt_sdpa_out)
+        tt_sdpa_out.deallocate(True)
+        tt_out = ttnn.reshape(tt_out, (1, 1, batch_size, hidden_size), (1, 1, 32, hidden_size))
+        if mesh_config.tp > 1 and use_decode_ar():
+            return decode_tp_all_reduce(tt_out, mesh_config, ccl_manager, hidden_size, "attn")
+        interleaved = ttnn.to_memory_config(tt_out, ttnn.L1_MEMORY_CONFIG)
+        tt_out.deallocate(True)
+        if mesh_config.tp > 1:
+            interleaved = ttnn.all_reduce(
+                interleaved,
+                num_links=ccl_manager.num_links,
+                topology=ttnn.Topology.Ring,
+                cluster_axis=mesh_config.tp_axis,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+            )
+        return interleaved
+
     tt_out = ttnn.linear(
         tt_sdpa_out, weights.o_proj, dtype=ttnn.bfloat16, memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG
     )
@@ -288,6 +313,15 @@ def decode_forward(
             tt_out.deallocate(True)
             tt_out = sliced
         return tt_out
+
+    if use_decode_ar() and mesh_config.tp > 1:
+        # GPT_OSS_OPT_DECODE_AR: one-op all-reduce (its width-sharded input copy
+        # replaces the slice + DRAM round-trip workaround of #41640, which is specific to ttnn.all_reduce's reads).
+        if padded_hidden != hidden_size:
+            sliced = ttnn.slice(tt_out, [0, 0, 0, 0], [1, 1, batch_size, hidden_size])
+            tt_out.deallocate(True)
+            tt_out = sliced
+        return decode_tp_all_reduce(tt_out, mesh_config, ccl_manager, hidden_size, "attn")
 
     # Slice padding AFTER bias: [1,1,B,3072] -> [1,1,B,2880].
     # Bias already applied on padded tensor; padding columns are zeros.
