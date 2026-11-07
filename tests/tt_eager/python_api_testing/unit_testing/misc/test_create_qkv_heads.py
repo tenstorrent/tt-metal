@@ -328,3 +328,127 @@ def test_nlp_create_q_and_kv_heads_separate_test(
     run_create_q_and_kv_heads_test(
         batch, q_seq_len, kv_seq_len, num_q_heads, num_kv_heads, head_dim, dtype, cores_h, cores_w, device, transpose_k
     )
+
+
+@skip_for_blackhole("L1 and Circular buffers are crashing on BH, see #12349")
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 8192}], indirect=True)
+@pytest.mark.parametrize("transpose_k", (True, False))
+def test_create_qkv_heads_offset_grid(transpose_k, device):
+    torch.manual_seed(1234)
+    batch, seq_len, num_q_heads, num_kv_heads, head_dim = 2, 64, 8, 4, 64
+    cores_h, cores_w = 2, 4
+    start_x, start_y = 1, 1
+    dtype = ttnn.bfloat16
+
+    q_shape = [batch, 1, seq_len, num_kv_heads, num_q_heads // num_kv_heads * head_dim]
+    k_shape = [batch, 1, seq_len, num_kv_heads, head_dim]
+    v_shape = [batch, 1, seq_len, num_kv_heads, head_dim]
+    Q = torch.randn(q_shape, dtype=torch.bfloat16)
+    K = torch.randn(k_shape, dtype=torch.bfloat16)
+    V = torch.randn(v_shape, dtype=torch.bfloat16)
+    QKV = torch.concat([Q.flatten(-2, -1), K.flatten(-2, -1), V.flatten(-2, -1)], -1)
+    QKV_interleaved = torch.concat([Q, K, V], -1).flatten(-2, -1)
+
+    offset_grid = ttnn.CoreRangeSet(
+        {
+            ttnn.CoreRange(
+                ttnn.CoreCoord(start_x, start_y),
+                ttnn.CoreCoord(start_x + cores_w - 1, start_y + cores_h - 1),
+            ),
+        }
+    )
+    in0_shard_spec = ttnn.ShardSpec(
+        offset_grid,
+        [seq_len, QKV.shape[-1] // cores_w],
+        ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    in0_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.BufferType.L1, in0_shard_spec)
+    in0_t = ttnn.Tensor(QKV_interleaved, dtype).to(ttnn.TILE_LAYOUT).to(device, in0_mem_config)
+    out_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, in0_shard_spec)
+
+    q, k, v = ttnn.experimental.create_qkv_heads(
+        in0_t,
+        num_heads=num_q_heads,
+        num_kv_heads=num_kv_heads,
+        transpose_k_heads=transpose_k,
+        memory_config=out_mem_config,
+    )
+
+    ref_q, ref_k, ref_v = torch.split(
+        QKV, [num_q_heads * head_dim, num_kv_heads * head_dim, num_kv_heads * head_dim], dim=-1
+    )
+    ref_q = torch.reshape(ref_q, [batch, seq_len, num_q_heads, head_dim]).transpose(-3, -2)
+    ref_k = torch.reshape(ref_k, [batch, seq_len, num_kv_heads, head_dim]).transpose(-3, -2)
+    ref_v = torch.reshape(ref_v, [batch, seq_len, num_kv_heads, head_dim]).transpose(-3, -2)
+    if transpose_k:
+        ref_k = torch.transpose(ref_k, -2, -1)
+
+    assert comp_pcc(ref_q, tt2torch_tensor(q), 1.0)[0]
+    assert comp_pcc(ref_k, tt2torch_tensor(k), 1.0)[0]
+    assert comp_pcc(ref_v, tt2torch_tensor(v), 1.0)[0]
+
+
+@skip_for_blackhole("L1 and Circular buffers are crashing on BH, see #12349")
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 8192}], indirect=True)
+@pytest.mark.parametrize("transpose_k", (True, False))
+def test_create_q_and_kv_heads_separate_offset_grid(transpose_k, device):
+    torch.manual_seed(1234)
+    batch, q_seq_len, kv_seq_len, num_q_heads, num_kv_heads, head_dim = 2, 64, 96, 8, 8, 64
+    cores_h, cores_w = 2, 4
+    start_x, start_y = 1, 1
+    dtype = ttnn.bfloat16
+
+    q_shape = [batch, 1, q_seq_len, num_q_heads, head_dim]
+    k_shape = [batch, 1, kv_seq_len, num_kv_heads, head_dim]
+    v_shape = [batch, 1, kv_seq_len, num_kv_heads, head_dim]
+    Q = torch.randn(q_shape, dtype=torch.bfloat16)
+    K = torch.randn(k_shape, dtype=torch.bfloat16)
+    V = torch.randn(v_shape, dtype=torch.bfloat16)
+
+    KV = torch.concat([K.flatten(-2, -1), V.flatten(-2, -1)], -1)
+    KV_interleaved = torch.concat([K, V], -1).flatten(-2, -1)
+    Q_flattened = Q.flatten(-2, -1)
+
+    offset_grid = ttnn.CoreRangeSet(
+        {
+            ttnn.CoreRange(
+                ttnn.CoreCoord(start_x, start_y),
+                ttnn.CoreCoord(start_x + cores_w - 1, start_y + cores_h - 1),
+            ),
+        }
+    )
+    kv_shard_spec = ttnn.ShardSpec(
+        offset_grid,
+        [kv_seq_len, KV_interleaved.shape[-1] // cores_w],
+        ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    q_shard_spec = ttnn.ShardSpec(
+        offset_grid,
+        [q_seq_len, Q_flattened.shape[-1] // cores_w],
+        ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    kv_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.BufferType.L1, kv_shard_spec)
+    q_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.BufferType.L1, q_shard_spec)
+    kv_t = ttnn.Tensor(KV_interleaved, dtype).to(ttnn.TILE_LAYOUT).to(device, kv_mem_config)
+    q_t = ttnn.Tensor(Q_flattened, dtype).to(ttnn.TILE_LAYOUT).to(device, q_mem_config)
+    out_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1)
+
+    q, k, v = ttnn.experimental.create_qkv_heads_from_separate_tensors(
+        q_t,
+        kv_t,
+        num_heads=num_q_heads,
+        num_kv_heads=num_kv_heads,
+        transpose_k_heads=transpose_k,
+        memory_config=out_mem_config,
+    )
+
+    ref_k, ref_v = torch.split(KV, [num_kv_heads * head_dim, num_kv_heads * head_dim], dim=-1)
+    ref_q = torch.reshape(Q_flattened, [batch, q_seq_len, num_q_heads, head_dim]).transpose(-3, -2)
+    ref_k = torch.reshape(ref_k, [batch, kv_seq_len, num_kv_heads, head_dim]).transpose(-3, -2)
+    ref_v = torch.reshape(ref_v, [batch, kv_seq_len, num_kv_heads, head_dim]).transpose(-3, -2)
+    if transpose_k:
+        ref_k = torch.transpose(ref_k, -2, -1)
+
+    assert comp_pcc(ref_q, tt2torch_tensor(q), 1.0)[0]
+    assert comp_pcc(ref_k, tt2torch_tensor(k), 1.0)[0]
+    assert comp_pcc(ref_v, tt2torch_tensor(v), 1.0)[0]
