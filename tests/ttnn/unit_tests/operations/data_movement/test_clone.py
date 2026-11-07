@@ -435,6 +435,14 @@ def test_clone_sharded_row_major(
     )
 
 
+def test_clone_host_tensor_raises(expect_error):
+    torch_input_tensor = torch.ones((2, 3, 4, 4), dtype=torch.bfloat16)
+    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.ROW_MAJOR_LAYOUT)
+
+    with expect_error(RuntimeError, "Clone: input must be on device"):
+        ttnn.clone(input_tensor)
+
+
 @pytest.mark.parametrize(
     "input_dtype, output_dtype",
     [

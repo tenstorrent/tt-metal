@@ -1381,3 +1381,11 @@ def test_concat_dtype_uint8_sharded_s2s_tiled(device):
     ]
     got = ttnn.to_torch(ttnn.concat(ttnn_inputs, dim=3, memory_config=out_cfg).cpu().to(ttnn.ROW_MAJOR_LAYOUT))
     assert torch.equal(got, torch.cat(torch_inputs, dim=3))
+
+
+def test_concat_host_tensor_raises(expect_error):
+    torch_input_tensor = torch.ones((2, 3, 4, 4), dtype=torch.bfloat16)
+    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.ROW_MAJOR_LAYOUT)
+
+    with expect_error(RuntimeError, "Input tensor must be on device"):
+        ttnn.concat([input_tensor, input_tensor], dim=-1)
