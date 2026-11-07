@@ -36,7 +36,7 @@ PROMPT = "<|im_start|>user\n" + vi.VIDEO_PLACEHOLDER + "What is said?<|im_end|>\
 SECONDS, FPS, SR = 6, 4, 44100
 
 
-def clip(with_audio=True):
+def clip(with_audio=True, audio_seconds=SECONDS):
     """An mp4: SECONDS s of panning frames at FPS, and a 440 Hz tone rising in loudness (AAC, SR)."""
     frames = vi.sample_video(num_frames=SECONDS * FPS, size=(320, 192))
     buf = io.BytesIO()
@@ -52,7 +52,7 @@ def clip(with_audio=True):
         for pkt in vs.encode():
             c.mux(pkt)
         if a_s is not None:
-            t = np.arange(SECONDS * SR) / SR
+            t = np.arange(int(audio_seconds * SR)) / SR
             wave = (0.3 * np.sin(2 * np.pi * 440 * t) * (t / SECONDS)).astype(np.float32)
             step = 1024
             for k in range(0, wave.size, step):
@@ -171,3 +171,14 @@ def test_without_audio(processor):
         ids, ph, item = run(processor, data, **kwargs)
         assert vocab["<|mimo_audio_start|>"] not in ids[ph.offset : ph.offset + ph.length]
         assert "va_audio_codes" not in item
+
+
+def test_audio_track_shorter_than_the_picture(processor):
+    """A track that ends 0.6 s before the last frame (seen on real clips: the processor's last segment came out empty
+    and the request failed) is padded with silence: every grid gets a non-empty segment, the last one included."""
+    vocab = processor.info.get_tokenizer().get_vocab()
+    ids, ph, item = run(processor, clip(audio_seconds=SECONDS - 0.6), mimo_video_audio=True)
+    n_segs = int(item["video_audio_n_segs"].data)
+    seg_lens = item["video_audio_seg_lens"].data.reshape(-1)[:n_segs].tolist()
+    assert n_segs == SECONDS * FPS // 2 and min(seg_lens) > 0, seg_lens
+    assert ids[ph.offset : ph.offset + ph.length].count(vocab["<|audio_pad|>"]) == sum(seg_lens)

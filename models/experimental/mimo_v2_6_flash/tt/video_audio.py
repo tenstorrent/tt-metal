@@ -67,9 +67,24 @@ def decode_audio_track(data):
     return np.asarray(AudioResampler(SAMPLE_RATE).resample(wave, orig_sr=sr), dtype=np.float32)
 
 
+def cover_frames(wave, metadata, num_frames):
+    """``wave`` zero-padded to last past the video's last frame. The checkpoint's processor cuts a segment per grid up to
+    the last frame's time plus one frame interval and asserts every segment is non-empty, so a track that ends before
+    the picture (common: a few hundred ms) fails the request; the missing tail is silence."""
+    from .video_input import VIDEO_TIMESTAMPS, loader_timestamps, upstream_timestamps
+
+    times = loader_timestamps(metadata, num_frames) if VIDEO_TIMESTAMPS == "loader" else None
+    if times is None:
+        times = upstream_timestamps(num_frames)
+    step = float(times[1] - times[0]) if num_frames > 1 else 1.0
+    need = int(np.ceil((float(times[-1]) + step + 0.5) * SAMPLE_RATE))
+    return wave if wave.size >= need else np.pad(wave, (0, need - wave.size))
+
+
 def attach_audio(video_items):
     """Decode each video's audio track into its metadata (``AUDIO_KEY``) from the video's bytes (vLLM keeps them on the
-    item: MediaWithBytes). Items without bytes or metadata (dummy videos, cached items) are left alone."""
+    item: MediaWithBytes), padded to cover every frame. Items without bytes or metadata (dummy videos, cached items)
+    are left alone."""
     if video_items is None:
         return
     for k, entry in enumerate(getattr(video_items, "data", [])):
@@ -83,7 +98,8 @@ def attach_audio(video_items):
             continue
         wave = decode_audio_track(data)
         if wave is not None:
-            meta[AUDIO_KEY] = wave
+            frames = getattr(media, "media", media)
+            meta[AUDIO_KEY] = cover_frames(wave, meta, len(frames))
 
 
 def _video_audio_input(video, wave):
