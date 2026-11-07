@@ -688,6 +688,24 @@ def _pack_entry(q, c0, c1, rf):
     return (rf << 30) | (q << 24) | (c0 << 12) | c1
 
 
+def _segment_args(entries, ws, Wt_lp):
+    """Per send entry (kernels/all_gather_rms_norm_port_walk.hpp Entry): the members its columns overlap, one word
+    each: member m [31:24], landing-tile offset inside the member's row [23:12], run length [11:0]. Returns the
+    port-kernel arg block: (first << 16 | count) per entry, the segment count, the segments."""
+    idx, segs = [], []
+    for q, c0, c1, _ in entries:
+        t0, t1 = q * Wt_lp + c0, q * Wt_lp + c1
+        first = len(segs)
+        for m in range(len(ws) - 1):
+            a, b = max(t0, ws[m]), min(t1, ws[m + 1])
+            if a < b:
+                assert m < 256 and a - ws[m] < 4096 and b - a < 4096
+                segs.append((m << 24) | ((a - ws[m]) << 12) | (b - a))
+        assert first < 65536 and len(segs) - first < 65536
+        idx.append((first << 16) | (len(segs) - first))
+    return idx + [len(segs)] + segs
+
+
 _READY_SEM_CACHE = {}
 
 
@@ -1035,19 +1053,21 @@ def create_mesh_program_descriptor(
                 up = ch.prv if d == "fwd" else ch.nxt
                 in_all = entries_of(chips[up].sends[d], l) if up is not None else []
                 s_id = DIRS.index(d) * L + l
+                assert not native_h or k == 1  # the walk's from_input source assumes one member per row
+                seg_args = _segment_args(out_ents, ws, geo.Wt_lp)
                 preader_rt[x][y] = (
                     [own_members, s_id, len(out_ents)]
                     + [_pack_entry(*e) for e in out_ents]
+                    + seg_args
                     + [len(in_all)]
                     + [_pack_entry(*e) for e in in_all]
                     + cnt
-                    + ws
                     + [x_addr]
                 )
                 sending = has_sends(coord, d, l)
                 # the peer's opposite-direction port (same link) sends into me: it waits for my ready
                 send_ready = peer is not None and has_sends(peer, _OPP[d], l)
-                args = [len(out_ents)] + [_pack_entry(*e) for e in out_ents] + ws
+                args = [len(out_ents)] + [_pack_entry(*e) for e in out_ents] + seg_args
                 if peer is not None and (sending or send_ready):
                     rc = virt(chips[peer].ports[(_OPP[d], l)])
                     pc = virt(chips[peer].ports[(d, l)])

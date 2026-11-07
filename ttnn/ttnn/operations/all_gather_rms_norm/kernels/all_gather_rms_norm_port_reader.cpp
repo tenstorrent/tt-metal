@@ -51,13 +51,16 @@ void kernel_main() {
     const uint32_t E_out = get_arg_val<uint32_t>(a++);
     const uint32_t out_idx = a;
     a += E_out;
+    const uint32_t segidx_idx = a;  // per send entry: (first segment << 16) | segment count
+    a += E_out;
+    const uint32_t n_segs = get_arg_val<uint32_t>(a++);
+    const uint32_t segs_idx = a;  // member segments of the send entries (see Entry)
+    a += n_segs;
     const uint32_t E_in = get_arg_val<uint32_t>(a++);
     const uint32_t in_idx = a;
     a += E_in;
     const uint32_t cnt_idx = a;
     a += k;
-    const uint32_t ws_idx = a;
-    a += k + 1;
     const uint32_t x_addr = get_arg_val<uint32_t>(a++);
 
     const Geom g{
@@ -70,7 +73,6 @@ void kernel_main() {
         xfer_rows,
         Wt_lp,
         get_write_ptr(agrms_cb::cb_x_landing),
-        ws_idx,
         rows_per_group,
         x_addr};
     const uint32_t n_xb = g.n_xb();
@@ -78,7 +80,9 @@ void kernel_main() {
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(sem_arrival_id));
     const uint32_t landed_addr = get_semaphore(landed_sem_id);
 
-    auto out_entry = [&](uint32_t e) { return unpack_entry(get_arg_val<uint32_t>(out_idx + e)); };
+    auto out_entry = [&](uint32_t e) {
+        return unpack_entry(get_arg_val<uint32_t>(out_idx + e), get_arg_val<uint32_t>(segidx_idx + e), segs_idx);
+    };
     auto in_entry = [&](uint32_t e) { return unpack_entry(get_arg_val<uint32_t>(in_idx + e)); };
 
     bool has_out = false;
@@ -114,9 +118,9 @@ void kernel_main() {
     auto notify_rows = [&](uint32_t xb) {
         const uint32_t r0 = xb * xfer_rows;
         const uint32_t rows = g.item_rows(xb);
-        for (uint32_t r = r0; r < r0 + rows; ++r) {
-            uint32_t grp, li;
-            g.place(r, grp, li);
+        uint32_t grp, li;
+        g.place(r0, grp, li);
+        for (uint32_t r = r0; r < r0 + rows; ++r, g.advance(grp, li)) {
             for (uint32_t m = 0; m < k; ++m) {
                 const uint32_t c = get_arg_val<uint32_t>(cnt_idx + m);
                 if (c != 0) {

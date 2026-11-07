@@ -61,8 +61,11 @@ void kernel_main() {
     const uint32_t E_out = get_arg_val<uint32_t>(a++);
     const uint32_t out_idx = a;
     a += E_out;
-    const uint32_t ws_idx = a;
-    a += k + 1;
+    const uint32_t segidx_idx = a;  // per send entry: (first segment << 16) | segment count
+    a += E_out;
+    const uint32_t n_segs = get_arg_val<uint32_t>(a++);
+    const uint32_t segs_idx = a;  // member segments of the send entries (see Entry)
+    a += n_segs;
     const uint32_t ready_addr = get_arg_val<uint32_t>(a++);  // global semaphore (same address on every port core)
     const uint32_t send_ready = get_arg_val<uint32_t>(a++);  // 1: the peer's port that sends to me waits for my ready
     const uint32_t ready_x = get_arg_val<uint32_t>(a++);
@@ -86,11 +89,12 @@ void kernel_main() {
         xfer_rows,
         Wt_lp,
         get_write_ptr(agrms_cb::cb_x_landing),
-        ws_idx,
         rows_per_group,
         0};
     const uint32_t n_xb = g.n_xb();
-    auto out_entry = [&](uint32_t e) { return unpack_entry(get_arg_val<uint32_t>(out_idx + e)); };
+    auto out_entry = [&](uint32_t e) {
+        return unpack_entry(get_arg_val<uint32_t>(out_idx + e), get_arg_val<uint32_t>(segidx_idx + e), segs_idx);
+    };
 
     uint32_t chunks_left = 0;
     for (uint32_t e = 0; e < E_out; ++e) {
