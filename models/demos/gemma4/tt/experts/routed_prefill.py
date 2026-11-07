@@ -19,8 +19,9 @@ All index metadata is built on device from the dense routing weights (compare, c
 stable sort for the dispatch ids, topk + gather for the combine ids). The capacity ``C`` of the expert-major buffer
 is static (``RoutedPrefillConfig.capacity``):
 
-* ``None`` (default): ``"exact"`` for eager prefill, ``"full"`` when the call is recorded under a device trace
-  (``prefill_traced``, set from the model's ``_prefill_trace_mode``);
+* ``None`` (default): ``"exact"`` for eager prefill. A call recorded under a device trace (``prefill_traced``, set
+  from the model's ``_prefill_trace_mode``) keeps the all-experts path unless the config enables the routed path
+  explicitly, in which case ``"full"`` is the default there;
 * ``"full"``: ``C`` is the chunk length, exact for any routing, no host interaction, traceable (the same
   matmul work as the all-experts path, so no speedup);
 * ``"exact"``: eager runs only, one scalar host readback of the busiest expert's token count sizes ``C``;
@@ -43,7 +44,9 @@ TILE_SIZE = 32
 
 @dataclass(frozen=True)
 class RoutedPrefillConfig:
-    """Routed prefill settings. ``enabled=None`` follows ``GEMMA4_MOE_ROUTED_PREFILL`` (default on)."""
+    """Routed prefill settings. ``enabled=None`` follows ``GEMMA4_MOE_ROUTED_PREFILL`` (default on) for eager
+    prefill and stays off for traced prefill (the all-experts path is kept bit-identical there); ``True`` forces the
+    routed path, also under a trace."""
 
     enabled: Optional[bool] = None
     min_tokens: int = 128  # shorter calls (the decode frame) keep sparse_matmul
@@ -51,9 +54,11 @@ class RoutedPrefillConfig:
     # None: "exact" for eager prefill, "full" under a device trace; or "full", "exact" (eager readback), rows per expert
     capacity: Union[None, str, int] = None
 
-    def is_enabled(self, seq_len):
+    def is_enabled(self, seq_len, prefill_traced=False):
         enabled = self.enabled
         if enabled is None:
+            if prefill_traced:
+                return False
             enabled = os.environ.get("GEMMA4_MOE_ROUTED_PREFILL", "1") == "1"
         return bool(enabled) and seq_len >= self.min_tokens
 
@@ -67,9 +72,9 @@ def resolve_routed_config(routed_prefill):
     return RoutedPrefillConfig(enabled=bool(routed_prefill), min_tokens=TILE_SIZE if routed_prefill else 128)
 
 
-def routed_prefill_enabled(seq_len, routed_prefill=None):
+def routed_prefill_enabled(seq_len, routed_prefill=None, prefill_traced=False):
     """True when a prefill call of ``seq_len`` rows takes the routed path."""
-    return resolve_routed_config(routed_prefill).is_enabled(seq_len)
+    return resolve_routed_config(routed_prefill).is_enabled(seq_len, prefill_traced)
 
 
 def _round_up(n, m=TILE_SIZE):

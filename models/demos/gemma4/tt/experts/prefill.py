@@ -287,8 +287,8 @@ def prefill_forward(
     ``routed_prefill`` selects the token-grouped path (``routed_prefill.py``: only the routed (token, expert) pairs
     are computed, index metadata built on device): a ``RoutedPrefillConfig``, a bool, or ``None`` for the defaults
     (on for calls of at least 128 rows; ``GEMMA4_MOE_ROUTED_PREFILL=0`` turns it off). ``False`` keeps the
-    all-experts path below. ``prefill_traced`` marks a call recorded under a device trace: the routed path then
-    sizes its expert buffers statically (no host readback).
+    all-experts path below. ``prefill_traced`` marks a call recorded under a device trace: it keeps this path unless
+    ``routed_prefill`` explicitly enables the routed one (which then sizes its buffers statically).
 
     Following gpt_oss pattern:
     1. Chunk long sequences so group_size fits in the core grid
@@ -315,7 +315,7 @@ def prefill_forward(
     local_routing = partition_routing_to_local_experts(routing_weights, weights, mesh_config)
     from .routed_prefill import routed_prefill_enabled, routed_prefill_forward  # lazy: it imports this module
 
-    if routed_prefill_enabled(seq_len, routed_prefill):
+    if routed_prefill_enabled(seq_len, routed_prefill, prefill_traced):
         result_acc = routed_prefill_forward(
             hidden_states, local_routing, weights, config, routed_prefill, prefill_traced
         )

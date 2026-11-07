@@ -83,6 +83,11 @@ def test_routed_prefill_enabled_flag(monkeypatch):
     assert not routed_prefill_enabled(1024, False)
     assert routed_prefill_enabled(32, True)
     assert not routed_prefill_enabled(64, RoutedPrefillConfig(min_tokens=128))
+    # traced prefill keeps the old path unless the routed one is explicitly enabled
+    assert not routed_prefill_enabled(1024, prefill_traced=True)
+    assert not routed_prefill_enabled(1024, RoutedPrefillConfig(), prefill_traced=True)
+    assert routed_prefill_enabled(1024, True, prefill_traced=True)
+    assert routed_prefill_enabled(1024, RoutedPrefillConfig(enabled=True, capacity="full"), prefill_traced=True)
     monkeypatch.setenv("GEMMA4_MOE_ROUTED_PREFILL", "0")
     assert not routed_prefill_enabled(1024)
     assert routed_prefill_enabled(1024, RoutedPrefillConfig(enabled=True))
