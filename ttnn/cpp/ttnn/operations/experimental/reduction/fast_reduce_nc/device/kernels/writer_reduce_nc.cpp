@@ -22,10 +22,10 @@ void kernel_main() {
 
     constexpr uint32_t onetile = 1;
 
-    Noc noc;
+    const Noc noc;
     DataflowBuffer cb_out_obj(dfb::out0);
 
-    uint32_t output_tile_bytes = cb_out_obj.get_entry_size();
+    const uint32_t output_tile_bytes = cb_out_obj.get_entry_size();
 
     auto tensor_accessor = TensorAccessor(tensor::dst);
 #ifdef SPLIT_OUTPUT

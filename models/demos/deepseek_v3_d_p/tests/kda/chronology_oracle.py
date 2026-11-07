@@ -59,6 +59,14 @@ class ChronologicalTopology:
         """Physical chip immediately preceding ``chip`` in chronological order."""
         return (chip - 1) % self.sp_size
 
+    def chronological_rows(self) -> list[tuple[int, int]]:
+        """(chip, local row) of every row of the chunk, in chronological order."""
+        order = [(self.first_rank, row) for row in range(self.head_rows)]
+        for chip in self.chip_order[1:]:
+            order.extend((chip, row) for row in range(self.local_rows))
+        order.extend((self.first_rank, row) for row in range(self.head_rows, self.local_rows))
+        return order
+
 
 def chronological_topology(actual_start: int, sp_size: int, local_rows: int) -> ChronologicalTopology:
     """Derive topology from layer-validated inputs for ``actual_start`` on an SP ring.

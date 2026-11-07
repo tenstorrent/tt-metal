@@ -7,8 +7,11 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cstdint>
 #include <random>
+#include <span>
 #include <thread>
+#include <vector>
 
 #include "autograd/auto_context.hpp"
 #include "core/random.hpp"
@@ -190,4 +193,46 @@ TEST_F(RandomGenerationTests, UniformInitsGoodMeanAndRangeSSE) {
 
     EXPECT_NEAR(parallel_mean, 0.0, 0.01);
     EXPECT_NEAR(sequential_mean, 0.0, 0.01);
+}
+
+namespace {
+
+// Generates 4099 elements, not a multiple of the SIMD batch size, with use_simd on, into a vector of sentinels that lie
+// outside [lo, hi]. Checks that the sequential and the parallel generator each overwrite every sentinel.
+template <typename T, typename DistGenFunc>
+void expect_simd_generators_fill_every_element(const DistGenFunc& dist_factory, float lo, float hi) {
+    for (const bool parallel : {false, true}) {
+        std::vector<T> seq(4099, static_cast<T>(hi + 1.0F));
+        if (parallel) {
+            ttml::core::parallel_generate(
+                std::span{seq}, dist_factory, 42, std::thread::hardware_concurrency(), /*use_simd=*/true);
+        } else {
+            ttml::core::sequential_generate(std::span{seq}, dist_factory, 42, /*use_simd=*/true);
+        }
+        for (size_t i = 0; i < seq.size(); ++i) {
+            const auto value = static_cast<float>(seq[i]);
+            ASSERT_TRUE(value >= lo && value <= hi)
+                << (parallel ? "parallel" : "sequential") << " element " << i << " is " << value;
+        }
+    }
+}
+
+}  // namespace
+
+TEST_F(RandomGenerationTests, SimdRngFillsEveryElement) {
+    // The SIMD generator's fast paths.
+    const auto uniform = []() { return std::uniform_real_distribution<float>(0.5F, 1.5F); };
+    const auto normal = []() { return std::normal_distribution<float>(0.0F, 1.0F); };
+    expect_simd_generators_fill_every_element<float>(uniform, 0.5F, 1.5F);
+    expect_simd_generators_fill_every_element<bfloat16>(uniform, 0.5F, 1.5F);
+    expect_simd_generators_fill_every_element<float>(normal, -100.0F, 100.0F);
+    expect_simd_generators_fill_every_element<bfloat16>(normal, -100.0F, 100.0F);
+
+    // The SIMD generator would leave these unwritten, so they fall back to the scalar one.
+    expect_simd_generators_fill_every_element<uint32_t>(
+        []() { return std::uniform_int_distribution<uint32_t>(0U, 63U); }, 0.0F, 63.0F);
+    expect_simd_generators_fill_every_element<int32_t>(
+        []() { return std::uniform_int_distribution<int32_t>(-8, 8); }, -8.0F, 8.0F);
+    expect_simd_generators_fill_every_element<double>(
+        []() { return std::uniform_real_distribution<double>(0.5, 1.5); }, 0.5F, 1.5F);
 }

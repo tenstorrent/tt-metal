@@ -67,7 +67,7 @@ void drain_emule_run(tt::tt_metal::distributed::MeshDevice* mesh_device, tt::Tar
     }
     tt::tt_metal::emule::flush_deferred_mesh_dispatch();
     std::vector<int> device_ids;
-    device_ids.reserve(mesh_device->get_devices().size());
+    device_ids.reserve(mesh_device->impl().get_devices().size());
     for (auto device_id : mesh_device->get_device_ids()) {
         device_ids.push_back(static_cast<int>(device_id));
     }
@@ -94,7 +94,7 @@ SDMeshCommandQueue::SDMeshCommandQueue(
     active_distributed_context_(std::move(distributed_context)) {
     // Init thread pool with all local devices for parallel dispatch.
     // One thread per device enables NUMA-aware CPU binding.
-    auto local_devices = mesh_device_->get_devices();
+    auto local_devices = mesh_device_->impl().get_devices();
     if (local_devices.size() > 1) {
         launch_thread_pool_ = create_device_bound_thread_pool(mesh_device_->impl().get_context_id(), local_devices);
     }
@@ -152,6 +152,11 @@ bool SDMeshCommandQueue::write_shard_to_device(
     }
 
     auto payload = ttsl::Span<const uint8_t>(static_cast<const uint8_t*>(src) + region_value.offset, region_value.size);
+    // Timed per shard, after wait_for_cores_idle(), so the time is the transfer alone.
+    ScopedHostTransfer transfer_stats(
+        host_transfer_stats_,
+        HostTransferCategory::BufferWriteSlowDispatch,
+        host_transfer_stats_->enabled() ? host_bytes_written(*shard_view, region_value.size, logical_core_filter) : 0);
     if (logical_core_filter != nullptr) {
         tt::tt_metal::experimental::core_subset_write::WriteToBuffer(*shard_view, payload, *logical_core_filter);
     } else {
@@ -186,6 +191,8 @@ void SDMeshCommandQueue::read_shard_from_device(
         return;
     }
 
+    ScopedHostTransfer transfer_stats(
+        host_transfer_stats_, HostTransferCategory::BufferReadSlowDispatch, shard_view->size());
     tt::tt_metal::slow_dispatch::ReadFromBuffer(*shard_view, static_cast<uint8_t*>(dst));
 }
 
@@ -439,7 +446,7 @@ void SDMeshCommandQueue::enqueue_write_dram_core_counter(
         return;
     }
     // No lock_api_function_() here: the caller (TensorPrefetcherManager) already holds
-    // the MeshDevice api lock across the counter bump + WAIT_CQ enqueue, and that lock is
+    // the MeshDevice api lock across this write and the sequence it is part of, and that lock is
     // non-recursive, so re-locking would self-deadlock. See the declaration's contract.
     TT_FATAL(sub_device_ids.empty(), "Sub-device IDs are not supported for slow dispatch");
 
