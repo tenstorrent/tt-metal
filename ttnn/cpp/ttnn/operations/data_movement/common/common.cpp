@@ -5,6 +5,7 @@
 #include "ttnn/operations/data_movement/common/common.hpp"
 
 #include <algorithm>
+#include <cstring>
 #include "ttnn/operations/core/program_cache_l1.hpp"
 #include "ttnn/operations/data_movement/pad/pad.hpp"
 #include "ttnn/operations/data_movement/squeeze/squeeze.hpp"
@@ -929,6 +930,44 @@ bool has_subaligned_shard_row(const tt::tt_metal::MemoryConfig& memory_config, u
                                    ? tt::tt_metal::hal::get_dram_alignment()
                                    : tt::tt_metal::hal::get_l1_alignment();
     return (memory_config.shard_spec()->shape[1] * element_size) % alignment != 0;
+}
+
+void check_rank1_nd_shard_aligned(
+    const char* op_name,
+    const char* which,
+    const tt::tt_metal::MemoryConfig& mc,
+    const ttnn::Shape& padded_shape,
+    uint32_t element_size,
+    bool allow_first_shard_payload,
+    uint32_t end_elements) {
+    const auto& nd = mc.nd_shard_spec();
+    if (!nd.has_value() || nd->shard_shape.rank() != 1) {
+        return;
+    }
+    const uint32_t alignment = (mc.buffer_type() == tt::tt_metal::BufferType::DRAM)
+                                   ? tt::tt_metal::hal::get_dram_alignment()
+                                   : tt::tt_metal::hal::get_l1_alignment();
+    const uint32_t shard_bytes = nd->shard_shape[0] * element_size;
+    if (shard_bytes % alignment == 0) {
+        return;
+    }
+    if (padded_shape.rank() > 1 && nd->shard_shape[0] == padded_shape[-1]) {
+        return;
+    }
+    if (allow_first_shard_payload && end_elements * element_size <= shard_bytes) {
+        return;
+    }
+    TT_FATAL(
+        false,
+        "{} {} is ND-sharded with rank-1 shard shape {} ({} bytes), which is not a multiple of the {}-byte "
+        "buffer alignment, and the {} reaches past the shard's payload. Use a shard size whose byte size "
+        "is aligned.",
+        op_name,
+        which,
+        nd->shard_shape,
+        shard_bytes,
+        alignment,
+        (std::strcmp(op_name, "Slice") == 0 ? "slice" : "gather"));
 }
 
 void push_buffer_set(
