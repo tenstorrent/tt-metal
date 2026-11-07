@@ -288,7 +288,7 @@ class Tracer:
                     ttnn.end_trace_capture(d, trace_id, cq_id=cq_id)
 
             outputs = _tree_map(_verify_value, outputs, path_label="outputs")
-        except Exception:
+        except BaseException:
             for d, trace_id in zip(self._devices, trace_ids, strict=True):
                 ttnn.release_trace(d, trace_id)
             raise

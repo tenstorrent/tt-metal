@@ -183,7 +183,7 @@ class LTXAudioDecoderAdapter:
         self.prepare_decode(audio_spatial)
         try:
             yield
-        except Exception:
+        except BaseException:
             if self._independent_trace:
                 self.release_traces()
             raise

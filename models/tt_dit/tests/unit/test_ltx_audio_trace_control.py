@@ -451,6 +451,35 @@ class AudioTraceControlTest(unittest.TestCase):
                 self.assertEqual(tracing["Tracer"]._traces_live[7], 0)
                 self.assertEqual(a.trace_status()["stages"]["mel"]["replays"], 0)
 
+    def test_interrupted_capture_replay_and_late_stage_release_buffers(self):
+        for error in (KeyboardInterrupt, SystemExit, GeneratorExit):
+            for phase in ("capture", "replay", "late"):
+                with self.subTest(error=error.__name__, phase=phase):
+                    a, native, _, tracing = fixture()
+                    if phase == "replay":
+                        decode(a, Tensor())
+                        target, method = native, "execute_trace"
+                    elif phase == "late":
+                        target, method = a.vocoder_with_bwe.bwe_generator, "forward_traced"
+                    else:
+                        # Complete eager preparation so the fault occurs inside capture.
+                        a.prepare_decode(Tensor())
+                        target, method = native, "operation"
+                    with patch.object(target, method, side_effect=error("interrupted")):
+                        with self.assertRaises(error):
+                            decode(a, Tensor())
+                    self.assertEqual(native.traces, {})
+                    self.assertIsNone(native.active)
+                    self.assertIsNone(a._warm_trace_identity)
+                    self.assertEqual(tracing["Tracer"]._traces_live.get(7, 0), 0)
+                    for _, module, method, _ in a._trace_modules():
+                        for tracer in getattr(type(module), method)._tracers_keyed.get(module, {}).values():
+                            self.assertEqual(tracer.inputs, {})
+                            self.assertIsNone(tracer._outputs)
+                    # Cancellation propagates; a later request can warm and capture anew.
+                    decode(a, Tensor())
+                    self.assertEqual(a.trace_status()["stages"]["mel"]["replays"], 0)
+
     def test_kernel_prewarm_is_neither_capture_nor_replay(self):
         a, _, _, tracing = fixture()
         tracing["_kernel_prewarm_capturing"] = True
