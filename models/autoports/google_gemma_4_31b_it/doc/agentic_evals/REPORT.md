@@ -161,7 +161,7 @@ Device costs include the device job, not build/queue. Release savings are foreca
 | release-freeze-materialization | 0.00000 / 0.00000 | 0.00000 | none/solved: Exact candidate dry/release argv and cohort parity prepared; complete initial8 native replies, freshness/no-score and workflow-drift checks specified. No freeze, dispatch or pass claim. |
 | ci-log-download-timeout | 0.00000 / 0.00000 | 0.00000 | none/solved: Existing bounded observers recovered unchanged: successful 61MB/21MB snapshots in1.916680s/1.088183s, hashes/offsets verified. Retrieval incident resolved; transport cause unresolved and upstream coverage/fr… |
 
-Evidence is written once by each effort; this table summarizes the current coordinator disposition. Unmeasured savings remain unknown or receive zero planning credit.
+Evidence is written once by each effort; this table summarizes the current coordinator disposition. The full ranking history is preserved through the `rankings_history` links in `efforts.json`, followed by its recent inline rankings. Unmeasured savings remain unknown or receive zero planning credit.
 
 ## Configuration and remaining limits
 

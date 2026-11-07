@@ -1,5 +1,5 @@
 {
-  "status": "GPQA40 valid C8 selected; normalC4/80 active, C8/80 comparison prepared; tool-suite measured stops",
+  "status": "GPQA40 valid C8 selected; normalC4/80 and C8/80 comparison active; tool-suite measured stops",
   "evals": {
     "r1_gpqa_diamond": {
       "decision": "go",
@@ -52,7 +52,7 @@
       "projection_scope": "Candidate80 C8 empirical sensitivity, not frozen release; actual80 pending",
       "c8_80_comparison": {
         "run_id": 42332785769,
-        "status": "submitted",
+        "status": "device_job_in_progress",
         "source": "runs/gpqa80-c8-saturation-comparison/manifest.json"
       }
     },
