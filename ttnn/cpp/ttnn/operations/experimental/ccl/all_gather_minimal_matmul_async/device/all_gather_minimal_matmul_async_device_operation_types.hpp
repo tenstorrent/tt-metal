@@ -125,8 +125,6 @@ struct AllGatherMinimalMatmulAsyncParams {
         "num_workers_per_link",
         "num_buffers_per_channel",
         "config",
-        "fused_activation",
-        "output_dtype",
         "chunks",
         "dim",
         "chunk_sizes",
@@ -134,6 +132,8 @@ struct AllGatherMinimalMatmulAsyncParams {
         "fsdp_ring_size",
         "using_persistent_weight_buffer",
         "fuse_swiglu",
+        "fused_activation",
+        "output_dtype",
         // Selects DST_SYNC_MODE and the other compile-time compute settings.
         "compute_kernel_config");
 
@@ -147,8 +147,6 @@ struct AllGatherMinimalMatmulAsyncParams {
             this->num_workers_per_link,
             this->num_buffers_per_channel,
             this->config,
-            this->fused_activation,
-            this->output_dtype,
             this->chunks,
             this->dim,
             this->chunk_sizes,
@@ -156,6 +154,8 @@ struct AllGatherMinimalMatmulAsyncParams {
             this->fsdp_ring_size,
             this->using_persistent_weight_buffer,
             this->fuse_swiglu,
+            this->fused_activation,
+            this->output_dtype,
             this->compute_kernel_config);
     }
 };
