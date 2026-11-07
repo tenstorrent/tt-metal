@@ -109,6 +109,13 @@ namespace ttnn::prim {
 struct FillPadProgramFactory {
     static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
         const FillPadParams& operation_attributes, const FillPadInputs& tensor_args, Tensor& tensor_return_value);
+    // Re-applies the bottom-mask threshold (H_mod32) on a cache hit; the program is shared by all
+    // logical heights with the same padded height.
+    static tt::tt_metal::experimental::ProgramRunArgs override_runtime_arguments(
+        const FillPadParams& operation_attributes,
+        const FillPadInputs& tensor_args,
+        Tensor& tensor_return_value,
+        const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate = std::nullopt);
 };
 
 // Handles all L1-sharded tensors (HEIGHT_SHARDED, WIDTH_SHARDED, BLOCK_SHARDED).
