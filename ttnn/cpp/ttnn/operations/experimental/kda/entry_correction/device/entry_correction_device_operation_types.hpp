@@ -35,6 +35,8 @@ struct EntryCorrectionInputs {
     Tensor tail_entry;
     Tensor actual_start;
     std::optional<Tensor> actual_end;
+    // Each device's rank along the sequence-parallel axis (UINT32 row-major scalar): one program for the whole mesh.
+    std::optional<Tensor> sp_rank;
 };
 
 }  // namespace ttnn::experimental::prim

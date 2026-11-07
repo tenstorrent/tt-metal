@@ -250,6 +250,7 @@ ttnn::device_operation::MeshWorkloadArtifacts EntryCorrectionProgramFactory::cre
         {final_state_name, final_state},
     };
     kda_factory_detail::bind_actual_end(spec, run_args, in.actual_end, reader);
+    const auto chronology_programs = kda_factory_detail::bind_sp_rank(spec, run_args, in.sp_rank, reader);
     spec.kernels = {std::move(reader), std::move(writer), std::move(compute)};
     return kda_factory_detail::chronology_workload(
         ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)},
@@ -257,7 +258,8 @@ ttnn::device_operation::MeshWorkloadArtifacts EntryCorrectionProgramFactory::cre
         device,
         attrs.sequence_parallel_axis,
         attrs.local_rows,
-        reader_kernel);
+        reader_kernel,
+        chronology_programs);
 }
 
 }  // namespace ttnn::experimental::prim
