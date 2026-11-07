@@ -400,6 +400,8 @@ class AudioTraceControlTest(unittest.TestCase):
                 with self.assertRaisesRegex(RuntimeError, "Release audio traces"):
                     decode(a, value)
                 self.assertEqual(native.serial, 3)
+                self.assertEqual(len(native.traces), 3)
+                self.assertIsNotNone(a._warm_trace_identity)
                 a.release_traces()
                 decode(a, value)
 
@@ -423,6 +425,53 @@ class AudioTraceControlTest(unittest.TestCase):
         self.assertTrue(a.vocoder_with_bwe.use_trace)
         self.assertTrue(a.vocoder_with_bwe.use_trace_bwe)
         self.assertEqual(a.trace_status()["stages"]["mel"]["captures"], 0)
+
+    def test_failed_warmup_clears_persistent_caches_and_allows_retry(self):
+        for error in (RuntimeError, KeyboardInterrupt, SystemExit, GeneratorExit):
+            for chain in (False, True):
+                for direct in (False, True):
+                    with self.subTest(error=error.__name__, chain=chain, direct=direct):
+                        a, native, _, _ = fixture()
+                        voc = a.vocoder_with_bwe
+                        voc.device_chain = chain
+                        # Exercise the production cache disposal with fake device owners.
+                        type(voc.vocoder).release_trace = definitions(
+                            ROOT / "models/audio_vae/vocoder_ltx.py", {"release_trace"}, class_name="Vocoder"
+                        )["release_trace"]
+                        type(voc).release_trace = definitions(
+                            ROOT / "models/audio_vae/bwe_ltx.py", {"release_trace"}, class_name="VocoderWithBWE"
+                        )["release_trace"]
+                        for module in (a.mel_decoder, voc.vocoder, voc.bwe_generator):
+                            module._tpad_mask_cache = {}
+                        voc.mel_stft = SimpleNamespace(stft_fn=SimpleNamespace(_window_indices={}))
+                        caches = (
+                            voc.vocoder._tpad_mask_cache,
+                            voc.bwe_generator._tpad_mask_cache,
+                            voc.mel_stft.stft_fn._window_indices,
+                        )
+                        failure = error("after eager cache allocation")
+
+                        def fail_after_cache(module, value):
+                            for cache in caches:
+                                cache[value.shape] = object()
+                            raise failure
+
+                        with patch.object(type(voc), "__call__", fail_after_cache):
+                            for frames in (80, 96, 112):
+                                value = Tensor(shape=(1, 8, frames, 16))
+                                with self.assertRaises(error) as caught:
+                                    a.prepare_decode(value) if direct else decode(a, value)
+                                self.assertIs(caught.exception, failure)
+                                self.assertTrue(all(not cache for cache in caches))
+                                self.assertIsNone(a._warm_trace_identity)
+                                self.assertEqual(native.traces, {})
+                                self.assertTrue(a.mel_decoder.use_trace)
+                                self.assertTrue(voc.use_trace)
+                                self.assertTrue(voc.use_trace_bwe)
+                        self.assertEqual(decode(a, Tensor(5)).value, 7 if chain else 8)
+                        self.assertEqual(decode(a, Tensor(9)).value, 11 if chain else 12)
+                        stage = "chain" if chain else "vocoder"
+                        self.assertEqual(a.trace_status()["stages"][stage]["replays"], 1)
 
     def test_partial_capture_and_execution_failures_release_buffers(self):
         for failure in ("end", "execute", "initial_execute", "late"):
