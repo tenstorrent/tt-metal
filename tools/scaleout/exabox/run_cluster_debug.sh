@@ -406,7 +406,7 @@ out_q=$(printf '%q' "$RANK_DUMP_DIR")
 root_probe=""
 if [[ -n "$PER_HOST_ROOT" ]]; then
     root_q=$(printf '%q' "$PER_HOST_ROOT")
-    root_probe="mkdir -p $root_q/\$h/$RUN_DATE 2>/dev/null && test -w $root_q/\$h/$RUN_DATE || rootbad=1"
+    root_probe="mkdir -p -m 1777 $root_q/\$h 2>/dev/null && mkdir -p -m 1777 $root_q/\$h/$RUN_DATE 2>/dev/null && test -w $root_q/\$h/$RUN_DATE || rootbad=1"
 fi
 # A tool missing on a host is "not installed" on a shared mount; with --no-shared-mount it was
 # copied there a moment ago, so its absence is a failure of that copy instead.
@@ -566,7 +566,7 @@ collect_bin=$(printf '%q ' "$RANK_TOOL" "${collect_args[@]}")
 if [[ -n "$PER_HOST_ROOT" ]]; then
     # <root>/<host>/<date>/cluster_dump_<host>_<stamp>.jsonl, the directory made by the rank.
     root_q=$(printf '%q' "$PER_HOST_ROOT")
-    RANK_TARGET="d=$root_q/\$h/$RUN_DATE; mkdir -p \"\$d\" && $collect_bin --out \"\$d/cluster_dump_\${h}_$RUN_STAMP.jsonl\""
+    RANK_TARGET="umask 0022; d=$root_q/\$h/$RUN_DATE; mkdir -p \"\$d\" && $collect_bin --out \"\$d/cluster_dump_\${h}_$RUN_STAMP.jsonl\""
 else
     dump_prefix=$(printf '%q' "$RANK_DUMP_DIR/cluster_dump_")
     RANK_TARGET="$collect_bin --out $dump_prefix\$h.jsonl"
@@ -736,6 +736,7 @@ fi
 # ---------------------------------------------------------------------------
 
 echo "Merging ${#dumps[@]} dump(s) into $CLUSTER_FILE ..."
+[[ -z "$PER_HOST_ROOT" ]] || umask 0022
 if ! "$TOOL" merge --cluster-name "$CLUSTER_NAME" --out "$CLUSTER_FILE" --dumps "${dumps[@]}"; then
     echo "Error: merge failed" >&2
     exit 1
