@@ -72,11 +72,15 @@ private:
         ttsl::Span<const SubDeviceId> sub_device_ids,
         bool notify_host,
         const std::optional<MeshCoordinateRange>& device_range = std::nullopt);
+    // With config_ahead, a device holding a sub-device manager switch's commands gets the program's config and binary
+    // before them and its launch after (the switch's drain then overlaps the config writes).
     void write_program_commands_to_devices(
         const std::vector<Device*>& devices,
         ProgramCommandSequence& program_cmd_seq,
         bool stall_first,
-        bool stall_before_program);
+        bool stall_before_program,
+        bool config_ahead = false,
+        ttsl::Span<const uint32_t> config_ahead_waits = {});
     // For a given MeshWorkload, a subgrid is unused if no programs are run on it. Dispatch sequences
     // must be sent to this subgrid to ensure consistent global state across the Virtual Mesh.
     // This function generates and writes dispatch commands forwarding go signal sequences to
@@ -132,11 +136,32 @@ private:
     DispatchArray<LaunchMessageRingBufferState> worker_launch_message_buffer_state_reset_;
     DispatchArray<uint32_t> expected_num_workers_completed_reset_{};
     DispatchArray<tt::tt_metal::WorkerConfigBufferMgr> config_buffer_mgr_reset_;
+    // After a sub-device manager switch outside a trace whose commands the devices hold back: the Tensix kernel config
+    // ring space of the previous manager's programs not known to have finished. The next program may write its config
+    // ahead of the switch only clear of each sub-device's last one (which may still run), after waiting for any other
+    // it overlaps.
+    struct SwitchConfigInUse {
+        uint32_t lo = 0;
+        uint32_t hi = 0;
+        uint32_t sub_device = 0;
+        uint32_t finished_count = 0;
+        bool last = false;
+    };
+    std::optional<std::vector<SwitchConfigInUse>> switch_config_in_use_;
+
+    // A sub-device manager switch made during trace capture. record_end encodes the programs before it under
+    // from_manager_id and writes the switch (drain, reset the workers, set up the new manager) into the trace.
+    struct SubDeviceManagerSwitch {
+        SubDeviceManagerId from_manager_id;
+        std::vector<uint32_t> workers_per_sub_device;
+        std::vector<std::pair<CoreRangeSet, uint32_t>> core_go_message_mapping;
+    };
 
     struct MeshTraceNode {
         std::vector<std::pair<MeshCoordinateRange, TraceNode>> trace_nodes;
         bool multicast_go_signals{false};
         SubDeviceId sub_device_id;
+        std::optional<SubDeviceManagerSwitch> sub_device_manager_switch;
     };
 
     // The following data structures are only popiulated when the MeshCQ is being used to trace workloads
