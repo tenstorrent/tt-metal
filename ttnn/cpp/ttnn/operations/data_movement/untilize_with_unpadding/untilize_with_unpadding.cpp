@@ -83,6 +83,15 @@ Tensor untilize_with_unpadding(
     ttsl::SmallVector<uint32_t> output_end_vector;
     ttnn::Shape output_end;
     const auto& input_shape = input_tensor.logical_shape();
+    TT_FATAL(
+        output_tensor_end.rank() == input_shape.rank(),
+        "untilize_with_unpadding: output_tensor_end rank {} must match input rank {}",
+        output_tensor_end.rank(),
+        input_shape.rank());
+    if (input_shape.rank() > 4) {
+        // Check the original axes before squeezing can hide growth of one leading dimension.
+        ttnn::prim::UntilizeWithUnpaddingDeviceOperation::validate_output_tensor_end(output_tensor_end, input_tensor);
+    }
     for (auto index = 0; index < input_shape.rank(); ++index) {
         output_end_vector.push_back(output_tensor_end[index]);
     }
@@ -121,22 +130,11 @@ Tensor untilize_with_unpadding(
             empty_shape.push_back(output_tensor_end[index] + 1);
         }
         const ttnn::Shape output_shape(std::move(empty_shape));
-        // validate_on_program_cache_miss never looks at output_tensor_end, so these two have no
-        // counterpart there. Unpadding only shrinks, and volume alone misses a grown axis:
-        // [0, 64] with ends [0, UINT32_MAX] is zero-volume but shaped [1, 0].
+        // An empty input cannot supply a non-empty output, even within tile padding.
         TT_FATAL(
             output_shape.volume() == 0,
             "untilize_with_unpadding: a zero-volume input requires a zero-volume output, got {}",
             output_shape);
-        for (size_t index = 0; index < input_shape.rank(); ++index) {
-            TT_FATAL(
-                output_shape[index] <= input_tensor.padded_shape()[index],
-                "untilize_with_unpadding: output extent {} exceeds the padded input extent {} in "
-                "dimension {}",
-                output_shape[index],
-                input_tensor.padded_shape()[index],
-                index);
-        }
 
         // Everything else is the device operation's to decide. fp32_dest_acc_en and
         // enough_space_height only steer factory selection, which is skipped, and neither
@@ -150,6 +148,8 @@ Tensor untilize_with_unpadding(
             .enough_space_height = false,
             .sub_core_grids = sub_core_grids,
         };
+        const auto output_spec =
+            ttnn::prim::UntilizeWithUnpaddingDeviceOperation::compute_output_specs(attributes, input_tensor);
         ttnn::prim::UntilizeWithUnpaddingDeviceOperation::validate_on_program_cache_miss(attributes, input_tensor);
         // The one rule that lives in select_program_factory rather than validate.
         TT_FATAL(
@@ -159,10 +159,7 @@ Tensor untilize_with_unpadding(
         // Allocated rather than filled: there is no element to initialise, and going through a host
         // tensor would upload to the device, which fails inside trace capture and drops the input's
         // mesh topology on the way.
-        return create_device_tensor(
-            ttnn::prim::UntilizeWithUnpaddingDeviceOperation::compute_output_specs(attributes, input_tensor),
-            input_tensor.device(),
-            input_tensor.tensor_topology());
+        return create_device_tensor(output_spec, input_tensor.device(), input_tensor.tensor_topology());
     }
 
     auto input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
