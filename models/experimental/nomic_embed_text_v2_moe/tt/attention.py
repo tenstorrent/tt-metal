@@ -4,11 +4,10 @@
 """Bidirectional MHA, the TTNN form of reference.NomicBertAttention.
 
     x (B, 1, S, H)
-      Wqkv                    -> (B, 1, S, 3H)   three-major: [q | k | v]
+      Wqkv                    -> (B, 1, S, 3H)   three-major: [q | k | v], q and k head dims pair-permuted
       nlp_create_qkv_heads    -> three (B, A, S, D)
-      rotary_embedding_hf     -> q and k rotated, v untouched
-      SDPA, is_causal=False   -> (B, A, S, D)
-      nlp_concat_heads        -> (B, 1, S, H)
+      rotary_embedding_llama  -> q and k rotated, v untouched
+      SDPA, is_causal=False   -> (B, 1, S, H)    heads concatenated: output_concat_heads=True
       out_proj                -> (B, 1, S, H)
 
 The rotary tables and the additive mask come from the caller, not from here: both depend only on
@@ -20,15 +19,71 @@ from __future__ import annotations
 from functools import cache
 from typing import Optional
 
+import torch
+
 import ttnn
 
 from models.common.lightweightmodule import LightweightModule
-from models.experimental.nomic_embed_text_v2_moe.tt.common import to_device, transpose_linear_weight
-from models.experimental.nomic_embed_text_v2_moe.tt.matmul_config import dense_linear
+from models.experimental.nomic_embed_text_v2_moe.tt.common import (
+    m_tiles,
+    rotary_pair_permutation,
+    rotary_rotation_matrix,
+    sharded_norm_layout,
+    to_device,
+    transpose_linear_weight,
+)
+from models.experimental.nomic_embed_text_v2_moe.tt.matmul_config import (
+    dense_linear,
+    l1_bank_bytes,
+    l1_floor,
+    prepare_grouped_projection,
+)
 from models.experimental.nomic_embed_text_v2_moe.tt.model_config import OpGroup
 
 # The largest fp32 score block, in tiles, that fit L1 beside the rest of SDPA's buffers.
 _FP32_SCORE_TILES = 144
+
+# rotary_embedding_llama splits prefill work over batch and sequence tiles, not heads, so (B, A, S, D)
+# keeps at most B * ceil(S / 32) cores busy. Below this many, rotary folds the heads into the batch axis.
+_ROTARY_FOLD_TILES = 96
+
+# A core whose rows (its sequence tiles x its heads) number at most _ROTARY_FAST_ROWS runs rotary's
+# faster path: it reads its cos/sin rows once for all of its heads, where above that it reads them
+# again for every row. Up to _ROTARY_VIEW_SEQ_TILES sequence tiles, from _ROTARY_VIEW_MIN_TILES tile
+# rows of M (1024 tokens) up, heads folded into the batch so a core keeps a few of them take that path
+# on more cores (rotary_heads_per_view).
+_ROTARY_FAST_ROWS = 8
+_ROTARY_VIEW_SEQ_TILES = 4
+_ROTARY_VIEW_MIN_TILES = 32
+_ROTARY_HEAD_SPLIT_IDLE_RATIO = 4
+
+
+@cache
+def rotary_heads_per_view(batch: int, seq_tiles: int, heads: int, cores: int) -> int:
+    """How many heads each batch entry of rotary's (B * A / k, k, S, D) view keeps, k a divisor of A.
+
+    rotary_embedding_llama gives each core a share of the view's batch entries and sequence tiles, and
+    of its k heads only when that leaves at least _ROTARY_HEAD_SPLIT_IDLE_RATIO times as many cores idle
+    (its multi-core program factory). Up to _ROTARY_VIEW_SEQ_TILES sequence tiles the largest k whose
+    cores keep at most _ROTARY_FAST_ROWS rows is taken: 3.9x faster than the native view at 256x32 (169
+    -> 43 us a call), 2.3x at 128x64, 1.6x at 64x128, 1.5x at 85x96. Longer sequences keep the native
+    view, A heads an entry, and inputs under 1024 tokens the small-input rule, one head an entry below
+    _ROTARY_FOLD_TILES tile rows. Measured over every view at 25 shapes from 64x32 to 16x512, the pick
+    is within 6% of the fastest at each. Every row is rotated alike in any view, so the output is the
+    same bit for bit.
+    """
+    if seq_tiles > _ROTARY_VIEW_SEQ_TILES or batch * seq_tiles < _ROTARY_VIEW_MIN_TILES:
+        return 1 if batch * seq_tiles < _ROTARY_FOLD_TILES else heads
+    for kept in sorted((k for k in range(1, heads + 1) if heads % k == 0), reverse=True):
+        entries = batch * heads // kept
+        batch_cores = min(entries, cores)
+        seq_cores = min(cores // batch_cores, seq_tiles)
+        idle_ratio = cores // (batch_cores * seq_cores)
+        head_cores = min(kept, idle_ratio) if idle_ratio >= _ROTARY_HEAD_SPLIT_IDLE_RATIO else 1
+        rows = ttnn.core.divup(seq_tiles, seq_cores) * ttnn.core.divup(kept, head_cores)
+        if rows <= _ROTARY_FAST_ROWS:
+            return kept
+    return 1
 
 
 def _round_up_to_tile(n: int) -> int:
@@ -40,49 +95,79 @@ def _balanced_chunk(length: int, limit: int) -> int:
     return _round_up_to_tile(ttnn.core.divup(length, ttnn.core.divup(length, limit)))
 
 
+# SDPA's time per round of query chunks, in key-chunk-equivalents: a chunk of q queries against a
+# whole sequence of S keys in chunks of k costs about q * (1 + _KEY_STEP_COST * S / k) + _CHUNK_COST.
+# Fitted to the fp32 kernel with q, k, v in L1 at 15 shapes from 4x512 to 64x128 (2026-10-27): with the
+# query chunk a whole sequence or half of one at 10 or more sequences, the cheapest pair by this estimate
+# ran within 3% of the fastest pair measured at every shape.
+_KEY_STEP_COST = 0.5
+_CHUNK_COST = 128
+
+# Below this many heads a call has more cores than (sequence, head) pairs, and smaller query chunks, up
+# to a sequence in eight, spread it; at or above it a head runs as one query chunk or two.
+_MANY_HEADS = 110
+
+
+def _query_chunks_ok(batch: int, chunks: int) -> bool:
+    """Three query chunks a head return wrong rows at 10 or more sequences (and two or four do not), so
+    an odd count above one is left out there."""
+    return chunks == 1 or chunks % 2 == 0 or batch < 10
+
+
+@cache
+def sdpa_chunk_candidates(
+    batch: int, seqlen: int, heads: int, cores: int, fp32_dest_acc: bool, max_query_chunks: int = 0
+) -> tuple[tuple[int, int], ...]:
+    """(q_chunk, k_chunk) pairs for one (B, A, S, D) call, cheapest estimated time first.
+
+    SDPA hands each core a contiguous run of the B * A * ceil(S / q_chunk) query chunks, so the time
+    is the rounds of query chunks a core runs times the cost of one (_KEY_STEP_COST, _CHUNK_COST). A
+    query chunk is a sequence, half of one or, when there are fewer heads than _MANY_HEADS, down to an
+    eighth (max_query_chunks overrides the limit: the placement's L1 fallback splits into four). A key
+    chunk is the sequence or an even split of at most 384, 256, 192 or 128 tokens; with fp32
+    accumulation the kernel computes the padded keys of its last chunk, so they split evenly there,
+    and its fp32 score block, q x k, fits L1 only up to 144 tiles (384 x 384).
+    Ties go to the larger key chunk, then the larger query chunk.
+    """
+    whole = _round_up_to_tile(seqlen)
+    tiles = whole // ttnn.TILE_SIZE
+    most = max_query_chunks or (2 if batch * heads >= _MANY_HEADS else 8)
+    queries = set()
+    for split in (1, 2, 4, 8):
+        if split <= min(most, tiles):
+            q_chunk = _balanced_chunk(whole, ttnn.core.divup(whole, split))
+            if _query_chunks_ok(batch, ttnn.core.divup(whole, q_chunk)):
+                queries.add(q_chunk)
+    keys = {
+        _balanced_chunk(whole, limit) if fp32_dest_acc else min(whole, limit) for limit in (whole, 384, 256, 192, 128)
+    }
+    candidates = []
+    for q_chunk in queries:
+        rounds = ttnn.core.divup(batch * heads * ttnn.core.divup(whole, q_chunk), cores)
+        for k_chunk in keys:
+            if fp32_dest_acc and (q_chunk // ttnn.TILE_SIZE) * (k_chunk // ttnn.TILE_SIZE) > _FP32_SCORE_TILES:
+                continue
+            cost = rounds * (q_chunk * (1 + _KEY_STEP_COST * whole / k_chunk) + _CHUNK_COST)
+            candidates.append((cost, -k_chunk, -q_chunk))
+    return tuple((-q, -k) for _, k, q in sorted(candidates))
+
+
 @cache
 def sdpa_program_config(
     batch: int, seqlen: int, heads: int, grid: ttnn.CoreCoord, fp32_dest_acc: bool, masked: bool
 ) -> ttnn.SDPAProgramConfig:
-    """Query and key chunk sizes for one (B, A, S, D) call.
+    """The cheapest chunk pair of sdpa_chunk_candidates, for q, k and v in DRAM.
 
-    SDPA hands each core a contiguous run of the B * A * ceil(S / q_chunk) query chunks. The
-    fastest query chunk measured is the smallest that still leaves no core a second one, and with
-    more heads than cores the whole sequence, up to 512; a whole-sequence key chunk suits a
-    whole-sequence query chunk, and 256 or 128 the rest. Over 54 shapes from 1x32 to 32x512 this
-    lands within 8% of the best pair, and on the best one at 8x512, 8x384, 1x128 and 2x37. A query
-    chunk splits the sequence evenly, so 17 tiles run as two chunks of 9 rather than 16 and 1. A
-    key chunk does not have to: the bfloat16 kernel skips the padded key tiles of the last chunk,
-    and 256 ran faster than an even 192 at S=384.
-
-    With fp32 accumulation the kernel keeps its score block in fp32, and past 144 tiles (384 x 384)
-    it no longer fits L1: 480 x 480 and 512 x 512 fail to allocate. There the query chunk shrinks
-    to a split of at most 256 while the heads fit on the grid, and the key chunk once they do not,
-    each the faster of the two where measured. The cap holds with no mask or a bfloat4_b one; a
-    bfloat16 mask fails at 256 x 512 too, and only attention_placement's fit check catches that.
-
-    A mask adds a double-buffered block of the score's size. On the bfloat16 kernel that leaves
-    512 x 512 unable to allocate, and with a mask every shape measured ran fastest, or within 7%,
-    at a key chunk of at most 256.
+    On the bfloat16 kernel a mask adds a double-buffered block of the score's size, which leaves
+    512 x 512 unable to allocate, and with a mask every shape measured ran fastest, or within 7%, at a
+    key chunk of at most 256; so a masked call there takes the cheapest pair within that.
     """
-    whole = _round_up_to_tile(seqlen)
-    chunks_per_head = (grid.x * grid.y) // (batch * heads)
-    q_limit = 512 if not chunks_per_head else min(512, _round_up_to_tile(ttnn.core.divup(seqlen, chunks_per_head)))
-    q_chunk = _balanced_chunk(whole, q_limit)
-    if fp32_dest_acc:
-        k_chunk = _balanced_chunk(whole, 512)
-        if (q_chunk // ttnn.TILE_SIZE) * (k_chunk // ttnn.TILE_SIZE) > _FP32_SCORE_TILES:
-            if chunks_per_head:
-                q_chunk = _balanced_chunk(whole, 256)
-            else:
-                k_chunk = _balanced_chunk(whole, 256)
-    elif q_chunk <= 64 and whole > 256:
-        k_chunk = 128
-    elif masked or (whole > 256 and q_chunk != whole):
-        k_chunk = min(whole, 256)
-    else:
-        k_chunk = min(whole, 512)
-    return ttnn.SDPAProgramConfig(compute_with_storage_grid_size=grid, q_chunk_size=q_chunk, k_chunk_size=k_chunk)
+    for q_chunk, k_chunk in sdpa_chunk_candidates(batch, seqlen, heads, grid.x * grid.y, fp32_dest_acc):
+        if fp32_dest_acc or not masked or k_chunk <= 256:
+            return ttnn.SDPAProgramConfig(
+                compute_with_storage_grid_size=grid, q_chunk_size=q_chunk, k_chunk_size=k_chunk
+            )
+    raise ValueError(f"no SDPA chunk pair for {batch}x{seqlen}")
 
 
 def sdpa_circular_buffer_bytes(
@@ -119,12 +204,73 @@ def sdpa_circular_buffer_bytes(
     return total
 
 
-# The L1 the head tensors may span beside SDPA's buffers, in head tensors: q, k, v and their rotated
-# copies overlap, and the ones freed leave holes. Measured up to 5.9 at the allocator's clashes.
-_HEAD_TENSOR_SPAN = 7
+# How far below the deepest tensor live before the head split (the residual, QKV's output) the
+# deepest head tensor reaches at SDPA, in head tensors (one of q, k or v). L1 tensors are allocated
+# from the top down, each in the highest gap it fits. The split writes into outputs allocated v
+# first, then k, then q (TtNomicBertAttention.forward), so with QKV's output in L1 v sits right below
+# it, the rotated q and k take the space QKV's output frees, and SDPA's output what is left of that:
+# 1 head tensor. QKV's output takes ceil(3h / banks) tiles a bank against a head tensor's
+# ceil(h / banks), so the rest can be short of a head tensor, and SDPA's output then goes below v: 2.
+# With QKV's output in DRAM, v, k and q go below the residual, the rotated q and k below them, and
+# SDPA's output where k was: 5.
+_HEAD_TENSOR_SPAN_QKV_IN_DRAM = 5
+
+
+def head_tensor_span(qkv_bank_bytes: int, head_bank: int) -> int:
+    """Head tensors the heads reach below the deepest tensor live before the split; qkv_bank_bytes is
+    QKV's output's share of a bank, 0 when it is in DRAM."""
+    if not qkv_bank_bytes:
+        return _HEAD_TENSOR_SPAN_QKV_IN_DRAM
+    return 1 if qkv_bank_bytes - 2 * head_bank >= head_bank else 2
+
 
 # Head room below the circular-buffer limit: the region started 6 KiB above the reported limit.
 _L1_MARGIN_BYTES = 16 * 1024
+
+
+def _first_fitting_pair(
+    batch: int,
+    seqlen: int,
+    heads: int,
+    head_dim: int,
+    cores: int,
+    fp32_dest_acc: bool,
+    mask_dtype: ttnn.DataType | None,
+    budget: int,
+) -> tuple[int, int] | None:
+    """The cheapest pair of sdpa_chunk_candidates, then of the four-way query splits, whose buffers take
+    at most budget bytes a core."""
+    candidates = sdpa_chunk_candidates(batch, seqlen, heads, cores, fp32_dest_acc)
+    split = sdpa_chunk_candidates(batch, seqlen, heads, cores, fp32_dest_acc, max_query_chunks=4)
+    for q_chunk, k_chunk in (*candidates, *(pair for pair in split if pair not in candidates)):
+        double_buffered_q = batch * heads * ttnn.core.divup(seqlen, q_chunk) > cores
+        footprint = sdpa_circular_buffer_bytes(
+            seqlen, q_chunk, k_chunk, head_dim, fp32_dest_acc, mask_dtype, double_buffered_q
+        )
+        if footprint <= budget:
+            return q_chunk, k_chunk
+    return None
+
+
+@cache
+def sdpa_chunks_in_l1(
+    batch: int,
+    seqlen: int,
+    heads: int,
+    head_dim: int,
+    grid: ttnn.CoreCoord,
+    fp32_dest_acc: bool,
+    mask_dtype: ttnn.DataType | None,
+    cb_bytes: int,
+) -> ttnn.SDPAProgramConfig | None:
+    """SDPA's program config with its operands already in L1: the cheapest pair whose buffers fit cb_bytes,
+    the L1 a bank below where SDPA's output will sit, with _L1_MARGIN_BYTES to spare; None if none does."""
+    pair = _first_fitting_pair(
+        batch, seqlen, heads, head_dim, grid.x * grid.y, fp32_dest_acc, mask_dtype, cb_bytes - _L1_MARGIN_BYTES
+    )
+    if pair is None:
+        return None
+    return ttnn.SDPAProgramConfig(compute_with_storage_grid_size=grid, q_chunk_size=pair[0], k_chunk_size=pair[1])
 
 
 @cache
@@ -138,42 +284,55 @@ def attention_placement(
     mask_dtype: ttnn.DataType | None,
     cb_bytes: int,
     banks: int,
+    qkv_bank_bytes: int = 0,
 ) -> tuple[ttnn.SDPAProgramConfig, ttnn.MemoryConfig]:
     """SDPA's program config and where the head tensors and SDPA's output live, for one call.
 
-    In L1 the head split, both rotary calls, SDPA and the head concat all read and write L1: at
-    8x384 that took them from 3.46 to 2.30 ms a forward. They need room beside SDPA's buffers,
-    which at 8x512 take 1.07 MB of a core on the fp32 kernel, so the key chunk shrinks, to 256 and
-    then 128, before the tensors go back to DRAM. On the fp32 kernel the smaller chunks split the
-    sequence evenly, since it computes the padded keys of its last chunk; the bfloat16 kernel
-    skips them.
+    In L1 the head split, both rotary calls and SDPA all read and write L1: at 8x384 that took them
+    from 3.46 to 2.30 ms a forward. They need room beside SDPA's buffers, which at 8x512 take 1.07 MB
+    of a core on the fp32 kernel at q256/k512. So the pairs of sdpa_chunk_candidates are tried
+    cheapest first, and the first whose buffers fit beside the heads' span is taken; if none does, a
+    head splits into four query chunks; if that does not fit either, the head tensors go to DRAM with
+    the cheapest pair whose buffers fit alone. Each query row runs the same arithmetic whatever the
+    query chunk and the placement, so for a given key chunk the output is the same bit for bit.
 
-    The query chunk is never split instead, although q128 with a whole-sequence key chunk is faster
-    beside L1 heads (63.5 us against q384/k192's 72.7 at 8x384): with three query chunks a head at
-    10 or more sequences SDPA returns wrong rows (10x384, 12x384, 16x384, 12x352), in DRAM as in
-    L1. See test_sdpa_where_three_query_chunks_a_head_are_wrong.
+    cb_bytes is the L1 a bank below the deepest tensor live before the split; qkv_bank_bytes is QKV's
+    output's share of a bank, 0 when it is in DRAM. The span is _HEAD_TENSOR_SPAN_QKV_IN_DRAM head
+    tensors with QKV's output in DRAM, otherwise v and, when the space QKV's output frees cannot take
+    SDPA's output beside the rotated q and k, SDPA's output too. That is the most the heads can reach;
+    once they are placed, the forward re-picks the chunks against where they are (sdpa_chunks_in_l1).
+
+    The query chunk is never a third of a head at 10 or more sequences: there SDPA returns wrong rows
+    (10x384, 12x384, 16x384, 12x352), in DRAM as in L1. See test_sdpa_where_three_query_chunks_a_head_are_wrong.
     """
-    config = sdpa_program_config(batch, seqlen, heads, grid, fp32_dest_acc, mask_dtype is not None)
-    whole = _round_up_to_tile(seqlen)
-    head_tiles = batch * ttnn.core.divup(seqlen, ttnn.TILE_SIZE) * heads * head_dim // ttnn.TILE_SIZE
-    head_bank = ttnn.core.divup(head_tiles, banks) * ttnn.tile_size(ttnn.bfloat16)
-    chunks = batch * heads * ttnn.core.divup(seqlen, config.q_chunk_size)
-    double_buffered_q = chunks > grid.x * grid.y
-    budget = cb_bytes - _L1_MARGIN_BYTES - _HEAD_TENSOR_SPAN * head_bank
-    smaller = (_balanced_chunk(whole, limit) if fp32_dest_acc else limit for limit in (256, 128))
-    for k_chunk in [config.k_chunk_size, *(k for k in smaller if k < config.k_chunk_size)]:
+    cores = grid.x * grid.y
+    head_bank = l1_head_bank_bytes(batch, seqlen, heads, head_dim, banks)
+
+    def config(q_chunk: int, k_chunk: int) -> ttnn.SDPAProgramConfig:
+        return ttnn.SDPAProgramConfig(compute_with_storage_grid_size=grid, q_chunk_size=q_chunk, k_chunk_size=k_chunk)
+
+    span = head_tensor_span(qkv_bank_bytes, head_bank)
+    budget = cb_bytes - _L1_MARGIN_BYTES
+    pair = _first_fitting_pair(
+        batch, seqlen, heads, head_dim, cores, fp32_dest_acc, mask_dtype, budget - span * head_bank
+    )
+    if pair is not None:
+        return config(*pair), ttnn.L1_MEMORY_CONFIG
+    for q_chunk, k_chunk in sdpa_chunk_candidates(batch, seqlen, heads, cores, fp32_dest_acc):
+        double_buffered_q = batch * heads * ttnn.core.divup(seqlen, q_chunk) > cores
         footprint = sdpa_circular_buffer_bytes(
-            seqlen, config.q_chunk_size, k_chunk, head_dim, fp32_dest_acc, mask_dtype, double_buffered_q
+            seqlen, q_chunk, k_chunk, head_dim, fp32_dest_acc, mask_dtype, double_buffered_q
         )
         if footprint <= budget:
-            candidate = ttnn.SDPAProgramConfig(
-                compute_with_storage_grid_size=grid,
-                q_chunk_size=config.q_chunk_size,
-                k_chunk_size=k_chunk,
-                exp_approx_mode=config.exp_approx_mode,
-            )
-            return candidate, ttnn.L1_MEMORY_CONFIG
-    return config, ttnn.DRAM_MEMORY_CONFIG
+            return config(q_chunk, k_chunk), ttnn.DRAM_MEMORY_CONFIG
+    raise ValueError(f"no SDPA chunk pair fits L1 for {batch}x{seqlen}")
+
+
+def l1_head_bank_bytes(batch: int, seqlen: int, heads: int, head_dim: int, banks: int) -> int:
+    """One of q, k or v's share of an L1 bank, bfloat16 tiles; SDPA's output, the heads concatenated,
+    takes the same."""
+    head_tiles = batch * ttnn.core.divup(seqlen, ttnn.TILE_SIZE) * heads * head_dim // ttnn.TILE_SIZE
+    return ttnn.core.divup(head_tiles, banks) * ttnn.tile_size(ttnn.bfloat16)
 
 
 class TtNomicBertAttention(LightweightModule):
@@ -191,7 +350,7 @@ class TtNomicBertAttention(LightweightModule):
     24 us a layer at 8x512. 1/sqrt(64) is a power of two, so q comes out scaled to the bit.
     """
 
-    def __init__(self, device, config, tt_config, state_dict, state_dict_prefix):
+    def __init__(self, device, config, tt_config, state_dict, state_dict_prefix, rotation_matrix=None):
         super().__init__()
         self.tt_config = tt_config
         self.num_heads = config.num_attention_heads
@@ -217,16 +376,32 @@ class TtNomicBertAttention(LightweightModule):
         qkv_bias = state_dict[f"{state_dict_prefix}Wqkv.bias"].clone()
         qkv_weight[query_rows] *= self.head_dim**-0.5
         qkv_bias[query_rows] *= self.head_dim**-0.5
+        # The q and k heads take rotary_pair_permutation's order, which rotary_embedding_llama rotates
+        # in; v keeps its own, so SDPA's output and out_proj see the reference's head dims.
+        query_and_key_heads = torch.arange(2 * self.num_heads)[:, None] * self.head_dim
+        rows = torch.cat(
+            (
+                (query_and_key_heads + rotary_pair_permutation(self.head_dim)).flatten(),
+                torch.arange(2 * config.hidden_size, 3 * config.hidden_size),
+            )
+        )
+        qkv_weight, qkv_bias = qkv_weight[rows], qkv_bias[rows]
         self.qkv_weight, self.qkv_bias = weight("Wqkv", OpGroup.QKV, qkv_weight), bias("Wqkv", qkv_bias)
+        # QKV with M <= N runs on grouped_matmul (dense_linear).
+        self.qkv_grouped = prepare_grouped_projection(self.qkv_weight, self.qkv_bias, device)
         self.out_weight, self.out_bias = weight("out_proj", OpGroup.ATTN_OUT), bias("out_proj")
+        # 2 KB of every core's L1, so the encoder builds one and hands it to all its layers.
+        self.rotation_matrix = (
+            rotary_rotation_matrix(device, tt_config.core_grid) if rotation_matrix is None else rotation_matrix
+        )
 
     def _rotate(
         self, x: ttnn.Tensor, cos: ttnn.Tensor, sin: ttnn.Tensor, memory_config: ttnn.MemoryConfig
     ) -> ttnn.Tensor:
-        """Apply rotary position embedding to one of q or k.
+        """Apply rotary position embedding to one of q or k, whose head dims are pair-permuted.
 
-        rotary_embedding_hf's prefill mode wants a leading batch of 1, so the batch is folded
-        into the head axis; cos/sin broadcast over it, applying the same table to every row.
+        The op runs on the (B * A / k, k, S, D) view rotary_heads_per_view picks; cos/sin broadcast over
+        both leading axes.
 
         Args:
             x: (B, A, S, D) queries or keys.
@@ -239,12 +414,14 @@ class TtNomicBertAttention(LightweightModule):
         """
         shape = x.shape
         batch, heads, seqlen, head_dim = shape[0], shape[1], shape[2], shape[3]
-        # At B = 1 the fold is the identity; the two reshapes are skipped, about 1 us of host time each.
-        folded = x if batch == 1 else ttnn.reshape(x, (1, batch * heads, seqlen, head_dim))
-        rotated = ttnn.experimental.rotary_embedding_hf(
-            folded, cos, sin, is_decode_mode=False, memory_config=memory_config
+        grid = self.tt_config.core_grid
+        kept = rotary_heads_per_view(batch, ttnn.core.divup(seqlen, ttnn.TILE_SIZE), heads, grid.x * grid.y)
+        folded = kept != heads
+        source = ttnn.reshape(x, (batch * heads // kept, kept, seqlen, head_dim)) if folded else x
+        rotated = ttnn.experimental.rotary_embedding_llama(
+            source, cos, sin, self.rotation_matrix, is_decode_mode=False, memory_config=memory_config
         )
-        return rotated if batch == 1 else ttnn.reshape(rotated, (batch, heads, seqlen, head_dim))
+        return ttnn.reshape(rotated, (batch, heads, seqlen, head_dim)) if folded else rotated
 
     def forward(
         self,
@@ -253,6 +430,9 @@ class TtNomicBertAttention(LightweightModule):
         attn_mask: Optional[ttnn.Tensor] = None,
     ) -> ttnn.Tensor:
         """Project, rotate, attend and project back.
+
+        Every L1 plan here is made below the deepest tensor live in L1 (l1_floor): x, QKV's output,
+        the rotary tables and the mask.
 
         Args:
             x: (B, 1, S, H) block input.
@@ -263,7 +443,10 @@ class TtNomicBertAttention(LightweightModule):
         Returns:
             ttnn.Tensor: (B, 1, S, H).
         """
-        qkv = dense_linear(x, self.qkv_weight, self.qkv_bias, OpGroup.QKV, self.tt_config)
+        live = (*rot_mats,) if attn_mask is None else (*rot_mats, attn_mask)
+        qkv = dense_linear(
+            x, self.qkv_weight, self.qkv_bias, OpGroup.QKV, self.tt_config, live=live, grouped=self.qkv_grouped
+        )
 
         compute_kernel_config = self.tt_config.compute_kernel_config(OpGroup.SDPA)
         batch, seqlen = x.shape[0], x.shape[-2]
@@ -276,7 +459,14 @@ class TtNomicBertAttention(LightweightModule):
             attn_mask is not None,
         )
         heads_memory = ttnn.DRAM_MEMORY_CONFIG
+        head_bank = l1_head_bank_bytes(batch, seqlen, self.num_heads, self.head_dim, self.tt_config.l1_banks)
         if self.tt_config.attention_l1:
+            floor = l1_floor((x, qkv, *live), self.tt_config)
+            qkv_bank = 0
+            if qkv.memory_config().buffer_type == ttnn.BufferType.L1:
+                qkv_bank = l1_bank_bytes(
+                    m_tiles(qkv.shape) * qkv.shape[-1] // ttnn.TILE_SIZE, self.tt_config, qkv.dtype
+                )
             program_config, heads_memory = attention_placement(
                 batch,
                 seqlen,
@@ -285,19 +475,31 @@ class TtNomicBertAttention(LightweightModule):
                 self.tt_config.core_grid,
                 compute_kernel_config.fp32_dest_acc_en,
                 None if attn_mask is None else attn_mask.dtype,
-                self.tt_config.l1_cb_bytes,
+                self.tt_config.l1_cb_bytes - floor,
                 self.tt_config.l1_banks,
+                qkv_bank_bytes=qkv_bank,
             )
 
         # Three-major, heads contiguous inside each of q, k and v. transpose_k_heads stays False
         # because SDPA wants K as (B, A, S, D), not pre-transposed. qkv may sit in L1
-        # (dense_linear); the heads are placed explicitly rather than inherit that.
+        # (dense_linear); the heads are placed explicitly rather than inherit that. In L1 the outputs
+        # are allocated v, k, q, so v lands highest and SDPA's buffers get the span the placement
+        # planned.
+        outputs = None
+        if heads_memory.buffer_type == ttnn.BufferType.L1:
+            head_shape = ttnn.Shape((batch, self.num_heads, seqlen, self.head_dim))
+            value_out, key_out, query_out = (
+                ttnn.allocate_tensor_on_device(head_shape, qkv.dtype, ttnn.TILE_LAYOUT, x.device(), heads_memory)
+                for _ in range(3)
+            )
+            outputs = [query_out, key_out, value_out]
         query, key, value = ttnn.experimental.nlp_create_qkv_heads(
             qkv,
             num_heads=self.num_heads,
             num_kv_heads=self.num_heads,
             transpose_k_heads=False,
             memory_config=heads_memory,
+            output_tensors=outputs,
         )
         ttnn.deallocate(qkv)
 
@@ -309,6 +511,26 @@ class TtNomicBertAttention(LightweightModule):
         ttnn.deallocate(query)
         ttnn.deallocate(key)
 
+        if heads_memory.buffer_type == ttnn.BufferType.L1:
+            # SDPA's output goes in the highest gap it fits: at worst right below the deepest tensor now
+            # live, and no lower than attention_placement's span. The first is the tighter when v took a
+            # gap above the residual, as from the second block on.
+            deepest = l1_floor((x, rotated_query, rotated_key, value, *live), self.tt_config)
+            output_bottom = min(deepest + head_bank, floor + head_tensor_span(qkv_bank, head_bank) * head_bank)
+            program_config = (
+                sdpa_chunks_in_l1(
+                    batch,
+                    seqlen,
+                    self.num_heads,
+                    self.head_dim,
+                    self.tt_config.core_grid,
+                    compute_kernel_config.fp32_dest_acc_en,
+                    None if attn_mask is None else attn_mask.dtype,
+                    self.tt_config.l1_cb_bytes - output_bottom,
+                )
+                or program_config
+            )
+
         context = ttnn.transformer.scaled_dot_product_attention(
             rotated_query,
             rotated_key,
@@ -319,13 +541,24 @@ class TtNomicBertAttention(LightweightModule):
             program_config=program_config,
             compute_kernel_config=compute_kernel_config,
             memory_config=heads_memory,
+            output_concat_heads=True,
         )
         for tensor in (rotated_query, rotated_key, value):
             ttnn.deallocate(tensor)
 
-        concatenated = ttnn.experimental.nlp_concat_heads(context, memory_config=heads_memory)
+        # SDPA's output can sit below v (attention_placement); dense_linear plans below it wherever it
+        # is (l1_floor). Up to the split limit the output is written in the layout of norm1, its only
+        # reader (tt/block.py).
+        out_shape = (context.shape[0], 1, context.shape[-2], self.out_weight.shape[-1])
+        norm_layout = sharded_norm_layout(out_shape, self.tt_config.core_grid)
+        out = dense_linear(
+            context,
+            self.out_weight,
+            self.out_bias,
+            OpGroup.ATTN_OUT,
+            self.tt_config,
+            live=(x, *live),
+            norm_layout=norm_layout,
+        )
         ttnn.deallocate(context)
-
-        out = dense_linear(concatenated, self.out_weight, self.out_bias, OpGroup.ATTN_OUT, self.tt_config)
-        ttnn.deallocate(concatenated)
         return out
