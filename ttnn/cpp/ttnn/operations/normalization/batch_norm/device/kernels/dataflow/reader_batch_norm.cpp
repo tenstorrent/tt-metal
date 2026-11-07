@@ -22,6 +22,10 @@ void kernel_main() {
     const uint32_t N = get_arg(args::N);
     const uint32_t C = get_arg(args::C);
 
+    if (num_tiles == 0) {
+        return;
+    }
+
     constexpr bool fill_eps_fp32 = get_arg(args::fill_eps_fp32) == 1;
 
     constexpr uint32_t onetile = 1;
