@@ -10,6 +10,7 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import comp_pcc
+from models.tt_dit.layers.linear import _FUSED_GELU_VARIANTS
 from models.tt_dit.utils.tensor import prepare_for_fused_swiglu
 from tests.ttnn.utils_for_testing import assert_program_cache_flat
 
@@ -69,6 +70,39 @@ def assert_quality(torch_output, tt_output):
     }
 
 
+def _resolve_fused_activation(activation):
+    if activation is None:
+        return None
+    # Resolve through the production map (single source of truth) so a drifted private copy can't
+    # silently under-test the op. An unknown key surfaces as KeyError from the production map.
+    return _FUSED_GELU_VARIANTS[activation]
+
+
+def _apply_torch_activation(torch_output, activation):
+    if activation is None:
+        return torch_output
+    if activation == "gelu":
+        return torch.nn.functional.gelu(torch_output)
+    if activation == "gelu_tanh":
+        return torch.nn.functional.gelu(torch_output, approximate="tanh")
+    # Narrower than _resolve_fused_activation on purpose: gelu_fast is a lossy LUT approximation with
+    # no exact torch oracle at this suite's PCC bar, so exercising it on-device needs a bespoke
+    # reference rather than F.gelu.
+    raise AssertionError(f"Unsupported activation: {activation}")
+
+
+def test_fused_activation_helper_matches_production_variants():
+    # The helper resolves through the production _FUSED_GELU_VARIANTS map (single source of truth).
+    # Lock the map's key set and values so a dropped/renamed variant fails here, and check one
+    # delegated lookup for the gelu_fast entry the old private copy omitted.
+    assert set(_FUSED_GELU_VARIANTS) == {"gelu", "gelu_fast", "gelu_tanh"}
+    assert _FUSED_GELU_VARIANTS["gelu"] == (ttnn.UnaryOpType.GELU, False)
+    assert _FUSED_GELU_VARIANTS["gelu_fast"] == (ttnn.UnaryOpType.GELU, True)
+    assert _FUSED_GELU_VARIANTS["gelu_tanh"] == ttnn.UnaryOpType.GELU_TANH
+    assert _resolve_fused_activation(None) is None
+    assert _resolve_fused_activation("gelu_fast") == (ttnn.UnaryOpType.GELU, True)
+
+
 def run_test_linear_impl(
     device,
     torch_input,
@@ -113,6 +147,7 @@ def run_test_linear_impl(
     gate_memory_config=ttnn.DRAM_MEMORY_CONFIG,
     num_buffers_per_channel=48,
     share_addcmul_inputs=False,
+    output_dtype=None,
     transpose_core_grid=None,
     ccl_semaphore_handles=None,
     barrier_semaphore_handles=None,
@@ -158,11 +193,7 @@ def run_test_linear_impl(
     else:
         persistent_output_buffers = []
 
-    activation_fn = None
-    if activation == "gelu":
-        activation_fn = (ttnn.UnaryOpType.GELU, False)
-    else:
-        assert activation is None, f"Unsupported activation: {activation}"
+    activation_fn = _resolve_fused_activation(activation)
 
     if fuse_addcmul:
         # The residual's rows follow the activation's SP split, whatever the tensor rank.
@@ -209,8 +240,7 @@ def run_test_linear_impl(
         if fuse_addcmul:
             torch_output = torch.addcmul(torch_addcmul_a, torch_output, torch_addcmul_b, value=addcmul_scalar)
 
-        if activation == "gelu":
-            torch_output = torch.nn.functional.gelu(torch_output)
+        torch_output = _apply_torch_activation(torch_output, activation)
 
         # Variable-width chunks split at the given per-device widths
         if chunk_sizes:
@@ -295,6 +325,7 @@ def run_test_linear_impl(
                 tt_weight,
                 bias_tensor=tt_bias,
                 fused_activation=activation_fn,
+                dtype=output_dtype,
                 compute_kernel_config=compute_config,
                 config=matmul_config,
                 persistent_output_buffer=persistent_output_buffers[i] if use_persistent_buffers else None,
@@ -315,6 +346,8 @@ def run_test_linear_impl(
                 transpose_core_grid=transpose_core_grid,
             )
 
+        if output_dtype is not None:
+            assert all(output.dtype == output_dtype for output in tt_output)
         return tt_output
 
     if enable_trace:
@@ -445,6 +478,7 @@ def run_test_linear(
     gate_memory_config=ttnn.DRAM_MEMORY_CONFIG,
     num_buffers_per_channel=48,
     share_addcmul_inputs=False,
+    output_dtype=None,
     use_persistent_buffers=True,
     transpose_core_grid=None,
     ccl_semaphore_handles=None,
@@ -567,6 +601,7 @@ def run_test_linear(
         gate_memory_config=gate_memory_config,
         num_buffers_per_channel=num_buffers_per_channel,
         share_addcmul_inputs=share_addcmul_inputs,
+        output_dtype=output_dtype,
         use_persistent_buffers=use_persistent_buffers,
         transpose_core_grid=transpose_core_grid,
         ccl_semaphore_handles=ccl_semaphore_handles,
@@ -814,6 +849,109 @@ def test_linear(
                 assert check_result[n][c][i]["relative_rmse"] < 0.02
 
 
+_cache_identity_executions = 0
+
+
+@pytest.fixture(scope="module")
+def require_cache_identity_executed():
+    # This regression is the only guard against the device-cache aliasing bug the suite exists
+    # to catch. Both params require an exact 8- or 32-device SKU and skip otherwise, so on any
+    # other box every param skips and a plain `pytest` run reports "passed" with zero coverage.
+    # This finalizer fails such a fully-skipped run so the guard cannot silently self-disable.
+    yield
+    assert _cache_identity_executions > 0, (
+        "test_linear_cache_identity was skipped on every parametrization; the AGMM program-cache "
+        "identity regression did not execute. Run on an exactly-8 or exactly-32 device SKU."
+    )
+
+
+@pytest.mark.parametrize(
+    "mesh_device, device_params",
+    [
+        pytest.param(
+            (2, 4),
+            {
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+                "trace_region_size": 90112,
+                "require_exact_physical_num_devices": True,
+            },
+            id="2x4",
+        ),
+        pytest.param(
+            (4, 8),
+            {
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
+                "fabric_router_config": create_fabric_router_config(4096),
+                "trace_region_size": 90112,
+                "require_exact_physical_num_devices": True,
+            },
+            id="4x8",
+        ),
+    ],
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize("cache_attribute", ["fused_activation", "output_dtype", "compute_kernel_config"])
+def test_linear_cache_identity(mesh_device, require_cache_identity_executed, cache_attribute):
+    global _cache_identity_executions
+    _cache_identity_executions += 1
+    submesh = _create_cluster_submesh(mesh_device, cluster_axis=1)
+    common = dict(
+        M=32,
+        K=2048,
+        N=2048,
+        M_block_size=1,
+        K_block_size=8,
+        N_block_size=8,
+        subblock_h=1,
+        subblock_w=2,
+        topology=ttnn.Topology.Ring,
+        core_grid=ttnn.CoreCoord(4, 4),
+        num_workers_per_link=4,
+        num_links=1,
+        use_non_fused=False,
+        force_transpose=True,
+        sp_axis=0,
+        tp_axis=1,
+        cluster_axis=1,
+        chunks=1,
+    )
+    baseline = dict(activation=None, output_dtype=ttnn.bfloat16, math_fidelity=ttnn.MathFidelity.HiFi2)
+    changed = dict(baseline)
+    if cache_attribute == "fused_activation":
+        changed["activation"] = "gelu_tanh"
+    elif cache_attribute == "output_dtype":
+        changed["output_dtype"] = ttnn.float32
+    else:
+        changed["math_fidelity"] = ttnn.MathFidelity.HiFi4
+
+    def run_and_check(parameters):
+        # Reuse identical data and tensor specs; only the selected op attribute changes.
+        torch.manual_seed(0)
+        results = run_test_linear(submesh, **parameters, **common)
+        for iteration_results in results:
+            for chunk_results in iteration_results:
+                for device_result in chunk_results:
+                    assert device_result["pcc"] > 0.999_500
+                    assert device_result["relative_rmse"] < 0.02
+        return submesh.num_program_cache_entries()
+
+    # Cache state must survive all calls in this test. A numerically correct uncached run
+    # would not cover aliasing; a changed compute configuration can also return plausible
+    # numbers on a stale program, so require a distinct entry as well as correct output.
+    submesh.disable_and_clear_program_cache()
+    submesh.enable_program_cache()
+    try:
+        baseline_entries = run_and_check(baseline)
+        assert baseline_entries > 0
+        assert run_and_check(baseline) == baseline_entries
+        changed_entries = run_and_check(changed)
+        assert changed_entries == baseline_entries + 1, f"{cache_attribute} must create its own program"
+        assert run_and_check(changed) == changed_entries
+        assert run_and_check(baseline) == changed_entries
+    finally:
+        submesh.disable_and_clear_program_cache()
+
+
 def run_test_linear_fsdp(
     device,
     M,
@@ -865,8 +1003,7 @@ def run_test_linear_fsdp(
         torch_output = torch_input @ weight_input
         if bias_input is not None:
             torch_output = torch_output + bias_input
-        if activation == "gelu":
-            torch_output = torch.nn.functional.gelu(torch_output)
+        torch_output = _apply_torch_activation(torch_output, activation)
         torch_output_chunks = torch.chunk(torch_output, chunks, dim=-1)
 
     # --- K-sharding ---
@@ -948,11 +1085,7 @@ def run_test_linear_fsdp(
             mesh_mapper=ttnn.ShardTensor2dMesh(device, mesh_shape=tuple(device.shape), dims=b_shard_dims),
         )
 
-    activation_fn = None
-    if activation == "gelu":
-        activation_fn = (ttnn.UnaryOpType.GELU, False)
-    else:
-        assert activation is None, f"Unsupported activation: {activation}"
+    activation_fn = _resolve_fused_activation(activation)
 
     ccl_cores = ttnn.CoreRangeSet(
         {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(core_grid.x - 1, core_grid.y - 1))}

@@ -8,6 +8,8 @@
 
 #include <optional>
 
+#include <tt-metalium/global_semaphore.hpp>
+
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/experimental/minimal_matmul/device/minimal_matmul_device_operation_types.hpp"
 
@@ -22,9 +24,9 @@ struct AllGatherMinimalMatmulAsyncParams {
     uint32_t num_links = 0;
     uint32_t ring_size = 0;
     ttnn::ccl::Topology topology;
-    std::vector<GlobalSemaphore> semaphore;
+    std::vector<tt::tt_metal::GlobalSemaphore> semaphore;
     std::optional<uint32_t> cluster_axis;
-    const std::optional<GlobalSemaphore>& barrier_semaphore;
+    const std::optional<tt::tt_metal::GlobalSemaphore>& barrier_semaphore;
     bool using_persistent_buffers = false;
     bool force_transpose = false;
     uint32_t num_workers_per_link = 0;
@@ -44,7 +46,7 @@ struct AllGatherMinimalMatmulAsyncParams {
     // into `persistent_weight_buffer` before/concurrently-with the matmul.
     std::optional<uint32_t> fsdp_cluster_axis;
     uint32_t fsdp_ring_size = 1;
-    std::vector<GlobalSemaphore> fsdp_semaphore;  // ping-pong pair, same shape as `semaphore`
+    std::vector<tt::tt_metal::GlobalSemaphore> fsdp_semaphore;  // ping-pong pair, same shape as `semaphore`
     bool using_persistent_weight_buffer = false;
     ttnn::ccl::Topology fsdp_topology;
 
@@ -68,9 +70,9 @@ struct AllGatherMinimalMatmulAsyncParams {
         uint32_t num_links,
         uint32_t ring_size,
         ttnn::ccl::Topology topology,
-        std::vector<GlobalSemaphore> semaphore,
+        std::vector<tt::tt_metal::GlobalSemaphore> semaphore,
         std::optional<uint32_t> cluster_axis,
-        const std::optional<GlobalSemaphore>& barrier_semaphore,
+        const std::optional<tt::tt_metal::GlobalSemaphore>& barrier_semaphore,
         bool using_persistent_buffers,
         bool force_transpose,
         uint32_t num_workers_per_link,
@@ -80,7 +82,7 @@ struct AllGatherMinimalMatmulAsyncParams {
         int32_t dim,
         std::optional<uint32_t> fsdp_cluster_axis,
         uint32_t fsdp_ring_size,
-        std::vector<GlobalSemaphore> fsdp_semaphore,
+        std::vector<tt::tt_metal::GlobalSemaphore> fsdp_semaphore,
         bool using_persistent_weight_buffer,
         ttnn::ccl::Topology fsdp_topology,
         bool fuse_swiglu = false,
@@ -123,6 +125,8 @@ struct AllGatherMinimalMatmulAsyncParams {
         "num_workers_per_link",
         "num_buffers_per_channel",
         "config",
+        "fused_activation",
+        "output_dtype",
         "chunks",
         "dim",
         "chunk_sizes",
@@ -130,8 +134,6 @@ struct AllGatherMinimalMatmulAsyncParams {
         "fsdp_ring_size",
         "using_persistent_weight_buffer",
         "fuse_swiglu",
-        "fused_activation",
-        "output_dtype",
         // Selects DST_SYNC_MODE and the other compile-time compute settings.
         "compute_kernel_config");
 
@@ -145,6 +147,8 @@ struct AllGatherMinimalMatmulAsyncParams {
             this->num_workers_per_link,
             this->num_buffers_per_channel,
             this->config,
+            this->fused_activation,
+            this->output_dtype,
             this->chunks,
             this->dim,
             this->chunk_sizes,
@@ -152,11 +156,23 @@ struct AllGatherMinimalMatmulAsyncParams {
             this->fsdp_ring_size,
             this->using_persistent_weight_buffer,
             this->fuse_swiglu,
-            this->fused_activation,
-            this->output_dtype,
             this->compute_kernel_config);
     }
 };
+
+// attribute_names and attribute_values() are hand-synced: same fields, same order. This assert
+// guards arity ONLY (equal element count) — the most common drift, adding/removing a field on one
+// side. Field order and the name-to-value correspondence stay a hand-maintained invariant it cannot
+// check. Runtime-only members (semaphores, fused_ternary_scalar) and the tensors are out of this list
+// by design: compute_program_hash keys the tensors, the resolved transpose_core_grid and whether
+// fused_ternary_scalar is set alongside these attributes. fsdp_topology is a
+// program-structural CT arg that is NOT in the key; it is safe today only because validate TT_FATALs
+// it to Linear whenever FSDP fusion is active, so it cannot vary — relaxing that check would require
+// keying it here.
+static_assert(
+    std::tuple_size_v<decltype(AllGatherMinimalMatmulAsyncParams::attribute_names)> ==
+        std::tuple_size_v<decltype(std::declval<const AllGatherMinimalMatmulAsyncParams>().attribute_values())>,
+    "AGMM attribute_names and attribute_values() must stay in lockstep");
 
 // The orientation the program is built with. M and N are the matmul's padded row count and weight width.
 inline bool resolve_transpose_core_grid(const AllGatherMinimalMatmulAsyncParams& params, uint32_t M, uint32_t N) {
