@@ -43,9 +43,8 @@ void kernel_main() {
 
 #ifdef CAUSAL_MASK
     constexpr std::uint32_t num_tiles_causal_mask = get_arg(args::num_tiles_causal_mask);
-    // The host repeats the mask every mask_Ht tile rows and starts each core at curr_ht % mask_Ht;
-    // mask_Ht differs from Wt whenever the mask is not square.
-    const std::uint32_t mask_Ht = num_tiles_causal_mask / Wt;
+    constexpr std::uint32_t mask_Ht = get_arg(args::mask_Ht);
+    constexpr std::uint32_t mask_Wt = get_arg(args::mask_Wt);
 
     std::uint32_t mask_ht = mask_start_ht;
 #endif
@@ -150,13 +149,14 @@ void kernel_main() {
             }
         }
 #ifdef CAUSAL_MASK
-        mask_id += Wt;
+        mask_id += mask_Wt;
         ++ht;
         ++mask_ht;
         if (ht == Ht) {
             ht = 0;
             mask_ht = 0;
             mask_id_offset += num_tiles_causal_mask;
+            mask_id = mask_id_offset;
         } else if (mask_ht == mask_Ht) {
             mask_ht = 0;
             mask_id = mask_id_offset;
