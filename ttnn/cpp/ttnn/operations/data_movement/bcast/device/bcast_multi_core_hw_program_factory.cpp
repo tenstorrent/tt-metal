@@ -214,7 +214,7 @@ ttnn::device_operation::ProgramArtifacts BcastMultiCoreHWProgramFactory::create_
         .hw_config = ttnn::create_writer_datamovement_config(),
     };
 
-    ComputeHardwareConfig compute_hw = ComputeHardwareConfig{};  // legacy ComputeConfigDescriptor{} defaults
+    ComputeHardwareConfig compute_hw = make_bcast_compute_hw_config(a, b, output, IN0, IN1);
     KernelSpec compute{
         .unique_id = COMPUTE,
         // Rung-2 fork of the lent bcast_hw.cpp compute kernel (rotate_half still binds the legacy original).

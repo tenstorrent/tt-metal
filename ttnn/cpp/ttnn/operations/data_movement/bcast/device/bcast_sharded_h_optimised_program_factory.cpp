@@ -166,7 +166,7 @@ ttnn::device_operation::ProgramArtifacts BcastShardedHOptimisedProgramFactory::c
         .hw_config = ttnn::create_reader_datamovement_config(),
     };
 
-    ComputeHardwareConfig compute_hw = ComputeHardwareConfig{};  // legacy ComputeConfigDescriptor{} defaults
+    ComputeHardwareConfig compute_hw = make_bcast_compute_hw_config(a, b, output, IN0, IN1);
     KernelSpec compute{
         .unique_id = COMPUTE,
         .source = std::filesystem::path(
