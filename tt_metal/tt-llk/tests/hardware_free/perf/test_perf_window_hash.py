@@ -7,10 +7,10 @@
 Run: pytest test_perf_window_hash.py
 """
 
-from helpers.perf.window_hash import _hash16, _window
+from helpers.perf.window_hash import _window, marker_id
 
 _MARKER = b"LLK_PROFILER:sources/x.cpp:42:TILE_LOOP"
-_ID = _hash16(_MARKER)
+_ID = marker_id(b"sources/x.cpp", 42)
 _ELF = b"\x00" + _MARKER + b"\x00"
 
 
@@ -62,3 +62,8 @@ def test_paths_that_leave_without_the_zone_end_are_not_in_the_window():
     )
 
     assert _window(insns, _ELF) == [0, 1, 2, 3]
+
+
+def test_marker_id_matches_profiler_h():
+    assert marker_id("sources/eltwise_unary_datacopy_test.cpp", 65) == 26627
+    assert marker_id("sources/x.cpp", 42) == 23168

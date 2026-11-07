@@ -225,6 +225,27 @@ def test_l1_to_l1_three_trisc_keeps_unpack_to_pack_duration():
     assert stat_column(f"{prefix}[FPU]", MEAN) not in result.columns
 
 
+@pytest.mark.parametrize(
+    "marker, expected",
+    [
+        ("TILE_LOOP", 60),
+        ("TILE_LOOP1", 70),
+    ],
+)
+def test_l1_to_l1_span_depends_on_the_zone_being_a_fused_stage(marker, expected):
+    data = ProfilerData(
+        _parallel_events([("unpack", 100, 105), ("pack", 90, 160)]).assign(
+            **{MARKER: marker}
+        )
+    )
+
+    result = _stats_l1_to_l1(data)
+    prefix = PerfRunType.L1_TO_L1.name
+    assert (
+        result[result[MARKER] == marker].iloc[0][stat_column(prefix, MEAN)] == expected
+    )
+
+
 def test_l1_to_l1_four_trisc_rejects_mismatched_zone_counts():
     data = ProfilerData(
         _parallel_events(

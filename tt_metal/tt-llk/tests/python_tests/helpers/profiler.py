@@ -14,6 +14,7 @@ from ttexalens.tt_exalens_lib import read_words_from_device
 
 from .llk_params import PerfRunType
 from .perf.schema import MARKER, MEAN, STD, stat_column, stat_prefix
+from .perf.window_hash import marker_id
 from .test_config import TestConfig
 
 
@@ -217,6 +218,9 @@ def _sfpu_has_compute_zones(raw_data: pd.DataFrame) -> bool:
     )
 
 
+_FUSED_STAGE_ZONE = re.compile(r"(INIT|TILE_LOOP|UNINIT)\d+")
+
+
 def _stats_l1_to_l1(data: ProfilerData) -> pd.DataFrame:
     raw_data = data.zones().raw()
 
@@ -260,8 +264,19 @@ def _stats_l1_to_l1(data: ProfilerData) -> pd.DataFrame:
                 f"unpack_count={len(unpack_start)}, pack_count={len(pack_end)})"
             )
 
+        first_start, last_end = stamps[unpack_start], stamps[pack_end]
+        if _FUSED_STAGE_ZONE.fullmatch(marker):
+            pack_start = np.flatnonzero(
+                group & (threads == "pack") & (types == "ZONE_START")
+            )
+            unpack_end = np.flatnonzero(
+                group & (threads == "unpack") & (types == "ZONE_END")
+            )
+            first_start = np.minimum(first_start, stamps[pack_start])
+            last_end = np.maximum(last_end, stamps[unpack_end])
+
         timing_markers += [marker] * len(unpack_start)
-        timing_values.append(stamps[pack_end] - stamps[unpack_start])
+        timing_values.append(last_end - first_start)
 
     return _stats_timings(
         pd.DataFrame(
@@ -403,16 +418,6 @@ class Profiler:
     SUPPORTED_RUNS = STATS_FUNCTION.keys()
 
     @staticmethod
-    def _hash_meta(s: str) -> int:
-        hash32 = 2166136261
-        for c in s.encode("ascii"):
-            hash32 ^= c
-            hash32 = (
-                hash32 * 16777619
-            ) & 0xFFFFFFFF  # simulate 32-bit unsigned overflow
-        return (hash32 ^ (hash32 >> 16)) & 0xFFFF  # fold to 16 bits
-
-    @staticmethod
     def _assert_no_collision(messages, message):
         existing = messages.get(message.id)
         if existing is not None and existing != message:
@@ -426,17 +431,20 @@ class Profiler:
                 marker=groups["marker"],
                 file=groups["file"],
                 line=int(groups["line"]),
-                id=Profiler._hash_meta(groups["full_marker"]),
+                id=marker_id(groups["file"], int(groups["line"])),
             )
         else:
             return None
 
     @staticmethod
     @functools.cache
-    def _get_meta(testname: str, variant_id: str) -> dict[id, ProfilerFullMarker]:
+    def _get_meta(
+        testname: str, variant_id: str
+    ) -> dict[str, dict[int, ProfilerFullMarker]]:
         profiler_data_dir = TestConfig.PROFILER_META / testname / variant_id
         metadata = {}
         for thread in TestConfig.KERNEL_COMPONENTS:
+            markers = metadata[thread] = {}
             file = profiler_data_dir / f"{thread}.meta.bin"
             if not file.exists():
                 continue
@@ -445,8 +453,8 @@ class Profiler:
                 strings = [s.decode("ascii") for s in binary.split(b"\0")]
                 for s in strings:
                     if marker := Profiler._parse_meta(s):
-                        Profiler._assert_no_collision(metadata, marker)
-                        metadata[marker.id] = marker
+                        Profiler._assert_no_collision(markers, marker)
+                        markers[marker.id] = marker
 
         return metadata
 
@@ -456,7 +464,7 @@ class Profiler:
     ) -> int:
         """Look up marker ID from metadata by marker name, file suffix, and line number.
         This provides stable marker ID lookup regardless of build environment paths."""
-        for marker in metadata.values():
+        for marker in (m for markers in metadata.values() for m in markers.values()):
             if (
                 marker.marker == marker_name
                 and marker.file.endswith(file_suffix)
@@ -491,7 +499,9 @@ class Profiler:
         marker_rows = []
         # Parse each thread and append to the DataFrame
         for thread, buffer in zip(TestConfig.KERNEL_COMPONENTS, buffers):
-            marker_rows.extend(Profiler._parse_thread(thread, buffer, profiler_meta))
+            marker_rows.extend(
+                Profiler._parse_thread(thread, buffer, profiler_meta[thread])
+            )
 
         df = Profiler._dataframe(marker_rows)
         return ProfilerData(df)

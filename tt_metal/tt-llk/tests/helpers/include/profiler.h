@@ -33,7 +33,7 @@ constexpr std::uint16_t hashString16(const char (&s)[N])
 #define MARKER_FULL(marker) "LLK_PROFILER" ":" __FILE__ ":" ExpandStringize(__LINE__) ":" marker
 // clang-format on
 
-#define MARKER_ID(marker) hashString16(MARKER_FULL(marker))
+#define MARKER_ID(marker) static_cast<std::uint16_t>(hashString16(__FILE__) + __LINE__)
 
 /* Push a string containing the full marker into the .profiler_meta section.
  * This section will be processed by the host code to construct a mapping

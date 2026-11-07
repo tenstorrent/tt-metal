@@ -100,7 +100,7 @@ def postprocess_tile_loop(frame: pd.DataFrame) -> pd.DataFrame:
     if frame.empty:
         return pd.DataFrame()
 
-    mask = frame[MARKER] == TILE_LOOP_MARKER
+    mask = frame[MARKER].astype(str).str.fullmatch(rf"{TILE_LOOP_MARKER}\d*")
 
     if not mask.any():
         return frame
