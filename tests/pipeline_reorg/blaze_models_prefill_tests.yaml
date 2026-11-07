@@ -2350,6 +2350,33 @@
   budget_type: demo
   sp_config: sc1
 
+# K3.1 mirror of the leg above: the same launcher, depth 24 (ends on a DSA layer) and stage-0 slots.
+# Its golden is an 8192-token vLLM prompt: the request is two 5k chunks, the golden's 8k is PCC'd and
+# the tail timed, as K3 does at 55k of 1M. No perf baseline yet, so throughput is reported, not gated.
+- name: "(Kimi-K3.1) disaggregated prefill L24 KV accuracy 8k@5k + perf 10k@5k, SC1"
+  cmd: |
+    set -euo pipefail
+    export TT_METAL_HOME="${TT_METAL_HOME:-/home/user/tt-metal}"
+    if [ ! -f "${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py" ]; then
+      cp -rn /ci/tt-metal/. "${TT_METAL_HOME}/"
+    fi
+    cd "${TT_METAL_HOME}"
+    # Below the job timeout, as for K3's leg above.
+    export TABLE_WAIT_SECS=2400
+    exec bash models/demos/common/prefill/runners/ci/run_multirank_pcc.sh kimi_k3_1 sc1
+  test_type: k31_prefill_runner_24l
+  test_tags: [kimi_k3_1, runner, kv_cache]
+  test_group: disagg_prefill
+  skus:
+    bh_sc1_high_power:
+      # K3's 60: its L24 leg was still in bringup at 38 min on CI (run 34831600450), where weight load
+      # is NFS-bound. Locally the whole launcher took 6.5 min (bringup ~6 min, two ~207 ms chunks).
+      timeout: 60
+  owner_id: U0ACLAM77PS  # Kosta Grujcic, K3's suite owner; K3.1's owner to be confirmed
+  team: shield
+  budget_type: demo
+  sp_config: sc1
+
 - name: "Ring joint SDPA perf + ring MLA chunked 55k@5k perf, accuracy, determinism"
   # Run every check unconditionally (so each reports numbers) but fail the step if any
   # fails - the harness only propagates the last command's exit code, so aggregate it ourselves.
