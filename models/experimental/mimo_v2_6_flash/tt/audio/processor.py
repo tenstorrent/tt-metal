@@ -4,14 +4,15 @@
 """Audio encoding in vLLM's front end: the upstream MiMo-V2-Omni processor plus the host audio encoders.
 
 ``MiMoV2OmniTTMultiModalProcessor`` runs vLLM 0.30.0's ``MiMoV2OmniMultiModalProcessor`` (placeholders, pixels, mels,
-video timestamps; unchanged) and then replaces each audio item's ``audio_features`` mel [T, 128] by its RVQ codes
-(25 Hz) computed in fp32 as the HF module computes them (reference/audio.py, tt/audio/host_backend.py:
-bit-identical) from the fp32 mel (vLLM casts the processor's mel to bf16 before it leaves the processor, which
-changed 8 of the 126 code frames of a 5 s clip; ``fp32_mels``), or with MIMO_AUDIO_PATCH=frontend by the LLM
-embeddings the patch encoder makes from them (below). The tokenizer encoder, 90-98 % of the host audio work (1.6 s
-for 30 s of audio at 8 threads), so leaves the engine process, where it held up every other request of the engine.
-It stays on the host CPU: its RVQ decisions sit at fp32 rounding level, so only a bit-identical fp32 computation
-keeps every code (tests/perf/audio_codes_margin.py).
+video timestamps; unchanged) and then replaces each audio item's ``audio_features`` mel [T, 128] by the fp32 mel
+for the engine's device tokenizer encoder (MIMO_AUDIO_TOKENIZER=device, the default; below), or with
+MIMO_AUDIO_TOKENIZER=frontend by its RVQ codes (25 Hz) computed here in fp32 as the HF module computes them
+(reference/audio.py, tt/audio/host_backend.py: bit-identical) from the fp32 mel (vLLM casts the processor's mel to
+bf16 before it leaves the processor, which changed 8 of the 126 code frames of a 5 s clip; ``fp32_mels``), or with
+MIMO_AUDIO_PATCH=frontend by the LLM embeddings the patch encoder makes from them (below). The host tokenizer encoder
+(1.6 s for 30 s of audio at 8 threads) runs here, never in the engine process, where it held up every other request
+of the engine. Only a bit-identical fp32 computation keeps every code (its RVQ decisions sit at fp32 rounding level,
+tests/perf/audio_codes_margin.py); the device encoder's few percent of changed frames cost no accuracy (below).
 
 Where it runs: vLLM 0.30.0's renderer calls ``_process_multimodal`` (and so this processor) through
 ``make_async(..., executor=self._mm_executor)``, a single-worker ThreadPoolExecutor of the API server process, not on
@@ -35,37 +36,34 @@ hit skips the processor entirely (``_cached_apply_hf_processor``), so a repeated
 
 MIMO_AUDIO_PATCH says where the patch encoder (codes -> LLM embeddings) runs; the API server and the engine read it:
 
-* ``engine`` (the default): codes, and the engine runs the host patch encoder (``AudioCodesBackend.embed_audio_codes``).
-* ``device``: on the engine's row (tt/audio/patch.py, TP=8): the item reaches the engine as
-  ``audio_codes`` int32 [n_codes, 20] and the engine's ``AudioCodesBackend`` runs the device patch encoder: 15 / 11
-  / 29 / 60 ms for 5 / 30 / 120 / 300 s of audio on bhg2 (host embedding sum and transfers included; PCC 0.9998 against the
-  host bf16 patch encoder, 0.9999 against fp32), where the host patch encoder takes 35 / 145 / 610 ms of CPU (bf16,
-  8 threads, bhg4) during which the engine's row stands still. An engine without the device encoder (no mesh, or
-  MIMO_MM_MODALITIES without audio) falls back to the host one. Not the default: on bhg2 row 1 (one row engine, the
-  release MTP config) an engine with it failed to start twice ("Cannot load new binaries during trace capture" for
-  the attention output linear of the largest prefill batch trace, whether its warm-up ran before or after the text
-  model's); without it the same engine started. ttnn's matmul auto-config sizes blocks from the L1 free at the call
-  (``available_program_l1_capacity``), and that linear has no explicit program config, so anything that changes L1
-  between the text model's warm-up and its batch-trace capture can make the capture need an unwarmed program.
+* ``device`` (the default): on the engine's row (tt/audio/patch.py, TP=8): the item reaches the engine as
+  ``audio_codes`` int32 [n_codes, 20] (or the mel, below) and the engine's ``AudioCodesBackend`` runs the device patch
+  encoder: 15 / 11 / 29 / 60 ms for 5 / 30 / 120 / 300 s of audio on bhg2 (host embedding sum and transfers included;
+  PCC 0.9998 against the host bf16 patch encoder, 0.9999 against fp32), where the host patch encoder takes 35 / 145 /
+  610 ms of CPU (bf16, 8 threads, bhg4) during which the engine's row stands still. An engine without the device
+  encoder (no mesh, or MIMO_MM_MODALITIES without audio) falls back to the host one. (Before the fixed prefill linear
+  configs of 5c112e83ddb an engine with it failed its prefill batch-trace capture at startup: ttnn's matmul
+  auto-config sizes blocks from the L1 free at the call.)
+* ``engine``: codes, and the engine runs the host patch encoder (``AudioCodesBackend.embed_audio_codes``).
 * ``frontend``: here, after the tokenizer encoder. The item reaches the engine as ``audio_embeds`` bf16
   [n_tokens, 4096], bit for bit what the engine's host patch encoder makes from the codes, and the engine only
   uploads it: the engine's row no longer waits for the host patch encoder, the item's processing here takes ~10 %
   longer. The processor cache and the engine transfer then hold 8 KiB per token instead of 80 B of codes per 25 Hz
   frame (a 30 s clip: 1.5 MB).
 
-MIMO_AUDIO_TOKENIZER=device moves the tokenizer encoder to the engine's row too (tt/audio/tokenizer.py; the API
-server and the engine read it): the item then reaches the engine as ``audio_mel_bits``, the fp32 mel as int32 bits
-[T, 128] (512 B per 10 ms frame), and this processor runs no encoder at all, so items no longer queue behind a long
-clip here. The device encoder takes ~0.1 s for 30 s of audio where the host one takes ~1.6 s, but its codes differ
-from the fp32 reference in ~3.5-5 % of the frames (Blackhole matmul accumulation; tests/test_audio_tokenizer_tp8.py).
-``frontend`` stays the default. Serving A/B on bhg2 row 1 (one row engine, the release MTP config, MIMO_AUDIO_PATCH=
-engine in both arms, full LibriSpeech test-clean and MMAU test-mini through tests/evals/run_eval.sh at concurrency 8):
-frontend WER 1.969 %, MMAU 61.7 %; device WER 2.557 %, MMAU 62.3 %. The device arm's WER loss is 12 degenerate
-generations in two bursts of consecutive requests (a correct start, then garbage tokens: in-flight requests corrupted
-together, not worse audio embeddings); without the 13 items degenerate in either arm the device arm's WER is lower
-(2.15 % vs 2.36 % with plain lowercase normalization). Audio TTFT (104 streamed requests at concurrency 8,
-LibriSpeech / MMAU / 30 s / 120 s clips): p50 4.54 -> 1.30 s, p95 6.62 -> 2.75 s. The corruption has to be found
-before the device encoder can be the default.
+MIMO_AUDIO_TOKENIZER=device (the default) runs the tokenizer encoder on the engine's row too (tt/audio/tokenizer.py;
+the API server and the engine read it): the item then reaches the engine as ``audio_mel_bits``, the fp32 mel as int32
+bits [T, 128] (512 B per 10 ms frame), and this processor runs no encoder at all, so items no longer queue behind a
+long clip here. The device encoder takes ~0.1 s for 30 s of audio where the host one takes ~1.6 s; its codes differ
+from the fp32 reference in ~3.5-5 % of the frames (Blackhole matmul accumulation; tests/test_audio_tokenizer_tp8.py),
+which does not cost accuracy. Serving A/B on bhg2 row 1 (one row engine, the release MTP config, full LibriSpeech
+test-clean through tests/evals/run_eval.sh at concurrency 8): ``frontend`` (host patch encoder) WER 1.969 %, 1
+degenerate output; ``device`` with the device patch encoder (integration 96920daecad, MIMO_MM_VIT_RESERVE_GB 0.35)
+WER 1.793 %, 1 degenerate output (the same item), no burst, TT_METAL_TRACE_ALLOC_TRACKING clean. Audio TTFT (104
+streamed requests at concurrency 8: LibriSpeech, MMAU, 30 s and 120 s clips): p50 4.54 -> 1.08 s, p95 6.62 -> 1.85 s
+(30 s clip 5.86 -> 0.57 s). An earlier device run (before the verify-trace warm-up fix f4c26ced179) had 12 degenerate
+generations in two bursts of in-flight requests (WER 2.557 %). MMAU test-mini (that earlier run, host patch encoder):
+61.7 % frontend, 62.3 % device. ``frontend`` keeps the bit-identical host path.
 
 MIMO_AUDIO_FRONTEND_THREADS (default 8): torch threads of the encoders in the front end (vLLM runs the processor
 with OMP_NUM_THREADS threads, 1 when unset).
@@ -84,11 +82,11 @@ from .host_backend import HostAudioBackend
 
 FRONTEND_THREADS = int(os.environ.get("MIMO_AUDIO_FRONTEND_THREADS", "8"))
 PATCH_PLACES = ("device", "frontend", "engine")
-PATCH_WHERE = os.environ.get("MIMO_AUDIO_PATCH", "engine")
+PATCH_WHERE = os.environ.get("MIMO_AUDIO_PATCH", "device")
 if PATCH_WHERE not in PATCH_PLACES:
     raise ValueError(f"MIMO_AUDIO_PATCH={PATCH_WHERE!r}: one of {PATCH_PLACES}")
 FRONTEND_PATCH = PATCH_WHERE == "frontend"
-TOKENIZER_WHERE = os.environ.get("MIMO_AUDIO_TOKENIZER", "frontend")
+TOKENIZER_WHERE = os.environ.get("MIMO_AUDIO_TOKENIZER", "device")
 if TOKENIZER_WHERE not in ("frontend", "device"):
     raise ValueError(f"MIMO_AUDIO_TOKENIZER={TOKENIZER_WHERE!r}: frontend or device")
 DEVICE_TOKENIZER = TOKENIZER_WHERE == "device"
