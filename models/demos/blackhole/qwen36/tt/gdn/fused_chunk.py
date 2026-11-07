@@ -217,3 +217,35 @@ def chunk_gated_delta_rule_fused_adapter(
         final_state = ttnn.typecast(final_state, ttnn.float32)
 
     return o, final_state
+
+
+def chunk_gated_delta_rule_fused_gva_adapter(
+    q, k, v, beta, g, scale=None, initial_state=None, device=None, valid_len=None, const_tiles=None, **_
+):
+    """Seq-adapter-compatible entry for single-device prefill: GVA-repeated q/k/v [B,T,Nv,D], fp32 gates, bf16 state out."""
+    B, T, Nv, Dk = q.shape
+    Dv = v.shape[3]
+
+    def _flat(t, D):
+        t = ttnn.to_layout(t, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        t = ttnn.reshape(t, [B, T, Nv * D])
+        return ttnn.to_layout(t, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+    def _gate(t):
+        t = ttnn.reshape(t, [B, T, Nv])
+        return t if t.dtype == ttnn.float32 else ttnn.typecast(t, ttnn.float32)
+
+    o, state = chunk_gated_delta_rule_fused_adapter(
+        _flat(q, Dk),
+        _flat(k, Dk),
+        _flat(v, Dv),
+        _gate(beta),
+        _gate(g),
+        scale=Dk**-0.5 if scale is None else scale,
+        initial_state=initial_state,
+        device=device,
+        valid_len=valid_len,
+        qkv_head_dims=(Nv, Dk, Nv, Dv),
+        const_tiles=const_tiles,
+    )
+    return o, ttnn.typecast(state, ttnn.bfloat16)

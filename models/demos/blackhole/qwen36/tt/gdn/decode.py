@@ -8,16 +8,25 @@ Operates on the gdn instance: reads weights from `gdn.weights`, config dims from
 memory_config, and the `gated_deltanet_forward_ttnn` kwargs are verbatim.
 """
 import ttnn
+from models.demos.blackhole.qwen36.tt.gdn.stateless_prefill import (
+    stateless_prefill_forward,
+    stateless_prefill_supported,
+)
 from models.experimental.gated_attention_gated_deltanet.tt.ttnn_gated_deltanet import gated_deltanet_forward_ttnn
 
 
-def recurrent_forward(gdn, x, mode="recurrent", chunk_size=None, valid_len=None):
+def recurrent_forward(gdn, x, mode="recurrent", chunk_size=None, valid_len=None, stateless=False):
     """Non-kernel GDN forward. mode='chunk' (prefill, may delegate to the prefill kernel) or
     'recurrent' (single-token decode). Reads weights/state/dims off the gdn instance; updates
     gdn's recurrent + conv state in place.
 
     valid_len: for fixed-bucket masked prefill — x is right-padded to T but only the first
-    valid_len positions are real (see gated_deltanet_forward_ttnn). None = no padding."""
+    valid_len positions are real (see gated_deltanet_forward_ttnn). None = no padding.
+
+    stateless: prefill from a zero state and leave gdn's state untouched. x may then hold several
+    right-padded sequences [B, T, dim], with valid_len a per-row list."""
+    if stateless_prefill_supported(gdn, mode, stateless):
+        return stateless_prefill_forward(gdn, x)
     w = gdn.weights
     if chunk_size is None:
         chunk_size = gdn.long_prefill_chunk_size if mode == "chunk" else 64
@@ -51,7 +60,7 @@ def recurrent_forward(gdn, x, mode="recurrent", chunk_size=None, valid_len=None)
         use_gate=True,
         norm_eps=gdn.norm_eps,
         device=gdn.device,
-        recurrent_state=gdn.recurrent_state,
+        recurrent_state=None if stateless else gdn.recurrent_state,
         mode=mode,
         chunk_size=chunk_size,
         q_weight_taps=w.q_weight_taps,
@@ -67,7 +76,7 @@ def recurrent_forward(gdn, x, mode="recurrent", chunk_size=None, valid_len=None)
         A_neg_precomputed=w.A_neg,
         fused_conv_weight_taps=w.fused_conv_weight_taps,
         fused_conv_bias_dev=w.fused_conv_bias_dev,
-        fused_conv_state=gdn.fused_conv_state,
+        fused_conv_state=None if stateless else gdn.fused_conv_state,
         ab_proj_weight=w.ab_proj_weight,
         mega_fused_weight=w.mega_fused_weight,
         mega_qkv_dim=w.mega_qkv_dim,
@@ -77,7 +86,14 @@ def recurrent_forward(gdn, x, mode="recurrent", chunk_size=None, valid_len=None)
         use_inplace_state=True,
         chunk_seq_masks=seq_masks,
         valid_len=valid_len,
+        chunk_delta_rule_fn=gdn.fused_prefill_fn,
     )
+
+    if stateless:
+        for t in (new_state, new_fused_conv):
+            if t is not None:
+                ttnn.deallocate(t)
+        return output
 
     if new_state is not gdn.recurrent_state:
         if list(new_state.shape) != list(gdn.recurrent_state.shape):

@@ -10,6 +10,9 @@ import os
 from dataclasses import dataclass
 
 import ttnn
+from models.demos.blackhole.qwen36.tt.prefill_matmul import SWIGLU_ROWS_MIN
+from models.demos.blackhole.qwen36.tt.prefill_matmul import enabled as prefill_matmul_enabled
+from models.demos.blackhole.qwen36.tt.prefill_matmul import fuses_silu, prefill_linear, prefill_swiglu, swiglu_enabled
 
 
 @dataclass(frozen=True)
@@ -20,7 +23,15 @@ class MLPWeights:
     w_gate_up: ttnn.Tensor = None  # TP prefill: tile-pair-interleaved packed [gate|up] for fused-swiglu AGMM
 
 
-def _build_gate_up(gate_w, up_w, mesh, tp, cache_path):
+def _gateup_dtype(args):
+    """Gate/up weight dtype (args.mlp_gateup_dtype, default bfloat4_b) and a cache-name tag: empty for
+    bfloat4_b so existing caches stay valid, else e.g. `.bfp8` so a dtype change never reuses stale files."""
+    dtype = getattr(args, "mlp_gateup_dtype", None) or ttnn.bfloat4_b
+    tag = {ttnn.bfloat4_b: "", ttnn.bfloat8_b: ".bfp8", ttnn.bfloat16: ".bf16"}[dtype]
+    return dtype, tag
+
+
+def _build_gate_up(gate_w, up_w, mesh, tp, cache_path, dtype=ttnn.bfloat4_b):
     """Packed [gate|up] weight for all_gather_swiglu_prefill: prepare_for_fused_swiglu tile-pair
     interleave, then column-parallel shard on the 2N dim so each device holds its interleaved slice."""
     import torch
@@ -39,7 +50,7 @@ def _build_gate_up(gate_w, up_w, mesh, tp, cache_path):
     return ttnn.as_tensor(
         gate_w,
         preprocess=pack,
-        dtype=ttnn.bfloat4_b,
+        dtype=dtype,
         device=mesh,
         mesh_mapper=tpc.tp_shard_mapper(mesh, -1),
         layout=ttnn.TILE_LAYOUT,
@@ -51,6 +62,7 @@ def _build_gate_up(gate_w, up_w, mesh, tp, cache_path):
 def load_mlp_weights(mesh_device, state_dict, tensor_cache_path=None, args=None, use_gateup_agmm=True) -> MLPWeights:
     """Per-layer MLP state: gate_proj, down_proj, up_proj weights."""
     tp = getattr(args, "num_devices", 1) if args is not None else 1
+    gu_dtype, gu_tag = _gateup_dtype(args)
 
     if tp > 1:
         # TP: w1/w3 column-parallel (shard out dim), w2 row-parallel (shard in dim).
@@ -77,7 +89,8 @@ def load_mlp_weights(mesh_device, state_dict, tensor_cache_path=None, args=None,
                 state_dict["up_proj.weight"],
                 mesh_device,
                 tp,
-                cache("gate_up", ".swiglu"),
+                cache("gate_up", ".swiglu" + gu_tag),
+                gu_dtype,
             )
             if tpc.mlp_gateup_agmm_enabled(tp) and use_gateup_agmm
             else None
@@ -90,16 +103,16 @@ def load_mlp_weights(mesh_device, state_dict, tensor_cache_path=None, args=None,
                     mesh_device,
                     dim=-1,
                     memory_config=args.mlp_w1_weight_memcfg,
-                    cache_path=cache("gate_proj", ".dramshard"),
-                    dtype=ttnn.bfloat4_b,
+                    cache_path=cache("gate_proj", ".dramshard" + gu_tag),
+                    dtype=gu_dtype,
                 ),
                 w3=tpc.shard_w(
                     state_dict["up_proj.weight"],
                     mesh_device,
                     dim=-1,
                     memory_config=args.mlp_w3_weight_memcfg,
-                    cache_path=cache("up_proj", ".dramshard"),
-                    dtype=ttnn.bfloat4_b,
+                    cache_path=cache("up_proj", ".dramshard" + gu_tag),
+                    dtype=gu_dtype,
                 ),
                 w2=tpc.shard_w(
                     state_dict["down_proj.weight"],
@@ -119,16 +132,16 @@ def load_mlp_weights(mesh_device, state_dict, tensor_cache_path=None, args=None,
                 mesh_device,
                 dim=-1,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                cache_path=cache("gate_proj"),
-                dtype=ttnn.bfloat4_b,
+                cache_path=cache("gate_proj", gu_tag),
+                dtype=gu_dtype,
             ),
             w3=tpc.shard_w(
                 state_dict["up_proj.weight"],
                 mesh_device,
                 dim=-1,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                cache_path=cache("up_proj"),
-                dtype=ttnn.bfloat4_b,
+                cache_path=cache("up_proj", gu_tag),
+                dtype=gu_dtype,
             ),
             w2=tpc.shard_w(
                 state_dict["down_proj.weight"],
@@ -141,7 +154,7 @@ def load_mlp_weights(mesh_device, state_dict, tensor_cache_path=None, args=None,
             w_gate_up=wgu,
         )
 
-    def load(name, dtype):
+    def load(name, dtype, tag=""):
         return ttnn.as_tensor(
             state_dict[f"{name}.weight"],
             preprocess=lambda t: t.T.contiguous(),  # [in, out] for ttnn.linear; cache-miss only
@@ -149,15 +162,22 @@ def load_mlp_weights(mesh_device, state_dict, tensor_cache_path=None, args=None,
             layout=ttnn.TILE_LAYOUT,
             device=mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            cache_file_name=(tensor_cache_path / f"mlp.{name}.weight") if tensor_cache_path else None,
+            cache_file_name=(tensor_cache_path / f"mlp.{name}.weight{tag}") if tensor_cache_path else None,
         )
 
-    # gate/up: bfloat4_b (bandwidth); down: bfloat8_b (accuracy).
+    # gate/up: bfloat4_b default (bandwidth; args.mlp_gateup_dtype); down: bfloat8_b (accuracy).
     return MLPWeights(
-        w1=load("gate_proj", ttnn.bfloat4_b),
+        w1=load("gate_proj", gu_dtype, gu_tag),
         w2=load("down_proj", ttnn.bfloat8_b),
-        w3=load("up_proj", ttnn.bfloat4_b),
+        w3=load("up_proj", gu_dtype, gu_tag),
     )
+
+
+def _rows(x):
+    m = 1
+    for d in list(x.shape)[:-1]:
+        m *= d
+    return m
 
 
 class Qwen36MLP:
@@ -196,6 +216,27 @@ class Qwen36MLP:
             math_fidelity=ttnn.MathFidelity.LoFi, fp32_dest_acc_en=True, packer_l1_acc=True
         )
 
+    def _gate_up_fused(self):
+        """Tile-pair-interleaved [gate|up] weight for the fused SwiGLU prefill matmul (single chip); built once.
+        Call it before a trace capture: the first call allocates the weight."""
+        if getattr(self, "_gate_up_fused_w", None) is None:
+            import torch
+
+            from models.tt_dit.utils.tensor import prepare_for_fused_swiglu
+
+            w = self.weights
+            gate = ttnn.to_torch(w.w1)
+            up = ttnn.to_torch(w.w3)
+            packed = prepare_for_fused_swiglu(torch.cat([gate, up], dim=-1), 1, gate_is_first=True)
+            self._gate_up_fused_w = ttnn.from_torch(
+                packed,
+                dtype=w.w1.dtype,
+                layout=w.w1.layout,
+                device=self.device,
+                memory_config=w.w1.memory_config(),
+            )
+        return self._gate_up_fused_w
+
     def forward(self, x, mode=None):
         # mode is unused (accepted only for a uniform signature with Qwen36MoE, which needs an
         # explicit decode/prefill mode); the dense MLP still infers its path from the input shape.
@@ -205,11 +246,27 @@ class Qwen36MLP:
         T = x.shape[1] if len(x.shape) >= 3 else 1
         ckc = self.compute_kernel_config_decode if T <= 1 else self.compute_kernel_config
         mc = ttnn.L1_MEMORY_CONFIG if T <= 512 else ttnn.DRAM_MEMORY_CONFIG
-        w1_out = ttnn.linear(x, w.w1, activation="silu", compute_kernel_config=ckc, memory_config=mc)
-        w3_out = ttnn.linear(x, w.w3, compute_kernel_config=ckc, memory_config=mc)
-        hidden = ttnn.mul(w1_out, w3_out, memory_config=mc)
+        silu_in_mul = False
+        if T > 1 and swiglu_enabled() and _rows(x) >= SWIGLU_ROWS_MIN:
+            hidden = prefill_swiglu(x, self._gate_up_fused(), ckc, memory_config=mc)
+            return self._down(hidden, T, ckc, mc)
+        if T > 1:
+            silu_in_mul = not fuses_silu(x, w.w1)
+            w1_out = prefill_linear(x, w.w1, ckc, activation=None if silu_in_mul else "silu", memory_config=mc)
+            w3_out = prefill_linear(x, w.w3, ckc, memory_config=mc)
+        else:
+            w1_out = ttnn.linear(x, w.w1, activation="silu", compute_kernel_config=ckc, memory_config=mc)
+            w3_out = ttnn.linear(x, w.w3, compute_kernel_config=ckc, memory_config=mc)
+        if silu_in_mul:
+            hidden = ttnn.mul(w1_out, w3_out, input_tensor_a_activations=[ttnn.UnaryOpType.SILU], memory_config=mc)
+        else:
+            hidden = ttnn.mul(w1_out, w3_out, memory_config=mc)
         ttnn.deallocate(w1_out)
         ttnn.deallocate(w3_out)
+        return self._down(hidden, T, ckc, mc)
+
+    def _down(self, hidden, T, ckc, mc):
+        w = self.weights
         down_pc = None
         if (
             T > 1
@@ -217,7 +274,10 @@ class Qwen36MLP:
             and os.environ.get("QWEN9B_MLP_DOWN_AUTO") != "1"
         ):
             down_pc = self.args.prefill_progcfg(T, hidden.shape[-1], w.w2.shape[-1])
-        output = ttnn.linear(hidden, w.w2, compute_kernel_config=ckc, memory_config=mc, program_config=down_pc)
+        if T > 1 and (down_pc is None or prefill_matmul_enabled()):
+            output = prefill_linear(hidden, w.w2, ckc, memory_config=mc)
+        else:
+            output = ttnn.linear(hidden, w.w2, compute_kernel_config=ckc, memory_config=mc, program_config=down_pc)
         ttnn.deallocate(hidden)
         return output
 

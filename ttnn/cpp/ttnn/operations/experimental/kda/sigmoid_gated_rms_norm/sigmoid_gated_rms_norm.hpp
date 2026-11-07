@@ -20,6 +20,7 @@ ttnn::Tensor sigmoid_gated_rms_norm(
     const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
     const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt,
     ttnn::DataType output_dtype = ttnn::DataType::FLOAT32,
-    uint32_t gate_column_offset = 0);
+    uint32_t gate_column_offset = 0,
+    bool silu_gate = false);
 
 }  // namespace ttnn::experimental::kda

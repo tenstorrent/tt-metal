@@ -23,6 +23,8 @@ struct SigmoidGatedRmsNormParams {
     DeviceComputeKernelConfig compute_kernel_config;
     // Gate columns start at this element offset within each row of the gate tensor.
     uint32_t gate_column_offset = 0;
+    // Gate with silu(gate) = gate * sigmoid(gate) instead of sigmoid(gate).
+    bool silu_gate = false;
 };
 
 struct SigmoidGatedRmsNormInputs {

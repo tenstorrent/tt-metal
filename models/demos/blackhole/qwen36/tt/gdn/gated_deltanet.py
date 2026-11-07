@@ -5,9 +5,12 @@
 Wraps the experimental ``gated_deltanet_forward_ttnn()`` and the on-device GDN prefill
 kernel into a module that manages weight tensors, recurrent state, and conv state.
 """
+from functools import partial
+
 import ttnn
 from models.demos.blackhole.qwen36.tt.gdn.config import GDNConfig
 from models.demos.blackhole.qwen36.tt.gdn.decode import recurrent_forward
+from models.demos.blackhole.qwen36.tt.gdn.fused_chunk import chunk_gated_delta_rule_fused_gva_adapter
 from models.demos.blackhole.qwen36.tt.gdn.weights import load_gdn_weights
 
 
@@ -63,6 +66,14 @@ class Qwen36GatedDeltaNet:
         self.fused_conv_state = zeros(conv_shape)
         self._zero_recurrent = zeros(rec_shape)
         self._zero_conv = zeros(conv_shape)
+
+        self.fused_prefill_fn = None
+        if config.fused_prefill:
+            from models.demos.blackhole.qwen36.tt.gdn.fused_chunk import build_fused_const_tiles
+
+            self.fused_prefill_fn = partial(
+                chunk_gated_delta_rule_fused_gva_adapter, const_tiles=build_fused_const_tiles(mesh_device)
+            )
 
     def forward(self, x, mode="recurrent", chunk_size=None, valid_len=None):
         return recurrent_forward(self, x, mode=mode, chunk_size=chunk_size, valid_len=valid_len)
