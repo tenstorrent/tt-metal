@@ -22,7 +22,7 @@
 #pragma once
 
 #include <core_coord.hpp>
-#include <umd/device/types/core_coordinates.hpp>
+#include <tt-umd/types/core_coordinates.hpp>
 
 #include <cstddef>
 #include <cstdint>

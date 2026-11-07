@@ -23,6 +23,8 @@ using test_helpers::BindTensorParameterToKernel;
 using test_helpers::MakeMinimalGen1ValidProgramSpec;
 using test_helpers::MakeMinimalTensorParameter;
 using test_helpers::MakeMinimalValidProgramSpec;
+using test_helpers::MakeMinimalWorkUnit;
+using test_helpers::MakePerNodeTensorParameter;
 using test_helpers::ProgramSpecTestGen1;
 using test_helpers::ProgramSpecTestQuasar;
 
@@ -97,6 +99,18 @@ TEST_F(ProgramSpecTestGen1, CPU_AccessorNamesAcrossCategoriesAreSeparateNamespac
     BindTensorParameterToKernel(spec.kernels[0], "input_tensor", "input_dfb");
 
     EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
+}
+
+TEST_F(ProgramSpecTestGen1, CPU_PerNodeTensorBindingOnNodeWithoutShardFails) {
+    // The tensor has a shard only on node (0, 0), but the kernel also runs on node (1, 0).
+    ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
+    spec.tensor_parameters = {MakePerNodeTensorParameter("per_node", /*num_cores=*/1)};
+    BindTensorParameterToKernel(spec.kernels[0], "per_node", "per_node");
+    spec.work_units = {MakeMinimalWorkUnit("work_unit", NodeRange{{0, 0}, {1, 0}}, {"dm_kernel", "compute_kernel"})};
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr(
+            "Kernel 'dm_kernel' runs on node 1-0, where per-node TensorParameter 'per_node' has no shard")));
 }
 
 }  // namespace

@@ -37,8 +37,6 @@ _TIMING_BASES = (
     "UNPACK_ISOLATE",
     "MATH_ISOLATE",
     "PACK_ISOLATE",
-    "L1_CONGESTION[UNPACK]",
-    "L1_CONGESTION[PACK]",
     "SFPU_ISOLATE",
 )
 _TIMING_COLUMNS = [
@@ -84,6 +82,7 @@ DB_SCHEMA = [
     Column("face_r_dim", "int64", True, "configuration"),
     Column("full_ct_dim", "int64", True, "configuration"),
     Column("full_rt_dim", "int64", True, "configuration"),
+    Column("group_kt_dim", "int64", True, "configuration"),
     Column("in0_face_c_dim", "int64", True, "configuration"),
     Column("in0_face_r_dim", "int64", True, "configuration"),
     Column("in1_face_c_dim", "int64", True, "configuration"),
@@ -92,6 +91,7 @@ DB_SCHEMA = [
     Column("input_num_blocks", "int64", True, "configuration"),
     Column("input_num_tiles_in_block", "int64", True, "configuration"),
     Column("input_tile_cnt", "int64", True, "configuration"),
+    Column("is_reduce_to_one", "bool", True, "configuration"),
     Column("k_dimm", "int64", True, "configuration"),
     Column("math_fidelity", "string", True, "configuration"),
     Column("math_transpose_faces", "string", True, "configuration"),
@@ -114,7 +114,7 @@ DB_SCHEMA = [
     Column("r_dimm", "int64", True, "configuration"),
     Column("relu_config", "int64", True, "configuration"),
     Column("reuse_dest_type", "string", True, "configuration"),
-    Column("sfpu_srcs_impl", "string", True, "configuration"),
+    Column("sfpu_impl", "string", True, "configuration"),
     Column("sign_magnitude", "bool", True, "configuration"),
     Column("src0_tile_idx", "int64", True, "configuration"),
     Column("src1_tile_idx", "int64", True, "configuration"),

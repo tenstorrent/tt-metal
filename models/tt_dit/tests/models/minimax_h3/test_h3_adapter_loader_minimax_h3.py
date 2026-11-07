@@ -1,0 +1,165 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
+
+"""CPU tests for H3 adapter-loader alpha scaling, fused-QKV validation and Turbo host-merge rounding (no device)."""
+
+from __future__ import annotations
+
+from types import SimpleNamespace
+
+import pytest
+import torch
+
+from ....experimental.lora.h3_adapter_loader import _collect_pairs, _file_alpha, _register_fused, _scale_of
+from ....pipelines.minimax_h3.pipeline_minimax_h3_turbo import _round_bf16_stochastic
+
+NUM_HEADS = 4
+HEAD_DIM = 8
+INNER_DIM = NUM_HEADS * HEAD_DIM  # 32
+RANK = 2
+IN_DIM = 5
+
+
+class _CaptureQKV:
+    """Records register_lora's (A, B, scale)."""
+
+    def __init__(self):
+        self.calls: list[tuple[torch.Tensor, torch.Tensor, float]] = []
+
+    def register_lora(self, a, b, *, scale, name):
+        self.calls.append((a, b, scale))
+        return len(self.calls) - 1
+
+
+def _attn():
+    return SimpleNamespace(
+        num_heads=NUM_HEADS,
+        head_dim=HEAD_DIM,
+        rotary_dim=HEAD_DIM,
+        inner_dim=INNER_DIM,
+        n_local_heads=NUM_HEADS,
+        parallel_config=SimpleNamespace(tensor_parallel=SimpleNamespace(factor=1)),
+        to_qkv=_CaptureQKV(),
+    )
+
+
+def _qkv(seed=0):
+    g = torch.Generator().manual_seed(seed)
+    return {
+        slot: {
+            "A": torch.randn(RANK, IN_DIM, generator=g, dtype=torch.float32),
+            "B": torch.randn(INNER_DIM, RANK, generator=g, dtype=torch.float32),
+        }
+        for slot in ("q", "k", "v")
+    }
+
+
+def _col_block(b_fused, position):
+    return b_fused[:, position * RANK : (position + 1) * RANK]
+
+
+def test_fused_folds_each_sources_own_alpha():
+    qkvs = _qkv()
+    base = lambda slot: f"transformer_blocks.0.attn.to_{slot}"  # noqa: E731
+
+    attn1 = _attn()
+    _register_fused(attn1, qkvs, 1.0, "a", {base(s): RANK for s in ("q", "k", "v")}, None, "transformer_blocks", 0)
+    b1, scale1 = attn1.to_qkv.calls[0][1], attn1.to_qkv.calls[0][2]
+
+    attn2 = _attn()
+    factors = {"q": 1, "k": 2, "v": 3}
+    _register_fused(
+        attn2, qkvs, 1.0, "a", {base(s): RANK * factors[s] for s in ("q", "k", "v")}, None, "transformer_blocks", 0
+    )
+    b2 = attn2.to_qkv.calls[0][1]
+
+    # Run 1 has alpha/rank == 1, so run 2's blocks are run 1's times each slot's factor.
+    for pos, slot in enumerate(("q", "k", "v")):
+        torch.testing.assert_close(_col_block(b2, pos), _col_block(b1, pos) * factors[slot])
+
+    # Alpha is folded into B; only the caller strength reaches register_lora.
+    assert scale1 == 1.0
+
+
+def test_fused_file_alpha_fallback_scales_every_slot():
+    qkvs = _qkv(seed=1)
+    attn_unit = _attn()
+    _register_fused(attn_unit, qkvs, 1.0, "a", {}, float(RANK), "transformer_blocks", 0)
+    attn_2x = _attn()
+    _register_fused(attn_2x, qkvs, 1.0, "a", {}, float(2 * RANK), "transformer_blocks", 0)
+    torch.testing.assert_close(attn_2x.to_qkv.calls[0][1], attn_unit.to_qkv.calls[0][1] * 2.0)
+
+
+def test_fused_missing_slot_raises(expect_error):
+    qkvs = _qkv()
+    del qkvs["v"]
+    with expect_error(RuntimeError, "missing"):
+        _register_fused(_attn(), qkvs, 1.0, "a", {}, None, "transformer_blocks", 0)
+
+
+def test_fused_rank_disagreement_raises(expect_error):
+    qkvs = _qkv()
+    qkvs["k"]["A"] = torch.randn(RANK + 1, IN_DIM, dtype=torch.float32)
+    with expect_error(ValueError, "ranks disagree"):
+        _register_fused(_attn(), qkvs, 1.0, "a", {}, None, "transformer_blocks", 0)
+
+
+def test_scale_of_prefers_per_target_then_file_then_one():
+    ab = {"A": torch.zeros(8, IN_DIM)}  # rank 8
+    assert _scale_of("t.0.attn.to_q", ab, {"t.0.attn.to_q": 16.0}, None) == pytest.approx(2.0)
+    assert _scale_of("t.0.attn.to_q", ab, {}, 16.0) == pytest.approx(2.0)
+    assert _scale_of("t.0.attn.to_q", ab, {}, None) == 1.0
+
+
+def test_file_alpha_reads_known_metadata_keys():
+    assert _file_alpha({"alpha": "16"}) == 16.0
+    assert _file_alpha({"lora_alpha": "8"}) == 8.0
+    assert _file_alpha({}) is None
+
+
+def test_collect_pairs_maps_slots_and_alphas():
+    raw = {
+        "transformer_blocks.0.attn.to_q.lora_A.weight": torch.zeros(RANK, IN_DIM),
+        "transformer_blocks.0.attn.to_q.lora_B.weight": torch.zeros(INNER_DIM, RANK),
+        "transformer_blocks.0.attn.to_q.alpha": torch.tensor(16.0),
+    }
+    pairs, alphas = _collect_pairs(raw)
+    assert set(pairs["transformer_blocks.0.attn.to_q"]) == {"A", "B"}
+    assert alphas["transformer_blocks.0.attn.to_q"] == 16.0
+
+
+def test_collect_pairs_rejects_non_lora_key(expect_error):
+    with expect_error(RuntimeError, "no LoRA convention"):
+        _collect_pairs({"transformer_blocks.0.attn.to_q.weight": torch.zeros(1)})
+
+
+def test_collect_pairs_rejects_half_pair(expect_error):
+    with expect_error(RuntimeError, "half pair"):
+        _collect_pairs({"transformer_blocks.0.attn.to_q.lora_A.weight": torch.zeros(RANK, IN_DIM)})
+
+
+@pytest.mark.parametrize("sign", [1.0, -1.0])
+def test_stochastic_round_keeps_sub_ulp_delta_on_average(sign):
+    weight = torch.full((1 << 20,), sign, dtype=torch.bfloat16)
+    merged = weight.float() + sign * 1e-4
+    assert torch.equal(merged.to(torch.bfloat16), weight)
+    rounded = _round_bf16_stochastic(merged, torch.Generator().manual_seed(0)).float()
+    assert abs(rounded.mean().item() - sign * (1.0 + 1e-4)) < 2e-5
+
+
+def test_stochastic_round_is_exact_on_bf16_and_seeded():
+    generator = torch.Generator().manual_seed(1)
+    weight = torch.randn(4096, generator=generator).to(torch.bfloat16)
+    assert torch.equal(_round_bf16_stochastic(weight.float(), torch.Generator().manual_seed(0)), weight)
+    merged = weight.float() + 1e-3 * torch.randn(4096, generator=generator)
+    first = _round_bf16_stochastic(merged, torch.Generator().manual_seed(0))
+    assert torch.equal(first, _round_bf16_stochastic(merged, torch.Generator().manual_seed(0)))
+
+
+def test_stochastic_round_keeps_signed_zeros_infinities_and_nan():
+    special = torch.tensor([0.0, -0.0, float("inf"), float("-inf")]).repeat(1 << 12)
+    rounded = _round_bf16_stochastic(special, torch.Generator().manual_seed(0)).float()
+    assert torch.equal(rounded, special)
+    assert torch.equal(torch.signbit(rounded), torch.signbit(special))
+    nan = torch.full((1 << 12,), float("nan"))
+    assert _round_bf16_stochastic(nan, torch.Generator().manual_seed(0)).isnan().all()

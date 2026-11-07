@@ -2,318 +2,375 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import os
 import statistics
+from dataclasses import dataclass, field
+from typing import Any
 
 import pytest
 from loguru import logger
+from PIL import Image
 
 import ttnn
 from models.common.utility_functions import is_blackhole
 from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
+from models.tt_dit.pipelines.events import log_section_durations, profiler_event_callback
+from models.tt_dit.pipelines.qwenimage.pipeline_qwenimage import QwenImagePipeline, QwenImagePipelineConfig
 
-from ....parallel.config import DiTParallelConfig, EncoderParallelConfig, VAEParallelConfig
-from ....pipelines.events import profiler_event_callback
-from ....pipelines.qwenimage.pipeline_qwenimage import QwenImagePipeline, QwenImagePipelineConfig
-from ....utils.test import line_params_req_exact_devices
+from .device_params import EDIT_MESH_DEVICE_PARAMS, MESH_DEVICE_PARAMS
+from .test_pipeline_qwenimage import DOG_IMAGE_PATH
 
+NUM_INFERENCE_STEPS = 50
+# The Qwen-Image-Edit-2511 model card's step count.
+EDIT_NUM_INFERENCE_STEPS = 40
+# Runs per case in CI's 1024² test, and in the opt-in benchmarks.
+CI_RUNS_PER_CASE = 2
+BENCHMARK_RUNS_PER_CASE = 3
 
-@pytest.mark.parametrize(
-    "image_w, image_h, num_inference_steps",
-    [
-        (1024, 1024, 50),
-    ],
+# The opt-in benchmark's sizes: the ones of our NVIDIA benchmark (1344² for its 1328²). A transposed
+# size takes the same time, and the 4:3 and 3:2 sizes take about as long as 16:9.
+BENCHMARK_RESOLUTIONS = [(1024, 1024), (1344, 1344), (1664, 928)]
+
+# Upper limits at 1024², in seconds, per (is Blackhole, mesh shape). Only the listed metrics are
+# checked.
+EXPECTED_METRICS = {
+    # BH QuietBox 2, measured on a local QB2: encoding 0.097s, denoising 27.2s, vae 0.111s, total 27.5s.
+    (True, (2, 2)): {
+        "total_encoding_time": 0.12,
+        "denoising_steps_time": 30.0,
+        "vae_decoding_time": 0.15,
+        "total_time": 31,
+    },
+    # WH T3K: encoding 0.552s, denoising 67.2s, vae 0.138s, total 68.0s.
+    (False, (2, 4)): {
+        "total_encoding_time": 0.6,
+        "denoising_steps_time": 74.0,
+        "vae_decoding_time": 0.2,
+        "total_time": 75,
+    },
+    # BH LoudBox: total 20.5s with the model-card prompt (CI run 38592590547).
+    (True, (2, 4)): {"total_time": 23},
+    # WH Galaxy: total 14.7–15.0s (CI runs 38337794894, 38364045034).
+    (False, (4, 8)): {"total_time": 17},
+    # BH Galaxy: total 7.7s (CI run 38231028525).
+    (True, (4, 8)): {"total_time": 9},
+}
+
+RUN_TYPES = {
+    (True, (2, 2)): "BH_QB",
+    (False, (2, 4)): "WH_T3K",
+    (True, (2, 4)): "BH_LB",
+    (False, (4, 8)): "WH_GLX",
+    (True, (4, 8)): "BH_GLX",
+}
+
+# The prompts of the Qwen-Image-2512 and Qwen-Image-Edit-2511 model cards, as in our NVIDIA benchmark.
+PROMPT = (
+    "A 20-year-old East Asian girl with delicate, charming features and large, bright brown eyes—expressive and "
+    "lively, with a cheerful or subtly smiling expression. Her naturally wavy long hair is either loose or tied in "
+    "twin ponytails. She has fair skin and light makeup accentuating her youthful freshness. She wears a modern, cute "
+    "dress or relaxed outfit in bright, soft colors—lightweight fabric, minimalist cut. She stands indoors at an anime "
+    "convention, surrounded by banners, posters, or stalls. Lighting is typical indoor illumination—no staged "
+    "lighting—and the image resembles a casual iPhone snapshot: unpretentious composition, yet brimming with vivid, "
+    "fresh, youthful charm."
 )
+EDIT_PROMPT = (
+    "The magician bear is on the left, the alchemist bear is on the right, facing each other in the central park "
+    "square."
+)
+
+# Input aspect ratios for editing, (width, height); the edit output takes the last input's.
+EDIT_ASPECT_RATIOS = {"1:1": (1, 1), "16:9": (16, 9)}
+
+
+@dataclass
+class Case:
+    label: str
+    num_inference_steps: int
+    kwargs: dict[str, Any] = field(default_factory=dict)
+
+
+def crop_to_aspect_ratio(image: Image.Image, aspect: tuple[int, int]) -> Image.Image:
+    width, height = image.size
+    target_width = min(width, height * aspect[0] // aspect[1])
+    target_height = min(height, width * aspect[1] // aspect[0])
+    left, top = (width - target_width) // 2, (height - target_height) // 2
+    return image.crop((left, top, left + target_width, top + target_height))
+
+
+def inpaint_inputs() -> dict[str, Any]:
+    image = Image.open(DOG_IMAGE_PATH).convert("RGB")
+    # Repaints the dog, with a margin around it.
+    mask = Image.new("L", image.size, 0)
+    mask.paste(255, (130, 20, 430, 425))
+    return {"image": image, "mask_image": mask, "strength": 1.0}
+
+
+def run_cases(
+    pipeline: QwenImagePipeline, cases: list[Case], *, prompt: str, file_prefix: str, runs_per_case: int
+) -> tuple[BenchmarkProfiler, dict[str, list[int]]]:
+    """Runs each case ``runs_per_case`` times and returns the profiler and each case's iterations."""
+    benchmark_profiler = BenchmarkProfiler()
+    iterations = {}
+    for c, case in enumerate(cases):
+        iterations[case.label] = []
+        for i in range(runs_per_case):
+            iteration = c * runs_per_case + i
+            iterations[case.label].append(iteration)
+
+            with benchmark_profiler("run", iteration=iteration):
+                images = pipeline(
+                    prompts=[prompt],
+                    num_inference_steps=case.num_inference_steps,
+                    traced=True,
+                    on_event=profiler_event_callback(benchmark_profiler, iteration),
+                    **case.kwargs,
+                )
+
+            logger.info(f"{case.label} run {i + 1}: {benchmark_profiler.get_duration('run', iteration):.2f}s")
+            log_section_durations(benchmark_profiler, iteration, per_step={"denoising": case.num_inference_steps})
+            tag = case.label.replace(" ", "_").replace(":", "x")
+            images[0].save(f"{file_prefix}_{tag}_perf_run{i}.png")
+    return benchmark_profiler, iterations
+
+
+def durations(profiler: BenchmarkProfiler, name: str, its: list[int]) -> list[float]:
+    return [profiler.get_duration(name, it) for it in its]
+
+
+def step_durations(profiler: BenchmarkProfiler, its: list[int], num_inference_steps: int) -> list[float]:
+    steps = []
+    for it in its:
+        for j in range(num_inference_steps):
+            assert profiler.contains_step(
+                f"denoising_step_{j}", it
+            ), f"All runs should have {num_inference_steps} denoising steps"
+            steps.append(profiler.get_duration(f"denoising_step_{j}", it))
+    return steps
+
+
+def print_stats(name: str, times: list[float]) -> None:
+    mean_time = statistics.mean(times)
+    std_time = statistics.stdev(times) if len(times) > 1 else 0
+    print(
+        f"{name:25} | Mean: {mean_time:8.4f}s | Std: {std_time:8.4f}s | "
+        f"Min: {min(times):8.4f}s | Max: {max(times):8.4f}s"
+    )
+
+
+def print_report(
+    *,
+    title: str,
+    profiler: BenchmarkProfiler,
+    iterations: dict[str, list[int]],
+    cases: list[Case],
+    config: QwenImagePipelineConfig,
+    mesh_device: ttnn.MeshDevice,
+) -> None:
+    dit = config.dit_parallel_config
+    print("\n" + "=" * 100)
+    print(title)
+    print("=" * 100)
+    print(f"Checkpoint: {config.checkpoint_name}, runs per case: {len(next(iter(iterations.values())))}")
+    print(
+        f"Configuration: cfg={dit.cfg_parallel.factor}, sp={dit.sequence_parallel.factor}, "
+        f"tp={dit.tensor_parallel.factor}, encoder_tp={config.encoder_parallel_config.tensor_parallel.factor}"
+    )
+    print(f"Mesh Shape: {mesh_device.shape}")
+    print(f"Topology: {config.topology}, links: {config.num_links}")
+
+    for case in cases:
+        its = iterations[case.label]
+        encoding = durations(profiler, "encoder", its)
+        text_encoder = durations(profiler, "qwen_encoding", its)
+        steps = step_durations(profiler, its, case.num_inference_steps)
+        denoising = durations(profiler, "denoising", its)
+        vae = durations(profiler, "vae", its)
+        total = durations(profiler, "run", its)
+        # Everything outside the three stages: latent preparation (including encoding input images
+        # with the VAE), image conversion, host overhead.
+        other = [t - e - d - v for t, e, d, v in zip(total, encoding, denoising, vae, strict=True)]
+
+        print("-" * 100)
+        print(f"Case: {case.label}, {case.num_inference_steps} steps")
+        print_stats("Total Encoding", encoding)
+        print_stats("  Text Encoder", text_encoder)
+        print_stats("Denoising (per step)", steps)
+        print_stats("Denoising (total)", denoising)
+        print_stats("VAE Decoding", vae)
+        print_stats("Other", other)
+        print_stats("Total Pipeline", total)
+
+    print("=" * 100)
+
+
 @pytest.mark.parametrize(
-    "mesh_device, cfg, sp, tp, encoder_tp, vae_tp, topology, num_links",
+    "all_resolutions",
     [
-        [(2, 2), (2, 0), (1, 0), (2, 1), (2, 1), (2, 1), ttnn.Topology.Linear, 1],
+        pytest.param(False, id="1024x1024"),
+        # Off in CI, where it would lengthen the job; set QWENIMAGE_PERF_ALL_RESOLUTIONS=1 to run it.
+        # Also times inpainting.
         pytest.param(
-            (2, 4),
-            (2, 0),
-            (1, 0),
-            (4, 1),
-            (4, 1),
-            (4, 1),
-            ttnn.Topology.Linear,
-            1,
+            True,
+            id="all_resolutions",
+            marks=pytest.mark.skipif(
+                os.environ.get("QWENIMAGE_PERF_ALL_RESOLUTIONS") != "1",
+                reason="set QWENIMAGE_PERF_ALL_RESOLUTIONS=1",
+            ),
         ),
-        [(4, 8), (2, 1), (4, 0), (4, 1), (4, 1), (4, 1), ttnn.Topology.Linear, 4],
     ],
-    ids=[
-        "2x2cfg2sp1tp2",
-        "2x4cfg2sp1tp4",
-        "4x8cfg2sp4tp4",
-    ],
-    indirect=["mesh_device"],
 )
-@pytest.mark.parametrize(
-    "device_params",
-    [{**line_params_req_exact_devices, "trace_region_size": 47000000}],
-    ids=["line"],
-    indirect=True,
-)
+@pytest.mark.parametrize(("mesh_device", "device_params"), MESH_DEVICE_PARAMS, indirect=True)
 def test_qwenimage_pipeline_performance(
     *,
     mesh_device: ttnn.MeshDevice,
-    image_w: int,
-    image_h: int,
-    num_inference_steps: int,
-    cfg: tuple[int, int],
-    sp: tuple[int, int],
-    tp: tuple[int, int],
-    encoder_tp: tuple[int, int],
-    vae_tp: tuple[int, int],
-    topology: ttnn.Topology,
-    num_links: int,
+    all_resolutions: bool,
     is_ci_env: bool,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Performance test for QwenImage pipeline with detailed timing analysis."""
-
-    benchmark_profiler = BenchmarkProfiler()
-
-    # Set TT_DIT_CACHE in CI environment
     if is_ci_env:
         monkeypatch.setenv("TT_DIT_CACHE_DIR", "/tmp/TT_DIT_CACHE")
 
-    logger.info(f"  Image size: {image_w}x{image_h}")
-    logger.info(f"  Inference steps: {num_inference_steps}")
+    key = (is_blackhole(), tuple(mesh_device.shape))
+    if key not in EXPECTED_METRICS:
+        pytest.fail(f"Unknown mesh device for performance comparison: {mesh_device}")
 
-    pipeline = QwenImagePipeline(
-        device=mesh_device,
-        config=QwenImagePipelineConfig.default(
-            mesh_shape=mesh_device.shape,
-            dit_parallel_config=DiTParallelConfig.from_tuples(cfg=cfg, sp=sp, tp=tp),
-            encoder_parallel_config=EncoderParallelConfig.from_tuple(encoder_tp),
-            vae_parallel_config=VAEParallelConfig.from_tuple(vae_tp),
-            use_torch_text_encoder=False,
-            use_torch_vae_decoder=False,
-            num_links=num_links,
-            topology=topology,
-            width=image_w,
-            height=image_h,
-        ),
+    # The pipeline warms up every resolution of its config while it is constructed, so the 1024² case
+    # only configures that one.
+    config = QwenImagePipelineConfig.default(
+        mesh_shape=mesh_device.shape, resolutions=None if all_resolutions else [(1024, 1024)]
+    )
+    pipeline = QwenImagePipeline(device=mesh_device, config=config)
+
+    resolutions = [r for r in BENCHMARK_RESOLUTIONS if r in config.resolutions] if all_resolutions else [(1024, 1024)]
+    cases = [
+        Case(f"{width}x{height}", NUM_INFERENCE_STEPS, {"width": width, "height": height})
+        for width, height in resolutions
+    ]
+    if all_resolutions:
+        # The dog image is square, so this inpaints at 1024².
+        cases.append(Case("inpaint 1024x1024", NUM_INFERENCE_STEPS, inpaint_inputs()))
+
+    benchmark_profiler, iterations = run_cases(
+        pipeline,
+        cases,
+        prompt=PROMPT,
+        file_prefix="qwenimage",
+        runs_per_case=BENCHMARK_RUNS_PER_CASE if all_resolutions else CI_RUNS_PER_CASE,
+    )
+    print_report(
+        title="QWEN IMAGE PIPELINE PERFORMANCE RESULTS",
+        profiler=benchmark_profiler,
+        iterations=iterations,
+        cases=cases,
+        config=config,
+        mesh_device=mesh_device,
     )
 
-    prompts = [
-        'A coffee shop entrance features a chalkboard sign reading "Qwen Coffee $2 per cup," with a neon light '
-        'beside it displaying "通义千问". Next to it hangs a poster showing a beautiful Chinese woman, and beneath the '
-        'poster is written "π≈3.1415926-53589793-23846264-33832795-02384197". Ultra HD, 4K, cinematic composition',
-        'Tokyo neon alley at night, rain-slick pavement, cinematic cyberpunk lighting; include glowing sign text "深夜営業" in bold neon above a doorway; moody reflections, shallow depth of field.',
-        'Steamy ramen shop entrance at dusk; fabric noren curtain gently swaying; print "しょうゆラーメン" across the curtain in thick brush-style kana; warm lantern light, photorealistic.',
-        'Minimalist tea poster, cream background, elegant layout; vertical calligraphy "抹茶" centered in sumi ink; small red hanko-style seal "本格" in the corner; high-resolution graphic design.',
-        'Hardcover fantasy novel cover, textured paper, gold foil; title text "物語のはじまり" centered; author line "山本ひかり" below; tasteful serif typography, dramatic vignette illustration.',
-    ]
-
-    logger.info("Running warmup iteration...")
-    with benchmark_profiler("run", iteration=0):
-        images = pipeline(
-            prompts=[prompts[0]],
-            num_inference_steps=num_inference_steps,
-            traced=True,
-            encoder_traced=False,
-        )
-    images[0].save(f"qwenimage_{image_w}_{image_h}_warmup.png")
-
-    logger.info(f"Warmup completed in {benchmark_profiler.get_duration('run', 0):.2f}s")
-
-    logger.info("Running performance measurement iterations...")
-    num_perf_runs = 2  # len(prompts)
-
-    # optional tracy profiling (if available)
-    profiler = None
-    try:
-        from tracy import Profiler
-
-        profiler = Profiler()
-        profiler.enable()
-        logger.info("Tracy profiling enabled")
-    except ImportError:
-        logger.info("Tracy profiler not available, continuing without profiling")
-
-    try:
-        for i in range(num_perf_runs):
-            logger.info(f"Performance run {i+1}/{num_perf_runs}...")
-
-            # run pipeline with different prompt
-            prompt_idx = (i + 1) % len(prompts)
-
-            with benchmark_profiler("run", iteration=i):
-                images = pipeline(
-                    prompts=[prompts[prompt_idx]],
-                    num_inference_steps=num_inference_steps,
-                    traced=True,
-                    encoder_traced=False,
-                    on_event=profiler_event_callback(benchmark_profiler, i),
-                )
-
-            logger.info(f"  Run {i+1} completed in {benchmark_profiler.get_duration('run', i):.2f}s")
-
-            images[0].save(f"qwenimage_{image_w}_{image_h}_perf_run{i}.png")
-
-    finally:
-        if profiler:
-            profiler.disable()
-            logger.info("Tracy profiling disabled")
-
-    total_encoding_times = [benchmark_profiler.get_duration("encoder", i) for i in range(num_perf_runs)]
-    vae_times = [benchmark_profiler.get_duration("vae", i) for i in range(num_perf_runs)]
-    total_times = [benchmark_profiler.get_duration("run", i) for i in range(num_perf_runs)]
-
-    # calculate per-step denoising times
-    all_denoising_steps = []
-    for i in range(num_perf_runs):
-        for j in range(num_inference_steps):
-            assert benchmark_profiler.contains_step(
-                f"denoising_step_{j}", i
-            ), f"All runs should have {num_inference_steps} denoising steps"
-            all_denoising_steps.append(benchmark_profiler.get_duration(f"denoising_step_{j}", i))
-
-    print("\n" + "=" * 100)
-    print("QWEN IMAGE PIPELINE PERFORMANCE RESULTS")
-    print("=" * 100)
-    print(f"Model: QwenImage")
-    print(f"Image Size: {image_w}x{image_h}")
-    print(f"Inference Steps: {num_inference_steps}")
-    print(f"Configuration: cfg={cfg[0]}, sp={sp[0]}, tp={tp[0]}, encoder_tp={encoder_tp[0]}, vae_tp={vae_tp[0]}")
-    print(f"Mesh Shape: {mesh_device.shape}")
-    print(f"Topology: {topology}")
-    print("-" * 100)
-
-    def print_stats(name, times):
-        if not times:
-            print(f"{name:25} | No data available")
-            return
-        mean_time = statistics.mean(times)
-        std_time = statistics.stdev(times) if len(times) > 1 else 0
-        min_time = min(times)
-        max_time = max(times)
-        print(
-            f"{name:25} | Mean: {mean_time:8.4f}s | Std: {std_time:8.4f}s | Min: {min_time:8.4f}s | Max: {max_time:8.4f}s"
-        )
-
-    print_stats("Total Encoding", total_encoding_times)
-    print_stats("Denoising (per step)", all_denoising_steps)
-    print_stats("VAE Decoding", vae_times)
-    print_stats("Total Pipeline", total_times)
-
-    print("-" * 100)
-
-    # additional metrics
-    if total_times and all_denoising_steps:
-        avg_total_time = statistics.mean(total_times)
-        avg_step_time = statistics.mean(all_denoising_steps)
-        total_denoising_time = avg_step_time * num_inference_steps
-
-        print(f"Average total denoising time: {total_denoising_time:.4f}s")
-        print(f"Denoising throughput: {num_inference_steps / total_denoising_time:.2f} steps/second")
-        print(f"Overall throughput: {1 / avg_total_time:.4f} images/second")
-
-        # breakdown percentages
-        avg_encoding_time = statistics.mean(total_encoding_times)
-        avg_vae_time = statistics.mean(vae_times)
-
-        print(f"\nTime breakdown:")
-        print(f"  Encoding: {avg_encoding_time/avg_total_time*100:.1f}%")
-        print(f"  Denoising: {total_denoising_time/avg_total_time*100:.1f}%")
-        print(f"  VAE: {avg_vae_time/avg_total_time*100:.1f}%")
-
-    # validate performance
-    avg_step_time = statistics.mean(all_denoising_steps) if all_denoising_steps else 0
-    total_denoising_time = avg_step_time * num_inference_steps
+    its_1024 = iterations["1024x1024"]
     measurements = {
-        "total_encoding_time": statistics.mean(total_encoding_times),
-        "denoising_steps_time": total_denoising_time,
-        "vae_decoding_time": statistics.mean(vae_times),
-        "total_time": statistics.mean(total_times),
+        "total_encoding_time": statistics.mean(durations(benchmark_profiler, "encoder", its_1024)),
+        "denoising_steps_time": statistics.mean(step_durations(benchmark_profiler, its_1024, NUM_INFERENCE_STEPS))
+        * NUM_INFERENCE_STEPS,
+        "vae_decoding_time": statistics.mean(durations(benchmark_profiler, "vae", its_1024)),
+        "total_time": statistics.mean(durations(benchmark_profiler, "run", its_1024)),
     }
-    if tuple(mesh_device.shape) == (2, 2):
-        # BH QuietBox 2, calibrated from run 31845507029:
-        # encoding 0.1189s, denoising 47.1481s, vae 1.1045s, total 57.4226s.
-        expected_metrics = {
-            "total_encoding_time": 0.2,
-            "denoising_steps_time": 55.0,
-            "vae_decoding_time": 1.5,
-            "total_time": 68,
-        }
-    elif tuple(mesh_device.shape) == (2, 4):
-        expected_metrics = {
-            "total_encoding_time": 0.35,
-            "denoising_steps_time": 80.0,
-            "vae_decoding_time": 3.0,
-            "total_time": 88,
-        }
-    elif tuple(mesh_device.shape) == (4, 8):
-        expected_metrics = {
-            "total_encoding_time": 0.35,
-            "denoising_steps_time": 25,
-            "vae_decoding_time": 0.4,
-            "total_time": 26,
-        }
-    else:
-        assert False, f"Unknown mesh device for performance comparison: {mesh_device}"
+    expected_metrics = EXPECTED_METRICS[key]
 
     if is_ci_env:
         # in ci, dump a performance report
         benchmark_data = BenchmarkData()
-        for iteration in range(num_perf_runs):
-            for step_name, target in zip(
-                ["encoder", "denoising", "vae", "run"],
-                [
-                    expected_metrics["total_encoding_time"],
-                    expected_metrics["denoising_steps_time"],
-                    expected_metrics["vae_decoding_time"],
-                    expected_metrics["total_time"],
-                ],
-            ):
+        step_names = {
+            "total_encoding_time": "encoder",
+            "denoising_steps_time": "denoising",
+            "vae_decoding_time": "vae",
+            "total_time": "run",
+        }
+        for iteration in its_1024:
+            for metric, step_name in step_names.items():
                 benchmark_data.add_measurement(
                     profiler=benchmark_profiler,
                     iteration=iteration,
                     step_name=step_name,
                     name=step_name,
                     value=benchmark_profiler.get_duration(step_name, iteration),
-                    target=target,
+                    target=expected_metrics.get(metric),
                 )
-        device_name_map = {
-            (2, 2): "BH_QB",
-            (2, 4): "WH_T3K",
-            (4, 8): "BH_GLX" if is_blackhole() else "WH_GLX",
-        }
         benchmark_profiler.start("inference")
         benchmark_profiler.end("inference")
-        benchmark_data.add_measurement(benchmark_profiler, 0, "inference", "fps", 1.0 / total_times[-1])
+        benchmark_data.add_measurement(benchmark_profiler, 0, "inference", "fps", 1.0 / measurements["total_time"])
+        dit = config.dit_parallel_config
         benchmark_data.save_partial_run_json(
             benchmark_profiler,
-            run_type=device_name_map[tuple(mesh_device.shape)],
+            run_type=RUN_TYPES[key],
             ml_model_name="QwenImage",
             batch_size=1,
             config_params={
-                "width": image_w,
-                "height": image_h,
-                "num_steps": num_inference_steps,
-                "cfg_factor": cfg[0],
-                "sp_factor": sp[0],
-                "tp_factor": tp[0],
+                "width": 1024,
+                "height": 1024,
+                "num_steps": NUM_INFERENCE_STEPS,
+                "cfg_factor": dit.cfg_parallel.factor,
+                "sp_factor": dit.sequence_parallel.factor,
+                "tp_factor": dit.tensor_parallel.factor,
                 "num_frames": 1,
-                "encoder_tp_factor": encoder_tp[0],
-                "vae_tp_factor": vae_tp[0],
-                "topology": str(topology),
-                "num_links": num_links,
-                "fsdp": pipeline._is_fsdp,
+                "encoder_tp_factor": config.encoder_parallel_config.tensor_parallel.factor,
+                "topology": str(config.topology),
+                "num_links": config.num_links,
             },
         )
 
-    pass_perf_check = True
-    assert_msgs = []
-    for k in expected_metrics.keys():
-        if measurements[k] > expected_metrics[k]:
-            assert_msgs.append(
-                f"Warning: {k} is outside of the tolerance range. Expected: {expected_metrics[k]}, Actual: {measurements[k]}"
-            )
-            pass_perf_check = False
+    assert_msgs = [
+        f"Warning: {k} is outside of the tolerance range. Expected: {limit}, Actual: {measurements[k]}"
+        for k, limit in expected_metrics.items()
+        if measurements[k] > limit
+    ]
+    assert not assert_msgs, "\n".join(assert_msgs)
 
-    assert pass_perf_check, "\n".join(assert_msgs)
-
-    # synchronize all devices
     pipeline.synchronize_devices()
     logger.info("Performance test completed successfully!")
+
+
+# Off in CI, where it would lengthen the job; set QWENIMAGE_PERF_EDIT=1 to run it.
+@pytest.mark.skipif(os.environ.get("QWENIMAGE_PERF_EDIT") != "1", reason="set QWENIMAGE_PERF_EDIT=1")
+@pytest.mark.parametrize(("mesh_device", "device_params"), EDIT_MESH_DEVICE_PARAMS, indirect=True)
+def test_qwenimage_edit_pipeline_performance(
+    *,
+    mesh_device: ttnn.MeshDevice,
+    is_ci_env: bool,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Times Qwen-Image-Edit-2511 with one square and one 16:9 input image, and edit inpainting.
+
+    Edit and Edit-2509 run the same transformer and text encoder, so they take the same time.
+    """
+    if is_ci_env:
+        monkeypatch.setenv("TT_DIT_CACHE_DIR", "/tmp/TT_DIT_CACHE")
+
+    checkpoint_name = "Qwen/Qwen-Image-Edit-2511"
+    pipeline = QwenImagePipeline.create_pipeline(mesh_device=mesh_device, checkpoint_name=checkpoint_name)
+    config = QwenImagePipelineConfig.default(mesh_shape=mesh_device.shape, checkpoint_name=checkpoint_name)
+
+    dog = Image.open(DOG_IMAGE_PATH).convert("RGB")
+    cases = [
+        Case(f"edit {name}", EDIT_NUM_INFERENCE_STEPS, {"image": crop_to_aspect_ratio(dog, aspect)})
+        for name, aspect in EDIT_ASPECT_RATIOS.items()
+    ]
+    cases.append(Case("edit inpaint 1:1", EDIT_NUM_INFERENCE_STEPS, inpaint_inputs()))
+
+    benchmark_profiler, iterations = run_cases(
+        pipeline,
+        cases,
+        prompt=EDIT_PROMPT,
+        file_prefix="qwenimage_edit_2511",
+        runs_per_case=BENCHMARK_RUNS_PER_CASE,
+    )
+    print_report(
+        title="QWEN IMAGE EDIT PIPELINE PERFORMANCE RESULTS",
+        profiler=benchmark_profiler,
+        iterations=iterations,
+        cases=cases,
+        config=config,
+        mesh_device=mesh_device,
+    )
+
+    pipeline.synchronize_devices()

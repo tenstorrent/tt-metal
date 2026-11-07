@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
-#include <tt-metalium/constants.hpp>
+#include "api/tile_constants.h"
 //
 // Dense RM reduce compute (handles both W reduce and H reduce; branched on REDUCE_DIM).
 //
