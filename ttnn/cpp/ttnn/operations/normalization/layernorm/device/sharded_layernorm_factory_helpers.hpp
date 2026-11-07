@@ -315,6 +315,11 @@ struct SpecConfig {
     bool legacy_reduction = false;
     float eps = 0.0f;
     uint32_t per_core_recip_lut_size = 0;
+    // Non-distributed, non-Welford only: the reduce scalers are 1.0 and the compute kernel applies these
+    // float32 factors in DEST (per-core reduce by reduce_scale_w, cross-core reduce by reduce_scale_c).
+    bool scale_reduce_in_dest = false;
+    float reduce_scale_w = 1.0f;
+    float reduce_scale_c = 1.0f;
 
     // Hardware configuration
     tt::tt_metal::NOC reader_noc = tt::tt_metal::NOC::NOC_0;
