@@ -84,8 +84,9 @@ def _build_condition_for_test_case(
         return torch.ones_like(base, dtype=torch_format)
     if test_case == "all_zeros":
         return torch.zeros_like(base, dtype=torch_format)
-    # "mixed" — raw stimuli as condition (mostly non-zero, exercises true branch).
-    return base.to(torch_format)
+    # "mixed": raw stimuli are never zero, so zero about half the lanes.
+    mask = torch.rand_like(base, dtype=torch.float32) < 0.5
+    return torch.where(mask, base, torch.zeros_like(base)).to(torch_format)
 
 
 @pytest.mark.quasar
@@ -223,7 +224,7 @@ def test_sfpu_where_quasar(
     res_tensor = torch.tensor(res_from_L1, dtype=torch_format_out)
     mask = _processed_face_mask(vector_mode, num_faces)
     assert passed_test(
-        golden_tensor[mask], res_tensor[mask], formats.output_format
+        golden_tensor[mask], res_tensor[mask], formats.output_format, max_ulp=0
     ), "Assert against golden failed"
 
 
@@ -316,5 +317,5 @@ def test_sfpu_where_mcw_quasar(formats_dest_acc, vector_mode):
     res_tensor = torch.tensor(res_from_L1, dtype=torch_format_out)
     mask = _processed_face_mask(vector_mode, num_faces)
     assert passed_test(
-        golden_tensor[mask], res_tensor[mask], formats.output_format
+        golden_tensor[mask], res_tensor[mask], formats.output_format, max_ulp=0
     ), "Assert against golden failed"

@@ -59,6 +59,7 @@ constexpr bool bfd_engine_owned_by_trisc(const BfdResource engine, const std::ui
         case BfdResource::Pack1:
         case BfdResource::Unp2_Slice0:
         case BfdResource::Unp2_Slice1:
+        case BfdResource::Unp2_Slice2:
             return trisc == 3;
         default:
             return false;
