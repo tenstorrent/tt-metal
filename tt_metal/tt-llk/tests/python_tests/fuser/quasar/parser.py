@@ -135,9 +135,9 @@ _no_transpose_mismatch = reject(
     "requires both transpose_faces and transpose_within_face to have the same value",
 )
 
-_block_full_width = reject(
-    lambda s, a, b: s.block_size[1] != a.dimensions[1],
-    "block width must be same as operand width",
+_block_divides_width = reject(
+    lambda s, a, b: a.dimensions[1] % s.block_size[1] != 0,
+    "operand width must be a multiple of the block width",
 )
 
 _reduce_col_only = reject(
@@ -196,9 +196,8 @@ UNPACKER_MAP = {
             IN0_REQUIRED,
             NO_BROADCAST,
             NO_TRANSPOSE,
-            _block_full_width,
+            _block_divides_width,
             NO_UNPACK_TO_DEST,
-            require_src_a_tiles((32, 32)),
         ],
     ),
     "UnpackerAB": (
