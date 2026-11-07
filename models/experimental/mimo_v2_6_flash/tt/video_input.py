@@ -170,6 +170,15 @@ class VideoInfoMixin:
 
         return MultiModalDataParser(target_sr=24000.0, video_needs_metadata=True)
 
+    def get_mm_max_tokens_per_item(self, seq_len, mm_counts):
+        """Upstream's bounds, except a video's: its embedding rows grow with its length (2 fps, frames down to the
+        processor's minimum size, its audio track at 6.25 tokens a second), so only the context bounds it. vLLM sizes
+        its encoder cache from these bounds and refuses a longer item (upstream's 114688 refused a VGI-Bench
+        clip, 124078 rows); the TT model encodes items itself (tt/multimodal.py), so that cache only counts here."""
+        out = dict(super().get_mm_max_tokens_per_item(seq_len, mm_counts))
+        out["video"] = max(out.get("video", 0), int(seq_len))
+        return out
+
     def get_hf_processor(self, **kwargs):
         processor = super().get_hf_processor(**kwargs)
         p = processor.mimo_processor

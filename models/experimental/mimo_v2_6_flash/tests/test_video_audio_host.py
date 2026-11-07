@@ -184,6 +184,20 @@ def test_audio_track_shorter_than_the_picture(processor):
     assert ids[ph.offset : ph.offset + ph.length].count(vocab["<|audio_pad|>"]) == sum(seg_lens)
 
 
+def test_track_ending_inside_the_last_grid_is_not_padded():
+    """Only a track that ends before the last grid starts is padded (to two tokens past it); one that ends inside the
+    last grid keeps its length (the last segment is shorter, as Xiaomi's API counts it)."""
+    from models.experimental.mimo_v2_6_flash.tt.video_audio import SAMPLE_RATE, cover_frames
+    from models.experimental.mimo_v2_6_flash.tt.video_input import dummy_metadata
+
+    meta = dict(dummy_metadata(24), fps=4.0)  # 24 frames 0.25 s apart: the last grid starts at 5.5 s
+    inside = np.zeros(int(5.9 * SAMPLE_RATE), dtype=np.float32)  # ends inside the last grid [5.5, 6.0)
+    assert cover_frames(inside, meta, 24) is inside
+    short = np.zeros(int(5.0 * SAMPLE_RATE), dtype=np.float32)
+    padded = cover_frames(short, meta, 24)
+    assert padded.size == (int(5.5 * 6.25) + 2) * SAMPLE_RATE * 4 // 25 and not padded[short.size :].any()
+
+
 def test_switch(monkeypatch):
     """MIMO_VIDEO_AUDIO (on by default when audio is served) is the default; a request's or the server's
     mm_processor_kwargs ``mimo_video_audio`` overrides it either way."""

@@ -76,17 +76,24 @@ def decode_audio_track(data):
     return np.asarray(AudioResampler(SAMPLE_RATE).resample(wave, orig_sr=sr), dtype=np.float32)
 
 
+TOKENS_PER_SECOND = 6.25  # audio tokens (25 Hz codes in groups of 4)
+SAMPLES_PER_TOKEN = int(SAMPLE_RATE / TOKENS_PER_SECOND)
+
+
 def cover_frames(wave, metadata, num_frames):
-    """``wave`` zero-padded to last past the video's last frame. The checkpoint's processor cuts a segment per grid up to
-    the last frame's time plus one frame interval and asserts every segment is non-empty, so a track that ends before
-    the picture (common: a few hundred ms) fails the request; the missing tail is silence."""
+    """``wave``, zero-padded when it ends before the video's last grid starts. The checkpoint's processor cuts a
+    segment per grid, from the grid's time to the next one's (the last one to the last frame plus one interval, cut at
+    the track's end), and asserts every segment is non-empty: a track that ends before the last grid's time fails the
+    request (seen on Video-MME clips). The missing tail becomes silence, up to two tokens past that time: a track that
+    only ends inside the last grid is left as it is (its last segment is shorter, as Xiaomi's API's token counts show).
+    """
     from .video_input import VIDEO_TIMESTAMPS, loader_timestamps, upstream_timestamps
 
     times = loader_timestamps(metadata, num_frames) if VIDEO_TIMESTAMPS == "loader" else None
     if times is None:
         times = upstream_timestamps(num_frames)
-    step = float(times[1] - times[0]) if num_frames > 1 else 1.0
-    need = int(np.ceil((float(times[-1]) + step + 0.5) * SAMPLE_RATE))
+    last_grid = float(times[(num_frames - 1) // 2 * 2])  # the processor pads an odd frame count with the last frame
+    need = (int(last_grid * TOKENS_PER_SECOND) + 2) * SAMPLES_PER_TOKEN
     return wave if wave.size >= need else np.pad(wave, (0, need - wave.size))
 
 
