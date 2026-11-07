@@ -297,6 +297,30 @@ def test_paged_rejects_bad_index(device, expect_error):
             _run(x, consts, sa, ha, True, True, state_page_idx=idx)
 
 
+@pytest.mark.parametrize("pool", ["state_pool2", "conv_hist_pool2"])
+def test_paged_rejects_a_second_pool_of_smaller_tiles(device, expect_error, pool):
+    """The kernels read a second pool with the first pool's page size (32x32 tiles): a second pool of 16x32 tiles, with
+    the right dtype and enough pages, is refused on the host."""
+    B = 8
+    gen = torch.Generator().manual_seed(0)
+    inp = _inputs(B, seed=0)
+    consts = _consts_dev(device, inp)
+    lay = Layout(B, "two_pools", gen)
+    (sp, hp) = lay.host_pools(inp, gen)
+    (sa, sb), (ha, hb) = _pools_dev(device, (sp, hp))
+    small = lambda t, dtype: ttnn.from_torch(
+        t, dtype=dtype, layout=ttnn.TILE_LAYOUT, tile=ttnn.Tile((16, 32)), device=device
+    )
+    if pool == "state_pool2":
+        sb = small(sp[1], ttnn.float32)
+    else:
+        hb = small(hp[1], ttnn.bfloat16)
+    x = _tile_dev(device, _token_rows(B, gen).reshape(1, B, W), ttnn.bfloat16)
+    idx = lay.index(device, list(range(B)))
+    with expect_error(RuntimeError, f"{pool} must use 32x32 tiles"):
+        _run(x, consts, sa, ha, True, True, state_page_idx=idx, state_pool2=sb, conv_hist_pool2=hb)
+
+
 @pytest.mark.parametrize("device_params", TRACE_PARAMS, indirect=True)
 @pytest.mark.parametrize("B", [8, 32])
 def test_paged_trace_follows_index(device, B):
