@@ -24,6 +24,11 @@ void NonZeroIndicesDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to Non-zero need to be on device!");
     TT_FATAL(input_tensor.is_allocated(), "Operands to Non-zero need to be allocated in buffers on device!");
 
+    TT_FATAL(
+        !tt::tt_metal::is_block_float(input_tensor.dtype()),
+        "non_zero_indices: block-float input ({}) is not supported; typecast it to BFLOAT16 first",
+        input_tensor.dtype());
+
     const uint32_t elem_size = input_tensor.element_size();
     TT_FATAL(
         elem_size == 1 || elem_size == 2 || elem_size == 4,

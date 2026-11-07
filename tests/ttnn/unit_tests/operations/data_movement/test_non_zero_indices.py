@@ -510,3 +510,18 @@ def test_nonzero_sharded_row_major_row_distinct_pattern(shape, grid_shape, shard
     ), f"orientation landed as {actual.shard_spec.orientation}, expected {orientation}"
 
     run_nonzero_and_validate(torch_input, ttnn_input, device)
+
+
+@pytest.mark.parametrize("dtype", [ttnn.bfloat8_b, ttnn.bfloat4_b])
+@pytest.mark.parametrize("pattern", ["one_hot", "identity", "row_of_ones"])
+def test_nonzero_block_float(pattern, dtype, device):
+    if pattern == "one_hot":
+        torch_input = torch.zeros(1, 1, 1, 32, dtype=torch.bfloat16)
+        torch_input[0, 0, 0, 5] = 1
+    elif pattern == "identity":
+        torch_input = torch.eye(32, dtype=torch.bfloat16).reshape(1, 1, 32, 32)
+    else:
+        torch_input = torch.zeros(1, 1, 8, 32, dtype=torch.bfloat16)
+        torch_input[0, 0, 6] = 1
+    ttnn_input = ttnn.from_torch(torch_input, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    run_nonzero_and_validate(torch_input, ttnn_input, device)
