@@ -2,8 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// grad * d/dx relu(x), evaluated over BF16 DEST by relu_bw_tile.
-
 #include <cstdint>
 
 #include "api/compute/compute_kernel_hw_startup.h"
