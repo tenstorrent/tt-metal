@@ -11,12 +11,12 @@ from models.demos.gemma4_d_p.scripts import layer_perf_report as lpr
 
 PERF_REPORT_HEADERS = [
     "ID",
-    "Total %",
+    "Total [%]",
     "Bound",
     "OP Code",
     "Device",
-    "Device Time",
-    "Op-to-Op Gap",
+    "Device Time [μs]",
+    "Op-to-Op Gap [μs]",
     "Global Call Count",
 ]
 
@@ -26,7 +26,7 @@ def _write_cell_csv(path, rows):
         writer = csv.DictWriter(f, fieldnames=PERF_REPORT_HEADERS)
         writer.writeheader()
         for op, device_us, gap_us, *call_count in rows:
-            row = {"OP Code": op, "Device Time": device_us, "Op-to-Op Gap": gap_us}
+            row = {"OP Code": op, "Device Time [μs]": device_us, "Op-to-Op Gap [μs]": gap_us}
             if call_count:
                 row["Global Call Count"] = call_count[0]
             writer.writerow(row)
@@ -78,6 +78,13 @@ def test_summarize_ignores_non_device_rows(tmp_path):
     assert summary["kernel_us"] == 1000.0
     assert summary["span_us"] == 1015.0
     assert summary["top_ops"] == [{"op": "MatmulDeviceOperation", "device_us": 500.0, "count": 2}]
+
+
+def test_summarize_rejects_missing_columns(tmp_path, expect_error):
+    path = tmp_path / "cell.csv"
+    path.write_text("ID,OP Code\n1,MatmulDeviceOperation\n")
+    with expect_error(ValueError, "has no Device Time"):
+        lpr.summarize_cell_csv(path)
 
 
 def test_summarize_includes_all_ops(tmp_path):

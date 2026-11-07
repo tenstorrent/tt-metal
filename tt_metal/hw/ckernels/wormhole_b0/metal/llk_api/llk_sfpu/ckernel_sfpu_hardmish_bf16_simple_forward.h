@@ -9,10 +9,8 @@
 #include "ckernel_sfpu_hardmish_bf16_min_max.h"
 #include "ckernel_sfpu_hardmish_bf16_simple_algebraic.h"
 namespace ckernel::sfpu::bf16::hardmish {
-// The rows load and store through the hold mode (ADDR_MOD_7, ADDR_MOD_3 past WH's SFPU base), which
-// every SFPU init leaves at zero step, and an INCRWC after each replay steps DEST: ADDR_MOD_6 belongs
-// to the FPU ops (matmul) a kernel may run between this init and its call. A threshold pair that folds
-// its identity store (always on WH, at 11 slots on BH) records its own INCRWC.
+// Rows step DEST through the zero-step hold mode and an INCRWC per replay, as ADDR_MOD_6 is the FPU's;
+// a threshold pair that folds its identity store records its own INCRWC.
 template <typename Config, int Iterations = 8>
 inline void calculate_simple_forward() {
     static_assert(Iterations > 0 && Iterations % 2 == 0);

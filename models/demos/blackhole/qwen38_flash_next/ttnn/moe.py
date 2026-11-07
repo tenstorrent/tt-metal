@@ -49,7 +49,7 @@ from models.demos.blackhole.qwen38_flash_next.ttnn.decode_matmul import (
     prefill_matmul_program_config,
 )
 from models.demos.blackhole.qwen38_flash_next.ttnn.prefill_dense import Qwen38TTNNPrefillDense
-from models.tt_transformers.tt.ccl import tt_all_reduce
+from models.ttt_compat.tt.ccl import tt_all_reduce
 
 HIDDEN_SIZE = 2560
 INTERMEDIATE_SIZE = 640

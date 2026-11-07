@@ -3,7 +3,5 @@
 #pragma once
 #include <cstdint>
 namespace ckernel::sfpu::bf16::hardmish {
-#ifndef TTPOLY_SFPU_REPLAY_SLOTS
 #define TTPOLY_SFPU_REPLAY_SLOTS 16
-#endif
 }  // namespace ckernel::sfpu::bf16::hardmish
