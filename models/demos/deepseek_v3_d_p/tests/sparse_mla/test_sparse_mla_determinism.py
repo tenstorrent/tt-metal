@@ -144,7 +144,7 @@ def _replay_outputs(mesh_device, case, start):
             try:
                 controller.end_capture()
             except Exception as e:
-                logger.debug(f"ending the failed capture failed: {e}")
+                logger.warning(f"ending the failed capture failed: {e}")
         _drain(mesh_device)
         for copy in outputs:
             ttnn.deallocate(copy)

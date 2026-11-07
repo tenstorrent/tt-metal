@@ -376,7 +376,8 @@ def _thp_state():
                 key, _, value = line.partition(":")
                 if value.split():
                     kib[key] = value.split()[0]
-        out.append(f"rss {int(kib['Rss']) // 1024} MiB, anon huge {int(kib['AnonHugePages']) // 1024} MiB")
+        rss, huge = (int(kib.get(k, -1024)) // 1024 for k in ("Rss", "AnonHugePages"))
+        out.append(f"rss {rss} MiB, anon huge {huge} MiB")
     except Exception:
         pass
     return "; ".join(out)
@@ -423,7 +424,10 @@ def _time_untraced(mesh_device, case, start, cpus=None, repeat=None, enqueue=Non
         samples.append((time.perf_counter() - t0) * 1e3)
         if host is not None:
             (f2, c2), vm2 = _rusage(), _vmstat()
-            vm = {k: vm2[k] - vm0.get(k, 0) for k in vm2 if vm2[k] != vm0.get(k, 0)}
+            if vm0 and vm2:
+                vm = " ".join(f"{k}={vm2[k] - vm0[k]}" for k in sorted(vm0.keys() & vm2.keys()) if vm2[k] != vm0[k])
+            else:
+                vm = "vmstat unavailable"
             host.append(f"{f1 - f0}/{f2 - f1}/{c2 - c0}" + (f" {vm}" if vm else ""))
         if enqueue is not None:
             enqueue.append((t1 - t0) * 1e3)
@@ -553,8 +557,9 @@ def test_sparse_mla_perf(mesh_device, device_params, variant, case_name, config_
     print(f"{label} host: {_host_state()}; untraced sample CPUs {' '.join(map(str, cpus))}")
     print(f"{label} untraced enqueue (forward() returns, ms): {' '.join(f'{x:.3f}' for x in enqueue)}")
     print(
-        f"{label} untraced host per sample (enqueue faults/sync faults/involuntary ctx switches, vmstat deltas): "
-        f"{', '.join(host)}; before: {thp_before}; after: {_thp_state()}"
+        f"{label} untraced host per sample (process-wide minor faults in enqueue/sync, involuntary ctx switches; "
+        f"system-wide vmstat deltas; windows approximate): {' | '.join(host)}; "
+        f"before: {thp_before}; after: {_thp_state()}"
     )
     print(f"{label} untraced op profile: {_op_host_profile(mesh_device, case, start)}")
     samples["traced"], traced_out = _time_traced(mesh_device, case, start, traced_repeat)
