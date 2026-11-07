@@ -55,6 +55,19 @@ struct Geom {
         }
     }
 
+    // placement of tile-row r + 1 from that of r (no division)
+    FORCE_INLINE void advance(uint32_t& grp, uint32_t& li) const {
+        if (rows_per_group == 0) {
+            if (++grp == n_groups) {
+                grp = 0;
+                ++li;
+            }
+        } else if (++li == rows_per_group) {
+            li = 0;
+            ++grp;
+        }
+    }
+
     FORCE_INLINE uint32_t ws(uint32_t m) const { return get_arg_val<uint32_t>(ws_arg + m); }
     FORCE_INLINE uint32_t n_xb() const { return (R_t + xfer_rows - 1) / xfer_rows; }
 
@@ -99,38 +112,59 @@ struct Geom {
 // A chunk is a run of <= run_pages landing tiles of one row inside one member (contiguous in that member's L1);
 // a member's segment of a row is split into balanced chunks. from_input: l1_addr is the chunk's source in the
 // member's resident input shard (native HEIGHT own slice) instead of its landing slot (same chunk boundaries).
+// Order: members outer, the item's rows inner (any order is valid: the reader and the sender share this walk, and an
+// item is published to the members only as a whole). The member layout is identical for every row, so each member's
+// chunk split is computed once per item and the row placement (group, local row) advances incrementally: the sender's
+// per-packet RISC work was the walk's per-row div / mod and per-member re-derivation (Refinement 3).
 template <typename F>
-FORCE_INLINE void for_each_chunk_of_item(
-    const Geom& g, const Entry& e, uint32_t xb, uint32_t cpr, F&& f, bool from_input = false) {
-    const uint32_t t0 = e.q * g.Wt_lp + e.c0, t1 = e.q * g.Wt_lp + e.c1;
+FORCE_INLINE void for_each_chunk_of_item(const Geom& g, const Entry& e, uint32_t xb, F&& f, bool from_input = false) {
     const uint32_t r0 = xb * g.xfer_rows;
     const uint32_t rows = g.item_rows(xb);
-    uint32_t left = e.rows_in(r0, rows) * cpr;
-    for (uint32_t r = r0; r < r0 + rows; ++r) {
-        if (!e.has_row(r)) {
+    if (e.empty() || e.rows_in(r0, rows) == 0) {
+        return;
+    }
+    const uint32_t q_base = e.q * g.Wt_lp;
+    const uint32_t t0 = q_base + e.c0, t1 = q_base + e.c1;
+    uint32_t r_last = r0 + rows - 1;
+    if (!e.has_row(r_last)) {
+        --r_last;
+    }
+    uint32_t grp0, li0;
+    g.place(r0, grp0, li0);
+    // last member overlapping [t0, t1): the item's last chunk is its last row's last chunk
+    uint32_t m_last = 0;
+    for (uint32_t m = 0; m < g.k; ++m) {
+        if (g.ws(m) < t1 && g.ws(m + 1) > t0) {
+            m_last = m;
+        }
+    }
+    for (uint32_t m = 0; m <= m_last; ++m) {
+        const uint32_t ws = g.ws(m), we = g.ws(m + 1);
+        const uint32_t a = t0 > ws ? t0 : ws;
+        const uint32_t b = t1 < we ? t1 : we;
+        if (a >= b) {
             continue;
         }
-        uint32_t grp, li;
-        g.place(r, grp, li);
-        for (uint32_t m = 0; m < g.k; ++m) {
-            const uint32_t ws = g.ws(m), we = g.ws(m + 1);
-            const uint32_t a = t0 > ws ? t0 : ws;
-            const uint32_t b = t1 < we ? t1 : we;
-            if (a >= b) {
-                continue;
+        const uint32_t len = b - a;
+        const uint32_t nch = (len + g.run_pages - 1) / g.run_pages;
+        const uint32_t base_n = len / nch, rem = len % nch;
+        // source address of this member's segment on local row 0, and the per-local-row pitch
+        const uint32_t seg0 =
+            from_input ? g.x_base + (a - q_base) * g.page_bytes : g.landing_base + (a - ws) * g.page_bytes;
+        const uint32_t pitch = (from_input ? g.Wt_lp : g.w_pitch) * g.page_bytes;
+        uint32_t grp = grp0, li = li0;
+        for (uint32_t r = r0; r < r0 + rows; ++r) {
+            if (e.has_row(r)) {
+                uint32_t addr = seg0 + li * pitch;
+                const uint32_t w = grp * g.k + m;
+                const bool last_row = m == m_last && r == r_last;
+                for (uint32_t c = 0; c < nch; ++c) {
+                    const uint32_t n = base_n + (c < rem ? 1 : 0);
+                    f(w, addr, n * g.page_bytes, last_row && c + 1 == nch);
+                    addr += n * g.page_bytes;
+                }
             }
-            const uint32_t len = b - a;
-            const uint32_t nch = (len + g.run_pages - 1) / g.run_pages;
-            const uint32_t base_n = len / nch, rem = len % nch;
-            uint32_t off = a;
-            for (uint32_t c = 0; c < nch; ++c) {
-                const uint32_t n = base_n + (c < rem ? 1 : 0);
-                const uint32_t addr = from_input ? g.x_base + (li * g.Wt_lp + (off - e.q * g.Wt_lp)) * g.page_bytes
-                                                 : g.landing_base + (li * g.w_pitch + (off - ws)) * g.page_bytes;
-                --left;
-                f(grp * g.k + m, addr, n * g.page_bytes, left == 0);
-                off += n;
-            }
+            g.advance(grp, li);
         }
     }
 }

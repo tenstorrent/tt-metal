@@ -138,12 +138,10 @@ void kernel_main() {
     // at the end of an item (a relay waits on its upstream; an unpushed tail would hold every downstream back).
     uint32_t batch = 0, need = 0, pos = 0, wptr = 0;
     auto stream_item = [&](const Entry& e, uint32_t xb, bool from_input) {
-        const uint32_t cpr = g.chunks_per_row(e);
         for_each_chunk_of_item(
             g,
             e,
             xb,
-            cpr,
             [&](uint32_t w, uint32_t addr, uint32_t bytes, bool last) {
                 if (batch == 0) {
                     need = group - pos % group;
@@ -151,7 +149,9 @@ void kernel_main() {
                     wptr = get_write_ptr(cb);
                 }
                 const uint32_t xy = get_common_arg_val<uint32_t>(w);
+#ifndef AGRMS_ABLATE_NOREAD
                 noc_async_read(get_noc_addr(xy & 0xFFFF, xy >> 16, addr), wptr + batch * chunk_bytes, bytes);
+#endif
                 if (++batch == need || last) {
                     noc_async_read_barrier();
                     cb_push_back(cb, run_pages * batch);
@@ -178,6 +178,7 @@ void kernel_main() {
             }
             if (has_in && t >= relay_lag) {
                 const int32_t s = static_cast<int32_t>(t - relay_lag);
+                AGRMS_ZONE("AG_ARRIVAL_WAIT");
                 noc_semaphore_wait_min(arrived, upstream_through(s));
                 notify_until(s);
             }

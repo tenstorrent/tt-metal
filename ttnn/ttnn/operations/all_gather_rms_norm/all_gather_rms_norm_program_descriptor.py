@@ -53,7 +53,9 @@ STAGE_ROWS = 1  # cb_x_stage depth in landed rows (regime N bfp8; >1 needs compu
 ITEM_MIN_CHUNKS = int(
     os.environ.get("AGRMS_ITEM_MIN_CHUNKS", "4")
 )  # (env: perf probes) chunks per transport item (one fused write + increment per item)
-PORT_CB_BYTES = 112 * 1024  # cb_port_chunks bytes (2 batches)
+PORT_CB_BYTES = (
+    int(os.environ.get("AGRMS_PORT_CB_KIB", "112")) * 1024
+)  # (env: perf probes) cb_port_chunks bytes (2 batches)
 PORT_GROUP_CAP = 8  # chunks per port batch
 # TRANSPORT (Refinement 3): the far slice of a balanced ring is split between the two directions by tile-row parity
 # (part 1 = even rows, part 2 = odd rows, each over the link's whole column range) instead of by columns (each half of
@@ -904,6 +906,7 @@ def create_mesh_program_descriptor(
         RELAY_LAG,
         ITEM_MIN_CHUNKS,
         FAR_ROW_SPLIT,
+        PORT_CB_BYTES,
         tuple(input_tensor.shape),
         str(x_dtype),
         str(gamma.dtype) if has_gamma else None,

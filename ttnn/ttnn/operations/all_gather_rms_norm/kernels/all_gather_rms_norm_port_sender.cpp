@@ -127,8 +127,7 @@ void kernel_main() {
         const uint64_t arrival_noc = get_noc_addr(peer_x, peer_y, get_semaphore(sem_arrival_id), 0);
         uint32_t h = 0, unflushed = 0;
         auto send_item = [&](const Entry& e, uint32_t xb) {
-            const uint32_t cpr = g.chunks_per_row(e);
-            for_each_chunk_of_item(g, e, xb, cpr, [&](uint32_t w, uint32_t addr, uint32_t bytes, bool last) {
+            for_each_chunk_of_item(g, e, xb, [&](uint32_t w, uint32_t addr, uint32_t bytes, bool last) {
                 cb_wait_front(cb, run_pages * (unflushed + 1));
                 const uint32_t src = get_read_ptr(cb) + unflushed * chunk_bytes;
                 const uint32_t xy = get_common_arg_val<uint32_t>(w);
