@@ -243,24 +243,27 @@ def log_mel_spectrogram(waveform, cfg=MiMoAudioConfig()):
 # ---------------------------------------------------------------------------
 
 
-def load_audio_weights(model_path):
-    """All audio-input tensors as stored: ``encoder.*`` of the tokenizer (bf16; RVQ codebooks fp32) and the
-    main checkpoint's ``speech_embeddings.*`` / ``audio_encoder.*`` (bf16). The vocoder (``decoder.*``) is skipped."""
+def load_audio_weights(model_path, tokenizer=True, patch=True):
+    """Audio-input tensors as stored: ``encoder.*`` of the tokenizer (bf16; RVQ codebooks fp32; ``tokenizer``) and
+    the main checkpoint's ``speech_embeddings.*`` / ``audio_encoder.*`` (bf16; ``patch``). The vocoder
+    (``decoder.*``) is skipped."""
     out = {}
-    with safe_open(os.path.join(model_path, AUDIO_TOKENIZER_DIR, "model.safetensors"), framework="pt") as f:
-        for k in f.keys():
-            if k.startswith("encoder."):
-                out[k] = f.get_tensor(k)
-    with open(os.path.join(model_path, "model.safetensors.index.json")) as f:
-        weight_map = json.load(f)["weight_map"]
-    by_file = {}
-    for k, fname in weight_map.items():
-        if k.startswith(("speech_embeddings.", "audio_encoder.")):
-            by_file.setdefault(fname, []).append(k)
-    for fname, keys in by_file.items():
-        with safe_open(os.path.join(model_path, fname), framework="pt") as f:
-            for k in keys:
-                out[k] = f.get_tensor(k)
+    if tokenizer:
+        with safe_open(os.path.join(model_path, AUDIO_TOKENIZER_DIR, "model.safetensors"), framework="pt") as f:
+            for k in f.keys():
+                if k.startswith("encoder."):
+                    out[k] = f.get_tensor(k)
+    if patch:
+        with open(os.path.join(model_path, "model.safetensors.index.json")) as f:
+            weight_map = json.load(f)["weight_map"]
+        by_file = {}
+        for k, fname in weight_map.items():
+            if k.startswith(("speech_embeddings.", "audio_encoder.")):
+                by_file.setdefault(fname, []).append(k)
+        for fname, keys in by_file.items():
+            with safe_open(os.path.join(model_path, fname), framework="pt") as f:
+                for k in keys:
+                    out[k] = f.get_tensor(k)
     return out
 
 
