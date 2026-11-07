@@ -1891,13 +1891,19 @@ class SpeculativeDecoder:
 
         ``ttnn.argmax`` requires ROW_MAJOR input; passing a TILE tensor takes a
         single-core internal-untilize path that is catastrophically slow on a
-        262144-wide vocab (~9 ms for 1 row, ~28 ms for 5). The multicore argmax
-        is fast (~1.6 ms) but ROW-PARALLEL: it returns GARBAGE unless the row
-        (batch) dim is EXACTLY one tile (32) — verified by a correctness probe
-        (1/5 rows -> wrong; padded to 32 -> exact; and >32 rows in one call also
-        returns garbage beyond the first tile). So process the rows in 32-row
-        chunks: pad each ≤32-row chunk up to 32, run the multicore untilize +
-        argmax, slice back, and concat. Net ~1.6 ms/chunk vs ~9-28 ms bare.
+        262144-wide vocab (~9 ms for 1 row, ~28 ms for 5). So the logits are
+        untilized (multicore) first, then argmaxed with the multicore ROW_MAJOR
+        kernel, which splits the VOCAB dim across cores; each core loops over
+        every row of its slice, so its work split does not depend on the row count.
+
+        Up to 32 rows take one untilize + argmax with no padding: untilize writes
+        only the logical rows (the tile pad is dropped). This is exact for every
+        row count 1..32 at N=262144 in bf16 and fp32 (test_dense_argmax.py).
+        ``GEMMA4_ARGMAX_PAD32`` restores the older pad-to-32 path: ``1`` for every
+        row count, ``multirow`` for 2..31 rows only.
+
+        More than 32 rows are argmaxed in 32-row chunks and concatenated; a single
+        >32-row call was once seen to garble later tiles, which is untested since.
         """
         R32 = 32
         if rows > R32:
@@ -1919,6 +1925,13 @@ class SpeculativeDecoder:
             for c in chunks:
                 c.deallocate(True)
             return out
+        pad_mode = os.environ.get("GEMMA4_ARGMAX_PAD32", "").strip().lower()
+        pad32 = pad_mode in ("1", "true", "yes", "on") or (pad_mode == "multirow" and rows > 1)
+        if not pad32:
+            u = ttnn.untilize(logits, use_multicore=True)
+            idx = ttnn.argmax(u, dim=-1, keepdim=False)  # [1,1,rows] uint32 RM
+            u.deallocate(True)
+            return idx
         src = logits
         padded = None
         if rows < R32:

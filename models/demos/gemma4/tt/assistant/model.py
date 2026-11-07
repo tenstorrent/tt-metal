@@ -38,6 +38,7 @@ import torch
 import ttnn
 from models.demos.gemma4.tt.attention import Gemma4AttentionConfig
 from models.demos.gemma4.tt.ccl import ccl_allgather
+from models.demos.gemma4.tt.decode_matmul import lm_head_out_block_w_config, lm_head_out_block_w_from_env
 from models.demos.gemma4.tt.layer import Gemma4DecoderLayer
 from models.demos.gemma4.tt.rms_norm import RMSNorm
 from models.demos.gemma4.utils.general_utils import get_cache_file_name
@@ -183,6 +184,35 @@ class Gemma4AssistantModel:
         self.lm_head = _linear(lm_key, col_mapper, weight_dtype=ttnn.bfloat8_b if lm_head_bfp8 else None)
         if self.pre_projection is None or self.post_projection is None or self.lm_head is None:
             raise ValueError("Assistant checkpoint missing pre_projection / post_projection / lm_head weights")
+        # GEMMA4_ASSISTANT_LM_HEAD_OUT_BLOCK_W (opt-in): fix out_block_w of the full-vocab lm_head, which otherwise runs
+        # on ttnn's automatic config (decode_matmul.lm_head_out_block_w_config). Single chip only: at TP > 1 the head
+        # is a vocab shard, a case this has not been measured on.
+        self._lm_head_out_block_w = lm_head_out_block_w_from_env("GEMMA4_ASSISTANT_LM_HEAD_OUT_BLOCK_W")
+        if self._lm_head_out_block_w is not None and tp > 1:
+            raise ValueError(f"GEMMA4_ASSISTANT_LM_HEAD_OUT_BLOCK_W supports a single chip only (tp={tp})")
+        self._lm_head_cfg = None
+        # GEMMA4_ASSISTANT_LOGITS_L1=1 (opt-in): write the lm_head's logits (one tile row of the full vocab, 16 MiB in
+        # bf16) to L1 instead of DRAM. It needs the explicit lm_head config: for an L1 output ttnn's automatic config
+        # falls back to the plain multi-core matmul (no packer L1 accumulation), which changes the logits; the explicit
+        # 1D config keeps the DRAM path's matmul and logits.
+        self._logits_l1 = os.environ.get("GEMMA4_ASSISTANT_LOGITS_L1", "0") == "1"
+        if self._logits_l1 and self._lm_head_out_block_w is None:
+            raise ValueError("GEMMA4_ASSISTANT_LOGITS_L1=1 needs GEMMA4_ASSISTANT_LM_HEAD_OUT_BLOCK_W")
+
+    def _lm_head_configs(self, x):
+        """(program_config, compute_kernel_config) of the lm_head call: (None, None) = ttnn's automatic config."""
+        if self._lm_head_out_block_w is None:
+            return None, None
+        if self._lm_head_cfg is None:
+            self._lm_head_cfg = lm_head_out_block_w_config(
+                self.mesh_device,
+                k=int(self.lm_head.shape[-2]),
+                n=int(self.lm_head.shape[-1]),
+                out_block_w=self._lm_head_out_block_w,
+                x_dtype=x.dtype,
+                w_dtype=self.lm_head.dtype,
+            )
+        return self._lm_head_cfg
 
     def _raw_token_embed(self, token_tt):
         """Target token embedding of a single token id -> [1,1,1,backbone] TILE.
@@ -302,7 +332,14 @@ class Gemma4AssistantModel:
 
         logits = None
         if return_logits:
-            logits = ttnn.linear(normed, self.lm_head)
+            pc, ckc = self._lm_head_configs(normed)
+            logits = ttnn.linear(
+                normed,
+                self.lm_head,
+                program_config=pc,
+                compute_kernel_config=ckc,
+                memory_config=ttnn.L1_MEMORY_CONFIG if self._logits_l1 else None,
+            )
             if gather_logits and self.mesh_config is not None and self.mesh_config.tp > 1:
                 logits = ccl_allgather(logits, self.mesh_config, self.ccl_manager)
 

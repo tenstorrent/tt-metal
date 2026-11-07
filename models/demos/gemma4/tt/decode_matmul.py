@@ -204,3 +204,55 @@ def pipeline_row_for(mesh_device, hidden_size, op: str, tp: int):
 
     grid = mesh_device.compute_with_storage_grid_size()
     return dram_sharded_pipeline_row(hidden_size, op, tp, (grid.x, grid.y), is_blackhole())
+
+
+def lm_head_out_block_w_config(mesh_device, k: int, n: int, out_block_w: int, x_dtype, w_dtype):
+    """Explicit 1D-mcast config for a full-vocab decode lm_head that fixes only ``out_block_w`` (opt-in).
+
+    At tp=1 the lm_head (262144 columns) runs on ttnn's automatic config, which sizes ``out_block_w`` from the free
+    L1, so its blocking moves whenever an unrelated allocation does. Everything except ``out_block_w`` restates what
+    the automatic config resolves to for a one-tile-row decode activation: the full compute grid,
+    ``per_core_N = ceil(ceil(N / cores) / 32)``, ``in0_block_w`` 2 when the K tiles are even, ``out_subblock_w`` the
+    largest divisor of ``out_block_w`` up to 8, and the automatic compute config (HiFi2 with packer L1 accumulation;
+    an explicit program config would otherwise drop to LoFi). ``out_block_w`` only changes how N is split into output
+    passes, not any tile's K sum, so the logits are expected to match the automatic config bit for bit.
+
+    Returns ``(program_config, compute_kernel_config)``; the compute config is None where ttnn's default already
+    matches the automatic path (both inputs block-float, or both fp32).
+    """
+    grid = mesh_device.compute_with_storage_grid_size()
+    cores = grid.x * grid.y
+    per_core_n = math.ceil(math.ceil(n / cores) / TILE)
+    if out_block_w <= 0 or per_core_n % out_block_w:
+        raise ValueError(f"out_block_w={out_block_w} must divide per_core_N={per_core_n} (N={n}, {cores} cores)")
+    k_tiles = k // TILE
+    pc = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=ttnn.CoreCoord(grid.x, grid.y),
+        in0_block_w=2 if k_tiles % 2 == 0 else 1,
+        out_subblock_h=1,
+        out_subblock_w=max(d for d in range(1, 9) if out_block_w % d == 0),
+        out_block_h=1,
+        out_block_w=out_block_w,
+        per_core_M=1,
+        per_core_N=per_core_n,
+        fuse_batch=False,
+        fused_activation=None,
+        mcast_in0=True,
+    )
+    low = (ttnn.bfloat8_b, ttnn.bfloat4_b)
+    if (x_dtype in low and w_dtype in low) or (x_dtype == ttnn.float32 and w_dtype == ttnn.float32):
+        return pc, None
+    ckc = ttnn.init_device_compute_kernel_config(
+        mesh_device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi2,
+        math_approx_mode=False,
+        fp32_dest_acc_en=False,
+        packer_l1_acc=True,
+    )
+    return pc, ckc
+
+
+def lm_head_out_block_w_from_env(env_name: str):
+    """``out_block_w`` from ``env_name`` (unset or empty -> None: keep ttnn's automatic lm_head config)."""
+    raw = (os.environ.get(env_name) or "").strip()
+    return int(raw) if raw else None
