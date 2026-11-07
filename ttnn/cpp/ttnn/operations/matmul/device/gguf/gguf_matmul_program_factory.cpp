@@ -240,6 +240,23 @@ GgufMatmulProgramFactory::cached_program_t GgufMatmulProgramFactory::create(
         {{uint32_t(v1.x), uint32_t(v1.y), uint32_t(v0.x), uint32_t(v0.y)},
          {uint32_t(v0.x), uint32_t(v0.y), uint32_t(v1.x), uint32_t(v1.y)}}};
 
+    // Codebook formats: each page's index words in equal parts, looked up by the reader, the writer, and the compute
+    // kernel's math and unpack threads; the pack thread takes the rest.
+    struct LookupSplit {
+        uint32_t parts, reader, writer, math, unpack;
+    };
+    const LookupSplit split = f.code_offset > 0 ? LookupSplit{4, 1, 1, 1, 1} : LookupSplit{2, 1, 1, 0, 0};
+    const std::map<std::string, std::string> lookup_defines = {
+        {"GGUF_LOOKUP_PARTS", std::to_string(split.parts)},
+        {"GGUF_READER_PARTS", std::to_string(split.reader)},
+        {"GGUF_WRITER_PARTS", std::to_string(split.writer)},
+        {"GGUF_MATH_PARTS", std::to_string(split.math)},
+        {"GGUF_UNPACK_PARTS", std::to_string(split.unpack)}};
+    if (f.code_offset > 0) {
+        // The page counts of the compute kernel's lookups (gguf_matmul_compute.cpp).
+        add_cb(program, compute, tt::CBIndex::c_3, tt::DataFormat::UInt32, 64, 1, tt::tt_metal::Tile());
+    }
+
     // Reads in flight: two for Q4_0 and Q4_1, one for the others, which a second one slows down (measured, decode).
     const bool two_in_flight = weight.dtype() == DataType::GGUF_Q4_0 || weight.dtype() == DataType::GGUF_Q4_1;
     std::vector<uint32_t> reader_ct = {
@@ -280,7 +297,8 @@ GgufMatmulProgramFactory::cached_program_t GgufMatmulProgramFactory::create(
             DataMovementConfig{
                 .processor = DataMovementProcessor::RISCV_1,
                 .noc = parity ? NOC::NOC_1 : NOC::NOC_0,
-                .compile_args = reader_ct});
+                .compile_args = reader_ct,
+                .defines = lookup_defines});
         shared.writer[parity] = CreateKernel(
             program,
             std::string(kKernels) + "gguf_matmul_writer.cpp",
@@ -288,7 +306,8 @@ GgufMatmulProgramFactory::cached_program_t GgufMatmulProgramFactory::create(
             DataMovementConfig{
                 .processor = DataMovementProcessor::RISCV_0,
                 .noc = parity ? NOC::NOC_0 : NOC::NOC_1,
-                .compile_args = writer_ct});
+                .compile_args = writer_ct,
+                .defines = lookup_defines});
     }
     const KernelHandle compute_kernel = CreateKernel(
         program,
@@ -298,7 +317,8 @@ GgufMatmulProgramFactory::cached_program_t GgufMatmulProgramFactory::create(
             .math_fidelity = MathFidelity::HiFi2,
             .fp32_dest_acc_en = true,
             .dst_full_sync_en = true,
-            .compile_args = {f.format_id, k_tiles, chunk, in0_rows}});
+            .compile_args = {f.format_id, k_tiles, chunk, in0_rows},
+            .defines = lookup_defines});
 
     for (size_t i = 0; i < cores.size(); i++) {
         const uint32_t parity = cores[i].x % 2;

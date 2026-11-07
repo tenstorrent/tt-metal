@@ -10,7 +10,7 @@
 // (gguf_matmul_writer.cpp) and each K tile is waited for when first reached. Compile args: format id, K tiles, input
 // tiles per chunk, input rows the matmul computes (8, 16 or 32). Runtime args: segments, then per segment its first and
 // end K tile and its role (gguf_matmul_program_factory.cpp Role); a finish has the count of other cores' partials in
-// place of its first K tile.
+// place of its first K tile. Codebook formats also look up part of each page's grid levels here (CodebookLookups).
 
 #include <cstdint>
 
@@ -24,6 +24,195 @@
 #include "api/compute/reg_api.h"
 #include "api/compute/tile_move_copy.h"
 #include "experimental/ckernel_gguf_page.h"
+#include "experimental/gguf_page.h"
+#include "internal/tt-1xx/cache.h"
+
+namespace {
+
+// Codebook formats: a page's level codes are table lookups of its index words, in GGUF_LOOKUP_PARTS equal parts. The
+// reader and the writer look up the first GGUF_READER_PARTS + GGUF_WRITER_PARTS before the page reaches c_0; here the
+// math thread takes the next GGUF_MATH_PARTS, the unpack thread the next GGUF_UNPACK_PARTS, and the pack thread the
+// rest. Math and pack run up to kLookAhead pages ahead of the decode and publish their counts of pages done in c_3; the
+// unpack thread waits for both counts, as cb_wait_front waits for tiles, before it unpacks a page. Math and pack wait
+// only for the reader's pages, so the waits form no cycle.
+template <uint32_t fmt>
+class CodebookLookups {
+    static constexpr auto FMT = static_cast<experimental::gguf::Format>(fmt);
+    static constexpr uint32_t kLookAhead = 2;
+    static constexpr uint32_t kParts = GGUF_LOOKUP_PARTS;
+    static constexpr uint32_t kMathBegin = GGUF_READER_PARTS + GGUF_WRITER_PARTS;
+    static constexpr uint32_t kUnpackBegin = kMathBegin + GGUF_MATH_PARTS;
+    static constexpr uint32_t kPackBegin = kUnpackBegin + GGUF_UNPACK_PARTS;
+    static constexpr bool kOn = experimental::gguf::is_codebook<FMT>();
+    static constexpr bool kMath = kOn && GGUF_MATH_PARTS > 0;
+    static constexpr bool kUnpack = kOn && GGUF_UNPACK_PARTS > 0;
+    static constexpr bool kPack = kOn && kPackBegin < kParts;
+    static_assert(
+        !kOn || ckernel::gguf::page_layout<static_cast<ckernel::gguf::Format>(fmt)>().page_tiles == 1,
+        "one K tile per page");
+    static_assert(!kOn || kPackBegin <= kParts, "lookup parts");
+    static_assert(
+        !kOn || (FMT == experimental::gguf::Format::IQ3_S || FMT == experimental::gguf::Format::IQ3_XXS ? 64 : 32) %
+                        (8 * kParts) ==
+                    0,
+        "lookup parts of a multiple of 8 index words");
+    // c_3's words: the pack thread's count at 0 and the math thread's at 4 (separate cache lines), then c_0's read
+    // pointer, limit, size and page size (from the unpack thread, as the math thread has no circular buffer interfaces)
+    // and c_0's acked count before the first page.
+    static constexpr uint32_t kPackCount = 0, kMathCount = 4, kGeometry = 8;
+    static constexpr uint32_t cb_page = tt::CBIndex::c_0, cb_sync = tt::CBIndex::c_3;
+
+    // Index-word parts [B, E) of the page at L1 byte address `page`.
+    template <uint32_t B, uint32_t E>
+    static __attribute__((noinline)) void lookup_parts(const uint32_t page) {
+        using namespace experimental::gguf;
+        const auto* indices = reinterpret_cast<const uint32_t*>(page + index_offset<FMT>());
+        for (uint32_t q = B; q < E; q++) {
+            lookup_grid<FMT>(
+                indices, level_table<FMT>(), reinterpret_cast<volatile tt_l1_ptr uint32_t*>(page), q, kParts);
+        }
+    }
+
+    volatile tt_l1_ptr uint32_t* sync_ = nullptr;
+    uint32_t total_pages_ = 0;                            // pages of this core's K work
+    uint32_t done_ = 0;                                   // math, pack: pages looked up; unpack: pages entered
+    uint32_t tiles_ = 0;                                  // tiles decoded
+    uint32_t ptr_ = 0, limit_ = 0, size_ = 0, step_ = 0;  // math, pack: c_0's next page to look up
+    uint16_t acked0_ = 0;
+
+    static void wait_min(volatile tt_l1_ptr uint32_t* count, const uint32_t n) {
+        do {
+            invalidate_l1_cache();
+        } while (*count < n);
+    }
+
+    // Pages up to the count `target` looked up by this thread: parts [B, E).
+    template <uint32_t B, uint32_t E>
+    void run(uint32_t target, const uint32_t count_word) {
+        target = target < total_pages_ ? target : total_pages_;
+        while (done_ < target) {
+            // The page's arrival in c_0, tested as cb_wait_front tests it.
+            const uint16_t want = static_cast<uint16_t>(acked0_ + done_ + 1);
+            while (static_cast<int16_t>(static_cast<uint16_t>(*get_cb_tiles_received_ptr(cb_page)) - want) < 0) {
+            }
+            invalidate_l1_cache();
+            lookup_parts<B, E>(ptr_ << cb_addr_shift);
+            asm volatile("fence" ::: "memory");  // the levels are in L1 before the count
+            sync_[count_word] = ++done_;
+            ptr_ += step_;
+            if (ptr_ >= limit_) {
+                ptr_ -= size_;
+            }
+        }
+    }
+
+    void receive_geometry(const uint32_t sync_addr) {
+        sync_ = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sync_addr);
+        invalidate_l1_cache();
+        ptr_ = sync_[kGeometry];
+        limit_ = sync_[kGeometry + 1];
+        size_ = sync_[kGeometry + 2];
+        step_ = sync_[kGeometry + 3];
+        acked0_ = static_cast<uint16_t>(sync_[kGeometry + 4]);
+    }
+
+public:
+    // Before the first page. Runtime args as in kernel_main.
+    void start(const uint32_t segments, const uint32_t finish) {
+        if constexpr (kMath || kPack) {
+            for (uint32_t s = 0; s < segments; s++) {
+                if (get_arg_val<uint32_t>(3 + 3 * s) != finish) {
+                    total_pages_ += get_arg_val<uint32_t>(2 + 3 * s) - get_arg_val<uint32_t>(1 + 3 * s);
+                }
+            }
+            UNPACK(({
+                const uint32_t sync_addr = get_local_cb_interface(cb_sync).fifo_rd_ptr << cb_addr_shift;
+                sync_ = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sync_addr);
+                sync_[kPackCount] = 0;
+                sync_[kMathCount] = 0;
+                sync_[kGeometry] = get_local_cb_interface(cb_page).fifo_rd_ptr;
+                sync_[kGeometry + 1] = get_local_cb_interface(cb_page).fifo_limit;
+                sync_[kGeometry + 2] = get_local_cb_interface(cb_page).fifo_size;
+                sync_[kGeometry + 3] = get_local_cb_interface(cb_page).fifo_page_size;
+                sync_[kGeometry + 4] = *get_cb_tiles_acked_ptr(cb_page);
+                asm volatile("fence" ::: "memory");
+                if constexpr (kMath) {
+                    ckernel::mailbox_write(ckernel::ThreadId::MathThreadId, sync_addr);
+                }
+                if constexpr (kPack) {
+                    ckernel::mailbox_write(ckernel::ThreadId::PackThreadId, sync_addr);
+                }
+            }));
+            MATH(({
+                if constexpr (kMath) {
+                    receive_geometry(ckernel::mailbox_read(ckernel::ThreadId::UnpackThreadId));
+                }
+            }));
+            PACK(({
+                if constexpr (kPack) {
+                    receive_geometry(ckernel::mailbox_read(ckernel::ThreadId::UnpackThreadId));
+                }
+            }));
+        }
+    }
+
+    // A segment's first page is in c_0.
+    void segment_start() {
+        PACK(({
+            if constexpr (kPack) {
+                run<kPackBegin, kParts>(tiles_ + kLookAhead, kPackCount);
+            }
+        }));
+        MATH(({
+            if constexpr (kMath) {
+                run<kMathBegin, kUnpackBegin>(tiles_ + kLookAhead, kMathCount);
+            }
+        }));
+    }
+
+    // The pack thread decoded a tile.
+    void tile_decoded() {
+        if constexpr (kOn) {
+            tiles_++;
+        }
+        PACK(({
+            if constexpr (kPack) {
+                run<kPackBegin, kParts>(tiles_ + kLookAhead, kPackCount);
+            }
+        }));
+    }
+
+    // The math thread multiplied a tile.
+    void matmul_done() {
+        MATH(({
+            if constexpr (kMath) {
+                run<kMathBegin, kUnpackBegin>(tiles_ + kLookAhead, kMathCount);
+            }
+        }));
+    }
+
+    // The page at c_0's front is complete before the unpack thread unpacks it.
+    void before_unpack() {
+        UNPACK(({
+            if constexpr (kOn) {
+                done_++;
+            }
+            if constexpr (kUnpack) {
+                invalidate_l1_cache();
+                lookup_parts<kUnpackBegin, kPackBegin>(get_local_cb_interface(cb_page).fifo_rd_ptr << cb_addr_shift);
+                asm volatile("fence" ::: "memory");
+            }
+            if constexpr (kPack) {
+                wait_min(sync_ + kPackCount, done_);
+            }
+            if constexpr (kMath) {
+                wait_min(sync_ + kMathCount, done_);
+            }
+        }));
+    }
+};
+
+}  // namespace
 
 void kernel_main() {
     using namespace ckernel;
@@ -43,6 +232,8 @@ void kernel_main() {
     gguf_decode_init<fmt, pack>();
     dest_srca_mm_init<in0_rows>(cb_in0, cb_page);
     gguf_decode_overlap_init();
+    CodebookLookups<fmt> lookups;
+    lookups.start(segments, finish);
 
     uint32_t in0_ready = 0;
     for (uint32_t s = 0; s < segments; s++) {
@@ -80,6 +271,8 @@ void kernel_main() {
         tile_regs_acquire();
         gguf_decode_overlap_acquire();
         cb_wait_front(cb_page, 1);
+        lookups.segment_start();
+        lookups.before_unpack();
         dest_srca_mm_page_to_dest(cb_page, 0, 2);
         gguf_decode_overlap_page_ready();
         uint32_t set = 0;
@@ -101,6 +294,7 @@ void kernel_main() {
             }
             gguf_decode_tile<fmt, pack>(out, t);
             gguf_decode_overlap_tile_done();
+            lookups.tile_decoded();
             if (kt >= in0_ready) {
                 in0_ready = (kt / chunk + 1) * chunk < k_tiles ? (kt / chunk + 1) * chunk : k_tiles;
                 cb_wait_front(cb_in0, in0_ready);
@@ -110,6 +304,7 @@ void kernel_main() {
                 if ((kt + 1) % L.page_tiles == 0) {
                     cb_pop_front(cb_page, 1);
                     cb_wait_front(cb_page, 1);
+                    lookups.before_unpack();
                 }
                 dest_srca_mm_page_unpack(cb_page, 0);
                 dest_srca_mm_page_wait(cb_page, next_page);
@@ -118,6 +313,7 @@ void kernel_main() {
             gguf_decode_overlap_wait_tile();
             dest_srca_mm_math<in0_rows>(out, 0);
             gguf_decode_overlap_matmul_done();
+            lookups.matmul_done();
             set ^= 1;
         }
         cb_pop_front(cb_page, 1);

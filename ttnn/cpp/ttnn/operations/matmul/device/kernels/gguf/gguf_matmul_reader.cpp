@@ -7,10 +7,11 @@
 // with one read, a unit of them per transaction id, one or two units in flight. Larger groups land whole in a staging
 // ring (c_2), one read each, one or two in flight, and go into their pages from local L1, each codes part with the
 // group's scale rows. The scale rows are converted once, in the first page (prepare_scales), and the block is copied to
-// the other pages. Codebook formats then fill in the pages' grid levels (lookup_grid): this kernel the first half of
-// each page's index words, the writer of this core the second (gguf_matmul_writer.cpp), on a request per record.
-// Compile args: format id, c_0 pages, one-page groups per unit, staging slots, the lookup request, answer and page
-// address semaphores, reads in flight, then the weight's TensorAccessorArgs.
+// the other pages. Codebook formats then fill in the pages' grid levels (lookup_grid) in GGUF_LOOKUP_PARTS parts of
+// their index words: this kernel the first GGUF_READER_PARTS, the writer of this core the next GGUF_WRITER_PARTS
+// (gguf_matmul_writer.cpp) on a request per record, the compute kernel the rest. Compile args: format id, c_0 pages,
+// one-page groups per unit, staging slots, the lookup request, answer and page address semaphores, reads in flight,
+// then the weight's TensorAccessorArgs.
 // Runtime args: weight address, N tiles, runs, then per run its N tile, first and end K group.
 
 #include <cstdint>
@@ -37,6 +38,7 @@ void kernel_main() {
     constexpr uint32_t request_sem = get_compile_time_arg_val(4), answer_sem = get_compile_time_arg_val(5);
     constexpr uint32_t address_sem = get_compile_time_arg_val(6);
     constexpr uint32_t in_flight = get_compile_time_arg_val(7);
+    constexpr uint32_t writer_parts = GGUF_WRITER_PARTS;
     constexpr auto weight_args = TensorAccessorArgs<8>();
     constexpr PageLayout L = page_layout<FMT>();
     constexpr uint32_t P = L.group_tiles / L.page_tiles;  // pages per group
@@ -167,19 +169,25 @@ void kernel_main() {
                 noc.async_read_barrier<NocOptions::TXN_ID>({.trid = local});
             }
             if constexpr (is_codebook<FMT>()) {
-                address.set(first);
-                asm volatile("fence" ::: "memory");  // the address is in L1 before the request
-                requests.set(++asked);
+                if constexpr (writer_parts > 0) {
+                    address.set(first);
+                    asm volatile("fence" ::: "memory");  // the address is in L1 before the request
+                    requests.set(++asked);
+                }
                 for (uint32_t p = 0; p < P; p++) {
-                    lookup_grid<FMT>(
-                        reinterpret_cast<const uint32_t*>(first + p * page + index_offset<FMT>()),
-                        table,
-                        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(first + p * page),
-                        0,
-                        2);
+                    for (uint32_t q = 0; q < GGUF_READER_PARTS; q++) {
+                        lookup_grid<FMT>(
+                            reinterpret_cast<const uint32_t*>(first + p * page + index_offset<FMT>()),
+                            table,
+                            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(first + p * page),
+                            q,
+                            GGUF_LOOKUP_PARTS);
+                    }
                 }
                 asm volatile("fence" ::: "memory");
-                answers.wait_min(asked);
+                if constexpr (writer_parts > 0) {
+                    answers.wait_min(asked);
+                }
             }
             pages.push_back(P);
         }
