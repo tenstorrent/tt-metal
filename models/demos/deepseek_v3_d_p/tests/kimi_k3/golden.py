@@ -33,7 +33,10 @@ K3.1 (retrained weights, so none of the above applies to it) has one, ``TRACE_K3
 2047 sampled decode steps — with ``decoder_output_layer_{0..92}``, ``attn_output``, AttnRes block
 streams, KV and the DSA indexer streams (``indexer/indexer_k_layer_N``, ``dsa/dsa_topk_indices_layer_N``)
 for all 24 DSA layers, and routing. The tracer wrote it chunked; ``convert_golden.py`` rewrote it into
-this layout, all 10239 rows: rows past ``n_prompt_tokens`` are the decode steps.
+this layout, all 10239 rows: rows past ``n_prompt_tokens`` are the decode steps. The tracer records each
+layer's FFN output as ``decoder_output``; the converter writes K3's running sum under that key instead
+(rebuilt from ``attn_output`` and the FFN output, pinned in ``test_k31_golden.py``) and keeps the FFN output
+as ``ffn_output/ffn_output_layer_N``, so ``decoder_output`` means the same thing in every trace here.
 """
 
 from __future__ import annotations

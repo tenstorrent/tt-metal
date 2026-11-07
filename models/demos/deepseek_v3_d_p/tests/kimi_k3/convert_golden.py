@@ -12,9 +12,16 @@ shards into one file, keeping the trace's own group directories and the per-stre
     decoder_io/decoder_output_layer_0/rows_*.safetensors  -> decoder_io/decoder_output_layer_0.safetensors
     kv_cache/layer_3/rows_*.safetensors                   -> kv_cache/layer_3.safetensors
 
-Lossless: every stream, every row, every dtype. Rows past ``n_prompt_tokens`` are the recorded decode
-steps (teacher-forced on ``completion_token_ids``); a consumer that reads the prompt length never sees
-them. ``metadata.json`` is the source's with ``layout`` rewritten, the source index (minus its shard
+One stream changes meaning on the way, so that the golden honours K3's contract
+(``test_golden_contract.py``): K3's ``decoder_output_layer_i`` is the AttnRes *running sum* after layer i,
+which the stack's layer tap returns, but the K3.1 tracer records the layer's FFN output alone under that
+key. The converter writes ``decoder_output_layer_i`` as K3's post-seal running sum,
+``sum(attn_output_j + ffn_j)`` over ``j`` from the block's seal (``j % ATTN_RES_BLOCK_SIZE == 0``, where the
+sum restarts) to ``i``, accumulated as vLLM does — in the trace's dtype, attention then FFN — which reproduces
+the tracer's sealed block snapshots (``attn_res/residual_layer_*``) bit for bit, and keeps the trace's own stream
+as ``ffn_output/ffn_output_layer_i``. So nothing is lost: every other stream, every row, every dtype is
+copied as is. Rows past ``n_prompt_tokens`` are the recorded decode steps (teacher-forced on
+``completion_token_ids``); a consumer that reads the prompt length never sees them. ``metadata.json`` is the source's with ``layout`` rewritten, the source index (minus its shard
 list) and provenance added; it is written last, so a partial output never resolves as a trace.
 
 Host only::
@@ -35,10 +42,12 @@ import torch
 from safetensors import safe_open
 from safetensors.torch import save_file
 
+from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config
+
 SOURCE_LAYOUT = "chunked_group_a_v1"
 LAYOUT = "per_stream_safetensors_v1"
-# Bump when the output of the same source changes.
-CONVERTER_VERSION = 1
+# Bump when the output of the same source changes. 2: decoder_output is K3's running sum (module docstring).
+CONVERTER_VERSION = 2
 # Small provenance files the tracer writes next to metadata.json; copied verbatim when present.
 SIDECARS = ("indexer_verify.json",)
 
@@ -77,14 +86,37 @@ def convert(src: Path, dst: Path, log=print) -> None:
         raise FileExistsError(f"{dst} already holds a trace")
 
     streams = index["tensor_streams"]
-    for n, (key, stream) in enumerate(sorted(streams.items()), 1):
-        group = Path(stream["chunks"][0]["path"]).parts[0]
+    layers = sorted(int(key.rsplit("_", 1)[1]) for key in streams if key.startswith("decoder_output_layer_"))
+    # The running sum needs every layer of each block from its seal, and each layer's attention output.
+    missing = [layer for layer in layers if f"attn_output_layer_{layer}" not in streams]
+    if missing or layers != list(range(len(layers))):
+        raise ValueError(f"{src}: decoder_output layers {layers}, without attn_output {missing}; no running sum")
+    count = len(streams) + len(layers)  # every stream, plus each layer's FFN output kept beside its running sum
+
+    def write(n: int, group: str, key: str, tensor: torch.Tensor) -> None:
         out = dst / stream_path(group, key)
         out.parent.mkdir(parents=True, exist_ok=True)
-        save_file({key: _read_stream(src, key, stream)}, str(out))
+        save_file({key: tensor.contiguous()}, str(out))
         # save_file creates 0600 whatever the umask; a golden on a shared tree has to be readable.
         out.chmod(0o664)
-        log(f"[{time.strftime('%H:%M:%S')}] {n}/{len(streams)} {out.relative_to(dst)}")
+        log(f"[{time.strftime('%H:%M:%S')}] {n}/{count} {out.relative_to(dst)}")
+
+    n = 0
+    for key, stream in sorted(streams.items()):
+        if not key.startswith("decoder_output_layer_"):
+            n += 1
+            write(n, Path(stream["chunks"][0]["path"]).parts[0], key, _read_stream(src, key, stream))
+
+    for layer in layers:
+        key = f"decoder_output_layer_{layer}"
+        ffn = _read_stream(src, key, streams[key])
+        attn = _read_stream(src, f"attn_output_layer_{layer}", streams[f"attn_output_layer_{layer}"])
+        if layer % KimiK3Config.ATTN_RES_BLOCK_SIZE == 0:
+            running = torch.zeros_like(ffn)  # the seal: the sum restarts
+        running = running + attn + ffn  # left to right, in the trace's dtype: vLLM's two adds
+        write(n + 1, "ffn_output", f"ffn_output_layer_{layer}", ffn)
+        write(n + 2, "decoder_io", key, running)
+        n += 2
 
     for name in SIDECARS:
         if (src / name).is_file():
@@ -93,7 +125,7 @@ def convert(src: Path, dst: Path, log=print) -> None:
     metadata["source_index"] = {k: v for k, v in index.items() if k != "tensor_streams"}
     metadata["converted_from"] = {"path": str(src), "layout": SOURCE_LAYOUT, "converter_version": CONVERTER_VERSION}
     (dst / "metadata.json").write_text(json.dumps(metadata, indent=1))
-    log(f"[{time.strftime('%H:%M:%S')}] done: {len(streams)} streams -> {dst}")
+    log(f"[{time.strftime('%H:%M:%S')}] done: {count} streams -> {dst}")
 
 
 def main() -> None:
