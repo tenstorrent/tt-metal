@@ -1260,6 +1260,8 @@ class LTXSpaceToDepthDownsample(Module):
 
         if pc.height_parallel.factor <= 1 and pc.width_parallel.factor <= 1:
             return ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
+        if os.environ.get("LTX_ENC_DEVICE_GATHER", "0") == "1":
+            return self._all_gather_hw_device(x)
 
         if _loc:
             logger.warning(f"LTX_ENC_LOCALIZE: host-gather HW pre in_shape={tuple(x.shape)} dtype={x.get_dtype()}")
@@ -1277,6 +1279,15 @@ class LTXSpaceToDepthDownsample(Module):
             ttnn.synchronize_device(mesh_device)
             logger.warning(f"LTX_ENC_LOCALIZE: host-gather HW done out_shape={tuple(x.shape)}")
         return x
+
+    def _all_gather_hw_device(self, x: ttnn.Tensor) -> ttnn.Tensor:
+        """On-device gather of the H/W shards (LTX_ENC_DEVICE_GATHER=1)."""
+        pc = self.parallel_config
+        if pc.height_parallel.factor > 1:
+            x = self.ccl_manager.all_gather(x, dim=2, mesh_axis=pc.height_parallel.mesh_axis, use_hyperparams=False)
+        if pc.width_parallel.factor > 1:
+            x = self.ccl_manager.all_gather(x, dim=3, mesh_axis=pc.width_parallel.mesh_axis, use_hyperparams=False)
+        return ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
 
     def _reshard_hw(self, x: ttnn.Tensor, B: int, d: int, h: int, w: int) -> ttnn.Tensor:
         """Re-shard a replicated (B, d, h, w, C) tensor back across the mesh, zero-padding each
