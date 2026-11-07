@@ -133,7 +133,7 @@ struct GridParams {
     bool use_two_stage_reduce = false;
     bool grid_is_rectangular = true;
 
-    static GridParams compute(const Tensor& input, uint32_t block_ht, CoreCoord compute_with_storage_grid_size);
+    static GridParams compute(const Tensor& input, uint32_t block_ht, CoreCoord compute_with_storage_grid_size, bool is_post_all_gather = false);
 };
 
 // Struct to hold worker distribution parameters
