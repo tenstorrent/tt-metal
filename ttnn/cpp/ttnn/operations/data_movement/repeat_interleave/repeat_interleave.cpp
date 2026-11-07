@@ -126,9 +126,9 @@ Tensor repeat_interleave_native(
     const auto& input_a_shape = input_a.logical_shape();
     uint32_t input_rank = input_a_shape.rank();
     uint32_t normalized_dim = input_a_shape.get_normalized_index(dim);
+    const bool typecast = is_block_float(input_a.dtype()) || input_a.dtype() == DataType::UINT8;
     if (normalized_dim == input_rank - 1) {
         ttnn::Tensor transpose_input = input_a;
-        bool typecast = input_a.dtype() == DataType::UINT8;
         if (typecast) {
             transpose_input = ttnn::typecast(transpose_input, DataType::BFLOAT16, mem_config);
         }
@@ -147,10 +147,6 @@ Tensor repeat_interleave_native(
     // numerically lossless for these formats. A pure TILE-preserving path works for BFLOAT16/BFLOAT8_B but fails
     // for BFLOAT4_B (tensor_spec TILE constraint) and UINT8 (reshape), so the typecast path is kept for them.
     ttnn::Tensor rm_input = input_a;
-    bool typecast =
-        input_a.dtype() == DataType::BFLOAT8_B ||
-        input_a.dtype() == DataType::BFLOAT4_B ||
-        input_a.dtype() == DataType::UINT8;
     if (typecast) {
         rm_input = ttnn::typecast(rm_input, DataType::BFLOAT16, mem_config);
     }
