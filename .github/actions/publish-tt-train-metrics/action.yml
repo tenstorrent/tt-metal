@@ -96,7 +96,7 @@ runs:
 
     - name: Upload metrics data to AWS SFTP bucket
       if: ${{ always() && inputs.upload-to-sftp == 'true' && steps.metrics.outputs.has-json == 'true' }}
-      uses: tenstorrent/tt-metal/.github/actions/upload-data-via-sftp@main
+      uses: tenstorrent/tt-metal/.github/actions/upload-data-via-sftp@090ad9244007fd7a14fbf383414c538d146913cd
       with:
         ssh-private-key: ${{ inputs.sftp-ssh-private-key }}
         sftp-batchfile: ${{ inputs.repo-root }}/.github/actions/upload-data-via-sftp/tt_train_model_metrics.txt

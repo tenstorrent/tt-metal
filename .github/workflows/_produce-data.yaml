@@ -267,7 +267,7 @@ jobs:
             pipelinecopy_*.json
             workflow.json
             workflow_jobs.json
-      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
+      - uses: tenstorrent/tt-metal/.github/actions/slack-report@090ad9244007fd7a14fbf383414c538d146913cd
         if: ${{ failure() }}
         with:
           slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
