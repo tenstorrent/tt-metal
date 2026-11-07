@@ -176,11 +176,19 @@ try:  # the multimodal class registers vLLM's MiMo-V2-Omni processor; tests driv
     from vllm.multimodal import MULTIMODAL_REGISTRY
 
     from .audio.processor import MiMoV2OmniTTMultiModalProcessor  # upstream + audio tokenized in the front end
+    from .video_input import VideoDummyMixin, VideoInfoMixin, VideoTimestampsMixin
     from .video_prompt import VideoPromptMixin
 
-    class MiMoV2OmniTTProcessor(VideoPromptMixin, MiMoV2OmniTTMultiModalProcessor):
+    class MiMoV2OmniTTProcessor(VideoTimestampsMixin, VideoPromptMixin, MiMoV2OmniTTMultiModalProcessor):
         """The processor the multimodal class registers: audio tokenized in the front end (tt/audio/processor.py),
-        video prompts upstream's or, with MIMO_VIDEO_PROMPT=hf, the checkpoint processor's (tt/video_prompt.py)."""
+        video frames labelled with the loader's times (tt/video_input.py, MIMO_VIDEO_TIMESTAMPS), video prompts
+        upstream's or, with MIMO_VIDEO_PROMPT=hf, the checkpoint processor's (tt/video_prompt.py)."""
+
+    class MiMoV2OmniTTProcessingInfo(VideoInfoMixin, MiMoV2OmniProcessingInfo):
+        """Upstream's processing info with the video metadata parser and pixel caps of tt/video_input.py."""
+
+    class MiMoV2OmniTTDummyInputsBuilder(VideoDummyMixin, MiMoV2OmniDummyInputsBuilder):
+        """Upstream's dummy inputs with video metadata (tt/video_input.py)."""
 
 except ImportError:
     SupportsMultiModal = MULTIMODAL_REGISTRY = None
@@ -2796,8 +2804,8 @@ def _register_mm_processor(cls):
         return cls
     return MULTIMODAL_REGISTRY.register_processor(
         MiMoV2OmniTTProcessor,
-        info=MiMoV2OmniProcessingInfo,
-        dummy_inputs=MiMoV2OmniDummyInputsBuilder,
+        info=MiMoV2OmniTTProcessingInfo,
+        dummy_inputs=MiMoV2OmniTTDummyInputsBuilder,
     )(cls)
 
 

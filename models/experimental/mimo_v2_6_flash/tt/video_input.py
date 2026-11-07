@@ -1,0 +1,159 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
+
+"""Video input as the checkpoint's processor expects it: real frame times and Xiaomi-like frame sizes.
+
+vLLM's video loader samples the frames (``--media-io-kwargs '{"video": {...}}'`` or a request's ``media_io_kwargs``:
+32 frames spread over the whole clip by default; ``{"num_frames": N, "fps": F}`` samples at F frames per second, at
+most N frames) and returns them with their source indices and fps (``frames_indices``, ``fps``). vLLM 0.30's
+``MiMoV2OmniMultiModalProcessor`` drops those and labels the frames 0, 1, 2, ... seconds (``_INPUT_FPS = 1``), so a
+2-minute clip's 32 frames are announced as 00:00 .. 00:30 and every timestamp token the model reads is wrong.
+
+* ``VideoInfoMixin`` (processing info): the data parser keeps each video's loader metadata with its frames
+  (``video_needs_metadata``), so it survives vLLM's processor cache, which re-parses the items it has to process from
+  their frames alone; ``VideoDummyMixin`` gives profiling's dummy videos metadata (1 fps), as the parser then requires.
+* ``VideoTimestampsMixin`` (processor; MIMO_VIDEO_TIMESTAMPS=loader, the default): the frames go to the checkpoint's
+  processor with the loader's times. vLLM writes the timestamp tokens again from the item's ``video_start_times`` and
+  ``second_per_grid_ts`` (``get_video_replacement``: ``start + j * spt``), fields it may hold in bf16, while the
+  checkpoint's processor writes them from the per-frame times; the two must give the same tokens. So the times are
+  made uniform: the first sampled frame's time and the sampled frames' mean interval, each rounded so it and a
+  grid's span (two frames) are exact in bf16 (and so in every fp32 / fp64 sum both sides make): within 0.4 % of the
+  true times. ``vllm`` keeps upstream's 1 fps labels.
+* ``VideoInfoMixin`` also applies MIMO_VIDEO_MAX_PIXELS, which caps a frame's pixels (the checkpoint allows
+  8388608, so a 1280x720 frame keeps 880 merged tokens; Xiaomi's API sends such frames at ~280: 286720 pixels) and
+  MIMO_VIDEO_TOTAL_MAX_PIXELS a clip's (checkpoint: 268435456); the processor shrinks every frame of a clip to
+  ``min(frame cap, total cap * 2 / frames)``. Unset: the checkpoint's values.
+"""
+
+import os
+
+import numpy as np
+import torch
+
+VIDEO_TIMESTAMPS = os.environ.get("MIMO_VIDEO_TIMESTAMPS", "loader")
+if VIDEO_TIMESTAMPS not in ("loader", "vllm"):
+    raise ValueError(f"MIMO_VIDEO_TIMESTAMPS={VIDEO_TIMESTAMPS!r}: loader or vllm")
+
+
+def _env_pixels(name):
+    value = os.environ.get(name)
+    return int(float(value)) if value else None
+
+
+VIDEO_MAX_PIXELS = _env_pixels("MIMO_VIDEO_MAX_PIXELS")
+VIDEO_TOTAL_MAX_PIXELS = _env_pixels("MIMO_VIDEO_TOTAL_MAX_PIXELS")
+
+
+def loader_timestamps(metadata, num_frames):
+    """Times (s, float32 [num_frames]) of the frames vLLM's loader sampled, from its metadata (``frames_indices`` into
+    the source at ``fps``), uniform and rounded so vLLM and the checkpoint's processor write the same timestamp tokens
+    (module docstring). None when the metadata does not describe these frames."""
+    if not isinstance(metadata, dict):
+        return None
+    indices, fps = metadata.get("frames_indices"), metadata.get("fps")
+    if indices is None or not fps or fps <= 0 or len(indices) != num_frames or num_frames == 0:
+        return None
+    start = _bf16(float(indices[0]) / fps)
+    if num_frames == 1:
+        return torch.tensor([start], dtype=torch.float32)
+    mean_step = (float(indices[-1]) - float(indices[0])) / fps / (num_frames - 1)
+    step = _bf16(2 * mean_step) / 2  # a grid's span (2 frames) exact in bf16
+    if step <= 0:
+        return None
+    return (start + torch.arange(num_frames, dtype=torch.float64) * step).to(torch.float32)
+
+
+def _bf16(x):
+    return float(torch.tensor(x, dtype=torch.float32).to(torch.bfloat16))
+
+
+def _frames_tchw(video):
+    """[T, H, W, C] (numpy or torch, vLLM's loader) -> float [T, C, H, W], as upstream converts them."""
+    frames = torch.from_numpy(np.asarray(video)) if not isinstance(video, torch.Tensor) else video
+    if frames.ndim == 4 and frames.shape[-1] in (1, 3, 4):
+        return frames.permute(0, 3, 1, 2).float()
+    return frames.float()
+
+
+def _metadata_list(items, n):
+    metadata = getattr(items, "metadata", None)
+    if isinstance(metadata, dict):
+        metadata = [metadata] if n == 1 else None
+    if not isinstance(metadata, list) or len(metadata) != n:
+        return [None] * n
+    return metadata
+
+
+def upstream_timestamps(num_frames):
+    """vLLM 0.30's labels: the frames 1 s apart (MiMoV2OmniMultiModalProcessor._INPUT_FPS)."""
+    return torch.arange(num_frames, dtype=torch.float32)
+
+
+def mimo_video(video, metadata=None):
+    """A video as the checkpoint's processor takes it: (frames float [T, C, H, W], times float32 [T]), the loader's
+    times with MIMO_VIDEO_TIMESTAMPS=loader and metadata that describes the frames, else upstream's."""
+    if isinstance(video, tuple) and len(video) == 2 and all(isinstance(v, torch.Tensor) for v in video):
+        return video
+    if isinstance(video, tuple) and len(video) == 2 and (video[1] is None or isinstance(video[1], dict)):
+        video, metadata = video
+    frames = _frames_tchw(video)
+    times = loader_timestamps(metadata, frames.shape[0]) if VIDEO_TIMESTAMPS == "loader" else None
+    return frames, (upstream_timestamps(frames.shape[0]) if times is None else times)
+
+
+class VideoTimestampsMixin:
+    """For a MiMoV2OmniMultiModalProcessor subclass: hand the checkpoint's processor the loader's frame times
+    (MIMO_VIDEO_TIMESTAMPS=loader); every video goes as (frames, times), which upstream passes through (it cannot take
+    the (frames, metadata) items of a metadata-keeping parser)."""
+
+    def _get_hf_mm_data(self, mm_items):
+        data, passthrough = super()._get_hf_mm_data(mm_items)
+        videos = data.get("videos")
+        if not videos:
+            return data, passthrough
+        metadata = _metadata_list(mm_items.get("video"), len(videos))
+        out = [None if v is None else mimo_video(v, m) for v, m in zip(videos, metadata)]
+        return {**data, "videos": out}, passthrough
+
+
+class VideoInfoMixin:
+    """For a MiMoV2OmniProcessingInfo subclass: a data parser that keeps the loader metadata with the frames, and
+    MIMO_VIDEO_MAX_PIXELS / MIMO_VIDEO_TOTAL_MAX_PIXELS (module docstring)."""
+
+    def get_data_parser(self):
+        from vllm.multimodal.parse import MultiModalDataParser
+
+        return MultiModalDataParser(target_sr=24000.0, video_needs_metadata=True)
+
+    def get_hf_processor(self, **kwargs):
+        processor = super().get_hf_processor(**kwargs)
+        kw = processor.mimo_processor._vid_kw
+        if VIDEO_MAX_PIXELS:
+            kw["max_pixels"] = VIDEO_MAX_PIXELS
+        if VIDEO_TOTAL_MAX_PIXELS:
+            kw["total_max_pixels"] = VIDEO_TOTAL_MAX_PIXELS
+        return processor
+
+
+class VideoDummyMixin:
+    """For a MiMoV2OmniDummyInputsBuilder subclass: dummy videos with loader metadata (1 fps, every frame), which the
+    metadata-keeping parser requires."""
+
+    def get_dummy_mm_data(self, seq_len, mm_counts, mm_options):
+        data = super().get_dummy_mm_data(seq_len, mm_counts, mm_options)
+        videos = data.get("video")
+        if videos:
+            data = dict(data)
+            data["video"] = [v if isinstance(v, tuple) else (v, dummy_metadata(len(v))) for v in videos]
+        return data
+
+
+def dummy_metadata(num_frames):
+    return {
+        "total_num_frames": num_frames,
+        "fps": 1.0,
+        "duration": float(num_frames),
+        "video_backend": "opencv",
+        "frames_indices": list(range(num_frames)),
+        "do_sample_frames": False,
+    }
