@@ -347,7 +347,7 @@ def compare_head(config_id, expected, actual):
     return {"sliding_k" if config_id < 20 else "sliding_v": cache_metrics(expected, actual)}
 
 
-_KV64697_LAYERS = tuple(int(x) for x in os.getenv("KV64697_DIAG_LAYERS", "4,5,6,7,8,11,12,13").split(",") if x)
+_KV64697_LAYERS = tuple(int(x) for x in os.getenv("KV64697_DIAG_LAYERS", ",".join(map(str, range(60)))).split(",") if x)
 
 
 def _kv64697_diag(layer, actual_heads, expected_heads):

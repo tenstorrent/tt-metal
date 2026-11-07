@@ -1236,9 +1236,9 @@
     export TT_CACHE_PATH=/mnt/models/huggingface/tt_cache/gemma4_d_p/google--gemma-4-31B-it
     export PREFILL_TRACE_DIR=/mnt/models/huggingface/gpu_traces/gemma4_d_p/gutenberg-135
     export OMP_NUM_THREADS=16 MKL_NUM_THREADS=16
-    # SCRATCH #64697: run twice on the same host.
+    # SCRATCH #64697: run three times on the same host.
     rc=0
-    for run in 1 2; do
+    for run in 1 2 3; do
       echo "KV64697 RUN $run on $(hostname)"
       mpirun --bind-to none --pernode --tag-output \
         python3 -m pytest \
@@ -1252,7 +1252,7 @@
   budget_type: demo
   skus:
     bh_sc1:
-      timeout: 50
+      timeout: 70
       tier: 1
       release_ready: false
   owner_id: U02LLCK5MML # Sasha Vuckovic
