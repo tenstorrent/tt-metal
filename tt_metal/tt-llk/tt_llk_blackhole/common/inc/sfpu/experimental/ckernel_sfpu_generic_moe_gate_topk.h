@@ -255,10 +255,10 @@ inline void _topk_moe_generate_indices_()
     for (std::uint32_t block = 0; block < num_full_blocks; block++)
     {
         const std::uint32_t offset = block * 8;
-        TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::LO16, ADDR_MOD_7, generic_moe_gate_indices_tile + offset + 0);
-        TTI_SFPSTORE(p_sfpu::LREG1, InstrModLoadStore::LO16, ADDR_MOD_7, generic_moe_gate_indices_tile + offset + 2);
-        TTI_SFPSTORE(p_sfpu::LREG2, InstrModLoadStore::LO16, ADDR_MOD_7, generic_moe_gate_indices_tile + offset + 4);
-        TTI_SFPSTORE(p_sfpu::LREG3, InstrModLoadStore::LO16, ADDR_MOD_7, generic_moe_gate_indices_tile + offset + 6);
+        TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::UINT16, ADDR_MOD_7, generic_moe_gate_indices_tile + offset + 0);
+        TTI_SFPSTORE(p_sfpu::LREG1, InstrModLoadStore::UINT16, ADDR_MOD_7, generic_moe_gate_indices_tile + offset + 2);
+        TTI_SFPSTORE(p_sfpu::LREG2, InstrModLoadStore::UINT16, ADDR_MOD_7, generic_moe_gate_indices_tile + offset + 4);
+        TTI_SFPSTORE(p_sfpu::LREG3, InstrModLoadStore::UINT16, ADDR_MOD_7, generic_moe_gate_indices_tile + offset + 6);
 
         TTI_SFPIADD(128, p_sfpu::LREG0, p_sfpu::LREG0, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_NONE);
         TTI_SFPIADD(128, p_sfpu::LREG1, p_sfpu::LREG1, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_NONE);
@@ -269,8 +269,8 @@ inline void _topk_moe_generate_indices_()
     if constexpr (num_total_experts % 128 == 64)
     {
         constexpr std::uint32_t offset = num_full_blocks * 8;
-        TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::LO16, ADDR_MOD_7, generic_moe_gate_indices_tile + offset + 0);
-        TTI_SFPSTORE(p_sfpu::LREG1, InstrModLoadStore::LO16, ADDR_MOD_7, generic_moe_gate_indices_tile + offset + 2);
+        TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::UINT16, ADDR_MOD_7, generic_moe_gate_indices_tile + offset + 0);
+        TTI_SFPSTORE(p_sfpu::LREG1, InstrModLoadStore::UINT16, ADDR_MOD_7, generic_moe_gate_indices_tile + offset + 2);
     }
 }
 
@@ -378,7 +378,7 @@ inline void _generic_moe_gate_copy_biased_scores_()
 
 // generate_indices fills DST[1] with the position identity [0..N-1] before sorting. Set it false when the
 // caller has already loaded DST[1] with its own mapping (e.g. bit-15-flagged SRAM slots) via
-// copy_tile(input_indices, 0, 1): the sort's LREG4-7 LO16 load then reads those values verbatim and the
+// copy_tile(input_indices, 0, 1): the sort's LREG4-7 LO16_ONLY load then reads those values verbatim and the
 // paired sort carries them through to out_indices.
 template <
     bool normalize,

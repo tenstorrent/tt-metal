@@ -57,7 +57,7 @@
 // transpose route to be worth it -- both recorded as follow-ups.
 //
 // dest_acc is a real axis here rather than a formality: it picks the index word width in
-// the sort (`InstrModLoadStore::INT32` vs `LO16` in bitonic_top32_load16/store16) AND the
+// the sort (`InstrModLoadStore::INT32` vs `UINT16` in bitonic_top32_load16/store16) AND the
 // Dest-move opcode in `llk_math_top32_rm_configure_mop` (ELWADD against a zeroed SrcB at
 // fp32 Dest, MOVA2D otherwise). The consumer only ever builds fp32 Dest, so the
 // dest_acc=No cells are the first exercise the 16-bit half of this family has had.

@@ -29,7 +29,7 @@ inline void _calculate_where_(
     int offset2 = (dst_index_in2 * 32) << 1;
 
     constexpr InstrModLoadStore mod0 =
-        data_format == DataFormat::Float16_b ? InstrModLoadStore::LO16 : InstrModLoadStore::INT32;
+        data_format == DataFormat::Float16_b ? InstrModLoadStore::UINT16 : InstrModLoadStore::INT32;
 
 #ifdef DISABLE_SFPLOADMACRO
     int offset3 = (dst_index_out * 32) << 1;

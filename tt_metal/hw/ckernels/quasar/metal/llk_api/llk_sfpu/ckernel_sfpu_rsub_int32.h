@@ -17,14 +17,14 @@ template <bool APPROXIMATION_MODE, InstrModLoadStore INSTRUCTION_MODE, int ITERA
 inline void calculate_rsub_int(
     const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
     static_assert(
-        is_valid_instruction_mode(INSTRUCTION_MODE), "INSTRUCTION_MODE must be one of: INT32_2S_COMP, INT32, LO16.");
+        is_valid_instruction_mode(INSTRUCTION_MODE), "INSTRUCTION_MODE must be one of: INT32_2S_COMP, INT32, UINT16.");
 
     // Reverse subtract in 2's complement: out = in1 - in0 (B - A). `b - a` lowers to the same single
     // SFPIADD (2's-complement of A) the raw path used, but leaves the loads/store and dst walk to the
     // compiler. Pick the DataLayout whose load/store format byte matches the original
-    // InstrModLoadStore (LO16->U16, INT32/2S_COMP->I32; on Blackhole INT32_2S_COMP is raw int32).
+    // InstrModLoadStore (UINT16->U16, INT32/2S_COMP->I32; on Blackhole INT32_2S_COMP is raw int32).
     constexpr sfpi::DataLayout layout =
-        (INSTRUCTION_MODE == InstrModLoadStore::LO16) ? sfpi::DataLayout::U16 : sfpi::DataLayout::I32;
+        (INSTRUCTION_MODE == InstrModLoadStore::UINT16) ? sfpi::DataLayout::U16 : sfpi::DataLayout::I32;
     using vType = std::conditional_t<layout == sfpi::DataLayout::U16, sfpi::vUInt, sfpi::vInt>;
 
     // size of each tile in Dest is 64/SFP_DESTREG_STRIDE = 32 rows when using sfpi to load/store

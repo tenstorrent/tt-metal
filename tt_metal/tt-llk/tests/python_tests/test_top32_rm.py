@@ -31,7 +31,7 @@ chunk fills only two faces, and the other two arrive as -inf from
 would lose to padding and the ``row_elements=160`` case would quietly return the wrong set.
 
 ``dest_acc`` is a real axis, not a formality: it selects the index word width inside the
-sort (``InstrModLoadStore::INT32`` vs ``LO16``) *and* the Dest-move opcode in
+sort (``InstrModLoadStore::INT32`` vs ``UINT16``) *and* the Dest-move opcode in
 ``llk_math_top32_rm_configure_mop`` (ELWADD against a zeroed SrcB at fp32 Dest, MOVA2D
 otherwise). The consumer only ever builds fp32 Dest, so the ``dest_acc=No`` cells are the
 first exercise the 16-bit half of this family has had.

@@ -438,7 +438,7 @@ def test_sfpu_reduce(
     ):
         pytest.skip(
             reason="UInt16 row MAX/MIN is unsupported by the kernel: without a 32-bit dest it loads "
-            "with LO16 (rejected by the row MAX/MIN static_assert), and with a 32-bit dest it routes "
+            "with UINT16 (rejected by the row MAX/MIN static_assert), and with a 32-bit dest it routes "
             "through the INT32 sign-magnitude row path, which does not mask UInt16's high bits and "
             "returns garbage. Column UInt16 MAX/MIN (the ttnn-exercised path) is still covered."
         )

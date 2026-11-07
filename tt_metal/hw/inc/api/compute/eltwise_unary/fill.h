@@ -53,7 +53,7 @@ ALWI void fill_tile_int(uint32_t idst, uint32_t param0) {
         DATA_FORMAT == DataFormat::Int32 || is_uint32_format(DATA_FORMAT) || DATA_FORMAT == DataFormat::UInt16,
         "Unsupported data format for fill_tile_int. Supported: Int32, UInt32, UInt16");
     constexpr InstrModLoadStore INSTRUCTION_MODE =
-        (DATA_FORMAT == DataFormat::UInt16) ? InstrModLoadStore::LO16 : InstrModLoadStore::INT32;
+        (DATA_FORMAT == DataFormat::UInt16) ? InstrModLoadStore::UINT16 : InstrModLoadStore::INT32;
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
