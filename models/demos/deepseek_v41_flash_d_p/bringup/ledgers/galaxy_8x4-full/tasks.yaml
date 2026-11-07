@@ -3168,6 +3168,50 @@ tasks:
       short_turn_device_ms: '> 0'
       acks_early: == 0
       contract_checks_failed: == 0
+- id: P.42
+  title: 'PD table per decode''s review: re-index layers 24-36 as aliases of layer 20''s index rows (no copies); window KV as a 128-row snapshot clamped at cap'
+  step: perf
+  role: perf
+  device: true
+  deps:
+  - P.41
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/tt
+  - models/demos/deepseek_v41_flash_d_p/tests/
+  - models/demos/deepseek_v41_flash_d_p/bringup/serving_contract.md
+  - ttnn/ttnn/bringup
+  brief:
+    details: 'OWNER 2026-11-07, OWNER-AUTHORIZED CONTRACT CHANGE, from decode''s review (Brian Liu, #blaze-deepseek-v4 2026-11-06 21:35 CET, https://claude.ai/artifact/HG8kwWMJedV7TZsJtPMjgk; prefill-side summary /scratch/dnijemcevic/rebase/dgen_migration_table_draft.md). tt-d-gen for serving: /scratch/dnijemcevic/tt-d-gen at jazpur/dsv4-replay-window 48b79127fb1 (built; its engine/tests/integration/dsv4_tables.py shows a ''snapshot'' config with max_sequence_length 128). Two changes, one task, every old behaviour kept behind its switch. (1) RE-INDEX ALIASES. Today 4_index_k_r1 covers layers 20, 24, 28, 32, 36 and each re-index layer has its own slab holding a physical copy of layer 20''s rows (serving_contract.md, ~96 MiB a chip a slot at 1M). Decode wants the re-index layers published as aliases of layer 20''s rows. alias_rows does not exist in tt-d-gen or tt-blaze today: implement it as table entries for layers 24, 28, 32, 36 whose noc_addr / size are layer 20''s records (same config, same positions), and drop the copies and their slabs. Check that the KV Manager table builder and our adapter accept several entries sharing one address (read tt-d-gen''s migration_strategy_builder / table code on that branch); if they reject it, keep the copies, say exactly what rejects it, and stop part (1) there. Switch REINDEX_SERVE: alias (new, default after acceptance) | copy (today). (2) WINDOW SNAPSHOT AT CAP. cap = (prompt_len - 1) // 64 * 64 (64 = the deployed kv_block_size; take it from the runtime/spec, do not hard-code). Decode receives rows [0, cap) of the history caches and replays [cap, prompt_len) itself. The served window KV becomes a 128-row ring per layer (all 40 layers), position p at row p % 128, written only for p < cap (clamp like update_padded_kv_cache(valid_global=...)), bf16 row-major 512 wide (1024 B a row), 32-row records in one bank (4 records a layer, 32,768 B each), shipped once after the last chunk, published as 0_window_kv with tensor_type snapshot, max_sequence_length 128 (tt-d-gen#1955 is the Snapshot tagging on their side; if the branch already supports it use it, else report what is missing). The history caches (compressed KV, index keys) are served for [0, cap) only. New WINDOW_KV_KEEP value snapshot128 (the default after acceptance); full, ring (192) and none keep working. Attention inside prefill must stay correct for every position up to prompt_len (positions >= cap still attend normally; only the served ring is clamped). Update serving_contract.md (table, cap rule, aliases, snapshot) and the contract / kv_layout / acks / runner_contract tests to the new layout: the snapshot rows equal the golden window KV of positions [cap - 128, cap) at row p % 128, rows for p >= cap are never written, and the alias entries resolve to layer 20''s bytes. Test prompt lengths that are not multiples of 64, and one shorter than 128. Never loosen any other check. Report: per-chip memory per slot at 56,320 and 1,048,576 tokens before / after; the table (configs, layers, record bytes, entry counts); accuracy metrics; chunk_wall_ms and device_ms_total. Agent rules 18 and 19 hold. Do not profile the model yourself beyond the A/B: the orchestrator measures at 51200. Report in plain language, short, every term defined.'
+  ab:
+    env:
+      REINDEX_SERVE: copy
+      WINDOW_KV_KEEP: full
+      ENGRAM_TABLE: resident
+    change:
+      REINDEX_SERVE: alias
+      WINDOW_KV_KEEP: snapshot128
+      ENGRAM_TABLE: resident
+  ab_positions:
+  - 51200
+  gate:
+    cmd: BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py
+      && DS41_ENGRAM_TABLE=resident scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py
+      && DS41_DECODER_SKIP=replay128 DS41_ENGRAM_TABLE=resident scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/test_short_turn.py
+      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_contract.py
+      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_kv_layout.py
+      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_adapter_acks.py
+      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_runner_contract.py
+    metrics:
+      err_layer_L*: <= limit
+      err_state_*_L*: <= limit
+      err_final_hidden: <= limit
+      top5_overlap: '>= limit'
+      chunk_wall_ms: '> 0'
+      device_ms_total: '> 0'
+      short_turn_ms: '> 0'
+      short_turn_device_ms: '> 0'
+      acks_early: == 0
+      contract_checks_failed: == 0
 - id: O.1
   hold: 'owner 2026-11-06: not now (P.34-P.36 first)'
   title: 'Derived-op tests: a random-input case for every ttnn.bringup call this model makes'
