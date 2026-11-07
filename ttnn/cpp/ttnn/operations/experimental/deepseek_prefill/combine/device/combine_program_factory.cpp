@@ -27,11 +27,13 @@ namespace ttnn::operations::experimental::deepseek_prefill::combine {
 
 namespace detail {
 
-uint32_t get_num_pages(const ttnn::Tensor& tensor) { return (uint32_t)tensor.buffer()->num_pages(); }
+uint32_t get_num_pages(const ttnn::Tensor& tensor) { return (uint32_t)tensor.mesh_buffer().num_pages(); }
 
-uint32_t get_page_size(const ttnn::Tensor& tensor) { return (uint32_t)tensor.buffer()->page_size(); }
+uint32_t get_page_size(const ttnn::Tensor& tensor) { return (uint32_t)tensor.mesh_buffer().page_size(); }
 
-uint32_t get_aligned_page_size(const ttnn::Tensor& tensor) { return (uint32_t)tensor.buffer()->aligned_page_size(); }
+uint32_t get_aligned_page_size(const ttnn::Tensor& tensor) {
+    return (uint32_t)tensor.mesh_buffer().aligned_page_size();
+}
 
 uint32_t get_num_rows(const ttnn::Tensor& tensor) {
     auto logical_volume = tensor.logical_shape().volume();
@@ -1270,11 +1272,11 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
         // std::vector — then promote to the RTArgList builder (replacing the
         // buffer-address slots with Buffer* entries) before emplace.
         std::vector<uint32_t> writer_runtime_args_raw = {
-            dispatched_buffer.buffer()->address(),
-            dispatched_metadata.buffer()->address(),
-            expert_token_counts.buffer()->address(),
-            expert_region_offsets.buffer()->address(),
-            output_tensor.buffer()->address(),
+            dispatched_buffer.mesh_buffer().address(),
+            dispatched_metadata.mesh_buffer().address(),
+            expert_token_counts.mesh_buffer().address(),
+            expert_region_offsets.mesh_buffer().address(),
+            output_tensor.mesh_buffer().address(),
             output_init_complete_semaphore_id,
             (uint32_t)init_semaphore.address(),
             (uint32_t)exit_semaphore.address(),
@@ -1337,6 +1339,7 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
                     *mesh_device, src_fabric_node_id, dst_nodes, core_link, "combine-axis");
                 writer_runtime_args_raw.push_back(static_cast<uint32_t>(dst_nodes.size()));
                 tt::tt_fabric::append_routing_plane_connection_manager_rt_args(
+                    *mesh_device,
                     src_fabric_node_id,
                     dst_nodes,
                     per_conn_links,
@@ -1354,7 +1357,13 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
                 // Legacy per-direction array connection (FABRIC_1D linear/ring — never deadlocked).
                 for (const auto& dst_node : dst_nodes) {
                     tt::tt_fabric::append_fabric_connection_rt_args<tt::tt_metal::ProgramDescriptor>(
-                        src_fabric_node_id, dst_node, core_link, desc, sender_core, writer_runtime_args_raw);
+                        *mesh_device,
+                        src_fabric_node_id,
+                        dst_node,
+                        core_link,
+                        desc,
+                        sender_core,
+                        writer_runtime_args_raw);
                 }
             }
         }

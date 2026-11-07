@@ -41,12 +41,7 @@ def test_sharded_reduce_h(N, in_sharded, out_sharded, dtype, device, function_le
 
     x = torch.randn((N, C, H, W)).bfloat16()
 
-    xt = ttnn.Tensor(
-        x.reshape(-1).tolist(),
-        x.shape,
-        dtype,
-        ttnn.TILE_LAYOUT,
-    ).to(
+    xt = ttnn.from_torch(x, dtype=dtype, layout=ttnn.TILE_LAYOUT).to(
         device,
         interleaved_mem_config,
     )
@@ -124,12 +119,7 @@ def test_nd_sharded_reduce_h_no_output_shard_spec(op, device, function_level_def
 
     x = torch.randn((N, C, H, W)).bfloat16()
 
-    xt = ttnn.Tensor(
-        x.reshape(-1).tolist(),
-        x.shape,
-        ttnn.bfloat16,
-        ttnn.TILE_LAYOUT,
-    ).to(device, interleaved_mem_config)
+    xt = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT).to(device, interleaved_mem_config)
 
     xt = ttnn.interleaved_to_sharded(
         xt,

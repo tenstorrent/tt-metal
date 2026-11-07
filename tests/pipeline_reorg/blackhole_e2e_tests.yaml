@@ -86,7 +86,23 @@
   skus:
     bh_loudbox:
       timeout: 10
-  owner_id: U09LK84G4TF # Nikola Milicevic
+  owner_id: U085GDCAZTN # Pavle Josipovic
+  team: ttnn
+  budget_type: e2e
+
+# The block statistics and mixture ops. The statistics' gather across the tensor-parallel
+# axis runs on each box's full mesh, 2x2 on QuietBox 2 and 2x4 on LoudBox; the other arms
+# run on one chip of it.
+- id: bh-ttnn-attn-res-block-unit
+  name: ttnn attn_res_block_stats and attn_res_block_mix unit tests
+  model-name: kimi_k3
+  cmd: pytest tests/ttnn/unit_tests/operations/experimental/test_attn_res_block_stats.py tests/ttnn/unit_tests/operations/experimental/test_attn_res_block_mix.py
+  skus:
+    bh_quietbox_2:
+      timeout: 10
+    bh_loudbox:
+      timeout: 10
+  owner_id: U085GDCAZTN # Pavle Josipovic
   team: ttnn
   budget_type: e2e
 
@@ -180,6 +196,8 @@
     pytest models/demos/deepseek_v3_d_p/tests/kda/components/test_qkv_convolution_exchange.py::test_qkv_convolution_exchange_matches_single_sequence -k loudbox -vvv --tb=short || exit_code=$?
     # One K3 KDA capture serving two user slots (#59977): the only test that fails if a trace pins its slot.
     pytest models/demos/deepseek_v3_d_p/tests/kimi_k3/test_kda_slot_trace.py -k "sp2tp4" -vvv --tb=short || exit_code=$?
+    pytest models/demos/deepseek_v3_d_p/tests/kda/components/test_relay_affine_prefix.py models/demos/deepseek_v3_d_p/tests/kda/components/test_entry_correction.py models/demos/deepseek_v3_d_p/tests/kda/components/test_select_final_carry.py -k "loudbox and not perf" -vvv --tb=short || exit_code=$?
+    pytest models/demos/deepseek_v3_d_p/tests/kda/components/test_recurrence.py::test_distributed_recurrence_split_interval_matches_reference -k "mesh-2x4" -vvv --tb=short || exit_code=$?
     pytest models/demos/deepseek_v3_d_p/tests/test_prefill_block_loop.py -k "fabric2d-mesh-2x4-2link and layer0 and device" -vvv --tb=short || exit_code=$?
     exit $exit_code
   skus:
@@ -221,6 +239,7 @@
     KDA_PERF_SKU=bh_loudbox pytest models/demos/deepseek_v3_d_p/tests/kda/perf/test_layer_perf.py::test_synthetic_kimi_k3_perf -k "SP8xTP1" -vvv --tb=short || exit_code=$?
     KDA_PERF_SKU=bh_loudbox pytest models/demos/deepseek_v3_d_p/tests/kda/perf/test_layer_perf.py::test_kimi_k3_tp_reduce_scatter_perf -k "linear" -vvv --tb=short || exit_code=$?
     pytest models/demos/deepseek_v3_d_p/tests/kda/components/test_qkv_convolution_exchange.py::test_qkv_convolution_exchange_kimi_k3_perf -k loudbox -vvv --tb=short || exit_code=$?
+    pytest models/demos/deepseek_v3_d_p/tests/kda/components/test_relay_affine_prefix.py::test_relay_affine_prefix_kimi_k3_perf models/demos/deepseek_v3_d_p/tests/kda/components/test_entry_correction.py::test_entry_correction_kimi_k3_perf models/demos/deepseek_v3_d_p/tests/kda/components/test_select_final_carry.py::test_select_final_carry_kimi_k3_perf -k loudbox -vvv --tb=short || exit_code=$?
     # Mistral Small 4 MoE and MLA at the PP=4 stage shape (SP=8 x TP=1). This LoudBox job builds
     # with Tracy; both rows are gated against a LoudBox baseline.
     export MISTRAL4_HF_MODEL=/mnt/models/blaze/mistralai/Mistral-Small-4-119B-2603
@@ -260,10 +279,11 @@
     pytest models/demos/deepseek_v3_d_p/tests/cache/ -vvv --tb=short || exit_code=$?
     pytest models/demos/deepseek_v3_d_p/tests/kda/layer/test_acceptance.py::test_synthetic_kimi_k3_accuracy_and_determinism -k "SP4xTP1" -vvv --tb=short || exit_code=$?
     pytest models/demos/deepseek_v3_d_p/tests/kda/components/test_qkv_convolution_exchange.py::test_qkv_convolution_exchange_matches_single_sequence -k quietbox -vvv --tb=short || exit_code=$?
+    pytest models/demos/deepseek_v3_d_p/tests/kda/components/test_relay_affine_prefix.py models/demos/deepseek_v3_d_p/tests/kda/components/test_entry_correction.py models/demos/deepseek_v3_d_p/tests/kda/components/test_select_final_carry.py -k "quietbox and not perf" -vvv --tb=short || exit_code=$?
     exit $exit_code
   skus:
     bh_quietbox_2:
-      timeout: 20
+      timeout: 25
   owner_id: U08E1JCMAJF # Marko Bezulj
   team: models
   budget_type: e2e
@@ -293,6 +313,7 @@
     KDA_PERF_SKU=bh_quietbox pytest models/demos/deepseek_v3_d_p/tests/kda/perf/test_layer_perf.py::test_synthetic_kimi_k3_perf -k "SP4xTP1" -vvv --tb=short || exit $?
     KDA_PERF_SKU=bh_quietbox pytest models/demos/deepseek_v3_d_p/tests/kda/perf/test_layer_perf.py::test_kimi_k3_tp_reduce_scatter_perf -k "ring" -vvv --tb=short || exit $?
     pytest models/demos/deepseek_v3_d_p/tests/kda/components/test_qkv_convolution_exchange.py::test_qkv_convolution_exchange_kimi_k3_perf -k quietbox -vvv --tb=short || exit $?
+    pytest models/demos/deepseek_v3_d_p/tests/kda/components/test_relay_affine_prefix.py::test_relay_affine_prefix_kimi_k3_perf models/demos/deepseek_v3_d_p/tests/kda/components/test_entry_correction.py::test_entry_correction_kimi_k3_perf models/demos/deepseek_v3_d_p/tests/kda/components/test_select_final_carry.py::test_select_final_carry_kimi_k3_perf -k quietbox -vvv --tb=short || exit $?
   skus:
     bh_quietbox_2:
       timeout: 10
@@ -325,11 +346,12 @@
   # is the smallest box carrying Galaxy's TP factor of 4. The directory's host-only files
   # come along because they gate code the device tests cannot: the PCC and bit-exactness
   # helpers those tests reach their verdicts through, and the weight cache path, which is
-  # only taken when a checkpoint is staged and CI stages none.
-  cmd: pytest models/demos/deepseek_v3_d_p/tests/attn_res/ -vvv --tb=short
+  # only taken when a checkpoint is staged and CI stages none. The two-rank split walk runs
+  # on Galaxy instead, to keep this job inside its budget.
+  cmd: pytest models/demos/deepseek_v3_d_p/tests/attn_res/ -vvv --tb=short --deselect models/demos/deepseek_v3_d_p/tests/attn_res/model/test_forward_loop.py::test_split_loop_matches_reference
   skus:
     bh_loudbox:
       timeout: 10
-  owner_id: U09LK84G4TF # Nikola Milicevic
+  owner_id: U085GDCAZTN # Pavle Josipovic
   team: models
   budget_type: e2e

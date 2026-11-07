@@ -32,11 +32,7 @@ def test_bw_sigmoid(input_shapes, device):
 
 
 # Exhaustive BF16 accuracy of ttnn.sigmoid_bw: every BF16 bit pattern with each gradient in SIGMOID_BW_GRADS.
-#
-# The SFPU may read a subnormal operand as zero, so an output may match torch at the operands or at the
-# operands with subnormals flushed; the pack stores NaN as +inf and -0 as +0, so classes compare as stored.
-# Declared lanes, as main's single program computes them unless noted: 0 wherever |x| >= 131.698, where even
-# exp(-|x|) * 2^64 is below the smallest normal, for a finite grad.
+# An output may match torch at the operands or with subnormals flushed; classes compare as the pack stores them.
 SIGMOID_BW_GRADS = [
     "1",
     "-1",
@@ -55,6 +51,8 @@ SIGMOID_BW_GRADS = [
     "3.3895313892515355e+38",
     "-3.3895313892515355e+38",
 ]
+# The kernel's largest error over every gradient on silicon, rounded up: a rounding regression exceeds it.
+SIGMOID_BW_MAX_ULP = 0.53
 SIGMOID_BW_SMALLEST_NORMAL = 2.0**-126
 
 
@@ -158,14 +156,13 @@ def test_sigmoid_bw_exhaustive_bfloat16(grad, device):
         _sigmoid_bw_pure_ulp(_sigmoid_bw_reference(g, x, True), actual),
     )
     worst = ulp.argmax()
-    assert ulp.max().item() < 1.0, (
-        f"{(ulp >= 1.0).sum().item()} outputs at or beyond 1 ulp or of the wrong class; worst at "
+    assert ulp.max().item() < SIGMOID_BW_MAX_ULP, (
+        f"{(ulp >= SIGMOID_BW_MAX_ULP).sum().item()} outputs at or beyond {SIGMOID_BW_MAX_ULP} ulp or of the wrong class; worst at "
         f"x={x.flatten()[worst].item()}, grad={g.flatten()[worst].item()}: "
         f"expected {_sigmoid_bw_reference(g, x, False).flatten()[worst].item()}, got {actual.flatten()[worst].item()}"
     )
 
 
-# The calls the fused program serves.
 SIGMOID_BW_FUSED_CALLS = (
     "interleaved_tiles",
     "interleaved_l1",

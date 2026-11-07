@@ -15,7 +15,6 @@ from loguru import logger
 
 SHAPES = [(512, 512), (1024, 1024)]
 REPEATS = 5
-# The boards whose calls the fused program serves.
 FUSED_BOARDS = (
     "blackhole",
     "wormhole_b0",
@@ -53,8 +52,7 @@ def test_sigmoid_bw_profiled_calls(device):
     """The calls the device-perf test profiles, between signposts that name each one."""
     from tracy import signpost
 
-    board = "blackhole" if ttnn.device.is_blackhole(device) else "wormhole_b0"
-    if board not in FUSED_BOARDS or not (ttnn.device.is_blackhole(device) or ttnn.device.is_wormhole_b0(device)):
+    if not (ttnn.device.is_blackhole(device) or ttnn.device.is_wormhole_b0(device)):
         pytest.skip("this board keeps main's single program")
     generator = torch.Generator().manual_seed(0)
     for height, width in SHAPES:
@@ -177,8 +175,7 @@ def test_sigmoid_bw_layout_profiled_calls(name, device):
     the fused program."""
     from tracy import signpost
 
-    board = "blackhole" if ttnn.device.is_blackhole(device) else "wormhole_b0"
-    if board not in FUSED_BOARDS or not (ttnn.device.is_blackhole(device) or ttnn.device.is_wormhole_b0(device)):
+    if not (ttnn.device.is_blackhole(device) or ttnn.device.is_wormhole_b0(device)):
         pytest.skip("this board keeps main's single program")
     generator = torch.Generator().manual_seed(0)
     for height, width in SHAPES:
@@ -209,7 +206,6 @@ def test_sigmoid_bw_layout_device_perf():
         pytest.skip("this board keeps main's single program")
     subdir = "sigmoid_bw_layout_device_perf"
     clear_profiler_runtime_artifacts()
-    # Every layout runs on the fused program in this build: a failed or missing call fails the test.
     run_device_profiler(
         f"pytest {PATH}::test_sigmoid_bw_layout_profiled_calls",
         subdir,
