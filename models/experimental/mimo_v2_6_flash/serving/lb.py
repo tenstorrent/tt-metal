@@ -593,12 +593,16 @@ class Shim:
 
     @staticmethod
     def parse_sampling(value):
-        """"T,P" (e.g. "1.0,0.95") -> (T, P); "" or None -> None."""
+        """The string "T,P" (e.g. "1.0,0.95") -> (T, P); "" or None -> None."""
         if value in (None, ""):
             return None
-        t, p = (float(v) for v in str(value).split(","))
+        parts = str(value).split(",")
+        try:
+            t, p = (float(v) for v in parts) if len(parts) == 2 else (0.0, 0.0)
+        except ValueError:
+            t = p = 0.0
         if not (t > 0 and 0 < p <= 1):
-            raise ValueError(f"thinking-greedy sampling {value!r}: want temperature > 0, 0 < top_p <= 1")
+            raise ValueError(f"thinking-greedy sampling {value!r}: want T,P with temperature T > 0, 0 < top_p P <= 1")
         return (t, p)
 
     @classmethod

@@ -532,12 +532,12 @@ def test_map_greedy_thinking(fields, want):
     assert lb.map_greedy_thinking(req, None) is req
 
 
-def test_parse_thinking_greedy():
+@pytest.mark.parametrize("bad", ["0,0.95", "1.0,0", "1.0,1.5", "1.0", "a,b", "1,0.9,3"])
+def test_parse_thinking_greedy(bad, expect_error):
     assert lb.Shim.parse_sampling("1.0,0.95") == (1.0, 0.95)
     assert lb.Shim.parse_sampling("") is None and lb.Shim.parse_sampling(None) is None
-    for bad in ("0,0.95", "1.0,0", "1.0,1.5", "1.0"):
-        with pytest.raises(ValueError):
-            lb.Shim.parse_sampling(bad)
+    with expect_error(ValueError, "want T,P"):
+        lb.Shim.parse_sampling(bad)
 
 
 def test_map_error():
