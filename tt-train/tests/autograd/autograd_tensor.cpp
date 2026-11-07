@@ -128,13 +128,13 @@ void expect_derived_view_tracks_writes(ttnn::DataType native_dtype, autograd::Pr
     auto tensor = autograd::AutocastTensor(filled(1.0F, native_dtype));
     const auto& before = tensor.get_tensor(derived);
     ASSERT_TRUE(all_equal(before, 1.0F));
-    const auto address = before.buffer()->address();
+    const auto address = before.mesh_buffer().address();
 
     write_in_place(tensor, 2.0F);
 
     const auto& after = tensor.get_tensor(derived);
     EXPECT_TRUE(all_equal(after, 2.0F)) << "the derived view is stale after an in-place write";
-    EXPECT_EQ(after.buffer()->address(), address) << "the refresh allocated a new buffer";
+    EXPECT_EQ(after.mesh_buffer().address(), address) << "the refresh allocated a new buffer";
 }
 
 }  // namespace

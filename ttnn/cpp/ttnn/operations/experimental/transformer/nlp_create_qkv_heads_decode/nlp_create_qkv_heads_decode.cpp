@@ -20,7 +20,6 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> nlp_create_qkv_heads_decode
     const std::optional<const uint32_t> slice_size,
     const std::optional<MemoryConfig>& memory_config) {
     const uint32_t num_kv_heads_val = num_kv_heads.value_or(num_heads);
-    TT_FATAL(num_heads > 0, "num_heads must be greater than 0");
     const bool overlap_qk_coregrid_val = input_tensor.is_sharded() ? overlap_qk_coregrid.value_or(true) : true;
     // Check if input is on subcoregrids
     // Conditions to check:
@@ -45,19 +44,24 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> nlp_create_qkv_heads_decode
         tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED,
         tt::tt_metal::BufferType::L1,
         tt::tt_metal::ShardSpec{output_core_grid, {}}};
-    // Infer head_dim. Bound the head count so the uint32_t sum below cannot wrap to 0.
-    const uint64_t input_width = input_tensor.padded_shape()[3];
     TT_FATAL(
-        uint64_t{num_heads} + 2 * uint64_t{num_kv_heads_val} <= input_width,
-        "num_heads ({}) + 2 * num_kv_heads ({}) exceeds the input width ({})",
+        num_heads > 0 && num_kv_heads_val > 0,
+        "num_heads ({}) and num_kv_heads ({}) must be greater than 0",
+        num_heads,
+        num_kv_heads_val);
+    TT_FATAL(
+        static_cast<uint64_t>(num_heads) + 2 * static_cast<uint64_t>(num_kv_heads_val) <=
+            input_tensor.padded_shape()[3],
+        "num_heads ({}) + 2 * num_kv_heads ({}) exceeds the fused width {}",
         num_heads,
         num_kv_heads_val,
-        input_width);
+        input_tensor.padded_shape()[3]);
     TT_FATAL(
         input_tensor.padded_shape()[3] % (num_heads + 2 * num_kv_heads_val) == 0,
         "Input shape {} must be divisible by num_heads + 2*num_kv_heads = {}",
         input_tensor.padded_shape()[3],
         num_heads + 2 * num_kv_heads_val);
+    // Infer head_dim
     uint32_t head_dim = input_tensor.padded_shape()[3] / (num_heads + 2 * num_kv_heads_val);
 
     auto out = ttnn::prim::nlp_create_qkv_heads_decode(

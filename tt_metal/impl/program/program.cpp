@@ -101,7 +101,6 @@
 #include <internal/service/service_core_manager.hpp>
 #include "impl/internal/service/service_core_manager_impl.hpp"
 #include "tt_metal/tools/profiler/tracy_debug_zones.hpp"
-#include <fmt/ranges.h>
 #include "distributed/mesh_device_impl.hpp"
 
 namespace tt {
@@ -194,7 +193,11 @@ SummaryRows program_config_breakdown(
         }
     }
     rows.emplace_back("  text-sizing group, cores", sizing_group.core_ranges.str());
-    rows.emplace_back("  text-sizing group, kernels", fmt::format("{}", fmt::join(names, ", ")));
+    std::string joined_names;
+    for (size_t i = 0; i < names.size(); ++i) {
+        joined_names += (i == 0 ? "" : ", ") + names[i];
+    }
+    rows.emplace_back("  text-sizing group, kernels", joined_names);
     return rows;
 }
 
@@ -671,7 +674,9 @@ KernelHandle detail::ProgramImpl::add_kernel(
         }
     }
 
-    if (!kernel->scratchpad_binding_handles().empty()) {
+    if (std::ranges::any_of(kernel->scratchpad_binding_handles(), [](const auto& binding) {
+            return !binding.allocation_override.has_value();
+        })) {
         register_ephemeral_allocation(this->dfb_allocation_metadata_, kernel->core_range_set());
     }
 
@@ -878,6 +883,24 @@ void ProgramImpl::register_tensor_parameter(
     TT_FATAL(inserted, "Duplicate tensor parameter name: {}", name);
 }
 
+void ProgramImpl::register_sram_arena_parameter(
+    const std::string& name,
+    const experimental::SRAMArenaProperties& properties,
+    const distributed::MeshDevice& device) {
+    if (!metal2_registry_) {
+        metal2_registry_ = Metal2NameRegistry{};
+    }
+    const auto [it, inserted] = metal2_registry_->sram_arena_parameters.try_emplace(
+        name, RegisteredSRAMArenaParameter{properties, std::cref(device)});
+    TT_FATAL(inserted, "Duplicate SRAM arena parameter name: {}", name);
+}
+
+const std::unordered_map<std::string, ProgramImpl::RegisteredSRAMArenaParameter>&
+ProgramImpl::get_sram_arena_parameters() const {
+    static const std::unordered_map<std::string, RegisteredSRAMArenaParameter> empty;
+    return metal2_registry_ ? metal2_registry_->sram_arena_parameters : empty;
+}
+
 const TensorSpec* ProgramImpl::get_tensor_parameter_layout(const std::string& name) const {
     if (!metal2_registry_) {
         return nullptr;
@@ -941,19 +964,19 @@ const detail::BoundTensorFootprint* ProgramImpl::get_bound_tensor_footprint(cons
     return &*it->second.bound;
 }
 
-void ProgramImpl::register_dfb_borrowed_binding(uint32_t dfb_id, const std::string& tensor_parameter_name) {
+void ProgramImpl::register_dfb_storage_binding(DFBStorageBinding binding) {
     if (!metal2_registry_) {
         metal2_registry_ = Metal2NameRegistry{};
     }
-    metal2_registry_->dfb_borrowed_bindings.emplace_back(dfb_id, tensor_parameter_name);
+    metal2_registry_->dfb_storage_bindings.push_back(std::move(binding));
 }
 
-const std::vector<std::pair<uint32_t, std::string>>& ProgramImpl::get_dfb_borrowed_bindings() const {
-    static const std::vector<std::pair<uint32_t, std::string>> empty;
+const std::vector<ProgramImpl::DFBStorageBinding>& ProgramImpl::get_dfb_storage_bindings() const {
+    static const std::vector<DFBStorageBinding> empty;
     if (!metal2_registry_) {
         return empty;
     }
-    return metal2_registry_->dfb_borrowed_bindings;
+    return metal2_registry_->dfb_storage_bindings;
 }
 // ============================================================================
 
@@ -1514,6 +1537,7 @@ const detail::ProgramImpl::PrefetcherPipeSlot& detail::ProgramImpl::get_prefetch
 uint8_t detail::ProgramImpl::reserve_prefetcher_pipe_slot(
     const CoreRangeSet& cores,
     const CoreRangeSet& receiver_cores,
+    const CoreRangeSet& extra_cores,
     uint32_t ring_size,
     uint32_t entry_size,
     uint32_t num_credit_lanes) {
@@ -1534,6 +1558,13 @@ uint8_t detail::ProgramImpl::reserve_prefetcher_pipe_slot(
     TT_FATAL(
         cores.intersection(receiver_cores).num_cores() == receiver_cores.num_cores(),
         "PrefetcherPipe slot receiver cores must be a subset of the slot cores");
+    TT_FATAL(
+        cores.contains(extra_cores) && !extra_cores.intersects(receiver_cores),
+        "PrefetcherPipe slot extra cores {} must be a subset of the slot cores {} and disjoint from its receiver cores "
+        "{}",
+        extra_cores.str(),
+        cores.str(),
+        receiver_cores.str());
 
     const uint32_t l1_alignment = MetalContext::instance(this->get_context_id()).hal().get_alignment(HalMemType::L1);
     TT_FATAL(entry_size > 0, "PrefetcherPipe entry_size must be > 0");
@@ -1590,6 +1621,7 @@ uint8_t detail::ProgramImpl::reserve_prefetcher_pipe_slot(
     prefetcher_pipe_slots_.push_back(
         {.cores = cores,
          .receiver_cores = receiver_cores,
+         .extra_cores = extra_cores,
          .ring_size = ring_size,
          .entry_size = entry_size,
          .num_credit_lanes = num_credit_lanes,
@@ -1848,14 +1880,16 @@ void detail::ProgramImpl::register_prefetcher_pipe_relay_dfb(uint8_t prefetcher_
         usable_ring_size,
         slot.ring_size,
         slot.entry_size);
+    // The relay covers the slot's receivers and may extend over its extra nodes, like the receiver kernel.
     const CoreRangeSet& relay_cores = relay_dfb->core_ranges;
     TT_FATAL(
-        relay_cores.num_cores() > 0 &&
-            slot.receiver_cores.intersection(relay_cores).num_cores() == relay_cores.num_cores(),
-        "Relay DFB core ranges {} must be receiver cores of PrefetcherPipe slot {} ({})",
+        relay_cores.contains(slot.receiver_cores) && slot.cores.contains(relay_cores),
+        "Relay DFB core ranges {} must include every receiver core of PrefetcherPipe slot {} ({}) and lie within "
+        "the slot's cores ({})",
         relay_cores.str(),
         prefetcher_pipe_id,
-        slot.receiver_cores.str());
+        slot.receiver_cores.str(),
+        slot.cores.str());
     TT_FATAL(
         relay_dfb->device_slot < std::numeric_limits<uint8_t>::max(),
         "Relay DFB device slot {} cannot be represented in PrefetcherPipe receiver metadata",
@@ -1990,6 +2024,17 @@ void detail::ProgramImpl::bind_prefetcher_pipe_parameters(std::span<const Prefet
             prefetcher_pipe.ring_size());
 
         for (const auto& slot_cores : binding.slots) {
+            // An extra node takes no part in the slot's pipes. Checked before the sender kernel's
+            // placement, which an extra sender node would fail with a less direct message.
+            const CoreRangeSet& extra_cores = get_prefetcher_pipe_slot(slot_cores.prefetcher_pipe_id).extra_cores;
+            TT_FATAL(
+                !extra_cores.intersects(prefetcher_pipe.sender_cores()),
+                "PrefetcherPipeParameter '{}': the supplied pipe's sender {} is one of the extra_nodes {} of a kernel "
+                "binding the pipe. Extra nodes take no part in the pipe: the sender kernel must not list its sender "
+                "node, and the receiver kernel cannot also run on the sender.",
+                bind.name,
+                prefetcher_pipe.sender_cores().str(),
+                extra_cores.str());
             check_prefetcher_pipe_slot_bind(
                 slot_cores.prefetcher_pipe_id,
                 prefetcher_pipe_slot_bind_cores(bind.name, slot_cores, prefetcher_pipe),
@@ -2003,10 +2048,12 @@ void detail::ProgramImpl::bind_prefetcher_pipe_parameters(std::span<const Prefet
     // Pass 2: commit.
     for (const Checked& checked : to_commit) {
         for (const auto& slot_cores : checked.binding->slots) {
-            commit_prefetcher_pipe_slot_bind(
-                slot_cores.prefetcher_pipe_id,
-                prefetcher_pipe_slot_bind_cores(*checked.name, slot_cores, *checked.pipe),
-                *checked.pipe);
+            CoreRangeSet cores = prefetcher_pipe_slot_bind_cores(*checked.name, slot_cores, *checked.pipe);
+            if (slot_cores.binds_extra_cores) {
+                // Disjoint from the pipe's receivers, so the extra cores only add per-core records.
+                cores = cores.merge(get_prefetcher_pipe_slot(slot_cores.prefetcher_pipe_id).extra_cores);
+            }
+            commit_prefetcher_pipe_slot_bind(slot_cores.prefetcher_pipe_id, cores, *checked.pipe);
         }
         checked.binding->bound_pipe_identity = checked.pipe->identity();
         checked.binding->bound_pipe_key = prefetcher_pipe_binding_key(*checked.pipe);
@@ -2265,7 +2312,7 @@ void detail::ProgramImpl::prepare_ephemeral_allocation(const IDevice* device) {
     for (const auto& kernels_of_core_type : this->kernels_) {
         for (const auto& [kernel_handle, kernel] : kernels_of_core_type) {
             for (const auto& handle : kernel->scratchpad_binding_handles()) {
-                if (handle.shared_allocation_identifier) {
+                if (handle.shared_allocation_identifier && !handle.allocation_override) {
                     auto& cores = shared_cores[*handle.shared_allocation_identifier];
                     cores = cores.merge(kernel->core_range_set());
                 }
@@ -2289,33 +2336,6 @@ void detail::ProgramImpl::allocate_scratchpads(const IDevice* device) {
 
     const uint32_t alignment = device->allocator()->get_alignment(BufferType::DRAM);
 
-    // Set address to a given scratchpad binding handle and it's kernel
-    auto set_address_on_scratchpad = [](DeviceAddr addr, ScratchpadBindingHandle& handle, Kernel& kernel) {
-        TT_FATAL(
-            addr != 0,
-            "Internal error: scratchpad '{}' on kernel '{}' "
-            "has a 0 allocated address (allocation failed or was skipped).",
-            handle.accessor_name,
-            kernel.name());
-
-        handle.allocated_address = static_cast<uint32_t>(addr);
-
-        // Patch the allocated address into the kernel's CRTA buffer if it exists.
-        // On the Metal 2.0 factory path, reserve_runtime_arg_buffers pre-sizes the CRTA
-        // buffer before this runs, so the address is updated here. If CRTA is not yet allocated
-        // (legacy order: SetProgramRunArgs first), SetProgramRunArgs copies
-        // handle.allocated_address into the scratchpad section when it builds the buffer.
-        // This allows for allocation of scratchpad and the CRTA buffer to be order agnostic.
-        //
-        // Usage of the CRTA buffer:
-        //  - FD: the fast/mesh path snapshots the CRTA buffer into the command stream
-        //  - SD: the slow-dispatch path writes it via WriteRuntimeArgsToDevice
-        if (!kernel.common_runtime_args().empty()) {
-            RuntimeArgsData& crta = kernel.common_runtime_args_data();
-            crta[handle.addr_crta_word] = handle.allocated_address;
-        }
-    };
-
     // Backticks needed to set a binding handle's address
     struct ScratchpadBindingRef {
         ScratchpadBindingHandle& handle;
@@ -2338,6 +2358,9 @@ void detail::ProgramImpl::allocate_scratchpads(const IDevice* device) {
             }
             const CoreRangeSet& kernel_cores = kernel->core_range_set();
             for (auto& handle : scratchpad_handles) {
+                if (handle.allocation_override) {
+                    continue;
+                }
                 // Multi-binded scratchpad, let's collect it and deal with it later
                 if (auto id = handle.shared_allocation_identifier) {
                     multi_binded_scratchpads[*id].emplace_back(handle, *kernel);
@@ -2346,7 +2369,7 @@ void detail::ProgramImpl::allocate_scratchpads(const IDevice* device) {
 
                 DeviceAddr addr =
                     allocate_scratchpad(this->dfb_allocation_metadata_, kernel_cores, handle.size_bytes, alignment);
-                set_address_on_scratchpad(addr, handle, *kernel);
+                SetScratchpadBindingAddress(*kernel, handle, addr);
             }
         }
     }
@@ -2362,11 +2385,33 @@ void detail::ProgramImpl::allocate_scratchpads(const IDevice* device) {
 
         DeviceAddr addr = allocate_scratchpad(this->dfb_allocation_metadata_, cores, size_bytes, alignment);
         for (auto& handle : refs) {
-            set_address_on_scratchpad(addr, handle.handle, handle.kernel);
+            SetScratchpadBindingAddress(handle.kernel, handle.handle, addr);
         }
     }
 
     this->scratchpads_allocated_ = true;
+}
+
+void detail::ProgramImpl::validate_scratchpad_bindings() const {
+    // Mock devices are exempt, as for borrowed-memory DFBs: nothing they serialize reaches hardware (issue #57022).
+    if (MetalContext::instance(this->context_id_).get_cluster().get_target_device_type() == tt::TargetDevice::Mock) {
+        return;
+    }
+    for (const auto& kernels_of_core_type : this->kernels_) {
+        for (const auto& [kernel_handle, kernel] : kernels_of_core_type) {
+            for (const auto& binding : kernel->scratchpad_binding_handles()) {
+                if (binding.allocation_override) {
+                    TT_FATAL(
+                        binding.allocated_address != 0,
+                        "Scratchpad '{}' on kernel '{}' has no bound SRAMArena '{}'. "
+                        "Supply its arena argument through SetProgramRunArgs before dispatch.",
+                        binding.accessor_name,
+                        kernel->name(),
+                        binding.allocation_override->arena);
+                }
+            }
+        }
+    }
 }
 
 void detail::ProgramImpl::allocate_circular_buffers(const IDevice* device) {
