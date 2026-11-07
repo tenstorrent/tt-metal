@@ -81,7 +81,7 @@ def test_vit(device, model_location_generator):
 
     # IMAGENET INFERENCE
     #####################
-    data_loader = get_data_loader("ImageNet_data", batch_size, 2)
+    data_loader = get_data_loader(batch_size, 2)
 
     durations = []
     for iter in range(2):

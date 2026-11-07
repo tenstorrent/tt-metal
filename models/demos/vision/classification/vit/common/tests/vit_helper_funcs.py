@@ -2,14 +2,17 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import glob
 import os
+from pathlib import Path
 
+import numpy as np
 import torch
-from datasets import load_dataset
 from PIL import Image
 
-from models.sample_data.huggingface_imagenet_classes import IMAGENET2012_CLASSES
+# A labelled image folder: one subfolder per class, named by the classifier's class index, holding that
+# class's images. Without it, inputs are synthetic and unlabelled.
+IMAGE_DIR_ENV = "VIT_IMAGE_DIR"
+SYNTHETIC_IMAGE_SIZE = 224
 
 
 class InputExample(object):
@@ -18,66 +21,62 @@ class InputExample(object):
         self.label = label
 
 
-def get_input(image_path):
-    img = Image.open(image_path)
-    return img
+def image_dir():
+    """The labelled image folder from VIT_IMAGE_DIR, or None."""
+    value = os.environ.get(IMAGE_DIR_ENV)
+    return Path(value) if value else None
 
 
-def get_label(image_path):
-    _, image_name = image_path.rsplit("/", 1)
-    image_name_exact, _ = image_name.rsplit(".", 1)
-    _, label_id = image_name_exact.rsplit("_", 1)
-    label = list(IMAGENET2012_CLASSES).index(label_id)
-    return label
+def labelled_images(root):
+    """(path, class index) pairs from a labelled image folder. The order takes one image of every class
+    in turn, so any prefix spreads over the classes instead of covering the first few."""
+    per_class = {
+        int(folder.name): sorted(path for path in folder.iterdir() if path.is_file())
+        for folder in root.iterdir()
+        if folder.is_dir() and folder.name.isdigit()
+    }
+    if not per_class:
+        raise ValueError(f"{root}: expected one subfolder per class index")
+    depth = max(len(paths) for paths in per_class.values())
+    return [
+        (paths[index], label)
+        for index in range(depth)
+        for label, paths in sorted(per_class.items())
+        if index < len(paths)
+    ]
 
 
-def get_data_loader(input_loc, batch_size, iterations, download_entire_dataset=False):
-    img_dir = input_loc + "/"
-    data_path = os.path.join(img_dir, "*G")
-    files = glob.glob(data_path)
+def num_images():
+    """The number of labelled images available, or None for synthetic inputs."""
+    root = image_dir()
+    return None if root is None else len(labelled_images(root))
 
-    def loader():
-        examples = []
-        for f1 in files:
-            examples.append(
+
+def get_data_loader(batch_size, iterations, seed=0):
+    """iterations batches of InputExamples: the labelled images from VIT_IMAGE_DIR when it is set, else
+    distinct random images without labels."""
+    root = image_dir()
+
+    def labelled():
+        images = labelled_images(root)[: batch_size * iterations]
+        for start in range(0, len(images) - batch_size + 1, batch_size):
+            yield [
+                InputExample(image=Image.open(path), label=label) for path, label in images[start : start + batch_size]
+            ]
+
+    def synthetic():
+        generator = np.random.default_rng(seed)
+        for _ in range(iterations):
+            yield [
                 InputExample(
-                    image=get_input(f1),
-                    label=get_label(f1),
+                    image=Image.fromarray(
+                        generator.integers(0, 256, (SYNTHETIC_IMAGE_SIZE, SYNTHETIC_IMAGE_SIZE, 3), dtype=np.uint8)
+                    )
                 )
-            )
-            if len(examples) == batch_size:
-                yield examples
-                del examples
-                examples = []
+                for _ in range(batch_size)
+            ]
 
-    def loader_hf():
-        examples = []
-        for f1 in files:
-            examples.append(
-                InputExample(
-                    image=f1["image"],
-                    label=f1["label"],
-                )
-            )
-            if len(examples) == batch_size:
-                yield examples
-                del examples
-                examples = []
-
-    if len(files) == 0:
-        files_raw = iter(
-            load_dataset(
-                "ILSVRC/imagenet-1k", split="validation", use_auth_token=True, streaming=not download_entire_dataset
-            )
-        )
-        files = []
-        sample_count = batch_size * iterations
-        for _ in range(sample_count):
-            files.append(next(files_raw))
-        del files_raw
-        return loader_hf()
-
-    return loader()
+    return labelled() if root is not None else synthetic()
 
 
 def get_batch(data_loader, image_processor):
@@ -87,7 +86,7 @@ def get_batch(data_loader, image_processor):
     for image in loaded_images:
         img = image.image
         labels.append(image.label)
-        if img.mode == "L":
+        if img.mode != "RGB":
             img = img.convert(mode="RGB")
         img = image_processor(img, return_tensors="pt")
         img = img["pixel_values"]
@@ -97,20 +96,3 @@ def get_batch(data_loader, image_processor):
         else:
             images = torch.cat((images, img), dim=0)
     return images, labels
-
-
-def get_data(input_loc):
-    img_dir = input_loc + "/"
-    data_path = os.path.join(img_dir, "*G")
-    files = sorted(glob.glob(data_path))
-    examples = []
-    for f1 in files:
-        examples.append(
-            InputExample(
-                image=get_input(f1),
-                label=get_label(f1),
-            )
-        )
-    image_examples = examples
-
-    return image_examples
