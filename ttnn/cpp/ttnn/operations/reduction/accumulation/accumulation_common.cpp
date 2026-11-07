@@ -87,13 +87,24 @@ Tensor postprocess_output_tensor(
     return processed_tensor;
 }
 
-void validate_output_tensor(const Tensor& input_tensor, const Tensor& output_tensor) {
+void validate_output_tensor(
+    const Tensor& input_tensor,
+    const Tensor& output_tensor,
+    const std::optional<DataType>& requested_dtype) {
     TT_FATAL(is_device_tensor(output_tensor), "Preallocated output tensor must be on device");
     TT_FATAL(
         input_tensor.logical_shape() == output_tensor.logical_shape(),
         "Shape mismatch: input tensor shape {} does not match output tensor shape {}.",
         input_tensor.logical_shape(),
         output_tensor.logical_shape());
+    const DataType expected_dtype = requested_dtype.value_or(input_tensor.dtype());
+    TT_FATAL(
+        output_tensor.dtype() == expected_dtype,
+        "Preallocated output tensor dtype {} does not match the accumulation output dtype {}. "
+        "Pass an output tensor allocated with the requested (or input) dtype, or omit `out=` to "
+        "let the op allocate.",
+        output_tensor.dtype(),
+        expected_dtype);
 }
 
 Tensor accumulation_invoke(
@@ -109,7 +120,7 @@ Tensor accumulation_invoke(
     const int32_t& input_rank = input_shape.rank();
 
     if (optional_out.has_value()) {
-        validate_output_tensor(input_tensor, *optional_out);
+        validate_output_tensor(input_tensor, *optional_out, dtype);
     }
 
     if (input_rank == 0 || input_tensor.logical_volume() == 0) {
@@ -136,6 +147,30 @@ Tensor accumulation_invoke(
     // Normalize negative dim
     const int32_t cum_axis = (dim < 0) ? (dim + input_rank) : dim;
 
+    // Direct-write fast path: when preprocess would be a no-op (no typecast, no rank pad,
+    // no permute required because the scan already runs along a tile axis in place), the
+    // primitive can write straight into the caller's preallocated buffer. This avoids the
+    // temp allocation + ttnn::copy that the fallback path incurs.
+    if (optional_out.has_value()) {
+        const bool dtype_unchanged = !dtype.has_value() || *dtype == input_tensor.dtype();
+        const bool rank_pad_unnecessary = input_rank >= static_cast<int32_t>(FOUR_DIMENSIONS);
+        const bool permute_unnecessary =
+            (input_rank - cum_axis >= static_cast<int32_t>(FOUR_DIMENSIONS)) ||
+            ttnn::prim::is_tile_axis_accumulation(
+                input_tensor, cum_axis, input_tensor.dtype(), reverse_order, op);
+        if (dtype_unchanged && rank_pad_unnecessary && permute_unnecessary) {
+            return ttnn::prim::accumulation(
+                input_tensor,
+                cum_axis,
+                dtype,
+                reverse_order,
+                optional_out,
+                memory_config.has_value() ? memory_config.value() : input_tensor.memory_config(),
+                op,
+                disable_compensation);
+        }
+    }
+
     Tensor wip_tensor = input_tensor;
     ttsl::SmallVector<int64_t> permutation;
     int32_t accumulation_axis;
@@ -152,10 +187,10 @@ Tensor accumulation_invoke(
         disable_compensation);
     wip_tensor = common::postprocess_output_tensor(wip_tensor, cum_axis, permutation, input_shape, input_rank);
     if (optional_out.has_value()) {
-        // TODO(#37807):
-        // This is a temporary fix, the op needs to be refactored to apply the output directly to optional_out,
-        // or pass in optional_out as a reference.
-        optional_out->tensor_attributes->get_storage() = wip_tensor.tensor_attributes->get_storage();
+        if (wip_tensor.buffer() != optional_out->buffer()) {
+            ttnn::copy(wip_tensor, *optional_out);
+        }
+        return *optional_out;
     }
     return wip_tensor;
 }

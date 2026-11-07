@@ -9,6 +9,7 @@
 #include "ttnn/operations/creation/creation.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
+#include "ttnn/operations/data_movement/copy/copy.hpp"
 #include "ttnn/operations/data_movement/fill_pad/fill_pad.hpp"
 #include "ttnn/operations/experimental/reshape/view.hpp"
 #include "ttnn/tensor/types.hpp"
@@ -56,9 +57,37 @@ ttnn::Tensor padded_slice(
     TT_FATAL(memory_config.is_sharded(), "Output Memory Config must be sharded. Use slice for non-sharded outputs.");
     TT_FATAL(!input_tensor.memory_config().is_sharded(), " padded_slice does not support sharded inputs.");
 
+    auto can_land_in_preallocated = [&](const ttnn::Tensor& source) {
+        return optional_output_tensor.has_value() && source.storage_type() == StorageType::DEVICE &&
+               source.layout() == optional_output_tensor->layout() &&
+               source.buffer() != optional_output_tensor->buffer();
+    };
+    auto finalize_into_preallocated = [&](const ttnn::Tensor& result) -> ttnn::Tensor {
+        if (!optional_output_tensor.has_value() || result.storage_type() != StorageType::DEVICE) {
+            return result;
+        }
+        const auto& dst = optional_output_tensor.value();
+        if (result.buffer() == dst.buffer()) {
+            return result;
+        }
+        // Guard against a caller-preallocated out= whose layout differs from the slice
+        // result. ttnn::copy requires matching layouts, so a mismatched preallocation
+        // would fail deep inside copy. Fail up front with a message the caller can act
+        // on. (The alternative — silently returning `result` without copying into the
+        // caller's buffer — reintroduces the stale-preallocated-buffer bug this PR
+        // fixes.)
+        TT_FATAL(
+            result.layout() == dst.layout(),
+            "padded_slice preallocated out= has layout {} but the slice result has layout {}. "
+            "Allocate out= with the same layout as the expected result, or omit out=.",
+            dst.layout(),
+            result.layout());
+        return ttnn::copy(result, dst);
+    };
     auto ret_adjustment([&](const ttnn::Tensor& ret_input_tensor) {
         if (ret_input_tensor.storage_type() == StorageType::DEVICE) {
-            auto tensor = ttnn::to_memory_config(ret_input_tensor, memory_config, std::nullopt);
+            const auto target = can_land_in_preallocated(ret_input_tensor) ? optional_output_tensor : std::nullopt;
+            auto tensor = ttnn::to_memory_config(ret_input_tensor, memory_config, std::nullopt, target);
             tensor = ttnn::to_layout(tensor, input_layout);
             return tensor;
         }
@@ -69,7 +98,7 @@ ttnn::Tensor padded_slice(
     bool rm_input = input_tensor.layout() == Layout::ROW_MAJOR;
     // No-op check
     if (no_step && starts_zero && ends_max && no_pad && rm_input) {
-        return ret_adjustment(input_tensor);
+        return finalize_into_preallocated(ret_adjustment(input_tensor));
     }
 
     // Create modified vectors with wrapped indices and adjust them to match the tensor's rank
@@ -122,6 +151,14 @@ ttnn::Tensor padded_slice(
         TT_FATAL(
             input_tensor.storage_type() == StorageType::DEVICE,
             "Host tensor slice cannot return a scalar or empty tensor");
+        // If the caller preallocated out=, return it instead of allocating a fresh empty
+        // tensor, so out.buffer_address() is preserved. The tensor is empty by shape so
+        // no payload fill is required.
+        if (optional_output_tensor.has_value() &&
+            optional_output_tensor->storage_type() == StorageType::DEVICE &&
+            optional_output_tensor->logical_shape() == actual_shape) {
+            return *optional_output_tensor;
+        }
         return ttnn::empty(
             actual_shape, input_tensor.dtype(), input_tensor.layout(), input_tensor.device(), memory_config);
     }
