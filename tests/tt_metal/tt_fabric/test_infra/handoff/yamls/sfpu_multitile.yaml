@@ -1,0 +1,36 @@
+# Compute payload gen/verify for payloads past one 4 KB tile (split over up to SFPU_PAYLOAD_MAX_TILES Int32 tiles), at
+# the default max packet (4352 B) and with Blackhole's largest packets. Run with TT_FABRIC_TEST_SFPU_PAYLOAD=1
+# TT_FABRIC_TEST_SFPU_VERIFY=1; every test must pass.
+Tests:
+  - name: "SfpuMultiTileLinear"
+    enable_flow_control: true
+    fabric_setup:
+      topology: Linear
+    parametrization_params:
+      ntype:
+        - unicast_write
+        - fused_atomic_inc
+        - {type: unicast_scatter_write, chunks: [2, 4]}
+      size: [4112, 4352]
+    defaults:
+      ftype: unicast
+      num_packets: 10000
+    patterns:
+      - type: all_to_all
+
+  - name: "SfpuMultiTileMesh15K"
+    enable_flow_control: true
+    fabric_setup:
+      topology: Mesh
+      max_packet_size: 15232
+    parametrization_params:
+      ftype: [unicast, mcast]
+      ntype:
+        - unicast_write
+        - fused_atomic_inc
+        - {type: unicast_scatter_write, chunks: 3}
+      size: [4368, 8192, 8208, 12288, 12304, 15232]
+    defaults:
+      num_packets: 10000
+    patterns:
+      - type: all_to_all

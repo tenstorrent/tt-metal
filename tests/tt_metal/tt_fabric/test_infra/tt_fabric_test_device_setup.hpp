@@ -5,11 +5,13 @@
 #pragma once
 
 #include <vector>
+#include <map>
 #include <algorithm>
 #include <unordered_map>
 #include <string>
 #include <string_view>
 #include <memory>
+#include <tuple>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt_metal/fabric/erisc_datamover_builder.hpp>
@@ -29,6 +31,10 @@ const std::string default_receiver_kernel_src =
     "tests/tt_metal/tt_fabric/test_infra/kernels/tt_fabric_test_receiver.cpp";
 const std::string default_sync_kernel_src = "tests/tt_metal/tt_fabric/test_infra/kernels/tt_fabric_test_sync.cpp";
 const std::string default_mux_kernel_src = "tt_metal/fabric/impl/kernels/tt_fabric_mux.cpp";
+const std::string default_payload_gen_kernel_src =
+    "tests/tt_metal/tt_fabric/test_infra/kernels/tt_fabric_test_payload_gen.cpp";
+const std::string default_payload_verify_kernel_src =
+    "tests/tt_metal/tt_fabric/test_infra/kernels/tt_fabric_test_payload_verify.cpp";
 
 using MeshCoordinate = tt::tt_metal::distributed::MeshCoordinate;
 using FabricMuxConfig = tt::tt_fabric::FabricMuxConfig;
@@ -219,7 +225,8 @@ public:
         uint32_t local_args_address,
         uint32_t local_args_capacity_bytes,
         const std::vector<std::pair<size_t, size_t>>& addresses_and_size_to_clear,
-        tt::tt_metal::NOC noc_id = tt::tt_metal::NOC::RISCV_0_default) const;
+        tt::tt_metal::NOC noc_id = tt::tt_metal::NOC::RISCV_0_default,
+        const std::map<std::string, std::string>& extra_defines = {}) const;
     void collect_results();
     virtual bool validate_results(std::vector<uint32_t>& data) const = 0;
     void dump_results();
@@ -397,6 +404,44 @@ public:
 
     std::shared_ptr<IDeviceInfoProvider> get_device_info_provider() const { return device_info_provider_; }
 
+    // Shared kernels (TT_FABRIC_TEST_SHARED_KERNELS): while create_kernels() runs, kernels are collected per key and
+    // created at its end, one kernel per key over all of the key's cores, with each core's own runtime args.
+    struct SharedKernelKey {
+        std::string src;
+        bool compute = false;
+        tt::tt_metal::NOC noc = tt::tt_metal::NOC::RISCV_0_default;
+        std::vector<uint32_t> ct_args;
+        std::map<std::string, std::string> defines;
+        bool operator<(const SharedKernelKey& other) const {
+            return std::tie(src, compute, noc, ct_args, defines) <
+                   std::tie(other.src, other.compute, other.noc, other.ct_args, other.defines);
+        }
+    };
+    bool collecting_shared_kernels() const { return collecting_shared_kernels_; }
+
+    // Host writes from kernel setup (local args, zeroing): issued right away, or recorded while the programs are built
+    // in parallel (TT_FABRIC_TEST_PARALLEL_BUILD) and issued in order by flush_deferred_host_writes().
+    void set_defer_host_writes(bool defer) { defer_host_writes_ = defer; }
+    void write_local_args(
+        const MeshCoordinate& device_coord,
+        tt::tt_metal::CoreCoord logical_core,
+        uint32_t address,
+        const std::vector<uint32_t>& args);
+    void zero_core_region(
+        const MeshCoordinate& device_coord, tt::tt_metal::CoreCoord logical_core, uint32_t address, uint32_t num_bytes);
+    void flush_deferred_host_writes();
+    void add_shared_kernel_core(SharedKernelKey key, tt::tt_metal::CoreCoord core, std::vector<uint32_t> rt_args);
+
+    // The traffic configs of the kernels last created on this device, and how many of them take the core's compute
+    // engine (TT_FABRIC_TEST_SFPU_PAYLOAD / TT_FABRIC_TEST_SFPU_VERIFY) rather than the sender or receiver.
+    struct SfpuCoverage {
+        uint32_t sender_configs = 0;
+        uint32_t generated = 0;
+        uint32_t receiver_configs = 0;
+        uint32_t verified = 0;
+    };
+    const SfpuCoverage& get_sfpu_coverage() const { return sfpu_coverage_; }
+
     // Latency buffer address getters (public so TestContext can query them)
     size_t get_latency_send_buffer_address() const;
     size_t get_latency_receive_buffer_address(uint32_t payload_size) const;
@@ -404,11 +449,26 @@ public:
 private:
     void add_worker(TestWorkerType worker_type, tt::tt_metal::CoreCoord logical_core);
     void create_sender_kernels();
+    // Sets up the sender core's compute engine to generate the payloads of the configs flagged in sfpu_configs (see
+    // tt_fabric_test_payload_gen.cpp) and returns the base of the payload page ring, which caps the sender's own L1 use.
+    uint32_t create_sfpu_payload_generator(
+        const tt::tt_metal::CoreCoord& core, const TestSender& sender, const std::vector<bool>& sfpu_configs);
+    // Sets up the receiver core's compute engine to verify the payloads of the configs flagged in sfpu_configs (see
+    // tt_fabric_test_payload_verify.cpp).
+    void create_sfpu_payload_verifier(
+        const tt::tt_metal::CoreCoord& core, const TestReceiver& receiver, const std::vector<bool>& sfpu_configs);
+    // Gives cores without a payload generator or verifier the CBs one would have (tt_fabric_test_pattern.hpp), as
+    // placeholders at address, so their kernels build the same as on cores with one.
+    void create_sfpu_placeholder_cbs(
+        const std::vector<tt::tt_metal::CoreCoord>& cores,
+        uint32_t address,
+        const std::vector<std::pair<uint8_t, tt::DataFormat>>& cbs);
     void create_receiver_kernels();
     void validate_sender_results() const;
     void validate_receiver_results() const;
     void create_sync_kernel();
     void create_mux_kernels();
+    void create_shared_kernels();
 
     // Registers a connection and resolves its physical channel and peer.
     ConnectionKey register_fabric_connection(
@@ -439,10 +499,28 @@ private:
     tt::tt_metal::CoreCoord sync_core_coord_;
     bool progress_monitoring_enabled_ = false;
 
+    bool collecting_shared_kernels_ = false;
+
+    struct DeferredHostWrite {
+        MeshCoordinate device_coord;
+        tt::tt_metal::CoreCoord logical_core;
+        uint32_t address = 0;
+        uint32_t zero_bytes = 0;      // > 0: zero this many bytes
+        std::vector<uint32_t> args;  // otherwise: write these words
+    };
+    bool defer_host_writes_ = false;
+    std::vector<DeferredHostWrite> deferred_host_writes_;
+    std::map<SharedKernelKey, std::vector<std::pair<tt::tt_metal::CoreCoord, std::vector<uint32_t>>>>
+        shared_kernel_cores_;
+
     // Pristine cores for mux allocation (transferred from allocator)
     std::vector<tt::tt_metal::CoreCoord> pristine_cores_;
 
     bool use_unified_connection_manager_ = false;
+
+    // Backing buffers for the fixed-address payload page rings; must outlive the program.
+    std::vector<std::shared_ptr<tt::tt_metal::distributed::MeshBuffer>> sfpu_payload_buffers_;
+    SfpuCoverage sfpu_coverage_;
 };
 
 }  // namespace tt::tt_fabric::fabric_tests
