@@ -9,6 +9,7 @@ import ttnn
 
 from models.common.lightweightmodule import LightweightModule
 from models.experimental.nomic_embed_text_v2_moe.tt.common import (
+    m_tiles,
     sharded_norm_layout,
     to_device,
     transpose_linear_weight,
@@ -82,8 +83,8 @@ class TtNomicBertMLP(LightweightModule):
         Returns:
             ttnn.Tensor: (B, 1, S, H), via (B, 1, S, F) at the activation.
         """
-        m_tiles = x.shape[0] * ttnn.core.divup(x.shape[-2], ttnn.TILE_SIZE)
-        if m_tiles > self.tt_config.dense_fc1_grouped_min_tiles:
+        rows = m_tiles(x.shape)
+        if rows > self.tt_config.dense_fc1_grouped_min_tiles:
             activated = self.fc1_grouped(x)
         else:
             activated = dense_linear(
@@ -92,7 +93,7 @@ class TtNomicBertMLP(LightweightModule):
         # Above SMALL_M_TILES fc2 (pirotski_matmul) writes norm2's split layout, bit for bit its interleaved output;
         # at or below it the small-M norm-layout program would change fc2's accumulation order, so the norm converts.
         norm_layout = None
-        if m_tiles > SMALL_M_TILES:
+        if rows > SMALL_M_TILES:
             norm_layout = sharded_norm_layout(x.shape, self.tt_config.core_grid)
         out = dense_linear(
             activated, self.fc2_weight, self.fc2_bias, OpGroup.FC2, self.tt_config, live=(x,), norm_layout=norm_layout

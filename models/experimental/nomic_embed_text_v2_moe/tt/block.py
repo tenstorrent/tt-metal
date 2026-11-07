@@ -97,6 +97,7 @@ class TtNomicBertBlock(LightweightModule):
             # The sub-block output has no other reader.
             consume_input=True,
             in_place=in_place,
+            grid=self.tt_config.core_grid,
         )
 
     def forward(

@@ -84,8 +84,11 @@ on real weights and real-text activations:
                        test_ttnn_encoder.py at 2x128. Re-gated on 1k to 16k token inputs
                        (2026-10-27): 4% to 5.5% faster, but mean last-hidden PCC 0.9958 -> 0.9903
                        and the pooled direction error 3.2x on random ids, 2x on real text.
-  dense GELU form      the tanh GELU's fast form, x / (1 + exp(-2u)) (dense_fast_gelu), as the
-                       routed w1 computes it, fused into fc1 at every M (from the packer). 1.6% to
+  dense GELU form      fc1 runs on grouped_matmul at every M (DENSE_FC1_GROUPED_MIN_TILES 0), so
+                       its GELU is the routed polynomial below (DENSE_GELU_FORM 2). Where
+                       dense_fc1_grouped_min_tiles is raised, fc1 below it is a ttnn.linear with
+                       the tanh GELU's fast form, x / (1 + exp(-2u)) (dense_fast_gelu), fused from
+                       the packer; against the accurate tanh form there it measured 1.6% to
                        2.5% of a forward at 1k to 8k tokens, the gain at 1024 tokens from fusing
                        it into the small-M program; on 39 inputs of 1k to 16k tokens mean PCC
                        0.99581 against 0.99580 and the same error tail (2026-10-27).

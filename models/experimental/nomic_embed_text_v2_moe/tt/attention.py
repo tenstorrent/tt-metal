@@ -239,10 +239,13 @@ def _first_fitting_pair(
     budget: int,
 ) -> tuple[int, int] | None:
     """The cheapest pair of sdpa_chunk_candidates, then of the four-way query splits, whose buffers take
-    at most budget bytes a core."""
+    at most budget bytes a core; a masked call on the bfloat16 kernel keeps sdpa_program_config's key chunk
+    of at most 256."""
     candidates = sdpa_chunk_candidates(batch, seqlen, heads, cores, fp32_dest_acc)
     split = sdpa_chunk_candidates(batch, seqlen, heads, cores, fp32_dest_acc, max_query_chunks=4)
     for q_chunk, k_chunk in (*candidates, *(pair for pair in split if pair not in candidates)):
+        if not fp32_dest_acc and mask_dtype is not None and k_chunk > 256:
+            continue
         double_buffered_q = batch * heads * ttnn.core.divup(seqlen, q_chunk) > cores
         footprint = sdpa_circular_buffer_bytes(
             seqlen, q_chunk, k_chunk, head_dim, fp32_dest_acc, mask_dtype, double_buffered_q

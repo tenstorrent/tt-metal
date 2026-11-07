@@ -64,7 +64,7 @@ def flat_input(x: torch.Tensor, device) -> ttnn.Tensor:
 
 @pytest.mark.parametrize("batch, seqlen", TOKEN_SHAPES)
 def test_router_probabilities(device, config, reference, tt_router, batch, seqlen):
-    """The fp32 softmax over the eight experts, before any selection, and exact zeros past them."""
+    """The fp32 softmax over the eight experts, before any selection."""
     x = hidden_states(batch, seqlen, config.hidden_size)
 
     routing, rows = tt_router(flat_input(x, device))
@@ -157,7 +157,8 @@ def test_routing_metadata_from_the_router(device, config, tt_router, batch, seql
     routing, rows = tt_router(flat_input(hidden_states(batch, seqlen, config.hidden_size), device))
     ttnn.deallocate(rows)
     values, indices = selection_of(routing, config.moe_top_k, config.num_experts)
-    topk_values, topk_indices = ttnn.topk(routing.scores, k=config.moe_top_k, dim=-1)
+    # stable=True: routing_metadata breaks exact fp32 ties toward the lower expert, which default topk does not.
+    topk_values, topk_indices = ttnn.topk(routing.scores, k=config.moe_top_k, dim=-1, stable=True)
 
     for token_start, num_tokens in routed_windows(tokens):
         window = dict(num_experts=config.num_experts, token_start=token_start, num_tokens=num_tokens)
