@@ -110,6 +110,34 @@ def test_forward_rejects_mtp_arguments_before_device_work(expect_error, mtp_kwar
         model.forward(object(), **mtp_kwargs)
 
 
+def test_forward_checks_the_index_cache_against_the_config(expect_error):
+    """K3 has no DSA indexer, so an index cache is a wiring mistake; K3.1's DSA layers cannot run without one."""
+    model = object.__new__(TtKimiK3Transformer)
+    model.has_indexer = False
+    with expect_error(ValueError, "no DSA indexer"):
+        model.forward(object(), index_kv_cache=object())
+    model.has_indexer, model.schedule = True, SimpleNamespace(num_mla_layers=1)
+    with expect_error(ValueError, "pass index_kv_cache"):
+        model.forward(object())
+
+
+def test_only_a_dsa_config_takes_a_sparse_kv_cache_format(expect_error):
+    """K3's dense MLA cache cannot take a sparse format; refused before any device work."""
+    from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config, kimi_k3_hf_config
+    from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat
+
+    with expect_error(ValueError, "dense MLA KV cache"):
+        TtKimiK3Transformer(
+            None,
+            kimi_k3_hf_config(),
+            KimiK3Config,
+            {},
+            num_layers=1,
+            seq_len=5120,
+            sparse_kv_cache_format=MlaKvCacheFormat.SCALED_FP8,
+        )
+
+
 def test_runtime_rejects_mtp_before_the_shared_build(monkeypatch, expect_error):
     from models.demos.deepseek_v3_d_p.tt.kimi_k3.runtime import TtKimiK3Runtime
     from models.demos.deepseek_v3_d_p.tt.tt_prefill_runtime import TtPrefillRuntime
