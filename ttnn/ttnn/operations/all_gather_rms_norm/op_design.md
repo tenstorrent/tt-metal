@@ -474,3 +474,39 @@ Helpers considered and rejected (raw_api entries):
 | First call sets up the ready semaphore | a remote ready can race its zero-initialization | blocking initial write or one synchronize at creation, cached per mesh, outside traces |
 | `combine_lookahead` from the base op | a lookahead waits on the next block's landing | off in this op (Stall-shadow check) |
 | Determinism | regression suite checks bit-identical repeats | fixed reduction orders; no arrival-order-dependent arithmetic |
+
+## Phase 0 implementation notes (implementer, measured on QB2 1x4 ring, FABRIC_2D_TORUS_XY, 14 KiB + 64 B payload)
+
+Built as designed: ports (TRANSPORT) with balanced ring / line schedules, ready fence, relay from member L1, one fused
+write + increment per item; slice-nested members, round-robin row groups, per-stream landing notifications; symmetric
+combine (k <= K_SYM_MAX = 8) and the owner combine beyond (base op row-form partial, rotated per block); regime N
+compose. Host placement maps each connection's Ethernet channel to its core (no probe program): on QB2 the union of
+port cores is 8 cores in logical row 0, leaving 102 workers. The split rule picks k = 8 (12 groups, 2 rows per core) for
+640x384 / 640x512 and k = 12 owner (8 groups, 3 rows per core) for 640x1792, as in the table above.
+
+Knob turned from the design's Phase 0 value (both values measured, the knob stays live):
+
+| Knob | Design | Now | Measured (fastest chip, eval harness) |
+|---|---|---|---|
+| `relay_lag` | 1 | **2** | focus 35.25 -> 31.35 us, 640x512 46.13 -> 41.55 us (`ccl_perf compare`: win). Transport-only ablation: lag 1 31.0, 2 26.2, 3 25.9 us |
+
+Breakdown of the focus case at `relay_lag = 2` (ablation hook `AGRMS_ABLATE`, perf probe
+`tests/ttnn/unit_tests/operations/all_gather_rms_norm/perf_ablation_all_gather_rms_norm.py`): full 31.4 us, transport
+only (members load, signal, wait their landings) 25.5-26.2 us, local work only (no transport) 14.7 us, empty program
+0.74 us. The transport binds.
+
+Findings for the refinement queue:
+
+1. TRANSPORT, top item: the ports are packet-rate bound. Device zones show every 4-chunk item taking ~1.6-1.9 us
+   on both port RISCs whether it is 48 KB (own slice, 6-tile packets) or 24 KB (far half, 3-tile packets): about
+   0.45 us per packet, 40 packets per port on the focus case. The lever is fuller packets: the design's lamp "far half
+   split across links by rows" (6-tile packets, 30 packets per port instead of 40), or scatter packets.
+2. OVERLAP: on 640x1792 the design's k = 12 (owner) measures 99.8 us against 87.4 us at k = 8 (symmetric); k = 12
+   symmetric is 100.5 us and k = 16 is 97.1 us, so the cost is k itself (8 groups give 3 rows per core instead of 2, and
+   19-tile members split the 28-tile link ranges into partial packets), not the owner topology. This is the design's
+   lamp "KEEP_UP_FRACTION / cost constants: sweep k* +- one candidate". The rule is kept as designed in Phase 0.
+3. Test infrastructure: under `--dev` (kernel asserts) Blackhole leaves ERISC0 halted at mesh teardown, so every later
+   fabric mesh open in the same process fails (the wrapper's own note; the fabric_all_gather example shows the same).
+   Multi-test runs therefore use production mode; single tests pass under `--dev`.
+
+Sharded inputs / outputs go through sharded `TensorAccessor`s, as the design specifies (`sharded_zero_copy` deferred).

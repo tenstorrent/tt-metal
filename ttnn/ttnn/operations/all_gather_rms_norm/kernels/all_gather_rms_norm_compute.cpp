@@ -33,6 +33,9 @@
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/bcast.h"
 #include "ttnn/cpp/ttnn/kernel_lib/dest_helpers.hpp"
+#include "api/compute/reduce.h"
+#include "api/compute/transpose_dest.h"
+#include "api/compute/matmul.h"
 #ifdef TRISC_MATH
 #include "ckernel_sfpu_sqrt.h"
 #include "sfpu/ckernel_sfpu_converter.h"
@@ -48,6 +51,8 @@ constexpr uint32_t block_row_tiles = get_compile_time_arg_val(2);
 constexpr bool regime_n = get_compile_time_arg_val(3) != 0;
 constexpr uint32_t out_unit = get_compile_time_arg_val(4);
 constexpr uint32_t out_w_tiles = get_compile_time_arg_val(5);
+constexpr bool combine_owner = get_compile_time_arg_val(6) != 0;  // k > K_SYM_MAX: per-row owner combine
+constexpr uint32_t row_gather = get_compile_time_arg_val(7);      // owner: gather tiles per owned row, ceil(k / 32)
 
 // rsqrt(sum * (1/W) + eps) on column 0 of DST[dst] — the reduce() post_reduce_op (base op FinalizeInvRms).
 #ifdef TRISC_MATH
@@ -137,6 +142,79 @@ ALWI void combine_partials_block(uint32_t rows, FinalizeInvRms finalize) {
         ReduceInputMemoryLayout::contiguous(),
         NoAccumulation{},
         finalize);
+}
+
+// ---- Owner combine (k > K_SYM_MAX), ported from the base op (Perf 2 row_partial_mcast). Raw compute API (documented
+// helper bypass, base op): reduce() has no row-form output and no "REDUCE_COL, then DEST transpose, then finalize".
+// collapse_rows_to_row0: per tile-row one FPU matmul ones-row x sumsq^T (unpacker transpose) -> row 0 = the 32 row
+// sums (faces 0/1 row 0), which the writer ships as two face rows into row (m % 32) of the owner's gather tile m / 32.
+ALWI void collapse_rows_to_row0(uint32_t rows) {
+    constexpr uint32_t batch = compute_kernel_lib::DEST_AUTO_LIMIT;
+    cb_wait_front(cb_ones, 1);
+    for (uint32_t r0 = 0; r0 < rows; r0 += batch) {
+        const uint32_t n = (rows - r0) < batch ? (rows - r0) : batch;
+        cb_wait_front(cb_sumsq_tiles, n);
+        cb_reserve_back(cb_partial_sumsq, n);
+        reconfig_data_format(cb_sumsq_tiles, cb_ones);  // srcA = in1 (sumsq), srcB = in0 (ones)
+        pack_reconfig_data_format(cb_partial_sumsq);
+        matmul_init(cb_ones, cb_sumsq_tiles, 1 /*transpose in1*/);
+        tile_regs_acquire();
+        for (uint32_t i = 0; i < n; ++i) {
+            matmul_tiles(cb_ones, cb_sumsq_tiles, 0, i, i);
+        }
+        tile_regs_commit();
+        tile_regs_wait();
+        for (uint32_t i = 0; i < n; ++i) {
+            pack_tile(i, cb_partial_sumsq);
+        }
+        tile_regs_release();
+        cb_push_back(cb_partial_sumsq, n);
+        cb_pop_front(cb_sumsq_tiles, n);
+    }
+}
+
+// combine_rows_block: per owned row, column-reduce its row_gather gather tiles (reduce_tile COL, 1.0 scaler: row 0 =
+// sum over the members), transpose row 0 -> column 0 in DEST, finalize column 0 -> cb_inv_owned.
+ALWI void combine_rows_block(uint32_t owned, FinalizeInvRms finalize) {
+    cb_wait_front(cb_gathered_sumsq, owned * row_gather);
+    cb_wait_front(cb_ones, 1);
+    for (uint32_t j = 0; j < owned; ++j) {
+        cb_reserve_back(cb_inv_owned, 1);
+        reconfig_data_format(cb_gathered_sumsq, cb_ones);  // REDUCE_COL: data -> srcA, scaler -> srcB
+        pack_reconfig_data_format(cb_inv_owned);
+        reduce_init<PoolType::SUM, ReduceDim::REDUCE_COL>(cb_gathered_sumsq, cb_ones, cb_inv_owned);
+        tile_regs_acquire();
+        for (uint32_t g = 0; g < row_gather; ++g) {
+            reduce_tile<PoolType::SUM, ReduceDim::REDUCE_COL>(cb_gathered_sumsq, cb_ones, j * row_gather + g, 0, 0);
+        }
+        reduce_uninit();
+        transpose_dest_init<DST_ACCUM_MODE>();
+        transpose_dest<DST_ACCUM_MODE>(0);
+        finalize(0);
+        tile_regs_commit();
+        tile_regs_wait();
+        pack_tile(0, cb_inv_owned);
+        tile_regs_release();
+        cb_push_back(cb_inv_owned, 1);
+    }
+    cb_pop_front(cb_gathered_sumsq, owned * row_gather);
+}
+
+// owner block: row r of the block (rotation ofs) is owned by member (r + ofs) % k; this member combines its owned rows,
+// and pops the gathered slots of the rows it does not own (uniform per block: lockstep slot addressing on all members).
+ALWI void owner_combine_block(uint32_t rows, uint32_t member_idx, uint32_t ofs, FinalizeInvRms finalize) {
+    constexpr uint32_t k = w_split_cores;
+    const uint32_t r0 = (member_idx + k - ofs) % k;
+    const uint32_t owned = r0 < rows ? (rows - r0 + k - 1) / k : 0;
+    const uint32_t slots = ((rows + k - 1) / k) * row_gather;
+    if (owned > 0) {
+        combine_rows_block(owned, finalize);
+    }
+    const uint32_t unread = slots - owned * row_gather;
+    if (unread > 0) {
+        cb_wait_front(cb_gathered_sumsq, unread);
+        cb_pop_front(cb_gathered_sumsq, unread);
+    }
 }
 
 #ifdef AGRMS_HAS_GAMMA
@@ -229,10 +307,14 @@ ALWI void normalize_streamed(uint32_t i, uint32_t t0, uint32_t n) {
 }
 
 void kernel_main() {
+#if defined(AGRMS_ABLATE_EMPTY) || defined(AGRMS_ABLATE_TRANSPORT)
+    return;
+#endif
     const uint32_t n_rows = get_arg_val<uint32_t>(0);
     const uint32_t core_w = get_arg_val<uint32_t>(1);  // regime A: member width; regime N: landing tiles per row
     const FinalizeInvRms finalize{get_arg_val<uint32_t>(2), get_arg_val<uint32_t>(3)};
     [[maybe_unused]] const uint32_t gamma_pages = get_arg_val<uint32_t>(4);  // cb_gamma pages incl. tail pages
+    [[maybe_unused]] const uint32_t member_idx = get_arg_val<uint32_t>(5);
 
     compute_kernel_hw_startup(cb_x_landing, cb_x_landing, cb_out_tiles);
 
@@ -241,6 +323,9 @@ void kernel_main() {
         sum_squares_block(rows, core_w);
         if constexpr (w_split_cores == 1) {
             collapse_sumsq_block<cb_inv_rms>(rows, finalize);
+        } else if constexpr (combine_owner) {
+            collapse_rows_to_row0(rows);
+            owner_combine_block(rows, member_idx, i0 % w_split_cores, finalize);  // owners rotate per block
         } else {
             collapse_sumsq_block<cb_partial_sumsq>(rows, NoOp{});
             combine_partials_block(rows, finalize);

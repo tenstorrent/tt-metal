@@ -38,7 +38,11 @@ constexpr uint32_t gamma_dram_page_bytes = get_compile_time_arg_val(11);
 constexpr bool regime_n = get_compile_time_arg_val(12) != 0;
 constexpr uint32_t block_row_tiles = get_compile_time_arg_val(13);
 constexpr uint32_t n_groups = get_compile_time_arg_val(14);
-constexpr auto out_args = TensorAccessorArgs<15>();
+constexpr bool combine_owner = get_compile_time_arg_val(15) != 0;  // k > K_SYM_MAX: per-row owner combine
+constexpr uint32_t row_gather = get_compile_time_arg_val(16);      // owner: gather tiles per owned row, ceil(k / 32)
+constexpr uint32_t sem_inv_id = get_compile_time_arg_val(17);      // owner: inv_rms returns arrived
+constexpr uint32_t gathered_cb_pages = get_compile_time_arg_val(18);
+constexpr auto out_args = TensorAccessorArgs<19>();
 [[maybe_unused]] constexpr auto gamma_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
 
 constexpr uint32_t FACE_DIM = 16;
@@ -93,7 +97,119 @@ FORCE_INLINE void send_acc_tile(uint32_t src, uint64_t dst, uint32_t tile_bytes)
     }
 }
 
+// ---- Owner combine (k > K_SYM_MAX), ported from the base op's writer (exchange_send owner branch,
+// owner_wait_partials, owner_return_inv, exchange_recv_inv). Row r of a block (rotation ofs) is owned by member
+// (r + ofs) % k. A member's partial of row r arrives from compute in ROW form (row 0 = its 32 row sums) and ships as
+// two face rows into row (m % 32) of gather tile m / 32 of the owner's slot for r; every member reserves / pushes
+// ceil(rows / k) * row_gather gathered pages per block (lockstep slot base). The owner returns inv_rms of each owned
+// row into slot r of every member's cb_inv_rms (faces 0/2) and bumps their sem_inv.
+constexpr uint32_t TILE_DIM = 32;
+FORCE_INLINE uint32_t gather_row_offset(uint32_t member, uint32_t tile_bytes) {
+    const uint32_t face_bytes = tile_bytes / 4;
+    const uint32_t frow = tile_bytes / 64;  // one 16-datum face row
+    const uint32_t i = member % TILE_DIM;
+    return (member / TILE_DIM) * tile_bytes + (i < FACE_DIM ? i * frow : 2 * face_bytes + (i - FACE_DIM) * frow);
+}
+
+// Rows k % 32 .. 31 of an owned row's LAST gather tile are written by no member: zero them once (local NoC reads of
+// the hardware zeros region). Every block reserves a multiple of row_gather pages and the ring holds a multiple of
+// it, so a last gather tile always sits on a ring page p with p % row_gather == row_gather - 1.
+FORCE_INLINE void zero_fill_range(uint64_t zeros, uint32_t a, uint32_t end) {
+    for (; a < end; a += MEM_ZEROS_SIZE) {
+        noc_async_read(zeros, a, (end - a) < MEM_ZEROS_SIZE ? (end - a) : MEM_ZEROS_SIZE);
+    }
+}
+FORCE_INLINE void zero_unused_gather_rows() {
+    constexpr uint32_t row_unused0 = w_split_cores % TILE_DIM;
+    if constexpr (combine_owner && row_unused0 != 0) {
+        const uint32_t tb = get_tile_size(cb_gathered_sumsq);
+        const uint32_t fb = tb / 4;
+        const uint32_t frow = tb / 64;
+        const uint64_t zeros = get_noc_addr(MEM_ZEROS_BASE);
+        const uint32_t base = get_write_ptr(cb_gathered_sumsq);
+        for (uint32_t p = row_gather - 1; p < gathered_cb_pages; p += row_gather) {
+            const uint32_t tile = base + p * tb;
+            if constexpr (row_unused0 < FACE_DIM) {
+                zero_fill_range(zeros, tile + row_unused0 * frow, tile + fb);
+                zero_fill_range(zeros, tile + fb + row_unused0 * frow, tile + 2 * fb);
+                zero_fill_range(zeros, tile + 2 * fb, tile + 4 * fb);
+            } else {
+                zero_fill_range(zeros, tile + 2 * fb + (row_unused0 - FACE_DIM) * frow, tile + 3 * fb);
+                zero_fill_range(zeros, tile + 3 * fb + (row_unused0 - FACE_DIM) * frow, tile + 4 * fb);
+            }
+        }
+        noc_async_read_barrier();
+    }
+}
+
+struct OwnerExchange {
+    uint32_t peers_idx;
+    uint32_t member_idx;
+    uint32_t sem_addr;
+    uint32_t sem_inv_addr;
+    uint32_t tb;
+    uint32_t partials_expected = 0;
+    uint32_t inv_expected = 0;
+
+    FORCE_INLINE void block(uint32_t rows, uint32_t ofs) {
+        constexpr uint32_t k = w_split_cores;
+        const uint32_t face_bytes = tb / 4;
+        const uint32_t frow = tb / 64;
+        // send: this member's row partials to their owners
+        cb_wait_front(cb_partial_sumsq, rows);
+        const uint32_t src = get_read_ptr(cb_partial_sumsq);
+        const uint32_t slots = ((rows + k - 1) / k) * row_gather;
+        cb_reserve_back(cb_gathered_sumsq, slots);
+        const uint32_t slot_base = get_write_ptr(cb_gathered_sumsq);
+        const uint32_t row_off = gather_row_offset(member_idx, tb);
+        for (uint32_t r = 0; r < rows; ++r) {
+            const uint32_t owner = (r + ofs) % k;
+            const uint32_t j = (r + ofs) / k - (owner < ofs ? 1 : 0);
+            const uint64_t dst = peer_addr(peers_idx, owner, slot_base + j * row_gather * tb + row_off);
+            noc_async_write(src + r * tb, dst, frow);                            // face 0 row 0
+            noc_async_write(src + r * tb + face_bytes, dst + face_bytes, frow);  // face 1 row 0
+        }
+        noc_async_writes_flushed();  // same NoC / VC / destination: the increments land after the data
+        const uint32_t n_owners = rows < k ? rows : k;
+        for (uint32_t r = 0; r < n_owners; ++r) {
+            noc_semaphore_inc(peer_addr(peers_idx, (r + ofs) % k, sem_addr), (rows - r + k - 1) / k);
+        }
+        cb_pop_front(cb_partial_sumsq, rows);
+        // owner: wait for the k partials of every owned row, publish them to compute
+        const uint32_t r0 = (member_idx + k - ofs) % k;
+        const uint32_t owned = r0 < rows ? (rows - r0 + k - 1) / k : 0;
+        partials_expected += owned * k;
+        noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sem_addr), partials_expected);
+        cb_push_back(cb_gathered_sumsq, slots);
+        // owner: return the combined inv_rms of each owned row r into slot r of every member's cb_inv_rms
+        cb_reserve_back(cb_inv_rms, rows);
+        const uint32_t inv_base = get_write_ptr(cb_inv_rms);
+        for (uint32_t jj = 0; jj < owned; ++jj) {
+            const uint32_t r = r0 + jj * k;
+            cb_wait_front(cb_inv_owned, 1);
+            const uint32_t inv_src = get_read_ptr(cb_inv_owned);
+            for (uint32_t m = 0; m < k; ++m) {
+                send_acc_tile(inv_src, peer_addr(peers_idx, m, inv_base + r * tb), tb);
+            }
+            noc_async_writes_flushed();
+            cb_pop_front(cb_inv_owned, 1);
+        }
+        if (owned > 0) {
+            for (uint32_t m = 0; m < k; ++m) {
+                noc_semaphore_inc(peer_addr(peers_idx, m, sem_inv_addr), owned);
+            }
+        }
+        // every member: wait for every row's inv_rms of the block, publish it to compute
+        inv_expected += rows;
+        noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sem_inv_addr), inv_expected);
+        cb_push_back(cb_inv_rms, rows);
+    }
+};
+
 void kernel_main() {
+#if defined(AGRMS_ABLATE_EMPTY) || defined(AGRMS_ABLATE_TRANSPORT)
+    return;
+#endif
     uint32_t a = 0;
     const uint32_t out_addr = get_arg_val<uint32_t>(a++);
     const uint32_t grp = get_arg_val<uint32_t>(a++);
@@ -119,13 +235,17 @@ void kernel_main() {
     [[maybe_unused]] const uint32_t sem_addr = get_semaphore(sem_partials_id);
     [[maybe_unused]] uint32_t partials_expected = 0;
     [[maybe_unused]] const uint32_t acc_tile_bytes = get_tile_size(cb_partial_sumsq);
+    [[maybe_unused]] OwnerExchange owner_x{peers_idx, member_idx, sem_addr, get_semaphore(sem_inv_id), acc_tile_bytes};
+    zero_unused_gather_rows();
 
     uint32_t out_ring_pos = 0;
     for (uint32_t i0 = 0; i0 < n_rows; i0 += block_row_tiles) {
         const uint32_t rows = (n_rows - i0) < block_row_tiles ? (n_rows - i0) : block_row_tiles;
 
         // ---- exchange_partials_block (symmetric all-gather of the k members' partials) ----
-        if constexpr (w_split_cores > 1) {
+        if constexpr (w_split_cores > 1 && combine_owner) {
+            owner_x.block(rows, i0 % w_split_cores);  // owners rotate per block (compute: same ofs)
+        } else if constexpr (w_split_cores > 1) {
             constexpr uint32_t k = w_split_cores;
             cb_wait_front(cb_partial_sumsq, rows);
             const uint32_t src = get_read_ptr(cb_partial_sumsq);

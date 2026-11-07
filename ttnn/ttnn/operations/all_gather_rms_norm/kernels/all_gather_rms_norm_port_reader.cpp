@@ -25,6 +25,9 @@
 using namespace agrms_port;
 
 void kernel_main() {
+#if defined(AGRMS_ABLATE_EMPTY) || defined(AGRMS_ABLATE_LOCAL)
+    return;
+#endif
     constexpr uint32_t page_bytes = get_compile_time_arg_val(0);
     constexpr uint32_t run_pages = get_compile_time_arg_val(1);
     constexpr uint32_t group = get_compile_time_arg_val(2);  // chunk slots per batch (the CB holds 2 x group)
@@ -149,8 +152,12 @@ void kernel_main() {
 
     if (has_out) {
         // the own slice is in the members' landing slots once every local member has loaded it
-        noc_semaphore_wait_min(
-            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(sem_local_loaded_id)), local_loaded_expected);
+        {
+            DeviceZoneScopedN("AG_LOCAL_WAIT");
+            noc_semaphore_wait_min(
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(sem_local_loaded_id)),
+                local_loaded_expected);
+        }
         const uint32_t steps = n_xb + (E_out - 1) * relay_lag;
         const Entry own = out_entry(0);
         for (uint32_t t = 0; t < steps; ++t) {

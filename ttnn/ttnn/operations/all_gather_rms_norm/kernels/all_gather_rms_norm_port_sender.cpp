@@ -38,6 +38,9 @@ inline void route_one_hop(volatile tt_l1_ptr PACKET_HEADER_TYPE* hdr, uint16_t c
 }
 
 void kernel_main() {
+#if defined(AGRMS_ABLATE_EMPTY) || defined(AGRMS_ABLATE_LOCAL)
+    return;
+#endif
     constexpr uint32_t page_bytes = get_compile_time_arg_val(0);
     constexpr uint32_t run_pages = get_compile_time_arg_val(1);
     constexpr uint32_t group = get_compile_time_arg_val(2);
@@ -97,21 +100,26 @@ void kernel_main() {
         hdrs[h] = PacketHeaderPool::allocate_header();
         route_one_hop(hdrs[h], dst_chip_id, dst_mesh_id);
     }
-    conn.open();
-    // Fence between calls: this program running here means every earlier command on this chip is done, so the peer
-    // may now write into my members' L1: say so. Then send nothing until the peer has said the same.
-    if (send_ready) {
-        hdrs[0]->to_noc_unicast_atomic_inc(
-            NocUnicastAtomicIncCommandHeader{get_noc_addr(ready_x, ready_y, ready_addr), 1, true});
-        conn.wait_for_empty_write_slot();
-        conn.send_payload_flush_blocking_from_address(reinterpret_cast<uint32_t>(hdrs[0]), sizeof(PACKET_HEADER_TYPE));
+    {
+        DeviceZoneScopedN("AG_FENCE");  // open + ready out + own ready in
+        conn.open();
+        // Fence between calls: this program running here means every earlier command on this chip is done, so the
+        // peer may now write into my members' L1: say so. Then send nothing until the peer has said the same.
+        if (send_ready) {
+            hdrs[0]->to_noc_unicast_atomic_inc(
+                NocUnicastAtomicIncCommandHeader{get_noc_addr(ready_x, ready_y, ready_addr), 1, true});
+            conn.wait_for_empty_write_slot();
+            conn.send_payload_flush_blocking_from_address(
+                reinterpret_cast<uint32_t>(hdrs[0]), sizeof(PACKET_HEADER_TYPE));
+        }
+        if (chunks_left > 0) {
+            volatile tt_l1_ptr uint32_t* ready = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ready_addr);
+            noc_semaphore_wait_min(ready, 1);
+            noc_semaphore_inc(get_noc_addr(ready_addr), 0u - 1u);
+            noc_async_atomic_barrier();
+        }
     }
     if (chunks_left > 0) {
-        volatile tt_l1_ptr uint32_t* ready = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ready_addr);
-        noc_semaphore_wait_min(ready, 1);
-        noc_semaphore_inc(get_noc_addr(ready_addr), 0u - 1u);
-        noc_async_atomic_barrier();
-
         const uint64_t arrival_noc = get_noc_addr(peer_x, peer_y, get_semaphore(sem_arrival_id), 0);
         uint32_t h = 0, unflushed = 0;
         auto send_item = [&](const Entry& e, uint32_t xb) {

@@ -103,6 +103,9 @@ FORCE_INLINE void compose_tile(uint32_t dst_tile, uint32_t landing_row, uint32_t
 }
 
 void kernel_main() {
+#ifdef AGRMS_ABLATE_EMPTY
+    return;
+#endif
     uint32_t a = 0;
     const uint32_t x_addr = get_arg_val<uint32_t>(a++);
     const uint32_t grp = get_arg_val<uint32_t>(a++);
@@ -123,6 +126,7 @@ void kernel_main() {
     const uint32_t own_lo = w_tile_start > s_lo ? w_tile_start : s_lo;
     const uint32_t own_hi = (w_tile_start + core_w) < s_hi ? (w_tile_start + core_w) : s_hi;
     if (own_lo < own_hi) {
+        DeviceZoneScopedN("AG_OWN_LOAD");
         for (uint32_t i = 0; i < n_rows; ++i) {
             const uint32_t r = grp + i * n_groups;
             uint32_t dst = landing + (i * w_pitch + (own_lo - w_tile_start)) * page_bytes;
@@ -139,19 +143,27 @@ void kernel_main() {
     }
 
     // 1.0 scaler of compute's FPU row collapse
+#ifndef AGRMS_ABLATE_TRANSPORT
     dataflow_kernel_lib::
         calculate_and_prepare_reduce_scaler<cb_ones, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>();
+#endif
 
     [[maybe_unused]] uint32_t aligned_pos = 0;  // cb_x_aligned page position of the write pointer
     for (uint32_t i0 = 0; i0 < n_rows; i0 += block_row_tiles) {
         const uint32_t rows = (n_rows - i0) < block_row_tiles ? (n_rows - i0) : block_row_tiles;
         // ---- await_landing_block ----
-        for (uint32_t s = 0; s < num_streams; ++s) {
-            const uint32_t n_s = get_arg_val<uint32_t>(streams_idx + s);
-            if (n_s != 0) {
-                // stream s notifies on semaphore id s
-                noc_semaphore_wait_min(
-                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(s)), (i0 + rows) * n_s);
+        {
+            DeviceZoneScopedN("AG_LAND_WAIT");  // stall on the transport (occupancy, not cost)
+            for (uint32_t s = 0; s < num_streams; ++s) {
+                const uint32_t n_s = get_arg_val<uint32_t>(streams_idx + s);
+#ifdef AGRMS_ABLATE_LOCAL
+                continue;  // perf probe: no transport
+#endif
+                if (n_s != 0) {
+                    // stream s notifies on semaphore id s
+                    noc_semaphore_wait_min(
+                        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(s)), (i0 + rows) * n_s);
+                }
             }
         }
         if constexpr (regime_n) {
@@ -164,6 +176,9 @@ void kernel_main() {
                 }
             }
         }
+#ifdef AGRMS_ABLATE_TRANSPORT
+        continue;  // perf probe: nothing downstream of the landing
+#endif
         cb_reserve_back(cb_x_landing, rows * w_pitch);
         cb_push_back(cb_x_landing, rows * w_pitch);
 

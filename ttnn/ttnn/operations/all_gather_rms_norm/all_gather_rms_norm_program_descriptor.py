@@ -35,7 +35,8 @@ CB_GAMMA = 1  # gamma slice, compact faces-0/1 row-0 pages
 CB_ONES = 2  # 1.0 reduce scaler
 CB_SUMSQ = 3  # per tile-row sum of x^2
 CB_PARTIAL = 4  # k > 1: per tile-row partial
-CB_GATHERED = 5  # k > 1: the k partials per tile-row
+CB_GATHERED = 5  # k > 1: the k partials per tile-row (owner: row-form gather tiles of the owned rows)
+CB_INV_OWNED = 6  # owner combine: inv_rms of the rows this member owns
 CB_INV_RMS = 7  # per tile-row rsqrt(mean + eps)
 CB_X_ALIGNED = 8  # regime N: composed dense x tiles
 CB_OUT = 9  # normalized output tiles
@@ -46,13 +47,18 @@ BLOCK_ROW_TILES = 1  # tile-rows per block (rows land progressively: one row per
 OUT_UNIT_CAP = 16  # writer / compose unit (tiles)
 OUT_DEPTH = 2  # cb_out_tiles depth in units
 COMPOSE_DEPTH = 2  # cb_x_aligned depth in units (regime N)
-ITEM_MIN_CHUNKS = 4  # chunks per transport item (one fused write + increment per item)
+ITEM_MIN_CHUNKS = int(
+    os.environ.get("AGRMS_ITEM_MIN_CHUNKS", "4")
+)  # (env: perf probes) chunks per transport item (one fused write + increment per item)
 PORT_CB_BYTES = 112 * 1024  # cb_port_chunks bytes (2 batches)
 PORT_GROUP_CAP = 8  # chunks per port batch
-RELAY_LAG = 1  # steps between a relay item's upstream send and its relay (>= 1)
-K_SYM_MAX = 8  # symmetric all-gather of partials up to this k (owner combine beyond: not built, see SPLIT_K_CAP)
-# Owner combine (k > K_SYM_MAX) is not built in Phase 0: candidates are capped at the symmetric range.
-SPLIT_K_CAP = K_SYM_MAX
+RELAY_LAG = int(
+    os.environ.get("AGRMS_RELAY_LAG", "2")
+)  # (env: perf probes) steps between a relay item's upstream send and its relay (>= 1)
+K_SYM_MAX = int(
+    os.environ.get("AGRMS_K_SYM_MAX", "8")
+)  # (env: perf probes) symmetric all-gather of partials up to this k; per-row owner combine beyond (base op)
+ROW_GATHER = 32  # owner combine: members per row-form gather tile (one 32-datum row each)
 OCC_TILES_PER_MEMBER = 4  # member width floor (except the smallest candidate)
 COMBINE_TILE_COST = 3  # per tile-row combine cost (x-tile equivalents), base op
 OWNER_MEMBER_COST = 0.4  # owner combine: per member (x-tile equivalents), base op
@@ -62,6 +68,12 @@ XFER_FIT = {True: (8.4e-6, 77.2e9), False: (9.8e-6, 42.1e9)}  # (fixed s, bytes/
 PARTIAL_FACES_ONLY = True
 GAMMA_READ_ALIGN = 64
 MAX_RUNTIME_ARGS = 341
+# Perf probes only (never set by the op): AGRMS_ABLATE=EMPTY | LOCAL | TRANSPORT stubs one side of the program
+# (kernels/*: AGRMS_ABLATE_*). EMPTY: every kernel returns at once (launch floor). LOCAL: no transport (ports idle,
+# members do not wait for landings). TRANSPORT: members only load, signal and wait for their landings.
+PERF_ABLATE = os.environ.get("AGRMS_ABLATE", "")
+# Test hook only (debug tests pin a split): AGRMS_FORCE_K = k restricts select_split to that candidate.
+FORCE_K = int(os.environ.get("AGRMS_FORCE_K", "0"))
 
 
 def _div_up(a, b):
@@ -434,9 +446,14 @@ def cb_plan(geo: Geometry, sz: Sizes, split: Split):
     if sz.has_gamma:
         plan_[CB_GAMMA] = (out_w + sz.g_tail, sz.T_g)
     if k > 1:
-        depth_g = 2 if split.blocks_max > 1 else 1
         plan_[CB_PARTIAL] = (b, sz.T_acc)
-        plan_[CB_GATHERED] = (depth_g * k * b, sz.T_acc)
+        if split.combine_owner:
+            owned = _div_up(b, k)  # tile-rows a member owns per block
+            plan_[CB_GATHERED] = (owned * _div_up(k, ROW_GATHER), sz.T_acc)  # uniform per block: lockstep slots
+            plan_[CB_INV_OWNED] = (owned, sz.T_acc)
+        else:
+            depth_g = 2 if split.blocks_max > 1 else 1  # lockstep slot reuse (base op mechanism cap)
+            plan_[CB_GATHERED] = (depth_g * k * b, sz.T_acc)
     if geo.regime_n:
         plan_[CB_X_ALIGNED] = (COMPOSE_DEPTH * unit, sz.T_in)
     return plan_
@@ -456,10 +473,10 @@ def select_split(geo: Geometry, sz: Sizes, n_workers: int, budget: int, ring: bo
     S = geo.M * geo.num_images * geo.W_local * sz.T_in / (TILE * TILE)
     t0, rate = XFER_FIT[ring]
     T_xfer = t0 + (geo.G - 1) * S / (rate * L)
-    k_cap = min((MAX_RUNTIME_ARGS - 16) // 2, n_workers, SPLIT_K_CAP)
+    k_cap = min((MAX_RUNTIME_ARGS - 16) // 2, n_workers)  # port reader RT args carry 2k + O(G) values
     fits, keeps = [], []
     for k in nested_candidates(geo):
-        if k > k_cap:
+        if k > k_cap or (FORCE_K and k != FORCE_K):
             continue
         ws = member_ranges(geo, k)
         w_pitch = max(ws[i + 1] - ws[i] for i in range(k))
@@ -607,6 +624,7 @@ def create_mesh_program_descriptor(
     SEM_PARTIALS = n_streams
     SEM_LOCAL_LOADED = n_streams + 1
     SEM_ARRIVAL = n_streams + 2
+    SEM_INV = n_streams + 3  # owner combine: inv_rms returns
 
     all_cores = sorted(set(workers) | port_union, key=lambda c: (c[1], c[0]))
     all_crs = _rects(all_cores)
@@ -617,6 +635,8 @@ def create_mesh_program_descriptor(
     g_page = gamma.buffer_aligned_page_size() if has_gamma else 0
     elem_bytes = datum_bytes(x_dtype)
     defines = [("AGRMS_HAS_GAMMA", "1")] if has_gamma else []
+    ablate = [(f"AGRMS_ABLATE_{PERF_ABLATE}", "1")] if PERF_ABLATE else []
+    defines += ablate
 
     ready_sem = ready_semaphore(mesh_device, port_union)
     ready_addr = int(ttnn.get_global_semaphore_address(ready_sem))
@@ -653,7 +673,9 @@ def create_mesh_program_descriptor(
         SEM_LOCAL_LOADED,
         plan_.get(CB_X_ALIGNED, (0, 0))[0],
     ] + list(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
-    compute_ct = [k, w_pitch, BLOCK_ROW_TILES, 1 if geo.regime_n else 0, unit, geo.out_w_tiles]
+    owner = 1 if split.combine_owner else 0
+    row_gather = _div_up(k, ROW_GATHER)
+    compute_ct = [k, w_pitch, BLOCK_ROW_TILES, 1 if geo.regime_n else 0, unit, geo.out_w_tiles, owner, row_gather]
     writer_ct = [
         out_page,
         geo.out_w_tiles,
@@ -670,6 +692,10 @@ def create_mesh_program_descriptor(
         1 if geo.regime_n else 0,
         BLOCK_ROW_TILES,
         n_groups,
+        owner,
+        row_gather,
+        SEM_INV,
+        plan_.get(CB_GATHERED, (0, 0))[0],
     ]
     writer_ct += list(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
     writer_ct += list(
@@ -687,6 +713,7 @@ def create_mesh_program_descriptor(
         CB_PARTIAL: t_acc,
         CB_GATHERED: t_acc,
         CB_INV_RMS: t_acc,
+        CB_INV_OWNED: t_acc,
         CB_X_ALIGNED: x_dtype,
         CB_OUT: x_dtype,
     }
@@ -694,6 +721,11 @@ def create_mesh_program_descriptor(
 
     hash_key = (
         "all_gather_rms_norm",
+        PERF_ABLATE,
+        FORCE_K,
+        K_SYM_MAX,
+        RELAY_LAG,
+        ITEM_MIN_CHUNKS,
         tuple(input_tensor.shape),
         str(x_dtype),
         str(gamma.dtype) if has_gamma else None,
@@ -723,9 +755,7 @@ def create_mesh_program_descriptor(
             if idx != CB_X_LANDING:
                 cbs.append(_cb(idx, pages, page_bytes, cb_dtype[idx], worker_crs))
         cbs.append(_cb(CB_PORT_CHUNKS, 2 * group * run_pages, T_in, x_dtype, port_crs))
-        semaphores = [
-            ttnn.SemaphoreDescriptor(id=i, core_ranges=all_crs, initial_value=0) for i in range(SEM_ARRIVAL + 1)
-        ]
+        semaphores = [ttnn.SemaphoreDescriptor(id=i, core_ranges=all_crs, initial_value=0) for i in range(SEM_INV + 1)]
         program = ttnn.ProgramDescriptor(kernels=[], semaphores=semaphores, cbs=cbs)
 
         # ---- per-stream counts: entries of the stream arriving at port (d, l) that touch member m ----
@@ -768,7 +798,7 @@ def create_mesh_program_descriptor(
                     own_members += 1
                 streams = [stream_cnt[(d, l)][1][m] for d in DIRS for l in range(L)]
                 reader_rt[x][y] = [x_addr, gi, n_rows, wst, cw, p, len(port_xy)] + port_xy + streams
-                compute_rt[x][y] = [n_rows, cw, inv_w_bits, eps_bits, (out_w if geo.regime_n else cw) + g_tail]
+                compute_rt[x][y] = [n_rows, cw, inv_w_bits, eps_bits, (out_w if geo.regime_n else cw) + g_tail, m]
                 peers = [noc_xy[gi * k + mm] for mm in range(k)]
                 writer_rt[x][y] = [out_addr, gi, n_rows, wst, cw, m, g_addr] + peers
         kernels = [
@@ -840,6 +870,7 @@ def create_mesh_program_descriptor(
                 kernel_source=str(KERNEL_DIR / "all_gather_rms_norm_port_reader.cpp"),
                 core_ranges=port_crs,
                 compile_time_args=reader_port_ct,
+                defines=ablate,
                 runtime_args=preader_rt,
                 common_runtime_args=noc_xy,
                 config=dm(ttnn.DataMovementProcessor.RISCV_1, ttnn.NOC.NOC_0),
@@ -848,6 +879,7 @@ def create_mesh_program_descriptor(
                 kernel_source=str(KERNEL_DIR / "all_gather_rms_norm_port_sender.cpp"),
                 core_ranges=port_crs,
                 compile_time_args=sender_port_ct,
+                defines=ablate,
                 runtime_args=psender_rt,
                 common_runtime_args=noc_xy,
                 config=dm(ttnn.DataMovementProcessor.RISCV_0, ttnn.NOC.NOC_1),
