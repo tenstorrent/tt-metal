@@ -40,8 +40,9 @@ branch ``mvasilijevic/deepseek-v41-prefill``, and of GLM-5.3's sparse MLA, whose
         V4.1's LoudBox rate (7.1 elements/ns per chip), which the 1M bound contradicts;
       - the indexer score program (fused with the index-K ring all-gather) has a fixed per-op cost
         (``INDEX_SCORE_FIXED_NS``) that the collective's 14 us latency below omits: every chip pays a floor of
-        128.2 us at prefix 0 (138.4 at 5,120) while its modelled work doubles; the constant is that floor less the
-        conservative model of the fused pair there (36.7 us). The 30-80 us chip spread above the floor (waiting on
+        197.7 us at prefix 0 (197.9 at 5,120) at HiFi2 while its modelled work nearly doubles; the constant is that
+        floor less the conservative model of the fused pair there (46.6 us). At LoFi the floor was 128.2 us (model
+        36.7 us), so the fixed cost depends on the fidelity (cause not established; tt_metal_tracker-ao3i.2.7). The 30-80 us chip spread above the floor (waiting on
         ring peers) is not a fixed cost and is not modelled.
   * DRAM: 512 GB/s per chip (``ttnn/core/operation.cpp``). Optimistic traffic reads each selected KV row once per
     chip (union of the queries' selections); conservative traffic reads each query's rows with no reuse.
@@ -86,7 +87,7 @@ KVPE_ROW_BYTES = MlaKvCacheGeometry(latent_dim=C.KV_LORA_RANK, rope_dim=C.QK_ROP
 # Measured on K3.1 8x4 (see module docstring), ns: the top-k's identifiable time (bound at 5,120 scores per row; rate
 # not identified), and the fused indexer score's fixed cost (chip floor at prefix 0 minus its conservative model).
 TOPK_NS = 128_400
-INDEX_SCORE_FIXED_NS = 128_200 - 36_700
+INDEX_SCORE_FIXED_NS = 197_700 - 46_600
 STAGES = ((0, 24), (24, 48), (48, 72), (72, 93))  # PP4 layer ranges, half-open, 0-based
 
 
@@ -215,7 +216,7 @@ def dsa_ops(prefix: int, chunk: int = CHUNK, hw: Galaxy8x4 = GALAXY) -> list[OpC
     received = visible * idim * bfp8 * (hw.chips - 1) / hw.chips
     opt, cal = _gather_fabric(received, hw.chips, hw)
     ops.append(OpCost("index_k_gather", dram_bytes=received, fabric_ns=opt, fabric_cons_ns=cal))
-    # Indexer score: relu(q.k) per head, weighted head sum, causal, LoFi bfp8 (GLM-5.3's deployed path).
+    # Indexer score: relu(q.k) per head, weighted head sum, causal, bfp8 at HiFi2 (K3.1's config; GLM-5.3 runs LoFi).
     # Scores are materialized in bf16 for the top-k (the in-tree graph: indexer_score -> topk_large_indices).
     pairs = causal_pairs(last, q)
     width = -(-visible // 32) * 32
@@ -224,7 +225,7 @@ def dsa_ops(prefix: int, chunk: int = CHUNK, hw: Galaxy8x4 = GALAXY) -> list[OpC
         OpCost(
             "index_score",
             matmul_flop=2 * pairs * ih * idim,
-            fidelity="LoFi",
+            fidelity="HiFi2",
             eltwise=pairs * ih * 3,  # relu, weight multiply, head-sum add
             dram_bytes=visible * idim * bfp8 + q * ih * idim * bf16 + scores,
             fixed_ns=INDEX_SCORE_FIXED_NS,
