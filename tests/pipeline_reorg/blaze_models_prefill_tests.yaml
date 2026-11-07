@@ -35,7 +35,7 @@
 #   test_group: Group identifier for selecting multiple related tests at once.
 #   test_tags: Optional list of coarse selectors for workflow_dispatch, matched exactly and
 #              OR-ed with test_type / test_group. Two vocabularies in one list: the model a
-#              leg covers (kimi_k2_7, kimi_k3, glm_5_3, dsv4_flash, dsv4_pro, minimax_m3)
+#              leg covers (kimi_k2_7, kimi_k3, kimi_k3_1, glm_5_3, dsv4_flash, dsv4_pro, minimax_m3)
 #              and the unit under test (moe, gate, mla, hca, swa, csa, sdpa, ccl, block, transformer,
 #              kv_cache, dflash, mtp, runner, determinism). So `moe` runs every MoE leg and `kimi_k3`
 #              every K3 leg. Multiple tokens UNION, they do not intersect: `moe,kimi_k3` is every MoE
@@ -304,7 +304,7 @@
   # galaxy allocations were spending ~22 min of setup to run ~7 min of tests. Measured test-step
   # times on run 36717057668: 77 / 150 / 114 / 92 s.
   #
-  # fabric_profile torus_xy is required by [2/4]..[4/4]. [1/4] is host-only -- no mesh device, no
+  # fabric_profile torus_xy is required by [2/5]..[5/5]. [1/5] is host-only -- no mesh device, no
   # fabric -- and rides along for free rather than paying its own setup. It keeps its mpirun wrapper:
   # the runner's container hook drives the step through its host-execution path and does not handle
   # a bare command (it failed 4 runs out of 4, 0 s in, before pytest ran).
@@ -380,23 +380,35 @@
       '
     )
 
-    echo "===== [1/4] (Kimi-K3-2.8T) golden-contract, layer-schedule, cache and KV-ack gates ====="
+    # K3.1's counterpart of [3/5]: its 24 full-attention layers are Gated DSA, so K3's MLA chunked tests become
+    # test_sparse_mla.py's kimi_k3_1 8x4 matrix vs MLACPU (8 tests, random weights + on-the-fly CPU truth).
+    # Measured 4.4 min pytest time on bh-glx-110-c10u14 (2026-11-07). Last, so a K3.1 failure masks no K3 section.
+    k31_dsa_mla() (
+      timeout -k 2m 12m mpirun --bind-to none --pernode --tag-output bash -lc '
+        export OMP_NUM_THREADS=$(nproc)
+        python3 -m pytest models/demos/deepseek_v3_d_p/tests/sparse_mla/test_sparse_mla.py -k "kimi_k3_1 and shape-8x4" -vvv --tb=short
+      '
+    )
+
+    echo "===== [1/5] (Kimi-K3-2.8T) golden-contract, layer-schedule, cache and KV-ack gates ====="
     k3_contracts || exit $?
-    echo "===== [2/4] (Kimi-K3-2.8T) KDA accuracy, determinism 5k SP8xTP4 + SP ops + layer-1 real weights ====="
+    echo "===== [2/5] (Kimi-K3-2.8T) KDA accuracy, determinism 5k SP8xTP4 + SP ops + layer-1 real weights ====="
     k3_kda || exit $?
-    echo "===== [3/4] (Kimi-K3-2.8T) MLA chunked accuracy 10k@5k + determinism 5k@5k ====="
+    echo "===== [3/5] (Kimi-K3-2.8T) MLA chunked accuracy 10k@5k + determinism 5k@5k ====="
     k3_mla || exit $?
-    echo "===== [4/4] (Kimi-K3-2.8T) MLA chunked accuracy 55k@5k vs golden trace ====="
+    echo "===== [4/5] (Kimi-K3-2.8T) MLA chunked accuracy 55k@5k vs golden trace ====="
     k3_mla_trace || exit $?
-    echo "===== all 4 sections passed ====="
+    echo "===== [5/5] (Kimi-K3.1) sparse MLA accuracy, chunked 5k@1k, pad overflow, determinism ====="
+    k31_dsa_mla || exit $?
+    echo "===== all 5 sections passed ====="
   test_type: k3_accuracy_suite
   # Per-section tokens retained: `-f test-type=<old token>` still selects this job.
-  test_tags: [kimi_k3, kda, mla, determinism, k3_contracts, k3_kda, k3_mla, k3_mla_trace]
+  test_tags: [kimi_k3, kimi_k3_1, kda, mla, determinism, k3_contracts, k3_kda, k3_mla, k3_mla_trace, k31_dsa_mla]
   test_group: module
   skus:
     bh_sc1:
-      # Exactly the sum of the per-section bounds (12 + 18 + 12 + 12).
-      timeout: 54
+      # Exactly the sum of the per-section bounds (12 + 18 + 12 + 12 + 12).
+      timeout: 66
       tier: 2
       release_ready: false
   owner_id: U0ACLAM77PS  # Kosta Grujcic
@@ -542,6 +554,68 @@
       tier: 2
       release_ready: false
   owner_id: U0ACLAM77PS  # Kosta Grujcic
+  team: models
+  budget_type: demo
+  sp_config: sc1
+
+- name: "(Kimi-K3.1) synthetic-weight DSA block, chunked prefill, depth L24 and pipeline split"
+  # K3.1 = K3 with Gated DSA on its 24 full-attention layers, run through K3's stack. No K3.1 golden yet, so
+  # these are the K3.1 variants of K3's transformer tests on synthetic weights (tests/kimi_k3/synthetic.py,
+  # dense-FFN stand-in on every layer): no checkpoint, no TTNN cache, no trace. `-k kimi_k3_1` selects the
+  # K3.1 variants; the same tests' kimi_k3 variants are K3's synthetic baseline and are not run here, since
+  # K3 is gated against its golden in the suites above. Measured on bh-glx-110-c10u14 (2026-11-07), pytest
+  # time per section incl. synthetic weight generation: DSA block 4 windows ~4.5 min, chunked ~1.5 min,
+  # depth L24 ~6 min, split ~6-7.5 min (~18-19.5 min), plus the job's ~5.5 min "Setup multihost job".
+  # Adds 50 min (its timeout) to models/demo/bh_sc1.
+  cmd: |
+    # Stops at the first failure, as the suites above.
+    k31_dsa_block() (
+      timeout -k 2m 12m mpirun --bind-to none --pernode --tag-output bash -lc '
+        export OMP_NUM_THREADS=$(nproc)
+        python3 -m pytest models/demos/deepseek_v3_d_p/tests/kimi_k3/test_kimi_k3_1_dsa_block.py -vvv --tb=short
+      '
+    )
+
+    k31_chunked_prefill() (
+      timeout -k 2m 8m mpirun --bind-to none --pernode --tag-output bash -lc '
+        export OMP_NUM_THREADS=$(nproc)
+        python3 -m pytest models/demos/deepseek_v3_d_p/tests/kimi_k3/test_chunked_prefill.py::test_synthetic_chunked_prefill_carries_state -k "kimi_k3_1" -vvv --tb=short
+      '
+    )
+
+    k31_transformer_depth() (
+      timeout -k 2m 15m mpirun --bind-to none --pernode --tag-output bash -lc '
+        export OMP_NUM_THREADS=$(nproc)
+        python3 -m pytest models/demos/deepseek_v3_d_p/tests/kimi_k3/test_transformer_depth.py::test_synthetic_depth_writes_every_slot -k "kimi_k3_1" -vvv --tb=short
+      '
+    )
+
+    k31_pipeline_split() (
+      timeout -k 2m 15m mpirun --bind-to none --pernode --tag-output bash -lc '
+        export OMP_NUM_THREADS=$(nproc)
+        python3 -m pytest models/demos/deepseek_v3_d_p/tests/kimi_k3/test_transformer_pipeline_split.py::test_synthetic_split_matches_undivided -k "kimi_k3_1" -vvv --tb=short
+      '
+    )
+
+    echo "===== [1/4] (Kimi-K3.1) DSA block windows, finite and deterministic ====="
+    k31_dsa_block || exit $?
+    echo "===== [2/4] (Kimi-K3.1) chunked prefill L4, 4 chunks to an unaligned end ====="
+    k31_chunked_prefill || exit $?
+    echo "===== [3/4] (Kimi-K3.1) depth L24, every cache slot its own ====="
+    k31_transformer_depth || exit $?
+    echo "===== [4/4] (Kimi-K3.1) pipeline split at layer 12 vs undivided ====="
+    k31_pipeline_split || exit $?
+    echo "===== all 4 sections passed ====="
+  test_type: k31_transformer_suite
+  test_tags: [kimi_k3_1, transformer, k31_dsa_block, k31_chunked_prefill, k31_transformer_depth, k31_pipeline_split]
+  test_group: module
+  skus:
+    bh_sc1:
+      # Exactly the sum of the per-section bounds (12 + 8 + 15 + 15).
+      timeout: 50
+      tier: 2
+      release_ready: false
+  owner_id: U0ACLAM77PS  # Kosta Grujcic, K3's suite owner; K3.1's owner to be confirmed
   team: models
   budget_type: demo
   sp_config: sc1
