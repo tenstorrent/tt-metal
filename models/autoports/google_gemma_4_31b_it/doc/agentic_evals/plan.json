@@ -2487,7 +2487,7 @@
       "workflow": "evals",
       "retention_enabled": true,
       "arm": "gpqa20-c8-expanded-pool-comparison",
-      "status": "device_job_in_progress",
+      "status": "completed_valid_comparison_unselected",
       "planned_clients": 8,
       "tti_sha": "7ad6cf50d160a2e9cbe007fc4475af3c8f8bf365",
       "tt_metal_sha": "4b7d9a3b4142dff5e8dd804438d6c42d9626bdcc",
@@ -2518,17 +2518,29 @@
       "run_id": 42293808766,
       "submitted_at": "2026-11-06T21:05:26Z",
       "url": "https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/42293808766",
-      "workflow_status": "in_progress",
-      "workflow_conclusion": null,
-      "last_observed_at": "2026-11-06T22:49:02.353324+00:00",
+      "workflow_status": "completed",
+      "workflow_conclusion": "success",
+      "last_observed_at": "2026-11-06T23:54:54.198528+00:00",
       "build_runner": "tt-ubuntu-2204-large-stable-44qvs-runner-wlxtq",
       "build_started_at": "2026-11-06T21:05:42Z",
       "build_completed_at": "2026-11-06T21:59:13Z",
       "runner": "120-qb2-p04t05",
       "device_job_id": 128178892453,
       "device_job_started_at": "2026-11-06T21:59:15Z",
-      "device_job_completed_at": null,
-      "start": "2026-11-06T21:59:15Z"
+      "device_job_completed_at": "2026-11-06T23:53:53Z",
+      "start": "2026-11-06T21:59:15Z",
+      "end": "2026-11-06T23:53:53Z",
+      "exit_status": 0,
+      "actual_hours": 1.9105555555555556,
+      "actual_hours_basis": "CI device job including setup/server/client; evaluation time separate",
+      "workflow_wall_hours": 2.807777777777778,
+      "audit": "runs/gpqa20-c8-expanded-pool-comparison/audit.json",
+      "eval_hours": 1.7869831844653365,
+      "score": 0.8,
+      "score_wilson95": [
+        0.5839825677481064,
+        0.919342337420202
+      ]
     },
     {
       "arm": "larger-gpqa40-c4-response-logging",
@@ -2631,7 +2643,7 @@
       "url": "https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/42296943044",
       "workflow_status": "in_progress",
       "workflow_conclusion": null,
-      "last_observed_at": "2026-11-06T22:49:18.139391+00:00",
+      "last_observed_at": "2026-11-06T23:55:07.144988+00:00",
       "runner": "qb2-120-p05t02",
       "device_job_id": 128164656843,
       "device_job_started_at": "2026-11-06T21:28:17Z",
@@ -2698,7 +2710,7 @@
       "device": "qb2-ci",
       "eval": "r1_gpqa_diamond",
       "workflow": "evals",
-      "status": "building_or_queued",
+      "status": "device_job_in_progress",
       "planned_clients": 2,
       "configured_concurrency_ceiling": 4,
       "batch": 8,
@@ -2734,10 +2746,15 @@
       "url": "https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/42302118669",
       "workflow_status": "in_progress",
       "workflow_conclusion": null,
-      "last_observed_at": "2026-11-06T22:49:27.452334+00:00",
+      "last_observed_at": "2026-11-06T23:55:16.672564+00:00",
       "build_runner": "tt-ubuntu-2204-large-stable-44qvs-runner-hzfl4",
       "build_started_at": "2026-11-06T22:06:53Z",
-      "build_completed_at": null
+      "build_completed_at": "2026-11-06T23:02:56Z",
+      "runner": "120-qb2-p04t05",
+      "device_job_id": 128205993830,
+      "device_job_started_at": "2026-11-06T23:53:54Z",
+      "device_job_completed_at": null,
+      "start": "2026-11-06T23:53:54Z"
     },
     {
       "arm": "hex-runtime-benchmark",
@@ -2807,10 +2824,103 @@
       "actual_hours": 0.07722610789111867,
       "exit_status": 0,
       "audit": "runs/hex-runtime-benchmark/RESULT.json"
+    },
+    {
+      "eval": "r1_gpqa_diamond",
+      "workflow": "evals",
+      "device": "qb2-ci",
+      "batch": 8,
+      "max_num_seqs": 8,
+      "task_count": 40,
+      "tasks": [
+        152,
+        189,
+        46,
+        87,
+        52,
+        181,
+        31,
+        185,
+        50,
+        187,
+        153,
+        135,
+        81,
+        93,
+        7,
+        42,
+        24,
+        168,
+        20,
+        28,
+        13,
+        94,
+        61,
+        15,
+        123,
+        160,
+        27,
+        29,
+        90,
+        127,
+        121,
+        188,
+        136,
+        174,
+        184,
+        9,
+        80,
+        102,
+        182,
+        173
+      ],
+      "vllm_sha": "ca7a18246e4111629ed6cb4a7d1192002749fccf",
+      "implementation": "gemma4-31b-autoport-v3",
+      "request_timeout_seconds": 14400,
+      "max_output_tokens": 126976,
+      "run_timeout_hours": 12,
+      "job_timeout_hours": 18,
+      "arm": "gpqa40-c8-saturation-comparison",
+      "owner": "local_serving_check",
+      "status": "prepared_waiting_image_confirmation",
+      "prepared_at": "2026-11-07T00:03:00.546412+00:00",
+      "planned_clients": 8,
+      "batch_reason": "Smallest validated batch at or above8; expandedpool C8 capacity and exactscored20 confirmed; C4 remains selected outside this experimental arm",
+      "pool_ids": 20480,
+      "tt_metal_sha": "eef534e5cd6bcaf37957647de4d8d4eff4f0e047",
+      "tti_sha": "e5a9a7638a1f46f22c0d89acf2ac333da5d53c02",
+      "docker_image": "ghcr.io/tenstorrent/tt-agentic-bringup-qb2/vllm-tt-metal-src-dev-ubuntu-22.04-amd64@sha256:bf1ada4081f7fa338ed8495a02324390d3b6124861cd625a0d2fb2d6a255d425",
+      "predicted_hours": 4.566983184465337,
+      "predicted_device_hours": 3.6975387400208923,
+      "device_box_hours": 4.5,
+      "projection": {
+        "C8_twenty_eval_hours": 1.7869831844653365,
+        "multiplier": 2,
+        "measured_device_overhead": 0.12357237109021901,
+        "latest_observed_queue_hours": 0.8494444444444444,
+        "logging_overhead_hours_guess": 0.02,
+        "full_request_tail_reserve_hours": 4,
+        "sensitivity_with_tail_hours": 8.566983184465338,
+        "basis": "Linear same20 currentC8 measurement plus actualsetup/queue and loggingguess; not promised speed gain"
+      },
+      "task_resources": "Stock HTTP-only lm-eval; no task sandboxes or task CPU/memory override",
+      "cohort_source": "cohorts.json default_rule registered40, identical to normal40",
+      "prerequisite_audit": "runs/gpqa20-c8-expanded-pool-comparison/audit.json",
+      "baseline_run_id": 42296943044,
+      "source_publication": "runs/c8-forty-preparation/publication.json",
+      "response_logging": {
+        "debug": true,
+        "enable_log_requests": true,
+        "max_log_len": 0,
+        "stream": false,
+        "static_config": "models/autoports/google_gemma_4_31b_it/tt/native_logging.json"
+      },
+      "scope": "Optional scored saturation comparison, not release or selection ofC8. Normal80 never waits.",
+      "plan": "runs/gpqa40-c8-saturation-comparison/plan.md"
     }
   ],
   "status": "SWE5_completed_validity_audit_GPQA20_repair_building",
-  "last_updated": "2026-11-06T22:54:36.831293+00:00",
+  "last_updated": "2026-11-07T00:03:00.546412+00:00",
   "stop_reason": null,
   "actual_runs": [],
   "continuations": [
@@ -2855,6 +2965,29 @@
       "run_id": 42166175324,
       "submission_to_build_start_seconds": 607.0,
       "basis": "Includes preliminary resolver jobs plus build-runner queue; not device/suite time."
+    },
+    {
+      "run_id": 42302118669,
+      "observed_at": "2026-11-06T23:33:55.302659+00:00",
+      "device_job_id": 128205993830,
+      "state": "queued",
+      "queue_hours_lower_bound": 0.5164729608333333,
+      "basis": "Elapsed since build completion; not final queue duration",
+      "original_queue_guess_hours": 0.5,
+      "device_hours_so_far": 0,
+      "current_workflow_lower_projection_hours": 1.633596914262798,
+      "projection_limitation": "Assumes runner starts now; no upper queue bound"
+    },
+    {
+      "run_id": 42302118669,
+      "device_job_id": 128205993830,
+      "runner": "120-qb2-p04t05",
+      "queue_hours_after_build": 0.8494444444444444,
+      "started_at": "2026-11-06T23:53:54Z",
+      "original_queue_guess_hours": 0.5,
+      "basis": "Actual interval build completion to device-job start",
+      "revised_workflow_projection_hours": 1.966568397873909,
+      "remaining_device_time_basis": "Original calculated smoke2 plus .02h logging allowance; not yet measured"
     }
   ],
   "measured_runs": [
@@ -3579,6 +3712,21 @@
       "ended_at": "2026-11-06T22:48:28.921214+00:00",
       "evidence": "runs/hex-runtime-benchmark/RESULT.json",
       "status": "valid_complete"
+    },
+    {
+      "arm": "gpqa20-c8-expanded-pool-comparison",
+      "run_id": 42293808766,
+      "planned_clients": 8,
+      "batch": 8,
+      "device_job_hours": 1.9105555555555556,
+      "workflow_wall_hours": 2.807777777777778,
+      "predicted_workflow_hours": 3.2087288868306616,
+      "workflow_conclusion": "success",
+      "eval_hours": 1.7869831844653365,
+      "score": 0.8,
+      "audit": "runs/gpqa20-c8-expanded-pool-comparison/audit.json",
+      "valid": true,
+      "selected": false
     }
   ],
   "local_idle_intervals": [
@@ -3774,35 +3922,29 @@
     "image": "ghcr.io/tenstorrent/tt-agentic-bringup-qb2/vllm-tt-metal-src-dev-ubuntu-22.04-amd64@sha256:0696f29a1d233f318ce3003ca80bdef304e03b91111f110b8eba694af62c767d"
   },
   "active_runs": [
-    42273660905
+    42296943044,
+    42302118669
   ],
   "latest_live_progress": {
-    "gpqa20_retained": {
-      "observed_at": "2026-11-06T17:33:15.300990+00:00",
-      "log_through": "2026-11-06T17:28:09Z",
-      "reported_completed": 14,
-      "tasks": 20,
-      "progress_elapsed_seconds": 1492,
-      "eval_projection_hours": 0.5920634920634921,
-      "full_request_tail_hours": 4,
-      "setup_allowance_hours": 0.15,
-      "queue_margin_hours": 0.5,
-      "projected_hours": 5.242063492063492,
-      "max_observed_active_rows": 4,
-      "decision": "continue",
-      "qualification": "Censored completion-rate projection; full4h tail retained. No score or loop classification claimed.",
-      "evidence": "bringup/artifacts/stage12-gpqa20-c4-retained-current.log"
+    "observed_at": "2026-11-06T23:08:57.977077+00:00",
+    "gpqa40": {
+      "run_id": 42296943044,
+      "last_published_event": "2026-11-06T23:05:27.6437824Z",
+      "last_counter": "4/40 at evaluation elapsed1:25:09",
+      "active_rows": 4,
+      "status": "running; counters may lag; no new score/projection"
     },
-    "swe5_retained": {
-      "observed_at": "2026-11-06T17:33:15.300990+00:00",
-      "eval_started_at": "2026-11-06T17:10:48.5545018Z",
-      "device_started_at": "2026-11-06T16:47:23Z",
-      "device_setup_hours": 0.39043180555555557,
-      "build_hours": 0.8863888888888889,
-      "projection_hours": 8.89957597861111,
-      "max_observed_active_rows": 2,
-      "evidence": "bringup/artifacts/stage12-swe-decode-current.log",
-      "qualification": "Harbor launch timestamp; subsequent decode proves serving active. Replaces premature cold-compilation-only description. Runtime clocks unmeasured; startup800MHz warning retained separately."
+    "gpqa20_c8": {
+      "run_id": 42293808766,
+      "last_published_event": "2026-11-06T23:08:39.3358797Z",
+      "last_counter": "17/20",
+      "active_rows": 2,
+      "status": "running; no scored acceptance"
+    },
+    "native_log_confirmation": {
+      "run_id": 42302118669,
+      "device_job_id": 128205993830,
+      "status": "queued; build complete .9341667h"
     }
   },
   "current_runtime_benchmark": {
@@ -4201,10 +4343,11 @@
     "reason": "Accepted source benchmark complete; no new device experiment admitted while CI rungs measure release workload"
   },
   "next_rung_admission_policy": {
-    "updated_at": "2026-11-06T17:48:16.171357+00:00",
-    "normal_rung": "Use measured aggregate completed current-rung wall time scaled by nested task count, measured setup and queue, explicit uncertainty; require projection before firstdry hour22. Track actual progress and stop nonfit. Do not promise full-tail worst-case completion from an average.",
+    "updated_at": "2026-11-06T23:06:29.089061+00:00",
+    "normal_rung": "Use measured aggregate completed current-rung wall time scaled by nested task count, measured setup and queue, explicit uncertainty; require projection before first dry at stage hour32. Track actual progress and stop nonfit. Do not promise full-tail worst-case completion from an average.",
     "release": "Additionally include full agent/request slow-tail allowance with margin within12h; frozen lastvalidlist only.",
-    "reason": "Distinguish measured normal-rung forecast from conservative release tail budget; no outputlimit reduction or score-directed task choice."
+    "reason": "Distinguish measured normal-rung forecast from conservative release tail budget; no outputlimit reduction or score-directed task choice.",
+    "next_cohort": "80 only after valid40 and updated measured projection; no wait for optionalC8 comparison. Select C8 only after its scored acceptance, otherwise C4."
   },
   "artifact_repair_schedule": {
     "recorded_at": "2026-11-06T18:35:33.107774+00:00",
@@ -4428,5 +4571,57 @@
       }
     ],
     "admission": "Held; preceding rung must be valid and projected runtime/stage schedule must fit; C8 needs scored acceptance"
+  },
+  "retention_size_projection": {
+    "updated_at": "2026-11-06T23:41:44.614188+00:00",
+    "basis": "Measured repaired20 current retained-runtime raw JSONL, linear per-task extrapolation; replaces historical unretained-work proxy for planning only",
+    "source": "runs/larger-gpqa20-c4-retention-retry/audit.json",
+    "measured_tasks": 20,
+    "measured_raw_bytes": 134557575,
+    "phase_file_cap_bytes": 4294967296,
+    "cohorts": [
+      {
+        "tasks": 40,
+        "projected_raw_bytes": 269115150.0,
+        "fraction_of_cap": 0.06265825359150767
+      },
+      {
+        "tasks": 80,
+        "projected_raw_bytes": 538230300.0,
+        "fraction_of_cap": 0.12531650718301535
+      },
+      {
+        "tasks": 160,
+        "projected_raw_bytes": 1076460600.0,
+        "fraction_of_cap": 0.2506330143660307
+      },
+      {
+        "tasks": 198,
+        "projected_raw_bytes": 1332119992.5,
+        "fraction_of_cap": 0.310158355277963
+      }
+    ],
+    "limitations": [
+      "Not an upper bound: unseen cohort work and active concurrency change bytes per task",
+      "Does not include full-response hex logs, duplicate archives, weights or dataset storage",
+      "Does not establish runner filesystem free space or reserve",
+      "Replace basis after each completed larger rung before admission; never reduce output limits"
+    ]
+  },
+  "held_c8_forty": {
+    "candidate": "e5a9a7638a1f46f22c0d89acf2ac333da5d53c02",
+    "parent": "483509781a0898395208fe0fdc14f54eb3ff8857",
+    "c4_eighty_descendant": "9b4b88c0ac2762d75e824818ec7428c594dba0f0",
+    "c8_eighty_descendant": "14615c6c0e5589dd6cd235e872252f8715046704",
+    "evidence": "runs/c8-forty-preparation/RESULT.json",
+    "admitted": false,
+    "rule": "Only if completed20 work/timing justifies optional scored40 with separately ranked box. Never delay normal80; original80 candidates remain valid if normal80 publishes first."
+  },
+  "c8_twenty_disposition": {
+    "capacity_kept": true,
+    "selected": false,
+    "same20_slower_percent": 14.862358471371294,
+    "evidence": "runs/gpqa20-c8-expanded-pool-comparison/audit.json",
+    "next": "Separate40 experiment planned; normal40/80 proceed onC4 independently"
   }
 }

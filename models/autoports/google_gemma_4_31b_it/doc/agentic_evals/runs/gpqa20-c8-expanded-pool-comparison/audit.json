@@ -1,0 +1,530 @@
+{
+  "run_id": 42293808766,
+  "status": "completed_valid_twenty_comparison_speed_gain_not_demonstrated",
+  "score": {
+    "name": "r1_gpqa_diamond exact_match",
+    "value": 0.8,
+    "correct": 16,
+    "completed_samples": 20,
+    "dataset_samples": 198,
+    "scope": "subset",
+    "wilson95": [
+      0.5839825677481064,
+      0.919342337420202
+    ],
+    "published_reference_percent": 84.3,
+    "gpu_reference_percent": 83.33,
+    "score_gate": false
+  },
+  "runtime": {
+    "tt_metal_sha": "4b7d9a3b4142dff5e8dd804438d6c42d9626bdcc",
+    "tti_sha": "7ad6cf50d160a2e9cbe007fc4475af3c8f8bf365",
+    "plugin_sha": "ca7a18246e4111629ed6cb4a7d1192002749fccf",
+    "image_digest": "sha256:979802869694a2eabe132506325de6476c228ea75c20797b4ab2559f7a2487e2",
+    "full_layers": 60,
+    "adapter_module": "/home/container_app_user/tt-metal/models/autoports/google_gemma_4_31b_it/tt/generator_vllm.py",
+    "planned_clients": 8,
+    "batch": 8,
+    "max_num_seqs": 8,
+    "max_observed_active_rows": 8,
+    "pool_ids": 20480,
+    "synthetic_token_budget": 589568,
+    "context": 262144
+  },
+  "cohort": {
+    "configured_ids": [
+      152,
+      189,
+      46,
+      87,
+      52,
+      181,
+      31,
+      185,
+      50,
+      187,
+      153,
+      135,
+      81,
+      93,
+      7,
+      42,
+      24,
+      168,
+      20,
+      28
+    ],
+    "semantic_dataset_ids": [
+      7,
+      20,
+      24,
+      28,
+      31,
+      42,
+      46,
+      50,
+      52,
+      81,
+      87,
+      93,
+      135,
+      152,
+      153,
+      168,
+      181,
+      185,
+      187,
+      189
+    ],
+    "semantic_binding": "Complete official sample document/prompt hashes equal baseline; actual index follows pinned membership-selection ordering, not logged unsorted labels. Physical chains joined through remap+position continuity and unique pinned-tokenizer prompt lengths.",
+    "all_twenty_hashes_and_visible_responses_identical": true
+  },
+  "limits": {
+    "model_args": {
+      "model": "google/gemma-4-31B-it",
+      "base_url": "http://127.0.0.1:8000/v1/chat/completions",
+      "tokenizer_backend": "huggingface",
+      "max_length": 262080,
+      "timeout": 14400,
+      "revision": "842da3794eaa0b77d5f08bae87a17459d91ff475",
+      "num_concurrent": 8,
+      "trust_remote_code": true
+    },
+    "generation": {
+      "stream": false,
+      "max_gen_toks": 126976,
+      "until": [],
+      "do_sample": true,
+      "temperature": 1.0,
+      "top_k": 20,
+      "top_p": 0.95,
+      "seed": 42
+    },
+    "thinking": true,
+    "only_eval_config_change_vs_baseline": "num_concurrent4\u21928",
+    "limits_preserved": true,
+    "task_resources": "HTTP-only EVALS_COMMON; no task sandboxes or CPU/memory overrides"
+  },
+  "phase_integrity": {
+    "artifact": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/runs/gpqa20-c8-expanded-pool-comparison/collected/workflow_logs_evals_gemma-4-31B-it_bh-qb-ge_gemma4-31b-autoport-v3/tt_triage/gemma4-phase-147-1794002702629922279.jsonl",
+    "sha256": "ab1bfa28377fcd786e0507a4d939b96227ef22541fd0c8a28fc48792659036eb",
+    "raw_bytes": 136210832,
+    "frames": 6420,
+    "events": 253978,
+    "paired_contiguous_steps": 126989,
+    "step_range": [
+      1,
+      126989
+    ],
+    "duplicate_events": 0,
+    "errors_or_loss_flags": [],
+    "final_pending_steps": 0,
+    "remaps": 30,
+    "chain_count": 20,
+    "ambiguous_edges": 0,
+    "active_decode_samples": 367509,
+    "decode_steps_by_active_rows": {
+      "8": 14900,
+      "7": 372,
+      "6": 2452,
+      "5": 564,
+      "4": 2431,
+      "3": 5937,
+      "2": 100319
+    },
+    "completion_interval_host_seconds_by_active_rows": {
+      "8": 562.6310374109979,
+      "7": 13.343258609999989,
+      "6": 85.95879054399985,
+      "5": 19.741587347,
+      "4": 85.30445116500006,
+      "3": 212.8740714540002,
+      "2": 5443.016525138034
+    },
+    "token_retention": {
+      "scope": "decode_device_only_physical_rows",
+      "row_index": "index_in_sampled_decode_token_ids",
+      "positions": "processed_input_position; sample_predicts_position_plus_one",
+      "inactive_rows": "positions_less_than_zero_are_not_request_tokens",
+      "prefill_tokens_retained": false,
+      "host_sampled_tokens_retained": false,
+      "request_ids_available": false,
+      "client_emission_verified": false,
+      "diagnostic_disabled": false,
+      "diagnostic_failures": 0,
+      "diagnostic_reason": null,
+      "position_identity_uncertain": false,
+      "loss": false,
+      "export_failed": false,
+      "file_exhausted": false,
+      "pending_incomplete": false
+    }
+  },
+  "capped_empty_responses": [
+    {
+      "first_pos": 258,
+      "last_pos": 127232,
+      "first_step": 3,
+      "first_ns": 2957827390715783,
+      "rows": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6
+      ],
+      "last_ns": 2964251657619283,
+      "last_step": 126989,
+      "physical_decode_samples": 126975,
+      "ids_sha256": "c54b058f31a60df2692c2d7dcdf631113d6ed432bacafec8b823c1fa1489ddc5",
+      "last4096_unique": 2,
+      "periodic_suffixes": {
+        "1": 1,
+        "2": 123797,
+        "4": 123797,
+        "8": 123797,
+        "16": 123797
+      },
+      "native_prompt_matches": [
+        20
+      ]
+    },
+    {
+      "first_pos": 481,
+      "last_pos": 127455,
+      "first_step": 3,
+      "first_ns": 2957827390715783,
+      "rows": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7
+      ],
+      "last_ns": 2964251657619283,
+      "last_step": 126989,
+      "physical_decode_samples": 126975,
+      "ids_sha256": "eccf765f0006d46a00d54f37da97c31c417076186a6790f568dcf1bf390c3791",
+      "last4096_unique": 2,
+      "periodic_suffixes": {
+        "1": 1,
+        "2": 122872,
+        "4": 122872,
+        "8": 122872,
+        "16": 122872
+      },
+      "native_prompt_matches": [
+        7
+      ]
+    }
+  ],
+  "cap_classification": "Same two initial semantic docs7/20 have 126975 retained physical decode samples plus unavailable prefill token, cap-consistent with126976. Exact period2 suffixes >120000 tokens match baseline loops; these remain failed tasks, not productive reasoning cut short. APIusage/finish_reason absent; physical samples are not mislabeled emitted usage.",
+  "chain_association_limits": "Same-step destination-to-previous remap plus positioncontinuity, unique promptlength anchors and complete20cohort; no phase prompt hashes/requestIDs exist. Reconstructed prompt hashes bind saved official messages, not nonexistent phase inputIDs. Firstprefilltoken and unobserved client-emission/async-extra details remain unknown; no exact hidden APIusage claim.",
+  "paired_work": [
+    {
+      "semantic_dataset_index": 7,
+      "logged_doc_id": 152,
+      "doc_hash": "9a66c03758e71508ee0f5a2b6cd532ec9e631ba5dff8459e2547eb64b110e7c3",
+      "prompt_hash": "b877ecb0b0d08b3325377aa6e28e141d829747ab47b32acd03bb7af9d883e28f",
+      "visible_response_sha256": "1249ac5a801c145d7aee23842efc203ffdb663f29d313b5d6b5f14d417e7b99b",
+      "physical_chain_sha256": "eccf765f0006d46a00d54f37da97c31c417076186a6790f568dcf1bf390c3791",
+      "physical_decode_samples": 126975,
+      "prompt_tokens": 481,
+      "score": 0,
+      "identical_to_baseline": true
+    },
+    {
+      "semantic_dataset_index": 20,
+      "logged_doc_id": 189,
+      "doc_hash": "af1347457a18a411add0a333803ba65c79e7d5c52b3c54f858a570ea542e1c31",
+      "prompt_hash": "6518ced11b296f119136a65e178cc1760b68ee596d2357794707255ff2c51ed4",
+      "visible_response_sha256": "1249ac5a801c145d7aee23842efc203ffdb663f29d313b5d6b5f14d417e7b99b",
+      "physical_chain_sha256": "c54b058f31a60df2692c2d7dcdf631113d6ed432bacafec8b823c1fa1489ddc5",
+      "physical_decode_samples": 126975,
+      "prompt_tokens": 258,
+      "score": 0,
+      "identical_to_baseline": true
+    },
+    {
+      "semantic_dataset_index": 24,
+      "logged_doc_id": 46,
+      "doc_hash": "d8931eacf1d508b504f8ca9ce25079bec54af7fb4ad98e93d6dc719d3b6685a1",
+      "prompt_hash": "4e68e28f4da934289a59e01b5b1a5deb590a5038d9f924255647da7e0875fe25",
+      "visible_response_sha256": "0926afbc38ae036cbd146b044b64b3d367741c88cf94d80ff9a400f4c7dc7dc5",
+      "physical_chain_sha256": "34035d61fc8ad1145fb51b8fb60af4413c5f53ece52a9af9185c09f6ed67a00e",
+      "physical_decode_samples": 5008,
+      "prompt_tokens": 358,
+      "score": 1,
+      "identical_to_baseline": true
+    },
+    {
+      "semantic_dataset_index": 28,
+      "logged_doc_id": 87,
+      "doc_hash": "016fdf9aac9142ae565ec3d8eb1b36fd4f4341a9633877db9d8f63c1cec35746",
+      "prompt_hash": "1ee6e598a00a5ffc2a898aa8eef22f65afc8874034aaa00fe28c39d6764a5f5c",
+      "visible_response_sha256": "b29fb56572a990645988f376e2f11467f8fc16ca5d2c539d6fe3fff7aad61fe9",
+      "physical_chain_sha256": "aab0bb8ce485e73260d0c292e1da47fadaa0083f1fd437f78e715320fd16bbef",
+      "physical_decode_samples": 9400,
+      "prompt_tokens": 396,
+      "score": 1,
+      "identical_to_baseline": true
+    },
+    {
+      "semantic_dataset_index": 31,
+      "logged_doc_id": 52,
+      "doc_hash": "9bfdb7a17362f9a18921fbd90a8d4d37815a1ef2bb792f359b5b640eb6738f7d",
+      "prompt_hash": "5986c3a844807bed907bcd683046b0e7ba29c5fd2633fb652c954f2b0c7d7cb4",
+      "visible_response_sha256": "8d72bf445e03c1e2fd8c5f48f1dafb9caca7c46841c1e7ecdf02b345f169e64d",
+      "physical_chain_sha256": "681e110975068505594f20535502451aa999eebefd43ed736b595b8f7ae5eef5",
+      "physical_decode_samples": 10540,
+      "prompt_tokens": 166,
+      "score": 1,
+      "identical_to_baseline": true
+    },
+    {
+      "semantic_dataset_index": 42,
+      "logged_doc_id": 181,
+      "doc_hash": "f834f25d6b0a68e9a8b4132b4aee38ab5a578cf0c98f2bac94dc3d42b8b7a659",
+      "prompt_hash": "a8b8d9fb7755d210d9e718a15bff0cd1111fd5d6212ea067b32cea80b11f140c",
+      "visible_response_sha256": "e03aba725217468d1918533124492a5dfe225f88004adf0e4625bbd960d656dd",
+      "physical_chain_sha256": "4836d21031cf6575785140727c63c45703981d24ef5882fe55b2390570c438d2",
+      "physical_decode_samples": 8735,
+      "prompt_tokens": 242,
+      "score": 1,
+      "identical_to_baseline": true
+    },
+    {
+      "semantic_dataset_index": 46,
+      "logged_doc_id": 31,
+      "doc_hash": "d9b848f9d50a9e467d3ff1dd84f83c7ca8ce17fc2ba574d457ee3544152a8a7d",
+      "prompt_hash": "921120ecd78db1d8d57cc1ecf89aae3b441e684946dc6a7d57c331f81270ef23",
+      "visible_response_sha256": "920c6098debea334b5afa387ea15c3552591c1291c9a0f281988dc89c60cc1f5",
+      "physical_chain_sha256": "6ee1eb2261940abff46ef2d0316452c97d41e0321eda25f0208202d69e4805ce",
+      "physical_decode_samples": 3244,
+      "prompt_tokens": 222,
+      "score": 1,
+      "identical_to_baseline": true
+    },
+    {
+      "semantic_dataset_index": 50,
+      "logged_doc_id": 185,
+      "doc_hash": "39d13db74e279e1277b2e742213c7426e7fe62ab5745ff1d139a111fc289e38d",
+      "prompt_hash": "3b702c7f0c8d7b25d6b04232b658bd8bcca3eb034d3e2f5a1f715aa739f73fa8",
+      "visible_response_sha256": "322851cf288d39674053fae31998cc74bf19a63aedc8eb850696af3986731534",
+      "physical_chain_sha256": "5e5df8ba04cedc64ba163c9f9b24b0052d971c0b18be3380345b0e7218f477a9",
+      "physical_decode_samples": 3767,
+      "prompt_tokens": 181,
+      "score": 1,
+      "identical_to_baseline": true
+    },
+    {
+      "semantic_dataset_index": 52,
+      "logged_doc_id": 50,
+      "doc_hash": "89f2867ed736e3794db41cd102fa91e9fbb9b4f6d6f09c41947b287a6c63b9fe",
+      "prompt_hash": "9b2a32b3b026c28757fc17a246ed137060bf2089f157021b13a60cd376434627",
+      "visible_response_sha256": "e20694374556788895d8e258495dce4d12275f736a7850f4ba43cc73244441b1",
+      "physical_chain_sha256": "9be01952221a519cf131479e3a9aacc7d695a02cd8643aa00c34b2af3beb6638",
+      "physical_decode_samples": 4554,
+      "prompt_tokens": 240,
+      "score": 1,
+      "identical_to_baseline": true
+    },
+    {
+      "semantic_dataset_index": 81,
+      "logged_doc_id": 187,
+      "doc_hash": "8242f046706473bc0f292e2fa37d1080ee259238564beb492194c4aa7f0f41c8",
+      "prompt_hash": "a73ea6ff6a8f3155dfc1036a6864acc159d2dc3ea56dd2559ec789b23bca4e7d",
+      "visible_response_sha256": "d759df31e2ee15045b9e46712efc255dc2fc51c817dec6d29875dad486078b99",
+      "physical_chain_sha256": "4b95efaf26f188336d88afdb5637e3b8d0fb642aebbc3df042b24478c75a6e43",
+      "physical_decode_samples": 8506,
+      "prompt_tokens": 642,
+      "score": 1,
+      "identical_to_baseline": true
+    },
+    {
+      "semantic_dataset_index": 87,
+      "logged_doc_id": 153,
+      "doc_hash": "ecf80e6cfea7f1b3760f0587c152a66c15d5def6b9d48fd8be04f0b6ebb4928c",
+      "prompt_hash": "797230b268e9b048a017fd5e7b9dce969c747e2ceca37a48cc3830e515ac6f78",
+      "visible_response_sha256": "9c634a1b664120998ecc444e3dbade5057a1ea638991a3d9b44a6c42028e4538",
+      "physical_chain_sha256": "6bdc9f8551313a451fe86c1f6654892bd6a55f8e688be96b044ac1d802d5b82f",
+      "physical_decode_samples": 1555,
+      "prompt_tokens": 173,
+      "score": 1,
+      "identical_to_baseline": true
+    },
+    {
+      "semantic_dataset_index": 93,
+      "logged_doc_id": 135,
+      "doc_hash": "2f7c0e25deaa33e24622dd6d9f4b71f533a5db969d519699c69efe6dea9752cb",
+      "prompt_hash": "eb4346a6d41be4fcce3bda227bdf8a1101cdf804ec137aca4b12a29b66630ff1",
+      "visible_response_sha256": "de9857769b34ad62eb5b0594da833fd589e6de24b4873fac308ac4e7458ad793",
+      "physical_chain_sha256": "ce8af9c2e65087fbe45d57f1e70a8ee80156cd394bf1421806653f9e96e7f9f9",
+      "physical_decode_samples": 8707,
+      "prompt_tokens": 200,
+      "score": 0,
+      "identical_to_baseline": true
+    },
+    {
+      "semantic_dataset_index": 135,
+      "logged_doc_id": 81,
+      "doc_hash": "0bdb2b0de3819fb38e1b3a305b10f493c1037c9b512c53144946179d283fbf56",
+      "prompt_hash": "d7ee41393d67002bbf975ba30f775547eef7a2e226d70d4af5b30e14586170d3",
+      "visible_response_sha256": "0933f1ebcf894edee29b46faadc0cd56990ab94779be5894cacf295ea4be8a9a",
+      "physical_chain_sha256": "1050591809a0f554dc997171b76251e21519769fae5f23c0ba471d59eb7fcfd0",
+      "physical_decode_samples": 6772,
+      "prompt_tokens": 202,
+      "score": 1,
+      "identical_to_baseline": true
+    },
+    {
+      "semantic_dataset_index": 152,
+      "logged_doc_id": 93,
+      "doc_hash": "4f28ff18d097650e64c9b43e15972784c11bed7b83ea73632702afbdbf19f345",
+      "prompt_hash": "26fa8f9e8fe3bb8ee9bb7ff00ffa5cc3d6a095e578eacd37ca863598f8fed823",
+      "visible_response_sha256": "7dc6a7b9d74e93edcf8396605a6160a9c00f816892f7ae2b07730af8cbb531b4",
+      "physical_chain_sha256": "91db49df3ca27dff16f00486a88998fb91f361a3991c86e0a7e90cac277a6bf3",
+      "physical_decode_samples": 5480,
+      "prompt_tokens": 485,
+      "score": 1,
+      "identical_to_baseline": true
+    },
+    {
+      "semantic_dataset_index": 153,
+      "logged_doc_id": 7,
+      "doc_hash": "790bac76e6283fa086181392e9d1175867e01943eddb51a47b142f0f5828220c",
+      "prompt_hash": "50ce2511a3fdc9d84001e994d466fc0ccc01449909f98d8fc368869742f5e71b",
+      "visible_response_sha256": "e8dfb5b71120da7d7800ac2c85690204f3c9bec450a8c17a442a2fda4a9d4f5d",
+      "physical_chain_sha256": "9ed1a6be1dc37e497a1a3be20b205a889a94801acb5c9d2680663dd7000c0855",
+      "physical_decode_samples": 2642,
+      "prompt_tokens": 255,
+      "score": 1,
+      "identical_to_baseline": true
+    },
+    {
+      "semantic_dataset_index": 168,
+      "logged_doc_id": 42,
+      "doc_hash": "7179c282f18f0549385afb7f2e9de60665c972195247524a496894c29731df6d",
+      "prompt_hash": "4da551a98e234d917c46d1b05e75fa6fd2bf3dab324fee8020594724bfa985a9",
+      "visible_response_sha256": "cd4125de2738faf9f6475205b079e44406c704464e11c5e7b355a8a1a180e433",
+      "physical_chain_sha256": "301ea2c2383c642d0c2aa38ea50a338807062737aa80df131f1e1f7df329aa38",
+      "physical_decode_samples": 7747,
+      "prompt_tokens": 235,
+      "score": 1,
+      "identical_to_baseline": true
+    },
+    {
+      "semantic_dataset_index": 181,
+      "logged_doc_id": 24,
+      "doc_hash": "0b877ef7c24f3ee7e12b2c9994542d5893c147be22d795d57df85e46205d3917",
+      "prompt_hash": "a5478c3344a4e1cc9f0b8ce51f3b5aa217bfb8c268b7208f3253dede88f5cfac",
+      "visible_response_sha256": "165ce1fcb724f5cbdb87addcc6df987884c0d677acc63d99a6b6577e60738944",
+      "physical_chain_sha256": "318159336ec2b0c61141b939acef95d97dea70f3c9513d335f92fb49d9cd341c",
+      "physical_decode_samples": 2868,
+      "prompt_tokens": 285,
+      "score": 1,
+      "identical_to_baseline": true
+    },
+    {
+      "semantic_dataset_index": 185,
+      "logged_doc_id": 168,
+      "doc_hash": "8a6683dc1a41f4dd1f15b40c6376bf959af44e2ecba9e19d7b0120203f47f92d",
+      "prompt_hash": "ef7bca5f3f0e858fa8e2f4a212d8c212476760fb14a177ed44c2fd3f961b29e7",
+      "visible_response_sha256": "4e4b82e6512a5f6111d3860606571813413fcb083add41e48fa867fde5ed1487",
+      "physical_chain_sha256": "20aff02262b7732394b105165dd0b911677dabf0be3ec557d8fadb1274bf5d70",
+      "physical_decode_samples": 8444,
+      "prompt_tokens": 184,
+      "score": 0,
+      "identical_to_baseline": true
+    },
+    {
+      "semantic_dataset_index": 187,
+      "logged_doc_id": 20,
+      "doc_hash": "929cc84025495469dab07b1be2228e76a5d5647b1d76ce7e5c4ec456e28806fb",
+      "prompt_hash": "63539ec251278faac85a99e34cdfb83713c46dbc2f9bd0ba201ba20dede46f3c",
+      "visible_response_sha256": "30368051382a0c94d6edf2ffef393e22d0a391baccc9b154a7992966524f2f29",
+      "physical_chain_sha256": "014675045590e1f1f9bfc5129cebb1cb276bfd307e51f4d39f37b57d9096bbff",
+      "physical_decode_samples": 12439,
+      "prompt_tokens": 156,
+      "score": 1,
+      "identical_to_baseline": true
+    },
+    {
+      "semantic_dataset_index": 189,
+      "logged_doc_id": 28,
+      "doc_hash": "e170219b5ac94f51360abe28c47e38efb6f0c194484e5df2199f8ba0eef02771",
+      "prompt_hash": "31fc18bdb7bf073553a44e9dff6a87210d6fc6c7b3a3077d250270b815930187",
+      "visible_response_sha256": "8b60efc2e603a88e12a3565fa3b005825e355100cc27fbcc745b084e33c62d7f",
+      "physical_chain_sha256": "85cfc91b638a3b1490cecb05003852e180a435b6adaec4c0d8d4922ffe6ebcab",
+      "physical_decode_samples": 3151,
+      "prompt_tokens": 298,
+      "score": 1,
+      "identical_to_baseline": true
+    }
+  ],
+  "comparison": {
+    "baseline_run_id": 42273660905,
+    "baseline_eval_seconds": 5600.7377435825765,
+    "candidate_eval_seconds": 6433.139464075211,
+    "delta_seconds": 832.4017204926349,
+    "delta_percent": 14.862358471371294,
+    "same_visible_outputs": 20,
+    "same_retained_chains": 20,
+    "same_total_active_decode_samples": 367509,
+    "capacity_confirmation": "Local eight independent131K histories fit/reuse; this scored run reaches8active and preserves all20 outputs/chains.",
+    "speed_confirmation": "No measured same20 speed gain; candidate is slower with identical work. Historical baseline reuse permitted, not a controlled causal isolation of pool/concurrency/logger/host effects.",
+    "source_differences": "Baseline ab273/37ee C4/defaultpool; candidate4b7/7ad C8/expandedpool plus previously exactness-proven request/response logging. Same stock plugin and full60; distinct jobs.",
+    "acceptance": "Coordinator decision pending; no final configuration selection by this audit."
+  },
+  "timing": {
+    "evaluation_seconds": 6433.139464075211,
+    "evaluation_hours": 1.7869831844653365,
+    "device_job_hours": 1.9105555555555556,
+    "workflow_hours": 2.807777777777778,
+    "predicted_eval_hours": 1.637656,
+    "predicted_workflow_hours": 3.2087288868306616,
+    "initial_capped_chain_host_seconds": [
+      6424.2669035,
+      6424.2669035
+    ],
+    "device_start": "2026-11-06T21:59:15Z",
+    "device_end": "2026-11-06T23:53:53Z",
+    "basis": "Host elapsed only; no device-time or roofline claim"
+  },
+  "effort_cost": {
+    "local_device_hours": 0.47222091055555554,
+    "ci_device_hours": 1.9105555555555556,
+    "total_device_hours": 2.3827764661111113,
+    "box_hours": 3.5,
+    "credited_release_saving_hours": 0
+  },
+  "release80_projection": {
+    "larger_list_gain_determined": false,
+    "reason": "Initial two tails dominate;100319 two-active steps account for5443.0165host seconds. Higher concurrency can shorten other request queueing yet same20 completed later. Unseen80 tail mix/active-context distribution is unknown; measured20 does not justify2x speedup or positive saving.",
+    "simple_linear_C8_eval_hours": 7.147932737861346,
+    "simple_linear_C4_eval_hours": 6.223041937313974,
+    "qualification": "Linear figures are guesses only, not admission or bounds; add measured setup/queue and required tail reserve separately. Normal cohort rungs remain required."
+  },
+  "remaining_limits": [
+    "First prefill token/native APIusage/finish_reason not retained by phase schema; no fabricated exact APIusage.",
+    "Physical chain continuity and unique prompt lengths establish association without request IDs; no row-order shortcut.",
+    "Request/reply INFO transport limitation predates separate hex formatter confirmation; this run does not prove dry-run observability.",
+    "Capacity gain is established separately; full-list speed gain remains unknown."
+  ],
+  "evidence": [
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/runs/gpqa20-c8-expanded-pool-comparison/collected/workflow_logs_evals_gemma-4-31B-it_bh-qb-ge_gemma4-31b-autoport-v3/reports_output/evals/google__gemma-4-31B-it_p300x2_evals/eval-attempt-326466a2f796412685a35e23cd0a852c/eval_id_gemma4-31b-autoport-v3_gemma-4-31B-it_p300x2/google__gemma-4-31B-it/samples_r1_gpqa_diamond_2026-11-06T23-53-23.688600.jsonl",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/runs/gpqa20-c8-expanded-pool-comparison/collected/workflow_logs_evals_gemma-4-31B-it_bh-qb-ge_gemma4-31b-autoport-v3/reports_output/evals/google__gemma-4-31B-it_p300x2_evals/eval-attempt-326466a2f796412685a35e23cd0a852c/eval_id_gemma4-31b-autoport-v3_gemma-4-31B-it_p300x2/google__gemma-4-31B-it/results_2026-11-06T23-53-23.688600.json",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/runs/gpqa20-c8-expanded-pool-comparison/manifest.json",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/runs/gpqa20-c8-expanded-pool-comparison/image-build.json",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/runs/gpqa20-c8-expanded-pool-comparison/startup-confirmation.json",
+    "bringup/artifacts/gpqa20-c8-final-audit/analyze.py",
+    "bringup/artifacts/gpqa20-c8-final-audit/chain-analysis.json",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/runs/larger-gpqa20-c4-retention-retry/audit.json"
+  ],
+  "audit_device_hours": 0
+}

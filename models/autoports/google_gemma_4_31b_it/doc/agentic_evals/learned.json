@@ -215,6 +215,10 @@
     {
       "fact": "Periodic phase export may precede final client output even after idle. Existing collector drain at confirmed idle persists observed boundaries without device synchronization; then close server.",
       "evidence": "runs/hex-runtime-benchmark/RESULT.json"
+    },
+    {
+      "fact": "C8 same20 exact work is14.86% slower;100319 two-active steps dominate5443hostseconds. Capacity gain alone cannot establish larger-list speedup.",
+      "evidence": "runs/gpqa20-c8-expanded-pool-comparison/audit.json"
     }
   ],
   "suite_timings": [
@@ -514,6 +518,25 @@
       },
       "functional_at": 20,
       "evidence": "runs/larger-gpqa20-c4-retention-retry/audit.json"
+    },
+    {
+      "run_id": 42293808766,
+      "eval": "r1_gpqa_diamond",
+      "tasks": 20,
+      "agents": 8,
+      "batch": 8,
+      "wall_hours": 1.7869831844653365,
+      "device_job_hours": 1.9105555555555556,
+      "workflow_hours": 2.807777777777778,
+      "agent_hours": null,
+      "timeouts": 0,
+      "output_cap_failures": 2,
+      "score": 0.8,
+      "wilson95": [
+        0.5839825677481064,
+        0.919342337420202
+      ],
+      "evidence": "runs/gpqa20-c8-expanded-pool-comparison/audit.json"
     }
   ],
   "generic_fixes": [

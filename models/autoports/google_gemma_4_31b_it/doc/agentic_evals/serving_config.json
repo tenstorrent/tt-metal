@@ -363,6 +363,13 @@
       "batch": 1,
       "max_num_seqs": 1,
       "batch_reason": "Exact required headline and unchanged stage11 matrix C1/B1"
+    },
+    "gpqa40-c8-saturation-comparison": {
+      "planned_clients": 8,
+      "batch": 8,
+      "max_num_seqs": 8,
+      "batch_reason": "Smallest validated batch at or above8; expandedpool C8 capacity and exactscored20 confirmed; C4 remains selected outside this experimental arm",
+      "pool_ids": 20480
     }
   },
   "release_limits": {
@@ -708,7 +715,7 @@
   },
   "candidates": {
     "expanded_b8_pool": {
-      "status": "local_exactness_and_capacity_confirmed_scored_comparison_pending",
+      "status": "capacity_and_exact_scored20_confirmed_slower_unselected",
       "planned_clients": 8,
       "batch": 8,
       "max_num_seqs": 8,
@@ -723,7 +730,11 @@
       },
       "evidence": "runs/gpqa-b8-expanded-pool/local-confirmation.json",
       "selected": false,
-      "matching_c4_cadence": "runs/gpqa-b8-expanded-pool/timing-baseline.json"
+      "matching_c4_cadence": "runs/gpqa-b8-expanded-pool/timing-baseline.json",
+      "scored_comparison": "runs/gpqa20-c8-expanded-pool-comparison/audit.json",
+      "score": 0.8,
+      "eval_hours": 1.7869831844653365,
+      "slower_percent": 14.862358471371294
     }
   }
 }

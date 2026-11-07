@@ -34,6 +34,8 @@ GPQA40 startup confirms the frozen40 list, full60 autoport, C4/B8/maxseq8, conte
 
 The published eef534 benchmark arm passed eight exact4096/128 B1/C1 requests:754.113ms TTFT and35.3152tokens/s/user. All eight texts match both prior baselines. The unchanged stage11 matrix completed8/8 in27.2148seconds. The first attempt had valid client results but a stale final phase snapshot; an observation-only idle drain fixed the private closer, and the repeated run retained2185complete pairs with no pending steps. Combined device cost0.153864hours against0.152693forecast; no causal speed claim. See `runs/hex-runtime-benchmark/RESULT.json`.
 
+The C8 same20 comparison completed valid16/20 (95%58.40–91.93%) with all20 visible outputs and retained chains identical to C4. It took1.786983evaluation hours,14.86% longer thanC4, and1.910556device-job hours; total effort2.382776hours versus3.5box. Eight-agent capacity is retained as an option, but C4 remains selected and zero release speed saving is credited. A separate registered40 saturation comparison is budgeted because the20-run tail spent5443hostseconds with only two active agents; its benefit is unknown and normal rungs never wait. See `runs/gpqa20-c8-expanded-pool-comparison/audit.json`.
+
 ## Effort predictions and results
 
 Device costs include the device job, not build/queue. Release savings are forecasts on the then-planned lists; guesses are marked. Later measured stops can retire those savings. Complete confirmations and their original scope remain in each result linked by efforts.json.
@@ -131,7 +133,7 @@ Device costs include the device job, not build/queue. Release savings are foreca
 | first-agent-reply-observability | 0.06000 (guess) / 0.06629 | 0.00000 | kept/solved: native body id matches: 7; baseline exact pairs: 3; empty visible probes logged: 4; matched seconds before: 14.044918984 |
 | response-logging-runtime-benchmark | 0.07605 / 0.08307 | 0.00000 | dropped/solved: headline completed: 8; matrix completed: 8; headline buffered ttft ms: 4386.854759; headline buffered tpot ms: 0.037546873 |
 | larger-gpqa-concurrency-reprice | 1.50000 (guess) / 0.00000 | 2.00000 | none/open: result: B16/C8 conservative allocation scenario exceeds pool by3 IDs; B32/C16 fits modeled envelope but speed uncertain. Prefer model-owned enlarged B8 pool20480; physical long-context fit unmeasured.; conte… |
-| gpqa-b8-expanded-pool | 1.10900 (guess) / unknown | 3.02400 | running/pending: Pending |
+| gpqa-b8-expanded-pool | 1.10900 (guess) / 2.38278 | 3.02400 | kept/open: capacity: Eight independent131K histories confirmed; all20 paired outputs/chains exact; same20 eval hours: 1.7869831844653365; baseline eval hours: 1.5557604843284936; delta percent slower: 14.862358471371294 |
 | gpqa80-c8-preparation | 0.00000 / 0.00000 | 0.00000 | kept/solved: candidate sha: dd4ba5b83837db77f4b26ca43005ae2074cd03b6; registered80 exact: True; tests: 36; hooks: passed |
 | gpqa80-current-best-publication | 0.00000 / 0.00000 | 0.00000 | kept/solved: candidate sha: 9a874b6574c157e77e5f4445e3134885589af96d; production identical to: 1eca89c0dcf65550a79196aecca13ef687c9cf06; tests: 36; hooks: passed |
 | ci-timestamp-observer-fix | 0.00000 / 0.00000 | 0.00000 | kept/solved: tests passed: 9; actual snapshot parses: True; original timestamps preserved: True; dry pass: False |
@@ -141,6 +143,8 @@ Device costs include the device job, not build/queue. Release savings are foreca
 | ci-native-log-confirmation | 0.18296 / unknown | 0.00000 | running/pending: Pending |
 | hex-runtime-benchmark | 0.07605 / 0.15386 | 0.00000 | kept/solved: headline ttft ms: 754.1133353515761; headline decode tps: 35.31515153764353; native texts exact: 8; matrix completed: 8 |
 | logging-future-cohort-preparation | 0.00000 / 0.00000 | 0.00000 | none/solved: candidates: 4; focused tests each: 37; hooks: pass; registered ids exact: True |
+| c8-forty-preparation | 0.00000 / 0.00000 | 0.00000 | none/solved: c8 forty sha: e5a9a7638a1f46f22c0d89acf2ac333da5d53c02; focused tests: 37; hooks: passed; both eighty descendant trees exact: True |
+| gpqa40-c8-saturation-comparison | 3.69754 (guess) / unknown | 1.50000 | running/pending: Pending |
 
 Evidence is written once by each effort; this table summarizes the current coordinator disposition. Unmeasured savings remain unknown or receive zero planning credit.
 
