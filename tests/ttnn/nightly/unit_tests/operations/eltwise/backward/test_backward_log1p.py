@@ -32,12 +32,7 @@ def test_bw_log1p(input_shapes, device):
 
 
 # Exhaustive BF16 accuracy of ttnn.log1p_bw: every BF16 bit pattern with each gradient in LOG1P_BW_GRADS.
-#
-# The SFPU may read a subnormal operand as zero, so an output may match torch at the operands or at the
-# operands with subnormals flushed; the pack stores NaN as +inf and -0 as +0, so classes compare as stored.
-# Declared lanes, as the composite this program replaces computes them unless noted: 0 wherever |Q(x)| = |x +
-# 1.0| reaches 2^126 in FP32, where the reciprocal is 0 on both boards (the composite's reciprocal is 0 there
-# too); or x is infinite, where f'(x)'s limit is 0 (torch's product is NaN for an infinite or NaN grad).
+# An output may match torch at the operands or with subnormals flushed; classes compare as the pack stores them.
 LOG1P_BW_GRADS = [
     "1",
     "-1",
@@ -56,6 +51,8 @@ LOG1P_BW_GRADS = [
     "3.3895313892515355e+38",
     "-3.3895313892515355e+38",
 ]
+# The kernel's largest error over every gradient on silicon, rounded up: a rounding regression exceeds it.
+LOG1P_BW_MAX_ULP = 0.51
 LOG1P_BW_SMALLEST_NORMAL = 2.0**-126
 
 
@@ -169,14 +166,13 @@ def test_log1p_bw_exhaustive_bfloat16(grad, device):
         _log1p_bw_pure_ulp(_log1p_bw_reference(g, x, True), actual),
     )
     worst = ulp.argmax()
-    assert ulp.max().item() < 1.0, (
-        f"{(ulp >= 1.0).sum().item()} outputs at or beyond 1 ulp or of the wrong class; worst at "
+    assert ulp.max().item() < LOG1P_BW_MAX_ULP, (
+        f"{(ulp >= LOG1P_BW_MAX_ULP).sum().item()} outputs at or beyond {LOG1P_BW_MAX_ULP} ulp or of the wrong class; worst at "
         f"x={x.flatten()[worst].item()}, grad={g.flatten()[worst].item()}: "
         f"expected {_log1p_bw_reference(g, x, False).flatten()[worst].item()}, got {actual.flatten()[worst].item()}"
     )
 
 
-# The calls the fused program serves.
 LOG1P_BW_FUSED_CALLS = (
     "interleaved_tiles",
     "interleaved_l1",
@@ -260,18 +256,7 @@ def _log1p_bw_placements(shape):
 @pytest.mark.parametrize(
     "call",
     [
-        "interleaved_tiles",
-        "interleaved_l1",
-        "height_sharded",
-        "width_sharded",
-        "block_sharded",
-        "height_sharded_dram",
-        "width_sharded_dram",
-        "nd_sharded",
-        "nd_sharded_dram",
-        "sharded_to_interleaved",
-        "interleaved_to_sharded",
-        "mixed_placements",
+        *LOG1P_BW_FUSED_CALLS,
         "broadcast_grad",
         "row_major",
         "mixed_layouts",
