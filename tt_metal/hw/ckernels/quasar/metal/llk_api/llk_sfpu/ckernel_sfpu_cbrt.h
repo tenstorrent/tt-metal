@@ -54,16 +54,21 @@ inline void calculate_cube_root() {
             c = d * y + -1.0f;
             sfpi::vFloat negative_third = sfpi::addexp(negative_third_256, 8);
             sfpi::vFloat t = c * negative_third + 1.0f;
-            d = sfpi::copysgn(d, a);
             y = d * (t * t);
         } else {
             sfpi::vFloat d = x * (y * y);
             sfpi::vFloat c = d * y;
             sfpi::vFloat t = c * (sfpi::vConstFloatPrgm2 * c + sfpi::vConstFloatPrgm1) + sfpi::vConstFloatPrgm0;
-            d = sfpi::copysgn(d, a);
             y = d * (t * t);
             y = sfpi::convert<sfpi::vFloat16b>(y, sfpi::RoundMode::Nearest);
         }
+        // Apply copysgn after the final multiplication so SFPMUL does not strip the sign of -0.0f,
+        // and pass non-finite inputs (±inf, NaN) through unchanged (avoiding BF16 SFPSTOCHRND NaN -> -inf).
+        y = sfpi::copysgn(y, a);
+        v_if(!sfpi::is_finite(x)) {
+            y = a;
+        }
+        v_endif;
         sfpi::dst_reg[0] = y;
         sfpi::dst_reg++;
     }
