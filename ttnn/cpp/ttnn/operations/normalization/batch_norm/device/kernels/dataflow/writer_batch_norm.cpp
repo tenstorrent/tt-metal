@@ -8,6 +8,8 @@
 #include "ttnn/operations/eltwise/binary_ng/device/kernels/dataflow/fill_tile_utils.hpp"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/dataflow_buffer.h"
+#include "api/dataflow/endpoints.h"
+#include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
 #include "experimental/kernel_args.h"
 
@@ -68,6 +70,109 @@ void kernel_main() {
     uint32_t tile_offset = (start_n * n_stride) + (start_c * c_stride);
     const uint32_t next_batch_shift = n_stride - (c_stride * C);
 
+#if defined(ARCH_WORMHOLE)
+    constexpr uint32_t stat_read_bytes = 32;
+    constexpr uint32_t seed_bytes = 64;
+    constexpr uint32_t chunk_bytes = 512;
+
+    auto fill_seed = [&](uint32_t addr, bool is_fp32, uint32_t bytes) __attribute__((always_inline)) {
+        volatile tt_l1_ptr uint32_t* p = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(addr);
+        uint32_t v = p[0];
+        if (!is_fp32) {
+            v = (v & 0xFFFFu) | (v << 16);
+        }
+        for (uint32_t i = 0; i < seed_bytes / 4; ++i) {
+            p[i] = v;
+        }
+        const uint32_t lim = bytes < chunk_bytes ? bytes : chunk_bytes;
+        for (uint32_t o = seed_bytes; o < lim; o += seed_bytes) {
+            noc.async_read(
+                UnicastEndpoint{},
+                CoreLocalMem<uint32_t>(addr + o),
+                seed_bytes,
+                {.noc_x = my_x[noc_index], .noc_y = my_y[noc_index], .addr = addr},
+                {});
+        }
+    };
+    auto fill_rest = [&](uint32_t addr, uint32_t bytes) __attribute__((always_inline)) {
+        for (uint32_t o = chunk_bytes; o < bytes; o += chunk_bytes) {
+            noc.async_read(
+                UnicastEndpoint{},
+                CoreLocalMem<uint32_t>(addr + o),
+                chunk_bytes,
+                {.noc_x = my_x[noc_index], .noc_y = my_y[noc_index], .addr = addr},
+                {});
+        }
+    };
+    auto read_stats = [&](uint32_t off) __attribute__((always_inline)) {
+        dfb_src.reserve_back(onetile);
+        noc.async_read(src, dfb_src, stat_read_bytes, {.page_id = off}, {.offset_bytes = 0});
+        dfb_batch_var.reserve_back(onetile);
+        noc.async_read(batch_var, dfb_batch_var, stat_read_bytes, {.page_id = off}, {.offset_bytes = 0});
+#ifdef WEIGHT_HAS_VALUE
+        dfb_weight.reserve_back(onetile);
+        noc.async_read(weight, dfb_weight, stat_read_bytes, {.page_id = off}, {.offset_bytes = 0});
+#endif
+#ifdef BIAS_HAS_VALUE
+        dfb_bias.reserve_back(onetile);
+        noc.async_read(bias, dfb_bias, stat_read_bytes, {.page_id = off}, {.offset_bytes = 0});
+#endif
+        noc.async_read_barrier();
+        fill_seed(dfb_src.get_write_ptr(), batch_stat_is_fp32, src_tile_bytes);
+        fill_seed(dfb_batch_var.get_write_ptr(), batch_stat_is_fp32, batch_var_tile_bytes);
+#ifdef WEIGHT_HAS_VALUE
+        fill_seed(dfb_weight.get_write_ptr(), param_is_fp32, weight_tile_bytes);
+#endif
+#ifdef BIAS_HAS_VALUE
+        fill_seed(dfb_bias.get_write_ptr(), param_is_fp32, bias_tile_bytes);
+#endif
+        noc.async_read_barrier();
+        fill_rest(dfb_src.get_write_ptr(), src_tile_bytes);
+        fill_rest(dfb_batch_var.get_write_ptr(), batch_var_tile_bytes);
+#ifdef WEIGHT_HAS_VALUE
+        fill_rest(dfb_weight.get_write_ptr(), weight_tile_bytes);
+#endif
+#ifdef BIAS_HAS_VALUE
+        fill_rest(dfb_bias.get_write_ptr(), bias_tile_bytes);
+#endif
+        noc.async_read_barrier();
+        dfb_src.push_back(onetile);
+        dfb_batch_var.push_back(onetile);
+#ifdef WEIGHT_HAS_VALUE
+        dfb_weight.push_back(onetile);
+#endif
+#ifdef BIAS_HAS_VALUE
+        dfb_bias.push_back(onetile);
+#endif
+    };
+
+    uint32_t num_tiles_written = 0;
+    auto write_out = [&](uint32_t count) __attribute__((always_inline)) {
+        for (uint32_t k = 0; k < count; ++k, ++num_tiles_written) {
+            dfb_dst.wait_front(onetile);
+            noc.async_write(
+                dfb_dst, dst, dst_tile_bytes, {.offset_bytes = 0}, {.page_id = start_tile_id + num_tiles_written});
+            noc.async_write_barrier();
+            dfb_dst.pop_front(onetile);
+        }
+    };
+
+    uint32_t assigned = 0;
+    uint32_t pending = 0;
+    for (uint32_t n = start_n; n < N && assigned < num_tiles; ++n, start_c = 0) {
+        for (uint32_t c = start_c; c < C && assigned < num_tiles; ++c, start_t = 0) {
+            const uint32_t left = HtWt - start_t;
+            const uint32_t count = (num_tiles - assigned) < left ? (num_tiles - assigned) : left;
+            assigned += count;
+            read_stats(tile_offset);
+            write_out(pending);
+            pending = count;
+            tile_offset += c_stride;
+        }
+        tile_offset += next_batch_shift;
+    }
+    write_out(pending);
+#else
     uint32_t num_tiles_written = 0;
     for (uint32_t n = start_n; n < N && num_tiles_written < num_tiles; ++n, start_c = 0) {
         for (uint32_t c = start_c; c < C && num_tiles_written < num_tiles; ++c, start_t = 0) {
@@ -134,4 +239,5 @@ void kernel_main() {
         }
         tile_offset += next_batch_shift;
     }
+#endif
 }
