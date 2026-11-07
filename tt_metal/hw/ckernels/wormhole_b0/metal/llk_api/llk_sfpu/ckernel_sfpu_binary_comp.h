@@ -51,17 +51,18 @@ inline void calculate_binary_comp_fp32_equal(const uint dst_index_in0, const uin
 
         TTI_SFPSETSGN(0, b, abs_b, 1); // SFPSETSGN_MOD1_ARG_IMM
         TTI_SFPSETSGN(0, a, abs_a, 1); // SFPSETSGN_MOD1_ARG_IMM
+        // Canonicalise: a = 1*a + 0, b = 1*b + 0. SFPMAD treats a subnormal input as zero and
+        // flushes a -0/subnormal result to +0, and is exact otherwise, so a ^ b below is zero iff
+        // the values are bitwise identical or both are in {±0, ±subnormal} (the pair the old
+        // abs(a) + abs(b) == 0 test accepted). One conditional store instead of two.
+        TTI_SFPMAD(p_sfpu::LCONST_1, a, p_sfpu::LCONST_0, a, 0);
+        TTI_SFPMAD(p_sfpu::LCONST_1, b, p_sfpu::LCONST_0, b, 0);
         TTI_SFPMAD(p_sfpu::LCONST_1, abs_a, abs_b, sum, 0);
         TTI_SFPXOR(0, b, a, 0);
 
-        // if abs(a) + abs(b) == 0; this allows us to treat all ±subnormals as equal
-        TTI_SFPSETCC(0, sum, 0, sfpi::SFPSETCC_MOD1_LREG_EQ0);
-        TT_SFPSTORE(equal_result, InstrModLoadStore::DEFAULT, ADDR_MOD_3, dst_index_out * dst_tile_size);
-        TTI_SFPENCC(0, 0, 0, 0);
-
         // if abs(a) + abs(b) <= inf; rejects NaN
         TTI_SFPIADD(0, inf, sum, sfpi::SFPIADD_MOD1_ARG_2SCOMP_LREG_DST | sfpi::SFPIADD_MOD1_CC_GTE0);
-        // if a ^ b == 0; requires both values to be bitwise identical
+        // if a ^ b == 0; equal after canonicalisation
         TTI_SFPSETCC(0, a, 0, sfpi::SFPSETCC_MOD1_LREG_EQ0);
         TT_SFPSTORE(equal_result, InstrModLoadStore::DEFAULT, ADDR_MOD_2, dst_index_out * dst_tile_size);
         TTI_SFPENCC(0, 0, 0, 0);
@@ -137,7 +138,7 @@ inline void calculate_binary_comp_fp32_weak_ordered(
     for (int d = 0; d < ITERATIONS; d++) {
         TT_SFPLOAD(a, InstrModLoadStore::DEFAULT, ADDR_MOD_3, dst_index_a * dst_tile_size);
         TT_SFPLOAD(b, InstrModLoadStore::DEFAULT, ADDR_MOD_3, dst_index_b * dst_tile_size);
-        TT_SFPSTORE(p_sfpu::LCONST_1, InstrModLoadStore::DEFAULT, ADDR_MOD_3, dst_index_out * dst_tile_size);
+        TT_SFPSTORE(p_sfpu::LCONST_0, InstrModLoadStore::DEFAULT, ADDR_MOD_3, dst_index_out * dst_tile_size);
 
         TTI_SFPSETSGN(0, a, abs_a, 1); // SFPSETSGN_MOD1_ARG_IMM
         TTI_SFPSETSGN(0, b, abs_b, 1); // SFPSETSGN_MOD1_ARG_IMM
@@ -148,16 +149,17 @@ inline void calculate_binary_comp_fp32_weak_ordered(
         // if abs(a) + abs(b) != 0; rejects if both are ±subnormal
         TTI_SFPSETCC(0, sum, 0, sfpi::SFPSETCC_MOD1_LREG_NE0);
 
-        // reject if original comparison is false
+        // lanes where the strict comparison a < b holds (total order)
         TTI_SFPSWAP(0, a, b, sfpi::SFPSWAP_MOD1_VEC_MIN_MAX);
         TTI_SFPXOR(0, a, copy, 0);
         TTI_SFPSETCC(0, copy, 0, sfpi::SFPSETCC_MOD1_LREG_NE0);
-        TT_SFPSTORE(p_sfpu::LCONST_0, InstrModLoadStore::DEFAULT, ADDR_MOD_3, dst_index_out * dst_tile_size);
-        TTI_SFPENCC(0, 0, 0, 0);
 
-        // if abs(a) + abs(b) > inf; a or b is NaN
-        TTI_SFPIADD(0, inf, sum, sfpi::SFPIADD_MOD1_ARG_2SCOMP_LREG_DST | sfpi::SFPIADD_MOD1_CC_LT0);
-        TT_SFPSTORE(p_sfpu::LCONST_0, InstrModLoadStore::DEFAULT, ADDR_MOD_2, dst_index_out * dst_tile_size);
+        // complement: lanes where the strict comparison is false (flag stack is empty here,
+        // so SFPCOMPC inverts every lane, including those the SETCCs disabled)
+        TTI_SFPCOMPC(0, 0, 0, 0);
+        // and abs(a) + abs(b) <= inf; rejects NaN
+        TTI_SFPIADD(0, inf, sum, sfpi::SFPIADD_MOD1_ARG_2SCOMP_LREG_DST | sfpi::SFPIADD_MOD1_CC_GTE0);
+        TT_SFPSTORE(p_sfpu::LCONST_1, InstrModLoadStore::DEFAULT, ADDR_MOD_2, dst_index_out * dst_tile_size);
         TTI_SFPENCC(0, 0, 0, 0);
     }
 }
@@ -282,8 +284,8 @@ inline void calculate_binary_comp_uint(const uint dst_index_in0, const uint dst_
 }
 
 // Integer equality comparisons: eq(a,b) and ne(a,b).
-// XOR a and b; the result is zero if a == b. A conditional store writes
-// the appropriate integer 0 or 1 result.
+// XOR a and b; the result is zero if a == b. SFPLZ returns 32 for a zero input
+// and 0..31 otherwise, so lz >> 5 is the 0/1 equality bit (XOR 1 for ne).
 template <bool APPROXIMATION_MODE, int ITERATIONS, SfpuType RELATIONAL_OP, DataFormat DATA_FORMAT>
 inline void calculate_binary_eq_int(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
     static_assert(
@@ -299,21 +301,23 @@ inline void calculate_binary_eq_int(const uint dst_index_in0, const uint dst_ind
     constexpr uint dst_tile_size = 64;
 
     constexpr bool is_eq = (RELATIONAL_OP == SfpuType::eq);
-    constexpr uint default_result = is_eq ? p_sfpu::LCONST_0 : one;
-    constexpr uint equal_result = is_eq ? one : p_sfpu::LCONST_0;
 
-    TTI_SFPLOADI(one, sfpi::SFPLOADI_MOD0_USHORT, 0x0001);
+    if constexpr (!is_eq) {
+        TTI_SFPLOADI(one, sfpi::SFPLOADI_MOD0_USHORT, 0x0001);
+    }
 
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         TT_SFPLOAD(a, ld_st_mod, ADDR_MOD_3, dst_index_in0 * dst_tile_size);
         TT_SFPLOAD(b, ld_st_mod, ADDR_MOD_3, dst_index_in1 * dst_tile_size);
-        TT_SFPSTORE(default_result, ld_st_mod, ADDR_MOD_3, dst_index_out * dst_tile_size);
 
         TTI_SFPXOR(0, b, a, 0);
-        TTI_SFPSETCC(0, a, 0, sfpi::SFPSETCC_MOD1_LREG_EQ0);
-        TT_SFPSTORE(equal_result, ld_st_mod, ADDR_MOD_2, dst_index_out * dst_tile_size);
-        TTI_SFPENCC(0, 0, 0, 0);
+        TTI_SFPLZ(0, a, a, 0);               // 32 iff a == b, else 0..31
+        TTI_SFPSHFT((-5) & 0xfff, a, a, 1);  // SFPSHFT_MOD1_ARG_IMM; lz >> 5: 1 iff a == b
+        if constexpr (!is_eq) {
+            TTI_SFPXOR(0, one, a, 0);
+        }
+        TT_SFPSTORE(a, ld_st_mod, ADDR_MOD_2, dst_index_out * dst_tile_size);
     }
 }
 }  //  namespace ckernel::sfpu
