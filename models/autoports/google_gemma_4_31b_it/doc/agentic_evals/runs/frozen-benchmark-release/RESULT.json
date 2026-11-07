@@ -1,0 +1,159 @@
+{
+  "status": "local_frozen_benchmark_arm_release_passed",
+  "release_run": true,
+  "freeze_evidence": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/runs/framed-benchmark-dry/freeze.json",
+  "freeze_sha256": "678c8b7de313ebbf36f6e0b5b1ae7266cc108154c3a303f44e7773d041aa0b0a",
+  "source": {
+    "tt_sha": "f57978407eaacf09587f5793b8ae46ca7af839ea",
+    "tti_sha": "af1ef17abfecb059da13d0a1287c00eace0f210e",
+    "plugin_runtime_sha": "ca7a18246e4111629ed6cb4a7d1192002749fccf",
+    "hf_revision": "842da3794eaa0b77d5f08bae87a17459d91ff475",
+    "runtime_files_matched": 16,
+    "frozen_file_hashes_verified": 26,
+    "full_layers": 60,
+    "batch": 1,
+    "max_num_seqs": 1,
+    "planned_clients": 1,
+    "context": 262144,
+    "response_debug": false,
+    "request_logging": false,
+    "static_logging_config": null,
+    "dry_launch_source_hashes_identical": true
+  },
+  "headline": {
+    "source": "vllm",
+    "input_tokens": 4096,
+    "output_tokens": 128,
+    "batch": 1,
+    "concurrency": 1,
+    "completed": 8,
+    "failed": 0,
+    "request_seconds": 34.806196479010396,
+    "ttft_ms": 752.6009546418209,
+    "mean_tpot_ms": 28.329580983075523,
+    "decode_tps": 35.298792474107316,
+    "prefill_device_us": null,
+    "decode_device_us": null,
+    "prefill_flops_pct": null,
+    "decode_dram_pct": null,
+    "evidence": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/bringup/artifacts/framed-benchmark-release-run/headline.json"
+  },
+  "stage11_matrix": {
+    "source": "tti",
+    "route": "stock launchers/run_llm_bench.py existing server",
+    "nominal_input_tokens": 128,
+    "output_tokens": 128,
+    "concurrency": 1,
+    "completed": 8,
+    "failed": 0,
+    "actual_adapter_prompt_lengths": [
+      141,
+      141,
+      142,
+      142,
+      141,
+      142,
+      141,
+      141
+    ],
+    "request_seconds": 27.072532247984782,
+    "ttft_ms": 112.02689685160294,
+    "mean_tpot_ms": 25.761049766873565,
+    "decode_tps": 38.81829386028793,
+    "evidence": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/bringup/artifacts/framed-benchmark-release-run/__home__bringup__.cache__huggingface__hub__models--google--gemma-4-31B-it__snapshots__842da3794eaa0b77d5f08bae87a17459d91ff475_p300x2_benchmarks/llm/benchmark___home__bringup__.cache__huggingface__hub__models--google--gemma-4-31B-it__snapshots__842da3794eaa0b77d5f08bae87a17459d91ff475_2026-11-07_15-52-23-644505_isl-128_osl-128_maxcon-1_n-8.json"
+  },
+  "comparison": {
+    "baseline": "frozen framed-benchmark dry, same source/config/commands",
+    "headline_exact_generated_text_matches": 8,
+    "headline_requests": 8,
+    "headline_ttft_delta_ms": -2.4976312124636024,
+    "headline_decode_tps_delta": -0.00535132215001255,
+    "matrix_text_matches": 0,
+    "matrix_scope": "Random native prompts not proven identical; same nominal stock row only. Text differences are not numerical discrepancy evidence.",
+    "causal_speed_claim": false
+  },
+  "phase_integrity": {
+    "frames": 71,
+    "unique_events": 4370,
+    "paired_contiguous_steps": 2185,
+    "step_range": [
+      1,
+      2185
+    ],
+    "prefill_steps": 26,
+    "decode_steps": 2159,
+    "sampling_modes": {
+      "device": 2176,
+      "host_compatibility": 9
+    },
+    "duplicates": 0,
+    "gaps": 0,
+    "errors_or_loss": false,
+    "final_pending_steps": 0,
+    "final_drain_boundary_ns": 1010553658090891,
+    "retention": {
+      "scope": "decode_device_only_physical_rows",
+      "row_index": "index_in_sampled_decode_token_ids",
+      "positions": "processed_input_position; sample_predicts_position_plus_one",
+      "inactive_rows": "positions_less_than_zero_are_not_request_tokens",
+      "prefill_tokens_retained": false,
+      "host_sampled_tokens_retained": false,
+      "request_ids_available": false,
+      "client_emission_verified": false,
+      "diagnostic_disabled": false,
+      "diagnostic_failures": 0,
+      "diagnostic_reason": null,
+      "position_identity_uncertain": false,
+      "loss": false,
+      "export_failed": false,
+      "file_exhausted": false,
+      "pending_incomplete": false
+    }
+  },
+  "cost": {
+    "started_at": "2026-11-07T15:49:21.048549+00:00",
+    "device_closed_at": "2026-11-07T15:53:51.789561+00:00",
+    "actual_device_hours": 0.07520583666666666,
+    "wrapper_ended_at": "2026-11-07T15:53:54.918473+00:00",
+    "wrapper_hours": 0.07607498586248969,
+    "forecast_device_hours": 0.0752905511111111,
+    "box_hours": 0.15,
+    "driver_embedded_forecast_hours": 0.07722610789,
+    "allocated_driver_hours": 0.07607498586248969,
+    "allocated_driver_to_dry_device_forecast_ratio": 1.0104187675585075,
+    "scope": "Device hold is measured through owners-empty; allocated driver cost includes wrapper close tail. Both are host-wall accounting, not device execution latency."
+  },
+  "shutdown": {
+    "at": "2026-11-07T15:53:51.287462+00:00",
+    "idle_metrics": [
+      "vllm:num_requests_running{engine=\"0\",model_name=\"google/gemma-4-31B-it\"} 0.0",
+      "vllm:num_requests_waiting{engine=\"0\",model_name=\"google/gemma-4-31B-it\"} 0.0"
+    ],
+    "owned_readiness_pid": 440209,
+    "signal": "SIGTERM to readiness hold handler only",
+    "device_closed_at": "2026-11-07T15:53:51.789561+00:00",
+    "remaining_owners": []
+  },
+  "artifact_parameter": "Only fresh ARTIFACT_ROOT differs between dry/release. Any semantic source/config/command change invalidates this local arm dry.",
+  "missing_reasons": [
+    "No serving profiling: device-time and device-roofline fields remain unknown.",
+    "GPQA release is a separate arm; this benchmark result does not assert whole-stage completion."
+  ],
+  "limitations": [
+    "No spec tests or accuracy scores in this arm.",
+    "Headline exact text equality scoped to eight seeded requests. Native matrix prompts are randomized; nominal shape/route matched, not exact matrix text identity.",
+    "Phase completion intervals include host scheduling/sampling/idle gaps, not device time. Retained submitted/completed steps are not substituted for API emitted token counts.",
+    "Whole-stage acceptance belongs to coordinator after all frozen release arms."
+  ],
+  "combined_stage_release_pass": null,
+  "evidence": [
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/bringup/artifacts/framed-benchmark-release-run/source-launch.json",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/bringup/artifacts/framed-benchmark-release-run/tti_matrix-execution.json",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/bringup/artifacts/framed-benchmark-release-run/headline-warmup-execution.json",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/bringup/artifacts/framed-benchmark-release-run/headline-execution.json",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/bringup/artifacts/framed-benchmark-release-run/final-drain.json",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/bringup/artifacts/framed-benchmark-release-run/phase-events.json",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/bringup/artifacts/framed-benchmark-release-run/idle-shutdown.json",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/bringup/artifacts/framed-benchmark-release-run/job.json"
+  ]
+}

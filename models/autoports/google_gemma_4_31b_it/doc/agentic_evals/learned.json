@@ -739,6 +739,14 @@
         0.7826567651397861
       ],
       "evidence": "runs/larger-gpqa160-c8/RESULT.json"
+    },
+    {
+      "arm": "frozen-benchmark-release",
+      "actual_hours": 0.07607498586248969,
+      "forecast_hours": 0.0752905511111111,
+      "evidence": "runs/frozen-benchmark-release/RESULT.json",
+      "matrix_client_seconds": 27.072532247984782,
+      "scope": "Release matrix once; full60 exactheadline eightserialrequests separately; no specs"
     }
   ],
   "generic_fixes": [

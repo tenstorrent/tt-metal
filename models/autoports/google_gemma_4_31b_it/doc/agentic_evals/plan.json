@@ -225,7 +225,15 @@
     "status": "running_frozen_no_repairs_or_redispatch",
     "gpqa_run_id": 42388198738,
     "gpqa_arm": "release-gpqa160-c8",
-    "benchmark_arm": "frozen-benchmark-release"
+    "benchmark_arm": "frozen-benchmark-release",
+    "benchmark_result": {
+      "passed": true,
+      "actual_hours": 0.07607498586248969,
+      "actual_device_hold_hours": 0.07520583666666666,
+      "evidence": "runs/frozen-benchmark-release/RESULT.json",
+      "no_fixes_or_redispatch": true,
+      "matrix_client_seconds": 27.072532247984782
+    }
   },
   "runs": [
     {
@@ -5256,7 +5264,7 @@
     {
       "arm": "frozen-benchmark-release",
       "device": "local",
-      "status": "queued",
+      "status": "completed_valid_release",
       "purpose": "Frozen final benchmark matrix and exact4096/128/B1/C1 headline; no repairs or redispatch",
       "planned_clients": 1,
       "batch": 1,
@@ -5273,11 +5281,19 @@
         "bringup/artifacts/stage12-framed-benchmark-dry/run.py",
         "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/bringup/artifacts/framed-benchmark-release-run"
       ],
-      "batch_reason": "Smallest supported batch for serial matrix/headline requests; exact dry measured"
+      "batch_reason": "Smallest supported batch for serial matrix/headline requests; exact dry measured",
+      "start": "2026-11-07T15:49:21.048549+00:00",
+      "end": "2026-11-07T15:53:54.918473+00:00",
+      "actual_hours": 0.07607498586248969,
+      "exit_status": 0,
+      "driver_forecast_hours": 0.07722610789,
+      "actual_hours_basis": "serialized local server/client device hold including startup and drain",
+      "audit": "runs/frozen-benchmark-release/RESULT.json",
+      "actual_device_hold_hours": 0.07520583666666666
     }
   ],
   "status": "release_running",
-  "last_updated": "2026-11-07T15:49:20.998727+00:00",
+  "last_updated": "2026-11-07T15:56:36.533663+00:00",
   "stop_reason": null,
   "actual_runs": [],
   "continuations": [
@@ -6442,6 +6458,11 @@
         42353554865,
         42356076812
       ]
+    },
+    {
+      "start": "2026-11-07T15:53:54.918473+00:00",
+      "end": null,
+      "reason": "Frozen benchmark release completed once and closed. FinalGPQA release holds authorized CI; no remaining authorized local measurements or runtime fixes needed. Avoid modifying frozen release or manufacturing repeated measurements."
     }
   ],
   "schedule_history": [
@@ -7091,7 +7112,7 @@
       "evidence": "bringup/artifacts/stage12-gpqa20-evals-current.log"
     }
   ],
-  "next_local_job": "frozen-benchmark-release",
+  "next_local_job": null,
   "next_rung_admission_policy": {
     "updated_at": "2026-11-06T23:06:29.089061+00:00",
     "normal_rung": "Next80 only after valid40 and measured forecast with slow-tail allowance fits before stagehour31.3; never wait for optional C8 comparison, use selected C4 fallback.",

@@ -956,5 +956,56 @@
     "dry_evidence": "runs/early-gpqa160-candidate-dry/RESULT.json",
     "status": "valid_rung_and_dry_evidence; coordinator_owns_release_selection_dispatch",
     "evidence": "runs/larger-gpqa160-c8/RESULT.json"
+  },
+  "final_release_benchmark": {
+    "source": "runs/frozen-benchmark-release/RESULT.json",
+    "headline": {
+      "source": "vllm",
+      "input_tokens": 4096,
+      "output_tokens": 128,
+      "batch": 1,
+      "concurrency": 1,
+      "completed": 8,
+      "failed": 0,
+      "request_seconds": 34.806196479010396,
+      "ttft_ms": 752.6009546418209,
+      "mean_tpot_ms": 28.329580983075523,
+      "decode_tps": 35.298792474107316,
+      "prefill_device_us": null,
+      "decode_device_us": null,
+      "prefill_flops_pct": null,
+      "decode_dram_pct": null,
+      "evidence": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/bringup/artifacts/framed-benchmark-release-run/headline.json"
+    },
+    "matrix": {
+      "source": "tti",
+      "route": "stock launchers/run_llm_bench.py existing server",
+      "nominal_input_tokens": 128,
+      "output_tokens": 128,
+      "concurrency": 1,
+      "completed": 8,
+      "failed": 0,
+      "actual_adapter_prompt_lengths": [
+        141,
+        141,
+        142,
+        142,
+        141,
+        142,
+        141,
+        141
+      ],
+      "request_seconds": 27.072532247984782,
+      "ttft_ms": 112.02689685160294,
+      "mean_tpot_ms": 25.761049766873565,
+      "decode_tps": 38.81829386028793,
+      "evidence": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/bringup/artifacts/framed-benchmark-release-run/__home__bringup__.cache__huggingface__hub__models--google--gemma-4-31B-it__snapshots__842da3794eaa0b77d5f08bae87a17459d91ff475_p300x2_benchmarks/llm/benchmark___home__bringup__.cache__huggingface__hub__models--google--gemma-4-31B-it__snapshots__842da3794eaa0b77d5f08bae87a17459d91ff475_2026-11-07_15-52-23-644505_isl-128_osl-128_maxcon-1_n-8.json"
+    },
+    "planned_clients": 1,
+    "batch": 1,
+    "sampling_modes": {
+      "device": 2176,
+      "host_compatibility": 9
+    }
   }
 }

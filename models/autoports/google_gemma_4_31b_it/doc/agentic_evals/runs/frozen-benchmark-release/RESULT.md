@@ -1,0 +1,13 @@
+# Frozen benchmark release arm passed
+
+All three frozen client commands completed successfully: stock stage11 TTI matrix, headline warmup and eight headline requests. No retry or configuration repair was needed. All26 frozen file hashes passed;16 runtime launch hashes match the dry run exactly. Full60-layer f579 runtime, TTI af1, stock plugin ca7, pinned HF842da, B1/C1 and262144 context are unchanged. Response-debug/request logging remain disabled and custom logging configuration absent. Only the fresh artifact destination differs.
+
+The headline measured exactly4096 input and128 output tokens for each of8 serial requests. Mean TTFT is752.600955ms; mean TPOT28.329581ms gives35.298792tokens/second/user. Request duration34.806196seconds. All8 generated texts match the frozen dry run exactly. Relative to dry, TTFT differs by−2.497631ms and decode rate by−0.005351tokens/s; these are descriptive differences, not a causal speed claim.
+
+The unchanged stock TTI nominal128-input/128-output/C1 matrix completed8/8 in27.072532seconds. Actual adapter prompt lengths were141,141,142,142,141,142,141,141. Mean TTFT112.026897ms and TPOT25.761050ms give38.818294tokens/s/user. Random native matrix prompts differ from dry, so its different texts are not evidence of a numerical discrepancy or exact-input comparison.
+
+Phase accounting contains71 frames,4370 unique events and2185 contiguous paired steps:26 prefill and2159 decode. Sampling mode is device on2176 steps and host compatibility on9. No duplicate steps, gaps, errors, truncation or retention loss occurred. Supported final drain persisted with zero pending steps, followed by fresh running0/waiting0 and graceful shutdown. Server exited0 and remaining device owners are empty. Completion intervals include host scheduling/sampling and idle gaps; they are not device execution time, and submitted/completed steps are not API emitted-token counts.
+
+Device hold through owner clearance was0.075205837hours versus dry-derived0.075290551forecast. Allocated driver cost through final wrapper closure was0.076074986hours (1.01042× that forecast), within0.15-hour box. The frozen driver's embedded forecast remains0.077226108hours and was not edited. Device closed15:53:51.789561UTC; wrapper closed15:53:54.918473UTC.
+
+Device-time latency and device roofline fields remain unknown: no serving profiling was performed. This release result covers the benchmark arm only, with no spec tests or accuracy score. The coordinator owns whole-stage acceptance after the separate frozen GPQA release arm. RESULT.json contains source, freeze, artifact and timing references.

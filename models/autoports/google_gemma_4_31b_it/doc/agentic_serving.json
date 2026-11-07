@@ -1537,12 +1537,12 @@
     "hit_fraction_of_ceiling": 0.9946692694646745,
     "pool_bound": false,
     "growing_contexts": {
-      "concurrency": 2,
+      "concurrency": 8,
       "final_context_tokens": 131072,
-      "late_hit_fraction": 0.9991333748336934,
+      "late_hit_fraction": 0.9973317088029241,
       "pool_bound": false,
-      "elapsed_seconds": 140.41494534397498,
-      "preemptions": 0.0,
+      "elapsed_seconds": 592.464129764121,
+      "preemptions": 0,
       "context_schedule": [
         4096,
         32768,
@@ -1550,15 +1550,18 @@
         98304,
         131072
       ],
-      "output_tokens_per_turn": 8,
-      "prefilled_tokens": 262656,
-      "final_context_token_sum": 262144,
+      "prefilled_tokens": 1050624.0,
+      "final_context_token_sum": 1048576,
       "prefilled_to_final_context_ratio": 1.001953125,
       "trace_captures_after_warmup": 0,
-      "scope": "synthetic growing conversation cache traffic; raw continuation stress, not a qualitative verdict",
-      "evidence": "doc/agentic_evals/runs/local-long-context/growing.json",
-      "real_history_followup": "doc/agentic_evals/runs/real-history-capacity/REPLAY_RESULT.json",
-      "limitation": "Synthetic2histories through131072 measured before native histories available; subsequent6 real C2 calls cover asymmetric107474/33461prompt peaks, not two equal107585token agents or greater capacity."
+      "evidence": "doc/agentic_evals/runs/gpqa-b8-expanded-pool/local-confirmation.json",
+      "scope": "Eight independent native-ID histories, five increasing rounds; simultaneous residency verified at each round. Own streams closed after residency snapshot and drained before next round; not natural completions or quality evidence.",
+      "request_output_cap": 126976,
+      "request_timeout_seconds": 14400,
+      "batch": 8,
+      "pool_ids": 20480,
+      "hit_fraction_of_ceiling": 0.9957774046438613,
+      "reason": "Capacity replay intentionally observes simultaneous residency then closes own HTTP streams; no end-to-end score or full126976-token completion claim. Scored160 separately confirms full-cap operation."
     },
     "trace_captures_after_warmup": {
       "decode": 0,
@@ -1752,6 +1755,30 @@
         32768
       ],
       "output_tokens_per_turn": 8
+    },
+    "prior_stage12_c2_growing_contexts": {
+      "concurrency": 2,
+      "final_context_tokens": 131072,
+      "late_hit_fraction": 0.9991333748336934,
+      "pool_bound": false,
+      "elapsed_seconds": 140.41494534397498,
+      "preemptions": 0.0,
+      "context_schedule": [
+        4096,
+        32768,
+        65536,
+        98304,
+        131072
+      ],
+      "output_tokens_per_turn": 8,
+      "prefilled_tokens": 262656,
+      "final_context_token_sum": 262144,
+      "prefilled_to_final_context_ratio": 1.001953125,
+      "trace_captures_after_warmup": 0,
+      "scope": "synthetic growing conversation cache traffic; raw continuation stress, not a qualitative verdict",
+      "evidence": "doc/agentic_evals/runs/local-long-context/growing.json",
+      "real_history_followup": "doc/agentic_evals/runs/real-history-capacity/REPLAY_RESULT.json",
+      "limitation": "Synthetic2histories through131072 measured before native histories available; subsequent6 real C2 calls cover asymmetric107474/33461prompt peaks, not two equal107585token agents or greater capacity."
     }
   },
   "datatype_sweep_stage_review": "datatype_sweep/stage_review.md",

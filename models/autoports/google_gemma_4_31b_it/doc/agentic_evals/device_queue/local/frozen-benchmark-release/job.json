@@ -1,7 +1,7 @@
 {
   "arm": "frozen-benchmark-release",
   "device": "local",
-  "status": "queued",
+  "status": "completed_valid_release",
   "purpose": "Frozen final benchmark matrix and exact4096/128/B1/C1 headline; no repairs or redispatch",
   "planned_clients": 1,
   "batch": 1,
@@ -18,5 +18,13 @@
     "bringup/artifacts/stage12-framed-benchmark-dry/run.py",
     "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/bringup/artifacts/framed-benchmark-release-run"
   ],
-  "batch_reason": "Smallest supported batch for serial matrix/headline requests; exact dry measured"
+  "batch_reason": "Smallest supported batch for serial matrix/headline requests; exact dry measured",
+  "start": "2026-11-07T15:49:21.048549+00:00",
+  "end": "2026-11-07T15:53:54.918473+00:00",
+  "actual_hours": 0.07607498586248969,
+  "exit_status": 0,
+  "driver_forecast_hours": 0.07722610789,
+  "actual_hours_basis": "serialized local server/client device hold including startup and drain",
+  "audit": "runs/frozen-benchmark-release/RESULT.json",
+  "actual_device_hold_hours": 0.07520583666666666
 }

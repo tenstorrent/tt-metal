@@ -1,0 +1,353 @@
+{
+  "status": "representation_repaired_with_explicit_remaining_gaps",
+  "device_hours": 0,
+  "credited_saving_hours": 0,
+  "changes": [
+    {
+      "problem": "long-prefill-decode-interference",
+      "field": "box_hours",
+      "before": null,
+      "after": 0
+    },
+    {
+      "problem": "phase-archive-runtime-benchmark",
+      "field": "predicted.basis",
+      "before": "measured previous retained-runtime benchmark",
+      "after": "measured"
+    },
+    {
+      "problem": "ci-log-cache-discriminator",
+      "field": "predicted.basis",
+      "before": "calculated; read-only host requests",
+      "after": "calculated"
+    },
+    {
+      "problem": "swe-recurrent-network-confirmation",
+      "field": "predicted.basis",
+      "before": "calculated host evidence only",
+      "after": "calculated"
+    },
+    {
+      "problem": "gpqa-only-release-schedule",
+      "field": "predicted.basis",
+      "before": "calculated host planning",
+      "after": "calculated"
+    },
+    {
+      "problem": "gpqa80-preparation",
+      "field": "predicted.basis",
+      "before": "calculated host-only preparation",
+      "after": "calculated"
+    },
+    {
+      "problem": "early-banked40-fallback-dry",
+      "field": "predicted.saving_hours",
+      "before": {},
+      "after": {
+        "r1_gpqa_diamond": 0
+      },
+      "source": "original predicted.reason explicitly says no speed credit"
+    },
+    {
+      "problem": "current-c8-larger-source-preparation",
+      "field": "predicted.saving_hours",
+      "before": {},
+      "after": {
+        "r1_gpqa_diamond": 0
+      },
+      "source": "original predicted.reason explicitly says no speed credit"
+    },
+    {
+      "problem": "framed-final-inventory-preparation",
+      "field": "predicted.saving_hours",
+      "before": {},
+      "after": {
+        "r1_gpqa_diamond": 0
+      },
+      "source": "original predicted.reason explicitly says no speed credit"
+    }
+  ],
+  "historical_saving_forecasts_unavailable": [
+    "retained-token-capacity",
+    "gpqa20-c4-retained-preparation",
+    "retention-c4-lifecycle",
+    "task-boundary-dry-route",
+    "ci-live-log-observability",
+    "b1-singleton-history-capacity",
+    "swe5-b1-singleton-config",
+    "terminal-c4-revisit",
+    "gpqa40-preparation",
+    "gpqa-empty-response-replay",
+    "framed-logger-image-provenance",
+    "ci-framed-confirmation-operator9",
+    "release-freeze-materialization",
+    "ci-log-download-timeout",
+    "dry-observation-timestamp-repair",
+    "ci-log-retrieval-recurrence",
+    "gpqa80-new-loop-diagnosis",
+    "early-gpqa160-candidate-dry"
+  ],
+  "before_checker_findings": [
+    [
+      2,
+      "effort 'long-prefill-decode-interference' needs an owner, box_hours, and its own goal and plan"
+    ],
+    [
+      2,
+      "effort 'retained-token-capacity' needs predicted saving_hours per eval, device_hours and basis (measured, calculated, guess); guess when it cannot be calculated"
+    ],
+    [
+      2,
+      "effort 'gpqa20-c4-retained-preparation' needs predicted saving_hours per eval, device_hours and basis (measured, calculated, guess); guess when it cannot be calculated"
+    ],
+    [
+      2,
+      "effort 'retention-c4-lifecycle' needs predicted saving_hours per eval, device_hours and basis (measured, calculated, guess); guess when it cannot be calculated"
+    ],
+    [
+      2,
+      "effort 'task-boundary-dry-route' needs predicted saving_hours per eval, device_hours and basis (measured, calculated, guess); guess when it cannot be calculated"
+    ],
+    [
+      2,
+      "effort 'ci-live-log-observability' needs predicted saving_hours per eval, device_hours and basis (measured, calculated, guess); guess when it cannot be calculated"
+    ],
+    [
+      2,
+      "effort 'b1-singleton-history-capacity' needs predicted saving_hours per eval, device_hours and basis (measured, calculated, guess); guess when it cannot be calculated"
+    ],
+    [
+      2,
+      "effort 'swe5-b1-singleton-config' needs predicted saving_hours per eval, device_hours and basis (measured, calculated, guess); guess when it cannot be calculated"
+    ],
+    [
+      2,
+      "effort 'terminal-c4-revisit' needs predicted saving_hours per eval, device_hours and basis (measured, calculated, guess); guess when it cannot be calculated"
+    ],
+    [
+      2,
+      "effort 'gpqa40-preparation' needs predicted saving_hours per eval, device_hours and basis (measured, calculated, guess); guess when it cannot be calculated"
+    ],
+    [
+      2,
+      "effort 'gpqa-empty-response-replay' needs predicted saving_hours per eval, device_hours and basis (measured, calculated, guess); guess when it cannot be calculated"
+    ],
+    [
+      2,
+      "effort 'phase-archive-runtime-benchmark' needs predicted saving_hours per eval, device_hours and basis (measured, calculated, guess); guess when it cannot be calculated"
+    ],
+    [
+      2,
+      "effort 'ci-log-cache-discriminator' needs predicted saving_hours per eval, device_hours and basis (measured, calculated, guess); guess when it cannot be calculated"
+    ],
+    [
+      2,
+      "effort 'swe-recurrent-network-confirmation' needs predicted saving_hours per eval, device_hours and basis (measured, calculated, guess); guess when it cannot be calculated"
+    ],
+    [
+      2,
+      "effort 'gpqa-only-release-schedule' needs predicted saving_hours per eval, device_hours and basis (measured, calculated, guess); guess when it cannot be calculated"
+    ],
+    [
+      2,
+      "effort 'gpqa80-preparation' needs predicted saving_hours per eval, device_hours and basis (measured, calculated, guess); guess when it cannot be calculated"
+    ],
+    [
+      2,
+      "effort 'framed-logger-image-provenance' needs predicted saving_hours per eval, device_hours and basis (measured, calculated, guess); guess when it cannot be calculated"
+    ],
+    [
+      2,
+      "effort 'ci-framed-confirmation-operator9' needs predicted saving_hours per eval, device_hours and basis (measured, calculated, guess); guess when it cannot be calculated"
+    ],
+    [
+      2,
+      "effort 'release-freeze-materialization' needs predicted saving_hours per eval, device_hours and basis (measured, calculated, guess); guess when it cannot be calculated"
+    ],
+    [
+      2,
+      "effort 'ci-log-download-timeout' needs predicted saving_hours per eval, device_hours and basis (measured, calculated, guess); guess when it cannot be calculated"
+    ],
+    [
+      2,
+      "effort 'early-banked40-fallback-dry' needs predicted saving_hours per eval, device_hours and basis (measured, calculated, guess); guess when it cannot be calculated"
+    ],
+    [
+      2,
+      "effort 'current-c8-larger-source-preparation' needs predicted saving_hours per eval, device_hours and basis (measured, calculated, guess); guess when it cannot be calculated"
+    ],
+    [
+      2,
+      "effort 'dry-observation-timestamp-repair' needs predicted saving_hours per eval, device_hours and basis (measured, calculated, guess); guess when it cannot be calculated"
+    ],
+    [
+      2,
+      "effort 'ci-log-retrieval-recurrence' needs predicted saving_hours per eval, device_hours and basis (measured, calculated, guess); guess when it cannot be calculated"
+    ],
+    [
+      2,
+      "effort 'gpqa80-new-loop-diagnosis' needs predicted saving_hours per eval, device_hours and basis (measured, calculated, guess); guess when it cannot be calculated"
+    ],
+    [
+      2,
+      "effort 'early-gpqa160-candidate-dry' needs predicted saving_hours per eval, device_hours and basis (measured, calculated, guess); guess when it cannot be calculated"
+    ],
+    [
+      2,
+      "effort 'framed-final-inventory-preparation' needs predicted saving_hours per eval, device_hours and basis (measured, calculated, guess); guess when it cannot be calculated"
+    ],
+    [
+      2,
+      "ranking 0 needs order rows with saving_hours and device_hours"
+    ],
+    [
+      2,
+      "ranking 1 needs order rows with saving_hours and device_hours"
+    ],
+    [
+      2,
+      "ranking 2 needs order rows with saving_hours and device_hours"
+    ],
+    [
+      2,
+      "ranking 3 needs order rows with saving_hours and device_hours"
+    ],
+    [
+      2,
+      "ranking 4 needs order rows with saving_hours and device_hours"
+    ],
+    [
+      2,
+      "ranking 5 needs order rows with saving_hours and device_hours"
+    ],
+    [
+      2,
+      "ranking 6 needs order rows with saving_hours and device_hours"
+    ],
+    [
+      2,
+      "ranking 7 needs order rows with saving_hours and device_hours"
+    ],
+    [
+      2,
+      "ranking 8 needs order rows with saving_hours and device_hours"
+    ]
+  ],
+  "after_checker_findings": [
+    [
+      2,
+      "effort 'retained-token-capacity' needs predicted saving_hours per eval, device_hours and basis (measured, calculated, guess); guess when it cannot be calculated"
+    ],
+    [
+      2,
+      "effort 'gpqa20-c4-retained-preparation' needs predicted saving_hours per eval, device_hours and basis (measured, calculated, guess); guess when it cannot be calculated"
+    ],
+    [
+      2,
+      "effort 'retention-c4-lifecycle' needs predicted saving_hours per eval, device_hours and basis (measured, calculated, guess); guess when it cannot be calculated"
+    ],
+    [
+      2,
+      "effort 'task-boundary-dry-route' needs predicted saving_hours per eval, device_hours and basis (measured, calculated, guess); guess when it cannot be calculated"
+    ],
+    [
+      2,
+      "effort 'ci-live-log-observability' needs predicted saving_hours per eval, device_hours and basis (measured, calculated, guess); guess when it cannot be calculated"
+    ],
+    [
+      2,
+      "effort 'b1-singleton-history-capacity' needs predicted saving_hours per eval, device_hours and basis (measured, calculated, guess); guess when it cannot be calculated"
+    ],
+    [
+      2,
+      "effort 'swe5-b1-singleton-config' needs predicted saving_hours per eval, device_hours and basis (measured, calculated, guess); guess when it cannot be calculated"
+    ],
+    [
+      2,
+      "effort 'terminal-c4-revisit' needs predicted saving_hours per eval, device_hours and basis (measured, calculated, guess); guess when it cannot be calculated"
+    ],
+    [
+      2,
+      "effort 'gpqa40-preparation' needs predicted saving_hours per eval, device_hours and basis (measured, calculated, guess); guess when it cannot be calculated"
+    ],
+    [
+      2,
+      "effort 'gpqa-empty-response-replay' needs predicted saving_hours per eval, device_hours and basis (measured, calculated, guess); guess when it cannot be calculated"
+    ],
+    [
+      2,
+      "effort 'framed-logger-image-provenance' needs predicted saving_hours per eval, device_hours and basis (measured, calculated, guess); guess when it cannot be calculated"
+    ],
+    [
+      2,
+      "effort 'ci-framed-confirmation-operator9' needs predicted saving_hours per eval, device_hours and basis (measured, calculated, guess); guess when it cannot be calculated"
+    ],
+    [
+      2,
+      "effort 'release-freeze-materialization' needs predicted saving_hours per eval, device_hours and basis (measured, calculated, guess); guess when it cannot be calculated"
+    ],
+    [
+      2,
+      "effort 'ci-log-download-timeout' needs predicted saving_hours per eval, device_hours and basis (measured, calculated, guess); guess when it cannot be calculated"
+    ],
+    [
+      2,
+      "effort 'dry-observation-timestamp-repair' needs predicted saving_hours per eval, device_hours and basis (measured, calculated, guess); guess when it cannot be calculated"
+    ],
+    [
+      2,
+      "effort 'ci-log-retrieval-recurrence' needs predicted saving_hours per eval, device_hours and basis (measured, calculated, guess); guess when it cannot be calculated"
+    ],
+    [
+      2,
+      "effort 'gpqa80-new-loop-diagnosis' needs predicted saving_hours per eval, device_hours and basis (measured, calculated, guess); guess when it cannot be calculated"
+    ],
+    [
+      2,
+      "effort 'early-gpqa160-candidate-dry' needs predicted saving_hours per eval, device_hours and basis (measured, calculated, guess); guess when it cannot be calculated"
+    ],
+    [
+      2,
+      "ranking 0 needs order rows with saving_hours and device_hours"
+    ]
+  ],
+  "size_before": 494135,
+  "size_after": 246958,
+  "archive": "ranking_details/rankings-before-release-ledger-reconciliation.json",
+  "archive_bytes": 327086,
+  "validation": {
+    "original_numeric_forecasts_and_actuals_preserved": true,
+    "existing_nonprediction_fields_preserved": true,
+    "archived_rankings_exact_json_equal": true,
+    "all_efforts_in_current_ranking": true,
+    "real_check_large_files": "Passed for ledger and archive",
+    "commands": [
+      "python3 bringup/artifacts/release-ledger-reconciliation/repair.py",
+      "PRE_COMMIT_HOME=bringup/artifacts/pre-commit python_env/bin/pre-commit run check-large-files --files models/autoports/google_gemma_4_31b_it/doc/agentic_evals/efforts.json models/autoports/google_gemma_4_31b_it/doc/agentic_evals/ranking_details/rankings-before-release-ledger-reconciliation.json",
+      "python3 <installed>/scripts/check_agentic_serving.py --model-dir models/autoports/google_gemma_4_31b_it --stage agentic-evals"
+    ]
+  },
+  "scope": "Documentation only; release frozen configuration and running jobs untouched. No device tests needed.",
+  "full_gate": {
+    "exit_code": 2,
+    "remaining_critical_categories": {
+      "unrecorded_historical_saving_forecasts": 18,
+      "zero_cost_or_unknown_ranking_prices": 1,
+      "disk_preflight_scope_coordinator_owned": 1,
+      "release_results_missing_while_release_running": 2
+    },
+    "advisories": "Existing duplicate weight representation, fixed KV budget and diagnostic B8 selection reasons; no new runtime defect inferred.",
+    "evidence": "bringup/artifacts/release-ledger-reconciliation/full-gate.txt"
+  },
+  "coordinator_owned_related_change": "Growing-context pointer reconciled by coordinator to existing C8 capacity evidence, no new experiment; full gate no longer reports growing-context deficiency.",
+  "limitations": [
+    "Unknown historical forecasts cannot be recreated after results; later zero credited saving does not establish a numerical earlier prediction.",
+    "Installed ranking checker requires strictly positive device cost; truthful zero host-only cost remains.",
+    "Documentation reconciliation does not complete running release, alter frozen sources, or establish disk free space."
+  ],
+  "evidence_hashes": {
+    "bringup/artifacts/release-ledger-reconciliation/before.json": "377d3bed8dd69a0d0a60cbb242e343c44d0b97dd431feffea843a1d39d4601fe",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/efforts.json": "1c2d0b544e875d255c9c291c1d018d109e6dbb13bcc82fa1b42a4d136528bc71",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/ranking_details/rankings-before-release-ledger-reconciliation.json": "a4344ec3e312645598ea09691085713a4e3ed88894e53b86be10a8f5077c6b29"
+  }
+}

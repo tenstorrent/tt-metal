@@ -37,7 +37,7 @@
     "One final closure review and stage gates; preserve unresolved disk and checker limitations"
   ],
   "initial_stop_at": "2026-11-06T04:33:36.867416+00:00",
-  "updated_at": "2026-11-07T15:50:54.509629+00:00",
+  "updated_at": "2026-11-07T15:58:20.367754+00:00",
   "completed_preparation": [
     "Fresh autoport registry and suite entries published; full host suite3737 passed15 skipped",
     "Stratified task cohorts frozen before scores",
@@ -266,5 +266,12 @@
     "initial_native_reply_proof": "7/8 only; not dry proof",
     "next160_measured_projection_hours": 11.65615118558173,
     "full198_current_measured_tail_hours": 13.669956140081167
+  },
+  "historical_effort_forecasts": {
+    "status": "unavailable_after_evidence_reconciliation",
+    "count": 18,
+    "reason": "Historical saving forecasts absent from original plans/ledger; do not fabricate retrospective predictions. AutoFix repaired representation gaps but cannot create missing prior measurements or intentions.",
+    "evidence": "runs/release-ledger-reconciliation/RESULT.json",
+    "release_impact": "No runtime change; frozen release continues to completion. Final stage acceptance must account for documented incompleteness."
   }
 }

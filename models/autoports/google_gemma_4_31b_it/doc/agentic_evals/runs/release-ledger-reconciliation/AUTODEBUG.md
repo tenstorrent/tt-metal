@@ -1,0 +1,5 @@
+# Diagnosis: effort evidence representation
+
+Direct source diagnosis (not a new isolated model/runtime investigation). The supplied stage12-release-running-gate.txt is empty; independently invoking the installed checker functions reproduces26 forecast-shape errors and one outcome error. check_prediction requires a nonempty numeric saving_hours dictionary and a basis enum.21 records have empty dictionaries; five preserve valid basis words with explanatory suffixes. check_outcome reports missing owner/plan collectively, but long-prefill-decode-interference already has both: only box_hours is missing. Its final RESULT states no device allocation; the older0.25h trial remains explicitly unallocated.
+
+Minimal alternatives: normalize basis while preserving descriptions; restore zero planning credit only where the original prediction explicitly says no speed credit; preserve other missing forecasts rather than reverse-engineering them from later outcomes. The installed check_rankings requires device_hours>0, rejecting valid host-only zero costs. Do not fabricate nonzero costs or modify installed checker. No model/runtime experiment is implicated.

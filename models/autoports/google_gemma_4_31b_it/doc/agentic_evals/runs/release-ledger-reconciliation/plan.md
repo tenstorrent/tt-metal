@@ -1,0 +1,3 @@
+# Release ledger representation reconciliation
+
+Coordinator goal: faithful effort-ledger schema. Diagnose current gate failures against actual checker and original plans/results; repair only genuine representation gaps, preserving missing historical forecasts explicitly. Never invent predictions, measurements or nonzero host/device cost to satisfy a checker. Installed skills remain read-only; zero-device-cost ranking defect remains recorded. Device box0h; host box1h; speed credit0. Register this validity effort and rerank; preserve ranking history if size requires archival. Own efforts.json and this effort evidence only; no serving/runtime/release changes or closure review. Final evidence once with source comparisons and remaining gate failures.

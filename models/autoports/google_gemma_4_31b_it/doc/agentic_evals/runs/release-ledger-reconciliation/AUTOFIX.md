@@ -1,0 +1,9 @@
+# AutoFix: release ledger reconciliation
+
+Diagnosis: AUTODEBUG.md and the installed checker source reproduce26 forecast-shape errors and one missing box. The supplied original gate file was empty, so no findings were attributed to its contents.
+
+Kept the minimal documentation repair: normalized five basis enums while retaining exact original descriptions; restored three explicit no-speed-credit forecasts as zero planning credit; added zero allocated device box for the completed host-only long-prefill assessment, retaining its prior unallocated0.25h trial forecast. Eighteen empty historical savings remain unknown with explicit missing_reasons. No estimates or measured values were fabricated. Registered this host-only validity effort with0 device hours and0 saving credit; retained all original effort outcome fields.
+
+Archived all nine previous inline ranking snapshots losslessly into ranking_details/rankings-before-release-ledger-reconciliation.json, preserving earlier archive pointers and exact JSON content; current full rerank covers all128 efforts plus the existing unmatched historical label. No rankings or evidence were deleted. Latest ranking keeps validity first and records that no speed work delays the frozen release.
+
+Validation: private repair.py asserts original numeric forecasts/actuals and existing nonprediction fields unchanged, archive JSON equality and full ranking membership. Real check-large-files hook passed for both ledger and archive. Full installed stage checker exits2:18 unavailable historical savings, legitimate zero-cost/unknown ranking prices, coordinator-owned disk scope, and running release results absent. Existing advisory reasons are preserved. The checker and installed skills remain read-only. No device, runtime, harness, CI, release, or commit action. See RESULT.json for precise commands, hashes and remaining findings.
