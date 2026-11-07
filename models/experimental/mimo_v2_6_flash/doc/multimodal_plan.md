@@ -65,7 +65,8 @@ Decisions:
    encoder (mel -> codes) runs in fp32 in vLLM's front end (tt/audio/processor.py), bit-identical to the reference;
    its RVQ decisions sit at fp32 rounding level (an fp64 encoder already changes a code frame per 30-300 s clip,
    tests/perf/audio_codes_margin.py), so it stays on the host. The patch encoder (codes -> embeddings) runs TP=8 on
-   the requesting row (tt/audio/patch.py, 57 MB/chip; ``MIMO_AUDIO_PATCH=device``, the default).
+   the requesting row (tt/audio/patch.py, 57 MB/chip; ``MIMO_AUDIO_PATCH=device``) or on the engine's host CPU
+   (``engine``, the default: with the device patch encoder a row engine failed its prefill batch-trace capture at startup).
 4. **Speculative decoding.** MTP / DFlash drafters see placeholder-token embeddings at multimodal positions in the
    first milestone (affects acceptance only, never output). Fix later if acceptance drops measurably.
 5. **Chunked prefill and APC.** Items may straddle chunks (vLLM's chunked multimodal input stays on): each chunk
