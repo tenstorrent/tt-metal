@@ -126,7 +126,9 @@ void py_module(nb::module_& m) {
         nb::arg("max_norm"),
         nb::arg("p_norm_type") = 2.0f,
         nb::arg("error_if_nonfinite") = false,
-        "Clip gradients of parameters to a maximum norm. Returns the total norm after clipping.");
+        "Clip gradients of parameters to a maximum norm in place. Returns the total norm before clipping. On a mesh, "
+        "each gradient is reduced over the mesh axes its parameter is sharded on, so replicated gradients, which must "
+        "be identical on every device (all-reduce partial-sum grads first), are counted once.");
 
     // Parameter precision (training_config.precision.master_dtype)
     m.def(
