@@ -10,10 +10,12 @@
 // partial (c_17) into its slot of the finishing core's c_18 and counts it on that core's semaphore; a head moves its
 // partial into this core's c_20; a finish first waits for its partials and hands them to the compute kernel. Codebook
 // formats: the writer also runs its part of the grid lookups of each record the reader asks for, between its own
-// waits. Compile args: K tiles, tiles per chunk, input semaphore, partial semaphore, format id, the lookup request,
-// answer and page address semaphores, the input's and the output's TensorAccessorArgs. Runtime args: collector, input
-// address, output address, multicast rectangle (NoC x / y start, x / y end, in this writer's NoC order), cores in it,
-// segments, then per segment: tail: slot, role, finishing core NoC x, y; else: N tile, role, partials, 0.
+// waits. TQ2_0 with one input row (gguf_matmul_tq2_compute.cpp): the collector zeroes every row of each input tile but
+// row 0 before the multicast, and c_1 counts 32-byte pages. Compile args: K tiles, tiles per chunk, input semaphore,
+// partial semaphore, format id, the lookup request, answer and page address semaphores, one-row TQ2_0 (0 / 1), the
+// input's and the output's TensorAccessorArgs. Runtime args: collector, input address, output address, multicast
+// rectangle (NoC x / y start, x / y end, in this writer's NoC order), cores in it, segments, then per segment: tail:
+// slot, role, finishing core NoC x, y; else: N tile, role, partials, 0.
 
 #include <cstdint>
 
@@ -36,9 +38,11 @@ void kernel_main() {
     constexpr auto FMT = static_cast<Format>(get_compile_time_arg_val(4));
     constexpr uint32_t request_sem = get_compile_time_arg_val(5), answer_sem = get_compile_time_arg_val(6);
     constexpr uint32_t address_sem = get_compile_time_arg_val(7);
-    constexpr auto input_args = TensorAccessorArgs<8>();
+    constexpr bool zero_rows = get_compile_time_arg_val(8) == 1;
+    constexpr auto input_args = TensorAccessorArgs<9>();
     constexpr auto output_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
     constexpr uint32_t tile_bytes = 2048, partial_bytes = 4096;
+    constexpr uint32_t in_pages = zero_rows ? tile_bytes / 32 : 1;  // c_1 pages per input tile
 
     const bool collector = get_arg_val<uint32_t>(0) == 1;
     const auto input = TensorAccessor(input_args, get_arg_val<uint32_t>(1));
@@ -98,7 +102,7 @@ void kernel_main() {
         }
     };
 
-    in_cb.reserve_back(k_tiles);
+    in_cb.reserve_back(k_tiles * in_pages);
     const uint32_t base = in_cb.get_write_ptr();
     // Collector: chunk c + 1 is read while chunk c is multicast.
     auto read_chunk = [&](uint32_t k0) {
@@ -113,6 +117,16 @@ void kernel_main() {
         const uint32_t n = k_tiles - k0 < chunk ? k_tiles - k0 : chunk;
         if (collector) {
             noc.async_read_barrier();
+            if constexpr (zero_rows) {
+                // Rows 1..15 of faces 0 and 1, faces 2 and 3: the compute kernel's in0 tiles overlap them.
+                noc.async_writes_flushed();
+                for (uint32_t kt = k0; kt < k0 + n; kt++) {
+                    const uint32_t tile = base + kt * tile_bytes;
+                    noc.async_write_zeros(CoreLocalMem<uint32_t>(tile + 32), 480);
+                    noc.async_write_zeros(CoreLocalMem<uint32_t>(tile + 544), tile_bytes - 544);
+                }
+                noc.write_zeros_l1_barrier();
+            }
             if (mc_dests > 0) {
                 noc.async_writes_flushed();  // the previous count has left before it is overwritten
                 const MulticastEndpoint grid;
@@ -139,7 +153,7 @@ void kernel_main() {
                 serve();
             }
         }
-        in_cb.push_back(n);
+        in_cb.push_back(n * in_pages);
     }
 
     for (uint32_t s = 0; s < segments; s++) {

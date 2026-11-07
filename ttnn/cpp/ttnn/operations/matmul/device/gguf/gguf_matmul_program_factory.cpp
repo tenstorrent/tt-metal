@@ -26,6 +26,10 @@ constexpr uint32_t kGroupsPerRead = 4;  // one-page groups: records per unit of 
 constexpr uint32_t kPageUnits = 4;      // units of pages c_0 holds
 constexpr uint32_t kRecordSlots = 3;    // multi-page groups: records staged in L1, two of them in flight from DRAM
 constexpr uint32_t kMaxSegments = 64;   // keeps each kernel's runtime arguments within the limit
+constexpr uint32_t kScaleTiles = 3;     // TQ2_0: scale tiles in c_3
+constexpr uint32_t kTq2Unit = 2;        // TQ2_0: records per unit of reads (measured, decode)
+constexpr uint32_t kTq2Units = 8;       // TQ2_0: units c_0 holds
+constexpr uint32_t kTq2InFlight = 2;    // TQ2_0: units in flight
 
 constexpr auto kKernels = "ttnn/cpp/ttnn/operations/matmul/device/kernels/gguf/";
 
@@ -133,6 +137,11 @@ GgufMatmulProgramFactory::cached_program_t GgufMatmulProgramFactory::create(
     const uint32_t groups = k_tiles / f.group_tiles, pages_per_group = f.group_tiles / f.page_tiles;
     const uint32_t rows = input.logical_shape().volume() / input.logical_shape()[-1];
     const uint32_t in0_rows = rows > 16 ? 32 : rows > 8 ? 16 : 8;
+    // TQ2_0 and expanded TQ1_0 (TQ2_0's pages): block-float weight tiles, no decoding (gguf_matmul_tq2_*.cpp). With one
+    // input row the scales apply once per window of 16 K groups (one DEST row each), otherwise once per K group.
+    const bool tq2 = weight.dtype() == DataType::GGUF_TQ2_0 || weight.dtype() == DataType::GGUF_TQ1_0_EXPANDED;
+    const bool one_row = tq2 && rows == 1;
+    const uint32_t window = one_row ? 16 : 1;
 
     // N tiles in bank order when each N tile's records sit in one DRAM bank (page g * n_tiles + n of an interleaved
     // buffer is in bank page % banks), so that a run of a core's items is in one bank.
@@ -200,16 +209,36 @@ GgufMatmulProgramFactory::cached_program_t GgufMatmulProgramFactory::create(
     const CoreRangeSet full(CoreRange(CoreCoord(0, 0), CoreCoord(grid.x - 1, grid.y - 1)));
     const CoreRangeSet compute = core_ranges(cores);
 
-    // c_1, the input, sits at the same address on every core of the grid: the collector multicasts it there.
-    add_cb(program, full, tt::CBIndex::c_1, tt::DataFormat::Float16_b, 2048, k_tiles);
+    // c_1, the input, sits at the same address on every core of the grid: the collector multicasts it there. One-row
+    // TQ2_0 reads it as [16, 32] tiles at 32-byte offsets.
+    if (one_row) {
+        add_cb(program, full, tt::CBIndex::c_1, tt::DataFormat::Float16_b, 32, 64 * k_tiles, tt::tt_metal::Tile({16, 32}));
+    } else {
+        add_cb(program, full, tt::CBIndex::c_1, tt::DataFormat::Float16_b, 2048, k_tiles);
+    }
     const uint32_t l1_page = f.l1_page_bytes();
     const tt::tt_metal::Tile page_tile(
         l1_page == 1024   ? std::array<uint32_t, 2>{16, 16}
         : l1_page == 2048 ? std::array<uint32_t, 2>{16, 32}
                           : std::array<uint32_t, 2>{32, 32});
-    const uint32_t unit = pages_per_group > 1 ? pages_per_group : kGroupsPerRead;
-    add_cb(program, compute, tt::CBIndex::c_0, tt::DataFormat::UInt32, l1_page, kPageUnits * unit, page_tile);
-    if (pages_per_group > 1) {
+    const uint32_t unit = tq2 ? kTq2Unit : pages_per_group > 1 ? pages_per_group : kGroupsPerRead;
+    // TQ2_0: whole records in 64-byte pages (the matmul indexes the weight tiles at 256-byte steps), and the scale
+    // tiles, fp32: [16, 32] with one input row, else [32, 32].
+    const uint32_t scale_tile_bytes = one_row ? 2048 : 4096;
+    if (tq2) {
+        add_cb(program, compute, tt::CBIndex::c_0, tt::DataFormat::Bfp4_b, 64, kTq2Units * unit * f.page_bytes() / 64);
+        add_cb(
+            program,
+            compute,
+            tt::CBIndex::c_3,
+            tt::DataFormat::Float32,
+            scale_tile_bytes,
+            kScaleTiles,
+            tt::tt_metal::Tile(one_row ? std::array<uint32_t, 2>{16, 32} : std::array<uint32_t, 2>{32, 32}));
+    } else {
+        add_cb(program, compute, tt::CBIndex::c_0, tt::DataFormat::UInt32, l1_page, kPageUnits * unit, page_tile);
+    }
+    if (pages_per_group > 1 && !tq2) {
         add_cb(program, compute, tt::CBIndex::c_2, tt::DataFormat::UInt32, kRecordSlots * f.page_bytes(), 1);
     }
     add_cb(program, compute, tt::CBIndex::c_16, tt::DataFormat::Float16_b, 2048, 2);
@@ -264,19 +293,21 @@ GgufMatmulProgramFactory::cached_program_t GgufMatmulProgramFactory::create(
 
     // Reads in flight: two for Q4_0 and Q4_1, one for the others, which a second one slows down (measured, decode).
     const bool two_in_flight = weight.dtype() == DataType::GGUF_Q4_0 || weight.dtype() == DataType::GGUF_Q4_1;
-    std::vector<uint32_t> reader_ct = {
-        f.format_id,
-        kPageUnits * unit,
-        kGroupsPerRead,
-        kRecordSlots,
-        request_sem,
-        answer_sem,
-        address_sem,
-        two_in_flight ? 2u : 1u};
+    std::vector<uint32_t> reader_ct =
+        tq2 ? std::vector<uint32_t>{kTq2Units * unit, unit, kTq2InFlight, window, kScaleTiles, scale_tile_bytes}
+            : std::vector<uint32_t>{
+                  f.format_id,
+                  kPageUnits * unit,
+                  kGroupsPerRead,
+                  kRecordSlots,
+                  request_sem,
+                  answer_sem,
+                  address_sem,
+                  two_in_flight ? 2u : 1u};
     TensorAccessorArgs(*weight.buffer()).append_to(reader_ct);
     const uint32_t chunk = std::min(kInputChunk, k_tiles);
     std::vector<uint32_t> writer_ct = {
-        k_tiles, chunk, input_sem, partial_sem, f.format_id, request_sem, answer_sem, address_sem};
+        k_tiles, chunk, input_sem, partial_sem, f.format_id, request_sem, answer_sem, address_sem, one_row ? 1u : 0u};
     TensorAccessorArgs(*input.buffer()).append_to(writer_ct);
     TensorAccessorArgs(*output.buffer()).append_to(writer_ct);
 
@@ -297,7 +328,7 @@ GgufMatmulProgramFactory::cached_program_t GgufMatmulProgramFactory::create(
         const CoreRangeSet ranges = core_ranges(sub);
         shared.reader[parity] = CreateKernel(
             program,
-            std::string(kKernels) + "gguf_matmul_reader.cpp",
+            std::string(kKernels) + (tq2 ? "gguf_matmul_tq2_reader.cpp" : "gguf_matmul_reader.cpp"),
             ranges,
             DataMovementConfig{
                 .processor = DataMovementProcessor::RISCV_1,
@@ -316,13 +347,14 @@ GgufMatmulProgramFactory::cached_program_t GgufMatmulProgramFactory::create(
     }
     const KernelHandle compute_kernel = CreateKernel(
         program,
-        std::string(kKernels) + "gguf_matmul_compute.cpp",
+        std::string(kKernels) + (tq2 ? "gguf_matmul_tq2_compute.cpp" : "gguf_matmul_compute.cpp"),
         compute,
         ComputeConfig{
-            .math_fidelity = MathFidelity::HiFi2,
+            .math_fidelity = tq2 ? MathFidelity::HiFi3 : MathFidelity::HiFi2,  // HiFi3: exact block-float products
             .fp32_dest_acc_en = true,
             .dst_full_sync_en = true,
-            .compile_args = {f.format_id, k_tiles, chunk, in0_rows},
+            .compile_args = tq2 ? std::vector<uint32_t>{k_tiles, chunk, one_row ? 1u : 0u, window}
+                                : std::vector<uint32_t>{f.format_id, k_tiles, chunk, in0_rows},
             .defines = lookup_defines});
 
     for (size_t i = 0; i < cores.size(); i++) {

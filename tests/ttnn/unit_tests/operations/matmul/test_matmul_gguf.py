@@ -136,6 +136,12 @@ def test_decode_large(device, dtype, k, n):
     _run(device, dtype, (1, 1, 1), k, n)
 
 
+@pytest.mark.parametrize("m", [1, 3])
+def test_decode_tq2_0_long_k(device, m):
+    # 40 K groups: with one input row the scales apply per 16 K groups, and the cores' segments cross those windows.
+    _run(device, ttnn.gguf_tq2_0, (1, 1, m), 10240, 2048)
+
+
 @pytest.mark.parametrize("m", [128, 512])
 @pytest.mark.parametrize("dtype", ttnn.GGUF_DTYPES, ids=_name)
 def test_prefill(device, dtype, m):
@@ -155,14 +161,22 @@ def test_expanded_round_trip(device, dtype):
 @pytest.mark.parametrize("m", [1, 32, 128])
 @pytest.mark.parametrize("dtype", list(ttnn.GGUF_EXPANDED.values()), ids=_name)
 def test_expanded_matches_compact(device, dtype, m):
-    # The same weights: the outputs of both layouts must be the same bits.
+    # The same weights: the outputs of both layouts must be the same bits. Expanded TQ1_0 runs TQ2_0's block-float
+    # matmul, so its reference is TQ2_0 blocks of the same trits.
     source, k, n = SOURCE[dtype], _k(dtype), 256
     blocks = _blocks(source, k, n)
+    reference, reference_blocks = source, blocks
+    if source == ttnn.gguf_tq1_0:
+        reference = ttnn.gguf_tq2_0
+        values = gguf.quants.dequantize(blocks, gguf.GGMLQuantizationType.TQ1_0)
+        reference_blocks = gguf.quants.quantize(values.reshape(n, k), gguf.GGMLQuantizationType.TQ2_0)
+        np.testing.assert_array_equal(gguf.quants.dequantize(reference_blocks, gguf.GGMLQuantizationType.TQ2_0), values)
     torch.manual_seed(0)
     x = torch.randn(1, m, k).bfloat16()
     x_tt = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     compact, expanded = (
-        ttnn.to_torch(ttnn.linear(x_tt, ttnn.from_gguf(blocks, (k, n), d, device=device))) for d in (source, dtype)
+        ttnn.to_torch(ttnn.linear(x_tt, ttnn.from_gguf(b, (k, n), d, device=device)))
+        for b, d in ((reference_blocks, reference), (blocks, dtype))
     )
     assert torch.equal(compact, expanded)
     _check(expanded, x, blocks, source, k, n)
