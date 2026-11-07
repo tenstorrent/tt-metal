@@ -25,7 +25,7 @@ SHAPES = [(2048, 256), (8192, 256), (32768, 256)]
 REPEATS = 5
 # Inputs inside the range the generated kernel is fitted on.
 LOW, HIGH = -10.0, 10.0
-PATH = "tests/ttnn/perf_tests/operations/eltwise/test_pack_relu_device_perf.py"
+PATH = "tests/ttnn/nightly/unit_tests/operations/eltwise/perf/pack_relu_device_perf.py"
 # The profiled calls run only inside the device profiler, which the device-perf test launches: run on their
 # own, they would hold the device that the profiler's run of them then waits for.
 IN_PROFILER = pytest.mark.skipif(
