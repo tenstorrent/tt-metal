@@ -49,7 +49,7 @@ def _params():
     for gate in _gate_params():
         mesh, dp, variant, case_name = gate.values
         for scenario, prefix in PREFIXES:
-            if prefix == "filled" and GATE_CASES.get(case_name, (None, False))[1]:
+            if prefix == "filled" and GATE_CASES[case_name][1]:
                 continue
             params.append(
                 pytest.param(
@@ -60,7 +60,7 @@ def _params():
                     scenario,
                     prefix,
                     marks=gate.marks,
-                    id=f"{gate.id}-{scenario}-{prefix}",
+                    id=f"{gate.id or 'unsupported'}-{scenario}-{prefix}",
                 )
             )
     return params
@@ -88,6 +88,14 @@ def _fill_prefix(mesh_device, case, cache: int, chunk: int, hidden_size: int):
     ttnn.synchronize_device(mesh_device)
 
 
+def _drain(mesh_device):
+    """Best-effort sync before freeing: on an error path, earlier enqueued work may still use the buffers."""
+    try:
+        ttnn.synchronize_device(mesh_device)
+    except Exception:
+        pass
+
+
 def _eager_outputs(mesh_device, case, start):
     """RUNS forwards back to back, every output kept on device; then one sync and the per-device outputs."""
     outputs = []
@@ -97,6 +105,7 @@ def _eager_outputs(mesh_device, case, start):
         ttnn.synchronize_device(mesh_device)
         return [_device_tensors(out) for out in outputs]
     finally:
+        _drain(mesh_device)
         for out in outputs:
             ttnn.deallocate(out)
 
@@ -127,6 +136,7 @@ def _replay_outputs(mesh_device, case, start):
         ttnn.synchronize_device(mesh_device)
         return [_device_tensors(copy) for copy in outputs]
     finally:
+        _drain(mesh_device)
         for copy in outputs:
             ttnn.deallocate(copy)
         if capturing:
@@ -153,13 +163,19 @@ def _bit_equal(a, b):
 
 
 def _differences(what, reference, outputs, first=1):
-    """One line per run that is not bit-exact with `reference`: the devices that differ and their PCC."""
+    """One line per run (numbered from `first`; run 0 is the reference) that is not bit-exact with `reference`: the
+    devices that differ and their PCC."""
     lines = []
     for run, devices in enumerate(outputs, start=first):
         bad = [d for d, (a, b) in enumerate(zip(reference, devices)) if not _bit_equal(a, b)]
         if bad:
-            pcc = min(comp_pcc(reference[d], devices[d], 0.0)[1] for d in bad)
-            lines.append(f"{what} {run}: {len(bad)}/{len(devices)} devices differ (first {bad[:4]}), min PCC {pcc:.6f}")
+            shapes = [d for d in bad if reference[d].shape != devices[d].shape]
+            if shapes:
+                d = shapes[0]
+                detail = f"shape {tuple(devices[d].shape)} vs {tuple(reference[d].shape)} on device {d}"
+            else:
+                detail = f"min PCC {min(comp_pcc(reference[d], devices[d], 0.0)[1] for d in bad):.6f}"
+            lines.append(f"{what} {run}: {len(bad)}/{len(devices)} devices differ (first {bad[:4]}), {detail}")
     return lines
 
 
