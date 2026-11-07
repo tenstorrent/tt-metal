@@ -325,13 +325,37 @@ void test_h2d_host_push_ordering_stress(
     std::mt19937 rng(64622);
     std::generate(patterns.begin(), patterns.end(), rng);
 
+    // A run takes seconds even with strict writes, so a socket that stops moving for this long has stalled. The
+    // timeout restarts on every page, and the clock is read only while a page waits, so the timed loop stays tight.
+    constexpr auto kStallTimeout = std::chrono::seconds(10);
+    auto retry_until_stalled = [&](auto&& operation, const char* timeout_message, uint32_t completed_pages) {
+        if (operation()) {
+            return;
+        }
+        const auto deadline = std::chrono::steady_clock::now() + kStallTimeout;
+        while (!operation()) {
+            if (std::chrono::steady_clock::now() >= deadline) {
+                throw std::runtime_error(
+                    std::string(timeout_message) + " after " + std::to_string(completed_pages) + "/" +
+                    std::to_string(num_pages) + " pages");
+            }
+            std::this_thread::yield();
+        }
+    };
+
     std::exception_ptr write_error;
     std::chrono::steady_clock::duration write_time{};
     std::thread write_thread([&]() {
         try {
             const auto start = std::chrono::steady_clock::now();
             for (uint32_t p = 0; p < num_pages; p++) {
-                input_socket.write(patterns.data() + ((p % kNumPatterns) * page_size_words), 1);
+                retry_until_stalled(
+                    [&]() {
+                        return experimental::detail::try_write(
+                            input_socket, patterns.data() + ((p % kNumPatterns) * page_size_words), /*num_pages=*/1);
+                    },
+                    "Timed out waiting for space in the H2D socket",
+                    p);
             }
             write_time = std::chrono::steady_clock::now() - start;
         } catch (...) {
@@ -339,22 +363,34 @@ void test_h2d_host_push_ordering_stress(
         }
     });
 
+    std::exception_ptr read_error;
     std::vector<uint32_t> page(page_size_words);
     uint32_t num_bad_pages = 0;
     std::optional<uint32_t> first_bad_page;
-    for (uint32_t p = 0; p < num_pages; p++) {
-        output_socket.read(page.data(), 1);
-        if (!std::equal(page.begin(), page.end(), patterns.begin() + ((p % kNumPatterns) * page_size_words))) {
-            num_bad_pages++;
-            first_bad_page = first_bad_page.value_or(p);
+    try {
+        for (uint32_t p = 0; p < num_pages; p++) {
+            retry_until_stalled(
+                [&]() { return experimental::detail::try_read(output_socket, page.data(), /*num_pages=*/1); },
+                "Timed out waiting for data in the D2H socket",
+                p);
+            if (!std::equal(page.begin(), page.end(), patterns.begin() + ((p % kNumPatterns) * page_size_words))) {
+                num_bad_pages++;
+                first_bad_page = first_bad_page.value_or(p);
+            }
         }
+    } catch (...) {
+        read_error = std::current_exception();
     }
+    // A failed read leaves the writer waiting for space, which it gives up on after kStallTimeout.
     write_thread.join();
     if (write_error) {
         std::rethrow_exception(write_error);
     }
-    input_socket.barrier();
-    output_socket.barrier();
+    if (read_error) {
+        std::rethrow_exception(read_error);
+    }
+    input_socket.barrier(10000);
+    output_socket.barrier(10000);
 
     const double us_per_page = std::chrono::duration<double, std::micro>(write_time).count() / num_pages;
     log_info(
@@ -725,6 +761,10 @@ TEST_F(HDSocketFixture, H2DSocketLoopback) {
             // On most hosts, page size is 4K, so this should lead to 5 pages being allocated on the host.
             test_hd_socket_loopback(
                 mesh_device_, 16512, 1088, 156672, h2d_mode, 50, MeshCoreCoord(socket_coord, CoreCoord(0, 1)));
+            // Uneven wrap with pages larger than one NOC burst (8 KiB on Wormhole, 16 KiB on Blackhole), which the
+            // kernel moves in several bursts and a shorter last one.
+            test_hd_socket_loopback(
+                mesh_device_, 65536, 19456, 155648, h2d_mode, 50, MeshCoreCoord(socket_coord, CoreCoord(1, 0)));
         }
     }
 }
