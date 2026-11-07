@@ -69,8 +69,7 @@ class _MoEPerfCase:
 _K2_7 = _MoEPerfCase(
     label="kimi-k2.7",
     config=KimiK27Config,
-    # Mean of CI runs 40424879138, 40494538796, 40532334659 and 40610708699 (2.991-3.000 ms).
-    expected_ns=2_996_000,
+    expected_ns=2_896_000,
     margin=0.03,
     shape_note="384 experts / top-8, 7168 emb",
 )
