@@ -110,6 +110,36 @@ def test_tilize_height_sharded_to_interleaved(device, tensor_shape, num_cores):
     assert_equal(torch_input, ttnn.to_torch(tt_output))
 
 
+@pytest.mark.parametrize(
+    "tensor_shape, shard_height, num_cores",
+    [
+        ([1, 1, 1312, 128], 1280, 2),  # partial last shard: 32 of 1280 rows
+        ([1, 1, 1568, 256], 768, 3),  # partial last shard: 32 of 768 rows
+        ([1, 1, 2560, 128], 1280, 2),  # control: shards cover the height exactly
+    ],
+)
+def test_tilize_height_sharded_partial_shard_to_interleaved(device, tensor_shape, shard_height, num_cores):
+    # A HEIGHT_SHARDED input whose last shard is partial must not write tiles past the end of the
+    # interleaved L1 output. The overrun lands in the L1 buffer allocated just above the output.
+    torch.manual_seed(0)
+    grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_cores - 1, 0))})
+    shard_spec = ttnn.ShardSpec(grid, [shard_height, tensor_shape[-1]], ttnn.ShardOrientation.ROW_MAJOR)
+    input_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec)
+    torch_input = torch.rand(tensor_shape, dtype=torch.bfloat16)
+    tt_input = ttnn.from_torch(
+        torch_input, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=input_mem_config
+    )
+    torch_sentinel = torch.full([1, 1, 1024, 1024], 7.0, dtype=torch.bfloat16)
+    tt_sentinel = ttnn.from_torch(
+        torch_sentinel, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
+    )
+    tt_output = ttnn.tilize(tt_input, memory_config=ttnn.L1_MEMORY_CONFIG)
+    assert tt_output.layout == ttnn.TILE_LAYOUT
+    assert tt_output.memory_config().memory_layout == ttnn.TensorMemoryLayout.INTERLEAVED
+    assert_equal(torch_input, ttnn.to_torch(tt_output))
+    assert_equal(torch_sentinel, ttnn.to_torch(tt_sentinel))
+
+
 @pytest.mark.parametrize("api", ["tilize", "to_layout"])
 def test_tilize_width_sharded_to_interleaved(device, api):
     torch.manual_seed(42)
