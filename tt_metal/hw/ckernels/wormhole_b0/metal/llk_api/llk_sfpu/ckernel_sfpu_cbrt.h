@@ -16,9 +16,6 @@ namespace ckernel::sfpu {
 
 // Whether BF16 DEST runs the generated cbrt kernel as one call over the whole tile.
 inline constexpr bool cbrt_bf16_whole_tile = false;
-// The stock cbrt kernel needs no BF16 setup.
-template <bool bf16_kernel>
-inline void cbrt_bf16_tile_init() {}
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS>
 inline void calculate_cube_root() {

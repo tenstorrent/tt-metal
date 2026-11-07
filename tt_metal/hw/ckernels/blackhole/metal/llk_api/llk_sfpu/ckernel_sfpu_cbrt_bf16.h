@@ -3,11 +3,6 @@
 
 #pragma once
 #include <cstdint>
-
-#include "ckernel.h"
-#include "ckernel_defs.h"
-#include "cmath_common.h"
-
 namespace ckernel::sfpu {
 
 // The kernel is fitted on BF16 data; the SFPU reads DEST in the math thread's SrcB format, as BF16 for
@@ -23,7 +18,7 @@ inline bool bf16_dest_cbrt() {
     return false;
 #endif
 }
-// Whole-tile BF16 cbrt: Moroz seed plus one Newton step on cube_root_init's constants, scheduled to fill stalls.
+// calculate_newton_root's instructions in a stall-filling order, constants held in LRegs.
 inline void calculate_cbrt_bf16_scheduled() {
     TTI_SFPLOAD(3, 0, 7, 0);
     TTI_SFPLOAD(0, 0, 7, 2);
@@ -513,11 +508,9 @@ inline void calculate_cbrt_bf16_scheduled() {
 }
 
 template <int ITERATIONS = 32>
-inline void calculate_cbrt_bf16() {
-    static_assert(ITERATIONS == 32, "the BF16 cbrt kernel runs as one whole-tile call");
+__attribute__((noinline)) inline void calculate_cbrt_bf16() {
+    static_assert(ITERATIONS == 32, "the BF16 kernel runs as one whole-tile call");
     calculate_cbrt_bf16_scheduled();
 }
-// The kernel reads only the constants cube_root_init programs, so it needs no setup of its own.
-inline void init_cbrt_bf16() {}
 
 }  // namespace ckernel::sfpu

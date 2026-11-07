@@ -6,6 +6,7 @@
 #include "ttnn/device_operation.hpp"
 
 #include "ttnn/operation.hpp"
+#include "ttnn/operations/common/hash_without_rows.hpp"
 #include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
@@ -20,6 +21,7 @@
 #include "ttnn/operations/core/work_split/work_split_tilize.hpp"
 #include "ttnn/common/constants.hpp"
 #include <tt-metalium/buffer_distribution_spec.hpp>
+#include <tt-metalium/experimental/tensor_layout_apis_with_custom_alignment.hpp>
 
 using namespace tt::tt_metal;
 
@@ -270,6 +272,45 @@ void UntilizeDeviceOperation::validate_on_program_cache_miss(
     }
 }
 
+namespace {
+// The multi-core factory with interleaved input and output derives its per-core rows on device when
+// asked to; only that configuration takes the row count at runtime.
+bool row_free_configuration(
+    const UntilizeDeviceOperation::operation_attributes_t& operation_attributes,
+    const UntilizeDeviceOperation::tensor_args_t& tensor_args) {
+    if (!operation_attributes.runtime_rows || tensor_args.input.is_sharded() ||
+        operation_attributes.output_mem_config.is_sharded()) {
+        return false;
+    }
+    return std::holds_alternative<UntilizeMultiCoreProgramFactory>(
+        UntilizeDeviceOperation::select_program_factory(operation_attributes, tensor_args));
+}
+}  // namespace
+
+void UntilizeDeviceOperation::validate_on_program_cache_hit(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    if (!row_free_configuration(operation_attributes, tensor_args)) {
+        validate_on_program_cache_miss(operation_attributes, tensor_args);
+        return;
+    }
+    using namespace tt::constants;
+    const auto& input_tensor_a = tensor_args.input;
+    uint32_t tensor_width = input_tensor_a.padded_shape()[-1];
+    uint32_t tensor_height = tensor_width == 0 ? 0 : input_tensor_a.physical_volume() / tensor_width;
+    TT_FATAL(tensor_width % TILE_WIDTH == 0, "Width must be evenly divisible into tiles");
+    TT_FATAL(tensor_height % TILE_HEIGHT == 0, "Height must be evenly divisible into tiles");
+}
+
+ttsl::hash::hash_t UntilizeDeviceOperation::compute_program_hash(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    if (!row_free_configuration(operation_attributes, tensor_args)) {
+        return ttsl::hash::hash_objects_with_default_seed(
+            ttsl::hash::type_hash<UntilizeDeviceOperation>, operation_attributes, tensor_args);
+    }
+    return tt::tt_metal::operation::hash_operation<UntilizeDeviceOperation>(
+        operation_attributes, ttnn::operations::common::hash_spec_without_rows(tensor_args.input));
+}
+
 UntilizeDeviceOperation::spec_return_value_t UntilizeDeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     using namespace tt::constants;
@@ -278,7 +319,7 @@ UntilizeDeviceOperation::spec_return_value_t UntilizeDeviceOperation::compute_ou
 
     return {tt::tt_metal::TensorSpec(
         input_tensor.logical_shape(),
-        TensorLayout::fromPaddedShape(
+        tt::tt_metal::experimental::tensor_layout_from_padded_shape(
             output_dtype,
             PageConfig(Layout::ROW_MAJOR),
             operation_attributes.output_mem_config,
@@ -394,9 +435,7 @@ UntilizeDeviceOperation::create_op_performance_model(
     const auto& output_tensor = output;
     uint32_t tile_width = input_tensor.tensor_spec().tile().get_width();
     uint32_t tile_height = input_tensor.tensor_spec().tile().get_height();
-    uint32_t single_tile_size = tile_width * tile_height * input_tensor.element_size();
-    uint32_t num_tiles =
-        std::ceil(static_cast<float>(input_tensor.physical_volume()) / static_cast<float>(single_tile_size));
+    uint32_t num_tiles = static_cast<uint32_t>(input_tensor.physical_volume() / (tile_width * tile_height));
     int compute_cycles = 0;
     const int max_tiles_per_row = 8;
     const int latency_untilize = 390;      // measured latency for untilize_block
@@ -422,7 +461,8 @@ Tensor untilize(
     bool fp32_dest_acc_en,
     std::optional<CoreRangeSet> sub_core_grids,
     bool enough_space_height,
-    uint32_t pf_type) {
+    uint32_t pf_type,
+    bool runtime_rows) {
     return ttnn::device_operation::launch<UntilizeDeviceOperation>(
         UntilizeOperationAttributes{
             .output_mem_config = std::move(output_mem_config),
@@ -430,7 +470,8 @@ Tensor untilize(
             .fp32_dest_acc_en = fp32_dest_acc_en,
             .sub_core_grids = std::move(sub_core_grids),
             .enough_space_height = enough_space_height,
-            .pf_type = pf_type},
+            .pf_type = pf_type,
+            .runtime_rows = runtime_rows},
         UntilizeTensorArgs{.input = input});
 }
 

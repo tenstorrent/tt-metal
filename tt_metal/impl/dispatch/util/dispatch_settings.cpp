@@ -32,12 +32,26 @@ static_assert(
     "DISPATCH_MESSAGES_MAX_OFFSET does not match the maximum value of go_msg_t::dispatch_message_offset. "
     "Fix the value in dispatch_settings.hpp");
 
+namespace {
+
+// Multiple CQs on one core share L1, so the per-CQ ringbuffer shrinks to a size that fits two CQs on both dispatch
+// engines and Tensix cores.
+uint32_t get_prefetch_ringbuffer_size(uint32_t num_cqs_per_core, uint32_t l1_size) {
+    if (num_cqs_per_core == 1) {
+        return 1024_KB;
+    }
+    return l1_size < 4_MB ? 384_KB : 864_KB;
+}
+
+}  // namespace
+
 DispatchSettings::DispatchSettings(
     uint32_t num_hw_cqs,
     uint32_t num_cqs_per_core,
     const CoreType& core_type,
     bool is_galaxy_cluster,
     bool are_cqs_dram_backed,
+    uint32_t l1_size,
     uint32_t l1_alignment,
     uint32_t prefetch_q_entry_size_bytes) {
     TT_FATAL(
@@ -47,10 +61,11 @@ DispatchSettings::DispatchSettings(
     this->prefetch_q_entry_size_bytes_ = prefetch_q_entry_size_bytes;
     switch (core_type) {
         case CoreType::WORKER:
-            init_worker_defaults(num_hw_cqs, is_galaxy_cluster, are_cqs_dram_backed, l1_alignment);
+            init_worker_defaults(
+                num_hw_cqs, num_cqs_per_core, is_galaxy_cluster, are_cqs_dram_backed, l1_size, l1_alignment);
             break;
         case CoreType::DISPATCH:
-            init_dispatch_defaults(num_hw_cqs, num_cqs_per_core, are_cqs_dram_backed, l1_alignment);
+            init_dispatch_defaults(num_hw_cqs, num_cqs_per_core, are_cqs_dram_backed, l1_size, l1_alignment);
             break;
         case CoreType::ETH: init_eth_defaults(num_hw_cqs, l1_alignment); break;
         default: TT_THROW("init_defaults not implemented for core type {}", enchantum::to_string(core_type));
@@ -60,7 +75,12 @@ DispatchSettings::DispatchSettings(
 }
 
 void DispatchSettings::init_worker_defaults(
-    uint32_t num_hw_cqs, bool is_galaxy_cluster, bool are_cqs_dram_backed, uint32_t l1_alignment) {
+    uint32_t num_hw_cqs,
+    uint32_t num_cqs_per_core,
+    bool is_galaxy_cluster,
+    bool are_cqs_dram_backed,
+    uint32_t l1_size,
+    uint32_t l1_alignment) {
     this->num_hw_cqs(num_hw_cqs)
         .core_type(CoreType::WORKER)
         .prefetch_q_entries(
@@ -68,7 +88,7 @@ void DispatchSettings::init_worker_defaults(
         .prefetch_max_cmd_size(128_KB)
         .prefetch_cmddat_q_size(256_KB)
         .prefetch_scratch_db_size(128_KB)
-        .prefetch_ringbuffer_size(1024_KB)
+        .prefetch_ringbuffer_size(get_prefetch_ringbuffer_size(num_cqs_per_core, l1_size))
         .prefetch_d_buffer_size(256_KB)
 
         .dispatch_size(512_KB)
@@ -80,7 +100,7 @@ void DispatchSettings::init_worker_defaults(
 }
 
 void DispatchSettings::init_dispatch_defaults(
-    uint32_t num_hw_cqs, uint32_t num_cqs_per_core, bool are_cqs_dram_backed, uint32_t l1_alignment) {
+    uint32_t num_hw_cqs, uint32_t num_cqs_per_core, bool are_cqs_dram_backed, uint32_t l1_size, uint32_t l1_alignment) {
     this->num_hw_cqs(num_hw_cqs)
         .core_type(CoreType::DISPATCH)
         .prefetch_q_entries(
@@ -88,9 +108,7 @@ void DispatchSettings::init_dispatch_defaults(
         .prefetch_max_cmd_size(128_KB)
         .prefetch_cmddat_q_size(256_KB)
         .prefetch_scratch_db_size(128_KB)
-        // Multiple CQs on one dispatch engine share L1, so shrink the per-CQ ringbuffer so they fit.
-        // When each CQ has its own dispatch engine, keep the full 1024 KB ringbuffer.
-        .prefetch_ringbuffer_size(num_cqs_per_core > 1 ? 864_KB : 1024_KB)
+        .prefetch_ringbuffer_size(get_prefetch_ringbuffer_size(num_cqs_per_core, l1_size))
         .prefetch_d_buffer_size(256_KB)
 
         .dispatch_size(512_KB)
