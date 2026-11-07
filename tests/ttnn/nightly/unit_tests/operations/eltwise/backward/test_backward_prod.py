@@ -10,6 +10,7 @@ from tests.ttnn.nightly.unit_tests.operations.eltwise.backward.utility_funcs imp
     data_gen_pt_tt_prod,
     compare_results,
 )
+from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
 @pytest.mark.parametrize(
@@ -88,3 +89,25 @@ def test_bw_prod_default_both(input_shapes, device):
     comp_pass = compare_results(tt_output_tensor_on_device, golden_tensor)
 
     assert comp_pass
+
+
+@pytest.mark.parametrize("full_grad", [False, True])
+@pytest.mark.parametrize("dim", [-1, -2])
+def test_prod_bw_logical_shape_not_tile_aligned(device, dim, full_grad):
+    torch.manual_seed(0)
+    x = (1.0 + 0.05 * torch.randn((1, 1, 40, 50))).bfloat16().float().requires_grad_(True)
+    y = torch.prod(x, dim=dim, keepdim=True)
+    grad = torch.randn(y.shape).bfloat16().float()
+    y.backward(grad)
+    tt_grad_in = grad
+    if full_grad:
+        tt_grad_in = torch.randn(x.shape).bfloat16().float()
+        if dim == -1:
+            tt_grad_in[..., :1] = grad
+        else:
+            tt_grad_in[..., :1, :] = grad
+    tt_x = ttnn.from_torch(x.detach().bfloat16(), layout=ttnn.TILE_LAYOUT, device=device)
+    tt_grad = ttnn.from_torch(tt_grad_in.bfloat16(), layout=ttnn.TILE_LAYOUT, device=device)
+    out = ttnn.to_torch(ttnn.prod_bw(tt_grad, tt_x, dim=dim)[0]).float()
+    assert list(out.shape) == list(x.shape)
+    assert_with_pcc(x.grad, out, 0.999)
