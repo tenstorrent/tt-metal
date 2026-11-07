@@ -48,11 +48,17 @@ def weight_cache_patterns(spec):
     """F261 (core/weight_cache.py): the files of the run's tt_cache its shared master (paths.tt_cache_shared) holds,
     pulled at run start and pushed after a build: the routed experts' bank-major files and completion markers of the
     run's EXPERTS_IMPL (tt/experts.py expert_cache_prefix: <rows>x<cols>/L<layer>.<impl>.<hash>...). Never the old
-    .tensorbin layout (convert it: tools/convert_expert_cache.py), nor another impl's (an A/B's) cache."""
+    .tensorbin layout (convert it: tools/convert_expert_cache.py), nor another impl's (an A/B's) cache.
+    MOE_BLOCK_SRC=main (the default since P.37) also reads its routed weights laid out for its flat plan,
+    <prefix>.moe_main.<plan>.{w_gu,w_d}.tensorbin (tt/moe_block_main_adapter.py), ~285 GB on the 8x4: shared too
+    (owner 2026-11-07), so another box pulls them instead of rebuilding them from the checkpoint."""
     from models.demos.deepseek_v41_flash_d_p.tt.settings import settings
 
     impl = settings.get("EXPERTS_IMPL")
-    return [f"L??.{impl}.*.bm.bin", f"L??.{impl}.*.done.json"]
+    pats = [f"L??.{impl}.*.bm.bin", f"L??.{impl}.*.done.json"]
+    if settings.get("MOE_BLOCK_SRC") == "main":
+        pats.append(f"L??.{impl}.*.moe_main.*.tensorbin")
+    return pats
 
 
 def _config(spec):
