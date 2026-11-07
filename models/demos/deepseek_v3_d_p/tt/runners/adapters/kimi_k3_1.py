@@ -3,11 +3,15 @@
 
 """Kimi-K3.1 prefill adapter: Kimi-K3 with its 24 full-attention layers turned into DSA layers.
 
-K3.1 is served by K3's own stack (``TtKimiK3Runtime`` / ``TtKimiK3Transformer`` / ``TtKimiK3Block``,
-KDA, AttnRes, latent MoE), so it subclasses ``KimiK3Adapter`` and inherits its runtime build, layer
-schedule, pipeline split points and migration-table layout; a K3 fix therefore reaches K3.1 too. The
-model difference is carried by ``KimiK31Config`` / ``kimi_k3_1_hf_config`` (the ``index_*`` DSA
-fields), not by code here.
+K3.1 is selected through K3's own stack (``TtKimiK3Runtime`` / ``TtKimiK3Transformer`` /
+``TtKimiK3Block``, KDA, AttnRes, latent MoE), so it subclasses ``KimiK3Adapter`` and inherits its
+runtime build, layer schedule, pipeline split points and migration-table layout; a K3 fix therefore
+reaches K3.1 too. The model difference is carried by ``KimiK31Config`` / ``kimi_k3_1_hf_config`` (the
+``index_*`` DSA fields), not by code here.
+
+Not servable yet: the K3 block does not drive the DSA indexer that K3.1's config makes ``ttMLA``
+build, and the KV allocation has no indexer key cache. Both land with Gated DSA in the K3 block and
+the K3.1 KV caches.
 
 What this class overrides is identity and artifacts: K3.1's weights are all retrained, so nothing
 recorded against the K3 checkpoint (TTNN cache, golden traces, DFlash drafter, MLA reference) is valid
