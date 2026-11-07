@@ -142,6 +142,17 @@ TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE=1,0 pytest models/experimental/bevformer
 
 The override is the inclusive end coordinate of the worker grid, so `1,0` is a 2x1 grid.
 
+### Reduced layer count
+
+`BEVFORMER_NUM_LAYERS=N` keeps the first `N` encoder and decoder layers and, in each ResNet layer, the
+first block, which alone strides and projects the shortcut, and `N` repeats of the block after it.
+The reference is reduced the same way, so the PCC thresholds still apply, but the reduced model is
+not the trained detector and no checkpoint loads into it:
+
+```sh
+BEVFORMER_NUM_LAYERS=1 pytest models/experimental/bevformer/tests/pcc/test_bevformer.py
+```
+
 ## Project Structure
 
 ```
