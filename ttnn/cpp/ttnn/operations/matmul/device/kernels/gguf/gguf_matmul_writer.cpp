@@ -10,7 +10,7 @@
 // partial (c_17) into its slot of the finishing core's c_18 and counts it on that core's semaphore; a head moves its
 // partial into this core's c_20; a finish first waits for its partials and hands them to the compute kernel. Codebook
 // formats: the writer also runs the second half of the grid lookups of each record the reader asks for, between its own
-// waits; Q2_K and Q5_K: the conversion of each record's scale rows. Compile args: K tiles, tiles per chunk, input
+// waits; Q2_K: the conversion of each record's scale rows. Compile args: K tiles, tiles per chunk, input
 // semaphore, partial semaphore, format id, the lookup request, answer and page address semaphores, the input's and the
 // output's TensorAccessorArgs. Runtime args: collector, input address, output address, multicast rectangle (NoC x / y
 // start, x / y end, in this writer's NoC order), cores in it, segments, then per segment: tail: slot, role, finishing
@@ -65,7 +65,7 @@ void kernel_main() {
     constexpr PageLayout L = page_layout<FMT>();
     constexpr uint32_t P = L.group_tiles / L.page_tiles, page = L.rows * 64;
     constexpr bool split = is_codebook<FMT>() && P > 1;
-    // Q2_K and Q5_K (two fp16 scale rows): per request, the record's fp32 scale copies (prepare_scales) in its first
+    // Q2_K (two fp16 scale rows): per request, the record's fp32 scale copies (prepare_scales) in its first
     // page, then the scale block copied into the other pages.
     constexpr bool prep = L.fp16_rows > 1 && !is_codebook<FMT>() && P > 1;
     Semaphore requests(request_sem), answers(answer_sem), address(address_sem);
