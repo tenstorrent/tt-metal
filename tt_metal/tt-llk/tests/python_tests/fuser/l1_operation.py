@@ -14,6 +14,7 @@ from helpers.llk_params import (
 )
 from helpers.tile_shape import TileShape
 
+from . import dest_sync
 from .arch_common import fpu_common, pack_common, unpack_common
 from .base_fpu import Fpu
 from .base_sfpu import Sfpu
@@ -144,15 +145,13 @@ class L1Operation:
         hoist = len(unpack_ops) == 1
         hoist_reconfig = hoist or self._all_same_operand_formats(unpack_ops)
 
-        init_code = ""
-        init_code += unpack_common.dvalid_init(config=config, operation=self)
-        init_code += config.sentinel.hw_configure_unpack(config, self)
+        init_code = config.sentinel.hw_configure_unpack(config, self)
         if unpack_ops and not config.skip_unpack_init:
             init_code += config.sentinel.configure_unpack(config, self, unpack_ops[0])
-        init_code += unpack_common.unpack_to_dest_sync_init(config, self)
+        init_code += dest_sync.init(config, self)
         if hoist and not unpack_ops[0].unpacker.per_block_init:
             init_code += unpack_ops[0].unpack_init(self, config, None)
-        code = self._zone(config, "INIT", init_code)
+        code = self._zone(config, f"INIT{self.stage_id}", init_code)
 
         code += unpack_common.sync_with_packer(config, self)
 
@@ -167,10 +166,11 @@ class L1Operation:
             )
 
         def batch_body(planned: PlannedBlock, constants):
-            body = unpack_common.unpack_to_dest_wait_for_dest_available(config)
+            body = ""
             after_commit = ""
             for cu in self.math_nodes:
                 if not isinstance(cu, FpuNode):
+                    body += dest_sync.take(config, cu)
                     continue
                 block = planned.block_for(cu)
                 node_body = ""
@@ -182,6 +182,8 @@ class L1Operation:
                     node_body += config.sentinel.configure_unpack(config, self, cu)
                 if not hoist:
                     node_body += cu.unpack_init(self, config, block)
+                init_body, node_body = node_body, ""
+                take = dest_sync.take(config, cu)
                 if cu.unpacker is not None:
                     node_body += planned.plan(cu, "unpack").emit_calls(
                         constants,
@@ -194,24 +196,25 @@ class L1Operation:
                     and cu.unpacker is not None
                     and cu.unpacker.emits_dummy_srcb_valid
                 ):
+                    body += init_body + take
                     after_commit += node_body
                 else:
-                    body += node_body
+                    body += init_body + take + node_body
             if not hoist_reconfig and not config.skip_unpack_init:
                 body += config.sentinel.configure_unpack(config, self, unpack_ops[0])
-            body += unpack_common.unpack_to_dest_section_done(config, self)
+            body += dest_sync.takes(config, self.pack_nodes)
             return body + after_commit
 
         code += self._zone_loop(
             config,
-            "TILE_LOOP",
+            f"TILE_LOOP{self.stage_id}",
             self._batch_loop(blocks, batch_body, init_fn, uninit_fn),
         )
 
         uninit_code = ""
         if hoist and not unpack_ops[0].unpacker.per_block_init:
             uninit_code += unpack_ops[0].unpack_uninit(self, config, None)
-        code += self._zone(config, "UNINIT", uninit_code)
+        code += self._zone(config, f"UNINIT{self.stage_id}", uninit_code)
 
         return code
 
@@ -223,6 +226,7 @@ class L1Operation:
         hoist_reconfig = hoist or self._all_same_operand_formats(fpu_ops)
 
         init_code = config.sentinel.hw_configure_math(config, self)
+        init_code += dest_sync.init(config, self)
         init_code += fpu_common.math_pack_sync_init(config, self)
         init_code += fpu_common.math_dest_remap_config(
             any(pn.packer.requires_dest_remap for pn in self._get_pack_nodes())
@@ -231,7 +235,7 @@ class L1Operation:
             init_code += config.sentinel.configure_math(config, self, fpu_ops[0])
         if hoist and not fpu_ops[0].fpu.per_block_init:
             init_code += fpu_ops[0].fpu_init(self, config, None)
-        code += self._zone(config, "INIT", init_code)
+        code += self._zone(config, f"INIT{self.stage_id}", init_code)
 
         init_fn = None
         uninit_fn = None
@@ -252,13 +256,15 @@ class L1Operation:
                         body += config.sentinel.configure_math(config, self, cu)
                     if not hoist:
                         body += cu.fpu_init(self, config, block)
+                body += dest_sync.take(config, cu)
+                if isinstance(cu, FpuNode):
                     body += planned.plan(cu, "math").emit_calls(
                         constants,
                         partial(cu.fpu_call, self, config, block),
                     )
                     if not hoist:
                         body += cu.fpu_uninit(self, config, block)
-                elif isinstance(cu, SfpuNode):
+                elif not config.sfpu_on_trisc3:
                     init = cu.sfpu_init(self, config, block)
                     body += config.sentinel.sfpu_math_reconfig(config)
                     body += init
@@ -271,19 +277,56 @@ class L1Operation:
             if not hoist_reconfig and not config.skip_math_init:
                 body += config.sentinel.configure_math(config, self, fpu_ops[0])
             body += fpu_common.math_dest_section_done(config, self)
+            body += dest_sync.takes(config, self.pack_nodes)
             return body
 
         code += self._zone_loop(
             config,
-            "TILE_LOOP",
+            f"TILE_LOOP{self.stage_id}",
             self._batch_loop(blocks, batch_body, init_fn, uninit_fn),
         )
 
         uninit_code = ""
         if hoist and not fpu_ops[0].fpu.per_block_init:
             uninit_code += fpu_ops[0].fpu_uninit(self, config, None)
-        code += self._zone(config, "UNINIT", uninit_code)
+        code += self._zone(config, f"UNINIT{self.stage_id}", uninit_code)
 
+        return code
+
+    def do_sfpu(self, config: "GlobalConfig", blocks: List[PlannedBlock]) -> str:
+        config.sentinel.prepare_operation(config, self, blocks)
+        code = f"// Operation {self.stage_id}: SFPU\n"
+        code += self._zone(config, f"INIT{self.stage_id}", dest_sync.init(config, self))
+
+        fpu_ops = [cu for cu in self.math_nodes if isinstance(cu, FpuNode)]
+
+        def batch_body(planned: PlannedBlock, constants):
+            body = ""
+            if fpu_ops:
+                config.sentinel.configure_math(config, self, fpu_ops[0])
+            for cu in self.math_nodes:
+                if isinstance(cu, SfpuNode):
+                    config.sentinel.configure_sfpu(config, self, cu)
+                    body += cu.sfpu_init(self, config, planned.block_for(cu))
+                body += dest_sync.take(config, cu)
+                if isinstance(cu, FpuNode):
+                    config.sentinel.configure_math(config, self, cu)
+                elif isinstance(cu, SfpuNode):
+                    block = planned.block_for(cu)
+                    body += config.sentinel.sfpu_math_reconfig(config)
+                    body += planned.plan(cu, "sfpu").emit_calls(
+                        constants,
+                        partial(cu.sfpu_call, self, config, block),
+                    )
+                    body += cu.sfpu_uninit(self, config, block)
+                    body += config.sentinel.sfpu_math_reconfig(config, restore=True)
+            body += dest_sync.takes(config, self.pack_nodes)
+            return body
+
+        code += self._zone_loop(
+            config, f"TILE_LOOP{self.stage_id}", self._batch_loop(blocks, batch_body)
+        )
+        code += self._zone(config, f"UNINIT{self.stage_id}", "")
         return code
 
     def _all_same_pack_formats(self, config) -> bool:
@@ -304,10 +347,11 @@ class L1Operation:
         if hoist_reconfig and pack_only:
             init_code += config.sentinel.configure_pack(config, self, pack_only[0])
         init_code += pack_common.pack_reduce_mask_config(self)
+        init_code += dest_sync.init(config, self)
         init_code += pack_common.pack_dest_init(config, self, pack_only[0])
         if hoist and not pack_only[0].packer.per_block_init:
             init_code += pack_only[0].init(self, config, None)
-        code += self._zone(config, "INIT", init_code)
+        code += self._zone(config, f"INIT{self.stage_id}", init_code)
 
         init_fn = None
         uninit_fn = None
@@ -318,7 +362,8 @@ class L1Operation:
             uninit_fn = lambda planned: pack_only[0].uninit(self, config)
 
         def batch_body(planned: PlannedBlock, constants):
-            body = pack_common.packer_wait_for_math(config, self)
+            body = dest_sync.takes(config, self.math_nodes)
+            body += pack_common.packer_wait_for_math(config, self)
             if not hoist_reconfig:
                 config.sentinel.reset_pack_formats()
             prev_was_pack = False
@@ -339,6 +384,7 @@ class L1Operation:
                         body += config.sentinel.configure_pack(config, self, pack_node)
                     if not hoist:
                         body += pack_node.init(self, config, block)
+                    body += dest_sync.take(config, pack_node)
                     body += planned.plan(pack_node, "pack").emit_calls(
                         constants,
                         partial(pack_node.pack_call, self, config, block),
@@ -351,7 +397,7 @@ class L1Operation:
 
         code += self._zone_loop(
             config,
-            "TILE_LOOP",
+            f"TILE_LOOP{self.stage_id}",
             self._batch_loop(blocks, batch_body, init_fn, uninit_fn),
         )
 
@@ -359,7 +405,7 @@ class L1Operation:
         if hoist and not pack_only[0].packer.per_block_init:
             uninit_code += pack_only[0].uninit(self, config)
         uninit_code += pack_common.pack_reduce_mask_clear(self)
-        code += self._zone(config, "UNINIT", uninit_code)
+        code += self._zone(config, f"UNINIT{self.stage_id}", uninit_code)
 
         return code
 
