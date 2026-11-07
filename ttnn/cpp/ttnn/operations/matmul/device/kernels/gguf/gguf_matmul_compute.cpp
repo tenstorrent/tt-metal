@@ -43,7 +43,7 @@ class CodebookLookups {
     static constexpr uint32_t kMathBegin = GGUF_READER_PARTS + GGUF_WRITER_PARTS;
     static constexpr uint32_t kUnpackBegin = kMathBegin + GGUF_MATH_PARTS;
     static constexpr uint32_t kPackBegin = kUnpackBegin + GGUF_UNPACK_PARTS;
-    static constexpr bool kOn = experimental::gguf::is_codebook<FMT>();
+    static constexpr bool kOn = experimental::gguf::is_codebook<FMT>() && !GGUF_EXPANDED;
     static constexpr bool kMath = kOn && GGUF_MATH_PARTS > 0;
     static constexpr bool kUnpack = kOn && GGUF_UNPACK_PARTS > 0;
     static constexpr bool kPack = kOn && kPackBegin < kParts;

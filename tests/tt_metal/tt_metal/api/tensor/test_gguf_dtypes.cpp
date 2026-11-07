@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // GGUF dtypes on the host: the format table against the Blackhole decoder's, page geometry and sharding, the
-// from_gguf / to_gguf round trip, and GGUF tensors failing cleanly outside from_gguf / to_gguf.
+// from_gguf / to_gguf round trip (also of the expanded layouts), and GGUF tensors failing cleanly outside from_gguf /
+// to_gguf.
 
 #include <gtest/gtest.h>
 
@@ -26,7 +27,7 @@ namespace {
 
 std::vector<DataType> gguf_dtypes() {
     std::vector<DataType> dtypes;
-    for (int i = static_cast<int>(DataType::GGUF_Q8_0); i < static_cast<int>(DataType::INVALID); ++i) {
+    for (int i = static_cast<int>(DataType::GGUF_Q8_0); i <= static_cast<int>(DataType::GGUF_TQ1_0); ++i) {
         dtypes.push_back(static_cast<DataType>(i));
     }
     return dtypes;
@@ -174,6 +175,58 @@ TEST(GgufDtypesTest, UnawareHostOpsFail) {
     EXPECT_ANY_THROW(to_layout(tensor, Layout::ROW_MAJOR));
     EXPECT_ANY_THROW(tensor.to_vector<float>());
     EXPECT_ANY_THROW(tile_size(dtype));
+}
+
+std::vector<DataType> expanded_dtypes() {
+    std::vector<DataType> dtypes;
+    for (int i = static_cast<int>(DataType::GGUF_TQ1_0) + 1; i < static_cast<int>(DataType::INVALID); ++i) {
+        dtypes.push_back(static_cast<DataType>(i));
+    }
+    return dtypes;
+}
+
+// TQ1_0 blocks as TQ1_0 quantization writes them: each base-3 byte ceil(256 v / 243) of a 5-trit value v (the last
+// trit 0 in the 4 bytes after the 48), then d.
+std::vector<std::byte> tq1_0_blocks(size_t blocks, uint32_t seed) {
+    std::mt19937 rng(seed);
+    std::vector<std::byte> out(54 * blocks);
+    for (size_t b = 0; b < blocks; ++b) {
+        for (int i = 0; i < 52; ++i) {
+            const uint32_t v = i < 48 ? rng() % 243 : rng() % 81 * 3;
+            out[54 * b + i] = std::byte((v * 256 + 242) / 243);
+        }
+        out[54 * b + 52] = std::byte(rng() & 0xFF);
+        out[54 * b + 53] = std::byte(0x20);
+    }
+    return out;
+}
+
+TEST(GgufDtypesTest, ExpandedLayouts) {
+    const auto dtypes = expanded_dtypes();
+    ASSERT_EQ(dtypes.size(), 8u);
+    for (const DataType dtype : dtypes) {
+        SCOPED_TRACE(fmt::format("{}", dtype));
+        const DataType source = gguf_source_dtype(dtype);
+        EXPECT_TRUE(is_gguf(dtype) && is_gguf_expanded(dtype) && !is_gguf_expanded(source));
+        const auto& f = gguf_traits(dtype);
+        const auto& s = gguf_traits(source == DataType::GGUF_TQ1_0 ? DataType::GGUF_TQ2_0 : source);
+        EXPECT_EQ(f.format_id, s.format_id);
+        EXPECT_EQ(f.l1_page_bytes(), s.l1_page_bytes());
+        EXPECT_GE(f.block_bytes, s.block_bytes);
+        EXPECT_EQ(f.page_bytes() % 64, 0u);
+
+        const uint32_t k = 2 * k_unit(source), n = 96;
+        const auto blocks = source == DataType::GGUF_TQ1_0
+                                ? tq1_0_blocks(gguf_bytes(source, k, n) / 54, 7)
+                                : random_blocks(gguf_bytes(source, k, n), static_cast<uint32_t>(dtype));
+        const HostTensor tensor = from_gguf(blocks, gguf_spec(dtype, k, n));
+        EXPECT_EQ(gguf_spec(dtype, k, n).compute_packed_buffer_size_bytes(), gguf_bytes(dtype, k, n));
+        EXPECT_EQ(to_gguf(tensor), blocks);
+    }
+    // A TQ1_0 byte that quantization never writes has no TQ2_0 form that gives it back.
+    auto blocks = tq1_0_blocks(96, 8);
+    blocks[5] = std::byte(1);  // ceil(256 v / 243) is never 1
+    EXPECT_ANY_THROW(from_gguf(blocks, gguf_spec(DataType::GGUF_TQ1_0_EXPANDED, 256, 96)));
 }
 
 }  // namespace

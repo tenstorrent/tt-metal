@@ -37,8 +37,9 @@ flatbuffers::Offset<flatbuffer::CoreRangeSet> to_flatbuffer(
 // The GGUF values share their numbers with tt::tt_metal::DataType.
 static_assert(
     static_cast<int>(flatbuffer::DataType::GgufQ8_0) == static_cast<int>(tt::tt_metal::DataType::GGUF_Q8_0) &&
-    static_cast<int>(flatbuffer::DataType::GgufTQ1_0) == static_cast<int>(tt::tt_metal::DataType::GGUF_TQ1_0) &&
-    flatbuffer::DataType::MAX == flatbuffer::DataType::GgufTQ1_0);
+    static_cast<int>(flatbuffer::DataType::GgufTQ1_0_Expanded) ==
+        static_cast<int>(tt::tt_metal::DataType::GGUF_TQ1_0_EXPANDED) &&
+    flatbuffer::DataType::MAX == flatbuffer::DataType::GgufTQ1_0_Expanded);
 
 tt::tt_metal::DataType from_flatbuffer(flatbuffer::DataType type) {
     if (type >= flatbuffer::DataType::GgufQ8_0) {

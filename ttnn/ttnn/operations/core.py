@@ -769,14 +769,16 @@ def from_gguf(
     Args:
         blocks (numpy.ndarray): the weight's GGUF bytes as a GGUF file stores them, N rows of K / block-size blocks.
         shape (ttnn.Shape or (K, N)): the logical shape [K, N]: K is the GGUF row length.
-        dtype (ttnn.DataType): one of ttnn.GGUF_DTYPES.
+        dtype (ttnn.DataType): one of ttnn.GGUF_DTYPES, or an expanded layout ttnn.GGUF_EXPANDED[format]: the same
+            weights in larger pages that ttnn.matmul decodes faster; blocks are then those of the format.
 
     Keyword Args:
         device (ttnn.MeshDevice, optional): the device to put the tensor on. Defaults to `None` (host).
         memory_config (ttnn.MemoryConfig, optional): defaults to DRAM interleaved.
 
     Returns:
-        ttnn.Tensor: a TILE layout tensor; each page is one GGUF record of 32 columns by 32 * group K rows.
+        ttnn.Tensor: a TILE layout tensor; each page is one GGUF record of 32 columns by 32 * group K rows (expanded:
+        the record's weights in the expanded layout).
     """
     import numpy as np
 
@@ -791,7 +793,8 @@ def from_gguf(
 @ttnn.register_python_operation(name="ttnn.to_gguf", golden_function=None)
 def to_gguf(tensor: ttnn.Tensor) -> "numpy.ndarray":
     """
-    Returns the GGUF blocks of a GGUF tensor as a uint8 numpy array, the exact inverse of ttnn.from_gguf.
+    Returns the GGUF blocks of a GGUF tensor as a uint8 numpy array, the exact inverse of ttnn.from_gguf (for an expanded
+    layout, the blocks of its format).
     Dequantize them with gguf.quants.dequantize (gguf-py).
     """
     if ttnn.is_tensor_storage_on_device(tensor):

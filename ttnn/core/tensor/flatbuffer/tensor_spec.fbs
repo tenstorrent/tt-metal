@@ -118,7 +118,15 @@ enum DataType : ubyte {
     GgufQ4_1 = 39,
     GgufQ5_0 = 40,
     GgufQ5_1 = 41,
-    GgufTQ1_0 = 42
+    GgufTQ1_0 = 42,
+    GgufIQ2_XXS_Expanded = 43,
+    GgufIQ1_S_Expanded = 44,
+    GgufIQ2_S_Expanded = 45,
+    GgufIQ3_S_Expanded = 46,
+    GgufIQ3_XXS_Expanded = 47,
+    GgufIQ2_XS_Expanded = 48,
+    GgufIQ1_M_Expanded = 49,
+    GgufTQ1_0_Expanded = 50
 }
 
 table RowMajorPageConfig {}

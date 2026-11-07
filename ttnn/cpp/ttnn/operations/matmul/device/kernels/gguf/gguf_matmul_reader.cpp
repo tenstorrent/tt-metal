@@ -9,9 +9,10 @@
 // group's scale rows. The scale rows are converted once, in the first page (prepare_scales), and the block is copied to
 // the other pages. Codebook formats then fill in the pages' grid levels (lookup_grid) in GGUF_LOOKUP_PARTS parts of
 // their index words: this kernel the first GGUF_READER_PARTS, the writer of this core the next GGUF_WRITER_PARTS
-// (gguf_matmul_writer.cpp) on a request per record, the compute kernel the rest. Compile args: format id, c_0 pages,
-// one-page groups per unit, staging slots, the lookup request, answer and page address semaphores, reads in flight,
-// then the weight's TensorAccessorArgs.
+// (gguf_matmul_writer.cpp) on a request per record, the compute kernel the rest. GGUF_EXPANDED: the pages hold the
+// level codes already (gguf_host_packing.cpp), each K tile without its index words, and no lookups run. Compile args:
+// format id, c_0 pages, one-page groups per unit, staging slots, the lookup request, answer and page address
+// semaphores, reads in flight, then the weight's TensorAccessorArgs.
 // Runtime args: weight address, N tiles, runs, then per run its N tile, first and end K group.
 
 #include <cstdint>
@@ -44,7 +45,14 @@ void kernel_main() {
     constexpr uint32_t P = L.group_tiles / L.page_tiles;  // pages per group
     constexpr uint32_t page = L.rows * 64;
     constexpr uint32_t scale_bytes = L.scale_rows * 64;
-    constexpr uint32_t record = scale_bytes + P * L.code_bytes;
+    // Expanded: per K tile the page's first `head` bytes (level codes, sign words), then `tail` bytes of the decoder's
+    // that follow the index words (IQ1_S, IQ1_M, IQ2_S).
+    constexpr bool expanded = GGUF_EXPANDED;
+    constexpr uint32_t index_bytes = FMT == Format::IQ3_S || FMT == Format::IQ3_XXS ? 256 : 128;
+    constexpr uint32_t head = index_offset<FMT>();
+    constexpr uint32_t tail = !expanded || FMT == Format::IQ3_S ? 0 : L.code_offset + L.code_bytes - head - index_bytes;
+    constexpr uint32_t tile_bytes = expanded ? head + tail : L.code_bytes;
+    constexpr uint32_t record = scale_bytes + P * tile_bytes;
 
     const auto weights = TensorAccessor(weight_args, get_arg_val<uint32_t>(0));
     const uint32_t n_tiles = get_arg_val<uint32_t>(1);
@@ -135,7 +143,7 @@ void kernel_main() {
         [[maybe_unused]] const std::uint16_t* table = nullptr;
         Semaphore requests(request_sem), answers(answer_sem), address(address_sem);
         uint32_t asked = 0;
-        if constexpr (is_codebook<FMT>()) {
+        if constexpr (is_codebook<FMT>() && !expanded) {
             table = level_table<FMT>();
             if constexpr (local_table<FMT>()) {
                 for (uint32_t j = 0; j < table_entries<FMT>() / 2; j++) {
@@ -152,7 +160,14 @@ void kernel_main() {
             pages.reserve_back(P);
             const uint32_t from = stage_addr + (i % slots) * record;
             for (uint32_t p = 0; p < P; p++) {
-                copy(from + scale_bytes + p * L.code_bytes, L.code_bytes, p * page + L.code_offset);
+                if constexpr (expanded) {
+                    copy(from + scale_bytes + p * tile_bytes, head, p * page);
+                    if constexpr (tail > 0) {
+                        copy(from + scale_bytes + p * tile_bytes + head, tail, p * page + head + index_bytes);
+                    }
+                } else {
+                    copy(from + scale_bytes + p * L.code_bytes, L.code_bytes, p * page + L.code_offset);
+                }
                 if (p == 0 || !shared_scales) {
                     copy(from, scale_bytes, p * page + L.scale_offset);
                 }
@@ -168,7 +183,7 @@ void kernel_main() {
                 }
                 noc.async_read_barrier<NocOptions::TXN_ID>({.trid = local});
             }
-            if constexpr (is_codebook<FMT>()) {
+            if constexpr (is_codebook<FMT>() && !expanded) {
                 if constexpr (writer_parts > 0) {
                     address.set(first);
                     asm volatile("fence" ::: "memory");  // the address is in L1 before the request
