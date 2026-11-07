@@ -170,6 +170,12 @@ def test_alias_view_rejects_unsafe_inputs(device, expect_error):
     with expect_error(RuntimeError, "straddle"):
         ttnn.experimental.alias_view(k, ttnn.Shape([2, 5, 128, 128]), ttnn.float32)
 
+    # a zero dimension, in dim 0 or elsewhere, leaves the view no pages to divide by
+    for empty in ([0, 1, 32, 32], [1, 0, 32, 32], [1, 1, 0, 32]):
+        for check_slices in (True, False):
+            with expect_error(RuntimeError, "no elements"):
+                ttnn.experimental.alias_view(k, ttnn.Shape(empty), ttnn.float32, check_slices=check_slices)
+
     rank2 = ttnn.from_torch(
         torch.zeros(banks * 32, 32).bfloat16(), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
     )
