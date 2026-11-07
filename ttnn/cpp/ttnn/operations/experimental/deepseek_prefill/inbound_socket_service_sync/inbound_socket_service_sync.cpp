@@ -25,9 +25,10 @@ std::vector<Tensor> inbound_socket_service_sync(
     uint32_t overhang_size_bytes,
     const std::optional<Tensor>& tokens_out,
     const std::optional<Tensor>& overhang_out,
-    const std::optional<Tensor>& metadata_out) {
+    const std::optional<Tensor>& metadata_out,
+    const std::vector<Tensor>& extras_out) {
     return ttnn::prim::inbound_socket_service_sync(
-        service, metadata_size_bytes, overhang_size_bytes, tokens_out, overhang_out, metadata_out);
+        service, metadata_size_bytes, overhang_size_bytes, tokens_out, overhang_out, metadata_out, extras_out);
 }
 
 }  // namespace ttnn::experimental
