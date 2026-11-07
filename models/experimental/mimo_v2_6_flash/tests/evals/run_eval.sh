@@ -10,6 +10,8 @@
 #
 # Benches (harness, task, defaults):
 #   mmmu_pro          lmms-eval  mmmu_pro_standard_cot (1730 q, 10 options, CoT)   thinking off
+#   mmmu_pro_aa       lmms-eval  mmmu_pro_aa: Artificial Analysis's protocol (1730, AA prompt + regex, thinking on);
+#                                the summary prints TT vs AA's 73.06%, the delta and 95% intervals
 #   ocrbench          lmms-eval  ocrbench (1000)                                    thinking off
 #   videomme_short    lmms-eval  videomme_short (900 q / 300 videos, no subtitles)  thinking off
 #   mmau_mini         lmms-eval  mmau_test_mini (1000)                              thinking off
@@ -37,7 +39,7 @@
 
 set -euo pipefail
 
-usage() { sed -n '4,40p' "$0" | sed 's/^# \{0,1\}//'; exit 2; }
+usage() { sed -n '4,42p' "$0" | sed 's/^# \{0,1\}//'; exit 2; }
 [ $# -ge 3 ] || usage
 
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
@@ -160,6 +162,7 @@ case $BENCH in
     videomme_short)
         [ -d "$HF_HOME/videomme/data" ] || { echo "run prefetch_datasets.py videomme --durations short first" >&2; exit 2; }
         run_lmms videomme_short off ;;
+    mmmu_pro_aa) run_lmms mmmu_pro_aa on ;;
     mmau_mini) run_lmms mmau_test_mini off ;;
     librispeech_clean) run_lmms librispeech_test_clean off ;;
     gpqa_diamond) run_inspect inspect "$HERE/openbench_tasks/gpqa_shuffled.py@gpqa_diamond_shuffled" -T "epochs=${EPOCHS:-10}" ;;

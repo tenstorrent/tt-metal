@@ -112,6 +112,41 @@ as both agent and user). No endpoint reachable without keys exists, so nothing h
 Reference runs need `OPENROUTER_API_KEY` only (tau2 also uses it for its user simulator, `openrouter/openai/gpt-4.1`,
 openbench's default user model). Pin GMICloud (the bf16 endpoint) and Xiaomi (first party) as two references.
 
+## References (2026-11-07 update: multimodal only)
+
+The text benchmarks (GPQA-Diamond, tau2) are out of scope for now; their harness code stays as is. References come
+from Artificial Analysis (AA) instead of an OpenRouter run.
+
+**AA's MMMU-Pro protocol** (artificialanalysis.ai/methodology/intelligence-benchmarking): MMMU/MMMU_Pro, 1,730
+questions, 10 options, 1 repeat, pass@1, AA's own instruction prompt ("Answer the following multiple choice question.
+The last line of your response should be in the following format: 'Answer: A/B/C/D/E/F/G/H/I/J' (e.g. 'Answer: A')."
+then the question and `A) ...` options) and a multi-stage regex (primary `(?i)[\*\_]{0,2}Answer[\*\_]{0,2}\s*:...`,
+then boxed / "answer is" / letter fallbacks, last match). General settings: temperature 0.6 for reasoning models unless
+the lab recommends another (MiMo's card: 1.0, top_p 0.95), maximum output tokens the creator allows. Not stated by AA:
+the split (1,730 questions with 10 options and text questions is "standard (10 options)"), image placement, the exact
+per-model temperature and token cap. **AA's MiMo-V2.6-Flash score: 73.06%** (1,264 / 1,730; reasoning variant, measured
+on Xiaomi's first-party API, which serves the RL checkpoint; we serve MOPD, RL plus a short MOPD stage). AA publishes no
+GPQA Diamond, tau2, video or audio score for this model.
+
+`run_eval.sh mmmu_pro_aa` runs that protocol (thinking on, temperature 1.0, top_p 0.95, max_new_tokens 131,072) and its
+summary prints TT, AA, the delta, the Wilson 95% interval of TT and the 95% interval of the delta (two independent
+proportions on 1,730 items each, about +/-3 points). `mmmu_pro` (lmms-eval's CoT prompt, thinking off) stays as a cheap
+second image check, as does OCRBench (no reference: a regression check against our own earlier runs).
+
+**Acceptance bars for video and audio: weaker evidence.** No MiMo-V2.6-Flash score exists, so the bars are floors from
+comparable models' published numbers under other protocols (frames, prompts, dataset versions differ); they catch a
+broken encoder path, they do not prove parity. `summarize_results.py` prints each against its bar
+(`tests/evals/aa_reference.json`, "acceptance_bars").
+
+| Bench | Bar | Basis (published, other protocols) |
+|---|---|---|
+| Video-MME short, w/o subtitles | >= 75.0% | short videos: Gemini 1.5 Pro 81.7, InternVL2.5-72B 82.8 (64 frames), Qwen2-VL-72B 80.1, GPT-4o 80.0 (video-mme.github.io leaderboard); whole set: Qwen3-Omni-30B-A3B-Instruct 70.5, Qwen2.5-Omni-7B 64.3. We sample 32 frames |
+| MMAU test-mini | >= 65.6% | Qwen2.5-Omni-7B 65.60 (model card, split not stated); Qwen3-Omni-30B-A3B-Instruct 77.5 (MMAU-v05.15.25) |
+| LibriSpeech test-clean | WER <= 2.5% | Qwen3-Omni-30B-A3B-Instruct 1.22, Qwen2.5-Omni-7B 1.8, Whisper-large-v3 1.8 (model cards) |
+
+A stronger check than any of these, once the host fp32 multimodal reference runs end to end: the same items through
+the reference and through TT, answer agreement per item.
+
 ## Suite and estimates
 
 Chosen suite (~2 per modality plus OpenRouter's two):
