@@ -21,6 +21,9 @@ MoEActivationFunction = ttnn._ttnn.operations.experimental.ccl_experimental.MoEA
 # Experimental CCL enum for strided_all_gather_minimal_matmul_async operation
 MMSignalAggregatorMode = ttnn._ttnn.operations.experimental.ccl_experimental.MMSignalAggregatorMode
 
+# Experimental CCL enum for matmul_reduce_scatter_prefill operation
+MatmulReduceScatterPrefillGrid = ttnn._ttnn.operations.experimental.ccl_experimental.MatmulReduceScatterPrefillGrid
+
 
 def _preprocess_collective_golden_inputs(function_args, function_kwargs):
     """Convert a collective mesh input into per-device Torch shards.

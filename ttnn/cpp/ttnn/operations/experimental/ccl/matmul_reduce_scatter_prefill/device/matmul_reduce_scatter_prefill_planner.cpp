@@ -44,10 +44,11 @@ constexpr uint32_t kZoneSets = 2;         // chunks' arrivals the zones hold at 
 constexpr uint32_t kMaxAutoChunks = 256;
 // Unchunked K-window cap. Fewer, larger windows mean fewer multicast handshakes per entry (QB2 1x4 ring, traced:
 // GLM-5.3 indexer wk 640x1536x128 28.0 -> 23.7 us at kb 24, Qwen3 down M=128 198 -> 152 us, K3 dense batched decode
-// 4-7% faster). A resident plan whose cores each hold >= kComputeBoundCoreTiles output tiles keeps kKbMaxSmall. Only
-// the streamed operand moves per window, and with that much matmul per K-tile the compute outpaces the window delivery:
-// the compute never waits for a window after the first block (K3 o_proj 640x3072x7168, 2x7 tiles per core, profiled),
-// so fewer handshakes save nothing there.
+// 4-7% faster). Two kinds of plan keep kKbMaxSmall: a DRAM width-sharded W (K3 dense M=96 ran 12% slower at 24), and a
+// resident plan whose cores each hold >= kComputeBoundCoreTiles output tiles. Only the streamed operand moves per
+// window, and with that much matmul per K-tile the compute outpaces the window delivery: the compute never waits for a
+// window after the first block (K3 o_proj 640x3072x7168, 2x7 tiles per core, profiled), so fewer handshakes save
+// nothing there.
 // A larger window only lengthens the call's start: every core waits for its first window, the resident fill's DRAM
 // reads and multicasts at once, ~4 us + 0.4 us per K-tile, and nothing overlaps it. The 4 output blocks cannot make
 // that up: K3 o_proj ran 1% slower at 24 (first window 10.0 -> 13.8 us, blocks 2-4 0.5 us faster each), DSV3 MLP
@@ -299,6 +300,65 @@ GridChoice choose_grid(uint32_t gx, uint32_t gy, uint32_t block_m, uint32_t bloc
     return best->second;
 }
 
+// The folded 1D grid along `flow`'s axis (FoldedN: N, FoldedM: M): every core holds the whole block on the other axis
+// and the thinnest slice of this one whose core count folds exactly into a rows x cols rectangle of the matmul area,
+// the row strip first and as tall as it fits (measured on decode rows: a tall fold with W read on both NoCs beats the
+// short, wide one by up to 18%); nothing when no rectangle fits.
+std::optional<GridChoice> choose_grid_folded(
+    uint32_t gx, uint32_t gy, uint32_t block_m, uint32_t block_n, uint32_t L, Flow flow) {
+    const bool along_n = flow == Flow::FoldedN;
+    const uint32_t len = along_n ? block_n : block_m;
+    for (uint32_t slice = 1; slice <= len; ++slice) {
+        const uint32_t n = tt::div_up(len, slice);
+        if (tt::div_up(len, n) != slice) {
+            continue;  // the same core count as a thinner slice
+        }
+        for (Strip strip : {Strip::Row, Strip::Col}) {
+            const uint32_t strip_len = strip == Strip::Row ? gx : gy;
+            if (2 * L > strip_len) {
+                continue;
+            }
+            const uint32_t rx = strip == Strip::Row ? gx : gx - 1;
+            const uint32_t ry = strip == Strip::Row ? gy - 1 : gy;
+            for (uint32_t rows = ry; rows >= 1; --rows) {
+                if (n % rows != 0 || n / rows > rx) {
+                    continue;
+                }
+                GridChoice c;
+                c.strip = strip;
+                c.grid_m = along_n ? 1 : n;
+                c.grid_n = along_n ? n : 1;
+                c.core_m = along_n ? block_m : slice;
+                c.core_n = along_n ? slice : block_n;
+                c.subblock = choose_subblock(c.core_m, c.core_n);
+                c.flow = flow;
+                c.fold_rows = rows;
+                c.fold_cols = n / rows;
+                return c;
+            }
+        }
+    }
+    return std::nullopt;
+}
+
+// The block's grid of the caller's flow. The op never picks the flow: which of the 2D grid and a fold wins depends on
+// the shape, the device and the read NoCs in ways no simple rule tracked (measured, QB2 1x4 ring: the fold along N won
+// 1.1-4x on decode rows, lost 13% on Kimi K3 dense M=128 against a 2D grid reading W on NoC0, and a per-core tile
+// count rule missed folds worth 1.2-1.6x), so a caller that wants a fold asks for it.
+GridChoice grid_of_flow(uint32_t gx, uint32_t gy, uint32_t block_m, uint32_t block_n, uint32_t L, Flow flow) {
+    if (flow == Flow::Grid2D) {
+        return choose_grid(gx, gy, block_m, block_n, L);
+    }
+    if (auto folded = choose_grid_folded(gx, gy, block_m, block_n, L, flow)) {
+        return *folded;
+    }
+    throw GeometryMiss(fmt::format(
+        "matmul_reduce_scatter_prefill: no {} grid of the {}x{}-tile block fits the matmul area",
+        flow == Flow::FoldedN ? "FOLDED_N" : "FOLDED_M",
+        block_m,
+        block_n));
+}
+
 std::vector<std::pair<uint32_t, uint32_t>> chunk_candidates(uint32_t block_m, uint32_t block_n, int32_t scatter_dim) {
     const bool inner_n = scatter_dim == -1;
     std::set<std::pair<uint32_t, uint32_t>> seen;
@@ -327,7 +387,7 @@ std::vector<std::pair<uint32_t, uint32_t>> chunk_candidates(uint32_t block_m, ui
     return out;
 }
 
-Plan plan_chunk_geometry(uint32_t n_m_req, uint32_t n_n_req, const PlanInputs& in) {
+Plan plan_on_grid(uint32_t n_m_req, uint32_t n_n_req, const PlanInputs& in, const GridChoice& grid) {
     Plan pl;
     pl.chunk_m = tt::div_up(in.block_m, n_m_req);
     pl.chunk_n = tt::div_up(in.block_n, n_n_req);
@@ -335,7 +395,7 @@ Plan plan_chunk_geometry(uint32_t n_m_req, uint32_t n_n_req, const PlanInputs& i
     pl.n_n = tt::div_up(in.block_n, pl.chunk_n);
     const uint32_t chunks = pl.n_m * pl.n_n;
     pl.zone_sets = chunks == 1 ? 1 : std::max(1u, std::min(kZoneSets, chunks));
-    pl.grid = choose_grid(in.gx, in.gy, pl.chunk_m, pl.chunk_n, in.L);
+    pl.grid = grid;
     const GridChoice& gd = pl.grid;
     if (in.kind == ScheduleKind::RingBalanced && gd.grid_m * gd.grid_n < 2) {
         throw GeometryMiss("matmul_reduce_scatter_prefill: a balanced ring needs >= 2 matmul cores (two halves)");
@@ -362,9 +422,9 @@ Plan plan_chunk_geometry(uint32_t n_m_req, uint32_t n_n_req, const PlanInputs& i
         geo.hold_depths[r] = hold_depth(sched_of[r]);
         geo.slots[r] = sched_of[r].slots;
     }
-    const uint32_t kb_cap = chunks == 1 ? kKbMax : kKbMaxChunked;
+    const uint32_t kb_cap = chunks == 1 ? (in.w_dram_sharded ? kKbMaxSmall : kKbMax) : kKbMaxChunked;
     KBlock kblk = choose_k_block(in.Kt, in.budget, kb_cap, geo);
-    if (chunks == 1 && kblk.resident && gd.core_m * gd.core_n >= kComputeBoundCoreTiles) {
+    if (chunks == 1 && kblk.resident && kb_cap > kKbMaxSmall && gd.core_m * gd.core_n >= kComputeBoundCoreTiles) {
         const KBlock small = choose_k_block(in.Kt, in.budget, kKbMaxSmall, geo);
         if (small.resident) {
             kblk = small;
@@ -392,6 +452,15 @@ Plan plan_chunk_geometry(uint32_t n_m_req, uint32_t n_n_req, const PlanInputs& i
     pl.P = pl.waves.P;
     pl.footprint = footprint(kblk.kb, kblk.resident, kblk.depth, in.Kt, geo, pl.depths);
     return pl;
+}
+
+// The chunk split's plan on the caller's grid; a miss throws.
+Plan plan_chunk_geometry(uint32_t n_m_req, uint32_t n_n_req, const PlanInputs& in) {
+    return plan_on_grid(
+        n_m_req,
+        n_n_req,
+        in,
+        grid_of_flow(in.gx, in.gy, tt::div_up(in.block_m, n_m_req), tt::div_up(in.block_n, n_n_req), in.L, in.flow));
 }
 
 double chunk_cost_us(const Plan& pl, const PlanInputs& in) {
@@ -631,7 +700,9 @@ const Plan& solve_plan(const PlanInputs& in) {
         in.tA,
         in.tW,
         in.scatter_dim,
-        in.budget);
+        in.budget,
+        in.flow,
+        in.w_dram_sharded);
     static std::mutex solved_mutex;
     static std::map<std::remove_const_t<decltype(key)>, Plan> solved;
     const std::lock_guard<std::mutex> lock(solved_mutex);
@@ -640,9 +711,9 @@ const Plan& solve_plan(const PlanInputs& in) {
         try {
             it = solved.emplace(key, solve_plan_uncached(in)).first;  // a refusal throws and caches nothing
         } catch (const L1Miss& miss) {
-            TT_THROW("{}", miss.what());
+            TT_THROW("{} (on the call's grid)", miss.what());
         } catch (const GeometryMiss& miss) {
-            TT_THROW("{}", miss.what());
+            TT_THROW("{} (on the call's grid)", miss.what());
         }
     }
     return it->second;
