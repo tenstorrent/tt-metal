@@ -169,6 +169,7 @@ _OP_DOMAIN_REGISTRY: dict[
     MathOperation.Hardsigmoid: _u(-4.0, 4.0),  # linear on [-3, 3], clipped outside
     MathOperation.Log: _lu(1e-4, 1e3),
     MathOperation.LogWithBase: _lu(1e-4, 1e3),
+    MathOperation.Log10: _lu(1e-4, 1e3),
     MathOperation.Log1p: _u(-0.99, 10.0),  # defined for x > -1
     MathOperation.Neg: _u(-10.0, 10.0),
     MathOperation.Reciprocal: _reciprocal_spec,
@@ -475,6 +476,7 @@ _OP_SINGULARITIES: dict[
     MathOperation.Rdiv: {Operand.A: ((0.0, _BOTH),)},
     MathOperation.Log: {Operand.A: ((0.0, _ABOVE),)},
     MathOperation.LogWithBase: {Operand.A: ((0.0, _ABOVE),)},
+    MathOperation.Log10: {Operand.A: ((0.0, _ABOVE),)},
     MathOperation.Log1p: {Operand.A: ((-1.0, _ABOVE),)},
     MathOperation.Sqrt: {Operand.A: ((0.0, _ABOVE),)},
     MathOperation.SqrtCustom: {Operand.A: ((0.0, _ABOVE),)},
