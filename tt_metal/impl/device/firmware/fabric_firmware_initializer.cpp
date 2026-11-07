@@ -388,58 +388,53 @@ void FabricFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& ini
         return;
     }
 
-    if (control_plane_.is_fabric_over_noc()) {
-        // Horizon fabric runs over NOC — no ERISC routers to terminate.
-        devices_.clear();
-        initialized_.clear();
-        init_done.erase(key);
-        return;
-    }
+    if (!control_plane_.is_fabric_over_noc()) {
+        const auto& fabric_context = control_plane_.get_fabric_context();
+        const auto& builder_ctx = fabric_context.get_builder_context();
+        auto [termination_signal_address, signal] = builder_ctx.get_fabric_router_termination_address_and_signal();
+        std::vector<uint32_t> termination_signal(1, signal);
 
-    const auto& fabric_context = control_plane_.get_fabric_context();
-    const auto& builder_ctx = fabric_context.get_builder_context();
-    auto [termination_signal_address, signal] = builder_ctx.get_fabric_router_termination_address_and_signal();
-    std::vector<uint32_t> termination_signal(1, signal);
+        // Terminate fabric tensix mux cores if enabled
+        // TODO: issue #26855, move the termination process to device
+        if (descriptor_->fabric_tensix_config() != tt::tt_fabric::FabricTensixConfig::DISABLED) {
+            const auto& tensix_config = builder_ctx.get_tensix_config();
 
-    // Terminate fabric tensix mux cores if enabled
-    // TODO: issue #26855, move the termination process to device
-    if (descriptor_->fabric_tensix_config() != tt::tt_fabric::FabricTensixConfig::DISABLED) {
-        const auto& tensix_config = builder_ctx.get_tensix_config();
+            for (auto* dev : devices_) {
+                if (builder_ctx.get_num_fabric_initialized_routers(dev->id()) == 0) {
+                    continue;
+                }
 
+                const auto fabric_node_id = control_plane_.get_fabric_node_id_from_physical_chip_id(dev->id());
+                const auto& active_fabric_eth_channels = control_plane_.get_active_fabric_eth_channels(fabric_node_id);
+
+                for (const auto& [eth_chan_id, direction] : active_fabric_eth_channels) {
+                    auto core_id = tensix_config.get_core_id_for_channel(dev->id(), eth_chan_id);
+                    auto [tensix_termination_address, tensix_signal] =
+                        tensix_config.get_termination_address_and_signal(core_id);
+                    std::vector<uint32_t> tensix_termination_signal(1, tensix_signal);
+                    auto mux_core = tensix_config.get_core_for_channel(dev->id(), eth_chan_id);
+
+                    detail::WriteToDeviceL1(
+                        dev, mux_core, tensix_termination_address, tensix_termination_signal, CoreType::WORKER);
+                }
+
+                cluster_.l1_barrier(dev->id());
+            }
+        }
+
+        // Terminate fabric routers via master router on each device
         for (auto* dev : devices_) {
             if (builder_ctx.get_num_fabric_initialized_routers(dev->id()) == 0) {
                 continue;
             }
 
-            const auto fabric_node_id = control_plane_.get_fabric_node_id_from_physical_chip_id(dev->id());
-            const auto& active_fabric_eth_channels = control_plane_.get_active_fabric_eth_channels(fabric_node_id);
-
-            for (const auto& [eth_chan_id, direction] : active_fabric_eth_channels) {
-                auto core_id = tensix_config.get_core_id_for_channel(dev->id(), eth_chan_id);
-                auto [tensix_termination_address, tensix_signal] =
-                    tensix_config.get_termination_address_and_signal(core_id);
-                std::vector<uint32_t> tensix_termination_signal(1, tensix_signal);
-                auto mux_core = tensix_config.get_core_for_channel(dev->id(), eth_chan_id);
-
-                detail::WriteToDeviceL1(
-                    dev, mux_core, tensix_termination_address, tensix_termination_signal, CoreType::WORKER);
-            }
-
-            cluster_.l1_barrier(dev->id());
-        }
-    }
-
-    // Terminate fabric routers via master router on each device
-    for (auto* dev : devices_) {
-        if (builder_ctx.get_num_fabric_initialized_routers(dev->id()) == 0) {
-            continue;
+            auto master_router_logical_core = cluster_.get_soc_desc(dev->id()).get_eth_core_for_channel(
+                builder_ctx.get_fabric_master_router_chan(dev->id()), CoordSystem::LOGICAL);
+            detail::WriteToDeviceL1(
+                dev, master_router_logical_core, termination_signal_address, termination_signal, CoreType::ETH);
         }
 
-        auto master_router_logical_core = cluster_.get_soc_desc(dev->id()).get_eth_core_for_channel(
-            builder_ctx.get_fabric_master_router_chan(dev->id()), CoordSystem::LOGICAL);
-        detail::WriteToDeviceL1(
-            dev, master_router_logical_core, termination_signal_address, termination_signal, CoreType::ETH);
-    }
+    }  // !is_fabric_over_noc()
 
     devices_.clear();
     initialized_.clear();

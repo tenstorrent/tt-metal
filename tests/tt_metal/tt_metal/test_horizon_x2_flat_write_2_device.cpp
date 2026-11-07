@@ -13,7 +13,7 @@
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
-#include <umd/device/tt_device/tt_device.hpp>
+#include <tt-umd/tt_device/tt_device.hpp>
 
 #include <cstdint>
 #include <cstdlib>

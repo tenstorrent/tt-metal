@@ -687,7 +687,7 @@ void ControlPlane::init_control_plane_auto_discovery() {
     // FabricUnicastWrite2DevBothChipsFixture::SetUp() in test_horizon_x2_fabric_unicast_write.cpp for details). Issue
     // tracked in #64515
     TT_FATAL(
-        !(this->is_fabric_over_noc()),
+        this->get_fabric_config() == FabricConfig::DISABLED || !(this->is_fabric_over_noc()),
         "Auto-discovery does not work for Fabric over NoC-based topologies, supply an MGD file and chip mapping "
         "instead.");
 
@@ -1758,17 +1758,20 @@ void ControlPlane::configure_routing_tables_for_fabric_over_noc() {
         tt::tt_fabric::MAX_HORIZON_DEVS_PER_MESH,
         this->logical_mesh_chip_id_to_physical_chip_id_mapping_.size());
 
-    for (const auto& [node, phys] : this->logical_mesh_chip_id_to_physical_chip_id_mapping_) {
+    {
+        const auto& first_phys = this->logical_mesh_chip_id_to_physical_chip_id_mapping_.begin()->second;
+        const auto ip_variant = this->cluster_.get().get_soc_desc(first_phys).get_arch_descriptor().get_ip_variant();
         uint32_t max_x = 0, max_y = 0;
-        const auto ip_variant = this->cluster_.get().get_soc_desc(phys).get_arch_descriptor().get_ip_variant();
         if (ip_variant == tt::IpVariant::HORIZON) {
             max_x = tt::tt_fabric::MAX_HORIZON_NOC_X;
             max_y = tt::tt_fabric::MAX_HORIZON_NOC_Y;
         } else {
             TT_FATAL(false, "Quasar IP Variant not found for core coordinate verification");
         }
-        this->verify_core_coordinates_(
-            this->cluster_.get().get_soc_desc(phys).get_cores(CoreType::TENSIX, CoordSystem::NOC0), max_x, max_y);
+        for (const auto& [node, phys] : this->logical_mesh_chip_id_to_physical_chip_id_mapping_) {
+            this->verify_core_coordinates_(
+                this->cluster_.get().get_soc_desc(phys).get_cores(CoreType::TENSIX, CoordSystem::NOC0), max_x, max_y);
+        }
     }
 
     for (const auto& [src_node, src_phys] : this->logical_mesh_chip_id_to_physical_chip_id_mapping_) {

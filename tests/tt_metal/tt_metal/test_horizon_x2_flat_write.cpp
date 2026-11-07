@@ -15,10 +15,12 @@
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
-#include <umd/device/tt_device/tt_device.hpp>
+#include <tt-metalium/experimental/fabric/fabric.hpp>
+#include <tt-umd/tt_device/tt_device.hpp>
 
 #include <cstdint>
 #include <cstdlib>
+#include <filesystem>
 #include <iostream>
 #include <vector>
 
@@ -139,6 +141,26 @@ bool flat_write_two_chips() {
     return is_horizon && std::getenv("TT_METAL_SIMULATOR") != nullptr && cluster.number_of_devices() >= 2;
 }
 
+// Sets the horizon_x2 chip mapping so get_fabric_node_id_from_physical_chip_id resolves
+// chips 0 and 1. Required because Horizon x2 has no Ethernet links and auto-discovery
+// maps nothing. Does NOT set FABRIC_1D — flat-address writes bypass the fabric router.
+class HorizonX2FlatWriteFixture : public QuasarMeshDeviceSingleCardFixture {
+protected:
+    void SetUp() override {
+        if (!flat_write_two_chips()) {
+            GTEST_SKIP() << "needs a horizon_x2 build with both chips visible";
+        }
+        auto mgd_path = (std::filesystem::path(MetalContext::instance().rtoptions().get_root_dir()) /
+                         "tt_metal/fabric/mesh_graph_descriptors/horizon_x2_mesh_graph_descriptor.textproto")
+                            .string();
+        MetalContext::instance().set_custom_fabric_topology(
+            mgd_path,
+            {{tt::tt_fabric::FabricNodeId(tt::tt_fabric::MeshId{0}, 0), 0},
+             {tt::tt_fabric::FabricNodeId(tt::tt_fabric::MeshId{0}, 1), 1}});
+        QuasarMeshDeviceSingleCardFixture::SetUp();
+    }
+};
+
 // Opens chip 1 instead of chip 0, for the reverse direction.
 class HorizonX2Chip1Fixture : public QuasarMeshDeviceSingleCardFixture {
 protected:
@@ -148,6 +170,13 @@ protected:
         if (MetalContext::instance().get_cluster().number_of_devices() < 2) {
             GTEST_SKIP() << "needs a horizon_x2 build with both chips visible";
         }
+        auto mgd_path = (std::filesystem::path(MetalContext::instance().rtoptions().get_root_dir()) /
+                         "tt_metal/fabric/mesh_graph_descriptors/horizon_x2_mesh_graph_descriptor.textproto")
+                            .string();
+        MetalContext::instance().set_custom_fabric_topology(
+            mgd_path,
+            {{tt::tt_fabric::FabricNodeId(tt::tt_fabric::MeshId{0}, 0), 0},
+             {tt::tt_fabric::FabricNodeId(tt::tt_fabric::MeshId{0}, 1), 1}});
         QuasarMeshDeviceSingleCardFixture::SetUp();
     }
 };
@@ -155,17 +184,9 @@ protected:
 }  // namespace
 
 // Chip 1's first access point is its NOC2AXI 0, at 0x20_...
-TEST_F(QuasarMeshDeviceSingleCardFixture, HorizonX2FlatWritePosted) {
-    if (!flat_write_two_chips()) {
-        GTEST_SKIP() << "needs a horizon_x2 build with both chips visible";
-    }
-    expect_flat_write_lands(*devices_[0], 0, 1, 0, true);
-}
+TEST_F(HorizonX2FlatWriteFixture, HorizonX2FlatWritePosted) { expect_flat_write_lands(*devices_[0], 0, 1, 0, true); }
 
-TEST_F(QuasarMeshDeviceSingleCardFixture, HorizonX2FlatWriteNonPosted) {
-    if (!flat_write_two_chips()) {
-        GTEST_SKIP() << "needs a horizon_x2 build with both chips visible";
-    }
+TEST_F(HorizonX2FlatWriteFixture, HorizonX2FlatWriteNonPosted) {
     expect_flat_write_lands(*devices_[0], 0, 1, 0, false);
 }
 
