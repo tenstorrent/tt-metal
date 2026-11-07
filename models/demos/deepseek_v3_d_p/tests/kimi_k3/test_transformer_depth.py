@@ -512,7 +512,9 @@ def k31_layer_pcc(layer: int) -> float:
 # 11-23 keep the 10K signature (>= 94% of misses rank >= 1500, median margin 0.3-0.6% of the spread): mean 0.928-0.941.
 # Layers 3 and 7 carry ~3x the later layers' per-key score error at both lengths (miss margin p50 ~1.2%, p90 ~3.4% of
 # the spread, unchanged from 10K), so the crowding costs them more: 0.834 / 0.837, 0.811 over the last 16K rows. The
-# 128K floor is 0.8, ~3 points under them, as 0.9 sits ~1.3 under the 10K minimum (layer 51).
+# 128K floor is 0.8, ~3 points under them, as 0.9 sits ~1.3 under the 10K minimum (layer 51). Unlike 0.9, 0.8 comes
+# from this measurement alone, not from an external reference (orchestrator decision, tt_metal_tracker-ao3i.5.2);
+# the first layers' larger score error and the trend toward 1M are tt_metal_tracker-ao3i.5.7.
 K31_TOPK_RECALL = {TRACE_K31: 0.9, TRACE_K31_128K: 0.8}
 
 
