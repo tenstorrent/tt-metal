@@ -162,6 +162,35 @@ void bind_experimental_paged_cache_operations(nb::module_& mod) {
         nb::arg("block_size") = nb::none(),
         nb::arg("cache_position_modulo") = nb::none(),
         nb::arg("valid_seq_len_tensor").noconvert() = nb::none());
+
+    const auto* paged_copy_blocks_doc =
+        R"doc(
+        Copies or zeroes whole blocks of paged caches in place, in one dispatch for all caches.
+
+        A block is one dim-0 slice of a cache (``cache[b]``). Row i of ``src_dst`` is a pair (src, dst):
+
+        * src == 0xFFFFFFFF: block dst of every cache is set to zero;
+        * src == dst: the row is skipped, so a fixed-size table can be padded and replayed in a trace;
+        * otherwise block dst of every cache becomes a copy of block src.
+
+        The table is read on device, so a captured trace follows new contents of ``src_dst`` without
+        recompiling. Caller contract: dst blocks are distinct, and no dst block is the src of another row.
+
+        Args:
+            caches (List[ttnn.Tensor]): interleaved device tensors of rank 3 or more with one spec (shape,
+                dtype, layout, memory config), for example the K and V caches of every layer.
+            src_dst (ttnn.Tensor): [num_pairs, 2] uint32 or int32 ROW_MAJOR interleaved device tensor.
+
+        Returns:
+            List[ttnn.Tensor]: the caches.
+        )doc";
+
+    ttnn::bind_function<"paged_copy_blocks", "ttnn.experimental.">(
+        mod,
+        paged_copy_blocks_doc,
+        &ttnn::experimental::paged_copy_blocks,
+        nb::arg("caches").noconvert(),
+        nb::arg("src_dst").noconvert());
 }
 
 }  // namespace ttnn::operations::experimental::paged_cache::detail

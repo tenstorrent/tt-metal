@@ -48,4 +48,8 @@ ttnn::Tensor paged_fill_cache(
     std::optional<uint32_t> cache_position_modulo = std::nullopt,
     const std::optional<const Tensor>& valid_seq_len_tensor = std::nullopt);
 
+// Copies or zeroes whole blocks (dim-0 slices) of every cache in one dispatch. src_dst is a [num_pairs, 2] uint32 or
+// int32 ROW_MAJOR device tensor; row i is (src, dst). src == 0xFFFFFFFF zeroes block dst, src == dst skips the row.
+std::vector<ttnn::Tensor> paged_copy_blocks(const std::vector<Tensor>& caches, const Tensor& src_dst);
+
 }  // namespace ttnn::experimental
