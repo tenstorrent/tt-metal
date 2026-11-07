@@ -101,6 +101,61 @@ sfpi_inline sfpi::vFloat _sfpu_neg_exp_f32_(sfpi::vFloat val) {
     return result;
 }
 
+// Evaluates (exp(r) - 1 - r) / r^2 = sum_{k=2}^{11} r^{k-2} / k! in Sterbenz-compensated
+// Horner form for |r| <= 0.5, returning the high part and writing the rounding residual
+// to y_lo. On |r| <= 0.5 each compensated step satisfies |r * y_{k+1}| < c_k / 2, so
+// c_k - y_k is exact by Sterbenz's lemma and a single SFPMAD recovers the FMA residual.
+sfpi_inline sfpi::vFloat _sfpu_expm1_m_x_over_x2_hi_lo_(sfpi::vFloat r, sfpi::vFloat& y_lo) {
+    constexpr float C11 = 1.0f / 39916800.0f;
+    constexpr float C10 = 1.0f / 3628800.0f;
+    constexpr float C9 = 1.0f / 362880.0f;
+    constexpr float C8 = 1.0f / 40320.0f;
+    constexpr float C7_HI = 1.0f / 5040.0f;
+    constexpr float C7_LO = -2.7255968749e-12f;
+    constexpr float C6_HI = 1.0f / 720.0f;
+    constexpr float C6_LO = -3.3631094437e-11f;
+    constexpr float C5_HI = 1.0f / 120.0f;
+    constexpr float C5_LO = -4.3461720334e-10f;
+    constexpr float C4_HI = 1.0f / 24.0f;
+    constexpr float C4_LO = -1.2417634698e-9f;
+    constexpr float C3_HI = 1.0f / 6.0f;
+    constexpr float C3_LO = -4.9670538793e-9f;
+    constexpr float C2 = 0.5f;
+
+    sfpi::vFloat y = r * C11 + C10;
+    y = r * y + C9;
+    y = r * y + C8;
+
+    sfpi::vFloat y_next = r * y + C7_HI;
+    y_lo = (r * y + (C7_HI - y_next)) + C7_LO;
+    y = y_next;
+
+    y_next = r * y + C6_HI;
+    sfpi::vFloat err = (r * y + (C6_HI - y_next)) + C6_LO;
+    y_lo = r * y_lo + err;
+    y = y_next;
+
+    y_next = r * y + C5_HI;
+    err = (r * y + (C5_HI - y_next)) + C5_LO;
+    y_lo = r * y_lo + err;
+    y = y_next;
+
+    y_next = r * y + C4_HI;
+    err = (r * y + (C4_HI - y_next)) + C4_LO;
+    y_lo = r * y_lo + err;
+    y = y_next;
+
+    y_next = r * y + C3_HI;
+    err = (r * y + (C3_HI - y_next)) + C3_LO;
+    y_lo = r * y_lo + err;
+    y = y_next;
+
+    y_next = r * y + C2;
+    err = r * y + (C2 - y_next);
+    y_lo = r * y_lo + err;
+    return y_next;
+}
+
 // mul_a * mul_b + addend (MAD)
 template <bool is_fp32_dest_acc_en>
 sfpi_inline void _xielu_mad_(sfpi::vFloat mul_a, sfpi::vFloat mul_b, sfpi::vFloat addend) {
@@ -130,6 +185,96 @@ sfpi_inline void _xielu_mad_(sfpi::vFloat mul_a, sfpi::vFloat mul_b, sfpi::vFloa
  */
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
 inline void calculate_xielu(const uint32_t param0, const uint32_t param1) {
+    if constexpr (is_fp32_dest_acc_en) {
+        // In float32 mode, alpha_n * (expm1(x) - x) and 0.5 * x cancel at the negative-branch
+        // zero crossing x* (e.g. x* ~= -2.4325 for alpha_n = 0.8, x* ~= -1.5936 for alpha_n = 1.0).
+        // Evaluate expm1(x) - x and the final product in compensated hi+lo form so the crossing
+        // stays faithful (<= 2 fp32 ULP) while keeping <= 6 LRegs live across the Horner polynomial.
+        for (int d = 0; d < ITERATIONS; d++) {
+            sfpi::vFloat x = sfpi::dst_reg[0];
+            v_if(x > 0.0f) {
+                sfpi::vFloat alpha_p = Converter::as_float(param0);
+                _xielu_mad_<true>(alpha_p * x, x, 0.5f * x);
+            }
+            v_elseif(x >= sfpi::vConstFloatPrgm1) {
+                sfpi::vFloat exp_term = sfpi::vConstFloatPrgm2 - x;
+                _xielu_mad_<true>(Converter::as_float(param1), exp_term, 0.5f * x);
+            }
+            v_elseif(x > -0.5f) {
+                sfpi::vFloat y_lo;
+                sfpi::vFloat y_hi = _sfpu_expm1_m_x_over_x2_hi_lo_(x, y_lo);
+                sfpi::vFloat x2 = x * x;
+                sfpi::vFloat neg_x2 = -x2;
+                sfpi::vFloat x2_err = x * x + neg_x2;
+                sfpi::vFloat p_hi = x2 * y_hi;
+                sfpi::vFloat neg_p_hi = -p_hi;
+                sfpi::vFloat p_err = x2 * y_hi + neg_p_hi;
+                sfpi::vFloat p_lo = x2 * y_lo + (x2_err * y_hi + p_err);
+
+                sfpi::vFloat alpha_n = Converter::as_float(param1);
+                sfpi::vFloat t_hi = p_hi * alpha_n;
+                sfpi::vFloat neg_t_hi = -t_hi;
+                sfpi::vFloat t_err = p_hi * alpha_n + neg_t_hi;
+                sfpi::vFloat res_hi = 0.5f * x + t_hi;
+                sfpi::dst_reg[0] = res_hi + (p_lo * alpha_n + t_err);
+            }
+            v_elseif(x > -20.0f) {
+                // 0x4B400000 = 1.5 * 2^23 rounds x / ln(2) to nearest integer k; 0x4B3FFF81
+                // subtracts the magic bias and adds the IEEE-754 exponent bias 127 in one ISUB.
+                constexpr float C231 = 12582912.0f;
+                constexpr int C231_BIAS = 0x4B3FFF81;
+                constexpr float LN2_HI = -6.93145751953125e-1f;
+                constexpr float LN2_LO = -1.428606765330187e-6f;
+                constexpr float LN2_LO2 = -5.495603971894525e-14f;
+
+                sfpi::vFloat k = (x * sfpi::vConstFloatPrgm0 + C231) - C231;
+                sfpi::vFloat r = k * LN2_LO + (k * LN2_HI + x);
+
+                sfpi::vFloat y_lo;
+                sfpi::vFloat y2 = _sfpu_expm1_m_x_over_x2_hi_lo_(r, y_lo);
+
+                sfpi::vFloat y1 = r * y2 + 1.0f;
+                sfpi::vFloat e1 = r * y2 + (1.0f - y1);
+                y_lo = r * y_lo + e1;
+
+                sfpi::vFloat p_hi = r * y1 + 1.0f;
+                sfpi::vFloat e0 = r * y1 + (1.0f - p_hi);
+                sfpi::vFloat p_lo = r * y_lo + e0;
+
+                // Reload x from Dest rather than holding it live across the Horner sequence.
+                sfpi::vFloat x_reload = sfpi::dst_reg[0];
+                sfpi::vFloat r_hi = k * LN2_HI + x_reload;
+                sfpi::vFloat r_lo = k * LN2_LO2 + (k * LN2_LO + (r_hi - r));
+                p_lo = r_lo * p_hi + p_lo;
+
+                sfpi::vFloat tmp = k + C231;
+                sfpi::vFloat two_k = sfpi::setexp(1.0f, sfpi::as<sfpi::vInt>(tmp) - C231_BIAS);
+                sfpi::vFloat e_hi = p_hi * two_k;
+                sfpi::vFloat e_lo = p_lo * two_k;
+
+                sfpi::vFloat em1_hi = e_hi - 1.0f;
+                sfpi::vFloat em1_lo = (e_hi - (em1_hi + 1.0f)) + e_lo;
+
+                sfpi::vFloat ex_hi = em1_hi - x_reload;
+                sfpi::vFloat ex_lo = (em1_hi - (ex_hi + x_reload)) + em1_lo;
+
+                sfpi::vFloat alpha_n = Converter::as_float(param1);
+                sfpi::vFloat t_hi = ex_hi * alpha_n;
+                sfpi::vFloat neg_t_hi = -t_hi;
+                sfpi::vFloat t_err = ex_hi * alpha_n + neg_t_hi;
+                sfpi::vFloat res_hi = 0.5f * x_reload + t_hi;
+                sfpi::dst_reg[0] = res_hi + (ex_lo * alpha_n + t_err);
+            }
+            v_else {
+                // For x <= -20, exp(x) < 2.06e-9 < 2^-33 * |1 - x|, so expm1(x) == -1 in float32.
+                sfpi::vFloat exp_term = -1.0f - x;
+                _xielu_mad_<true>(Converter::as_float(param1), exp_term, 0.5f * x);
+            }
+            v_endif;
+            sfpi::dst_reg++;
+        }
+        return;
+    }
     sfpi::vFloat alpha_p = Converter::as_float(param0);
     sfpi::vFloat alpha_n = Converter::as_float(param1);
     for (int d = 0; d < ITERATIONS; d++) {
