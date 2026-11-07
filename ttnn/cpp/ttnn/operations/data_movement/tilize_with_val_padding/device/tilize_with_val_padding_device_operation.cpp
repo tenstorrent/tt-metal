@@ -93,7 +93,7 @@ TilizeWithValPaddingDeviceOperation::program_factory_t TilizeWithValPaddingDevic
         uint32_t num_blocks_block = (input_tensor.padded_shape()[-1] * input_tensor.padded_shape()[-2]) /
                                     (tt::constants::TILE_HEIGHT * tt::constants::TILE_WIDTH);
         auto ncores_wh = compute_ncores_wh(grid_area, num_blocks_block, num_tiles_per_row, num_tiles_per_col);
-        if (ncores < ncores_wh.ncores) {
+        if (ncores < ncores_wh.ncores && ncores_wh.ncores <= grid_area) {
             return TilizeWithValPaddingMultiCoreBlockInterleavedFactory{};
         }
     }
