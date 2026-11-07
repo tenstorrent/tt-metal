@@ -10,6 +10,7 @@ Seldon's parser takes the FIRST "Answer:" match (then the first standalone lette
 scores the same replies with the last "Answer:" line instead (same fallback), to show whether the choice matters.
 """
 
+import os
 import re
 
 LETTERS = "abcdefghijklmnopqrstuvwxyz"
@@ -52,7 +53,16 @@ def parse_answer_last_line(text, n_options):
 
 
 def vgi_doc_to_visual(doc):
-    return [doc["video_url"]]  # sent by URL, as Seldon's harness does
+    """The video by URL, as Seldon's harness does. With VGI_LOCAL_VIDEO_DIR set (a local, sha256-checked copy of the
+    videos named by their URL basename) a server that reads local media (vLLM --allowed-local-media-path) gets a
+    file:// URL to the same bytes instead, so it does not download hundreds of MB from the CDN for every question."""
+    url = doc["video_url"]
+    local_dir = os.environ.get("VGI_LOCAL_VIDEO_DIR")
+    if local_dir:
+        path = os.path.join(local_dir, url.rsplit("/", 1)[-1])
+        if os.path.isfile(path):
+            return ["file://" + os.path.abspath(path)]
+    return [url]
 
 
 def vgi_doc_to_text(doc, lmms_eval_specific_kwargs=None):

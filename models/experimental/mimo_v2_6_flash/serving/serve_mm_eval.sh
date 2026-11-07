@@ -19,6 +19,7 @@
 #   PLUGIN_SRC        vllm-tt-plugin src/ ($R/mm/vllm-tt-plugin-mm/src); EXTRA_PYTHONPATH (torchaudio: $R/mm/llm/pylib)
 #   MIMO_TT_CACHE     the LLM's TT cache (the MTP entry's tt-inference-server volume); MIMO_VISION_CACHE
 #   BASE_PORT         proxy port (8730); engine of row r on BASE_PORT + 1 + r
+#   EXTRA_VLLM_ARGS_LINES  extra engine arguments, one per line; GEN_CONFIG  generation-config override JSON
 #   TT_PROXY_*        lb.py's shim (TT_PROXY_FETCH_MEDIA defaults to 1 here: the proxy downloads http(s) media and
 #                     the engines refuse media URLs)
 set -u
@@ -48,6 +49,11 @@ export TT_PROXY_FETCH_MEDIA=${TT_PROXY_FETCH_MEDIA:-1}
 TT='{"tt": {"trace_mode": "decode_only", "trace_region_size": 1200000000, "l1_small_size": 65536, "dispatch_core_axis": "col", "sample_on_device_mode": "decode_only", "prefill_chunk_alignment": 256}}'
 SPEC='{"method": "custom_class", "model": "vllm_tt_plugin.model_owned_drafter", "num_speculative_tokens": 3}'
 MEDIA_ARGS=()
+# Extra engine arguments, one per line in EXTRA_VLLM_ARGS_LINES (e.g. --media-io-kwargs and its JSON, or
+# --allowed-local-media-path and a directory); GEN_CONFIG replaces the generation-config override (JSON).
+EXTRA_VLLM_ARGS=()
+GEN_CONFIG=${GEN_CONFIG:-'{"max_new_tokens": null}'}
+[ -n "${EXTRA_VLLM_ARGS_LINES:-}" ] && mapfile -t EXTRA_VLLM_ARGS <<< "$EXTRA_VLLM_ARGS_LINES"
 case "$TT_PROXY_FETCH_MEDIA" in 1|true|yes|on) MEDIA_ARGS=(--allowed-media-domains fetched-by-the-proxy.invalid) ;; esac
 
 cd "$MODEL_SRC"  # the model's kernel sources resolve against the CWD first
@@ -94,7 +100,8 @@ for r in $ROWS; do
     --prefix-cache-retention-interval "${APC_RETENTION:-1024}" \
     --reasoning-parser mimo --tool-call-parser mimo --enable-auto-tool-choice \
     --port "$port" --additional-config "$TT" --speculative-config "$SPEC" \
-    --override-generation-config '{"max_new_tokens": null}' ${MEDIA_ARGS[@]+"${MEDIA_ARGS[@]}"} \
+    --override-generation-config "$GEN_CONFIG" ${MEDIA_ARGS[@]+"${MEDIA_ARGS[@]}"} \
+    ${EXTRA_VLLM_ARGS[@]+"${EXTRA_VLLM_ARGS[@]}"} \
     > "$LOGS/row$r.log" 2>&1 &
   LOCKS+=($!)
   BACKENDS+=("127.0.0.1:$port")

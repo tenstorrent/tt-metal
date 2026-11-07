@@ -398,7 +398,7 @@ class OpenRouterChat(lmms):
         os.replace(tmp, out)
 
     def _video_part(self, path):
-        if path.startswith(("http://", "https://")):
+        if path.startswith(("http://", "https://", "file://")):
             return {"type": "video_url", "video_url": {"url": path}}
         payload, mime = self._video_bytes(path)
         return {"type": "video_url", "video_url": {"url": f"data:{mime};base64," + base64.b64encode(payload).decode()}}
