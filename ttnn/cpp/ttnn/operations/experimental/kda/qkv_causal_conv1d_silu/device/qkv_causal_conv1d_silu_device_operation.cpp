@@ -23,6 +23,24 @@ QkvCausalConv1dSiluOperation::program_factory_t QkvCausalConv1dSiluOperation::se
     return QkvCausalConv1dSiluProgramFactory{};
 }
 
+// A cache hit matches every attribute and tensor spec the miss validated: only where the tensors live can differ.
+void QkvCausalConv1dSiluOperation::validate_on_program_cache_hit(
+    const operation_attributes_t&, const tensor_args_t& in) {
+    kda_factory_detail::check_allocated_on_device(
+        in.input,
+        {{&in.input, "input"},
+         {&in.history, "history"},
+         {&in.tap0, "tap0"},
+         {&in.tap1, "tap1"},
+         {&in.tap2, "tap2"},
+         {&in.tap3, "tap3"},
+         {&in.actual_start, "actual_start"},
+         {in.predecessor_carry ? &*in.predecessor_carry : nullptr, "predecessor_carry"},
+         {in.exchange_buffer ? &*in.exchange_buffer : nullptr, "exchange_buffer"},
+         {in.actual_end ? &*in.actual_end : nullptr, "actual_end"}},
+        "qkv_causal_conv1d_silu");
+}
+
 void QkvCausalConv1dSiluOperation::validate_on_program_cache_miss(
     const operation_attributes_t& attrs, const tensor_args_t& in) {
     using namespace kda_factory_detail;

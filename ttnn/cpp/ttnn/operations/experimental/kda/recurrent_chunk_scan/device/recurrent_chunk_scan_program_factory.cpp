@@ -499,6 +499,7 @@ ttnn::device_operation::MeshWorkloadArtifacts RecurrentChunkScanProgramFactory::
         reader.dfb_bindings.push_back(tt::tt_metal::experimental::ProducerOf(writer_chronology, "chronology_writer"));
         writer.dfb_bindings.push_back(tt::tt_metal::experimental::ConsumerOf(writer_chronology, "chronology_writer"));
     }
+    const auto chronology_programs = kda_factory_detail::bind_sp_rank(spec, run_args, in.sp_rank, reader);
     spec.kernels = {std::move(reader), std::move(writer), std::move(compute)};
     return kda_factory_detail::chronology_workload(
         ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)},
@@ -506,7 +507,8 @@ ttnn::device_operation::MeshWorkloadArtifacts RecurrentChunkScanProgramFactory::
         device,
         attrs.sequence_parallel_axis,
         attrs.num_chunks * attrs.groups_per_head * tt::constants::TILE_HEIGHT,
-        reader_kernel_name);
+        reader_kernel_name,
+        chronology_programs);
 }
 
 }  // namespace ttnn::experimental::prim

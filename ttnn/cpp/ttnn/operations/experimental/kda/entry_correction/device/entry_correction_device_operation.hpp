@@ -38,6 +38,7 @@ std::tuple<Tensor, Tensor> entry_correction(
     const std::optional<Tensor>& actual_end,
     uint32_t sequence_parallel_axis,
     uint32_t local_rows,
-    const std::vector<tt::tt_metal::CoreCoord>& cores);
+    const std::vector<tt::tt_metal::CoreCoord>& cores,
+    const std::optional<Tensor>& sp_rank = std::nullopt);
 
 }  // namespace ttnn::experimental::prim

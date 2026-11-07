@@ -72,6 +72,9 @@ void RecurrentChunkScanOperation::validate_on_program_cache_miss(
     if (in.actual_end) {
         kda_factory_detail::check_actual_start(in.actual_start, *in.actual_end, "recurrent_chunk_scan");
     }
+    if (in.sp_rank) {
+        kda_factory_detail::check_device_scalar(in.t_inv, *in.sp_rank, operation_name, "sp_rank");
+    }
     check_protocol_tensor(in.v_beta, "v_beta", true, operation_name);
     check_protocol_tensor(in.kd, "kd", true, operation_name);
     check_protocol_tensor(in.q_decay, "q_decay", true, operation_name);
@@ -273,7 +276,8 @@ std::vector<Tensor> recurrent_chunk_scan(
     bool tail,
     bool init,
     bool emit_outputs,
-    const std::optional<MemoryConfig>& emit_mem_config) {
+    const std::optional<MemoryConfig>& emit_mem_config,
+    const std::optional<Tensor>& sp_rank) {
     const auto& value_shape = v_beta.logical_shape();
     const auto& key_shape = kd.logical_shape();
     const std::string_view operation_name =
@@ -305,7 +309,8 @@ std::vector<Tensor> recurrent_chunk_scan(
             .group_entry_states = group_entry_states,
             .tail_entry_states = tail_entry_states,
             .actual_start = actual_start,
-            .actual_end = actual_end});
+            .actual_end = actual_end,
+            .sp_rank = sp_rank});
 }
 
 }  // namespace ttnn::experimental::prim

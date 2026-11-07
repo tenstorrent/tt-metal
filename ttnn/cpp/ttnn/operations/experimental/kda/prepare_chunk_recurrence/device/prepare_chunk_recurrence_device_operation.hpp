@@ -20,6 +20,7 @@ struct PrepareChunkRecurrenceOperation {
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
+    static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
     static tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t> create_op_performance_model(
         const operation_attributes_t&, const tensor_args_t&, tensor_return_value_t&);
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
@@ -40,6 +41,7 @@ std::vector<Tensor> prepare_chunk_recurrence(
     const std::optional<Tensor>& actual_end,
     uint32_t sequence_parallel_axis,
     float gate_scale,
-    uint32_t beta_logits_column_offset);
+    uint32_t beta_logits_column_offset,
+    const std::optional<Tensor>& sp_rank = std::nullopt);
 
 }  // namespace ttnn::experimental::prim

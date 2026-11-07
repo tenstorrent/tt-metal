@@ -46,6 +46,9 @@ void EntryCorrectionOperation::validate_on_program_cache_miss(
     if (in.actual_end) {
         kda_factory_detail::check_actual_start(in.actual_start, *in.actual_end, operation_name);
     }
+    if (in.sp_rank) {
+        kda_factory_detail::check_device_scalar(in.final_b, *in.sp_rank, operation_name, "sp_rank");
+    }
     for (const auto& [tensor, name] :
          {std::pair{&in.final_a, "final_a"},
           std::pair{&in.final_b, "final_b"},
@@ -219,7 +222,8 @@ std::tuple<Tensor, Tensor> entry_correction(
     const std::optional<Tensor>& actual_end,
     uint32_t sequence_parallel_axis,
     uint32_t local_rows,
-    const std::vector<tt::tt_metal::CoreCoord>& cores) {
+    const std::vector<tt::tt_metal::CoreCoord>& cores,
+    const std::optional<Tensor>& sp_rank) {
     auto outputs = ttnn::device_operation::launch<EntryCorrectionOperation>(
         EntryCorrectionParams{
             .sequence_parallel_axis = sequence_parallel_axis,
@@ -234,7 +238,8 @@ std::tuple<Tensor, Tensor> entry_correction(
             .entry = entry,
             .tail_entry = tail_entry,
             .actual_start = actual_start,
-            .actual_end = actual_end});
+            .actual_end = actual_end,
+            .sp_rank = sp_rank});
     return {outputs[0], outputs[1]};
 }
 

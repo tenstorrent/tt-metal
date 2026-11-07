@@ -29,6 +29,8 @@ void bind_prepare_chunk_recurrence(nb::module_& mod) {
         Omitting ``actual_end`` retains full physical
         capacity. Their contents may change during trace replay. Padded chunk/group
         outputs are unspecified. Bounds are caller preconditions, not read on host.
+        With ``sp_rank``, each device's UINT32 row-major scalar rank along ``sequence_parallel_axis``,
+        one program serves the whole mesh, which the host queues faster.
 
         Args:
             q (ttnn.Tensor): Flat queries ``[1, T, H*K]`` in BFLOAT16.
@@ -56,6 +58,9 @@ void bind_prepare_chunk_recurrence(nb::module_& mod) {
                 any BF16-representable scale, so it is bit-identical to host-scaled ``g`` whenever that
                 host product is itself exact in BF16. Defaults to 1.0.
             beta_logits_column_offset (int): Tile-aligned first column of the beta logits in ``beta``.
+            sp_rank (ttnn.Tensor, optional): Each device's UINT32 row-major scalar rank along
+                ``sequence_parallel_axis``. With it one program serves the whole mesh, which the host queues
+                faster; without it each SP rank gets its own program.
                 Defaults to 0.
 
         Returns:
@@ -89,7 +94,8 @@ void bind_prepare_chunk_recurrence(nb::module_& mod) {
         nb::arg("actual_end") = nb::none(),
         nb::arg("sequence_parallel_axis") = 0,
         nb::arg("gate_scale") = 1.0F,
-        nb::arg("beta_logits_column_offset") = 0);
+        nb::arg("beta_logits_column_offset") = 0,
+        nb::arg("sp_rank") = nb::none());
 }
 
 }  // namespace ttnn::operations::experimental::kda::prepare_chunk_recurrence::detail
