@@ -235,7 +235,8 @@ void kernel_main() {
                     false,
                     unpadded_Sk,
                     0,
-                    is_causal);
+                    is_causal,
+                    k_num_chunks * Sk_chunk_t);
             }
 
             // Windowed: synthesize this Q chunk's block-diagonal mask (all K chunks) before draining its
