@@ -77,6 +77,7 @@
 #include <tt-umd/types/core_coordinates.hpp>
 #include "mesh_device_view_impl.hpp"
 #include "dummy_mesh_command_queue.hpp"
+#include "impl/buffers/global_semaphore_pool.hpp"
 #include "impl/context/metal_env_accessor.hpp"
 #ifdef TT_METAL_USE_EMULE
 #include "emule_mesh_command_queue.hpp"
@@ -1239,6 +1240,7 @@ bool MeshDeviceImpl::close_impl(MeshDevice* pimpl_wrapper) {
         // still initialized runs mesh-buffer deallocation during teardown, which hangs on multihost
         // meshes using the hybrid allocator. Cached programs outliving the persistent L1 arena is
         // handled by PersistentL1Arena::Seal's liveness token instead.
+        release_global_semaphore_pool();
         sub_device_manager_tracker_.reset();
         scoped_devices_.reset();
         parent_mesh_.reset();
@@ -1824,6 +1826,103 @@ bool MeshDeviceImpl::initialize(
     return false;
 }
 
+namespace {
+
+template <typename Reserve>
+std::unique_ptr<GlobalSemaphorePoolReservation> reserve_global_semaphore_block(
+    uint32_t num_slots, int mesh_id, Reserve&& reserve) {
+    try {
+        return reserve();
+    } catch (const std::exception& e) {
+        TT_THROW(
+            "Could not reserve a GlobalSemaphore pool of {} slots from the L1 allocator of mesh device {}. Cause: {}",
+            num_slots,
+            mesh_id,
+            e.what());
+    }
+}
+
+}  // namespace
+
+void MeshDeviceImpl::reserve_global_semaphore_pool(MeshDevice& device, uint32_t num_slots) {
+    TT_FATAL(is_initialized(), "ReserveGlobalSemaphorePool called on a closed MeshDevice");
+    // The parent of unit meshes is never opened and has no allocator; each unit mesh owns its pool.
+    if (parent_mesh_ != nullptr && parent_mesh_->impl().is_initialized()) {
+        parent_mesh_->impl().reserve_global_semaphore_pool(*parent_mesh_, num_slots);
+        return;
+    }
+    num_slots = metal_env().get_rtoptions().get_global_semaphore_pool_slots().value_or(num_slots);
+    if (global_semaphore_pool_ != nullptr) {
+        TT_FATAL(
+            num_slots <= global_semaphore_pool_->num_slots(),
+            "Mesh device {} already has a GlobalSemaphore pool of {} slots, which cannot grow to {}",
+            id(),
+            global_semaphore_pool_->num_slots(),
+            num_slots);
+        return;
+    }
+    if (num_slots == 0) {
+        return;
+    }
+    const DeviceAddr slot_size = metal_env().get_hal().get_alignment(HalMemType::L1);
+    const DeviceAddr size = GlobalSemaphorePool::reservation_size(num_slots, slot_size);
+    const CoreCoord grid = compute_with_storage_grid_size();
+    CoreRangeSet worker_grid(CoreRange({0, 0}, {grid.x - 1, grid.y - 1}));
+    auto reservation = reserve_global_semaphore_block(
+        num_slots, id(), [&] { return GlobalSemaphorePoolReservation::from_allocator(device, worker_grid, size); });
+    auto pool =
+        std::make_shared<GlobalSemaphorePool>(std::move(reservation), std::move(worker_grid), num_slots, slot_size);
+    global_semaphore_pool_ = pool;
+    try {
+        for (const auto& weak_submesh : submeshes_) {
+            if (const auto submesh = weak_submesh.lock(); submesh != nullptr && submesh->is_initialized()) {
+                submesh->impl().adopt_global_semaphore_pool(pool);
+            }
+        }
+    } catch (...) {
+        const std::function<void(MeshDeviceImpl&)> release_submeshes = [&](MeshDeviceImpl& mesh) {
+            for (const auto& weak_submesh : mesh.submeshes_) {
+                if (const auto submesh = weak_submesh.lock(); submesh != nullptr) {
+                    release_submeshes(submesh->impl());
+                    submesh->impl().release_global_semaphore_pool();
+                }
+            }
+        };
+        release_submeshes(*this);
+        release_global_semaphore_pool();
+        throw;
+    }
+}
+
+void MeshDeviceImpl::adopt_global_semaphore_pool(const std::shared_ptr<GlobalSemaphorePool>& pool) {
+    const DeviceAddr size = GlobalSemaphorePool::reservation_size(pool->num_slots(), pool->slot_size());
+    global_semaphore_pool_mirror_ = reserve_global_semaphore_block(pool->num_slots(), id(), [&] {
+        return GlobalSemaphorePoolReservation::mirror_allocator_block(*allocator_impl(), pool->base_address(), size);
+    });
+    global_semaphore_pool_ = pool;
+    for (const auto& weak_submesh : submeshes_) {
+        if (const auto submesh = weak_submesh.lock(); submesh != nullptr && submesh->is_initialized()) {
+            submesh->impl().adopt_global_semaphore_pool(pool);
+        }
+    }
+}
+
+void MeshDeviceImpl::release_global_semaphore_pool() {
+    if (global_semaphore_pool_ != nullptr && global_semaphore_pool_mirror_ == nullptr) {
+        if (const uint32_t peak = global_semaphore_pool_->peak_live(); peak > 0) {
+            log_info(
+                tt::LogMetal,
+                "GlobalSemaphore pool of mesh device {}: peak {} of {} slots live",
+                id(),
+                peak,
+                global_semaphore_pool_->num_slots());
+        }
+        global_semaphore_pool_->close();
+    }
+    global_semaphore_pool_.reset();
+    global_semaphore_pool_mirror_.reset();
+}
+
 // Dispatch and initialization
 bool MeshDeviceImpl::initialize_impl(
     MeshDevice* pimpl_wrapper,
@@ -1868,6 +1967,9 @@ bool MeshDeviceImpl::initialize_impl(
     // SubDeviceManagerTracker needs a MeshDevice pointer.
     sub_device_manager_tracker_ =
         std::make_unique<SubDeviceManagerTracker>(pimpl_wrapper, std::move(mesh_allocator), sub_devices);
+    if (parent_mesh_ != nullptr && parent_mesh_->impl().global_semaphore_pool() != nullptr) {
+        adopt_global_semaphore_pool(parent_mesh_->impl().global_semaphore_pool());
+    }
     mesh_command_queues_.reserve(this->num_hw_cqs());
     if (metal_env().get_rtoptions().get_fast_dispatch()) {
         for (std::size_t cq_id = 0; cq_id < this->num_hw_cqs(); cq_id++) {
@@ -2110,6 +2212,9 @@ void MeshDeviceImpl::quiesce_internal() {
 
 void MeshDeviceImpl::quiesce_devices() {
     quiesce_internal();
+    if (global_semaphore_pool_ != nullptr) {
+        global_semaphore_pool_->device_quiesced(*this);
+    }
     for (auto& command_queue : mesh_command_queues_) {
         for (auto& device : get_devices()) {
             TT_ASSERT(
