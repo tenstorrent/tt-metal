@@ -42,7 +42,7 @@ constexpr bool ZERO_SKIPPED_SLOTS = true;
 // through the mailbox. Plain uint32 words so the mailbox is a flat L1 copy.
 struct PointArgs {
     // Row r's corner word at corner_l1 + tile_col16_offset_fp32(r): a corner
-    // tile, or a tiled block's shifted by j columns.
+    // tile, or a tiled block's tile for point j's group, shifted by its lane.
     uint32_t corner_l1;
     uint32_t block_l1;  // the input-CB block being staged
     uint32_t v_rows;
@@ -74,15 +74,15 @@ constexpr uint32_t SPLIT_ROW = ValueAccessor::is_dram ? SPLIT_ROW_DRAM : SPLIT_R
 // both RISCs:
 //   reader: post_point(pt); ready = ++seq; push the next point's geometry
 //           (per-point hand-off only); gather rows [0, SPLIT_ROW); barrier;
-//           wait done == seq; pop the corner tile (tiled geometry: after the
-//           block's last point); push the block.
+//           wait done == seq; pop the corner tile (tiled geometry: the
+//           block's corner tiles, after its last point); push the block.
 //   writer: wait ready == ++seq; fetch_point; gather rows [SPLIT_ROW, 32);
 //           barrier; done = seq.
 // Both sides must post or consume exactly NUM_LEVELS * NUM_POINTS points per
 // output tile, every tile: a skipped post hangs the other side. The mailbox is
 // rewritten only after done == seq, so one page is enough. These are counters
 // rather than a CB because the writer fills part of a block the reader
-// reserved, and the corner tile must stay at the reader's front until the
+// reserved, and the corner tiles must stay at the reader's front until the
 // writer has read it.
 //
 // Ordering: volatile accesses keep the mailbox stores ahead of ready. The L1

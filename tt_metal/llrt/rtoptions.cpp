@@ -90,6 +90,7 @@ enum class EnvVarID {
     TT_METAL_WATCHER_TEST_MODE,         // Enable watcher test mode
     TT_METAL_KERNEL_MAP,                // Enable kernel build mapping
     TT_METAL_DISPATCH_DATA_COLLECTION,  // Enable dispatch debug data collection
+    TT_METAL_HOST_TRANSFER_STATS,       // Report host <-> device transfer time and volume at teardown
     TT_METAL_GTEST_ETH_DISPATCH,        // Use Ethernet cores for dispatch in tests
     TT_METAL_TENSIX_DISPATCH_CORES,     // Quasar: force interim Tensix dispatch cores from core descriptor YAML
     TT_METAL_NOC_ATT,                   // Quasar: NoC address-translation-table map for device traffic
@@ -99,6 +100,7 @@ enum class EnvVarID {
     // ========================================
     TT_METAL_ENABLE_HW_CACHE_INVALIDATION,              // Enable HW cache invalidation
     TT_METAL_DISABLE_RELAXED_MEM_ORDERING,              // Disable relaxed memory ordering
+    TT_METAL_DISABLE_L1_ECC_HALT,                       // Disable the Blackhole L1 ECC halt
     TT_METAL_ENABLE_GATHERING,                          // Enable instruction gathering
     TT_METAL_FABRIC_BW_TELEMETRY,                       // Enable fabric bandwidth telemetry
     TT_METAL_FABRIC_TELEMETRY,                          // Enable fabric telemetry
@@ -397,10 +399,12 @@ RunTimeOptions::RunTimeOptions() : system_kernel_dir("/usr/share/tenstorrent/ker
     // TT_METAL_DISABLE_MULTI_AERISC override) intact so that HAL construction and kernel compilation match
     // what a real device would produce. Architecture gating still happens downstream (only Blackhole's HAL
     // acts on the flag). The simulator and emule backends cannot model dual-erisc, so force it off for them.
+    // ttsim exits on any access to the ECC registers, so the L1 ECC halt is forced off too.
     if (this->runtime_target_device_ == tt::TargetDevice::Simulator ||
         this->runtime_target_device_ == tt::TargetDevice::Emule) {
         log_info(tt::LogMetal, "Disabling multi-erisc mode with simulator/emule target device");
         this->enable_2_erisc_mode = false;
+        this->disable_l1_ecc_halt = true;
     }
 
     TT_FATAL(
@@ -714,6 +718,13 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Usage: export TT_METAL_DISPATCH_DATA_COLLECTION=1
         case EnvVarID::TT_METAL_DISPATCH_DATA_COLLECTION: this->enable_dispatch_data_collection = true; break;
 
+        // TT_METAL_HOST_TRANSFER_STATS
+        // Record the bytes and time of host <-> device transfers and log a summary when the context tears down.
+        // Under fast dispatch, each recorded transfer adds two events to the command queue.
+        // Default: false (not recorded). Set to '0' to disable, any other value enables it.
+        // Usage: export TT_METAL_HOST_TRANSFER_STATS=1
+        case EnvVarID::TT_METAL_HOST_TRANSFER_STATS: this->enable_host_transfer_stats = strcmp(value, "0") != 0; break;
+
         // TT_METAL_GTEST_ETH_DISPATCH
         // Use Ethernet cores for dispatch in tests.
         // Default: Worker cores (default dispatch type)
@@ -773,6 +784,12 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Default: false (relaxed ordering enabled)
         // Usage: export TT_METAL_DISABLE_RELAXED_MEM_ORDERING=1
         case EnvVarID::TT_METAL_DISABLE_RELAXED_MEM_ORDERING: this->disable_relaxed_memory_ordering = true; break;
+
+        // TT_METAL_DISABLE_L1_ECC_HALT
+        // Do not halt a Blackhole Tensix BRISC on an L1 ECC error.
+        // Default: false (halt enabled on Blackhole silicon)
+        // Usage: export TT_METAL_DISABLE_L1_ECC_HALT=1
+        case EnvVarID::TT_METAL_DISABLE_L1_ECC_HALT: this->disable_l1_ecc_halt = is_env_enabled(value); break;
 
         // TT_METAL_ENABLE_GATHERING
         // Enable data gathering on Blackhole.

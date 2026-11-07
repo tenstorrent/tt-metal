@@ -48,7 +48,8 @@ def test_experts(batch_size, seq_len, mesh_device, reset_seeds, request):
     run_experts(batch_size, seq_len, mesh_device, request)
 
 
-# the direct dispatch/combine ops run along mesh axis 0 only: single-row meshes take test_experts_dispatch_ring; the
+# the direct dispatch/combine programs run along mesh axis 0 only (the ring transport of single-row meshes is
+# unit-only: custom_ops/test_moe_dispatch_prefill.py covers the local dispatch / combine on a (2,2) block); the
 # 4-chip line runs them as the (4,1) column mesh (GEMMA4_TP_AXIS=0: TP over the rows = the dispatch group)
 @skip_if_not_moe
 @pytest.mark.skipif(
@@ -84,47 +85,6 @@ def test_experts_dispatch_fit(seq_len, sparse, mesh_device, reset_seeds, request
     monkeypatch.setenv("GEMMA4_MOE_DISPATCH_MIN_TOKENS", "128")
     monkeypatch.setenv("GEMMA4_MOE_DISPATCH_FIT_CHUNK", "1")
     run_experts(1, seq_len, mesh_device, request, sparse_routing=sparse)
-
-
-def _skip_unless_ring_payload_fits(hidden):
-    """dispatch_fabric2d sends a whole bf16 token page plus 64 B per fabric packet and refuses more than the fabric
-    max payload (4352 B by default). Opening the mesh with a raised router config (6528 B for the 26B's 2816-wide
-    hidden) hangs the loop-wired QB2 inside the op (tt-metal CI at ca39639f7c1, bh_quietbox_2: DispatchFabric running,
-    the board left with eth firmware not ready), so a model whose token exceeds the default is skipped here; the
-    planner refuses the ring for it at runtime (ring_transport_reason) and test_dispatch_ring_payload_host.py pins
-    the numbers. The ring transport is unit-only: no served configuration selects it."""
-    from models.demos.gemma4.tt.experts.dispatch_prefill import (
-        FABRIC_DEFAULT_PAYLOAD_BYTES,
-        ring_payload_required_bytes,
-    )
-
-    need = ring_payload_required_bytes(hidden)
-    if need > FABRIC_DEFAULT_PAYLOAD_BYTES:
-        pytest.skip(
-            f"26B token payload exceeds the fabric default ({need} B > {FABRIC_DEFAULT_PAYLOAD_BYTES} B); upstream "
-            "dispatch_fabric2d cannot carry it on this build"
-        )
-
-
-# single-row meshes (the 4-chip and 8-chip entries) dispatch along their columns over the hop-forwarding
-# dispatch_fabric2d / combine_fabric2d pair, which needs the axis wrap-wired (FABRIC_1D_RING; skipped on the line)
-@skip_if_not_moe
-@pytest.mark.skipif(
-    not is_blackhole(), reason="token-dispatch prefill runs the Blackhole-only unified_routed_expert_ffn"
-)
-@parametrize_mesh_with_fabric(
-    mesh_shapes=[(1, 4), (1, 8)], device_params_extra={"fabric_config": lanes_fabric_config()}
-)
-@pytest.mark.parametrize("seq_len", [128, 1024, 4096 + 128], ids=["prefill_128", "prefill_1024", "prefill_4224"])
-def test_experts_dispatch_ring(seq_len, mesh_device, reset_seeds, request, monkeypatch):
-    """Token-dispatch prefill on the ring transport (single-row mesh) vs the HF reference."""
-    if lanes_fabric_config() != ttnn.FabricConfig.FABRIC_1D_RING:
-        pytest.skip("the ring transport (dispatch_fabric2d / combine_fabric2d) needs FABRIC_1D_RING")
-    _skip_unless_ring_payload_fits(int(TestFactory.create_hf_text_config().hidden_size))
-    monkeypatch.setenv("GEMMA4_MOE_DISPATCH_PREFILL", "1")
-    monkeypatch.setenv("GEMMA4_MOE_DISPATCH_RING", "1")
-    monkeypatch.setenv("GEMMA4_MOE_DISPATCH_MIN_TOKENS", "128")
-    run_experts(1, seq_len, mesh_device, request)
 
 
 # the decode MoE kernel dispatches on the lane fabric: FABRIC_1D_RING on the Galaxy, a FABRIC_1D line on the (2,4)

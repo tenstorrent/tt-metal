@@ -26,7 +26,6 @@
 #include <vector>
 #include "llrt/hal_proc_set.hpp"  // HalProcessorSet — internal, no full Hal singleton
 #include "tt_target_device.hpp"
-#include <tt-umd/types/xy_pair.hpp>
 #include <tt-umd/types/core_coordinates.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/dispatch_core_common.hpp>  // For DispatchCoreConfig
@@ -300,6 +299,8 @@ class RunTimeOptions {
 
     bool enable_dispatch_data_collection = false;
 
+    bool enable_host_transfer_stats = false;
+
     // HW can clear Blackhole's L1 data cache psuedo-randomly once every 128 transactions
     // This option will enable this feature to help flush out whether there is a missing cache invalidation
     bool enable_hw_cache_invalidation = false;
@@ -322,6 +323,9 @@ class RunTimeOptions {
     // e.g. Store A followed by Load A will be unchanges but Store A followed by Load B may return B before A is written
     // This option will disable the relaxed ordering
     bool disable_relaxed_memory_ordering = false;
+
+    // Blackhole silicon: BRISC halts on an L1 ECC error and the host reports it.
+    bool disable_l1_ecc_halt = false;
 
     // Enable instruction gathering in Tensix core.
     bool enable_gathering = false;
@@ -821,9 +825,14 @@ public:
     bool get_dispatch_data_collection_enabled() const { return enable_dispatch_data_collection; }
     void set_dispatch_data_collection_enabled(bool enable) { enable_dispatch_data_collection = enable; }
 
+    bool get_host_transfer_stats_enabled() const { return enable_host_transfer_stats; }
+    void set_host_transfer_stats_enabled(bool enable) { enable_host_transfer_stats = enable; }
+
     bool get_hw_cache_invalidation_enabled() const { return this->enable_hw_cache_invalidation; }
 
     bool get_relaxed_memory_ordering_disabled() const { return this->disable_relaxed_memory_ordering; }
+    // Callers also check for Blackhole; the option is arch-agnostic.
+    bool get_l1_ecc_halt_enabled() const { return !this->disable_l1_ecc_halt; }
     bool get_gathering_enabled() const { return this->enable_gathering; }
 
     std::optional<tt_metal::DispatchCoreType> get_dispatch_core_type_override() const {

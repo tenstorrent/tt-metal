@@ -4,7 +4,10 @@
 
 #include "mock_psd_builder.hpp"
 
+#include <algorithm>
 #include <map>
+
+#include <tt_stl/assert.hpp>
 
 #include "protobuf/physical_system_descriptor.pb.h"
 #include "tt_metal/fabric/serialization/physical_system_descriptor_serialization.hpp"
@@ -187,6 +190,30 @@ tt::tt_metal::PhysicalSystemDescriptor build_grid_mock_psd(
         }
     }
     return build_mock_psd(host_of_asic, links, positions, base_asic_id);
+}
+
+tt::tt_metal::PhysicalSystemDescriptor restrict_mock_psd_to_hosts(
+    const tt::tt_metal::PhysicalSystemDescriptor& psd, const std::set<std::string>& hosts) {
+    const auto bytes = tt::tt_metal::serialize_physical_system_descriptor_to_bytes(psd);
+    proto::PhysicalSystemDescriptor p;
+    TT_FATAL(p.ParseFromArray(bytes.data(), static_cast<int>(bytes.size())), "Failed to parse mock PSD bytes");
+
+    auto erase_if = [](auto* field, auto drop) {
+        field->erase(std::remove_if(field->begin(), field->end(), drop), field->end());
+    };
+    auto dropped = [&](const std::string& host) { return !hosts.contains(host); };
+
+    erase_if(p.mutable_asic_descriptors(), [&](const auto& m) { return dropped(m.asic_descriptor().host_name()); });
+    erase_if(p.mutable_host_to_rank(), [&](const auto& m) { return dropped(m.host_name()); });
+    erase_if(p.mutable_host_to_mobo_name(), [&](const auto& m) { return dropped(m.host_name()); });
+    erase_if(p.mutable_exit_node_connection_table(), [&](const auto& m) { return dropped(m.host_name()); });
+    erase_if(p.mutable_pcie_devices_per_tray(), [&](const auto& m) { return dropped(m.host_name()); });
+    erase_if(p.mutable_pcie_id_to_asic_location(), [&](const auto& m) { return dropped(m.host_name()); });
+    auto* sg = p.mutable_system_graph();
+    erase_if(sg->mutable_asic_connectivity_graph(), [&](const auto& m) { return dropped(m.host_name()); });
+    erase_if(sg->mutable_host_connectivity_graph(), [&](const auto& m) { return dropped(m.src_host_name()); });
+
+    return tt::tt_metal::deserialize_physical_system_descriptor_from_proto(p);
 }
 
 std::vector<std::pair<int, int>> line_edges(int num_asics) {

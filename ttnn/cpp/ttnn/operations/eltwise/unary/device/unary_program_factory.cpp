@@ -220,8 +220,8 @@ void enumerate_core_rt_args(
     const uint32_t input_tile_bytes = tile_size(input_df);
     const uint32_t output_tile_bytes = tile_size(output_df);
 
-    const uint32_t input_page_bytes = rm_interleaved ? static_cast<uint32_t>(input.buffer()->page_size()) : 0;
-    const uint32_t output_page_bytes = rm_interleaved ? static_cast<uint32_t>(output.buffer()->page_size()) : 0;
+    const uint32_t input_page_bytes = rm_interleaved ? static_cast<uint32_t>(input.mesh_buffer().page_size()) : 0;
+    const uint32_t output_page_bytes = rm_interleaved ? static_cast<uint32_t>(output.mesh_buffer().page_size()) : 0;
     RmChunkConstants k;
     k.chunks_per_row = rm_interleaved ? (input_page_bytes + input_tile_bytes - 1) / input_tile_bytes : 1;
     k.input_chunk_size = input_tile_bytes;
@@ -230,11 +230,11 @@ void enumerate_core_rt_args(
     k.output_chunk_size = output_tile_bytes;
     k.output_last_chunk_size =
         rm_interleaved ? output_page_bytes - ((k.chunks_per_row - 1) * output_tile_bytes) : output_tile_bytes;
-    k.total_rows = rm_interleaved ? output.buffer()->num_pages() : 0;
+    k.total_rows = rm_interleaved ? output.mesh_buffer().num_pages() : 0;
     if (rm_interleaved && input_page_bytes > 0 && input_page_bytes < input_tile_bytes) {
         const uint32_t input_element_size = datum_size(input_df);
         const uint32_t row_width_elements = input_page_bytes / input_element_size;
-        const uint32_t aligned_page_size = static_cast<uint32_t>(input.buffer()->aligned_page_size());
+        const uint32_t aligned_page_size = static_cast<uint32_t>(input.mesh_buffer().aligned_page_size());
         if (input_page_bytes == aligned_page_size && row_width_elements > 0) {
             k.rows_per_tile = tile_hw / row_width_elements;
         }

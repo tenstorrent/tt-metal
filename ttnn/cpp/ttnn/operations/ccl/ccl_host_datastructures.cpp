@@ -6,6 +6,7 @@
 
 #include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
 #include <tt-metalium/math.hpp>
+#include <tt-metalium/mesh_buffer.hpp>
 
 using namespace tt::tt_metal;
 
@@ -67,9 +68,9 @@ CCLOpConfig::CCLOpConfig(
     if (input_tensors.at(0).layout() == Layout::TILE) {
         this->tile = input_tensors.at(0).tensor_spec().tile();
         this->page_size = this->tile.get_tile_size(this->df);
-        // this->page_size = input_tensors.at(0).buffer()->page_size();
+        // this->page_size = input_tensors.at(0).mesh_buffer().page_size();
     } else {
-        this->page_size = input_tensors.at(0).buffer()->page_size();
+        this->page_size = input_tensors.at(0).mesh_buffer().page_size();
     }
 }
 
