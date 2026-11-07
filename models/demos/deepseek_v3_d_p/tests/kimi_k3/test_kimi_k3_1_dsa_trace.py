@@ -7,14 +7,18 @@ PREFILL_USE_TRACE=1 records the chunk forward once and replays it with the per-c
 read on device from the persistent `metadata` the runtime rewrites before every replay
 (`TtPrefillRuntime._forward_traced`). A Gated DSA layer makes five per-request decisions from them: the
 KVPE and index-key cache writes (slot, start, real-token clamp), the indexer's causal score extent and
-cache slot, the top-k valid count (fewer than 2048 keys below position 2048, where the rest are sentinel
-indices), and the KVPE prefix gather. Any of them frozen at capture leaves the capture-time chunk exact
-and every other chunk wrong, so the capture is recorded on slot 0 at position 0 and replayed on:
+cache slot, the top-k valid count (the scored prefix, ceil32(actual_end) capped at the chunk end), and the
+KVPE prefix gather. Any of them frozen at capture leaves the capture-time chunk exact and every other chunk
+wrong, so the capture is recorded on slot 0 at position 0 (valid count 5120) and replayed on:
 
-  user A (slot 0) at 0, user B (slot 1) at 0, B at 5120, A at 5120, then A at 10240 with a partial chunk.
+  user A (slot 0) at 0, user B (slot 1) at 0, B at 5120, A at 5120, A at 10240 with a partial chunk, then
+  user C starting a new 1000-token request on B's slot 1.
 
-Each 5120-token chunk at 0 crosses 2048 (rows below 2048 see fewer than top-k causal keys, rows past it
-see more than top-k); the later chunks select from a 10240- and 15360-token prefix of their own slot.
+Within each chunk at 0 the causal mask leaves rows below 2048 fewer than top-k keys (the rest sentinel
+indices); the later chunks select from a 10240- and 11264-token prefix of their own slot. User C's whole
+context is below 2048: its valid count, 1024, takes top-k's short search (at most 2048 keys) under a
+capture whose count took the long one. It also reuses a slot without clearing it, and in the KDA window
+its head must load a zero carry over B's.
 
 Reference: the same model run eagerly from host ints over the same schedule, from the same pristine
 caches. Every replay's output and both caches (every slot, every row) must match eager bit for bit after
@@ -49,14 +53,17 @@ from models.demos.deepseek_v3_d_p.tt.runners.input_prep import prepare_prefill_i
 from models.demos.deepseek_v3_d_p.utils.sub_device_trace import SubDeviceTraceController
 
 NUM_USERS = 2
-# (slot, actual_start, actual_end): two users interleave their chunks, then user A ends on a partial chunk.
+# (request, slot, actual_start, actual_end): requests A (0) and B (1) interleave their chunks, A ends on a
+# partial chunk, then request C (2) starts a short request on B's slot. Each request has its own tokens.
 CHUNKS = [
-    (0, 0, CHUNK),
-    (1, 0, CHUNK),
-    (1, CHUNK, 2 * CHUNK),
-    (0, CHUNK, 2 * CHUNK),
-    (0, 2 * CHUNK, 2 * CHUNK + 1000),
+    (0, 0, 0, CHUNK),
+    (1, 1, 0, CHUNK),
+    (1, 1, CHUNK, 2 * CHUNK),
+    (0, 0, CHUNK, 2 * CHUNK),
+    (0, 0, 2 * CHUNK, 2 * CHUNK + 1000),
+    (2, 1, 0, 1000),
 ]
+NUM_REQUESTS = 3
 # The block test's placement plus a trace region; a few layers' capture fits well inside the runner's 256 MB.
 PLACEMENTS = [
     pytest.param(
@@ -136,13 +143,13 @@ def test_k31_dsa_traced_replay_matches_eager(mesh_device, device_params, window)
 
     mesh_shape = tuple(mesh_device.shape)
     streams = [
-        torch.randint(0, config.vocab_size, (3 * CHUNK,), generator=torch.Generator().manual_seed(7 + user)).tolist()
-        for user in range(NUM_USERS)
+        torch.randint(0, config.vocab_size, (3 * CHUNK,), generator=torch.Generator().manual_seed(7 + request)).tolist()
+        for request in range(NUM_REQUESTS)
     ]
 
-    def tokens(slot, start):
+    def tokens(request, start):
         return prepare_prefill_input_tensor(
-            streams[slot][start : start + CHUNK], mesh_device, mesh_shape[SP_AXIS], False, mesh_shape, SP_AXIS
+            streams[request][start : start + CHUNK], mesh_device, mesh_shape[SP_AXIS], False, mesh_shape, SP_AXIS
         )
 
     def caches_now():
@@ -151,10 +158,10 @@ def test_k31_dsa_traced_replay_matches_eager(mesh_device, device_params, window)
     input_tt = tokens(0, 0)
     metadata = ChunkMetadata(_scalar(mesh_device, 0), _scalar(mesh_device, 0), _scalar(mesh_device, CHUNK), None)
 
-    def stage(slot, start, end):
+    def stage(request, slot, start, end):
         """Rewrite the persistent input and metadata in place, as the runtime does before every replay."""
         for source, destination in (
-            (tokens(slot, start), input_tt),
+            (tokens(request, start), input_tt),
             (_scalar(mesh_device, slot), metadata.slot_id),
             (_scalar(mesh_device, start), metadata.actual_start),
             (_scalar(mesh_device, end), metadata.actual_end),
@@ -180,9 +187,9 @@ def test_k31_dsa_traced_replay_matches_eager(mesh_device, device_params, window)
     traced_out = None
     try:
         eager = []
-        for slot, start, end in CHUNKS:
+        for request, slot, start, end in CHUNKS:
             logger.info(f"{window}: eager slot {slot} [{start}, {end})")
-            chunk_tokens = tokens(slot, start)
+            chunk_tokens = tokens(request, start)
             out = model.forward(
                 chunk_tokens,
                 kvpe_cache=kvpe,
@@ -200,7 +207,7 @@ def test_k31_dsa_traced_replay_matches_eager(mesh_device, device_params, window)
 
         # Capture on slot 0 at position 0, after two warm forwards settle programs and persistent resources.
         model.set_trace_controller(controller)
-        stage(0, 0, CHUNK)
+        stage(0, 0, 0, CHUNK)
         for _ in range(2):
             ttnn.deallocate(forward_traced())
         ttnn.synchronize_device(mesh_device)
@@ -213,9 +220,9 @@ def test_k31_dsa_traced_replay_matches_eager(mesh_device, device_params, window)
 
         ttnn.copy_host_to_device_tensor(pristine[0], kvpe.storage)
         ttnn.copy_host_to_device_tensor(pristine[1], index)
-        for i, (slot, start, end) in enumerate(CHUNKS):
+        for i, (request, slot, start, end) in enumerate(CHUNKS):
             logger.info(f"{window}: replay slot {slot} [{start}, {end})")
-            stage(slot, start, end)
+            stage(request, slot, start, end)
             controller.replay()
             out_want, kvpe_want, index_want = eager[i]
             kvpe_got, index_got = caches_now()
