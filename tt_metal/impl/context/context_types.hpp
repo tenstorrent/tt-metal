@@ -7,7 +7,6 @@
 #include <cstddef>
 #include <tt_stl/strong_type.hpp>
 #include <tt-metalium/device.hpp>
-#include <tt-metalium/mesh_device.hpp>
 
 namespace tt::tt_metal {
 
@@ -28,13 +27,5 @@ constexpr size_t MAX_CONTEXT_COUNT = 32;
 // TODO: Remove these extract_context_id functions once all child objects have MetalEnv and MetalContext references
 // passed in
 ContextId extract_context_id(const IDevice* device);
-
-ContextId extract_context_id(const distributed::MeshDevice* mesh_device);
-
-// Extract context ID from MeshDevice or Device, using whichever one is not nullptr
-// This is used specifically by the profiler as some functions accept both a MeshDevice xor a IDevice pointer
-// TOOD: Remove this and make profiler aware of which MetalEnv the device is on
-// https://github.com/tenstorrent/tt-metal/issues/39741
-ContextId extract_context_id(const distributed::MeshDevice* mesh_device, const IDevice* device);
 
 }  // namespace tt::tt_metal

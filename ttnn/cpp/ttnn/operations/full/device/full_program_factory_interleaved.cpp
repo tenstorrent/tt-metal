@@ -14,6 +14,7 @@
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/tensor_parameter.hpp>
+#include <tt-metalium/mesh_buffer.hpp>
 
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 
@@ -36,11 +37,11 @@ ttnn::device_operation::ProgramArtifacts FullInterleavedProgramFactory::create_p
     auto fill_value = operation_attributes.fill_value;
 
     auto grid = operation_attributes.mesh_device->compute_with_storage_grid_size();
-    auto num_pages = (uint32_t)output.buffer()->num_pages();
+    auto num_pages = (uint32_t)output.mesh_buffer().num_pages();
     auto [num_cores, all_cores, core_group_1, core_group_2, num_pages_per_core_group_1, num_pages_per_core_group_2] =
         tt::tt_metal::split_work_to_cores(grid, num_pages);
 
-    uint32_t page_size = output.buffer()->page_size();
+    uint32_t page_size = output.mesh_buffer().page_size();
     TT_FATAL(page_size % output.element_size() == 0, "Page size must be divisible by element size");
     uint32_t elems_per_page = page_size / output.element_size();
 

@@ -40,9 +40,12 @@ ALWI void logsigmoid_tile(uint32_t idst_in0, uint32_t idst_in1, uint32_t idst_ou
 /**
  * Initialize logsigmoid operation.
  * Must be called before logsigmoid_tile.
+ * On Wormhole this loads polynomial coefficients into vConstFloatPrgm0..2, the registers exp_tile_init
+ * (and other SFPU inits) also program. Call it after those inits, right before logsigmoid_tile, and call
+ * exp_tile_init again after it before the next exp_tile.
  *
  * Return value: None
  */
-ALWI void logsigmoid_tile_init() { MATH((SFPU_BINARY_INIT(unused))); }
+ALWI void logsigmoid_tile_init() { MATH((SFPU_BINARY_INIT_FN(unused, sfpu::logsigmoid_init, (APPROX)))); }
 
 }  // namespace ckernel

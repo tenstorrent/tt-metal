@@ -5,6 +5,7 @@
 
 import pytest
 from helpers.bf16_sweep import bf16_exhaustive_sweep
+from helpers.chip_architecture import ChipArchitecture
 from helpers.llk_params import ApproximationMode, MathOperation
 
 # (operation, approximation mode of the replaced instance, max ULP); max ULP 0 is an exact fit.
@@ -12,9 +13,10 @@ _BF16_EXHAUSTIVE_OPS = [
     (MathOperation.Acos, ApproximationMode.No, 1),
 ]
 # Boards where the op keeps its stock kernel, which this sweep does not test.
-_BF16_STOCK_BOARDS = {}
-# The stored word, per board, at each special input class where the kernel returns its stock
-# kernel's result instead of torch's; the sweep expects that word's class there.
+_BF16_STOCK_BOARDS = {
+    MathOperation.Acos: (ChipArchitecture.WORMHOLE,),
+}
+# Per board, the word stored at each special input class where the kernel returns stock's result.
 _BF16_STOCK_SPECIALS = {}
 
 
