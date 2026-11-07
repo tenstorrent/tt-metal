@@ -10,9 +10,7 @@ __attribute__((always_inline)) inline vFloat inverse_square_scalar(
     vFloat x, Reciprocal reciprocal, [[maybe_unused]] Tail tail) {
     vFloat zero = 0.0f;
     vFloat one = 1.0f;
-    // psi1(x)=psi1(x+1)+1/x^2 for every positive x. Taking that one
-    // recurrence step unconditionally makes the positive and reflection arms
-    // share z=1+|x| and the same inverse-square pipeline.
+    // psi1(x) = psi1(x+1) + 1/x^2: one unconditional step lets both arms share z = 1 + |x|.
     vFloat z = setsgn(x, 0) + one;
     constexpr float kRound = 0x1.8p23f;
     vFloat n = x + kRound;
@@ -24,9 +22,7 @@ __attribute__((always_inline)) inline vFloat inverse_square_scalar(
     // The Bernoulli core in Horner order.
     vFloat core = ((Config::kP0 * u + 0.5f) * u + one) * u;
     vFloat iq = reciprocal(q);
-    // Mask before squaring: on the positive arm the regularizer is dead, but
-    // evaluating it at q=x would overflow for large finite BF16 inputs and
-    // turn the final 0*regularizer into NaN.
+    // Mask before squaring: the dead regularizer would overflow at large x and turn 0 * it into NaN.
     vFloat regularizer_q = negative_mask * q;
     vFloat q2 = regularizer_q * regularizer_q;
     vFloat regularizer = (Config::kP2[2] * q2 + Config::kP2[1]) * q2 + Config::kP2[0];

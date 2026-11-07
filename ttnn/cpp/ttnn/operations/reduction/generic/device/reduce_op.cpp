@@ -11,6 +11,7 @@
 #include <string>
 
 #include <tt-metalium/math.hpp>
+#include <tt-metalium/tensor/tensor_types.hpp>
 
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/eltwise/unary_backward/unary_backward.hpp"
@@ -220,6 +221,10 @@ Tensor reduce(
     // reduce directly (like Int32 MIN) and must skip that lowering.
     if (reduce_math == tt::tt_metal::ReduceOpMath::MIN && input_tensor.dtype() != tt::tt_metal::DataType::INT32 &&
         !use_sfpu_fp32_min && !use_sfpu_bf16_min) {
+        TT_FATAL(
+            !is_mx(input_tensor.dtype()),
+            "ttnn.min is not supported for MX inputs: the -MAX(-x) lowering copies tiles back out of a bf16 scratch "
+            "ring, which packs zeros for MX on Quasar (issue #62742)");
         return reduce_min(input_tensor, reduce_dim, scaler, output_mem_config, compute_kernel_config, sub_core_grids);
     }
 

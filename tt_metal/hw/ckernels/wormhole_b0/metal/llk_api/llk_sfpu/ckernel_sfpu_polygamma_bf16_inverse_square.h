@@ -11,6 +11,7 @@
 #include "ckernel_sfpu_polygamma_bf16_replay_window.h"
 #include "ckernel_sfpu_polygamma_bf16_inverse_square_core.h"
 namespace ckernel::sfpu::bf16::polygamma {
+
 template <class Config, int Iterations = 32>
 inline void calculate_inverse_square() {
     static_assert(Iterations == 32);

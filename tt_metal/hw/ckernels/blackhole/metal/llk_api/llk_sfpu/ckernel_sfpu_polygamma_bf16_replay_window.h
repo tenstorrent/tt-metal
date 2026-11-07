@@ -3,9 +3,7 @@
 #pragma once
 #include <cstdint>
 namespace ckernel::sfpu::bf16::polygamma {
-#ifndef TTPOLY_SFPU_REPLAY_SLOTS
 #define TTPOLY_SFPU_REPLAY_SLOTS 16
-#endif
 inline constexpr std::uint32_t kSfpuReplaySlots = TTPOLY_SFPU_REPLAY_SLOTS;
 template <std::uint32_t Start, std::uint32_t Slots>
 inline constexpr bool replay_fits = Start + Slots <= kSfpuReplaySlots;

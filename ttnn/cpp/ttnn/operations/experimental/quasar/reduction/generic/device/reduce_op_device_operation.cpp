@@ -90,10 +90,13 @@ void ReduceDeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(
             tensor_args.dtype() != DataType::INT32,
             "INT32 reduce uses the sfpu_reduce path which is unported on Quasar.");
+        // MX: unpacked to Float16_b, reduced on the FPU like bf16, packed back for an MX output.
         TT_FATAL(
             tensor_args.dtype() == DataType::BFLOAT16 || tensor_args.dtype() == DataType::FLOAT32 ||
-                tensor_args.dtype() == DataType::BFLOAT8_B || tensor_args.dtype() == DataType::UINT32,
-            "Only FLOAT32, BFLOAT16, BFLOAT8_B, and UINT32 are supported for generic reduction - got {}.",
+                tensor_args.dtype() == DataType::BFLOAT8_B || tensor_args.dtype() == DataType::UINT32 ||
+                is_mx(tensor_args.dtype()),
+            "Only FLOAT32, BFLOAT16, BFLOAT8_B, UINT32 and the MX formats are supported for generic reduction - got "
+            "{}.",
             tensor_args.dtype());
     }
     validate_reduce_sharded_buffer_types(tensor_args.memory_config(), operation_attributes.output_mem_config, "reduce");
