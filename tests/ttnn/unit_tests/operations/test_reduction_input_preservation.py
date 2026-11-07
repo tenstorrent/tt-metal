@@ -124,9 +124,18 @@ def test_pad_preserves_input_bits(device, shape):
     values = torch.randn(shape, dtype=torch.bfloat16)
     values.view(torch.int16).flatten()[:3] = torch.tensor(TRAP_BITS, dtype=torch.int16)
 
+    # Control: sum leaves input bits untouched.
+    tensor_sum = ttnn.from_torch(values, device=device, layout=ttnn.TILE_LAYOUT)
+    before_sum = _read_padded_bits(tensor_sum)
+    _ = ttnn.sum(tensor_sum, dim=-1)
+    assert torch.equal(_read_padded_bits(tensor_sum), before_sum)
+
+    # Pad the last dim by one element so the tile path runs and the implicit padding is filled.
+    padding = [(0, 0)] * len(shape)
+    padding[-1] = (0, 1)
     tensor_pad = ttnn.from_torch(values, device=device, layout=ttnn.TILE_LAYOUT)
     before_pad = _read_padded_bits(tensor_pad)
-    ttnn.pad(tensor_pad, [(0, 0)] * len(shape))
+    ttnn.pad(tensor_pad, padding=padding, value=0.0)
     assert torch.equal(_read_padded_bits(tensor_pad), before_pad)
 
 
@@ -137,12 +146,13 @@ def test_gather_preserves_input_bits(device, shape):
     values.view(torch.int16).flatten()[:3] = torch.tensor(TRAP_BITS, dtype=torch.int16)
     index = torch.tensor([[0, 1]], dtype=torch.int32)
 
-    # Control: gather must not rewrite its caller's input tensor either.
-    tensor_gather = ttnn.from_torch(values, device=device, layout=ttnn.TILE_LAYOUT)
+    # Control: sum leaves input bits untouched.
+    tensor_sum = ttnn.from_torch(values, device=device, layout=ttnn.TILE_LAYOUT)
     before_sum = _read_padded_bits(tensor_sum)
     _ = ttnn.sum(tensor_sum, dim=-1)
     assert torch.equal(_read_padded_bits(tensor_sum), before_sum)
 
+    # Gather must not rewrite its caller's input tensor while filling the implicit padding.
     tensor_gather = ttnn.from_torch(values, device=device, layout=ttnn.TILE_LAYOUT)
     before_gather = _read_padded_bits(tensor_gather)
     index_tensor = ttnn.from_torch(index, device=device, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT)
@@ -150,13 +160,21 @@ def test_gather_preserves_input_bits(device, shape):
     assert torch.equal(_read_padded_bits(tensor_gather), before_gather)
 
 
-@pytest.mark.parametrize("shape", PRIVATE_PADDING_SHAPES)
+@pytest.mark.parametrize("shape", [(1, 1, 7, 33), (1, 1, 33, 40), (1, 2, 33, 40)])
 @pytest.mark.parametrize("with_residual", [False, True])
 def test_norm_pre_all_gather_preserves_input_bits(device, shape, with_residual):
     torch.manual_seed(0)
     values = torch.randn(shape, dtype=torch.bfloat16)
     values.view(torch.int16).flatten()[:3] = torch.tensor(TRAP_BITS, dtype=torch.int16)
     residual = torch.randn(shape, dtype=torch.bfloat16) if with_residual else None
+
+    kernel_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=True,
+    )
 
     # Control: sum leaves input bits untouched.
     tensor_sum = ttnn.from_torch(values, device=device, layout=ttnn.TILE_LAYOUT)
@@ -168,7 +186,13 @@ def test_norm_pre_all_gather_preserves_input_bits(device, shape, with_residual):
     before_input = _read_padded_bits(tensor_input)
     residual_tensor = ttnn.from_torch(residual, device=device, layout=ttnn.TILE_LAYOUT) if with_residual else None
     before_residual = _read_padded_bits(residual_tensor) if with_residual else None
-    ttnn.layer_norm_pre_all_gather(tensor_input, dtype=ttnn.bfloat16, residual_input_tensor=residual_tensor)
+    ttnn.layer_norm_pre_all_gather(
+        tensor_input,
+        residual_input_tensor=residual_tensor,
+        dtype=ttnn.bfloat16,
+        compute_kernel_config=kernel_config,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
     assert torch.equal(_read_padded_bits(tensor_input), before_input)
     if with_residual:
         assert torch.equal(_read_padded_bits(residual_tensor), before_residual)
