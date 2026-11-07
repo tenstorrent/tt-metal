@@ -2,9 +2,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 # Regression test (tt-llk#1161 follow-up): a format-only reconfig_data_format that changes datum size
-# (fp16 -> fp32) must re-commit the format-derived ch1 Z-stride. The kernel reads the stride back and
+# (bf16 -> fp32) must re-commit the format-derived ch1 Z-stride. The kernel reads the stride back and
 # LLK_ASSERTs it matches the new format's canonical stride. run_idx 0 (direct fp32 configure) and
-# run_idx 1 (fp16 then format-only reconfig) must both pass; before the fix run_idx 1 fired the assert.
+# run_idx 1 (bf16 then format-only reconfig) must both pass; before the fix run_idx 1 fired the assert.
 
 from helpers.format_config import DataFormat, FormatConfig
 from helpers.llk_params import DestAccumulation
@@ -14,11 +14,16 @@ from helpers.test_variant_parameters import CONFIGURE_TEST_RUN_IDX, TO_FROM_INT8
 
 
 @parametrize(
-    # unpack_A slots = prev (fp16); pack slots = next (fp32).
+    # unpack_A slots = prev (bf16); pack slots = next (fp32).
     formats=[
-        (DataFormat.Float16, DataFormat.Float16, DataFormat.Float32, DataFormat.Float32)
+        (
+            DataFormat.Float16_b,
+            DataFormat.Float16_b,
+            DataFormat.Float32,
+            DataFormat.Float32,
+        )
     ],
-    # run_idx 0 = CONTROL (direct fp32 configure, asserts must pass); 1 = BUGGY (fp16 then format-only reconfig).
+    # run_idx 0 = CONTROL (direct fp32 configure, asserts must pass); 1 = BUGGY (bf16 then format-only reconfig).
     run_idx=[0, 1],
     dest_acc=DestAccumulation.Yes,
 )

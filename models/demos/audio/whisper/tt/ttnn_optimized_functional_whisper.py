@@ -830,6 +830,23 @@ def prepare_conv_weights(config, parameters, weights_mesh_mapper):
         for i in range(conv2_out_channel_splits):
             weight_splits.append(parameters.conv2.weight[i * conv2_out_channels : (i + 1) * conv2_out_channels, :, :])
         parameters.conv2.weight = weight_splits
+    if isinstance(parameters.conv1.bias, torch.Tensor):
+        parameters.conv1.bias = ttnn.from_torch(
+            parameters.conv1.bias.reshape(1, 1, 1, -1),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=weights_mesh_mapper,
+        )
+    if isinstance(parameters.conv2.bias, torch.Tensor):
+        parameters.conv2.bias = [
+            ttnn.from_torch(
+                parameters.conv2.bias[i * conv2_out_channels : (i + 1) * conv2_out_channels].reshape(1, 1, 1, -1),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                mesh_mapper=weights_mesh_mapper,
+            )
+            for i in range(conv2_out_channel_splits)
+        ]
     return conv2_out_channel_splits, conv2_out_channels
 
 
@@ -853,9 +870,10 @@ def preprocess_encoder_inputs(config, input_features, *, parameters, device, inp
     input_embeds_all_batches_splits = []
     for j in range(batch_size):
         input_features_slice = input_features[j : j + 1, :, :]
-        input_embeds, [weights_device, _] = ttnn.conv1d(
+        input_embeds, [weights_device, bias_device] = ttnn.conv1d(
             input_tensor=input_features_slice,
             weight_tensor=parameters.conv1.weight,
+            bias_tensor=parameters.conv1.bias,
             device=device,
             in_channels=config.num_mel_bins,
             out_channels=config.d_model,
@@ -872,14 +890,16 @@ def preprocess_encoder_inputs(config, input_features, *, parameters, device, inp
             return_weights_and_bias=True,
         )
         parameters.conv1.weight = weights_device
+        parameters.conv1.bias = bias_device
         input_embeds = ttnn.gelu(input_embeds)
         input_embeds = ttnn.sharded_to_interleaved(input_embeds)
 
         out_tensor_splits = []
         for i in range(conv2_out_channel_splits):
-            out_split, [weights_device, _] = ttnn.conv1d(
+            out_split, [weights_device, bias_device] = ttnn.conv1d(
                 input_tensor=input_embeds,
                 weight_tensor=parameters.conv2.weight[i],
+                bias_tensor=parameters.conv2.bias[i],
                 device=device,
                 in_channels=config.d_model,
                 out_channels=conv2_out_channels,
@@ -895,6 +915,7 @@ def preprocess_encoder_inputs(config, input_features, *, parameters, device, inp
                 return_weights_and_bias=True,
             )
             parameters.conv2.weight[i] = weights_device
+            parameters.conv2.bias[i] = bias_device
             out_split = ttnn.sharded_to_interleaved(out_split)
             out_tensor_splits.append(out_split)
 

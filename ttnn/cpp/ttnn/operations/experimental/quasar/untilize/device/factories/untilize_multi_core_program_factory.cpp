@@ -45,7 +45,7 @@ ttnn::device_operation::ProgramArtifacts UntilizeMultiCoreProgramFactory::create
     uint32_t output_single_tile_size = tt::tile_size(output_cb_data_format);
 
     MeshDevice* device = a.device();
-    Buffer* src0_buffer = a.buffer();
+    const auto* src0_buffer = &a.mesh_buffer();
 
     uint32_t tensor_width = a.padded_shape()[-1];
     uint32_t tensor_height = a.physical_volume() / tensor_width;
@@ -100,7 +100,8 @@ ttnn::device_operation::ProgramArtifacts UntilizeMultiCoreProgramFactory::create
         has_uneven_sharding = (height_remainder != 0) || (width_remainder != 0);
     }
 
-    const bool input_is_dram_sharded = input_is_sharded && src0_buffer->buffer_type() == BufferType::DRAM;
+    const bool input_is_dram_sharded =
+        input_is_sharded && src0_buffer->device_local_config().buffer_type == BufferType::DRAM;
     // Block reader: streams from L1/DRAM shard block-by-block (uneven or DRAM sharding).
     // Even sharding uses a zero-copy DFB borrowed from the shard buffer.
     bool use_block_reader = input_is_sharded && (has_uneven_sharding || input_is_dram_sharded);
@@ -213,9 +214,6 @@ ttnn::device_operation::ProgramArtifacts UntilizeMultiCoreProgramFactory::create
 
     // ---- Compute KernelSpec(s) (common; full + optional interleaved cliff) ----
     KernelSpec::CompilerOptions::Defines compute_defines;
-    if (a.dtype() == DataType::INT32 || a.dtype() == DataType::UINT32 || a.dtype() == DataType::FLOAT32) {
-        compute_defines.emplace("DST_ACCUM_MODE", "1");
-    }
     auto make_compute_hw = [&]() -> ComputeHardwareConfig {
         ttnn::ComputeKernelConfig hw{
             .math_fidelity = MathFidelity::HiFi4, .math_approx_mode = false, .fp32_dest_acc_en = fp32_dest_acc_en};
