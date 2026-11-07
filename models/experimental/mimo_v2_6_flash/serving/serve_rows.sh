@@ -30,6 +30,10 @@
 #   MNBT             --max-num-batched-tokens, the prefill chunk (default 4096, as tt-inference-server's MiMo spec)
 #   APC_RETENTION    --prefix-cache-retention-interval (default 1024; vLLM's 0 keeps a SWA layer's cached KV only at the
 #                    end of each prompt, see doc/vllm_integration/README.md)
+#   TT_PROXY_*       lb.py's request shim (see its docstring): TT_PROXY_FETCH_MEDIA=1 downloads http(s) media in the
+#                    proxy (400 on failure; set it when serving image / video / audio; the engines then refuse media
+#                    URLs: --allowed-media-domains fetched-by-the-proxy.invalid), TT_PROXY_MAX_REQUEST_MB (256),
+#                    TT_PROXY_PCM_SAMPLE_RATE (24000), TT_PROXY_REQUEST_SHIM=0 turns the rewrites off
 #   MIMO_KV_GB_PER_CHIP  the model's KV pool per chip; unset, the model's default (6.7 with the global KV pair split,
 #                    vLLM's default: 4 x 1M per row), which is what tt-inference-server's MiMo spec sets
 #   STOP_TIMEOUT     seconds the engines get to stop on SIGINT before SIGKILL (default 120)
@@ -88,6 +92,10 @@ stop() {
 trap 'stop; exit 130' INT
 trap 'stop; exit 143' TERM
 trap stop EXIT
+# With TT_PROXY_FETCH_MEDIA lb.py downloads http(s) media (public addresses only) and inlines it; the engines then
+# accept no media URL at all (.invalid never resolves), so nothing behind the proxy fetches a caller's URL.
+MEDIA_ARGS=()
+case "${TT_PROXY_FETCH_MEDIA:-0}" in 1|true|yes|on) MEDIA_ARGS=(--allowed-media-domains fetched-by-the-proxy.invalid) ;; esac
 for r in $ROWS; do
   TT_VISIBLE_DEVICES=${DEVICES[$r]} setsid "$VLLM" serve "$MODEL" \
     --served-model-name XiaomiMiMo/MiMo-V2.6-Flash-MOPD --trust-remote-code \
@@ -95,7 +103,8 @@ for r in $ROWS; do
     --enable-chunked-prefill --max-num-batched-tokens "${MNBT:-4096}" --enable-prefix-caching \
     --prefix-cache-retention-interval "${APC_RETENTION:-1024}" \
     --reasoning-parser mimo --tool-call-parser mimo --enable-auto-tool-choice \
-    --port $((BASE_PORT + 1 + r)) --additional-config "{\"tt\": $TT_CONFIG}" "$@" > "$LOGS/row$r.log" 2>&1 &
+    --port $((BASE_PORT + 1 + r)) --additional-config "{\"tt\": $TT_CONFIG}" ${MEDIA_ARGS[@]+"${MEDIA_ARGS[@]}"} "$@" \
+    > "$LOGS/row$r.log" 2>&1 &
   ENGINES+=($!)
   BACKENDS+=("127.0.0.1:$((BASE_PORT + 1 + r))")
 done
