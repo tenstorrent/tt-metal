@@ -151,14 +151,18 @@ void RunOneTest(
         .work_units = {wu},
     };
     Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
+    workload.add_program(device_range, std::move(program));
 
-    // Idle-ETH cores: invoke the original (legacy) kernel via the legacy host API.
+    // Idle-ETH cores: invoke the original (legacy) kernel via the legacy host API, in a separate program because
+    // MakeProgramFromSpec returns an already-compiled program.
+    std::optional<distributed::MeshWorkload> idle_eth_workload;
     if (!is_quasar) {
         const auto& inactive_eth_cores = device->get_inactive_ethernet_cores();
         if (!inactive_eth_cores.empty() && fixture->IsSlowDispatch()) {
             CoreCoord idle_coord = CoreCoord(*inactive_eth_cores.begin());
+            Program idle_eth_program = CreateProgram(*mesh_device);
             CreateKernel(
-                program,
+                idle_eth_program,
                 path_legacy,
                 idle_coord,
                 tt_metal::EthernetConfig{
@@ -166,9 +170,10 @@ void RunOneTest(
                     .noc = tt_metal::NOC::NOC_0,
                     .processor = DataMovementProcessor::RISCV_0,
                     .compile_args = compile_args});
+            idle_eth_workload.emplace();
+            idle_eth_workload->add_program(device_range, std::move(idle_eth_program));
         }
     }
-    workload.add_program(device_range, std::move(program));
 
     // Add expected messages for the DMs that ran a user kernel. On Quasar DM0/DM1 are reserved
     // for internal use, so user kernels run on DM2..DM7 (6 user DMs).
@@ -192,7 +197,10 @@ void RunOneTest(
         add_expected_msg("ierisc", path_legacy);
     }
 
-    fixture->RunProgram(mesh_device, workload, true);
+    fixture->RunProgram(mesh_device, workload, !idle_eth_workload.has_value());
+    if (idle_eth_workload.has_value()) {
+        fixture->RunProgram(mesh_device, *idle_eth_workload, true);
+    }
     EXPECT_TRUE(FileContainsAllStringsInOrder(fixture->log_file_name, expected));
 }
 

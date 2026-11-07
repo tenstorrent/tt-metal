@@ -19,6 +19,7 @@
 
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/experimental/mock_device/mock_device.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/program.hpp>
@@ -499,9 +500,21 @@ void blaze_expect_cache_hit_values(
     EXPECT_EQ(common_args[3], base + 8) << "named common array[1]";
 }
 
+// Constructing a Program registers its kernels with the watcher, which only exists for open silicon devices or
+// mock targets, so these host-only tests run in mock mode.
+class BlazeArgsMockFixture : public ::testing::Test {
+protected:
+    void SetUp() override { experimental::configure_mock_mode(tt::ARCH::WORMHOLE_B0, 1); }
+
+    void TearDown() override { experimental::disable_mock_mode(); }
+};
+
 }  // namespace
 
-TEST(NamedArgsDescriptorCacheHit, CPU_SameSchemaDifferentValuesShareProgramHash) {
+using NamedArgsDescriptorCacheHit = BlazeArgsMockFixture;
+using RuntimeArgCountCacheHit = BlazeArgsMockFixture;
+
+TEST_F(NamedArgsDescriptorCacheHit, CPU_SameSchemaDifferentValuesShareProgramHash) {
     // Premise of the staleness bug (and of the regression test below): the two
     // invocations must land on the SAME cache entry.  Values are deliberately
     // excluded from the schema hash; if that ever changes, this test fails first
@@ -514,7 +527,7 @@ TEST(NamedArgsDescriptorCacheHit, CPU_SameSchemaDifferentValuesShareProgramHash)
         << "Same named-arg schema with different values must share a program-cache hash";
 }
 
-TEST(NamedArgsDescriptorCacheHit, CPU_NamedValuesReappliedOnCacheHit) {
+TEST_F(NamedArgsDescriptorCacheHit, CPU_NamedValuesReappliedOnCacheHit) {
     const CoreCoord core0{0, 0};
     const CoreCoord core1{1, 0};
     ProgramDescriptor desc_v1{.kernels = {blaze_cache_hit_kernel(core0, core1, 0)}};
@@ -533,7 +546,7 @@ TEST(NamedArgsDescriptorCacheHit, CPU_NamedValuesReappliedOnCacheHit) {
     blaze_expect_cache_hit_values(program, core0, core1, 1000);
 }
 
-TEST(NamedArgsDescriptorCacheHit, CPU_NamedOnlyValuesReappliedOnCacheHit) {
+TEST_F(NamedArgsDescriptorCacheHit, CPU_NamedOnlyValuesReappliedOnCacheHit) {
     // No positional args at all: before the fix, apply_descriptor_runtime_args had
     // nothing to copy for this descriptor, so EVERY named value stayed frozen at the
     // first invocation's.  Covers all four named-RT-arg variants in this configuration.
@@ -574,7 +587,7 @@ TEST(NamedArgsDescriptorCacheHit, CPU_NamedOnlyValuesReappliedOnCacheHit) {
     EXPECT_EQ(common_args[2], 400u) << "named common array[1] must be desc_v2's value";
 }
 
-TEST(NamedArgsDescriptorCacheHit, CPU_RepeatedCacheHitsKeepReapplyingValues) {
+TEST_F(NamedArgsDescriptorCacheHit, CPU_RepeatedCacheHitsKeepReapplyingValues) {
     // Repeated same-schema invocations are the production norm.  The patch must be a
     // pure function of the current descriptor on EVERY hit — a works-once or otherwise
     // stateful re-application (e.g. one that corrupts sizes or skips later hits) must
@@ -595,7 +608,7 @@ TEST(NamedArgsDescriptorCacheHit, CPU_RepeatedCacheHitsKeepReapplyingValues) {
     blaze_expect_cache_hit_values(program, core0, core1, 2000);
 }
 
-TEST(NamedArgsDescriptorCacheHit, CPU_MultipleNamedArgsPerVariantReappliedOnCacheHit) {
+TEST_F(NamedArgsDescriptorCacheHit, CPU_MultipleNamedArgsPerVariantReappliedOnCacheHit) {
     // Two entries per variant (arrays of different lengths) pack into adjacent slots
     // in declaration order: positional, then scalars, then arrays.  Every packed
     // offset must be re-applied on a cache hit, not just the first named slot.
@@ -646,7 +659,7 @@ TEST(NamedArgsDescriptorCacheHit, CPU_MultipleNamedArgsPerVariantReappliedOnCach
     expect_values(program, 1000);
 }
 
-TEST(NamedArgsDescriptorCacheHit, CPU_PositionalRuntimeArgCountChangeIsRejected) {
+TEST_F(NamedArgsDescriptorCacheHit, CPU_PositionalRuntimeArgCountChangeIsRejected) {
     const CoreCoord core0{0, 0};
     const CoreCoord core1{1, 0};
     ProgramDescriptor desc{.kernels = {blaze_cache_hit_kernel(core0, core1, 0)}};
@@ -663,7 +676,7 @@ TEST(NamedArgsDescriptorCacheHit, CPU_PositionalRuntimeArgCountChangeIsRejected)
     EXPECT_EQ(GetRuntimeArgs(program, 0, core0)[1], core0_named);
 }
 
-TEST(NamedArgsDescriptorCacheHit, CPU_DroppedNamedOnlyCoreIsRejected) {
+TEST_F(NamedArgsDescriptorCacheHit, CPU_DroppedNamedOnlyCoreIsRejected) {
     const CoreCoord core0{0, 0};
     const CoreCoord core1{1, 0};
     auto make_kernel = [&](bool both_cores) {
@@ -689,7 +702,7 @@ TEST(NamedArgsDescriptorCacheHit, CPU_DroppedNamedOnlyCoreIsRejected) {
     EXPECT_EQ(GetRuntimeArgs(program, 0, core1)[0], core1_before);
 }
 
-TEST(RuntimeArgCountCacheHit, CPU_PaddedDispatchCapacityIsNotTheLogicalCount) {
+TEST_F(RuntimeArgCountCacheHit, CPU_PaddedDispatchCapacityIsNotTheLogicalCount) {
     const CoreCoord core0{0, 0};
     const CoreCoord core1{0, 1};
     ProgramDescriptor desc{
@@ -726,7 +739,7 @@ TEST(RuntimeArgCountCacheHit, CPU_PaddedDispatchCapacityIsNotTheLogicalCount) {
     EXPECT_EQ(GetRuntimeArgs(program, 0, core1)[0], 9u);
 }
 
-TEST(RuntimeArgCountCacheHit, CPU_DuplicateCoreEntryCannotExceedCachedCount) {
+TEST_F(RuntimeArgCountCacheHit, CPU_DuplicateCoreEntryCannotExceedCachedCount) {
     // Two equal-length entries for one core are legal; growing only the first must still be rejected.
     const CoreCoord core0{0, 0};
     const CoreCoord core1{0, 1};
@@ -764,7 +777,7 @@ TEST(RuntimeArgCountCacheHit, CPU_DuplicateCoreEntryCannotExceedCachedCount) {
     }
 }
 
-TEST(RuntimeArgCountCacheHit, CPU_TrailingEmptyDuplicateReusesCachedCount) {
+TEST_F(RuntimeArgCountCacheHit, CPU_TrailingEmptyDuplicateReusesCachedCount) {
     // SetRuntimeArgs skips an empty list, so a trailing empty duplicate keeps the earlier count.
     const CoreCoord core0{0, 0};
     const CoreCoord core1{0, 1};
@@ -804,7 +817,7 @@ TEST(RuntimeArgCountCacheHit, CPU_TrailingEmptyDuplicateReusesCachedCount) {
     EXPECT_EQ(GetRuntimeArgs(program, 0, core0)[0], 9u);
 }
 
-TEST(RuntimeArgCountCacheHit, CPU_OmittedCoreIsRejected) {
+TEST_F(RuntimeArgCountCacheHit, CPU_OmittedCoreIsRejected) {
     const CoreCoord core0{0, 0};
     const CoreCoord core1{0, 1};
     ProgramDescriptor desc{
@@ -823,7 +836,7 @@ TEST(RuntimeArgCountCacheHit, CPU_OmittedCoreIsRejected) {
     EXPECT_EQ(GetRuntimeArgs(program, 0, core1)[0], core1_before);
 }
 
-TEST(RuntimeArgCountCacheHit, CPU_EmptyCommonArgsSurviveCountFinalization) {
+TEST_F(RuntimeArgCountCacheHit, CPU_EmptyCommonArgsSurviveCountFinalization) {
     const CoreCoord core{0, 0};
     ProgramDescriptor desc{
         .kernels = {KernelDescriptor{
