@@ -113,7 +113,7 @@ NpHaloScatterSetup setup_interior_scatter(
         return setup;
     }
 
-    Buffer* padded_buf = tensor_args.padded_output.value().buffer();
+    const auto* padded_buf = &tensor_args.padded_output.value().mesh_buffer();
     const uint32_t Hd_i = geom.input_halo_dim_size;      // interior H (input is unpadded in repack mode)
     const uint32_t Wd_i = geom.num_sticks_per_halo_dim;  // interior W
     const uint32_t Hp_i = Hd_i + 2 * op.np_padding_h;
@@ -1540,8 +1540,8 @@ void NpHaloMeshWorkloadFactory::override_runtime_arguments(
     const NpHaloParams& op,
     const NpHaloInputs& tensor_args,
     Tensor& tensor_return_value) {
-    const uint32_t input_addr = tensor_args.input_tensor.buffer()->address();
-    const uint32_t halo_buffer_addr = tensor_args.halo_buffer.buffer()->address();
+    const uint32_t input_addr = tensor_args.input_tensor.mesh_buffer().address();
+    const uint32_t halo_buffer_addr = tensor_args.halo_buffer.mesh_buffer().address();
     (void)tensor_return_value;  // output IS the halo_buffer
     const uint32_t h_sem_addr = op.h_neighbor_semaphore.address();
     const uint32_t barrier_sem_addr = op.barrier_semaphore.address();
@@ -1598,7 +1598,7 @@ void NpHaloMeshWorkloadFactory::override_runtime_arguments(
 
         // --- Padded-output fused interior-copy scatter kernel: refresh per-core [input, compact, padded]. ---
         if (shared_vars.np_artifacts.has_scatter && tensor_args.padded_output.has_value()) {
-            const uint32_t padded_addr = tensor_args.padded_output.value().buffer()->address();
+            const uint32_t padded_addr = tensor_args.padded_output.value().mesh_buffer().address();
             auto& sc_args_by_core = GetRuntimeArgs(program, shared_vars.np_artifacts.scatter_kernel_id);
             for (const auto& cr : shared_vars.np_artifacts.scatter_core_range.ranges()) {
                 for (uint32_t x = cr.start_coord.x; x <= cr.end_coord.x; ++x) {

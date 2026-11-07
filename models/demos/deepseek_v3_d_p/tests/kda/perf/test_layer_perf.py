@@ -56,7 +56,9 @@ _PERF_MARGIN = 0.03
 # reference, not measured on this base.
 _PERF_REFERENCE_MS = {
     _LOUDBOX_PERF_SKU: {
-        "SP8xTP1": 1.169,
+        # Kimi-K3 HiFi3 (scan, affine prefix, output projection), composed, not measured on this base: 1.169 x 1.035,
+        # the traced HiFi3 / HiFi2 ratio over 3 interleaved rounds on bh-lb-18 (before the relay prefix).
+        "SP8xTP1": 1.210,
         "TP4-linear": 0.188,
     },
     _QUIETBOX_PERF_SKU: {
@@ -73,7 +75,9 @@ _DEVICE_PERF_MARGIN = 0.05
 # relay's reference, not measured on this base.
 _DEVICE_PERF_REFERENCE_MS = {
     _QUIETBOX_PERF_SKU: {
-        "SP4xTP1": 1.181,
+        # Kimi-K3 HiFi3, composed, not measured on this base: 1.181 x 1.035, assuming LoudBox SP8xTP1's ratio (same
+        # per-chip workload); not measured on QuietBox.
+        "SP4xTP1": 1.222,
     },
 }
 # Galaxy-equivalent layouts outside CI: they report wall time but are not gated.
@@ -87,9 +91,11 @@ _ACTUAL_START_OVERRIDE = os.environ.get("KDA_PERF_ACTUAL_START")
 # broadcast that a rank-aligned start skips. Production always passes actual_end, so the gate does too. An
 # untraced call also pays its host dispatch, which a block of 10 calls does not fully hide.
 # Galaxy SP8xTP4: relay's 1.205 / 1.225 x 1.013, conv's traced median ratio over 3 interleaved c03u08 rounds (conv
-# 43ad083e1ee vs main 28a48b08a82); composed from conv's measured ratio on relay's reference, not measured on this
-# base. The untraced entry assumes the traced ratio.
-_GALAXY_PERF_REFERENCE_MS = {"traced": 1.221, "untraced": 1.241}
+# 43ad083e1ee vs main 28a48b08a82), then x 1.040 for Kimi-K3 HiFi3 (scan, affine prefix, output projection), HiFi3's
+# traced ratio over 3 interleaved c03u08 rounds, measured before the relay prefix with the output projection unfused.
+# Composed from measured ratios on relay's reference, not measured on this base. The untraced entry assumes the
+# traced ratios.
+_GALAXY_PERF_REFERENCE_MS = {"traced": 1.270, "untraced": 1.291}
 _GALAXY_TP = 4
 _GALAXY_HEADS_PER_CHIP = KimiK3Config.KDA_NUM_HEADS // _GALAXY_TP
 _GALAXY_ACTUAL_START = 4 * PREFILL_CHUNK_TOKENS_PER_CHIP + 320
