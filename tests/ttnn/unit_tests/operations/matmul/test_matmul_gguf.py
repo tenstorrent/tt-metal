@@ -42,20 +42,29 @@ FP16_FIELDS = {
 }
 
 
+# Expanded layout -> its GGUF format.
+SOURCE = {expanded: source for source, expanded in ttnn.GGUF_EXPANDED.items()}
+
+
 def _name(dtype):
     return dtype.name.removeprefix("GGUF_")
 
 
+def _format(dtype):
+    """The GGUF format of a dtype's blocks."""
+    return _name(SOURCE.get(dtype, dtype))
+
+
 def _qtype(dtype):
-    qtype = getattr(gguf.GGMLQuantizationType, _name(dtype), None)
+    qtype = getattr(gguf.GGMLQuantizationType, _format(dtype), None)
     if qtype is None:
-        pytest.skip(f"gguf-py has no {_name(dtype)}")
+        pytest.skip(f"gguf-py has no {_format(dtype)}")
     return qtype
 
 
 def _blocks(dtype, k, n, seed=0):
     """The GGUF bytes of an [N, K] weight."""
-    name, qtype = _name(dtype), _qtype(dtype)
+    name, qtype = _format(dtype), _qtype(dtype)
     rng = np.random.default_rng(seed)
     if name in QUANTIZED:
         return gguf.quants.quantize(rng.standard_normal((n, k), dtype=np.float32), qtype)
@@ -80,9 +89,9 @@ def _blocks(dtype, k, n, seed=0):
 
 def _k(dtype, groups=2):
     """K of `groups` GGUF pages: whole pages and whole blocks."""
-    page_rows = {"Q8_0": 32, "Q4_0": 32, "IQ4_NL": 32, "Q4_1": 32, "NVFP4": 64}.get(_name(dtype))
+    page_rows = {"Q8_0": 32, "Q4_0": 32, "IQ4_NL": 32, "Q4_1": 32, "NVFP4": 64}.get(_format(dtype))
     if page_rows is None:
-        page_rows = {"MXFP4": 64, "Q5_0": 64, "Q5_1": 64, "Q2_0": 64, "Q1_0": 128}.get(_name(dtype), 256)
+        page_rows = {"MXFP4": 64, "Q5_0": 64, "Q5_1": 64, "Q2_0": 64, "Q1_0": 128}.get(_format(dtype), 256)
     return groups * page_rows
 
 
@@ -131,6 +140,41 @@ def test_decode_large(device, dtype, k, n):
 @pytest.mark.parametrize("dtype", ttnn.GGUF_DTYPES, ids=_name)
 def test_prefill(device, dtype, m):
     _run(device, dtype, (1, m), _k(dtype), 96)
+
+
+@pytest.mark.parametrize("dtype", list(ttnn.GGUF_EXPANDED.values()), ids=_name)
+def test_expanded_round_trip(device, dtype):
+    k, n = _k(dtype), 96
+    blocks = _blocks(dtype, k, n)
+    w = ttnn.from_gguf(blocks, (k, n), dtype)
+    assert w.dtype == dtype
+    np.testing.assert_array_equal(ttnn.to_gguf(w), blocks.reshape(-1))
+    np.testing.assert_array_equal(ttnn.to_gguf(ttnn.to_device(w, device)), blocks.reshape(-1))
+
+
+@pytest.mark.parametrize("m", [1, 32, 128])
+@pytest.mark.parametrize("dtype", list(ttnn.GGUF_EXPANDED.values()), ids=_name)
+def test_expanded_matches_compact(device, dtype, m):
+    # The same weights: the outputs of both layouts must be the same bits.
+    source, k, n = SOURCE[dtype], _k(dtype), 256
+    blocks = _blocks(source, k, n)
+    torch.manual_seed(0)
+    x = torch.randn(1, m, k).bfloat16()
+    x_tt = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    compact, expanded = (
+        ttnn.to_torch(ttnn.linear(x_tt, ttnn.from_gguf(blocks, (k, n), d, device=device))) for d in (source, dtype)
+    )
+    assert torch.equal(compact, expanded)
+    _check(expanded, x, blocks, source, k, n)
+
+
+def test_expanded_refusals(expect_error):
+    blocks = _blocks(ttnn.gguf_tq1_0, 256, 32)
+    blocks[0, 0] = 1  # TQ1_0 quantization never writes 1
+    with expect_error(RuntimeError, "TQ1_0 quantization does not write"):
+        ttnn.from_gguf(blocks, (256, 32), ttnn.gguf_tq1_0_expanded)
+    with expect_error(RuntimeError, "bytes of blocks"):
+        ttnn.from_gguf(_blocks(ttnn.gguf_iq2_xs, 256, 32), (256, 32), ttnn.gguf_iq2_xxs_expanded)
 
 
 def test_leading_dims_and_bias(device):
@@ -202,7 +246,7 @@ _PERF_DTYPES = [
     pytest.param(
         d, id=_name(d), marks=() if d in (ttnn.gguf_q4_0, ttnn.gguf_q4_k, ttnn.gguf_q6_k) else pytest.mark.slow
     )
-    for d in ttnn.GGUF_DTYPES
+    for d in (*ttnn.GGUF_DTYPES, *ttnn.GGUF_EXPANDED.values())
 ]
 
 

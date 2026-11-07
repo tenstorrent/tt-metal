@@ -20,7 +20,7 @@ struct GgufFormat {
 
 // In DataType order. The numbers match the decoder's page_layout (ckernel_gguf_page.h).
 // clang-format off
-constexpr std::array<GgufFormat, 25> kGgufFormats{{
+constexpr std::array<GgufFormat, 33> kGgufFormats{{
     // name                   id  blk  bytes G  page code  scale fp16 code_offset
     {"DataType::GGUF_Q8_0",    {1, 32, 34, 1, 1, 1024, 1, 0, 0}},
     {"DataType::GGUF_Q4_0",    {2, 32, 18, 1, 1, 512, 1, 0, 0}},
@@ -47,6 +47,16 @@ constexpr std::array<GgufFormat, 25> kGgufFormats{{
     {"DataType::GGUF_Q5_0",    {23, 32, 22, 2, 2, 1280, 2, 0, 0}},
     {"DataType::GGUF_Q5_1",    {24, 32, 24, 2, 2, 1280, 4, 0, 0}},
     {"DataType::GGUF_TQ1_0",   {25, 256, 54, 8, 8, 1536, 3, 0, 0}},
+    // Expanded layouts: the decoder's page of the source format, per K tile its level codes and the code bytes the
+    // decoder reads (gguf_host_packing.cpp); TQ1_0's is TQ2_0's.
+    {"DataType::GGUF_IQ2_XXS_EXPANDED", {15, 256, 98, 8, 1, 256, 1, 1, 256}},
+    {"DataType::GGUF_IQ1_S_EXPANDED",   {16, 256, 82, 8, 1, 192, 1, 1, 256}},
+    {"DataType::GGUF_IQ2_S_EXPANDED",   {17, 256, 114, 8, 1, 320, 1, 1, 256}},
+    {"DataType::GGUF_IQ3_S_EXPANDED",   {18, 256, 162, 8, 1, 432, 1, 1, 512}},
+    {"DataType::GGUF_IQ3_XXS_EXPANDED", {19, 256, 162, 8, 1, 384, 1, 1, 512}},
+    {"DataType::GGUF_IQ2_XS_EXPANDED",  {20, 256, 106, 8, 1, 256, 5, 1, 256}},
+    {"DataType::GGUF_IQ1_M_EXPANDED",   {21, 256, 88, 8, 1, 192, 4, 1, 256}},
+    {"DataType::GGUF_TQ1_0_EXPANDED",   {12, 256, 66, 8, 1, 256, 1, 0, 0}},
 }};
 // clang-format on
 static_assert(kFirstGguf + static_cast<int>(kGgufFormats.size()) == static_cast<int>(DataType::INVALID));
@@ -161,6 +171,23 @@ bool is_block_float(DataType dtype) {
 bool is_gguf(DataType dtype) { return static_cast<int>(dtype) >= kFirstGguf && dtype < DataType::INVALID; }
 
 const GgufTraits& gguf_traits(DataType dtype) { return gguf_format(dtype).traits; }
+
+bool is_gguf_expanded(DataType dtype) { return dtype > DataType::GGUF_TQ1_0 && dtype < DataType::INVALID; }
+
+DataType gguf_source_dtype(DataType dtype) {
+    TT_FATAL(is_gguf(dtype), "{} is not a GGUF dtype", dtype);
+    switch (dtype) {
+        case DataType::GGUF_IQ2_XXS_EXPANDED: return DataType::GGUF_IQ2_XXS;
+        case DataType::GGUF_IQ1_S_EXPANDED: return DataType::GGUF_IQ1_S;
+        case DataType::GGUF_IQ2_S_EXPANDED: return DataType::GGUF_IQ2_S;
+        case DataType::GGUF_IQ3_S_EXPANDED: return DataType::GGUF_IQ3_S;
+        case DataType::GGUF_IQ3_XXS_EXPANDED: return DataType::GGUF_IQ3_XXS;
+        case DataType::GGUF_IQ2_XS_EXPANDED: return DataType::GGUF_IQ2_XS;
+        case DataType::GGUF_IQ1_M_EXPANDED: return DataType::GGUF_IQ1_M;
+        case DataType::GGUF_TQ1_0_EXPANDED: return DataType::GGUF_TQ1_0;
+        default: return dtype;
+    }
+}
 
 bool is_mx(DataType dtype) {
     switch (dtype) {

@@ -245,14 +245,19 @@ GgufMatmulProgramFactory::cached_program_t GgufMatmulProgramFactory::create(
     struct LookupSplit {
         uint32_t parts, reader, writer, math, unpack;
     };
-    const LookupSplit split = f.code_offset > 0 ? LookupSplit{4, 1, 1, 1, 1} : LookupSplit{2, 1, 1, 0, 0};
+    // An expanded codebook layout holds the level codes: no lookups.
+    const bool expanded = is_gguf_expanded(weight.dtype()) && f.code_offset > 0;
+    const LookupSplit split = expanded            ? LookupSplit{4, 0, 0, 0, 0}
+                              : f.code_offset > 0 ? LookupSplit{4, 1, 1, 1, 1}
+                                                  : LookupSplit{2, 1, 1, 0, 0};
     const std::map<std::string, std::string> lookup_defines = {
+        {"GGUF_EXPANDED", expanded ? "1" : "0"},
         {"GGUF_LOOKUP_PARTS", std::to_string(split.parts)},
         {"GGUF_READER_PARTS", std::to_string(split.reader)},
         {"GGUF_WRITER_PARTS", std::to_string(split.writer)},
         {"GGUF_MATH_PARTS", std::to_string(split.math)},
         {"GGUF_UNPACK_PARTS", std::to_string(split.unpack)}};
-    if (f.code_offset > 0) {
+    if (f.code_offset > 0 && !expanded) {
         // The page counts of the compute kernel's lookups (gguf_matmul_compute.cpp).
         add_cb(program, compute, tt::CBIndex::c_3, tt::DataFormat::UInt32, 64, 1, tt::tt_metal::Tile());
     }

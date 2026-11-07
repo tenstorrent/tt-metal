@@ -55,6 +55,16 @@ gguf_q4_1 = DataType.GGUF_Q4_1
 gguf_q5_0 = DataType.GGUF_Q5_0
 gguf_q5_1 = DataType.GGUF_Q5_1
 gguf_tq1_0 = DataType.GGUF_TQ1_0
+# Expanded layouts of some GGUF formats: ttnn.from_gguf takes the format's blocks and ttnn.to_gguf returns them, exactly;
+# the pages are larger and the matmul is faster. Opt-in, for when the memory is there.
+gguf_iq2_xxs_expanded = DataType.GGUF_IQ2_XXS_EXPANDED
+gguf_iq1_s_expanded = DataType.GGUF_IQ1_S_EXPANDED
+gguf_iq2_s_expanded = DataType.GGUF_IQ2_S_EXPANDED
+gguf_iq3_s_expanded = DataType.GGUF_IQ3_S_EXPANDED
+gguf_iq3_xxs_expanded = DataType.GGUF_IQ3_XXS_EXPANDED
+gguf_iq2_xs_expanded = DataType.GGUF_IQ2_XS_EXPANDED
+gguf_iq1_m_expanded = DataType.GGUF_IQ1_M_EXPANDED
+gguf_tq1_0_expanded = DataType.GGUF_TQ1_0_EXPANDED
 GGUF_DTYPES = (
     gguf_q8_0,
     gguf_q4_0,
@@ -82,6 +92,17 @@ GGUF_DTYPES = (
     gguf_q5_1,
     gguf_tq1_0,
 )
+# GGUF format -> its expanded layout.
+GGUF_EXPANDED = {
+    gguf_iq2_xxs: gguf_iq2_xxs_expanded,
+    gguf_iq1_s: gguf_iq1_s_expanded,
+    gguf_iq2_s: gguf_iq2_s_expanded,
+    gguf_iq3_s: gguf_iq3_s_expanded,
+    gguf_iq3_xxs: gguf_iq3_xxs_expanded,
+    gguf_iq2_xs: gguf_iq2_xs_expanded,
+    gguf_iq1_m: gguf_iq1_m_expanded,
+    gguf_tq1_0: gguf_tq1_0_expanded,
+}
 
 
 def is_mx_dtype(dtype) -> bool:
