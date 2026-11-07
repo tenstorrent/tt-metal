@@ -1479,3 +1479,59 @@ def test_ttnn_where_uint16_control(c_shape, t_shape, f_shape, condition, torch_d
 
     result = ttnn.to_torch(ttnn_result).to(torch_dtype)
     assert torch.equal(result, golden), f"expected {golden.flatten()[:8].tolist()}, got {result.flatten()[:8].tolist()}"
+
+
+def _every_value_where_inputs(torch_dtype, lo, hi, pred_dtype):
+    # Shape [1, 1, 64, 128] = 8192 elements. The value operands cycle through every value of the
+    # dtype (including -128 for int8) in both the true and the false branch, and the predicate mixes
+    # zero and non-zero (including the dtype's extremes) so each value is selected and rejected.
+    n = 64 * 128
+    span = hi - lo + 1
+    idx = torch.arange(n, dtype=torch.int64)
+    T = (lo + idx % span).to(torch_dtype).reshape(1, 1, 64, 128)
+    F = (hi - (idx * 5 + 3) % span).to(torch_dtype).reshape(1, 1, 64, 128)
+    pred_values = torch.tensor([0, 1, 0, 7, 0, 1, 1, 0, 3], dtype=torch.int64)
+    C = pred_values[idx % pred_values.numel()].to(pred_dtype).reshape(1, 1, 64, 128)
+    return C, T, F
+
+
+@pytest.mark.parametrize(
+    "pred_ttnn_dtype, pred_torch_dtype, value_ttnn_dtype, value_torch_dtype, lo, hi",
+    [
+        (ttnn.int8, torch.int8, ttnn.int8, torch.int8, -128, 127),  # int8 predicate, int8 values
+        (ttnn.int32, torch.int32, ttnn.int8, torch.int8, -128, 127),  # int32 predicate, int8 values
+        (ttnn.uint8, torch.uint8, ttnn.int8, torch.int8, -128, 127),  # uint8 predicate, int8 values
+        (ttnn.uint8, torch.uint8, ttnn.uint8, torch.uint8, 0, 255),  # control, uint8 predicate and values
+        (ttnn.int32, torch.int32, ttnn.uint8, torch.uint8, 0, 255),  # control, int32 predicate, uint8 values
+        (ttnn.int32, torch.int32, ttnn.int32, torch.int32, -128, 127),  # control, int32 everywhere
+    ],
+    ids=[
+        "int8_pred_int8_values",
+        "int32_pred_int8_values",
+        "uint8_pred_int8_values",
+        "uint8_pred_uint8_values",
+        "int32_pred_uint8_values",
+        "int32_pred_int32_values",
+    ],
+)
+def test_ttnn_where_8bit_every_value(
+    pred_ttnn_dtype, pred_torch_dtype, value_ttnn_dtype, value_torch_dtype, lo, hi, device
+):
+    # An int8 operand used to be read through the 16-bit Dest path (all values wrong when every operand
+    # was int8) or, under the 32-bit Dest an int32 predicate selects, through sign-magnitude (every -128
+    # in the int8 values came back as 0). Every value in the range must round-trip exactly.
+    C, T, F = _every_value_where_inputs(value_torch_dtype, lo, hi, pred_torch_dtype)
+    golden = torch.where(C != 0, T, F)
+
+    ttnn_C = ttnn.from_torch(C, dtype=pred_ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    ttnn_T = ttnn.from_torch(T, dtype=value_ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    ttnn_F = ttnn.from_torch(F, dtype=value_ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    ttnn_result = ttnn.where(ttnn_C, ttnn_T, ttnn_F)
+
+    assert ttnn_result.dtype == value_ttnn_dtype
+    result = ttnn.to_torch(ttnn_result).to(value_torch_dtype)
+    bad = (result != golden).flatten().nonzero().flatten()
+    assert bad.numel() == 0, (
+        f"{bad.numel()} of {golden.numel()} wrong, first want {golden.flatten()[bad[:8]].tolist()}, "
+        f"got {result.flatten()[bad[:8]].tolist()}"
+    )
