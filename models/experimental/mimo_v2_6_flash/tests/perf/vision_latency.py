@@ -3,8 +3,8 @@
 
 """Latency of the TTNN ViT (tt/vision) on one Galaxy row vs the fp32 / bf16 torch reference on the host CPU.
 
-Cases (inputs from vLLM's processor, repo sample images): ``448`` (448x448 image, 784 patches), ``1024`` (1024x1024,
-4096), ``max`` (a 4096x2048 image, the processor's 8.4 MP limit: 32768 patches in one sequence), ``video32``
+Cases (inputs from vLLM's processor, repo sample images): ``448`` (448x448 image, 784 patches), ``640x480`` (1200),
+``1024`` (1024x1024, 4096), ``max`` (a 4096x2048 image, the processor's 8.4 MP limit: 32768 patches in one sequence), ``video32``
 (32 frames of 640x360: 16 frame pairs of 880 patches) and ``video32_720p`` (32 frames of 1280x720, 56320 patches,
 several passes). Device time is the encoder call end to end (host inputs, device, readback of [n, 4096] bf16),
 the median of ``--repeats`` calls after a first (compiling) call; the CPU reference runs once per dtype with
@@ -12,7 +12,8 @@ the median of ``--repeats`` calls after a first (compiling) call; the CPU refere
 
 Run on one row, as a row engine does:
     TT_VISIBLE_DEVICES=<row chips> python models/experimental/mimo_v2_6_flash/tests/perf/vision_latency.py \
-        [--cases 448,1024,max,video32] [--cpu fp32,bf16] [--threads 16]
+        [--cases 448,1024,max,video32] [--cpu fp32,bf16] [--threads 16] \
+        [--numerics accurate,accurate+exact,accurate+bfp8] [--warm]
 """
 
 import argparse
@@ -30,11 +31,14 @@ from models.experimental.mimo_v2_6_flash.reference.checkpoint import default_mod
 from models.experimental.mimo_v2_6_flash.tests.common import pcc
 from models.experimental.mimo_v2_6_flash.tt.common import fabric_config
 from models.experimental.mimo_v2_6_flash.tt.vision.encoder import MiMoVisionEncoder
+from models.experimental.mimo_v2_6_flash.tt.vision.vit import ROW_BUCKETS
 
 
 def case_inputs(path, case):
     if case == "448":
         return "image", vin.process_images(path, [vin.sample_image(size=(448, 448))])
+    if case == "640x480":
+        return "image", vin.process_images(path, [vin.sample_image(size=(640, 480))])
     if case == "1024":
         return "image", vin.process_images(path, [vin.sample_image("demo.jpeg", size=(1024, 1024))])
     if case == "max":
@@ -84,8 +88,13 @@ def main():
     p.add_argument("--cpu-cases", default="448,1024,video32", help="cases the CPU reference runs on")
     p.add_argument("--threads", type=int, default=16)
     p.add_argument("--max-rows", type=int, default=None)
-    p.add_argument("--weights", default="bf16", choices=["bf16", "bfp8"])
-    p.add_argument("--numerics", default="accurate", help="tt/vision/vit.py NUMERICS preset(s), comma-separated")
+    p.add_argument(
+        "--numerics",
+        default="balanced",
+        help="configurations, comma-separated: a tt/vision/vit.py NUMERICS preset, optionally with '+bfp8' (bfloat8_b "
+        "weights) and / or '+exact' (no row buckets: each pass padded to a multiple of 128), e.g. accurate+bfp8",
+    )
+    p.add_argument("--warm", action="store_true", help="warm() every bucket first and report its time and programs")
     a = p.parse_args()
     torch.set_num_threads(a.threads)
     path = default_model_path()
@@ -107,14 +116,25 @@ def main():
     mesh = ttnn.open_mesh_device(ttnn.MeshShape(1, 8), l1_small_size=65536, trace_region_size=0)
     try:
         kwargs = {} if a.max_rows is None else {"max_rows": a.max_rows}
-        weight_dtype = ttnn.bfloat16 if a.weights == "bf16" else ttnn.bfloat8_b
         tracker = PeakTracker(mesh)
         for preset in presets:
             base_mb = dram_mb(mesh)
             t0 = time.time()
-            enc = MiMoVisionEncoder(mesh, path, weight_dtype=weight_dtype, numerics=preset, **kwargs)
+            numerics, *flags = preset.split("+")
+            weight_dtype = ttnn.bfloat8_b if "bfp8" in flags else ttnn.bfloat16
+            buckets = None if "exact" in flags else ROW_BUCKETS
+            enc = MiMoVisionEncoder(mesh, path, weight_dtype=weight_dtype, numerics=numerics, buckets=buckets, **kwargs)
             weights_mb = dram_mb(mesh) - base_mb
             logger.info(f"{preset}: encoder ready in {time.time() - t0:.1f} s, weights {weights_mb:.1f} MB per chip")
+            if a.warm and buckets:
+                programs, before = mesh.num_program_cache_entries(), dram_mb(mesh)
+                t0 = time.time()
+                per_bucket = enc.warm()
+                logger.info(
+                    f"{preset}: warm() {time.time() - t0:.1f} s for {len(per_bucket)} buckets "
+                    f"({', '.join(f'{r}: {s:.2f} s' for r, s in per_bucket.items())}); "
+                    f"{mesh.num_program_cache_entries() - programs} programs, {dram_mb(mesh) - before:.2f} MB DRAM"
+                )
             for c in cases:
                 kind, pv, grid = fields(c)
                 fn = enc.embed_image if kind == "image" else enc.embed_video
