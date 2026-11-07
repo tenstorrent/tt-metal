@@ -108,11 +108,13 @@ MoeExpertTokenRemapDeviceOperation::tensor_return_value_t MoeExpertTokenRemapDev
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto output_spec = compute_output_specs(operation_attributes, tensor_args);
 
-    const auto output_mapping_tensor = tensor_args.optional_output_mapping_tensor.value_or(
-        create_device_tensor(output_spec[0], tensor_args.topk_tensor.device()));
+    const auto output_mapping_tensor = tensor_args.optional_output_mapping_tensor.has_value()
+                                           ? *tensor_args.optional_output_mapping_tensor
+                                           : create_device_tensor(output_spec[0], tensor_args.topk_tensor.device());
 
-    const auto output_reduced_tensor = tensor_args.optional_output_reduced_tensor.value_or(
-        create_device_tensor(output_spec[1], tensor_args.topk_tensor.device()));
+    const auto output_reduced_tensor = tensor_args.optional_output_reduced_tensor.has_value()
+                                           ? *tensor_args.optional_output_reduced_tensor
+                                           : create_device_tensor(output_spec[1], tensor_args.topk_tensor.device());
 
     return {output_mapping_tensor, output_reduced_tensor};
 }
