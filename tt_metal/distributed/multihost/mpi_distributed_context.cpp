@@ -225,6 +225,12 @@ inline void init_env(int& argc, char**& argv) {
     static int provided_thread_level = MPI_THREAD_SINGLE;
 
     std::call_once(mpi_once, [&] {
+        // A process nobody launched (no PMIx rank from mpirun / tt-run) is a singleton: it has no peers, so it has
+        // no use for the shared-memory transport, and Open MPI never unlinks a singleton's 16 MB segment
+        // (tt-metal #63870). Ask for the self transport only; an explicit OMPI_MCA_btl in the environment wins.
+        if (std::getenv("PMIX_RANK") == nullptr && std::getenv("OMPI_COMM_WORLD_SIZE") == nullptr) {
+            setenv("OMPI_MCA_btl", "self", /*overwrite=*/0);
+        }
         int provided = 0;
         if (MPI_Init_thread(&argc, &argv, MPI_THREAD_MULTIPLE, &provided) != MPI_SUCCESS) {
             TT_THROW("MPI_Init_thread failed");
