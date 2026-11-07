@@ -95,6 +95,13 @@ def test_converter_round_trips_through_both_golden_readers(tmp_path, expect_erro
 
     with expect_error(FileExistsError, "already holds a trace"):
         convert(src, dst, log=lambda _: None)
+    # `layers` keeps the first N layers' streams and every stream that is not per layer.
+    convert(src, tmp_path / "golden_l12", log=lambda _: None, layers=KimiK3Config.ATTN_RES_BLOCK_SIZE)
+    short = GoldenTrace(tmp_path / "golden_l12")
+    assert short.metadata["converted_from"]["layers"] == KimiK3Config.ATTN_RES_BLOCK_SIZE
+    assert short.has("decoder_io", "decoder_output_layer_11") and not short.has("decoder_io", "decoder_output_layer_12")
+    assert torch.equal(short.decoder_output(11), trace.decoder_output(11)) and short.has("topk", "topk_indices")
+    assert short.has_kv_cache(3)
     # A layer without its attention output has no running sum: refused, not guessed.
     del streams["attn_output_layer_5"]
     _write_chunked(tmp_path / "chunked2", streams, shard_rows=4)
