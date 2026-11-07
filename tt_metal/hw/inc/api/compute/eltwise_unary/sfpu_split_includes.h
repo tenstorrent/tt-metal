@@ -116,6 +116,10 @@
 #include "api/compute/eltwise_unary/xielu.h"
 #endif
 
+#ifdef SFPU_OP_LOGIT_INCLUDE
+#include "api/compute/eltwise_unary/logit.h"
+#endif
+
 #ifdef SFPU_OP_LOGSIGMOID_INCLUDE
 #include "api/compute/logsigmoid.h"
 #endif
