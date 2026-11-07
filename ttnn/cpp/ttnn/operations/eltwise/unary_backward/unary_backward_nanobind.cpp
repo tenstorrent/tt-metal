@@ -1188,7 +1188,7 @@ void py_module(nb::module_& mod) {
     bind_unary_backward_op<"cos_bw">(
         mod,
         &ttnn::cos_bw,
-        R"doc(Performs backward operations for cosine on :attr:`input_tensor` with given :attr:`grad_tensor`.)doc",
+        R"doc(Performs backward operations for cosine on :attr:`input_tensor` with given :attr:`grad_tensor`. Supported input range is (-1e5, 1e5))doc",
         R"doc(BFLOAT16, BFLOAT8_B)doc");
 
     bind_unary_backward_op<"acosh_bw">(
@@ -1376,7 +1376,7 @@ void py_module(nb::module_& mod) {
     bind_unary_backward_op<"sin_bw">(
         mod,
         &ttnn::sin_bw,
-        R"doc(Performs backward operations for sin on :attr:`input_tensor` with given :attr:`grad_tensor`)doc",
+        R"doc(Performs backward operations for sin on :attr:`input_tensor` with given :attr:`grad_tensor`. Supported input range is (-5e4, 5e4))doc",
         R"doc(BFLOAT16, BFLOAT8_B)doc");
 
     bind_unary_backward_op<"sinh_bw">(
