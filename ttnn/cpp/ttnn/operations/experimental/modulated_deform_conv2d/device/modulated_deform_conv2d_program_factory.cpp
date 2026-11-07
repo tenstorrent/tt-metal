@@ -30,7 +30,7 @@ using namespace tt::tt_metal;
 // wider than kConvMaxChunkTiles tiles takes several passes per position, one per chunk of channels.
 // The work unit is a block of 32 consecutive output rows, which shares one set of offset and mask
 // loads; blocks are split evenly over the cores, or by shard for a sharded input, and each core keeps
-// its blocks' geometry and output accumulators for the whole run.
+// the geometry and output accumulators of a wave of its blocks, all of them where L1 allows.
 ProgramDescriptor ModulatedDeformConv2dOperation::create_descriptor(
     const operation_attributes_t& attrs, const tensor_args_t& tensor_args, Tensor& output) {
     ProgramDescriptor descriptor{};
@@ -156,39 +156,61 @@ ProgramDescriptor ModulatedDeformConv2dOperation::create_descriptor(
                 }}},
             });
         };
-    // Each reader's staging arena, half a block's offset-mask rows.
-    for (const uint8_t cb : {offset_mask_arena_cb, odd_offset_mask_arena_cb}) {
-        push_cb(cb, TILE_ROWS / 2, offset_mask_page_nbytes);
+    // Every CB but the readers' outputs and the band, for waves of wave_blocks blocks.
+    auto push_cbs = [&](uint32_t wave_blocks) {
+        // Each reader's staging arena, half a block's offset-mask rows.
+        for (const uint8_t cb : {offset_mask_arena_cb, odd_offset_mask_arena_cb}) {
+            push_cb(cb, TILE_ROWS / 2, offset_mask_page_nbytes);
+        }
+        // The four corners of a (pass, block) and one scalar tile per corner, per reader, two deep.
+        for (const uint8_t cb : {corner_block_cb, odd_corner_block_cb}) {
+            push_cb(cb, 2 * CORNERS * chunk_tiles, tile_nbytes);
+        }
+        for (const uint8_t cb : {scalar_tile_cb, odd_scalar_tile_cb}) {
+            push_cb(cb, 2 * CORNERS, tile_nbytes);
+        }
+        push_cb(tiled_block_cb, CORNERS * chunk_tiles, tile_nbytes);
+        // Each reader's geometry inputs, one block deep, and its blocks' geometry for the wave.
+        for (const uint8_t cb : {geom_in_cb, odd_geom_in_cb}) {
+            push_cb(cb, GEOM_IN_TILES, fp32_tile_nbytes, tt::DataFormat::Float32);
+        }
+        push_cb(geom_kernel_cb, 2, fp32_tile_nbytes, tt::DataFormat::Float32);
+        // The geometry's fp32 intermediates between its rounds in dest: a block pushes five, so each
+        // block starts at the front and its four last stay contiguous.
+        push_cb(geom_scratch_cb, 5, fp32_tile_nbytes, tt::DataFormat::Float32);
+        const uint32_t even_slots = std::max<uint32_t>(1, (wave_blocks + 1) / 2);
+        const uint32_t odd_slots = std::max<uint32_t>(1, wave_blocks / 2);
+        push_cb(geom_index_cb, even_slots, int32_tile_nbytes, tt::DataFormat::Int32);
+        push_cb(odd_geom_index_cb, odd_slots, int32_tile_nbytes, tt::DataFormat::Int32);
+        push_cb(geom_weight_cb, CORNERS * even_slots, tile_nbytes);
+        push_cb(odd_geom_weight_cb, CORNERS * odd_slots, tile_nbytes);
+        // A block's columns of one pass; two weight slices, the next loading while compute works
+        // through the current one; the output of every block of the wave, accumulated across passes
+        // in bfloat16 (fp32 within a pass, in dest); the bias.
+        push_cb(column_cb, chunk_tiles, tile_nbytes);
+        push_cb(conv_weight_cb, 2 * chunk_tiles * out_tiles, tile_nbytes);
+        push_cb(acc_cb, wave_blocks * out_tiles, tile_nbytes);
+        push_cb(bias_cb, out_tiles, tile_nbytes);
+    };
+
+    // Each core keeps the geometry and output accumulators of the blocks it works on at once, so a
+    // core runs its blocks in waves of as many as fit L1, every wave taking every pass, and the
+    // weight slices are loaded again each wave. Every core runs the same number of waves, as each
+    // pass's slice is multicast to all of them; a core with fewer blocks runs shorter or empty ones.
+    // On a full grid one wave takes all of a core's blocks. The readers' outputs count one block deep.
+    uint32_t wave_blocks = std::max<uint32_t>(1, max_blocks);
+    for (;; --wave_blocks) {
+        descriptor.cbs.clear();
+        push_cbs(wave_blocks);
+        uint64_t wave_cbs = 2ull * out_tiles * tile_nbytes;
+        for (const auto& cb : descriptor.cbs) {
+            wave_cbs += cb.total_size;
+        }
+        if (wave_cbs <= attrs.l1_budget || wave_blocks == 1 || sharded_input) {
+            break;
+        }
     }
-    // The four corners of a (pass, block) and one scalar tile per corner, per reader, two deep.
-    for (const uint8_t cb : {corner_block_cb, odd_corner_block_cb}) {
-        push_cb(cb, 2 * CORNERS * chunk_tiles, tile_nbytes);
-    }
-    for (const uint8_t cb : {scalar_tile_cb, odd_scalar_tile_cb}) {
-        push_cb(cb, 2 * CORNERS, tile_nbytes);
-    }
-    push_cb(tiled_block_cb, CORNERS * chunk_tiles, tile_nbytes);
-    // Each reader's geometry inputs, one block deep, and its blocks' geometry for the whole run.
-    for (const uint8_t cb : {geom_in_cb, odd_geom_in_cb}) {
-        push_cb(cb, GEOM_IN_TILES, fp32_tile_nbytes, tt::DataFormat::Float32);
-    }
-    push_cb(geom_kernel_cb, 2, fp32_tile_nbytes, tt::DataFormat::Float32);
-    // The geometry's fp32 intermediates between its rounds in dest: a block pushes five, so each
-    // block starts at the front and its four last stay contiguous.
-    push_cb(geom_scratch_cb, 5, fp32_tile_nbytes, tt::DataFormat::Float32);
-    const uint32_t even_slots = std::max<uint32_t>(1, (max_blocks + 1) / 2);
-    const uint32_t odd_slots = std::max<uint32_t>(1, max_blocks / 2);
-    push_cb(geom_index_cb, even_slots, int32_tile_nbytes, tt::DataFormat::Int32);
-    push_cb(odd_geom_index_cb, odd_slots, int32_tile_nbytes, tt::DataFormat::Int32);
-    push_cb(geom_weight_cb, CORNERS * even_slots, tile_nbytes);
-    push_cb(odd_geom_weight_cb, CORNERS * odd_slots, tile_nbytes);
-    // A block's columns of one pass; two weight slices, the next loading while compute works
-    // through the current one; every block's output, accumulated across passes in bfloat16 (fp32
-    // within a pass, in dest); the bias.
-    push_cb(column_cb, chunk_tiles, tile_nbytes);
-    push_cb(conv_weight_cb, 2 * chunk_tiles * out_tiles, tile_nbytes);
-    push_cb(acc_cb, max_blocks * out_tiles, tile_nbytes);
-    push_cb(bias_cb, out_tiles, tile_nbytes);
+    const uint32_t waves = std::max<uint32_t>(1, tt::div_up(max_blocks, wave_blocks));
 
     const auto* device = input.device();
     const uint64_t l1_budget = attrs.l1_budget;
@@ -209,7 +231,8 @@ ProgramDescriptor ModulatedDeformConv2dOperation::create_descriptor(
     auto band_cbs_nbytes = [&](uint32_t pages) -> uint64_t {
         return 2ull * std::max<uint32_t>(1, (pages + 1) / 2) * input_page_nbytes;
     };
-    const uint64_t band_budget = !sharded_input && l1_budget > other_cbs ? l1_budget - other_cbs : 0;
+    // In waves the band would hold a core's whole range of input rows for any one wave's.
+    const uint64_t band_budget = !sharded_input && waves == 1 && l1_budget > other_cbs ? l1_budget - other_cbs : 0;
     uint32_t band_margin = 0;
     uint32_t band_pages = 0;
     bool use_band = false;
@@ -234,14 +257,14 @@ ProgramDescriptor ModulatedDeformConv2dOperation::create_descriptor(
     other_cbs += band_cbs_nbytes(band_pages);
     TT_FATAL(
         other_cbs <= l1_budget,
-        "modulated_deform_conv2d: needs {} KB of L1 per core, {} KB free: {} blocks of 32 rows per core, C {}, C_out "
-        "{} (output accumulators {} KB, weight slices {} KB)",
+        "modulated_deform_conv2d: needs {} KB of L1 per core, {} KB free: {} blocks of 32 rows per core at once, C {}, "
+        "C_out {} (output accumulators {} KB, weight slices {} KB)",
         other_cbs / 1024,
         l1_budget / 1024,
-        max_blocks,
+        wave_blocks,
         s.channels,
         s.out_channels,
-        max_blocks * out_tiles * tile_nbytes / 1024,
+        wave_blocks * out_tiles * tile_nbytes / 1024,
         2 * chunk_tiles * out_tiles * tile_nbytes / 1024);
 
     // One core reads the weight slices and multicasts them when the cores form one rectangle; the
@@ -259,7 +282,7 @@ ProgramDescriptor ModulatedDeformConv2dOperation::create_descriptor(
 
     // The weight slices go to the reader with fewer blocks on the busiest cores: with an odd count
     // the even reader has one more block of corners to gather.
-    const uint32_t weight_parity = max_blocks % 2;
+    const uint32_t weight_parity = wave_blocks % 2;
     // The copy of a block parity: 0 takes the even blocks, 1 the odd ones.
     auto reader_named_ct = [&](uint32_t parity) {
         const bool even = parity == 0;
@@ -303,6 +326,8 @@ ProgramDescriptor ModulatedDeformConv2dOperation::create_descriptor(
             {"weight_sender_sem_id", weight_sender_sem_id},
             {"weight_receiver_sem_id", weight_receiver_sem_id},
             {"input_shard_pages", sharded_input ? input.shard_spec()->shape[0] : 0u},
+            {"wave_blocks", wave_blocks},
+            {"waves", waves},
         };
     };
     // Only the tensor accessors' args are positional, chained from index 0.
@@ -379,6 +404,8 @@ ProgramDescriptor ModulatedDeformConv2dOperation::create_descriptor(
         {"in_h_less_one_fp32", std::bit_cast<uint32_t>(static_cast<float>(s.in_h) - 1.0f)},
         {"in_w_fp32", std::bit_cast<uint32_t>(static_cast<float>(s.in_w))},
         {"in_w_less_one_fp32", std::bit_cast<uint32_t>(static_cast<float>(s.in_w) - 1.0f)},
+        {"wave_blocks", wave_blocks},
+        {"waves", waves},
     };
     // The geometry runs in fp32: its inputs and intermediates unpack straight to dest, as srcA would
     // round them to TF32. Each pass's matmul reduction accumulates in fp32 too. Half-sync dest, four
