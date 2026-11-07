@@ -6,6 +6,7 @@
 
 #include "tt-metalium/constants.hpp"
 #include "ttnn/operations/pool/generic/device/pool_op.hpp"
+#include <algorithm>
 #include <cmath>
 #include <optional>
 #include <tt-metalium/buffer_types.hpp>
@@ -101,6 +102,12 @@ static std::tuple<MemoryConfig, uint32_t, sliding_window::ParallelConfig> get_po
 
     uint32_t num_cores_c = conv::get_num_cores_channels_from_parallel_config(parallel_config);
 
+    // With TILE output each channel core writes a TILE_WIDTH-aligned output shard, so the input shards must have the
+    // same per-core width. Otherwise e.g. C=48 on two channel cores gives 24-wide input shards against 32-wide output
+    // shards, and every channel from 24 on lands in the wrong output column.
+    if (is_out_tiled && num_cores_c > 1) {
+        input_channels_alignment = std::max(input_channels_alignment, tt::constants::TILE_WIDTH);
+    }
     uint32_t input_tensor_width_snapped_to_channels_alignment =
         tt::round_up(channels, num_cores_c * input_channels_alignment);
 
