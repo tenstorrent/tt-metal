@@ -40,6 +40,8 @@ ttnn::Tensor embedding(
     auto embedding_input_tensor = input_tensor;
     if (input_tensor.layout() == ttnn::ROW_MAJOR_LAYOUT) {
         embedding_input_tensor = ttnn::reshape(input_tensor, ttnn::Shape({batch_size, 1, 1, sentence_size}));
+    } else if (original_input_rank > 2) {
+        embedding_input_tensor = ttnn::reshape(input_tensor, ttnn::Shape({batch_size, sentence_size}));
     }
 
     // If layout is row major, OR if the input tensor is not a multiple of TILE_HEIGHT, then we cannot use tilized
