@@ -130,6 +130,8 @@ enum class SfpuType : std::uint32_t
     gt,
     le,
     ge,
+    eq,
+    ne,
     lt_int,
     gt_int,
     le_int,

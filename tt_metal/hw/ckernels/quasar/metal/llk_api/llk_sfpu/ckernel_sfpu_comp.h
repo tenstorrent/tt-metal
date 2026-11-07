@@ -215,18 +215,98 @@ inline void calculate_zero_comp() {
     }
 }
 
-// The Int32 unary comparisons (unary_*_tile_int32) are not ported to Quasar. The Compute API
-// keeps one signature on every arch, so their kernel entry points (ne / eq call the metal
-// calculate_comp_unary_int, gt / ge / lt / le the tt-llk _calculate_comp_unary_int_ on
-// Blackhole / Wormhole) reject the call here.
-template <bool APPROXIMATION_MODE, SfpuType COMP_MODE, int ITERATIONS = 8>
-inline void calculate_comp_unary_int([[maybe_unused]] int scalar) {
-    LLK_ASSERT(false, "Int32 unary comparisons (unary_*_tile_int32) are not supported on Quasar");
+// Native Int32 in Dest is two's complement (unpack-to-dest copies the L1 bits), so the Int32 compares
+// below load vInt through the I32 sfpmem mode and compare in two's complement. A mixed-sign pair is
+// decided by the signs alone, so the x - s difference never has to survive an overflow. Equality is
+// two orderings: sfpi lowers vInt == through the sign-magnitude compare type, where INT_MIN reads as -0.
+
+// (x OP s) ? 1 : 0 for a scalar s, OP one of unary_eq/ne/gt/ge/lt/le; x and s two's complement.
+template <SfpuType COMP_MODE>
+inline __attribute__((always_inline)) sfpi::vInt _int32_scalar_comp_(sfpi::vInt x, int scalar) {
+    static_assert(
+        COMP_MODE == SfpuType::unary_eq || COMP_MODE == SfpuType::unary_ne || COMP_MODE == SfpuType::unary_gt ||
+            COMP_MODE == SfpuType::unary_ge || COMP_MODE == SfpuType::unary_lt || COMP_MODE == SfpuType::unary_le,
+        "_int32_scalar_comp_: COMP_MODE must be one of the six unary_* scalar compares");
+    const sfpi::vInt s = scalar;
+    sfpi::vInt result = 0;
+    if constexpr (COMP_MODE == SfpuType::unary_eq) {
+        v_if(x <= s && x >= s) { result = 1; }
+        v_endif;
+    } else if constexpr (COMP_MODE == SfpuType::unary_ne) {
+        v_if(x < s || x > s) { result = 1; }
+        v_endif;
+    } else if constexpr (COMP_MODE == SfpuType::unary_gt) {
+        v_if(x >= 0 && s < 0) { result = 1; }
+        v_elseif(x < 0 && s >= 0) { result = 0; }
+        v_elseif(x > s) { result = 1; }
+        v_endif;
+    } else if constexpr (COMP_MODE == SfpuType::unary_ge) {
+        v_if(x >= 0 && s < 0) { result = 1; }
+        v_elseif(x < 0 && s >= 0) { result = 0; }
+        v_elseif(x >= s) { result = 1; }
+        v_endif;
+    } else if constexpr (COMP_MODE == SfpuType::unary_lt) {
+        v_if(x >= 0 && s < 0) { result = 0; }
+        v_elseif(x < 0 && s >= 0) { result = 1; }
+        v_elseif(x < s) { result = 1; }
+        v_endif;
+    } else {  // unary_le
+        v_if(x >= 0 && s < 0) { result = 0; }
+        v_elseif(x < 0 && s >= 0) { result = 1; }
+        v_elseif(x <= s) { result = 1; }
+        v_endif;
+    }
+    return result;
 }
 
+/**
+ * @brief Int32 compare against a scalar over a tile, written as 1/0 Int32: unary_{eq,ne,gt,ge,lt,le}_tile_int32.
+ *
+ * @tparam APPROXIMATION_MODE: Unused; retained for dispatcher signature symmetry.
+ * @tparam COMP_MODE: One of SfpuType::unary_eq/ne/gt/ge/lt/le.
+ * @tparam ITERATIONS: Number of SFP-row pairs to process (8 for a 32x16 face).
+ * @param scalar: Two's-complement Int32 comparand.
+ */
 template <bool APPROXIMATION_MODE, SfpuType COMP_MODE, int ITERATIONS = 8>
-inline void _calculate_comp_unary_int_([[maybe_unused]] int scalar) {
-    LLK_ASSERT(false, "Int32 unary comparisons (unary_*_tile_int32) are not supported on Quasar");
+inline void calculate_comp_unary_int(int scalar) {
+#pragma GCC unroll 8
+    for (int d = 0; d < ITERATIONS; d++) {
+        const sfpi::vInt x = sfpi::dst_reg[0].mode<sfpi::DataLayout::I32>();
+        sfpi::dst_reg[0].mode<sfpi::DataLayout::I32>() = _int32_scalar_comp_<COMP_MODE>(x, scalar);
+        sfpi::dst_reg++;
+    }
+}
+
+// Same kernel under the tt-llk entry-point name the gt/ge/lt/le compute API calls on every arch.
+template <bool APPROXIMATION_MODE, SfpuType COMP_MODE, int ITERATIONS = 8>
+inline void _calculate_comp_unary_int_(int scalar) {
+    calculate_comp_unary_int<APPROXIMATION_MODE, COMP_MODE, ITERATIONS>(scalar);
+}
+
+/**
+ * @brief Int32 comparison-to-zero over a tile, written as 1/0 Int32: {eqz,nez,gtz,gez,ltz,lez}_tile_int32.
+ *
+ * The compute API calls this with the zero-compare SfpuType modes on every arch; on Quasar it is the
+ * two's-complement counterpart of @ref calculate_zero_comp, whose integer path reads sign-magnitude.
+ *
+ * @tparam APPROXIMATION_MODE: Unused; retained for dispatcher signature symmetry.
+ * @tparam COMP_MODE: One of the six comparison-to-zero SfpuType modes.
+ * @tparam ITERATIONS: Number of SFP-row pairs to process (8 for a 32x16 face).
+ */
+template <bool APPROXIMATION_MODE, SfpuType COMP_MODE, int ITERATIONS = 8>
+inline void calculate_comp_int() {
+    static_assert(
+        COMP_MODE == SfpuType::equal_zero || COMP_MODE == SfpuType::not_equal_zero ||
+            COMP_MODE == SfpuType::less_than_zero || COMP_MODE == SfpuType::greater_than_zero ||
+            COMP_MODE == SfpuType::less_than_equal_zero || COMP_MODE == SfpuType::greater_than_equal_zero,
+        "calculate_comp_int: COMP_MODE must be one of the six comparison-to-zero SfpuType modes");
+    constexpr SfpuType scalar_mode = COMP_MODE == SfpuType::equal_zero             ? SfpuType::unary_eq
+                                     : COMP_MODE == SfpuType::not_equal_zero       ? SfpuType::unary_ne
+                                     : COMP_MODE == SfpuType::less_than_zero       ? SfpuType::unary_lt
+                                     : COMP_MODE == SfpuType::greater_than_zero    ? SfpuType::unary_gt
+                                     : COMP_MODE == SfpuType::less_than_equal_zero ? SfpuType::unary_le
+                                                                                   : SfpuType::unary_ge;
+    calculate_comp_unary_int<APPROXIMATION_MODE, scalar_mode, ITERATIONS>(0);
 }
 
 }  // namespace sfpu
