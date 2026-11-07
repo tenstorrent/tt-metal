@@ -88,30 +88,46 @@ inline void calculate_remainder() {
     sfpi::vFloat value_tmp = sfpi::vConstFloatPrgm0;
     sfpi::vFloat s = sfpi::abs(value_tmp);
     sfpi::vFloat recip_val = sfpi::abs(sfpi::vConstFloatPrgm1);
+    // Keep one fractional bit in the quotient estimate before correcting the residual.
+    constexpr int residual_correction_exp_limit = 23;
 
 #pragma GCC unroll 0
     for (int d = 0; d < ITERATIONS; d++) {
         vFloat val = sfpi::dst_reg[0];
         vFloat v = sfpi::abs(val);
 
-        vFloat quotient;
-        vInt exp = sfpi::exexp(v * recip_val);
+        vFloat quotient = v * recip_val;
+        vInt exp = sfpi::exexp(quotient);
         v_if(exp < 0) { quotient = 0.0f; }
         // Since fp32 has 23 mantissa bits, the LSB represents the fractional part when exp < 23.
         // We effectively round off the fractional bits to zero by right shifting using (exp - 23) and then left
         // shifting it back using (0 - (exp - 23)).
         v_elseif(exp < 23) {
-            quotient = sfpi::as<sfpi::vFloat>(
-                shft((shft(sfpi::as<sfpi::vUInt>(v * recip_val), (exp - 23))), (0 - (exp - 23))));
-        }
-        v_else { quotient = v * recip_val; }
-        v_endif
-
-        v_if(quotient > v * recip_val) {
-            quotient = quotient - 1;
+            quotient =
+                sfpi::as<sfpi::vFloat>(shft((shft(sfpi::as<sfpi::vUInt>(quotient), (exp - 23))), (0 - (exp - 23))));
         }
         v_endif;
+
         v = v - quotient * s;
+        v_if(exp < residual_correction_exp_limit) {
+            // The floored quotient times s can exceed abs(val), leaving a negative residual.
+            v_if(v < 0) { v = v + s; }
+            v_endif;
+
+            v_if(quotient > 0) {
+                quotient = quotient + 1;
+                quotient = sfpi::abs(val) - quotient * s;
+                v_if(quotient >= 0) {
+                    // Accept exact zero for either sign; preserve the positive tail's nonzero residual.
+                    v_if(quotient == 0) { v = quotient; }
+                    v_elseif((sfpi::as<sfpi::vInt>(val) | sfpi::as<sfpi::vInt>(value_tmp)) < 0) { v = quotient; }
+                    v_endif;
+                }
+                v_endif;
+            }
+            v_endif;
+        }
+        v_endif;
 
         v_if(val < 0 && v != 0) { v = s - v; }
         v_endif;
