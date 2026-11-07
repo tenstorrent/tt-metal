@@ -17,6 +17,7 @@
 #include "ttnn/operations/core/work_split/work_split_tilize.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/experimental/tensor_layout_apis_with_custom_alignment.hpp>
 using namespace tt::tt_metal;
 
 namespace ttnn::prim {
@@ -235,10 +236,10 @@ void TilizeDeviceOperation::validate_on_program_cache_miss(
         const uint32_t shard_width =
             (input_tensor_a.shard_spec().has_value() ? input_tensor_a.shard_spec().value().shape[1]
                                                      : input_tensor_a.nd_shard_spec().value().shard_shape[-1]);
-        const uint32_t page_size_bytes = input_tensor_a.buffer()->page_size();
+        const uint32_t page_size_bytes = input_tensor_a.mesh_buffer().page_size();
         const uint32_t alignment_requirement = hal::get_l1_alignment();
         TT_FATAL(
-            page_size_bytes == input_tensor_a.buffer()->aligned_page_size(),
+            page_size_bytes == input_tensor_a.mesh_buffer().aligned_page_size(),
             "Input row-major shard width {} bytes gives page size {} bytes, which must be aligned to {} bytes L1 SRAM "
             "buffer alignment "
             "requirement",
@@ -270,7 +271,7 @@ TilizeDeviceOperation::spec_return_value_t TilizeDeviceOperation::compute_output
                                                          // factory, the output has the same shard spec as the input.
         return {tt::tt_metal::TensorSpec(
             input_tensor.logical_shape(),
-            TensorLayout::fromPaddedShape(
+            tt::tt_metal::experimental::tensor_layout_from_padded_shape(
                 operation_attributes.output_dtype,
                 PageConfig(Layout::TILE, operation_attributes.tile),
                 mem_config,
