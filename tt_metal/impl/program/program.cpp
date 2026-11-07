@@ -2757,6 +2757,15 @@ void detail::ProgramImpl::cache_simple_l1_validation(const IDevice* device) {
     this->simple_l1_validation_manager_id_ = device->get_active_sub_device_manager_id();
 }
 
+std::optional<uint64_t> detail::ProgramImpl::cached_l1_frontier(const IDevice* device) const {
+    // Exactly the conditions under which compile_and_allocate takes its early frontier-check return.
+    if (this->compile_and_allocate_needed_ || this->compile_and_allocate_device_ != device ||
+        !this->simple_l1_validation_usable(device)) {
+        return std::nullopt;
+    }
+    return this->simple_l1_validation_region_end_;
+}
+
 bool detail::ProgramImpl::simple_l1_validation_usable(const IDevice* device) const {
     const auto& svc = MetalContext::instance(context_id_).get_service_core_manager().impl();
     // Service claims matter only to CB regions on a claimed core; with claims unchanged since the

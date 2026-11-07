@@ -282,6 +282,10 @@ public:
     /// objects on disk are reused unless the content hash of a source or header dependency changed (or
     /// TT_METAL_FORCE_JIT_COMPILE is set). A program is compiled once per build key; later calls return early.
     void compile(IDevice* device, bool force_slow_dispatch = false);
+    // The L1 frontier this program's cached compile_and_allocate on `device` would check against (0 when it has no
+    // static L1 region), or nullopt when that call would do more than the lockstep frontier check. Lets a mesh
+    // workload do one frontier check for all of its programs.
+    std::optional<uint64_t> cached_l1_frontier(const IDevice* device) const;
     void compile_and_allocate(IDevice* device, bool force_slow_dispatch);
     void invalidate_circular_buffer_allocation();
     void invalidate_dataflow_buffer_allocation();

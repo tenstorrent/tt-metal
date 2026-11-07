@@ -74,6 +74,9 @@ private:
     std::unordered_map<std::size_t, ProgramBinaryStatus> program_binary_status_;
     std::unordered_map<std::size_t, std::unordered_map<uint64_t, std::unordered_set<SubDeviceId>>>
         sub_device_ids_by_mesh_and_manager_;
+    // Whether some program's sub-device set is empty (every active sub-device), per mesh and manager.
+    std::unordered_map<std::size_t, std::unordered_map<uint64_t, bool>>
+        program_spans_all_sub_devices_by_mesh_and_manager_;
     std::shared_ptr<MeshBuffer> kernel_bin_buf_;
     std::vector<std::unordered_map<KernelHandle, std::shared_ptr<Kernel>>> kernels_;
     std::vector<std::vector<std::shared_ptr<KernelGroup>>> kernel_groups_;
@@ -111,6 +114,7 @@ public:
     std::unordered_map<MeshCoordinateRange, Program>& get_programs() { return programs_; }
     const std::unordered_map<MeshCoordinateRange, Program>& get_programs() const { return programs_; }
     void compile(MeshDevice* mesh_device);
+    bool l1_frontier_check_passes(MeshDevice* mesh_device);
     // Compile/finalize the workload and commit its kernel binaries to DRAM without executing it.
     // The returned owner must remain alive while commands referencing the binary addresses may execute.
     std::shared_ptr<MeshBuffer> prepare_for_command_list(MeshCommandQueue& mesh_cq);
