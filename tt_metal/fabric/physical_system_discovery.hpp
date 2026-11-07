@@ -29,7 +29,8 @@ PhysicalSystemDescriptor run_physical_system_discovery(
     const std::shared_ptr<distributed::multihost::DistributedContext>& distributed_context,
     tt::TargetDevice target_device_type,
     bool run_global_discovery = true,
-    bool run_live_discovery = true);
+    bool run_live_discovery = true,
+    bool check_fw_bundle_version = true);
 
 // Free function to query local ethernet metrics
 LocalEthernetMetrics query_local_ethernet_metrics(
