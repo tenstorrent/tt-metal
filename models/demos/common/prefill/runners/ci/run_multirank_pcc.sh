@@ -252,7 +252,7 @@ emit_summary() {
   python3 "${TT_METAL_HOME}/models/demos/common/prefill/runners/ci/summarize_ci_run.py" \
     --ranklogs "${RANKLOGS}" --real-chunks "${REAL_CHUNKS}" \
     --chunk-size "${CHUNK_SIZE}" --pipeline-ranks "${EXPECTED_RANKS:-1}" \
-    --probe-chunks "${PROBE_CHUNKS}" \
+    --probe-chunks="${PROBE_CHUNKS}" \
     --summary-name "${RUN_NAME}_${CONFIG}" \
     || echo "summary generation failed (non-fatal)"
 }
