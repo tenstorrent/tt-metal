@@ -6,12 +6,14 @@
 #include <array>
 #include <atomic>
 #include <chrono>
+#include <cerrno>
 #include <climits>
 #include <cstdint>
 #include <cstddef>
 #include <memory>
 #include <mutex>
 #include <stdexcept>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -33,12 +35,63 @@ namespace tt::tt_metal {
 
 namespace thread_binding {
 
-std::unordered_map<int, std::vector<uint32_t>> get_cpu_cores_per_numa_node() {
+// CPUs the process may run on: the main thread's affinity mask (what taskset or a cpuset sets for the process), read
+// with a dynamically sized set. Empty if it cannot be read. Callers snapshot it on first use.
+std::vector<uint32_t> get_allowed_cpus() {
+    constexpr long max_cpus = 1L << 16;
+    const long configured = sysconf(_SC_NPROCESSORS_CONF);
+    for (long n = std::min(std::max<long>(configured, CPU_SETSIZE), max_cpus);; n = std::min(n * 2, max_cpus)) {
+        cpu_set_t* set = CPU_ALLOC(n);
+        if (set == nullptr) {
+            return {};
+        }
+        const size_t size = CPU_ALLOC_SIZE(n);
+        CPU_ZERO_S(size, set);
+        if (sched_getaffinity(getpid(), size, set) == 0) {
+            std::vector<uint32_t> cpus;
+            for (long cpu = 0; cpu < static_cast<long>(size * CHAR_BIT); ++cpu) {
+                if (CPU_ISSET_S(cpu, size, set)) {
+                    cpus.push_back(static_cast<uint32_t>(cpu));
+                }
+            }
+            CPU_FREE(set);
+            return cpus;
+        }
+        const int err = errno;
+        CPU_FREE(set);
+        if (err != EINVAL || n == max_cpus) {
+            return {};
+        }
+    }
+}
+
+// CPUs per NUMA node that worker threads may be pinned to, limited to the process's allowed CPUs so a process kept off
+// some CPUs (e.g. ones another process busy-polls) keeps its workers off them too. A node with no allowed CPU gets all
+// allowed CPUs; only if none can be determined does a node keep all of its own. A narrow binding (e.g. an MPI rank on
+// one core) therefore puts all of that process's workers on those few CPUs; get_cpu_core_for_physical_device warns.
+std::unordered_map<int, std::vector<uint32_t>> get_cpu_cores_per_numa_node(const std::vector<uint32_t>& allowed) {
     std::unordered_map<int, std::vector<uint32_t>> cpu_cores_per_numa_node = {};
-    if (numa_available() != -1) {
-        for (int cpu = 0; cpu < numa_num_configured_cpus(); ++cpu) {
-            int node = numa_node_of_cpu(cpu);
+    if (numa_available() == -1) {
+        return cpu_cores_per_numa_node;
+    }
+    const std::unordered_set<uint32_t> allowed_set(allowed.begin(), allowed.end());
+    std::unordered_map<int, std::vector<uint32_t>> all_cores = {};
+    for (int cpu = 0; cpu < numa_num_configured_cpus(); ++cpu) {
+        int node = numa_node_of_cpu(cpu);
+        all_cores[node].push_back(cpu);
+        if (allowed_set.contains(cpu)) {
             cpu_cores_per_numa_node[node].push_back(cpu);
+        }
+    }
+    for (auto& [node, cores] : all_cores) {
+        auto& chosen = cpu_cores_per_numa_node[node];
+        if (!chosen.empty()) {
+            continue;
+        }
+        if (allowed.empty()) {
+            chosen = std::move(cores);
+        } else {
+            chosen = allowed;
         }
     }
     return cpu_cores_per_numa_node;
@@ -59,7 +112,22 @@ bool balanced_physical_device_numa(ContextId context_id) {
 }
 
 uint32_t get_cpu_core_for_physical_device(ContextId context_id, uint32_t physical_device_id) {
-    static std::unordered_map<int, std::vector<uint32_t>> cpu_cores_per_numa_node = get_cpu_cores_per_numa_node();
+    // One snapshot of the allowed CPUs, taken on first use, feeds both the NUMA map and the fallback.
+    static const std::vector<uint32_t> allowed_cpus = get_allowed_cpus();
+    static std::unordered_map<int, std::vector<uint32_t>> cpu_cores_per_numa_node =
+        get_cpu_cores_per_numa_node(allowed_cpus);
+    static std::once_flag narrow_warning;
+    const uint32_t num_devices = MetalContext::instance(context_id).get_cluster().number_of_devices();
+    if (!allowed_cpus.empty() && allowed_cpus.size() < num_devices) {
+        std::call_once(narrow_warning, [&] {
+            log_warning(
+                tt::LogMetal,
+                "The process may run on {} CPUs, fewer than the cluster's {} devices: device worker threads may "
+                "share CPUs. Widen the CPU binding (taskset, MPI --bind-to) for full host throughput.",
+                allowed_cpus.size(),
+                num_devices);
+        });
+    }
     static std::unordered_map<int, int> logical_cpu_id_per_numa_node = {};
     // Initialize to an invalid value. Determine the NUMA Node based on the physical device id.
     // If a NUMA Node is not found, use a round robin policy.
@@ -86,6 +154,9 @@ uint32_t get_cpu_core_for_physical_device(ContextId context_id, uint32_t physica
         auto& cpu_cores_on_node = cpu_cores_per_numa_node[numa_node];
         return cpu_cores_on_node[(logical_cpu_id_per_numa_node[numa_node]++) % cpu_cores_on_node.size()];
     }
+    if (!allowed_cpus.empty()) {
+        return allowed_cpus[physical_device_id % allowed_cpus.size()];
+    }
     uint32_t num_threads = std::thread::hardware_concurrency();
     TT_FATAL(num_threads, "Could not detect the number of CPU cores on host.");
     return physical_device_id % num_threads;
@@ -102,10 +173,17 @@ void bind_memory_to_numa_node(void* base, size_t bytes, int numa_node) {
 }
 
 void set_worker_affinity(std::thread& worker, uint32_t cpu_core) {
-    cpu_set_t cpuset;
-    CPU_ZERO(&cpuset);
-    CPU_SET(cpu_core, &cpuset);
-    int rc = pthread_setaffinity_np(worker.native_handle(), sizeof(cpu_set_t), &cpuset);
+    // Sized for cpu_core, so CPUs beyond CPU_SETSIZE work too.
+    cpu_set_t* cpuset = CPU_ALLOC(cpu_core + 1);
+    if (cpuset == nullptr) {
+        log_warning(tt::LogMetal, "Unable to bind worker thread to CPU Core {}: out of memory", cpu_core);
+        return;
+    }
+    const size_t size = CPU_ALLOC_SIZE(cpu_core + 1);
+    CPU_ZERO_S(size, cpuset);
+    CPU_SET_S(cpu_core, size, cpuset);
+    int rc = pthread_setaffinity_np(worker.native_handle(), size, cpuset);
+    CPU_FREE(cpuset);
     if (rc) {
         log_warning(
             tt::LogMetal,
