@@ -502,6 +502,44 @@ def test_map_reasoning(fields, want_kwargs, want_include):
     assert req == dict({"model": "m", "messages": []}, **fields)  # not modified
 
 
+@pytest.mark.parametrize(
+    "fields,want",
+    [
+        ({"temperature": 0}, (1.0, 0.95)),
+        ({"temperature": 0.0, "top_p": 0.5}, (1.0, 0.95)),
+        ({"temperature": 0, "chat_template_kwargs": {"enable_thinking": True}}, (1.0, 0.95)),
+        ({"temperature": 0, "reasoning": {"enabled": True}}, (1.0, 0.95)),
+        # Thinking off, a sampled request, or no temperature (vLLM's generation-config default): unchanged.
+        ({"temperature": 0, "chat_template_kwargs": {"enable_thinking": False}}, None),
+        ({"temperature": 0, "reasoning": {"enabled": False}}, None),
+        ({"temperature": 0, "reasoning": {"effort": "none"}}, None),
+        ({"temperature": 0.7}, None),
+        ({}, None),
+        ({"temperature": False}, None),
+    ],
+)
+def test_map_greedy_thinking(fields, want):
+    req = dict({"model": "m", "messages": [{"role": "user", "content": "hi"}]}, **fields)
+    snapshot = json.loads(json.dumps(req))
+    out = lb.rewrite_chat(req, lb.Shim(thinking_greedy=(1.0, 0.95)))
+    if want is None:
+        assert out.get("temperature") == req.get("temperature") and out.get("top_p") == req.get("top_p")
+    else:
+        assert (out["temperature"], out["top_p"]) == want
+    assert req == snapshot  # not modified
+    # Off by default: the request is forwarded as is (the same object when nothing else applies).
+    assert lb.rewrite_chat(req, lb.Shim()).get("temperature") == req.get("temperature")
+    assert lb.map_greedy_thinking(req, None) is req
+
+
+def test_parse_thinking_greedy():
+    assert lb.Shim.parse_sampling("1.0,0.95") == (1.0, 0.95)
+    assert lb.Shim.parse_sampling("") is None and lb.Shim.parse_sampling(None) is None
+    for bad in ("0,0.95", "1.0,0", "1.0,1.5", "1.0"):
+        with pytest.raises(ValueError):
+            lb.Shim.parse_sampling(bad)
+
+
 def test_map_error():
     vllm_422 = json.dumps(
         {
@@ -914,7 +952,13 @@ def test_fetch_connects_only_to_the_checked_address(monkeypatch):
 
 
 def test_shim_from_env(monkeypatch):
-    for name in ("TT_PROXY_REQUEST_SHIM", "TT_PROXY_FETCH_MEDIA", "TT_PROXY_MAX_REQUEST_MB", "TT_PROXY_FETCH_MAX_MB"):
+    for name in (
+        "TT_PROXY_REQUEST_SHIM",
+        "TT_PROXY_FETCH_MEDIA",
+        "TT_PROXY_MAX_REQUEST_MB",
+        "TT_PROXY_FETCH_MAX_MB",
+        "TT_PROXY_THINKING_GREEDY",
+    ):
         monkeypatch.delenv(name, raising=False)
     assert lb.Shim.from_env() == lb.Shim()
     monkeypatch.setenv("TT_PROXY_FETCH_MEDIA", "1")
@@ -925,6 +969,9 @@ def test_shim_from_env(monkeypatch):
     assert shim.fetch_timeout_s == 5 and shim.enabled
     monkeypatch.setenv("TT_PROXY_REQUEST_SHIM", "0")
     assert not lb.Shim.from_env().enabled
+    assert lb.Shim.from_env().thinking_greedy is None
+    monkeypatch.setenv("TT_PROXY_THINKING_GREEDY", "1.0,0.95")
+    assert lb.Shim.from_env().thinking_greedy == (1.0, 0.95)
 
 
 def test_proxy_fetches_media_when_enabled():

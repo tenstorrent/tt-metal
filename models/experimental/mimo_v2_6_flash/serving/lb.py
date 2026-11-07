@@ -28,6 +28,11 @@ Multimodal requests in OpenRouter's forms (``Shim``; ``--no-request-shim`` turns
   pcm24 becomes WAV, the legacy ``input_video`` part becomes ``video_url``, OpenRouter's ``reasoning`` object becomes
   ``chat_template_kwargs.enable_thinking`` / ``include_reasoning``, and a FLAC without its length gets it. A request
   needing none of that is forwarded byte for byte;
+- with ``--thinking-greedy T,P`` (env ``TT_PROXY_THINKING_GREEDY``, off by default) a chat request asking for
+  temperature 0 with thinking on is sampled at temperature T, top-p P instead (``map_greedy_thinking``; the model card's
+  1.0,0.95), as MiMo's GPU providers on OpenRouter serve it: in thinking mode GMICloud and Xiaomi sample whatever
+  temperature a request asks for (with thinking off both decode greedily), while MiMo's greedy reasoning loops until
+  the token limit on hard long-video questions;
 - vLLM's 422 (a media URL that could not be fetched) is answered as 400 with vLLM's message (``map_error``): OpenRouter
   counts 400 as the caller's error, 422 in neither list;
 - a body above ``--max-request-mb`` is refused with 413;
@@ -296,10 +301,33 @@ def map_reasoning(req):
     return out
 
 
+def map_greedy_thinking(req, sampling):
+    """``req`` with ``sampling`` = (temperature, top_p) in place of a requested temperature 0 when thinking is on (MiMo's
+    chat template thinks unless ``chat_template_kwargs.enable_thinking`` is false; run after ``map_reasoning``), or
+    ``req`` itself. ``sampling`` None (the default) never changes a request.
+
+    Why: MiMo's greedy reasoning on a question it cannot settle (VGI-Bench's false-premise questions over a 130K-token
+    video) re-checks the same evidence until the token limit (on one row engine, 2 to 4 of the 5 smoke questions with
+    BFP4 experts, also with GPTQ experts and BFP8 in the last layer), and so does it at temperature 0.05 or 0.2; the
+    model card asks for 1.0 / 0.95. MiMo's GPU providers on OpenRouter already sample in thinking mode whatever the
+    request's temperature (GMICloud: four different answers to one temperature-0 request with thinking on, one answer
+    with thinking off), so OpenRouter's temperature-0 runs of MiMo are sampled runs."""
+    if sampling is None:
+        return req
+    temperature = req.get("temperature")
+    if isinstance(temperature, bool) or not isinstance(temperature, (int, float)) or temperature != 0:
+        return req
+    kwargs = req.get("chat_template_kwargs")
+    if isinstance(kwargs, dict) and kwargs.get("enable_thinking") is False:
+        return req
+    return dict(req, temperature=sampling[0], top_p=sampling[1])
+
+
 def rewrite_chat(req, shim):
-    """A chat-completions request rewritten for vLLM 0.30 (``_rewrite_part`` on every content part, ``map_reasoning``),
-    or ``req`` itself when nothing applies. Raises ShimError for a request that cannot be rewritten."""
-    out = map_reasoning(req)
+    """A chat-completions request rewritten for vLLM 0.30 (``_rewrite_part`` on every content part, ``map_reasoning``,
+    ``map_greedy_thinking``), or ``req`` itself when nothing applies. Raises ShimError for a request that cannot be
+    rewritten."""
+    out = map_greedy_thinking(map_reasoning(req), shim.thinking_greedy)
     messages = out.get("messages")
     if isinstance(messages, list):
         new_messages = []
@@ -560,11 +588,24 @@ class Shim:
     # Also fetch from non-public addresses (loopback, private, link-local...): only for a deployment that is itself
     # private and fetches from an internal store. Never on a public endpoint.
     fetch_allow_private: bool = False
+    # (temperature, top_p) for chat requests asking for temperature 0 with thinking on (map_greedy_thinking); None: off.
+    thinking_greedy: tuple = None
+
+    @staticmethod
+    def parse_sampling(value):
+        """"T,P" (e.g. "1.0,0.95") -> (T, P); "" or None -> None."""
+        if value in (None, ""):
+            return None
+        t, p = (float(v) for v in str(value).split(","))
+        if not (t > 0 and 0 < p <= 1):
+            raise ValueError(f"thinking-greedy sampling {value!r}: want temperature > 0, 0 < top_p <= 1")
+        return (t, p)
 
     @classmethod
     def from_env(cls, **overrides):
         """Defaults from the TT_PROXY_* env vars (as tt-inference-server sets them per model spec), then overrides."""
         env = dict(
+            thinking_greedy=cls.parse_sampling(os.environ.get("TT_PROXY_THINKING_GREEDY")),
             enabled=_env_flag("TT_PROXY_REQUEST_SHIM", True),
             pcm_sample_rate=int(os.environ.get("TT_PROXY_PCM_SAMPLE_RATE") or 24000),
             max_request_bytes=int(float(os.environ.get("TT_PROXY_MAX_REQUEST_MB") or 256) * 2**20),
@@ -895,6 +936,10 @@ def main():
     ap.add_argument("--fetch-media", action="store_true", help="download http(s) media in the proxy (400 on failure)")
     ap.add_argument("--fetch-timeout-s", type=float, help="per-URL download limit (default 30)")
     ap.add_argument("--fetch-max-mb", type=float, help="per-URL size limit (default 100)")
+    ap.add_argument(
+        "--thinking-greedy",
+        help='"T,P": sample temperature-0 chat requests with thinking on at temperature T, top-p P (e.g. "1.0,0.95")',
+    )
     a = ap.parse_args()
     backends = [b if b.startswith("http") else f"http://{b}" for b in a.backends.split(",")]
     router = Router(backends, a.chunk_chars, a.min_match_chars, a.slack, a.index_chunks, a.down_s)
@@ -906,6 +951,7 @@ def main():
         fetch_media=True if a.fetch_media else None,
         fetch_timeout_s=a.fetch_timeout_s,
         fetch_max_bytes=mib(a.fetch_max_mb),
+        thinking_greedy=Shim.parse_sampling(a.thinking_greedy),
     )
     web.run_app(make_app(router, shim=shim), host=a.host, port=a.port, access_log=None)
 
