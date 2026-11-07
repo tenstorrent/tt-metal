@@ -65,6 +65,7 @@ it is classified differently on different systems.
 | Qwen3-32B | WH Galaxy, BH Galaxy |
 | Qwen3.6-27B | BH QuietBox 2 |
 | Qwen3.6-35B-A3B | BH QuietBox 2 |
+| Qwen3.8-27B | BH QuietBox 2, BH Galaxy |
 | GPT-OSS 120B | WH LLMBox, WH Galaxy, BH QuietBox 2, BH Galaxy |
 | MiniMax-M3 | BH P150, BH Galaxy |
 | Gemma-4-12B | BH QuietBox 2 |
@@ -235,7 +236,7 @@ Models covered (system · classification tier):
 | Llama3.1-8B | WH LLMBox, BH QuietBox 2, BH LoudBox | 2 |
 | Llama3.3-70B | WH Galaxy | 1 |
 | Qwen3-32B | WH Galaxy | 1 |
-| Qwen3.6-27B | BH QuietBox 2 | 1 |
+| Qwen3.8-27B | BH QuietBox 2 | 1 |
 | Qwen2.5-VL-72B | WH LLMBox | 2 |
 | Qwen2.5-VL-7B | WH LLMBox | 3 |
 | Qwen3-VL-32B | WH LLMBox | 2 |

@@ -82,6 +82,23 @@ run to the eight devices that form the mesh:
 TT_VISIBLE_DEVICES=1,2,3,4,5,6,7,8 pytest models/demos/blackhole/qwen36/demo/text_demo.py -v -s -k "traced"
 ```
 
+**Galaxy (Glx) — 8-way TP x 4-way DP:**
+
+`test_demo_text_dp` opens the whole 32-chip Galaxy as a (4, 8) mesh
+(`FABRIC_1D_RING`), splits it into four (1, 8) TP=8 submeshes, and runs one model
+replica per submesh (one user each); decode trace replays are enqueued across the
+groups in lockstep.
+
+```bash
+export MESH_DEVICE=BHGLX
+pytest models/demos/blackhole/qwen36/demo/text_demo.py -v -s -k "dp4_traced_128"      # same prompt on all 4 groups (outputs must match)
+pytest models/demos/blackhole/qwen36/demo/text_demo.py -v -s -k "dp4_distinct_128"    # a different prompt per group
+pytest models/demos/blackhole/qwen36/demo/text_demo.py -v -s -k "tp8_glx_traced_128"  # a single TP=8 replica on one (1, 8) row
+```
+
+Measured on a Blackhole Galaxy (Qwen3.8-27B, 128-token prompt): 41.7 tok/s/user at
+TP=8, 166.6 tok/s aggregate at TP=8 x DP=4, TTFT ~0.06 s.
+
 **Other checkpoints:**
 
 ```bash
@@ -113,9 +130,33 @@ Face hub id (resolved via `snapshot_download`) or a local checkpoint directory.
 Optional flags:
 
 ```bash
-# Run SDPA in BF8 (faster; slightly lower precision).
+# Also cast the prefill SDPA Q to BF8 (the KV cache is BF8 by default; slightly lower precision).
 export QWEN_SDPA_BF8=1
 ```
+
+Default decode settings (TP paths, 27B), each with an env var that reverts it:
+
+| Default | Revert / alternatives |
+|---|---|
+| GDN decode through `ttnn.experimental.kda.gdn_decode_step` (conv + gating + recurrence + gated norm in one op) for every `max_batch_size` from 1 to 32 | `QWEN36_GDN_DECODE_STEP_OP=0` (single-user fused kernels at B=1, the older batched paths above) |
+| exact-fp32 recurrent-state update in that op | `QWEN36_GDN_STEP_FP32_STATE=0` (FPU path) |
+| dense-MLP gate/up weights in BFP8 | `QWEN36_MLP_GATEUP_BFP8=0` (BFP4) |
+| dense-MLP matmuls at HiFi2 | `QWEN36_MLP_FIDELITY=lofi\|hifi3\|hifi4` |
+| dense-MLP decode gate/up weights DRAM width-sharded (3 readers per bank; TP=4 only, measured on QB2: decode +3.5%, +~0.18 GB DRAM) | `QWEN36_MLP_DECODE_DSHARD=0` (interleaved 1D-mcast gate/up) |
+| 8 KB fabric packet payload on multi-device meshes (demo and vLLM) | `QWEN36_FABRIC_PAYLOAD_BYTES=0` (fabric default, 4352 B) or another size |
+| BF8 paged KV cache (demo and vLLM; prefill Q stays BF16) | `QWEN36_KV_BF8=0` (BF16 cache) |
+
+With all of the defaults above, Qwen3.8-27B served through vLLM on a P150x8 ring (`max_num_seqs` 32, thinking on,
+temperature 1.0 / top_p 0.95 / top_k 20) passes the task evals (reference score
+inside the question-clustered 95% CI):
+
+| Eval | Score [95% CI] | Reference |
+|---|---|---|
+| AIME 2026, 4 repeats, 65k max tokens | 94.17 [86.67, 99.17] | 98.13 |
+| GPQA-Diamond, 2 repeats, 65k max tokens | 89.14 [85.10, 92.93] | 89.2 |
+| MMLU-Pro, 500-question subset | 85.20 [82.00, 88.20] | 85.54 |
+
+`accuracy_512` passes as well. BFP4 MLP-down + attention on top of these defaults failed AIME.
 
 
 ## End-to-end demo test (`demo/text_demo.py`)
@@ -196,6 +237,90 @@ When a checkpoint changes, regenerate its reference on CPU (no device needed):
 python models/tt_transformers/tests/generate_reference_hf.py --model Qwen/Qwen3.6-27B \
     --output_file models/tt_transformers/tests/reference_outputs/Qwen3.6-27B.refpt
 ```
+
+## Automatic prefix caching (vLLM serving, batched TP path)
+
+vLLM's APC reuses the paged attention KV blocks; the 48 Gated-DeltaNet layers carry a non-paged recurrent state, so the
+model keeps its own LRU of GDN-state snapshots (`tt/prefix_cache.py`, `GdnPrefixStateCache`: `rec_state` + `conv_carry`
+of every GDN layer, device-to-device copies of the B=1 prefill scratch). Serve with `--enable-prefix-caching
+--block-size 64`. On a hit vLLM passes the full prompt, the full page-table row and `start_pos` (cached tokens, a
+multiple of 64); `prefill_paged_slots` resumes at the largest snapshot position `s <= floor(start_pos/128)*128` whose
+token digest matches, restores the GDN state, and prefills only `[s, L)` at absolute positions (chunk trace with an
+absolute chunk start, then the short bucket trace with `chunk_start`). Without a matching snapshot the prompt is
+recomputed from 0 (correct, slower).
+
+Snapshot points (all multiples of 128, because the SDPA chunk offset uses q_chunk=128, and always `<= L-3` so every
+segment keeps >= 3 tokens for the conv new-state selection): the vLLM-hit position when we have no snapshot there
+("learn"), the end of long prompts (`((L-3)//128)*128`, prompts >= `QWEN36_PREFIX_SNAPSHOT_MIN_LEN`, which splits the prefill
+there), for shorter prompts with no other save point the last full 2048-token chunk boundary `p = s + num_full*2048`
+when `p > s` and `p <= L-3` (saved between two chunk-trace replays, no split, about 3 ms), and every
+`QWEN36_PREFIX_SNAPSHOT_STRIDE` tokens after the resume point. A prompt longer than 2048 tokens whose last chunk would leave a 1-2 token remainder gets an extra split 128 tokens before the last full-chunk boundary so the final segment runs on the short trace (not eagerly). With the cache off, or no hit and no snapshot to take,
+the prefill is the unchanged path. Only the batched slot path (`max_num_seqs > 1`, text) uses snapshots; the B=1 TP and
+single-device paths ignore `start_pos` and recompute from 0.
+
+| Env var | Default | Meaning |
+|---|---|---|
+| `QWEN36_PREFIX_CACHE` | `1` | advertise `supports_prefix_caching` and build the snapshot cache (`0` disables) |
+| `QWEN36_PREFIX_CACHE_SLOTS` | `16`, or `32` when `QWEN36_BATCHED_PREFILL=0` | snapshot slots (the 16 default with batched prefill leaves ~0.6 GB/chip for its persistent state; an explicit value always wins), allocated before trace capture: about 19 MB of DRAM per device per slot at TP=8, about 38 MB at TP=4. 32 fits next to the default BFP8 gate/up weights and the 1.05M-token KV pool on P150x4; 64 runs out of DRAM there |
+| `QWEN36_BATCHED_PREFILL` | `1` | `1` groups short fresh prompts (text, start 0, bucket in `_BUCKETS`) of one `prefill_paged_slots` call into a single forward; allocates persistent state at vLLM warmup (if that allocation fails the server logs a warning and falls back to per-user prefill; `0` disables). vLLM on QB2, 32 concurrent 128-token prompts: TTFT 3.0 s -> 1.3 s, output tok/s 537 -> 691, outputs identical |
+| `QWEN36_BATCHED_PREFILL_BG` | `4,8` | group sizes (rows per grouped forward; smaller remainders pad with dummy rows) |
+| `QWEN36_BATCHED_PREFILL_BUCKETS` | `128,256` | prompt-length buckets served by grouped prefill |
+| `QWEN36_BATCHED_PREFILL_TRACE` | `1` | capture one trace per (bucket, Bg) of the grouped body at warmup (`0` keeps it eager) |
+| `QWEN36_PREFIX_SNAPSHOT_MIN_LEN` | `8192` | minimum prompt length for the end-of-prompt snapshot (a prefill split); shorter prompts save at the last full-chunk boundary instead |
+| `QWEN36_PREFIX_SNAPSHOT_STRIDE` | `8192` | snapshot every N tokens (chunk boundaries, relative to the resume point) |
+| `QWEN36_PREFIX_CACHE_DEBUG` | `0` | `1` logs one line per prefix-cached prefill (hit position, saves, stats) |
+
+## Chunked prefill (vLLM serving, batched TP path)
+
+Opt-in: with `QWEN36_CHUNKED_PREFILL=1` the model declares `supports_chunked_prefill` (serve it with
+`--no-enable-prefix-caching`, see below). With `--max-num-batched-tokens` below `max_model_len`, vLLM prefills a
+longer prompt over several engine steps, and the plugin runs decode steps for the other requests in between (its
+decode interleave: at most `decode_interleave_prefill_steps` (2) prefill steps, then `decode_interleave_decode_steps` (1)
+decode step, both in `additional_config['tt']`). Without it, one prefill step holds every waiting prompt that fits the
+budget, which tt-inference-server sets to `max_context`, and running requests get no tokens until the step ends.
+
+Each chunk's row holds the prompt from position 0, `prompt_lens` is the chunk end and `start_pos` the tokens already
+prefilled; non-final chunk ends are 128-aligned (the plugin's `prefill_chunk_alignment`). The model is not told which
+chunk is the last. A row that may be non-final (its end is 128-aligned and the step used its whole token budget, or
+`long_prefill_token_threshold` cut it) snapshots its GDN state at its end into a small continuation store
+(`model._chunk_state_cache`, the `GdnPrefixStateCache` class with its own slots, independent of APC), and the next chunk
+resumes there through the APC planner. A 1-2 token final chunk resumes from the previous chunk's snapshot; a missed
+snapshot is recomputed from an earlier one or from 0 (correct, slower). Multimodal requests recompute from 0 on every
+chunk (vLLM never splits an image across chunks). The B=1 TP path recomputes from 0 on every chunk: keep
+`--max-num-batched-tokens >= max_model_len` at `max_num_seqs 1`. The store is allocated (before trace capture) only when
+vLLM can split a prompt: chunked prefill on and the budget below `max_model_len`. With chunked prefill on, vLLM refuses a
+budget below the largest image/video item (16384 tokens at the default processor settings: "Chunked MM input disabled
+but max_tokens_per_mm_item ... is larger than max_num_batched_tokens"); go lower only for text-only serving
+(`--limit-mm-per-prompt '{"image": 0, "video": 0}'`).
+
+Chunked prefill and vLLM prefix caching do not start together on the TT plugin today (vllm-tt-plugin d84049e and main
+6afed54): with chunked prefill on, the plugin sets `disable_chunked_mm_input=True`, and vLLM's hybrid-model prefix
+caching (`mamba_cache_mode='align'`) rejects that in `validate_block_size` ("Chunked MM input is required because we need
+the flexibility to schedule a multiple of block_size tokens ..."). Serve chunked prefill with `--no-enable-prefix-caching`
+until the plugin relaxes that for TT-owned recurrent state; the continuation store does not need APC.
+
+| Env var | Default | Meaning |
+|---|---|---|
+| `QWEN36_CHUNKED_PREFILL` | `0` | `1` advertises `supports_chunked_prefill` and builds the continuation store (needs `--no-enable-prefix-caching`) |
+| `QWEN36_CHUNK_STATE_SLOTS` | `4` | continuation snapshot slots (about 19 MB of DRAM per device per slot at TP=8) |
+
+## Multimodal serving: vision buckets and `max_pixels` (vLLM)
+
+The vision tower runs on padded patch buckets (ceil-to-2048 of the patch count + 1 step) that must be compiled
+**before** prefill/decode traces are captured; a program first dispatched after capture can be clobbered by a trace
+replay and hangs the device (seen: `tt_all_reduce`). `warmup_vision` therefore warms `QWEN36_VISION_WARMUP_GRIDS`
+(default `1x32x32;1x48x64;1x64x64;1x80x80`, buckets up to 8192 patches) in the eager warmup phase.
+
+- **Always serve with `--mm-processor-kwargs '{"max_pixels": 1048576}'`** (or your limit). `initialize_vllm_model` reads
+  it from the vLLM config (`model_config.mm_processor_kwargs`) and `warmup_vision` also warms every bucket up to the
+  one covering `max_pixels / patch_size^2` patches (1 MP -> 4096 patches -> bucket 6144, already in the defaults; e.g.
+  3 MP adds buckets 10240 and 12288), so every input vLLM can accept is pre-compiled. Video is bounded by the same
+  figure (conservatively). Each extra bucket adds a few seconds to warmup.
+- Any item whose bucket was not warmed (above the largest, or in a gap of a `QWEN36_VISION_WARMUP_GRIDS` override) is
+  **rejected** with a `ValueError` (patch count, warmed buckets, advice) instead of being run. This still fails that
+  request's step (the engine reports the error) but avoids the device hang. If `max_pixels` is unset (vLLM default
+  ~16 MP, ~65k patches) a WARNING is logged at warmup.
+- Test: `tests/test_vllm_batched_mm.py::test_vision_guard`.
 
 ## Tests
 
