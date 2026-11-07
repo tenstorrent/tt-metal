@@ -26,7 +26,8 @@ void bind_experimental_sparse_kv_push_operations(nb::module_& mod) {
             "can be pushed before this chunk's KV is written.")
         .value("REST", SparseKvPushPart::kRest, "Every needed row after the prefix.");
 
-    // Cores the push needs per fabric link, for callers laying out its core grid beside other work.
+    // Cores the push needs per fabric link on a chip with fabric neighbours in all four directions, the most it takes,
+    // for callers laying out its core grid beside other work.
     mod.attr("SPARSE_KV_PUSH_CORES_PER_LINK") = cores_needed(1);
     // Test-only: the compact layout's (pages_per_packet, banks), so tests lay out reference buffers as the ops do.
     mod.def(
@@ -42,8 +43,8 @@ void bind_experimental_sparse_kv_push_operations(nb::module_& mod) {
         mod,
         R"doc(
             Whether ``sparse_push_plan`` and ``sparse_kv_push`` can serve a cache of ``max_rows`` rows in blocks of
-            ``stripe_chunk`` rows on ``mesh_device``: a FABRIC_2D_TORUS_XY fabric, at least 3 chips on each mesh axis
-            and at most 32 in all, and a cache geometry the plan table and the plan's reduce fit. When this returns
+            ``stripe_chunk`` rows on ``mesh_device``: a 2D fabric (FABRIC_2D or a torus on either or both axes) on a 2D
+            mesh of 2 to 32 chips, and a cache geometry the plan table and the plan's reduce fit. When this returns
             False the ops would raise, so callers can gather the whole prefix instead.
 
             Args:
@@ -143,8 +144,9 @@ void bind_experimental_sparse_kv_push_operations(nb::module_& mod) {
         R"doc(
             Each owner chip pushes only the cache rows a requester's top-k references into that requester's
             compact ``output_tensor``, at the slots ``sparse_push_plan`` rewrote its indices to.
-            Needs a FABRIC_2D_TORUS_XY fabric on a 2D mesh of at most 32 chips, with each dimension at least 3
-            (every chip has four distinct torus neighbours).
+            Needs a 2D fabric (FABRIC_2D, or a torus on either or both axes) on a 2D mesh of 2 to 32 chips. Each
+            chip sends on the fabric links it has: both ways along an axis the fabric wraps, towards the existing
+            neighbours along one it does not.
 
             Args:
                 input_tensor: The KVPE cache, [slots, 1, rows per chip, width] ROW_MAJOR in DRAM (interleaved or
@@ -180,7 +182,8 @@ void bind_experimental_sparse_kv_push_operations(nb::module_& mod) {
                 batch_slot_num_layers: Cache slots per user; must divide the cache's slots.
                 batch_slot_layer_idx: The pushed layer's slot within its user, below ``batch_slot_num_layers``.
                 core_grid: Cores for the push (default: the first sub-device's cores); it needs
-                    ``num_links * 4 * 3`` of them: two senders and one fabric mux per link and torus direction.
+                    ``num_links * directions * 3`` of them: two senders and one fabric mux per link and direction the chip
+                    has a fabric neighbour in (at most 4, so at most ``num_links * SPARSE_KV_PUSH_CORES_PER_LINK``).
 
             Returns:
                 ttnn.Tensor: ``output_tensor``, holding the pushed rows. Each chip's rows differ, so it is labelled

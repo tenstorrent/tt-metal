@@ -5,10 +5,14 @@
 #include "sparse_kv_push_common.hpp"
 
 #include <algorithm>
+#include <array>
+#include <utility>
 
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/math.hpp>
 #include "ttnn/operation.hpp"
+#include "ttnn/operations/ccl/ccl_common.hpp"
+#include "ttnn/operations/ccl/common/host/moe_utils.hpp"
 #include "kernels/sparse_push_constants.hpp"
 
 namespace ttnn::operations::experimental::sparse_kv_push {
@@ -35,6 +39,68 @@ PacketShape packet_shape(tt::tt_metal::distributed::MeshDevice* mesh_device, uin
         page_bytes);
     return PacketShape{
         .pages_per_packet = max_payload / page_bytes, .banks = static_cast<uint32_t>(mesh_device->num_dram_channels())};
+}
+
+bool fabric_supported(tt::tt_metal::distributed::MeshDevice* mesh_device) {
+    const auto& mesh_shape = mesh_device->shape();
+    // The configs that say which axes wrap (fabric_directions reads it from them); not MGD_DEFAULT, which leaves it to
+    // the mesh graph descriptor.
+    using tt::tt_fabric::FabricConfig;
+    const auto config = tt::tt_fabric::GetFabricConfig();
+    const bool fabric_2d = config == FabricConfig::FABRIC_2D || config == FabricConfig::FABRIC_2D_TORUS_X ||
+                           config == FabricConfig::FABRIC_2D_TORUS_Y || config == FabricConfig::FABRIC_2D_TORUS_XY;
+    return fabric_2d && mesh_shape.dims() == 2 && mesh_shape.mesh_size() >= 2;
+}
+
+std::vector<FabricDirection> fabric_directions(
+    const Tensor& tensor, const tt::tt_metal::distributed::MeshCoordinate& coord) {
+    // get_neighbors' direction order: E, W along axis 1, then N, S along axis 0.
+    enum : uint32_t { kEast = 0, kWest = 1, kNorth = 2, kSouth = 3 };
+    constexpr std::array<std::pair<uint32_t, std::array<uint32_t, 2>>, 2> kAxes = {
+        {{1, {kEast, kWest}}, {0, {kNorth, kSouth}}}};
+    auto* mesh_device = tensor.device();
+    const auto& mesh_view = mesh_device->get_view();
+    const auto fabric_config = tt::tt_fabric::GetFabricConfig();
+    const auto my_node = mesh_device->get_fabric_node_id(coord);
+    std::vector<FabricDirection> directions;
+    for (const auto& [axis, axis_directions] : kAxes) {
+        if (mesh_view.shape()[axis] < 2) {
+            continue;
+        }
+        // Ring when the fabric wraps this axis and the closing link is wired (never for 2 chips), else a line.
+        const auto topology = ttnn::ccl::get_axis_topology(tensor, fabric_config, axis);
+        const auto [neighbors, present] =
+            ttnn::operations::ccl::common::get_neighbors(mesh_view, coord, topology, axis);
+        auto neighbor = neighbors.begin();
+        for (const uint32_t direction : axis_directions) {
+            if (!present[direction]) {
+                continue;
+            }
+            // The kernels pick a channel by the fabric's next hop, so name the direction as the fabric does.
+            const auto eth_direction =
+                tt::tt_fabric::get_eth_forwarding_direction(my_node, mesh_device->get_fabric_node_id(*neighbor));
+            TT_FATAL(
+                eth_direction.has_value(),
+                "the sparse KV push found no fabric route from chip {} to its neighbour {}",
+                coord,
+                *neighbor);
+            directions.push_back(FabricDirection{
+                .eth_direction = static_cast<uint32_t>(*eth_direction),
+                .neighbor = *neighbor,
+                .links = tt::tt_fabric::get_forwarding_link_indices(
+                    *mesh_device, my_node, mesh_device->get_fabric_node_id(*neighbor))});
+            ++neighbor;
+        }
+    }
+    return directions;
+}
+
+uint32_t max_fabric_directions(const Tensor& tensor) {
+    uint32_t most = 0;
+    for (const auto& coord : tt::tt_metal::distributed::MeshCoordinateRange(tensor.device()->shape())) {
+        most = std::max(most, static_cast<uint32_t>(fabric_directions(tensor, coord).size()));
+    }
+    return most;
 }
 
 uint32_t plan_cores(tt::tt_metal::distributed::MeshDevice* mesh_device) {
