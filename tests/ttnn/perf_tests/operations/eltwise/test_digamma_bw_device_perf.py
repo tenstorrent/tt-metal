@@ -2,14 +2,10 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""
-Device kernel time of ttnn.digamma_bw's fused program against the composite it replaces.
+"""Device kernel time of ttnn.digamma_bw's fused program against the composite it replaces, on the same BF16
+operands: with the composite's output placement the call runs the fused program."""
 
-Both run in one profiled process on the same BF16 operands, a gradient in L1 beside an input in
-DRAM: without an output placement that call keeps the composite, and with the composite's output
-placement it runs the fused program, so both write the same memory. A call's time is the device
-kernel duration summed over the programs it launches, the median of REPEATS calls.
-"""
+import os
 
 import pandas as pd
 import pytest
@@ -26,6 +22,11 @@ FUSED_BOARDS = (
     "wormhole_b0",
 )
 PATH = "tests/ttnn/perf_tests/operations/eltwise/test_digamma_bw_device_perf.py"
+# The profiled calls run only inside the device profiler, which the device-perf test launches: run on their
+# own, they would hold the device that the profiler's run of them then waits for.
+IN_PROFILER = pytest.mark.skipif(
+    os.environ.get("TT_METAL_DEVICE_PROFILER") != "1", reason="runs inside the device profiler only"
+)
 
 
 def _calls(tt_g, tt_x):
@@ -52,6 +53,7 @@ def _runs_fused(call):
     return "UnaryBackwardDeviceOperation" in ttnn.graph.extract_calltrace(graph)
 
 
+@IN_PROFILER
 def test_digamma_bw_profiled_calls(device):
     """The calls the device-perf test profiles, between signposts that name each one."""
     from tracy import signpost
@@ -180,6 +182,7 @@ LAYOUTS = (
 )
 
 
+@IN_PROFILER
 @pytest.mark.parametrize("name", LAYOUTS)
 def test_digamma_bw_layout_profiled_calls(name, device):
     """A layout's call, both operands in it, between signposts that name it. This build runs every layout on

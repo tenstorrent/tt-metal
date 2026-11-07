@@ -21,10 +21,6 @@ sfpi_inline sfpi::vFloat _digamma_bw_reciprocal_(const sfpi::vFloat a) {
     return y;
 }
 
-// digamma_bw: grad * digamma'(x). DEST tile idst holds x and idst + 1 holds grad; the result replaces x.
-// digamma' is trigamma: the reflection branch for x < 0 and the asymptotic series otherwise. At the
-// poles (non-positive integers) the reciprocal of the zero fraction is inf, so a nonzero grad gives inf
-// and grad = 0 gives NaN; a zero grad flushes the factor to 0 only for tiny nonzero |x|.
 template <int ITERATIONS = 32>
 inline void calculate_digamma_bw_bf16() {
     using namespace sfpi;
@@ -48,21 +44,21 @@ inline void calculate_digamma_bw_bf16() {
         v8 = v8 * v9 + 6.496425628662109f;
         v8 = v8 * v9 + 3.2898592948913574f;
         vFloat v2 = v3 * v3 + v8;
-        vFloat v18 = v5 * vFloat(0.25f) + vFloat(0.25f);
-        vFloat v17 = _digamma_bw_reciprocal_(v18);
-        vFloat v16 = v17 * vFloat(0.25f);
-        vFloat v15 = v16 * v16;
-        vFloat v22 = -0.00333130219951272f;
-        v22 = v22 * v16 + 0.020276019349694252f;
-        v22 = v22 * v16 + -0.03929563984274864f;
-        v22 = v22 * v16 + 0.000635107106063515f;
-        v22 = v22 * v16 + 0.16665546596050262f;
-        vFloat v21 = v16 * v22 + vFloat(0.5f);
-        vFloat v14 = v15 * v21 + v16;
-        vFloat v1 = v2 - v14;
-        vFloat v24 = _digamma_bw_reciprocal_(v5);
-        vFloat v23 = v24 * v24 + v14;
-        vFloat factor = v23;
+        vFloat v14 = v5 * vFloat(0.25f) + vFloat(0.25f);
+        vFloat v13 = _digamma_bw_reciprocal_(v14);
+        vFloat v12 = v13 * vFloat(0.25f);
+        vFloat v11 = v12 * v12;
+        vFloat v16 = -0.00333130219951272f;
+        v16 = v16 * v12 + 0.020276019349694252f;
+        v16 = v16 * v12 + -0.03929563984274864f;
+        v16 = v16 * v12 + 0.000635107106063515f;
+        v16 = v16 * v12 + 0.16665546596050262f;
+        vFloat v15 = v12 * v16 + vFloat(0.5f);
+        vFloat v10 = v11 * v15 + v12;
+        vFloat v1 = v2 - v10;
+        vFloat v18 = _digamma_bw_reciprocal_(v5);
+        vFloat v17 = v18 * v18 + v10;
+        vFloat factor = v17;
         vFloat x = x6;
         v_if(x < 0.0f) { factor = v1; }
         v_endif;
@@ -72,8 +68,7 @@ inline void calculate_digamma_bw_bf16() {
             factor = 0.0f;
         }
         v_endif;
-        // DEST holds x as 16 bits (BF16, so !DST_ACCUM_MODE): exponent in bits 7:0, mantissa in 14:8, sign in 15.
-        // Masks 0x00ff and 0x7f00 select them there, not the BF16 encoding's 0x7f80 and 0x007f.
+        // DEST holds x as BF16 bits: exponent 7:0, mantissa 14:8, sign 15 (not the encoding's 0x7f80, 0x007f).
         vUInt raw = dst_reg[d].mode<::sfpi::DataLayout::U16>();
         v_if((raw & 0x00ff) == 0x00ff) {
             factor = 0.0f;
