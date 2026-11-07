@@ -264,7 +264,7 @@ FORCE_INLINE void read_sticks_activation_reuse(
             start_ind = start_ind + second_row_width;
 
             if constexpr (!output_image_width_full_tile) {
-                if (third_row_width > 0) {
+                if (third_row_width > 0 && num_segments > 1) {
                     num_segments--;
                     load_next_segment<window_inner, single_core_processes_multiple_batches>(
                         packed_reader_indices_ptr, reader_idx, start_ind, end_ind, new_batch_image_rows_to_fill);
