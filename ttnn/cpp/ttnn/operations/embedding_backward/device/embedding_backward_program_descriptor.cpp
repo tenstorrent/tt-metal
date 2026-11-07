@@ -52,7 +52,7 @@ std::optional<ProgramDescriptor> create_onehot_descriptor(
     const auto& index_tensor = tensor_args.index_tensor;
     const auto& grad_tensor = tensor_args.grad_tensor;
     if (!embedding_backward_uses_onehot(index_tensor, grad_tensor, operation_attributes.num_embeddings) ||
-        (tensor_return_value.dtype() != DataType::BFLOAT16 && tensor_return_value.dtype() != DataType::FLOAT32)) {
+        tensor_return_value.dtype() != DataType::BFLOAT16) {
         return std::nullopt;
     }
     const uint32_t num_index_pages = index_tensor.padded_shape()[0];
