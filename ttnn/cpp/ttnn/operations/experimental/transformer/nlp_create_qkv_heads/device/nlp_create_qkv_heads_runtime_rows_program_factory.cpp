@@ -108,10 +108,10 @@ NlpCreateHeadsDeviceOperation::InterleavedRuntimeRows::create_program_artifacts(
     const bool read_from_input_tensor_kv = input_tensor_kv.has_value();
 
     uint32_t single_tile_size = tt::tile_size(data_format);
-    TT_ASSERT(input_tensor.buffer()->size() % single_tile_size == 0);
+    TT_ASSERT(input_tensor.mesh_buffer().device_local_size() % single_tile_size == 0);
 
     if (read_from_input_tensor_kv) {
-        TT_ASSERT(input_tensor_kv->buffer()->size() % single_tile_size == 0);
+        TT_ASSERT(input_tensor_kv->mesh_buffer().device_local_size() % single_tile_size == 0);
     }
 
     // Tile counts
