@@ -13,6 +13,7 @@ from models.tt_cnn.tt.builder import TtConv2d
 from models.experimental.ops.quasar.panoptic_deeplab.reference.pytorch_semseg import ShapeSpec
 from models.common.lightweightmodule import LightweightModule
 from models.experimental.ops.quasar.panoptic_deeplab.tt.common import reshape_flattened_conv_output
+from models.experimental.ops.quasar.panoptic_deeplab.tt.arch import block_float_dtype, uses_20_core_path
 
 try:
     from tracy import signpost
@@ -61,8 +62,7 @@ class TtDeepLabV3PlusHead(LightweightModule):
         self.decoder_only = num_classes is None
         self.device = device
         self.model_configs = model_configs
-        compute_grid = device.compute_with_storage_grid_size()
-        self.is_20_core = compute_grid.x == 5 and compute_grid.y == 4
+        self.is_20_core = uses_20_core_path(device)  # also every grid without a tuned profile
 
         # Initialize decoder with all stages
         self._initialize_decoder(
@@ -287,7 +287,7 @@ class TtDeepLabV3PlusHead(LightweightModule):
             y_upsampled = ttnn.to_memory_config(y_upsampled, ttnn.DRAM_MEMORY_CONFIG)
 
             # Ensure both tensors have the same dtype before concatenation
-            target_dtype = ttnn.bfloat8_b
+            target_dtype = block_float_dtype(self.device)
             if proj_x.dtype != target_dtype:
                 proj_x = ttnn.typecast(proj_x, target_dtype)
             if y_upsampled.dtype != target_dtype:
@@ -420,7 +420,7 @@ class TtDeepLabV3PlusHead(LightweightModule):
             ttnn.deallocate(y_upsampled_row_major)
 
             # Ensure both tensors have the same dtype before concatenation
-            target_dtype = ttnn.bfloat8_b
+            target_dtype = block_float_dtype(self.device)
             if proj_x.dtype != target_dtype:
                 proj_x_old = proj_x
                 proj_x = ttnn.typecast(proj_x, target_dtype)
@@ -563,7 +563,7 @@ class TtPanopticDeepLabSemSegHead(TtDeepLabV3PlusHead):
             output_channels_first=True,
             mm1_program_config=final_upsample_mm_config1,
             mm2_program_config=final_upsample_mm_config2,
-            output_dtype=ttnn.bfloat8_b,
+            output_dtype=block_float_dtype(device),
         )
         logger.debug("TtPanopticDeepLabSemSegHead initialization complete")
 

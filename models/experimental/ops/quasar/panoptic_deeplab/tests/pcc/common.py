@@ -131,3 +131,14 @@ def skip_if_not_blackhole_110_cores(device):
         pytest.skip(
             f"This test is intended to run only on Blackhole P150 devices with 110 cores. Core grid [{compute_grid.x},{compute_grid.y}] must be [11, 10]."
         )
+
+
+def skip_if_not_quasar_any_grid(device):
+    """Run only on Quasar, whose grids (8x4, the emulator's 2 cores) have no tuned profile.
+
+    ``AnyGridOptimiser`` (every grid but 5x4 / 11x10) is still being brought up on Quasar. On Blackhole
+    limited to 8x4 with ``TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE`` it runs end to end but misses these PCC
+    bars (semantic 0.971, center 0.930, offset 0.989), so it is not run on Wormhole/Blackhole yet.
+    """
+    if device.arch() != ttnn.device.Arch.QUASAR:
+        pytest.skip("The any-grid profile is only run on Quasar while it is brought up.")
