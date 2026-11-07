@@ -885,5 +885,16 @@
       "cause": "Malformed replay during stock Docker-log dump after cancellation; live original was complete and hash-validated. No runtime repair needed.",
       "scope": "Final all-log coverage remains flagged; no silent suppression."
     }
+  },
+  "fallback80_dry_acceptance": {
+    "status": "passed_exact80_fallback_not_final_selection",
+    "evidence": "runs/early-banked80-fallback-dry/RESULT.json",
+    "device_hours": 1.9088888888888889,
+    "predicted_device_hours": 2.223317459,
+    "cohort_count": 80,
+    "planned_clients": 8,
+    "batch": 8,
+    "no_score": true,
+    "requires": "Final cohort selection and unchanged releaseprovenance; scored80 and localbenchmarkdry already banked"
   }
 }

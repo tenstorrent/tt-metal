@@ -134,11 +134,16 @@
     }
   },
   "release_route": {
-    "ok": false,
+    "ok": true,
     "harness_main_commit": "7a51c2f20f51e7508d8ea365d09092d00bbd5fcb",
-    "reason": "Stock QB2CI route has valid full60 autoport scores for all three suites. Final frozen dry-run stop/evidence control unresolved; release not started.",
+    "reason": "Stock route operationally proven by exact80 fallback and160 candidate frozen dry runs plus localbenchmarkdry; final release selection and results remain pending.",
     "authorized": true,
-    "device": "qb2-ci"
+    "device": "qb2-ci",
+    "dry_evidence": [
+      "runs/early-banked80-fallback-dry/RESULT.json",
+      "runs/early-gpqa160-candidate-dry/RESULT.json",
+      "runs/framed-benchmark-dry/RESULT.json"
+    ]
   },
   "smoke": {
     "ok": true,

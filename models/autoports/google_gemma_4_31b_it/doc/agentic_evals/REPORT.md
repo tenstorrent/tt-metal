@@ -171,11 +171,12 @@ Device costs include the device job, not build/queue. Release savings are foreca
 | ci-log-retrieval-recurrence | 0.00000 / 0.00000 | 0.00000 | none/open: Retrieval recovered unchanged: C4 117900405bytes/2.680677s and C8 71606816bytes/2.150588s. Independent same-route probe79.590738s does not justify timeout increase. One failed attempt reached body transfer; … |
 | gpqa80-new-loop-diagnosis | 0.30000 / 0.22576 | 0.00000 | none/open: fresh prompt tokens: 237; retained overlap tokens: 15031; conditional checkpoints: 4; top1 equal: 4 |
 | early-gpqa160-candidate-dry | 2.22332 / 1.78222 | 0.00000 | none/solved: dry pass: True; initial replies: 8; no score: True; actual device hours: 1.7822222222222222 |
-| early-banked80-fallback-dry | 2.22332 / unknown | 0.00000 | running/pending: Free grantedCI slot, separate allocations; normal160 and candidate160dry neverwait. Current40dry cannot prove exactbanked80. |
+| early-banked80-fallback-dry | 2.22332 / 1.90889 | 0.00000 | none/solved: dry pass: True; initial replies: 8; no score: True; actual device hours: 1.9088888888888889 |
 | release-http-only-preflight-scope | 0.00000 / 0.00000 | 0.00000 | none/open: task storage: Harbor task-storage admission not applicable to selectedHTTP-only release; model storage: Operationalstartup observed; numerical filesystem/reserve/headroom unknown; blanket disk ok: False |
 | effort-ledger-size-repair | 0.00000 / 0.00000 | 0.00000 | kept/solved: semantic data unchanged: True; canonical hash equal: True; size hook passed: True; scope: Whitespace-onlyserialization, allhistoryretained |
 | gpqa86-entry-diagnosis | 0.20000 / 0.17441 | 0.00000 | none/open: all four argmax equal: True; fresh overlap exact: 9499; credited release saving hours: 0; actual device hours: 0.17440725777777777 |
 | release-dispatch-preparation | 0.00000 / 0.00000 | 0.00000 | none/solved: actual device hours: 0; release saving hours: 0; result: Both candidate freezes match recorded hashes; no selection or dispatch; evidence: runs/release-dispatch-preparation/commands.json |
+| ranking-ledger-shape-repair | 0.00000 / 0.00000 | 0.00000 | none/solved: all efforts covered: 125; all ranking rows dict: True; forecast measurement records unchanged: True; size hook: passed |
 
 Evidence is written once by each effort; this table summarizes the current coordinator disposition. Unmeasured savings remain unknown or receive zero planning credit.
 
@@ -222,3 +223,5 @@ The new GPQA80 degeneration diagnostic used 0.225763 device hours (forecast 0.30
 Doc86 vocabulary-entry diagnostic matched all four HF/TT argmax identities and observed-token ranks after confirming9,499 exact retained-token overlaps. It used0.174407device hours against0.20forecast/0.30box; no serving change or release saving is claimed. This is conditional evidence, not autonomousHF or original served-state equivalence; the capped failure remains unresolved. See `runs/gpqa86-entry-diagnosis/RESULT.md`.
 
 The exact160 candidate operational dry passed: all eight initial native replies remained complete through cancellation at20/160 with no scoring. It used1.782222device hours versus2.223317forecast. A malformed historical duplicate in the post-cancel Docker-log replay is recorded separately; the original live chunk was intact. This does not bank160 or select a release. See `runs/early-gpqa160-candidate-dry/RESULT.md`.
+
+The exact80 fallback dry passed independently with all eight initial replies,23/80 progress and no scoring before cancellation. Final replay is clean. Cost1.908889device hours versus2.223317forecast; final selection still awaits the normal160 outcome. Both frozen80/160 operational dry options and the local benchmark arm are now proven; see `runs/early-banked80-fallback-dry/RESULT.md`.

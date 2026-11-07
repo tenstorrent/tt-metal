@@ -1,0 +1,17 @@
+{
+  "run_id": 42356076812,
+  "at": "2026-11-07T10:28:49.231717+00:00",
+  "argv": [
+    "gh",
+    "run",
+    "cancel",
+    "42356076812",
+    "-R",
+    "tenstorrent/tt-agentic-bringup-qb2"
+  ],
+  "exit_status": 0,
+  "reason": "All initial8 complete identity-matched native replies, no framing/loss/errors/score; preserved fresh69s-old snapshot at20/80 with8active. Atleast60tasks remain; startup/frozen cohort/source proven. Stop dry before scoring. Final terminal evidence still required.",
+  "pre_stop": "bringup/artifacts/stage12-eval-observation/42356076812/pre-stop-20261107T102839105641Z",
+  "stdout": "\u2713 Request to cancel workflow submitted.",
+  "stderr": ""
+}
