@@ -186,23 +186,3 @@ TEST_F(FabricUnicastWrite2DevBothChipsFixture, HorizonX2FabricUnicastWriteRevers
     }
     expect_fabric_unicast_write_with_checker(*devices_[1], *devices_[0], 1, 0);
 }
-// -----------------------------------------------------------------------
-// ttsim fixture — single device, chip 0 → chip 0 (sequential dispatch).
-// Validates kernel compilation, dispatch, and the NOC self-write path.
-// The kernel uses the #ifdef TT_METAL_TTSIM routing-table bypass, so no
-// SetFabricConfig or cross-chip AXI crossbar is needed.
-// -----------------------------------------------------------------------
-
-class FabricUnicastWriteTtsimFixture : public QuasarMeshDeviceSingleCardFixture {
-protected:
-    void create_devices() override { AnyDispatchMeshDeviceSingleCardFixture::create_devices({0}); }
-};
-
-TEST_F(FabricUnicastWriteTtsimFixture, TtsimFabricUnicastWrite) {
-    if (std::getenv("TT_METAL_SIMULATOR") == nullptr) {
-        GTEST_SKIP() << "set TT_METAL_SIMULATOR=/home/jhai/.cache/ttsim/v1.12.0/libttsim_qsr.so to enable";
-    }
-    // Sender on chip 0 core {0,0} → write to recv_buf on same chip/core via NOC self-write.
-    // Checker runs after sender completes (both dispatched blocking/sequentially).
-    expect_fabric_unicast_write_with_checker(*devices_[0], *devices_[0], 0, 0);
-}

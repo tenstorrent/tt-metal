@@ -200,6 +200,20 @@ FabricBuilderContext::FabricBuilderContext(const FabricContext& fabric_context) 
 
     tensix_config_ = nullptr;
 
+    if (!fabric_context.get_control_plane().is_fabric_over_noc()) {
+        router_config_ = create_edm_config();
+        for (size_t direction = 0; direction < eth_chan_directions::COUNT; direction++) {
+            router_with_mux_config_[direction] =
+                create_edm_config(FabricTensixConfig::MUX, static_cast<eth_chan_directions>(direction));
+        }
+
+        // Populate immutable per-mesh assignments before concurrent per-device kernel creation reads them.
+        const auto& control_plane = fabric_context.get_control_plane();
+        for (const auto mesh_id : control_plane.get_local_mesh_id_bindings()) {
+            stream_assignments_.emplace(mesh_id, compute_stream_assignment(mesh_id));
+        }
+    }
+
     // Initialize per-device build state
     const auto& cluster = fabric_context.get_cluster();
     num_devices_ = cluster.number_of_user_devices();
@@ -207,22 +221,8 @@ FabricBuilderContext::FabricBuilderContext(const FabricContext& fabric_context) 
     if (num_devices_ != 4 && num_pcie_devices == 4) {
         num_devices_ += num_pcie_devices;
     }
-
     master_router_chans_.resize(num_devices_, UNINITIALIZED_MASTER_ROUTER_CHAN);
     num_initialized_routers_.resize(num_devices_, UNINITIALIZED_ROUTERS);
-
-    if (!fabric_context.get_control_plane().is_fabric_over_noc()) {
-        router_config_ = create_edm_config();
-        for (size_t direction = 0; direction < eth_chan_directions::COUNT; direction++) {
-            router_with_mux_config_[direction] =
-                create_edm_config(FabricTensixConfig::MUX, static_cast<eth_chan_directions>(direction));
-        }
-        // Populate immutable per-mesh assignments before concurrent per-device kernel creation reads them.
-        const auto& control_plane = fabric_context.get_control_plane();
-        for (const auto mesh_id : control_plane.get_local_mesh_id_bindings()) {
-            stream_assignments_.emplace(mesh_id, compute_stream_assignment(mesh_id));
-        }
-    }
 }
 
 std::unique_ptr<FabricEriscDatamoverConfig> FabricBuilderContext::create_edm_config(
