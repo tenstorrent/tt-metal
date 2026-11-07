@@ -249,9 +249,7 @@ inline void mop_sync()
 // false). START is where to place in the replay buffer, and LEN is the number of instructions to
 // record (should match the expansion of CALLABLE). CALLABLE is a callable, to which ARGS are
 // forwarded.
-// Same signature as Blackhole's, where it also turns instruction gathering off around the record.
-// Wormhole has no gathering: this only records. Every record goes through here, never a raw
-// lltt::record / TTI_REPLAY, so kernels shared with Blackhole stay correct there.
+// Wormhole has no gathering; kept so kernels shared with Blackhole record through it.
 enum ExecBool : bool
 {
     NoExec,

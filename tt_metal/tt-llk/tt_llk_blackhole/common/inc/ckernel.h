@@ -637,17 +637,8 @@ inline void set_ttsync_enables()
     TTI_SETC16(TENSIX_TRISC_SYNC_TrackGlobalCfg_ADDR32, bitmask);
 }
 
-// Turning gathering off while fetch is on a path into code the TRISC has already gathered can hang the
-// TRISC for good. No instruction flushes fetch, and fetch runs up to 16 instructions ahead of execute, so
-// both edges of the bracket keep that distance in straight-line RISC nops:
-//  - disable: branch prediction goes off, then 20 nops, then gathering goes off. Any prediction made
-//    before branch prediction was off resolves before gathering goes off.
-//  - enable: 16 nops before gathering goes back on, so fetch cannot reach the gathered code after the
-//    bracket before gathering is off, however short the bracketed body is.
-// The nops live once per ELF, in two shared routines that every bracket calls, so the code size does not
-// grow with the number of records. The calls are direct jumps, so their targets never depend on the
-// branch predictor. Each routine uses only t0 and returns through ra. Gathering is already off when the
-// gathering-off routine's ret resolves, so a wrong prediction of that ret is harmless.
+// Gathering bracket: branch prediction off + 20 nops before gathering goes off, 16 nops before it goes back on,
+// so fetch (up to 16 ahead) is never on a gathered path when gathering turns off. One shared copy per ELF.
 #if defined(COMPILE_FOR_TRISC)
 asm(".pushsection .text.ckernel_gathering_off,\"axG\",@progbits,ckernel_gathering_off,comdat\n"
     ".globl ckernel_gathering_off\n"

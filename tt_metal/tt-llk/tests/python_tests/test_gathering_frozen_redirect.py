@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """Regression: a stale branch prediction at ckernel::disable_gathering() must not hang the TRISC.
 
-See sources/gathering_frozen_redirect_test.cpp. Without the fix in disable_gathering() the test hangs.
+See sources/gathering_frozen_redirect_test.cpp.
 """
 
 from dataclasses import dataclass
@@ -26,8 +26,7 @@ class GFR_LEAD(TemplateParameter):
         return f"#define GFR_LEAD {self.n}"
 
 
-# Dependent L1 loads just before the bracket: they stall execute so fetch gets ahead of it. Without the
-# fix in disable_gathering() every count here hangs.
+# Dependent L1 loads just before the bracket: they stall execute so fetch gets ahead of it.
 @pytest.mark.parametrize("lead", [1, 4, 16])
 def test_gathering_frozen_redirect(lead):
     if not TestConfig.gathering_build():
