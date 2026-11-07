@@ -268,6 +268,7 @@ int main(int argc, char** argv) {
     argv = app.ensure_utf8(argv);
 
     InferenceConfig inference_config;
+    std::string model_config_path = std::string(CONFIGS_FOLDER) + "/model_configs/tinyllama_bpe.yaml";
 
     app.add_option("--max-tokens", inference_config.max_new_tokens, "Maximum new tokens to generate")
         ->default_val(inference_config.max_new_tokens);
@@ -275,13 +276,11 @@ int main(int argc, char** argv) {
     app.add_option("--prompt", inference_config.prompt, "Input prompt (comma-separated token IDs)")
         ->default_val(inference_config.prompt);
     app.add_option("-p,--model-path", inference_config.model_path, "Path to model weights (.msgpack)");
+    app.add_option("--model-config", model_config_path, "Path to model configuration")->default_val(model_config_path);
     app.add_flag("--use-kv-cache,!--no-kv-cache", inference_config.use_kv_cache, "Use KV cache (default: true)")
         ->default_val(true);
 
     CLI11_PARSE(app, argc, argv);
-
-    // Use default LLaMA config path
-    std::string model_config_path = "./tt-train/configs/model_configs/tinyllama.yaml";
 
     fmt::print("\n{}\n", std::string(80, '='));
     fmt::print("LLaMA Inference {}\n", inference_config.use_kv_cache ? "with KV Cache" : "without KV Cache");

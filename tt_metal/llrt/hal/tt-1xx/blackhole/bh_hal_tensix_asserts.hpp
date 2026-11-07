@@ -24,6 +24,7 @@ static_assert(TENSIX_PROFILER_CHECK == 0);
 static_assert(sizeof(launch_msg_t) % TT_ARCH_MAX_NOC_WRITE_ALIGNMENT == 0);
 static_assert((MEM_MAILBOX_BASE + offsetof(mailboxes_t, go_message_index)) % TT_ARCH_MAX_NOC_WRITE_ALIGNMENT == 0);
 static_assert(offsetof(subordinate_map_t, dm1) == 0);
+static_assert(sizeof(l1_ecc_halt_slot_t) <= MEM_L1_ECC_HALT_SIZE);
 
 static_assert(sizeof(tt::tt_fabric::routing_l1_info_t) == MEM_ROUTING_TABLE_SIZE, "Struct size mismatch!");
 static_assert(

@@ -35,6 +35,12 @@ enum class TopkTieOrder : std::uint8_t {
     Descending,
 };
 
+// SFPSWAP imm12 bit 0 selects the compare: 0 = two's-complement int32, 1 = fp32. TopK values
+// are always floats (FP16B/FP32), and their sign-magnitude bit patterns order backwards under
+// the int32 compare when both operands are negative, so every SFPSWAP here uses the fp32 compare.
+// The fp32 compare treats -0 == +0 and never swaps when either operand is NaN.
+constexpr std::uint32_t TOPK_SWAP_IMM12_FP32 = 0x1;
+
 // Set the per-TRISC dest section base register for the math TRISC.
 // Quasar has separate SEC0..SEC3 registers (one per TRISC); this implementation
 // runs the SFPU TopK network on the math TRISC, so SFPLOAD/SFPSTORE effective
@@ -255,8 +261,8 @@ inline void bitonic_topk_ph0_st1_to_1() {
     TTI_SFPTRANSP;
 
     // Step 1
-    TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG1, p_sfpswap::ALL_ROWS_MAX);
-    TTI_SFPSWAP(0, p_sfpu::LREG3, p_sfpu::LREG2, p_sfpswap::ALL_ROWS_MAX);
+    TTI_SFPSWAP(TOPK_SWAP_IMM12_FP32, p_sfpu::LREG0, p_sfpu::LREG1, p_sfpswap::ALL_ROWS_MAX);
+    TTI_SFPSWAP(TOPK_SWAP_IMM12_FP32, p_sfpu::LREG3, p_sfpu::LREG2, p_sfpswap::ALL_ROWS_MAX);
 
     TTI_SFPTRANSP;
 }
@@ -266,12 +272,12 @@ inline void bitonic_topk_ph1_st2_to_1() {
     TTI_SFPTRANSP;
 
     // Step 2
-    TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG2, p_sfpswap::ROWS_02_MAX);
-    TTI_SFPSWAP(0, p_sfpu::LREG1, p_sfpu::LREG3, p_sfpswap::ROWS_02_MAX);
+    TTI_SFPSWAP(TOPK_SWAP_IMM12_FP32, p_sfpu::LREG0, p_sfpu::LREG2, p_sfpswap::ROWS_02_MAX);
+    TTI_SFPSWAP(TOPK_SWAP_IMM12_FP32, p_sfpu::LREG1, p_sfpu::LREG3, p_sfpswap::ROWS_02_MAX);
 
     // Step 1
-    TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG1, p_sfpswap::ROWS_02_MAX);
-    TTI_SFPSWAP(0, p_sfpu::LREG2, p_sfpu::LREG3, p_sfpswap::ROWS_02_MAX);
+    TTI_SFPSWAP(TOPK_SWAP_IMM12_FP32, p_sfpu::LREG0, p_sfpu::LREG1, p_sfpswap::ROWS_02_MAX);
+    TTI_SFPSWAP(TOPK_SWAP_IMM12_FP32, p_sfpu::LREG2, p_sfpu::LREG3, p_sfpswap::ROWS_02_MAX);
 
     TTI_SFPTRANSP;
 }
@@ -282,19 +288,19 @@ inline void bitonic_topk_ph1_st2_to_1() {
 // (matches the BH algorithm exactly; do not remove).
 inline void bitonic_topk_ph2_st3_to_1() {
     // Step 3
-    TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG1, p_sfpswap::ALL_ROWS_MAX);
-    TTI_SFPSWAP(0, p_sfpu::LREG2, p_sfpu::LREG3, p_sfpswap::ALL_ROWS_MAX);
-    TTI_SFPSWAP(0, p_sfpu::LREG2, p_sfpu::LREG3, p_sfpswap::UNCONDITIONALLY);
+    TTI_SFPSWAP(TOPK_SWAP_IMM12_FP32, p_sfpu::LREG0, p_sfpu::LREG1, p_sfpswap::ALL_ROWS_MAX);
+    TTI_SFPSWAP(TOPK_SWAP_IMM12_FP32, p_sfpu::LREG2, p_sfpu::LREG3, p_sfpswap::ALL_ROWS_MAX);
+    TTI_SFPSWAP(TOPK_SWAP_IMM12_FP32, p_sfpu::LREG2, p_sfpu::LREG3, p_sfpswap::UNCONDITIONALLY);
 
     TTI_SFPTRANSP;
 
     // Step 2
-    TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG2, p_sfpswap::ROWS_01_MAX);
-    TTI_SFPSWAP(0, p_sfpu::LREG1, p_sfpu::LREG3, p_sfpswap::ROWS_01_MAX);
+    TTI_SFPSWAP(TOPK_SWAP_IMM12_FP32, p_sfpu::LREG0, p_sfpu::LREG2, p_sfpswap::ROWS_01_MAX);
+    TTI_SFPSWAP(TOPK_SWAP_IMM12_FP32, p_sfpu::LREG1, p_sfpu::LREG3, p_sfpswap::ROWS_01_MAX);
 
     // Step 1
-    TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG1, p_sfpswap::ROWS_01_MAX);
-    TTI_SFPSWAP(0, p_sfpu::LREG2, p_sfpu::LREG3, p_sfpswap::ROWS_01_MAX);
+    TTI_SFPSWAP(TOPK_SWAP_IMM12_FP32, p_sfpu::LREG0, p_sfpu::LREG1, p_sfpswap::ROWS_01_MAX);
+    TTI_SFPSWAP(TOPK_SWAP_IMM12_FP32, p_sfpu::LREG2, p_sfpu::LREG3, p_sfpswap::ROWS_01_MAX);
 
     TTI_SFPTRANSP;
 }
@@ -310,12 +316,12 @@ inline void bitonic_topk_ph2_st3_to_1() {
 inline void bitonic_topk_step_N(bool sort_dir) {
     // Step N
     if (sort_dir == static_cast<bool>(SortDir::ArgMax)) {
-        TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG2, p_sfpswap::ALL_ROWS_MAX);
-        TTI_SFPSWAP(0, p_sfpu::LREG1, p_sfpu::LREG3, p_sfpswap::ALL_ROWS_MAX);
+        TTI_SFPSWAP(TOPK_SWAP_IMM12_FP32, p_sfpu::LREG0, p_sfpu::LREG2, p_sfpswap::ALL_ROWS_MAX);
+        TTI_SFPSWAP(TOPK_SWAP_IMM12_FP32, p_sfpu::LREG1, p_sfpu::LREG3, p_sfpswap::ALL_ROWS_MAX);
     } else {
         // Min — operand order swapped relative to ArgMax.
-        TTI_SFPSWAP(0, p_sfpu::LREG2, p_sfpu::LREG0, p_sfpswap::ALL_ROWS_MAX);
-        TTI_SFPSWAP(0, p_sfpu::LREG3, p_sfpu::LREG1, p_sfpswap::ALL_ROWS_MAX);
+        TTI_SFPSWAP(TOPK_SWAP_IMM12_FP32, p_sfpu::LREG2, p_sfpu::LREG0, p_sfpswap::ALL_ROWS_MAX);
+        TTI_SFPSWAP(TOPK_SWAP_IMM12_FP32, p_sfpu::LREG3, p_sfpu::LREG1, p_sfpswap::ALL_ROWS_MAX);
     }
 }
 
@@ -337,17 +343,17 @@ inline void bitonic_topk_ph3_st4_to_1(bool sort_dir) {
     }
 
     // First execution.
-    TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG2, p_sfpswap::ALL_ROWS_MAX);
-    TTI_SFPSWAP(0, p_sfpu::LREG1, p_sfpu::LREG3, p_sfpswap::ALL_ROWS_MAX);
-    TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG1, p_sfpswap::ALL_ROWS_MAX);
-    TTI_SFPSWAP(0, p_sfpu::LREG2, p_sfpu::LREG3, p_sfpswap::ALL_ROWS_MAX);
+    TTI_SFPSWAP(TOPK_SWAP_IMM12_FP32, p_sfpu::LREG0, p_sfpu::LREG2, p_sfpswap::ALL_ROWS_MAX);
+    TTI_SFPSWAP(TOPK_SWAP_IMM12_FP32, p_sfpu::LREG1, p_sfpu::LREG3, p_sfpswap::ALL_ROWS_MAX);
+    TTI_SFPSWAP(TOPK_SWAP_IMM12_FP32, p_sfpu::LREG0, p_sfpu::LREG1, p_sfpswap::ALL_ROWS_MAX);
+    TTI_SFPSWAP(TOPK_SWAP_IMM12_FP32, p_sfpu::LREG2, p_sfpu::LREG3, p_sfpswap::ALL_ROWS_MAX);
     TTI_SFPTRANSP;
 
     // Second execution.
-    TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG2, p_sfpswap::ALL_ROWS_MAX);
-    TTI_SFPSWAP(0, p_sfpu::LREG1, p_sfpu::LREG3, p_sfpswap::ALL_ROWS_MAX);
-    TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG1, p_sfpswap::ALL_ROWS_MAX);
-    TTI_SFPSWAP(0, p_sfpu::LREG2, p_sfpu::LREG3, p_sfpswap::ALL_ROWS_MAX);
+    TTI_SFPSWAP(TOPK_SWAP_IMM12_FP32, p_sfpu::LREG0, p_sfpu::LREG2, p_sfpswap::ALL_ROWS_MAX);
+    TTI_SFPSWAP(TOPK_SWAP_IMM12_FP32, p_sfpu::LREG1, p_sfpu::LREG3, p_sfpswap::ALL_ROWS_MAX);
+    TTI_SFPSWAP(TOPK_SWAP_IMM12_FP32, p_sfpu::LREG0, p_sfpu::LREG1, p_sfpswap::ALL_ROWS_MAX);
+    TTI_SFPSWAP(TOPK_SWAP_IMM12_FP32, p_sfpu::LREG2, p_sfpu::LREG3, p_sfpswap::ALL_ROWS_MAX);
     TTI_SFPTRANSP;
 
     if (sort_dir == static_cast<bool>(SortDir::ArgMin)) {
@@ -568,7 +574,7 @@ inline void calculate_bitonic_topk_merge(const int m_iter, const int k) {
                 for (std::uint32_t inner_iter = 0; inner_iter < inner_iter_count; inner_iter++) {
                     bitonic_topk_load8<is_fp32_dest_acc_en>(dst_offset, ld_dist);
                     TTI_SFPSWAP(
-                        0,
+                        TOPK_SWAP_IMM12_FP32,
                         top_min ? p_sfpu::LREG1 : p_sfpu::LREG0,
                         top_min ? p_sfpu::LREG0 : p_sfpu::LREG1,
                         p_sfpswap::ALL_ROWS_MAX);

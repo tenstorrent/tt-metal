@@ -5,7 +5,7 @@
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "sfpi.h"
-#include "sfpu/ckernel_sfpu_expm1_bf16_factored_cw_expm1_core.h"
+#include "ckernel_sfpu_expm1_bf16_factored_cw_expm1_core.h"
 namespace ckernel::sfpu::bf16::expm1 {
 template <class Config>
 inline void init_factored_cw_expm1() {
