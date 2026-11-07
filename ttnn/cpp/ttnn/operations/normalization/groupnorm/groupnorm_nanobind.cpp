@@ -22,6 +22,47 @@
 namespace ttnn::operations::normalization::detail {
 
 namespace {
+
+// The Python default for inplace is "in place where supported": ROW_MAJOR input with an unchanged
+// output layout. TILE input, or a layout change, is not supported in place, so it defaults to False.
+Tensor group_norm_default_inplace(
+    const Tensor& input_tensor,
+    int num_groups,
+    float epsilon,
+    const std::optional<Tensor>& input_mask,
+    const std::optional<Tensor>& weight,
+    const std::optional<Tensor>& bias,
+    const std::optional<MemoryConfig>& memory_config,
+    std::optional<DataType> dtype,
+    std::optional<CoreGrid> core_grid,
+    std::optional<bool> inplace,
+    std::optional<Layout> output_layout,
+    std::optional<int> num_out_blocks,
+    std::optional<DeviceComputeKernelConfig> compute_kernel_config,
+    const std::optional<Tensor>& negative_mask,
+    bool use_welford) {
+    if (!inplace.has_value()) {
+        inplace = input_tensor.layout() != Layout::TILE &&
+                  output_layout.value_or(input_tensor.layout()) == input_tensor.layout();
+    }
+    return ttnn::group_norm(
+        input_tensor,
+        num_groups,
+        epsilon,
+        input_mask,
+        weight,
+        bias,
+        memory_config,
+        dtype,
+        core_grid,
+        inplace,
+        output_layout,
+        num_out_blocks,
+        compute_kernel_config,
+        negative_mask,
+        use_welford);
+}
+
 void bind_normalization_group_norm_operation(nb::module_& mod) {
     const auto* doc = R"doc(
                 Computes group_norm over :attr:`input_tensor`.
@@ -61,7 +102,7 @@ void bind_normalization_group_norm_operation(nb::module_& mod) {
                 memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
                 dtype (ttnn.DataType, optional): Output data type. When provided, it must equal the :attr:`input_tensor` dtype; a mismatch is rejected. Defaults to `None` (output dtype matches the input).
                 core_grid (CoreGrid, optional): Defaults to `None`.
-                inplace (bool, optional): Defaults to `True`.
+                inplace (bool, optional): Defaults to `True` for a ROW_MAJOR :attr:`input_tensor` whose output layout is unchanged, and `False` otherwise.
                 output_layout (ttnn.Layout, optional): Defaults to `None`.
                 num_out_blocks (int, optional): For non-sharded (interleaved) inputs, splits the per-core output height (``block_h``, in tiles) into ``num_out_blocks`` chunks so each iteration uses less SRAM, at the cost of performance. Ignored for sharded inputs. Should only be set if needed to relieve SRAM pressure. Accepted explicit values are ``-1`` (use the built-in auto-heuristic) or a chunk count in range ``[1, block_h]``. Defaults to `None`, whose meaning depends on :attr:`core_grid` (non-sharded inputs only): when :attr:`core_grid` is also `None` (auto-selected), ``num_out_blocks`` is determined automatically using the same auto-heuristic as ``-1``, and passing an explicit ``num_out_blocks`` in that case is rejected. When :attr:`core_grid` is provided and ``num_out_blocks`` is `None` (default), ``num_out_blocks`` defaults to ``1`` (no chunking).
                 compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): Compute kernel configuration for the op. Defaults to `None`.
@@ -127,7 +168,7 @@ void bind_normalization_group_norm_operation(nb::module_& mod) {
     ttnn::bind_function<"group_norm">(
         mod,
         doc,
-        &ttnn::group_norm,
+        &group_norm_default_inplace,
         nb::arg("input_tensor"),
         nb::kw_only(),
         nb::arg("num_groups"),
@@ -138,7 +179,7 @@ void bind_normalization_group_norm_operation(nb::module_& mod) {
         nb::arg("memory_config") = nb::none(),
         nb::arg("dtype") = nb::none(),
         nb::arg("core_grid") = nb::none(),
-        nb::arg("inplace") = true,
+        nb::arg("inplace") = nb::none(),
         nb::arg("output_layout") = nb::none(),
         nb::arg("num_out_blocks") = nb::none(),
         nb::arg("compute_kernel_config") = nb::none(),
