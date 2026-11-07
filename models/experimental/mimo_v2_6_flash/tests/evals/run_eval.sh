@@ -16,6 +16,8 @@
 #   videomme_short    lmms-eval  videomme_short (900 q / 300 videos, no subtitles)  thinking off
 #   mmau_mini         lmms-eval  mmau_test_mini (1000)                              thinking off
 #   librispeech_clean lmms-eval  librispeech_test_clean (2620, WER)                 thinking off
+#   vgi_bench         lmms-eval  vgi_bench: Seldon's VGI-Bench public split (439 q, long videos by URL, Seldon's
+#                                prompt + parser, temperature 0, no max_tokens / reasoning switch: endpoint defaults)
 #   gpqa_diamond      inspect    gpqa_shuffled.py (198 q x 10 epochs, T=0.5, per-question shuffle = OpenRouter's)
 #   gpqa_openbench    openbench  gpqa_diamond (openbench as published: fixed permutation)
 #   tau2_airline      openbench  tau_bench_airline (50 tasks, T=0; user simulator --user-model, needs its key)
@@ -42,7 +44,7 @@
 
 set -euo pipefail
 
-usage() { sed -n '4,41p' "$0" | sed 's/^# \{0,1\}//'; exit 2; }
+usage() { sed -n '4,43p' "$0" | sed 's/^# \{0,1\}//'; exit 2; }
 [ $# -ge 3 ] || usage
 
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
@@ -171,6 +173,7 @@ case $BENCH in
     mmmu_pro_aa) run_lmms mmmu_pro_aa on ;;
     mmau_mini) run_lmms mmau_test_mini off ;;
     librispeech_clean) run_lmms librispeech_test_clean off ;;
+    vgi_bench) run_lmms vgi_bench default ;;
     gpqa_diamond) run_inspect inspect "$HERE/openbench_tasks/gpqa_shuffled.py@gpqa_diamond_shuffled" -T "epochs=${EPOCHS:-10}" ;;
     gpqa_openbench) run_inspect bench gpqa_diamond --epochs "${EPOCHS:-10}" ;;
     tau2_airline)
