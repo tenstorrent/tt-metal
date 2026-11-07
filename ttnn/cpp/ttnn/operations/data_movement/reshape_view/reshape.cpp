@@ -750,7 +750,11 @@ ttnn::Tensor reshape_dispatch(
                 interleaved_result.padded_shape(),
                 tensor.layout() == ttnn::TILE_LAYOUT);
         }
-        return ttnn::to_memory_config(interleaved_result, output_mem_config);
+        auto output = ttnn::to_memory_config(interleaved_result, output_mem_config);
+        output.update_tensor_topology(
+            ttnn::reshaped_tensor_topology(tensor.tensor_topology(), tensor_shape, logical_shape)
+                .value_or(tensor.tensor_topology()));
+        return output;
     }
 
     // A metadata-only view keeps the input's buffer, so it only needs matching sharded-ness and
@@ -788,9 +792,13 @@ ttnn::Tensor reshape_dispatch(
         // This is a completely incorrect test but it is due to issue 15558
         TT_FATAL(false, "Attempting to reshape between two shapes with different volumes");
     }
+    const auto output_topology =
+        ttnn::reshaped_tensor_topology(tensor.tensor_topology(), tensor_shape, logical_shape)
+            .value_or(tensor.tensor_topology());
+
     // Do the reshape in row-major
     if (tensor.layout() == ttnn::ROW_MAJOR_LAYOUT) {
-        return operations::data_movement::detail::reshape_rm(
+        auto output = operations::data_movement::detail::reshape_rm(
             tensor,
             logical_shape,
             padded_shape,
@@ -799,11 +807,13 @@ ttnn::Tensor reshape_dispatch(
             mem_config,
             pad_value.value_or(default_pad_value),
             sub_core_grid);
+        output.update_tensor_topology(output_topology);
+        return output;
     }
     // Preserve whether the caller explicitly passed pad_value. value_or(default_pad_value) below
     // collapses that signal, but reshape_tiled needs it to gate the default-off fill for non-BF8.
     const bool pad_value_explicit = pad_value.has_value();
-    return operations::data_movement::reshape_tiled(
+    auto output = operations::data_movement::reshape_tiled(
         tensor,
         logical_shape,
         mem_config,
@@ -813,6 +823,8 @@ ttnn::Tensor reshape_dispatch(
         explicit_memory_config,
         skip_padding_fill,
         pad_value_explicit);
+    output.update_tensor_topology(output_topology);
+    return output;
 }
 
 }  // namespace

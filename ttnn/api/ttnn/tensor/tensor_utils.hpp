@@ -84,4 +84,14 @@ tt::tt_metal::CBDescriptor cb_descriptor_from_sharded_tensor(
  */
 uint32_t get_cb_address(const tt::tt_metal::CBDescriptor& desc);
 
+// Returns the mesh topology of a tensor reshaped from `old_shape` to `new_shape`.
+// Each Shard placement whose outer prefix volume P = prod(old_shape[:d]) matches a unique
+// outermost dimension d' in `new_shape` with prod(new_shape[:d']) == P and new_shape[d'] > 1
+// (or old_shape[d] == 1) moves to d', preserving negative dim spelling. Returns std::nullopt
+// when no Shard placement changes.
+std::optional<tt::tt_metal::TensorTopology> reshaped_tensor_topology(
+    const tt::tt_metal::TensorTopology& topology,
+    const tt::tt_metal::Shape& old_shape,
+    const tt::tt_metal::Shape& new_shape);
+
 }  // namespace ttnn

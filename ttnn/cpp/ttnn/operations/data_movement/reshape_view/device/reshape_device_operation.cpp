@@ -6,6 +6,7 @@
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
+#include "ttnn/tensor/tensor_utils.hpp"
 
 namespace ttnn::prim {
 
@@ -38,6 +39,18 @@ ReshapeViewDeviceOperation::spec_return_value_t ReshapeViewDeviceOperation::comp
             operation_attributes.output_mem_config,
             operation_attributes.logical_output_shape,
             operation_attributes.padded_output_shape));
+}
+
+std::vector<tt::tt_metal::TensorTopology> ReshapeViewDeviceOperation::compute_output_topologies(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    auto topology = ttnn::reshaped_tensor_topology(
+        tensor_args.input.tensor_topology(),
+        tensor_args.input.logical_shape(),
+        operation_attributes.logical_output_shape);
+    if (!topology.has_value()) {
+        return {};
+    }
+    return {std::move(*topology)};
 }
 
 ttnn::Tensor ReshapeViewDeviceOperation::create_output_tensors(

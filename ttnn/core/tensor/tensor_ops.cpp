@@ -460,7 +460,11 @@ Tensor view_device(const Tensor& input_tensor, const Shape& new_logical_shape, c
             new_logical_shape,
             new_padded_shape));
 
-    // TODO (#25340): Review tensor topology logic for reshape
+    const auto output_topology =
+        ttnn::reshaped_tensor_topology(
+            input_tensor.tensor_topology(), input_tensor.logical_shape(), new_logical_shape)
+            .value_or(input_tensor.tensor_topology());
+
     if (input_tensor.layout() != Layout::ROW_MAJOR || !changing_last_dim) {
         const auto& input_buffer = input_tensor.device_storage().get_mesh_buffer();
 
@@ -470,8 +474,8 @@ Tensor view_device(const Tensor& input_tensor, const Shape& new_logical_shape, c
             input_buffer.device(),
             input_buffer.address());
 
-        MeshTensor view_mesh_tensor = mesh_tensor_from_buffer_with_topology(
-            std::move(*view_mesh_buffer), new_spec, input_tensor.tensor_topology());
+        MeshTensor view_mesh_tensor =
+            mesh_tensor_from_buffer_with_topology(std::move(*view_mesh_buffer), new_spec, output_topology);
         DeviceStorage view_storage(input_tensor.device_storage(), std::move(view_mesh_tensor));
         return Tensor(std::move(view_storage));
     }
@@ -484,8 +488,8 @@ Tensor view_device(const Tensor& input_tensor, const Shape& new_logical_shape, c
         auto view_mesh_buffer = tt::tt_metal::distributed::MeshBuffer::create(
             input_buffer.global_config(), new_device_config, input_buffer.device(), input_buffer.address());
 
-        MeshTensor view_mesh_tensor = mesh_tensor_from_buffer_with_topology(
-            std::move(*view_mesh_buffer), new_spec, input_tensor.tensor_topology());
+        MeshTensor view_mesh_tensor =
+            mesh_tensor_from_buffer_with_topology(std::move(*view_mesh_buffer), new_spec, output_topology);
         DeviceStorage view_storage(input_tensor.device_storage(), std::move(view_mesh_tensor));
         return Tensor(std::move(view_storage));
     }
@@ -522,7 +526,7 @@ Tensor view_device(const Tensor& input_tensor, const Shape& new_logical_shape, c
 
     ttnn::DeviceStorage view_storage(
         input_tensor.device_storage(),
-        mesh_tensor_from_buffer_with_topology(std::move(*view_mesh_buffer), new_spec, input_tensor.tensor_topology()));
+        mesh_tensor_from_buffer_with_topology(std::move(*view_mesh_buffer), new_spec, output_topology));
     return Tensor(std::move(view_storage));
 }
 

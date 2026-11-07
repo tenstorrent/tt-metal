@@ -100,6 +100,18 @@ ReshapeDeviceOperation::spec_return_value_t ReshapeDeviceOperation::compute_outp
             operation_attributes.padded_output_shape));
 }
 
+std::vector<tt::tt_metal::TensorTopology> ReshapeDeviceOperation::compute_output_topologies(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    auto topology = ttnn::reshaped_tensor_topology(
+        tensor_args.input_tensor.tensor_topology(),
+        tensor_args.input_tensor.logical_shape(),
+        operation_attributes.logical_output_shape);
+    if (!topology.has_value()) {
+        return {};
+    }
+    return {std::move(*topology)};
+}
+
 ReshapeDeviceOperation::tensor_return_value_t ReshapeDeviceOperation::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     return create_device_tensor(

@@ -28,6 +28,9 @@ struct ReshapeDeviceOperation {
     static spec_return_value_t compute_output_specs(
         const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
 
+    static std::vector<tt::tt_metal::TensorTopology> compute_output_topologies(
+        const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
+
     static tensor_return_value_t create_output_tensors(
         const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
 

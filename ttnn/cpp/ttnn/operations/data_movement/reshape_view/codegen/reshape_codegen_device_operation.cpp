@@ -11,6 +11,7 @@
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/data_movement/reshape_view/codegen/reshape_codegen_supported.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
+#include "ttnn/tensor/tensor_utils.hpp"
 
 namespace ttnn::prim {
 
@@ -93,6 +94,18 @@ ReshapeCodegenDeviceOperation::spec_return_value_t ReshapeCodegenDeviceOperation
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     return ttnn::operations::data_movement::reshape_codegen::output_spec(
         tensor_args.input, operation_attributes.logical_output_shape, operation_attributes.output_mem_config);
+}
+
+std::vector<tt::tt_metal::TensorTopology> ReshapeCodegenDeviceOperation::compute_output_topologies(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    auto topology = ttnn::reshaped_tensor_topology(
+        tensor_args.input.tensor_topology(),
+        tensor_args.input.logical_shape(),
+        operation_attributes.logical_output_shape);
+    if (!topology.has_value()) {
+        return {};
+    }
+    return {std::move(*topology)};
 }
 
 ReshapeCodegenDeviceOperation::tensor_return_value_t ReshapeCodegenDeviceOperation::create_output_tensors(

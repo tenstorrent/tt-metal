@@ -111,4 +111,48 @@ std::vector<CoreCoord> get_optimal_worker_cores_for_sharded_tensor(const Tensor&
     return ordered_worker_cores_with_data;
 }
 
+std::optional<tt::tt_metal::TensorTopology> reshaped_tensor_topology(
+    const tt::tt_metal::TensorTopology& topology,
+    const tt::tt_metal::Shape& old_shape,
+    const tt::tt_metal::Shape& new_shape) {
+    using Shard = tt::tt_metal::distributed::MeshMapperConfig::Shard;
+    const int old_rank = static_cast<int>(old_shape.rank());
+    const int new_rank = static_cast<int>(new_shape.rank());
+    auto placements = topology.placements();
+    bool moved = false;
+    for (auto& placement : placements) {
+        auto* shard = std::get_if<Shard>(&placement);
+        if (shard == nullptr) {
+            continue;
+        }
+        const int dim = shard->dim < 0 ? shard->dim + old_rank : shard->dim;
+        if (dim < 0 || dim >= old_rank) {
+            continue;
+        }
+        uint64_t old_prefix = 1;
+        for (int i = 0; i < dim; ++i) {
+            old_prefix *= old_shape[i];
+        }
+        std::optional<int> destination;
+        uint64_t new_prefix = 1;
+        for (int d_prime = 0; d_prime < new_rank; ++d_prime) {
+            if (new_prefix == old_prefix && (new_shape[d_prime] > 1 || old_shape[dim] == 1)) {
+                destination = d_prime;
+                break;
+            }
+            new_prefix *= new_shape[d_prime];
+        }
+        if (!destination.has_value()) {
+            continue;
+        }
+        const int spelled = shard->dim < 0 ? *destination - new_rank : *destination;
+        moved = moved || spelled != shard->dim;
+        shard->dim = spelled;
+    }
+    if (!moved) {
+        return std::nullopt;
+    }
+    return tt::tt_metal::TensorTopology(topology.distribution_shape(), std::move(placements), topology.mesh_coords());
+}
+
 }  // namespace ttnn

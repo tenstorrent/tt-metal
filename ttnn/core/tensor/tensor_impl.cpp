@@ -17,6 +17,7 @@
 #include "ttnn/tensor/storage.hpp"
 #include "ttnn/tensor/layout/tensor_layout.hpp"
 #include "ttnn/tensor/tensor_impl.hpp"
+#include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/operations/core/core.hpp"
 
@@ -455,9 +456,12 @@ tt::tt_metal::HostTensor view(
             new_logical_shape,
             new_padded_shape));
 
-    // TODO (#25340): Review tensor topology logic for reshape
+    const auto& input_topology = tt::tt_metal::get_tensor_topology(tensor);
+    const auto output_topology =
+        ttnn::reshaped_tensor_topology(input_topology, tensor.logical_shape(), new_logical_shape)
+            .value_or(input_topology);
     const auto& buffer = tensor.buffer();
-    return host_tensor_from_buffer_with_topology(buffer, new_spec, tt::tt_metal::get_tensor_topology(tensor));
+    return host_tensor_from_buffer_with_topology(buffer, new_spec, output_topology);
 }
 
 // ======================================================================================
