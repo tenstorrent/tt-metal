@@ -271,9 +271,12 @@ class DS41PrefillRuntime:
     ):
         """``last`` (P.30): whether the chunk is the request's last. tt-d-gen's chunk header has no such flag yet, so
         the engine never passes it: None (every layer, today's behaviour). Under DECODER_SKIP=exact a caller passing
-        False gets the decoder skipped (layers 20-39 write no window rows for the chunk); the caller then starts the
-        last chunk >= 2688 tokens before its end (the model never pulls back). Under replay128 (P.31) True runs the
-        decoder on the chunk's last <= 128 rows only (the tail model's own caches: not the served decoder rows)."""
+        False gets the decoder skipped (layers 20-39 write no window rows for the chunk); under replay128 (P.31) True
+        runs the decoder on the chunk's tail only (the tail model's own caches: not the served decoder rows). The
+        caller starts the request's last chunk at or before model.last_start(actual_end) (SKIP_TAIL_START, P.43:
+        cap: exact min(end - 2688, cap - 2668), replay128 min(end - 128, cap - 128), cap = (end - 1) // 64 x 64; the
+        chunk before it ending there); the model refuses a later start (ValueError), it never pulls back. Under
+        WINDOW_KV_KEEP=snapshot128 every layer's snapshot is then written on the last chunk."""
         c, m = self.config.chunk_size, self.config.max_seq_len
         start, end = int(actual_start), int(actual_end)
         assert start % 32 == 0, f"actual_start {start} must be tile (32) aligned"

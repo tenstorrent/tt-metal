@@ -30,10 +30,10 @@ chip, in bank (shard mod banks) at base + (shard div banks) x record bytes.
 
 WINDOW_KV_KEEP=snapshot128 (P.42, the default; owner 2026-11-07, decode's review): 0_window_kv is a SNAPSHOT config
 (KvChunkTensorType.Snapshot; records at positions 0, 32, 64, 96 only, so tt-d-gen's KV Manager reads it as a
-128-position snapshot: kv_chunk_table.cpp conformSnapshot -> SnapshotOfExtent(128); the declared
-max_sequence_length stays max_seq, because tt-metal's table refuses a lookup at or past it,
-kv_chunk_address_table.cpp:138, and the framework's contract test reads every config at every chunk's first and
-last block, testing/contract.py): per (slot, layer) 128 rows, position p at row p % 128 for
+128-position snapshot: kv_chunk_table.cpp conformSnapshot -> SnapshotOfExtent(128); its declared
+max_sequence_length is 128, decode's table (P.43; tt-metal's table refuses a lookup at or past it,
+kv_chunk_address_table.cpp:138, so every reader stops at 128: testing/contract.py reads a Snapshot config at the
+request's last chunk only, its 4 records): per (slot, layer) 128 rows, position p at row p % 128 for
 p < cap = (prompt_len - 1) // kv_block_size x kv_block_size (decode receives [0, cap) and replays [cap, prompt_len)),
 4 records of 32 rows (32 KiB each, one bank), the same bytes on every chip (device group: the whole mesh); tensor
 [slots x L, 1, 128, 512], replicated. REINDEX_SERVE=alias (P.42, the default): 4_index_k_r1's entries of the re-index
@@ -41,7 +41,7 @@ layers are their key source's records (the same noc_addr, size and device group 
 tensor holds the KV sources' slabs only (``alloc``).
 
 Address table: one config per tensor (chunk_n_tokens 32, chunk_size_bytes = one record, num_slots = slots,
-max_sequence_length = max_seq, num_layers = the served (engine) layers L); a config sets entries only for the
+max_sequence_length = max_seq (the snapshot: 128), num_layers = the served (engine) layers L); a config sets entries only for the
 layers it covers (config 0: all). Table layer = engine index k (= first_layer_idx + k; a non-contiguous bring-up
 subset is served as engine layers 0..L-1, PREFILL_LAYER_IDS naming the model layers, F100). Device groups: a TP-dedup
 record's chip alone; a TP-replicated record's mesh row (every chip holding the same bytes).
@@ -191,7 +191,7 @@ class DS41ContractKV:
             host, fnids = f"host-{st['host_tag']:08x}", st["fnids"]
         table = D.KvChunkAddressTable(
             {
-                c["name"]: self._config(L, seq_len, self.num_users, c["record_bytes"], c.get("snapshot"))
+                c["name"]: self._config(L, c["seq"] or seq_len, self.num_users, c["record_bytes"], c.get("snapshot"))
                 for c in self.configs
             }
         )

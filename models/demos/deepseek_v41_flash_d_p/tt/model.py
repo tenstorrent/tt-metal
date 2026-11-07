@@ -59,7 +59,7 @@ import ttnn
 from models.demos.common.bringup.reference.interface import Ctx, run_block
 
 from . import ccl, host_alloc
-from .attention import TtWindowAttention, TtWindowCache, WindowTables, attention_weights, window_keep
+from .attention import TtWindowAttention, TtWindowCache, WindowTables, attention_weights, snapshot_cap, window_keep
 from .ccl import dealloc
 from .collapse import TtHcCollapse
 from .common import (
@@ -1051,6 +1051,8 @@ class TtDS41Model:
         self.decoder, self.kv_only = [], frozenset()
         self._skip = False  # this chunk skips the decoder (set per chunk by begin_chunk)
         self._snap = True  # WINDOW_KV_KEEP=snapshot128 (P.42): this chunk rewrites the served window snapshots
+        self._last = False  # P.43: the caller marked this chunk the request's last (begin_chunk(.., last=True))
+        self._req = 0  # P.43: the start of the running request when this chunk is its first (0 or a replay start)
         mode = settings.get("DECODER_SKIP")
         # (WINDOW_KV_KEEP=ring | none, P.32: begin_chunk truncates a window whose carry is not kept under exact /
         # replay128 and refuses the chunk under off; the decoder tail model never decides it)
@@ -1242,6 +1244,9 @@ class TtDS41Model:
         self._skip = bool(self.decoder) and last is False and self.skip_mode != "off"
         # WINDOW_KV_KEEP=snapshot128 (P.42): every chunk not marked not-last rewrites the served window snapshots
         self._snap = last is not False
+        self._last = last is True
+        if start == 0 or replay:  # (P.43: the request starts here, the clamp of last_start)
+            self._req = int(start)
         self._tail_mode = self.replay and last is True
         self._tail_at = None
         st = self.state
@@ -1309,6 +1314,71 @@ class TtDS41Model:
         for i, c in st.window.items():
             c.truncate(cut[i])
         st.cut = start if any(v is not None for v in cut.values()) else None
+
+    # ------------------------------------------------------------------ SKIP_TAIL_START (P.43)
+    def tail_from_cap(self) -> bool:
+        """SKIP_TAIL_START=cap (P.43): the last chunk's start and replay128's tail placed relative to decode's cap."""
+        return settings.get("SKIP_TAIL_START") == "cap"
+
+    def exact_rows(self) -> int:
+        """DECODER_SKIP=exact: the rows past a last chunk's start the decoder needs before it is exact (P.30: 20 x
+        127 + 128 = 2668 with 20 decoder layers, window 128: the last row of a 128-row window exact)."""
+        w = self.cfg.window
+        return len(self.decoder) * (w - 1) + w
+
+    def last_start(self, end: int, request_start: int = 0) -> int:
+        """The latest start (32-aligned) of a request's last chunk ending at ``end`` under DECODER_SKIP and
+        SKIP_TAIL_START (P.43): the caller (runner / adapter / harness) starts the chunk there or earlier, ending the
+        chunk before it at that start. cap = snapshot_cap(end) (decode's cap, KV_BLOCK_SIZE):
+            exact      cap: min(end - last_rows (2688), cap - exact_rows (2668)); end (P.30): end - 2688
+            replay128  cap: min(end - 128, cap - 128) (the tail's start); end (P.31): no limit (end - 1)
+            off        no limit
+        clamped at ``request_start`` (0, or a replay start: a request has no earlier rows to start at) and 0."""
+        end = int(end)
+        lim = end - 1
+        if self.decoder and self.skip_mode != "off":
+            w, cap = self.cfg.window, snapshot_cap(end)
+            if self.skip_mode == "exact":
+                lim = (
+                    min(end - self.last_rows, cap - self.exact_rows()) if self.tail_from_cap() else end - self.last_rows
+                )
+            elif self.tail_from_cap():
+                lim = min(end - w, cap - w)
+        return max(int(request_start), 0, lim // 32 * 32)
+
+    def tail_start(self, start: int, end: int) -> int:
+        """DECODER_SKIP=replay128 (P.31): where the decoder tail of the last chunk [start, end) starts. SKIP_TAIL_START=
+        cap (P.43): min(ceil32(end - 128), cap - 128) (the tail holds decode's snapshot rows [cap - 128, cap));
+        end: ceil32(end - 128) (the last <= 128 rows). Clamped at ``start``."""
+        w = self.cfg.window
+        dec = -(-(int(end) - w) // 32) * 32
+        if self.tail_from_cap():
+            dec = min(dec, snapshot_cap(end) - w)
+        return max(int(start), dec)
+
+    def _check_last_start(self, start: int, end: int, state: DS41DeviceState) -> None:
+        """SKIP_TAIL_START=cap (P.43), the request's last chunk [start, end) at its first decoder layer: refuse (ValueError,
+        before any decoder work) a start past last_start(end) whose decoder rows before it were not computed (exact: a
+        decoder window's carry masked, skipped or truncated; replay128: always, but at the request's own start), so
+        decode's snapshot rows [cap - 128, cap) would be inexact or missing. The model never pulls back by itself."""
+        if not (self._last and self.tail_from_cap() and self.decoder and self.skip_mode != "off"):
+            return
+        lim = self.last_start(end, self._req if start == self._req else 0)
+        if start <= lim:
+            return
+        if self.skip_mode == "exact" and not any(state.window[i].carry_masked(start) for i in self.decoder):
+            return  # (the decoder's rows before start are there: nothing to be exact from)
+        cap = snapshot_cap(end)
+        raise ValueError(
+            f"DECODER_SKIP={self.skip_mode}, SKIP_TAIL_START=cap: the request's last chunk [{start}, {end}) starts after "
+            f"{lim} = last_start({end}) (cap {cap}: decode's window snapshot [{cap - self.cfg.window}, {cap}) "
+            + (
+                f"is exact only from start + {self.exact_rows() - self.cfg.window}"
+                if self.skip_mode == "exact"
+                else "must lie in the decoder tail, which starts at or after the chunk's start"
+            )
+            + "); the caller starts the last chunk at or before TtDS41Model.last_start(end) (P.43)"
+        )
 
     def use_decoder_skip(self, mode: str) -> None:
         """Tests only (tests/bringup/test_window_ring.py, P.32): run a model loaded with DECODER_SKIP=replay128 (its
@@ -1407,8 +1477,13 @@ class TtDS41Model:
                     return self.blocks[i].kv_only(h, start, state, end)
                 assert isinstance(h, Skipped), f"layer {i}: DECODER_SKIP skips it on this chunk"
                 return h
-            if self._tail_mode:  # replay128, the request's last chunk: the decoder on its last <= 128 rows only
-                return self._tail_layer(i, h, start, state, end)
+            if i == self.decoder[0]:
+                self._check_last_start(start, start + self.chunk if end is None else int(end), state)
+            if self._tail_mode:  # replay128, the request's last chunk: the decoder on its tail only
+                out = self._tail_layer(i, h, start, state, end)
+                if self.tail_from_cap():  # (P.43: the tail holds [cap - 128, cap): every layer's snapshot)
+                    self._snapshot(i, start, state, end, src=self.tail_state(state).window[i])
+                return out
             out = self.blocks[i](h, start, state, end)
             state.window[i].computed(start, start + self.chunk)
             self._snapshot(i, start, state, end)
@@ -1423,12 +1498,13 @@ class TtDS41Model:
             return SKIPPED
         return out
 
-    def _snapshot(self, i: int, start: int, state: DS41DeviceState, end: int | None) -> None:
+    def _snapshot(self, i: int, start: int, state: DS41DeviceState, end: int | None, src=None) -> None:
         """WINDOW_KV_KEEP=snapshot128 (P.42): layer i's served window snapshot after its window write of the chunk
-        [start, end) (device ops; before the layer's ack), unless the caller marked the chunk not the request's last."""
+        [start, end) (device ops; before the layer's ack), unless the caller marked the chunk not the request's last.
+        ``src`` (P.43, replay128's tail): the window cache whose ring holds the rows (the tail state's)."""
         c = state.window[i]
         if c.snap is not None and self._snap:
-            c.write_snapshot(start + self.chunk if end is None else int(end))
+            c.write_snapshot(start + self.chunk if end is None else int(end), src=src)
 
     def _tail_layer(self, i: int, h, start: int, state: DS41DeviceState, end: int | None) -> TailH:
         """DECODER_SKIP=replay128 (P.31), the request's last chunk [start, end). The first decoder layer (20): its KV
@@ -1444,7 +1520,7 @@ class TtDS41Model:
             for j in self.kv_only:  # (the decoder's KV sources: layer 20)
                 assert j == i, (j, i)
                 self.blocks[i].kv_only(h, start, state, end)
-            dec = max(start, -(-(end - self.cfg.window) // 32) * 32)
+            dec = self.tail_start(start, end)  # (SKIP_TAIL_START, P.43)
             self._tail_at = (dec, end)
             if ts.memo is not None:
                 ts.memo.clear()

@@ -1039,20 +1039,26 @@ class TtWindowCache:
         return (self.ring.nbytes if self.ring_owned else 0) + snap + pin
 
     # ------------------------------------------------------------------ WINDOW_KV_KEEP=snapshot128 (P.42)
-    def write_snapshot(self, end: int) -> None:
+    def write_snapshot(self, end: int, src: "TtWindowCache | None" = None) -> None:
         """The served snapshot after a chunk ending at ``end`` (device ops only; after the layer's window write, before
         its ack): position p at row p % 128 for p in [cap - 128, cap), cap = snapshot_cap(end), read from the ring
         (``_snapshot_rows``: blocks held by one chip gathered from it, so every chip holds the same bytes); rows of no
         position < cap (cap < 128) zero; rows of p >= cap never written. One stock-path write of the 128 rows
         (ttnn.bringup.update_padded_kv_cache, start 0: every chip the same rows; slice_write takes no sharded output),
         on the ring's small grid (WINDOW_RING_CORES). Rows the ring does not hold (a window truncated
-        at a replay start, DECODER_SKIP=replay128 / exact) are zero (noted in ``snap_missing``)."""
+        at a replay start, DECODER_SKIP=replay128 / exact) are zero (noted in ``snap_missing``).
+        ``src`` (P.43, SKIP_TAIL_START=cap): the cache whose ring holds the rows, when not this one: DECODER_SKIP=
+        replay128's decoder tail (the tail state's window cache of this layer, written by the tail's chunk; its ring
+        is the tail model's working ring, the same [1, 1, 192, 512] shape); this cache's gather buffers and slab."""
+        src = self if src is None else src
+        assert src.ring is not None, "write_snapshot: the source cache keeps no ring"
+        assert src is self or src.keep != "none" or src.ring.writer is src, "the tail ring was written by another cache"
         cap = snapshot_cap(end)
         lo = cap
-        while lo > max(0, cap - SNAP) and self.history and self.ring.holds(lo - 32, lo):
+        while lo > max(0, cap - SNAP) and src.history and src.ring.holds(lo - 32, lo):
             lo -= 32
         self.snap_missing = (max(0, cap - SNAP), lo) if lo > max(0, cap - SNAP) else None
-        rows = self._snapshot_rows(cap, lo) if lo < cap else self.tables.zero_carry
+        rows = self._snapshot_rows(cap, lo, src.ring) if lo < cap else self.tables.zero_carry
         # every chip writes the same 128 rows at local row 0 of its (slot, layer) slab: kv_actual_global 0 is the
         # uniform per-device offset 0 on every SP row (and TP column: no tp_axis); the input is replicated
         snap = self.snap
@@ -1070,7 +1076,7 @@ class TtWindowCache:
             dealloc(rows)
         self.snap_cap = cap
 
-    def _snapshot_rows(self, cap: int, lo: int) -> ttnn.Tensor:
+    def _snapshot_rows(self, cap: int, lo: int, ring: "WindowRing | None" = None) -> ttnn.Tensor:
         """[1, 1, 128, 512] bf16 ROW_MAJOR, replicated, in SNAPSHOT order: row k = position p with p % 128 == k for p in
         [lo, cap) (lo 32-aligned, the ring holds [lo, cap)), zeros elsewhere. Read from the ring (position p at ring row
         p % 192); when a block is held by one chip (``write_own``), every chip's whole ring gathered over the mesh in
@@ -1078,8 +1084,10 @@ class TtWindowCache:
         (``WindowTables.snapshot_gather_buf``; chip q's ring
         at rows [q 192, (q + 1) 192)), the owner's rows taken. The 32-row pieces sliced straight into snapshot row order
         (contiguous ones merged) and concatenated: no rotation, no layout change, no intermediate before the gather.
-        Small ops on the ring's grid (WINDOW_RING_CORES)."""
-        ring, cores = self.ring, self.ring.cores
+        Small ops on the ring's grid (WINDOW_RING_CORES). ``ring``: the ring read (default this cache's; P.43: the
+        decoder tail's)."""
+        ring = self.ring if ring is None else ring
+        cores = ring.cores
         owners = {q: ring.own[(q // 32) % ring.BLOCKS] for q in range(lo, cap, 32)}
         src, stride = ring.t, 0  # (position p of owner q: src row q stride + p % 192)
         temps = []

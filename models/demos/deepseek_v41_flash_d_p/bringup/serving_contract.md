@@ -70,19 +70,35 @@ tt-d-gen jazpur/dsv4-replay-window 48b79127fb1).** Two settings (tt/settings.py)
   0_window_kv with `KvChunkTensorType.Snapshot` (tt-d-gen#1955's tagging; the branch's KV Manager has it:
   kv_manager/include/kv_tensor_type.hpp, cached_tensor_mode.hpp `movesTensor`, the prefill reader ships snapshot
   configs with the last chunk's acks of a recurrent model, prefill_reader.cpp:235). Records exist at positions 0, 32,
-  64, 96 only; the config's declared max_sequence_length stays PREFILL_MAX_SEQ_LEN (not 128): tt-metal's
-  KvChunkAddressTable refuses a lookup at or past it (kv_chunk_address_table.cpp:138) and the bring-up framework's
-  contract test reads every config at every chunk's first and last block (testing/contract.py); tt-d-gen's loader
-  reads a snapshot config whose records end before its declared length as that extent, 128
-  (kv_manager/src/control_plane/maps/kv_chunk_table.cpp conformSnapshot -> SnapshotOfExtent), which is what decode's
-  table declares (engine/tests/integration/dsv4_tables.py "swa" snapshot, 128). The model keeps its own last 192 rows
+  64, 96 only, and the config declares max_sequence_length 128 (P.43), what decode's table declares
+  (engine/tests/integration/dsv4_tables.py "swa" snapshot, 128; tt-d-gen's loader reads it as that extent:
+  kv_manager/src/control_plane/maps/kv_chunk_table.cpp conformSnapshot -> SnapshotOfExtent). tt-metal's
+  KvChunkAddressTable refuses a lookup at or past the declared length (kv_chunk_address_table.cpp:138), so no reader
+  looks a snapshot config up past 128: the bring-up framework's contract check (testing/contract.py AckReads) reads a
+  Snapshot config at the request's last chunk only, its 4 records, as tt-d-gen ships it; history configs keep every
+  chunk's first / last block check. The model keeps its own last 192 rows
   a layer (P.32's ring) for attention and rewrites the snapshot from them after each layer's window write, before
   the layer's ack, on every chunk (tt-d-gen's chunk header has no last flag; the last chunk's is the one shipped).
   The pulled-back last chunk (max_seq - chunk, ...) needs a carry about a chunk behind the previous end, outside the
   ring: each layer also keeps the 128 rows before max_seq - chunk when a chunk writes them (`TtWindowCache.pin`).
-  Known conflict: the bring-up framework's contract test (testing/contract.py) re-reads every config's first block
-  after the request and counts a change as an early ack; the snapshot's record 0 is rewritten by the next chunk by
-  design, so it reports acks_early = 40 (one per layer) until that check skips Snapshot configs.
+  (P.42's conflict with the framework's ack check, acks_early 40, DS41-218: resolved in P.43, see above.)
+- **Decoder skip and the snapshot (`SKIP_TAIL_START=cap`, default; end = P.42's rule kept; P.43, owner 2026-11-07).**
+  Only under `DECODER_SKIP=exact` / `replay128` (default off: unchanged) and only on chunks the caller marks
+  (`begin_chunk(.., last=True/False)`; the engine marks none today, so every chunk runs every layer). The decoder
+  layers (layer 20's attention / MoE, 21-39) compute window rows only on the request's last chunk, so that chunk
+  must reach back to decode's snapshot rows [cap - 128, cap). The caller starts it at or before
+  `TtDS41Model.last_start(end, request_start)` and ends the chunk before it there:
+  replay128: min(end - 128, cap - 128), and the decoder tail starts there too (it holds [cap - 128, end), 129 to 192
+  rows, at the tail model's fixed 1024 rows on 8x4); exact: min(end - 2688, cap - 2668) (the decoder is exact from
+  the chunk's start + 20 x 127); both clamped at 0 / the request's start, 32-aligned. Minimum last-chunk length:
+  replay128 end - (cap - 128) = 129..192 tokens (128 + (end - cap)); exact 2688..2732 tokens (end - cap up to 64);
+  a shorter prompt is one chunk from 0. The model refuses a later start (ValueError at the first decoder layer: the
+  encoder layers of that chunk already ran), never pulls back itself, and writes every layer's snapshot on the last
+  chunk (replay128's decoder layers from the tail's own window rows, truncated at the tail's start by design).
+  What serving would need: a last-chunk flag in tt-d-gen's chunk header (owner raising it with tt-d-gen; the runner
+  contract is unchanged here) and a chunk plan whose last chunk starts at last_start(end) with the previous chunk
+  ending there (any 32-aligned start is accepted, DS41-17). SKIP_TAIL_START=end: the tail = the last <= 128 rows,
+  exact's last chunk at or before end - 2688, no check, no snapshot for the layers replay128 runs on its tail.
 - **Re-index aliases (`REINDEX_SERVE=alias`, default; copy = P.39's copies).** 4_index_k_r1 still covers 20, 24, 28,
   32, 36, but the entries of 24-36 are layer 20's records: the same noc_addr, size and device group at the same
   (slot, position), so they resolve to layer 20's bytes. No slab of their own, nothing written for them. Checked
@@ -248,7 +264,7 @@ Table rules (`ttnn.experimental.disaggregation.KvChunkAddressTable`):
   (ttnn/cpp/ttnn-nanobind/disaggregation.cpp:117-122). chunk_n_tokens 32. chunk_size_bytes = (32 / r) x width x 2
   (index configs under fp8_row192: (32 / r) x 192).
   num_layers = the served layers. num_slots = max_slots, the same in every config (kv_chunk_table.cpp:41-72).
-  max_sequence_length = PREFILL_MAX_SEQ_LEN. Compression UNROLLED or STRIDED_ROWS (tables.py:37).
+  max_sequence_length = PREFILL_MAX_SEQ_LEN (the window snapshot under snapshot128: 128, P.43). Compression UNROLLED or STRIDED_ROWS (tables.py:37).
 - **Coverage.** Config 0 (0_window_kv) covers exactly the served layers 0..N-1 (tables.py:67-74). Every other config
   covers exactly its layers: a layer covered on one side only fails the migration
   (migration_strategy_builder.cpp:107-121).

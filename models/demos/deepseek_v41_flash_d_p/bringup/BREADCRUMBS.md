@@ -3551,3 +3551,39 @@ Each item has its own setting (tt/settings.py, default on, off = the path before
   the bytes it reads are final. The fix belongs in testing/contract.py, which is outside this step's paths.
 - Open serving question (DS41-219): at 48b79127fb1 a PD prefill's last actual_end is prompt_len - 1. Our cap and
   decode's differ when prompt_len % 64 == 1. Decode has to confirm which length its cap uses.
+
+## P.43 perf (8x4, 2026-11-07): SKIP_TAIL_START=cap (last chunk / replay128 tail from decode's cap) + Snapshot configs in the framework ack check
+- Setting `SKIP_TAIL_START` cap (default) | end (P.42). A/B: on `DECODER_SKIP=replay128 WINDOW_KV_KEEP=snapshot128
+  SKIP_TAIL_START=cap ENGRAM_TABLE=resident`, off the same with `end`. DECODER_SKIP=off and chunks not marked last: no change.
+- Model (tt/model.py): `last_start(end, request_start)` = the latest 32-aligned start of a request's last chunk
+  (cap: exact min(end - 2688, cap - 2668), replay128 min(end - 128, cap - 128); end: exact end - 2688, replay128 no
+  limit; clamped at the request start / 0). `tail_start` (replay128 tail: cap: min(ceil32(end - 128), cap - 128)).
+  `_check_last_start` raises ValueError at the first decoder layer of a last chunk past last_start (exact only when a
+  decoder carry is masked; replay128 unless the chunk is the request's own start). Under cap every layer's snapshot is
+  written on the last chunk; replay128's decoder layers from the tail state's window ring
+  (`TtWindowCache.write_snapshot(end, src=)`, the main cache's gather buffers and slab; the high_bw gathers kept).
+- Caller rule (tests): the chunk before the last ends at last_start(end) (no overlap, so the encoder's carry is in
+  the 192-row ring; a pulled-back overlapping start would truncate every layer's window under snapshot128).
+- Framework (testing/contract.py): `AckReads`: history configs unchanged (each chunk's first / last block); Snapshot
+  configs (`is_snapshot_config`) only at the last chunk's acks, every record of [0, max_sequence_length). Unit test
+  tests/test_contract_acks.py (fake table, host only). kv_contract declares 0_window_kv max_sequence_length 128
+  (`c["seq"] or seq_len`); caches.table_rules expects 128 for the snapshot.
+- Test (tests/test_window_snapshot.py::test_skip_snapshot): every layer, s10240 tokens, ends 5184 / 5150 / 100. The
+  limit for the step-dump layers comes from the official per-position window KV on the same rows (official_kv,
+  DS41-193): with the ring drift, L20 rows [0, 64) (a plain no-skip chunk) failed 0.182 vs 0.144, the official itself
+  is 0.180 there. Results: exact every layer <= 0.76 of limit; replay128 L00-L20 <= 0.78, L21-L39 diag 0.97-2.2x
+  (DS41-221); refusal of last_start + 32 raises in both modes.
+- Last-chunk start (8x4, chunk 5120), before (end) -> after (cap): replay128 3000: 0 -> 0 (tail 2880 -> 2816); 5150:
+  5120 -> 4992 (tail 5024 -> 4992); 5184: 5120 -> 4992 (tail 5056 -> 4992). exact 3000: 288 -> 256; 5150: 2432 ->
+  2432; 5184: 2496 -> 2432.
+- Gate units passed on this code: test_kv_layout, test_window_snapshot (replay128, exact), test_contract (acks_early
+  0, contract_checks_failed 0, 800 blocks), test_adapter_acks, test_runner_contract.
+- Re-run: `DS41_DECODER_SKIP=exact DS41_WINDOW_KV_KEEP=snapshot128 DS41_ENGRAM_TABLE=resident scripts/run_safe_pytest.sh
+  --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_window_snapshot.py` (~5 min incl. load);
+  `scripts/run_safe_pytest.sh models/demos/common/bringup/tests/test_contract_acks.py` (host only).
+- test_short_turn (replay128, cap): tail [51520, 51712) (192 rows; was [51584, 51712)), final hidden rel at the last
+  token 0.108 (limit 0.242; DS41-205 had 0.199 with the 128-row tail), top-5 / top-1 hit; short_turn_ms 170.9,
+  short_turn_device_ms 147.29.
+- `orchestrator measure --task P.43` (change on; the harness never marks a chunk last, so the skip does not act):
+  quick L39 0.7067 (limit 1.533, identical to P.42), host_transfers_per_layer 0, wall 186.9; p51200 chunk_wall_ms
+  204.4 (spread 39.2), device_ms_total 189.02 (P.42's on run: 206.5 / 188.74).

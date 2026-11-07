@@ -1,0 +1,97 @@
+{
+ "used": [
+  {
+   "id": "DS41-218",
+   "how": "the framework fix it asked for: testing/contract.py AckReads checks Snapshot configs at the last chunk only; entry updated with the fix",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "DS41-193",
+   "how": "test_skip_snapshot takes the step-dump layers' limit from the official per-position window KV on the same rows (official_kv); with the ring drift L20 rows [0, 64) of a no-skip chunk failed 0.182 vs 0.144 while the official itself is 0.180 there",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "DS41-207",
+   "how": "replay128's tail rows of layers 21-39 recorded as snap_diag_* beside the no-skip limit, not gated, as test_window_ring does",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "DS41-209",
+   "how": "used the golden's ring at 5120 (every layer, [4992, 5120)) by choosing ends 5150 / 5184 whose cap is 5120, so no recomputation was needed",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-17",
+   "how": "the caller rule ends the chunk before the last at last_start(end) (any 32-aligned start), instead of an overlapping pull-back",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-216",
+   "how": "kept the snapshot on the model's high_bw gathers (a semaphore pair per axis); the tail ring reuses the main cache's gather buffers",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "DS41-183",
+   "how": "every device run (gate units, measure) ran detached through devjob",
+   "traced": null,
+   "cited": false
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "under WINDOW_KV_KEEP=snapshot128 a pulled-back last chunk that overlaps the previous chunk loses every layer's carry (the 192-row ring does not hold it), so a decoder-skip caller must shorten the previous chunk instead of overlapping (now in BREADCRUMBS P.43 / serving_contract.md)",
+  "the window-KV ring drift at 10240 is not a valid limit near position 0: the official reference's own error on L20 rows [0, 64) is 0.180 vs 0.072 on the ring (DS41-193 states it for [0, 2536), not for the first rows)"
+ ],
+ "overseer": [
+  {
+   "id": "OV-3",
+   "answer": "done",
+   "evidence": "no padding or inflated work: the tail runs at the tail model's existing 1024-row geometry; the snapshot stays 128 rows"
+  },
+  {
+   "id": "OV-23",
+   "answer": "n/a",
+   "evidence": "no Python-built op added or touched; the snapshot write uses the existing ttnn.bringup.update_padded_kv_cache / slice / concat calls as P.42"
+  },
+  {
+   "id": "OV-25",
+   "answer": "done",
+   "evidence": "no fork regression suites run; only the new host unit test (test_contract_acks.py) and the model-level gate units"
+  }
+ ],
+ "cited_only": [
+  "DS41-221"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "P.43",
+  "role": "perf",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-11-07T18:25:13",
+  "head": "902322e6f77",
+  "touched": [
+   "models/demos/common/bringup/testing/contract.py",
+   "models/demos/common/bringup/tests/test_contract_acks.py",
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/P.43.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/knowledge_use/P.43.perf.1.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/serving_contract.md",
+   "models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/caches.py",
+   "models/demos/deepseek_v41_flash_d_p/tests/test_window_snapshot.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/attention.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/model.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/runners/adapter.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/runners/kv_contract.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/settings.py"
+  ]
+ }
+}
