@@ -51,3 +51,9 @@ shared:
     paths:
     - ttnn/ttnn/bringup
     note: 'owner 2026-11-07: drop the bf16 index-key copy, serve the Blaze 8-bit rows from the bfp8 keys; byte-exact served-row check re-referenced to the bfp8 keys (authorized), every option kept'
+  P.42:
+    by: dnijemcevic
+    at: '2026-11-07T08:00:00'
+    paths:
+    - ttnn/ttnn/bringup
+    note: 'owner 2026-11-07: PD table per decode review: re-index aliases, 128-row window snapshot clamped at cap; contract change authorized, old paths kept behind switches'
