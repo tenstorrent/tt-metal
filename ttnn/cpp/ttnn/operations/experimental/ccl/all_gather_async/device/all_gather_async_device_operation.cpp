@@ -14,6 +14,8 @@
 #include "ttnn/operations/ccl/common/host/ccl_topology_utils.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"  // for roofline calculation
 #include "ttnn/operations/experimental/ccl/composite_common.hpp"
+#include "ttnn/operations/common/hash_without_rows.hpp"
+#include "ttnn/operation.hpp"
 
 #include <algorithm>
 
@@ -38,6 +40,53 @@ bool via_broadcast_has_contiguous_output_slice(const Tensor& input_tensor, int32
 
     return std::all_of(
         page_extents.begin(), page_extents.begin() + gather_dim, [](const auto& extent) { return extent == 1; });
+}
+
+// Checked on a miss and on every MINIMAL_DEFAULT hit: the buffers' storage and liveness (a tensor can be
+// freed between calls) and the row-dependent shape rules. The rest of the miss validation is fixed by the
+// specs and attributes.
+void validate_row_dependent_invariants(const AllGatherAsyncParams& args, const AllGatherAsyncInputs& tensor_args) {
+    const auto& input_tensor = tensor_args.input_tensor;
+    TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to all_gather need to be on device!");
+    TT_FATAL(input_tensor.is_allocated(), "Operands to all_gather need to be allocated in buffers on device!");
+    const auto input_shape = input_tensor.padded_shape();
+    if (input_tensor.layout() == Layout::TILE && input_shape.rank() >= 2) {
+        const uint32_t tile_height = input_tensor.tensor_spec().tile().get_height();
+        TT_FATAL(
+            input_shape[-2] % tile_height == 0,
+            "Input tensor height {} must be a multiple of the tile height {}",
+            input_shape[-2],
+            tile_height);
+    }
+    if (tensor_args.persistent_output_buffer.has_value()) {
+        const auto& output_tensor = tensor_args.persistent_output_buffer.value();
+        TT_FATAL(output_tensor.storage_type() == StorageType::DEVICE, "Operands to all_gather need to be on device!");
+        TT_FATAL(
+            output_tensor.is_allocated(),
+            "The persistent output buffer of all_gather needs to be allocated in a buffer on device!");
+        const auto output_shape = output_tensor.padded_shape();
+        TT_FATAL(
+            output_shape.size() == input_shape.size(),
+            "Error, Output tensor shape should have same number of dimensions as input tensor but has {}",
+            output_shape.size());
+        for (size_t i = 0; i < input_shape.size(); ++i) {
+            if (i == args.dim) {
+                TT_FATAL(
+                    output_shape[i] <= input_shape[i] * args.ring_size,
+                    "Error, Output tensor shape at dimension {} should be {} but has {}",
+                    i,
+                    input_shape[i] * args.ring_size,
+                    output_shape[i]);
+            } else {
+                TT_FATAL(
+                    output_shape[i] == input_shape[i],
+                    "Error, Output tensor shape at dimension {} should be {} but has {}",
+                    i,
+                    input_shape[i],
+                    output_shape[i]);
+            }
+        }
+    }
 }
 
 }  // namespace
@@ -79,20 +128,19 @@ AllGatherAsyncDeviceOperation::program_factory_t AllGatherAsyncDeviceOperation::
 
 void AllGatherAsyncDeviceOperation::validate_on_program_cache_miss(
     const AllGatherAsyncParams& args, const AllGatherAsyncInputs& tensor_args) {
+    validate_row_dependent_invariants(args, tensor_args);
     const auto& input_tensor = tensor_args.input_tensor;
     const auto& layout = input_tensor.layout();
     const auto& dtype = input_tensor.dtype();
-    const auto& page_size = input_tensor.buffer()->page_size();
+    const auto& page_size = input_tensor.mesh_buffer().page_size();
     TT_FATAL(
         (input_tensor.device()->arch() != tt::ARCH::BLACKHOLE) ||
             (input_tensor.memory_config().buffer_type() != BufferType::DRAM) ||
             !args.use_all_gather_async_llama_sharded,
         "This kernel does not support blackhole dram as it does not use an accessor to get the noc address as needed "
         "by the fabric api");
-    TT_FATAL(page_size % input_tensor.buffer()->alignment() == 0, "All Gather currently requires aligned pages");
+    TT_FATAL(page_size % input_tensor.mesh_buffer().alignment() == 0, "All Gather currently requires aligned pages");
 
-    TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to all_gather need to be on device!");
-    TT_FATAL(input_tensor.is_allocated(), "Operands to all_gather need to be allocated in buffers on device!");
     TT_FATAL(args.num_links > 0, "Error, num_links should be more than 0 but has {}", args.num_links);
     TT_FATAL(
         args.num_links <= input_tensor.device()->compute_with_storage_grid_size().y,
@@ -111,7 +159,6 @@ void AllGatherAsyncDeviceOperation::validate_on_program_cache_miss(
     if (tensor_args.persistent_output_buffer.has_value()) {
         const auto& output_tensor = tensor_args.persistent_output_buffer.value();
 
-        TT_FATAL(output_tensor.storage_type() == StorageType::DEVICE, "Operands to all_gather need to be on device!");
         TT_FATAL(
             output_tensor.layout() == layout,
             "Error, Output tensor layout should be same as input tensor layout but has {}",
@@ -137,30 +184,7 @@ void AllGatherAsyncDeviceOperation::validate_on_program_cache_miss(
             "Unsupported output tensor memory layout {}.",
             output_tensor.memory_config().memory_layout());
 
-        // check the output tensor size
-        auto output_shape = output_tensor.padded_shape();
-        auto input_shape = input_tensor.padded_shape();
-        TT_FATAL(
-            output_shape.size() == input_shape.size(),
-            "Error, Output tensor shape should have same number of dimensions as input tensor but has {}",
-            output_shape.size());
-        for (size_t i = 0; i < input_shape.size(); ++i) {
-            if (i == args.dim) {
-                TT_FATAL(
-                    output_shape[i] <= input_shape[i] * args.ring_size,
-                    "Error, Output tensor shape at dimension {} should be {} but has {}",
-                    i,
-                    input_shape[i] * args.ring_size,
-                    output_shape[i]);
-            } else {
-                TT_FATAL(
-                    output_shape[i] == input_shape[i],
-                    "Error, Output tensor shape at dimension {} should be {} but has {}",
-                    i,
-                    input_shape[i],
-                    output_shape[i]);
-            }
-        }
+        // The output tensor size is checked in validate_row_dependent_invariants (on hits too).
 
         if (version == AllGatherAsyncVersion::MINIMAL_DEFAULT) {
             // Checks specific to the MINIMAL_DEFAULT case
@@ -203,6 +227,44 @@ void AllGatherAsyncDeviceOperation::validate_on_program_cache_miss(
             input_tensor.padded_shape(),
             input_tensor.layout());
     }
+}
+
+// MINIMAL_DEFAULT re-checks the row-dependent invariants on a hit; the other versions keep the full miss
+// validation on hits, as before.
+void AllGatherAsyncDeviceOperation::validate_on_program_cache_hit(
+    const AllGatherAsyncParams& args, const AllGatherAsyncInputs& tensor_args) {
+    if (select_version(args) != AllGatherAsyncVersion::MINIMAL_DEFAULT) {
+        validate_on_program_cache_miss(args, tensor_args);
+        return;
+    }
+    validate_row_dependent_invariants(args, tensor_args);
+}
+
+ttsl::hash::hash_t AllGatherAsyncDeviceOperation::compute_program_hash(
+    const AllGatherAsyncParams& args, const AllGatherAsyncInputs& tensor_args) {
+    const bool row_free = select_version(args) == AllGatherAsyncVersion::MINIMAL_DEFAULT;
+    const auto hash_tensor = [&](const Tensor& tensor) {
+        return row_free ? ttnn::operations::common::hash_spec_without_rows(tensor)
+                        : ttsl::hash::hash_objects_with_default_seed(tensor.tensor_spec());
+    };
+    uint32_t num_workers_per_direction = 0;
+    if (row_free) {
+        // The default worker count is a function of the output bytes (the packed size of the output's spec),
+        // computed the same way here and in the factory.
+        const uint32_t output_bytes =
+            (tensor_args.persistent_output_buffer.has_value() ? tensor_args.persistent_output_buffer->tensor_spec()
+                                                              : compute_output_specs(args, tensor_args))
+                .compute_packed_buffer_size_bytes();
+        num_workers_per_direction =
+            all_gather_async_num_workers_per_direction(args, tensor_args.input_tensor, output_bytes);
+    }
+    return tt::tt_metal::operation::hash_operation<AllGatherAsyncDeviceOperation>(
+        args.attribute_values(),
+        row_free,
+        num_workers_per_direction,
+        hash_tensor(tensor_args.input_tensor),
+        tensor_args.persistent_output_buffer.has_value(),
+        tensor_args.persistent_output_buffer.has_value() ? hash_tensor(*tensor_args.persistent_output_buffer) : 0);
 }
 
 AllGatherAsyncDeviceOperation::spec_return_value_t AllGatherAsyncDeviceOperation::compute_output_specs(
@@ -401,10 +463,10 @@ AllGatherAsyncDeviceOperation::create_op_performance_model(
     // Roofline assumes all device compute cores drive DRAM concurrently
     // (hardware max parallelism). DRAM bandwidth and its read/write fill-drain
     // latency are two more floors; all of these overlap, so all feed the final max().
-    const bool input_is_dram = input_tensor.buffer()->buffer_type() == BufferType::DRAM;
-    const bool output_is_dram = output_tensor.buffer()->buffer_type() == BufferType::DRAM;
-    const uint32_t read_page_size = input_tensor.buffer()->page_size();
-    const uint32_t write_page_size = output_tensor.buffer()->page_size();
+    const bool input_is_dram = input_tensor.memory_config().buffer_type() == BufferType::DRAM;
+    const bool output_is_dram = output_tensor.memory_config().buffer_type() == BufferType::DRAM;
+    const uint32_t read_page_size = input_tensor.mesh_buffer().page_size();
+    const uint32_t write_page_size = output_tensor.mesh_buffer().page_size();
 
     // Hardware ceiling: total compute cores available to drive DRAM
     const uint32_t device_rows = input_tensor.device()->compute_with_storage_grid_size().x;

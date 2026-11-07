@@ -340,6 +340,7 @@ def test_deepseek_prefill_preserves_live_slots_when_admitting_new_request():
         seed=list(range(100, 108)),
         enable_log_probs=[False, True, False, True, False, True, False, True],
         num_logprobs=list(range(8)),
+        log_probs_enable_temperature=[True] * 8,
     )
     incoming = SamplingParams(
         temperature=[0.95],
@@ -351,6 +352,7 @@ def test_deepseek_prefill_preserves_live_slots_when_admitting_new_request():
         seed=[999],
         enable_log_probs=[False],
         num_logprobs=[9],
+        log_probs_enable_temperature=[False],
     )
 
     stable = DeepseekGenerator._sampling_params_for_user_slots(generator, incoming, [5])
@@ -364,6 +366,7 @@ def test_deepseek_prefill_preserves_live_slots_when_admitting_new_request():
     assert stable.seed == [100, 101, 102, 103, 104, 999, 106, 107]
     assert stable.enable_log_probs == [False, True, False, True, False, False, False, True]
     assert stable.num_logprobs == [0, 1, 2, 3, 4, 9, 6, 7]
+    assert stable.log_probs_enable_temperature == [True, True, True, True, True, False, True, True]
 
 
 def test_deepseek_prompt_history_excludes_padding_tokens():

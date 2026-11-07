@@ -931,24 +931,8 @@ inline void config_unpacker_x_end(const std::uint32_t face_r_dim)
     LLK_ASSERT(
         face_r_dim == 1 || face_r_dim == 2 || face_r_dim == 4 || face_r_dim == 8 || face_r_dim == FACE_R_DIM, "face_r_dim must be 1, 2, 4, 8, or FACE_R_DIM");
 
-    switch (face_r_dim)
-    {
-        case 1:
-            TTI_SETADCXX(UNP_SEL, 1 * FACE_C_DIM - 1, 0x0);
-            break;
-        case 2:
-            TTI_SETADCXX(UNP_SEL, 2 * FACE_C_DIM - 1, 0x0);
-            break;
-        case 4:
-            TTI_SETADCXX(UNP_SEL, 4 * FACE_C_DIM - 1, 0x0);
-            break;
-        case 8:
-            TTI_SETADCXX(UNP_SEL, 8 * FACE_C_DIM - 1, 0x0);
-            break;
-        default:
-            TTI_SETADCXX(UNP_SEL, FACE_R_DIM * FACE_C_DIM - 1, 0x0);
-            break;
-    }
+    // One write built at run time, no branch: a switch put the full face, the common case, out of line mid init
+    TT_SETADCXX(UNP_SEL, face_r_dim * FACE_C_DIM - 1, 0x0);
 }
 
 inline void wait_for_dest_available()

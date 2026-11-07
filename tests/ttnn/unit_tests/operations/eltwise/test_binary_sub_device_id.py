@@ -199,6 +199,36 @@ def test_remainder_int32_row_major_bfloat16_output_with_sub_device_id(device, sc
         teardown_sub_device(device, sub_device_manager)
 
 
+@pytest.mark.parametrize("op_fn", [ttnn.remainder, ttnn.fmod, ttnn.div])
+@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
+@skip_for_slow_dispatch()
+def test_binary_int32_float_scalar_nd_sharded_with_sub_device_id(device, op_fn, layout):
+    """ND-sharded inputs have no 2D shard_spec; promotion must read the grid from nd_shard_spec (#64039)."""
+    cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(4, 0), ttnn.CoreCoord(4, 2))})
+    memory_config = ttnn.MemoryConfig(
+        ttnn.BufferType.L1,
+        ttnn.NdShardSpec(
+            ttnn.Shape([1, 1, 32, 32]),
+            cores,
+            ttnn.ShardOrientation.ROW_MAJOR,
+            ttnn.ShardDistributionStrategy.ROUND_ROBIN_1D,
+        ),
+    )
+    torch_input = ((torch.arange(96 * 128).reshape(1, 1, 96, 128) % 17) - 8).to(torch.int32)
+    sub_device_manager = setup_sub_device(device, local_l1_size=128 * 1024)
+    try:
+        tt_input = ttnn.from_torch(
+            torch_input, dtype=ttnn.int32, layout=layout, memory_config=memory_config, device=device
+        )
+        assert tt_input.memory_config().shard_spec is None
+        result = op_fn(tt_input, 1.5, sub_device_id=ttnn.SubDeviceId(1))
+        expected = ttnn.get_golden_function(op_fn)(torch_input.float(), 1.5, device=device)
+        assert result.layout == layout
+        assert torch.equal(expected, ttnn.to_torch(result).float())
+    finally:
+        teardown_sub_device(device, sub_device_manager)
+
+
 @pytest.mark.parametrize("rounding_mode", [None, "trunc", "floor"])
 @pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
 @skip_for_slow_dispatch()
