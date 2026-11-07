@@ -55,21 +55,21 @@ ALWI void gelu_tile_pack(uint32_t idst) {
 /**
  * Init for gelu_tanh_tile. See gelu_tanh_tile() for semantics.
  */
-template <bool fast = false>
+template <bool fast = false, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void gelu_tanh_tile_init() {
     if constexpr (fast) {
         MATH(llk_math_eltwise_unary_sfpu_init<SfpuType::gelu_tanh>(sfpu::gelu_tanh_fast_init));
     } else {
-        MATH(llk_math_eltwise_unary_sfpu_init<SfpuType::gelu_tanh>(sfpu::gelu_tanh_init));
+        MATH(llk_math_eltwise_unary_sfpu_init<SfpuType::gelu_tanh>(sfpu::gelu_tanh_init<is_fp32_dest_acc_en>));
     }
 }
 
-template <bool fast = false>
+template <bool fast = false, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void gelu_tanh_tile_init_pack() {
     if constexpr (fast) {
         PACK(llk_math_eltwise_unary_sfpu_init<SfpuType::gelu_tanh>(sfpu::gelu_tanh_fast_init));
     } else {
-        PACK(llk_math_eltwise_unary_sfpu_init<SfpuType::gelu_tanh>(sfpu::gelu_tanh_init));
+        PACK(llk_math_eltwise_unary_sfpu_init<SfpuType::gelu_tanh>(sfpu::gelu_tanh_init<is_fp32_dest_acc_en>));
     }
 }
 
@@ -81,9 +81,14 @@ ALWI void gelu_tanh_tile_init_pack() {
  * Intended as a fused-activation drop-in for matmuls that need the
  * tanh-GELU (e.g. F.gelu(approximate="tanh")).
  *
- * fast = false evaluates it in FP32 with the accurate tanh. fast = true, for BF16 outputs, computes the same
- * function as x / (1 + exp(-2u)) with a polynomial exp and two Newton steps on the reciprocal: within 1 BF16
- * ULP of the accurate form where |GELU| >= 1e-3, and without its cancellation in the negative tail.
+ * fast = false evaluates it in FP32 with the accurate tanh on Wormhole and with FP32 DEST. On Blackhole with BF16
+ * DEST (is_fp32_dest_acc_en false) it runs a fitted kernel instead (ckernel_sfpu_gelu_tanh_bf16.h): the same
+ * function as x / (1 + exp(-2u)), below 1 BF16 ULP of the exact value wherever that is a normal BF16 value
+ * (max 0.51 ULP). Wormhole and Blackhole give different bits there.
+ *
+ * fast = true, for BF16 outputs, computes the same function as x / (1 + exp(-2u)) with a polynomial exp and
+ * two Newton steps on the reciprocal: within 1 BF16 ULP of the FP32 tanh form where |GELU| >= 1e-3, and
+ * without its cancellation in the negative tail.
  *
  * Return value: None
  *

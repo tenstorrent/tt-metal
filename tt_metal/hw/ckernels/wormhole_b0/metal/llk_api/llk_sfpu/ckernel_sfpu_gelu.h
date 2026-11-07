@@ -376,6 +376,8 @@ inline void calculate_gelu_tanh() {
     }
 }
 
+// Wormhole keeps the stock body in both DEST modes, so the state is written in both.
+template <bool is_fp32_dest_acc_en = true>
 inline void gelu_tanh_init() {
     math::reset_counters(p_setrwc::SET_ABD_F);
     // initialise constants for _sfpu_tanh_fp32_accurate_
