@@ -1153,10 +1153,10 @@ void run_benchmark_case_six(DfbInitTimingBenchContext& ctx) {
     TT_FATAL(cfg_bytes > 0u, "serialize_dfb_config_for_core returned 0 bytes");
     const auto* ghdr = reinterpret_cast<const dfb_global_header_t*>(cfg_buf.data());
     constexpr uint8_t kNeo0Hart = ::dfb::TENSIX_RISC_OFFSET;  // Neo0 unpack hart
-    const auto* neo0_e0 = reinterpret_cast<const dfb_hart_init_entry_t*>(
-        cfg_buf.data() + ghdr->hart_blob_offset[kNeo0Hart]);
+    const auto* neo0_e0 =
+        reinterpret_cast<const dfb_hart_init_entry_t*>(cfg_buf.data() + ghdr->hart_desc[kNeo0Hart].blob_start);
     const auto* neo0_tc0 = reinterpret_cast<const dfb_blob_tc_pair_t*>(
-        cfg_buf.data() + ghdr->hart_blob_offset[kNeo0Hart] + sizeof(dfb_hart_init_entry_t));
+        cfg_buf.data() + ghdr->hart_desc[kNeo0Hart].blob_start + sizeof(dfb_hart_init_entry_t));
     log_info(
         tt::LogTest,
         "BenchmarkCaseSix preflight: Neo0 dfb{} entry_size={} tc0 base=0x{:x} limit=0x{:x} ring_tiles={}",
@@ -1248,10 +1248,10 @@ void run_benchmark_case_six_debug(DfbInitTimingBenchContext& ctx) {
     TT_FATAL(cfg_bytes > 0u, "serialize_dfb_config_for_core returned 0 bytes");
     const auto* ghdr = reinterpret_cast<const dfb_global_header_t*>(cfg_buf.data());
     constexpr uint8_t kNeo0Hart = ::dfb::TENSIX_RISC_OFFSET;
-    const auto* neo0_e0 = reinterpret_cast<const dfb_hart_init_entry_t*>(
-        cfg_buf.data() + ghdr->hart_blob_offset[kNeo0Hart]);
+    const auto* neo0_e0 =
+        reinterpret_cast<const dfb_hart_init_entry_t*>(cfg_buf.data() + ghdr->hart_desc[kNeo0Hart].blob_start);
     const auto* neo0_tc0 = reinterpret_cast<const dfb_blob_tc_pair_t*>(
-        cfg_buf.data() + ghdr->hart_blob_offset[kNeo0Hart] + sizeof(dfb_hart_init_entry_t));
+        cfg_buf.data() + ghdr->hart_desc[kNeo0Hart].blob_start + sizeof(dfb_hart_init_entry_t));
     log_info(
         tt::LogTest,
         "BenchmarkCaseSixDebug preflight: Neo0 dfb{} entry_size={} tc0 base=0x{:x} limit=0x{:x} ring_tiles={}",

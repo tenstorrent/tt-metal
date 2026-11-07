@@ -2019,12 +2019,17 @@ public:
                 size_t size = transfer_vector.back().end() - start;
                 TT_ASSERT(size > 0);
                 TT_ASSERT(size - 1 <= std::numeric_limits<uint16_t>::max());
+                // Snoop any sub-command that carries DFB config so DMs can read them cached.
+                const bool snoop = std::any_of(
+                    transfer_vector.begin(), transfer_vector.end(), [](const Transfer& t) { return !t.dfbs.empty(); });
                 batched_dispatch_subcmds.back().emplace_back(CQDispatchWritePackedLargeSubCmd{
                     .noc_xy_addr = transfer_set.first.first,
                     .addr = start,
                     .length_minus1 = (uint16_t)(size - 1),
                     .num_mcast_dests = static_cast<uint8_t>(transfer_set.first.second),
-                    .flags = CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_FLAG_NONE});
+                    .flags = static_cast<uint8_t>(
+                        snoop ? CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_FLAG_SNOOP
+                              : CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_FLAG_NONE)});
 
                 // Modify the start addresses to be relative to the dispatch buffer.
                 uint32_t new_start =

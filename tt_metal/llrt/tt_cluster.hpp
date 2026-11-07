@@ -167,6 +167,10 @@ public:
     // that lies in L1 or a DRAM bank goes out as a block; anything else keeps register-width writes.
     void write_core_immediate(const void* mem_ptr, uint32_t sz_in_bytes, tt_cxy_pair core, uint64_t addr) const;
 
+    bool requires_snoop_for_dm_coherence() const;
+    void write_core_with_snoop_if_required(
+        const void* mem_ptr, uint32_t sz_in_bytes, tt_cxy_pair core, uint64_t addr) const;
+
     // Write to core without effects of write combining
     template <typename DType>
     void write_core_immediate(
@@ -449,6 +453,8 @@ private:
     bool dma_available(ChipId chip_id) const;
     bool use_dma_read(ChipId chip_id, uint32_t sz_in_bytes, uint64_t addr) const;
     bool use_dma_write(ChipId chip_id, uint32_t sz_in_bytes, uint64_t addr, tt::umd::IoOrdering ordering) const;
+
+    void sanitize_host_noc_write(tt_cxy_pair core, uint64_t addr, uint32_t sz_in_bytes) const;
 
     ARCH arch_{tt::ARCH::Invalid};
     TargetDevice target_type_{0};

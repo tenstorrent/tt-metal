@@ -288,9 +288,10 @@ FORCE_INLINE void cq_noc_async_wwrite_with_state(
 
 // More generic version of cq_noc_async_write_with_state: Allows writing an arbitrary amount of data, when the NOC
 // config (dst_noc, VC..) have been specified.
+// snoop tags every transfer this call issues with the NoC snoop bit, so the destination keeps its DM L2 coherent.
 // flush_last_transfer sets the flush packet tag on the final transfer so that a credit atomic issued after
 // this call -- typically from CBWriter::release_pages -- cannot commit to L1 ahead of the payload.
-// No-op on tt-1xx, which has no packet tags.
+// Both leave the tags cleared on return. No-op on tt-1xx, which has no packet tags.
 
 // send is exposed so a test can drive the address walk without putting traffic on the wire. Production callers
 // leave it at CQ_NOC_SEND.
@@ -303,8 +304,19 @@ template <
     enum CQNocSend send = CQ_NOC_SEND,
     bool set_ret_mid = false>
 inline uint32_t cq_noc_async_write_with_state_any_len(
-    uint32_t src_addr, uint64_t dst_addr, uint32_t size = 0, uint32_t ndests = 1, uint8_t noc = noc_index) {
-    if (size > NOC_MAX_BURST_SIZE) {
+    uint32_t src_addr,
+    uint64_t dst_addr,
+    uint32_t size = 0,
+    uint32_t ndests = 1,
+    uint8_t noc = noc_index,
+    bool snoop = false) {
+    const bool chunked = size > NOC_MAX_BURST_SIZE;
+#if defined(ARCH_QUASAR)
+    if (snoop && chunked) {
+        noc_set_packet_tags<cmd_buf>(/*snoop=*/true, /*flush=*/false);
+    }
+#endif
+    if (chunked) {
         cq_noc_async_write_with_state<CQ_NOC_SnDL, wait_first, send, cmd_buf, update_counters, set_ret_mid>(
             src_addr, dst_addr, NOC_MAX_BURST_SIZE, ndests);
         src_addr += NOC_MAX_BURST_SIZE;
@@ -320,14 +332,14 @@ inline uint32_t cq_noc_async_write_with_state_any_len(
     }
     if constexpr (write_last_packet) {
 #if defined(ARCH_QUASAR)
-        if constexpr (flush_last_transfer) {
-            noc_set_packet_tags<cmd_buf>(/*snoop=*/false, /*flush=*/true);
+        if (flush_last_transfer || snoop) {
+            noc_set_packet_tags<cmd_buf>(snoop, flush_last_transfer);
         }
 #endif
         cq_noc_async_write_with_state<CQ_NOC_SnDL, CQ_NOC_WAIT, send, cmd_buf, update_counters, set_ret_mid>(
             src_addr, dst_addr, size, ndests, noc);
 #if defined(ARCH_QUASAR)
-        if constexpr (flush_last_transfer) {
+        if (flush_last_transfer || snoop) {
             noc_set_packet_tags<cmd_buf>(/*snoop=*/false, /*flush=*/false);
         }
 #endif
@@ -337,6 +349,12 @@ inline uint32_t cq_noc_async_write_with_state_any_len(
             !flush_last_transfer,
             "flush_last_transfer requires write_last_packet: this call does not issue the final transfer, so there "
             "is nothing to tag here. Tag it at the call that does.");
+        // This call does not write the last packet, so clear the packet tags on return
+#if defined(ARCH_QUASAR)
+        if (snoop && chunked) {
+            noc_set_packet_tags<cmd_buf>(/*snoop=*/false, /*flush=*/false);
+        }
+#endif
         return size;
     }
 }
