@@ -228,6 +228,9 @@ struct OperationArguments {
     // L1 per core the blocking may plan for: the arena its buffers are laid over. Zero means everything
     // above the allocator base.
     uint32_t l1_budget_bytes = 0;
+    // Per-expert weight bases come from the union kernel's weight table rather than runtime args, so
+    // the per-expert blocks are left out of the argument lists; see kernels/hybrid_weight_table.hpp.
+    bool weights_from_table = false;
 
     static constexpr auto attribute_names = std::forward_as_tuple(
         "experts_per_chip",
@@ -243,7 +246,8 @@ struct OperationArguments {
         "output_dtype",
         "output_memory_config",
         "compute_kernel_config",
-        "l1_budget_bytes");
+        "l1_budget_bytes",
+        "weights_from_table");
 
     auto attribute_values() const {
         return std::forward_as_tuple(
@@ -260,7 +264,8 @@ struct OperationArguments {
             output_dtype,
             output_memory_config,
             compute_kernel_config,
-            l1_budget_bytes);
+            l1_budget_bytes,
+            weights_from_table);
     }
 };
 
@@ -320,6 +325,9 @@ struct HybridRoutedExpertFfnParams {
     uint32_t combine_num_links = 2;
     uint32_t num_experts_per_tok = 0;
     uint32_t seq_len_per_chip = 0;
+    // Pages one of combine's forwarding channels holds, the model's MOE_FWD_VC_PAGES. Set exactly when
+    // overlap_combine is.
+    std::optional<uint32_t> combine_fwd_vc_pages;
 
     // The overlap's counters: combine's per-stream receive counts and the routed expert's start signal. They
     // must outlive every launch -- an upstream chip may bump one for the next launch before this chip starts it
@@ -327,11 +335,16 @@ struct HybridRoutedExpertFfnParams {
     std::optional<GlobalSemaphore> fwd_arrived;
     std::optional<GlobalSemaphore> final_arrived;
     std::optional<GlobalSemaphore> expert_go;
-    // Every address combine bakes into its compile-time arguments: the three semaphores and the per-call L1
+    // Combine's per-channel credit counters, caller-owned for the same reason and one more: the L1 arena
+    // below has taken every free byte by the time combine is built, so there is nothing left to allocate
+    // them from. combine::channel_semaphore_count says how many, and what order they are read in.
+    std::vector<GlobalSemaphore> channel_semaphores;
+    // Every address combine bakes into its compile-time arguments: the semaphores and the per-call L1
     // arena its layout is placed in. Hashed, so a cached program is only ever reused over the same layout.
     uint32_t fwd_arrived_addr = 0;
     uint32_t final_arrived_addr = 0;
     uint32_t expert_go_addr = 0;
+    std::vector<uint32_t> channel_semaphore_addrs;
     uint32_t l1_arena_addr = 0;
 
     static constexpr auto attribute_names = std::forward_as_tuple(
@@ -347,9 +360,11 @@ struct HybridRoutedExpertFfnParams {
         "combine_num_links",
         "num_experts_per_tok",
         "seq_len_per_chip",
+        "combine_fwd_vc_pages",
         "fwd_arrived_addr",
         "final_arrived_addr",
         "expert_go_addr",
+        "channel_semaphore_addrs",
         "l1_arena_addr");
 
     auto attribute_values() const {
@@ -366,9 +381,11 @@ struct HybridRoutedExpertFfnParams {
             combine_num_links,
             num_experts_per_tok,
             seq_len_per_chip,
+            combine_fwd_vc_pages,
             fwd_arrived_addr,
             final_arrived_addr,
             expert_go_addr,
+            channel_semaphore_addrs,
             l1_arena_addr);
     }
 };
@@ -406,6 +423,12 @@ struct HybridRoutedExpertFfnInputs {
     // Combine's DRAM forwarding buffer, of combine::forwarding_buffer_spec. Absent: combine allocates its own; see
     // CombineL1::forwarding. An input, so a cache hit re-patches its address like any other.
     std::optional<Tensor> forwarding_buffer;
+
+    // Every expert's weight bases as one uint32 page, [gate[0..E), up[0..E), down[0..E)], read by the
+    // union kernels in place of per-expert runtime args; see kernels/hybrid_weight_table.hpp. The
+    // caller owns it and keeps it in step with the weight lists above: the op checks its shape, not
+    // its contents.
+    std::optional<Tensor> weight_table;
 };
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::hybrid_routed_expert_ffn

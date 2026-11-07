@@ -12,7 +12,7 @@ struct AtanBf16Config {
     static constexpr unsigned kCoefficientBits[] = {0x00000000u, 0x3f800000u, 0x3aa8eb14u, 0xbebd4004u, 0x3e1daa80u};
 };
 }  // namespace ckernel::sfpu
-#include "sfpu/ckernel_sfpu_atan_bf16_reciprocal_complement.h"
+#include "ckernel_sfpu_atan_bf16_reciprocal_complement.h"
 
 namespace ckernel::sfpu {
 
@@ -29,10 +29,9 @@ inline bool bf16_dest_atan() {
     return false;
 #endif
 }
-// Each call records replay slots 0-25, overwriting what an init recorded there (matmul and reduce
-// record from replay_buf_offset = 16).
+// Each call records replay slots 0-22, overwriting what an init recorded there (from 16).
 template <int ITERATIONS = 32>
-inline void calculate_atan_bf16() {
+__attribute__((noinline)) inline void calculate_atan_bf16() {
     ckernel::sfpu::bf16::atan::calculate_reciprocal_complement<ckernel::sfpu::AtanBf16Config, ITERATIONS>();
 }
 inline void init_atan_bf16() { ckernel::sfpu::bf16::atan::init_reciprocal_complement<ckernel::sfpu::AtanBf16Config>(); }

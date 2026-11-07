@@ -47,8 +47,8 @@
 #include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
 #include "ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
 #include "ttnn/types.hpp"
-#include <umd/device/types/arch.hpp>
-#include <umd/device/types/xy_pair.hpp>
+#include <tt-umd/types/arch.hpp>
+#include <tt-umd/types/xy_pair.hpp>
 #include "common/tt_backend_api_types.hpp"
 #include "distributed/mesh_device_impl.hpp"
 
@@ -598,7 +598,6 @@ bool RunWriteBWTest(
     ////////////////////////////////////////////////////////////////////////////
     auto local_edm_kernel = ttnn::ccl::generate_edm_kernel(
         sender_program,
-        sender_mesh_device->impl().get_devices()[0],
         local_chip_edm_builder,
         eth_sender_core,
         tt_metal::DataMovementProcessor::RISCV_0,
@@ -607,7 +606,6 @@ bool RunWriteBWTest(
 
     auto remote_edm_kernel = ttnn::ccl::generate_edm_kernel(
         receiver_program,
-        receiver_mesh_device->impl().get_devices()[0],
         remote_chip_edm_builder,
         eth_receiver_core,
         tt_metal::DataMovementProcessor::RISCV_0,

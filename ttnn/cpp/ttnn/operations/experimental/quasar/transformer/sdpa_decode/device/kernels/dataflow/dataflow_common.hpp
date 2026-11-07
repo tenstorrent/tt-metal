@@ -12,6 +12,7 @@
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
+#include "internal/tensor/transfer_noc_addr.h"
 #include <vector>
 // Vendored prefill dataflow helpers (carry the Metal 2.0 read_page_table_for_batch overload); see
 // sdpa_dataflow_common.hpp.
@@ -25,17 +26,15 @@
 /******************************************************************************
  *                   Generic Tile Manipulation Functions                       *
  ******************************************************************************/
-template <uint32_t tile_bytes>
-void fill_tile(uint32_t dfb_id, uint32_t tile_id, uint32_t val) {
+template <uint32_t tile_bytes, typename DFB>
+void fill_tile(DFB& dfb, uint32_t tile_id, uint32_t val) {
     Noc noc;
     if (val == 0) {
         // Arch-agnostic zeroing (#45450): async_write_zeros works on WH/BH/Quasar.
-        DataflowBuffer dfb(dfb_id);
         noc.async_write_zeros(dfb, tile_bytes, {.offset_bytes = tile_id * tile_bytes});
         noc.write_zeros_l1_barrier();
     } else {
         // Fill 2 uint16 datums in each writes to optimize for performance
-        DataflowBuffer dfb(dfb_id);
         volatile tt_l1_ptr uint32_t* ptr =
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(dfb.get_write_ptr() + tile_id * tile_bytes);
         constexpr int num_uint32_datums_tile = tile_bytes / 4;
@@ -45,19 +44,18 @@ void fill_tile(uint32_t dfb_id, uint32_t tile_id, uint32_t val) {
     }
 }
 
-template <uint32_t tile_bytes>
-void fill_tile_partial(uint32_t dfb_id, uint32_t tile_id, uint32_t cur_pos_in_tile, uint32_t partial_val) {
+template <uint32_t tile_bytes, typename DFB>
+void fill_tile_partial(DFB& dfb, uint32_t tile_id, uint32_t cur_pos_in_tile, uint32_t partial_val) {
     /*
     We want to fill cur_pos_in_tile + 1 to the end
     */
     constexpr int num_faces = (tile_bytes == 1024) ? 2 : 4;
 
-    fill_tile<tile_bytes>(dfb_id, tile_id, 0);
+    fill_tile<tile_bytes>(dfb, tile_id, 0);
     if (cur_pos_in_tile == 31 || partial_val == 0) {
         return;
     }
     const uint16_t datum_val = partial_val >> 16;
-    DataflowBuffer dfb(dfb_id);
     volatile tt_l1_ptr uint16_t* uint16_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint16_t*>(dfb.get_write_ptr() + tile_id * tile_bytes);
     volatile tt_l1_ptr uint32_t* uint32_ptr =
@@ -102,9 +100,9 @@ void fill_tile_partial(uint32_t dfb_id, uint32_t tile_id, uint32_t cur_pos_in_ti
     }
 }
 
-template <uint32_t tile_bytes>
+template <uint32_t tile_bytes, typename DFB>
 void fill_tile_partial_sliding_window(
-    uint32_t dfb_id, uint32_t tile_id, uint32_t window_start_pos_in_tile, uint32_t partial_val) {
+    DFB& dfb, uint32_t tile_id, uint32_t window_start_pos_in_tile, uint32_t partial_val) {
     /*
     For sliding window mask: fill positions 0 to window_start_pos_in_tile - 1 with partial_val (-inf)
     This is the inverse of fill_tile_partial which fills from cur_pos_in_tile + 1 to end
@@ -114,13 +112,12 @@ void fill_tile_partial_sliding_window(
     */
     constexpr int num_faces = (tile_bytes == 1024) ? 2 : 4;
 
-    fill_tile<tile_bytes>(dfb_id, tile_id, 0);
+    fill_tile<tile_bytes>(dfb, tile_id, 0);
     if (window_start_pos_in_tile == 0 || partial_val == 0) {
         return;  // No masking needed if window starts at position 0 or no mask value
     }
 
     const uint16_t datum_val = partial_val >> 16;
-    DataflowBuffer dfb(dfb_id);
     volatile tt_l1_ptr uint16_t* uint16_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint16_t*>(dfb.get_write_ptr() + tile_id * tile_bytes);
     volatile tt_l1_ptr uint32_t* uint32_ptr =
@@ -176,12 +173,13 @@ void fill_tile_partial_sliding_window(
  *                   Attention Mask Functions                                 *
  ******************************************************************************/
 template <
-    uint32_t dfb_mask_in,
     uint32_t mask_tile_bytes,
     uint32_t barrier_threshold,
     uint32_t PNHt,
-    typename MaskReaderType>
+    typename MaskReaderType,
+    typename MaskDFB>
 uint32_t read_mask_chunk(
+    MaskDFB& dfb_mask,
     uint32_t PSt,
     uint32_t Sk_chunk_t,
     uint32_t mask_chunk_tiles,
@@ -189,7 +187,6 @@ uint32_t read_mask_chunk(
     const MaskReaderType& mask_reader) {
     Noc noc;
     // Read mask chunk
-    DataflowBuffer dfb_mask(dfb_mask_in);
     dfb_mask.reserve_back(mask_chunk_tiles);
     uint32_t mask_write_ptr = dfb_mask.get_write_ptr();
     uint32_t barrier_count = 0;
@@ -216,8 +213,8 @@ uint32_t read_mask_chunk(
     return mask_start_tile_id;
 }
 
-template <uint32_t dfb_mask_in, uint32_t PNHt>
-void generate_mask(uint32_t k_num_chunks, uint32_t Sk_chunk_t, uint32_t cur_pos) {
+template <uint32_t dfb_mask_in, uint32_t PNHt, typename MaskDFB>
+void generate_mask(MaskDFB& dfb_mask, uint32_t k_num_chunks, uint32_t Sk_chunk_t, uint32_t cur_pos) {
     Noc noc;
     /*
     example 1: 64 seqlen at cur_pos 40, 2 cores, 32 chunk size
@@ -260,7 +257,6 @@ void generate_mask(uint32_t k_num_chunks, uint32_t Sk_chunk_t, uint32_t cur_pos)
     uint32_t cur_pos_in_tile = cur_pos_in_chunk % 32;
     constexpr uint32_t NEG_INF = 0xFF80FF80;  // TODO: Make sure this is -inf
 
-    DataflowBuffer dfb_mask(dfb_mask_in);
     dfb_mask.reserve_back(total_read_tiles);
 
     uint32_t q_write_ptr_base = dfb_mask.get_read_ptr();
@@ -270,7 +266,7 @@ void generate_mask(uint32_t k_num_chunks, uint32_t Sk_chunk_t, uint32_t cur_pos)
         if (i < cur_pos_in_chunk_t) {
             // fill with zero
             if (i == 0) {
-                fill_tile<tile_bytes>(dfb_mask_in, i, 0);
+                fill_tile<tile_bytes>(dfb_mask, i, 0);
             } else {
                 copy_tile<tile_bytes>(
                     noc, q_write_ptr_base, q_write_ptr_base, 0, i);  // copy from dfb_mask_in[0] to dfb_mask_in[i]
@@ -280,11 +276,11 @@ void generate_mask(uint32_t k_num_chunks, uint32_t Sk_chunk_t, uint32_t cur_pos)
             }
         } else if (i == cur_pos_in_chunk_t) {
             // fill with partial zero/-inf
-            fill_tile_partial<tile_bytes>(dfb_mask_in, i, cur_pos_in_tile, NEG_INF);
+            fill_tile_partial<tile_bytes>(dfb_mask, i, cur_pos_in_tile, NEG_INF);
         } else {
             // fill with -inf
             if (i == cur_pos_in_chunk_t + 1) {
-                fill_tile<tile_bytes>(dfb_mask_in, i, NEG_INF);
+                fill_tile<tile_bytes>(dfb_mask, i, NEG_INF);
             } else {
                 copy_tile<tile_bytes>(
                     noc,
@@ -309,8 +305,9 @@ void generate_mask(uint32_t k_num_chunks, uint32_t Sk_chunk_t, uint32_t cur_pos)
     dfb_mask.push_back(total_read_tiles);
 }
 
-template <uint32_t dfb_mask_in, uint32_t PNHt>
-void generate_sliding_window_mask(uint32_t k_num_chunks, uint32_t Sk_chunk_t, uint32_t window_start) {
+template <uint32_t dfb_mask_in, uint32_t PNHt, typename MaskDFB>
+void generate_sliding_window_mask(
+    MaskDFB& dfb_mask, uint32_t k_num_chunks, uint32_t Sk_chunk_t, uint32_t window_start) {
     Noc noc;
     /*
     Generate sliding window mask for the first chunk:
@@ -327,7 +324,6 @@ void generate_sliding_window_mask(uint32_t k_num_chunks, uint32_t Sk_chunk_t, ui
     uint32_t window_start_in_tile = window_start_in_chunk % 32;
     constexpr uint32_t NEG_INF = 0xFF80FF80;  // TODO: Make sure this is -inf
 
-    DataflowBuffer dfb_mask(dfb_mask_in);
     dfb_mask.reserve_back(total_read_tiles);
 
     uint32_t q_write_ptr_base = dfb_mask.get_read_ptr();
@@ -337,17 +333,17 @@ void generate_sliding_window_mask(uint32_t k_num_chunks, uint32_t Sk_chunk_t, ui
         if (i < window_start_in_chunk_t) {
             // Tile is completely before sliding window - fill with -inf
             if (i == 0) {
-                fill_tile<tile_bytes>(dfb_mask_in, i, NEG_INF);
+                fill_tile<tile_bytes>(dfb_mask, i, NEG_INF);
             } else {
                 copy_tile<tile_bytes>(noc, q_write_ptr_base, q_write_ptr_base, 0, i);
             }
         } else if (i == window_start_in_chunk_t) {
             // Tile contains sliding window start - partial mask at beginning
-            fill_tile_partial_sliding_window<tile_bytes>(dfb_mask_in, i, window_start_in_tile, NEG_INF);
+            fill_tile_partial_sliding_window<tile_bytes>(dfb_mask, i, window_start_in_tile, NEG_INF);
         } else {
             // Tile is within sliding window - fill with zeros (allow)
             if (i == window_start_in_chunk_t + 1) {
-                fill_tile<tile_bytes>(dfb_mask_in, i, 0);
+                fill_tile<tile_bytes>(dfb_mask, i, 0);
             } else {
                 // Copy from the first allowed tile
                 copy_tile<tile_bytes>(
@@ -383,19 +379,18 @@ void generate_sliding_window_mask(uint32_t k_num_chunks, uint32_t Sk_chunk_t, ui
  * get mask=0 (valid), columns [block_size, 32) get mask=-inf (padding).
  * This mask is pushed once and reused (without popping) by the compute kernel for every K chunk.
  */
-template <uint32_t dfb_block_pad_mask, uint32_t PNHt>
-void generate_block_padding_mask(uint32_t Sk_chunk_t, uint32_t block_size) {
+template <uint32_t dfb_block_pad_mask, uint32_t PNHt, typename PadDFB>
+void generate_block_padding_mask(PadDFB& dfb_pad, uint32_t Sk_chunk_t, uint32_t block_size) {
     Noc noc;
     uint32_t total_tiles = PNHt * Sk_chunk_t;
     constexpr uint32_t tile_bytes = get_tile_size(dfb_block_pad_mask);
     constexpr uint32_t NEG_INF = 0xFF80FF80;
 
-    DataflowBuffer dfb_pad(dfb_block_pad_mask);
     dfb_pad.reserve_back(total_tiles);
 
     for (uint32_t i = 0; i < Sk_chunk_t; ++i) {
         // fill_tile_partial: columns [0, block_size-1] = 0, columns [block_size, 31] = -inf
-        fill_tile_partial<tile_bytes>(dfb_block_pad_mask, i, block_size - 1, NEG_INF);
+        fill_tile_partial<tile_bytes>(dfb_pad, i, block_size - 1, NEG_INF);
 
         // Copy to all heads
         uint32_t write_ptr_base = dfb_pad.get_read_ptr();
@@ -413,11 +408,10 @@ void generate_block_padding_mask(uint32_t Sk_chunk_t, uint32_t block_size) {
 /******************************************************************************
  *                   Writer Kernel Specific Functions                         *
  ******************************************************************************/
-template <uint32_t dfb_out, uint32_t out_chunk_tiles, uint32_t barrier_threshold, typename WriterType>
-uint32_t write_tiles_to_memory(uint32_t& out_tile_id, const WriterType& out_writer, uint32_t& barrier_count) {
+template <uint32_t dfb_out, uint32_t out_chunk_tiles, uint32_t barrier_threshold, typename WriterType, typename DFB>
+uint32_t write_tiles_to_memory(DFB& dfb, uint32_t& out_tile_id, const WriterType& out_writer, uint32_t& barrier_count) {
     Noc noc;
     constexpr uint32_t tile_bytes = get_tile_size(dfb_out);
-    DataflowBuffer dfb(dfb_out);
     uint32_t l1_read_addr = dfb.get_read_ptr();
     for (uint32_t tile = 0; tile < out_chunk_tiles; ++tile) {
         noc.async_write(CoreLocalMem<uint32_t>(l1_read_addr), out_writer, tile_bytes, {}, {.page_id = out_tile_id});
@@ -431,8 +425,15 @@ uint32_t write_tiles_to_memory(uint32_t& out_tile_id, const WriterType& out_writ
     return barrier_count;
 }
 
-template <uint32_t dfb_out, uint32_t ELEMENT_SIZE, uint32_t barrier_threshold, uint32_t PNHt, typename WriterType>
+template <
+    uint32_t dfb_out,
+    uint32_t ELEMENT_SIZE,
+    uint32_t barrier_threshold,
+    uint32_t PNHt,
+    typename WriterType,
+    typename DFB>
 uint32_t write_partial_tiles_to_memory(
+    DFB& dfb,
     uint32_t& out_tile_id,  // base tile index in DRAM for this batch
     const WriterType& out_writer,
     uint32_t& barrier_count,
@@ -447,7 +448,6 @@ uint32_t write_partial_tiles_to_memory(
     constexpr uint32_t FACE_LINE_BYTES = FACE_HW * ELEMENT_SIZE;
     const uint32_t num_hidden_tiles = out_chunk_tiles / PNHt;
 
-    DataflowBuffer dfb(dfb_out);
     uint32_t l1_base_addr = dfb.get_read_ptr();
 
     for (uint32_t hidden_tile = 0; hidden_tile < num_hidden_tiles; ++hidden_tile) {
@@ -495,21 +495,21 @@ uint32_t write_partial_tiles_to_memory(
  *                   Reader Kernel Specific Functions                         *
  ******************************************************************************/
 // Read Q when it is NOT locally available (the locally-available / MLA-replicated case is handled inline
-// in the reader kernel, where the borrowed DFB just needs a reserve+push). dfb_q_in and dfb_q_rm carry the
-// SAME DFB accessor (the reader binds only the one it uses per tilize_q), so tilize_q selects which local
-// name is active. The Q address is taken from the bound tensor (`get_bank_base_address` bridge on the
-// sharded path; page reads on the DRAM path — the legacy redundant page-size 3rd argument is dropped).
+// in the reader kernel, where the borrowed DFB just needs a reserve+push). dfb_q is the reader's q_rm buffer
+// when tilize_q, else its q_in buffer (the reader binds only the one it uses). The Q address is taken from the
+// bound tensor (raw `TransferAccess::bank_base` on the sharded path; page reads on the DRAM path — the legacy
+// redundant page-size 3rd argument is dropped).
 template <
-    uint32_t dfb_q_in,
-    uint32_t dfb_q_rm,
     uint32_t q_tile_bytes,
     uint32_t q_chunk_tiles,
     bool is_q_sharded,
     bool tilize_q,
     bool use_half_tile,
     uint32_t barrier_threshold,
-    typename QReaderType>
+    typename QReaderType,
+    typename QDFB>
 void read_q(
+    QDFB& dfb_q,
     bool is_output_core,
     const QReaderType& q_reader,
     uint32_t output_core_noc_x,
@@ -517,26 +517,20 @@ void read_q(
     uint32_t q_chunk_size_bytes,
     uint32_t q_batch_offset) {
     Noc noc;
-    DataflowBuffer dfb_q(dfb_q_in);
-    DataflowBuffer dfb_q_rm_buf(dfb_q_rm);
 
     if constexpr (is_q_sharded) {
         // Q is sharded - read from output core's L1. Case 2 binding: pull the clean shard base pointer
         // from the accessor and keep the raw core-to-core L1 walk unchanged.
-        uint32_t q_addr = q_reader.get_bank_base_address();
+        // Raw: same L1 address on the Q output core (no handle form yet).
+        uint32_t q_addr = tensor_accessor::detail::TransferAccess::bank_base(q_reader);
         const uint8_t noc_id = noc.get_noc_id();
         const uint32_t src_noc_x = is_output_core ? my_x[noc_id] : output_core_noc_x;
         const uint32_t src_noc_y = is_output_core ? my_y[noc_id] : output_core_noc_y;
         uint32_t q_src_addr = q_addr;
 
         uint32_t q_write_ptr;
-        if constexpr (tilize_q) {
-            dfb_q_rm_buf.reserve_back(q_chunk_tiles);
-            q_write_ptr = dfb_q_rm_buf.get_write_ptr();
-        } else {
-            dfb_q.reserve_back(q_chunk_tiles);
-            q_write_ptr = dfb_q.get_write_ptr();
-        }
+        dfb_q.reserve_back(q_chunk_tiles);
+        q_write_ptr = dfb_q.get_write_ptr();
 
         UnicastEndpoint q_src;
         if constexpr (use_half_tile && !tilize_q) {
@@ -561,11 +555,7 @@ void read_q(
         }
         noc.async_read_barrier();
 
-        if constexpr (tilize_q) {
-            dfb_q_rm_buf.push_back(q_chunk_tiles);
-        } else {
-            dfb_q.push_back(q_chunk_tiles);
-        }
+        dfb_q.push_back(q_chunk_tiles);
     } else {
         // Q is not sharded - read tiles from DRAM via the bound tensor accessor.
         uint32_t q_tile_id = q_batch_offset;
@@ -599,7 +589,6 @@ struct KMcastParams {
 };
 
 template <
-    uint32_t dfb_k_in,
     uint32_t DHt,
     uint32_t num_kv_heads,
     uint32_t block_size_t,
@@ -609,8 +598,10 @@ template <
     bool use_mcast,
     uint32_t capacity_t,
     typename KReaderType,
-    typename KMcastSemT>
+    typename KMcastSemT,
+    typename KDFB>
 uint32_t read_k(
+    KDFB& dfb_k,
     uint32_t k_chunk_tiles,
     uint32_t cur_head,
     uint32_t Sk_chunk_t_dynamic,
@@ -622,7 +613,6 @@ uint32_t read_k(
     const KMcastParams& mcast_params,
     KMcastSemT* k_mcast_sem) {
     Noc noc;
-    DataflowBuffer dfb_k(dfb_k_in);
     dfb_k.reserve_back(k_chunk_tiles);
     uint32_t k_write_ptr = dfb_k.get_write_ptr();
     uint32_t k_base_read_ptr = k_write_ptr;
@@ -732,7 +722,6 @@ uint32_t read_k(
 }
 
 template <
-    uint32_t dfb_v_in,
     uint32_t vDHt,
     uint32_t num_kv_heads,
     uint32_t block_size_t,
@@ -741,8 +730,10 @@ template <
     bool is_page_table_sharded,
     bool reuse_k,
     uint32_t capacity_t,
-    typename VReaderType>
+    typename VReaderType,
+    typename VDFB>
 void read_v(
+    VDFB& dfb_v,
     uint32_t v_chunk_tiles,
     uint32_t cur_head,
     uint32_t Sk_chunk_t_dynamic,
@@ -754,7 +745,6 @@ void read_v(
     uint32_t k_base_read_ptr = 0,
     uint32_t k_tile_bytes = 0) {
     Noc noc;
-    DataflowBuffer dfb_v(dfb_v_in);
     dfb_v.reserve_back(v_chunk_tiles);
     uint32_t v_write_ptr = dfb_v.get_write_ptr();
     if constexpr (reuse_k) {
@@ -816,14 +806,17 @@ template <
     uint32_t mask_tile_bytes,
     uint32_t PNHt,
     bool use_attention_mask,
-    uint32_t dfb_k_in,
-    uint32_t dfb_v_in,
-    uint32_t dfb_mask_in,
     bool reuse_k,  // If enabled, read V from K, instead of from DRAM
     typename KReaderType,
     typename VReaderType,
-    typename MaskReaderType>
+    typename MaskReaderType,
+    typename KDFB,
+    typename VDFB,
+    typename MaskDFB>
 void read_kv_mask_chunks(
+    KDFB& dfb_k,
+    VDFB& dfb_v,
+    MaskDFB& dfb_mask,  // unused (any bound buffer) when !use_attention_mask
     uint32_t k_chunk_start,
     uint32_t k_chunk_end,
     uint32_t k_start_tile_id,
@@ -840,8 +833,6 @@ void read_kv_mask_chunks(
     uint32_t v_tile_bytes,
     uint32_t PSt) {
     Noc noc;
-    DataflowBuffer dfb_k(dfb_k_in);
-    DataflowBuffer dfb_v(dfb_v_in);
     const uint8_t noc_id = noc.get_noc_id();
     const uint32_t my_noc_x = my_x[noc_id];
     const uint32_t my_noc_y = my_y[noc_id];
@@ -869,8 +860,8 @@ void read_kv_mask_chunks(
         dfb_k.push_back(k_chunk_tiles);
 
         if constexpr (use_attention_mask) {
-            mask_start_tile_id = read_mask_chunk<dfb_mask_in, mask_tile_bytes, barrier_threshold, PNHt>(
-                PSt, Sk_chunk_t, mask_chunk_tiles, mask_start_tile_id, mask_reader);
+            mask_start_tile_id = read_mask_chunk<mask_tile_bytes, barrier_threshold, PNHt>(
+                dfb_mask, PSt, Sk_chunk_t, mask_chunk_tiles, mask_start_tile_id, mask_reader);
         }
 
         // Read V chunk (transpose of K), from K's L1 buffer
