@@ -65,7 +65,8 @@ void bind_view(nb::module_& mod) {
         p % num_banks, so a block holds the same bytes in the input and in the view only when the block's
         page count is a multiple of the bank count. alias_view therefore requires:
 
-        * the input to have rank 3 or more, TILE layout and interleaved memory;
+        * the input to have rank 3 or more, TILE layout and interleaved memory, and the input and the view
+          to have at least one element;
         * the page count of one dim-0 slice of the input to be a multiple of the bank count;
         * the bytes one dim-0 slice holds on each bank to be a whole number of view pages;
         * the view to have rank 3 or more, and each of its dim-0 slices to lie inside one dim-0 slice of

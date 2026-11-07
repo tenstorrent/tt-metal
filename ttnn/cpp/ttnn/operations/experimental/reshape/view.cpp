@@ -47,6 +47,9 @@ ttnn::Tensor alias_view(
         tensor.padded_shape().rank() >= 3,
         "alias_view: input rank must be at least 3 so that dim 0 is outside the tiled dims, got {}",
         tensor.padded_shape().rank());
+    // the slice checks below divide by the input's dim 0 and by the view's page counts
+    TT_FATAL(tensor.logical_volume() > 0, "alias_view: input shape {} has no elements", tensor.logical_shape());
+    TT_FATAL(shape.volume() > 0, "alias_view: view shape {} has no elements", shape);
 
     const TensorSpec view_spec(
         shape, TensorLayout(dtype, PageConfig(Layout::TILE, tensor.tensor_spec().tile()), memory_config));
