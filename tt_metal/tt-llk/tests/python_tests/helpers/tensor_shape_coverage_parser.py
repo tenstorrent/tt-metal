@@ -96,6 +96,7 @@ MATH_FUNCTIONS = (
     "_llk_math_eltwise_unary_datacopy_",
     "_llk_math_eltwise_unary_datacopy_init_",
     "eltwise_unary_configure_mop",
+    "_llk_math_matmul_init_",
 )
 
 UNPACK_FUNCTIONS = (
@@ -107,6 +108,9 @@ UNPACK_FUNCTIONS = (
     "_llk_unpack_AB_reduce_init_",
     "_llk_unpack_reduce_init_",
     "_llk_unpack_AB_reduce_mop_config_",
+    "_llk_unpack_AB_matmul_init_",
+    "_llk_unpack_AB_matmul_mop_config_",
+    "_llk_unpack_AB_matmul_",
 )
 
 # Predicate name used when seeding from a checked-in TRISC header.

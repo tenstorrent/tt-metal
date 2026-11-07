@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from typing import Iterable, List, NamedTuple, Tuple
 
 from helpers.format_config import DataFormat, FormatConfig, is_dest_acc_needed
-from helpers.golden_generators import TILE_DIM
+from helpers.golden_generators import FACE_DIM, TILE_DIM
 from helpers.llk_params import (
     DestAccumulation,
     DestSync,
@@ -46,6 +46,9 @@ class FaceLayoutConfig:
     num_faces_in0: int
     num_faces_in1: int
     num_faces: int
+    # partial_face_in0/in1/math become PARTIAL_FACE_A/B/MATH, which no C++ source reads (the matmul
+    # LLK derives partial faces from the tile shapes). Perf-schema-only: kept for the perf_math_matmul
+    # partial_a/partial_b/partial_face_math columns.
     partial_face_in0: bool
     partial_face_in1: bool
     partial_face_math: bool
@@ -389,7 +392,7 @@ def generate_face_layout_config(num_faces: int) -> List[FaceLayoutConfig]:
     }
 
     # Calculate output faces based on input layouts
-    # In _mask_tile: matrix A (is_matrix_B=False) uses f0,f1 (horizontal layout)
+    # In _mask_tile: a 32-wide tile (wide_tile=True) uses f0,f1 (horizontal layout)
     output_num_faces = calculate_matmul_output_faces(
         num_faces_in0=num_faces,
         num_faces_in1=num_faces,
@@ -424,6 +427,20 @@ def generate_face_layout_config_sweep(math_matmul: bool) -> List[FaceLayoutConfi
 # ===========================================================
 # Sweeping Functions: Generate All Matmul Test Configurations
 # ===========================================================
+
+
+def _is_invalid_fp16b_to_fp16(fmt: FormatConfig, dest_acc: DestAccumulation) -> bool:
+    """Float16_b in -> Float16 out without dest_acc: skip it.
+
+    Float16_b has an 8-bit exponent and Float16 a 5-bit one, so the math needs Float32 in dest
+    (dest_acc on). test_config.py turns dest_acc on when compiling this combo, which then hits
+    LLK_ASSERTs in the math_matmul and unpack_matmul tests.
+    """
+    return (
+        dest_acc == DestAccumulation.No
+        and fmt.input_format == DataFormat.Float16_b
+        and fmt.output_format == DataFormat.Float16
+    )
 
 
 def sweep_matmul(
@@ -480,14 +497,7 @@ def sweep_matmul(
                             math_matmul
                         )
                         for face_layout_config in face_layout_config_sweep:
-                            # Don't add invalid variants. If these variants are added LLK_ASSERTs are hit in math_matmul and unpack_matmul tests.
-                            # In test_config.py, when compiling the test itself, dest_acc is changed to DestAccumulation.Yes, which causes the assert to be hit.
-                            # Furthermore, this combo is not valid because Float16_b has 8-bit exponent and Float16 has 5-bit exponent which, when doing calculations with these formats it needs to be expanded to Float32, which requires dest_acc to be true
-                            if (
-                                dest_acc == DestAccumulation.No
-                                and fmt.input_format == DataFormat.Float16_b
-                                and fmt.output_format == DataFormat.Float16
-                            ):
+                            if _is_invalid_fp16b_to_fp16(fmt, dest_acc):
                                 continue
 
                             base_matmul_dims = MatmulConfig(
@@ -591,14 +601,7 @@ def sweep_tiny_tiles_matmul(
                 max_dst_indices.append(max_dst_index)
 
             for max_dst_idx in max_dst_indices:
-                # Don't add invalid variants. If these variants are added LLK_ASSERTs are hit in math_matmul and unpack_matmul tests.
-                # In test_config.py, when compiling the test itself, dest_acc is changed to DestAccumulation.Yes, which causes the assert to be hit.
-                # Furthermore, this combo is not valid because Float16_b has 8-bit exponent and Float16 has 5-bit exponent which, when doing calculations with these formats it needs to be expanded to Float32, which requires dest_acc to be true
-                if (
-                    config["dest_acc"] == DestAccumulation.No
-                    and config["fmt"].input_format == DataFormat.Float16_b
-                    and config["fmt"].output_format == DataFormat.Float16
-                ):
+                if _is_invalid_fp16b_to_fp16(config["fmt"], config["dest_acc"]):
                     continue
 
                 combinations.append(
@@ -613,4 +616,84 @@ def sweep_tiny_tiles_matmul(
                     )
                 )
 
+    return combinations
+
+
+# (in0 tile, in1 tile) shape pairs, as (rows, cols), that the two sweeps above do not cover:
+# - in1 32x16, used by TTNN tiny-tile matmuls for a 16-wide output (in0 1/2/4/8/16/32 x 32);
+# - K = 16: in0 32x16 or 16x16 by in1 16x32.
+# Pairs that _llk_math_matmul_init_ rejects (see matmul_supports_tensor_shapes) are not listed.
+MATMUL_TILE_SHAPE_PAIRS = [((r, 32), (32, 16)) for r in (1, 2, 4, 8, 16, 32)] + [
+    ((32, 16), (16, 32)),
+    ((16, 16), (16, 32)),
+]
+
+# Tiny in0 by in1 32x32; the tiny-tile sweep above only runs kt_dim = 1, so use these with kt_dim > 1.
+MATMUL_TINY_IN0_PAIRS = [((r, 32), (32, 32)) for r in (1, 2, 4, 8, 16)]
+
+
+def _tile_num_faces(tile: Tuple[int, int]) -> int:
+    rows, cols = tile
+    return (2 if rows > FACE_DIM else 1) * (2 if cols > FACE_DIM else 1)
+
+
+def sweep_matmul_tile_shape_pairs(
+    formats_list: List[FormatConfig],
+    dest_acc_modes: List[DestAccumulation],
+    tile_pairs: List[Tuple[Tuple[int, int], Tuple[int, int]]],
+    ct_dims: Iterable[int] = (1, 2, 4),
+    kt_dims: Iterable[int] = (1, 2),
+    dest_sync: DestSync = DestSync.Half,
+) -> List[MatmulConfig]:
+    """Matmul configs for explicit (in0 tile, in1 tile) shape pairs, with rt_dim = 1.
+
+    Each tile sits at the top-left of its own 32x32 slot of the stimuli (the rest is zero),
+    the same way the tiny-tile sweep models in0 tiles shorter than 32 rows.
+    """
+    combinations = []
+    for fmt in formats_list:
+        for dest_acc in dest_acc_modes:
+            if is_dest_acc_needed(fmt) and dest_acc == DestAccumulation.No:
+                continue
+            if _is_invalid_fp16b_to_fp16(fmt, dest_acc):
+                continue
+            for in0_tile, in1_tile in tile_pairs:
+                assert (
+                    in0_tile[1] == in1_tile[0]
+                ), "in0 tile cols must match in1 tile rows"
+                out_tile = (in0_tile[0], in1_tile[1])
+                face = FaceLayoutConfig(
+                    num_faces_in0=_tile_num_faces(in0_tile),
+                    num_faces_in1=_tile_num_faces(in1_tile),
+                    num_faces=_tile_num_faces(out_tile),
+                    unpack_transpose_faces=Transpose.No,
+                    unpack_transpose_within_face=Transpose.No,
+                    partial_face_in0=in0_tile[0] < TILE_DIM,
+                    partial_face_in1=in1_tile[0] < TILE_DIM,
+                    partial_face_math=in0_tile[0] < FACE_DIM,
+                    partial_face_pack=out_tile[0] < TILE_DIM,
+                )
+                for ct_dim in ct_dims:
+                    for kt_dim in kt_dims:
+                        tile_dims = generate_tile_dims(
+                            (
+                                [TILE_DIM, kt_dim * TILE_DIM],
+                                [kt_dim * TILE_DIM, ct_dim * TILE_DIM],
+                            ),
+                            in0_tile_r_dim=in0_tile[0],
+                            in1_tile_c_dim=in1_tile[1],
+                        )
+                        tile_dims.in0_tile_c_dim = in0_tile[1]
+                        tile_dims.in1_tile_r_dim = in1_tile[0]
+                        combinations.append(
+                            MatmulConfig(
+                                tile_dimensions=tile_dims,
+                                face_layout_config=face,
+                                formats=fmt,
+                                stochastic_rnd=StochasticRounding.No,
+                                dst_index=0,
+                                dest_sync=dest_sync,
+                                dest_acc=dest_acc,
+                            )
+                        )
     return combinations

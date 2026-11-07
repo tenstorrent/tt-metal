@@ -19,7 +19,6 @@ void kernel_main() {
 
     // Init compute
     compute_kernel_hw_startup<SrcOrder::Reverse>(qk_im_cb, qk_im_cb, qk_im_cb);
-    matmul_init(qk_im_cb, qk_im_cb);
 
     // Inputs: qk_im (rows * cols tiles), prev_max (rows tiles if used), scale (1 tile)
     cb_push_back(qk_im_cb, Sq_chunk_t * Sk_chunk_t);

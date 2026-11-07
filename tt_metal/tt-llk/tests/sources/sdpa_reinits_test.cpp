@@ -40,12 +40,23 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_unpack_hw_configure_<false>(unpack_a_src_format0, unpack_b_src_format0, unpack_a_dst_format0, unpack_b_dst_format0, 16, 16, 4, 4, 128, 128);
     for (std::uint32_t batch = 0; batch < 1; ++batch)
     {
-        _llk_unpack_AB_matmul_init_<>(false, 1, 1, 1, 16, 16);
+        _llk_unpack_AB_matmul_init_<>(false, 1, 1, 1);
         {
             const std::uint32_t mt = batch;
             for (std::uint32_t kt = 0; kt < 1; ++kt)
             {
-                _llk_unpack_AB_matmul_<>(L1_ADDRESS(buffer_A0[0]), L1_ADDRESS(buffer_B0[0]), mt * 1 + kt, kt * 1, 128, 128, false, false, 1, 1, 1);
+                _llk_unpack_AB_matmul_<>(
+                    L1_ADDRESS(buffer_A0[0]),
+                    L1_ADDRESS(buffer_B0[0]),
+                    mt * 1 + kt,
+                    kt * 1,
+                    128,
+                    128,
+                    ckernel::DEFAULT_TENSOR_SHAPE,
+                    ckernel::DEFAULT_TENSOR_SHAPE,
+                    1,
+                    1,
+                    1);
             }
         }
     }
@@ -98,12 +109,23 @@ void run_kernel(RUNTIME_PARAMETERS params)
     t6_semaphore_get<>(semaphore::PACK_DONE);
     for (std::uint32_t batch = 0; batch < 1; ++batch)
     {
-        _llk_unpack_AB_matmul_init_<>(false, 1, 1, 1, 16, 16);
+        _llk_unpack_AB_matmul_init_<>(false, 1, 1, 1);
         {
             const std::uint32_t mt = batch;
             for (std::uint32_t kt = 0; kt < 1; ++kt)
             {
-                _llk_unpack_AB_matmul_<>(L1_ADDRESS(buffer_A3[0]), L1_ADDRESS(buffer_B3[0]), mt * 1 + kt, kt * 1, 128, 128, false, false, 1, 1, 1);
+                _llk_unpack_AB_matmul_<>(
+                    L1_ADDRESS(buffer_A3[0]),
+                    L1_ADDRESS(buffer_B3[0]),
+                    mt * 1 + kt,
+                    kt * 1,
+                    128,
+                    128,
+                    ckernel::DEFAULT_TENSOR_SHAPE,
+                    ckernel::DEFAULT_TENSOR_SHAPE,
+                    1,
+                    1,
+                    1);
             }
         }
     }
@@ -186,7 +208,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_math_pack_sync_init_<dest_sync3, false>();
 
     // Operation 3: Matmul FPU - Using experimental custom no-mop API
-    // _llk_math_matmul_init_<0, 0>(TILE_R_DIM, TILE_C_DIM, TILE_R_DIM, TILE_C_DIM, false, 0, 1, 1);
+    // _llk_math_matmul_init_<0, 0>(ckernel::DEFAULT_TENSOR_SHAPE, ckernel::DEFAULT_TENSOR_SHAPE, 0, 1, 1);
 
     matmul_configure_addrmod_reinit();
 
