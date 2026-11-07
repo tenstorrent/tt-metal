@@ -166,18 +166,18 @@ protected:
     void RunTestOnDevice(
         const std::function<void()>& run_function, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
         const auto device_id = mesh_device->get_device_ids()[0];
-        log_info(tt::LogTest, "Running test on device {}.", device_id);
+        log_debug(tt::LogTest, "Running test on device {}.", device_id);
         run_function();
-        log_info(tt::LogTest, "Finished running test on device {}.", device_id);
+        log_debug(tt::LogTest, "Finished running test on device {}.", device_id);
     }
 
     void DetectDispatchMode() {
         auto* slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
         if (slow_dispatch) {
-            log_info(tt::LogTest, "Running test using Slow Dispatch");
+            log_debug(tt::LogTest, "Running test using Slow Dispatch");
             this->slow_dispatch_ = true;
         } else {
-            log_info(tt::LogTest, "Running test using Fast Dispatch");
+            log_debug(tt::LogTest, "Running test using Fast Dispatch");
             this->slow_dispatch_ = false;
         }
     }

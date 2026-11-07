@@ -26,7 +26,7 @@ protected:
 
     void SetUp() override {
         if (!this->validate_dispatch_mode()) {
-            GTEST_SKIP();
+            GTEST_SKIP() << "This suite can only be run with fast dispatch or TT_METAL_SLOW_DISPATCH_MODE unset";
         }
 
         this->num_cqs_ = tt::tt_metal::MetalContext::instance().rtoptions().get_num_hw_cqs();
@@ -53,7 +53,6 @@ protected:
         this->slow_dispatch_ = false;
         auto* slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
         if (slow_dispatch) {
-            log_info(tt::LogTest, "This suite can only be run with fast dispatch or TT_METAL_SLOW_DISPATCH_MODE unset");
             this->slow_dispatch_ = true;
             return false;
         }
@@ -96,7 +95,7 @@ class UnitMeshMultiCQSingleDeviceTraceFixture : public UnitMeshMultiCQSingleDevi
 protected:
     void SetUp() override {
         if (!this->validate_dispatch_mode()) {
-            GTEST_SKIP();
+            GTEST_SKIP() << "This suite can only be run with fast dispatch or TT_METAL_SLOW_DISPATCH_MODE unset";
         }
 
         this->num_cqs_ = tt::tt_metal::MetalContext::instance().rtoptions().get_num_hw_cqs();
@@ -118,9 +117,8 @@ protected:
         this->slow_dispatch_ = false;
         auto* slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
         if (slow_dispatch) {
-            log_info(tt::LogTest, "This suite can only be run with fast dispatch or TT_METAL_SLOW_DISPATCH_MODE unset");
             this->slow_dispatch_ = true;
-            GTEST_SKIP();
+            GTEST_SKIP() << "This suite can only be run with fast dispatch or TT_METAL_SLOW_DISPATCH_MODE unset";
         }
 
         auto num_cqs = tt::tt_metal::MetalContext::instance().rtoptions().get_num_hw_cqs();

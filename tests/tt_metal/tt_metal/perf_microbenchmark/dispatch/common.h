@@ -1132,7 +1132,7 @@ protected:
 
     void SetUp() override {
         if (!validate_dispatch_mode()) {
-            GTEST_SKIP();
+            GTEST_SKIP() << "This suite can only be run with fast dispatch or TT_METAL_SLOW_DISPATCH_MODE unset";
         }
         tt_metal::GenericMeshDeviceFixture::SetUp();
 
@@ -1174,7 +1174,6 @@ protected:
 
     bool validate_dispatch_mode() {
         if (!tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch()) {
-            log_info(tt::LogTest, "This suite can only be run with fast dispatch or TT_METAL_SLOW_DISPATCH_MODE unset");
             return false;
         }
         return true;
