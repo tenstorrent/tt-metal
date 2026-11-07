@@ -1,0 +1,30 @@
+# Serving env for Laguna-XS-2.1 on vLLM. Installed by setup_vllm.sh; see
+# README.md for the end-user runbook.
+#
+# Not a plain `pip install -r` target: vLLM must be built from sdist with
+# VLLM_TARGET_DEVICE=empty (the PyPI wheel is CUDA) against the CPU torch index,
+# and the install needs --override overrides.txt. setup_vllm.sh reads and
+# installs the pins from here. Bump versions here, not in the script.
+#
+# ttnn is deliberately NOT pinned here: it is installed editable from THIS
+# checkout, which carries a tt-metal change no released wheel has — SDPA's
+# chunked path accepts sliding_window_size, which the sliding-window layers
+# require on a prefix-cache hit. setup_vllm.sh installs ttnn from this checkout.
+
+# The TT plugin is only tested against 0.24.0 (vllm-tt-plugin README) and it
+# monkeypatches upstream internals, so this pin is load-bearing, not cosmetic.
+vllm==0.24.0
+
+# Public plugin: provides the `tt` platform + EXTRA_MODELS_DIR model registration.
+# Pin the validated commit: the plugin monkeypatches vLLM internals, so following
+# a moving branch makes otherwise identical Laguna environments non-reproducible.
+vllm-tt-plugin @ git+https://github.com/tenstorrent/vllm-tt-plugin@c127c17d80d66ee83d23064d3a62ac844a1170de
+
+# Sampling1D (the on-device sampler) lives in tt-transformers since tt-metal removed models/common/modules
+# (#59548). Same pin as tt-metal's tests/scripts/tt_transformers_ref.txt. Installed with --no-deps: it depends on
+# ttnn, and a resolving install would replace this checkout's ttnn build.
+tt-transformers @ git+https://github.com/tenstorrent/tt-transformers.git@c95935d8934f136833f02f306f32deb8a1136177
+
+# Device-free compatibility tests run as part of setup verification.
+pytest==9.0.3
+pytest-timeout==2.4.0
