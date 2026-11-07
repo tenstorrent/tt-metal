@@ -25,6 +25,7 @@ Sections:
 """
 
 import math
+import os
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -38,6 +39,32 @@ if TYPE_CHECKING:
 
 VARIANTS = {name: load_builtin_config(name) for name in ("tiny", "small", "base")}
 _VARIANT = selected_config()
+
+# BEVFORMER_NUM_LAYERS=N keeps the first N encoder and decoder layers and, in each ResNet layer, the
+# first block, which alone strides and projects the shortcut, and N repeats of the block after it.
+# Repeated layers run the same kernels on the same shapes, so a reduced model still launches every
+# kernel of the full one, for simulator bring-up; it is not the trained detector, nor does a
+# checkpoint load into it.
+NUM_LAYERS_ENV = "BEVFORMER_NUM_LAYERS"
+
+
+def _num_layers_from_env():
+    value = os.environ.get(NUM_LAYERS_ENV, "")
+    if value == "":
+        return None
+    num_layers = int(value)
+    if num_layers < 1:
+        raise ValueError(f"{NUM_LAYERS_ENV} must be at least 1, got {num_layers}")
+    return num_layers
+
+
+NUM_LAYERS = _num_layers_from_env()
+
+
+def _reduced(count):
+    return count if NUM_LAYERS is None else min(count, NUM_LAYERS)
+
+
 VARIANT = _VARIANT.variant
 MODEL_CONFIG = _VARIANT
 
@@ -93,6 +120,7 @@ RESNET_KWARGS = dict(
     with_cp=False,
     zero_init_residual=True,
     init_cfg=None,
+    max_stage_blocks=None if NUM_LAYERS is None else 1 + NUM_LAYERS,
 )
 
 # 256-channel levels, one per backbone output, and for base a fourth from an extra stride-2 conv
@@ -140,7 +168,7 @@ ROTATE_CENTER = _VARIANT.rotate_center
 
 # SCA is the spatial cross-attention into the cameras, TSA the temporal self-attention over the
 # previous BEV.
-ENCODER_NUM_LAYERS = _VARIANT.encoder_num_layers
+ENCODER_NUM_LAYERS = _reduced(_VARIANT.encoder_num_layers)
 # The SCA's sampling points per head and level, split over the pillar's heights.
 SCA_NUM_POINTS = _VARIANT.spatial_num_points
 NUM_POINTS_IN_PILLAR = _VARIANT.num_points_in_pillar
@@ -148,7 +176,7 @@ TSA_NUM_POINTS = _VARIANT.temporal_num_points
 
 # --- Decoder and head ---------------------------------------------------------------------------
 
-DECODER_NUM_LAYERS = _VARIANT.decoder_num_layers
+DECODER_NUM_LAYERS = _reduced(_VARIANT.decoder_num_layers)
 DECODER_NUM_POINTS = _VARIANT.decoder_num_points
 NUM_QUERY = _VARIANT.num_query
 NUM_CLASSES = len(_VARIANT.class_names)
