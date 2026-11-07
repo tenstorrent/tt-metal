@@ -127,6 +127,37 @@ prefill chunk of the request, each
 * Models that do not declare `mm_modalities` keep the image-only `pixel_values` / `image_grid_thw` lists.
   `MiMoV2OmniForCausalLM` also accepts them (items found by their placeholder runs).
 
+## Video input (frames, times, audio)
+
+vLLM 0.30's MiMo processor labels the loader's frames 1 s apart and takes 32 of them at full resolution by default, so
+a 2-minute clip was announced as 00:00 .. 00:30 at 14K tokens, without its audio. Xiaomi's API samples ~2 frames a
+second at ~280 merged tokens a frame pair (16-34K tokens on Video-MME short) and interleaves the audio track.
+
+* `tt/video_input.py`: frames labelled with the loader's real times (`MIMO_VIDEO_TIMESTAMPS=loader`, default; the
+  loader metadata travels with the frames through vLLM's processor cache), per-frame / per-clip pixel caps
+  (`MIMO_VIDEO_MAX_PIXELS`, `MIMO_VIDEO_TOTAL_MAX_PIXELS`; unset: the checkpoint's 8388608 / 268435456).
+* `tt/video_audio.py`: a video's audio track decoded from the video's bytes and interleaved per temporal grid at 6.25
+  tokens a second, as the checkpoint's processor does (`video_audio` items; `MIMO_VIDEO_AUDIO`, default on when audio
+  is served; per request / server `mm_processor_kwargs: {"mimo_video_audio": true|false}`); the engine interleaves the
+  ViT rows and the audio patch encoder's rows (`tt/multimodal.py interleave_video_audio`).
+* `tt/video_prompt.py`: the checkpoint processor's video prompt (`MIMO_VIDEO_PROMPT=hf`, default) instead of
+  upstream's extra outer `<|vision_start|> .. <|vision_end|>`.
+
+Frame sampling is vLLM's. Recommended serving (Xiaomi parity): `--media-io-kwargs '{"video": {"num_frames": 1024,
+"fps": 2}}'` and `MIMO_VIDEO_MAX_PIXELS=286720`, with audio served (a checkpoint with `audio_tokenizer/`, torchaudio).
+Video-MME short docs 0-59, one row engine at concurrency 8 (Xiaomi's API: 75.0 %; 2026-11-07):
+
+| Video input | Score | Verbose / 60 | Prompt tokens p50 | Latency c=8 / c=1 |
+|---|---|---|---|---|
+| 32 frames, full resolution, 1 fps labels (before) | 63.3 / 63.3 / 60.0 | 13-15 | 14.3K | 11.8 s / 3.4 s |
+| 32 frames, real times | 58.3 | 15 | 14.3K | 9.9 s / 3.4 s |
+| 2 fps, 286720 px a frame, real times | 63.3 / 65.0 / 65.0 | 5-6 | 28.0K | 18.0 s / 6.2 s |
+| + audio track (upstream prompt) | 70.0 / 68.3 | 9-10 | 28.9K | 22.6 s / 8.7 s |
+| + audio track, `MIMO_VIDEO_PROMPT=hf` (recommended) | 71.7 | 0 | 28.9K | 23.3 s / - |
+
+At 2 fps a request's ViT takes ~0.5 s and its prefill ~3.9 s (c=1, 26K tokens); the front end's audio tokenizer adds
+~2.5 s a request (CPU, 8 threads).
+
 ## Workstreams
 
 | Id | Branch | Scope | Device |
