@@ -34,7 +34,7 @@ We want a just a single core, so we will restrict the core range to be just one 
 distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
 distributed::MeshWorkload workload;
 distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
-Program program{};
+Program program = CreateProgram(*mesh_device);
 CoreCoord core({0, 0});
 ```
 

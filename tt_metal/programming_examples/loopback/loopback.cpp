@@ -65,7 +65,7 @@ int main() {
         // A program is a collection of kernels. Note that unlike OpenCL/CUDA where every core must run the
         // same kernel at a given time. Metalium allows you to run different kernels on different cores
         // simultaneously.
-        Program program = CreateProgram();
+        Program program = CreateProgram(*mesh_device);
 
         // A MeshWorkload is a collection of programs that will be executed on the mesh. Each workload is
         // local to a single device. Here we create a workload for our single-device mesh.
@@ -79,8 +79,8 @@ int main() {
         // `loopback_dram_copy.cpp` file for the actual implementation). The kernel is created on the Tensix core
         // {0, 0} and uses the default NoC.
         std::vector<uint32_t> dram_copy_compile_time_args;
-        TensorAccessorArgs(*input_dram_buffer->get_backing_buffer()).append_to(dram_copy_compile_time_args);
-        TensorAccessorArgs(*output_dram_buffer->get_backing_buffer()).append_to(dram_copy_compile_time_args);
+        TensorAccessorArgs(*input_dram_buffer).append_to(dram_copy_compile_time_args);
+        TensorAccessorArgs(*output_dram_buffer).append_to(dram_copy_compile_time_args);
         KernelHandle dram_copy_kernel_id = CreateKernel(
             program,
             OVERRIDE_KERNEL_PREFIX "loopback/kernels/loopback_dram_copy.cpp",
