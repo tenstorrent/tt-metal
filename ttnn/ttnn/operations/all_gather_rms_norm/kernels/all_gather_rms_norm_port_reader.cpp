@@ -12,9 +12,9 @@
 // by the upstream at its step t - relay_lag, so one wait per step ("upstream complete through step t - lag") covers
 // every relay of the step.
 // Landing notifications (TRANSPORT -> member): row-block xb is complete on this stream once the upstream's last
-// non-empty entry sent item xb; the reader then bumps sem_landed[stream] of every member of every row in it by the
-// number of this stream's entries touching that member (host-counted), row-ascending, so a member's local row i is
-// complete on this stream iff sem_landed >= (i + 1) * count.
+// non-empty entry sent item xb; the reader then bumps sem_landed[stream] by 1 for every member of every row in it
+// that the stream touches at all (host flag; row-filtered entries make the per-row entry count vary, a flag does not),
+// row-ascending, so a member's local row i is complete on this stream iff sem_landed >= i + 1.
 
 #include <cstdint>
 
@@ -89,9 +89,10 @@ void kernel_main() {
     int32_t last_in = -1;
     uint32_t total_in = 0;
     for (uint32_t e = 0; e < E_in; ++e) {
-        if (!in_entry(e).empty()) {
+        const Entry en = in_entry(e);
+        if (!en.empty()) {
             last_in = static_cast<int32_t>(e);
-            total_in += n_xb;
+            total_in += g.items_before(en, n_xb);
         }
     }
     const bool has_in = last_in >= 0;
@@ -100,12 +101,10 @@ void kernel_main() {
     auto upstream_through = [&](int32_t s) {
         uint32_t n = 0;
         for (uint32_t e = 0; e < E_in; ++e) {
-            if (in_entry(e).empty()) {
-                continue;
-            }
+            const Entry en = in_entry(e);
             const int32_t c = s - static_cast<int32_t>(e * relay_lag) + 1;
             if (c > 0) {
-                n += static_cast<uint32_t>(c) < n_xb ? static_cast<uint32_t>(c) : n_xb;
+                n += g.items_before(en, static_cast<uint32_t>(c) < n_xb ? static_cast<uint32_t>(c) : n_xb);
             }
         }
         return n;

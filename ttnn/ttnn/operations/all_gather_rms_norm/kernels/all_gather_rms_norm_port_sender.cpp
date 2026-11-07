@@ -94,7 +94,8 @@ void kernel_main() {
 
     uint32_t chunks_left = 0;
     for (uint32_t e = 0; e < E_out; ++e) {
-        chunks_left += R_t * g.chunks_per_row(out_entry(e));
+        const Entry en = out_entry(e);
+        chunks_left += en.rows_in(0, R_t) * g.chunks_per_row(en);
     }
 
     auto conn = WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(a);  // appended last

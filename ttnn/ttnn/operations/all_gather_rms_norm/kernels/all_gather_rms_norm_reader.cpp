@@ -6,8 +6,8 @@
 //                        cb_x_landing slots (one barrier). The ports re-send them from here (no second DRAM read).
 //   signal_local_loaded  once: +1 on sem_local_loaded of every port of this chip.
 //   per block:
-//   await_landing_block  per incoming stream s: sem_landed[s] >= (last local row + 1) * n_s (host-counted entries of
-//                        stream s touching this member); regime N: zero the W padding of every slice's tail tile;
+//   await_landing_block  per incoming stream s: sem_landed[s] >= (last local row + 1) * n_s (n_s = 1 if stream s
+//                        touches this member at all, else 0); regime N: zero the W padding of every slice's tail tile;
 //                        then one cb_push_back of the block's landing pages (the credit compute waits on).
 //   compose_aligned_block (regime N) dense output tile t of a row <- datums of the landing tiles (slice x / W_local,
 //                        column x % W_local), zeros for x >= W; streamed in out_unit units into cb_x_aligned.

@@ -55,6 +55,11 @@ ITEM_MIN_CHUNKS = int(
 )  # (env: perf probes) chunks per transport item (one fused write + increment per item)
 PORT_CB_BYTES = 112 * 1024  # cb_port_chunks bytes (2 batches)
 PORT_GROUP_CAP = 8  # chunks per port batch
+# TRANSPORT (Refinement 3): the far slice of a balanced ring is split between the two directions by tile-row parity
+# (part 1 = even rows, part 2 = odd rows, each over the link's whole column range) instead of by columns (each half of
+# the link's columns), so its packets carry the link's full run (6 tiles instead of 3 on the focus case). 0 = the
+# Phase 0 column split (A/B only).
+FAR_ROW_SPLIT = os.environ.get("AGRMS_FAR_ROW_SPLIT", "1") == "1"
 RELAY_LAG = int(
     os.environ.get("AGRMS_RELAY_LAG", "2")
 )  # (env: perf probes) steps between a relay item's upstream send and its relay (>= 1)
@@ -176,13 +181,20 @@ DIRS = ("fwd", "bwd")
 _OPP = {"fwd": "bwd", "bwd": "fwd"}
 
 
-def link_cols(Wt_lp, L, l, part):
-    """Columns [c0, c1) of a slice that link l carries for an entry part (part halves nest in the link's range)."""
+def link_cols(Wt_lp, L, l, part, row_split=False):
+    """(c0, c1, rf): columns [c0, c1) of a slice that link l carries for an entry part, and the row filter rf (0 = every
+    tile-row, 1 / 2 = even / odd rows). Part halves split the link's range by columns, or (row_split) by rows."""
     a, b = (l * Wt_lp) // L, ((l + 1) * Wt_lp) // L
     if part == 0:
-        return a, b
+        return a, b, 0
+    if row_split:
+        return a, b, part
     h = a + (b - a) // 2
-    return (a, h) if part == 1 else (h, b)
+    return (a, h, 0) if part == 1 else (h, b, 0)
+
+
+def entry_has_row(rf, r):
+    return rf == 0 or (r & 1) == rf - 1
 
 
 def discovered_links(mesh_device, cluster_axis, ring):
@@ -668,9 +680,10 @@ def _shard_backed_cb(index, tensor, core_ranges):
     return cb
 
 
-def _pack_entry(q, c0, c1):
-    assert q < 256 and c0 < 4096 and c1 < 4096
-    return (q << 24) | (c0 << 12) | c1
+def _pack_entry(q, c0, c1, rf):
+    """kernels/all_gather_rms_norm_port_walk.hpp unpack_entry: rf[31:30] q[29:24] c0[23:12] c1[11:0]."""
+    assert q < 64 and c0 < 4096 and c1 < 4096 and rf < 4
+    return (rf << 30) | (q << 24) | (c0 << 12) | c1
 
 
 _READY_SEM_CACHE = {}
@@ -762,7 +775,7 @@ def create_mesh_program_descriptor(
                 n += _div_up(b - a, run_pages)
         return n
 
-    cpr = max(cpr_of(0, *link_cols(geo.Wt_lp, L, l, 0)) for l in range(L))
+    cpr = max(cpr_of(0, *link_cols(geo.Wt_lp, L, l, 0)[:2]) for l in range(L))
     xfer_rows = max(1, _div_up(ITEM_MIN_CHUNKS, max(cpr, 1)))
 
     out_w = geo.out_w_tiles if geo.regime_n else w_pitch  # tiles normalized / stored per row (pitch)
@@ -803,14 +816,13 @@ def create_mesh_program_descriptor(
     def entries_of(sends, l):
         out = []
         for q, part in sends:
-            c0, c1 = link_cols(geo.Wt_lp, L, l, part)
-            out.append((q, c0, c1))
+            out.append((q, *link_cols(geo.Wt_lp, L, l, part, FAR_ROW_SPLIT)))
         return out
 
     def has_sends(coord, d, l):
         ch = chips[coord]
         peer = ch.nxt if d == "fwd" else ch.prv
-        return peer is not None and any(c1 > c0 for _, c0, c1 in entries_of(ch.sends[d], l))
+        return peer is not None and any(c1 > c0 for _, c0, c1, _ in entries_of(ch.sends[d], l))
 
     reader_ct = [
         T_in,
@@ -891,6 +903,7 @@ def create_mesh_program_descriptor(
         K_SYM_MAX,
         RELAY_LAG,
         ITEM_MIN_CHUNKS,
+        FAR_ROW_SPLIT,
         tuple(input_tensor.shape),
         str(x_dtype),
         str(gamma.dtype) if has_gamma else None,
@@ -929,7 +942,7 @@ def create_mesh_program_descriptor(
         semaphores = [ttnn.SemaphoreDescriptor(id=i, core_ranges=all_crs, initial_value=0) for i in range(NUM_SEMS)]
         program = ttnn.ProgramDescriptor(kernels=[], semaphores=semaphores, cbs=cbs)
 
-        # ---- per-stream counts: entries of the stream arriving at port (d, l) that touch member m ----
+        # ---- per-stream flags: 1 if the stream arriving at port (d, l) touches member m (any entry, any row) ----
         stream_cnt = {}
         for d in DIRS:
             up = ch.prv if d == "fwd" else ch.nxt
@@ -939,22 +952,28 @@ def create_mesh_program_descriptor(
                 cnt = []
                 for m in range(k):
                     n = 0
-                    for q, c0, c1 in ents:
+                    for q, c0, c1, _ in ents:
                         a, b = max(q * geo.Wt_lp + c0, ws[m]), min(q * geo.Wt_lp + c1, ws[m + 1])
                         n += a < b
-                    cnt.append(n)
+                    cnt.append(min(n, 1))
                 stream_cnt[(d, l)] = (ents, cnt)
-        # coverage check: every landing tile of every member is written exactly once (own load or one stream)
+        # coverage check: every landing tile of every member is written exactly once (own load or one stream), on an
+        # even and an odd tile-row (row-filtered entries)
         for m in range(k):
-            cover = [0] * (ws[m + 1] - ws[m])
-            for t in range(ws[m], ws[m + 1]):
-                if p * geo.Wt_lp <= t < (p + 1) * geo.Wt_lp:
-                    cover[t - ws[m]] += 1
-            for ents, _ in stream_cnt.values():
-                for q, c0, c1 in ents:
-                    for t in range(max(q * geo.Wt_lp + c0, ws[m]), min(q * geo.Wt_lp + c1, ws[m + 1])):
+            for par in (0, 1):
+                cover = [0] * (ws[m + 1] - ws[m])
+                for t in range(ws[m], ws[m + 1]):
+                    if p * geo.Wt_lp <= t < (p + 1) * geo.Wt_lp:
                         cover[t - ws[m]] += 1
-            assert all(c == 1 for c in cover), f"all_gather_rms_norm: landing coverage {cover} (chip {coord}, m {m})"
+                for ents, _ in stream_cnt.values():
+                    for q, c0, c1, rf in ents:
+                        if not entry_has_row(rf, par):
+                            continue
+                        for t in range(max(q * geo.Wt_lp + c0, ws[m]), min(q * geo.Wt_lp + c1, ws[m + 1])):
+                            cover[t - ws[m]] += 1
+                assert all(
+                    c == 1 for c in cover
+                ), f"all_gather_rms_norm: landing coverage {cover} (chip {coord}, m {m}, row parity {par})"
 
         # ---- member kernels ----
         port_xy = [(lambda v: v.x | (v.y << 16))(virt(c)) for c in port_cores]

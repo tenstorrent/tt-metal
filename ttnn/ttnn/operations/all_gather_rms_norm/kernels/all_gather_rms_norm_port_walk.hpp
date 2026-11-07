@@ -10,15 +10,23 @@
 
 namespace agrms_port {
 
-// A send / receive entry: slice q, landing-tile columns [c0, c1) of that slice (this link's part).
+// A send / receive entry: slice q, landing-tile columns [c0, c1) of that slice (this link's part), and a row filter
+// rf: 0 = every tile-row, 1 / 2 = the even / odd tile-rows only (the far slice of a balanced ring split between the two
+// directions by rows, so every packet carries the link's whole column run: Refinement 3, FAR_ROW_SPLIT).
 struct Entry {
     uint32_t q;
     uint32_t c0;
     uint32_t c1;
+    uint32_t rf;
     FORCE_INLINE bool empty() const { return c1 <= c0; }
+    FORCE_INLINE bool has_row(uint32_t r) const { return rf == 0 || (r & 1) == rf - 1; }
+    // rows of [r0, r0 + rows) this entry carries
+    FORCE_INLINE uint32_t rows_in(uint32_t r0, uint32_t rows) const {
+        return rf == 0 ? rows : (rows + ((r0 & 1) == rf - 1 ? 1 : 0)) / 2;
+    }
 };
 
-FORCE_INLINE Entry unpack_entry(uint32_t v) { return Entry{v >> 24, (v >> 12) & 0xFFF, v & 0xFFF}; }
+FORCE_INLINE Entry unpack_entry(uint32_t v) { return Entry{(v >> 24) & 0x3F, (v >> 12) & 0xFFF, v & 0xFFF, v >> 30}; }
 
 // Geometry shared by the port reader and sender (compile-time args + a few runtime values).
 struct Geom {
@@ -71,6 +79,20 @@ struct Geom {
         const uint32_t r0 = xb * xfer_rows;
         return (R_t - r0) < xfer_rows ? (R_t - r0) : xfer_rows;
     }
+
+    // items xb < c of entry e that carry at least one row (a row-filtered entry can have empty items: they send
+    // nothing, so they carry no arrival increment either). Closed form: with xfer_rows >= 2 only a 1-row last item
+    // can miss the filter; with xfer_rows == 1 item xb is row xb.
+    FORCE_INLINE uint32_t items_before(const Entry& e, uint32_t c) const {
+        if (e.empty() || e.rf == 0 || c == 0) {
+            return e.empty() ? 0 : c;
+        }
+        if (xfer_rows == 1) {
+            return e.rf == 1 ? (c + 1) / 2 : c / 2;
+        }
+        const uint32_t last = n_xb() - 1;
+        return c - ((c > last && e.rows_in(last * xfer_rows, item_rows(last)) == 0) ? 1 : 0);
+    }
 };
 
 // Walk the chunks of item (entry e, row-block xb) in order. f(worker_index, l1_addr, bytes, is_last_chunk).
@@ -83,8 +105,11 @@ FORCE_INLINE void for_each_chunk_of_item(
     const uint32_t t0 = e.q * g.Wt_lp + e.c0, t1 = e.q * g.Wt_lp + e.c1;
     const uint32_t r0 = xb * g.xfer_rows;
     const uint32_t rows = g.item_rows(xb);
-    uint32_t left = rows * cpr;
+    uint32_t left = e.rows_in(r0, rows) * cpr;
     for (uint32_t r = r0; r < r0 + rows; ++r) {
+        if (!e.has_row(r)) {
+            continue;
+        }
         uint32_t grp, li;
         g.place(r, grp, li);
         for (uint32_t m = 0; m < g.k; ++m) {
