@@ -3492,3 +3492,62 @@ Each item has its own setting (tt/settings.py, default on, off = the path before
 - Gate units passed here on the final code: test_kv_layout (0 failures; encoding byte-exact against the stock cast of
   the bfp8 keys), test_adapter_acks (0 failures), test_contract, test_ladder. Left to the orchestrator: test_profile,
   test_short_turn.
+
+## P.42 perf (8x4, 2026-11-07): re-index aliases + 128-row window snapshot at cap (owner-authorized contract change)
+- Settings (tt/settings.py): `REINDEX_SERVE` alias (default) / copy (P.39); `WINDOW_KV_KEEP` gains snapshot128 (default;
+  full / ring / none kept); `KV_BLOCK_SIZE` 64 (the server's kv_block_size; cap = (end - 1) // it x it). A/B: on
+  `REINDEX_SERVE=alias WINDOW_KV_KEEP=snapshot128`, off `copy full` (both ENGRAM_TABLE=resident).
+- Aliases: tt-d-gen 48b79127fb1 has no address-uniqueness check (make_kv_chunk_table.cpp:1060 refuses duplicate
+  coordinates only; kv_chunk_table.cpp validConfigs, migration_strategy_builder.cpp, kv_chunk_index_builder.cpp:191,
+  tableWithinDramGeometry: none), nor has tt-metal's KvChunkAddressTable. kv_contract: config `alloc` = layer 20 only,
+  alias entries = layer 20's (noc_addr, size, device group) at the same (slot, position); model.mirrors() -> [].
+- Snapshot: TtWindowCache(keep snapshot128) = P.32's 192-row ring for attention + `snap` (CacheSlab [.., 1, 128, 512],
+  ND-sharded 32-row records, replicated) + `pin` (the 128 rows before max_seq - chunk: the server's pulled-back last
+  chunk needs that carry, outside the ring; found by test_runner_contract's engine case). TtDS41Model.layer ->
+  `_snapshot` -> `write_snapshot(end)` after the layer's window write, before its ack, on every chunk not marked
+  last=False (tt-d-gen's chunk header has no last flag). Rows: `_snapshot_rows` (ring slices; owned blocks: stock
+  all_gather TP then SP of the ring itself into load-time buffers, WindowTables.snapshot_gather_buf; pieces sliced
+  straight into p % 128 order), written by update_padded_kv_cache(kv_actual_global=0) (DS41-217). Not written for
+  DECODER_SKIP=replay128's tail layers.
+- Table: 0_window_kv tensor_type Snapshot, records at 0/32/64/96 only, device group = whole mesh. Declared
+  max_sequence_length = max_seq, NOT 128: tt-metal's table TT_FATALs a lookup at >= it (kv_chunk_address_table.cpp:138)
+  and the framework's test_contract reads every config at every chunk's first / last block; tt-d-gen's conformSnapshot
+  reads it as a 128 extent (SnapshotOfExtent), what decode declares. One-line flip: kv_contract address_table
+  `_config(L, seq_len, ..)` -> `c["seq"] or seq_len` once testing/contract.py skips Snapshot configs.
+- FRAMEWORK CONFLICT (not fixable in my paths): test_contract FAIL `acks_early` 40 (of 800 blocks; limit 0): it
+  re-reads every config's first block after the request; the snapshot's record 0 is rewritten by the next chunk by
+  design (one per layer). Its other checks pass (producer snapshot PCC 0.987-0.999 over 96 golden rows a layer).
+- DS41-216: snapshot replicas differed on whole TP columns / mesh rows at the gather ring's antipode with the model's
+  high_bw gathers (2 of 2 acks runs), a stock whole-mesh gather (3 of 3, also with topology Linear); stock TP-then-SP
+  gathers 3 of 3 clean (the shipped path). Golden checks (chip (0, 0)'s copy) passed in every run.
+- Measured, change on (`orchestrator measure --task P.42`, ab/P.42/new) vs P.41's change-on run (ab/P.41/new; the
+  orchestrator measures the real off side, full + copy): every err_layer_L00..L39 identical to the last digit (L39
+  0.7067, limit 1.533), host_transfers_per_layer 0. p51200: chunk_wall_ms 210.0 (spread 27.1) vs 204.7 (30.3);
+  device_ms_total 192.17 vs 183.80 (+8.4: the snapshot writes, in the ffn_residual section 13.60 vs 5.07, ~0.21 ms a
+  layer, mostly the two gathers); write_snapshot host 22.7 ms a chunk (40 layers). Quick last-chunk wall 186.8 vs 180.7.
+- Memory a chip a slot (8x4): window KV full 68.75 MiB at 56,320 / 1281.25 MiB at 1,048,576 -> 20 MiB at any length
+  (40 x (192 ring + 192 pin + 128 snapshot) KiB), + one 6.75 MiB gather buffer pair a model; re-index copies 5.16 /
+  96.09 MiB -> 0. Total before 73.91 / 1377.34 MiB, after 20 MiB.
+- Gate units on the final code: test_kv_layout PASS, test_adapter_acks PASS, test_runner_contract PASS (tt-d-gen
+  engine 48b79127fb1, pulled-back chunk), test_contract FAIL acks_early 40 (the framework conflict above). Left to the
+  orchestrator: test_ladder, test_profile, test_short_turn.
+- Tests: new tests/test_window_snapshot.py (8x4, exact on 32 chips: ends 100, 5120, 6120, 10310 (start 32 mod 64),
+  15337, the pulled-back chunk via the pin, 40); caches.snapshot_failures / table_rules (Snapshot type, no record
+  past 128, whole-mesh group, alias == source entry, alias records out of the overlap check); acks: snapshot vs golden
+  [cap - 128, cap) at every ack and at the end + a 100-token request; runner: final and turn-1 snapshots.
+  Per-position-only rules (reused-prefix bytes, last block, bytecmp, pulled-back rewrite of layer 0) skip the snapshot.
+- Re-run: `scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_window_snapshot.py`;
+  `python -m models.demos.common.bringup gate P.42 --spec <spec> --check --unit P.42#test_adapter_acks`;
+  `python -m models.demos.common.bringup.orchestrator measure --task P.42 --spec <spec>`.
+
+## P.42 perf attempt 2 (8x4, 2026-11-07)
+- Attempt 1 was stopped because approvals.yaml / tasks.yaml changed. Those edits are the owner's P.43 queue entry
+  (10:30, during attempt 1), not the agent's. Left as they are, not reverted.
+- No code change in attempt 2. The gate status on the same code: test_kv_layout, test_adapter_acks and
+  test_runner_contract kept PASS; test_contract FAIL. `orchestrator measure --task P.42` reused quick + p51200
+  (rc 0, every err_layer within its limit, L39 0.7067 vs 1.533; p51200 chunk_wall_ms 210.0, device_ms_total 192.17).
+- FAIL contract (framework, DS41-218): `acks_early` 40 (limit 0) of 800 blocks; contract_checks_failed 1. tt-d-gen
+  ships Snapshot configs only with the last chunk (prefill_reader.cpp:235, ALL tensors only when is_last_chunk), so
+  the bytes it reads are final. The fix belongs in testing/contract.py, which is outside this step's paths.
+- Open serving question (DS41-219): at 48b79127fb1 a PD prefill's last actual_end is prompt_len - 1. Our cap and
+  decode's differ when prompt_len % 64 == 1. Decode has to confirm which length its cap uses.

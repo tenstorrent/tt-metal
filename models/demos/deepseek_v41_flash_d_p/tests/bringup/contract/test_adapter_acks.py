@@ -31,6 +31,15 @@ through the table over UMD, as the KV Manager does. Pass:
   - at the end: each slot's [0, end) vs the golden; slot 0's reused prefix [0, 960) byte-identical to what turn 1's
     acks shipped, its last block [960, 1000) PCC >= 0.99 against it (the harness's prefix / last-block rule,
     validation.py:55-61); every chip of a record's device group holds the same bytes
+  - WINDOW_KV_KEEP=snapshot128 (P.42, owner-authorized contract change 2026-11-07): 0_window_kv is the 128-row
+    snapshot. At every ack and at the end its 4 records hold the golden window KV of positions [cap - 128, cap) at row
+    p % 128, cap = (end - 1) // 64 x 64 of the chunk's end (caches.snapshot_failures: the golden rows in position
+    order through golden_failures, the same limits as before; rows of no position < cap zero). Ends not multiples of
+    64: 2536, 6072 and the chunk ends; then one more request shorter than 128 (slot 1, [0, 100): cap 64, rows 64..127
+    zero), its acks and snapshot checked the same way. The snapshot is rewritten every chunk by design, so the reused-
+    prefix byte check and the last-block check apply to the per-position caches only. REINDEX_SERVE=alias (P.42): a
+    re-index layer's records are read through its own table entries, which alias layer 20's records (byte-equal by
+    construction; table_rules checks the entries)
 """
 
 import pytest
@@ -73,11 +82,17 @@ def test_adapter_acks(mesh_device, tmp_path):
     def on_layer(layer_idx, chunk):
         acks.append((int(layer_idx), chunk))
         s, lo, hi = cur["slot"], cur["start"], cur["end"]
+        reader.where = f"ack layer {layer_idx} slot {s} [{lo}, {hi})"
         for cfg in cfgs:
             if layer_idx not in cfg["layers"]:
                 continue
             recs = reader.records(cfg["name"], s, [layer_idx], lo, hi)
             cur["reads"][(cfg["name"], layer_idx)] = recs
+            if cfg.get("snapshot"):  # P.42: the 128-row snapshot at the chunk end's cap
+                cur["fails"] += C.snapshot_failures(
+                    kvc, gk, cfg, recs, layer_idx, C.snapshot_cap(hi), thr, f"ack slot {s} [{lo}, {hi})"
+                )
+                continue
             shipped.setdefault((s, cur["turn"]), {}).setdefault(cfg["name"], {}).update(recs)
             got, pad = C.valid_and_pad(recs, cfg, layer_idx, lo, hi)
             cur["fails"] += C.golden_failures(kvc, gk, cfg, got, layer_idx, lo, hi, thr, f"ack slot {s} [{lo}, {hi})")
@@ -102,10 +117,11 @@ def test_adapter_acks(mesh_device, tmp_path):
 
     runtime.set_layer_completion_sink(Sink())
     ends = {}
-    for k, p in enumerate(R.interleave(R.ACK_TURNS)):
-        cur.update(slot=p.slot, start=p.start, end=p.end, turn=p.turn, fails=[], reads={})
+
+    def run_chunk(k, p):
         inp = C.payload_tensor(mesh_device, R.server_payload(tokens[p.start : p.start + R.CHUNK], p.start, p.end))
         n0 = len(acks)
+        out = []
         try:
             runtime.prefill_chunk(
                 inp,
@@ -122,23 +138,34 @@ def test_adapter_acks(mesh_device, tmp_path):
         ttnn.synchronize_device(mesh_device)
         want = [(i, (p.slot, p.start, p.end)) for i in range(len(layers))]
         if acks[n0:] != want:
-            fails.append(f"chunk {k} [{p.start}, {p.end}): acks {acks[n0:]}, want one per layer in order {want}")
-        fails += [f"chunk {k}: {x}" for x in cur["fails"]]
+            out.append(f"chunk {k} [{p.start}, {p.end}): acks {acks[n0:]}, want one per layer in order {want}")
+        out += [f"chunk {k}: {x}" for x in cur["fails"]]
         early = [
             (name, layer)
             for (name, layer), recs in cur["reads"].items()
             if reader.records(name, p.slot, [layer], p.start, p.end) != recs
         ]
         if early:
-            fails.append(
-                f"chunk {k}: records changed after their layer's ack (acked before the KV was in DRAM): {early}"
-            )
+            out.append(f"chunk {k}: records changed after their layer's ack (acked before the KV was in DRAM): {early}")
         ends[p.slot] = p.end
         print(f"[adapter acks] chunk {k} slot {p.slot} [{p.start}, {p.end}): {len(acks) - n0} acks")
+        return out
+
+    plan = R.interleave(R.ACK_TURNS)
+    for k, p in enumerate(plan):
+        cur.update(slot=p.slot, start=p.start, end=p.end, turn=p.turn, fails=[], reads={})
+        fails += run_chunk(k, p)
 
     for s, e in ends.items():
         for cfg in cfgs:
             recs = reader.records(cfg["name"], s, cfg["layers"], 0, e)
+            if cfg.get("snapshot"):  # P.42: the request's final snapshot at its cap
+                for layer in cfg["layers"]:
+                    mine = {key: b for key, b in recs.items() if key[0] == layer}
+                    fails += C.snapshot_failures(
+                        kvc, gk, cfg, mine, layer, C.snapshot_cap(e), thr, f"final slot {s} [0, {e})"
+                    )
+                continue
             for layer in cfg["layers"]:
                 got, _ = C.valid_and_pad(recs, cfg, layer, 0, e)
                 fails += C.golden_failures(kvc, gk, cfg, got, layer, 0, e, thr, f"final slot {s} [0, {e})")
@@ -148,6 +175,8 @@ def test_adapter_acks(mesh_device, tmp_path):
     t1, t2 = R.ACK_TURNS[0]
     prefix = R.follow_up_resident(t1, t2)
     for cfg in cfgs:
+        if cfg.get("snapshot"):  # (P.42: rewritten every chunk by design; checked at every ack and at the end above)
+            continue
         final = reader.records(cfg["name"], 0, cfg["layers"], 0, t1)
         first = shipped[(0, 0)][cfg["name"]]
         fails += [f"slot 0 reused prefix: {x}" for x in C.bytes_equal(first, final, cfg, cfg["layers"], 0, prefix)]
@@ -156,7 +185,14 @@ def test_adapter_acks(mesh_device, tmp_path):
             b, _ = C.valid_and_pad(final, cfg, layer, prefix, t1)
             fails += C.pcc_failures(kvc, cfg, b, a, layer, R.LAST_BLOCK_PCC, f"slot 0 last block [{prefix}, {t1})")
             gk.note_err("lastblock", cfg, layer, b, a, f"slot 0 last block [{prefix}, {t1})")  # P.26, never gated
+    if any(c.get("snapshot") for c in cfgs):  # P.42: a request shorter than 128 (cap 64) on slot 1, cold
+        short = R.Push(slot=1, chunk_idx=0, start=0, end=100, is_last=True, turn=len(R.ACK_TURNS[1]))
+        cur.update(slot=1, start=0, end=100, turn=short.turn, fails=[], reads={})
+        fails += run_chunk(len(plan), short)
     if reader.replica_mismatch:
+        print(
+            f"[adapter acks] replica mismatches (config, slot, layer, pos, chips, group, where): {reader.replica_detail}"
+        )
         fails.append(
             f"device-group replicas differ at {len(reader.replica_mismatch)} records: {reader.replica_mismatch[:3]}"
         )

@@ -183,6 +183,12 @@ def index_k_fp8() -> bool:
     return settings.get("INDEX_K_SERVED") == "fp8_row192"
 
 
+def reindex_alias() -> bool:
+    """REINDEX_SERVE=alias (P.42, owner 2026-11-07): the re-index layers' 4_index_k_r1 table entries are their key
+    source's (layer 20's) records; no mirror slab is allocated or written. False (copy, P.39): mirrors written."""
+    return settings.get("REINDEX_SERVE") == "alias"
+
+
 _COPY_NOTED = set()
 
 

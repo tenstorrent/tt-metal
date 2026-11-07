@@ -57,3 +57,11 @@ shared:
     paths:
     - ttnn/ttnn/bringup
     note: 'owner 2026-11-07: PD table per decode review: re-index aliases, 128-row window snapshot clamped at cap; contract change authorized, old paths kept behind switches'
+  P.43:
+    by: dnijemcevic
+    at: '2026-11-07T10:30:00'
+    paths:
+    - models/demos/deepseek_v41_flash_d_p/tt
+    - models/demos/common/bringup/testing/contract.py
+    - models/demos/common/bringup/tests/
+    note: 'owner 2026-11-07: queue the skip last-chunk-start fix (derived from cap, exact and replay128) so the snapshot hand-off works with the decoder skip; bundled: framework contract check for snapshot configs (owner-authorized framework edit) and the 128-row snapshot declaration'

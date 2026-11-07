@@ -25,7 +25,8 @@ Per chunk (prefill_chunk):
   2. the slot's id history takes [actual_start, actual_end); every engram layer's tail = the compressed ids of the 3
      positions before actual_start (a follow-up starts inside the slot's earlier prompt); begin_chunk sends the rows
   3. layer by layer: the layer writes its records (window rows, compressed / index rows, the last record's pad rows
-     zero) through update_padded_kv_cache; then the ack: host sink = ttnn.synchronize_device, then
+     zero) through update_padded_kv_cache; WINDOW_KV_KEEP=snapshot128 (P.42): the window rows go to the slot's ring
+     and the layer's served 128-row snapshot at cap(actual_end) is rewritten from it; then the ack: host sink = ttnn.synchronize_device, then
      sink.layers_completed(g, g + 1, slot, actual_start, actual_end) with g = first_layer_idx + k (K-71); D2H (d2h_service given) = outbound_socket_service_sync on the same
      command queue, no host sync
 No host round trip inside a layer (the ladder gates host_transfers_per_layer at 0).
@@ -136,12 +137,14 @@ class DS41PrefillRuntime:
         )
         # FIX.17: DEEP_LAYERS=tail skips layers 21-39 until the prompt's end; the engine reads every layer's window KV
         assert not self.model.deep, "DEEP_LAYERS=tail is not served: the engine needs every layer's whole history"
-        # P.32: WINDOW_KV_KEEP=ring | none keep a ring, not tt-d-gen's 0_window_kv of every position (its reader pending)
+        # P.32: WINDOW_KV_KEEP=ring | none keep a ring, not tt-d-gen's 0_window_kv of every position (its reader pending);
+        # P.42: snapshot128 serves the 128-row snapshot at cap (tt-d-gen's snapshot config)
         from ..attention import window_keep
 
-        assert (
-            window_keep() == "full"
-        ), f"WINDOW_KV_KEEP={window_keep()} is not served yet: tt-d-gen reads every position"
+        assert window_keep() in (
+            "full",
+            "snapshot128",
+        ), f"WINDOW_KV_KEEP={window_keep()} is not served: tt-d-gen reads every position or the snapshot at cap"
         self.geo = WindowGeometry(mesh_device, c)
         from models.demos.common.bringup.testing.contract import gap_feed
 
@@ -215,6 +218,10 @@ class DS41PrefillRuntime:
         assert d2h is None or metadata_msg is not None, "metadata_msg is required with d2h_service"
         st = self.state(kv, slot)
         model.state = st  # begin_chunk reads (and advances) the active slot's engram tail
+        if acks:  # (P.42: the in-process read-back's snapshot cap; host bookkeeping)
+            from .kv_contract import SNAPSHOT_ENDS
+
+            SNAPSHOT_ENDS[int(slot)] = int(end)
         ids = self._host_ids(inp, start, end)
         st.note_tokens(ids, start, end)
         model.begin_chunk(ids, start, last=last)  # (P.30 / P.31: False skips the decoder; None = not told, every layer)

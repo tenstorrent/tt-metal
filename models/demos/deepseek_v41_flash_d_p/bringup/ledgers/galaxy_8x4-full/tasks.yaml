@@ -3212,6 +3212,55 @@ tasks:
       short_turn_device_ms: '> 0'
       acks_early: == 0
       contract_checks_failed: == 0
+- id: P.43
+  title: 'Decode hand-off clean-up: DECODER_SKIP (exact and replay128) last-chunk start derived from cap so every layer''s snapshot is computed; the framework contract check accepts snapshot configs; the snapshot config declared as 128 rows'
+  step: perf
+  role: perf
+  device: true
+  deps:
+  - P.42
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/tt
+  - models/demos/deepseek_v41_flash_d_p/tests/
+  - models/demos/deepseek_v41_flash_d_p/bringup/serving_contract.md
+  - models/demos/common/bringup/testing/contract.py
+  - models/demos/common/bringup/tests/
+  brief:
+    details: 'OWNER 2026-11-07 (widened the same day to both skip modes). Background: decode receives [0, cap) of the history caches, cap = (prompt_len - 1) // KV_BLOCK_SIZE * KV_BLOCK_SIZE, plus a 128-row window snapshot of every layer for positions [cap - 128, cap) (P.42, WINDOW_KV_KEEP=snapshot128). Under DECODER_SKIP the skipped layers (layer 20''s attention / MoE, 21-39) only get correct window rows from the last chunk, which today is placed relative to the prompt''s END, not to cap. (a) replay128: the tail starts at end - 128, so rows [cap - 128, end - 128) of the skipped layers are never computed; P.42 therefore does not write their snapshot. (b) exact: a row is exact from last-chunk start + 20 x 127 = start + 2540; the caller rule start <= end - 2688 makes the last 128 rows before the END exact, but the snapshot needs [cap - 128, cap), i.e. start <= cap - 2668 (up to end - 2732; 44 tokens more in the worst case). Fix: derive the last chunk''s start from cap for both modes: replay128 tail start = min(end - 128, cap - 128); exact last-chunk start <= min(end - 2688, cap - 2668); clamp at 0 / the request''s start. Put the rule where the caller (runner / adapter / harness) chooses the last chunk''s start, and in the model''s check of it, not as a silent pull-back. Then write the snapshot for every layer under both modes (remove the P.42 exclusion). Keep today''s behaviour behind a switch SKIP_TAIL_START: end (today) | cap (new, the default after acceptance). DECODER_SKIP stays off by default (owner has not decided the skip); DECODER_SKIP=off is unchanged. Note (owner 2026-11-07): in serving the skip only acts on chunks marked not-last, and tt-d-gen''s chunk header has no last flag yet; the owner is raising it with tt-d-gen. Do not change the runner contract for that here; say in the report what the runtime would need (the flag, and the last chunk''s minimum length under each mode). Tests: extend models/demos/deepseek_v41_flash_d_p/tests/test_window_snapshot.py so that under each of DECODER_SKIP=exact and replay128 with snapshot128 every layer''s snapshot is written and its rows equal the golden window KV of [cap - 128, cap) at row p % 128: under exact within the no-skip limits (it is exact), under replay128 within the replay128 limits already used for its tail (never loosen a limit; if a new one is needed, derive it like the existing ones and say so); prompt lengths that are multiples of 64, not multiples of 64, and shorter than the last-chunk minimum. Update serving_contract.md and the DECODER_SKIP / WINDOW_KV_KEEP setting text. Report: the last-chunk start for 3 example lengths before / after under each mode; the extra full-model tokens and ms; accuracy; chunk_wall_ms and device_ms_total. Agent rules 18 and 19 hold. Report in plain language, short, every term defined. PART 2 (owner 2026-11-07, bundled into P.43): (a) the framework contract check (models/demos/common/bringup/testing/contract.py) re-reads every config after each ack and counts any later byte change as an early ack (acks_early); a snapshot config (tensor_type snapshot) is rewritten by design on every chunk and only the last chunk''s version is shipped (tt-d-gen prefill_reader.cpp ships snapshot configs with the last chunk only), so P.42 fails it with acks_early 40 (DS41-218). Make the check treat snapshot configs as tt-d-gen does: verify them (bytes, no change after the ack) at the request''s last chunk only; history configs keep every existing check unchanged; never loosen any other check; add a framework unit test that a history config changed after its ack still fails and a snapshot config rewritten before the last chunk passes. (b) Then declare 0_window_kv''s max_sequence_length as 128 (decode''s table; P.42 declared the full sequence length because tt-metal''s table crashed on lookups past a config''s declared length during the framework check): kv_contract.address_table, and any lookup that still reads a snapshot config at positions >= 128 must not (fix the reader, not the length). The full test_contract must pass (acks_early == 0, contract_checks_failed == 0). Note: P.42 moved the snapshot back onto the model''s high_bw gather after the DS41-216 fix (one semaphore pair per mesh axis); keep it. '
+  ab:
+    env:
+      DECODER_SKIP: replay128
+      WINDOW_KV_KEEP: snapshot128
+      SKIP_TAIL_START: end
+      ENGRAM_TABLE: resident
+    change:
+      DECODER_SKIP: replay128
+      WINDOW_KV_KEEP: snapshot128
+      SKIP_TAIL_START: cap
+      ENGRAM_TABLE: resident
+  ab_positions:
+  - 51200
+  gate:
+    cmd: BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py
+      && DS41_ENGRAM_TABLE=resident scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py
+      && DS41_DECODER_SKIP=replay128 DS41_ENGRAM_TABLE=resident scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/test_short_turn.py
+      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_contract.py
+      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_kv_layout.py
+      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_adapter_acks.py
+      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_runner_contract.py
+      && DS41_DECODER_SKIP=replay128 DS41_WINDOW_KV_KEEP=snapshot128 DS41_ENGRAM_TABLE=resident scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_window_snapshot.py
+      && DS41_DECODER_SKIP=exact DS41_WINDOW_KV_KEEP=snapshot128 DS41_ENGRAM_TABLE=resident scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_window_snapshot.py
+    metrics:
+      err_layer_L*: <= limit
+      err_state_*_L*: <= limit
+      err_final_hidden: <= limit
+      top5_overlap: '>= limit'
+      chunk_wall_ms: '> 0'
+      device_ms_total: '> 0'
+      short_turn_ms: '> 0'
+      short_turn_device_ms: '> 0'
+      acks_early: == 0
+      contract_checks_failed: == 0
 - id: O.1
   hold: 'owner 2026-11-06: not now (P.34-P.36 first)'
   title: 'Derived-op tests: a random-input case for every ttnn.bringup call this model makes'

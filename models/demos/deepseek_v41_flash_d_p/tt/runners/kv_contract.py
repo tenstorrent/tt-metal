@@ -28,6 +28,18 @@ TP-replicated: every column, local token row (g / chunk) W + g mod W. A compress
 its first token / r. So the record of tokens [p, p + 32) is shard b x (local token rows / 32) + lr / 32 of its
 chip, in bank (shard mod banks) at base + (shard div banks) x record bytes.
 
+WINDOW_KV_KEEP=snapshot128 (P.42, the default; owner 2026-11-07, decode's review): 0_window_kv is a SNAPSHOT config
+(KvChunkTensorType.Snapshot; records at positions 0, 32, 64, 96 only, so tt-d-gen's KV Manager reads it as a
+128-position snapshot: kv_chunk_table.cpp conformSnapshot -> SnapshotOfExtent(128); the declared
+max_sequence_length stays max_seq, because tt-metal's table refuses a lookup at or past it,
+kv_chunk_address_table.cpp:138, and the framework's contract test reads every config at every chunk's first and
+last block, testing/contract.py): per (slot, layer) 128 rows, position p at row p % 128 for
+p < cap = (prompt_len - 1) // kv_block_size x kv_block_size (decode receives [0, cap) and replays [cap, prompt_len)),
+4 records of 32 rows (32 KiB each, one bank), the same bytes on every chip (device group: the whole mesh); tensor
+[slots x L, 1, 128, 512], replicated. REINDEX_SERVE=alias (P.42, the default): 4_index_k_r1's entries of the re-index
+layers are their key source's records (the same noc_addr, size and device group at the same (slot, position)); the
+tensor holds the KV sources' slabs only (``alloc``).
+
 Address table: one config per tensor (chunk_n_tokens 32, chunk_size_bytes = one record, num_slots = slots,
 max_sequence_length = max_seq, num_layers = the served (engine) layers L); a config sets entries only for the
 layers it covers (config 0: all). Table layer = engine index k (= first_layer_idx + k; a non-contiguous bring-up
@@ -43,23 +55,41 @@ import torch
 
 import ttnn
 
-from ..attention import WindowGeometry
-from ..compressor import FP8_ROW_BYTES, fp8_rows_decode, index_k_fp8, reindex_layers
+from ..attention import SNAP, WindowGeometry, snapshot_cap, window_keep
+from ..compressor import FP8_ROW_BYTES, fp8_rows_decode, index_k_fp8, reindex_alias, reindex_layers
 from ..served import CacheSlab, alloc_served
 
 RECORD = 32  # tokens per record (tools/launch_harness/tables.py: chunk_n_tokens)
 CONFIG_ORDER = ("0_window_kv", "1_compress_kv_r2", "2_index_k_r2", "3_compress_kv_r1", "4_index_k_r1")
 
 
-def served_configs(cfg, layer_ids: list[int], window: bool = True) -> list[dict]:
+def served_configs(cfg, layer_ids: list[int], keep: str | None = None) -> list[dict]:
     """The table configs of these served model layers (engine index k = position in ``layer_ids``), table order.
-    ``window`` False (WINDOW_KV_KEEP=ring | none, P.32): no 0_window_kv (the slot's window rows are its state's ring,
-    not an engine cache of every position; tt-d-gen's reading of it is pending)."""
-    out = (
-        [dict(name=CONFIG_ORDER[0], kind="window_kv", ratio=1, width=cfg.head_dim, dedup=True, layers=list(layer_ids))]
-        if window
-        else []
-    )
+    ``keep`` (WINDOW_KV_KEEP; None: the setting): full = 0_window_kv of every position; snapshot128 (P.42) = the
+    128-row snapshot (``snapshot``: tensor_type Snapshot, ``seq`` 128); ring | none (P.32) = no 0_window_kv (the slot's
+    window rows are its state's ring). Each config's ``alloc``: the layers its tensor holds slabs for (REINDEX_SERVE=
+    alias: the KV sources only; ``of`` maps an alias layer to its source)."""
+    keep = keep or window_keep()
+    out = []
+    if keep == "full":
+        out.append(
+            dict(
+                name=CONFIG_ORDER[0], kind="window_kv", ratio=1, width=cfg.head_dim, dedup=True, layers=list(layer_ids)
+            )
+        )
+    elif keep == "snapshot128":
+        out.append(
+            dict(
+                name=CONFIG_ORDER[0],
+                kind="window_kv",
+                ratio=1,
+                width=cfg.head_dim,
+                dedup=False,
+                layers=list(layer_ids),
+                snapshot=True,
+                seq=SNAP,
+            )
+        )
     fp8 = index_k_fp8()
     for r, (cn, ik) in ((2, CONFIG_ORDER[1:3]), (1, CONFIG_ORDER[3:5])):
         src = [i for i in layer_ids if cfg.is_kv_source(i) and cfg.ratio(i) == r]
@@ -69,8 +99,12 @@ def served_configs(cfg, layer_ids: list[int], window: bool = True) -> list[dict]
             if fp8:  # P.39: Blaze's rows, also under the re-index layers reading these keys (source of each: "of")
                 mirrors = {j: i for i in src for j in reindex_layers(cfg, layer_ids, i)}
                 idx.update(fp8=True, layers=sorted(src + list(mirrors)), of=mirrors)
+                if mirrors and reindex_alias():  # P.42: their entries are the source's records; slabs for src only
+                    idx.update(alias=True, alloc=list(src))
             out.append(idx)
     for c in out:
+        c.setdefault("alloc", list(c["layers"]))
+        c.setdefault("seq", None)  # (None: max_seq, a KV config)
         c["rows"] = RECORD // c["ratio"]  # rows per record
         c["row_bytes"] = FP8_ROW_BYTES if c.get("fp8") else c["width"] * 2
         c["alloc_width"] = FP8_ROW_BYTES if c.get("fp8") else c["width"]  # elements a row of the tensor
@@ -93,20 +127,21 @@ class DS41ContractKV:
         self.num_banks = get_num_dram_banks(mesh)
         from ..attention import window_keep
 
-        self.window_keep = window_keep()  # (P.32: ring | none hold no 0_window_kv here)
-        self.configs = served_configs(cfg, self.layer_ids, window=self.window_keep == "full")
+        self.window_keep = window_keep()  # (P.32: ring | none hold no 0_window_kv here; P.42: snapshot128 its snapshot)
+        self.configs = served_configs(cfg, self.layer_ids, self.window_keep)
         self.by_config = {}
         for c in self.configs:
             stripe = g.stripe if (c["dedup"] and g.tp > 1) else g.w
             c["stripe"] = stripe
-            c["tok_rows"] = (self.max_seq // self.chunk) * stripe  # local token rows per chip
+            # local token rows per chip (P.42 snapshot: its 128 rows, every chip)
+            c["tok_rows"] = SNAP if c.get("snapshot") else (self.max_seq // self.chunk) * stripe
             assert c["tok_rows"] % RECORD == 0 and stripe % RECORD == 0, (c["name"], stripe)
             self.by_config[c["name"]] = alloc_served(
                 mesh,
                 c["alloc_width"],
                 c["tok_rows"] // c["ratio"],
                 c["rows"],
-                self.num_users * len(c["layers"]),
+                self.num_users * len(c["alloc"]),
                 c["dedup"],
                 dtype=c["dtype"],
             )
@@ -116,8 +151,8 @@ class DS41ContractKV:
         assert 0 <= slot < self.num_users, (slot, self.num_users)
         out = {}
         for c in self.configs:
-            t, n = self.by_config[c["name"]], len(c["layers"])
-            for row, layer in enumerate(c["layers"]):
+            t, n = self.by_config[c["name"]], len(c["alloc"])
+            for row, layer in enumerate(c["alloc"]):
                 out.setdefault(layer, {})[c["name"]] = CacheSlab(t, slot, row, n)
         return out
 
@@ -155,42 +190,59 @@ class DS41ContractKV:
             st = stage_layouts[0][0]
             host, fnids = f"host-{st['host_tag']:08x}", st["fnids"]
         table = D.KvChunkAddressTable(
-            {c["name"]: self._config(L, seq_len, self.num_users, c["record_bytes"]) for c in self.configs}
+            {
+                c["name"]: self._config(L, seq_len, self.num_users, c["record_bytes"], c.get("snapshot"))
+                for c in self.configs
+            }
         )
         for r in range(g.sp):
             for c in range(g.tp):
                 table.set_fabric_node_host(fnids[r][c], host_name=host)
         chip_group = [[table.add_device_group([fnids[r][c]]) for c in range(g.tp)] for r in range(g.sp)]
         row_group = [table.add_device_group(list(fnids[r])) if g.tp > 1 else chip_group[r][0] for r in range(g.sp)]
+        mesh_group = None  # (P.42 snapshot: every chip holds the same bytes)
         for cid, c in enumerate(self.configs):
             assert table.config_name(cid) == c["name"], (cid, table.config_name(cid), c["name"])
-            base, nbytes, n = bases[cid], c["record_bytes"], len(c["layers"])
+            base, nbytes, n = bases[cid], c["record_bytes"], len(c["alloc"])
             per_batch = c["tok_rows"] // RECORD  # records per (slot, layer) slab on a chip
+            if c.get("snapshot") and mesh_group is None:
+                mesh_group = table.add_device_group([f for row in fnids for f in row])
             for slot in range(self.num_users):
-                for row, k in enumerate(c["engine"]):
-                    b = slot * n + row
-                    for pos in range(0, seq_len, RECORD):
-                        mr, mc, lr = self.locate(c, pos)
-                        j = b * per_batch + lr // RECORD  # ROUND_ROBIN_1D: shard j in bank j % B at j // B
+                for layer, k in zip(c["layers"], c["engine"]):
+                    # P.42 REINDEX_SERVE=alias: a re-index layer's entries are its key source's records
+                    b = slot * n + c["alloc"].index(c.get("of", {}).get(layer, layer) if c.get("alias") else layer)
+                    for pos in range(0, c["seq"] or seq_len, RECORD):
+                        if c.get("snapshot"):  # P.42: record pos / 32 of the slab's 128 rows, on every chip
+                            j, dg = b * per_batch + pos // RECORD, mesh_group
+                        else:
+                            mr, mc, lr = self.locate(c, pos)
+                            j = b * per_batch + lr // RECORD  # ROUND_ROBIN_1D: shard j in bank j % B at j // B
+                            dg = row_group[mr] if mc < 0 else chip_group[mr][mc]
                         loc = D.KvCacheLocation()
                         loc.noc_addr = ((j % banks[cid]) << 32) | (base + (j // banks[cid]) * nbytes)
                         loc.size_bytes = nbytes
-                        loc.device_group_index = row_group[mr] if mc < 0 else chip_group[mr][mc]
+                        loc.device_group_index = dg
                         table.set(first_layer_idx + k, pos, slot, loc, cid)
         return table
 
     @staticmethod
-    def _config(num_layers: int, seq_len: int, slots: int, nbytes: int):
-        cfg = ttnn.experimental.disaggregation.KvChunkAddressTableConfig()
+    def _config(num_layers: int, seq_len: int, slots: int, nbytes: int, snapshot: bool = False):
+        D = ttnn.experimental.disaggregation
+        cfg = D.KvChunkAddressTableConfig()
         cfg.num_layers = num_layers
         cfg.max_sequence_length = seq_len
         cfg.num_slots = slots
         cfg.chunk_n_tokens = RECORD
         cfg.chunk_size_bytes = nbytes
+        if snapshot:  # P.42: fixed-size state (tt-d-gen KvTensorType::SNAPSHOT: moved whole, positions 0..96)
+            cfg.tensor_type = D.KvChunkTensorType.Snapshot
         return cfg
 
 
 # ---------------------------------------------------------------- read-back (host, through the table over UMD)
+SNAPSHOT_ENDS = {}  # P.42: {slot: the end of the last chunk the in-process runtime ran} (the snapshot's cap source)
+
+
 def _pcc(a: torch.Tensor, b: torch.Tensor) -> float:
     a, b = a.double().flatten(), b.double().flatten()
     a, b = a - a.mean(), b - b.mean()
@@ -218,6 +270,42 @@ def read_rows(
         else:
             out.append(torch.frombuffer(bytearray(raw), dtype=torch.bfloat16).reshape(-1, width))
     return torch.cat(out).float() if out else torch.zeros(0, width)
+
+
+def golden_window(golden, layer: int, lo: int, hi: int) -> tuple[torch.Tensor, torch.Tensor]:
+    """(positions, rows) of layer's golden window KV in [lo, hi) the golden holds: every position of a layer with
+    per-chunk dumps, else the positions its ring snapshots hold (kv_cache/layer_i[_at_p], position q at ring row
+    q % 128; a position two snapshots hold: the later one). Test-side only."""
+    if all(golden.has_layer(ch, layer) for ch in range(golden.n_chunks)):
+        kv = torch.cat([golden.layer(ch, layer)["kv"] for ch in range(golden.n_chunks)])
+        pos = torch.arange(max(0, lo), min(hi, kv.shape[0]))
+        return pos, kv[pos].float()
+    rows = {}
+    for at in sorted(set(golden.meta.get("state_snapshots", [])) | {golden.seq}, reverse=True):
+        try:
+            ring = golden.state(layer, at=None if at == golden.seq else at)["window_kv"]
+        except FileNotFoundError:
+            continue
+        ring = ring.reshape(-1, ring.shape[-1])
+        for q in range(max(lo, at - ring.shape[0], 0), min(hi, at)):
+            rows.setdefault(q, ring[q % ring.shape[0]])
+    pos = sorted(rows)
+    return torch.tensor(pos, dtype=torch.int64), (torch.stack([rows[q] for q in pos]).float() if pos else None)
+
+
+def snapshot_failures(snap: torch.Tensor, golden, layer: int, cap: int) -> tuple[torch.Tensor, torch.Tensor, list]:
+    """P.42: a served snapshot [128, 512] vs the golden window KV of positions [cap - 128, cap) at row p % 128: (the
+    device rows, the golden rows of the positions the golden holds, failures: rows of no position < cap not zero).
+    Test-side only."""
+    lo = max(0, cap - SNAP)
+    pos, want = golden_window(golden, layer, lo, cap)
+    fails = []
+    held = {q % SNAP for q in range(lo, cap)}
+    empty = [r for r in range(SNAP) if r not in held and bool(snap[r].abs().sum() > 0)]
+    if empty:
+        fails.append(f"snapshot layer {layer} cap {cap}: rows {empty[:4]}.. of no position < cap are not zero")
+    got = snap[pos % SNAP].float() if len(pos) else torch.zeros(0, snap.shape[-1])
+    return got, (want if want is not None else torch.zeros(0, snap.shape[-1])), fails
 
 
 def golden_rows(golden, c: dict, layer: int, length: int) -> tuple[torch.Tensor, int, str]:
@@ -251,9 +339,24 @@ def read_slot_kv_and_check_pcc(table, device_map, slot_id: int, real_len: int, t
     golden = Golden(trace_dir)
     names = [table.config_name(i) for i in range(table.num_configs())]
     mins, modes = {}, {}
+    # P.42 snapshot: the cap of the request's real end (the runtime's last chunk end in this process; else the
+    # caller's 32-aligned length, whose cap is the same unless that length is a multiple of 64 and the prompt longer)
+    cap = snapshot_cap(SNAPSHOT_ENDS.get(int(slot_id), real_len))
     for c in served_configs(cfg, list(layer_ids)):
         cid = names.index(c["name"])
         for k, layer in zip(c["engine"], c["layers"]):
+            if c.get("snapshot"):
+                snap = read_rows(table, device_map, cid, k, slot_id, SNAP, c["width"])
+                got, want, bad = snapshot_failures(snap, golden, layer, cap)
+                for b in bad:  # (rows of no position < cap not zero: the read-back fails the window kind)
+                    logger.error(f"  {c['name']}: {b}")
+                    mins[c["kind"]] = 0.0
+                if want.shape[0]:
+                    p = _pcc(got, want)
+                    mins[c["kind"]] = min(mins.get(c["kind"], 1.0), p)
+                    modes.setdefault(f"{c['name']}:snapshot", []).append(layer)
+                    logger.info(f"  {c['name']} layer {layer}: snapshot at cap {cap}, {want.shape[0]} rows PCC {p:.6f}")
+                continue
             want, lo, mode = golden_rows(golden, c, layer, real_len)
             got = read_rows(table, device_map, cid, k, slot_id, real_len, c["width"], c.get("fp8", False))
             got = got[lo : lo + want.shape[0]]

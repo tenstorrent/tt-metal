@@ -74,7 +74,15 @@ from .common import (
     set_load_layer,
     stream_dtype,
 )
-from .compressor import CompressRope, TtCompressCaches, TtCompressor, compressor_weights, config_names, reindex_layers
+from .compressor import (
+    CompressRope,
+    TtCompressCaches,
+    TtCompressor,
+    compressor_weights,
+    config_names,
+    reindex_alias,
+    reindex_layers,
+)
 from .cores import from_torch, init_caps, max_grid, sub_cores, sub_cores_tiled
 from .engram import TtEngramRows
 from .engram_add import build_engram_add
@@ -266,6 +274,8 @@ class DS41DeviceState:
         self.shared_compress = frozenset(shared)
 
         def mirrors(i):  # INDEX_K_SERVED=fp8_row192 (P.39): the re-index layers serving source i's index keys
+            if reindex_alias():  # P.42: their table entries are source i's records; no copies
+                return []
             name = config_names(cfg.ratio(i))[1]
             return [slabs.get(j, {}).get(name) for j in reindex_layers(cfg, model.layers, i)]
 
@@ -1040,6 +1050,7 @@ class TtDS41Model:
         # (TtDS41Block.kv_only) and the rest is skipped; every decoder layer's window cache notes the skipped positions
         self.decoder, self.kv_only = [], frozenset()
         self._skip = False  # this chunk skips the decoder (set per chunk by begin_chunk)
+        self._snap = True  # WINDOW_KV_KEEP=snapshot128 (P.42): this chunk rewrites the served window snapshots
         mode = settings.get("DECODER_SKIP")
         # (WINDOW_KV_KEEP=ring | none, P.32: begin_chunk truncates a window whose carry is not kept under exact /
         # replay128 and refuses the chunk under off; the decoder tail model never decides it)
@@ -1229,6 +1240,8 @@ class TtDS41Model:
         caller pulls back). Under replay128 every layer's window is truncated at ``start`` (the carry masked: start
         class 0); under exact nothing changes (the pull-back recomputes exactly from the complete caches)."""
         self._skip = bool(self.decoder) and last is False and self.skip_mode != "off"
+        # WINDOW_KV_KEEP=snapshot128 (P.42): every chunk not marked not-last rewrites the served window snapshots
+        self._snap = last is not False
         self._tail_mode = self.replay and last is True
         self._tail_at = None
         st = self.state
@@ -1398,15 +1411,24 @@ class TtDS41Model:
                 return self._tail_layer(i, h, start, state, end)
             out = self.blocks[i](h, start, state, end)
             state.window[i].computed(start, start + self.chunk)
+            self._snapshot(i, start, state, end)
             return out
         if i in self._deep_set:  # DEEP_LAYERS=tail: not on a normal chunk (tail_pass runs it)
             assert isinstance(h, Skipped), f"layer {i}: DEEP_LAYERS=tail runs it only in tail_pass"
             return h
         out = self.blocks[i](h, start, state, end)
+        self._snapshot(i, start, state, end)
         if i == self.deep_src:  # DEEP_LAYERS=tail: the deep layers' input, kept for the tail pass
             state.keep_deep_input(start, start + self.chunk if end is None else end, out)
             return SKIPPED
         return out
+
+    def _snapshot(self, i: int, start: int, state: DS41DeviceState, end: int | None) -> None:
+        """WINDOW_KV_KEEP=snapshot128 (P.42): layer i's served window snapshot after its window write of the chunk
+        [start, end) (device ops; before the layer's ack), unless the caller marked the chunk not the request's last."""
+        c = state.window[i]
+        if c.snap is not None and self._snap:
+            c.write_snapshot(start + self.chunk if end is None else int(end))
 
     def _tail_layer(self, i: int, h, start: int, state: DS41DeviceState, end: int | None) -> TailH:
         """DECODER_SKIP=replay128 (P.31), the request's last chunk [start, end). The first decoder layer (20): its KV
