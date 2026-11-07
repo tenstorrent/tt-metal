@@ -244,6 +244,10 @@
     {
       "fact": "Stock dispatch references mutable tt-shield branch and action refs. Compare actual dry/release head_sha, referenced_workflows and Uses/action SHAs, not only pre-dispatch branch lookup. A late drift invalidates unchanged-route claim; never redispatch release to hide it.",
       "evidence": "runs/release-freeze-materialization/RESULT.md"
+    },
+    {
+      "fact": "A gh job-log download timeout covers the whole redirect/blob transfer. Preserve prior snapshot until a complete successful download; recovery and local hashes do not establish upstream log freshness/completeness.",
+      "evidence": "runs/ci-log-download-timeout/RESULT.json"
     }
   ],
   "suite_timings": [

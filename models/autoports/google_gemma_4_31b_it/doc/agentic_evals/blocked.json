@@ -39,7 +39,7 @@
     "One closure review and stage gate"
   ],
   "initial_stop_at": "2026-11-06T04:33:36.867416+00:00",
-  "updated_at": "2026-11-07T03:33:36.871747+00:00",
+  "updated_at": "2026-11-07T04:22:39.972196+00:00",
   "completed_preparation": [
     "Fresh autoport registry and suite entries published; full host suite3737 passed15 skipped",
     "Stratified task cohorts frozen before scores",
@@ -230,5 +230,15 @@
       "state": "curl-builder5/5 install-curl running; no EPEL metadata/CONNECT403 in current snapshot",
       "claim": "Progress only; no successful image/CI confirmation yet"
     }
+  },
+  "log_retrieval": {
+    "status": "recovered_unchanged_cause_unresolved",
+    "observed_at": "2026-11-07T04:22:39.972196+00:00",
+    "run_ids": [
+      42323448662,
+      42332785769
+    ],
+    "evidence": "runs/ci-log-download-timeout/RESULT.json",
+    "scope": "Both bounded observers recovered; successful retrieval does not prove current or complete runner-log coverage. Existing freshness limitation remains."
   }
 }
