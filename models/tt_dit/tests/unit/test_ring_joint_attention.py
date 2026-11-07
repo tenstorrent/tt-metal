@@ -11,10 +11,9 @@ from tracy.process_model_log import post_process_ops_log, run_device_profiler
 
 import ttnn
 from models.common.utility_functions import is_blackhole
+from models.tt_dit.tests.unit.cache_entries_counter import CacheEntriesCounter
 from models.tt_dit.utils.padding import get_padded_vision_seq_len
-from tests.tests_common.cache_entries_counter import CacheEntriesCounter
-from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
-from tests.ttnn.unit_tests.operations.sdpa.sdpa_test_utils import fa_rand
+from tt_py_test_utils_common.comparison_funcs import comp_pcc
 
 
 def create_global_semaphores(mesh_device, cores, initial_value):
@@ -1966,3 +1965,10 @@ def test_ring_joint_sdpa_logical_tensor_trace_replay(
         submesh.reset_sub_device_stall_group()
         submesh.clear_loaded_sub_device_manager()
         submesh.remove_sub_device_manager(sub_device_manager)
+
+
+def fa_rand(*shape):
+    normal_1 = torch.randn(shape)
+    normal_2 = torch.randn(shape) * 10
+    bernoulli = torch.bernoulli(torch.full(shape, 0.001))
+    return normal_1 + normal_2 * bernoulli

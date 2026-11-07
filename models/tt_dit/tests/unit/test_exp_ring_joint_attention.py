@@ -11,8 +11,7 @@ from loguru import logger
 import ttnn
 from models.tt_dit.tests.unit.test_ring_joint_attention import create_ring_joint_sdpa_submesh, logical_length_tensor
 from models.tt_dit.utils.padding import get_padded_vision_seq_len
-from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
-from tests.ttnn.unit_tests.operations.sdpa.sdpa_test_utils import fa_rand
+from tt_py_test_utils_common.comparison_funcs import comp_pcc
 
 
 def create_fabric_router_config(max_payload_size=8192):
@@ -831,3 +830,10 @@ def test_exp_ring_joint_sdpa_logical_n_tensor_trace_replay(
         submesh.reset_sub_device_stall_group()
         submesh.clear_loaded_sub_device_manager()
         submesh.remove_sub_device_manager(sub_device_manager)
+
+
+def fa_rand(*shape):
+    normal_1 = torch.randn(shape)
+    normal_2 = torch.randn(shape) * 10
+    bernoulli = torch.bernoulli(torch.full(shape, 0.001))
+    return normal_1 + normal_2 * bernoulli

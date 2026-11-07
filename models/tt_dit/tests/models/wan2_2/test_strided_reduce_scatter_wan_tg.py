@@ -6,10 +6,10 @@ import pytest
 
 import ttnn
 from models.common.utility_functions import is_wormhole_b0
-from tests.nightly.t3000.ccl.test_minimal_matmul_strided_reduce_scatter_async import (
+from models.tt_dit.tests.models.wan2_2.runners.minimal_matmul_strided_rs import (
     run_minimal_matmul_strided_reduce_scatter_impl,
 )
-from tests.nightly.t3000.ccl.test_strided_reduce_scatter_async import run_reduce_scatter_impl
+from models.tt_dit.tests.models.wan2_2.runners.strided_reduce_scatter import run_reduce_scatter_impl
 
 
 def _make_fabric_router_config(max_packet_payload_size_bytes):
