@@ -1,31 +1,34 @@
 {
-  "status": "GPQA20 valid;40 admitted; SWE and Terminal measuredstops",
+  "status": "GPQA40 valid;80 submitted; SWE and Terminal measured stops",
   "evals": {
     "r1_gpqa_diamond": {
       "decision": "go",
-      "reason": "All20 official samples complete; repaired retained archive is intact and uniquely matched long-prefix chains show both capped empty answers are repetitive failures, not unresolved productive progress. Scores reported, not gated.",
-      "functional_at": 20,
-      "projected_hours": 7.779093817661827,
-      "score": 0.8,
+      "reason": "All40 official samples valid, complete phase archive,7 capped exact-loop failures. Score is reported, not gated.80 admitted on measured extra-wave projection; final release list remains unselected.",
+      "functional_at": 40,
+      "projected_hours": 6.241833334768334,
+      "score": 0.625,
       "confidence_interval_95": [
-        0.5839825677481064,
-        0.919342337420202
+        0.47032439137301096,
+        0.7577702083276673
       ],
       "next_rung": {
-        "tasks": 40,
+        "task_count": 80,
         "planned_clients": 4,
         "batch": 8,
         "status": "submitted",
-        "projected_workflow_hours": 3.7790938176618267,
-        "source": "runs/larger-gpqa40-c4-response-logging/manifest.json",
-        "run_id": 42296943044,
-        "submitted_at": "2026-11-06T21:27:59Z",
-        "url": "https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/42296943044"
+        "run_id": 42323448662,
+        "submitted_at": "2026-11-07T01:19:36Z",
+        "url": "https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/42323448662",
+        "tasks": 80,
+        "projected_workflow_hours": 8.258135529016663,
+        "measured_tail_sensitivity_hours": 9.882468863784997,
+        "full_timeout_sensitivity_hours": 12.258135529016663,
+        "source": "runs/larger-gpqa80-c4-native-logging/manifest.json"
       },
       "full_suite_decision": "pending_current_configuration_larger_rungs",
       "full_suite_stop_evidence": "runs/full-gpqa-observable/stop.json",
       "evidence": [
-        "runs/larger-gpqa20-c4-retention-retry/audit.json"
+        "runs/larger-gpqa40-c4-response-logging/audit.json"
       ],
       "full_suite_prior_stop_scope": "Earlier C2 partial run; not a currentC4/C8 full-suite impossibility claim"
     },

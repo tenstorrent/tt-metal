@@ -223,6 +223,10 @@
     {
       "fact": "Native hex logger survives unchanged CI filter, both initial request IDs/full replies match harness. First live snapshot already scored2/2; successful transport alone does not establish dry cancellation window. Postbuild shared queue .849444h.",
       "evidence": "runs/ci-native-log-confirmation/audit.json"
+    },
+    {
+      "fact": "40-run has7 capped loops vs2 on20. Longest capped chain1.624333h;33minutes single-active tail. All nested20 visibleoutputs match; one retained physical chain differs, so no cross-cohort physical exactness claim.",
+      "evidence": "runs/larger-gpqa40-c4-response-logging/audit.json"
     }
   ],
   "suite_timings": [
@@ -559,6 +563,25 @@
         1.0
       ],
       "evidence": "runs/ci-native-log-confirmation/audit.json"
+    },
+    {
+      "run_id": 42296943044,
+      "eval": "r1_gpqa_diamond",
+      "tasks": 40,
+      "agents": 4,
+      "batch": 8,
+      "wall_hours": 3.640635529016662,
+      "device_job_hours": 3.7675,
+      "workflow_hours": 3.772777777777778,
+      "agent_hours": null,
+      "timeouts": 0,
+      "output_cap_failures": 7,
+      "score": 0.625,
+      "wilson95": [
+        0.47032439137301096,
+        0.7577702083276673
+      ],
+      "evidence": "runs/larger-gpqa40-c4-response-logging/audit.json"
     }
   ],
   "generic_fixes": [

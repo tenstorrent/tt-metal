@@ -370,6 +370,13 @@
       "max_num_seqs": 8,
       "batch_reason": "Smallest validated batch at or above8; expandedpool C8 capacity and exactscored20 confirmed; C4 remains selected outside this experimental arm",
       "pool_ids": 20480
+    },
+    "larger-gpqa80-c4-native-logging": {
+      "planned_clients": 4,
+      "batch": 8,
+      "max_num_seqs": 8,
+      "batch_reason": "Smallest validated batch at or above4; C4 selected and C8 optional comparison cannot delay this normal rung",
+      "pool_ids": 10248
     }
   },
   "release_limits": {

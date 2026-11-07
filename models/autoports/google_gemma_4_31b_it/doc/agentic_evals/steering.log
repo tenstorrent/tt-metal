@@ -39,3 +39,4 @@
 2026-11-06T23:29:53.823825+00:00 logging-future-cohort-preparation completed: inputs re-read unchanged (extended48h/12h, batches1/8/16/32, maxCI6); steering.md absent. Held configurations only; normal rung admission unchanged. Execution remotes empty.
 2026-11-07T00:11:35.807854+00:00 Re-read inputs/run_contract/device instructions: unchanged; no steering.md. CI logging confirmation accepted, not a dry pass. Normal C4 progression independent of C8 comparison.
 2026-11-07T00:38:33.352120+00:00 C4 exact40 host-only fallback prepared; inputs unchanged, no steering.md. No publication/selection, normal80 independent.
+2026-11-07T01:25:57.128541+00:00 Inputs re-read unchanged; no steering.md. Valid40 banked, measured9.882469h80 forecast admitted/dispatched. New period3 hypothesis gets one bounded fresh-native prefix prerequisite, total.30devicehbox; no missingtoken synthesis.
