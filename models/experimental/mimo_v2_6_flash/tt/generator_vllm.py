@@ -164,6 +164,18 @@ from .attention import PAIR_SPLIT_OPS, page_table_width, verify_grouped, verify_
 from .device_sampler import CANDIDATES_PER_CHIP, MAX_USERS, stream_states
 from .generator import MiMoGalaxyGenerator
 from .model import PREFILL_CHUNK_TRACE, prefill_padded_len, prefill_warmup_batches, prefill_warmup_chunks
+from . import multimodal as mm
+
+try:  # the multimodal class registers vLLM's MiMo-V2-Omni processor; tests drive the adapter without vLLM
+    from vllm.model_executor.models.interfaces import SupportsMultiModal
+    from vllm.model_executor.models.mimo_v2_omni import (
+        MiMoV2OmniDummyInputsBuilder,
+        MiMoV2OmniMultiModalProcessor,
+        MiMoV2OmniProcessingInfo,
+    )
+    from vllm.multimodal import MULTIMODAL_REGISTRY
+except ImportError:
+    SupportsMultiModal = MULTIMODAL_REGISTRY = None
 
 TP = 8
 BLOCK_SIZE = 64
@@ -904,6 +916,7 @@ class MiMoV2ForCausalLM:
                 start > 0
                 and PREFILL_BATCH
                 and prefill_padded_len(int(ends[i])) <= self.models[0].PREFILL_BATCH_MAX_PADDED
+                and not self._mm_rows_in(i, 0, int(ends[i]))
             ):
                 # A short prompt whose first blocks are cached (a prefix hit) is recomputed from position 0 in a batch
                 # pass (with the lane's other first chunks, traced) instead of an eager later chunk. Its cached blocks
@@ -953,7 +966,11 @@ class MiMoV2ForCausalLM:
             # (allow_trace=False), after the replays, so no replay runs while an eager output of the lane is alive.
             model = self.models[lane]
             traced = [
-                g for g in rows_ if PREFILL_CHUNK_TRACE and model.chunk_traced(g[0][2], g[0][3], g[0][4] - g[0][3])
+                g
+                for g in rows_
+                if PREFILL_CHUNK_TRACE
+                and not self._mm_rows_in(g[0][0], g[0][3], g[0][4])
+                and model.chunk_traced(g[0][2], g[0][3], g[0][4] - g[0][3])
             ]
             traced_rows.update(g[0][0] for g in traced)
             by_lane.append(traced + batches + [g for g in rows_ if not any(g is t for t in traced)])
@@ -975,6 +992,8 @@ class MiMoV2ForCausalLM:
                 (chunk, slot, _), start, i = chunks[0], rows_of_pass[0][3], rows_of_pass[0][0]
                 group = draft_group[i]
                 self._dflash_continue(lane, slot, start, start + chunk.numel() - 1, group)
+                embeds, embed_rows = self._row_embeds(i, lane, start, start + chunk.numel())
+                mm_rows = {} if embeds is None else {"embeds": embeds, "embed_rows": embed_rows}
                 handle = self.models[lane].prefill_enqueue(
                     chunk,
                     slot,
@@ -982,6 +1001,7 @@ class MiMoV2ForCausalLM:
                     history_continues=continues[i],
                     draft_group=group,
                     allow_trace=i in traced_rows,
+                    **mm_rows,
                 )
             pending.append((rows_of_pass, lane, handle))
         t1 = time.perf_counter()
@@ -1004,9 +1024,25 @@ class MiMoV2ForCausalLM:
         return kv_pair_split.PAIR if self.pair_split else BLOCK_SIZE
 
     def _batchable(self, placed_row):
-        """A first chunk (start 0) whose padded length a prefill batch takes."""
+        """A first chunk (start 0) whose padded length a prefill batch takes (and that holds no multimodal row)."""
         start, end = placed_row[3], placed_row[4]
-        return PREFILL_BATCH and start == 0 and prefill_padded_len(end) <= self.models[0].PREFILL_BATCH_MAX_PADDED
+        return (
+            PREFILL_BATCH
+            and start == 0
+            and prefill_padded_len(end) <= self.models[0].PREFILL_BATCH_MAX_PADDED
+            and not self._mm_rows_in(placed_row[0], start, end)
+        )
+
+    # Multimodal hooks of prefill_forward (MiMoV2OmniForCausalLM): the text model has no multimodal rows.
+    def _mm_rows_in(self, row, start, end):
+        """Whether prefill row ``row`` has a multimodal embedding row in prompt positions [start, end): such a chunk
+        runs eagerly on its own (no batch, no trace) and a cached prefix in front of it is not recomputed in a batch."""
+        return False
+
+    def _row_embeds(self, row, lane, start, end):
+        """(embeds, embed_rows) of prefill row ``row``'s chunk [start, end) for TtMiMoModel.prefill_enqueue, or
+        (None, None)."""
+        return None, None
 
     def _recapture_after_new_programs(self, programs):
         """``programs``: each replica's program-cache size before the prefill. A prefill that compiled new programs
@@ -2523,3 +2559,199 @@ class MiMoV2ForCausalLM:
             model.release_prefill_traces()
             model.release_prefill_chunk_traces()
             model.release_spec_traces()
+
+
+# ---------------------------------------------------------------------------------------------------------------------
+# Multimodal input (doc/multimodal_plan.md)
+# ---------------------------------------------------------------------------------------------------------------------
+
+# Modalities MiMoV2OmniForCausalLM serves (model_capabilities["mm_modalities"]); MIMO_MM_MODALITIES narrows them.
+MM_MODALITIES = tuple(m for m in os.environ.get("MIMO_MM_MODALITIES", ",".join(mm.MODALITIES)).split(",") if m)
+
+
+def default_encoder_backend(model_path, mesh_device):
+    """The encoder backend of the replica on ``mesh_device`` (its 1x8 row). MIMO_MM_ENCODER: ``hf_host`` (default:
+    the TEMPORARY host backend, tt/multimodal.HFHostBackend, one per process) or ``module.path:factory`` with the same
+    signature (the vision workstream's device ViT plugs in here: it runs on the row that serves the request)."""
+    spec = os.environ.get("MIMO_MM_ENCODER", "hf_host")
+    if spec == "hf_host":
+        return mm.HFHostBackend.shared(model_path)
+    module, _, name = spec.partition(":")
+    if not name:
+        raise ValueError(f"MIMO_MM_ENCODER={spec!r}: hf_host or module.path:factory")
+    import importlib
+
+    return getattr(importlib.import_module(module), name)(model_path, mesh_device)
+
+
+def _register_mm_processor(cls):
+    if MULTIMODAL_REGISTRY is None:
+        return cls
+    return MULTIMODAL_REGISTRY.register_processor(
+        MiMoV2OmniMultiModalProcessor,
+        info=MiMoV2OmniProcessingInfo,
+        dummy_inputs=MiMoV2OmniDummyInputsBuilder,
+    )(cls)
+
+
+@_register_mm_processor
+class MiMoV2OmniForCausalLM(MiMoV2ForCausalLM, *((SupportsMultiModal,) if SupportsMultiModal is not None else ())):
+    """MiMo-V2.6-Flash with image, video and audio input: the text adapter plus vLLM's upstream MiMo-V2-Omni processor
+    (placeholder expansion, pixel / mel preprocessing, video frames and timestamps), with the items' embeddings
+    merged into the prefill (tt/multimodal.py, TtMiMoModel.prefill_enqueue(embeds=)). Serve it with
+    TT_MODEL_CLASS_OVERRIDES=TTMiMoV2OmniForCausalLM=models.experimental.mimo_v2_6_flash.tt.generator_vllm:MiMoV2OmniForCausalLM
+    (vLLM resolves the MiMo-V2.6-Flash checkpoints, which carry a vision_config, to MiMoV2OmniForCausalLM; the plugin's
+    built-in map serves both names with the text class).
+
+    ``prefill_forward`` takes each row's items from ``mm_items`` (the plugin contract: per row None or a list of
+    {modality, identifier, offset, length, is_embed, data}), else from the plugin's image-only ``pixel_values`` /
+    ``image_grid_thw`` lists (items found by their placeholder runs). A chunk with an item's embedding rows runs
+    eagerly on its own, with the rows merged on device; every other chunk, and every text-only request, runs exactly as
+    in the text class. Item embeddings are cached by identifier (an LRU, MIMO_MM_CACHE_MB): a later chunk, a chunk
+    start moved back into an earlier item, or an item stripped by APC (``data`` None) reuses them. Nothing in a
+    request's multimodal input raises out of prefill (an exception there kills the engine): an item that cannot be
+    parsed or encoded is logged and its placeholder tokens' own embeddings stand in.
+
+    Speculative decoding (plan decision 4): the MTP history keeps the placeholder token ids of multimodal rows (its
+    drafts see the placeholder embeddings there); DFlash's context ring takes the target's hidden states, which see the
+    items. Either affects acceptance only."""
+
+    model_capabilities = {**MiMoV2ForCausalLM.model_capabilities, "mm_modalities": MM_MODALITIES}
+
+    @classmethod
+    def get_placeholder_str(cls, modality, i):
+        if modality.startswith("image"):
+            return "<|vision_start|><|image_pad|><|vision_end|>"
+        if modality.startswith("video"):
+            return "<|vision_start|><|video_pad|><|vision_end|>"
+        if modality.startswith("audio"):
+            return "<|mimo_audio_start|><|audio_pad|><|mimo_audio_end|>"
+        raise ValueError(f"Unsupported modality: {modality}")
+
+    def embed_multimodal(self, **kwargs):
+        raise NotImplementedError("MiMo on TT merges multimodal embeddings inside prefill_forward")
+
+    @classmethod
+    def initialize_vllm_model(cls, hf_config, mesh_device, *args, **kwargs):
+        model = super().initialize_vllm_model(hf_config, mesh_device, *args, **kwargs)
+        model.setup_multimodal(_model_path(hf_config), hf_config)
+        return model
+
+    def setup_multimodal(self, model_path, hf_config=None, backends=None):
+        """The encoder backend of each lane (``backends``, else default_encoder_backend on the lane's row), the item
+        embedding cache, and the image placeholder id (for the image-only kwargs)."""
+        self.mm_hidden = self.models[0].cfg.hidden_size
+        self.image_token_id = int(getattr(hf_config, "image_token_id", None) or 151655)
+        vision = getattr(hf_config, "vision_config", None)
+        merge = None
+        if vision is not None:
+            merge = vision.get("spatial_merge_size") if isinstance(vision, dict) else vision.spatial_merge_size
+        self.mm_merge_size = int(merge or 2)
+        if backends is None:
+            backends = [default_encoder_backend(model_path, m.mesh_device) for m in self.models]
+        self.mm_cache = mm.EmbeddingCache()
+        self.mm_encoders = [mm.ItemEncoder(b, self.mm_cache) for b in backends]
+        # The identifiers of the items of each slot's request (by plugin slot): when a slot takes another request, the
+        # items no other slot's request holds leave the cache (the plugin does not say when a request is done; the
+        # cache's LRU budget bounds the rest).
+        self.mm_slot_items = {}
+        self.mm_failures = 0  # chunks whose multimodal rows fell back to their placeholder tokens
+        self._row_mm = self._row_slots = None
+        logger.info(f"MiMo vLLM: multimodal input {MM_MODALITIES}, encoders {[type(b).__name__ for b in backends]}")
+
+    def _rows_items(self, tokens, prompt_lens, mm_items, pixel_values, grids):
+        """Each prefill row's items (tt/multimodal.MMItem, prompt order). A row whose input is malformed is logged
+        and served as text."""
+        ends = np.asarray(prompt_lens).reshape(-1).astype(np.int64)
+        out = [[] for _ in range(tokens.shape[0])]
+        for i in range(tokens.shape[0]):
+            try:
+                if mm_items is not None:
+                    out[i] = mm.parse_items(mm_items[i] if i < len(mm_items) else None, MM_MODALITIES)
+                elif grids is not None and i < len(grids) and grids[i] is not None:
+                    if "image" not in MM_MODALITIES:
+                        raise mm.MMInputError("images are not served (MIMO_MM_MODALITIES)")
+                    pv = pixel_values[i] if pixel_values is not None and i < len(pixel_values) else None
+                    out[i] = mm.items_from_image_lists(
+                        tokens[i], int(ends[i]), pv, grids[i], self.image_token_id, self.mm_merge_size
+                    )
+            except Exception as e:  # noqa: BLE001 - a malformed request must not kill the engine
+                logger.error(f"MiMo vLLM: prefill row {i}: multimodal input ignored, served as text: {e}")
+                out[i] = []
+        return out
+
+    def prefill_forward(self, tokens, start_pos, prompt_lens, page_table, kv_cache, *args, **kwargs):
+        mm_kwargs = [kwargs.pop(k, None) for k in ("mm_items", "pixel_values", "image_grid_thw")]
+        items = self._rows_items(tokens, prompt_lens, *mm_kwargs)
+        empty_slots = kwargs.get("empty_slots")
+        slots = list(range(tokens.shape[0])) if empty_slots is None else [int(s) for s in empty_slots]
+        self._track_slot_items(slots, items)
+        if not any(items):
+            return super().prefill_forward(tokens, start_pos, prompt_lens, page_table, kv_cache, *args, **kwargs)
+        self._row_mm, self._row_slots = items, slots
+        try:
+            return super().prefill_forward(tokens, start_pos, prompt_lens, page_table, kv_cache, *args, **kwargs)
+        finally:
+            self._row_mm = self._row_slots = None
+
+    def _track_slot_items(self, slots, items):
+        """Record each prefill row's item identifiers under its slot; a slot whose request changed drops the cached
+        embeddings of its old request's items that no other slot's request holds."""
+        dropped = set()
+        for slot, row_items in zip(slots, items):
+            ids = {item.identifier for item in row_items if item.identifier is not None}
+            old = self.mm_slot_items.get(slot, set())
+            if ids != old:
+                dropped |= old - ids
+                self.mm_slot_items[slot] = ids
+        if dropped:
+            live = set().union(*self.mm_slot_items.values())
+            self.mm_cache.discard(dropped - live)
+
+    def _mm_rows_in(self, row, start, end):
+        return self._row_mm is not None and bool(mm.items_overlapping(self._row_mm[row], start, end))
+
+    def _row_embeds(self, row, lane, start, end):
+        if not self._mm_rows_in(row, start, end):
+            return None, None
+        t0 = time.perf_counter()
+        where = f" (prefill row {row}, slot {self._row_slots[row]}, chunk [{start}, {end}))"
+        encoder = self.mm_encoders[lane]
+        failures = encoder.failures
+        try:
+            embeds, rows = mm.chunk_embeds(
+                self._row_mm[row], start, end, lambda item: encoder(item, where), self.mm_hidden
+            )
+        except Exception as e:  # noqa: BLE001 - see _rows_items
+            embeds = rows = None
+            logger.error(f"MiMo vLLM: multimodal rows{where} not merged: {type(e).__name__}: {e}")
+        if embeds is None or encoder.failures > failures:
+            self.mm_failures += 1
+            logger.error(
+                f"MiMo vLLM: chunk{where} runs with placeholder embeddings for (some of) its multimodal rows: "
+                f"{self.mm_failures} degraded chunks so far"
+            )
+        if embeds is None:
+            return None, None
+        logger.info(
+            f"MiMo vLLM: prefill row {row} [{start}, {end}): {0 if rows is None else int(rows.sum())} multimodal rows "
+            f"in {1e3 * (time.perf_counter() - t0):.0f} ms (cache: {len(self.mm_cache)} items, "
+            f"{self.mm_cache.used / 2**20:.0f} MB, {self.mm_cache.hits} hits)"
+        )
+        return embeds, rows
+
+    def warmup_model_prefill(self, *args, **kwargs):
+        """The text model's warm-up, then the multimodal row merge for every padded length a chunk can have."""
+        first = not (self.already_warmed_up_prefill or self.prefill_programs_compiled)
+        super().warmup_model_prefill(*args, **kwargs)
+        if not first:
+            return
+        model0 = self.models[0]
+        window = next((layer.attn.sliding_window for layer in model0.layers if layer.is_swa), BLOCK_SIZE)
+        chunks = prefill_warmup_chunks(
+            self._max_prefill_tokens(), self.max_seq_len, BLOCK_SIZE, window, self.pair_split
+        )
+        lengths = sorted({prefill_padded_len(n, start, self.pair_split) for n, start in chunks})
+        for model in self.models:
+            model.warm_embeds(lengths)
+        logger.info(f"MiMo vLLM: multimodal row merge warmed up for padded lengths {lengths}")
