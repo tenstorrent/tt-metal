@@ -43,6 +43,18 @@ from models.demos.deepseek_v3_d_p.tests.kda.checkpoint_utils import resolve_mode
 from models.demos.deepseek_v3_d_p.tests.kda.utils import read_slab_layer
 from models.demos.deepseek_v3_d_p.tests.kimi_k3.golden import TRACE_1M, TRACE_100K, resolve_checkpoint, resolve_trace
 from models.demos.deepseek_v3_d_p.tests.kimi_k3.kda_slabs import attach_kda_states
+from models.demos.deepseek_v3_d_p.tests.kimi_k3.synthetic import (
+    CACHE_LEN,
+    HF_CONFIGS,
+    build_stack,
+    cache_rows,
+    compose,
+    placements,
+    release,
+    synthetic_state_dict,
+    token_ids,
+    upload_tokens,
+)
 from models.demos.deepseek_v3_d_p.tests.kimi_k3.test_transformer_depth import (
     PLACEMENTS,
     SP_AXIS,
@@ -372,3 +384,110 @@ def test_chunked_prefill_carries_kda_state(mesh_device, device_params, num_layer
         slabs.deallocate()
     assert growth == 0, f"device DRAM grew {growth} bytes across chunks 1..{NUM_CHUNKS - 1}: {footprints}"
     assert not failures, "chunked prefill diverged from the model: " + "; ".join(failures)
+
+
+# --- Synthetic weights (K3 and K3.1) ------------------------------------------------------------------
+#
+# K3.1 has no golden, so this is K3's chunked test with the oracle-free half of its checks: after every
+# chunk each KDA layer's carry is stored on every chip as finite, nonzero values, and device DRAM does not
+# grow after the first chunk; at the end the kvpe and (K3.1) index cache hold every real token's row in
+# token order and nothing past the last chunk; and the same prompt prefilled again with DIFFERENT padding
+# ids past its end is bit-identical in outputs, carries and every real token's cache rows. The last chunk
+# ends off the chunk grid and off the 32-token tile grid, as a prompt's real length does, so a layer that
+# ignores `actual_end` (a KDA recurrence running into the padding, an attention reading padded keys) fails
+# the rerun.
+#
+# Whether the values crossing a boundary are RIGHT is owned where a reference exists: the KDA carry by
+# K3's golden test above (K3.1's KDA layers are K3's), and DSA reading the previous chunks' kvpe and index
+# keys by `sparse_mla/test_sparse_mla.py`'s chunked K3.1 case against the CPU reference.
+#
+# Layers 0-3: three KDA layers, then the first full-attention layer.
+SYNTHETIC_LAYERS = 4
+SYNTHETIC_CHUNKS = 4
+SYNTHETIC_END = (SYNTHETIC_CHUNKS - 1) * CHUNK + 3001
+
+
+def _carries(mesh_device, slabs) -> dict:
+    """Every KDA layer's stored carry, both halves, as each chip's raw values."""
+    carries = {}
+    for layer_idx in slabs.layer_ids:
+        carry = read_slab_layer(mesh_device, slabs, 0, layer_idx)
+        for name in ("recurrent", "convolution"):
+            carries[(layer_idx, name)] = [
+                ttnn.to_torch(t).float() for t in ttnn.get_device_tensors(getattr(carry, name))
+            ]
+        deallocate_state(carry)
+    return carries
+
+
+def _prefill(mesh_device, stack, caches, ids):
+    """One request's chunks: final outputs, carries after every chunk, and DRAM after every chunk."""
+    outputs, carries, footprints = [], [], []
+    for start in range(0, SYNTHETIC_END, CHUNK):
+        end = min(start + CHUNK, SYNTHETIC_END)
+        tokens_tt = upload_tokens(mesh_device, ids[start : start + CHUNK])
+        out = stack.forward(
+            tokens_tt,
+            kvpe_cache=caches.kvpe,
+            index_kv_cache=caches.index,
+            actual_start=start,
+            actual_end=end,
+        )
+        ttnn.deallocate(tokens_tt)
+        outputs.append(compose(mesh_device, out, end - start).float())
+        ttnn.deallocate(out)
+        carries.append(_carries(mesh_device, caches.kda_states))
+        footprints.append(_dram_bytes(mesh_device))
+    kv = {
+        name: cache_rows(mesh_device, cache, CHUNK, CACHE_LEN)
+        for name, cache in (("kvpe", caches.kvpe), ("index", caches.index))
+        if cache is not None
+    }
+    return outputs, carries, footprints, kv
+
+
+@pytest.mark.timeout(1800)
+@pytest.mark.parametrize("model, mesh_device, device_params", placements(), indirect=["mesh_device", "device_params"])
+def test_synthetic_chunked_prefill_carries_state(model, mesh_device, device_params):
+    state_dict = synthetic_state_dict(HF_CONFIGS[model](CACHE_LEN), 0, SYNTHETIC_LAYERS)
+    stack, caches = build_stack(mesh_device, model, state_dict, 0, SYNTHETIC_LAYERS)
+    ids = token_ids(SYNTHETIC_CHUNKS * CHUNK)
+    # Same prompt, other padding: everything past SYNTHETIC_END is what the forward must ignore.
+    repadded = ids[:SYNTHETIC_END] + token_ids(SYNTHETIC_CHUNKS * CHUNK - SYNTHETIC_END, seed=8)
+    assert repadded[SYNTHETIC_END:] != ids[SYNTHETIC_END:]
+    try:
+        logger.info(f"{model}: {SYNTHETIC_CHUNKS} chunks of {CHUNK}, ending at {SYNTHETIC_END}")
+        outputs, carries, footprints, kv = _prefill(mesh_device, stack, caches, ids)
+        logger.info(f"{model}: the same prompt again, with different padding past {SYNTHETIC_END}")
+        outputs_again, carries_again, _, kv_again = _prefill(mesh_device, stack, caches, repadded)
+    finally:
+        release(stack, caches)
+
+    for chunk, (out, chunk_carries) in enumerate(zip(outputs, carries)):
+        assert torch.isfinite(out).all() and out.std() > 0, f"chunk {chunk}: non-finite or constant output"
+        for (layer_idx, name), shards in chunk_carries.items():
+            for dev, values in enumerate(shards):
+                assert (
+                    torch.isfinite(values).all() and values.any()
+                ), f"chunk {chunk}: KDA layer {layer_idx} {name} carry not stored on device {dev}"
+    growth = max(footprints[1:]) - min(footprints[1:])
+    logger.info(f"  {model} DRAM drift over chunks 1..{SYNTHETIC_CHUNKS - 1}: {growth} B")
+    assert growth == 0, f"device DRAM grew {growth} bytes across chunks 1..{SYNTHETIC_CHUNKS - 1}: {footprints}"
+
+    assert set(kv) == ({"kvpe", "index"} if model == "kimi_k3_1" else {"kvpe"})
+    for name, slots in kv.items():
+        assert torch.isfinite(slots).all(), f"non-finite {name} cache"
+        assert slots[:, :SYNTHETIC_END].abs().amax(dim=-1).gt(0).all(), f"a real token's {name} row is unwritten"
+        assert not slots[:, SYNTHETIC_CHUNKS * CHUNK :].any(), f"{name} rows past the last chunk were written"
+        logger.info(f"  {model} {name}: rows [0, {SYNTHETIC_END}) written in every slot, nothing past the last chunk")
+
+    for chunk, (out, again) in enumerate(zip(outputs, outputs_again)):
+        assert torch.equal(out, again), f"chunk {chunk}: output depends on the padding"
+    for chunk, (chunk_carries, again) in enumerate(zip(carries, carries_again)):
+        for key, shards in chunk_carries.items():
+            assert all(map(torch.equal, shards, again[key])), f"chunk {chunk}: KDA {key} carry depends on the padding"
+    for name in kv:
+        real = slice(0, SYNTHETIC_END)
+        assert torch.equal(
+            kv[name][:, real], kv_again[name][:, real]
+        ), f"{name} cache of real tokens depends on the padding"
