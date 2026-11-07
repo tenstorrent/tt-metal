@@ -39,7 +39,7 @@ If links are flaky, fabric tests will fail with routing errors - you'll waste ti
   - 8x16: `/data/local-syseng-manual/5x8x16_fsd.textproto`
   - 4x32: `/data/local-syseng-manual/4x4x32_fsd.textproto`
 
-**SSH Setup**
+#### SSH Setup
 
 On your local host, start an ssh-agent and add your key:
 ```bash
@@ -57,7 +57,7 @@ From the jump host, verify you can connect to all peer hosts without a password:
 ssh <peer-host> hostname
 ```
 
-**MPI Check**
+#### MPI Check
 
 On the jump host, verify MPI can reach all hosts (`<hosts>` = comma-separated list, e.g. `host1,host2,host3,host4`):
 ```bash
@@ -65,7 +65,7 @@ mpirun --host <hosts> hostname
 ```
 This should print the hostname of each machine. If it hangs or prompts for a password, fix SSH first.
 
-**Docker Check**
+#### Docker Check
 
 Verify Docker is installed and running on all hosts:
 ```bash
@@ -73,7 +73,7 @@ mpirun --host <hosts> docker --version
 ```
 This should print the Docker version on each machine. If any host fails, install Docker on that host.
 
-**Docker Image**
+#### Docker Image
 
 For Galaxy clusters, use:
 ```

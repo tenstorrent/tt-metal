@@ -9,6 +9,7 @@
 #include "device/embedding_device_operation.hpp"
 #include "ttnn/operation.hpp"
 #include "ttnn/operations/data_movement/unsqueeze/unsqueeze.hpp"
+#include "ttnn/operations/data_movement/untilize/untilize_force.hpp"
 #include <ttnn/operations/copy/typecast/typecast.hpp>
 
 namespace ttnn {
@@ -21,7 +22,8 @@ ttnn::Tensor embedding(
     ttnn::prim::EmbeddingsType embeddings_type,
     const std::optional<const DataType> dtype,
     const std::optional<MemoryConfig>& memory_config,
-    const std::optional<Tensor>& optional_output_tensor) {
+    const std::optional<Tensor>& optional_output_tensor,
+    bool runtime_rows) {
     if (pad_token.has_value()) {
         embeddings_type = ttnn::prim::EmbeddingsType::PADDED;
     }
@@ -31,11 +33,14 @@ ttnn::Tensor embedding(
     // the end (the restore below compares against weight_arg's dtype, not the untilized one).
     if (mutable_weight.layout() == ttnn::TILE_LAYOUT) {
         if (tt::tt_metal::is_block_float(mutable_weight.dtype())) {
-            mutable_weight =
-                ttnn::to_layout(ttnn::typecast(mutable_weight, DataType::BFLOAT16), ttnn::ROW_MAJOR_LAYOUT);
-        } else {
-            mutable_weight = ttnn::to_layout(mutable_weight, ttnn::ROW_MAJOR_LAYOUT);
+            mutable_weight = ttnn::typecast(mutable_weight, DataType::BFLOAT16);
         }
+        // runtime_rows: untilize the interleaved table with the native multi-core program, which takes its
+        // row count at runtime (the routed untilize may pick the shape-specific codegen program).
+        mutable_weight = runtime_rows && !mutable_weight.is_sharded()
+                             ? ttnn::operations::data_movement::detail::untilize_force_native(
+                                   mutable_weight, std::nullopt, true, std::nullopt, runtime_rows)
+                             : ttnn::to_layout(mutable_weight, ttnn::ROW_MAJOR_LAYOUT);
     }
     auto hidden_embedding_dim = mutable_weight.logical_shape()[-1];
     auto original_input_rank = input_tensor.logical_shape().rank();
@@ -72,7 +77,8 @@ ttnn::Tensor embedding(
         embeddings_type,
         memory_config,
         pad_token,
-        optional_output_tensor);
+        optional_output_tensor,
+        runtime_rows);
     // Don't include batch_size if there was none
     if (original_input_rank == 1) {
         embeddings = ttnn::reshape(embeddings, Shape({sentence_size, hidden_embedding_dim}));
