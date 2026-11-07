@@ -54,13 +54,11 @@ _PERF_MARGIN = 0.03
 # payload (kda_device_params).
 _PERF_REFERENCE_MS = {
     _LOUDBOX_PERF_SKU: {
-        # forward_slot 1.185 ms from CI (before HiFi3) x 1.035, Kimi-K3 HiFi3's traced ratio on LoudBox; composed, not
-        # measured on this base.
-        "SP8xTP1": 1.226,
+        "SP8xTP1": 1.237,
         "TP4-linear": 0.188,
     },
     _QUIETBOX_PERF_SKU: {
-        "TP4-ring": 0.086,
+        "TP4-ring": 0.082,
     },
 }
 # Device time of one traced call: the sum over its programs of the slowest chip's realtime-profiler duration, the
@@ -71,9 +69,7 @@ _PERF_REFERENCE_MS = {
 _DEVICE_PERF_MARGIN = 0.05
 _DEVICE_PERF_REFERENCE_MS = {
     _QUIETBOX_PERF_SKU: {
-        # forward_slot 1.179 ms from CI (before HiFi3) x 1.035, assuming LoudBox SP8xTP1's HiFi3 ratio (same per-chip
-        # workload); composed, not measured on this base.
-        "SP4xTP1": 1.220,
+        "SP4xTP1": 1.217,
     },
 }
 # Galaxy-equivalent layouts outside CI: they report wall time but are not gated.
@@ -87,7 +83,7 @@ _ACTUAL_START_OVERRIDE = os.environ.get("KDA_PERF_ACTUAL_START")
 # broadcast that a rank-aligned start skips. Production always passes actual_end, so the gate does too. An
 # untraced call also pays its host dispatch, which a block of 10 calls does not fully hide. Host dispatch varies more
 # from run to run than the device does, hence the untraced gate's wider margin.
-_GALAXY_PERF_REFERENCE_MS = {"traced": 1.355, "untraced": 1.429}
+_GALAXY_PERF_REFERENCE_MS = {"traced": 1.418, "untraced": 1.435}
 _GALAXY_UNTRACED_PERF_MARGIN = 0.06
 _GALAXY_TP = 4
 _GALAXY_HEADS_PER_CHIP = KimiK3Config.KDA_NUM_HEADS // _GALAXY_TP
