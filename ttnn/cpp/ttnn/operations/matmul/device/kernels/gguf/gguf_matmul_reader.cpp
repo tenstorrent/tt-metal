@@ -3,14 +3,14 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Weight reader of the GGUF matmul: this core's records in compute order into c_0 as the decoder's L1 pages
-// (experimental/gguf_page.h). One-page groups store codes then scale rows, the page's own order: each lands in its
-// page with one read, a unit of them per transaction id, two units in flight. Larger groups land whole in a staging
-// ring (c_2), one read each, two in flight, and go into their pages from local L1, each codes part with the group's
-// scale rows. The scale rows are converted once, in the first page (prepare_scales), and the block is copied to the
-// other pages. Codebook formats then fill in the pages' grid levels (lookup_grid): this kernel the first half of each
-// page's index words, the writer of this core the second (gguf_matmul_writer.cpp), on a request per record.
+// (experimental/gguf_page.h). One-page groups store codes then scale rows, the page's own order: each lands in its page
+// with one read, a unit of them per transaction id, one or two units in flight. Larger groups land whole in a staging
+// ring (c_2), one read each, one or two in flight, and go into their pages from local L1, each codes part with the
+// group's scale rows. The scale rows are converted once, in the first page (prepare_scales), and the block is copied to
+// the other pages. Codebook formats then fill in the pages' grid levels (lookup_grid): this kernel the first half of
+// each page's index words, the writer of this core the second (gguf_matmul_writer.cpp), on a request per record.
 // Compile args: format id, c_0 pages, one-page groups per unit, staging slots, the lookup request, answer and page
-// address semaphores, then the weight's TensorAccessorArgs.
+// address semaphores, reads in flight, then the weight's TensorAccessorArgs.
 // Runtime args: weight address, N tiles, runs, then per run its N tile, first and end K group.
 
 #include <cstdint>
@@ -36,13 +36,13 @@ void kernel_main() {
     constexpr uint32_t slots = get_compile_time_arg_val(3);
     constexpr uint32_t request_sem = get_compile_time_arg_val(4), answer_sem = get_compile_time_arg_val(5);
     constexpr uint32_t address_sem = get_compile_time_arg_val(6);
-    constexpr auto weight_args = TensorAccessorArgs<7>();
+    constexpr uint32_t in_flight = get_compile_time_arg_val(7);
+    constexpr auto weight_args = TensorAccessorArgs<8>();
     constexpr PageLayout L = page_layout<FMT>();
     constexpr uint32_t P = L.group_tiles / L.page_tiles;  // pages per group
     constexpr uint32_t page = L.rows * 64;
     constexpr uint32_t scale_bytes = L.scale_rows * 64;
     constexpr uint32_t record = scale_bytes + P * L.code_bytes;
-    constexpr uint32_t in_flight = 2;
 
     const auto weights = TensorAccessor(weight_args, get_arg_val<uint32_t>(0));
     const uint32_t n_tiles = get_arg_val<uint32_t>(1);

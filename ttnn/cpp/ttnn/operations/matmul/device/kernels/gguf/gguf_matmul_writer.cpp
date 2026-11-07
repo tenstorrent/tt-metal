@@ -2,18 +2,18 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Input and output mover of the GGUF matmul. Every compute core holds the input row block (K tiles in c_1, at the
-// same L1 address on every core of the grid). The collector reads it chunk by chunk, multicasts each chunk to the
-// grid and then sets the chunk count in the grid's semaphore with a multicast ordered behind the data; the others
-// push each chunk once the count reaches it, so the matmul starts on chunk 0 while later chunks are in flight. Then,
-// per segment (gguf_matmul_program_factory.cpp Role): whole and finish write the bf16 output tile (c_16); a tail sends
-// its fp32 partial (c_17) into its slot of the finishing core's c_18 and counts it on that core's semaphore; a head
-// moves its partial into this core's c_20; a finish first waits for its partials and hands them to the compute kernel.
-// Codebook formats: the writer also runs the second half of the grid lookups of each record the reader asks for,
-// between its own waits. Compile args: K tiles, tiles per chunk, input semaphore, partial semaphore, format id, the
-// lookup request, answer and page address semaphores, the input's and the output's TensorAccessorArgs. Runtime args: collector, input address, output address, multicast rectangle (NoC x / y start,
-// x / y end, in this writer's NoC order), cores in it, segments, then per segment: tail: slot, role, finishing core NoC
-// x, y; else: N tile, role, partials, 0.
+// Input and output mover of the GGUF matmul. Every compute core holds the input row block (K tiles in c_1, at the same
+// L1 address on every core of the grid). The collector reads it chunk by chunk, multicasts each chunk to the grid and
+// then sets the chunk count in the grid's semaphore with a multicast ordered behind the data; the others push each
+// chunk once the count reaches it, so the matmul starts on chunk 0 while later chunks are in flight. Then, per segment
+// (gguf_matmul_program_factory.cpp Role): whole and finish write the bf16 output tile (c_16); a tail sends its fp32
+// partial (c_17) into its slot of the finishing core's c_18 and counts it on that core's semaphore; a head moves its
+// partial into this core's c_20; a finish first waits for its partials and hands them to the compute kernel. Codebook
+// formats: the writer also runs the second half of the grid lookups of each record the reader asks for, between its own
+// waits. Compile args: K tiles, tiles per chunk, input semaphore, partial semaphore, format id, the lookup request,
+// answer and page address semaphores, the input's and the output's TensorAccessorArgs. Runtime args: collector, input
+// address, output address, multicast rectangle (NoC x / y start, x / y end, in this writer's NoC order), cores in it,
+// segments, then per segment: tail: slot, role, finishing core NoC x, y; else: N tile, role, partials, 0.
 
 #include <cstdint>
 

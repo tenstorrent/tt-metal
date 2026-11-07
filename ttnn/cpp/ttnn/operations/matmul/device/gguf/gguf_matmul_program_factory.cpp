@@ -240,8 +240,17 @@ GgufMatmulProgramFactory::cached_program_t GgufMatmulProgramFactory::create(
         {{uint32_t(v1.x), uint32_t(v1.y), uint32_t(v0.x), uint32_t(v0.y)},
          {uint32_t(v0.x), uint32_t(v0.y), uint32_t(v1.x), uint32_t(v1.y)}}};
 
+    // Reads in flight: two for Q4_0 and Q4_1, one for the others, which a second one slows down (measured, decode).
+    const bool two_in_flight = weight.dtype() == DataType::GGUF_Q4_0 || weight.dtype() == DataType::GGUF_Q4_1;
     std::vector<uint32_t> reader_ct = {
-        f.format_id, kPageUnits * unit, kGroupsPerRead, kRecordSlots, request_sem, answer_sem, address_sem};
+        f.format_id,
+        kPageUnits * unit,
+        kGroupsPerRead,
+        kRecordSlots,
+        request_sem,
+        answer_sem,
+        address_sem,
+        two_in_flight ? 2u : 1u};
     TensorAccessorArgs(*weight.buffer()).append_to(reader_ct);
     const uint32_t chunk = std::min(kInputChunk, k_tiles);
     std::vector<uint32_t> writer_ct = {
