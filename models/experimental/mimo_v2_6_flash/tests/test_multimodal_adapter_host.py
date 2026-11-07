@@ -1,10 +1,12 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Host checks of MiMoV2OmniForCausalLM.prefill_forward's routing (no device): a chunk holding an item's embedding
-rows runs eagerly on its own with the item rows merged (never in a prefill batch, never replayed), a cached prefix in
-front of an item is not recomputed in a batch, text rows and text-only steps run as in the text class, and malformed
-multimodal input is served as text instead of raising out of prefill."""
+"""Host checks of MiMoV2OmniForCausalLM.prefill_forward's routing (no device): on replicas whose traced passes take no
+multimodal rows a chunk holding an item's embedding rows runs eagerly on its own with the item rows merged (never in a
+prefill batch, never replayed), and on replicas whose traced passes take them (TtMiMoModel.enable_trace_embeds) it
+batches and replays as a text chunk does; a cached prefix in front of an item is not recomputed in a batch, text rows
+and text-only steps run as in the text class, and malformed multimodal input is served as text instead of raising out
+of prefill."""
 
 from types import SimpleNamespace
 

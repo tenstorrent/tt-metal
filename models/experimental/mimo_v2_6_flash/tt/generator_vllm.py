@@ -2701,9 +2701,9 @@ class MiMoV2OmniForCausalLM(MiMoV2ForCausalLM, *((SupportsMultiModal,) if Suppor
 
     ``prefill_forward`` takes each row's items from ``mm_items`` (the plugin contract: per row None or a list of
     {modality, identifier, offset, length, is_embed, data}), else from the plugin's image-only ``pixel_values`` /
-    ``image_grid_thw`` lists (items found by their placeholder runs). A chunk with an item's embedding rows runs
-    eagerly on its own, with the rows merged on device; every other chunk, and every text-only request, runs exactly as
-    in the text class. Item embeddings are cached by identifier (an LRU, MIMO_MM_CACHE_MB): a later chunk, a chunk
+    ``image_grid_thw`` lists (items found by their placeholder runs). A chunk with an item's embedding rows runs as a
+    text chunk does (batched, replaying a trace) with the rows merged on device inside the trace (MIMO_MM_TRACE; with
+    it off, eagerly on its own); a text-only request computes exactly what the text class does. Item embeddings are cached by identifier (an LRU, MIMO_MM_CACHE_MB): a later chunk, a chunk
     start moved back into an earlier item, or an item stripped by APC (``data`` None) reuses them. Nothing in a
     request's multimodal input raises out of prefill (an exception there kills the engine): an item that cannot be
     parsed or encoded is logged and its placeholder tokens' own embeddings stand in.

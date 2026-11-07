@@ -53,8 +53,15 @@ Decisions:
    host bf16 rows for the chunk's multimodal positions, uploaded row-major and merged into the device embedding of the
    chunk's tokens by one exact gather (`ttnn.embedding` over [token rows; uploaded rows]), so the pass starts from
    exactly the layout `ttnn.embedding` produces and pad rows stay the tokens'. Used only for chunks that contain
-   multimodal rows; text-only chunks keep the device embedding, prefill batches and the traced chunk path. Chunks
-   with multimodal rows run eagerly on their own; tracing them (an embeddings input buffer) is a later optimization.
+   multimodal rows; text-only chunks keep the device embedding, prefill batches and the traced chunk path.
+   Traced passes take multimodal rows too (`TtMiMoModel.enable_trace_embeds`, `MIMO_MM_TRACE`, default on in
+   `MiMoV2OmniForCausalLM`): every traced prefill pass embeds its tokens and merges host rows by the same gather,
+   from persistent inputs a replay rewrites (its gather index, and the host rows packed into a segmented row buffer
+   the passes share, of which a replay uploads only the segments its rows reach). So a chunk with multimodal rows
+   batches with the lane's other first chunks and replays their trace, or replays a traced later chunk, or a traced
+   first chunk (start 0) of 640-4096 tokens; the multimodal traces are optional (captured last, while the trace
+   region has room: ~14 MB each). A text pass computes the same values either way; traced and eager multimodal
+   passes are bit-identical (`tests/test_prefill_embeds_tp8.py`, `tests/test_mm_prefill_adapter_tp8.py`).
 2. **Model class.** A new `MiMoV2OmniForCausalLM` TT class (subclass of the text `MiMoV2ForCausalLM` in
    `tt/generator_vllm.py`, registered with the upstream processor) selected by `TT_MODEL_CLASS_OVERRIDES` (see the
    plugin contract). The text-only release path stays byte-identical.
