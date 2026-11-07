@@ -73,9 +73,11 @@ GATE_CASES = {
 # Host time of one chunk forward through device synchronization, in ms, per case: (warm untraced, warm traced, long
 # untraced, long traced). From CI (LOGURU_LEVEL=ERROR, TT_METAL_SHM_TRACKING_DISABLED=1, one pytest process per model as
 # the jobs run them), two runs on 2026-11-07: traced is their mean, untraced the slower of the two, since untraced is
-# only a ceiling. K3.1 on Galaxy is report-only until it has a CI run.
+# only a ceiling. K3.1 on Galaxy has one CI run so far (2026-11-07): traced from it, untraced the slower of it and the
+# pinned local run (bh-glx-120-c02u02, 2026-11-06/07).
 _TARGETS_MS = {
     "Galaxy": {
+        "kimi_k3_1": (4.29, 3.10, 7.57, 6.71),
         "glm_5_3": (4.79, 2.70, 7.09, 6.30),
         "glm_5_3-no_indexer": (4.22, 2.19, 3.60, 2.25),
     },
@@ -358,9 +360,10 @@ def _host_state():
         return f"unavailable ({e})"
 
 
-def _time_untraced(mesh_device, case, start, cpus=None):
+def _time_untraced(mesh_device, case, start, cpus=None, repeat=None):
     """Host ms of each timed eager forward through sync, and the last forward's per-device output. Appends the CPU
-    the main thread ran on after each sample to `cpus` if given."""
+    the main thread ran on after each sample to `cpus`, and the second-to-last forward's output to `repeat`, if
+    given."""
     for _ in range(UNTRACED_WARMUP):  # the first call compiles
         ttnn.deallocate(case.forward(start))
         ttnn.synchronize_device(mesh_device)
@@ -374,12 +377,15 @@ def _time_untraced(mesh_device, case, start, cpus=None):
             cpus.append(_host_cpu())
         if i == UNTRACED_SAMPLES - 1:
             reference = _device_tensors(out)
+        elif i == UNTRACED_SAMPLES - 2 and repeat is not None:
+            repeat.append(_device_tensors(out))
         ttnn.deallocate(out)
     return samples, reference
 
 
-def _time_traced(mesh_device, case, start):
-    """Host ms of one segmented trace replay (it ends in a device sync), and the trace's output."""
+def _time_traced(mesh_device, case, start, repeat=None):
+    """Host ms of one segmented trace replay (it ends in a device sync), and the trace's output. If `repeat` is given,
+    replays once more, untimed, and appends that replay's output to it."""
     controller = SubDeviceTraceController(mesh_device)
     case.mla.set_trace_controller(controller)
     capture_out, capturing = None, False
@@ -394,7 +400,12 @@ def _time_traced(mesh_device, case, start):
         ttnn.synchronize_device(mesh_device)
         t0 = time.perf_counter()
         controller.replay()
-        return [(time.perf_counter() - t0) * 1e3], _device_tensors(capture_out)
+        elapsed_ms = (time.perf_counter() - t0) * 1e3
+        out = _device_tensors(capture_out)
+        if repeat is not None:
+            controller.replay()
+            repeat.append(_device_tensors(capture_out))
+        return [elapsed_ms], out
     finally:
         if capturing:
             try:
@@ -439,10 +450,15 @@ def test_sparse_mla_perf(mesh_device, device_params, variant, case_name, config_
     start = cache
     samples = {}
     cpus = []
-    samples["untraced"], eager_out = _time_untraced(mesh_device, case, start, cpus)
+    eager_repeat, traced_repeat = [], []
+    samples["untraced"], eager_out = _time_untraced(mesh_device, case, start, cpus, eager_repeat)
     print(f"{label} host: {_host_state()}; untraced sample CPUs {' '.join(map(str, cpus))}")
-    samples["traced"], traced_out = _time_traced(mesh_device, case, start)
-    trace_pcc = min(comp_pcc(a, b, TRACE_PCC)[1] for a, b in zip(eager_out, traced_out))
+    samples["traced"], traced_out = _time_traced(mesh_device, case, start, traced_repeat)
+
+    def min_pcc(xs, ys):
+        return min(comp_pcc(a, b, TRACE_PCC)[1] for a, b in zip(xs, ys))
+
+    trace_pcc = min_pcc(eager_out, traced_out)
 
     failures, unmeasured = [], []
     for mode in MODES:
@@ -492,9 +508,13 @@ def test_sparse_mla_perf(mesh_device, device_params, variant, case_name, config_
                 bound = f"outside [{lower:.3f}, {upper:.3f}] (target {target_ms:.3f} ms ±{margin:.0%}); {direction}"
             failures.append(f"{mode}: {measured_ms:.3f} ms {bound}")
     if trace_pcc < TRACE_PCC:
-        failures.append(f"traced output differs from untraced: min per-device PCC {trace_pcc:.6f}")
+        # Which side is not repeatable: two eager forwards, and two replays of the same trace.
+        failures.append(
+            f"traced output differs from untraced: min per-device PCC {trace_pcc:.6f} (eager vs eager "
+            f"{min_pcc(eager_repeat[0], eager_out):.6f}, replay vs replay {min_pcc(traced_repeat[0], traced_out):.6f})"
+        )
     assert not failures, f"{label}: " + "; ".join(failures)
-    if unmeasured:  # report-only until this box has targets
+    if unmeasured:  # report-only until this case has targets on this box
         pytest.skip(f"{label}: no targets yet; measured " + ", ".join(unmeasured))
 
 
