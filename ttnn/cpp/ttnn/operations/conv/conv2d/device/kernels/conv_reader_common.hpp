@@ -28,8 +28,15 @@ FORCE_INLINE void zero_out_tiles(Noc noc, DFB dfb) {
     noc.write_zeros_l1_barrier();
 }
 
+// The weight_size_w sticks of a kernel row can be fetched with one NoC read only when they are contiguous
+// (dilation_w == 1) and the read fits in a single burst; otherwise each stick is read separately.
+template <uint32_t dilation_w, uint32_t weight_size_w, uint32_t conv_act_c_read_bytes>
+constexpr bool coalesce_kernel_w_reads() {
+    return dilation_w == 1 && weight_size_w * conv_act_c_read_bytes <= NOC_MAX_BURST_SIZE;
+}
+
 template <
-    uint32_t dilation_w,
+    bool coalesce_reads,
     uint32_t coalesced_read_bytes,
     uint32_t conv_act_c_read_bytes,
     uint32_t act_block_w_extra_align_bytes,
@@ -49,7 +56,7 @@ FORCE_INLINE void read_sticks(
         uint16_t start_ind = packed_reader_indices_ptr[reader_idx] & 0xffff;
         uint16_t end_ind = packed_reader_indices_ptr[reader_idx] >> 16;
 
-        if constexpr (dilation_w == 1) {
+        if constexpr (coalesce_reads) {
             for (uint16_t ind = start_ind; ind <= end_ind; ind += stride_w) {
                 uint32_t src_addr = reader_offset + (ind * conv_act_c_read_bytes);
                 experimental::read_with_state(noc, l1_write_addr_act, src_addr);
@@ -70,10 +77,20 @@ FORCE_INLINE void read_sticks(
     reader_idx++;
 }
 
-template <uint32_t coalesced_read_bytes, uint32_t stride_h_bytes>
+// Reads one kernel row as num_reads contiguous reads of coalesced_read_bytes each.
+template <uint32_t coalesced_read_bytes, uint32_t stride_h_bytes, uint32_t num_reads>
 FORCE_INLINE void read_kernel_w(Noc noc, uint32_t& l1_write_addr_act, uint32_t& act_l1_offset) {
-    experimental::read_with_state(noc, l1_write_addr_act, act_l1_offset);
-    l1_write_addr_act += coalesced_read_bytes;
+    if constexpr (num_reads == 1) {
+        experimental::read_with_state(noc, l1_write_addr_act, act_l1_offset);
+        l1_write_addr_act += coalesced_read_bytes;
+    } else {
+        uint32_t src_addr = act_l1_offset;
+        for (uint32_t i = 0; i < num_reads; i++) {
+            experimental::read_with_state(noc, l1_write_addr_act, src_addr);
+            l1_write_addr_act += coalesced_read_bytes;
+            src_addr += coalesced_read_bytes;
+        }
+    }
     act_l1_offset += stride_h_bytes;
 }
 
@@ -114,6 +131,7 @@ FORCE_INLINE void push_remaining_tiles(DFB dfb_act, uint32_t remaining_tiles_to_
 // Function to read the windows in the first output image row where we don't reuse anything
 template <
     uint32_t coalesced_read_bytes,
+    uint32_t kernel_w_num_reads,
     uint32_t stride_h_bytes,
     uint32_t window_outer,
     uint32_t cb_id_act,
@@ -125,7 +143,7 @@ FORCE_INLINE void read_first_image_row_window(
     Noc noc, DFB dfb_act, uint32_t& l1_write_addr_act, uint32_t reader_offset, uint16_t ind, uint32_t& pixel_column) {
     uint32_t act_l1_offset = reader_offset + (ind * conv_act_c_read_bytes);
     for (uint32_t outer = 0; outer < window_outer; outer++) {
-        read_kernel_w<coalesced_read_bytes, stride_h_bytes>(noc, l1_write_addr_act, act_l1_offset);
+        read_kernel_w<coalesced_read_bytes, stride_h_bytes, kernel_w_num_reads>(noc, l1_write_addr_act, act_l1_offset);
     }
     l1_write_addr_act += act_block_w_extra_align_bytes;
 
@@ -138,14 +156,14 @@ FORCE_INLINE void read_first_image_row_window(
 
 template <
     uint32_t coalesced_read_bytes,
+    uint32_t kernel_w_num_reads,
     uint32_t stride_h_bytes,
     uint32_t outer_coalesced_read_bytes,
     uint32_t outer_stride_h_bytes>
-FORCE_INLINE void read_image_row_window_with_reuse(
-    Noc noc, uint32_t& l1_write_addr_act, uint32_t& act_l1_offset) {
+FORCE_INLINE void read_image_row_window_with_reuse(Noc noc, uint32_t& l1_write_addr_act, uint32_t& act_l1_offset) {
     l1_write_addr_act += outer_coalesced_read_bytes;
     act_l1_offset += outer_stride_h_bytes;
-    read_kernel_w<coalesced_read_bytes, stride_h_bytes>(noc, l1_write_addr_act, act_l1_offset);
+    read_kernel_w<coalesced_read_bytes, stride_h_bytes, kernel_w_num_reads>(noc, l1_write_addr_act, act_l1_offset);
 }
 
 template <uint32_t window_inner, bool single_core_processes_multiple_batches>
@@ -173,8 +191,10 @@ FORCE_INLINE void load_next_segment(
     end_ind = packed_reader_indices_ptr[reader_idx] >> 16;
 }
 
+// kernel_w_num_reads is the number of coalesced_read_bytes reads that make up one kernel row.
 template <
     uint32_t coalesced_read_bytes,
+    uint32_t kernel_w_num_reads,
     uint32_t conv_act_c_read_bytes,
     uint32_t act_block_w_extra_align_bytes,
     uint32_t stride_h_bytes,
@@ -201,7 +221,7 @@ FORCE_INLINE void read_sticks_activation_reuse(
     constexpr uint32_t image_width_padded_to_tile = image_width_tiles * tt::constants::TILE_HEIGHT;
     constexpr bool output_image_width_full_tile = output_image_width == image_width_padded_to_tile;
     constexpr uint32_t reuse_outer = window_outer - 1;
-    constexpr uint32_t outer_coalesced_read_bytes = reuse_outer * coalesced_read_bytes;
+    constexpr uint32_t outer_coalesced_read_bytes = reuse_outer * kernel_w_num_reads * coalesced_read_bytes;
     constexpr uint32_t outer_stride_h_bytes = reuse_outer * stride_h_bytes;
 
     uint16_t num_segments = packed_reader_indices_ptr[reader_idx] & 0xffff;
@@ -222,6 +242,7 @@ FORCE_INLINE void read_sticks_activation_reuse(
     for (uint16_t ind = start_ind; ind <= end_ind; ind += stride_w) {
         read_first_image_row_window<
             coalesced_read_bytes,
+            kernel_w_num_reads,
             stride_h_bytes,
             window_outer,
             cb_id_act,
@@ -253,6 +274,7 @@ FORCE_INLINE void read_sticks_activation_reuse(
             for (uint16_t ind = start_ind; ind < start_ind + second_row_width; ind += stride_w) {
                 read_first_image_row_window<
                     coalesced_read_bytes,
+                    kernel_w_num_reads,
                     stride_h_bytes,
                     window_outer,
                     cb_id_act,
@@ -272,6 +294,7 @@ FORCE_INLINE void read_sticks_activation_reuse(
                     for (uint16_t ind = start_ind; ind < start_ind + third_row_width; ind += stride_w) {
                         read_first_image_row_window<
                             coalesced_read_bytes,
+                            kernel_w_num_reads,
                             stride_h_bytes,
                             window_outer,
                             cb_id_act,
@@ -298,6 +321,7 @@ FORCE_INLINE void read_sticks_activation_reuse(
                 // In this case, everything is reused after the first image width
                 read_image_row_window_with_reuse<
                     coalesced_read_bytes,
+                    kernel_w_num_reads,
                     stride_h_bytes,
                     outer_coalesced_read_bytes,
                     outer_stride_h_bytes>(noc, l1_write_addr_act, act_l1_offset);
@@ -306,12 +330,14 @@ FORCE_INLINE void read_sticks_activation_reuse(
                 if (pixel_column < output_image_width && new_batch_image_rows_to_fill == 0) {
                     read_image_row_window_with_reuse<
                         coalesced_read_bytes,
+                        kernel_w_num_reads,
                         stride_h_bytes,
                         outer_coalesced_read_bytes,
                         outer_stride_h_bytes>(noc, l1_write_addr_act, act_l1_offset);
                 } else {
                     for (uint32_t outer = 0; outer < window_outer; outer++) {
-                        read_kernel_w<coalesced_read_bytes, stride_h_bytes>(noc, l1_write_addr_act, act_l1_offset);
+                        read_kernel_w<coalesced_read_bytes, stride_h_bytes, kernel_w_num_reads>(
+                            noc, l1_write_addr_act, act_l1_offset);
                     }
                 }
             }
@@ -412,7 +438,7 @@ FORCE_INLINE void read_channels(
 
 template <
     bool sliced_inner_dim,
-    uint32_t dilation_w,
+    bool coalesce_reads,
     uint32_t coalesced_read_bytes,
     uint32_t conv_act_c_read_bytes,
     uint32_t act_block_w_extra_align_bytes,
@@ -431,7 +457,7 @@ FORCE_INLINE void read_activation_data(
     uint32_t stride_h_bytes) {
     if constexpr (sliced_inner_dim) {
         read_sticks<
-            dilation_w,
+            coalesce_reads,
             coalesced_read_bytes,
             conv_act_c_read_bytes,
             act_block_w_extra_align_bytes,
@@ -445,7 +471,7 @@ FORCE_INLINE void read_activation_data(
             uint16_t start_ind = packed_reader_indices_ptr[reader_idx] & 0xffff;
             uint16_t end_ind = packed_reader_indices_ptr[reader_idx] >> 16;
             for (uint16_t ind = start_ind; ind <= end_ind; ind += stride_w) {
-                if constexpr (dilation_w == 1) {
+                if constexpr (coalesce_reads) {
                     read_channels<weight_size_h>(
                         noc,
                         l1_write_addr_act,

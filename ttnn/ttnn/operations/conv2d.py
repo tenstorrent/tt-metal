@@ -88,6 +88,7 @@ def prepare_conv_transpose2d_bias(*args, **kwargs):
     :param tuple[int  , int] kernel_size: size of the convolving kernel.
     :param tuple[int, int] stride: stride of the cross-correlation.
     :param tuple[int, int] or tuple[int, int, int, int]) padding: zero-padding added to both sides of the input. [pad_height, pad_width] or [pad_top, pad_bottom, pad_left, pad_right].
+    :param tuple[int, int] output_padding: additional size added to one side of each dimension in the output. Must match the value passed to conv_transpose2d and prepare_conv_transpose2d_weights so bias preparation picks the same sharding as the op. Default: [0, 0].
     :param tuple[int, int] dilation: spacing between kernel elements.
     :param ttnn.IDevice device:  the device to use.
     :param ttnn.DataType input_dtype: the data type of the input tensor.

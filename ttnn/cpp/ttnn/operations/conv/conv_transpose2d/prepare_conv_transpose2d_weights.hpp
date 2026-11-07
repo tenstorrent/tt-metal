@@ -110,6 +110,7 @@ ttnn::Tensor prepare_conv_transpose2d_bias(
     std::array<uint32_t, 2> kernel_size,
     std::array<uint32_t, 2> stride,
     std::variant<std::array<uint32_t, 2>, std::array<uint32_t, 4>> padding,
+    std::array<uint32_t, 2> output_padding,
     std::array<uint32_t, 2> dilation,
     uint32_t groups,
     MeshDevice* device,

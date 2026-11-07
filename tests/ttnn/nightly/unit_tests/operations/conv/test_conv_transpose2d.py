@@ -152,7 +152,7 @@ def run_conv_transpose2d(
                 kernel_size=(filter_height, filter_width),
                 stride=(stride_h, stride_w),
                 padding=(pad_h, pad_w),
-                # output_padding=(out_pad_h, out_pad_w),
+                output_padding=(out_pad_h, out_pad_w),
                 dilation=(dilation, dilation),
                 groups=groups,
                 conv_config=conv_config,

@@ -212,8 +212,9 @@ void kernel_main() {
     // TODO: need to make the read coalescing optimization cleaner
     // currently works for the case of num_coalesced_reads == weight_size_w since these reads are contiguous on both
     // src/dst side
-    constexpr uint32_t coalesced_read_bytes =
-        ((dilation_w == 1) ? weight_size_w * conv_act_c_read_bytes : conv_act_c_read_bytes);
+    constexpr bool coalesce_reads = coalesce_kernel_w_reads<dilation_w, weight_size_w, conv_act_c_read_bytes>();
+    constexpr uint32_t num_coalesced_reads = coalesce_reads ? weight_size_w : 1;
+    constexpr uint32_t coalesced_read_bytes = num_coalesced_reads * conv_act_c_read_bytes;
 
     // Fully create act matrix and tilize it before mcast
     uint32_t act_l1_read_addr = dfb_sharded_act_obj.get_read_ptr();
@@ -243,7 +244,7 @@ void kernel_main() {
                 }
                 read_activation_data<
                     sliced_inner_dim,
-                    dilation_w,
+                    coalesce_reads,
                     coalesced_read_bytes,
                     conv_act_c_read_bytes,
                     act_block_w_extra_align_bytes,

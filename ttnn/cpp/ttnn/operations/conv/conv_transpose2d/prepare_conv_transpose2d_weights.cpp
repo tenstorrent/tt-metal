@@ -427,6 +427,7 @@ ttnn::Tensor prepare_conv_transpose2d_bias(
     std::array<uint32_t, 2> kernel_size,
     std::array<uint32_t, 2> stride,
     std::variant<std::array<uint32_t, 2>, std::array<uint32_t, 4>> padding,
+    std::array<uint32_t, 2> output_padding,
     std::array<uint32_t, 2> dilation,
     uint32_t groups,
     MeshDevice* device,
@@ -438,9 +439,8 @@ ttnn::Tensor prepare_conv_transpose2d_bias(
     validate_conv_params(in_channels, out_channels, batch_size, kernel_size, stride, groups);
     // For transposed conv2d, the conv2d micro-op always uses stride=1x1 and operates on
     // full_input dimensions. Calculate these dimensions for bias preparation.
-    // Note: bias preparation doesn't receive output_padding, so we assume output_padding = 0
-    auto dims =
-        compute_conv_transpose2d_dimensions(input_height, input_width, kernel_size, stride, padding, {0, 0}, dilation);
+    auto dims = compute_conv_transpose2d_dimensions(
+        input_height, input_width, kernel_size, stride, padding, output_padding, dilation);
     const uint32_t groups_for_prep = groups > 1 ? 1 : groups;
 
     return prepare_conv_bias(
