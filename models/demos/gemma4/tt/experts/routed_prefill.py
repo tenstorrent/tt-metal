@@ -19,7 +19,10 @@ All index metadata is built on device from the dense routing weights (compare, c
 stable sort for the dispatch ids, topk + gather for the combine ids). The capacity ``C`` of the expert-major buffer
 is static (``RoutedPrefillConfig.capacity``):
 
-* ``"full"`` (default): ``C`` is the chunk length, exact for any routing, no host interaction, traceable;
+* ``None`` (default): ``"exact"`` for eager prefill, ``"full"`` when the call is recorded under a device trace
+  (``prefill_traced``, set from the model's ``_prefill_trace_mode``);
+* ``"full"``: ``C`` is the chunk length, exact for any routing, no host interaction, traceable (the same
+  matmul work as the all-experts path, so no speedup);
 * ``"exact"``: eager runs only, one scalar host readback of the busiest expert's token count sizes ``C``;
 * an int: ``C`` is that many rows (rounded up to a tile); tokens routed to an expert beyond its first ``C`` are
   dropped (their routing weight is zeroed), as with a capacity factor.
@@ -45,7 +48,8 @@ class RoutedPrefillConfig:
     enabled: Optional[bool] = None
     min_tokens: int = 128  # shorter calls (the decode frame) keep sparse_matmul
     chunk_size: int = 4096  # tokens per chunk, bounds the expert-major buffers
-    capacity: Union[str, int] = "full"  # "full", "exact" (eager readback) or rows per expert
+    # None: "exact" for eager prefill, "full" under a device trace; or "full", "exact" (eager readback), rows per expert
+    capacity: Union[None, str, int] = None
 
     def is_enabled(self, seq_len):
         enabled = self.enabled
@@ -212,7 +216,7 @@ def _routed_chunk(hidden_states, local_routing, weights, config, compute_kernel_
     return ttnn.reshape(out, (1, 1, n, hidden))
 
 
-def routed_prefill_forward(hidden_states, local_routing, weights, config, routed_prefill=None):
+def routed_prefill_forward(hidden_states, local_routing, weights, config, routed_prefill=None, prefill_traced=False):
     """Routed expert forward for a prefill call: hidden [1,1,S,H], this chip's routing [1,1,S,E_loc] ->
     [1,1,S,H] partial sum over this chip's experts (the caller combines across chips)."""
     seq_len = int(hidden_states.shape[2])
@@ -226,7 +230,7 @@ def routed_prefill_forward(hidden_states, local_routing, weights, config, routed
     )
     routed = resolve_routed_config(routed_prefill)
     chunk = max(TILE_SIZE, routed.chunk_size // TILE_SIZE * TILE_SIZE)
-    capacity = routed.capacity
+    capacity = routed.capacity if routed.capacity is not None else ("full" if prefill_traced else "exact")
     if seq_len <= chunk:
         return _routed_chunk(hidden_states, local_routing, weights, config, compute_kernel_config, capacity)
     hidden_chunks = ttnn.split(hidden_states, chunk, dim=2)

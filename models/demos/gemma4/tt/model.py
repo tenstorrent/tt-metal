@@ -1317,6 +1317,7 @@ class Gemma4Model:
                 chunk_page_table=chunk_page_table,
                 mm_attn_mask=mm_attn_masks,
                 traced_short_bucket=traced_short_bucket,
+                prefill_traced=bool(getattr(self, "_prefill_trace_mode", False)),
                 continuation=continuation.for_layer(i) if continuation is not None else None,
             )
 

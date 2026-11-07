@@ -107,7 +107,7 @@ def _run_experts(experts, mesh_device, hf_config, hidden, routing, routed):
 
 @skip_if_not_moe
 @parametrize_mesh_with_fabric(mesh_shapes=[(1, 1)])
-@pytest.mark.parametrize("capacity", ["full", "exact"])
+@pytest.mark.parametrize("capacity", [None, "full", "exact"], ids=["auto", "full", "exact"])
 @pytest.mark.parametrize("skewed", [False, True], ids=["uniform", "skewed"])
 @pytest.mark.parametrize("seq_len", [128, 1024], ids=["prefill_128", "prefill_1024"])
 def test_experts_routed_prefill(seq_len, skewed, capacity, mesh_device, reset_seeds, request):
