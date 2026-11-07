@@ -1050,7 +1050,8 @@ class MiMoV2ForCausalLM:
         """``programs``: each replica's program-cache size before the prefill. A prefill that compiled new programs
         (a chunk length or offset first seen while serving) put their program-cache buffers in memory the replica's
         decode trace may write on replay (tech_reports/.../TraceCorrectness.md, unsafe allocations), so that replica's
-        decode trace is captured again, around them. Every slot is idle during the capture, so no KV is written."""
+        traces are captured again, around them. Every slot is idle during the decode capture and the prefill batches
+        capture on zero fill tables, so no request's KV is written."""
         for lane, model in enumerate(self.models):
             if model.decode_trace is None or model.mesh_device.num_program_cache_entries() == programs[lane]:
                 continue
@@ -1061,6 +1062,10 @@ class MiMoV2ForCausalLM:
             model.release_decode_trace()
             model.release_prefill_chunk_traces()
             model.capture_decode_trace()
+            # The traced prefill batches too (warm-up compiles every prefill program before them, but a multimodal
+            # prefill's encoder can compile programs while serving: TT_METAL_TRACE_ALLOC_TRACKING caught a batch replay
+            # over the device ViT's new program-cache buffers).
+            model.recapture_prefill_batch_traces()
             if model.mtp is not None or model.dflash is not None:
                 model.capture_spec_traces()
             model.capture_prefill_chunk_traces()  # optional, so last: if they no longer fit they are dropped
