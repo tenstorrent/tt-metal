@@ -202,7 +202,7 @@ TEST(Describe, LiveIdleTileReportsEveryHart) {
     EXPECT_TRUE(mentions(text, "live"));
     EXPECT_TRUE(mentions(text, "hart 0")) << text;
     EXPECT_TRUE(mentions(text, "hart 3")) << text;
-    EXPECT_TRUE(mentions(text, "version=0x10000")) << text;
+    EXPECT_TRUE(mentions(text, "version=0x10001")) << text;
     EXPECT_TRUE(mentions(text, "control_run=0x1234")) << text;
     EXPECT_TRUE(mentions(text, "entry=0x8001000")) << text;
 }

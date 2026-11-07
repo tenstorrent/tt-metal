@@ -12,7 +12,7 @@
 #include "x280_address_map.h"
 
 /* Protocol placement and record geometry. */
-#define X280_HART_PROTOCOL_VERSION X280_ABI_U32(0x00010000)
+#define X280_HART_PROTOCOL_VERSION X280_ABI_U32(0x00010001)
 #define X280_HART_COUNT X280_ABI_U32(4)
 #define X280_HART_RECORD_SHIFT X280_ABI_U32(6)
 #define X280_HART_RECORD_STRIDE X280_ABI_U64(0x40)
@@ -44,6 +44,9 @@
 #define X280_HART_STATE_RESULT_OFFSET X280_ABI_U64(0x18)
 #define X280_HART_STATE_HEARTBEAT_OFFSET X280_ABI_U64(0x20)
 #define X280_HART_STATE_STAGE_OFFSET X280_ABI_U64(0x28)
+#define X280_HART_STATE_REVIVE_COUNT_OFFSET X280_ABI_U64(0x2C)
+#define X280_HART_STATE_REVIVE_EPC_OFFSET X280_ABI_U64(0x30)
+#define X280_HART_STATE_REVIVE_CAUSE_OFFSET X280_ABI_U64(0x38)
 
 /* x280_hart_trap_t fields. */
 #define X280_HART_TRAP_RUN_VALUE_OFFSET X280_ABI_U64(0x00)
@@ -81,6 +84,35 @@
 #define X280_HART_STAGE_POSTED X280_ABI_U32(3)
 #define X280_HART_STAGE_STOPPING X280_ABI_U32(4)
 #define X280_HART_STAGE_RETURNING X280_ABI_U32(5)
+/* Written by the resident idle's RNMI handler, which abandons whatever the
+ * hart was running and re-enters the idle (X280Runtime::revive). */
+#define X280_HART_STAGE_REVIVED X280_ABI_U32(6)
+
+/* Resident-idle RNMI revive (X280Runtime::revive).
+ *
+ * The host raises a hart's bit in the level-triggered trigger word, the hart
+ * takes the RNMI at its next instruction boundary, and the handler at
+ * X280_IDLE_RNMI_ENTRY_ADDR records where the hart was (revive_epc /
+ * revive_cause), clears the hart's trap record, stamps stage REVIVED, bumps
+ * revive_count, waits for the host to clear the bit, and mnrets to the idle's
+ * _start. Both handler addresses reset to 0, so the host writes them before
+ * the reset release. The marker dword precedes the entry so the host can tell
+ * an idle image that carries the handler from one that does not.
+ *
+ * mnscratch/mnepc/mncause/mnstatus are CSRs 0x350-0x353 on this part. */
+#define X280_RNMI_TRIGGER_ADDR X280_ABI_U64(0x20010414)
+#define X280_IDLE_RNMI_MAGIC_OFFSET X280_ABI_U64(0x0F8)
+#define X280_IDLE_RNMI_ENTRY_OFFSET X280_ABI_U64(0x100)
+#define X280_IDLE_RNMI_EXC_OFFSET X280_ABI_U64(0x180)
+#define X280_IDLE_RNMI_MAGIC_ADDR (X280_IDLE_FW_LOAD_ADDR + X280_IDLE_RNMI_MAGIC_OFFSET)
+#define X280_IDLE_RNMI_ENTRY_ADDR (X280_IDLE_FW_LOAD_ADDR + X280_IDLE_RNMI_ENTRY_OFFSET)
+#define X280_IDLE_RNMI_EXC_ADDR (X280_IDLE_FW_LOAD_ADDR + X280_IDLE_RNMI_EXC_OFFSET)
+/* "RNMI" then the protocol version, as one little-endian dword. */
+#define X280_IDLE_RNMI_MAGIC_LO X280_ABI_U32(0x494D4E52)
+#define X280_IDLE_RNMI_MAGIC (((uint64_t)X280_HART_PROTOCOL_VERSION << 32) | X280_IDLE_RNMI_MAGIC_LO)
+/* revive_cause of a fault taken inside the handler (NMIE = 0): this bit with
+ * that fault's mcause in the low bits. */
+#define X280_REVIVE_CAUSE_EXCEPTION X280_ABI_U64(0x4000000000000000)
 
 #define X280_HART_IDLE_HEARTBEAT_BASE X280_ABI_U64(0x1D1E100000000000)
 #define X280_HART_ACTIVE_HEARTBEAT_BASE X280_ABI_U64(0xAC71000000000000)
@@ -127,8 +159,12 @@ typedef struct __attribute__((aligned(X280_HART_RECORD_STRIDE))) {
     uint64_t result;
     uint64_t heartbeat;
     uint32_t stage;
-    uint32_t reserved_stage;
-    uint8_t reserved[16];
+    /* Bumped by the resident idle's RNMI handler, last. Per session: enqueue
+     * clears it with the rest of the record. */
+    uint32_t revive_count;
+    /* mnepc and mncause the RNMI handler recorded: where the hart was. */
+    uint64_t revive_epc;
+    uint64_t revive_cause;
 } x280_hart_state_t;
 
 typedef struct __attribute__((aligned(X280_HART_RECORD_STRIDE))) {
@@ -174,6 +210,12 @@ X280_WIRE_ASSERT(offsetof(x280_hart_state_t, result) == X280_HART_STATE_RESULT_O
 X280_WIRE_ASSERT(
     offsetof(x280_hart_state_t, heartbeat) == X280_HART_STATE_HEARTBEAT_OFFSET, "hart state heartbeat offset");
 X280_WIRE_ASSERT(offsetof(x280_hart_state_t, stage) == X280_HART_STATE_STAGE_OFFSET, "hart state stage offset");
+X280_WIRE_ASSERT(
+    offsetof(x280_hart_state_t, revive_count) == X280_HART_STATE_REVIVE_COUNT_OFFSET, "hart state revive-count offset");
+X280_WIRE_ASSERT(
+    offsetof(x280_hart_state_t, revive_epc) == X280_HART_STATE_REVIVE_EPC_OFFSET, "hart state revive-epc offset");
+X280_WIRE_ASSERT(
+    offsetof(x280_hart_state_t, revive_cause) == X280_HART_STATE_REVIVE_CAUSE_OFFSET, "hart state revive-cause offset");
 
 X280_WIRE_ASSERT(sizeof(x280_hart_trap_t) == X280_HART_RECORD_STRIDE, "hart trap record stride");
 X280_WIRE_ASSERT(X280_WIRE_ALIGNOF(x280_hart_trap_t) == X280_HART_RECORD_STRIDE, "hart trap record alignment");
@@ -203,6 +245,12 @@ X280_WIRE_ASSERT(X280_HART_TRAP_ADDR(0) == 0x08131A00, "hart trap assembly addre
 X280_WIRE_ASSERT(
     X280_HART_TRAP_ADDR(0) + X280_HART_TRAP_PROBE_STATE_OFFSET == 0x08131A20, "hart probe-state assembly address");
 X280_WIRE_ASSERT(X280_IPI_ACK_ADDR == 0x400030470020, "IPI acknowledgement assembly address");
+X280_WIRE_ASSERT(X280_HART_STATE_ADDR(0) == 0x08131900, "hart state assembly address");
+X280_WIRE_ASSERT(X280_IDLE_RNMI_ENTRY_ADDR == 0x08000100, "RNMI entry assembly address");
+X280_WIRE_ASSERT(X280_IDLE_RNMI_EXC_ADDR == 0x08000180, "RNMI exception entry assembly address");
+X280_WIRE_ASSERT(
+    X280_IDLE_RNMI_MAGIC_ADDR + sizeof(uint64_t) == X280_IDLE_RNMI_ENTRY_ADDR, "RNMI marker precedes the entry");
+X280_WIRE_ASSERT(X280_IDLE_RNMI_EXC_ADDR < X280_ECC_PRIME_MARKER_ADDR, "RNMI entries stay below the ECC marker");
 X280_WIRE_ASSERT((1ULL << X280_IPI_ACK_RECORD_SHIFT) == sizeof(uint64_t), "IPI acknowledgement record shift");
 X280_WIRE_ASSERT(
     X280_IDLE_TRAP_DIAG_ADDR + X280_HART_COUNT * X280_TRAP_DIAG_STRIDE ==

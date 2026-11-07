@@ -17,8 +17,8 @@ int main(uint64_t hartid) {
     /* The harness already published RUNNING for every hart, so the selected
      * one only has to trap. The host then sees a session whose harts disagree:
      * three terminal, one committed only to a trap record -- entry.S's
-     * _trap_normal CEASEs the faulting hart, so it reaches no harness step
-     * after main. */
+     * _trap_normal parks the faulting hart in WFI, so it reaches no harness
+     * step after main until X280Runtime::revive takes it back to idle. */
     if (hartid == X280_ACTIVE_FAULT_HART) {
         __asm__ volatile("ebreak");
         __builtin_unreachable();

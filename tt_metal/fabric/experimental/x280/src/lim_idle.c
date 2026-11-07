@@ -20,6 +20,11 @@
  * marker before committing IDLE. It then polls only its command word and
  * jumps after observing JUMP with a stable matching generation.
  *
+ * Entries are the reset release, an active image's acknowledged return, and
+ * the RNMI handler in boot/entry.S (X280Runtime::revive), which mnrets to
+ * _start. The host clears a revived hart's command and entry before it raises
+ * the RNMI, so the JUMP of the session it ended is not seen here again.
+ *
  * Linked with ld/x280-lim-idle.ld (X280_LIM_BASE = 0x08000000,
  * idle region size = 0x1000). Does NOT touch DRAM, AXI, or any MMIO
  * outside the local L2CPU tile -- safe to leave running across

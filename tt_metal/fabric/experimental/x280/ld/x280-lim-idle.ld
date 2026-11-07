@@ -120,6 +120,13 @@ ASSERT(DEFINED(X280_REQUIRE_NO_BSS) ? (_bss_end == _bss_start) : 1,
 ASSERT(_bss_end <= ECC_MARKER_ADDR,
        "x280-lim-idle: .bss overlaps the ECC-prime marker at LIM+0x800")
 
+/* The host writes these two addresses into every hart's RNMI handler pair
+ * (x280_hart_protocol.h X280_IDLE_RNMI_*_ADDR); entry.S pins them with .org. */
+ASSERT(_x280_rnmi_entry == 0x08000100,
+       "x280-lim-idle: _x280_rnmi_entry must sit at X280_IDLE_RNMI_ENTRY_ADDR")
+ASSERT(_x280_rnmi_exc == 0x08000180,
+       "x280-lim-idle: _x280_rnmi_exc must sit at X280_IDLE_RNMI_EXC_ADDR")
+
 /* entry.S writes this into mtvec, whose low two bits are the MODE field, so a
  * misaligned handler selects a reserved mode and traps never arrive. */
 ASSERT((_trap_handler & 3) == 0,

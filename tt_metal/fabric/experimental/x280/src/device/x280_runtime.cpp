@@ -862,4 +862,8 @@ CleanupResult X280Runtime::cleanup(SessionId id, std::chrono::milliseconds timeo
     return require_impl(impl_, "cleanup").cleanup(id, timeout);
 }
 
+ReviveResult X280Runtime::revive(X280Tile& tile, const ReviveRequest& request) {
+    return require_impl(impl_, "revive").revive(tile, request);
+}
+
 }  // namespace x280

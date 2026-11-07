@@ -27,6 +27,10 @@ std::string describe(const HartState& hart) {
         // How far the harness carried this hart. Decimal, because it is a
         // small enumerated postcode rather than a wire word.
         << " stage=" << hart.state.stage;
+    if (hart.state.revive_count != 0) {
+        out << " revived(count=" << hart.state.revive_count << " epc=" << hex(hart.state.revive_epc)
+            << " cause=" << hex(hart.state.revive_cause) << ')';
+    }
     const auto commit = commit_state(hart);
     if (commit.phase_payload_pending) {
         out << " phase_commit=uncommitted";

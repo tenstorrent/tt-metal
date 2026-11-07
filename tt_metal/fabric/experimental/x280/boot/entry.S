@@ -17,9 +17,10 @@
  *     Clears msip[hartid], writes DDR ack, mret.
  *   PROBE MODE (this hart's probe state != 0): skip access faults (5, 7),
  *     set it to 2, mret.
- *   NORMAL MODE: write trap diagnostics for host readback, CEASE. Under
- *     X280_PER_HART_PROTOCOL that is this hart's trap record; otherwise this
- *     hart's linker-placed trap block.
+ *   NORMAL MODE: write trap diagnostics for host readback, then stop. Under
+ *     X280_PER_HART_PROTOCOL that is this hart's trap record and the hart
+ *     parks in WFI with interrupts off, where X280Runtime::revive reaches it;
+ *     otherwise this hart's linker-placed trap block, then CEASE.
  */
 
 #include "x280_hart_protocol.h"
@@ -27,6 +28,13 @@
 .section .text.start, "ax"
 .global _start
 
+#if defined(X280_PER_HART_PROTOCOL) && !defined(X280_ACTIVE_HARNESS)
+    /* The RNMI entries below sit at fixed offsets (.org). Linker relaxation
+     * would shrink _start after assembly and move them, so the resident idle's
+     * start section is not relaxed. */
+    .option push
+    .option norelax
+#endif
 _start:
     /* Global-pointer initialization must disable relaxation. */
     .option push
@@ -89,6 +97,99 @@ _hart_skip_bss:
 
 3:  j     3b
 
+#if defined(X280_PER_HART_PROTOCOL) && !defined(X280_ACTIVE_HARNESS)
+/*
+ * Resident-idle RNMI revive (resident idle only; active images carry none).
+ *
+ * The host writes every hart's RNMI handler pair to these two fixed addresses
+ * before the reset release, and raises a hart's bit in the level-triggered
+ * trigger word to take it back to idle from any instruction boundary. The
+ * interrupted context is abandoned, so nothing is saved: the handler records
+ * where the hart was, clears the trap record the dead image may have left
+ * (resident idle is only recognised with trap_valid == 0, and a left-over
+ * probe state would make idle skip real faults), stamps stage REVIVED, bumps
+ * revive_count last as the host's acknowledgement, waits for the host to clear
+ * its trigger bit (one entry per pulse), and mnrets to _start. _start rebuilds
+ * gp, mtvec, the feature-disable CSR, mstatus.VS and the stack, and idle's
+ * main republishes IDLE, so a revived hart and a freshly booted one leave the
+ * same code path. mnret sets mnstatus.NMIE again.
+ *
+ * Interrupts are cleared first: idle polls with interrupts off, and an
+ * interrupt a dead image enabled would otherwise reach idle's _trap_normal.
+ * The handler touches no CLINT, PLIC or MSI state; the next image initialises
+ * what it enables (README section 3).
+ *
+ * CSRs 0x350-0x353 are mnscratch, mnepc, mncause and mnstatus; mnret is
+ * emitted as a raw word because binutils has no mnemonic for it.
+ */
+    .org  X280_IDLE_RNMI_MAGIC_OFFSET
+    .word X280_IDLE_RNMI_MAGIC_LO
+    .word X280_HART_PROTOCOL_VERSION
+
+    .org  X280_IDLE_RNMI_ENTRY_OFFSET
+.global _x280_rnmi_entry
+_x280_rnmi_entry:
+    csrr  t3, 0x352                 /* mncause */
+    j     _x280_rnmi_common
+
+    /* A fault while mnstatus.NMIE = 0, i.e. inside the handler below. The
+     * cause records it; the tail is the same. */
+    .org  X280_IDLE_RNMI_EXC_OFFSET
+.global _x280_rnmi_exc
+_x280_rnmi_exc:
+    csrr  t3, mcause
+    li    t0, X280_REVIVE_CAUSE_EXCEPTION
+    or    t3, t3, t0
+
+_x280_rnmi_common:
+    csrw  mie, zero
+    li    t0, (1 << 3) | (1 << 17)  /* mstatus.MIE, mstatus.MPRV */
+    csrc  mstatus, t0
+
+    csrr  t0, mhartid
+    slli  t0, t0, X280_HART_RECORD_SHIFT
+    li    t1, X280_HART_STATE_ADDR(0)
+    add   t1, t1, t0
+    li    t2, X280_HART_TRAP_ADDR(0)
+    add   t2, t2, t0
+
+    csrr  t4, 0x351                 /* mnepc */
+    sd    t4, X280_HART_STATE_REVIVE_EPC_OFFSET(t1)
+    sd    t3, X280_HART_STATE_REVIVE_CAUSE_OFFSET(t1)
+    sd    zero, X280_HART_TRAP_VALID_OFFSET(t2)
+    sd    zero, X280_HART_TRAP_RUN_VALUE_OFFSET(t2)
+    sd    zero, X280_HART_TRAP_MCAUSE_OFFSET(t2)
+    sd    zero, X280_HART_TRAP_MEPC_OFFSET(t2)
+    sd    zero, X280_HART_TRAP_MTVAL_OFFSET(t2)
+    sd    zero, X280_HART_TRAP_PROBE_STATE_OFFSET(t2)
+    sd    zero, X280_HART_STATE_PHASE_OFFSET(t1)
+    li    t4, X280_HART_STAGE_REVIVED
+    sw    t4, X280_HART_STATE_STAGE_OFFSET(t1)
+    fence iorw, iorw
+    lw    t4, X280_HART_STATE_REVIVE_COUNT_OFFSET(t1)
+    addi  t4, t4, 1
+    sw    t4, X280_HART_STATE_REVIVE_COUNT_OFFSET(t1)
+    fence iorw, iorw
+
+    /* Level-triggered: leave only once the host cleared this hart's bit, or
+     * mnret would take the same RNMI again. */
+    csrr  t0, mhartid
+    li    t5, X280_RNMI_TRIGGER_ADDR
+4:  lw    t4, 0(t5)
+    srl   t4, t4, t0
+    andi  t4, t4, 1
+    bnez  t4, 4b
+
+    li    t4, X280_IDLE_FW_LOAD_ADDR
+    csrw  0x351, t4                 /* mnepc = _start */
+    li    t4, 0x1800
+    csrs  0x353, t4                 /* mnstatus.MNPP = M */
+    li    t4, 0x80
+    csrc  0x353, t4                 /* mnstatus.MNPV = 0 */
+    .word 0x70200073                /* mnret */
+    .option pop
+#endif
+
 
 /*
  * Trap handler: three modes.
@@ -106,7 +207,11 @@ _hart_skip_bss:
  *
  * NORMAL MODE (this hart's probe state == 0):
  *   Write mcause/mepc/mtval to this hart's known addresses for host
- *   readback, then halt via CEASE.
+ *   readback, then stop: per-hart protocol images park in WFI with
+ *   interrupts off, standalone images CEASE. A ceased hart takes no RNMI
+ *   (measured), so CEASE would put a trapped hart out of the runtime's reach
+ *   until an ASIC reset; the WFI park keeps it at an instruction boundary,
+ *   which the resident idle's RNMI handler takes it back from.
  *
  * Uses only caller-saved temporaries to avoid corrupting state.
  * IPI handler does NOT modify mstatus -- vector state is preserved.
@@ -201,11 +306,20 @@ _trap_normal:
     sd    t0, 0x10(t1)
 #endif
 
+#ifdef X280_PER_HART_PROTOCOL
+    /* Park at an instruction boundary: nothing wakes it but an RNMI, which
+     * X280Runtime::revive raises. Interrupts off, so a pending one only ends
+     * the WFI and the loop re-enters it. */
+    csrw  mie, zero
+1:  wfi
+    j     1b
+#else
     /* CEASE: halt the hart (SiFive custom, encoding 0x30500073) */
     .word 0x30500073
 
     /* Fallback: infinite loop if CEASE is not supported */
     j     .
+#endif
 
 _trap_skip:
     /* Mark that a fault occurred: this hart's probe state = 2. t2 still holds
