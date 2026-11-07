@@ -26,11 +26,17 @@ import ttnn
 _SHARD_DIMS = (2, 3)
 
 
-def save_activation(mesh_device, activation: ttnn.Tensor, path: Path) -> torch.Tensor:
-    """Write the rank's outbound activation as the socket's global tensor; returns it on host."""
+def compose_activation(mesh_device, activation: ttnn.Tensor) -> torch.Tensor:
+    """The rank's outbound activation on host as the socket's global tensor."""
     composer = ttnn.ConcatMesh2dToTensor(mesh_device, dims=_SHARD_DIMS, mesh_shape=tuple(mesh_device.shape))
     host = ttnn.to_torch(activation, mesh_composer=composer)
     assert host.dtype == torch.bfloat16, f"the D2D payload is bf16, got {host.dtype}"
+    return host
+
+
+def save_activation(mesh_device, activation: ttnn.Tensor, path: Path) -> torch.Tensor:
+    """Write the rank's outbound activation as the socket's global tensor; returns it on host."""
+    host = compose_activation(mesh_device, activation)
     host.contiguous().view(torch.int16).numpy().tofile(path)
     return host
 

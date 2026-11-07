@@ -2,8 +2,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Each Kimi-K3.1 pipeline stage on one galaxy, traced, at its recorded maximum num_users
-(`test_kimi_k3_1_stage_traced`), and the four stages run in sequence through saved handoffs
-(`test_kimi_k3_1_stage_handoff`, described at its section below).
+(`test_kimi_k3_1_stage_traced`), the four stages run in sequence through saved handoffs
+(`test_kimi_k3_1_stage_handoff`), and a stage's kvpe cache read whole at two users (`test_kimi_k3_1_stage_kvpe`);
+the last two are described at their sections below.
 
 A stage is built as `prefill_runner` builds that rank (`compute_layer_split` over the adapter's split
 boundaries, `build_runtime` / `allocate_kv_cache` / `compile` / `capture_trace` with the K3 manifest's
@@ -54,7 +55,11 @@ from models.demos.common.prefill.runners.migration import setup_kv_chunk_table
 from models.demos.common.prefill.runners.runner_utils import compute_layer_split, d2d_activation_rows
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_1_config import KimiK31Config
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import torus_xy_device_params
-from models.demos.deepseek_v3_d_p.tests.kimi_k3.stage_handoff import load_activation, save_activation
+from models.demos.deepseek_v3_d_p.tests.kimi_k3.stage_handoff import (
+    compose_activation,
+    load_activation,
+    save_activation,
+)
 from models.demos.deepseek_v3_d_p.tests.test_prefill_chunk_traced_vs_eager import _packed_metadata_msg
 from models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert import TtRoutedExpert
 
@@ -264,6 +269,53 @@ def _random_activation(runtime, mesh_device, seed: int) -> ttnn.Tensor:
     )
 
 
+@contextlib.contextmanager
+def _built_stage(stage: int, num_users: int, weight_cache_path: Path, mesh_device, *, stub=False, before_capture=None):
+    """PP4 rank `stage` built as the runner builds it, traced; yields (runtime, kv_caches). Weights (header-only
+    stubs if `stub`), every slot's KV caches, compile, the D2D backings, `before_capture(runtime, kv_caches)` for
+    what the runner registers between compile and capture, then the capture. DRAM is logged after each step."""
+    hf_config, params = _stage_params(stage, num_users, weight_cache_path)
+    _log_dram(mesh_device, "opened")
+    t0 = time.perf_counter()
+    with _header_only() if stub else contextlib.nullcontext():
+        runtime = ADAPTER.build_runtime(mesh_device=mesh_device, hf_config=hf_config, params=params)
+    logger.info(f"STAGE_TIME weights {time.perf_counter() - t0:.1f} s")
+    weight_bytes = _log_dram(mesh_device, "weights")
+    kv_caches = ADAPTER.allocate_kv_cache(mesh_device=mesh_device, hf_config=hf_config, params=params)
+    caches = _log_dram(mesh_device, f"kv_caches({num_users} users)") - weight_bytes
+    logger.info(f"STAGE_KV {caches} B per chip for {num_users} users ({caches / num_users / 1e6:.1f} MB per user)")
+    try:
+        t0 = time.perf_counter()
+        runtime.compile(kv_caches)
+        logger.info(f"STAGE_TIME compile {time.perf_counter() - t0:.1f} s")
+        _log_dram(mesh_device, "compiled")
+        d2d_backings = _d2d_backings(runtime, mesh_device)
+        _log_dram(mesh_device, f"d2d backings ({len(d2d_backings)})")
+        if before_capture is not None:
+            before_capture(runtime, kv_caches)
+        t0 = time.perf_counter()
+        runtime.capture_trace(kv_caches)
+        logger.info(f"STAGE_TIME capture {time.perf_counter() - t0:.1f} s")
+        _log_dram(mesh_device, "traced")
+        yield runtime, kv_caches
+    finally:
+        # The captured trace buffers must go before the mesh_device fixture closes the device.
+        runtime.release_trace()
+
+
+def _replay(runtime, mesh_device, chunk_input, kv_caches, slot: int, start: int, end: int):
+    """One traced chunk, synchronized and timed; returns the rank's outbound activation (None on the last rank)."""
+    msg = _packed_metadata_msg(mesh_device, slot, start, end)
+    t0 = time.perf_counter()
+    out = runtime.prefill_chunk(
+        chunk_input, kv_caches, slot_id=slot, actual_start=start, actual_end=end, request_id=0, metadata_msg=msg
+    )
+    ttnn.synchronize_device(mesh_device)
+    logger.info(f"STAGE_TIME replay slot {slot} [{start}, {end}) {time.perf_counter() - t0:.3f} s")
+    ttnn.deallocate(msg)
+    return out
+
+
 @pytest.mark.skipif(not is_blackhole(), reason="Kimi-K3.1 runs on Blackhole only")
 @pytest.mark.timeout(0)
 @pytest.mark.parametrize("mesh_device, device_params", PLACEMENT, indirect=True)
@@ -275,53 +327,20 @@ def test_kimi_k3_1_stage_traced(stage, mesh_device, device_params, tmp_path):
     weight_cache_path = _weight_cache_path()
     if weights == "stub":
         weight_cache_path = _stub_cache(weight_cache_path, tmp_path)
-    hf_config, params = _stage_params(stage, num_users, weight_cache_path)
     logger.info(f"K3.1 stage {stage} weights={weights}")
 
-    _log_dram(mesh_device, "opened")
-    t0 = time.perf_counter()
-    with _header_only() if weights == "stub" else contextlib.nullcontext():
-        runtime = ADAPTER.build_runtime(mesh_device=mesh_device, hf_config=hf_config, params=params)
-    logger.info(f"STAGE_TIME weights {time.perf_counter() - t0:.1f} s")
-    weight_bytes = _log_dram(mesh_device, "weights")
-    kv_caches = ADAPTER.allocate_kv_cache(mesh_device=mesh_device, hf_config=hf_config, params=params)
-    caches = _log_dram(mesh_device, f"kv_caches({num_users} users)") - weight_bytes
-    logger.info(f"STAGE_KV {caches} B per chip for {num_users} users ({caches / num_users / 1e6:.1f} MB per user)")
-    try:
-        t0 = time.perf_counter()
-        runtime.compile(kv_caches)
-        d2d_backings = _d2d_backings(runtime, mesh_device)
-        _log_dram(mesh_device, f"d2d backings ({len(d2d_backings)})")
-        runtime.capture_trace(kv_caches)
-        logger.info(f"STAGE_TIME compile+capture {time.perf_counter() - t0:.1f} s")
-        _log_dram(mesh_device, "traced")
-
+    stage_built = _built_stage(stage, num_users, weight_cache_path, mesh_device, stub=weights == "stub")
+    with stage_built as (runtime, kv_caches):
         slot = num_users - 1
         for start in REPLAY_STARTS:
             if runtime.config.is_first_rank:
                 chunk_input = runtime.make_chunk_input([1] * CHUNK)
             else:
                 chunk_input = _random_activation(runtime, mesh_device, seed=start)
-            msg = _packed_metadata_msg(mesh_device, slot, start, start + CHUNK)
-            t0 = time.perf_counter()
-            runtime.prefill_chunk(
-                chunk_input,
-                kv_caches,
-                slot_id=slot,
-                actual_start=start,
-                actual_end=start + CHUNK,
-                request_id=0,
-                metadata_msg=msg,
-            )
-            ttnn.synchronize_device(mesh_device)
-            logger.info(f"STAGE_TIME replay slot {slot} [{start}, {start + CHUNK}) {time.perf_counter() - t0:.3f} s")
-            ttnn.deallocate(msg)
+            _replay(runtime, mesh_device, chunk_input, kv_caches, slot, start, start + CHUNK)
         _log_dram(mesh_device, "replayed")
         view = ttnn.get_memory_view(mesh_device, ttnn.BufferType.DRAM)
         logger.info(f"STAGE_DRAM capacity {view.total_bytes_per_bank * view.num_banks} B per chip")
-    finally:
-        # The captured trace buffers must go before the mesh_device fixture closes the device.
-        runtime.release_trace()
 
 
 # --- The four stages in sequence on one galaxy, through saved handoffs -----------------------------------
@@ -329,14 +348,17 @@ def test_kimi_k3_1_stage_traced(stage, mesh_device, device_params, tmp_path):
 # Without an SC4 the PP4 pipeline runs one stage per process: each stage is built as its rank is (as above,
 # real weights, every slot of the system maximum), takes its input from the previous stage's saved handoff
 # (`stage_handoff`: the D2D socket's payload, bit for bit) and saves its own for the next. The runner pieces
-# the capacity test leaves out are built here, where the runner builds them: the migration export (each
-# rank's KV stage layouts gathered; rank 0 writes the chunk table) after compile, and the D2H layer-ack
-# service registered before capture, so every layer's ack op runs inside the replays and each ack record is
-# read back and checked. No H2D socket: stage 0 takes the chunk's tokens as the runtime's chunk input.
+# the capacity test leaves out are built here, where the runner builds them, between compile and capture: the
+# D2H layer-ack service, so every layer's ack op runs inside the replays and each ack record is read back and
+# checked, and the migration export. That export runs in the runner's mock mode, one process per stage, so its
+# all-gather of KV stage layouts sees this rank only: each stage writes its own device map, and the chunk table
+# (written by rank 0) covers stage 0's layers only. No H2D socket: stage 0 takes the chunk's tokens as the
+# runtime's chunk input.
 #
 # The prompt (deterministic ids) runs twice, on the highest slot and then on slot 0: outputs and the slot's
-# cache rows must agree bit for bit. A whole repeat run (all four stages again into another directory) must
-# reproduce every saved file byte for byte (`cmp`). No golden for K3.1: outputs are checked finite only.
+# cache rows (index, KDA) must agree bit for bit. A whole repeat run (all four stages again into another
+# directory) must reproduce every saved file byte for byte (`cmp`). No golden for K3.1: outputs are checked
+# finite only. The kvpe cache is too large to read at the system maximum; `test_kimi_k3_1_stage_kvpe` covers it.
 #
 #     for s in 0 1 2 3; do K31_HANDOFF_DIR=/path/run1 scripts/run_safe_pytest.sh \
 #         "models/demos/deepseek_v3_d_p/tests/kimi_k3/test_kimi_k3_1_stage.py::test_kimi_k3_1_stage_handoff[blackhole-stage$s-torus-xy-8x4]"; done
@@ -422,46 +444,52 @@ def _write_raw(tensor: torch.Tensor, path: Path) -> None:
     tensor.contiguous().view(torch.uint8).numpy().tofile(path)
 
 
+def _cached_stage(stage: int) -> Path:
+    """The weight cache, skipping when any layer of the stage is not cached yet."""
+    weight_cache_path = _weight_cache_path()
+    first_layer_idx, num_layers = STAGES[stage]
+    layers = range(first_layer_idx, first_layer_idx + num_layers)
+    uncached = [i for i in layers if not (weight_cache_path / f".layer_{i}.complete").is_file()]
+    if uncached:
+        pytest.skip(f"layers {uncached} are not in the K3.1 TTNN cache yet")
+    return weight_cache_path
+
+
+def _handoff_dir() -> Path:
+    handoff_dir = Path(os.getenv("K31_HANDOFF_DIR", "generated/kimi_k3_1_handoff"))
+    handoff_dir.mkdir(parents=True, exist_ok=True)
+    logger.info(f"K3.1 handoff dir {handoff_dir.resolve()}")
+    return handoff_dir
+
+
 @pytest.mark.skipif(not is_blackhole(), reason="Kimi-K3.1 runs on Blackhole only")
 @pytest.mark.timeout(0)
 @pytest.mark.parametrize("mesh_device, device_params", PLACEMENT, indirect=True)
 @pytest.mark.parametrize("stage", range(NUM_STAGES), ids=[f"stage{s}" for s in range(NUM_STAGES)])
 def test_kimi_k3_1_stage_handoff(stage, mesh_device, device_params, monkeypatch):
-    handoff_dir = Path(os.getenv("K31_HANDOFF_DIR", "generated/kimi_k3_1_handoff"))
-    handoff_dir.mkdir(parents=True, exist_ok=True)
+    handoff_dir = _handoff_dir()
     num_users = int(os.getenv("K31_STAGE_USERS", SYSTEM_MAX_USERS))
+    weight_cache_path = _cached_stage(stage)
     first_layer_idx, num_layers = STAGES[stage]
-    weight_cache_path = _weight_cache_path()
-    uncached = [
-        i
-        for i in range(first_layer_idx, first_layer_idx + num_layers)
-        if not (weight_cache_path / f".layer_{i}.complete").is_file()
-    ]
-    if uncached:
-        pytest.skip(f"layers {uncached} are not in the K3.1 TTNN cache yet")
-    hf_config, params = _stage_params(stage, num_users, weight_cache_path)
-    logger.info(f"K3.1 stage {stage} handoff dir {handoff_dir.resolve()}")
-
-    _log_dram(mesh_device, "opened")
-    t0 = time.perf_counter()
-    runtime = ADAPTER.build_runtime(mesh_device=mesh_device, hf_config=hf_config, params=params)
-    logger.info(f"STAGE_TIME weights {time.perf_counter() - t0:.1f} s")
-    weight_bytes = _log_dram(mesh_device, "weights")
-    kv_caches = ADAPTER.allocate_kv_cache(mesh_device=mesh_device, hf_config=hf_config, params=params)
-    caches = _log_dram(mesh_device, f"kv_caches({num_users} users)") - weight_bytes
-    logger.info(f"STAGE_KV {caches} B per chip for {num_users} users ({caches / num_users / 1e6:.1f} MB per user)")
     d2h_service = None
-    try:
-        t0 = time.perf_counter()
-        runtime.compile(kv_caches)
-        logger.info(f"STAGE_TIME compile {time.perf_counter() - t0:.1f} s")
-        _log_dram(mesh_device, "compiled")
 
-        # Migration export, in the runner's mock mode (no worker): this rank's stages are gathered and its
-        # device map written; rank 0 builds the chunk table, here over its own stage only.
+    def before_capture(runtime, kv_caches):
+        nonlocal d2h_service
+        d2h_service = ttnn.D2HStreamService(
+            mesh_device,
+            global_spec=None,
+            fifo_size_bytes=ACK_FIFO_BYTES,
+            worker_cores=ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0)),  # the runner's SYNC_WORKER_CORES
+            metadata_size_bytes=metadata_size_bytes(1),
+            metadata_ring=True,
+        )
+        runtime.set_d2h_ack_service(d2h_service)
+        _log_dram(mesh_device, "d2h ack service")
+        # Per-process gather (see above): a device map per stage, since each export removes the maps of its
+        # path; the table is stage 0's.
         monkeypatch.setenv("PREFILL_ENABLE_MIGRATION", "0")
         monkeypatch.setenv("PREFILL_MIGRATION_TABLE_PATH", str(handoff_dir / "kv_chunk_table.pb"))
-        monkeypatch.setenv("PREFILL_MIGRATION_DEVICE_MAP_PATH", str(handoff_dir / "kv_device_map.json"))
+        monkeypatch.setenv("PREFILL_MIGRATION_DEVICE_MAP_PATH", str(handoff_dir / f"stage{stage}.kv_device_map.json"))
         setup_kv_chunk_table(
             runtime,
             kv_caches,
@@ -474,39 +502,20 @@ def test_kimi_k3_1_stage_handoff(stage, mesh_device, device_params, monkeypatch)
         )
         _log_dram(mesh_device, "migration export")
 
-        d2d_backings = _d2d_backings(runtime, mesh_device)
-        _log_dram(mesh_device, f"d2d backings ({len(d2d_backings)})")
-        d2h_service = ttnn.D2HStreamService(
-            mesh_device,
-            global_spec=None,
-            fifo_size_bytes=ACK_FIFO_BYTES,
-            worker_cores=ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0)),  # the runner's SYNC_WORKER_CORES
-            metadata_size_bytes=metadata_size_bytes(1),
-            metadata_ring=True,
-        )
-        runtime.set_d2h_ack_service(d2h_service)
-        _log_dram(mesh_device, "d2h ack service")
-        t0 = time.perf_counter()
-        runtime.capture_trace(kv_caches)
-        logger.info(f"STAGE_TIME capture {time.perf_counter() - t0:.1f} s")
+    with _built_stage(stage, num_users, weight_cache_path, mesh_device, before_capture=before_capture) as (
+        runtime,
+        kv_caches,
+    ):
         acks_per_chunk = runtime.warmup_ack_count()
         assert acks_per_chunk >= num_layers, f"{acks_per_chunk} acks per chunk for {num_layers} layers"
         _read_acks(d2h_service, acks_per_chunk)  # the capture's warm pass
-        _log_dram(mesh_device, "traced")
 
         outputs, states = {}, {}
         for slot in (num_users - 1, 0):
             for chunk in range(HANDOFF_CHUNKS):
                 start, end = chunk * CHUNK, (chunk + 1) * CHUNK
                 chunk_input = _chunk_input(runtime, mesh_device, handoff_dir, stage, chunk)
-                msg = _packed_metadata_msg(mesh_device, slot, start, end)
-                t0 = time.perf_counter()
-                out = runtime.prefill_chunk(
-                    chunk_input, kv_caches, slot_id=slot, actual_start=start, actual_end=end, metadata_msg=msg
-                )
-                ttnn.synchronize_device(mesh_device)
-                logger.info(f"STAGE_TIME replay slot {slot} [{start}, {end}) {time.perf_counter() - t0:.3f} s")
-                ttnn.deallocate(msg)
+                out = _replay(runtime, mesh_device, chunk_input, kv_caches, slot, start, end)
                 acks = _read_acks(d2h_service, acks_per_chunk)
                 assert set(acks) == {
                     (slot, start, end)
@@ -532,6 +541,76 @@ def test_kimi_k3_1_stage_handoff(stage, mesh_device, device_params, monkeypatch)
             unwritten = first["index"].abs().amax(dim=-1).eq(0).sum()
             assert not unwritten, f"stage {stage}: {unwritten} index cache rows of the prompt are unwritten"
         logger.info(f"STAGE_HANDOFF stage {stage}: {sorted(p.name for p in handoff_dir.glob(f'stage{stage}.*'))}")
-    finally:
-        runtime.release_trace()
-        d2h_service = None
+
+
+# --- The kvpe cache of a stage, read whole, at two users ------------------------------------------------
+#
+# The handoff test reads no kvpe rows (no device slice of the packed scaled-FP8 cache, and ~10 GB per chip at
+# the system maximum). Here the stage is built with two slots, ~0.26 GB of kvpe per chip, read whole as stored
+# (every chip's shard, raw bytes). The prompt runs on slot 1, then slot 0, from the handoff test's inputs:
+# - every kvpe row of the prompt (both chunks, every DSA layer, the last rank's kv-only layer too) is written
+#   (differs from the allocator's zero fill) and is the same on both slots;
+# - a negative control, on a non-last rank: chunk 0 on slot 1, then the kvpe cache alone reset to its zero
+#   fill (index cache and KDA carry kept), then chunk 1: its output must differ from the full prompt's, so
+#   chunk 1's output depends on the kvpe rows chunk 0 wrote. The prompt rerun on that slot then restores it.
+KVPE_USERS = 2
+
+
+def _shards(mesh_device, tensor) -> torch.Tensor:
+    """Every chip's shard as stored, raw bytes: [rows * per-chip dim 0, cols * per-chip dim 1, ...]."""
+    composer = ttnn.ConcatMesh2dToTensor(mesh_device, dims=(0, 1), mesh_shape=MESH)
+    return ttnn.to_torch(tensor, mesh_composer=composer).view(torch.uint8)
+
+
+def _kvpe_prompt_rows(raw: torch.Tensor, slot: int) -> torch.Tensor:
+    """One slot's kvpe rows of the prompt's chunks, every chip: [mesh rows, slabs, mesh cols, rows, row bytes].
+    Slabs are slot-major on each chip; with TP-deduped KV a chip holds rows [0, chunks * chunk / (sp * tp))."""
+    per_chip_users_slabs = raw.shape[0] // MESH[0]
+    slabs = per_chip_users_slabs // KVPE_USERS
+    by_slot = raw.reshape(MESH[0], KVPE_USERS, slabs, *raw.shape[1:])
+    return by_slot[:, slot, :, :, : HANDOFF_CHUNKS * CHUNK // (MESH[0] * MESH[1])].clone()
+
+
+@pytest.mark.skipif(not is_blackhole(), reason="Kimi-K3.1 runs on Blackhole only")
+@pytest.mark.timeout(0)
+@pytest.mark.parametrize("mesh_device, device_params", PLACEMENT, indirect=True)
+@pytest.mark.parametrize("stage", range(NUM_STAGES), ids=[f"stage{s}" for s in range(NUM_STAGES)])
+def test_kimi_k3_1_stage_kvpe(stage, mesh_device, device_params):
+    handoff_dir = _handoff_dir()
+    weight_cache_path = _cached_stage(stage)
+    with _built_stage(stage, KVPE_USERS, weight_cache_path, mesh_device) as (runtime, kv_caches):
+        kvpe = kv_caches.kvpe.storage
+        fresh = kvpe.cpu()  # the allocator's zero fill
+
+        def run(slot, reset_kvpe_before=()):
+            """The prompt's chunks on `slot`; the stage's outbound activations on host (None on the last rank)."""
+            outputs = []
+            for chunk in range(HANDOFF_CHUNKS):
+                if chunk in reset_kvpe_before:
+                    ttnn.copy_host_to_device_tensor(fresh, kvpe)
+                chunk_input = _chunk_input(runtime, mesh_device, handoff_dir, stage, chunk)
+                start, end = chunk * CHUNK, (chunk + 1) * CHUNK
+                out = _replay(runtime, mesh_device, chunk_input, kv_caches, slot, start, end)
+                outputs.append(None if out is None else compose_activation(mesh_device, out))
+            return outputs
+
+        fresh_rows = _kvpe_prompt_rows(_shards(mesh_device, kvpe), 1)
+        assert fresh_rows.shape[-1] == kvpe.shape[-1], f"kvpe read back as {fresh_rows.dtype}, not raw bytes"
+        outputs = run(1)
+        written = _kvpe_prompt_rows(_shards(mesh_device, kvpe), 1)
+        unwritten = (written == fresh_rows).all(dim=-1).sum()
+        assert not unwritten, f"stage {stage}: {unwritten} of {written[..., 0].numel()} kvpe rows unwritten"
+        again = run(0)
+        assert torch.equal(_kvpe_prompt_rows(_shards(mesh_device, kvpe), 0), written), "kvpe: slot 0 differs"
+        for chunk, (first, second) in enumerate(zip(outputs, again)):
+            assert first is None or torch.equal(first, second), f"stage {stage} chunk {chunk}: slot 0 differs"
+        logger.info(f"STAGE_KVPE stage {stage}: {written[..., 0].numel()} prompt rows written, equal on both slots")
+
+        if runtime.config.is_last_rank:
+            assert outputs == [None] * HANDOFF_CHUNKS
+            return
+        control = run(1, reset_kvpe_before=(1,))[1]
+        assert not torch.equal(control, outputs[1]), f"stage {stage}: chunk 1 does not read chunk 0's kvpe rows"
+        mismatched = (control != outputs[1]).float().mean().item()
+        assert torch.equal(run(1)[1], outputs[1]), f"stage {stage}: the prompt rerun after the reset differs"
+        logger.info(f"STAGE_KVPE stage {stage}: kvpe reset before chunk 1 changes {mismatched:.1%} of its output")
