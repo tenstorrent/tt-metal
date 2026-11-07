@@ -159,7 +159,7 @@ inline void llk_unpack_reconfig_data_format_srca(const std::uint32_t srca_new_op
         dim_stride_target == p_dim_stride_target::IGNORE,
         "Quasar unpack reconfig does not support stride/tile-dimension changes");
     const std::uint32_t srca_operand_id = get_operand_id(srca_new_operand);
-    _llk_unpack_reconfig_data_format_src_<p_unpacr::UNP_A, EN_32BIT_DEST>(
+    _llk_unpack_reconfig_data_format_src_<p_unpacr::UNP_A, EN_32BIT_DEST, UnpackToDestEn>(
         unpack_src_format[srca_operand_id], unpack_dst_format[srca_operand_id]);
 }
 
@@ -169,7 +169,7 @@ inline void llk_unpack_reconfig_data_format_srcb(const std::uint32_t srcb_new_op
         dim_stride_target == p_dim_stride_target::IGNORE,
         "Quasar unpack reconfig does not support stride/tile-dimension changes");
     const std::uint32_t srcb_operand_id = get_operand_id(srcb_new_operand);
-    _llk_unpack_reconfig_data_format_src_<p_unpacr::UNP_B, EN_32BIT_DEST>(
+    _llk_unpack_reconfig_data_format_src_<p_unpacr::UNP_B, EN_32BIT_DEST, UnpackToDestEn>(
         unpack_src_format[srcb_operand_id], unpack_dst_format[srcb_operand_id]);
 }
 

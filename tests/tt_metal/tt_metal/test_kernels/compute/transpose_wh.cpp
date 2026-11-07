@@ -17,10 +17,16 @@ void kernel_main() {
 
 #ifndef SHORT_INIT
     compute_kernel_hw_startup(dfb::in, dfb::out);
+#ifdef RECONFIG_SRCA
+    reconfig_data_format_srca(dfb::in);
+#endif
     transpose_init(dfb::in);
 #else
     // SHORT_INIT path: same as unary_op_init_common(dfb::in, dfb::out) used to expand to.
     compute_kernel_hw_startup(dfb::in, dfb::out);
+#ifdef RECONFIG_SRCA
+    reconfig_data_format_srca(dfb::in);
+#endif
     copy_init(dfb::in);
     transpose_init(dfb::in);
 #endif

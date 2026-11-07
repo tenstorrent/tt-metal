@@ -64,6 +64,7 @@ struct TransposeConfig {
     tt::DataFormat data_format = tt::DataFormat::Float16_b;
     bool dst_full_sync_en = false;
     bool unpack_to_dest = false;
+    bool reconfig_srca = false;
 };
 
 // Tiled dimensions derived from a 4-D NCHW tensor shape, with shared validation.
@@ -259,6 +260,9 @@ void run_single_core_transpose(distributed::MeshDevice& mesh_device, const Trans
     experimental::KernelSpec::CompilerOptions::Defines compute_defines;
     if (test_config.short_init) {
         compute_defines.emplace("SHORT_INIT", "1");
+    }
+    if (test_config.reconfig_srca) {
+        compute_defines.emplace("RECONFIG_SRCA", "1");
     }
 
     const char* compute_kernel_path = test_config.transpose_dest
@@ -457,6 +461,44 @@ TEST_F(LLKQuasarMeshDeviceSingleCardFixture, QuasarTransposeWHInt32) {
             .data_format = tt::DataFormat::Int32,
             .dst_full_sync_en = dst_full_sync_en,
             .unpack_to_dest = true,
+        };
+        unit_tests::compute::transpose::run_single_core_transpose(this->device(), test_config);
+    }
+}
+
+// reconfig_data_format_srca on the to-dest DFB (#63025): the reconfig format check used to take the src path, reject
+// Float32->Float32 / Int32->Int32 and halt the unpack TRISC with EBREAK under TT_METAL_LLK_ASSERTS=1.
+TEST_F(LLKQuasarMeshDeviceSingleCardFixture, QuasarTransposeWHFloat32ReconfigSrcA) {
+    for (const bool dst_full_sync_en : {false, true}) {
+        SCOPED_TRACE(dst_full_sync_en ? "dst_full_sync_en=true (SyncFull)" : "dst_full_sync_en=false (SyncHalf)");
+        unit_tests::compute::transpose::TransposeConfig test_config = {
+            .short_init = false,
+            .transpose_dest = false,
+            .single_tile_size = constants::TILE_HW * sizeof(std::uint32_t),
+            .shape = {1, 1, 64, 64},
+            .transpose_type = unit_tests::compute::transpose::TransposeType::WH,
+            .data_format = tt::DataFormat::Float32,
+            .dst_full_sync_en = dst_full_sync_en,
+            .unpack_to_dest = true,
+            .reconfig_srca = true,
+        };
+        unit_tests::compute::transpose::run_single_core_transpose(this->device(), test_config);
+    }
+}
+
+TEST_F(LLKQuasarMeshDeviceSingleCardFixture, QuasarTransposeWHInt32ReconfigSrcA) {
+    for (const bool dst_full_sync_en : {false, true}) {
+        SCOPED_TRACE(dst_full_sync_en ? "dst_full_sync_en=true (SyncFull)" : "dst_full_sync_en=false (SyncHalf)");
+        unit_tests::compute::transpose::TransposeConfig test_config = {
+            .short_init = false,
+            .transpose_dest = false,
+            .single_tile_size = constants::TILE_HW * sizeof(std::uint32_t),
+            .shape = {1, 1, 64, 64},
+            .transpose_type = unit_tests::compute::transpose::TransposeType::WH,
+            .data_format = tt::DataFormat::Int32,
+            .dst_full_sync_en = dst_full_sync_en,
+            .unpack_to_dest = true,
+            .reconfig_srca = true,
         };
         unit_tests::compute::transpose::run_single_core_transpose(this->device(), test_config);
     }
