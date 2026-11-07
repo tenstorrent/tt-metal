@@ -16,21 +16,20 @@ work (16x for gemma-4-26B-A4B: 128 experts, top-8). This path computes only the 
    scaled by the routing weights and summed with ``fast_reduce_nc``.
 
 All index metadata is built on device from the dense routing weights (compare, cumsum for the in-expert rank,
-stable sort for the dispatch ids, topk + gather for the combine ids). The only host interaction is one scalar
-readback of the busiest expert's token count that sizes the capacity ``C`` of the expert-major buffer
-(``GEMMA4_MOE_ROUTED_CAPACITY`` unset). It is skipped, and the path has no host round trip (so it can be traced),
-when a capacity is given:
+stable sort for the dispatch ids, topk + gather for the combine ids). The capacity ``C`` of the expert-major buffer
+is static (``RoutedPrefillConfig.capacity``):
 
-* ``GEMMA4_MOE_ROUTED_CAPACITY=full``: ``C`` is the chunk length (exact for any routing, no readback);
-* ``GEMMA4_MOE_ROUTED_CAPACITY=<n>``: ``C`` is ``n`` rows (rounded up to a tile). Tokens routed to an expert beyond
-  its first ``C`` are dropped (their routing weight is zeroed), as with a capacity factor.
+* ``"full"`` (default): ``C`` is the chunk length, exact for any routing, no host interaction, traceable;
+* ``"exact"``: eager runs only, one scalar host readback of the busiest expert's token count sizes ``C``;
+* an int: ``C`` is that many rows (rounded up to a tile); tokens routed to an expert beyond its first ``C`` are
+  dropped (their routing weight is zeroed), as with a capacity factor.
 
-Environment knobs: ``GEMMA4_MOE_ROUTED_PREFILL`` (default ``1``; ``0`` keeps the all-experts sparse_matmul path),
-``GEMMA4_MOE_ROUTED_MIN_TOKENS`` (default 128: shorter calls, such as the decode frame, keep sparse_matmul),
-``GEMMA4_MOE_ROUTED_CHUNK`` (default 4096 tokens per chunk, bounds the expert-major buffers).
+``GEMMA4_MOE_ROUTED_PREFILL=0`` is the one environment override: it keeps the all-experts sparse_matmul path.
 """
 
 import os
+from dataclasses import dataclass
+from typing import Optional, Union
 
 import ttnn
 
@@ -39,18 +38,34 @@ from .prefill import apply_geglu_fused
 TILE_SIZE = 32
 
 
-def routed_prefill_enabled(seq_len, override=None):
-    """True when a prefill call of ``seq_len`` rows takes the routed path (``override`` beats the environment)."""
-    if override is not None:
-        return bool(override)
-    if os.environ.get("GEMMA4_MOE_ROUTED_PREFILL", "1") != "1":
-        return False
-    return seq_len >= int(os.environ.get("GEMMA4_MOE_ROUTED_MIN_TOKENS", "128"))
+@dataclass(frozen=True)
+class RoutedPrefillConfig:
+    """Routed prefill settings. ``enabled=None`` follows ``GEMMA4_MOE_ROUTED_PREFILL`` (default on)."""
+
+    enabled: Optional[bool] = None
+    min_tokens: int = 128  # shorter calls (the decode frame) keep sparse_matmul
+    chunk_size: int = 4096  # tokens per chunk, bounds the expert-major buffers
+    capacity: Union[str, int] = "full"  # "full", "exact" (eager readback) or rows per expert
+
+    def is_enabled(self, seq_len):
+        enabled = self.enabled
+        if enabled is None:
+            enabled = os.environ.get("GEMMA4_MOE_ROUTED_PREFILL", "1") == "1"
+        return bool(enabled) and seq_len >= self.min_tokens
 
 
-def routed_chunk_size():
-    chunk = int(os.environ.get("GEMMA4_MOE_ROUTED_CHUNK", "4096"))
-    return max(TILE_SIZE, chunk // TILE_SIZE * TILE_SIZE)
+def resolve_routed_config(routed_prefill):
+    """None -> defaults, bool -> enabled flag (any length), RoutedPrefillConfig -> itself."""
+    if isinstance(routed_prefill, RoutedPrefillConfig):
+        return routed_prefill
+    if routed_prefill is None:
+        return RoutedPrefillConfig()
+    return RoutedPrefillConfig(enabled=bool(routed_prefill), min_tokens=TILE_SIZE if routed_prefill else 128)
+
+
+def routed_prefill_enabled(seq_len, routed_prefill=None):
+    """True when a prefill call of ``seq_len`` rows takes the routed path."""
+    return resolve_routed_config(routed_prefill).is_enabled(seq_len)
 
 
 def _round_up(n, m=TILE_SIZE):
@@ -66,17 +81,16 @@ def _host_max(tensor, mesh_device):
     return int(host.float().max().item())
 
 
-def _capacity(chunk_len, counts_max_fn):
+def _capacity(chunk_len, capacity, counts_max_fn):
     """Rows per expert in the expert-major buffer for a chunk of ``chunk_len`` tokens."""
-    setting = os.environ.get("GEMMA4_MOE_ROUTED_CAPACITY", "").strip().lower()
-    if setting == "full":
+    if capacity == "full":
         return chunk_len
-    if setting:
-        return min(chunk_len, _round_up(max(1, int(setting))))
-    return min(chunk_len, _round_up(max(1, counts_max_fn())))
+    if capacity == "exact":
+        return min(chunk_len, _round_up(max(1, counts_max_fn())))
+    return min(chunk_len, _round_up(max(1, int(capacity))))
 
 
-def build_routing_metadata(local_routing, num_local, top_k):
+def build_routing_metadata(local_routing, num_local, top_k, capacity="full"):
     """Index tensors of the routed path, all computed on device.
 
     ``local_routing`` [1, 1, n, E_loc] dense (bfloat16, TILE) routing weights of this chip's experts (zero where the
@@ -100,7 +114,7 @@ def build_routing_metadata(local_routing, num_local, top_k):
     mask_f32.deallocate(True)
     rank = ttnn.subtract(csum, 1.0)  # position of a routed token inside its expert's list
 
-    capacity = _capacity(n, lambda: _host_max(ttnn.max(csum, dim=2, keepdim=True), local_routing.device()))
+    capacity = _capacity(n, capacity, lambda: _host_max(ttnn.max(csum, dim=2, keepdim=True), local_routing.device()))
     csum.deallocate(True)
 
     # dispatch: a stable descending sort of the mask puts every expert's routed tokens first, in token order
@@ -149,13 +163,13 @@ def build_routing_metadata(local_routing, num_local, top_k):
     }
 
 
-def _routed_chunk(hidden_states, local_routing, weights, config, compute_kernel_config):
+def _routed_chunk(hidden_states, local_routing, weights, config, compute_kernel_config, capacity):
     """One chunk: hidden [1,1,n,H], local routing [1,1,n,E_loc] -> [1,1,n,H] (this chip's partial sum)."""
     n = int(hidden_states.shape[2])
     hidden = config.hidden_size
     num_local = weights.num_local_experts
     intermediate = weights.intermediate_size_per_device
-    meta = build_routing_metadata(local_routing, num_local, config.top_k)
+    meta = build_routing_metadata(local_routing, num_local, config.top_k, capacity)
     cap, kl = meta["capacity"], meta["kl"]
 
     x_rm = ttnn.reshape(ttnn.to_layout(hidden_states, ttnn.ROW_MAJOR_LAYOUT), (n, hidden))
@@ -198,7 +212,7 @@ def _routed_chunk(hidden_states, local_routing, weights, config, compute_kernel_
     return ttnn.reshape(out, (1, 1, n, hidden))
 
 
-def routed_prefill_forward(hidden_states, local_routing, weights, config):
+def routed_prefill_forward(hidden_states, local_routing, weights, config, routed_prefill=None):
     """Routed expert forward for a prefill call: hidden [1,1,S,H], this chip's routing [1,1,S,E_loc] ->
     [1,1,S,H] partial sum over this chip's experts (the caller combines across chips)."""
     seq_len = int(hidden_states.shape[2])
@@ -210,14 +224,16 @@ def routed_prefill_forward(hidden_states, local_routing, weights, config):
         fp32_dest_acc_en=False,
         packer_l1_acc=False,
     )
-    chunk = routed_chunk_size()
+    routed = resolve_routed_config(routed_prefill)
+    chunk = max(TILE_SIZE, routed.chunk_size // TILE_SIZE * TILE_SIZE)
+    capacity = routed.capacity
     if seq_len <= chunk:
-        return _routed_chunk(hidden_states, local_routing, weights, config, compute_kernel_config)
+        return _routed_chunk(hidden_states, local_routing, weights, config, compute_kernel_config, capacity)
     hidden_chunks = ttnn.split(hidden_states, chunk, dim=2)
     routing_chunks = ttnn.split(local_routing, chunk, dim=2)
     results = []
     for h_chunk, r_chunk in zip(hidden_chunks, routing_chunks):
-        results.append(_routed_chunk(h_chunk, r_chunk, weights, config, compute_kernel_config))
+        results.append(_routed_chunk(h_chunk, r_chunk, weights, config, compute_kernel_config, capacity))
         h_chunk.deallocate(True)
         r_chunk.deallocate(True)
     out = ttnn.concat(results, dim=2)
