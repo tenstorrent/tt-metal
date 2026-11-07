@@ -138,6 +138,20 @@ Tensor repeat_interleave_native(
         return ttnn::repeat(input_a, repetition_vector, mem_config);
     }
 
+    if (normalized_dim == input_rank - 1) {
+        ttnn::Tensor transpose_input = input_a;
+        bool typecast = input_a.dtype() == DataType::UINT8;
+        if (typecast) {
+            transpose_input = ttnn::typecast(transpose_input, DataType::BFLOAT16, mem_config);
+        }
+        auto transposed_input = ttnn::transpose(transpose_input, -1, -2, mem_config);
+        // Recurse into the native implementation, not the public entry point: the latter re-enters
+        // the routing gate, which would let this inner call dispatch to codegen.
+        auto repeated_input = repeat_interleave_native(transposed_input, repeat, -2, mem_config);
+        auto result = ttnn::transpose(repeated_input, -1, -2, mem_config);
+        return typecast ? ttnn::typecast(result, input_a.dtype(), mem_config) : result;
+    }
+
     // This op is composed of unsqueeze -> repeat -> reshape, which are run in ROW_MAJOR layout below so that
     // the replicated dimension is not subject to tile (32x32) padding. BFLOAT8_B/BFLOAT4_B/UINT8 cannot be laid out
     // in ROW_MAJOR (block-float formats are TILE-only; UINT8 reshape is unsupported), so they are typecast up to
