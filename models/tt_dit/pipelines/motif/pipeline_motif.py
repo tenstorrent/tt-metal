@@ -285,11 +285,14 @@ class MotifPipeline(PipelineAPIMixin):
             context = early_context if t >= negative_strategy_switch_time else late_context
             pooled = early_pooled if t >= negative_strategy_switch_time else late_pooled
 
+            # The reference uses integer timesteps: (t * 1000).round() in float32.
+            rounded_t = torch.tensor(t, dtype=torch.float32).mul(1000).round().item()
+
             velocity_preds = []
             for idx, tracer in enumerate(self._tracers):
                 timestep = ttnn.full(
                     [1, 1],
-                    fill_value=t * 1000,
+                    fill_value=rounded_t,
                     layout=ttnn.TILE_LAYOUT,
                     dtype=ttnn.float32,
                     device=self._devices[idx],
