@@ -31,6 +31,7 @@ in [doc/tp8_dp4_plan.md](doc/tp8_dp4_plan.md).
 | `tt/verify_sampler.py`, `reference/sample_verify.py` | Speculative acceptance on device (the plugin's `fused_sample`): the verify's accept walk on the device sampler's candidates (`kernels/sample_verify.cpp`; greedy only, `kernels/greedy_verify.cpp`, past the sampler's users), and its host layouts and integer mirror |
 | `tt/spec_inputs.py`, `tt/spec_chain.py`, `reference/spec_inputs.py`, `reference/spec_chain.py` | A verify's and a draft's packed inputs, derived on device; the MTP or DFlash draft chained behind the verify and its acceptance (`kernels/spec_chain.cpp`), with one result page per pass; their torch / integer mirrors |
 | `tt/generator_vllm.py` | `MiMoV2ForCausalLM`, the vllm-tt-plugin model class: DP=4 as in-process lanes, vLLM-owned hybrid KV (1 global + 5 SWA KV cache groups). Launch and results in [doc/vllm_integration/README.md](doc/vllm_integration/README.md) |
+| `tt/multimodal.py`, `reference/make_golden_mm.py` | Multimodal input (doc/multimodal_plan.md): the plugin's items, the encoder backend interface (a temporary HF host backend until the vision / audio workstreams land), the item embedding cache and the scatter into a prefill chunk's rows, which `TtMiMoModel.prefill_enqueue(embeds=)` merges on device; `MiMoV2OmniForCausalLM` in `tt/generator_vllm.py` serves it (`TT_MODEL_CLASS_OVERRIDES=TTMiMoV2OmniForCausalLM=models.experimental.mimo_v2_6_flash.tt.generator_vllm:MiMoV2OmniForCausalLM`); the multimodal golden |
 | `tests/` | TP=8 x DP=4 tests on the 4x8 mesh; `tests/perf/` perf scripts and tt-kernel-agent check / bench commands. Results in [doc/tp8_dp4_plan.md](doc/tp8_dp4_plan.md) |
 
 ## Running
@@ -51,6 +52,10 @@ pytest models/experimental/mimo_v2_6_flash/tests/test_model_tp8_dp4.py          
 pytest models/experimental/mimo_v2_6_flash/tests/test_model_chunked_tp8_dp4.py    # 48 layers: chunked, prefix hit
 pytest models/experimental/mimo_v2_6_flash/tests/test_model_traced_tp8_dp4.py     # traced decode, device greedy loop
 pytest models/experimental/mimo_v2_6_flash/tests/test_dflash_tp8.py               # DFlash drafter vs the fp32 reference
+pytest models/experimental/mimo_v2_6_flash/tests/test_multimodal_host.py          # multimodal items, cache, scatter, host only
+pytest models/experimental/mimo_v2_6_flash/tests/test_prefill_embeds_tp8.py       # prefill from embeddings == from tokens
+python -m models.experimental.mimo_v2_6_flash.reference.make_golden_mm --audio clip.wav --out golden_mm_48l.pt
+MIMO_MM_GOLDEN=golden_mm_48l.pt pytest models/experimental/mimo_v2_6_flash/tests/test_model_mm_tp8.py  # image / audio
 python models/experimental/mimo_v2_6_flash/tests/perf/decode_bandwidth.py --steps 32 --repeats 5
 python models/experimental/mimo_v2_6_flash/tests/perf/prefill_time.py             # 4K prompt, 32K in 4K chunks, one row
 ```
