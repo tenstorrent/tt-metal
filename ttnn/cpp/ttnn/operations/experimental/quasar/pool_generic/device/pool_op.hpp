@@ -33,7 +33,6 @@ struct Pool2D {
         bool count_include_pad_{};
         std::optional<int32_t> divisor_override_;
         bool return_indices_{};
-        uint32_t memory_used{};
         bool config_tensor_in_dram{};
     };
 
@@ -78,6 +77,5 @@ std::vector<ttnn::Tensor> pool2d(
     bool count_include_pad,
     std::optional<int32_t> divisor_override,
     bool return_indices,
-    uint32_t memory_used,
     bool config_tensor_in_dram);
 }  // namespace ttnn::prim::qsr

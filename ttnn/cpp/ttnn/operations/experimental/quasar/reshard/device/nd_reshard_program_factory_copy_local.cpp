@@ -111,6 +111,7 @@ ttnn::device_operation::ProgramArtifacts NdReshardCopyLocalShardFactory<local_is
         {"src_width", source_width},
         {"dst_width", destination_width},
         {"transfer_size", base_page_size},
+        {"page_to_page", static_cast<uint32_t>(input.layout() == Layout::TILE)},
     };
 
     const std::filesystem::path kernel_source(
