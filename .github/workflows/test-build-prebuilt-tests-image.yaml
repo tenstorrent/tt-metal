@@ -46,6 +46,8 @@ jobs:
       # The ci-test image this bakes onto already stages SFPI, same as the gate.
       use-system-sfpi: true
       checkout-filter: tree:0
+      # bake-smoke-ttml installs tt-ml-validation, which is only packaged when tt-train is built
+      skip-tt-train: false
 
   bake:
     name: "Bake packages into the prebuilt tests image"
@@ -77,6 +79,23 @@ jobs:
       dockerfile: dockerfile/Dockerfile.prebuilt-tests-packages
       build-args: |
         PRODUCT=tt-nn
+        PROFILE=smoke
+
+  bake-smoke-ttml:
+    name: "Bake smoke / tt-ml"
+    needs: build
+    uses: ./.github/workflows/build-prebuilt-tests-image.yaml
+    permissions:
+      contents: read
+      packages: write
+      actions: read
+    secrets: inherit
+    with:
+      artifact-name: ${{ needs.build.outputs.packages-artifact-name }}
+      base-image: ${{ needs.build.outputs.ci-test-docker-image }}
+      dockerfile: dockerfile/Dockerfile.prebuilt-tests-packages
+      build-args: |
+        PRODUCT=tt-ml
         PROFILE=smoke
 
   bake-examples-runtime:
@@ -118,7 +137,7 @@ jobs:
   # no hardware, so only the smoke image needs a real test leg below.
   verify-payloads:
     name: "Check every image carries the right packages"
-    needs: [bake, bake-smoke-ttnn, bake-examples-runtime, bake-examples-ttnn]
+    needs: [bake, bake-smoke-ttnn, bake-smoke-ttml, bake-examples-runtime, bake-examples-ttnn]
     if: ${{ needs.bake.outputs.image != '' }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -135,6 +154,7 @@ jobs:
         env:
           SMOKE_METALIUM: ${{ needs.bake.outputs.image }}
           SMOKE_TTNN: ${{ needs.bake-smoke-ttnn.outputs.image }}
+          SMOKE_TTML: ${{ needs.bake-smoke-ttml.outputs.image }}
           EXAMPLES_METALIUM: ${{ needs.bake-examples-runtime.outputs.image }}
           EXAMPLES_TTNN: ${{ needs.bake-examples-ttnn.outputs.image }}
         run: |
@@ -153,6 +173,7 @@ jobs:
           }
           check "$SMOKE_METALIUM"    tt-metalium tt-metalium-validation
           check "$SMOKE_TTNN"        tt-metalium tt-nn tt-nn-validation
+          check "$SMOKE_TTML"        tt-metalium tt-nn tt-ml-validation
           check "$EXAMPLES_METALIUM" tt-metalium tt-metalium-dev tt-metalium-examples
           check "$EXAMPLES_TTNN"     tt-metalium tt-metalium-dev tt-nn tt-nn-dev tt-nn-examples
 
