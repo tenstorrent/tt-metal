@@ -24,7 +24,7 @@ namespace ckernel {
  *   gate_leaf(x) = x/(1+exp(-(1.5957691216057308*x+0.07135481627260025*x^3)))
  *   up_leaf(x) = x
  *
- * BF16 inputs, Blackhole only: within 0.521 ULP of the exact value in either DEST mode.
+ * BF16 inputs, Blackhole only: within 0.521 ULP of the exact value, in either DEST mode, on the inputs its test scores.
  *
  * The DST register buffer must be in acquired state via *acquire_dst* call. This call is blocking and is only
  * available on the compute engine.

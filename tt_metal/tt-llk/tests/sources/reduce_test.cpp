@@ -20,8 +20,8 @@ std::uint32_t math_sync_tile_dst_index = 0;
 
 static constexpr bool IS_SWAPPED_REDUCE_ROW = (REDUCE_DIM == ckernel::ReduceDim::REDUCE_ROW) && (POOL_TYPE != ckernel::PoolType::MAX);
 
-// Swapped 4-face REDUCE_ROW unpacks a whole tile with one UNPACR per operand; every other path posts one per face.
-// Must match full_tile in _llk_unpack_AB_reduce_mop_config_: the isolate-mode dvalid mocks are sized from it.
+// Swapped 4-face REDUCE_ROW posts one SrcA/SrcB handoff per tile; every other path posts one per data face.
+// Must match _llk_unpack_AB_reduce_mop_config_: the isolate-mode dvalid mocks are sized from it.
 inline std::uint32_t reduce_src_dvalids_per_tile(const ckernel::TensorShape& tensor_shape)
 {
     const std::uint32_t num_faces = tensor_shape.total_num_faces();
@@ -47,25 +47,48 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const int in0_face_c_dim               = params.in0_face_c_dim;
     const int num_faces_r_dim_A            = params.num_faces_r_dim_A;
     const int num_faces_c_dim_A            = params.num_faces_c_dim_A;
+    const int in1_face_r_dim               = params.in1_face_r_dim;
+    const int in1_face_c_dim               = params.in1_face_c_dim;
+    const int num_faces_r_dim_B            = params.num_faces_r_dim_B;
+    const int num_faces_c_dim_B            = params.num_faces_c_dim_B;
     const Operand& buffer_A                = params.buffer_A;
     const Operand& buffer_B                = params.buffer_B;
 #endif
     TEST_TENSOR_SHAPE(tensor_shape, in0_face_r_dim, in0_face_c_dim, num_faces_r_dim_A, num_faces_c_dim_A);
+    TEST_TENSOR_SHAPE(scaler_shape, in1_face_r_dim, in1_face_c_dim, num_faces_r_dim_B, num_faces_c_dim_B);
 
     {
         START_PERF_MEASURE("INIT")
-        _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
-            formats.unpack_A_src,
-            formats.unpack_B_src,
-            formats.unpack_A_dst,
-            formats.unpack_B_dst,
-            tensor_shape.face_r_dim,
-            tensor_shape.face_r_dim,
-            tensor_shape.total_num_faces(),
-            tensor_shape.total_num_faces(),
-            TILE_SIZE_UNPACK_A,
-            TILE_SIZE_UNPACK_B);
-        _llk_unpack_AB_reduce_init_<POOL_TYPE, REDUCE_DIM>(tensor_shape);
+        if constexpr (IS_SWAPPED_REDUCE_ROW)
+        {
+            // Unpacker 0 reads the scaler and unpacker 1 the data; configure each for its operand.
+            _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
+                formats.unpack_B_src,
+                formats.unpack_A_src,
+                formats.unpack_B_dst,
+                formats.unpack_A_dst,
+                scaler_shape.face_r_dim,
+                tensor_shape.face_r_dim,
+                scaler_shape.total_num_faces(),
+                tensor_shape.total_num_faces(),
+                TILE_SIZE_UNPACK_B,
+                TILE_SIZE_UNPACK_A);
+        }
+        else
+        {
+            _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
+                formats.unpack_A_src,
+                formats.unpack_B_src,
+                formats.unpack_A_dst,
+                formats.unpack_B_dst,
+                tensor_shape.face_r_dim,
+                scaler_shape.face_r_dim,
+                tensor_shape.total_num_faces(),
+                scaler_shape.total_num_faces(),
+                TILE_SIZE_UNPACK_A,
+                TILE_SIZE_UNPACK_B);
+        }
+        _llk_unpack_AB_reduce_init_<POOL_TYPE, REDUCE_DIM>(tensor_shape, scaler_shape);
         PROFILER_SYNC();
     }
     {
@@ -75,7 +98,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
         {
-            _perf_unpack_loop_set_valid<true /*set_a*/, true /*set_b*/>(LOOP_FACTOR * TILE_CNT * reduce_src_dvalids_per_tile(tensor_shape));
+            _perf_unpack_stream_set_valid<true /*set_a*/, true /*set_b*/, PERF_RUN_TYPE>(LOOP_FACTOR * TILE_CNT * reduce_src_dvalids_per_tile(tensor_shape));
         }
         else
         {
@@ -130,9 +153,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
         }
-        else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
+        else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE)
         {
-            _perf_math_loop_clear_valid<true /*clear_a*/, true /*clear_b*/>(LOOP_FACTOR * TILE_CNT * reduce_src_dvalids_per_tile(tensor_shape));
+            _perf_math_stream_clear_valid<true /*clear_a*/, true /*clear_b*/, PERF_RUN_TYPE>(
+                LOOP_FACTOR * TILE_CNT * reduce_src_dvalids_per_tile(tensor_shape));
         }
         else
         {
@@ -216,7 +240,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t num_faces = tensor_shape.total_num_faces();
     const bool partial_face       = tensor_shape.face_r_dim < FACE_R_DIM;
     const bool narrow_tile        = tensor_shape.num_faces_c_dim == 1;
-    constexpr bool sync_with_math = PERF_RUN_TYPE != PerfRunType::PACK_ISOLATE && PERF_RUN_TYPE != PerfRunType::L1_CONGESTION;
+    constexpr bool sync_with_math = PERF_RUN_TYPE != PerfRunType::PACK_ISOLATE;
 
     {
         START_PERF_MEASURE("INIT")

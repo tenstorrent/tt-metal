@@ -366,23 +366,6 @@ def _stats_sfpu_isolate(data: ProfilerData) -> pd.DataFrame:
     return _stats_thread(PerfRunType.SFPU_ISOLATE.name, data.sfpu().raw())
 
 
-def _stats_l1_congestion(data: ProfilerData) -> pd.DataFrame:
-    unpack_stats = _stats_thread(
-        f"{PerfRunType.L1_CONGESTION.name}[UNPACK]", data.unpack().raw()
-    )
-    pack_stats = _stats_thread(
-        f"{PerfRunType.L1_CONGESTION.name}[PACK]", data.pack().raw()
-    )
-
-    frames = [df for df in (unpack_stats, pack_stats) if not df.empty]
-    if not frames:
-        return pd.DataFrame()
-    result = frames[0]
-    for df in frames[1:]:
-        result = pd.merge(result, df, on=MARKER, how="outer", validate="1:1")
-    return result
-
-
 class EntryType(Enum):
     TIMESTAMP = 0b1000
     TIMESTAMP_DATA = 0b1001
@@ -416,7 +399,6 @@ class Profiler:
         PerfRunType.MATH_ISOLATE: _stats_math_isolate,
         PerfRunType.PACK_ISOLATE: _stats_pack_isolate,
         PerfRunType.SFPU_ISOLATE: _stats_sfpu_isolate,
-        PerfRunType.L1_CONGESTION: _stats_l1_congestion,
     }
     SUPPORTED_RUNS = STATS_FUNCTION.keys()
 
