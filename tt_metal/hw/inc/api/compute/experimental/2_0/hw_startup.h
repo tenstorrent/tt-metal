@@ -44,8 +44,9 @@ namespace ckernel {
  * from the operand descriptors (NTTPs) -- no CB ids, no runtime L1-format inference. Call exactly once at the
  * top of the kernel, before any op-specific init. src_order selects how (in0, in1) map onto SrcA/SrcB
  * (SrcOrder::Reverse for matmul: in0 -> SrcB, in1 -> SrcA). The operands' runtime l1_address is unused here.
- * The two source-register formats are reconciled to a common exponent-width family; a mixed-width pairing
- * that is not Float32-rebiasable is a hard compile error.
+ * The two source-register formats are reconciled to a common exponent-width family: Float32, UInt32, UInt16,
+ * UInt8 and Int32 adopt the other operand's family (two of them default to the 8-bit "b" family); any other
+ * mixed-width pairing is a hard compile error.
  *
  * | Param Type | Name             | Description                                      | Type                   | Valid Range | Required |
  * |------------|------------------|--------------------------------------------------|------------------------|-------------|----------|
