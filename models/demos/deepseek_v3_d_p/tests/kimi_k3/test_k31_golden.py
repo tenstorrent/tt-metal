@@ -1,13 +1,20 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""The K3.1 golden is K3's golden format, and it is the trace it was converted from. Host only.
+"""The K3.1 golden is K3's golden format and K3's contract, and it is the trace it was converted from. Host only.
 
 `convert_golden.py` rewrites Miguel's chunked vLLM trace into the per-stream layout `golden.GoldenTrace`
 reads. Pinned here: the conversion round-trips through both readers that consume a golden — K3's
 `GoldenTrace` (the *_matches_golden tests) and the runner producer's KV loaders (the PCC gate) — and the
-converted K3.1 golden is the source trace row for row on the streams those gates score (all 24 DSA
-layers' KV, the decoder output of layers 23 and 92), and enters at the K3.1 checkpoint's own token embedding.
+converted K3.1 golden is the source trace row for row where it copies a stream (all 24 DSA layers' KV, which
+the runner gate scores; the FFN output of layers 23 and 92, which no gate scores, pinned as the input of the
+rebuild), and enters at the K3.1 checkpoint's own token embedding.
+
+And `decoder_output_layer_i` means what it means in K3's golden (`test_golden_contract.py`): the AttnRes running
+sum after layer i, restarted at each seal, which is what the stack's layer tap returns. The K3.1 tracer records
+the layer's FFN output under that key; the converter rebuilds the running sum from it and `attn_output`. The
+rebuild is checked against a stream the tracer wrote independently: the sealed block snapshots in
+`attn_res/residual_layer_{12k}`, whose slot k is the running sum at the end of block k-1.
 """
 
 import json
@@ -18,10 +25,12 @@ import pytest
 import torch
 from safetensors.torch import save_file
 
+from models.common.utility_functions import comp_pcc
 from models.demos.common.prefill.runners.runner_utils import load_trace_golden_span, load_trace_token_ids
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config
 from models.demos.deepseek_v3_d_p.tests.kimi_k3.convert_golden import LAYOUT, SOURCE_LAYOUT, convert
 from models.demos.deepseek_v3_d_p.tests.kimi_k3.golden import TRACE_K31, GoldenTrace, embedding_rows, resolve_trace
+from models.demos.deepseek_v3_d_p.tests.kimi_k3.test_golden_contract import GOLDEN_PCC, ROWS
 from models.demos.deepseek_v3_d_p.tt.runners.adapters.kimi_k3_1 import KimiK31Adapter
 from models.demos.deepseek_v3_d_p.tt.runners.prefill_kv_validation import (
     _load_golden_kv_post,
@@ -52,26 +61,34 @@ def _write_chunked(root: Path, streams: dict[str, tuple[str, torch.Tensor]], sha
 
 
 def test_converter_round_trips_through_both_golden_readers(tmp_path, expect_error):
-    """Every stream lands where `GoldenTrace` and the producer look for it, bit for bit, shards joined in order."""
-    hidden = torch.randn(10, 8).to(torch.bfloat16)
+    """Every stream lands where `GoldenTrace` and the producer look for it, bit for bit, shards joined in order;
+    `decoder_output` becomes the running sum of `attn_output` and the FFN output, restarted at the seal (layer 12),
+    and the FFN output is kept as `ffn_output`."""
+    layers = KimiK3Config.ATTN_RES_BLOCK_SIZE + 2
+    ffn = [torch.randn(10, 8).to(torch.bfloat16) for _ in range(layers)]
+    attn = [torch.randn(10, 8).to(torch.bfloat16) for _ in range(layers)]
     kv = torch.randn(10, 6).to(torch.bfloat16)
     topk = torch.randint(-1, 10, (3, 4), dtype=torch.int32)
     src, dst = tmp_path / "chunked", tmp_path / "golden"
-    _write_chunked(
-        src,
-        {
-            "decoder_output_layer_0": ("decoder_io/decoder_output_layer_0", hidden),
-            "kv_post_transform_layer_3": ("kv_cache/layer_3", kv),
-            "topk_indices": ("topk/indices", topk),
-        },
-        shard_rows=4,
-    )
+    streams = {
+        "kv_post_transform_layer_3": ("kv_cache/layer_3", kv),
+        "topk_indices": ("topk/indices", topk),
+    }
+    for i in range(layers):
+        streams[f"decoder_output_layer_{i}"] = (f"decoder_io/decoder_output_layer_{i}", ffn[i])
+        streams[f"attn_output_layer_{i}"] = (f"attn_output/attn_output_layer_{i}", attn[i])
+    _write_chunked(src, streams, shard_rows=4)
     convert(src, dst, log=lambda _: None)
 
     assert {path.stat().st_mode & 0o777 for path in dst.rglob("*.safetensors")} == {0o664}
     trace = GoldenTrace(dst)
     assert trace.metadata["layout"] == LAYOUT and trace.metadata["converted_from"]["path"] == str(src)
-    assert torch.equal(trace.decoder_output(0).to(torch.bfloat16), hidden)
+    for i in range(layers):
+        running = running if i % KimiK3Config.ATTN_RES_BLOCK_SIZE else torch.zeros(10, 8, dtype=torch.bfloat16)
+        running = (running + attn[i]) + ffn[i]  # bf16, attention then FFN
+        assert torch.equal(trace.decoder_output(i).to(torch.bfloat16), running), i
+        assert torch.equal(trace.rows("ffn_output", f"ffn_output_layer_{i}").to(torch.bfloat16), ffn[i]), i
+        assert torch.equal(trace.rows("attn_output", f"attn_output_layer_{i}").to(torch.bfloat16), attn[i]), i
     assert torch.equal(trace.kv_cache(3).to(torch.bfloat16), kv)
     assert torch.equal(trace.rows("topk", "topk_indices").to(torch.int32), topk)
     assert kvpe_golden_present(dst, 3) and not kvpe_golden_present(dst, 7)
@@ -79,6 +96,18 @@ def test_converter_round_trips_through_both_golden_readers(tmp_path, expect_erro
 
     with expect_error(FileExistsError, "already holds a trace"):
         convert(src, dst, log=lambda _: None)
+    # `layers` keeps the first N layers' streams and every stream that is not per layer.
+    convert(src, tmp_path / "golden_l12", log=lambda _: None, layers=KimiK3Config.ATTN_RES_BLOCK_SIZE)
+    short = GoldenTrace(tmp_path / "golden_l12")
+    assert short.metadata["converted_from"]["layers"] == KimiK3Config.ATTN_RES_BLOCK_SIZE
+    assert short.has("decoder_io", "decoder_output_layer_11") and not short.has("decoder_io", "decoder_output_layer_12")
+    assert torch.equal(short.decoder_output(11), trace.decoder_output(11)) and short.has("topk", "topk_indices")
+    assert short.has_kv_cache(3)
+    # A layer without its attention output has no running sum: refused, not guessed.
+    del streams["attn_output_layer_5"]
+    _write_chunked(tmp_path / "chunked2", streams, shard_rows=4)
+    with expect_error(ValueError, "no running sum"):
+        convert(tmp_path / "chunked2", tmp_path / "golden2", log=lambda _: None)
 
 
 @pytest.fixture(scope="module")
@@ -101,11 +130,13 @@ def test_k31_golden_enters_at_the_k31_token_embedding(k31_trace):
 
 
 def test_k31_golden_serves_the_runner_gate(k31_trace):
-    """What the runner gate and the depth tests score is in the golden, as the source trace's prompt rows.
+    """What the runner gate scores is in the golden, as the source trace's prompt rows; so is the FFN output the
+    running sum is rebuilt from.
 
-    The producer compares the prompt span (`load_trace_golden_span`) of every DSA layer's kvpe; the depth
-    tests read the last layer's decoder output, 23 for the 24-layer leg and 92 for the full model. Both
-    through the readers those consumers use.
+    The producer compares the prompt span (`load_trace_golden_span`) of every DSA layer's kvpe, read through the
+    producer's own loaders. `ffn_output` of layers 23 and 92 (the tracer's `decoder_output`) is pinned to the
+    source; no gate scores it. The `decoder_output` the depth tests score is the rebuilt running sum, pinned by
+    `test_k31_block_ends_match_the_sealed_snapshots`.
     """
     trace_dir = k31_trace.path
     prompt = k31_trace.metadata["n_prompt_tokens"]
@@ -119,6 +150,36 @@ def test_k31_golden_serves_the_runner_gate(k31_trace):
         assert torch.equal(golden, _load_sharded_rows(source / "kv_cache" / f"layer_{layer}", key, 0, prompt)), layer
 
     for layer in (23, KimiK3Config.NUM_LAYERS - 1):
-        key = f"decoder_output_layer_{layer}"
-        golden = k31_trace.decoder_output(layer, 0, prompt)
+        golden = k31_trace.rows("ffn_output", f"ffn_output_layer_{layer}", 0, prompt)
+        key = f"decoder_output_layer_{layer}"  # the tracer's name for the FFN output
         assert torch.equal(golden, _load_sharded_rows(source / "decoder_io" / key, key, 0, prompt)), layer
+
+
+def test_k31_layer0_output_is_a_post_seal_running_sum(k31_trace):
+    """K3's contract (2): `decoder_output_layer_0 == attn + ffn`, with no embedding term (layer 0 seals). The
+    control, a plain residual carrying the embedding, must fail."""
+    golden = k31_trace.decoder_output(0, 0, ROWS)
+    attn = k31_trace.rows("attn_output", "attn_output_layer_0", 0, ROWS)
+    ffn = k31_trace.rows("ffn_output", "ffn_output_layer_0", 0, ROWS)
+    passed, message = comp_pcc(golden, attn + ffn, GOLDEN_PCC)
+    assert passed, f"decoder_output_layer_0 != attn_output + ffn_output: {message}"
+    plain, plain_message = comp_pcc(golden, k31_trace.decoder_input(0, ROWS) + attn + ffn, 0.99)
+    assert not plain, f"decoder_output_layer_0 also matches a plain residual with the embedding: {plain_message}"
+
+
+def test_k31_block_ends_match_the_sealed_snapshots(k31_trace):
+    """The rebuilt running sum at the end of each block is the snapshot the tracer sealed for it, written
+    independently: slot k of `residual_layer_{12k}` (slot 0 is the embedding). Every block that has a successor.
+    Bit-identical, a stronger form of K3's GOLDEN_PCC: both sides are vLLM's bf16 stream, so equality is
+    reachable, and an fp32 rebuild misses it (block 6 reaches only 0.999988)."""
+    block = KimiK3Config.ATTN_RES_BLOCK_SIZE
+    for k in range(1, -(-KimiK3Config.NUM_LAYERS // block)):
+        sealed = k31_trace.rows("attn_res", f"residual_layer_{k * block}", 0, ROWS)[:, k]
+        rebuilt = k31_trace.decoder_output(k * block - 1, 0, ROWS)
+        assert torch.equal(sealed, rebuilt), (
+            f"decoder_output_layer_{k * block - 1} != sealed snapshot {k} of residual_layer_{k * block}: "
+            f"{comp_pcc(sealed, rebuilt, GOLDEN_PCC)[1]}"
+        )
+        # Control: the tracer's own per-layer stream, the FFN output, is not the running sum.
+        ffn_pcc = comp_pcc(sealed, k31_trace.rows("ffn_output", f"ffn_output_layer_{k * block - 1}", 0, ROWS))[1]
+        assert ffn_pcc < 0.99, f"block {k}: the FFN output alone matches the sealed snapshot ({ffn_pcc})"
