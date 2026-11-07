@@ -259,6 +259,14 @@
         "runs/current-c8-larger-source-preparation/RESULT.json",
         "runs/current-c8-larger-source-preparation/RESULT.md"
       ]
+    },
+    {
+      "fact": "B32 default36896 IDs statically cover16x131K histories narrowly, but2048 chunked-prefill limits scheduled queries, not accumulated key length. Prior805MB transient allowance used short attention and does not validate current long-attention peak. No C16 probe allocated before80 distribution evidence.",
+      "evidence": [
+        "runs/gpqa-c16-b32-feasibility/RESULT.json",
+        "runs/gpqa-c16-b32-feasibility/RESULT.md",
+        "runs/gpqa-c16-b32-feasibility/transient-source-note.md"
+      ]
     }
   ],
   "suite_timings": [

@@ -50,3 +50,5 @@
 2026-11-07T04:36:57.816861+00:00 actual framed CI confirmation accepted after rereading inputs; operator9 unchanged, fullcap and dry remain separate.
 2026-11-07T04:59:32.389911+00:00 current-c8 larger-source preparation: reread inputs/run_contract, no steering; operator9 unchanged. Prepare only; no publication or dispatch admission.
 2026-11-07T05:06:34.255836+00:00 current-c8-larger-source-preparation boundary: reread inputs.json/run_contract.json; no steering.md. No new instruction. Accept held source-only160/198 candidates; no dispatch or rung admission.
+2026-11-07T05:12:11.106079+00:00 C16/B32 host feasibility admitted: inputs/run_contract reread unchanged; no steering.md; no device/source/dispatch admission.
+2026-11-07T05:15:47.862478+00:00 C16/B32 feasibility boundary: inputs/run_contract unchanged, steering.md absent. Record static fit and STOP current probe allocation; no device or serving changes.

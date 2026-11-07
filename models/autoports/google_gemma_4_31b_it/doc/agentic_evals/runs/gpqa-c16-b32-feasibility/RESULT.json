@@ -1,0 +1,94 @@
+{
+  "status": "completed_host_feasibility",
+  "decision": "stop_current_probe_allocation",
+  "static_fit": "C16 at 131072 tokens per history fits the B32 default shared pool on conservative aggregate arithmetic, pending actual residency and transient validation",
+  "runtime_publication": "f57978407eaacf09587f5793b8ae46ca7af839ea",
+  "changes": [],
+  "device_hours": 0,
+  "host_box_hours": 0.3,
+  "planned_clients": 16,
+  "supported_batch": 32,
+  "max_num_seqs": 32,
+  "pool_ids": 36896,
+  "pool_sizing": {
+    "synthetic_tokens": 917504,
+    "worker_output_tokens": 1024,
+    "worker_sliding_tokens": 262144,
+    "worker_divisor": 32
+  },
+  "demand": {
+    "context_each": 131072,
+    "global_ids": 32768,
+    "sliding_aligned_ids": 2640,
+    "aggregate_inflight_global_ids": 64,
+    "aggregate_inflight_sliding_ids": 640,
+    "extra_rounding_allowance_ids": 96,
+    "null_ids": 1,
+    "total_ids": 36209,
+    "remaining_ids": 687,
+    "at131200_total_ids": 36241,
+    "at131200_remaining_ids": 655,
+    "basis": "16*ceil(context/64) global;16*5*33 sliding (1024 window,32-token pages plus alignment);4096 aggregate async tokens conservatively add64global+640sliding IDs; six groups*16 extra rounding IDs plus shared null. Extra rounding deliberately conservative, not measured allocation. Aggregate inflight bound is not16 independent4096-token reservations.",
+    "reserved_output_growth_tokens_aggregate_at131200": 41920,
+    "apc_reserve_limit": "655 remaining IDs is only the residual live estimate; no guarantee all prior-turn sliding checkpoints/prefix hashes survive LRU. Cannot reserve another complete131K turn per agent."
+  },
+  "smallest_fitting_batch": {
+    "B16_ids": 18448,
+    "global_only_deficit": 14320,
+    "B32_reason": "B16 cannot hold global pages alone; B32 is the next supported batch. B8 override ignored outsideB8; no B16 override proposed."
+  },
+  "physical_memory": {
+    "kv_bytes_per_device": 25691422720,
+    "latest_prior_b32_prepared_bytes": 32321636864,
+    "usable_bytes_per_device": 34044513280,
+    "free_bytes_per_device": 1722876416,
+    "analytical_transient_allowance_bytes": 805306368,
+    "residual_after_analytical_allowance_bytes": 917570048,
+    "scope": "Prior stage10 B32 full-stack measurements, not new f579 long131K-prefill validation; transient allowance analytical. Earlier pool_plan snapshot free1796440576 predates default batched-prefill prepared ledger."
+  },
+  "performance_evidence": {
+    "prior_b32_short_context_idle_aggregate_output_tps": 985.554417,
+    "prior_b32_host_busy_aggregate_output_tps": 645.034448,
+    "short_context_only": true,
+    "b8_c8_five_round_capacity_client_seconds": 592.464129764121,
+    "b8_capacity_including_startup_hours": 0.2416716388888889,
+    "b8_c8_40_eval_hours": 2.5011817041318865,
+    "b8_c8_40_longest_chain_seconds": 6651.925640578,
+    "b8_c8_40_capped_tasks": 7,
+    "interpretation": "B32 short-context32-row delivery cannot forecast C16 long-context cadence. Padding16 active rows to32, doubled KV demand, host sampling/logging and long-context attention can erase concurrency benefit. Seven capped40 tasks do not establish demand for16 simultaneous long tails. Larger80 distribution remains unmeasured; C8/20 was slower and C8/40 faster, showing list dependence."
+  },
+  "no_run_reason": "Static fit is plausible but narrow, and no cheap cold simultaneous probe safely isolates16 resident131K histories: early streams grow during long prefill and can consume residual pages. A faithful primed probe costs approximately0.6h plus subsequent scored comparison, with no measured80 saturation evidence yet. Do not allocate it before normalC8/80 and frozen dry priority; wait for existing80 occupancy/tail evidence, not new hardware.",
+  "conditional_future_probe": {
+    "admitted": false,
+    "forecast_device_hours_guess": 0.6,
+    "proposed_box_hours": 0.85,
+    "forecast_basis": "About2*592s prior eight-history five-round prefill work, plus300s startup and~600s extra sequential-prefix/admission/cache uncertainty; rounded2160s. Not a fitted B32 performance prediction.",
+    "protocol": "Sixteen independent private synthetic token prefixes, sequentialC1 cold priming at131072 then immediate warmC16 native streams, supported B32/default36896 pool. Keep126976 output cap and14400request timeout, ignore_eos diagnostic only. Own HTTP cancellation after observed16-full-position proof and bounded cadence sample; fresh idle, drain and graceful owned server close. No active engine kill. If priming eviction, runaway growth, preemption or timeout occurs, fail rather than reduce limits or silently substitute prefixes.",
+    "confirmation": [
+      "Actual allocator36896/full60/f579/pinnedHF and no B8 pool override",
+      "All16 distinct prefixes; no shared-prefix capacity substitution",
+      "Contemporaneous running16 and complete phase16positions>=131072, final cache/resident demand and physical allocator reserve measured",
+      "Warm queried/cached deltas and retained fullblock ceiling; reuse>=0.9, zero preemptions",
+      "At least128 paired served decode boundaries at16active rows for host-wall cadence; no device-time claim",
+      "Native/physical token overlap verified and final retained phase pending0/no diagnostic loss; zero postwarmup captures",
+      "Fresh running0/waiting0 and owner closure after own HTTP cancellation"
+    ],
+    "acceptance": "Capacity/cadence only; C16 scored same-cohort comparison still required before release selection. Current frozenC8/80 and dry remain unchanged."
+  },
+  "release_saving_hours": null,
+  "credited_saving_hours": 0,
+  "missing_reasons": [
+    "No current-source C16/B32 long-context residency or cadence measurement.",
+    "No completed80 occupancy distribution or same-cohort C16 scored result; no defensible release-hour saving estimate."
+  ],
+  "evidence": [
+    "doc/vllm_integration/pool_plan.json",
+    "tt/kv_pool_budget.py:get_pool_token_budget",
+    "tt/generator_vllm.py:get_kv_cache_spec",
+    "doc/agentic_serving.json:ledger",
+    "bringup/artifacts/vllm-server-source-v0.31.0/vllm/v1/kv_cache_interface.py:SlidingWindowSpec.max_admission_blocks_per_request",
+    "doc/agentic_evals/runs/local-host-contention/RESULT.md",
+    "doc/agentic_evals/runs/gpqa-b8-expanded-pool/local-confirmation.json",
+    "doc/agentic_evals/runs/gpqa40-c8-saturation-comparison/audit.json"
+  ]
+}

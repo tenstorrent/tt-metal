@@ -1,0 +1,7 @@
+# Transient source clarification
+
+The coordinator's final clarification requested the exact stage10 transient basis. `doc/optimized_vllm/memory_comparison.json:transient_bound_review` records a **reduced** measured peak560,168,960 bytes, retained-logits bound130,023,424 bytes and extraction allowance22,708,224 bytes: combined712,900,608 bytes inside the805,306,368-byte budget. This is an analytical carry-forward, not a full60 peak measurement. Its shape basis explicitly assumes attention with at most128 keys per short row. It does not validate131K-key attention on B32.
+
+The2048 chunked-prefill scheduler limit bounds scheduled query-token volume per step; accumulated context/KV and attention key length can still be131K. Chunking therefore does not establish transient fit. Prior B8 expanded-pool boundary snapshots also have much greater physical slack and are not a substitute for B32 transient evidence.
+
+If separately admitted, sequential own-HTTP cancellation priming must record cache hits/queries and eviction evidence after each prefix, retaining distinct native histories without invented user followups. A final simultaneous warm16 snapshot must prove all16 resident positions, not merely that16 clients were launched. Full126976 output caps and14400-second request timeouts remain unchanged. The0.6-hour forecast is about2.48 times the old0.241672-hour B8 capacity/exactness allocation; no measured release saving offsets that cost yet. Current no-run recommendation remains unchanged.

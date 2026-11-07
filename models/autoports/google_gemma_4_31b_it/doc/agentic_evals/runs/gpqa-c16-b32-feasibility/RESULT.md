@@ -1,0 +1,11 @@
+# C16/B32 feasibility: static fit, no probe allocated
+
+Sixteen independent 131,072-token histories plausibly fit unchanged B32's default 36,896-ID shared pool. Conservative aggregate demand is 36,209 IDs: 32,768 global, 2,640 aligned sliding, 704 in-flight, 96 extra rounding and one null. Residual687 IDs shrinks to655 at131,200 positions. B16's18,448 IDs cannot fit even global pages, so B32 is the smallest supported candidate; no override or runtime change is proposed.
+
+Prior full-stack B32 preparation leaves1,722,876,416 bytes per device. Subtracting the analytical805,306,368-byte transient allowance leaves917,570,048 bytes, but neither figure validates current f579 long-prefill high-water usage. Pool IDs are shared across global/sliding groups, not independent per-group pools. Residual IDs are not a guaranteed APC reserve.
+
+Recommend **stop the current probe allocation**, retaining the static candidate for later evidence. Cold simultaneous131K requests can grow substantially while later prefills run, consuming the narrow reserve. A meaningful alternative sequentially primes16 distinct prefixes, then admits16 warm streams and measures actual simultaneous residency/cache reuse and128 served boundaries. Forecast0.6device hours (guess), proposed box0.85hours, not admitted. Keep full126976 output cap/14400request timeout and safely cancel only owned HTTP streams after evidence, followed by freshidle and drain. This is capacity/cadence evidence only, never score acceptance.
+
+Prior B32 short-context aggregate rates985.55idle/645.03busy tokens/s do not predict C16 long-context speed: active rows are padded to32, KV/cache pressure is larger, and host overhead matters. C8/40 already holds all seven capped tails within eight slots; the current80 tail population is unknown. C8 was slower on20 and faster on40. No defensible C16 release saving can yet be priced, and a further same-cohort scored comparison would still be needed. Existing C8/80 and frozen dry retain priority. Reconsider only if their occupancy/tail evidence supports useful extra admission.
+
+No device commands, source changes, dispatch, publication or central edits were made. Device cost0; saving unknown and credit0. RESULT.json contains arithmetic, proposed confirmation and source references.

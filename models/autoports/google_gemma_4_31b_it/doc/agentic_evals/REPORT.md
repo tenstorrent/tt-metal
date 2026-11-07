@@ -162,6 +162,7 @@ Device costs include the device job, not build/queue. Release savings are foreca
 | ci-log-download-timeout | 0.00000 / 0.00000 | 0.00000 | none/solved: Existing bounded observers recovered unchanged: successful 61MB/21MB snapshots in1.916680s/1.088183s, hashes/offsets verified. Retrieval incident resolved; transport cause unresolved and upstream coverage/fr… |
 | early-banked40-fallback-dry | 2.17935 / unknown | 0.00000 | running/pending: Accepted f579 CI exactness and frozen40 C8 source/image; early fallback dry dispatched with2 other runs active. No final cohort selection;80 upgrade requires new dry. |
 | current-c8-larger-source-preparation | 0.00000 / 0.00000 | 0.00000 | kept/solved: Held160/198 source candidates directly parent current80 TTI42dc; exact registered cohorts and prior validated trees;37 focused tests each and intended-file hooks passed. No publication, admission, device run… |
+| gpqa-c16-b32-feasibility | 0.00000 / 0.00000 | 0.00000 | none/open: Static C16/B32 demand36209/36896IDs fits narrowly; B16 global-only demand exceeds pool. Current long-context transient and cadence unmeasured. Conditional .6h probe plus scored validation has no defensible r… |
 
 Evidence is written once by each effort; this table summarizes the current coordinator disposition. Unmeasured savings remain unknown or receive zero planning credit.
 
