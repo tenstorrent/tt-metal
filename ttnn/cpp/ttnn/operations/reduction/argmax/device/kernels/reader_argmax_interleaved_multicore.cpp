@@ -261,6 +261,12 @@ void kernel_main() {
     // This dictates the page size in the output dfb
     constexpr auto inner_dim_units = get_arg(args::inner_dim_units);
 
+    // dst_page_size is rounded up to 32 B because it sizes the dst DFB entry, but an output page is only
+    // inner_dim_units indices and its slot in an L1 bank is aligned to 16 B. Writing dst_page_size bytes would spill
+    // into the next page slot, or into the next tensor for the last page of a full bank.
+    constexpr uint32_t dst_write_size = inner_dim_units * sizeof(uint32_t);
+    static_assert(dst_write_size <= dst_page_size, "An output page cannot be larger than the dst DFB entry.");
+
     // This is the number of elements in the input tensor along the reduction dim (W)
     constexpr auto red_dim_units = get_arg(args::red_dim_units);
 
@@ -490,7 +496,7 @@ void kernel_main() {
                         red_idx_size_per_core);
                 }
 
-                noc.async_write(dst_dfb, s_dst, dst_page_size, {.offset_bytes = 0}, {.page_id = k});
+                noc.async_write(dst_dfb, s_dst, dst_write_size, {.offset_bytes = 0}, {.page_id = k});
                 noc.async_write_barrier();
             }
         }
@@ -533,7 +539,7 @@ void kernel_main() {
                 red_val_size_per_core,
                 red_idx_size_per_core);
 
-            noc.async_write(dst_dfb, s_dst, dst_page_size, {.offset_bytes = 0}, {.page_id = 0});
+            noc.async_write(dst_dfb, s_dst, dst_write_size, {.offset_bytes = 0}, {.page_id = 0});
             noc.async_write_barrier();
         }
     }  // if constexpr (reduce_all)
