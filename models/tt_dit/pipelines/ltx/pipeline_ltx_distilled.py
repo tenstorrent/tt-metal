@@ -634,8 +634,10 @@ class LTXDistilledPipeline(LTXPipeline):
                 # Static mesh: capture one encode trace per stage resolution here, below every DiT
                 # capture; each gen replays it ("enc" in LTX_GEN_EAGER_STAGES keeps it eager).
                 self.vae_encoder.traced = True
+                self.vae_encoder.capture_open = True
                 self._warmup_encode(height // 2, width // 2)
                 self._warmup_encode(height, width)
+                self.vae_encoder.capture_open = False
                 # The IC-LoRA reference encoders are also built once and never reloaded here, so the
                 # same before-capture rule applies; the late warmup below skips them on this path.
                 if ref_num_frames is not None:

@@ -1565,6 +1565,9 @@ class LTXVideoEncoder(Module):
         # shape (the pipeline encodes at both stage resolutions); each gen copies its pixels into the
         # captured input buffer and replays. "enc" in LTX_GEN_EAGER_STAGES runs it eager at runtime.
         self.traced = False
+        # Captures are taken only while the pipeline holds this open (its warmup, below every DiT
+        # trace). A shape first seen later runs eager: a capture then would allocate under live traces.
+        self.capture_open = False
         self._encode_tracers: dict[tuple, Tracer] = {}
         self._encode_logical_hw: dict[tuple, tuple[int, int]] = {}
         self._last_logical_hw = (0, 0)
@@ -1626,6 +1629,11 @@ class LTXVideoEncoder(Module):
         if traced:
             key = (tuple(sample_tt.shape), logical_h, logical_w)
             tracer = self._encode_tracers.get(key)
+            if tracer is None and not self.capture_open:
+                logger.warning(f"image encoder: no capture for {key}, encoding eager")
+                traced = False
+                sample_tt = ttnn.to_device(sample_tt, self.mesh_device)
+        if traced:
             if tracer is None:
                 tracer = Tracer(self.encode_device, device=self.mesh_device, prep_run=True, clone_prep_inputs=True)
                 self._encode_tracers[key] = tracer
