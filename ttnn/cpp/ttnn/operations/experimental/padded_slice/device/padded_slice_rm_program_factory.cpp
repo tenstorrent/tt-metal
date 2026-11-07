@@ -484,7 +484,11 @@ ttnn::device_operation::ProgramArtifacts PaddedSliceRMProgramFactory::create_pro
                               .endpoint_type = DFBEndpointType::CONSUMER,
                           },
                       },
-                  .compile_time_args = {{"output_elem_size", output.element_size()}},
+                  .compile_time_args =
+                      {{"output_elem_size", output.element_size()},
+                       {"pad_value_bits",
+                        ttnn::operations::experimental::detail::pad_value_to_element_bits(
+                            operation_attributes.pad_value, output.dtype())}},
                   .runtime_arg_schema =
                       {
                           .runtime_arg_names =

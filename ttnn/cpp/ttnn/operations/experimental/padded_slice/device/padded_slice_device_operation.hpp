@@ -44,6 +44,7 @@ ttnn::experimental::prim::PaddedSliceDeviceOperation::tensor_return_value_t padd
     const ttnn::Shape& padded_slice_end,
     const ttnn::Shape& step,
     const MemoryConfig& output_mem_config,
-    const std::optional<Tensor>& preallocated_output = std::nullopt);
+    const std::optional<Tensor>& preallocated_output = std::nullopt,
+    const std::optional<float>& pad_value = std::nullopt);
 
 }  // namespace ttnn::prim

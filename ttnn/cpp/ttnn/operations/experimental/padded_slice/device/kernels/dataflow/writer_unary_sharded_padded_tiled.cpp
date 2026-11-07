@@ -24,6 +24,7 @@ void kernel_main() {
     constexpr uint32_t num_dims = get_arg(args::num_dims);
     constexpr uint32_t output_elem_size = get_arg(args::output_elem_size);
     constexpr uint32_t output_row_size_bytes = get_arg(args::output_row_size_bytes);
+    constexpr uint32_t pad_value_bits = get_arg(args::pad_value_bits);
 
     const uint32_t total_num_tiles = get_arg(args::total_num_tiles);
     const uint32_t num_tiles_per_read = get_arg(args::num_tiles_per_read);
@@ -63,17 +64,17 @@ void kernel_main() {
         if constexpr (output_elem_size == 4) {
             volatile tt_l1_ptr uint32_t* pad_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(pad_addr);
             for (uint32_t i = 0; i < output_row_size_elems; ++i) {
-                pad_ptr[i] = 0;
+                pad_ptr[i] = static_cast<uint32_t>(pad_value_bits);
             }
         } else if constexpr (output_elem_size == 2) {
             volatile tt_l1_ptr uint16_t* pad_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(pad_addr);
             for (uint32_t i = 0; i < output_row_size_elems; ++i) {
-                pad_ptr[i] = 0;
+                pad_ptr[i] = static_cast<uint16_t>(pad_value_bits);
             }
         } else if constexpr (output_elem_size == 1) {
             volatile tt_l1_ptr uint8_t* pad_ptr = reinterpret_cast<volatile tt_l1_ptr uint8_t*>(pad_addr);
             for (uint32_t i = 0; i < output_row_size_elems; ++i) {
-                pad_ptr[i] = 0;
+                pad_ptr[i] = static_cast<uint8_t>(pad_value_bits);
             }
         }
     }
