@@ -66,6 +66,27 @@ def test_max_min_uint32(device, input_shape, dim, op):
     assert_equal(output_tensor.to(torch.int64), torch_output_tensor)
 
 
+@pytest.mark.parametrize("dim", [0, 1, None])
+@pytest.mark.parametrize("op", ["max", "min"])
+def test_max_min_uint32_row_major(device, dim, op):
+    torch.manual_seed(0)
+    torch_input_tensor = torch.randint(0, 2**32, (2, 3, 17, 19), dtype=torch.int64)
+    torch_input_tensor.view(-1)[:4] = torch.tensor([0, 2**31 - 1, 2**31, 2**32 - 1])
+
+    torch_op = torch.amax if op == "max" else torch.amin
+    ttnn_op = ttnn.max if op == "max" else ttnn.min
+
+    torch_output_tensor = torch_op(torch_input_tensor, dim=dim)
+
+    input_tensor = ttnn.from_torch(
+        torch_input_tensor.to(torch.uint32), layout=ttnn.ROW_MAJOR_LAYOUT, device=device, dtype=ttnn.uint32
+    )
+    output_tensor = ttnn.to_torch(ttnn_op(input_tensor, dim=dim))
+
+    assert output_tensor.dtype == torch.uint32
+    assert_equal(output_tensor.to(torch.int64).reshape(torch_output_tensor.shape), torch_output_tensor)
+
+
 @pytest.mark.parametrize("scale", [2.0, 0.5, -3.0])
 @pytest.mark.parametrize(
     "input_shape, dim",
@@ -92,15 +113,36 @@ def test_max_min_with_scaling(device, input_shape, dim, op, scale):
     assert_equal(output_tensor, torch_expected)
 
 
+@pytest.mark.parametrize("scale", [2.0, 0.5, 0.1, -3.0])
+@pytest.mark.parametrize(
+    "input_shape, dim",
+    [
+        ((1, 2, 64, 64), -1),
+        ((1, 1, 96, 64), -2),
+        ((1, 1, 64, 64), (-1, -2)),
+        ((2, 3, 64, 60), (0, -1)),
+        ((2, 3, 64, 60), None),
+    ],
+)
 @pytest.mark.parametrize("op", ["max", "min"])
-def test_max_min_uint32_rejects_scaling(device, op, expect_error):
-    input_tensor = ttnn.from_torch(
-        torch.ones((1, 1, 32, 32), dtype=torch.uint32), layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.uint32
-    )
+def test_max_min_uint32_with_scaling(device, input_shape, dim, op, scale):
+    torch.manual_seed(0)
+    torch_input_tensor = torch.randint(0, 2**32, input_shape, dtype=torch.int64)
+    torch_input_tensor.view(-1)[:4] = torch.tensor([0, 2**31 - 1, 2**31, 2**32 - 1])
+
+    torch_op = torch.amax if op == "max" else torch.amin
     ttnn_op = ttnn.max if op == "max" else ttnn.min
 
-    with expect_error(RuntimeError, "UINT32 sum/max/min do not support scalar"):
-        ttnn_op(input_tensor, dim=-1, scalar=2.0)
+    torch_product = torch_input_tensor.to(torch.float32) * torch.tensor(scale, dtype=torch.float32)
+    torch_expected = torch_op(torch_product, dim=dim).to(torch.float64).trunc().clamp(0, 2**32 - 1).to(torch.int64)
+
+    input_tensor = ttnn.from_torch(
+        torch_input_tensor.to(torch.uint32), layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.uint32
+    )
+    output_tensor = ttnn.to_torch(ttnn_op(input_tensor, dim=dim, scalar=scale))
+
+    assert output_tensor.dtype == torch.uint32
+    assert_equal(output_tensor.to(torch.int64), torch_expected)
 
 
 # ---------------------------------------------------------------------------
