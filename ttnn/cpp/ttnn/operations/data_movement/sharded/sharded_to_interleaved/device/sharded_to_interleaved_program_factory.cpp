@@ -13,6 +13,7 @@
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/math.hpp>
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
+#include "ttnn/operations/data_movement/common/datacopy_rounding.hpp"
 
 using namespace tt;
 using namespace tt::constants;
@@ -201,6 +202,10 @@ ttnn::device_operation::ProgramArtifacts ShardedToInterleavedProgramFactory::cre
             // The WH/BH config sets no fields, so the Quasar config copies none.
             // TODO(#52269): Quasar unpack_modes are copied from WH/BH and not yet optimized for Quasar.
             compute_hw = ComputeHardwareConfig{};
+        } else if (ttnn::operations::data_movement::datacopy_rounds_fp32_to_bf16(
+                       input.device()->arch(), input_data_format, output_data_format)) {
+            compute_hw.enable_32_bit_dest = true;
+            compute_hw.unpack_modes = ComputeHardwareConfig::ComputeUnpackModes{{IN_DFB, UnpackMode::UnpackToSrc}};
         }
         kernels.push_back(KernelSpec{
             .unique_id = COMPUTE,

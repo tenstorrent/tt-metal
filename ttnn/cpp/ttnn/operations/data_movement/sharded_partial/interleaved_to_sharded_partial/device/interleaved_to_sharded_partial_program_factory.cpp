@@ -14,6 +14,7 @@
 #include <tt-metalium/program_descriptors.hpp>
 #include "ttnn/operations/ccl/sharding_addrgen_helper.hpp"
 #include "ttnn/operations/data_movement/sharded/sharded_common.hpp"
+#include "ttnn/operations/data_movement/common/datacopy_rounding.hpp"
 
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
@@ -235,7 +236,12 @@ ProgramDescriptor InterleavedToShardedPartialProgramFactory::create_descriptor(
             "ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/compute/eltwise_copy.cpp";
         compute_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
         compute_desc.core_ranges = all_cores;
-        compute_desc.config = ComputeConfigDescriptor{};
+        ComputeConfigDescriptor compute_config{};
+        if (ttnn::operations::data_movement::datacopy_rounds_fp32_to_bf16(
+                input.device()->arch(), input_cb_data_format, output_cb_data_format)) {
+            compute_config.fp32_dest_acc_en = true;
+        }
+        compute_desc.config = compute_config;
     }
 
     uint32_t starting_idx_h =
