@@ -189,6 +189,22 @@ void SdpaDecodeDeviceOperation::validate_on_program_cache_miss(
             const auto mask_shape_unpadded = mask_tensor.logical_shape();
 
             TT_FATAL(
+                mask_shape.rank() == 4,
+                "attn_mask must be rank 4, [1, b, nh, s] or [b, 1, nh, s], but got rank {}",
+                mask_shape.rank());
+            // The reader indexes the mask by user over dims 0 and 1 flattened (see Bmask in the program
+            // factory), so the batch may sit in either dim, and must be 1 (broadcast) or Q's batch.
+            TT_FATAL(
+                mask_shape[0] == 1 || mask_shape[1] == 1,
+                "attn_mask must be [1, b, nh, s] or [b, 1, nh, s], but got dims 0 and 1 of {} and {}",
+                mask_shape[0],
+                mask_shape[1]);
+            TT_FATAL(
+                mask_shape[0] * mask_shape[1] == 1 || mask_shape[0] * mask_shape[1] == q_shape[1],
+                "attn_mask batch must be 1 (broadcast to every user) or Q's batch {}, but got {}",
+                q_shape[1],
+                mask_shape[0] * mask_shape[1]);
+            TT_FATAL(
                 mask_shape[2] == q_shape[2],
                 "Expect same number of padded heads in mask as in Q, got {} and {}",
                 mask_shape[2],

@@ -1390,6 +1390,123 @@ def run_test_sdpa_decode_broadcast_mask_batch(
     )
 
 
+def run_test_sdpa_decode_mask_batch_layout(device, b, nh, nkv, s, d, dtype, grid_size, mask_batch_dim):
+    """Each user's own mask is applied whether the mask batch sits in dim 0 or dim 1.
+
+    `[1, b, nh, s]` (the documented layout) and `[b, 1, nh, s]` hold each user's tiles in the same order.
+    The reader once took the mask batch from dim 0 only, so `[1, b, nh, s]` gave every user user 0's mask.
+    Each user here keeps a different number of keys, so a user that reads another user's mask
+    fails its own comparison against the torch reference.
+    """
+    compute_grid_size = device.compute_with_storage_grid_size()
+    if grid_size[0] > compute_grid_size.x or grid_size[1] > compute_grid_size.y:
+        pytest.skip(f"Need {grid_size} grid size to run this test but core grid is {compute_grid_size}")
+
+    torch.manual_seed(1234)
+
+    padded_num_heads = nearest_pow_2(nearest_n(nh, n=32))
+    scale = d**-0.5
+    dram = ttnn.DRAM_MEMORY_CONFIG
+    neg_inf = torch.finfo(torch.float32).min
+
+    compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=False,
+        packer_l1_acc=False,
+    )
+    program_config = ttnn.SDPAProgramConfig(
+        compute_with_storage_grid_size=grid_size,
+        q_chunk_size=padded_num_heads,
+        k_chunk_size=get_chunk_size(s, s),
+        exp_approx_mode=False,
+    )
+
+    Q = fa_rand(1, b, nh, d)
+    K = fa_rand(b, nkv, s, d)
+    V = fa_rand(b, nkv, s, d)
+
+    # User i attends to the first (i + 1) * s // b keys only.
+    mask = torch.zeros(b, nh, s)
+    for i in range(b):
+        mask[i, :, (i + 1) * s // b :] = neg_inf
+    tt_mask_torch = mask.unsqueeze(0) if mask_batch_dim == 1 else mask.unsqueeze(1)
+
+    tt_Q = ttnn.as_tensor(Q, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, memory_config=dram)
+    tt_K = ttnn.as_tensor(K, device=device, dtype=dtype, layout=ttnn.TILE_LAYOUT, memory_config=dram)
+    tt_V = ttnn.as_tensor(V, device=device, dtype=dtype, layout=ttnn.TILE_LAYOUT, memory_config=dram)
+    tt_mask = ttnn.as_tensor(
+        tt_mask_torch, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, memory_config=dram
+    )
+
+    tt_out = ttnn.transformer.scaled_dot_product_attention_decode(
+        tt_Q,
+        tt_K,
+        tt_V,
+        is_causal=False,
+        attn_mask=tt_mask,
+        scale=scale,
+        program_config=program_config,
+        compute_kernel_config=compute_kernel_config,
+        memory_config=dram,
+    )
+    out = ttnn.to_torch(tt_out)[:, :, :nh, :]
+
+    Q_ref = Q.permute(1, 2, 0, 3)  # b, nh, 1, d
+    K_ref = K.repeat_interleave(nh // nkv, dim=1)  # b, nh, s, d
+    V_ref = V.repeat_interleave(nh // nkv, dim=1)
+    expect = torch.nn.functional.scaled_dot_product_attention(
+        Q_ref, K_ref, V_ref, mask.unsqueeze(2), scale=scale, is_causal=False
+    )  # b, nh, 1, d
+    expect = expect.squeeze(2).unsqueeze(0)  # 1, b, nh, d
+
+    for i in range(b):
+        out_pass, out_pcc = comp_pcc(expect[:, i], out[:, i], 0.99)
+        logger.debug(f"user {i}, mask batch in dim {mask_batch_dim}: {out_pcc}")
+        assert out_pass, (
+            f"User {i} with the mask batch in dim {mask_batch_dim} ({list(tt_mask_torch.shape)}): {out_pcc} "
+            f"(expected >= 0.99). The user likely read another user's mask."
+        )
+
+
+def run_test_sdpa_decode_mask_batch_rejected(device, b, nh, s, d, mask_batch_shape, match):
+    """A mask whose dims 0 and 1 do not give one mask per user (or a single shared one) is rejected."""
+    dram = ttnn.DRAM_MEMORY_CONFIG
+    tt_Q = ttnn.as_tensor(
+        fa_rand(1, b, nh, d), device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, memory_config=dram
+    )
+    tt_K = ttnn.as_tensor(
+        fa_rand(b, 1, s, d), device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, memory_config=dram
+    )
+    tt_V = ttnn.as_tensor(
+        fa_rand(b, 1, s, d), device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, memory_config=dram
+    )
+    tt_mask = ttnn.as_tensor(
+        torch.zeros(*mask_batch_shape, nh, s),
+        device=device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=dram,
+    )
+    program_config = ttnn.SDPAProgramConfig(
+        compute_with_storage_grid_size=(8, 4),
+        q_chunk_size=nearest_pow_2(nearest_n(nh, n=32)),
+        k_chunk_size=get_chunk_size(s, s),
+        exp_approx_mode=False,
+    )
+    with pytest.raises(RuntimeError, match=match):
+        ttnn.transformer.scaled_dot_product_attention_decode(
+            tt_Q,
+            tt_K,
+            tt_V,
+            is_causal=False,
+            attn_mask=tt_mask,
+            scale=d**-0.5,
+            program_config=program_config,
+            memory_config=dram,
+        )
+
+
 def run_sdpa_block_mask(device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, p_masked, bcast_heads):
     torch.manual_seed(1234)
     program_config = ttnn.SDPAProgramConfig(

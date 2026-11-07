@@ -540,7 +540,7 @@ mask_4d = blocked.to(torch.bfloat16) * -1e3
 tt_mask = ttnn.from_torch(mask_4d, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.bfloat16)
 ```
 
-This yields `[batch, 1, q_len, kv_len]`, which prefill `scaled_dot_product_attention` accepts directly. Interleaved `scale_mask_softmax` takes it only when `q_len` is `1` or `32`; otherwise reshape it as described below. Decode needs `[1, b, nh, s]` instead — see the table below.
+This yields `[batch, 1, q_len, kv_len]`, which prefill `scaled_dot_product_attention` accepts directly. Interleaved `scale_mask_softmax` takes it only when `q_len` is `1` or `32`; otherwise reshape it as described below. Decode needs the heads in dim 2 instead, `[1, b, nh, s]` or `[b, 1, nh, s]` — see the table below.
 
 Dim 1 is left at `1` so the mask broadcasts across heads; expand it only if the OP requires an explicit head dimension. If you need the causal half alone, `AttentionMaskConverter(is_causal=True).to_causal_4d(...)` from `transformers.modeling_attn_mask_utils` produces it in one call, using `torch.finfo(dtype).min` as its fill value.
 
@@ -556,7 +556,7 @@ Mask shapes are enforced with hard asserts, so a mismatch is a crash rather than
 | --- | --- | --- |
 | `scaled_dot_product_attention` | none, with `is_causal=True` | `attn_mask` and `is_causal` are mutually exclusive |
 | `scaled_dot_product_attention` | `(bsz or 1, n_q_heads or 1, seqlen, cache_len)` | dims 2 and 3 must match Q and K exactly |
-| `scaled_dot_product_attention_decode` | `[1, b, nh, s]` | dim 2 matches Q's head count, logical and padded; dim 3 is the KV length and must be a multiple of `k_chunk_size` |
+| `scaled_dot_product_attention_decode` | `[1, b, nh, s]` or `[b, 1, nh, s]` | `b` is 1 (one mask for every user) or Q's batch; dim 2 matches Q's head count, logical and padded; dim 3 is the KV length and must be a multiple of `k_chunk_size` |
 | `scale_mask_softmax`, interleaved | height (dim -2) `1` or the tile height (32) | intermediate dims must all be `1`; inner dim and batch must match the input |
 | `scale_mask_softmax`, sharded | equal to the input's padded shape | mask must be in `TILE` layout |
 | `ttnn.add` then `ttnn.softmax` | anything broadcastable | unfused, so slower |
