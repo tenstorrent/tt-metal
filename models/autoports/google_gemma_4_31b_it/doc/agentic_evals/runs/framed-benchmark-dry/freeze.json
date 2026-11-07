@@ -1,0 +1,53 @@
+{
+  "status": "frozen_benchmark_arm_not_combined_stage_dry",
+  "tt_source": "f57978407eaacf09587f5793b8ae46ca7af839ea",
+  "tti_sha": "af1ef17abfecb059da13d0a1287c00eace0f210e",
+  "plugin_runtime_sha": "ca7a18246e4111629ed6cb4a7d1192002749fccf",
+  "hf_revision": "842da3794eaa0b77d5f08bae87a17459d91ff475",
+  "batch": 1,
+  "planned_clients": 1,
+  "response_debug": false,
+  "request_logging": false,
+  "static_logging_config": null,
+  "default_pool": true,
+  "source_notes": "Frozen detached TTI worktree; shared installed client environments. Old resolved spec identifies matrix/model only; local B1server remains authoritative.",
+  "file_sha256": {
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/runs/framed-benchmark-dry/commands.json": "406099a7178205d6f05535a2938171315494e30b2693b6797e591e4b4a7e5ee2",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/bringup/artifacts/stage12-framed-benchmark-dry/run.py": "9ac8bc73d7bb4f5f40998428b8630a87fe1f7da080d1ea6d9b43306bc55704cc",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/bringup/artifacts/stage12-framed-benchmark-dry/client.py": "4bf25362ac2cf1dff0a2f2e5165429c06d8a41f834e9fe45f99b6b8dde6fa661",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/bringup/artifacts/stage12-framed-benchmark-dry/close.py": "ebabc20ef3b38ed1c8caed4cafe133aba56de5f3a3ce82f39b350b296e542f67",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tests/run_serving.sh": "68a09e186a1fa7e3fa6411ee07a022f4263d318fa6b6a72316d610817e26b263",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/bringup/artifacts/stage12-local-tti-preflight/workflow_logs/runtime_model_specs/runtime_model_spec_2026-11-06_05-40-28_id_gemma4-31b-autoport-v3_842da3794eaa0b77d5f08bae87a17459d91ff475_p300x2_svrlIeuM.json": "247c265544f542e2dd659e539de779dffc54ac73424dc1446f858d43c10ea4b3",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/bringup/artifacts/model-token-retention/live_pair.py": "ab89c5bc75e7f4b627662e11cb17ed4eaff4d3018c4935703b6566a0db6d3176",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tt/weights.py": "bca69b111c9c9cbf9bc620c3dc6bee873abdecdd75f08d5b8b93638e881868cd",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tt/generator.py": "3276fd7427898077ab25e139f89a7b03d2a968cd9bafb79e9aa08bb975016f22",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tt/prefill.py": "4208b8362e997db1845fd98043df9b183e8e17ed789ff5b5ea839739cd0b1f91",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tt/benchmark_phases.py": "659d7a4aa043f30dc1313a0cfedd68265a3d17b03db7a2a2bf9b5be253f46f9e",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tt/precision.py": "4d2c9708ec2757d888610e9ab5025e6e9b1cbe7cf1e929475e1167131052eef1",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tt/native_log_formatter.py": "b3fab5ef1cbf13d2907378e2d58e98dedd716fe8d8932b3a9513387b5cb37c13",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tt/multichip_decoder.py": "4580814729e23f84b4b8fc1b952ae6dc3eeb55a7de6b8f13753c940f98fb03b7",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tt/generator_contract.py": "b5af096ae1b99d19a48786c089a790778faf1c228a45b4a8933a447dfba95f24",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tt/fused_decoder.py": "cc1b358f90a2fadab24cbb3dd9826ffe32015fab46ccefac25c0c6c11c658149",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tt/model.py": "10224839f923f08887ac64ab71121980affa50d7bb542784b234ff19b466e70b",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tt/kv_pool_budget.py": "d4b426107cb0e003f43cca26294a92dd2fdd4a184638cbd2e5ce0c6c1dd6fbcd",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tt/functional_decoder.py": "a9d4f4d8ba3c710fb7508e0f0804e499a1312a847484f4d4e6668bd6b4334731",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tt/optimized_decoder.py": "3129039e1aafc3b12f2c535306a80e40f41fc2d98747ed93768d0bab1323e1c7",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tt/batched_prefill.py": "ab99ab9c8c54f206d16a56df1dc02bc3c4da14db003ea52d6e45d7f679af8df8",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tt/generator_vllm.py": "b866eec7ca27fc91d56571c4ec70fa5e1acacfc4c149fc07100f8caa45c273d4",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tt/native_logging.json": "eeffa2897a4e5037db8e4f08dda3dc00bbb89227b0042a3b62053ac293a2a101",
+    "/home/mvasiljevic/gemma4-31b-pipeline-v3/tti-framed-benchmark-dry/launchers/run_llm_bench.py": "f94141c74d3dc89986e8c1b44a59c9c8884c7da78386a4b5e97fe29b6ef3829b",
+    "/home/mvasiljevic/gemma4-31b-pipeline-v3/tti-framed-benchmark-dry/reference_config/benchmarking/benchmark_targets/model_performance_reference.json": "a9a7c548bd62ea30e7228bf91bd65356e8953c74ef30687e0a2fcc06312e7fe0",
+    "/home/mvasiljevic/gemma4-31b-pipeline-v3/tti-framed-benchmark-dry/workflows/model_spec.py": "37bc7d34ef3bc9434945e7a29f5303569f9a9e23bf5846746027db8c3a39b15a"
+  },
+  "launch": [
+    "python_env/bin/python",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/bringup/artifacts/stage12-framed-benchmark-dry/run.py",
+    "${ARTIFACT_ROOT}"
+  ],
+  "rerun_rule": "Changes to source/config/semantic commands invalidate dry. Only ARTIFACT_ROOT substitution is exempt. Combined stage dry additionally needs frozen GPQA finalcohort pass.",
+  "nonsemantic_parameter": {
+    "name": "ARTIFACT_ROOT",
+    "scope": "Only phase-log/output/result directories; immutable command template replaces this exact marker. No semantic argv/env/source changes permitted.",
+    "policy": "Must be fresh absolute path under checkout bringup/artifacts; refuse existing path. Distinct dry/release roots preserve evidence."
+  }
+}

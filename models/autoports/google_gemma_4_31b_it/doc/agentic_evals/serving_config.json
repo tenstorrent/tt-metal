@@ -404,6 +404,12 @@
       "max_num_seqs": 8,
       "pool_ids": 10248,
       "batch_reason": "Two original smoke tasks; smallest validated batch>=2, current C4 ceiling unchanged"
+    },
+    "framed-benchmark-dry": {
+      "planned_clients": 1,
+      "batch": 1,
+      "max_num_seqs": 1,
+      "batch_reason": "Frozen B1/C1 benchmark and headline arm"
     }
   },
   "release_limits": {
