@@ -246,12 +246,12 @@ PrefetcherPipeSpaceImpl::~PrefetcherPipeSpaceImpl() {
 // ---------------------------------------------------------------------------------------------
 
 PrefetcherPipeSpaceL1::PrefetcherPipeSpaceL1(
-    distributed::MeshDevice& device,
+    distributed::MeshCommandQueue& mesh_cq,
     PrefetcherPipeL1Source source,
     const CoreRangeSet& cores,
     uint32_t ring_size,
     uint32_t config_page_size) :
-    device_(&device) {
+    device_(mesh_cq.device()), cq_id_(static_cast<uint8_t>(mesh_cq.id())) {
     TT_FATAL(
         source != PrefetcherPipeL1Source::Default,
         "PrefetcherPipeSpaceL1 requires a resolved L1 source (internal error)");
@@ -268,6 +268,10 @@ PrefetcherPipeSpaceL1::PrefetcherPipeSpaceL1(
 }
 
 PrefetcherPipeSpaceL1::~PrefetcherPipeSpaceL1() { release(); }
+
+distributed::MeshCommandQueue& PrefetcherPipeSpaceL1::command_queue() const {
+    return device_->mesh_command_queue(cq_id_);
+}
 
 void PrefetcherPipeSpaceL1::allocate_from_arena(
     const CoreRangeSet& cores, uint32_t ring_size, uint32_t config_page_size) {
@@ -332,7 +336,7 @@ void PrefetcherPipeSpaceL1::allocate_from_allocator(
     // Zero every core's page, which is the template a core no pipe has claimed holds. Through the
     // command queue, like the pages carved later, because earlier work may still be using this L1.
     const std::vector<uint32_t> zeros(config_buffer_->size() / sizeof(uint32_t), 0);
-    distributed::EnqueueWriteMeshBuffer(device_->mesh_command_queue(), config_buffer_, zeros, /*blocking=*/false);
+    distributed::EnqueueWriteMeshBuffer(command_queue(), config_buffer_, zeros, /*blocking=*/false);
 }
 
 void PrefetcherPipeSpaceL1::enqueue_config_pages(
@@ -371,7 +375,7 @@ void PrefetcherPipeSpaceL1::enqueue_config_pages(
             return image;
         });
     }
-    core_subset_write::enqueue_write(device_->mesh_command_queue(), *config_buffer_, images, /*blocking=*/false, cores);
+    core_subset_write::enqueue_write(command_queue(), *config_buffer_, images, /*blocking=*/false, cores);
 }
 
 void PrefetcherPipeSpaceL1::release() noexcept {
@@ -533,7 +537,7 @@ void PrefetcherPipeSpaceImpl::order_dram_sender_pages() const {
     // holds every later request until the queue gets here. One started later, even on another thread
     // while this runs, is launched straight from the host, so the queue has to have drained before
     // the caller gets a pipe to name in a request.
-    auto& cq = device_->mesh_command_queue();
+    auto& cq = command_queue();
     if (!device_->impl().wait_for_cq_on_tensor_prefetcher_if_active(cq)) {
         distributed::Finish(cq);
     }
@@ -1040,14 +1044,15 @@ std::vector<PrefetcherPipe> PrefetcherPipeSpace::create_pipes(
 PrefetcherPipeL1Source PrefetcherPipeSpace::l1_source() const { return pimpl_->l1_source(); }
 
 PrefetcherPipeSpace CreatePrefetcherPipeSpace(
-    distributed::MeshDevice& device, const PrefetcherPipeSpaceConfig& config) {
-    std::vector<PrefetcherPipeSpace> spaces = CreatePrefetcherPipeSpaces(device, std::span(&config, 1));
+    distributed::MeshCommandQueue& mesh_cq, const PrefetcherPipeSpaceConfig& config) {
+    std::vector<PrefetcherPipeSpace> spaces = CreatePrefetcherPipeSpaces(mesh_cq, std::span(&config, 1));
     return std::move(spaces.front());
 }
 
 std::vector<PrefetcherPipeSpace> CreatePrefetcherPipeSpaces(
-    distributed::MeshDevice& device, std::span<const PrefetcherPipeSpaceConfig> configs) {
+    distributed::MeshCommandQueue& mesh_cq, std::span<const PrefetcherPipeSpaceConfig> configs) {
     TT_FATAL(!configs.empty(), "CreatePrefetcherPipeSpaces requires at least one config");
+    distributed::MeshDevice& device = *mesh_cq.device();
     std::vector<std::unique_ptr<PrefetcherPipeSpaceImpl>> impls;
     impls.reserve(configs.size());
     for (const PrefetcherPipeSpaceConfig& config : configs) {
@@ -1077,7 +1082,7 @@ std::vector<PrefetcherPipeSpace> CreatePrefetcherPipeSpaces(
         config_page_size = std::max(config_page_size, impl.config_page_size());
     }
 
-    auto l1 = std::make_shared<PrefetcherPipeSpaceL1>(device, source, cores, ring_size, config_page_size);
+    auto l1 = std::make_shared<PrefetcherPipeSpaceL1>(mesh_cq, source, cores, ring_size, config_page_size);
     std::vector<PrefetcherPipeSpace> spaces;
     spaces.reserve(impls.size());
     for (auto& impl : impls) {
