@@ -2106,6 +2106,28 @@
   budget_type: demo
   sp_config: sc1
 
+# INVESTIGATION ONLY (branch mstaletovic/moe-block-pwr-ab, not for main): the SC1 leg above twice in one job,
+# MOE_IMPL=ttmoe then block, with 1 ms tt_umd telemetry - is the block's long-context loss a TDP clamp?
+- name: "(GLM-5.3-744B) MoE block power A/B: TtMoe vs block, 1M@5k SC1 + telemetry"
+  cmd: |
+    set -euo pipefail
+    export TT_METAL_HOME="${TT_METAL_HOME:-/home/user/tt-metal}"
+    if [ ! -f "${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py" ]; then
+      cp -rn /ci/tt-metal/. "${TT_METAL_HOME}/"
+    fi
+    cd "${TT_METAL_HOME}"
+    exec bash models/demos/common/prefill/runners/ci/pwr_ab.sh
+  test_type: moe_power_ab
+  test_tags: [glm_5_3, runner]
+  test_group: disagg_prefill
+  skus:
+    bh_sc1_high_power:
+      timeout: 120
+  owner_id: U0AC4LTJH1P # Jaksa Jovicic
+  team: shield
+  budget_type: demo
+  sp_config: sc1
+
 
 # Single-galaxy (SC1) GLM-5.3 MTP KV share prefill KV accuracy and throughput, same launcher as the SC4 entry
 # above and the control for it: one rank skips the D2D union-id transport, so a failure here is MTP prefill
