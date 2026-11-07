@@ -1414,3 +1414,121 @@ def test_where_rejects_scalar_not_representable_in_int_tensor(device, expect_err
             ttnn.where(tt_c, tt_t, scalar)
         else:
             ttnn.where(tt_c, scalar, tt_t)
+
+
+@pytest.mark.parametrize(
+    "c_shape, t_shape, f_shape",
+    [
+        ((1, 1, 32, 64), (1, 1, 32, 64), (1, 1, 32, 64)),  # one tile row, two tile columns
+        ((2, 3, 64, 128), (2, 3, 64, 128), (2, 3, 64, 128)),  # multi-batch, tile-aligned
+        ((3, 2, 3, 64, 128), (3, 2, 3, 64, 128), (3, 2, 3, 64, 128)),  # 5D tensor
+        ((256,), (256,), (256,)),  # 1D flat
+    ],
+)
+@pytest.mark.parametrize("condition", [1, 0])
+def test_ttnn_where_uint8_ttt(c_shape, t_shape, f_shape, condition, device):
+    # The ternary where LLK has no UInt8 SFPU variant. This previously selected the
+    # Float16_b variant while Dest stayed 16-bit, and every output element came back 0.
+    torch.manual_seed(0)
+    C = torch.ones(c_shape, dtype=torch.uint8) * condition
+    # Exercise the low end (0) as well as the top of the range, since the predicate value 0
+    # collides with the false-branch value 0.
+    T = torch.randint(1, 50, t_shape, dtype=torch.uint8)
+    F = torch.randint(200, 250, f_shape, dtype=torch.uint8)
+    golden = torch.where(C.bool(), T, F)
+
+    ttnn_C = ttnn.from_torch(C, dtype=ttnn.uint8, layout=ttnn.TILE_LAYOUT, device=device)
+    ttnn_T = ttnn.from_torch(T, dtype=ttnn.uint8, layout=ttnn.TILE_LAYOUT, device=device)
+    ttnn_F = ttnn.from_torch(F, dtype=ttnn.uint8, layout=ttnn.TILE_LAYOUT, device=device)
+    ttnn_result = ttnn.where(ttnn_C, ttnn_T, ttnn_F)
+
+    assert ttnn_result.dtype == ttnn.uint8
+    result = ttnn.to_torch(ttnn_result)
+    assert torch.equal(result, golden), f"expected {golden.flatten()[:8].tolist()}, got {result.flatten()[:8].tolist()}"
+
+
+@pytest.mark.parametrize(
+    "torch_dtype, ttnn_dtype",
+    [
+        (torch.int32, ttnn.uint16),
+        (torch.int64, ttnn.uint8),  # uint8 reference, compared against the uint16 control below
+    ],
+)
+@pytest.mark.parametrize(
+    "c_shape, t_shape, f_shape",
+    [
+        ((1, 1, 32, 64), (1, 1, 32, 64), (1, 1, 32, 64)),
+        ((2, 3, 64, 128), (2, 3, 64, 128), (2, 3, 64, 128)),
+    ],
+)
+@pytest.mark.parametrize("condition", [1, 0])
+def test_ttnn_where_uint16_control(c_shape, t_shape, f_shape, condition, torch_dtype, ttnn_dtype, device):
+    # Controls for the UINT8 TTT case. UINT16 is the 16-bit format the LLK genuinely supports,
+    # and INT32 is the 32-bit format; both must stay exact.
+    torch.manual_seed(0)
+    C = torch.ones(c_shape, dtype=torch.int32) * condition
+    hi = 255 if ttnn_dtype == ttnn.uint8 else 60000
+    T = torch.randint(1, hi, t_shape, dtype=torch.int64).to(torch_dtype)
+    F = torch.randint(0, hi, f_shape, dtype=torch.int64).to(torch_dtype)
+    golden = torch.where(C.bool(), T, F)
+
+    ttnn_C = ttnn.from_torch(C, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    ttnn_T = ttnn.from_torch(T, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    ttnn_F = ttnn.from_torch(F, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    ttnn_result = ttnn.where(ttnn_C, ttnn_T, ttnn_F)
+
+    result = ttnn.to_torch(ttnn_result).to(torch_dtype)
+    assert torch.equal(result, golden), f"expected {golden.flatten()[:8].tolist()}, got {result.flatten()[:8].tolist()}"
+
+
+def _every_value_where_inputs(torch_dtype, lo, hi, pred_dtype):
+    # Shape [1, 1, 64, 128] = 8192 elements. The value operands cycle through every value of the
+    # dtype (including -128 for int8) in both the true and the false branch, and the predicate mixes
+    # zero and non-zero (including the dtype's extremes) so each value is selected and rejected.
+    n = 64 * 128
+    span = hi - lo + 1
+    idx = torch.arange(n, dtype=torch.int64)
+    T = (lo + idx % span).to(torch_dtype).reshape(1, 1, 64, 128)
+    F = (hi - (idx * 5 + 3) % span).to(torch_dtype).reshape(1, 1, 64, 128)
+    pred_values = torch.tensor([0, 1, 0, 7, 0, 1, 1, 0, 3], dtype=torch.int64)
+    C = pred_values[idx % pred_values.numel()].to(pred_dtype).reshape(1, 1, 64, 128)
+    return C, T, F
+
+
+@pytest.mark.parametrize(
+    "pred_ttnn_dtype, pred_torch_dtype, value_ttnn_dtype, value_torch_dtype, lo, hi",
+    [
+        (ttnn.int8, torch.int8, ttnn.int8, torch.int8, -127, 127),  # int8 predicate, int8 values
+        (ttnn.int32, torch.int32, ttnn.int8, torch.int8, -127, 127),  # int32 predicate, int8 values
+        (ttnn.uint8, torch.uint8, ttnn.uint8, torch.uint8, 0, 255),  # control, uint8 predicate and values
+        (ttnn.int32, torch.int32, ttnn.uint8, torch.uint8, 0, 255),  # control, int32 predicate, uint8 values
+        (ttnn.int32, torch.int32, ttnn.int32, torch.int32, -128, 127),  # control, int32 everywhere
+    ],
+    ids=[
+        "int8_pred_int8_values",
+        "int32_pred_int8_values",
+        "uint8_pred_uint8_values",
+        "int32_pred_uint8_values",
+        "int32_pred_int32_values",
+    ],
+)
+def test_ttnn_where_8bit_every_value(
+    pred_ttnn_dtype, pred_torch_dtype, value_ttnn_dtype, value_torch_dtype, lo, hi, device
+):
+    # An int8 operand used to be read through the 16-bit Dest path, so every value came back wrong when
+    # all operands were int8. -128 is left out: the unpacker reads int8 as sign-magnitude, which has no -128.
+    C, T, F = _every_value_where_inputs(value_torch_dtype, lo, hi, pred_torch_dtype)
+    golden = torch.where(C != 0, T, F)
+
+    ttnn_C = ttnn.from_torch(C, dtype=pred_ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    ttnn_T = ttnn.from_torch(T, dtype=value_ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    ttnn_F = ttnn.from_torch(F, dtype=value_ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    ttnn_result = ttnn.where(ttnn_C, ttnn_T, ttnn_F)
+
+    assert ttnn_result.dtype == value_ttnn_dtype
+    result = ttnn.to_torch(ttnn_result).to(value_torch_dtype)
+    bad = (result != golden).flatten().nonzero().flatten()
+    assert bad.numel() == 0, (
+        f"{bad.numel()} of {golden.numel()} wrong, first want {golden.flatten()[bad[:8]].tolist()}, "
+        f"got {result.flatten()[bad[:8]].tolist()}"
+    )
