@@ -395,9 +395,7 @@ _PRODUCTION_CASES = (
 @pytest.mark.parametrize("case", _PRODUCTION_CASES, ids=lambda case: case.case_id)
 def test_kimi_k3_production_performance(device, case: _ProductionCase) -> None:
     if not is_perf_profiler_active():
-        pytest.fail(
-            "Streaming profiler (TT_METAL_STREAMING_PROFILER=1) must be active for indexed_entry_copy performance checks"
-        )
+        pytest.fail("Streaming profiler must be active for indexed_entry_copy performance checks")
     slab_host = _random((_K3_SLOTS * _K3_LAYERS, *case.entry_shape), case.dtype, 11)
     slab = _to_device(slab_host, device, case.dtype, case.layout, _table_memory(device, case.nd_shard))
     carry_host = _random((1, *case.entry_shape), case.dtype, 10)

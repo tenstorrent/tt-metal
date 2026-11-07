@@ -717,6 +717,12 @@ public:
             compile_hash_str += "_blaze_runtime_reload_";
             compile_hash_str += get_brisc_firmware_header();
         }
+        // The streaming profiler compiles kernels and firmware with -DPROFILE_STREAMING. Part of the hash so that
+        // toggling it at runtime (streaming_profiler::SetEnabled) re-initializes MetalContext, rebuilding firmware
+        // and the per-device build environments. Appended only when on so non-streaming cache keys stay unchanged.
+        if (get_streaming_profiler_enabled()) {
+            compile_hash_str += "_streaming_profiler";
+        }
         // Each ATT map gets its own JIT build directory so toggling ATT does not rebuild the non-ATT
         // tree. Appended only when a map is selected so non-ATT cache keys stay unchanged.
         if (!noc_att_map_.empty()) {
@@ -760,6 +766,10 @@ public:
     bool get_streaming_profiler_tracy_enabled() const { return streaming_profiler_tracy_enabled; }
     uint32_t get_streaming_profiler_spool_mb() const { return streaming_profiler_spool_mb; }
     uint32_t get_streaming_profiler_fifo_mb() const { return streaming_profiler_fifo_mb; }
+    // Runtime switches for streaming_profiler::SetEnabled; only valid while no device is open.
+    void set_streaming_profiler_enabled(bool enabled) { streaming_profiler_enabled = enabled; }
+    void set_streaming_profiler_spool_mb(uint32_t mb) { streaming_profiler_spool_mb = mb; }
+    void set_streaming_profiler_fifo_mb(uint32_t mb) { streaming_profiler_fifo_mb = mb; }
     const std::string& get_streaming_profiler_ops_csv_path() const { return streaming_profiler_ops_csv_path; }
     const std::string& get_streaming_profiler_zone_csv_path() const { return streaming_profiler_zone_csv_path; }
     void set_experimental_noc_debug_dump_enabled(bool enabled);

@@ -297,7 +297,7 @@ def resolve_runtime_system(mesh_device, path: CollectivePath, fabric_config) -> 
 # --------------------------------------------------------------------------------------------------
 def _profile_programs(mesh_device, run_fn, expected_programs):
     if not is_perf_profiler_active():
-        pytest.fail("Streaming profiler (TT_METAL_STREAMING_PROFILER=1) must be active for sparse MLA CCL perf checks")
+        pytest.fail("Streaming profiler must be active for sparse MLA CCL perf checks")
 
     # Drain setup programs before registering the callback so only run_fn contributes records.
     ttnn.synchronize_device(mesh_device)

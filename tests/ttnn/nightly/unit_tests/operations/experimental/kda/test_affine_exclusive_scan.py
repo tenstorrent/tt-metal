@@ -491,9 +491,7 @@ def test_affine_exclusive_scan_production_performance(
     zero_actual_start, device: ttnn.Device, case: _ProductionCase, placement: str
 ) -> None:
     if not is_perf_profiler_active():
-        pytest.fail(
-            "Streaming profiler (TT_METAL_STREAMING_PROFILER=1) must be active for affine exclusive-scan performance checks"
-        )
+        pytest.fail("Streaming profiler must be active for affine exclusive-scan performance checks")
 
     host = _host_inputs(case.batch_heads, case.groups_per_head, case.key_dim, case.value_dim, seed=117)
     expected = _oracle(*host, case.batch_heads, case.groups_per_head)

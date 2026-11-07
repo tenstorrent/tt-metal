@@ -17,11 +17,11 @@ from loguru import logger
 # baselines calibrated under it read low for ops that throttle. Kernels run instrumented in this mode, so durations
 # include the zone-marker cost (measured negligible for ms-scale ops).
 #
-# The streaming profiler is a process-wide mode, read once when tt-metal builds its runtime options (the first device
-# open or cluster query, which collection-time skipif/parametrize code often does), so it must be in the environment
-# before pytest starts; the perf jobs in tests/pipeline_reorg set it on their commands:
-#   TT_METAL_STREAMING_PROFILER=1 TT_METAL_STREAMING_PROFILER_DRAM_MB=0 TT_METAL_STREAMING_PROFILER_FIFO_MB=16
-# (direct push: no GDDR spool reservation, small host FIFOs; same delivery latency).
+# Turning it on: the device fixtures in the root conftest.py do it per device open
+# (ttnn.device.SetStreamingProfilerEnabled), for every test that reaches this helper (a module-scoped device: any
+# selected test of the module), so no environment variable is needed and other tests stay uninstrumented. A test that
+# opens its own device calls ttnn.device.SetStreamingProfilerEnabled(True) before opening it. Setting
+# TT_METAL_STREAMING_PROFILER in the environment instead turns it on for the whole process.
 
 DEFAULT_RT_PROFILER_RECORD_TIMEOUT_SECONDS = 5.0
 
@@ -60,8 +60,8 @@ def profile_realtime_program(
 
     if not is_streaming_profiler_active():
         raise RuntimeError(
-            "Streaming profiler is not active: run pytest with TT_METAL_STREAMING_PROFILER=1 "
-            "TT_METAL_STREAMING_PROFILER_DRAM_MB=0 TT_METAL_STREAMING_PROFILER_FIFO_MB=16 set in the environment."
+            "Streaming profiler is not active: open the device through the conftest device fixtures (they turn it on "
+            "for tests that use this helper) or call ttnn.device.SetStreamingProfilerEnabled(True) before opening it."
         )
 
     # Everything dispatched before the measured region finishes here, so its programs start before region_start_ns
@@ -143,8 +143,8 @@ def require_realtime_profiler(what: str) -> None:
 
     if not is_perf_profiler_active():
         pytest.fail(
-            f"Streaming profiler must be active for {what}: run pytest with TT_METAL_STREAMING_PROFILER=1 "
-            "TT_METAL_STREAMING_PROFILER_DRAM_MB=0 TT_METAL_STREAMING_PROFILER_FIFO_MB=16"
+            f"Streaming profiler must be active for {what}: open the device through the conftest device fixtures or "
+            "call ttnn.device.SetStreamingProfilerEnabled(True) before opening it"
         )
 
 

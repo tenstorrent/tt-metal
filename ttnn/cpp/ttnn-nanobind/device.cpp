@@ -1141,6 +1141,17 @@ void device_module(nb::module_& m_device) {
         )doc");
 
     m_device.def(
+        "SetStreamingProfilerEnabled",
+        [](bool enabled, uint32_t host_fifo_mb) { streaming_profiler::SetEnabled(enabled, host_fifo_mb); },
+        nb::arg("enabled"),
+        nb::arg("host_fifo_mb") = 16,
+        nb::call_guard<nb::gil_scoped_release>(),
+        R"doc(
+            Turn the streaming profiler on or off for the devices opened next, in place of
+            TT_METAL_STREAMING_PROFILER. Call it with every device closed and fabric DISABLED.
+        )doc");
+
+    m_device.def(
         "IsStreamingProfilerActive",
         []() { return streaming_profiler::IsActive(); },
         R"doc(

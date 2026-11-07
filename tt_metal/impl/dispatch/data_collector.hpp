@@ -92,6 +92,10 @@ public:
     // instead of recording unconditionally: the recording costs a mutex and a keyed insert per
     // program per device, and nothing outside the profiler reads the result. Lock-free so the
     // check itself stays off the critical path.
+    // Re-derives IsProgramMetadataRecordingEnabled from the runtime options, after they change at runtime
+    // (streaming_profiler::SetEnabled).
+    void RefreshProgramMetadataRecording();
+
     bool IsProgramMetadataRecordingEnabled() const noexcept {
         return program_metadata_recording_enabled_.load(std::memory_order_relaxed);
     }

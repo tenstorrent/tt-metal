@@ -268,6 +268,7 @@ IsProgramRealtimeProfilerActive = ttnn._ttnn.device.IsProgramRealtimeProfilerAct
 StreamingProgramRecord = ttnn._ttnn.device.StreamingProgramRecord
 StreamingProgramCollector = ttnn._ttnn.device.StreamingProgramCollector
 IsStreamingProfilerActive = ttnn._ttnn.device.IsStreamingProfilerActive
+SetStreamingProfilerEnabled = ttnn._ttnn.device.SetStreamingProfilerEnabled
 
 __all__ = [
     "ProgramRealtimeRecord",
@@ -278,4 +279,5 @@ __all__ = [
     "StreamingProgramRecord",
     "StreamingProgramCollector",
     "IsStreamingProfilerActive",
+    "SetStreamingProfilerEnabled",
 ]

@@ -5,6 +5,7 @@
 #include <tt-metalium/experimental/streaming_profiler.hpp>
 
 #include <algorithm>
+#include <bit>
 #include <atomic>
 #include <deque>
 #include <functional>
@@ -22,6 +23,11 @@
 
 #include "hostdev/observability_event_descriptor.h"
 #include "impl/context/context_types.hpp"
+#include "impl/context/metal_context.hpp"
+#include "impl/device/device_manager.hpp"
+#include "impl/dispatch/data_collector.hpp"
+#include "llrt/hal.hpp"
+#include "llrt/rtoptions.hpp"
 #include "impl/dispatch/data_collection.hpp"
 #include "impl/streaming_profiler/service.hpp"
 #include "impl/streaming_profiler/sync/clock_map.hpp"
@@ -156,6 +162,42 @@ TimestampedData& TimestampedData::operator=(TimestampedData other) noexcept {
 TimestampedData::~TimestampedData() { delete[] values_; }
 
 bool IsActive() { return internal::service().is_active(); }
+
+void SetEnabled(bool enabled, uint32_t host_fifo_mb) {
+    auto& context = tt::tt_metal::MetalContext::instance();
+    const auto& device_manager = context.device_manager();
+    TT_FATAL(
+        !(device_manager && device_manager->is_initialized() && !device_manager->get_all_active_devices().empty()),
+        "streaming_profiler::SetEnabled: close every device first; the profiler mode applies from the next device "
+        "open");
+    TT_FATAL(
+        context.get_fabric_config() == tt::tt_fabric::FabricConfig::DISABLED,
+        "streaming_profiler::SetEnabled: set the fabric config to DISABLED first; the fabric routers' configuration "
+        "depends on the profiler mode and is rebuilt when the fabric config is set again");
+    auto& rtoptions = context.rtoptions();
+    if (enabled) {
+        TT_FATAL(context.hal().get_arch() == tt::ARCH::BLACKHOLE, "streaming_profiler::SetEnabled: Blackhole only");
+        TT_FATAL(
+            !rtoptions.get_profiler_enabled(),
+            "streaming_profiler::SetEnabled: mutually exclusive with TT_METAL_DEVICE_PROFILER");
+        TT_FATAL(
+            !rtoptions.get_feature_enabled(tt::llrt::RunTimeDebugFeatureDprint),
+            "streaming_profiler::SetEnabled: mutually exclusive with DPRINT");
+        TT_FATAL(
+            host_fifo_mb >= 1 && host_fifo_mb <= tt::llrt::STREAMING_PROFILER_FIFO_MB_MAX &&
+                std::has_single_bit(host_fifo_mb),
+            "streaming_profiler::SetEnabled: host_fifo_mb={} must be a power of two in [1, {}]",
+            host_fifo_mb,
+            tt::llrt::STREAMING_PROFILER_FIFO_MB_MAX);
+        rtoptions.set_streaming_profiler_spool_mb(0);
+        rtoptions.set_streaming_profiler_fifo_mb(host_fifo_mb);
+    }
+    rtoptions.set_streaming_profiler_enabled(enabled);
+    // Before the first device open there is no collector yet; it reads the runtime options when it is created.
+    if (context.data_collector()) {
+        context.data_collector()->RefreshProgramMetadataRecording();
+    }
+}
 
 std::vector<std::string_view> KernelSources(uint32_t runtime_id) {
     const std::span<const std::string_view> sources =

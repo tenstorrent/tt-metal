@@ -42,7 +42,7 @@ def create_fabric_router_config(max_payload_size):
 
 def profile_exp_ring_joint_runtime_duration_ns(mesh_device, run_fn):
     if not is_perf_profiler_active():
-        pytest.fail("Streaming profiler (TT_METAL_STREAMING_PROFILER=1) must be active for SDPA perf checks")
+        pytest.fail("Streaming profiler must be active for SDPA perf checks")
 
     _, records = profile_realtime_program(
         mesh_device,

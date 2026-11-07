@@ -355,9 +355,7 @@ def test_chain_affine_transforms_rejects_unsupported_compute_config(
 def test_chain_affine_transforms_production_performance(zero_actual_start, device: ttnn.Device) -> None:
     case = _PRODUCTION_PERF_CASE
     if not is_perf_profiler_active():
-        pytest.fail(
-            "Streaming profiler (TT_METAL_STREAMING_PROFILER=1) must be active for affine-transform chaining performance checks"
-        )
+        pytest.fail("Streaming profiler must be active for affine-transform chaining performance checks")
 
     host = _host_inputs(case.batch_heads, case.key_dim, case.value_dim, seed=117)
     expected = _oracle(*host)

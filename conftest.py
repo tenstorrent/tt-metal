@@ -417,6 +417,7 @@ def _device_module_impl(request):
     original_default_device = ttnn.GetDefaultDevice()
 
     updated_device_params = get_updated_device_params(device_params)
+    streaming_profiler = _streaming_profiler_for_test(request)
     device = ttnn.CreateDevice(device_id=device_id, **updated_device_params)
     request.node.pci_ids = [ttnn.GetPCIeDeviceID(device_id)]
     ttnn.SetDefaultDevice(device)
@@ -426,6 +427,78 @@ def _device_module_impl(request):
     # Restore the original default device BEFORE closing the test-specific one
     ttnn.SetDefaultDevice(original_default_device)
     ttnn.close_device(device)
+    _streaming_profiler_off(streaming_profiler)
+
+
+# Perf tests time device programs with the streaming profiler (tests/ttnn/profiling/realtime_profiler_utils.py). It is
+# a per-device-open mode: the device fixtures turn it on just before opening the device of a test that reaches the
+# profiler helper and off after closing it, so every other test runs uninstrumented. TT_METAL_STREAMING_PROFILER in the
+# environment (set at startup) takes precedence and leaves the mode alone.
+_PERF_PROFILER_HELPER_MODULE = "tests.ttnn.profiling.realtime_profiler_utils"
+
+
+def _reaches_perf_profiler_helper(func, seen, depth=4):
+    """Whether ``func``, or what it calls through module globals up to ``depth`` levels, uses the profiler helper."""
+    import types
+
+    if depth < 0 or not isinstance(func, types.FunctionType) or func in seen:
+        return False
+    seen.add(func)
+    if func.__module__ == _PERF_PROFILER_HELPER_MODULE:
+        return True
+    codes = [func.__code__]
+    while codes:
+        code = codes.pop()
+        codes.extend(const for const in code.co_consts if isinstance(const, types.CodeType))  # lambdas, inner defs
+        for name in code.co_names:
+            target = func.__globals__.get(name)
+            if isinstance(target, types.ModuleType) and target.__name__ == _PERF_PROFILER_HELPER_MODULE:
+                return True
+            if _reaches_perf_profiler_helper(target, seen, depth - 1):
+                return True
+    return False
+
+
+def _item_uses_perf_profiler(item, seen):
+    funcs = [getattr(item, "function", None)]
+    fixture_info = getattr(item, "_fixtureinfo", None)
+    for fixture_defs in fixture_info.name2fixturedefs.values() if fixture_info else ():
+        funcs.extend(fixture_def.func for fixture_def in fixture_defs)
+    return any(_reaches_perf_profiler_helper(func, seen) for func in funcs)
+
+
+def _test_uses_perf_profiler(request):
+    """For a function-scoped device, whether this test times device programs; for a module-scoped device
+    (use_module_device), whether any selected test of the module does."""
+    seen = set()
+    if isinstance(request.node, pytest.Function):
+        return _item_uses_perf_profiler(request.node, seen)
+    module = getattr(request.node, "module", None)
+    return any(
+        _item_uses_perf_profiler(item, seen)
+        for item in request.session.items
+        if module is not None and getattr(item, "module", None) is module
+    )
+
+
+def _streaming_profiler_for_test(request):
+    """Turn the streaming profiler on for this test's device open when the test times device programs. Call with no
+    device open and fabric DISABLED; returns whether it was turned on, to pass to _streaming_profiler_off."""
+    import ttnn
+
+    if os.environ.get("TT_METAL_STREAMING_PROFILER") is not None or os.environ.get("TT_METAL_DEVICE_PROFILER"):
+        return False
+    if ttnn.get_arch_name() != "blackhole" or not _test_uses_perf_profiler(request):
+        return False
+    ttnn.device.SetStreamingProfilerEnabled(True)
+    return True
+
+
+def _streaming_profiler_off(enabled):
+    import ttnn
+
+    if enabled:
+        ttnn.device.SetStreamingProfilerEnabled(False)
 
 
 @pytest.fixture(scope="function")
@@ -465,6 +538,7 @@ def device(request, device_params):
     original_default_device = ttnn.GetDefaultDevice()
 
     updated_device_params = get_updated_device_params(device_params)
+    streaming_profiler = _streaming_profiler_for_test(request)
     device = ttnn.CreateDevice(device_id=device_id, **updated_device_params)
     ttnn.SetDefaultDevice(device)
 
@@ -477,6 +551,7 @@ def device(request, device_params):
     # Restore the original default device BEFORE closing the test-specific one
     ttnn.SetDefaultDevice(original_default_device)
     ttnn.close_device(device)
+    _streaming_profiler_off(streaming_profiler)
 
 
 # Reset fabric config to DISABLED if not None, and do nothing otherwise
@@ -658,6 +733,7 @@ def mesh_device(request, silicon_arch_name, device_params):
     reliability_mode = updated_device_params.pop("reliability_mode", None)
     fabric_manager = updated_device_params.pop("fabric_manager", None)
     fabric_router_config = updated_device_params.pop("fabric_router_config", None)
+    streaming_profiler = _streaming_profiler_for_test(request)
     set_fabric(fabric_config, reliability_mode, fabric_tensix_config, fabric_manager, fabric_router_config)
     mesh_device = ttnn.open_mesh_device(mesh_shape=mesh_shape, **updated_device_params)
 
@@ -673,6 +749,7 @@ def mesh_device(request, silicon_arch_name, device_params):
 
     ttnn.close_mesh_device(mesh_device)
     reset_fabric(fabric_config)
+    _streaming_profiler_off(streaming_profiler)
     del mesh_device
 
 

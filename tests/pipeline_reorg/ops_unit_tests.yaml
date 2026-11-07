@@ -134,7 +134,7 @@
   # Tests opt in with @pytest.mark.requires_host_iommu, allowing operation developers to add IOMMU coverage
   # without changing this infra-owned command. Keep the search roots aligned with the non-IOMMU suites above.
   cmd: |
-    TT_METAL_STREAMING_PROFILER=1 TT_METAL_STREAMING_PROFILER_DRAM_MB=0 TT_METAL_STREAMING_PROFILER_FIFO_MB=16 pytest \
+    pytest \
       tests/ttnn/nightly/unit_tests/operations/data_movement \
       tests/ttnn/nightly/unit_tests/operations/experimental \
       --ignore=tests/ttnn/nightly/unit_tests/operations/experimental/fft \
@@ -442,9 +442,7 @@
 
 - name: ccl nightly tests
   cmd: |
-    # Only the perf files time device programs; the streaming profiler adds a bring-up to every mesh open, so the rest of the directory runs without it.
-    pytest tests/ttnn/unit_tests/operations/ccl/blackhole_CI/box/nightly --ignore=tests/ttnn/unit_tests/operations/ccl/blackhole_CI/box/nightly/test_all_to_all_async_generic_perf.py --ignore=tests/ttnn/unit_tests/operations/ccl/blackhole_CI/box/nightly/test_matmul_reduce_scatter_prefill_perf_bh.py
-    TT_METAL_STREAMING_PROFILER=1 TT_METAL_STREAMING_PROFILER_DRAM_MB=0 TT_METAL_STREAMING_PROFILER_FIFO_MB=16 pytest tests/ttnn/unit_tests/operations/ccl/blackhole_CI/box/nightly/test_all_to_all_async_generic_perf.py tests/ttnn/unit_tests/operations/ccl/blackhole_CI/box/nightly/test_matmul_reduce_scatter_prefill_perf_bh.py
+    pytest tests/ttnn/unit_tests/operations/ccl/blackhole_CI/box/nightly
     # The box/watcher tests only fail when a device ASSERT can trap, so the watcher has to be
     # enabled before pytest starts. This job runs with enable-watcher off, and with it off ASSERT
     # compiles to a no-op (tt_metal/hw/inc/api/debug/assert.h), so these tests would pass whether

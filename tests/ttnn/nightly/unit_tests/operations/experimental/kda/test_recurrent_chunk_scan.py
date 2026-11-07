@@ -472,9 +472,7 @@ def test_recurrent_chunk_scan_updates_state_in_multi_row_partial_width_blocks(
 def test_recurrent_chunk_scan_regression_performance(zero_actual_start, device: ttnn.Device) -> None:
     case = _REGRESSION_CASE
     if not is_perf_profiler_active():
-        pytest.fail(
-            "Streaming profiler (TT_METAL_STREAMING_PROFILER=1) must be active for recurrent chunk-scan performance checks"
-        )
+        pytest.fail("Streaming profiler must be active for recurrent chunk-scan performance checks")
     _, _, inputs, state = _regression_inputs(device, protocol_seed=117, state_seed=117)
 
     def run() -> list[ttnn.Tensor]:
@@ -517,9 +515,7 @@ def test_recurrent_chunk_scan_regression_performance(zero_actual_start, device: 
 def test_recurrent_chunk_scan_production_performance(zero_actual_start, device: ttnn.Device) -> None:
     case = _PRODUCTION_CASE
     if not is_perf_profiler_active():
-        pytest.fail(
-            "Streaming profiler (TT_METAL_STREAMING_PROFILER=1) must be active for recurrent chunk-scan performance checks"
-        )
+        pytest.fail("Streaming profiler must be active for recurrent chunk-scan performance checks")
     _, _, inputs, state = _production_inputs(device, protocol_seed=117, state_seed=117)
     compute_config = _production_compute_config(device)
 

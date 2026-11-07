@@ -471,9 +471,7 @@ def _require_rt_profiler() -> None:
     dispatch/fabric config disabled it (see realtime_profiler_manager eligibility) — fail loudly rather
     than silently mis-measure with an empty record set."""
     if not is_perf_profiler_active():
-        pytest.fail(
-            "Streaming profiler (TT_METAL_STREAMING_PROFILER=1) must be active for sparse MLA perf checks (eligible Blackhole HW required)"
-        )
+        pytest.fail("Streaming profiler must be active for sparse MLA perf checks (eligible Blackhole HW required)")
 
 
 def _op_label(kernel_sources) -> str:

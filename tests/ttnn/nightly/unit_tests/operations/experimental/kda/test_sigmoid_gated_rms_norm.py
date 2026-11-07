@@ -376,9 +376,7 @@ def test_sigmoid_gated_rms_norm_production_is_accurate_and_deterministic(
 @skip_with_watcher("Watcher perturbs kernel timing; perf checks are not meaningful with it enabled.")
 def test_sigmoid_gated_rms_norm_production_performance(device: ttnn.Device, case: _ProductionCase) -> None:
     if not is_perf_profiler_active():
-        pytest.fail(
-            "Streaming profiler (TT_METAL_STREAMING_PROFILER=1) must be active for sigmoid-gated RMSNorm performance checks"
-        )
+        pytest.fail("Streaming profiler must be active for sigmoid-gated RMSNorm performance checks")
 
     _, (input_tt, gate_tt, weight_tt) = _device_inputs(
         device,

@@ -236,10 +236,10 @@
     # Dispatch/combine perf remains disabled pending issue #47287.
     pytest models/demos/deepseek_v3_d_p/tests/perf/test_moe_perf.py::test_deepseek_v3_moe_perf_loudbox -vvv --tb=short || exit_code=$?
     pytest models/demos/deepseek_v3_d_p/tests/perf/test_prefill_block_perf.py -k "block_2x4" -vvv --tb=short || exit_code=$?
-    KDA_PERF_SKU=bh_loudbox TT_METAL_STREAMING_PROFILER=1 TT_METAL_STREAMING_PROFILER_DRAM_MB=0 TT_METAL_STREAMING_PROFILER_FIFO_MB=16 pytest models/demos/deepseek_v3_d_p/tests/kda/perf/test_layer_perf.py::test_synthetic_kimi_k3_perf -k "SP8xTP1" -vvv --tb=short || exit_code=$?
-    KDA_PERF_SKU=bh_loudbox TT_METAL_STREAMING_PROFILER=1 TT_METAL_STREAMING_PROFILER_DRAM_MB=0 TT_METAL_STREAMING_PROFILER_FIFO_MB=16 pytest models/demos/deepseek_v3_d_p/tests/kda/perf/test_layer_perf.py::test_kimi_k3_tp_reduce_scatter_perf -k "linear" -vvv --tb=short || exit_code=$?
+    KDA_PERF_SKU=bh_loudbox pytest models/demos/deepseek_v3_d_p/tests/kda/perf/test_layer_perf.py::test_synthetic_kimi_k3_perf -k "SP8xTP1" -vvv --tb=short || exit_code=$?
+    KDA_PERF_SKU=bh_loudbox pytest models/demos/deepseek_v3_d_p/tests/kda/perf/test_layer_perf.py::test_kimi_k3_tp_reduce_scatter_perf -k "linear" -vvv --tb=short || exit_code=$?
     pytest models/demos/deepseek_v3_d_p/tests/kda/components/test_qkv_convolution_exchange.py::test_qkv_convolution_exchange_kimi_k3_perf -k loudbox -vvv --tb=short || exit_code=$?
-    TT_METAL_STREAMING_PROFILER=1 TT_METAL_STREAMING_PROFILER_DRAM_MB=0 TT_METAL_STREAMING_PROFILER_FIFO_MB=16 pytest models/demos/deepseek_v3_d_p/tests/kda/components/test_relay_affine_prefix.py::test_relay_affine_prefix_kimi_k3_perf models/demos/deepseek_v3_d_p/tests/kda/components/test_entry_correction.py::test_entry_correction_kimi_k3_perf models/demos/deepseek_v3_d_p/tests/kda/components/test_select_final_carry.py::test_select_final_carry_kimi_k3_perf -k loudbox -vvv --tb=short || exit_code=$?
+    pytest models/demos/deepseek_v3_d_p/tests/kda/components/test_relay_affine_prefix.py::test_relay_affine_prefix_kimi_k3_perf models/demos/deepseek_v3_d_p/tests/kda/components/test_entry_correction.py::test_entry_correction_kimi_k3_perf models/demos/deepseek_v3_d_p/tests/kda/components/test_select_final_carry.py::test_select_final_carry_kimi_k3_perf -k loudbox -vvv --tb=short || exit_code=$?
     # Mistral Small 4 MoE and MLA at the PP=4 stage shape (SP=8 x TP=1). This LoudBox job builds
     # with Tracy; both rows are gated against a LoudBox baseline.
     export MISTRAL4_HF_MODEL=/mnt/models/blaze/mistralai/Mistral-Small-4-119B-2603
@@ -261,8 +261,8 @@
   cmd: |
     export TT_METAL_SHM_TRACKING_DISABLED=1
     export LOGURU_LEVEL=ERROR
-    TT_METAL_STREAMING_PROFILER=1 TT_METAL_STREAMING_PROFILER_DRAM_MB=0 TT_METAL_STREAMING_PROFILER_FIFO_MB=16 pytest models/demos/deepseek_v3_d_p/tests/kimi_k3/test_mla_perf.py -m perf -vvv --tb=short || exit $?
-    ATTN_RES_PERF_SKU=bh_loudbox TT_METAL_STREAMING_PROFILER=1 TT_METAL_STREAMING_PROFILER_DRAM_MB=0 TT_METAL_STREAMING_PROFILER_FIFO_MB=16 pytest models/demos/deepseek_v3_d_p/tests/attn_res/perf/test_attn_res_perf.py::test_attn_res_layer_perf -k "SP2xTP4" -vvv --tb=short || exit $?
+    pytest models/demos/deepseek_v3_d_p/tests/kimi_k3/test_mla_perf.py -m perf -vvv --tb=short || exit $?
+    ATTN_RES_PERF_SKU=bh_loudbox pytest models/demos/deepseek_v3_d_p/tests/attn_res/perf/test_attn_res_perf.py::test_attn_res_layer_perf -k "SP2xTP4" -vvv --tb=short || exit $?
   skus:
     bh_loudbox:
       timeout: 10
@@ -295,7 +295,7 @@
     export TT_METAL_SHM_TRACKING_DISABLED=1
     export LOGURU_LEVEL=ERROR
     exit_code=0
-    TT_METAL_STREAMING_PROFILER=1 TT_METAL_STREAMING_PROFILER_DRAM_MB=0 TT_METAL_STREAMING_PROFILER_FIFO_MB=16 pytest models/demos/deepseek_v3_d_p/tests/kimi_k3/test_mla_perf.py -m perf -vvv --tb=short || exit_code=$?
+    pytest models/demos/deepseek_v3_d_p/tests/kimi_k3/test_mla_perf.py -m perf -vvv --tb=short || exit_code=$?
     exit $exit_code
   skus:
     bh_quietbox_2:
@@ -310,10 +310,10 @@
   cmd: |
     export TT_METAL_SHM_TRACKING_DISABLED=1
     export LOGURU_LEVEL=ERROR
-    KDA_PERF_SKU=bh_quietbox TT_METAL_STREAMING_PROFILER=1 TT_METAL_STREAMING_PROFILER_DRAM_MB=0 TT_METAL_STREAMING_PROFILER_FIFO_MB=16 pytest models/demos/deepseek_v3_d_p/tests/kda/perf/test_layer_perf.py::test_synthetic_kimi_k3_perf -k "SP4xTP1" -vvv --tb=short || exit $?
-    KDA_PERF_SKU=bh_quietbox TT_METAL_STREAMING_PROFILER=1 TT_METAL_STREAMING_PROFILER_DRAM_MB=0 TT_METAL_STREAMING_PROFILER_FIFO_MB=16 pytest models/demos/deepseek_v3_d_p/tests/kda/perf/test_layer_perf.py::test_kimi_k3_tp_reduce_scatter_perf -k "ring" -vvv --tb=short || exit $?
+    KDA_PERF_SKU=bh_quietbox pytest models/demos/deepseek_v3_d_p/tests/kda/perf/test_layer_perf.py::test_synthetic_kimi_k3_perf -k "SP4xTP1" -vvv --tb=short || exit $?
+    KDA_PERF_SKU=bh_quietbox pytest models/demos/deepseek_v3_d_p/tests/kda/perf/test_layer_perf.py::test_kimi_k3_tp_reduce_scatter_perf -k "ring" -vvv --tb=short || exit $?
     pytest models/demos/deepseek_v3_d_p/tests/kda/components/test_qkv_convolution_exchange.py::test_qkv_convolution_exchange_kimi_k3_perf -k quietbox -vvv --tb=short || exit $?
-    TT_METAL_STREAMING_PROFILER=1 TT_METAL_STREAMING_PROFILER_DRAM_MB=0 TT_METAL_STREAMING_PROFILER_FIFO_MB=16 pytest models/demos/deepseek_v3_d_p/tests/kda/components/test_relay_affine_prefix.py::test_relay_affine_prefix_kimi_k3_perf models/demos/deepseek_v3_d_p/tests/kda/components/test_entry_correction.py::test_entry_correction_kimi_k3_perf models/demos/deepseek_v3_d_p/tests/kda/components/test_select_final_carry.py::test_select_final_carry_kimi_k3_perf -k quietbox -vvv --tb=short || exit $?
+    pytest models/demos/deepseek_v3_d_p/tests/kda/components/test_relay_affine_prefix.py::test_relay_affine_prefix_kimi_k3_perf models/demos/deepseek_v3_d_p/tests/kda/components/test_entry_correction.py::test_entry_correction_kimi_k3_perf models/demos/deepseek_v3_d_p/tests/kda/components/test_select_final_carry.py::test_select_final_carry_kimi_k3_perf -k quietbox -vvv --tb=short || exit $?
   skus:
     bh_quietbox_2:
       timeout: 10
@@ -348,7 +348,7 @@
   # helpers those tests reach their verdicts through, and the weight cache path, which is
   # only taken when a checkpoint is staged and CI stages none. The two-rank split walk runs
   # on Galaxy instead, to keep this job inside its budget.
-  cmd: TT_METAL_STREAMING_PROFILER=1 TT_METAL_STREAMING_PROFILER_DRAM_MB=0 TT_METAL_STREAMING_PROFILER_FIFO_MB=16 pytest models/demos/deepseek_v3_d_p/tests/attn_res/ -vvv --tb=short --deselect models/demos/deepseek_v3_d_p/tests/attn_res/model/test_forward_loop.py::test_split_loop_matches_reference
+  cmd: pytest models/demos/deepseek_v3_d_p/tests/attn_res/ -vvv --tb=short --deselect models/demos/deepseek_v3_d_p/tests/attn_res/model/test_forward_loop.py::test_split_loop_matches_reference
   skus:
     bh_loudbox:
       timeout: 10

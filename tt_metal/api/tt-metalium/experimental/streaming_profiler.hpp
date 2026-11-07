@@ -332,6 +332,17 @@ private:
 bool IsActive();
 
 /**
+ * @brief Turns the streaming profiler on or off for the devices opened next, in place of TT_METAL_STREAMING_PROFILER.
+ *
+ * Call it while no device is open and fabric is disabled (FabricConfig::DISABLED): the next device open re-initializes
+ * the runtime and compiles firmware and kernels with or without the profiler (each mode keeps its own JIT cache).
+ * Enabling uses direct push (no GDDR spool, whose DRAM region is only reserved when the environment variable is set at
+ * startup) and host_fifo_mb MiB of host FIFO per relay (a power of two). Blackhole only; mutually exclusive with the
+ * DRAM device profiler (TT_METAL_DEVICE_PROFILER) and DPRINT.
+ */
+void SetEnabled(bool enabled, uint32_t host_fifo_mb = 16);
+
+/**
  * @brief Kernel source paths of the program a record's runtime_id() names, on the default context.
  *
  * Empty if the runtime ID is unknown. Runtime IDs are 16-bit, so an ID is reused after 65536 program launches and

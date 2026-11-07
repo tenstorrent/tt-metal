@@ -435,9 +435,7 @@ def test_summarize_chunk_recurrence_rejects_unsupported_compute_config(
 def test_summarize_chunk_recurrence_regression_performance(zero_actual_start, device: ttnn.Device, init: bool) -> None:
     case = _REGRESSION_CASE
     if not is_perf_profiler_active():
-        pytest.fail(
-            "Streaming profiler (TT_METAL_STREAMING_PROFILER=1) must be active for recurrence-summary performance checks"
-        )
+        pytest.fail("Streaming profiler must be active for recurrence-summary performance checks")
     _, inputs = _regression_protocol(device, seed=117)
 
     def run() -> ttnn.Tensor:
@@ -476,9 +474,7 @@ def test_summarize_chunk_recurrence_production_performance(zero_actual_start, de
     """An unsplit rank's tail slots are all undefined, so identity-fill measures the worst-case fill cost."""
     case = _PRODUCTION_CASE
     if not is_perf_profiler_active():
-        pytest.fail(
-            "Streaming profiler (TT_METAL_STREAMING_PROFILER=1) must be active for recurrence-summary performance checks"
-        )
+        pytest.fail("Streaming profiler must be active for recurrence-summary performance checks")
     _, inputs = _production_protocol(device, seed=117)
     output_memory = group_summary_nd_sharded(device, 2, case.batch_heads, case.dim, case.dim)
     compute_config = _production_compute_config(device)

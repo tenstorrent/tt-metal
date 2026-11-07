@@ -690,9 +690,7 @@ def test_prepare_chunk_recurrence_rejects_unsupported_compute_config(
 def test_prepare_chunk_recurrence_production_performance(device: ttnn.Device) -> None:
     case = _PRODUCTION_CASE
     if not is_perf_profiler_active():
-        pytest.fail(
-            "Streaming profiler (TT_METAL_STREAMING_PROFILER=1) must be active for chunk-recurrence preparation performance checks"
-        )
+        pytest.fail("Streaming profiler must be active for chunk-recurrence preparation performance checks")
 
     host_inputs = _case_host_inputs(case, seed=117)
     inputs = _device_inputs(host_inputs, device)

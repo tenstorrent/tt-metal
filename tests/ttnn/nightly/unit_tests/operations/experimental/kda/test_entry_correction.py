@@ -237,9 +237,7 @@ def test_entry_correction_rejects_aliased_entry_states(
 def test_entry_correction_production_performance(device: ttnn.Device) -> None:
     """The model's call shape, starting inside the rank, at the scan's fidelity."""
     if not is_perf_profiler_active():
-        pytest.fail(
-            "Streaming profiler (TT_METAL_STREAMING_PROFILER=1) must be active for entry-correction performance checks"
-        )
+        pytest.fail("Streaming profiler must be active for entry-correction performance checks")
     math_fidelity = _PRODUCTION_FIDELITY
     correction = _correction(device, math_fidelity)
     inputs = _device_inputs(device, correction, _host_inputs(seed=117))

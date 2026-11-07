@@ -1229,9 +1229,7 @@ def test_indexer_score_math_util(device, case_id, run_fn, mm_flops_thunk, expect
         # This runs only on the IOMMU-pinned sku (the broad non-IOMMU globs exclude it by marker), so an inactive
         # profiler means it regressed on a sku that should have it -- fail (not skip), matching the sprint /
         # ring-joint perf checks.
-        pytest.fail(
-            "Streaming profiler (TT_METAL_STREAMING_PROFILER=1) must be active for indexer_score perf checks (needs IOMMU)"
-        )
+        pytest.fail("Streaming profiler must be active for indexer_score perf checks (needs IOMMU)")
     _, perf_record = profile_realtime_program(device, lambda: run_fn(device))
     duration_ns = perf_record["duration_ns"]
     core_count = INDEXER_PERF_CORES
