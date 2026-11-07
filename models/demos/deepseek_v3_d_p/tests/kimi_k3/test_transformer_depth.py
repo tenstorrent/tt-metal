@@ -37,6 +37,7 @@ from models.common.utility_functions import comp_pcc, is_blackhole
 # silent until the reference is called and LightweightModule.__call__ looks for a `forward`.
 from models.demos.deepseek_v3_d_p.reference.kimi_k3.attn_res.attn_res import attn_res as attn_res_reference
 from models.demos.deepseek_v3_d_p.reference.kimi_k3.attn_res.attn_res import fold_query
+from models.demos.deepseek_v3_d_p.reference.kimi_k3_1_config import KimiK31Config
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config, kimi_k3_hf_config
 from models.demos.deepseek_v3_d_p.tests.attn_res.checkpoint_utils import load_attn_res_state_dict
 from models.demos.deepseek_v3_d_p.tests.kda.checkpoint_utils import resolve_model_root
@@ -71,6 +72,7 @@ from models.demos.deepseek_v3_d_p.tt.attn_res.weights import load_attn_res_weigh
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.residual import TtAttnResResidual
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.transformer import TtKimiK3Transformer
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.weights import cache_root
+from models.demos.deepseek_v3_d_p.tt.mla.indexer import normalized_hadamard_matrix
 from models.demos.deepseek_v3_d_p.tt.mla.utils import blockcyclic_positions
 from models.demos.deepseek_v3_d_p.tt.runners.input_prep import prepare_prefill_input_tensor
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import allocate_mla_kvpe_cache
@@ -476,8 +478,17 @@ def test_synthetic_depth_writes_every_slot(model, mesh_device, device_params):
 # device's per-token error split into massive and normal tokens was not measured. Accepted as a metric effect
 # (orchestrator decision, tt_metal_tracker-ao3i.5.1).
 #
-# The indexer key cache is logged against `indexer/indexer_k_layer_i` for information only; whether and how
-# it is scored is tt_metal_tracker-ao3i.5.3's.
+# The DSA indexer, per DSA layer, as GLM-5.3's runner gate and the package's indexer tests measure it:
+#
+# * Key cache (tt_metal_tracker-ao3i.5.3): the device stores each key in the orthonormal Hadamard basis
+#   (`TtIndexer.write_k`), the trace's `indexer/indexer_k_layer_i` is the post-LayerNorm key in the natural
+#   basis (its own fp8 cache dequantizes to it at PCC 0.9996). Undo the rotation (H is symmetric and its own
+#   inverse) and PCC on the prompt rows, as the producer's index check does; raw, the two read PCC -0.22..0.17.
+#   Bar KV_CACHE_PCC, the KV cache's (the producer holds the index cache to the same threshold as the kvpe).
+# * Top-k (tt_metal_tracker-ao3i.5.2): each DSA layer's device top-2048 against `dsa/dsa_topk_indices_layer_i`,
+#   scored as set recall |device ∩ trace| / |trace| per query row (test_ttnn_csa*.py's measure), averaged
+#   over the prompt rows at positions >= INDEX_TOPK. Rows before that select every causal key on both sides
+#   (recall 1 by construction, checked) and decode rows are logged. Bar K31_TOPK_RECALL, per golden (below).
 #
 #     K31_HANDOFF_DIR=/path/handoff scripts/run_safe_pytest.sh \
 #         "models/demos/deepseek_v3_d_p/tests/kimi_k3/test_transformer_depth.py::test_k31_depth_ladder_matches_golden[blackhole-L5-torus-xy-8x4]"
@@ -486,6 +497,63 @@ def k31_layer_pcc(layer: int) -> float:
     if layer < KimiK3Config.ATTN_RES_BLOCK_SIZE:
         return SHALLOW_LAYER_PCC
     return DEEP_LAYER_PCC if layer < 2 * KimiK3Config.ATTN_RES_BLOCK_SIZE else LAYER_PCC_THRESHOLD
+
+
+# The package's indexer overlap floor (test_ttnn_csa_indexer._assert_topk_overlap). Measured at 10K
+# (tt_metal_tracker-ao3i.5.2): mean recall 0.913 (layer 51) .. 0.971. The trace's cut is crowded (~150 of 2048
+# selected keys within 1% of the row's score spread above it), and through layer 47 >= 98% of the trace keys the
+# device misses rank >= 1500 of 2048 by trace score: near-ties a bf8 key/query moves across the cut. From layer 55
+# on, 6-11% of misses come from the trace's top half, in rows owned mostly by newline/','/'.' tokens: the
+# frequent-token hidden-state error that sets in at layers 48-59 (tt_metal_tracker-ao3i.5.5), not the indexer
+# (its key cache stays >= 0.992 there). 0.95, the CSA chunked floor, would fail layers 3, 7, 51 and 63-92 on that.
+#
+# Near-tie recall falls with the number of candidates, so one floor cannot serve both goldens: at 128K the cut holds
+# ~300-380 keys within 1% of the spread (twice 10K's) and recall falls smoothly with position, at every layer. Layers
+# 11-23 keep the 10K signature (>= 94% of misses rank >= 1500, median margin 0.3-0.6% of the spread): mean 0.928-0.941.
+# Layers 3 and 7 carry ~3x the later layers' per-key score error at both lengths (miss margin p50 ~1.2%, p90 ~3.4% of
+# the spread, unchanged from 10K), so the crowding costs them more: 0.834 / 0.837, 0.811 over the last 16K rows. The
+# 128K floor is 0.8, ~3 points under them, as 0.9 sits ~1.3 under the 10K minimum (layer 51). Unlike 0.9, 0.8 comes
+# from this measurement alone, not from an external reference (orchestrator decision, tt_metal_tracker-ao3i.5.2);
+# the first layers' larger score error and the trend toward 1M are tt_metal_tracker-ao3i.5.7.
+K31_TOPK_RECALL = {TRACE_K31: 0.9, TRACE_K31_128K: 0.8}
+
+
+def k31_topk_rows(mesh_device, indices, rows: int) -> torch.Tensor:
+    """A DSA layer's top-k `[1, 1, rows/sp(/tp), k]` (one chunk's query rows over SP, TP-split or TP-replicated)
+    as host int64 `[rows, k]` in token order; the uint32 no-key sentinel reads 0xFFFFFFFF."""
+    sp, tp = mesh_device.shape[SP_AXIS], mesh_device.shape[TP_AXIS]
+    dims = [0, 0]
+    dims[SP_AXIS], dims[TP_AXIS] = 2, 1
+    host = (
+        ttnn.to_torch(
+            indices,
+            mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=tuple(dims), mesh_shape=tuple(mesh_device.shape)),
+        ).to(torch.int64)
+        & 0xFFFFFFFF
+    )  # [1, tp, sp * local, k]
+    local = host.shape[2] // sp
+    if local * sp == rows:
+        return host[0, 0]
+    assert local * sp * tp == rows, f"top-k rows {host.shape} do not tile a {rows}-row chunk on {sp}x{tp}"
+    return torch.cat([host[0, t, s * local : (s + 1) * local] for s in range(sp) for t in range(tp)])
+
+
+def topk_recall(got: torch.Tensor, want: torch.Tensor) -> torch.Tensor:
+    """Per row the fraction of `want`'s valid (>= 0) keys that occur in `got`, i.e. |got ∩ want| / |want| as sets
+    (a key `got` holds twice counts once). Both `[rows, k]` int64; `got`'s 0xFFFFFFFF sentinel matches nothing.
+    Rows with no valid `want` entry read NaN."""
+    rows = torch.arange(want.shape[0]).unsqueeze(1) << 32
+    valid = want >= 0
+    return (torch.isin(rows + want, rows + got) & valid).sum(dim=1) / valid.sum(dim=1)
+
+
+def test_topk_recall_counts_each_trace_key_once():
+    """Hand-checked: a duplicated device index does not stand in for a missed key, keys never match across rows,
+    and the no-key sentinel matches nothing."""
+    none = 0xFFFFFFFF
+    got = torch.tensor([[0, 0, 2], [0, 1, 2], [3, 4, 5], [0, none, none]])
+    want = torch.tensor([[0, 1, 2], [0, 1, 2], [0, 1, 2], [0, -1, -1]])
+    assert topk_recall(got, want).tolist() == pytest.approx([2 / 3, 1.0, 0.0, 1.0])
 
 
 # rung -> (golden, PP4 stage, layer count; None = the whole stage). "L24-128k" is K3's long-context check
@@ -555,6 +623,42 @@ def test_k31_depth_ladder_matches_golden(rung, mesh_device, device_params):
                 f"decode {decode.get((layer, c), float('nan')):.6f}{seal}"
             )
 
+    # Per DSA layer, the top-k recall of every trace row, filled chunk by chunk (the indices are not kept).
+    recall = {}  # global layer -> [trace rows] float
+    topk_miscounted = []
+
+    def score_topk(c, topk):
+        lo = c * chunk
+        for layer, got in sorted(topk.items()):
+            want = trace.rows("dsa", f"dsa_topk_indices_layer_{layer}", lo, min(lo + chunk, real_len)).long()
+            n = want.shape[0]
+            got = got[:n]
+            # Every device row selects min(position + 1, top-k) keys, as every trace row does.
+            want_count = torch.clamp(torch.arange(lo, lo + n) + 1, max=want.shape[1])
+            miscounted = int(((got < 2**31).sum(dim=1) != want_count).sum())
+            if miscounted:
+                topk_miscounted.append(f"layer {layer} chunk {c}: {miscounted} rows")
+            recall.setdefault(layer, torch.full((trace_rows,), float("nan")))[lo : lo + n] = topk_recall(got, want)
+
+    trace_rows = real_len - 1
+    topk = {}
+    dsa_mlas = {
+        first + local: layer.attention.mla
+        for local, layer in enumerate(runtime.model.layers)
+        if runtime.model.schedule.is_mla(first + local)
+    }
+
+    def with_topk(layer, mla_forward):
+        def forward_returning_topk(*args, **kwargs):
+            out, indices = mla_forward(*args, return_indexer_indices=True, **kwargs)
+            topk[layer] = k31_topk_rows(mesh_device, indices, chunk)
+            return out
+
+        return forward_returning_topk
+
+    for layer, mla in dsa_mlas.items():
+        mla.forward = with_topk(layer, mla.forward)
+
     taps = {}
     forward = runtime.model.forward
 
@@ -590,6 +694,8 @@ def test_k31_depth_ladder_matches_golden(rung, mesh_device, device_params):
                 ttnn.deallocate(out)
             score(c, taps)
             taps.clear()
+            score_topk(c, topk)
+            topk.clear()
         slots = {
             slot: runtime.model.schedule.global_index(local)
             for local, slot in enumerate(runtime.model.schedule.kv_slot_of_local)
@@ -602,6 +708,8 @@ def test_k31_depth_ladder_matches_golden(rung, mesh_device, device_params):
         }
     finally:
         runtime.model.forward = forward
+        for mla in dsa_mlas.values():
+            del mla.forward  # the instance attribute; the class's forward shows through again
         if kv_caches.kda_states is not None:
             kv_caches.kda_states.deallocate()
         runtime.release_trace()  # the sub-device managers, before the fixture closes the mesh
@@ -618,6 +726,7 @@ def test_k31_depth_ladder_matches_golden(rung, mesh_device, device_params):
         )
 
     kv_failures = []
+    hadamard = normalized_hadamard_matrix(KimiK31Config.INDEX_HEAD_DIM).float()
     for slot, layer in sorted(slots.items()):
         golden = trace.kv_cache(layer, 0, real_len)
         got = kv["kvpe"][slot, : golden.shape[0]]
@@ -629,12 +738,30 @@ def test_k31_depth_ladder_matches_golden(rung, mesh_device, device_params):
         )
         line = f"K31 {rung} kvpe slot {slot} (layer {layer}): lora={lora:.6f} rope={rope:.6f}"
         line += f"  decode lora={dec_lora:.6f} rope={dec_rope:.6f}"
-        if "index" in kv and trace.has("indexer", f"indexer_k_layer_{layer}"):
-            want_index = trace.rows("indexer", f"indexer_k_layer_{layer}", 0, prompt_len)
-            line += f"  index key (info) {pcc(want_index, kv['index'][slot, :prompt_len]):.6f}"
+        # The key in the trace's (natural) basis: the device stores it Hadamard-rotated.
+        want_index = trace.rows("indexer", f"indexer_k_layer_{layer}", 0, real_len)
+        got_index = kv["index"][slot, : want_index.shape[0]] @ hadamard
+        index = pcc(want_index[:prompt_len], got_index[:prompt_len])
+        line += f"  index key={index:.6f}  decode {pcc(want_index[prompt_len:], got_index[prompt_len:]):.6f}"
         logger.info(line)
         if min(lora, rope) < KV_CACHE_PCC:
             kv_failures.append(f"slot {slot} (layer {layer}): lora={lora:.6f} rope={rope:.6f}")
+        if index < KV_CACHE_PCC:
+            kv_failures.append(f"slot {slot} (layer {layer}): index key={index:.6f}")
+
+    # Top-k recall per DSA layer: gated on the prompt rows past the first top-k; the rows before it are checked
+    # for completeness, the teacher-forced decode rows logged.
+    topk_k = KimiK31Config.INDEX_TOPK
+    topk_failures = []
+    for layer, per_row in sorted(recall.items()):
+        full, gated, dec = per_row[:topk_k], per_row[topk_k:prompt_len], per_row[prompt_len:]
+        logger.info(
+            f"K31 {rung} layer {layer} top-{topk_k} recall vs dsa_topk_indices: prompt rows [{topk_k}, {prompt_len}) "
+            f"mean {gated.mean():.6f} p1 {gated.quantile(0.01):.4f} min {gated.min():.4f}  "
+            f"rows [0, {topk_k}) min {full.min():.4f}  decode mean {dec.mean():.6f}"
+        )
+        if gated.mean() < K31_TOPK_RECALL[golden_path] or full.min() < 1:
+            topk_failures.append(f"layer {layer}: {gated.mean():.6f} (rows < {topk_k}: min {full.min():.4f})")
 
     worst = min(scores, key=lambda k: scores[k] - k31_layer_pcc(k[0]))
     logger.info(
@@ -645,3 +772,5 @@ def test_k31_depth_ladder_matches_golden(rung, mesh_device, device_params):
         f"{l}/chunk{c}:{v:.6f}<{k31_layer_pcc(l)}" for (l, c), v in sorted(below.items())
     )
     assert not kv_failures, "KV cache diverged: " + "; ".join(kv_failures)
+    assert not topk_miscounted, "device top-k selects a different number of keys: " + "; ".join(topk_miscounted)
+    assert not topk_failures, f"top-k recall below {K31_TOPK_RECALL[golden_path]}: " + "; ".join(topk_failures)

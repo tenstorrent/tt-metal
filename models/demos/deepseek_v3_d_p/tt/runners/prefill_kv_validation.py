@@ -83,6 +83,20 @@ def _load_sharded_rows(layer_dir: Path, key: str, start: int, total_len: int) ->
     return out
 
 
+def _load_rows(single: Path, sharded: Path, key: str, start: int, total_len: int) -> "torch.Tensor":
+    """Rows [start, start + total_len) of one golden stream as float32: one file holding the whole tensor if
+    ``single`` exists, else the row shards under ``sharded``. A read short of ``total_len`` raises."""
+    from safetensors import safe_open
+
+    if not single.exists():
+        return _load_sharded_rows(sharded, key, start, total_len)
+    with safe_open(single, framework="pt") as f:
+        out = f.get_slice(key)[start : start + total_len].to(torch.float32)
+    if out.shape[0] != total_len:
+        raise FileNotFoundError(f"{single} covers only {out.shape[0]} of rows [{start},{start + total_len})")
+    return out
+
+
 def _load_golden_kv_post(trace_dir, layer_idx: int, total_len: int, start: int = 0) -> "torch.Tensor":
     """[total_len, 576] golden kv_post_transform for one layer, format-agnostic:
     - DeepSeek: a single kv_cache/layer_N.safetensors holding the full tensor.
@@ -90,17 +104,11 @@ def _load_golden_kv_post(trace_dir, layer_idx: int, total_len: int, start: int =
 
     `start` skips that many golden rows first. A head+tail capture stores the two windows back to
     back, so its tail begins at the head length rather than at the prompt position it represents:
-    reaching it needs a row offset, not a longer read.
+    reaching it needs a row offset, not a longer read. A read short of ``total_len`` raises in either layout.
     """
-    import torch
-    from safetensors import safe_open
-
+    root = Path(trace_dir) / "kv_cache"
     key = f"kv_post_transform_layer_{layer_idx}"
-    single = Path(trace_dir) / "kv_cache" / f"layer_{layer_idx}.safetensors"
-    if single.exists():
-        with safe_open(single, framework="pt") as f:
-            return f.get_slice(key)[start : start + total_len].to(torch.float32)
-    return _load_sharded_rows(Path(trace_dir) / "kv_cache" / f"layer_{layer_idx}", key, start, total_len)
+    return _load_rows(root / f"layer_{layer_idx}.safetensors", root / f"layer_{layer_idx}", key, start, total_len)
 
 
 def kvpe_golden_present(trace_dir, layer_idx: int) -> bool:
@@ -122,13 +130,14 @@ def index_golden_present(trace_dir, layer_idx: int | None = None) -> bool:
 
     Some vLLM dumps store only ``dsa/dsa_topk_indices_layer_*``, so a trace can hold a valid KVPE golden
     and no indexer key at all. Callers use this to skip index-cache validation instead of failing on the
-    empty ``torch.cat([])`` the loader would hit. Lives next to the loader so the ``dsa/indexer_k_layer_*``
-    layout stays encoded in exactly one place."""
-    from pathlib import Path
-
-    dsa_dir = Path(trace_dir) / "dsa"
-    pattern = "indexer_k_layer_*" if layer_idx is None else f"indexer_k_layer_{layer_idx}"
-    return dsa_dir.is_dir() and any(dsa_dir.glob(pattern))
+    empty ``torch.cat([])`` the loader would hit. Lives next to the loader so the two indexer-key layouts
+    (GLM's row-sharded ``dsa/indexer_k_layer_N/``, Kimi-K3.1's single ``indexer/indexer_k_layer_N.safetensors``)
+    stay encoded in exactly one place."""
+    layer = "*" if layer_idx is None else layer_idx
+    root = Path(trace_dir)
+    return any(root.glob(f"dsa/indexer_k_layer_{layer}")) or any(
+        root.glob(f"indexer/indexer_k_layer_{layer}.safetensors")
+    )
 
 
 def _rebase_index_k_rope(golden_ik: "torch.Tensor", hf_config, position0: int = 0) -> "torch.Tensor":
@@ -180,15 +189,16 @@ def _load_golden_index_k(
     hf_config=None,
     position0: int | None = None,
 ) -> "torch.Tensor":
-    """[total_len, index_head_dim] golden indexer key for one layer, from the vLLM trace's row-sharded
-    dsa/indexer_k_layer_N/rows_<start>_<end>.safetensors shards (concatenated by start row). Mirrors
-    _load_golden_kv_post but reads the dsa/ subdir and the indexer_k_layer_N key. ``rope_layout`` is
+    """[total_len, index_head_dim] golden indexer key for one layer (post-LayerNorm, natural basis), format-
+    agnostic as _load_golden_kv_post: Kimi-K3.1's single indexer/indexer_k_layer_N.safetensors, else GLM's
+    row-sharded dsa/indexer_k_layer_N/rows_<start>_<end>.safetensors (concatenated by start row). ``rope_layout`` is
     the pairing the TRACE stored; ``interleaved`` is the device's own, ``half_split`` is re-based.
     ``position0`` is the prompt position of the first returned row, which re-basing rotates by. It
     defaults to ``start``; a windowed (tail) trace stores position ``capture_start + r`` at row r, so
     pass the absolute position there."""
+    root = Path(trace_dir)
     key = f"indexer_k_layer_{layer_idx}"
-    golden = _load_sharded_rows(Path(trace_dir) / "dsa" / key, key, start, total_len)
+    golden = _load_rows(root / "indexer" / f"{key}.safetensors", root / "dsa" / key, key, start, total_len)
     if rope_layout == "interleaved":
         return golden
     if rope_layout != "half_split":
