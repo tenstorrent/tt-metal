@@ -11,8 +11,8 @@ TtMiMoModel.prefill_enqueue(embeds=, embed_rows=) merges into the chunk on devic
   hash), PlaceholderRange ``offset`` / ``length`` / ``is_embed`` in the full prompt, and the processor fields
   (``data``; None when vLLM stripped them because the item lies in an APC-cached prefix).
 * ``EncoderBackend``: what turns an item's processor fields into its embeddings [num_embeds, hidden] (host, bf16).
-  The vision workstream supplies the device ViT, the audio workstream the host audio path; until then
-  ``HFHostBackend`` (TEMPORARY) runs the checkpoint's own HF modules on the host.
+  ``CompositeBackend`` serves images / videos with the device ViT (tt/vision/) and audio on the host (tt/audio/);
+  ``HFHostBackend`` (debug only) runs the checkpoint's own HF modules on the host.
 * ``EmbeddingCache``: an LRU of item embeddings keyed by identifier, so a later chunk, a chunk start moved back into an
   earlier chunk's item, or another request with the same item does not encode it again.
 * ``chunk_embeds``: scatter of the items' embeddings into the rows of a chunk [start, end) of the prompt: an item may
@@ -340,10 +340,37 @@ class ItemEncoder:
         return emb
 
 
+class CompositeBackend:
+    """An EncoderBackend from one backend per modality family: ``vision`` (embed_image / embed_video; the serving
+    default is tt/vision/encoder.MiMoVisionEncoder on the request's row) and ``audio`` (embed_audio; the serving
+    default is tt/audio/host_backend.HostAudioBackend). A missing one raises MMInputError for its modalities."""
+
+    def __init__(self, vision=None, audio=None):
+        self.vision, self.audio = vision, audio
+
+    def embed_image(self, pixel_values, grid_thw):
+        if self.vision is None:
+            raise MMInputError("this backend serves no images")
+        return self.vision.embed_image(pixel_values, grid_thw)
+
+    def embed_video(self, pixel_values_videos, grid_thw):
+        if self.vision is None:
+            raise MMInputError("this backend serves no videos")
+        return self.vision.embed_video(pixel_values_videos, grid_thw)
+
+    def embed_audio(self, mel):
+        if self.audio is None:
+            raise MMInputError("this backend serves no audio")
+        return self.audio.embed_audio(mel)
+
+    def __repr__(self):
+        return f"CompositeBackend(vision={type(self.vision).__name__}, audio={type(self.audio).__name__})"
+
+
 # --------------------------------------------------------------------------------------------------------------------
-# TEMPORARY host backend: the checkpoint's own HF modules (modeling_mimo_v2.py) on the host, until the vision
-# workstream's device ViT (tt/vision/) and the audio workstream's host path (reference/audio.py) land. Not a reference:
-# whatever precision it runs in is what serving gets.
+# Debug only (MIMO_MM_ENCODER=hf_host): the checkpoint's own HF modules (modeling_mimo_v2.py) on the host. The serving
+# encoders are the device ViT (tt/vision/) and the host audio path (tt/audio/); the references are reference/vision.py
+# and reference/audio.py.
 # --------------------------------------------------------------------------------------------------------------------
 
 
@@ -370,7 +397,7 @@ def _load_prefixed(module, path, prefix):
 
 
 class HFHostBackend:
-    """TEMPORARY: image / video / audio embeddings from the checkpoint's HF modules on the host (torch, ``dtype``
+    """Debug only: image / video / audio embeddings from the checkpoint's HF modules on the host (torch, ``dtype``
     MIMO_MM_HOST_DTYPE: float32 by default). One instance per process (``shared``)."""
 
     _shared = {}
@@ -430,7 +457,7 @@ class HFHostBackend:
             for m in (self.speech_embeddings, self.audio, self.audio_tokenizer):
                 m.to(dtype).eval()
         logger.info(
-            f"MiMo multimodal: TEMPORARY HF host encoders loaded ({dtype}; vision {self.visual is not None}, audio "
+            f"MiMo multimodal: HF host encoders (debug backend) loaded ({dtype}; vision {self.visual is not None}, audio "
             f"{self.audio is not None})"
         )
 

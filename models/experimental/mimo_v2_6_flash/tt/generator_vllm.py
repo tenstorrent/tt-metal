@@ -2569,16 +2569,45 @@ class MiMoV2ForCausalLM:
 MM_MODALITIES = tuple(m for m in os.environ.get("MIMO_MM_MODALITIES", ",".join(mm.MODALITIES)).split(",") if m)
 
 
+# The device ViT's patch rows per pass (tt/vision; a single image always runs in one pass) and weight dtype.
+VIT_MAX_ROWS = int(os.environ.get("MIMO_VIT_MAX_ROWS", "16384"))
+_AUDIO_BACKENDS = {}
+_AUDIO_LOCK = threading.Lock()
+
+
+def _host_audio_backend(model_path):
+    """One host audio encoder per process (~1.7 GB of host weights), shared by the replicas: tt/audio/host_backend."""
+    from .audio.host_backend import HostAudioBackend
+
+    with _AUDIO_LOCK:
+        if model_path not in _AUDIO_BACKENDS:
+            threads = int(os.environ.get("MIMO_AUDIO_THREADS", "8"))
+            _AUDIO_BACKENDS[model_path] = HostAudioBackend(model_path, num_threads=threads)
+        return _AUDIO_BACKENDS[model_path]
+
+
 def default_encoder_backend(model_path, mesh_device):
-    """The encoder backend of the replica on ``mesh_device`` (its 1x8 row). MIMO_MM_ENCODER: ``hf_host`` (default:
-    the TEMPORARY host backend, tt/multimodal.HFHostBackend, one per process) or ``module.path:factory`` with the same
-    signature (the vision workstream's device ViT plugs in here: it runs on the row that serves the request)."""
-    spec = os.environ.get("MIMO_MM_ENCODER", "hf_host")
+    """The encoder backend of the replica on ``mesh_device`` (its 1x8 row). MIMO_MM_ENCODER:
+
+    * ``tt`` (default): images and videos on the row's device ViT (tt/vision/encoder.MiMoVisionEncoder, its weights
+      cached under MIMO_VISION_CACHE), audio on the host (tt/audio/host_backend.HostAudioBackend, one per process);
+    * ``hf_host``: debug only, the checkpoint's HF modules on the host (tt/multimodal.HFHostBackend);
+    * ``module.path:factory``: factory(model_path, mesh_device) -> an EncoderBackend."""
+    spec = os.environ.get("MIMO_MM_ENCODER", "tt")
+    if spec == "tt":
+        vision = audio = None
+        if "image" in MM_MODALITIES or "video" in MM_MODALITIES:
+            from .vision.encoder import MiMoVisionEncoder
+
+            vision = MiMoVisionEncoder(mesh_device, model_path, max_rows=VIT_MAX_ROWS)
+        if "audio" in MM_MODALITIES:
+            audio = _host_audio_backend(model_path)
+        return mm.CompositeBackend(vision, audio)
     if spec == "hf_host":
         return mm.HFHostBackend.shared(model_path)
     module, _, name = spec.partition(":")
     if not name:
-        raise ValueError(f"MIMO_MM_ENCODER={spec!r}: hf_host or module.path:factory")
+        raise ValueError(f"MIMO_MM_ENCODER={spec!r}: tt, hf_host or module.path:factory")
     import importlib
 
     return getattr(importlib.import_module(module), name)(model_path, mesh_device)
@@ -2657,7 +2686,7 @@ class MiMoV2OmniForCausalLM(MiMoV2ForCausalLM, *((SupportsMultiModal,) if Suppor
         self.mm_slot_items = {}
         self.mm_failures = 0  # chunks whose multimodal rows fell back to their placeholder tokens
         self._row_mm = self._row_slots = None
-        logger.info(f"MiMo vLLM: multimodal input {MM_MODALITIES}, encoders {[type(b).__name__ for b in backends]}")
+        logger.info(f"MiMo vLLM: multimodal input {MM_MODALITIES}, encoders {backends}")
 
     def _rows_items(self, tokens, prompt_lens, mm_items, pixel_values, grids):
         """Each prefill row's items (tt/multimodal.MMItem, prompt order). A row whose input is malformed is logged
@@ -2680,7 +2709,28 @@ class MiMoV2OmniForCausalLM(MiMoV2ForCausalLM, *((SupportsMultiModal,) if Suppor
                 out[i] = []
         return out
 
+    def log_dram(self, reason, every_s=None):
+        """Log each replica's free DRAM (per chip) and its largest free block, at most every ``every_s`` seconds
+        (MIMO_MM_DRAM_LOG_S, default 300; 0 turns the periodic log off): a slow leak or fragmentation shows up as a
+        trend while serving."""
+        every_s = float(os.environ.get("MIMO_MM_DRAM_LOG_S", "300")) if every_s is None else every_s
+        now = time.monotonic()
+        if every_s <= 0 or now - getattr(self, "_dram_logged", -1e9) < every_s:
+            return
+        self._dram_logged = now
+        parts = []
+        try:  # a log line must never raise out of prefill
+            for lane, model in enumerate(self.models):
+                view = ttnn.get_memory_view(model.mesh_device, ttnn.BufferType.DRAM)
+                free = view.total_bytes_free_per_bank * view.num_banks / 1e6
+                largest = view.largest_contiguous_bytes_free_per_bank * view.num_banks / 1e6
+                parts.append(f"replica {lane} {free:.0f} MB free, largest block {largest:.0f} MB")
+        except Exception:  # noqa: BLE001
+            return
+        logger.info(f"MiMo vLLM DRAM per chip ({reason}): " + "; ".join(parts))
+
     def prefill_forward(self, tokens, start_pos, prompt_lens, page_table, kv_cache, *args, **kwargs):
+        self.log_dram("periodic")
         mm_kwargs = [kwargs.pop(k, None) for k in ("mm_items", "pixel_values", "image_grid_thw")]
         items = self._rows_items(tokens, prompt_lens, *mm_kwargs)
         empty_slots = kwargs.get("empty_slots")
@@ -2755,3 +2805,4 @@ class MiMoV2OmniForCausalLM(MiMoV2ForCausalLM, *((SupportsMultiModal,) if Suppor
         for model in self.models:
             model.warm_embeds(lengths)
         logger.info(f"MiMo vLLM: multimodal row merge warmed up for padded lengths {lengths}")
+        self.log_dram("after the prefill warm-up", every_s=0.001)

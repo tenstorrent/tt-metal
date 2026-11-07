@@ -5,8 +5,10 @@
 
 Like make_golden.py, but the prompts go through vLLM's MiMo-V2-Omni processor (placeholder expansion, pixels, mel)
 and start from ``inputs_embeds``: the token embeddings with each item's placeholder rows replaced by the item's
-embeddings from the encoder backend (tt/multimodal.py; by default the HF host encoders in fp32, rounded to bf16 as
-the device receives them). Layers are streamed one at a time, every prompt through a layer before the next loads.
+embeddings from the fp32 reference encoders (reference/vision.py with vLLM's RMSNorm merger, reference/audio.py),
+rounded to bf16 as the device receives them. A text-only prompt of similar length is the control: it shows what the
+same metrics look like without multimodal rows. Layers are streamed one at a time, every prompt through a layer
+before the next loads.
 
 Saved per prompt: the processor's token ids and fields, the multimodal rows, ``inputs_embeds`` (bf16), the hidden
 state after every layer (bf16, [num_layers + 1, S, hidden]), the logits of the last ``--tail`` positions (fp32) and the
@@ -35,6 +37,45 @@ PLACEHOLDER = {
 def chat(placeholder, question):
     """One user turn and the non-thinking assistant prefix, as the checkpoint's chat template renders them."""
     return f"<|im_start|>user\n{placeholder}{question}<|im_end|><|im_start|>assistant\n<think></think>"
+
+
+# The control prompt: plain text of about the image prompt's length (no multimodal rows).
+CONTROL_TEXT = (
+    "Read the passage and answer the question.\n\n"
+    "The water cycle describes how water moves through the Earth system. Heat from the Sun evaporates water from "
+    "oceans, lakes and rivers, and plants release more water vapour through their leaves in a process called "
+    "transpiration. As warm, moist air rises it cools, and the vapour condenses on tiny particles of dust and salt to "
+    "form the droplets that make up clouds. When the droplets merge and grow heavy enough, they fall back to the "
+    "surface as rain, snow, sleet or hail. Some of this precipitation soaks into the ground and recharges aquifers, "
+    "some is stored for months or years in glaciers and snow packs, and the rest runs off the land into streams that "
+    "carry it back to the sea. Over long periods the cycle also shapes the landscape: rivers carve valleys, glaciers "
+    "grind mountains into sediment, and groundwater slowly dissolves limestone to create caves. Because the total "
+    "amount of water on the planet stays nearly constant, the same molecules have been recycled countless times "
+    "since the oceans first formed, which is why the water in a glass today may once have fallen as rain on a "
+    "dinosaur.\n\nQuestion: What process releases water vapour from plants? Answer in one sentence."
+)
+
+
+class ReferenceEncoders:
+    """The fp32 reference encoders as an EncoderBackend (tt/multimodal.py)."""
+
+    def __init__(self, model_path):
+        from models.experimental.mimo_v2_6_flash.reference.audio import MiMoAudioReference
+        from models.experimental.mimo_v2_6_flash.reference.vision import MiMoVisionReference
+
+        self.vision = MiMoVisionReference.from_model_path(model_path, merger_norm="rms")
+        self.audio = MiMoAudioReference.from_model_path(model_path)
+
+    @torch.no_grad()
+    def embed_image(self, pixel_values, grid_thw):
+        return self.vision.forward(pixel_values.float(), torch.as_tensor(grid_thw).reshape(-1, 3))
+
+    embed_video = embed_image
+
+    @torch.no_grad()
+    def embed_audio(self, mel):
+        mel = torch.as_tensor(mel).float()
+        return self.audio.embed([mel[0] if mel.dim() == 3 else mel])[0]
 
 
 def test_image():
@@ -66,6 +107,8 @@ def build_prompts(model_path, image_path=None, audio_path=None):
     tok = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
     proc = MiMoOmniProcessor.from_hf_config(tok, AutoConfig.from_pretrained(model_path, trust_remote_code=True))
     out = []
+    text = chat("", CONTROL_TEXT)
+    out.append(("text", text, torch.tensor(tok(text)["input_ids"]), None, None))
     img = Image.open(image_path).convert("RGB") if image_path else test_image()
     text = chat(PLACEHOLDER["image"], "What is in this image? Answer in one sentence.")
     p = proc(text=text, images=[img], return_tensors="pt")
@@ -97,10 +140,28 @@ def main():
     num_layers = args.num_layers or cfg.num_hidden_layers
     prompts = build_prompts(args.model_path, args.image, args.audio)
 
-    backend = mm.HFHostBackend(args.model_path, dtype=torch.float32)
+    backend = ReferenceEncoders(args.model_path)
     embedding = ckpt.embedding()
     records = []
     for name, text, ids, fields, modality in prompts:
+        if modality is None:  # the text-only control
+            embeds = embedding[ids].to(torch.bfloat16)
+            mask = torch.zeros(ids.numel(), dtype=torch.bool)
+            logger.info(f"{name}: {ids.numel()} tokens, text only")
+            records.append(
+                dict(
+                    name=name,
+                    text=text,
+                    token_ids=ids,
+                    modality=None,
+                    offset=0,
+                    length=0,
+                    fields=None,
+                    mm_rows=mask,
+                    inputs_embeds=embeds,
+                )
+            )
+            continue
         token = IMAGE_TOKEN if modality == "image" else AUDIO_TOKEN
         (offset, length), *rest = mm.placeholder_rows(ids, token)
         assert not rest, f"{name}: one item per prompt"
@@ -163,7 +224,7 @@ def main():
             "prompts": records,
             "num_layers": num_layers,
             "tail": args.tail,
-            "encoder": f"tt/multimodal.HFHostBackend float32 (merger norm {mm.os.environ.get('MIMO_MM_MERGER_NORM', 'rms')})",
+            "encoder": "reference/vision.py (merger rms) and reference/audio.py, float32",
         },
         args.out,
     )
