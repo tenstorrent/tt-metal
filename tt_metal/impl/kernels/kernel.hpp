@@ -123,6 +123,10 @@ struct DataflowBufferBindingHandle {
     bool consumes = false;
     uint8_t pap = 0;
     uint8_t cap = 0;
+    // Watcher: the nodes the DFB's address is reserved on, as rectangles in NoC coordinates. Empty without Watcher NoC
+    // sanitizing, and for a DFB borrowed from an interleaved tensor: that tensor holds the address in every L1 bank, so
+    // no node set narrower than the whole grid limits a multicast into it.
+    std::vector<experimental::NodeRange> watcher_node_ranges;
 };
 using DataflowBufferBindingHandleMap = std::unordered_map<std::string, DataflowBufferBindingHandle>;
 
@@ -131,6 +135,8 @@ struct SemaphoreBindingHandle {
     uint16_t id = 0;
     SemScope scope = SemScope::LOCAL_NONATOMIC;
     uint32_t total_binder_harts = 0;
+    // Watcher: the nodes the semaphore exists on, as for DataflowBufferBindingHandle::watcher_node_ranges.
+    std::vector<experimental::NodeRange> watcher_node_ranges;
 };
 // Metal 2.0: semaphore accessor names -> {semaphore id, scope}
 using SemaphoreBindingHandleMap = std::unordered_map<std::string, SemaphoreBindingHandle>;
@@ -338,6 +344,12 @@ public:
         std::function<
             void(const std::string& accessor_name, uint16_t semaphore_id, SemScope scope, uint32_t total_binder_harts)>)
         const override;
+    void process_watcher_node_ranges(
+        const std::function<void(
+            const std::string& accessor_name, const std::vector<experimental::NodeRange>& node_ranges)>& dfb_callback,
+        const std::function<
+            void(const std::string& accessor_name, const std::vector<experimental::NodeRange>& node_ranges)>&
+            semaphore_callback) const override;
     void process_tensor_binding_handles(const std::function<void(
                                             const std::string& accessor_name,
                                             uint32_t cta_offset,
