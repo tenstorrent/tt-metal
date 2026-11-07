@@ -262,7 +262,7 @@ struct to_json_t<tt::tt_metal::CoreCoord> {
 
 template <>
 struct from_json_t<tt::tt_metal::CoreCoord> {
-    tt::tt_metal::CoreCoord operator()(const nlohmann::json& json) noexcept;
+    tt::tt_metal::CoreCoord operator()(const nlohmann::json& json);
 };
 
 template <>
@@ -272,7 +272,7 @@ struct to_json_t<tt::tt_metal::CoreRange> {
 
 template <>
 struct from_json_t<tt::tt_metal::CoreRange> {
-    tt::tt_metal::CoreRange operator()(const nlohmann::json& json) noexcept;
+    tt::tt_metal::CoreRange operator()(const nlohmann::json& json);
 };
 
 template <>
@@ -282,7 +282,7 @@ struct to_json_t<tt::tt_metal::CoreRangeSet> {
 
 template <>
 struct from_json_t<tt::tt_metal::CoreRangeSet> {
-    tt::tt_metal::CoreRangeSet operator()(const nlohmann::json& json) noexcept;
+    tt::tt_metal::CoreRangeSet operator()(const nlohmann::json& json);
 };
 
 }  // namespace ttsl::json
