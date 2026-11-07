@@ -30,6 +30,7 @@ NB_MAKE_OPAQUE(ttml::serialization::NamedParameters)
 
 #include <nanobind/stl/unordered_map.h>
 
+#include "autograd/auto_context.hpp"
 #include "autograd/tensor.hpp"
 #include "core/clip_grad_norm.hpp"
 #include "core/distributed/distributed.hpp"
@@ -42,6 +43,19 @@ NB_MAKE_OPAQUE(ttml::serialization::NamedParameters)
 #include "utils/memory_utils.hpp"
 
 namespace ttml::nanobind::core {
+
+namespace {
+
+// `placements` as a list of ttnn's Python placement objects (ttnn.PlacementShard / ttnn.PlacementReplicate).
+nb::list placements_list(const ttsl::SmallVector<tt::tt_metal::distributed::MeshMapperConfig::Placement>& placements) {
+    nb::list result;
+    for (const auto& placement : placements) {
+        std::visit([&result](const auto& p) { result.append(nb::cast(p, nb::rv_policy::copy)); }, placement);
+    }
+    return result;
+}
+
+}  // namespace
 
 void py_module_types(nb::module_& m) {
     m.def_submodule("distributed");
@@ -246,7 +260,31 @@ void py_module(nb::module_& m) {
             nb::arg("tensor"),
             nb::arg("cluster_axis") = nb::none(),
             "Raw all_reduce without autograd tracking. Returns a new ttnn::Tensor.");
+        py_distributed.def(
+            "mesh_partition",
+            &ttml::ttnn_fixed::distributed::mesh_partition,
+            nb::arg("tensor"),
+            nb::arg("dim"),
+            nb::arg("cluster_axis") = nb::none(),
+            "Raw mesh_partition (each device keeps its own slice of `dim` along `cluster_axis`, no collective). "
+            "Returns a new ttnn::Tensor.");
 
+        py_distributed.def(
+            "placements_per_axis",
+            [](const ttnn::Tensor& tensor) {
+                return placements_list(ttml::core::distributed::placements_per_axis(tensor));
+            },
+            nb::arg("tensor"),
+            "`tensor`'s placement on each mesh axis.");
+        py_distributed.def(
+            "placements_per_axis",
+            [](const tt::tt_metal::distributed::MeshMapperConfig& config) {
+                return placements_list(
+                    ttml::core::distributed::placements_per_axis(config, ttml::autograd::ctx().get_device().shape()));
+            },
+            nb::arg("config"),
+            "The placement on each axis of the current mesh that a mapper with `config` gives a tensor, read as the "
+            "tensor's label would be.");
         py_distributed.def(
             "is_sharded_on_axis",
             &ttml::core::distributed::is_sharded_on_axis,

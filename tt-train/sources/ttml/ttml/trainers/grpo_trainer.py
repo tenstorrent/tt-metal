@@ -895,7 +895,6 @@ class GRPOTrainer:
         self._fsdp_enabled: bool = False
         self._ddp_enabled: bool = False
         self._ddp_context_enabled: bool = False
-        self._fsdp_sync_axes: Tuple[str, ...] = ()
         self._dp_mapper: Any = None
         self._dp_composer: Any = None
         self._grad_sync_world_size: int = 1
@@ -1165,7 +1164,6 @@ class GRPOTrainer:
         self._fsdp_enabled = fsdp_enabled
         self._ddp_enabled = ddp_enabled
         self._ddp_context_enabled = ddp_context_enabled
-        self._fsdp_sync_axes = fsdp_sync_axes
         self._dp_mapper = dp_mapper
         self._dp_composer = dp_composer
         self._grad_sync_world_size = grad_sync_world_size
@@ -1378,7 +1376,7 @@ class GRPOTrainer:
           5. ``self._lr_scheduler.step()`` sets the next step's LR.
         """
         if self._fsdp_enabled:
-            ttml.sync_gradients(self.model.parameters(), axis_names=self._fsdp_sync_axes)
+            ttml.sync_gradients(self.model.parameters())
         elif self._ddp_context_enabled:
             # Parallelism-context DDP (Llama completer): a parallelism context
             # is initialized, so use its gradient sync. ``sync_gradients`` would
@@ -1392,7 +1390,7 @@ class GRPOTrainer:
             # primitive FSDP uses. The loss normalization divides by
             # ``grad_sync_world_size`` (= the "dp" axis size here), matched to
             # this reduction.
-            ttml.sync_gradients(self.model.parameters(), axis_names=("dp",))
+            ttml.sync_gradients(self.model.parameters())
 
         for cb in self.callbacks:
             self._time_callback(cb, "on_before_optimizer_step", self)

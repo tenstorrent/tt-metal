@@ -36,6 +36,7 @@ from ttml.models.llama.safetensors_loader import (
     _sharded_dim,
     _tp_axis,
 )
+from ttml.parallel import TPStrategy
 
 HEAD_DIM = 8  # even: RoPE splits each head into two halves
 HIDDEN = 16
@@ -179,18 +180,16 @@ class TestPlacementWithoutTensorParallelism:
         monkeypatch.setattr(ttml, "maybe_mesh", lambda: mesh)
         assert _tp_axis() is None
 
-    def test_rejects_a_shard_over_another_axis(self, monkeypatch, expect_error):
+    def test_rejects_a_shard_over_another_axis(self, expect_error):
         """Assigning the whole tensor to a dp-sharded parameter would silently undo the sharding."""
         sharded = SimpleNamespace(placements=[ttnn.PlacementShard(ROW_DIM)])
-        monkeypatch.setattr(ttml.Sharding, "from_tensor", lambda _: sharded)
         with expect_error(RuntimeError, "Llama/fc/weight: sharded over mesh axis 0"):
-            _sharded_dim(object(), None, "Llama/fc/weight")
+            _sharded_dim(sharded, None, "Llama/fc/weight")
 
-    def test_rejects_a_tp_shard_on_neither_rows_nor_columns(self, monkeypatch, expect_error):
+    def test_rejects_a_tp_shard_on_neither_rows_nor_columns(self, expect_error):
         sharded = SimpleNamespace(placements=[ttnn.PlacementReplicate(), ttnn.PlacementShard(1)])
-        monkeypatch.setattr(ttml.Sharding, "from_tensor", lambda _: sharded)
         with expect_error(RuntimeError, "Llama/fc/weight: sharded on dim 1 over 'tp'"):
-            _sharded_dim(object(), _TpAxis(index=1, size=2), "Llama/fc/weight")
+            _sharded_dim(sharded, _TpAxis(index=1, size=2), "Llama/fc/weight")
 
 
 class HeadersOnly:
@@ -205,17 +204,23 @@ class HeadersOnly:
 
 
 class TestLoadPlan:
-    """Runs without a device: placements are stubbed, and shapes come from ``HeadersOnly``."""
+    """Runs without a device: each parameter's layout is stubbed, and the checkpoint's shapes come from
+    ``HeadersOnly``."""
 
     @staticmethod
     def param(rows: int, cols: int):
-        return SimpleNamespace(shape=lambda: [1, 1, rows, cols])
+        """A parameter whose stubbed layout reports a global shape of ``[rows, cols]``."""
+        return SimpleNamespace(global_shape=[1, 1, rows, cols])
 
     @pytest.fixture
     def placements(self, monkeypatch):
         """The placements every parameter reports; a test may change them in place."""
         current = [ttnn.PlacementReplicate()]
-        monkeypatch.setattr(ttml.Sharding, "from_tensor", lambda _: SimpleNamespace(placements=current))
+        monkeypatch.setattr(
+            ttml.Sharding,
+            "from_tensor",
+            lambda param: SimpleNamespace(placements=current, global_shape=param.global_shape),
+        )
         return current
 
     def test_without_a_source_shape_requires_the_parameter_shape(self, placements, expect_error):
@@ -233,11 +238,12 @@ class TestLoadPlan:
             _load_plan(rule, self.param(128, 3), None, 1, HeadersOnly({"a": (120, 3)}))
 
     def test_a_row_shard_expects_the_global_shape(self, placements):
+        """Each of the 2 tp ranks holds 64 rows, so the checkpoint must supply all 128."""
         placements[:] = [ttnn.PlacementReplicate(), ttnn.PlacementShard(ROW_DIM)]
         tp = _TpAxis(index=1, size=2)
         rule = _Rule("w_gate_up", ("gate", "up"), block_rows=(64, 64))
         headers = HeadersOnly({"gate": (64, HIDDEN), "up": (64, HIDDEN)})
-        assert _load_plan(rule, self.param(64, HIDDEN), tp, 2, headers) == (ROW_DIM, (128, HIDDEN))
+        assert _load_plan(rule, self.param(128, HIDDEN), tp, 2, headers) == (ROW_DIM, (128, HIDDEN))
 
     @pytest.mark.parametrize(
         "suffix,rows",
@@ -545,8 +551,8 @@ class TestSources:
 # ── End-to-end: a synthetic HF checkpoint through the real loader ──
 
 
-def e2e_config(use_tp: bool, placement: EmbeddingPlacement, tying=WeightTyingType.Disabled, **overrides):
-    return coverage_config(use_tp=use_tp, embedding_placement=placement, weight_tying=tying, **overrides)
+def e2e_config(tp_strategy: TPStrategy, placement: EmbeddingPlacement, tying=WeightTyingType.Disabled, **overrides):
+    return coverage_config(tp_strategy=tp_strategy, embedding_placement=placement, weight_tying=tying, **overrides)
 
 
 def hf_tensors(vocab: int = VOCAB, dtype=np.float32, tied: bool = False) -> dict[str, np.ndarray]:
@@ -680,7 +686,7 @@ class TestLoadIntoModel:
     @pytest.mark.parametrize("dtype", [np.float32, ml_dtypes.bfloat16], ids=["f32", "bf16"])
     def test_reports_a_clean_load(self, tmp_path, dtype):
         write_hf_checkpoint(tmp_path, hf_tensors(dtype=dtype))
-        model = Llama(e2e_config(False, EmbeddingPlacement.Replicated))
+        model = Llama(e2e_config(TPStrategy.NONE, EmbeddingPlacement.Replicated))
         result = load_from_safetensors(model, tmp_path)
 
         assert sorted(result.loaded) == sorted(model.parameters())
@@ -691,7 +697,7 @@ class TestLoadIntoModel:
         hf = hf_tensors()
         hf["model.layers.0.self_attn.rotary_emb.inv_freq"] = np.ones(MODEL_HEAD_DIM // 2, np.float32)
         write_hf_checkpoint(tmp_path, hf)
-        model = Llama(e2e_config(False, EmbeddingPlacement.Replicated, attention_bias=True))
+        model = Llama(e2e_config(TPStrategy.NONE, EmbeddingPlacement.Replicated, attention_bias=True))
         biases = sorted(name for name in model.parameters() if name.endswith("/bias"))
         assert biases, "premise: the model has attention biases"
         before = {name: model.parameters()[name].to_numpy(ttnn.DataType.FLOAT32) for name in biases}
@@ -709,7 +715,7 @@ class TestLoadIntoModel:
         """A fused parameter needs all of its sources; a partial group must not load silently."""
         save_checkpoint(tmp_path, {k: v for k, v in hf_tensors().items() if "v_proj" not in k})
         with expect_error(RuntimeError, "the checkpoint has no"):
-            load_from_safetensors(Llama(e2e_config(False, EmbeddingPlacement.Replicated)), tmp_path)
+            load_from_safetensors(Llama(e2e_config(TPStrategy.NONE, EmbeddingPlacement.Replicated)), tmp_path)
 
     def test_a_failed_check_leaves_the_model_untouched(self, tmp_path, expect_error):
         """A bad tensor in the last layer must fail the load before any earlier layer is written."""
@@ -718,7 +724,7 @@ class TestLoadIntoModel:
             (MODEL_HIDDEN, INTERMEDIATE // 2), np.float32
         )
         write_hf_checkpoint(tmp_path, hf)
-        model = Llama(e2e_config(False, EmbeddingPlacement.Replicated))
+        model = Llama(e2e_config(TPStrategy.NONE, EmbeddingPlacement.Replicated))
         before = {name: param.to_numpy(ttnn.DataType.FLOAT32) for name, param in model.parameters().items()}
 
         with expect_error(RuntimeError, "does not match the config-implied shape"):
@@ -742,12 +748,12 @@ class TestLoadIntoModel:
         hf[f"{pfx}.{long}.weight"] = np.concatenate([long_block, short_block[-MODEL_HEAD_DIM:]])
         write_hf_checkpoint(tmp_path, hf)
         with expect_error(RuntimeError, "the config implies"):
-            load_from_safetensors(Llama(e2e_config(False, EmbeddingPlacement.Replicated)), tmp_path)
+            load_from_safetensors(Llama(e2e_config(TPStrategy.NONE, EmbeddingPlacement.Replicated)), tmp_path)
 
     @pytest.mark.parametrize("tying", TYINGS, ids=lambda v: v.name)
     def test_every_parameter_holds_its_sources(self, tmp_path, tying):
         hf = write_hf_checkpoint(tmp_path, hf_tensors(tied=tying == WeightTyingType.Enabled))
-        model = Llama(e2e_config(False, EmbeddingPlacement.Replicated, tying))
+        model = Llama(e2e_config(TPStrategy.NONE, EmbeddingPlacement.Replicated, tying))
         load_from_safetensors(model, tmp_path)
         assert_every_parameter_loaded(model, hf)
 
@@ -759,7 +765,7 @@ class TestLoadIntoModel:
         """The model decides the precision and the checkpoint supplies the values: an fp32 parameter
         holds the checkpoint's values exactly, a bf16 one their rounding."""
         hf = write_hf_checkpoint(tmp_path, hf_tensors(dtype=checkpoint_dtype))
-        model = Llama(e2e_config(False, EmbeddingPlacement.Replicated))
+        model = Llama(e2e_config(TPStrategy.NONE, EmbeddingPlacement.Replicated))
         store_as(model, dtype)
         load_from_safetensors(model, tmp_path)
         for name, param in model.parameters().items():
@@ -770,14 +776,14 @@ class TestLoadIntoModel:
         hf = hf_tensors()
         hf["lm_head.weight"] = hf["model.embed_tokens.weight"].copy()
         write_hf_checkpoint(tmp_path, hf)
-        model = Llama(e2e_config(False, EmbeddingPlacement.Replicated, WeightTyingType.Enabled))
+        model = Llama(e2e_config(TPStrategy.NONE, EmbeddingPlacement.Replicated, WeightTyingType.Enabled))
         assert load_from_safetensors(model, tmp_path).unused == ("lm_head.weight",)
         assert_every_parameter_loaded(model, hf)
 
     def test_pads_the_vocab_the_model_rounds_up_to_a_tile(self, tmp_path):
         vocab = VOCAB - 8
         hf = write_hf_checkpoint(tmp_path, hf_tensors(vocab=vocab))
-        model = Llama(e2e_config(False, EmbeddingPlacement.Replicated, vocab_size=vocab))
+        model = Llama(e2e_config(TPStrategy.NONE, EmbeddingPlacement.Replicated, vocab_size=vocab))
         assert model.padded_vocab_size > vocab, "premise: the model rounds the vocab up"
         load_from_safetensors(model, tmp_path)
         assert_every_parameter_loaded(model, hf)
@@ -787,7 +793,7 @@ class TestLoadIntoModel:
         """A shorter vocab would leave noise for real tokens; main cropped a longer one."""
         write_hf_checkpoint(tmp_path, hf_tensors(vocab=vocab))
         with expect_error(RuntimeError, "does not match the config-implied shape"):
-            load_from_safetensors(Llama(e2e_config(False, EmbeddingPlacement.Replicated)), tmp_path)
+            load_from_safetensors(Llama(e2e_config(TPStrategy.NONE, EmbeddingPlacement.Replicated)), tmp_path)
 
 
 # ── Against HuggingFace ──
@@ -854,7 +860,7 @@ def ttml_logits(model: Llama, ids: np.ndarray) -> np.ndarray:
         build_causal_mask(SEQ_LEN, device=True),
     )
     composer = None
-    if model.config.use_tp:
+    if model.config.tp_strategy.tensor_parallel:
         device = ttml.autograd.AutoContext.get_instance().get_device()
         composer = ttml.core.distributed.concat_mesh_to_tensor_composer(device, COL_DIM)
     values = logits.to_numpy(ttnn.DataType.FLOAT32, composer=composer)
@@ -908,15 +914,22 @@ class TestLoadIntoTensorParallelModel:
     )
     def test_tensor_parallel_layout(self, tmp_path, placement, tying):
         hf = write_hf_checkpoint(tmp_path, hf_tensors(tied=tying == WeightTyingType.Enabled))
-        model = Llama(e2e_config(True, placement, tying))
+        model = Llama(e2e_config(TPStrategy.TENSOR, placement, tying))
         load_from_safetensors(model, tmp_path)
         assert_every_parameter_loaded(model, hf, ttml.mesh().axis_size("tp"), placement)
+
+    def test_sequence_parallel_layout_matches_tensor_parallel(self, tmp_path):
+        """SP changes the collectives, not the weight sharding, so the loader needs no SP path."""
+        hf = write_hf_checkpoint(tmp_path, hf_tensors())
+        model = Llama(e2e_config(TPStrategy.TENSOR_SEQUENCE, EmbeddingPlacement.VocabParallel))
+        load_from_safetensors(model, tmp_path)
+        assert_every_parameter_loaded(model, hf, ttml.mesh().axis_size("tp"), EmbeddingPlacement.VocabParallel)
 
     def test_pads_the_vocab_the_model_rounds_up_to_a_tile(self, tmp_path):
         """The one end-to-end vocab that is not tile-aligned: 120 rounds up to 128, and the pad rows shard too."""
         vocab = VOCAB - 8
         hf = write_hf_checkpoint(tmp_path, hf_tensors(vocab=vocab))
-        model = Llama(e2e_config(True, EmbeddingPlacement.VocabParallel, vocab_size=vocab))
+        model = Llama(e2e_config(TPStrategy.TENSOR, EmbeddingPlacement.VocabParallel, vocab_size=vocab))
         assert model.padded_vocab_size > vocab, "premise: the model rounds the vocab up"
         load_from_safetensors(model, tmp_path)
         assert_every_parameter_loaded(model, hf, ttml.mesh().axis_size("tp"), EmbeddingPlacement.VocabParallel)
@@ -924,7 +937,7 @@ class TestLoadIntoTensorParallelModel:
     def test_keeps_an_fp32_models_values(self, tmp_path):
         """The fused blocks are interleaved and sharded in the parameter's dtype, not rounded to bf16 on the way."""
         hf = write_hf_checkpoint(tmp_path, hf_tensors())
-        model = Llama(e2e_config(True, EmbeddingPlacement.VocabParallel))
+        model = Llama(e2e_config(TPStrategy.TENSOR, EmbeddingPlacement.VocabParallel))
         store_as(model, ttnn.DataType.FLOAT32)
         load_from_safetensors(model, tmp_path)
         for name, param in model.parameters().items():
@@ -933,7 +946,9 @@ class TestLoadIntoTensorParallelModel:
 
     def test_logits_match_hugging_face(self, tmp_path):
         """Tied and vocab-parallel, as LoRA loads Llama 3.2 1B, with the fused blocks interleaved per device."""
-        assert_logits_match_hf(tmp_path, tied=True, use_tp=True, embedding_placement=EmbeddingPlacement.VocabParallel)
+        assert_logits_match_hf(
+            tmp_path, tied=True, tp_strategy=TPStrategy.TENSOR, embedding_placement=EmbeddingPlacement.VocabParallel
+        )
 
 
 if __name__ == "__main__":

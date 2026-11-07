@@ -115,7 +115,6 @@ class MultiHeadLatentAttention(AbstractModuleBase):
                 attn_in,
                 config.dim,
                 has_bias=False,
-                input_is_parallel=True,
                 axis_name="tp",
             )
         else:

@@ -92,14 +92,10 @@ DistributedTransformer::DistributedTransformer(const TransformerConfig& config) 
                 ttml::modules::PositionalEmbeddingConfig{
                     .embedding_dim = embedding_dim,
                     .sequence_length = max_sequence_length,
-                    .dropout_prob = dropout_prob,
-                    .use_dropout_seed_per_device = false});
+                    .dropout_prob = dropout_prob});
         } else {
             return std::make_shared<ttml::modules::PositionalEmbedding>(ttml::modules::PositionalEmbeddingConfig{
-                .embedding_dim = embedding_dim,
-                .sequence_length = max_sequence_length,
-                .dropout_prob = dropout_prob,
-                .use_dropout_seed_per_device = false});
+                .embedding_dim = embedding_dim, .sequence_length = max_sequence_length, .dropout_prob = dropout_prob});
         }
     };
     pos_emb = create_positional_embedding();

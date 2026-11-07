@@ -6,6 +6,7 @@ import functools, operator, os, re
 from typing import Iterable
 import ttnn
 import ttml
+from .parallel import partial_axes
 
 
 def prod(x: Iterable[int]) -> int:
@@ -231,21 +232,25 @@ def mesh() -> Mesh:
     return _mesh
 
 
-def sync_gradients(parameters, axis_names: tuple[str, ...] = ("dp",)):
+def sync_gradients(parameters):
+    """Turn each device's local gradient into the global one; call once per step."""
+    average_gradients(parameters, axis_names=("dp", "fsdp"))
+    sum_partial_gradients(parameters)
+
+
+def average_gradients(parameters, axis_names: tuple[str, ...]):
     """Average parameter gradients across one or more mesh axes.
 
     For each parameter with an initialized gradient, the grad is all-reduced
     (summed) across every axis in ``axis_names`` and then divided by the
     product of those axis sizes, leaving each device with the mean grad.
 
-    Axes listed in ``axis_names`` but not present on the active mesh are
-    silently skipped — if none are present (or ``axis_names`` is empty, or
-    no mesh is open), the function is a no-op. The default ``("dp",)``
-    matches the common DDP case. TP is intentionally excluded: sharded
-    parameters already hold per-shard-correct grads, and a layer whose
-    replicated parameter gets a TP-partial grad must sum it across TP itself
-    (e.g. ``lora_A`` in ``LoraColumnParallelLinear``). Nothing enforces this;
-    see #63970 for a known violation.
+    Axes listed in ``axis_names`` but not present on the active mesh, or of
+    size 1, are silently skipped. If none are left (or ``axis_names`` is
+    empty, or no mesh is open), the function is a no-op. TP is not averaged:
+    sharded parameters already hold per-shard-correct grads, and a replicated
+    parameter whose grad is partial across TP is marked with
+    ``ttml.parallel.mark_partial`` and summed by ``sum_partial_gradients``.
 
     FSDP interaction: parameters sharded by ``ttml.fsdp.fully_shard`` on a
     mesh axis listed in ``axis_names`` are skipped for that axis — the FSDP
@@ -259,7 +264,8 @@ def sync_gradients(parameters, axis_names: tuple[str, ...] = ("dp",)):
     if m is None or not axis_names:
         return
 
-    axes = tuple(m.axis_index(name) for name in axis_names if m.has_axis(name))
+    # A collective over a size-1 axis is an error, not a no-op: sync_gradients always names "dp" and "fsdp".
+    axes = tuple(m.axis_index(name) for name in axis_names if m.has_axis(name) and m.axis_size(name) > 1)
     if not axes:
         return
 
@@ -289,3 +295,27 @@ def _param_is_fsdp_sharded(param, axis_index: int) -> bool:
     if getattr(param, "_fsdp_managed", False) and getattr(param, "_fsdp_axis", None) == axis_index:
         return True
     return False
+
+
+def sum_partial_gradients(parameters):
+    """Sum each gradient across the mesh axes its parameter is marked partial on (``ttml.parallel.mark_partial``).
+
+    Axes the mesh lacks, or of size 1, are skipped.
+
+    Args:
+        parameters: A ``NamedParameters`` mapping (e.g. ``model.parameters()``).
+    """
+    m = maybe_mesh()
+    if m is None:
+        return
+
+    for _, param in parameters.items():
+        if not param.is_grad_initialized():
+            continue
+        axes = [m.axis_index(name) for name in partial_axes(param) if m.has_axis(name) and m.axis_size(name) > 1]
+        if not axes:
+            continue
+        grad = param.get_grad()
+        for axis in axes:
+            grad = ttml.core.distributed.all_reduce(grad, cluster_axis=axis)
+        param.set_grad(grad)

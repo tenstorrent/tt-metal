@@ -43,14 +43,13 @@ autograd::TensorPtr swiglu_composite(
     const autograd::TensorPtr& w1,
     const autograd::TensorPtr& w2,
     const autograd::TensorPtr& w3,
-    float dropout_prob,
-    bool use_per_device_seed) {
+    float dropout_prob) {
     // Baseline-only reference used by the isolated benchmark A/B table.
     // Keep model/runtime paths on fused swiglu().
     const auto swished = ops::silu(ops::linear_op(tensor, w1, nullptr));
     const auto gate = ops::linear_op(tensor, w3, nullptr);
     const auto x = ops::linear_op(ops::mul(swished, gate), w2, nullptr);
-    return ops::dropout(x, dropout_prob, use_per_device_seed);
+    return ops::dropout(x, dropout_prob);
 }
 
 autograd::TensorPtr swiglu(
@@ -58,10 +57,9 @@ autograd::TensorPtr swiglu(
     const autograd::TensorPtr& w1,
     const autograd::TensorPtr& w2,
     const autograd::TensorPtr& w3,
-    float dropout_prob,
-    bool use_per_device_seed) {
+    float dropout_prob) {
     if (force_swiglu_composite()) {
-        return swiglu_composite(tensor, w1, w2, w3, dropout_prob, use_per_device_seed);
+        return swiglu_composite(tensor, w1, w2, w3, dropout_prob);
     }
     // Composite forward: weights are [out, in] (LinearLayer convention)
     // Save linear1 and gate for backward (2 tensors vs autograd's 4+).
@@ -110,7 +108,9 @@ autograd::TensorPtr swiglu(
 
     uint32_t dropout_seed = 0;
     float dropout_scaler = 1.0F;
+    bool use_per_device_seed = false;
     if (dropout_prob > 0.0F) {
+        use_per_device_seed = dropout_seed_per_device(swiglu_result);
         dropout_seed = static_cast<uint32_t>(autograd::ctx().get_generator()());
         dropout_scaler = 1.0F / (1.0F - dropout_prob);
         ttnn::experimental::dropout(

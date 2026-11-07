@@ -75,7 +75,7 @@ logits = model(input_tokens, mask)
 loss = ttml.ops.loss.cross_entropy_loss(logits, targets, reduce=ttml.ops.ReduceType.MEAN)
 loss.backward(False)
 
-ttml.sync_gradients(model.parameters())  # no-op on a pure-FSDP mesh
+ttml.sync_gradients(model.parameters())  # managed params are already reduce-scattered; averages only unsharded ones
 optimizer.step()
 ```
 
@@ -183,9 +183,8 @@ matrices or embeddings.
 
 **Gradient sync.** Each FSDP rank sees different data, so the training loop
 must average replicated gradients over the FSDP axis with
-`ttml.sync_gradients(model.parameters(), axis_names=("fsdp",))` (or
-`("dp", "fsdp")` under HSDP). It skips sharded parameters, so one call
-covers the whole model. `SFTTrainer` and `GRPOTrainer` already do this.
+`ttml.sync_gradients(model.parameters())`, which covers DDP, FSDP and HSDP.
+It skips sharded parameters, so one call covers the whole model. `SFTTrainer` and `GRPOTrainer` already do this.
 
 ---
 
@@ -272,33 +271,25 @@ step.
 
 ### Initial sharding (`fully_shard` time)
 
-Each replicated parameter is replaced with its local shard via a
-host-roundtrip:
-
-1. The full tensor is composed from the mesh as a `float32` numpy array.
-2. A new `MeshMapperConfig` is built with the existing placements
-   preserved on every other axis (so a TP-sharded weight stays
-   TP-sharded), with `Shard{shard_dim}` installed on the FSDP axis.
-3. The numpy array is redistributed back to the mesh through a fresh
-   `from_numpy` call with that mapper.
+Each replicated parameter is replaced with its local shard, keeping its
+placement on every other axis, so a TP-sharded weight stays TP-sharded. A
+materialized parameter is partitioned on device (`ttnn.mesh_partition`). A
+lazy one gets a mapper with `Shard{shard_dim}` on the FSDP axis instead, so
+`ttml.materialize_module` allocates it already sharded.
 
 ---
 
 ### Gradient sync
 
-Call `ttml.sync_gradients(model.parameters(), axis_names=("dp", "fsdp"))`,
-as `SFTTrainer` and `GRPOTrainer` do. Axes missing from the mesh are
-skipped, so the same call works for DDP, FSDP and HSDP. Each parameter is
-filtered per axis:
+Call `ttml.sync_gradients(model.parameters())`, as `SFTTrainer` and
+`GRPOTrainer` do. Axes missing from the mesh are skipped, so the same call
+works for DDP, FSDP and HSDP. Each parameter is filtered per axis:
 
 - FSDP-sharded parameters skip `"fsdp"`, since `backward_post` already
   reduce-scattered their gradients. Under HSDP they still all-reduce over
   `"dp"`.
 - Replicated parameters (from `replicate=`, or ones that couldn't be
   sharded) all-reduce over both axes.
-
-`axis_names=("dp",)` alone, as in plain DDP, is not enough under FSDP: it
-never averages replicated gradients over `"fsdp"`.
 
 ## Gradient accumulation
 
@@ -357,7 +348,7 @@ In this layout:
 - During backward:
   - The FSDP backward-post hook reduce-scatters grads across the
     `"fsdp"` axis (size F) — same as pure FSDP.
-  - `ttml.sync_gradients(params, axis_names=("dp", "fsdp"))` then runs
+  - `ttml.sync_gradients(params)` then runs
     a per-param filter: FSDP-managed grads skip the `"fsdp"` axis
     (already reduce-scattered) but all-reduce across `"dp"` to average
     each shard over DP replicas. Any non-FSDP / replicated parameter
@@ -393,7 +384,7 @@ In this layout:
   outside the training loop.
 - **`ttml.fsdp.is_fsdp_managed(param.tensor)`** returns `True` for any
   parameter `fully_shard` has touched. The marker is what
-  `sync_gradients` uses to decide which axes to skip per parameter.
+  `average_gradients` uses to decide which axes to skip per parameter.
 
 ---
 
@@ -422,9 +413,8 @@ roughly the order I'd tackle them:
   grads, all-reduce the squared-sums on the FSDP axis, take the global
   sqrt, then scale per-rank shards by `min(1, max_norm / global_norm)`.
 
-- [ ] **Lazy init.** The
-  current host-roundtrip path is correct but spends ~`num_devices * total_params`
-  bytes of host RAM transiently at `fully_shard` time. Plus it doesn't allow for a model with
+- [ ] **Lazy init.** An eagerly built model holds every parameter in full
+  before `fully_shard` partitions it, which doesn't allow for a model with
   weights not fitting in a single chip memory. Need lazy init infra to enable training of a model
   like Qwen-32B or Llama-70B on a single galaxy.
 

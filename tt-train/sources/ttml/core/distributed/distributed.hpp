@@ -16,10 +16,24 @@ using DistributedContext = tt::tt_metal::distributed::multihost::DistributedCont
 
 ttnn::Tensor synchronize_tensor(const ttnn::Tensor& tensor, const ttsl::SmallVector<uint32_t>& cluster_axes);
 
-// True when `value` is Shard on mesh axis `axis` of the mesh it is on. A collapsed `{N}, [placement]` label counts as
-// that placement on every axis of size > 1; a host tensor, or a label that is neither per-axis nor a collapsed label
-// covering the mesh, is an error.
+// `value`'s placement on each axis of its device mesh. A collapsed 1-D label, such as the default mappers'
+// `{N}, [placement]`, means that placement on every axis of size > 1. Any other label that does not cover the mesh
+// is an error.
+ttsl::SmallVector<tt::tt_metal::distributed::MeshMapperConfig::Placement> placements_per_axis(
+    const ttnn::Tensor& value);
+
+// The same reading of the label `config` gives a tensor on a mesh of `mesh_shape`, for a tensor not yet mapped (a lazy
+// parameter).
+ttsl::SmallVector<tt::tt_metal::distributed::MeshMapperConfig::Placement> placements_per_axis(
+    const tt::tt_metal::distributed::MeshMapperConfig& config, const tt::tt_metal::distributed::MeshShape& mesh_shape);
+
+// Whether `value` is sharded on mesh axis `axis`, as placements_per_axis reads it.
 bool is_sharded_on_axis(const ttnn::Tensor& value, uint32_t axis);
+
+// Relabels `value` with `placements`, one per mesh axis. Ops call it when ttnn's default label, which copies each
+// input's shard dim, misdescribes their output.
+void set_placements_per_axis(
+    ttnn::Tensor& value, const ttsl::SmallVector<tt::tt_metal::distributed::MeshMapperConfig::Placement>& placements);
 
 // Averages every parameter's gradient along the mesh axes the parallelism context reduces (context parallel, then
 // data parallel), skipping for each parameter any axis it is sharded on (see is_sharded_on_axis). A no-op when no

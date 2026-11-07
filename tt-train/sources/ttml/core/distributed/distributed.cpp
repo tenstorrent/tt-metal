@@ -17,6 +17,66 @@
 
 namespace ttml::core::distributed {
 
+namespace {
+
+using Placements = ttsl::SmallVector<tt::tt_metal::distributed::MeshMapperConfig::Placement>;
+
+// `label` read per axis of `mesh_shape`, by ttnn's rule for collapsed labels. `whose` names the label in the error.
+Placements read_per_axis(
+    const tt::tt_metal::TensorTopology& label,
+    const tt::tt_metal::distributed::MeshShape& mesh_shape,
+    const char* whose) {
+    std::string reason;
+    auto placements = ttnn::operations::ccl::common::uncollapse_placements(label, mesh_shape, &reason);
+    TT_FATAL(placements.has_value(), "cannot read {} placement per mesh axis: {}", whose, reason);
+    return std::move(*placements);
+}
+
+}  // namespace
+
+Placements placements_per_axis(const ttnn::Tensor& value) {
+    const auto* device = value.device();
+    TT_FATAL(
+        device != nullptr,
+        "cannot read the placement per mesh axis of a tensor that is not allocated on a device mesh (a host tensor, "
+        "or a deallocated one): its label is read against the mesh it is on");
+    return read_per_axis(value.tensor_topology(), device->shape(), "the tensor's");
+}
+
+Placements placements_per_axis(
+    const tt::tt_metal::distributed::MeshMapperConfig& config, const tt::tt_metal::distributed::MeshShape& mesh_shape) {
+    // The label a tensor mapped with `config` gets. Its coordinates only matter when it covers the whole mesh, which a
+    // mapper then lists in row-major order.
+    const ttnn::MeshCoordinateRange whole_mesh(mesh_shape);
+    const tt::tt_metal::TensorTopology label(
+        config.mesh_shape_override.value_or(mesh_shape),
+        config.placements,
+        std::vector(whole_mesh.begin(), whole_mesh.end()));
+    return read_per_axis(label, mesh_shape, "the mapper's");
+}
+
+bool is_sharded_on_axis(const ttnn::Tensor& value, uint32_t axis) {
+    const auto placements = placements_per_axis(value);
+    TT_FATAL(
+        axis < placements.size(),
+        "is_sharded_on_axis: mesh axis {} is out of range for a {}-axis device mesh",
+        axis,
+        placements.size());
+    return std::holds_alternative<tt::tt_metal::distributed::MeshMapperConfig::Shard>(placements[axis]);
+}
+
+void set_placements_per_axis(
+    ttnn::Tensor& value, const ttsl::SmallVector<tt::tt_metal::distributed::MeshMapperConfig::Placement>& placements) {
+    const auto mesh_shape = value.device()->shape();
+    TT_FATAL(
+        placements.size() == mesh_shape.dims(),
+        "set_placements_per_axis: {} placements for the {} device mesh",
+        placements.size(),
+        mesh_shape);
+    value.update_tensor_topology(
+        tt::tt_metal::TensorTopology(mesh_shape, placements, value.tensor_topology().mesh_coords()));
+}
+
 ttnn::Tensor synchronize_tensor(const ttnn::Tensor& tensor, const ttsl::SmallVector<uint32_t>& cluster_axes) {
     auto* device = &autograd::ctx().get_device();
     if (cluster_axes.size() == 0) {
@@ -37,29 +97,6 @@ ttnn::Tensor synchronize_tensor(const ttnn::Tensor& tensor, const ttsl::SmallVec
 
     result = ttnn::multiply(result, 1.0F / static_cast<float>(scaler));
     return result;
-}
-
-bool is_sharded_on_axis(const ttnn::Tensor& value, uint32_t axis) {
-    const auto* device = value.device();
-    TT_FATAL(
-        device != nullptr,
-        "is_sharded_on_axis: the tensor is not allocated on a device mesh (a host tensor, or a deallocated one); its "
-        "label is read against the mesh it is on");
-    const auto mesh_shape = device->shape();
-    TT_FATAL(
-        axis < mesh_shape.dims(),
-        "is_sharded_on_axis: mesh axis {} is out of range for the {} device mesh",
-        axis,
-        mesh_shape);
-    std::string reason;
-    const auto placements =
-        ttnn::operations::ccl::common::uncollapse_placements(value.tensor_topology(), mesh_shape, &reason);
-    TT_FATAL(
-        placements.has_value(),
-        "is_sharded_on_axis: cannot tell whether the tensor is sharded on mesh axis {}: {}",
-        axis,
-        reason);
-    return std::holds_alternative<tt::tt_metal::distributed::MeshMapperConfig::Shard>((*placements)[axis]);
 }
 
 namespace {
