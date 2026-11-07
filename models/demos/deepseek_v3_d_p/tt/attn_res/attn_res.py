@@ -270,7 +270,7 @@ class TtAttnRes(LightweightModule):
             self._score_stack_by_query_ids[key] = (list(queries), stack)
         return self._score_stack_by_query_ids[key][1]
 
-    def _inter_block_fused(self, sealed, queries, num_closed):
+    def _inter_block_fused(self, sealed, queries):
         """`inter_block` as two dispatches: both statistics in one pass over the sealed set,
         gathered across the tensor-parallel axis in the same program, then the scoring and
         the mixture in a second pass.
@@ -291,13 +291,10 @@ class TtAttnRes(LightweightModule):
             compute_kernel_config=STATS_FIDELITY,
         )
 
-        return ttnn.experimental.deepseek_prefill.attn_res_block_mix(
-            sealed,
-            stats,
-            num_sites=len(queries),
-            eps=self.eps,
-            num_closed_sites=num_closed,
+        partials, shifts, masses, _ = ttnn.experimental.deepseek_prefill.attn_res_block_mix(
+            sealed, stats, num_sites=len(queries), eps=self.eps
         )
+        return partials, shifts, masses
 
     def _exchange_semaphore(self):
         """Arrival semaphore for the fused read's exchange.
@@ -359,7 +356,7 @@ class TtAttnRes(LightweightModule):
             )
         return self._gathered_stats_by_shape[key]
 
-    def inter_block(self, sealed, queries, num_closed=0):
+    def inter_block(self, sealed, queries):
         """Sealed-snapshot half of the mixture, for every read site in a block.
 
         Everything that does not depend on the read site runs once for the whole
@@ -375,18 +372,13 @@ class TtAttnRes(LightweightModule):
                 empty — the walk places no read site before the first seal, so every
                 executed read has one.
             queries: sequence of `[1, 1, 1, d/tp_factor]` folded queries.
-            num_closed: how many leading sites have no live stream to fold in. Their read
-                is the sealed set's mixture alone, `sum_i e_i v_i / sum_i e_i`, and comes
-                back whole rather than as a batch entry.
 
         Returns:
-            `(partials, shifts, masses, closed)`. The partials `[R, 1, N, d/tp_factor]`,
-            each site's holding `sum_i e_i v_i`, and the shifts and masses `[R, 1, N, 1]`,
-            all batched over the open read sites in the online-softmax convention
+            `(partials, shifts, masses)`. The partials `[R, 1, N, d/tp_factor]`, each
+            site's holding `sum_i e_i v_i`, and the shifts and masses `[R, 1, N, 1]`, all
+            batched over the read sites in the online-softmax convention
             `e_i = exp(s_i - m)`. `merge` takes the batches whole and names the site; keep
-            them alive until the block's last read. `closed` is the closed sites' reads,
-            `[num_closed, 1, N, d/tp_factor]`, with the batches starting at the first open
-            site; `None` without `num_closed`.
+            them alive until the block's last read.
         """
         sealed = as_sealed_list(sealed)
         assert sealed, "inter_block needs a sealed snapshot to score against"
@@ -395,7 +387,7 @@ class TtAttnRes(LightweightModule):
             "`attn_res_block_stats` lands every site's dot in one fp32 tile column, beside the sum "
             "of squares in column 0"
         )
-        return self._inter_block_fused(sealed, queries, num_closed)
+        return self._inter_block_fused(sealed, queries)
 
     def merge(self, partial, shift, mass, running_sum, q, site=0, pending=None):
         """Fold the live stream into a precomputed sealed-snapshot partial.
