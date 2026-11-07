@@ -26,6 +26,25 @@ def test_reduction_preserves_input_bits(device, shape, operation):
     assert torch.equal(after, before)
 
 
+@pytest.mark.parametrize("shape", [(2, 7, 128), (2, 33, 40), (2, 32, 128)])
+def test_prod_preserves_input_bits(device, shape):
+    torch.manual_seed(0)
+    values = torch.randn(shape, dtype=torch.bfloat16)
+    values.view(torch.int16).flatten()[:3] = torch.tensor([-32768, 1, 0x7FC1], dtype=torch.int16)
+
+    # Control: sum leaves input bits untouched
+    tensor_sum = ttnn.from_torch(values, device=device, layout=ttnn.TILE_LAYOUT)
+    before_sum = ttnn.to_torch(tensor_sum).view(torch.int16).clone()
+    _ = ttnn.sum(tensor_sum, dim=-1)
+    assert torch.equal(ttnn.to_torch(tensor_sum).view(torch.int16), before_sum)
+
+    # Prod test: preserves input bits on non-tile-aligned inputs
+    tensor_prod = ttnn.from_torch(values, device=device, layout=ttnn.TILE_LAYOUT)
+    before_prod = ttnn.to_torch(tensor_prod).view(torch.int16).clone()
+    _ = ttnn.prod(tensor_prod, dim=-1)
+    assert torch.equal(ttnn.to_torch(tensor_prod).view(torch.int16), before_prod)
+
+
 @pytest.mark.parametrize("shape", [(2, 7, 128), (2, 33, 40)])
 @pytest.mark.parametrize("operation", ["topk", "max", "min", "sum", "mean"])
 def test_reduction_with_private_padding_matches_reference(device, shape, operation):
