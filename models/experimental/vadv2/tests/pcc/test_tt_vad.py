@@ -57,12 +57,12 @@ def test_vadv2(
                 [
                     {
                         "filename": [
-                            "./data/nuscenes/samples/CAM_FRONT/n008-2018-08-01-15-16-36-0400__CAM_FRONT__1533151603512404.jpg",
-                            "./data/nuscenes/samples/CAM_FRONT_RIGHT/n008-2018-08-01-15-16-36-0400__CAM_FRONT_RIGHT__1533151603520482.jpg",
-                            "./data/nuscenes/samples/CAM_FRONT_LEFT/n008-2018-08-01-15-16-36-0400__CAM_FRONT_LEFT__1533151603504799.jpg",
-                            "./data/nuscenes/samples/CAM_BACK/n008-2018-08-01-15-16-36-0400__CAM_BACK__1533151603537558.jpg",
-                            "./data/nuscenes/samples/CAM_BACK_LEFT/n008-2018-08-01-15-16-36-0400__CAM_BACK_LEFT__1533151603547405.jpg",
-                            "./data/nuscenes/samples/CAM_BACK_RIGHT/n008-2018-08-01-15-16-36-0400__CAM_BACK_RIGHT__1533151603528113.jpg",
+                            "cam_front.jpg",
+                            "cam_front_right.jpg",
+                            "cam_front_left.jpg",
+                            "cam_back.jpg",
+                            "cam_back_left.jpg",
+                            "cam_back_right.jpg",
                         ],
                         "ori_shape": [(360, 640, 3)] * 6,
                         "img_shape": [(384, 640, 3)] * 6,
@@ -128,12 +128,12 @@ def test_vadv2(
                             "std": np.array([58.395, 57.12, 57.375], dtype=np.float32),
                             "to_rgb": True,
                         },
-                        "sample_idx": "3e8750f331d7499e9b5123e9eb70f2e2",
+                        "sample_idx": "sample-0",
                         "prev_idx": "",
-                        "next_idx": "3950bd41f74548429c0f7700ff3d8269",
+                        "next_idx": "sample-1",
                         "pcd_scale_factor": 1.0,
-                        "pts_filename": "data/pcd.bin",
-                        "scene_token": "fcbccedd61424f1b85dcbf8f897f9754",
+                        "pts_filename": "lidar.bin",
+                        "scene_token": "scene-0",
                         "can_bus": np.array(
                             [
                                 6.50486842e02,
@@ -750,8 +750,8 @@ def test_vadv2(
     second_meta["can_bus"][:2] += np.array([1.5, 0.4])
     second_meta["can_bus"][-2] += np.deg2rad(4.0)
     second_meta["can_bus"][-1] += 4.0
-    # nuScenes compensates each camera for the ego's motion between its exposure and the lidar
-    # sweep, so lidar2img changes from frame to frame; turn the rig by half a degree.
+    # Recorded driving data compensates each camera for the ego's motion between its exposure and
+    # the lidar sweep, so lidar2img changes from frame to frame; turn the rig by half a degree.
     yaw = np.deg2rad(0.5)
     turn = np.eye(4)
     turn[:2, :2] = [[np.cos(yaw), -np.sin(yaw)], [np.sin(yaw), np.cos(yaw)]]

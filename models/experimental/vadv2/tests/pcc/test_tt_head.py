@@ -493,12 +493,12 @@ def test_vadv2_head(
                 "std": np.array([58.395, 57.12, 57.375], dtype=np.float32),
                 "to_rgb": True,
             },
-            "sample_idx": "3e8750f331d7499e9b5123e9eb70f2e2",
+            "sample_idx": "sample-0",
             "prev_idx": "",
-            "next_idx": "3950bd41f74548429c0f7700ff3d8269",
+            "next_idx": "sample-1",
             "pcd_scale_factor": 1.0,
-            "pts_filename": "./data/nuscenes/samples/LIDAR_TOP/n008-2018-08-01-15-16-36-0400__LIDAR_TOP__1533151603547590.pcd.bin",
-            "scene_token": "fcbccedd61424f1b85dcbf8f897f9754",
+            "pts_filename": "lidar.bin",
+            "scene_token": "scene-0",
             "can_bus": np.array(
                 [
                     0.0,
