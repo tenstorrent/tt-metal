@@ -189,6 +189,32 @@ Video-MME short docs 0-59, one row engine at concurrency 8 (Xiaomi's API: 75.0 %
 At 2 fps a request's ViT takes ~0.5 s and its prefill ~3.9 s (c=1, 26K tokens); the front end's audio tokenizer adds
 ~2.5 s a request (CPU, 8 threads; these runs predate the track's device tokenizer, so they tokenized in the front end).
 
+### Greedy decoding on long videos (VGI-Bench)
+
+At temperature 0 with thinking on, MiMo's reasoning on VGI-Bench's long videos often never answers: on a question it
+cannot settle (the smoke questions are false-premise ones, "This does not happen in the video" is right) it re-checks
+the same scenes until the token limit. That comes with greedy decoding; nothing points at TT's numerics (no GPU
+provider decodes greedily with thinking on, so there is no greedy GPU run to compare with). One row engine on bhg2, smoke docs
+0-4 (128-147K tokens) and the 7 other public questions on the same 7 videos, max_tokens 16384 (2026-11-07):
+
+| Decoding / input | No answer by 16384 tokens |
+|---|---|
+| greedy (the bhg4 eval at 9c014d841, 131072 limit: 4/5) | 2/5 + 1/7 |
+| greedy, no audio track / 1 fps (same token count) / 0.25 fps (40-91K tokens) | 3/5 / 3/5 / 1/5 |
+| greedy, GPTQ experts and BFP8 experts in the last layer | 3/5 + 4/7 |
+| temperature 0.05 / 0.2 | 3/5 / 4/5 |
+| temperature 1.0, top-p 0.95 (the model card's), two seeds | 0/5 + 0/7, 0/5; 404-9323 tokens |
+| text only: LongBench v2, 118-139K tokens, greedy | 0/6 |
+
+The GPU providers' temperature-0 runs that answer (GMICloud: 0 of 17 loop) are sampled: with thinking on, GMICloud
+answers one temperature-0 "pick a random integer" request four ways (734 four times with thinking off), as Xiaomi's
+endpoint does. And TT's next-token distribution matches theirs: teacher-forcing GMICloud's own reasoning for docs 3
+and 4 (its prompts within 2 tokens of ours) through TT, TT's argmax is GMICloud's token at 85.3 / 83.4 % of the
+positions against a mean TT top-1 probability of 84.6 / 81.6 %, in every probability bin, which is what samples from
+TT's own distribution would give (the same with GPTQ and last-layer BFP8 experts). To serve temperature-0 requests the way those providers do, start lb.py with
+`--thinking-greedy 1.0,0.95` (`TT_PROXY_THINKING_GREEDY`): such a request with thinking on is sampled at the model
+card's settings; evals take `MM_TEMPERATURE=1.0 MM_TOP_P=0.95`.
+
 ## Workstreams
 
 | Id | Branch | Scope | Device |
