@@ -19,7 +19,8 @@ namespace {
 constexpr uint32_t kObservationSpins = 65536;
 
 // The test ends with this thread's tile counter full; ~DataflowBuffer() waits until every posted entry is acked.
-void pop_remaining(DataflowBuffer& dfb) {
+template <typename Dfb>
+void pop_remaining(Dfb& dfb) {
     const uint32_t remaining = dfb.get_local_num_entries();
     dfb.wait_front(remaining);
     dfb.pop_front(remaining);
