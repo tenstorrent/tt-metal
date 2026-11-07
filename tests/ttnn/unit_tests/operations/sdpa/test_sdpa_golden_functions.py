@@ -692,6 +692,39 @@ def test_sdpa_decode_golden_broadcasts_a_single_mask_batch():
     torch.testing.assert_close(actual, expected)
 
 
+def test_sdpa_decode_golden_reads_mask_batch_from_dim_1():
+    """A [1, batch, heads, keys] mask gives each user its own row, like [batch, 1, heads, keys]."""
+    torch.manual_seed(21)
+    batch, heads, dim, keys = 3, 2, 4, 6
+    query = torch.randn(1, batch, heads, dim)
+    key = torch.randn(batch, 1, keys, dim)
+    value = torch.randn(batch, 1, keys, dim)
+    logical_mask = torch.zeros(batch, heads, 1, keys)
+    for user in range(batch):
+        logical_mask[user, :, :, user + 2 :] = -1.0e4  # user i attends to its first i + 2 keys
+    batch_in_dim_1 = logical_mask.permute(2, 0, 1, 3).contiguous()  # [1, batch, heads, keys]
+
+    golden = ttnn.get_golden_function(ttnn.transformer.scaled_dot_product_attention_decode)
+    actual = golden(
+        query,
+        key,
+        value,
+        is_causal=False,
+        attn_mask=batch_in_dim_1,
+        cur_pos=[keys - 1] * batch,
+        scale=1.0,
+    )
+
+    expected = torch.nn.functional.scaled_dot_product_attention(
+        query.permute(1, 2, 0, 3),
+        key.repeat_interleave(heads, dim=1),
+        value.repeat_interleave(heads, dim=1),
+        attn_mask=logical_mask,
+        scale=1.0,
+    ).permute(2, 0, 1, 3)
+    torch.testing.assert_close(actual, expected)
+
+
 def test_sdpa_decode_golden_keeps_query_batch_with_shared_cache():
     torch.manual_seed(14)
     batch, heads, dim, keys = 2, 32, 64, 64

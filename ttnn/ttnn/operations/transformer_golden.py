@@ -453,6 +453,16 @@ def _decode_attention_mask(mask, num_heads):
     return mask
 
 
+def _decode_mask_batch_first(mask, num_heads):
+    """Move a device-layout decode mask from [1, batch, heads, keys] onto [batch, 1, heads, keys].
+
+    The decode reader counts users over dims 0 and 1 together, so both layouts give each user its own row.
+    """
+    if mask is not None and mask.ndim == 4 and mask.shape[0] == 1 and mask.shape[1] > 1 and mask.shape[2] == num_heads:
+        return mask.transpose(0, 1)
+    return mask
+
+
 def _decode_batch_sink(attention_sink, batch, batch_index):
     # A rank-2 decode sink is [heads, TILE_WIDTH] and is shared across the batch.
     if attention_sink is None or attention_sink.ndim < 3 or attention_sink.shape[0] != batch:
@@ -478,6 +488,7 @@ def _decode_attention(
 
     query = _decode_layout(input_tensor_q)
     batch, num_heads, _, _ = query.shape
+    attn_mask = _decode_mask_batch_first(attn_mask, num_heads)
     positions = cur_pos_tensor if cur_pos_tensor is not None else cur_pos
     if positions is None or (not isinstance(positions, torch.Tensor) and len(positions) == 0):
         positions = [input_tensor_k.shape[-2] - 1] * batch
@@ -570,6 +581,7 @@ def _paged_circular_decode_attention(
     query = _decode_layout(input_tensor_q)
     if query.shape[0] != batch:
         raise ValueError(f"Query batch size {query.shape[0]} does not match page-table batch size {batch}")
+    attn_mask = _decode_mask_batch_first(attn_mask, query.shape[1])
 
     positions = cur_pos_tensor.reshape(-1).tolist()
     if len(positions) not in (1, batch):
