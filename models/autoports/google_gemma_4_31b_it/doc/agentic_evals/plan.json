@@ -3769,7 +3769,7 @@
     }
   ],
   "status": "SWE5_completed_validity_audit_GPQA20_repair_building",
-  "last_updated": "2026-11-07T04:40:23.186320+00:00",
+  "last_updated": "2026-11-07T05:06:34.255836+00:00",
   "stop_reason": null,
   "actual_runs": [],
   "continuations": [
@@ -5904,5 +5904,29 @@
     "submitted_at": "2026-11-07T03:10:50Z",
     "url": "https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/42332785769",
     "workflow_status": "in_progress"
+  },
+  "held_current_c8_larger_candidates": {
+    "prepared_at": "2026-11-07T05:06:34.255836+00:00",
+    "evidence": [
+      "runs/current-c8-larger-source-preparation/RESULT.json",
+      "runs/current-c8-larger-source-preparation/RESULT.md"
+    ],
+    "candidates": [
+      {
+        "size": 160,
+        "candidate_sha": "8b9623a7f1ccee85c04319e4c83e00f974322201",
+        "parent_sha": "42dc40754e465cf8c9ec993027ff59d3c936832c",
+        "tree": "aa799190cef6bdd23862f9867afae579cd214c52",
+        "source": "cohorts.json:r1_gpqa_diamond.rungs.prepared-larger160"
+      },
+      {
+        "size": 198,
+        "candidate_sha": "e888c28d08be5dc020a04a252994a9013c65e88d",
+        "parent_sha": "42dc40754e465cf8c9ec993027ff59d3c936832c",
+        "tree": "6bd9438fb7dbbe9ffdc2dafd1ab3947cc79e6530",
+        "source": "cohorts.json:r1_gpqa_diamond.rungs.prepared-larger198"
+      }
+    ],
+    "admission": "Held until preceding rung valid and measured schedule fits;198 rebase/reconfirm required if160 accepted first"
   }
 }

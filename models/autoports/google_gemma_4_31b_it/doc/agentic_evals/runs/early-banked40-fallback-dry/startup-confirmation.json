@@ -1,0 +1,36 @@
+{
+  "observed_at": "2026-11-07T04:48:50.955575+00:00",
+  "run_id": 42339332447,
+  "status": "startup_confirmed_not_dry_pass",
+  "planned_clients": 8,
+  "batch": 8,
+  "max_num_seqs": 8,
+  "pool_ids": 20480,
+  "full_layers": 60,
+  "context": 262144,
+  "task_count": 40,
+  "list_matches_frozen_cohort": true,
+  "module": "models.autoports.google_gemma_4_31b_it.tt.generator_vllm:Gemma4ForCausalLM",
+  "image": "ghcr.io/tenstorrent/tt-agentic-bringup-qb2/vllm-tt-metal-src-dev-ubuntu-22.04-amd64@sha256:ae8bf2ac98d004471bc58959995dd25dc04cc76bb250b794d746bc073ac8f7fe",
+  "tt_metal_sha": "f57978407eaacf09587f5793b8ae46ca7af839ea",
+  "tti_sha": "e5a9a7638a1f46f22c0d89acf2ac333da5d53c02",
+  "limits_match": true,
+  "evaluator_boundary_unique": true,
+  "event_lines": {
+    "serving_pool_budget": 1285,
+    "autoport_registration": 1359,
+    "serving_cache_allocation": 1366
+  },
+  "actual_evaluator_command_sha256": "423007ad0cafdc20a66a5e18da3bc6cf57118fafd3fca3f6f7f48a1341113469",
+  "snapshot_sha256": "ae60b3bf8327cfeb331d21102632bd26a2acbb4bb6d5178821b7c20f647ac8d7",
+  "evidence": "bringup/artifacts/stage12-eval-observation/42339332447/startup-confirmed.log",
+  "scope": "Startup/settings/tasklist only; initial8 full replies and fresh no-score cancellation still pending",
+  "prefix_caching": true,
+  "chunked_prefill": true,
+  "async_scheduling": true,
+  "served_generation_override": {
+    "top_k": 32
+  },
+  "tokenizer_revision": "842da3794eaa0b77d5f08bae87a17459d91ff475",
+  "snapshot_bytes": 2106381
+}

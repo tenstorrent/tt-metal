@@ -252,6 +252,13 @@
     {
       "fact": "Atomic model-owned HEX2 records survived actual stock CI:22 unique frames reconstruct8 complete envelopes and both original2 replies match. First complete archived snapshot arrived after score; transport success is not timely no-score dry evidence.",
       "evidence": "runs/ci-native-framed-confirmation-retry90m/RESULT.json"
+    },
+    {
+      "fact": "Prepared larger-cohort source commits may be host-validated before admission, but a sibling198 commit must rebase and reconfirm after160 becomes current best; source preparation grants no rung or score claim.",
+      "evidence": [
+        "runs/current-c8-larger-source-preparation/RESULT.json",
+        "runs/current-c8-larger-source-preparation/RESULT.md"
+      ]
     }
   ],
   "suite_timings": [

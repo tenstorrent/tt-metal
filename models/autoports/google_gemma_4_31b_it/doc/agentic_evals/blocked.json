@@ -1,5 +1,5 @@
 {
-  "status": "stage_active_two_gpqa80_runs",
+  "status": "stage_active_two_gpqa80_runs_and_early40_dry",
   "blockers": [
     {
       "id": "local-sandbox-runtime",
@@ -39,7 +39,7 @@
     "One closure review and stage gate"
   ],
   "initial_stop_at": "2026-11-06T04:33:36.867416+00:00",
-  "updated_at": "2026-11-07T04:36:57.816861+00:00",
+  "updated_at": "2026-11-07T05:07:04.759460+00:00",
   "completed_preparation": [
     "Fresh autoport registry and suite entries published; full host suite3737 passed15 skipped",
     "Stratified task cohorts frozen before scores",
@@ -48,9 +48,10 @@
   "live_wait": {
     "run_ids": [
       42323448662,
-      42332785769
+      42332785769,
+      42339332447
     ],
-    "status": "Normal C4/80 and optional C8/80 device jobs active"
+    "status": "C4/80 and C8/80 normal runs plus early frozen40/C8 fallback dry active"
   },
   "release_route_decision_request": {
     "at": "2026-11-06T05:12:13.370191+00:00",
@@ -193,7 +194,7 @@
     }
   },
   "initial_agent_reply_observability": {
-    "status": "local_repair_kept_actual_CI_transport_blocked",
+    "status": "original2_framed_CI_transport_confirmed_fullcap_dry_in_progress",
     "observed_at": "2026-11-06T21:49:49.076105+00:00",
     "problem": "StockCI grep-v-i INFO strips native records and responsecontent; workflow remains unchanged",
     "evidence": [
@@ -203,7 +204,7 @@
     "action": "Fresh AutoDebug/AutoFix source investigation; no runtime or route change authorized implicitly. Normal rungs continue independently.",
     "otlp": "Stock host request-finish spans exist, but collector/read route unavailable; no device profiler used or proposed.",
     "solution": "Model-only explicit native hex logging preserves exact stock records through filter; private observer decodes",
-    "remaining": "Operator9 unchanged90min retry42334508049 passed prior curl-builder DNF failure point and is compiling stock tools; image and actual native CI pair remain pending. Fallback eef/bf1ada authorized and must not wait.",
+    "remaining": "Actual f579 original2 transport/exactness passed42334508049. Early frozen40 dry42339332447 is testing fullcap initial8 replies and timely pre-score observation; no dry pass yet.",
     "ci_run_id": 42296943044,
     "ci_observation": "42302118669: two initial IDs and complete replies visible, matching harness outputs; first snapshot already scored, so not a dry pass",
     "diagnosis_effort": "runs/ci-response-log-propagation/plan.md",
