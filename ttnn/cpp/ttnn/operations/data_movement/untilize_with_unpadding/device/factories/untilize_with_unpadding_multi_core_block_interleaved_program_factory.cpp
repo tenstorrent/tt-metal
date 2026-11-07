@@ -157,6 +157,15 @@ UntilizeWithUnpaddingMultiCoreBlockInterleavedProgramFactory::create_program_art
         third_dim = log_shape[-3] * log_shape[-4];
     }
 
+    // A leading dim may be cropped (output dim -3 / -4 smaller than the input's). The writer emits output
+    // slabs contiguously; the reader maps each output slab (n, c) to input slab n * in_dim_c + c.
+    uint32_t out_dim_c = 1;
+    uint32_t in_dim_c = 1;
+    if (log_shape.rank() >= 4) {
+        out_dim_c = log_shape[-3];
+        in_dim_c = a.padded_shape()[-3];
+    }
+
     uint32_t total_num_rows = output.logical_shape()[-2];
 
     // One reader and one writer per buffer set, each over that set's cores and bound to that set's
@@ -181,7 +190,9 @@ UntilizeWithUnpaddingMultiCoreBlockInterleavedProgramFactory::create_program_art
             .compile_time_args =
                 {{"num_tiles_per_2d", num_tiles_2d},
                  {"third_dim", third_dim},
-                 {"total_tiles_per_row", total_tiles_per_row}},
+                 {"total_tiles_per_row", total_tiles_per_row},
+                 {"out_dim_c", out_dim_c},
+                 {"in_dim_c", in_dim_c}},
             .runtime_arg_schema =
                 {.runtime_arg_names = {"start_id", "single_block_size_row_arg", "single_block_size_col_arg"}},
             .hw_config = ttnn::create_reader_datamovement_config(),
