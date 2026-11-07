@@ -379,6 +379,11 @@ Tensor gather_dispatch(
         padded_index_tensor.padded_shape(),
         original_index_tensor_lshape);
 
+    // The tensor the caller handed us. For a non-last dim the transform below swaps in a transposed
+    // copy, the device op writes into that copy, and the post-transform returns yet another buffer,
+    // so the result has to be written back here or the caller's `out` keeps its old contents.
+    const std::optional<Tensor> caller_output_tensor = optional_output_tensor;
+
     std::optional<Tensor> optional_output_tensor_value = std::nullopt;
     if (optional_output_tensor.has_value()) {
         auto& output_tensor = optional_output_tensor.value();
@@ -452,12 +457,22 @@ Tensor gather_dispatch(
             gather_tensor, rerouted_output_memory_config.value(), std::nullopt, optional_output_tensor_value);
     }
 
-    return operations::data_movement::CMAKE_UNIQUE_NAMESPACE::post_gather_transform_tensor(
+    Tensor result = operations::data_movement::CMAKE_UNIQUE_NAMESPACE::post_gather_transform_tensor(
         input_index_tensor,
         gather_tensor,
         normalized_dim,
         input_index_tensor_is_dim_last_idx,
         original_index_tensor_lshape);
+
+    // dim == last wrote straight into the caller's buffer, so nothing is copied there.
+    if (caller_output_tensor.has_value()) {
+        if (result.buffer() != caller_output_tensor->buffer()) {
+            ttnn::to_memory_config(
+                result, caller_output_tensor->memory_config(), caller_output_tensor->dtype(), caller_output_tensor);
+        }
+        return caller_output_tensor.value();
+    }
+    return result;
 }
 
 // The existing native implementation, unconditionally. Callers that have already been routed here
