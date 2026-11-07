@@ -20,6 +20,7 @@ Prefixes:
 
 import pytest
 import torch
+from loguru import logger
 
 import ttnn
 from models.common.utility_functions import comp_pcc
@@ -82,6 +83,7 @@ def _fill_prefix(mesh_device, case, cache: int, chunk: int, hidden_size: int):
             try:
                 ttnn.deallocate(case.forward(start))
             finally:
+                _drain(mesh_device)
                 ttnn.deallocate(case.x)
     finally:
         case.x = x
@@ -89,11 +91,12 @@ def _fill_prefix(mesh_device, case, cache: int, chunk: int, hidden_size: int):
 
 
 def _drain(mesh_device):
-    """Best-effort sync before freeing: on an error path, earlier enqueued work may still use the buffers."""
+    """Best-effort sync before freeing on an error path. Frees on one command queue are ordered after earlier work
+    anyway; this guards anything that touches the buffers outside the queue, and leaves the device idle."""
     try:
         ttnn.synchronize_device(mesh_device)
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"drain before cleanup failed: {e}")
 
 
 def _eager_outputs(mesh_device, case, start):
@@ -136,14 +139,14 @@ def _replay_outputs(mesh_device, case, start):
         ttnn.synchronize_device(mesh_device)
         return [_device_tensors(copy) for copy in outputs]
     finally:
-        _drain(mesh_device)
-        for copy in outputs:
-            ttnn.deallocate(copy)
-        if capturing:
+        if capturing:  # end a failed capture first: the device cannot sync while capturing
             try:
                 controller.end_capture()
             except Exception:
                 pass
+        _drain(mesh_device)
+        for copy in outputs:
+            ttnn.deallocate(copy)
         try:
             controller.release()
         finally:

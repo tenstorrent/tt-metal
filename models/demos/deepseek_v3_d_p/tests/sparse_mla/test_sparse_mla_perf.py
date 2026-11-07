@@ -27,6 +27,7 @@ scaled-FP8 cache / dense ring-MLA baseline. Narrow with -k, e.g. -k "glm_5_3 and
 import copy
 import gc
 import os
+import resource
 import time
 from dataclasses import dataclass
 
@@ -359,20 +360,46 @@ def _host_state():
         return f"unavailable ({e})"
 
 
-def _time_untraced(mesh_device, case, start, cpus=None, repeat=None, enqueue=None):
+def _thp_state():
+    """Transparent huge page settings and this process's anonymous huge-page memory: a CI diagnostic."""
+    out = []
+    for name in ("enabled", "defrag"):
+        try:
+            with open(f"/sys/kernel/mm/transparent_hugepage/{name}") as f:
+                out.append(f"thp {name} {f.read().strip()}")
+        except OSError:
+            pass
+    try:
+        with open("/proc/self/smaps_rollup") as f:
+            rss = {k: v.split()[0] for k, v in (line.split(":", 1) for line in f if ":" in line)}
+        out.append(f"rss {int(rss.get('Rss', 0)) // 1024} MB, anon huge {int(rss.get('AnonHugePages', 0)) // 1024} MB")
+    except (OSError, ValueError):
+        pass
+    return "; ".join(out)
+
+
+def _minor_faults():
+    return resource.getrusage(resource.RUSAGE_SELF).ru_minflt
+
+
+def _time_untraced(mesh_device, case, start, cpus=None, repeat=None, enqueue=None, faults=None):
     """Host ms of each timed eager forward through sync, and the last timed forward's per-device output. Appends the CPU
     the main thread ran on after each sample to `cpus`, the ms until forward() returned (before the sync) to `enqueue`,
-    and the output of one more, untimed forward to `repeat`, if given."""
+    the process's minor page faults during each sample to `faults`, and the output of one more, untimed forward to
+    `repeat`, if given."""
     for _ in range(UNTRACED_WARMUP):  # the first call compiles
         ttnn.deallocate(case.forward(start))
         ttnn.synchronize_device(mesh_device)
     samples = []
     for i in range(UNTRACED_SAMPLES):
+        f0 = _minor_faults()
         t0 = time.perf_counter()
         out = case.forward(start)
         t1 = time.perf_counter()
         ttnn.synchronize_device(mesh_device)
         samples.append((time.perf_counter() - t0) * 1e3)
+        if faults is not None:
+            faults.append(_minor_faults() - f0)
         if enqueue is not None:
             enqueue.append((t1 - t0) * 1e3)
         if cpus is not None:
@@ -495,10 +522,14 @@ def test_sparse_mla_perf(mesh_device, device_params, variant, case_name, config_
     samples = {}
     cpus = []
     eager_repeat, traced_repeat = [], []
-    enqueue = []
-    samples["untraced"], eager_out = _time_untraced(mesh_device, case, start, cpus, eager_repeat, enqueue)
+    enqueue, faults = [], []
+    thp_before = _thp_state()
+    samples["untraced"], eager_out = _time_untraced(mesh_device, case, start, cpus, eager_repeat, enqueue, faults)
     print(f"{label} host: {_host_state()}; untraced sample CPUs {' '.join(map(str, cpus))}")
     print(f"{label} untraced enqueue (forward() returns, ms): {' '.join(f'{x:.3f}' for x in enqueue)}")
+    print(
+        f"{label} untraced minor page faults: {' '.join(map(str, faults))}; before: {thp_before}; after: {_thp_state()}"
+    )
     print(f"{label} untraced op profile: {_op_host_profile(mesh_device, case, start)}")
     samples["traced"], traced_out = _time_traced(mesh_device, case, start, traced_repeat)
 
