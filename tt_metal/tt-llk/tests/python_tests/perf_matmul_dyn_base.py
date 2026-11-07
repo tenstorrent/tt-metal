@@ -22,17 +22,26 @@ def _generate():
         os.path.join(_TESTS, "..", "tt_llk_blackhole", "llk_lib", "llk_math_matmul.h")
     ).read()
     head = "_llk_math_matmul_init_switch_" in llk
+    args = "TILE_R_DIM, TILE_C_DIM, TILE_R_DIM, TILE_C_DIM, false, UNPACK_TRANSPOSE_FACES, CT_DIM, RT_DIM"
     if head:
         call, init = "MATMUL_MATH_TEMPLATE_ARGS", "MATMUL_MATH_INIT_TEMPLATE_ARGS"
         tcall, tinit = (
             "MATMUL_FIDELITY, 5, false, true, matmul_reuse_dir_k",
             "MATMUL_FIDELITY, 5, false, true, 0, false, false, matmul_reuse_dir_k, false",
         )
-        reinit = "_llk_math_matmul_init_switch_"
+        # main's form (key 0) re-inits with main's full init, as the metal API does
+        reinit_t, reinit_n = (
+            f"if constexpr (matmul_true_main_key) {{ _llk_math_matmul_init_<{a}>({args}); }} "
+            f"else {{ _llk_math_matmul_init_switch_<{a}>({args}); }}"
+            for a in ("DYN_TINIT_ARGS", "DYN_INIT_ARGS")
+        )
     else:
         call = init = "MATH_FIDELITY, THROTTLE_LEVEL"
         tcall = tinit = "MATH_FIDELITY, 5"
-        reinit = "_llk_math_matmul_init_"
+        reinit_t, reinit_n = (
+            f"_llk_math_matmul_init_<{a}>({args});"
+            for a in ("DYN_TINIT_ARGS", "DYN_INIT_ARGS")
+        )
     defs = f"""
 #ifndef tt_l1_ptr
 #define tt_l1_ptr
@@ -55,10 +64,10 @@ volatile tt_l1_ptr std::uint32_t* dyn_tp = reinterpret_cast<volatile tt_l1_ptr s
         if (DYN_MODE == 3) fw &= ~1u;                                                                               \\
         if (DYN_MODE == 4) {{ fw &= ~1u; _llk_math_matmul_init_<DYN_INIT_ARGS>(TILE_R_DIM, TILE_C_DIM, TILE_R_DIM, TILE_C_DIM, false, UNPACK_TRANSPOSE_FACES, CT_DIM, RT_DIM); }} \\
         if (fw % 2) {{                                                                                              \\
-            if (dyn_status != 1) {{ {reinit}<DYN_TINIT_ARGS>(TILE_R_DIM, TILE_C_DIM, TILE_R_DIM, TILE_C_DIM, false, UNPACK_TRANSPOSE_FACES, CT_DIM, RT_DIM); dyn_status = 1; }} \\
+            if (dyn_status != 1) {{ {reinit_t} dyn_status = 1; }} \\
             _llk_math_matmul_<DYN_TCALL_ARGS>(0, CT_DIM, RT_DIM);                                                   \\
         }} else {{                                                                                                  \\
-            if (dyn_status != 0) {{ {reinit}<DYN_INIT_ARGS>(TILE_R_DIM, TILE_C_DIM, TILE_R_DIM, TILE_C_DIM, false, UNPACK_TRANSPOSE_FACES, CT_DIM, RT_DIM); dyn_status = 0; }} \\
+            if (dyn_status != 0) {{ {reinit_n} dyn_status = 0; }} \\
             _llk_math_matmul_<DYN_CALL_ARGS>(0, CT_DIM, RT_DIM);                                                    \\
         }}                                                                                                          \\
     }} while (0)
