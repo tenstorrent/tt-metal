@@ -25,6 +25,7 @@
 #include "debug_tools_test_utils.hpp"
 #include "gtest/gtest.h"
 #include "tests/tt_metal/tt_metal/eth/eth_test_common.hpp"
+#include "distributed/mesh_device_impl.hpp"
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -42,9 +43,9 @@ distributed::MeshCoordinateRange single_device_range() {
     return distributed::MeshCoordinateRange(zero, zero);
 }
 
-Program& add_empty_program(distributed::MeshWorkload& workload) {
+Program& add_empty_program(distributed::MeshDevice& mesh_device, distributed::MeshWorkload& workload) {
     auto range = single_device_range();
-    workload.add_program(range, Program());
+    workload.add_program(range, CreateProgram(mesh_device));
     return workload.get_programs().at(range);
 }
 
@@ -104,7 +105,7 @@ TEST_F(DevicePrintFixture, TwoActiveEthKernelsSameProgram) {
         GTEST_SKIP() << "fast dispatch to active ethernet has been removed";
     }
     for (auto& mesh_device : this->devices_) {
-        auto* device = mesh_device->get_devices()[0];
+        auto* device = mesh_device->impl().get_devices()[0];
         const auto eth_cores = device->get_active_ethernet_cores(true);
         if (eth_cores.size() < 2) {
             log_info(
@@ -113,7 +114,7 @@ TEST_F(DevicePrintFixture, TwoActiveEthKernelsSameProgram) {
         }
 
         distributed::MeshWorkload workload;
-        Program& program = add_empty_program(workload);
+        Program& program = add_empty_program(*mesh_device, workload);
 
         const CoreRangeSet crs(std::set<CoreRange>(eth_cores.begin(), eth_cores.end()));
         CreateKernel(program, kEriscKernel, crs, make_active_eth_config());
@@ -144,7 +145,7 @@ TEST_F(DevicePrintFixture, TwoActiveEthProgramsBackToBack) {
         GTEST_SKIP() << "fast dispatch to active ethernet has been removed";
     }
     for (auto& mesh_device : this->devices_) {
-        auto* device = mesh_device->get_devices()[0];
+        auto* device = mesh_device->impl().get_devices()[0];
         const auto eth_cores = device->get_active_ethernet_cores(true);
         if (eth_cores.empty()) {
             log_info(tt::LogTest, "Skipping device {} (no active ETH cores)", device->id());
@@ -155,7 +156,7 @@ TEST_F(DevicePrintFixture, TwoActiveEthProgramsBackToBack) {
         const EthernetConfig config = make_active_eth_config();
         for (int i = 0; i < 2; i++) {
             distributed::MeshWorkload workload;
-            Program& program = add_empty_program(workload);
+            Program& program = add_empty_program(*mesh_device, workload);
             CreateKernel(program, kEriscKernel, core, config);
             this->RunProgram(mesh_device, workload);
         }

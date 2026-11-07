@@ -14,12 +14,11 @@
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 #include <tt_stl/assert.hpp>
-#include <umd/device/types/cluster_descriptor_types.hpp>  // ChipId
+#include <tt-umd/types/cluster_descriptor_types.hpp>  // ChipId
 #include <optional>
 #include <vector>
 
 #include "erisc_datamover_builder.hpp"
-#include "impl/program/program_impl.hpp"
 #include "llrt/tt_cluster.hpp"
 #include "tt_metal/fabric/builder/fabric_static_sized_channels_allocator.hpp"
 #include "fabric_host_utils.hpp"
