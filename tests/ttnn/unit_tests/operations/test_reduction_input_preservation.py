@@ -144,7 +144,12 @@ def test_gather_preserves_input_bits(device, shape):
     torch.manual_seed(0)
     values = torch.randn(shape, dtype=torch.bfloat16)
     values.view(torch.int16).flatten()[:3] = torch.tensor(TRAP_BITS, dtype=torch.int16)
-    index = torch.tensor([[0, 1]], dtype=torch.int32)
+    # The index keeps the input's rank and leading dims; only the gather dim shrinks.
+    # tests/ttnn/unit_tests/operations/data_movement/test_gather.py builds it this way, and
+    # gather.cpp:322 requires input and index ranks to match.
+    index_shape = list(shape)
+    index_shape[-1] = min(32, shape[-1])
+    index = torch.randint(0, shape[-1], index_shape, dtype=torch.int64)
 
     # Control: sum leaves input bits untouched.
     tensor_sum = ttnn.from_torch(values, device=device, layout=ttnn.TILE_LAYOUT)
@@ -155,7 +160,7 @@ def test_gather_preserves_input_bits(device, shape):
     # Gather must not rewrite its caller's input tensor while filling the implicit padding.
     tensor_gather = ttnn.from_torch(values, device=device, layout=ttnn.TILE_LAYOUT)
     before_gather = _read_padded_bits(tensor_gather)
-    index_tensor = ttnn.from_torch(index, device=device, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT)
+    index_tensor = ttnn.from_torch(index, ttnn.uint16, layout=ttnn.Layout.TILE, device=device)
     _ = ttnn.gather(tensor_gather, dim=-1, index=index_tensor)
     assert torch.equal(_read_padded_bits(tensor_gather), before_gather)
 
