@@ -6,8 +6,9 @@
 // (experimental/gguf_page.h). One-page groups store codes then scale rows, the page's own order: each lands in its
 // page with one read, a unit of them per transaction id, two units in flight. Larger groups land whole in a staging
 // ring (c_2), one read each, two in flight, and go into their pages from local L1, each codes part with the group's
-// scale rows. Codebook formats then fill in each page's grid levels and fp32 scale copies (prepare_page); the others
-// convert the scale rows once, in the first page (prepare_scales), and copy the block to the other pages.
+// scale rows. The scale rows are converted once, in the first page (prepare_scales), and the block is copied to the
+// other pages; codebook formats then fill in each page's grid levels (lookup_grid), from a copy of the level table in
+// local data memory when it fits in 1 KiB.
 // Compile args: format id, c_0 pages, one-page groups per unit, staging slots, then the weight's TensorAccessorArgs.
 // Runtime args: weight address, N tiles, runs, then per run its N tile, first and end K group.
 
@@ -17,6 +18,12 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/endpoints.h"
 #include "experimental/gguf_page.h"
+
+template <experimental::gguf::Format FMT>
+constexpr bool local_table() {
+    return experimental::gguf::is_codebook<FMT>() && experimental::gguf::table_entries<FMT>() * 2 <= 1024;
+}
+alignas(4) std::uint16_t table_copy[1024 / 2];
 
 void kernel_main() {
     using namespace experimental::gguf;
@@ -91,7 +98,7 @@ void kernel_main() {
     } else {
         static_assert(slots > in_flight);
         constexpr uint32_t local = slots + 1;  // transaction id of the copies within L1
-        constexpr bool shared_scales = L.fp16_rows > 0 && !is_codebook<FMT>();
+        constexpr bool shared_scales = L.fp16_rows > 0;
         CircularBuffer stage(tt::CBIndex::c_2);
         stage.reserve_back(1);  // private: never pushed
         const uint32_t stage_addr = stage.get_write_ptr();
@@ -118,6 +125,16 @@ void kernel_main() {
         for (uint32_t i = 0; i < in_flight && i < total; i++) {
             read_record(i);
         }
+        [[maybe_unused]] const std::uint16_t* table = nullptr;
+        if constexpr (is_codebook<FMT>()) {
+            table = level_table<FMT>();
+            if constexpr (local_table<FMT>()) {
+                for (uint32_t j = 0; j < table_entries<FMT>() / 2; j++) {
+                    reinterpret_cast<uint32_t*>(table_copy)[j] = reinterpret_cast<const uint32_t*>(table)[j];
+                }
+                table = table_copy;
+            }
+        }
         for (uint32_t i = 0; i < total; i++) {
             if (i + in_flight < total) {
                 read_record(i + in_flight);  // its slot held record i - 1, whose copies are done
@@ -141,9 +158,13 @@ void kernel_main() {
                     copy(first + L.scale_offset, L.scale_bytes, p * page + L.scale_offset);
                 }
                 noc.async_read_barrier<NocOptions::TXN_ID>({.trid = local});
-            } else {
+            }
+            if constexpr (is_codebook<FMT>()) {
                 for (uint32_t p = 0; p < P; p++) {
-                    prepare_page<FMT>(first + p * page);
+                    lookup_grid<FMT>(
+                        reinterpret_cast<const uint32_t*>(first + p * page + index_offset<FMT>()),
+                        table,
+                        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(first + p * page));
                 }
                 asm volatile("fence" ::: "memory");
             }
