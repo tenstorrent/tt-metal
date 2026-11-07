@@ -82,7 +82,7 @@ def _build_shim() -> tuple[type, dict]:
     def _lines(node: ast.AST) -> str:
         return "".join(src_lines[node.lineno - 1 : node.end_lineno])
 
-    p2l = _lines(_top("pixel_to_latent_frame")) + "\n\n" + _lines(_top("_env_on"))
+    p2l = "\n\n".join(_lines(_top(n)) for n in ("pixel_to_latent_frame", "_env_on", "_s1_pin_strength"))
     methods = ("warmup_buffers", "_prealloc_trace_io", "generate", "_assert_trace_family_warmed")
     method_blocks = [_lines(_method(n)) for n in methods]
 
