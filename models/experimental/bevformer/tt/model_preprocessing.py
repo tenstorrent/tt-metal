@@ -30,9 +30,8 @@ from models.experimental.bevformer.model_config import (
     tt_fpn_kwargs,
     tt_resnet_kwargs,
 )
-from models.experimental.bevformer.tt.tt_common import is_pointwise
+from models.experimental.bevformer.tt.tt_common import conv_output_size, is_pointwise
 from models.experimental.bevformer.tt.tt_resnet import TTResNet
-
 
 # --- Shared helpers ---------------------------------------------------------------------------
 
@@ -200,8 +199,8 @@ def create_perception_transformer_parameters(transformer, device, dtype=WEIGHT_D
 
 # Each BatchNorm is folded into the conv before it. The backbone's conv input shapes are recorded
 # from one reference forward; the FPN's follow from its input levels' shapes. The weights stay on
-# the host: conv2d lays them out for its input on the device. A stride-1 1x1 conv whose activations
-# are in DRAM runs as a matmul instead and gets a Linear's weight; the DCNs get their op's weight,
+# the host: conv2d lays them out for its input on the device. A 1x1 conv whose activations are in
+# DRAM runs as a matmul instead and gets a Linear's weight; the DCNs get their op's weight,
 # laid out for the order it samples its columns in.
 
 
@@ -315,8 +314,7 @@ def create_fpn_parameters(model, input_tensors, tt_kwargs=None):
     for fpn_conv in model.fpn_convs[len(level_shapes) :]:
         shapes.append((batch, height, width))
         conv = fpn_conv.conv
-        height = (height + 2 * conv.padding[0] - conv.kernel_size[0]) // conv.stride[0] + 1
-        width = (width + 2 * conv.padding[1] - conv.kernel_size[1]) // conv.stride[1] + 1
+        height, width = conv_output_size(height, width, conv.kernel_size, conv.stride, conv.padding)
 
     def conv_args(conv_module, shape):
         conv = conv_module.conv

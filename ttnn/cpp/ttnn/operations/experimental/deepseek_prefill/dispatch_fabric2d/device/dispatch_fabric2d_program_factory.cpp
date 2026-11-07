@@ -53,7 +53,7 @@ uint32_t ring_extent_of(const DispatchFabric2dParams& args) {
 // Bytes of one token wherever the op moves it. Taken from the output payload, whose page is one token in
 // both input layouts; a TILE input is paged by tile.
 uint32_t token_size_bytes(const ttnn::Tensor& out_payload) {
-    return static_cast<uint32_t>(out_payload.buffer()->aligned_page_size());
+    return static_cast<uint32_t>(out_payload.mesh_buffer().aligned_page_size());
 }
 
 bool input_is_tiled(const DispatchFabric2dInputs& t) { return t.input_tensor.layout() == tt::tt_metal::Layout::TILE; }
@@ -279,7 +279,7 @@ tt::tt_metal::WorkloadDescriptor DispatchFabric2dProgramFactory::create_workload
     auto* mesh = args.device;
     const uint32_t extent = ring_extent_of(args);
     const uint32_t token_bytes = token_size_bytes(tensor_return_value[0]);
-    const uint32_t meta_bytes = static_cast<uint32_t>(tensor_return_value[1].buffer()->aligned_page_size());
+    const uint32_t meta_bytes = static_cast<uint32_t>(tensor_return_value[1].mesh_buffer().aligned_page_size());
     TT_FATAL(
         meta_bytes >= dspf2d::METADATA_WIRE_BYTES,
         "dispatch_fabric2d: metadata page is {} B but the last hop writes {} B into it",
@@ -299,9 +299,9 @@ tt::tt_metal::WorkloadDescriptor DispatchFabric2dProgramFactory::create_workload
         // The row-major path reads tokens straight out of the input, so the two pages have to be the
         // same size; they are both one row of the same emb_dim in the same dtype.
         TT_FATAL(
-            tensor_args.input_tensor.buffer()->aligned_page_size() == token_bytes,
+            tensor_args.input_tensor.mesh_buffer().aligned_page_size() == token_bytes,
             "dispatch_fabric2d: a ROW_MAJOR input pages a token at {} B but the output pages it at {} B",
-            tensor_args.input_tensor.buffer()->aligned_page_size(),
+            tensor_args.input_tensor.mesh_buffer().aligned_page_size(),
             token_bytes);
     }
 

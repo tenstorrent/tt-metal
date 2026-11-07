@@ -101,10 +101,14 @@ TENSORBIN_HEADER_ALIGNMENT = 8
 MAX_TENSORBIN_HEADER_BYTES = 16 << 20
 REPO_ROOT = Path(__file__).resolve().parents[5]
 # The sources that determine the packed bytes: this module (the layer walk), the moe_compute layout packer, and
-# tt-metal's BFP4 tile packer.  The cache identity pins their digests instead of the tt-metal revision.
+# tt-metal's host BFP4 packers (the direct tile encoder and the fallback packer).  The cache identity pins their
+# digests instead of the tt-metal revision.
 CONVERTER_SOURCES = (
     Path(__file__).resolve(),
     Path(moe_compute_utils.__file__).resolve(),
+    REPO_ROOT / "tt_metal/impl/tensor/host_tensor_factory.cpp",
+    REPO_ROOT / "tt_metal/impl/data_format/bfp_tile_encode.hpp",
+    REPO_ROOT / "tt_metal/impl/data_format/bfp_simd.hpp",
     REPO_ROOT / "tt_metal/impl/data_format/bfloat4.cpp",
     REPO_ROOT / "tt_metal/impl/data_format/blockfloat_common.hpp",
     REPO_ROOT / "tt_metal/impl/data_format/blockfloat_common.cpp",

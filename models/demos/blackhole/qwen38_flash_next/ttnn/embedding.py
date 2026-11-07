@@ -54,7 +54,7 @@ from models.demos.blackhole.qwen38_flash_next.ttnn.decode_matmul import (
     validate_decode_dram_workers,
     validate_dram_sharded_weight,
 )
-from models.tt_transformers.tt.ccl import tt_all_reduce
+from models.ttt_compat.tt.ccl import tt_all_reduce
 
 TP_AXIS = 1
 TP_SIZE = 4
