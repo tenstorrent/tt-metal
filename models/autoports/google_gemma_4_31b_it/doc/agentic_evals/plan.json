@@ -172,6 +172,27 @@
       "predicted_device_hours": 2.2233174590343814,
       "full_timeout_sensitivity_hours": 5.135805358948548,
       "not_final_selection": true
+    },
+    "candidate160_dry": {
+      "status": "passed_operational_dry_not_final_selection",
+      "evidence": "runs/early-gpqa160-candidate-dry/RESULT.json",
+      "device_hours": 1.7822222222222222,
+      "predicted_device_hours": 2.22331746,
+      "cohort_count": 160,
+      "planned_clients": 8,
+      "batch": 8,
+      "requires": "Valid completed160 and measured whole-run projection within12h plus unchanged releaseprovenance",
+      "post_cancel_replay_limitation": {
+        "line": 137218,
+        "timestamp": "2026-11-07T09:46:52.2175450Z",
+        "frame_key": "4d2c734379e0f3861b17d553c50647e11433f51bae03fd110943f9718ecc8f36",
+        "chunk": 8,
+        "chunk_count": 11,
+        "complete_live_copy_line": 6768,
+        "complete_live_timestamp": "2026-11-07T08:08:11.9037930Z",
+        "cause": "Malformed replay during stock Docker-log dump after cancellation; live original was complete and hash-validated. No runtime repair needed.",
+        "scope": "Final all-log coverage remains flagged; no silent suppression."
+      }
     }
   },
   "runs": [
@@ -4010,7 +4031,7 @@
       "url": "https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/42353554865",
       "workflow_status": "in_progress",
       "workflow_conclusion": null,
-      "last_observed_at": "2026-11-07T09:15:35.914633+00:00",
+      "last_observed_at": "2026-11-07T09:51:03.377647+00:00",
       "runner": "120-qb2-p05t01",
       "device_job_id": 128346706365,
       "device_job_started_at": "2026-11-07T08:00:09Z",
@@ -4020,7 +4041,7 @@
     {
       "arm": "early-gpqa160-candidate-dry",
       "device": "qb2-ci",
-      "status": "device_job_in_progress",
+      "status": "cancelled",
       "purpose": "No-score candidate dry",
       "eval": "r1_gpqa_diamond",
       "tasks": [
@@ -4229,14 +4250,20 @@
       "run_id": 42353568775,
       "submitted_at": "2026-11-07T08:00:04Z",
       "url": "https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/42353568775",
-      "workflow_status": "in_progress",
-      "workflow_conclusion": null,
-      "last_observed_at": "2026-11-07T09:15:35.901308+00:00",
+      "workflow_status": "completed",
+      "workflow_conclusion": "cancelled",
+      "last_observed_at": "2026-11-07T09:48:01.027869+00:00",
       "runner": "qb2-120-p05t05",
       "device_job_id": 128346745414,
       "device_job_started_at": "2026-11-07T08:00:19Z",
-      "device_job_completed_at": null,
-      "start": "2026-11-07T08:00:19Z"
+      "device_job_completed_at": "2026-11-07T09:47:15Z",
+      "start": "2026-11-07T08:00:19Z",
+      "end": "2026-11-07T09:47:15Z",
+      "exit_status": 1,
+      "actual_hours": 1.7822222222222222,
+      "actual_hours_basis": "CI device job including setup/server/client; evaluation time separate",
+      "workflow_wall_hours": 1.7866666666666666,
+      "audit": "runs/early-gpqa160-candidate-dry/RESULT.json"
     },
     {
       "arm": "gpqa80-new-loop-diagnosis",
@@ -4671,7 +4698,7 @@
       "submitted_at": "2026-11-07T08:34:42Z",
       "url": "https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/42356076812",
       "workflow_status": "in_progress",
-      "last_observed_at": "2026-11-07T09:15:27.727939+00:00",
+      "last_observed_at": "2026-11-07T09:50:53.065208+00:00",
       "runner": "120-qb2-p04t05",
       "device_job_id": 128354391541,
       "device_job_started_at": "2026-11-07T08:34:55Z",
@@ -4974,7 +5001,7 @@
     }
   ],
   "status": "valid80_admitted160_with_parallel_candidate_dry",
-  "last_updated": "2026-11-07T09:15:45.509800+00:00",
+  "last_updated": "2026-11-07T09:51:44.745986+00:00",
   "stop_reason": null,
   "actual_runs": [],
   "continuations": [
@@ -6027,6 +6054,16 @@
       "batch": 8,
       "predicted_hours": 0.05,
       "actual_hours": 0.04678343194444445
+    },
+    {
+      "arm": "early-gpqa160-candidate-dry",
+      "run_id": 42353568775,
+      "planned_clients": 8,
+      "batch": 8,
+      "device_job_hours": 1.7822222222222222,
+      "workflow_wall_hours": 1.7866666666666666,
+      "predicted_workflow_hours": 3.072761903478826,
+      "workflow_conclusion": "cancelled"
     }
   ],
   "local_idle_intervals": [
@@ -7294,5 +7331,26 @@
     "forecast_hours": 0.2,
     "scope": "Four full60 conditional checkpoints after exact fresh-prefix overlap; not autonomous generation or original served-state replay",
     "finding": "No actionable TT-specific conditional divergence; no change; original failure remains"
+  },
+  "candidate160_dry_acceptance": {
+    "status": "passed_operational_dry_not_final_selection",
+    "evidence": "runs/early-gpqa160-candidate-dry/RESULT.json",
+    "device_hours": 1.7822222222222222,
+    "predicted_device_hours": 2.22331746,
+    "cohort_count": 160,
+    "planned_clients": 8,
+    "batch": 8,
+    "requires": "Valid completed160 and measured whole-run projection within12h plus unchanged releaseprovenance",
+    "post_cancel_replay_limitation": {
+      "line": 137218,
+      "timestamp": "2026-11-07T09:46:52.2175450Z",
+      "frame_key": "4d2c734379e0f3861b17d553c50647e11433f51bae03fd110943f9718ecc8f36",
+      "chunk": 8,
+      "chunk_count": 11,
+      "complete_live_copy_line": 6768,
+      "complete_live_timestamp": "2026-11-07T08:08:11.9037930Z",
+      "cause": "Malformed replay during stock Docker-log dump after cancellation; live original was complete and hash-validated. No runtime repair needed.",
+      "scope": "Final all-log coverage remains flagged; no silent suppression."
+    }
   }
 }

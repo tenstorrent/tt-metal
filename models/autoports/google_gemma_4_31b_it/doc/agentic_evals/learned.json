@@ -864,5 +864,26 @@
     "forecast_hours": 0.2,
     "scope": "Four full60 conditional checkpoints after exact fresh-prefix overlap; not autonomous generation or original served-state replay",
     "finding": "No actionable TT-specific conditional divergence; no change; original failure remains"
+  },
+  "candidate160_dry_acceptance": {
+    "status": "passed_operational_dry_not_final_selection",
+    "evidence": "runs/early-gpqa160-candidate-dry/RESULT.json",
+    "device_hours": 1.7822222222222222,
+    "predicted_device_hours": 2.22331746,
+    "cohort_count": 160,
+    "planned_clients": 8,
+    "batch": 8,
+    "requires": "Valid completed160 and measured whole-run projection within12h plus unchanged releaseprovenance",
+    "post_cancel_replay_limitation": {
+      "line": 137218,
+      "timestamp": "2026-11-07T09:46:52.2175450Z",
+      "frame_key": "4d2c734379e0f3861b17d553c50647e11433f51bae03fd110943f9718ecc8f36",
+      "chunk": 8,
+      "chunk_count": 11,
+      "complete_live_copy_line": 6768,
+      "complete_live_timestamp": "2026-11-07T08:08:11.9037930Z",
+      "cause": "Malformed replay during stock Docker-log dump after cancellation; live original was complete and hash-validated. No runtime repair needed.",
+      "scope": "Final all-log coverage remains flagged; no silent suppression."
+    }
   }
 }
