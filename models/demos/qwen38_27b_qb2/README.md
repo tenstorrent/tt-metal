@@ -48,3 +48,18 @@ python models/demos/qwen38_27b_qb2/demo/text_demo.py \
 
 For vLLM serving, set `EXTRA_MODELS_DIR` to `models/demos`. The model is
 registered as `TTQwen38ForCausalLM`.
+
+## vLLM prefix caching
+
+Set `QWEN_PREFIX_SNAPSHOTS` to keep that many device snapshots of the
+linear-attention state (36.7 MiB per device each) and enable vLLM prefix
+caching:
+
+```bash
+export QWEN_PREFIX_SNAPSHOTS=32
+```
+
+A snapshot is taken at the last multiple of 128 tokens at least 16 tokens
+before the end of each prompt of at least 4096 tokens
+(`QWEN_PREFIX_SNAPSHOT_MARGIN`, `QWEN_PREFIX_SNAPSHOT_MIN`). Do not pass
+`--no-enable-prefix-caching`.
