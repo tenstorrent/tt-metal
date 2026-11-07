@@ -82,6 +82,23 @@ inline bool use_sfpu_reduce_path(
            (math_op == ReduceOpMath::SUM || math_op == ReduceOpMath::MAX || math_op == ReduceOpMath::MIN);
 }
 
+// True when an H reduce takes the width-sharded L1 fast path. Each core reduces its own input shard and writes to
+// its own output shard. This is true only when the input and output shards match: the same grid, shard width and
+// orientation. Otherwise the general path runs. Both H factory and h_reduce_negate_fits_in_l1 use this check.
+inline bool reduce_h_uses_width_sharded_fast_path(
+    const tt::tt_metal::MemoryConfig& input, const tt::tt_metal::MemoryConfig& output) {
+    using tt::tt_metal::TensorMemoryLayout;
+    if (input.memory_layout() != TensorMemoryLayout::WIDTH_SHARDED ||
+        output.memory_layout() != TensorMemoryLayout::WIDTH_SHARDED || !input.is_l1() || !output.is_l1() ||
+        !input.shard_spec().has_value() || !output.shard_spec().has_value()) {
+        return false;
+    }
+    const auto& input_shard = *input.shard_spec();
+    const auto& output_shard = *output.shard_spec();
+    return input_shard.grid == output_shard.grid && input_shard.shape[1] == output_shard.shape[1] &&
+           input_shard.orientation == output_shard.orientation;
+}
+
 // Which slot carries the scalar. This is structural, so it is hashed; the value itself is not.
 enum class ScalerMode : uint8_t { None, ScalerTile, PostMul };
 

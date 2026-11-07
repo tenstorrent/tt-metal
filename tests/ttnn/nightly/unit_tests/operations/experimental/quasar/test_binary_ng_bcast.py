@@ -26,8 +26,7 @@ x 4 tile-cols (16 tiles); [1,2,1,128] = 2 (N*C) batch/channel slabs x one (padde
 
 Run on the Quasar simulator:
     unset TT_METAL_DISABLE_SFPLOADMACRO
-    TT_METAL_SIMULATOR=<path>/libttsim.so TT_SIMULATOR_LOCALHOST=1 ARCH_NAME=quasar CHIP_ARCH=quasar \
-        TT_METAL_SLOW_DISPATCH_MODE=1 \
+    TT_METAL_SIMULATOR=<path>/libttsim.so TT_SIMULATOR_LOCALHOST=1 TT_METAL_SLOW_DISPATCH_MODE=1 \
         pytest tests/ttnn/nightly/unit_tests/operations/experimental/quasar/test_binary_ng_bcast.py
 """
 import pytest
@@ -38,6 +37,11 @@ from tests.ttnn.nightly.unit_tests.operations.experimental.quasar.binary_ng_quas
     _height_sharded_config,
     _width_sharded_config,
 )
+
+# Every test in this module takes the function-scoped `device` fixture without
+# parametrizing device_params, so the device is opened once per module rather than
+# once per test.
+pytestmark = pytest.mark.use_module_device
 
 
 # a is the full [H,W]; the other operand broadcasts. ROW_B: b has one (logical) row. ROW_A: a has one.

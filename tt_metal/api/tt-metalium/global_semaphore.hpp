@@ -21,6 +21,7 @@ using DeviceAddr = std::uint64_t;
 class IDevice;
 class GlobalSemaphoreImpl;
 namespace distributed {
+class MeshCommandQueue;
 class MeshDevice;
 }  // namespace distributed
 }  // namespace tt::tt_metal
@@ -36,9 +37,29 @@ public:
      * @param cores Range of Tensix coordinates using the semaphore.
      * @param initial_value Initial value of the semaphore.
      * @param buffer_type Buffer type to store the semaphore. Can only be an L1 buffer type.
+     * @param cq_id Id of the command queue used for the initial-value write with fast dispatch (cq 0 if not
+     * provided). The queue is looked up with `device.mesh_command_queue(cq_id)`; prefer the overload below that takes
+     * a MeshCommandQueue&.
      */
     GlobalSemaphore(
         distributed::MeshDevice& device,
+        CoreRangeSet cores,
+        uint32_t initial_value,
+        BufferType buffer_type = BufferType::L1,
+        uint8_t cq_id = 0);
+
+    /**
+     * @brief Allocates a global semaphore in L1 on `mesh_cq`'s mesh device, writing the initial value through
+     * `mesh_cq`.
+     *
+     * @param mesh_cq Command queue of the mesh device to create the semaphore on. It is used for the initial-value
+     * write with fast dispatch, and not used for the write on slow dispatch / simulator.
+     * @param cores Range of Tensix coordinates using the semaphore.
+     * @param initial_value Initial value of the semaphore.
+     * @param buffer_type Buffer type to store the semaphore. Can only be an L1 buffer type.
+     */
+    GlobalSemaphore(
+        distributed::MeshCommandQueue& mesh_cq,
         CoreRangeSet cores,
         uint32_t initial_value,
         BufferType buffer_type = BufferType::L1);
@@ -56,7 +77,23 @@ public:
 
     DeviceAddr address() const;
 
-    void reset_semaphore_value(uint32_t reset_value) const;
+    /**
+     * @brief Resets the semaphore on every local device to `reset_value` (blocking).
+     *
+     * @param reset_value Value to write.
+     * @param cq_id Id of the command queue used for the write with fast dispatch (cq 0 if not provided). The queue is
+     * looked up with `mesh_command_queue(cq_id)`; prefer the overload below that takes a MeshCommandQueue&.
+     */
+    void reset_semaphore_value(uint32_t reset_value, uint8_t cq_id = 0) const;
+
+    /**
+     * @brief Resets the semaphore on every local device to `reset_value` (blocking).
+     *
+     * @param reset_value Value to write.
+     * @param mesh_cq Command queue used for the write with fast dispatch. Must belong to the semaphore's device. It
+     * is not used on slow dispatch / simulator.
+     */
+    void reset_semaphore_value(uint32_t reset_value, distributed::MeshCommandQueue& mesh_cq) const;
 
     static constexpr auto attribute_names = std::forward_as_tuple("cores", "buffer_type");
     std::tuple<CoreRangeSet, BufferType> attribute_values() const;

@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 // SPDX-License-Identifier: Apache-2.0
 template <uint32_t NUM_DEGREE, uint32_t DEN_DEGREE>
-static inline void eval_rational_interleaved_numer_denom(
+static __attribute__((always_inline)) inline void eval_rational_interleaved_numer_denom(
     const float* num_coeffs, const float* den_coeffs, vFloat x, vFloat& out_numer, vFloat& out_denom) {
     constexpr uint32_t MIN_DEG = (NUM_DEGREE < DEN_DEGREE) ? NUM_DEGREE : DEN_DEGREE;
 
@@ -30,14 +30,6 @@ static inline void eval_rational_interleaved_numer_denom(
     out_denom = denom;
 }
 
-
-static inline vFloat rational_reciprocal(vFloat denom) {
-#if defined(RATIONAL_RECIPROCAL_ZERO_ITER)
-    // Raw 8-bit SFPARECIP seed, zero Newton steps — TTNN's own erfc divide.
-    return ckernel::sfpu::sfpu_reciprocal_iter<0>(denom);
-#elif defined(RATIONAL_RECIPROCAL_ONE_ITER)
-    return ckernel::sfpu::sfpu_reciprocal_iter<1>(denom);
-#else
+static __attribute__((always_inline)) inline vFloat rational_reciprocal(vFloat denom) {
     return ckernel::sfpu::sfpu_reciprocal_iter<2>(denom);
-#endif
 }

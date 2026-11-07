@@ -36,7 +36,7 @@
 #include "device_fixture.hpp"
 #include "llrt/rtoptions.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
-#include "umd/device/driver_atomics.hpp"
+#include <tt-umd/driver_atomics.hpp>
 
 namespace tt::tt_metal {
 

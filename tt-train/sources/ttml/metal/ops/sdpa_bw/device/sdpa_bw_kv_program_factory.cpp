@@ -177,7 +177,7 @@ SDPABackwardKVProgramFactory::cached_program_t SDPABackwardKVProgramFactory::cre
 
     auto* device = grad_output.device();
 
-    tt::tt_metal::Program program{};
+    tt::tt_metal::Program program = tt::tt_metal::CreateProgram(*device);
     auto input_data_format = datatype_to_dataformat_converter(grad_output.dtype());
     const uint32_t bfloat16_single_tile_size_bytes = tt::tile_size(tt::DataFormat::Float16_b);
     const uint32_t float32_single_tile_size_bytes = tt::tile_size(tt::DataFormat::Float32);
@@ -604,17 +604,17 @@ void SDPABackwardKVProgramFactory::override_runtime_arguments(
     uint32_t num_cores = shared_vars.num_cores;
     uint32_t num_cores_y = shared_vars.num_cores_y;
 
-    const auto* grad_output_buffer = tensor_args.grad_output.buffer();
-    const auto* query_buffer = tensor_args.query.buffer();
-    const auto* key_buffer = tensor_args.key.buffer();
-    const auto* value_buffer = tensor_args.value.buffer();
+    const auto* grad_output_buffer = &tensor_args.grad_output.mesh_buffer();
+    const auto* query_buffer = &tensor_args.query.mesh_buffer();
+    const auto* key_buffer = &tensor_args.key.mesh_buffer();
+    const auto* value_buffer = &tensor_args.value.mesh_buffer();
     const auto* mask_buffer = tensor_args.attn_mask.has_value() ? tensor_args.attn_mask.value().buffer() : nullptr;
-    const auto* intermediates_buffer = tensor_args.intermediates.buffer();
-    const auto* u_scaler_buffer = tensor_args.u_scaler.buffer();
+    const auto* intermediates_buffer = &tensor_args.intermediates.mesh_buffer();
+    const auto* u_scaler_buffer = &tensor_args.u_scaler.mesh_buffer();
 
     auto& [grad_key, grad_value] = tensor_return_value;
-    auto* grad_key_buffer = grad_key.buffer();
-    auto* grad_value_buffer = grad_value.buffer();
+    const auto* grad_key_buffer = &grad_key.mesh_buffer();
+    const auto* grad_value_buffer = &grad_value.mesh_buffer();
 
     auto& reader_runtime_args = GetRuntimeArgs(program, sdpa_bw_reader_kernel);
     auto& writer_runtime_args = GetRuntimeArgs(program, sdpa_bw_writer_kernel);

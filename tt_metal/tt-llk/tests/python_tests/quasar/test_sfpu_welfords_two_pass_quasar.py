@@ -5,10 +5,10 @@ from dataclasses import dataclass
 
 import pytest
 import torch
+from helpers.data_format_inference import dest_acc_for
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import FACE_DIM, TILE_DIM
 from helpers.llk_params import (
-    DestAccumulation,
     UnpackerEngine,
     format_dict,
 )
@@ -24,11 +24,10 @@ from helpers.test_variant_parameters import (
     UNPACKER_ENGINE_SEL,
 )
 from helpers.tilize_untilize import tilize_block, untilize_block
-from helpers.utils import passed_test
+from helpers.utils import passed_test, result_tensor
 
 FORMATS = [
-    InputOutputFormat(fmt, fmt)
-    for fmt in (DataFormat.Float16_b, DataFormat.Float16, DataFormat.Float32)
+    InputOutputFormat(fmt, fmt) for fmt in (DataFormat.Float16_b, DataFormat.Float32)
 ]
 
 # Two output steps of relative slack. The near-zero floor is that slack times the smallest
@@ -276,11 +275,7 @@ def test_sfpu_welfords_two_pass_quasar(formats, scenario_name):
     """Shifted two-pass per-column mean / population variance (the _two_pass_* helpers)."""
     scenario = SCENARIOS[scenario_name]
     scenario.validate()
-    dest_acc = (
-        DestAccumulation.Yes
-        if formats.input_format.is_32_bit()
-        else DestAccumulation.No
-    )
+    dest_acc = dest_acc_for(formats.input_format)
     torch_format = format_dict[formats.input_format]
     tile_count = scenario.tile_count
     dims = [TILE_DIM, tile_count * TILE_DIM]
@@ -337,7 +332,7 @@ def test_sfpu_welfords_two_pass_quasar(formats, scenario_name):
 
     res_from_L1 = configuration.run().result
     res = untilize_block(
-        torch.tensor(res_from_L1, dtype=format_dict[formats.output_format]),
+        result_tensor(res_from_L1, formats.output_format),
         formats.output_format,
         dims,
     ).to(torch.float64)

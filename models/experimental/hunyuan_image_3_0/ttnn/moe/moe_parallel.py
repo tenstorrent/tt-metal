@@ -271,7 +271,7 @@ class HunyuanTtMoEParallel(LightweightModule):
         n = getattr(self.ccl, "num_links", None)
         if n is not None:
             return max(1, int(n))
-        from models.common.modules.tt_ccl import get_num_links
+        from models.common.tt_ccl import get_num_links
 
         return max(1, get_num_links(self.mesh_device))
 

@@ -10,7 +10,7 @@
 #include <cstdint>
 
 #include "api/dataflow/dataflow_api.h"
-#include <tt-metalium/constants.hpp>
+#include "api/tile_constants.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/noc_semaphore.h"
@@ -75,6 +75,7 @@ template <
     uint32_t Vt_full,
     uint32_t mcast_shared,
     uint32_t summary,
+    uint32_t emit_outputs,
     uint32_t groups_per_head,
     uint32_t late_on_writer,
     uint32_t has_actual_end,
@@ -160,10 +161,10 @@ TT_KERNEL void reader(
         for (uint32_t chunk = 0; chunk < valid_chunks; ++chunk) {
             const uint32_t head_chunk = head * num_chunks + chunk;
             // Publish the restart seed just in time, never before the loop. The state
-            // DFB holds one kv payload and compute frees it only via pop_front at the
-            // end of chunk 0, so hoisting this deadlocks; pushing it here reuses the
-            // same capacity as a queue and costs no extra L1. reset_chunk is >= 1
-            // whenever it is non-zero, so chunk 0 has always been consumed by now.
+            // DFB holds one kv payload and compute frees it only after seeding its ring
+            // and carry from it; pushing it here reuses the same capacity as a queue and
+            // costs no extra L1. reset_chunk is >= 1 whenever it is non-zero, so the
+            // initial seed has always been consumed by now.
             if constexpr (summary) {
                 if (reset_chunk != 0 && chunk == reset_chunk) {
                     seed_summary_pair<Kt, Vt>(state, noc, value_block);
@@ -186,7 +187,7 @@ TT_KERNEL void reader(
             const auto for_each_shared_input = [&](auto&& input) {
                 input(kd_accessor, kd, head_chunk * chunk_key_tiles, chunk_key_tiles);
                 input(t_inv_accessor, t_inv, head_chunk * chunk_chunk_tiles, chunk_chunk_tiles);
-                if constexpr (!summary) {
+                if constexpr (!summary || emit_outputs) {
                     input(TensorAccessor(tensor::q_decay), q_decay, head_chunk * chunk_key_tiles, chunk_key_tiles);
                     input(TensorAccessor(tensor::intra), intra, head_chunk * chunk_chunk_tiles, chunk_chunk_tiles);
                 }
@@ -207,11 +208,11 @@ TT_KERNEL void reader(
                     buffer.push_back(tiles);
                 });
             } else {
-                // kd and t_inv always; q_decay and intra for the recurrence; k_dec_t and dl unless the writer
-                // multicasts them.
+                // kd and t_inv always; q_decay and intra for the recurrence and the emitting summary; k_dec_t and dl
+                // unless the writer multicasts them.
                 static_assert(
                     !(summary && late_on_writer), "the summary keeps the state update's inputs on the reader");
-                constexpr uint32_t shared_inputs = 2 + (summary ? 0 : 2) + (late_on_writer ? 0 : 2);
+                constexpr uint32_t shared_inputs = 2 + (summary && !emit_outputs ? 0 : 2) + (late_on_writer ? 0 : 2);
                 // Every shared input is a default-pattern DFB, so kd's specialization holds all of them.
                 kda::SharedInput<decltype(kd)> inputs[shared_inputs];
                 uint32_t count = 0;

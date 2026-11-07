@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "moreh_group_norm_backward_gamma_beta_grad_device_operation.hpp"
+#include <algorithm>
 #include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
@@ -34,6 +35,8 @@ MorehGroupNormBackwardGammaBetaGradOperation::MorehGroupNormBackwardGammaBetaGra
     //                      Device Setup
     ////////////////////////////////////////////////////////////////////////////
     auto* device = output_grad.device();
+    auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
+        get_compute_kernel_config_args(device->arch(), operation_attributes.compute_kernel_config);
 
     ////////////////////////////////////////////////////////////////////////////
     //                         Parameters Setup
@@ -142,37 +145,37 @@ MorehGroupNormBackwardGammaBetaGradOperation::MorehGroupNormBackwardGammaBetaGra
     const uint32_t im5_t = 1;  // dycopy
 
     const auto data_format = tt_metal::datatype_to_dataformat_converter(output_grad.dtype());
-    const auto single_tile_size = tt::tile_size(data_format);
+    const auto intermed_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : data_format;
 
     Group<DataflowBufferSpec> dfbs;
 
-    auto add_dfb = [&](const DFBSpecName& name, uint32_t num_tiles) {
+    auto add_dfb = [&](const DFBSpecName& name, uint32_t num_tiles, tt::DataFormat format) {
         if (num_tiles == 0) {
             return;
         }
         dfbs.push_back(DataflowBufferSpec{
             .unique_id = name,
-            .entry_size = single_tile_size,
+            .entry_size = tt::tile_size(format),
             .num_entries = num_tiles,
-            .data_format_metadata = data_format,
+            .data_format_metadata = format,
         });
     };
 
-    add_dfb(DY, in0_t);       // output_grad(==dy)
-    add_dfb(X, in1_t);        // input(==x)
-    add_dfb(MEAN, in2_t);     // mean
-    add_dfb(RSTD, in3_t);     // rstd
-    add_dfb(SCALER, in4_t);   // one
-    add_dfb(MASK_H, in5_t);   // mask_h
-    add_dfb(MASK_W, in6_t);   // mask_w
-    add_dfb(DGAMMA, out0_t);  // gamma_grad(==dgamma)
-    add_dfb(DBETA, out1_t);   // beta_grad(==dbeta)
-    add_dfb(Y, im0_t);        // output(==y)
-    add_dfb(YDY, im1_t);      // y * dy
-    add_dfb(DYADD, im2_t);    // Add[dy]
-    add_dfb(YDYADD, im3_t);   // Add[y * dy]
-    add_dfb(XMM, im4_t);      // x - mean
-    add_dfb(DYCOPY, im5_t);   // dycopy
+    add_dfb(DY, in0_t, data_format);          // output_grad(==dy)
+    add_dfb(X, in1_t, data_format);           // input(==x)
+    add_dfb(MEAN, in2_t, data_format);        // mean
+    add_dfb(RSTD, in3_t, data_format);        // rstd
+    add_dfb(SCALER, in4_t, data_format);      // one
+    add_dfb(MASK_H, in5_t, data_format);      // mask_h
+    add_dfb(MASK_W, in6_t, data_format);      // mask_w
+    add_dfb(DGAMMA, out0_t, data_format);     // gamma_grad(==dgamma)
+    add_dfb(DBETA, out1_t, data_format);      // beta_grad(==dbeta)
+    add_dfb(Y, im0_t, intermed_format);       // output(==y)
+    add_dfb(YDY, im1_t, intermed_format);     // y * dy
+    add_dfb(DYADD, im2_t, intermed_format);   // Add[dy]
+    add_dfb(YDYADD, im3_t, intermed_format);  // Add[y * dy]
+    add_dfb(XMM, im4_t, intermed_format);     // x - mean
+    add_dfb(DYCOPY, im5_t, intermed_format);  // dycopy
 
     ////////////////////////////////////////////////////////////////////////////
     //                      DataMovementKernel SetUp
@@ -194,6 +197,9 @@ MorehGroupNormBackwardGammaBetaGradOperation::MorehGroupNormBackwardGammaBetaGra
         {"REDUCE_OP", "PoolType::SUM"},
         {"REDUCE_DIM", "ReduceDim::REDUCE_SCALAR"},
     };
+    if (fp32_dest_acc_en) {
+        compute_defines["FP32_DEST_ACC_EN"] = "1";
+    }
     if (gamma_grad_has_value) {
         reader_defines["GAMMA_GRAD_HAS_VALUE"] = "1";
         writer_defines["GAMMA_GRAD_HAS_VALUE"] = "1";
@@ -331,7 +337,18 @@ MorehGroupNormBackwardGammaBetaGradOperation::MorehGroupNormBackwardGammaBetaGra
     // would silently flip every field, because that helper's defaults favor performance while the
     // Metal struct's favor precision. With enable_32_bit_dest at its default false, the Float32
     // unpack_modes requirement does not apply, so the table stays empty.
-    const ComputeHardwareConfig compute_hw = ComputeHardwareConfig{};
+    auto compute_hw = ttnn::to_compute_hardware_config(operation_attributes.compute_kernel_config);
+    if (compute_hw.enable_32_bit_dest) {
+        for (const auto& dfb : dfbs) {
+            const bool consumed_by_compute =
+                std::any_of(compute_dfb_bindings.begin(), compute_dfb_bindings.end(), [&](const DFBBinding& binding) {
+                    return binding.dfb_spec_name == dfb.unique_id && binding.endpoint_type == DFBEndpointType::CONSUMER;
+                });
+            if (consumed_by_compute && dfb.data_format_metadata == tt::DataFormat::Float32) {
+                compute_hw.unpack_modes.emplace(dfb.unique_id, tt::tt_metal::UnpackMode::UnpackToSrc);
+            }
+        }
+    }
 
     auto make_compute = [&](const KernelSpecName& unique_id, uint32_t num_channels_per_core) {
         return KernelSpec{
