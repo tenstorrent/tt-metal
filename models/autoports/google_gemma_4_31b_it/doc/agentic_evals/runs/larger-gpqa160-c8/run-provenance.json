@@ -1,0 +1,39 @@
+{
+  "id": 42353554865,
+  "event": "workflow_dispatch",
+  "path": ".github/workflows/manual-tt-shield-dispatch.yml",
+  "head_sha": "e30222f0d6f31401c90ee641b7e10b9368c1f887",
+  "head_branch": "main",
+  "display_title": "gemma-4-31B-it | bh-qb-ge | evals | f57978407eaacf09587f5793b8ae46ca7af839ea | 8b9623a7f1ccee85c04319e4c83e00f974322201",
+  "referenced_workflows": [
+    {
+      "path": "tenstorrent/tt-shield/.github/workflows/on-dispatch.yml@vvukoman/enable-on-dispatch-cross-repo-trigger",
+      "sha": "ba2f03318608be52c5cb2085469598a89dcfa0fc",
+      "ref": "refs/heads/vvukoman/enable-on-dispatch-cross-repo-trigger"
+    },
+    {
+      "path": "tenstorrent/tt-shield/.github/workflows/workflow_determine-server-type.yml@ba2f03318608be52c5cb2085469598a89dcfa0fc",
+      "sha": "ba2f03318608be52c5cb2085469598a89dcfa0fc",
+      "ref": "refs/heads/vvukoman/enable-on-dispatch-cross-repo-trigger"
+    },
+    {
+      "path": "tenstorrent/tt-shield/.github/workflows/workflow_resolve-shas.yml@ba2f03318608be52c5cb2085469598a89dcfa0fc",
+      "sha": "ba2f03318608be52c5cb2085469598a89dcfa0fc",
+      "ref": "refs/heads/vvukoman/enable-on-dispatch-cross-repo-trigger"
+    },
+    {
+      "path": "tenstorrent/tt-shield/.github/workflows/workflow_build-inference-server.yml@ba2f03318608be52c5cb2085469598a89dcfa0fc",
+      "sha": "ba2f03318608be52c5cb2085469598a89dcfa0fc",
+      "ref": "refs/heads/vvukoman/enable-on-dispatch-cross-repo-trigger"
+    },
+    {
+      "path": "tenstorrent/tt-shield/.github/workflows/workflow_run-tests-with-inference-server.yml@ba2f03318608be52c5cb2085469598a89dcfa0fc",
+      "sha": "ba2f03318608be52c5cb2085469598a89dcfa0fc",
+      "ref": "refs/heads/vvukoman/enable-on-dispatch-cross-repo-trigger"
+    }
+  ],
+  "created_at": "2026-11-07T07:59:52Z",
+  "run_started_at": "2026-11-07T07:59:52Z",
+  "observed_at": "2026-11-07T08:01:23.392990+00:00",
+  "actions_status": "pending actual startup log"
+}

@@ -439,6 +439,26 @@
       "pool_ids": 20480,
       "batch_reason": "Smallest validated batch>=8; accepted C8/40 measured31.298% shorter than C4 on same40",
       "task_containers": 0
+    },
+    "larger-gpqa160-c8": {
+      "batch": 8,
+      "planned_clients": 8,
+      "max_num_seqs": 8,
+      "pool_ids": 20480,
+      "batch_reason": "Smallest validated batch>=8; accepted C8/40 aggregate gain and valid80 capacity"
+    },
+    "early-gpqa160-candidate-dry": {
+      "batch": 8,
+      "planned_clients": 8,
+      "max_num_seqs": 8,
+      "pool_ids": 20480,
+      "batch_reason": "Smallest validated batch>=8; accepted C8/40 aggregate gain and valid80 capacity"
+    },
+    "gpqa80-new-loop-diagnosis": {
+      "planned_clients": 1,
+      "batch": 8,
+      "max_num_seqs": 8,
+      "batch_reason": "Match scoredB8 numerical path for diagnostic; not a throughput choice"
     }
   },
   "release_limits": {

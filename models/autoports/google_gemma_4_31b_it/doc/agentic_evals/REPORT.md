@@ -2,13 +2,17 @@
 
 | Suite | functional_at | Evaluation hours/run | Score (95% Wilson interval) | Reference |
 |---|---:|---:|---|---|
-| GPQA Diamond | 40 | 2.50118 at C8 | 25/40, 62.5% (47.03–75.78%) | Published84.3%, GPU83.33% |
+| GPQA Diamond | 80 | 4.28169 at C8 | 56/80, 70% (59.23–78.94%) | Published84.3%, GPU83.33% |
 | SWE-bench Verified | 2 | 0.10416 | 0/2, 0% (0–65.76%) | NA |
 | Terminal-Bench 2.1 | 2 | 0.63756 | 0/2, 0% (0–65.76%) | NA |
 
-Current configuration: C8/B8 with20480 pool IDs is selected on the valid same40 comparison:31.298% shorter thanC4 with all40 visible outputs/scores and total active work matched.39/40 hidden chains match; doc20 differs. The same80 C4/C8 comparison is running. Atomic-frame f579 passed actual CI original2 reply/retained-chain exactness; its immutable ae8bf image is now used by the early frozen40/C8 fallback dry. Full-cap transport and timely no-score observation remain pending.
+Current configuration: C8/B8 with20480 pool IDs is selected on the valid same40 comparison:31.298% shorter thanC4 with all40 visible outputs/scores and total active work matched.39/40 hidden chains match; doc20 differs. C8/80 is valid; the C4/80 comparator remains pending, so same80 speed saving is unconfirmed. Atomic-frame f579 passed actual CI original2 reply/retained-chain exactness; its immutable ae8bf image is now used by the early frozen40/C8 fallback dry. The early frozen40 fallback dry passed with complete initial replies; final-cohort dry remains required.
 
-These are banked subset scores, not release results. The early40/C8 fallback dry is in progress; no combined dry pass or release is claimed. The frozen local benchmark arm passed its dry run. Small intervals are not implied by repeated evaluations of the same tasks; these samples cannot establish full-suite parity with references. Reference provenance is retained in survey/preflight evidence; unavailable comparable references remain NA.
+These are banked subset scores, not release results. The early40/C8 fallback dry and local benchmark arm passed; no final-cohort release is claimed. The frozen local benchmark arm passed its dry run. Small intervals are not implied by repeated evaluations of the same tasks; these samples cannot establish full-suite parity with references. Reference provenance is retained in survey/preflight evidence; unavailable comparable references remain NA.
+
+GPQA80 C8 run42332785769 is valid:56/80, Wilson95%59.23–78.94%,4.281695evaluation hours and4.568056device-job hours versus5.333959predicted. All80 retained chains are complete, with2114531 active decode samples and no loss. Thirteen cap failures count:12 periodic loops and one six-character degenerate tail;11 other answers are wrong. All nested40 visible outputs and retained chains match the acceptedC8/40 run. Same80C4 comparison remains pending, with no credited speed saving. See `runs/gpqa80-c8-saturation-comparison/RESULT.json`.
+
+The80 measured longest capped chain is1.936957hours. Next160 is coordinator-admitted at9.699195hours point,11.636151hours including one measured extra tail, and11.656151hours with0.02postprocessing reserve. Full4h sensitivity13.699195hours exceeds12; this is not a bound. Full198 measured-tail13.669956hours currently does not fit12 and must be reassessed after valid160. Native v1 retains78/80 complete replies and7/8 initial replies; scored validity comes from complete phase chains and official samples, not a dry-pass inference.
 
 GPQA40 run42296943044 is valid:3.640636evaluation hours,3.7675device-job hours and3.772778workflow hours versus3.779094predicted. All40 chains are associated, with313942pairedsteps and no loss. Seven capped empty answers have long exactperiod1/2/3/4suffixes and count as failures; eight other answers are wrong. The subset interval lies below both listed references; scores are not gated. All nested20 visible outputs match the earlier run, but one physical chain differs, so cross-cohort token exactness is not claimed. See `runs/larger-gpqa40-c4-response-logging/audit.json`.
 
@@ -155,7 +159,7 @@ Device costs include the device job, not build/queue. Release savings are foreca
 | gpqa40-new-loop-diagnosis | 0.20000 (guess) / 0.13608 | 1.00000 | none/open: success: False; result: Four conditional checkpoints support loop tokens in both pinned HF/currentTT; no actionable discrepancy, no further device check justified; top1 matches: 4; checkpoints: 4 |
 | ci-native-large-reply-visibility | 0.24472 / 0.05917 | 0.00000 | kept/open: success: False; local exactness passed: True; result: Atomic framed handler passes local exact native pair and competing-writer transport. Two stock CI image builds fail EPEL proxy403 before device; actual C… |
 | framed-benchmark-dry | 0.07723 / 0.07529 | 0.00000 | none/solved: success: True; result: Frozen local benchmark arm passed; 8/8 exact headline outputs vs eef; phase complete and devices closed. No combined dry/release claim.; credited saving hours: 0 |
-| gpqa80-c8-saturation-comparison | 5.33396 / unknown | 2.27891 | running/pending: Final valid40 gain accepted; empirical-tail and devicebox projections fit firstdry reserve. NormalC4/80 continues. |
+| gpqa80-c8-saturation-comparison | 5.33396 / 4.56806 | 2.27891 | none/open: functional at: 80; score: 56/80; Wilson95 59.23–78.94%; evaluation hours: 4.281694641051452; credited release saving hours: 0 |
 | framed-logger-image-provenance | 0.00000 / 0.00000 | 0.00000 | none/solved: Old-image reuse rejected: all3changed files baked into image and no stock TT-tree overlay. Exact immutable image required; optional candidate cannot delay fallback. |
 | ci-framed-confirmation-operator9 | 0.18556 / 0.16583 | 0.00000 | kept/solved: Actual CI original2 replies exact except volatile IDs/time; retained3151/5480 chains exact;22 unique frames/8 records,0errors/loss/pending. Fullcap and timely no-score observation remain unproven; separate e… |
 | release-freeze-materialization | 0.00000 / 0.00000 | 0.00000 | none/solved: Exact candidate dry/release argv and cohort parity prepared; complete initial8 native replies, freshness/no-score and workflow-drift checks specified. No freeze, dispatch or pass claim. |
@@ -165,6 +169,8 @@ Device costs include the device job, not build/queue. Release savings are foreca
 | gpqa-c16-b32-feasibility | 0.00000 / 0.00000 | 0.00000 | none/open: Static C16/B32 demand36209/36896IDs fits narrowly; B16 global-only demand exceeds pool. Current long-context transient and cadence unmeasured. Conditional .6h probe plus scored validation has no defensible r… |
 | dry-observation-timestamp-repair | 0.00000 / 0.00000 | 0.00000 | kept/solved: Python3.10 seven-digit timestamp rejection reproduced; parse-only normalization passes5 valid cases and rejects2 malformed cases. Raw snapshots/metadata identical, original timestamps preserved; lag103.92194… |
 | ci-log-retrieval-recurrence | 0.00000 / 0.00000 | 0.00000 | none/open: Retrieval recovered unchanged: C4 117900405bytes/2.680677s and C8 71606816bytes/2.150588s. Independent same-route probe79.590738s does not justify timeout increase. One failed attempt reached body transfer; … |
+| gpqa80-new-loop-diagnosis | 0.30000 / unknown | 0.00000 | running/pending: Valid80 identifies two new failure patterns; diagnose while next rung/dry proceed independently. Device admission pending owner plan; local idle device remains available. |
+| early-gpqa160-candidate-dry | 2.22332 / unknown | 0.00000 | running/pending: Valid80 banked, exact160 frozen and dispatched parallel to normal160 on separate granted CI allocation. |
 
 Evidence is written once by each effort; this table summarizes the current coordinator disposition. Unmeasured savings remain unknown or receive zero planning credit.
 

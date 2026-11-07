@@ -275,6 +275,10 @@
     {
       "fact": "Whole-request CI log timeouts can occur after tens of MB of body transfer. Recurrence recovered unchanged at2\u20133s for71\u2013118MB; one independent79.59s success does not justify increasing90s timeout. Preserve prior successful snapshot across failed partial transfers; transfer success does not establish upstream freshness.",
       "evidence": "runs/ci-log-retrieval-recurrence/RESULT.json"
+    },
+    {
+      "fact": "Native v1 CI reply transport may lose giant records:80 received IDs but78 complete bodies and7/8 initial replies. Native LogRecord.created preserves completion timing; outer CI timestamp may be postrun replay. Complete retained physical chains support scored classification but do not replace initial-agent dry identity proof.",
+      "evidence": "runs/gpqa80-c8-saturation-comparison/RESULT.json"
     }
   ],
   "suite_timings": [
@@ -665,6 +669,24 @@
         1.0
       ],
       "evidence": "runs/ci-native-framed-confirmation-retry90m/RESULT.json"
+    },
+    {
+      "run_id": 42332785769,
+      "eval": "r1_gpqa_diamond",
+      "tasks": 80,
+      "agents": 8,
+      "batch": 8,
+      "wall_hours": 4.281694641051452,
+      "device_job_hours": 4.5680555555555555,
+      "workflow_hours": 4.573055555555555,
+      "agent_hours": 29.14689246403778,
+      "output_cap_failures": 13,
+      "score": 0.7,
+      "confidence_interval_95": [
+        0.5923184607866026,
+        0.7893542873991866
+      ],
+      "evidence": "runs/gpqa80-c8-saturation-comparison/RESULT.json"
     }
   ],
   "generic_fixes": [

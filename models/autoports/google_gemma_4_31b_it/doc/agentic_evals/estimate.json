@@ -1,36 +1,22 @@
 {
-  "status": "GPQA40 valid C8 selected; normalC4/80 and C8/80 comparison active; tool-suite measured stops",
+  "status": "GPQA80 valid C8;160 admitted;198 currently nonfit on measured-tail sensitivity; tool-suite measured stops",
   "evals": {
     "r1_gpqa_diamond": {
       "decision": "go",
-      "reason": "Valid same40 C8 scored pair25/40 with complete retained work and matched visible outputs,31.298% shorter. Seven periodic cap failures count.80 remains next rung; no final release list yet.",
-      "functional_at": 40,
-      "projected_hours": 8.051161048736885,
-      "score": 0.625,
+      "reason": "Valid frozen80 C8:56/80; complete retained chains classify13 capped failures. Coordinator admits next160 using measured-tail plus0.02h reserve11.656151h; full4h sensitivity13.699195h exceeds12 and is not a bound.",
+      "functional_at": 80,
+      "projected_hours": 11.65615118558173,
+      "score": 0.7,
       "confidence_interval_95": [
-        0.47032439137301096,
-        0.7577702083276673
+        0.5923184607866026,
+        0.7893542873991866
       ],
-      "next_rung": {
-        "task_count": 80,
-        "planned_clients": 4,
-        "batch": 8,
-        "status": "submitted",
-        "run_id": 42323448662,
-        "submitted_at": "2026-11-07T01:19:36Z",
-        "url": "https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/42323448662",
-        "tasks": 80,
-        "projected_workflow_hours": 8.258135529016663,
-        "measured_tail_sensitivity_hours": 9.882468863784997,
-        "full_timeout_sensitivity_hours": 12.258135529016663,
-        "source": "runs/larger-gpqa80-c4-native-logging/manifest.json"
-      },
-      "full_suite_decision": "pending_current_configuration_larger_rungs",
+      "full_suite_decision": "stop_current_projection_reassess_after_valid160",
       "full_suite_stop_evidence": "runs/full-gpqa-observable/stop.json",
-      "evidence": "runs/gpqa40-c8-saturation-comparison/audit.json",
+      "evidence": "runs/gpqa80-c8-saturation-comparison/RESULT.json",
       "full_suite_prior_stop_scope": "Earlier C2 partial run; not a currentC4/C8 full-suite impossibility claim",
       "selected_concurrency": 8,
-      "latest_measured_eval_hours": 2.5011817041318865,
+      "latest_measured_eval_hours": 4.281694641051452,
       "c8_80_projection": {
         "eval_linear_hours": 5.002363408263773,
         "measured_allocated_non_eval_hours": 0.3315960736458914,
@@ -49,11 +35,49 @@
         "assumptions": "Linear doubled40 work, same C8/B8/expandedpool/source, reused image, observed job overhead including AI-summary delay, recent queue allowance. Extra longest observed chain models one more tail wave but is not a bound; new80 tail mix and logging contention unknown. Full4h sensitivity fits12h per-run but misses first-dry reserve if dispatched now.",
         "candidate80": "42dc40754e465cf8c9ec993027ff59d3c936832c; coordinator must verify immutable source tree/baseline before dispatch."
       },
-      "projection_scope": "Candidate80 C8 empirical sensitivity, not frozen release; actual80 pending",
+      "projection_scope": "Next160 measured-density extrapolation; no release completion claim",
       "c8_80_comparison": {
         "run_id": 42332785769,
-        "status": "device_job_in_progress",
-        "source": "runs/gpqa80-c8-saturation-comparison/manifest.json"
+        "status": "completed_valid_comparator_pending",
+        "source": "runs/gpqa80-c8-saturation-comparison/RESULT.json",
+        "credited_saving_hours": 0
+      },
+      "previous_rung": {
+        "task_count": 80,
+        "planned_clients": 4,
+        "batch": 8,
+        "status": "submitted",
+        "run_id": 42323448662,
+        "submitted_at": "2026-11-07T01:19:36Z",
+        "url": "https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/42323448662",
+        "tasks": 80,
+        "projected_workflow_hours": 8.258135529016663,
+        "measured_tail_sensitivity_hours": 9.882468863784997,
+        "full_timeout_sensitivity_hours": 12.258135529016663,
+        "source": "runs/larger-gpqa80-c4-native-logging/manifest.json"
+      },
+      "next_rung": {
+        "tasks": 160,
+        "planned_clients": 8,
+        "batch": 8,
+        "status": "coordinator_admitted",
+        "projected_workflow_hours": 9.699194641051452,
+        "measured_tail_sensitivity_hours": 11.63615118558173,
+        "postprocessing_reserve_hours": 0.02,
+        "admission_projection_hours": 11.65615118558173,
+        "full_timeout_sensitivity_hours": 13.699194641051452,
+        "source": "runs/gpqa80-c8-saturation-comparison/RESULT.json"
+      },
+      "full_suite_projection": {
+        "linear_eval_hours": 10.597194236602343,
+        "measured_setup_hours": 0.2863609145041037,
+        "queue_allowance_hours": 0.8494444444444444,
+        "point_workflow_hours": 11.73299959555089,
+        "extra_measured_tail_hours": 1.9369565445302779,
+        "measured_tail_sensitivity_hours": 13.669956140081167,
+        "full4h_timeout_sensitivity_hours": 15.73299959555089,
+        "measured_tail_sensitivity_fits12h": false,
+        "scope": "Measured-density extrapolation plus one extra observed longest capped wave; not bound. Full4h request timeout unchanged. Schedule/dry budget admission belongs to coordinator;198 requires preceding valid160."
       }
     },
     "swe_bench_verified": {

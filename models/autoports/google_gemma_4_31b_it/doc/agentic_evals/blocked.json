@@ -1,5 +1,5 @@
 {
-  "status": "stage_active_gpqa80_runs_fallback40_dry_passed",
+  "status": "stage_active_gpqa80_valid_160_admitted_fallback40_dry_passed",
   "blockers": [
     {
       "id": "local-sandbox-runtime",
@@ -33,13 +33,13 @@
     "account_fallback": null
   },
   "remaining_work": [
-    "Complete80 and project next GPQA rung from measured time",
-    "Accept or reject C8 on same80; C8 same40 accepted",
-    "Frozen configuration, actual clean dry and immutable release including benchmark matrix",
+    "Complete admitted160 and reproject198 from measured time",
+    "Complete final-cohort frozen dry and unchanged release including benchmark matrix",
+    "C4/80 normal-rung audit owns eventual paired comparison; no delay to valid80 progression",
     "One closure review and stage gate"
   ],
   "initial_stop_at": "2026-11-06T04:33:36.867416+00:00",
-  "updated_at": "2026-11-07T06:31:27.101664+00:00",
+  "updated_at": "2026-11-07T07:59:46.996210+00:00",
   "completed_preparation": [
     "Fresh autoport registry and suite entries published; full host suite3737 passed15 skipped",
     "Stratified task cohorts frozen before scores",
@@ -47,11 +47,9 @@
   ],
   "live_wait": {
     "run_ids": [
-      42323448662,
-      42332785769,
-      42339332447
+      42323448662
     ],
-    "status": "C4/80 and C8/80 normal runs plus early frozen40/C8 fallback dry active"
+    "status": "C8/80 complete and banked; C4/80 comparator pending; coordinator owns160 and candidate dry dispatch"
   },
   "release_route_decision_request": {
     "at": "2026-11-06T05:12:13.370191+00:00",
@@ -262,5 +260,12 @@
     "action": "Existing AutoFix procedure: unchanged automatic retry, no speculative patch or device action. Recheck successful retrieval.",
     "prior_diagnosis": "runs/ci-log-download-timeout/AUTOFIX.md",
     "evidence": "runs/ci-log-retrieval-recurrence/RESULT.json"
+  },
+  "banked_gpqa80": {
+    "functional_at": 80,
+    "evidence": "runs/gpqa80-c8-saturation-comparison/RESULT.json",
+    "initial_native_reply_proof": "7/8 only; not dry proof",
+    "next160_measured_projection_hours": 11.65615118558173,
+    "full198_current_measured_tail_hours": 13.669956140081167
   }
 }
