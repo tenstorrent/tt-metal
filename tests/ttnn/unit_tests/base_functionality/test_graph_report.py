@@ -14,6 +14,7 @@ import contextlib
 import gc
 import hashlib
 import json
+import os
 import sqlite3
 import sys
 from pathlib import Path
@@ -7427,6 +7428,176 @@ class TestReportModesDuringTraceCapture:
                 ttnn.end_trace_capture(device, trace_id, cq_id=0)
                 ttnn.release_trace(device, trace_id)
         ttnn.synchronize_device(device)
+
+
+def _comparison_records():
+    record = {"tensor_id": 1, "golden_tensor_id": 2, "matches": True, "desired_pcc": 0.99, "actual_pcc": 0.995}
+    return {"local_tensor_comparison_records": [record], "global_tensor_comparison_records": [], "tensors": []}
+
+
+class TestGraphCaptureEndsWhenItsReportFails:
+    """Ending a capture ends it, and resets the Python side once no capture is left, even when the report can't be
+    written. Passing a directory as the report path makes the write fail."""
+
+    WRITE_FAILS = "Failed to move graph report into place"
+
+    @pytest.fixture(autouse=True)
+    def own_the_capture_stack(self):
+        """Skips under a session-wide report capture, and ends whatever a failed test leaves active so later tests
+        don't inherit it."""
+        if ttnn.graph.is_graph_capture_active():
+            pytest.skip("graph reporting is already on for this run; these tests end every capture they leave behind")
+        stack_traces_were_on = ttnn.graph.is_python_stack_trace_enabled()
+        yield
+        try:
+            while ttnn.graph.is_graph_capture_active():
+                ttnn.graph.end_graph_capture()
+        finally:
+            if stack_traces_were_on:
+                ttnn.graph.enable_python_stack_traces()
+            else:
+                ttnn.graph.disable_python_stack_traces()
+
+    @staticmethod
+    def _partial_reports(report_path):
+        """The temporary files a report is written to before it is moved into place."""
+        return list(Path(report_path).parent.glob(f"{Path(report_path).name}.partial*"))
+
+    def test_failed_write_ends_the_capture_and_leaves_no_partial_report(self, tmp_path, expect_error):
+        ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
+        with expect_error(RuntimeError, self.WRITE_FAILS):
+            ttnn.graph.end_graph_capture_to_file(tmp_path)
+        assert not ttnn.graph.is_graph_capture_active()
+        assert not ttnn.graph.is_python_io_recording_enabled()
+        assert not self._partial_reports(tmp_path)
+
+    def test_failed_open_ends_the_capture(self, tmp_path, expect_error):
+        """The temporary file can't be opened (a directory is in the way)."""
+        report_path = tmp_path / "report.json"
+        Path(f"{report_path}.partial.{os.getpid()}").mkdir()
+        ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
+        with expect_error(RuntimeError, "Failed to open graph report file for writing"):
+            ttnn.graph.end_graph_capture_to_file(report_path)
+        assert not ttnn.graph.is_graph_capture_active()
+        assert not ttnn.graph.is_python_io_recording_enabled()
+        assert not report_path.exists()
+
+    def test_report_under_a_regular_file_ends_the_capture(self, tmp_path, expect_error):
+        """The report's directory can't be created, because a file has its name."""
+        (tmp_path / "f").write_text("")
+        report_path = tmp_path / "f" / "report.json"
+        ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
+        with expect_error(RuntimeError, "create_directories|Not a directory|File exists"):
+            ttnn.graph.end_graph_capture_to_file(report_path)
+        assert not ttnn.graph.is_graph_capture_active()
+        assert not ttnn.graph.is_python_io_recording_enabled()
+
+    @pytest.mark.parametrize(
+        "end",
+        [lambda report_path: ttnn.graph.end_graph_capture(), ttnn.graph.end_graph_capture_to_file],
+        ids=["end_graph_capture", "end_graph_capture_to_file"],
+    )
+    def test_ending_with_no_active_capture_raises(self, tmp_path, expect_error, end):
+        report_path = tmp_path / "report.json"
+        with expect_error(RuntimeError, "no graph capture is active"):
+            end(report_path)
+        assert not ttnn.graph.is_graph_capture_active()
+        assert not ttnn.graph.is_python_io_recording_enabled()
+        assert not report_path.exists()
+
+    def test_failed_write_turns_off_stack_traces_the_capture_turned_on(self, tmp_path, expect_error):
+        with ttnn.manage_config("enable_graph_python_stack_traces", True):
+            ttnn.graph.disable_python_stack_traces()
+            ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
+            assert ttnn.graph.is_python_stack_trace_enabled()
+            with expect_error(RuntimeError, self.WRITE_FAILS):
+                ttnn.graph.end_graph_capture_to_file(tmp_path)
+        assert not ttnn.graph.is_python_stack_trace_enabled()
+
+    def test_failed_write_keeps_stack_traces_turned_on_before_the_capture(self, tmp_path, expect_error):
+        ttnn.graph.enable_python_stack_traces()
+        ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
+        with expect_error(RuntimeError, self.WRITE_FAILS):
+            ttnn.graph.end_graph_capture_to_file(tmp_path)
+        assert ttnn.graph.is_python_stack_trace_enabled()
+
+    def test_failed_outermost_write_drops_comparison_and_io_records(self, tmp_path, expect_error, monkeypatch):
+        """Records for a report that was never written would otherwise wait for the next capture, and comparison
+        records be flushed with another session's."""
+        ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
+        monkeypatch.setattr(ttnn.graph, "_comparison_records_data", _comparison_records())
+        monkeypatch.setattr(ttnn.graph, "_python_io_data", [{"name": "ttnn.relu"}])
+        with expect_error(RuntimeError, self.WRITE_FAILS):
+            ttnn.graph.end_graph_capture_to_file(tmp_path)
+        assert not ttnn.graph.has_comparison_records()
+        assert ttnn.graph._python_io_data == []
+
+    def test_failed_nested_write_leaves_the_records_to_the_outer_capture(self, tmp_path, expect_error, monkeypatch):
+        """The nested capture ends; the outer one keeps recording and writes both kinds of records in its own report."""
+        ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
+        ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
+        monkeypatch.setattr(ttnn.graph, "_comparison_records_data", _comparison_records())
+        monkeypatch.setattr(ttnn.graph, "_python_io_data", [{"name": "ttnn.relu"}])
+        with expect_error(RuntimeError, self.WRITE_FAILS):
+            ttnn.graph.end_graph_capture_to_file(tmp_path)
+        assert ttnn.graph.is_graph_capture_active()
+        assert ttnn.graph.is_python_io_recording_enabled()
+
+        outer_report = tmp_path / "outer.json"
+        ttnn.graph.end_graph_capture_to_file(outer_report)
+        assert not ttnn.graph.is_graph_capture_active()
+        comparison = json.loads(outer_report.with_suffix(".comparison_records.json").read_text())
+        assert [r["tensor_id"] for r in comparison["local_tensor_comparison_records"]] == [1]
+        python_io = json.loads(outer_report.with_suffix(".python_io.json").read_text())
+        assert [r["name"] for r in python_io] == ["ttnn.relu"]
+
+    @pytest.mark.parametrize("failing_sidecar", ["_write_python_io_sidecar", "_write_comparison_records_sidecar"])
+    def test_failed_sidecar_write_still_ends_the_capture(self, tmp_path, expect_error, monkeypatch, failing_sidecar):
+        """The C++ report is written, then a sidecar fails: the capture is over and its records are reset."""
+
+        def failing_sidecar_write(report_path):
+            raise OSError("sidecar write failed")
+
+        report_path = tmp_path / "report.json"
+        ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
+        monkeypatch.setattr(ttnn.graph, "_python_io_data", [{"name": "ttnn.relu"}])
+        monkeypatch.setattr(ttnn.graph, "_comparison_records_data", _comparison_records())
+        monkeypatch.setattr(ttnn.graph, failing_sidecar, failing_sidecar_write)
+        with expect_error(OSError, "sidecar write failed"):
+            ttnn.graph.end_graph_capture_to_file(report_path)
+        assert report_path.exists()
+        assert not ttnn.graph.is_graph_capture_active()
+        assert not ttnn.graph.is_python_io_recording_enabled()
+        assert ttnn.graph._python_io_data == []
+        assert not ttnn.graph.has_comparison_records()
+
+    @pytest.mark.parametrize("write_fails", [False, True], ids=["write_succeeds", "write_fails"])
+    def test_nested_full_graph_capture_leaves_the_enclosing_capture_active(self, tmp_path, expect_error, write_fails):
+        """full_graph_capture ends its own capture, not one it is nested in, such as the graph report fixture's."""
+        ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
+        if write_fails:
+            with expect_error(RuntimeError, self.WRITE_FAILS):
+                with ttnn.graph.full_graph_capture(tmp_path, slow_dispatch=False):
+                    pass
+        else:
+            with ttnn.graph.full_graph_capture(tmp_path / "inner.json", slow_dispatch=False):
+                pass
+        assert ttnn.graph.is_graph_capture_active()
+
+    def test_report_fixture_raises_and_ends_its_capture_when_the_write_fails(self, tmp_path, expect_error):
+        """The graph report fixture's teardown: the error reaches the test run, and no capture is left behind."""
+        with ttnn.manage_config("enable_graph_report", True), ttnn.manage_config(
+            "root_report_path", str(tmp_path)
+        ), ttnn.manage_config("report_name", "failed_write"):
+            report_path = Path(ttnn.CONFIG.report_path)
+            fixture = graph_report._run_pytest_graph_report_fixture(
+                SimpleNamespace(fixturenames=[], getfixturevalue=lambda name: None)
+            )
+            next(fixture)
+            (report_path / "graph_capture.json").mkdir(parents=True)
+            with expect_error(RuntimeError, self.WRITE_FAILS):
+                next(fixture, None)
+        assert not ttnn.graph.is_graph_capture_active()
 
 
 # mesh_device depends on silicon_arch_name, which conftest only parametrizes for tests that name it at collection.
