@@ -12,7 +12,7 @@ ttnn::Tensor all_gather_weight_minimal_matmul_async(
     const ttnn::Tensor& weight_tensor,
     const ttnn::Tensor& persistent_weight_buffer,
     const std::vector<tt::tt_metal::GlobalSemaphore>& multi_device_global_semaphore,
-    std::optional<uint32_t> cluster_axis,
+    uint32_t cluster_axis,
     ttnn::ccl::Topology topology,
     const std::optional<const ttnn::experimental::prim::MinimalMatmulConfig>& config,
     const std::optional<ttnn::MemoryConfig>& memory_config,

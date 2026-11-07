@@ -6,6 +6,7 @@
 
 #include <optional>
 #include <variant>
+#include <vector>
 
 #include "all_gather_weight_minimal_matmul_async_device_operation_types.hpp"
 #include "all_gather_weight_minimal_matmul_async_program_factory.hpp"
@@ -24,6 +25,8 @@ struct AllGatherWeightMinimalMatmulAsyncDeviceOperation {
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
+    static std::vector<tt::tt_metal::TensorTopology> compute_output_topologies(
+        const operation_attributes_t&, const tensor_args_t&);
 };
 }  // namespace ttml::metal::ops::all_gather_weight_minimal_matmul_async
 

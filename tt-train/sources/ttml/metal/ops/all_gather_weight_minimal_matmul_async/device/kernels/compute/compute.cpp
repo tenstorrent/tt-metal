@@ -154,12 +154,12 @@ void kernel_main() {
                 cb_in0.pop_front(in0_block_num_tiles);
                 cb_in1.pop_front(in1_block_num_tiles);
                 if (k_block == 0) {  // later K blocks accumulate in L1
-                    PACK((llk_pack_reconfig_l1_acc(1)));
+                    pack_reconfig_l1_acc(1);
                 }
             }
 
             cb_intermediate.push_back(out_block_num_tiles);
-            PACK((llk_pack_reconfig_l1_acc(0)));
+            pack_reconfig_l1_acc(0);
 
             // Partials are in the accumulation format; copy them out in the output format.
             cb_out.reserve_back(out_block_num_tiles);

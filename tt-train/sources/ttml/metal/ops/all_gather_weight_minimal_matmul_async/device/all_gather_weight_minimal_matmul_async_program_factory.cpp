@@ -7,10 +7,8 @@
 #include <algorithm>
 #include <map>
 #include <string>
-#include <tt-metalium/allocator.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
-#include <tt-metalium/hal.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
@@ -238,8 +236,8 @@ AllGatherWeightMinimalMatmulAsyncProgramFactory::create_at(
     const uint32_t grid_send_slots = static_cast<uint32_t>(std::min<uint64_t>(kMaxSendSlots, fit)) & ~1U;
     TT_FATAL(
         grid_send_slots >= 2,
-        "The matmul's circular buffers leave no L1 for the fabric senders' packets on the sink row; use smaller "
-        "blocks");
+        "all_gather_weight_minimal_matmul_async: the matmul's circular buffers leave no L1 for the fabric senders' "
+        "packets on the sink row; use smaller blocks");
 
     // Chain handshake: a core with room bumps its upstream's sender semaphore, the upstream writes the block and
     // flips the core's receiver semaphore to VALID.
@@ -442,25 +440,29 @@ AllGatherWeightMinimalMatmulAsyncProgramFactory::create_at(
         const uint32_t chain_offset = layout.chain_offset(in1_idx);
         const uint32_t chain_width = layout.chain_width(in1_idx);
 
-        auto dm_runtime_args =
-            [&](uint32_t input_addr, bool is_sink, const ttnn::CoreCoord& next, const ttnn::CoreCoord& prev) {
-                std::vector<uint32_t> args = {
-                    input_addr,
-                    output_tensor.buffer()->address(),
-                    static_cast<uint32_t>(is_sink),
-                    static_cast<uint32_t>(next.x),
-                    static_cast<uint32_t>(next.y),
-                    static_cast<uint32_t>(prev.x),
-                    static_cast<uint32_t>(prev.y),
-                    M_start_tile,
-                    M_end_tile,
-                    chain_offset,
-                    chain_width,
-                    defer_write_k_block,
-                };
-                args.insert(args.end(), layout.stripe_order.begin(), layout.stripe_order.end());
-                return args;
+        auto dm_runtime_args = [&](uint32_t input_addr,
+                                   bool is_sink,
+                                   const ttnn::CoreCoord& next,
+                                   const ttnn::CoreCoord& prev) {
+            std::vector<uint32_t> args = {
+                input_addr,
+                output_tensor.buffer()->address(),
+                static_cast<uint32_t>(is_sink),
+                static_cast<uint32_t>(next.x),
+                static_cast<uint32_t>(next.y),
+                static_cast<uint32_t>(prev.x),
+                static_cast<uint32_t>(prev.y),
+                M_start_tile,
+                M_end_tile,
+                chain_offset,
+                chain_width,
+                defer_write_k_block,
             };
+            // override_runtime_arguments finds the persistent buffer and semaphores past these.
+            TT_ASSERT(args.size() == kRtDmFixedArgs && layout.stripe_order.size() == operation_attributes.ring_size);
+            args.insert(args.end(), layout.stripe_order.begin(), layout.stripe_order.end());
+            return args;
+        };
 
         std::vector<uint32_t> in1_args =
             dm_runtime_args(weight_tensor.buffer()->address(), is_in1_sink, in1_next, in1_prev);

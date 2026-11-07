@@ -10,8 +10,10 @@
 #include <cstdlib>
 #include <filesystem>
 #include <optional>
+#include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-umd-workload/cluster.hpp>
+#include <variant>
 #include <vector>
 #include <xtensor-blas/xlinalg.hpp>
 #include <xtensor/containers/xadapt.hpp>
@@ -33,17 +35,21 @@ namespace {
 using ttnn::experimental::prim::MinimalMatmulConfig;
 
 constexpr uint32_t kClusterAxis = 1;
+constexpr uint32_t kRingSize = 4;
 constexpr uint32_t kCalls = 4;
 
 class AllGatherWeightMinimalMatmulAsyncTest : public ttml::test_utils::MeshFixture {
 protected:
-    AllGatherWeightMinimalMatmulAsyncTest() : MeshFixture(tt::tt_metal::distributed::MeshShape(1, 4)) {
+    AllGatherWeightMinimalMatmulAsyncTest() : MeshFixture(tt::tt_metal::distributed::MeshShape(1, kRingSize)) {
     }
 
     void SetUp() override {
         const char* root = std::getenv("TT_METAL_RUNTIME_ROOT");
         const auto cluster = tt::umd::Cluster::create_cluster_descriptor();
-        if (std::getenv(kMgdEnv) == nullptr && root != nullptr && cluster->get_arch() == tt::ARCH::BLACKHOLE) {
+        // Metal reads the descriptor once per process: on a box too small for the ring it would break every later
+        // device test instead of letting these skip.
+        if (std::getenv(kMgdEnv) == nullptr && root != nullptr && cluster->get_arch() == tt::ARCH::BLACKHOLE &&
+            cluster->get_number_of_chips() >= kRingSize) {
             const auto mgd = std::filesystem::path(root) / "tt-train/configs/mgd/bh_qb_1_4_ring_ring.textproto";
             if (std::filesystem::exists(mgd)) {
                 setenv(kMgdEnv, mgd.c_str(), 1);
@@ -108,6 +114,13 @@ Problem make_problem(const Shape& s, uint32_t spot_ring_size = 0) {
     Problem p{.shape = s};
     p.x = ttml::test_utils::make_uniform_vector<float>(static_cast<size_t>(s.M) * s.K, -1.0F, 1.0F, 42);
     p.w_nk = ttml::test_utils::make_uniform_vector<float>(static_cast<size_t>(s.N) * s.K, -1.0F, 1.0F, 43);
+    // The device sees bf16 inputs, so the reference does too: the bound then measures the op, not input rounding.
+    for (float& v : p.x) {
+        v = static_cast<float>(bfloat16(v));
+    }
+    for (float& v : p.w_nk) {
+        v = static_cast<float>(bfloat16(v));
+    }
     const xt::xarray<float> x = xt::adapt(p.x, std::vector<size_t>{s.M, s.K});
     const xt::xarray<float> w = xt::adapt(p.w_nk, std::vector<size_t>{s.N, s.K});
     if (spot_ring_size == 0) {
@@ -143,16 +156,18 @@ xt::xarray<float> checked_part(const Problem& p, const xt::xarray<float>& y) {
     return part;
 }
 
-double pcc(const xt::xarray<float>& a, const xt::xarray<float>& b) {
-    const xt::xarray<double> da = xt::cast<double>(a) - xt::mean(xt::cast<double>(a))();
-    const xt::xarray<double> db = xt::cast<double>(b) - xt::mean(xt::cast<double>(b))();
-    return xt::sum(da * db)() / std::sqrt(xt::sum(da * da)() * xt::sum(db * db)());
-}
-
+// With bf16 inputs on both sides what's left is the HiFi2 matmul and the bf16 output, about 0.004 relative L2.
 void expect_close(const xt::xarray<float>& ref, const xt::xarray<float>& out) {
     ASSERT_EQ(ref.shape(), out.shape());
-    EXPECT_GT(pcc(ref, out), 0.9995);
-    EXPECT_LT(ttml::test_utils::relative_l2(out, ref), 0.02);
+    EXPECT_LT(ttml::test_utils::relative_l2(out, ref), 1e-2);
+}
+
+// Stripe s of a full weight: rows of an [N, K] weight (transpose_b), columns of a [K, N] one.
+xt::xarray<float> stripe_of(const xt::xarray<float>& full, size_t s, size_t width, bool transpose_b) {
+    if (transpose_b) {
+        return xt::view(full, xt::range(s * width, (s + 1) * width), xt::all());
+    }
+    return xt::view(full, xt::all(), xt::range(s * width, (s + 1) * width));
 }
 
 std::vector<tt::tt_metal::GlobalSemaphore> make_semaphores(ttnn::distributed::MeshDevice* device) {
@@ -238,12 +253,39 @@ void run_fabric_gather(
             transpose_b));
     }
     for (uint32_t i = 0; i < num_calls; ++i) {
+        SCOPED_TRACE(testing::Message() << "call " << i);
+        // Every device holds the whole output, so its label must not claim a split.
+        for (const auto& placement : outputs[i].tensor_topology().placements()) {
+            EXPECT_TRUE(std::holds_alternative<tt::tt_metal::distributed::MeshMapperConfig::Replicate>(placement));
+        }
         for (const auto& device_y : ttnn::distributed::get_device_tensors(outputs[i])) {
-            SCOPED_TRACE(testing::Message() << "call " << i);
             xt::xarray<float> y = ttml::core::to_xtensor(device_y);
             y.reshape({p.shape.M, p.shape.N});
             const xt::xarray<float> ref = p.y * call_scale(i);
             expect_close(ref, checked_part(p, y));
+        }
+    }
+
+    // The gather itself is pure data movement, so each buffer must hold the remote stripes of the last call that used
+    // it bit for bit, in every column. The local stripe is read from the shard and never lands in the buffer.
+    for (uint32_t b = 0; b < 2 && b < num_calls; ++b) {
+        const uint32_t last = (((num_calls - 1 - b) / 2) * 2) + b;
+        SCOPED_TRACE(testing::Message() << "buffer " << b << " after call " << last);
+        std::vector<xt::xarray<float>> shards;
+        for (const auto& shard : ttnn::distributed::get_device_tensors(weights[last])) {
+            shards.push_back(ttml::core::to_xtensor(shard));
+        }
+        const auto gathered = ttnn::distributed::get_device_tensors(buffers[b]);
+        for (size_t d = 0; d < gathered.size(); ++d) {
+            const xt::xarray<float> buffer = ttml::core::to_xtensor(gathered[d]);
+            for (size_t s = 0; s < shards.size(); ++s) {
+                if (s == d) {
+                    continue;
+                }
+                const size_t width = shards[s].shape()[transpose_b ? 0 : 1];
+                EXPECT_TRUE(xt::all(xt::equal(stripe_of(buffer, s, width, transpose_b), shards[s])))
+                    << "device " << d << " stripe " << s;
+            }
         }
     }
 }
@@ -345,27 +387,41 @@ TEST_F(AllGatherWeightMinimalMatmulAsyncTest, CacheHitWithOtherSemaphores) {
     const Problem p = make_problem(s);
     const auto replicate = ttnn::distributed::replicate_tensor_to_mesh_mapper(*device);
     const auto shard = ttnn::distributed::shard_tensor_to_mesh_mapper(*device, 0, kClusterAxis);
-    const auto x = ttml::core::from_vector(p.x, ttnn::Shape({s.M, s.K}), device, ttnn::Layout::TILE, replicate.get());
+    // Same shape, different addresses: the hit has to patch the input address too.
+    const std::array<ttnn::Tensor, 2> xs = {
+        ttml::core::from_vector(p.x, ttnn::Shape({s.M, s.K}), device, ttnn::Layout::TILE, replicate.get()),
+        ttml::core::from_vector(p.x, ttnn::Shape({s.M, s.K}), device, ttnn::Layout::TILE, replicate.get())};
     const auto w = ttml::core::from_vector(p.w_nk, ttnn::Shape({s.N, s.K}), device, ttnn::Layout::TILE, shard.get());
+    const std::array<ttnn::Tensor, 2> buffers = {
+        ttml::core::zeros(ttnn::Shape({s.N, s.K}), device), ttml::core::zeros(ttnn::Shape({s.N, s.K}), device)};
     const std::array<std::vector<tt::tt_metal::GlobalSemaphore>, 2> semaphores = {
         make_semaphores(device), make_semaphores(device)};
-    for (uint32_t i = 0; i < 2; ++i) {
+    size_t entries = 0;
+    for (uint32_t i = 0; i < 3; ++i) {
+        // Calls 0 and 1 share a program; call 2 uses one link instead of two, which is a new one.
+        const uint32_t num_links = i < 2 ? 2 : 1;
         SCOPED_TRACE(testing::Message() << "call " << i);
         const auto y = ttml::metal::all_gather_weight_minimal_matmul_async(
-            x,
+            xs[i % 2],
             w,
-            ttml::core::zeros(ttnn::Shape({s.N, s.K}), device),
-            semaphores[i],
+            buffers[i % 2],
+            semaphores[i == 0 ? 0 : 1],
             kClusterAxis,
             ttnn::ccl::Topology::Ring,
             std::nullopt,
             std::nullopt,
             std::nullopt,
             std::nullopt,
-            2);
+            num_links);
+        if (i == 0) {
+            entries = device->num_program_cache_entries();
+        } else {
+            EXPECT_EQ(device->num_program_cache_entries(), entries + (i - 1));
+        }
         for (const auto& device_y : ttnn::distributed::get_device_tensors(y)) {
             expect_close(p.y, ttml::core::to_xtensor(device_y));
         }
+        // Poisoning the first set proves later calls run on the second.
         for (const auto& semaphore : semaphores[0]) {
             semaphore.reset_semaphore_value(1000);
         }
@@ -393,7 +449,8 @@ TEST_F(AllGatherWeightMinimalMatmulAsyncTest, TinyShapes) {
     auto* device = &ttml::autograd::ctx().get_device();
     const auto replicate = ttnn::distributed::replicate_tensor_to_mesh_mapper(*device);
     const auto shard = ttnn::distributed::shard_tensor_to_mesh_mapper(*device, 0, kClusterAxis);
-    for (const uint32_t K : {32U, 96U, 256U}) {
+    // 320 = 8 + 2 tiles: a short last K chunk after a full one.
+    for (const uint32_t K : {32U, 96U, 256U, 320U}) {
         for (const uint32_t N : {128U, 256U, 384U}) {
             const Shape s{128, K, N};
             const Problem p = make_problem(s);
@@ -451,6 +508,7 @@ TEST_P(AllGatherWeightMinimalMatmulAsyncLargeTest, MatchesReference) {
     const auto w = ttml::core::from_vector(p.w_nk, ttnn::Shape({s.N, s.K}), device, ttnn::Layout::TILE, shard.get());
     const auto grid = device->compute_with_storage_grid_size();
     const size_t available_links = ttnn::operations::ccl::common::get_num_links(*device, kClusterAxis);
+    bool ran = false;
     for (const uint32_t num_links : {2U, 4U}) {
         if (num_links > available_links || 2 * num_links > grid.x - 1) {
             continue;
@@ -459,7 +517,11 @@ TEST_P(AllGatherWeightMinimalMatmulAsyncLargeTest, MatchesReference) {
             SCOPED_TRACE(
                 testing::Message() << "ring=" << (topology == ttnn::ccl::Topology::Ring) << " links=" << num_links);
             run_fabric_gather(p, x, w, num_links, true, topology, std::nullopt, 2);
+            ran = true;
         }
+    }
+    if (!ran) {
+        GTEST_SKIP() << "needs at least 2 fabric links on the ring's axis, found " << available_links;
     }
 }
 

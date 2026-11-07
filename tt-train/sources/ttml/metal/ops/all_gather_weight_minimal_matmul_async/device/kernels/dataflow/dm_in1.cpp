@@ -18,7 +18,6 @@
 void kernel_main() {
     Noc noc;
     constexpr uint32_t M_tiles = get_compile_time_arg_val(0);
-    constexpr uint32_t padded_M_tiles = get_compile_time_arg_val(1);
     constexpr uint32_t K_tiles = get_compile_time_arg_val(2);
     constexpr uint32_t padded_K_tiles = get_compile_time_arg_val(3);
     constexpr uint32_t N_tiles = get_compile_time_arg_val(4);
