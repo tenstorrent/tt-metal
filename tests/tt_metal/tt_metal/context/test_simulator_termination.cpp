@@ -17,7 +17,6 @@
 
 #include "impl/context/simulator_termination.hpp"
 
-
 namespace simulator_termination_test {
 
 // Exit code the release-path children ask for, to tell a real release from an incidental exit.
@@ -34,7 +33,7 @@ void write_marker() {
         return;
     }
     const char marker = 'x';
-    (void)write(child_write_fd, &marker, 1);
+    [[maybe_unused]] const ssize_t written = write(child_write_fd, &marker, 1);
 }
 
 std::atomic<bool> fault_requested{false};
