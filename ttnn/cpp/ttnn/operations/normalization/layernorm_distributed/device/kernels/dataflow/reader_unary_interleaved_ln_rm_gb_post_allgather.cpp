@@ -106,12 +106,16 @@ void kernel_main() {
     const uint32_t beta_datum_bytes = dfb_beta_buf.get_tile_size() / tt::constants::TILE_HW;
 #endif
 
-    // Generate constant tiles for layernorm compute
+    // Generate constant tiles for layernorm compute.
+    // Each stats tile contains the device's partial sum in column 0 only; the remaining 31
+    // columns are reduce scratch (which contains non-zero intermediate sums on the SFPU
+    // accurate FLOAT32 reduction path). Restricting the reduce scaler to column 0 ensures
+    // that undefined columns are zero-masked and never added into the cross-device average.
     dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
         dfb::reduce,
         ckernel::PoolType::AVG,
         ckernel::ReduceDim::REDUCE_ROW,
-        reduce_factor>();
+        reduce_factor>(1);
     const auto eps = get_arg(args::eps);
     // generate_bcast_col_scalar is a shared kernel-pool helper that still takes a CircularBuffer by
     // value, so the handle is wrapped here at the call site rather than passed as a DataflowBuffer.
