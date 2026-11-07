@@ -11,6 +11,8 @@ here. A call's time is the device kernel duration summed over the programs it la
 of REPEATS calls.
 """
 
+import os
+
 import pandas as pd
 import pytest
 import torch
@@ -22,6 +24,11 @@ REPEATS = 5
 # Inputs inside the range the generated kernel is fitted on.
 LOW, HIGH = -10.0, 10.0
 PATH = "tests/ttnn/perf_tests/operations/eltwise/test_hardswish_device_perf.py"
+# The profiled calls run only inside the device profiler, which the device-perf test launches: run on their
+# own, they would hold the device that the profiler's run of them then waits for.
+IN_PROFILER = pytest.mark.skipif(
+    os.environ.get("TT_METAL_DEVICE_PROFILER") != "1", reason="runs inside the device profiler only"
+)
 
 # op: (this change's call, the boards the change installs on)
 CASES = {
@@ -39,6 +46,7 @@ def _inputs(shape, device):
     return ttnn.from_torch(x.to(torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
 
 
+@IN_PROFILER
 def test_hardswish_profiled_calls(device):
     """The calls the device-perf test profiles, between signposts that name each one."""
     from tracy import signpost

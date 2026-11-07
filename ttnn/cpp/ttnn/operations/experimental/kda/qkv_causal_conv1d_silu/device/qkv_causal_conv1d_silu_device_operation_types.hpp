@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <array>
 #include <optional>
 #include <vector>
 
@@ -19,6 +20,13 @@ struct QkvCausalConv1dSiluParams {
     uint32_t v_width;
     uint32_t channel_chunk_size;
     uint32_t sequence_parallel_axis;
+    // First channel of the convolution within the input's last dimension.
+    uint32_t input_column_offset;
+    // Layout of history, predecessor_carry and the replacement carry: token-paged [1, history_rows, Q+K+V] when
+    // empty, else channel-paged [1, (Q+K+V) / P, history_rows * P] with P = page_channels channels per page.
+    std::optional<uint32_t> page_channels;
+    // Fabric history exchange only: L1 addresses of its global semaphores, entry, predecessor arrival, carry arrival.
+    std::array<uint32_t, 3> exchange_semaphore_addresses{};
     tt::tt_metal::MemoryConfig output_mem_config;
     DeviceComputeKernelConfig compute_kernel_config;
 };
@@ -32,7 +40,12 @@ struct QkvCausalConv1dSiluInputs {
     Tensor tap3;
 
     Tensor actual_start;
-    Tensor predecessor_carry;
+    // Exactly one of predecessor_carry and exchange_buffer supplies the predecessor's rows. exchange_buffer is a
+    // persistent [1, qkv_conv::exchange_rows, Q+K+V] ROW_MAJOR DRAM tensor the operation fills itself over the fabric;
+    // with it the operation also returns the replacement carry.
+    std::optional<Tensor> predecessor_carry;
+    std::optional<Tensor> exchange_buffer;
+    std::optional<Tensor> actual_end;
 };
 
 }  // namespace ttnn::experimental::prim

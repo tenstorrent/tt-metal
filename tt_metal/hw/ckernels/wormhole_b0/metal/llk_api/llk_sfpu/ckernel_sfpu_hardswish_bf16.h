@@ -18,7 +18,7 @@ struct HardswishBf16Config {
 namespace ckernel::sfpu {
 
 template <int ITERATIONS = 32>
-inline void calculate_hardswish_bf16() {
+__attribute__((noinline)) inline void calculate_hardswish_bf16() {
     ckernel::sfpu::bf16::hardswish::calculate_simple_forward<ckernel::sfpu::HardswishBf16Config, ITERATIONS>();
 }
 inline void init_hardswish_bf16() {

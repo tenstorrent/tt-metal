@@ -53,7 +53,9 @@ ttnn::Tensor update_padded_kv_cache(
     const std::optional<ttnn::Tensor>& valid_global,
     std::optional<uint32_t> tp_axis,
     const std::optional<ttnn::Tensor>& rope,
-    const std::optional<ttnn::Tensor>& scales) {
+    const std::optional<ttnn::Tensor>& scales,
+    uint32_t input_row_offset,
+    std::optional<uint32_t> input_rows) {
     return ttnn::prim::update_padded_kv_cache(
         cache,
         input,
@@ -68,7 +70,9 @@ ttnn::Tensor update_padded_kv_cache(
         /*valid_global=*/std::nullopt,
         tp_axis,
         rope,
-        scales);
+        scales,
+        input_row_offset,
+        input_rows);
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::update_padded_kv_cache

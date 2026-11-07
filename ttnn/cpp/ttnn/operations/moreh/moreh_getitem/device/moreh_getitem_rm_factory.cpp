@@ -11,7 +11,7 @@
 
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
-#include <tt-metalium/tilize_utils.hpp>
+#include <tt-metalium/math.hpp>
 
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
@@ -123,7 +123,7 @@ ttnn::device_operation::ProgramArtifacts MorehGetItemOperation::MorehGetItemRmFa
     auto src_cb_data_format = datatype_to_dataformat_converter(input.dtype());
     auto index_cb_data_format = datatype_to_dataformat_converter(index_tensors[0].dtype());
 
-    auto rounded_input_page_size = round_up_to_mul32(input_unit_size);
+    auto rounded_input_page_size = tt::round_up(input_unit_size, 32u);
     spec.dataflow_buffers.push_back(DataflowBufferSpec{
         .unique_id = IN0,
         .entry_size = rounded_input_page_size,
@@ -161,7 +161,7 @@ ttnn::device_operation::ProgramArtifacts MorehGetItemOperation::MorehGetItemRmFa
             TensorBinding{.tensor_parameter_name = INDEX[dim], .accessor_name = INDEX_ACCESSOR[dim]});
         reader_defines.emplace(INDEX_DEFINE[dim], "1");
 
-        auto index_page_size = round_up_to_mul32(index_info[dim].unit_size);
+        auto index_page_size = tt::round_up(index_info[dim].unit_size, 32u);
         spec.dataflow_buffers.push_back(DataflowBufferSpec{
             .unique_id = INDEX_DFB[dim],
             .entry_size = index_page_size,
