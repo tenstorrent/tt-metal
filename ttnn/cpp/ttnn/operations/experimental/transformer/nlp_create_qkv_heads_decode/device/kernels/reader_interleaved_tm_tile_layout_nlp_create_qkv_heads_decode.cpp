@@ -229,7 +229,6 @@ void kernel_main() {
             qkv_tile_id += 1;
             q_write_addr += tile_size;
         }
-        noc.async_read_barrier();
     }
 
     // K
@@ -265,7 +264,6 @@ void kernel_main() {
             qkv_tile_id += 1;
             k_write_addr += tile_size;
         }
-        noc.async_read_barrier();
     }
 
     // V
@@ -301,7 +299,6 @@ void kernel_main() {
             qkv_tile_id += 1;
             v_write_addr += tile_size;
         }
-        noc.async_read_barrier();
     }
 
     noc.async_read_barrier();
