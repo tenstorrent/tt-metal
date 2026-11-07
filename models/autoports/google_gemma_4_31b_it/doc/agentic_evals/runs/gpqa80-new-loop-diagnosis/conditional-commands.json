@@ -1,0 +1,58 @@
+{
+  "hf_after_device_closed": [
+    "env",
+    "HF_HUB_OFFLINE=1",
+    "TRANSFORMERS_OFFLINE=1",
+    "timeout",
+    "--signal=TERM",
+    "--kill-after=30s",
+    "2100s",
+    "python_env/bin/python",
+    "bringup/artifacts/gpqa-loop-logits-discriminator/diagnose.py",
+    "hf",
+    "--case",
+    "bringup/artifacts/gpqa80-new-loop-diagnosis/case.json",
+    "--budget-seconds",
+    "2040",
+    "--output",
+    "bringup/artifacts/gpqa80-new-loop-diagnosis/hf"
+  ],
+  "tt_after_hf_complete_and_remaining_budget_admitted": [
+    "env",
+    "TT_METAL_CACHE=/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/bringup/artifacts/cache-env-validation/tt-metal-jit",
+    "XDG_CACHE_HOME=/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/bringup/artifacts/xdg-cache",
+    "python_env/bin/python",
+    "bringup/artifacts/gpqa-loop-logits-discriminator/diagnose.py",
+    "tt",
+    "--case",
+    "bringup/artifacts/gpqa80-new-loop-diagnosis/case.json",
+    "--output",
+    "bringup/artifacts/gpqa80-new-loop-diagnosis/tt"
+  ],
+  "compare": [
+    "python_env/bin/python",
+    "bringup/artifacts/gpqa-loop-logits-discriminator/diagnose.py",
+    "compare",
+    "--case",
+    "bringup/artifacts/gpqa80-new-loop-diagnosis/case.json",
+    "--hf",
+    "bringup/artifacts/gpqa80-new-loop-diagnosis/hf/logits.pt",
+    "--tt",
+    "bringup/artifacts/gpqa80-new-loop-diagnosis/tt/logits.pt",
+    "--output",
+    "bringup/artifacts/gpqa80-new-loop-diagnosis/compare"
+  ],
+  "capture_device_hours": 0.17872619666666667,
+  "remaining_device_box_hours": 0.1712738033333333,
+  "conditional_tt_forecast_hours": 0.05,
+  "conditional_tt_box_seconds": 420,
+  "hf_host_forecast_seconds": 1100,
+  "hf_host_ceiling_seconds": 2100,
+  "requirements": [
+    "No hardware by agent; coordinator owner/source guard and current f579 identity before directTT launch",
+    "HF may run only after confirmed serving closure; no HF alongside timing/serving capture",
+    "BeforeTT compare remaining actual .35h total; expected180s versus616s remaining; no retry admitted",
+    "Same exact casehash089260fca248ddb9eec99bf35bd6f90feb94b987d532b3c5dec0311ec005c05b botharms",
+    "DirectTT is conditional prefill, not original incremental/sampler/APC state"
+  ]
+}

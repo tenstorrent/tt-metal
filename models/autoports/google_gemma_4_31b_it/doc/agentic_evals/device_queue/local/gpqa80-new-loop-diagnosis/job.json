@@ -2,7 +2,7 @@
   "arm": "gpqa80-new-loop-diagnosis",
   "owner": "local_serving_check",
   "device": "local",
-  "status": "launching",
+  "status": "capture_completed_idle",
   "start": "2026-11-07T08:00:22.173108+00:00",
   "planned_clients": 1,
   "batch": 8,
@@ -252,5 +252,14 @@
     "models/autoports/google_gemma_4_31b_it/tools/benchmark_work.py": "cf0288f4374c851d1d12fd82965556ec04f3d6b042e0a146654e7cf910cf05cb",
     "models/autoports/google_gemma_4_31b_it/tools/finalize_benchmark.py": "b94f718bafac34e7da158af81224c71511f7d3a906c6561b47f942a0cbfd8b39"
   },
-  "commands": "runs/gpqa80-new-loop-diagnosis/commands.json"
+  "commands": "runs/gpqa80-new-loop-diagnosis/commands.json",
+  "sessions": {
+    "server": 67508,
+    "client": 12714,
+    "idle_closer": 71398
+  },
+  "end": "2026-11-07T08:11:05.587416+00:00",
+  "exit_status": 0,
+  "actual_hours": 0.17872619666666667,
+  "remaining_owners": []
 }

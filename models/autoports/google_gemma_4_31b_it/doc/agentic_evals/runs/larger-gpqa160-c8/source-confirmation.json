@@ -1,0 +1,55 @@
+{
+  "status": "immutable_source_confirmed",
+  "tti_sha": "8b9623a7f1ccee85c04319e4c83e00f974322201",
+  "parent_sha": "42dc40754e465cf8c9ec993027ff59d3c936832c",
+  "tree": "aa799190cef6bdd23862f9867afae579cd214c52",
+  "cohort": {
+    "source": "cohorts.json:r1_gpqa_diamond.rungs.prepared-larger160",
+    "count": 160,
+    "ids_sha256_compact_json": "e53cd6598138733885c7ac335c37027a871ada186b3c2b6fbcb731f24d2a048c",
+    "exact": true
+  },
+  "delta_files": [
+    "reference_config/evals/eval_config.py",
+    "tests/workflows/test_eval_config_mode_reference.py",
+    "tests/workflows/test_gemma4_autoport_smoke_suites.py"
+  ],
+  "production_delta_only_registered_ids_and_count": true,
+  "all_other_files_exact_current80": true,
+  "serving_preserved": "C8/B8/maxseq8/pool20480; all caps/context/sampling/reference/native_logging path; current immutable harness/workflows unchanged",
+  "source_only": true,
+  "publication": {
+    "basis": "Coordinator reports successful FF publication from separate160 checkout; saved run-provenance binds dispatched immutable8b9623 SHA. This audit performs no network query and makes no new remote-head observation.",
+    "rung_run": 42353554865,
+    "dry_run": 42353568775
+  },
+  "runtime_binding": {
+    "tt": "f57978407eaacf09587f5793b8ae46ca7af839ea",
+    "image_digest": "sha256:ae8bf2ac98d004471bc58959995dd25dc04cc76bb250b794d746bc073ac8f7fe"
+  },
+  "validation": "Existing16037focused+fullhooks; exact AST/tree/cohort audit rerun. No generic harness/workflow changes introduced by160 commit. Historical base differs from origin/main; unchanged claim is relative to accepted immutable80, not an assertion entire branch equals upstream main.",
+  "held198": {
+    "candidate_sha": "7b89c8713323c592c7b04736949eb6e15a38fd56",
+    "parent": "8b9623a7f1ccee85c04319e4c83e00f974322201",
+    "tree": "6bd9438fb7dbbe9ffdc2dafd1ab3947cc79e6530",
+    "branch": "prep/gpqa198-current-c8-ff",
+    "worktree": "/home/mvasiljevic/gemma4-31b-pipeline-v3/tti-gpqa198-current-c8-ff",
+    "exact_previous_tested198_tree": true,
+    "registered198_exact": true,
+    "registered160_prefix": true,
+    "source_delta": "Only GPQA doc_ids/count plus two matching tests",
+    "focused_tests": "37 passed in5.30s",
+    "full_hooks": "Inherited from exact byte-identical old198 tree; no new source bytes from reparenting",
+    "held": true,
+    "published": false,
+    "admitted": false
+  },
+  "device_hours": 0,
+  "actions": "Read-only160 audit and local198 source-only descendant preparation; no publication/dispatch/network/device/runtime/central edits",
+  "evidence": [
+    "../current-c8-larger-source-preparation/RESULT.json",
+    "run-provenance.json",
+    "bringup/artifacts/current-c8-larger-source-preparation/current-c8-160/audit.json",
+    "bringup/artifacts/current-c8-larger-source-preparation/198-fastforward/candidate.json"
+  ]
+}

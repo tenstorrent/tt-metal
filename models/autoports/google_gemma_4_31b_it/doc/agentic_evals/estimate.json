@@ -1,9 +1,9 @@
 {
-  "status": "GPQA80 valid C8;160 admitted;198 currently nonfit on measured-tail sensitivity; tool-suite measured stops",
+  "status": "GPQA80 valid C8 selected with measured same80 configuration benefit;160 admitted;198 reproject after160; tool-suite measured stops",
   "evals": {
     "r1_gpqa_diamond": {
       "decision": "go",
-      "reason": "Valid frozen80 C8:56/80; complete retained chains classify13 capped failures. Coordinator admits next160 using measured-tail plus0.02h reserve11.656151h; full4h sensitivity13.699195h exceeds12 and is not a bound.",
+      "reason": "Valid frozen80 C8:56/80; complete retained chains classify13 capped failures. Coordinator admits next160 using measured-tail plus0.02h reserve11.656151h; full4h sensitivity13.699195h exceeds12 and is not a bound. Completed C4/80 comparison now matches all80 outputs/chains/work; C8 observed2.614273h/37.9102% shorter with host/pool caveats; admitted160 projection unchanged.",
       "functional_at": 80,
       "projected_hours": 11.65615118558173,
       "score": 0.7,
@@ -38,9 +38,12 @@
       "projection_scope": "Next160 measured-density extrapolation; no release completion claim",
       "c8_80_comparison": {
         "run_id": 42332785769,
-        "status": "completed_valid_comparator_pending",
+        "status": "completed_valid_same80_gain_confirmed",
         "source": "runs/gpqa80-c8-saturation-comparison/RESULT.json",
-        "credited_saving_hours": 0
+        "comparison_evidence": "runs/larger-gpqa80-c4-native-logging/RESULT.json",
+        "observed_evaluation_hours_saved": 2.614273164693861,
+        "observed_evaluation_reduction_percent": 37.910170672719836,
+        "scope": "Same frozen80, same TT/image/plugin/sampling/full limits; C4/default10248 pool versus C8/expanded20480 pool on different granted CI hosts, overlapping wall-clock runs. Matched work and output support measured configuration benefit; not an isolated causal concurrency experiment or guarantee for160/198."
       },
       "previous_rung": {
         "task_count": 80,
@@ -78,6 +81,26 @@
         "full4h_timeout_sensitivity_hours": 15.73299959555089,
         "measured_tail_sensitivity_fits12h": false,
         "scope": "Measured-density extrapolation plus one extra observed longest capped wave; not bound. Full4h request timeout unchanged. Schedule/dry budget admission belongs to coordinator;198 requires preceding valid160."
+      },
+      "same80_comparison": {
+        "comparator_run_id": 42332785769,
+        "evidence": "runs/larger-gpqa80-c4-native-logging/RESULT.json",
+        "semantic_prompts_equal": 80,
+        "visible_outputs_equal": 80,
+        "scores_equal": 80,
+        "retained_chains_equal": 80,
+        "active_decode_work_equal": true,
+        "active_decode_work": 2114531,
+        "c4_evaluation_hours": 6.895967805745313,
+        "c8_evaluation_hours": 4.281694641051452,
+        "c8_observed_evaluation_hours_saved": 2.614273164693861,
+        "c8_observed_evaluation_reduction_percent": 37.910170672719836,
+        "c4_device_job_hours": 7.0633333333333335,
+        "c8_device_job_hours": 4.5680555555555555,
+        "c4_runner": "qb2-120-p05t02",
+        "c8_runner": "120-qb2-p05t01",
+        "scope": "Same frozen80, same TT/image/plugin/sampling/full limits; C4/default10248 pool versus C8/expanded20480 pool on different granted CI hosts, overlapping wall-clock runs. Matched work and output support measured configuration benefit; not an isolated causal concurrency experiment or guarantee for160/198.",
+        "comparator_evidence": "runs/gpqa80-c8-saturation-comparison/RESULT.json"
       }
     },
     "swe_bench_verified": {

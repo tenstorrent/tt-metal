@@ -1,0 +1,205 @@
+{
+  "status": "completed_conditional_discrepancy_hypothesis_unsupported",
+  "goal": "Test distinct doc139 nonperiodic six-character degeneration around fresh transition with pinned full60 HF/currentTT.",
+  "change": "None; no inference/sampling/precision/runtime change accepted.",
+  "problem_status": "Measured transition tokens supported by both conditional models; no actionable gross conditional-logit discrepancy found. Original capped looping remains unresolved and counted as failure.",
+  "source": {
+    "runtime_publication": "f57978407eaacf09587f5793b8ae46ca7af839ea",
+    "runtime_hash_guard_file_count": 236,
+    "hf_revision": "842da3794eaa0b77d5f08bae87a17459d91ff475",
+    "full_layers": 60,
+    "batch": 8,
+    "planned_clients": 1,
+    "batch_reason": "Match scored B8 numerical path; not throughput measurement",
+    "precision": {
+      "config_id": "head_bfp4",
+      "weight_groups": {
+        "attention": "bfp4",
+        "mlp": "bfp4",
+        "down": "bfp4",
+        "lm_head": "bfp4"
+      },
+      "layer_exceptions": {},
+      "compute_fidelities": {
+        "attention": "LoFi",
+        "mlp": "LoFi",
+        "down": "LoFi",
+        "lm_head": "LoFi"
+      },
+      "activation_dtype": "bfloat8_b",
+      "residual_dtype": "bfloat16",
+      "ccl_dtype": {
+        "prefill": "bfloat8_b",
+        "decode": "bfloat16"
+      },
+      "kv_cache_dtype": "bfloat8_b",
+      "logits_dtype": "bfloat16",
+      "sampling_dtype": "bfloat16",
+      "embedding_dtype": "bfloat16",
+      "norm_dtype": "bfloat16",
+      "max_seq_len": 262144
+    }
+  },
+  "capture": {
+    "prompt_ids_exact": true,
+    "prompt_tokens": 237,
+    "fresh_native_tokens": 15032,
+    "retained_overlap_samples": 15031,
+    "all_overlap_exact": true,
+    "original_first_prefill_recovered": false,
+    "fresh_tail_entry_generated_index": 14520,
+    "checkpoints": [
+      14519,
+      14520,
+      14536,
+      14537
+    ],
+    "case_sha256": "089260fca248ddb9eec99bf35bd6f90feb94b987d532b3c5dec0311ec005c05b",
+    "request_output_cap": 126976,
+    "request_timeout_seconds": 14400,
+    "client_elapsed_seconds": 627.2034179810435,
+    "stop": "OwnHTTPdisconnect after15032nativeIDs; freshidle/drain then graceful close, ownersempty",
+    "differences": "FreshC1/B8 rather than scoredC8; streamingnativeIDs/debugloggingdisabled/default10248pool; no scoredlimits changed"
+  },
+  "checkpoints": [
+    {
+      "name": "last_before_degenerate_tail",
+      "generated_target_index": 14519,
+      "input_position": 14755,
+      "input_prefix_length": 14756,
+      "prefix_ids_sha256": "14448d5bb912e0faa053ef83c81cb068526fbf4ad7b17fac64058b36a52090cf",
+      "distribution": {
+        "kl_hf_tt": 0.02606412451110839,
+        "js": 0.005853728098014026,
+        "top1_equal": true
+      },
+      "observed_hf": {
+        "rank": 5,
+        "raw_probability": 0.07112528556187576,
+        "release_top20_top_p95_probability": 0.07181580314571764
+      },
+      "observed_tt": {
+        "rank": 5,
+        "raw_probability": 0.04758229027515071,
+        "release_top20_top_p95_probability": 0.047923665330365274
+      }
+    },
+    {
+      "name": "degenerate_tail_entry",
+      "generated_target_index": 14520,
+      "input_position": 14756,
+      "input_prefix_length": 14757,
+      "prefix_ids_sha256": "153bcf7a17ecf10a26b3fed081fd2e4634437cba76b9e07494255ac63452beaf",
+      "distribution": {
+        "kl_hf_tt": 0.019191138646433764,
+        "js": 0.0024777745508290745,
+        "top1_equal": true
+      },
+      "observed_hf": {
+        "rank": 1,
+        "raw_probability": 0.6821872387070206,
+        "release_top20_top_p95_probability": 0.7057850278370112
+      },
+      "observed_tt": {
+        "rank": 1,
+        "raw_probability": 0.6973253149503542,
+        "release_top20_top_p95_probability": 0.7310585786300049
+      }
+    },
+    {
+      "name": "tail_interior_a",
+      "generated_target_index": 14536,
+      "input_position": 14772,
+      "input_prefix_length": 14773,
+      "prefix_ids_sha256": "e0ab70cf8090015b5249bb18129a37e0cb98257da69c803475b6d81e1f4c192c",
+      "distribution": {
+        "kl_hf_tt": 0.007823388883891549,
+        "js": 0.0016000327196602163,
+        "top1_equal": true
+      },
+      "observed_hf": {
+        "rank": 1,
+        "raw_probability": 0.7519692946740884,
+        "release_top20_top_p95_probability": 0.7549149868676283
+      },
+      "observed_tt": {
+        "rank": 1,
+        "raw_probability": 0.7953365412491951,
+        "release_top20_top_p95_probability": 0.7981867777396212
+      }
+    },
+    {
+      "name": "tail_interior_next_distinct",
+      "generated_target_index": 14537,
+      "input_position": 14773,
+      "input_prefix_length": 14774,
+      "prefix_ids_sha256": "6bc768ee11b57d1c99275ec4d14283cf3723bf2f236f7b34d1a76ecfcab46aff",
+      "distribution": {
+        "kl_hf_tt": 0.02341437714915032,
+        "js": 0.005048786731444529,
+        "top1_equal": true
+      },
+      "observed_hf": {
+        "rank": 1,
+        "raw_probability": 0.29971084843411716,
+        "release_top20_top_p95_probability": 0.30184024769551376
+      },
+      "observed_tt": {
+        "rank": 2,
+        "raw_probability": 0.2914023913457697,
+        "release_top20_top_p95_probability": 0.29884557992168226
+      }
+    }
+  ],
+  "hf_cache_control": {
+    "kl_hf_tt": 0.0,
+    "js": 0.0,
+    "top1_equal": true
+  },
+  "comparison_interpretation": "All4 argmax identities match. Observed last-before-tail sample has rank5 onboth and nonzero filtered support. Entry and firstinterior rank1onboth; nextdistinct sample ranks1(tied)HF/2TT and remains supported. Differences are measured, not zero or threshold-passed. They do not demonstrate unsupported sampled token or gross conditional collapse at these positions.",
+  "doc86": {
+    "binding": "Complete-set elimination after312-token doc160 chain matched prioracceptedhash",
+    "retained_four_token_vocabulary_onset": 8903,
+    "exact_period57_suffix_tokens": 50152,
+    "exact_period57_suffix_start_retained_index": 76823,
+    "device_tested": false,
+    "reason": "Firstprefill unavailable; fullperiod57 capture beyond bounded effort. Selected uniquelybound139 for distinct nonperiodic degeneration; no doc86cause claim."
+  },
+  "cost": {
+    "capture_device_hours": 0.17872619666666667,
+    "conditional_tt_device_hours": 0.04703672361111111,
+    "total_device_hours": 0.22576292027777778,
+    "initial_forecast_hours": 0.15,
+    "revised_forecast_hours": 0.3,
+    "box_hours": 0.35,
+    "actual_to_revised_ratio": 0.7525430675925926,
+    "hf_host_seconds": 763.5924175960245,
+    "hf_host_forecast_seconds": 1100,
+    "hf_peak_rss_mib": 74163.1015625,
+    "tt_driver_wall_seconds": 167.808223759057,
+    "conditional_order": "Captureclosed thenTT thenhostHF thencompare; no concurrentHF/TT",
+    "credited_release_saving_hours": 0
+  },
+  "recommendation": "Stop this conditional-discrepancy line; no additional device experiment or setting change justified by this result. Preserve caps/failedscores and progress normalrungs/dry.",
+  "limitations": [
+    "Fresh native[1:] exactly matches15031original retainedIDs; original firstprefill token remainsunknown. This does not recover original full trajectory or servedstate.",
+    "Four conditional teacher-forced positions, not autonomousHFgeneration or accuracy/performance measurement.",
+    "DirectTT fullprefix/continuation does not reproduce original scheduler,APC,incrementalKV or deviceRNG state.",
+    "CPU top20/topp.95 transformation measures support, not exact device sampler arithmetic.",
+    "Agreement after earlier generatedchoices does not identify cause or establish health of everypriorposition/remaining126Ktail.",
+    "Doc86 newperiod57 was not device-tested; no general all-loop conclusion."
+  ],
+  "evidence": {
+    "bringup/artifacts/gpqa80-new-loop-diagnosis/case.json": "089260fca248ddb9eec99bf35bd6f90feb94b987d532b3c5dec0311ec005c05b",
+    "bringup/artifacts/gpqa80-new-loop-diagnosis/fresh-prefix-proof.json": "4f3a629b685adf9d4bb3c7878cf50c4dc4a6dfcdeea5be4e1b6bf36a043d3f82",
+    "bringup/artifacts/gpqa80-new-loop-diagnosis/compare/result.json": "1a972dcbe27a752d9855b1144482469857118f21ad99fa5d842e25c1f763ca71",
+    "bringup/artifacts/gpqa80-new-loop-diagnosis/hf/result.json": "be60f2ccbe47733f48ebf0a0d8a6970d84877886b84f92394182c27e4f0538d9",
+    "bringup/artifacts/gpqa80-new-loop-diagnosis/tt/result.json": "bb5736e7a17c21dfaaaec539f471a857b9cbd280468f86d3bd4e5dd2a062b489",
+    "bringup/artifacts/gpqa80-new-loop-diagnosis/queue.json": "2b2f6d057c5133d8573f99ad14c60b5103f798a09416329ac6d3e5e880bfa4d1",
+    "bringup/artifacts/gpqa80-new-loop-diagnosis/conditional-queue.json": "df864e2b57537749da3e861f6816617f22c5692f0e89247446f08a9cf58b999d",
+    "bringup/artifacts/gpqa80-new-loop-diagnosis/idle-shutdown.json": "41375ed2d721a6be8d309db7a6db5fba506618a8bb2f9f1cd4d014857cc8ed87",
+    "bringup/artifacts/gpqa80-new-loop-diagnosis/host-prefix-inventory.json": "3c05080eb697b25b6be01e79a715c400e46c1da884050768f7e9c9b8666bebf1",
+    "bringup/artifacts/gpqa80-new-loop-diagnosis/request-provenance.json": "8087c15531afcaef58615bf143686aab865a0a7ed2171959c5b39fa4a25777f3",
+    "bringup/artifacts/gpqa80-new-loop-diagnosis/host-check.json": "808b1d383f875c704f19067bd2c750f48cd60a9638ed522fa7a234cb01cfce38"
+  }
+}

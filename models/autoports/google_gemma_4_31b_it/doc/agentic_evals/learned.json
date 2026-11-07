@@ -279,6 +279,10 @@
     {
       "fact": "Native v1 CI reply transport may lose giant records:80 received IDs but78 complete bodies and7/8 initial replies. Native LogRecord.created preserves completion timing; outer CI timestamp may be postrun replay. Complete retained physical chains support scored classification but do not replace initial-agent dry identity proof.",
       "evidence": "runs/gpqa80-c8-saturation-comparison/RESULT.json"
+    },
+    {
+      "fact": "Same80 C4/C8 comparison matches all80 semantic prompts, visible outputs, scores and complete retained chains;2114531 active decode samples each. Observed C8 evaluation2.614273h/37.9102% shorter, on different hosts and expanded versus default pool. Configuration benefit on80 is measured; isolated concurrency causality and larger-list gain are not established.",
+      "evidence": "runs/larger-gpqa80-c4-native-logging/RESULT.json"
     }
   ],
   "suite_timings": [
@@ -687,6 +691,24 @@
         0.7893542873991866
       ],
       "evidence": "runs/gpqa80-c8-saturation-comparison/RESULT.json"
+    },
+    {
+      "run_id": 42323448662,
+      "eval": "r1_gpqa_diamond",
+      "tasks": 80,
+      "agents": 4,
+      "batch": 8,
+      "wall_hours": 6.895967805745313,
+      "device_job_hours": 7.0633333333333335,
+      "workflow_hours": 7.067777777777778,
+      "agent_hours": 26.10587472323889,
+      "output_cap_failures": 13,
+      "score": 0.7,
+      "confidence_interval_95": [
+        0.5923184607866026,
+        0.7893542873991866
+      ],
+      "evidence": "runs/larger-gpqa80-c4-native-logging/RESULT.json"
     }
   ],
   "generic_fixes": [
@@ -821,6 +843,13 @@
     {
       "fact": "Doc160 new period3 loop: exact fresh4699-token retained overlap, four conditional HF/TT next-token matches; no actionable conditional numerical discrepancy. Do not claim autonomousHF or originalstate.",
       "evidence": "runs/gpqa40-new-loop-diagnosis/RESULT.json"
+    }
+  ],
+  "conditional_diagnostics": [
+    {
+      "evidence": "runs/gpqa80-new-loop-diagnosis/RESULT.json",
+      "finding": "Fresh237prompt/15031retainedoverlap exact. Fourfull60conditional HF/TTtop1match; observedtokens supported byboth. Noactionableconditionalcollapse. Originalservedstate andautonomousHF notproven; doc86hostonly.",
+      "device_hours": 0.22576292027777778
     }
   ]
 }

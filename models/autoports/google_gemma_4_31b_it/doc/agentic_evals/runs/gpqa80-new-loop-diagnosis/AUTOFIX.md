@@ -1,0 +1,5 @@
+# Private request preparation correction
+
+Before any request or device launch, pinned-tokenizer validation rejected the prepared message value: `str object has no attribute role`. The official saved `arg_0` is a one-element list containing a JSON-serialized native message list, as the existing audited extractor demonstrates. The first preparation copied that container directly rather than decoding its serialized element.
+
+Minimal repair decoded that element exactly once, with structural assertions for message dictionaries/roles. The pinned tokenizer then produced237 IDs with the identical audited prompt hash; fresh native SSE later matched every reconstructed prompt ID. No prompt content was invented or rewritten, no failed request reached serving, and no device cost belongs to this preparation failure. The private provenance/host-check files retain the correction; model, harness and runtime sources were unchanged. Final fresh-prefix overlap and conditional measurements are recorded in RESULT.json.

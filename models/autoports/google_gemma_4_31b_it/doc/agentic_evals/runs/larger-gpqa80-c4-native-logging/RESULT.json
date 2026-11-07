@@ -1,0 +1,2373 @@
+{
+  "run_id": 42323448662,
+  "status": "completed_valid_eighty_same80_pair_complete",
+  "valid": true,
+  "functional_at": 80,
+  "score": {
+    "name": "r1_gpqa_diamond exact_match",
+    "value": 0.7,
+    "correct": 56,
+    "completed_samples": 80,
+    "dataset_samples": 198,
+    "scope": "subset",
+    "wilson95": [
+      0.5923184607866026,
+      0.7893542873991866
+    ],
+    "published_reference_percent": 84.3,
+    "gpu_reference_percent": 83.33,
+    "score_gate": false
+  },
+  "runtime": {
+    "tt_metal_sha": "eef534e5cd6bcaf37957647de4d8d4eff4f0e047",
+    "tti_sha": "9b4b88c0ac2762d75e824818ec7428c594dba0f0",
+    "plugin_sha": "ca7a18246e4111629ed6cb4a7d1192002749fccf",
+    "image": "ghcr.io/tenstorrent/tt-agentic-bringup-qb2/vllm-tt-metal-src-dev-ubuntu-22.04-amd64@sha256:bf1ada4081f7fa338ed8495a02324390d3b6124861cd625a0d2fb2d6a255d425",
+    "full_layers": 60,
+    "planned_clients": 4,
+    "batch": 8,
+    "max_num_seqs": 8,
+    "pool_ids": 10248,
+    "context": 262144,
+    "runner": "qb2-120-p05t02"
+  },
+  "cohort": {
+    "exact_frozen80": true,
+    "configured_ids": [
+      152,
+      189,
+      46,
+      87,
+      52,
+      181,
+      31,
+      185,
+      50,
+      187,
+      153,
+      135,
+      81,
+      93,
+      7,
+      42,
+      24,
+      168,
+      20,
+      28,
+      13,
+      94,
+      61,
+      15,
+      123,
+      160,
+      27,
+      29,
+      90,
+      127,
+      121,
+      188,
+      136,
+      174,
+      184,
+      9,
+      80,
+      102,
+      182,
+      173,
+      109,
+      193,
+      192,
+      47,
+      19,
+      18,
+      48,
+      17,
+      36,
+      114,
+      154,
+      73,
+      115,
+      144,
+      166,
+      179,
+      150,
+      91,
+      176,
+      67,
+      86,
+      194,
+      163,
+      63,
+      16,
+      60,
+      131,
+      62,
+      2,
+      139,
+      122,
+      169,
+      167,
+      84,
+      35,
+      147,
+      12,
+      158,
+      56,
+      120
+    ],
+    "semantic_ids": [
+      2,
+      7,
+      9,
+      12,
+      13,
+      15,
+      16,
+      17,
+      18,
+      19,
+      20,
+      24,
+      27,
+      28,
+      29,
+      31,
+      35,
+      36,
+      42,
+      46,
+      47,
+      48,
+      50,
+      52,
+      56,
+      60,
+      61,
+      62,
+      63,
+      67,
+      73,
+      80,
+      81,
+      84,
+      86,
+      87,
+      90,
+      91,
+      93,
+      94,
+      102,
+      109,
+      114,
+      115,
+      120,
+      121,
+      122,
+      123,
+      127,
+      131,
+      135,
+      136,
+      139,
+      144,
+      147,
+      150,
+      152,
+      153,
+      154,
+      158,
+      160,
+      163,
+      166,
+      167,
+      168,
+      169,
+      173,
+      174,
+      176,
+      179,
+      181,
+      182,
+      184,
+      185,
+      187,
+      188,
+      189,
+      192,
+      193,
+      194
+    ],
+    "source": "runs/gpqa80-preparation/cohort.json",
+    "mapping": "Semantic dataset membership order verified against same80 doc/prompt hashes; no physical row-order binding. All80 chains match unique accepted C8/80 hashes."
+  },
+  "limits": {
+    "model_args": {
+      "model": "google/gemma-4-31B-it",
+      "base_url": "http://127.0.0.1:8000/v1/chat/completions",
+      "tokenizer_backend": "huggingface",
+      "max_length": 262080,
+      "timeout": 14400,
+      "revision": "842da3794eaa0b77d5f08bae87a17459d91ff475",
+      "num_concurrent": 4,
+      "trust_remote_code": true
+    },
+    "generation": {
+      "stream": false,
+      "max_gen_toks": 126976,
+      "until": [],
+      "do_sample": true,
+      "temperature": 1.0,
+      "top_k": 20,
+      "top_p": 0.95,
+      "seed": 42
+    },
+    "thinking": true,
+    "resources": "Stock HTTP-only lm-eval; zero task sandboxes, no CPU/memory override",
+    "no_progress_cutoff": "No separate progress-based cutoff observed; full run terminal success; cap126976 and timeout14400 unchanged."
+  },
+  "phase_integrity": {
+    "artifact": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/runs/larger-gpqa80-c4-native-logging/collected/workflow_logs_evals_gemma-4-31B-it_bh-qb-ge_gemma4-31b-autoport-v3/tt_triage/gemma4-phase-147-1794014780686224992.jsonl",
+    "sha256": "f71b01eb0e126676116644419b64196d699b02cdba10d7d89efb1ca811d29fa5",
+    "raw_bytes": 597213772,
+    "frames": 24791,
+    "paired_contiguous_steps": 555854,
+    "duplicates": 0,
+    "gaps": 0,
+    "errors_or_loss_flags": [],
+    "final_pending_steps": 0,
+    "chains": 80,
+    "remaps": 141,
+    "ambiguous_edges": 0,
+    "active_decode_work": 2114531,
+    "decode_steps_by_active_rows": {
+      "4": 517132,
+      "3": 138,
+      "2": 7083,
+      "1": 31423
+    },
+    "host_completion_interval_seconds_by_active_rows": {
+      "4": 22937.06862362024,
+      "3": 8.215945103999998,
+      "2": 322.14513927899986,
+      "1": 1539.8615701609858
+    },
+    "retention": {
+      "scope": "decode_device_only_physical_rows",
+      "row_index": "index_in_sampled_decode_token_ids",
+      "positions": "processed_input_position; sample_predicts_position_plus_one",
+      "inactive_rows": "positions_less_than_zero_are_not_request_tokens",
+      "prefill_tokens_retained": false,
+      "host_sampled_tokens_retained": false,
+      "request_ids_available": false,
+      "client_emission_verified": false,
+      "diagnostic_disabled": false,
+      "diagnostic_failures": 0,
+      "diagnostic_reason": null,
+      "position_identity_uncertain": false,
+      "loss": false,
+      "export_failed": false,
+      "file_exhausted": false,
+      "pending_incomplete": false
+    }
+  },
+  "all_samples": [
+    {
+      "semantic_dataset_index": 2,
+      "logged_doc_id": 152,
+      "doc_hash": "be009aa89df84127fed41ea33d15930d27016677ed788eb6b3ad920c08fd5206",
+      "prompt_hash": "27aa79b756f6dabf0128504f864f14d5827c89417fae0b7a3735c3bd5277dca9",
+      "visible_response_sha256": "7e4b532859f036aa05d58adfbef3553203c9da3c733d799727b42def2602576c",
+      "physical_chain_sha256": "4a56142bf673b7bff67c7e19baf6b1381b0b287662400e5ae6b9f4bf05a92916",
+      "physical_decode_samples": 5266,
+      "prompt_tokens": 187,
+      "score": 1,
+      "capped_empty": false
+    },
+    {
+      "semantic_dataset_index": 7,
+      "logged_doc_id": 189,
+      "doc_hash": "9a66c03758e71508ee0f5a2b6cd532ec9e631ba5dff8459e2547eb64b110e7c3",
+      "prompt_hash": "b877ecb0b0d08b3325377aa6e28e141d829747ab47b32acd03bb7af9d883e28f",
+      "visible_response_sha256": "1249ac5a801c145d7aee23842efc203ffdb663f29d313b5d6b5f14d417e7b99b",
+      "physical_chain_sha256": "eccf765f0006d46a00d54f37da97c31c417076186a6790f568dcf1bf390c3791",
+      "physical_decode_samples": 126975,
+      "prompt_tokens": 481,
+      "score": 0,
+      "capped_empty": true
+    },
+    {
+      "semantic_dataset_index": 9,
+      "logged_doc_id": 46,
+      "doc_hash": "1e550d0b6bbdc783826deff71256a56f7a6828136f968ee45e6c3c204dbd1008",
+      "prompt_hash": "680c63516dfd920835eb182b2df5633ca217882a601f953838a4f630d85759a8",
+      "visible_response_sha256": "53bd285fde23dbaf644d4240d66cd8e4c9f81f94babb73d4fb6f32a3333214b2",
+      "physical_chain_sha256": "80ca85bac2b54f274d5e83850fb3d3a269ddc8e4ffa2228c561c8f8eb9db7f51",
+      "physical_decode_samples": 4821,
+      "prompt_tokens": 167,
+      "score": 1,
+      "capped_empty": false
+    },
+    {
+      "semantic_dataset_index": 12,
+      "logged_doc_id": 87,
+      "doc_hash": "ffe8a1dfa6cb5882980e63d7eabba505aac3c9e3653e8571aa03f6e4d43b9a25",
+      "prompt_hash": "fba4e07556c7f0251b753ce29701256b7dce4ea1a37b220fb0e5f6e7c1915226",
+      "visible_response_sha256": "1249ac5a801c145d7aee23842efc203ffdb663f29d313b5d6b5f14d417e7b99b",
+      "physical_chain_sha256": "0512759f94e2de572a2f453781c82bff020879c7a6fe3e3680ce6dfe785fb874",
+      "physical_decode_samples": 126975,
+      "prompt_tokens": 321,
+      "score": 0,
+      "capped_empty": true
+    },
+    {
+      "semantic_dataset_index": 13,
+      "logged_doc_id": 52,
+      "doc_hash": "31f5652b293d84f239c05b7963a9fc02fe86a81e6e4418b8ef95c79dff6d239e",
+      "prompt_hash": "7c69c17e5810ce2cd8d0a6a77356ddb1b1ed8a23df17a0158cee410e975c9fa7",
+      "visible_response_sha256": "6d97ab8ffe7b8f48be6f46995434b9eeb77b9966105196b07c443f9881009bfc",
+      "physical_chain_sha256": "f8a3222d159521b1bfb269d63e976a4b53f450cb3842a4426d256065036ca63e",
+      "physical_decode_samples": 4953,
+      "prompt_tokens": 160,
+      "score": 0,
+      "capped_empty": false
+    },
+    {
+      "semantic_dataset_index": 15,
+      "logged_doc_id": 181,
+      "doc_hash": "c9add4fe0a5bed075164d96c9f993734980a20d7a04e37d557e5240ac2fa73ac",
+      "prompt_hash": "9a8ba7627fba8de07a7a102cf3f5f960ca9b8dd0d4d638b5b01a4b167dcfb75c",
+      "visible_response_sha256": "1249ac5a801c145d7aee23842efc203ffdb663f29d313b5d6b5f14d417e7b99b",
+      "physical_chain_sha256": "693e7419cd24a22c9bfd83967afac88b7e2b3b54ff3cd367ba9f95ef5b99937e",
+      "physical_decode_samples": 126975,
+      "prompt_tokens": 225,
+      "score": 0,
+      "capped_empty": true
+    },
+    {
+      "semantic_dataset_index": 16,
+      "logged_doc_id": 31,
+      "doc_hash": "bf1b583c0804819582ad797df686207d70fbeb0aed1369c8d06f88d270edf235",
+      "prompt_hash": "50e56c74f88d67d7b2d2b1a821765c58ca5a4b146e349e6cf383c67a95f53048",
+      "visible_response_sha256": "00c00bfc999b4bfaa1433ddb6fb149fa8724c0a32d5f5511f4c21165f234a72a",
+      "physical_chain_sha256": "223285d55224b90030fd6c24bd7e5d95ed73eb9891f0af055d552efc59ece101",
+      "physical_decode_samples": 2101,
+      "prompt_tokens": 170,
+      "score": 1,
+      "capped_empty": false
+    },
+    {
+      "semantic_dataset_index": 17,
+      "logged_doc_id": 185,
+      "doc_hash": "7b405c615ef2188774cf7be7815f5a9f146328eea7fc60094c6991128ededf23",
+      "prompt_hash": "bce72b937edeab036d2f725b069fc49f1edce18178205355e745afb2f37816cb",
+      "visible_response_sha256": "9b05e34cf157e79f645b578059ff556e1f9b369c5902eb1de59e6b7648061c23",
+      "physical_chain_sha256": "91342e2ae841591fb3d54448cc40bd2dd0c30b2775419138f83bbaf6ec8eaa9f",
+      "physical_decode_samples": 8596,
+      "prompt_tokens": 252,
+      "score": 0,
+      "capped_empty": false
+    },
+    {
+      "semantic_dataset_index": 18,
+      "logged_doc_id": 50,
+      "doc_hash": "f35c7fbc74beed4fefee0dae5a1b5228844f25d0ac4cc7bdaefa1e048cadf57b",
+      "prompt_hash": "a5576975b9d55fd167c19710cb72e6292c61d83922c167431a274e77ce6a5e9b",
+      "visible_response_sha256": "c2f12378dc75d75d8af9fc746528483753bedd960d34cdf34cc163bf9c8cb6d3",
+      "physical_chain_sha256": "610e76c7b49deba18aa0dabf43f8a9580bc6e2accc66ac96a6e206fcebb2d8b0",
+      "physical_decode_samples": 8451,
+      "prompt_tokens": 485,
+      "score": 1,
+      "capped_empty": false
+    },
+    {
+      "semantic_dataset_index": 19,
+      "logged_doc_id": 187,
+      "doc_hash": "b2c96f6d59dfd53951380aaa2581128423be6f1d16f370cf6965a164d49aabd7",
+      "prompt_hash": "9adfe2a2ba70572a07316234aadeea08c473023c58231cd4679532f6875b490d",
+      "visible_response_sha256": "e1ff58cfe6fe71e5e55513f3d208852e05f8733104f6f086b18462c556de9b77",
+      "physical_chain_sha256": "8bdf5e72a52ce421c070af6d2230f0961ba7e032e9d5dd24f607db30736cf032",
+      "physical_decode_samples": 2651,
+      "prompt_tokens": 205,
+      "score": 1,
+      "capped_empty": false
+    },
+    {
+      "semantic_dataset_index": 20,
+      "logged_doc_id": 153,
+      "doc_hash": "af1347457a18a411add0a333803ba65c79e7d5c52b3c54f858a570ea542e1c31",
+      "prompt_hash": "6518ced11b296f119136a65e178cc1760b68ee596d2357794707255ff2c51ed4",
+      "visible_response_sha256": "1249ac5a801c145d7aee23842efc203ffdb663f29d313b5d6b5f14d417e7b99b",
+      "physical_chain_sha256": "c54b058f31a60df2692c2d7dcdf631113d6ed432bacafec8b823c1fa1489ddc5",
+      "physical_decode_samples": 126975,
+      "prompt_tokens": 258,
+      "score": 0,
+      "capped_empty": true
+    },
+    {
+      "semantic_dataset_index": 24,
+      "logged_doc_id": 135,
+      "doc_hash": "d8931eacf1d508b504f8ca9ce25079bec54af7fb4ad98e93d6dc719d3b6685a1",
+      "prompt_hash": "4e68e28f4da934289a59e01b5b1a5deb590a5038d9f924255647da7e0875fe25",
+      "visible_response_sha256": "0926afbc38ae036cbd146b044b64b3d367741c88cf94d80ff9a400f4c7dc7dc5",
+      "physical_chain_sha256": "34035d61fc8ad1145fb51b8fb60af4413c5f53ece52a9af9185c09f6ed67a00e",
+      "physical_decode_samples": 5008,
+      "prompt_tokens": 358,
+      "score": 1,
+      "capped_empty": false
+    },
+    {
+      "semantic_dataset_index": 27,
+      "logged_doc_id": 81,
+      "doc_hash": "f393fd4bef266defdb43a300e1b063e885022a6ea878b34d58154216eda530d4",
+      "prompt_hash": "d3d9aa4f2cfb6f0e98df94287a947f8bf7f695b3ab70f7f3b87bcedcc18bdef8",
+      "visible_response_sha256": "1249ac5a801c145d7aee23842efc203ffdb663f29d313b5d6b5f14d417e7b99b",
+      "physical_chain_sha256": "6cb389094e8daac2b2581b7e604703a03f7fe9902b96830a4eea6af6b5f6cf1d",
+      "physical_decode_samples": 126975,
+      "prompt_tokens": 301,
+      "score": 0,
+      "capped_empty": true
+    },
+    {
+      "semantic_dataset_index": 28,
+      "logged_doc_id": 93,
+      "doc_hash": "016fdf9aac9142ae565ec3d8eb1b36fd4f4341a9633877db9d8f63c1cec35746",
+      "prompt_hash": "1ee6e598a00a5ffc2a898aa8eef22f65afc8874034aaa00fe28c39d6764a5f5c",
+      "visible_response_sha256": "b29fb56572a990645988f376e2f11467f8fc16ca5d2c539d6fe3fff7aad61fe9",
+      "physical_chain_sha256": "aab0bb8ce485e73260d0c292e1da47fadaa0083f1fd437f78e715320fd16bbef",
+      "physical_decode_samples": 9400,
+      "prompt_tokens": 396,
+      "score": 1,
+      "capped_empty": false
+    },
+    {
+      "semantic_dataset_index": 29,
+      "logged_doc_id": 7,
+      "doc_hash": "fe8bca7c43c3649b0d2ea3a2a03b36304e4f2bd86ac5c260485c17474e023f00",
+      "prompt_hash": "22195bfd4a573bfcf82becaaef11d269ceab466169521981100ac622e5671f73",
+      "visible_response_sha256": "bebbe05118c40f78805764a55362dc72564ff505c8c3134e2d6d298a2d7f74ae",
+      "physical_chain_sha256": "cb1f78b6fd14134a63a45a4bfa5c580e7a8c47eaad09ce3a77788ca813cca69d",
+      "physical_decode_samples": 7986,
+      "prompt_tokens": 112,
+      "score": 0,
+      "capped_empty": false
+    },
+    {
+      "semantic_dataset_index": 31,
+      "logged_doc_id": 42,
+      "doc_hash": "9bfdb7a17362f9a18921fbd90a8d4d37815a1ef2bb792f359b5b640eb6738f7d",
+      "prompt_hash": "5986c3a844807bed907bcd683046b0e7ba29c5fd2633fb652c954f2b0c7d7cb4",
+      "visible_response_sha256": "8d72bf445e03c1e2fd8c5f48f1dafb9caca7c46841c1e7ecdf02b345f169e64d",
+      "physical_chain_sha256": "681e110975068505594f20535502451aa999eebefd43ed736b595b8f7ae5eef5",
+      "physical_decode_samples": 10540,
+      "prompt_tokens": 166,
+      "score": 1,
+      "capped_empty": false
+    },
+    {
+      "semantic_dataset_index": 35,
+      "logged_doc_id": 24,
+      "doc_hash": "b7cebb6dd2e44ecdfb6d2c8056f52dd1c2e670a46c9da8850a1e2f7374860cd9",
+      "prompt_hash": "6dd28468fd5ae8a695e700a639bdd9b0fad528b0220db411d7cc1ef70cb1a10b",
+      "visible_response_sha256": "1249ac5a801c145d7aee23842efc203ffdb663f29d313b5d6b5f14d417e7b99b",
+      "physical_chain_sha256": "83532e6e6f638c8ae35fd9ee0ea9521f080272fef7f9b7ba531ee6a8706940a1",
+      "physical_decode_samples": 126975,
+      "prompt_tokens": 165,
+      "score": 0,
+      "capped_empty": true
+    },
+    {
+      "semantic_dataset_index": 36,
+      "logged_doc_id": 168,
+      "doc_hash": "9b3a1e89651a9826c23f00e4c9e214a64340075bc6d495f7a73fc600ac79db48",
+      "prompt_hash": "e4bc3ac00d77296198c271f2990dadbbfcc6b5e2c532dc2abf473bbf6a039cb1",
+      "visible_response_sha256": "8a300dda747ce5a62b48d2af510aa4d3b6df288fd8ba299a05330c28616f18f1",
+      "physical_chain_sha256": "576a7a18dc5c43f2f7e8275a12f398d24ddfa561d28c14b6157d224f79d4e010",
+      "physical_decode_samples": 8942,
+      "prompt_tokens": 171,
+      "score": 1,
+      "capped_empty": false
+    },
+    {
+      "semantic_dataset_index": 42,
+      "logged_doc_id": 20,
+      "doc_hash": "f834f25d6b0a68e9a8b4132b4aee38ab5a578cf0c98f2bac94dc3d42b8b7a659",
+      "prompt_hash": "a8b8d9fb7755d210d9e718a15bff0cd1111fd5d6212ea067b32cea80b11f140c",
+      "visible_response_sha256": "e03aba725217468d1918533124492a5dfe225f88004adf0e4625bbd960d656dd",
+      "physical_chain_sha256": "4836d21031cf6575785140727c63c45703981d24ef5882fe55b2390570c438d2",
+      "physical_decode_samples": 8735,
+      "prompt_tokens": 242,
+      "score": 1,
+      "capped_empty": false
+    },
+    {
+      "semantic_dataset_index": 46,
+      "logged_doc_id": 28,
+      "doc_hash": "d9b848f9d50a9e467d3ff1dd84f83c7ca8ce17fc2ba574d457ee3544152a8a7d",
+      "prompt_hash": "921120ecd78db1d8d57cc1ecf89aae3b441e684946dc6a7d57c331f81270ef23",
+      "visible_response_sha256": "920c6098debea334b5afa387ea15c3552591c1291c9a0f281988dc89c60cc1f5",
+      "physical_chain_sha256": "6ee1eb2261940abff46ef2d0316452c97d41e0321eda25f0208202d69e4805ce",
+      "physical_decode_samples": 3244,
+      "prompt_tokens": 222,
+      "score": 1,
+      "capped_empty": false
+    },
+    {
+      "semantic_dataset_index": 47,
+      "logged_doc_id": 13,
+      "doc_hash": "63c2dd613806558a1679f7b3c598f3ca8415aae7dac38815c4b4c3342f510049",
+      "prompt_hash": "5ab6cdb54ab86fbb037e8dce619535a2f2efe76e943af4db259f40d0a7435d42",
+      "visible_response_sha256": "1249ac5a801c145d7aee23842efc203ffdb663f29d313b5d6b5f14d417e7b99b",
+      "physical_chain_sha256": "e0b767bad114ccdadf5a034f05735387e6eb744939ca840ca63ef78bad1e9da1",
+      "physical_decode_samples": 126975,
+      "prompt_tokens": 156,
+      "score": 0,
+      "capped_empty": true
+    },
+    {
+      "semantic_dataset_index": 48,
+      "logged_doc_id": 94,
+      "doc_hash": "5564c01e2e1e33ce2bb508814a049c75fcd57187752ef8150d9d470cd918a18a",
+      "prompt_hash": "85fb7a114ac9cec1a00f447838ae7d4f95622606d024c3a4c0e149b11d7bb547",
+      "visible_response_sha256": "5caf965809196d22acdc43d6acd5304c315f440a3aade1936113ea49bded2959",
+      "physical_chain_sha256": "83d4cacbf831c30ae3051d5e2772f58c2006063333080600c4db23644eeb748a",
+      "physical_decode_samples": 12818,
+      "prompt_tokens": 420,
+      "score": 0,
+      "capped_empty": false
+    },
+    {
+      "semantic_dataset_index": 50,
+      "logged_doc_id": 61,
+      "doc_hash": "39d13db74e279e1277b2e742213c7426e7fe62ab5745ff1d139a111fc289e38d",
+      "prompt_hash": "3b702c7f0c8d7b25d6b04232b658bd8bcca3eb034d3e2f5a1f715aa739f73fa8",
+      "visible_response_sha256": "322851cf288d39674053fae31998cc74bf19a63aedc8eb850696af3986731534",
+      "physical_chain_sha256": "5e5df8ba04cedc64ba163c9f9b24b0052d971c0b18be3380345b0e7218f477a9",
+      "physical_decode_samples": 3767,
+      "prompt_tokens": 181,
+      "score": 1,
+      "capped_empty": false
+    },
+    {
+      "semantic_dataset_index": 52,
+      "logged_doc_id": 15,
+      "doc_hash": "89f2867ed736e3794db41cd102fa91e9fbb9b4f6d6f09c41947b287a6c63b9fe",
+      "prompt_hash": "9b2a32b3b026c28757fc17a246ed137060bf2089f157021b13a60cd376434627",
+      "visible_response_sha256": "e20694374556788895d8e258495dce4d12275f736a7850f4ba43cc73244441b1",
+      "physical_chain_sha256": "9be01952221a519cf131479e3a9aacc7d695a02cd8643aa00c34b2af3beb6638",
+      "physical_decode_samples": 4554,
+      "prompt_tokens": 240,
+      "score": 1,
+      "capped_empty": false
+    },
+    {
+      "semantic_dataset_index": 56,
+      "logged_doc_id": 123,
+      "doc_hash": "41a03102c1dc1a9f32cad4db8bfa687d9e75d6774a9636c822ef1954f8b3893e",
+      "prompt_hash": "e8c6d38930a2d49d98def3f4652495dd5048aef54b164e7e6c3ed3b86b0980f7",
+      "visible_response_sha256": "fedc8d9fbeb9afd551c1475266f438e1f6254712bd1671ea8f4a6e247e455024",
+      "physical_chain_sha256": "fac95be78699d07dcbdb72051171129019792e700449e1cd7901233b63606eae",
+      "physical_decode_samples": 9576,
+      "prompt_tokens": 204,
+      "score": 1,
+      "capped_empty": false
+    },
+    {
+      "semantic_dataset_index": 60,
+      "logged_doc_id": 160,
+      "doc_hash": "b09f2f36099a476298df01cd38c8b12ba76a69c594e56f75b18601d23ada91b4",
+      "prompt_hash": "cb8c84cdc35c6744553209a7fb2cbe21657933dc2227a3e2c854d339c63d6a77",
+      "visible_response_sha256": "5be8f636028074079aea03d6abc3d8ef196fbe7d650da9adfc4a254b9eb12d02",
+      "physical_chain_sha256": "ddd1eb51bd3270f4db246769922346159577342ee76f7ce952f327ee5eb4e424",
+      "physical_decode_samples": 2482,
+      "prompt_tokens": 227,
+      "score": 1,
+      "capped_empty": false
+    },
+    {
+      "semantic_dataset_index": 61,
+      "logged_doc_id": 27,
+      "doc_hash": "959518ada8c0bc4c3d4111cce1cd4dee5c16d90d2ffe9533869a3027a991e07b",
+      "prompt_hash": "03955b1ca0b4e6d531a0d839fd5add2ca4a31adb6fba13a57ec5465a8a414782",
+      "visible_response_sha256": "1249ac5a801c145d7aee23842efc203ffdb663f29d313b5d6b5f14d417e7b99b",
+      "physical_chain_sha256": "eb82fb710526abc5ed9db6351507d6fbacb2e241d01787c6fab7a7d6dbaf2919",
+      "physical_decode_samples": 126975,
+      "prompt_tokens": 250,
+      "score": 0,
+      "capped_empty": true
+    },
+    {
+      "semantic_dataset_index": 62,
+      "logged_doc_id": 29,
+      "doc_hash": "8e7aa28cc05f6e9a571c54602c337b38bf7fd2ea999bf20d0331813cff24ee3a",
+      "prompt_hash": "82d4afb42d575721977ce5d975e38861e7399f6b8355c5f936bea15101b80300",
+      "visible_response_sha256": "3cbc3ea91d9ffdcfae041818875d7e53868239f9bfe06321dfb71d2e0e1094d1",
+      "physical_chain_sha256": "a3e9b82940c0756bfd06c050cd6ea1ef222b1b782a3b5f1634fdb65eac7a375e",
+      "physical_decode_samples": 7447,
+      "prompt_tokens": 258,
+      "score": 1,
+      "capped_empty": false
+    },
+    {
+      "semantic_dataset_index": 63,
+      "logged_doc_id": 90,
+      "doc_hash": "be5b70460195f07e56a626ae0116b8e6fe398d2838d0138f77c74cf371e594b3",
+      "prompt_hash": "bbde5016f24a22c0b8987d2a41856ffd69370466e0c7f4aafa6c7542e315eb8e",
+      "visible_response_sha256": "dc207e15c0aa829e26d433e5b7ed670001deedb537a56612a9f004f9945a8eee",
+      "physical_chain_sha256": "8e0a58a030811b3ece876228d56d33249fa3c33c213694d76f5a7b5f2d1c1f68",
+      "physical_decode_samples": 10220,
+      "prompt_tokens": 252,
+      "score": 1,
+      "capped_empty": false
+    },
+    {
+      "semantic_dataset_index": 67,
+      "logged_doc_id": 127,
+      "doc_hash": "ed8cfb71ee26f1ae1f4d67f2660507c48b87d50aa6c6a032b410fb2f99766c75",
+      "prompt_hash": "871841cd8b8d30ff1b7e8f976f1aa360fa0c66f64e506a78ff88bd499ca2bd1e",
+      "visible_response_sha256": "430e07df21a9532638cbdfba1963b0c97937b6092ebf541013bf0dfd3411defd",
+      "physical_chain_sha256": "3c8306d1189ae67b8a843c580dfb9e4a061f214b7bd3edc7a20cb2ea0e55a086",
+      "physical_decode_samples": 6769,
+      "prompt_tokens": 178,
+      "score": 1,
+      "capped_empty": false
+    },
+    {
+      "semantic_dataset_index": 73,
+      "logged_doc_id": 121,
+      "doc_hash": "e52785bfdf8c97fab1a5650a36656065aaee60a612d05a0069eeec8bb38f961a",
+      "prompt_hash": "b6379cbe87c1d0e7bc9ecd53adea5d407dc61da3fd1cc944dbf12ffdb88715fc",
+      "visible_response_sha256": "b185144aa517bdb6dd8f3246a321eebfa21edb343e9d81f9ca27214049902390",
+      "physical_chain_sha256": "1a1cb7bc96f627dea84904b97dc07885311de161fcf0ff8ca4c974b758916bf4",
+      "physical_decode_samples": 9192,
+      "prompt_tokens": 187,
+      "score": 1,
+      "capped_empty": false
+    },
+    {
+      "semantic_dataset_index": 80,
+      "logged_doc_id": 188,
+      "doc_hash": "2c397ac98ceb9853d32a5ab84a1755dd56a5e6092531e7383a3976d5fe34e209",
+      "prompt_hash": "df498f2a8e07135f953db101e48318b208160661d3c3c49362e8728807df2ecd",
+      "visible_response_sha256": "bd9b01e9933a0284f40fe53cd6ad8dad6bfc521098dc03b515eb8a5077aca979",
+      "physical_chain_sha256": "d47febe50a3c10ad407784f95066ed372c7922c5b26f743ec5e46cacbcc43854",
+      "physical_decode_samples": 6245,
+      "prompt_tokens": 234,
+      "score": 1,
+      "capped_empty": false
+    },
+    {
+      "semantic_dataset_index": 81,
+      "logged_doc_id": 136,
+      "doc_hash": "8242f046706473bc0f292e2fa37d1080ee259238564beb492194c4aa7f0f41c8",
+      "prompt_hash": "a73ea6ff6a8f3155dfc1036a6864acc159d2dc3ea56dd2559ec789b23bca4e7d",
+      "visible_response_sha256": "d759df31e2ee15045b9e46712efc255dc2fc51c817dec6d29875dad486078b99",
+      "physical_chain_sha256": "4b95efaf26f188336d88afdb5637e3b8d0fb642aebbc3df042b24478c75a6e43",
+      "physical_decode_samples": 8506,
+      "prompt_tokens": 642,
+      "score": 1,
+      "capped_empty": false
+    },
+    {
+      "semantic_dataset_index": 84,
+      "logged_doc_id": 174,
+      "doc_hash": "3ea065d7b0960e11550f048329d9b4ff4a8523ad10b08406eb262d7fbed4fbd2",
+      "prompt_hash": "4137219bc1a1507ba2ce70b418ac3620d986cd10e8c58958e71264aaa4f917c2",
+      "visible_response_sha256": "c3a69391e05b767f81a45dc0751a60dcc5e96560a415bb34d6ec8e9a02447ccc",
+      "physical_chain_sha256": "72ddc1b653d3254b65f7be47ed3ecdf95bd8081447b6bd4fdb1f86f34b79a9a4",
+      "physical_decode_samples": 9978,
+      "prompt_tokens": 299,
+      "score": 1,
+      "capped_empty": false
+    },
+    {
+      "semantic_dataset_index": 86,
+      "logged_doc_id": 184,
+      "doc_hash": "b090ecd0b3863a6461046d867eacdef689b646a0a99beae987239fdbfc03e31f",
+      "prompt_hash": "fec0b06eca48d9d8b0d6dd761e0af523b40f3e60b5d17c94d8e29f01f5235235",
+      "visible_response_sha256": "1249ac5a801c145d7aee23842efc203ffdb663f29d313b5d6b5f14d417e7b99b",
+      "physical_chain_sha256": "4951459a9b3fe7c353a42ec55f4a7b3d6efb7663904e2bdc92701e0ce68a7274",
+      "physical_decode_samples": 126975,
+      "prompt_tokens": 312,
+      "score": 0,
+      "capped_empty": true
+    },
+    {
+      "semantic_dataset_index": 87,
+      "logged_doc_id": 9,
+      "doc_hash": "ecf80e6cfea7f1b3760f0587c152a66c15d5def6b9d48fd8be04f0b6ebb4928c",
+      "prompt_hash": "797230b268e9b048a017fd5e7b9dce969c747e2ceca37a48cc3830e515ac6f78",
+      "visible_response_sha256": "9c634a1b664120998ecc444e3dbade5057a1ea638991a3d9b44a6c42028e4538",
+      "physical_chain_sha256": "6bdc9f8551313a451fe86c1f6654892bd6a55f8e688be96b044ac1d802d5b82f",
+      "physical_decode_samples": 1555,
+      "prompt_tokens": 173,
+      "score": 1,
+      "capped_empty": false
+    },
+    {
+      "semantic_dataset_index": 90,
+      "logged_doc_id": 80,
+      "doc_hash": "126c3e7d7207a5b0f219ac9eba3e9f25b0d991a5a08eb462ee60af6ae44f9c94",
+      "prompt_hash": "1027393c47a7c75a467bd6f8d0804ad51a783c7850f8d48b251b7027c64dfd93",
+      "visible_response_sha256": "1249ac5a801c145d7aee23842efc203ffdb663f29d313b5d6b5f14d417e7b99b",
+      "physical_chain_sha256": "832e8008fb7baf2ebcacf83bdf97fafd912eb5e21e8a4e9ca14a2e6fa862b520",
+      "physical_decode_samples": 126975,
+      "prompt_tokens": 217,
+      "score": 0,
+      "capped_empty": true
+    },
+    {
+      "semantic_dataset_index": 91,
+      "logged_doc_id": 102,
+      "doc_hash": "6f65fc349e48cb3365874146bc08f20d09a536384a0bf47a9e62c46579d33f14",
+      "prompt_hash": "9469db156a99b11f1492a902c0da9c4f703fcc627b9a850102f367ab4ffebc5f",
+      "visible_response_sha256": "800b5583db32a5874bb0f04562c78922dfcb347ae232912dd45ed26dcb8d1e50",
+      "physical_chain_sha256": "e625306e32bffbb67dabaa78211705284673f51c07df5455b4d491862ab07e70",
+      "physical_decode_samples": 6978,
+      "prompt_tokens": 223,
+      "score": 1,
+      "capped_empty": false
+    },
+    {
+      "semantic_dataset_index": 93,
+      "logged_doc_id": 182,
+      "doc_hash": "2f7c0e25deaa33e24622dd6d9f4b71f533a5db969d519699c69efe6dea9752cb",
+      "prompt_hash": "eb4346a6d41be4fcce3bda227bdf8a1101cdf804ec137aca4b12a29b66630ff1",
+      "visible_response_sha256": "de9857769b34ad62eb5b0594da833fd589e6de24b4873fac308ac4e7458ad793",
+      "physical_chain_sha256": "ce8af9c2e65087fbe45d57f1e70a8ee80156cd394bf1421806653f9e96e7f9f9",
+      "physical_decode_samples": 8707,
+      "prompt_tokens": 200,
+      "score": 0,
+      "capped_empty": false
+    },
+    {
+      "semantic_dataset_index": 94,
+      "logged_doc_id": 173,
+      "doc_hash": "e8d54c62f0d0add12cad577a5b0cdfd43fcabaed5e709d1cafce2afd8c9bb853",
+      "prompt_hash": "57659143a7e7e55a0a1fc443ca89f97608d64ae2603d16be4d80ef25b4c54631",
+      "visible_response_sha256": "94bb89626e181638f9a66a0e4fb0f9227939235c1576050aef3ae9f33f0357b4",
+      "physical_chain_sha256": "eeec95445cbc7464c8bcbbfeaed0ab70e80b6417b21a9ac120a0b6fccad0d473",
+      "physical_decode_samples": 8907,
+      "prompt_tokens": 265,
+      "score": 0,
+      "capped_empty": false
+    },
+    {
+      "semantic_dataset_index": 102,
+      "logged_doc_id": 109,
+      "doc_hash": "1e5af1dc5943030c7e54e1530900a43105431111967b0fa55fb90f235c50aef8",
+      "prompt_hash": "76566b4cc86d52e78eb68d1358a2b8cf266ab140647a1a7d91f83074a14595fa",
+      "visible_response_sha256": "5cd2aef5d3fd289712ab49c9ef69fb8189a1b5a32f74a04c8565ef72405173ac",
+      "physical_chain_sha256": "eec3f47390ba7a56742f527d91dc3c5687baa7a684f8c12a084254a5a580b2d9",
+      "physical_decode_samples": 7647,
+      "prompt_tokens": 352,
+      "score": 0,
+      "capped_empty": false
+    },
+    {
+      "semantic_dataset_index": 109,
+      "logged_doc_id": 193,
+      "doc_hash": "2500117464ebb494e84edf47b806cfaad735a297370808da3fa4e0068c6af374",
+      "prompt_hash": "b128e433382237d299b3fb629181830588efb8dba55694ec9fb0356fb9a1c606",
+      "visible_response_sha256": "5a0ea58aa557a12910596b0ef904d446e322dfe157509ac1cfff9c0ebc74f624",
+      "physical_chain_sha256": "183bffab55292f4cf4eb4a23cdddcc5f0e7772a5b0fb930762dad6ac21474fff",
+      "physical_decode_samples": 9981,
+      "prompt_tokens": 543,
+      "score": 1,
+      "capped_empty": false
+    },
+    {
+      "semantic_dataset_index": 114,
+      "logged_doc_id": 192,
+      "doc_hash": "21c304be73bb80f5069f455665a1c7346a5fffda908c1da7d183ed299c0377f9",
+      "prompt_hash": "316c00f7ffc8ec5a710361806bce44f55089855bd1474f52e955de9069149d31",
+      "visible_response_sha256": "3c898a87351dd8d3e70a4b9f42f1eb6f3895797186280590886ad99a495416d0",
+      "physical_chain_sha256": "7387428e8df1ed0ef518937a35490f6cfcf8e9d6da3bcf7306d06d6b67ccb693",
+      "physical_decode_samples": 6541,
+      "prompt_tokens": 194,
+      "score": 1,
+      "capped_empty": false
+    },
+    {
+      "semantic_dataset_index": 115,
+      "logged_doc_id": 47,
+      "doc_hash": "5e2f0f3cf527fe4dc446dfe5381f9ecb8cdaa289755205ca644dc87643e25024",
+      "prompt_hash": "73e722aa900903220515e93cc47a9164835dbd11664dcf7822121164e044bc78",
+      "visible_response_sha256": "99f4b9a0596aa44776682b9077bf97e3375cc6061d32f660b0bfeed400e0f3f8",
+      "physical_chain_sha256": "b7a8f17609206de3f4e40b9cfb28067d3fcf6430297ccf642ba150c107b89f9a",
+      "physical_decode_samples": 9510,
+      "prompt_tokens": 259,
+      "score": 1,
+      "capped_empty": false
+    },
+    {
+      "semantic_dataset_index": 120,
+      "logged_doc_id": 19,
+      "doc_hash": "3ec351d45152ebd28c63a6b8a86ba3c8638a7647bae6bc594017aa0fb01928a9",
+      "prompt_hash": "68fdd21a8bf29a28bdf5ca9114549e35ee3caca45377dc2fb7e84079ffc7aff7",
+      "visible_response_sha256": "c7919e2847405adf51b8765b12badfbffdb757d62d24eb8bcf60ef7606d1b90f",
+      "physical_chain_sha256": "99c6073991fb1b8f1a6025a198214c5beca147c55eaa353fe240ecc3d7c4d04a",
+      "physical_decode_samples": 14649,
+      "prompt_tokens": 282,
+      "score": 1,
+      "capped_empty": false
+    },
+    {
+      "semantic_dataset_index": 121,
+      "logged_doc_id": 18,
+      "doc_hash": "33df681a905f813ea6c2c5e7a3e4cdc7b8ad58f895f562d0b423939fd3a90c67",
+      "prompt_hash": "93e95e6747de8e62c9f1bb40cc18de7330afe70268b449f2d347f875ead80809",
+      "visible_response_sha256": "b473ccd0a6326033e5f3f4d24c7355c650f25630f0d8a89c9dfb5b7dfe233a62",
+      "physical_chain_sha256": "664a777b133fe2b72e16cd709f32e621afdbd6078022b15d9635dc5ea71fd370",
+      "physical_decode_samples": 11722,
+      "prompt_tokens": 209,
+      "score": 1,
+      "capped_empty": false
+    },
+    {
+      "semantic_dataset_index": 122,
+      "logged_doc_id": 48,
+      "doc_hash": "19a180abc5b8efd4a87e0e18f3d738f93395818e73e445b94d5024d3cc72216d",
+      "prompt_hash": "302ad5289278c5cfee09f1f45e90156503e316351f9dd59fa9321f13809834b2",
+      "visible_response_sha256": "8737689993af2f77c3ab63e5f60c72410086024d75891b205bd95086b261d479",
+      "physical_chain_sha256": "5e487bd71a045a628cf2194c8d305991d8bee24f5d5f61c688ea01162d4fc4ca",
+      "physical_decode_samples": 9002,
+      "prompt_tokens": 241,
+      "score": 1,
+      "capped_empty": false
+    },
+    {
+      "semantic_dataset_index": 123,
+      "logged_doc_id": 17,
+      "doc_hash": "f638543ac6d115bc0f4d21d29028bc655b629009d9fb8a840ceb12d7acaa824d",
+      "prompt_hash": "12ab4d92041a2931f0f5eb08cfbc89e6dc81012807f5bf44d2d612a0e5a28fc2",
+      "visible_response_sha256": "508ac00187024fce22393ddad54cf549a4ba400c2acb2994fb55e185665e191f",
+      "physical_chain_sha256": "5646bb70957f940e9d093da40b87c68e6741a181d8120b9727eda1b7176b34d7",
+      "physical_decode_samples": 3495,
+      "prompt_tokens": 171,
+      "score": 1,
+      "capped_empty": false
+    },
+    {
+      "semantic_dataset_index": 127,
+      "logged_doc_id": 36,
+      "doc_hash": "d615cbec7c7e99d975bec295f7aa111a81eff68b611812e740594d4ca5e51bc0",
+      "prompt_hash": "4946ed81015f37940d60f0f32a51450bd245931e9198c4d448dce0772693924c",
+      "visible_response_sha256": "cc32d66bc3064057daf2d75a804188b959328966a7b92e9181e750c9851b0f8e",
+      "physical_chain_sha256": "7aac6e850145774c75352d525cd476ae4d07f9bad6618811918052f5df97744a",
+      "physical_decode_samples": 15845,
+      "prompt_tokens": 2428,
+      "score": 0,
+      "capped_empty": false
+    },
+    {
+      "semantic_dataset_index": 131,
+      "logged_doc_id": 114,
+      "doc_hash": "f69b60ad1939eef9a91e0180a556a67ab395c09b9b4d76772d35612c53d86d33",
+      "prompt_hash": "d127a1d090a050b646e60d028dd4d08f772e22c2eb81414df29941bc3ae75c1c",
+      "visible_response_sha256": "d53c35c112bd9f29e816ee22be7def1af78c4b7860b5a1c750f33824b385b3fa",
+      "physical_chain_sha256": "b321cc79aa231db3ddaeec9e1f9f52bacf09ee0af7fce957053142026d6eb22f",
+      "physical_decode_samples": 5999,
+      "prompt_tokens": 309,
+      "score": 1,
+      "capped_empty": false
+    },
+    {
+      "semantic_dataset_index": 135,
+      "logged_doc_id": 154,
+      "doc_hash": "0bdb2b0de3819fb38e1b3a305b10f493c1037c9b512c53144946179d283fbf56",
+      "prompt_hash": "d7ee41393d67002bbf975ba30f775547eef7a2e226d70d4af5b30e14586170d3",
+      "visible_response_sha256": "0933f1ebcf894edee29b46faadc0cd56990ab94779be5894cacf295ea4be8a9a",
+      "physical_chain_sha256": "1050591809a0f554dc997171b76251e21519769fae5f23c0ba471d59eb7fcfd0",
+      "physical_decode_samples": 6772,
+      "prompt_tokens": 202,
+      "score": 1,
+      "capped_empty": false
+    },
+    {
+      "semantic_dataset_index": 136,
+      "logged_doc_id": 73,
+      "doc_hash": "b3263f61ce49afdec39a85f20f45e44d0780839b0547cb26ad37dbd79d796ab2",
+      "prompt_hash": "733cfd4bf82355ffd119ed254dce3000807eed9c1aaa64de915982f4090b8f0e",
+      "visible_response_sha256": "235911678aa79d640428320c4039ec198cdcf307c205428ab0c032d08c9fff77",
+      "physical_chain_sha256": "bffe2b1220371bc9ff6506a56f64663d9123b5d2915e5ed7b7806ff4b2b1f082",
+      "physical_decode_samples": 4387,
+      "prompt_tokens": 241,
+      "score": 1,
+      "capped_empty": false
+    },
+    {
+      "semantic_dataset_index": 139,
+      "logged_doc_id": 115,
+      "doc_hash": "8406054efbcdf1bedaacf791a15be5f4eec2f76bbbaf3ac689b6e78ea57ded88",
+      "prompt_hash": "12bccd268d8091a77aa93b2775321995a968a69a73b2caf98ca305a7f03235f8",
+      "visible_response_sha256": "1249ac5a801c145d7aee23842efc203ffdb663f29d313b5d6b5f14d417e7b99b",
+      "physical_chain_sha256": "5ab9daf95bbcb2bccde842ed9c10b6b88c74b14c8be502191fb75496e34aba1a",
+      "physical_decode_samples": 126975,
+      "prompt_tokens": 237,
+      "score": 0,
+      "capped_empty": true
+    },
+    {
+      "semantic_dataset_index": 144,
+      "logged_doc_id": 144,
+      "doc_hash": "7386fa336142681b2d6e7dd876fe53f60c9331863d553921bd9c425a6417f8c3",
+      "prompt_hash": "a806da62df2af9ee1e97008781f8d855c7d22ce78f8baca1782e2c1341b27a78",
+      "visible_response_sha256": "60c0c202688e2ded799494c8453215e1596d9d4f89482e2a029fb1a75b560c29",
+      "physical_chain_sha256": "bc07296c2bca00e338d4a67a851062bf2a0e4b68029550952ea96945472c899a",
+      "physical_decode_samples": 4392,
+      "prompt_tokens": 118,
+      "score": 1,
+      "capped_empty": false
+    },
+    {
+      "semantic_dataset_index": 147,
+      "logged_doc_id": 166,
+      "doc_hash": "0c77edcd57b5d643402938af54996ecd301ddef8675d758879acafaa376fa0b2",
+      "prompt_hash": "9ce40d6e232fee4b7b2fa62c185ea30b4d7e8726e4a226c0f3ea8ab797002c3c",
+      "visible_response_sha256": "1249ac5a801c145d7aee23842efc203ffdb663f29d313b5d6b5f14d417e7b99b",
+      "physical_chain_sha256": "77786b1b4c6b0b1cc53722a47fd75f264693c731a0b9a38cd0f6d2d8abb59278",
+      "physical_decode_samples": 126975,
+      "prompt_tokens": 232,
+      "score": 0,
+      "capped_empty": true
+    },
+    {
+      "semantic_dataset_index": 150,
+      "logged_doc_id": 179,
+      "doc_hash": "ea128ff0a7d26654fcd2e569a4569e35a7bd04e543d32e1944e830b79d1cda5d",
+      "prompt_hash": "f5fc1570dfb81621ddbd64a6b7057cf14303c6d6a721323ffb98cdb635e9eeb8",
+      "visible_response_sha256": "009f0de553de2640f1a01d2dc71bc85f5a841c92b61188b8e675c1fd2f5bde3b",
+      "physical_chain_sha256": "b29d916fd1bfdaa5f73c48bb0513551c65ca78685733525ce74991b9a03f6640",
+      "physical_decode_samples": 6014,
+      "prompt_tokens": 210,
+      "score": 1,
+      "capped_empty": false
+    },
+    {
+      "semantic_dataset_index": 152,
+      "logged_doc_id": 150,
+      "doc_hash": "4f28ff18d097650e64c9b43e15972784c11bed7b83ea73632702afbdbf19f345",
+      "prompt_hash": "26fa8f9e8fe3bb8ee9bb7ff00ffa5cc3d6a095e578eacd37ca863598f8fed823",
+      "visible_response_sha256": "7dc6a7b9d74e93edcf8396605a6160a9c00f816892f7ae2b07730af8cbb531b4",
+      "physical_chain_sha256": "91db49df3ca27dff16f00486a88998fb91f361a3991c86e0a7e90cac277a6bf3",
+      "physical_decode_samples": 5480,
+      "prompt_tokens": 485,
+      "score": 1,
+      "capped_empty": false
+    },
+    {
+      "semantic_dataset_index": 153,
+      "logged_doc_id": 91,
+      "doc_hash": "790bac76e6283fa086181392e9d1175867e01943eddb51a47b142f0f5828220c",
+      "prompt_hash": "50ce2511a3fdc9d84001e994d466fc0ccc01449909f98d8fc368869742f5e71b",
+      "visible_response_sha256": "e8dfb5b71120da7d7800ac2c85690204f3c9bec450a8c17a442a2fda4a9d4f5d",
+      "physical_chain_sha256": "9ed1a6be1dc37e497a1a3be20b205a889a94801acb5c9d2680663dd7000c0855",
+      "physical_decode_samples": 2642,
+      "prompt_tokens": 255,
+      "score": 1,
+      "capped_empty": false
+    },
+    {
+      "semantic_dataset_index": 154,
+      "logged_doc_id": 176,
+      "doc_hash": "d41538f74ad2e2247b29334471c6ce17d13d1f4187c0162438f4dfe0d270f299",
+      "prompt_hash": "432e2ebc8bf4a7255d670c01c9af9b9009732b790a7aaf68d9422a36e2823cd3",
+      "visible_response_sha256": "b630e98377cf06e7d95de8b10f5c14b73d2e819c00de6b2954c4b0b6371dac74",
+      "physical_chain_sha256": "ce7bb7f82e7f87f354574386e7c0d8911e809bc2fc95dd10c87f40c2152984e1",
+      "physical_decode_samples": 4974,
+      "prompt_tokens": 423,
+      "score": 1,
+      "capped_empty": false
+    },
+    {
+      "semantic_dataset_index": 158,
+      "logged_doc_id": 67,
+      "doc_hash": "07ef2947c923606d810e193dc114fad37d333b684badec743e0e02abc0c12d09",
+      "prompt_hash": "b4731e4804619c92f8004099911d3ac42875b7dd4f32e5a8ba1fb47bd739cafd",
+      "visible_response_sha256": "e41ecc3521fae3b3409048753016923d69b2c6614f409f0eeb474f46a9780a87",
+      "physical_chain_sha256": "0d1d8e3585b634f9b44761c02308efed43f6c13b1e8c7662165b014d9411ee92",
+      "physical_decode_samples": 9402,
+      "prompt_tokens": 225,
+      "score": 1,
+      "capped_empty": false
+    },
+    {
+      "semantic_dataset_index": 160,
+      "logged_doc_id": 86,
+      "doc_hash": "b21b5e72bf60ccbbbb8752a92ec79c1c421baa0d3215d39677c8fbcf83c58300",
+      "prompt_hash": "43267f98a51b4419976354876f80aa9e3b9fd50df2e8e581b88d1a1b4b396a70",
+      "visible_response_sha256": "1249ac5a801c145d7aee23842efc203ffdb663f29d313b5d6b5f14d417e7b99b",
+      "physical_chain_sha256": "c1de976f8b42a72b91ff2fdcb0e9db40aa8c362159d94407e0fe4953f06b2797",
+      "physical_decode_samples": 126975,
+      "prompt_tokens": 312,
+      "score": 0,
+      "capped_empty": true
+    },
+    {
+      "semantic_dataset_index": 163,
+      "logged_doc_id": 194,
+      "doc_hash": "46717fc9df1240260bf8277261377a8ce1d9265630b82b642aeb6711c491081d",
+      "prompt_hash": "d119e54b733522ea357d3fb0c1ed9e9b2e13fdf6c9a32eb296d75f5137382ede",
+      "visible_response_sha256": "55a94af6b9cd9a75e212e61af02e89913d611844b83d83cb6588e052b78cf6a1",
+      "physical_chain_sha256": "dab07250a620ffe0bacb51769d09598da5381d0ba0f6ea6ec82da6d856b7cda6",
+      "physical_decode_samples": 7622,
+      "prompt_tokens": 248,
+      "score": 1,
+      "capped_empty": false
+    },
+    {
+      "semantic_dataset_index": 166,
+      "logged_doc_id": 163,
+      "doc_hash": "5f5f1bfd4e0cda075ce957355db2fb9721a635add5db476349bf9b6ff4dae1bd",
+      "prompt_hash": "58b6e1da5f402614e7f81f51c5a8796a78fb5665617ba045851ffca04120beca",
+      "visible_response_sha256": "83ac9285eea7109302db0764a4b312c65ce33586409ef34940ba2531d5bf2b7c",
+      "physical_chain_sha256": "7e768890e0a4d5719778890ea71aaf445971ca897e548402081f9e6c5693031c",
+      "physical_decode_samples": 12655,
+      "prompt_tokens": 257,
+      "score": 1,
+      "capped_empty": false
+    },
+    {
+      "semantic_dataset_index": 167,
+      "logged_doc_id": 63,
+      "doc_hash": "af9e76ea06a2a2549772a779ede83740cf9decdec80bdd4c478c520ec0303438",
+      "prompt_hash": "18eb53b23c1b4c07c09aca8cd1eff7460bfeb8a2737b1a58ddae8fdfb3259d9f",
+      "visible_response_sha256": "3db3253e9a4ea9331fdfad5e273e56536f6b037de8693b6f5c60be6082491512",
+      "physical_chain_sha256": "d459924c3602c4bbde971c66b7c74de00fed7caeb1f4f79bd00fbb8e4f4c48f1",
+      "physical_decode_samples": 1663,
+      "prompt_tokens": 148,
+      "score": 0,
+      "capped_empty": false
+    },
+    {
+      "semantic_dataset_index": 168,
+      "logged_doc_id": 16,
+      "doc_hash": "7179c282f18f0549385afb7f2e9de60665c972195247524a496894c29731df6d",
+      "prompt_hash": "4da551a98e234d917c46d1b05e75fa6fd2bf3dab324fee8020594724bfa985a9",
+      "visible_response_sha256": "cd4125de2738faf9f6475205b079e44406c704464e11c5e7b355a8a1a180e433",
+      "physical_chain_sha256": "301ea2c2383c642d0c2aa38ea50a338807062737aa80df131f1e1f7df329aa38",
+      "physical_decode_samples": 7747,
+      "prompt_tokens": 235,
+      "score": 1,
+      "capped_empty": false
+    },
+    {
+      "semantic_dataset_index": 169,
+      "logged_doc_id": 60,
+      "doc_hash": "13fd57b82316ba7f3e10dfaaf35da637c5d82d8374e2b0bdfe87c588cfd23efd",
+      "prompt_hash": "e88cd863035e0b6c0683ea94ee8d002ddbdb9201e739290482e4b31d3df93e1f",
+      "visible_response_sha256": "4ab7ca6a1e155501779f70b5a1e2852bb6f2b1e3f0eb38239efe6402998ba259",
+      "physical_chain_sha256": "5e6b4dfed6298af3bc5499eb4cdefa3b48cc4c1b6654ccea95f22845b4b9f11e",
+      "physical_decode_samples": 2982,
+      "prompt_tokens": 171,
+      "score": 1,
+      "capped_empty": false
+    },
+    {
+      "semantic_dataset_index": 173,
+      "logged_doc_id": 131,
+      "doc_hash": "2b6cf68945b917e45c9058fdb518fd4ede13cd481b62474d53f82614bae08b50",
+      "prompt_hash": "7f84878715f39f2f8af737d92e5f17cf0b5405bb63d72e012ab59dffb3e43e62",
+      "visible_response_sha256": "6364a3bc681535f6c9ae92f0e2d6ab4cb699d7a6d843aa9105e7986b37840871",
+      "physical_chain_sha256": "a193cbbf11073bcacb96ed0e8bd55d48e1ac9106dada7430aabc90c0d8ed56ec",
+      "physical_decode_samples": 5506,
+      "prompt_tokens": 220,
+      "score": 1,
+      "capped_empty": false
+    },
+    {
+      "semantic_dataset_index": 174,
+      "logged_doc_id": 62,
+      "doc_hash": "a6b03a07b3b2bd7ef54a031b63faf755b7a1da5a845dc29e3e8808aec65e6f86",
+      "prompt_hash": "2a2df0b3e4b058cb1fe2edb26707f38f50382a7ac54ccc54dc9c1a66ea6e6c47",
+      "visible_response_sha256": "2d1e53c773b8d498387ef806d9407fa2726a68248d1ff6bd70f01235eec30ddd",
+      "physical_chain_sha256": "e2f02cf31f58ccb981c0a72be56c9dff4494501899f861bf3f978c2052214fb2",
+      "physical_decode_samples": 6417,
+      "prompt_tokens": 223,
+      "score": 0,
+      "capped_empty": false
+    },
+    {
+      "semantic_dataset_index": 176,
+      "logged_doc_id": 2,
+      "doc_hash": "9d356fa0ad3b434b330ba328c2637de1b378225aedc785e561b884cc2fdc2fa9",
+      "prompt_hash": "83e80734d152883e88e548816309e2382ee050f8e7ac2e00adbb198a5031efb1",
+      "visible_response_sha256": "c59596013ae9b39ac357bd5397f6d0ed9e718c1d695e1bc895bf78e1c1365864",
+      "physical_chain_sha256": "5ffe41774fe729e2a302995982cf5eff1d3e8fbf80026cefa7964cf1897d212c",
+      "physical_decode_samples": 9274,
+      "prompt_tokens": 233,
+      "score": 1,
+      "capped_empty": false
+    },
+    {
+      "semantic_dataset_index": 179,
+      "logged_doc_id": 139,
+      "doc_hash": "9056383aac52eda7df189314d9c03d49bf50502181fe1ae68e68ee5de80a542d",
+      "prompt_hash": "d03d76a52a46af7e4de3079d7d6a49bd2f564ac7a285d5519afa9ef1fcb770ff",
+      "visible_response_sha256": "9ef15cfc35295f14d0c66f84ed0c0b5f9493e6a8d08e39f62f04ac7dfbd42c21",
+      "physical_chain_sha256": "cb13a65db8202bff623e838b0e2f6bcd3667dabbf160b27846a5b1e5e13e7a84",
+      "physical_decode_samples": 7230,
+      "prompt_tokens": 190,
+      "score": 1,
+      "capped_empty": false
+    },
+    {
+      "semantic_dataset_index": 181,
+      "logged_doc_id": 122,
+      "doc_hash": "0b877ef7c24f3ee7e12b2c9994542d5893c147be22d795d57df85e46205d3917",
+      "prompt_hash": "a5478c3344a4e1cc9f0b8ce51f3b5aa217bfb8c268b7208f3253dede88f5cfac",
+      "visible_response_sha256": "165ce1fcb724f5cbdb87addcc6df987884c0d677acc63d99a6b6577e60738944",
+      "physical_chain_sha256": "318159336ec2b0c61141b939acef95d97dea70f3c9513d335f92fb49d9cd341c",
+      "physical_decode_samples": 2868,
+      "prompt_tokens": 285,
+      "score": 1,
+      "capped_empty": false
+    },
+    {
+      "semantic_dataset_index": 182,
+      "logged_doc_id": 169,
+      "doc_hash": "230f6804ed43a7dd81707d2bce637b407e16fab8279a3af18a50cc48f9004e15",
+      "prompt_hash": "775f3289cc70dac9a1bdc09498fbcb9db27c9f9157bd0e56dddc08b31ee53874",
+      "visible_response_sha256": "56c067f476515d726e08edbdcba26f5eb771ecb19e34e77ae24bbf58b69c3c21",
+      "physical_chain_sha256": "11efd0801919f8c3782a58ef2e2872ee1ed5886196e27dd2913c67a01cf40c0c",
+      "physical_decode_samples": 4660,
+      "prompt_tokens": 121,
+      "score": 1,
+      "capped_empty": false
+    },
+    {
+      "semantic_dataset_index": 184,
+      "logged_doc_id": 167,
+      "doc_hash": "4599b579dda8642a0ec1abbefc0321c2450e858496c787a848a2649a469f7bdc",
+      "prompt_hash": "334b0b01e0a259f631be383de2ebe71eb84167ec043777810a717e601e258e73",
+      "visible_response_sha256": "b82898fdfa8583bbd7d6551f06688dfebc6ddc54b880ef7177b8eba28f35e080",
+      "physical_chain_sha256": "3e47299a0d215db4db28e5597fdb083925e2537b6c0186cc33e05069d65f7ae8",
+      "physical_decode_samples": 4335,
+      "prompt_tokens": 173,
+      "score": 1,
+      "capped_empty": false
+    },
+    {
+      "semantic_dataset_index": 185,
+      "logged_doc_id": 84,
+      "doc_hash": "8a6683dc1a41f4dd1f15b40c6376bf959af44e2ecba9e19d7b0120203f47f92d",
+      "prompt_hash": "ef7bca5f3f0e858fa8e2f4a212d8c212476760fb14a177ed44c2fd3f961b29e7",
+      "visible_response_sha256": "4e4b82e6512a5f6111d3860606571813413fcb083add41e48fa867fde5ed1487",
+      "physical_chain_sha256": "20aff02262b7732394b105165dd0b911677dabf0be3ec557d8fadb1274bf5d70",
+      "physical_decode_samples": 8444,
+      "prompt_tokens": 184,
+      "score": 0,
+      "capped_empty": false
+    },
+    {
+      "semantic_dataset_index": 187,
+      "logged_doc_id": 35,
+      "doc_hash": "929cc84025495469dab07b1be2228e76a5d5647b1d76ce7e5c4ec456e28806fb",
+      "prompt_hash": "63539ec251278faac85a99e34cdfb83713c46dbc2f9bd0ba201ba20dede46f3c",
+      "visible_response_sha256": "30368051382a0c94d6edf2ffef393e22d0a391baccc9b154a7992966524f2f29",
+      "physical_chain_sha256": "014675045590e1f1f9bfc5129cebb1cb276bfd307e51f4d39f37b57d9096bbff",
+      "physical_decode_samples": 12439,
+      "prompt_tokens": 156,
+      "score": 1,
+      "capped_empty": false
+    },
+    {
+      "semantic_dataset_index": 188,
+      "logged_doc_id": 147,
+      "doc_hash": "f16f9be42f164680827e17802a4d26e0c44b80c5e684efa957ebd741e6ccc310",
+      "prompt_hash": "cfaf7ed55e9bf2fce6ae309745caf62a32ad249562fe9e7a2f81195cf88587ff",
+      "visible_response_sha256": "8aa484e202fb637c549f2d9b30b80811295d9b71f55a69556f6d4eba28d32078",
+      "physical_chain_sha256": "66e99b17792bf25e0e2de903dd643d2e02ea7779e3bf710154029a2bd5bed1d2",
+      "physical_decode_samples": 3320,
+      "prompt_tokens": 99,
+      "score": 1,
+      "capped_empty": false
+    },
+    {
+      "semantic_dataset_index": 189,
+      "logged_doc_id": 12,
+      "doc_hash": "e170219b5ac94f51360abe28c47e38efb6f0c194484e5df2199f8ba0eef02771",
+      "prompt_hash": "31fc18bdb7bf073553a44e9dff6a87210d6fc6c7b3a3077d250270b815930187",
+      "visible_response_sha256": "8b60efc2e603a88e12a3565fa3b005825e355100cc27fbcc745b084e33c62d7f",
+      "physical_chain_sha256": "85cfc91b638a3b1490cecb05003852e180a435b6adaec4c0d8d4922ffe6ebcab",
+      "physical_decode_samples": 3151,
+      "prompt_tokens": 298,
+      "score": 1,
+      "capped_empty": false
+    },
+    {
+      "semantic_dataset_index": 192,
+      "logged_doc_id": 158,
+      "doc_hash": "c37e7dc479d1fb5fda4f00c86d9c7fc33be1998b28ce0720ec8b9f6822e4803b",
+      "prompt_hash": "9c6a495f5032e58a08af5bfaecd14f0900409725fa17ba2209aa89fa2dd3a45a",
+      "visible_response_sha256": "23bbe1929808c0e01b67da656a86990df7623eed370f39bdeda95ac42da469dd",
+      "physical_chain_sha256": "8a459e8e33f5f748a64d149022af9b4f323a93bdc2727eb823baf48d926c3ad8",
+      "physical_decode_samples": 5502,
+      "prompt_tokens": 141,
+      "score": 1,
+      "capped_empty": false
+    },
+    {
+      "semantic_dataset_index": 193,
+      "logged_doc_id": 56,
+      "doc_hash": "62f1efccaa91b23dd50e6519dbab48df838b3a979440fe3df8119cffcfbe9367",
+      "prompt_hash": "3424b52f0241e49a224a5337fe5a036fba5e9b4c6854dab7c7d4946c148b2f6c",
+      "visible_response_sha256": "80cb04bf4e85143e7978b2ca37d4e356142dd4f411278d90ba015a77b7e3cee2",
+      "physical_chain_sha256": "ba4fa660f956b97cc63970dbfb709b8ec6ffc3edab0852a82b2f632391399b40",
+      "physical_decode_samples": 3794,
+      "prompt_tokens": 231,
+      "score": 1,
+      "capped_empty": false
+    },
+    {
+      "semantic_dataset_index": 194,
+      "logged_doc_id": 120,
+      "doc_hash": "0be3f4e4ecdfe44e7ea2792f9fbfe72dac9fa257dad58578f6f5b2644422130c",
+      "prompt_hash": "9df65aef3f898a8926de8b9e232b950f901928a8351f6816639a348ef8a5407e",
+      "visible_response_sha256": "bd689eb4d6c1bfdb3ff5fed751ad3f601ec652bc181d6934a63cf62e9771c40d",
+      "physical_chain_sha256": "cce09b7ee6f2577ca96bda70c96e57b227c36e8e4645144944e54df2a1e2dbe3",
+      "physical_decode_samples": 7398,
+      "prompt_tokens": 216,
+      "score": 1,
+      "capped_empty": false
+    }
+  ],
+  "capped_failures": [
+    {
+      "first_pos": 481,
+      "last_pos": 127455,
+      "first_step": 3,
+      "first_ns": 2956597918304389,
+      "rows": [
+        0,
+        1,
+        2
+      ],
+      "last_ns": 2961708606773692,
+      "last_step": 126984,
+      "physical_decode_samples": 126975,
+      "ids_sha256": "eccf765f0006d46a00d54f37da97c31c417076186a6790f568dcf1bf390c3791",
+      "last4096_unique": 2,
+      "periodic_suffixes": {
+        "1": 1,
+        "2": 122872,
+        "3": 3,
+        "4": 122872,
+        "5": 5,
+        "6": 122872,
+        "7": 7,
+        "8": 122872,
+        "16": 122872,
+        "32": 122872,
+        "57": 57
+      },
+      "native_prompt_matches": [
+        7
+      ],
+      "semantic_dataset_index": 7,
+      "classification": "Long exact periodic loop at configured output cap",
+      "classification_basis": "Exact full retained-chain hash match to independently classified C8/80 trajectory"
+    },
+    {
+      "first_pos": 321,
+      "last_pos": 127295,
+      "first_step": 3,
+      "first_ns": 2956597918304389,
+      "rows": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "last_ns": 2961708606773692,
+      "last_step": 126984,
+      "physical_decode_samples": 126975,
+      "ids_sha256": "0512759f94e2de572a2f453781c82bff020879c7a6fe3e3680ce6dfe785fb874",
+      "last4096_unique": 2,
+      "periodic_suffixes": {
+        "1": 1,
+        "2": 122814,
+        "3": 3,
+        "4": 122814,
+        "5": 5,
+        "6": 122814,
+        "7": 7,
+        "8": 122814,
+        "16": 122814,
+        "32": 122814,
+        "57": 57
+      },
+      "native_prompt_matches": [
+        12
+      ],
+      "semantic_dataset_index": 12,
+      "classification": "Long exact periodic loop at configured output cap",
+      "classification_basis": "Exact full retained-chain hash match to independently classified C8/80 trajectory"
+    },
+    {
+      "first_pos": 225,
+      "last_pos": 127199,
+      "first_step": 5272,
+      "first_ns": 2956748581130665,
+      "rows": [
+        0,
+        1,
+        3
+      ],
+      "last_ns": 2961982626679235,
+      "last_step": 132253,
+      "physical_decode_samples": 126975,
+      "ids_sha256": "693e7419cd24a22c9bfd83967afac88b7e2b3b54ff3cd367ba9f95ef5b99937e",
+      "last4096_unique": 4,
+      "periodic_suffixes": {
+        "1": 1,
+        "2": 2,
+        "3": 3,
+        "4": 121433,
+        "5": 5,
+        "6": 6,
+        "7": 7,
+        "8": 121433,
+        "16": 121433,
+        "32": 121433,
+        "57": 57
+      },
+      "native_prompt_matches": [
+        15,
+        158
+      ],
+      "semantic_dataset_index": 15,
+      "classification": "Long exact periodic loop at configured output cap",
+      "classification_basis": "Exact full retained-chain hash match to independently classified C8/80 trajectory"
+    },
+    {
+      "first_pos": 258,
+      "last_pos": 127232,
+      "first_step": 31589,
+      "first_ns": 2957581018866196,
+      "rows": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "last_ns": 2963297604021632,
+      "last_step": 158569,
+      "physical_decode_samples": 126975,
+      "ids_sha256": "c54b058f31a60df2692c2d7dcdf631113d6ed432bacafec8b823c1fa1489ddc5",
+      "last4096_unique": 2,
+      "periodic_suffixes": {
+        "1": 1,
+        "2": 123797,
+        "3": 3,
+        "4": 123797,
+        "5": 5,
+        "6": 123797,
+        "7": 7,
+        "8": 123797,
+        "16": 123797,
+        "32": 123797,
+        "57": 57
+      },
+      "native_prompt_matches": [
+        20,
+        62
+      ],
+      "semantic_dataset_index": 20,
+      "classification": "Long exact periodic loop at configured output cap",
+      "classification_basis": "Exact full retained-chain hash match to independently classified C8/80 trajectory"
+    },
+    {
+      "first_pos": 301,
+      "last_pos": 127275,
+      "first_step": 126992,
+      "first_ns": 2961709247393961,
+      "rows": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "last_ns": 2967427180643153,
+      "last_step": 253980,
+      "physical_decode_samples": 126975,
+      "ids_sha256": "6cb389094e8daac2b2581b7e604703a03f7fe9902b96830a4eea6af6b5f6cf1d",
+      "last4096_unique": 2,
+      "periodic_suffixes": {
+        "1": 1,
+        "2": 124838,
+        "3": 3,
+        "4": 124838,
+        "5": 5,
+        "6": 124838,
+        "7": 7,
+        "8": 124838,
+        "16": 124838,
+        "32": 124838,
+        "57": 57
+      },
+      "native_prompt_matches": [
+        27
+      ],
+      "semantic_dataset_index": 27,
+      "classification": "Long exact periodic loop at configured output cap",
+      "classification_basis": "Exact full retained-chain hash match to independently classified C8/80 trajectory"
+    },
+    {
+      "first_pos": 165,
+      "last_pos": 127139,
+      "first_step": 141406,
+      "first_ns": 2962425116141828,
+      "rows": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "last_ns": 2968163148719820,
+      "last_step": 268392,
+      "physical_decode_samples": 126975,
+      "ids_sha256": "83532e6e6f638c8ae35fd9ee0ea9521f080272fef7f9b7ba531ee6a8706940a1",
+      "last4096_unique": 2,
+      "periodic_suffixes": {
+        "1": 1,
+        "2": 126572,
+        "3": 3,
+        "4": 126572,
+        "5": 5,
+        "6": 126572,
+        "7": 7,
+        "8": 126572,
+        "16": 126572,
+        "32": 126572,
+        "57": 57
+      },
+      "native_prompt_matches": [
+        35
+      ],
+      "semantic_dataset_index": 35,
+      "classification": "Long exact periodic loop at configured output cap",
+      "classification_basis": "Exact full retained-chain hash match to independently classified C8/80 trajectory"
+    },
+    {
+      "first_pos": 156,
+      "last_pos": 127130,
+      "first_step": 162981,
+      "first_ns": 2963450739031810,
+      "rows": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "last_ns": 2969251004867432,
+      "last_step": 289969,
+      "physical_decode_samples": 126975,
+      "ids_sha256": "e0b767bad114ccdadf5a034f05735387e6eb744939ca840ca63ef78bad1e9da1",
+      "last4096_unique": 2,
+      "periodic_suffixes": {
+        "1": 1,
+        "2": 96190,
+        "3": 3,
+        "4": 96190,
+        "5": 5,
+        "6": 96190,
+        "7": 7,
+        "8": 96190,
+        "16": 96190,
+        "32": 96190,
+        "57": 57
+      },
+      "native_prompt_matches": [
+        47,
+        187
+      ],
+      "semantic_dataset_index": 47,
+      "classification": "Long exact periodic loop at configured output cap",
+      "classification_basis": "Exact full retained-chain hash match to independently classified C8/80 trajectory"
+    },
+    {
+      "first_pos": 250,
+      "last_pos": 127224,
+      "first_step": 200523,
+      "first_ns": 2964900692955667,
+      "rows": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "last_ns": 2971086833943279,
+      "last_step": 327512,
+      "physical_decode_samples": 126975,
+      "ids_sha256": "eb82fb710526abc5ed9db6351507d6fbacb2e241d01787c6fab7a7d6dbaf2919",
+      "last4096_unique": 2,
+      "periodic_suffixes": {
+        "1": 1,
+        "2": 122976,
+        "3": 3,
+        "4": 122976,
+        "5": 5,
+        "6": 122976,
+        "7": 7,
+        "8": 122976,
+        "16": 122976,
+        "32": 122976,
+        "57": 57
+      },
+      "native_prompt_matches": [
+        61
+      ],
+      "semantic_dataset_index": 61,
+      "classification": "Long exact periodic loop at configured output cap",
+      "classification_basis": "Exact full retained-chain hash match to independently classified C8/80 trajectory"
+    },
+    {
+      "first_pos": 312,
+      "last_pos": 127286,
+      "first_step": 289362,
+      "first_ns": 2969219210260727,
+      "rows": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "last_ns": 2974993063427027,
+      "last_step": 416357,
+      "physical_decode_samples": 126975,
+      "ids_sha256": "4951459a9b3fe7c353a42ec55f4a7b3d6efb7663904e2bdc92701e0ce68a7274",
+      "last4096_unique": 4,
+      "periodic_suffixes": {
+        "1": 1,
+        "2": 2,
+        "3": 3,
+        "4": 49,
+        "5": 5,
+        "6": 6,
+        "7": 7,
+        "8": 49,
+        "16": 49,
+        "32": 49,
+        "57": 50152
+      },
+      "native_prompt_matches": [
+        86,
+        160
+      ],
+      "semantic_dataset_index": 86,
+      "classification": "Long exact periodic loop at configured output cap",
+      "classification_basis": "Exact full retained-chain hash match to independently classified C8/80 trajectory"
+    },
+    {
+      "first_pos": 217,
+      "last_pos": 127191,
+      "first_step": 291400,
+      "first_ns": 2969316218183725,
+      "rows": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "last_ns": 2975099496834584,
+      "last_step": 418394,
+      "physical_decode_samples": 126975,
+      "ids_sha256": "832e8008fb7baf2ebcacf83bdf97fafd912eb5e21e8a4e9ca14a2e6fa862b520",
+      "last4096_unique": 1,
+      "periodic_suffixes": {
+        "1": 118874,
+        "2": 118874,
+        "3": 118874,
+        "4": 118874,
+        "5": 118874,
+        "6": 118874,
+        "7": 118874,
+        "8": 118874,
+        "16": 118874,
+        "32": 118874,
+        "57": 118874
+      },
+      "native_prompt_matches": [
+        90
+      ],
+      "semantic_dataset_index": 90,
+      "classification": "Long exact periodic loop at configured output cap",
+      "classification_basis": "Exact full retained-chain hash match to independently classified C8/80 trajectory"
+    },
+    {
+      "first_pos": 237,
+      "last_pos": 127211,
+      "first_step": 373573,
+      "first_ns": 2972924076174074,
+      "rows": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "last_ns": 2978762523975284,
+      "last_step": 500566,
+      "physical_decode_samples": 126975,
+      "ids_sha256": "5ab9daf95bbcb2bccde842ed9c10b6b88c74b14c8be502191fb75496e34aba1a",
+      "last4096_unique": 6,
+      "periodic_suffixes": {
+        "1": 1,
+        "2": 2,
+        "3": 3,
+        "4": 4,
+        "5": 5,
+        "6": 6,
+        "7": 7,
+        "8": 11,
+        "16": 16,
+        "32": 32,
+        "57": 57
+      },
+      "native_prompt_matches": [
+        139
+      ],
+      "semantic_dataset_index": 139,
+      "classification": "Nonperiodic degenerate six-character tail: final65536tokens contain only four uppercase letters and two punctuation characters, no whitespace; not sustained productive reasoning.",
+      "classification_basis": "Exact full retained-chain hash match to independently classified C8/80 trajectory"
+    },
+    {
+      "first_pos": 232,
+      "last_pos": 127206,
+      "first_step": 380067,
+      "first_ns": 2973215708621038,
+      "rows": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "last_ns": 2979099478771294,
+      "last_step": 507061,
+      "physical_decode_samples": 126975,
+      "ids_sha256": "77786b1b4c6b0b1cc53722a47fd75f264693c731a0b9a38cd0f6d2d8abb59278",
+      "last4096_unique": 2,
+      "periodic_suffixes": {
+        "1": 1,
+        "2": 113889,
+        "3": 3,
+        "4": 113889,
+        "5": 5,
+        "6": 113889,
+        "7": 7,
+        "8": 113889,
+        "16": 113889,
+        "32": 113889,
+        "57": 57
+      },
+      "native_prompt_matches": [
+        147
+      ],
+      "semantic_dataset_index": 147,
+      "classification": "Long exact periodic loop at configured output cap",
+      "classification_basis": "Exact full retained-chain hash match to independently classified C8/80 trajectory"
+    },
+    {
+      "first_pos": 312,
+      "last_pos": 127286,
+      "first_step": 428861,
+      "first_ns": 2975494333949096,
+      "rows": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "last_ns": 2981415131235162,
+      "last_step": 555854,
+      "physical_decode_samples": 126975,
+      "ids_sha256": "c1de976f8b42a72b91ff2fdcb0e9db40aa8c362159d94407e0fe4953f06b2797",
+      "last4096_unique": 2,
+      "periodic_suffixes": {
+        "1": 2,
+        "2": 2,
+        "3": 122336,
+        "4": 5,
+        "5": 5,
+        "6": 122336,
+        "7": 8,
+        "8": 8,
+        "16": 17,
+        "32": 32,
+        "57": 122336
+      },
+      "native_prompt_matches": [
+        86,
+        160
+      ],
+      "semantic_dataset_index": 160,
+      "classification": "Long exact periodic loop at configured output cap",
+      "classification_basis": "Exact full retained-chain hash match to independently classified C8/80 trajectory"
+    }
+  ],
+  "cap_accounting": {
+    "count": 13,
+    "semantic_ids": [
+      7,
+      12,
+      15,
+      20,
+      27,
+      35,
+      47,
+      61,
+      86,
+      90,
+      139,
+      147,
+      160
+    ],
+    "exact_periodic": 12,
+    "nonperiodic_degenerate": 1,
+    "other_incorrect": 11,
+    "interpretation": "All13 cap-consistent empty answers are failed repetitive/degenerate generation, not unresolved productive reasoning. Preserve all failures; no cap reduction or hidden answer recovery."
+  },
+  "native_log_coverage": {
+    "unique_received_ids": 80,
+    "complete_unique_reply_bodies": 79,
+    "missing_complete_reply_bodies": 1,
+    "initial4": [
+      {
+        "request_id": "chatcmpl-a3513d7448c81541",
+        "complete_native_reply_observed": true,
+        "server_elapsed_seconds": 150.91728138923645
+      },
+      {
+        "request_id": "chatcmpl-ae5a79ff8804652e",
+        "complete_native_reply_observed": true,
+        "server_elapsed_seconds": 5111.401618480682
+      },
+      {
+        "request_id": "chatcmpl-817dd8c8395d8a76",
+        "complete_native_reply_observed": true,
+        "server_elapsed_seconds": 137.71398830413818
+      },
+      {
+        "request_id": "chatcmpl-9c0a2f25cd105232",
+        "complete_native_reply_observed": true,
+        "server_elapsed_seconds": 5111.401552438736
+      }
+    ],
+    "initial_complete_replies": 4,
+    "scope": "Final available private console; native timestamps used instead of outer CI replay timestamps. No dry-pass assertion; phase chains do not retain prefill samples or request IDs."
+  },
+  "paired_C8_80": {
+    "comparator_run_id": 42332785769,
+    "evidence": "runs/gpqa80-c8-saturation-comparison/RESULT.json",
+    "semantic_prompts_equal": 80,
+    "visible_outputs_equal": 80,
+    "scores_equal": 80,
+    "retained_chains_equal": 80,
+    "active_decode_work_equal": true,
+    "active_decode_work": 2114531,
+    "c4_evaluation_hours": 6.895967805745313,
+    "c8_evaluation_hours": 4.281694641051452,
+    "c8_observed_evaluation_hours_saved": 2.614273164693861,
+    "c8_observed_evaluation_reduction_percent": 37.910170672719836,
+    "c4_device_job_hours": 7.0633333333333335,
+    "c8_device_job_hours": 4.5680555555555555,
+    "c4_runner": "qb2-120-p05t02",
+    "c8_runner": "120-qb2-p05t01",
+    "scope": "Same frozen80, same TT/image/plugin/sampling/full limits; C4/default10248 pool versus C8/expanded20480 pool on different granted CI hosts, overlapping wall-clock runs. Matched work and output support measured configuration benefit; not an isolated causal concurrency experiment or guarantee for160/198.",
+    "per_document": [
+      {
+        "semantic_dataset_index": 2,
+        "visible_response_equal": true,
+        "retained_chain_equal": true,
+        "work_equal": true,
+        "score_equal": true
+      },
+      {
+        "semantic_dataset_index": 7,
+        "visible_response_equal": true,
+        "retained_chain_equal": true,
+        "work_equal": true,
+        "score_equal": true
+      },
+      {
+        "semantic_dataset_index": 9,
+        "visible_response_equal": true,
+        "retained_chain_equal": true,
+        "work_equal": true,
+        "score_equal": true
+      },
+      {
+        "semantic_dataset_index": 12,
+        "visible_response_equal": true,
+        "retained_chain_equal": true,
+        "work_equal": true,
+        "score_equal": true
+      },
+      {
+        "semantic_dataset_index": 13,
+        "visible_response_equal": true,
+        "retained_chain_equal": true,
+        "work_equal": true,
+        "score_equal": true
+      },
+      {
+        "semantic_dataset_index": 15,
+        "visible_response_equal": true,
+        "retained_chain_equal": true,
+        "work_equal": true,
+        "score_equal": true
+      },
+      {
+        "semantic_dataset_index": 16,
+        "visible_response_equal": true,
+        "retained_chain_equal": true,
+        "work_equal": true,
+        "score_equal": true
+      },
+      {
+        "semantic_dataset_index": 17,
+        "visible_response_equal": true,
+        "retained_chain_equal": true,
+        "work_equal": true,
+        "score_equal": true
+      },
+      {
+        "semantic_dataset_index": 18,
+        "visible_response_equal": true,
+        "retained_chain_equal": true,
+        "work_equal": true,
+        "score_equal": true
+      },
+      {
+        "semantic_dataset_index": 19,
+        "visible_response_equal": true,
+        "retained_chain_equal": true,
+        "work_equal": true,
+        "score_equal": true
+      },
+      {
+        "semantic_dataset_index": 20,
+        "visible_response_equal": true,
+        "retained_chain_equal": true,
+        "work_equal": true,
+        "score_equal": true
+      },
+      {
+        "semantic_dataset_index": 24,
+        "visible_response_equal": true,
+        "retained_chain_equal": true,
+        "work_equal": true,
+        "score_equal": true
+      },
+      {
+        "semantic_dataset_index": 27,
+        "visible_response_equal": true,
+        "retained_chain_equal": true,
+        "work_equal": true,
+        "score_equal": true
+      },
+      {
+        "semantic_dataset_index": 28,
+        "visible_response_equal": true,
+        "retained_chain_equal": true,
+        "work_equal": true,
+        "score_equal": true
+      },
+      {
+        "semantic_dataset_index": 29,
+        "visible_response_equal": true,
+        "retained_chain_equal": true,
+        "work_equal": true,
+        "score_equal": true
+      },
+      {
+        "semantic_dataset_index": 31,
+        "visible_response_equal": true,
+        "retained_chain_equal": true,
+        "work_equal": true,
+        "score_equal": true
+      },
+      {
+        "semantic_dataset_index": 35,
+        "visible_response_equal": true,
+        "retained_chain_equal": true,
+        "work_equal": true,
+        "score_equal": true
+      },
+      {
+        "semantic_dataset_index": 36,
+        "visible_response_equal": true,
+        "retained_chain_equal": true,
+        "work_equal": true,
+        "score_equal": true
+      },
+      {
+        "semantic_dataset_index": 42,
+        "visible_response_equal": true,
+        "retained_chain_equal": true,
+        "work_equal": true,
+        "score_equal": true
+      },
+      {
+        "semantic_dataset_index": 46,
+        "visible_response_equal": true,
+        "retained_chain_equal": true,
+        "work_equal": true,
+        "score_equal": true
+      },
+      {
+        "semantic_dataset_index": 47,
+        "visible_response_equal": true,
+        "retained_chain_equal": true,
+        "work_equal": true,
+        "score_equal": true
+      },
+      {
+        "semantic_dataset_index": 48,
+        "visible_response_equal": true,
+        "retained_chain_equal": true,
+        "work_equal": true,
+        "score_equal": true
+      },
+      {
+        "semantic_dataset_index": 50,
+        "visible_response_equal": true,
+        "retained_chain_equal": true,
+        "work_equal": true,
+        "score_equal": true
+      },
+      {
+        "semantic_dataset_index": 52,
+        "visible_response_equal": true,
+        "retained_chain_equal": true,
+        "work_equal": true,
+        "score_equal": true
+      },
+      {
+        "semantic_dataset_index": 56,
+        "visible_response_equal": true,
+        "retained_chain_equal": true,
+        "work_equal": true,
+        "score_equal": true
+      },
+      {
+        "semantic_dataset_index": 60,
+        "visible_response_equal": true,
+        "retained_chain_equal": true,
+        "work_equal": true,
+        "score_equal": true
+      },
+      {
+        "semantic_dataset_index": 61,
+        "visible_response_equal": true,
+        "retained_chain_equal": true,
+        "work_equal": true,
+        "score_equal": true
+      },
+      {
+        "semantic_dataset_index": 62,
+        "visible_response_equal": true,
+        "retained_chain_equal": true,
+        "work_equal": true,
+        "score_equal": true
+      },
+      {
+        "semantic_dataset_index": 63,
+        "visible_response_equal": true,
+        "retained_chain_equal": true,
+        "work_equal": true,
+        "score_equal": true
+      },
+      {
+        "semantic_dataset_index": 67,
+        "visible_response_equal": true,
+        "retained_chain_equal": true,
+        "work_equal": true,
+        "score_equal": true
+      },
+      {
+        "semantic_dataset_index": 73,
+        "visible_response_equal": true,
+        "retained_chain_equal": true,
+        "work_equal": true,
+        "score_equal": true
+      },
+      {
+        "semantic_dataset_index": 80,
+        "visible_response_equal": true,
+        "retained_chain_equal": true,
+        "work_equal": true,
+        "score_equal": true
+      },
+      {
+        "semantic_dataset_index": 81,
+        "visible_response_equal": true,
+        "retained_chain_equal": true,
+        "work_equal": true,
+        "score_equal": true
+      },
+      {
+        "semantic_dataset_index": 84,
+        "visible_response_equal": true,
+        "retained_chain_equal": true,
+        "work_equal": true,
+        "score_equal": true
+      },
+      {
+        "semantic_dataset_index": 86,
+        "visible_response_equal": true,
+        "retained_chain_equal": true,
+        "work_equal": true,
+        "score_equal": true
+      },
+      {
+        "semantic_dataset_index": 87,
+        "visible_response_equal": true,
+        "retained_chain_equal": true,
+        "work_equal": true,
+        "score_equal": true
+      },
+      {
+        "semantic_dataset_index": 90,
+        "visible_response_equal": true,
+        "retained_chain_equal": true,
+        "work_equal": true,
+        "score_equal": true
+      },
+      {
+        "semantic_dataset_index": 91,
+        "visible_response_equal": true,
+        "retained_chain_equal": true,
+        "work_equal": true,
+        "score_equal": true
+      },
+      {
+        "semantic_dataset_index": 93,
+        "visible_response_equal": true,
+        "retained_chain_equal": true,
+        "work_equal": true,
+        "score_equal": true
+      },
+      {
+        "semantic_dataset_index": 94,
+        "visible_response_equal": true,
+        "retained_chain_equal": true,
+        "work_equal": true,
+        "score_equal": true
+      },
+      {
+        "semantic_dataset_index": 102,
+        "visible_response_equal": true,
+        "retained_chain_equal": true,
+        "work_equal": true,
+        "score_equal": true
+      },
+      {
+        "semantic_dataset_index": 109,
+        "visible_response_equal": true,
+        "retained_chain_equal": true,
+        "work_equal": true,
+        "score_equal": true
+      },
+      {
+        "semantic_dataset_index": 114,
+        "visible_response_equal": true,
+        "retained_chain_equal": true,
+        "work_equal": true,
+        "score_equal": true
+      },
+      {
+        "semantic_dataset_index": 115,
+        "visible_response_equal": true,
+        "retained_chain_equal": true,
+        "work_equal": true,
+        "score_equal": true
+      },
+      {
+        "semantic_dataset_index": 120,
+        "visible_response_equal": true,
+        "retained_chain_equal": true,
+        "work_equal": true,
+        "score_equal": true
+      },
+      {
+        "semantic_dataset_index": 121,
+        "visible_response_equal": true,
+        "retained_chain_equal": true,
+        "work_equal": true,
+        "score_equal": true
+      },
+      {
+        "semantic_dataset_index": 122,
+        "visible_response_equal": true,
+        "retained_chain_equal": true,
+        "work_equal": true,
+        "score_equal": true
+      },
+      {
+        "semantic_dataset_index": 123,
+        "visible_response_equal": true,
+        "retained_chain_equal": true,
+        "work_equal": true,
+        "score_equal": true
+      },
+      {
+        "semantic_dataset_index": 127,
+        "visible_response_equal": true,
+        "retained_chain_equal": true,
+        "work_equal": true,
+        "score_equal": true
+      },
+      {
+        "semantic_dataset_index": 131,
+        "visible_response_equal": true,
+        "retained_chain_equal": true,
+        "work_equal": true,
+        "score_equal": true
+      },
+      {
+        "semantic_dataset_index": 135,
+        "visible_response_equal": true,
+        "retained_chain_equal": true,
+        "work_equal": true,
+        "score_equal": true
+      },
+      {
+        "semantic_dataset_index": 136,
+        "visible_response_equal": true,
+        "retained_chain_equal": true,
+        "work_equal": true,
+        "score_equal": true
+      },
+      {
+        "semantic_dataset_index": 139,
+        "visible_response_equal": true,
+        "retained_chain_equal": true,
+        "work_equal": true,
+        "score_equal": true
+      },
+      {
+        "semantic_dataset_index": 144,
+        "visible_response_equal": true,
+        "retained_chain_equal": true,
+        "work_equal": true,
+        "score_equal": true
+      },
+      {
+        "semantic_dataset_index": 147,
+        "visible_response_equal": true,
+        "retained_chain_equal": true,
+        "work_equal": true,
+        "score_equal": true
+      },
+      {
+        "semantic_dataset_index": 150,
+        "visible_response_equal": true,
+        "retained_chain_equal": true,
+        "work_equal": true,
+        "score_equal": true
+      },
+      {
+        "semantic_dataset_index": 152,
+        "visible_response_equal": true,
+        "retained_chain_equal": true,
+        "work_equal": true,
+        "score_equal": true
+      },
+      {
+        "semantic_dataset_index": 153,
+        "visible_response_equal": true,
+        "retained_chain_equal": true,
+        "work_equal": true,
+        "score_equal": true
+      },
+      {
+        "semantic_dataset_index": 154,
+        "visible_response_equal": true,
+        "retained_chain_equal": true,
+        "work_equal": true,
+        "score_equal": true
+      },
+      {
+        "semantic_dataset_index": 158,
+        "visible_response_equal": true,
+        "retained_chain_equal": true,
+        "work_equal": true,
+        "score_equal": true
+      },
+      {
+        "semantic_dataset_index": 160,
+        "visible_response_equal": true,
+        "retained_chain_equal": true,
+        "work_equal": true,
+        "score_equal": true
+      },
+      {
+        "semantic_dataset_index": 163,
+        "visible_response_equal": true,
+        "retained_chain_equal": true,
+        "work_equal": true,
+        "score_equal": true
+      },
+      {
+        "semantic_dataset_index": 166,
+        "visible_response_equal": true,
+        "retained_chain_equal": true,
+        "work_equal": true,
+        "score_equal": true
+      },
+      {
+        "semantic_dataset_index": 167,
+        "visible_response_equal": true,
+        "retained_chain_equal": true,
+        "work_equal": true,
+        "score_equal": true
+      },
+      {
+        "semantic_dataset_index": 168,
+        "visible_response_equal": true,
+        "retained_chain_equal": true,
+        "work_equal": true,
+        "score_equal": true
+      },
+      {
+        "semantic_dataset_index": 169,
+        "visible_response_equal": true,
+        "retained_chain_equal": true,
+        "work_equal": true,
+        "score_equal": true
+      },
+      {
+        "semantic_dataset_index": 173,
+        "visible_response_equal": true,
+        "retained_chain_equal": true,
+        "work_equal": true,
+        "score_equal": true
+      },
+      {
+        "semantic_dataset_index": 174,
+        "visible_response_equal": true,
+        "retained_chain_equal": true,
+        "work_equal": true,
+        "score_equal": true
+      },
+      {
+        "semantic_dataset_index": 176,
+        "visible_response_equal": true,
+        "retained_chain_equal": true,
+        "work_equal": true,
+        "score_equal": true
+      },
+      {
+        "semantic_dataset_index": 179,
+        "visible_response_equal": true,
+        "retained_chain_equal": true,
+        "work_equal": true,
+        "score_equal": true
+      },
+      {
+        "semantic_dataset_index": 181,
+        "visible_response_equal": true,
+        "retained_chain_equal": true,
+        "work_equal": true,
+        "score_equal": true
+      },
+      {
+        "semantic_dataset_index": 182,
+        "visible_response_equal": true,
+        "retained_chain_equal": true,
+        "work_equal": true,
+        "score_equal": true
+      },
+      {
+        "semantic_dataset_index": 184,
+        "visible_response_equal": true,
+        "retained_chain_equal": true,
+        "work_equal": true,
+        "score_equal": true
+      },
+      {
+        "semantic_dataset_index": 185,
+        "visible_response_equal": true,
+        "retained_chain_equal": true,
+        "work_equal": true,
+        "score_equal": true
+      },
+      {
+        "semantic_dataset_index": 187,
+        "visible_response_equal": true,
+        "retained_chain_equal": true,
+        "work_equal": true,
+        "score_equal": true
+      },
+      {
+        "semantic_dataset_index": 188,
+        "visible_response_equal": true,
+        "retained_chain_equal": true,
+        "work_equal": true,
+        "score_equal": true
+      },
+      {
+        "semantic_dataset_index": 189,
+        "visible_response_equal": true,
+        "retained_chain_equal": true,
+        "work_equal": true,
+        "score_equal": true
+      },
+      {
+        "semantic_dataset_index": 192,
+        "visible_response_equal": true,
+        "retained_chain_equal": true,
+        "work_equal": true,
+        "score_equal": true
+      },
+      {
+        "semantic_dataset_index": 193,
+        "visible_response_equal": true,
+        "retained_chain_equal": true,
+        "work_equal": true,
+        "score_equal": true
+      },
+      {
+        "semantic_dataset_index": 194,
+        "visible_response_equal": true,
+        "retained_chain_equal": true,
+        "work_equal": true,
+        "score_equal": true
+      }
+    ]
+  },
+  "timing": {
+    "evaluation_seconds": 24825.484100683127,
+    "evaluation_hours": 6.895967805745313,
+    "device_job_hours": 7.0633333333333335,
+    "workflow_hours": 7.067777777777778,
+    "workflow_end_basis": "GitHub terminal updated_at",
+    "device_start": "2026-11-07T01:19:51Z",
+    "device_end": "2026-11-07T08:23:39Z",
+    "dispatch_queue_hours": 0.004166666666666667,
+    "predicted_workflow_hours": 8.258135529016663,
+    "predicted_device_hours": 7.408135529016662,
+    "agent_hours_sum": 26.10587472323889,
+    "capped_agent_hours_sum": 20.504035374366943,
+    "longest_capped_chain_seconds": 6186.140987612,
+    "terminal_tail_after_last_noncap_seconds": 1539.861570161,
+    "single_agent_decode_interval_seconds": 1539.8615701609858,
+    "basis": "Host elapsed and allocated CI job duration; overlapping agent hours not device execution time. No profiling."
+  },
+  "remaining_limits": [
+    "Native response coverage incomplete; prefill/host-sampled/client-emission token identity unavailable.",
+    "Same80 configuration benefit does not guarantee larger-list speed; different hosts and joint pool/concurrency changes prevent isolated attribution.",
+    "Thirteen failed capped repetitive outputs retained; no missing-answer recovery or score gating."
+  ],
+  "evidence": [
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/runs/larger-gpqa80-c4-native-logging/manifest.json",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/runs/larger-gpqa80-c4-native-logging/startup-confirmation.json",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/runs/larger-gpqa80-c4-native-logging/collected/workflow_logs_evals_gemma-4-31B-it_bh-qb-ge_gemma4-31b-autoport-v3/reports_output/evals/google__gemma-4-31B-it_p300x2_evals/eval-attempt-cb4e497ab67044f690ee02ed30b4d084/eval_id_gemma4-31b-autoport-v3_gemma-4-31B-it_p300x2/google__gemma-4-31B-it/samples_r1_gpqa_diamond_2026-11-07T08-20-53.271116.jsonl",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/runs/larger-gpqa80-c4-native-logging/collected/workflow_logs_evals_gemma-4-31B-it_bh-qb-ge_gemma4-31b-autoport-v3/reports_output/evals/google__gemma-4-31B-it_p300x2_evals/eval-attempt-cb4e497ab67044f690ee02ed30b4d084/eval_id_gemma4-31b-autoport-v3_gemma-4-31B-it_p300x2/google__gemma-4-31B-it/results_2026-11-07T08-20-53.271116.json",
+    "bringup/artifacts/gpqa80-c4-final-audit/analyze.py",
+    "bringup/artifacts/gpqa80-c4-final-audit/native_inventory.py",
+    "bringup/artifacts/stage12-ci-monitor/42323448662.collected.json"
+  ],
+  "audit_device_hours": 0
+}

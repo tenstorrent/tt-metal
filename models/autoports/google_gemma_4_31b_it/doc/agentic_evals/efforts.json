@@ -4034,22 +4034,25 @@
       },
       "box_hours": 7.5,
       "status": "done",
-      "reason": "Final valid40 gain accepted; empirical-tail and devicebox projections fit firstdry reserve. NormalC4/80 continues.",
+      "reason": "C4 normalrung final audit confirms identical80 work/outputs and useful aggregateC8gain; no new configuration change from comparison effort.",
       "scope": "Prior served eef/bf1ada image with C8/pool20480, full releasecaps. Atomicframe f579 CIimage blocked; no frozenrelease claim.",
       "run_id": 42332785769,
       "used_device_hours": 4.5680555555555555,
       "change": "none",
-      "problem_status": "open",
+      "problem_status": "solved",
       "confirmed": {
         "functional_at": 80,
         "score": "56/80; Wilson95 59.23\u201378.94%",
         "evaluation_hours": 4.281694641051452,
         "credited_release_saving_hours": 0,
-        "comparison": "Same80 C4 pending; later normal-rung audit owns comparison. Valid80 banked; no configuration change from this effort.",
-        "full_phase_integrity": true
+        "comparison": "Final normalC4/80 audit: identical80 visible outputs, scores and retainedchains/2114531decodework. C8 observed2.614273165h37.91017% shorter; differenthosts and pool sizes prevent isolated concurrency attribution.",
+        "full_phase_integrity": true,
+        "observed_same80_saving_hours": 2.614273164781881,
+        "release_saving_scope": "Same80 measured; candidate160 counterfactual extrapolation is not measured release saving."
       },
       "evidence": [
-        "runs/gpqa80-c8-saturation-comparison/RESULT.json"
+        "runs/gpqa80-c8-saturation-comparison/RESULT.json",
+        "runs/larger-gpqa80-c4-native-logging/RESULT.json"
       ]
     },
     {
@@ -4338,8 +4341,24 @@
         "success": "Actionable discrepancy with minimal repair and required confirmation, or explicit conditional agreement/unsupported cause with provenance and limits. Never synthesize missing native tokens or claim conditional tests prove autonomous behavior."
       },
       "box_hours": 0.35,
-      "status": "running",
-      "reason": "Valid80 identifies two new failure patterns; diagnose while next rung/dry proceed independently. Device admission pending owner plan; local idle device remains available."
+      "status": "done",
+      "reason": "Exact fresh-prefix conditional test found no actionable TT-specific discrepancy; stop this line withinbox. Original served state/autonomousHF and doc86device diagnosis unproven.",
+      "used_device_hours": 0.22576292027777778,
+      "change": "none",
+      "problem_status": "open",
+      "confirmed": {
+        "fresh_prompt_tokens": 237,
+        "retained_overlap_tokens": 15031,
+        "conditional_checkpoints": 4,
+        "top1_equal": 4,
+        "HF_host_seconds": 763.5924175960245,
+        "credited_saving_hours": 0,
+        "scope": "Conditional teacher forcing only; no full-generation accuracy or performance claim"
+      },
+      "evidence": [
+        "runs/gpqa80-new-loop-diagnosis/RESULT.json",
+        "runs/gpqa80-new-loop-diagnosis/AUTOFIX.md"
+      ]
     },
     {
       "problem": "early-gpqa160-candidate-dry",
@@ -13546,11 +13565,11 @@
         {
           "problem": "gpqa80-new-loop-diagnosis",
           "saving_hours": 0,
-          "device_hours": 0.15,
+          "device_hours": 0.3,
           "unblocks": [
             "representative GPQA capped-call cause"
           ],
-          "basis": "guess"
+          "basis": "calculated_owner_plan"
         },
         {
           "problem": "ci-log-retrieval-recurrence",
@@ -13891,7 +13910,733 @@
           "basis": "measured_valid80_closed_same80_gain_unconfirmed"
         }
       ],
-      "reason": "Validity first: initial-agent dry and new loop diagnosis remain ahead of speed. C8/80 closed with valid80 but same80 gain unconfirmed; zero credited saving. Prior forecasts preserved."
+      "reason": "Validity first: initial-agent dry and new loop diagnosis remain ahead of speed. C8/80 closed with valid80 but same80 gain unconfirmed; zero credited saving. Prior forecasts preserved. Coordinator adopted owner revised nativecapture forecast0.30h at launch; historical .15 guess superseded before devicework."
+    },
+    {
+      "after": "normal-C4-80-final-paired-comparison",
+      "at": "2026-11-07T08:29:22.192570+00:00",
+      "order": [
+        {
+          "problem": "early-gpqa160-candidate-dry",
+          "saving_hours": 0,
+          "device_hours": 2.22331746,
+          "unblocks": [
+            "frozen160 release candidate"
+          ],
+          "basis": "calculated_not_bound"
+        },
+        {
+          "problem": "gpqa80-new-loop-diagnosis",
+          "saving_hours": 0,
+          "device_hours": 0.3,
+          "unblocks": [
+            "representative GPQA capped-call cause"
+          ],
+          "basis": "calculated_owner_plan"
+        },
+        {
+          "problem": "ci-log-retrieval-recurrence",
+          "saving_hours": 0,
+          "device_hours": 0,
+          "unblocks": [
+            "CI trajectory and final rung observation"
+          ],
+          "basis": "measured_host_recovery_cause_open"
+        },
+        {
+          "problem": "early-banked40-fallback-dry",
+          "saving_hours": 0,
+          "device_hours": 1.795,
+          "unblocks": [
+            "early frozen fallback dry and native reply observation"
+          ],
+          "basis": "measured_closed_fallback40_only"
+        },
+        {
+          "problem": "dry-observation-timestamp-repair",
+          "saving_hours": 0,
+          "device_hours": 0,
+          "unblocks": [
+            "pre-stop evidence preservation"
+          ],
+          "basis": "measured_host_only_closed"
+        },
+        {
+          "problem": "current-c8-larger-source-preparation",
+          "saving_hours": 0,
+          "device_hours": 0,
+          "unblocks": [
+            "next-rung source readiness"
+          ],
+          "basis": "measured_host_only_closed"
+        },
+        {
+          "problem": "ci-log-download-timeout",
+          "saving_hours": 0,
+          "device_hours": 0,
+          "unblocks": [
+            "fresh CI observation and dry evidence"
+          ],
+          "basis": "measured_host_only_closed"
+        },
+        {
+          "problem": "release-freeze-materialization",
+          "saving_hours": 0,
+          "device_hours": 0,
+          "unblocks": [
+            "release freeze and dry procedure"
+          ],
+          "basis": "measured_host_only_closed"
+        },
+        {
+          "problem": "ci-framed-confirmation-operator9",
+          "saving_hours": 0,
+          "device_hours": 0.16583333333333333,
+          "unblocks": [
+            "optional complete native CI reply transport"
+          ],
+          "basis": "measured_smoke_transport_closed"
+        },
+        {
+          "problem": "framed-logger-image-provenance",
+          "unblocks": [
+            "optional CI native logging confirmation"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0,
+          "basis": "measured_host_only_closed"
+        },
+        {
+          "problem": "ci-native-large-reply-visibility",
+          "saving_hours": 0,
+          "device_hours": 0.24472474064558306,
+          "unblocks": [
+            "r1_gpqa_diamond"
+          ],
+          "basis": "calculated_plus_guess"
+        },
+        {
+          "problem": "frozen initial-agent no-score dry",
+          "unblocks": [
+            "release"
+          ],
+          "saving_hours": 0,
+          "device_hours": 4.9,
+          "basis": "guess"
+        },
+        {
+          "problem": "astropy-prefix-discriminator",
+          "unblocks": [
+            "capped-call cause and representative SWE score"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0.12
+        },
+        {
+          "problem": "ci-disk-admission-basis",
+          "unblocks": [
+            "release_preflight"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0
+        },
+        {
+          "problem": "ci-live-log-observability",
+          "unblocks": [
+            "release"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0
+        },
+        {
+          "problem": "ci-log-cache-discriminator",
+          "unblocks": [
+            "exact dry-run observation"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0
+        },
+        {
+          "problem": "ci-release-route",
+          "unblocks": [
+            "r1_gpqa_diamond",
+            "swe_bench_verified",
+            "terminal_bench_2_1"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0
+        },
+        {
+          "problem": "django-cap-loop-diagnosis",
+          "unblocks": [
+            "representative_agent_score"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0.25
+        },
+        {
+          "problem": "gpqa-nightly-runtime-analysis",
+          "unblocks": [
+            "r1_gpqa_diamond"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0
+        },
+        {
+          "problem": "gpqa-only-release-schedule",
+          "unblocks": [
+            "release dry route and schedule"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0
+        },
+        {
+          "problem": "gpqa-terminal-state-capacity",
+          "unblocks": [
+            "r1_gpqa_diamond"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0.1
+        },
+        {
+          "problem": "malformed-response-retention",
+          "unblocks": [
+            "representative capped-call diagnosis"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0
+        },
+        {
+          "problem": "model-token-retention",
+          "unblocks": [
+            "swe_bench_verified"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0.12
+        },
+        {
+          "problem": "native-token-retention",
+          "unblocks": [
+            "exact recurring-loop onset evidence"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0
+        },
+        {
+          "problem": "nightly-swe-network-reach",
+          "unblocks": [
+            "swe_bench_verified"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0
+        },
+        {
+          "problem": "partial-tool-dry-route",
+          "unblocks": [
+            "release"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0
+        },
+        {
+          "problem": "serving-shortfall-pricing",
+          "unblocks": [
+            "representative release projection"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0
+        },
+        {
+          "problem": "stage12-zero-cost-checker",
+          "unblocks": [
+            "stage_check"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0
+        },
+        {
+          "problem": "swe-recurrent-network-confirmation",
+          "unblocks": [
+            "swe_bench_verified disposition"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0
+        },
+        {
+          "problem": "task-boundary-dry-route",
+          "unblocks": [
+            "release"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0
+        },
+        {
+          "problem": "terminal-c4-revisit",
+          "unblocks": [
+            "terminal_bench_2_1"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0
+        },
+        {
+          "problem": "terminal-nightly-tail-diagnosis",
+          "unblocks": [
+            "representative Terminal score"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0
+        },
+        {
+          "problem": "gpqa40-c8-saturation-comparison",
+          "saving_hours": 0,
+          "device_hours": 2.832777777777778,
+          "basis": "measured40_gain_closed_release80_unconfirmed"
+        },
+        {
+          "problem": "agent-capacity-and-contention",
+          "saving_hours": 0,
+          "device_hours": 0.25
+        },
+        {
+          "problem": "ci-cache-routing",
+          "saving_hours": 0,
+          "device_hours": 0.08333333333333333
+        },
+        {
+          "problem": "ci-image-reuse",
+          "saving_hours": 0,
+          "device_hours": 0
+        },
+        {
+          "problem": "gpqa-c4-capacity",
+          "saving_hours": 0,
+          "device_hours": 0.18
+        },
+        {
+          "problem": "gpqa-c4-scored10",
+          "saving_hours": 0,
+          "device_hours": 0.5088888888888888
+        },
+        {
+          "problem": "gpqa-decode-state-discriminator",
+          "saving_hours": 0,
+          "device_hours": 0.12
+        },
+        {
+          "problem": "gpqa-loop-logits-discriminator",
+          "saving_hours": 0,
+          "device_hours": 0.08
+        },
+        {
+          "problem": "larger-gpqa-concurrency-reprice",
+          "saving_hours": 0,
+          "device_hours": 1.5
+        },
+        {
+          "problem": "long-prefill-decode-interference",
+          "saving_hours": 0,
+          "device_hours": 0.25
+        },
+        {
+          "problem": "real-history-capacity-preparation",
+          "saving_hours": 0,
+          "device_hours": 0
+        },
+        {
+          "problem": "singleton-batch-comparison",
+          "saving_hours": 0,
+          "device_hours": 0.1
+        },
+        {
+          "problem": "gpqa40-new-loop-diagnosis",
+          "saving_hours": 0,
+          "device_hours": 0.1360832952778,
+          "basis": "measured"
+        },
+        {
+          "problem": "framed-benchmark-dry",
+          "saving_hours": 0,
+          "device_hours": 0.0752905511111111,
+          "unblocks": [],
+          "basis": "measured"
+        },
+        {
+          "problem": "gpqa-c16-b32-feasibility",
+          "saving_hours": 0,
+          "device_hours": 0,
+          "basis": "host_measured_no_probe_allocated"
+        },
+        {
+          "problem": "gpqa80-c8-saturation-comparison",
+          "saving_hours": 0,
+          "device_hours": 4.5680555555555555,
+          "basis": "closed_same80_observed_gain2.614273165h_not_release_measurement"
+        }
+      ],
+      "reason": "Validity dry and capped-cause work remain first. Same80 comparison closes usefulC8confirmation with exactretainedwork; currentC8best retained. No remainingdevice work for this comparison; future160 gain is not measured."
+    },
+    {
+      "after": "gpqa80-new-loop-diagnosis-complete",
+      "at": "2026-11-07T08:31:09.175118+00:00",
+      "order": [
+        {
+          "problem": "early-gpqa160-candidate-dry",
+          "saving_hours": 0,
+          "device_hours": 2.22331746,
+          "unblocks": [
+            "frozen160 release candidate"
+          ],
+          "basis": "calculated_not_bound"
+        },
+        {
+          "problem": "gpqa80-new-loop-diagnosis",
+          "saving_hours": 0,
+          "device_hours": 0,
+          "unblocks": [
+            "representative GPQA capped-call cause remains open"
+          ],
+          "basis": "measured_stop_no_actionable_conditional_discrepancy"
+        },
+        {
+          "problem": "ci-log-retrieval-recurrence",
+          "saving_hours": 0,
+          "device_hours": 0,
+          "unblocks": [
+            "CI trajectory and final rung observation"
+          ],
+          "basis": "measured_host_recovery_cause_open"
+        },
+        {
+          "problem": "early-banked40-fallback-dry",
+          "saving_hours": 0,
+          "device_hours": 1.795,
+          "unblocks": [
+            "early frozen fallback dry and native reply observation"
+          ],
+          "basis": "measured_closed_fallback40_only"
+        },
+        {
+          "problem": "dry-observation-timestamp-repair",
+          "saving_hours": 0,
+          "device_hours": 0,
+          "unblocks": [
+            "pre-stop evidence preservation"
+          ],
+          "basis": "measured_host_only_closed"
+        },
+        {
+          "problem": "current-c8-larger-source-preparation",
+          "saving_hours": 0,
+          "device_hours": 0,
+          "unblocks": [
+            "next-rung source readiness"
+          ],
+          "basis": "measured_host_only_closed"
+        },
+        {
+          "problem": "ci-log-download-timeout",
+          "saving_hours": 0,
+          "device_hours": 0,
+          "unblocks": [
+            "fresh CI observation and dry evidence"
+          ],
+          "basis": "measured_host_only_closed"
+        },
+        {
+          "problem": "release-freeze-materialization",
+          "saving_hours": 0,
+          "device_hours": 0,
+          "unblocks": [
+            "release freeze and dry procedure"
+          ],
+          "basis": "measured_host_only_closed"
+        },
+        {
+          "problem": "ci-framed-confirmation-operator9",
+          "saving_hours": 0,
+          "device_hours": 0.16583333333333333,
+          "unblocks": [
+            "optional complete native CI reply transport"
+          ],
+          "basis": "measured_smoke_transport_closed"
+        },
+        {
+          "problem": "framed-logger-image-provenance",
+          "unblocks": [
+            "optional CI native logging confirmation"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0,
+          "basis": "measured_host_only_closed"
+        },
+        {
+          "problem": "ci-native-large-reply-visibility",
+          "saving_hours": 0,
+          "device_hours": 0.24472474064558306,
+          "unblocks": [
+            "r1_gpqa_diamond"
+          ],
+          "basis": "calculated_plus_guess"
+        },
+        {
+          "problem": "frozen initial-agent no-score dry",
+          "unblocks": [
+            "release"
+          ],
+          "saving_hours": 0,
+          "device_hours": 4.9,
+          "basis": "guess"
+        },
+        {
+          "problem": "astropy-prefix-discriminator",
+          "unblocks": [
+            "capped-call cause and representative SWE score"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0.12
+        },
+        {
+          "problem": "ci-disk-admission-basis",
+          "unblocks": [
+            "release_preflight"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0
+        },
+        {
+          "problem": "ci-live-log-observability",
+          "unblocks": [
+            "release"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0
+        },
+        {
+          "problem": "ci-log-cache-discriminator",
+          "unblocks": [
+            "exact dry-run observation"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0
+        },
+        {
+          "problem": "ci-release-route",
+          "unblocks": [
+            "r1_gpqa_diamond",
+            "swe_bench_verified",
+            "terminal_bench_2_1"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0
+        },
+        {
+          "problem": "django-cap-loop-diagnosis",
+          "unblocks": [
+            "representative_agent_score"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0.25
+        },
+        {
+          "problem": "gpqa-nightly-runtime-analysis",
+          "unblocks": [
+            "r1_gpqa_diamond"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0
+        },
+        {
+          "problem": "gpqa-only-release-schedule",
+          "unblocks": [
+            "release dry route and schedule"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0
+        },
+        {
+          "problem": "gpqa-terminal-state-capacity",
+          "unblocks": [
+            "r1_gpqa_diamond"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0.1
+        },
+        {
+          "problem": "malformed-response-retention",
+          "unblocks": [
+            "representative capped-call diagnosis"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0
+        },
+        {
+          "problem": "model-token-retention",
+          "unblocks": [
+            "swe_bench_verified"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0.12
+        },
+        {
+          "problem": "native-token-retention",
+          "unblocks": [
+            "exact recurring-loop onset evidence"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0
+        },
+        {
+          "problem": "nightly-swe-network-reach",
+          "unblocks": [
+            "swe_bench_verified"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0
+        },
+        {
+          "problem": "partial-tool-dry-route",
+          "unblocks": [
+            "release"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0
+        },
+        {
+          "problem": "serving-shortfall-pricing",
+          "unblocks": [
+            "representative release projection"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0
+        },
+        {
+          "problem": "stage12-zero-cost-checker",
+          "unblocks": [
+            "stage_check"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0
+        },
+        {
+          "problem": "swe-recurrent-network-confirmation",
+          "unblocks": [
+            "swe_bench_verified disposition"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0
+        },
+        {
+          "problem": "task-boundary-dry-route",
+          "unblocks": [
+            "release"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0
+        },
+        {
+          "problem": "terminal-c4-revisit",
+          "unblocks": [
+            "terminal_bench_2_1"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0
+        },
+        {
+          "problem": "terminal-nightly-tail-diagnosis",
+          "unblocks": [
+            "representative Terminal score"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0
+        },
+        {
+          "problem": "gpqa40-c8-saturation-comparison",
+          "saving_hours": 0,
+          "device_hours": 2.832777777777778,
+          "basis": "measured40_gain_closed_release80_unconfirmed"
+        },
+        {
+          "problem": "agent-capacity-and-contention",
+          "saving_hours": 0,
+          "device_hours": 0.25
+        },
+        {
+          "problem": "ci-cache-routing",
+          "saving_hours": 0,
+          "device_hours": 0.08333333333333333
+        },
+        {
+          "problem": "ci-image-reuse",
+          "saving_hours": 0,
+          "device_hours": 0
+        },
+        {
+          "problem": "gpqa-c4-capacity",
+          "saving_hours": 0,
+          "device_hours": 0.18
+        },
+        {
+          "problem": "gpqa-c4-scored10",
+          "saving_hours": 0,
+          "device_hours": 0.5088888888888888
+        },
+        {
+          "problem": "gpqa-decode-state-discriminator",
+          "saving_hours": 0,
+          "device_hours": 0.12
+        },
+        {
+          "problem": "gpqa-loop-logits-discriminator",
+          "saving_hours": 0,
+          "device_hours": 0.08
+        },
+        {
+          "problem": "larger-gpqa-concurrency-reprice",
+          "saving_hours": 0,
+          "device_hours": 1.5
+        },
+        {
+          "problem": "long-prefill-decode-interference",
+          "saving_hours": 0,
+          "device_hours": 0.25
+        },
+        {
+          "problem": "real-history-capacity-preparation",
+          "saving_hours": 0,
+          "device_hours": 0
+        },
+        {
+          "problem": "singleton-batch-comparison",
+          "saving_hours": 0,
+          "device_hours": 0.1
+        },
+        {
+          "problem": "gpqa40-new-loop-diagnosis",
+          "saving_hours": 0,
+          "device_hours": 0.1360832952778,
+          "basis": "measured"
+        },
+        {
+          "problem": "framed-benchmark-dry",
+          "saving_hours": 0,
+          "device_hours": 0.0752905511111111,
+          "unblocks": [],
+          "basis": "measured"
+        },
+        {
+          "problem": "gpqa-c16-b32-feasibility",
+          "saving_hours": 0,
+          "device_hours": 0,
+          "basis": "host_measured_no_probe_allocated"
+        },
+        {
+          "problem": "gpqa80-c8-saturation-comparison",
+          "saving_hours": 0,
+          "device_hours": 4.5680555555555555,
+          "basis": "closed_same80_observed_gain2.614273165h_not_release_measurement"
+        }
+      ],
+      "reason": "Exact conditional diagnostic did not expose actionable fix; no furtherdevice work justified beforecandidate dry. Validity dry remainsfirst. Loop causes remain open,not misclassified as fixed; no speed saving credited."
     }
   ],
   "forecast_accounting_note": "Original missing forecasts are retained in prediction_reconciliation, not silently reconstructed. Zero saving means no credited release speed benefit. Current planning guesses are explicitly separated from measured outcomes.",

@@ -612,29 +612,32 @@
   },
   "measured_suites": {
     "r1_gpqa_diamond": {
-      "functional_at": 20,
-      "planned_clients": 4,
+      "functional_at": 80,
+      "planned_clients": 8,
       "batch": 8,
       "score": {
         "name": "r1_gpqa_diamond exact_match",
-        "value": 0.8,
-        "correct": 16,
-        "completed_samples": 20,
+        "value": 0.7,
+        "correct": 56,
+        "completed_samples": 80,
         "dataset_samples": 198,
         "scope": "subset",
         "wilson95": [
-          0.5839825677481064,
-          0.919342337420202
+          0.5923184607866026,
+          0.7893542873991866
         ],
-        "accepted": true
+        "published_reference_percent": 84.3,
+        "gpu_reference_percent": 83.33,
+        "score_gate": false
       },
-      "eval_hours": 1.5557604843284936,
+      "eval_hours": 4.281694641051452,
       "request_timeout_seconds": 14400,
       "max_output_tokens": 126976,
       "observed_processed_cache_tokens_max": 127456,
-      "native_prompt_tokens_median": 241,
-      "total_physical_decode_samples": 367509,
-      "evidence": "runs/larger-gpqa20-c4-retention-retry/audit.json"
+      "native_prompt_tokens_median": 229,
+      "total_physical_decode_samples": 2114531,
+      "evidence": "runs/gpqa80-c8-saturation-comparison/RESULT.json",
+      "comparison_evidence": "runs/larger-gpqa80-c4-native-logging/RESULT.json"
     },
     "swe_bench_verified": {
       "functional_at": 2,
@@ -679,7 +682,7 @@
     "live_pin_hook_confirmed": false,
     "note": "Does not change running immutable jobs; next normalrung confirms pin hook"
   },
-  "max_concurrency_basis": "runs/gpqa40-c8-saturation-comparison/audit.json",
+  "max_concurrency_basis": "runs/larger-gpqa80-c4-native-logging/RESULT.json",
   "phase_export": {
     "runtime_sha": "439c22b0e991e5af626efafa7224edf28f84795b",
     "period_seconds": 1,
@@ -741,7 +744,7 @@
     "request_logging": false,
     "custom_logging_config": null
   },
-  "max_concurrency_scope": "Selected on valid40; C4/20 was faster at20, C8/80 confirmation pending. Existing C4/80 keeps its recorded configuration.",
+  "max_concurrency_scope": "Selected C8 on valid same40 and same80 measured configuration benefit; C4/20 was faster at20. Same80 all outputs/chains/work equal; different hosts and pool sizes preclude isolated causality or guaranteed larger-list gain.",
   "concurrency_by_eval": {
     "r1_gpqa_diamond": 8,
     "swe_bench_verified": 2,
@@ -805,7 +808,7 @@
   },
   "candidates": {
     "expanded_b8_pool": {
-      "status": "selected_measured40_gain80_confirmation_pending",
+      "status": "selected_measured80_configuration_gain",
       "planned_clients": 8,
       "batch": 8,
       "max_num_seqs": 8,
@@ -828,7 +831,13 @@
       "scored40_comparison": "runs/gpqa40-c8-saturation-comparison/audit.json",
       "score40": 0.625,
       "eval40_hours": 2.5011817041318865,
-      "shorter40_percent": 31.298211968846623
+      "shorter40_percent": 31.298211968846623,
+      "scored80_comparison": "runs/larger-gpqa80-c4-native-logging/RESULT.json",
+      "score80": 0.7,
+      "eval80_hours": 4.281694641051452,
+      "shorter80_percent": 37.910170672719836,
+      "observed80_eval_hours_saved": 2.614273164693861,
+      "comparison_scope": "Same frozen80, same TT/image/plugin/sampling/full limits; C4/default10248 pool versus C8/expanded20480 pool on different granted CI hosts, overlapping wall-clock runs. Matched work and output support measured configuration benefit; not an isolated causal concurrency experiment or guarantee for160/198."
     }
   },
   "accepted_atomic_native_logging": {
@@ -845,5 +854,25 @@
     "pool_ids": 20480,
     "evidence": "runs/early-banked40-fallback-dry/RESULT.json",
     "final_selection": false
+  },
+  "same80_comparison": {
+    "comparator_run_id": 42332785769,
+    "evidence": "runs/larger-gpqa80-c4-native-logging/RESULT.json",
+    "semantic_prompts_equal": 80,
+    "visible_outputs_equal": 80,
+    "scores_equal": 80,
+    "retained_chains_equal": 80,
+    "active_decode_work_equal": true,
+    "active_decode_work": 2114531,
+    "c4_evaluation_hours": 6.895967805745313,
+    "c8_evaluation_hours": 4.281694641051452,
+    "c8_observed_evaluation_hours_saved": 2.614273164693861,
+    "c8_observed_evaluation_reduction_percent": 37.910170672719836,
+    "c4_device_job_hours": 7.0633333333333335,
+    "c8_device_job_hours": 4.5680555555555555,
+    "c4_runner": "qb2-120-p05t02",
+    "c8_runner": "120-qb2-p05t01",
+    "scope": "Same frozen80, same TT/image/plugin/sampling/full limits; C4/default10248 pool versus C8/expanded20480 pool on different granted CI hosts, overlapping wall-clock runs. Matched work and output support measured configuration benefit; not an isolated causal concurrency experiment or guarantee for160/198.",
+    "comparator_evidence": "runs/gpqa80-c8-saturation-comparison/RESULT.json"
   }
 }

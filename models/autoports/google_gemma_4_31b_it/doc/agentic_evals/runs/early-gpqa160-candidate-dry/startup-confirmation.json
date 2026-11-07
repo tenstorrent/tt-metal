@@ -1,0 +1,27 @@
+{
+  "run_id": 42353568775,
+  "at": "2026-11-07T08:13:52.590025+00:00",
+  "checks": {
+    "LOAD_LAYER 59": true,
+    "models.autoports.google_gemma_4_31b_it.tt.generator_vllm:Gemma4ForCausalLM": true,
+    "\"b8_pool_ids_override\": 20480": true,
+    "\"max_model_len\": 262144": true,
+    "\"max_num_seqs\": 8": true,
+    "num_concurrent=8": true,
+    "max_gen_toks=126976": true,
+    "timeout=14400": true,
+    "f57978407eaacf09587f5793b8ae46ca7af839ea": true,
+    "8b9623a7f1ccee85c04319e4c83e00f974322201": true,
+    "ae8bf2ac98d004471bc58959995dd25dc04cc76bb250b794d746bc073ac8f7fe": true
+  },
+  "status": "startup_observed_not_final_audit",
+  "planned_clients": 8,
+  "batch": 8,
+  "max_num_seqs": 8,
+  "cohort_source": "freeze.json; source-confirmation.json",
+  "dry_pass": false,
+  "evidence": "bringup/artifacts/stage12-eval-observation/42353568775/startup-confirmed.log",
+  "task_count": 160,
+  "list_matches_registered_cohort": true,
+  "actual_harness_samples_argument_verified": true
+}
