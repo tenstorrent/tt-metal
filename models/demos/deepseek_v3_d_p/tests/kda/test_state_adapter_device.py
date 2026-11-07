@@ -18,8 +18,12 @@ import torch
 import ttnn
 from models.common.utility_functions import run_for_blackhole
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import kimi_k3_kda_config
-from models.demos.deepseek_v3_d_p.tests.kda.utils import read_slab_layer
-from models.demos.deepseek_v3_d_p.tt.kda.kda import KdaState
+from models.demos.deepseek_v3_d_p.tests.kda.utils import (
+    kda_state_patterns,
+    native_state_from_global,
+    per_chip_convolution,
+    read_slab_layer,
+)
 from models.demos.deepseek_v3_d_p.tt.kda.state_adapter import (
     KdaContractGeometry,
     KdaStates,
@@ -42,7 +46,6 @@ from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import (
     all_zero_bits,
     assert_bit_identical,
     decode_tail,
-    encode_tail,
 )
 
 pytestmark = [
@@ -65,58 +68,6 @@ def _geometry(mesh_device) -> KdaContractGeometry:
     )
 
 
-def _global_patterns(geometry: KdaContractGeometry, slot: int, layer_idx: int):
-    """Global recurrent ``[H, D, D]`` and golden-order convolution ``[K-1, 3*H*D]`` with a per-(slot, layer) offset."""
-    tag = 1000.0 * (slot * 10 + layer_idx)
-    heads, dim = geometry.num_heads, geometry.head_dim
-    recurrent = (torch.arange(heads * dim * dim, dtype=torch.float32).reshape(heads, dim, dim) + tag).float()
-    width = 3 * heads * dim
-    convolution = (
-        torch.arange(geometry.conv_history * width, dtype=torch.int32).remainder(509) + slot * 7 + layer_idx
-    ).to(torch.bfloat16)
-    return recurrent, convolution.reshape(geometry.conv_history, width)
-
-
-def _per_chip_convolution(geometry: KdaContractGeometry, convolution: torch.Tensor, tp_col: int) -> torch.Tensor:
-    """The chip's ``[q_local | k_local | v_local]`` row from the golden-order global tensor."""
-    heads, dim, local = geometry.num_heads, geometry.head_dim, geometry.local_heads
-    parts = [
-        convolution[:, branch * heads * dim + tp_col * local * dim : branch * heads * dim + (tp_col + 1) * local * dim]
-        for branch in range(3)
-    ]
-    return torch.cat(parts, dim=-1)
-
-
-def _native_from_global(mesh_device, geometry, recurrent, convolution) -> KdaState:
-    """TP-shard heads, replicate across SP, in the layout the layer itself produces."""
-    tp = geometry.tensor_parallel_size
-    rec_dims, conv_dims = [None, None], [None, None]
-    rec_dims[TP_AXIS], conv_dims[TP_AXIS] = 1, 1
-    stacked_conv = encode_tail(
-        torch.cat([_per_chip_convolution(geometry, convolution, col) for col in range(tp)], dim=-1),
-        KDA_CONVOLUTION_PAGE_CHANNELS,
-    )
-    mesh_shape = tuple(mesh_device.shape)
-    return KdaState(
-        recurrent=ttnn.from_torch(
-            recurrent.unsqueeze(0),
-            dtype=ttnn.float32,
-            layout=ttnn.TILE_LAYOUT,
-            device=mesh_device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=tuple(rec_dims), mesh_shape=mesh_shape),
-        ),
-        convolution=ttnn.from_torch(
-            stacked_conv.unsqueeze(0),
-            dtype=ttnn.bfloat16,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=mesh_device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=tuple(conv_dims), mesh_shape=mesh_shape),
-        ),
-    )
-
-
 def _shards(tensor: ttnn.Tensor, mesh_device) -> dict[tuple[int, int], torch.Tensor]:
     rows, cols = tuple(mesh_device.shape)
     host = [ttnn.to_torch(shard) for shard in ttnn.get_device_tensors(tensor)]
@@ -125,7 +76,7 @@ def _shards(tensor: ttnn.Tensor, mesh_device) -> dict[tuple[int, int], torch.Ten
 
 def _expected_chip(geometry, recurrent, convolution, tp_col):
     local = geometry.local_heads
-    return recurrent[tp_col * local : (tp_col + 1) * local], _per_chip_convolution(geometry, convolution, tp_col)
+    return recurrent[tp_col * local : (tp_col + 1) * local], per_chip_convolution(geometry, convolution, tp_col)
 
 
 def _single_stage_layout(mesh_device, slab, count):
@@ -160,9 +111,9 @@ def test_slabs_round_trip_replay_and_table(mesh_device, device_params, layer_ids
     tp = geometry.tensor_parallel_size
 
     patterns = {
-        (slot, layer): _global_patterns(geometry, slot, layer) for slot in range(num_slots) for layer in layer_ids
+        (slot, layer): kda_state_patterns(geometry, slot, layer) for slot in range(num_slots) for layer in layer_ids
     }
-    natives = {key: _native_from_global(mesh_device, geometry, *value) for key, value in patterns.items()}
+    natives = {key: native_state_from_global(mesh_device, geometry, *value, TP_AXIS) for key, value in patterns.items()}
     for (slot, layer), state in natives.items():
         index = device_scalar(mesh_device, slot)
         slabs.export_layer(state, index, layer)
@@ -211,8 +162,8 @@ def test_slabs_round_trip_replay_and_table(mesh_device, device_params, layer_ids
     trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
     slabs.export_layer(victim, slot_tt, layer_ids[0])
     ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
-    new_rec, new_conv = _global_patterns(geometry, 5, 9)
-    staged = _native_from_global(mesh_device, geometry, new_rec, new_conv)
+    new_rec, new_conv = kda_state_patterns(geometry, 5, 9)
+    staged = native_state_from_global(mesh_device, geometry, new_rec, new_conv, TP_AXIS)
     ttnn.copy(staged.recurrent, victim.recurrent)
     ttnn.copy(staged.convolution, victim.convolution)
     replay_slot = num_slots - 1
