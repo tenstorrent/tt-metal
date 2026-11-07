@@ -1,0 +1,456 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
+
+"""Multimodal input (image, video, audio) for the MiMo-V2.6-Flash prefill: host-side bookkeeping.
+
+The LLM is unchanged: an item's embeddings replace the embeddings of its placeholder tokens (doc/multimodal_plan.md).
+This module turns a prefill row's items into the host rows of one chunk (``chunk_embeds``), which
+TtMiMoModel.prefill_enqueue(embeds=, embed_rows=) merges into the chunk on device:
+
+* ``MMItem``: one item of the plugin contract (``prefill_forward``'s ``mm_items``): modality, vLLM identifier (its mm
+  hash), PlaceholderRange ``offset`` / ``length`` / ``is_embed`` in the full prompt, and the processor fields
+  (``data``; None when vLLM stripped them because the item lies in an APC-cached prefix).
+* ``EncoderBackend``: what turns an item's processor fields into its embeddings [num_embeds, hidden] (host, bf16).
+  The vision workstream supplies the device ViT, the audio workstream the host audio path; until then
+  ``HFHostBackend`` (TEMPORARY) runs the checkpoint's own HF modules on the host.
+* ``EmbeddingCache``: an LRU of item embeddings keyed by identifier, so a later chunk, a chunk start moved back into an
+  earlier chunk's item, or another request with the same item does not encode it again.
+* ``chunk_embeds``: scatter of the items' embeddings into the rows of a chunk [start, end) of the prompt: an item may
+  start before the chunk (only its rows in the chunk are used), end before it (skipped), carry an ``is_embed`` mask
+  (video: timestamp and frame-separator tokens inside the range keep their token embeddings).
+
+Errors in a request's multimodal input raise ``MMInputError``; the vLLM adapter turns them into a logged error and
+the placeholder tokens' own embeddings for that item, never an exception out of prefill (which kills the engine).
+"""
+
+import collections
+import hashlib
+import os
+import threading
+from dataclasses import dataclass
+from typing import Optional, Protocol
+
+import torch
+from loguru import logger
+
+MODALITIES = ("image", "video", "audio")
+
+# Processor fields an item needs to be encoded (vLLM's MiMoV2OmniMultiModalProcessor._get_mm_fields_config).
+REQUIRED_FIELDS = {
+    "image": ("pixel_values", "image_grid_thw"),
+    "video": ("pixel_values_videos", "video_grid_thw"),
+    "audio": ("audio_features",),
+}
+
+
+class MMInputError(ValueError):
+    """A request's multimodal input cannot be served (malformed, unsupported or missing data)."""
+
+
+@dataclass
+class MMItem:
+    modality: str
+    identifier: Optional[str]
+    offset: int
+    length: int
+    is_embed: Optional[torch.Tensor] = None  # bool [length]; None: every row of the range is an embedding
+    data: Optional[dict] = None
+
+    @property
+    def num_embeds(self):
+        return self.length if self.is_embed is None else int(self.is_embed.sum())
+
+    @property
+    def end(self):
+        return self.offset + self.length
+
+    def embed_positions(self):
+        """Prompt positions of the item's embedding rows, in order (int64 [num_embeds])."""
+        positions = torch.arange(self.offset, self.end, dtype=torch.int64)
+        return positions if self.is_embed is None else positions[self.is_embed]
+
+
+def _field(data, name):
+    """A processor field's tensor: vLLM hands MultiModalFieldElem-like objects (``.data``) or plain tensors."""
+    value = data.get(name)
+    return getattr(value, "data", value)
+
+
+def parse_item(entry, modalities=MODALITIES):
+    """One ``mm_items`` entry (a dict of the plugin contract, or an MMItem) -> MMItem; raises MMInputError."""
+    if isinstance(entry, MMItem):
+        item = entry
+    else:
+        if not isinstance(entry, dict):
+            raise MMInputError(f"a multimodal item must be a dict, got {type(entry).__name__}")
+        try:
+            item = MMItem(
+                modality=str(entry["modality"]),
+                identifier=None if entry.get("identifier") is None else str(entry["identifier"]),
+                offset=int(entry["offset"]),
+                length=int(entry["length"]),
+                is_embed=entry.get("is_embed"),
+                data=entry.get("data"),
+            )
+        except (KeyError, TypeError, ValueError) as e:
+            raise MMInputError(f"malformed multimodal item {sorted(entry)}: {e}") from e
+    if item.modality not in modalities:
+        raise MMInputError(f"modality {item.modality!r} is not served (served: {', '.join(modalities)})")
+    if item.offset < 0 or item.length <= 0:
+        raise MMInputError(f"{item.modality} item at offset {item.offset} with length {item.length}")
+    if item.is_embed is not None:
+        is_embed = torch.as_tensor(item.is_embed).to(torch.bool).reshape(-1)
+        if is_embed.numel() != item.length:
+            raise MMInputError(f"{item.modality} item: is_embed has {is_embed.numel()} rows, length {item.length}")
+        item.is_embed = None if bool(is_embed.all()) else is_embed
+    if item.data is not None:
+        missing = [f for f in REQUIRED_FIELDS[item.modality] if _field(item.data, f) is None]
+        if missing:
+            raise MMInputError(f"{item.modality} item {item.identifier}: missing processor fields {missing}")
+    return item
+
+
+def parse_items(entries, modalities=MODALITIES):
+    """A row's ``mm_items`` entry (None or a list) -> [MMItem] sorted by offset, non-overlapping."""
+    if not entries:
+        return []
+    items = sorted((parse_item(e, modalities) for e in entries), key=lambda it: it.offset)
+    for a, b in zip(items, items[1:]):
+        if b.offset < a.end:
+            raise MMInputError(f"multimodal items overlap: [{a.offset}, {a.end}) and [{b.offset}, {b.end})")
+    return items
+
+
+def items_overlapping(items, start, end):
+    """The items with an embedding row in prompt positions [start, end)."""
+    out = []
+    for item in items:
+        if item.end <= start or item.offset >= end:
+            continue
+        pos = item.embed_positions()
+        if bool(((pos >= start) & (pos < end)).any()):
+            out.append(item)
+    return out
+
+
+def chunk_embeds(items, start, end, embeddings_of, hidden):
+    """Host rows of the prompt chunk [start, end): (embeds bf16 [end - start, hidden], rows bool [end - start]) for
+    TtMiMoModel.prefill_enqueue(embeds=, embed_rows=), or (None, None) when no item has a row in it.
+    ``embeddings_of(item)`` -> the item's embeddings [num_embeds, hidden], or None to leave its rows to their tokens
+    (an item that could not be encoded)."""
+    n = end - start
+    embeds = rows = None
+    for item in items_overlapping(items, start, end):
+        emb = embeddings_of(item)
+        if emb is None:
+            continue
+        if tuple(emb.shape) != (item.num_embeds, hidden):
+            raise MMInputError(
+                f"{item.modality} item {item.identifier}: embeddings {tuple(emb.shape)}, expected "
+                f"({item.num_embeds}, {hidden})"
+            )
+        pos = item.embed_positions()
+        keep = (pos >= start) & (pos < end)
+        if embeds is None:
+            embeds = torch.zeros(n, hidden, dtype=torch.bfloat16)
+            rows = torch.zeros(n, dtype=torch.bool)
+        embeds[pos[keep] - start] = emb[keep].to(torch.bfloat16)
+        rows[pos[keep] - start] = True
+    return embeds, rows
+
+
+def placeholder_rows(tokens, token_id):
+    """Runs of ``token_id`` in ``tokens`` (1D): [(offset, length)] in order."""
+    hits = (torch.as_tensor(tokens).reshape(-1) == token_id).nonzero().flatten().tolist()
+    runs = []
+    for p in hits:
+        if runs and runs[-1][0] + runs[-1][1] == p:
+            runs[-1][1] += 1
+        else:
+            runs.append([p, 1])
+    return [tuple(r) for r in runs]
+
+
+def content_id(*tensors):
+    """A stable identifier of an item's processor tensors (the image-only fallback has no vLLM identifier)."""
+    h = hashlib.sha1()
+    for t in tensors:
+        t = torch.as_tensor(t).detach().cpu().contiguous()
+        h.update(str((t.dtype, tuple(t.shape))).encode())
+        h.update(t.view(torch.uint8).numpy().tobytes() if t.numel() else b"")
+    return "sha1:" + h.hexdigest()
+
+
+def items_from_image_lists(tokens, end, pixel_values, grids, image_token_id, merge_size=2):
+    """The plugin's image-only kwargs of one row (``pixel_values`` / ``image_grid_thw``: per image a tensor or None)
+    -> [MMItem]. The prompt's k-th run of ``image_token_id`` in tokens[:end] is image k; images whose run starts at or
+    past ``end`` are not in the prompt yet and are left out. A run that ends at ``end`` may be cut there."""
+    if grids is None:
+        return []
+    pixel_values = list(pixel_values) if pixel_values is not None else [None] * len(grids)
+    if len(pixel_values) != len(grids):
+        raise MMInputError(f"{len(pixel_values)} pixel entries for {len(grids)} image grids")
+    runs = placeholder_rows(torch.as_tensor(tokens).reshape(-1)[:end], image_token_id)
+    items = []
+    for k, (pv, grid) in enumerate(zip(pixel_values, grids)):
+        if k >= len(runs):
+            break
+        if grid is None:
+            raise MMInputError(f"image {k} has no image_grid_thw")
+        grid = torch.as_tensor(grid).reshape(-1)
+        if grid.numel() != 3:
+            raise MMInputError(f"image {k}: image_grid_thw {tuple(grid.shape)}, expected 3 values")
+        length = int(grid.prod()) // merge_size**2
+        offset, run = runs[k]
+        if run != length and not (run < length and offset + run == end):
+            raise MMInputError(
+                f"image {k}: {run} placeholder tokens at {offset}, its grid {grid.tolist()} has {length}"
+            )
+        data = None if pv is None else {"pixel_values": pv, "image_grid_thw": grid}
+        identifier = None if pv is None else content_id(pv, grid)
+        items.append(MMItem("image", identifier, offset, length, None, data))
+    return items
+
+
+class EncoderBackend(Protocol):
+    """Item embeddings on the host (bf16), one row per placeholder token the item's embedding rows replace."""
+
+    def embed_image(self, pixel_values, grid_thw) -> torch.Tensor:  # [sum(t * h * w) / 4, hidden]
+        ...
+
+    def embed_video(self, pixel_values_videos, grid_thw) -> torch.Tensor:  # [sum(t * h * w) / 4, hidden]
+        ...
+
+    def embed_audio(self, mel) -> torch.Tensor:  # [n_tokens, hidden]
+        ...
+
+
+def encode_item(backend, item):
+    """An item's embeddings [num_embeds, hidden] bf16 from its processor fields (raises MMInputError)."""
+    if item.data is None:
+        raise MMInputError(f"{item.modality} item {item.identifier} has no data (stripped) and is not cached")
+    if item.modality == "image":
+        out = backend.embed_image(
+            _field(item.data, "pixel_values"), torch.as_tensor(_field(item.data, "image_grid_thw")).reshape(-1, 3)
+        )
+    elif item.modality == "video":
+        if _field(item.data, "video_audio_n_segs") is not None and int(
+            torch.as_tensor(_field(item.data, "video_audio_n_segs")).sum()
+        ):
+            raise MMInputError("video with an interleaved audio track is not served yet")
+        out = backend.embed_video(
+            _field(item.data, "pixel_values_videos"),
+            torch.as_tensor(_field(item.data, "video_grid_thw")).reshape(-1, 3),
+        )
+    else:
+        out = backend.embed_audio(_field(item.data, "audio_features"))
+    if out.dim() != 2 or out.shape[0] != item.num_embeds:
+        raise MMInputError(
+            f"{item.modality} item {item.identifier}: the encoder gave {tuple(out.shape)} for {item.num_embeds} "
+            "placeholder rows"
+        )
+    return out.to(torch.bfloat16)
+
+
+class EmbeddingCache:
+    """Item embeddings by identifier, least recently used first out past ``budget_bytes`` (MIMO_MM_CACHE_MB, default
+    4096). Thread-safe (the plugin may call the adapter from several threads)."""
+
+    def __init__(self, budget_bytes=None):
+        if budget_bytes is None:
+            budget_bytes = int(float(os.environ.get("MIMO_MM_CACHE_MB", "4096")) * 2**20)
+        self.budget = budget_bytes
+        self.used = 0
+        self.entries = collections.OrderedDict()
+        self.hits = self.misses = 0
+        self.lock = threading.Lock()
+
+    def get(self, identifier):
+        if identifier is None:
+            return None
+        with self.lock:
+            emb = self.entries.get(identifier)
+            if emb is None:
+                self.misses += 1
+                return None
+            self.entries.move_to_end(identifier)
+            self.hits += 1
+            return emb
+
+    def put(self, identifier, emb):
+        if identifier is None:
+            return
+        size = emb.numel() * emb.element_size()
+        with self.lock:
+            old = self.entries.pop(identifier, None)
+            if old is not None:
+                self.used -= old.numel() * old.element_size()
+            if size > self.budget:
+                return
+            self.entries[identifier] = emb
+            self.used += size
+            while self.used > self.budget:
+                _, out = self.entries.popitem(last=False)
+                self.used -= out.numel() * out.element_size()
+
+    def __contains__(self, identifier):
+        with self.lock:
+            return identifier in self.entries
+
+    def __len__(self):
+        return len(self.entries)
+
+
+class ItemEncoder:
+    """Embeddings of a row's items through the cache, encoding a miss with ``backend`` (what chunk_embeds'
+    ``embeddings_of`` takes). An item that cannot be encoded logs an error once and keeps its placeholder tokens'
+    embeddings (None): the request is served, degraded, rather than raising out of prefill."""
+
+    def __init__(self, backend, cache=None):
+        self.backend = backend
+        self.cache = cache if cache is not None else EmbeddingCache()
+        self.failed = set()
+
+    def __call__(self, item):
+        emb = self.cache.get(item.identifier)
+        if emb is not None:
+            if emb.shape[0] != item.num_embeds:
+                raise MMInputError(
+                    f"{item.modality} item {item.identifier}: cached {emb.shape[0]} rows, the prompt has "
+                    f"{item.num_embeds}"
+                )
+            return emb
+        try:
+            emb = encode_item(self.backend, item)
+        except Exception as e:  # noqa: BLE001 - any encoder failure must not kill the engine
+            key = item.identifier or id(item)
+            if key not in self.failed:
+                self.failed.add(key)
+                logger.error(
+                    f"MiMo multimodal: {item.modality} item {item.identifier} at [{item.offset}, {item.end}) not "
+                    f"encoded, its placeholder tokens stand in: {type(e).__name__}: {e}"
+                )
+            return None
+        self.cache.put(item.identifier, emb)
+        return emb
+
+
+# --------------------------------------------------------------------------------------------------------------------
+# TEMPORARY host backend: the checkpoint's own HF modules (modeling_mimo_v2.py) on the host, until the vision
+# workstream's device ViT (tt/vision/) and the audio workstream's host path (reference/audio.py) land. Not a reference:
+# whatever precision it runs in is what serving gets.
+# --------------------------------------------------------------------------------------------------------------------
+
+
+def _hf_module(model_path):
+    """The checkpoint's modeling_mimo_v2 module (remote code, loaded the way transformers loads it)."""
+    from transformers.dynamic_module_utils import get_class_from_dynamic_module
+
+    cls = get_class_from_dynamic_module("modeling_mimo_v2.MiMoVisionTransformer", model_path)
+    import sys
+
+    return sys.modules[cls.__module__]
+
+
+def _load_prefixed(module, path, prefix):
+    from safetensors import safe_open
+
+    state = {}
+    with safe_open(path, "pt") as f:
+        for key in f.keys():
+            if key.startswith(prefix):
+                state[key[len(prefix) :]] = f.get_tensor(key)
+    missing, unexpected = module.load_state_dict(state, strict=False)
+    return missing, unexpected
+
+
+class HFHostBackend:
+    """TEMPORARY: image / video / audio embeddings from the checkpoint's HF modules on the host (torch, ``dtype``
+    MIMO_MM_HOST_DTYPE: float32 by default). One instance per process (``shared``)."""
+
+    _shared = {}
+    _lock = threading.Lock()
+
+    @classmethod
+    def shared(cls, model_path):
+        with cls._lock:
+            if model_path not in cls._shared:
+                cls._shared[model_path] = cls(model_path)
+            return cls._shared[model_path]
+
+    def __init__(self, model_path, dtype=None, modalities=MODALITIES):
+        import json
+
+        if dtype is None:
+            dtype = getattr(torch, os.environ.get("MIMO_MM_HOST_DTYPE", "float32"))
+        self.model_path, self.dtype = model_path, dtype
+        with open(os.path.join(model_path, "config.json")) as f:
+            config = json.load(f)
+        self.hidden = config["hidden_size"]
+        hf = _hf_module(model_path)
+        self.hf = hf
+        shard = os.path.join(model_path, "model_pp0_ep0_shard0.safetensors")
+        self.visual = self.audio = None
+        self.lock = threading.Lock()  # torch modules are not re-entrant across the plugin's threads
+        if "image" in modalities or "video" in modalities:
+            self.visual = hf.MiMoVisionTransformer(hf._as_namespace(config["vision_config"]))
+            merger = self.visual.merger
+            # The checkpoint's merger has no biases and one norm weight. modeling_mimo_v2.py builds a LayerNorm and
+            # biased Linears (whose missing biases would keep their random init); vLLM's mimo_v2_omni.py an RMSNorm
+            # and bias-free Linears. Follow vLLM unless MIMO_MM_MERGER_NORM=layer.
+            if os.environ.get("MIMO_MM_MERGER_NORM", "rms") == "rms":
+                merger.ln_q = torch.nn.RMSNorm(merger.ln_q.normalized_shape, eps=1e-6)
+            for linear in (merger.mlp[0], merger.mlp[2]):
+                linear.bias = None
+            missing, _ = _load_prefixed(self.visual, shard, "visual.")
+            missing = [k for k in missing if k != "merger.ln_q.bias"]  # LayerNorm without a bias: zeros
+            if missing:
+                raise RuntimeError(f"ViT weights missing from {shard}: {missing[:5]}")
+            self.visual.to(dtype).eval()
+            self.merge = config["vision_config"].get("spatial_merge_size", 2)
+        if "audio" in modalities and config.get("audio_config"):
+            audio_cfg = hf._as_namespace(config["audio_config"])
+            self.speech_embeddings = hf._build_speech_embeddings(audio_cfg)
+            _load_prefixed(self.speech_embeddings, shard, "speech_embeddings.")
+            self.audio = hf.MiMoAudioEncoder(audio_cfg)
+            missing, _ = _load_prefixed(self.audio, shard, "audio_encoder.")
+            missing = [k for k in missing if "embed_tokens" not in k]  # unused by inputs_embeds
+            if missing:
+                raise RuntimeError(f"audio encoder weights missing from {shard}: {missing[:5]}")
+            tok_dir = os.path.join(model_path, "audio_tokenizer")
+            with open(os.path.join(tok_dir, "config.json")) as f:
+                tok_cfg = json.load(f)
+            self.audio_tokenizer = hf.MiMoAudioTokenizer(hf.MiMoAudioTokenizerConfig(**tok_cfg))
+            _load_prefixed(self.audio_tokenizer, os.path.join(tok_dir, "model.safetensors"), "")
+            for m in (self.speech_embeddings, self.audio, self.audio_tokenizer):
+                m.to(dtype).eval()
+        logger.info(
+            f"MiMo multimodal: TEMPORARY HF host encoders loaded ({dtype}; vision {self.visual is not None}, audio "
+            f"{self.audio is not None})"
+        )
+
+    @torch.no_grad()
+    def embed_image(self, pixel_values, grid_thw):
+        if self.visual is None:
+            raise MMInputError("this backend serves no images")
+        grid_thw = torch.as_tensor(grid_thw).reshape(-1, 3).to(torch.int64)
+        with self.lock:
+            out = self.visual(torch.as_tensor(pixel_values).to(self.dtype), grid_thw)
+        return out.to(torch.bfloat16)
+
+    embed_video = embed_image
+
+    @torch.no_grad()
+    def embed_audio(self, mel):
+        if self.audio is None:
+            raise MMInputError("this backend serves no audio")
+        if isinstance(mel, (list, tuple)):
+            mels = [torch.as_tensor(m) for m in mel]
+        else:
+            mel = torch.as_tensor(mel)
+            mels = list(mel) if mel.dim() == 3 else [mel]
+        with self.lock:
+            out = self.audio.get_audio_feature(
+                [m.to(self.dtype) for m in mels], self.speech_embeddings, self.audio_tokenizer.encoder
+            )
+        return out.to(torch.bfloat16)
