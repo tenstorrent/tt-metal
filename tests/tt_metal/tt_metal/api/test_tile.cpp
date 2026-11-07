@@ -4,12 +4,16 @@
 
 #include <array>
 #include <cstdint>
+#include <cstdlib>
 #include <stdexcept>
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include <tt-metalium/constants.hpp>
+#include <tt-metalium/experimental/mock_device/mock_device.hpp>
 #include <tt-metalium/tile.hpp>
+#include <tt-metalium/tt_backend_api_types.hpp>
+#include "impl/context/metal_context.hpp"
 
 namespace tt::tt_metal {
 namespace {
@@ -191,6 +195,104 @@ TEST(TileFromFaceGrid, RejectsGridThatExceedsMaxFaces) {
     EXPECT_THAT(
         [] { (void)Tile::from_face_grid(4, 2, {8, 16}); },
         ThrowsMessage<std::runtime_error>(HasSubstr("exceeds the maximum supported num_faces")));
+}
+
+constexpr std::array<DataFormat, 28> kTileSizeFormats = {
+    DataFormat::Float32,   DataFormat::Float16,   DataFormat::Bfp8,      DataFormat::Bfp4,   DataFormat::Bfp2,
+    DataFormat::Float16_b, DataFormat::Bfp8_b,    DataFormat::Bfp4_b,    DataFormat::Bfp2_b, DataFormat::Lf8,
+    DataFormat::Fp8_e4m3,  DataFormat::MxFp4,     DataFormat::MxFp6P,    DataFormat::MxFp6R, DataFormat::MxFp8R,
+    DataFormat::MxFp8P,    DataFormat::MxInt8,    DataFormat::MxInt4,    DataFormat::MxInt2, DataFormat::Int8,
+    DataFormat::UInt8,     DataFormat::UInt16,    DataFormat::Int16,     DataFormat::Int32,  DataFormat::UInt32,
+    DataFormat::RawUInt8,  DataFormat::RawUInt16, DataFormat::RawUInt32,
+};
+
+constexpr std::array<DataFormat, 14> kUnpackedTileSizeFormats = {
+    DataFormat::Float32,
+    DataFormat::Float16,
+    DataFormat::Float16_b,
+    DataFormat::Lf8,
+    DataFormat::Fp8_e4m3,
+    DataFormat::Int8,
+    DataFormat::UInt8,
+    DataFormat::UInt16,
+    DataFormat::Int16,
+    DataFormat::Int32,
+    DataFormat::UInt32,
+    DataFormat::RawUInt8,
+    DataFormat::RawUInt16,
+    DataFormat::RawUInt32,
+};
+
+TEST(TileSizeHostOnly, CPU_DoesNotCreateDefaultContext) {
+    const auto old_style = GTEST_FLAG_GET(death_test_style);
+    GTEST_FLAG_SET(death_test_style, "threadsafe");
+    EXPECT_EXIT(
+        {
+            if (MetalContext::instance_exists()) {
+                std::_Exit(10);
+            }
+            const Tile tile;
+            const Tile tiny({16, 32});
+            for (const auto format : kTileSizeFormats) {
+                if (tile.get_tile_size(format) != tt::tile_size(format)) {
+                    std::_Exit(11);
+                }
+                if (MetalContext::instance_exists()) {
+                    std::_Exit(12);
+                }
+            }
+            for (const auto format : kUnpackedTileSizeFormats) {
+                if (tiny.get_tile_size(format) != tt::tile_size(format) / 2) {
+                    std::_Exit(11);
+                }
+                if (MetalContext::instance_exists()) {
+                    std::_Exit(12);
+                }
+            }
+            constexpr uint32_t kL1Alignment = 16;
+            const Tile row({1, 32});
+            if (row.get_tile_size(DataFormat::Bfp8_b) != 32 + kL1Alignment ||
+                row.get_tile_size(DataFormat::MxInt2) != 8 + kL1Alignment) {
+                std::_Exit(11);
+            }
+            if (MetalContext::instance_exists()) {
+                std::_Exit(12);
+            }
+            std::_Exit(0);
+        },
+        ::testing::ExitedWithCode(0),
+        "");
+    GTEST_FLAG_SET(death_test_style, old_style);
+}
+
+TEST(TileSizeHostOnly, CPU_SizesWithDefaultContext) {
+    const auto old_style = GTEST_FLAG_GET(death_test_style);
+    GTEST_FLAG_SET(death_test_style, "threadsafe");
+    EXPECT_EXIT(
+        {
+            if (MetalContext::instance_exists()) {
+                std::_Exit(10);
+            }
+            experimental::configure_mock_mode(tt::ARCH::WORMHOLE_B0, 1);
+            const auto& context = MetalContext::instance();
+            if (!MetalContext::instance_exists()) {
+                std::_Exit(12);
+            }
+            const uint32_t alignment = context.hal().get_alignment(HalMemType::L1);
+            const auto aligned = [alignment](uint32_t n) { return ((n + alignment - 1) / alignment) * alignment; };
+            const Tile tiny({1, 32});
+            if (tiny.get_tile_size(DataFormat::Bfp8_b) != 32 + aligned(2) ||
+                tiny.get_tile_size(DataFormat::MxInt2) != 8 + aligned(1)) {
+                std::_Exit(11);
+            }
+            if (!MetalContext::instance_exists()) {
+                std::_Exit(12);
+            }
+            std::_Exit(0);
+        },
+        ::testing::ExitedWithCode(0),
+        "");
+    GTEST_FLAG_SET(death_test_style, old_style);
 }
 
 }  // namespace
