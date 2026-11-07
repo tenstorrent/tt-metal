@@ -1286,3 +1286,28 @@ def test_tilize_uint8_tall_narrow_program_cache_addr_change(device, shape):
 
     assert entries == 1, "tilize should build exactly one program for a fixed config"
     device.disable_and_clear_program_cache()
+
+
+@pytest.mark.parametrize(
+    "dtype, shape",
+    [
+        (ttnn.bfloat16, (1, 1, 1024, 1056)),
+        (ttnn.bfloat16, (1, 1, 1024, 2048)),
+        (ttnn.bfloat16, (1, 1, 2048, 2048)),
+        (ttnn.bfloat16, (1, 8, 1024, 2048)),
+        (ttnn.bfloat16, (1, 1, 128, 4096)),
+        (ttnn.float32, (1, 1, 1024, 2048)),
+        (ttnn.int32, (1, 1, 1024, 2048)),
+    ],
+)
+def test_tilize_wide_rows_multicore(device, dtype, shape):
+    torch.manual_seed(0)
+    if dtype == ttnn.int32:
+        torch_input = torch.randint(-(2**31), 2**31 - 1, shape, dtype=torch.int32)
+    else:
+        torch_input = torch.randn(shape, dtype=torch.float32 if dtype == ttnn.float32 else torch.bfloat16)
+    tt_input = ttnn.from_torch(
+        torch_input, dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    tt_output = ttnn.tilize(tt_input, memory_config=ttnn.DRAM_MEMORY_CONFIG, use_multicore=True)
+    assert_equal(torch_input, ttnn.to_torch(tt_output))
