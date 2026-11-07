@@ -155,8 +155,7 @@ extern "C" __attribute__((noinline, used)) void issue_mmio_semaphore_selectors(h
     hs::semaphore::post<hs::Access::MMIO>(selector);
 }
 
-// The MMIO references reuse the ckernel:: helpers that the HAL duplicates.
-// TODO issue #58443: Replace them with raw pc_buf_base accesses when the ckernel:: helpers are removed.
+// TODO: #58443 Replace the ckernel:: MMIO references with raw pc_buf_base accesses.
 extern "C" __attribute__((noinline, used)) void reference_issue_mmio_semaphore_selectors(hs::Semaphore selector)
 {
     ckernel::semaphore_get(1 /*index*/);
