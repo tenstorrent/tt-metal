@@ -57,8 +57,8 @@ def _sequence(generator):
     return frames
 
 
-def _host_image(images):
-    return to_image_layout(images, None)
+def _host_image(images, device):
+    return to_image_layout(images, device, upload=False)
 
 
 def _to_torch(tensors):
@@ -89,7 +89,7 @@ def test_bevformer_trace_matches_live(device, reset_seeds, expect_error):
 
     def live_frame(i, frame, prev_bev):
         frame = tt_model.prepare_frame(frames[i], frame)
-        cls_scores, bbox_preds, bev = tt_model(ttnn.to_device(_host_image(images[i]), device), frame, prev_bev)
+        cls_scores, bbox_preds, bev = tt_model(to_image_layout(images[i], device), frame, prev_bev)
         scores, labels, _, boxes, valid = tt_model.detect(cls_scores, bbox_preds)
         return frame, bev, _to_torch((scores, labels, boxes, valid, bev))
 
@@ -105,7 +105,7 @@ def test_bevformer_trace_matches_live(device, reset_seeds, expect_error):
         frame, prev_bev, _ = live_frame(i, frame, prev_bev)
     # The live pass sized the planner for every frame, so only GROWTH_FRAME and RESERVE_FRAME grow it.
     planner = tt_model.planner
-    runner = TTBEVFormerTrace(tt_model, device, _host_image(images[0]), frame, prev_bev, num_command_queues=2)
+    runner = TTBEVFormerTrace(tt_model, device, _host_image(images[0], device), frame, prev_bev, num_command_queues=2)
     size = planner.size
 
     def grow():
@@ -122,7 +122,7 @@ def test_bevformer_trace_matches_live(device, reset_seeds, expect_error):
 
     replayed_addresses = set()
     try:
-        runner.upload(_host_image(images[LIVE_FRAMES]))
+        runner.upload(_host_image(images[LIVE_FRAMES], device))
         for i in range(LIVE_FRAMES, NUM_FRAMES):
             # GROWTH_FRAME grows between its counts' readback and its plan, RESERVE_FRAME before it starts.
             planner.size = size_and_grow if i == GROWTH_FRAME else size
@@ -130,7 +130,7 @@ def test_bevformer_trace_matches_live(device, reset_seeds, expect_error):
                 grow()
             outputs = runner(frames[i], tt_model.host_frame(frames[i]))
             if i + 1 < NUM_FRAMES:
-                runner.upload(_host_image(images[i + 1]))
+                runner.upload(_host_image(images[i + 1], device))
             # Blocking reads on the ops queue; the input queue's upload may still run.
             got = _to_torch((*outputs, runner.prev_bev))
             if i not in (GROWTH_FRAME, RESERVE_FRAME):

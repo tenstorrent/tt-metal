@@ -86,7 +86,7 @@ from models.experimental.bevformer.tests.fixtures.camera_rigs import (
     build_lidar2img,
     ring_camera_rig,
 )
-from models.experimental.bevformer.tt.tt_resnet import TTResLayer
+from models.experimental.bevformer.tt.tt_resnet import TTResLayer, TTResNet
 from models.experimental.bevformer.tt.tt_head import box_preds_to_torch
 
 # The variant is fixed when model_config is first imported; the log says which one a run tests.
@@ -399,11 +399,24 @@ def to_conv_layout(nchw, device, dtype, layout=ttnn.TILE_LAYOUT):
     return ttnn.from_torch(nhwc, device=device, dtype=dtype, layout=layout)
 
 
-def to_image_layout(nchw, device):
-    """NCHW images -> the (N, 3, H, W) bfloat16 ROW_MAJOR ttnn tensor TTResNet reads (``device`` None
-    keeps it on the host). torch rounds float32 to bfloat16 bit for bit as from_torch does, several
-    times faster."""
-    return ttnn.from_torch(nchw.to(torch.bfloat16), device=device, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
+def to_image_layout(nchw, device, upload=True):
+    """NCHW images -> the per-camera tensors TTResNet reads, each ``(1, 1, 3, H * W)`` bfloat16
+    ROW_MAJOR and sharded over ``device``'s DRAM (TTResNet.camera_memory_config); without
+    ``upload`` they stay on the host in that layout. torch rounds float32 to bfloat16 bit for bit as
+    from_torch does, several times faster."""
+    n, c, h, w = nchw.shape
+    memory_config = TTResNet.camera_memory_config(device, c, h, w)
+    cameras = nchw.to(torch.bfloat16).reshape(n, 1, 1, c, h * w)
+    return [
+        ttnn.from_torch(
+            camera,
+            device=device if upload else None,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=memory_config,
+        )
+        for camera in cameras
+    ]
 
 
 def from_conv_layout(tt_tensor, nchw_shape):

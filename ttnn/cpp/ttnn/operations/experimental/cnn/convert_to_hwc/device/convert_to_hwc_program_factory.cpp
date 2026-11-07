@@ -306,17 +306,14 @@ void setup_circular_buffers(
     const tt::DataFormat intermediary_format = tt::DataFormat::Float16_b;
     const uint32_t intermediary_tile_size = tt::tile_size(intermediary_format);
 
-    // CB_IN: full input shard per core
-    const uint32_t cb_in_page_size = config.l1_input_shard_width * config.element_size_bytes;
-    const uint32_t cb_in_total_size = config.l1_input_shard_height * cb_in_page_size;
-    // Only update input CB address for L1 input (DRAM input doesn't need CB update)
-    desc.cbs.push_back(make_cnn_circular_buffer(
-        core_grid,
-        CBIndex::CB_IN,
-        cb_in_total_size,
-        cb_in_page_size,
-        config.input_format,
-        config.is_input_in_dram ? nullptr : input.buffer()));
+    // CB_IN: the L1 input's shard, which the writers gather from. A DRAM input is read from its
+    // banks directly, so it takes no CB; one would hold a whole bank's shard on every core.
+    if (!config.is_input_in_dram) {
+        const uint32_t cb_in_page_size = config.l1_input_shard_width * config.element_size_bytes;
+        const uint32_t cb_in_total_size = config.l1_input_shard_height * cb_in_page_size;
+        desc.cbs.push_back(make_cnn_circular_buffer(
+            core_grid, CBIndex::CB_IN, cb_in_total_size, cb_in_page_size, config.input_format, input.buffer()));
+    }
 
     // CB_IN_BATCH: [C x block_size_width] staging for gathered sticks
     const uint32_t cb_in_batch_page_size = block_size_width * config.element_size_bytes;
