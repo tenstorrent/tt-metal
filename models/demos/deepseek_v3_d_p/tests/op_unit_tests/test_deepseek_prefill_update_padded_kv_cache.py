@@ -1453,7 +1453,28 @@ def test_update_padded_kv_cache_input_row_window_rejects(mesh_device, expect_err
 
 # KV dedup: the op gets a TP-REPLICATED input and each chip persists only its own 1/tp window, so the two
 # mesh axes linearize into one block-cyclic axis of sp*tp with per-chip chunk Cl = chunk_local/tp.
-@pytest.mark.parametrize("mesh_device", [(1, 4), (2, 2), (2, 4)], ids=["1x4", "2x2", "2x4"], indirect=True)
+# With fabric up the op runs one program for the mesh, else one per chip; both must match the reference.
+@pytest.mark.parametrize(
+    "mesh_device, device_params",
+    [
+        pytest.param((1, 4), {}, id="1x4"),
+        pytest.param((2, 2), {}, id="2x2"),
+        pytest.param((2, 4), {}, id="2x4"),
+        pytest.param(
+            (2, 4),
+            fabric2d_device_params(),
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"),
+            id="fabric2d-2x4",
+        ),
+        pytest.param(
+            (8, 4),
+            torus_xy_device_params(),
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
+            id="torus-xy-8x4",
+        ),
+    ],
+    indirect=True,
+)
 @pytest.mark.parametrize("dtype, layout", DTYPE_LAYOUT_CASES, ids=DTYPE_LAYOUT_IDS)
 @pytest.mark.parametrize(
     "config_name, num_users, num_layers, cl_tiles_per_dev, cache_tokens_per_dev",
@@ -1637,6 +1658,35 @@ def test_update_padded_kv_cache_tp_sharded(
             logger.info(f"  user {u} layer {l}: exact match")
 
     logger.info(f"program cache entries: {mesh_device.num_program_cache_entries()}")
+
+
+@pytest.mark.parametrize(
+    "mesh_device, device_params",
+    [
+        pytest.param(
+            (2, 4),
+            fabric2d_device_params(),
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"),
+            id="fabric2d-2x4",
+        ),
+        pytest.param(
+            (8, 4),
+            torus_xy_device_params(),
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
+            id="torus-xy-8x4",
+        ),
+    ],
+    indirect=True,
+)
+@pytest.mark.parametrize("dtype, layout", DTYPE_LAYOUT_CASES, ids=DTYPE_LAYOUT_IDS)
+@pytest.mark.timeout(0)
+def test_update_padded_kv_cache_on_offset_submesh(mesh_device, dtype, layout):
+    """Bottom half of the box: fabric chip ids are not the submesh's row-major order. Bit-exact."""
+    rows, cols = mesh_device.shape
+    submesh = mesh_device.create_submesh(ttnn.MeshShape(rows // 2, cols), offset=ttnn.MeshCoordinate(rows // 2, 0))
+    test_update_padded_kv_cache_tp_sharded(
+        submesh, "small", 2, 3, 2, 512, "padded_partial", dtype, layout, False, False
+    )
 
 
 @pytest.mark.parametrize("mesh_device", _full_mesh_update_cases(), indirect=True)
