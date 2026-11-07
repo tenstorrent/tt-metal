@@ -239,8 +239,12 @@ void kernel_main() {
 
                 // TODO implement accumulation for <=9 MPWI SFPU so we can use this version for large kernels as well
                 constexpr uint32_t max_mpwi_kernel_size = window_size_hw <= 9 ? 9 : 32;
-                max_reduce_with_indices<max_mpwi_kernel_size, ckernel::DataLayout::ROW_MAJOR, is_large_kernel>(
-                    data_dst_idx, index_dst_idx, chunk);
+                max_reduce_with_indices<
+                    data_dst_idx,
+                    index_dst_idx,
+                    max_mpwi_kernel_size,
+                    ckernel::DataLayout::ROW_MAJOR,
+                    is_large_kernel>(chunk);
 
                 if constexpr (is_large_kernel) {
                     if (!last_chunk) {
