@@ -488,7 +488,7 @@ def test_synthetic_depth_writes_every_slot(model, mesh_device, device_params):
 # * Top-k (tt_metal_tracker-ao3i.5.2): each DSA layer's device top-2048 against `dsa/dsa_topk_indices_layer_i`,
 #   scored as set recall |device ∩ trace| / |trace| per query row (test_ttnn_csa*.py's measure), averaged
 #   over the prompt rows at positions >= INDEX_TOPK. Rows before that select every causal key on both sides
-#   (recall 1 by construction, checked) and decode rows are logged. Bar K31_TOPK_RECALL (below).
+#   (recall 1 by construction, checked) and decode rows are logged. Bar K31_TOPK_RECALL, per golden (below).
 #
 #     K31_HANDOFF_DIR=/path/handoff scripts/run_safe_pytest.sh \
 #         "models/demos/deepseek_v3_d_p/tests/kimi_k3/test_transformer_depth.py::test_k31_depth_ladder_matches_golden[blackhole-L5-torus-xy-8x4]"
@@ -506,7 +506,14 @@ def k31_layer_pcc(layer: int) -> float:
 # on, 6-11% of misses come from the trace's top half, in rows owned mostly by newline/','/'.' tokens: the
 # frequent-token hidden-state error that sets in at layers 48-59 (tt_metal_tracker-ao3i.5.5), not the indexer
 # (its key cache stays >= 0.992 there). 0.95, the CSA chunked floor, would fail layers 3, 7, 51 and 63-92 on that.
-K31_TOPK_RECALL = 0.9
+#
+# Near-tie recall falls with the number of candidates, so one floor cannot serve both goldens: at 128K the cut holds
+# ~300-380 keys within 1% of the spread (twice 10K's) and recall falls smoothly with position, at every layer. Layers
+# 11-23 keep the 10K signature (>= 94% of misses rank >= 1500, median margin 0.3-0.6% of the spread): mean 0.928-0.941.
+# Layers 3 and 7 carry ~3x the later layers' per-key score error at both lengths (miss margin p50 ~1.2%, p90 ~3.4% of
+# the spread, unchanged from 10K), so the crowding costs them more: 0.834 / 0.837, 0.811 over the last 16K rows. The
+# 128K floor is 0.8, ~3 points under them, as 0.9 sits ~1.3 under the 10K minimum (layer 51).
+K31_TOPK_RECALL = {TRACE_K31: 0.9, TRACE_K31_128K: 0.8}
 
 
 def k31_topk_rows(mesh_device, indices, rows: int) -> torch.Tensor:
@@ -751,7 +758,7 @@ def test_k31_depth_ladder_matches_golden(rung, mesh_device, device_params):
             f"mean {gated.mean():.6f} p1 {gated.quantile(0.01):.4f} min {gated.min():.4f}  "
             f"rows [0, {topk_k}) min {full.min():.4f}  decode mean {dec.mean():.6f}"
         )
-        if gated.mean() < K31_TOPK_RECALL or full.min() < 1:
+        if gated.mean() < K31_TOPK_RECALL[golden_path] or full.min() < 1:
             topk_failures.append(f"layer {layer}: {gated.mean():.6f} (rows < {topk_k}: min {full.min():.4f})")
 
     worst = min(scores, key=lambda k: scores[k] - k31_layer_pcc(k[0]))
@@ -764,4 +771,4 @@ def test_k31_depth_ladder_matches_golden(rung, mesh_device, device_params):
     )
     assert not kv_failures, "KV cache diverged: " + "; ".join(kv_failures)
     assert not topk_miscounted, "device top-k selects a different number of keys: " + "; ".join(topk_miscounted)
-    assert not topk_failures, f"top-k recall below {K31_TOPK_RECALL}: " + "; ".join(topk_failures)
+    assert not topk_failures, f"top-k recall below {K31_TOPK_RECALL[golden_path]}: " + "; ".join(topk_failures)
