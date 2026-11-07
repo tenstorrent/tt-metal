@@ -185,7 +185,7 @@
     "resource_overrides": false
   },
   "arm": "release-gpqa160-c8",
-  "status": "release_dispatched",
+  "status": "device_job_in_progress",
   "purpose": "Final frozen release evaluation; no repairs or redispatch",
   "predicted_device_hours": 7.6466666666666665,
   "predicted_hours": 10.44204616718822,
@@ -206,5 +206,12 @@
   "run_id": 42388198738,
   "submitted_at": "2026-11-07T15:49:00Z",
   "url": "https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/42388198738",
-  "workflow_status": "queued"
+  "workflow_status": "in_progress",
+  "workflow_conclusion": null,
+  "last_observed_at": "2026-11-07T16:17:42.487196+00:00",
+  "runner": "120-qb2-p04t05",
+  "device_job_id": 128450033948,
+  "device_job_started_at": "2026-11-07T15:49:13Z",
+  "device_job_completed_at": null,
+  "start": "2026-11-07T15:49:13Z"
 }

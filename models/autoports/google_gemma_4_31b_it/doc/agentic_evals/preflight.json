@@ -101,6 +101,15 @@
       "model_filesystem_free_bytes": null,
       "model_storage_reserve_bytes": null,
       "quantitative_headroom_unknown": true
+    },
+    "release_stock_observation": {
+      "source": "runs/release-gpqa160-c8/startup-confirmation.json",
+      "reported_free_gb": 887,
+      "usage_percent": 75,
+      "filesystem": null,
+      "docker_root_mapping": null,
+      "reserve_bytes": null,
+      "scope": "Stock cleanup only; no new check added and no general disk-admission proof inferred"
     }
   },
   "admission": {
