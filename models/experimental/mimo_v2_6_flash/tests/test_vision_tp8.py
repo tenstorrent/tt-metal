@@ -7,7 +7,8 @@ Inputs come from vLLM's processor (reference/vision_inputs.py) on the repo's sam
 640x360 image, a 1024x1024 image, two images in one call, and a 32-frame 640x360 video (also split into several
 passes); bf16 and bfloat8_b weights. Checks the PCC of every block's output (row order) and of the final embeddings,
 that padding a pass to its row bucket leaves the real rows alone, that ``warm()`` compiles every program a call runs,
-and the encoder backend on a busy device.
+that traced passes match the eager ones bit for bit within their DRAM / trace region budget, and the encoder backend
+on a busy device.
 
 Run on one Galaxy row, as a row engine does:
     TT_VISIBLE_DEVICES=<the row's 8 chips> pytest models/experimental/mimo_v2_6_flash/tests/test_vision_tp8.py
@@ -29,6 +30,7 @@ from models.experimental.mimo_v2_6_flash.tt.vision.encoder import MiMoVisionEnco
 from models.experimental.mimo_v2_6_flash.tt.vision.vit import (
     NUMERICS,
     ROW_BUCKETS,
+    TRACE_BUCKETS,
     PassGeometry,
     TtMiMoVisionTransformer,
     plan_passes,
@@ -36,6 +38,12 @@ from models.experimental.mimo_v2_6_flash.tt.vision.vit import (
 
 BLOCK_PCC = 0.99
 FINAL_PCC = 0.99
+# Per-chip cost of the traced buckets (tt/vision/vit.py TRACE_BUCKETS) a serving replica can afford: the MTP launch
+# keeps ~1049 MB of DRAM free per chip against the 832 MB its largest eager ViT pass needs, and ~318 MiB of its 1144 MiB
+# trace region free after the LLM's captures (bhg4 row engines, 2026-11-07).
+PERSISTENT_BUDGET_MB = 32
+TRACE_BUDGET_MB = 96
+TRACE_DEVICE_PARAMS = {**GALAXY_DEVICE_PARAMS, "trace_region_size": 128 << 20}
 
 
 def vision_cache_dir():
@@ -238,6 +246,74 @@ def test_vision_warm_bounds_programs(mesh_device, reference):
         new = mesh_device.num_program_cache_entries() - programs
         assert new == 0, f"{case} compiled {new} programs after warm()"
         assert dram_allocated(mesh_device) == dram, f"{case} left DRAM allocated"
+
+
+@pytest.mark.parametrize("device_params", [TRACE_DEVICE_PARAMS], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
+def test_vision_traced_passes(mesh_device, reference):
+    """Traced passes (every bucket up to TRACE_MAX_ROWS): bit-identical to the eager pass for several geometries per
+    bucket (an image filling it, a smaller image padded into it, two images), close to the fp32 reference on the
+    processor's images; replays compile nothing and allocate no DRAM; a program compiled after a capture makes the
+    next replay capture again (its binary can sit where the trace's temporaries are). Logs and checks the cost per
+    chip: persistent buffers within PERSISTENT_BUDGET_MB, trace region within TRACE_BUDGET_MB."""
+    path, model_ref = reference
+    cfg = model_ref.cfg
+    model = TtMiMoVisionTransformer.from_checkpoint(mesh_device, path, cache_dir=vision_cache_dir())
+    persistent = model.prepare_traces(TRACE_BUCKETS)
+    sizes = model.capture_traces()
+    assert sorted(sizes) == list(TRACE_BUCKETS) and all(sizes.values()), sizes
+    logger.info(
+        f"traces: persistent buffers {persistent / 2**20:.1f} MiB per chip, trace region {sum(sizes.values()) / 2**20:.1f} "
+        f"MiB per chip ({', '.join(f'{r}: {b / 2**20:.1f}' for r, b in sizes.items())})"
+    )
+    assert persistent <= PERSISTENT_BUDGET_MB * 2**20 and sum(sizes.values()) <= TRACE_BUDGET_MB * 2**20
+
+    g = torch.Generator().manual_seed(0)
+    programs, dram = mesh_device.num_program_cache_entries(), dram_allocated(mesh_device)
+    for rows in TRACE_BUCKETS:
+        lower = max([b for b in ROW_BUCKETS if b < rows], default=0)
+        h = 32
+        w = (lower // h + 1 + rows // h) // 2 // 2 * 2  # an image between the bucket below and this one
+        geometries = [[(1, h, rows // h)], [(1, h, w)], [(1, 16, 16), (1, h, w - 8)]]
+        for grids in geometries:
+            geo = PassGeometry.build(grids, model.buckets)
+            assert geo.rows == rows, (grids, geo.rows, rows)
+            pixels = torch.randn(geo.n, cfg.patch_dim, generator=g).bfloat16()
+            eager = model.forward_pass(pixels, geo, trace=False)
+            traced = model.forward_pass(pixels, geo)
+            again = model.forward_pass(pixels, geo)
+            assert torch.equal(eager, traced) and torch.equal(traced, again), f"{grids}: traced != eager"
+        logger.info(f"{rows} rows: traced == eager for {geometries}")
+    assert mesh_device.num_program_cache_entries() == programs, "a replay compiled programs"
+    assert dram_allocated(mesh_device) == dram, "a replay left DRAM allocated"
+
+    for case in ("image_448", "image_640x480", "image_1024", "two_images"):
+        pixel_values, grid, _ = make_case(path, case)
+        out = model(pixel_values, grid)
+        with torch.no_grad():
+            expected = model_ref(pixel_values, grid)
+        score = pcc(out.float(), expected)
+        logger.info(f"{case} traced: final PCC {score:.5f}")
+        assert score >= FINAL_PCC
+
+    # A new program after the captures: the next replay captures that bucket again and stays exact.
+    probe = ttnn.from_torch(
+        torch.ones(1, 1, 96, 96),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh_device,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+    ttnn.add(probe, probe).deallocate(True)
+    probe.deallocate(True)
+    rows = TRACE_BUCKETS[0]
+    geo = PassGeometry.build([(1, 32, rows // 32)], model.buckets)
+    pixels = torch.randn(rows, cfg.patch_dim, generator=g).bfloat16()
+    before = model.trace_info()[rows][2]
+    traced = model.forward_pass(pixels, geo)
+    assert model.trace_info()[rows][2] == before + 1, "no recapture after a new program"
+    assert torch.equal(traced, model.forward_pass(pixels, geo, trace=False))
+    model.release_traces()
 
 
 @pytest.mark.parametrize("device_params", [GALAXY_DEVICE_PARAMS], indirect=True)

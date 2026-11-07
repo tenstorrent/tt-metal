@@ -8,12 +8,13 @@ Cases (inputs from vLLM's processor, repo sample images): ``448`` (448x448 image
 (32 frames of 640x360: 16 frame pairs of 880 patches) and ``video32_720p`` (32 frames of 1280x720, 56320 patches,
 several passes). Device time is the encoder call end to end (host inputs, device, readback of [n, 4096] bf16),
 the median of ``--repeats`` calls after a first (compiling) call; the CPU reference runs once per dtype with
-``--threads`` torch threads.
+``--threads`` torch threads. Buckets up to ``--trace-max-rows`` replay traces (captured before the cases run; their
+persistent DRAM and trace region per chip are logged); ``--trace-max-rows 0`` runs every pass eagerly.
 
 Run on one row, as a row engine does:
     TT_VISIBLE_DEVICES=<row chips> python models/experimental/mimo_v2_6_flash/tests/perf/vision_latency.py \
         [--cases 448,1024,max,video32] [--cpu fp32,bf16] [--threads 16] \
-        [--numerics accurate,accurate+exact,accurate+bfp8] [--warm]
+        [--numerics accurate,accurate+exact,accurate+bfp8] [--warm] [--trace-max-rows 4096]
 """
 
 import argparse
@@ -31,7 +32,7 @@ from models.experimental.mimo_v2_6_flash.reference.checkpoint import default_mod
 from models.experimental.mimo_v2_6_flash.tests.common import pcc
 from models.experimental.mimo_v2_6_flash.tt.common import fabric_config
 from models.experimental.mimo_v2_6_flash.tt.vision.encoder import MiMoVisionEncoder
-from models.experimental.mimo_v2_6_flash.tt.vision.vit import ROW_BUCKETS
+from models.experimental.mimo_v2_6_flash.tt.vision.vit import ROW_BUCKETS, TRACE_MAX_ROWS
 
 
 def case_inputs(path, case):
@@ -95,6 +96,8 @@ def main():
         "weights) and / or '+exact' (no row buckets: each pass padded to a multiple of 128), e.g. accurate+bfp8",
     )
     p.add_argument("--warm", action="store_true", help="warm() every bucket first and report its time and programs")
+    p.add_argument("--trace-max-rows", type=int, default=TRACE_MAX_ROWS, help="largest traced bucket (0: no traces)")
+    p.add_argument("--trace-region-mb", type=int, default=256)
     a = p.parse_args()
     torch.set_num_threads(a.threads)
     path = default_model_path()
@@ -113,7 +116,8 @@ def main():
         return kind, d["pixel_values_videos"], d["video_grid_thw"]
 
     ttnn.set_fabric_config(**fabric_config())
-    mesh = ttnn.open_mesh_device(ttnn.MeshShape(1, 8), l1_small_size=65536, trace_region_size=0)
+    trace_region = a.trace_region_mb << 20 if a.trace_max_rows else 0
+    mesh = ttnn.open_mesh_device(ttnn.MeshShape(1, 8), l1_small_size=65536, trace_region_size=trace_region)
     try:
         kwargs = {} if a.max_rows is None else {"max_rows": a.max_rows}
         tracker = PeakTracker(mesh)
@@ -123,9 +127,26 @@ def main():
             numerics, *flags = preset.split("+")
             weight_dtype = ttnn.bfloat8_b if "bfp8" in flags else ttnn.bfloat16
             buckets = None if "exact" in flags else ROW_BUCKETS
-            enc = MiMoVisionEncoder(mesh, path, weight_dtype=weight_dtype, numerics=numerics, buckets=buckets, **kwargs)
+            enc = MiMoVisionEncoder(
+                mesh,
+                path,
+                weight_dtype=weight_dtype,
+                numerics=numerics,
+                buckets=buckets,
+                trace_max_rows=a.trace_max_rows,
+                **kwargs,
+            )
             weights_mb = dram_mb(mesh) - base_mb
             logger.info(f"{preset}: encoder ready in {time.time() - t0:.1f} s, weights {weights_mb:.1f} MB per chip")
+            if enc.trace_buckets:
+                t0 = time.time()
+                persistent = enc.vit.prepare_traces(enc.trace_buckets)
+                sizes = enc.capture_traces()
+                logger.info(
+                    f"{preset}: {len(sizes)} traces ({list(sizes)}) in {time.time() - t0:.1f} s: persistent buffers "
+                    f"{persistent / 1e6:.1f} MB per chip, trace region {sum(sizes.values()) / 2**20:.1f} MiB per "
+                    f"chip ({', '.join(f'{r}: {b / 2**20:.1f}' for r, b in sizes.items())})"
+                )
             if a.warm and buckets:
                 programs, before = mesh.num_program_cache_entries(), dram_mb(mesh)
                 t0 = time.time()
@@ -162,6 +183,7 @@ def main():
                     f"{preset} {c}: {r['grid']} first {first:.2f} s, median {r[preset]['ms']:.1f} ms, "
                     f"activation peak ~{r[preset]['act_mb']:.0f} MB per chip, left allocated {left_mb:.1f} MB"
                 )
+            enc.release_traces()
             del enc
     finally:
         ttnn.close_mesh_device(mesh)

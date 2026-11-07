@@ -14,13 +14,18 @@ one or several items; outputs are the items' merged-token embeddings back to bac
 
 Programs: every device pass is padded to one of ``encoder.buckets`` (``ROW_BUCKETS``: 1024 .. 32768 patch rows), so
 the programs a call can run are a fixed set; ``warm()`` compiles them all (or a subset of buckets) and keeps their
-binaries in DRAM (~11 MB per chip for all buckets). Calls after that compile nothing and allocate nothing that
-outlives them.
+binaries in DRAM (~20 MB per chip for all buckets). Calls after that compile nothing.
+
+Traces: passes of the buckets up to ``trace_max_rows`` (``MIMO_VIT_TRACE_MAX_ROWS``, default 4096: images up to
+1024x1024; 0 turns tracing off) replay a trace instead of enqueueing ~1000 ops from the host (a small image: ~44 ms
+eager, a few ms traced; bit-identical). ``warm()`` also allocates their persistent inputs and outputs (a few MB per
+chip in all), before the LLM's traces are captured; ``capture_traces()`` captures them after the LLM's (a bucket not
+captured by then is captured on its first call). Each trace takes trace region DRAM (``trace_info()``); a capture that
+does not fit leaves its bucket eager. Larger passes run eagerly and leave no device tensor behind.
 
 Weights: converted from the checkpoint on first use into ``cache_dir`` (``MIMO_VISION_CACHE``/<checkpoint name> by
 default; never the LLM's cache) under the same lock as the LLM's weights: 201 MB per chip in BF16, less with
-``weight_dtype=ttnn.bfloat8_b``. Every call runs eagerly (no trace) and leaves no device tensor behind, so it can run
-between the LLM's traced decode steps.
+``weight_dtype=ttnn.bfloat8_b``.
 """
 
 import os
@@ -30,7 +35,10 @@ import torch
 import ttnn
 
 from ...reference.vision import as_grid_list
-from .vit import DEFAULT_MAX_ROWS, DEFAULT_NUMERICS, NUMERICS, ROW_BUCKETS, TtMiMoVisionTransformer
+from .vit import DEFAULT_MAX_ROWS, DEFAULT_NUMERICS, NUMERICS, ROW_BUCKETS, TRACE_MAX_ROWS, TtMiMoVisionTransformer
+
+# Largest traced bucket (patch rows); 0: no traces.
+VIT_TRACE_MAX_ROWS = int(os.environ.get("MIMO_VIT_TRACE_MAX_ROWS", str(TRACE_MAX_ROWS)))
 
 
 def default_cache_dir(model_path):
@@ -45,7 +53,8 @@ class MiMoVisionEncoder:
     (whole frames; an image always runs in one pass; at most the largest bucket). ``weight_dtype``: matmul weights
     (bf16 or bfloat8_b). ``numerics``: a ``vit.NUMERICS`` preset; "balanced" (HiFi4 linears, fp32 residual stream,
     bf16 all-reduce) by default; "accurate" adds fp32 all-reduces, each followed by a device sync (see
-    ``vit.VisionNumerics``). ``buckets``: pass row counts (None: one program set per input size, unbounded)."""
+    ``vit.VisionNumerics``; not traceable). ``buckets``: pass row counts (None: one program set per input size,
+    unbounded, no traces). ``trace_max_rows``: the largest traced bucket (0: none)."""
 
     modalities = ("image", "video")
 
@@ -58,6 +67,7 @@ class MiMoVisionEncoder:
         weight_dtype=ttnn.bfloat16,
         numerics=DEFAULT_NUMERICS,
         buckets=ROW_BUCKETS,
+        trace_max_rows=None,
     ):
         cache_dir = cache_dir if cache_dir is not None else default_cache_dir(model_path)
         self.vit = TtMiMoVisionTransformer.from_checkpoint(
@@ -70,6 +80,8 @@ class MiMoVisionEncoder:
             buckets=buckets,
         )
         self.cfg = self.vit.cfg
+        limit = VIT_TRACE_MAX_ROWS if trace_max_rows is None else trace_max_rows
+        self.trace_buckets = tuple(b for b in self.vit.buckets if b <= limit) if self.vit.traceable() else ()
 
     @property
     def buckets(self):
@@ -77,8 +89,24 @@ class MiMoVisionEncoder:
         return self.vit.buckets
 
     def warm(self, buckets=None):
-        """Compile every bucket's programs (default: all) before the LLM captures its traces. Returns {rows: s}."""
-        return self.vit.warm(buckets)
+        """Compile every bucket's programs (default: all) and allocate the traced buckets' persistent buffers, before
+        the LLM captures its traces. Returns {rows: s}."""
+        times = self.vit.warm(buckets)
+        self.vit.prepare_traces(self.trace_buckets)
+        return times
+
+    def capture_traces(self):
+        """Capture the traced buckets' passes (after warm(), once the LLM's traces are captured). Returns {rows: trace
+        region bytes per chip}."""
+        self.vit.prepare_traces(self.trace_buckets)
+        return self.vit.capture_traces()
+
+    def trace_info(self):
+        """{rows: (captured, trace region bytes per chip, recaptures)}."""
+        return self.vit.trace_info()
+
+    def release_traces(self):
+        self.vit.release_traces()
 
     def _embed(self, pixel_values, grid_thw):
         grids = as_grid_list(grid_thw)

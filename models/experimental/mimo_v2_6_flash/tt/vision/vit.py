@@ -32,9 +32,11 @@ than the largest bucket (only if the processor allows images over 32768 patches)
 """
 
 import time
+from collections import OrderedDict
 from dataclasses import dataclass
 
 import torch
+from loguru import logger
 
 import ttnn
 
@@ -55,6 +57,12 @@ ROW_BUCKETS = tuple(
 # CU_ENTRIES - 2 sequences plus the padding window.
 CU_ENTRIES = 256
 MAX_SEQS_PER_PASS = CU_ENTRIES - 2
+# Buckets whose passes are traced by default (prepare_traces): up to a 1024x1024 image. A trace replay costs ~0 host
+# time against the eager pass's ~40 us of enqueue per op (~1000 ops: the whole small-image latency).
+TRACE_MAX_ROWS = 4096
+TRACE_BUCKETS = tuple(b for b in ROW_BUCKETS if b <= TRACE_MAX_ROWS)
+# Pass geometries whose host input tensors (PassInputs.host) stay cached, least recently used out first.
+HOST_INPUT_CACHE = 64
 
 
 @dataclass(frozen=True)
@@ -178,55 +186,86 @@ def band_masks(geo, window):
 
 class PassInputs:
     """Device tensors describing one pass (replicated on the row): RoPE tables in both orders, the order
-    permutations, the SDPA windows and the band masks."""
+    permutations, the SDPA windows and the band masks.
 
-    def __init__(self, plan, cfg, geo):
+    ``host(plan, cfg, geo)`` builds what is uploaded, as host tensors: they depend on the pass geometry only, never on
+    the pixels, so the model caches them per geometry. ``upload`` puts a host set on the device; ``copy_from`` writes a
+    host set of the same row count into existing device tensors (a traced pass's persistent inputs). Uploaded are the
+    row-order RoPE tables and one ``band`` tensor (0: visible key, 1: visible sink key, MASK_NEG: hidden); ``derive``
+    makes the rest on the device at the start of a pass (column-order tables: the row-order ones gathered into column
+    order; the mask and sink indicator: band - relu(band) and relu(band)), all exact, and ``release`` frees them."""
+
+    def __init__(self, geo, tensors):
         self.geo = geo
-        rows = geo.rows
-        mesh = plan.mesh_device
-        rep = plan.replicate()
-        merge = cfg.spatial_merge_size
-        unit = cfg.merge_unit
+        self.tensors = tensors
+        self.order = {True: tensors["to_col"], False: tensors["to_row"]}
+        self.cu = tensors["cu"]
+        self.window_rows = tensors["window_rows"]
+        self.cos = self.sin = self.mask = self.sink = None
 
-        def dev(t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT):
-            return ttnn.from_torch(t, dtype=dtype, layout=layout, device=mesh, mesh_mapper=rep)
+    @staticmethod
+    def host(plan, cfg, geo):
+        rows = geo.rows
+        rep = plan.replicate()
+
+        def host(t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT):
+            return ttnn.from_torch(t, dtype=dtype, layout=layout, mesh_mapper=rep)
+
+        def index(t):
+            return host(t.reshape(1, -1).to(torch.int32), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT)
 
         pad = rows - geo.n
-        freqs = ref.rotary_freqs(geo.grids, cfg.head_dim, merge)
+        freqs = ref.rotary_freqs(geo.grids, cfg.head_dim, cfg.spatial_merge_size)
         emb = torch.cat((freqs, freqs), dim=-1)
-        index = ref.col_window_index(geo.grids, merge)
-        col_emb = ref.apply_index(emb, index, unit)
 
-        def table(e, fn, fill):
-            t = torch.cat([fn(e), torch.full((pad, e.shape[-1]), fill)]) if pad else fn(e)
-            return dev(t.reshape(1, 1, rows, -1))
-
-        self.cos = {False: table(emb, torch.cos, 1.0), True: table(col_emb, torch.cos, 1.0)}
-        self.sin = {False: table(emb, torch.sin, 0.0), True: table(col_emb, torch.sin, 0.0)}
+        def table(fn, fill):
+            t = torch.cat([fn(emb), torch.full((pad, emb.shape[-1]), fill)]) if pad else fn(emb)
+            return host(t.reshape(1, 1, rows, -1))
 
         # Row permutations (padding rows stay in place): to column order and back.
-        to_col = ref.patch_row_index(index, unit)
+        to_col = ref.patch_row_index(ref.col_window_index(geo.grids, cfg.spatial_merge_size), cfg.merge_unit)
         to_col = torch.cat([to_col, torch.arange(geo.n, rows)])
-        to_row = torch.argsort(to_col)
-        self.order = {
-            True: dev(to_col.reshape(1, rows).to(torch.int32), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT),
-            False: dev(to_row.reshape(1, rows).to(torch.int32), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT),
-        }
-        self.cu = dev(torch.tensor(geo.cu_window_seqlens(), dtype=torch.int32), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT)
         mask, sink = band_masks(geo, cfg.window_size)
-        self.mask = dev(mask)
-        self.sink = dev(sink)
         # Window blocks' key rows, block after block (b*BLOCK - window .. + span; rows outside the pass are masked,
         # so they read any row: the nearest one).
         nb, span = rows // BLOCK, BLOCK + 2 * cfg.window_size
         keys = (torch.arange(nb) * BLOCK - cfg.window_size).view(nb, 1) + torch.arange(span).view(1, span)
-        self.window_rows = dev(
-            keys.clamp(0, rows - 1).reshape(1, -1).to(torch.int32), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT
-        )
+        cu = torch.tensor(geo.cu_window_seqlens(), dtype=torch.int32)
+        return {
+            "cos": table(torch.cos, 1.0),
+            "sin": table(torch.sin, 0.0),
+            "to_col": index(to_col),
+            "to_row": index(torch.argsort(to_col)),
+            "cu": host(cu, ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT),
+            "band": host(mask + sink),
+            "window_rows": index(keys.clamp(0, rows - 1)),
+        }
+
+    @classmethod
+    def upload(cls, plan, geo, host):
+        mesh = plan.mesh_device
+        return cls(geo, {k: ttnn.to_device(t, mesh, memory_config=ttnn.DRAM_MEMORY_CONFIG) for k, t in host.items()})
+
+    def copy_from(self, host):
+        for k, t in host.items():
+            ttnn.copy_host_to_device_tensor(t, self.tensors[k])
+
+    def derive(self, gather_rows):
+        """The device-made inputs (``gather_rows(x, index)``: rows of x in index order)."""
+        t = self.tensors
+        dram = ttnn.DRAM_MEMORY_CONFIG
+        self.cos = {False: t["cos"], True: gather_rows(t["cos"], t["to_col"])}
+        self.sin = {False: t["sin"], True: gather_rows(t["sin"], t["to_col"])}
+        self.sink = ttnn.relu(t["band"], memory_config=dram)
+        self.mask = ttnn.subtract(t["band"], self.sink, memory_config=dram)
+
+    def release(self):
+        for x in (self.cos[True], self.sin[True], self.sink, self.mask):
+            x.deallocate(True)
+        self.cos = self.sin = self.mask = self.sink = None
 
     def deallocate(self):
-        tensors = [*self.cos.values(), *self.sin.values(), *self.order.values(), self.cu, self.mask, self.sink]
-        for t in tensors + [self.window_rows]:
+        for t in self.tensors.values():
             t.deallocate(True)
 
 
@@ -497,6 +536,11 @@ class TtMiMoVisionTransformer:
             TtVisionBlock(self.plan, cfg, i, sd, cache_dir, weight_dtype, numerics, self.mm_config, self.attn_config)
             for i in range(cfg.depth)
         ]
+        # A bf16 merger reduce ends in a reduce-scatter (chip c holds output columns c * 512 ..; the host concatenates
+        # them): the first half of the all-reduce, without gathering the [rows / 4, 4096] output on every chip.
+        self.scatter_out = numerics.reduce_dtype != ttnn.float32
+        self._host_cache = OrderedDict()  # (grids, rows) -> PassInputs.host(...), least recently used first
+        self._traces = {}  # rows -> PassTrace (prepare_traces)
 
     @classmethod
     def from_checkpoint(cls, mesh_device, model_path, cache_dir=None, **kwargs):
@@ -553,7 +597,20 @@ class TtMiMoVisionTransformer:
         h0.deallocate(True)
         out = ttnn.linear(g, self.merger_w2, **{**kw, "dtype": self.numerics.reduce_dtype})
         g.deallocate(True)
-        return all_reduce(self.plan, out, self.numerics)
+        if not self.scatter_out:
+            return all_reduce(self.plan, out, self.numerics)
+        # all_reduce's own reduce-scatter (it scatters [1, 1, rows / 4, 4096] on the last dim), without its gather.
+        plan = self.plan
+        scattered = ttnn.reduce_scatter(
+            out,
+            3,
+            cluster_axis=plan.tp_axis,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            num_links=plan.num_links,
+            topology=plan.topology,
+        )
+        out.deallocate(True)
+        return scattered
 
     def _host_rows(self, x, geo, to_row=None):
         """Chip 0's [rows, d] -> torch [n, d] in row (processor) order."""
@@ -562,23 +619,56 @@ class TtMiMoVisionTransformer:
             t = t[to_row]
         return t[: geo.n]
 
-    def forward_pass(self, pixel_values, geo, hidden=None):
-        """One pass: pixel rows [geo.n, patch_dim] -> host bf16 [geo.n / 4, out_hidden]. Rows past ``geo.n`` (up to
-        ``geo.rows``; zeros when not given) are padding: they never reach the real rows. ``hidden``: a list that
-        collects each block's output (host fp32 [n, hidden], row order) for tests."""
-        cfg = self.cfg
-        inp = PassInputs(self.plan, cfg, geo)
+    def _host_inputs(self, geo):
+        """PassInputs.host for ``geo``, cached per pass geometry (they never depend on the pixels)."""
+        key = (tuple(geo.grids), geo.rows)
+        host = self._host_cache.get(key)
+        if host is None:
+            host = PassInputs.host(self.plan, self.cfg, geo)
+            self._host_cache[key] = host
+            while len(self._host_cache) > HOST_INPUT_CACHE:
+                self._host_cache.popitem(last=False)
+        else:
+            self._host_cache.move_to_end(key)
+        return host
+
+    def _host_pixels(self, pixel_values, geo):
+        """Pixel rows [geo.n .. geo.rows, patch_dim] -> host bf16 [1, 1, rows, patch_dim] row-major tensor, rows
+        sharded over the row's chips (the pass tilizes and all-gathers them: 1/8 of a replicated upload, no host
+        tilize)."""
         pv = pixel_values.to(torch.bfloat16)
         assert geo.n <= pv.shape[0] <= geo.rows, (pv.shape, geo.n, geo.rows)
         if geo.rows > pv.shape[0]:
             pv = torch.cat([pv, torch.zeros(geo.rows - pv.shape[0], pv.shape[-1], dtype=pv.dtype)])
-        x_in = ttnn.from_torch(
+        return ttnn.from_torch(
             pv.reshape(1, 1, geo.rows, -1),
             dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=self.plan.mesh_device,
-            mesh_mapper=self.plan.replicate(),
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=self.plan.shard(2),
         )
+
+    def _read_out(self, out, geo):
+        """The merger output on device (row-major) -> host bf16 [geo.n / 4, out_hidden]."""
+        unit = self.cfg.merge_unit
+        if self.scatter_out:  # one read of every chip's columns (3-4x faster than a to_torch per chip)
+            t = ttnn.to_torch(out, mesh_composer=ttnn.ConcatMeshToTensor(self.plan.mesh_device, dim=3))
+        else:
+            t = ttnn.to_torch(ttnn.get_device_tensors(out)[0])
+        return t.reshape(geo.rows // unit, -1)[: geo.n // unit].to(torch.bfloat16)
+
+    def _pass(self, pixels, inp, own_inputs=True, hidden=None):
+        """The device pass: sharded pixel rows + PassInputs -> the merger output (reduce-scattered or all-reduced, see
+        ``scatter_out``). ``own_inputs``: deallocate the inputs as soon as they are used (an eager pass); a traced pass
+        keeps them (persistent). ``hidden``: see forward_pass (eager only: it reads every block's output)."""
+        cfg = self.cfg
+        geo = inp.geo
+        dram = ttnn.DRAM_MEMORY_CONFIG
+        tiles = ttnn.to_layout(pixels, ttnn.TILE_LAYOUT, memory_config=dram)
+        if own_inputs:
+            pixels.deallocate(True)
+        x_in = self.plan.all_gather(tiles, dim=2)
+        tiles.deallocate(True)
+        inp.derive(self._gather_rows)
         x = ttnn.linear(
             x_in,
             self.patch_w,
@@ -608,12 +698,31 @@ class TtMiMoVisionTransformer:
             x_new = self._reorder(x, inp.order[False])
             x.deallocate(True)
             x = x_new
+        inp.release()
         out = self._merger(x)
         x.deallocate(True)
-        inp.deallocate()
-        result = ttnn.to_torch(ttnn.get_device_tensors(out)[0]).float().reshape(geo.rows // cfg.merge_unit, -1)
+        if own_inputs:
+            inp.deallocate()
+        out_rm = ttnn.to_layout(out, ttnn.ROW_MAJOR_LAYOUT, memory_config=dram)
         out.deallocate(True)
-        return result[: geo.n // cfg.merge_unit].to(torch.bfloat16)
+        return out_rm
+
+    def forward_pass(self, pixel_values, geo, hidden=None, trace=True):
+        """One pass: pixel rows [geo.n, patch_dim] -> host bf16 [geo.n / 4, out_hidden]. Rows past ``geo.n`` (up to
+        ``geo.rows``; zeros when not given) are padding: they never reach the real rows. ``hidden``: a list that
+        collects each block's output (host fp32 [n, hidden], row order) for tests (eager). ``trace``: replay the
+        bucket's trace when it has one (prepare_traces; bit-identical to the eager pass)."""
+        pixels = self._host_pixels(pixel_values, geo)
+        host = self._host_inputs(geo)
+        traced = self._traces.get(geo.rows) if trace and hidden is None else None
+        if traced is not None and self._replay(traced, pixels, host):
+            return self._read_out(traced.out, geo)
+        mesh = self.plan.mesh_device
+        inp = PassInputs.upload(self.plan, geo, host)
+        out = self._pass(ttnn.to_device(pixels, mesh, memory_config=ttnn.DRAM_MEMORY_CONFIG), inp, hidden=hidden)
+        result = self._read_out(out, geo)
+        out.deallocate(True)
+        return result
 
     def forward(self, pixel_values, grid_thw, hidden=None):
         """pixel_values [N, patch_dim] (processor layout, any float dtype), grid_thw [items, 3] -> host bf16
@@ -633,8 +742,160 @@ class TtMiMoVisionTransformer:
         times = {}
         for rows in buckets if buckets is not None else self.buckets:
             assert rows in self.buckets, f"{rows} is not one of the buckets {self.buckets}"
-            grids = [(1, 32, rows // 32)]  # one image of exactly ``rows`` patches
             t0 = time.time()
-            self.forward_pass(torch.zeros(rows, self.cfg.patch_dim), PassGeometry.build(grids, self.buckets))
+            self.forward_pass(torch.zeros(rows, self.cfg.patch_dim), self._warm_geometry(rows), trace=False)
             times[rows] = time.time() - t0
         return times
+
+    def _warm_geometry(self, rows):
+        return PassGeometry.build([(1, 32, rows // 32)], self.buckets)  # one image of exactly ``rows`` patches
+
+    # -- traced passes -------------------------------------------------------------------------------------------
+
+    def traceable(self):
+        """Whether passes can be traced: the device has a trace region (without one a capture would take the DRAM
+        heap), and no fp32 reduce (it needs a device sync after it, VisionNumerics, which a trace cannot hold)."""
+        return self.numerics.reduce_dtype != ttnn.float32 and _trace_region(self.plan.mesh_device)[1] > 0
+
+    def prepare_traces(self, buckets=TRACE_BUCKETS):
+        """Allocate the persistent inputs and output of a traced pass for each of ``buckets`` and compile everything
+        it runs (one eager run of its body). Call it before the LLM captures its traces (as warm()), so their
+        replays never write over these buffers. The traces themselves are captured later (capture_traces, or on
+        first use). Returns the persistent DRAM per chip (bytes)."""
+        if not self.traceable():
+            return 0
+        mesh = self.plan.mesh_device
+        before = _dram_allocated(mesh)
+        new = []
+        for rows in buckets:
+            assert rows in self.buckets, f"{rows} is not one of the buckets {self.buckets}"
+            if rows in self._traces:
+                continue
+            geo = self._warm_geometry(rows)
+            pixels = self._host_pixels(torch.zeros(rows, self.cfg.patch_dim), geo)
+            pixels = ttnn.to_device(pixels, mesh, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            inp = PassInputs.upload(self.plan, geo, self._host_inputs(geo))
+            unit, out_dim = self.cfg.merge_unit, self.cfg.out_hidden_size
+            out_cols = out_dim // self.plan.tp if self.scatter_out else out_dim
+            out = ttnn.allocate_tensor_on_device(
+                ttnn.Shape([1, 1, rows // unit, out_cols]),
+                self.numerics.reduce_dtype,
+                ttnn.ROW_MAJOR_LAYOUT,
+                mesh,
+                ttnn.DRAM_MEMORY_CONFIG,
+            )
+            self._traces[rows] = PassTrace(rows, pixels, inp, out)
+            new.append(rows)
+        persistent = _dram_allocated(mesh) - before  # (the bodies below can add program binaries)
+        for rows in new:  # after every persistent buffer, so the bodies' temporaries do not split them up
+            self._trace_body(self._traces[rows])
+        ttnn.synchronize_device(mesh)
+        return persistent
+
+    def _trace_body(self, traced):
+        out = self._pass(traced.pixels, traced.inp, own_inputs=False)
+        ttnn.copy(out, traced.out)
+        out.deallocate(True)
+
+    def capture_traces(self, buckets=None):
+        """Capture the prepared traces not captured yet (``buckets``: a subset; default all prepared). Capture after
+        every long-lived allocation of the process (the LLM's traces): a replay writes the trace's temporaries where
+        they were at capture. Returns {rows: trace region bytes per chip}; a bucket whose capture fails (trace region
+        full) runs eagerly, with a warning."""
+        sizes = {}
+        for rows, traced in self._traces.items():
+            if traced.id is None and (buckets is None or rows in buckets):
+                sizes[rows] = self._capture(traced)
+        return sizes
+
+    def _capture(self, traced):
+        mesh = self.plan.mesh_device
+        before = _trace_allocated(mesh)
+        trace_id = None
+        try:
+            ttnn.synchronize_device(mesh)
+            trace_id = ttnn.begin_trace_capture(mesh, cq_id=0)
+            try:
+                self._trace_body(traced)
+            finally:
+                ttnn.end_trace_capture(mesh, trace_id, cq_id=0)
+            ttnn.synchronize_device(mesh)
+        except Exception as e:  # e.g. the trace region is full: that bucket runs eagerly
+            if trace_id is not None:
+                try:
+                    ttnn.release_trace(mesh, trace_id)
+                except Exception:
+                    pass
+            logger.warning(f"MiMo ViT: capturing the {traced.rows}-row pass failed, it runs eagerly: {e}")
+            traced.failed = True
+            return 0
+        traced.id = trace_id
+        traced.programs = mesh.num_program_cache_entries()
+        traced.bytes = _trace_allocated(mesh) - before
+        return traced.bytes
+
+    def _replay(self, traced, pixels, host):
+        """Copy a pass's inputs into its trace's buffers and replay it (non-blocking; the output read waits). Captures
+        it first if it is not yet (or again if programs were compiled since its capture: their binaries can sit where
+        its temporaries are). Returns False when the bucket has no usable trace (it then runs eagerly)."""
+        if traced.failed:
+            return False
+        mesh = self.plan.mesh_device
+        if traced.id is not None and traced.programs != mesh.num_program_cache_entries():
+            ttnn.release_trace(mesh, traced.id)
+            traced.id = None
+            traced.recaptures += 1
+        if traced.id is None and not self._capture(traced):
+            return False
+        ttnn.copy_host_to_device_tensor(pixels, traced.pixels)
+        traced.inp.copy_from(host)
+        ttnn.execute_trace(mesh, traced.id, cq_id=0, blocking=False)
+        return True
+
+    def release_traces(self):
+        """Release every trace and free its persistent buffers."""
+        mesh = self.plan.mesh_device
+        for traced in self._traces.values():
+            if traced.id is not None:
+                ttnn.release_trace(mesh, traced.id)
+            traced.pixels.deallocate(True)
+            traced.inp.deallocate()
+            traced.out.deallocate(True)
+        self._traces = {}
+
+    def trace_info(self):
+        """{rows: (captured, trace region bytes per chip, recaptures)} of the prepared traces."""
+        return {r: (t.id is not None, t.bytes, t.recaptures) for r, t in self._traces.items()}
+
+
+@dataclass
+class PassTrace:
+    """A bucket's traced pass: persistent sharded pixel rows, PassInputs and output, and the trace."""
+
+    rows: int
+    pixels: object
+    inp: PassInputs
+    out: object
+    id: object = None
+    programs: int = -1  # program-cache entries at capture
+    bytes: int = 0  # trace region per chip
+    recaptures: int = 0
+    failed: bool = False
+
+
+def _dram_allocated(mesh):
+    view = ttnn.get_memory_view(mesh, ttnn.BufferType.DRAM)
+    return view.total_bytes_allocated_per_bank * view.num_banks
+
+
+def _trace_region(mesh):
+    """(allocated, total) bytes of the trace region per chip; (0, 0) without one."""
+    try:
+        view = ttnn.get_memory_view(mesh, ttnn.BufferType.TRACE)
+    except Exception:
+        return 0, 0
+    return view.total_bytes_allocated_per_bank * view.num_banks, view.total_bytes_per_bank * view.num_banks
+
+
+def _trace_allocated(mesh):
+    return _trace_region(mesh)[0]
