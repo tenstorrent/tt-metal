@@ -734,7 +734,7 @@ static vector<failure> run_phase(
             }
 
             if (!programs.contains(s.mesh)) {
-                programs[s.mesh] = make_shared<Program>();
+                programs[s.mesh] = make_shared<Program>(CreateProgram(*s.mesh));
             }
             Program& program = *programs[s.mesh];
 

@@ -2438,7 +2438,7 @@ TEST_F(UnitMeshFixture, DfbSerializeGlobalHeaderGappedDeviceSlots) {
     const CoreCoord coordinator(0, 0);
     const CoreCoord worker(1, 0);
     const CoreRange all_cores(coordinator, worker);
-    Program program = CreateProgram();
+    Program program = CreateProgram(this->device());
     const auto config = make_minimal_dfb_config();
 
     for (int i = 0; i < 3; i++) {
