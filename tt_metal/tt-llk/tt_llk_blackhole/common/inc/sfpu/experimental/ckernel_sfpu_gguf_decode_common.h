@@ -90,11 +90,15 @@ sfpi_inline vUInt bits(const vUInt w, const int lsb, const int width)
     return (w << static_cast<unsigned>(32 - lsb - width)) >> static_cast<unsigned>(32 - width);
 }
 
-// Prepared formats (fp16_rows > 0): the fp32 copy of fp16 field F of column 16a + 2c + b (written with the page; Q4_K:
-// k4_group).
+// Prepared formats (fp16_rows > 0): the fp32 copy of fp16 field F of column 16a + 2c + b, written with the page; Q4_K
+// and Q5_K: by k4_group, past the page.
 template <int FMT>
 constexpr int pf32_idx(const int F, const int b, const int a)
 {
+    if constexpr (FMT == Q4_K || FMT == Q5_K)
+    {
+        return CO + static_cast<int>(page_layout<static_cast<Format>(FMT)>().rows) / 2 + 2 * (2 * F + b) + a;
+    }
     constexpr int fb = round_up(page_layout<static_cast<Format>(FMT)>().scale_rows, 4);
     return CO + scale_row<FMT>() / 2 + 2 * (fb / 4 + 2 * F + b) + a;
 }

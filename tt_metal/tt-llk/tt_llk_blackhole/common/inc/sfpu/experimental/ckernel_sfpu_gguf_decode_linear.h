@@ -25,8 +25,8 @@ constexpr bool q40_params = FMT == Q8_0 || FMT == Q4_0 || FMT == Q5_0 || FMT == 
 // Q4_K and Q5_K: k4_group (sfpu_gguf_decode_group) unpacks a group's 6-bit scales and mins once, from the scale rows
 // (0..5: 12 bytes per column), into scratch entries K4 .. K4 + 15. Word K4 + 4 (2a + b) + 2v + u, byte t: field v
 // (0 scale, 1 min) of tile 4u + t, column half b, word parity a; the bytes of tiles 0..3 keep their native top two bits
-// (bits() drops them). Q4_K's page holds rows 6, 7 (fp16 d, dmin) as stored: k4_group converts them and stores them
-// where pf32 reads prepared copies, past the 1 KB page.
+// (bits() drops them). Rows 6, 7 (fp16 d, dmin) are in the page as stored: k4_group converts them and stores them
+// where pf32 reads them, past the page.
 constexpr int K4 = 2 * TILE;
 
 // f16_at with the fp16 rebias as an immediate (the body owns the programmable constants).
@@ -64,7 +64,6 @@ sfpi_inline void k4_group()
         sfpi::dst_reg[w1 + 2].mode<sfpi::DataLayout::U32>() = q0;
         sfpi::dst_reg[w1 + 1].mode<sfpi::DataLayout::U32>() = ldu(w1 + 1) | (q1 & vUInt(0x0F0F0F0Fu));
         sfpi::dst_reg[w1 + 3].mode<sfpi::DataLayout::U32>() = ((q1 >> 4u) & vUInt(0x0F0F0F0Fu)) | ((q0 >> 2u) & vUInt(0x30303030u));
-        if constexpr (FMT == Q4_K)
         {
             // Rows 6, 7 (q2, q3): fp16 d and dmin, column half b in bits 16b.
 #pragma GCC unroll 2
@@ -83,7 +82,7 @@ sfpi_inline void k4_group()
 template <int FMT, int TI>
 sfpi_inline void linear_params()
 {
-    if constexpr (page_layout<static_cast<Format>(FMT)>().fp16_rows == 0 && FMT != Q4_K)
+    if constexpr (page_layout<static_cast<Format>(FMT)>().fp16_rows == 0 && FMT != Q4_K && FMT != Q5_K)
     {
         params_init<!q40_params<FMT>>();
     }

@@ -101,7 +101,7 @@ constexpr PageLayout page_layout()
         case NVFP4:   return make_layout(1, 1, 512, 1, 0);
         case Q6_K:    return make_layout(8, 1, 768, 9, 1);
         case Q4_K:    return make_layout(8, 1, 512, 8, 0);
-        case Q5_K:    return make_layout(8, 2, 1280, 8, 2);
+        case Q5_K:    return make_layout(8, 2, 1280, 8, 0);
         case Q3_K:    return make_layout(8, 2, 768, 7, 1);
         case Q2_K:    return make_layout(8, 1, 256, 10, 2);
         case IQ4_XS:  return make_layout(8, 1, 512, 4, 1);
