@@ -184,6 +184,7 @@ class AudioCodesBackend:
     per process and checkpoint, loaded on the first call)."""
 
     _patch = {}
+    _tokenizer = {}
     _patch_lock = threading.Lock()
 
     def __init__(self, backend, model_path, num_threads=None, device_patch=None, device_tokenizer=None):
@@ -205,8 +206,24 @@ class AudioCodesBackend:
         wrapped backend's ``embed_audio`` (the host encoders)."""
         if self.device_tokenizer is None:
             return self.backend.embed_audio(mel)
-        mel = HostAudioBackend._as_mel(mel, self.device_tokenizer.cfg.n_mels)
-        return self.embed_audio_codes(self.device_tokenizer.codes(mel))
+        return self.embed_audio_codes(self.audio_codes(mel))
+
+    def audio_codes(self, mel):
+        """fp32 mel [T, 128] -> int64 RVQ codes [n_codes, 20] (a video's audio track, ``va_audio_mel_bits``): the row's
+        device tokenizer encoder with the RVQ on the host at ``num_threads`` (vLLM leaves an engine one torch thread
+        unless OMP_NUM_THREADS is set, and a 27 min track has 41K code frames), else the fp32 host tokenizer encoder
+        (one per process and checkpoint, loaded on the first call; the front end's codes, bit for bit)."""
+        if self.device_tokenizer is None:
+            with AudioCodesBackend._patch_lock:
+                host = AudioCodesBackend._tokenizer.get(self.model_path)
+                if host is None:
+                    host = HostAudioBackend(self.model_path, num_threads=self.num_threads, patch=False)
+                    AudioCodesBackend._tokenizer[self.model_path] = host
+            return host.codes(mel)
+        tok = self.device_tokenizer
+        hidden = tok.hidden(HostAudioBackend._as_mel(mel, tok.cfg.n_mels))
+        with _threads(self.num_threads):
+            return tok.quantizer.quantize(hidden).t().contiguous()
 
     def embed_audio_codes(self, codes):
         if self.device_patch is not None:

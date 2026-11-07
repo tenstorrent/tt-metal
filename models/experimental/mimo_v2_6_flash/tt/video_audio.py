@@ -17,11 +17,15 @@ the same from the item's ``video_audio_n_segs`` / ``video_audio_seg_lens``. vLLM
   (tt/video_input.py). A video without an audio track (or whose track fails to decode) stays a plain video (logged).
 * ``_get_hf_mm_data``: a call's videos go to the checkpoint's processor as ``video_audio`` items when every one of them
   has its audio (the processor lists plain videos before video_audio ones, so a mix would reorder the items).
-* ``_apply_hf_processor_main``: each item's mel is recomputed in fp32 (vLLM casts the processor's to bf16) and turned
-  into RVQ codes here, as tt/audio/processor.py does for audio items: the item carries ``va_audio_codes`` int32
-  [n_codes, 20] (a video field) instead of upstream's ``va_audio_features`` (a field of a "va_audio" modality that no
-  placeholder belongs to). The engine (tt/multimodal.py ``encode_item``) embeds frames and codes and interleaves them
-  per group, as vLLM's ``embed_multimodal`` does.
+* ``_apply_hf_processor_main``: each item's mel is recomputed in fp32 (vLLM casts the processor's to bf16) and, as
+  tt/audio/processor.py does for audio items, follows MIMO_AUDIO_TOKENIZER: with ``device`` (the default) the item
+  carries the whole track's fp32 mel as its int32 bits, ``va_audio_mel_bits`` [T, 128] (a video field; 51 KB a
+  second), and the engine tokenizes it on the request's row (the device tokenizer encoder, the host RVQ, then the
+  patch encoder; tt/multimodal.py ``video_audio_codes``); with ``frontend`` the fp32 host tokenizer encoder turns it
+  into RVQ codes here, ``va_audio_codes`` int32 [n_codes, 20]. Either replaces upstream's ``va_audio_features`` (a
+  field of a "va_audio" modality that no placeholder belongs to). The engine (tt/multimodal.py ``encode_item``)
+  embeds frames and codes and interleaves them per group, as vLLM's ``embed_multimodal`` does. The front-end
+  tokenizer took 56-204 s of a 10-40 min video in vLLM's single multimodal worker (75-84 % of the front end).
 
 The timestamps the segments are cut by are the frames' real times (tt/video_input.py, MIMO_VIDEO_TIMESTAMPS=loader);
 with upstream's 1 fps labels the audio would be cut at the wrong places.
@@ -184,13 +188,13 @@ class VideoAudioMixin:
         if "va_audio_features" not in out:
             return out
         from ..reference import audio as ref
-        from .audio.processor import audio_checkpoint_path, tokenize_mels
+        from .audio import processor as audio_proc
 
         mels = out.pop("va_audio_features")
         if isinstance(mels, torch.Tensor):
             mels = list(mels) if mels.dim() == 3 else [mels]
         waves = [w for w in _waves(mm_items, len(mels)) if w is not None]
-        path = audio_checkpoint_path(self.info.ctx.model_config)
+        path = audio_proc.audio_checkpoint_path(self.info.ctx.model_config)
         cfg = ref.MiMoAudioConfig.from_model_path(path)
         mels32 = []
         for k, mel in enumerate(mels):
@@ -199,7 +203,10 @@ class VideoAudioMixin:
                 logger.warning(f"MiMo video audio: item {k}: tokenizing the processor's {mel.dtype} mel")
                 mel32 = mel.float()
             mels32.append(mel32)
-        out["va_audio_codes"] = tokenize_mels(mels32, path)
+        if audio_proc.DEVICE_TOKENIZER:  # the engine's row tokenizes it: the fp32 mel, exactly (int32 bits: never cast)
+            out["va_audio_mel_bits"] = [m.contiguous().view(torch.int32) for m in mels32]
+        else:
+            out["va_audio_codes"] = audio_proc.tokenize_mels(mels32, path)
         return out
 
     def _get_mm_fields_config(self, hf_inputs, hf_processor_mm_kwargs):
@@ -208,4 +215,5 @@ class VideoAudioMixin:
         fields = dict(super()._get_mm_fields_config(hf_inputs, hf_processor_mm_kwargs))
         fields.pop("va_audio_features", None)
         fields["va_audio_codes"] = MultiModalFieldConfig.batched("video")  # fields missing from the output are skipped
+        fields["va_audio_mel_bits"] = MultiModalFieldConfig.batched("video")
         return fields
