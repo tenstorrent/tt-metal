@@ -274,7 +274,7 @@ def test_gguf_decode_mm(fmt, rows):
     _assert_matmul(device, in0.to(torch.float32), in1, MathFidelity.HiFi2)
 
 
-@parametrize(fmt=["Q4_K", "Q5_K", "Q2_K", "Q4_0"])
+@parametrize(fmt=["Q4_K", "Q5_K", "Q3_K", "Q2_K", "Q4_0"])
 def test_gguf_decode_mm_page_rows(fmt):
     """The decode (and the group step, where the format has one) with a DEST row offset: rows = 64 one tile lower."""
     (fmt,) = fmt
