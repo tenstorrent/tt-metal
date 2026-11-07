@@ -130,10 +130,15 @@ SoftmaxDeviceOperation::SoftmaxShardedProgramFactoryAttentionOptimized::create_p
         }
     }
 
-    // define core ranges (full sharded grid)
-    std::uint32_t num_cores_c = program_config.compute_with_storage_grid_size.x;
-    std::uint32_t num_cores_r = program_config.compute_with_storage_grid_size.y;
-    const CoreRangeSet all_device_cores{CoreRange({0, 0}, {num_cores_c - 1, num_cores_r - 1})};
+    // Define the core range from the input tensor's shard grid. The grid may be
+    // offset from (0, 0); the host used to build the range from the origin, so on
+    // offset grids it launched work on the wrong cores and left the real shards
+    // untouched. The bounding box is the dense rectangle the shard grid occupies.
+    const auto& input_shard_spec = input_tensor.shard_spec().value();
+    const CoreRange shard_bbox = input_shard_spec.grid.bounding_box();
+    const std::uint32_t num_cores_c = shard_bbox.end_coord.x - shard_bbox.start_coord.x + 1;
+    const std::uint32_t num_cores_r = shard_bbox.end_coord.y - shard_bbox.start_coord.y + 1;
+    const CoreRangeSet all_device_cores{shard_bbox};
 
     // ---- Resource names (program-scope; local to avoid unity-build symbol clashes) ----
     const KernelSpecName READER{"reader"};
@@ -498,16 +503,21 @@ SoftmaxDeviceOperation::SoftmaxShardedProgramFactoryAttentionOptimized::create_p
         }
     };
 
+    // Enumerate the per-core runtime args over the shard grid's own coordinates,
+    // not from the origin. On an offset grid the loops must start at the grid's
+    // first core so every shard receives its arguments.
+    const std::uint32_t core_x0 = shard_bbox.start_coord.x;
+    const std::uint32_t core_y0 = shard_bbox.start_coord.y;
     if (shard_orient == tt::tt_metal::ShardOrientation::COL_MAJOR) {
         for (std::uint32_t core_idx_x = 0; core_idx_x < num_cores_c; core_idx_x++) {
             for (std::uint32_t core_idx_y = 0; core_idx_y < num_cores_r; core_idx_y++) {
-                emit_reader_args(CoreCoord{core_idx_x, core_idx_y});
+                emit_reader_args(CoreCoord{core_x0 + core_idx_x, core_y0 + core_idx_y});
             }
         }
     } else {
         for (std::uint32_t core_idx_y = 0; core_idx_y < num_cores_r; core_idx_y++) {
             for (std::uint32_t core_idx_x = 0; core_idx_x < num_cores_c; core_idx_x++) {
-                emit_reader_args(CoreCoord{core_idx_x, core_idx_y});
+                emit_reader_args(CoreCoord{core_x0 + core_idx_x, core_y0 + core_idx_y});
             }
         }
     }
