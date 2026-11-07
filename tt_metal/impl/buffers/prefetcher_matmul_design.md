@@ -482,7 +482,8 @@ src = bank_local_base[t]
 
 #### Matmul consumer contracts
 
-Two 1D matmul consumers drain the Tensor prefetcher's pipes:
+Two 1D matmul consumers drain the Tensor prefetcher's pipes (and the unified matmul, which takes
+mcast-in0's contract; see below):
 
 - **Ring gather-in0:** `block_count = receiver_count`. Batched mode uses no rotation and needs the
   whole layer resident. `stream_in1=true` uses an identity rotation request so each receiver sees its
@@ -531,6 +532,18 @@ Metal 2.0 factory (`create_program_mcast_in0_artifacts`): either the DRAM-sender
   slice `i % R` of bank `i / R`'s shard of a K-row-major one, which needs one pipe per bank, each with
   the same `R` receivers. The matmul cannot check what a worker-sender pipe's producer sends, so there
   that contract is the producer's.
+
+#### Unified matmul over PrefetcherPipes
+
+The Quasar-native matmul (`ttnn.experimental.quasar.matmul(..., prefetcher_pipes=pipes)`,
+`MatmulUnifiedProgramConfig`, `ttnn/cpp/ttnn/operations/experimental/quasar/matmul/`) drains the pipes as
+mcast-in0 does: each core is a pipe receiver computing all of M for one N slice, the cores in row-major order
+take the N slices in order, and a pipe entry is one K chunk (`K_chunk_tiles` by the N slice). The op queues
+its own request (`block_count = K_tiles / K_chunk_tiles`, no rotation), since only its plan knows the K
+chunk. B_slice is a relay over the rings that the reader publishes with the same one-block window
+(`prefetcher_pipe_in1_window.hpp`); the reader is single-threaded and on NOC 0, where a DRAM sender's
+NIU takes the credit atomics. The weight contract is mcast-in0's, with `in0_block_w = K_chunk_tiles` and
+`per_core_N` the N slice. Blackhole only so far.
 
 #### Gather-in0 over PrefetcherPipes
 
@@ -711,6 +724,9 @@ Whoever changes prefetcher or receiver code must preserve these:
   `kernels/dataflow/in0_ring_forward.hpp` with the ring reader) and the pipe-only in1 reader
   `reader_bmm_tile_layout_in1_prefetcher_pipe_metal2.cpp`. How much of K each padded in0 shard holds
   is in `kernels/gather_in0_shard_k.hpp`, shared by the ring's dataflow and compute kernels.
+- Unified matmul over PrefetcherPipes: `plan_unified_matmul` (`B_from_pipes`) in
+  `ttnn/cpp/ttnn/operations/experimental/quasar/matmul/device/config/matmul_unified_plan.cpp`, the factory
+  and `unified_matmul_reader.cpp` under `B_FROM_PREFETCHER_PIPES` beside it.
 - Both in1 readers drain ring-order pipes through `kernels/dataflow/prefetcher_pipe_in1_window.hpp`,
   which holds the one-block lookahead window the host sizes the ring for. A K-order gather layer is
   published by the gather reader itself and handed back whole.
