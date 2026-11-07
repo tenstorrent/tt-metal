@@ -855,3 +855,53 @@ def test_transpose_empty_to_sharded_output(device, expect_error):
     )
     with expect_error(RuntimeError, "Sharded WH transpose requires non-zero H and W"):
         ttnn.transpose(x, -2, -1, memory_config=mem)
+
+
+# transpose(1, 2) on interleaved TILE bfloat16 / float32 with C >= 32 moves whole tiles (untilize a 32-channel row of
+# tiles, tilize each line); the generic path below one channel tile moves face lines. Both must be exact and fill the
+# channel rows past C with pad_value.
+@pytest.mark.parametrize(
+    "shape",
+    [[1, 32, 32, 32], [1, 64, 64, 64], [2, 96, 40, 72], [1, 48, 33, 32], [3, 40, 100, 64], [1, 16, 64, 64]],
+)
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32])
+@pytest.mark.parametrize("pad_value", [0.0, 7.0])
+def test_transpose_hc_tiled_exact(device, shape, dtype, pad_value):
+    torch.manual_seed(0)
+    torch_input = random_torch_tensor(dtype, shape)
+    torch_output = torch_input.transpose(1, 2)
+
+    tt_input = ttnn.from_torch(torch_input, layout=ttnn.TILE_LAYOUT, dtype=dtype, device=device)
+    tt_output = ttnn.transpose(tt_input, 1, 2, pad_value=pad_value)
+
+    assert list(tt_output.shape) == list(torch_output.shape)
+    assert torch.equal(ttnn.to_torch(tt_output), torch_output)
+
+    C, W = shape[1], shape[3]
+    padded = ttnn.from_device(tt_output).to_torch_with_padded_shape()
+    if C % 32 != 0:
+        assert torch.all(padded[:, :, C:, :W] == pad_value)
+
+
+@pytest.mark.parametrize("shape", [[1, 32, 32, 32], [2, 64, 40, 72], [1, 48, 33, 100], [1, 16, 64, 64]])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32])
+def test_permute_nchw_to_nhwc_tiled_exact(device, shape, dtype):
+    torch.manual_seed(0)
+    torch_input = random_torch_tensor(dtype, shape)
+    torch_output = torch.permute(torch_input, (0, 2, 3, 1))
+
+    tt_input = ttnn.from_torch(torch_input, layout=ttnn.TILE_LAYOUT, dtype=dtype, device=device)
+    tt_output = ttnn.permute(tt_input, (0, 2, 3, 1))
+
+    assert list(tt_output.shape) == list(torch_output.shape)
+    assert torch.equal(ttnn.to_torch(tt_output), torch_output)
+
+
+# NCHW -> NHWC on interleaved TILE with C >= 32 runs as transpose(1, 2) + transpose(-2, -1) (two programs) instead
+# of the generic tiled permute kernel; below one channel tile it stays on prim::permute (one program).
+@pytest.mark.parametrize("channels, expected_programs", [(64, 2), (16, 1)])
+def test_permute_nchw_to_nhwc_tiled_route(device, isolate_program_cache, channels, expected_programs):
+    shape = (1, channels, 64, 64)
+    ref, out = run_permute(device, shape, (0, 2, 3, 1))
+    assert torch.equal(out, ref)
+    assert device.cache_entries_counter.total == expected_programs
