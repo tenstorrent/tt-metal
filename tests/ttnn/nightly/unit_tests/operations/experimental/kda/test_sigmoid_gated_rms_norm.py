@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import math
 from collections.abc import Callable
 from dataclasses import dataclass
 
@@ -50,9 +51,9 @@ _PRODUCTION_OUTPUT_DTYPE = ttnn.bfloat16
 _PRODUCTION_PERF_MARGIN = 0.05
 
 # Kimi-K3 on Galaxy SP8xTP4: one device's 640 tokens of 24 heads.
-# Calibrated on a P150 with an 11x10 grid; the 5% symmetric margin
-# covers board and thermal variance while still guarding regressions.
-_PRODUCTION_CASES = (_ProductionCase("h24-s640-local", num_heads=24, sequence=640, expected_duration_ns=48_800),)
+# Calibrated for a P150 with an 11x10 grid: 54.4 us measured on a P150b (12x10 grid), scaled by the 11x10/12x10 ratio of
+# the previous reference. The 5% symmetric margin covers board and thermal variance while still guarding regressions.
+_PRODUCTION_CASES = (_ProductionCase("h24-s640-local", num_heads=24, sequence=640, expected_duration_ns=55_800),)
 
 
 def _sigmoid_gated_rms_norm_ops(
@@ -76,14 +77,10 @@ def _sigmoid_gated_rms_norm_ops(
         raise ValueError("sigmoid-gated RMSNorm tensor shapes are inconsistent")
 
     rows = batch * num_heads * sequence
-    elements = rows * value_dim
+    # The row-sum matmul against a 32-column ones tile is the only FPU work; SFPU multiplies are not modeled.
     return (
-        perf_model.FpuOps(
-            multiply_ops=4 * elements,
-            add_ops=rows,
-            reduction_ops=rows * (value_dim - 1),
-        ),
-        perf_model.SfpuOps(rsqrt_ops=rows, sigmoid_ops=elements),
+        perf_model.FpuOps(matrix_flops=2 * rows * value_dim * 32),
+        perf_model.SfpuOps(rsqrt_ops=rows, sigmoid_ops=rows * value_dim),
     )
 
 
@@ -115,7 +112,7 @@ def test_sigmoid_gated_rms_norm_work_golden() -> None:
         torch.empty((1, 1, 4)),
     )
 
-    assert fpu == perf_model.FpuOps(multiply_ops=16, add_ops=2, reduction_ops=2)
+    assert fpu == perf_model.FpuOps(matrix_flops=256)
     assert sfpu == perf_model.SfpuOps(rsqrt_ops=2, sigmoid_ops=4)
 
 
@@ -212,6 +209,18 @@ def _production_compute_kernel_config(device: ttnn.Device) -> ttnn.DeviceCompute
     return ttnn.init_device_compute_kernel_config(
         device.arch(),
         math_fidelity=ttnn.MathFidelity.HiFi4,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=False,
+    )
+
+
+def _exact_compute_kernel_config(
+    device: ttnn.Device, math_fidelity: ttnn.MathFidelity = ttnn.MathFidelity.HiFi4
+) -> ttnn.DeviceComputeKernelConfig:
+    return ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=math_fidelity,
+        math_approx_mode=False,
         fp32_dest_acc_en=True,
         packer_l1_acc=False,
     )
@@ -512,16 +521,29 @@ def test_sigmoid_gated_rms_norm_exact_math_changes_program_and_output(
     _, (input_tt, gate_tt, weight_tt) = _device_inputs(device, seed=818)
     approximate = ttnn.to_torch(_run(input_tt, gate_tt, weight_tt))
     entries = device.num_program_cache_entries()
-    exact_config = ttnn.init_device_compute_kernel_config(
-        device.arch(),
-        math_fidelity=ttnn.MathFidelity.HiFi4,
-        math_approx_mode=False,
-        fp32_dest_acc_en=True,
-        packer_l1_acc=False,
-    )
+    exact_config = _exact_compute_kernel_config(device)
     exact = ttnn.to_torch(_run(input_tt, gate_tt, weight_tt, compute_kernel_config=exact_config))
     assert device.num_program_cache_entries() == entries + 1
     assert not torch.equal(approximate, exact)
+
+
+@pytest.mark.parametrize("math_fidelity", [ttnn.MathFidelity.HiFi3, ttnn.MathFidelity.HiFi4], ids=["HiFi3", "HiFi4"])
+def test_sigmoid_gated_rms_norm_keeps_fp32_input_bits(device: ttnn.Device, math_fidelity: ttnn.MathFidelity) -> None:
+    # c is exact in FP32. A source register's 8 explicit mantissa bits drop c's 2^-10, and the low bits of the near-1
+    # running product x * inv, in some products but not others, so an FPU-product kernel's output is ~1e-3 off. With
+    # every product in FP32 DST, weight 1 and gate 0, every output is 0.5 * c / sqrt(c^2 + eps). The row sum keeps
+    # x^2's 2^-9 in SrcB only if the fidelity phases include SrcB's low mantissa bits, hence both HiFi3 and HiFi4.
+    c = 1.0 + 2.0**-10
+    num_heads, sequence, value_dim = 1, 32, 64
+    input_tt = _to_device(torch.full((num_heads, sequence, value_dim), c), device, dtype=ttnn.float32)
+    gate_tt = _to_device(torch.zeros(1, sequence, num_heads * value_dim), device, dtype=ttnn.bfloat16)
+    weight_tt = _to_device(torch.ones(value_dim), device, dtype=ttnn.bfloat16)
+    exact_config = _exact_compute_kernel_config(device, math_fidelity)
+    actual = ttnn.to_torch(
+        _run(input_tt, gate_tt, weight_tt, num_heads=num_heads, compute_kernel_config=exact_config)
+    ).double()
+    expected = 0.5 * c / math.sqrt(c * c + _EPSILON)
+    torch.testing.assert_close(actual, torch.full_like(actual, expected), rtol=1e-5, atol=0.0)
 
 
 @pytest.mark.parametrize(
@@ -534,8 +556,22 @@ def test_sigmoid_gated_rms_norm_exact_math_changes_program_and_output(
             ),
             "packer_l1_acc=true is unsupported",
         ),
+        (
+            ttnn.types.BlackholeComputeKernelConfig(
+                math_fidelity=ttnn.MathFidelity.HiFi4,
+                fp32_dest_acc_en=False,
+            ),
+            "fp32_dest_acc_en=false is unsupported",
+        ),
+        (
+            ttnn.types.BlackholeComputeKernelConfig(
+                math_fidelity=ttnn.MathFidelity.HiFi2,
+                fp32_dest_acc_en=True,
+            ),
+            "math_fidelity below HiFi3 is unsupported",
+        ),
     ],
-    ids=["packer-l1-acc"],
+    ids=["packer-l1-acc", "bf16-dest", "hifi2"],
 )
 def test_sigmoid_gated_rms_norm_rejects_unsupported_compute_config(
     device: ttnn.Device,
