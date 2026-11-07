@@ -76,11 +76,13 @@ inline uint32_t non_tile_cb_page_size(tt::DataFormat data_format, uint32_t l1_al
     return std::max({tt::datum_size(data_format), l1_alignment, CIRCULAR_BUFFER_COMPUTE_WORD_SIZE});
 }
 
-uint32_t get_num_pages_st(const ttnn::Tensor& tensor) { return (uint32_t)tensor.buffer()->num_pages(); }
+uint32_t get_num_pages_st(const ttnn::Tensor& tensor) { return (uint32_t)tensor.mesh_buffer().num_pages(); }
 
-uint32_t get_page_size_st(const ttnn::Tensor& tensor) { return (uint32_t)tensor.buffer()->page_size(); }
+uint32_t get_page_size_st(const ttnn::Tensor& tensor) { return (uint32_t)tensor.mesh_buffer().page_size(); }
 
-uint32_t get_aligned_page_size_st(const ttnn::Tensor& tensor) { return (uint32_t)tensor.buffer()->aligned_page_size(); }
+uint32_t get_aligned_page_size_st(const ttnn::Tensor& tensor) {
+    return (uint32_t)tensor.mesh_buffer().aligned_page_size();
+}
 
 uint32_t get_num_rows_st(const ttnn::Tensor& tensor) {
     auto logical_volume = tensor.logical_shape().volume();
@@ -1276,7 +1278,7 @@ tt::tt_metal::ProgramDescriptor build_moe_compute_program_descriptor(
         source_shard_shape[0],
         source_shard_shape[1],
         hidden_size / combine_data_parallel_cores,
-        tilize_output_tensor.buffer()->aligned_size_per_bank(),
+        tilize_output_tensor.mesh_buffer().aligned_size_per_bank(),
         token_segment_size_bytes,
         num_source_buffers);
     const uint32_t token_expert_row_offset = fused_source_layout.rows_per_buffer;
@@ -1301,8 +1303,8 @@ tt::tt_metal::ProgramDescriptor build_moe_compute_program_descriptor(
     // holds w0_w1_bank_blocks_per_expert whole blocks per (layer, expert). dm0 derives the
     // geometry from the shape compile args; check here that the tensor was packed that way
     // (a tensor packed with the old per-core stride has a different page count).
-    const uint32_t w0_w1_total_pages_buf = static_cast<uint32_t>(matmul_w0_w1_tensor.buffer()->num_pages());
-    const uint32_t w2_total_pages_buf = static_cast<uint32_t>(matmul_w2_tensor.buffer()->num_pages());
+    const uint32_t w0_w1_total_pages_buf = static_cast<uint32_t>(matmul_w0_w1_tensor.mesh_buffer().num_pages());
+    const uint32_t w2_total_pages_buf = static_cast<uint32_t>(matmul_w2_tensor.mesh_buffer().num_pages());
     {
         const uint32_t w0_w1_layers = matmul_w0_w1_tensor.logical_shape()[1];
         const uint32_t w0_w1_bank_blocks = moe_ring::w0_w1_bank_blocks_per_expert(
@@ -1537,8 +1539,8 @@ tt::tt_metal::ProgramDescriptor build_moe_compute_program_descriptor(
     // helper `get_weight_mem_configs` enforces matching invariants when constructing the
     // ShardSpec, so this is belt-and-braces.
     {
-        const uint32_t w0_w1_total_pages = static_cast<uint32_t>(matmul_w0_w1_tensor.buffer()->num_pages());
-        const uint32_t w2_total_pages = static_cast<uint32_t>(matmul_w2_tensor.buffer()->num_pages());
+        const uint32_t w0_w1_total_pages = static_cast<uint32_t>(matmul_w0_w1_tensor.mesh_buffer().num_pages());
+        const uint32_t w2_total_pages = static_cast<uint32_t>(matmul_w2_tensor.mesh_buffer().num_pages());
         TT_FATAL(
             w0_w1_total_pages % num_dram_banks == 0,
             "moe_compute: w0_w1 total pages ({}) must be divisible by num_banks ({})",

@@ -168,7 +168,7 @@ ProgramDescriptor ConcatCodegenProgramFactory::create_descriptor(
     std::vector<uint32_t> src_stick_bytes;
     for (const Tensor& input : inputs) {
         src_buffers.push_back(input.buffer());
-        src_page_bytes.push_back(input.buffer()->aligned_page_size());
+        src_page_bytes.push_back(input.mesh_buffer().aligned_page_size());
         src_stick_bytes.push_back(input.logical_shape()[cc::kLastAxis] * input.element_size());
     }
 
