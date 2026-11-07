@@ -29,6 +29,12 @@ void validate_tensors(
 
     check_tensor(input, "moreh_abs_pow", "input", {DataType::BFLOAT16, DataType::INT32});
     check_tensor(output, "moreh_abs_pow", "output", {DataType::BFLOAT16, DataType::INT32});
+    // The program uses the input's data format for every buffer, including the output.
+    TT_FATAL(
+        !output.has_value() || output->dtype() == input.dtype(),
+        "moreh_abs_pow output dtype ({}) must match the input dtype ({})",
+        output.has_value() ? output->dtype() : input.dtype(),
+        input.dtype());
 }
 
 void MorehAbsPowOperation::validate_on_program_cache_miss(

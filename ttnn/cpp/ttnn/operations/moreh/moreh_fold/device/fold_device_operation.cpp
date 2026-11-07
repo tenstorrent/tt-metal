@@ -77,6 +77,12 @@ void MorehFoldOperation::validate_inputs(
         TT_FATAL(
             output_shape[output_rank - 1] == operation_attributes.output_size[1], "Fold: Invalid output shape size");
         TT_FATAL(output_rank == 4 || output_rank == 3, "Fold: Only support 4D and 3D output tensor");
+        // The program sizes and formats every element from the input dtype.
+        TT_FATAL(
+            tensor_args.output->dtype() == input.dtype(),
+            "Fold: output dtype ({}) must match the input dtype ({})",
+            tensor_args.output->dtype(),
+            input.dtype());
     }
 };
 
