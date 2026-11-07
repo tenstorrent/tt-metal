@@ -278,7 +278,8 @@ std::optional<tt::tt_metal::Shape> sharded_tensor_shape_in_pages(const Tensor& t
         return std::nullopt;
     }
     if (tensor.is_allocated() && tensor.storage_type() == StorageType::DEVICE) {
-        const auto& distribution_spec = tensor.buffer()->buffer_distribution_spec();
+        const auto& distribution_spec =
+            tensor.mesh_buffer().device_local_config().sharding_args.buffer_distribution_spec();
         if (distribution_spec.has_value()) {
             return distribution_spec->tensor_shape_in_pages();
         }

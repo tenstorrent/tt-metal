@@ -4,7 +4,7 @@
 from typing import List
 
 import pytest
-from helpers.format_config import DataFormat, FormatConfig
+from helpers.format_config import DataFormat, FormatConfig, InputOutputFormat
 from helpers.golden_generators import (
     DataCopyGolden,
     get_golden_generator,
@@ -18,6 +18,7 @@ from helpers.llk_params import (
 )
 from helpers.param_config import (
     calculate_edgecase_dest_indices,
+    generate_dest_depth_input_dimensions,
     generate_perf_input_dimensions,
     generate_reduced_input_dimensions,
     get_num_blocks_and_num_tiles_in_block,
@@ -51,40 +52,46 @@ from helpers.tile_shape import construct_tile_shape
 from helpers.utils import passed_test, result_tensor
 
 
+def datacopy_dest_acc_modes(fmt: FormatConfig):
+    """Dest widths a datacopy of *fmt* can run with."""
+    # Int16 in the source registers cannot land in a 32-bit Dest.
+    if fmt.input_format == DataFormat.Int16:
+        return (DestAccumulation.No,)
+    # The packer cannot upcast a 16-bit Dest to a 32-bit output.
+    if fmt.output_format.is_32_bit():
+        return (DestAccumulation.Yes,)
+    return (DestAccumulation.No, DestAccumulation.Yes)
+
+
 def generate_eltwise_unary_datacopy_combinations(
     formats_list: List[FormatConfig],
     *,
     is_perf=False,
+    tile_sizes=SUPPORTED_TILE_SIZES,
+    dimensions_fn=None,
 ):
     """
     Generate eltwise_unary_datacopy combinations.
 
     Args: List of input-output format pairs
 
+    *dimensions_fn* (dest_acc, dest_sync, tile_shape) overrides the reduced dimension set.
+
     Returns: List of (format, dest_acc, data_copy_type, input_dimensions, dest_sync, edgecase_dest_index, tile_dimensions) tuples
     """
     combinations = []
+    if is_perf:
+        tile_sizes = select_perf_tile_sizes(tile_sizes)
 
     for fmt in formats_list:
         in_fmt = fmt.input_format
 
-        dest_acc_modes = (DestAccumulation.No, DestAccumulation.Yes)
         dest_sync_modes = quasar_dest_sync_modes(is_perf=is_perf)
         data_copy_types = (DataCopyType.A2D, DataCopyType.B2D)
-        tile_sizes = (
-            select_perf_tile_sizes(SUPPORTED_TILE_SIZES)
-            if is_perf
-            else SUPPORTED_TILE_SIZES
-        )
 
-        for dest_acc in dest_acc_modes:
-            if (
-                in_fmt != DataFormat.Float32
-                and fmt.output_format == DataFormat.Float32
-                and dest_acc == DestAccumulation.No
-            ):
-                continue
-
+        for dest_acc in datacopy_dest_acc_modes(fmt):
+            # Size as get_num_blocks_and_num_tiles_in_block does: a 32-bit input gets 32-bit section capacity.
+            sizing_dest_acc = DestAccumulation.Yes if in_fmt.is_32_bit() else dest_acc
             for dest_sync in dest_sync_modes:
                 for data_copy_type in data_copy_types:
                     for tile_dims in tile_sizes:
@@ -98,8 +105,8 @@ def generate_eltwise_unary_datacopy_combinations(
                                 dest_acc, dest_sync, tile_shape
                             )
                             if is_perf
-                            else generate_reduced_input_dimensions(
-                                dest_acc, dest_sync=dest_sync, tile_shape=tile_shape
+                            else (dimensions_fn or generate_reduced_input_dimensions)(
+                                sizing_dest_acc, dest_sync, tile_shape
                             )
                         )
                         for dimensions in dimensions_list:
@@ -111,11 +118,7 @@ def generate_eltwise_unary_datacopy_combinations(
                                 else [
                                     edgecase_dest_index
                                     for _, edgecase_dest_index in calculate_edgecase_dest_indices(
-                                        (
-                                            True
-                                            if dest_acc == DestAccumulation.Yes
-                                            else False
-                                        ),
+                                        sizing_dest_acc == DestAccumulation.Yes,
                                         dimensions[0]
                                         // tile_dims[0]
                                         * dimensions[1]
@@ -151,6 +154,31 @@ ALL_DATACOPY_COMBINATIONS = generate_eltwise_unary_datacopy_combinations(
 PERF_DATACOPY_COMBINATIONS = generate_eltwise_unary_datacopy_combinations(
     DATACOPY_FORMATS,
     is_perf=True,
+)
+
+# Float32 reaches SrcA as Tf32 (32-bit Dest) or Float16_b (16-bit Dest).
+DATACOPY_FLOAT32_COMBINATIONS = generate_eltwise_unary_datacopy_combinations(
+    [
+        InputOutputFormat(DataFormat.Float32, DataFormat.Float32),
+        InputOutputFormat(DataFormat.Float32, DataFormat.Float16_b),
+    ],
+    tile_sizes=[(32, 32)],
+)
+
+# Identity integer datacopy through SrcA/SrcB. Int32 does not fit the 19-bit source registers, so
+# it can only unpack straight to Dest; test_unpack_unary_operand_quasar covers it on UnpDest.
+DATACOPY_INT_COMBINATIONS = generate_eltwise_unary_datacopy_combinations(
+    input_output_formats(
+        [DataFormat.Int8, DataFormat.UInt8, DataFormat.Int16], same=True
+    ),
+    tile_sizes=[(32, 32)],
+)
+
+# 4 and 8 full Dest sections per run, so math/pack hand Dest over 3 and 7 times.
+DATACOPY_DEST_DEPTH_COMBINATIONS = generate_eltwise_unary_datacopy_combinations(
+    input_output_formats([DataFormat.Float16_b]),
+    tile_sizes=[(32, 32)],
+    dimensions_fn=generate_dest_depth_input_dimensions,
 )
 
 
@@ -276,3 +304,48 @@ def test_eltwise_unary_datacopy_quasar(
         res_tensor,
         formats.output_format,
     ), "Assert against golden failed"
+
+
+@pytest.mark.quasar
+@parametrize(
+    formats_dest_acc_data_copy_type_dims_dest_sync_dest_indices=DATACOPY_FLOAT32_COMBINATIONS,
+)
+def test_eltwise_unary_datacopy_float32_quasar(
+    formats_dest_acc_data_copy_type_dims_dest_sync_dest_indices,
+):
+    # A lone parametrize argument arrives wrapped in a 1-tuple.
+    test_eltwise_unary_datacopy_quasar(
+        formats_dest_acc_data_copy_type_dims_dest_sync_dest_indices[0],
+        [PerfRunType.L1_TO_L1],
+        1,
+    )
+
+
+@pytest.mark.quasar
+@parametrize(
+    formats_dest_acc_data_copy_type_dims_dest_sync_dest_indices=DATACOPY_INT_COMBINATIONS,
+)
+def test_eltwise_unary_datacopy_int_quasar(
+    formats_dest_acc_data_copy_type_dims_dest_sync_dest_indices,
+):
+    # A lone parametrize argument arrives wrapped in a 1-tuple.
+    test_eltwise_unary_datacopy_quasar(
+        formats_dest_acc_data_copy_type_dims_dest_sync_dest_indices[0],
+        [PerfRunType.L1_TO_L1],
+        1,
+    )
+
+
+@pytest.mark.quasar
+@parametrize(
+    formats_dest_acc_data_copy_type_dims_dest_sync_dest_indices=DATACOPY_DEST_DEPTH_COMBINATIONS,
+)
+def test_eltwise_unary_datacopy_dest_depth_quasar(
+    formats_dest_acc_data_copy_type_dims_dest_sync_dest_indices,
+):
+    # A lone parametrize argument arrives wrapped in a 1-tuple.
+    test_eltwise_unary_datacopy_quasar(
+        formats_dest_acc_data_copy_type_dims_dest_sync_dest_indices[0],
+        [PerfRunType.L1_TO_L1],
+        1,
+    )
