@@ -287,6 +287,122 @@ void test_hd_socket_loopback(
     EXPECT_EQ(src_vec, dst_vec);
 }
 
+// HOST_PUSH loopback of num_pages pages, each checked as it comes back. Page p carries pattern p % kNumPatterns,
+// and kNumPatterns is prime, so a page that reaches the device before the FIFO slot's earlier contents are
+// replaced, or a bytes_sent update that overtakes its page, reads back as a different pattern.
+void test_h2d_host_push_ordering_stress(
+    const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& mesh_device,
+    std::size_t socket_fifo_size,
+    std::size_t page_size,
+    uint32_t num_pages,
+    const MeshCoreCoord& socket_core) {
+    constexpr uint32_t kNumPatterns = 61;
+    constexpr uint32_t kPagesPerIteration = 1000;
+    TT_FATAL(num_pages % kPagesPerIteration == 0, "num_pages must be a multiple of {}", kPagesPerIteration);
+
+    auto input_socket = H2DSocket(mesh_device, socket_core, BufferType::L1, socket_fifo_size, H2DMode::HOST_PUSH);
+    auto output_socket = D2HSocket(mesh_device, socket_core, socket_fifo_size);
+    input_socket.set_page_size(page_size);
+    output_socket.set_page_size(page_size);
+
+    auto program = CreateProgram(*mesh_device);
+    const std::shared_ptr<MeshBuffer> scratch_buffer = add_loopback_kernel(
+        program,
+        mesh_device,
+        socket_core.core_coord,
+        input_socket,
+        output_socket,
+        page_size,
+        kPagesPerIteration * page_size,
+        num_pages / kPagesPerIteration,
+        H2DMode::HOST_PUSH);
+    auto mesh_workload = MeshWorkload();
+    mesh_workload.add_program(MeshCoordinateRange(socket_core.device_coord), std::move(program));
+    EnqueueMeshWorkload(mesh_device->mesh_command_queue(), mesh_workload, false);
+
+    const uint32_t page_size_words = page_size / sizeof(uint32_t);
+    std::vector<uint32_t> patterns(kNumPatterns * page_size_words);
+    std::mt19937 rng(64622);
+    std::generate(patterns.begin(), patterns.end(), rng);
+
+    // A run takes seconds even with strict writes, so a socket that stops moving for this long has stalled. The
+    // timeout restarts on every page, and the clock is read only while a page waits, so the timed loop stays tight.
+    constexpr auto kStallTimeout = std::chrono::seconds(10);
+    auto retry_until_stalled = [&](auto&& operation, const char* timeout_message, uint32_t completed_pages) {
+        if (operation()) {
+            return;
+        }
+        const auto deadline = std::chrono::steady_clock::now() + kStallTimeout;
+        while (!operation()) {
+            if (std::chrono::steady_clock::now() >= deadline) {
+                throw std::runtime_error(
+                    std::string(timeout_message) + " after " + std::to_string(completed_pages) + "/" +
+                    std::to_string(num_pages) + " pages");
+            }
+            std::this_thread::yield();
+        }
+    };
+
+    std::exception_ptr write_error;
+    std::chrono::steady_clock::duration write_time{};
+    std::thread write_thread([&]() {
+        try {
+            const auto start = std::chrono::steady_clock::now();
+            for (uint32_t p = 0; p < num_pages; p++) {
+                retry_until_stalled(
+                    [&]() {
+                        return experimental::detail::try_write(
+                            input_socket, patterns.data() + ((p % kNumPatterns) * page_size_words), /*num_pages=*/1);
+                    },
+                    "Timed out waiting for space in the H2D socket",
+                    p);
+            }
+            write_time = std::chrono::steady_clock::now() - start;
+        } catch (...) {
+            write_error = std::current_exception();
+        }
+    });
+
+    std::exception_ptr read_error;
+    std::vector<uint32_t> page(page_size_words);
+    uint32_t num_bad_pages = 0;
+    std::optional<uint32_t> first_bad_page;
+    try {
+        for (uint32_t p = 0; p < num_pages; p++) {
+            retry_until_stalled(
+                [&]() { return experimental::detail::try_read(output_socket, page.data(), /*num_pages=*/1); },
+                "Timed out waiting for data in the D2H socket",
+                p);
+            if (!std::equal(page.begin(), page.end(), patterns.begin() + ((p % kNumPatterns) * page_size_words))) {
+                num_bad_pages++;
+                first_bad_page = first_bad_page.value_or(p);
+            }
+        }
+    } catch (...) {
+        read_error = std::current_exception();
+    }
+    // A failed read leaves the writer waiting for space, which it gives up on after kStallTimeout.
+    write_thread.join();
+    if (write_error) {
+        std::rethrow_exception(write_error);
+    }
+    if (read_error) {
+        std::rethrow_exception(read_error);
+    }
+    input_socket.barrier(10000);
+    output_socket.barrier(10000);
+
+    const double us_per_page = std::chrono::duration<double, std::micro>(write_time).count() / num_pages;
+    log_info(
+        tt::LogTest,
+        "H2D HOST_PUSH loopback: {} pages of {} B, {:.2f} us per write(), {:.2f} GB/s",
+        num_pages,
+        page_size,
+        us_per_page,
+        page_size / us_per_page / 1e3);
+    EXPECT_EQ(num_bad_pages, 0u) << "first bad page: " << first_bad_page.value_or(0);
+}
+
 void test_hd_socket_multithreaded_loopback(
     const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& mesh_device,
     std::size_t socket_fifo_size,
@@ -645,8 +761,27 @@ TEST_F(HDSocketFixture, H2DSocketLoopback) {
             // On most hosts, page size is 4K, so this should lead to 5 pages being allocated on the host.
             test_hd_socket_loopback(
                 mesh_device_, 16512, 1088, 156672, h2d_mode, 50, MeshCoreCoord(socket_coord, CoreCoord(0, 1)));
+            // Uneven wrap with pages larger than one NOC burst (8 KiB on Wormhole, 16 KiB on Blackhole), which the
+            // kernel moves in several bursts and a shorter last one.
+            test_hd_socket_loopback(
+                mesh_device_, 65536, 19456, 155648, h2d_mode, 50, MeshCoreCoord(socket_coord, CoreCoord(1, 0)));
         }
     }
+}
+
+// Blackhole writes HOST_PUSH pages through a posted window, so nothing but the NOC VC orders a page against
+// the bytes_sent update that publishes it.
+TEST_F(H2DSocketStatsFixture, H2DSocketHostPushOrderingStress) {
+    if (!experimental::GetMemoryPinningParameters(*mesh_device_).can_map_to_noc) {
+        GTEST_SKIP() << "Mapping host memory to NOC is not supported on this system";
+    }
+    if (mesh_device_->arch() != tt::ARCH::BLACKHOLE) {
+        GTEST_SKIP() << "Only Blackhole writes HOST_PUSH pages through a posted window";
+    }
+    const MeshCoreCoord socket_core(MeshCoordinate(0, 0), CoreCoord(0, 0));
+    // A tt-blaze grammar mask page and a token page.
+    test_h2d_host_push_ordering_stress(mesh_device_, 4 * 19456, 19456, 100000, socket_core);
+    test_h2d_host_push_ordering_stress(mesh_device_, 16 * 384, 384, 100000, socket_core);
 }
 
 TEST_F(HDSocketFixture, H2DSocketLoopbackMultiThreadedStress) {
