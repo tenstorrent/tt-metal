@@ -781,3 +781,90 @@ def test_bessel_ops(device, ttnn_op, low, high):
     golden = flush_to_zero(golden)
 
     assert_with_ulp(expected_result=golden, actual_result=result, ulp_threshold=1)
+
+
+def test_xielu_bf16_unflushed_zero_and_subnormal_inputs(device):
+    """+-0 and subnormal BF16 inputs, which TT-NN delivers to DEST unflushed, store torch's result as the BF16 pack
+    stores it (NaN as +inf, -0 and subnormal results as +0), or a finite word within 1 ULP of it."""
+    board = "blackhole" if ttnn.device.is_blackhole(device) else "wormhole_b0"
+    if board not in ("blackhole", "wormhole_b0"):
+        pytest.skip(f"ttnn.xielu keeps its stock kernel on {board}")
+    words = torch.cat([torch.arange(0x80), torch.arange(0x8000, 0x8080)]).to(torch.int16)
+    x = words.view(torch.bfloat16).repeat(4).reshape(1, 1, 32, 32)
+    tt_x = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    tiny = torch.finfo(torch.bfloat16).tiny
+
+    def stored(t):
+        t = t.to(torch.bfloat16).to(torch.float64).flatten()
+        t = torch.where(torch.isnan(t), torch.full_like(t, float("inf")), t)
+        return torch.where(t.abs() < tiny, torch.zeros_like(t), t)
+
+    actual = stored(ttnn.to_torch(ttnn.xielu(tt_x)))
+    x64 = x.flatten().to(torch.float64)
+    reference = ttnn.get_golden_function(ttnn.xielu)(x64).to(torch.float64).flatten()
+    rounded = stored(reference)
+    spacing = 2.0 ** (torch.floor(torch.log2(reference.abs().clamp(min=tiny))) - 7)
+    close = torch.isfinite(reference) & (actual != 0) & ((actual - reference).abs() < spacing)
+    ok = (actual == rounded) | close
+    bits = words.repeat(4).to(torch.int32) & 0xFFFF
+    assert ok.all(), (
+        f"{(~ok).sum().item()} of {ok.numel()} inputs off torch; first input 0x{bits[~ok][0].item():04x} "
+        f"stored {actual[~ok][0].item()!r}, torch {reference[~ok][0].item()!r}"
+    )
+
+
+def test_xielu_bf16_bfloat8_b(device):
+    """bfloat8_b in and out runs the BF16 kernel (the SFPU reads Bfp8_b in DEST as BF16); PCC 0.999 against torch."""
+    board = "blackhole" if ttnn.device.is_blackhole(device) else "wormhole_b0"
+    if board not in ("blackhole", "wormhole_b0"):
+        pytest.skip(f"ttnn.xielu keeps its stock kernel on {board}")
+    torch.manual_seed(0)
+    x = torch.empty(1, 1, 64, 64).uniform_(-10.0, 10.0).to(torch.bfloat16)
+    tt_x = ttnn.from_torch(x, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device)
+    stored = ttnn.to_torch(tt_x).to(torch.float64).flatten()
+    output = ttnn.xielu(tt_x)
+    assert output.dtype == ttnn.bfloat8_b
+    actual = ttnn.to_torch(output).to(torch.float64).flatten()
+    golden = ttnn.get_golden_function(ttnn.xielu)(stored).to(torch.float64)
+    pcc = torch.corrcoef(torch.stack([actual, golden]))[0, 1].item()
+    assert pcc >= 0.999, f"PCC {pcc:.6f} against torch"
+
+
+def test_xielu_bf16_exhaustive_inputs(device):
+    """All 65,536 BF16 inputs through ttnn.xielu store torch's float64 result as the BF16 pack stores it, or a finite
+    word within STEPS steps of it; SKIP (the positive subnormal inputs) is checked by the unflushed test above."""
+    board = "blackhole" if ttnn.device.is_blackhole(device) else "wormhole_b0"
+    if board not in ("blackhole", "wormhole_b0"):
+        pytest.skip(f"ttnn.xielu keeps its stock kernel on {board}")
+    STEPS = 1
+    SKIP = [(0x0001, 0x00FF)]
+    bits = torch.arange(1 << 16, dtype=torch.int32)
+    x = bits.to(torch.int16).view(torch.bfloat16).reshape(1, 1, 256, 256)
+    tt_x = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    tiny = torch.finfo(torch.bfloat16).tiny
+
+    def stored(t):
+        t = t.to(torch.bfloat16).to(torch.float64).flatten()
+        return torch.where(t.abs() < tiny, torch.zeros_like(t), t)
+
+    def ordered(t):
+        # BF16 words in value order, so that adjacent finite values differ by one step.
+        words = t.to(torch.bfloat16).view(torch.int16).to(torch.int32)
+        return torch.where(words < 0, -(words & 0x7FFF), words)
+
+    actual = stored(ttnn.to_torch(ttnn.xielu(tt_x)))
+    x = x.flatten().to(torch.float64)
+    reference = (ttnn.get_golden_function(ttnn.xielu)(x)).to(torch.float64).flatten()
+    expected = stored(reference)
+    finite = torch.isfinite(expected) & torch.isfinite(actual)
+    ok = (actual == expected) | (finite & ((ordered(actual) - ordered(expected)).abs() <= STEPS))
+    # A NaN result reaches L1 as a NaN or as an infinity of either sign.
+    ok |= torch.isnan(reference) & (torch.isnan(actual) | torch.isinf(actual))
+    # The SFPU flushes a result below the smallest normal, or within 2^-12 above it, to 0.
+    ok |= (actual == 0) & (reference.abs() < tiny * (1 + 2.0**-12))
+    for first, last in SKIP:
+        ok |= (bits >= first) & (bits <= last)
+    assert ok.all(), (
+        f"{(~ok).sum().item()} of {ok.numel()} inputs off torch; first input 0x{bits[~ok][0].item():04x} "
+        f"stored {actual[~ok][0].item()!r}, torch {reference[~ok][0].item()!r}"
+    )
