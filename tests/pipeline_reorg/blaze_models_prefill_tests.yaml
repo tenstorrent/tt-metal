@@ -1236,17 +1236,23 @@
     export TT_CACHE_PATH=/mnt/models/huggingface/tt_cache/gemma4_d_p/google--gemma-4-31B-it
     export PREFILL_TRACE_DIR=/mnt/models/huggingface/gpu_traces/gemma4_d_p/gutenberg-135
     export OMP_NUM_THREADS=16 MKL_NUM_THREADS=16
-    mpirun --bind-to none --pernode --tag-output \
-      python3 -m pytest \
-        'models/demos/gemma4_d_p/tests/test_prefill_migration.py::test_prefill_migration[mock-256k]' \
-        -sv --tb=short --junitxml="$PREFILL_SUMMARIES/{artifact_subdir}/junit.xml"
+    # SCRATCH #64697: run twice on the same host.
+    rc=0
+    for run in 1 2; do
+      echo "KV64697 RUN $run on $(hostname)"
+      mpirun --bind-to none --pernode --tag-output \
+        python3 -m pytest \
+          'models/demos/gemma4_d_p/tests/test_prefill_migration.py::test_prefill_migration[mock-256k]' \
+          -sv --tb=short --junitxml="$PREFILL_SUMMARIES/{artifact_subdir}/junit$run.xml" || rc=1
+    done
+    test "$rc" -eq 0
   test_type: gemma4_prefill_kv_pcc
   test_tags: [gemma4_d_p, runner, kv_cache]
   test_group: disagg_prefill
   budget_type: demo
   skus:
     bh_sc1:
-      timeout: 30
+      timeout: 50
       tier: 1
       release_ready: false
   owner_id: U02LLCK5MML # Sasha Vuckovic

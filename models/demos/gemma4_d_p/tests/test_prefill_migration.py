@@ -173,6 +173,9 @@ def test_prefill_migration(migration_environment, context_len):
         f"Worst head: layer={worst_head['layer']} head={worst_head['head']} "
         f"type={worst_head['cache_type']} PCC={worst_head['pcc']:.6f}"
     )
+    diag = output_dir / "kv64697_diag.txt"
+    if diag.exists():
+        print(diag.read_text(), flush=True)
     per_head_pcc_passed = worst_head["pcc"] >= MIN_PER_HEAD_PCC
     overall_pcc_passed = overall["pcc"] >= MIN_OVERALL_PCC
     overall_rrmse_passed = overall["relative_rmse"] < MAX_OVERALL_RRMSE

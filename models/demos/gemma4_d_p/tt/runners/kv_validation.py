@@ -347,6 +347,45 @@ def compare_head(config_id, expected, actual):
     return {"sliding_k" if config_id < 20 else "sliding_v": cache_metrics(expected, actual)}
 
 
+_KV64697_LAYERS = tuple(int(x) for x in os.getenv("KV64697_DIAG_LAYERS", "4,5,6,7,8,11,12,13").split(",") if x)
+
+
+def _kv64697_diag(layer, actual_heads, expected_heads):
+    """Per (chunk, CP row) slab: a hash of the device KV over all heads and its relative error vs the GPU reference.
+    Two hosts agree bit-for-bit on a slab iff the hashes match; the error says which side moved."""
+    import hashlib
+
+    cp = Gemma4ServiceConfig.MESH_SHAPE[0]
+    chunk = Gemma4ServiceConfig.CHUNK_SIZE
+    local = chunk // cp
+    groups = {}
+    for config_id, actual in actual_heads:
+        name = "g" if config_id < 4 else ("k" if config_id < 20 else "v")
+        groups.setdefault(name, []).append((config_id, actual))
+    lines = []
+    for name, heads in groups.items():
+        rows = heads[0][1].shape[0]
+        for c in range(rows // chunk):
+            hashes, errors = [], []
+            for r in range(cp):
+                rows_slice = slice(c * chunk + r * local, c * chunk + (r + 1) * local)
+                digest = hashlib.blake2b(digest_size=3)
+                num = den = 0.0
+                for config_id, actual in heads:
+                    part = actual[rows_slice].contiguous()
+                    digest.update(part.view(torch.uint8).numpy().tobytes())
+                    expected = expected_heads[config_id][rows_slice].float()
+                    if config_id < 4:
+                        expected = expected[:, : part.shape[1]]
+                    diff = part.float() - expected
+                    num += float((diff * diff).sum())
+                    den += float((expected * expected).sum())
+                hashes.append(digest.hexdigest())
+                errors.append(f"{(num / den if den else 0.0) * 1e4:7.2f}")
+            lines.append(f"KV64697 L{layer:02d} {name} c{c:02d} " + " ".join(hashes) + " | " + " ".join(errors))
+    return lines
+
+
 def compare_slot_cache(read_heads, slot_id, real_len, trace_dir):
     started = time.perf_counter()
     timings = dict(reference_seconds=0.0, readback_seconds=0.0, comparison_seconds=0.0, wait_seconds=0.0)
@@ -355,6 +394,7 @@ def compare_slot_cache(read_heads, slot_id, real_len, trace_dir):
     layer_timings = []
     all_comparisons = []
     layer_metrics = []
+    kv64697_lines = []
     layers = range(Gemma4ServiceConfig.NUM_LAYERS)
     # Golden loads and device readback each run up to _PREFETCH_LAYERS ahead on their own thread;
     # reference/readback are those threads' busy time and wait is how long this thread blocked on them.
@@ -402,6 +442,8 @@ def compare_slot_cache(read_heads, slot_id, real_len, trace_dir):
                         layer_minima[name] = min(layer_minima.get(name, 1.0), score)
                     measurements.append(dict(layer=layer, config=CONFIG_NAMES[config_id], pcc=scores))
                 timings["comparison_seconds"] += time.perf_counter() - start
+                if layer in _KV64697_LAYERS:
+                    kv64697_lines.extend(_kv64697_diag(layer, actual_heads, expected_heads))
                 all_comparisons.extend(layer_comparisons)
                 layer_summary = summarize_metrics(layer_comparisons)
                 layer_metrics.append(dict(layer=layer, **layer_summary))
@@ -446,6 +488,7 @@ def compare_slot_cache(read_heads, slot_id, real_len, trace_dir):
             error_metrics=dict(overall=overall_metrics, layers=layer_metrics),
         )
         (directory / f"gemma4_slot{slot_id}.json").write_text(json.dumps(result, indent=2) + "\n")
+        (directory / "kv64697_diag.txt").write_text("\n".join(kv64697_lines) + "\n")
     logger.info(
         f"[Gemma4 KV PCC] slot={slot_id} final_min_pcc={min(minima.values()):.8f} "
         f"worst_head={worst_head} "
