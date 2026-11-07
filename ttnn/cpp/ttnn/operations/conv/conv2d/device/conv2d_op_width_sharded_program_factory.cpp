@@ -435,7 +435,8 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor(
         false,
         skip_activation_mcast,
         input_channels_padded,
-        reader_indices_actual_page_size);
+        reader_indices_actual_page_size,
+        operation_attributes.fp32_partials);
 
     // Emit CBDescriptors directly onto the ProgramDescriptor.  The framework
     // tracks the globally-allocated CBs (ACT_SHARDED on input, OUT/PARTIALS on

@@ -218,6 +218,7 @@ struct Conv2dParams {
     bool config_tensors_in_dram = false;
     uint32_t pre_op_l1_allocation_size_bytes = 0;
     std::optional<bool> force_split_reader;
+    bool fp32_partials = false;
 
     static constexpr auto attribute_names = std::make_tuple(
         "sliding_window_config",
@@ -237,7 +238,8 @@ struct Conv2dParams {
         "full_inner_dim",
         "enable_activation_reuse",
         "config_tensors_in_dram",
-        "force_split_reader");
+        "force_split_reader",
+        "fp32_partials");
 
     auto attribute_values() const {
         return std::make_tuple(
@@ -258,7 +260,8 @@ struct Conv2dParams {
             this->full_inner_dim,
             this->enable_activation_reuse,
             this->config_tensors_in_dram,
-            this->force_split_reader);
+            this->force_split_reader,
+            this->fp32_partials);
     }
 };
 
