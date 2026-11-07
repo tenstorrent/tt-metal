@@ -509,7 +509,18 @@ class DraftAttention(_PagedMixin, DSV41Attention):
         for i in range(BLOCK):
             idx = torch.full((T_d,), -1, dtype=torch.int32)
             idx[i * Ub : (i + 1) * Ub] = RING + i
-            blk.append(self._mk_pt(idx))
+            blk.append(
+                ttnn.from_torch(
+                    idx.repeat(self.rows),
+                    device=self.mesh_device,
+                    dtype=ttnn.int32,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    mesh_mapper=ttnn.ShardTensor2dMesh(
+                        self.mesh_device, dims=(0, None), mesh_shape=(self.rows, self.cols)
+                    ),
+                )
+            )
         v.blk_idx = blk
         return v
 
