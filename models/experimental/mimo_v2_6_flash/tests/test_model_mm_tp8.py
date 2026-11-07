@@ -66,6 +66,22 @@ def run_group(model, tok, prompts, greedy=0):
         if rows is not None and bool(rows.any()):
             r["mm_pcc"] = pcc(hidden[-1][rows], ref_hidden[-1][:n][rows].float())
             r["text_pcc"] = pcc(hidden[-1][~rows], ref_hidden[-1][:n][~rows].float())
+            # Per layer: PCC at the item rows / at the text rows / at the text rows without the few rows that carry
+            # massive activations (|x| > 500 in some layer: they dominate a PCC over the rows they are in), and the
+            # reference's largest |activation| at the item / text rows.
+            massive = ref_hidden[1:, :n].float().abs().amax(dim=(0, 2)) > 500
+            plain = ~rows & ~massive
+            r["massive_rows"] = massive.nonzero().flatten().tolist()
+            r["curve"] = [
+                (
+                    pcc(h[rows], ref_hidden[k + 1][:n][rows].float()),
+                    pcc(h[~rows], ref_hidden[k + 1][:n][~rows].float()),
+                    pcc(h[plain], ref_hidden[k + 1][:n][plain].float()),
+                    float(ref_hidden[k + 1][:n][rows].float().abs().max()),
+                    float(ref_hidden[k + 1][:n][~rows].float().abs().max()),
+                )
+                for k, h in enumerate(hidden)
+            ]
         _score(r, logits, p["ref_logits"](n - 1))
         positions[slot] = n
     for _ in range(TEACHER_FORCED):
@@ -114,6 +130,14 @@ def log_results(results):
             f"mean {sum(r['pcc']) / len(r['pcc']):.4f} min {min(r['pcc']):.4f}; reference margins "
             f"{[round(m, 2) for m in r['margins']]}" + (f"; answer {r['answer']!r}" if "answer" in r else "")
         )
+        if "curve" in r:
+            logger.info(
+                f"{name}: per layer, hidden PCC item rows / text rows / text rows without the massive-activation rows "
+                f"{r['massive_rows']} (reference max |activation| item / text): "
+                + ", ".join(
+                    f"{k}: {a:.4f}/{b:.4f}/{c:.4f} ({d:.0f}/{e:.0f})" for k, (a, b, c, d, e) in enumerate(r["curve"])
+                )
+            )
 
 
 @pytest.mark.parametrize("device_params", [GALAXY_DEVICE_PARAMS], indirect=True)
