@@ -20,8 +20,9 @@ void kernel_main() {
     // dst index the result is written to: 0 aliases the gate operand (what an expert kernel does
     // to save a dst slot), 2 keeps it separate. Both are exercised by the host test.
     constexpr uint32_t kDstOut = get_compile_time_arg_val(1);
-    constexpr uint32_t kDstGate = 0;
-    constexpr uint32_t kDstUp = 1;
+    // dst indices of the operands: 0 and 1 unless the host test places them elsewhere.
+    constexpr uint32_t kDstGate = get_compile_time_arg_val(2);
+    constexpr uint32_t kDstUp = get_compile_time_arg_val(3);
 
     constexpr uint32_t cb_gate = tt::CBIndex::c_0;
     constexpr uint32_t cb_up = tt::CBIndex::c_1;

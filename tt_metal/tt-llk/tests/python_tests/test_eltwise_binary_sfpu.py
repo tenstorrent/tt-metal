@@ -11,6 +11,7 @@ from typing import Dict
 import numpy as np
 import pytest
 import torch
+from conftest import skip_for_quasar, skip_for_wormhole
 from helpers.chip_architecture import ChipArchitecture
 from helpers.constraints import skip_if_32bit_input_without_dest_acc
 from helpers.data_format_inference import effective_dest_acc, unpacks_to_dest
@@ -240,6 +241,7 @@ _UNREGISTERED_BINARY_OPS = frozenset(
         MathOperation.SfpuRemainderUint32,
         MathOperation.SfpuRsubInt32,
         MathOperation.SfpuCopyDest,
+        MathOperation.SfpuSituGlu,
     }
 )
 
@@ -1445,6 +1447,31 @@ def _run_quant(mathop, sign_magnitude, **run_kwargs):
 @parametrize(**QUANT_SWEEP)
 def test_eltwise_binary_sfpu_quant(mathop, sign_magnitude, **run_kwargs):
     _run_quant(mathop, sign_magnitude, **run_kwargs)
+
+
+SITU_GLU_SWEEP = dict(
+    formats=input_output_formats([DataFormat.Float16_b]),
+    mathop=[MathOperation.SfpuSituGlu],
+    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+)
+
+
+@skip_for_quasar
+@skip_for_wormhole
+@parametrize(**SITU_GLU_SWEEP)
+def test_eltwise_binary_sfpu_situ_glu(formats, dest_acc, mathop, **run_kwargs):
+    # situ_glu(gate, up) with gate = tile0 and up = tile1; Blackhole has the only kernel. Both signs, past
+    # the kernel's clamps (|gate| 19.5, |up| 121.875), with gate above the logistic flush at -87.5.
+    sfpu_binary(
+        formats,
+        dest_acc,
+        mathop,
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-80.0, high=40.0),
+        spec_B=StimuliSpec(
+            distribution=DistributionKind.UNIFORM, low=-200.0, high=200.0
+        ),
+        **run_kwargs,
+    )
 
 
 # =============================================================================
