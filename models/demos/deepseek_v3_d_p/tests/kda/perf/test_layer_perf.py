@@ -62,7 +62,7 @@ _PERF_REFERENCE_MS = {
         "TP4-linear": 0.188,
     },
     _QUIETBOX_PERF_SKU: {
-        "TP4-ring": 0.086,
+        "TP4-ring": 0.082,
     },
 }
 # Device time of one traced call: the sum over its programs of the slowest chip's realtime-profiler duration, the
