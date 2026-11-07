@@ -240,6 +240,10 @@
     {
       "fact": "Operator9 old-image reuse for f579 rejected: all3 model logging files baked into TT image, no TT-tree overlay in stock test route. Immutable ref flags cannot replace image-owned bytes.",
       "evidence": "runs/ci-native-large-reply-visibility/decision9-image-reuse.json"
+    },
+    {
+      "fact": "Stock dispatch references mutable tt-shield branch and action refs. Compare actual dry/release head_sha, referenced_workflows and Uses/action SHAs, not only pre-dispatch branch lookup. A late drift invalidates unchanged-route claim; never redispatch release to hide it.",
+      "evidence": "runs/release-freeze-materialization/RESULT.md"
     }
   ],
   "suite_timings": [

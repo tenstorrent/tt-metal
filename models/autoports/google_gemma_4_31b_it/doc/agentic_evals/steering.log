@@ -44,3 +44,4 @@
 2026-11-07T01:45:38.958445+00:00 effortboundary: inputs.json unchanged, steering.md absent; doc160 hypothesis stops unsupported, no output/config change; transport validity repair next.
 2026-11-07T03:01:19.692807+00:00 C8/40 completion boundary: reread inputs; extended48h/run12h/grantedqb2-ci unchanged; bringup/agentic_evals/steering.md absent. Preserve firstdry31.3h and currentC4/80 rung.
 2026-11-07T03:16:47.611140+00:00 Resume boundary: inputs unchanged; operator decision9 found in AGENTS.md/run_contract. Stock build retries>=90min only; exact file-provenance required for image reuse; optional logger cannot delay CI-proven dry/release fallback. Recording three omitted failed benchmark jobs. No steering.md.
+2026-11-07T04:03:25.961500+00:00 Freeze preparation boundary: inputs unchanged extended48h/run12h; operator9 read and applied, no steering.md. Prepared commands do not select configuration; actual80, image confirmation and fresh dry remain pending.

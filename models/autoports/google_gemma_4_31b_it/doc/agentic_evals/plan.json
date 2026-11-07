@@ -88,7 +88,7 @@
       "swe_bench_verified",
       "terminal_bench_2_1"
     ],
-    "dry_procedure": "runs/gpqa-only-release-preparation/plan.md",
+    "dry_procedure": "runs/release-freeze-materialization/RESULT.md",
     "per_arm_logging": {
       "r1_gpqa_diamond": {
         "response_debug": "true",
@@ -140,7 +140,10 @@
       "projected_workflow_hours_with_full_extra_tail": 7.702222222222223,
       "reason": "Largest currently banked valid cohort, accepted faster C8 config. Only use if larger80 cannot bank before reserved dry or fails fitting projection; never delay firstdry for optional logger image. Actual dry still required.",
       "evidence": "runs/gpqa40-c8-saturation-comparison/audit.json"
-    }
+    },
+    "prior_dry_procedure": "runs/gpqa-only-release-preparation/plan.md",
+    "prepared_candidates": "runs/release-freeze-materialization/prepared.json",
+    "freeze_preparation_status": "Prepared80C8 and banked40C8; no selection/freeze/dry pass. Explicit initial8 identitymatched complete native replies and fresh no-score snapshot required."
   },
   "runs": [
     {
@@ -3642,7 +3645,7 @@
     }
   ],
   "status": "SWE5_completed_validity_audit_GPQA20_repair_building",
-  "last_updated": "2026-11-07T03:37:30.411240+00:00",
+  "last_updated": "2026-11-07T04:03:25.961500+00:00",
   "stop_reason": null,
   "actual_runs": [],
   "continuations": [
