@@ -23,9 +23,10 @@ Windows: the first DSA layer alone (layer 3, a first rank with its embedding); t
 pipeline stage's KV-only last layer (layer 92's role); and layers 0-3, so the KDA carries and the DSA
 index cache meet in one forward.
 
-Caches are allocated here in GLM-5.3's serving layout (TP-deduped scaled-FP8
-KVPE and bf8 index-key caches, one slot per DSA layer of the rank), without the paging bank alignment,
-which needs a multiple of 8192 tokens; two 5120-token chunks are 10240.
+The caches and KDA slabs come from the serving allocator (`KimiK31Adapter.allocate_kv_cache`: TP-deduped
+scaled-FP8 KVPE and bf8 index-key caches, one slot per DSA layer of the rank). The capacity must be a
+multiple of 8192 tokens (the allocator's paging alignment) and of the chunk (the cache write), so the two
+chunks fill 10240 of a 40960-token cache.
 """
 
 import pytest
@@ -33,22 +34,30 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.demos.common.prefill.adapter import PrefillRunParams, get_adapter
 from models.demos.deepseek_v3_d_p.reference.cpu_deepseek_v32 import random_mla_weights
 from models.demos.deepseek_v3_d_p.reference.kimi_k3.attn_res.weights import query_weight_names
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_1_config import KimiK31Config, kimi_k3_1_hf_config
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import kimi_k3_kda_config
 from models.demos.deepseek_v3_d_p.tests.kda.utils import random_weights as random_kda_weights
-from models.demos.deepseek_v3_d_p.tests.kimi_k3.kda_slabs import attach_kda_states
-from models.demos.deepseek_v3_d_p.tests.kimi_k3.test_transformer_depth import PLACEMENTS, SP_AXIS, TP_AXIS, _compose
+from models.demos.deepseek_v3_d_p.tests.kimi_k3.test_transformer_depth import SP_AXIS, TP_AXIS, _compose
 from models.demos.deepseek_v3_d_p.tt.attn_res.weights import CHECKPOINT_PREFIX
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.transformer import TtKimiK3Transformer
 from models.demos.deepseek_v3_d_p.tt.runners.input_prep import prepare_prefill_input_tensor
-from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat, init_kvpe_cache, init_mla_kv_cache
 
 CHUNK = 5120
 NUM_CHUNKS = 2
-MAX_SEQ_LEN = CHUNK * NUM_CHUNKS
+MAX_SEQ_LEN = 40960  # cache capacity: a multiple of 8192 (bank alignment) and of CHUNK (update_padded_kv_cache)
 STD = 0.02
+
+PLACEMENTS = [
+    pytest.param(
+        (8, 4),
+        {"fabric_config": ttnn.FabricConfig.FABRIC_2D, "l1_small_size": KimiK31Config.L1_SMALL_SIZE},
+        marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
+        id="fabric2d-8x4",
+    )
+]
 
 
 class _DenseFfnK31(KimiK31Config):
@@ -145,8 +154,27 @@ def _run_sequence(model, mesh_device, token_ids, kvpe, index) -> list[torch.Tens
 @pytest.mark.parametrize("window", list(WINDOWS), ids=list(WINDOWS))
 def test_k31_dsa_block_finite_and_deterministic(mesh_device, device_params, window):
     first_layer_idx, num_layers, kv_only = WINDOWS[window]
+    adapter = get_adapter("kimi_k3_1")
     config = kimi_k3_1_hf_config(max_seq=MAX_SEQ_LEN)
-    cache_format = MlaKvCacheFormat.SCALED_FP8
+    params = PrefillRunParams(
+        mesh_shape=tuple(mesh_device.shape),
+        num_layers=num_layers,
+        first_layer_idx=first_layer_idx,
+        is_first_rank=True,
+        is_last_rank=True,
+        max_seq_len=MAX_SEQ_LEN,
+        chunk_size=CHUNK,
+        num_users=1,
+        capacity_factor=2,
+        num_links=1,
+        gate_mode_name="DEVICE_FP32",
+        kv_only_last_layer=kv_only,
+        weight_cache_path=None,
+        sp_axis=SP_AXIS,
+        tp_axis=TP_AXIS,
+        tp_shard_kv=True,
+        sparse_kv_cache_format=None,
+    )
 
     logger.info(f"{window}: building synthetic weights for layers [{first_layer_idx}, {first_layer_idx + num_layers})")
     state_dict = _synthetic_state_dict(config, first_layer_idx, num_layers)
@@ -164,35 +192,28 @@ def test_k31_dsa_block_finite_and_deterministic(mesh_device, device_params, wind
         tp_axis=TP_AXIS,
         max_seq_len=MAX_SEQ_LEN,
         is_chunked=True,
-        sparse_kv_cache_format=cache_format,
+        sparse_kv_cache_format=adapter.resolve_sparse_kv_cache_format(params.sparse_kv_cache_format),
+        tp_shard_kv=True,
     )
     dsa_layers = [layer for layer in model.layers if layer.attention.writes_kv]
     assert dsa_layers and all(layer.attention.mla._has_indexer for layer in dsa_layers), "K3.1 layers must be DSA"
 
-    num_slots = model.schedule.num_mla_layers
-    cache_kwargs = dict(
-        mesh_device=mesh_device,
-        seq_len=MAX_SEQ_LEN,
-        mesh_shape=list(mesh_device.shape),
-        sp_axis=SP_AXIS,
-        num_kvpe_cache_layers=num_slots,
-        num_users=1,
-        tp_axis=TP_AXIS,
-    )
-    kvpe = init_mla_kv_cache(cache_format=cache_format, hf_config=config, **cache_kwargs)
-    index = init_kvpe_cache(kvpe_cache_head_dim=config.index_head_dim, dtype=ttnn.bfloat8_b, **cache_kwargs)
-    slabs = attach_kda_states(mesh_device, model, sp_axis=SP_AXIS, tp_axis=TP_AXIS)
+    caches = adapter.allocate_kv_cache(mesh_device=mesh_device, hf_config=config, params=params)
+    kvpe, index = caches.kvpe, caches.index
+    model.kda_states = caches.kda_states
 
-    token_ids = torch.randint(0, config.vocab_size, (MAX_SEQ_LEN,), generator=torch.Generator().manual_seed(7))
+    token_ids = torch.randint(0, config.vocab_size, (NUM_CHUNKS * CHUNK,), generator=torch.Generator().manual_seed(7))
     runs = []
     try:
         for run in range(2):
             logger.info(f"{window}: run {run}")
             outputs = _run_sequence(model, mesh_device, token_ids.tolist(), kvpe, index)
             runs.append((outputs, _shards(mesh_device, kvpe.storage), _shards(mesh_device, index)))
+        l1_small = ttnn.get_memory_view(mesh_device, ttnn.BufferType.L1_SMALL)
+        logger.info(f"{window}: L1_SMALL after the runs: {l1_small.total_bytes_allocated_per_bank} B/bank allocated")
     finally:
-        if slabs is not None:
-            slabs.deallocate()
+        if caches.kda_states is not None:
+            caches.kda_states.deallocate()
         model.release_sub_device_managers()
 
     (outputs, kvpe_raw, index_raw), (outputs_again, kvpe_raw_again, index_raw_again) = runs
@@ -207,9 +228,12 @@ def test_k31_dsa_block_finite_and_deterministic(mesh_device, device_params, wind
     kvpe_logical = kvpe.unpack_host(kvpe_raw)
     assert torch.isfinite(kvpe_logical).all(), "non-finite KVPE cache"
     assert torch.isfinite(index_raw.float()).all(), "non-finite index cache"
-    # Both chunks of every DSA slot were written: no all-zero row survives in either cache.
-    assert (kvpe_logical.abs().amax(dim=-1) > 0).all(), "a KVPE cache row was never written"
-    assert (index_raw.float().abs().amax(dim=-1) > 0).all(), "an index cache row was never written"
+    # Both chunks of every DSA slot were written: each chunk fills its first CHUNK / (SP*TP) rows on every
+    # chip (TP-deduped, block-cyclic), so no all-zero row survives below that; the rest is still empty.
+    written = NUM_CHUNKS * CHUNK // mesh_device.get_num_devices()
+    for name, cache in (("KVPE", kvpe_logical), ("index", index_raw.float())):
+        assert (cache[..., :written, :].abs().amax(dim=-1) > 0).all(), f"a written {name} cache row is zero"
+        assert not cache[..., written:, :].any(), f"{name} cache rows past the two chunks were written"
 
     for chunk, (out, again) in enumerate(zip(outputs, outputs_again)):
         if out is not None:

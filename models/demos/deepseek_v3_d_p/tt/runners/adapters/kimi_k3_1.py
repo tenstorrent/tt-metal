@@ -9,9 +9,9 @@ runtime build, layer schedule, pipeline split points and migration-table layout;
 reaches K3.1 too. The model difference is carried by ``KimiK31Config`` / ``kimi_k3_1_hf_config`` (the
 ``index_*`` DSA fields), not by code here.
 
-Not servable yet: the K3 block does not drive the DSA indexer that K3.1's config makes ``ttMLA``
-build; that lands with Gated DSA in the K3 block. K3's shared ``allocate_kv_cache`` already gives
-K3.1 its scaled-FP8 kvpe and bf8 indexer key cache.
+K3's block drives the DSA indexer K3.1's config makes ``ttMLA`` build (the transformer threads the
+sparse kvpe format and the index cache), and K3's shared ``allocate_kv_cache`` gives K3.1 its
+scaled-FP8 kvpe and bf8 indexer key cache.
 
 What this class overrides is identity and artifacts: K3.1's weights are all retrained, so nothing
 recorded against the K3 checkpoint (TTNN cache, golden traces, DFlash drafter, MLA reference) is valid
@@ -44,6 +44,8 @@ class KimiK31Adapter(KimiK3Adapter):
 
     # Kimi-K3-DSpark was trained against K3, not K3.1.
     supports_dflash = False
+    # The DSA layers' sparse-MLA CCLs need more than K3's L1_SMALL (see KimiK31Config.L1_SMALL_SIZE).
+    l1_small_size = KimiK31Config.L1_SMALL_SIZE
     dflash_model_default = ""
     dflash_golden_default = ""
 
