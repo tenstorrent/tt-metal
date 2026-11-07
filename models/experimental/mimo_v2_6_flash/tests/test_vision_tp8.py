@@ -18,9 +18,11 @@ The converted weights go to ``MIMO_VISION_CACHE`` (default: a ``vision`` cache n
 import os
 import time
 
+import numpy as np
 import pytest
 import torch
 from loguru import logger
+from PIL import Image
 
 import ttnn
 from models.experimental.mimo_v2_6_flash.reference import vision as ref
@@ -313,6 +315,62 @@ def test_vision_traced_passes(mesh_device, reference):
     traced = model.forward_pass(pixels, geo)
     assert model.trace_info()[rows][2] == before + 1, "no recapture after a new program"
     assert torch.equal(traced, model.forward_pass(pixels, geo, trace=False))
+    model.release_traces()
+
+
+SOLID = {"red": (220, 20, 20), "blue": (20, 20, 220), "green": (20, 160, 20)}
+
+
+def solid_case(path, kind, color, size):
+    """A uniform-colour image (PIL) or video (32 identical frames) through the vLLM processor."""
+    if kind == "video":
+        frames = np.full((32, size[1], size[0], 3), SOLID[color], dtype=np.uint8)
+        out = vin.process_video(path, frames)
+        return out["pixel_values_videos"], out["video_grid_thw"]
+    out = vin.process_images(path, [Image.new("RGB", size, SOLID[color])])
+    return out["pixel_values"], out["image_grid_thw"]
+
+
+@pytest.mark.parametrize("device_params", [TRACE_DEVICE_PARAMS], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
+def test_vision_solid_colours(mesh_device, reference):
+    """Uniform-colour images and videos (every patch identical; a 64x64 image is 48 patches in a 1024-row bucket) on
+    the eager and the traced path, colours alternating so a stale traced input would show: every token close to the
+    fp32 reference, and colours told apart exactly as much as the reference tells them apart (its red / blue / green
+    embeddings are ~0.99 cosine-similar, so a small error could erase the colour).
+
+    The conformance suite's solid-colour misses (TT: white / black, OpenRouter: red) are not the encoder: the fp32 host
+    reference LLM fed the fp32 reference ViT answers white / black too, as the TT server does with the device or the HF
+    host encoder; OpenRouter serves MiMo-V2.6-Flash-RL, a different checkpoint."""
+    path, model_ref = reference
+    model = TtMiMoVisionTransformer.from_checkpoint(mesh_device, path, cache_dir=vision_cache_dir())
+    model.prepare_traces(TRACE_BUCKETS)
+    model.capture_traces()
+    cases = [("image", (64, 64)), ("image", (256, 256)), ("image", (448, 448)), ("video", (320, 240))]
+    for kind, size in cases:
+        means = {}
+        for color in ("red", "blue", "green", "red"):
+            pixel_values, grid = solid_case(path, kind, color, size)
+            with torch.no_grad():
+                expected = model_ref(pixel_values, grid)
+            eager = model(pixel_values, grid, hidden=[]).float()
+            traced = model(pixel_values, grid).float()
+            assert torch.equal(eager, traced), f"{kind} {size} {color}: traced != eager"
+            cos = torch.nn.functional.cosine_similarity(traced, expected, dim=-1)
+            logger.info(
+                f"solid {color} {kind} {size}: grid {ref.as_grid_list(grid)}, PCC {pcc(traced, expected):.5f}, token "
+                f"cosine min {cos.min():.5f} mean {cos.mean():.5f}, |emb| device {traced.norm(dim=-1).mean():.2f} fp32 "
+                f"{expected.norm(dim=-1).mean():.2f}"
+            )
+            assert cos.min() >= 0.99 and cos.mean() >= 0.998 and pcc(traced, expected) >= FINAL_PCC, f"{kind} {size}"
+            means.setdefault(color, (traced.mean(0), expected.mean(0)))
+        for a, b in (("red", "blue"), ("red", "green"), ("blue", "green")):
+            dev = torch.nn.functional.cosine_similarity(means[a][0], means[b][0], dim=0).item()
+            fp32 = torch.nn.functional.cosine_similarity(means[a][1], means[b][1], dim=0).item()
+            logger.info(f"solid {kind} {size}: cos({a}, {b}) device {dev:.5f} fp32 {fp32:.5f}")
+            assert abs(dev - fp32) <= 0.1 * (
+                1 - fp32
+            ), f"{kind} {size}: {a} vs {b} separated {dev:.5f}, fp32 {fp32:.5f}"
     model.release_traces()
 
 
