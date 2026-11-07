@@ -319,6 +319,49 @@ def test_full(device, input_shape, fill_value, layout):
 
 
 @pytest.mark.parametrize(
+    "dtype, fill_value",
+    [
+        (ttnn.uint8, 256),
+        (ttnn.uint8, 65535),
+        (ttnn.uint8, -1),
+        (ttnn.uint8, 300.0),
+        (ttnn.uint16, 65536),
+        (ttnn.uint16, -1),
+        (ttnn.uint32, -1),
+        (ttnn.int32, 2**31),
+        (ttnn.int32, float("nan")),
+    ],
+)
+@pytest.mark.parametrize("on_device", [False, True])
+def test_full_integer_fill_value_out_of_range(device, dtype, fill_value, on_device, expect_error):
+    # torch.full raises for these instead of wrapping the value into the dtype.
+    with expect_error(RuntimeError, "without overflow"):
+        ttnn.full([2, 3], fill_value, dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device if on_device else None)
+
+
+@pytest.mark.parametrize(
+    "dtype, fill_value",
+    [
+        (ttnn.uint8, 0),
+        (ttnn.uint8, 255),
+        (ttnn.uint8, 7.9),
+        (ttnn.uint16, 65535),
+        (ttnn.uint32, 2**31 - 1),
+        (ttnn.int32, -(2**31)),
+        (ttnn.int32, 2**31 - 1),
+    ],
+)
+@pytest.mark.parametrize("on_device", [False, True])
+def test_full_integer_fill_value_in_range(device, dtype, fill_value, on_device):
+    tensor = ttnn.full(
+        [2, 3], fill_value, dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device if on_device else None
+    )
+    assert tensor.dtype == dtype
+    expected = torch.full([2, 3], int(fill_value), dtype=torch.int64)
+    assert torch.equal(ttnn.to_torch(tensor).to(torch.int64), expected)
+
+
+@pytest.mark.parametrize(
     "input_shape",
     [
         [32, 32],
