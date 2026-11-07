@@ -205,7 +205,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             _configure_default_alu_data_format_state_<is_fp32_dest_acc_en>(math_format, math_format);
         }
-        _llk_math_eltwise_unary_broadcast_init_<BROADCAST_TYPE, is_fp32_dest_acc_en, unpack_to_dest>(tensor_shape);
+        _llk_math_eltwise_unary_broadcast_init_<BROADCAST_TYPE, is_fp32_dest_acc_en, unpack_to_dest>(tensor_shape, math_format);
 
         PROFILER_SYNC();
     }
