@@ -7,7 +7,8 @@
 // arena and there is no secondary operand. Every other responsibility — the
 // hand-off of the geometry to the SFPU, boundary handling, the NoC gather of the
 // four bilinear neighbours, the tile scatter and the input-tile contract — is in
-// fused_msda_reader_common.hpp and identical to V2's.
+// fused_msda_reader_common.hpp (the row-major gather in msda_gather_rows.hpp)
+// and identical to V2's.
 //
 // The coordinate space (MSDA [0, 1] vs grid_sample [-1, 1]) and align_corners
 // are folded into the per-level scale and bias the compute kernel applies, so
@@ -20,6 +21,9 @@ constexpr auto attn_args = TensorAccessorArgs<value_args.next_compile_time_args_
 constexpr auto loc_args = TensorAccessorArgs<attn_args.next_compile_time_args_offset()>();
 
 static_assert(!FROM_OFFSETS, "V1 reader must not be built with the from-offsets frontend");
+#ifdef MSDA_DEVICE_COUNTS
+#error "device valid query counts are only offered on the from-offsets reader"
+#endif
 
 namespace {
 
@@ -53,7 +57,7 @@ void kernel_main() {
     loc_scratch_cb.reserve_back(TILE_MAX_ROWS * LOC_STICKS_PER_ROW);
 
     MaterializedLocations loc_src{
-        .acc = TensorAccessor(loc_args, loc_addr, loc_stick_nbytes),
+        .acc = TensorAccessor(loc_args, loc_addr, loc_page_nbytes),
         .arena_l1 = loc_scratch_cb.get_write_ptr(),
     };
 

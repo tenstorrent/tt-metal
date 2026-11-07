@@ -1,0 +1,295 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+
+# SPDX-License-Identifier: Apache-2.0
+
+import contextlib
+import math
+from pathlib import Path
+
+from loguru import logger
+
+import ttnn
+from models.demos.gemma4.config import MeshConfig, ModeConfig
+from models.demos.gemma4.tt.ccl import CCLManager, ccl_allreduce
+from models.demos.qwen3_vl.tt.common import nearest_multiple
+from models.tt_transformers.tt import model_config as _ttt_model_config
+from models.tt_transformers.tt.model_config import ModelArgs
+
+# models/demos/gemma4/tt/vision/ -> models/demos/gemma4/configs/
+_GEMMA4_CONFIGS = Path(__file__).resolve().parents[2] / "configs"
+
+
+class ModelOptimizations:
+    def __init__(self, model_name):
+        """Configuration optimized for accuracy
+        Only 70B models uses bfp4 MLPs in this configuration
+        """
+        self.bfp4_mlp = False
+        # self.bfp4_mlp = "Qwen3-VL-32B" in model_name
+
+
+class VisionModelArgs(ModelArgs):
+    # ``ModelArgs`` resolves a dummy-weights run through ``LOCAL_HF_PARAMS``,
+    # which lists tt_transformers' own checkpoints and has no Gemma4 entry -- so
+    # every vision test died in the constructor with ``KeyError: gemma-4-31B-it``
+    # before reaching a device. The Gemma4 configs are checked in under this demo
+    # (``models/demos/gemma4/configs/``) and already carry ``vision_config``, so
+    # the map is extended HERE rather than in the shared table: this is our
+    # model's requirement, not a gap in tt_transformers.
+    LOCAL_HF_PARAMS = {
+        **ModelArgs.LOCAL_HF_PARAMS,
+        **{p.name: str(p) for p in sorted(_GEMMA4_CONFIGS.glob("gemma-4-*")) if p.is_dir()},
+    }
+
+    @staticmethod
+    @contextlib.contextmanager
+    def _tolerate_text_rope_scaling():
+        """Let the TEXT config's RoPE type through while the parent parses it.
+
+        ``ModelArgs.__init__`` parses the text config, and Gemma4's full-attention
+        layers declare ``rope_type: "proportional"`` (with
+        ``partial_rotary_factor: 0.25``), which tt_transformers' factory rejects
+        outright -- so every vision test died before reaching a device.
+
+        The vision tower does not consume text RoPE at all: it has its own rotary
+        embedding (``VisionRotaryEmbedding`` in ``vision_tower.py``, ``rope_type: "default"``,
+        theta 100), and nothing under ``tt/vision/`` reads ``args.rope_scaling``.
+        So for THIS construction the text value is genuinely irrelevant.
+
+        Scoped to the vision constructor on purpose. The obvious alternative --
+        adding "proportional" to the shared accept-and-warn list -- would silently
+        disable proportional RoPE for the TEXT model, where Gemma4 really does use
+        it, trading a loud failure here for a quiet accuracy loss there.
+        """
+        # Patch the name in the CALLING module: model_config does
+        # ``from ...common import rope_scaling_model_factory`` at import time, so
+        # it holds its own reference and patching ``common`` would do nothing.
+        original = _ttt_model_config.rope_scaling_model_factory
+
+        def tolerant(rope_scaling_params, *a, **kw):
+            try:
+                return original(rope_scaling_params, *a, **kw)
+            except ValueError as exc:
+                if "Unexpected RoPE scaling type" not in str(exc):
+                    raise
+                logger.info(
+                    f"VisionModelArgs: ignoring text RoPE scaling ({rope_scaling_params}) -- "
+                    "the vision tower carries its own rotary embedding and never reads it"
+                )
+                return None
+
+        _ttt_model_config.rope_scaling_model_factory = tolerant
+        try:
+            yield
+        finally:
+            _ttt_model_config.rope_scaling_model_factory = original
+
+    def __init__(self, *args, mesh_config=None, ccl_manager=None, **kwargs):
+        with self._tolerate_text_rope_scaling():
+            super().__init__(*args, **kwargs)
+
+        # Tensor parallelism: the vision tower is sharded across every device of the
+        # mesh (attention by heads, MLP by intermediate dim), and each block ends in an
+        # all-reduce so activations stay replicated at the block boundaries. Batch is
+        # always 1 — callers loop over users.
+        self.tp = self.cluster_shape[1] if self.cluster_shape else 1
+        # The tower is never laid out in the base class's Galaxy 2-D scheme (heads over one axis,
+        # K over the other): on a 2-D mesh it is TP over axis 1 and replicated over axis 0, so the
+        # Galaxy-specific program configs below must not engage.
+        self.is_galaxy = False
+        if self.tp > 1:
+            # A caller's mesh config (the text model's, possibly TP on axis 0 with fractured weights)
+            # only applies when it describes the same split; otherwise the tower builds its own.
+            if (
+                mesh_config is None
+                or getattr(mesh_config, "tp", None) != self.tp
+                or getattr(mesh_config, "tp_axis", 1) != 1
+                or bool(getattr(mesh_config, "weight_fracture", False))
+            ):
+                mesh_config = MeshConfig(self.mesh_device.shape, decode=ModeConfig(tp=self.tp))
+            self.mesh_config = mesh_config
+            self.ccl_manager = ccl_manager or CCLManager(self.mesh_device)
+        else:
+            self.mesh_config = None
+            self.ccl_manager = None
+
+        # Core dimensions from HF config
+        self.dim = self.hf_config.vision_config.hidden_size
+        self.unpadded_hidden_dim = self.hf_config.vision_config.intermediate_size
+        self.hidden_dim = nearest_multiple(  # pad to a tile multiple per device
+            self.unpadded_hidden_dim, self.tile_size * self.tp
+        )
+        if self.hidden_dim != self.unpadded_hidden_dim:
+            logger.info(f"padding hidden dim from {self.unpadded_hidden_dim} to {self.hidden_dim}")
+        self.head_dim = self.hf_config.vision_config.hidden_size // self.hf_config.vision_config.num_key_value_heads
+        self.n_heads = self.hf_config.vision_config.num_key_value_heads
+        self.n_kv_heads = self.hf_config.vision_config.num_key_value_heads
+
+        self.padded_head_dim = math.ceil(self.head_dim / self.tile_size) * self.tile_size
+
+        if self.padded_head_dim != self.head_dim:
+            logger.info(f"padding head dim from {self.head_dim} to {self.padded_head_dim}")
+
+        self.qkv_size = self.padded_head_dim * (2 * self.n_kv_heads + self.n_heads)
+        self.MAX_QKV_MM_SEQ_LEN = self.MAX_QKV_MM_SEQ_LEN
+
+        self.optimizations = ModelOptimizations(
+            self.model_name
+        )  # todo)) implement finer grained control similar to tt_transformers'
+
+        num_rows = lambda seq_len: min(seq_len, 1024 if self.is_galaxy else 2048)
+        k_dim = self.dim // self.cluster_shape[0] if self.is_galaxy else self.dim
+        n_dim = self.dim // self.cluster_shape[1] if self.is_galaxy else self.dim
+        self.model_config["VISION_WO_PREFILL_PROGCFG"] = lambda seq_len: self.matmul_config(
+            m=num_rows(seq_len),
+            k=k_dim,
+            n=n_dim,
+            grid_size=self.find_prefill_grid(num_rows(seq_len), n_dim // self.tile_size),
+            in0_block_w=1 if self.is_galaxy else self.dim // 1024,
+            fuse_batch=seq_len <= 1024,
+        )
+
+        assert self.n_heads % self.tp == 0, f"n_heads ({self.n_heads}) must be divisible by TP ({self.tp})"
+        assert self.n_kv_heads % self.tp == 0, f"n_kv_heads ({self.n_kv_heads}) must be divisible by TP ({self.tp})"
+
+    def _lm_head_grid_dims(self):
+        """The vision tower has no LM head. The base heuristic special-cases 32-device meshes for
+        Llama widths (``dim % 1024 == 0``) and divides by zero for the Gemma text widths, so use
+        the generic rule here on every mesh (it is what the 8-device engines already run)."""
+        rows, cores_per_row = 8, 8
+        while self.dim % (ttnn.TILE_SIZE * rows * cores_per_row) != 0:
+            rows -= 1
+            if rows == 0:
+                cores_per_row -= 1
+                if cores_per_row == 0:
+                    raise ValueError(f"No LM head core grid divides dim={self.dim}")
+                rows = 8
+        return rows, cores_per_row
+
+    def prepare_residual_tensor_prefill(self, x_bsh):
+        """
+        Prepare inputs for prefill mode.
+        x: (batch, seq, hidden_dim)
+        B: batch (1)
+        S: sequence len
+        H: dim
+
+        Activations are replicated: the tower is tensor-parallel, so every device
+        needs the full hidden dim at each block boundary.
+        """
+        x_1BSH = x_bsh.unsqueeze(0)
+
+        # input goes to DRAM
+        xs_1BSH = ttnn.from_torch(
+            x_1BSH,
+            device=self.mesh_device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+        )
+        return xs_1BSH
+
+    # Visual model does not use distributed norm for now
+    def is_distributed_norm(self, mode):
+        return False
+
+    def get_state_dict_prefix(self, module_name, layer_num=None, deepstack_merger_num=None):
+        layer_prefix = f"visual.encoder.layers.{layer_num}." if layer_num is not None else ""
+        module_map = {
+            "MLP": "mlp",
+            "Gemma4VisionMLP": "mlp",
+            "VisionAttention": "self_attn",
+            "VisionBlock": "",
+            "VisionTransformer": "visual",
+            "PatchMerger": "visual.merger",
+            "input_layernorm": "input_layernorm",
+            "post_attention_layernorm": "post_attention_layernorm",
+            "pre_feedforward_layernorm": "pre_feedforward_layernorm",
+            "post_feedforward_layernorm": "post_feedforward_layernorm",
+            "DeepstackMerger": f"visual.deepstack_merger_list.{deepstack_merger_num}",
+            "": "",  # If no module is given, just get layer prefix
+        }
+        return layer_prefix + module_map[module_name]
+
+    def reference_vision_model(self, depth=None):
+        # Workaround until Qwen2.5-VL is fully integrated into a HF release
+        from transformers.models.gemma4.modeling_gemma4 import Gemma4ForConditionalGeneration as AutoModelForCausalLM
+
+        config = AutoModelForCausalLM.config_class.from_pretrained(self.CKPT_DIR)
+        config.vision_config.num_hidden_layers = depth if depth is not None else config.vision_config.num_hidden_layers
+        model = AutoModelForCausalLM.from_pretrained(self.CKPT_DIR, config=config)
+        return model.model.vision_tower
+
+    def reference_vision_block(self, layer_num=0):
+        return self.reference_vision_model().encoder.layers[layer_num]
+
+    def reference_mlp(self):
+        return self.reference_vision_block().mlp
+
+    def reference_attention(self):
+        return self.reference_vision_block().self_attn
+
+    def reference_rms_norm(self):
+        return self.reference_vision_block().norm2
+
+    def reference_pooler(self):
+        return self.reference_vision_model().pooler
+
+    def reference_rotary_emb(self):
+        return self.reference_vision_model().encoder.rotary_emb
+
+    def reference_patch_merger(self):
+        return self.reference_vision_model().merger
+
+    def reference_deepstack_merger(self):
+        return self.reference_vision_model().deepstack_merger_list[0]
+
+    def reference_patch_embedder(self):
+        return self.reference_vision_model().patch_embedder
+
+    def reference_patch_embed(self):
+        return self.reference_vision_model().patch_embed
+
+
+# ── TP collectives of the tower ───────────────────────────────────────────────────────────────────────────────────
+# TP collectives for the Gemma-4 vision tower.
+#
+# The vision tower is tensor-parallel across the whole mesh: attention is sharded by
+# head, the MLP by intermediate dim, and each row-parallel matmul leaves every device
+# holding a *partial sum* of the full hidden dim. ``tp_all_reduce`` sums those partials
+# so the block output is replicated again, which is the I/O contract every other vision
+# module (norms, residual adds, pooler, projector) assumes.
+
+
+def tp_all_reduce(x, args):
+    """Sum row-parallel partial sums across the TP devices.
+
+    Args:
+        x: ttnn.Tensor ``[..., width]`` partial sum (4D, TILE layout, DRAM).
+        args: ``VisionModelArgs`` (carries ``tp`` / ``mesh_config`` / ``ccl_manager``).
+
+    Returns:
+        ttnn.Tensor of the same shape, replicated across the mesh.
+    """
+    if args.tp <= 1:
+        return x
+
+    # The all-reduce reduce-scatters along dim 3, so the width must split into
+    # tile-aligned per-device chunks (e.g. dim=1152 over TP=8 does not). Zero-pad
+    # up to a multiple of ``tile_size * tp`` — summing zeros is a no-op — and slice
+    # the padding back off afterwards.
+    width = int(x.shape[-1])
+    pad = -width % (args.tile_size * args.tp)
+    if pad:
+        padded = ttnn.pad(x, [(0, 0), (0, 0), (0, 0), (0, pad)], value=0.0)
+        ttnn.deallocate(x)
+        x = padded
+
+    out = ccl_allreduce(x, args.mesh_config, args.ccl_manager)
+
+    if pad:
+        sliced = out[:, :, :, :width]
+        ttnn.deallocate(out)
+        out = sliced
+    return out

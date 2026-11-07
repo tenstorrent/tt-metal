@@ -15,10 +15,6 @@ constexpr float correction_exp_scale(int degree) {
     return scale;
 }
 
-// Exponent leaf shared by the exp_hw_eval compositions. MULT may be an
-// immediate, a programmable constant or a DST value.
-// PoolHeld takes ResidualPool's two upper coefficients as immediates of the call, the values
-// init_abs_exp_correction would program in Prgm1/2.
 template <
     uint32_t DEG,
     bool SquareStore,
@@ -27,9 +23,8 @@ template <
     bool ResidualFold,
     bool SkipClamp,
     bool SplitScaleBias,
-    typename Mult,
-    bool PoolHeld = false>
-inline vFloat correction_exp_leaf(vFloat x, Mult MULT, float bias, const float* c) {
+    typename Mult>
+__attribute__((always_inline)) inline vFloat correction_exp_leaf(vFloat x, Mult MULT, float bias, const float* c) {
     vFloat xlog2;
     if constexpr (SplitScaleBias) {
         // An explicit MAD(product, 1, bias) keeps the compiler from contracting the MUL into it.
@@ -74,7 +69,7 @@ inline vFloat correction_exp_leaf(vFloat x, Mult MULT, float bias, const float* 
         p = dst_reg[64 + DEG].mode<DataLayout::F32>();
     } else if constexpr (SquareFold) {
         p = c[DEG] * correction_exp_scale(DEG);
-    } else if constexpr (ResidualPool && PoolHeld) {
+    } else if constexpr (false) {
         p = ResidualFold ? c[DEG] * correction_exp_scale(DEG) : c[DEG];
     } else if constexpr (ResidualPool) {
         p = vConstFloatPrgm1;
@@ -91,7 +86,7 @@ inline vFloat correction_exp_leaf(vFloat x, Mult MULT, float bias, const float* 
             }
         } else if constexpr (SquareFold) {
             p = p * f + c[k] * correction_exp_scale(k);
-        } else if constexpr (ResidualPool && PoolHeld) {
+        } else if constexpr (false) {
             if (k == (int)DEG - 1) {
                 p = p * f + (ResidualFold ? c[k] * correction_exp_scale(k) : c[k]);
             } else {
@@ -108,14 +103,6 @@ inline vFloat correction_exp_leaf(vFloat x, Mult MULT, float bias, const float* 
         }
     }
 
-    // Recombine 2^i * 2^f. `ep` is the biased exponent of the integer part
-    // (== i + 127). setexp only REPLACES p's exponent field, keeping its
-    // mantissa — which is correct only when p in [1,2) (exponent field 127).
-    // A polynomial fitted on [0,1) can have g(0)=c[0] just below 1.0 for some
-    // degrees (e.g. odd-degree exp2: c0=0.99992), putting p in [0.5,1) at f~=0
-    // (exponent field 126). Replacing that with ep then over-scales by 2x. Add
-    // p's own exponent deviation from the bias so the integer part composes with
-    // p's actual magnitude (mirrors pow_hw_eval's setexp(s, s_exp + q)).
     if constexpr (SquareFold || ResidualFold) {
         return setexp(p, ep);
     } else {

@@ -14,7 +14,7 @@
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
 #include "api/core_local_mem.h"
-#include <tt-metalium/constants.hpp>
+#include "api/tile_constants.h"
 
 #include "indexer_score_common.hpp"  // shared CB indices, compile-time dims, work-unit walk
 #include "indexer_score_metadata.hpp"

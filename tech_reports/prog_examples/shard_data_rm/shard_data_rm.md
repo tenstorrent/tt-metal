@@ -1,7 +1,7 @@
 # Data Sharding (Multicore)
 
 In this example, we will implement a simple TT-Metalium program to demonstrate how sharding works for untilized data. The code for this program can be found in
-[shard_data_rm.cpp](../../../tt_metal/programming_examples/sharding/shard_data_rm.cpp).
+[shard_data_rm.cpp](../../../tt_metal/programming_examples/shard_data_rm/shard_data_rm.cpp).
 
 ## Building and Running the Example
 
@@ -20,7 +20,7 @@ std::shared_ptr<distributed::MeshDevice> mesh_device = distributed::MeshDevice::
 distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
 distributed::MeshWorkload workload;
 distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
-distributed::Program program = distributed::CreateProgram();
+distributed::Program program = distributed::CreateProgram(*mesh_device);
 ```
 
 We start the source code by creating an object that designates the physical mesh of devices that we will be using for the program. For this example, we select the device with an ID of 0 to create a 1x1 mesh.
