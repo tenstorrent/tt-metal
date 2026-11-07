@@ -339,39 +339,51 @@ def _smt_siblings(cpu):
     return out
 
 
-# CPUs at least this busy before the device opens are taken to be another process's busy-poll threads (on Weka hosts,
-# wekanode polls 2 CPUs at ~98%: DIIM-604 / DIIM-761) and are excluded, with their SMT siblings.
+# CPUs at least this busy are another process's busy-poll threads (on Weka hosts wekanode polls 2 CPUs at ~98%:
+# DIIM-604); the dispatching thread's core avoids them.
 BUSY_POLL_FRACTION = 0.9
-MIN_ALLOWED_CPUS = 8
 
 
-@pytest.fixture(autouse=True)
-def avoid_busy_poll_cpus():
-    """Keep this process's threads off CPUs another process busy-polls, before the device opens and creates its threads.
+def _isolate_dispatch_core():
+    """Give the main (dispatching) thread a physical core to itself; returns a function that restores every mask.
 
-    Untraced time is host dispatch; a dispatch thread that lands on (or next to) a busy-poll CPU adds about 1 ms per
-    forward until it moves, which shows up on CI as a slow mode that comes and goes. Every existing thread gets the new
-    mask, and threads created later inherit it. Prints what it found either way.
+    Untraced time is host dispatch on this thread. tt-metal's real-time profiler runs unpinned threads that poll
+    continuously; when one shares the main thread's core (SMT sibling), dispatch runs ~30% slower until the scheduler
+    moves it, which shows up as a sticky slow mode. Pin the main thread to one CPU whose core no busy-poll CPU shares,
+    and move every other thread of this process off that core (a thread pinned only there goes to another CPU).
     """
-    allowed = os.sched_getaffinity(0)
-    busy = _cpu_busy()
-    hot = {cpu for cpu, frac in busy.items() if frac >= BUSY_POLL_FRACTION}
-    excluded = set().union(*(_smt_siblings(cpu) for cpu in hot)) & allowed if hot else set()
-    keep = allowed - excluded
-    applied = bool(excluded) and len(keep) >= MIN_ALLOWED_CPUS
-    if applied:
-        for tid in os.listdir("/proc/self/task"):
+    main = os.getpid()
+    allowed = sorted(os.sched_getaffinity(0))
+    hot = {cpu for cpu, frac in _cpu_busy().items() if frac >= BUSY_POLL_FRACTION}
+    current = _host_cpu()
+    candidates = [current] + [c for c in allowed if c != current]
+    cpu = next((c for c in candidates if c in allowed and not (_smt_siblings(c) & hot)), None)
+    if cpu is None:
+        return "no free core; affinity unchanged", lambda: None
+    core = _smt_siblings(cpu)
+    spare = [c for c in allowed if c not in core and c not in hot] or [c for c in allowed if c not in core]
+    saved, moved = {}, 0
+    for tid in (int(t) for t in os.listdir("/proc/self/task")):
+        try:
+            mask = os.sched_getaffinity(tid)
+            saved[tid] = mask
+            if tid == main:
+                os.sched_setaffinity(tid, {cpu})
+            elif mask & core:
+                keep = mask - core
+                os.sched_setaffinity(tid, keep or {spare[moved % len(spare)]})
+                moved += 1
+        except OSError:
+            pass  # thread exited
+
+    def restore():
+        for tid, mask in saved.items():
             try:
-                os.sched_setaffinity(int(tid), keep)
+                os.sched_setaffinity(tid, mask)
             except OSError:
                 pass
-    top = sorted(busy.items(), key=lambda kv: -kv[1])[:6]
-    print(  # print, not logger: CI runs perf jobs at LOGURU_LEVEL=ERROR
-        f"host CPUs: busiest {', '.join(f'{c}:{f:.0%}' for c, f in top) or 'unavailable'}; "
-        f"busy-poll {_cpu_ranges(sorted(hot)) or 'none'}; "
-        + (f"excluded {_cpu_ranges(sorted(excluded))}, now {len(keep)} CPUs" if applied else "affinity unchanged")
-    )
-    yield
+
+    return f"main on CPU {cpu} (core {_cpu_ranges(sorted(core))}), {moved} other threads moved off it", restore
 
 
 def _gate_params():
@@ -603,7 +615,7 @@ def _time_traced(mesh_device, case, start, repeat=None):
     indirect=["mesh_device", "device_params", "variant"],
 )
 @pytest.mark.parametrize("scenario", list(SCENARIO_CACHE_TOKENS))
-def test_sparse_mla_perf(mesh_device, device_params, variant, case_name, config_only, scenario):
+def test_sparse_mla_perf(request, mesh_device, device_params, variant, case_name, config_only, scenario):
     box = _BOX[0]
     shared_layer = GATE_CASES[case_name][1]
     label = f"{case_name} sparse MLA {box} {scenario}"
@@ -622,6 +634,9 @@ def test_sparse_mla_perf(mesh_device, device_params, variant, case_name, config_
         shared_layer=shared_layer,
     )
     start = cache
+    isolation, restore_affinity = _isolate_dispatch_core()
+    request.addfinalizer(restore_affinity)
+    print(f"{label} host: {isolation}")
     samples = {}
     cpus = []
     eager_repeat, traced_repeat = [], []
