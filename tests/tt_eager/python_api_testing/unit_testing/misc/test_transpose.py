@@ -12,7 +12,7 @@ from loguru import logger
 from models.common.utility_functions import is_blackhole, torch_random
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc, comp_equal
 from models.common.utility_functions import skip_for_blackhole, run_for_blackhole, skip_for_wormhole_b0
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tests.ttnn.utils_for_testing import assert_equal, assert_with_pcc
 
 
 def random_torch_tensor(dtype, shape):
@@ -1652,3 +1652,85 @@ def test_transpose_sharded_rm_width(device, dim0, dim1, input_sharding, output_s
         layout=ttnn.ROW_MAJOR_LAYOUT,
         input_dtype=dtype,
     )
+
+
+# Row-major tensors whose rows span several shards, with a shard row that is not a multiple of the buffer alignment
+# (L1: 16 B; DRAM: 32 B on Wormhole, 64 B on Blackhole). The sharded reads and writes cannot split such rows, so
+# transpose stages these tensors through interleaved memory.
+def _ramp_bf16(shape):
+    # Multiples of 1/8 in [-6, 6], exact in bfloat16, with a period that does not divide the row lengths used here.
+    return ((torch.arange(torch.Size(shape).numel()) % 97 - 48) / 8).reshape(shape).to(torch.bfloat16)
+
+
+def _width_shards(buffer_type, num_shards, shard_shape):
+    # Shards in rows of 8 cores, or on DRAM banks 0 .. num_shards - 1.
+    if buffer_type == ttnn.BufferType.L1 and num_shards > 8:
+        end = ttnn.CoreCoord(7, num_shards // 8 - 1)
+    else:
+        end = ttnn.CoreCoord(num_shards - 1, 0)
+    cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), end)})
+    spec = ttnn.ShardSpec(cores, shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
+    return ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, buffer_type, spec)
+
+
+def test_transpose_rm_width_sharded_subaligned_input(device):
+    x = _ramp_bf16([1, 1, 32, 64])
+    t = ttnn.from_torch(
+        x, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=_width_shards(ttnn.BufferType.L1, 16, [32, 4])
+    )
+
+    output = ttnn.transpose(t, 2, 3)
+
+    assert_equal(x.transpose(2, 3), ttnn.to_torch(output))
+
+
+def test_transpose_rm_subaligned_input_into_aligned_width_shards(device):
+    # The input moves to interleaved memory; the output keeps its sharded config, with aligned 16-byte shard rows.
+    x = _ramp_bf16([1, 1, 32, 64])
+    t = ttnn.from_torch(
+        x, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=_width_shards(ttnn.BufferType.L1, 16, [32, 4])
+    )
+    out_config = _width_shards(ttnn.BufferType.L1, 4, [64, 8])
+
+    output = ttnn.transpose(t, 2, 3, memory_config=out_config)
+
+    assert output.memory_config() == out_config
+    assert_equal(x.transpose(2, 3), ttnn.to_torch(output))
+
+
+def test_transpose_rm_height_input_promoted_to_subaligned_width_shards(device):
+    # transpose gives an N = C = 1 HEIGHT-sharded input a WIDTH-sharded output: [256, 4] shards of 8-byte rows.
+    config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 1))}),
+            [4, 256],
+            ttnn.ShardOrientation.ROW_MAJOR,
+        ),
+    )
+    x = _ramp_bf16([1, 1, 64, 256])
+    t = ttnn.from_torch(x, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=config)
+
+    output = ttnn.transpose(t, 2, 3)
+
+    out_config = output.memory_config()
+    assert out_config.memory_layout == ttnn.TensorMemoryLayout.WIDTH_SHARDED, out_config
+    assert (out_config.shard_spec.shape[1] * 2) % 16 != 0, out_config
+    assert_equal(x.transpose(2, 3), ttnn.to_torch(output))
+
+
+def test_transpose_rm_dram_width_sharded_subaligned_input(device):
+    # DRAM shard rows that are 16-byte multiples but not multiples of the DRAM alignment.
+    e = 8 if device.arch() == ttnn.device.Arch.WORMHOLE_B0 else 16
+    x = _ramp_bf16([1, 1, 32, 32])
+    t = ttnn.from_torch(
+        x,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=_width_shards(ttnn.BufferType.DRAM, 32 // e, [32, e]),
+    )
+
+    output = ttnn.transpose(t, 2, 3)
+
+    assert_equal(x.transpose(2, 3), ttnn.to_torch(output))

@@ -2340,9 +2340,9 @@ def test_slice_nd_sharded_rank1_input_data(device, length, shard, num_cores, beg
     assert torch.equal(ttnn.to_torch(sliced), torch_input[begin:end])
 
 
-def test_slice_nd_sharded_rank1_sub_aligned_input_rejected(device, expect_error):
+def test_slice_nd_sharded_rank1_sub_aligned_input(device):
     # [36] bf16 shards are 72 bytes, padded to an aligned page; the split path would read the padding as data,
-    # so slice rejects such inputs instead of returning wrong values. (Issue #58370, #58402 item 17)
+    # so slice moves such an input to interleaved memory first. (Issue #58370, #58402 item 17)
     torch_input = torch.arange(144, dtype=torch.float32).to(torch.bfloat16)
     tt_input = ttnn.from_torch(
         torch_input,
@@ -2352,13 +2352,14 @@ def test_slice_nd_sharded_rank1_sub_aligned_input_rejected(device, expect_error)
         memory_config=_contiguous_1d_l1([36], num_cores=4),
     )
 
-    with expect_error(RuntimeError, "not a multiple of the"):
-        ttnn.slice(tt_input, [0], [72], [1], memory_config=ttnn.L1_MEMORY_CONFIG)
+    sliced = ttnn.slice(tt_input, [0], [72], [1], memory_config=ttnn.L1_MEMORY_CONFIG)
+
+    assert torch.equal(ttnn.to_torch(sliced), torch_input[0:72])
 
 
-def test_slice_nd_sharded_rank1_sub_aligned_input_second_shard_rejected(device, expect_error):
+def test_slice_nd_sharded_rank1_sub_aligned_input_second_shard(device):
     # [36:72] stays inside shard 1, but the helper addresses the row by bytes against the 80-byte aligned page, so
-    # the read would start in padding and drop elements 68..71; it must be rejected, not silently wrong.
+    # the read would start in padding and drop elements 68..71; the input goes through interleaved memory instead.
     torch_input = torch.arange(144, dtype=torch.float32).to(torch.bfloat16)
     tt_input = ttnn.from_torch(
         torch_input,
@@ -2368,13 +2369,14 @@ def test_slice_nd_sharded_rank1_sub_aligned_input_second_shard_rejected(device, 
         memory_config=_contiguous_1d_l1([36], num_cores=4),
     )
 
-    with expect_error(RuntimeError, "not a multiple of the"):
-        ttnn.slice(tt_input, [36], [72], [1], memory_config=ttnn.L1_MEMORY_CONFIG)
+    sliced = ttnn.slice(tt_input, [36], [72], [1], memory_config=ttnn.L1_MEMORY_CONFIG)
+
+    assert torch.equal(ttnn.to_torch(sliced), torch_input[36:72])
 
 
-def test_slice_nd_sharded_rank1_sub_aligned_input_into_padding_rejected(device, expect_error):
+def test_slice_nd_sharded_rank1_sub_aligned_input_into_padding(device):
     # [0:40] ends at byte 80, inside the first 80-byte aligned page but past its 72-byte payload, so a single read
-    # would return the shard's padding as elements 36..39; it must be rejected.
+    # would return the shard's padding as elements 36..39; the input goes through interleaved memory instead.
     torch_input = torch.arange(144, dtype=torch.float32).to(torch.bfloat16)
     tt_input = ttnn.from_torch(
         torch_input,
@@ -2384,8 +2386,9 @@ def test_slice_nd_sharded_rank1_sub_aligned_input_into_padding_rejected(device, 
         memory_config=_contiguous_1d_l1([36], num_cores=4),
     )
 
-    with expect_error(RuntimeError, "not a multiple of the"):
-        ttnn.slice(tt_input, [0], [40], [1], memory_config=ttnn.L1_MEMORY_CONFIG)
+    sliced = ttnn.slice(tt_input, [0], [40], [1], memory_config=ttnn.L1_MEMORY_CONFIG)
+
+    assert torch.equal(ttnn.to_torch(sliced), torch_input[0:40])
 
 
 def test_slice_nd_sharded_row_wide_sub_aligned_shard_rank4(device):
@@ -2428,9 +2431,9 @@ def test_slice_nd_sharded_rank1_sub_aligned_input_within_one_page(device):
     assert torch.equal(ttnn.to_torch(sliced), torch_input[:8])
 
 
-def test_slice_nd_sharded_rank1_sub_aligned_output_rejected(device, expect_error):
-    # The output check is only reachable with an ND input (an interleaved input takes the composite hop for an ND
-    # output): [256] in [64]/4 cores sliced [0:72] into [36]/2 cores writes 144 bytes into a 72-byte payload.
+def test_slice_nd_sharded_rank1_sub_aligned_output_from_nd_input(device):
+    # [256] in [64]/4 cores sliced [0:72] into [36]/2 cores: the split path would write 144 bytes into a 72-byte
+    # payload, so slice writes the output interleaved and copies it into the ND layout.
     torch_input = torch.arange(256, dtype=torch.float32).to(torch.bfloat16)
     tt_input = ttnn.from_torch(
         torch_input,
@@ -2440,8 +2443,10 @@ def test_slice_nd_sharded_rank1_sub_aligned_output_rejected(device, expect_error
         memory_config=_contiguous_1d_l1([64], num_cores=4),
     )
 
-    with expect_error(RuntimeError, "not a multiple of the"):
-        ttnn.slice(tt_input, [0], [72], [1], memory_config=_contiguous_1d_l1([36], num_cores=2))
+    sliced = ttnn.slice(tt_input, [0], [72], [1], memory_config=_contiguous_1d_l1([36], num_cores=2))
+
+    assert list(sliced.memory_config().nd_shard_spec.shard_shape) == [36]
+    assert torch.equal(ttnn.to_torch(sliced), torch_input[0:72])
 
 
 def test_slice_nd_sharded_rank1_sub_aligned_output_data(device):
@@ -2552,3 +2557,79 @@ def test_slice_rm_wide_row_after_l1_fills(device):
         assert torch.equal(ttnn.to_torch(output), torch_expected)
     finally:
         ttnn.deallocate(resident)
+
+
+# Row-major tensors whose rows span several shards, with a shard row that is not a multiple of the buffer alignment.
+# The sharded reads and writes cannot split such rows, so slice stages these tensors through interleaved memory.
+def _ramp_bf16(shape):
+    # Multiples of 1/8 in [-6, 6], exact in bfloat16, with a period that does not divide the row lengths used here.
+    return ((torch.arange(torch.Size(shape).numel()) % 97 - 48) / 8).reshape(shape).to(torch.bfloat16)
+
+
+def _core_grid(*ranges):
+    return ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(*a), ttnn.CoreCoord(*b)) for a, b in ranges})
+
+
+def _width_shards(num_shards, shard_shape):
+    # L1 shards in rows of 8 cores.
+    cores = (
+        _core_grid(((0, 0), (7, num_shards // 8 - 1))) if num_shards > 8 else _core_grid(((0, 0), (num_shards - 1, 0)))
+    )
+    return ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(cores, shard_shape, ttnn.ShardOrientation.ROW_MAJOR),
+    )
+
+
+def _nd_shards(shard_shape, cores):
+    spec = ttnn.NdShardSpec(
+        ttnn.Shape(shard_shape), cores, ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardDistributionStrategy.CONTIGUOUS_1D
+    )
+    return ttnn.MemoryConfig(ttnn.BufferType.L1, spec)
+
+
+def test_slice_rm_nd_sharded_subaligned_output_rows(device):
+    # The output slice derives from the [1, 1, 5, 64] input shards has shard rows that are not 16-byte aligned.
+    x = _ramp_bf16([1, 1, 32, 224])
+    config = _nd_shards([1, 1, 5, 64], _core_grid(((0, 0), (7, 2)), ((0, 3), (3, 3))))
+    t = ttnn.from_torch(x, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=config)
+
+    output = ttnn.slice(t, [0, 0, 16, 0], [1, 1, 32, 32], [1, 1, 2, 2])
+
+    nd_spec = output.memory_config().nd_shard_spec
+    assert nd_spec is not None and (nd_spec.shard_shape[-1] * 2) % 16 != 0, output.memory_config()
+    assert_equal(x[:, :, 16:32:2, 0:32:2], ttnn.to_torch(output))
+
+
+def test_slice_rm_into_preallocated_nd_sharded_subaligned_rows(device):
+    # The preallocated output has 8-byte ND shard rows: slice writes it interleaved, then copies it in.
+    x = _ramp_bf16([1, 1, 32, 64])
+    t = ttnn.from_torch(x, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    out = ttnn.from_torch(
+        torch.zeros(1, 1, 16, 32, dtype=torch.bfloat16),
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=_nd_shards([1, 1, 16, 4], _core_grid(((0, 0), (7, 0)))),
+    )
+
+    ttnn.slice(t, [0, 0, 8, 16], [1, 1, 24, 48], [1, 1, 1, 1], output_tensor=out)
+
+    assert_equal(x[:, :, 8:24, 16:48], ttnn.to_torch(out))
+
+
+def test_slice_rm_width_sharded_subaligned_input_into_preallocated(device):
+    # Only the input's 8-byte shard rows are sub-aligned: it moves to interleaved memory, and slice writes straight
+    # into the preallocated output, whose 32-byte shard rows are aligned.
+    x = _ramp_bf16([1, 1, 64, 64])
+    t = ttnn.from_torch(x, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=_width_shards(16, [64, 4]))
+    out = ttnn.from_torch(
+        torch.zeros(1, 1, 32, 64, dtype=torch.bfloat16),
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=_width_shards(4, [32, 16]),
+    )
+
+    ttnn.slice(t, [0, 0, 16, 0], [1, 1, 48, 64], [1, 1, 1, 1], output_tensor=out)
+
+    assert_equal(x[:, :, 16:48, :], ttnn.to_torch(out))

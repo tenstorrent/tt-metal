@@ -44,19 +44,29 @@ ttnn::device_operation::ProgramArtifacts Fold::MultiCore::create_program_artifac
 
     tt::DataFormat dfb_data_format = datatype_to_dataformat_converter(input.dtype());
 
-    uint32_t pixel_size = shard_shape[1] * input.element_size();
+    // A pixel's logical channels may fill only part of its shard row: the shard can be wider than C (a TILE input
+    // untilized to RM, or C padded for alignment). The kernel copies pixel_size bytes per pixel and steps through the
+    // input by its shard pitch and through the output by the output's, so padding never lands in the output.
+    TT_FATAL(output.shard_spec().has_value(), "Fold (fast path): output must be sharded with a shard spec.");
+    const uint32_t pixel_size = input.logical_shape()[-1] * input.element_size();
     uint32_t num_pixels = shard_shape[0];
     uint32_t num_dst_pixels = num_pixels / (stride_h * stride_w);
 
     // chunk consists of channel values of stride_w neighboring pixels along the W dimension
     uint32_t width = input.padded_shape()[2];
-    uint32_t chunk_size = stride_w * pixel_size;
-    uint32_t dst_pixel_size = stride_h * chunk_size;
     uint32_t num_dst_rows = num_pixels / (width * stride_h);
     uint32_t pixels_per_dst_row = stride_h * width;
 
-    const uint32_t aligned_pixel_size = tt::align(pixel_size, hal::get_l1_alignment());
-    const uint32_t aligned_dst_pixel_size = tt::align(dst_pixel_size, hal::get_l1_alignment());
+    // validate_fold keeps a row-major output in the input's dtype, so one element size covers both sides.
+    const uint32_t aligned_pixel_size = tt::align(shard_shape[1] * input.element_size(), hal::get_l1_alignment());
+    const uint32_t aligned_dst_pixel_size =
+        tt::align(output.shard_spec()->shape[1] * input.element_size(), hal::get_l1_alignment());
+    TT_FATAL(
+        stride_h * stride_w * pixel_size <= aligned_dst_pixel_size,
+        "Fold (fast path): an output pixel ({} B) cannot hold {} input pixels of {} B.",
+        aligned_dst_pixel_size,
+        stride_h * stride_w,
+        pixel_size);
 
     // Input DFB — borrowed onto the sharded input buffer.
     // The backing L1 address resolves at runtime from the INPUT tensor argument.
@@ -94,7 +104,6 @@ ttnn::device_operation::ProgramArtifacts Fold::MultiCore::create_program_artifac
         {"num_dst_rows", num_dst_rows},
         {"num_dst_cols", width / stride_w},
         {"dst_row_offset", pixels_per_dst_row * aligned_pixel_size},
-        {"element_size", input.element_size()},
     };
 
     // Dual-instance work-split: one kernel source instantiated twice over the same grid,

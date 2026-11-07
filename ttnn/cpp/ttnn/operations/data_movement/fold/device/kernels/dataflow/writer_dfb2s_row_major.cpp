@@ -8,6 +8,21 @@
 #include "experimental/kernel_args.h"
 #include <ttnn/operations/pool/device/kernels/experimental_device_api.hpp>
 
+// Copies the stride_w pixels of one chunk: pixel_size bytes from each source pixel, which are aligned_pixel_size apart,
+// packed back to back at dst. T is the widest unit that divides pixel_size, so every access stays aligned.
+template <typename T, uint32_t pixel_size, uint32_t aligned_pixel_size, uint32_t stride_w>
+FORCE_INLINE void copy_chunk(uint32_t src_addr, uint32_t dst_addr) {
+    const T* src = reinterpret_cast<const T*>(src_addr);
+    T* dst = reinterpret_cast<T*>(dst_addr);
+    for (uint32_t w = 0; w < stride_w; ++w) {
+        for (uint32_t i = 0; i < pixel_size / sizeof(T); ++i) {
+            dst[i] = src[i];
+        }
+        src += aligned_pixel_size / sizeof(T);
+        dst += pixel_size / sizeof(T);
+    }
+}
+
 void kernel_main() {
     // src0 / dst0 are borrowed-memory DFBs.
     constexpr uint32_t pixel_size = get_arg(args::pixel_size);
@@ -20,7 +35,6 @@ void kernel_main() {
     constexpr uint32_t num_dst_rows = get_arg(args::num_dst_rows);
     constexpr uint32_t num_dst_cols = get_arg(args::num_dst_cols);
     constexpr uint32_t dst_row_offset = get_arg(args::dst_row_offset);
-    constexpr uint32_t element_size = get_arg(args::element_size);
     constexpr uint32_t is_reader = get_arg(args::is_reader);
 
     constexpr uint32_t dst_row_size = num_dst_cols * aligned_dst_pixel_size;
@@ -29,9 +43,14 @@ void kernel_main() {
     constexpr uint32_t core_col_offset = is_reader ? 0 : aligned_chunk_size;
     constexpr uint32_t core_dst_offset = is_reader ? 0 : aligned_dst_pixel_size;
 
+    // pixel_size is the logical channels' bytes; aligned_pixel_size is the pitch of the input's pixels, which is wider
+    // when the pixel is not 16-byte aligned or the shard is wider than the channels.
     constexpr bool is_aligned = (pixel_size == aligned_pixel_size);
-    constexpr uint32_t elements_per_pixel = pixel_size / element_size;
-    constexpr uint32_t elements_per_aligned_pixel = aligned_pixel_size / element_size;
+    // A pixel narrower than its pitch but L1-aligned (e.g. C = 16 bf16 in 32-wide shards) moves with one NoC read.
+    constexpr bool read_each_pixel = !is_aligned && pixel_size % L1_ALIGNMENT == 0 && pixel_size <= NOC_MAX_BURST_SIZE;
+    // Otherwise the RISC copies it. The pitch is a multiple of the L1 alignment, so pixel_size alone sets the unit.
+    static_assert(aligned_pixel_size % L1_ALIGNMENT == 0);
+    constexpr uint32_t copy_unit = pixel_size % 4 == 0 ? 4 : (pixel_size % 2 == 0 ? 2 : 1);
 
     Noc noc;
     DataflowBuffer dfb_src0(dfb::src0);
@@ -42,6 +61,8 @@ void kernel_main() {
 
     if constexpr (is_aligned) {
         experimental::set_read_state<aligned_chunk_size>(noc, src_addr_base);
+    } else if constexpr (read_each_pixel) {
+        experimental::set_read_state<pixel_size>(noc, src_addr_base);
     }
 
     // Process each destination row
@@ -59,20 +80,22 @@ void kernel_main() {
                     // Fast path: aligned NOC read
                     experimental::read_with_state(noc, dst_pixel_addr, src_addr_base + src_col_offset + h_offset);
                     dst_pixel_addr += aligned_chunk_size;
-                } else {
-                    // Slow path: element-wise copy for unaligned data
-                    // Cast to uint16_t* for element-level access to pixel data
-                    uint16_t* src_ptr = (uint16_t*)(src_addr_base + src_col_offset + h_offset);
-                    uint16_t* dst_ptr = (uint16_t*)dst_pixel_addr;
-
-                    // Gather pixels along stride_w dimension
+                } else if constexpr (read_each_pixel) {
+                    uint32_t src_pixel_addr = src_addr_base + src_col_offset + h_offset;
                     for (uint32_t w = 0; w < stride_w; ++w) {
-                        // Copy elements_per_pixel (half-words) from source to destination
-                        for (uint32_t i = 0; i < elements_per_pixel; ++i) {
-                            dst_ptr[i] = src_ptr[i];
-                        }
-                        src_ptr += elements_per_aligned_pixel;
-                        dst_ptr += elements_per_pixel;
+                        experimental::read_with_state(noc, dst_pixel_addr, src_pixel_addr);
+                        src_pixel_addr += aligned_pixel_size;
+                        dst_pixel_addr += pixel_size;
+                    }
+                } else {
+                    // Slow path: copy each pixel's logical bytes and pack them.
+                    const uint32_t src_chunk_addr = src_addr_base + src_col_offset + h_offset;
+                    if constexpr (copy_unit == 4) {
+                        copy_chunk<uint32_t, pixel_size, aligned_pixel_size, stride_w>(src_chunk_addr, dst_pixel_addr);
+                    } else if constexpr (copy_unit == 2) {
+                        copy_chunk<uint16_t, pixel_size, aligned_pixel_size, stride_w>(src_chunk_addr, dst_pixel_addr);
+                    } else {
+                        copy_chunk<uint8_t, pixel_size, aligned_pixel_size, stride_w>(src_chunk_addr, dst_pixel_addr);
                     }
                     dst_pixel_addr += pixel_size * stride_w;
                 }

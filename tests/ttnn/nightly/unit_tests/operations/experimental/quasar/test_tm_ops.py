@@ -163,6 +163,21 @@ def test_quasar_slice_rm_block_sharded_subaligned_shard_row_out(device):
     _run_quasar_slice((1, 1, 64, 96), (0, 0, 0, 0), (1, 1, 32, 96), (1, 1, 1, 1), L1_INTERLEAVED, omc, device)
 
 
+def _nd_shard_config(shard_shape, ncores):
+    grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, ncores // 8 - 1))})
+    spec = ttnn.NdShardSpec(
+        ttnn.Shape(shard_shape), grid, ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardDistributionStrategy.CONTIGUOUS_1D
+    )
+    return ttnn.MemoryConfig(ttnn.BufferType.L1, spec)
+
+
+# An ND-sharded input with 8-byte shard rows reaches the device op, which stages it through interleaved memory
+# (#64020). The output is DRAM because quasar slice misreads ND inputs it does not stage (#64473).
+def test_quasar_slice_rm_nd_sharded_subaligned_shard_row_in(device):
+    imc = _nd_shard_config([1, 1, 8, 4], 16)
+    _run_quasar_slice((1, 1, 64, 64), (0, 0, 0, 0), (1, 1, 32, 64), (1, 1, 1, 1), imc, ttnn.DRAM_MEMORY_CONFIG, device)
+
+
 def test_quasar_slice_tile_tensor_args(device):
     shape = (1, 1, 64, 64)
     starts, ends = [0, 0, 32, 0], [1, 1, 64, 64]
@@ -1267,6 +1282,21 @@ def test_quasar_transpose_rm_bw_sharded_subaligned_shard_row(shape, dim0, dim1, 
         assert tuple(actual.shape) == tuple(requested.shape), f"Expected shard {requested.shape}, got {actual.shape}"
         assert actual.grid == requested.grid, f"Expected grid {requested.grid}, got {actual.grid}"
     assert_with_ulp(expected_result=x.transpose(dim0, dim1), actual_result=ttnn.to_torch(out.cpu()), ulp_threshold=0)
+
+
+# An ND-sharded input with 8-byte shard rows: the device op stages it through interleaved memory (#64020).
+def test_quasar_transpose_rm_nd_sharded_subaligned_shard_row_in(device):
+    torch.manual_seed(0)
+    x = torch.rand((1, 1, 32, 64), dtype=torch.bfloat16)
+    tt_in = ttnn.from_torch(
+        x,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        dtype=ttnn.bfloat16,
+        device=device,
+        memory_config=_nd_shard_config([1, 1, 32, 4], 16),
+    )
+    out = ttnn.experimental.quasar.transpose(tt_in, 2, 3)
+    assert_with_ulp(expected_result=x.transpose(2, 3), actual_result=ttnn.to_torch(out.cpu()), ulp_threshold=0)
 
 
 # Sub-aligned RM input staged through L1 interleaved must still seed a specless sharded output from
