@@ -9,6 +9,7 @@
 #include <tt-metalium/experimental/mesh_program_descriptor.hpp>
 #include <tt_stl/reflection.hpp>  // ttsl::hash::hash_t
 
+#include "ttnn/operation.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "generic_op_program_factory.hpp"
 #include "generic_op_device_operation_types.hpp"
@@ -32,6 +33,12 @@ struct GenericOpDeviceOperation {
     static void validate_inputs(const operation_attributes_t& attributes, const tensor_args_t& tensor_args);
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
     static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
+
+    // Uses the work the programs declare in ProgramDescriptor::performance; the default model when none does
+    static tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t> create_op_performance_model(
+        const operation_attributes_t& operation_attributes,
+        const tensor_args_t& tensor_args,
+        tensor_return_value_t& tensor_return_value);
 
     // Note: will either compute a program hash, or simply return user provided custom program hash
     static ttsl::hash::hash_t compute_program_hash(

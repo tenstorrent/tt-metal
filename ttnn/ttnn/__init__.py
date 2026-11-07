@@ -316,6 +316,7 @@ from ttnn.types import (
     RuntimeArgs,
     RuntimeArgsColProxy,
     SemaphoreDescriptor,
+    ProgramPerformanceDescriptor,
     ProgramDescriptor,
     MeshProgramDescriptor,
     merge_program_descriptors,
