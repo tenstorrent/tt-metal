@@ -450,16 +450,19 @@ std::vector<Tensor> sort(
         results[1] = ttnn::to_memory_config(results[1], *index_mem_cfg_override);
     }
 
-    // For preallocated outputs, rebind the user's handle when the underlying
-    // buffer changed.
+    // For preallocated outputs, write the result into the caller's buffer when the
+    // transforms above produced a different one (non-last dim, padded sort dim,
+    // layout or memory config conversion). Rebinding the handle instead would leave
+    // the caller's buffer, and any view of it, holding its old contents.
     if (optional_output_tensors.has_value()) {
-        const auto rebind_if_changed = [](Tensor& user_t, const Tensor& result_t) {
+        const auto write_back_if_changed = [](Tensor& user_t, Tensor& result_t) {
             if (user_t.buffer() != result_t.buffer()) {
-                user_t = result_t;
+                ttnn::to_memory_config(result_t, user_t.memory_config(), user_t.dtype(), user_t);
             }
+            result_t = user_t;
         };
-        rebind_if_changed(std::get<0>(*optional_output_tensors), results[0]);
-        rebind_if_changed(std::get<1>(*optional_output_tensors), results[1]);
+        write_back_if_changed(std::get<0>(*optional_output_tensors), results[0]);
+        write_back_if_changed(std::get<1>(*optional_output_tensors), results[1]);
     }
 
     return results;
