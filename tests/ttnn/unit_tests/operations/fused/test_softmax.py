@@ -1482,3 +1482,98 @@ def test_scale_mask_softmax_scale_not_exact_in_float32(device, scale):
 
     assert torch.equal(output, expected)
     assert torch.allclose(output, torch_output, atol=1e-2)
+
+
+@pytest.mark.parametrize(
+    "input_shape, mask_shape, grid, block_h, mask_layout, error",
+    [
+        # Case 1: Row-major mask with is_causal_mask=True must be rejected with clear error instead of hanging
+        ((2, 2, 64, 128), (2, 1, 64, 128), (2, 2), 2, ttnn.ROW_MAJOR_LAYOUT, "Causal mask currently only supports TILE layout"),
+        # Case 2: block_h not a multiple of causal mask height in tiles
+        ((2, 2, 128, 128), (2, 1, 128, 128), (4, 2), 2, ttnn.TILE_LAYOUT, "positive multiple of the causal mask height"),
+        ((3, 1, 64, 128), (3, 1, 64, 128), (2, 1), 3, ttnn.TILE_LAYOUT, "positive multiple of the causal mask height"),
+        # Case 3: Batch size mismatch between input and mask
+        ((2, 2, 64, 128), (1, 1, 64, 128), (2, 2), 2, ttnn.TILE_LAYOUT, "Input and mask batch sizes must match"),
+        # Case 4: Valid configuration (block_h multiple of mask tile height)
+        ((2, 2, 96, 128), (2, 1, 96, 128), (2, 1), 6, ttnn.TILE_LAYOUT, None),
+    ],
+)
+@pytest.mark.parametrize("orientation", [ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR])
+def test_sharded_scale_mask_softmax_causal_mask_comprehensive(
+    device, expect_error, input_shape, mask_shape, grid, block_h, mask_layout, error, orientation
+):
+    torch.manual_seed(0)
+    scale = 0.125
+    W = input_shape[-1]
+    torch_input = torch.randn(input_shape, dtype=torch.bfloat16)
+    torch_mask = (torch.rand(mask_shape) > 0.5).float() * -4.0
+    torch_mask = torch_mask.to(torch.bfloat16)
+
+    shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid[0] - 1, grid[1] - 1))})
+    shard_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(shard_grid, [block_h * 32, W], orientation),
+    )
+    program_config = ttnn.SoftmaxShardedMultiCoreProgramConfig(
+        compute_with_storage_grid_size=grid, subblock_w=1, block_h=block_h, block_w=W // 32
+    )
+    ttnn_input = ttnn.from_torch(
+        torch_input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=shard_config
+    )
+    ttnn_mask = ttnn.from_torch(torch_mask, dtype=ttnn.bfloat16, layout=mask_layout, device=device)
+
+    if error is not None:
+        with expect_error(RuntimeError, error):
+            ttnn.scale_mask_softmax_in_place(
+                ttnn_input, scale, ttnn_mask, program_config=program_config, is_causal_mask=True
+            )
+        return
+
+    torch_output = F.softmax(torch_input.float() * scale + torch_mask.float(), dim=-1)
+    ttnn_output = ttnn.scale_mask_softmax_in_place(
+        ttnn_input, scale, ttnn_mask, program_config=program_config, is_causal_mask=True
+    )
+    assert_with_pcc(torch_output, ttnn.to_torch(ttnn_output).float(), 0.999)
+
+
+@pytest.mark.parametrize("mismatched_orientation", [ttnn.ShardOrientation.COL_MAJOR])
+def test_sharded_scale_mask_softmax_sharded_mask_orientation_mismatch(device, expect_error, mismatched_orientation):
+    grid = (2, 2)
+    block_h = 2
+    W = 128
+    input_shape = (2, 2, 64, W)
+    shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid[0] - 1, grid[1] - 1))})
+
+    input_shard_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(shard_grid, [block_h * 32, W], ttnn.ShardOrientation.ROW_MAJOR),
+    )
+    mask_shard_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(shard_grid, [block_h * 32, W], mismatched_orientation),
+    )
+    ttnn_input = ttnn.from_torch(
+        torch.randn(input_shape, dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=input_shard_config,
+    )
+    ttnn_mask = ttnn.from_torch(
+        torch.zeros(input_shape, dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=mask_shard_config,
+    )
+
+    program_config = ttnn.SoftmaxShardedMultiCoreProgramConfig(
+        compute_with_storage_grid_size=grid, subblock_w=1, block_h=block_h, block_w=W // 32
+    )
+    with expect_error(RuntimeError, "Mask shard orientation must match input tensor shard orientation"):
+        ttnn.scale_mask_softmax_in_place(
+            ttnn_input, 0.125, ttnn_mask, program_config=program_config, is_causal_mask=True
+        )
