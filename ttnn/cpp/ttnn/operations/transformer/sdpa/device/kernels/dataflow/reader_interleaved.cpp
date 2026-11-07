@@ -145,16 +145,16 @@ void kernel_main() {
     const uint32_t attention_sink_addr = get_arg_val<uint32_t>(argidx++);
     const uint32_t chunk_start_idx_addr = get_arg_val<uint32_t>(argidx++);
     const uint32_t num_phases = get_arg_val<uint32_t>(argidx++);
-    const uint32_t chunked_q_chunk_offset_phase_1 = get_arg_val<uint32_t>(argidx++);
+    const uint32_t chunked_q_offset_t_phase_1 = get_arg_val<uint32_t>(argidx++);
     const uint32_t read_offset_phase_1 = get_arg_val<uint32_t>(argidx++);
-    uint32_t chunked_q_chunk_offset_phase_2 = 0;
+    uint32_t chunked_q_offset_t_phase_2 = 0;
     uint32_t read_offset_phase_2 = 0;
     if (num_phases == 2) {
-        chunked_q_chunk_offset_phase_2 = get_arg_val<uint32_t>(argidx++);
+        chunked_q_offset_t_phase_2 = get_arg_val<uint32_t>(argidx++);
         read_offset_phase_2 = get_arg_val<uint32_t>(argidx++);
     }
-    uint32_t chunked_q_chunk_offset_phase_1_local = chunked_q_chunk_offset_phase_1;
-    uint32_t chunked_q_chunk_offset_phase_2_local = chunked_q_chunk_offset_phase_2;
+    uint32_t chunked_q_offset_t_phase_1_local = chunked_q_offset_t_phase_1;
+    uint32_t chunked_q_offset_t_phase_2_local = chunked_q_offset_t_phase_2;
 
     // Global Q scheduling runtime args (parsed after chain metadata so the host-side ordering
     // aligns for both causal and non-causal).
@@ -347,7 +347,7 @@ void kernel_main() {
     uint32_t k_slot_fwd_seq[kv_slots] = {};
     uint32_t v_slot_fwd_seq[kv_slots] = {};
 
-    uint32_t chunked_q_chunk_offset = 0;
+    uint32_t chunked_q_offset_t = 0;
     if constexpr (is_chunked) {
         if (chunk_start_idx_addr != 0) {
             CircularBuffer cb_chunk_compute(cb_id_chunk_start_idx_compute);
@@ -367,10 +367,11 @@ void kernel_main() {
             noc.async_read_barrier();
             cb_chunk_writer.push_back(1);
 
-            const uint32_t q_chunk_size = Sq_chunk_t * tt::constants::TILE_HEIGHT;
-            chunked_q_chunk_offset_phase_1_local = chunk_start_idx / q_chunk_size;
+            // The device-side start cannot be validated on the host; it must be tile aligned.
+            ASSERT(chunk_start_idx % tt::constants::TILE_HEIGHT == 0);
+            chunked_q_offset_t_phase_1_local = chunk_start_idx / tt::constants::TILE_HEIGHT;
             if (num_phases == 2) {
-                chunked_q_chunk_offset_phase_2_local = chunked_q_chunk_offset_phase_1_local;
+                chunked_q_offset_t_phase_2_local = chunked_q_offset_t_phase_1_local;
             }
         }
     }
@@ -399,16 +400,16 @@ void kernel_main() {
     uint32_t read_offset = 0;
     for (uint32_t phase = 0; phase < num_phases; ++phase) {
         if (phase == 0) {
-            chunked_q_chunk_offset = chunked_q_chunk_offset_phase_1_local;
+            chunked_q_offset_t = chunked_q_offset_t_phase_1_local;
             read_offset = read_offset_phase_1;
         } else {
-            chunked_q_chunk_offset = chunked_q_chunk_offset_phase_2_local;
+            chunked_q_offset_t = chunked_q_offset_t_phase_2_local;
             read_offset = read_offset_phase_2;
         }
         uint32_t valid_Skt_bound;
         if (chunk_start_idx_addr != 0) {
             // Flexible or ring: cap at valid_Skt so we never read past K/V extent.
-            valid_Skt_bound = std::min(chunked_q_chunk_offset * Sq_chunk_t + valid_Sqt, valid_Skt);
+            valid_Skt_bound = std::min(chunked_q_offset_t + valid_Sqt, valid_Skt);
         } else {
             // Scalar-offset factories already include the prefix in valid_Skt.
             // Adding it again can resolve page-table entries beyond the valid KV
@@ -572,8 +573,9 @@ void kernel_main() {
                     q_reader, cb_q_in, q_read_tile_id, q_row_tile_count, DHt, Sq_chunk_t, DHt, barrier_threshold);
             }
 
-            q_chunk = chunked_q_chunk_offset + q_chunk;
-            uint32_t q_low_idx = q_chunk * Sq_chunk_t;  // This is the sequence index of the first tile of this chunk
+            // First tile of this Q chunk in the full sequence. The chunked offset is in tiles and need not be a
+            // multiple of Sq_chunk_t.
+            uint32_t q_low_idx = chunked_q_offset_t + q_chunk * Sq_chunk_t;
             uint32_t q_high_idx;
             if constexpr (is_causal) {
                 // Clamp to total K-tile extent (Skt = k_num_chunks * Sk_chunk_t). Without

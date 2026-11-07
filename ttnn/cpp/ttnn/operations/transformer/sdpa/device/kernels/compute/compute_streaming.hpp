@@ -2212,7 +2212,7 @@ void sdpa_standard_v2(
     const uint32_t cb_sum_A,
     const uint32_t cb_sum_B,
     const uint32_t local_q_start = 0,
-    const uint32_t chunked_q_chunk_offset = 0,
+    const uint32_t chunked_q_offset_t = 0,
     const LightweightMaskContext& lw_mask = {},
     const uint32_t q_num_chunks = 0,
     const bool use_zigzag_balancing = false,
@@ -2288,9 +2288,8 @@ void sdpa_standard_v2(
             // (global Q scheduling iterates across batches and heads).
             q_chunk_local = remap_q_index(q_chunk_local, q_num_chunks, use_zigzag_balancing) % q_num_chunks;
             // q_chunk_global is the absolute Q chunk index (used for the diagonal);
-            // chunked-prefill shifts this via chunked_q_chunk_offset.
-            const uint32_t q_chunk_global = q_chunk_local + chunked_q_chunk_offset;
-            q_start_tile = q_chunk_global * Sq_chunk_t;
+            // chunked-prefill shifts this via chunked_q_offset_t (a tile offset, not a multiple of Sq_chunk_t).
+            q_start_tile = q_chunk_local * Sq_chunk_t + chunked_q_offset_t;
             if constexpr (is_causal_sdpa) {
                 const uint32_t limit = (q_start_tile + Sq_chunk_t + Sk_chunk_t - 1) / Sk_chunk_t;
                 k_loop_end = limit < k_num_chunks ? limit : k_num_chunks;

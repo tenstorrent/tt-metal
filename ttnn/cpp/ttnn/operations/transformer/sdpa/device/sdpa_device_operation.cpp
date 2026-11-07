@@ -230,6 +230,12 @@ void SDPAOperation::validate_on_program_cache_miss(const SDPAParams& attrs, cons
             "chunked mode requires either chunk_start_idx (scalar) or chunk_start_idx_tensor");
         if (legacy_chunked) {
             TT_FATAL(attrs.chunk_start_idx.value() >= 0, "chunk_start_idx must be non-negative");
+            // The kernels address Q rows in tiles, so a start inside a tile cannot be honoured.
+            TT_FATAL(
+                attrs.chunk_start_idx.value() % tt::constants::TILE_HEIGHT == 0,
+                "chunk_start_idx must be a multiple of the tile height ({}). Got chunk_start_idx: {}",
+                tt::constants::TILE_HEIGHT,
+                attrs.chunk_start_idx.value());
         }
         if (flexible_chunked) {
             const auto& csi_tensor = attrs.chunk_start_idx_tensor.value();

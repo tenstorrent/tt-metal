@@ -716,3 +716,264 @@ def test_sdpa_window_between_tile_boundaries(device, is_causal, fp32_dest_acc_en
     )
     passed, pcc = comp_pcc(expected, ttnn.to_torch(actual), 0.999)
     assert passed, pcc
+
+
+def _paged_chunked_inputs(device, kv_heads, sequence, head_dim, page_size, query_heads):
+    torch.manual_seed(7)
+    query = fa_rand(1, query_heads, sequence, head_dim)
+    key = fa_rand(1, kv_heads, sequence, head_dim)
+    value = fa_rand(1, kv_heads, sequence, head_dim)
+    blocks = sequence // page_size
+    permutation = torch.randperm(blocks)
+    page_table = torch.argsort(permutation).reshape(1, blocks).to(torch.int32)
+
+    def page_cache(tensor):
+        pages = tensor.reshape(1, kv_heads, blocks, page_size, head_dim).transpose(1, 2)
+        pages = pages.reshape(blocks, kv_heads, page_size, head_dim)[permutation]
+        return ttnn.from_torch(pages, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+
+    return (
+        query,
+        key,
+        value,
+        page_cache(key),
+        page_cache(value),
+        ttnn.from_torch(page_table, dtype=ttnn.int32, device=device),
+    )
+
+
+def _causal_reference(query, key, value, start, query_len, query_heads, kv_heads):
+    group = query_heads // kv_heads
+    k = key.repeat_interleave(group, dim=1)
+    v = value.repeat_interleave(group, dim=1)
+    q = query[:, :, start : start + query_len]
+    scale = q.shape[-1] ** -0.5
+    scores = q @ k.transpose(-2, -1) * scale
+    visible = torch.arange(k.shape[2])[None, :] <= torch.arange(start, start + query_len)[:, None]
+    scores.masked_fill_(~visible, float("-inf"))
+    return scores.softmax(dim=-1) @ v
+
+
+@pytest.mark.skipif(is_watcher_enabled(), reason="Kernel OOM with watcher enabled")
+@pytest.mark.parametrize("fp32_dest_acc_en", [False, True])
+@pytest.mark.parametrize(
+    "q_chunk_size,k_chunk_size,start",
+    [
+        (32, 32, 32),
+        (32, 32, 96),
+        (64, 64, 64),
+        (64, 64, 192),
+        (128, 128, 128),
+        (128, 128, 256),
+        (256, 256, 256),
+        (64, 128, 128),
+        (128, 64, 128),
+        (128, 256, 256),
+        (256, 128, 256),
+    ],
+)
+def test_chunked_sdpa_tensor_start_matches_scalar_start(device, q_chunk_size, k_chunk_size, start, fp32_dest_acc_en):
+    """The device-tensor start must give the same output as the host-scalar start at every chunk-aligned offset."""
+    query_heads, kv_heads, sequence, head_dim, page_size, query_len = 4, 2, 512, 64, 64, 128
+    query, key, value, tt_key, tt_value, tt_page_table = _paged_chunked_inputs(
+        device, kv_heads, sequence, head_dim, page_size, query_heads
+    )
+    program_config = ttnn.SDPAProgramConfig(
+        compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
+        q_chunk_size=q_chunk_size,
+        k_chunk_size=k_chunk_size,
+        exp_approx_mode=False,
+    )
+    compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=fp32_dest_acc_en,
+        packer_l1_acc=False,
+    )
+    tt_query = ttnn.from_torch(
+        query[:, :, start : start + query_len], dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+    )
+    outputs = []
+    for start_argument in (
+        {"chunk_start_idx": start},
+        {"chunk_start_idx_tensor": ttnn.from_torch(torch.tensor([start], dtype=torch.int32), device=device)},
+    ):
+        out = ttnn.transformer.chunked_scaled_dot_product_attention(
+            tt_query,
+            tt_key,
+            tt_value,
+            tt_page_table,
+            **start_argument,
+            program_config=program_config,
+            compute_kernel_config=compute_kernel_config,
+        )
+        outputs.append(ttnn.to_torch(out))
+    expected = _causal_reference(query, key, value, start, query_len, query_heads, kv_heads)
+    for name, actual in zip(("scalar_start", "tensor_start"), outputs):
+        passed, pcc = comp_pcc(expected, actual, 0.999)
+        assert passed, f"{name} at start {start} (q{q_chunk_size}/k{k_chunk_size}) failed PCC: {pcc}"
+    # The tensor form sizes K for the whole page table, the scalar form for start + Sq, so when q_chunk_size is larger
+    # than k_chunk_size the tensor form runs extra fully masked K chunks. That can change the last bits.
+    passed, pcc = comp_pcc(outputs[0], outputs[1], 0.9999)
+    assert passed, f"tensor start differs from scalar start: {pcc}"
+
+
+@pytest.mark.parametrize(
+    "q_chunk_size,k_chunk_size,start",
+    [
+        (None, None, 16),
+        (None, None, 33),
+        (64, 64, 32),
+        (64, 64, 96),
+        (128, 128, 64),
+        (64, 128, 64),
+        (128, 64, 64),
+    ],
+)
+def test_chunked_sdpa_scalar_start_rejects_unaligned(device, expect_error, q_chunk_size, k_chunk_size, start):
+    """A scalar start that is not a multiple of the chunk sizes (32 without a program_config) raises."""
+    query_heads, kv_heads, sequence, head_dim, page_size, query_len = 4, 2, 512, 64, 64, 128
+    query, key, value, tt_key, tt_value, tt_page_table = _paged_chunked_inputs(
+        device, kv_heads, sequence, head_dim, page_size, query_heads
+    )
+    tt_query = ttnn.from_torch(query[:, :, :query_len], dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    program_config = (
+        None
+        if q_chunk_size is None
+        else ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
+            q_chunk_size=q_chunk_size,
+            k_chunk_size=k_chunk_size,
+            exp_approx_mode=False,
+        )
+    )
+    with expect_error(RuntimeError, "chunk_start_idx must be a multiple of"):
+        ttnn.transformer.chunked_scaled_dot_product_attention(
+            tt_query,
+            tt_key,
+            tt_value,
+            tt_page_table,
+            chunk_start_idx=start,
+            program_config=program_config,
+        )
+
+
+@pytest.mark.skipif(is_watcher_enabled(), reason="Kernel OOM with watcher enabled")
+@pytest.mark.parametrize("fp32_dest_acc_en", [False, True])
+@pytest.mark.parametrize(
+    "q_chunk_size,k_chunk_size,start",
+    [
+        (64, 64, 32),
+        (64, 64, 96),
+        (64, 64, 160),
+        (64, 128, 32),
+        (64, 128, 96),
+        (128, 128, 32),
+        (128, 128, 64),
+        (128, 128, 224),
+        (128, 64, 32),
+        (128, 64, 96),
+        (128, 256, 160),
+        (256, 128, 96),
+        (256, 256, 160),
+    ],
+)
+def test_chunked_sdpa_tensor_start_not_chunk_aligned(device, q_chunk_size, k_chunk_size, start, fp32_dest_acc_en):
+    """A device-tensor start that is tile aligned but not chunk aligned (prefix-cache resume) is correct.
+
+    The scalar form with 32-token chunks accepts every tile-aligned start, so it is the baseline.
+    """
+    query_heads, kv_heads, sequence, head_dim, page_size, query_len = 4, 2, 512, 64, 64, 128
+    query, key, value, tt_key, tt_value, tt_page_table = _paged_chunked_inputs(
+        device, kv_heads, sequence, head_dim, page_size, query_heads
+    )
+    compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=fp32_dest_acc_en,
+        packer_l1_acc=False,
+    )
+
+    def config(q, k):
+        return ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
+            q_chunk_size=q,
+            k_chunk_size=k,
+            exp_approx_mode=False,
+        )
+
+    tt_query = ttnn.from_torch(
+        query[:, :, start : start + query_len], dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+    )
+    start_tensor = ttnn.from_torch(torch.tensor([start], dtype=torch.int32), device=device)
+    actual = ttnn.to_torch(
+        ttnn.transformer.chunked_scaled_dot_product_attention(
+            tt_query,
+            tt_key,
+            tt_value,
+            tt_page_table,
+            chunk_start_idx_tensor=start_tensor,
+            program_config=config(q_chunk_size, k_chunk_size),
+            compute_kernel_config=compute_kernel_config,
+        )
+    )
+    baseline = ttnn.to_torch(
+        ttnn.transformer.chunked_scaled_dot_product_attention(
+            tt_query,
+            tt_key,
+            tt_value,
+            tt_page_table,
+            chunk_start_idx=start,
+            program_config=config(32, 32),
+            compute_kernel_config=compute_kernel_config,
+        )
+    )
+    expected = _causal_reference(query, key, value, start, query_len, query_heads, kv_heads)
+    passed, pcc = comp_pcc(expected, actual, 0.999)
+    assert passed, f"tensor start {start} (q{q_chunk_size}/k{k_chunk_size}) failed PCC vs torch: {pcc}"
+    passed, pcc = comp_pcc(baseline, actual, 0.999)
+    assert passed, f"tensor start {start} (q{q_chunk_size}/k{k_chunk_size}) differs from scalar q32/k32: {pcc}"
+
+
+@pytest.mark.skipif(is_watcher_enabled(), reason="Kernel OOM with watcher enabled")
+@pytest.mark.parametrize("sliding_window", [None, 96])
+def test_chunked_sdpa_tensor_start_not_chunk_aligned_sliding_window(device, sliding_window):
+    """Unaligned tensor starts with and without a sliding window, q64/k128, start 96."""
+    query_heads, kv_heads, sequence, head_dim, page_size, query_len, start = 4, 2, 512, 64, 64, 128, 96
+    query, key, value, tt_key, tt_value, tt_page_table = _paged_chunked_inputs(
+        device, kv_heads, sequence, head_dim, page_size, query_heads
+    )
+    program_config = ttnn.SDPAProgramConfig(
+        compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
+        q_chunk_size=64,
+        k_chunk_size=128,
+        exp_approx_mode=False,
+    )
+    tt_query = ttnn.from_torch(
+        query[:, :, start : start + query_len], dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+    )
+    actual = ttnn.to_torch(
+        ttnn.transformer.chunked_scaled_dot_product_attention(
+            tt_query,
+            tt_key,
+            tt_value,
+            tt_page_table,
+            chunk_start_idx_tensor=ttnn.from_torch(torch.tensor([start], dtype=torch.int32), device=device),
+            program_config=program_config,
+            sliding_window_size=sliding_window,
+        )
+    )
+    group = query_heads // kv_heads
+    k = key.repeat_interleave(group, dim=1)
+    v = value.repeat_interleave(group, dim=1)
+    q = query[:, :, start : start + query_len]
+    scores = q @ k.transpose(-2, -1) * head_dim**-0.5
+    q_pos = torch.arange(start, start + query_len)[:, None]
+    k_pos = torch.arange(sequence)[None, :]
+    visible = k_pos <= q_pos
+    if sliding_window is not None:
+        visible &= k_pos > q_pos - sliding_window
+    scores.masked_fill_(~visible, float("-inf"))
+    expected = scores.softmax(dim=-1) @ v
+    passed, pcc = comp_pcc(expected, actual, 0.999)
+    assert passed, f"sliding_window={sliding_window} unaligned tensor start failed PCC: {pcc}"
