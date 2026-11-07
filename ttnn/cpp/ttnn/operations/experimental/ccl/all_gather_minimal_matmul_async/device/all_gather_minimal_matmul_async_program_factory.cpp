@@ -4,6 +4,7 @@
 
 #include "all_gather_minimal_matmul_async_device_operation.hpp"
 #include "all_gather_minimal_matmul_async_program_factory.hpp"
+#include "ttnn/operations/experimental/minimal_matmul/device/ternary_gate_buffer.hpp"
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
@@ -556,6 +557,25 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory_helper(
             tt::tt_metal::datatype_to_dataformat_converter(fused_ternary_input_b.value().dtype());
         auto ternary_c_tile_size = tt::tile_size(ternary_c_data_format);
         uint32_t ternary_c_cb_num_tiles = N_block_tiles;  // Single row (like bias), broadcast across M
+        // A full-shape gate gets a whole-block CB when L1 allows, so the in0 reader fetches it during the K loop
+        // instead of a row per compute pop (see use_full_block_ternary_gate). Every CB so far is on the worker grid.
+        const bool gate_is_full_shape =
+            fused_ternary_input_b.value().padded_shape()[-2] / tt::constants::TILE_HEIGHT != 1;
+        uint64_t cb_bytes_with_full_gate = static_cast<uint64_t>(ternary_c_tile_size) * out_block_num_tiles;
+        for (const auto& cb : desc.cbs) {
+            cb_bytes_with_full_gate += cb.total_size;
+        }
+        if (ttnn::experimental::prim::use_full_block_ternary_gate(
+                device, gate_is_full_shape, cb_bytes_with_full_gate)) {
+            ternary_c_cb_num_tiles = out_block_num_tiles;
+        }
+        log_debug(
+            tt::LogOp,
+            "all_gather_minimal_matmul_async ternary_b CB: {} tiles (full-shape gate: {}, L1 with a whole-block "
+            "gate: {} B)",
+            ternary_c_cb_num_tiles,
+            gate_is_full_shape,
+            cb_bytes_with_full_gate);
 
         add_cb(ternary_c_cb_id, ternary_c_tile_size, ternary_c_cb_num_tiles, ternary_c_data_format);
 
