@@ -144,6 +144,14 @@ ttnn::Tensor permute_impl(
             output = transpose_hc(formatted_input_tensor, output_mem_config);
         } else if (N == 1 && C == 0 && H == 2 && W == 3) {
             output = transpose_cn(formatted_input_tensor);
+        } else if (
+            N == 0 && C == 2 && H == 3 && W == 1 && formatted_input_tensor.layout() == Layout::TILE &&
+            (formatted_input_tensor.dtype() == DataType::BFLOAT16 ||
+             formatted_input_tensor.dtype() == DataType::FLOAT32) &&
+            formatted_input_tensor.logical_shape()[1] >= tt::constants::TILE_WIDTH) {
+            // NCHW -> NHWC as transpose(1, 2) then transpose(-2, -1): both move whole tiles, while the generic tiled
+            // permute kernel moves every tile as 32 B face lines.
+            output = transpose_wh(transpose_hc(formatted_input_tensor), output_mem_config);
         } else {
             output = prim_permute(formatted_input_tensor);
         }
