@@ -840,7 +840,7 @@ HighBwAllGatherFabricFactory::cached_mesh_workload_t HighBwAllGatherFabricFactor
     std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
     for (const auto& chip : tensor_coords.coords()) {
         const uint32_t chip_index = plan.linear_chip_index(chip);
-        tt::tt_metal::Program program{};
+        tt::tt_metal::Program program = tt::tt_metal::CreateProgram(*mesh_device);
         const auto& fabric_link_workers = plan.fabric_link_workers[chip_index];
         const auto& local_copy_cores = plan.local_copy_cores[chip_index];
 

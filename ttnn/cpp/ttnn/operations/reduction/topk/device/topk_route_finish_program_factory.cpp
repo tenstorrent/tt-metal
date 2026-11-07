@@ -164,7 +164,7 @@ TopkRouteFinishProgramFactory::cached_program_t TopkRouteFinishProgramFactory::c
     const Tensor& values_out = std::get<0>(tensor_return_value);
     const Tensor& indices_out = std::get<1>(tensor_return_value);
 
-    auto program = tt::tt_metal::CreateProgram();
+    auto program = tt::tt_metal::CreateProgram(*input.device());
 
     const auto split = compute_work_split(input, indices);
     const auto grid = input.device()->compute_with_storage_grid_size();

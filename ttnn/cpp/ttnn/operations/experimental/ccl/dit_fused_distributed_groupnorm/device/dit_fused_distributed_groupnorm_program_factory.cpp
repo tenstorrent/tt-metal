@@ -57,10 +57,9 @@ DitFusedDistributedGroupnormMeshWorkloadFactory::create_at(
     const auto& beta = tensor_args.beta;
     const auto& input_mask = tensor_args.input_mask;
 
-    Program program = CreateProgram();
-
     MeshDevice* device = input_tensor.device();
     auto* mesh_device = input_tensor.device();
+    Program program = CreateProgram(*device);
 
     const bool is_local = (args.ring_size <= 1);
     const bool use_mux = !is_local;

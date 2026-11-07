@@ -36,7 +36,7 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create_
     const ttnn::MeshCoordinate& coord,
     const tensor_args_t& tensors,
     tensor_return_value_t& out) {
-    tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
+    tt::tt_metal::Program program = tt::tt_metal::CreateProgram(*tensors.q.device());
 
     const auto& q = tensors.q;
     const auto& k = tensors.k;

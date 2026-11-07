@@ -406,7 +406,7 @@ LlamaReduceScatterCreateHeadsDeviceOperation::LlamaReduceScatterCreateHeads::cre
         tt::tt_metal::HalProgrammableCoreType::TENSIX,
         operation_attributes.subdevice_id.value_or(mesh_device->get_sub_device_ids().at(0)));
 
-    tt::tt_metal::Program program{};
+    tt::tt_metal::Program program = tt::tt_metal::CreateProgram(*mesh_device);
 
     auto fabric_max_packet_size = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes(*mesh_device);
     size_t packet_size_bytes =
