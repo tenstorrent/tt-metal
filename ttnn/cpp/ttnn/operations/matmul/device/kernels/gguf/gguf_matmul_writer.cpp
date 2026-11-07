@@ -10,10 +10,11 @@
 // partial (c_17) into its slot of the finishing core's c_18 and counts it on that core's semaphore; a head moves its
 // partial into this core's c_20; a finish first waits for its partials and hands them to the compute kernel. Codebook
 // formats: the writer also runs the second half of the grid lookups of each record the reader asks for, between its own
-// waits. Compile args: K tiles, tiles per chunk, input semaphore, partial semaphore, format id, the lookup request,
-// answer and page address semaphores, the input's and the output's TensorAccessorArgs. Runtime args: collector, input
-// address, output address, multicast rectangle (NoC x / y start, x / y end, in this writer's NoC order), cores in it,
-// segments, then per segment: tail: slot, role, finishing core NoC x, y; else: N tile, role, partials, 0.
+// waits; Q2_K and Q5_K: the conversion of each record's scale rows. Compile args: K tiles, tiles per chunk, input
+// semaphore, partial semaphore, format id, the lookup request, answer and page address semaphores, the input's and the
+// output's TensorAccessorArgs. Runtime args: collector, input address, output address, multicast rectangle (NoC x / y
+// start, x / y end, in this writer's NoC order), cores in it, segments, then per segment: tail: slot, role, finishing
+// core NoC x, y; else: N tile, role, partials, 0.
 
 #include <cstdint>
 
@@ -64,6 +65,9 @@ void kernel_main() {
     constexpr PageLayout L = page_layout<FMT>();
     constexpr uint32_t P = L.group_tiles / L.page_tiles, page = L.rows * 64;
     constexpr bool split = is_codebook<FMT>() && P > 1;
+    // Q2_K and Q5_K (two fp16 scale rows): per request, the record's fp32 scale copies (prepare_scales) in its first
+    // page, then the scale block copied into the other pages.
+    constexpr bool prep = L.fp16_rows > 1 && !is_codebook<FMT>() && P > 1;
     Semaphore requests(request_sem), answers(answer_sem), address(address_sem);
     uint32_t served = 0;
     [[maybe_unused]] const std::uint16_t* table = nullptr;
@@ -90,6 +94,23 @@ void kernel_main() {
                         2);
                 }
                 asm volatile("fence" ::: "memory");
+                answers.set(++served);
+            }
+        } else if constexpr (prep) {
+            if (requests.value() > served) {
+                const uint32_t first = address.value();
+                invalidate_l1_cache();
+                prepare_scales<FMT>(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(first + L.scale_offset));
+                asm volatile("fence" ::: "memory");
+                for (uint32_t p = 1; p < P; p++) {
+                    noc.async_read(
+                        core,
+                        CoreLocalMem<uint32_t>(first + p * page + L.scale_offset),
+                        L.scale_bytes,
+                        {.noc_x = me_x, .noc_y = me_y, .addr = first + L.scale_offset},
+                        {});
+                }
+                noc.async_read_barrier();
                 answers.set(++served);
             }
         }
