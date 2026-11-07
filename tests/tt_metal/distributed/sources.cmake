@@ -13,6 +13,7 @@ set(DISTRIBUTED_UNIT_TEST_SOURCES
     test_mesh_buffer_page_getters.cpp
     test_mesh_coord.cpp
     test_mesh_device.cpp
+    test_mesh_device_info.cpp
     test_mesh_device_reshape.cpp
     test_mesh_device_view.cpp
     test_mesh_workload.cpp
