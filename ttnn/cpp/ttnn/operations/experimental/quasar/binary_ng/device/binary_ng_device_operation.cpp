@@ -696,18 +696,38 @@ bool BinaryNgDeviceOperation::matches_quasar_native_slice(
     // Subtile broadcast runs in bf16 and fp32. In bf16 the compute expands ROW, COL and SCALAR with unary_bcast. That
     // takes no 32-bit operand on Quasar, so in fp32 the reader expands them in software and the compute copies them.
 
-    // In bf16, add and subtract run the FPU kernel; multiply, divide, maximum and minimum run the SFPU kernel; and
-    // multiply runs the FPU kernel in fast and approximate mode. In fp32 all six run the SFPU kernel. The SFPU kernel
-    // runs no other op here: each needs its own validation on Quasar.
+    // In bf16, multiply, divide, maximum, minimum and pow run the SFPU kernel (multiply runs the FPU kernel in fast
+    // and approximate mode), and the other admitted ops run the FPU kernel. In fp32 every admitted op runs the SFPU
+    // kernel except rsub, whose rsub_binary_tile is not declared for Quasar.
     const BinaryOpType op_type = attributes.binary_op_type;
-    if (op_type != BinaryOpType::ADD && op_type != BinaryOpType::SUB && op_type != BinaryOpType::MUL &&
-        op_type != BinaryOpType::DIV && op_type != BinaryOpType::MAXIMUM && op_type != BinaryOpType::MINIMUM) {
-        return false;
+    switch (op_type) {
+        case BinaryOpType::ADD:
+        case BinaryOpType::SUB:
+        case BinaryOpType::MUL:
+        case BinaryOpType::DIV:
+        case BinaryOpType::MAXIMUM:
+        case BinaryOpType::MINIMUM:
+        case BinaryOpType::SQUARED_DIFFERENCE:
+        case BinaryOpType::RSUB:
+        case BinaryOpType::HYPOT:
+        case BinaryOpType::LOGICAL_AND:
+        case BinaryOpType::LOGICAL_OR:
+        case BinaryOpType::LOGICAL_XOR:
+        case BinaryOpType::LDEXP:
+        case BinaryOpType::LOGADDEXP:
+        case BinaryOpType::BIAS_GELU:
+        case BinaryOpType::POWER:
+        case BinaryOpType::LOGADDEXP2: break;
+        default: return false;
     }
     // a and b in one format, bf16 or fp32; the output's format is checked below. Mixed formats are not validated on
     // Quasar.
     const DataType dtype = a.dtype();
     if ((dtype != DataType::BFLOAT16 && dtype != DataType::FLOAT32) || (!is_scalar && b->dtype() != dtype)) {
+        return false;
+    }
+    const bool fp32 = dtype == DataType::FLOAT32;
+    if (fp32 && op_type == BinaryOpType::RSUB) {
         return false;
     }
     // The factory packs a scalar in a's format into the ring of b, whose format is derived: a's on the SFPU kernel,
@@ -716,17 +736,19 @@ bool BinaryNgDeviceOperation::matches_quasar_native_slice(
         return false;
     }
     // Implied by the format, but checked, so that a routing change falls back instead of running untested: fp32 runs
-    // only the SFPU kernel, and bf16 runs add and subtract only on the FPU kernel.
-    const bool fp32 = dtype == DataType::FLOAT32;
+    // only the SFPU kernel, and bf16 runs the SFPU kernel only for multiply, divide, maximum, minimum and pow.
     if (fp32 && !attributes.is_sfpu) {
         return false;
     }
+    const bool bf16_always_sfpu =
+        op_type == BinaryOpType::MAXIMUM || op_type == BinaryOpType::MINIMUM || op_type == BinaryOpType::POWER;
     if (!fp32 && attributes.is_sfpu && op_type != BinaryOpType::MUL && op_type != BinaryOpType::DIV &&
-        op_type != BinaryOpType::MAXIMUM && op_type != BinaryOpType::MINIMUM) {
+        !bf16_always_sfpu) {
         return false;
     }
-    // Divide in fast and approximate mode, a reciprocal pass on b before an FPU multiply, is not validated on Quasar.
-    if (!attributes.is_sfpu && op_type == BinaryOpType::DIV) {
+    // Divide in fast and approximate mode, a reciprocal pass on b before an FPU multiply, is not validated on Quasar;
+    // maximum, minimum and pow have no FPU path.
+    if (!attributes.is_sfpu && (op_type == BinaryOpType::DIV || bf16_always_sfpu)) {
         return false;
     }
     // Attributes, not tensor.layout(): output_layout has no tensor when none was supplied.
