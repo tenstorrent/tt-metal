@@ -691,8 +691,8 @@ std::shared_ptr<Kernel> detail::ProgramImpl::get_kernel(KernelHandle kernel_id) 
     // this->id);
     //  find coretype based on kernel_id
     for (const auto& kernels : this->kernels_) {
-        if (kernels.contains(kernel_id)) {
-            return kernels.at(kernel_id);
+        if (const auto it = kernels.find(kernel_id); it != kernels.end()) {
+            return it->second;
         }
     }
 
