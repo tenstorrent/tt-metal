@@ -28,12 +28,16 @@ branch ``mvasilijevic/deepseek-v41-prefill``, and of GLM-5.3's sparse MLA, whose
     of K3.1 on this 8x4 (ao3i.2.2, stage 2, real weights; indicative, TDP_LIMIT_MAX=75 W), not capabilities:
       - the indexer top-k (``topk_large_indices``, k=2048, 160 rows per chip) runs on its own sub-device concurrently
         with the KVPE gather and emits no profiler record. Its time is bounded on the chip timeline by the region from
-        the KVPE write's end to ``sparse_sdpa``'s start, which also holds the gather. At 5,120 scores per row the
-        region (<= 128.4 us) outlasts the gather (39 us): that is the top-k's identifiable time, ``TOPK_NS``. Deeper,
-        the region is the gather's own duration (1M: 4,768 us region vs 4,734 us gather), so the top-k's rate is not
-        identified (only >= 35.7 elements/ns per chip: 160 x 1,064,960 scores within the gather) and is not modelled;
-        a standalone ``topk_large_indices`` at 160 x 5,120 and 160 x 1,064,960 on 120 cores would measure it. This
-        replaces V4.1's LoudBox rate (7.1 elements/ns per chip), which the 1M bound contradicts;
+        the KVPE write's end to ``sparse_sdpa``'s start, which also holds the gather. ``TOPK_NS`` is that region at
+        prefix 0 (5,120 scores per row: <= 128.4 us, gather 39 us), established there only. On the 128K prompt the
+        region outlasts the gather by 56-94 us per layer at most depths (11-40 us at 61K-97K) and by ~10 us only at
+        1M (4,768 vs 4,734 us): that tail is either the top-k (then the top-k is ~ the region, ~645 us at 117,760, 5x
+        ``TOPK_NS``) or a post-gather wait; the dumps cannot separate them. So the top-k's rate is not identified
+        (>= 35.7 elements/ns per chip at 1M, the only depth where the gather certainly hides it) and is not
+        modelled; a standalone ``topk_large_indices`` at 160 x 5,120 and 160 x 1,064,960 on 120 cores would measure
+        it. The concurrent term max(top-k, gather) covers the measured region from the 5th chunk on only through the
+        gather model's 1.5-2x slack; at the 2nd-4th chunks the region exceeds it by 1.03-1.24x. This replaces
+        V4.1's LoudBox rate (7.1 elements/ns per chip), which the 1M bound contradicts;
       - the indexer score program (fused with the index-K ring all-gather) has a fixed per-op cost
         (``INDEX_SCORE_FIXED_NS``) that the collective's 14 us latency below omits: every chip pays a floor of
         128.2 us at prefix 0 (138.4 at 5,120) while its modelled work doubles; the constant is that floor less the
@@ -272,7 +276,7 @@ def dsa_ops(prefix: int, chunk: int = CHUNK, hw: Galaxy8x4 = GALAXY) -> list[OpC
 @dataclass(frozen=True)
 class CoreEstimate:
     ideal_ns: float  # max(sum FPU, sum DRAM, sum fabric): modelled work only
-    measured_ns: float  # measured-rate top-k + fixed per-op costs
+    measured_ns: float  # measured top-k time (TOPK_NS) + fixed per-op costs
     optimistic_ns: float  # max(sum FPU + top-k, sum DRAM, sum fabric) + fixed costs
     conservative_ns: float
     ops: tuple
