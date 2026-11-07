@@ -119,12 +119,14 @@ def test_grammar_uses_separate_trace():
     assert grammar_on is not grammar_off
 
 
-def test_precompile_all_configs_selects_supported_grammar_matrix():
+@pytest.mark.parametrize("topk_logprobs", [False, True])
+def test_precompile_all_configs_selects_supported_grammar_matrix(topk_logprobs):
     class StubLogProbs:
         def __init__(self):
             self.logprobs_enabled = [False]
             self.num_logprobs = [0]
             self.enable_log_probs = False
+            self._use_topk_logprobs = topk_logprobs
 
         def set_log_probs_mode(self, enabled, num_logprobs=0):
             values = list(enabled) if isinstance(enabled, list) else [enabled]
@@ -167,6 +169,7 @@ def test_precompile_all_configs_selects_supported_grammar_matrix():
         for penalties in (False, True)
         for log_probs in (False, True)
         for force_argmax in (False, True)
+        if not (topk_logprobs and log_probs and force_argmax)
     }
 
     calls.clear()
