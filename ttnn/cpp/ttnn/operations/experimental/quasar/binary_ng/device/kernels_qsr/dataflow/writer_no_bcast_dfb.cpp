@@ -2,7 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Metal 2.0 / DataflowBuffer (DFB) writer for binary_ng's no-broadcast binary op, Quasar-native.
+// Metal 2.0 / DataflowBuffer (DFB) writer for binary_ng, Quasar-native. The output is never broadcast, so this writer
+// serves every operand mode unchanged.
 //
 // Diverges from kernels_dfb/dataflow/writer_no_bcast_dfb.cpp in three ways, all licensed by
 // matches_quasar_native_slice:
@@ -14,10 +15,9 @@
 // The output is written over the NoC, or borrowed from this core's L1 (DST_SHARDED): its shard, or its
 // slice of an L1-interleaved tensor, which the compute packs in place.
 //
-// The writer's cascade is the milder case: an output is never broadcast, so its strides are dense. Without an
-// anchor each core writes a linear page range, and the sharding-aware TensorAccessor maps each page to its
-// shard. The reader's cascade is the load-bearing one; see the note in reader_no_bcast_dfb.cpp before widening
-// the gate.
+// The output's strides are dense, so the writer needs no Map: without an anchor each core writes a linear page range,
+// and the sharding-aware TensorAccessor maps each page to its shard. The reader reads the inputs through their Maps
+// (reader_binary_dfb.cpp).
 
 #include <cstdint>
 
@@ -58,10 +58,7 @@ void kernel_main() {
         Noc noc;
         DataflowBuffer tail_out(dfb::out_tail);
         const LocalTensorAccessor<uint32_t> out_shard(tensor::out);
-        const uint32_t out_shard_base = out_shard.get_bank_base_address();
         const uint32_t tile_bytes = tail_out.get_entry_size();
-        const uint32_t noc_x = my_x[noc.get_noc_id()];
-        const uint32_t noc_y = my_y[noc.get_noc_id()];
         const uint32_t num_threads = get_num_threads();
         uint32_t slot = get_my_thread_id();
         for (uint32_t c = 0; c < num_tcs; ++c, slot += num_threads) {
@@ -69,10 +66,10 @@ void kernel_main() {
             if (slot < TAIL_TILES) {
                 noc.async_write(
                     tail_out,
-                    UnicastEndpoint{},
+                    out_shard,
                     tile_bytes,
                     {.offset_bytes = 0},
-                    {.noc_x = noc_x, .noc_y = noc_y, .addr = out_shard_base + (dst_num_tiles + slot) * tile_bytes});
+                    {.offset_bytes = (dst_num_tiles + slot) * tile_bytes});
                 noc.async_write_barrier();
             }
             tail_out.pop_front(1);

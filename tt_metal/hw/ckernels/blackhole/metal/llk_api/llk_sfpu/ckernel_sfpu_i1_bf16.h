@@ -26,13 +26,11 @@ struct I1Bf16Config {
     static constexpr float kExponentShift = __builtin_bit_cast(float, 0x40800000u);
     static constexpr float kRootC1 = __builtin_bit_cast(float, 0x401214c9u);
     static constexpr float kRootC2 = __builtin_bit_cast(float, 0x40103626u);
-    static constexpr unsigned kRootMagic = 1594953888u;
     static constexpr unsigned kOriginShift = 126u;
     static constexpr unsigned kOriginScaledBits = 1073676288u;
     static constexpr unsigned kLateNegativeNanClass = 1u;
     static constexpr bool kWormhole = false;
 
-    // Typed domain actions.
     struct TtDomainActionRecord {
         float bound;
         uint8_t direction;
@@ -86,13 +84,9 @@ inline void calculate_i1_bf16_body() {
 }
 // The constants stock's init also sets hold the kernel's own values for its call only.
 template <int ITERATIONS = 32>
-inline void calculate_i1_bf16() {
+__attribute__((noinline)) inline void calculate_i1_bf16() {
     sfpi::vConstFloatPrgm0 = __builtin_bit_cast(float, 0x5f1110a0u);
     calculate_i1_bf16_body<ITERATIONS>();
-    sfpi::vConstFloatPrgm0 = __builtin_bit_cast(float, 0x40000000u);
-}
-inline void init_i1_bf16() {
-    ckernel::sfpu::bf16::i1::init_exp_root<ckernel::sfpu::I1Bf16Config>();
     sfpi::vConstFloatPrgm0 = __builtin_bit_cast(float, 0x40000000u);
 }
 

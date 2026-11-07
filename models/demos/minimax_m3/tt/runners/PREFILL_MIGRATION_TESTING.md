@@ -16,6 +16,7 @@ M3 stores three cache tensors (`k`, `v`, `index_k`). `k`/`v` are TP-head-sharded
 |------|----------------|-------|
 | **0 — standalone PCC** | Prefill writes correct K / V / index_k vs golden | tt-metal tree only |
 | **1 — mock migration** | The 9-config address table is correct, read device-lessly | tt-metal tree only |
+| **1P — packed mock migration** | Gate 1 with 4 chunks per forward from both slots | tt-metal tree only |
 | **2 — loopback migration** | The real DRAM → DCN → DRAM copy, and migrated-KV accuracy | + tt-llm-engine migration layer |
 | **P0 — merged-table unit test** | The multi-stage merge's address math, device-free | tt-metal tree only, no device |
 | **P1 — pipeline mock migration** | The MERGED 60-layer table over 2 stages, read device-lessly | tt-metal tree only |
@@ -33,6 +34,8 @@ M3 stores three cache tensors (`k`, `v`, `index_k`). `k`/`v` are TP-head-sharded
 | `manifests/m3_binding_mock_migration_1rank.yaml` | Gate 1 runner: 1-rank topology + mock-migration env |
 | `manifests/m3_binding_loopback_migration_1rank.yaml` | Gate 2 runner: 1-rank topology + real-migration env |
 | `manifests/m3_producer_mock_migration.yaml` | Gate 1 producer: 2 slots × 2 chunks, golden PCC |
+| `manifests/m3_binding_mock_migration_packed_1rank.yaml` | Gate 1P runner: Gate 1 at 1024-token chunks, 4096-token forwards |
+| `manifests/m3_producer_mock_migration_packed.yaml` | Gate 1P producer: 2 slots × 10 chunks, 4 per forward, golden PCC |
 | `manifests/m3_producer_loopback_migration.yaml` | Gate 2 driver: prefill 0,1 → migrate to 2,3 |
 | `manifests/m3_binding_mock_migration_intragalaxy_2rank.yaml` | Gate P1 runner: 2-stage intragalaxy + merged mock |
 | `manifests/m3_binding_loopback_migration_intragalaxy_2rank.yaml` | Gate P2 runner: 2-stage intragalaxy + real migration |
@@ -126,6 +129,24 @@ and are skipped); the read-back picks the bf16 or bf8 decoder from the config's 
 The runner's request loop is unbounded, so it stays up after the producer exits — re-run the producer as
 often as you like, then stop it with Ctrl-C, or set `PREFILL_SEND_SHUTDOWN: "1"` in the producer manifest's
 `env:` block for a graceful drain-and-exit on the last push.
+
+### Gate 1P — packed forwards
+
+Gate 1 with `PREFILL_CHUNK_SIZE=1024` and `PREFILL_FORWARD_TOKENS_BUDGET=4096`: each forward carries up to 4
+chunks (`TtPrefillRuntime.prefill_forward`), and the last one carries both slots. The budget must match on both
+sides. Layer acks go through the host callback (`PREFILL_LAYER_ACK_D2H=0`): a D2H ack record names one chunk.
+
+```bash
+# ---- Terminal 1 — runner ----
+$RUN $M3/m3_binding_mock_migration_packed_1rank.yaml $HOST:1
+
+# ---- Terminal 2 — producer ----
+python -m models.demos.common.prefill.runners.prefill_producer \
+  --manifest $M3/m3_producer_mock_migration_packed.yaml
+```
+
+**Expect:** as Gate 1, with `[producer] layer acks 1200/1200` (2 slots × 10 chunks × 60 layers) and the same
+per-slot PCC pass.
 
 ---
 
