@@ -12,7 +12,7 @@ from tt_py_test_utils_common.perf.benchmarking_utils import BenchmarkProfiler
 from tracy import signpost
 
 from tests.ttnn.utils_for_testing import assert_equal, assert_allclose, assert_with_pcc, assert_with_ulp
-from tt_py_test_utils_common.utility_functions import skip_for_slow_dispatch, run_for_blackhole
+from tt_py_test_utils_common.utility_functions import skip_for_slow_dispatch, run_for_blackhole, run_for_wormhole_b0
 
 shapes = [[[1, 1, 32, 32]], [[3, 1, 320, 384]], [[1, 1, 128, 7328]]]
 
@@ -292,6 +292,48 @@ def test_tilize_nd_sharded_to_legacy_sharded(
     output_torch_tensor = ttnn.to_torch(ttnn_output_tensor)
 
     assert_equal(input_torch_tensor, output_torch_tensor)
+
+
+def _fill_l1_leaving(device, keep_bytes):
+    chunk = ttnn.from_torch(torch.zeros(1, 1, 256, 1024), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    fillers = []
+    while True:
+        try:
+            fillers.append(chunk.to(device, ttnn.L1_MEMORY_CONFIG))
+        except RuntimeError:
+            break
+    freed = 0
+    while fillers and freed < keep_bytes:
+        ttnn.deallocate(fillers.pop())
+        freed += 256 * 1024 * 2
+    return fillers
+
+
+@run_for_wormhole_b0()
+@pytest.mark.parametrize("shape", [(1, 128, 128, 1024), (2, 64, 64, 256), (16, 32, 512)])
+@pytest.mark.parametrize("output_dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
+def test_tilize_l1_interleaved_with_little_free_l1(device, shape, output_dtype):
+    torch.manual_seed(0)
+    torch_input = torch.randn(shape, dtype=torch.bfloat16)
+    input_tensor = ttnn.from_torch(
+        torch_input,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
+    expected = ttnn.to_torch(
+        ttnn.to_layout(input_tensor, ttnn.TILE_LAYOUT, dtype=output_dtype, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    )
+    output_bytes = math.prod(shape) * (2 if output_dtype == ttnn.bfloat16 else 1.0625)
+    fillers = _fill_l1_leaving(device, int(output_bytes * 1.25))
+    try:
+        output = ttnn.to_layout(input_tensor, ttnn.TILE_LAYOUT, dtype=output_dtype, memory_config=ttnn.L1_MEMORY_CONFIG)
+    finally:
+        for f in fillers:
+            ttnn.deallocate(f)
+    assert list(output.shape) == list(shape)
+    assert_equal(expected, ttnn.to_torch(output))
 
 
 @pytest.mark.parametrize("input_shape", [(32, 15936), (160, 5210112)])
