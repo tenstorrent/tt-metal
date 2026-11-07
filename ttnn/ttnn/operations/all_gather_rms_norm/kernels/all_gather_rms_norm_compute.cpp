@@ -53,6 +53,8 @@ constexpr uint32_t out_unit = get_compile_time_arg_val(4);
 constexpr uint32_t out_w_tiles = get_compile_time_arg_val(5);
 constexpr bool combine_owner = get_compile_time_arg_val(6) != 0;  // k > K_SYM_MAX: per-row owner combine
 constexpr uint32_t row_gather = get_compile_time_arg_val(7);      // owner: gather tiles per owned row, ceil(k / 32)
+constexpr bool own_in_shard = get_compile_time_arg_val(8) != 0;   // native HEIGHT: own slice read from cb_x_in
+constexpr uint32_t Wt_lp = get_compile_time_arg_val(9);           // tiles per slice (cb_x_in row pitch)
 
 // rsqrt(sum * (1/W) + eps) on column 0 of DST[dst] — the reduce() post_reduce_op (base op FinalizeInvRms).
 #ifdef TRISC_MATH
@@ -83,7 +85,9 @@ struct FinalizeInvRms {
 
 // ---- sum_squares_block: per tile-row, sum_j x[r][j]^2 accumulated in DEST, one tile per tile-row ----
 // The block's tile-row i starts at page i * w_pitch of the cb_x_landing front (earlier blocks are popped).
-ALWI void sum_squares_block(uint32_t rows, uint32_t full_w) {
+// own_in_shard: landing columns [own_c0, own_c0 + Wt_lp) are read from the resident input shard instead (cb_x_in,
+// waited once for every row; local row i0 + i at page (i0 + i) * Wt_lp).
+ALWI void sum_squares_block(uint32_t i0, uint32_t rows, uint32_t full_w, uint32_t own_c0) {
     cb_wait_front(cb_x_landing, rows * w_pitch);
     constexpr uint32_t batch = compute_kernel_lib::DEST_AUTO_LIMIT;
     reconfig_data_format(cb_x_landing, cb_x_landing);
@@ -96,7 +100,12 @@ ALWI void sum_squares_block(uint32_t rows, uint32_t full_w) {
         for (uint32_t i = 0; i < n; ++i) {
             const uint32_t base = (r0 + i) * w_pitch;
             for (uint32_t j = 0; j < full_w; ++j) {
-                mul_tiles(cb_x_landing, cb_x_landing, base + j, base + j, i);
+                if (own_in_shard && j - own_c0 < Wt_lp) {
+                    const uint32_t xi = (i0 + r0 + i) * Wt_lp + (j - own_c0);
+                    mul_tiles(cb_x_in, cb_x_in, xi, xi, i);
+                } else {
+                    mul_tiles(cb_x_landing, cb_x_landing, base + j, base + j, i);
+                }
             }
         }
         tile_regs_commit();
@@ -287,6 +296,42 @@ ALWI void normalize_resident(uint32_t rows, uint32_t width) {
 #endif
 }
 
+// regime A, one row segment: n tiles of block row i, x from x_cb at x (Strided: one row), gamma from column c0.
+// Native placement normalizes a row in segments: the own slice from the input shard (cb_x_in), the rest from the
+// landing; packed in column order into cb_out_tiles (the output shard).
+template <uint32_t x_cb>
+ALWI void normalize_segment(uint32_t i, StridedTileRange x, [[maybe_unused]] uint32_t c0, uint32_t n) {
+    constexpr auto x_in = input(
+        x_cb,
+        WaitPolicy::None,
+        PopPolicy::None,
+        InputTileMapping::Block,
+        DataFormatReconfig::Enabled,
+        TileAddressing::Strided);
+    constexpr auto inv_rms_in = input(
+        cb_inv_rms,
+        BroadcastDim::Col,
+        WaitPolicy::None,
+        PopPolicy::None,
+        InputTileMapping::Col,
+        DataFormatReconfig::Enabled,
+        TileAddressing::Offset);
+    using XTimesInvRms = BinaryFpu<BinaryFpuOp::Mul, x_in, inv_rms_in>;
+#ifdef AGRMS_HAS_GAMMA
+    eltwise_chain(IterationShape::grid(1, n), XTimesInvRms{x, i}, TimesGamma{c0}, PackTile<output(cb_out_tiles)>{});
+#else
+    eltwise_chain(IterationShape::grid(1, n), XTimesInvRms{x, i}, PackTile<output(cb_out_tiles)>{});
+#endif
+}
+
+// native WIDTH, ragged last member: pad the output row up to the shard pitch (pages never read)
+ALWI void pad_out_row(uint32_t out_pad) {
+    if (out_pad > 0) {
+        cb_reserve_back(cb_out_tiles, out_pad);
+        cb_push_back(cb_out_tiles, out_pad);
+    }
+}
+
 // regime N: one window of n dense tiles [t0, t0 + n) of block row i, x streamed from cb_x_aligned
 ALWI void normalize_streamed(uint32_t i, uint32_t t0, uint32_t n) {
     constexpr auto x_in = input(cb_x_aligned);  // PerTile wait / pop
@@ -315,12 +360,17 @@ void kernel_main() {
     const FinalizeInvRms finalize{get_arg_val<uint32_t>(2), get_arg_val<uint32_t>(3)};
     [[maybe_unused]] const uint32_t gamma_pages = get_arg_val<uint32_t>(4);  // cb_gamma pages incl. tail pages
     [[maybe_unused]] const uint32_t member_idx = get_arg_val<uint32_t>(5);
+    [[maybe_unused]] const uint32_t own_c0 = get_arg_val<uint32_t>(6);   // own slice's first landing column
+    [[maybe_unused]] const uint32_t out_pad = get_arg_val<uint32_t>(7);  // native: pad pages per output row
 
     compute_kernel_hw_startup(cb_x_landing, cb_x_landing, cb_out_tiles);
+    if constexpr (own_in_shard) {
+        cb_wait_front(cb_x_in, n_rows * Wt_lp);  // the resident input shard (published once by the reader)
+    }
 
     for (uint32_t i0 = 0; i0 < n_rows; i0 += block_row_tiles) {
         const uint32_t rows = (n_rows - i0) < block_row_tiles ? (n_rows - i0) : block_row_tiles;
-        sum_squares_block(rows, core_w);
+        sum_squares_block(i0, rows, core_w, own_c0);
         if constexpr (w_split_cores == 1) {
             collapse_sumsq_block<cb_inv_rms>(rows, finalize);
         } else if constexpr (combine_owner) {
@@ -341,6 +391,24 @@ void kernel_main() {
                     normalize_streamed(i, t0, n);
                 }
             }
+        } else if (own_in_shard) {
+            // landing [0, own_c0) | input shard [own_c0, own_c0 + Wt_lp) | landing [own_c0 + Wt_lp, core_w)
+            const uint32_t own_c1 = own_c0 + Wt_lp;
+            for (uint32_t i = 0; i < rows; ++i) {
+                if (own_c0 > 0) {
+                    normalize_segment<cb_x_landing>(i, StridedTileRange{i * w_pitch, w_pitch}, 0, own_c0);
+                }
+                normalize_segment<cb_x_in>(i, StridedTileRange{(i0 + i) * Wt_lp, Wt_lp}, own_c0, Wt_lp);
+                if (own_c1 < core_w) {
+                    normalize_segment<cb_x_landing>(
+                        i, StridedTileRange{i * w_pitch + own_c1, w_pitch}, own_c1, core_w - own_c1);
+                }
+            }
+        } else if (out_pad > 0) {
+            for (uint32_t i = 0; i < rows; ++i) {
+                normalize_segment<cb_x_landing>(i, StridedTileRange{i * w_pitch, w_pitch}, 0, core_w);
+                pad_out_row(out_pad);
+            }
         } else {
             normalize_resident(rows, core_w);
         }
@@ -350,4 +418,7 @@ void kernel_main() {
 #ifdef AGRMS_HAS_GAMMA
     cb_pop_front(cb_gamma, gamma_pages);
 #endif
+    if constexpr (own_in_shard) {
+        cb_pop_front(cb_x_in, n_rows * Wt_lp);
+    }
 }

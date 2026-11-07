@@ -69,7 +69,7 @@ Entry-point contract:
 | Shape | per device `(..., M, W_local)`, rank 2–4; leading dims fold into the row axis |
 | Dtype | float32, bfloat16, bfloat8_b |
 | Layout | TILE |
-| Memory | DRAM or L1 INTERLEAVED; L1 HEIGHT_SHARDED / WIDTH_SHARDED (read through a sharded `TensorAccessor`) |
+| Memory | DRAM or L1 INTERLEAVED; L1 HEIGHT_SHARDED / WIDTH_SHARDED (native: consumed in place, see `sharded_zero_copy`; else read through a sharded `TensorAccessor`) |
 | Gamma | full W on every device; TILE `(1,1,1,W)`: row 0 of tile t holds `gamma[32t .. 32t+31]`. ROW_MAJOR sticks `(1,1,ceil(W/32),32)`: page t is the 32-element stick `gamma[32t .. 32t+31]`, tail zero-padded. float32 / bfloat16, independent of the input dtype |
 
 ### Output
@@ -79,7 +79,7 @@ Entry-point contract:
 | Shape | per device `(..., M, G·W_local)`; group position p at columns `[p·W_local, (p+1)·W_local)`, dense (no padding between slices) |
 | Dtype | input dtype |
 | Layout | TILE |
-| Memory | `output_tensor`'s config, else `memory_config`, else DRAM interleaved. Written through a `TensorAccessor` (interleaved or sharded alike). |
+| Memory | `output_tensor`'s config, else `memory_config`, else DRAM interleaved. Written through a `TensorAccessor`, except on the native sharded path, where compute packs into the resident output shard. |
 
 ## Blocking Model
 
@@ -188,7 +188,7 @@ Named boundaries: **DRAM** (per chip: x read once = S, out written once = G·S) 
 | `port_dram_sourcing` (ports read the own slice from DRAM, as the example does) | **rejected**: +2·S DRAM reads per chip, and per-tile DRAM page reads at port rate (the example needed same-bank runs to feed a link, rule 9). Sourcing from member L1 is both fewer bytes and contiguous runs. | — | — | +2·S DRAM | — |
 | `contiguous_rows` (base op: a contiguous tile-row range per group) | **rejected**: the last-landing rows all fall on the last group, whose whole assignment is then exposed after the final packet. Round-robin is the same traffic with a one-block tail. | — | — | same | — |
 | `gamma_mcast` (one reader per W range multicasts gamma to that range's members across groups) | **deferred**: r = gamma bytes / x bytes per member ≤ 1/32. Catalog `shared_input_reuse` measured null for r ≤ 0.125. Reachable: `cb_gamma` is a program-lifetime CB with one producer (the writer), and the base op's `GAMMA_MCAST` channel only replaces its DRAM read. | — | — | gamma read once per W range instead of once per group | — |
-| `sharded_zero_copy` (consume the input shard in place and pack into the output shard: CBs backed on the shards) | **deferred**: the port cores sit next to the Ethernet cores, wherever the caller's shard grid may also place shards, so a shard-aligned work split is not placeable in general. Phase 0 reaches shards through sharded `TensorAccessor`s (correct for any shard grid). No perf case is sharded. Reachable: only the member read / write addressing changes. | `memory_layout ≠ INTERLEAVED` and the shard grid avoids every port core | shard | x / out never cross DRAM | — |
+| `sharded_zero_copy` (consume the input shard in place and pack into the output shard: CBs backed on the shards) | **implemented (Refinement 1)**, gated: `native_shard_split()` + `native_keeps_up()`. HEIGHT (input and output with the same row partition, full-width shards): one group per shard, k = 1, contiguous rows (`rows_per_group`). The own-slice columns are read in place from `cb_x_in` (backed on the input shard) by compute, by the regime-N compose and by the ports (no load). WIDTH (output full-height shards, regime A): one group, k = output shard columns, member m = output shard core m; its own tiles are gathered from the input shards (cross-core reads; the input partition differs from the output's). Both: remote slices still land in `cb_x_landing` (not in the output shard: the ports relay from the landing, so normalizing it in place would forward normalized data), and compute packs straight into `cb_out_tiles` backed on the output shard (the writer only waits / pops). The ports are placed off the member cores (`plan(avoid=...)`: the shard grid starts at core (0,0), where Phase 0 put ports). | TILE L1 shards, ROW_MAJOR orientation, shard partition as above, the CBs fit L1, >= 2L free cores per chip off the shard grid, and the shard-fixed split keeps up with the transport: per-core work (cost model) <= `NATIVE_KEEP_UP_FRACTION` (1.0) x T_xfer. Otherwise the sharded `TensorAccessor` fallback (Phase 0 path). Measured: HEIGHT 640x384 34.9 vs 41.4 us, 2048x384 68.2 vs 93.4 us (native wins). HEIGHT 128x512 (4 shards x 64 tiles) and WIDTH 64x512 (64 one-tile members: one-tile packets, 64-way combine) / 32x4096 (k = 103) lose 7-18 us natively, and the gate keeps them on the fallback. | shard | x own slice (HEIGHT) / out never cross the NoC | — |
 | `probe_placement` (example: one probe program reports each connection's Ethernet core) | **rejected**: a second device dispatch on the first call violates one dispatch per invocation. Placement is derived on the host instead (Work Distribution). | — | — | — | — |
 | `single_core` | **rejected**: Phase 0 is multi-core | — | — | — | — |
 
@@ -350,8 +350,8 @@ Placement axis (`memory_layout`) seen as TARGET:
 | `TensorMemoryLayout` | Axis it cuts | Character | Unlock class | Realization |
 |---|---|---|---|---|
 | INTERLEAVED | — | — | built | as above |
-| HEIGHT_SHARDED (input, and the gathered output) | row | independent | **knob-turn** (built in Phase 0) | accessor CT args only; the split ignores the shard grid. Zero-copy = `sharded_zero_copy` (deferred, reason in Regimes). |
-| WIDTH_SHARDED | W_local (input) / W (output) | dependent **within the chip** | knob-turn here: the combine is already built, and the split does not follow the shard | accessor CT args only |
+| HEIGHT_SHARDED (input, and the gathered output) | row | independent | **scheme-change (Refinement 1)**: the shard grid fixes the split (one group per shard, k = 1) when `native_keeps_up`; else round-robin over the accessor fallback | `cb_x_in` / `cb_out_tiles` backed on the shards; ports avoid the shard cores |
+| WIDTH_SHARDED | W_local (input) / W (output) | dependent **within the chip** | **scheme-change (Refinement 1)**: k = output shard columns, one group (regime A), when `native_keeps_up`; else the accessor fallback | `cb_out_tiles` backed on the output shard; own tiles gathered from the input shards |
 
 Structural impossibilities: none beyond the INVALID entries already in `feature_spec.py`.
 
@@ -510,4 +510,4 @@ Findings for the refinement queue:
    fabric mesh open in the same process fails (the wrapper's own note; the fabric_all_gather example shows the same).
    Multi-test runs therefore use production mode; single tests pass under `--dev`.
 
-Sharded inputs / outputs go through sharded `TensorAccessor`s, as the design specifies (`sharded_zero_copy` deferred).
+Sharded inputs / outputs take the native shard-resident path when `native_shard_split()` places them and `native_keeps_up()` holds (Refinement 1, see `sharded_zero_copy`); otherwise they go through sharded `TensorAccessor`s (the Phase 0 path).

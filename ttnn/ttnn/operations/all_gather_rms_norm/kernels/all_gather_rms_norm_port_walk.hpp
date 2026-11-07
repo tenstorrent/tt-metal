@@ -32,6 +32,20 @@ struct Geom {
     uint32_t Wt_lp;         // tiles per slice
     uint32_t landing_base;  // cb_x_landing base address (identical on every core of every chip)
     uint32_t ws_arg;        // runtime-arg index of member_ws[0..k] (landing tile boundaries of the members)
+    uint32_t rows_per_group;  // 0: round-robin rows (row r -> group r % n_groups, local row r / n_groups);
+                              // > 0 (native HEIGHT shards): group r / rows_per_group, local row r % rows_per_group
+    uint32_t x_base;          // native HEIGHT: input shard address (own slice read in place, row pitch Wt_lp)
+
+    // group and local row of tile-row r
+    FORCE_INLINE void place(uint32_t r, uint32_t& grp, uint32_t& li) const {
+        if (rows_per_group == 0) {
+            grp = r % n_groups;
+            li = r / n_groups;
+        } else {
+            grp = r / rows_per_group;
+            li = r - grp * rows_per_group;
+        }
+    }
 
     FORCE_INLINE uint32_t ws(uint32_t m) const { return get_arg_val<uint32_t>(ws_arg + m); }
     FORCE_INLINE uint32_t n_xb() const { return (R_t + xfer_rows - 1) / xfer_rows; }
@@ -61,16 +75,18 @@ struct Geom {
 
 // Walk the chunks of item (entry e, row-block xb) in order. f(worker_index, l1_addr, bytes, is_last_chunk).
 // A chunk is a run of <= run_pages landing tiles of one row inside one member (contiguous in that member's L1);
-// a member's segment of a row is split into balanced chunks.
+// a member's segment of a row is split into balanced chunks. from_input: l1_addr is the chunk's source in the
+// member's resident input shard (native HEIGHT own slice) instead of its landing slot (same chunk boundaries).
 template <typename F>
-FORCE_INLINE void for_each_chunk_of_item(const Geom& g, const Entry& e, uint32_t xb, uint32_t cpr, F&& f) {
+FORCE_INLINE void for_each_chunk_of_item(
+    const Geom& g, const Entry& e, uint32_t xb, uint32_t cpr, F&& f, bool from_input = false) {
     const uint32_t t0 = e.q * g.Wt_lp + e.c0, t1 = e.q * g.Wt_lp + e.c1;
     const uint32_t r0 = xb * g.xfer_rows;
     const uint32_t rows = g.item_rows(xb);
     uint32_t left = rows * cpr;
     for (uint32_t r = r0; r < r0 + rows; ++r) {
-        const uint32_t grp = r % g.n_groups;
-        const uint32_t li = r / g.n_groups;
+        uint32_t grp, li;
+        g.place(r, grp, li);
         for (uint32_t m = 0; m < g.k; ++m) {
             const uint32_t ws = g.ws(m), we = g.ws(m + 1);
             const uint32_t a = t0 > ws ? t0 : ws;
@@ -84,7 +100,8 @@ FORCE_INLINE void for_each_chunk_of_item(const Geom& g, const Entry& e, uint32_t
             uint32_t off = a;
             for (uint32_t c = 0; c < nch; ++c) {
                 const uint32_t n = base_n + (c < rem ? 1 : 0);
-                const uint32_t addr = g.landing_base + (li * g.w_pitch + (off - ws)) * g.page_bytes;
+                const uint32_t addr = from_input ? g.x_base + (li * g.Wt_lp + (off - e.q * g.Wt_lp)) * g.page_bytes
+                                                 : g.landing_base + (li * g.w_pitch + (off - ws)) * g.page_bytes;
                 --left;
                 f(grp * g.k + m, addr, n * g.page_bytes, left == 0);
                 off += n;

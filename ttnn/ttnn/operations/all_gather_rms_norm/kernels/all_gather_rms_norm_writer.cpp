@@ -22,6 +22,8 @@
 //   member's partial(b+1), produced only after combine(b)), so a per-parity count only completes with all k
 //   partials of block b.
 // store_block: per tile-row, in units of <= out_unit tiles (clamped to the cb_out ring end): wait, write, flush, pop.
+//   Native sharded placement (out_native, Refinement 1): cb_out_tiles IS the resident output shard (zero-copy);
+//   compute packs every row at its final place, so the store is only the consumer credit (wait + pop, no write).
 
 #include <cstdint>
 
@@ -51,7 +53,8 @@ constexpr uint32_t sem_inv_id = get_compile_time_arg_val(17);      // owner: inv
 constexpr uint32_t gathered_cb_pages = get_compile_time_arg_val(18);
 constexpr uint32_t sem_partials_odd_id = get_compile_time_arg_val(19);  // partials of odd blocks (see below)
 constexpr uint32_t GAMMA_READ_ALIGN = get_compile_time_arg_val(20);     // DRAM read alignment (>= one face row)
-constexpr auto out_args = TensorAccessorArgs<21>();
+constexpr bool out_native = get_compile_time_arg_val(21) != 0;          // cb_out_tiles backed on the output shard
+constexpr auto out_args = TensorAccessorArgs<22>();
 [[maybe_unused]] constexpr auto gamma_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
 
 constexpr uint32_t FACE_DIM = 16;
@@ -227,6 +230,7 @@ void kernel_main() {
     const uint32_t core_w = get_arg_val<uint32_t>(a++);
     const uint32_t member_idx = get_arg_val<uint32_t>(a++);
     [[maybe_unused]] const uint32_t gamma_addr = get_arg_val<uint32_t>(a++);
+    [[maybe_unused]] const uint32_t out_pad = get_arg_val<uint32_t>(a++);  // native: pad pages per output row
     const uint32_t peers_idx = a;  // k packed (x | y << 16) NoC coords of the group's members
 
     // output tiles this member writes per row: regime A its landing (= output) tiles, regime N the dense row
@@ -283,6 +287,12 @@ void kernel_main() {
         }
 
         // ---- store_block ----
+        if constexpr (out_native) {
+            const uint32_t n = rows * (t_count + out_pad);
+            cb_wait_front(cb_out_tiles, n);
+            cb_pop_front(cb_out_tiles, n);
+            continue;
+        }
         for (uint32_t i = i0; i < i0 + rows; ++i) {
             const uint32_t r = grp + i * n_groups;
             const uint32_t first_page = r * out_w_tiles + t_first;

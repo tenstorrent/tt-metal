@@ -7,6 +7,9 @@ Not collected by directory runs (no test_ prefix in the file name); run it by pa
     AGRMS_ABLATE=TRANSPORT CCL_PERF_EXPERIMENTS=3 scripts/run_safe_pytest.sh --no-precompile \\
         tests/ttnn/unit_tests/operations/all_gather_rms_norm/perf_ablation_all_gather_rms_norm.py -s
 
+Sharded A/B (Refinement 1): AGRMS_PERF_SHAPE=1,1,640,384 AGRMS_PERF_MEMORY_LAYOUT=HEIGHT_SHARDED re-runs the focus
+case's axes on that per-device shape / placement; AGRMS_NATIVE_SHARD=0 selects the TensorAccessor fallback.
+
 The un-ablated run is checked against the golden reference first; ablated runs are not (their output is garbage).
 Headline numbers come from eval/golden_tests/all_gather_rms_norm/perf_measure.py, not from here.
 """
@@ -57,6 +60,12 @@ def test_perf_ablation(inputs, axes, extras, mesh_cache, request):
         resolved, _ = resolve_pinned_mesh(extras["mesh_shape"], axes["topology"], axes["cluster_axis"])
         shape = resolved or shape
     mesh = mesh_cache.get(shape, trace_region_size=ccl_perf.TRACE_REGION_SIZE)
+    if os.environ.get("AGRMS_PERF_SHAPE"):
+        inputs = (tuple(int(v) for v in os.environ["AGRMS_PERF_SHAPE"].split(",")),)
+    if os.environ.get("AGRMS_PERF_MEMORY_LAYOUT"):
+        import ttnn
+
+        axes = dict(axes, memory_layout=getattr(ttnn.TensorMemoryLayout, os.environ["AGRMS_PERF_MEMORY_LAYOUT"]))
     call, check = prepare_all_gather_rms_norm(inputs, mesh_device=mesh, extras=extras, op=all_gather_rms_norm, **axes)
     out = call()
     if not ABLATE:
@@ -67,5 +76,7 @@ def test_perf_ablation(inputs, axes, extras, mesh_cache, request):
     if out_dir:
         from pathlib import Path
 
-        path = Path(out_dir) / f"{inputs[0][-2]}x{inputs[0][-1]}-{ABLATE or 'none'}.json"
+        ml = os.environ.get("AGRMS_PERF_MEMORY_LAYOUT", "")
+        nat = "" if os.environ.get("AGRMS_NATIVE_SHARD", "1") == "1" else "-fallback"
+        path = Path(out_dir) / f"{inputs[0][-2]}x{inputs[0][-1]}{ml and '-' + ml}{nat}-{ABLATE or 'none'}.json"
     ccl_perf.run(mesh, call, experiments=EXPERIMENTS, out_path=path, label=label)

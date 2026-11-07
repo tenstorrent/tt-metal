@@ -13,6 +13,10 @@
 //                        column x % W_local), zeros for x >= W; streamed in out_unit units into cb_x_aligned.
 // cb_x_landing is never reserved for writing: its bytes arrive by DMA (this kernel's DRAM reads and the peers'
 // fabric writes); the CB credit only publishes them to compute. The ring holds every block and never wraps.
+// Native HEIGHT shards (own_in_shard, Refinement 1): the own slice is NOT loaded — it is the resident input shard,
+// published once on cb_x_in (zero-copy CB backed on the shard; compute and the ports read it in place). Regime N
+// zeroes the W padding of the own tail tile there (the shard's tile padding, never logical data) and composes the
+// own slice's columns straight from it.
 
 #include <cstdint>
 
@@ -37,7 +41,8 @@ constexpr uint32_t elem_bytes = get_compile_time_arg_val(10);
 constexpr uint32_t num_streams = get_compile_time_arg_val(11);
 constexpr uint32_t sem_local_loaded_id = get_compile_time_arg_val(12);
 constexpr uint32_t aligned_cb_pages = get_compile_time_arg_val(13);  // regime N: cb_x_aligned capacity
-constexpr auto x_args = TensorAccessorArgs<14>();
+constexpr bool own_in_shard = get_compile_time_arg_val(14) != 0;     // native HEIGHT: own slice = input shard
+constexpr auto x_args = TensorAccessorArgs<15>();
 
 constexpr uint32_t TILE_DIM = 32;
 constexpr uint32_t FACE_DIM = 16;
@@ -71,8 +76,9 @@ FORCE_INLINE void copy_run(uint32_t dst, uint32_t src, uint32_t n) {
     }
 }
 
-// Regime N: dense output tile t of local row li, composed from the landing tiles of that row.
-FORCE_INLINE void compose_tile(uint32_t dst_tile, uint32_t landing_row, uint32_t t) {
+// Regime N: dense output tile t of local row li, composed from the landing tiles of that row (own slice p_self
+// from the input shard row xin_row when own_in_shard).
+FORCE_INLINE void compose_tile(uint32_t dst_tile, uint32_t landing_row, uint32_t xin_row, uint32_t p_self, uint32_t t) {
     uint32_t x = t * TILE_DIM;
     const uint32_t x_end = x + TILE_DIM;
     while (x < x_end) {
@@ -84,7 +90,8 @@ FORCE_INLINE void compose_tile(uint32_t dst_tile, uint32_t landing_row, uint32_t
         const uint32_t q = x / W_local;
         const uint32_t c = x - q * W_local;
         const uint32_t cc = c % TILE_DIM;
-        const uint32_t src_tile = landing_row + (q * Wt_lp + c / TILE_DIM) * page_bytes;
+        const uint32_t src_tile = (own_in_shard && q == p_self) ? xin_row + (c / TILE_DIM) * page_bytes
+                                                                : landing_row + (q * Wt_lp + c / TILE_DIM) * page_bytes;
         uint32_t len = TILE_DIM - xo;
         len = (FACE_DIM - xo % FACE_DIM) < len ? (FACE_DIM - xo % FACE_DIM) : len;
         len = (W_local - c) < len ? (W_local - c) : len;
@@ -125,16 +132,29 @@ void kernel_main() {
     const uint32_t s_lo = p_self * Wt_lp, s_hi = s_lo + Wt_lp;
     const uint32_t own_lo = w_tile_start > s_lo ? w_tile_start : s_lo;
     const uint32_t own_hi = (w_tile_start + core_w) < s_hi ? (w_tile_start + core_w) : s_hi;
+    [[maybe_unused]] uint32_t xin = 0;
+    if constexpr (own_in_shard) {
+        cb_reserve_back(cb_x_in, n_rows * Wt_lp);
+        xin = get_write_ptr(cb_x_in);
+        if constexpr (regime_n && w_valid_tail < TILE_DIM) {
+            for (uint32_t i = 0; i < n_rows; ++i) {
+                zero_cols(xin + (i * Wt_lp + Wt_lp - 1) * page_bytes, w_valid_tail);
+            }
+        }
+        cb_push_back(cb_x_in, n_rows * Wt_lp);
+    }
     if (own_lo < own_hi) {
         AGRMS_ZONE("AG_OWN_LOAD");
-        for (uint32_t i = 0; i < n_rows; ++i) {
+        for (uint32_t i = 0; i < n_rows && !own_in_shard; ++i) {
             const uint32_t r = grp + i * n_groups;
             uint32_t dst = landing + (i * w_pitch + (own_lo - w_tile_start)) * page_bytes;
             for (uint32_t t = own_lo; t < own_hi; ++t, dst += page_bytes) {
                 noc_async_read(x_acc.get_noc_addr(r * Wt_lp + (t - s_lo)), dst, page_bytes);
             }
         }
-        noc_async_read_barrier();
+        if constexpr (!own_in_shard) {
+            noc_async_read_barrier();
+        }
         const uint32_t loaded_addr = get_semaphore(sem_local_loaded_id);
         for (uint32_t pi = 0; pi < n_ports; ++pi) {
             const uint32_t xy = get_arg_val<uint32_t>(ports_idx + pi);
@@ -171,6 +191,9 @@ void kernel_main() {
             if constexpr (w_valid_tail < TILE_DIM) {
                 for (uint32_t i = i0; i < i0 + rows; ++i) {
                     for (uint32_t q = 0; q < G; ++q) {
+                        if (own_in_shard && q == p_self) {
+                            continue;  // zeroed in the input shard above
+                        }
                         zero_cols(landing + (i * w_pitch + q * Wt_lp + Wt_lp - 1) * page_bytes, w_valid_tail);
                     }
                 }
@@ -186,6 +209,7 @@ void kernel_main() {
         if constexpr (regime_n) {
             for (uint32_t i = i0; i < i0 + rows; ++i) {
                 const uint32_t landing_row = landing + i * w_pitch * page_bytes;
+                const uint32_t xin_row = xin + i * Wt_lp * page_bytes;
                 for (uint32_t t0 = 0; t0 < out_w_tiles;) {
                     // a unit is written linearly from the write pointer: clamp it to the ring end
                     uint32_t n = (out_w_tiles - t0) < out_unit ? (out_w_tiles - t0) : out_unit;
@@ -193,7 +217,7 @@ void kernel_main() {
                     cb_reserve_back(cb_x_aligned, n);
                     const uint32_t wptr = get_write_ptr(cb_x_aligned);
                     for (uint32_t j = 0; j < n; ++j) {
-                        compose_tile(wptr + j * page_bytes, landing_row, t0 + j);
+                        compose_tile(wptr + j * page_bytes, landing_row, xin_row, p_self, t0 + j);
                     }
                     cb_push_back(cb_x_aligned, n);
                     aligned_pos = (aligned_pos + n == aligned_cb_pages) ? 0 : aligned_pos + n;

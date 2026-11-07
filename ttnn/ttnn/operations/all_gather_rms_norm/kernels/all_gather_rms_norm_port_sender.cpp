@@ -52,6 +52,7 @@ void kernel_main() {
     constexpr uint32_t Wt_lp = get_compile_time_arg_val(8);
     constexpr uint32_t relay_lag = get_compile_time_arg_val(9);
     constexpr uint32_t sem_arrival_id = get_compile_time_arg_val(10);
+    constexpr uint32_t rows_per_group = get_compile_time_arg_val(11);  // 0: round-robin rows (see Geom::place)
     constexpr uint32_t chunk_bytes = run_pages * page_bytes;
     constexpr uint32_t num_headers = group;
     constexpr uint32_t cb = agrms_cb::cb_port_chunks;
@@ -85,7 +86,9 @@ void kernel_main() {
         xfer_rows,
         Wt_lp,
         get_write_ptr(agrms_cb::cb_x_landing),
-        ws_idx};
+        ws_idx,
+        rows_per_group,
+        0};
     const uint32_t n_xb = g.n_xb();
     auto out_entry = [&](uint32_t e) { return unpack_entry(get_arg_val<uint32_t>(out_idx + e)); };
 

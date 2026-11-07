@@ -62,7 +62,7 @@
 - **Focus breakdown**: full 31.36 · TRANSPORT-only 26.22 · LOCAL-only 14.73 · empty program 0.75 µs →
   the transport binds; 5.1 µs is exposed beyond it; the local work is the next binder below ~15 µs.
 
-### [ ] Refinement 1 — Native sharded placement: consume the input shard in place, pack into the output shard
+### [x] Refinement 1 — Native sharded placement: consume the input shard in place, pack into the output shard
 
 **Goal**: complete `HEIGHT_SHARDED` / `WIDTH_SHARDED` (already in `SUPPORTED["memory_layout"]`) **natively**. Today
 every member reads its rows through a sharded `TensorAccessor` with a work split that ignores the shard grid, and
@@ -99,6 +99,19 @@ No `SUPPORTED` change: this replaces a tolerated path with the implemented one.
 shard is read with no `TensorAccessor` / NoC read of the core's own shard, and the output is packed directly into
 the output shard. Device-ns on a representative sharded shape (e.g. HEIGHT `(1,1,640,384)` ring L2 and WIDTH
 `(1,1,64,512)`) does not regress against Phase 0. Interleaved cells and the perf cases do not regress.
+**Outcome**: native path built for both layouts, behind a stated predicate (`native_shard_split` + `native_keeps_up`).
+HEIGHT: one group per shard, k = 1. The own slice is read in place from `cb_x_in` (compute, compose, ports), and the
+output is packed into `cb_out_tiles` backed on the output shard. WIDTH: k = output shard columns, own tiles gathered
+from the input shards, output packed into the shard. The ports move off the shard cores. Remote slices still land in
+`cb_x_landing`, not the output shard: the ports relay from the landing, so normalizing it in place would forward
+normalized data downstream.
+Fastest chip, QB2 1×4 ring L2, fallback → native: HEIGHT 640×384 **41.4 → 34.9 µs**, HEIGHT 2048×384 93.4 → 68.2 µs.
+These shapes lose natively: HEIGHT 128×512 (20.2 → 27.6), WIDTH 64×512 (14.3 → 32.6: 64 one-tile members, so
+one-tile packets and a 64-way combine; TRANSPORT-only 9.5 → 21.2, LOCAL-only 6.7 → 14.6), WIDTH 32×4096 (24.9 → 32.7).
+The keep-up gate (per-core work ≤ T_xfer, the split's own cost model) keeps those on the fallback, so they measure as
+in Phase 0 (20.25, 14.28 µs). Perf cases unchanged: 31.46 / 41.70 / 100.02 µs (Phase 0 31.36 / 41.51 / 99.89).
+Next: make narrow-shard WIDTH keep up. Merge adjacent one-tile members' runs into one packet (scatter headers,
+Refinement 3) and give the k-way combine a hierarchy. Not done here: that is transport / combine work, not placement.
 
 ### [ ] Refinement 2 — bfloat8_b with W_local non-tile-aligned (regime N compose on a bf16 staging row)
 

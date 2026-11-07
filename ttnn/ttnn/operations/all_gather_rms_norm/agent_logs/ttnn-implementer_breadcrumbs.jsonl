@@ -2,3 +2,4 @@
 {"event":"test_run","result":"pass","detail":"acceptance 26/26 production mode; debug 5/5; golden slices 120 passed / 72 xfailed / 0 failed","ts":"2026-11-07T02:37:51+00:00"}
 {"event":"fix_applied","detail":"relay_lag 1->2 (knob): focus 35.25->31.35 us, 640x512 46.13->41.55 us","ts":"2026-11-07T02:37:51+00:00"}
 {"event":"hypothesis","detail":"transport is packet-rate bound (~0.45 us/packet, 40 packets/port on focus); lever: far-half link split by rows / scatter packets","ts":"2026-11-07T02:37:51+00:00"}
+{"event":"test_run","refinement":1,"result":"pass","detail":"native shard path; gated by keep-up; golden sharded slices 76/76 + 114/114; perf cases unchanged","ts":"2026-11-07T05:56:13+00:00"}

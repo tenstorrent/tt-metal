@@ -41,6 +41,7 @@ CB_INV_RMS = 7  # per tile-row rsqrt(mean + eps)
 CB_X_ALIGNED = 8  # regime N: composed dense x tiles
 CB_OUT = 9  # normalized output tiles
 CB_PORT_CHUNKS = 10  # ports: chunk staging
+CB_X_IN = 11  # native HEIGHT shard: the resident input shard (zero-copy; own-slice columns read in place)
 
 # ---- Blocking-model knobs (op_design.md -> Blocking Model). Every extent below derives from these. ----
 BLOCK_ROW_TILES = 1  # tile-rows per block (rows land progressively: one row per block)
@@ -64,6 +65,11 @@ COMBINE_TILE_COST = 3  # per tile-row combine cost (x-tile equivalents), base op
 OWNER_MEMBER_COST = 0.4  # owner combine: per member (x-tile equivalents), base op
 TILIZED_WTILE_NS = 310  # per W tile of a tile-row, base op
 KEEP_UP_FRACTION = 0.5
+# Native sharded placement (Refinement 1) is taken when its shard-fixed split keeps up with the transport: per-core
+# work (same cost model) <= NATIVE_KEEP_UP_FRACTION * T_xfer. Measured (QB2 1x4 ring L2, fastest chip): HEIGHT
+# 640x384 keeps up (0.83) native 34.9 vs fallback 41.4 us; HEIGHT 2048x384 (0.39) 68.2 vs 93.4; HEIGHT 128x512 (1.8)
+# 27.6 vs 20.2; WIDTH 64x512 k=64 (1.9) 32.6 vs 14.3; WIDTH 32x4096 k=103 (1.1) 32.7 vs 24.9.
+NATIVE_KEEP_UP_FRACTION = 1.0
 XFER_FIT = {True: (8.4e-6, 77.2e9), False: (9.8e-6, 42.1e9)}  # (fixed s, bytes/s per link): fabric_all_gather fits
 PARTIAL_FACES_ONLY = True
 GAMMA_READ_ALIGN = 64  # BH DRAM read alignment: cb_gamma page stride (host) and gamma reads (writer CT arg)
@@ -76,6 +82,8 @@ PERF_ABLATE = os.environ.get("AGRMS_ABLATE", "")
 PROFILE_ZONES = os.environ.get("AGRMS_PROFILE_ZONES", "") == "1"
 # Test hook only (debug tests pin a split): AGRMS_FORCE_K = k restricts select_split to that candidate.
 FORCE_K = int(os.environ.get("AGRMS_FORCE_K", "0"))
+# Perf A/B only: AGRMS_NATIVE_SHARD=0 sends sharded tensors down the TensorAccessor fallback (the Phase 0 path).
+NATIVE_SHARD = os.environ.get("AGRMS_NATIVE_SHARD", "1") == "1"
 
 
 def _div_up(a, b):
@@ -288,8 +296,9 @@ def allowed_cores(mesh_device):
     return {(x, y) for x in range(grid.x) for y in range(grid.y)}
 
 
-def plan(mesh_device, cluster_axis, ring, L):
-    key = (id(mesh_device), cluster_axis, ring, L)
+def plan(mesh_device, cluster_axis, ring, L, avoid=frozenset()):
+    """avoid: logical cores the ports must not take (native shard placement: the member shard cores)."""
+    key = (id(mesh_device), cluster_axis, ring, L, avoid)
     if key in _PLAN_CACHE:
         return _PLAN_CACHE[key][1]
     mesh_shape = tuple(mesh_device.shape)
@@ -316,7 +325,7 @@ def plan(mesh_device, cluster_axis, ring, L):
                 )
             ch.links[d] = list(links[:L])
     # placement: each port next to its link's Ethernet core (fewest NoC1 hops); receive-only ports anywhere free
-    allowed = allowed_cores(mesh_device)
+    allowed = allowed_cores(mesh_device) - set(avoid)
     for ch in chips.values():
         taken = set()
         pending = []
@@ -469,12 +478,27 @@ def port_footprint(sz: Sizes, split: Split):
     return split.blocks_max * BLOCK_ROW_TILES * split.w_pitch * sz.T_in + 2 * sz.group * sz.run_pages * sz.T_in
 
 
+def transfer_time(geo: Geometry, sz: Sizes, ring: bool, L: int):
+    """Modelled transport time (s): fabric_all_gather fit for the G - 1 slices a chip receives."""
+    S = geo.M * geo.num_images * geo.W_local * sz.T_in / (TILE * TILE)
+    t0, rate = XFER_FIT[ring]
+    return t0 + (geo.G - 1) * S / (rate * L)
+
+
+def combine_cost(k: int, owner: bool):
+    """Per tile-row combine cost of a k-member group (x-tile equivalents, base op)."""
+    return 0 if k == 1 else (COMBINE_TILE_COST if not owner else COMBINE_TILE_COST + OWNER_MEMBER_COST * k)
+
+
+def native_keeps_up(geo: Geometry, sz: Sizes, split: Split, ring: bool, L: int):
+    total = split.rows_max * (split.w_pitch + combine_cost(split.k, split.combine_owner))
+    return total * TILIZED_WTILE_NS * 1e-9 <= NATIVE_KEEP_UP_FRACTION * transfer_time(geo, sz, ring, L)
+
+
 def select_split(geo: Geometry, sz: Sizes, n_workers: int, budget: int, ring: bool, L: int):
     """op_design.md -> Regime / split selection. Objective: the tail after the last landing, among the splits that
     keep up with the transport; else the smallest total; else RuntimeError."""
-    S = geo.M * geo.num_images * geo.W_local * sz.T_in / (TILE * TILE)
-    t0, rate = XFER_FIT[ring]
-    T_xfer = t0 + (geo.G - 1) * S / (rate * L)
+    T_xfer = transfer_time(geo, sz, ring, L)
     k_cap = min((MAX_RUNTIME_ARGS - 16) // 2, n_workers)  # port reader RT args carry 2k + O(G) values
     fits, keeps = [], []
     for k in nested_candidates(geo):
@@ -491,7 +515,7 @@ def select_split(geo: Geometry, sz: Sizes, n_workers: int, budget: int, ring: bo
         split = Split(k, ws, w_pitch, n_groups, rows_max, blocks_max, owner)
         if _plan_bytes(cb_plan(geo, sz, split)) > budget or port_footprint(sz, split) > budget:
             continue
-        C = 0 if k == 1 else (COMBINE_TILE_COST if not owner else COMBINE_TILE_COST + OWNER_MEMBER_COST * k)
+        C = combine_cost(k, owner)
         total = rows_max * (w_pitch + C)
         tail = BLOCK_ROW_TILES * (w_pitch + C)
         fits.append((total, rows_max, split))
@@ -505,6 +529,83 @@ def select_split(geo: Geometry, sz: Sizes, n_workers: int, budget: int, ring: bo
         f"all_gather_rms_norm: no admissible split fits L1 (budget {budget} B) for per-device shape "
         f"rows {geo.R_t} x slice {geo.Wt_lp} tiles x G {geo.G} (dram_landing regime is deferred)"
     )
+
+
+# ---------------------------------------------------------------------------------------------------------------------
+# Native sharded placement (Refinement 1): the shard grid IS the work split (base op Refinements 2 / 4)
+# ---------------------------------------------------------------------------------------------------------------------
+
+
+@dataclass
+class NativeShard:
+    kind: str  # "height" | "width"
+    split: Split
+    cores: list  # member cores in member order (worker index g * k + m), = the output shard cores in shard order
+    rows_per_group: int  # HEIGHT: tile-rows per shard (group gi holds rows [gi * rpg, ...)); WIDTH: 0 (one group)
+    group_rows: list  # tile-rows of each group
+    out_pitch: int  # tiles per row of the output shard (WIDTH: a ragged last member pushes pad pages up to it)
+
+
+def _ordered_shard_cores(grid, row_major: bool):
+    """Cores of a shard grid in shard-assignment order (row-major or column-major) — base op."""
+    cores = set()
+    for r in grid.ranges():
+        for y in range(r.start.y, r.end.y + 1):
+            for x in range(r.start.x, r.end.x + 1):
+                cores.add((x, y))
+    return sorted(cores, key=(lambda c: (c[1], c[0])) if row_major else (lambda c: (c[0], c[1])))
+
+
+def _shard_geom(tensor):
+    mc = tensor.memory_config()
+    ss = mc.shard_spec
+    if not mc.is_sharded() or ss is None or mc.buffer_type != ttnn.BufferType.L1:
+        return None
+    sh, sw = int(ss.shape[0]), int(ss.shape[1])
+    if sh % TILE or sw % TILE:
+        return None
+    row_major = ss.orientation == ttnn.ShardOrientation.ROW_MAJOR
+    return mc.memory_layout, sh // TILE, sw // TILE, _ordered_shard_cores(ss.grid, row_major)
+
+
+def native_shard_split(geo: Geometry, input_tensor, output_tensor):
+    """The native (shard-resident) split, or None when the shard geometry needs the TensorAccessor fallback.
+
+    Predicate (op_design.md -> Regimes, sharded_zero_copy):
+      HEIGHT: input and output HEIGHT_SHARDED with the same row partition (shard height, grid, orientation) and
+        full-width shards. One group per shard (k = 1, contiguous rows), member = the shard core. The own-slice
+        columns are read in place from the input shard (cb_x_in); the output is packed into the output shard.
+      WIDTH: output WIDTH_SHARDED with full-height shards, W_local % 32 == 0 (regime A): one group, k = output
+        shard columns, member m = output shard core m holding gathered tiles [m * pw, (m + 1) * pw). The own slice
+        is gathered from the input shards (cross-core reads); the output is packed into the output shard.
+      Both: the ports must be placeable off the member cores (checked by the caller) and the CBs must fit L1.
+    """
+    gi, go = _shard_geom(input_tensor), _shard_geom(output_tensor)
+    if gi is None or go is None or gi[0] != go[0]:
+        return None
+    ml, oh, ow, ocores = go
+    if ml == ttnn.TensorMemoryLayout.HEIGHT_SHARDED:
+        _, ih, iw, icores = gi
+        if ih != oh or icores != ocores or iw != geo.Wt_lp or ow != geo.out_w_tiles:
+            return None
+        n = _div_up(geo.R_t, oh)
+        if n > len(ocores):
+            return None
+        land_w = geo.land_w_tiles
+        rows = [min(oh, geo.R_t - g * oh) for g in range(n)]
+        split = Split(1, [0, land_w], land_w, n, oh, _div_up(oh, BLOCK_ROW_TILES), False)
+        return NativeShard("height", split, ocores[:n], oh, rows, geo.out_w_tiles)
+    if ml == ttnn.TensorMemoryLayout.WIDTH_SHARDED:
+        if geo.regime_n or oh != geo.R_t:
+            return None
+        total = geo.land_w_tiles
+        k = _div_up(total, ow)
+        if k > len(ocores) or k > (MAX_RUNTIME_ARGS - 16) // 2:
+            return None
+        ws = [min(m * ow, total) for m in range(k + 1)]
+        split = Split(k, ws, ow, 1, geo.R_t, _div_up(geo.R_t, BLOCK_ROW_TILES), k > K_SYM_MAX)
+        return NativeShard("width", split, ocores[:k], 0, [geo.R_t], ow)
+    return None
 
 
 def cb_l1_budget(device) -> int:
@@ -554,6 +655,13 @@ def _cb(index, pages, page_bytes, dtype, core_ranges):
     )
 
 
+def _shard_backed_cb(index, tensor, core_ranges):
+    """CB aliasing a TILE tensor's resident shard (zero-copy: the shard IS the CB's L1) — base op."""
+    cb = ttnn.cb_descriptor_from_sharded_tensor(index, tensor)
+    cb.core_ranges = core_ranges
+    return cb
+
+
 def _pack_entry(q, c0, c1):
     assert q < 256 and c0 < 4096 and c1 < 4096
     return (q << 24) | (c0 << 12) | c1
@@ -580,7 +688,7 @@ def create_mesh_program_descriptor(
     input_tensor, gamma, output_tensor, *, cluster_axis, ring, L, epsilon, compute_kernel_config
 ):
     mesh_device = input_tensor.device()
-    chips, G = plan(mesh_device, cluster_axis, ring, L)
+    G = tuple(mesh_device.shape)[cluster_axis]
     geo = derive_geometry(input_tensor.shape, G)
     has_gamma = gamma is not None
     x_dtype = input_tensor.dtype
@@ -592,15 +700,45 @@ def create_mesh_program_descriptor(
     T_g, g_tail = gamma_page_layout(gamma.dtype) if has_gamma else (0, 0)
     sz = Sizes(T_in, ttnn.tile_size(t_acc), T_g, g_tail, run_pages, group, has_gamma)
 
-    # ---- worker set: allowed cores minus the union of every chip's port cores (identical on every chip) ----
+    # ---- native sharded placement (Refinement 1): the shard grid fixes the split; the ports avoid its cores ----
     allowed = allowed_cores(mesh_device)
+    budget = cb_l1_budget(mesh_device)
+    native = native_shard_split(geo, input_tensor, output_tensor) if NATIVE_SHARD else None
+    if native is not None:
+        resident = {CB_OUT} | ({CB_X_IN} if native.kind == "height" else set())  # shard-backed: not CB budget
+        nplan = cb_plan(geo, sz, native.split)
+        fits = sum(pg * pb for i, (pg, pb) in nplan.items() if i not in resident) <= budget
+        if not fits or port_footprint(sz, native.split) > budget or not set(native.cores) <= allowed:
+            native = None
+        elif not native_keeps_up(geo, sz, native.split, ring, L):
+            native = None  # the shard-fixed split would bind the call: the round-robin split is faster
+    chips = None
+    if native is not None:
+        try:
+            chips, _ = plan(mesh_device, cluster_axis, ring, L, frozenset(native.cores))
+        except ValueError:  # not enough cores off the shard grid for the ports: TensorAccessor fallback
+            native = None
+    if chips is None:
+        chips, _ = plan(mesh_device, cluster_axis, ring, L)
+    native_h = native is not None and native.kind == "height"
+
+    # ---- worker set: allowed cores minus the union of every chip's port cores (identical on every chip) ----
     port_union = {c for ch in chips.values() for c in ch.ports.values()}
     workers = sorted(allowed - port_union, key=lambda c: (c[1], c[0]))
     if not workers:
         raise ValueError("all_gather_rms_norm: no worker core left after the ports")
-    split = select_split(geo, sz, len(workers), cb_l1_budget(mesh_device), ring, L)
+    if native is not None:
+        split = native.split
+        active = list(native.cores)  # worker index g * k + m = shard order
+        assert not (set(active) & port_union)
+        rows_per_group = native.rows_per_group
+        group_rows = native.group_rows
+    else:
+        split = select_split(geo, sz, len(workers), budget, ring, L)
+        active = workers[: split.n_groups * split.k]  # worker index g * k + m
+        rows_per_group = 0  # round-robin rows: row r -> group r % n_groups
+        group_rows = [len(range(gi, geo.R_t, split.n_groups)) for gi in range(split.n_groups)]
     k, ws, w_pitch, n_groups = split.k, split.ws, split.w_pitch, split.n_groups
-    active = workers[: n_groups * k]  # worker index g * k + m
     virt = lambda c: mesh_device.worker_core_from_logical_core(ttnn.CoreCoord(*c))
     noc_xy = [(lambda v: v.x | (v.y << 16))(virt(c)) for c in active]
 
@@ -620,6 +758,8 @@ def create_mesh_program_descriptor(
     out_w = geo.out_w_tiles if geo.regime_n else w_pitch  # tiles normalized / stored per row (pitch)
     unit = out_unit_of(geo, out_w)
     plan_ = cb_plan(geo, sz, split)
+    if native is not None:
+        plan_.pop(CB_OUT)  # backed on the output shard below
 
     # ---- semaphores (program, on every core of every chip's union set; ids identical everywhere) ----
     n_streams = 2 * L
@@ -677,16 +817,18 @@ def create_mesh_program_descriptor(
         n_streams,
         SEM_LOCAL_LOADED,
         plan_.get(CB_X_ALIGNED, (0, 0))[0],
+        1 if native_h else 0,  # own slice read in place from the input shard (cb_x_in)
     ] + list(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
     owner = 1 if split.combine_owner else 0
     row_gather = _div_up(k, ROW_GATHER)
     compute_ct = [k, w_pitch, BLOCK_ROW_TILES, 1 if geo.regime_n else 0, unit, geo.out_w_tiles, owner, row_gather]
+    compute_ct += [1 if native_h else 0, geo.Wt_lp]
     writer_ct = [
         out_page,
         geo.out_w_tiles,
         k,
         unit,
-        plan_[CB_OUT][0],
+        plan_[CB_OUT][0] if native is None else 0,
         SEM_PARTIALS,
         1 if PARTIAL_FACES_ONLY else 0,
         1 if (has_gamma and gamma.layout == ttnn.TILE_LAYOUT) else 0,
@@ -703,6 +845,7 @@ def create_mesh_program_descriptor(
         plan_.get(CB_GATHERED, (0, 0))[0],
         SEM_PARTIALS_ODD,
         GAMMA_READ_ALIGN,
+        1 if native is not None else 0,  # output packed into the resident output shard (no NoC writes)
     ]
     writer_ct += list(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
     writer_ct += list(
@@ -723,6 +866,7 @@ def create_mesh_program_descriptor(
         CB_INV_OWNED: t_acc,
         CB_X_ALIGNED: x_dtype,
         CB_OUT: x_dtype,
+        CB_X_IN: x_dtype,
     }
     dm = lambda risc, noc: ttnn.DataMovementConfigDescriptor(processor=risc, noc=noc)
 
@@ -731,6 +875,7 @@ def create_mesh_program_descriptor(
         PERF_ABLATE,
         PROFILE_ZONES,
         FORCE_K,
+        NATIVE_SHARD,
         K_SYM_MAX,
         RELAY_LAG,
         ITEM_MIN_CHUNKS,
@@ -750,6 +895,7 @@ def create_mesh_program_descriptor(
         k,
         n_groups,
         xfer_rows,
+        native.kind if native is not None else None,
     )
 
     mesh_desc = ttnn.MeshProgramDescriptor()
@@ -764,6 +910,10 @@ def create_mesh_program_descriptor(
             if idx != CB_X_LANDING:
                 cbs.append(_cb(idx, pages, page_bytes, cb_dtype[idx], worker_crs))
         cbs.append(_cb(CB_PORT_CHUNKS, 2 * group * run_pages, T_in, x_dtype, port_crs))
+        if native is not None:  # zero-copy: the shards ARE these CBs' L1
+            cbs.append(_shard_backed_cb(CB_OUT, output_tensor, worker_crs))
+            if native_h:
+                cbs.append(_shard_backed_cb(CB_X_IN, input_tensor, worker_crs))
         semaphores = [ttnn.SemaphoreDescriptor(id=i, core_ranges=all_crs, initial_value=0) for i in range(NUM_SEMS)]
         program = ttnn.ProgramDescriptor(kernels=[], semaphores=semaphores, cbs=cbs)
 
@@ -799,7 +949,7 @@ def create_mesh_program_descriptor(
         reader_rt, writer_rt, compute_rt = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
         own_members = 0
         for gi in range(n_groups):
-            n_rows = len(range(gi, geo.R_t, n_groups))
+            n_rows = group_rows[gi]
             for m in range(k):
                 x, y = active[gi * k + m]
                 wst, cw = ws[m], ws[m + 1] - ws[m]
@@ -807,9 +957,12 @@ def create_mesh_program_descriptor(
                     own_members += 1
                 streams = [stream_cnt[(d, l)][1][m] for d in DIRS for l in range(L)]
                 reader_rt[x][y] = [x_addr, gi, n_rows, wst, cw, p, len(port_xy)] + port_xy + streams
-                compute_rt[x][y] = [n_rows, cw, inv_w_bits, eps_bits, (out_w if geo.regime_n else cw) + g_tail, m]
+                # native: a ragged last WIDTH member pads each output row up to the shard pitch
+                t_cnt = geo.out_w_tiles if geo.regime_n else cw
+                out_pad = native.out_pitch - t_cnt if native is not None else 0
+                compute_rt[x][y] = [n_rows, cw, inv_w_bits, eps_bits, t_cnt + g_tail, m, p * geo.Wt_lp, out_pad]
                 peers = [noc_xy[gi * k + mm] for mm in range(k)]
-                writer_rt[x][y] = [out_addr, gi, n_rows, wst, cw, m, g_addr] + peers
+                writer_rt[x][y] = [out_addr, gi, n_rows, wst, cw, m, g_addr, out_pad] + peers
         kernels = [
             ttnn.KernelDescriptor(
                 kernel_source=str(KERNEL_DIR / "all_gather_rms_norm_reader.cpp"),
@@ -855,6 +1008,7 @@ def create_mesh_program_descriptor(
                     + [_pack_entry(*e) for e in in_all]
                     + cnt
                     + ws
+                    + [x_addr]
                 )
                 sending = has_sends(coord, d, l)
                 # the peer's opposite-direction port (same link) sends into me: it waits for my ready
@@ -872,8 +1026,8 @@ def create_mesh_program_descriptor(
                 else:
                     args += [ready_addr, 0, 0, 0, 0, 0, 0, 0, 0]
                 psender_rt[x][y] = args
-        reader_port_ct = port_ct + [SEM_ARRIVAL, SEM_LOCAL_LOADED]
-        sender_port_ct = port_ct + [SEM_ARRIVAL]
+        reader_port_ct = port_ct + [SEM_ARRIVAL, SEM_LOCAL_LOADED, rows_per_group, 1 if native_h else 0]
+        sender_port_ct = port_ct + [SEM_ARRIVAL, rows_per_group]
         kernels += [
             ttnn.KernelDescriptor(
                 kernel_source=str(KERNEL_DIR / "all_gather_rms_norm_port_reader.cpp"),

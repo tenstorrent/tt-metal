@@ -40,6 +40,8 @@ void kernel_main() {
     constexpr uint32_t relay_lag = get_compile_time_arg_val(9);
     constexpr uint32_t sem_arrival_id = get_compile_time_arg_val(10);
     constexpr uint32_t sem_local_loaded_id = get_compile_time_arg_val(11);
+    constexpr uint32_t rows_per_group = get_compile_time_arg_val(12);   // 0: round-robin rows (see Geom::place)
+    constexpr bool own_from_input = get_compile_time_arg_val(13) != 0;  // native HEIGHT: own slice in the input shard
     constexpr uint32_t chunk_bytes = run_pages * page_bytes;
     constexpr uint32_t cb = agrms_cb::cb_port_chunks;
 
@@ -55,6 +57,8 @@ void kernel_main() {
     const uint32_t cnt_idx = a;
     a += k;
     const uint32_t ws_idx = a;
+    a += k + 1;
+    const uint32_t x_addr = get_arg_val<uint32_t>(a++);
 
     const Geom g{
         page_bytes,
@@ -66,7 +70,9 @@ void kernel_main() {
         xfer_rows,
         Wt_lp,
         get_write_ptr(agrms_cb::cb_x_landing),
-        ws_idx};
+        ws_idx,
+        rows_per_group,
+        x_addr};
     const uint32_t n_xb = g.n_xb();
     volatile tt_l1_ptr uint32_t* arrived =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(sem_arrival_id));
@@ -110,7 +116,8 @@ void kernel_main() {
         const uint32_t r0 = xb * xfer_rows;
         const uint32_t rows = g.item_rows(xb);
         for (uint32_t r = r0; r < r0 + rows; ++r) {
-            const uint32_t grp = r % n_groups;
+            uint32_t grp, li;
+            g.place(r, grp, li);
             for (uint32_t m = 0; m < k; ++m) {
                 const uint32_t c = get_arg_val<uint32_t>(cnt_idx + m);
                 if (c != 0) {
@@ -131,23 +138,29 @@ void kernel_main() {
     // Batches end at the next multiple of `group` chunks in the CB (2 x group chunks: a reservation never wraps) or
     // at the end of an item (a relay waits on its upstream; an unpushed tail would hold every downstream back).
     uint32_t batch = 0, need = 0, pos = 0, wptr = 0;
-    auto stream_item = [&](const Entry& e, uint32_t xb) {
+    auto stream_item = [&](const Entry& e, uint32_t xb, bool from_input) {
         const uint32_t cpr = g.chunks_per_row(e);
-        for_each_chunk_of_item(g, e, xb, cpr, [&](uint32_t w, uint32_t addr, uint32_t bytes, bool last) {
-            if (batch == 0) {
-                need = group - pos % group;
-                cb_reserve_back(cb, run_pages * need);
-                wptr = get_write_ptr(cb);
-            }
-            const uint32_t xy = get_common_arg_val<uint32_t>(w);
-            noc_async_read(get_noc_addr(xy & 0xFFFF, xy >> 16, addr), wptr + batch * chunk_bytes, bytes);
-            if (++batch == need || last) {
-                noc_async_read_barrier();
-                cb_push_back(cb, run_pages * batch);
-                pos += batch;
-                batch = 0;
-            }
-        });
+        for_each_chunk_of_item(
+            g,
+            e,
+            xb,
+            cpr,
+            [&](uint32_t w, uint32_t addr, uint32_t bytes, bool last) {
+                if (batch == 0) {
+                    need = group - pos % group;
+                    cb_reserve_back(cb, run_pages * need);
+                    wptr = get_write_ptr(cb);
+                }
+                const uint32_t xy = get_common_arg_val<uint32_t>(w);
+                noc_async_read(get_noc_addr(xy & 0xFFFF, xy >> 16, addr), wptr + batch * chunk_bytes, bytes);
+                if (++batch == need || last) {
+                    noc_async_read_barrier();
+                    cb_push_back(cb, run_pages * batch);
+                    pos += batch;
+                    batch = 0;
+                }
+            },
+            from_input);
     };
 
     if (has_out) {
@@ -162,7 +175,7 @@ void kernel_main() {
         const Entry own = out_entry(0);
         for (uint32_t t = 0; t < steps; ++t) {
             if (t < n_xb && !own.empty()) {
-                stream_item(own, t);
+                stream_item(own, t, own_from_input);
             }
             if (has_in && t >= relay_lag) {
                 const int32_t s = static_cast<int32_t>(t - relay_lag);
@@ -177,7 +190,7 @@ void kernel_main() {
                 if (xb < n_xb) {
                     const Entry en = out_entry(e);
                     if (!en.empty()) {
-                        stream_item(en, xb);
+                        stream_item(en, xb, false);
                     }
                 }
             }
