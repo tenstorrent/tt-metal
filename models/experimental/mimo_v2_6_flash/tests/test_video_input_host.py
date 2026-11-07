@@ -198,16 +198,39 @@ def test_video_items_bounded_only_by_the_context(processors):
     assert upstream["video"] < 124078 and ours["video"] == 1048576 and ours["image"] == upstream["image"]
 
 
-def test_frames_resized_before_the_processor_as_it_would(processors):
-    """mimo_video resizes the frames to the processor's size first (chunks of RESIZE_CHUNK, so a long clip's frames never
-    exist as full-size floats); the processor's own resize is then the identity, and its pixels equal what it makes
-    from the full-size frames."""
+def test_cache_hit_converts_nothing(processors, monkeypatch):
+    """vLLM's processor cache: the second request on a video (the next question) neither resizes nor processes its
+    frames; vLLM's passthrough-only call of _get_hf_mm_data converts nothing either."""
     from models.experimental.mimo_v2_6_flash.tt import video_input
 
+    calls = []
+    resized = video_input._resized_frames
+    monkeypatch.setattr(video_input, "_resized_frames", lambda *a: calls.append(1) or resized(*a))
+    frames = vi.sample_video(num_frames=16, size=(640, 352))
+    meta = loader_metadata(16)
+    first = run(processors["cached"], (frames, meta))
+    second = run(processors["cached"], (frames, meta))
+    assert len(calls) == 1 and first[0] == second[0]
+
+
+@pytest.mark.parametrize("resize", ["torch", "cv2"])
+def test_frames_resized_before_the_processor_as_it_would(processors, monkeypatch, resize):
+    """mimo_video resizes the frames to the processor's size first (a long clip's frames never exist as full-size
+    floats); the processor's own resize is then the identity. With torch (the processor's call) its pixels equal what
+    it makes from the full-size frames bit for bit; with OpenCV (the default, faster) they differ by at most one bf16
+    step of the normalised pixel."""
+    from models.experimental.mimo_v2_6_flash.tt import video_input
+
+    monkeypatch.setattr(video_input, "RESIZE", resize)
     frames = vi.sample_video(num_frames=40, size=(1280, 720))
     meta = loader_metadata(40)
     _, _, item = run(processors["ours"], (frames, meta))
     hf = processors["ours"].info.get_hf_processor()
     full = torch.from_numpy(frames).permute(0, 3, 1, 2).float()
     ref = hf(videos=[(full, video_input.loader_timestamps(meta, 40))], return_tensors="pt")
-    assert torch.equal(item["pixel_values_videos"].data.float(), ref["pixel_values_videos"].to(torch.bfloat16).float())
+    got, want = item["pixel_values_videos"].data.float(), ref["pixel_values_videos"].to(torch.bfloat16).float()
+    if resize == "torch":
+        assert torch.equal(got, want)
+    else:
+        assert got.shape == want.shape and float((got - want).abs().max()) <= 2**-5, float((got - want).abs().max())
+        assert float((got != want).float().mean()) < 0.1

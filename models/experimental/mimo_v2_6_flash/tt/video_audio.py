@@ -27,7 +27,10 @@ The timestamps the segments are cut by are the frames' real times (tt/video_inpu
 with upstream's 1 fps labels the audio would be cut at the wrong places.
 """
 
+import collections
+import hashlib
 import os
+import threading
 from io import BytesIO
 
 import numpy as np
@@ -56,6 +59,27 @@ def wanted(hf_processor_mm_kwargs):
     MIMO_VIDEO_AUDIO."""
     value = (hf_processor_mm_kwargs or {}).get(REQUEST_KEY)
     return VIDEO_AUDIO if value is None else bool(value)
+
+
+_TRACKS = collections.OrderedDict()  # sha256 of a video file -> its decoded track (or None), least recent first
+_TRACKS_LOCK = threading.Lock()
+TRACK_CACHE_BYTES = int(float(os.environ.get("MIMO_VIDEO_AUDIO_CACHE_MB", "2048")) * 2**20)
+
+
+def cached_audio_track(data):
+    """decode_audio_track, remembered for the last few files (MIMO_VIDEO_AUDIO_CACHE_MB, default 2048): the second and
+    third question on a video skip the decode (vLLM's processor cache skips the rest)."""
+    key = hashlib.sha256(data).hexdigest()
+    with _TRACKS_LOCK:
+        if key in _TRACKS:
+            _TRACKS.move_to_end(key)
+            return _TRACKS[key]
+    wave = decode_audio_track(data)
+    with _TRACKS_LOCK:
+        _TRACKS[key] = wave
+        while sum(w.nbytes for w in _TRACKS.values() if w is not None) > TRACK_CACHE_BYTES and len(_TRACKS) > 1:
+            _TRACKS.popitem(last=False)
+    return wave
 
 
 def decode_audio_track(data):
@@ -112,7 +136,7 @@ def attach_audio(video_items):
         data = getattr(media, "original_bytes", None)
         if data is None:
             continue
-        wave = decode_audio_track(data)
+        wave = cached_audio_track(data)
         if wave is not None:
             frames = getattr(media, "media", media)
             meta[AUDIO_KEY] = cover_frames(wave, meta, len(frames))
@@ -140,9 +164,11 @@ class VideoAudioMixin:
         return super().apply(inputs, *args, **kwargs)
 
     def _get_hf_mm_data(self, mm_items):
+        from .video_input import converting
+
         data, passthrough = super()._get_hf_mm_data(mm_items)
         videos = data.get("videos")
-        if not videos:
+        if not videos or not converting():
             return data, passthrough
         waves = _waves(mm_items, len(videos))
         if any(w is None for w in waves):
