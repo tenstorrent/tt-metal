@@ -614,3 +614,88 @@ def test_typecast_host_tensor(output_dtype, preferred_layout, device):
     elif output_dtype == ttnn.bfloat16:
         torch_expected = torch_tensor.to(tt_dtype_to_torch_dtype[output_dtype])
         assert_with_ulp(expected_result=torch_expected, actual_result=torch_output, ulp_threshold=2)
+
+
+@pytest.mark.parametrize(
+    "logical_hw",
+    [(16, 32), (16, 16)],
+    ids=["H_padded_W_compact", "H_and_W_padded"],
+)
+@pytest.mark.parametrize(
+    "input_dtype,output_dtype",
+    [
+        (ttnn.bfloat16, ttnn.float32),
+        (ttnn.bfloat16, ttnn.int32),
+        (ttnn.uint8, ttnn.bfloat16),
+    ],
+    ids=["BFLOAT16_TO_FLOAT32", "BFLOAT16_TO_INT32", "UINT8_TO_BFLOAT16"],
+)
+def test_typecast_row_major_padded_input_from_untilize(input_dtype, output_dtype, logical_hw, device):
+    """Regression #63647: RM typecast must not read tile-padding rows or write past the output on
+    either H or W padding; value equality is primary, the guard bracket is a best-effort OOB catcher."""
+    height_sharded = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0))}),
+            [32, 32],
+            ttnn.ShardOrientation.ROW_MAJOR,
+        ),
+    )
+
+    H, W = logical_hw
+    shape = [2, 1, H, W]
+    torch.manual_seed(63647)
+    if input_dtype == ttnn.uint8:
+        torch_input = torch.randint(0, 256, shape, dtype=torch.uint8)
+    else:
+        torch_input = torch.randn(shape, dtype=torch.bfloat16)
+
+    tile = ttnn.from_torch(
+        torch_input,
+        dtype=input_dtype,
+        layout=ttnn.TILE_LAYOUT,
+        pad_value=-7.0 if input_dtype == ttnn.bfloat16 else 0,
+        device=device,
+        memory_config=height_sharded,
+    )
+    x = ttnn.untilize(tile, memory_config=ttnn.DRAM_MEMORY_CONFIG, use_multicore=True)
+    assert list(x.padded_shape) == [2, 1, 32, 32]
+    assert list(x.shape) == shape
+
+    # Bracket y in DRAM; guards share y's dtype so the first-fit slot is the same size as y.
+    GUARD = -3.0
+    guard_torch_dtype = tt_dtype_to_torch_dtype[output_dtype]
+    guard_host = torch.full(shape, GUARD, dtype=guard_torch_dtype)
+    guard_a = ttnn.from_torch(
+        guard_host,
+        dtype=output_dtype,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    holder = ttnn.allocate_tensor_on_device(
+        ttnn.Shape(shape), output_dtype, ttnn.ROW_MAJOR_LAYOUT, device, ttnn.DRAM_MEMORY_CONFIG
+    )
+    guard_b = ttnn.from_torch(
+        guard_host,
+        dtype=output_dtype,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    ttnn.deallocate(holder)
+
+    y = ttnn.typecast(x, output_dtype, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    ttnn.synchronize_device(device)
+
+    torch_y = ttnn.to_torch(y).reshape(shape)
+    expected = torch_input.to(guard_torch_dtype)
+    if output_dtype in INTEGER_OUTPUT_DTYPES:
+        assert torch.equal(torch_y, expected), "padded-RM typecast values diverge"
+    else:
+        assert_with_ulp(expected_result=expected.to(torch_y.dtype), actual_result=torch_y, ulp_threshold=2)
+
+    for name, g in (("guard_a", guard_a), ("guard_b", guard_b)):
+        g_torch = ttnn.to_torch(g)
+        assert torch.equal(g_torch, guard_host.to(g_torch.dtype)), f"{name} overwritten by typecast"

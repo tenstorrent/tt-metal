@@ -84,10 +84,20 @@ ttnn::device_operation::ProgramArtifacts TypecastRowMajorChunkedProgramFactory::
     const auto* src_buffer = &input.mesh_buffer();
     const auto* dst_buffer = &output.mesh_buffer();
 
-    // Get row information
-    const auto& padded_shape = input.padded_shape();
-    const uint32_t row_width_elements = padded_shape[padded_shape.rank() - 1];
-    const uint32_t num_rows = src_buffer->num_pages();
+    // Chunk size uses logical W to skip inner-W input padding; the kernel remaps logical rows
+    // to input/output padded page_ids. Padding-shape validation lives in validate.
+    const auto& input_padded_shape = input.padded_shape();
+    const auto& output_padded_shape = output.padded_shape();
+    const auto& logical_shape = input.logical_shape();
+    const uint32_t rank = logical_shape.rank();
+    const uint32_t row_width_elements = logical_shape[logical_shape.rank() - 1];
+    const uint32_t h_logical = rank >= 2 ? logical_shape[rank - 2] : 1;
+    const uint32_t h_padded_in = rank >= 2 ? input_padded_shape[input_padded_shape.rank() - 2] : 1;
+    const uint32_t h_padded_out = rank >= 2 ? output_padded_shape[output_padded_shape.rank() - 2] : 1;
+    uint32_t num_rows = 1;
+    for (uint32_t i = 0; i + 1 < rank; ++i) {
+        num_rows *= logical_shape[i];
+    }
 
     // Calculate chunk configuration
     const ChunkSizeConfig chunk_config =
@@ -158,9 +168,11 @@ ttnn::device_operation::ProgramArtifacts TypecastRowMajorChunkedProgramFactory::
         .compile_time_args =
             {
                 {"full_chunks_per_row", full_chunks_per_row},
-                {"partial_chunks_per_row", partial_chunks_per_row},           // 0 or 1
-                {"full_chunk_size_bytes", input_full_chunk_size_bytes},       // DRAM read size
-                {"partial_chunk_size_bytes", input_partial_chunk_size_bytes}  // DRAM read size
+                {"partial_chunks_per_row", partial_chunks_per_row},            // 0 or 1
+                {"full_chunk_size_bytes", input_full_chunk_size_bytes},        // DRAM read size
+                {"partial_chunk_size_bytes", input_partial_chunk_size_bytes},  // DRAM read size
+                {"h_logical", h_logical},
+                {"h_padded", h_padded_in},
             },
         .runtime_arg_schema = {.runtime_arg_names = {"num_rows", "start_row_id"}},
         .hw_config = ttnn::create_reader_datamovement_config(),
@@ -175,9 +187,11 @@ ttnn::device_operation::ProgramArtifacts TypecastRowMajorChunkedProgramFactory::
         .compile_time_args =
             {
                 {"full_chunks_per_row", full_chunks_per_row},
-                {"partial_chunks_per_row", partial_chunks_per_row},            // 0 or 1
-                {"full_chunk_size_bytes", output_full_chunk_size_bytes},       // DRAM write size
-                {"partial_chunk_size_bytes", output_partial_chunk_size_bytes}  // DRAM write size
+                {"partial_chunks_per_row", partial_chunks_per_row},             // 0 or 1
+                {"full_chunk_size_bytes", output_full_chunk_size_bytes},        // DRAM write size
+                {"partial_chunk_size_bytes", output_partial_chunk_size_bytes},  // DRAM write size
+                {"h_logical", h_logical},
+                {"h_padded", h_padded_out},
             },
         .runtime_arg_schema = {.runtime_arg_names = {"num_rows", "start_row_id"}},
         .hw_config = ttnn::create_writer_datamovement_config(),
