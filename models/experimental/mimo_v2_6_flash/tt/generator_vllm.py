@@ -2612,12 +2612,16 @@ class MiMoV2ForCausalLM:
 
     def background_warmup_step(self):
         """One deferred capture (MIMO_DEFER_TRACES): the next prefill batch trace (its eager warm pass first, when it
-        had none), or the later-chunk traces. Call only while the engine runs nothing (no step in flight). A warm pass
+        had none), or the later-chunk traces. Call only between steps (none in flight): while the engine is idle, or
+        between two steps of a busy one (vllm-tt-plugin background_warmup). A warm pass
         that compiles a program (none should: warmup compiled every program the passes run) makes the replica's decode
         traces be captured again around it (``_recapture_after_new_programs``). Returns whether more remain."""
         queue = getattr(self, "_deferred_captures", [])
         if not queue:
             return False
+        # The plugin also runs a unit between two steps of a busy engine: the last step's pending draws go first,
+        # so the capture queues behind them like any other entry point's work.
+        self._flush_draws()
         kind, lane, key = queue.pop(0)
         model = self.models[lane]
         t0 = time.time()
