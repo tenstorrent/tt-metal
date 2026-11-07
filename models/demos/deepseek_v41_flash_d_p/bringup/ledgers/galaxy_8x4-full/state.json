@@ -3583,15 +3583,20 @@
     "s": 0.0,
     "status": "PASS",
     "t": "2026-11-06T20:34:40"
+   },
+   {
+    "s": 0.0,
+    "status": "PASS",
+    "t": "2026-11-07T19:05:09"
    }
   ],
-  "last_run": "2026-11-06T20:34:40",
+  "last_run": "2026-11-07T19:05:09",
   "log": "/scratch/dnijemcevic/bringup/deepseek_v41_flash_d_p/runs/galaxy_8x4-full/run1/logs/P.38.log",
   "rc": 0,
   "reason": [],
   "role": "perf",
   "stamp": null,
-  "started": "2026-11-06T20:34:40",
+  "started": "2026-11-07T19:05:09",
   "status": "PASS",
   "units": null,
   "waiting": null
@@ -3619,7 +3624,7 @@
   "attempt": 1,
   "attempts": 0,
   "duration_s": 0.0,
-  "full_pending": true,
+  "full_pending": false,
   "history": [
    {
     "s": 0.0,
