@@ -939,15 +939,29 @@ class DSparkDrafter:
         v.U = Ub
         v.T_d, v.T_v = BLOCK * Ub, Ub * self.n
         T_d, T_v = v.T_d, v.T_v
+        _vd = (
+            lambda tag: print(  # DSV41_MEMLOG=1: DRAM per bank after each part of the view
+                f"DRAFTVIEW Ub={Ub} {tag}: {ttnn.get_memory_view(self.md, ttnn.BufferType.DRAM).total_bytes_allocated_per_bank / 2**20:.2f} MiB/bank",
+                flush=True,
+            )
+            if os.environ.get("DSV41_MEMLOG") == "1"
+            else None
+        )
+        _vd("start")
         v.attn = [a.view_users(Ub) for a in self.attn]
+        _vd("attn views")
         v.state = self.state.view_users(Ub, v.attn[0])
+        _vd("state")
         v.layers, bufs = [], None
         for layer, a in zip(self.layers, v.attn):
             mv, bufs = layer.moe.view_batch(T_d, bufs)
+            _vd("moe view_batch")
             lv = layer.view_users(a, mv, T_d)
             if not v.layers:
                 lv.moe.warmup()  # compile pass of the new batch with the L1 hole, before any trace exists
+                _vd("moe warmup")
             v.layers.append(lv)
+        _vd("layers")
         up = self._up
         v.pre0 = up(torch.tensor([1.0, 0, 0, 0]).repeat(T_d, 1, 1, 1), ttnn.float32)
         v.Tp = _odd_t(T_d) if os.environ.get("DSV41_DRAFT_KEEP_PAD", "1") == "1" else None

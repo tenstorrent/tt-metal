@@ -353,7 +353,10 @@ class DSV41MoEBlock:
             tt_scores, tt_indices = forced_routing
         else:
             tt_scores, tt_indices = self.gate.forward(tt_x_gate)
-        self.last_routing = (tt_scores, tt_indices)  # for debugging / error-budget tests
+        if __import__("os").environ.get("DSV41_DROP_LAST_ROUTING") != "1":
+            # for debugging / error-budget tests. DSV41_DROP_LAST_ROUTING=1 (the load-based trace entries): not kept, the router outputs stay L1 tensors (128 B/bank per MoE layer per runner view of
+            # PERSISTENT L1, which the prefill programs' static circular buffers need free: 'Statically allocated circular buffers ... clash')
+            self.last_routing = (tt_scores, tt_indices)
         if (
             ROUTE_LOG is not None and ROUTE_ON[0]
         ):  # DSV41_ROUTE_CAPTURE=1 (eager decode only): host copy of the REAL routed expert ids, one entry per call

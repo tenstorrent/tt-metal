@@ -11,7 +11,12 @@ import sys
 
 SPECS = {
     # (source entry, new entry, buckets, trace region bytes)
-    "b16": ("deepseek_v41_flash_b16_1m", "deepseek_v41_flash_b16_1m_lt", "1,2", "1060000000"),
+    "b16": (
+        "deepseek_v41_flash_b16_1m",
+        "deepseek_v41_flash_b16_1m_lt",
+        "1",
+        "1000000000",
+    ),  # (measured: ~14 MiB/bank of DRAM per extra runner (k) set; two buckets do not fit without bfp4)
     "b8": ("deepseek_v41_flash_b8_1m", "deepseek_v41_flash_b8_1m_lt", "1", "1200000000"),
 }
 
@@ -31,6 +36,7 @@ def add(full, extra=None):
             "DSV41_TRACE_REGION": region,
             "DSV41_FUSE_TAIL_SMALL": "1",
             "DSV41_ATTN_FRONT_SMALL": "1",
+            "DSV41_DROP_LAST_ROUTING": "1",
         }
         env_add.update(extra or {})
         e["env_vars"].update(env_add)

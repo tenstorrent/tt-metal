@@ -232,6 +232,15 @@ class DSV41Layer:
                     mv = ttnn.get_memory_view(self.mesh_device, ttnn.BufferType.L1)
                     profile["_l1_trace"].append(
                         (name, mv.total_bytes_allocated_per_bank, mv.largest_contiguous_bytes_free_per_bank)
+                        + (
+                            (
+                                ttnn.get_memory_view(
+                                    self.mesh_device, ttnn.BufferType.DRAM
+                                ).total_bytes_allocated_per_bank,
+                            )
+                            if profile.get("_dram")
+                            else ()
+                        )
                     )
                 t0[0] = time.perf_counter()
 
