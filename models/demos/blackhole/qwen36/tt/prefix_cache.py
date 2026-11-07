@@ -255,12 +255,13 @@ class GdnPrefixStateCache:
     def __init__(self, model, num_slots=None, name="GDN prefix-state cache", host_slots=None):
         kv = getattr(model, "_paged_kv_caches", None)
         block = int(kv[0][0].shape[2]) if kv else kv_block_size()
-        if block > SPEC_PREFIX_ALIGN:
+        if SPEC_PREFIX_ALIGN % block:
             # A resume at a 128-aligned position inside a block would refill the block's K/V from its first row
-            # (paged_fill_cache): wrong K/V for the earlier tokens of the block.
+            # (paged_fill_cache): wrong K/V for the earlier tokens of the block. Every multiple of 128 starts a block
+            # only when the block size divides 128 (96 does not: a resume at 128 lies inside block 1).
             raise ValueError(
-                f"{name}: resumes prefill at {SPEC_PREFIX_ALIGN}-token positions, which needs a KV block size of at "
-                f"most {SPEC_PREFIX_ALIGN}, got {block}. Turn off vLLM prefix caching / chunked prefill (or "
+                f"{name}: resumes prefill at {SPEC_PREFIX_ALIGN}-token positions, which needs a KV block size that "
+                f"divides {SPEC_PREFIX_ALIGN}, got {block}. Turn off vLLM prefix caching / chunked prefill (or "
                 "QWEN36_PREFIX_CACHE=0), or keep the GDN state in vLLM blocks (QWEN36_MAMBA_SPEC=1)."
             )
         self.model = model
