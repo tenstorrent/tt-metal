@@ -88,7 +88,7 @@ jobs:
         test-group: ${{ fromJson(needs.load-test-matrix.outputs.matrix) }}
     name: ${{ matrix.test-group.name }}
     environment: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && 'mainline' || '' }}
-    timeout-minutes: ${{ matrix.test-group.timeout }}
+    timeout-minutes: 30
     runs-on: ${{ matrix.test-group.runs_on }}
     container:
       # A prebuilt image already carries the packages and needs no Harbor prefix.
