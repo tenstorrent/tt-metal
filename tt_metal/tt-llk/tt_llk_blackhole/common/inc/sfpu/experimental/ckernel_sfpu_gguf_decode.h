@@ -244,14 +244,14 @@ inline void sfpu_gguf_decode_init()
 
 /**
  * @brief Group step of Q4_K and Q5_K: unpack the 6-bit scales and mins of a group once, for every tile of it decoded
- *        at the same DEST tiles (Q4_K: also its fp16 d and dmin, into tile dst_index + 1 past the 1 KB page). Nothing
+ *        at the same DEST tiles, and its fp16 d and dmin, into tile dst_index + 1 past the page. Nothing
  *        for the other formats.
  *
  * @tparam FMT: ckernel::gguf::Format of the page.
  * @param dst_index: As @ref sfpu_gguf_decode_tile; the page in tile dst_index + 1 is any page of the group.
  * @param rows: As @ref sfpu_gguf_decode_tile; the same value as the group's tile calls.
  * @note Call before the first tile of a group that @ref sfpu_gguf_decode_tile decodes at dst_index and rows; nothing
- *       else may write scratch tile dst_index + 2 (entries 0..15) or, Q4_K, tile dst_index + 1 past its page until the
+ *       else may write scratch tile dst_index + 2 (entries 0..15) or tile dst_index + 1 past its page until the
  *       group ends.
  */
 template <int FMT>
