@@ -52,7 +52,10 @@ def placements(models=tuple(MODEL_CONFIGS)) -> list:
         pytest.param(
             model,
             (8, 4),
-            {"fabric_config": ttnn.FabricConfig.FABRIC_2D, "l1_small_size": MODEL_CONFIGS[model].L1_SMALL_SIZE},
+            {
+                "fabric_config": ttnn.FabricConfig.FABRIC_2D,
+                "l1_small_size": MODEL_CONFIGS[model].L1_SMALL_SIZE,
+            },
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
             id=f"{model}-fabric2d-8x4",
         )
