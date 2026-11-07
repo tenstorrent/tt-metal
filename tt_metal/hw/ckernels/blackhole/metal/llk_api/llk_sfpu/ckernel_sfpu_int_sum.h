@@ -55,7 +55,7 @@ inline void sum_int_init() {
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS>
-inline void add_int(const uint dst_offset) {
+inline void add_int([[maybe_unused]] const uint dst_offset) {
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         vInt a = dst_reg[0];
