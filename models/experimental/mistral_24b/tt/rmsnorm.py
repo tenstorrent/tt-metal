@@ -169,7 +169,6 @@ class RMSNorm(LightweightModule):
             output = ttnn.to_memory_config(output, memory_config)
 
         ttnn.deallocate(xnorm)
-        ttnn.deallocate(weight)
 
         return output
 

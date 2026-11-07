@@ -1,5 +1,4 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
-
 # SPDX-License-Identifier: Apache-2.0
 
 import os
@@ -9,14 +8,12 @@ import torch
 from loguru import logger
 
 import ttnn
-
-from models.experimental.mistral_24b.tt.vision_mlp import MistralTTVisionMLP as MLP
+from models.common.utility_functions import comp_allclose, comp_pcc
 from models.tt_transformers.tt.model_config import ModelArgs
-from models.common.utility_functions import comp_allclose, comp_pcc, run_for_wormhole_b0_or_blackhole
+from models.experimental.mistral_24b.tt.vision_mlp import MistralTTVisionMLP as MLP
 
 
 @torch.no_grad()
-@run_for_wormhole_b0_or_blackhole()
 @pytest.mark.parametrize(
     "mesh_device",
     [
@@ -36,7 +33,6 @@ from models.common.utility_functions import comp_allclose, comp_pcc, run_for_wor
 )
 def test_mlp_inference(seq_len, batch_size, mesh_device, reset_seeds):
     dtype = ttnn.bfloat8_b
-    mode = "decode" if seq_len <= 32 else "prefill"
 
     model_args = ModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=128)
     model_args.n_layers = 1
@@ -61,7 +57,7 @@ def test_mlp_inference(seq_len, batch_size, mesh_device, reset_seeds):
     )
     torch_input = torch.randn(1, 1, seq_len, 1024).to(torch.bfloat16)
 
-    reference_output = reference_model(torch_input.float())
+    reference_output = reference_model(torch_input)
     tt_input = ttnn.from_torch(
         torch_input,
         device=mesh_device,

@@ -36,5 +36,5 @@ pytest models/experimental/exaone45_vl/tests/
 
 End-to-end image chat (vision on device + text TP=8):
 ```bash
-python models/tt_transformers/demo/exaone_45_vision_hybrid.py --vision-device tt
+python models/experimental/exaone45_vl/demo/exaone_45_vision_hybrid.py --vision-device tt
 ```

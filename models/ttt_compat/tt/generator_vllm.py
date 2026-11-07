@@ -474,7 +474,7 @@ class Mistral3ForConditionalGeneration(Generator, SupportsMultiModal):
         optimizations: str = None,
     ):
         assert optimizations is None, "Custom optimizations are not supported for this model"
-        from models.ttt_compat.demo.simple_vision_demo import create_multimodal_model
+        from models.experimental.mistral_24b.tt.model import create_mistral_24b_model
 
         max_seq_len = 1024 * 128
 
@@ -485,7 +485,7 @@ class Mistral3ForConditionalGeneration(Generator, SupportsMultiModal):
         state_dict = None
 
         for submesh in submesh_devices:
-            model_args_i, model_i, state_dict = create_multimodal_model(
+            model_args_i, model_i, state_dict = create_mistral_24b_model(
                 mesh_device=submesh,
                 max_batch_size=max_batch_size // tt_data_parallel,
                 max_seq_len=max_seq_len,
@@ -589,7 +589,7 @@ class MllamaForConditionalGeneration(Generator, SupportsMultiModal):
         cls, hf_config, mesh_device, max_batch_size, max_seq_len, tt_data_parallel=1, optimizations: str = None
     ):
         assert optimizations is None, "Custom optimizations are not supported for this model"
-        from models.ttt_compat.demo.simple_vision_demo import create_multimodal_model
+        from models.demos.multimodal.llama3_vision.demo.simple_vision_demo import create_multimodal_model
 
         submesh_devices = create_submeshes(mesh_device, tt_data_parallel)
 
