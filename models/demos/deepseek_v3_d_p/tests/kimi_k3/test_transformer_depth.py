@@ -470,10 +470,11 @@ def test_synthetic_depth_writes_every_slot(model, mesh_device, device_params):
 # depth-24 bar, set for the second seal), and past depth 24, where K3 has no bar of its own, the package's
 # chunked per-layer bar LAYER_PCC_THRESHOLD (test_prefill_transformer_chunked.py). KV: KV_CACHE_PCC at every DSA
 # layer. Measured at 10K (tt_metal_tracker-ao3i.5.1): worst 0.9966 (layers 0-11), 0.9869 (12-23), 0.9343 past
-# 24. The step at layers 91/92 (0.958 -> 0.934) is the metric, not the layers: there ~6.5% of tokens turn
-# massive (|h| up to ~12k-24k against a median ~50) and carry nearly all the energy, so a pooled PCC scores only
-# those tokens; the output is right (host logits from the final hidden match the trace's top-1 at all 2049
-# positions it scored).
+# 24. The step at layers 91/92 (0.958 -> 0.934) coincides with ~6.5% of tokens turning massive (|h| up to
+# ~12k-24k against a median ~50) and carrying nearly all the energy, so a pooled PCC there mostly scores those
+# tokens; host logits from the final hidden match the trace's top-1 at all 2049 positions it scored. The
+# device's per-token error split into massive and normal tokens was not measured. Accepted as a metric effect
+# (orchestrator decision, tt_metal_tracker-ao3i.5.1).
 #
 # The indexer key cache is logged against `indexer/indexer_k_layer_i` for information only; whether and how
 # it is scored is tt_metal_tracker-ao3i.5.3's.
