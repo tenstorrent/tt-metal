@@ -34,6 +34,7 @@ from models.demos.deepseek_v3_d_p.tests.kda.checkpoint_utils import (
 from models.demos.deepseek_v3_d_p.tt.kda.config import (
     KDAProgramConfig,
     KDARecurrenceProgramConfig,
+    kda_worker_l1_size,
     kimi_k3_program_config,
 )
 from models.demos.deepseek_v3_d_p.tt.kda.kda import KdaState, ttKDA
@@ -47,11 +48,15 @@ from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import ass
 
 
 def kda_device_params(mesh_shape: tuple[int, int], **overrides) -> dict:
-    """The fabric a KDA test opens on ``mesh_shape``: a 2D fabric, as Kimi-K3 runs on, with K3's fabric payload.
+    """The fabric a KDA test opens on ``mesh_shape``: a 2D fabric, as Kimi-K3 runs on, with K3's fabric payload and
+    kernel-config ring.
 
     8x4 takes K3's TorusXY, a ring of chips the torus over its one axis (TorusY for Nx1, TorusX for 1xN), and 2x2,
     2x4 and 4x2 an unwrapped Fabric2D.
     """
+    # The kernel-config ring KDA meshes open with (config.kda_worker_l1_size; the KDA conftest resolves it when the
+    # device opens), as the Kimi-K3 prefill runner does.
+    overrides.setdefault("worker_l1_size", kda_worker_l1_size)
     rows, columns = mesh_shape
     if (rows, columns) == (8, 4):
         profile = torus_xy_device_params

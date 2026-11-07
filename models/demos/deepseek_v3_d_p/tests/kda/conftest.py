@@ -13,6 +13,16 @@ def pytest_configure(config: pytest.Config) -> None:
     config.addinivalue_line("markers", "extended_actual_start: exhaustive aligned-start local acceptance")
 
 
+@pytest.fixture(scope="function")
+def device_params(request):
+    """The root conftest's device_params, with a callable worker_l1_size (config.kda_worker_l1_size) resolved here,
+    when the device opens, rather than at collection: it queries the HAL, which initialises the Metal context."""
+    params = dict(getattr(request, "param", {}))
+    if callable(params.get("worker_l1_size")):
+        params["worker_l1_size"] = params["worker_l1_size"]()
+    return params
+
+
 @pytest.fixture
 def isolated_program_cache(device):
     """Give one cache-sensitive test an enabled, empty program cache."""

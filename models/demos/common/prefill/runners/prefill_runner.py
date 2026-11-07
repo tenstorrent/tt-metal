@@ -1153,6 +1153,7 @@ def main() -> None:
         ADAPTER.fabric_payload_size(),
         l1_small_size=_L1_SMALL_SIZE,
         trace_region_size=_TRACE_REGION_SIZE,
+        worker_l1_size=ADAPTER.worker_l1_size,
     )
 
     if CHUNK_TIMEOUT_SECONDS:

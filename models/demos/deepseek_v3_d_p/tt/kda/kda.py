@@ -29,6 +29,9 @@ from models.demos.deepseek_v3_d_p.tt.kda.config import (
     decay_projection_program_config,
     l1_when_it_fits,
     output_gate_program_config,
+    matmul_core_grid,
+    matmul_grid,
+    padded_projection_width,
     tuned_projection_matmul_configs,
     validate_convolution_page_channels,
 )
@@ -209,6 +212,7 @@ class ttKDA:
         self.output_gate_split = (
             program_config.input_projection_gate_heads * config.head_v_dim if self._side_by_side else None
         )
+        owns_weights = weights is None
         if weights is None:
             weights = load_kda_weights(
                 mesh_device,
@@ -296,19 +300,24 @@ class ttKDA:
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
         )
+        # Every projection matmul runs on the matmul grid (KDAProgramConfig.max_matmul_cores).
+        self._matmul_grid = matmul_grid(mesh_device.compute_with_storage_grid_size(), program_config.max_matmul_cores)
+        if program_config.tuned_projection_matmuls:
+            self._pad_input_projection(owns_weights)
         self.input_projection_program_config, self.output_projection_program_config = (
             tuned_projection_matmul_configs(
-                mesh_device.compute_with_storage_grid_size(),
+                self._matmul_grid,
                 self.active_seq_len_local,
                 self.weights.input_projection.shape[-1],
                 *tuple(self.weights.output_projection.shape)[-2:],
+                weight_dtype=self.weights.input_projection.dtype,
             )
             if program_config.tuned_projection_matmuls
             else (None, None)
         )
         decay_width = self.config.num_heads * self.config.head_k_dim
         self.decay_program_config = decay_projection_program_config(
-            mesh_device.compute_with_storage_grid_size(),
+            self._matmul_grid,
             self.active_seq_len_local,
             self.config.head_k_dim,
             decay_width,
@@ -399,6 +408,23 @@ class ttKDA:
                 topology=ttnn.Topology.Ring if ring else ttnn.Topology.Linear,
                 num_links=min(self._tp_num_links, 2),
             )
+
+    def _pad_input_projection(self, owns_weights: bool) -> None:
+        """Pad the input projection's columns to a multiple of the DRAM bank count (padded_projection_width).
+
+        The padding columns are zero and come after every semantic column, so the projection's column offsets are
+        unchanged. A layer that loaded its weights frees the unpadded tensor; caller-provided weights stay intact.
+        """
+        weight = self.weights.input_projection
+        dram_grid = self.device.dram_grid_size()
+        width = padded_projection_width(weight.shape[-1], dram_grid.x * dram_grid.y)
+        if width == weight.padded_shape[-1]:
+            return
+        padding = [(0, 0)] * (len(weight.shape) - 1) + [(0, width - weight.shape[-1])]
+        padded = ttnn.pad(weight, padding=padding, value=0.0, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        if owns_weights:
+            ttnn.deallocate(weight)
+        self.weights = replace(self.weights, input_projection=padded)
 
     @property
     def _convolution_width(self) -> int:
@@ -498,6 +524,7 @@ class ttKDA:
             hidden_states,
             weights.input_projection,
             program_config=self.input_projection_program_config,
+            core_grid=None if self.input_projection_program_config else matmul_core_grid(self._matmul_grid),
             memory_config=(
                 ttnn.DRAM_MEMORY_CONFIG if self.input_projection_program_config is None else ttnn.L1_MEMORY_CONFIG
             ),
@@ -619,6 +646,7 @@ class ttKDA:
             weights.output_projection,
             memory_config=self.partial_output_memory_config,
             program_config=self.output_projection_program_config,
+            core_grid=None if self.output_projection_program_config else matmul_core_grid(self._matmul_grid),
             compute_kernel_config=self.output_projection_compute_config,
         )
         if self.tensor_parallel_size > 1:
