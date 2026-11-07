@@ -6,7 +6,6 @@
 namespace ckernel::sfpu {
 struct LogBf16Config {
     static constexpr uint32_t kDegree = 4u;
-    // Fit: degree-4 polynomial on [1, 2], 1 segment, max pure (continuous) ULP 0.64.
     static constexpr uint32_t kCoefficientBits[] = {0x00000000u, 0x3f7fbd33u, 0xbef3a895u, 0x3e6a802fu, 0xbd7180f6u};
     static constexpr uint32_t kScaleBits = 0x3f317218u;
     static constexpr uint32_t kBodySlots = 23u;
@@ -29,10 +28,10 @@ inline bool bf16_dest_log() {
     return false;
 #endif
 }
+// Each call records replay slots 0-15, below replay_buf_offset = 16.
 template <int ITERATIONS = 32>
-inline void calculate_log_bf16() {
+__attribute__((noinline)) inline void calculate_log_bf16() {
     ckernel::sfpu::bf16::log::calculate_log_fused<ckernel::sfpu::LogBf16Config, ITERATIONS>();
 }
-inline void init_log_bf16() { ckernel::sfpu::bf16::log::init_log_fused<ckernel::sfpu::LogBf16Config>(); }
 
 }  // namespace ckernel::sfpu

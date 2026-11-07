@@ -128,7 +128,7 @@ def _assert_live_tp_fabric(mesh_device):
             for neighbor_tp in ((tp_coord - 1) % TP, (tp_coord + 1) % TP):
                 dst_coord = ttnn.MeshCoordinate([sp_coord, neighbor_tp])
                 dst_node = mesh_device.get_fabric_node_id(dst_coord)
-                link_indices = tuple(ttnn.get_forwarding_link_indices(src_node, dst_node))
+                link_indices = tuple(ttnn.get_forwarding_link_indices(mesh_device, src_node, dst_node))
                 logger.info(
                     f"MLP TP edge src={src_coord}/{src_node} dst={dst_coord}/{dst_node} "
                     f"forwarding_link_indices={link_indices}"

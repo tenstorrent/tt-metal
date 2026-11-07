@@ -18,7 +18,7 @@ import torch
 from loguru import logger
 
 from models.demos.utils.trace_region_sizes import TRACE_MODEL_KEY_PARAM, resolve_trace_region_size
-from models.tt_transformers.demo.trace_region_config import get_logical_sku, get_supported_trace_region_size
+from models.ttt_compat.demo.trace_region_config import get_logical_sku, get_supported_trace_region_size
 from tests.scripts.common import get_updated_device_params, run_process_and_get_result
 
 # Constants for device configurations

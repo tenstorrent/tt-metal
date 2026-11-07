@@ -36,7 +36,7 @@ RUNS_SUBDIR = "generated/tt-train/grpo_reverse_text_run"
 # Every column the built-in GRPOMonitor writes for the reverse-text run, in
 # reading order: the learning signal first, then what the policy is producing,
 # then the wall-clock cost broken down per stage / callback. The
-# ``*_time_s`` columns after ``generation_time_s`` are per-callback timings the
+# ``*_time_s`` columns after ``rollout_wait_s`` are per-callback timings the
 # trainer records for ``on_step_end`` — they are lagged one step (step 1 is
 # nan), see GRPO_TRAINER.md.
 METRICS = [
@@ -47,6 +47,8 @@ METRICS = [
     ("mean_completion_len", "mean completion (tokens)"),
     ("step_time_s", "step time (s)"),
     ("generation_time_s", "generation time (s)"),
+    ("reward_time_s", "reward time (s)"),
+    ("rollout_wait_s", "rollout wait (s)"),
     ("EvalCallback_time_s", "eval callback time (s)"),
     ("GRPOMonitor_time_s", "monitor callback time (s)"),
 ]
