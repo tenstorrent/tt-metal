@@ -38,6 +38,22 @@ python models/demos/vision/detection/rtdetr/demo.py --video <path-or-url> --mode
 `--threshold` sets the detection threshold and `--device-id` selects the device. Annotated results
 are written to a new directory under `models/demos/vision/detection/rtdetr/outputs/`.
 
+The sample images are COCO `val2017` photos from Flickr, used under the licenses below; the
+source links lead to each photo and its author.
+
+| `--sample_image` | COCO image | License | Source |
+| ---: | --- | --- | --- |
+| 0 | `000000039769` | [CC BY-SA 2.0](https://creativecommons.org/licenses/by-sa/2.0/) | [Flickr](https://www.flickr.com/photo.gne?id=210383891) |
+| 1 | `000000397133` | [CC BY 2.0](https://creativecommons.org/licenses/by/2.0/) | [Flickr](https://www.flickr.com/photo.gne?id=6255196340) |
+| 2 | `000000189078` | [CC BY 2.0](https://creativecommons.org/licenses/by/2.0/) | [Flickr](https://www.flickr.com/photo.gne?id=4430551771) |
+| 3 | `000000252219` | [CC BY 2.0](https://creativecommons.org/licenses/by/2.0/) | [Flickr](https://www.flickr.com/photo.gne?id=3232237447) |
+| 4 | `000000065350` | [CC BY 2.0](https://creativecommons.org/licenses/by/2.0/) | [Flickr](https://www.flickr.com/photo.gne?id=4869131880) |
+| 5 | `000000414510` | [CC BY 2.0](https://creativecommons.org/licenses/by/2.0/) | [Flickr](https://www.flickr.com/photo.gne?id=5883783041) |
+| 6 | `000000403385` | [CC BY 2.0](https://creativecommons.org/licenses/by/2.0/) | [Flickr](https://www.flickr.com/photo.gne?id=3768289025) |
+| 7 | `000000006818` | [CC BY 2.0](https://creativecommons.org/licenses/by/2.0/) | [Flickr](https://www.flickr.com/photo.gne?id=2068039201) |
+| 8 | `000000574702` | [CC BY 2.0](https://creativecommons.org/licenses/by/2.0/) | [Flickr](https://www.flickr.com/photo.gne?id=2252476376) |
+| 9 | `000000331352` | [CC BY 2.0](https://creativecommons.org/licenses/by/2.0/) | [Flickr](https://www.flickr.com/photo.gne?id=136223761) |
+
 ## Performance
 
 - Trace latency at batch 1, one warmup and eight trace replays on different images:
@@ -75,8 +91,8 @@ pytest --disable-warnings models/demos/vision/detection/rtdetr/tests/pcc.py
 pytest --disable-warnings models/demos/vision/detection/rtdetr/tests/pcc.py::test_rtdetr_model
 ```
 - `tests/validate_detection.py` compares detections against PyTorch on the first 500 COCO
-  `val2017` images; set `COCO_VAL2017_IMAGES` to the image directory (see
-  [VALIDATION.md](VALIDATION.md)).
+  `val2017` images whose license allows commercial use and modification, read from the val2017
+  annotations; see [VALIDATION.md](VALIDATION.md) for the setup.
 
 ### Reduced grid
 

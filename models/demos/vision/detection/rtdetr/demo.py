@@ -37,16 +37,18 @@ MODEL_CONFIGS = {
     2: ("PekingU/rtdetr_v2_r50vd", RTDetrV2ForObjectDetection),
 }
 
+# COCO val2017 images licensed for commercial use and modification; README.md lists each one's
+# license and source.
 SAMPLE_TEST_IMAGES = [
     "http://images.cocodataset.org/val2017/000000039769.jpg",
     "http://images.cocodataset.org/val2017/000000397133.jpg",
-    "http://images.cocodataset.org/val2017/000000037777.jpg",
+    "http://images.cocodataset.org/val2017/000000189078.jpg",
     "http://images.cocodataset.org/val2017/000000252219.jpg",
-    "http://images.cocodataset.org/val2017/000000087038.jpg",
-    "http://images.cocodataset.org/val2017/000000174482.jpg",
+    "http://images.cocodataset.org/val2017/000000065350.jpg",
+    "http://images.cocodataset.org/val2017/000000414510.jpg",
     "http://images.cocodataset.org/val2017/000000403385.jpg",
     "http://images.cocodataset.org/val2017/000000006818.jpg",
-    "http://images.cocodataset.org/val2017/000000480985.jpg",
+    "http://images.cocodataset.org/val2017/000000574702.jpg",
     "http://images.cocodataset.org/val2017/000000331352.jpg",
 ]
 

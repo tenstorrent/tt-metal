@@ -13,28 +13,34 @@
 | Device configuration | `l1_small_size=16384`, `trace_region_size=1 << 26` |
 | RT-DETR v1 checkpoint | `PekingU/rtdetr_r50vd` |
 | RT-DETRv2 checkpoint | `PekingU/rtdetr_v2_r50vd` |
-| Validation data | First 500 COCO `val2017` images in sorted filename order |
+| Validation data | First 500 COCO `val2017` images, in sorted filename order, whose license allows commercial use and modification |
 
 The recorded runs used the RT-DETR commits of this change on top of the listed base commit, in a Release build.
 
 ### COCO Validation Data
 
-The detection tests require the COCO `val2017` images. Ground-truth annotations are not required because the tests compare TTNN detections against the PyTorch reference.
+The detection tests compare TTNN detections against the PyTorch reference, so they need no ground
+truth, but they read the `val2017` annotations for each image's license. They use the first 500
+images, in sorted filename order, whose license allows commercial use and modification (CC BY 2.0,
+CC BY-SA 2.0, no known copyright restrictions or United States Government Work), and download any
+of those images that are missing from the image directory.
 
 From the RT-DETR directory:
 
 ```bash
 mkdir -p datasets/coco
 cd datasets/coco
-wget http://images.cocodataset.org/zips/val2017.zip
-unzip val2017.zip
-rm val2017.zip
+wget http://images.cocodataset.org/annotations/annotations_trainval2017.zip
+unzip annotations_trainval2017.zip annotations/instances_val2017.json
+rm annotations_trainval2017.zip
 cd ../..
 ```
 
-The default image path is `./datasets/coco/val2017`. To use another location:
+The default paths are `./datasets/coco/annotations/instances_val2017.json` for the annotations and
+`./datasets/coco/val2017` for the images. To use other locations:
 
 ```bash
+export COCO_VAL2017_ANNOTATIONS=<path-to-instances_val2017.json>
 export COCO_VAL2017_IMAGES=<path-to-val2017>
 ```
 
@@ -64,19 +70,19 @@ pytest tests/validate_detection.py::test_rtdetr_detection -sv
 pytest tests/validate_detection.py::test_rtdetr_v2_detection -sv
 ```
 
-PyTorch and TTNN detections used a confidence threshold of `0.5`. Boxes were greedily matched at IoU ≥ `0.5`.
+PyTorch and TTNN detections used a confidence threshold of `0.5`. Boxes were greedily matched at IoU ≥ `0.5`. These results were recorded on base commit `ef2854b798f06e76028cc2c63987beb5b1354e0d`.
 
 | Metric | RT-DETR v1 | RT-DETRv2 |
 |---|---:|---:|
 | Images | 500 | 500 |
-| PyTorch detections | 2,763 | 3,550 |
-| TTNN detections | 2,683 | 3,418 |
-| Matched detections | 2,658 | 3,368 |
-| Matched ratio | 96.20% | 94.87% |
-| Label agreement | 99.77% | 99.08% |
-| Mean matched IoU | 0.9639 | 0.9601 |
-| Minimum matched IoU | 0.6194 | 0.5988 |
-| Mean confidence-score error | 0.0115 | 0.0131 |
+| PyTorch detections | 2,752 | 3,578 |
+| TTNN detections | 2,674 | 3,445 |
+| Matched detections | 2,650 | 3,393 |
+| Matched ratio | 96.29% | 94.83% |
+| Label agreement | 99.66% | 99.17% |
+| Mean matched IoU | 0.9622 | 0.9581 |
+| Minimum matched IoU | 0.5650 | 0.5298 |
+| Mean confidence-score error | 0.0114 | 0.0128 |
 
 ## Model Latency
 
