@@ -314,7 +314,7 @@ Tensor clamped_silu_glu(
     const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id = std::nullopt);
 
-// gelu_tanh(gate) * up with gate and up supplied pre-split (Gemma 4's MLP activation).
+// GeGLU with the tanh GELU, of gate and up supplied pre-split.
 Tensor geglu_tanh(
     const Tensor& gate,
     const Tensor& up,

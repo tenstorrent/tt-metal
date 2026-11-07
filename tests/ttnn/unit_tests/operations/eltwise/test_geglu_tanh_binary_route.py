@@ -2,10 +2,8 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""ttnn.geglu_tanh as one binary_ng program: every finite BF16 input in pure ULP against the exact product.
-
-Specials follow torch except where BF16 storage cannot hold the result (-0/subnormal in -> +0, NaN -> +inf).
-"""
+"""ttnn.geglu_tanh as one binary_ng program whose only arithmetic is geglu_tanh_tile, scored in pure ULP against the
+exact product; special-value classes follow torch where the BF16 pipeline can store torch's result."""
 
 import pytest
 import torch

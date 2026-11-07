@@ -324,6 +324,8 @@ enum class BinaryOp : std::uint8_t
     LOGICAL_RSHFT = 9,
     ADD_TOP_ROW   = 10,
     LT            = 11,
+    // geglu_tanh has a Blackhole kernel only: the harness dispatches it on Blackhole.
+    GEGLU_TANH = 63,
     GT            = 12,
     LE            = 13,
     GE            = 14,
@@ -395,8 +397,6 @@ enum class BinaryOp : std::uint8_t
     DEQUANT_INT8              = 60,
     // _float_to_int32_positive_ on raw fp32 words (in0 -> out), the conversion inside the pow kernels.
     FLOAT_TO_INT32_POSITIVE = 61,
-    // Blackhole-only generated kernel.
-    GEGLU_TANH = 63,
 };
 
 enum class PackMode : std::uint8_t
