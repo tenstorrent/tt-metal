@@ -142,6 +142,12 @@ ProgramDescriptor BinaryBackwardProgramFactory::create_descriptor(
     writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     writer_desc.core_ranges = all_cores;
     writer_desc.compile_time_args = writer_compile_time_args;
+    // Partial-mask callers: skip the unused slot's NoC write. wait/pop stay unconditional
+    // so compute's push still drains and no reader back-pressure deadlock surfaces.
+    writer_desc.defines = {
+        {"WRITE_INPUT_GRAD", args.are_required_outputs[0] ? "1" : "0"},
+        {"WRITE_OTHER_GRAD", args.are_required_outputs[1] ? "1" : "0"},
+    };
     writer_desc.config = WriterConfigDescriptor{};
 
     KernelDescriptor compute_desc;
