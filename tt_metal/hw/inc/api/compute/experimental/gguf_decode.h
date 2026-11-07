@@ -39,9 +39,9 @@ ALWI void gguf_decode_init() {
     GGUF_DECODE_ON(thr, llk_math_gguf_decode_init<fmt>());
 }
 
-// Group step of the formats that unpack a group's scales once (Q4_K, Q5_K; nothing for the others): call before the
-// first tile of a group that gguf_decode_tile decodes at idst and rows, with any page of the group in tile idst + 1.
-// Until the group ends, nothing else may write tile idst + 2 or, Q4_K, tile idst + 1 past its page.
+// Group step of the formats that convert a group's scales once (Q4_K, Q5_K, Q3_K, Q2_K; nothing for the others): call
+// before the first tile of a group that gguf_decode_tile decodes at idst and rows, with any page of the group in tile
+// idst + 1. Until the group ends, nothing else may write tile idst + 2 or tile idst + 1 past its page.
 template <std::uint32_t fmt, GgufDecodeThread thr = GgufDecodeThread::Math>
 ALWI void gguf_decode_group(const std::uint32_t idst, const std::uint32_t rows = 0) {
     GGUF_DECODE_ON(thr, llk_math_gguf_decode_group<fmt>(idst, rows));
@@ -49,8 +49,9 @@ ALWI void gguf_decode_group(const std::uint32_t idst, const std::uint32_t rows =
 
 // clang-format off
 /**
- * Decodes one GGUF weight tile into a Float32 [K][N] tile in DEST, scales applied (ggml's dequantization). Q4_K and
- * Q5_K need gguf_decode_group for the tile's group first. On the pack thread only inside the overlap protocol below.
+ * Decodes one GGUF weight tile into a Float32 [K][N] tile in DEST, scales applied (ggml's dequantization). Q4_K,
+ * Q5_K, Q3_K and Q2_K need gguf_decode_group for the tile's group first. On the pack thread only inside the overlap
+ * protocol below.
  *
  * | Argument | Description                                                                                  | Type     | Valid Range              | Required |
  * |----------|----------------------------------------------------------------------------------------------|----------|--------------------------|----------|
