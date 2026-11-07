@@ -351,38 +351,62 @@ _KV64697_LAYERS = tuple(int(x) for x in os.getenv("KV64697_DIAG_LAYERS", ",".joi
 
 
 def _kv64697_diag(layer, actual_heads, expected_heads):
-    """Per (chunk, CP row) slab: a hash of the device KV over all heads and its relative error vs the GPU reference.
+    """Per (chunk, CP row) slab: a hash of the device KV over all heads, its relative error vs the GPU reference, then
+    the error per TP column (which chip of the CP row) and per 128-row block of the slab.
     Two hosts agree bit-for-bit on a slab iff the hashes match; the error says which side moved."""
     import hashlib
 
-    cp = Gemma4ServiceConfig.MESH_SHAPE[0]
+    cp, tp = Gemma4ServiceConfig.MESH_SHAPE
     chunk = Gemma4ServiceConfig.CHUNK_SIZE
     local = chunk // cp
+    blocks = 4
     groups = {}
     for config_id, actual in actual_heads:
         name = "g" if config_id < 4 else ("k" if config_id < 20 else "v")
         groups.setdefault(name, []).append((config_id, actual))
     lines = []
     for name, heads in groups.items():
+        first = {"g": 0, "k": 4, "v": 20}[name]
+        per_column = max(1, len(heads) // tp)
         rows = heads[0][1].shape[0]
         for c in range(rows // chunk):
-            hashes, errors = [], []
+            hashes, errors, details = [], [], []
             for r in range(cp):
-                rows_slice = slice(c * chunk + r * local, c * chunk + (r + 1) * local)
+                start = c * chunk + r * local
                 digest = hashlib.blake2b(digest_size=3)
-                num = den = 0.0
+                col_num, col_den = [0.0] * tp, [0.0] * tp
+                blk_num, blk_den = [0.0] * blocks, [0.0] * blocks
                 for config_id, actual in heads:
-                    part = actual[rows_slice].contiguous()
+                    part = actual[start : start + local].contiguous()
                     digest.update(part.view(torch.uint8).numpy().tobytes())
-                    expected = expected_heads[config_id][rows_slice].float()
+                    expected = expected_heads[config_id][start : start + local].float()
                     if config_id < 4:
                         expected = expected[:, : part.shape[1]]
-                    diff = part.float() - expected
-                    num += float((diff * diff).sum())
-                    den += float((expected * expected).sum())
+                    sq_diff = ((part.float() - expected) ** 2).reshape(blocks, -1).sum(dim=1)
+                    sq_ref = (expected**2).reshape(blocks, -1).sum(dim=1)
+                    column = min((config_id - first) // per_column, tp - 1)
+                    col_num[column] += float(sq_diff.sum())
+                    col_den[column] += float(sq_ref.sum())
+                    for b in range(blocks):
+                        blk_num[b] += float(sq_diff[b])
+                        blk_den[b] += float(sq_ref[b])
                 hashes.append(digest.hexdigest())
+                num, den = sum(col_num), sum(col_den)
                 errors.append(f"{(num / den if den else 0.0) * 1e4:7.2f}")
-            lines.append(f"KV64697 L{layer:02d} {name} c{c:02d} " + " ".join(hashes) + " | " + " ".join(errors))
+                ratio = lambda n, d: f"{(n / d if d else 0.0) * 1e4:.1f}"
+                details.append(
+                    "/".join(ratio(n, d) for n, d in zip(col_num, col_den))
+                    + ":"
+                    + "/".join(ratio(n, d) for n, d in zip(blk_num, blk_den))
+                )
+            lines.append(
+                f"KV64697 L{layer:02d} {name} c{c:02d} "
+                + " ".join(hashes)
+                + " | "
+                + " ".join(errors)
+                + " || "
+                + " ".join(details)
+            )
     return lines
 
 

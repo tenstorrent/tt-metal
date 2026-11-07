@@ -3,6 +3,8 @@
 
 """Gemma4 context-parallel prefill attention with local and packed global ring caches."""
 
+import os
+
 import ttnn
 
 from models.demos.gemma4_d_p.tt.ccl import ccl_reduce_scatter_rows
@@ -79,6 +81,15 @@ class Gemma4Attention:
         self.ccl_manager = ccl_manager
         self.mesh_config = mesh_config
         self.layer_idx = layer_idx
+        mode = os.getenv("KV64697_BARRIER", "")
+        self._kv64697_barrier = config.is_sliding and (
+            mode == "sliding" or (mode == "after_global" and layer_idx % 6 == 0 and layer_idx > 0)
+        )
+        self._kv64697_token = (
+            ttnn.zeros([1, 1, 32, 32], dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=mesh_device)
+            if self._kv64697_barrier
+            else None
+        )
 
         if ring_kv_cache is not None:
             cache = ring_kv_cache.k if config.is_sliding else ring_kv_cache.kv
@@ -275,6 +286,15 @@ class Gemma4Attention:
             )
             packed_kv.deallocate(True)
         else:
+            if self._kv64697_barrier:
+                # Every CP rank must reach this point before any starts the halo exchange.
+                barrier = ttnn.all_gather(
+                    self._kv64697_token,
+                    dim=3,
+                    cluster_axis=self.mesh_config.cp_axis,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
+                ttnn.deallocate(barrier)
             tt_sdpa = sliding_ring_prefill_attention(
                 tt_q,
                 self.ring_kv_cache.k,

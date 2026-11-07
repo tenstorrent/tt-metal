@@ -1240,7 +1240,9 @@
     rc=0
     for run in 1 2 3; do
       echo "KV64697 RUN $run on $(hostname)"
-      mpirun --bind-to none --pernode --tag-output \
+      if [ "$run" = 2 ]; then export KV64697_BARRIER=sliding; else export KV64697_BARRIER=none; fi
+      echo "KV64697 BARRIER=${KV64697_BARRIER:-none}"
+      mpirun -x KV64697_BARRIER --bind-to none --pernode --tag-output \
         python3 -m pytest \
           'models/demos/gemma4_d_p/tests/test_prefill_migration.py::test_prefill_migration[mock-256k]' \
           -sv --tb=short --junitxml="$PREFILL_SUMMARIES/{artifact_subdir}/junit$run.xml" || rc=1
