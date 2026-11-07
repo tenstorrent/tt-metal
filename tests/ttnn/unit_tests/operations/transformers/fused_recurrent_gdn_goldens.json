@@ -3,112 +3,112 @@
  "op": "ttnn.transformer.fused_recurrent_gated_delta_rule",
  "cases": {
   "qwen27b_tp4/B1/T1/s0": {
-   "o": "96f557d3b517d71f9c5a43e2eb91681445b3c3268a1c03a5512b6c884baafcfd",
-   "state": "40ed7c6679eb45537369bc37730e1beed497a0df42dc2ed2fc089d252ae9db96",
-   "pcc_o": 0.9999986,
+   "o": "86b6e9f6733456a5ca205040b1688b8685efb1a2d86b0a6c2ea74c044c2f2c5b",
+   "state": "97e73b4937ac8acc9919b025793987c7368202e9a0ac9dcbedefdf7e605879fc",
+   "pcc_o": 0.9999987,
    "pcc_state": 0.9999998,
-   "commit": "e863cb9ac94",
-   "device": "p300c bh-qbge-15",
-   "date": "2026-10-13"
+   "commit": "f61c24754ea-dirty",
+   "device": "blackhole",
+   "date": "2026-10-30"
   },
   "qwen27b_tp4/B1/T1/zero": {
-   "o": "a73ed4d9e8f18d25ea9f8a393f09f26bb401cd38fa325d3e0b8dc06831858b9a",
-   "state": "d9043af7a606a5da1516d686572141021fc98a43e19e8c7828aca5a6b8e20499",
-   "pcc_o": 0.9999996,
-   "pcc_state": 0.9999998,
-   "commit": "e863cb9ac94",
-   "device": "p300c bh-qbge-15",
-   "date": "2026-10-13"
+   "o": "e266aab162dee54ade1f27f9571bdcea00e8825312d5e62f239703677de07d32",
+   "state": "43f03d55435e1f53e7cb7a2a3b5c3690e665a1db4cb3a557358068a208ac2fd8",
+   "pcc_o": 1.0,
+   "pcc_state": 0.9999999,
+   "commit": "f61c24754ea-dirty",
+   "device": "blackhole",
+   "date": "2026-10-30"
   },
   "qwen27b_tp4/B8/T1/s0": {
-   "o": "3c682468bab877d9692e4f127464b0b96bb2311f6fcad788cd4e20deedd782b4",
-   "state": "d972fe4a613a4febdb37d272f98f4fd148ecb475cd641be54ea4761de3ef1480",
-   "pcc_o": 0.9999997,
-   "pcc_state": 0.9999998,
-   "commit": "e863cb9ac94",
-   "device": "p300c bh-qbge-15",
-   "date": "2026-10-13"
-  },
-  "qwen27b_tp4/B8/T1/zero": {
-   "o": "2e600eb97132e240bf3ffd7cf295fb7890d57e9eb2505029936bf8219f7a733c",
-   "state": "7fb121d68d734c4d0a9e88b356b87829004d6dcb6b7c277ab81342efc38fa7bc",
-   "pcc_o": 0.9999997,
-   "pcc_state": 0.9999998,
-   "commit": "e863cb9ac94",
-   "device": "p300c bh-qbge-15",
-   "date": "2026-10-13"
-  },
-  "qwen27b_tp4/B1/T8/s0": {
-   "o": "59431e6d0b3cb9944e131ec77fb03347873338ddf4fd21a39f578177fcca77f5",
-   "state": "ca5a697234c92536587a7813d5f3ecaaa387a20727626032c627292272f0ab2c",
-   "pcc_o": 0.9999994,
-   "pcc_state": 0.9999995,
-   "commit": "e863cb9ac94",
-   "device": "p300c bh-qbge-15",
-   "date": "2026-10-13"
-  },
-  "qwen27b_tp4/B1/T8/zero": {
-   "o": "60a78585de163a8db12ec4c6d7b5607b2eb11628caa058e4a3e52d7f02e5e20d",
-   "state": "55b1e4c16c64a5ae526e91c13377373239c0154582aecb83c50019f1659a4b7f",
-   "pcc_o": 0.999999,
-   "pcc_state": 0.9999995,
-   "commit": "e863cb9ac94",
-   "device": "p300c bh-qbge-15",
-   "date": "2026-10-13"
-  },
-  "qwen27b_tp8/B1/T1/s0": {
-   "o": "3cf638f6751819383f6a80ba0587290d3d67594a94a00fcea068d8dfad2f56c8",
-   "state": "a885b1699377ebde43c318af4f97498d08d3a068f759e3a56fc710f6569fad2b",
-   "pcc_o": 0.9999995,
-   "pcc_state": 0.9999998,
-   "commit": "e863cb9ac94",
-   "device": "p300c bh-qbge-15",
-   "date": "2026-10-13"
-  },
-  "qwen27b_tp8/B1/T1/zero": {
-   "o": "148050db28de1e9848d5b9982fcef141a7f3f699b28e4d937298910977137599",
-   "state": "f84f22f004c7991f9cdaa6c8f1b1064018e6a3d3e8b5e942bf0070e7846ba4fb",
+   "o": "cd1b96259d79824e1d5fa260ad07535d14085a8534640b5920638033de1d1607",
+   "state": "2db55b18d1ccda8496c7addb2ccb1ec11e84843ef03a4f31c45d1e3461acd44a",
    "pcc_o": 0.9999998,
    "pcc_state": 0.9999998,
-   "commit": "e863cb9ac94",
-   "device": "p300c bh-qbge-15",
-   "date": "2026-10-13"
+   "commit": "f61c24754ea-dirty",
+   "device": "blackhole",
+   "date": "2026-10-30"
+  },
+  "qwen27b_tp4/B8/T1/zero": {
+   "o": "ba5e1692f7051c2b28b7d8629640482cb184857190cfde71c2ea430d0cba3b5c",
+   "state": "e15347072adce32ccc73552da6fac5b864ba317676a01f08dae242d76cc22366",
+   "pcc_o": 0.9999997,
+   "pcc_state": 0.9999999,
+   "commit": "f61c24754ea-dirty",
+   "device": "blackhole",
+   "date": "2026-10-30"
+  },
+  "qwen27b_tp4/B1/T8/s0": {
+   "o": "3c515f9bde518a8888b699397b3a9723988877f5fcf0ef11bcf0f3aa9159f636",
+   "state": "2e367e4caae747922ec2cf96e5fd8c4aaacda375688b7c1d62654972e42e43c4",
+   "pcc_o": 0.9999998,
+   "pcc_state": 0.9999999,
+   "commit": "f61c24754ea-dirty",
+   "device": "blackhole",
+   "date": "2026-10-30"
+  },
+  "qwen27b_tp4/B1/T8/zero": {
+   "o": "15ac4e1dae5379e5a51b3489c9ab02280f752a07ae7c8c20590208ca6fd916d3",
+   "state": "0658084ce708a646d9d635f2529020e891f01f294c57d02ef214119eefbc7efe",
+   "pcc_o": 0.9999996,
+   "pcc_state": 0.9999999,
+   "commit": "f61c24754ea-dirty",
+   "device": "blackhole",
+   "date": "2026-10-30"
+  },
+  "qwen27b_tp8/B1/T1/s0": {
+   "o": "4b92d331d0b7701fb871dc9ff30372216569e77c825182ea531109560404f07d",
+   "state": "c4dac6c94b4090899a0ef1ea617d7f829b75614fb56041dd872f4b10827d2ca4",
+   "pcc_o": 0.9999996,
+   "pcc_state": 0.9999998,
+   "commit": "f61c24754ea-dirty",
+   "device": "blackhole",
+   "date": "2026-10-30"
+  },
+  "qwen27b_tp8/B1/T1/zero": {
+   "o": "4bd1680a6e7e663fc1749f6169ba141c9575f862cb10c50127849d4dda4a29e8",
+   "state": "9dcafb2dc8fee090aa7baa6bc0aa244a4dcdddf53794a10c887bd1d3e8f88712",
+   "pcc_o": 1.0,
+   "pcc_state": 0.9999999,
+   "commit": "f61c24754ea-dirty",
+   "device": "blackhole",
+   "date": "2026-10-30"
   },
   "qwen9b_tp1/B1/T1/s0": {
-   "o": "c260cefd6a7a1f57008124bb6b957ff70868d4fe798e7a47531763df858bd056",
-   "state": "9270bf8621ec098605b728e4bb49847f59394041c293adb64a09ec6e36d73e04",
-   "pcc_o": 0.9999996,
+   "o": "0ae951157d91a4547183da39b27478719e998fa1fbefd9874d289cca88fc6b7b",
+   "state": "43299fb48dde290d5a4ae5a4edd77f7f57a337a18a49602d12e7a513f934f4ae",
+   "pcc_o": 0.9999998,
    "pcc_state": 0.9999998,
-   "commit": "e863cb9ac94",
-   "device": "p300c bh-qbge-15",
-   "date": "2026-10-13"
+   "commit": "f61c24754ea-dirty",
+   "device": "blackhole",
+   "date": "2026-10-30"
   },
   "qwen9b_tp1/B1/T1/zero": {
-   "o": "25dc0401c0dd936ffc3612a81ef232cbc23c62d06dbaf51dc685dd7804194dfa",
-   "state": "0fe8f74cc09f13d0e309980e37f25e989984a8e5719e2dc3ea97deb84e21c72e",
-   "pcc_o": 0.9999996,
-   "pcc_state": 0.9999998,
-   "commit": "e863cb9ac94",
-   "device": "p300c bh-qbge-15",
-   "date": "2026-10-13"
+   "o": "795f37eedae466a15a8940c8ee014711f00015c2274d808daf6327ef777ffced",
+   "state": "7d59c929108e455438c4162aa5a4edd688fb0e2978ad4d97503d3cdf41d9b72d",
+   "pcc_o": 0.9999998,
+   "pcc_state": 0.9999999,
+   "commit": "f61c24754ea-dirty",
+   "device": "blackhole",
+   "date": "2026-10-30"
   },
   "qwen35b_a3b_tp4/B4/T4/s0": {
-   "o": "ed08622ebf71795f0bc2a378983450f5470eaa7125c83e08da69157b15135930",
-   "state": "128565ddeade3177cbac304f05818211fc1386d0feeae04f009c0e66cbecf9f3",
-   "pcc_o": 0.9999993,
-   "pcc_state": 0.9999996,
-   "commit": "e863cb9ac94",
-   "device": "p300c bh-qbge-15",
-   "date": "2026-10-13"
+   "o": "6028eee711b1a36693631c27251228fcb6e3d7f8845857f916eb376c77a47b28",
+   "state": "11920201e8d7130c3a7ebcfeed39e1658fd9a4a4bccf8bd82a0d721154be01fd",
+   "pcc_o": 0.9999997,
+   "pcc_state": 0.9999999,
+   "commit": "f61c24754ea-dirty",
+   "device": "blackhole",
+   "date": "2026-10-30"
   },
   "qwen35b_a3b_tp4/B4/T4/zero": {
-   "o": "d7a5e75e81f95b976a0bd6ddd912d7574fa983494cb39f5afe9efb905f7fa838",
-   "state": "f8d3378ba98b1bfc947ab61ba354640edac8fefe274071792769b2e330e1cbbd",
-   "pcc_o": 0.9999993,
-   "pcc_state": 0.9999996,
-   "commit": "e863cb9ac94",
-   "device": "p300c bh-qbge-15",
-   "date": "2026-10-13"
+   "o": "e62123468a4624bcabc068ac5fe7710d58f9d988689adfd7d2fae1f286690b52",
+   "state": "c1e2faefbf8542f07f1cb22727af906b2748a5bab93c79c3e612658f6810460a",
+   "pcc_o": 0.9999997,
+   "pcc_state": 0.9999999,
+   "commit": "f61c24754ea-dirty",
+   "device": "blackhole",
+   "date": "2026-10-30"
   }
  }
 }
