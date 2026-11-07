@@ -187,9 +187,9 @@ name (`core/spec.py:art`):
 | HF checkpoint, rev `5254448103b6254fc646dacbca1cbbf20e9216c1`, all 48 shards | `/scratch/$USER/bringup/deepseek_v41_flash_d_p/hf_full` | 476 GiB | You download it once (below). Dense weights and the engram tables are always read from it |
 | Goldens (master) | `/data/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden_full/galaxy_8x4` (s10240_c5120, s56320_c5120, plus `-official`) | 85 GB | Fixed |
 | Goldens (node-local mirror tests read) | `/scratch/$USER/bringup/deepseek_v41_flash_d_p/golden_full/galaxy_8x4` | 85 GB | `reference.golden sync`. The orchestrator syncs at run/resume start. When the mirror is incomplete, tests read NFS (slow) and print a warning |
-| Routed-expert weight cache (master) | `/data/dnijemcevic/bringup/deepseek_v41_flash_d_p/tt_cache/8x4/v1` (bank-major `.bm.bin`, bfp4_mse) | 306 GB, 120 files | Fixed |
-| Weight cache (node-local mirror the loader reads) | `/scratch/$USER/bringup/deepseek_v41_flash_d_p/tt_cache/8x4/v1` | 306 GB | `core.weight_cache pull`. The orchestrator pulls at run/resume start. A miss rebuilds that layer from the checkpoint (~2-3 min a layer, DS41-121) |
-| MoE-main routed weights | beside the expert cache: `<expert cache>.moe_main.<plan>.{w_gu,w_d}.tensorbin` | ~285 GB (HANDOFF_2026-11-06) | Laid out from the checkpoint on first use of `MOE_BLOCK_SRC=main` (unverified: time) |
+| Routed-expert weight cache (master) | `/data/dnijemcevic/bringup/deepseek_v41_flash_d_p/tt_cache/8x4/v1`: the carried block's bank-major `.bm.bin` (306 GB, 120 files) and, since 2026-11-07, the MoE-main block's `.moe_main.*.tensorbin` (306 GB, 80 files), bfp4_mse | 612 GB, 200 files | Fixed |
+| Weight cache (node-local mirror the loader reads) | `/scratch/$USER/bringup/deepseek_v41_flash_d_p/tt_cache/8x4/v1` | 612 GB with `MOE_BLOCK_SRC=main` (306 GB with `carried`) | `core.weight_cache pull`. The orchestrator pulls at run/resume start. A miss rebuilds that layer from the checkpoint (~2-3 min a layer, DS41-121) |
+| MoE-main routed weights (the default block) | beside the expert cache: `<expert cache>.moe_main.<plan>.{w_gu,w_d}.tensorbin` | 306 GB, 80 files | In the master (pushed 2026-11-07 in 16 min, ~315 MB/s) and pulled with the rest when `MOE_BLOCK_SRC=main` (`bringup/hooks.py weight_cache_patterns`). A missing file is laid out from the checkpoint on first use (time unverified) |
 
 ```bash
 # checkpoint (the recipe used here: /scratch/dnijemcevic/hf_dl.py; ~7 min on this node's network (unverified elsewhere))
@@ -200,10 +200,10 @@ python -c "from huggingface_hub import snapshot_download as d; d('deepseek-ai/De
 python -m models.demos.common.bringup.reference.golden status --spec $S      # which dir each rung reads
 python -m models.demos.common.bringup.reference.golden sync   --spec $S      # master -> mirror, verified
 python -m models.demos.common.bringup.core.weight_cache status --spec $S     # to pull / to push, with a time estimate
-python -m models.demos.common.bringup.core.weight_cache pull   --spec $S     # ~50 min at the code's 100 MB/s NFS estimate
+python -m models.demos.common.bringup.core.weight_cache pull   --spec $S     # 612 GB: ~100 min at the code's 100 MB/s NFS estimate
 ```
 
-- The local disk needs about 870 GB for checkpoint, cache and goldens, plus the MoE-main weights.
+- The local disk needs about 1.2 TB: checkpoint 476 GiB, weight cache 612 GB (both blocks), goldens 85 GB.
 - Old `.tensorbin` expert caches are not read any more. To convert one (host only, ~8 min):
   `python models/demos/deepseek_v41_flash_d_p/tools/convert_expert_cache.py --layers $(seq 0 39) [--verify]`.
 - `ENGRAM_TABLE=resident` needs ~190-210 GB of host RAM for the two engram tables (the Galaxy host has 566 GB).
@@ -489,4 +489,4 @@ box has none of it). "/data" = NFS, shared, not in git.
 | `/scratch/dnijemcevic/tt-d-gen` (branch `jazpur/dsv4-replay-window`), `/scratch/dnijemcevic/tt-d-gen-build` (`venv312`, `README.md`) | scratch | tt-d-gen clone and build |
 | `/scratch/dnijemcevic/tt-d-gen/engine/tests/integration/dsv4_tables.py` | scratch (tt-d-gen) | the tt-d-gen DSv4 tables mock |
 | `/scratch/$USER/bringup/deepseek_v41_flash_d_p/{hf_full,golden_full,tt_cache,runs,profiles}` | scratch | checkpoint, mirrors, run dirs |
-| `/data/dnijemcevic/bringup/deepseek_v41_flash_d_p/{golden_full/galaxy_8x4,tt_cache}` | /data | shared masters: goldens and weight cache |
+| `/data/dnijemcevic/bringup/deepseek_v41_flash_d_p/{golden_full/galaxy_8x4,tt_cache}` | /data | shared masters: goldens and weight cache (both MoE blocks' routed weights) |
