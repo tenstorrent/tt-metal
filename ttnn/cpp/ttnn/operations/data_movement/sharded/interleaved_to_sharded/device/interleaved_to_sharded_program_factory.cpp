@@ -409,6 +409,8 @@ ttnn::device_operation::ProgramArtifacts InterleavedToShardedProgramFactory::cre
             uint32_t shard_height = num_units_per_shard_height;
             uint32_t shard_width = input_unit_size;
             if (shard_strategy == TensorMemoryLayout::HEIGHT_SHARDED) {
+                // A height shard may include padding columns beyond the source row.
+                shard_width = num_units_per_shard_width_last;
                 if (core.x == end_core.x && core.y == end_core.y) {
                     shard_height = num_units_per_shard_height_last;
                     curr_num_units_per_shard = shard_height * num_units_per_shard_width;
