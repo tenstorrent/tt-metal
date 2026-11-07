@@ -343,19 +343,6 @@ RingSemaphores allocate_ring_semaphores(
         sems.vc_freed.push_back(channel());
         sems.vc_outbox.push_back(channel());
     }
-    // The published release order is an optimisation: without it combine walks the predicted order, which is as
-    // correct. So when its words leave no room for the fabric connection (16 experts a chip at the default
-    // untilizer count and two links), drop them rather than fail.
-    if (sems.order_words != 0 && sems.num_program_semaphores() > kCombineSemaphoresPerCore) {
-        log_warning(
-            tt::LogOp,
-            "combine_fabric2d: {} release-order words leave no room for the fabric connection ({} ids of {}); "
-            "walking the predicted order",
-            sems.order_words,
-            sems.num_program_semaphores(),
-            kCombineSemaphoresPerCore);
-        sems.order_words = 0;
-    }
     TT_FATAL(
         sems.num_program_semaphores() <= kCombineSemaphoresPerCore,
         "combine_fabric2d: {} program semaphores per combine core exceed the {} a core has beside its fabric "
@@ -666,15 +653,6 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
             }
             if (args.walk_taper_tail > 0) {
                 kernel.defines.emplace_back("URE_TAPER_TAIL", std::to_string(args.walk_taper_tail));
-                if (const char* e = std::getenv("TT_URE_TAPER_SINGLE")) {
-                    kernel.defines.emplace_back("URE_TAPER_SINGLE", e);
-                }
-                if (std::getenv("TT_URE_SORT_WALK") != nullptr) {
-                    kernel.defines.emplace_back("URE_SORT_WALK", "1");
-                }
-                if (const char* e = std::getenv("TT_URE_TAPER_HEAD")) {
-                    kernel.defines.emplace_back("URE_TAPER_HEAD", e);
-                }
             }
         }
     };

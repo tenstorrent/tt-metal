@@ -261,29 +261,6 @@ inline bool partial_eighth_on_rows(const uint32_t* c, uint32_t n, uint32_t per_c
     return true;
 }
 
-// WALK ORDER (EXPERIMENT URE_SORT_WALK): the order a pass walks its local experts in. With the switch, biggest
-// first, so the walk's last experts -- what combine still has to ship once the routed expert ends -- are its
-// smallest. Ties keep local order. Without it, local order. All kernels and combine's prediction build it alike.
-// `perm` holds n entries.
-template <class TilesOf>
-inline void walk_perm(uint8_t* perm, uint32_t n, const TilesOf& tiles_of) {
-    for (uint32_t i = 0; i < n; ++i) {
-        perm[i] = static_cast<uint8_t>(i);
-    }
-#ifdef URE_SORT_WALK
-    for (uint32_t i = 1; i < n; ++i) {
-        const uint8_t v = perm[i];
-        const uint32_t tv = tiles_of(v);
-        uint32_t j = i;
-        while (j > 0 && tiles_of(perm[j - 1]) < tv) {
-            perm[j] = perm[j - 1];
-            --j;
-        }
-        perm[j] = v;
-    }
-#endif
-}
-
 // Streaming planner: call role() once per local expert, in increasing order. tiles_of(e)
 // must return the expert's CLAMPED tile-row count (0 if empty or outside the band).
 // A group (quad or pair) is decided when its first expert comes up; its later members are
@@ -324,28 +301,10 @@ struct WavePlanner {
         for (uint32_t n = e + 1; n < num_experts; ++n) {
             after += tiles_of(n) != 0 ? 1u : 0u;
         }
-#ifdef URE_TAPER_HEAD
-        // EXPERIMENT: the first URE_TAPER_HEAD non-empty experts go at most two at a time too, so combine gets its
-        // first release early instead of after a whole quad or eighth wave.
-        uint32_t before = 0;  // non-empty experts before e
-        for (uint32_t n = 0; n < e; ++n) {
-            before += tiles_of(n) != 0 ? 1u : 0u;
-        }
-        const bool head_ok = before >= URE_TAPER_HEAD;
-#else
-        constexpr bool head_ok = true;
-#endif
-        const bool eighth_ok = head_ok && after >= 7 + URE_TAPER_TAIL;
+        const bool eighth_ok = after >= 7 + URE_TAPER_TAIL;
         const bool partial_eighth_ok = false;
-        const bool quad_ok = head_ok && after >= 3 + URE_TAPER_TAIL;
-#ifdef URE_TAPER_SINGLE
-        // EXPERIMENT: the last URE_TAPER_SINGLE experts run one at a time on the whole grid.
-        const bool pair_ok = after > URE_TAPER_SINGLE;
+        const bool quad_ok = after >= 3 + URE_TAPER_TAIL;
 #else
-        constexpr bool pair_ok = true;
-#endif
-#else
-        constexpr bool pair_ok = true;
         constexpr bool eighth_ok = true;
         constexpr bool partial_eighth_ok = true;
         constexpr bool quad_ok = true;
@@ -377,7 +336,7 @@ struct WavePlanner {
             n_pend = 3;
             return kRoleQuarter0;
         }
-        if (pair_ok && found >= 1 && pair_on_halves(c, nc[1], per_core_M_max)) {
+        if (found >= 1 && pair_on_halves(c, nc[1], per_core_M_max)) {
             pend_e[0] = nx[0];
             pend_role[0] = kRoleBottom;
             n_pend = 1;
@@ -493,13 +452,9 @@ inline void predicted_order(
         const uint32_t lo = (passes == 2 && pass == 0) ? big_first_t + 1 : 0u;
         const uint32_t hi = (passes == 2 && pass == 1) ? big_first_t : 0xFFFFFFFFu;
         auto tiles_of = [&](uint32_t e) -> uint32_t { return (count_in_band(counts[e], lo, hi) + 31) / 32; };
-        uint8_t perm[N];
-        walk_perm(perm, n, tiles_of);
-        auto tiles_at = [&](uint32_t k) -> uint32_t { return tiles_of(perm[k]); };
         WavePlanner planner;
-        for (uint32_t k = 0; k < n; ++k) {
-            const uint32_t e = perm[k];
-            const uint32_t role = planner.role(k, n, per_core_M_max, tiles_at);
+        for (uint32_t e = 0; e < n; ++e) {
+            const uint32_t role = planner.role(e, n, per_core_M_max, tiles_of);
             if (role == kRoleSkip) {
                 continue;
             }

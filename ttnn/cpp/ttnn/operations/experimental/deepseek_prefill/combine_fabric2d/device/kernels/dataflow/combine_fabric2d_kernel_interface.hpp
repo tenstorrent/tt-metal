@@ -202,8 +202,7 @@ struct UntilizerPlan {
 struct CollectorPlan {
     uint32_t counts_addr = 0;
     uint32_t ready_sem = 0;
-    std::vector<tt::tt_metal::CoreCoord> waiting;     // virtual; the cores `ready` and `progress` are published to
-    std::vector<tt::tt_metal::CoreCoord> order_only;  // virtual; the cores that take only the release order
+    std::vector<tt::tt_metal::CoreCoord> waiting;  // virtual; the cores `ready` is published to
 };
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::combine_fabric2d
