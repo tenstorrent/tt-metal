@@ -489,6 +489,7 @@ jobs:
           path: stage2
 
       - name: Add stage 2 to the report
+        id: stage2
         if: ${{ !cancelled() && hashFiles('stage2/**/stage2.json') != '' && hashFiles('perf_gate_report.md') != '' }}
         env:
           ARCH: ${{ inputs.arch }}
@@ -499,11 +500,12 @@ jobs:
             "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/attempts/${GITHUB_RUN_ATTEMPT}/jobs?per_page=100" \
             --jq ".jobs[] | select(.name | test(\"_${ARCH} group [0-9]+/[0-9]+\")) | .name" | wc -l) || LEGS=0
           GATE_BASE=$(python3 -c "import json; print(json.load(open('baseline_metadata.json')).get('commit_sha', ''))")
-          # Report-only: stage 2 adds to the report and does not change the verdict.
+          # Stage 2 decides the regression verdict: exit 1 when it blocks.
           python3 ${{ env.LLK_PATH }}/perf/placement_check.py gate \
             --results 'stage2/**/stage2.json' --bases 'stage2/**/stage2.base' --legs "$LEGS" \
             --stage1 perf_gate_report.regressions.csv --gate-base "$GATE_BASE" \
-            --arch "$ARCH" --report stage2.md || true
+            --arch "$ARCH" --report stage2.md && RC=0 || RC=$?
+          echo "exit_code=$RC" >> "$GITHUB_OUTPUT"
           printf '\n' >> perf_gate_report.md
           cat stage2.md >> perf_gate_report.md
 
@@ -710,7 +712,7 @@ jobs:
           fi
 
           HAVE_BASELINE=$(cat have_baseline.txt 2>/dev/null || echo false)
-          EXIT_CODE=${{ steps.compare.outputs.gate_exit_code }}
+          EXIT_CODE=${{ steps.stage2.outputs.exit_code || steps.compare.outputs.gate_exit_code }}
 
           if [ "${{ steps.measured.outputs.complete }}" != "true" ]; then
             KIND=incomplete
