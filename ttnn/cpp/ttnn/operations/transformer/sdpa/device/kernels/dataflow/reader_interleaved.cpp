@@ -1039,4 +1039,5 @@ void kernel_main() {
             }
         }
     }  // close phase
+    noc.async_write_barrier();
 }
