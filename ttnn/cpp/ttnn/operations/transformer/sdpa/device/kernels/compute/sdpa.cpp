@@ -14,13 +14,10 @@
 #include "cpp/ttnn/operations/transformer/sdpa/device/kernels/windowed_mode.hpp"
 
 void kernel_main() {
-    constexpr uint32_t Skt = get_compile_time_arg_val(0);
     constexpr uint32_t DHt = get_compile_time_arg_val(1);
     constexpr uint32_t vDHt = get_compile_time_arg_val(2);
     constexpr uint32_t Sq_chunk_t = get_compile_time_arg_val(3);
-    constexpr uint32_t q_num_chunks = get_compile_time_arg_val(4);
     constexpr uint32_t Sk_chunk_t = get_compile_time_arg_val(5);
-    constexpr uint32_t k_num_chunks = get_compile_time_arg_val(6);
 
     constexpr uint32_t qk_in0_block_w = get_compile_time_arg_val(7);
     constexpr uint32_t qk_subblock_w = get_compile_time_arg_val(8);
@@ -41,7 +38,6 @@ void kernel_main() {
     constexpr uint32_t sliding_window_size = get_compile_time_arg_val(22);
     constexpr bool use_attention_sink = get_compile_time_arg_val(23) == 1;
     constexpr bool use_streaming_compute = get_compile_time_arg_val(24) == 1;
-    constexpr uint32_t valid_Skt = get_compile_time_arg_val(25);
     constexpr uint32_t k_partial_col = get_compile_time_arg_val(26);
     // Zigzag remap flag drives the external remap_q_index call on the flat B*NQH*q_num_chunks range.
     constexpr bool use_zigzag_balancing = get_compile_time_arg_val(27) == 1;
@@ -61,6 +57,11 @@ void kernel_main() {
     // Global Q scheduling args follow phase_2 slot.
     const uint32_t global_q_start = get_arg_val<uint32_t>(4);
     const uint32_t global_q_count = get_arg_val<uint32_t>(5);
+    // Sequence geometry (compile-time args 0, 4, 6 and 25 are retired placeholders).
+    const uint32_t Skt = get_arg_val<uint32_t>(6);
+    const uint32_t valid_Skt = get_arg_val<uint32_t>(7);
+    const uint32_t q_num_chunks = get_arg_val<uint32_t>(8);
+    const uint32_t k_num_chunks = get_arg_val<uint32_t>(9);
 
     constexpr uint32_t q_chunk_tiles = Sq_chunk_t * DHt;
     constexpr uint32_t k_chunk_tiles = Sk_chunk_t * DHt;
@@ -136,9 +137,9 @@ void kernel_main() {
             lw_mask.global_n_partial_col = k_partial_col;
             lw_mask.global_n_partial_tile_idx = lw_mask_tile_count++;
             // global_n_padded_tiles = Sk_chunk_t - valid_tiles_in_last_chunk
-            constexpr uint32_t last_chunk_first_tile =
+            const uint32_t last_chunk_first_tile =
                 (valid_Skt > Sk_chunk_t) ? ((valid_Skt - 1) / Sk_chunk_t) * Sk_chunk_t : 0u;
-            constexpr uint32_t valid_tiles_in_last_chunk = valid_Skt - last_chunk_first_tile;
+            const uint32_t valid_tiles_in_last_chunk = valid_Skt - last_chunk_first_tile;
             lw_mask.global_n_padded_tiles = Sk_chunk_t - valid_tiles_in_last_chunk;
         }
         // A user-provided dense mask is streamed per-chunk by the reader and consumed inside the
@@ -154,7 +155,6 @@ void kernel_main() {
         sdpa_standard_v2<
             Sq_chunk_t,
             Sk_chunk_t,
-            valid_Skt,
             DHt,
             vDHt,
             scale_fp32,
@@ -182,6 +182,7 @@ void kernel_main() {
             cb_windowed_k_range>(
             global_q_count,
             k_num_chunks,
+            valid_Skt,
             cb_out_im_A,
             cb_out_im_B,
             cb_max_A,

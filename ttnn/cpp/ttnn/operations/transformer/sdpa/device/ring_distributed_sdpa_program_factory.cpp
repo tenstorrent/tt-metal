@@ -264,15 +264,15 @@ ProgramDescriptor build_ring_distributed_sdpa_program_descriptor(
         NQH,
         NKH,
         NKH,
-        Skt,
-        valid_Sqt * 2 * ring_size,
-        valid_Skt,
+        0,  // arg 4: Skt, a runtime arg
+        0,  // arg 5: valid_Sqt (full Q length in tiles), a runtime arg
+        0,  // arg 6: valid_Skt, a runtime arg
         DHt,
         vDHt,
         Sq_chunk_t,
-        q_num_chunks,
+        0,  // arg 10: q_num_chunks, a runtime arg
         Sk_chunk_t,
-        k_num_chunks,
+        0,  // arg 12: k_num_chunks, a runtime arg
         num_cores,
         true,                               //(std::uint32_t)is_causal,
         false,                              //(std::uint32_t)use_provided_mask,
@@ -318,13 +318,13 @@ ProgramDescriptor build_ring_distributed_sdpa_program_descriptor(
         // interleaved accessor args
         B,
         NQH,
-        valid_Sqt * 2,
-        Sk,
+        0,  // arg 2: valid_Sqt * 2, a runtime arg
+        0,  // arg 3: Sk, a runtime arg
         vDHt,
         Sq_chunk_t,
-        q_num_chunks,
+        0,  // arg 6: q_num_chunks, a runtime arg
         Sk_chunk_t,
-        k_num_chunks,
+        0,  // arg 8: k_num_chunks, a runtime arg
         packed_identity_scalar,
         num_cores,
         true,   //(std::uint32_t)is_causal,
@@ -355,13 +355,13 @@ ProgramDescriptor build_ring_distributed_sdpa_program_descriptor(
 
     std::vector<uint32_t> compute_compile_time_args = {
         // matmul args
-        Skt,
+        0,  // arg 0: Skt, a runtime arg
         DHt,
         vDHt,
         Sq_chunk_t,
-        q_num_chunks,
+        0,  // arg 4: q_num_chunks, a runtime arg
         Sk_chunk_t,
-        k_num_chunks,
+        0,  // arg 6: k_num_chunks, a runtime arg
         qk_in0_block_w,
         qk_out_subblock_w,
         qk_out_subblock_h,
@@ -377,11 +377,11 @@ ProgramDescriptor build_ring_distributed_sdpa_program_descriptor(
         false,  //(std::uint32_t)use_padded_mask,
         true,   //(uint32_t)is_chunked,
         scale_packed,
-        0,          //(uint32_t)sliding_window_size,
-        0,          //(std::uint32_t)use_attention_sink,
-        0,          //(std::uint32_t)use_streaming_compute - always false for ring distributed (causal)
-        valid_Skt,  // arg 25: unpadded K tiles for streaming padded_k_tiles
-        0u,         // arg 26: k_partial_col - unused on ring's non-streaming path
+        0,   //(uint32_t)sliding_window_size,
+        0,   //(std::uint32_t)use_attention_sink,
+        0,   //(std::uint32_t)use_streaming_compute - always false for ring distributed (causal)
+        0u,  // arg 25: valid_Skt, a runtime arg
+        0u,  // arg 26: k_partial_col - unused on ring's non-streaming path
         static_cast<uint32_t>(use_zigzag_balancing),  // arg 27: unified zigzag remap
         static_cast<uint32_t>(WindowedMode::None),    // arg 28: windowed mode — ring is never windowed
         0u,                                           // arg 29: K/V retention, off on ring
@@ -554,6 +554,17 @@ ProgramDescriptor build_ring_distributed_sdpa_program_descriptor(
              read_offset_phase_1,
              chunked_q_chunk_offset_phase_2,
              read_offset_phase_2,
+             Skt,
+             valid_Sqt * 2 * ring_size,
+             valid_Skt,
+             q_num_chunks,
+             k_num_chunks,
+             0u,  // cu_window_seqlens_addr (ring is never windowed)
+             0u,  // cu_window_seqlens_eles
+             0u,  // windowed_q_token_offset
+             0u,  // windowed_q_token_offset_addr
+             0u,  // mask block map addr (never on ring)
+             0u,  // mask block map stick bytes
              global_q_start,
              global_q_count});
 
@@ -568,8 +579,14 @@ ProgramDescriptor build_ring_distributed_sdpa_program_descriptor(
              write_offset_phase_2,
              global_q_start,
              global_q_count,
-             0u,    // arg 9: cu_window_seqlens_addr — unused (ring is never windowed)
-             0u});  // arg 10: cu_window_seqlens_eles — unused (ring is never windowed)
+             0u,              // arg 9: cu_window_seqlens_addr — unused (ring is never windowed)
+             0u,              // arg 10: cu_window_seqlens_eles — unused (ring is never windowed)
+             0u,              // arg 11: windowed_q_token_offset — unused
+             0u,              // arg 12: windowed_q_token_offset_addr — unused
+             valid_Sqt * 2,   // arg 13
+             Sk,              // arg 14
+             q_num_chunks,    // arg 15
+             k_num_chunks});  // arg 16
 
         compute_desc.emplace_runtime_args(
             core,
@@ -578,7 +595,11 @@ ProgramDescriptor build_ring_distributed_sdpa_program_descriptor(
              chunked_q_chunk_offset_phase_1,
              chunked_q_chunk_offset_phase_2,
              global_q_start,
-             global_q_count});
+             global_q_count,
+             Skt,
+             valid_Skt,
+             q_num_chunks,
+             k_num_chunks});
     }
 
     desc.kernels.push_back(std::move(reader_desc));

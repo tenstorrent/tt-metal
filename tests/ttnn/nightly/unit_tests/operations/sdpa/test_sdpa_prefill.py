@@ -897,7 +897,8 @@ def test_sdpa_chunked_iterate_batch(
             grid_size=(1, 1),
         )
 
-    expected_entries = s // prefill_chunk_size
+    # The scalar chunk offset is a runtime argument, so every chunk shares one program.
+    expected_entries = 1
     assert (
         device.num_program_cache_entries() == expected_entries
     ), "Program cache should have {} entry/entries but has {}".format(
