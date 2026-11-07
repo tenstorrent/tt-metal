@@ -19,7 +19,22 @@ void bind_nlp_concat_heads_decode(nb::module_& mod) {
     ttnn::bind_function<"nlp_concat_heads_decode", "ttnn.experimental.">(
         mod,
         R"doc(
-            Shuffles [S=1, B=32, 32(num_heads), head_dim] tensor into tensor with shape [S=1, 1, B=32, num_heads * head_dim]. num_heads should be specified and be less than 32; the op will assume the input padded num_heads to 32 and will unpad it. The output is default width sharded by num heads.
+            Concatenates heads into [1, 1, 32, num_heads * padded_head_dim] by default.
+            The input has shape [1, users, padded_heads, head_dim]; padded_head_dim is its padded width.
+            The input must be L1 HEIGHT_SHARDED with one [padded_heads, padded_head_dim] shard per user,
+            at most 32 users, and padded_heads a multiple of 32 containing num_heads.
+            Input and output tiles must be non-transposed 32x32 with 16x16 faces. BF16 and FP32
+            are supported. Shard orientation may be ROW_MAJOR or COL_MAJOR.
+
+            output_tensor, when supplied, must be on the input device, have matching dtype,
+            TILE layout, and L1 WIDTH_SHARDED memory. Its padded shape must match the result,
+            it must contain every user row and have logical width num_heads * padded_head_dim.
+            At least num_heads cores are required, each with a [32, padded_head_dim] shard.
+            Spare cores are unused; for one head, the supplied output may instead keep the input logical width.
+
+            sub_core_grids provides the available output cores and is required for non-origin or
+            disjoint input grids. Without output_tensor, the output is L1 WIDTH_SHARDED with
+            one core per head. memory_config is currently ignored.
         )doc",
         &ttnn::experimental::nlp_concat_heads_decode,
         nb::arg("input_tensor").noconvert(),
