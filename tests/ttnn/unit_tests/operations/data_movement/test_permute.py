@@ -855,3 +855,25 @@ def test_transpose_empty_to_sharded_output(device, expect_error):
     )
     with expect_error(RuntimeError, "Sharded WH transpose requires non-zero H and W"):
         ttnn.transpose(x, -2, -1, memory_config=mem)
+
+
+@pytest.mark.parametrize(
+    "orientation",
+    [ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR],
+    ids=["row_major", "col_major"],
+)
+def test_transpose_wh_sharded_offset_core_grid(device, orientation):
+    torch.manual_seed(0)
+    shape = (1, 1, 128, 64)
+    torch_input = torch.randn(shape, dtype=torch.bfloat16)
+    torch_expected = torch_input.transpose(-2, -1)
+
+    grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(1, 1), ttnn.CoreCoord(2, 2))})
+    shard_spec = ttnn.ShardSpec(grid, (32, 64), orientation)
+    mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec)
+
+    tt_input = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=mem_config)
+    tt_output = ttnn.transpose(tt_input, -2, -1, memory_config=mem_config)
+    output_torch = ttnn.to_torch(tt_output)
+
+    assert_with_pcc(torch_expected, output_torch, 0.9999)
