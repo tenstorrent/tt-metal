@@ -10,8 +10,10 @@ one device marker read back at the end (`device_determinism.py`). Without a sync
 apart, which is what exposes a buffer or a semaphore reused before a slow peer is done with it.
 
 Shapes are K3's: `d = 7168` over TP4, so 1792 columns per chip, and the 5120-token chunk over the SP
-axis, 640 rows per chip on 8x4 and 1280 on a 4x4 stage. The sealed set is the boundary block's,
-six inherited snapshots and the sealed live stream, with 25 read sites, the first one closed.
+axis, 640 rows per chip on 8x4 and 1280 on a 4x4 stage. The batches are a non-first pipeline rank's,
+as `TtAttnResWalk` issues them: the read owed across the rank boundary as a one-site batch over the six
+inherited snapshots, then the boundary block's 24 sites over those and the sealed live stream, and the
+next block's 24 over one more snapshot.
 
 The 4x4 arm needs the Galaxy carved to a subtorus:
     TT_VISIBLE_DEVICES=2,3,6,7,10,11,14,15,18,19,22,23,26,27,30,31
@@ -40,11 +42,12 @@ GLOBAL_TOKENS = 5120
 EPS = 1e-5
 TP_AXIS = 1
 SP_AXIS = 0
-# The boundary block: six inherited snapshots and the sealed live stream, then one more snapshot a
-# block later. 24 read sites and the read owed across the rank boundary, which comes back closed.
+# Six inherited snapshots, the sealed live stream, then one more snapshot a block later.
 PLANES = (6, 1, 1)
-NUM_SITES = 25
-NUM_CLOSED = 1
+NUM_SITES = 24
+# Each batch as (snapshots it scores, a prefix of PLANES; read sites): the owed read, the boundary
+# block's batch and the next block's.
+BATCHES = ((1, 1), (2, NUM_SITES), (3, NUM_SITES))
 ITERATIONS = 100
 
 EXACT_BOX = {"require_exact_physical_num_devices": True}
@@ -85,11 +88,11 @@ def _sealed(mesh_device):
     ]
 
 
-def _score_columns(mesh_device):
-    """`[1, 1, d, 32]` with a query per site in columns 1..NUM_SITES and column 0 zero, `d` over TP."""
+def _score_columns(mesh_device, num_sites):
+    """`[1, 1, d, 32]` with a query per site in columns 1..num_sites and column 0 zero, `d` over TP."""
     queries = torch.zeros(1, 1, HIDDEN_SIZE, 32)
-    queries[..., 1 : 1 + NUM_SITES] = deterministic_input(
-        HIDDEN_SIZE, NUM_SITES, seed=len(PLANES), scale=0.02, dtype=torch.float32
+    queries[..., 1 : 1 + num_sites] = deterministic_input(
+        HIDDEN_SIZE, num_sites, seed=len(PLANES), scale=0.02, dtype=torch.float32
     )
     return _to_device(mesh_device, queries, _mapper(mesh_device, None, 2))
 
@@ -134,65 +137,77 @@ def _assert_repeats(marker, names, references, outputs, what):
 
 @pytest.mark.parametrize("mesh_device, device_params", MESH_ARMS, indirect=True)
 def test_attn_res_block_stats_repeats(mesh_device, device_params):
-    """The gathered statistics, alternating two sealed depths as consecutive blocks do.
+    """The gathered statistics, cycling through the batches in the order a rank issues them.
 
-    Each depth has its own persistent `gathered` buffer and its own program, and both depths share
-    one arrival semaphore, so every run reuses a buffer its peers wrote into two runs ago and a
-    semaphore the other depth's program last left. The gathered buffer is the output, so the
-    reference is a copy of it.
+    Each sealed depth has its own persistent `gathered` buffer and its own program, and every depth
+    shares one arrival semaphore, so every run reuses a buffer its peers wrote into a cycle ago and a
+    semaphore another depth's program last left. The gathered buffer is the output, so the reference
+    is a copy of it.
     """
     _, tp_factor, _ = _layout(mesh_device)
     sealed = _sealed(mesh_device)
-    queries = _score_columns(mesh_device)
     semaphore = _block_stats_semaphore(mesh_device)
-    depths = [sealed[:2], sealed]
-    gathered = [_gathered(mesh_device, sum(PLANES[: len(depth)]), tp_factor) for depth in depths]
+    depths = [sealed[:num_snapshots] for num_snapshots, _ in BATCHES]
+    queries = [_score_columns(mesh_device, num_sites) for _, num_sites in BATCHES]
+    gathered = [_gathered(mesh_device, sum(PLANES[:num_snapshots]), tp_factor) for num_snapshots, _ in BATCHES]
 
-    references = [
-        ttnn.clone(_block_stats(mesh_device, depth, queries, out, semaphore)) for depth, out in zip(depths, gathered)
-    ]
+    references = [ttnn.clone(_block_stats(mesh_device, *batch, semaphore)) for batch in zip(depths, queries, gathered)]
     marker = None
-    for iteration in range(len(depths), ITERATIONS):
-        which = iteration % len(depths)
-        out = _block_stats(mesh_device, depths[which], queries, gathered[which], semaphore)
+    for iteration in range(len(BATCHES), ITERATIONS):
+        which = iteration % len(BATCHES)
+        out = _block_stats(mesh_device, depths[which], queries[which], gathered[which], semaphore)
         marker = fold_mismatches(marker, [references[which]], [out])
 
-    names = [f"gathered C={sum(PLANES[: len(depth)])}" for depth in depths]
+    names = [f"gathered C={sum(PLANES[:num_snapshots])}" for num_snapshots, _ in BATCHES]
     _assert_repeats(marker, names, references, gathered, "attn_res_block_stats")
 
 
 @pytest.mark.parametrize("mesh_device, device_params", MESH_ARMS, indirect=True)
 def test_attn_res_block_mix_repeats(mesh_device, device_params):
-    """The boundary block's scoring and mixture, from one gathered statistics tensor held for every run.
+    """The boundary layer's two batches, the owed read's and the boundary block's, alternating, each
+    from one gathered statistics tensor held for every run.
 
     The op is rank-local, so each chip repeats on its own; the mesh is here so every chip's shard is
     a different one, at the shape it has in the model.
     """
     _, tp_factor, _ = _layout(mesh_device)
-    sealed = _sealed(mesh_device)[:2]
-    gathered = _gathered(mesh_device, sum(PLANES[:2]), tp_factor)
-    stats = _block_stats(
-        mesh_device, sealed, _score_columns(mesh_device), gathered, _block_stats_semaphore(mesh_device)
-    )
+    sealed = _sealed(mesh_device)
+    semaphore = _block_stats_semaphore(mesh_device)
+    batches = BATCHES[:2]
+    stats = [
+        _block_stats(
+            mesh_device,
+            sealed[:num_snapshots],
+            _score_columns(mesh_device, num_sites),
+            _gathered(mesh_device, sum(PLANES[:num_snapshots]), tp_factor),
+            semaphore,
+        )
+        for num_snapshots, num_sites in batches
+    ]
 
-    def mix():
+    def mix(which):
+        num_snapshots, num_sites = batches[which]
         return list(
             ttnn.experimental.deepseek_prefill.attn_res_block_mix(
-                sealed, stats, num_sites=NUM_SITES, eps=EPS, num_closed_sites=NUM_CLOSED
+                sealed[:num_snapshots], stats[which], num_sites=num_sites, eps=EPS
             )
         )
 
-    references = mix()
+    references = [mix(which) for which in range(len(batches))]
+    last = list(references)
     marker = None
-    for iteration in range(1, ITERATIONS):
-        outputs = mix()
-        marker = fold_mismatches(marker, references, outputs)
-        # The last run's outputs stay for the failure report.
-        if iteration < ITERATIONS - 1:
-            for output in outputs:
+    for iteration in range(len(batches), ITERATIONS):
+        which = iteration % len(batches)
+        outputs = mix(which)
+        marker = fold_mismatches(marker, references[which], outputs)
+        # Each batch's last outputs stay for the failure report.
+        if last[which] is not references[which]:
+            for output in last[which]:
                 ttnn.deallocate(output)
+        last[which] = outputs
 
-    _assert_repeats(marker, ["partials", "shifts", "masses", "closed"], references, outputs, "attn_res_block_mix")
+    names = [f"R={num_sites} {name}" for _, num_sites in batches for name in ("partials", "shifts", "masses")]
+    _assert_repeats(marker, names, sum(references, []), sum(last, []), "attn_res_block_mix")
 
 
 @pytest.mark.parametrize("mesh_device, device_params", MESH_ARMS, indirect=True)
@@ -204,7 +219,7 @@ def test_attn_res_gather_softmax_repeats(mesh_device, device_params):
     whole walk, and the site reaches the cached program as a runtime arg, so the sites rotate.
     """
     _, tp_factor, _ = _layout(mesh_device)
-    num_sites = NUM_SITES - NUM_CLOSED
+    num_sites = NUM_SITES
     sites = (0, num_sites // 2, num_sites - 1)
     stream = lambda seed: _to_device(
         mesh_device, deterministic_input(1, 1, GLOBAL_TOKENS, HIDDEN_SIZE, seed=seed), _mapper(mesh_device, 2, 3)

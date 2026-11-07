@@ -25,7 +25,7 @@ void bind_attn_res_block_mix(nb::module_& mod) {
         mod,
         R"doc(
             Scores R AttnRes read sites against the sealed set and mixes it, returning
-            `(partials, shift, mass, closed)` in the online-softmax convention:
+            `(partials, shift, mass)` in the online-softmax convention:
 
                 s[r][c][n]       = stats[c][n][1 + r] * rsqrt(stats[c][n][0] / (P * d) + eps)
                 shift[r][0][n]   = max_c s[r][c][n]
@@ -38,10 +38,7 @@ void bind_attn_res_block_mix(nb::module_& mod) {
             partials side by side, each with the sum of squares in column 0 and query r's
             dot in column 1 + r, as `attn_res_block_stats` gathers them. `partials` is
             `[R, 1, N, d]` and `shift` and `mass` are `[R, 1, N, 1]` float32, the layouts
-            `attn_res_gather_softmax` reads. The leading `num_closed_sites` sites have
-            nothing live to fold in, so their read is `partial / mass` itself: it comes back
-            as `closed`, `[num_closed_sites, 1, N, d]`, and the first three hold only the
-            open sites. Without closed sites, `closed` is None. Blackhole only.
+            `attn_res_gather_softmax` reads. Blackhole only.
         )doc",
         &ttnn::operations::experimental::deepseek_prefill::attn_res_block_mix::attn_res_block_mix,
         nb::arg("sealed"),
@@ -49,7 +46,6 @@ void bind_attn_res_block_mix(nb::module_& mod) {
         nb::kw_only(),
         nb::arg("num_sites"),
         nb::arg("eps"),
-        nb::arg("num_closed_sites") = 0,
         nb::arg("memory_config").noconvert() = nb::none(),
         nb::arg("compute_kernel_config").noconvert() = nb::none());
 }
