@@ -316,6 +316,7 @@ Pointwise Binary
    ttnn.gcd
    ttnn.ge
    ttnn.ge_
+   ttnn.geglu_tanh
    ttnn.gt
    ttnn.gt_
    ttnn.hypot

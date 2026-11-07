@@ -13,6 +13,18 @@
 
 # For max allowed timeout refer to .github/time_budget.yaml
 
+- name: "ttnn eltwise generated bf16 geglu_tanh"
+  cmd: >-
+    TRACY_NO_SYS_TRACE=1 pytest --timeout 120 -s -m models_device_performance_bare_metal
+    tests/ttnn/perf_tests/operations/eltwise/test_geglu_tanh_device_perf.py
+  model: geglu_tanh
+  skus:
+    bh_p150b_civ2:
+      timeout: 1
+  team: ttnn
+  budget_type: device_perf
+  owner_id: U09LVP68R7F # Nachiket Kapre
+
 - name: Llama 3.1-8B device perf tests
   cmd: |
     export TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=10000
