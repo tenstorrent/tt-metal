@@ -92,6 +92,7 @@
     "SWE retained5: raw1/5 (Wilson95%3.62\u201362.45%), invalid Xarray external retrieval; functional2 retained, no retry/advance. Eval8190.434942s; native Astropy cap32768 with18047-token periodic suffix. Nine discarded outputs and failed phase archive limit attribution. Evidence: runs/nightly-swe-decode-retention/audit.json.",
     "Selected headline remains unbuffered B1. Stock response debug buffers SSE (measured experiment excluded from decoderateclaims); enabled only for nonstreamingGPQA. Evidence: runs/response-logging-runtime-benchmark/AUTOFIX.md.",
     "C8 same20 valid16/20; all outputs/retained chains exact versusC4, but1.786983eval hours is14.86% slower. Capacity retained, C4 selected, no speed saving credited. Separate40 comparison running42316311286; not an extra independent accuracy sample. Evidence: runs/gpqa20-c8-expanded-pool-comparison/audit.json.",
-    "Valid C4/40:25/40,3.640636eval hours; normal80 dispatched42323448662 on measured9.882469h sensitivity. Full4h additive scenario12.258136h exceeds12; projection is not bound."
+    "Valid C4/40:25/40,3.640636eval hours; normal80 dispatched42323448662 on measured9.882469h sensitivity. Full4h additive scenario12.258136h exceeds12; projection is not bound.",
+    "New doc160 period3: exact4699-token overlap from fresh native capture; four conditional HF/TT checkpoints agree, no actionable discrepancy, no serving change. Cost.136083deviceh. No autonomousHF/originalstateclaim. Evidence: runs/gpqa40-new-loop-diagnosis/RESULT.json."
   ]
 }

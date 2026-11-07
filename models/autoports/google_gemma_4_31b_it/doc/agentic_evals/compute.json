@@ -1422,7 +1422,7 @@
           "arm": "gpqa40-new-loop-diagnosis",
           "owner": "current_benchmark",
           "device": "local",
-          "status": "capture_complete",
+          "status": "complete",
           "queued_at": "2026-11-07T01:30:31.967234+00:00",
           "start": "2026-11-07T01:30:31.967234+00:00",
           "planned_clients": 1,
@@ -1444,13 +1444,14 @@
           "actual_hours": 0.08962788611111111,
           "exit_status": 0,
           "remaining_owners": [],
-          "next": "freshprefix proof then hostHF, bounded conditionalTT if exact"
+          "next": "freshprefix proof then hostHF, bounded conditionalTT if exact",
+          "audit": "runs/gpqa40-new-loop-diagnosis/RESULT.json"
         },
         {
           "arm": "gpqa40-new-loop-diagnosis-tt",
           "owner": "current_benchmark",
           "device": "local",
-          "status": "complete_pending_comparison",
+          "status": "complete",
           "queued_at": "2026-11-07T01:36:38.183543+00:00",
           "predicted_hours": 0.08,
           "remaining_effort_box_hours": 0.21037211388888888,
@@ -1466,7 +1467,8 @@
           "end_basis": "Last process log write including successful meshclose; process exited0 and owners empty at coordinator check",
           "exit_status": 0,
           "remaining_owners": [],
-          "actual_hours": 0.04645540916666667
+          "actual_hours": 0.04645540916666667,
+          "audit": "runs/gpqa40-new-loop-diagnosis/RESULT.json"
         }
       ]
     },
@@ -3519,5 +3521,5 @@
       "role": "Read-only status and artifact collection"
     }
   ],
-  "last_updated": "2026-11-07T01:44:40.717055+00:00"
+  "last_updated": "2026-11-07T01:45:38.958445+00:00"
 }

@@ -740,6 +740,10 @@
       "name": "retained_swe_native_cap_and_network_stop",
       "evidence": "runs/nightly-swe-decode-retention/audit.json",
       "finding": "Native Astropy cap repetition confirmed; nine other discarded responses unclassified. No precision/sampling/root-cause attribution. Existing HF/TT conditional comparisons do not establish autonomous continuation health. Validity remains ahead of speed; no release saving credited to this finding."
+    },
+    {
+      "fact": "Doc160 new period3 loop: exact fresh4699-token retained overlap, four conditional HF/TT next-token matches; no actionable conditional numerical discrepancy. Do not claim autonomousHF or originalstate.",
+      "evidence": "runs/gpqa40-new-loop-diagnosis/RESULT.json"
     }
   ]
 }
