@@ -603,8 +603,6 @@ def test_sdpa_tt(device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dtype, me
 def test_sdpa_noncausal(device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dtype):
     if (s % q_chunk_size != 0) or (s % k_chunk_size != 0):
         pytest.skip("s must be divisible by q_chunk_size and k_chunk_size")
-    if s > 2048 and (q_chunk_size == 128 or k_chunk_size == 128):
-        pytest.skip("Bad PCC for small chunks")
     rmse_threshold = 0.0069
     run_sdpa_noncausal(device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dtype, rmse_threshold=rmse_threshold)
 
