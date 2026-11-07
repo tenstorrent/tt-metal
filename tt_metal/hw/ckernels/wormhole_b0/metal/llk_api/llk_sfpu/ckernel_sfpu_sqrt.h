@@ -64,16 +64,15 @@ sfpi_inline sfpi::vFloat _calculate_sqrt_body_(const sfpi::vFloat x) {
     } else {
         // Algorithm SQRT_23-bits, with modifications for reciprocal.
         sfpi::vFloat xy = x * y;
-        sfpi::vFloat negative_y = -y;
-        sfpi::vFloat c = negative_y * xy;
-        sfpi::vFloat infinity = sfpi::sFloat16b(std::numeric_limits<float>::infinity());
-        sfpi::vInt infinity_bits = sfpi::as<sfpi::vInt>(infinity);
-        y = y * (sfpi::vConstFloatPrgm1 + c * (sfpi::vConstFloatPrgm2 + c));
-        xy = x * y;
-        negative_y = -y;
-        sfpi::vFloat one_minus_xyy = 1.0f + (negative_y * xy);
-
         if constexpr (RECIPROCAL) {
+            sfpi::vFloat negative_y = -y;
+            sfpi::vFloat c = negative_y * xy;
+            sfpi::vFloat infinity = sfpi::sFloat16b(std::numeric_limits<float>::infinity());
+            sfpi::vInt infinity_bits = sfpi::as<sfpi::vInt>(infinity);
+            y = y * (sfpi::vConstFloatPrgm1 + c * (sfpi::vConstFloatPrgm2 + c));
+            xy = x * y;
+            negative_y = -y;
+            sfpi::vFloat one_minus_xyy = 1.0f + (negative_y * xy);
             sfpi::vFloat half_y = sfpi::addexp(y, -1);
             sfpi::vInt x_bits = sfpi::as<sfpi::vInt>(x);
             sfpi::vInt infinity_minus_x_bits = infinity_bits - x_bits;
@@ -92,13 +91,39 @@ sfpi_inline sfpi::vFloat _calculate_sqrt_body_(const sfpi::vFloat x) {
             v_else { y = sfpi::as<sfpi::vFloat>(infinity_minus_x_bits); }
             v_endif;
         } else {
-            sfpi::vFloat half_xy = 0.5f * xy;
+            // The same refinement with every sign folded into the SFPMAD that consumes it, so
+            // no operand is negated or copied first (each of those was an sfpmov issue slot).
+            // SFPMAD rounds to nearest-even and is sign-symmetric, so y*xy, c - P2 and y*xy - 1
+            // are the exact negations of the paper's -y*xy, P2 + c and 1 + (-y)*xy, c*(c - P2)
+            // is the same product as (-c)*(P2 + c), and -0.5 is a power-of-two scale: every
+            // intermediate is bit-identical to the unfolded form. The edge guards' operands
+            // (infinity, |x|, NaN) are built mid-chain, where they fill the MAD latency shadows.
+            sfpi::vFloat infinity = sfpi::sFloat16b(std::numeric_limits<float>::infinity());
+            sfpi::vInt infinity_bits = sfpi::as<sfpi::vInt>(infinity);
+            sfpi::vFloat c = y * xy;
+            // |x| in float mode clears only the sign bit, so `== 0` is exactly {+0, -0} and a
+            // NaN stays non-zero.
+            sfpi::vInt magnitude_bits = sfpi::as<sfpi::vInt>(sfpi::abs(x));
+            sfpi::vFloat t = c - sfpi::vConstFloatPrgm2;
+            sfpi::vFloat nan = std::numeric_limits<float>::quiet_NaN();  // nan for fp32, inf for bf16
+            y = y * (c * t + sfpi::vConstFloatPrgm1);
+            xy = x * y;
+            sfpi::vFloat xyy_minus_one = y * xy - 1.0f;
+            sfpi::vFloat half_one_minus_xyy = xyy_minus_one * -0.5f;
             // If x == inf, we need to skip to avoid y = inf - inf = nan; y will already be inf.
             // Keep this as `<`, not `!=`: it skips positive NaN, which would otherwise run the
             // step and come back sign-flipped (a bf16 pack then makes that -inf). Negative NaN
             // does run the step -- the compare wraps -- but the clamp below rewrites it.
-            v_if(sfpi::as<sfpi::vInt>(x) < infinity_bits) { y = one_minus_xyy * half_xy + xy; }
+            v_if(sfpi::as<sfpi::vInt>(x) < infinity_bits) { y = half_one_minus_xyy * xy + xy; }
             v_endif;
+            if constexpr (!FAST_APPROX) {
+                // `x < 0.0F` is a sign-bit test, so it claims -0.0 as well; zero magnitudes are
+                // answered first. sqrt(+/-0) = +/-0: return x, because the refinement cannot
+                // produce a signed zero.
+                v_if(magnitude_bits == 0) { y = x; }
+                v_elseif(x < 0.0F) { y = nan; }
+                v_endif;
+            }
         }
     }
     // All edge handling is gated on !FAST_APPROX, as the negative clamp alone was before: the
@@ -107,9 +132,9 @@ sfpi_inline sfpi::vFloat _calculate_sqrt_body_(const sfpi::vFloat x) {
     if constexpr (!FAST_APPROX) {
         // `x < 0.0F` is a sign-bit test, so it claims -0.0 as well; zero magnitudes are kept
         // out of it and answered separately.
-        if constexpr (!RECIPROCAL) {
-            // rsqrt's clamp is inside the refinement guard above, where the predicate already
-            // excludes +/-0 and +inf.
+        // Exact sqrt answers both in its own branch above; rsqrt's clamp is inside the
+        // refinement guard, where the predicate already excludes +/-0 and +inf.
+        if constexpr (!RECIPROCAL && APPROXIMATE) {
             // sqrt(+/-0) = +/-0: return x, because the refinement cannot produce a signed zero.
             v_if(_bits_without_sign_(x) == 0) { y = x; }
             v_elseif(x < 0.0F) {
