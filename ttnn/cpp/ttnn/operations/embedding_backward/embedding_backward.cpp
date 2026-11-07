@@ -31,8 +31,23 @@ Tensor embedding_bw(
     const auto output_mem_config = memory_config.value_or(output_gradient_tensor_arg.memory_config());
     const auto out_dtype = dtype.value_or(output_gradient_tensor_arg.dtype());
 
-    // The op adds each index's gradient rows into its partial output one chunk at a time. Kept in bfloat16 or
-    // bfloat8_b, that running sum stops absorbing small terms once it grows, so a row that many indices hit loses
+    // A bfloat16 gradient takes the output-stationary program: it accumulates every hit of an output tile in FP32
+    // DEST and writes the tile once, so a bfloat16 output is rounded once with no FLOAT32 intermediate to cast back.
+    const bool onehot =
+        ttnn::prim::embedding_backward_uses_onehot(input_tensor, output_gradient_tensor_arg, num_embeddings);
+    if (onehot && out_dtype == DataType::BFLOAT16 &&
+        (!optional_output_tensor.has_value() || optional_output_tensor->dtype() == DataType::BFLOAT16)) {
+        return ttnn::prim::embedding_backward(
+            input_tensor,
+            output_gradient_tensor_arg,
+            output_mem_config,
+            DataType::BFLOAT16,
+            num_embeddings,
+            optional_output_tensor);
+    }
+
+    // The scatter program adds each index's gradient rows into its partial output one chunk at a time. Kept in bfloat16
+    // or bfloat8_b, that running sum stops absorbing small terms once it grows, so a row that many indices hit loses
     // most of its gradient. Accumulate in FLOAT32 (the kernel reads the gradient in its own dtype) and round to the
     // requested dtype once at the end.
     const bool fp32_output = out_dtype == DataType::FLOAT32 || (optional_output_tensor.has_value() &&

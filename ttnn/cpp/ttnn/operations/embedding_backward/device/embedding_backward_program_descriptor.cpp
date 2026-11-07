@@ -8,6 +8,8 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/work_split.hpp>
 
+#include <optional>
+
 #include "ttnn/operations/embedding_backward/device/embedding_backward_device_operation.hpp"
 
 using namespace tt;
@@ -16,10 +18,150 @@ using namespace tt::tt_metal;
 
 namespace ttnn::prim {
 
+namespace {
+
+// Scratch for the output-stationary reader: indices (uint32), the pair list (uint16), three uint32 arrays per
+// output tile row and a 16 byte tail.
+uint32_t onehot_scratch_bytes(uint32_t num_tokens, uint32_t vocab_tiles) {
+    return tt::round_up(num_tokens * 4, 16) + tt::round_up(num_tokens * 2, 16) + (3 * vocab_tiles * 4) + 16;
+}
+
+}  // namespace
+
+bool embedding_backward_uses_onehot(const Tensor& index_tensor, const Tensor& grad_tensor, uint32_t num_embeddings) {
+    if (grad_tensor.dtype() != DataType::BFLOAT16) {
+        return false;
+    }
+    const uint32_t num_tokens = index_tensor.padded_shape()[0] * index_tensor.padded_shape()[-1];
+    // The pair list stores grad tile rows as uint16.
+    if (num_tokens / TILE_HEIGHT >= (1u << 16)) {
+        return false;
+    }
+    return onehot_scratch_bytes(num_tokens, tt::div_up(num_embeddings, TILE_HEIGHT)) <= 512 * 1024;
+}
+
+namespace {
+
+// Output-stationary path: every (output tile row, hidden chunk) unit is owned by one core, which accumulates
+// onehot(indices) x grad for the grad tile rows that hit it in DEST and writes each output tile once. Returns
+// std::nullopt when the shape or dtypes are outside what it handles, and the caller falls back to the scatter path.
+std::optional<ProgramDescriptor> create_onehot_descriptor(
+    const EmbeddingBackwardParams& operation_attributes,
+    const EmbeddingBackwardInputs& tensor_args,
+    Tensor& tensor_return_value) {
+    const auto& index_tensor = tensor_args.index_tensor;
+    const auto& grad_tensor = tensor_args.grad_tensor;
+    if (!embedding_backward_uses_onehot(index_tensor, grad_tensor, operation_attributes.num_embeddings) ||
+        (tensor_return_value.dtype() != DataType::BFLOAT16 && tensor_return_value.dtype() != DataType::FLOAT32)) {
+        return std::nullopt;
+    }
+    const uint32_t num_index_pages = index_tensor.padded_shape()[0];
+    const uint32_t index_page_len = index_tensor.padded_shape()[-1];
+    const uint32_t num_tokens = num_index_pages * index_page_len;
+    const uint32_t hidden_tiles = grad_tensor.padded_shape()[-1] / TILE_WIDTH;
+    const uint32_t vocab_tiles = tt::div_up(operation_attributes.num_embeddings, TILE_HEIGHT);
+
+    // FP32 DEST holds 4 tiles in half-sync mode. Every chunk has the same width, so the grad and output rings (two
+    // chunks each) always take whole windows and never wrap inside one.
+    uint32_t chunk_tiles = 4;
+    while (hidden_tiles % chunk_tiles != 0) {
+        --chunk_tiles;
+    }
+    const uint32_t num_chunks = hidden_tiles / chunk_tiles;
+    const uint32_t num_units = vocab_tiles * num_chunks;
+
+    auto* device = grad_tensor.device();
+    auto grid_size = device->compute_with_storage_grid_size();
+    // Units are dealt round-robin (unit u on core u % num_cores): with contiguous ranges, skewed token
+    // distributions put every frequent (low-index) row on one core. Each core buckets all output rows.
+    auto [num_cores, all_cores, core_group_1, core_group_2, units_per_core_1, units_per_core_2] =
+        tt::tt_metal::split_work_to_cores(grid_size, num_units);
+    const uint32_t scratch_bytes = onehot_scratch_bytes(num_tokens, vocab_tiles);
+
+    const tt::DataFormat bf16 = tt::DataFormat::Float16_b;
+    const tt::DataFormat out_format = datatype_to_dataformat_converter(tensor_return_value.dtype());
+    const uint32_t tile_bytes = tt::tile_size(bf16);
+    const uint32_t out_tile_bytes = tt::tile_size(out_format);
+    ProgramDescriptor desc;
+    auto add_cb = [&](CBIndex index, uint32_t total, uint32_t page, tt::DataFormat format) {
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = total,
+            .core_ranges = all_cores,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(index),
+                .data_format = format,
+                .page_size = page,
+            }}},
+        });
+    };
+    // The reader keeps up to 4 pairs in flight, so both pair rings hold 8 per-pair windows.
+    add_cb(CBIndex::c_0, 8 * chunk_tiles * tile_bytes, tile_bytes, bf16);                 // grad tiles
+    add_cb(CBIndex::c_1, 8 * tile_bytes, tile_bytes, bf16);                               // one-hot tiles
+    add_cb(CBIndex::c_2, 2 * 16, 16, bf16);                                               // per-unit count
+    add_cb(CBIndex::c_16, 2 * chunk_tiles * out_tile_bytes, out_tile_bytes, out_format);  // finished output tiles
+    add_cb(CBIndex::c_25, scratch_bytes, scratch_bytes, bf16);                            // index and bucket scratch
+
+    std::vector<uint32_t> reader_ct_args = {
+        hidden_tiles,
+        chunk_tiles,
+        num_chunks,
+        num_index_pages,
+        index_page_len,
+        static_cast<uint32_t>(index_tensor.dtype() == DataType::BFLOAT16)};
+    TensorAccessorArgs(*grad_tensor.buffer()).append_to(reader_ct_args);
+    TensorAccessorArgs(*index_tensor.buffer()).append_to(reader_ct_args);
+    std::vector<uint32_t> writer_ct_args = {hidden_tiles, chunk_tiles, num_chunks};
+    TensorAccessorArgs(*tensor_return_value.buffer()).append_to(writer_ct_args);
+
+    KernelDescriptor reader_desc;
+    reader_desc.kernel_source =
+        "ttnn/cpp/ttnn/operations/embedding_backward/device/kernels/dataflow/reader_embedding_backward_onehot.cpp";
+    reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    reader_desc.core_ranges = all_cores;
+    reader_desc.compile_time_args = std::move(reader_ct_args);
+    reader_desc.config = ReaderConfigDescriptor{};
+
+    KernelDescriptor writer_desc;
+    writer_desc.kernel_source =
+        "ttnn/cpp/ttnn/operations/embedding_backward/device/kernels/dataflow/writer_embedding_backward_onehot.cpp";
+    writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    writer_desc.core_ranges = all_cores;
+    writer_desc.compile_time_args = std::move(writer_ct_args);
+    writer_desc.config = WriterConfigDescriptor{};
+
+    KernelDescriptor compute_desc;
+    compute_desc.kernel_source =
+        "ttnn/cpp/ttnn/operations/embedding_backward/device/kernels/compute/embedding_backward_onehot.cpp";
+    compute_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    compute_desc.core_ranges = all_cores;
+    compute_desc.compile_time_args = {hidden_tiles, chunk_tiles, num_chunks};
+    compute_desc.config = ComputeConfigDescriptor{.math_fidelity = MathFidelity::HiFi4, .fp32_dest_acc_en = true};
+
+    uint32_t first_unit = 0;
+    for (const auto& core : corerange_to_cores(all_cores)) {
+        reader_desc.emplace_runtime_args(
+            core, {grad_tensor.buffer(), index_tensor.buffer(), first_unit, num_cores, num_units});
+        writer_desc.emplace_runtime_args(core, {tensor_return_value.buffer(), first_unit, num_cores, num_units});
+        compute_desc.emplace_runtime_args(core, {first_unit, num_cores, num_units});
+        ++first_unit;
+    }
+
+    desc.kernels.push_back(std::move(reader_desc));
+    desc.kernels.push_back(std::move(writer_desc));
+    desc.kernels.push_back(std::move(compute_desc));
+    return desc;
+}
+
+}  // namespace
+
 ProgramDescriptor EmbeddingBackwardDeviceOperation::create_descriptor(
     const EmbeddingBackwardParams& operation_attributes,
     const EmbeddingBackwardInputs& tensor_args,
     Tensor& tensor_return_value) {
+    if (auto onehot = create_onehot_descriptor(operation_attributes, tensor_args, tensor_return_value)) {
+        return std::move(*onehot);
+    }
+
     ////////////////////////////////////////////////////////////////////////////
     //                 Buffer Setup
     ////////////////////////////////////////////////////////////////////////////

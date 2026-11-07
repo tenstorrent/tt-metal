@@ -222,6 +222,121 @@ def test_embedding_bw_repeated_indices(seq_len, embedding_dim, num_embeddings, h
     assert worst_row_error < tolerance, f"worst row error {worst_row_error} relative to the row's largest gradient"
 
 
+def _zipf_indices(num_tokens, num_embeddings, exponent=1.2):
+    ranks = torch.arange(1, num_embeddings + 1, dtype=torch.float64)
+    probs = ranks**-exponent
+    probs /= probs.sum()
+    return torch.multinomial(probs, num_tokens, replacement=True)
+
+
+def _run_embedding_bw_against_fp64(device, index, num_embeddings, embedding_dim, output_dtype, check_bit_exact=False):
+    """Run embedding_bw with a bfloat16 gradient and compare with an fp64 index_add of the gradient values the device
+    received. Each output element may differ from the exact sum by one bfloat16 rounding of the result plus the FP32
+    accumulation error of its terms; the FLOAT32 output only by the latter."""
+    num_tokens = index.numel()
+    grad = ttnn.from_torch(
+        torch.randn(1, 1, num_tokens, embedding_dim), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+    )
+    index_tensor = ttnn.from_torch(index.reshape(1, num_tokens).int(), dtype=ttnn.uint32, device=device)
+    weights = ttnn.from_torch(
+        torch.zeros(num_embeddings, embedding_dim), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+    )
+
+    out = ttnn.embedding_bw(index_tensor, weights, grad, dtype=output_dtype)
+    assert out.dtype == output_dtype
+    out = ttnn.to_torch(out).double().reshape(num_embeddings, embedding_dim)
+
+    grad_values = ttnn.to_torch(grad).double().reshape(num_tokens, embedding_dim)
+    index = index.long()
+    reference = torch.zeros(num_embeddings, embedding_dim, dtype=torch.float64).index_add_(0, index, grad_values)
+    abs_sum = torch.zeros(num_embeddings, embedding_dim, dtype=torch.float64).index_add_(0, index, grad_values.abs())
+
+    # fp32 accumulation error is bounded by (terms) * 2^-23 per add; allow 2^-18 of the absolute sum.
+    accumulation_slack = abs_sum * 2.0**-18
+    rounding = reference.abs() * (2.0**-7 if output_dtype == ttnn.bfloat16 else 0.0)
+    excess = (out - reference).abs() - (rounding + accumulation_slack)
+    assert float(excess.max()) <= 0.0, f"error exceeds output rounding by {float(excess.max())}"
+    if check_bit_exact:
+        assert torch.equal(
+            out, reference.to(torch.float32 if output_dtype == ttnn.float32 else torch.bfloat16).double()
+        )
+
+
+@pytest.mark.parametrize("output_dtype", [ttnn.bfloat16, ttnn.float32])
+@pytest.mark.parametrize(
+    "distribution, num_tokens, embedding_dim, num_embeddings",
+    [
+        ("zipf", 2048, 768, 4096),
+        ("zipf", 1024, 256, 100),
+        ("same", 2048, 512, 70),
+        ("same", 1024, 96, 33),
+    ],
+)
+def test_embedding_bw_skewed_indices_fp64_reference(
+    distribution, num_tokens, embedding_dim, num_embeddings, output_dtype, device
+):
+    """Zipf distributed and all-identical tokens: the hot rows collect hundreds of gradients."""
+    torch.manual_seed(7)
+    if distribution == "zipf":
+        index = _zipf_indices(num_tokens, num_embeddings)
+    else:
+        index = torch.full((num_tokens,), num_embeddings // 2)
+    _run_embedding_bw_against_fp64(device, index, num_embeddings, embedding_dim, output_dtype)
+
+
+@pytest.mark.parametrize("output_dtype", [ttnn.bfloat16, ttnn.float32])
+@pytest.mark.parametrize(
+    "num_tokens, embedding_dim, num_embeddings",
+    [
+        (1024, 384, 5000),
+        (2048, 128, 4096),
+        (64, 160, 97),
+    ],
+)
+def test_embedding_bw_unique_indices_bit_exact(num_tokens, embedding_dim, num_embeddings, output_dtype, device):
+    """With no repeated index every output row is a single gradient row, so the result must be bit exact."""
+    torch.manual_seed(3)
+    index = torch.randperm(num_embeddings)[:num_tokens]
+    _run_embedding_bw_against_fp64(device, index, num_embeddings, embedding_dim, output_dtype, check_bit_exact=True)
+
+
+@pytest.mark.parametrize("output_dtype", [ttnn.bfloat16, ttnn.float32])
+@pytest.mark.parametrize(
+    "batch_size, seq_len, embedding_dim, num_embeddings",
+    [
+        # gpt2s, tinyllama and qwen3_0.6b training shapes
+        (4, 1024, 768, 50257),
+        (5, 1024, 2048, 32000),
+        (2, 1024, 1024, 151936),
+    ],
+)
+def test_embedding_bw_training_shapes_fp64_reference(
+    batch_size, seq_len, embedding_dim, num_embeddings, output_dtype, device
+):
+    torch.manual_seed(11)
+    index = _zipf_indices(batch_size * seq_len, num_embeddings)
+    _run_embedding_bw_against_fp64(device, index, num_embeddings, embedding_dim, output_dtype)
+
+
+def test_embedding_bw_bfloat16_single_program_with_program_cache(device):
+    """A bfloat16 gradient and output is one program: no FLOAT32 intermediate and no typecast."""
+    torch.manual_seed(5)
+    num_tokens, embedding_dim, num_embeddings = 128, 160, 96
+    for _ in range(2):
+        index = ttnn.from_torch(
+            torch.randint(0, num_embeddings, (1, num_tokens)).int(), dtype=ttnn.uint32, device=device
+        )
+        weights = ttnn.from_torch(
+            torch.zeros(num_embeddings, embedding_dim), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+        )
+        grad = ttnn.from_torch(
+            torch.randn(1, 1, num_tokens, embedding_dim), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+        )
+        with device.cache_entries_counter.measure():
+            ttnn.embedding_bw(index, weights, grad, dtype=ttnn.bfloat16)
+    assert device.cache_entries_counter.total == 1
+
+
 def test_embedding_bw_rejects_sharded_index(device, expect_error):
     # Regression: the sharding checks were OR'd, so a sharded index was accepted.
     grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 0))})
