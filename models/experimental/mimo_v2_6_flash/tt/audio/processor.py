@@ -48,6 +48,13 @@ MIMO_AUDIO_PATCH says where the patch encoder (codes -> LLM embeddings) runs; th
   frame (a 30 s clip: 1.5 MB).
 * ``engine``: codes, and the engine runs the host patch encoder (``AudioCodesBackend.embed_audio_codes``).
 
+MIMO_AUDIO_TOKENIZER=device moves the tokenizer encoder to the engine's row too (tt/audio/tokenizer.py; the API
+server and the engine read it): the item then reaches the engine as ``audio_mel_bits``, the fp32 mel as int32 bits
+[T, 128] (512 B per 10 ms frame), and this processor runs no encoder at all, so items no longer queue behind a long
+clip here. The device encoder takes ~0.1 s for 30 s of audio where the host one takes ~1.6 s, but its codes differ
+from the fp32 reference in ~3.5-5 % of the frames (Blackhole matmul accumulation; tests/test_audio_tokenizer_tp8.py),
+so ``frontend`` stays the default.
+
 MIMO_AUDIO_FRONTEND_THREADS (default 8): torch threads of the encoders in the front end (vLLM runs the processor
 with OMP_NUM_THREADS threads, 1 when unset).
 """
@@ -69,6 +76,10 @@ PATCH_WHERE = os.environ.get("MIMO_AUDIO_PATCH", "device")
 if PATCH_WHERE not in PATCH_PLACES:
     raise ValueError(f"MIMO_AUDIO_PATCH={PATCH_WHERE!r}: one of {PATCH_PLACES}")
 FRONTEND_PATCH = PATCH_WHERE == "frontend"
+TOKENIZER_WHERE = os.environ.get("MIMO_AUDIO_TOKENIZER", "frontend")
+if TOKENIZER_WHERE not in ("frontend", "device"):
+    raise ValueError(f"MIMO_AUDIO_TOKENIZER={TOKENIZER_WHERE!r}: frontend or device")
+DEVICE_TOKENIZER = TOKENIZER_WHERE == "device"
 _tokenizers = {}
 _tokenizers_lock = threading.Lock()
 
@@ -160,7 +171,9 @@ class MiMoV2OmniTTMultiModalProcessor(MiMoV2OmniMultiModalProcessor):
             mels = fp32_mels(
                 out.pop("audio_features"), mm_items.get("audio"), ref.MiMoAudioConfig.from_model_path(path)
             )
-            if FRONTEND_PATCH:
+            if DEVICE_TOKENIZER:  # the engine's row encodes it: the fp32 mel, exactly (int32 bits: never cast)
+                out["audio_mel_bits"] = [m.contiguous().view(torch.int32) for m in mels]
+            elif FRONTEND_PATCH:
                 out["audio_embeds"] = embed_mels(mels, path)
             else:
                 out["audio_codes"] = tokenize_mels(mels, path)
@@ -171,4 +184,5 @@ class MiMoV2OmniTTMultiModalProcessor(MiMoV2OmniMultiModalProcessor):
         fields.pop("audio_features", None)
         fields["audio_codes"] = MultiModalFieldConfig.batched("audio")  # fields missing from the output are skipped
         fields["audio_embeds"] = MultiModalFieldConfig.batched("audio")
+        fields["audio_mel_bits"] = MultiModalFieldConfig.batched("audio")
         return fields
