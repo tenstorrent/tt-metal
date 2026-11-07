@@ -30,7 +30,8 @@ void throw_if_recording_command_list(std::string_view call_name) {
 void record_to_command_list(
     std::string_view operation_name,
     tt::tt_metal::distributed::MeshDevice* mesh_device,
-    tt::tt_metal::distributed::MeshWorkload& workload) {
+    tt::tt_metal::distributed::MeshWorkload& workload,
+    std::shared_ptr<std::vector<tt::tt_metal::MeshTensor>> op_owned_tensors) {
     auto* builder = t_recording;
     TT_FATAL(builder != nullptr, "{}: no CommandListBuilder is recording on this thread", operation_name);
     TT_FATAL(
@@ -38,7 +39,8 @@ void record_to_command_list(
         "{} runs on a different MeshDevice than the recording CommandListBuilder",
         operation_name);
     try {
-        builder->record(ttnn::get_current_command_queue_id_for_thread(), workload);
+        builder->record(
+            ttnn::get_current_command_queue_id_for_thread(), workload, std::move(op_owned_tensors));
     } catch (const std::exception& e) {
         TT_THROW("{} cannot be recorded into a command list: {}", operation_name, e.what());
     }
@@ -82,26 +84,37 @@ ScopeGuard CommandListBuilder::record_scope() {
 CommandList CommandListBuilder::build(std::optional<QueueId> cq_id) const {
     ZoneScoped;
     const QueueId queue = cq_id.value_or(get_current_command_queue_id_for_thread());
-    return CommandList(metal_builder_.build(device().mesh_command_queue(queue.get())));
+    return CommandList(metal_builder_.build(device().mesh_command_queue(queue.get())), op_owned_tensors_);
 }
 
 void CommandListBuilder::clear() {
     TT_FATAL(!recording_, "Cannot clear a recording CommandListBuilder");
     metal_builder_.clear();
+    op_owned_tensors_.clear();
 }
 
 void CommandListBuilder::deallocate() {
     TT_FATAL(!recording_, "Cannot deallocate a recording CommandListBuilder");
     metal_builder_.deallocate();
+    op_owned_tensors_.clear();
 }
 
 tt::tt_metal::distributed::MeshDevice& CommandListBuilder::device() const { return metal_builder_.device(); }
 
-void CommandListBuilder::record(QueueId binary_upload_cq_id, tt::tt_metal::distributed::MeshWorkload& workload) {
+void CommandListBuilder::record(
+    QueueId binary_upload_cq_id,
+    tt::tt_metal::distributed::MeshWorkload& workload,
+    std::shared_ptr<std::vector<tt::tt_metal::MeshTensor>> op_owned_tensors) {
     metal_builder_.add(device().mesh_command_queue(binary_upload_cq_id.get()), workload);
+    if (op_owned_tensors && !op_owned_tensors->empty()) {
+        op_owned_tensors_.push_back(std::move(op_owned_tensors));
+    }
 }
 
-CommandList::CommandList(metal::CommandList metal_list) : metal_list_(std::move(metal_list)) {}
+CommandList::CommandList(
+    metal::CommandList metal_list,
+    std::vector<std::shared_ptr<std::vector<tt::tt_metal::MeshTensor>>> op_owned_tensors) :
+    metal_list_(std::move(metal_list)), op_owned_tensors_(std::move(op_owned_tensors)) {}
 
 void CommandList::enqueue(bool blocking, bool check_dram_overlap) {
     ZoneScoped;
@@ -110,7 +123,10 @@ void CommandList::enqueue(bool blocking, bool check_dram_overlap) {
         device().mesh_command_queue(metal_list_.cq_id()), metal_list_, blocking, check_dram_overlap);
 }
 
-void CommandList::deallocate() { metal_list_.deallocate(); }
+void CommandList::deallocate() {
+    metal_list_.deallocate();
+    op_owned_tensors_.clear();
+}
 
 tt::tt_metal::distributed::MeshDevice& CommandList::device() const { return metal_list_.device(); }
 
