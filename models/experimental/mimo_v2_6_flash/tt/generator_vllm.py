@@ -165,15 +165,17 @@ from .device_sampler import CANDIDATES_PER_CHIP, MAX_USERS, stream_states
 from .generator import MiMoGalaxyGenerator
 from .model import PREFILL_CHUNK_TRACE, prefill_padded_len, prefill_warmup_batches, prefill_warmup_chunks
 from . import multimodal as mm
+from .audio.host_backend import AudioCodesBackend
 
 try:  # the multimodal class registers vLLM's MiMo-V2-Omni processor; tests drive the adapter without vLLM
     from vllm.model_executor.models.interfaces import SupportsMultiModal
     from vllm.model_executor.models.mimo_v2_omni import (
         MiMoV2OmniDummyInputsBuilder,
-        MiMoV2OmniMultiModalProcessor,
         MiMoV2OmniProcessingInfo,
     )
     from vllm.multimodal import MULTIMODAL_REGISTRY
+
+    from .audio.processor import MiMoV2OmniTTMultiModalProcessor  # upstream + audio tokenized in the front end
 except ImportError:
     SupportsMultiModal = MULTIMODAL_REGISTRY = None
 
@@ -2617,7 +2619,7 @@ def _register_mm_processor(cls):
     if MULTIMODAL_REGISTRY is None:
         return cls
     return MULTIMODAL_REGISTRY.register_processor(
-        MiMoV2OmniMultiModalProcessor,
+        MiMoV2OmniTTMultiModalProcessor,
         info=MiMoV2OmniProcessingInfo,
         dummy_inputs=MiMoV2OmniDummyInputsBuilder,
     )(cls)
@@ -2678,6 +2680,7 @@ class MiMoV2OmniForCausalLM(MiMoV2ForCausalLM, *((SupportsMultiModal,) if Suppor
         self.mm_merge_size = int(merge or 2)
         if backends is None:
             backends = [default_encoder_backend(model_path, m.mesh_device) for m in self.models]
+            backends = [AudioCodesBackend(b, model_path) for b in backends]  # + embed_audio_codes (patch encoder)
         self.mm_cache = mm.EmbeddingCache()
         self.mm_encoders = [mm.ItemEncoder(b, self.mm_cache) for b in backends]
         # The identifiers of the items of each slot's request (by plugin slot): when a slot takes another request, the

@@ -39,7 +39,7 @@ MODALITIES = ("image", "video", "audio")
 REQUIRED_FIELDS = {
     "image": ("pixel_values", "image_grid_thw"),
     "video": ("pixel_values_videos", "video_grid_thw"),
-    "audio": ("audio_features",),
+    "audio": ("audio_features|audio_codes",),  # the mel, or its RVQ codes (tt/audio/processor.py)
 }
 
 
@@ -104,7 +104,7 @@ def parse_item(entry, modalities=MODALITIES):
             raise MMInputError(f"{item.modality} item: is_embed has {is_embed.numel()} rows, length {item.length}")
         item.is_embed = None if bool(is_embed.all()) else is_embed
     if item.data is not None:
-        missing = [f for f in REQUIRED_FIELDS[item.modality] if _field(item.data, f) is None]
+        missing = [f for f in REQUIRED_FIELDS[item.modality] if all(_field(item.data, g) is None for g in f.split("|"))]
         if missing:
             raise MMInputError(f"{item.modality} item {item.identifier}: missing processor fields {missing}")
     return item
@@ -242,6 +242,8 @@ def encode_item(backend, item):
             _field(item.data, "pixel_values_videos"),
             torch.as_tensor(_field(item.data, "video_grid_thw")).reshape(-1, 3),
         )
+    elif _field(item.data, "audio_codes") is not None:
+        out = backend.embed_audio_codes(_field(item.data, "audio_codes"))
     else:
         out = backend.embed_audio(_field(item.data, "audio_features"))
     if out.dim() != 2 or out.shape[0] != item.num_embeds:
