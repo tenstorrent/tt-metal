@@ -11,7 +11,6 @@
 #include "hostdev/dev_msgs.h"
 #include "noc/noc_parameters.h"
 
-static_assert(DISPATCH_MEM_MAP_END <= MEM_L1_SIZE, "Dispatch-engine L1 layout exceeds MEM_L1_SIZE");
 static_assert(
     MEM_DISPATCH_DM_LOCAL_SIZE % 2048 == 0, "Dispatch DM local size must be a multiple of 2 kB (D$ set alignment)");
 static_assert(

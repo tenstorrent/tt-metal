@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <stdint.h>
-#include <tt-metalium/constants.hpp>
+#include "api/tile_constants.h"
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "llk_defs.h"
@@ -70,7 +70,9 @@ void reduce_rm_reader() {
         }
         return (W_logical < tt::constants::TILE_WIDTH) ? W_logical : tt::constants::TILE_WIDTH;
     }();
-    dataflow_kernel_lib::prepare_reduce_scaler<cb_id_scaler, REDUCE_OP, DIM>(scaler_f, scaler_valid_for_reduce);
+    DataflowBuffer cb_scaler(cb_id_scaler);
+    dataflow_kernel_lib::prepare_reduce_scaler<cb_id_scaler, REDUCE_OP, DIM>(
+        cb_scaler, scaler_f, scaler_valid_for_reduce);
 
     // Identity template — pre-built once, reused as the pad source for every staged slab.
     const uint32_t clear_template_bytes = get_tile_size(cb_id_clear_value);

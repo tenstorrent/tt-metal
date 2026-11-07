@@ -31,6 +31,7 @@ driver that lives outside ``tests/sources/``.
 import atexit
 import collections
 import datetime
+import gc
 import json
 import logging
 import os
@@ -41,6 +42,7 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import NoReturn, Optional
 
+from helpers.target_config import is_ttsim
 from ttsim_error import parse_ttsim_error
 
 # ttsim runs in-process (no SimulationServer). Its init must complete before the
@@ -61,7 +63,7 @@ _HARDWARE_FREE = os.environ.get("LLK_HARDWARE_FREE") == "1"
 _SHOULD_RUN_SIMULATOR = _IS_XDIST_WORKER or (
     "--run-simulator" in sys.argv and "--compile-producer" not in sys.argv
 )
-if _SHOULD_RUN_SIMULATOR and _SIMULATOR_PATH and _SIMULATOR_PATH.endswith(".so"):
+if _SHOULD_RUN_SIMULATOR and is_ttsim(_SIMULATOR_PATH):
     from ttexalens import tt_exalens_init as _tt_exalens_init
 
     _tt_exalens_init.init_ttexalens(simulation_directory=_SIMULATOR_PATH)
@@ -242,28 +244,24 @@ def pytest_addoption(parser):
         "--ulp-measure",
         default=None,
         metavar="PATH",
-        help="Append a JSON row (test, variant, measured max ULP and lane counts) to "
-        "PATH for each comparison made right after exactly one accuracy_contract "
-        "lookup in the same test, on a variant that ran with the dest_acc it names. "
-        "The exhaustive sweep records every cell it measures, gated or not and under "
-        "--ulp-emit too, plus a non-finite lane count for a tolerance cell it cannot "
-        "measure. PATH is created and truncated at session start. Reporting only: it "
-        "cannot change a verdict.",
+        help="Append one JSON record per recorded comparison to PATH (created and "
+        "truncated at session start; one that cannot be is a usage error). Reporting "
+        "only, except that the sweep's records are required: a sweep cell whose record "
+        "is not written fails.",
     )
     parser.addoption(
         "--ulp-emit",
         action="store_true",
-        help="Re-measure rather than gate: the exhaustive unary sweep records what it "
-        "measures and folds it back into helpers/sfpu_accuracy_budget.yaml at the end "
-        "of the session, replacing the rows of each (op, in, out) it measured and "
-        "keeping hand-maintained rows. Writes the table; use it deliberately.",
+        help="Re-measure rather than gate: the exhaustive unary sweep writes what it "
+        "measured into this architecture's helpers/sfpu_accuracy_budget_*.yaml at the "
+        "end of the session. "
+        "Writes the table; use it deliberately.",
     )
     parser.addoption(
         "--ulp-report",
         action="store_true",
-        help="Log the measured ULP distance for every comparison on a ULP-capable "
-        "format, on a pass as well as a failure, and including ops that carry no step "
-        "budget yet. Reporting only: it cannot change a verdict.",
+        help="Log the measured ULP distance of every comparison on a ULP-capable "
+        "format, pass or fail, enrolled or not. Reporting only.",
     )
 
     parser.addoption(
@@ -334,6 +332,11 @@ def pytest_addoption(parser):
         help="Path to where the test order, per runner should be stored to, default path is the same folder as LLK repo",
     )
 
+    parser.addoption(
+        "--node-list",
+        default=None,
+        help="File of test node ids, one per line; only those tests run.",
+    )
     parser.addoption(
         "--perf-splits",
         type=int,
@@ -526,7 +529,7 @@ def pytest_configure(config):
 
     if config.getoption("--ulp-emit"):
         from . import ulp_sweep
-        from .sfpu_accuracy_budget import MEASURED_ARCH
+        from .ulp_table import MEASURED_ARCH
 
         if TestConfig.CHIP_ARCH != MEASURED_ARCH:
             # finish_emit refuses this too, but only at session end: emit bypasses the
@@ -551,7 +554,12 @@ def pytest_configure(config):
                 "through a UMD simulation server, which needs no port. Drop it from "
                 "your command line; it will be removed."
             )
-        utils_module.prepare_ulp_measure_file()
+        try:
+            utils_module.prepare_ulp_measure_file()
+        except OSError as exc:
+            raise pytest.UsageError(
+                f"--ulp-measure: cannot prepare the file: {exc}"
+            ) from exc
         # Refresh order folder with setup_files function
         order_processing.setup_files(TestConfig.ARTEFACTS_DIR / "order_records", True)
         if os.path.exists(log_file):
@@ -576,7 +584,7 @@ def pytest_configure(config):
                     returncode=1,
                 )
 
-            if _SIMULATOR_PATH.endswith(".so"):
+            if is_ttsim(_SIMULATOR_PATH):
                 # ttsim: already initialized at module import above; runs in-process, no server.
                 # --reset-simulator-per-test restarts the SimulationServer, which ttsim doesn't use,
                 # so it would be a silent no-op. Fail fast to avoid confusing false-green runs.
@@ -613,10 +621,9 @@ def pytest_configure(config):
             tt_exalens_init.init_ttexalens()
             TestConfig.resolve_worker_tensix_location()
 
-        is_ttsim = _SIMULATOR_PATH and _SIMULATOR_PATH.endswith(".so")
         # WH/BH only: ttsim or silicon. Quasar is skipped inside the helper
         # because ttexalens has no Tensix register description yet.
-        if is_ttsim or not TestConfig.TEST_TARGET.run_simulator:
+        if is_ttsim(_SIMULATOR_PATH) or not TestConfig.TEST_TARGET.run_simulator:
             override_gprs_used_by_tensix_dump()
 
 
@@ -734,14 +741,28 @@ def _select_tests_by_op(config, items):
     )
 
 
+def _select_node_list(config, items):
+    path = config.getoption("--node-list")
+    if not path:
+        return
+    wanted = {
+        line.strip() for line in Path(path).read_text().splitlines() if line.strip()
+    }
+    selected = [item for item in items if item.nodeid in wanted]
+    config.hook.pytest_deselected(
+        items=[item for item in items if item.nodeid not in wanted]
+    )
+    items[:] = selected
+
+
 def _split_by_cost(config, items):
     """Cut the tests, in collection order, into --perf-splits chunks of equal estimated time.
 
-    A test weighs its module's cost from perf_split_costs.json (perf_split_costs_sol.json with
-    --speed-of-light, which compiles every variant) divided by the module's test count. The
+    A test weighs its measured duration from LLK_SPLIT_DURATIONS, or, without that file, its
+    module's cost from the perf_split_costs table divided by the module's test count. The
     chunks are contiguous, so a module's tests, and the ELFs they share, stay in one shard
-    except at a cut point. build_perf_split_costs.py rebuilds both tables. This runs before
-    _collapse_runtime_only_variants, so the compile and run passes cut the same list.
+    except at a cut point. This runs before _collapse_runtime_only_variants, so the compile
+    and run passes cut the same list.
     """
     splits = config.getoption("--perf-splits")
     group = config.getoption("--perf-group")
@@ -752,26 +773,9 @@ def _split_by_cost(config, items):
             "--perf-splits N and --perf-group G go together, with 1 <= G <= N"
         )
 
-    arch = TestConfig.CHIP_ARCH.value
-    costs_file = (
-        "perf_split_costs_sol.json"
-        if TestConfig.SPEED_OF_LIGHT
-        else "perf_split_costs.json"
-    )
-    table = json.loads((Path(__file__).resolve().parents[2] / costs_file).read_text())
-    module_cost = table.get(arch)
-    if module_cost is None:
-        raise pytest.UsageError(f"{costs_file} has no costs for {arch}")
-
-    modules = [item.path.stem for item in items]
-    unknown = sorted(set(modules) - module_cost.keys())
-    if unknown:
-        logger.warning(
-            f"--perf-splits: {costs_file} has no cost for {', '.join(unknown)}; "
-            "each counts as 1 s"
-        )
-    tests_in = collections.Counter(modules)
-    weights = [module_cost.get(m, 1.0) / tests_in[m] for m in modules]
+    weights = _weights_from_durations(items)
+    if weights is None:
+        weights = _weights_from_table(items)
     total = sum(weights)
     if total == 0:
         weights, total = [1.0] * len(items), float(len(items))
@@ -785,6 +789,81 @@ def _split_by_cost(config, items):
         before += weight
     config.hook.pytest_deselected(items=deselected)
     items[:] = selected
+
+
+def _module_costs():
+    costs_file = (
+        "perf_split_costs_sol.json"
+        if TestConfig.SPEED_OF_LIGHT
+        else "perf_split_costs.json"
+    )
+    table = json.loads((Path(__file__).resolve().parents[2] / costs_file).read_text())
+    return costs_file, table.get(TestConfig.CHIP_ARCH.value)
+
+
+def _weights_from_table(items):
+    costs_file, module_cost = _module_costs()
+    if module_cost is None:
+        raise pytest.UsageError(
+            f"{costs_file} has no costs for {TestConfig.CHIP_ARCH.value}"
+        )
+    modules = [item.path.stem for item in items]
+    unknown = sorted(set(modules) - module_cost.keys())
+    if unknown:
+        logger.warning(
+            f"--perf-splits: {costs_file} has no cost for {', '.join(unknown)}; "
+            "each counts as 1 s"
+        )
+    tests_in = collections.Counter(modules)
+    return [module_cost.get(m, 1.0) / tests_in[m] for m in modules]
+
+
+def _weights_from_durations(items):
+    path = os.environ.get("LLK_SPLIT_DURATIONS")
+    if not path or not Path(path).is_file():
+        return None
+    try:
+        durations = json.loads(Path(path).read_text())
+    except (OSError, ValueError) as error:
+        logger.warning(
+            f"--perf-splits: {path} is unreadable ({error}); using the table"
+        )
+        return None
+    if not isinstance(durations, dict):
+        logger.warning(f"--perf-splits: {path} is not an object; using the table")
+        return None
+    known = [durations[item.nodeid] for item in items if item.nodeid in durations]
+    if not known:
+        return None
+    mean = sum(known) / len(known)
+    logger.info(
+        f"--perf-splits: {path} has durations for {len(known)} of {len(items)} tests"
+    )
+    return [durations.get(item.nodeid, mean) for item in items]
+
+
+def _store_split_durations(session):
+    config = session.config
+    if config.getoption("--perf-splits") is None:
+        return
+    workers = config.getoption("numprocesses", None)
+    workers = workers if isinstance(workers, int) and workers > 0 else 1
+    path = Path(".perf_split_durations")
+    durations = (
+        json.loads(path.read_text())
+        if TestConfig.BUILD_MODE == BuildMode.CONSUME and path.is_file()
+        else {}
+    )
+    reporter = config.pluginmanager.get_plugin("terminalreporter")
+    if reporter is None:
+        return
+    for reports in reporter.stats.values():
+        for report in reports:
+            if isinstance(report, pytest.TestReport):
+                durations[report.nodeid] = (
+                    durations.get(report.nodeid, 0.0) + report.duration / workers
+                )
+    path.write_text(json.dumps(durations))
 
 
 def _restore_test_order(config, items):
@@ -829,6 +908,7 @@ def pytest_collection_modifyitems(config, items):
     # Choose compile representatives only after other plugins apply selection filters.
     result = yield
     _select_tests_by_op(config, items)
+    _select_node_list(config, items)
     _split_by_cost(config, items)
     _restore_test_order(config, items)
 
@@ -1061,6 +1141,10 @@ def pytest_runtest_setup(item):
     """
     global _reset_simulator_pending
 
+    if item.config.getoption("forked", default=False):
+        # a forked test shares the worker heap copy on write, so keep full collections off it
+        gc.freeze()
+
     if _worker_fatal is not None:
         _fail_xdist_worker(item, _worker_fatal)
 
@@ -1105,6 +1189,37 @@ def pytest_configure_node(node):
         node.workerinput[_SIM_HOST_PID_KEY] = _sim_server.pid
 
 
+# Every chunk of a module this worker ran (worksteal can split a module). Only this worker writes its
+# <module>.<worker> files and the controller reads them after the workers end, so no other process races them.
+_MODULE_REPORTS: dict[str, PerfReport] = {}
+
+
+def _module_report(key: str, report: PerfReport, context: str) -> PerfReport:
+    """This chunk's rows added to the earlier chunks of the module, failing before any write if their column schemas
+    differ: a CSV must hold exactly one schema."""
+    # The chunk's own tests first, by test name: frame() below joins them and fills the columns a test lacks.
+    report.assert_single_schema(context=context)
+    merged = _MODULE_REPORTS.setdefault(key, PerfReport())
+    merged.append(report.frame(), label=context)
+    merged.assert_single_schema(context=context)
+    return merged
+
+
+def _dump_perf_report(test_module: str, worker_id: str, report: PerfReport):
+    """Write this worker's raw and post-processed CSVs of the module, over every chunk of it the worker ran."""
+    # More than one schema means two unrelated tests/ops share this module (split them into separate files) or one
+    # test emits inconsistent columns across its sweep.
+    merged = _module_report(
+        f"{test_module}.{worker_id}", report, f"{test_module} (worker {worker_id})"
+    )
+    merged.dump_csv(TestConfig.PERF_DATA_DIR / f"{test_module}.{worker_id}.csv")
+
+    post = PerfReport()
+    post.append(merged.frame().copy())
+    post.post_process()
+    post.dump_csv(TestConfig.PERF_DATA_DIR / f"{test_module}.{worker_id}.post.csv")
+
+
 @pytest.fixture(scope="module", autouse=True)
 def counter_report(request, worker_id):
     """Separate report for raw hardware counter CSV data (--dump-perf-counters)."""
@@ -1130,16 +1245,14 @@ def counter_report(request, worker_id):
     if PerfConfig.TEST_COUNTER == 0:
         return
 
-    temp_report.assert_single_schema(
-        context=f"{test_module} counters (worker {worker_id})"
+    merged = _module_report(
+        f"{test_module}.{worker_id}.counters",
+        temp_report,
+        f"{test_module} counters (worker {worker_id})",
     )
-
-    counters_path = TestConfig.PERF_DATA_DIR / f"{test_module}.{worker_id}.counters.csv"
-
-    if counters_path.exists():
-        counters_path.unlink()
-
-    temp_report.dump_csv(counters_path)
+    merged.dump_csv(
+        TestConfig.PERF_DATA_DIR / f"{test_module}.{worker_id}.counters.csv"
+    )
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -1160,23 +1273,7 @@ def perf_report(request, worker_id):
     if PerfConfig.TEST_COUNTER == 0:
         return
 
-    # Fail loud before writing: a single CSV must hold exactly one column schema.
-    # More than one means two unrelated tests/ops share this module (split them
-    # into separate files) or one test emits inconsistent columns across its sweep.
-    temp_report.assert_single_schema(context=f"{test_module} (worker {worker_id})")
-
-    raw_path = TestConfig.PERF_DATA_DIR / f"{test_module}.{worker_id}.csv"
-    post_path = TestConfig.PERF_DATA_DIR / f"{test_module}.{worker_id}.post.csv"
-
-    if raw_path.exists():
-        raw_path.unlink()
-
-    if post_path.exists():
-        post_path.unlink()
-
-    temp_report.dump_csv(raw_path)
-    temp_report.post_process()
-    temp_report.dump_csv(post_path)
+    _dump_perf_report(test_module, worker_id, temp_report)
 
 
 @pytest.hookimpl(optionalhook=True)
@@ -1185,49 +1282,35 @@ def pytest_testnodedown(node, error):
     from . import ulp_sweep
 
     ulp_sweep.merge_measured(
-        getattr(node, "workeroutput", {}).get(ulp_sweep.WORKEROUTPUT_KEY, ())
+        getattr(node, "workeroutput", {}).get(ulp_sweep.WORKEROUTPUT_KEY)
     )
 
 
 def _finish_ulp_emit(session):
-    """Under ``--ulp-emit``, write the whole session's measurements into the table once,
-    after every cell of an op has been seen. A refusal fails the session."""
-    import yaml
-
+    """Under ``--ulp-emit``, write the session's measurements into the table once; a
+    refusal fails a clean session and leaves an interrupted one's status alone."""
     from . import ulp_sweep
+    from .ulp_table import TABLE_PATH
 
     if not ulp_sweep.EMIT:
         return
     if TestConfig.BUILD_MODE == BuildMode.PRODUCE or session.config.option.collectonly:
-        # The producer only compiles -- TestConfig.run() skips before the device -- so it
-        # can never measure. It collects the same op set with or without --ulp-emit,
-        # and failing it would fail the documented emit workflow.
-        # `--collect-only --ulp-emit` previews that set, and runs nothing either.
+        # The producer only compiles, and --collect-only runs nothing: neither measures.
         _ulp_emit_line(
             session, "--ulp-emit: nothing runs in this session; nothing to write"
         )
         return
     try:
         if not ulp_sweep.MEASURED:
-            # Silence here read as a successful rewrite: a `-k` that matched nothing, a
-            # mode that deselects the sweep.
             raise RuntimeError("nothing was measured, so the table was not touched")
-        # pytest runs this hook after a Ctrl-C as well, with INTERRUPTED already in
-        # `exitstatus`; the failure count and the grid check cannot tell that apart from
-        # a run that ended on its own. Passed through as pytest set it, enum or int.
-        message = ulp_sweep.finish_emit(
-            get_chip_architecture(),
-            session.testsfailed,
-            exitstatus=session.exitstatus,
-        ).summary()
-    except (RuntimeError, ValueError, yaml.YAMLError) as exc:
-        # A ValueError or YAMLError can only come from the first read of the table,
-        # when the one on disk does not load and nothing was written; a rewrite that
-        # would not load is refused before the write, as an `EmitRefused`.
+        # The hook also runs after a Ctrl-C, with INTERRUPTED already in `exitstatus`.
+        clean = session.testsfailed == 0 and session.exitstatus == pytest.ExitCode.OK
+        written = ulp_sweep.finish_emit(get_chip_architecture(), clean, TABLE_PATH)
+        message = f"--ulp-emit: rewrote {len(written)} op(s) in {TABLE_PATH.name}"
+    except (RuntimeError, ValueError) as exc:
+        # A ValueError is a TableError: the table on disk does not load, or the rewrite
+        # would not (`write_table_file` reads its dump back first); nothing was written.
         message = f"--ulp-emit: {exc}"
-        # Escalate only a clean session: a refusal *because* the run was interrupted, hit
-        # an internal error or called pytest.exit(returncode=N) keeps that status, which a
-        # calling script would otherwise read as an ordinary test failure.
         if session.exitstatus == pytest.ExitCode.OK:
             session.exitstatus = pytest.ExitCode.TESTS_FAILED
     _ulp_emit_line(session, message)
@@ -1256,6 +1339,7 @@ def pytest_sessionfinish(session):
         return
 
     _finish_ulp_emit(session)
+    _store_split_durations(session)
 
     if not _HARDWARE_FREE and TestConfig.BUILD_MODE != BuildMode.PRODUCE:
         combine_perf_reports()

@@ -31,18 +31,21 @@ void bind_gather_operation(nb::module_& mod) {
             dim (int): The dimension along which values are gathered.
             index (ttnn.Tensor): A tensor containing the indices of elements to gather, with the same number of dimensions as the input tensor.
 
-        Keyword Arguments:
-            sparse_grad (bool, optional): If `True`, the gradient computation will be sparse. Defaults to `False`.
+        Keyword Args:
+            sparse_grad (bool, optional): Not supported: it must be `False`, and `True` raises an error. Defaults to `False`.
             memory_config (ttnn.MemoryConfig, optional): Specifies the memory configuration for the output tensor. Defaults to `None`.
             out (ttnn.Tensor, optional): A preallocated tensor to store the gathered values. Defaults to `None`.
             sub_core_grids (ttnn.CoreRangeSet, optional): Custom core range set for operation execution. Allows specification of which cores should be used for the operation. Defaults to `None`.
+
+        Returns:
+            ttnn.Tensor: the gathered values, with the same shape as `index`.
 
         Additional Information:
             * Currently, the `sparse_grad` argument is not supported.
 
         Note:
 
-            Supported dtypes and layout for input tensor values:
+            Supported dtypes and layouts for input tensor values:
 
             .. list-table::
                 :header-rows: 1
@@ -50,13 +53,11 @@ void bind_gather_operation(nb::module_& mod) {
                 * - Dtypes
                   - Layouts
                 * - BFLOAT16, FLOAT32
-                  - TILE
-                * - UINT16, UINT32
-                  - TILE
-                * - INT32
+                  - TILE, ROW_MAJOR
+                * - UINT16, UINT32, INT32
                   - TILE
 
-            Supported dtypes and layout for index tensor values:
+            Supported dtypes and layouts for index tensor values:
 
             .. list-table::
                 :header-rows: 1
@@ -64,10 +65,13 @@ void bind_gather_operation(nb::module_& mod) {
                 * - Dtypes
                   - Layouts
                 * - UINT16, UINT32
-                  - TILE
+                  - TILE, ROW_MAJOR
+
+            The input and index tensors must use the same layout.
 
         Memory Support:
             - Interleaved: DRAM and L1
+            - Sharded: HEIGHT_SHARDED, WIDTH_SHARDED and BLOCK_SHARDED in L1; TILE input and index tensors can also be HEIGHT_SHARDED in DRAM
     )doc";
 
     ttnn::bind_function<"gather">(
@@ -78,6 +82,8 @@ void bind_gather_operation(nb::module_& mod) {
         nb::arg("dim"),
         nb::arg("index"),
         nb::kw_only(),
+        // Only false is supported. Removing sparse_grad is tracked in
+        // https://github.com/tenstorrent/tt-metal/issues/64304.
         nb::arg("sparse_grad") = false,
         nb::arg("memory_config") = nb::none(),
         nb::arg("out") = nb::none(),

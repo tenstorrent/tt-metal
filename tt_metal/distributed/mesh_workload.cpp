@@ -11,6 +11,7 @@
 #include <cstdint>
 #include "impl/buffers/buffer_impl.hpp"
 #include <tt_metal/impl/program/program_command_sequence.hpp>
+#include "distributed/mesh_command_queue_base.hpp"
 #include "distributed/mesh_device_impl.hpp"
 #include "impl/context/metal_context.hpp"
 #include "impl/context/metal_env_impl.hpp"
@@ -42,8 +43,6 @@
 #include "impl/buffers/semaphore.hpp"
 #include "sub_device_types.hpp"
 #include "tt_metal/impl/dispatch/device_command.hpp"
-#include "tracy/Tracy.hpp"
-#include "tt_metal/distributed/fd_mesh_command_queue.hpp"
 
 #include <tt-umd/types/core_coordinates.hpp>
 #include <impl/dispatch/dispatch_core_manager.hpp>
@@ -218,6 +217,7 @@ void MeshWorkloadImpl::load_binaries(MeshCommandQueue& mesh_cq) {
             }
             kernel_bin_buf_ =
                 MeshBuffer::create(global_kernel_bin_buf_config, device_local_kernel_bin_buf_config, mesh_device);
+            MeshCommandQueueBase::ScopedProgramBinaryUpload program_binary_upload;
             // Iterate over the sub-grids and EnqueueWriteMeshBuffer to each sub-grid that runs an individual program
             for (auto& [device_range, program] : this->programs_) {
                 std::size_t kernel_bin_size =
@@ -494,7 +494,7 @@ void MeshWorkloadImpl::finalize_offsets(MeshDevice* mesh_device) {
     ttsl::Span<tt::tt_metal::detail::ProgramImpl*> programs(program_impls.data(), program_impls.size());
 
     const uint32_t max_program_kernels_sizeB = tt::tt_metal::detail::ProgramImpl::finalize_program_offsets(
-        extract_context_id(mesh_device),
+        mesh_device->impl().get_context_id(),
         mesh_device,
         kernels_getter,
         kernel_groups_getter,

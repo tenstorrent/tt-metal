@@ -29,7 +29,7 @@ NlpCreateHeadsSegformerDeviceOperation::NlpCreateQkvHeadsSegformerProgramFactory
     tt::DataFormat data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());
 
     uint32_t single_tile_size = tt::tile_size(data_format);
-    TT_ASSERT(a.buffer()->size() % single_tile_size == 0);
+    TT_ASSERT(a.mesh_buffer().device_local_size() % single_tile_size == 0);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      TM Parameters Setup
@@ -60,7 +60,7 @@ NlpCreateHeadsSegformerDeviceOperation::NlpCreateQkvHeadsSegformerProgramFactory
     ////////////////////////////////////////////////////////////////////////////
     ttnn::Tensor& q = std::get<0>(output);
 
-    TT_ASSERT(q.buffer() != nullptr, "Output q buffer should be allocated on device!");
+    TT_ASSERT(q.is_allocated(), "Output q buffer should be allocated on device!");
 
     // The Metal 2.0 binding layer works with the Metalium tensor type; extract once.
     const auto& input_mesh_tensor = a.mesh_tensor();

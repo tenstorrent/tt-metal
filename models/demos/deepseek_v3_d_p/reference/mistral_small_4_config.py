@@ -48,8 +48,12 @@ class MistralSmall4Config:
     INTERMEDIATE_SIZE = 12288  # Dense FFN hidden dimension; unused - NUM_DENSE_LAYERS is 0
 
     # MoE configuration
+    ROUTED_EXPERT_COMBINE_OVERLAP = True
     NUM_ROUTED_EXPERTS = 128  # n_routed_experts
     NUM_EXPERTS_PER_TOKEN = 4  # num_experts_per_tok
+    # Depth of the MoE forwarding buffers. Any value would make model functional,
+    # but larger values make it faster and consume more DRAM, so it's a compromise.
+    MOE_FWD_VC_PAGES = 48
     NUM_SHARED_EXPERTS = 1  # n_shared_experts
     NUM_EXPERT_GROUPS = 1  # n_group
     NUM_LIMITED_GROUPS = 1  # topk_group

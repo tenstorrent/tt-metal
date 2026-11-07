@@ -102,7 +102,10 @@ ttnn::device_operation::ProgramArtifacts RotaryEmbeddingLlamaMultiCore::create_p
     const uint32_t num_sin_cos_rows_per_core = (seq_len_t + seq_parallel_factor - 1) / seq_parallel_factor;
     const uint32_t num_rows_per_core = num_sin_cos_rows_per_core * heads_per_core;
 
-    uint32_t num_cos_sin_tiles = 2 * head_dim_t * num_sin_cos_rows_per_core;
+    // The reader writes each batch's cos/sin rows contiguously from the write pointer with no wrap check, so the
+    // buffer must be a whole number of those per-batch blocks; only rotary_seq_len_t rows are read per batch.
+    uint32_t num_cos_sin_tiles =
+        2 * head_dim_t * std::max<uint32_t>(1, std::min(num_sin_cos_rows_per_core, rotary_seq_len_t));
 
     uint32_t input_cb_num_tiles = num_sin_cos_rows_per_core * num_input_tiles;
 
@@ -334,7 +337,7 @@ ttnn::device_operation::ProgramArtifacts RotaryEmbeddingLlamaMultiCore::create_p
     for (uint32_t i = 0; i < cores.size(); ++i) {
         const auto& a = per_core_args[i];
         const NodeCoord node = cores[i];
-        const std::initializer_list<std::pair<std::string, uint32_t>> range_args = {
+        const std::initializer_list<std::pair<std::string, ArgValue>> range_args = {
             {"batch_start", a.start_batch},
             {"batch_end", a.end_batch},
             {"seq_t_start", a.start_seq},

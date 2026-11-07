@@ -66,9 +66,9 @@ struct MatmulMultiCoreReuseMultiCast1DProgramConfig {
     std::size_t num_global_cb_receivers{};
     bool untilize_out{};
     std::optional<tt::tt_metal::CoreRangeSet> allowed_worker_cores = std::nullopt;
-    // Select ring-rotated FIFO delivery for gather_in0 with a DRAM-sender GCB. The feeding prefetcher
-    // request MUST supply a per-receiver rotation. GCB-backed mcast_in0 instead consumes natural FIFO
-    // order and requires this flag to remain false.
+    // Select ring-rotated FIFO delivery for gather_in0 over Tensor prefetcher PrefetcherPipes. The
+    // feeding prefetcher request MUST supply a per-receiver rotation. mcast_in0 instead consumes natural
+    // FIFO order and requires this flag to remain false.
     bool stream_in1 = false;
 };
 

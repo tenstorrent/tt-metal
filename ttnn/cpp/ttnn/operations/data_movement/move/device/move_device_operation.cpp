@@ -73,14 +73,14 @@ void MoveDeviceOperation::validate_on_program_cache_hit(
         "ttnn.move: input tensor must be on device on cache hit. Got storage type: {}",
         input_tensor.storage_type());
 
-    TT_FATAL(input_tensor.buffer() != nullptr, "ttnn.move: input tensor buffer must be allocated on cache hit");
+    TT_FATAL(input_tensor.is_allocated(), "ttnn.move: input tensor buffer must be allocated on cache hit");
 
     TT_FATAL(
         output_tensor.storage_type() == StorageType::DEVICE,
         "ttnn.move: output tensor must be on device on cache hit. Got storage type: {}",
         output_tensor.storage_type());
 
-    TT_FATAL(output_tensor.buffer() != nullptr, "ttnn.move: output tensor buffer must be allocated on cache hit");
+    TT_FATAL(output_tensor.is_allocated(), "ttnn.move: output tensor buffer must be allocated on cache hit");
 }
 
 MoveDeviceOperation::spec_return_value_t MoveDeviceOperation::compute_output_specs(
@@ -119,13 +119,13 @@ ttnn::prim::MoveDeviceOperation::tensor_return_value_t move(
     using OperationType = ttnn::prim::MoveDeviceOperation;
     bool backwards = false;
     if (move_op_parallelization_strategy == ttnn::prim::MoveOpParallelizationStrategy::MULTI_CORE) {
-        Buffer* src_buffer = input_tensor.buffer();
-        Buffer* dst_buffer = output_tensor.buffer();
-        const bool src_and_dst_in_l1 = src_buffer->buffer_type() == tt::tt_metal::BufferType::L1 &&
-                                       dst_buffer->buffer_type() == tt::tt_metal::BufferType::L1;
+        const auto* src_buffer = &input_tensor.mesh_buffer();
+        const auto* dst_buffer = &output_tensor.mesh_buffer();
+        const bool src_and_dst_in_l1 = src_buffer->device_local_config().buffer_type == tt::tt_metal::BufferType::L1 &&
+                                       dst_buffer->device_local_config().buffer_type == tt::tt_metal::BufferType::L1;
         const uint32_t src_base = src_buffer->address();
         const uint32_t dst_base = dst_buffer->address();
-        const uint32_t copy_size_bytes = dst_buffer->size();
+        const uint32_t copy_size_bytes = dst_buffer->device_local_size();
         const bool ranges_overlap = (src_base < dst_base + copy_size_bytes) && (dst_base < src_base + copy_size_bytes);
         backwards = src_and_dst_in_l1 && ranges_overlap && (dst_base > src_base);
     }
