@@ -1096,6 +1096,8 @@ TEST_F(DispatchTelemetryReadApiTest, DispatchTelemetryTracksWorkersPerSubDeviceC
         SubDevice(std::array{sub_device_cores[0]}), SubDevice(std::array{sub_device_cores[1]})};
     auto sub_device_manager = mesh_device->create_sub_device_manager({sub_devices[0], sub_devices[1]}, 3200);
     mesh_device->load_sub_device_manager(sub_device_manager);
+    // The switch's commands are enqueued like any other: the device has run them once the CQ finishes.
+    Finish(mesh_device->mesh_command_queue(cq_id));
 
     auto info = read_dispatch_core_telemetry(tt_device(), *dispatch_telemetry_core);
     EXPECT_TRUE(info.has_value());

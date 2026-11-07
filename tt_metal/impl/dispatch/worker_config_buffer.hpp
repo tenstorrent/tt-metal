@@ -6,6 +6,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <utility>
 #include <vector>
 #include <tt-metalium/hal_types.hpp>
 
@@ -37,6 +38,10 @@ public:
     WorkerConfigBufferMgr();
 
     void init_add_buffer(uint32_t base_addr, uint32_t size);
+    // Whether init_add_buffer was called with exactly these (base address, size) buffers, in order.
+    bool has_buffers(const std::vector<std::pair<uint32_t, uint32_t>>& buffers) const;
+    // Frees everything: the state init_add_buffer leaves the manager in, without reallocating.
+    void reset();
     std::pair<ConfigBufferSync, std::vector<ConfigBufferEntry>&> reserve(const std::vector<uint32_t>& sizes);
     void free(uint32_t free_up_to_sync_count);
     void alloc(uint32_t when_freeable_sync_count);

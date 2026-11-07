@@ -80,7 +80,20 @@ public:
 
     std::vector<SystemMemoryCQInterface>& get_cq_interfaces();
 
+    // Writes any deferred commands (defer_commands) first, as their own fetch queue entry.
     void* issue_queue_reserve(uint32_t cmd_size_B, uint8_t cq_id);
+
+    // Holds `commands` back until the next command. A program sent to several devices at once takes them
+    // (take_deferred_commands) into its own fetch queue entry, saving an entry's write to the device; any other
+    // issue_queue_reserve writes them first, as their own entry. A sub-device manager switch holds its commands back
+    // this way.
+    void defer_commands(std::shared_ptr<const std::vector<uint32_t>> commands, uint8_t cq_id);
+    std::shared_ptr<const std::vector<uint32_t>> take_deferred_commands(uint8_t cq_id) {
+        return std::move(deferred_commands_.at(cq_id));
+    }
+    uint32_t deferred_commands_size(uint8_t cq_id) const {
+        return deferred_commands_.at(cq_id) ? deferred_commands_[cq_id]->size() * sizeof(uint32_t) : 0;
+    }
 
     void cq_write(const void* data, uint32_t size_in_bytes, uint32_t write_ptr);
 
@@ -127,6 +140,11 @@ private:
     ChipId device_id = 0;
     std::vector<uint32_t> completion_byte_addrs;
     char* cq_sysmem_start = nullptr;
+    // Per CQ, commands held back by defer_commands.
+    std::vector<std::shared_ptr<const std::vector<uint32_t>>> deferred_commands_;
+    void* issue_queue_reserve_impl(uint32_t cmd_size_B, uint8_t cq_id);
+    // Writes the deferred commands, if any, as their own fetch queue entry.
+    void flush_deferred_commands(uint8_t cq_id);
     std::vector<SystemMemoryCQInterface> cq_interfaces;
     uint32_t cq_size = 0;
     uint32_t channel_offset = 0;
