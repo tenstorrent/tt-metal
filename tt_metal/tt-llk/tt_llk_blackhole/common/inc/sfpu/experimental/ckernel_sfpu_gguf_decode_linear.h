@@ -93,6 +93,45 @@ sfpi_inline void q2_group()
     }
 }
 
+// Q3_K's group step: the 16 6-bit scales of each column half, from the 12 scale bytes in rows 0..2 (column half 0)
+// and 3..5 (half 1), as bytes into scratch entries Q3 .. Q3 + 15: word Q3 + 4 (2a + b) + j, byte t: scale 4j + t of
+// column half b, word parity a. Row 6 (fp16 d) to fp32, where pf32 reads it, past the page.
+constexpr int Q3 = 2 * TILE;
+
+template <unsigned LS, unsigned HS>
+sfpi_inline vUInt q3_word(const vUInt lo, const vUInt hi)
+{
+    const vUInt l = LS ? lo >> LS : lo;
+    const vUInt h = HS ? hi >> HS : hi;
+    return (l & vUInt(0x0F0F0F0Fu)) | ((h & vUInt(0x03030303u)) << 4u);
+}
+
+template <int FMT>
+sfpi_inline void q3_group()
+{
+#pragma GCC unroll 2
+    for (int a = 0; a < 2; a++)
+    {
+        const int w0 = Q3 + 8 * a, w1 = w0 + 4;
+        vUInt r0, r1, r2, r3;
+        rep4<FMT>(0, a, r0, r1, r2, r3);
+        sfpi::dst_reg[w0 + 0].mode<sfpi::DataLayout::U32>() = q3_word<0, 0>(r0, r2);
+        sfpi::dst_reg[w0 + 1].mode<sfpi::DataLayout::U32>() = q3_word<0, 2>(r1, r2);
+        sfpi::dst_reg[w0 + 2].mode<sfpi::DataLayout::U32>() = q3_word<4, 4>(r0, r2);
+        sfpi::dst_reg[w0 + 3].mode<sfpi::DataLayout::U32>() = q3_word<4, 6>(r1, r2);
+        sfpi::dst_reg[w1 + 0].mode<sfpi::DataLayout::U32>() = r3;  // row 3, until the transpose below is done
+        vUInt q0, q1, q2, q3;
+        rep4<FMT>(1, a, q0, q1, q2, q3);
+        const vUInt l0 = ldu(w1 + 0);
+        sfpi::dst_reg[w1 + 0].mode<sfpi::DataLayout::U32>() = q3_word<0, 0>(l0, q1);
+        sfpi::dst_reg[w1 + 1].mode<sfpi::DataLayout::U32>() = q3_word<0, 2>(q0, q1);
+        sfpi::dst_reg[w1 + 2].mode<sfpi::DataLayout::U32>() = q3_word<4, 4>(l0, q1);
+        sfpi::dst_reg[w1 + 3].mode<sfpi::DataLayout::U32>() = q3_word<4, 6>(q0, q1);
+        sfpi::dst_reg[pf32_idx<FMT>(0, 0, a)] = k4_f16<0>(q2);
+        sfpi::dst_reg[pf32_idx<FMT>(0, 1, a)] = k4_f16<1>(q2);
+    }
+}
+
 // Phase 1 of the linear formats and of IQ4_NL (Q4_0's scale rows). TI = tile index inside the scale page's group of
 // K-tiles.
 template <int FMT, int TI>
@@ -196,19 +235,17 @@ sfpi_inline void linear_params()
         }
         else if constexpr (FMT == Q3_K)
         {
-            // Rows 0..5: 12 bytes per column holding 16 6-bit scales; field 0: d.
-            rep4_to<FMT>(0, a, 0);
-            rep4_to<FMT>(1, a, 4);
+            // Sub-blocks 2 TI + h's 6-bit scales from q3_group's words; d as fp32.
 #pragma GCC unroll 2
             for (int b = 0; b < 2; b++)
             {
-                const int o    = 12 * b;
                 const vFloat d = pf32<FMT>(0, b, a);
+                const vUInt w  = ldu(Q3 + 4 * (2 * a + b) + TI / 2);
 #pragma GCC unroll 2
                 for (int h = 0; h < 2; h++)
                 {
                     const int i                       = 2 * TI + h;
-                    const vUInt ls                    = byte_bits(0, o + i % 8, 4 * (i / 8), 4) | (byte_bits(0, o + 8 + i % 4, 2 * (i / 4), 2) << 4);
+                    const vUInt ls                    = bits(w, 8 * (i % 4), 6);
                     const vFloat s                    = d * (ufloat(ls) + -32.0f);
                     sfpi::dst_reg[PS + pidx(a, b, h)] = s;
                     sfpi::dst_reg[PM + pidx(a, b, h)] = s * -4.0f;
