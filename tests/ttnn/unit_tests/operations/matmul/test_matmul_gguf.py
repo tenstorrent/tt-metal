@@ -4,7 +4,7 @@
 
 """ttnn.matmul / ttnn.linear with a GGUF weight (ttnn.from_gguf) on Blackhole, against gguf-py's dequantization of the
 same blocks times the same bf16 input in float64: PCC >= 0.9999 and the largest error within 1 % of the largest
-output, the bounds of the llama.cpp backend's GGUF gate."""
+output."""
 
 import statistics
 import time

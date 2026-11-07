@@ -39,7 +39,7 @@ enum class DataType {
     MXINT8 = 15,
     MXINT4 = 16,
     MXINT2 = 17,
-    // GGUF (llama.cpp) quantized weights, one value per format: TILE layout, each page one GGUF record, see GgufTraits.
+    // GGUF quantized weights, one value per format: TILE layout, each page one GGUF record, see GgufTraits.
     GGUF_Q8_0 = 18,
     GGUF_Q4_0 = 19,
     GGUF_IQ4_NL = 20,
