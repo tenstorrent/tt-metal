@@ -28,7 +28,7 @@ Overrides for a capacity sweep: `$K31_STAGE_USERS` (num_users) and `$K31_STAGE_W
 * `real`: the stage's cached weights, to confirm a stub result; every layer of the stage must be cached.
 
     K31_STAGE_USERS=77 scripts/run_safe_pytest.sh \
-        "models/demos/deepseek_v3_d_p/tests/kimi_k3/test_kimi_k3_1_stage.py::test_kimi_k3_1_stage_traced[stage0-torus-xy-8x4]"
+        "models/demos/deepseek_v3_d_p/tests/kimi_k3/test_kimi_k3_1_stage.py::test_kimi_k3_1_stage_traced[blackhole-stage0-torus-xy-8x4]"
 """
 
 from __future__ import annotations
