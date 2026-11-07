@@ -669,6 +669,8 @@ def _dirty_dram(device, num_elements):
 def test_conv_transpose2d_dram_slice_rows_without_input(
     device, height, width, kernel, stride, slice_type, num_slices, output_layout
 ):
+    if slice_type == ttnn.Conv2dDRAMSliceWidth and output_layout == ttnn.TILE_LAYOUT:
+        pytest.skip("width slicing a TILE output allows only one slice")
     cin = cout = 32
     torch.manual_seed(0)
     torch_input = torch.randn(1, cin, height, width).bfloat16().float()
