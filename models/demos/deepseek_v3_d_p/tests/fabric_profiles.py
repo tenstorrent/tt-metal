@@ -118,8 +118,8 @@ def torus_xy_device_params(*, fabric_payload_size=None, **overrides) -> dict:
     return params
 
 
-def assert_torus_xy_descriptor(path: str) -> None:
-    """Fail before device open unless every declared device mesh is 8x4 Ring/Ring."""
+def _device_topologies(path: str) -> tuple[Path, list[tuple[str, str, str, str]]]:
+    """(dims..., dim_types...) of every device mesh a descriptor declares; fails on a non-2D one."""
     descriptor_path = Path(path).resolve()
     text = descriptor_path.read_text()
     declared = len(re.findall(r"device_topology\s*\{", text))
@@ -131,11 +131,35 @@ def assert_torus_xy_descriptor(path: str) -> None:
     assert topologies, f"{descriptor_path}: no two-dimensional device topology found"
     assert len(topologies) == declared, (
         f"{descriptor_path}: {declared} device_topology block(s) declared but only "
-        f"{len(topologies)} are two-dimensional; TorusXY requires every mesh to be 8x4 Ring/Ring"
+        f"{len(topologies)} are two-dimensional; a certified torus requires every mesh to be 2D"
     )
+    return descriptor_path, topologies
+
+
+def assert_torus_xy_descriptor(path: str) -> None:
+    """Fail before device open unless every declared device mesh is 8x4 Ring/Ring."""
+    descriptor_path, topologies = _device_topologies(path)
     assert all(
         topology == ("8", "4", "RING", "RING") for topology in topologies
     ), f"{descriptor_path}: TorusXY requires every device topology to be 8x4 Ring/Ring; found {topologies}"
+
+
+# One tray half as a 4x4 prefill stage: SP on the axis-1 ring, TP on the axis-0 line.
+_4X4_STAGE_TOPOLOGY = ("4", "4", "LINE", "RING")
+
+
+def certified_torus_fabric(path: str) -> ttnn.FabricConfig:
+    """The wrapped fabric a cabling-certified Galaxy may open under this explicit descriptor.
+
+    8x4 Ring/Ring is the production TorusXY. A 4x4 Line/Ring descriptor is one tray half (the
+    4x4 stage), whose axis-1 rings are the certified torus's own X wraps, so it certifies TorusX.
+    Anything else fails before device open.
+    """
+    _, topologies = _device_topologies(path)
+    if all(topology == _4X4_STAGE_TOPOLOGY for topology in topologies):
+        return ttnn.FabricConfig.FABRIC_2D_TORUS_X
+    assert_torus_xy_descriptor(path)
+    return ttnn.FabricConfig.FABRIC_2D_TORUS_XY
 
 
 _REQUESTS_TP_WRAP = frozenset(

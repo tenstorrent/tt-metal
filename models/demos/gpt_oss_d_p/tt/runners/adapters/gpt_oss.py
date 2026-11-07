@@ -78,12 +78,14 @@ class GptOssPrefillAdapter(PrefillModelAdapter):
     # ------------------------------------------------------------------
     # Weight cache
     # ------------------------------------------------------------------
-    def weight_cache_path(self, mesh_shape: tuple) -> Optional[Path]:
+    def weight_cache_path(self, mesh_shape: tuple, sp_axis: int = 0) -> Optional[Path]:
         """The model's own tilized-cache layout, $PREFILL_TTNN_CACHE / tensor_cache_bfp8_MeshShape([sp, tp]),
         so the runner reads the files the standalone harness writes (``ModelArgs.weight_cache_path``).
         None if PREFILL_TTNN_CACHE is explicitly empty. Built from the mesh shape alone: the runner calls
         this before ``open_mesh_device``.
         """
+        if sp_axis != 0:
+            raise ValueError("gpt-oss prefill runs SP on mesh axis 0 only")
         env_cache = os.environ.get("PREFILL_TTNN_CACHE", self.ttnn_cache_default)
         if not env_cache:
             return None

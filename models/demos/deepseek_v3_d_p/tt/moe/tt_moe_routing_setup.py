@@ -30,7 +30,7 @@ This is a TTNN wrapper around two device operations executed in sequence:
                Token count per expert for this chip.
 
   2. offset_cumsum — First reshapes each device's histogram to (1, num_routed_experts) and
-     all-gathers along cluster_axis=0 (SP axis) to produce a gathered tensor of shape
+     all-gathers along the SP axis (sp_axis) to produce a gathered tensor of shape
      (dispatch_group_size, num_routed_experts) on every device. Then runs a device kernel
      that computes, for each source device, the starting token index in the destination
      device's local dispatch buffer where that source device must write its own tokens for
@@ -117,6 +117,7 @@ from loguru import logger
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.demos.deepseek_v3_d_p.tt.moe.debug_logging import DEBUG_LOGGING_ENABLED
+from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import mesh_shard_dims
 
 
 class MoERoutingOutputs(NamedTuple):
@@ -151,6 +152,7 @@ class TtMoERoutingSetup(LightweightModule):
         num_links: int = 1,
         experts_per_chip: int = 32,
         use_l1_small_for_semaphores: bool = False,
+        sp_axis: int = 0,
     ):
         """
         Initialize routing setup with the expert-to-chip mapping.
@@ -166,13 +168,16 @@ class TtMoERoutingSetup(LightweightModule):
                 always -1. masked_bincount only reads indices < num_routed_experts, so the extra
                 column is ignored here (it exists so the dispatch reader maps padded sentinel tokens
                 to -1).
-                Sharded across mesh with dims=(None, 0): replicated across rows (dispatch axis),
-                sharded on dim 0 across columns (dispatch groups).
+                Replicated across the dispatch (SP) axis and sharded on dim 0 across the other axis
+                (dispatch groups); see TtDispatchModule.shard_expert_dispatch_table.
                 Per-device shape after sharding: (1, num_routed_experts) (or +1 with the sentinel column)
             num_links: Number of fabric links to use for cross-chip communication in offset_cumsum
             experts_per_chip: Number of experts per chip (for expert region offset grouping in offset_cumsum)
+            sp_axis: Mesh axis the dispatch groups run along (the axis offset_cumsum gathers over).
         """
+        assert sp_axis in (0, 1), f"sp_axis must be 0 or 1, got {sp_axis}"
         self.mesh_device = mesh_device
+        self.sp_axis = sp_axis
         self.num_links = num_links
         self.experts_per_chip = experts_per_chip
         self.use_l1_small_for_semaphores = use_l1_small_for_semaphores
@@ -182,7 +187,9 @@ class TtMoERoutingSetup(LightweightModule):
             device=mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             layout=ttnn.ROW_MAJOR_LAYOUT,
-            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=mesh_device.shape, dims=(None, 0)),
+            mesh_mapper=ttnn.ShardTensor2dMesh(
+                mesh_device, mesh_shape=mesh_device.shape, dims=mesh_shard_dims(0, 1 - sp_axis)
+            ),
         )
 
     def forward(
@@ -230,7 +237,7 @@ class TtMoERoutingSetup(LightweightModule):
             mesh_mapper = ttnn.ShardTensor2dMesh(
                 self.mesh_device,
                 mesh_shape=self.mesh_device.shape,
-                dims=(0, None),
+                dims=mesh_shard_dims(0, self.sp_axis),
             )
             ttnn_top_k_experts_indices = ttnn.from_torch(
                 ttnn_top_k_experts_indices,
@@ -263,7 +270,7 @@ class TtMoERoutingSetup(LightweightModule):
             all_global_dispatch_offsets,
         ) = ttnn.experimental.deepseek_prefill.offset_cumsum(
             expert_histograms,
-            cluster_axis=0,
+            cluster_axis=self.sp_axis,
             num_links=self.num_links,
             experts_per_chip=self.experts_per_chip,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,

@@ -18,8 +18,11 @@ set -- "${POSITIONAL[@]+"${POSITIONAL[@]}"}"
 MODEL="${1:?${USAGE}}"
 RUN_NAME="${MODEL}${VARIANT}"
 # First entry is the default; membership is the validation. These models support sc1 only.
+# Kimi-K3's sc4 and sc1 are 4x4 stages, two per galaxy (its manifest's layout); the _8x4 configs keep
+# the one-stage-per-galaxy layout for hand comparisons and are in no CI leg.
 case "${MODEL}" in
   mistral4|gptoss120b) MODEL_CONFIGS="sc1" ;;
+  kimi_k3)             MODEL_CONFIGS="sc4 sc1 sc4_8x4 sc1_8x4" ;;
   *)                   MODEL_CONFIGS="sc4 sc1" ;;
 esac
 CONFIG="${2:-${MODEL_CONFIGS%% *}}"
@@ -27,6 +30,8 @@ case " ${MODEL_CONFIGS} " in
   *" ${CONFIG} "*) ;;
   *) echo "${MODEL} does not support config '${CONFIG}' (supported: ${MODEL_CONFIGS})" >&2; exit 2 ;;
 esac
+# The galaxy count without the layout suffix: sc4_8x4 runs as sc4 does, on sc4's descriptor.
+SCALE="${CONFIG%%_*}"
 
 : "${TT_METAL_HOME:?TT_METAL_HOME must be set}"
 : "${PREFILL_SUMMARIES:?PREFILL_SUMMARIES must be set by the blaze impl (shared /ci scratch for the KV table)}"
@@ -39,7 +44,7 @@ manifest_env() {
   python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["env"][sys.argv[2]])' "${MANIFEST}" "$1"
 }
 
-MGD="${MGD_DIR}/${CONFIG}_mgd.textproto"
+MGD="${MGD_DIR}/${SCALE}_mgd.textproto"
 
 CHUNK_SIZE=5120
 WARMUP_CHUNKS=10
@@ -57,6 +62,8 @@ PRODUCER_USERS="${PREFILL_PRODUCER_NUM_USERS:-1}"
 TCP_INTERFACE="${PREFILL_TCP_INTERFACE:-ens5f0np0}"
 # Non-zero for a pipeline-parallel model: the rank count its binding fixes. Set in the case block.
 PP_RANKS=0
+# Non-zero for a 4x4 layout: the galaxy count, two 4x4 stages (tray halves) on each.
+PP_4X4_HOSTS=0
 # PCC verdicts, rank logs and any rank binding, kept for the run's artifact upload.
 EVIDENCE_DIR="${PREFILL_SUMMARIES}/pcc/${RUN_NAME}"
 MTP_PCC_THRESHOLD=""
@@ -124,8 +131,6 @@ case "${MODEL}" in
     # the 5k..250k ones GLM-5.3 reports and sc4's 1M request adds 510k and 1M on top. Not a
     # baseline for sc4 -- 24 layers against 93 -- which is why the summary job reports sc4 alone.
     SC1_NUM_LAYERS=24
-    # sc1 is sc4's stage 0, so it opens sc4's slots.
-    SC1_NUM_USERS=$(manifest_env PREFILL_NUM_USERS)
     RUNNER_ENV="export PREFILL_HF_MODEL=/mnt/weka/model-weights/llm/moonshotai/Kimi-K3-dequantized; \
       export TT_METAL_SHM_TRACKING_DISABLED=1; export LOGURU_LEVEL=ERROR;"
     # The sc4 93-layer leg's KV PCC
@@ -137,13 +142,43 @@ case "${MODEL}" in
     PRODUCER_ENV+=" export PREFILL_PCC_GOLDEN_LEN=${GOLDEN_LEN};"
     REQUEST_LEN=1049600
     if [ "${VARIANT}" = _dspark ]; then
-      [ "${CONFIG}" = sc4 ] || { echo "${MODEL} runs sc4 only" >&2; exit 2; }
+      [ "${SCALE}" = sc4 ] || { echo "${MODEL} runs sc4 only" >&2; exit 2; }
       DFLASH=1
       MANIFEST="${MANIFEST_DIR}/kimi_k3_dspark.json"
       DFLASH_PCC_THRESHOLD="${PREFILL_DFLASH_PCC:-0.85}"
       PRODUCER_ENV="export PREFILL_DFLASH_PCC=${DFLASH_PCC_THRESHOLD};"
       TABLE_WAIT_DEFAULT=7200
     fi
+    # The manifests describe a 4x4 stage: SP=4 on mesh axis 1 (the tray half's ring), 2560-token chunks
+    # (640 tokens per chip), and the slots that layout fits. Runner and producer both read them.
+    CHUNK_SIZE=$(manifest_env PREFILL_CHUNK_SIZE)
+    case "${CONFIG}" in
+      sc4|sc1)
+        # Two ranks per galaxy, one per tray half, bound by tt-run discovery against the 4x4
+        # descriptor: 8 stages of 12 layers (9 on the last) for sc4, and sc4's first two for sc1, at
+        # sc4's slot count.
+        PP_4X4_HOSTS=1
+        [ "${SCALE}" = sc4 ] && PP_4X4_HOSTS=4
+        PP_RANKS=$((2 * PP_4X4_HOSTS))
+        # The cache the runner resolves for a [4,4] SP-axis-1 stage on 16 visible chips. Checked
+        # non-empty: weight_cache_path mkdirs it, so a failed run leaves an empty one behind.
+        K3_CACHE="${PREFILL_TTNN_CACHE:-/mnt/weka/model-cache/scratch/moonshotai/Kimi-K3-Cache/Kimi-K3-Cache-prefill}"
+        PP_CACHE_DIR="${K3_CACHE}/kimi_k3_bh_16dev/4x4_sp1"
+        RUNNER_ENV+=" export PREFILL_TTNN_CACHE='${K3_CACHE}';"
+        ;;
+      *_8x4)
+        # One 8x4 stage per galaxy, SP=8 on axis 0, at the 8x4 chunk and the slots #63502 measured
+        # for it (34 with the drafter). Exported to runner and producer, ahead of the manifest.
+        CHUNK_SIZE=5120
+        : "${PREFILL_NUM_USERS:=$([ "${DFLASH}" = 1 ] && echo 34 || echo 100)}"
+        export PREFILL_NUM_USERS
+        LAYOUT_8X4="export PREFILL_SP=8; export PREFILL_TP=4; export PREFILL_SP_AXIS=0; export PREFILL_CHUNK_SIZE=${CHUNK_SIZE};"
+        RUNNER_ENV+=" ${LAYOUT_8X4}"
+        PRODUCER_ENV+=" ${LAYOUT_8X4}"
+        ;;
+    esac
+    # sc1 opens sc4's slots.
+    SC1_NUM_USERS=${PREFILL_NUM_USERS:-$(manifest_env PREFILL_NUM_USERS)}
     ;;
   mistral4)
     export PIPELINE_DIR="${PREFILL_SUMMARIES/prefill_summaries/mistral4_pp4_kv}"
@@ -195,7 +230,7 @@ RUNNER_OVERRIDES="${VARIANT_MAX_SEQ_LEN:+export PREFILL_MAX_SEQ_LEN=${MAX_SEQ_LE
 SC4_MAX_SEQ_LEN=${MAX_SEQ_LEN}
 SC1_MAX_SEQ_LEN=${SC1_MAX_SEQ_LEN:-${MAX_SEQ_LEN}}
 NUM_LAYERS_ENV=""
-if [ "${CONFIG}" = sc1 ]; then
+if [ "${SCALE}" = sc1 ]; then
   MAX_SEQ_LEN=${SC1_MAX_SEQ_LEN}
   NUM_USERS=${SC1_NUM_USERS}
   RUNNER_OVERRIDES="export PREFILL_MAX_SEQ_LEN=${MAX_SEQ_LEN}; export PREFILL_NUM_USERS=${NUM_USERS};"
@@ -215,7 +250,7 @@ fi
 SC1_REQUEST_LEN=${SC1_REQUEST_LEN:-${REQUEST_LEN:-${SC1_MAX_SEQ_LEN}}}
 SC4_REQUEST_LEN=${REQUEST_LEN:-${SC4_MAX_SEQ_LEN}}
 REQUEST_LEN=${SC4_REQUEST_LEN}
-[ "${CONFIG}" = sc1 ] && REQUEST_LEN=${SC1_REQUEST_LEN}
+[ "${SCALE}" = sc1 ] && REQUEST_LEN=${SC1_REQUEST_LEN}
 echo "resolved shape for ${RUN_NAME}/${CONFIG}: max_seq_len=${MAX_SEQ_LEN} request_len=${REQUEST_LEN} num_users=${NUM_USERS}"
 
 REAL_CHUNKS=$((REQUEST_LEN / CHUNK_SIZE))
@@ -226,7 +261,7 @@ SC4_CHUNKS=$((SC4_REQUEST_LEN / CHUNK_SIZE))
 # one config yields the same chunk twice, and the summary drops chunks past a short window.
 PROBE_CHUNKS="${PROBE_CHUNKS:-$(printf '%s\n' 0 "$((50000 / CHUNK_SIZE))" "$((100000 / CHUNK_SIZE))" \
   "$((256000 / CHUNK_SIZE))" "$((SC1_CHUNKS / 2 - 1))" "$((SC1_CHUNKS - 1))" "$((SC4_CHUNKS / 2 - 1))" \
-  "$((SC4_CHUNKS - 1))" | sort -n -u | paste -sd,)}"
+  "$((SC4_CHUNKS - 1))" | sort -n -u | paste -sd, -)}"
 
 
 mkdir -p "${PIPELINE_DIR}"
@@ -326,7 +361,33 @@ trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
-if [ "${PP_RANKS}" -ne 0 ]; then
+if [ "${PP_4X4_HOSTS}" -ne 0 ]; then
+  # tt-run discovery binds two 4x4 meshes per host: it solves the descriptor (8 meshes for sc4, 2 for
+  # sc1) against the live cabling, so it picks the host ring order (the hostfile's order does not
+  # matter) and gives each rank its tray half's chips. Mock-checked on pod2 and pod6 against
+  # assemble_pipeline_binding.py predict: same halves per host, even meshes on the top half.
+  IFS=, read -r -a HOST_LIST <<< "${RESOLVED_HOSTS}"
+  [ "${#HOST_LIST[@]}" -eq "${PP_4X4_HOSTS}" ] || {
+    echo "${MODEL}/${CONFIG} requires exactly ${PP_4X4_HOSTS} cabled Galaxy hosts in ${TTRUN_DIR}/hostfile; got '${RESOLVED_HOSTS}'" >&2; exit 2;
+  }
+  if [ "${PP_4X4_HOSTS}" -eq 1 ]; then
+    MGD="${MGD_DIR%/ci}/pipeline_prefill_intragalaxy_2x4x4_sp1_mgd.textproto"
+  else
+    MGD="${MGD_DIR}/sc4_4x4_sp1_mgd.textproto"
+  fi
+  [ -f "${MGD}" ] || { echo "no mesh-graph descriptor for ${CONFIG} at ${MGD}" >&2; exit 2; }
+  # The stage shape comes from the manifest (the runner applies it under the launch line's exports);
+  # a manifest without it would bring 8x4 settings up on a 4x4 mesh.
+  [ "$(manifest_env PREFILL_SP_AXIS)" = 1 ] || { echo "${MANIFEST} does not set the 4x4 stage's PREFILL_SP_AXIS=1" >&2; exit 2; }
+  "${MPIRUN}" -np "${PP_4X4_HOSTS}" --host "$(printf '%s:1,' "${HOST_LIST[@]}" | sed 's/,$//')" --map-by slot \
+    --bind-to none --allow-run-as-root \
+    bash -lc "[ -n \"\$(ls -A '${PP_CACHE_DIR}' 2>/dev/null)\" ] || { echo \"\$(hostname): no 4x4 weight cache at ${PP_CACHE_DIR} (or set PREFILL_TTNN_CACHE)\" >&2; exit 1; }"
+  TTRUN_ARGS=(--force-rediscovery --mesh-graph-descriptor "${MGD}" --hosts "${RESOLVED_HOSTS}")
+  RUNNER_PLACEMENT=""
+  # Each producer rank reads its own stage's map (device_map_r<rank>.json); none can reach the others.
+  RUNNER_ENV+=" export PREFILL_MIGRATION_DEVICE_MAP_PATH='${MR_DIR}/device_map.json';"
+  PRODUCER_ENV+=" export PREFILL_MIGRATION_DEVICE_MAP_PATH='${MR_DIR}/device_map.json';"
+elif [ "${PP_RANKS}" -ne 0 ]; then
   # The CI controller has no chips: probe the allocated worker, and never reuse the template's
   # device IDs, since column enumeration is host-specific.
   [ -n "${RESOLVED_HOSTS}" ] && [[ "${RESOLVED_HOSTS}" != *,* ]] || {
@@ -402,16 +463,28 @@ done
 [ -f "${TABLE_PATH}" ] || { echo "KV table not published within ${TABLE_WAIT_SECS}s"; exit 1; }
 
 # A PP binding already fixed the rank count and host; only discovery has to parse them back out.
-if [ "${PP_RANKS}" -eq 0 ]; then
+if [ "${PP_RANKS}" -eq 0 ] || [ "${PP_4X4_HOSTS}" -ne 0 ]; then
   RANKFILE=$(ls -t "${TTRUN_CWD}"/generated/ttrun/*/rankfile 2>/dev/null | head -1)
   [ -f "${RANKFILE}" ] || { echo "tt-run rankfile not found under ${TTRUN_CWD}/generated/ttrun/*/rankfile"; exit 1; }
-  HOSTS=$(awk '/^rank[[:space:]]+[0-9]+=/ {n=$2; sub(/=.*/,"",n); h=$2; sub(/^[0-9]+=/,"",h); print n" "h}' "${RANKFILE}" | sort -n | awk '{printf "%s%s:1", (NR>1?",":""), $2}')
+  RANK_HOSTS=$(awk '/^rank[[:space:]]+[0-9]+=/ {n=$2; sub(/=.*/,"",n); h=$2; sub(/^[0-9]+=/,"",h); print n" "h}' "${RANKFILE}" | sort -n | awk '{print $2}')
+  # One --host entry per host with its rank count, in first-rank order.
+  HOSTS=$(printf '%s\n' "${RANK_HOSTS}" | awk 'NF && !($1 in n) {order[++k]=$1} NF {n[$1]++} END {for (i=1;i<=k;i++) printf "%s%s:%d", (i>1?",":""), order[i], n[order[i]]}')
   [ -n "${HOSTS}" ] || { echo "failed to parse producer host order from ${RANKFILE}"; exit 1; }
   echo "producer host order from tt-run discovery: ${HOSTS}"
-  EXPECTED_RANKS=$(printf '%s' "${HOSTS}" | tr ',' '\n' | grep -c .)
+  EXPECTED_RANKS=$(printf '%s\n' "${RANK_HOSTS}" | grep -c .)
+  if [ "${PP_RANKS}" -ne 0 ] && [ "${EXPECTED_RANKS}" -ne "${PP_RANKS}" ]; then
+    echo "tt-run discovery bound ${EXPECTED_RANKS} ranks; ${MODEL}/${CONFIG} needs ${PP_RANKS}"; exit 1
+  fi
+  # The binding tt-run solved, kept with the run's evidence.
+  BINDING="${RANKFILE%/*}/rank_bindings.yaml"
 fi
 
 PRODUCER_PLACEMENT=(-np "${EXPECTED_RANKS}" --map-by slot)
+# Producer rank r must share a host with runner rank r, which --map-by slot over HOSTS gives only
+# when each host's ranks are contiguous -- as tt-run binds a host's two 4x4 meshes.
+if [ "${PP_4X4_HOSTS}" -ne 0 ] && [ "$(printf '%s\n' "${RANK_HOSTS}" | uniq | wc -l)" -ne "${PP_4X4_HOSTS}" ]; then
+  echo "tt-run discovery interleaved hosts across ranks: ${RANK_HOSTS//$'\n'/ }"; exit 1
+fi
 if [ "${DFLASH}" = 1 ]; then
   mkdir -p "${TT_METAL_HOME}/generated/ttrun"
   cp "${RANKFILE}" "${TT_METAL_HOME}/generated/ttrun/producer_rankfile"

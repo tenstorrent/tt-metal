@@ -32,6 +32,25 @@ from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import (
 
 pytestmark = run_for_blackhole()
 
+_ON_4X4_STAGE = pytest.mark.requires_mesh_topology(mesh_shape=(4, 4), topology="mesh-4x4")
+# The distributed recurrence on LoudBox with TP on either axis, and on one 4x4 prefill stage (a Galaxy
+# tray half) with its deployed layout: TP=4 on the axis-0 line, SP=4 on the axis-1 ring.
+_ON_DISTRIBUTED_MESHES = pytest.mark.parametrize(
+    "mesh_device,device_params,tensor_parallel_axis",
+    [
+        pytest.param((2, 4), kda_device_params((2, 4)), 0, id="2x4-tp0"),
+        pytest.param((2, 4), kda_device_params((2, 4)), 1, id="2x4-tp1"),
+        pytest.param(
+            (4, 4),
+            kda_device_params((4, 4)),
+            0,
+            marks=_ON_4X4_STAGE,
+            id="4x4-torus-x-tp0",
+        ),
+    ],
+    indirect=["mesh_device", "device_params"],
+)
+
 
 def _to_device(tensor: torch.Tensor, device: ttnn.Device, dtype: ttnn.DataType) -> ttnn.Tensor:
     return ttnn.from_torch(
@@ -333,9 +352,7 @@ def _run_distributed_recurrence(
     return result.output, result.final_state
 
 
-@pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True)
-@pytest.mark.parametrize("device_params", [kda_device_params((2, 4))], indirect=True)
-@pytest.mark.parametrize("tensor_parallel_axis", [0, 1])
+@_ON_DISTRIBUTED_MESHES
 def test_distributed_recurrence_matches_serial_and_is_deterministic(
     mesh_device: ttnn.MeshDevice,
     tensor_parallel_axis: int,
@@ -365,9 +382,7 @@ def test_distributed_recurrence_matches_serial_and_is_deterministic(
     assert_accurate(expected_state, actual_state, name=f"{label} state", nrmse_threshold=0.01)
 
 
-@pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True)
-@pytest.mark.parametrize("device_params", [kda_device_params((2, 4))], indirect=True)
-@pytest.mark.parametrize("tensor_parallel_axis", [0, 1])
+@_ON_DISTRIBUTED_MESHES
 def test_distributed_recurrence_trace_replay_matches_eager(
     mesh_device: ttnn.MeshDevice,
     tensor_parallel_axis: int,

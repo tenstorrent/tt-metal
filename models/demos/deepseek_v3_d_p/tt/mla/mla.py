@@ -23,13 +23,16 @@ from models.demos.deepseek_v3_d_p.tt.mla.mla_config import MLA_MATMUL_CONFIG, ML
 from models.demos.deepseek_v3_d_p.tt.mla.rope import identity_rope_tensors_indexed
 from models.demos.deepseek_v3_d_p.tt.mla.sparse_kv_push import SparseKvPushPart, sparse_kv_push_supported
 from models.demos.deepseek_v3_d_p.tt.mla.utils import llama4_scale_host
+from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import get_sp_mesh_composer
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_tt_ccl, resolve_per_axis_topology
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import (
     MlaKvCache,
     MlaKvCacheFormat,
     MlaKvCacheGeometry,
+    assert_full_mesh_stripe_order,
     declared_seq_shard_factor,
     is_tp_deduped_kv_cache,
+    striped_cache_to_host,
 )
 
 # Axis 0 is N/S (mesh rows), axis 1 is E/W (mesh cols) -- the same convention high_bw_all_gather uses.
@@ -858,31 +861,11 @@ class ttMLA:
         """
         storage = kvpe_cache.storage
         if len(list(storage.tensor_topology().distribution_shape())) == 2:
-            n0, n1 = mesh_device.shape[0], mesh_device.shape[1]
-            sharded = ttnn.to_torch(
-                storage,
-                mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(2, 1), mesh_shape=mesh_device.shape),
-            )  # [slots, n1, n0 * rows_per_chip, width]
-            rows = sharded.shape[2] // n0
-            # Row-major chip order (axis 0 outer), matching the coordinate order init_kvpe_cache declares.
-            host = torch.cat(
-                [sharded[:, a1 : a1 + 1, a0 * rows : (a0 + 1) * rows] for a0 in range(n0) for a1 in range(n1)],
-                dim=2,
-            )
+            # SP-major stripe order, as ring_mla writes it.
+            host = striped_cache_to_host(storage, mesh_device, sp_axis).unsqueeze(1)
         else:
-            host = ttnn.to_torch(
-                storage,
-                mesh_composer=ttnn.create_mesh_composer(
-                    mesh_device,
-                    config=ttnn.MeshComposerConfig(
-                        dims=(2, -1),
-                        mesh_shape_override=ttnn.MeshShape(
-                            mesh_device.shape[sp_axis],  # concat SP shards
-                            1,  # collapse TP replicas
-                        ),
-                    ),
-                ),
-            )
+            # SP shards concatenate on the sequence dim; only one TP replica is read back.
+            host = ttnn.to_torch(storage, mesh_composer=get_sp_mesh_composer(mesh_device, sp_axis, concat_dim=2))
         return kvpe_cache.unpack_host(host)
 
     def get_weight_shapes(self) -> dict[str, tuple]:
@@ -2671,9 +2654,11 @@ class ttMLA:
             ), "dense tp_shard_kv is the chunked ring_mla split-KV path; single-shot prefill has no striped write"
         # Checked here, not on the first chunk after a long weight load.
         if self.tp_shard_kv and not self._has_indexer:
-            assert self.sp_axis == 0 and self.tp_axis == 1, (
-                f"dense tp_shard_kv needs SP on mesh axis 0 and TP on axis 1 (split-KV ring_mla), got "
-                f"sp_axis={self.sp_axis} tp_axis={self.tp_axis}"
+            # Either axis works: ring_mla numbers its KV stripes SP-major, row-major over the mesh with SP
+            # on axis 0 and column-major with SP on axis 1, from Q's declared sequence placement.
+            assert self.tp_axis == 1 - self.sp_axis, (
+                f"dense tp_shard_kv needs SP and TP on distinct mesh axes, got sp_axis={self.sp_axis} "
+                f"tp_axis={self.tp_axis}"
             )
             chunk_local = self.active_seq_len // self.sp_factor
             assert self.active_seq_len % self.sp_factor == 0 and chunk_local % (self.tp_factor * ttnn.TILE_SIZE) == 0, (
@@ -2912,7 +2897,7 @@ class ttMLA:
         assert self._sparse_kv_gather_buffer is not None
         # Preconditions of the full-mesh gather -- wrong here means a silently misordered gather.
         # Row-major over the mesh equals the sp*tp linearization only for this axis assignment.
-        assert self.sp_axis == 0 and self.tp_axis == 1, "full-mesh KVPE gather assumes sp_axis=0, tp_axis=1"
+        assert_full_mesh_stripe_order(storage, self.sp_axis, "full-mesh KVPE gather")
         # A cache still declaring the legacy kv-head-on-TP layout reports too few stripes and would
         # under-gather. This is the assertion that catches an allocator which forgot tp_axis.
         assert self._declared_seq_shard_factor(storage) == stripes, (

@@ -52,4 +52,20 @@ constexpr uint32_t row_major_index(uint32_t ring_index, uint32_t num_rows, uint3
     return row * num_cols + col;
 }
 
+// The same coordinate numbered down the columns: rank col * num_rows + row.
+constexpr uint32_t column_major_index(
+    uint32_t ring_index, uint32_t num_rows, uint32_t num_cols, Orientation orientation) {
+    const uint32_t row = coordinate_row(ring_index, num_rows, num_cols, orientation);
+    const uint32_t col = coordinate_col(ring_index, num_rows, num_cols, orientation);
+    return col * num_rows + row;
+}
+
+// Tensor rank of a full-mesh ring index: row-major over the mesh, or column-major when the tensor's
+// sequence runs along mesh axis 1. The one transport-to-tensor mapping for host route plans and kernels.
+constexpr uint32_t tensor_index(
+    uint32_t ring_index, uint32_t num_rows, uint32_t num_cols, Orientation orientation, bool column_major) {
+    return column_major ? column_major_index(ring_index, num_rows, num_cols, orientation)
+                        : row_major_index(ring_index, num_rows, num_cols, orientation);
+}
+
 }  // namespace ttnn::ccl::snake_ring
