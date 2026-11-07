@@ -573,15 +573,15 @@ def test_sdpa_decode_mask_batch_layout(device, b, nh, nkv, s, d, dtype, grid_siz
 
 
 @pytest.mark.parametrize(
-    "mask_batch_shape, match",
+    "mask_batch_shape, message",
     [
         ((2, 1), "attn_mask batch must be 1"),
         ((1, 2), "attn_mask batch must be 1"),
-        ((2, 2), r"attn_mask must be \[1, b, nh, s\] or \[b, 1, nh, s\]"),
+        ((2, 2), "but got dims 0 and 1 of 2 and 2"),
     ],
     ids=["dim0_mismatch", "dim1_mismatch", "both_dims"],
 )
-def test_sdpa_decode_mask_batch_rejected(device, mask_batch_shape, match):
+def test_sdpa_decode_mask_batch_rejected(device, expect_error, mask_batch_shape, message):
     run_test_sdpa_decode_mask_batch_rejected(
-        device, b=4, nh=8, s=256, d=64, mask_batch_shape=mask_batch_shape, match=match
+        device, expect_error, b=4, nh=8, s=256, d=64, mask_batch_shape=mask_batch_shape, message=message
     )

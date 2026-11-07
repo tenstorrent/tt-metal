@@ -1469,7 +1469,7 @@ def run_test_sdpa_decode_mask_batch_layout(device, b, nh, nkv, s, d, dtype, grid
         )
 
 
-def run_test_sdpa_decode_mask_batch_rejected(device, b, nh, s, d, mask_batch_shape, match):
+def run_test_sdpa_decode_mask_batch_rejected(device, expect_error, b, nh, s, d, mask_batch_shape, message):
     """A mask whose dims 0 and 1 do not give one mask per user (or a single shared one) is rejected."""
     dram = ttnn.DRAM_MEMORY_CONFIG
     tt_Q = ttnn.as_tensor(
@@ -1494,7 +1494,7 @@ def run_test_sdpa_decode_mask_batch_rejected(device, b, nh, s, d, mask_batch_sha
         k_chunk_size=get_chunk_size(s, s),
         exp_approx_mode=False,
     )
-    with pytest.raises(RuntimeError, match=match):
+    with expect_error(RuntimeError, message):
         ttnn.transformer.scaled_dot_product_attention_decode(
             tt_Q,
             tt_K,
