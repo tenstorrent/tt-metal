@@ -91,8 +91,9 @@ def _fill_prefix(mesh_device, case, cache: int, chunk: int, hidden_size: int):
 
 
 def _drain(mesh_device):
-    """Best-effort sync before freeing on an error path. Frees on one command queue are ordered after earlier work
-    anyway; this guards anything that touches the buffers outside the queue, and leaves the device idle."""
+    """Best-effort sync before freeing (on success it is a cheap second sync). Frees on one command queue are ordered
+    after earlier work anyway; this guards anything that touches the buffers outside the queue, and leaves the device
+    idle."""
     try:
         ttnn.synchronize_device(mesh_device)
     except Exception as e:
@@ -142,8 +143,8 @@ def _replay_outputs(mesh_device, case, start):
         if capturing:  # end a failed capture first: the device cannot sync while capturing
             try:
                 controller.end_capture()
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"ending the failed capture failed: {e}")
         _drain(mesh_device)
         for copy in outputs:
             ttnn.deallocate(copy)

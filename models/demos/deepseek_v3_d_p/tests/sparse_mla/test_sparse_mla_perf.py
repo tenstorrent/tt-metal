@@ -371,35 +371,60 @@ def _thp_state():
             pass
     try:
         with open("/proc/self/smaps_rollup") as f:
-            rss = {k: v.split()[0] for k, v in (line.split(":", 1) for line in f if ":" in line)}
-        out.append(f"rss {int(rss.get('Rss', 0)) // 1024} MB, anon huge {int(rss.get('AnonHugePages', 0)) // 1024} MB")
-    except (OSError, ValueError):
+            kib = {}
+            for line in f:
+                key, _, value = line.partition(":")
+                if value.split():
+                    kib[key] = value.split()[0]
+        out.append(f"rss {int(kib['Rss']) // 1024} MiB, anon huge {int(kib['AnonHugePages']) // 1024} MiB")
+    except Exception:
         pass
     return "; ".join(out)
 
 
-def _minor_faults():
-    return resource.getrusage(resource.RUSAGE_SELF).ru_minflt
+_VMSTAT_KEYS = ("compact_stall", "compact_fail", "thp_fault_alloc", "thp_fault_fallback", "thp_collapse_alloc")
 
 
-def _time_untraced(mesh_device, case, start, cpus=None, repeat=None, enqueue=None, faults=None):
+def _rusage():
+    """(minor faults, involuntary context switches) of the whole process, all threads."""
+    ru = resource.getrusage(resource.RUSAGE_SELF)
+    return ru.ru_minflt, ru.ru_nivcsw
+
+
+def _vmstat():
+    """System-wide compaction and THP allocation counters (/proc/vmstat), or {} if unavailable."""
+    try:
+        with open("/proc/vmstat") as f:
+            pairs = (line.split() for line in f)
+            return {k: int(v) for k, v, *_ in pairs if k in _VMSTAT_KEYS}
+    except Exception:
+        return {}
+
+
+def _time_untraced(mesh_device, case, start, cpus=None, repeat=None, enqueue=None, host=None):
     """Host ms of each timed eager forward through sync, and the last timed forward's per-device output. Appends the CPU
     the main thread ran on after each sample to `cpus`, the ms until forward() returned (before the sync) to `enqueue`,
-    the process's minor page faults during each sample to `faults`, and the output of one more, untimed forward to
-    `repeat`, if given."""
+    per-sample host counters to `host` (process minor faults during enqueue and during the sync, involuntary context
+    switches, and /proc/vmstat compaction/THP deltas), and the output of one more, untimed forward to `repeat`, if
+    given."""
     for _ in range(UNTRACED_WARMUP):  # the first call compiles
         ttnn.deallocate(case.forward(start))
         ttnn.synchronize_device(mesh_device)
     samples = []
     for i in range(UNTRACED_SAMPLES):
-        f0 = _minor_faults()
+        if host is not None:
+            vm0, (f0, c0) = _vmstat(), _rusage()
         t0 = time.perf_counter()
         out = case.forward(start)
         t1 = time.perf_counter()
+        if host is not None:
+            f1, _ = _rusage()  # outside the enqueue window, ~1 us inside the total one
         ttnn.synchronize_device(mesh_device)
         samples.append((time.perf_counter() - t0) * 1e3)
-        if faults is not None:
-            faults.append(_minor_faults() - f0)
+        if host is not None:
+            (f2, c2), vm2 = _rusage(), _vmstat()
+            vm = {k: vm2[k] - vm0.get(k, 0) for k in vm2 if vm2[k] != vm0.get(k, 0)}
+            host.append(f"{f1 - f0}/{f2 - f1}/{c2 - c0}" + (f" {vm}" if vm else ""))
         if enqueue is not None:
             enqueue.append((t1 - t0) * 1e3)
         if cpus is not None:
@@ -522,13 +547,14 @@ def test_sparse_mla_perf(mesh_device, device_params, variant, case_name, config_
     samples = {}
     cpus = []
     eager_repeat, traced_repeat = [], []
-    enqueue, faults = [], []
+    enqueue, host = [], []
     thp_before = _thp_state()
-    samples["untraced"], eager_out = _time_untraced(mesh_device, case, start, cpus, eager_repeat, enqueue, faults)
+    samples["untraced"], eager_out = _time_untraced(mesh_device, case, start, cpus, eager_repeat, enqueue, host)
     print(f"{label} host: {_host_state()}; untraced sample CPUs {' '.join(map(str, cpus))}")
     print(f"{label} untraced enqueue (forward() returns, ms): {' '.join(f'{x:.3f}' for x in enqueue)}")
     print(
-        f"{label} untraced minor page faults: {' '.join(map(str, faults))}; before: {thp_before}; after: {_thp_state()}"
+        f"{label} untraced host per sample (enqueue faults/sync faults/involuntary ctx switches, vmstat deltas): "
+        f"{', '.join(host)}; before: {thp_before}; after: {_thp_state()}"
     )
     print(f"{label} untraced op profile: {_op_host_profile(mesh_device, case, start)}")
     samples["traced"], traced_out = _time_traced(mesh_device, case, start, traced_repeat)
