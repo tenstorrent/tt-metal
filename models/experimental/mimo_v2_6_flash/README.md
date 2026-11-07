@@ -33,6 +33,7 @@ in [doc/tp8_dp4_plan.md](doc/tp8_dp4_plan.md).
 | `tt/generator_vllm.py` | `MiMoV2ForCausalLM`, the vllm-tt-plugin model class: DP=4 as in-process lanes, vLLM-owned hybrid KV (1 global + 5 SWA KV cache groups). Launch and results in [doc/vllm_integration/README.md](doc/vllm_integration/README.md) |
 | `reference/vision.py`, `reference/vision_inputs.py` | fp32 MiMo ViT (`visual.*`), bit-identical to HF's `MiMoVisionTransformer` except the merger norm (RMSNorm as vLLM, not HF's LayerNorm); vLLM's `MiMoV2OmniMultiModalProcessor` on the host for inputs as served |
 | `tt/vision/` | The ViT on one 1x8 row, TP=8 (`vit.py`), and `MiMoVisionEncoder` (`encoder.py`: `embed_image` / `embed_video` -> host bf16 [n, 4096]) |
+| `reference/audio.py`, `tt/audio/host_backend.py` | Audio input: fp32 torch reference of mel -> audio tokenizer encoder -> 20 RVQ codes -> patch encoder -> [n, 4096] (bit-identical to HF), and `HostAudioBackend.embed_audio` on the host CPU; test clips from `reference/make_audio_clips.py` |
 | `tests/` | TP=8 x DP=4 tests on the 4x8 mesh; `tests/perf/` perf scripts and tt-kernel-agent check / bench commands. Results in [doc/tp8_dp4_plan.md](doc/tp8_dp4_plan.md) |
 
 ## Running
