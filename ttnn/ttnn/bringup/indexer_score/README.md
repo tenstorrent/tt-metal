@@ -120,6 +120,7 @@ Tests: `tests/test_indexer_score.py` (model cases, `tests/cases.py`), `tests/uni
   block_max_pin=True` (the candidate pool), layers 24-36 `block_keys=8, block_bias` (the candidate restriction).
   P.31 (DECODER_SKIP=replay128): the decoder tail's layers 20-39 at a 1024-token chunk score the 5120-token chunks'
   keys with `natural_query_rows`.
+  P.40: INDEX_K_FORMAT=bfp8 scores bfloat8_b keys (k_local and the ring buffer) against the bfloat4_b query.
 
 ## History
 CHANGELOG.md

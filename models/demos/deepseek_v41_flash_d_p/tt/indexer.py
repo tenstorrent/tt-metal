@@ -67,6 +67,8 @@ from .cores import from_torch, max_grid, sub_cores, sub_cores_tiled, to_rm
 from .rope import RopeTable, deinterleave_perm, indexer_glue, rope_chain, rope_chains, rope_heads, rope_stock
 from .settings import settings
 
+# INDEX_K_FORMAT -> the dtype the ring scores the index keys in (and its gathered-key buffer's)
+INDEX_K_DTYPES = {"bf16": ttnn.bfloat16, "bfp8": ttnn.bfloat8_b, "bfp4": ttnn.bfloat4_b}
 Q_CHUNK, K_CHUNK = 64, 32  # score work unit: k 32 is the fork's fidelity-honouring head reduction (K-13 / K-14)
 
 
@@ -190,8 +192,10 @@ class TtIndexer:
         self.glue = indexer_glue()  # INDEXER_GLUE=on (P.16)
         self._memo = None  # (tt/sparse_attention.ChunkMemo, KV source layer): ``share``
         self.local = False  # INDEXER_TOPK_LOCAL=on (P.8): the top-k not gathered over TP (tt/model.py sets it)
-        # INDEX_K_FORMAT / INDEX_Q_FORMAT=bfp4 (DS41-150): keys and query rounded to bfloat4_b before the score
-        self.k_dtype = ttnn.bfloat4_b if settings.get("INDEX_K_FORMAT") == "bfp4" else ttnn.bfloat16
+        # INDEX_K_FORMAT / INDEX_Q_FORMAT=bfp4 (DS41-150): keys and query rounded to bfloat4_b before the score;
+        # INDEX_K_FORMAT=bfp8 (P.40): the keys rounded to bfloat8_b instead (bfp_round, nearest even), the ring's key
+        # buffer bfloat8_b; bf16: no rounding step
+        self.k_dtype = INDEX_K_DTYPES[settings.get("INDEX_K_FORMAT")]
         self.q_bfp4 = settings.get("INDEX_Q_FORMAT") == "bfp4"
         self.prepared = settings.get("CKV_BFP4_PREPARED") == "on"  # P.7: bfp_round built once, addresses patched
         # LOWBIT_HOST=on (P.12): bfp_round compact (no per-core runtime args) into this layer's own output buffers
@@ -227,7 +231,7 @@ class TtIndexer:
 
     # ------------------------------------------------------------------ per chunk (device only)
     def _round(self, x: ttnn.Tensor, what: str) -> tuple[ttnn.Tensor, bool]:
-        """x bf16 TILE -> (x on the bfloat4_b grid, nearest even; whether that tensor is this layer's persistent
+        """x bf16 TILE -> (x on the bfloat4_b grid (keys: k_dtype's, bfloat8_b under INDEX_K_FORMAT=bfp8), nearest even; whether that tensor is this layer's persistent
         buffer, which the caller never frees). LOWBIT_HOST=on (P.12): bfp_round compact into the layer's buffer for
         ``what`` (allocated at the first call; each call rewrites all of it, and the layer's next call of the same kind
         comes after every reader of the last one on the queue); off: a new tensor each call (FIX.14's path)."""
@@ -246,7 +250,7 @@ class TtIndexer:
 
     def _keys(self, cache) -> ttnn.Tensor:
         """The served index-key cache's slab [1, 1, rows / r, hd] bf16 ROW_MAJOR (ND-sharded) -> compressed rows
-        [1, 1, rows / r, hd] bf16 TILE (INDEX_K_FORMAT=bfp4: rounded to bfloat4_b), interleaved: the ring's k_local
+        [1, 1, rows / r, hd] bf16 TILE (INDEX_K_FORMAT=bfp4 / bfp8: rounded to bfloat4_b / bfloat8_b), interleaved: the ring's k_local
         (block-cyclic layout unchanged)."""
         rm = cache.slab.slice_rows(0, cache.crows)
         kt = ttnn.to_layout(rm, ttnn.TILE_LAYOUT, memory_config=DRAM, sub_core_grids=sub_cores(rm))
@@ -425,7 +429,7 @@ class TtIndexer:
         k_local = self._memo[0].get(("keys", self._memo[1]), kkey) if shared else None
         if isinstance(k_local, Kept):
             k_local = k_local.t
-        # (LOWBIT_HOST=on with INDEX_K_FORMAT=bfp4: the keys are the layer's persistent buffer, never freed; a memo
+        # (LOWBIT_HOST=on with INDEX_K_FORMAT=bfp4 / bfp8: the keys are the layer's persistent buffer, never freed; a memo
         # holds it as Kept, which its drop leaves alone)
         k_kept = self.lowbit_host and self.k_dtype != ttnn.bfloat16
         if k_local is None:

@@ -222,3 +222,14 @@ Mechanical fork changes (fork_op.py): namespace `ttnn::operations::bringup`, CMa
 - What: a 3-way merge per file (base = fork_op.py's mechanical copy of the source @ `6b80daf43e3`, the fork's last sync / fork point, no skipped commits; upstream = the same copy @ `107f838f379` (origin/llk_helper_library); ours = this fork). 1 file merged clean. Taken (1 commit): `19da1202a49` #62567 (`tensor.buffer() != nullptr` -> `tensor.is_allocated()` in validation).
 - Behaviour: none.
 - Files: device/indexer_score_device_operation.cpp; README.md (sync SHA)
+
+### P.40 (deepseek_v41_flash_d_p, 2026-11-07): a test case for a bfloat4_b query with bfloat8_b keys
+- What: `tests/cases.py` gains `deepseek_v41_flash_d_p-2x2-ring-natural-ratio2-...-q-bfp4-k-bfp8` (ring op, ratio 2,
+  q bfloat4_b, k_local and the ring's k buffer bfloat8_b, limits from the noise floor at bfp4 / bfp8 / bf16);
+  `test_ring_indexer_score_dsa_ds41` reads optional `q_dtype` / `k_dtype` (default `qk_dtype`) and puts each input on
+  its own block-float grid (reference.bfp_grid mbits 3 / 7). The op is unchanged: q and k already take their own
+  formats (ring_indexer_score_dsa_program_factory.cpp "q / k bf16, bfloat8_b or bfloat4_b, each in its own format").
+- Why: the model's INDEX_K_FORMAT=bfp8 A/B (keys bfloat8_b, query INDEX_Q_FORMAT=bfp4) feeds the op mixed formats.
+- Run: not on the 8x4: a 2x2 FABRIC_2D sub-mesh of the Galaxy fails the router handshake (K-68); the model's quick A/B
+  on the 8x4 exercises the path (rung last, every layer against the golden). Runs on a 2x2 box / in F.1.
+- Files: tests/cases.py, tests/test_indexer_score.py
