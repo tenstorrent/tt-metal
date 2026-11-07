@@ -86,11 +86,11 @@ def test_dsa_core_target_doubles_only_modelled_work():
 
 
 def test_indexer_score_fixed_cost_reproduces_its_floor():
-    # The fused indexer score program (index-K ring gather + score): every chip took >= 128.2 us at prefix 0
-    # (ao3i.2.2); the conservative model of the fused pair with the fixed cost reproduces that floor.
+    # The fused indexer score program (index-K ring gather + score): every chip took >= 197.7 us at prefix 0 at HiFi2
+    # (ao3i.2.7); the conservative model of the fused pair with the fixed cost reproduces that floor.
     ops = {o.name: o for o in m.dsa_ops(prefix=0)}
     fused = sum(ops[n].roofline_cons_ns + ops[n].fabric_cons_ns for n in ("index_k_gather", "index_score"))
-    assert fused == pytest.approx(128_200, abs=100)
+    assert fused == pytest.approx(197_700, abs=100)
 
 
 @pytest.mark.parametrize(
