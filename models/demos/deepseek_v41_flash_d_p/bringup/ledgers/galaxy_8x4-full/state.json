@@ -3534,24 +3534,44 @@
   },
   "attempt": 2,
   "attempts": 0,
-  "duration_s": 0.0,
+  "duration_s": 1371.0,
   "full_pending": true,
   "history": [
    {
     "s": 0.0,
     "status": "PASS",
     "t": "2026-11-06T19:28:29"
+   },
+   {
+    "s": 1371.0,
+    "status": "PASS",
+    "t": "2026-11-07T19:28:04"
    }
   ],
-  "last_run": "2026-11-06T19:28:29",
+  "last_run": "2026-11-07T19:28:03",
   "log": "/scratch/dnijemcevic/bringup/deepseek_v41_flash_d_p/runs/galaxy_8x4-full/run1/logs/P.37.log",
   "rc": 0,
   "reason": [],
   "role": "perf",
-  "stamp": null,
-  "started": "2026-11-06T19:28:29",
+  "stamp": {
+   "reused": [],
+   "units": {
+    "P.37#test_adapter_acks": "d9fbc21563679fa9",
+    "P.37#test_contract": "00fc99f300d692b0",
+    "P.37#test_ladder": "d409ce6de891e540",
+    "P.37#test_profile": "8993496674580a0b",
+    "P.37#test_short_turn": "e04f9606445ae7e3"
+   }
+  },
+  "started": "2026-11-07T19:05:12",
   "status": "PASS",
-  "units": null,
+  "units": {
+   "P.37#test_adapter_acks": "PASS",
+   "P.37#test_contract": "PASS",
+   "P.37#test_ladder": "PASS",
+   "P.37#test_profile": "PASS",
+   "P.37#test_short_turn": "PASS"
+  },
   "waiting": null
  },
  "P.38": {
@@ -3577,7 +3597,7 @@
   "attempt": 1,
   "attempts": 0,
   "duration_s": 0.0,
-  "full_pending": true,
+  "full_pending": false,
   "history": [
    {
     "s": 0.0,
