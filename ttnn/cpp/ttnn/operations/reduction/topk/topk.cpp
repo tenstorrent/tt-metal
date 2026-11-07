@@ -736,12 +736,6 @@ std::vector<Tensor> topk(
     output_tensor_vec.push_back(std::move(output_value_tensor));
     output_tensor_vec.push_back(std::move(output_index_tensor));
 
-    // Save pre-transformed tensor buffers for comparison (needed to check if device op changed buffers)
-    auto* pre_transform_buffer_0 =
-        preallocated_output_tensors.has_value() ? std::get<0>(output_tensors.value()).buffer() : nullptr;
-    auto* pre_transform_buffer_1 =
-        preallocated_output_tensors.has_value() ? std::get<1>(output_tensors.value()).buffer() : nullptr;
-
     // Apply post-processing transformations to restore original format
     auto post_transform_output_tensors =
         operations::reduction::topk::CMAKE_UNIQUE_NAMESPACE::post_topk_transform_tensor(
@@ -754,14 +748,19 @@ std::vector<Tensor> topk(
             original_lshape,
             input_memory_config);
 
-    // Check if padding or dtype conversion changed buffer address
+    // For a non-last dim (or a padded or converted output) the device op wrote into a
+    // transposed copy and the post-transform returned yet another buffer, so write the
+    // result into the caller's buffer. Rebinding the handle instead would leave the
+    // caller's buffer, and any view of it, holding its old contents.
     if (preallocated_output_tensors.has_value()) {
-        if (std::get<0>(preallocated_output_tensors.value()).buffer() != pre_transform_buffer_0) {
-            std::get<0>(preallocated_output_tensors.value()) = post_transform_output_tensors.at(0);
-        }
-        if (std::get<1>(preallocated_output_tensors.value()).buffer() != pre_transform_buffer_1) {
-            std::get<1>(preallocated_output_tensors.value()) = post_transform_output_tensors.at(1);
-        }
+        const auto write_back_if_changed = [](Tensor& user_t, Tensor& result_t) {
+            if (user_t.buffer() != result_t.buffer()) {
+                ttnn::to_memory_config(result_t, user_t.memory_config(), user_t.dtype(), user_t);
+            }
+            result_t = user_t;
+        };
+        write_back_if_changed(std::get<0>(preallocated_output_tensors.value()), post_transform_output_tensors.at(0));
+        write_back_if_changed(std::get<1>(preallocated_output_tensors.value()), post_transform_output_tensors.at(1));
     }
     return post_transform_output_tensors;
 }
