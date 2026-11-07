@@ -84,7 +84,7 @@ request's state, and the slabs start uninitialized.
 ## Reading it back
 
 `models/demos/deepseek_v3_d_p/tt/runners/kda_state_readback.py` opens a published table and device
-map, walks configs 1 and 2 by model layer, reads every segment with `read_dram_umd`, reassembles the
+map, walks the KDA configs (the adapter's `cache_kind`: 1 and 2 on K3, 2 and 3 on K3.1; `--model`) by model layer, reads every segment with `read_dram_umd`, reassembles the
 per-layer state and scores it against the head/tail golden
 (`k3_vllm_code_debug_1M_head_tail/kda/kda_{recurrent,conv}_state_layer_N`, 1024-token period; the
 state after `real_len` tokens is row `real_len / 1024 - 1`). A rank's host only reaches its own
