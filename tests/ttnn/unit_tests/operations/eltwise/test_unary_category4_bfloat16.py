@@ -483,3 +483,15 @@ def test_fill_op(device, fill_value):
         f"fill(fill_value={fill_value}) diverged for {int((~elementwise_match).sum().item())} "
         f"of {result.numel()} elements"
     )
+
+
+def test_leaky_relu_bf16_unflushed_zero_and_subnormal_inputs(device):
+    """±0 and subnormal BF16 inputs, which TT-NN keeps in DEST, store +0 (0x0000) at slope 0.01."""
+    if not ttnn.device.is_blackhole(device):
+        pytest.skip("ttnn.leaky_relu keeps its stock kernel on wormhole_b0")
+    words = torch.cat([torch.arange(0x80), torch.arange(0x8000, 0x8080)]).to(torch.int16)
+    x = words.view(torch.bfloat16).repeat(4).reshape(1, 1, 32, 32)
+    tt_x = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    device_out = ttnn.to_torch(ttnn.leaky_relu(tt_x, negative_slope=0.01))
+    raw = device_out.reshape(-1).view(torch.int16).to(torch.int32) & 0xFFFF
+    assert torch.all(raw == 0x0000)
