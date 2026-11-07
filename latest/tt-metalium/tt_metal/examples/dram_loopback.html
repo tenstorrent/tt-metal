@@ -338,7 +338,7 @@
 </h2>
 <div class="highlight-cpp notranslate">
 <div class="highlight"><pre><span></span><span class="n">distributed</span><span class="o">::</span><span class="n">MeshCommandQueue</span><span class="o">&amp;</span><span class="w"> </span><span class="n">cq</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">mesh_device</span><span class="o">-&gt;</span><span class="n">mesh_command_queue</span><span class="p">();</span>
-<span class="n">Program</span><span class="w"> </span><span class="n">program</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">CreateProgram</span><span class="p">();</span>
+<span class="n">Program</span><span class="w"> </span><span class="n">program</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">CreateProgram</span><span class="p">(</span><span class="o">*</span><span class="n">mesh_device</span><span class="p">);</span>
 </pre></div>
 </div>
 <p>Operations in Metalium are almost always capable to be run asynchronously and the ordering of operations is managed by a command queue. The command queue, like the name suggests, is a FIFO queue of commands that are executed in order. Commands include operations run on the device such as upload/download of data and program execution. The mesh command queue handles operations across the entire mesh (in this case, our single device).</p>
@@ -412,8 +412,8 @@
 <div class="highlight-cpp notranslate">
 <div class="highlight"><pre><span></span><span class="k">constexpr</span><span class="w"> </span><span class="n">CoreCoord</span><span class="w"> </span><span class="n">core</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{</span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="mi">0</span><span class="p">};</span>
 <span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="kt">uint32_t</span><span class="o">&gt;</span><span class="w"> </span><span class="n">dram_copy_compile_time_args</span><span class="p">;</span>
-<span class="n">TensorAccessorArgs</span><span class="p">(</span><span class="o">*</span><span class="n">input_dram_buffer</span><span class="o">-&gt;</span><span class="n">get_backing_buffer</span><span class="p">()).</span><span class="n">append_to</span><span class="p">(</span><span class="n">dram_copy_compile_time_args</span><span class="p">);</span>
-<span class="n">TensorAccessorArgs</span><span class="p">(</span><span class="o">*</span><span class="n">output_dram_buffer</span><span class="o">-&gt;</span><span class="n">get_backing_buffer</span><span class="p">()).</span><span class="n">append_to</span><span class="p">(</span><span class="n">dram_copy_compile_time_args</span><span class="p">);</span>
+<span class="n">TensorAccessorArgs</span><span class="p">(</span><span class="o">*</span><span class="n">input_dram_buffer</span><span class="p">).</span><span class="n">append_to</span><span class="p">(</span><span class="n">dram_copy_compile_time_args</span><span class="p">);</span>
+<span class="n">TensorAccessorArgs</span><span class="p">(</span><span class="o">*</span><span class="n">output_dram_buffer</span><span class="p">).</span><span class="n">append_to</span><span class="p">(</span><span class="n">dram_copy_compile_time_args</span><span class="p">);</span>
 
 <span class="n">KernelHandle</span><span class="w"> </span><span class="n">dram_copy_kernel_id</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">CreateKernel</span><span class="p">(</span>
 <span class="w">    </span><span class="n">program</span><span class="p">,</span>

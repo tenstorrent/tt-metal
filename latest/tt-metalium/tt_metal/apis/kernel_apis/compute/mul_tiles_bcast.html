@@ -308,11 +308,20 @@
 <h1>mul_tiles_bcast<a class="headerlink" href="#mul-tiles-bcast" title="Permalink to this heading"></a>
 </h1>
 <dl class="cpp function">
-<dt class="sig sig-object cpp" id="_CPPv4N7ckernel19mul_bcast_cols_initE8uint32_t8uint32_t8uint32_t">
-<span class="target" id="namespaceckernel_1aef81a94aef6b43c0c8177bb6bbe05ad4"></span><span class="kt"><span class="pre">void</span></span><span class="w"> </span><span class="sig-prename descclassname"><span class="n"><span class="pre">ckernel</span></span><span class="p"><span class="pre">::</span></span></span><span class="sig-name descname"><span class="n"><span class="pre">mul_bcast_cols_init</span></span></span><span class="sig-paren">(</span><span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">icb0</span></span>, <span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">icb1</span></span>, <span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">call_line</span></span><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="n"><span class="pre">__builtin_LINE</span></span><span class="p"><span class="pre">(</span></span><span class="p"><span class="pre">)</span></span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4N7ckernel19mul_bcast_cols_initE8uint32_t8uint32_t8uint32_t" title="Permalink to this definition"></a><br>
+<dt class="sig sig-object cpp" id="_CPPv4N7ckernel19mul_bcast_cols_initE8uint32_t8uint32_tb8uint32_t">
+<span class="target" id="namespaceckernel_1a70d7a23f5f931ae1f67a970c68e0a878"></span><span class="kt"><span class="pre">void</span></span><span class="w"> </span><span class="sig-prename descclassname"><span class="n"><span class="pre">ckernel</span></span><span class="p"><span class="pre">::</span></span></span><span class="sig-name descname"><span class="n"><span class="pre">mul_bcast_cols_init</span></span></span><span class="sig-paren">(</span><span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">icb0</span></span>, <span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">icb1</span></span>, <span class="kt"><span class="pre">bool</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">acc_to_dest</span></span><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="k"><span class="pre">false</span></span>, <span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">call_line</span></span><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="n"><span class="pre">__builtin_LINE</span></span><span class="p"><span class="pre">(</span></span><span class="p"><span class="pre">)</span></span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4N7ckernel19mul_bcast_cols_initE8uint32_t8uint32_tb8uint32_t" title="Permalink to this definition"></a><br>
 </dt>
 <dd>
-<p>Performs a first-call or switch-from-another-op tile hw reconfiguration step needed for mul_bcast_cols to be executed correctly. </p>
+<p>Performs a first-call or switch-from-another-op tile hw reconfiguration step needed for mul_bcast_cols to be executed correctly.</p>
+<p>With acc_to_dest, every following <em>mul_tiles_bcast_cols</em> accumulates into its destination tile rather than overwriting it: DST[idst] += A * column 0 of B. That makes a column-broadcast multiply a MAC, so a weighted sum over several input tiles lands in one DST tile without an intermediate CB.</p>
+<p></p>
+<div class="tt-api-param-list colwidths-auto docutils container">
+<p class="tt-api-param-row"><span class="tt-api-param-name">Argument  </span><span class="tt-api-param-desc">Description  </span></p>
+<p class="tt-api-param-row"><span class="tt-api-param-name">icb0  </span><span class="tt-api-param-desc">CB whose tile is unpacked into SrcA (operand A)  </span></p>
+<p class="tt-api-param-row"><span class="tt-api-param-name">icb1  </span><span class="tt-api-param-desc">CB whose tile is unpacked into SrcB (operand B, column 0 broadcast)  </span></p>
+<p class="tt-api-param-row"><span class="tt-api-param-name">acc_to_dest  </span><span class="tt-api-param-desc">If true, operation = A * B + dst_tile_idx of mul_tiles_bcast_cols  </span></p>
+</div>
+
 </dd>
 </dl>
 

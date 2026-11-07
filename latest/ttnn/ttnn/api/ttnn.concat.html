@@ -375,26 +375,33 @@
 </h1>
 <span class="target" id="id1"></span><dl class="py function">
 <dt class="sig sig-object py" id="ttnn.concat">
-<span class="sig-prename descclassname"><span class="pre">ttnn.</span></span><span class="sig-name descname"><span class="pre">concat</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">input_tensor:</span> <span class="pre">List</span> <span class="pre">of</span> <span class="pre">ttnn.Tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">dim:</span> <span class="pre">number</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">*</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">sub_core_grids:</span> <span class="pre">ttnn.CoreRangeSet</span> <span class="pre">=</span> <span class="pre">None</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">→</span> <span class="sig-return-typehint"><span class="pre">ttnn.Tensor</span></span></span><a class="headerlink" href="#ttnn.concat" title="Permalink to this definition"></a>
+<span class="sig-prename descclassname"><span class="pre">ttnn.</span></span><span class="sig-name descname"><span class="pre">concat</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">tensors</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">List</span><span class="p"><span class="pre">[</span></span><span class="pre">ttnn.Tensor</span><span class="p"><span class="pre">]</span></span></span></em>, <em class="sig-param"><span class="n"><span class="pre">dim</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">0</span></span></em>, <em class="sig-param"><span class="o"><span class="pre">*</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">memory_config</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.MemoryConfig</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">output_tensor</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">groups</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">1</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">sub_core_grids</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.CoreRangeSet</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">→</span> <span class="sig-return-typehint"><span class="pre">ttnn.Tensor</span></span></span><a class="headerlink" href="#ttnn.concat" title="Permalink to this definition"></a>
 </dt>
 <dd>
+<p>Concatenates the input tensors along dimension <cite>dim</cite>.</p>
+<p>All input tensors must be on the same device and have the same rank and dtype. Their shapes must match in
+every dimension except <cite>dim</cite>, and the size of the output along <cite>dim</cite> is the sum of the inputs’ sizes along
+it. The inputs must be either all interleaved or all sharded.</p>
+<p>Interleaved inputs with different layouts are converted to the first input’s layout, or to ROW_MAJOR if a
+ROW_MAJOR input is not tile-aligned. A TILE input that is padded along <cite>dim</cite> needs every input to be TILE.
+Sharded inputs must also have the same layout, shard grid, sharding scheme and shard orientation.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters<span class="colon">:</span>
 </dt>
 <dd class="field-odd">
 <ul class="simple">
-<li><p><span class="tt-api-param-name"><strong>input_tensor</strong> (<em>List</em><em> of </em><em>ttnn.Tensor</em>)</span><span class="tt-api-param-desc">the input tensors.</span></p></li>
-<li><p><span class="tt-api-param-name"><strong>dim</strong> (<em>number</em>)</span><span class="tt-api-param-desc">the concatenating dimension.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>tensors</strong> (<em>List</em><em>[</em><em>ttnn.Tensor</em><em>]</em>)</span><span class="tt-api-param-desc">the tensors to concatenate.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>dim</strong> (<em>int</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">the dimension along which to concatenate; negative values count from the last dimension. Defaults to <cite>0</cite>.</span></p></li>
 </ul>
 </dd>
 <dt class="field-even">Keyword Arguments<span class="colon">:</span>
 </dt>
 <dd class="field-even">
 <ul class="simple">
-<li><p><span class="tt-api-param-name"><strong>memory_config</strong> (<em>ttnn.MemoryConfig</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">Memory configuration for the operation. Defaults to <cite>None</cite>.</span></p></li>
-<li><p><span class="tt-api-param-name"><strong>output_tensor</strong> (<em>ttnn.Tensor</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">Preallocated output tensor. Defaults to <cite>None</cite>.</span></p></li>
-<li><p><span class="tt-api-param-name"><strong>groups</strong> (<em>int</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">When <cite>groups</cite> is set to a value greater than 1, the inputs are split into N <cite>groups</cite> partitions, and elements are interleaved from each group into the output tensor. Each group is processed independently, and elements from each group are concatenated in an alternating pattern based on the number of groups. This is useful for recombining grouped convolution outputs during residual concatenation. Defaults to <cite>1</cite>. Currently, groups &gt; <cite>1</cite> is only supported for two height sharded input tensors.</span></p></li>
-<li><p><span class="tt-api-param-name"><strong>sub_core_grids</strong> (<em>ttnn.CoreRangeSet</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">Sub-core grid to use for interleaved (L1 or DRAM) output tensors. If provided, the concatenation will run on the specified sub-core grid instead of the full compute grid. Defaults to <cite>None</cite>.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>memory_config</strong> (<em>ttnn.MemoryConfig</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">Memory configuration of the output tensor. Defaults to <cite>None</cite>, which gives a DRAM interleaved output.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>output_tensor</strong> (<em>ttnn.Tensor</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">Not supported: passing a tensor raises an error. Defaults to <cite>None</cite>.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>groups</strong> (<em>int</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">When <cite>groups</cite> is set to a value greater than 1, the inputs are split into N <cite>groups</cite> partitions, and elements are interleaved from each group into the output tensor. Each group is processed independently, and elements from each group are concatenated in an alternating pattern based on the number of groups. This is useful for recombining grouped convolution outputs during residual concatenation. Defaults to <cite>1</cite>. Currently, groups &gt; <cite>1</cite> is only supported for a width concat of two height-sharded tensors in L1.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>sub_core_grids</strong> (<em>ttnn.CoreRangeSet</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">Sub-core grid to use when the inputs and the output are interleaved (L1 or DRAM). If provided, the concatenation will run on the specified sub-core grid instead of the full compute grid. Defaults to <cite>None</cite>.</span></p></li>
 </ul>
 </dd>
 </dl>
@@ -418,9 +425,7 @@
 
 <span class="c1"># Concatenate along dimension 3</span>
 <span class="n">concatenated_tensor</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">concat</span><span class="p">([</span><span class="n">tensor1</span><span class="p">,</span> <span class="n">tensor2</span><span class="p">],</span> <span class="n">dim</span><span class="o">=</span><span class="mi">3</span><span class="p">)</span>
-<span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span>
-    <span class="s2">"Concatenated Tensor Shape:"</span><span class="p">,</span> <span class="n">concatenated_tensor</span><span class="o">.</span><span class="n">shape</span>
-<span class="p">)</span>  <span class="c1"># Concatenated Tensor Shape: Shape([1, 1, 64, 64])</span>
+<span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Concatenated Tensor Shape: </span><span class="si">{</span><span class="n">concatenated_tensor</span><span class="o">.</span><span class="n">shape</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>  <span class="c1"># Shape([1, 1, 64, 64])</span>
 </pre></div>
 </div>
 </div>
