@@ -39,17 +39,23 @@ inline void llk_math_reduce_init(const std::uint32_t operandA, const std::uint32
     const DataFormat srcA_format = src_2x ? DataFormat::MxFp4_2x_B : (swap_operands ? scaler_format : data_format);
     const DataFormat srcB_format = src_2x ? DataFormat::MxFp4_2x_B : (swap_operands ? data_format : scaler_format);
 
-    // The default path skips the ALU setup when already configured, so set the ALU formats directly when they change.
-    if (src_2x || swap_operands) {
+    // When src_2x, srcA_format and srcB_format deviate from the op-agnostic unpack_dst_format[] table. Program the
+    // ALU directly in that case; this is still the DEFAULT config shape (no dest-format override).
+    if (src_2x) {
         const bool en_int32_dest_format = _is_src_fmt_int32_dest_compatible_(srcA_format) &&
                                           _is_src_fmt_int32_dest_compatible_(srcB_format) && EN_32BIT_DEST;
         _configure_alu_formats_<EN_32BIT_DEST>(
             srcA_format, srcB_format, en_int32_dest_format, DataFormat::Invalid /* no dest-format override */);
-        if (swap_operands) {
-            data_format_config_set = DataFormatConfigSet::UNCONFIGURED;
-        }
     } else {
-        _configure_default_alu_data_format_state_<EN_32BIT_DEST>(srcA_format, srcB_format);
+        // Row MAX and scalar reduces move the pooled Dest rows back into SrcB (MOVD2B), which reads them under the
+        // SrcA format and writes them under the SrcB one. In a 32-bit Dest those rows are fp32, so a Float16_b
+        // operand is declared Tf32 there: the same exponent, with the low mantissa bits it lacks at zero. The
+        // fidelity schedule still comes from the unpacked formats, so no phase is added.
+        constexpr bool moves_dest_to_src = reduce_dim == ReduceDim::REDUCE_SCALAR ||
+                                           (reduce_dim == ReduceDim::REDUCE_ROW && pool_type == PoolType::MAX);
+        _configure_default_alu_data_format_state_<EN_32BIT_DEST>(
+            moves_dest_to_src ? ckernel::math::dest_src_format<EN_32BIT_DEST>(srcA_format) : srcA_format,
+            moves_dest_to_src ? ckernel::math::dest_src_format<EN_32BIT_DEST>(srcB_format) : srcB_format);
     }
     _llk_math_reduce_init_<pool_type, reduce_dim, EN_32BIT_DEST, math_fidelity>(srcA_format, srcB_format, tensor_shape);
 }
