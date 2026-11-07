@@ -52,9 +52,7 @@ def test_bw_leaky_relu_default(input_shapes, device):
 
 
 # Exhaustive BF16 accuracy of ttnn.leaky_relu_bw at the scalar values the generated kernel is fitted for: every BF16 bit pattern with each gradient in LEAKY_RELU_BW_GRADS.
-#
-# The SFPU may read a subnormal operand as zero, so an output may match torch at the operands or at the
-# operands with subnormals flushed; the pack stores NaN as +inf and -0 as +0, so classes compare as stored.
+# An output may match torch at the operands or with subnormals flushed; classes compare as the pack stores them.
 LEAKY_RELU_BW_GRADS = [
     "1",
     "-1",
@@ -73,6 +71,8 @@ LEAKY_RELU_BW_GRADS = [
     "3.3895313892515355e+38",
     "-3.3895313892515355e+38",
 ]
+# The kernel's largest error over every gradient on silicon, rounded up: a rounding regression exceeds it.
+LEAKY_RELU_BW_MAX_ULP = 0.49
 LEAKY_RELU_BW_SMALLEST_NORMAL = 2.0**-126
 LEAKY_RELU_BW_NEGATIVE_SLOPE = 0.01
 
@@ -181,8 +181,8 @@ def test_leaky_relu_bw_exhaustive_bfloat16(grad, device):
         _leaky_relu_bw_pure_ulp(_leaky_relu_bw_reference(g, x, True), actual),
     )
     worst = ulp.argmax()
-    assert ulp.max().item() < 1.0, (
-        f"{(ulp >= 1.0).sum().item()} outputs at or beyond 1 ulp or of the wrong class; worst at "
+    assert ulp.max().item() < LEAKY_RELU_BW_MAX_ULP, (
+        f"{(ulp >= LEAKY_RELU_BW_MAX_ULP).sum().item()} outputs at or beyond {LEAKY_RELU_BW_MAX_ULP} ulp or of the wrong class; worst at "
         f"x={x.flatten()[worst].item()}, grad={g.flatten()[worst].item()}: "
         f"expected {_leaky_relu_bw_reference(g, x, False).flatten()[worst].item()}, got {actual.flatten()[worst].item()}"
     )
@@ -191,7 +191,6 @@ def test_leaky_relu_bw_exhaustive_bfloat16(grad, device):
 # Scalars off the values the generated kernel is fitted for.
 LEAKY_RELU_BW_OTHER_SCALARS = {"negative_slope": 0.02}
 
-# The calls the fused program serves.
 LEAKY_RELU_BW_FUSED_CALLS = (
     "interleaved_tiles",
     "interleaved_l1",
@@ -206,13 +205,6 @@ LEAKY_RELU_BW_FUSED_CALLS = (
     "interleaved_to_sharded",
     "mixed_placements",
 )
-
-# Calls whose composite differs from torch on main itself, on silicon: expected to fail until main
-# fixes them, and a pass fails, so the entry is dropped then.
-LEAKY_RELU_BW_COMPOSITE_DIVERGES = {
-    "blackhole": ("mixed_layouts",),
-    "wormhole_b0": ("mixed_layouts",),
-}
 
 
 def _leaky_relu_bw_torch_gradient(grad, x, negative_slope=LEAKY_RELU_BW_NEGATIVE_SLOPE):
@@ -282,18 +274,7 @@ def _leaky_relu_bw_placements(shape):
 @pytest.mark.parametrize(
     "call",
     [
-        "interleaved_tiles",
-        "interleaved_l1",
-        "height_sharded",
-        "width_sharded",
-        "block_sharded",
-        "height_sharded_dram",
-        "width_sharded_dram",
-        "nd_sharded",
-        "nd_sharded_dram",
-        "sharded_to_interleaved",
-        "interleaved_to_sharded",
-        "mixed_placements",
+        *LEAKY_RELU_BW_FUSED_CALLS,
         "broadcast_grad",
         "row_major",
         "mixed_layouts",
@@ -337,15 +318,7 @@ def test_leaky_relu_bw_runs_the_fused_program_only_where_it_applies(call, device
             # Only where torch's result is finite: at NaN inputs and poles the composite stores its own values.
             expected = _leaky_relu_bw_torch_gradient(g.expand(shape), x, negative_slope=scalars["negative_slope"])
             finite = torch.isfinite(expected)
-            board_name = "blackhole" if ttnn.device.is_blackhole(device) else "wormhole_b0"
-            diverges = call in LEAKY_RELU_BW_COMPOSITE_DIVERGES.get(board_name, ())
-            try:
-                assert_with_pcc(expected[finite], ttnn.to_torch(result).float()[finite], 0.999)
-            except AssertionError:
-                if diverges:
-                    pytest.xfail(f"main's composite differs from torch here on {board_name}")
-                raise
-            assert not diverges, f"main's composite now matches torch here on {board_name}: drop the entry"
+            assert_with_pcc(expected[finite], ttnn.to_torch(result).float()[finite], 0.999)
         return
     assert error is None, error
     expected = _leaky_relu_bw_torch_gradient(g, x, negative_slope=scalars["negative_slope"])
