@@ -7,9 +7,10 @@
 // page with one read, a unit of them per transaction id, two units in flight. Larger groups land whole in a staging
 // ring (c_2), one read each, two in flight, and go into their pages from local L1, each codes part with the group's
 // scale rows. The scale rows are converted once, in the first page (prepare_scales), and the block is copied to the
-// other pages; codebook formats then fill in each page's grid levels (lookup_grid), from a copy of the level table in
-// local data memory when it fits in 1 KiB.
-// Compile args: format id, c_0 pages, one-page groups per unit, staging slots, then the weight's TensorAccessorArgs.
+// other pages. Codebook formats then fill in the pages' grid levels (lookup_grid): this kernel the first half of each
+// page's index words, the writer of this core the second (gguf_matmul_writer.cpp), on a request per record.
+// Compile args: format id, c_0 pages, one-page groups per unit, staging slots, the lookup request, answer and page
+// address semaphores, then the weight's TensorAccessorArgs.
 // Runtime args: weight address, N tiles, runs, then per run its N tile, first and end K group.
 
 #include <cstdint>
@@ -17,8 +18,10 @@
 #include "api/dataflow/circular_buffer.h"
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/endpoints.h"
+#include "api/dataflow/noc_semaphore.h"
 #include "experimental/gguf_page.h"
 
+// Level tables of up to 1 KiB are read from a copy in this RISC's local data memory, faster to load from than L1.
 template <experimental::gguf::Format FMT>
 constexpr bool local_table() {
     return experimental::gguf::is_codebook<FMT>() && experimental::gguf::table_entries<FMT>() * 2 <= 1024;
@@ -31,7 +34,9 @@ void kernel_main() {
     constexpr uint32_t ring = get_compile_time_arg_val(1);
     constexpr uint32_t unit = get_compile_time_arg_val(2);
     constexpr uint32_t slots = get_compile_time_arg_val(3);
-    constexpr auto weight_args = TensorAccessorArgs<4>();
+    constexpr uint32_t request_sem = get_compile_time_arg_val(4), answer_sem = get_compile_time_arg_val(5);
+    constexpr uint32_t address_sem = get_compile_time_arg_val(6);
+    constexpr auto weight_args = TensorAccessorArgs<7>();
     constexpr PageLayout L = page_layout<FMT>();
     constexpr uint32_t P = L.group_tiles / L.page_tiles;  // pages per group
     constexpr uint32_t page = L.rows * 64;
@@ -126,6 +131,8 @@ void kernel_main() {
             read_record(i);
         }
         [[maybe_unused]] const std::uint16_t* table = nullptr;
+        Semaphore requests(request_sem), answers(answer_sem), address(address_sem);
+        uint32_t asked = 0;
         if constexpr (is_codebook<FMT>()) {
             table = level_table<FMT>();
             if constexpr (local_table<FMT>()) {
@@ -160,13 +167,19 @@ void kernel_main() {
                 noc.async_read_barrier<NocOptions::TXN_ID>({.trid = local});
             }
             if constexpr (is_codebook<FMT>()) {
+                address.set(first);
+                asm volatile("fence" ::: "memory");  // the address is in L1 before the request
+                requests.set(++asked);
                 for (uint32_t p = 0; p < P; p++) {
                     lookup_grid<FMT>(
                         reinterpret_cast<const uint32_t*>(first + p * page + index_offset<FMT>()),
                         table,
-                        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(first + p * page));
+                        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(first + p * page),
+                        0,
+                        2);
                 }
                 asm volatile("fence" ::: "memory");
+                answers.wait_min(asked);
             }
             pages.push_back(P);
         }
