@@ -41,6 +41,42 @@ def _same_m_per_core_match(grid_dict, M, K, N, grid_x):
     return best
 
 
+# Largest relative per-core-M gap `_same_m_blocks_match` bridges. Bucketed sequence lengths sit a few
+# percent above the SP * TILE length the tables were swept at (MiniMax-H3 15 s: 13952 vs 13664 rows,
+# 55 vs 54 M tiles per core on an 8-wide grid); 5% covers that without stretching an entry across a
+# materially different per-core problem.
+_SAME_M_BLOCKS_MAX_REL_GAP = 0.05
+
+
+def _same_m_blocks_match(grid_dict, M, K, N, m_cores):
+    """A table entry for the same (K, N) that runs the same number of M blocks per core.
+
+    The second-tier fallback after `_same_m_per_core_match`. An entry swept at `pcm_e` M tiles per core
+    with `M_block = b` walks `ceil(pcm_e / b)` M blocks on each core; a query whose own per-core M gives
+    the same block count runs the identical loop nest, differing only in how full the last block is.
+    Accepted only when the per-core M is within `_SAME_M_BLOCKS_MAX_REL_GAP` of the entry's and the
+    query keeps the entry's orientation (`M > N` decides which grid axis M runs over). Nearest M wins.
+
+    Returns ``(matched_M, config_tuple)`` or ``None``.
+    """
+    if not grid_dict or not m_cores:
+        return None
+    target = math.ceil(math.ceil(M / 32) / m_cores)
+    best = None
+    for (m, k, n), cfg in grid_dict.items():
+        if k != K or n != N or m == M or (m > n) != (M > N):
+            continue
+        pcm = math.ceil(math.ceil(m / 32) / m_cores)
+        m_block = cfg[0]
+        if abs(target - pcm) > _SAME_M_BLOCKS_MAX_REL_GAP * pcm:
+            continue
+        if math.ceil(target / m_block) != math.ceil(pcm / m_block):
+            continue
+        if best is None or abs(m - M) < abs(best[0] - M):
+            best = (m, cfg)
+    return best
+
+
 _warned_1d_matmul_signatures = set()
 _ENABLE_MM_LOG = os.environ.get("TT_DIT_ENABLE_MM_LOG", "true").lower() in ("1", "true")
 
@@ -464,10 +500,11 @@ grid_12_9_configs = {
     (32, 2048, 1536): (1, 4, 16, (1, 4)),
     (32, 2048, 512): (1, 8, 2, (1, 2)),
     (32, 2048, 2048): (1, 4, 12, (1, 4)),
-    # H3
-    (3424, 5376, 5376): (4, 7, 14, (2, 2)),  # qkv
+    # H3 to_out. M > N, so the AGMM transposes onto this 12x9 grid and the entry is reachable. The qkv
+    # (3424, 5376, 5376) and ff1 (3424, 5376, 7168) entries that sat beside it were removed: both have
+    # M < N, and with the force_transpose=False the H3 call sites pass, `agmm_worker_grid` puts those
+    # shapes on 11x10, so a 12x9 key could never be looked up (they predate the mux-axis-aware grid).
     (3424, 7168, 1344): (9, 8, 5, (3, 1)),  # to_out
-    (3424, 5376, 7168): (6, 7, 12, (2, 2)),  # ff1
     # LTX-2.3 distilled 153f@25fps 1080p, BH 4x8 sp1tp0, 12x9 AGMM grid — swept 2026-09-15; was v3 rules / generic fallback.
     (32, 2048, 544): (4, 8, 2, (2, 2)),  # 37.5 μs
     (32, 2048, 1568): (2, 8, 4, (2, 2)),  # 59.9 μs
@@ -665,7 +702,7 @@ def _lookup_nearest_blocking(M: int, K: int, N: int, grid_x: int, grid_y: int, t
     return (Mb, Kb, Nb, sb) if sb is not None else (Mb, Kb, Nb)
 
 
-def get_matmul_config(M, K, N, core_grid, default_block_size=None, use_heuristic=False, num_k_shards=-1):
+def get_matmul_config(M, K, N, core_grid, default_block_size=None, use_heuristic=False, num_k_shards=-1, m_cores=None):
     """Get the matmul config for the given shape and core grid.
 
     Args:
@@ -676,6 +713,9 @@ def get_matmul_config(M, K, N, core_grid, default_block_size=None, use_heuristic
         default_block_size: The default block size to use if no config is found.
         use_heuristic: Whether to use the heuristic blocking algorithm.
         num_k_shards: The number of shards. If set, we will use the nearest blocking algorithm.
+        m_cores: How many cores M is parallelized over, for the same-M-per-core table fallbacks.
+            Defaults to ``core_grid.x`` (the transposed / minimal_matmul M > N layout); a
+            non-transposed all-gather matmul runs M over ``core_grid.y`` and must say so.
 
         Algorithm order:
             - Default block size
@@ -700,15 +740,18 @@ def get_matmul_config(M, K, N, core_grid, default_block_size=None, use_heuristic
     if grid_dict is not None:
         config_tuple = grid_dict.get((M, K, N))
         if config_tuple is None:
-            near = _same_m_per_core_match(grid_dict, M, K, N, grid_x)
+            m_cores = m_cores or grid_x
+            near = _same_m_per_core_match(grid_dict, M, K, N, m_cores) or _same_m_blocks_match(
+                grid_dict, M, K, N, m_cores
+            )
             if near is not None:
                 matched_m, config_tuple = near
                 signature = (M, K, N, grid_x, grid_y)
                 if signature not in _logged_m_per_core_signatures:
                     log_info(
                         f"No exact blocking for (M, K, N) = ({M}, {K}, {N}) on {grid_x}x{grid_y}; using the "
-                        f"entry swept at M={matched_m}, which has the same M_per_core "
-                        f"({math.ceil(math.ceil(M / 32) / grid_x)} M tiles per core)"
+                        f"entry swept at M={matched_m}, which runs the same M blocks per core "
+                        f"({math.ceil(math.ceil(M / 32) / m_cores)} M tiles per core here)"
                     )
                     _logged_m_per_core_signatures.add(signature)
 
@@ -849,9 +892,15 @@ def get_agmm_config(
     legacy_workers = math.ceil((legacy_grid.x if transpose_core_grid else legacy_grid.y) / num_links)
     _legacy_table = _grid_config_lookup.get((legacy_grid.x, legacy_grid.y), {})
     m_cores = legacy_grid.x if transpose_core_grid else legacy_grid.y
-    table_hit = (M, K, N) in _legacy_table or _same_m_per_core_match(_legacy_table, M, K, N, m_cores) is not None
+    table_hit = (
+        (M, K, N) in _legacy_table
+        or _same_m_per_core_match(_legacy_table, M, K, N, m_cores) is not None
+        or _same_m_blocks_match(_legacy_table, M, K, N, m_cores) is not None
+    )
     if core_grid is not None or default_block_size is not None or use_heuristic or table_hit:
-        config = get_matmul_config(M, K, N, legacy_grid, default_block_size, use_heuristic)
+        # Same m_cores as the table_hit test above: get_matmul_config otherwise matches on grid.x, so a
+        # non-transposed shape could pass table_hit here and then miss the very entry it matched.
+        config = get_matmul_config(M, K, N, legacy_grid, default_block_size, use_heuristic, m_cores=m_cores)
         return legacy_grid, config, legacy_workers
 
     v3 = None
@@ -1185,7 +1234,7 @@ def register_matmul_configs(configs: dict) -> None:
 
     Args:
         configs: Mapping from grid key string to dict of (M,K,N) -> config tuples.
-            Grid keys: ``"11x10"``, ``"12x10"``, ``"12x9"``, ``"13x9"``, ``"8x8"``, ``"8x9"``.
+            Grid keys: ``"11x10"``, ``"12x10"``, ``"12x9"``, ``"12x8"``, ``"13x9"``, ``"8x8"``, ``"8x9"``.
             Config tuple format: ``(M_block, K_block, N_block)`` or
             ``(M_block, K_block, N_block, (sub_h, sub_w))``.
             When subblock is omitted, the default ``(2, 2)`` is used.
@@ -1205,6 +1254,9 @@ def register_matmul_configs(configs: dict) -> None:
         "11x10": grid_11_10_configs,
         "12x10": grid_12_10_configs,
         "12x9": grid_12_9_configs,
+        # 12x8 is the grid `Attention.get_core_grid` hands an AGMM at M <= 1152; without this key a
+        # model could not register entries for it at all.
+        "12x8": grid_12_8_configs,
         "13x9": grid_13_9_configs,
     }
     for grid_key, entries in configs.items():

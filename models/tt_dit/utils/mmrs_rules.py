@@ -32,7 +32,7 @@ K_block = the smallest divisor of K_tiles keeping the K-chunk count (K_tiles / K
 
 N_block = 8, except in the short-N regime (N_tiles <= 128, which separates LTX 4096x4096 from
   Wan/H3/Flux at 160/168/192 without naming the family): there N_block = 6 while pcM < 24, and
-  N_block = 16 (one block covering the core's width) above, walking K_block down its divisor
+  N_block = min(16, pcN) (one block covering the core's width) above, walking K_block down its divisor
   ladder until the combo fits the L1 budget -- at K_block = 8 the wide-N CBs are L1-illegal.
 
 Subblock: 2x2 when both blocks are even, else the largest h*w <= 4 dividing both (fp32 dest
@@ -136,9 +136,9 @@ def pick_v23(
 
     gx, gy = MM_GRID
     if M > N:
-        pc_m = _ceil(m_tiles, gx)
+        pc_m, pc_n = _ceil(m_tiles, gx), _ceil(n_tiles, gy)
     else:
-        pc_m = _ceil(m_tiles, gy)
+        pc_m, pc_n = _ceil(m_tiles, gy), _ceil(n_tiles, gx)
 
     m_blk = max(2, min(6, _ceil(pc_m, 2)))
     if m_blk % 2:
@@ -154,7 +154,11 @@ def pick_v23(
         if pc_m < WIDE_N_PCM:
             n_blk = 6
         else:
-            n_blk = 16
+            # "One block covering the core's width": 16 is exactly that for the fitted LTX family
+            # (128 N tiles / 8 = 16 per core). A narrower N (e.g. FLUX 3 Klein proj_out, 96 tiles ->
+            # 12 per core) must not compute a 16-wide strip of which a quarter is padding, so cap at
+            # the core's width. Unswept for those shapes; the fitted family is unchanged.
+            n_blk = min(16, pc_n)
             while estimate_l1_kb(m_blk, k_blk, n_blk) > l1_budget_kb:
                 lower = [d for d in k_divs if d < k_blk]
                 if not lower:
