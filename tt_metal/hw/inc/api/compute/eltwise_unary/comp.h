@@ -6,6 +6,7 @@
 
 #include "api/compute/common_globals.h"
 #ifdef TRISC_MATH
+#include "ckernel_sfpu_bitwise.h"
 #include "ckernel_sfpu_comp.h"
 #include "ckernel_sfpu_unary_comp.h"
 #include "llk_math_eltwise_unary_sfpu_macros.h"
@@ -330,6 +331,107 @@ ALWI void unary_le_tile_int32(uint32_t idst, uint32_t param0) {
  * Please refer to documentation for any_init.
  */
 ALWI void unary_le_tile_init() { MATH(SFPU_UNARY_INIT(unary_le)); }
+
+namespace detail {
+// The int32 compares are signed. Flipping the sign bit of both the value and the scalar maps uint32 order onto
+// int32 order, and the compare then overwrites the biased word with its 1/0 result.
+// The xor runs under the unary_{gt,lt,ge,le} init the caller issued, with no bitwise_xor init of its own. That is
+// only safe while bitwise_xor_init() and those four inits are the same bare reset_counters(SET_ABD_F) on every
+// architecture. If bitwise_xor_init() ever programs op-specific state (an ADDR_MOD, as typecast_init does), these
+// four functions must issue it before the xor and restore the compare's init after it.
+constexpr uint32_t uint32_compare_bias = 0x80000000u;
+
+ALWI void bias_uint32_for_signed_compare(uint32_t idst) {
+    MATH(SFPU_UNARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_sfpu_unary_bitwise,
+        (APPROX, sfpu::UnaryBitwiseOp::XOR, DataFormat::Int32),
+        idst,
+        VectorMode::RC,
+        uint32_compare_bias));
+}
+}  // namespace detail
+
+// clang-format off
+/**
+ * Performs element-wise computation of:  result = 1 if x > value, else 0, where x is each element of a UInt32 tile
+ * in DST register at index tile_index and both operands are compared as unsigned. The value is provided as const
+ * param0. Initialize with *unary_gt_tile_init*. The DST register buffer must be in acquired state via *acquire_dst*
+ * call. This call is blocking and is only available on the compute engine.
+ *
+ * Return value: None
+ *
+ * | Argument        | Description                                                                | Type     | Valid Range                                           | Required |
+ * |-----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
+ * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
+ * | param0          | The value to be compared with the input tensor                             | uint32_t |                                                       | True     |
+ */
+// clang-format on
+ALWI void unary_gt_tile_uint32(uint32_t idst, uint32_t param0) {
+    detail::bias_uint32_for_signed_compare(idst);
+    unary_gt_tile_int32(idst, param0 ^ detail::uint32_compare_bias);
+}
+
+// clang-format off
+/**
+ * Performs element-wise computation of:  result = 1 if x >= value, else 0, where x is each element of a UInt32 tile
+ * in DST register at index tile_index and both operands are compared as unsigned. The value is provided as const
+ * param0. Initialize with *unary_ge_tile_init*. The DST register buffer must be in acquired state via *acquire_dst*
+ * call. This call is blocking and is only available on the compute engine.
+ *
+ * Return value: None
+ *
+ * | Argument        | Description                                                                | Type     | Valid Range                                           | Required |
+ * |-----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
+ * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
+ * | param0          | The value to be compared with the input tensor                             | uint32_t |                                                       | True     |
+ */
+// clang-format on
+ALWI void unary_ge_tile_uint32(uint32_t idst, uint32_t param0) {
+    detail::bias_uint32_for_signed_compare(idst);
+    unary_ge_tile_int32(idst, param0 ^ detail::uint32_compare_bias);
+}
+
+// clang-format off
+/**
+ * Performs element-wise computation of:  result = 1 if x < value, else 0, where x is each element of a UInt32 tile
+ * in DST register at index tile_index and both operands are compared as unsigned. The value is provided as const
+ * param0. Initialize with *unary_lt_tile_init*. The DST register buffer must be in acquired state via *acquire_dst*
+ * call. This call is blocking and is only available on the compute engine.
+ *
+ * Return value: None
+ *
+ * | Argument        | Description                                                                | Type     | Valid Range                                           | Required |
+ * |-----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
+ * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
+ * | param0          | The value to be compared with the input tensor                             | uint32_t |                                                       | True     |
+ */
+// clang-format on
+ALWI void unary_lt_tile_uint32(uint32_t idst, uint32_t param0) {
+    detail::bias_uint32_for_signed_compare(idst);
+    unary_lt_tile_int32(idst, param0 ^ detail::uint32_compare_bias);
+}
+
+// clang-format off
+/**
+ * Performs element-wise computation of:  result = 1 if x <= value, else 0, where x is each element of a UInt32 tile
+ * in DST register at index tile_index and both operands are compared as unsigned. The value is provided as const
+ * param0. Initialize with *unary_le_tile_init*. The DST register buffer must be in acquired state via *acquire_dst*
+ * call. This call is blocking and is only available on the compute engine.
+ *
+ * Return value: None
+ *
+ * | Argument        | Description                                                                | Type     | Valid Range                                           | Required |
+ * |-----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
+ * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
+ * | param0          | The value to be compared with the input tensor                             | uint32_t |                                                       | True     |
+ */
+// clang-format on
+ALWI void unary_le_tile_uint32(uint32_t idst, uint32_t param0) {
+    detail::bias_uint32_for_signed_compare(idst);
+    unary_le_tile_int32(idst, param0 ^ detail::uint32_compare_bias);
+}
 
 // clang-format off
 /**
