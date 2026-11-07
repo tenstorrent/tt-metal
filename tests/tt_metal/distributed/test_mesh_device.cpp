@@ -28,10 +28,10 @@
 #include <tt-metalium/mesh_workload.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/program_cache.hpp>
-#include <tt-metalium/shape_base.hpp>
 #include <tt-metalium/system_mesh.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "impl/context/metal_context.hpp"
+#include "impl/context/metal_env_impl.hpp"
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt-metalium/experimental/device.hpp>
@@ -279,8 +279,8 @@ TEST_F(MeshDevice2x4Test, GetOptimalDramBankToLogicalWorkerAssignmentPerDevice) 
 
 TEST_F(MeshDevice2x4Test, WorkerCoreFromLogicalCoreUsesSelectedDevice) {
     const CoreCoord logical_core{0, 0};
-    auto& metal_context = tt::tt_metal::MetalContext::instance(mesh_device_->impl().get_context_id());
-    const auto& control_plane = metal_context.get_control_plane();
+    auto& env = mesh_device_->impl().metal_env();
+    const auto& control_plane = env.get_control_plane();
 
     for (const auto& mesh_coordinate : MeshCoordinateRange(mesh_device_->shape())) {
         // Derive the expected coordinate from the chip's SoC descriptor rather than from the device
@@ -290,7 +290,7 @@ TEST_F(MeshDevice2x4Test, WorkerCoreFromLogicalCoreUsesSelectedDevice) {
         EXPECT_EQ(
             tt::tt_metal::experimental::Device::worker_core_from_logical_core(
                 *mesh_device_, mesh_coordinate, logical_core),
-            metal_context.get_cluster().get_virtual_coordinate_from_logical_coordinates(
+            env.get_cluster().get_virtual_coordinate_from_logical_coordinates(
                 physical_chip_id, logical_core, CoreType::WORKER));
     }
 

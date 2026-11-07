@@ -17,20 +17,18 @@
 
 #include <gtest/gtest.h>
 
-#include <tt-metalium/distributed.hpp>
+#include <tt-metalium/mesh_device.hpp>
 
 #include "device_fixture.hpp"
 #include "distributed/mesh_device_impl.hpp"
-#include "impl/context/metal_context.hpp"
+#include "impl/context/metal_env_impl.hpp"
 #include "llrt/hal.hpp"
 
 namespace tt::tt_metal {
 
 // The skip gate: whether `mesh_device`'s DRAM cores can run a DRISC sender.
 inline bool dram_cores_programmable(distributed::MeshDevice& mesh_device) {
-    return MetalContext::instance(mesh_device.impl().get_context_id())
-        .hal()
-        .has_programmable_core_type(HalProgrammableCoreType::DRAM);
+    return mesh_device.impl().metal_env().get_hal().has_programmable_core_type(HalProgrammableCoreType::DRAM);
 }
 
 class DramSenderFixture : public BlackholeSingleCardFixture {
