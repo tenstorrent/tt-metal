@@ -569,6 +569,13 @@ void run_single_core_unpack_tilizeA_B_reduce_program(
     const std::uint32_t num_tiles_out = num_tiles_in;  // each tile reduced independently, same count as input
     const std::uint32_t input_dram_buffer_size = test_config.input_single_tile_size * num_tiles_in;
 
+    // On Quasar a column reduce writes its result to DEST as a 1x32 tile, so it is packed with a 1x32 output tile:
+    // one row of 32 datums per tile (face 0's 16, then face 1's 16).
+    const bool pack_1xn_output = mesh_device.arch() == tt::ARCH::QUASAR;
+    const std::uint32_t output_datum_bytes = tt::datum_size(test_config.output_fmt);
+    const std::uint32_t output_entry_size =
+        pack_1xn_output ? tt::constants::TILE_WIDTH * output_datum_bytes : test_config.output_single_tile_size;
+
     auto make_flat_tensor_spec = [](std::uint32_t entry_size, std::uint32_t total_entries) {
         const std::uint32_t entry_size_words = entry_size / sizeof(std::uint32_t);
         auto page_config = tt::tt_metal::PageConfig(tt::tt_metal::Layout::ROW_MAJOR);
@@ -580,8 +587,8 @@ void run_single_core_unpack_tilizeA_B_reduce_program(
 
     auto in_tensor = MeshTensor::allocate_on_device(
         mesh_device, make_flat_tensor_spec(test_config.input_single_tile_size, num_tiles_in));
-    auto out_tensor = MeshTensor::allocate_on_device(
-        mesh_device, make_flat_tensor_spec(test_config.output_single_tile_size, num_tiles_out));
+    auto out_tensor =
+        MeshTensor::allocate_on_device(mesh_device, make_flat_tensor_spec(output_entry_size, num_tiles_out));
 
     const experimental::DFBSpecName INP_DATA_DFB{"inp_data_dfb"};
     const experimental::DFBSpecName INP_SCALER_DFB{"inp_scaler_dfb"};
@@ -607,9 +614,12 @@ void run_single_core_unpack_tilizeA_B_reduce_program(
     };
     experimental::DataflowBufferSpec out_dfb_spec{
         .unique_id = OUT_DFB,
-        .entry_size = test_config.output_single_tile_size,
+        .entry_size = output_entry_size,
         .num_entries = std::max(2u, test_config.num_tiles_c),
         .data_format_metadata = test_config.output_fmt,
+        .tile_format_metadata =
+            pack_1xn_output ? std::optional<tt::tt_metal::Tile>(tt::tt_metal::Tile({1, tt::constants::TILE_WIDTH}))
+                            : std::nullopt,
     };
 
     experimental::DataMovementHardwareConfig reader_hw_config;
@@ -767,6 +777,27 @@ void run_single_core_unpack_tilizeA_B_reduce_program(
 
     std::vector<std::uint32_t> result_vec;
     slow_dispatch::ReadFromBuffer(out_tensor.mesh_buffer(), result_vec);
+
+    if (pack_1xn_output) {
+        // The golden is full tiles with only row 0 set. Put each packed row back at row 0 of faces 0 and 1 of a
+        // zeroed full tile.
+        const std::uint32_t row_words = tt::constants::FACE_WIDTH * output_datum_bytes / sizeof(std::uint32_t);
+        const std::uint32_t face_words = tt::constants::FACE_HEIGHT * row_words;
+        const std::uint32_t tile_words = test_config.output_single_tile_size / sizeof(std::uint32_t);
+        TT_FATAL(
+            result_vec.size() == num_tiles_out * 2 * row_words,
+            "Expected {} packed 1x32 words, got {}",
+            num_tiles_out * 2 * row_words,
+            result_vec.size());
+        std::vector<std::uint32_t> full_tiles(num_tiles_out * tile_words, 0);
+        for (std::uint32_t t = 0; t < num_tiles_out; t++) {
+            const auto row = result_vec.begin() + (t * 2 * row_words);
+            const auto tile = full_tiles.begin() + (t * tile_words);
+            std::copy_n(row, row_words, tile);
+            std::copy_n(row + row_words, row_words, tile + face_words);
+        }
+        result_vec = std::move(full_tiles);
+    }
 
     validate_result(test_config, src0_vec, scaler_tile_vec, result_vec);
 }
