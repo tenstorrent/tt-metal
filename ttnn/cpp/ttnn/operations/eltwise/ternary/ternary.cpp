@@ -7,6 +7,7 @@
 #include <utility>
 #include <variant>
 #include <cstdint>
+#include <limits>
 
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/eltwise/binary/common/binary_op_utils.hpp"
@@ -110,6 +111,26 @@ void validate_where_scalar_for_integer_tensor(float scalar, DataType tensor_dtyp
         tensor_dtype);
 }
 
+bool is_int32_or_uint32(DataType dtype) { return dtype == DataType::INT32 || dtype == DataType::UINT32; }
+
+operations::unary::ScalarVariant exact_integer_scalar(std::int64_t scalar, DataType tensor_dtype) {
+    const bool fits =
+        tensor_dtype == DataType::INT32
+            ? scalar >= std::numeric_limits<std::int32_t>::min() && scalar <= std::numeric_limits<std::int32_t>::max()
+            : scalar >= 0 && scalar <= std::numeric_limits<std::uint32_t>::max();
+    TT_FATAL(
+        fits,
+        "ttnn.where with a {} tensor cannot represent the scalar {}: only an integer within the range of {} "
+        "survives being packed as one. Typecast the tensor to a wider dtype first.",
+        tensor_dtype,
+        scalar,
+        tensor_dtype);
+    if (tensor_dtype == DataType::INT32) {
+        return static_cast<std::int32_t>(scalar);
+    }
+    return static_cast<std::uint32_t>(scalar);
+}
+
 // TTT: tensor, tensor, tensor
 Tensor invoke_impl(
     const Tensor& predicate,
@@ -201,6 +222,84 @@ Tensor invoke_impl(
     const std::optional<CoreRangeSet>& sub_core_grids) {
     log_debug(tt::LogOp, "Where LLK - TSS");
     return ttnn::where_tss(condition, t_true, t_false, memory_config, output, sub_core_grids);
+}
+
+Tensor invoke_impl(
+    const Tensor& predicate,
+    const Tensor& t_true,
+    std::int64_t scalar_false,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& output,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
+    if (!is_int32_or_uint32(t_true.dtype())) {
+        return invoke_impl(predicate, t_true, static_cast<float>(scalar_false), memory_config, output, sub_core_grids);
+    }
+    return operations::binary::where_operation_with_scalar<operations::binary::BinaryOpType::WHERE_TTS>(
+        predicate,
+        t_true,
+        exact_integer_scalar(scalar_false, t_true.dtype()),
+        ternary_utils::determine_memory_config_for_broadcast(memory_config, t_true, predicate.logical_shape()),
+        output,
+        sub_core_grids);
+}
+
+Tensor invoke_impl(
+    const Tensor& predicate,
+    std::int64_t scalar_true,
+    const Tensor& t_false,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& output,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
+    if (!is_int32_or_uint32(t_false.dtype())) {
+        return invoke_impl(predicate, static_cast<float>(scalar_true), t_false, memory_config, output, sub_core_grids);
+    }
+    return operations::binary::where_operation_with_scalar<operations::binary::BinaryOpType::WHERE_TST>(
+        predicate,
+        t_false,
+        exact_integer_scalar(scalar_true, t_false.dtype()),
+        ternary_utils::determine_memory_config_for_broadcast(memory_config, t_false, predicate.logical_shape()),
+        output,
+        sub_core_grids);
+}
+
+Tensor invoke_impl(
+    const Tensor& condition,
+    std::int64_t t_true,
+    std::int64_t t_false,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& output,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
+    if (!is_int32_or_uint32(condition.dtype())) {
+        return invoke_impl(
+            condition, static_cast<float>(t_true), static_cast<float>(t_false), memory_config, output, sub_core_grids);
+    }
+    return ttnn::where_tss(
+        condition,
+        exact_integer_scalar(t_true, condition.dtype()),
+        exact_integer_scalar(t_false, condition.dtype()),
+        memory_config,
+        output,
+        sub_core_grids);
+}
+
+Tensor invoke_impl(
+    const Tensor& condition,
+    float t_true,
+    std::int64_t t_false,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& output,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
+    return invoke_impl(condition, t_true, static_cast<float>(t_false), memory_config, output, sub_core_grids);
+}
+
+Tensor invoke_impl(
+    const Tensor& condition,
+    std::int64_t t_true,
+    float t_false,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& output,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
+    return invoke_impl(condition, static_cast<float>(t_true), t_false, memory_config, output, sub_core_grids);
 }
 
 // A native mac needs float operands the SFPU can consume and a broadcast the ternary
