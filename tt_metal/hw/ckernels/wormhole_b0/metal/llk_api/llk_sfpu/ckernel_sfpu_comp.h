@@ -19,27 +19,6 @@ using namespace sfpi;
 namespace ckernel {
 namespace sfpu {
 
-// These constants and function should ideally go to SFPI
-// Copied from ckernel_sfpu_int_sum.h to avoid dependency complications
-#ifndef SFPU_SIGN_MAG_TO_TWOS_COMP_DEFINED
-#define SFPU_SIGN_MAG_TO_TWOS_COMP_DEFINED
-
-#define BIT_MASK_32 0xFFFFFFFF
-#define SIGN 0x80000000
-#define MAGNITUDE 0x7FFFFFFF
-
-// Convert from sign-magnitude to two's complement format
-sfpi_inline vInt sfpu_sign_mag_to_twos_comp(vInt value) {
-    v_if(value & SIGN) {
-        vInt magnitude = value & MAGNITUDE;
-        value = (~magnitude + 1) & BIT_MASK_32;
-    }
-    v_endif;
-    return value;
-}
-
-#endif  // SFPU_SIGN_MAG_TO_TWOS_COMP_DEFINED
-
 inline void equal_zero_init() {
     addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
     math::reset_counters(p_setrwc::SET_ABD_F);
@@ -169,48 +148,57 @@ inline void calculate_comp_int() {
         "calculate_comp_int supports only the six comparison-to-zero modes");
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
-        vInt v = dst_reg[0];
-        vInt zero = 0;
-        vInt res = zero;
+        // Int32 tiles sit in Dest as two's complement, so read the word as it is (I32 layout,
+        // SFPLOAD mod0 INT32). The Wormhole Default vInt layout is SM32 (SFPLOAD mod0 INT32_SM),
+        // whose sign-magnitude -> two's complement conversion has no encoding for -2^31 and
+        // turns it into 0, which would make eqz/nez/ltz/gez misclassify INT32_MIN.
+        //
+        // Every compare below is against the immediate 0, which SFPI lowers to SFPSETCC on the
+        // word itself (sign bit / zero test); `v >= 0 && v != 0` is two chained SFPSETCCs.
+        // `v > 0` and `v <= 0` must not be used: SFPI lowers them through an integer
+        // subtraction (SFPIADD 0 - v) that overflows for INT32_MIN and classifies it as positive.
+        vInt v = dst_reg[0].mode<sfpi::DataLayout::I32>();
+        vInt res = 0;
 
         // a[i] == 0
         if constexpr (COMP_MODE == SfpuType::equal_zero) {
-            v_if(v == zero) { res = 1; }
+            v_if(v == 0) { res = 1; }
             v_endif;
         }
 
         // a[i] != 0
         if constexpr (COMP_MODE == SfpuType::not_equal_zero) {
             res = 1;
-            v_if(v == zero) { res = zero; }
+            v_if(v == 0) { res = 0; }
             v_endif;
         }
 
         // a[i] < 0
         if constexpr (COMP_MODE == SfpuType::less_than_zero) {
-            v_if(v < zero) { res = 1; }
+            v_if(v < 0) { res = 1; }
             v_endif;
         }
 
         // a[i] > 0
         if constexpr (COMP_MODE == SfpuType::greater_than_zero) {
-            v_if(v > zero) { res = 1; }
+            v_if(v >= 0 && v != 0) { res = 1; }
             v_endif;
         }
 
         // a[i] <= 0
         if constexpr (COMP_MODE == SfpuType::less_than_equal_zero) {
-            v_if(v <= zero) { res = 1; }
+            res = 1;
+            v_if(v >= 0 && v != 0) { res = 0; }
             v_endif;
         }
 
         // a[i] >= 0
         if constexpr (COMP_MODE == SfpuType::greater_than_equal_zero) {
-            v_if(v >= zero) { res = 1; }
+            v_if(v >= 0) { res = 1; }
             v_endif;
         }
 
-        dst_reg[0] = res;
+        dst_reg[0].mode<sfpi::DataLayout::I32>() = res;
         dst_reg++;
     }
 }
@@ -269,35 +257,28 @@ inline void calculate_nez_uint32() {
 
 template <bool APPROXIMATION_MODE, SfpuType COMP_MODE, int ITERATIONS = 8>
 inline void calculate_comp_unary_int(int scalar) {
-    // Convert both operands to two's complement format
-    //
-    // LOGIC:
-    // - Scalar is already in two's complement (from host)
-    // - Convert SFPU input data from sign-magnitude to two's complement
-    // - Perform comparison with both in two's complement format
-
-    // Scalar stays in original two's complement format
-    vInt converted_scalar = scalar;
+    // eq/ne is equality of the raw 32-bit word (int32 or uint32 bit pattern; ttnn routes both
+    // dtypes here) against the scalar the host passes as the same raw word, so read the Dest word
+    // as it is (I32 layout, SFPLOAD mod0 INT32) and compare. The Wormhole Default vInt layout is
+    // SM32 (SFPLOAD mod0 INT32_SM), whose sign-magnitude -> two's complement conversion has no
+    // encoding for the word 0x80000000 (INT32_MIN, or the uint32 2^31) and turns it into 0; a
+    // software re-conversion of that word cannot bring it back, so eq/ne misclassified it.
+    vInt scalar_vec = scalar;
 
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
-        vInt v = dst_reg[0];
+        vInt v = dst_reg[0].mode<sfpi::DataLayout::I32>();
         vInt val = 0;
 
-        // Convert input data from sign-magnitude to two's complement
-        v = sfpu_sign_mag_to_twos_comp(v);
-
-        // Now both operands are in two's complement format
-        // Use simple comparison like Blackhole
         if constexpr (COMP_MODE == SfpuType::unary_ne) {
-            v_if(v != converted_scalar) { val = 1; }
+            v_if(v != scalar_vec) { val = 1; }
             v_endif;
         } else if constexpr (COMP_MODE == SfpuType::unary_eq) {
-            v_if(v == converted_scalar) { val = 1; }
+            v_if(v == scalar_vec) { val = 1; }
             v_endif;
         }
 
-        dst_reg[0] = val;
+        dst_reg[0].mode<sfpi::DataLayout::I32>() = val;
         dst_reg++;
     }
 }

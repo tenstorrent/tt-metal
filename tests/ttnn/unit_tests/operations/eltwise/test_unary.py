@@ -1332,7 +1332,9 @@ def test_unary_zero_comp_edge_case(input_shapes, ttnn_function, device):
     num_elements = torch.prod(torch.tensor(input_shapes)).item()
     uniform_values = torch.linspace(-2147483647, 2147483647, num_elements, dtype=torch.int32)
 
-    corner_cases = torch.tensor([0, 1, -1, 2147483647, -2147483647], dtype=torch.int32)
+    # -2147483648 (INT32_MIN) has no sign-magnitude encoding; keep it in the input so a load
+    # through a converting SFPLOAD mode would collapse it to 0 and misclassify it.
+    corner_cases = torch.tensor([0, 1, -1, 2147483647, -2147483647, -2147483648], dtype=torch.int32)
     in_data = torch.cat([uniform_values, corner_cases])
 
     in_data = in_data[-num_elements:].reshape(input_shapes)
