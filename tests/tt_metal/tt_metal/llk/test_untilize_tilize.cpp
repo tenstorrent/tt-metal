@@ -19,6 +19,7 @@
 #include <map>
 #include <memory>
 #include <optional>
+#include <stdexcept>
 #include <string>
 #include <type_traits>
 #include <variant>
@@ -2059,5 +2060,210 @@ TEST_F(LLKBlackholeSingleCardFixture, TensixPackUntilizeBlock4IdFreeGolden) {
 // input_tile_index-addressed nonzero column tile reads the input as contiguous standalone tiles instead of a
 // wide block and cannot match gold_standard_tilize. The restored params are correct-for-parity but not
 // cleanly device-observable via this path (same resolution as the D0/D1/Copilot#2 unobservable fixes).
+
+// Compile-time contract of the id-free tilize operand geometry; these programs are never launched. Tilize keeps
+// the tile geometry: the pack tilize program is built from the output geometry and emits two faces per pass, so an
+// output geometry that differs from the input either overruns the next output slot or drops the bottom face pair.
+// The datapath has no single-face program and no narrow (single face column) program for any format: the non-8-bit
+// unpack program has no narrow form and the pack program always takes face 0 from the even and face 1 from the odd
+// DEST rows of a two-face-wide row, while the 8-bit (Int8/UInt8/Fp8_e4m3/Lf8) unpack sequence addresses face 1 as
+// the right-hand neighbour of face 0. For a non-8-bit input the pack tilize program reaches the second face pair
+// by a fixed two-full-face DEST stride, so faces shorter than 16 rows are packed correctly for a two-face tile only;
+// an 8-bit input packs in the default mode, which has no face-height limit. Only the single-face, the 8-bit narrow
+// and the one-row four-face tiles are runtime LLK_ASSERTs in the LLK (compiled out of production builds), so the
+// API must reject the operands at compile time in each of tilize_init, tilize_block and tilize_uninit. Formats:
+// block-float data is tile-layout only (the shared exponent belongs to a 16-datum face row), so a block-float input
+// has no row-major form for the tilize unpacker to read, and a block-float output shorter than 32 rows is
+// unsupported on the compute datapath (the pack and copy ops reject it at compile time; tilize drives the packer
+// directly and never reached those asserts). Neither is checked by the LLK at all.
+TEST_F(LLKBlackholeSingleCardFixture, TensixTilizeIdFreeCompileLimits) {
+    struct Case {
+        tt::DataFormat format;      // input L1 format
+        tt::DataFormat out_format;  // output L1 format
+        std::uint32_t faces_r;
+        std::uint32_t faces_c;
+        std::uint32_t face_r_dim;
+        std::uint32_t out_faces_r;
+        std::uint32_t out_faces_c;
+        bool accepted;
+    };
+    const std::array<Case, 27> cases{{
+        // Full-height faces, output geometry == input geometry: two faces wide accepted, narrow / one face rejected.
+        {tt::DataFormat::Float16_b, tt::DataFormat::Float16_b, 2, 2, 16, 2, 2, true},
+        {tt::DataFormat::Float16_b, tt::DataFormat::Float16_b, 1, 2, 16, 1, 2, true},
+        // narrow 32x16: no narrow tilize program
+        {tt::DataFormat::Float16_b, tt::DataFormat::Float16_b, 2, 1, 16, 2, 1, false},
+        {tt::DataFormat::Float16_b, tt::DataFormat::Float16_b, 1, 1, 16, 1, 1, false},
+        {tt::DataFormat::Float32, tt::DataFormat::Float32, 2, 1, 16, 2, 1, false},
+        {tt::DataFormat::Int8, tt::DataFormat::Int8, 2, 2, 16, 2, 2, true},
+        {tt::DataFormat::Int8, tt::DataFormat::Int8, 1, 2, 16, 1, 2, true},
+        {tt::DataFormat::Int8, tt::DataFormat::Int8, 2, 1, 16, 2, 1, false},
+        {tt::DataFormat::Int8, tt::DataFormat::Int8, 1, 1, 16, 1, 1, false},
+        {tt::DataFormat::UInt8, tt::DataFormat::UInt8, 2, 1, 16, 2, 1, false},
+        {tt::DataFormat::Fp8_e4m3, tt::DataFormat::Fp8_e4m3, 2, 1, 16, 2, 1, false},
+        {tt::DataFormat::Lf8, tt::DataFormat::Lf8, 2, 1, 16, 2, 1, false},
+        // Output geometry differs from the input.
+        // two-face input into a one-face output, four-face input into a two-face output
+        {tt::DataFormat::Float16_b, tt::DataFormat::Float16_b, 1, 2, 16, 1, 1, false},
+        {tt::DataFormat::Float16_b, tt::DataFormat::Float16_b, 2, 2, 16, 1, 2, false},
+        {tt::DataFormat::Int8, tt::DataFormat::Int8, 2, 2, 16, 1, 2, false},
+        // Faces shorter than 16 rows, non-8-bit input: a two-face tile is the pack tilize program's only short-face
+        // form; four short faces (2x32 / 4x32 / 8x32 / 16x32 as 2x2 faces) have none.
+        {tt::DataFormat::Float16_b, tt::DataFormat::Float16_b, 1, 2, 1, 1, 2, true},
+        {tt::DataFormat::Float16_b, tt::DataFormat::Float16_b, 1, 2, 8, 1, 2, true},
+        {tt::DataFormat::Float16_b, tt::DataFormat::Float16_b, 2, 2, 1, 2, 2, false},
+        {tt::DataFormat::Float16_b, tt::DataFormat::Float16_b, 2, 2, 2, 2, 2, false},
+        {tt::DataFormat::Float16_b, tt::DataFormat::Float16_b, 2, 2, 4, 2, 2, false},
+        {tt::DataFormat::Float16_b, tt::DataFormat::Float16_b, 2, 2, 8, 2, 2, false},
+        // Faces shorter than 16 rows, 8-bit input: the default pack program has no face-height limit.
+        {tt::DataFormat::Int8, tt::DataFormat::Int8, 2, 2, 1, 2, 2, true},
+        {tt::DataFormat::Int8, tt::DataFormat::Int8, 2, 2, 8, 2, 2, true},
+        // Block-float formats. A block-float input has no row-major form to tilize; a block-float output shorter
+        // than 32 rows is unsupported on the compute datapath; a full 32-row block-float output is the ordinary
+        // tilize-to-Bfp8 case and must keep compiling.
+        {tt::DataFormat::Bfp8_b, tt::DataFormat::Bfp8_b, 2, 2, 16, 2, 2, false},     // block-float input
+        {tt::DataFormat::Float16_b, tt::DataFormat::Bfp8_b, 1, 2, 16, 1, 2, false},  // 16x32 block-float output
+        {tt::DataFormat::Float16_b, tt::DataFormat::Bfp8_b, 1, 2, 1, 1, 2, false},   // 1x32 block-float output
+        {tt::DataFormat::Float16_b, tt::DataFormat::Bfp8_b, 2, 2, 16, 2, 2, true},   // 32x32 block-float output
+    }};
+    // Each entry point is compiled on its own (compile arg `mode`) so dropping any one of the three asserts fails.
+    const std::array<std::string, 3> entry_points{"tilize_init", "tilize_block", "tilize_uninit"};
+    const CoreCoord core{0, 0};
+    for (const auto& test : cases) {
+        for (std::uint32_t mode = 0; mode < entry_points.size(); ++mode) {
+            SCOPED_TRACE(
+                ::testing::Message() << "format=" << enchantum::to_string(test.format)
+                                     << ", out_format=" << enchantum::to_string(test.out_format)
+                                     << ", faces=" << test.faces_r << "x" << test.faces_c
+                                     << ", face_r_dim=" << test.face_r_dim << ", out_faces=" << test.out_faces_r << "x"
+                                     << test.out_faces_c << ", entry=" << entry_points[mode]);
+            Program program = CreateProgram();
+            CreateKernel(
+                program,
+                "tests/tt_metal/tt_metal/test_kernels/compute/tilize_2_0_compile_limits.cpp",
+                core,
+                ComputeConfig{
+                    .fp32_dest_acc_en = false,
+                    .compile_args = {
+                        static_cast<std::uint32_t>(test.format),
+                        test.faces_r,
+                        test.faces_c,
+                        mode,
+                        test.face_r_dim,
+                        test.out_faces_r,
+                        test.out_faces_c,
+                        static_cast<std::uint32_t>(test.out_format)}});
+            if (test.accepted) {
+                EXPECT_NO_THROW(program.impl().compile(&this->device()));
+                continue;
+            }
+            // The build failure carries the compiler log; the rejection must come from the API's static_assert,
+            // not from some unrelated build error.
+            // Prefix only: the message text may be refined, the entry point and the fact that it rejects may not.
+            const std::string expected_assert = entry_points[mode] + ": unsupported";
+            try {
+                program.impl().compile(&this->device());
+                ADD_FAILURE() << "unsupported tilize operands compiled";
+            } catch (const std::runtime_error& e) {
+                EXPECT_NE(std::string(e.what()).find(expected_assert), std::string::npos) << e.what();
+            }
+        }
+    }
+}
+
+namespace {
+
+// One single-tile id-free tilize of `tile` (format `format`) on the device, compared bitwise with the host golden.
+// Returns the compile error text when the API refuses to build the kernel, empty otherwise (the comparison then
+// records any mismatch).
+std::string run_tilize_id_free_golden(
+    distributed::MeshDevice& device, tt::DataFormat format, const tt::tt_metal::Tile& tile, bool fp32_dest_acc_en) {
+    constexpr std::uint32_t num_tiles = 1;
+    const std::uint32_t datum_bytes = tt::datum_size(format);
+    const std::uint32_t tile_bytes = tile.get_tile_size(format) * num_tiles;
+    const std::vector<std::uint32_t> src =
+        datum_bytes == 1
+            ? create_random_vector_of_int8(tile_bytes, /*seed=*/42)
+            : create_random_vector_of_bfloat16(tile_bytes, /*rand_max_float=*/20, /*seed=*/42, /*offset=*/-10.0f);
+    std::vector<std::uint32_t> result;
+    try {
+        result = unit_tests::llk::single_core::run_unary_tiled(
+            device,
+            format,
+            format,
+            tile,
+            src,
+            num_tiles,
+            fp32_dest_acc_en,
+            "tests/tt_metal/tt_metal/test_kernels/compute/tilize_2_0.cpp",
+            /*cb_depth_tiles=*/1);
+    } catch (const std::runtime_error& e) {
+        return e.what();
+    }
+    const auto face_shape = tile.get_face_shape();
+    const auto tile_shape = tile.get_tile_shape();
+    ::unit_tests::compute::GoldenConfig config{
+        .num_tiles_r_dim = 1,
+        .num_tiles_c_dim = 1,
+        .face_r_dim = static_cast<int>(face_shape[0]),
+        .face_c_dim = static_cast<int>(face_shape[1]),
+        .num_faces = static_cast<int>((tile_shape[0] / face_shape[0]) * (tile_shape[1] / face_shape[1])),
+        .datum_bytes = datum_bytes};
+    EXPECT_EQ(::unit_tests::compute::gold_standard_tilize(src, config), result);
+    return {};
+}
+
+}  // namespace
+
+// The one-row four-face (2x32, 1x16 faces) Float16_b tilize on the device: the unpacker and the math accept the
+// tile, so without the compile-time rejection the kernel builds and runs, and the pack tilize program emits a tile
+// whose second face pair does not match the host golden. The API must refuse to build it; if it does build, the
+// output is compared so the failure shows what the device produced.
+TEST_F(LLKBlackholeSingleCardFixture, TensixTilizeIdFreeOneRowFourFacesRejected) {
+    const std::string error = run_tilize_id_free_golden(
+        this->device(), tt::DataFormat::Float16_b, tt::tt_metal::Tile({2, 32}, {1, 16}), /*fp32_dest_acc_en=*/false);
+    EXPECT_NE(error.find("tilize_init: unsupported"), std::string::npos) << error;
+    if (error.empty()) {
+        ADD_FAILURE() << "a one-row four-face tilize compiled";
+    }
+}
+
+// Same for eight-row faces (a 16x32 tile as 2x2 faces of 8 rows): the second face pair sits at DEST row 16 but the
+// pack tilize program reaches for it two full faces (32 rows) further on.
+TEST_F(LLKBlackholeSingleCardFixture, TensixTilizeIdFreeEightRowFourFacesRejected) {
+    const std::string error = run_tilize_id_free_golden(
+        this->device(), tt::DataFormat::Float16_b, tt::tt_metal::Tile({16, 32}, {8, 16}), /*fp32_dest_acc_en=*/false);
+    EXPECT_NE(error.find("tilize_init: unsupported"), std::string::npos) << error;
+    if (error.empty()) {
+        ADD_FAILURE() << "an eight-row four-face tilize compiled";
+    }
+}
+
+// The short-face tiles the contract accepts must tilize correctly on the device: the two-face short-face forms of a
+// non-8-bit input (1x32 and 8x32 Float16_b), and the four-face short-face forms of an 8-bit input (2x32 and 16x32
+// Int8 as 2x2 faces of 1 / 8 rows, which pack in the default mode). Int8 runs with fp32 dest accumulation, as the
+// legacy Int8 tilize does.
+TEST_F(LLKBlackholeSingleCardFixture, TensixTilizeIdFreeShortFacesGolden) {
+    struct Case {
+        tt::DataFormat format;
+        tt::tt_metal::Tile tile;
+        bool fp32_dest_acc_en;
+    };
+    const std::array<Case, 4> cases{{
+        {tt::DataFormat::Float16_b, tt::tt_metal::Tile({1, 32}, {1, 16}), false},
+        {tt::DataFormat::Float16_b, tt::tt_metal::Tile({8, 32}, {8, 16}), false},
+        {tt::DataFormat::Int8, tt::tt_metal::Tile({2, 32}, {1, 16}), true},
+        {tt::DataFormat::Int8, tt::tt_metal::Tile({16, 32}, {8, 16}), true},
+    }};
+    for (const auto& test : cases) {
+        SCOPED_TRACE(
+            ::testing::Message() << "format=" << enchantum::to_string(test.format)
+                                 << ", tile=" << test.tile.get_height() << "x" << test.tile.get_width()
+                                 << ", face_r_dim=" << test.tile.get_face_shape()[0]);
+        const std::string error =
+            run_tilize_id_free_golden(this->device(), test.format, test.tile, test.fp32_dest_acc_en);
+        EXPECT_TRUE(error.empty()) << error;
+    }
+}
 
 }  // namespace tt::tt_metal
