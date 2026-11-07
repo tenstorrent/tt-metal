@@ -1,32 +1,34 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""One Kimi-K3.1 pipeline stage on one galaxy, traced, at a given num_users.
+"""Each Kimi-K3.1 pipeline stage on one galaxy, traced, at its recorded maximum num_users.
 
-The stage is built exactly as `prefill_runner` builds that rank (`compute_layer_split` over the
-adapter's split boundaries, `build_runtime` / `allocate_kv_cache` / `compile` / `capture_trace` with the
-K3 manifest's knobs: 8x4 torus, TP-deduped KV, the adapter's scaled-FP8 kvpe, trace on, kv-only last
-layer on the last rank), from the K3.1 TTNN weight cache. Only the transport is replaced: the input
-activation (the live stream plus the AttnRes snapshots sealed upstream) is a random tensor of the size
-the D2D socket delivers, and the per-chunk metadata is a packed record instead of the socket's, as
-`test_prefill_chunk_traced_vs_eager.py` does. No migration ack is wired.
+A stage is built as `prefill_runner` builds that rank (`compute_layer_split` over the adapter's split
+boundaries, `build_runtime` / `allocate_kv_cache` / `compile` / `capture_trace` with the K3 manifest's
+knobs: 8x4 torus, TP-deduped KV, the adapter's scaled-FP8 kvpe, trace on, kv-only last layer on the last
+rank, no lm_head) from the K3.1 TTNN weight cache. The inter-stage D2D endpoints keep their DRAM: the
+receiver's and sender's activation backing tensors are allocated where the runner allocates them, after
+compile and before capture. What is replaced is what moves data: the input activation (the live stream
+plus the AttnRes snapshots sealed upstream) is a random tensor of the size the socket delivers, the
+per-chunk metadata is a packed record instead of the socket's, as `test_prefill_chunk_traced_vs_eager.py`
+does, and no H2D service, layer ack or migration export is built.
 
-It is the memory gate for a stage: weights, KV caches for every slot, trace and a replay must fit one
-chip's DRAM. Replays go to the highest slot from the start of the per-user cache to its very end, so
-the whole allocation is addressed. DRAM per chip is logged after each phase (`STAGE_DRAM` lines).
+It gates the recorded capacity (`STAGE_MAX_USERS`): weights, KV caches for every slot, D2D backings,
+trace and a replay must fit one chip's DRAM. Replays go to the highest slot from the start of the per-user
+cache to its end, so the whole allocation is addressed. DRAM per chip is logged after each phase
+(`STAGE_DRAM` lines). One more user fails in compile: the forward's buffers find no contiguous block.
 
-    K31_STAGE=3 K31_STAGE_USERS=2 scripts/run_safe_pytest.sh \
-        models/demos/deepseek_v3_d_p/tests/kimi_k3/test_kimi_k3_1_stage.py -vv
+Overrides for a capacity sweep: `$K31_STAGE_USERS` (num_users) and `$K31_STAGE_WEIGHTS`:
 
-`$K31_STAGE` is the PP4 rank (0-3); `$K31_STAGE_LAYERS` (`FIRST-LAST`, inclusive) instead runs a
-leading part of a stage: it must start where a rank starts and end on a full-attention layer (the
-kv-only last layer). The test skips without either.
+* `stub` (default): every weight is allocated on device with the spec and mesh topology of its cache
+  file (the file is mapped and only its header read) and left uninitialized, so a run costs no weight
+  load. A layer not yet cached takes the files of a cached layer of the same kind (full attention or
+  KDA, dense or MoE FFN): the shapes depend on the kind alone. Byte-identical to `real` in DRAM and in
+  the pass/fail boundary (stages 0 and 3).
+* `real`: the stage's cached weights, to confirm a stub result; every layer of the stage must be cached.
 
-`$K31_STAGE_WEIGHTS=stub` is the capacity-sweep mode: every weight is allocated on device with the
-spec and mesh topology of its cache file (read from the file header, no tensor data read) and left
-uninitialized, so a num_users step costs no weight load. A layer not yet cached takes the files of a
-cached layer of the same kind (full attention or KDA, dense or MoE FFN): the shapes depend on the
-kind alone. The default, `real`, loads the stage's cached weights; use it to confirm a stub result.
+    K31_STAGE_USERS=77 scripts/run_safe_pytest.sh \
+        "models/demos/deepseek_v3_d_p/tests/kimi_k3/test_kimi_k3_1_stage.py::test_kimi_k3_1_stage_traced[stage0-torus-xy-8x4]"
 """
 
 from __future__ import annotations
@@ -43,9 +45,10 @@ from loguru import logger
 import ttnn
 from models.common.utility_functions import is_blackhole
 from models.demos.common.prefill.adapter import PrefillRunParams, get_adapter
-from models.demos.common.prefill.runners.runner_utils import compute_layer_split
+from models.demos.common.prefill.runners.runner_utils import compute_layer_split, d2d_activation_rows
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_1_config import KimiK31Config
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import torus_xy_device_params
+from models.demos.deepseek_v3_d_p.tests.test_prefill_chunk_traced_vs_eager import _packed_metadata_msg
 from models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert import TtRoutedExpert
 
 ADAPTER = get_adapter("kimi_k3_1")
@@ -60,20 +63,13 @@ TRACE_REGION_SIZE = 256 * 1024 * 1024  # the runner's PREFILL_TRACE_REGION_SIZE 
 REPLAY_STARTS = (0, CHUNK, 51_200, 512_000, MAX_SEQ_LEN - CHUNK)
 
 
-def _window() -> tuple[int, int] | None:
-    """(first layer, layer count) of the stage, or of a leading part of it."""
-    split = compute_layer_split(
-        KimiK31Config.NUM_LAYERS, NUM_STAGES, ADAPTER.layer_split_boundaries(KimiK31Config.NUM_LAYERS)
-    )
-    if spec := os.getenv("K31_STAGE_LAYERS"):
-        first, _, last = spec.partition("-")
-        first, last = int(first), int(last)
-        assert first in {start for start, _ in split}, f"{spec}: layer {first} is not where a PP4 rank starts {split}"
-        assert last in KimiK31Config.mla_layer_ids(), f"{spec}: the kv-only last layer {last} is not attention"
-        return first, last - first + 1
-    if stage := os.getenv("K31_STAGE"):
-        return split[int(stage)]
-    return None
+# (first layer, layer count) of each PP4 rank: 0-23 / 24-47 / 48-71 / 72-92.
+STAGES = compute_layer_split(
+    KimiK31Config.NUM_LAYERS, NUM_STAGES, ADAPTER.layer_split_boundaries(KimiK31Config.NUM_LAYERS)
+)
+# Measured on bh-glx-110-c10u14 (ao3i.1.6): the most users each stage fits at MAX_SEQ_LEN; one more fails.
+# The PP4 system maximum is their minimum, 76.
+STAGE_MAX_USERS = {0: 76, 1: 77, 2: 77, 3: 93}
 
 
 def _layer_kind(layer_idx: int) -> tuple[bool, bool]:
@@ -166,16 +162,27 @@ def _log_dram(mesh_device, phase: str) -> int:
     return allocated
 
 
-def _metadata_msg(mesh_device, slot_id: int, actual_start: int, actual_end: int) -> ttnn.Tensor:
-    """The packed (slot_id, actual_start, actual_end) record the socket delivers; the traced path reads it on device."""
-    return ttnn.from_torch(
-        torch.tensor([slot_id, actual_start, actual_end], dtype=torch.int64).reshape(1, 1, 1, 3),
-        device=mesh_device,
-        dtype=ttnn.uint32,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-    )
+def _d2d_backings(runtime, mesh_device) -> list[ttnn.Tensor]:
+    """The DRAM the runner's D2D receiver (non-first rank) and sender (non-last rank) each allocate for the
+    activation they move: its per-chip slice of `activation_global_spec`, planes taken at that boundary."""
+    config = runtime.config
+    rows = d2d_activation_rows(CHUNK, sp_factor=MESH[0]) // MESH[0]
+    width = runtime.hf_config.hidden_size // (MESH[1] if ADAPTER.pipeline_activation_emb_tp_sharded else 1)
+    boundaries = []
+    if not config.is_first_rank:
+        boundaries.append(config.first_layer_idx)
+    if not config.is_last_rank:
+        boundaries.append(config.first_layer_idx + config.num_layers)
+    return [
+        ttnn.allocate_tensor_on_device(
+            ttnn.Shape([1, ADAPTER.pipeline_activation_planes(boundary), rows, width]),
+            ttnn.bfloat16,
+            ttnn.TILE_LAYOUT,
+            mesh_device,
+            ttnn.DRAM_MEMORY_CONFIG,
+        )
+        for boundary in boundaries
+    ]
 
 
 def _random_activation(runtime, mesh_device, seed: int) -> ttnn.Tensor:
@@ -213,18 +220,18 @@ def _random_activation(runtime, mesh_device, seed: int) -> ttnn.Tensor:
     ],
     indirect=True,
 )
-def test_kimi_k3_1_stage_traced(mesh_device, device_params, tmp_path):
-    window = _window()
-    if window is None:
-        pytest.skip("set $K31_STAGE (PP4 rank) or $K31_STAGE_LAYERS; the stage's weights must be cached")
-    first_layer_idx, num_layers = window
-    num_users = int(os.getenv("K31_STAGE_USERS", "1"))
-    weights = os.getenv("K31_STAGE_WEIGHTS", "real")
+@pytest.mark.parametrize("stage", range(NUM_STAGES), ids=[f"stage{s}" for s in range(NUM_STAGES)])
+def test_kimi_k3_1_stage_traced(stage, mesh_device, device_params, tmp_path):
+    first_layer_idx, num_layers = STAGES[stage]
+    num_users = int(os.getenv("K31_STAGE_USERS", STAGE_MAX_USERS[stage]))
+    weights = os.getenv("K31_STAGE_WEIGHTS", "stub")
     assert weights in ("real", "stub"), f"$K31_STAGE_WEIGHTS={weights!r}: real or stub"
     weight_cache_path = ADAPTER.weight_cache_path(MESH)
+    if not any(weight_cache_path.resolve().glob(".layer_*.complete")):
+        pytest.skip(f"no K3.1 TTNN weight cache at {weight_cache_path}")
     if weights == "stub":
         weight_cache_path = _stub_cache(weight_cache_path.resolve(), tmp_path)
-    is_last_rank = first_layer_idx + num_layers == KimiK31Config.NUM_LAYERS or "K31_STAGE_LAYERS" in os.environ
+    is_last_rank = stage == NUM_STAGES - 1
     hf_config = ADAPTER.load_hf_config()
     hf_config.max_seq_len = MAX_SEQ_LEN
     params = PrefillRunParams(
@@ -246,9 +253,9 @@ def test_kimi_k3_1_stage_traced(mesh_device, device_params, tmp_path):
         use_trace=True,
     )
     logger.info(
-        f"K3.1 stage layers [{first_layer_idx}, {first_layer_idx + num_layers}) is_last={is_last_rank} "
+        f"K3.1 stage {stage} layers [{first_layer_idx}, {first_layer_idx + num_layers}) is_last={is_last_rank} "
         f"num_users={num_users} weights={weights} max_seq_len={MAX_SEQ_LEN} kvpe={params.sparse_kv_cache_format} "
-        f"weights={params.weight_cache_path}"
+        f"cache={params.weight_cache_path}"
     )
 
     _log_dram(mesh_device, "opened")
@@ -263,6 +270,8 @@ def test_kimi_k3_1_stage_traced(mesh_device, device_params, tmp_path):
     try:
         t0 = time.perf_counter()
         runtime.compile(kv_caches)
+        d2d_backings = _d2d_backings(runtime, mesh_device)
+        _log_dram(mesh_device, f"d2d backings ({len(d2d_backings)})")
         runtime.capture_trace(kv_caches)
         logger.info(f"STAGE_TIME compile+capture {time.perf_counter() - t0:.1f} s")
         _log_dram(mesh_device, "traced")
@@ -273,7 +282,7 @@ def test_kimi_k3_1_stage_traced(mesh_device, device_params, tmp_path):
                 chunk_input = runtime.make_chunk_input([1] * CHUNK)
             else:
                 chunk_input = _random_activation(runtime, mesh_device, seed=start)
-            msg = _metadata_msg(mesh_device, slot, start, start + CHUNK)
+            msg = _packed_metadata_msg(mesh_device, slot, start, start + CHUNK)
             t0 = time.perf_counter()
             runtime.prefill_chunk(
                 chunk_input,
