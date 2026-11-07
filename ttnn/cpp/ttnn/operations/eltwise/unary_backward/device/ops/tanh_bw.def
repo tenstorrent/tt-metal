@@ -1,0 +1,4 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+//
+// SPDX-License-Identifier: Apache-2.0
+UNARY_BW_OP(TANH_BW_BF16, "eltwise_bw_tanh_bf16.cpp")
