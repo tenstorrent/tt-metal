@@ -166,7 +166,7 @@ ttnn::device_operation::ProgramArtifacts UntilizeWithUnpaddingMultiCoreShardedPr
     TT_ASSERT(output.is_allocated(), "Output buffer should be allocated on device!");
 
     uint32_t num_output_tiles = out_sharded ? (unpad_tensor_w_16 ? 16 : ntiles_per_batch * 2) : ntiles_per_block * 2;
-    uint32_t aligned_page_size = static_cast<uint32_t>(output.buffer()->aligned_page_size());
+    uint32_t aligned_page_size = static_cast<uint32_t>(output.mesh_buffer().aligned_page_size());
     DataflowBufferSpec out_dfb{
         .unique_id = SH_OUT,
         .entry_size = output_single_tile_size,

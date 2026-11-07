@@ -86,7 +86,7 @@ tt::tt_metal::ProgramDescriptor::CBDescriptors make_cbs(
     const uint32_t idx_elem_bytes = t.indices.element_size();  // uint32 -> 4
     const uint32_t q_row_bytes = k_dim * t.q.element_size();
     const uint32_t k_row_bytes = k_dim * t.kv.element_size();
-    const uint32_t packed_page_bytes = scaled_kv ? t.kv.buffer()->aligned_page_size() : 0;
+    const uint32_t packed_page_bytes = scaled_kv ? t.kv.mesh_buffer().aligned_page_size() : 0;
     const uint32_t scale_blocks = ::sparse_sdpa::scale_block_count(v_dim);
     constexpr tt::DataFormat bf = tt::DataFormat::Float16_b;
     constexpr tt::DataFormat fp32 = tt::DataFormat::Float32;
@@ -274,7 +274,7 @@ tt::tt_metal::ProgramDescriptor SparseSDPAOperation::SparseSDPAProgramFactory::c
     const uint32_t kv_elem_bytes = t.kv.element_size();
     const uint32_t idx_elem_bytes = t.indices.element_size();  // uint32 -> 4
     const uint32_t out_elem_bytes = output.element_size();
-    const uint32_t packed_page_bytes = scaled_kv ? t.kv.buffer()->aligned_page_size() : 0;
+    const uint32_t packed_page_bytes = scaled_kv ? t.kv.mesh_buffer().aligned_page_size() : 0;
     const bool kv_storage_is_fp8 =
         tt::tt_metal::datatype_to_dataformat_converter(t.kv.dtype()) == tt::DataFormat::Fp8_e4m3;
     const bool q_is_fp8 = tt::tt_metal::datatype_to_dataformat_converter(t.q.dtype()) == tt::DataFormat::Fp8_e4m3;
@@ -543,18 +543,18 @@ void SparseSDPAOperation::SparseSDPAProgramFactory::override_runtime_arguments(
     // tensor-accessor metadata follows these slots and remains unchanged under the cache key.
     const auto& t = tensor_args;
     const uint32_t offset = operation_attributes.cache_batch_idx.value_or(0) * t.kv.logical_shape()[2];
-    const uint32_t kv = t.kv.buffer()->address();
+    const uint32_t kv = t.kv.mesh_buffer().address();
     auto& reader_args = tt::tt_metal::GetCommonRuntimeArgs(program, 0);
     auto& writer_args = tt::tt_metal::GetCommonRuntimeArgs(program, 1);
-    reader_args[::sparse_sdpa::reader_common_arg::Q_ADDRESS] = t.q.buffer()->address();
+    reader_args[::sparse_sdpa::reader_common_arg::Q_ADDRESS] = t.q.mesh_buffer().address();
     reader_args[::sparse_sdpa::reader_common_arg::KV_ADDRESS] = kv;
-    reader_args[::sparse_sdpa::reader_common_arg::INDICES_ADDRESS] = t.indices.buffer()->address();
+    reader_args[::sparse_sdpa::reader_common_arg::INDICES_ADDRESS] = t.indices.mesh_buffer().address();
     reader_args[::sparse_sdpa::reader_common_arg::KV_BATCH_PAGE_OFFSET] = offset;
-    writer_args[::sparse_sdpa::writer_common_arg::OUTPUT_ADDRESS] = tensor_return_value.buffer()->address();
+    writer_args[::sparse_sdpa::writer_common_arg::OUTPUT_ADDRESS] = tensor_return_value.mesh_buffer().address();
     writer_args[::sparse_sdpa::writer_common_arg::KV_ADDRESS] = kv;
     writer_args[::sparse_sdpa::writer_common_arg::KV_BATCH_PAGE_OFFSET] = offset;
     writer_args[::sparse_sdpa::writer_common_arg::ATTENTION_SINK_ADDRESS] =
-        t.attention_sink.has_value() ? t.attention_sink->buffer()->address() : 0u;
+        t.attention_sink.has_value() ? t.attention_sink->mesh_buffer().address() : 0u;
 }
 
 }  // namespace ttnn::prim
