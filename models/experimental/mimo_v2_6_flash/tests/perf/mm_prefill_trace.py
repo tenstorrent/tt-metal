@@ -107,11 +107,11 @@ def main():
         used0 = model.trace_region_bytes()[0]
         assert model.capture_prefill_chunk_traces(), "the traces did not fit"
         used, total = model.trace_region_bytes()
+        segments = [int(t.shape[0]) for t in model.trace_rows]
         say(
             f"{len(keys)} traced first chunks {lengths} set up, warmed and captured in {time.time() - t1:.0f}s: "
             f"{(used - used0) / 2**20:.1f} MB of the trace region ({(used - used0) / 2**20 / len(keys):.1f} MB each); "
-            f"row buffers {sorted(model.trace_rows)} ({sum(model.trace_rows) * cfg.hidden_size * 2 / 2**20:.0f} MB "
-            "per chip)"
+            f"row buffer segments {segments} ({sum(segments) * cfg.hidden_size * 2 / 2**20:.0f} MB per chip)"
         )
         programs = row.num_program_cache_entries()
 

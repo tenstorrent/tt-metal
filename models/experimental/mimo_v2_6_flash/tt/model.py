@@ -854,26 +854,28 @@ class TtMiMoModel:
                 merge["identity"] = True
             return
         index = torch.arange(n, dtype=torch.int32)
-        positions, rows = [], []
+        picks = []  # (first row of the pass, embeds, the rows taken or None: all)
         for first, embeds, embed_rows in sorted(segments, key=lambda seg: seg[0]):
             m = embeds.shape[0]
-            keep = (
-                torch.ones(m, dtype=torch.bool) if embed_rows is None else torch.as_tensor(embed_rows, dtype=torch.bool)
-            )
-            assert first + m <= n and len(keep) == m, (first, m, len(keep), n)
-            positions.append(first + keep.nonzero().flatten())
-            rows.append(embeds[keep].to(torch.bfloat16))
-        pos, rows = torch.cat(positions), torch.cat(rows)
-        index[pos] = n + torch.arange(pos.numel(), dtype=torch.int32)
+            assert first + m <= n and (embed_rows is None or len(embed_rows) == m), (first, m, n)
+            taken = None if embed_rows is None else torch.as_tensor(embed_rows, dtype=torch.bool).nonzero().flatten()
+            picks.append((first, embeds, taken))
+        count = sum(e.shape[0] if t is None else t.numel() for _, e, t in picks)
+        sizes = [int(t.shape[0]) for t in self.trace_rows[: merge["segments"]]]
+        reach = next(k + 1 for k in range(len(sizes)) if sum(sizes[: k + 1]) >= count)
+        # The rows packed in pass order (one copy; rows past the last are never gathered, so left as they are).
+        packed = torch.empty(sum(sizes[:reach]), self.cfg.hidden_size, dtype=torch.bfloat16)
+        k = 0
+        for first, embeds, taken in picks:
+            rows = embeds if taken is None else embeds.index_select(0, taken)
+            pos = first + (torch.arange(rows.shape[0]) if taken is None else taken)
+            packed[k : k + rows.shape[0]] = rows
+            index[pos] = n + k + torch.arange(rows.shape[0], dtype=torch.int32)
+            k += rows.shape[0]
         offset = 0
-        for t in self.trace_rows[: merge["segments"]]:
-            if offset >= pos.numel():
-                break
-            size = int(t.shape[0])
-            host = torch.zeros(size, self.cfg.hidden_size, dtype=torch.bfloat16)
-            part = rows[offset : offset + size]
-            host[: part.shape[0]] = part
-            ttnn.copy_host_to_device_tensor(kv_lib.replicated(self.plan, host, ttnn.bfloat16, False), t)
+        for t, size in zip(self.trace_rows[:reach], sizes):
+            host = kv_lib.replicated(self.plan, packed[offset : offset + size], ttnn.bfloat16, False)
+            ttnn.copy_host_to_device_tensor(host, t)
             offset += size
         ttnn.copy_host_to_device_tensor(
             kv_lib.replicated(self.plan, index.reshape(1, n), ttnn.uint32, False), merge["index"]
