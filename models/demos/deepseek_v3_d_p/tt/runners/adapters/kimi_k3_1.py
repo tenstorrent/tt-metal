@@ -10,8 +10,8 @@ reaches K3.1 too. The model difference is carried by ``KimiK31Config`` / ``kimi_
 ``index_*`` DSA fields), not by code here.
 
 Not servable yet: the K3 block does not drive the DSA indexer that K3.1's config makes ``ttMLA``
-build, and the KV allocation has no indexer key cache. Both land with Gated DSA in the K3 block and
-the K3.1 KV caches.
+build; that lands with Gated DSA in the K3 block. K3's shared ``allocate_kv_cache`` already gives
+K3.1 its scaled-FP8 kvpe and bf8 indexer key cache.
 
 What this class overrides is identity and artifacts: K3.1's weights are all retrained, so nothing
 recorded against the K3 checkpoint (TTNN cache, golden traces, DFlash drafter, MLA reference) is valid
@@ -58,6 +58,13 @@ class KimiK31Adapter(KimiK3Adapter):
     supports_pretrained = False
     pretrained_mla_layer = None
     default_local_path = None
+
+    @property
+    def default_sparse_kv_cache_format(self):
+        """Scaled-FP8 kvpe, as GLM-5.3: the DSA layers read it with sparse_sdpa, which cannot read bf8."""
+        from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat
+
+        return MlaKvCacheFormat.SCALED_FP8
 
     @property
     def config_builder(self) -> Callable:

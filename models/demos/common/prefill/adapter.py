@@ -368,7 +368,7 @@ ADAPTER_PATHS = {
     "kimi_k2_7": "models.demos.deepseek_v3_d_p.tt.runners.adapters.kimi_k2_7:KimiK27Adapter",
     "kimi_k3": "models.demos.deepseek_v3_d_p.tt.runners.adapters.kimi_k3:KimiK3Adapter",
     # Kimi-K3.1: K3 + DSA indexer on its 24 MLA layers; selected through K3's stack (adapters/kimi_k3_1.py).
-    # Not servable yet: needs Gated DSA in the K3 block and the K3.1 KV caches.
+    # Not servable yet: needs Gated DSA in the K3 block.
     "kimi_k3_1": "models.demos.deepseek_v3_d_p.tt.runners.adapters.kimi_k3_1:KimiK31Adapter",
     "minimax_m3": "models.demos.minimax_m3.tt.runners.adapters.minimax_m3:MiniMaxM3PrefillAdapter",
     # Mistral-Small-4-119B: dense MLA + MoE; config hand-built (transformers 5.x rope_parameters).
