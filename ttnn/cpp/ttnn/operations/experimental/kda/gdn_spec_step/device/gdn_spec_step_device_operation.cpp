@@ -27,6 +27,15 @@ void check_tiled(const Tensor& t, std::string_view name, std::initializer_list<D
         ok = ok || t.dtype() == d;
     }
     TT_FATAL(ok, "{}: {} has unsupported dtype {}", kOp, name, t.dtype());
+    // the circular buffers and page reads are sized for 32x32 tiles
+    const auto& tile = t.tensor_spec().tile();
+    TT_FATAL(
+        tile.get_height() == tt::constants::TILE_HEIGHT && tile.get_width() == tt::constants::TILE_WIDTH,
+        "{}: {} must use 32x32 tiles (got {}x{})",
+        kOp,
+        name,
+        tile.get_height(),
+        tile.get_width());
 }
 }  // namespace
 
@@ -162,11 +171,17 @@ void GdnSpecStepOperation::validate_on_program_cache_miss(const operation_attrib
         if (in.ring_pool2.has_value()) {
             check_tiled(*in.ring_pool2, "ring_pool2", {DataType::FLOAT32});
             check_same_device(in.qkvzab, *in.ring_pool2, kOp, "ring_pool2");
-            // the kernels address both pools with one accessor type
+            // the kernels address both pools with one accessor type and ring's page size (same_layout_accessor)
             TT_FATAL(
                 in.ring_pool2->buffer()->buffer_type() == in.ring.buffer()->buffer_type(),
                 "{}: ring_pool2 must be in the same memory (DRAM / L1) as ring",
                 kOp);
+            TT_FATAL(
+                in.ring_pool2->buffer()->aligned_page_size() == in.ring.buffer()->aligned_page_size(),
+                "{}: ring_pool2 must have the aligned page size of ring ({} B, got {} B)",
+                kOp,
+                in.ring.buffer()->aligned_page_size(),
+                in.ring_pool2->buffer()->aligned_page_size());
             TT_FATAL(
                 in.ring_pool2->buffer()->num_pages() >= static_cast<uint64_t>(Dk / TW) * (Dv / TW),
                 "{}: ring_pool2 must hold at least Dk * Dv / 1024 tiles",
