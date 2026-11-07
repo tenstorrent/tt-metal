@@ -142,7 +142,6 @@ void EmbeddingsDeviceOperation::validate_on_program_cache_hit(
         validate_on_program_cache_miss(operation_attributes, tensor_args);
         return;
     }
-    // Only the row-dependent invariants.
     const auto& a = tensor_args.input_tensor_arg;
     const auto& weights = tensor_args.weight_arg;
     TT_FATAL(

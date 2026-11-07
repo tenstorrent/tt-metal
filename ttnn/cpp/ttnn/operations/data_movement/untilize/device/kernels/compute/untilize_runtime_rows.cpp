@@ -2,14 +2,14 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Compute of the multi-core untilize whose block count follows the common row count (see
-// untilize_row_split.hpp); the row width stays a compile-time arg.
+// Compute of the multi-core untilize whose block count follows the common row count; the row width
+// stays a compile-time arg.
 
 #include <cstdint>
 
 #include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
 #include "experimental/kernel_args.h"
-#include "ttnn/operations/data_movement/untilize/device/kernels/untilize_row_split.hpp"
+#include "ttnn/operations/common/shared_with_host/runtime_length.hpp"
 
 void kernel_main() {
     // RUNTIME ARGS
@@ -20,7 +20,7 @@ void kernel_main() {
     constexpr uint32_t num_cores = get_arg(args::num_cores);
     constexpr auto per_core_block_tile_cnt = get_arg(args::per_core_block_tile_cnt);
 
-    const auto [row_start, row_end] = untilize_row_range(core_idx, num_tile_rows, num_cores);
+    const auto [row_start, row_end] = ttnn::runtime_length::chunked_range(core_idx, num_tile_rows, num_cores);
     const uint32_t per_core_block_cnt = row_end - row_start;
 
     if (per_core_block_cnt == 0) {

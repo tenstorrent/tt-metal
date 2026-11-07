@@ -256,7 +256,7 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsFusedRuntimeRowsProgramFactor
 
     spec.kernels.push_back(KernelSpec{
         .unique_id = READER,
-        .source = "ttnn/cpp/ttnn/operations/embedding/device/kernels/dataflow/embeddings_tilize_runtime_rows.cpp",
+        .source = "ttnn/cpp/ttnn/operations/embedding/device/kernels/dataflow/embeddings_tilize_reader_runtime_rows.cpp",
         .compiler_options = {.defines = embedding_defines},
         .dfb_bindings = std::move(reader_dfb_bindings),
         .scratchpad_bindings = std::move(reader_scratchpad_bindings),

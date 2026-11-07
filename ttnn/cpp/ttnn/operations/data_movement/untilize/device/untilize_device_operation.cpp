@@ -292,7 +292,6 @@ void UntilizeDeviceOperation::validate_on_program_cache_hit(
         validate_on_program_cache_miss(operation_attributes, tensor_args);
         return;
     }
-    // Only the row-dependent invariants.
     using namespace tt::constants;
     const auto& input_tensor_a = tensor_args.input;
     uint32_t tensor_width = input_tensor_a.padded_shape()[-1];

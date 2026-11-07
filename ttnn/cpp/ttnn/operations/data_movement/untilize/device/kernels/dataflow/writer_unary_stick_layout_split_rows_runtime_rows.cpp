@@ -2,8 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Writer of the interleaved multi-core untilize: the split-rows writer's stick writes, with this
-// core's block range derived from the common row count instead of per-core runtime args.
+// Writer of the interleaved multi-core untilize: one output page per stick row. The input block spans
+// the whole tensor width, so every stick is one full page and the page id is the row index. This core's
+// block range comes from the common row count.
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
@@ -12,7 +13,7 @@
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
 #include "experimental/kernel_args.h"
-#include "ttnn/operations/data_movement/untilize/device/kernels/untilize_row_split.hpp"
+#include "ttnn/operations/common/shared_with_host/runtime_length.hpp"
 
 void kernel_main() {
     // RUNTIME ARGS
@@ -28,74 +29,28 @@ void kernel_main() {
     constexpr auto num_cols_per_input_block = get_arg(args::num_cols_per_input_block);
     constexpr auto num_cols_per_output_block = get_arg(args::num_cols_per_output_block);
 
-    // The column loop below advances by min(columns left, num_cols_per_output_block) per pass, so an
-    // empty output block would never terminate it. On this interleaved path it is the tensor width.
-    static_assert(num_cols_per_output_block > 0, "untilize writer: the output block must hold a column");
+    // Interleaved input and output: one input block and one output page per row, both the tensor width.
+    static_assert(num_output_blocks_across_width == 1, "untilize writer: interleaved output has one page per row");
+    static_assert(
+        num_cols_per_output_block == num_cols_per_input_block, "untilize writer: a stick is one full output page");
+    static_assert(num_cols_per_input_block > 0, "untilize writer: the row must hold a column");
+    constexpr uint32_t stick_bytes = num_cols_per_input_block * output_element_size;
 
-    // Interleaved input: one input block spans the whole row, so the column bookkeeping is fixed.
-    constexpr uint32_t num_unpadded_cols_per_input_block = num_cols_per_input_block;
-    constexpr uint32_t width_wise_output_block_start_index = 0;
-    constexpr uint32_t num_cols_already_processed_in_first_output_block = 0;
-
-    const auto [row_start, row_end] = untilize_row_range(core_idx, num_tile_rows, num_cores);
+    const auto [row_start, row_end] = ttnn::runtime_length::chunked_range(core_idx, num_tile_rows, num_cores);
 
     const auto s = TensorAccessor(tensor::dst);
 
     Noc noc;
     DataflowBuffer dfb_out(dfb::out);
 
-    auto write_tiles_in_current_block = [&](uint32_t block_height_index) {
+    for (uint32_t block = row_start; block < row_end; ++block) {
         dfb_out.wait_front(num_tiles_per_input_block);
-
-        // Base address of the row of elements we are going to be writing.
-        uint32_t base_l1_read_addr = dfb_out.get_read_ptr();
-
-        // Process each row of elements in the input block
+        const uint32_t base_l1_read_addr = dfb_out.get_read_ptr();
         for (uint32_t j = 0; j < tile_height; ++j) {
-            uint32_t current_l1_read_addr = base_l1_read_addr + j * num_cols_per_input_block * output_element_size;
-
-            // Output page_id that we are going to be writing to
-            uint32_t num_rows_already_processed = block_height_index * tile_height + j;
-            uint32_t num_pages_already_processed_in_previous_rows =
-                num_rows_already_processed * num_output_blocks_across_width;
-            uint32_t output_page_id =
-                num_pages_already_processed_in_previous_rows + width_wise_output_block_start_index;
-
-            uint32_t num_cols_remaining_in_current_output_block =
-                num_cols_per_output_block - num_cols_already_processed_in_first_output_block;
-            uint32_t output_offset_within_page_in_bytes =
-                num_cols_already_processed_in_first_output_block * output_element_size;
-
-            // Iterate through all columns in the input block that this core is processing
-            uint32_t num_input_cols_processed = 0;
-            while (num_input_cols_processed < num_unpadded_cols_per_input_block) {
-                uint32_t num_cols_to_write = std::min(
-                    num_unpadded_cols_per_input_block - num_input_cols_processed,
-                    num_cols_remaining_in_current_output_block);
-                uint32_t num_bytes_to_write = num_cols_to_write * output_element_size;
-
-                CoreLocalMem<uint32_t> src(current_l1_read_addr);
-                noc.async_write(
-                    src,
-                    s,
-                    num_bytes_to_write,
-                    {.offset_bytes = 0},
-                    {.page_id = output_page_id, .offset_bytes = output_offset_within_page_in_bytes});
-
-                num_input_cols_processed += num_cols_to_write;
-                current_l1_read_addr += num_bytes_to_write;
-                output_page_id++;
-                num_cols_remaining_in_current_output_block = num_cols_per_output_block;
-                output_offset_within_page_in_bytes = 0;
-            }
+            CoreLocalMem<uint32_t> src(base_l1_read_addr + j * stick_bytes);
+            noc.async_write(src, s, stick_bytes, {.offset_bytes = 0}, {.page_id = block * tile_height + j});
         }
-
         noc.async_write_barrier();
         dfb_out.pop_front(num_tiles_per_input_block);
-    };
-
-    // Each input block processed separately
-    for (uint32_t block = row_start; block < row_end; ++block) {
-        write_tiles_in_current_block(block);
     }
 }
