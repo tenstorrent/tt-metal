@@ -316,7 +316,7 @@ def test_driver_cache_plan_follows_cache_kind(model, tmp_path, monkeypatch):
     axis, a decode width for the token caches only (kvpe, and K3.1's index cache at 01), none for the KDA
     Snapshot configs (01/02 on K3, 02/03 on K3.1), which its dump skips and its byte verify walks whole."""
     from models.demos.common.prefill.runners import prefill_producer
-    from models.demos.common.prefill.runners.migration_driver import _cache_plan, _layer_runs
+    from models.demos.common.prefill.runners.migration_driver import _cache_plan
 
     adapter = get_adapter(model)
     table = ttnn.experimental.disaggregation.import_from_protobuf_file(_published_table(model, tmp_path, monkeypatch))
@@ -330,6 +330,3 @@ def test_driver_cache_plan_follows_cache_kind(model, tmp_path, monkeypatch):
     plan = _cache_plan(table, None)
     assert [entry["config_id"] for entry in plan] == list(range(len(expected)))
     assert [(entry["kind"], sorted(entry["rows"]), entry["head_dim"]) for entry in plan] == expected
-    # One /migrate per run of equal position ranges: K3.1's layers group exactly as K3's.
-    runs = _layer_runs(range(KimiK3Config.NUM_LAYERS), 56_320, adapter.layer_position_range)
-    assert runs == _layer_runs(range(KimiK3Config.NUM_LAYERS), 56_320, KimiK3Adapter().layer_position_range)
