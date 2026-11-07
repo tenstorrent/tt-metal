@@ -6,6 +6,7 @@
 // columns and 32 * group_tiles rows, regrouped so that each lane of the Blackhole decoder finds its fields in one
 // place (tt-llk ckernel_gguf_page.h and ckernel_sfpu_gguf_decode*.h describe the rows). SFPU output o of lane (r, c)
 // is element (out_k(o, r), out_n(o, c)) of a 32x32 [K][N] tile; scale word w covers columns lane_col(w) + b, b = 0, 1.
+// TQ2_0 is the exception: its codes become block-float tiles that the matmul reads without decoding (group_tq2_0).
 
 #include <algorithm>
 #include <array>
@@ -154,7 +155,7 @@ struct CodePlanes {
 
 CodePlanes planes_of(DataType type, int blk) {
     CodePlanes p;
-    const bool two = type == GGUF_Q3_K || type == GGUF_Q2_K || type == GGUF_TQ2_0 || type == GGUF_Q2_0;
+    const bool two = type == GGUF_Q3_K || type == GGUF_Q2_K || type == GGUF_Q2_0;
     p.lo.bits = type == GGUF_Q8_0 ? 8 : type == GGUF_Q1_0 ? 1 : two ? 2 : 4;
     p.hi.bits = type == GGUF_Q6_K                                                                  ? 2
                 : type == GGUF_Q5_K || type == GGUF_Q3_K || type == GGUF_Q5_0 || type == GGUF_Q5_1 ? 1
@@ -181,7 +182,6 @@ CodePlanes planes_of(DataType type, int blk) {
             case GGUF_Q3_K:   lb = 32 + 32 * h + e; ls = 2 * t; hb = e; hs = j; break;
             case GGUF_Q2_K:   lb = 16 + 32 * h + e; ls = 2 * t; break;
             case GGUF_IQ4_XS: lb = 8 + 16 * j + w % 16; ls = 4 * (w % 32 / 16); break;
-            case GGUF_TQ2_0:  lb = 32 * h + e; ls = 2 * t; break;
             case GGUF_Q2_0:   lb = 2 + w / 4; ls = 2 * (w % 4); break;
             case GGUF_Q1_0:   lb = 2 + w / 8; ls = w % 8; break;
             default:          break;
@@ -236,7 +236,6 @@ uint8_t* group_planes(
         case GGUF_IQ4_NL:
         case GGUF_Q2_0:
         case GGUF_Q1_0: pair16(t, g, 0, S[0]); break;
-        case GGUF_TQ2_0: pair16(t, g, 64, S[0]); break;
         case GGUF_Q4_1:
             pair16(t, g, 0, S[0]);  // d
             pair16(t, g, 2, S[1]);  // m
@@ -338,6 +337,55 @@ uint8_t* group_tq1_0(const TileRows& t, int64_t g, uint8_t* out) {
     }
     pair16(t, g, 52, S[2]);
     return put(out, S[0], 48);
+}
+
+// TQ2_0: the group's eight K tiles as BFP2_b tiles without exponents (256 B each: 32x32 [K][N] in face order, element
+// i in bits 2 (i % 4) of byte i / 4, a 2-bit sign / magnitude code), then d of column n at byte 2048 + 2 n. The codes
+// are the GGUF codes q with tq2_0_codes applied, so that the matmul reads q - 1 with the exponent forced to 1.0.
+uint8_t* group_tq2_0(const TileRows& t, int64_t g, uint8_t* out) {
+    std::memset(out, 0, 2048);
+    for (int i = 0; i < 8; ++i) {
+        for (int r = 0; r < 32; ++r) {
+            const int w = 32 * i + r;  // element w of the column's block g
+            for (int c = 0; c < 32; ++c) {
+                const uint32_t q = t.block(c, g)[32 * (w / 128) + w % 32] >> 2 * (w % 128 / 32) & 3;
+                const int e = 512 * (r / 16) + 256 * (c / 16) + 16 * (r % 16) + c % 16;
+                out[256 * i + e / 4] |= uint8_t(q << 2 * (e % 4));
+            }
+        }
+    }
+    for (int c = 0; c < 32; ++c) {
+        std::memcpy(out + 2048 + 2 * c, t.block(c, g) + 64, 2);
+    }
+    return out + 2112;
+}
+
+// TQ2_0 codes q (0, 1, 2 for -1, 0, +1) <-> BFP2 codes (q + 3) % 4: sign in bit 1, magnitude in bit 0, so that 0 is +0.
+// q = 3, which TQ2_0 quantization never writes, would become sign 1 with magnitude 0, which reads as -inf: from_gguf
+// refuses it. Applied to the 64 code bytes of each block by pack_pages and unpack_pages, around the bit
+// permutations. row_blocks: blocks per column of N.
+void tq2_0_codes(uint8_t* blocks, size_t bytes, int64_t row_blocks, bool to_device) {
+    std::array<uint8_t, 256> map{};
+    for (int b = 0; b < 256; ++b) {
+        for (int f = 0; f < 4; ++f) {
+            map[b] |= uint8_t((((b >> 2 * f) + (to_device ? 3 : 1)) & 3) << 2 * f);
+        }
+    }
+    for (size_t block = 0; block < bytes; block += 66) {
+        for (size_t j = 0; j < 64; ++j) {
+            const uint8_t b = blocks[block + j];
+            if (to_device) {
+                const int64_t index = int64_t(block / 66);
+                TT_FATAL(
+                    (b & b >> 1 & 0x55) == 0,
+                    "DataType::GGUF_TQ2_0: block {} (column {}, K block {}) holds code 3; TQ2_0 codes are 0, 1 and 2",
+                    index,
+                    index / row_blocks,
+                    index % row_blocks);
+            }
+            blocks[block + j] = map[b];
+        }
+    }
 }
 
 // ------------------------------------------------------------------------------------------- codebook formats
@@ -534,7 +582,7 @@ uint8_t* group_iq1_m(const TileRows& t, int64_t g, uint8_t* out) {
 
 // The pages of an [K, N] tensor from its GGUF blocks (N rows of K / block_elems blocks), page (g, nt) at page index
 // g * N / 32 + nt: K group g of N tile nt.
-void pack_pages(DataType type, const uint8_t* blocks, int64_t K, int64_t N, uint8_t* pages) {
+void pack_page_bits(DataType type, const uint8_t* blocks, int64_t K, int64_t N, uint8_t* pages) {
     const GgufTraits& f = gguf_traits(type);
     const CodePlanes p = planes_of(type, int(f.block_elems));
     const size_t row_bytes = size_t(K / f.block_elems) * f.block_bytes;
@@ -553,6 +601,7 @@ void pack_pages(DataType type, const uint8_t* blocks, int64_t K, int64_t N, uint
                 case GGUF_IQ2_XS: end = group_iq2_xs(t, g, page); break;
                 case GGUF_IQ1_M: end = group_iq1_m(t, g, page); break;
                 case GGUF_TQ1_0: end = group_tq1_0(t, g, page); break;
+                case GGUF_TQ2_0: end = group_tq2_0(t, g, page); break;
                 default: end = group_planes(type, f, p, t, g, page); break;
             }
             TT_ASSERT(end == page + f.page_bytes(), "{}: a page must hold exactly its GGUF bytes", type);
@@ -560,7 +609,7 @@ void pack_pages(DataType type, const uint8_t* blocks, int64_t K, int64_t N, uint
     }
 }
 
-// pack_pages only moves bits, so to_gguf runs it backwards with a table: for one unit of 32 columns by
+// pack_page_bits only moves bits, so unpack_page_bits runs it backwards with a table: for one unit of 32 columns by
 // lcm(32 * group_tiles, block_elems) rows of K, source[i] = the GGUF bit that page bit i (of the unit's pages, in K
 // order) holds. Read off once per format by packing index-coded probes: in probe p, GGUF bit j is bit p of j + 1.
 struct BitTable {
@@ -583,7 +632,7 @@ const BitTable& bit_table(DataType type) {
             for (size_t j = 0; j < bits; ++j) {
                 probe[j / 8] |= uint8_t(((j + 1) >> p & 1) << (j % 8));
             }
-            pack_pages(type, probe.data(), table.unit_k, 32, pages.data());
+            pack_page_bits(type, probe.data(), table.unit_k, 32, pages.data());
             for (size_t i = 0; i < bits; ++i) {
                 code[i] |= uint32_t(pages[i / 8] >> (i % 8) & 1) << p;
             }
@@ -599,7 +648,7 @@ const BitTable& bit_table(DataType type) {
     return tables[index];
 }
 
-void unpack_pages(DataType type, const uint8_t* pages, int64_t K, int64_t N, uint8_t* blocks) {
+void unpack_page_bits(DataType type, const uint8_t* pages, int64_t K, int64_t N, uint8_t* blocks) {
     const GgufTraits& f = gguf_traits(type);
     const BitTable& table = bit_table(type);
     const size_t row_bytes = size_t(K / f.block_elems) * f.block_bytes;
@@ -617,6 +666,26 @@ void unpack_pages(DataType type, const uint8_t* pages, int64_t K, int64_t N, uin
                 rows[(j / 8) / unit_row_bytes * row_bytes + (j / 8) % unit_row_bytes] |= uint8_t(v << (j % 8));
             }
         }
+    }
+}
+
+// GGUF blocks <-> pages. TQ2_0 maps its codes for the block-float tiles first (tq2_0_codes, which refuses code 3);
+// the rest is a bit permutation.
+void pack_pages(DataType type, const uint8_t* blocks, int64_t K, int64_t N, uint8_t* pages) {
+    if (type != GGUF_TQ2_0) {
+        pack_page_bits(type, blocks, K, N, pages);
+        return;
+    }
+    const size_t bytes = size_t(N) * size_t(K / 256) * 66;
+    std::vector<uint8_t> codes(blocks, blocks + bytes);
+    tq2_0_codes(codes.data(), bytes, K / 256, true);
+    pack_page_bits(type, codes.data(), K, N, pages);
+}
+
+void unpack_pages(DataType type, const uint8_t* pages, int64_t K, int64_t N, uint8_t* blocks) {
+    unpack_page_bits(type, pages, K, N, blocks);
+    if (type == GGUF_TQ2_0) {
+        tq2_0_codes(blocks, size_t(N) * size_t(K / 256) * 66, K / 256, false);
     }
 }
 

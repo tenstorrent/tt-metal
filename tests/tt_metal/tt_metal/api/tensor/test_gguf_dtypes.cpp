@@ -126,11 +126,27 @@ TEST(GgufDtypesTest, WidthShardedDramPages) {
     EXPECT_ANY_THROW(gguf_spec(dtype, k, n, bad_height));
 }
 
+// TQ2_0 blocks hold codes 0, 1, 2 only (from_gguf refuses 3): each 2-bit code of the 64 code bytes taken mod 3.
+void valid_tq2_0_codes(std::vector<std::byte>& blocks) {
+    for (size_t block = 0; block < blocks.size(); block += 66) {
+        for (size_t j = 0; j < 64; ++j) {
+            uint32_t b = std::to_integer<uint32_t>(blocks[block + j]), v = 0;
+            for (int f = 0; f < 4; ++f) {
+                v |= (b >> 2 * f & 3) % 3 << 2 * f;
+            }
+            blocks[block + j] = std::byte(v);
+        }
+    }
+}
+
 TEST(GgufDtypesTest, RoundTripIsBitExact) {
     for (const DataType dtype : gguf_dtypes()) {
         SCOPED_TRACE(fmt::format("{}", dtype));
         const uint32_t k = 2 * k_unit(dtype), n = 96;
-        const auto blocks = random_blocks(gguf_bytes(dtype, k, n), static_cast<uint32_t>(dtype));
+        auto blocks = random_blocks(gguf_bytes(dtype, k, n), static_cast<uint32_t>(dtype));
+        if (dtype == DataType::GGUF_TQ2_0) {
+            valid_tq2_0_codes(blocks);
+        }
         const HostTensor tensor = from_gguf(blocks, gguf_spec(dtype, k, n));
         EXPECT_EQ(tensor.dtype(), dtype);
         EXPECT_EQ(to_gguf(tensor), blocks);
@@ -158,6 +174,15 @@ TEST(GgufDtypesTest, PagesAreInKGroupMajorOrder) {
         }
         EXPECT_EQ(set != 0, page == g * n_tiles + nt) << "page " << page;
     }
+}
+
+TEST(GgufDtypesTest, Tq2_0RefusesCode3) {
+    const DataType dtype = DataType::GGUF_TQ2_0;
+    auto blocks = random_blocks(gguf_bytes(dtype, 512, 32), 2);
+    valid_tq2_0_codes(blocks);
+    EXPECT_NO_THROW(from_gguf(blocks, gguf_spec(dtype, 512, 32)));
+    blocks[3 * 66 + 10] |= std::byte(0x30);  // block 3: column 1, K block 1
+    EXPECT_ANY_THROW(from_gguf(blocks, gguf_spec(dtype, 512, 32)));
 }
 
 TEST(GgufDtypesTest, RejectsShapesThePagesCannotHold) {

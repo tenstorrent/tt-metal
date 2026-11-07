@@ -88,6 +88,16 @@ def test_rejects_wrong_sizes(expect_error):
         ttnn.from_gguf(blocks[:48], (256, 48), dtype)
 
 
+def test_tq2_0_refuses_code_3(expect_error):
+    dtype = ttnn.gguf_tq2_0
+    blocks = _blocks(dtype, 512, 32).copy()
+    ttnn.from_gguf(blocks, (512, 32), dtype)
+    blocks.reshape(-1, 66)[3, 10] |= 0x30  # block 3: column 1, K block 1
+    with expect_error(RuntimeError, "holds code 3") as error:
+        ttnn.from_gguf(blocks, (512, 32), dtype)
+    assert "block 3 (column 1, K block 1)" in str(error.value)
+
+
 def test_values_need_gguf_py(expect_error):
     dtype = ttnn.gguf_q4_0
     tensor = ttnn.from_gguf(_blocks(dtype, 64, 32), (64, 32), dtype)
