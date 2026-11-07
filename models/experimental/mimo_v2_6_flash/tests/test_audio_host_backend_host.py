@@ -84,6 +84,28 @@ def test_hidden_identical_to_reference(setup, backends, clip):
     logger.info(f"{clip}: {lens.tolist()} mel frames per segment, {got.shape[0]} hidden rows identical")
 
 
+@pytest.mark.parametrize("threads", (1, 8))
+def test_device_rvq_row_blocks(setup, backends, threads):
+    """The device tokenizer's host RVQ (tt/audio/tokenizer.HostRVQ) quantizes in row blocks: every row gets the codes
+    of the reference's one call over all rows (300 s of speech, 7500 frames, in blocks of 1000 / 2048 / 4096)."""
+    from models.experimental.mimo_v2_6_flash.tt.audio.host_backend import _threads
+    from models.experimental.mimo_v2_6_flash.tt.audio.tokenizer import HostRVQ
+
+    clip = "speech_300s"
+    if clip not in setup["mels"]:
+        pytest.skip(f"{clip}.wav not in the clips directory")
+    mel, cfg = setup["mels"][clip], setup["cfg"]
+    lens = torch.tensor(ref.segment_lengths(mel.shape[0], cfg.segment_size))
+    rvq = HostRVQ(setup["weights"], cfg)
+    with torch.inference_mode(), _threads(threads):
+        h, _ = backends[0].encoder.features(mel, lens)
+        want = ref.AudioTokenizerEncoder(setup["weights"], cfg, torch.float32).quantize(h)
+        for rows in (1000, 2048, 4096):
+            rvq.rows = rows
+            assert torch.equal(rvq.quantize(h), want), rows
+    logger.info(f"{clip}: {h.shape[0]} frames, RVQ in row blocks == one call at {threads} threads")
+
+
 @pytest.mark.parametrize("clip", ("speech_5s", "speech_65s"))
 def test_embed_audio(setup, backends, clip):
     mel, cfg = setup["mels"][clip], setup["cfg"]
