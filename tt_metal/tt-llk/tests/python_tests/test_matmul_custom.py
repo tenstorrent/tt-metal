@@ -2,19 +2,24 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
-import torch
 from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from helpers.device import BootMode
 from helpers.format_config import DataFormat, is_dest_acc_needed
 from helpers.golden_generators import TILE_DIM, MatmulGolden, get_golden_generator
-from helpers.llk_params import DestAccumulation, DestSync, MathFidelity, format_dict
+from helpers.llk_params import (
+    ALL_MATH_FIDELITIES,
+    DEST_ACC_MODES,
+    DestAccumulation,
+    DestSync,
+    MathFidelity,
+)
 from helpers.matmul_sweep import (
     ODD_REUSE_KT_DIMS,
     ODD_REUSE_RT_CT,
     generate_matmul_dimension_combinations,
     generate_tile_dims,
 )
-from helpers.param_config import input_output_formats, parametrize
+from helpers.param_config import input_output_formats, max_dest_tiles, parametrize
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import StimuliSpec, generate_stimuli
 from helpers.test_config import TestConfig
@@ -27,7 +32,7 @@ from helpers.test_variant_parameters import (
     TILE_COUNT,
 )
 from helpers.tilize_untilize import tilize_block
-from helpers.utils import passed_test
+from helpers.utils import passed_test, result_tensor
 
 # Throttle levels supported by the no-mop matmul math LLK. Throttle only inserts
 # NOPs between MVMULs to cap compute throughput, so the numeric result is IDENTICAL
@@ -45,18 +50,6 @@ else:
     THROTTLE_LEVELS = [0]
 
 
-def _dest_bank_max_tiles(formats, dest_acc):
-    """Max result-tile count for a (format, dest_acc) pair on DestSync.Half.
-
-    A 32-bit destination register (dest_acc=Yes, or a format the harness forces
-    onto 32-bit dest) holds 4 tiles; the 16-bit destination holds 8. Mirrors
-    perf_matmul._dest_bank_max_tiles so test and perf coverage share the rule.
-    """
-    if is_dest_acc_needed(formats) or dest_acc == DestAccumulation.Yes:
-        return 4
-    return 8
-
-
 MATMUL_FORMATS = input_output_formats(
     [
         DataFormat.Float16_b,
@@ -64,7 +57,6 @@ MATMUL_FORMATS = input_output_formats(
         DataFormat.Bfp8_b,
     ]
 )
-DEST_ACC_MODES = [DestAccumulation.No, DestAccumulation.Yes]
 
 # Odd t_dim on the 16-tile dest (DestSync.Full); the SyncHalf sweeps above cannot reach it.
 ODD_REUSE_DIMS = [
@@ -85,8 +77,6 @@ def _run_matmul_custom(
     boot_mode: BootMode,
     dest_sync: DestSync = DestSync.Half,
 ):
-    torch_format = format_dict[formats.output_format]
-
     sfpu_false_spec = StimuliSpec.uniform(low=0.0, high=1.0)
     src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
         stimuli_format_A=formats.input_format,
@@ -155,11 +145,7 @@ def _run_matmul_custom(
 
     res_from_L1 = configuration.run().result
 
-    assert len(res_from_L1) == len(
-        golden_tensor
-    ), "Result tensor and golden tensor are not of the same length"
-
-    res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
+    res_tensor = result_tensor(res_from_L1, formats.output_format, golden_tensor)
 
     assert passed_test(
         golden_tensor, res_tensor, formats.output_format
@@ -167,20 +153,16 @@ def _run_matmul_custom(
 
 
 @parametrize(
-    math_fidelity=[
-        MathFidelity.LoFi,
-        MathFidelity.HiFi2,
-        MathFidelity.HiFi3,
-        MathFidelity.HiFi4,
-    ],
+    math_fidelity=ALL_MATH_FIDELITIES,
     formats=MATMUL_FORMATS,
     dest_acc=DEST_ACC_MODES,
     # dimensions depends on (formats, dest_acc): the max result-tile count is set by
-    # which dest register the pair lands in (see _dest_bank_max_tiles). Kept as its
+    # which dest register the pair lands in (see max_dest_tiles; is_dest_acc_needed
+    # formats are forced onto the 32-bit dest). Kept as its
     # own axis -- rather than a packed (format, dest_acc, dims) tuple -- so test and
     # perf coverage line up axis-for-axis (cf. perf_matmul.matmul_combos).
     dimensions=lambda formats, dest_acc: generate_matmul_dimension_combinations(
-        _dest_bank_max_tiles(formats, dest_acc)
+        max_dest_tiles(is_dest_acc_needed(formats) or dest_acc == DestAccumulation.Yes)
     ),
 )
 def test_matmul_custom(
@@ -219,7 +201,7 @@ THROTTLE_DIMS = ([32, 32], [32, 32])
     throttle_level=THROTTLE_LEVELS,
     math_fidelity=[MathFidelity.LoFi, MathFidelity.HiFi4],
     formats=THROTTLE_FORMATS,
-    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+    dest_acc=DEST_ACC_MODES,
 )
 def test_matmul_custom_throttle(
     throttle_level,

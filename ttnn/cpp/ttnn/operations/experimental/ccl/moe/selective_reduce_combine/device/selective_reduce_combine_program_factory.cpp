@@ -24,7 +24,6 @@
 #include <tt-metalium/sub_device.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
-#include <tt-metalium/tt_align.hpp>
 #include <tt-metalium/math.hpp>
 #include "ttnn/global_semaphore.hpp"
 
@@ -300,6 +299,7 @@ auto plan_mux_workers(
 }
 
 void add_mux_worker_kernels(
+    const MeshDevice& mesh_device,
     tt::tt_metal::ProgramDescriptor& desc,
     const tt::tt_fabric::FabricMuxV2Config& mux_config,
     const tt::tt_fabric::FabricNodeId& src_node_id,
@@ -310,6 +310,7 @@ void add_mux_worker_kernels(
         // back-pressures their DRAM weight reads; on a Wormhole Galaxy that hung dm0 in
         // noc_async_read_barrier_with_trid (see moe_compute dm0.cpp).
         tt::tt_fabric::add_fabric_mux_v2_to_program(
+            mesh_device,
             desc,
             mux_config,
             placement.logical_core,
@@ -479,7 +480,7 @@ void append_selective_reduce_combine_to_descriptor(
             source_shard_shape[0],
             source_shard_shape[1],
             hidden_size / num_data_parallel_cores,
-            input_tensor.buffer()->aligned_size_per_bank(),
+            input_tensor.mesh_buffer().aligned_size_per_bank(),
             token_segment_buffer_size_bytes,
             num_buffers);
         expert_token_segment_buffer_block_size_bytes = fused_source_layout.buffer_block_size_bytes;
@@ -893,7 +894,7 @@ void append_selective_reduce_combine_to_descriptor(
         }
     }
 
-    detail::add_mux_worker_kernels(desc, mux_config, fabric_node_id, mux_placements);
+    detail::add_mux_worker_kernels(*mesh_device, desc, mux_config, fabric_node_id, mux_placements);
 }
 
 void UnifiedSelectReduce::override_runtime_arguments(

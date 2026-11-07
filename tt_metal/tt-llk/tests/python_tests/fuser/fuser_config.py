@@ -12,7 +12,6 @@ import pandas as pd
 import pytest
 from filelock import FileLock
 from helpers.chip_architecture import ChipArchitecture
-from helpers.device_io import read_words_from_device
 from helpers.llk_params import PERF_RUN_TYPES_QUASAR, DestAccumulation, PerfRunType
 from helpers.logger import logger
 from helpers.perf.core import PerfReport
@@ -25,6 +24,7 @@ from helpers.test_config import (
     StimuliMode,
     TestConfig,
 )
+from ttexalens.tt_exalens_lib import read_words_from_device
 
 from .fpu_node import FpuNode
 from .l1_operation import L1Operation
@@ -68,7 +68,6 @@ class GlobalConfig:
         return self.perf_run_type in (
             PerfRunType.UNPACK_ISOLATE,
             PerfRunType.PACK_ISOLATE,
-            PerfRunType.L1_CONGESTION,
         )
 
     @property
@@ -77,7 +76,6 @@ class GlobalConfig:
             PerfRunType.MATH_ISOLATE,
             PerfRunType.UNPACK_ISOLATE,
             PerfRunType.PACK_ISOLATE,
-            PerfRunType.L1_CONGESTION,
         )
 
 

@@ -64,7 +64,7 @@ from helpers.tile_constants import (
     DEFAULT_TILE_R_DIM,
     FACE_C_DIM,
 )
-from helpers.tilize_untilize import tilize
+from helpers.tilize_untilize import tilize_block
 from helpers.utils import passed_test
 from ttexalens.tt_exalens_lib import write_to_device
 
@@ -183,10 +183,10 @@ def _pack_in1(
                 k * DEFAULT_TILE_R_DIM : (k + 1) * DEFAULT_TILE_R_DIM,
                 c * DEFAULT_TILE_C_DIM : (c + 1) * DEFAULT_TILE_C_DIM,
             ]
-            faces = tilize(
-                blk.reshape(-1),
-                tile_dimensions=[DEFAULT_TILE_R_DIM, DEFAULT_TILE_C_DIM],
-            )
+            faces = tilize_block(
+                blk,
+                dimensions=[DEFAULT_TILE_R_DIM, DEFAULT_TILE_C_DIM],
+            ).flatten()
             tiles[(k, c)] = pack_bfp16(faces)
 
     # Finite nonzero poison makes using kt instead of the physical row stride, or

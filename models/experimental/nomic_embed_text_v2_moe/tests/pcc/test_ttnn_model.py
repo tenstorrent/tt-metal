@@ -124,8 +124,8 @@ def pooled_embedding(tt_model, input_ids, attention_mask, matryoshka_dim=None):
     """Backbone then pooling, for the tests driven by token ids rather than text.
 
     encode() takes text, so it cannot express a controlled shape or a chosen padding pattern.
-    These three calls are the same stages encode() makes, in the same order, which is also how a
-    reference user reaches them: directly, not through a wrapper on the model.
+    These three calls are the stages embed() runs on each chunk, here on the whole batch at its full
+    S, which is also how a reference user reaches them: directly, not through a wrapper on the model.
     """
     kernel_config = tt_model.tt_config.compute_kernel_config(OpGroup.REDUCE)
     hidden = tt_model(input_ids, attention_mask)

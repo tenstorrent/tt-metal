@@ -10,6 +10,7 @@ from helpers.data_format_inference import effective_dest_acc
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import TILE_DIMENSIONS
 from helpers.llk_params import (
+    ALL_MATH_FIDELITIES,
     BlocksCalculationAlgorithm,
     DestAccumulation,
     DestSync,
@@ -24,8 +25,8 @@ def get_valid_dest_accumulation_modes(formats):
 
     Constraints (all architectures):
     - Dest accumulation must be ENABLED for the following format combination:
-        - Input format is 32bit integer format
-        Reason: HW limitation, Unpacker cannot unpack 32bit integer formats into SrcA and SrcB registers
+        - Input format is 32-bit
+        Reason: HW limitation, Unpacker cannot unpack 32-bit formats into SrcA and SrcB registers
 
     Constraints (Wormhole/Blackhole only):
     - Dest accumulation must be ENABLED for the following format combinations:
@@ -46,7 +47,7 @@ def get_valid_dest_accumulation_modes(formats):
     chip_arch = get_chip_architecture()
     in_fmt, out_fmt = formats.input, formats.output
 
-    if in_fmt in [DataFormat.Int32, DataFormat.UInt32]:
+    if in_fmt.is_32_bit():
         return [DestAccumulation.Yes]
 
     if chip_arch == ChipArchitecture.QUASAR:
@@ -152,12 +153,22 @@ def get_valid_math_fidelities(format, operation=None, PERF_RUN: bool = False):
     ]:
         return [MathFidelity.LoFi]
 
-    return [
-        MathFidelity.LoFi,
-        MathFidelity.HiFi2,
-        MathFidelity.HiFi3,
-        MathFidelity.HiFi4,
-    ]
+    return list(ALL_MATH_FIDELITIES)
+
+
+def get_valid_eltwise_binary_math_fidelities(formats, math_op=None):
+    if math_op is not None and math_op != MathOperation.Elwmul:
+        return [MathFidelity.LoFi]
+    input_format = formats.input_format
+    if input_format == DataFormat.Int8:
+        return [MathFidelity.LoFi]
+    if input_format.is_block_float():
+        return [MathFidelity.LoFi]
+    elif input_format == DataFormat.Float16_b:
+        return [MathFidelity.LoFi, MathFidelity.HiFi2]
+    elif input_format == DataFormat.Float32:
+        return [MathFidelity.HiFi3, MathFidelity.HiFi4]
+    return list(ALL_MATH_FIDELITIES)
 
 
 def get_perf_math_operations():
@@ -431,6 +442,24 @@ def is_valid_quasar_packer_conversion(
     hardware_input = _quasar_sfpu_hardware_format(pack_input_format)
     hardware_output = _quasar_sfpu_hardware_format(output_format)
     return hardware_output in _QUASAR_PACK_OUTPUTS.get(hardware_input, set())
+
+
+def is_valid_quasar_dest_mode_conversion(
+    in_fmt: DataFormat, out_fmt: DataFormat, dest_acc: DestAccumulation
+) -> bool:
+    """Check Quasar Dest-mode packing. A 16-bit Dest rejects non-32-bit inputs packed
+    to 32-bit outputs and source-register Int8/UInt8 format conversions."""
+    if dest_acc != DestAccumulation.No:
+        return True
+    if out_fmt.is_32_bit() and not in_fmt.is_32_bit():
+        return False
+    src_reg_fmt = {
+        DataFormat.Int4: DataFormat.Int8,
+        DataFormat.UInt4: DataFormat.UInt8,
+    }.get(in_fmt, in_fmt)
+    return not (
+        src_reg_fmt in (DataFormat.Int8, DataFormat.UInt8) and src_reg_fmt != out_fmt
+    )
 
 
 def skip_reason_32bit_input_without_dest_acc(formats, dest_acc):

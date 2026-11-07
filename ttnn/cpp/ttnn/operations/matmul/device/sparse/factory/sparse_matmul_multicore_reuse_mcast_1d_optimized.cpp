@@ -15,7 +15,7 @@
 
 #include "tt-metalium/work_split.hpp"
 #include <tt-metalium/hal.hpp>
-#include <tt-metalium/tt_align.hpp>
+#include <tt-metalium/math.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 
@@ -359,8 +359,8 @@ ttnn::device_operation::ProgramArtifacts SparseMatmulMultiCoreReuseMcast1DProgra
 
     // The sparsity page sizes the readers stride DRAM at. These are host-side size queries on the
     // operand buffers, not address deliveries -- the addresses themselves travel as tensor bindings.
-    const uint32_t sparsity_pagesize = static_cast<uint32_t>(sparsity.buffer()->aligned_page_size());
-    const uint32_t in1_sparsity_pagesize = static_cast<uint32_t>(in1_sparsity_tensor.buffer()->aligned_page_size());
+    const uint32_t sparsity_pagesize = static_cast<uint32_t>(sparsity.mesh_buffer().aligned_page_size());
+    const uint32_t in1_sparsity_pagesize = static_cast<uint32_t>(in1_sparsity_tensor.mesh_buffer().aligned_page_size());
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Spec-scope resource names
