@@ -72,8 +72,11 @@ add_subdirectory(fused_msda)
 add_subdirectory(modulated_deform_conv2d)
 add_subdirectory(multi_scale_deformable_attn)
 add_subdirectory(nomic_embed_text_v2_moe/routed_combine)
-add_subdirectory(nomic_embed_text_v2_moe/grouped_matmul)
+add_subdirectory(nomic_embed_text_v2_moe/grouped_matmul_w1)
+add_subdirectory(nomic_embed_text_v2_moe/grouped_matmul_w2)
+add_subdirectory(nomic_embed_text_v2_moe/pirotski_matmul)
 add_subdirectory(nomic_embed_text_v2_moe/routing_metadata)
+add_subdirectory(nomic_embed_text_v2_moe/router_front_end)
 add_subdirectory(plusone)
 add_subdirectory(reshape)
 add_subdirectory(ssm)
@@ -125,8 +128,11 @@ target_link_libraries(
         TTNN::Ops::Experimental::ModulatedDeformConv2d
         TTNN::Ops::Experimental::MultiScaleDeformableAttn
         TTNN::Ops::Experimental::NomicEmbedTextV2Moe::RoutedCombine
-        TTNN::Ops::Experimental::NomicEmbedTextV2Moe::GroupedMatmul
+        TTNN::Ops::Experimental::NomicEmbedTextV2Moe::GroupedMatmulW1
+        TTNN::Ops::Experimental::NomicEmbedTextV2Moe::GroupedMatmulW2
+        TTNN::Ops::Experimental::NomicEmbedTextV2Moe::PirotskiMatmul
         TTNN::Ops::Experimental::NomicEmbedTextV2Moe::RoutingMetadata
+        TTNN::Ops::Experimental::NomicEmbedTextV2Moe::RouterFrontEnd
         TTNN::Ops::Experimental::PlusOne
         TTNN::Ops::Experimental::Reshape
         TTNN::Ops::Experimental::SSM
@@ -183,8 +189,11 @@ target_sources(
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::ModulatedDeformConv2d>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::MultiScaleDeformableAttn>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::NomicEmbedTextV2Moe::RoutedCombine>
-        $<TARGET_OBJECTS:TTNN::Ops::Experimental::NomicEmbedTextV2Moe::GroupedMatmul>
+        $<TARGET_OBJECTS:TTNN::Ops::Experimental::NomicEmbedTextV2Moe::GroupedMatmulW1>
+        $<TARGET_OBJECTS:TTNN::Ops::Experimental::NomicEmbedTextV2Moe::GroupedMatmulW2>
+        $<TARGET_OBJECTS:TTNN::Ops::Experimental::NomicEmbedTextV2Moe::PirotskiMatmul>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::NomicEmbedTextV2Moe::RoutingMetadata>
+        $<TARGET_OBJECTS:TTNN::Ops::Experimental::NomicEmbedTextV2Moe::RouterFrontEnd>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::PlusOne>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::Reshape>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::SSM>

@@ -43,6 +43,7 @@ from models.experimental.nomic_embed_text_v2_moe.reference.postprocessing import
 from models.experimental.nomic_embed_text_v2_moe.tests.pcc.module_common import (
     from_block_layout,
     keep_mask,
+    selection_of,
     to_block_layout,
 )
 from models.experimental.nomic_embed_text_v2_moe.tt.common import (
@@ -56,19 +57,23 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 
 pytestmark = [run_for_blackhole(), pytest.mark.use_module_device, pytest.mark.needs_weights]
 
-# All-token PCC over the full stack. Measured 0.99158 to 0.99811 in domain over seeds 0..7 at each
-# of 2x128 and 2x512, padded or not, outside the two routing cascades below (0.980 and 0.982), so
-# this holds the standard 0.99 module line with about 0.16% to spare. The statistic moves with how
-# many tokens happened to reroute, which is why the pooled cosine below is the tighter gate.
-MODULE_PCC = 0.99
+# All-token PCC over the full stack, on the kept tokens. With the large-input precision, over seeds
+# 0..15 at each of 2x128 and 2x512, padded or not: 0.9884 to 0.9977 outside one routing cascade
+# (0.9703 at 2x512 padded), medians 0.9939 to 0.9962. Seed 0 at 2x128 padded measures 0.9894, under
+# the standard 0.99 module line this was; before, the same sweep read 0.9900 to 0.9974 outside two
+# cascades (0.9800, 0.9831). The statistic moves with how many tokens happened to reroute, which is
+# why the pooled cosine below is the tighter gate.
+MODULE_PCC = 0.985
 
-# The pooled, normalized embedding: what the model emits, and the tight gate. Over seeds 0..7 at
-# both shapes, padded and not, 1 - cos is at most 1.7e-3 in 30 of 32 draws. The other two, both
-# padded, are routing cascades: 2.4e-2 at 2x128 and 7.9e-3 at 2x512. With the matmuls at their
-# earlier fidelities there are cascades too (1.5e-2 at 2x512 padded), and 2 of 8 draws at 2x128
-# exceed 1e-3, so the 0.999 gate this replaced held on the tested seed alone. These tests run seed
-# 0; the seed sweep of the pooled embedding is test_ttnn_model.py's, at its own tolerance.
-POOLED_COSINE = 0.998
+# The pooled, normalized embedding: what the model emits, and the tight gate. With the large-input
+# precision (HiFi2 QKV, fc2 and routed w1, the polynomial GELUs, a bfloat8_b dense intermediate),
+# over seeds 0..15 at both shapes, padded and not, 1 - cos is at most 3.5e-3 in 61 of 64 draws, and
+# the other three are routing cascades: 6.1e-3 and 7.0e-3 at 2x128, padded and not, and 1.5e-2 at
+# 2x512 padded. Short sequences moved: over 2e-3 on 5 of 32 draws at 2x128 against 3 before, at
+# 2x512 on 1 against 2. The 0.998 gate this replaced failed seed 0 at 2x128 padded (3.5e-3). These
+# tests run seed 0; the seed sweep of the pooled embedding is test_ttnn_model.py's, at its own
+# tolerance.
+POOLED_COSINE = 0.995
 
 # Minimum per-layer PCC across the ladder. Measured 0.9937 to 0.9981.
 LADDER_PCC = 0.99
@@ -229,8 +234,9 @@ def test_routing_agreement_holds_at_depth(device, config, reference_model, refer
             # measuring there would report decisions the model never makes.
             tt_attn = layer.attn(tensor, rot_mats)
             tt_hidden = layer._norm(tt_attn, tensor, layer.norm1)
-            routing = layer.mlp.router(flatten_tokens(tt_hidden))
-            selected = ttnn.to_torch(routing.indices).long().reshape(tokens, config.moe_top_k)
+            routing, rows = layer.mlp.router(flatten_tokens(tt_hidden))
+            ttnn.deallocate(rows)
+            _, selected = selection_of(routing, config.moe_top_k, config.num_experts)
             routing.deallocate()
             with torch.no_grad():
                 block = reference.layers[idx]

@@ -2,8 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Turns the window's top-k expert ids into gather_index, combine_index and expert_counts. Each core
-// of a rectangle takes a contiguous range of the window's tile rows:
+// Turns the window's top-k expert ids, given or selected from the router's scores first, into
+// gather_index, combine_index and expert_counts. Each core of a rectangle takes a contiguous range of
+// the window's tile rows:
 //   1. every core counts the slots of each expert among its tokens and sends the counts to core 0,
 //      which multicasts the table of all counts back;
 //   2. every core sums the table: the totals give each expert's region, starting on a 32-row block
@@ -26,6 +27,7 @@
 #include "api/tensor/noc_traits.h"
 #include "ckernel.h"
 #include "routing_metadata_faces.hpp"
+#include "routing_metadata_select.hpp"
 
 namespace {
 
@@ -41,12 +43,22 @@ void drain_stores(volatile tt_l1_ptr uint32_t* scratch_word) {
     (void)ckernel::load_blocking(scratch_word);
 }
 
-// Sets words [begin, end) of an L1 array to value. Unrolled, so the loop overhead does not outweigh
-// the stores, which L1 takes four to a write.
-void fill_rows(volatile tt_l1_ptr uint32_t* words, uint32_t begin, uint32_t end, uint32_t value) {
+// Sets words [begin, end) of an L1 array, rows that hold no slot, to tokens token_start + row mod
+// num_tokens: real rows, and distinct ones, so a gather of them does not queue every read on one row's
+// L1 bank. Written in runs of consecutive tokens, one division a call, each run unrolled so the loop
+// overhead does not outweigh the stores, which L1 takes four to a write.
+void fill_rows(
+    volatile tt_l1_ptr uint32_t* words, uint32_t begin, uint32_t end, uint32_t token_start, uint32_t num_tokens) {
+    uint32_t token = begin % num_tokens;
+    while (begin < end) {
+        const uint32_t run = end - begin < num_tokens - token ? end - begin : num_tokens - token;
+        const uint32_t first = token_start + token;
 #pragma GCC unroll 4
-    for (uint32_t index = begin; index < end; ++index) {
-        words[index] = value;
+        for (uint32_t step = 0; step < run; ++step) {
+            words[begin + step] = first + step;
+        }
+        begin += run;
+        token = 0;
     }
 }
 
@@ -55,6 +67,9 @@ void fill_rows(volatile tt_l1_ptr uint32_t* words, uint32_t begin, uint32_t end,
 void kernel_main() {
     constexpr uint32_t num_experts = get_named_compile_time_arg_val("num_experts");
     constexpr uint32_t top_k = get_named_compile_time_arg_val("top_k");
+    // 1 when the input is the router's scores, from which this kernel selects the top_k itself.
+    constexpr bool select = get_named_compile_time_arg_val("select") == 1;
+    constexpr uint32_t score_tiles_per_row = get_named_compile_time_arg_val("score_tiles_per_row");
     constexpr uint32_t table_row_words = get_named_compile_time_arg_val("table_row_words");
     constexpr uint32_t packed_row_words = (num_experts + 1) / 2;
     constexpr uint32_t totals_row_words = get_named_compile_time_arg_val("totals_row_words");
@@ -109,8 +124,23 @@ void kernel_main() {
         starts_ready.set(1);
     }
 
-    read_face_pairs(noc, indices, index_faces, token_start / kBlockRows + first_tile_row, num_tile_rows);
-    noc.async_read_barrier();
+    // indices reads the selection's ids, or the scores to select them from.
+    if constexpr (select) {
+        read_score_groups(
+            noc,
+            indices,
+            index_faces,
+            token_start / kBlockRows + first_tile_row,
+            num_tile_rows,
+            score_groups(num_experts),
+            score_tiles_per_row);
+        noc.async_read_barrier();
+        select_top_k<num_experts, top_k, true>(
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(index_faces), num_tile_rows);
+    } else {
+        read_face_pairs(noc, indices, index_faces, token_start / kBlockRows + first_tile_row, num_tile_rows);
+        noc.async_read_barrier();
+    }
 
     // The core's tokens, numbered from 0 here; the last core's last tile row may be partial.
     const uint32_t first_token = first_tile_row * kBlockRows;
@@ -341,16 +371,16 @@ void kernel_main() {
             {.page_id = k, .offset_bytes = first_token * kWordBytes});
     }
 
-    // Assemble this core's regions: rows that hold no slot copy the window's first token, a real
-    // row, so a gather by gather_index stays in range and finite. So do the rows after the last
-    // region, which core 0 writes.
+    // Assemble this core's regions: rows that hold no slot copy a token of the window, a real row, so
+    // a gather by gather_index stays in range and finite. So do the rows after the last region,
+    // which core 0 writes.
     for (uint32_t expert = core_index; expert < num_experts; expert += num_cores) {
         const uint32_t used_end = region_starts[expert] + totals[expert];
         const uint32_t region_end = region_starts[expert] + round_up_to_block(totals[expert]);
-        fill_rows(gather, used_end, region_end, token_start);
+        fill_rows(gather, used_end, region_end, token_start, num_tokens);
     }
     if (is_coordinator) {
-        fill_rows(gather, regions_end, gathered_rows, token_start);
+        fill_rows(gather, regions_end, gathered_rows, token_start, num_tokens);
     }
     drain_stores(drain_word);
 

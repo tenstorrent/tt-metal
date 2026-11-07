@@ -32,7 +32,12 @@ from models.experimental.nomic_embed_text_v2_moe.tests.pcc.module_common import 
     to_block_layout,
 )
 from models.experimental.nomic_embed_text_v2_moe.tt.common import flatten_tokens, to_device
-from models.experimental.nomic_embed_text_v2_moe.tt.experts import ROUTED_MAX_TOKENS, TtNomicExperts, routed_windows
+from models.experimental.nomic_embed_text_v2_moe.tt.experts import (
+    MAX_SPARE_TILE_ROWS,
+    ROUTED_MAX_TOKENS,
+    TtNomicExperts,
+    routed_windows,
+)
 from models.experimental.nomic_embed_text_v2_moe.tt.router import Routing
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
@@ -196,7 +201,7 @@ def test_misoriented_w2_decorrelates(device, config, tt_config, state_dict, refe
     assert compute_pcc(ref, got) < DECORRELATED_PCC
 
 
-def window_metadata(routing: Routing, num_experts: int, token_start: int, num_tokens: int):
+def window_metadata(routing: Routing, num_experts: int, top_k: int, token_start: int, num_tokens: int):
     """routing_metadata's four outputs for one routed pass, on the device and on the host."""
     # Imported here, so a moved op test tree fails the routed tests alone rather than the module.
     from tests.ttnn.nightly.unit_tests.operations.experimental.nomic_embed_text_v2_moe.routing_metadata_reference import (
@@ -204,7 +209,27 @@ def window_metadata(routing: Routing, num_experts: int, token_start: int, num_to
     )
 
     outputs = ttnn.experimental.nomic_embed_text_v2_moe.routing_metadata(
-        routing.indices, routing.values, num_experts=num_experts, token_start=token_start, num_tokens=num_tokens
+        scores=routing.scores, top_k=top_k, num_experts=num_experts, token_start=token_start, num_tokens=num_tokens
+    )
+    return outputs, to_host(outputs)
+
+
+def selection_window_metadata(
+    values: torch.Tensor, indices: torch.Tensor, num_experts: int, token_start: int, num_tokens: int, device
+):
+    """window_metadata from an explicit (T, K) selection, for weights that are not descending and above
+    0, which scores cannot express: routing_metadata takes the selection as it is."""
+    from tests.ttnn.nightly.unit_tests.operations.experimental.nomic_embed_text_v2_moe.routing_metadata_reference import (
+        to_host,
+    )
+
+    shape = (1, 1, *values.shape)
+    outputs = ttnn.experimental.nomic_embed_text_v2_moe.routing_metadata(
+        to_device(indices.reshape(shape).to(torch.int32), device, dtype=ttnn.uint32),
+        to_device(values.reshape(shape), device, dtype=ttnn.float32),
+        num_experts=num_experts,
+        token_start=token_start,
+        num_tokens=num_tokens,
     )
     return outputs, to_host(outputs)
 
@@ -245,17 +270,21 @@ def torch_experts(reference, dispatched: torch.Tensor, expert_counts: torch.Tens
 def test_dispatch_copies_each_slot_row(device, config, tt_experts, batch, seqlen):
     """Every row the routed experts read is a row of x, bit for bit.
 
-    Rows that hold no slot copy the pass's first token, so they are finite too. The ids are global:
+    Rows that hold no slot copy a token of the pass, so they are finite too. The ids are global:
     every pass of a split batch gathers from the one table.
     """
     tokens = batch * seqlen
     x = flatten_tokens(to_device(to_block_layout(hidden_states(batch, seqlen, config.hidden_size)), device))
-    routing = device_selection(*routing_selection(tokens, config.num_experts, config.moe_top_k), device)
+    routing = device_selection(
+        *routing_selection(tokens, config.num_experts, config.moe_top_k), config.num_experts, device
+    )
     x_host = ttnn.to_torch(x).reshape(tokens, config.hidden_size)
 
     x_rows = tt_experts.dispatch_table(x)
     for token_start, num_tokens in routed_windows(tokens, STEP_WINDOW_TOKENS):
-        (gather_index, *_), metadata = window_metadata(routing, config.num_experts, token_start, num_tokens)
+        (gather_index, *_), metadata = window_metadata(
+            routing, config.num_experts, config.moe_top_k, token_start, num_tokens
+        )
         dispatched = ttnn.to_torch(tt_experts.dispatch(x_rows, gather_index))
         ids = metadata.gather_index
 
@@ -278,10 +307,9 @@ def test_combine_returns_each_slot_row(device, config, tt_experts, batch, seqlen
     for k in range(top_k):
         values = torch.zeros(tokens, top_k)
         values[:, k] = 1.0
-        routing = device_selection(values, indices, device)
         for token_start, num_tokens in routed_windows(tokens, STEP_WINDOW_TOKENS):
-            (_, combine_index, combine_weights, _), metadata = window_metadata(
-                routing, config.num_experts, token_start, num_tokens
+            (_, combine_index, combine_weights, _), metadata = selection_window_metadata(
+                values, indices, config.num_experts, token_start, num_tokens, device
             )
             rows = metadata.combine_index
             padded_tokens = rows.shape[-1]
@@ -316,13 +344,13 @@ def test_routed_pass_with_torch_experts(device, config, reference, tt_experts, b
     tokens, hidden = batch * seqlen, config.hidden_size
     x = flatten_tokens(to_device(to_block_layout(hidden_states(batch, seqlen, hidden)), device))
     values, indices = routing_selection(tokens, config.num_experts, config.moe_top_k)
-    routing = device_selection(values, indices, device)
+    routing = device_selection(values, indices, config.num_experts, device)
 
     x_rows = tt_experts.dispatch_table(x)
     sums = []
     for token_start, num_tokens in routed_windows(tokens, STEP_WINDOW_TOKENS):
         (gather_index, combine_index, combine_weights, _), metadata = window_metadata(
-            routing, config.num_experts, token_start, num_tokens
+            routing, config.num_experts, config.moe_top_k, token_start, num_tokens
         )
         dispatched = ttnn.to_torch(tt_experts.dispatch(x_rows, gather_index)).float().reshape(-1, hidden)
         expert_outputs = torch_experts(reference, dispatched, metadata.expert_counts)
@@ -352,7 +380,7 @@ def test_routed_pass_with_device_experts(device, config, reference, tt_experts, 
     tokens, hidden = batch * seqlen, config.hidden_size
     x = flatten_tokens(to_device(to_block_layout(hidden_states(batch, seqlen, hidden)), device))
     values, indices = routing_selection(tokens, config.num_experts, config.moe_top_k)
-    routing = device_selection(values, indices, device)
+    routing = device_selection(values, indices, config.num_experts, device)
 
     got = ttnn.to_torch(tt_experts(x, routing)).float().reshape(tokens, hidden)
 
@@ -372,15 +400,17 @@ def test_routed_pass_with_device_experts(device, config, reference, tt_experts, 
 @pytest.mark.parametrize("batch, seqlen, windows", [(2, 512, 1), (10, 500, 2)])
 def test_routed_pass_replays_in_a_trace(device, config, tt_experts, batch, seqlen, windows):
     """The routed pass reads its routing on the device only, so a captured trace replays it for a
-    new routing: a replay after copying in a new selection equals running that selection directly.
+    new routing: a replay after copying in new scores equals running those scores directly.
     The two windows of 10x500, 2528 and 2472 tokens, are joined off the tile grid.
     """
     tokens, hidden = batch * seqlen, config.hidden_size
     tt_experts.max_tokens_per_routed_pass = ttnn.core.divup(tokens, windows)
     x = flatten_tokens(to_device(to_block_layout(hidden_states(batch, seqlen, hidden)), device))
-    first = device_selection(*routing_selection(tokens, config.num_experts, config.moe_top_k), device)
+    first = device_selection(
+        *routing_selection(tokens, config.num_experts, config.moe_top_k), config.num_experts, device
+    )
     second_values, second_indices = routing_selection(tokens, config.num_experts, config.moe_top_k)
-    second = device_selection(second_values, second_indices, device)
+    second = device_selection(second_values, second_indices, config.num_experts, device)
 
     # Compiles every program first: a trace captures commands, not compilation.
     want = ttnn.to_torch(tt_experts(x, second))
@@ -388,8 +418,7 @@ def test_routed_pass_replays_in_a_trace(device, config, tt_experts, batch, seqle
     trace_id = ttnn.begin_trace_capture(device, cq_id=0)
     traced = tt_experts(x, first)
     ttnn.end_trace_capture(device, trace_id, cq_id=0)
-    for source, target in ((second.indices, first.indices), (second.values, first.values)):
-        ttnn.copy_host_to_device_tensor(ttnn.from_device(source), target)
+    ttnn.copy_host_to_device_tensor(ttnn.from_device(second.scores), first.scores)
     ttnn.execute_trace(device, trace_id, cq_id=0, blocking=True)
     got = ttnn.to_torch(traced)
     ttnn.release_trace(device, trace_id)
@@ -413,11 +442,35 @@ def test_routed_windows_do_not_change_the_answer(device, config, tt_experts, bat
     """
     tokens = batch * seqlen
     x = flatten_tokens(to_device(to_block_layout(hidden_states(batch, seqlen, config.hidden_size)), device))
-    routing = device_selection(*routing_selection(tokens, config.num_experts, config.moe_top_k), device)
+    routing = device_selection(
+        *routing_selection(tokens, config.num_experts, config.moe_top_k), config.num_experts, device
+    )
 
     results = []
     for window_tokens in (ROUTED_MAX_TOKENS, tokens // 3 + 1, tokens // 5 + 1):
         tt_experts.max_tokens_per_routed_pass = window_tokens
+        results.append(ttnn.to_torch(tt_experts(x, routing)))
+
+    for result in results[1:]:
+        assert torch.equal(result.view(torch.int16), results[0].view(torch.int16))
+
+
+@pytest.mark.parametrize("batch, seqlen", [(3, 110), (129, 32)])
+def test_the_spare_row_does_not_change_the_answer(device, config, tt_experts, batch, seqlen):
+    """Spare tile rows a gather writes past routing_metadata's rows (TtNomicExperts._spare_tile_rows) leave
+    every token's result the same, bit for bit: they lie past the last expert's blocks, which grouped_matmul
+    neither computes nor writes and the combine never reads. 4128 tokens is a count where the model needs
+    one to keep w2's output in L1.
+    """
+    tokens = batch * seqlen
+    x = flatten_tokens(to_device(to_block_layout(hidden_states(batch, seqlen, config.hidden_size)), device))
+    routing = device_selection(
+        *routing_selection(tokens, config.num_experts, config.moe_top_k), config.num_experts, device
+    )
+
+    results = []
+    for spare in (0, 1, MAX_SPARE_TILE_ROWS):
+        tt_experts._spare_tile_rows = lambda rows, hidden, deepest, spare=spare: spare
         results.append(ttnn.to_torch(tt_experts(x, routing)))
 
     for result in results[1:]:

@@ -49,12 +49,20 @@ RoutedCombineLayout RoutedCombineDeviceOperation::compute_layout(
     const auto& index = tensor_args.combine_index;
     const auto& weights = tensor_args.combine_weights;
     const auto& bias = tensor_args.bias;
+    TT_FATAL(
+        weights.has_value() == bias.has_value(),
+        "routed_combine: combine_weights and bias come together, or neither for a gather");
+    const bool combine = weights.has_value();
     check_operand(rows, "expert_rows", DataType::BFLOAT16, Layout::ROW_MAJOR);
     check_operand(index, "combine_index", DataType::UINT32, Layout::ROW_MAJOR);
-    check_operand(weights, "combine_weights", DataType::FLOAT32, Layout::TILE);
-    check_operand(bias, "bias", DataType::BFLOAT16, Layout::TILE);
-    for (const Tensor* tensor : {&index, &weights, &bias}) {
-        TT_FATAL(tensor->device() == rows.device(), "routed_combine: every input must be on the device of expert_rows");
+    TT_FATAL(index.device() == rows.device(), "routed_combine: every input must be on the device of expert_rows");
+    if (combine) {
+        check_operand(*weights, "combine_weights", DataType::FLOAT32, Layout::TILE);
+        check_operand(*bias, "bias", DataType::BFLOAT16, Layout::TILE);
+        for (const Tensor* tensor : {&*weights, &*bias}) {
+            TT_FATAL(
+                tensor->device() == rows.device(), "routed_combine: every input must be on the device of expert_rows");
+        }
     }
 
     const auto& rows_shape = rows.logical_shape();
@@ -76,31 +84,31 @@ RoutedCombineLayout RoutedCombineDeviceOperation::compute_layout(
         "routed_combine: num_tokens {} does not match combine_index's {} padded tokens",
         attributes.num_tokens,
         padded_tokens);
-    // routing_metadata gives every slot a row, so fewer rows cannot be its layout. The index values
-    // themselves stay on the device.
-    const uint32_t min_rows = tt::round_up(top_k * attributes.num_tokens, kTileSize);
-    TT_FATAL(
-        rows_shape[2] >= min_rows,
-        "routed_combine: expert_rows has {} rows, fewer than the {} that {} tokens at top_k {} fill",
-        rows_shape[2],
-        min_rows,
-        attributes.num_tokens,
-        top_k);
-    TT_FATAL(
-        weights.logical_shape() == ttnn::Shape({1, top_k, padded_tokens, 1}),
-        "routed_combine: combine_weights must be 1 x {} x {} x 1, got {}",
-        top_k,
-        padded_tokens,
-        weights.logical_shape());
-    TT_FATAL(
-        bias.logical_shape() == ttnn::Shape({1, 1, 1, hidden}),
-        "routed_combine: bias must be 1 x 1 x 1 x {}, got {}",
-        hidden,
-        bias.logical_shape());
-    TT_FATAL(
-        attributes.memory_config.memory_layout() == TensorMemoryLayout::INTERLEAVED,
-        "routed_combine: memory_config must be interleaved, got {}",
-        attributes.memory_config.memory_layout());
+    if (combine) {
+        // routing_metadata gives every slot a row, so fewer rows cannot be its layout. The index values
+        // themselves stay on the device. A gather has no such bound: it reads fewer rows than it writes.
+        const uint32_t min_rows = tt::round_up(top_k * attributes.num_tokens, kTileSize);
+        TT_FATAL(
+            rows_shape[2] >= min_rows,
+            "routed_combine: expert_rows has {} rows, fewer than the {} that {} tokens at top_k {} fill",
+            rows_shape[2],
+            min_rows,
+            attributes.num_tokens,
+            top_k);
+        TT_FATAL(
+            weights->logical_shape() == ttnn::Shape({1, top_k, padded_tokens, 1}),
+            "routed_combine: combine_weights must be 1 x {} x {} x 1, got {}",
+            top_k,
+            padded_tokens,
+            weights->logical_shape());
+        TT_FATAL(
+            bias->logical_shape() == ttnn::Shape({1, 1, 1, hidden}),
+            "routed_combine: bias must be 1 x 1 x 1 x {}, got {}",
+            hidden,
+            bias->logical_shape());
+    } else {
+        TT_FATAL(top_k == 1, "routed_combine: a gather, without weights and bias, takes top_k 1, got {}", top_k);
+    }
     const auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(rows.device()->arch(), attributes.compute_kernel_config);
     TT_FATAL(fp32_dest_acc_en, "routed_combine: compute_kernel_config must enable fp32_dest_acc_en");
@@ -125,6 +133,7 @@ RoutedCombineLayout RoutedCombineDeviceOperation::compute_layout(
     }
     const uint32_t num_units = token_blocks * (hidden_tiles / chunk_tiles);
     return RoutedCombineLayout{
+        .combine = combine,
         .top_k = top_k,
         .padded_tokens = padded_tokens,
         .hidden_tiles = hidden_tiles,
@@ -163,8 +172,8 @@ namespace ttnn::prim {
 Tensor routed_combine(
     const Tensor& expert_rows,
     const Tensor& combine_index,
-    const Tensor& combine_weights,
-    const Tensor& bias,
+    const std::optional<Tensor>& combine_weights,
+    const std::optional<Tensor>& bias,
     uint32_t num_tokens,
     const tt::tt_metal::MemoryConfig& memory_config,
     const DeviceComputeKernelConfig& compute_kernel_config) {

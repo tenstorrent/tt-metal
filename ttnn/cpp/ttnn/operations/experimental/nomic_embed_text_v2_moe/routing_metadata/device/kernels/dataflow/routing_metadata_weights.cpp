@@ -5,6 +5,8 @@
 // Copies the core's tile rows of the window's top-k weights into combine_weights, (1, top_k,
 // padded_tokens, 1) FLOAT32 TILE: column 0 of tile (k, tile row) holds choice k's weights for those
 // 32 tokens; padding tokens and columns 1-31 hold 0. A 32-bit copy, so every weight stays bit-exact.
+// Given the router's scores instead of a selection, it selects the top-k weights itself, as the
+// indices kernel selects their ids.
 
 #include <cstdint>
 
@@ -15,6 +17,7 @@
 #include "api/tensor/noc_traits.h"
 #include "ckernel.h"
 #include "routing_metadata_faces.hpp"
+#include "routing_metadata_select.hpp"
 
 namespace {
 
@@ -34,7 +37,10 @@ constexpr uint32_t column_zero_word(uint32_t row) {
 }  // namespace
 
 void kernel_main() {
+    constexpr uint32_t num_experts = get_named_compile_time_arg_val("num_experts");
     constexpr uint32_t top_k = get_named_compile_time_arg_val("top_k");
+    constexpr bool select = get_named_compile_time_arg_val("select") == 1;
+    constexpr uint32_t score_tiles_per_row = get_named_compile_time_arg_val("score_tiles_per_row");
     constexpr auto values_args = TensorAccessorArgs<0>();
     constexpr auto combine_weights_args = TensorAccessorArgs<values_args.next_compile_time_args_offset()>();
 
@@ -57,11 +63,27 @@ void kernel_main() {
     const uint32_t weight_tiles = weight_tiles_cb.get_write_ptr();
     const uint32_t value_faces = CircularBuffer(get_named_compile_time_arg_val("value_faces_cb")).get_write_ptr();
 
-    read_face_pairs(noc, values, value_faces, token_start / kBlockRows + first_tile_row, num_tile_rows);
+    // values reads the selection's weights, or the scores to select them from.
+    if constexpr (select) {
+        read_score_groups(
+            noc,
+            values,
+            value_faces,
+            token_start / kBlockRows + first_tile_row,
+            num_tile_rows,
+            score_groups(num_experts),
+            score_tiles_per_row);
+    } else {
+        read_face_pairs(noc, values, value_faces, token_start / kBlockRows + first_tile_row, num_tile_rows);
+    }
     // Columns 1-31 stay zero throughout: each tile row rewrites column 0 only.
     noc.async_write_zeros(weight_tiles_cb, weight_slots * top_k * kTileBytes);
     noc.write_zeros_l1_barrier();
     noc.async_read_barrier();
+    if constexpr (select) {
+        select_top_k<num_experts, top_k, false>(
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(value_faces), num_tile_rows);
+    }
 
     volatile tt_l1_ptr uint32_t* tiles = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(weight_tiles);
     // Pages are spread over the DRAM banks in page order, and every core runs this loop at about the

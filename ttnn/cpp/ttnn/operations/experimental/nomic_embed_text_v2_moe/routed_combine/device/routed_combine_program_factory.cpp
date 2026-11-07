@@ -5,6 +5,8 @@
 #include "routed_combine_device_operation.hpp"
 
 #include <string>
+#include <variant>
+#include <vector>
 
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/program_descriptors.hpp>
@@ -12,6 +14,7 @@
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+#include "ttnn/operations/experimental/nomic_embed_text_v2_moe/common/device/page_multicast.hpp"
 
 namespace ttnn::experimental::nomic_embed_text_v2_moe {
 
@@ -23,6 +26,11 @@ const std::string kKernelDirectory =
 // Two slots: the reader gathers the next unit's rows while compute works on this one.
 constexpr uint32_t kSlots = 2;
 
+// The reader's row reads in flight: batches of kBatchReads under kBatchDepth transaction ids. At 4096
+// tokens 8 x 2 beat 16 x 2, 4 x 4 and 8 x 3.
+constexpr uint32_t kBatchReads = 8;
+constexpr uint32_t kBatchDepth = 2;
+
 enum CircularBufferIndex : uint8_t {
     kRows = tt::CBIndex::c_0,
     kTiles = tt::CBIndex::c_1,
@@ -31,6 +39,8 @@ enum CircularBufferIndex : uint8_t {
     kOutput = tt::CBIndex::c_4,
     kIndex = tt::CBIndex::c_5,
 };
+
+constexpr uint32_t kBiasReadySemaphore = 0;
 
 tt::tt_metal::CBDescriptor buffer(
     const CoreRangeSet& cores, uint8_t index, tt::DataFormat format, uint32_t page_bytes, uint32_t num_pages) {
@@ -68,11 +78,23 @@ tt::tt_metal::ProgramDescriptor RoutedCombineDeviceOperation::create_descriptor(
     const uint32_t fp32_tile_bytes = tt::tile_size(tt::DataFormat::Float32);
     const uint32_t unit_tiles = layout.top_k * layout.chunk_tiles;
 
+    // The bias goes out from the last core, which takes the fewest units.
+    const std::vector<CoreCoord> core_list = corerange_to_cores(cores, std::nullopt, /*row_wise=*/true);
+    const CoreCoord bias_sender = core_list.back();
+    const std::vector<MulticastRectangle> rectangles =
+        layout.combine && layout.num_cores > 1 ? multicast_rectangles(*device, cores, bias_sender, NOC::NOC_0)
+                                               : std::vector<MulticastRectangle>{};
+    const bool bias_multicast = !rectangles.empty();
+
     tt::tt_metal::ProgramDescriptor descriptor;
     descriptor.cbs.push_back(buffer(cores, kRows, tt::DataFormat::Float16_b, bf16_tile_bytes, kSlots * unit_tiles));
-    descriptor.cbs.push_back(buffer(cores, kTiles, tt::DataFormat::Float16_b, bf16_tile_bytes, unit_tiles));
-    descriptor.cbs.push_back(buffer(cores, kWeights, tt::DataFormat::Float32, fp32_tile_bytes, kSlots * layout.top_k));
-    descriptor.cbs.push_back(buffer(cores, kBias, tt::DataFormat::Float16_b, bf16_tile_bytes, layout.hidden_tiles));
+    // A gather tilizes straight into the output: no tiles, weights or bias to hold.
+    if (layout.combine) {
+        descriptor.cbs.push_back(buffer(cores, kTiles, tt::DataFormat::Float16_b, bf16_tile_bytes, unit_tiles));
+        descriptor.cbs.push_back(
+            buffer(cores, kWeights, tt::DataFormat::Float32, fp32_tile_bytes, kSlots * layout.top_k));
+        descriptor.cbs.push_back(buffer(cores, kBias, tt::DataFormat::Float16_b, bf16_tile_bytes, layout.hidden_tiles));
+    }
     descriptor.cbs.push_back(
         buffer(cores, kOutput, tt::DataFormat::Float16_b, bf16_tile_bytes, kSlots * layout.chunk_tiles));
     descriptor.cbs.push_back(
@@ -83,6 +105,7 @@ tt::tt_metal::ProgramDescriptor RoutedCombineDeviceOperation::create_descriptor(
     reader.source_type = KernelDescriptor::SourceType::FILE_PATH;
     reader.core_ranges = cores;
     reader.named_compile_time_args = {
+        {"combine", layout.combine ? 1u : 0u},
         {"top_k", layout.top_k},
         {"hidden_tiles", layout.hidden_tiles},
         {"chunk_tiles", layout.chunk_tiles},
@@ -91,11 +114,20 @@ tt::tt_metal::ProgramDescriptor RoutedCombineDeviceOperation::create_descriptor(
         {"weights_cb", kWeights},
         {"bias_cb", kBias},
         {"index_cb", kIndex},
+        {"bias_multicast", bias_multicast ? 1u : 0u},
+        {"slots", kSlots},
+        {"batch_reads", kBatchReads},
+        {"batch_depth", kBatchDepth},
+        {"bias_ready_semaphore", kBiasReadySemaphore},
     };
     TensorAccessorArgs(*tensor_args.expert_rows.buffer()).append_to(reader.compile_time_args);
     TensorAccessorArgs(*tensor_args.combine_index.buffer()).append_to(reader.compile_time_args);
-    TensorAccessorArgs(*tensor_args.combine_weights.buffer()).append_to(reader.compile_time_args);
-    TensorAccessorArgs(*tensor_args.bias.buffer()).append_to(reader.compile_time_args);
+    // A gather reads neither; stand-ins keep the accessors' compile-time layout.
+    for (const std::optional<Tensor>* operand : {&tensor_args.combine_weights, &tensor_args.bias}) {
+        (operand->has_value() ? TensorAccessorArgs(*(*operand)->buffer())
+                              : TensorAccessorArgs::create_dram_interleaved())
+            .append_to(reader.compile_time_args);
+    }
     reader.config = DataMovementConfigDescriptor{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::NOC_0};
 
     KernelDescriptor writer;
@@ -115,6 +147,7 @@ tt::tt_metal::ProgramDescriptor RoutedCombineDeviceOperation::create_descriptor(
     compute.source_type = KernelDescriptor::SourceType::FILE_PATH;
     compute.core_ranges = cores;
     compute.named_compile_time_args = {
+        {"combine", layout.combine ? 1u : 0u},
         {"top_k", layout.top_k},
         {"hidden_tiles", layout.hidden_tiles},
         {"chunk_tiles", layout.chunk_tiles},
@@ -134,21 +167,46 @@ tt::tt_metal::ProgramDescriptor RoutedCombineDeviceOperation::create_descriptor(
         .math_approx_mode = math_approx_mode,
     };
 
+    if (bias_multicast) {
+        descriptor.semaphores.push_back(tt::tt_metal::SemaphoreDescriptor{
+            .id = kBiasReadySemaphore,
+            .core_type = tt::CoreType::WORKER,
+            .core_ranges = cores,
+            .initial_value = 0,
+        });
+    }
+    const std::vector<uint32_t> rectangle_args = multicast_rectangle_args(rectangles);
+
     // Core c takes units [first, first + count), the first num_units % num_cores cores one more.
     const uint32_t base_units = layout.num_units / layout.num_cores;
     const uint32_t extra_units = layout.num_units % layout.num_cores;
     uint32_t core_index = 0;
     uint32_t first_unit = 0;
-    for (const CoreCoord& core : corerange_to_cores(cores, std::nullopt, /*row_wise=*/true)) {
+    for (const CoreCoord& core : core_list) {
         const uint32_t count = base_units + (core_index++ < extra_units ? 1 : 0);
-        reader.emplace_runtime_args(
-            core,
-            {tensor_args.expert_rows.buffer(),
-             tensor_args.combine_index.buffer(),
-             tensor_args.combine_weights.buffer(),
-             tensor_args.bias.buffer(),
-             first_unit,
-             count});
+        if (layout.combine) {
+            std::vector<std::variant<uint32_t, tt::tt_metal::Buffer*>> args{
+                tensor_args.expert_rows.buffer(),
+                tensor_args.combine_index.buffer(),
+                tensor_args.combine_weights->buffer(),
+                tensor_args.bias->buffer(),
+                first_unit,
+                count,
+                core == bias_sender ? 1u : 0u};
+            args.insert(args.end(), rectangle_args.begin(), rectangle_args.end());
+            reader.emplace_runtime_args(core, args);
+        } else {
+            reader.emplace_runtime_args(
+                core,
+                {tensor_args.expert_rows.buffer(),
+                 tensor_args.combine_index.buffer(),
+                 0u,
+                 0u,
+                 first_unit,
+                 count,
+                 0u,
+                 0u});
+        }
         writer.emplace_runtime_args(core, {output.buffer(), first_unit, count});
         compute.emplace_runtime_args(core, {first_unit, count});
         first_unit += count;

@@ -5,6 +5,7 @@
 #pragma once
 
 #include <cstdint>
+#include <optional>
 #include <tuple>
 
 #include <tt-metalium/program_descriptors.hpp>
@@ -15,6 +16,11 @@ namespace ttnn::experimental::nomic_embed_text_v2_moe {
 
 // Sizes of one call, derived from its inputs and attributes.
 struct RoutingMetadataLayout {
+    // true when the call selects the top-k from scores itself, rather than taking a selection.
+    bool select = false;
+    // The scores' 16-column face groups that hold the experts, and their tiles a tile row.
+    uint32_t score_groups = 0;
+    uint32_t score_tiles_per_row = 0;
     uint32_t top_k = 0;
     // Every expert's region starts on a 32-row block. Rounding a region up wastes at most 31 rows,
     // so ceil(top_k * num_tokens / 32) + num_experts - 1 blocks hold any routing.
@@ -26,13 +32,17 @@ struct RoutingMetadataLayout {
 struct RoutingMetadataDeviceOperation {
     struct operation_attributes_t {
         uint32_t num_experts = 0;
+        // The k to select from scores; 0 when the call takes a selection.
+        uint32_t top_k = 0;
         uint32_t token_start = 0;
         uint32_t num_tokens = 0;
     };
 
+    // Either indices and values, a top-k selection, or scores alone.
     struct tensor_args_t {
-        const Tensor& indices;
-        const Tensor& values;
+        std::optional<Tensor> indices;
+        std::optional<Tensor> values;
+        std::optional<Tensor> scores;
     };
 
     // gather_index, combine_index, combine_weights, expert_counts.
@@ -59,6 +69,12 @@ struct RoutingMetadataDeviceOperation {
 namespace ttnn::prim {
 
 std::tuple<Tensor, Tensor, Tensor, Tensor> routing_metadata(
-    const Tensor& indices, const Tensor& values, uint32_t num_experts, uint32_t token_start, uint32_t num_tokens);
+    const std::optional<Tensor>& indices,
+    const std::optional<Tensor>& values,
+    const std::optional<Tensor>& scores,
+    uint32_t num_experts,
+    uint32_t top_k,
+    uint32_t token_start,
+    uint32_t num_tokens);
 
 }  // namespace ttnn::prim

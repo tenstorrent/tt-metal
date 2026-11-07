@@ -30,6 +30,7 @@ from models.experimental.nomic_embed_text_v2_moe.tests.pcc.module_common import 
     hidden_states,
     keep_mask,
     load_reference,
+    selection_of,
     to_block_layout,
 )
 from models.experimental.nomic_embed_text_v2_moe.tt.block import TtNomicBertBlock
@@ -74,8 +75,9 @@ def routing_agreement(config, reference, tt_block, x, x_tt, moe, rot_mats, attn_
 
     tt_attn = tt_block.attn(x_tt, rot_mats, attn_mask)
     tt_hidden = tt_block._norm(tt_attn, x_tt, tt_block.norm1)
-    routing = tt_block.mlp.router(flatten_tokens(tt_hidden))
-    selected = ttnn.to_torch(routing.indices).long().reshape(batch * seqlen, config.moe_top_k)
+    routing, rows = tt_block.mlp.router(flatten_tokens(tt_hidden))
+    ttnn.deallocate(rows)
+    _, selected = selection_of(routing, config.moe_top_k, config.num_experts)
     routing.deallocate()
 
     with torch.no_grad():
@@ -189,9 +191,11 @@ def test_dropping_a_residual_is_decorrelated(device, config, tt_config, state_di
         epsilon=config.layer_norm_epsilon,
         compute_kernel_config=tt_config.compute_kernel_config(OpGroup.NORM),
     )
+    # The MoE writes the split norm's sharded layout, which the stock call takes only with a sharded residual.
+    mlp_out = ttnn.to_memory_config(tt_block.mlp(without_residual), ttnn.L1_MEMORY_CONFIG)
     dropped = from_block_layout(
         ttnn.layer_norm(
-            tt_block.mlp(without_residual),
+            mlp_out,
             residual_input_tensor=without_residual,
             weight=norm2_weight,
             bias=norm2_bias,
