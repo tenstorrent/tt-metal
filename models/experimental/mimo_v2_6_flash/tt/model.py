@@ -704,11 +704,59 @@ class TtMiMoModel:
             mesh_mapper=self.plan.replicate(),
         )
 
-    def _embed(self, tokens):
+    def _embed(self, tokens, embeds=None, embed_rows=None):
+        """The rows [1, 1, n, hidden] (bf16, tile) a pass starts from: the embedding of ``tokens`` (1D, n), with the
+        rows ``embed_rows`` (bool [<= n], None: the first ``embeds.shape[0]`` rows) replaced by the host rows ``embeds``
+        [<= n, hidden] (multimodal items' embeddings; a row past ``embeds`` keeps its token's). The replacement is an
+        exact copy (``_merge_embeds``), so a row whose ``embeds`` row is its token's embedding gives what the token
+        would."""
+        n = tokens.numel()
         tt_tokens = self._to_device_tokens(tokens)
-        x = ttnn.embedding(tt_tokens, self.embedding, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+        if embeds is None:
+            x = ttnn.embedding(tt_tokens, self.embedding, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+            tt_tokens.deallocate(True)
+            return ttnn.reshape(x, (1, 1, n, self.cfg.hidden_size))
+        x = ttnn.embedding(tt_tokens, self.embedding, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16)
         tt_tokens.deallocate(True)
-        return ttnn.reshape(x, (1, 1, tokens.numel(), self.cfg.hidden_size))
+        return self._merge_embeds(x, embeds, embed_rows, n)
+
+    def _merge_embeds(self, x, embeds, embed_rows, n):
+        """x: the token embeddings [1, n, hidden] row-major (freed). Returns them with the rows ``embed_rows`` taken
+        from ``embeds`` (``_embed``), [1, 1, n, hidden] tile: the host rows are uploaded in the chunk's row order (one
+        [n, hidden] bf16 tensor, zeros where no row is replaced) and one gather (``ttnn.embedding``, an exact copy)
+        picks each row from the token rows or the uploaded ones. Every op keys only on n, the chunk's padded length,
+        so a multimodal chunk compiles nothing a warm-up of its length (``warm_embeds``) did not."""
+        hidden = self.cfg.hidden_size
+        m = embeds.shape[0]
+        assert m <= n and tuple(embeds.shape) == (m, hidden), (tuple(embeds.shape), n, hidden)
+        rows = torch.zeros(n, dtype=torch.bool)
+        if embed_rows is None:
+            rows[:m] = True
+        else:
+            assert len(embed_rows) == m, (len(embed_rows), m)
+            rows[:m] = torch.as_tensor(embed_rows, dtype=torch.bool)
+        host = torch.zeros(n, hidden, dtype=torch.bfloat16)
+        host[:m] = torch.where(rows[:m, None], embeds.to(torch.bfloat16), 0)
+        index = torch.arange(n, dtype=torch.int32) + rows.to(torch.int32) * n  # row r: token row r or uploaded n + r
+        x = ttnn.reshape(x, (n, hidden))
+        upload = kv_lib.replicated(self.plan, host, ttnn.bfloat16)
+        table = ttnn.concat([x, upload], dim=0, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        x.deallocate(True)
+        upload.deallocate(True)
+        index_tt = kv_lib.replicated(self.plan, index.reshape(1, n), ttnn.uint32)
+        out = ttnn.embedding(index_tt, table, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+        table.deallocate(True)
+        index_tt.deallocate(True)
+        return ttnn.reshape(out, (1, 1, n, hidden))
+
+    def warm_embeds(self, padded_lengths):
+        """Compile the multimodal row merge (``_merge_embeds``) for each padded chunk length, before any trace capture
+        (a program compiled after a capture can sit where the trace's replays write)."""
+        hidden = self.cfg.hidden_size
+        for n in sorted(set(padded_lengths)):
+            x = self._embed(torch.zeros(n, dtype=torch.int32), torch.zeros(1, hidden, dtype=torch.bfloat16))
+            x.deallocate(True)
+        ttnn.synchronize_device(self.mesh_device)
 
     def _logits(self, x, h=None, prefill=False):
         """``h``: final_norm(x) when the last layer's reduction already computed it (a persistent buffer).
@@ -743,13 +791,25 @@ class TtMiMoModel:
             for setup in begun:
                 setup.end_prefill_chunk()
 
-    def _prefill_chunk(self, tokens, slot, start_pos, hidden, layers=None, draft_group=0, after_layer=None):
+    def _prefill_chunk(
+        self,
+        tokens,
+        slot,
+        start_pos,
+        hidden,
+        layers=None,
+        draft_group=0,
+        after_layer=None,
+        embeds=None,
+        embed_rows=None,
+    ):
         """One chunk (``tokens`` 1D torch) at ``start_pos`` through the layers ``layers`` (indices, default all);
         returns the last one's output [1, 1, padded, hidden] and appends (copy, real rows) of every layer's output to
         ``hidden`` when given. With the DFlash drafter the chunk's last rows also go into draft group ``draft_group``'s
         context ring (TtDFlash.prefill_context; a warm-up through a subset of the layers runs the same programs).
         ``after_layer(i)`` runs after layer ``i`` is enqueued (profiling: tests/perf/profile_prefill.py reads the
-        device profiler there)."""
+        device profiler there). ``embeds`` / ``embed_rows``: host rows replacing the chunk's token embeddings
+        (``_embed``; multimodal items)."""
         n = tokens.numel()
         padded = prefill_padded_len(n, start_pos, self.pair is not None)
         assert start_pos + n <= self.max_seq_len, f"chunk ends at {start_pos + n} > {self.max_seq_len}"
@@ -761,7 +821,7 @@ class TtMiMoModel:
         # The shared cos/sin are freed as the chunk ends (enqueued: ordered with the work that reads them).
         with self._prefill_rope():
             with zone("embed"):
-                x = self._embed(torch.nn.functional.pad(tokens.to(torch.int32), (0, padded - n)))
+                x = self._embed(torch.nn.functional.pad(tokens.to(torch.int32), (0, padded - n)), embeds, embed_rows)
             dflash_acc = None
             with self._prefill_reduce(padded):
                 for k, i in enumerate(layers):
@@ -805,6 +865,8 @@ class TtMiMoModel:
         history_continues=False,
         draft_group=0,
         allow_trace=True,
+        embeds=None,
+        embed_rows=None,
     ):
         """Enqueue prefill of one user (``tokens`` 1D torch, positions start_pos ..) into batch ``slot``, in chunks
         of ``chunk_size`` tokens (default ``max_prefill_chunk``; a multiple of the block size, as is ``start_pos``).
@@ -815,26 +877,47 @@ class TtMiMoModel:
         entries stay), else it is the request's first and the slot's other entries are invalidated.
         ``draft_group``: the request's draft group (its DFlash context ring). ``allow_trace=False``: every chunk runs
         eagerly, even one a captured later-chunk trace covers (vLLM's prefill_forward runs a row that would mix
-        replays and eager chunks all eager: ``chunk_traced``)."""
+        replays and eager chunks all eager: ``chunk_traced``).
+
+        ``embeds``: host rows [n, hidden] that replace the token embeddings of the rows ``embed_rows`` (bool [n]; None:
+        every row), e.g. multimodal items' embeddings at their placeholder tokens (``_embed``). A chunk with such a row
+        runs eagerly; a chunk without one runs as it would without ``embeds`` (its trace, if it has one). The MTP
+        history keeps the tokens of those rows (their placeholder ids)."""
         n = tokens.numel()
         chunk = chunk_size or self.max_prefill_chunk
         align = self.block_size * (2 if self.pair is not None else 1)  # pair split: 128-token global blocks
         assert n > 0 and chunk % align == 0 and start_pos % align == 0, (n, chunk, start_pos, align)
+        if embeds is not None:
+            assert tuple(embeds.shape) == (n, self.cfg.hidden_size), (tuple(embeds.shape), n)
+            assert embed_rows is None or len(embed_rows) == n, (len(embed_rows), n)
         hidden = [[] for _ in (range(len(self.layers)) if layers is None else layers)] if return_hidden else None
         hist = self._history()
         x = replayed = None
         for s in range(0, n, chunk):
             piece = tokens[s : s + chunk]
+            piece_embeds = piece_rows = None
+            if embeds is not None and (embed_rows is None or bool(embed_rows[s : s + chunk].any())):
+                piece_embeds = embeds[s : s + chunk]
+                piece_rows = None if embed_rows is None else embed_rows[s : s + chunk]
             writes = None
             if hist is not None and slot < SPEC_SLOTS:
                 writes = hist.chunk_writes(slot, start_pos + s, piece, 0, history_continues or s > 0)
-            eager = not allow_trace or hidden is not None or layers is not None
+            eager = not allow_trace or hidden is not None or layers is not None or piece_embeds is not None
             trace = None if eager else self._chunk_trace(slot, start_pos + s, piece)
             if trace is not None:
                 replayed = self._replay_prefill_chunk(trace, piece, slot, start_pos + s, writes or [])
                 continue
             replayed = None
-            x, padded = self._prefill_chunk(piece, slot, start_pos + s, hidden, layers, draft_group)
+            x, padded = self._prefill_chunk(
+                piece,
+                slot,
+                start_pos + s,
+                hidden,
+                layers,
+                draft_group,
+                embeds=piece_embeds,
+                embed_rows=piece_rows,
+            )
             if writes is not None:
                 write_list = hist.prefill_list(writes)
                 hist.prefill(x, self.final_norm, write_list, len(writes))
@@ -1406,8 +1489,12 @@ class TtMiMoModel:
             hidden.append(torch.cat(parts))
         return out, hidden
 
-    def prefill(self, tokens, slot, return_hidden=False, start_pos=0, chunk_size=None):
-        return self.prefill_read(self.prefill_enqueue(tokens, slot, return_hidden, start_pos, chunk_size))
+    def prefill(self, tokens, slot, return_hidden=False, start_pos=0, chunk_size=None, embeds=None, embed_rows=None):
+        return self.prefill_read(
+            self.prefill_enqueue(
+                tokens, slot, return_hidden, start_pos, chunk_size, embeds=embeds, embed_rows=embed_rows
+            )
+        )
 
     # ------------------------------------------------------------------ decode
     def prepare_decode_inputs_host(self, tokens, positions, serial=False):
