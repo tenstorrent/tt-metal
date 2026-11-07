@@ -16,10 +16,20 @@ conv_config = {
 }
 
 
+def to_row_major(x):
+    shape, padded = list(x.shape), list(x.padded_shape)
+    if shape == padded or len(shape) != 4 or x.dtype != ttnn.bfloat16 or x.memory_config().is_sharded():
+        return ttnn.to_layout(x, layout=ttnn.ROW_MAJOR_LAYOUT)
+    y = ttnn.to_layout(ttnn.reshape(x, ttnn.Shape(padded), ttnn.Shape(padded)), layout=ttnn.ROW_MAJOR_LAYOUT)
+    out = ttnn.slice(y, [0, 0, 0, 0], shape, memory_config=x.memory_config())
+    ttnn.deallocate(y)
+    return out
+
+
 def post_conv_reshape(x, out_height=1, out_width=1):
     """Convert sharded conv output to [N,1,1,C] tile layout for SE block."""
     x = ttnn.sharded_to_interleaved(x, ttnn.L1_MEMORY_CONFIG)
-    x = ttnn.to_layout(x, layout=ttnn.ROW_MAJOR_LAYOUT)
+    x = to_row_major(x)
     x = ttnn.reshape(x, (x.shape[0], out_height, out_width, x.shape[3]))
     return ttnn.to_layout(x, layout=ttnn.TILE_LAYOUT)
 
