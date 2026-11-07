@@ -28,6 +28,7 @@ from models.demos.common.prefill.prefill_chunk import (
     sentinel_words,
     validate_chunks,
 )
+from models.demos.common.prefill.runners import model_descriptor
 from models.demos.common.prefill.runners.layer_completion_layout import layer_completion_layout
 from models.demos.common.prefill.runners.layer_completion_ring_reader import scheduler_shm_name
 from models.demos.common.prefill.runners.layer_completion_ring_writer import LayerCompletionRingWriter
@@ -1053,6 +1054,7 @@ def _print_config() -> None:
         ("PREFILL_TRACE_DIR", os.environ.get("PREFILL_TRACE_DIR", ADAPTER.prefill_trace_default)),
         ("PREFILL_ENABLE_MIGRATION", str(int(migration_publish_enabled()))),
         ("PREFILL_MIGRATION_TABLE_PATH", migration_table_path()),
+        (model_descriptor.PATH_ENV, model_descriptor.descriptor_path() or "<unset: not written>"),
         ("PREFILL_MIGRATION_WAIT_READY_MS", os.environ.get("PREFILL_MIGRATION_WAIT_READY_MS", "120000")),
         ("PREFILL_MIGRATION_EXPORT_TO_FILE", os.environ.get("PREFILL_MIGRATION_EXPORT_TO_FILE", "0")),
         (
@@ -1111,6 +1113,8 @@ def main() -> None:
     signal.signal(signal.SIGINT, _handle_sigterm)
 
     _print_config()
+    if model_descriptor.descriptor_path():
+        model_descriptor.discard(model_descriptor.descriptor_path())
 
     if not ttnn.distributed_context_is_initialized():
         ttnn.init_distributed_context()
@@ -1198,6 +1202,26 @@ def main() -> None:
     ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
     ttnn.close_mesh_device(mesh_device)
     logger.info(f"[pp rank {rank}] shutdown complete")
+
+
+def _write_model_descriptor(hf_config, service_id: str, ack_shm_name: str) -> None:
+    path = model_descriptor.descriptor_path()
+    doc = model_descriptor.prefill_descriptor(
+        model_id=os.environ.get("PREFILL_HF_MODEL", ADAPTER.hf_model_default),
+        max_context_len=int(hf_config.max_position_embeddings),
+        max_slots=NUM_USERS,
+        kv_depth=MAX_SEQ_LEN,
+        num_layers=NUM_LAYERS,
+        page_tokens=ttnn.TILE_SIZE,
+        chunk_size=CHUNK_SIZE,
+        sp_factor=_sp,
+        max_chunks_per_batch=FORWARD_CHUNKS,
+        num_mtp_tokens=MTP_LEVELS,
+        service_id=service_id,
+        ack_shm_name=ack_shm_name,
+    )
+    model_descriptor.write(path, doc)
+    logger.info(f"[prefill] model descriptor -> {path}")
 
 
 def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ranks: int, is_first_rank: bool) -> None:
@@ -1425,6 +1449,9 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
             if n_warm:
                 logger.info(f"[migration] drained {n_warm} D2H warm-up ack records from the trace capture")
             layer_ack_service.start()
+
+    if rank == master_rank and model_descriptor.descriptor_path():
+        _write_model_descriptor(hf_config, service_id, ack_shm_name)
 
     logger.info(f"[pp rank {rank}] setup complete, entering request loop")
 
