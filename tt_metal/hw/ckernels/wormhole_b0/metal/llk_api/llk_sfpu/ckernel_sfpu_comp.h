@@ -269,35 +269,28 @@ inline void calculate_nez_uint32() {
 
 template <bool APPROXIMATION_MODE, SfpuType COMP_MODE, int ITERATIONS = 8>
 inline void calculate_comp_unary_int(int scalar) {
-    // Convert both operands to two's complement format
-    //
-    // LOGIC:
-    // - Scalar is already in two's complement (from host)
-    // - Convert SFPU input data from sign-magnitude to two's complement
-    // - Perform comparison with both in two's complement format
-
-    // Scalar stays in original two's complement format
-    vInt converted_scalar = scalar;
+    // Equality is a compare of the 32-bit words, so the tile word is loaded as stored
+    // (DataLayout::I32, SFPLOAD INT32). The default vInt load (INT32_SM) converts the word from
+    // sign-magnitude to two's complement on the way in, and the explicit conversion this kernel
+    // used to apply on top of it undid that for every word except 0x80000000, which the load turns
+    // into 0: a tile value of exactly 2^31 (UINT32) or INT32_MIN (INT32) compared equal to 0 and
+    // unequal to its own scalar.
+    vInt s = scalar;
 
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
-        vInt v = dst_reg[0];
+        vInt v = dst_reg[0].mode<sfpi::DataLayout::I32>();
         vInt val = 0;
 
-        // Convert input data from sign-magnitude to two's complement
-        v = sfpu_sign_mag_to_twos_comp(v);
-
-        // Now both operands are in two's complement format
-        // Use simple comparison like Blackhole
         if constexpr (COMP_MODE == SfpuType::unary_ne) {
-            v_if(v != converted_scalar) { val = 1; }
+            v_if(v != s) { val = 1; }
             v_endif;
         } else if constexpr (COMP_MODE == SfpuType::unary_eq) {
-            v_if(v == converted_scalar) { val = 1; }
+            v_if(v == s) { val = 1; }
             v_endif;
         }
 
-        dst_reg[0] = val;
+        dst_reg[0].mode<sfpi::DataLayout::I32>() = val;
         dst_reg++;
     }
 }

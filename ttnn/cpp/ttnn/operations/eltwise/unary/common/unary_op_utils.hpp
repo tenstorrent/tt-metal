@@ -5,6 +5,7 @@
 #pragma once
 
 #include <map>
+#include <optional>
 #include <string>
 #include <span>
 
@@ -32,6 +33,9 @@ std::map<std::string, std::string> get_defines(
     const std::string& id = "0",
     const std::string& idst = "0",
     std::optional<DataType> input_dtype = std::nullopt);
+
+// Target dtype (second parameter) of a TYPECAST/BITCAST op, whichever type backs its parameters.
+std::optional<tt::tt_metal::DataType> typecast_target_dtype(const EltwiseUnaryWithParam& op);
 
 std::map<std::string, std::string> get_block_defines(
     const std::vector<EltwiseUnaryWithParam>& op_chain,
