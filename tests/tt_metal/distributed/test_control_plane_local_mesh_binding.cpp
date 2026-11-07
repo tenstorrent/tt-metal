@@ -35,9 +35,12 @@ struct MeshScopeTestParams {
     std::string test_name;
 };
 
-const std::string kDualHostMeshDesc =
-    std::filesystem::path(::tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
-    "tests/tt_metal/tt_fabric/custom_mesh_descriptors/t3k_dual_host_mesh_graph_descriptor.textproto";
+// Computed on demand: a namespace-scope initializer here would create the implicit MetalContext during static
+// initialization, before main() and before any test has decided whether it needs hardware.
+std::filesystem::path dual_host_mesh_desc() {
+    return std::filesystem::path(::tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
+           "tests/tt_metal/tt_fabric/custom_mesh_descriptors/t3k_dual_host_mesh_graph_descriptor.textproto";
+}
 
 // Define eth_coord mappings for the dual host mesh descriptor
 // This is a 2x4 mesh split between 2 hosts, where:
@@ -107,14 +110,14 @@ TEST_F(ControlPlaneLocalMeshBinding, NoMeshBinding) {
     // No binding: mesh 0 with the host rank deferred to the topology mapper, which cannot pick one host rank of a
     // mesh split across two.
     EXPECT_THAT(
-        ([&]() { return make_control_plane(kDualHostMeshDesc, get_dual_host_chip_mapping()); }),
+        ([&]() { return make_control_plane(dual_host_mesh_desc(), get_dual_host_chip_mapping()); }),
         ThrowsMessage<std::runtime_error>(HasSubstr("TopologyMapper: Inconsistent host ranks found for mesh 0")));
 }
 
 TEST_F(ControlPlaneLocalMeshBinding, WithMeshBinding) {
     auto chip_mapping = get_dual_host_chip_mapping();
     auto control_plane =
-        make_control_plane(kDualHostMeshDesc, chip_mapping, {.mesh_id = MeshId{0}, .host_rank = MeshHostRankId{0}});
+        make_control_plane(dual_host_mesh_desc(), chip_mapping, {.mesh_id = MeshId{0}, .host_rank = MeshHostRankId{0}});
     EXPECT_EQ(control_plane->get_local_mesh_id_bindings()[0], MeshId{0});
     EXPECT_EQ(control_plane->get_local_host_rank_id_binding(), MeshHostRankId{0});
 }
@@ -123,7 +126,7 @@ TEST_F(ControlPlaneLocalMeshBinding, WithMeshBindingInvalidMeshId) {
     EXPECT_THAT(
         ([&]() {
             return make_control_plane(
-                kDualHostMeshDesc,
+                dual_host_mesh_desc(),
                 get_dual_host_chip_mapping(),
                 {.mesh_id = MeshId{99}, .host_rank = MeshHostRankId{0}});
         }),
@@ -135,7 +138,7 @@ TEST_F(ControlPlaneLocalMeshBinding, WithMeshBindingInvalidMeshHostId) {
     EXPECT_THAT(
         ([&]() {
             return make_control_plane(
-                kDualHostMeshDesc,
+                dual_host_mesh_desc(),
                 get_dual_host_chip_mapping(),
                 {.mesh_id = MeshId{0}, .host_rank = MeshHostRankId{99}});
         }),
@@ -147,12 +150,14 @@ TEST_F(ControlPlaneLocalMeshBinding, PartialMeshBinding) {
     // Mesh id bound, host rank unset: the host rank is deferred to the topology mapper, which rejects a mesh split
     // across host ranks when no single host rank owns it.
     EXPECT_THAT(
-        ([&]() { return make_control_plane(kDualHostMeshDesc, get_dual_host_chip_mapping(), {.mesh_id = MeshId{0}}); }),
+        ([&]() {
+            return make_control_plane(dual_host_mesh_desc(), get_dual_host_chip_mapping(), {.mesh_id = MeshId{0}});
+        }),
         ThrowsMessage<std::runtime_error>(HasSubstr("TopologyMapper: Inconsistent host ranks found for mesh 0")));
 
     // Host rank bound, mesh id unset: the mesh id defaults to 0, so this is a full binding to host rank 0 of mesh 0.
     auto control_plane =
-        make_control_plane(kDualHostMeshDesc, get_dual_host_chip_mapping(), {.host_rank = MeshHostRankId{0}});
+        make_control_plane(dual_host_mesh_desc(), get_dual_host_chip_mapping(), {.host_rank = MeshHostRankId{0}});
     EXPECT_EQ(control_plane->get_local_mesh_id_bindings()[0], MeshId{0});
     EXPECT_EQ(control_plane->get_local_host_rank_id_binding(), MeshHostRankId{0});
     EXPECT_EQ(control_plane->get_physical_mesh_shape(MeshId{0}, MeshScope::LOCAL), MeshShape(2, 2));
@@ -161,7 +166,7 @@ TEST_F(ControlPlaneLocalMeshBinding, PartialMeshBinding) {
 TEST_F(ControlPlaneLocalMeshBinding, GetPhysicalMeshShapeWithScopeDualHost) {
     auto chip_mapping = get_dual_host_chip_mapping();
     auto control_plane =
-        make_control_plane(kDualHostMeshDesc, chip_mapping, {.mesh_id = MeshId{0}, .host_rank = MeshHostRankId{0}});
+        make_control_plane(dual_host_mesh_desc(), chip_mapping, {.mesh_id = MeshId{0}, .host_rank = MeshHostRankId{0}});
     auto global_shape = control_plane->get_physical_mesh_shape(MeshId{0}, MeshScope::GLOBAL);
     EXPECT_EQ(global_shape, MeshShape(2, 4));
 
@@ -178,7 +183,7 @@ TEST_F(ControlPlaneLocalMeshBinding, GetPhysicalMeshShapeWithScopeDualHost) {
 TEST_F(ControlPlaneLocalMeshBinding, GetCoordRangeWithScopeDualHost) {
     auto chip_mapping = get_dual_host_chip_mapping();
     auto control_plane =
-        make_control_plane(kDualHostMeshDesc, chip_mapping, {.mesh_id = MeshId{0}, .host_rank = MeshHostRankId{0}});
+        make_control_plane(dual_host_mesh_desc(), chip_mapping, {.mesh_id = MeshId{0}, .host_rank = MeshHostRankId{0}});
 
     auto global_range = control_plane->get_coord_range(MeshId{0}, MeshScope::GLOBAL);
     EXPECT_EQ(global_range.start_coord(), MeshCoordinate(0, 0));
@@ -200,7 +205,7 @@ TEST_F(ControlPlaneLocalMeshBinding, GetCoordRangeWithScopeDualHost) {
 TEST_F(ControlPlaneLocalMeshBinding, InvalidMeshId) {
     auto chip_mapping = get_dual_host_chip_mapping();
     auto control_plane =
-        make_control_plane(kDualHostMeshDesc, chip_mapping, {.mesh_id = MeshId{0}, .host_rank = MeshHostRankId{0}});
+        make_control_plane(dual_host_mesh_desc(), chip_mapping, {.mesh_id = MeshId{0}, .host_rank = MeshHostRankId{0}});
     EXPECT_EQ(control_plane->get_local_mesh_id_bindings()[0], MeshId{0});
     EXPECT_EQ(control_plane->get_local_host_rank_id_binding(), MeshHostRankId{0});
     EXPECT_THROW(control_plane->get_physical_mesh_shape(MeshId{99}, MeshScope::GLOBAL), std::runtime_error);
@@ -209,7 +214,7 @@ TEST_F(ControlPlaneLocalMeshBinding, InvalidMeshId) {
 TEST_F(ControlPlaneLocalMeshBinding, LocalMeshScopeQueryWithoutExplicitBinding) {
     auto chip_mapping = get_dual_host_chip_mapping();
     auto control_plane =
-        make_control_plane(kDualHostMeshDesc, chip_mapping, {.mesh_id = MeshId{0}, .host_rank = MeshHostRankId{0}});
+        make_control_plane(dual_host_mesh_desc(), chip_mapping, {.mesh_id = MeshId{0}, .host_rank = MeshHostRankId{0}});
     EXPECT_EQ(control_plane->get_local_mesh_id_bindings()[0], MeshId{0});
     EXPECT_EQ(control_plane->get_local_host_rank_id_binding(), MeshHostRankId{0});
     EXPECT_NO_THROW(control_plane->get_coord_range(MeshId{0}, MeshScope::LOCAL));
@@ -226,7 +231,7 @@ TEST_P(MeshScopeParameterizedTest, GetPhysicalMeshShape) {
     // Set up control plane with specified host rank
     auto chip_mapping = get_dual_host_chip_mapping();
     auto control_plane =
-        make_control_plane(kDualHostMeshDesc, chip_mapping, {.mesh_id = MeshId{0}, .host_rank = params.host_rank});
+        make_control_plane(dual_host_mesh_desc(), chip_mapping, {.mesh_id = MeshId{0}, .host_rank = params.host_rank});
 
     // Test global mesh shape (always 2x4)
     auto global_shape = control_plane->get_physical_mesh_shape(MeshId{0}, MeshScope::GLOBAL);
@@ -248,7 +253,7 @@ TEST_P(MeshScopeParameterizedTest, GetCoordRange) {
     // Set up control plane with specified host rank
     auto chip_mapping = get_dual_host_chip_mapping();
     auto control_plane =
-        make_control_plane(kDualHostMeshDesc, chip_mapping, {.mesh_id = MeshId{0}, .host_rank = params.host_rank});
+        make_control_plane(dual_host_mesh_desc(), chip_mapping, {.mesh_id = MeshId{0}, .host_rank = params.host_rank});
 
     // Test global coordinate range (always (0,0) to (1,3))
     auto global_range = control_plane->get_coord_range(MeshId{0}, MeshScope::GLOBAL);
