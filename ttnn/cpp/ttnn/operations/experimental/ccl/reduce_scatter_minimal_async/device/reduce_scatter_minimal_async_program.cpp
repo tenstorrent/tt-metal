@@ -506,10 +506,10 @@ void apply_reduce_scatter_common_args(
     const std::optional<Tensor>& penult) {
     using Args = ttnn::ccl::ReduceScatterCommonArgs;
     std::array<uint32_t, Args::count> values{};
-    values[Args::input] = input.buffer()->address();
-    values[Args::intermediate] = intermediate.buffer()->address();
-    values[Args::output] = output.buffer()->address();
-    values[Args::penult] = penult.has_value() ? penult->buffer()->address() : 0u;
+    values[Args::input] = input.mesh_buffer().address();
+    values[Args::intermediate] = intermediate.mesh_buffer().address();
+    values[Args::output] = output.mesh_buffer().address();
+    values[Args::penult] = penult.has_value() ? penult->mesh_buffer().address() : 0u;
     const auto semaphore_args = reduce_scatter_semaphore_args(is_ring, barrier, semaphores);
     std::copy(semaphore_args.begin(), semaphore_args.end(), values.begin() + Args::barrier);
     for (const size_t kernel_index : {artifacts.reader_kernel_index, artifacts.writer_kernel_index}) {
@@ -574,7 +574,7 @@ ReduceScatterDescriptorArtifacts build_ring_reduce_scatter_minimal_async_program
     // Each sender is reader + compute + writer
     uint32_t num_directions_per_link = 2;
     uint32_t num_mux_cores_per_direction_per_link = 1;
-    uint64_t input_data_size_bytes = input_tensor.buffer()->size();
+    uint64_t input_data_size_bytes = input_tensor.mesh_buffer().device_local_size();
     uint32_t num_workers_per_direction =
         num_workers_per_direction_opt.value_or(ttnn::experimental::ccl::reduce_scatter_default_workers(
             *mesh_device,
@@ -596,7 +596,7 @@ ReduceScatterDescriptorArtifacts build_ring_reduce_scatter_minimal_async_program
         num_workers_per_direction, num_directions_per_link, num_mux_cores_per_direction_per_link);
 
     // Get OP Config, topology config
-    uint32_t page_size = input_tensor.buffer()->page_size();
+    uint32_t page_size = input_tensor.mesh_buffer().page_size();
     auto [unicast_forward_args, unicast_backward_args] = ccl::get_forward_backward_line_unicast_configuration(
         sender_device_coord, forward_coord, backward_coord, mesh_device);
     auto [mcast_forward_args, mcast_backward_args] = ccl::get_forward_backward_line_mcast_configuration(
@@ -683,7 +683,7 @@ ReduceScatterDescriptorArtifacts build_ring_reduce_scatter_minimal_async_program
         !(fuse_op && normalized_dim == 0),
         "reduce_scatter_minimal_async ring implementation can't be fused with matmul when scattering on dim 0");
 
-    const uint32_t input_tensor_num_pages = input_tensor.buffer()->num_pages();
+    const uint32_t input_tensor_num_pages = input_tensor.mesh_buffer().num_pages();
     const uint32_t output_tensor_num_pages = input_tensor_num_pages / ring_size;
     const uint32_t input_batch_num_pages = input_tensor_num_pages / input_tensor_B;
     const bool per_batch_traversals = fuse_op && input_tensor_B > 1;
@@ -742,13 +742,13 @@ ReduceScatterDescriptorArtifacts build_ring_reduce_scatter_minimal_async_program
         // into whatever follows it in DRAM. The public op already rejects such a buffer in validate; this
         // covers callers that reach the builder directly, such as matmul_reduce_scatter_async.
         TT_FATAL(
-            intermediate_tensor.buffer()->num_pages() >= input_tensor_num_pages,
+            intermediate_tensor.mesh_buffer().num_pages() >= input_tensor_num_pages,
             "reduce_scatter_minimal_async: the tiled intermediate must hold the whole input ({} pages) so that "
             "each of the {} batches can stage into its own region; got {} pages. Allocate it with the input "
             "tensor's shape.",
             input_tensor_num_pages,
             input_tensor_B,
-            intermediate_tensor.buffer()->num_pages());
+            intermediate_tensor.mesh_buffer().num_pages());
     }
 
     // input_tensor from reader -> compute
@@ -1263,7 +1263,7 @@ ReduceScatterDescriptorArtifacts build_line_reduce_scatter_minimal_async_program
     // 2 senders (reader + core + writer) per direction (forward, backward) per link
     uint32_t num_directions_per_link = 2;
     uint32_t num_mux_cores_per_direction_per_link = 1;
-    uint64_t input_data_size_bytes = input_tensor.buffer()->size();
+    uint64_t input_data_size_bytes = input_tensor.mesh_buffer().device_local_size();
     uint32_t num_workers_per_direction =
         num_workers_per_direction_opt.value_or(ttnn::experimental::ccl::reduce_scatter_default_workers(
             *mesh_device,
@@ -1289,7 +1289,7 @@ ReduceScatterDescriptorArtifacts build_line_reduce_scatter_minimal_async_program
     TT_FATAL(!fuse_op, "reduce_scatter_minimal_async line implementation does not support fusion");
 
     // Get OP Config, topology config
-    uint32_t page_size = input_tensor.buffer()->page_size();
+    uint32_t page_size = input_tensor.mesh_buffer().page_size();
     auto [unicast_forward_args, unicast_backward_args] = ccl::get_forward_backward_line_unicast_configuration(
         sender_device_coord, forward_coord, backward_coord, mesh_device);
     auto [num_targets_forward, num_targets_backward] =
@@ -1428,7 +1428,7 @@ ReduceScatterDescriptorArtifacts build_line_reduce_scatter_minimal_async_program
         !(fuse_op && normalized_dim == 0),
         "reduce_scatter_minimal_async line implementation can't be fused with matmul when scattering on dim 0");
 
-    const uint32_t input_tensor_num_pages = input_tensor.buffer()->num_pages();
+    const uint32_t input_tensor_num_pages = input_tensor.mesh_buffer().num_pages();
     const uint32_t output_tensor_num_pages = input_tensor_num_pages / ring_size;
     const uint32_t input_batch_num_pages = input_tensor_num_pages / input_tensor_B;
     const uint32_t output_batch_num_pages = output_tensor_num_pages / slice_B;
@@ -1466,6 +1466,7 @@ ReduceScatterDescriptorArtifacts build_line_reduce_scatter_minimal_async_program
     // Fabric mux kernel. The mux's map goes in program-local L1 (a circular buffer on the mux cores), so it stays
     // clear of persistent L1 there; its addresses are offsets until the mux publishes the map's base.
     auto mux_kernel_config = tt::tt_fabric::FabricMuxConfig(
+        *mesh_device,
         num_full_size_channels,
         num_header_only_channels,
         num_buffers_full_size_channels,
@@ -1645,11 +1646,11 @@ ReduceScatterDescriptorArtifacts build_line_reduce_scatter_minimal_async_program
                 if (dir) {  // forward
                     const auto dst_node_id = mesh_device->get_fabric_node_id(forward_coord.value());
                     mux_rt_args = mux_kernel_config.get_fabric_mux_run_time_args(
-                        src_node_id, dst_node_id, link, program, {mux_logical_core});
+                        *mesh_device, src_node_id, dst_node_id, link, program, {mux_logical_core});
                 } else {
                     const auto dst_node_id = mesh_device->get_fabric_node_id(backward_coord.value());
                     mux_rt_args = mux_kernel_config.get_fabric_mux_run_time_args(
-                        src_node_id, dst_node_id, link, program, {mux_logical_core});
+                        *mesh_device, src_node_id, dst_node_id, link, program, {mux_logical_core});
                 }
                 set_runtime_args(program, mux_kernel_id, mux_logical_core, mux_rt_args);
             }

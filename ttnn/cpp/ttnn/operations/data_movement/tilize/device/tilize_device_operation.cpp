@@ -235,10 +235,10 @@ void TilizeDeviceOperation::validate_on_program_cache_miss(
         const uint32_t shard_width =
             (input_tensor_a.shard_spec().has_value() ? input_tensor_a.shard_spec().value().shape[1]
                                                      : input_tensor_a.nd_shard_spec().value().shard_shape[-1]);
-        const uint32_t page_size_bytes = input_tensor_a.buffer()->page_size();
+        const uint32_t page_size_bytes = input_tensor_a.mesh_buffer().page_size();
         const uint32_t alignment_requirement = hal::get_l1_alignment();
         TT_FATAL(
-            page_size_bytes == input_tensor_a.buffer()->aligned_page_size(),
+            page_size_bytes == input_tensor_a.mesh_buffer().aligned_page_size(),
             "Input row-major shard width {} bytes gives page size {} bytes, which must be aligned to {} bytes L1 SRAM "
             "buffer alignment "
             "requirement",

@@ -95,7 +95,7 @@ ProgramDescriptor RecvDirectAsyncProgramFactory::create_descriptor(
 
     auto max_alignment = std::max(
         target_device->allocator()->get_alignment(mesh_socket.get_config().socket_mem_config.socket_storage_type),
-        output_tensor.buffer()->alignment());
+        output_tensor.mesh_buffer().alignment());
 
     uint32_t handshake_page_size = ttnn::send_recv_utils::handshake_page_size(max_alignment);
 
@@ -141,7 +141,7 @@ ProgramDescriptor RecvDirectAsyncProgramFactory::create_descriptor(
         // would patch the output address and leave the socket address frozen at first miss.
         std::vector<uint32_t> handshake_rt_args = {
             mesh_socket.get_config_buffer()->address(),  // socket_config_addr
-            output_tensor.buffer()->address(),           // output_base_addr
+            output_tensor.mesh_buffer().address(),       // output_base_addr
         };
 
         auto link_indices = tt::tt_fabric::get_forwarding_link_indices(
@@ -180,7 +180,7 @@ void RecvDirectAsyncProgramFactory::override_runtime_arguments(
     // The rest of the runtime args (the fabric connection trailer) derives from the socket topology,
     // which is in the program hash — so on a cache hit only these two base addresses can have moved.
     const uint32_t socket_config_addr = mesh_socket.get_config_buffer()->address();
-    const uint32_t output_base_addr = output_tensor.buffer()->address();
+    const uint32_t output_base_addr = output_tensor.mesh_buffer().address();
 
     for (const auto& receiver_core_coord :
          collect_receiver_connections(mesh_socket, output_tensor, target_device).core_coords) {
