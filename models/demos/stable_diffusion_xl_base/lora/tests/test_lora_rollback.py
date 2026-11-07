@@ -17,7 +17,7 @@ from models.demos.stable_diffusion_xl_base.tests.test_common import (
     prepare_device,
 )
 from models.demos.stable_diffusion_xl_base.tt.tt_sdxl_pipeline import TtSDXLPipeline, TtSDXLPipelineConfig
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tt_py_test_utils_common.utils_for_testing import assert_with_pcc
 
 
 def _run_forward_pass(tt_sdxl, pipeline, prompt, negative_prompt, batch_size):

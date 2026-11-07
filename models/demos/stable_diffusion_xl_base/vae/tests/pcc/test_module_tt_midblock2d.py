@@ -11,7 +11,7 @@ import ttnn
 from models.common.utility_functions import is_blackhole, torch_random
 from models.demos.stable_diffusion_xl_base.vae.tt.model_configs import load_vae_model_optimisations
 from models.demos.stable_diffusion_xl_base.vae.tt.tt_midblock2d import TtUNetMidBlock2D
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tt_py_test_utils_common.utils_for_testing import assert_with_pcc
 
 
 @pytest.mark.parametrize(
