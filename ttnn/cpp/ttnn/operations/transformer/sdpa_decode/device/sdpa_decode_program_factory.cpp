@@ -199,8 +199,12 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
     TT_FATAL(num_cores_available >= B, "Cores available ({}) must be >= batch size ({})", num_cores_available, B);
 
     // ========== Core Allocation ==========
-    const uint32_t max_cores_per_head =
-        program_config.has_value() ? program_config->max_cores_per_head_batch : num_cores_available;
+    // Without a program config, give a head no more cores than the tree reduction can combine. A batch-1,
+    // single-KV-head call would otherwise take the whole grid, which exceeds that on grids of more than 64 cores
+    // (Blackhole).
+    const uint32_t max_cores_per_head = program_config.has_value()
+                                            ? program_config->max_cores_per_head_batch
+                                            : std::min<uint32_t>(num_cores_available, 1u << MAX_TREE_REDUCTION_ROUNDS);
     TT_FATAL(max_cores_per_head > 0, "max_cores_per_head_batch must be > 0");
     const uint32_t max_num_cores_for_compute = max_cores_per_head * B * num_kv_heads;
     const uint32_t num_cores_per_batch_uncapped = std::min(num_cores_available, max_num_cores_for_compute) / B;
