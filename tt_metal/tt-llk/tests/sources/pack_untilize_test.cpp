@@ -115,7 +115,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             else
             {
                 const std::uint32_t src_handshake_iters = LOOP_FACTOR * _perf_src_handshake_iters_(false /* tilize_en */, TILE_CNT, num_faces);
-                _perf_unpack_loop_set_valid<true /* set_a */, is_fp32_dest_acc_en /* set_b */>(src_handshake_iters);
+                _perf_unpack_stream_set_valid<true /* set_a */, is_fp32_dest_acc_en /* set_b */, PERF_RUN_TYPE>(src_handshake_iters);
             }
         }
         else if constexpr (PERF_RUN_TYPE != PerfRunType::PACK_ISOLATE)
@@ -174,14 +174,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
         }
-        else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
+        else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE)
         {
             if constexpr (!unpack_to_dest)
             {
                 const std::uint32_t src_handshake_iters = LOOP_FACTOR * _perf_src_handshake_iters_(false /* tilize_en */, TILE_CNT, num_faces);
                 // Real unpack_A posts both SrcA and SrcB dvalids; both must be consumed
                 // before unpack can advance to the next face.
-                _perf_math_loop_clear_valid<true /* clear_a */, true /* clear_b */>(src_handshake_iters);
+                _perf_math_stream_clear_valid<true /* clear_a */, true /* clear_b */, PERF_RUN_TYPE>(src_handshake_iters);
             }
             else
             {

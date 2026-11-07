@@ -68,11 +68,16 @@ int main(void)
     *(mailbox_base + 2)    = ckernel::RESET_VAL;
 #ifdef ARCH_QUASAR
     *(mailbox_base + 3) = ckernel::RESET_VAL;
+    for (std::uint32_t slot = 0; slot < llk_barrier::NUM_THREADS; ++slot)
+    {
+        host_signal::write(slot, ckernel::RESET_VAL);
+    }
 #endif
     device_setup();
 #if defined(ARCH_QUASAR)
-    // No BRISC on Quasar: unpack configures and arms the counters while the other TRISCs are still held in reset.
-    llk_perf::configure_and_arm();
+    // No BRISC on Quasar: unpack resets the barrier and scrubs the debug features while the others are held in reset.
+    llk_barrier::reset_semaphores();
+    llk_perf::clear_debug_features();
 #endif
     clear_trisc_soft_reset(); // Release the rest of the triscs
 #endif
@@ -88,6 +93,9 @@ int main(void)
 #endif
 
 #if defined(LLK_PROFILER)
+    // Counters on only, empty otherwise (counters.h): copy the launch word here, before the kernel, and read the
+    // last zone of a single thread run type after it (read_last_zone).
+    llk_perf::load_counted_zones();
     llk_profiler::reset();
     llk_profiler::sync_threads();
 #endif
@@ -106,7 +114,15 @@ int main(void)
 
     llk_perf::read_last_zone();
 
-    *mailbox = ckernel::KERNEL_COMPLETE;
+#if (defined(ARCH_WORMHOLE) || defined(ARCH_BLACKHOLE)) && !(defined(TT_METAL_TTSIM) && defined(COVERAGE))
+    ckernel::store_blocking(mailbox, ckernel::KERNEL_COMPLETE); // landed before BRISC can reset this core (_start)
+#elif defined(ARCH_WORMHOLE) || defined(ARCH_BLACKHOLE)
+    // ttsim BRISC resets this core once the mailbox reads complete: _start publishes it after the coverage dump
+#else
+    *mailbox = ckernel::KERNEL_COMPLETE; // kept in L1 too: ttsim's only signal, and what trisc_hangs and llk_triage.py read
+    asm volatile("fence" ::: "memory"); // the L1 results land before the flag the host polls
+    host_signal::write(mailbox_offset / sizeof(std::uint32_t), ckernel::KERNEL_COMPLETE);
+#endif
 }
 
 extern "C" __attribute__((section(".init"), naked, noreturn, no_profile_instrument_function)) std::uint32_t _start()
@@ -117,6 +133,16 @@ extern "C" __attribute__((section(".init"), naked, noreturn, no_profile_instrume
 
 #ifdef COVERAGE
     gcov_dump();
+#endif
+
+#if (defined(ARCH_WORMHOLE) || defined(ARCH_BLACKHOLE)) && defined(TT_METAL_TTSIM) && defined(COVERAGE)
+    ckernel::store_blocking(reinterpret_cast<mailbox_t>(mailboxes_start + mailbox_offset), ckernel::KERNEL_COMPLETE);
+#endif
+
+#if (defined(ARCH_WORMHOLE) || defined(ARCH_BLACKHOLE)) && !defined(TT_METAL_TTSIM) // BRISC waits on L1 on ttsim
+    // Park on this TRISC's own PC buffer, which nothing fills: that ends BRISC's wait on it (brisc.cpp), and BRISC then
+    // puts the core back in soft reset.
+    (void)ckernel::load_blocking(&ckernel::pc_buf_base[0]);
 #endif
 
     for (;;)
