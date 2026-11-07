@@ -34,27 +34,40 @@ def _create_fabric_router_config(max_payload_size):
     return config
 
 
+_FABRIC_MODE_MAP = {
+    "1d": ttnn.FabricConfig.FABRIC_1D,
+    "2d": ttnn.FabricConfig.FABRIC_2D,
+    "1d_ring": ttnn.FabricConfig.FABRIC_1D_RING,
+    "2d_torus_x": ttnn.FabricConfig.FABRIC_2D_TORUS_X,
+    "2d_torus_y": ttnn.FabricConfig.FABRIC_2D_TORUS_Y,
+    "2d_torus_xy": ttnn.FabricConfig.FABRIC_2D_TORUS_XY,
+}
+
+_FORCED_FABRIC_MODES = {(8, 4): "2d_torus_xy"}
+
+
+def resolve_fabric_mode(mesh_shape: tuple) -> str:
+    forced = _FORCED_FABRIC_MODES.get(tuple(mesh_shape))
+    if forced is not None:
+        return forced
+    fabric_mode = os.environ.get("PREFILL_FABRIC_MODE", "").strip().lower()
+    if not fabric_mode:
+        # The torus modes need a descriptor declaring RING on both axes; a LINE one hangs at bring-up.
+        return "2d_torus_xy"
+    if fabric_mode not in _FABRIC_MODE_MAP:
+        raise ValueError(f"PREFILL_FABRIC_MODE must be one of {sorted(_FABRIC_MODE_MAP)}, got {fabric_mode!r}")
+    return fabric_mode
+
+
 def open_mesh_device(
     mesh_shape: tuple, max_payload_size: int, l1_small_size: int = 0, trace_region_size: int = 0
 ) -> ttnn.MeshDevice:
-    sp = mesh_shape[0]
-    fabric_mode = os.environ.get("PREFILL_FABRIC_MODE", "").strip().lower()
-    fabric_mode_map = {
-        "1d": ttnn.FabricConfig.FABRIC_1D,
-        "2d": ttnn.FabricConfig.FABRIC_2D,
-        "1d_ring": ttnn.FabricConfig.FABRIC_1D_RING,
-        "2d_torus_x": ttnn.FabricConfig.FABRIC_2D_TORUS_X,
-        "2d_torus_y": ttnn.FabricConfig.FABRIC_2D_TORUS_Y,
-        "2d_torus_xy": ttnn.FabricConfig.FABRIC_2D_TORUS_XY,
-    }
-    if fabric_mode in fabric_mode_map:
-        fabric_config = fabric_mode_map[fabric_mode]
-    elif fabric_mode:
-        raise ValueError(f"PREFILL_FABRIC_MODE must be one of {sorted(fabric_mode_map)}, got {fabric_mode!r}")
-    else:
-        # The torus modes need a descriptor declaring RING on both axes; a LINE one hangs at bring-up.
-        fabric_config = ttnn.FabricConfig.FABRIC_2D_TORUS_XY
-    logger.info(f"Fabric config: {fabric_config} (sp={sp}, PREFILL_FABRIC_MODE={fabric_mode or 'unset'})")
+    fabric_mode = resolve_fabric_mode(mesh_shape)
+    fabric_config = _FABRIC_MODE_MAP[fabric_mode]
+    env_mode = os.environ.get("PREFILL_FABRIC_MODE", "").strip().lower() or "unset"
+    logger.info(f"Fabric config: {fabric_config} (mesh={tuple(mesh_shape)}, PREFILL_FABRIC_MODE={env_mode})")
+    if tuple(mesh_shape) in _FORCED_FABRIC_MODES and env_mode not in ("unset", fabric_mode):
+        logger.warning(f"PREFILL_FABRIC_MODE={env_mode} ignored: mesh {tuple(mesh_shape)} always runs {fabric_mode}")
 
     fabric_router_config = _create_fabric_router_config(
         max_payload_size=max_payload_size,

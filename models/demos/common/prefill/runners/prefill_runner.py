@@ -52,6 +52,7 @@ from models.demos.common.prefill.runners.runner_utils import (
     make_h2d_spec,
     num_mtp_tokens,
     open_mesh_device,
+    resolve_fabric_mode,
 )
 from models.demos.deepseek_v3_d_p.tt.mla.utils import mtp_lookahead_positions
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat
@@ -168,7 +169,10 @@ CHUNK_TIMEOUT_SECONDS = float(os.environ.get("TT_PREFILL_CHUNK_TIMEOUT_SECONDS",
 _L1_SMALL_SIZE = int(os.environ.get("PREFILL_L1_SMALL_SIZE", ADAPTER.l1_small_size))
 if MTP_LEVELS:
     _L1_SMALL_SIZE += 512
-USE_TRACE = os.environ.get("PREFILL_USE_TRACE", "0") == "1"
+_FORCED_TRACE_MODELS = {"glm_5_3"}
+USE_TRACE = ADAPTER.name in _FORCED_TRACE_MODELS or os.environ.get("PREFILL_USE_TRACE", "0") == "1"
+if ADAPTER.name in _FORCED_TRACE_MODELS and os.environ.get("PREFILL_USE_TRACE", "1") != "1":
+    logger.warning(f"PREFILL_USE_TRACE={os.environ['PREFILL_USE_TRACE']} ignored: {ADAPTER.name} always runs traced")
 # Hybrid page pool v2: the engine finds each rank's D2D receiver from the exported pipeline descriptor.
 HYBRID_PAGE_POOL_V2 = os.environ.get("PREFILL_HYBRID_PAGE_POOL_V2", "0") == "1"
 # GLM KVPE cache: scaled FP8 unless PREFILL_SCALED_FP8_KV_CACHE=0 (bf16). Dense-MLA models get None.
@@ -1055,7 +1059,7 @@ def _print_config() -> None:
         ("PREFILL_NUM_USERS", str(NUM_USERS)),
         ("PREFILL_CAPACITY_FACTOR", str(CAPACITY_FACTOR)),
         ("PREFILL_GATE_FALLBACK_MODE", _gate_mode_name),
-        ("PREFILL_FABRIC_MODE", os.environ.get("PREFILL_FABRIC_MODE", "2d_torus_xy")),
+        ("PREFILL_FABRIC_MODE", resolve_fabric_mode(GLOBAL_MESH_SHAPE)),
         ("PREFILL_PP_D2D_FIFO_BYTES", str(D2D_FIFO_SIZE_BYTES)),
         (
             "TT_METAL_FABRIC_DISABLE_INTERMESH_VC",
