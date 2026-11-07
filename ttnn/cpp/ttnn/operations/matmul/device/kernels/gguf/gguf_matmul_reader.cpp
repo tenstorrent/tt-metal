@@ -7,7 +7,7 @@
 // with one read, a unit of them per transaction id, one or two units in flight. Larger groups land whole in a staging
 // ring (c_2), one read each, one or two in flight, and go into their pages from local L1, each codes part with the
 // group's scale rows. The scale rows are converted once, in the first page (prepare_scales), and the block is copied to
-// the other pages (Q2_K, Q5_K: by the writer of this core while this kernel moves the next record). Codebook formats
+// the other pages (Q2_K: by the writer of this core while this kernel moves the next record). Codebook formats
 // then fill in the pages' grid levels (lookup_grid): this kernel the first half of each page's index words, the writer
 // of this core the second (gguf_matmul_writer.cpp), on a request per record. Compile args: format id, c_0 pages,
 // one-page groups per unit, staging slots, the lookup request, answer and page address semaphores, reads in flight,
@@ -105,7 +105,7 @@ void kernel_main() {
         static_assert(slots > in_flight);
         constexpr uint32_t local = slots + 1;  // transaction id of the copies within L1
         constexpr bool shared_scales = L.fp16_rows > 0;
-        // Two fp16 scale rows (Q2_K, Q5_K): the writer of this core converts them and copies them to the other pages
+        // Two fp16 scale rows (Q2_K): the writer of this core converts them and copies them to the other pages
         // (gguf_matmul_writer.cpp) while this kernel moves the next record into its pages; with one, the handoff
         // costs more than the conversion.
         constexpr bool prep_on_writer = L.fp16_rows > 1 && !is_codebook<FMT>();
