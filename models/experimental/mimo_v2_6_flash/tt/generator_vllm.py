@@ -2965,6 +2965,18 @@ class MiMoV2OmniForCausalLM(MiMoV2ForCausalLM, *((SupportsMultiModal,) if Suppor
         super().warmup_model_decode(*args, **kwargs)
         if not any(v is not None for v in getattr(self, "vision_encoders", [])):
             return
+        # The ViT's traced buckets (their persistent buffers were allocated in the prefill warm-up, before the text
+        # model's captures), captured after every text-model trace: a replay writes its temporaries where they were
+        # at capture, which must not hold anything allocated later. A bucket that does not fit stays eager.
+        for lane, vit in enumerate(self.vision_encoders):
+            if vit is not None and hasattr(vit, "capture_traces"):
+                t0 = time.time()
+                sizes = vit.capture_traces()
+                if sizes:
+                    logger.info(
+                        f"MiMo vLLM: replica {lane} ViT traces captured for buckets {list(sizes)} in "
+                        f"{time.time() - t0:.1f}s, {sum(sizes.values()) / 2**20:.1f} MiB of trace region per chip"
+                    )
         need = VIT_PASS_DRAM_MB[VIT_LARGEST_PASS]
         for lane, model in enumerate(self.models):
             view = ttnn.get_memory_view(model.mesh_device, ttnn.BufferType.DRAM)
