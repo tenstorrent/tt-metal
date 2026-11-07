@@ -94,13 +94,19 @@ def test_bonsai_perf(mesh_device, device_params):
         signpost("DECODE_END")
         return
 
-    layers = int(os.environ.get("BONSAI_OPT_PROFILE_LAYERS", "0") or 0) if traced_prof else 0
+    layers = (
+        int(os.environ.get("BONSAI_OPT_PROFILE_LAYERS", "0") or 0)
+        if traced_prof
+        else int(os.environ.get("BONSAI_N_LAYERS", "0") or 0)
+    )
     model, page_table = build_model(device, n_layers=layers or None)
     vocab = model.args.vocab_size
     model.capture_prefill_trace_chunked(device, page_table, chunk_size=CHUNK, warmup_masked_buckets=False)
     logits = prefill_traced(model, prompt, page_table)  # untimed: compiles the last-token norm and LM head
     prefill_ms = []
+    cooldown = float(os.environ.get("BONSAI_PREFILL_COOLDOWN", "0") or 0)  # s idle before each sample (cold TTFT)
     for _ in range(PREFILL_SAMPLES if STAGE == "prefill" else 0):
+        time.sleep(cooldown)
         t = time.perf_counter()
         logits = prefill_traced(model, prompt, page_table)
         first = int(logits[:vocab].argmax())

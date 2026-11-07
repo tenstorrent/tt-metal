@@ -186,7 +186,11 @@ def test_tprefill_parts_time(device):
 def test_tprefill2(device, T, K, N, glu):
     from models.demos.blackhole.bonsai2.tt.ternary.decode_linear3 import pack_glu_records, pack_records_inline
     from models.demos.blackhole.bonsai2.tt.tprefill.linear2 import TernaryPrefillLinear2
+    from models.demos.blackhole.bonsai2.tt.tprefill.linear6 import TernaryPrefillLinear6, round_sig
 
+    six = os.environ.get("BONSAI_TPRE_CLASS") == "6"  # the shared-fold linear (5-bit scales) instead
+    cls = TernaryPrefillLinear6 if six else TernaryPrefillLinear2
+    rs = (lambda s: round_sig(s).astype(np.float32)) if six else (lambda s: s)
     x = torch.randn(T, K).bfloat16()
     xt = ttnn.from_torch(x.reshape(1, 1, T, K), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     if glu:
@@ -202,11 +206,12 @@ def test_tprefill2(device, T, K, N, glu):
             device=device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        lin = TernaryPrefillLinear2.from_records(device, rec_dev, rec, ppr, K, 2 * N, glu=True)
-        ref = torch.nn.functional.silu(reference(x, tg, sg)) * reference(x, tu, su)
+        lin = cls.from_records(device, rec_dev, rec, ppr, K, 2 * N, glu=True)
+        ref = torch.nn.functional.silu(reference(x, tg, rs(sg))) * reference(x, tu, rs(su))
     else:
         t, s = _weights(K, N)
-        lin = TernaryPrefillLinear2.from_host(device, t, s)
+        lin = cls.from_host(device, t, s)
+        s = rs(s)
         if "T2_NOSCALE" in os.environ.get("BONSAI_T2_DEFINES", ""):
             s = np.ones_like(s)
         ref = reference(x, t, s)
