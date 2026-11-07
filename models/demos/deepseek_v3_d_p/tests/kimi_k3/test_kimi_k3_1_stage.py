@@ -650,8 +650,10 @@ def test_kimi_k3_1_stage_kvpe(stage, mesh_device, device_params):
 # arrives), each traced replay synchronized and timed on host (`STAGE_PERIOD` lines; one stage's chunk time is
 # its retire period in the PP4 pipeline). Then one more pass under the real-time device profiler, one program
 # record per chip, and the same for one chunk at the deepest position of the per-user cache (the 1M probe of
-# ao3i.1.6). Each profiled chunk's programs go to `stage{s}.{label}.programs.json` in dispatch order with the
-# per-chip durations (critical path = max over chips), for attribution off device.
+# ao3i.1.6). Each profiled chunk's programs go to `stage{s}.{label}.programs.json` in dispatch order with each
+# chip's [start, end] ns on that chip's clock, for attribution off device: programs overlap (sub-device regions),
+# so durations alone do not partition the chunk, and a program without records (the DSA indexer's top-k on its
+# sub-device) shows only as a gap in a chip's timeline.
 #
 #     for s in 0 1 2 3; do K31_HANDOFF_DIR=/path/perf10k scripts/run_safe_pytest.sh \
 #         "models/demos/deepseek_v3_d_p/tests/kimi_k3/test_kimi_k3_1_stage.py::test_kimi_k3_1_stage_prompt_perf[blackhole-stage$s-torus-xy-8x4]"; done
@@ -690,9 +692,9 @@ def _profiled_replay(runtime, mesh_device, chunk_input, kv_caches, slot, start, 
         program = programs.setdefault(
             record["runtime_id"], {"runtime_id": record["runtime_id"], "kernel_sources": record["kernel_sources"]}
         )
-        program.setdefault("chip_ns", {})[record["chip_id"]] = record["duration_ns"]
+        program.setdefault("chip_ns", {})[record["chip_id"]] = (record["start_ns"], record["end_ns"])
     path.write_text(json.dumps(list(programs.values())))
-    critical_path = sum(max(p["chip_ns"].values()) for p in programs.values())
+    critical_path = sum(max(end - start for start, end in p["chip_ns"].values()) for p in programs.values())
     logger.info(
         f"STAGE_PROFILE {path.name}: {len(programs)} programs, {len(records)} records, "
         f"sum of per-program max over chips {critical_path / 1e6:.3f} ms"
