@@ -164,7 +164,7 @@ public:
     chan_id_t get_fabric_master_router_chan(ChipId chip_id) const;
 
     // ============ Router Address Info ============
-    std::vector<size_t> get_fabric_router_addresses_to_clear() const;
+    std::vector<std::pair<size_t, size_t>> get_fabric_router_addresses_to_clear() const;
     std::pair<uint32_t, uint32_t> get_fabric_router_sync_address_and_status() const;
     std::optional<std::pair<uint32_t, EDMStatus>> get_fabric_router_ready_address_and_signal() const;
     std::pair<uint32_t, uint32_t> get_fabric_router_termination_address_and_signal() const;
