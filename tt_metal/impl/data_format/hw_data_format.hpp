@@ -12,7 +12,17 @@ namespace tt::tt_metal {
 
 using hw_format_t = std::underlying_type_t<DataFormat>;
 
-// The HW DataFormat code device compilation needs for a host DataFormat (see hw_data_format.cpp).
+// Quasar HW DataFormat code for a host DataFormat (see hw_data_format.cpp).
+// The one-argument form is the Quasar table. Wormhole and Blackhole host values are already
+// the hardware codes, so call that form only for ARCH::QUASAR.
 hw_format_t host_data_format_to_hw(DataFormat f);
+
+// Arch seam for the table above. Quasar gets the remapped code; every other arch gets the host value.
+hw_format_t host_data_format_to_hw(DataFormat f, tt::ARCH arch);
+
+// Host DataFormat for a code copied out of a device format field. Rewrites the Quasar codes that
+// collide with a different host enumerator. Those codes are not Wormhole or Blackhole circular-buffer
+// formats, so this is safe on every arch. Every other code is already the host value.
+DataFormat hw_data_format_to_host(hw_format_t code);
 
 }  // namespace tt::tt_metal

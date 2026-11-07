@@ -20,6 +20,7 @@
 #include <enchantum/enchantum.hpp>
 #include <enchantum/scoped.hpp>
 #include "impl/data_format/blockfloat_common.hpp"
+#include "impl/data_format/hw_data_format.hpp"
 #include <tt_stl/assert.hpp>
 
 #include "fmt/base.h"
@@ -592,7 +593,7 @@ std::string_view DevicePrintParserImpl<PointerSize>::format_message(
                         continue;
                     }
                     case DPrintErrorUnsupportedFormat: {
-                        tt::DataFormat data_format = static_cast<tt::DataFormat>(tile_slice.header.data_format);
+                        const tt::DataFormat data_format = hw_data_format_to_host(tile_slice.header.data_format);
                         fmt::format_to(
                             std::back_inserter(buffer.buffer),
                             "Tried printing {}: Unsupported data format ({})\n",
@@ -618,7 +619,9 @@ std::string_view DevicePrintParserImpl<PointerSize>::format_message(
                         continue;
                 }
 
-                // No error codes, print the TileSlice
+                // The device copies a hardware code; hw_data_format_to_host maps the Quasar UInt8 and Fp8P collisions.
+                const uint8_t raw_format = tile_slice.header.data_format;
+                const tt::DataFormat data_format = hw_data_format_to_host(raw_format);
                 const uint8_t* data = tile_slice.data.data();
                 uint32_t i = 0;
                 bool count_exceeded = false;
@@ -633,7 +636,6 @@ std::string_view DevicePrintParserImpl<PointerSize>::format_message(
                             count_exceeded = true;
                             break;
                         }
-                        tt::DataFormat data_format = static_cast<tt::DataFormat>(tile_slice.header.data_format);
                         switch (data_format) {
                             case tt::DataFormat::Float16_b: {
                                 const uint16_t* float16_b_ptr = reinterpret_cast<const uint16_t*>(data);
@@ -682,7 +684,15 @@ std::string_view DevicePrintParserImpl<PointerSize>::format_message(
                                 fmt::format_to(std::back_inserter(buffer.buffer), format, (unsigned int)data_ptr[i]);
                                 break;
                             }
-                            default: break;
+                            default:
+                                fmt::format_to(
+                                    std::back_inserter(buffer.buffer),
+                                    "Unsupported data format ({})\n",
+                                    static_cast<unsigned>(raw_format));
+                                // The switch is inside the element loops. End the slice after one message.
+                                h = tile_slice.header.slice_range.h1;
+                                w = tile_slice.header.slice_range.w1;
+                                break;
                         }
                         if (w + tile_slice.header.slice_range.ws < tile_slice.header.slice_range.w1) {
                             buffer.buffer.append(" "sv);
