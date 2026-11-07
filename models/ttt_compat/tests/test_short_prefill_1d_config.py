@@ -58,7 +58,7 @@ def test_single_card_short_prefill_uses_1d_mcast_in0(name, seq_len):
     assert isinstance(pc, ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig)
     assert pc.mcast_in0
     assert pc.fuse_batch
-    assert tuple(pc.compute_with_storage_grid_size) == (8, 8)
+    assert (pc.compute_with_storage_grid_size.x, pc.compute_with_storage_grid_size.y) == (8, 8)
     assert pc.per_core_M == seq_len // 32
 
 
