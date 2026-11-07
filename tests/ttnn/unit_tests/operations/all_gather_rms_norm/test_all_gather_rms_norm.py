@@ -227,6 +227,12 @@ AXIS1_CASES = [
     pytest.param((1, 1, 17, 50), ttnn.bfloat8_b, RING, 1, RM, ttnn.bfloat16, id="17x50-bf8b-ring-L1-gRM"),
     pytest.param((1, 1, 64, 1000), ttnn.bfloat8_b, RING, 2, TILE, ttnn.float32, id="64x1000-bf8b-ring-L2-gTILE"),
     pytest.param((4, 128, 47), ttnn.bfloat8_b, LINE, 1, None, None, id="r3_4x128x47-bf8b-line-L1-nogamma"),
+    # far slice split between directions by row parity (Refinement 3): odd tile-row counts, so a 1-row last item
+    # leaves one direction's far half empty (R_t 5 / 3 with 4 / 2 rows per item), and 1-row items (xfer_rows 1, wide
+    # rows) where every other far item is empty
+    pytest.param((1, 1, 160, 384), ttnn.bfloat16, RING, 2, RM, ttnn.bfloat16, id="160x384-ring-L2-rowsplit_tail"),
+    pytest.param((1, 1, 96, 384), ttnn.bfloat16, RING, 1, None, None, id="96x384-ring-L1-rowsplit_tail"),
+    pytest.param((1, 1, 96, 1792), ttnn.bfloat16, RING, 2, RM, ttnn.bfloat16, id="96x1792-ring-L2-rowsplit_xr1"),
     # Linear over the same four devices
     pytest.param((1, 1, 640, 384), ttnn.bfloat16, LINE, 2, RM, ttnn.bfloat16, id="focus_640x384-line-L2-gRM"),
     pytest.param((1, 1, 64, 128), ttnn.float32, LINE, 1, TILE, ttnn.float32, id="64x128-fp32-line-L1-gTILE"),

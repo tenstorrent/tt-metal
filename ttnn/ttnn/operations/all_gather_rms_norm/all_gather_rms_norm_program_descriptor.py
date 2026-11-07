@@ -85,7 +85,8 @@ GAMMA_READ_ALIGN = 64  # BH DRAM read alignment: cb_gamma page stride (host) and
 MAX_RUNTIME_ARGS = 341
 # Perf probes only (never set by the op): AGRMS_ABLATE=EMPTY | LOCAL | TRANSPORT stubs one side of the program
 # (kernels/*: AGRMS_ABLATE_*). EMPTY: every kernel returns at once (launch floor). LOCAL: no transport (ports idle,
-# members do not wait for landings). TRANSPORT: members only load, signal and wait for their landings.
+# members do not wait for landings). TRANSPORT: members only load, signal and wait for their landings. NOREAD: the port
+# reader skips its NoC reads (pushes kept; output garbage) to size the port read stage.
 PERF_ABLATE = os.environ.get("AGRMS_ABLATE", "")
 # Perf probes only: AGRMS_PROFILE_ZONES=1 compiles the per-stage device zones in (kernels: AGRMS_ZONE).
 PROFILE_ZONES = os.environ.get("AGRMS_PROFILE_ZONES", "") == "1"

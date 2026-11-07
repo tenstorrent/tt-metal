@@ -108,6 +108,7 @@ Entry-point contract:
 | **transport item rows** (`xfer_rows`) | — (a transport quantum along the row axis, not a block extent: the unit one arrival increment covers) | `xfer_rows` | `max(1, ceil(item_min_chunks / chunks_per_row_on_link))`, `item_min_chunks = 4`; focus = 4 | host `plan()` → port RT | n/a (per port) | knob-turn |
 | **transport chunk** (tiles per packet) | — (a mechanism quantum) | `run_pages` | `floor(fabric_max_payload / T_in)`: 7 bf16, 3 fp32, 13 bfp8 at the 14 KiB + 64 B payload; a per-row run is split into `ceil(len/run_pages)` **balanced** chunks | host → port CT | n/a | fabric-config knob |
 | **link** (L parallel planes) | independent: the column range of every transport item is cut into L sub-ranges, one per link | `num_links` | resolved L | validate → `plan()` | one port core per (direction, link) | knob-turn |
+| **far-slice direction split** (balanced ring) | independent: the far slice is split between the two directions by **tile-row parity** (part 1 = even rows, part 2 = odd rows, each over the link's whole column range; Refinement 3), so its packets carry the link's full run | `FAR_ROW_SPLIT` | on (off = the Phase 0 column split, A/B) | host `link_cols()` → entry row filter `rf` | n/a | knob-turn |
 
 Operand-reuse check (operand × split):
 
@@ -156,7 +157,7 @@ Step-1 table, one row per axis of every data object, no blanks:
 | Arrival-counter semantics | items per port stream | the upstream increments the downstream port's `sem_arrival` **exactly once per item, on the item's last chunk** (fused write+inc). Item `i` (in the upstream's send order) has landed iff `sem_arrival ≥ i + 1`. | a relay or a notification reads data that has not landed |
 | `ready` fence (global semaphore) | sends per call | each port with a peer that writes into this chip sends exactly 1 ready increment per call; each sending port consumes exactly 1 (`wait ≥ 1`, then `−1`). Back at 0 after every call. | a peer writes into my L1 while the previous program (possibly another op) still owns it, or a ready is double-counted |
 | Program semaphores re-initialized per launch | `sem_arrival`, `sem_landed[*]`, `sem_local_loaded`, `sem_partials`, `sem_inv` | monotonic targets within a call, never reset. Every remote increment is issued only after this chip's `ready` went out, which is after this program's config (semaphore init) was written. | — (the `ready` counter is the only one that can be hit before launch, hence global) |
-| Per-stream landing notifications | `sem_landed[s]` targets | one semaphore per incoming stream s = (direction, link), at most 2·L. Within a stream the port notifies in its own (row-ascending) order, so block b of a member is complete iff `sem_landed[s] ≥ (b+1)·u[s]` for every s (`u[s]` ∈ {0, 1, …}: units of that stream per block, host-counted) | a shared counter across streams could reach a block's target with one stream's unit of that block still missing |
+| Per-stream landing notifications | `sem_landed[s]` targets | one semaphore per incoming stream s = (direction, link), at most 2·L. Within a stream the port notifies in its own (row-ascending) order, so block b of a member is complete iff `sem_landed[s] ≥ (b+1)·u[s]` for every s (`u[s]` ∈ {0, 1}: whether stream s touches the member at all, host flag; since Refinement 3 the per-row entry count varies with the far slice's row parity, a flag does not) | a shared counter across streams could reach a block's target with one stream's unit of that block still missing |
 | Semaphore count per core | ids | ≤ 2·L + 5 ≤ 9 program semaphores (incl. the per-parity partials pair), all declared on the union core range (`NUM_SEMAPHORES = 16`, `tt_metal/impl/buffers/semaphore.hpp:16`) | — |
 | Fabric packet payload | `run_pages` | `floor(get_tt_fabric_max_payload_size_bytes() / T_in)` | the router truncates or faults |
 | Fused write + atomic inc stalls the receiving router (rule 4) | `xfer_rows` | ≥ `item_min_chunks = 4` chunks per item where the shape allows | the link rate drops (1.14× at an increment every 2 chunks) |
@@ -312,11 +313,11 @@ Algebraic permission used: none that changes floating-point order. The combine s
 | `KEEP_UP_FRACTION = 0.5`, cost constants | OVERLAP | the constants are the base op's (HiFi2 16-bit DEST perf profile) and the example's transport fit; the focus runs HiFi4 fp32-DEST | sweep k* ± one candidate on all three perf cases |
 | `relay_lag = 1` | OVERLAP / TRANSPORT | a relay item may still be in flight one step later (fence skew between chips) | `relay_lag` 0 and 2 |
 | `xfer_rows` (`item_min_chunks = 4`) | TRANSPORT | larger items mean fewer router stalls but coarser relay and notification latency | `item_min_chunks` 2 and 8 |
-| Far-half link split by columns | TRANSPORT | the far half's link part is `Wt_lp/(2L)` tiles: 3-tile (6 KiB) packets on the focus, near the packet-rate floor (rule 1) | far half split across links by **rows** (6-tile packets), or a scatter packet (`NocUnicastScatterCommandHeader`, ≤ 4 chunks) |
+| ~~Far-half link split by columns~~ | TRANSPORT | **done (Refinement 3)**: the far half is split between the directions by tile-row parity, 6-tile packets on the focus (31.47 → 29.38 µs). Scatter packets are moot after it: a packet is one member's 6-tile run, two runs (12 tiles) do not fit one 7-tile payload, and the item's fused increment ends a packet anyway | — |
 | Port-mediated notifications | OVERLAP | a landed row is announced only when the port reader reaches that item | fused inc straight to the member's semaphore when a unit is ≥ 4 chunks |
 | Own slice sent only after **all** local members loaded | OVERLAP | the first own packet waits for the slowest local member's DRAM read (hidden today by the ~5 µs fence) | per-row-group readiness flags |
 | Members nested in slices | OVERLAP | on 1792, k = 12 nested gives 19 tiles per member. A non-nested k (e.g. 5 on 512: 13 tiles) shortens the tail at the cost of split packets at slice edges. | non-nested k on 512 / 1792 |
-| `port_cb_bytes = 112 KiB` | TRANSPORT | items here are short (4–7 chunks), not the multi-MiB shards the example tuned on | 56 KiB (2 per batch) |
+| `port_cb_bytes = 112 KiB` | TRANSPORT | items here are short (4–7 chunks), not the multi-MiB shards the example tuned on | re-measured in Refinement 3 (`AGRMS_PORT_CB_KIB`): 56 KiB 31.3, 224 KiB 26.3 / 30.0 vs 112 KiB 25.1 / 29.4 µs: 112 stays |
 | Compute lookahead off | OVERLAP | the combine wait of block b is unused | non-blocking `cb_pages_available_at_front` check of block b+1 |
 | x·γ pre-scale in the combine wait | OVERLAP | pass 2 is two FPU passes on the critical last block | fp32 scratch of one block; pass 2 = one mul-bcast (gate on the precision baseline) |
 
@@ -512,3 +513,37 @@ Findings for the refinement queue:
    Multi-test runs therefore use production mode; single tests pass under `--dev`.
 
 Sharded inputs / outputs take the native shard-resident path when `native_shard_split()` places them and `native_keeps_up()` holds (Refinement 1, see `sharded_zero_copy`); otherwise they go through sharded `TensorAccessor`s (the Phase 0 path).
+
+## Refinement 3 — TRANSPORT: fill the packets (implementer, measured on QB2 1x4 ring, FABRIC_2D_TORUS_XY)
+
+The ports were bound by the port **sender's RISC work per packet**, not by the link. Per-packet device zones on the
+focus case: the send call (payload + header NoC writes + credit) takes 0.10 µs, the fabric slot wait 0.03 µs, but
+~0.25 µs more went to the port walk's address math before the next packet (per-row div / mod of the round-robin
+placement, a per-row scan of all k member boundaries with two runtime-arg reads each, per-member chunk-split
+divisions), and ~0.5 µs per item boundary. Kernels build at -Os. Three changes, each a measured win
+(`eval.ccl_perf compare`, fastest chip on the focus case):
+
+| Change | Focus fastest chip (µs) |
+|---|---|
+| baseline (Refinement 2 tree) | 31.47 (TRANSPORT-only 26.37) |
+| far slice split between directions by tile-row parity: 6-tile instead of 3-tile packets, 30 instead of 40 packets per port | 29.38 (TRANSPORT-only 24.01) |
+| port walk: members outer, rows inner, incremental (group, local row) placement, one chunk split per member per item | 26.98 |
+| host-precomputed member segments per send entry in the port runtime args (`_segment_args`: member, landing offset, run length): no per-item scan of the k member boundaries; `ws[0..k]` no longer passed to the ports | **25.08** (TRANSPORT-only 19.81, LOCAL-only 14.72) |
+
+Row-filtered entries: an entry carries `rf` (0 every row, 1 / 2 even / odd tile-rows). An item with no row of its
+parity sends nothing and carries no arrival increment; the receiver's counter targets count only non-empty items
+(`Geom::items_before`, closed form). Landing notifications became one per row per stream that touches the member at
+all (a flag, `n_s ∈ {0, 1}`), since the per-row entry count now varies with parity. The host coverage check runs per row
+parity.
+
+Knobs re-swept after the change (all live; defaults kept): `relay_lag` 1 / 2 / 3 → 29.29 / **25.08** / 25.82;
+`item_min_chunks` 2 / 4 / 8 → 30.99 / **25.08** / 26.37; `port_cb_bytes` 56 / 112 / 224 KiB → 31.29 (earlier tree) / **25.08** / 26.28.
+
+Transport against bytes: each chip receives 3 × 480 KiB = 1.47 MB; TRANSPORT-only 19.8 µs (members load, signal, wait
+their landings), 74 GB/s received per chip. The `fabric_all_gather` example moves 256 tiles per chip on 2 links in
+~18.3 µs (29.1 µs × 0.63) on this ring; the gap to it went from ~8 µs to ~1.5 µs.
+
+What still binds the transport (focus, per-packet zones): the sender's per-packet RISC work (~0.25 µs above the
+0.10 µs send, 30 packets), the relay tail (the last relayed item waits ~2 µs on its upstream: steps 5–6 carry only
+relay items), and the start: the own-slice DRAM load before the first packet (`AG_LOCAL_WAIT` ~1.6 µs, the OVERLAP
+lamp "per-row-group readiness", Refinement 4's scope) plus the first batch read (~0.6 µs).

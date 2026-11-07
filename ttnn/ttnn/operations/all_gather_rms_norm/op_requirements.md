@@ -144,7 +144,7 @@ are INVALID gamma skips). Acceptance + native-shard 35/35. The aligned paths onl
 bf16 aligned and untouched). Possible next step: stream the staging per `out_unit` window instead of one row. That
 needs compute to interleave the copy with the normalize, and it only matters for L1 on wide non-aligned rows.
 
-### [ ] Refinement 3 — TRANSPORT: fill the packets (perf, focus case)
+### [x] Refinement 3 — TRANSPORT: fill the packets (perf, focus case)
 
 **Type**: perf
 
@@ -169,6 +169,21 @@ No SUPPORTED change.
 Report the transport time against bytes received per chip, next to the example's fit. The golden suite stays green.
 No regression across the guard set: one representative per transport path × regime: Linear and Ring, L = 1 and 2,
 regime A k = 1 / symmetric / owner, regime N, one sharded cell, and 640×512 / 640×1792.
+**Outcome**: focus fastest chip **31.47 → 25.08 µs** (slowest 32.37 → 26.50; `ccl_perf compare`: win at every step),
+TRANSPORT-only **26.37 → 19.81 µs** (1.47 MB received per chip, 74 GB/s; the `fabric_all_gather` example's ~18.3 µs for
+256 tiles/chip on 2 links: the gap went from ~8 to ~1.5 µs), LOCAL-only unchanged (14.72). 640×512 41.5 → 35.5 µs,
+640×1792 99.9 → 86.0 µs. Three wins: (1) the far slice is split between the directions by tile-row parity, so
+6-tile packets instead of 3-tile ones (31.47 → 29.38). (2) Per-packet device zones showed the port sender was RISC-bound,
+not link-bound: the send itself is 0.10 µs, and the walk's address math was ~0.25 µs per packet plus ~0.5 µs per
+item. So the walk now goes members outer with no per-row division (→ 26.98). (3) Host-precomputed member segments
+per send entry (→ 25.08). Re-swept with defaults kept: `relay_lag` 2 (1: 29.3, 3: 25.8), `item_min_chunks` 4
+(2: 31.0, 8: 26.4), `port_cb_bytes` 112 KiB (224: 26.3). Scatter packets were not built: after (1) a packet is one
+member's 6-tile run, and two runs do not fit a 7-tile payload. Still binding: the sender's per-packet RISC work
+(~0.25 µs over the 0.10 µs send), the relay tail (the last relay item waits ~2 µs on its upstream), and the
+own-slice load before the first packet (~1.6 µs; Refinement 4's per-row-group readiness lamp). Next would be to
+shave the sender's per-packet path further (batch `cb_wait_front`, pre-built headers) and to shrink the last items
+to shorten the relay tail. Not done here: both are below ~1–2 µs, and the full call is now within ~5 µs of the
+LOCAL-only time, which Refinements 4–5 own.
 
 ### [ ] Refinement 4 — OVERLAP: shorten the exposed tail and co-tune the split around the ports (perf, flagged cases)
 

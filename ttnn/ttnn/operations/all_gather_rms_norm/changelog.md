@@ -100,3 +100,42 @@
   column debug test exposed it (every column past the first tile was shifted).
 - Tests added: 3 bfp8 regime N cases in `test_all_gather_rms_norm.py`, and `test_bf8b_regime_n_columns` (2 shapes) in
   `test_all_gather_rms_norm_debug.py`.
+
+## Refinement 3 — TRANSPORT: fill the packets (perf, focus case)
+- Date: 2026-11-07
+- What was done (TRANSPORT; three measured wins on the focus case, fastest chip, `eval.ccl_perf compare`):
+  - Far slice of the balanced ring split between the two directions by **tile-row parity** instead of by columns.
+    Each link carries its whole column run, so packets are 6 tiles instead of 3, and each port sends 30 packets
+    instead of 40. Entries gained a row filter `rf` (packed in bits 31:30). Items with no row of their parity send
+    nothing and carry no arrival increment (`Geom::items_before`). Landing notifications became a per-stream touch
+    flag, and the host coverage check runs per row parity. Knob `FAR_ROW_SPLIT` (env `AGRMS_FAR_ROW_SPLIT=0` for A/B).
+    31.47 → 29.38 µs.
+  - Per-packet device zones showed the port sender was bound by its own RISC work, not the link: the send call is
+    0.10 µs, the slot wait 0.03 µs, and the walk's address math ~0.25 µs per packet plus ~0.5 µs per item. The port
+    walk now goes members outer and rows inner, with incremental (group, local-row) placement and one chunk split per
+    member per item. 29.38 → 26.98 µs.
+  - Host-precomputed member segments per send entry (`_segment_args`: member, landing offset, run length) replace
+    the `ws[0..k]` boundary list in the port args. No per-item scan of k members. 26.98 → **25.08 µs**.
+  - Re-swept with defaults kept: `relay_lag` 1/2/3 → 29.29 / 25.08 / 25.82; `item_min_chunks` 2/4/8 → 30.99 / 25.08 /
+    26.37; `port_cb_bytes` 56/112/224 KiB (now env `AGRMS_PORT_CB_KIB`) → 31.29 (earlier tree) / 25.08 / 26.28.
+  - Scatter packets not built: after the row split a packet is one member's 6-tile run, two runs exceed the 7-tile
+    payload, and the item's fused increment ends a packet anyway.
+  - Reused: the port reader / sender / walk, the schedule, the arrival counters. Added: the entry row filter,
+    `items_before`, `Geom::advance`, `_segment_args`. No CB change, no SUPPORTED change.
+- Perf (fastest chip, QB2 1×4 ring, 2 links): 640×384 [FOCUS] 31.47 → 25.08 µs (slowest 32.37 → 26.50); 640×512
+  41.5 → 35.54 µs; 640×1792 99.9 → 85.96 µs. Focus TRANSPORT-only 26.37 → 19.81 µs, i.e. 1.47 MB received per chip
+  at 74 GB/s. The `fabric_all_gather` example moves 256 tiles/chip on 2 links in ~18.3 µs, so the gap to it went from
+  ~8 to ~1.5 µs. LOCAL-only 14.72 µs (unchanged).
+- Still binding (finding, not a follow-up): the sender's per-packet RISC work (~0.25 µs above the send), the relay
+  tail (the last relay item waits ~2 µs on its upstream), and the own-slice load before the first packet (~1.6 µs,
+  Refinement 4's lamp).
+- Accuracy achieved: unchanged numerics (transport moves the same bytes; compute untouched). Acceptance PCC gates
+  (bf16 0.995, fp32 0.999, bf8b 0.99) met on every unit case; precision baseline test green.
+- Golden test progress: guard slice of 144 cells (one per shape × topology × links × cluster_axis × memory_layout
+  over 12 shapes): 38 passed, 5 xfailed (EXCLUSIONS), 101 skipped (INVALID / not buildable on this mesh), 0 failed.
+  The three loose perf cases pass their golden check in `perf_measure.py`. Unit dir: 54 passed + native shard 6/6.
+- Issues encountered: the full three-case perf run was killed once by host memory pressure (exit 137, other
+  processes held 227 of 249 GB). The 640×1792 case was re-run alone.
+- Tests added: 3 cases in `test_all_gather_rms_norm.py` for the row-split edges: `160x384-ring-L2-rowsplit_tail` and
+  `96x384-ring-L1-rowsplit_tail` (a 1-row last item, one direction's far half empty), and `96x1792-ring-L2-rowsplit_xr1`
+  (1-row items, every other far item empty).
