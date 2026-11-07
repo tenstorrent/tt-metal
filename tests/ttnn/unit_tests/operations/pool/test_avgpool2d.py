@@ -6,7 +6,7 @@ import ttnn
 import pytest
 from tests.ttnn.nightly.unit_tests.operations.pool.test_avgpool2d import run_avg_pool2d
 
-pytestmark = pytest.mark.use_module_device
+pytestmark = pytest.mark.use_module_device({"l1_small_size": 16384})
 
 
 @pytest.fixture(scope="module")
@@ -306,7 +306,6 @@ def test_avg_pool2d_global_rejects_zero_batch(device, expect_error):
         )
 
 
-@pytest.mark.use_module_device({"l1_small_size": 16384})
 @pytest.mark.parametrize(
     "out_dtype, in_c",
     [
