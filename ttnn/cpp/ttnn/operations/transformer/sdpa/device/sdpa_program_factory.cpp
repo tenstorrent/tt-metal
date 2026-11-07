@@ -134,7 +134,7 @@ EffectiveKvGeometry resolve_effective_kv_geometry(
 
 // Chunked prefill parameters collected from page table layout.
 struct ChunkedParams {
-    uint32_t chunked_q_chunk_offset = 0;
+    uint32_t chunked_q_offset_t = 0;
     uint32_t block_size = 0;
     uint32_t block_size_t = 0;
     uint32_t max_blocks_per_seq = 0;
@@ -155,7 +155,7 @@ ChunkedParams compute_chunked_params(
         return p;
     }
     if (is_chunked_legacy) {
-        p.chunked_q_chunk_offset = chunk_start_idx.value() / q_chunk_size;
+        p.chunked_q_offset_t = chunk_start_idx.value() / TILE_HEIGHT;
     }
     const auto& page_table_tensor = page_table.value();
     p.block_size = k_seq_dim;
@@ -1312,7 +1312,7 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
         page_table,
         effective_kv_block_size,
         q_chunk_size);
-    const uint32_t chunked_q_chunk_offset = chunked.chunked_q_chunk_offset;
+    const uint32_t chunked_q_offset_t = chunked.chunked_q_offset_t;
     const uint32_t block_size = chunked.block_size;
     const uint32_t block_size_t = chunked.block_size_t;
     [[maybe_unused]] const uint32_t max_blocks_per_seq = chunked.max_blocks_per_seq;
@@ -2042,7 +2042,7 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
         reader_args.push_back(attention_sink_buffer);
         reader_args.push_back(chunk_start_idx_buffer);
         reader_args.push_back(num_phases);
-        reader_args.push_back(chunked_q_chunk_offset);
+        reader_args.push_back(chunked_q_offset_t);
         reader_args.push_back(read_offset);  // read_offset
 
         if (!use_causal_kernel || kv_chain_mode >= 2) {
@@ -2088,7 +2088,7 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
         writer_args.push_back(out0_buffer);
         writer_args.push_back(num_phases);                                       // 1
         writer_args.push_back(static_cast<uint32_t>(flexible_chunked ? 1 : 0));  // 2
-        writer_args.push_back(chunked_q_chunk_offset);                           // 3: phase_1
+        writer_args.push_back(chunked_q_offset_t);                               // 3: phase_1
         writer_args.push_back(write_offset);                                     // 4
         writer_args.push_back(0u);                        // 5: phase_2 chunk_start (unused, num_phases==1)
         writer_args.push_back(0u);                        // 6: phase_2 write_offset (unused, num_phases==1)
@@ -2110,7 +2110,7 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
             core,
             {num_phases,                                       // 0
              static_cast<uint32_t>(flexible_chunked ? 1 : 0),  // 1
-             chunked_q_chunk_offset,                           // 2: phase_1
+             chunked_q_offset_t,                               // 2: phase_1
              0u,                                               // 3: phase_2 chunked offset (unused, num_phases==1)
              global_q_start,                                   // 4
              global_q_count});                                 // 5

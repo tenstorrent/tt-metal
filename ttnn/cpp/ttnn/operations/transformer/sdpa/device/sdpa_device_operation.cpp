@@ -230,6 +230,12 @@ void SDPAOperation::validate_on_program_cache_miss(const SDPAParams& attrs, cons
             "chunked mode requires either chunk_start_idx (scalar) or chunk_start_idx_tensor");
         if (legacy_chunked) {
             TT_FATAL(attrs.chunk_start_idx.value() >= 0, "chunk_start_idx must be non-negative");
+            // The kernels address Q rows in tiles, so a start inside a tile cannot be honoured.
+            TT_FATAL(
+                attrs.chunk_start_idx.value() % tt::constants::TILE_HEIGHT == 0,
+                "chunk_start_idx must be a multiple of the tile height ({}). Got chunk_start_idx: {}",
+                tt::constants::TILE_HEIGHT,
+                attrs.chunk_start_idx.value());
         }
         if (flexible_chunked) {
             const auto& csi_tensor = attrs.chunk_start_idx_tensor.value();
@@ -384,28 +390,24 @@ void SDPAOperation::validate_on_program_cache_miss(const SDPAParams& attrs, cons
                 "k_chunk_size must be a positive multiple of TILE_SIZE. Got k_chunk_size: {}, TILE_SIZE: {}",
                 k_chunk_size,
                 tt::constants::TILE_WIDTH);
-        }
 
-        if (legacy_chunked) {
-            // Without a program_config the kernels run with 32-token chunks (see the program factory), so
-            // the same alignment rules apply and a non-tile-aligned start is rejected too.
-            const uint32_t q_chunk_size =
-                attrs.program_config.has_value() ? attrs.program_config->q_chunk_size : tt::constants::TILE_HEIGHT;
-            const uint32_t k_chunk_size =
-                attrs.program_config.has_value() ? attrs.program_config->k_chunk_size : tt::constants::TILE_HEIGHT;
-            // chunk_start_idx is divided by q_chunk_size to compute chunked_q_chunk_offset
-            TT_FATAL(
-                attrs.chunk_start_idx.value() % q_chunk_size == 0,
-                "chunk_start_idx must be a multiple of q_chunk_size. Got chunk_start_idx: {}, q_chunk_size: {}",
-                attrs.chunk_start_idx.value(),
-                q_chunk_size);
+            if (legacy_chunked) {
+                // Validate that chunk_start_idx is a multiple of q_chunk_size
+                // This is required because chunk_start_idx is divided by q_chunk_size to compute chunked_q_chunk_offset
+                TT_FATAL(
+                    attrs.chunk_start_idx.value() % q_chunk_size == 0,
+                    "chunk_start_idx must be a multiple of q_chunk_size. Got chunk_start_idx: {}, q_chunk_size: {}",
+                    attrs.chunk_start_idx.value(),
+                    q_chunk_size);
 
-            // Workaround for https://github.com/tenstorrent/tt-metal/issues/35225
-            TT_FATAL(
-                attrs.chunk_start_idx.value() % k_chunk_size == 0,
-                "chunk_start_idx must be a multiple of k_chunk_size. Got chunk_start_idx: {}, k_chunk_size: {}",
-                attrs.chunk_start_idx.value(),
-                k_chunk_size);
+                // Validate that chunk_start_idx is a multiple of k_chunk_size
+                // Workaround for https://github.com/tenstorrent/tt-metal/issues/35225
+                TT_FATAL(
+                    attrs.chunk_start_idx.value() % k_chunk_size == 0,
+                    "chunk_start_idx must be a multiple of k_chunk_size. Got chunk_start_idx: {}, k_chunk_size: {}",
+                    attrs.chunk_start_idx.value(),
+                    k_chunk_size);
+            }
         }
 
         if (legacy_chunked) {
