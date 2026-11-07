@@ -113,7 +113,7 @@ void kernel_main() {
     constexpr uint32_t in3_tensor_stride_w = get_arg(args::in3_tensor_stride_w);
 
     constexpr uint32_t cb_id_in3 = dfb::cb_bias;
-    constexpr uint32_t bias_single_tile_size_bytes = get_tile_size(cb_id_in3);
+    const uint32_t bias_single_tile_size_bytes = get_local_cb_interface(cb_id_in3).fifo_page_size;
 
 #ifndef BIAS_SHARDED
     uint32_t l1_write_addr_in3;
