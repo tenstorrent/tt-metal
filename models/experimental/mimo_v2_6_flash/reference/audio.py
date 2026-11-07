@@ -352,6 +352,13 @@ class AudioTokenizerEncoder:
         if bf16_buffers:
             self.inv_freq = self.inv_freq.to(torch.bfloat16)
 
+    def _attention(self, q, k, v, window, masks):
+        """One segment, [1, heads, n, hd]: SDPA with HF's additive mask (cached in ``masks`` across layers)."""
+        key = (q.shape[2], window)
+        if key not in masks:
+            masks[key] = _attn_mask(q.shape[2], self.cfg.encoder_causal, window, q.dtype)
+        return F.scaled_dot_product_attention(q, k, v, attn_mask=masks[key], scale=q.shape[-1] ** -0.5)
+
     def _layer(self, h, L, cu_seqlens, cos, sin, masks):
         cfg = self.cfg
         total = h.shape[0]
@@ -367,12 +374,7 @@ class AudioTokenizerEncoder:
         for i in range(len(cu_seqlens) - 1):
             a, b = int(cu_seqlens[i]), int(cu_seqlens[i + 1])
             qs, ks, vs = (t[a:b].transpose(0, 1).unsqueeze(0) for t in (q, k, v))
-            key = (b - a, L["window"])
-            if key not in masks:  # the same mask for every layer of this window: build it once per call
-                masks[key] = _attn_mask(b - a, cfg.encoder_causal, L["window"], qs.dtype)
-            mask = masks[key]
-            o = F.scaled_dot_product_attention(qs, ks, vs, attn_mask=mask, scale=hd**-0.5)
-            outs.append(o.squeeze(0).transpose(0, 1))
+            outs.append(self._attention(qs, ks, vs, L["window"], masks).squeeze(0).transpose(0, 1))
         h = F.linear(torch.cat(outs, dim=0).reshape(total, cfg.d_model), L["o_w"], L["o_b"])
         h = residual + h
         residual = h
