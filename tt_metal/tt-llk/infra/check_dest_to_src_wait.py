@@ -34,6 +34,7 @@ import argparse
 import glob
 import os
 import re
+import subprocess
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -45,6 +46,11 @@ TREE_GLOB = os.path.join(LLK, "tt_llk_*", "**", "*.h")
 COPIES_GLOB = os.path.join(
     LLK, "..", "..", "ttnn", "**", "kernel_includes", "**", "*.h"
 )
+REPO = os.path.normpath(os.path.join(LLK, "..", ".."))
+# The same two globs as git pathspecs, relative to REPO.
+LLK_PATHSPEC = ":(glob)tt_metal/tt-llk/tt_llk_*/**/*.h"
+COPIES_PATHSPEC = ":(glob)ttnn/**/kernel_includes/**/*.h"
+TREE_PATHSPECS = (LLK_PATHSPEC, COPIES_PATHSPEC)
 
 # (move, the valid bit that must be waited on)
 PAIRS = (("MOVD2A", "SRCA_VLD"), ("MOVD2B", "SRCB_VLD"))
@@ -164,7 +170,11 @@ def wait_providers(paths):
         kind: {vld: set() for _, vld in PAIRS} for kind in ("full", "vld_only")
     }
     for path in paths:
-        src = open(path, errors="ignore").read()
+        try:
+            with open(path, errors="ignore") as f:
+                src = f.read()
+        except OSError:
+            continue
         if "STALLWAIT" not in src or "_VLD" not in src:
             continue
         lines = _blank_noncode(src).split("\n")
@@ -197,7 +207,11 @@ def scan(path, providers):
     `kind` is "none" (no wait on the bank at all) or "vld_only" (a wait on the valid bit that
     does not drain math).
     """
-    src = open(path, errors="ignore").read()
+    try:
+        with open(path, errors="ignore") as f:
+            src = f.read()
+    except OSError:
+        return
     if "MOVD2" not in src:
         return
     code = _blank_noncode(src)
@@ -242,6 +256,69 @@ def scan(path, providers):
             yield line + 1, move, vld, kind, lines[sig].strip()[:76]
 
 
+def _git_ls_files(*args):
+    res = subprocess.run(
+        ["git", "-C", REPO, "ls-files", "-z", *args],
+        capture_output=True,
+        text=True,
+    )
+    if res.returncode != 0:
+        return None
+    return [
+        os.path.normpath(os.path.join(REPO, p)) for p in res.stdout.split("\0") if p
+    ]
+
+
+def tree_headers():
+    """The LLK headers and their ttnn copies. Listed from git when it can answer:
+    walking all of ttnn/ for kernel_includes/ directories is slow on a network mount.
+
+    ``--cached`` reads the index without walking ttnn/ on disk. ``--others`` is scoped to
+    ``tt_metal/tt-llk/`` (plus any ``kernel_includes/`` directories already in the index) so
+    untracked headers are still found without walking the whole ttnn/ tree.
+    """
+    try:
+        tracked = _git_ls_files("--cached", "--", *TREE_PATHSPECS)
+        if tracked is not None:
+            copy_dirs = sorted(
+                {
+                    rel[: rel.index("/kernel_includes/") + len("/kernel_includes")]
+                    for p in tracked
+                    for rel in (os.path.relpath(p, REPO).replace("\\", "/"),)
+                    if "/kernel_includes/" in rel
+                }
+            )
+            untracked = _git_ls_files(
+                "--others",
+                "--exclude-standard",
+                "--",
+                LLK_PATHSPEC,
+                *(f":(glob){d}/**/*.h" for d in copy_dirs),
+            )
+            if untracked is not None:
+                combined = set(tracked) | set(untracked)
+                # ls-files --cached still names a header after it is deleted in the work tree.
+                # Opening that path raises, so keep only files that are still there.
+                present = sorted(path for path in combined if os.path.isfile(path))
+                if present:
+                    return present
+    except OSError:
+        pass
+    return sorted(
+        os.path.normpath(p)
+        for g in (TREE_GLOB, COPIES_GLOB)
+        for p in glob.glob(g, recursive=True)
+    )
+
+
+def _has_move(path):
+    try:
+        with open(path, errors="ignore") as f:
+            return "MOVD2" in f.read()
+    except OSError:
+        return False
+
+
 def main():
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
@@ -251,11 +328,12 @@ def main():
     )
     args = ap.parse_args()
 
-    tree = sorted(
-        os.path.normpath(p)
-        for g in (TREE_GLOB, COPIES_GLOB)
-        for p in glob.glob(g, recursive=True)
-    )
+    # A file without a move has nothing to report, so the whole-tree provider pass is skipped.
+    if args.files and not any(
+        f.endswith((".h", ".hpp")) and _has_move(f) for f in args.files
+    ):
+        return 0
+    tree = tree_headers()
     files = args.files or tree
     # Wait helpers live in shared headers a commit seldom touches, so find them in the whole tree.
     providers = wait_providers(sorted(set(tree) | set(files)))

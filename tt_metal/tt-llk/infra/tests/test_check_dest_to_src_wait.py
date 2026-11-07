@@ -453,6 +453,108 @@ def test_recorded_wait_in_a_helper_does_not_cover_callers(tmp_path):
     assert "MOVD2B with no SRCB_VLD wait" in run(f).stdout
 
 
+def test_tree_headers_drops_index_entries_missing_on_disk(tmp_path, monkeypatch):
+    """git ls-files still lists a header deleted in the work tree; opening it must not raise."""
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location(
+        "check_dest_to_src_wait_under_test", SCRIPT
+    )
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    present = tmp_path / "tt_metal/tt-llk/tt_llk_blackhole/keep.h"
+    present.parent.mkdir(parents=True)
+    present.write_text("// existing header\n")
+
+    class Result:
+        returncode = 0
+        stdout = (
+            "tt_metal/tt-llk/tt_llk_blackhole/gone.h\0"
+            "tt_metal/tt-llk/tt_llk_blackhole/keep.h\0"
+        )
+
+    monkeypatch.setattr(mod, "REPO", str(tmp_path))
+    monkeypatch.setattr(mod.subprocess, "run", lambda *args, **kwargs: Result())
+    assert mod.tree_headers() == [os.path.normpath(str(present))]
+
+
+def test_tree_headers_includes_untracked_headers(tmp_path, monkeypatch):
+    """A header that is not in the index yet is still part of a whole-tree scan."""
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location(
+        "check_dest_to_src_wait_untracked", SCRIPT
+    )
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    bh_dir = tmp_path / "tt_metal/tt-llk/tt_llk_blackhole"
+    bh_dir.mkdir(parents=True)
+    (bh_dir / "tracked.h").write_text("// tracked\n")
+    (bh_dir / "new.h").write_text("// untracked\n")
+    seen = []
+
+    class Result:
+        def __init__(self, stdout):
+            self.returncode = 0
+            self.stdout = stdout
+
+    def run(cmd, **kwargs):
+        seen.append(cmd)
+        if "--others" in cmd:
+            return Result("tt_metal/tt-llk/tt_llk_blackhole/new.h\0")
+        return Result("tt_metal/tt-llk/tt_llk_blackhole/tracked.h\0")
+
+    monkeypatch.setattr(mod, "REPO", str(tmp_path))
+    monkeypatch.setattr(mod.subprocess, "run", run)
+    headers = mod.tree_headers()
+    assert any("--cached" in cmd for cmd in seen)
+    assert any("--others" in cmd and "--exclude-standard" in cmd for cmd in seen)
+    assert [os.path.basename(path) for path in headers] == ["new.h", "tracked.h"]
+
+    # If the --others call fails, fall back to the glob rather than silently omitting untracked files.
+    class Failed:
+        returncode = 1
+        stdout = ""
+
+    monkeypatch.setattr(mod, "TREE_GLOB", str(bh_dir / "*.h"))
+    monkeypatch.setattr(mod, "COPIES_GLOB", str(tmp_path / "none" / "*.h"))
+    monkeypatch.setattr(
+        mod.subprocess,
+        "run",
+        lambda cmd, **kwargs: (
+            Failed()
+            if "--others" in cmd
+            else Result("tt_metal/tt-llk/tt_llk_blackhole/tracked.h\0")
+        ),
+    )
+    assert [os.path.basename(path) for path in mod.tree_headers()] == [
+        "new.h",
+        "tracked.h",
+    ]
+
+
+def test_missing_argument_file_is_ignored(tmp_path):
+    """A deleted or non-existent file passed on the command line must not raise FileNotFoundError."""
+    missing = tmp_path / "deleted.h"
+    res = run(missing)
+    assert res.returncode == 0
+    assert res.stdout == ""
+
+    bad = hdr(
+        tmp_path,
+        "bad.h",
+        """
+        inline void _llk_math_thing_()
+        {
+            TTI_MOVD2B(0, 0, ADDR_MOD_0, p_movd2b::MOV_4_ROWS, 0);
+        }
+        """,
+    )
+    res = run(missing, bad)
+    assert res.returncode == 0
+    assert "MOVD2B with no SRCB_VLD wait" in res.stdout
+
+
 def test_shipped_tree_never_fails():
     """Whole-tree run (no files) exits 0 whether or not findings remain."""
     g = runpy.run_path(SCRIPT)
