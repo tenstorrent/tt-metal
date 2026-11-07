@@ -52,3 +52,4 @@
 2026-11-07T05:06:34.255836+00:00 current-c8-larger-source-preparation boundary: reread inputs.json/run_contract.json; no steering.md. No new instruction. Accept held source-only160/198 candidates; no dispatch or rung admission.
 2026-11-07T05:12:11.106079+00:00 C16/B32 host feasibility admitted: inputs/run_contract reread unchanged; no steering.md; no device/source/dispatch admission.
 2026-11-07T05:15:47.862478+00:00 C16/B32 feasibility boundary: inputs/run_contract unchanged, steering.md absent. Record static fit and STOP current probe allocation; no device or serving changes.
+2026-11-07T06:31:27.101664+00:00 Early40 dry and timestamp repair boundary: reread inputs/run_contract unchanged; no steering.md. Accept fallback40 dry and host-only parsing repair; no larger cohort selection or release claim. Running80 jobs unchanged.

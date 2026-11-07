@@ -816,5 +816,14 @@
     "image": "ghcr.io/tenstorrent/tt-agentic-bringup-qb2/vllm-tt-metal-src-dev-ubuntu-22.04-amd64@sha256:ae8bf2ac98d004471bc58959995dd25dc04cc76bb250b794d746bc073ac8f7fe",
     "evidence": "runs/ci-native-framed-confirmation-retry90m/RESULT.json",
     "scope": "Actual stock CI original2 plus prior local exactness; fullcap/live dry remains to prove"
+  },
+  "fallback40_dry": {
+    "passed": true,
+    "planned_clients": 8,
+    "batch": 8,
+    "max_num_seqs": 8,
+    "pool_ids": 20480,
+    "evidence": "runs/early-banked40-fallback-dry/RESULT.json",
+    "final_selection": false
   }
 }

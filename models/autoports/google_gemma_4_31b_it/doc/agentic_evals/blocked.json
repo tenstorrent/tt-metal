@@ -39,7 +39,7 @@
     "One closure review and stage gate"
   ],
   "initial_stop_at": "2026-11-06T04:33:36.867416+00:00",
-  "updated_at": "2026-11-07T05:07:04.759460+00:00",
+  "updated_at": "2026-11-07T06:31:27.101664+00:00",
   "completed_preparation": [
     "Fresh autoport registry and suite entries published; full host suite3737 passed15 skipped",
     "Stratified task cohorts frozen before scores",
@@ -246,5 +246,10 @@
     ],
     "evidence": "runs/ci-log-download-timeout/RESULT.json",
     "scope": "Both bounded observers recovered; successful retrieval does not prove current or complete runner-log coverage. Existing freshness limitation remains."
+  },
+  "early_fallback_dry": {
+    "passed": true,
+    "evidence": "runs/early-banked40-fallback-dry/RESULT.json",
+    "remaining": "Final cohort choice and its clean dry, then unchanged release"
   }
 }

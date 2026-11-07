@@ -1,0 +1,234 @@
+{
+  "run_id": 42339332447,
+  "status": "passed_fallback40_no_score_dry",
+  "scope": "GPQA40 C8 fallback only; not final cohort selection or combined release completion",
+  "frozen_configuration": "freeze.json",
+  "tasks": 40,
+  "planned_clients": 8,
+  "batch": 8,
+  "max_num_seqs": 8,
+  "pool_ids": 20480,
+  "source": {
+    "tt_metal_sha": "f57978407eaacf09587f5793b8ae46ca7af839ea",
+    "tti_sha": "e5a9a7638a1f46f22c0d89acf2ac333da5d53c02",
+    "docker_image": "ghcr.io/tenstorrent/tt-agentic-bringup-qb2/vllm-tt-metal-src-dev-ubuntu-22.04-amd64@sha256:ae8bf2ac98d004471bc58959995dd25dc04cc76bb250b794d746bc073ac8f7fe",
+    "vllm_sha": "ca7a18246e4111629ed6cb4a7d1192002749fccf",
+    "hf_revision": "842da3794eaa0b77d5f08bae87a17459d91ff475"
+  },
+  "initial_replies": [
+    {
+      "id": "chatcmpl-9fd5758b683c9871",
+      "timestamp": "2026-11-07T04:43:20.6507211Z",
+      "line": 1720,
+      "server_response_records": [
+        {
+          "timestamp": "2026-11-07T06:21:12.9100340Z",
+          "line_start": 130332,
+          "line_end": 130332,
+          "json_sha256": "310c22e105e1edde7bab3616289268a27a168adab8d47e4e709affcfa8a6a490",
+          "json_characters": 132615,
+          "complete_json_wrapper": true,
+          "single_finished_chat_choice": true,
+          "finish_reason": "length",
+          "visible_empty": true
+        }
+      ],
+      "complete_server_reply_observed": true,
+      "client_acknowledgement": "unknown"
+    },
+    {
+      "id": "chatcmpl-97868cb59992e527",
+      "timestamp": "2026-11-07T04:43:20.6575095Z",
+      "line": 1723,
+      "server_response_records": [
+        {
+          "timestamp": "2026-11-07T04:46:06.0854993Z",
+          "line_start": 6752,
+          "line_end": 6752,
+          "json_sha256": "5ef4d2bf2a2f234bcedd6388642b733a457e79f6352c50ee7a0867a93c8c5f9b",
+          "json_characters": 18691,
+          "complete_json_wrapper": true,
+          "single_finished_chat_choice": true,
+          "finish_reason": "stop",
+          "visible_empty": false
+        }
+      ],
+      "complete_server_reply_observed": true,
+      "client_acknowledgement": "unknown"
+    },
+    {
+      "id": "chatcmpl-8de0bc2cda6d9544",
+      "timestamp": "2026-11-07T04:43:20.6582158Z",
+      "line": 1725,
+      "server_response_records": [
+        {
+          "timestamp": "2026-11-07T04:46:01.5186512Z",
+          "line_start": 6591,
+          "line_end": 6591,
+          "json_sha256": "83f3b926bcd1e14cdc7ec1e04e2540803ce0c6caffac77ca5640dc6e7941e740",
+          "json_characters": 17806,
+          "complete_json_wrapper": true,
+          "single_finished_chat_choice": true,
+          "finish_reason": "stop",
+          "visible_empty": false
+        }
+      ],
+      "complete_server_reply_observed": true,
+      "client_acknowledgement": "unknown"
+    },
+    {
+      "id": "chatcmpl-a0cc9f82826aa57c",
+      "timestamp": "2026-11-07T04:43:20.6589683Z",
+      "line": 1728,
+      "server_response_records": [
+        {
+          "timestamp": "2026-11-07T06:21:12.2809995Z",
+          "line_start": 129856,
+          "line_end": 129856,
+          "json_sha256": "80b46542e626baa764b514734a5972a41b2ff23b972fc1e4a030eb84bfa4b5dc",
+          "json_characters": 169487,
+          "complete_json_wrapper": true,
+          "single_finished_chat_choice": true,
+          "finish_reason": "length",
+          "visible_empty": true
+        }
+      ],
+      "complete_server_reply_observed": true,
+      "client_acknowledgement": "unknown"
+    },
+    {
+      "id": "chatcmpl-a2a658ca55d39828",
+      "timestamp": "2026-11-07T04:43:20.6598650Z",
+      "line": 1730,
+      "server_response_records": [
+        {
+          "timestamp": "2026-11-07T06:21:12.6782549Z",
+          "line_start": 130058,
+          "line_end": 130058,
+          "json_sha256": "0f85592d94727ea52a18c3e4e967f40ec40e7f7e8c313e12e91e908065990c4d",
+          "json_characters": 195346,
+          "complete_json_wrapper": true,
+          "single_finished_chat_choice": true,
+          "finish_reason": "length",
+          "visible_empty": true
+        }
+      ],
+      "complete_server_reply_observed": true,
+      "client_acknowledgement": "unknown"
+    },
+    {
+      "id": "chatcmpl-8165552088c77cbc",
+      "timestamp": "2026-11-07T04:43:20.6605373Z",
+      "line": 1732,
+      "server_response_records": [
+        {
+          "timestamp": "2026-11-07T04:46:08.0521564Z",
+          "line_start": 6830,
+          "line_end": 6830,
+          "json_sha256": "6556afa2c9853c66c74cb6f12086a10c831af99d39855506c2f1a88bca96da91",
+          "json_characters": 14789,
+          "complete_json_wrapper": true,
+          "single_finished_chat_choice": true,
+          "finish_reason": "stop",
+          "visible_empty": false
+        }
+      ],
+      "complete_server_reply_observed": true,
+      "client_acknowledgement": "unknown"
+    },
+    {
+      "id": "chatcmpl-9e0d459f1b55bf35",
+      "timestamp": "2026-11-07T04:43:20.6612051Z",
+      "line": 1734,
+      "server_response_records": [
+        {
+          "timestamp": "2026-11-07T06:21:12.7923195Z",
+          "line_start": 130194,
+          "line_end": 130194,
+          "json_sha256": "8abfdac5f0a7d93fbc66891f693c04673733024966c790ac55ffa7b74b2bb383",
+          "json_characters": 131548,
+          "complete_json_wrapper": true,
+          "single_finished_chat_choice": true,
+          "finish_reason": "length",
+          "visible_empty": true
+        }
+      ],
+      "complete_server_reply_observed": true,
+      "client_acknowledgement": "unknown"
+    },
+    {
+      "id": "chatcmpl-ab9f9f7cd902c734",
+      "timestamp": "2026-11-07T04:43:20.6618755Z",
+      "line": 1736,
+      "server_response_records": [
+        {
+          "timestamp": "2026-11-07T04:48:38.2915939Z",
+          "line_start": 11256,
+          "line_end": 11256,
+          "json_sha256": "eb36ad17d84fa5457fa9efd60c737cd1c5d01e12653a5ec918baa36615f6513a",
+          "json_characters": 23714,
+          "complete_json_wrapper": true,
+          "single_finished_chat_choice": true,
+          "finish_reason": "stop",
+          "visible_empty": false
+        }
+      ],
+      "complete_server_reply_observed": true,
+      "client_acknowledgement": "unknown"
+    }
+  ],
+  "frame_errors": 0,
+  "frame_pending": 0,
+  "truncation_events": 0,
+  "parsed_progress": {
+    "completed": 33,
+    "total": 40
+  },
+  "actual_initial_active_rows": 8,
+  "active_rows_at_cancellation": 3,
+  "final_active_timestamp": "2026-11-07T06:26:07.3308949Z",
+  "cancel_requested_at": "2026-11-07T06:25:48.777615+00:00",
+  "operation_cancelled_at": "2026-11-07T06:26:02.0372064Z",
+  "no_score": true,
+  "no_score_basis": "Final device log extends through cancellation/cleanup, stays33/40, shows active decode3 through06:26:07; no aggregation markers. This closes pre-stop snapshot lag uncertainty retrospectively.",
+  "preservation_lag_seconds": 103.92,
+  "device_hours": 1.795,
+  "workflow_hours": 1.7991666666666666,
+  "queue_to_device_seconds": 14,
+  "predicted_device_hours": 2.1793532,
+  "predicted_queue_hours": 0.8494444,
+  "device_box_hours": 4.9,
+  "cap_branches": {
+    "initial_length_finished_empty_visible": 4,
+    "completion_tokens_each": 126976,
+    "initial_stop_finished_nonempty": 4
+  },
+  "baseline_comparison": {
+    "run_id": 42316311286,
+    "initial_reply_count": 8,
+    "normalized_reply_multiset_equal": true,
+    "ignored_fields": [
+      "id",
+      "created"
+    ],
+    "arrival_order_different_positions_1based": [
+      2,
+      3
+    ],
+    "same_request_pair_claim": false,
+    "reason": "Request log atmax_log_len0 omits distinguishing prompt; all normalized initial8 response bodies equal as multiset, with two arrival positions swapped. No broader output/scheduler/performance exactness claim."
+  },
+  "limitations": [
+    "No final score or samples artifact expected for intentionally cancelled dry.",
+    "Native construction is not per-request client acknowledgement; parsed33/40 separately proves successful client replies.",
+    "Stock cleanup ran; no post-cleanup hardware probe by this effort.",
+    "Any80 upgrade or semantic/source/image change requires new dry."
+  ],
+  "evidence": [
+    "startup-confirmation.json",
+    "run-provenance.json",
+    "cancel-request.json",
+    "bringup/artifacts/stage12-eval-observation/42339332447/pre-stop-20261107T062539710523Z",
+    "bringup/artifacts/stage12-eval-observation/42339332447/post-cancel/device-job.log"
+  ]
+}

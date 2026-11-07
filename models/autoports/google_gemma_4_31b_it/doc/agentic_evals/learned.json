@@ -267,6 +267,10 @@
         "runs/gpqa-c16-b32-feasibility/RESULT.md",
         "runs/gpqa-c16-b32-feasibility/transient-source-note.md"
       ]
+    },
+    {
+      "fact": "An incomplete live log can split a multi-frame native response. Wait for hash-checked completion; a fresh local fetch alone cannot establish upstream freshness. Final cancellation log can confirm no aggregation despite pre-stop log lag. Fallback40 initial8 includes four full126976-token empty-visible replies; all were preserved before cancellation.",
+      "evidence": "runs/early-banked40-fallback-dry/RESULT.json"
     }
   ],
   "suite_timings": [
@@ -697,6 +701,12 @@
       "sha": "536febd8",
       "fix": "Local servingdiagnostic client nowhonorsconfiguredsockettimeout instead ofhidden60s clamp; totalelapsedguardunchanged.",
       "evidence": "runs/measured-workload-prefill/AUTOFIX.md"
+    },
+    {
+      "branch": null,
+      "sha": null,
+      "fix": "Private observation helper normalizes fractional seconds to6digits only at Python3.10 parsing; preserves raw7digit CI timestamps. Host-only5valid/2invalid confirmation, no device test.",
+      "evidence": "runs/dry-observation-timestamp-repair/AUTOFIX.md"
     }
   ],
   "current_runtime_measurements": {

@@ -80,7 +80,7 @@
   "missing_reasons": {
     "device_metrics": "Live vLLM profiling prohibited; host-wall rooflines are not device-time measurements.",
     "stage12_accuracy": "Banked GPQA40/198, C8 same40 accepted; seven capped loops count as failures. C4/80 and C8/80 remain unbanked in progress. SWE2/500 and Terminal2/89 retain measured stops.",
-    "release": "Local frozen benchmark arm passed. Combined dry/release pending final GPQA cohort. Two prior f579 image builds failed EPEL proxy403 with zero TT device hours; authorized spaced retry42334508049 built successfully and its two-task CI confirmation is running. Actual native transport still unverified; proven eef image fallback remains available.",
+    "release": "Local frozen benchmark arm and frozen40 C8 fallback dry passed. Full-cap initial replies preserved; cancellation before grading confirmed. Final largest fitting cohort selection, its dry if upgraded, and unchanged release remain pending.",
     "layer_types": "Template kind=layer is preserved as required metadata; this is stage12 full-model vLLM serving, not a layer measurement. No layer values measured."
   },
   "notes": [
