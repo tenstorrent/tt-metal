@@ -83,6 +83,7 @@ class ttMLA:
         return (
             tp_factor > 1
             and not kv_only
+            and not has_indexer
             and not ttMLA.merges_qkv_a(config, tp_factor, kv_only, has_indexer)
             and rope_scaling.get("llama_4_scaling_beta") is None
             and use_fused_rmsnorm
