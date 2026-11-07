@@ -650,6 +650,7 @@ struct KMcastParams {
     uint32_t mcast_y1;      // y end for multicast range
     uint32_t num_dests;     // number of multicast destinations
     uint32_t mcast_sem_id;  // semaphore ID for synchronization (Semaphore<> takes this)
+    uint32_t ready_sem_id;  // receivers post one credit each to the sender once their cb_k slot is reserved
 };
 
 template <
@@ -714,6 +715,9 @@ uint32_t read_k(
                 }
             }
             noc.async_read_barrier();
+            Semaphore<> ready_sem(mcast_params.ready_sem_id);
+            ready_sem.wait(mcast_params.num_dests);
+            ready_sem.set(0);
             // Multicast the full K^T chunk to all receiver cores at once
             noc.async_write_multicast(
                 CoreLocalMem<uint32_t>(k_write_ptr),
@@ -745,6 +749,7 @@ uint32_t read_k(
         } else {
             // Wait for single signal that the full K^T chunk is ready
             Semaphore<> mcast_sem(mcast_params.mcast_sem_id);
+            Semaphore<>(mcast_params.ready_sem_id).up(noc, mcast_params.mcast_x, mcast_params.mcast_y0, 1);
             mcast_sem.wait(1);
             mcast_sem.set(0);
             noc.async_atomic_barrier();
