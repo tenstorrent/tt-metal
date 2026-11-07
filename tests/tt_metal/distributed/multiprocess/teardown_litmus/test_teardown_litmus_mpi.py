@@ -136,15 +136,17 @@ def test_mpi_hang_never_ends():
     ended(r)
 
 
-@known("P14: with a wrong TCP interface every rank dies at MPI_Init and prterun never ends the job")
 def test_mpi_wrong_interface_ends():
+    """Default launcher (no ULFM) with a bogus TCP interface: every rank fails MPI_Init and the job ends fast with a
+    non-zero code. Under --with-ft ulfm this instead hangs (P14), which is why tt-run launches the plain mpirun."""
     r = run_case(
         "mpi_wrong_interface",
         {**NP, "PROBE_SCENARIO": "clean"},
-        DEADLINE_HANG,
-        cmd=mpi_cmd(extra="--mca btl_tcp_if_include nosuchif"),
+        DEADLINE_END,
+        cmd=mpi_cmd(ulfm=False, extra="--mca btl_tcp_if_include nosuchif"),
     )
     ended(r)
+    nonzero(r)
     clean(r)
 
 

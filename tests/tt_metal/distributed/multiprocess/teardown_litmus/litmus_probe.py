@@ -14,7 +14,7 @@ Env (all optional):
   PROBE_PHASE      before_init | after_init | in_open | after_open   (where the scenario lands; default after_open)
   PROBE_VICTIM     the rank that misbehaves (default 1)
   PROBE_DELAY_MS   delay before the fault (default 300; in_open: after open_enter)
-  PROBE_COLL       barrier | barrier_skip | send_no_recv | recv_dead_peer | barrier_dead_peer | recv_bad_rank
+  PROBE_COLL       barrier | barrier_skip | allgather_skip | send_no_recv | recv_dead_peer | barrier_dead_peer | recv_bad_rank
   PROBE_ON_ERROR   exit (default: a failed collective propagates and the rank exits non-zero, as an
                    application would) | continue (record and go on)
   PROBE_FABRIC_RANK   rank that sets FABRIC_2D before open (-1 none): a fabric-config conflict across ranks
@@ -171,6 +171,12 @@ elif COLL == "barrier_dead_peer":
 elif COLL == "recv_bad_rank":
     if RANK == 0:
         timed("coll_recv_8B_from_rank5_nonexistent", lambda: ttnn.distributed_context_recv_bytes(8, 5, 7))
+elif COLL == "allgather_skip":
+    if is_victim():
+        mark("coll_skip: victim skips the all_gather, sleeps 30 s")
+        time.sleep(30)
+    else:
+        timed("coll_allgather_int", lambda: ttnn.distributed_context_allgather_int(RANK))
 
 t = time.time()
 mark("close_enter")

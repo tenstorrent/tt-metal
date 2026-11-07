@@ -60,18 +60,19 @@ def test_clean():
 
 
 def test_dead_peer_barrier_ends():
-    """Rank 1 dies before a barrier: the survivor's barrier raises MPI_ERR_PROC_FAILED and the job ends."""
+    """Default launcher (no ULFM): rank 1 dies before a barrier, so the whole job ends with a non-zero code and nothing
+    is left. A hung (not dead) peer is the per-collective-timeout case instead (test_barrier_skipped_ends, P16)."""
     r = run_case("dead_peer_barrier", {"PROBE_COLL": "barrier_dead_peer"}, DEADLINE_END)
     ended(r)
-    rc_contains(r, 0, "PROC_FAILED")
+    nonzero(r)
     clean(r)
 
 
-def test_dead_peer_recv_raises():
-    """Rank 1 dies before rank 0's recv: recv raises instead of waiting forever."""
+def test_dead_peer_recv_ends():
+    """Default launcher: rank 1 dies before rank 0's recv, so the job ends non-zero instead of rank 0 waiting forever."""
     r = run_case("dead_peer_recv", {"PROBE_COLL": "recv_dead_peer"}, DEADLINE_END)
     ended(r)
-    rc_contains(r, 0, "RuntimeError")
+    nonzero(r)
     clean(r)
 
 
@@ -180,14 +181,12 @@ def test_send_without_recv_ends():
     clean(r)
 
 
-@known("P13: a rank killed before MPI_Init is never noticed; the survivor waits in the context init forever")
 def test_sigkill_before_init_ends():
     r = run_case("sigkill_before_init", {"PROBE_SCENARIO": "sigkill", "PROBE_PHASE": "before_init"}, DEADLINE_HANG)
     ended(r)
     clean(r)
 
 
-@known("P17/P4: a rank killed inside the control plane's init ends the job with exit 0")
 def test_dead_peer_in_open_exit_nonzero():
     r = run_case(
         "sigkill_in_open",
@@ -242,7 +241,6 @@ def test_sigterm_at_ttrun_ends():
     clean(r)
 
 
-@known("P18: a phase-1 (solve) rank killed leaves generate_rank_bindings and prterun forever")
 def test_solve_rank_killed_ends():
     r = run_case("solve_rank_killed", {}, DEADLINE_HANG, cmd=solve_cmd(), phase1_kill=True)
     ended(r)
@@ -321,6 +319,19 @@ def test_late_rank_in_open_bounded():
 @known("P17: a mesh-shape disagreement between ranks (4x4 against 8x4) is accepted silently and the job exits 0")
 def test_shape_mismatch_refused():
     r = run_case("shape_mismatch", {"PROBE_MESH_SHAPE_VICTIM": "4x4"}, DEADLINE_END)
+    ended(r)
+    nonzero(r)
+    clean(r)
+
+
+@known(
+    "P16: an all_gather where one rank never calls it hangs the others forever; fix: a per-call timeout on the collective that cancels and tears the job down"
+)
+def test_allgather_missing_peer_ends():
+    """The user's example: rank 1 does not join the all_gather, so ranks 0 and 2 wait in distributed_context_allgather_int
+    forever. The fix is step 3: the call gives up at its deadline and aborts the job, not a local raise that leaves peers.
+    """
+    r = run_case("allgather_missing_peer", {"PROBE_COLL": "allgather_skip"}, DEADLINE_HANG)
     ended(r)
     nonzero(r)
     clean(r)
