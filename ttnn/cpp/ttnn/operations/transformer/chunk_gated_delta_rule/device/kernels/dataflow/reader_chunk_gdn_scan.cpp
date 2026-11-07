@@ -289,16 +289,13 @@ void kernel_main() {
     valid.set(VALID);
 
     // Stage a shared group: reserve + issue DRAM reads into this core's own CB slot, WITHOUT
-    // pushing (the write pointer must still address the slot when the mcast reads it). Returns
-    // the slot's L1 address — identical on every sibling core (same CB config, same push/pop
-    // history: exactly n tiles per chunk on both sides).
-    auto stage_group = [&](const auto& acc, uint32_t cb_id, uint32_t base, uint32_t n) -> uint32_t {
+    // pushing (the write pointer must still address the slot when the mcast reads it).
+    auto stage_group = [&](const auto& acc, uint32_t cb_id, uint32_t base, uint32_t n) {
         CircularBuffer cb(cb_id);
         cb.reserve_back(n);
         for (uint32_t t = 0; t < n; t++) {
             noc.async_read(acc, cb, tb, {.page_id = base + t}, {.offset_bytes = t * tb});
         }
-        return cb.get_write_ptr();
     };
 
     for (uint32_t c = 0; c < NC; c++) {
@@ -306,12 +303,12 @@ void kernel_main() {
         read_vslice(vb_acc, cb_vbeta, hc * Ct * Vt_full, Ct);  // private v_beta slice (unchanged)
 
         // Stage all six shared groups, then one barrier for the lot.
-        const uint32_t p_nkd = stage_group(nkd_acc, cb_nkd, hc * ck, ck);
-        const uint32_t p_qd = stage_group(qd_acc, cb_qdecay, hc * ck, ck);
-        const uint32_t p_it = stage_group(it_acc, cb_intra, hc * cc, cc);
-        const uint32_t p_kc = stage_group(kc_acc, cb_kdec_t, hc * kc, kc);
-        const uint32_t p_dl = stage_group(dl_acc, cb_dl, hc * 1, 1);
-        const uint32_t p_ti = stage_group(ti_acc, cb_Tinv, hc * cc, cc);
+        stage_group(nkd_acc, cb_nkd, hc * ck, ck);
+        stage_group(qd_acc, cb_qdecay, hc * ck, ck);
+        stage_group(it_acc, cb_intra, hc * cc, cc);
+        stage_group(kc_acc, cb_kdec_t, hc * kc, kc);
+        stage_group(dl_acc, cb_dl, hc * 1, 1);
+        stage_group(ti_acc, cb_Tinv, hc * cc, cc);
         noc.async_read_barrier();
 
         // All receivers have reserved this chunk's CB space (their slots are writable).
@@ -320,23 +317,26 @@ void kernel_main() {
 
         // Data mcasts, linked so they chain with the flag mcast on one static VC (data-before-
         // flag ordering). num_dests excludes the sender — no local copy is performed.
-        MulticastEndpoint mcast_dst;
-        auto mcast_group = [&](uint32_t addr, uint32_t n) {
+        // Each group goes from its staged slot, at the CB's write pointer, to the same slot on the
+        // receivers: the slot's L1 address is identical on every sibling core (same CB config, same
+        // push/pop history: exactly n tiles per chunk on both sides).
+        auto mcast_group = [&](uint32_t cb_id, uint32_t n) {
+            CircularBuffer cb(cb_id);
             noc.async_write_multicast(
-                CoreLocalMem<uint32_t>(addr),
-                mcast_dst,
+                CoreLocalMem<uint32_t>(cb.get_write_ptr()),
+                cb,
                 n * tb,
                 num_dests,
                 {},
-                {.noc_x_start = rcv_x0, .noc_y_start = rcv_y0, .noc_x_end = rcv_x1, .noc_y_end = rcv_y1, .addr = addr},
+                {.noc_x_start = rcv_x0, .noc_y_start = rcv_y0, .noc_x_end = rcv_x1, .noc_y_end = rcv_y1},
                 /*linked=*/true);
         };
-        mcast_group(p_nkd, ck);
-        mcast_group(p_qd, ck);
-        mcast_group(p_it, cc);
-        mcast_group(p_kc, kc);
-        mcast_group(p_dl, 1);
-        mcast_group(p_ti, cc);
+        mcast_group(cb_nkd, ck);
+        mcast_group(cb_qdecay, ck);
+        mcast_group(cb_intra, cc);
+        mcast_group(cb_kdec_t, kc);
+        mcast_group(cb_dl, 1);
+        mcast_group(cb_Tinv, cc);
         // Flush on EVERY arch, for two reasons. Blackhole: NoC latency exceeds L1<->RISCV latency,
         // so without it a receiver could see VALID with the data still in flight. All arches: the
         // flush proves every data mcast has read its L1 source slot; only then may the pushes
