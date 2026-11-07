@@ -157,7 +157,8 @@ MatmulReduceScatterPrefillParams resolve_params(
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<uint32_t>& l1_headroom,
     bool use_column_major_ccl,
-    bool output_preallocated) {
+    bool output_preallocated,
+    const std::optional<CoreCoord>& core_grid) {
     using tt::constants::TILE_HEIGHT;
     using tt::constants::TILE_WIDTH;
 
@@ -202,7 +203,13 @@ MatmulReduceScatterPrefillParams resolve_params(
     const uint32_t Mt = M / TILE_HEIGHT;
     const uint32_t Kt = K / TILE_WIDTH;
     const uint32_t Nt = N / TILE_WIDTH;
-    const CoreCoord grid = mesh->compute_with_storage_grid_size();
+    const CoreCoord full_grid = mesh->compute_with_storage_grid_size();
+    const CoreCoord grid = core_grid.value_or(full_grid);
+    TT_FATAL(
+        grid.x > 0 && grid.y > 0 && grid.x <= full_grid.x && grid.y <= full_grid.y,
+        "matmul_reduce_scatter_prefill: core_grid {} must be a nonempty block of the {} worker grid",
+        grid,
+        full_grid);
     const uint64_t l1_bank = mesh->allocator()->get_bank_size(tt::tt_metal::BufferType::L1);
     const uint64_t headroom = l1_headroom.value_or(detail::kL1Headroom);
     TT_FATAL(
@@ -266,6 +273,7 @@ Tensor experimental::matmul_reduce_scatter_prefill(
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& output_tensor,
     const std::optional<uint32_t>& l1_headroom,
+    const std::optional<CoreCoord>& core_grid,
     bool use_column_major_ccl) {
     using namespace ttnn::operations::experimental::ccl::matmul_reduce_scatter_prefill;
     const MatmulReduceScatterPrefillParams params = resolve_params(
@@ -279,7 +287,8 @@ Tensor experimental::matmul_reduce_scatter_prefill(
         memory_config,
         l1_headroom,
         use_column_major_ccl,
-        output_tensor.has_value());
+        output_tensor.has_value(),
+        core_grid);
     record_last_plan(params);
     return ttnn::prim::matmul_reduce_scatter_prefill(input_tensor, weight, output_tensor, params);
 }

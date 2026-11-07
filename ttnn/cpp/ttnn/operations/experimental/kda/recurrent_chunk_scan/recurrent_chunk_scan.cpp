@@ -113,7 +113,8 @@ std::vector<ttnn::Tensor> summarize_chunk_recurrence(
     bool tail,
     bool init,
     bool emit_outputs,
-    const std::optional<ttnn::MemoryConfig>& emit_memory_config) {
+    const std::optional<ttnn::MemoryConfig>& emit_memory_config,
+    const std::optional<Tensor>& sp_rank) {
     constexpr std::string_view operation_name = "summarize_chunk_recurrence";
     validate_protocol_inputs(v_beta, kd, q_decay, intra, k_dec_t, final_decay, t_inv, operation_name);
     auto [output_memory_config, kernel_config] = resolve_configs(v_beta, memory_config, compute_kernel_config);
@@ -139,7 +140,8 @@ std::vector<ttnn::Tensor> summarize_chunk_recurrence(
         tail,
         init,
         emit_outputs,
-        emit_memory_config);
+        emit_memory_config,
+        sp_rank);
 }
 
 }  // namespace ttnn::experimental::kda

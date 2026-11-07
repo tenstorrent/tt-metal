@@ -46,6 +46,7 @@ std::vector<ttnn::Tensor> summarize_chunk_recurrence(
     bool tail = false,
     bool init = true,
     bool emit_outputs = false,
-    const std::optional<ttnn::MemoryConfig>& emit_memory_config = std::nullopt);
+    const std::optional<ttnn::MemoryConfig>& emit_memory_config = std::nullopt,
+    const std::optional<Tensor>& sp_rank = std::nullopt);
 
 }  // namespace ttnn::experimental::kda

@@ -47,6 +47,7 @@ std::vector<Tensor> recurrent_chunk_scan(
     bool tail = false,
     bool init = true,
     bool emit_outputs = false,
-    const std::optional<tt::tt_metal::MemoryConfig>& emit_mem_config = std::nullopt);
+    const std::optional<tt::tt_metal::MemoryConfig>& emit_mem_config = std::nullopt,
+    const std::optional<Tensor>& sp_rank = std::nullopt);
 
 }  // namespace ttnn::experimental::prim

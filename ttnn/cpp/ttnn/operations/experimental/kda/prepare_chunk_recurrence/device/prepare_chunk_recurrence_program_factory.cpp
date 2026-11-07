@@ -421,6 +421,7 @@ ttnn::device_operation::MeshWorkloadArtifacts PrepareChunkRecurrenceProgramFacto
          .data_format_metadata = tt::DataFormat::UInt32});
     reader.dfb_bindings.push_back(m2::ProducerOf(writer_chronology, "chronology_writer"));
     writer.dfb_bindings.push_back(m2::ConsumerOf(writer_chronology, "chronology_writer"));
+    const auto chronology_programs = kda_factory_detail::bind_sp_rank(spec, run_args, in.sp_rank, reader);
     spec.kernels = {std::move(reader), std::move(writer), std::move(compute)};
     return kda_factory_detail::chronology_workload(
         {.spec = std::move(spec), .run_params = std::move(run_args)},
@@ -428,7 +429,8 @@ ttnn::device_operation::MeshWorkloadArtifacts PrepareChunkRecurrenceProgramFacto
         device,
         attrs.sequence_parallel_axis,
         attrs.num_chunks * TILE_HEIGHT,
-        READER);
+        READER,
+        chronology_programs);
 }
 
 }  // namespace ttnn::experimental::prim

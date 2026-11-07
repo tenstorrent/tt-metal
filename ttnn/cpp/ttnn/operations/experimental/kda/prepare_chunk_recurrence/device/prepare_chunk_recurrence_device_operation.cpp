@@ -196,7 +196,8 @@ std::vector<Tensor> prepare_chunk_recurrence(
     const std::optional<Tensor>& actual_end,
     uint32_t sequence_parallel_axis,
     float gate_scale,
-    uint32_t beta_logits_column_offset) {
+    uint32_t beta_logits_column_offset,
+    const std::optional<Tensor>& sp_rank) {
     TT_FATAL(std::isfinite(gate_scale), "prepare_chunk_recurrence: gate_scale must be finite");
     TT_FATAL(!actual_end || actual_start, "prepare_chunk_recurrence: actual_end requires actual_start");
     if (actual_start) {
@@ -204,6 +205,9 @@ std::vector<Tensor> prepare_chunk_recurrence(
     }
     if (actual_end) {
         kda_factory_detail::check_actual_start(q, *actual_end, "prepare_chunk_recurrence");
+    }
+    if (sp_rank) {
+        kda_factory_detail::check_device_scalar(q, *sp_rank, "prepare_chunk_recurrence", "sp_rank");
     }
     const auto& q_shape = q.logical_shape();
     const auto& v_shape = v.logical_shape();
@@ -233,7 +237,14 @@ std::vector<Tensor> prepare_chunk_recurrence(
             .output_mem_config = output_mem_config,
             .compute_kernel_config = compute_kernel_config},
         PrepareChunkRecurrenceInputs{
-            .q = q, .k = k, .v = v, .g = g, .beta = beta, .actual_start = actual_start, .actual_end = actual_end});
+            .q = q,
+            .k = k,
+            .v = v,
+            .g = g,
+            .beta = beta,
+            .actual_start = actual_start,
+            .actual_end = actual_end,
+            .sp_rank = sp_rank});
 }
 
 }  // namespace ttnn::experimental::prim
