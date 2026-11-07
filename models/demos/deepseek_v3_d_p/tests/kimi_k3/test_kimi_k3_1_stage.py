@@ -639,12 +639,12 @@ def test_kimi_k3_1_stage_kvpe(stage, mesh_device, device_params):
         logger.info(f"STAGE_KVPE stage {stage}: kvpe reset before chunk 1 changes {mismatched:.1%} of its output")
 
 
-# --- The 10K scenario, stage by stage: traced chunk periods and a device-profiler record per program ----------
+# --- The 10K and 128K scenarios, stage by stage: traced chunk periods and a device-profiler record per program ----
 #
-# Miguel's 10K vLLM trace prompt (8,192 tokens: two chunks, the second padded past the prompt as the producer
-# pads it) through each stage as it is served (`_served_stage`), stage 0 from the prompt's token ids and each
-# later stage from the previous stage's saved handoff, so every stage routes its experts on the real prompt.
-# Run the stages in order into one $K31_HANDOFF_DIR.
+# The prompt of one of Miguel's vLLM traces (10K: 8,192 tokens, two chunks; 128K: 126,976 tokens, 25 chunks; the last
+# chunk padded past the prompt as the producer pads it) through each stage as it is served (`_served_stage`), stage 0
+# from the prompt's token ids and each later stage from the previous stage's saved handoff, so every stage routes its
+# experts on the real prompt. Run the stages of one prompt in order into one $K31_HANDOFF_DIR.
 #
 # Timing follows K3's `test_prefill_perf`: whole passes of the prompt (every chunk, in order, as a request
 # arrives), each traced replay synchronized and timed on host (`STAGE_PERIOD` lines; one stage's chunk time is
@@ -655,21 +655,23 @@ def test_kimi_k3_1_stage_kvpe(stage, mesh_device, device_params):
 # so durations alone do not partition the chunk, and a program without records (the DSA indexer's top-k on its
 # sub-device) shows only as a gap in a chip's timeline.
 #
-#     for s in 0 1 2 3; do K31_HANDOFF_DIR=/path/perf10k scripts/run_safe_pytest.sh \
-#         "models/demos/deepseek_v3_d_p/tests/kimi_k3/test_kimi_k3_1_stage.py::test_kimi_k3_1_stage_prompt_perf[blackhole-stage$s-torus-xy-8x4]"; done
-PROMPT_TRACE = Path(
-    "/mnt/weka/model-weights/llm/ref-data/debug_traces/kimi_k31_pro_10k_v2/vllm-d06690a4-10240tok/metadata.json"
-)
+#     for s in 0 1 2 3; do K31_HANDOFF_DIR=/path/perf128k scripts/run_safe_pytest.sh \
+#         "models/demos/deepseek_v3_d_p/tests/kimi_k3/test_kimi_k3_1_stage.py::test_kimi_k3_1_stage_prompt_perf[blackhole-stage$s-128k-torus-xy-8x4]"; done
+TRACES = Path("/mnt/weka/model-weights/llm/ref-data/debug_traces")
+PROMPT_TRACES = {
+    "10k": TRACES / "kimi_k31_pro_10k_v2/vllm-d06690a4-10240tok/metadata.json",
+    "128k": TRACES / "kimi_k31_pro_128k_v2/vllm-4984af7c-131072tok/metadata.json",
+}
 PERF_PASSES = 5  # after the capture's warm pass; K3's test_prefill_perf times 5 iterations
 DEEP_START = MAX_SEQ_LEN - CHUNK
 
 
-def _trace_prompt() -> tuple[list[int], int]:
+def _trace_prompt(trace: Path) -> tuple[list[int], int]:
     """(the trace's prompt token ids padded to whole chunks with the producer's pad id, the prompt's length);
     skips when the trace is absent."""
-    if not PROMPT_TRACE.is_file():
-        pytest.skip(f"no K3.1 10K trace metadata at {PROMPT_TRACE}")
-    metadata = json.loads(PROMPT_TRACE.read_text())
+    if not trace.is_file():
+        pytest.skip(f"no K3.1 trace metadata at {trace}")
+    metadata = json.loads(trace.read_text())
     ids = metadata["token_ids"]
     assert len(ids) == metadata["n_prompt_tokens"], f"{len(ids)} token ids for {metadata['n_prompt_tokens']} tokens"
     return ids + [MTP_PAD_TOKEN_ID] * (-len(ids) % CHUNK), len(ids)
@@ -700,10 +702,11 @@ def _profiled_replay(runtime, mesh_device, chunk_input, kv_caches, slot, start, 
 @pytest.mark.skipif(not is_blackhole(), reason="Kimi-K3.1 runs on Blackhole only")
 @pytest.mark.timeout(0)
 @pytest.mark.parametrize("mesh_device, device_params", PLACEMENT, indirect=True)
+@pytest.mark.parametrize("trace", PROMPT_TRACES.values(), ids=PROMPT_TRACES.keys())
 @pytest.mark.parametrize("stage", range(NUM_STAGES), ids=[f"stage{s}" for s in range(NUM_STAGES)])
-def test_kimi_k3_1_stage_prompt_perf(stage, mesh_device, device_params, monkeypatch):
+def test_kimi_k3_1_stage_prompt_perf(stage, trace, mesh_device, device_params, monkeypatch):
     handoff_dir = _handoff_dir()
-    prompt, prompt_len = _trace_prompt()
+    prompt, prompt_len = _trace_prompt(trace)
     chunks = [(c * CHUNK, min((c + 1) * CHUNK, prompt_len)) for c in range(len(prompt) // CHUNK)]
     with _served_stage(stage, SYSTEM_MAX_USERS, handoff_dir, mesh_device, monkeypatch) as (
         runtime,

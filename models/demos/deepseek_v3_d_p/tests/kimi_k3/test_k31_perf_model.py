@@ -64,8 +64,9 @@ def test_finish_hand_values():
         hw,
     )
     assert op.fpu_ns == pytest.approx((6 + 5) / 2)
-    # Measured 7.1 elements/ns per chip ran 640 rows on 110 cores: 6 rows per core.
-    assert op.topk_ns == pytest.approx(2 * 1000 / (7.1 * 6 / 640))
+    # Measured: 160 rows of 1,064,960 scores in 4.7683 ms on 120 cores, 2 rows per core -> 2 * 1,064,960 elements
+    # per 4,768,300 ns on the busiest core.
+    assert op.topk_ns == pytest.approx(2 * 1000 / (2 * 1_064_960 / 4_768_300))
     assert op.compute_ns == pytest.approx(op.fpu_ns + op.topk_ns)
     assert op.dram_ns == pytest.approx(2.0)
     assert op.dram_cons_ns == pytest.approx(8.0)
@@ -83,8 +84,18 @@ def test_dsa_core_target_doubles_only_modelled_work():
     fpu = sum(o.fpu_ns for o in e.ops)
     dram = sum(o.dram_ns for o in e.ops)
     fabric = sum(o.fabric_ns for o in e.ops)
-    assert e.topk_ns > 0
-    assert e.target_ns == max(2 * max(fpu, dram, fabric) + e.topk_ns, e.conservative_ns)
+    measured = sum(o.topk_ns + o.fixed_ns for o in e.ops)
+    assert e.measured_ns == measured > 0
+    assert e.target_ns == max(2 * max(fpu, dram, fabric) + measured, e.conservative_ns)
+
+
+def test_indexer_score_fixed_cost_reproduces_its_measurement():
+    # The fused indexer score program (index-K ring gather + score) measured 174.7 us at prefix 0 (ao3i.2.2);
+    # the conservative model with the fixed cost reproduces it there, and the cost is added once per layer.
+    ops = {o.name: o for o in m.dsa_ops(prefix=0)}
+    fused = sum(ops[n].roofline_cons_ns + ops[n].fabric_cons_ns for n in ("index_k_gather", "index_score"))
+    assert fused == pytest.approx(174_700, abs=100)
+    assert sum(o.fixed_ns for o in ops.values()) == ops["index_score"].fixed_ns > 0
 
 
 def _hand_anchor():
