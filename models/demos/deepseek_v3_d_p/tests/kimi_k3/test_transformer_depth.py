@@ -45,6 +45,7 @@ from models.demos.deepseek_v3_d_p.tests.kimi_k3.golden import (
     TRACE_1M,
     TRACE_100K,
     TRACE_K31,
+    TRACE_K31_128K,
     load_checkpoint_tensors,
     resolve_checkpoint,
     resolve_trace,
@@ -486,15 +487,17 @@ def k31_layer_pcc(layer: int) -> float:
     return DEEP_LAYER_PCC if layer < 2 * KimiK3Config.ATTN_RES_BLOCK_SIZE else LAYER_PCC_THRESHOLD
 
 
-# rung -> (PP4 stage, layer count; None = the whole stage)
+# rung -> (golden, PP4 stage, layer count; None = the whole stage). "L24-128k" is K3's long-context check
+# (test_chunked_prefill.py's L24: layers 0-23 over every chunk) on the 128K trace.
 K31_RUNGS = {
-    "L1": (0, 1),
-    "L5": (0, 5),
-    "L12": (0, 12),
-    "L24": (0, None),
-    "stage1": (1, None),
-    "stage2": (2, None),
-    "stage3": (3, None),
+    "L1": (TRACE_K31, 0, 1),
+    "L5": (TRACE_K31, 0, 5),
+    "L12": (TRACE_K31, 0, 12),
+    "L24": (TRACE_K31, 0, None),
+    "stage1": (TRACE_K31, 1, None),
+    "stage2": (TRACE_K31, 2, None),
+    "stage3": (TRACE_K31, 3, None),
+    "L24-128k": (TRACE_K31_128K, 0, None),
 }
 
 
@@ -503,12 +506,15 @@ K31_RUNGS = {
 @pytest.mark.parametrize("mesh_device, device_params", k31_stage.PLACEMENT, indirect=True)
 @pytest.mark.parametrize("rung", list(K31_RUNGS))
 def test_k31_depth_ladder_matches_golden(rung, mesh_device, device_params):
-    trace = resolve_trace(TRACE_K31)
-    assert trace is not None, f"no K3.1 golden at {TRACE_K31}"
-    stage, num_layers = K31_RUNGS[rung]
-    chunk, num_chunks = k31_stage.CHUNK, k31_stage.HANDOFF_CHUNKS
-    prompt = k31_stage._teacher_forced_prompt()
-    prompt_len = len(trace.metadata["token_ids"])
+    golden_path, stage, num_layers = K31_RUNGS[rung]
+    trace = resolve_trace(golden_path)
+    assert trace is not None, f"no K3.1 golden at {golden_path}"
+    chunk = k31_stage.CHUNK
+    # The trace's whole teacher-forced sequence (prompt, then the ids vLLM decoded), padded to whole chunks.
+    ids = trace.metadata["token_ids"] + trace.metadata["completion_token_ids"]
+    prompt_len, real_len = len(trace.metadata["token_ids"]), len(ids)
+    num_chunks = -(-real_len // chunk)
+    prompt = ids + [k31_stage.MTP_PAD_TOKEN_ID] * (num_chunks * chunk - real_len)
     handoff_dir = k31_stage._handoff_dir()
     hf_config, params = k31_stage._stage_params(
         stage,
@@ -516,7 +522,7 @@ def test_k31_depth_ladder_matches_golden(rung, mesh_device, device_params):
         k31_stage._weight_cache_path(),
         full_last_layer=True,  # the last rank's last layer whole, so it has a residual to score
         num_layers=num_layers,
-        max_seq_len=CACHE_LEN,
+        max_seq_len=-(-real_len // CACHE_LEN) * CACHE_LEN,
         use_trace=False,
     )
     first, num_layers = params.first_layer_idx, params.num_layers
@@ -524,26 +530,53 @@ def test_k31_depth_ladder_matches_golden(rung, mesh_device, device_params):
     kv_caches = k31_stage.ADAPTER.allocate_kv_cache(mesh_device=mesh_device, hf_config=hf_config, params=params)
     runtime.compile(kv_caches)
 
-    per_layer = {}  # (global layer, chunk) -> host [chunk, hidden]
-    current = {}
+    def pcc(want, got):
+        return float(str(comp_pcc(want, got)[1]).split()[-1])
+
+    # Scored chunk by chunk, so host memory holds one chunk's taps. Prompt rows are gated; the teacher-forced
+    # decode rows are logged. The trace ends one row short of the sequence: it has no row for the last
+    # decoded id, which vLLM never fed back.
+    scores, decode = {}, {}  # (global layer, chunk) -> PCC
+
+    def score(c, taps):
+        lo, hi = c * chunk, min((c + 1) * chunk, real_len)
+        split = min(max(prompt_len - lo, 0), hi - lo)
+        for layer, got in sorted(taps.items()):
+            golden = trace.decoder_output(layer, lo, hi)
+            got = got[: golden.shape[0]].float()
+            if split:
+                scores[(layer, c)] = pcc(golden[:split], got[:split])
+            if split < golden.shape[0]:
+                decode[(layer, c)] = pcc(golden[split:], got[split:])
+            seal = " <- seal" if layer % KimiK3Config.ATTN_RES_BLOCK_SIZE == 0 else ""
+            logger.info(
+                f"K31 {rung} chunk {c} layer {layer}: prompt {scores.get((layer, c), float('nan')):.6f}  "
+                f"decode {decode.get((layer, c), float('nan')):.6f}{seal}"
+            )
+
+    taps = {}
     forward = runtime.model.forward
 
     def tapped(*args, **kwargs):
-        tap = lambda idx, h: per_layer.__setitem__((first + idx, current["chunk"]), compose(mesh_device, h, chunk))
+        tap = lambda idx, h: taps.__setitem__(first + idx, compose(mesh_device, h, chunk))
         return forward(*args, layer_tap=tap, **kwargs)
 
     runtime.model.forward = tapped
     try:
         for c in range(num_chunks):
-            current["chunk"] = c
             chunk_input = k31_stage._chunk_input(runtime, mesh_device, handoff_dir, stage, c, prompt)
             out = runtime.prefill_chunk(
-                chunk_input, kv_caches, slot_id=0, actual_start=c * chunk, actual_end=(c + 1) * chunk
+                chunk_input, kv_caches, slot_id=0, actual_start=c * chunk, actual_end=min((c + 1) * chunk, real_len)
             )
             ttnn.synchronize_device(mesh_device)
-            logger.info(f"K31 {rung} chunk {c} done: layers [{first}, {first + num_layers})")
+            logger.info(f"K31 {rung} chunk {c}/{num_chunks} done: layers [{first}, {first + num_layers})")
             saved = k31_stage._handoff_path(handoff_dir, stage, c)
-            if out is not None and num_layers == k31_stage.STAGES[stage][1] and saved.is_file():
+            if (
+                out is not None
+                and golden_path == TRACE_K31
+                and num_layers == k31_stage.STAGES[stage][1]
+                and saved.is_file()
+            ):
                 # The traced chain's saved output for the same stage and chunk: says whether stages 1-3,
                 # which start from it, start from what this eager build would have handed them.
                 got = compose_activation(mesh_device, out)
@@ -554,13 +587,15 @@ def test_k31_depth_ladder_matches_golden(rung, mesh_device, device_params):
                 )
             if out is not None:
                 ttnn.deallocate(out)
+            score(c, taps)
+            taps.clear()
         slots = {
             slot: runtime.model.schedule.global_index(local)
             for local, slot in enumerate(runtime.model.schedule.kv_slot_of_local)
             if slot is not None
         }
         kv = {
-            name: cache_rows(mesh_device, cache, chunk, num_chunks * chunk)
+            name: cache_rows(mesh_device, cache, chunk, real_len)
             for name, cache in (("kvpe", kv_caches.kvpe), ("index", kv_caches.index))
             if cache is not None
         }
@@ -570,28 +605,20 @@ def test_k31_depth_ladder_matches_golden(rung, mesh_device, device_params):
             kv_caches.kda_states.deallocate()
         runtime.release_trace()  # the sub-device managers, before the fixture closes the mesh
 
-    def pcc(want, got):
-        return float(str(comp_pcc(want, got)[1]).split()[-1])
-
-    # Prompt rows per chunk are gated; the teacher-forced decode rows the trace holds are logged. The trace
-    # ends one row short of the run: it has no row for the last decoded id, which vLLM never fed back.
-    windows = [(c * chunk, min((c + 1) * chunk, prompt_len)) for c in range(num_chunks) if c * chunk < prompt_len]
-    run_len = num_chunks * chunk
-
-    scores = {}
+    # The per-layer curve over context: worst prompt chunk and worst decode chunk per layer.
     for layer in range(first, first + num_layers):
-        golden = trace.decoder_output(layer, 0, run_len)
-        got = torch.cat([per_layer[(layer, c)] for c in range(num_chunks)])[: golden.shape[0]].float()
-        for c, (lo, hi) in enumerate(windows):
-            scores[(layer, c)] = pcc(golden[lo:hi], got[lo:hi])
-        decode_pcc = pcc(golden[prompt_len:], got[prompt_len:])
+        per_chunk = {c: v for (l, c), v in scores.items() if l == layer}
+        worst_c = min(per_chunk, key=per_chunk.get)
+        dec = [v for (l, _), v in decode.items() if l == layer]
         seal = " <- seal" if layer % KimiK3Config.ATTN_RES_BLOCK_SIZE == 0 else ""
-        cells = "  ".join(f"chunk{c} {scores[(layer, c)]:.6f}" for c in range(len(windows)))
-        logger.info(f"K31 {rung} layer {layer} vs decoder_output_layer_{layer}: {cells}  decode {decode_pcc:.6f}{seal}")
+        logger.info(
+            f"K31 {rung} layer {layer} vs decoder_output_layer_{layer}: chunk0 {per_chunk[0]:.6f}  "
+            f"worst chunk {worst_c} {per_chunk[worst_c]:.6f}  decode {min(dec) if dec else float('nan'):.6f}{seal}"
+        )
 
     kv_failures = []
     for slot, layer in sorted(slots.items()):
-        golden = trace.kv_cache(layer, 0, run_len)
+        golden = trace.kv_cache(layer, 0, real_len)
         got = kv["kvpe"][slot, : golden.shape[0]]
         lora, rope = cache_half_pccs(
             golden[:prompt_len], got[:prompt_len], KimiK3Config.KV_LORA_RANK, pe_interleave=False
