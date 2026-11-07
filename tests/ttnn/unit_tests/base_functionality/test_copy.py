@@ -2723,3 +2723,13 @@ def test_copy_tile_interleaved_to_width_sharded_bf8(device):
 
     output_torch = ttnn.to_torch(output_tensor)
     assert_allclose(torch_input, output_torch, rtol=0.05, atol=0.025)
+
+
+def test_copy_empty_tensor(device):
+    shape = [4, 0]
+    src = torch.zeros(shape)
+    dst = torch.zeros(shape)
+    src_tt = ttnn.from_torch(src, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    dst_tt = ttnn.from_torch(dst, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    ttnn.copy(src_tt, dst_tt)
+    assert list(dst_tt.shape) == shape
