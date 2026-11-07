@@ -9,6 +9,7 @@
 #include "ttnn/operations/experimental/quasar/pad/pad_nanobind.hpp"
 #include "ttnn/operations/experimental/quasar/tilize/tilize_nanobind.hpp"
 #include "ttnn/operations/experimental/quasar/move/move_nanobind.hpp"
+#include "ttnn/operations/experimental/quasar/ccl/all_gather/all_gather_nanobind.hpp"
 #include "ttnn/operations/experimental/quasar/untilize_with_unpadding/untilize_with_unpadding_nanobind.hpp"
 #include "ttnn/operations/experimental/quasar/slice/slice_nanobind.hpp"
 #include "ttnn/operations/experimental/quasar/transpose/transpose_nanobind.hpp"
@@ -43,6 +44,7 @@ void bind_quasar(nb::module_& mod) {
     detail::bind_pad(m_quasar);
     detail::bind_tilize(m_quasar);
     detail::bind_move(m_quasar);
+    detail::bind_all_gather(m_quasar);
     detail::bind_untilize_with_unpadding(m_quasar);
     detail::bind_slice(m_quasar);
     detail::bind_slice_descriptor(m_quasar);
