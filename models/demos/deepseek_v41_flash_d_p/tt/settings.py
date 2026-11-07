@@ -734,9 +734,24 @@ TABLE = {
         "ttnn.experimental.deepseek_prefill.per_token_cast_to_fp8 (round_scale_to_power_of_two=False) + "
         "ttnn.bringup.pack_fp8_rows (zeroed pad rows stay all zero), and served also under the re-index layers that "
         "read the ratio-1 source's keys (24 / 28 / 32 / 36: Blaze's REINDEX caches hold layer 20's key, "
-        "csa_attention/op.py:1126-1161); the indexer scores a persistent bf16 compute copy of the keys (tt/"
-        "compressor.TtServedRows: the slab of the old path, not served). Records 32 / r x 192 B. bf16 = the path "
+        "csa_attention/op.py:1126-1161); the indexer scores the private copy INDEX_K_COPY picks (P.41: bfp8, the "
+        "served rows then encoded from it; bf16 = tt/compressor.TtServedRows' slab of the old path, not served). "
+        "Records 32 / r x 192 B. bf16 = the path "
         "before (bf16 rows of 128, 256 B, served on the KV sources only)",
+    ),
+    "INDEX_K_COPY": Setting(
+        "bfp8",
+        ("bfp8", "bf16"),
+        "P.41 (OWNER 2026-11-07): the index keys' private copy each KV source keeps for its indexers "
+        "(tt/compressor.TtServedRows). bfp8 = ONE persistent bfloat8_b TILE copy [1, 1, rows / r, 128] a chip (no 16-bit "
+        "copy): each chunk's new keys rounded once to it (ttnn.bringup.bfp_round, nearest even) and written in place "
+        "(start % chunk == 0: at the chip's tile row; any other 32-aligned start: the two W blocks the chunk touches "
+        "read back exactly, the rows written by update_padded_kv_cache, re-rounded in place, an identity on the old "
+        "rows); the indexer scores that copy as it is (no per-chunk tilize / re-rounding of the history), and the "
+        "served Blaze 192-byte rows are encoded from the bfp8 keys (typecast to bf16, exact, then the stock "
+        "per_token_cast_to_fp8 + pack_fp8_rows). Needs INDEX_K_FORMAT=bfp8 and INDEX_K_SERVED=fp8_row192: with any "
+        "other value of either it FALLS BACK to the bf16 copy (logged once). bf16 = the path before P.41: a persistent "
+        "bf16 copy (the served rows encoded from it), tiled and rounded to INDEX_K_FORMAT by the indexer every chunk",
     ),
     "INDEX_Q_FORMAT": Setting(
         "bfp4",

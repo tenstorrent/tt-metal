@@ -24,6 +24,10 @@ stage_layouts)). No chunk runs. Pass:
     all zero. Against tt-blaze's torch recipe (caches.blaze_rows, _quantize_scaled_keys): the scales byte-equal, every
     value within one e4m3 step (the stock cast lands one step higher at ~1 % of values and keeps e4m3 subnormals the
     recipe flushes; counted and printed)
+    INDEX_K_COPY=bfp8 (P.41, owner-authorized test change 2026-11-07): the served rows are built from the keys' bfp8
+    copy, so the recipe and the stock cast are applied to the keys the rows are built from: the golden's bf16 keys
+    rounded to bfloat8_b by tt-metal's host rule (dequantized; ckv_bfp4_ttnn/tests/reference.round_values, which
+    ttnn.bringup.bfp_round equals for bf16 inputs). Every other check, tolerance and limit unchanged.
 """
 
 import pytest
@@ -152,6 +156,10 @@ def _encoding_failures(mesh, runtime, kv, path, tmp_path, layers) -> list[str]:
             keys = gk.g.state(src)["index_k"][: n_tok // r].float()
             st.compress[src].index_k.load_host(keys, 0)
             ttnn.synchronize_device(mesh)
+            if st.compress[src].index_k.k8 is not None:  # INDEX_K_COPY=bfp8 (P.41): the rows' source is the bfp8 keys
+                from ttnn.bringup.ckv_bfp4_ttnn.tests.reference import round_values
+
+                keys = round_values(keys.bfloat16().float(), mbits=7)
             recipe = C.blaze_rows(keys)
             stock = _stock_rows(mesh, keys)
             for layer in [src] + sorted(j for j, s in cfg["of"].items() if s == src):

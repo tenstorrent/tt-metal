@@ -251,7 +251,11 @@ class TtIndexer:
     def _keys(self, cache) -> ttnn.Tensor:
         """The served index-key cache's slab [1, 1, rows / r, hd] bf16 ROW_MAJOR (ND-sharded) -> compressed rows
         [1, 1, rows / r, hd] bf16 TILE (INDEX_K_FORMAT=bfp4 / bfp8: rounded to bfloat4_b / bfloat8_b), interleaved: the ring's k_local
-        (block-cyclic layout unchanged)."""
+        (block-cyclic layout unchanged). INDEX_K_COPY=bfp8 (P.41): the cache's persistent bfloat8_b copy itself (the
+        compressor rounded each chunk's keys into it once; never freed here)."""
+        if cache.k8 is not None:
+            assert self.k_dtype == ttnn.bfloat8_b, "INDEX_K_COPY=bfp8 needs INDEX_K_FORMAT=bfp8"
+            return cache.k8
         rm = cache.slab.slice_rows(0, cache.crows)
         kt = ttnn.to_layout(rm, ttnn.TILE_LAYOUT, memory_config=DRAM, sub_core_grids=sub_cores(rm))
         dealloc(rm)
@@ -430,8 +434,8 @@ class TtIndexer:
         if isinstance(k_local, Kept):
             k_local = k_local.t
         # (LOWBIT_HOST=on with INDEX_K_FORMAT=bfp4 / bfp8: the keys are the layer's persistent buffer, never freed; a memo
-        # holds it as Kept, which its drop leaves alone)
-        k_kept = self.lowbit_host and self.k_dtype != ttnn.bfloat16
+        # holds it as Kept, which its drop leaves alone; INDEX_K_COPY=bfp8, P.41: the cache's own bfp8 copy, likewise)
+        k_kept = (self.lowbit_host and self.k_dtype != ttnn.bfloat16) or cache.k8 is not None
         if k_local is None:
             k_local = self._keys(cache)
             if shared:  # INDEXER_GLUE=on (P.16): the re-index layers score the same tiled keys (L24 = L20's)
