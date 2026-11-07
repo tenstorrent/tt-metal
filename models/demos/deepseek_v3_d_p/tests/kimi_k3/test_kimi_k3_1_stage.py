@@ -306,14 +306,15 @@ def _built_stage(stage: int, num_users: int, weight_cache_path: Path, mesh_devic
 
 
 def _replay(runtime, mesh_device, chunk_input, kv_caches, slot: int, start: int, end: int):
-    """One traced chunk, synchronized and timed; returns the rank's outbound activation (None on the last rank)."""
+    """One traced chunk, synchronized and timed (`STAGE_TIME replay`, from the trace's dispatch to the sync; the
+    metadata record is built before); returns the rank's outbound activation (None on the last rank)."""
     msg = _packed_metadata_msg(mesh_device, slot, start, end)
     t0 = time.perf_counter()
     out = runtime.prefill_chunk(
         chunk_input, kv_caches, slot_id=slot, actual_start=start, actual_end=end, request_id=0, metadata_msg=msg
     )
     ttnn.synchronize_device(mesh_device)
-    logger.info(f"STAGE_TIME replay slot {slot} [{start}, {end}) {time.perf_counter() - t0:.3f} s")
+    logger.info(f"STAGE_TIME replay slot {slot} [{start}, {end}) {(time.perf_counter() - t0) * 1e3:.3f} ms")
     ttnn.deallocate(msg)
     return out
 
@@ -647,7 +648,7 @@ def test_kimi_k3_1_stage_kvpe(stage, mesh_device, device_params):
 # Run the stages in order into one $K31_HANDOFF_DIR.
 #
 # Timing follows K3's `test_prefill_perf`: whole passes of the prompt (every chunk, in order, as a request
-# arrives), each traced replay synchronized and timed on host (`STAGE_PERIOD` lines; one stage's chunk time is
+# arrives), each traced replay synchronized and timed on host (`STAGE_TIME replay` lines; one stage's chunk time is
 # its retire period in the PP4 pipeline). Then one more pass under the real-time device profiler, one program
 # record per chip, and the same for one chunk at the deepest position of the per-user cache (the 1M probe of
 # ao3i.1.6). Each profiled chunk's programs go to `stage{s}.{label}.programs.json` in dispatch order with each
@@ -675,20 +676,19 @@ def _trace_prompt() -> tuple[list[int], int]:
     return ids + [MTP_PAD_TOKEN_ID] * (-len(ids) % CHUNK), len(ids)
 
 
-def _profiled_replay(runtime, mesh_device, chunk_input, kv_caches, slot, start, end, path: Path) -> None:
-    """One traced chunk under the real-time profiler; writes its programs (dispatch order, per-chip ns) to `path`.
-    Fails when the profiler delivers no records or drops some (a partial set), rather than write a partial file."""
+def _profiled_replay(mesh_device, run, path: Path) -> None:
+    """`run` (one traced chunk) under the real-time profiler; writes its programs (dispatch order, per-chip ns) to
+    `path`. Fails rather than write a partial file: on no records or dropped ones (the profiler raises), and on a
+    set cut short at the profiler's collection deadline (some program without a record from every chip)."""
     programs = {}
-
-    def run():
-        _replay(runtime, mesh_device, chunk_input, kv_caches, slot, start, end)
-
     _, records = profile_realtime_program(mesh_device, run, collect_all=True)
     for record in records:  # arrival order is dispatch order
         program = programs.setdefault(
             record["runtime_id"], {"runtime_id": record["runtime_id"], "kernel_sources": record["kernel_sources"]}
         )
         program.setdefault("chip_ns", {})[record["chip_id"]] = (record["start_ns"], record["end_ns"])
+    chips = mesh_device.get_num_devices()
+    assert len(records) == len(programs) * chips, f"{len(records)} records for {len(programs)} programs x {chips} chips"
     path.write_text(json.dumps(list(programs.values())))
     critical_path = sum(max(end - start for start, end in p["chip_ns"].values()) for p in programs.values())
     logger.info(
@@ -714,17 +714,15 @@ def test_kimi_k3_1_stage_prompt_perf(stage, mesh_device, device_params, monkeypa
         slot = SYSTEM_MAX_USERS - 1
 
         def replay(chunk, start, end, profile_label=None):
-            """One chunk, timed (`STAGE_PERIOD`) or profiled, its layer acks checked; returns its output (None when
-            profiled or on the last rank)."""
+            """One chunk, timed (`STAGE_TIME replay`) or profiled (`STAGE_PROFILE` follows its replay line), its layer
+            acks checked; returns its output (None when profiled or on the last rank)."""
             chunk_input = _chunk_input(runtime, mesh_device, handoff_dir, stage, chunk, prompt)
+            run = lambda: _replay(runtime, mesh_device, chunk_input, kv_caches, slot, start, end)
             out = None
             if profile_label is None:
-                t0 = time.perf_counter()
-                out = _replay(runtime, mesh_device, chunk_input, kv_caches, slot, start, end)
-                logger.info(f"STAGE_PERIOD stage {stage} [{start}, {end}) {(time.perf_counter() - t0) * 1e3:.3f} ms")
+                out = run()
             else:
-                path = handoff_dir / f"stage{stage}.{profile_label}.programs.json"
-                _profiled_replay(runtime, mesh_device, chunk_input, kv_caches, slot, start, end, path)
+                _profiled_replay(mesh_device, run, handoff_dir / f"stage{stage}.{profile_label}.programs.json")
             acks = _read_acks(d2h_service, acks_per_chunk)
             assert set(acks) == {(slot, start, end)}, f"ack records {sorted(set(acks))} for chunk {(slot, start, end)}"
             return out
