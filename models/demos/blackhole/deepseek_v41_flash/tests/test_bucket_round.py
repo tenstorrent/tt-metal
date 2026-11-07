@@ -56,6 +56,16 @@ def test_bucket_round(mesh_device):
     runner.dec.set_force(-1)
     snaps = runner.dec.snapshot_states()
     full = _round(runner, X, base, snaps)
+    full2 = _round(runner, X, base, snaps)  # determinism of the full round itself (same inputs, state restored)
+    T._log(
+        "BUCKETSELF full vs full: "
+        + str(
+            {
+                tag: round(min(T._pcc(a_, b_) for a_, b_ in zip(rws, full2["streams"][tag])), 6)
+                for tag, rws in list(full["streams"].items())[:4]
+            }
+        )
+    )
     for Ub in [int(x) for x in os.environ.get("BUCKET_UBS", "2,1").split(",")]:
         dv = runner.drafter_root.view_users(Ub)
         br = SpecRunner(gen.m, runner.k, drafter=dv, Ub=Ub)
@@ -63,14 +73,28 @@ def test_bucket_round(mesh_device):
         phys = br.phys  # runner row -> model user
         bsnaps = br.dec.snapshot_states()
         got = _round(br, X[phys], base[phys], bsnaps)
+        got2 = _round(br, X[phys], base[phys], bsnaps)
+        T._log(
+            f"BUCKETSELF Ub {Ub} bucket vs bucket: "
+            + str(
+                {
+                    tag: round(min(T._pcc(a_, b_) for a_, b_ in zip(rws, got2["streams"][tag])), 6)
+                    for tag, rws in list(got["streams"].items())[:4]
+                }
+            )
+        )
         worst, worst_tag = 1.0, ""
         for tag, rws in full["streams"].items():
+            tmin = [[1.0] * n for _ in range(Ub)]
             for r in range(rows):
                 f, g = rws[r], got["streams"][tag][r]
                 for u in range(Ub):
                     p = T._pcc(f[u * n : (u + 1) * n], g[u * n : (u + 1) * n])
                     if p < worst:
                         worst, worst_tag = p, f"{tag} row {r} user {u}"
+                    for j in range(n):
+                        tmin[u][j] = min(tmin[u][j], T._pcc(f[u * n + j], g[u * n + j]))
+            T._log(f"BUCKETSTREAM Ub {Ub} {tag}: min PCC per user/row {[[round(x, 5) for x in t] for t in tmin]}")
         sel = phys
         lg_f = full["logits"].reshape(rows, U * n, -1)
         lg_g = got["logits"].reshape(rows, Ub * n, -1)
@@ -80,6 +104,11 @@ def test_bucket_round(mesh_device):
         eq_a = bool(torch.equal(full["a"][sel], got["a"]))
         eq_m = bool(torch.equal(full["m"][sel], got["m"]))
         eq_d = bool(torch.equal(full["d"][sel], got["d"]))
+        if not eq_d:
+            df, dg = full["d"][sel], got["d"]
+            T._log(
+                f"BUCKETDRAFTS Ub {Ub}: differing entries {int((df != dg).sum())} of {df.numel()}: users {[int(u) for u in (df != dg).any(dim=1).nonzero().flatten()]} positions {[int(j) for j in (df != dg).any(dim=0).nonzero().flatten()]}"
+            )
         T._log(
             f"BUCKETTEST Ub {Ub} k {runner.k}: streams worst PCC {worst:.6f} ({worst_tag}); logits PCC {lp:.6f}; argmax ids equal {eq_a}; accept counts equal {eq_m}; drafts equal {eq_d}"
         )
