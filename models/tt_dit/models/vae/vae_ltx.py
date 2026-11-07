@@ -1148,6 +1148,8 @@ class LTXSpaceToDepthDownsample(Module):
         self.out_channels = out_channels
         self.parallel_config = parallel_config
         self.ccl_manager = ccl_manager
+        # Set by a traced encoder while it captures: gather on device instead of the host round-trip.
+        self.device_gather = False
         prod = math.prod(stride)
         # Skip path groups (in_channels * prod) channels down to out_channels by mean-pooling.
         self.group_size = in_channels * prod // out_channels
@@ -1260,7 +1262,7 @@ class LTXSpaceToDepthDownsample(Module):
 
         if pc.height_parallel.factor <= 1 and pc.width_parallel.factor <= 1:
             return ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
-        if os.environ.get("LTX_ENC_DEVICE_GATHER", "0") == "1":
+        if self.device_gather or os.environ.get("LTX_ENC_DEVICE_GATHER", "0") == "1":
             return self._all_gather_hw_device(x)
 
         if _loc:
@@ -1398,6 +1400,10 @@ def _compute_ltx_encoder_dims(
 
     dims.append(res_dims())  # conv_out
     return dims
+
+
+def _eager_stages() -> set[str]:
+    return {s.strip() for s in os.environ.get("LTX_GEN_EAGER_STAGES", "").split(",") if s.strip()}
 
 
 class LTXVideoEncoder(Module):
@@ -1555,6 +1561,14 @@ class LTXVideoEncoder(Module):
         if os.environ.get("LTX_VAE_ENC_HALO_ONLY", "0") != "1":
             _set_halo_only(self, False)
 
+        # Traced encode: the pipeline sets ``traced`` on a static traced mesh. One capture per input
+        # shape (the pipeline encodes at both stage resolutions); each gen copies its pixels into the
+        # captured input buffer and replays. "enc" in LTX_GEN_EAGER_STAGES runs it eager at runtime.
+        self.traced = False
+        self._encode_tracers: dict[tuple, Tracer] = {}
+        self._encode_logical_hw: dict[tuple, tuple[int, int]] = {}
+        self._last_logical_hw = (0, 0)
+
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         # Map per_channel_statistics (dash keys) -> per_channel_mean/std.
         if "per_channel_statistics.mean-of-means" in state:
@@ -1570,7 +1584,7 @@ class LTXVideoEncoder(Module):
         for k in keys_to_remove:
             del state[k]
 
-    def forward(self, sample_BCTHW: torch.Tensor) -> torch.Tensor:
+    def forward(self, sample_BCTHW: torch.Tensor, traced: bool | None = None) -> torch.Tensor:
         """Encode video (B, 3, F, H, W) in [-1, 1] -> normalized latent means (B, 128, F', H', W')."""
         # Crop trailing frames so F == 1 + 8*k (mirrors the reference encoder).
         frames_count = sample_BCTHW.shape[2]
@@ -1593,6 +1607,10 @@ class LTXVideoEncoder(Module):
         sample, logical_h = conv_pad_height(sample, self.parallel_config.height_parallel.factor)
         sample, logical_w = conv_pad_width(sample, self.parallel_config.width_parallel.factor)
 
+        if traced is None:
+            traced = self.traced and "enc" not in _eager_stages()
+        # Traced: keep the upload on host so the replay copies it into the captured input buffer
+        # (no device allocation after capture).
         sample_tt = typed_tensor_2dshard(
             sample,
             self.mesh_device,
@@ -1602,8 +1620,52 @@ class LTXVideoEncoder(Module):
             },
             layout=ttnn.ROW_MAJOR_LAYOUT,
             dtype=ttnn.bfloat16,
+            on_host=traced,
         )
 
+        if traced:
+            key = (tuple(sample_tt.shape), logical_h, logical_w)
+            tracer = self._encode_tracers.get(key)
+            if tracer is None:
+                tracer = Tracer(self.encode_device, device=self.mesh_device, prep_run=True, clone_prep_inputs=True)
+                self._encode_tracers[key] = tracer
+                # A host round-trip cannot be captured: the downsample gathers on device inside the trace.
+                self._set_device_gather(True)
+                try:
+                    sample_tt = tracer(sample_tt, logical_h, logical_w)
+                finally:
+                    self._set_device_gather(False)
+                self._encode_logical_hw[key] = self._last_logical_hw
+            else:
+                sample_tt = tracer(sample_tt, logical_h, logical_w)
+            logical_h, logical_w = self._encode_logical_hw[key]
+        else:
+            sample_tt = self.encode_device(sample_tt, logical_h, logical_w)
+            logical_h, logical_w = self._last_logical_hw
+
+        concat_dims = [None, None]
+        concat_dims[self.parallel_config.height_parallel.mesh_axis] = 2
+        concat_dims[self.parallel_config.width_parallel.mesh_axis] = 3
+        result = fast_device_to_host(
+            sample_tt,
+            self.mesh_device,
+            concat_dims,
+            ccl_manager=self.ccl_manager,
+        )  # (B, F', H', W', 128)
+
+        result = result[:, :, :logical_h, :logical_w, :]
+        # (B, F', H', W', C) -> (B, C, F', H', W')
+        return result.permute(0, 4, 1, 2, 3)
+
+    def _set_device_gather(self, on: bool) -> None:
+        for block in self.down_blocks:
+            if isinstance(block, LTXSpaceToDepthDownsample):
+                block.device_gather = on
+
+    def encode_device(self, sample_tt: ttnn.Tensor, logical_h: int, logical_w: int) -> ttnn.Tensor:
+        """Device-only encode (conv_in -> down_blocks -> norm_out -> conv_out -> normalize) of an
+        already-sharded input, so the whole region can be captured as one trace. Stashes the final
+        logical dims: the returned tensor still carries mesh padding."""
         _loc = os.environ.get("LTX_ENC_LOCALIZE")
 
         def _mark(tag):
@@ -1639,20 +1701,19 @@ class LTXVideoEncoder(Module):
         mean = self.per_channel_mean.data
         std = self.per_channel_std.data
         sample_tt = ttnn.multiply(ttnn.subtract(sample_tt, mean), ttnn.reciprocal(std))
+        self._last_logical_hw = (logical_h, logical_w)
+        return sample_tt
 
-        concat_dims = [None, None]
-        concat_dims[self.parallel_config.height_parallel.mesh_axis] = 2
-        concat_dims[self.parallel_config.width_parallel.mesh_axis] = 3
-        result = fast_device_to_host(
-            sample_tt,
-            self.mesh_device,
-            concat_dims,
-            ccl_manager=self.ccl_manager,
-        )  # (B, F', H', W', 128)
+    def release_trace(self) -> None:
+        """Release every encode capture before rebuilding or unloading weights."""
+        for tracer in self._encode_tracers.values():
+            tracer.release_trace()
+        self._encode_tracers.clear()
+        self._encode_logical_hw.clear()
 
-        result = result[:, :, :logical_h, :logical_w, :]
-        # (B, F', H', W', C) -> (B, C, F', H', W')
-        return result.permute(0, 4, 1, 2, 3)
+    def deallocate_weights(self) -> None:
+        self.release_trace()
+        super().deallocate_weights()
 
 
 # =============================================================================

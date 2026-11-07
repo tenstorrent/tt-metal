@@ -631,6 +631,9 @@ class LTXDistilledPipeline(LTXPipeline):
             # puts its weights and anything its first forward allocates below every trace.
             if self.vae_encoder is not None and warm_encoders:
                 logger.info(f"warmup image encoder (before capture): {height // 2}x{width // 2} + {height}x{width}")
+                # Static mesh: capture one encode trace per stage resolution here, below every DiT
+                # capture; each gen replays it ("enc" in LTX_GEN_EAGER_STAGES keeps it eager).
+                self.vae_encoder.traced = True
                 self._warmup_encode(height // 2, width // 2)
                 self._warmup_encode(height, width)
                 # The IC-LoRA reference encoders are also built once and never reloaded here, so the
