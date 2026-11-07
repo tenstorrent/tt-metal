@@ -218,6 +218,10 @@ GgufMatmulProgramFactory::cached_program_t GgufMatmulProgramFactory::create(
     add_cb(program, compute, tt::CBIndex::c_20, tt::DataFormat::UInt32, 4096, 1, tt::tt_metal::Tile());
     const uint32_t input_sem = CreateSemaphore(program, full, 0);
     const uint32_t partial_sem = CreateSemaphore(program, compute, 0);
+    // Codebook formats: grid-lookup requests from the reader to the writer of its core, the answers, the page address.
+    const uint32_t request_sem = CreateSemaphore(program, compute, 0);
+    const uint32_t answer_sem = CreateSemaphore(program, compute, 0);
+    const uint32_t address_sem = CreateSemaphore(program, compute, 0);
 
     // The collector: the core nearest the middle of the grid whose writer runs on NoC 0 (odd column), if any. The
     // multicast rectangle is the whole grid, corners in the writer's NoC order.
@@ -236,10 +240,12 @@ GgufMatmulProgramFactory::cached_program_t GgufMatmulProgramFactory::create(
         {{uint32_t(v1.x), uint32_t(v1.y), uint32_t(v0.x), uint32_t(v0.y)},
          {uint32_t(v0.x), uint32_t(v0.y), uint32_t(v1.x), uint32_t(v1.y)}}};
 
-    std::vector<uint32_t> reader_ct = {f.format_id, kPageUnits * unit, kGroupsPerRead, kRecordSlots};
+    std::vector<uint32_t> reader_ct = {
+        f.format_id, kPageUnits * unit, kGroupsPerRead, kRecordSlots, request_sem, answer_sem, address_sem};
     TensorAccessorArgs(*weight.buffer()).append_to(reader_ct);
     const uint32_t chunk = std::min(kInputChunk, k_tiles);
-    std::vector<uint32_t> writer_ct = {k_tiles, chunk, input_sem, partial_sem};
+    std::vector<uint32_t> writer_ct = {
+        k_tiles, chunk, input_sem, partial_sem, f.format_id, request_sem, answer_sem, address_sem};
     TensorAccessorArgs(*input.buffer()).append_to(writer_ct);
     TensorAccessorArgs(*output.buffer()).append_to(writer_ct);
 
