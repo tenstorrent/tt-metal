@@ -97,6 +97,10 @@ DEST_RT_CT_BLOCKS = (
 ODD_REUSE_RT_CT = ((3, 3), (3, 4), (4, 3), (3, 5), (5, 3))
 ODD_REUSE_KT_DIMS = (1, 2)
 
+# Unpack MOP count max(rt, ct) = 16 on both reuse branches: zmask bits 8-15 select the context-1 replay.
+MOP_ZMASK_RT_CT = ((1, 16), (16, 1))
+MOP_ZMASK_KT_DIMS = (1, 2)
+
 
 def mid_fill_rt_ct_pairs(max_tiles: int) -> List[tuple]:
     """Half-dest occupancy: 2×2, 1×(cap/2), (cap/2)×1 when they fit."""
