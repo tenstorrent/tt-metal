@@ -530,7 +530,6 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor(
 
     if (config_tensors_in_dram) {
         reader_defines["CONFIG_TENSOR_IN_DRAM"] = "1";
-        activation_kernel_compile_args.push_back(conv_reader_indices_buffer->address());  // smuggled-rta-ok
         activation_kernel_compile_args.push_back(conv_reader_indices_buffer->page_size());
         tt::tt_metal::TensorAccessorArgs(conv_reader_indices_buffer).append_to(activation_kernel_compile_args);
     }
@@ -554,6 +553,9 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor(
         .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
         .noc = act_noc,
     };
+    if (config_tensors_in_dram) {
+        act_kernel_desc.emplace_common_runtime_args({conv_reader_indices_buffer});
+    }
 
     KernelDescriptor weights_kernel_desc;
     weights_kernel_desc.kernel_source = weights_kernel_path;

@@ -199,7 +199,7 @@ void kernel_main() {
 
     tt_l1_ptr uint32_t* act_mcast_sender_noc_y = (tt_l1_ptr uint32_t*)(get_arg_addr(i));
 
-    load_config_tensor_if_in_dram<29, 30, 31, cb_reader_indices>(noc, dfb_reader_indices_obj, dram_config_reader_index);
+    load_config_tensor_if_in_dram<30, 31, cb_reader_indices>(noc, dfb_reader_indices_obj, dram_config_reader_index);
 
     volatile tt_l1_ptr uint32_t* packed_reader_indices_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(dfb_reader_indices_obj.get_write_ptr());

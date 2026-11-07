@@ -37,7 +37,7 @@ void kernel_main() {
 
     uint32_t runtime_arg_idx = 0;
     uint32_t core_index = get_arg_val<uint32_t>(runtime_arg_idx++);
-    load_config_tensor_if_in_dram<29, 30, 31, cb_reader_indices>(Noc(), dfb_reader_idx, core_index);
+    load_config_tensor_if_in_dram<30, 31, cb_reader_indices>(Noc(), dfb_reader_idx, core_index);
     // Activation reuse args (offset by 4 from index 29: address + page_size + 2 TensorAccessorArgs)
     constexpr uint32_t act_reuse_cb_tiles = get_compile_time_arg_val(33);
     constexpr uint32_t act_block_w_tiles = get_compile_time_arg_val(34);
