@@ -352,7 +352,8 @@ HostTensor unpad_impl(
     const auto& input_shape = tensor.padded_shape();
     const auto input_strides = compute_strides(input_shape);
 
-    // Validate inputs and compute output shape
+    // Validate inputs and compute output shape. The release-mode bounds checks live once,
+    // at the public unpad() entry, so these debug-only assertions stay as they were.
     ttsl::SmallVector<uint32_t> output_shape;
     for (auto i = 0; i < input_shape.rank(); i++) {
         // Check if tensor start and end indices are within input tensor shape
@@ -440,8 +441,46 @@ HostTensor pad(
     const tt::tt_metal::Shape& input_tensor_start,
     float pad_value) {
     TT_FATAL(tensor.layout() == Layout::ROW_MAJOR, "Tensor layout must be ROW_MAJOR for padding");
+    // pad_impl promotes a rank < 2 padded shape to rank 2, so validate against that rank.
+    auto input_padded_shape = tensor.padded_shape();
+    if (input_padded_shape.rank() < 2) {
+        input_padded_shape = input_padded_shape.to_rank(2);
+    }
+    const auto rank = input_padded_shape.rank();
+    // Callers may pass lower-rank output/start shapes (the Python binding forwards the lists
+    // verbatim), so widen them to the promoted rank and use the widened shapes for both
+    // validation and pad_impl. The output shape gains leading 1s, and the start offsets gain
+    // leading 0s, because a leading dim is never offset by a caller that never mentioned it.
+    auto output_shape = output_padded_shape;
+    if (output_shape.rank() < rank) {
+        output_shape = output_shape.to_rank(rank);
+    }
+    auto start_shape = input_tensor_start;
+    if (start_shape.rank() < rank) {
+        ttsl::SmallVector<uint32_t> widened(rank, 0);
+        for (size_t i = 0; i < start_shape.rank(); i++) {
+            widened[rank - start_shape.rank() + i] = start_shape[i];
+        }
+        start_shape = tt::tt_metal::Shape(std::move(widened));
+    }
+    TT_FATAL(
+        output_shape.rank() == rank && start_shape.rank() == rank,
+        "pad: output_padded_shape and input_tensor_start must both be rank {} (the input's promoted rank), got {} and "
+        "{}",
+        rank,
+        output_padded_shape.rank(),
+        input_tensor_start.rank());
+    for (size_t i = 0; i < rank; i++) {
+        TT_FATAL(
+            start_shape[i] + input_padded_shape[i] <= output_shape[i],
+            "pad: dim {}: input_tensor_start {} + input_padded_shape {} exceeds output_padded_shape {}",
+            i,
+            start_shape[i],
+            input_padded_shape[i],
+            output_shape[i]);
+    }
     return tensor_impl::dispatch(tensor.dtype(), [&]<typename T>() {
-        return CMAKE_UNIQUE_NAMESPACE::pad_impl<T>(tensor, output_padded_shape, input_tensor_start, pad_value);
+        return CMAKE_UNIQUE_NAMESPACE::pad_impl<T>(tensor, output_shape, start_shape, pad_value);
     });
 }
 
@@ -476,6 +515,36 @@ HostTensor unpad(
     const tt::tt_metal::Shape& output_tensor_start,
     const tt::tt_metal::Shape& output_tensor_end) {
     TT_FATAL(tensor.layout() == Layout::ROW_MAJOR, "Tensor layout must be ROW_MAJOR for unpadding");
+    // unpad_impl indexes output_tensor_start/end by the input rank, so the ranks must
+    // agree before any buffer is allocated.
+    const auto& input_shape = tensor.padded_shape();
+    const auto rank = input_shape.rank();
+    TT_FATAL(
+        output_tensor_start.rank() == rank && output_tensor_end.rank() == rank,
+        "unpad: output_tensor_start and output_tensor_end must both be rank {}, got {} and {}",
+        rank,
+        output_tensor_start.rank(),
+        output_tensor_end.rank());
+    for (size_t i = 0; i < rank; i++) {
+        TT_FATAL(
+            output_tensor_start[i] <= input_shape[i],
+            "unpad: dim {}: output_tensor_start {} exceeds input shape {}",
+            i,
+            output_tensor_start[i],
+            input_shape[i]);
+        TT_FATAL(
+            output_tensor_end[i] <= input_shape[i],
+            "unpad: dim {}: output_tensor_end {} exceeds input shape {}",
+            i,
+            output_tensor_end[i],
+            input_shape[i]);
+        TT_FATAL(
+            output_tensor_start[i] <= output_tensor_end[i],
+            "unpad: dim {}: output_tensor_start {} exceeds output_tensor_end {}",
+            i,
+            output_tensor_start[i],
+            output_tensor_end[i]);
+    }
     return tensor_impl::dispatch(tensor.dtype(), [&]<typename T>() {
         return CMAKE_UNIQUE_NAMESPACE::unpad_impl<T>(tensor, output_tensor_start, output_tensor_end);
     });
