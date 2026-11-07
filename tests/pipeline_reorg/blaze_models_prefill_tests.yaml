@@ -497,9 +497,10 @@
     # .github/scripts/utils/lint_pipeline_cmds.py). That is a real trade against the separate legs
     # this replaces -- a failure in an early section now masks the later ones.
     #
-    # Each body is the leg's previous `cmd` verbatim, wrapped in a subshell with its mpirun bounded,
-    # so it can be diffed against the leg it replaces. All three sections here happen to export the
-    # same environment, so the subshell is only keeping them independent -- unlike the accuracy suite
+    # Each K3 body ([1/5]..[3/5]) is the leg's previous `cmd` verbatim, wrapped in a subshell with its
+    # mpirun bounded, so it can be diffed against the leg it replaces. The three K3 sections happen to
+    # export the same environment, so the subshell is only keeping them independent (and away from the
+    # K3.1 sections' TorusXY exports, see the entry comment) -- unlike the accuracy suite
     # above, where it is load-bearing because one section must NOT see another's KIMI_K3_HF_MODEL.
     # Repeating the exports per section rather than hoisting them is what keeps each body verbatim.
 
