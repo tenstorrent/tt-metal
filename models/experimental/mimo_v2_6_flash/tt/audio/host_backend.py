@@ -29,17 +29,42 @@ import torch.nn.functional as F
 from models.experimental.mimo_v2_6_flash.reference import audio as ref
 
 
+# Key block of PyTorch's CPU flash attention (aten/src/ATen/native/cpu/FlashAttentionKernel.cpp: kvSplitSize 512).
+CPU_SDPA_KV_BLOCK = 512
+
+
 class CausalAudioTokenizerEncoder(ref.AudioTokenizerEncoder):
-    """The reference encoder with the full-attention layers on SDPA's ``is_causal`` instead of HF's additive causal
-    mask: the CPU flash kernel then skips the blocks above the diagonal instead of adding -inf to them, and the
-    result is bit-identical (checked on 5 s to 600 s of speech). The windowed layers keep the masked dense SDPA:
-    attending each query block only to its 128-key window was 2x cheaper there but not bit-identical (one code
-    frame in 7421 changed on a 300 s clip), and the whole encoder only 10-18 % faster."""
+    """The reference encoder with cheaper attention, bit-identical hidden states (checked on 5 s to 600 s of speech,
+    tests/test_audio_host_backend_host.py):
+
+    * Full-attention layers: SDPA's ``is_causal`` instead of HF's additive causal mask, so the CPU flash kernel
+      skips the key blocks above the diagonal instead of adding -inf to them.
+    * Windowed layers (``windowed_blocks``): the masked SDPA per 512-row query block, on the keys from the
+      512-aligned key block holding the window's start up to the query block's end. The CPU flash kernel walks the
+      keys in 512-key blocks from key 0; the dropped blocks are entirely masked for these queries, where the kernel
+      adds nothing (its running max, sum and output are unchanged), and the kept blocks have the same bounds as in
+      the full call, so every sum is taken in the same order. Unaligned bounds are not bit-identical (attending each
+      query block only to its own 128-key window changed one code frame in 7421 on a 300 s clip). 10 % faster
+      than the dense masked SDPA on 65 s to 600 s clips (a segment of 6000 mel frames has 3000 queries)."""
+
+    windowed_blocks = True
 
     def _attention(self, q, k, v, window, masks):
-        if window <= 0 or q.shape[2] <= window + 1:  # causal, or a window that covers the whole segment
+        n = q.shape[2]
+        if window <= 0 or n <= window + 1:  # causal, or a window that covers the whole segment
             return F.scaled_dot_product_attention(q, k, v, is_causal=True, scale=q.shape[-1] ** -0.5)
-        return super()._attention(q, k, v, window, masks)
+        if not self.windowed_blocks or n <= CPU_SDPA_KV_BLOCK:
+            return super()._attention(q, k, v, window, masks)
+        key = (n, window)
+        if key not in masks:
+            masks[key] = ref._attn_mask(n, self.cfg.encoder_causal, window, q.dtype)
+        mask, out, B = masks[key], torch.empty_like(q), CPU_SDPA_KV_BLOCK
+        for q0 in range(0, n, B):
+            q1, k0 = min(n, q0 + B), max(0, q0 - window) // B * B
+            out[:, :, q0:q1] = F.scaled_dot_product_attention(
+                q[:, :, q0:q1], k[:, :, k0:q1], v[:, :, k0:q1], attn_mask=mask[q0:q1, k0:q1], scale=q.shape[-1] ** -0.5
+            )
+        return out
 
 
 class HostAudioBackend:
@@ -51,8 +76,9 @@ class HostAudioBackend:
         num_threads: torch intra-op threads while embedding (the serving process needs the rest of the CPU).
         patch_dtype: dtype of the patch encoder (codes -> embeddings): ``torch.bfloat16`` (default) or
             ``torch.float32`` (embeddings bit-identical to the fp32 reference before the final bf16 cast).
-        fast_attention: run the tokenizer encoder's full-attention layers with ``is_causal`` (bit-identical,
-            ~5 % faster); False runs the reference's masked attention everywhere.
+        fast_attention: the tokenizer encoder's cheaper, bit-identical attention (``CausalAudioTokenizerEncoder``:
+            ``is_causal`` full layers, key-block-aligned windowed layers); False runs the reference's masked
+            attention everywhere.
         tokenizer, patch: which halves to load. The engine needs only the patch encoder when the processor
             tokenizes in the front end (tt/audio/processor.py); the front end only the tokenizer encoder.
         weights: ``reference.audio.load_audio_weights(model_path)`` output, to share one load between instances.
@@ -61,7 +87,11 @@ class HostAudioBackend:
     bf16). Construction took 0.1 s on bhg4 with the safetensors files in the page cache.
 
     Latency of ``embed_audio`` on bhg4 (EPYC 9354P, shared host; tests/perf/audio_host_latency.py), 8 threads:
-    5 s 0.35 s, 30 s 1.74 s, 120 s 8.9 s, 300 s 28.4 s, 600 s 62 s; the tokenizer encoder is 90-98 % of it.
+    5 s 0.35 s, 30 s 1.74 s, 120 s 8.9 s, 300 s 28.4 s, 600 s 62 s; the tokenizer encoder is 90-98 % of it. Its
+    fp32 matmuls run at ~100 GFLOP/s per core (MKL sgemm at the AVX-512 peak: 790 GFLOP/s at 8 threads), 70 % of
+    its time; attention ~20 %. By thread count on bhg2 (same CPU, lightly shared), key-block-aligned windowed layers
+    vs dense: 30 s 1.74 / 0.97 / 0.72 / 0.85 s at 8 / 16 / 24 / 32 threads (dense windowed layers 1.85 / 1.17 /
+    0.85 s at 8 / 16 / 24), 120 s 8.0 / 4.8 / 3.9 / 4.1 s (dense 8.7 / 5.8 at 8 / 16).
     """
 
     def __init__(

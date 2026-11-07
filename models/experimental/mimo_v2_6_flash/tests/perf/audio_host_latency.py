@@ -49,6 +49,9 @@ def main():
     parser.add_argument("--repeats", type=int, default=3)
     parser.add_argument("--patch-dtype", choices=["bf16", "fp32"], default="bf16")
     parser.add_argument("--dense-attention", action="store_true", help="the reference's masked attention")
+    parser.add_argument(
+        "--dense-windowed", action="store_true", help="is_causal full layers, but dense masked windowed layers"
+    )
     args = parser.parse_args()
 
     print(f"load average before: {os.getloadavg()}")
@@ -58,6 +61,8 @@ def main():
         patch_dtype=torch.bfloat16 if args.patch_dtype == "bf16" else torch.float32,
         fast_attention=not args.dense_attention,
     )
+    if args.dense_windowed and backend.encoder is not None:
+        backend.encoder.windowed_blocks = False
     print(f"backend load: {time.time() - t:.1f} s")
     cfg = backend.cfg
     mels = {c: load_mel(os.path.join(args.clips, f"{c}.wav"), cfg) for c in args.clip}

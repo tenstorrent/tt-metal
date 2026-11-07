@@ -1,16 +1,15 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Audio tokenization in vLLM's front end: the upstream MiMo-V2-Omni processor plus the audio tokenizer encoder.
+"""Audio encoding in vLLM's front end: the upstream MiMo-V2-Omni processor plus the host audio encoders.
 
 ``MiMoV2OmniTTMultiModalProcessor`` runs vLLM 0.30.0's ``MiMoV2OmniMultiModalProcessor`` (placeholders, pixels, mels,
 video timestamps; unchanged) and then replaces each audio item's ``audio_features`` mel [T, 128] by its RVQ codes
-``audio_codes`` int32 [n_codes, 20] (25 Hz), computed in fp32 as the HF module computes them (reference/audio.py,
-tt/audio/host_backend.py: bit-identical) from the fp32 mel (vLLM casts the processor's mel to bf16 before it leaves
-the processor, which changed 8 of the 126 code frames of a 5 s clip; ``fp32_mels``). The engine then runs only the
-patch encoder
-(``AudioCodesBackend.embed_audio_codes``) inside prefill; the tokenizer encoder, 90-98 % of the audio work (1.6 s for
-30 s of audio at 8 threads), leaves the engine process, where it held up every other request of the engine.
+(25 Hz) computed in fp32 as the HF module computes them (reference/audio.py, tt/audio/host_backend.py:
+bit-identical) from the fp32 mel (vLLM casts the processor's mel to bf16 before it leaves the processor, which
+changed 8 of the 126 code frames of a 5 s clip; ``fp32_mels``), and by default by the LLM embeddings the patch
+encoder makes from them (below). The tokenizer encoder, 90-98 % of the audio work (1.6 s for 30 s of audio at 8
+threads), so leaves the engine process, where it held up every other request of the engine.
 
 Where it runs: vLLM 0.30.0's renderer calls ``_process_multimodal`` (and so this processor) through
 ``make_async(..., executor=self._mm_executor)``, a single-worker ThreadPoolExecutor of the API server process, not on
@@ -25,8 +24,19 @@ before vLLM forks its engine-core processes (vllm/multimodal/audio.py).
 Caching is unchanged: vLLM hashes an item's input data and processor kwargs, not its processed fields, and a cache
 hit skips the processor entirely (``_cached_apply_hf_processor``), so a repeated clip is not tokenized again.
 
-MIMO_AUDIO_FRONTEND_THREADS (default 8): torch threads of the tokenizer encoder in the front end (vLLM runs the
-processor with OMP_NUM_THREADS threads, 1 when unset).
+MIMO_AUDIO_PATCH says where the patch encoder (codes -> LLM embeddings) runs; the API server and the engine read it:
+
+* ``frontend`` (the default): here, after the tokenizer encoder. The item reaches the engine as ``audio_embeds``
+  bf16 [n_tokens, 4096], bit for bit what the engine's host patch encoder makes from the codes, and the engine only
+  uploads it. On the engine's host CPU the patch encoder held up every request of the engine's row for its duration
+  (bf16, 8 threads: 35 / 145 / 610 ms for 5 / 30 / 120 s of audio on bhg4, ~10 % of the tokenizer's time); here it
+  adds that to the item's processing, off the event loop. The processor cache and the engine transfer then hold
+  8 KiB per token instead of 80 B of codes per 25 Hz frame (a 30 s clip: 1.5 MB).
+* ``engine``: the item reaches the engine as ``audio_codes`` int32 [n_codes, 20] and the engine runs the patch
+  encoder on its host (``AudioCodesBackend.embed_audio_codes``).
+
+MIMO_AUDIO_FRONTEND_THREADS (default 8): torch threads of the encoders in the front end (vLLM runs the processor
+with OMP_NUM_THREADS threads, 1 when unset).
 """
 
 import os
@@ -41,6 +51,10 @@ from ...reference import audio as ref
 from .host_backend import HostAudioBackend
 
 FRONTEND_THREADS = int(os.environ.get("MIMO_AUDIO_FRONTEND_THREADS", "8"))
+PATCH_WHERE = os.environ.get("MIMO_AUDIO_PATCH", "frontend")
+if PATCH_WHERE not in ("frontend", "engine"):
+    raise ValueError(f"MIMO_AUDIO_PATCH={PATCH_WHERE!r}: frontend or engine")
+FRONTEND_PATCH = PATCH_WHERE == "frontend"
 _tokenizers = {}
 _tokenizers_lock = threading.Lock()
 
@@ -68,22 +82,34 @@ def audio_checkpoint_path(model_config):
     raise RuntimeError(f"MiMo audio front end: no {ref.AUDIO_TOKENIZER_DIR}/model.safetensors under {candidates}")
 
 
-def audio_tokenizer(model_path, num_threads=None):
-    """This process's front-end tokenizer encoder for ``model_path`` (a tokenizer-only HostAudioBackend)."""
+def audio_tokenizer(model_path, num_threads=None, patch=None):
+    """This process's front-end audio encoder for ``model_path``: a HostAudioBackend with the tokenizer encoder, and
+    the patch encoder with ``patch`` (default FRONTEND_PATCH; loaded on the first call that asks for it)."""
+    patch = FRONTEND_PATCH if patch is None else patch
     with _tokenizers_lock:
         tok = _tokenizers.get(model_path)
         if tok is None:
-            tok = HostAudioBackend(model_path, num_threads=num_threads or FRONTEND_THREADS, patch=False)
+            tok = HostAudioBackend(model_path, num_threads=num_threads or FRONTEND_THREADS, patch=patch)
             _tokenizers[model_path] = tok
-            logger.info(f"MiMo audio front end: tokenizer encoder loaded from {model_path}")
+            logger.info(f"MiMo audio front end: tokenizer encoder{' + patch encoder' * patch} loaded from {model_path}")
+        elif patch and tok.patch is None:
+            tok.patch = HostAudioBackend(model_path, num_threads=tok.num_threads, tokenizer=False).patch
+            logger.info(f"MiMo audio front end: patch encoder loaded from {model_path}")
         return tok
 
 
 def tokenize_mels(mels, model_path):
     """fp32 mels [T, 128] -> int32 [n_codes, 20] codes, one per item, each tokenized on its own (as the engine-side
     path did)."""
-    tok = audio_tokenizer(model_path)
+    tok = audio_tokenizer(model_path, patch=False)
     return [tok.codes(m).to(torch.int32) for m in mels]
+
+
+def embed_mels(mels, model_path):
+    """fp32 mels [T, 128] -> bf16 [audio_token_len(T), 4096] LLM embeddings, one per item (HostAudioBackend's
+    ``embed_audio``: the codes of ``tokenize_mels``, then the bf16 patch encoder)."""
+    tok = audio_tokenizer(model_path, patch=True)
+    return [tok.embed_audio(m) for m in mels]
 
 
 def fp32_mels(mels, waveforms, cfg):
@@ -120,11 +146,15 @@ class MiMoV2OmniTTMultiModalProcessor(MiMoV2OmniMultiModalProcessor):
             mels = fp32_mels(
                 out.pop("audio_features"), mm_items.get("audio"), ref.MiMoAudioConfig.from_model_path(path)
             )
-            out["audio_codes"] = tokenize_mels(mels, path)
+            if FRONTEND_PATCH:
+                out["audio_embeds"] = embed_mels(mels, path)
+            else:
+                out["audio_codes"] = tokenize_mels(mels, path)
         return out
 
     def _get_mm_fields_config(self, hf_inputs, hf_processor_mm_kwargs):
         fields = dict(super()._get_mm_fields_config(hf_inputs, hf_processor_mm_kwargs))
         fields.pop("audio_features", None)
-        fields["audio_codes"] = MultiModalFieldConfig.batched("audio")
+        fields["audio_codes"] = MultiModalFieldConfig.batched("audio")  # fields missing from the output are skipped
+        fields["audio_embeds"] = MultiModalFieldConfig.batched("audio")
         return fields

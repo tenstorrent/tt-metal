@@ -6,13 +6,17 @@
 Through vLLM 0.30.0's own renderer (the API server's input path, built from the checkpoint with the TT platform and
 MiMoV2OmniForCausalLM, so the registered processor is ours), on LibriSpeech clips (16 kHz files, resampled by vLLM):
 
-* each audio item reaches the engine as ``audio_codes`` int32 [n, 20], without ``audio_features``, and the codes are
-  the fp32 reference's for the item's mel (two items in one request: each tokenized on its own);
+* with MIMO_AUDIO_PATCH=engine each audio item reaches the engine as ``audio_codes`` int32 [n, 20], without
+  ``audio_features``, and the codes are the fp32 reference's for the item's mel (two items in one request: each
+  tokenized on its own);
+* by default (MIMO_AUDIO_PATCH=frontend) it reaches the engine as ``audio_embeds`` bf16 [n_tokens, 4096]: bit for
+  bit what the engine's host patch encoder makes from those codes, and tt/multimodal.encode_item hands them over
+  unchanged (no encoder call);
 * ``audio_token_lens`` and the placeholder range are unchanged (rows of the patch encoder's output);
 * the engine side (``AudioCodesBackend.embed_audio_codes``, through tt/multimodal.encode_item) gives the embeddings
   today's engine-side path gives from the mel: bit-identical to the TEMPORARY HF host backend (fp32) with an fp32
   patch encoder, and to ``HostAudioBackend.embed_audio`` with the default bf16 one;
-* a repeated clip is a processor-cache hit: the same hash, and the front end does not tokenize it again.
+* a repeated clip is a processor-cache hit: the same hash, and the front end does not encode it again.
 
 Needs MIMO_MODEL_PATH with ``audio_tokenizer/``, MIMO_AUDIO_CLIPS, vllm and torchaudio.
 """
@@ -78,12 +82,28 @@ def process(renderer, items):
     return renderer._process_multimodal(prompt, {"audio": list(items)}, None, None)
 
 
+def _two_items(setup, frontend_patch):
+    """One request with two audio items through the renderer, from an empty processor cache."""
+    module = setup["module"]
+    saved, module.FRONTEND_PATCH = module.FRONTEND_PATCH, frontend_patch
+    try:
+        setup["renderer"].clear_mm_cache()
+        clips = setup["clips"]
+        return process(setup["renderer"], [clips["speech_5s"]["raw"], clips["speech_65s"]["raw"]])
+    finally:
+        module.FRONTEND_PATCH = saved
+
+
 @pytest.fixture(scope="module")
 def front(setup):
-    """One request with two audio items through the renderer, from an empty processor cache."""
-    setup["renderer"].clear_mm_cache()
-    clips = setup["clips"]
-    return process(setup["renderer"], [clips["speech_5s"]["raw"], clips["speech_65s"]["raw"]])
+    """MIMO_AUDIO_PATCH=engine: the front end sends codes."""
+    return _two_items(setup, False)
+
+
+@pytest.fixture(scope="module")
+def front_embeds(setup, front):
+    """MIMO_AUDIO_PATCH=frontend (the default): the front end sends embeddings."""
+    return _two_items(setup, True)
 
 
 def test_front_end_emits_codes(setup, front):
@@ -126,13 +146,34 @@ def test_engine_side_embeddings_unchanged(setup, front):
         logger.info(f"{clip}: codes path == mel path (bf16 patch), and == the HF host backend (fp32 patch)")
 
 
-def test_repeated_clip_is_a_cache_hit(setup, front, monkeypatch):
+def test_front_end_emits_embeds(setup, front, front_embeds):
+    """The front end's patch encoder gives what the engine's gives from the same codes, and the engine uploads it."""
+    from models.experimental.mimo_v2_6_flash.tt import multimodal as mm
+    from models.experimental.mimo_v2_6_flash.tt.audio.host_backend import AudioCodesBackend
+
+    engine = AudioCodesBackend(object(), setup["path"])  # the engine's host patch encoder (bf16)
+    no_encoder = object()  # an encoder backend without any method: audio_embeds must not need one
+    for k, clip in enumerate(("speech_5s", "speech_65s")):
+        data = front_embeds["mm_kwargs"]["audio"][k].get_data()
+        codes = front["mm_kwargs"]["audio"][k].get_data()["audio_codes"]
+        assert "audio_features" not in data and "audio_codes" not in data, sorted(data)
+        embeds, n = data["audio_embeds"], int(data["audio_token_lens"])
+        assert embeds.dtype == torch.bfloat16 and embeds.shape == (n, 4096), (embeds.dtype, embeds.shape)
+        assert n == front_embeds["mm_placeholders"]["audio"][k].length
+        assert torch.equal(embeds, engine.embed_audio_codes(codes)), clip
+        item = mm.MMItem("audio", clip, 10, n, None, {"audio_embeds": embeds, "audio_token_lens": torch.tensor(n)})
+        assert torch.equal(mm.encode_item(no_encoder, mm.parse_item(item)), embeds), clip
+        logger.info(f"{clip}: front-end embeddings {tuple(embeds.shape)} == the engine's patch encoder on the codes")
+
+
+def test_repeated_clip_is_a_cache_hit(setup, front_embeds, monkeypatch):
     clips, renderer, module = setup["clips"], setup["renderer"], setup["module"]
     calls = []
-    tokenize = module.tokenize_mels
-    monkeypatch.setattr(module, "tokenize_mels", lambda mels, path: calls.append(len(mels)) or tokenize(mels, path))
-    first = process(renderer, [clips["speech_5s"]["raw"]])  # processed by ``front`` already
+    for name in ("tokenize_mels", "embed_mels"):
+        fn = getattr(module, name)
+        monkeypatch.setattr(module, name, lambda mels, path, fn=fn: calls.append(len(mels)) or fn(mels, path))
+    first = process(renderer, [clips["speech_5s"]["raw"]])  # processed by ``front_embeds`` already
     second = process(renderer, [clips["speech_5s"]["raw"]])
-    assert first["mm_hashes"]["audio"] == second["mm_hashes"]["audio"] == front["mm_hashes"]["audio"][:1]
+    assert first["mm_hashes"]["audio"] == second["mm_hashes"]["audio"] == front_embeds["mm_hashes"]["audio"][:1]
     assert calls == [], calls
-    logger.info("repeated clip: same hash, not tokenized again")
+    logger.info("repeated clip: same hash, not encoded again")
