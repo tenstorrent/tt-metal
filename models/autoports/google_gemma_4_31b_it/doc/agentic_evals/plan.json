@@ -18,21 +18,21 @@
     {
       "phase": "server_sized_larger_and_efforts",
       "start_hour": 7,
-      "end_hour": 32
+      "end_hour": 31.3
     },
     {
       "phase": "freeze_and_first_dry_run_reserve",
-      "start_hour": 32,
-      "end_hour": 37.4
+      "start_hour": 31.3,
+      "end_hour": 37.05
     },
     {
       "phase": "fix_reserve",
-      "start_hour": 37.4,
-      "end_hour": 39.3
+      "start_hour": 37.05,
+      "end_hour": 38.95
     },
     {
       "phase": "second_dry_run_reserve_if_needed",
-      "start_hour": 39.3,
+      "start_hour": 38.95,
       "end_hour": 44.7
     },
     {
@@ -2943,7 +2943,7 @@
     }
   ],
   "status": "SWE5_completed_validity_audit_GPQA20_repair_building",
-  "last_updated": "2026-11-07T00:12:04.209919+00:00",
+  "last_updated": "2026-11-07T00:12:27.803682+00:00",
   "stop_reason": null,
   "actual_runs": [],
   "continuations": [
@@ -2972,7 +2972,7 @@
     "job_limit_hours": 18,
     "run_limit_hours": 12
   },
-  "schedule_basis": "GPQA-only release preparation accepted: runs/gpqa-only-release-preparation/plan.md. Each dry5.4h includes full4h request tail,0.4h setup,0.5h queue,0.25h observation and0.25h cleanup; setup conservatively rounded from measurements, queue/lag/cleanup guesses. Fix1.9h includes0.9h build guess; release queue margin2.8h. Actual clean pre-score dry and frozen release remain mandatory.",
+  "schedule_basis": "Each dry5.75h =4h full requesttail+.4h setup+.85h queue (rounded actual .849444h)+.25h observation+.25h cleanup. Start firstdry31.3 (Nov7 11:46:49UTC), preserve1.9hfix, second5.75h, .5hfreeze and2.8hreleasequeue. Queue observation not upper bound; reestimate if exceeded.",
   "ci_queue_observations": [
     {
       "run_id": 42166117505,
@@ -3913,14 +3913,61 @@
       ],
       "basis": "First dry start no later than stagehour22; efforts and larger rungs must fit before it. Preserve two11.1h contingency windows,1hfix,2.8hdispatch/queue; this is reserved time, not stale full198 fit claim. Current measured full198 stop retained. Exact tool dry route remains unresolved; no completed-score rehearsal exception assumed.",
       "superseded_reason": "Confirmed SWE validity stop and Terminal timing stop leave GPQA HTTP-only plus benchmark release; early-stop dry reserve replaces full tool rehearsal contingency."
+    },
+    {
+      "at": "2026-11-07T00:12:27.803682+00:00",
+      "schedule": [
+        {
+          "phase": "survey_preflight_and_smoke",
+          "start_hour": 0,
+          "end_hour": 11
+        },
+        {
+          "phase": "nightly",
+          "start_hour": 4,
+          "end_hour": 16
+        },
+        {
+          "phase": "server_sized_larger_and_efforts",
+          "start_hour": 7,
+          "end_hour": 31.3
+        },
+        {
+          "phase": "freeze_and_first_dry_run_reserve",
+          "start_hour": 31.3,
+          "end_hour": 37.05
+        },
+        {
+          "phase": "fix_reserve",
+          "start_hour": 37.05,
+          "end_hour": 38.95
+        },
+        {
+          "phase": "second_dry_run_reserve_if_needed",
+          "start_hour": 38.95,
+          "end_hour": 44.7
+        },
+        {
+          "phase": "freeze_decision_slack",
+          "start_hour": 44.7,
+          "end_hour": 45.2
+        },
+        {
+          "phase": "release_dispatch_and_queue_margin",
+          "start_hour": 45.2,
+          "end_hour": 48
+        }
+      ],
+      "basis": "GPQA-only release preparation accepted: runs/gpqa-only-release-preparation/plan.md. Each dry5.4h includes full4h request tail,0.4h setup,0.5h queue,0.25h observation and0.25h cleanup; setup conservatively rounded from measurements, queue/lag/cleanup guesses. Fix1.9h includes0.9h build guess; release queue margin2.8h. Actual clean pre-score dry and frozen release remain mandatory.",
+      "superseded_reason": "Measured postbuild queue .849444h exceeds prior .5h guess; reserve .85h each dry."
     }
   ],
   "dry_route_contingency": {
     "authorization": "stock GPQA HTTP-only exact early-stop route; no rehearsal exception claimed",
-    "provisional_cycle_hours": 5.4,
+    "provisional_cycle_hours": 5.75,
     "basis": "Conservative retained contingency windows from prior plan; full198 is now measured stop. Actual frozen lists/projections must replace this before admission.",
-    "first_dry_start_hour": 32,
-    "efforts_end_hour": 32,
+    "first_dry_start_hour": 31.3,
+    "efforts_end_hour": 31.3,
     "fix_hours": 1.9,
     "second_cycle_reserved": true,
     "release_queue_margin_hours": 2.8,
@@ -4340,9 +4387,9 @@
       "banked": false
     },
     "next": "Settle retained same20/same5 validity; held40 candidate launches only after valid20 and next-run projection fits before first dry. Freeze go set promptly when largest fitting rungs settle.",
-    "first_dry_latest_start_hour": 32,
+    "first_dry_latest_start_hour": 31.3,
     "release_dispatch_latest_target_hour": 45.2,
-    "reserve_note": "Current schedule supersedes historical stagehour22 cutoff: first dry32, release queue45.2\u201348. Historical repair forecasts remain labeled snapshots."
+    "reserve_note": "Each dry5.75h =4h full requesttail+.4h setup+.85h queue (rounded actual .849444h)+.25h observation+.25h cleanup. Start firstdry31.3 (Nov7 11:46:49UTC), preserve1.9hfix, second5.75h, .5hfreeze and2.8hreleasequeue. Queue observation not upper bound; reestimate if exceeded."
   },
   "progress_observations": [
     {
@@ -4369,7 +4416,7 @@
   },
   "next_rung_admission_policy": {
     "updated_at": "2026-11-06T23:06:29.089061+00:00",
-    "normal_rung": "Use measured aggregate completed current-rung wall time scaled by nested task count, measured setup and queue, explicit uncertainty; require projection before first dry at stage hour32. Track actual progress and stop nonfit. Do not promise full-tail worst-case completion from an average.",
+    "normal_rung": "Next80 only after valid40 and measured forecast with slow-tail allowance fits before stagehour31.3; never wait for optional C8 comparison, use selected C4 fallback.",
     "release": "Additionally include full agent/request slow-tail allowance with margin within12h; frozen lastvalidlist only.",
     "reason": "Distinguish measured normal-rung forecast from conservative release tail budget; no outputlimit reduction or score-directed task choice.",
     "next_cohort": "80 only after valid40 and updated measured projection; no wait for optionalC8 comparison. Select C8 only after its scored acceptance, otherwise C4."
