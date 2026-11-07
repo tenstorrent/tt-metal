@@ -500,7 +500,10 @@ class OpenRouterChat(lmms):
         if self.target != "openrouter" or not isinstance(body, dict):
             return False
         err = body.get("error") if isinstance(body.get("error"), dict) else body
-        return err.get("message") == "Provider returned error" or bool((err.get("metadata") or {}).get("provider_name"))
+        meta = err.get("metadata") or {}
+        if "size limit" in str(meta.get("raw", "")):  # e.g. Xiaomi: "exceeded maximum size limit for video url data"
+            return False
+        return err.get("message") == "Provider returned error" or bool(meta.get("provider_name"))
 
     def _send(self, req):
         """dict(text, usage, finish, status, body, headers, attempts). Retries 5xx / 408 / 429 / transport errors and
