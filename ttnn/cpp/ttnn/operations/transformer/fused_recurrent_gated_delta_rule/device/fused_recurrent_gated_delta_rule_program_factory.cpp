@@ -2,9 +2,9 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 // Program factory for fused_recurrent_gated_delta_rule.
-// Parallelism: one Tensix core per (B*HV) head; each core walks the T token axis sequentially,
-// holding the recurrent state S [K,V] on-core. All math is in the compute kernel, derived from
-// flash-linear-attention `naive_recurrent_gated_delta_rule`.
+// Parallelism: the B*HV heads are split into contiguous runs, one run per Tensix core; for each of its heads a core
+// walks the T token axis sequentially, holding the recurrent state S [K,V] on-core. All math is in the compute kernel,
+// derived from flash-linear-attention `naive_recurrent_gated_delta_rule`.
 
 #include "fused_recurrent_gated_delta_rule_program_factory.hpp"
 
@@ -41,7 +41,8 @@ constexpr uint32_t sd = tt::CBIndex::c_10;        // [K,V]  decayed state (S*dec
 constexpr uint32_t vread = tt::CBIndex::c_11;     // [1,V]  k . S'
 constexpr uint32_t u = tt::CBIndex::c_12;         // [1,V]  beta*(v - vread)
 constexpr uint32_t kcol = tt::CBIndex::c_13;      // [K,1]  transpose(k)
-constexpr uint32_t blkidx = tt::CBIndex::c_16;    // [BH]   uint32 scratch, ring mode only
+constexpr uint32_t blkidx = tt::CBIndex::c_16;    // [BH]   uint32 scratch, ring and paged modes (reader)
+constexpr uint32_t blkidx_w = tt::CBIndex::c_17;  // [BH]   uint32 scratch, paged mode (writer)
 }  // namespace cb
 
 tt::tt_metal::ProgramDescriptor FusedRecurrentGatedDeltaRuleProgramFactory::create_descriptor(
@@ -53,24 +54,29 @@ tt::tt_metal::ProgramDescriptor FusedRecurrentGatedDeltaRuleProgramFactory::crea
     const uint32_t Kt = attrs.key_dim / TILE_WIDTH;
     const uint32_t Vt = attrs.val_dim / TILE_WIDTH;
     const uint32_t per_token = attrs.output_per_token_state ? 1u : 0u;
-    const bool ring = in.initial_state_block_idx.has_value();
-    const uint32_t use_blk_idx = ring ? 1u : 0u;
-    Buffer* blk_buf = ring ? in.initial_state_block_idx->buffer() : nullptr;
+    const bool has_idx = in.initial_state_block_idx.has_value();
+    const bool paged = attrs.paged_state;
+    // Reader index mode: 0 = state page h, 1 = ring (idx[h], per-token in place), 2 = paged pool (idx[h]).
+    const uint32_t blk_idx_mode = paged ? 2u : (has_idx ? 1u : 0u);
+    Buffer* blk_buf = has_idx ? in.initial_state_block_idx->buffer() : nullptr;
     // The [BH] index vector is one ROW_MAJOR page; the aligned page size keeps the DRAM read aligned.
-    const uint32_t blk_page_bytes = ring ? blk_buf->aligned_page_size() : 0u;
+    const uint32_t blk_page_bytes = has_idx ? blk_buf->aligned_page_size() : 0u;
 
     const uint32_t kv = Kt * Vt;
 
     auto* device = in.q.device();
     const CoreCoord grid = device->compute_with_storage_grid_size();
     const uint32_t grid_y = grid.y;
-    TT_FATAL(BH <= grid.x * grid_y, "num_heads {} exceeds compute cores {}", BH, grid.x * grid_y);
+    // Each core walks a contiguous run of heads, one after another, so B*HV may exceed the core count.
+    const uint32_t num_cores = std::min<uint32_t>(BH, grid.x * grid_y);
+    const uint32_t heads_per_core = BH / num_cores;
+    const uint32_t cores_with_extra_head = BH % num_cores;
 
-    std::vector<CoreCoord> head_cores(BH);
+    std::vector<CoreCoord> head_cores(num_cores);
     std::set<CoreRange> core_set;
-    for (uint32_t h = 0; h < BH; h++) {
-        head_cores[h] = CoreCoord{h / grid_y, h % grid_y};
-        core_set.insert(CoreRange{head_cores[h], head_cores[h]});
+    for (uint32_t c = 0; c < num_cores; c++) {
+        head_cores[c] = CoreCoord{c / grid_y, c % grid_y};
+        core_set.insert(CoreRange{head_cores[c], head_cores[c]});
     }
     CoreRangeSet cores{core_set};
 
@@ -99,21 +105,26 @@ tt::tt_metal::ProgramDescriptor FusedRecurrentGatedDeltaRuleProgramFactory::crea
     add_cb(cb::vread, Vt);
     add_cb(cb::u, Vt);
     add_cb(cb::kcol, Kt);
-    if (ring) {
+    if (has_idx) {
         const tt::DataFormat idx_fmt = datatype_to_dataformat_converter(in.initial_state_block_idx->dtype());
-        desc.cbs.push_back(CBDescriptor{
-            .total_size = blk_page_bytes,
-            .core_ranges = cores,
-            .format_descriptors = {{CBFormatDescriptor{
-                .buffer_index = static_cast<uint8_t>(cb::blkidx),
-                .data_format = idx_fmt,
-                .page_size = blk_page_bytes}}}});
+        auto add_idx_cb = [&](uint32_t idx) {
+            desc.cbs.push_back(CBDescriptor{
+                .total_size = blk_page_bytes,
+                .core_ranges = cores,
+                .format_descriptors = {{CBFormatDescriptor{
+                    .buffer_index = static_cast<uint8_t>(idx), .data_format = idx_fmt, .page_size = blk_page_bytes}}}});
+        };
+        add_idx_cb(cb::blkidx);
+        // The writer reads the index vector on its own RISC, so it gets its own scratch.
+        if (paged) {
+            add_idx_cb(cb::blkidx_w);
+        }
     }
 
     const std::string kdir = "ttnn/cpp/ttnn/operations/transformer/fused_recurrent_gated_delta_rule/device/kernels/";
     const std::vector<uint32_t> compute_ct = {Kt, Vt, per_token};
 
-    std::vector<uint32_t> reader_ct = {Kt, Vt, use_blk_idx};
+    std::vector<uint32_t> reader_ct = {Kt, Vt, blk_idx_mode};
     TensorAccessorArgs(*in.q.buffer()).append_to(reader_ct);
     TensorAccessorArgs(*in.k.buffer()).append_to(reader_ct);
     TensorAccessorArgs(*in.v.buffer()).append_to(reader_ct);
@@ -125,6 +136,8 @@ tt::tt_metal::ProgramDescriptor FusedRecurrentGatedDeltaRuleProgramFactory::crea
     std::vector<uint32_t> writer_ct = {Kt, Vt, per_token};
     TensorAccessorArgs(*outputs[0].buffer()).append_to(writer_ct);
     TensorAccessorArgs(*outputs[1].buffer()).append_to(writer_ct);
+    writer_ct.push_back(paged ? 1u : 0u);
+    TensorAccessorArgs(paged ? blk_buf : nullptr).append_to(writer_ct);
 
     KernelDescriptor reader;
     reader.kernel_source = kdir + "dataflow/reader_fused_recurrent_gated_delta_rule.cpp";
@@ -166,13 +179,15 @@ tt::tt_metal::ProgramDescriptor FusedRecurrentGatedDeltaRuleProgramFactory::crea
     auto* o_buf = outputs[0].buffer();
     auto* st_buf = outputs[1].buffer();
 
-    for (uint32_t h = 0; h < BH; h++) {
-        const auto& core = head_cores[h];
+    for (uint32_t c = 0, h0 = 0; c < num_cores; c++) {
+        const auto& core = head_cores[c];
+        const uint32_t n_heads = heads_per_core + (c < cores_with_extra_head ? 1u : 0u);
         reader.emplace_runtime_args(
-            core, {h, T, q_buf, k_buf, v_buf, decay_buf, beta_buf, s0_buf, blk_buf, blk_page_bytes, BH});
+            core, {h0, n_heads, T, q_buf, k_buf, v_buf, decay_buf, beta_buf, s0_buf, blk_buf, blk_page_bytes, BH});
         // BH is needed by the writer to place per-token state token-major (page t*BH + h).
-        writer.emplace_runtime_args(core, {h, T, o_buf, st_buf, BH});
-        compute.emplace_runtime_args(core, {T});
+        writer.emplace_runtime_args(core, {h0, n_heads, T, o_buf, st_buf, BH, blk_buf, blk_page_bytes});
+        compute.emplace_runtime_args(core, {T, n_heads});
+        h0 += n_heads;
     }
 
     desc.kernels.push_back(std::move(reader));

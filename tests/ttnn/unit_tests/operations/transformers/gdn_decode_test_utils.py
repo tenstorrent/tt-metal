@@ -26,7 +26,6 @@ import subprocess
 import zlib
 from dataclasses import dataclass
 
-import pytest
 import torch
 
 import ttnn
@@ -35,9 +34,8 @@ from ttnn.operations.transformer_golden import l2_norm
 
 OP = ttnn.transformer.fused_recurrent_gated_delta_rule
 K = V = 128  # head dimensions of every served configuration
-BATCHES = (1, 2, 4, 8)
+BATCHES = (1, 2, 4, 8, 32)  # 32 puts several heads on each core at every served head count
 TOKENS = (1, 4, 8, 12)  # decode, and speculative verify with 3, 7 and 11 draft tokens
-P150_CORES = 110  # the compute grid the case matrix is sized for; larger grids re-check at run time
 
 # The sanity job that runs the unit_tests directory has simulator SKUs (roughly 100x slower than silicon, and their
 # bits are not the silicon's); tests that only add coverage on hardware carry this mark.
@@ -55,7 +53,7 @@ MAX_ABS_REL = 1e-2
 class Shape:
     num_key_heads: int
     num_value_heads: int
-    supported_today: bool = True  # the current op: rank-3 g only, B * HV <= 110 cores
+    supported_today: bool = True  # the current op: rank-3 g only
 
 
 # Per-device head counts of served configurations. K = V = 128 throughout.
@@ -157,25 +155,17 @@ def run_op(device, x, *, output_final_state=False, output_per_token_state=False)
     return ttnn.to_torch(o), (ttnn.to_torch(state) if state is not None else None)
 
 
-def skip_unless_fits(device, B, HV):
-    grid = device.compute_with_storage_grid_size()
-    if B * HV > grid.x * grid.y:
-        pytest.skip(f"B*HV = {B * HV} exceeds the {grid.x * grid.y}-core grid: one core per (b, hv) today")
-
-
 def case_id(shape, B, T, with_state):
     return f"{shape}-B{B}-T{T}-{'s0' if with_state else 'zero'}"
 
 
 def accuracy_cases():
     """The accuracy matrix the current op supports, as (shape, B, T, with_state) tuples: every served head count, B in
-    BATCHES within the p150 grid, T in TOKENS, with and without an initial state."""
+    BATCHES, T in TOKENS, with and without an initial state."""
     for name, sh in SHAPES.items():
         if not sh.supported_today:
             continue
         for B in BATCHES:
-            if B * sh.num_value_heads > P150_CORES:
-                continue
             for T in TOKENS:
                 for with_state in (True, False):
                     yield name, B, T, with_state
@@ -185,7 +175,6 @@ def assert_decode_matches_golden(device, shape, B, T, with_state):
     """o and the state after every token (T > 1) or the final state (T = 1) against the golden at the accuracy gates,
     on inputs seeded by the case."""
     sh = SHAPES[shape]
-    skip_unless_fits(device, B, sh.num_value_heads)
     seed = zlib.crc32(f"{shape}-{B}-{T}".encode())
     x = make_inputs(B, T, sh.num_key_heads, sh.num_value_heads, K, V, seed=seed, with_state=with_state)
     per_token = T > 1

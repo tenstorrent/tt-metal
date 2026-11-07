@@ -167,6 +167,7 @@ void kernel_main() {
     constexpr uint32_t Vt = get_compile_time_arg_val(1);
     constexpr uint32_t per_token = get_compile_time_arg_val(2);
     const uint32_t T = get_arg_val<uint32_t>(0);
+    const uint32_t n_heads = get_arg_val<uint32_t>(1);
 
     constexpr uint32_t kv = Kt * Vt;
 
@@ -177,51 +178,57 @@ void kernel_main() {
     CircularBuffer q(cb_q), k(cb_k), v(cb_v), decay(cb_decay), beta(cb_beta);
     CircularBuffer sd(cb_sd), vread(cb_vread), u(cb_u), kcol(cb_kcol);
 
-    for (uint32_t t = 0; t < T; t++) {
-        const uint32_t cur_S_id = (t == 0) ? cb_S : ((t & 1u) ? cb_s2 : cb_s3);
-        const uint32_t nxt_S_id = (t & 1u) ? cb_s3 : cb_s2;
-        CircularBuffer cur_S(cur_S_id), nxt_S(nxt_S_id);
-        const bool last = (t == T - 1);
+    for (uint32_t head = 0; head < n_heads; head++) {
+        for (uint32_t t = 0; t < T; t++) {
+            const uint32_t cur_S_id = (t == 0) ? cb_S : ((t & 1u) ? cb_s2 : cb_s3);
+            const uint32_t nxt_S_id = (t & 1u) ? cb_s3 : cb_s2;
+            CircularBuffer cur_S(cur_S_id), nxt_S(nxt_S_id);
+            const bool last = (t == T - 1);
 
-        // sd = cur_S * decay  (decay before read)
-        decay.wait_front(1);
-        cur_S.wait_front(kv);
-        bcast_scalar_mul(cur_S_id, cb_decay, cb_sd, kv);
-        decay.pop_front(1);
-        cur_S.pop_front(kv);
-        sd.wait_front(kv);
+            // sd = cur_S * decay  (decay before read)
+            decay.wait_front(1);
+            cur_S.wait_front(kv);
+            bcast_scalar_mul(cur_S_id, cb_decay, cb_sd, kv);
+            decay.pop_front(1);
+            cur_S.pop_front(kv);
+            sd.wait_front(kv);
 
-        // vread = k . sd  ([1,V])
-        k.wait_front(Kt);
-        mm(cb_k, cb_sd, cb_vread, 1, Kt, Vt, false);
-        vread.wait_front(Vt);
+            // vread = k . sd  ([1,V])
+            k.wait_front(Kt);
+            mm(cb_k, cb_sd, cb_vread, 1, Kt, Vt, false);
+            vread.wait_front(Vt);
 
-        // u = beta * (v - vread)
-        v.wait_front(Vt);
-        beta.wait_front(1);
-        delta_rule_residual(cb_v, cb_vread, cb_beta, cb_u, Vt);
-        v.pop_front(Vt);
-        vread.pop_front(Vt);
-        beta.pop_front(1);
-        u.wait_front(Vt);
+            // u = beta * (v - vread)
+            v.wait_front(Vt);
+            beta.wait_front(1);
+            delta_rule_residual(cb_v, cb_vread, cb_beta, cb_u, Vt);
+            v.pop_front(Vt);
+            vread.pop_front(Vt);
+            beta.pop_front(1);
+            u.wait_front(Vt);
 
-        // kcol = transpose(k) ([K,1])
-        transpose_block(cb_k, cb_kcol, Kt);
-        k.pop_front(Kt);
-        kcol.wait_front(Kt);
+            // kcol = transpose(k) ([K,1])
+            transpose_block(cb_k, cb_kcol, Kt);
+            k.pop_front(Kt);
+            kcol.wait_front(Kt);
 
-        // S_new = sd + kcol (x) u -> nxt_S (and the state output, per token or last)
-        rank1_update<Kt, Vt>(cb_sd, cb_kcol, cb_u, nxt_S_id, per_token || last);
-        kcol.pop_front(Kt);
-        u.pop_front(Vt);
-        sd.pop_front(kv);
-        nxt_S.wait_front(kv);
+            // S_new = sd + kcol (x) u -> nxt_S (and the state output, per token or last)
+            rank1_update<Kt, Vt>(cb_sd, cb_kcol, cb_u, nxt_S_id, per_token || last);
+            kcol.pop_front(Kt);
+            u.pop_front(Vt);
+            sd.pop_front(kv);
+            nxt_S.wait_front(kv);
 
-        // o = q . S_new  (read from POST-update state)
-        q.wait_front(Kt);
-        mm(cb_q, nxt_S_id, cb_out, 1, Kt, Vt, false);
-        q.pop_front(Kt);
+            // o = q . S_new  (read from POST-update state)
+            q.wait_front(Kt);
+            mm(cb_q, nxt_S_id, cb_out, 1, Kt, Vt, false);
+            q.pop_front(Kt);
 
-        // nxt_S is intentionally NOT popped: the next iteration reads it as cur_S.
+            // nxt_S is intentionally NOT popped: the next token reads it as cur_S. After the last token it is
+            // popped, so the next head of this core starts from empty ping-pong buffers.
+            if (last) {
+                nxt_S.pop_front(kv);
+            }
+        }
     }
 }
