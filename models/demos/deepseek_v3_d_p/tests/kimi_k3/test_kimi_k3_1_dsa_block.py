@@ -13,7 +13,9 @@ There is no K3.1 CPU reference or golden, so the bar is the K3 layer tests' stru
 5120-token chunks of chunked prefill (the second chunk's indexer selects its top-2048 from a 10240
 token prefix and reads the first chunk's cache), every output and cache finite, and a second run of
 the same sequence bit-identical to the first. In the DSA-only window, chunk 1's output must change when only
-chunk 0's tokens do: the stack-level proof that a later chunk reads the earlier chunks from its caches.
+chunk 0's tokens do: the stack-level proof that a later chunk reads the earlier chunks' kvpe cache. It does
+not prove the index-key read (an indexer ignoring its cached keys would still pass); that is left to
+`sparse_mla/test_sparse_mla.py`'s chunked kimi_k3_1 case against the CPU reference (not in CI; see ao3i.6).
 
 Synthetic weights from `synthetic.py`, with its one substitution: every layer's FFN is K3's dense FFN
 (a synthetic LatentMoE layer is ~59 GB; the MoE is unchanged from K3 and covered by K3's tests).
@@ -109,7 +111,8 @@ def test_k31_dsa_block_finite_and_deterministic(model, mesh_device, device_param
             runs.append((outputs, _shards(mesh_device, kvpe.storage), _shards(mesh_device, index)))
         # Prefix dependence, where nothing but the caches crosses a chunk: a window of DSA layers only (no
         # KDA carry; AttnRes opens a fresh walk per chunk). Change only chunk 0's tokens: chunk 1's output
-        # can move only through its attention reading chunk 0 from the kvpe and index caches.
+        # can move only through its attention reading chunk 0 from the kvpe cache (the index-key read is not
+        # proven here; see the module docstring).
         reads_prefix_only_from_caches = not kv_only and not stack.schedule.rank_kda_layer_ids()
         if reads_prefix_only_from_caches:
             logger.info(f"{window}: chunk 0 re-tokenized, chunk 1 unchanged")
