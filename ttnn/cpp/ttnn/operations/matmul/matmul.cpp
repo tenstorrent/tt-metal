@@ -89,7 +89,8 @@ Tensor handle_zero_volume_matmul(
     return output_tensor;
 }
 
-// A GGUF weight (from_gguf, [K, N]): the GGUF matmul on each 32-row block of a, then the bias.
+// A GGUF weight (from_gguf, [K, N]): the GGUF matmul on all rows of a at once where its prefill program applies,
+// otherwise on each 32-row block of a; then the bias.
 Tensor gguf_matmul(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
@@ -119,6 +120,12 @@ Tensor gguf_matmul(
         return bias.has_value() ? ttnn::add(output, bias.value(), std::nullopt, memory_config) : output;
     }
     const Tensor a = ttnn::reshape(input_tensor_a, ttnn::Shape({1, 1, rows, k}));
+    if (ttnn::prim::gguf_prefill_supported(a, input_tensor_b)) {
+        ttnn::Shape output_shape = a_shape;
+        output_shape[-1] = input_tensor_b.logical_shape()[-1];
+        Tensor output = ttnn::reshape(ttnn::prim::gguf_matmul(a, input_tensor_b, memory_config), output_shape);
+        return bias.has_value() ? ttnn::add(output, bias.value(), std::nullopt, memory_config) : output;
+    }
     std::vector<Tensor> blocks;
     for (uint32_t r = 0; r < rows; r += tt::constants::TILE_HEIGHT) {
         const std::array<uint32_t, 4> begin = {0, 0, r, 0};

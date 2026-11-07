@@ -13,7 +13,10 @@ namespace ttnn::prim {
 using namespace tt::tt_metal;
 
 GgufMatmulDeviceOperation::program_factory_t GgufMatmulDeviceOperation::select_program_factory(
-    const operation_attributes_t&, const tensor_args_t&) {
+    const operation_attributes_t&, const tensor_args_t& args) {
+    if (args.input.padded_shape().volume() / args.input.padded_shape()[-1] != tt::constants::TILE_HEIGHT) {
+        return GgufMatmulPrefillProgramFactory{};
+    }
     return GgufMatmulProgramFactory{};
 }
 
@@ -50,10 +53,12 @@ void GgufMatmulDeviceOperation::validate_on_program_cache_miss(
         "GGUF matmul: the input's last dimension {} must equal the weight's K {}",
         input.logical_shape()[-1],
         k);
+    const uint32_t padded_rows = input.padded_shape().volume() / k;
     TT_FATAL(
-        input.padded_shape().volume() / k == tt::constants::TILE_HEIGHT,
-        "GGUF matmul: the input must hold one row block of {} rows, got {}",
+        padded_rows == tt::constants::TILE_HEIGHT || gguf_prefill_supported(input, weight),
+        "GGUF matmul: the input must hold one row block of {} rows, or whole row blocks for {}, got {}",
         tt::constants::TILE_HEIGHT,
+        weight.dtype(),
         input.padded_shape());
     TT_FATAL(
         attributes.output_mem_config.memory_layout() == TensorMemoryLayout::INTERLEAVED,

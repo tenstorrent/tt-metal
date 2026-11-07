@@ -31,4 +31,21 @@ struct GgufMatmulProgramFactory {
         cached_program_t& cached_program, const GgufMatmulParams&, const GgufMatmulInputs&, Tensor& output);
 };
 
+// More than one row block of the input. Bands of whole grid rows share M rows and split N over their cores; each core
+// decodes its weight tiles once per M chunk into L1 and multiplies them against the chunk's rows, which a sender core
+// of the band multicasts in blocks. With few rows, two bands split K and one adds the other's sums.
+struct GgufMatmulPrefillProgramFactory {
+    using shared_variables_t = GgufMatmulSharedVariables;
+    using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
+
+    static cached_program_t create(const GgufMatmulParams&, const GgufMatmulInputs&, Tensor& output);
+
+    static void override_runtime_arguments(
+        cached_program_t& cached_program, const GgufMatmulParams&, const GgufMatmulInputs&, Tensor& output);
+};
+
+// True when GgufMatmulPrefillProgramFactory takes this input (whole row blocks) and weight (its formats, a blocking
+// that fits L1).
+bool gguf_prefill_supported(const Tensor& input, const Tensor& weight);
+
 }  // namespace ttnn::prim

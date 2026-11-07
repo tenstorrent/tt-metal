@@ -17,6 +17,7 @@ set(TTNN_OP_MATMUL_SRCS
     device/sparse/sparse_matmul_device_operation.cpp
     device/gguf/gguf_matmul_device_operation.cpp
     device/gguf/gguf_matmul_program_factory.cpp
+    device/gguf/gguf_matmul_prefill_program_factory.cpp
 )
 
 set(TTNN_OP_MATMUL_API_HEADERS
