@@ -289,44 +289,36 @@ sfpi_inline void calculate_remainder_uint32_body(
 }
 
 template <bool is_fp32_dest_acc_en>
-sfpi_inline sfpi::vFloat _sfpu_binary_remainder_(sfpi::vFloat in0, sfpi::vFloat in1) {
-    // remainder(a, b) = a - floor(a/b) * b
-
-    sfpi::vFloat a = in0;
-    sfpi::vFloat b = in1;
-
-    // Compute a/b = a * (1/b)
+sfpi_inline sfpi::vFloat _sfpu_binary_remainder_(sfpi::vFloat a, sfpi::vFloat b) {
+    // remainder(a, b) = a - floor(a/b) * b, sign of b
     sfpi::vFloat div_result = a * sfpu_reciprocal_iter<2>(b);
-
-    // Compute floor(a/b)
     sfpi::vFloat floor_div = _floor_body_(div_result);
-
-    // Compute remainder = a - floor(a/b) * b
     sfpi::vFloat result = a - floor_div * b;
 
-    // Sign correction: remainder must match the sign of b (or be zero).
-    // XOR of the float bit-patterns detects sign mismatch via the MSB,
-    // avoiding a compound conditional with four comparisons and an OR.
-    v_if(result != sfpi::vFloat(0.0f)) {
-        sfpi::vInt signs = sfpi::as<sfpi::vInt>(result) ^ sfpi::as<sfpi::vInt>(b);
-        v_and(signs < 0);
-        result += b;
+    // Corrections are done on q = result * sign(b), i.e. on the result expressed
+    // relative to the sign of b: a sign mismatch is then q < 0 and the magnitude
+    // overshoot is q >= |b|, which folds the three sign-dependent correction
+    // blocks into two unsigned ones. The products by +-1.0 and the MADs on |b|
+    // round symmetrically, so every lane equals the signed chain lane for lane,
+    // signed zeros included: the SFPMUL flushes -0 to +0 as the MADs did.
+    sfpi::vFloat sign_b = sfpi::copysgn(sfpi::vFloat(1.0f), b);
+    sfpi::vFloat b_abs = sfpi::abs(b);
+    sfpi::vFloat q = result * sign_b;
+
+    // Sign correction: a result of the wrong sign (or a floor one too high) gets +b.
+    v_if(q < sfpi::vFloat(0.0f)) { q += b_abs; }
+    v_endif;
+
+    // Magnitude correction, same-sign operands only (as before): reciprocal
+    // imprecision can make floor() one too low, leaving |result| >= |b|.
+    v_if((sfpi::as<sfpi::vInt>(a) ^ sfpi::as<sfpi::vInt>(b)) >= 0) {
+        sfpi::vFloat diff = q - b_abs;
+        v_if(diff >= sfpi::vFloat(0.0f)) { q = diff; }
+        v_endif;
     }
     v_endif;
 
-    // Magnitude correction: reciprocal imprecision can cause floor() to be greater than the true floor value.
-    v_if(b > sfpi::vFloat(0.0f) && a > sfpi::vFloat(0.0f)) {
-        sfpi::vFloat diff = result - b;
-        v_if(diff >= sfpi::vFloat(0.0f)) { result = diff; }
-        v_endif;
-    }
-    v_endif;
-    v_if(b < sfpi::vFloat(0.0f) && a < sfpi::vFloat(0.0f)) {
-        sfpi::vFloat diff = result - b;
-        v_if(diff <= sfpi::vFloat(0.0f)) { result = diff; }
-        v_endif;
-    }
-    v_endif;
+    result = q * sign_b;
 
     // Handle division by zero - return NaN
     v_if(b == sfpi::vFloat(0.0f)) { result = sfpi::vFloat(std::numeric_limits<float>::quiet_NaN()); }
