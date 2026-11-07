@@ -89,13 +89,10 @@ _ACTUAL_START_OVERRIDE = os.environ.get("KDA_PERF_ACTUAL_START")
 # Galaxy target: a full chunk whose start falls mid-device. A resumed request starts at an arbitrary aligned
 # prefix, and every full chunk of it then wraps onto its first rank, which adds the final-carry barrier and
 # broadcast that a rank-aligned start skips. Production always passes actual_end, so the gate does too. An
-# untraced call also pays its host dispatch, which a block of 10 calls does not fully hide.
-# Galaxy SP8xTP4: relay's 1.205 / 1.225 x 1.013, conv's traced median ratio over 3 interleaved c03u08 rounds (conv
-# 43ad083e1ee vs main 28a48b08a82), then x 1.040 for Kimi-K3 HiFi3 (scan, affine prefix, output projection), HiFi3's
-# traced ratio over 3 interleaved c03u08 rounds, measured before the relay prefix with the output projection unfused.
-# Composed from measured ratios on relay's reference, not measured on this base. The untraced entry assumes the
-# traced ratios.
-_GALAXY_PERF_REFERENCE_MS = {"traced": 1.270, "untraced": 1.291}
+# untraced call also pays its host dispatch, which a block of 10 calls does not fully hide: the block's first call
+# starts with the device idle. Mean of 3 runs on bh-glx-120-b07u02 with the CI job's settings
+# (TT_METAL_SHM_TRACKING_DISABLED=1, LOGURU_LEVEL=ERROR); main there: 1.298 traced, 1.321 untraced.
+_GALAXY_PERF_REFERENCE_MS = {"traced": 1.185, "untraced": 1.211}
 _GALAXY_TP = 4
 _GALAXY_HEADS_PER_CHIP = KimiK3Config.KDA_NUM_HEADS // _GALAXY_TP
 _GALAXY_ACTUAL_START = 4 * PREFILL_CHUNK_TOKENS_PER_CHIP + 320
