@@ -45,3 +45,9 @@ shared:
     paths:
     - ttnn/ttnn/bringup
     note: 'owner 2026-11-07: index-key format A/B bf16 vs bfp8 vs bfp4 (adds a bfp8 option to INDEX_K_FORMAT; default unchanged)'
+  P.41:
+    by: dnijemcevic
+    at: '2026-11-07T07:00:00'
+    paths:
+    - ttnn/ttnn/bringup
+    note: 'owner 2026-11-07: drop the bf16 index-key copy, serve the Blaze 8-bit rows from the bfp8 keys; byte-exact served-row check re-referenced to the bfp8 keys (authorized), every option kept'

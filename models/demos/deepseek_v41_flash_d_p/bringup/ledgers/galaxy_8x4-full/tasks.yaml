@@ -3127,6 +3127,47 @@ tasks:
       short_turn_device_ms: '> 0'
       acks_early: == 0
       contract_checks_failed: == 0
+- id: P.41
+  title: 'Index keys: drop the bf16 compute copy; one bfp8 copy for scoring, the served Blaze 8-bit rows built from it'
+  step: perf
+  role: perf
+  device: true
+  deps:
+  - P.40
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/tt
+  - models/demos/deepseek_v41_flash_d_p/tests/
+  - models/demos/deepseek_v41_flash_d_p/bringup/serving_contract.md
+  - ttnn/ttnn/bringup
+  brief:
+    details: 'OWNER 2026-11-07: with INDEX_K_FORMAT=bfp8 (P.40 default) and INDEX_K_SERVED=fp8_row192 (P.39 default), keep no 16-bit copy of the index keys. Today tt/compressor.py keeps a persistent bf16 compute copy of every index-key cache (``slab``, compressor.py:52 / :366 / :397), the indexer rounds it to bfp8 every chunk (bfp_round) into the ring key buffer, and the served 192-byte rows are packed from the bf16 keys. Target: the keys are written once, as bfloat8_b, into a persistent bfp8 copy (no bf16 slab, no per-chunk re-rounding of the history; only the new chunk''s keys are rounded); the indexer scores that copy; the served Blaze rows (e4m3 of key / scale, fp32 scale a row, 192 B rows, same encoding rules as P.39) are built from the bfp8 keys (the unpacker reads bfp8 natively; add a typecast if per_token_cast_to_fp8 does not accept bfp8). Behind a new switch INDEX_K_COPY: bfp8 (new, default after acceptance) | bf16 (today''s path, unchanged). KEEP EVERY OPTION: INDEX_K_FORMAT bf16 / bfp4 and INDEX_K_SERVED bf16 keep working (with INDEX_K_COPY=bfp8 they need the bf16 copy, so either fall back to the bf16 copy with a log line or refuse with a clear error; say which). OWNER-AUTHORIZED TEST CHANGE: P.39''s byte-exact check of the served rows applies the Blaze recipe to the keys the rows are built from; with INDEX_K_COPY=bfp8 that is the bfp8-rounded keys (dequantized), not the bf16 keys. Change only that reference input; every other check, tolerance and limit stays. Report in one short table: per-chip memory of the index-key copies at 56,320 and 1,044,480 tokens (before / after), err_state_index_k_L*, err_state_topk_idx_L* and overlap, err_final_hidden, top5_overlap, device_ms_indexer, device_ms_total, chunk_wall_ms. Never loosen any check. Agent rules 18 and 19 hold. Do not profile the model yourself beyond the A/B: the orchestrator measures at 51200. Report in plain language, short, every term defined.'
+  ab:
+    env:
+      INDEX_K_COPY: bf16
+      ENGRAM_TABLE: resident
+    change:
+      INDEX_K_COPY: bfp8
+      ENGRAM_TABLE: resident
+  ab_positions:
+  - 51200
+  gate:
+    cmd: BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py
+      && DS41_ENGRAM_TABLE=resident scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py
+      && DS41_DECODER_SKIP=replay128 DS41_ENGRAM_TABLE=resident scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/test_short_turn.py
+      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_contract.py
+      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_kv_layout.py
+      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_adapter_acks.py
+    metrics:
+      err_layer_L*: <= limit
+      err_state_*_L*: <= limit
+      err_final_hidden: <= limit
+      top5_overlap: '>= limit'
+      chunk_wall_ms: '> 0'
+      device_ms_total: '> 0'
+      short_turn_ms: '> 0'
+      short_turn_device_ms: '> 0'
+      acks_early: == 0
+      contract_checks_failed: == 0
 - id: O.1
   hold: 'owner 2026-11-06: not now (P.34-P.36 first)'
   title: 'Derived-op tests: a random-input case for every ttnn.bringup call this model makes'
