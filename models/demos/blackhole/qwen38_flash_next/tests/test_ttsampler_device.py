@@ -207,7 +207,7 @@ def case_timing(mesh, sampler, trace_id):
 @MESH
 @PARAMS
 def test_ttsampler(mesh_device):
-    from models.tt_transformers.tt.ccl import TT_CCL
+    from models.ttt_compat.tt.ccl import TT_CCL
 
     mesh = mesh_device
     sampler = Qwen38TTSampler(mesh, TT_CCL(mesh))

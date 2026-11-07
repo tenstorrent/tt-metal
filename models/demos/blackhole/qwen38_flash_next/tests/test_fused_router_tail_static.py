@@ -229,6 +229,9 @@ def _llk_exp_precise_loop_with_vector_guard() -> str:
     assert any(
         llk[i : i + 6] == _FROZEN_LLK_EXP_LOOP for i in range(start, len(llk) - 5)
     ), "the LLK's sfpi exp loop changed"
+    # the replayed form that runs by default is tested bit-exact against that sfpi loop
+    replay_tests = (fp.REPO_ROOT / "tests/tt_metal/tt_metal/llk/test_sfpu_exp_fp32_replay.cpp").read_text()
+    assert "TEST_F(LLKBlackholeSingleCardFixture, TensixSfpuExpFp32ReplayBitExact)" in replay_tests
     return "\n".join(
         [
             "    for (int d = 0; d < end; d++) {",  # end = 2 * (last live pair + 1): the face step is CR-based (see the header)

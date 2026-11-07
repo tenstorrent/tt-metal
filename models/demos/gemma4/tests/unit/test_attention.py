@@ -22,6 +22,7 @@ from loguru import logger
 import ttnn
 from models.demos.gemma4.config import MeshConfig, ModeConfig
 from models.demos.gemma4.tt.attention import Gemma4Attention, Gemma4AttentionConfig
+from models.demos.gemma4.tt.attention.continuation import CONTINUATION_CHUNKED_SDPA_ENV
 from models.demos.gemma4.tt.ccl import CCLManager
 
 from ...tests.test_factory import (
@@ -101,7 +102,7 @@ def _from_device(tensor, mesh_device):
 @parametrize_mesh_with_fabric()
 @pytest.mark.parametrize("layer_type", ["sliding_attention", "full_attention"], ids=["sliding", "global"])
 @pytest.mark.parametrize("seq_len", PREFILL_BUCKETS, ids=[f"seq{b}" for b in PREFILL_BUCKETS])
-def test_attention_prefill(layer_type, seq_len, mesh_device, reset_seeds, request):
+def test_attention_prefill(layer_type, seq_len, mesh_device, device_params, reset_seeds, request):
     """Test prefill attention against HF reference; threshold per
     pcc_thresholds.json (defaults to 0.99 when unmeasured).
 
@@ -148,7 +149,7 @@ def test_attention_prefill(layer_type, seq_len, mesh_device, reset_seeds, reques
 @parametrize_mesh_with_fabric(mesh_shapes=[(1, 1)])
 @pytest.mark.parametrize("layer_idx", [0, 5], ids=["sliding", "global"])
 @pytest.mark.parametrize("position", [0, 32, 512, 1023, 1024, 1500, 2047], ids=lambda p: f"pos{p}")
-def test_rope_pcc(layer_idx, position, mesh_device, reset_seeds, request):
+def test_rope_pcc(layer_idx, position, mesh_device, device_params, reset_seeds, request):
     """Test RoPE cos/sin values and apply_rope PCC at various decode positions up to 2k.
 
     Compares TT rotary embedding output against HF reference at each position.
@@ -233,7 +234,7 @@ def _build_sliding_window_mask(cache_len, sliding_window):
 @parametrize_mesh_with_fabric(mesh_shapes=[(1, 1)])
 @pytest.mark.parametrize("layer_idx", [0, 5], ids=["sliding", "global"])
 @pytest.mark.parametrize("cache_len", [32, 512, 1023, 1500], ids=lambda c: f"cache{c}")
-def test_attention_decode_paged(layer_idx, cache_len, mesh_device, reset_seeds, request):
+def test_attention_decode_paged(layer_idx, cache_len, mesh_device, device_params, reset_seeds, request):
     """Test decode attention with paged KV cache against HF reference.
 
     Tests at various cache lengths including positions beyond the sliding window (1024).
@@ -391,7 +392,9 @@ def _kv_fill_to_tt(k_torch, mesh_device, *, num_kv_heads, num_attention_heads, t
 @pytest.mark.parametrize("batch", [1, 16, 32], ids=lambda b: f"batch{b}")
 @pytest.mark.parametrize("cache_len", [512, 1500], ids=lambda c: f"cache{c}")
 @pytest.mark.parametrize("qkv_path", ["composite", "fused_presliced"])
-def test_attention_decode_paged_batched(layer_idx, batch, cache_len, qkv_path, mesh_device, reset_seeds, request):
+def test_attention_decode_paged_batched(
+    layer_idx, batch, cache_len, qkv_path, mesh_device, device_params, reset_seeds, request
+):
     """True batched decode (batch > 1 single forward) with paged KV cache.
 
     ``qkv_path``: ``composite`` = the per-head norms + RoPE composite with the 2D cache gathered inside attention
@@ -598,7 +601,10 @@ def test_attention_decode_paged_batched(layer_idx, batch, cache_len, qkv_path, m
 
 
 @parametrize_mesh_with_fabric(mesh_shapes=[(1, 1)])
-def test_sliding_tail_survives_cross_call_chunking(mesh_device, reset_seeds, request):
+@pytest.mark.parametrize("continuation_mode", ["continuation", "stash"])
+def test_sliding_tail_survives_cross_call_chunking(
+    continuation_mode, mesh_device, device_params, reset_seeds, request, monkeypatch
+):
     """Regression test for the sliding-window prefill-tail-lifetime bug.
 
     vLLM-driven token-chunked prefill makes separate ``__call__`` invocations
@@ -610,7 +616,14 @@ def test_sliding_tail_survives_cross_call_chunking(mesh_device, reset_seeds, req
 
     This test simulates two separate prefill calls with ``chunk_start_idx``
     and verifies the second call consumes the persisted tail without error.
+
+    ``stash`` pins ``GEMMA4_CONTINUATION_CHUNKED_SDPA=0`` (the cross-call stash: vision chunks, the bounded
+    ring and the traced multi-chunk keep it) and asserts the stash lifetime. ``continuation`` is the default:
+    an eager unbounded chunk reads its window from the paged cache, so the first call must NOT stash a tail and
+    the second call rebuilds the prior window from the paged K/V (``_read_sliding_tail_from_paged_cache``).
     """
+    monkeypatch.setenv(CONTINUATION_CHUNKED_SDPA_ENV, "0" if continuation_mode == "stash" else "1")
+    stash = continuation_mode == "stash"
     from models.demos.gemma4.tt.attention.kv_cache import init_kv_cache
     from models.tt_transformers.tt.common import PagedAttentionConfig
 
@@ -670,10 +683,17 @@ def test_sliding_tail_survives_cross_call_chunking(mesh_device, reset_seeds, req
     # between scheduling steps (mimics real vLLM inter-step behavior).
     out1.deallocate(True)
 
-    # The tail must be alive after the first call.
+    # The tail must be alive after the first call (stash path); the continuation path keeps no stash.
     tail = (getattr(tt_attn, "_sliding_tails_by_key", None) or {}).get(None)
-    assert tail is not None, "Sliding tail was not persisted after chunk 1"
-    assert all(t.is_allocated() for t in tail), "Sliding tail tensor(s) are not allocated — the clone fix is missing"
+    if stash:
+        assert tail is not None, "Sliding tail was not persisted after chunk 1"
+        assert all(
+            t.is_allocated() for t in tail
+        ), "Sliding tail tensor(s) are not allocated — the clone fix is missing"
+    else:
+        assert (
+            tail is None
+        ), "the continuation path must not stash a cross-chunk sliding tail (it reads the paged cache)"
     # endregion
 
     # region Chunk 2 (chunk_start_idx=chunk_size, consumes persisted tail)
@@ -702,7 +722,8 @@ def test_sliding_tail_survives_cross_call_chunking(mesh_device, reset_seeds, req
     # between APC continuation prefills. Decode must NOT wipe the sliding
     # tail; a new prefill at chunk_start_idx==0 releases it instead.
     tail_before_decode = (getattr(tt_attn, "_sliding_tails_by_key", None) or {}).get(None)
-    assert tail_before_decode is not None, "Tail should still be present after chunk 2 (not yet in decode)"
+    if stash:
+        assert tail_before_decode is not None, "Tail should still be present after chunk 2 (not yet in decode)"
 
     x_dec = torch.randn(1, 1, 1, config.hidden_size, dtype=torch.bfloat16)
     x_dec_tt = _to_device(x_dec, mesh_device)
@@ -723,8 +744,9 @@ def test_sliding_tail_survives_cross_call_chunking(mesh_device, reset_seeds, req
     )
 
     tail_after_decode = (getattr(tt_attn, "_sliding_tails_by_key", None) or {}).get(None)
-    assert tail_after_decode is not None, "Tail must survive decode so async APC continuations keep sliding_tail_in"
-    assert all(t.is_allocated() for t in tail_after_decode), "Tail deallocated during decode"
+    if stash:
+        assert tail_after_decode is not None, "Tail must survive decode so async APC continuations keep sliding_tail_in"
+        assert all(t.is_allocated() for t in tail_after_decode), "Tail deallocated during decode"
 
     # A fresh prefill at chunk_start==0 must release the prior request's tail.
     x_new = torch.randn(1, 1, chunk_size, config.hidden_size, dtype=torch.bfloat16)
@@ -742,19 +764,30 @@ def test_sliding_tail_survives_cross_call_chunking(mesh_device, reset_seeds, req
     )
     out_new.deallocate(True)
     tail_after_reset = (getattr(tt_attn, "_sliding_tails_by_key", None) or {}).get(None)
-    assert tail_after_reset is not None, "New prefill at start=0 should stash a fresh tail"
-    assert all(t.is_allocated() for t in tail_after_reset)
+    if stash:
+        assert tail_after_reset is not None, "New prefill at start=0 should stash a fresh tail"
+        assert all(t.is_allocated() for t in tail_after_reset)
+    else:
+        assert tail_after_reset is None, "the continuation path must not stash a tail on a fresh prefill either"
     # endregion
 
 
 @parametrize_mesh_with_fabric(mesh_shapes=[(1, 1)])
-def test_short_first_chunk_stashes_padded_sliding_tail(mesh_device, reset_seeds, request):
+@pytest.mark.parametrize("continuation_mode", ["continuation", "stash"])
+def test_short_first_chunk_stashes_padded_sliding_tail(
+    continuation_mode, mesh_device, device_params, reset_seeds, request, monkeypatch
+):
     """APC remnant: first grant < sliding_window must still stash a hist-wide tail.
 
     Reproduces the shield failure mode where chunk_start=384 arrives on the
     continuation without sliding_tail_in because the prior short chunk skipped
     the post-SDPA stash (kseq < hist).
+
+    ``stash`` pins ``GEMMA4_CONTINUATION_CHUNKED_SDPA=0`` and asserts the padded stash; ``continuation`` (the
+    default) must not stash and rebuilds the short prior window (384 < hist) from the paged cache instead.
     """
+    monkeypatch.setenv(CONTINUATION_CHUNKED_SDPA_ENV, "0" if continuation_mode == "stash" else "1")
+    stash = continuation_mode == "stash"
     from models.demos.gemma4.tt.attention.kv_cache import init_kv_cache
     from models.tt_transformers.tt.common import PagedAttentionConfig
 
@@ -812,9 +845,12 @@ def test_short_first_chunk_stashes_padded_sliding_tail(mesh_device, reset_seeds,
     )
     out1.deallocate(True)
     tail = (getattr(tt_attn, "_sliding_tails_by_key", None) or {}).get(None)
-    assert tail is not None, "Short first chunk must stash a padded sliding tail"
-    assert all(t.is_allocated() for t in tail)
-    assert int(tail[0].shape[-2]) == hist, f"Expected padded hist={hist}, got {tail[0].shape[-2]}"
+    if stash:
+        assert tail is not None, "Short first chunk must stash a padded sliding tail"
+        assert all(t.is_allocated() for t in tail)
+        assert int(tail[0].shape[-2]) == hist, f"Expected padded hist={hist}, got {tail[0].shape[-2]}"
+    else:
+        assert tail is None, "the continuation path must not stash a sliding tail after a short first grant"
 
     # Continuation at chunk_start=384 with chunk_page_table — needs the tail.
     x2 = torch.randn(1, 1, cont_len, config.hidden_size, dtype=torch.bfloat16)
@@ -864,7 +900,7 @@ def test_short_first_chunk_stashes_padded_sliding_tail(mesh_device, reset_seeds,
         ),
     ],
 )
-def test_chunked_prefill_matches_one_shot(layer_type, mesh_device, reset_seeds, request):
+def test_chunked_prefill_matches_one_shot(layer_type, mesh_device, device_params, reset_seeds, request):
     """Two 1024-token chunks through the vLLM-style chunked prefill (``chunk_start_idx`` + ``chunk_page_table``,
     the served 8K / 32K path) match the one-shot 2048-token prefill of the same layer: the global layer's second
     chunk attends the paged prefix through ``chunked_prefill_sdpa`` and the sliding layer's through its stashed
@@ -973,7 +1009,7 @@ def _setup_fractured_attention(mesh_device, layer_idx, max_seq_len=128):
 @parametrize_mesh_with_fabric(mesh_shapes=[(8, 4)])
 @pytest.mark.parametrize("layer_type", ["sliding_attention", "full_attention"], ids=["sliding", "global"])
 @pytest.mark.parametrize("seq_len", [128, 1024], ids=["seq128", "seq1024"])
-def test_attention_fracture_prefill(layer_type, seq_len, mesh_device, reset_seeds, request):
+def test_attention_fracture_prefill(layer_type, seq_len, mesh_device, device_params, reset_seeds, request):
     """Prefill PCC vs HF: heads over the tp axis, replicated across the lane axis."""
     hf_text_config = TestFactory.create_hf_text_config()
     try:
@@ -1024,7 +1060,7 @@ FILLER = "The sky is blue and the grass is green. "
 
 
 @parametrize_mesh_with_fabric(mesh_shapes=[(8, 4)])
-def test_cp_prefill(mesh_device, reset_seeds, request):
+def test_cp_prefill(mesh_device, device_params, reset_seeds, request):
     os.environ["GEMMA4_GALAXY_FRACTURE"] = "1"
     os.environ["GEMMA4_CP_PREFILL"] = "1"
     os.environ.pop("GEMMA4_GALAXY_LANES", None)  # CP and lanes are exclusive

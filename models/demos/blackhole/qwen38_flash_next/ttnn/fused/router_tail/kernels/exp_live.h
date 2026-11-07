@@ -13,9 +13,10 @@
 // faces 2 and 3 token rows 16-31, so the vector PAIR p of face f holds token rows (f >> 1) * 16 + 4p .. + 3.  A token
 // row the core never produces is never compared with a live column (the sort runs inside a token column of the
 // transposed tile), never summed with a live row (the reductions are row-wise) and never written, so its exp is
-// unobservable.  `exp_tile_live(idst, pair_mask)` issues the same instructions as `exp_tile<false>` on the pairs
-// whose bit is set (bit p for faces 0/1, bit 4 + p for faces 2/3) and only the address increment on the others: a
-// live row computes bit for bit what the full call computes, at the same DST address.  The pair is the unit because
+// unobservable.  `exp_tile_live(idst, pair_mask)` issues the sfpi form of `exp_tile<false>` (the LLK tests hold the
+// default replayed form bit-exact to it) on the pairs whose bit is set (bit p for faces 0/1, bit 4 + p for faces
+// 2/3) and only the address increment on the others: a live row computes bit for bit what the full call computes,
+// at the same DST address.  The pair is the unit because
 // a single vector holds only half of its four rows' experts (measured 2026-09-25 on one Blackhole chip before the
 // layout was read: the LLK's own loop at ITERATIONS = 1 leaves the live row wrong and at 4 right; a per-vector guard
 // at {0, 1} right, at {0} or {0, 1, 2} wrong on the odd vector).  The loop ends at the last live pair: the face step
@@ -35,7 +36,7 @@
 namespace ckernel {
 namespace sfpu {
 
-// ---- copied from ckernel_sfpu_exp.h: calculate_exponential, the precise fp32-dest branch, with the vector guard ----
+// ---- copied from ckernel_sfpu_exp.h: calculate_exponential, the precise fp32-dest sfpi form, plus the vector guard
 template <bool is_fp32_dest_acc_en, bool SCALE_EN = false, int ITERATIONS = 8>
 inline void calculate_exponential_live(
     const std::uint32_t pair_mask, const uint exp_base_scale_factor = p_sfpu::kCONST_1_FP16B) {

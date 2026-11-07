@@ -3,7 +3,8 @@
 
 """The public launcher without a device: ``--help`` and ``--validate-only`` behave the same from the model directory
 and from an unrelated directory, the interpreter it starts runs from the repository root (so the model's own ``ttnn/``
-package never shadows ttnn), and relative path arguments are the caller's."""
+package never shadows ttnn), relative path arguments are the caller's, and p150-line exports the device indices
+the server derives from the host's device nodes."""
 
 from __future__ import annotations
 
@@ -12,6 +13,8 @@ import subprocess
 from pathlib import Path
 
 import pytest
+
+from models.demos.blackhole.qwen38_flash_next.tools.hardware_profiles import P150_LINE
 
 MODEL_DIR = Path(__file__).resolve().parents[1]
 REPO_ROOT = MODEL_DIR.parents[3]
@@ -126,6 +129,75 @@ def test_long_chunks_and_a_slab_combine_with_mtp(tmp_path) -> None:
     assert "--long-chunks and --mtp are alternatives" not in launcher
     assert "--prefill-slab and --mtp are alternatives" not in launcher
     assert "accepted for compatibility: the 128-row chunks are the server's default (combines with --mtp)" in launcher
+
+
+def test_lanes_and_their_stall_budget_reach_the_server(tmp_path) -> None:
+    if subprocess.run(["git", "-C", str(REPO_ROOT), "rev-parse", "HEAD"], stdout=subprocess.DEVNULL).returncode:
+        pytest.skip("the launcher records the checkout's head: not a git checkout")
+    stub = tmp_path / "python"
+    stub.write_text(STUB_PYTHON)
+    stub.chmod(0o755)
+    (tmp_path / "checkpoint").mkdir()
+    common = ("--profile", "p150-line", "--checkpoint", str(tmp_path / "checkpoint"), "--cache-root", str(tmp_path))
+    common += ("--python", str(stub), "--mtp", "4", "--no-sampling", "--validate-only")
+    run = run_launcher(tmp_path, *common, "--lanes", "4", "--lanes-stall-budget", "off")
+    assert run.returncode == 0, run.stderr
+    args = [line[len("arg=") :] for line in run.stdout.splitlines()[1:]]
+    assert args[args.index("--lanes") + 1] == "4" and args[args.index("--lanes-stall-budget") + 1] == "off"
+    assert "--sampling" not in args
+    refused = run_launcher(tmp_path, *common, "--lanes", "0")
+    assert refused.returncode == 2 and "--lanes must be a positive integer" in refused.stderr, refused.stderr
+
+
+@pytest.mark.parametrize(
+    ("present", "devices", "nodes", "visible"),
+    (
+        ((4, 5, 6, 7), None, "4,5,6,7", "0,1,2,3"),  # a container scoped to four chips other than 0-3
+        ((4, 5, 6, 7), "4,5,6,7", "4,5,6,7", "0,1,2,3"),
+        (tuple(range(8)), "4,5,6,7", "4,5,6,7", "4,5,6,7"),  # four chips of a larger host
+        (tuple(range(8)), None, None, "0,1,2,3"),
+        ((0, 1, 2, 3), None, None, "0,1,2,3"),
+    ),
+)
+def test_p150_line_takes_umd_indices_when_its_chips_are_all_the_host_presents(
+    tmp_path, present, devices, nodes, visible
+) -> None:
+    """The launcher exports the TT_VISIBLE_DEVICES the server derives (``with_device_nodes``) from a fake device
+    listing, and a host that presents exactly four nodes runs p150-line on them without --devices."""
+
+    tree = tmp_path / "tree"
+    launcher = tree / LAUNCHER.relative_to(REPO_ROOT)
+    launcher.parent.mkdir(parents=True)
+    device_root = tmp_path / "dev-tenstorrent"
+    device_root.mkdir()
+    for node in present:
+        (device_root / str(node)).touch()
+    source = LAUNCHER.read_text(encoding="utf-8")
+    assert source.count("readonly DEVICE_ROOT=/dev/tenstorrent\n") == 1
+    launcher.write_text(source.replace("DEVICE_ROOT=/dev/tenstorrent\n", f"DEVICE_ROOT={device_root}\n"))
+    (tree / "ttnn" / "ttnn").mkdir(parents=True)
+    (tree / "ttnn" / "ttnn" / "__init__.py").touch()
+    # the launcher records the checkout's head: the stand-in tree is a repository with one empty commit
+    git = ["git", "-C", str(tree), "-c", "user.name=test", "-c", "user.email=test@example.com"]
+    subprocess.run([*git, "init", "-q"], check=True, timeout=60)
+    subprocess.run([*git, "commit", "-q", "--allow-empty", "-m", "stand-in"], check=True, timeout=60)
+    stub = tmp_path / "python"
+    stub.write_text(STUB_PYTHON.replace(str(REPO_ROOT), str(tree)) + 'printf "visible=%s\\n" "$TT_VISIBLE_DEVICES"\n')
+    stub.chmod(0o755)
+    (tmp_path / "checkpoint").mkdir()
+    env = {**os.environ, "TT_METAL_HOME": str(tree)}
+    command = ["bash", str(launcher), "--profile", "p150-line", "--checkpoint", str(tmp_path / "checkpoint")]
+    command += ["--cache-root", str(tmp_path / "cache"), "--python", str(stub), "--validate-only"]
+    command += [] if devices is None else ["--devices", devices]
+    run = subprocess.run(command, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=120)
+    assert run.returncode == 0, run.stderr
+    lines = run.stdout.splitlines()
+    args = [line[len("arg=") :] for line in lines if line.startswith("arg=")]
+    assert lines[-1] == f"visible={visible}", lines
+    assert (args[args.index("--device-nodes") + 1] if "--device-nodes" in args else None) == nodes
+    if nodes is not None:
+        moved = P150_LINE.with_device_nodes(tuple(int(node) for node in nodes.split(",")), present=present)
+        assert moved.visible_devices == visible
 
 
 def test_the_launcher_changes_directory_before_the_interpreter_runs() -> None:

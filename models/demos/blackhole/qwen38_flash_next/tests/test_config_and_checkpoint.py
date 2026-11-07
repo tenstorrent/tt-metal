@@ -2,11 +2,13 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
+import shutil
 from pathlib import Path
 
 import pytest
 import torch
 
+from models.demos.blackhole.qwen38_flash_next.chat import Qwen38OfficialChatTemplate
 from models.demos.blackhole.qwen38_flash_next.checkpoint import (
     HF_MODEL_ID,
     PINNED_CHECKPOINT_REVISION,
@@ -139,6 +141,46 @@ def test_checkpoint_directory_uses_an_existing_directory_as_is(tmp_path, monkeyp
     monkeypatch.setattr(huggingface_hub, "snapshot_download", fail)
 
     assert checkpoint_directory({"HF_MODEL": str(tmp_path)}) == tmp_path
+
+
+def test_tokenizer_and_index_load_from_a_hub_snapshot(link_into_hub_blobs, tmp_path):
+    """The hub cache's snapshot links every file into ``blobs/``: the pinned tokenizer, template and index load."""
+
+    if not (CHECKPOINT / "model.safetensors.index.json").is_file():
+        pytest.skip("the checkpoint's weight index is not on this host")
+    snapshot = tmp_path / "snapshots" / PINNED_CHECKPOINT_REVISION
+    snapshot.mkdir(parents=True)
+    for source in sorted(CHECKPOINT.iterdir()):
+        if source.is_file() and source.suffix != ".safetensors":
+            shutil.copyfile(source, snapshot / source.name)
+    link_into_hub_blobs(snapshot)
+    assert Qwen38OfficialChatTemplate(snapshot).checkpoint_root == snapshot.resolve()
+    checkpoint = Qwen38Checkpoint(snapshot)
+    assert len(checkpoint.shards) == 131 and checkpoint.file("config.json").parent == (tmp_path / "blobs").resolve()
+
+
+def test_tokenizer_loads_the_verified_bytes_not_a_retargeted_link(link_into_hub_blobs, tmp_path, monkeypatch):
+    """A tokenizer link retargeted between the hash check and the load is never read."""
+
+    import transformers
+
+    snapshot = tmp_path / "snapshots" / PINNED_CHECKPOINT_REVISION
+    snapshot.mkdir(parents=True)
+    for name in ("chat_template.jinja", "tokenizer.json", "tokenizer_config.json", "generation_config.json"):
+        shutil.copyfile(CHECKPOINT / name, snapshot / name)
+    link_into_hub_blobs(snapshot)
+    tampered = tmp_path / "blobs" / "tampered"
+    tampered.write_text("not a tokenizer")
+    load = transformers.AutoTokenizer.from_pretrained
+
+    def retarget_then_load(*args, **kwargs):
+        (snapshot / "tokenizer.json").unlink()
+        (snapshot / "tokenizer.json").symlink_to(tampered)
+        return load(*args, **kwargs)
+
+    monkeypatch.setattr(transformers.AutoTokenizer, "from_pretrained", retarget_then_load)
+    template = Qwen38OfficialChatTemplate(snapshot)
+    assert (snapshot / "tokenizer.json").resolve() == tampered and len(template.tokenizer) == 248_077
 
 
 def test_checkpoint_directory_resolves_a_repo_id_in_the_local_hub_cache(tmp_path, monkeypatch):

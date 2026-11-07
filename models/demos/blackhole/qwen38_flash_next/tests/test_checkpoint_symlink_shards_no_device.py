@@ -23,6 +23,7 @@ class _SyntheticCheckpoint(Qwen38Checkpoint):
     def __init__(self, root: Path) -> None:
         self.root = Path(root).resolve()
         self._file_guard = None
+        self._admitted = {}
         self.weight_map = {NAME: SHARD}
         self.shards = (SHARD,)
 

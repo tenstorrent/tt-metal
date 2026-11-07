@@ -1299,15 +1299,18 @@ class TTNNBF4ConverterIdentityTest(unittest.TestCase):
         patcher.start()
         self.addCleanup(patcher.stop)
 
-    def test_converter_source_identity_pins_this_module_the_layout_packer_and_the_bfp4_packer(self):
+    def test_converter_source_identity_pins_this_module_the_layout_packer_and_the_bfp4_packers(self):
         identity = bf4_module.bf4_converter_source_identity()
         self.assertEqual(
             [path for path, _ in identity],
             [
                 "models/demos/blackhole/qwen38_flash_next/ttnn/bf4.py",
                 "tt_metal/impl/data_format/bfloat4.cpp",
+                "tt_metal/impl/data_format/bfp_simd.hpp",
+                "tt_metal/impl/data_format/bfp_tile_encode.hpp",
                 "tt_metal/impl/data_format/blockfloat_common.cpp",
                 "tt_metal/impl/data_format/blockfloat_common.hpp",
+                "tt_metal/impl/tensor/host_tensor_factory.cpp",
                 "ttnn/ttnn/_experimental/moe_compute_utils.py",
             ],
         )
@@ -1327,6 +1330,16 @@ class TTNNBF4ConverterIdentityTest(unittest.TestCase):
             with self.subTest(malformed=malformed):
                 with self.assertRaisesRegex(ValueError, "converter sources"):
                     replace(_identity(), converter_sources=malformed)
+
+    # The tile encoder is internal to tt_metal/impl; code outside reaches it through host_tensor_factory.cpp.
+    def test_converter_sources_cover_every_caller_of_the_bfp_tile_encoder(self):
+        callers = {
+            path.relative_to(bf4_module.REPO_ROOT).as_posix()
+            for path in (bf4_module.REPO_ROOT / "tt_metal/impl").rglob("*.[ch]pp")
+            if "encode_bfp_tiles" in path.read_text(errors="replace")
+        }
+        pinned = {path for path, _ in bf4_module.bf4_converter_source_identity()}
+        self.assertTrue(callers and callers <= pinned, sorted(callers - pinned))
 
     def test_legacy_slots_keyed_by_the_revision_or_the_worker_coordinates_are_adopted_in_place(self):
         identity = _identity()

@@ -18,6 +18,7 @@ from __future__ import annotations
 import ast
 import importlib.util
 import inspect
+import math
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -33,6 +34,7 @@ from models.demos.blackhole.qwen38_flash_next.ttnn import model as model_module
 from models.demos.blackhole.qwen38_flash_next.ttnn import qsa as qsa_module
 from models.demos.blackhole.qwen38_flash_next.ttnn.contracts import (
     MAX_LANES,
+    Qwen38MeshContract,
     Qwen38TTNNDevicePosition,
     Qwen38TTNNDevicePositionRow,
 )
@@ -108,7 +110,7 @@ def _get_device_tensors(tensor):
 
 
 def _flat_topology() -> step4.TensorTopology:
-    """The legacy flat mesh ``ttnn.zeros`` reports (what ``_canonicalize_flat_replicated_topology`` accepts)."""
+    """The flat mesh the host fill of ``ttnn.zeros`` reports (what ``_canonicalize_zero_allocation_topology`` retags)."""
 
     return step4.TensorTopology((TP,), [step4.PlacementReplicate()], [(0, column) for column in range(TP)])
 
@@ -128,7 +130,12 @@ def _from_torch(host, *, dtype, layout, device=None, memory_config=None, mesh_ma
 
 def _zeros(shape, *, dtype, layout, device, memory_config):
     tensor = FakeTensor([torch.zeros(tuple(shape), dtype=dtype.torch) for _ in range(TP)], dtype, layout)
-    tensor.topology = _flat_topology()
+    # ttnn.zeros fills a TILE bfloat16/float32 tensor of at least 128 KiB per device (tile-padded) on the device, which
+    # reports the canonical (1, 4) topology (FakeTensor's default); the host fill reports the flat one.
+    *batch, rows, cols = shape
+    padded_bytes = math.prod(batch) * -(-rows // 32) * 32 * -(-cols // 32) * 32 * tensor.locals[0].element_size()
+    if layout != TILE or dtype not in (BF16, FP32) or padded_bytes < 128 * 1024:
+        tensor.topology = _flat_topology()
     return tensor
 
 
@@ -1074,3 +1081,47 @@ def test_sparse_sdpa_key_splits_independent_of_rows(monkeypatch):
     assert helper(device, 8) == 64
     monkeypatch.setenv("QWEN38_SDPA_KSPLIT", "0")
     assert helper(device, 8) == 1
+
+
+# --------------------------------------------------------------------------- zero allocation topology
+
+
+class _ContractMesh:
+    shape = (1, TP)
+
+    def get_num_devices(self):
+        return TP
+
+    def get_device_ids(self):
+        return (0, 1, 2, 3)
+
+
+def _canonicalize_on_contract_mesh(tensor) -> None:
+    mesh = _ContractMesh()
+    tensor.device = lambda: mesh
+    qsa_module._canonicalize_zero_allocation_topology(tensor, Qwen38MeshContract((0, 1, 2, 3)))
+
+
+@pytest.mark.parametrize(
+    ("shape", "layout", "distribution"),
+    (
+        ((1, 1, CACHE_WRITE_ROWS, 2 * HEAD_DIM), ROW_MAJOR, (TP,)),  # the host fill's flat form, retagged
+        ((1, 1, BLOCKS, INDEX_HEAD_DIM), TILE, (1, TP)),  # the device fill's 2-D form, kept
+    ),
+)
+def test_zero_allocation_admits_the_host_and_the_device_fill_topologies(fake, shape, layout, distribution) -> None:
+    tensor = fake.zeros(shape, dtype=BF16, layout=layout, device="mesh", memory_config="DRAM")
+    assert tuple(tensor.tensor_topology().distribution_shape()) == distribution
+    _canonicalize_on_contract_mesh(tensor)
+    topology = tensor.tensor_topology()
+    assert tuple(topology.distribution_shape()) == (1, TP)
+    assert [type(item).__name__ for item in topology.placements()] == ["PlacementReplicate"] * 2
+
+
+@pytest.mark.parametrize("distribution", ((TP,), (1, TP)))
+def test_zero_allocation_refuses_a_sharded_topology(fake, expect_error, distribution) -> None:
+    tensor = FakeTensor([torch.zeros(1, 1, 32, 128, dtype=torch.bfloat16) for _ in range(TP)], BF16)
+    placements = [step4.PlacementReplicate(), step4.PlacementShard(3)][-len(distribution) :]
+    tensor.topology = step4.TensorTopology(distribution, placements, [(0, column) for column in range(TP)])
+    with expect_error(RuntimeError):  # allow-pytest.raises: neither zero-fill form
+        _canonicalize_on_contract_mesh(tensor)

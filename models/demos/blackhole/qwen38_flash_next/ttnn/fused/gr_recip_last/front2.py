@@ -248,13 +248,13 @@ def _transport_program(mesh, stats, partials, rows, *, semaphores, cbs, kernels,
             semaphores=semaphores,
         )
         backward = [
-            ttnn.setup_fabric_connection(node, geometry.nodes[(rank - 1) % TP_SIZE], i, seed, cores[i])
+            ttnn.setup_fabric_connection(mesh, node, geometry.nodes[(rank - 1) % TP_SIZE], i, seed, cores[i])
             if (rank > 0 or ring)
             else []
             for i in range(links)
         ]
         forward = [
-            ttnn.setup_fabric_connection(node, geometry.nodes[(rank + 1) % TP_SIZE], i, seed, cores[i])
+            ttnn.setup_fabric_connection(mesh, node, geometry.nodes[(rank + 1) % TP_SIZE], i, seed, cores[i])
             if (rank + 1 < TP_SIZE or ring)
             else []
             for i in range(links)

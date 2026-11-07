@@ -23,6 +23,7 @@ ttnn::Tensor sparse_sdpa(
     std::optional<uint32_t> block_cyclic_chunk_local,
     bool block_cyclic_cache_tp_sharded,
     const std::optional<ttnn::Tensor>& attention_sink,
+    const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids,
     uint32_t key_splits) {
     const uint32_t k_dim = q.logical_shape()[3];  // head dim, from the tensor
     const float resolved_scale = scale.value_or(1.0f / std::sqrt(static_cast<float>(k_dim)));
@@ -95,6 +96,7 @@ ttnn::Tensor sparse_sdpa(
         cache_batch_idx,
         block_cyclic,
         attention_sink,
+        sub_core_grids,
         key_splits);
 }
 

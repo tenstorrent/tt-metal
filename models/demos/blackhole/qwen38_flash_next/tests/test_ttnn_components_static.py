@@ -316,7 +316,7 @@ def test_qsa_flat_zero_topology_is_canonicalized_to_explicit_2d(monkeypatch) -> 
     tensor = _Tensor(topology)
     contract = _Contract()
 
-    qsa_module._canonicalize_flat_replicated_topology(tensor, contract)
+    qsa_module._canonicalize_zero_allocation_topology(tensor, contract)
 
     assert tensor.updated[0] == ("MeshShape", 1, 4)
     assert tuple(type(value).__name__ for value in tensor.updated[1]) == (
@@ -363,7 +363,7 @@ def test_qsa_flat_zero_topology_rejects_unexpected_distribution_and_coordinates(
     )
     for topology in cases:
         with expect_error(RuntimeError, "not the exact flat replicated TP4 form"):
-            qsa_module._canonicalize_flat_replicated_topology(_Tensor(topology), contract)
+            qsa_module._canonicalize_zero_allocation_topology(_Tensor(topology), contract)
 
 
 def test_gated_residual_uses_the_runtime_stats_dtype_contract() -> None:

@@ -1,7 +1,9 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
+import hashlib
 import json
+import os
 import re
 from contextlib import contextmanager
 from pathlib import Path
@@ -23,6 +25,23 @@ def _expect_error(expected_exception, match=None):
 @pytest.fixture
 def expect_error():
     return _expect_error
+
+
+def _link_into_hub_blobs(snapshot: Path) -> None:
+    """Lay ``snapshot`` (``<repo>/snapshots/<revision>``) out as the hub cache does: every file moves to
+    ``<repo>/blobs/<sha256>`` and leaves a relative link in its place."""
+
+    blobs = snapshot.parent.parent / "blobs"
+    blobs.mkdir(exist_ok=True)
+    for path in sorted(snapshot.iterdir()):
+        digest = hashlib.sha256(path.read_bytes()).hexdigest()
+        os.replace(path, blobs / digest)
+        path.symlink_to(Path("../../blobs") / digest)
+
+
+@pytest.fixture
+def link_into_hub_blobs():
+    return _link_into_hub_blobs
 
 
 @pytest.fixture

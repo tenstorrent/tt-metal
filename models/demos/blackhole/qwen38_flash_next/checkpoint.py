@@ -9,6 +9,7 @@ import hashlib
 import json
 import math
 import os
+import stat
 import struct
 from dataclasses import dataclass
 from functools import lru_cache
@@ -84,6 +85,18 @@ def checkpoint_directory(
         ) from error
 
 
+def admit_checkpoint_file(path: Path) -> Path:
+    """Resolve a checkpoint file once and require a regular file (a hub snapshot links each one into ``blobs/``).
+
+    Callers read the returned path from then on, so no link is traversed after admission.
+    """
+
+    resolved = Path(path).resolve(strict=True)
+    if not stat.S_ISREG(resolved.lstat().st_mode):
+        raise ValueError(f"checkpoint file {path} must resolve to a regular file, got {resolved}")
+    return resolved
+
+
 def _file_identity(status: os.stat_result) -> tuple[int, ...]:
     # Same nine fields as the component gate's CheckpointFileIdentity.
     return (
@@ -136,13 +149,14 @@ class Qwen38Checkpoint:
     ):
         self.root = Path(root).resolve()
         self._file_guard = file_guard
-        config_path = self.root / "config.json"
+        self._admitted: dict[str, Path] = {}
+        config_path = self.file("config.json")
         stable_config_path = self._guard(config_path, "before-config-read")
         try:
             self.config = Qwen38Config.from_checkpoint(self.root, config_file=stable_config_path)
         finally:
             self._guard(config_path, "after-config-read")
-        index_path = self.root / "model.safetensors.index.json"
+        index_path = self.file("model.safetensors.index.json")
         stable_index_path = self._guard(index_path, "before-index-read")
         try:
             index_bytes = stable_index_path.read_bytes()
@@ -164,6 +178,14 @@ class Qwen38Checkpoint:
         if len(self.shards) != EXPECTED_SHARDS:
             raise ValueError(f"weight_map must contain exactly {EXPECTED_SHARDS} shards")
 
+    def file(self, name: str) -> Path:
+        """The admitted path of the checkpoint file ``name``, resolved on first use and pinned for this instance."""
+
+        path = self._admitted.get(name)
+        if path is None:
+            path = self._admitted[name] = admit_checkpoint_file(self.root / name)
+        return path
+
     def _guard(self, path: Path, phase: str) -> Path:
         if self._file_guard is None:
             return path
@@ -174,7 +196,7 @@ class Qwen38Checkpoint:
     def _header(self, shard: str) -> tuple[int, dict[str, Any]]:
         if shard not in self.shards:
             raise KeyError(f"unknown checkpoint shard: {shard}")
-        path = self.root / shard
+        path = self.file(shard)
         stable_path = self._guard(path, f"before-header-read:{shard}")
         try:
             with stable_path.open("rb") as stream:
@@ -255,7 +277,7 @@ class Qwen38Checkpoint:
         Nothing of the tower is read unless this is called: the text-only paths keep the domain omitted."""
 
         names = self.vision_tensor_names()
-        path = self.root / VISION_SHARD
+        path = self.file(VISION_SHARD)
         stable_path = self._guard(path, "before-vision-read")
         tensors: dict[str, torch.Tensor] = {}
         try:
@@ -271,7 +293,7 @@ class Qwen38Checkpoint:
 
     def tensor(self, name: str) -> torch.Tensor:
         metadata = self.metadata(name)
-        path = self.root / metadata.shard
+        path = self.file(metadata.shard)
         stable_path = self._guard(path, f"before-tensor-read:{name}")
         try:
             with safe_open(stable_path, framework="pt", device="cpu") as handle:
@@ -284,7 +306,7 @@ class Qwen38Checkpoint:
 
     def tensor_slice(self, name: str, selection) -> torch.Tensor:
         metadata = self.metadata(name)
-        path = self.root / metadata.shard
+        path = self.file(metadata.shard)
         stable_path = self._guard(path, f"before-tensor-slice:{name}")
         try:
             with safe_open(stable_path, framework="pt", device="cpu") as handle:
@@ -317,7 +339,7 @@ class Qwen38Checkpoint:
         header_length, _ = self._header(metadata.shard)
         tensor_base = 8 + header_length + metadata.data_offsets[0]
         output = torch.empty((flat_indices.numel(), row_elements), dtype=torch.bfloat16)
-        path = self.root / metadata.shard
+        path = self.file(metadata.shard)
         stable_path = self._guard(path, f"before-tensor-rows:{name}")
         flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0)
         # A component-gate guard returns /proc/self/fd/N intentionally: that
@@ -358,7 +380,7 @@ class Qwen38Checkpoint:
         int64_elements = 0
 
         for shard in self.shards:
-            path = self.root / shard
+            path = self.file(shard)
             stable_path = self._guard(path, f"before-header-validation:{shard}")
             try:
                 header_length, header = self._header(shard)
@@ -428,7 +450,7 @@ class Qwen38CheckpointRowReader:
         self.row_shape = metadata.shape[1:]
         self.row_bytes = math.prod(self.row_shape) * _DTYPE_BYTES[metadata.dtype]
         self._tensor_base = 8 + header_length + metadata.data_offsets[0]
-        path = checkpoint.root / metadata.shard
+        path = checkpoint.file(metadata.shard)
         stable_path = checkpoint._guard(path, f"before-tensor-rows-open:{name}")
         flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0)
         # A Hugging Face cache snapshot links each shard to ../../blobs/<sha>: resolve the link once, then open the

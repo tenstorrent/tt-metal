@@ -114,7 +114,7 @@ from models.demos.blackhole.qwen38_flash_next.ttnn.qsa import (
     validate_qsa_cache_capacity,
 )
 from models.demos.blackhole.qwen38_flash_next.ttnn.vision_residency import VISION_ROW_BUCKETS, Qwen38VisionResidency
-from models.tt_transformers.tt.ccl import TT_CCL
+from models.ttt_compat.tt.ccl import TT_CCL
 
 BACKBONE_LAYERS = 48
 MTP_LAYERS = 1

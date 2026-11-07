@@ -2932,6 +2932,61 @@ def test_untilize_nd_shard_to_same_shard_spec_uneven_input_shard_spec(
     assert_equal(input_torch_tensor, ttnn.to_torch(ttnn_output_tensor))
 
 
+@pytest.mark.parametrize("dtype", [ttnn.float32, ttnn.int32, ttnn.uint32])
+@pytest.mark.parametrize(
+    "tensor_shape, shard_shape, shard_core_grid",
+    [
+        # Even: two shards per core. The shard spans 2 batches, so it has no 2D shard-spec equivalent.
+        (
+            [4, 128, 256],
+            ttnn.Shape([2, 64, 128]),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))}),
+        ),
+        # Uneven: several shards per core, unequal across cores, partial edge shards.
+        (
+            [3, 192, 160],
+            ttnn.Shape([2, 64, 64]),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 2))}),
+        ),
+    ],
+)
+def test_untilize_nd_shard_to_same_shard_spec_32bit_dest(device, dtype, tensor_shape, shard_shape, shard_core_grid):
+    # 32-bit input dtypes turn on fp32_dest_acc_en, which unpacks the input straight to Dest.
+    # The second run is a program-cache hit on new allocations: both borrowed DFBs must rebind to them.
+    torch.manual_seed(0)
+    tensor_spec = ttnn.TensorSpec(
+        shape=tensor_shape, dtype=dtype, layout=ttnn.TILE_LAYOUT, buffer_type=ttnn.BufferType.L1
+    ).sharded(shard_shape, shard_core_grid, orientation=ttnn.ShardOrientation.ROW_MAJOR)
+
+    device.disable_and_clear_program_cache()
+    device.enable_program_cache()
+
+    keep_alive = []  # keeps the first run's tensors allocated so the second run gets new addresses
+    entries = None
+    for i in range(2):
+        if dtype == ttnn.float32:
+            input_torch_tensor = torch.randn(tensor_shape, dtype=torch.float32)
+        else:
+            input_torch_tensor = torch.randint(0, 1 << 20, tensor_shape, dtype=torch.int32)
+        input_ttnn_tensor = ttnn.from_torch(input_torch_tensor, spec=tensor_spec, device=device)
+
+        ttnn_output_tensor = ttnn.untilize(input_ttnn_tensor)
+
+        assert ttnn_output_tensor.memory_config() == input_ttnn_tensor.memory_config()
+        assert_equal(input_torch_tensor, ttnn.to_torch(ttnn_output_tensor).to(input_torch_tensor.dtype))
+
+        if i == 0:
+            entries = device.num_program_cache_entries()
+            assert entries >= 1, "the first invocation should have populated the program cache"
+        else:
+            assert device.num_program_cache_entries() == entries, "untilize must reuse the cached program"
+            assert input_ttnn_tensor.buffer_address() != keep_alive[0].buffer_address()
+            assert ttnn_output_tensor.buffer_address() != keep_alive[1].buffer_address()
+        keep_alive += [input_ttnn_tensor, ttnn_output_tensor]
+
+    device.disable_and_clear_program_cache()
+
+
 # --- Codegen-path coverage ---
 #
 # ttnn.untilize routes gate-supported cases to codegen and the rest to native, and offers no way to
@@ -3477,3 +3532,13 @@ def test_untilize_block_per_node_cb_size(device, tensor_shape, dtype):
             ), "untilize must reuse the cached program on a cache hit"
 
     device.disable_and_clear_program_cache()
+
+
+# UINT8 regression: untilize compute copies tiles through Dest; 16-bit Dest zeroed UINT8.
+@pytest.mark.parametrize("tensor_shape", [[1, 1, 64, 64], [2, 2, 128, 128]])
+def test_untilize_dtype_uint8(device, tensor_shape):
+    torch.manual_seed(0)
+    x = torch.randint(0, 256, tensor_shape, dtype=torch.uint8)
+    t = ttnn.from_torch(x, dtype=ttnn.uint8, layout=ttnn.TILE_LAYOUT, device=device)
+    got = ttnn.to_torch(ttnn.untilize(t))
+    assert torch.equal(got, x)

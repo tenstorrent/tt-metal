@@ -164,7 +164,7 @@ def _traced_us(mesh, call):
 @pytest.mark.parametrize("device_params", [DEVICE_PARAMS], indirect=True)
 @pytest.mark.parametrize("dtype,rows,sharded", CASES, ids=[f"{d}_r{r}{'_l1' if l1 else ''}" for d, r, l1 in CASES])
 def test_row_reduce_is_bitwise_the_stock_reduce_scatter(mesh_device, dtype, rows, sharded, monkeypatch):
-    from models.tt_transformers.tt.ccl import TT_CCL, tt_all_reduce
+    from models.ttt_compat.tt.ccl import TT_CCL, tt_all_reduce
 
     mesh = mesh_device
     mesh.enable_program_cache()

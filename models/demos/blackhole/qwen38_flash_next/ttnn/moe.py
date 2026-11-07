@@ -60,7 +60,7 @@ from models.demos.blackhole.qwen38_flash_next.ttnn.fused import mm_stream as fus
 from models.demos.blackhole.qwen38_flash_next.ttnn.fused import moe_experts as fused_moe_experts
 from models.demos.blackhole.qwen38_flash_next.ttnn.fused import router_tail_sc as fused_router_tail_sc
 from models.demos.blackhole.qwen38_flash_next.ttnn.prefill_dense import Qwen38TTNNPrefillDense, prefill_linear
-from models.tt_transformers.tt.ccl import tt_all_reduce
+from models.ttt_compat.tt.ccl import tt_all_reduce
 
 _MOE_ALLREDUCE_LINKS_ENV = "QWEN38_MOE_ALLREDUCE_LINKS"
 _MOE_ALLREDUCE_TP_AXIS = 1

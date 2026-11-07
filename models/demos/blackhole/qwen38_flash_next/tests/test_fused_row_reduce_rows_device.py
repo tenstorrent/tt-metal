@@ -44,7 +44,7 @@ def _set_links(links):
 @pytest.mark.parametrize("mesh_device", [MESH_SHAPE], indirect=True)
 @pytest.mark.parametrize("device_params", [base.DEVICE_PARAMS], indirect=True)
 def test_row_reduce_rows_is_bitwise_the_stock_reduce_scatter(mesh_device):
-    from models.tt_transformers.tt.ccl import TT_CCL, tt_all_reduce
+    from models.ttt_compat.tt.ccl import TT_CCL, tt_all_reduce
 
     mesh = mesh_device
     mesh.enable_program_cache()

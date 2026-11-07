@@ -8,7 +8,8 @@
 #   --profile p150-line     4x p150 in one host as an ethernet line, ttnn's default descriptor; the route is
 #                           derived at start
 #   --profile qb2           p300-based box (QuietBox 2, or a 4x p300 host with --instance 0|1) -- UNTESTED, see README
-#   --devices A,B,C,D       run p150-line on these four KMD device nodes (four chips of a larger host)
+#   --devices A,B,C,D       run p150-line on these four KMD device nodes (four chips of a larger host); a container
+#                           that presents exactly four nodes runs p150-line on them without it
 #   --checkpoint DIR        the ModelScope checkpoint directory (tools/download_checkpoint.py)
 #   --cache-root DIR        the converted weights, the BF4 expert cache, the model I/O cache, the JIT cache and the run
 #                           directories (about 23 GB for 32k plus 107 GB of BF4 experts on the first start)
@@ -22,6 +23,10 @@
 #   --stall-seconds N       a request with no completed device step for N seconds ends the server with exit 1 so a
 #                           supervisor restarts it (default 300; every decode step, prefill event and admission from
 #                           the queue restarts the clock, so a long prompt never trips it); 0 disables the watchdog
+#   --lanes B               serve up to B concurrent greedy requests through the MTP lane chain (needs --mtp and
+#                           --no-sampling; B x (K + 1) <= 32 rows)
+#   --lanes-stall-budget S  with --lanes: the admission work (seconds) the decoding lanes wait for before their pass
+#                           runs between two segments of an admission; off: every admission runs whole (default 0.5)
 #   --port N --host ADDR    default 8000 on 0.0.0.0
 #   --acceptance            replay the shipped CPU greedy records (tools/acceptance/greedy-prompts) at startup
 #   --acceptance-prompts D  replay the records in D instead
@@ -52,14 +57,15 @@ readonly HERE="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 readonly MODEL_DIR="$(cd -- "$HERE/.." && pwd -P)"
 readonly REPO_ROOT="$(cd -- "$MODEL_DIR/../../../.." && pwd -P)"
 readonly SERVER="$HERE/qwen38_chat_server.py"
+readonly DEVICE_ROOT=/dev/tenstorrent
 
 die() { printf 'run_qwen38_chat_server: %s\n' "$*" >&2; exit 2; }
-usage() { sed -n '2,48p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2; }
+usage() { sed -n '2,53p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2; }
 
 profile= instance=0 devices= checkpoint= cache_root= allocated_context=32768 mtp= port=8000 host=0.0.0.0 long_chunks=
 prefill_slab=
 acceptance= acceptance_prompts= require_json_96= acceptance_only= prepare_only= bf4_stage_limit= bf4_corpus= bf4_corpus_verification=
-serve_seconds= python= validate_only= prefill_mode=chunked sampling=1 stall_seconds=300
+serve_seconds= python= validate_only= prefill_mode=chunked sampling=1 stall_seconds=300 lanes= lanes_stall_budget=
 agreement_reference= agreement_parts= agreement_items= agreement_full_logits=
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -74,6 +80,8 @@ while [[ $# -gt 0 ]]; do
         --prefill-slab) prefill_slab=${2-}; shift 2 ;;
         --no-sampling) sampling=; shift ;;
         --stall-seconds) stall_seconds=${2-}; shift 2 ;;
+        --lanes) lanes=${2-}; shift 2 ;;
+        --lanes-stall-budget) lanes_stall_budget=${2-}; shift 2 ;;
         --port) port=${2-}; shift 2 ;;
         --host) host=${2-}; shift 2 ;;
         --acceptance) acceptance=1; shift ;;
@@ -105,6 +113,7 @@ done
 [[ "$stall_seconds" =~ ^[0-9]+$ ]] || die "--stall-seconds must be a whole number of seconds (0 disables the watchdog)"
 [[ -z "$bf4_corpus" && -z "$bf4_corpus_verification" || -n "$bf4_corpus" && -n "$bf4_corpus_verification" ]] \
     || die "--bf4-corpus and --bf4-corpus-verification go together"
+[[ -z "$lanes" || "$lanes" =~ ^[1-9][0-9]*$ ]] || die "--lanes must be a positive integer"
 [[ -z "$acceptance" || -z "$acceptance_prompts" ]] || die "--acceptance and --acceptance-prompts are alternatives"
 [[ -z "${TT_METAL_HOME:-}" || "$(cd -- "$TT_METAL_HOME" && pwd -P)" == "$REPO_ROOT" ]] \
     || die "TT_METAL_HOME=$TT_METAL_HOME is not this checkout ($REPO_ROOT); unset it or run that checkout's launcher"
@@ -122,7 +131,14 @@ case "$profile" in
         descriptor="$HERE/qb_p150_x4_1x4_line_mesh_graph_descriptor.textproto" ;;
     p150-line)
         [[ "$instance" == 0 ]] || die "--instance applies to --profile qb2"
-        hardware_profile=p150-line visible_devices=${devices:-0,1,2,3} descriptor= ;;
+        # UMD reads TT_VISIBLE_DEVICES as indices over the nodes present: 0..3 when the chips are all the host
+        # presents (a container), else their node numbers (hardware_profiles.with_device_nodes; the server checks)
+        present=$(ls -- "$DEVICE_ROOT" 2>/dev/null | grep -xE '[0-9]+' | sort -n | paste -sd, -) || present=
+        if [[ -z "$devices" && "$present" =~ ^[0-9]+(,[0-9]+){3}$ && "$present" != 0,1,2,3 ]]; then devices=$present; fi
+        visible_devices=${devices:-0,1,2,3}
+        sorted=$(tr , '\n' <<<"$visible_devices" | sort -n | paste -sd, -)
+        if [[ "$sorted" == "$present" ]]; then visible_devices=0,1,2,3; fi
+        hardware_profile=p150-line descriptor= ;;
     qb2)
         [[ -z "$devices" ]] || die "--devices applies to --profile p150-line"
         printf 'run_qwen38_chat_server: the qb2 profile is UNTESTED (no QuietBox 2 was available); the first run prints the derived route to pin\n' >&2
@@ -184,6 +200,8 @@ if [[ -n "$prefill_slab" ]]; then
 fi
 [[ -z "$sampling" ]] || args+=(--sampling)
 [[ "$stall_seconds" == 0 ]] || args+=(--stall-seconds "$stall_seconds")
+[[ -z "$lanes" ]] || args+=(--lanes "$lanes")
+[[ -z "$lanes_stall_budget" ]] || args+=(--lanes-stall-budget "$lanes_stall_budget")
 [[ -z "$acceptance" ]] || args+=(--acceptance-prompts "$HERE/acceptance/greedy-prompts")
 [[ -z "$acceptance_prompts" ]] || args+=(--acceptance-prompts "$acceptance_prompts")
 [[ -z "$acceptance_only" ]] || args+=(--acceptance-only)

@@ -14,7 +14,6 @@
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
-#include <tt-metalium/tt_align.hpp>
 #include <tt-metalium/math.hpp>
 #include <internal/mesh_device.hpp>
 #include "ttnn/operations/experimental/ccl/send_recv_async/send_recv_utils.hpp"
@@ -274,6 +273,7 @@ ProgramDescriptor SendDirectAsyncProgramFactory::create_descriptor(
 
         uint32_t selected_link_index = link_indices[core_idx % link_indices.size()];
         tt::tt_fabric::append_fabric_connection_rt_args<ProgramDescriptor>(
+            *input_tensor.device(),
             sender_fabric_node_id,
             receiver_fabric_node_id,
             selected_link_index,

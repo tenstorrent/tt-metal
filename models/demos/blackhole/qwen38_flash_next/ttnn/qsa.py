@@ -519,14 +519,15 @@ def _retag_tensor(tensor, *, reference, shard_dim: int | None) -> None:
     )
 
 
-def _canonicalize_flat_replicated_topology(tensor, mesh_contract: Qwen38MeshContract) -> None:
-    """Retag the legacy flat mesh returned by device-side zero allocation; accept the canonical two-axis form as is.
+def _canonicalize_zero_allocation_topology(tensor, mesh_contract: Qwen38MeshContract) -> None:
+    """Retag the flat mesh the host fill of ``ttnn.zeros`` returns; accept the canonical two-axis form as is.
 
     ``ttnn.zeros`` creates the requested full local value on every worker but
     currently reports the four workers as one distribution axis while retaining
     their two-dimensional mesh coordinates.  The already opened model mesh is
     explicitly ``(1, 4)``.  Accept only that exact native representation, then
     change metadata to the canonical two-axis topology without moving bytes.
+    The device fill (TILE bfloat16/float32 of at least 128 KiB per device) reports the canonical form.
     """
 
     topology = tensor.tensor_topology()
@@ -4151,7 +4152,7 @@ class Qwen38TTNNQSA:
             device=self.mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        _canonicalize_flat_replicated_topology(value, self.mesh_contract)
+        _canonicalize_zero_allocation_topology(value, self.mesh_contract)
         _retag_tensor(value, reference=value, shard_dim=1)
         self.mesh_contract.validate_tensor(value, placement=TensorPlacement.KV_PAIR_GROUPED, shard_dim=1)
         return value
@@ -4174,7 +4175,7 @@ class Qwen38TTNNQSA:
             device=self.mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        _canonicalize_flat_replicated_topology(value, self.mesh_contract)
+        _canonicalize_zero_allocation_topology(value, self.mesh_contract)
         return value
 
     def allocate_state(self) -> Qwen38TTNNQSAState:

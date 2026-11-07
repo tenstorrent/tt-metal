@@ -75,7 +75,7 @@ if not hasattr(FakeTensor, "padded_shape"):
 
 
 def _flat_replicated(tensor: FakeTensor) -> FakeTensor:
-    """The legacy flat topology ``ttnn.zeros`` reports (what ``_canonicalize_flat_replicated_topology`` expects)."""
+    """The legacy flat topology ``ttnn.zeros`` reports (what ``_canonicalize_zero_allocation_topology`` expects)."""
 
     tensor.topology = TensorTopology((TP,), [PlacementReplicate()], [(0, column) for column in range(TP)])
     return tensor

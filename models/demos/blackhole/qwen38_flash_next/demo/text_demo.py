@@ -57,7 +57,7 @@ from models.demos.blackhole.qwen38_flash_next.ttnn.contracts import FABRIC_CONFI
 from models.demos.blackhole.qwen38_flash_next.ttnn.qsa import Qwen38LanePaging, paged_table_width
 from models.demos.utils.llm_demo_utils import create_benchmark_data
 from models.perf.benchmarking_utils import BenchmarkProfiler
-from models.tt_transformers.tt.model_config import determine_device_name
+from models.ttt_compat.tt.model_config import determine_device_name
 
 MODEL_NAME = "Qwen/Qwen3.8-Flash-Next"  # normalized by the benchmark writer to the model_targets.yaml key
 PROMPT_FILE = Path(__file__).parent / "sample_prompts" / "long_context_needle.json"

@@ -9,7 +9,7 @@
 
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/hal.hpp>
-#include <tt-metalium/tt_align.hpp>
+#include <tt-metalium/math.hpp>
 #include <tt-metalium/work_split.hpp>
 
 #include <enchantum/enchantum.hpp>
