@@ -39,7 +39,6 @@ def alloc_served(
     sharded on dim 2 over both axes, as init_kvpe_cache(tp_axis=1)); else SP-sharded and TP-replicated (replicated
     topology, as init_kvpe_cache(tp_axis=None))."""
     from models.demos.common.prefill.runners.migration import get_num_dram_banks
-    from models.demos.deepseek_v3_b1.micro_ops.dram_zero_fill.op import DRAMZeroFill
 
     assert rows % shard_rows == 0, (rows, shard_rows)
     banks = get_num_dram_banks(mesh)
@@ -52,10 +51,7 @@ def alloc_served(
     )
     mc = ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM, nd_shard_spec=spec)
     t = ttnn.allocate_tensor_on_device(ttnn.Shape([batches, 1, rows, width]), dtype, ttnn.ROW_MAJOR_LAYOUT, mesh, mc)
-    if max_grid(mesh) is None:
-        DRAMZeroFill.op(t)
-    else:
-        _zero_fill_capped(t, max_grid(mesh))
+    zero_fill(t)
     phys = ttnn.MeshShape(mesh.shape[0], mesh.shape[1])
     coords = [ttnn.MeshCoordinate([c[i] for i in range(c.dims())]) for c in ttnn.MeshCoordinateRange(phys)]
     if dedup and mesh.shape[TP_AXIS] > 1:
@@ -65,6 +61,18 @@ def alloc_served(
         topo = ttnn.TensorTopology(ttnn.MeshShape([n]), [ttnn.PlacementReplicate()], coords)
     t.update_tensor_topology(topo)
     return t
+
+
+def zero_fill(t: ttnn.Tensor) -> None:
+    """Every page of device tensor ``t`` (ROW_MAJOR or TILE, any memory layout) zeroed: DRAMZeroFill.op, capped to
+    MAX_WORKER_CORES on a Galaxy (FIX.15)."""
+    from models.demos.deepseek_v3_b1.micro_ops.dram_zero_fill.op import DRAMZeroFill
+
+    mesh = t.device()
+    if max_grid(mesh) is None:
+        DRAMZeroFill.op(t)
+    else:
+        _zero_fill_capped(t, max_grid(mesh))
 
 
 def _zero_fill_capped(t: ttnn.Tensor, grid: ttnn.CoreCoord) -> None:

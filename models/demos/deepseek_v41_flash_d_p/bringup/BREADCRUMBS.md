@@ -3428,3 +3428,67 @@ Each item has its own setting (tt/settings.py, default on, off = the path before
   only the bfp4 grid for index keys; under bfp8 it would model bfp4. Diagnosis only, never gated.
 - Re-run: `python -m models.demos.common.bringup.orchestrator measure --task P.40 --spec <spec>`; other arms:
   `python /scratch/dnijemcevic/p40ab/drive.py bf16:ql bfp4:ql bfp8:l` then devjob `bash /scratch/dnijemcevic/p40ab/run.sh`.
+
+## P.41 perf (8x4, 2026-11-07): one bfp8 index-key copy, served 8-bit rows built from it (INDEX_K_COPY=bfp8)
+- Setting `INDEX_K_COPY` (tt/settings.py): `bfp8` (default) / `bf16` (the path before, unchanged). A/B: on
+  `DS41_INDEX_K_COPY=bfp8`, off `DS41_INDEX_K_COPY=bf16` (both `DS41_ENGRAM_TABLE=resident`).
+- bfp8 needs INDEX_K_FORMAT=bfp8 and INDEX_K_SERVED=fp8_row192. Any other value of either: FALLS BACK to the bf16
+  copy with one log line (`compressor.index_k_copy`), so INDEX_K_FORMAT bf16 / bfp4 and INDEX_K_SERVED bf16 keep working.
+- Change (tt/compressor.py `TtServedRows`): no bf16 slab; `k8` = [1, 1, rows / r, 128] bfloat8_b TILE, DRAM
+  interleaved, zeroed at load (served.zero_fill, capped), same local rows (block-cyclic order) as the slab was.
+  Per chunk (`_put8`): the server-order rows tiled -> start % S == 0: ttnn.bringup.bfp_round in place at tile row
+  (start / S) W / r (same on every chip), then that slice of k8 -> typecast bf16 (exact) -> stock per_token_cast_to_fp8
+  -> pack_fp8_rows -> served + mirrors (`fp8_rows_tile`). Other starts (follow-ups, pulled-back last chunk; the c_start
+  row's rows sit elsewhere, 16 rows off a tile for ratio 2 at 32 mod 64): `_region` (DS41-215): W blocks c, c + 1 of
+  k8 read back (exact), update_padded_kv_cache into that ROW_MAJOR region with start / end shifted by c S, bfp_round
+  back in place (old rows re-round to themselves); served rows from bfp_round of the chunk's rows.
+  tt/indexer.py `_keys`: returns cache.k8 as it is (kept, never freed); no per-chunk slice / tilize / round of the
+  history. Rounding is the same rule on the same bf16 values as P.40's bfp8 arm, so the scored keys are the same.
+- Difference to the bf16 path: an aligned write with a partial end zeroes the copy's rows past ceil32(end) of that
+  chunk (bfp_round writes the whole W / r rows; the bf16 slab's update left them). Never read: the causal mask hides
+  them and the next chunk rewrites from its start.
+- Test change (owner-authorized): test_kv_layout's recipe and stock-cast reference input = the golden keys rounded to
+  bfloat8_b (ckv_bfp4_ttnn/tests/reference.round_values, mbits 7) when k8 is in use. Nothing else changed.
+- New test `tests/test_index_k_copy.py` (8x4, 22 s): ratio 2 and 1, writes at 0 (partial end), 0, S, S + 1312 (32 mod
+  64, partial end), 2S + 2944, 3S + 1312 (last block): k8 == the bf16 path's copy of host-rounded keys and served /
+  mirror rows byte-equal, every chip, every write. Plus the fallback rule.
+- Cores (rule 18): bfp_round max_grid (110); slice / typecast / tilize / untilize (cores.to_rm) on the capped
+  sub_core_grids; update_padded_kv_cache max_grid; cast 10 / 20 cores (asserted); pack unchanged.
+- OV-23: bfp_round prepared (non-compact: row0 changes per chunk); pack_fp8_rows prepared. OV-25: no fork suite run.
+- Memory, index-key copies a chip a slot (3 ratio-2 sources + 1 ratio-1; bf16 256 B, bfp8 136 B a 128-value row;
+  before = the bf16 copy + the indexers' persistent bfp8 rounded buffers of layers 2 / 8 / 14 / 20):
+  56,320 tokens 6.90 -> 2.39 MB; 1,044,480 tokens 127.95 -> 44.39 MB. Also gone: the per-chunk transient tilized copy
+  of the whole history (1M, layer 20: 33 MB RM + 33 MB TILE). Unchanged: served fp8 rows + mirrors, ring key buffers.
+- Re-run: `scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/test_index_k_copy.py`;
+  `python -m models.demos.common.bringup gate P.41 --spec <spec> --check --unit P.41#test_kv_layout`;
+  `python -m models.demos.common.bringup.orchestrator measure --task P.41 --spec <spec>`.
+- Gotcha (fixed in this step): test_adapter_acks first failed "Input Tensor is not allocated" at a follow-up (chunk
+  [2496, 6072), max_seq two chunks): the region read was a full-range ttnn.slice of k8, a wrapper over k8's buffer, and
+  was freed (DS41-52). `_k8_rows` / `_k8_free` compare buffer addresses; the new test covers capacities of 1 and 2 chunks.
+- Measured, change on (`orchestrator measure --task P.41`, ab/P.41/new) vs the off path's numbers = P.40's change-on
+  run (ab/P.40/new: INDEX_K_FORMAT=bfp8 with the bf16 copy, the same code the off side runs; the orchestrator measures
+  the real off side). Ladder rung last: gate unit P.41#test_ladder (P.40 bfp8 arm: p40ab/bfp8/ladder).
+
+  | metric (limit) | off: bf16 copy | on: bfp8 copy |
+  |---|---|---|
+  | index-key copies a chip, 56,320 / 1,044,480 tokens | 6.90 / 127.95 MB | 2.39 / 44.39 MB |
+  | err_state_index_k L02 / L08 / L14 / L20 (.236 .260 .292 .276) | .0525 / .0607 / .0981 / .0853 | .0525 / .0609 / .0981 / .0854 |
+  | err_state_topk_idx L02 / L08 / L14 / L20 | .0798 / .0698 / .0674 / .0871 | identical |
+  | err_state_topk_idx L24 / L28 / L32 / L36 | .1335 / .0825 / .0929 / .0859 | identical |
+  | overlap_state_topk_idx L02..L36 | .920 .930 .933 .913 .867 .917 .907 .914 | identical |
+  | err_final_hidden (<= 0.242) | 0.1313 | 0.1313 |
+  | top5_overlap (>= 0.994) | 1.000 | 1.000 |
+  | device_ms_indexer (p51200) | 7.04 | 6.83 |
+  | device_ms_compressor (p51200) | 1.95 | 1.98 |
+  | device_ms_total (p51200) | 183.56 | 183.80 |
+  | chunk_wall_ms (p51200; spread) | 206.5 (10.2) | 204.7 (30.3) |
+  | chunk_wall_ms (quick, last chunk) | 181.4 | 180.7 |
+
+  Reading: the scored keys are the same values (top-k identical to the last digit); the served rows now come from
+  the bfp8 keys, a rounding before the e4m3 one (index_k error +0.0002 at most, limits ~0.25). Time at 51,200 (cache
+  capacity 56,320): indexer -0.21 ms (no whole-capacity tilize + round per chunk), compressor +0.03 (the slice and
+  typecast before the cast); totals and wall within run noise. The removed per-chunk work scales with the capacity,
+  so the saving should grow toward 1M tokens (not measured: the orchestrator profiles at 51,200).
+- Gate units passed here on the final code: test_kv_layout (0 failures; encoding byte-exact against the stock cast of
+  the bfp8 keys), test_adapter_acks (0 failures), test_contract, test_ladder. Left to the orchestrator: test_profile,
+  test_short_turn.

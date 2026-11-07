@@ -1,0 +1,93 @@
+{
+ "used": [
+  {
+   "id": "K-1",
+   "how": "TtServedRows._put8 / _region free every intermediate (tile, slice, typecast, rows) but never the persistent k8; the indexer marks k8 kept (never freed, memo holds it as Kept)",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "DS41-54",
+   "how": "the region write reuses _put_into's metadata path for ratio-2 starts (multiples of 16 rows) on a region-sized ROW_MAJOR cache with start / end shifted by c S",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-176",
+   "how": "every stock op added (slice, typecast, to_layout, untilize via cores.to_rm) passes the capped sub_core_grids; zero fill of k8 goes through served.zero_fill (capped)",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "DS41-145",
+   "how": "bfp_round in place stays non-compact (row0 changes per chunk; compact would build one program per row0) and prepared (page0 slot)",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "DS41-213",
+   "how": "served bytes still checked against the stock cast exactly and the Blaze recipe within one step, now applied to the bfp8-rounded keys (owner-authorized reference change)",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-214",
+   "how": "new test compares served rows as raw uint8 host rows (host_rows of the uint8 slabs), never through an fp8 to_dtype",
+   "traced": false,
+   "cited": false
+  }
+ ],
+ "contradicted": [
+  {
+   "id": "DS41-143",
+   "evidence": "out of date for index keys: since P.39 the served index-key caches hold 192-byte fp8 rows (tt/compressor.py fp8_rows), not unrounded bf16; since P.41 (INDEX_K_COPY=bfp8) the indexer no longer rounds per chunk (tt/indexer.py _keys returns cache.k8, rounded once at write). Still true for 0_window_kv.",
+   "cited": true
+  }
+ ],
+ "missing": [
+  "how to write a bfloat8_b TILE cache at a per-chip block-cyclic offset that is not a tile row (ratio-2 starts at 32 mod 64): now DS41-215"
+ ],
+ "overseer": [
+  {
+   "id": "OV-3",
+   "answer": "done",
+   "evidence": "nothing padded to fit an op: the region path reads back and rewrites only the two W blocks the chunk touches (2 W / r rows, the rows it changes plus at most one W block), needed because the chip offsets differ; no weight or input padded"
+  },
+  {
+   "id": "OV-23",
+   "answer": "done",
+   "evidence": "the only Python-built ops touched are ttnn.bringup.bfp_round (prepared=True under CKV_BFP4_PREPARED=on, the default; page0 a value slot) and pack_fp8_rows (prepared, unchanged). Every other op added is a stock C++ op"
+  },
+  {
+   "id": "OV-25",
+   "answer": "done",
+   "evidence": "no fork suite run; only the new model test tests/test_index_k_copy.py (8x4, 22 s) and the model-level gate units / measure"
+  }
+ ],
+ "cited_only": [
+  "DS41-215"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "P.41",
+  "role": "perf",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-11-07T07:30:44",
+  "head": "23f99b50d1a",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/P.41.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/knowledge_use/P.41.perf.1.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/repo_map.md",
+   "models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_kv_layout.py",
+   "models/demos/deepseek_v41_flash_d_p/tests/test_index_k_copy.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/compressor.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/indexer.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/served.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/settings.py"
+  ]
+ }
+}
