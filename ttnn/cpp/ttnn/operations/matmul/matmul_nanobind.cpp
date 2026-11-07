@@ -19,6 +19,7 @@
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
 #include "ttnn/operations/matmul/device/config/matmul_program_config.hpp"
 #include "ttnn/operations/matmul/device/matmul_device_operation.hpp"
+#include "ttnn/operations/matmul/device/utilities/matmul_utilities.hpp"
 #include "ttnn/operations/matmul/device/factory/matmul_multicore_reuse_optimized_program_factory.hpp"
 #include "ttnn-nanobind/bind_function.hpp"
 #include "ttnn-nanobind/json_class.hpp"
@@ -1313,6 +1314,28 @@ void py_module(nb::module_& mod) {
         nb::arg("input_tensor_b"),
         nb::arg("parameters"),
         nb::arg("optional_output_tensors"));
+
+    mod.def(
+        "get_lowest_equivalent_matmul_fidelity",
+        &ttnn::operations::matmul::utilities::get_lowest_equivalent_matmul_fidelity,
+        nb::arg("arch"),
+        nb::arg("in0_dtype"),
+        nb::arg("in1_dtype"),
+        nb::arg("math_fidelity"),
+        R"doc(
+        Lowest math fidelity whose matmul output is bit-identical to ``math_fidelity`` for these operand dtypes.
+
+        Each fidelity phase multiplies a 5-bit slice of in1 (SrcA) by a 7-bit slice of in0 (SrcB). bfloat4_b in1
+        and bfloat8_b/bfloat4_b in0 fit in their high slice, so the phases that read the low slice add zero.
+        ``ttnn.matmul`` warns when ``compute_kernel_config`` asks for more than this. Returns ``math_fidelity``
+        unchanged on architectures other than Wormhole and Blackhole.
+
+        Args:
+            arch (ttnn.device.Arch): device architecture, e.g. ``device.arch()``.
+            in0_dtype (ttnn.DataType): dtype of input_tensor_a (activations).
+            in1_dtype (ttnn.DataType): dtype of input_tensor_b (weights).
+            math_fidelity (ttnn.MathFidelity): the requested fidelity.
+        )doc");
 }
 
 }  // namespace ttnn::operations::matmul

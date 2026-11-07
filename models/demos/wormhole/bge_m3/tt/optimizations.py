@@ -175,13 +175,15 @@ def _build_mlp_optimizations(
     use; other shapes, and dtype mixes that do not fit, use tuned or default program
     configs."""
     wi_compute_kernel_cfg = mlp_wi_compute_kernel_config(mesh_device, max_seq_len, max_batch, dtype=dtype)
-    wo_compute_kernel_cfg = mlp_wo_compute_kernel_config(mesh_device, max_seq_len, max_batch, dtype=dtype)
     ln_input_mem = _ln_input_sharded_memory_config(max_seq_len, max_batch, mesh_device)
     # Dtypes the two matmuls run with (encoder.py): in0 of Wi is the LayerNorm output,
     # which keeps the model dtype; weights and biases are the model dtype; the Wi
     # output is the model dtype unless ModelArgs overrides it; Wo writes bfloat16 when
     # its output feeds a sharded LayerNorm, else it keeps its input dtype.
     wi_out_dtype = dtype if wi_output_dtype is None else wi_output_dtype
+    wo_compute_kernel_cfg = mlp_wo_compute_kernel_config(
+        mesh_device, max_seq_len, max_batch, dtype=dtype, in0_dtype=wi_out_dtype
+    )
     wo_out_dtype = ttnn.bfloat16 if ln_input_mem is not None else wi_out_dtype
 
     # The S8192 minimal_matmul configs below were tuned for bfloat8_b (N300 B12 data
@@ -463,7 +465,7 @@ def mlp_wi_compute_kernel_config(mesh_device, max_seq_len=None, max_batch_size=N
     return matmul_compute_kernel_config(mesh_device, max_seq_len, max_batch)
 
 
-def mlp_wo_compute_kernel_config(mesh_device, max_seq_len=None, max_batch_size=None, dtype=None):
+def mlp_wo_compute_kernel_config(mesh_device, max_seq_len=None, max_batch_size=None, dtype=None, in0_dtype=None):
     max_batch = 1 if max_batch_size is None else max(1, max_batch_size)
     if max_seq_len == 512 and max_batch == 1:
         return _make_compute_kernel(mesh_device, ttnn.MathFidelity.LoFi, max_seq_len, max_batch)
@@ -475,7 +477,14 @@ def mlp_wo_compute_kernel_config(mesh_device, max_seq_len=None, max_batch_size=N
     if max_seq_len == 8192:
         # LoFi (bf8xbf8): matmuls are compute-bound per roofline; LoFi ~2x HiFi2.
         return _make_compute_kernel(mesh_device, ttnn.MathFidelity.LoFi, max_seq_len, max_batch, fp32_dest_acc_en=False)
-    return matmul_compute_kernel_config(mesh_device, max_seq_len, max_batch)
+    config = matmul_compute_kernel_config(mesh_device, max_seq_len, max_batch)
+    if in0_dtype is not None and dtype is not None:
+        # in0 is the Wi output: as bfloat8_b/bfloat4_b it fits in SrcB's high slice, so HiFi3/HiFi4 only add
+        # phases that multiply zeros. Lower to the fidelity with bit-identical output.
+        config.math_fidelity = ttnn.get_lowest_equivalent_matmul_fidelity(
+            mesh_device.arch(), in0_dtype, dtype, config.math_fidelity
+        )
+    return config
 
 
 def attention_qkv_compute_kernel_config(mesh_device, max_seq_len=None, max_batch_size=None, dtype=None):

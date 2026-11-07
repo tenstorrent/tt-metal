@@ -131,7 +131,11 @@ class VisionAttention(LightweightModule):
             decoder_id=layer_num, op=OpGroup.LI_QKV_PREFILL, configuration=configuration
         )
         self.li_o_prefill_compute_kernel_cfg = self.model_config["DECODERS_OPTIMIZATIONS"].get_math_fidelity(
-            decoder_id=layer_num, op=OpGroup.LI_O_PREFILL, configuration=configuration
+            decoder_id=layer_num,
+            op=OpGroup.LI_O_PREFILL,
+            configuration=configuration,
+            in0_dtype=ttnn.bfloat8_b,  # Q is cast to bfloat8_b before SDPA; SDPA and concat_heads keep it
+            weight_dtype=self.dtype,
         )
         layer_name = configuration.get_state_dict_prefix(self.__class__.__name__, layer_num)
         if configuration.dummy_weights or (weight_cache_path is None):

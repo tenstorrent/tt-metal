@@ -107,6 +107,13 @@ def test_contributing_phases_change_output(device, case, fp32_dest_acc_en):
     assert not torch.equal(out_requested, out_lower)
 
 
+def test_lowest_equivalent_fidelity_binding(device):
+    for in0_dtype, in1_dtype, requested, lower in ZERO_PHASE_CASES:
+        assert ttnn.get_lowest_equivalent_matmul_fidelity(device.arch(), in0_dtype, in1_dtype, requested) == lower
+    for in0_dtype, in1_dtype, requested, _ in CONTRIBUTING_PHASE_CASES:
+        assert ttnn.get_lowest_equivalent_matmul_fidelity(device.arch(), in0_dtype, in1_dtype, requested) == requested
+
+
 @pytest.mark.parametrize(
     "in0_dtype, in1_dtype, expected",
     [

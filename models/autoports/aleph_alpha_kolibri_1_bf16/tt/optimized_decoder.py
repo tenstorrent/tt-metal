@@ -390,6 +390,22 @@ class OptimizedDecoder(LightweightModule):
         )
         return ttnn.linear(x, w, dtype=dtype, memory_config=DRAM, program_config=program, compute_kernel_config=compute)
 
+    def _large_router_compute(self):
+        # bfloat4_b router weights fit in SrcA's high slice, so the HiFi4 phase (SrcA low x SrcB low) only
+        # multiplies zeros: HiFi3 gives the same output as the HiFi4 control with one phase fewer.
+        if self.router.dtype != ttnn.bfloat4_b or self.compute.math_fidelity != ttnn.MathFidelity.HiFi4:
+            return self.compute
+        if getattr(self, "_large_router_compute_cfg", None) is None:
+            self._large_router_compute_cfg = ttnn.WormholeComputeKernelConfig(
+                math_fidelity=ttnn.MathFidelity.HiFi3,
+                math_approx_mode=self.compute.math_approx_mode,
+                fp32_dest_acc_en=self.compute.fp32_dest_acc_en,
+                packer_l1_acc=self.compute.packer_l1_acc,
+                dst_full_sync_en=self.compute.dst_full_sync_en,
+                throttle_level=self.compute.throttle_level,
+            )
+        return self._large_router_compute_cfg
+
     def _linear(self, x, w, *, dtype=ttnn.bfloat16, activation=None):
         info = self.projection_info.get(id(w))
         if info is not None:
@@ -419,7 +435,10 @@ class OptimizedDecoder(LightweightModule):
         if x.shape[-2] > 32:
             # Router LoFi wins at short M; large MinimalMatmul retains the
             # measured HiFi4 control because long-prefill results are mixed.
-            compute = self.router_compute if w is self.router and x.shape[-2] <= 1024 else self.compute
+            if w is self.router:
+                compute = self.router_compute if x.shape[-2] <= 1024 else self._large_router_compute()
+            else:
+                compute = self.compute
             return self._prefill_linear(x, w, dtype, compute)
         return ttnn.linear(
             x,

@@ -521,6 +521,7 @@ from ttnn.operations.matmul import (
     MatmulDeviceOperation,
     create_matmul_attributes,
     matmul_select_program_factory,
+    get_lowest_equivalent_matmul_fidelity,
 )
 
 from ttnn.operations.normalization import (
