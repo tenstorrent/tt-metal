@@ -145,6 +145,18 @@ case "${MODEL}" in
       TABLE_WAIT_DEFAULT=7200
     fi
     ;;
+  kimi_k3_1)
+    # Kimi-K3 with its 24 MLA layers changed to DSA: same depths, slots and gate as kimi_k3 above.
+    # The adapter's defaults already name the K3.1 weights, cache and golden, so nothing is exported.
+    export PIPELINE_DIR="${PREFILL_SUMMARIES/prefill_summaries/kimi_k3_1_prefill_runner_kv}"
+    MANIFEST="${MANIFEST_DIR}/kimi_k3_1.json"
+    SC1_NUM_LAYERS=24
+    SC1_NUM_USERS=$(manifest_env PREFILL_NUM_USERS)
+    RUNNER_ENV="export TT_METAL_SHM_TRACKING_DISABLED=1; export LOGURU_LEVEL=ERROR;"
+    # The golden is the 8192-token prompt of a vLLM capture, so the request stays inside it: one whole
+    # chunk, all of it PCC'd.
+    REQUEST_LEN=${CHUNK_SIZE}
+    ;;
   mistral4)
     export PIPELINE_DIR="${PREFILL_SUMMARIES/prefill_summaries/mistral4_pp4_kv}"
     MANIFEST="${MANIFEST_DIR}/mistral4.json"
