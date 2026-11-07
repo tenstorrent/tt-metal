@@ -161,27 +161,52 @@ class KimiK3Adapter(MLAPrefillAdapter):
 
         A K3 rank can legitimately hold ZERO full-attention layers — a 1-layer bring-up run is layer
         0, which is KDA, and then there is no KV cache to allocate; the KDA state slabs still are.
+
+        The config decides what a full-attention layer stores. Kimi-K3's MLA is dense: a bf8 TILE kvpe
+        cache (its adapter declares no sparse format). Kimi-K3.1's are Gated DSA layers (the config
+        carries the indexer): sparse_sdpa reads the kvpe natively, so it is in the adapter's sparse
+        format (scaled FP8 by default), and each layer's indexer writes its keys to a second, bf8 TILE
+        ``index_head_dim``-wide cache (as GLM-5.3). Every DSA layer owns its indexer, so the index cache
+        has the kvpe cache's slabs, slot for slot, and the same SP/TP split.
         """
+        import ttnn
         from models.demos.deepseek_v3_d_p.tt.kda.state_adapter import KdaStates
         from models.demos.deepseek_v3_d_p.tt.kimi_k3.kda_geometry import kimi_k3_kda_geometry
         from models.demos.deepseek_v3_d_p.tt.kimi_k3.layer_schedule import KimiK3LayerSchedule
+        from models.demos.deepseek_v3_d_p.tt.mla.indexer import resolve_has_indexer
         from models.demos.deepseek_v3_d_p.tt.runners.kv_caches import KimiK3KvCaches
-        from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import allocate_mla_kvpe_cache
+        from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import (
+            MlaKvCacheFormat,
+            init_kvpe_cache,
+            init_mla_kv_cache,
+        )
+
+        has_indexer = resolve_has_indexer(hf_config)
+        kvpe_format = MlaKvCacheFormat(
+            self.resolve_sparse_kv_cache_format(params.sparse_kv_cache_format) or MlaKvCacheFormat.BFP8_TILE
+        )
+        if has_indexer == (kvpe_format == MlaKvCacheFormat.BFP8_TILE):
+            raise ValueError(
+                f"{self.name}: a {'DSA' if has_indexer else 'dense MLA'} model cannot use a {kvpe_format} kvpe "
+                "cache; sparse_sdpa reads only sparse formats and the dense MLA path only bf8 TILE"
+            )
 
         schedule = KimiK3LayerSchedule.build(KimiK3Config, params.first_layer_idx, params.num_layers)
-        kvpe = None
+        kvpe = index = None
         if schedule.num_mla_layers > 0:
-            kvpe = allocate_mla_kvpe_cache(
+            split = dict(
                 mesh_device=mesh_device,
-                hf_config=hf_config,
-                max_seq_len=params.max_seq_len,
+                seq_len=params.max_seq_len,
                 mesh_shape=params.mesh_shape,
                 sp_axis=params.sp_axis,
-                num_layers=schedule.num_mla_layers,
+                num_kvpe_cache_layers=schedule.num_mla_layers,
                 num_users=params.num_users,
                 tp_axis=params.tp_axis if self._dense_tp_shard_kv(params) else None,
                 bank_aligned=True,
             )
+            kvpe = init_mla_kv_cache(cache_format=kvpe_format, hf_config=hf_config, **split)
+            if has_indexer:
+                index = init_kvpe_cache(kvpe_cache_head_dim=hf_config.index_head_dim, dtype=ttnn.bfloat8_b, **split)
 
         # The KDA carries' one store: a consolidated slab per state kind over this rank's KDA layers and
         # every slot, allocated from the config alone and handed to the model at compile(). Allocated
@@ -191,7 +216,7 @@ class KimiK3Adapter(MLAPrefillAdapter):
         if kda_layer_ids:
             geometry = kimi_k3_kda_geometry(params.mesh_shape, params.sp_axis, params.tp_axis)
             kda_states = KdaStates.allocate(mesh_device, geometry, layer_ids=kda_layer_ids, num_slots=params.num_users)
-        return KimiK3KvCaches(kvpe=kvpe, kda_states=kda_states)
+        return KimiK3KvCaches(kvpe=kvpe, index=index, kda_states=kda_states)
 
     def layer_split_boundaries(self, num_layers: int):
         """Pipeline ranks may only start on an AttnRes block boundary.
