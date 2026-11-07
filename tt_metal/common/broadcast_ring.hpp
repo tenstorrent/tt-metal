@@ -279,11 +279,17 @@ public:
          * through wake_readers() (e.g. a stop flag): take @p since before testing that condition, so a
          * wake_readers() between the test and the wait is not lost.
          */
-        void wait(WakeToken since) const noexcept {
+        void wait(WakeToken since) const noexcept { wait(since, kWaitSpinIterations); }
+
+        /**
+         * @brief wait(since) with @p spins pause iterations (instead of the default) before blocking. Readers whose
+         * writer publishes in widely spaced bursts gain nothing from spinning and can pass 0.
+         */
+        void wait(WakeToken since, uint32_t spins) const noexcept {
             if (cursor_ < shared_state_->head.load(std::memory_order_acquire)) {
                 return;
             }
-            for (uint32_t spin = 0; spin < kWaitSpinIterations; ++spin) {
+            for (uint32_t spin = 0; spin < spins; ++spin) {
                 if (shared_state_->wake_token.load(std::memory_order_acquire) != since) {
                     return;
                 }
