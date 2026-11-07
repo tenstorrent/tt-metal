@@ -475,6 +475,11 @@ void kernel_main() {
     constexpr bool operand_split = get_compile_time_arg_val(34) == 1;
     constexpr uint32_t cb_matmul_in0 = operand_split ? cb_x_hi_tiled : cb_vol2col_tiled;
 
+    // In a 2-window vol2col ring the reader pushes the partial last tile row as a whole window (ChunkWriter in
+    // reader_vol2col.cpp derives the same constant), so it is popped as a whole window too.
+    constexpr bool vol2col_full_windows =
+        num_patches > 2 * tt::constants::TILE_HEIGHT && num_patches % tt::constants::TILE_HEIGHT != 0;
+
     constexpr uint32_t weight_tiles = matmul_K_t * matmul_N_t;
     constexpr uint32_t output_tiles = matmul_M_t * matmul_N_t;
     constexpr uint32_t batch_tiles = subblock_h * matmul_K_t;
@@ -554,7 +559,7 @@ void kernel_main() {
                                                 NoReconfigure,
                                             compute_kernel_lib::tilize_config::Fp32Mode::Fast,
                                             compute_kernel_lib::tilize_config::RemapMode::AssumeConfigured>(
-                                            1, patches_this_row);
+                                            1, vol2col_full_windows ? tt::constants::TILE_HEIGHT : patches_this_row);
                                         patches_left -= patches_this_row;
                                     }
 
