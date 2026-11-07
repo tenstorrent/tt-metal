@@ -45,9 +45,8 @@ template <uint32_t cb_id, uint32_t clear_value_cb_id, typename DFB, typename Cle
 ALWI void clear_out_tiles(Noc noc, DFB& cb, ClearDFB& clear_cb) {
     ASSERT(cb.get_id() == cb_id);
     constexpr uint32_t tile_size = get_tile_size(cb_id);
-    const uint32_t num_pages = get_local_cb_interface(cb_id).fifo_num_pages;
-    // QSR: get_local_cb_interface(cb_id).fifo_page_size is stale for Metal-2.0 DFBs; read the entry
-    // size from the DFB object instead (per LLK guidance / the tilize writer fix).
+    // QSR: the legacy CB interface is never populated for Metal-2.0 DFBs; read the sizes from the DFB.
+    const uint32_t num_pages = cb.get_total_num_entries();
     const uint32_t num_tiles = cb.get_entry_size() / tile_size;
 
     UnicastEndpoint self_ep;
@@ -79,7 +78,7 @@ template <uint32_t cb_id, typename DFB>
 ALWI void zero_out_tiles(Noc noc, DFB& cb) {
     ASSERT(cb.get_id() == cb_id);
     constexpr uint32_t tile_size = get_tile_size(cb_id);
-    const uint32_t num_tiles = get_local_cb_interface(cb_id).fifo_num_pages;
+    const uint32_t num_tiles = cb.get_total_num_entries();
     noc.async_write_zeros(cb, tile_size * num_tiles);
     noc.write_zeros_l1_barrier();
 }
