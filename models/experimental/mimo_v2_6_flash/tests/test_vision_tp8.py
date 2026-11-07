@@ -23,6 +23,7 @@ import ttnn
 from models.experimental.mimo_v2_6_flash.reference import vision as ref
 from models.experimental.mimo_v2_6_flash.reference import vision_inputs as vin
 from models.experimental.mimo_v2_6_flash.tests.common import GALAXY_DEVICE_PARAMS, model_path, pcc
+from models.experimental.mimo_v2_6_flash.tt.vision.encoder import MiMoVisionEncoder
 from models.experimental.mimo_v2_6_flash.tt.vision.vit import TtMiMoVisionTransformer
 
 BLOCK_PCC = 0.99
@@ -108,3 +109,46 @@ def test_vision_tp8(mesh_device, reference, case, max_rows):
         logger.info(f"{case}: final PCC {final:.5f} ({max_rows} rows per pass)")
     assert final >= FINAL_PCC, f"final PCC {final:.5f}"
     ttnn.synchronize_device(mesh_device)
+
+
+def dram_allocated(mesh_device):
+    mv = ttnn.get_memory_view(mesh_device, ttnn.BufferType.DRAM)
+    return mv.total_bytes_allocated_per_bank * mv.num_banks
+
+
+@pytest.mark.parametrize("device_params", [GALAXY_DEVICE_PARAMS], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
+@pytest.mark.parametrize("l1_kb_per_core", [0, 384])
+def test_vision_encoder_busy_device(mesh_device, reference, l1_kb_per_core):
+    """The encoder backend (MiMoVisionEncoder) as the LLM calls it between its steps: L1 partly held by
+    long-lived buffers (decode keeps some), images and a video back to back, nothing left allocated after a call
+    (the first call of a shape keeps only its programs' binaries, so each case runs once before the check)."""
+    path, model_ref = reference
+    grid_size = mesh_device.compute_with_storage_grid_size()
+    cores = grid_size.x * grid_size.y
+    held = None
+    if l1_kb_per_core:
+        tiles_per_core = l1_kb_per_core * 1024 // (32 * 32 * 2)
+        held = ttnn.from_torch(
+            torch.zeros(1, 1, 32 * tiles_per_core, 32 * cores),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        )
+    encoder = MiMoVisionEncoder(mesh_device, path, cache_dir=vision_cache_dir())
+    for case in ("image_1024", "video_32f", "two_images"):
+        pixel_values, grid, _ = make_case(path, case)
+        embed = encoder.embed_video if case.startswith("video") else encoder.embed_image
+        embed(pixel_values, grid)
+        before = dram_allocated(mesh_device)
+        out = embed(pixel_values, grid)
+        assert dram_allocated(mesh_device) == before, "the call left device tensors allocated"
+        with torch.no_grad():
+            expected = model_ref(pixel_values, grid)
+        score = pcc(out.float(), expected)
+        logger.info(f"{case} with {l1_kb_per_core} KB of L1 held per core: final PCC {score:.5f}")
+        assert score >= FINAL_PCC
+    if held is not None:
+        held.deallocate(True)
