@@ -143,8 +143,17 @@ second at ~280 merged tokens a frame pair (16-34K tokens on Video-MME short) and
 * `tt/video_prompt.py`: the checkpoint processor's video prompt (`MIMO_VIDEO_PROMPT=hf`, default) instead of
   upstream's extra outer `<|vision_start|> .. <|vision_end|>`.
 
-Frame sampling is vLLM's. Recommended serving (Xiaomi parity): `--media-io-kwargs '{"video": {"num_frames": 1024,
-"fps": 2}}'` and `MIMO_VIDEO_MAX_PIXELS=286720`, with audio served (a checkpoint with `audio_tokenizer/`, torchaudio).
+Frame sampling is vLLM's. Xiaomi parity: `--media-io-kwargs '{"video": {"num_frames": -1, "fps": 2}}'` (2 fps, every
+second of the clip), with audio served (a checkpoint with `audio_tokenizer/`, torchaudio); the frame sizes are the
+defaults (`MIMO_VIDEO_MAX_PIXELS=307200` a frame, `MIMO_VIDEO_TOTAL_MAX_PIXELS=268435456` spread over the frames, odd
+frame counts cut to whole pairs: `MIMO_VIDEO_EVEN_FRAMES=1`). With them the prompt token counts equal Xiaomi's API's on
+the evals agent's probes (120 s 720p 33978, a VGI-Bench clip 124254; with its audio track within 6 tokens).
+Long videos (VGI-Bench, 10-40 min, 130-146K tokens, up to 315 MB): vLLM's per-item encoder bound is the context
+(`get_mm_max_tokens_per_item`; upstream's 114688 refused them); the proxy needs `TT_PROXY_FETCH_MAX_MB=400`,
+`TT_PROXY_FETCH_TIMEOUT_S=300` and `TT_PROXY_MAX_REQUEST_MB=512` (a 315 MB file is a 420 MB data URI), vLLM fetching a
+URL itself `VLLM_MAX_MEDIA_DOWNLOAD_SIZE_MB=400` and `VLLM_VIDEO_FETCH_TIMEOUT=300`. Such a request spends 1-4 minutes
+in the API server (decoding up to 4800 frames, the audio tokenizer on the CPU), where vLLM processes multimodal items one
+at a time.
 Video-MME short docs 0-59, one row engine at concurrency 8 (Xiaomi's API: 75.0 %; 2026-11-07):
 
 | Video input | Score | Verbose / 60 | Prompt tokens p50 | Latency c=8 / c=1 |
@@ -153,7 +162,8 @@ Video-MME short docs 0-59, one row engine at concurrency 8 (Xiaomi's API: 75.0 %
 | 32 frames, real times | 58.3 | 15 | 14.3K | 9.9 s / 3.4 s |
 | 2 fps, 286720 px a frame, real times | 63.3 / 65.0 / 65.0 | 5-6 | 28.0K | 18.0 s / 6.2 s |
 | + audio track (upstream prompt) | 70.0 / 68.3 | 9-10 | 28.9K | 22.6 s / 8.7 s |
-| + audio track, `MIMO_VIDEO_PROMPT=hf` (recommended) | 71.7 | 0 | 28.9K | 23.3 s / - |
+| + audio track, `MIMO_VIDEO_PROMPT=hf` | 71.7 | 0 | 28.9K | 23.3 s / - |
+| Xiaomi's sizes (307200 a frame, every second at 2 fps) + audio + `hf` (the defaults) | 71.7 | 0 | 30.1K | 25.9 s / - |
 
 At 2 fps a request's ViT takes ~0.5 s and its prefill ~3.9 s (c=1, 26K tokens); the front end's audio tokenizer adds
 ~2.5 s a request (CPU, 8 threads).
