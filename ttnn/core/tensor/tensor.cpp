@@ -40,6 +40,7 @@
 #include <memory>
 #include <utility>
 #include <atomic>
+#include <tt-metalium/experimental/tensor_layout_apis_with_custom_alignment.hpp>
 
 namespace ttnn {
 
@@ -80,7 +81,7 @@ Tensor::Tensor(
         std::move(buffer),
         TensorSpec(
             logical_shape,
-            tt::tt_metal::TensorLayout::fromPaddedShape(
+            tt::tt_metal::experimental::tensor_layout_from_padded_shape(
                 dtype,
                 tt::tt_metal::PageConfig(layout, tile),
                 tt::tt_metal::MemoryConfig{},
@@ -394,7 +395,15 @@ uint32_t Tensor::element_size() const {
         case DataType::UINT8: return sizeof(uint8_t);
         case DataType::INT8: return sizeof(int8_t);
         case DataType::BFLOAT8_B:
-        case DataType::BFLOAT4_B: return sizeof(std::byte);
+        case DataType::BFLOAT4_B:
+        case DataType::MXFP8_E4M3:
+        case DataType::MXFP8_E5M2:
+        case DataType::MXFP6_E2M3:
+        case DataType::MXFP6_E3M2:
+        case DataType::MXFP4:
+        case DataType::MXINT8:
+        case DataType::MXINT4:
+        case DataType::MXINT2: return sizeof(std::byte);
         default: TT_THROW("Unsupported data type");
     }
 }

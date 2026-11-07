@@ -4,13 +4,11 @@
 
 #pragma once
 
-#include <circular_buffer.hpp>
 #include <device.hpp>
 #include <tt-metalium/program.hpp>
-#include <stdint.h>
+#include <cstdint>
 #include "impl/dispatch/vector_aligned.hpp"
 #include <tt_stl/span.hpp>
-#include <array>
 #include <functional>
 #include <memory>
 #include <unordered_map>
@@ -25,11 +23,10 @@
 #include "dispatch/worker_config_buffer.hpp"
 #include "trace/trace_node.hpp"
 
-#include <umd/device/types/core_coordinates.hpp>
-
 namespace tt::tt_metal {
 class Device;
 class IDevice;
+class LaunchMessageRingBufferState;
 class MetalContext;
 class Program;
 class Semaphore;
@@ -156,9 +153,8 @@ std::vector<CrossNodeDFBCoreGroup> partition_cores_by_cross_node_dfb_payload(
         per_core_cross_node_dfbs,
     uint8_t num_program_slots);
 
-// Dense per-core PrefetcherPipe slot payload. The relay word of each slot also carries the
-// pipe's active credit lane count, resolved from the program's attachment at build time so a
-// relay / Attach that armed lanes after this core's participant record was added is picked up.
+// Dense per-core PrefetcherPipe slot payload. The relay word of each slot also carries the bound
+// pipe's credit lane count, which the participant record copied from the pipe at bind.
 std::vector<uint32_t> build_prefetcher_pipe_config_payload(
     const detail::ProgramImpl& program,
     const std::vector<detail::ProgramImpl::PrefetcherPipeParticipant>& sparse_participants);
@@ -201,21 +197,15 @@ void update_program_dispatch_commands(
     ProgramCommandSequence& cached_program_command_sequence,
     uint32_t multicast_cores_launch_message_wptr,
     uint32_t expected_num_workers_completed,
-    CoreCoord dispatch_core,
-    SubDeviceId sub_device_id,
     const ProgramDispatchMetadata& dispatch_md,
-    ProgramBinaryStatus program_binary_status,
-    uint8_t cq_id);
+    ProgramBinaryStatus program_binary_status);
 
 void update_traced_program_dispatch_commands(
     const TraceNode& node,
     ProgramCommandSequence& cached_program_command_sequence,
     uint32_t multicast_cores_launch_message_wptr,
     uint32_t expected_num_workers_completed,
-    CoreCoord dispatch_core,
-    SubDeviceId sub_device_id,
-    ProgramBinaryStatus program_binary_status,
-    uint8_t cq_id);
+    ProgramBinaryStatus program_binary_status);
 
 TraceNode create_trace_node(
     detail::ProgramImpl& program,
@@ -260,8 +250,8 @@ void reset_worker_dispatch_state_on_device(
     distributed::MeshDevice* mesh_device,
     SystemMemoryManager& manager,
     uint8_t cq_id,
-    CoreCoord dispatch_core,
     const DispatchArray<uint32_t>& expected_num_workers_completed,
+    const DispatchArray<LaunchMessageRingBufferState>& worker_launch_message_buffer_state,
     bool reset_launch_msg_state,
     ttsl::Span<const vector_aligned<uint32_t>> setup_commands);
 
@@ -285,7 +275,6 @@ ExpectedNumWorkerUpdates get_expected_num_workers_completed_updates(
 // Immutable setup batches, each bounded by the device's maximum fetch size.
 std::vector<vector_aligned<uint32_t>> build_sub_device_setup_commands(
     Device* device,
-    uint8_t cq_id,
     ttsl::Span<const uint32_t> workers_per_sub_device,
     const std::vector<std::pair<CoreRangeSet, uint32_t>>& core_go_message_mapping,
     bool reset_launch_msg_state);

@@ -31,7 +31,7 @@ int main() {
     std::shared_ptr<distributed::MeshDevice> mesh_device = distributed::MeshDevice::create_unit_mesh(device_id);
 
     distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
-    Program program = CreateProgram();
+    Program program = CreateProgram(*mesh_device);
 
     distributed::MeshWorkload workload;
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());

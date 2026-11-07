@@ -7,7 +7,6 @@
 namespace ckernel::sfpu {
 struct ErfBf16Config {
     static constexpr uint32_t kDegree = 7u;
-    // Fit: minimax degree-7 polynomial on [0, 10], 1 segment, max pure (continuous) ULP 0.73.
     static constexpr uint32_t kCoefficientBits[] = {
         0x00000000u, 0x3f904bb0u, 0x3ceceac4u, 0xbf007bbau, 0x3e40e7f0u, 0x3c90cff8u, 0xbca6e156u, 0x3b39f45cu};
     static constexpr uint32_t kClampMaxBits = 0x3f800000u;
@@ -37,20 +36,13 @@ inline void calculate_erf_bf16_body() {
     ckernel::sfpu::bf16::erf::calculate_signed_abs<ckernel::sfpu::ErfBf16Config, ITERATIONS>();
 }
 // The constants stock's init also sets hold the kernel's own values for its call only.
-// Each call records replay slots 0-31, overwriting what an init recorded there (matmul and reduce
-// record from replay_buf_offset = 16).
+// Each call records replay slots 0-31, overwriting what an init recorded there (from 16).
 template <int ITERATIONS = 32>
-inline void calculate_erf_bf16() {
+__attribute__((noinline)) inline void calculate_erf_bf16() {
     sfpi::vConstFloatPrgm0 = __builtin_bit_cast(float, 0x3b39f45cu);
     sfpi::vConstFloatPrgm1 = __builtin_bit_cast(float, 0xbca6e156u);
     sfpi::vConstFloatPrgm2 = __builtin_bit_cast(float, 0x3c90cff8u);
     calculate_erf_bf16_body<ITERATIONS>();
-    sfpi::vConstFloatPrgm0 = __builtin_bit_cast(float, 0x3ea57ebbu);
-    sfpi::vConstFloatPrgm1 = __builtin_bit_cast(float, 0x3fba2e90u);
-    sfpi::vConstFloatPrgm2 = __builtin_bit_cast(float, 0x4007c1f2u);
-}
-inline void init_erf_bf16() {
-    ckernel::sfpu::bf16::erf::init_signed_abs<ckernel::sfpu::ErfBf16Config>();
     sfpi::vConstFloatPrgm0 = __builtin_bit_cast(float, 0x3ea57ebbu);
     sfpi::vConstFloatPrgm1 = __builtin_bit_cast(float, 0x3fba2e90u);
     sfpi::vConstFloatPrgm2 = __builtin_bit_cast(float, 0x4007c1f2u);

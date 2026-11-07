@@ -64,7 +64,7 @@ ttnn::device_operation::ProgramArtifacts PadTileMulticoreProgramFactory::create_
     auto cores_in_order = corerange_to_cores(all_cores, num_cores, true);
 
     tt::DataFormat dfb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
-    uint32_t page_size = output.buffer()->page_size();
+    uint32_t page_size = output.mesh_buffer().page_size();
     uint32_t multi_buffering_size = 2;
 
     DataflowBufferSpec in0_dfb{
@@ -83,7 +83,7 @@ ttnn::device_operation::ProgramArtifacts PadTileMulticoreProgramFactory::create_
         .size_per_node = page_size,  // entry_size * num_entries (1)
     };
 
-    TT_ASSERT(output.buffer() != nullptr, "Output buffer should be allocated on device!");
+    TT_ASSERT(output.is_allocated(), "Output buffer should be allocated on device!");
 
     uint32_t packed_pad_value;
     bfloat16 bfloat_pad_value = bfloat16(pad_value);
