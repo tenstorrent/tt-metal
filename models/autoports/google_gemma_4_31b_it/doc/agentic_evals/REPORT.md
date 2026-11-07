@@ -177,6 +177,7 @@ Device costs include the device job, not build/queue. Release savings are foreca
 | gpqa86-entry-diagnosis | 0.20000 / 0.17441 | 0.00000 | none/open: all four argmax equal: True; fresh overlap exact: 9499; credited release saving hours: 0; actual device hours: 0.17440725777777777 |
 | release-dispatch-preparation | 0.00000 / 0.00000 | 0.00000 | none/solved: actual device hours: 0; release saving hours: 0; result: Both candidate freezes match recorded hashes; no selection or dispatch; evidence: runs/release-dispatch-preparation/commands.json |
 | ranking-ledger-shape-repair | 0.00000 / 0.00000 | 0.00000 | none/solved: all efforts covered: 125; all ranking rows dict: True; forecast measurement records unchanged: True; size hook: passed |
+| framed-final-inventory-preparation | 0.00000 / 0.00000 | 0.00000 | kept/solved: Ten fixtures pass; completed80 dry all60 envelope hashes and initial8 body hashes match validated observer; native-created/replay timestamps distinct; no live160 audit. |
 
 Evidence is written once by each effort; this table summarizes the current coordinator disposition. Unmeasured savings remain unknown or receive zero planning credit.
 

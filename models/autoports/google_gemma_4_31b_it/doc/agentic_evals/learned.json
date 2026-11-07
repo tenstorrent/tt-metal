@@ -283,6 +283,11 @@
     {
       "fact": "Same80 C4/C8 comparison matches all80 semantic prompts, visible outputs, scores and complete retained chains;2114531 active decode samples each. Observed C8 evaluation2.614273h/37.9102% shorter, on different hosts and expanded versus default pool. Configuration benefit on80 is measured; isolated concurrency causality and larger-list gain are not established.",
       "evidence": "runs/larger-gpqa80-c4-native-logging/RESULT.json"
+    },
+    {
+      "fact": "During scored160, stock job-log endpoint snapshots advanced in roughly2.1MB increments; observed snapshot age reached7.5883min before a fresh10:43:46 decoding event arrived. Successful transfer alone does not prove freshness; do not infer stalled model solely from repeated old snapshots. This is an observed publication pattern, not a guaranteed maximum delay.",
+      "evidence": "bringup/artifacts/stage12-gpqa160-observer.log; coordinator comparison of consecutive last_event/bytes/fetch timestamps at2026-11-07T10:44Z",
+      "measured_max_snapshot_age_minutes": 7.58833075
     }
   ],
   "suite_timings": [

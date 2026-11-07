@@ -1,0 +1,67 @@
+{
+  "effort": "framed-final-inventory-preparation",
+  "status": "prepared_host_validated",
+  "device_hours": 0,
+  "device_hour_box": 0,
+  "host_hour_box": 0.5,
+  "helper": "bringup/artifacts/framed-final-inventory/inventory.py",
+  "cli": "python3 bringup/artifacts/framed-final-inventory/inventory.py --log <completed-final-log> --output bringup/artifacts/<private-inventory>.json",
+  "confirmation": {
+    "run_id": 42356076812,
+    "source_sha256": "da6805d50c3e4372baffe807d54e18f81d876c865e2d6d50618204778d8f14ba",
+    "source_bytes": 67352129,
+    "records": 60,
+    "request_ids": 32,
+    "response_ids": 24,
+    "matched_response_ids": 24,
+    "requests_without_response": 8,
+    "initial8_ids_exact": true,
+    "initial8_complete_body_hashes_exact": true,
+    "all_record_envelope_hashes_equal_existing_observer_completed_set": true,
+    "native_created_separate_from_outer_replay_times": true,
+    "transport": {
+      "frames": 1150,
+      "exact_duplicate_frames": 575,
+      "malformed_frames": 0,
+      "unsupported_versions": 0,
+      "markerless_hex_lines": 0
+    },
+    "source_coverage_compromised": false,
+    "pending_records": 0,
+    "tests_passed": 10,
+    "decoder_sha256": "b42795fd59acba29a9d6561b2f1ef53b573c1cbd82004d4ee0f5f85f90fb9069",
+    "helper_sha256": "f3b9885af557d6e1a793ce05b36a4d4ddd46e0e92ea848f52fee16043bc62b51",
+    "scope": "Completed/cancelled exact80 dry transport fixture only; no scores, ongoing160 or model validity audit."
+  },
+  "contract": {
+    "decoder": "Existing validated framing.py imported unchanged; source hash recorded in every inventory.",
+    "raw_output": "Only under bringup/artifacts; new output refuses overwrite.",
+    "coverage": "Malformed/unrecognized native markers, decoder errors/conflicts, invalid UTF8/loggers/timestamps/JSON, possible markerless suffixes, unterminated native frames and incomplete pending records set source_coverage_compromised. Compromised CLI exits2; valid recovered records retained explicitly, never invented.",
+    "timestamps": "Native LogRecord.created retained as original number separately from outer CI first/last occurrence and completion timestamps; final replay never substitutes for native creation time.",
+    "duplicates": "Exact repeated chunks suppressed by unchanged decoder and counted; conflicting chunks flag errors. Conflicting complete bodies for sameID flag coverage.",
+    "identity": "Requests and response IDs matched only explicitly. No row-to-request inference, task ID inference, client ACK or latency claim."
+  },
+  "limits": [
+    "This is a completed/cancelled80 dry transport fixture, not a scored160 audit.",
+    "Eight requests without responses remain explicitly listed; a canceled run with outstanding requests is not inferred to have failed completed replies.",
+    "Unknown or unsupported framing versions compromise coverage rather than being silently discarded.",
+    "No scores, freshness bound, dry pass or model-output validity decision produced.",
+    "Potential markerless hex detection is conservative; a fragment without recognizable framing cannot be reconstructed.",
+    "Decoder bounds remain64MiB/record,256MiBpending,64pendingrecords,4096identities,262144completedchunks; hitting bounds compromises coverage."
+  ],
+  "evidence": [
+    "bringup/artifacts/framed-final-inventory/inventory.py",
+    "bringup/artifacts/framed-final-inventory/test_inventory.py",
+    "bringup/artifacts/framed-final-inventory/validate_completed80.py",
+    "bringup/artifacts/framed-final-inventory/validation.json",
+    "bringup/artifacts/ci-native-large-reply-visibility/framing.py"
+  ],
+  "actions": "Private helper/test files and own compact effort evidence only; no runtime/central edits, scored160 inspection, device/CI/network/dispatch.",
+  "validation_commands": {
+    "interpreter": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python3",
+    "python_version": "3.10.19 (main, Jan 14 2026, 19:36:24) [Clang 21.1.4 ]",
+    "fixtures": "python3 -m unittest discover -s bringup/artifacts/framed-final-inventory -p test_inventory.py -v",
+    "completed_fixture": "python3 bringup/artifacts/framed-final-inventory/inventory.py --log bringup/artifacts/stage12-eval-observation/42356076812/current.log --output bringup/artifacts/framed-final-inventory/completed80.json",
+    "observer_comparison": "python3 bringup/artifacts/framed-final-inventory/validate_completed80.py"
+  }
+}
