@@ -30,13 +30,13 @@ branch ``mvasilijevic/deepseek-v41-prefill``, and of GLM-5.3's sparse MLA, whose
         with the KVPE gather and emits no profiler record. Its time is bounded on the chip timeline by the region from
         the KVPE write's end to ``sparse_sdpa``'s start, which also holds the gather. ``TOPK_NS`` is that region at
         prefix 0 (5,120 scores per row: <= 128.4 us, gather 39 us), established there only. On the 128K prompt the
-        region outlasts the gather by 56-94 us per layer at most depths (11-40 us at 61K-97K) and by ~10 us only at
-        1M (4,768 vs 4,734 us): that tail is either the top-k (then the top-k is ~ the region, ~645 us at 117,760, 5x
+        region outlasts the gather by 37-96 us per layer (stage 0: 49-94) at chunks 0-11 and 20-24, by 10-40 us at
+        chunks 12-19, and by ~10 us only at 1M (4,768 vs 4,734 us): that tail is either the top-k (then the top-k is ~ the region, ~645 us at 117,760, 5x
         ``TOPK_NS``) or a post-gather wait; the dumps cannot separate them. So the top-k's rate is not identified
         (>= 35.7 elements/ns per chip at 1M, the only depth where the gather certainly hides it) and is not
         modelled; a standalone ``topk_large_indices`` at 160 x 5,120 and 160 x 1,064,960 on 120 cores would measure
-        it. The concurrent term max(top-k, gather) covers the measured region from the 5th chunk on only through the
-        gather model's 1.5-2x slack; at the 2nd-4th chunks the region exceeds it by 1.03-1.24x. This replaces
+        it. The concurrent term max(top-k, gather) covers the measured region from the 6th chunk on only through the
+        gather model's 1.5-2x slack; at chunks 0-4 the region exceeds it by 1.01-1.24x. This replaces
         V4.1's LoudBox rate (7.1 elements/ns per chip), which the 1M bound contradicts;
       - the indexer score program (fused with the index-K ring all-gather) has a fixed per-op cost
         (``INDEX_SCORE_FIXED_NS``) that the collective's 14 us latency below omits: every chip pays a floor of
