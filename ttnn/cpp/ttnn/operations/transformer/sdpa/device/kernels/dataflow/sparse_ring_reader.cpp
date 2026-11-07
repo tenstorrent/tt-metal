@@ -22,6 +22,78 @@
 
 namespace ring_joint = ttnn::operations::transformer::sdpa::ring_joint;
 
+// The per-iteration mask-bit loops (one pass over the shard's blocks per ring iteration and per resident chunk), out
+// of line at O2 (SPARSE_RING_HOT, pooled_bias_gen.hpp): the reader is built at Os. Block b is word b / 32, bit b % 32.
+namespace sparse_ring_bits {
+
+// The shard's blocks holding a real token.
+template <uint32_t kWords, bool has_counts>
+SPARSE_RING_HOT void live_bits(
+    uint32_t (&live)[kWords],
+    const pooled_bias_gen::Geometry& geo,
+    const volatile tt_l1_ptr uint8_t* counts,
+    uint32_t s) {
+    for (uint32_t w = 0; w < kWords; ++w) {
+        live[w] = 0;
+    }
+    for (uint32_t b = 0; b < geo.nb; ++b) {
+        if (pooled_bias_gen::block_count<has_counts>(geo, counts, s, b) != 0) {
+            live[b >> 5] |= 1u << (b & 31);
+        }
+    }
+}
+
+// The kept blocks that hold a real token: every block for a dense row, else the set blocks of the mask row slice (nb
+// words at row_addr) plus the always-kept ones.
+template <uint32_t kWords>
+SPARSE_RING_HOT void row_bits(
+    uint32_t (&words)[kWords],
+    uint32_t row_addr,
+    uint32_t nb,
+    bool dense_row,
+    const uint32_t (&always)[kWords],
+    const uint32_t (&live)[kWords]) {
+    CoreLocalMem<volatile uint32_t> row(row_addr);
+    for (uint32_t w = 0; w < kWords; ++w) {
+        words[w] = dense_row ? ~0u : always[w];
+    }
+    for (uint32_t b = 0; b < nb && !dense_row; ++b) {
+        if (row[b] != 0) {
+            words[b >> 5] |= 1u << (b & 31);
+        }
+    }
+    for (uint32_t w = 0; w < kWords; ++w) {
+        words[w] &= live[w];
+    }
+}
+
+// Piece k (blocks [k * kBlocksPerPiece, (k + 1) * kBlocksPerPiece)) is kept when any of its blocks is: bit k of
+// (lo, hi).
+template <uint32_t kWords, uint32_t kPieces, uint32_t kBlocksPerPiece>
+SPARSE_RING_HOT void piece_bits(const uint32_t (&words)[kWords], uint32_t nb, uint32_t& lo, uint32_t& hi) {
+    static_assert(kPieces <= 64, "piece bits are two words");
+    uint32_t l = 0;
+    uint32_t h = 0;
+    for (uint32_t k = 0; k < kPieces; ++k) {
+        bool kept = false;
+        for (uint32_t j = 0; j < kBlocksPerPiece && !kept; ++j) {
+            const uint32_t b = k * kBlocksPerPiece + j;
+            kept = b < nb && ((words[b >> 5] >> (b & 31)) & 1u) != 0;
+        }
+        if (kept) {
+            if (k < 32) {
+                l |= 1u << k;
+            } else {
+                h |= 1u << (k - 32);
+            }
+        }
+    }
+    lo = l;
+    hi = h;
+}
+
+}  // namespace sparse_ring_bits
+
 // Reader of the block-sparse ring SDPA: every core holds its Q blocks ("resident" chunks of
 // block_size rows) in L1 for the whole op and streams each K/V piece of a ring iteration's shard once, for all of
 // them. Per ring iteration it publishes one plan (each chunk's kept blocks of the shard and its head group's piece
@@ -196,9 +268,9 @@ void kernel_main() {
     // by multicast), valid = the producer's local source word for that set. Off when the factory builds no head
     // chains; the pieces then go over the chain or are read by each core.
     constexpr bool group_mcast = get_named_compile_time_arg_val("group_mcast") == 1;
-    // With group delivery every head chain member is a group member (factory), so the head chain never moves a piece:
-    // dense builds leave its transfers out (kernel config buffer). The shared-K chain still moves K.
-    constexpr bool v_chain_moves = !(group_mcast && dense_owners > 0);
+    // With group delivery every head chain member is a group member (checked by the factory), so the head chain never
+    // moves a piece: its transfers are left out (kernel config buffer). A shared-K chain would still move K.
+    constexpr bool v_chain_moves = !group_mcast;
     constexpr bool k_chain_moves = v_chain_moves || k_uses_batch_chain;
     // rec_base != 0: one plan page per ring iteration holding every chunk's record from that word on (0 = one page
     // per chunk, when the records do not fit one page).
@@ -320,14 +392,7 @@ void kernel_main() {
         cb_counts.push_back(1);
     }
     const auto block_count = [&](uint32_t s, uint32_t b) -> uint32_t {
-        if (b >= mask_nb) {
-            return 0;  // padding past the shard's blocks (the last piece can reach past them)
-        }
-        if constexpr (has_block_counts) {
-            return counts_table[s * mask_nb_pad + b];
-        } else {
-            return pooled_bias_gen::block_len(geo, s, b);
-        }
+        return pooled_bias_gen::block_count<has_block_counts>(geo, counts_table, s, b);
     };
 
     // Key-bias CB position in pages, carried across ring iterations and passes (compute tracks the same: kb_pos).
@@ -465,14 +530,7 @@ void kernel_main() {
             constexpr uint32_t kBlockWords = plan_block_words;
             constexpr uint32_t kBlocksPerPiece = Sk_chunk_t / pooled_bias_gen::kBlockTiles;
             uint32_t live_bits[kBlockWords];  // the shard's blocks holding a real token, once per ring iteration
-            for (uint32_t w = 0; w < kBlockWords; ++w) {
-                live_bits[w] = 0;
-            }
-            for (uint32_t b = 0; b < mask_nb; ++b) {
-                if (block_count(ring_id, b) != 0) {
-                    live_bits[b >> 5] |= 1u << (b & 31);
-                }
-            }
+            sparse_ring_bits::live_bits<kBlockWords, has_block_counts>(live_bits, geo, counts_table, ring_id);
             // The shard's blocks in a dense range (dense_keys), kept by every chunk.
             uint32_t dense_key_bits[kBlockWords];
             for (uint32_t w = 0; w < kBlockWords; ++w) {
@@ -489,40 +547,13 @@ void kernel_main() {
                 }
             }
             // Local Q block qc of a dense row keeps every block.
-            const auto row_block_bits = [&](uint32_t* words, uint32_t qc) {
-                CoreLocalMem<volatile uint32_t> row(scratch);
+            const auto row_block_bits = [&](uint32_t(&words)[kBlockWords], uint32_t qc) {
                 const bool dense_row = dense != nullptr || in_dense(ring_index * mask_nb_pad + qc);
-                for (uint32_t w = 0; w < kBlockWords; ++w) {
-                    words[w] = dense_row ? ~0u : dense_key_bits[w];
-                }
-                for (uint32_t b = 0; b < mask_nb && !dense_row; ++b) {
-                    if (row[b] != 0) {
-                        words[b >> 5] |= 1u << (b & 31);
-                    }
-                }
-                for (uint32_t w = 0; w < kBlockWords; ++w) {
-                    words[w] &= live_bits[w];
-                }
+                sparse_ring_bits::row_bits<kBlockWords>(words, scratch, mask_nb, dense_row, dense_key_bits, live_bits);
             };
             // Piece k is kept when any of its blocks is: the streaming / chain-union granularity.
-            static_assert(num_local_k_chunks <= 64, "piece bits are two words");
-            const auto piece_bits = [&](const uint32_t* words, uint32_t& lo, uint32_t& hi) {
-                lo = 0;
-                hi = 0;
-                for (uint32_t k = 0; k < num_local_k_chunks; ++k) {
-                    bool kept = false;
-                    for (uint32_t j = 0; j < kBlocksPerPiece && !kept; ++j) {
-                        const uint32_t b = k * kBlocksPerPiece + j;
-                        kept = b < mask_nb && ((words[b >> 5] >> (b & 31)) & 1u) != 0;
-                    }
-                    if (kept) {
-                        if (k < 32) {
-                            lo |= 1u << k;
-                        } else {
-                            hi |= 1u << (k - 32);
-                        }
-                    }
-                }
+            const auto piece_bits = [&](const uint32_t(&words)[kBlockWords], uint32_t& lo, uint32_t& hi) {
+                sparse_ring_bits::piece_bits<kBlockWords, num_local_k_chunks, kBlocksPerPiece>(words, mask_nb, lo, hi);
             };
             uint32_t res_lo[kResMax];
             uint32_t res_hi[kResMax];
@@ -978,7 +1009,7 @@ void kernel_main() {
                                 CircularBuffer cb_bias(cb_pooled_bias);
                                 cb_bias.reserve_back(Sk_chunk_t);
                                 // Block-form row: exact iff the block's own bit is set on a block with a real token.
-                                pooled_bias_gen::generate_tiles<pooled_bias_tile_bytes>(
+                                pooled_bias_gen::generate_tiles<pooled_bias_tile_bytes, has_block_counts>(
                                     noc,
                                     cb_bias.get_write_ptr(),
                                     row0,
@@ -986,7 +1017,7 @@ void kernel_main() {
                                     geo,
                                     CoreLocalMem<volatile uint32_t>(scratch),
                                     pooled_bias_table_base,
-                                    block_count);
+                                    counts_table);
                                 cb_bias.push_back(Sk_chunk_t);
                             }
                         }
