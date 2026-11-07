@@ -32,6 +32,7 @@ struct DitFusedDistributedRmsnormDeviceOperation {
     using program_factory_t = std::variant<DitFusedDistributedRmsnormMeshWorkloadFactory>;
 
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
+    static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
 
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
 
@@ -69,6 +70,7 @@ Tensor dit_fused_distributed_rmsnorm(
     ttnn::experimental::DitFusedNormType norm_type = ttnn::experimental::DitFusedNormType::RMS,
     const std::optional<const Tensor>& reciprocals = std::nullopt,
     const std::optional<const Tensor>& affine_tile_row_map = std::nullopt,
+    std::optional<uint32_t> row_capacity = std::nullopt,
     bool preserve_rope_rounding = false);
 
 }  // namespace ttnn::prim

@@ -57,7 +57,7 @@ ttnn::device_operation::ProgramArtifacts UntilizeMultiCoreProgramFactory::create
     uint32_t output_single_tile_size = tt::tile_size(output_data_format);
 
     MeshDevice* device = a.device();
-    Buffer* src0_buffer = a.buffer();
+    const auto* src0_buffer = &a.mesh_buffer();
     TT_FATAL(output.is_allocated(), "Output buffer should be allocated on device!");
 
     uint32_t tensor_width = a.padded_shape()[-1];
@@ -112,7 +112,8 @@ ttnn::device_operation::ProgramArtifacts UntilizeMultiCoreProgramFactory::create
         has_uneven_sharding = (height_remainder != 0) || (width_remainder != 0);
     }
 
-    const bool input_is_dram_sharded = input_is_sharded && src0_buffer->buffer_type() == BufferType::DRAM;
+    const bool input_is_dram_sharded =
+        input_is_sharded && src0_buffer->device_local_config().buffer_type == BufferType::DRAM;
 
     // Block reader: unbacked double-buffer DFB, reads from L1 shard block-by-block.
     // Even sharding uses zero-copy borrowed-memory DFB (fast production path).
