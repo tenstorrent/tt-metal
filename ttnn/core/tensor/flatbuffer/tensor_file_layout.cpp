@@ -188,9 +188,8 @@ std::shared_ptr<void> map_tensor_file(int fd, size_t file_size, std::string_view
         std::call_once(private_mapping_warned, [&] {
             log_warning(
                 tt::LogMetal,
-                "Mapped \"{}\" MAP_PRIVATE because MAP_SHARED failed with \"{}\". Uploading a tensor loaded from a "
-                "privately mapped file through pinned memory first copies every page of it into anonymous memory, "
-                "which is slow and doubles its resident memory. Reported for the first such file only.",
+                "Mapped \"{}\" MAP_PRIVATE because MAP_SHARED failed with \"{}\". Uploads of tensors loaded from a "
+                "privately mapped file are copied rather than pinned. Reported for the first such file only.",
                 file_name,
                 strerror(shared_errno));
         });
