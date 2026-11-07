@@ -107,7 +107,9 @@ ttnn::device_operation::ProgramArtifacts SdpaDecodeDeviceOperation::SdpaDecodePr
     uint32_t DH = apply_geometry_override ? q_shape[3] : k_shape[3];
     uint32_t vDH = use_mla ? head_dim_v : (apply_geometry_override ? q_shape[3] : v_shape[3]);
     uint32_t Bkv = k_shape[0];
-    const uint32_t Bmask = attn_mask.has_value() ? attn_mask->padded_shape()[0] : Bkv;
+    // The mask's batch may sit in dim 0 ([b, 1, nh, s]) or dim 1 ([1, b, nh, s]). Both put each user's
+    // PNHt x St tiles in the same order, so count users over dims 0 and 1 together.
+    const uint32_t Bmask = attn_mask.has_value() ? attn_mask->padded_shape()[0] * attn_mask->padded_shape()[1] : Bkv;
     // num_kv_heads from the cache view by default, or from the explicit override
     // when an HMA cross-group caller is reading a buffer allocated for a different
     // layer's spec (e.g. Gemma4-26B-A4B sliding kv=8 cache read by a full kv=2
