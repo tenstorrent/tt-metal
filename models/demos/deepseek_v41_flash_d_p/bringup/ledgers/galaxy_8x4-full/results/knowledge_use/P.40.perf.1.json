@@ -1,0 +1,77 @@
+{
+ "used": [
+  {
+   "id": "DS41-145",
+   "how": "kept bfp_round compact + prepared for the bfloat8_b keys (LOWBIT_HOST=on path), no new per-core-arg dispatch",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "K-14",
+   "how": "checked k_chunk 32 L1 sizing: bfloat8_b key tiles sit between bfp4 and bf16, which already fit; no re-sweep needed",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "K-68",
+   "how": "the new 2x2 fork case failed the FABRIC_2D router handshake on the 8x4 as K-68 says; not retried, left for a 2x2 box / F.1",
+   "traced": false,
+   "cited": true
+  },
+  {
+   "id": "DS41-183",
+   "how": "every device job (measure, arms batch, ladders) started detached with devjob and waited in short calls",
+   "traced": null,
+   "cited": false
+  },
+  {
+   "id": "DS41-188",
+   "how": "judged the arms on the per-layer state metrics and err_final_hidden, not on pcc_chunk_out / L39 swings",
+   "traced": null,
+   "cited": false
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "how to measure a third arm of a quick A/B with the orchestrator's own tooling (I rebuilt core/batch plans + ab_base env in a scratch driver)",
+  "the knowledge-use report path in the brief (bringup/results/knowledge_use) differs from the allowed path (ledgers/<run>/results/knowledge_use)"
+ ],
+ "overseer": [
+  {
+   "id": "OV-3",
+   "answer": "done",
+   "evidence": "no padding or inflation: the keys keep their shape; only the dtype of the rounding output and the ring buffer changes"
+  },
+  {
+   "id": "OV-23",
+   "answer": "done",
+   "evidence": "the only Python-built op touched, ttnn.bringup.bfp_round, runs prepared=True compact=True (tt/indexer.py _round); host per call as measured in DS41-145 (~60 us), same program shape class"
+  },
+  {
+   "id": "OV-25",
+   "answer": "done",
+   "evidence": "no fork regression suite run; only the one new case (it could not open a 2x2 sub-mesh, K-68) and the model-level measure / ladders"
+  }
+ ],
+ "cited_only": [],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "P.40",
+  "role": "perf",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-11-07T01:25:44",
+  "head": "9a1c940a225",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/knowledge_use/P.40.perf.1.json",
+   "models/demos/deepseek_v41_flash_d_p/tt/indexer.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/settings.py",
+   "ttnn/ttnn/bringup/indexer_score/CHANGELOG.md",
+   "ttnn/ttnn/bringup/indexer_score/README.md",
+   "ttnn/ttnn/bringup/indexer_score/tests/cases.py",
+   "ttnn/ttnn/bringup/indexer_score/tests/test_indexer_score.py"
+  ]
+ }
+}

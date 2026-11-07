@@ -216,3 +216,22 @@ CASES += [
         "noise": {"inputs": ["bfp4", "bfp4", "bf16"], "out": "bf16"},
     },
 ]
+
+# deepseek_v41_flash_d_p P.40 (INDEX_K_FORMAT=bfp8, INDEX_Q_FORMAT=bfp4): the index query bfloat4_b, the keys and the
+# ring's key buffer bfloat8_b (mixed unpacker formats), ratio 2. Limits from the noise floor at those formats.
+CASES += [
+    {
+        **_DS41,
+        "id": "deepseek_v41_flash_d_p-2x2-ring-natural-ratio2-q512-t27648-h32-d128-hifi2-q-bfp4-k-bfp8",
+        "sig": "lowbit-q-bfp4-k-bfp8-r2",
+        "task": "P.40",
+        "key_compression_ratio": 2,
+        "t": 27648,
+        "k_local_rows": 13824,
+        "kv_len": 27648,
+        "seed": 6,
+        "q_dtype": "bfloat4_b",
+        "k_dtype": "bfloat8_b",
+        "noise": {"inputs": ["bfp4", "bfp8", "bf16"], "out": "bf16"},
+    },
+]

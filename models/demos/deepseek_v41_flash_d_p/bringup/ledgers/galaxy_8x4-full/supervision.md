@@ -1623,3 +1623,27 @@ https://claude.ai/artifact/V6jTfy2imD5wQz6UQXPPbR.
 - Defaults: EXPERTS_IMPL bfp4_mse, DECODER_SKIP off, WINDOW_KV_KEEP full, WINDOW_KV_FORMAT bfp8_tiles, CKV_FORMAT
   bfp4_rows. Host leak (tt-kmd #301): unaccounted ~130 GiB (reboot ~250). Expert caches on /scratch (bfp4, bfp4_mse, bfp8),
   bfp4 + bfp4_mse backed up on /data.
+
+## 2026-11-06 23:45 UTC INFRA: Slurm job 172961 ended by a node reboot (admins, to install the fixed tt-kmd for #301)
+- Loaded driver after the reboot: /sys/module/tenstorrent/version = 2.11.0, srcversion 28F4D57AD8D03824163E9BE,
+  module file /lib/modules/6.8.0-106-generic/updates/dkms/tenstorrent.ko dated 2026-10-16 19:29 UTC. **The driver did
+  not change**: same version and the same file as before the reboot, so the #301 leak fix is not loaded and the leak is
+  expected to come back.
+- Free RAM 29 min after boot: MemFree 508 GiB, MemAvailable 517 GiB of 566 (Cached 4.5, Anon 4.0, Slab 4.7, Hugetlb
+  34.8 GiB).
+- Before the reboot: ~320 GiB unaccounted (the leak). The final P.39 test round (rebase worktree, local tip
+  d70e41c47f0, nothing pushed) had 6 units OOM-killed during model load: ladder, short_turn, contract, kv_layout, acks,
+  runner_contract. Passed: profile, moe_parity, fork_fused_head, fork_pack_fp8, fork_sdpa_bf16. fork_sdpa_bfp4 failed
+  only on the 4 owner-waived H=32 SFPI cases. Handoff: /scratch/dnijemcevic/rebase/HANDOFF_2026-11-06.md.
+- 23:44 after the reboot: incremental build of the rebase worktree at d70e41c47f0 (11 steps, BUILD_RC 0, install 0);
+  test_box PASS (32 chips, 8x4, all_gather 0, all_reduce rel err 0.0048 / 0.0044). Overseer guard set again, watch on
+  progress.log and an hourly heartbeat. build_ok not written: it is keyed to ~/repos/tt-metal's HEAD for the old run's
+  autoresume, and the old orchestrator must stay stopped. The orchestrator was not restarted (owner: run stopped).
+  Rerun of the 6 OOM-killed units started (final_p39/rerun.sh, tmux final39r, MemAvailable logged per unit).
+- 00:14 rerun of the 6 OOM-killed units: all PASS (ladder err_final_hidden 0.133 / limit 0.242, top5 1.0; short_turn,
+  contract, kv_layout, acks, runner_contract). MemAvailable stayed 513-515 GiB (driver unchanged, no leak visible yet).
+- 00:15 owner: tt-d-gen for serving = jazpur/dsv4-replay-window. /scratch/dnijemcevic/tt-d-gen checked out at
+  48b79127fb1 (main d8a194417 + 10 commits; same tt-blaze pin 3cefbb45), engine rebuilt (build3.log, rc 0).
+  runner_contract against it: PASS (00:48).
+- 00:48 P.40 queued by the owner (INDEX_K_FORMAT bf16 vs bfp8 vs bfp4 A/B; adds bfp8; default stays bfp4); orchestrator
+  started --until P.40 (tmux ds41run).

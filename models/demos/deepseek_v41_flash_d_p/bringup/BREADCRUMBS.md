@@ -3388,3 +3388,43 @@ Each item has its own setting (tt/settings.py, default on, off = the path before
 - Gate units passed here on the final code: test_kv_layout (byte-exact), test_adapter_acks (0 failures; 4 chunks x 40
   acks), test_contract (producer index_k PCC 0.9927, limit 0.9465; contract_checks_failed 0, acks_early 0). Left to
   the orchestrator: test_ladder, test_profile, test_short_turn.
+
+## P.40 perf (8x4, 2026-11-07): index keys bf16 vs bfp8 vs bfp4 (INDEX_K_FORMAT gains bfp8)
+- Change: `INDEX_K_FORMAT` (tt/settings.py) choices bf16 / bfp4 / bfp8; tt/indexer.py `INDEX_K_DTYPES` maps them to
+  the score's key dtype: bfp8 = the tiled key slab rounded to bfloat8_b by ttnn.bringup.bfp_round (prepared, compact,
+  into the layer's persistent buffer, as bfp4) and the ring's gathered-key buffer bfloat8_b. bf16 / bfp4 unchanged.
+  Default stays bfp4 (owner decides). Query keeps INDEX_Q_FORMAT=bfp4; served keys stay INDEX_K_SERVED=fp8_row192.
+  No op change: ring_indexer_score_dsa already takes q and k each in its own format; bfp_round already does bfloat8_b.
+  Prepared ops touched (OV-23): bfp_round (prepared + compact). Cores: bfp_round on max_grid() (110), unchanged.
+- Fork test: indexer_score tests gain a q bfp4 / k bfp8 ratio-2 case (q_dtype / k_dtype). Not run on the 8x4: a
+  2x2 FABRIC_2D sub-mesh fails the router handshake (K-68; I ran it once, 24 s, no hang, no reset). For F.1 / a 2x2 box.
+- Measured, same code (f5072f7f1d2aa663), env DS41_ENGRAM_TABLE=resident + the arm: bfp8 = `orchestrator measure
+  --task P.40` (ab/P.40/new: quick + p51200); bf16 / bfp4 = the same batch plans and env (core/batch, BRINGUP_AB=1,
+  BRINGUP_BATCH_MAX_SEQ=56320) by /scratch/dnijemcevic/p40ab/drive.py -> /scratch/dnijemcevic/p40ab/<arm>/; ladder
+  rung last per arm (err_final_hidden, top5, every state metric) in p40ab/<arm>/ladder. All runs rc 0, nothing over a limit.
+
+  | metric (limit) | bf16 | bfp4 (default) | bfp8 (new) |
+  |---|---|---|---|
+  | err_final_hidden (<= 0.242) | 0.1319 | 0.1334 | 0.1313 |
+  | top5_overlap (>= 0.994) | 1.000 | 1.000 | 1.000 |
+  | err_state_topk_idx L02 / L08 / L14 / L20 | .079 / .069 / .068 / .087 | .164 / .151 / .119 / .151 | .080 / .070 / .067 / .087 |
+  | err_state_topk_idx L24 / L28 / L32 / L36 | .134 / .083 / .094 / .086 | .253 / .156 / .154 / .146 | .134 / .083 / .093 / .086 |
+  | (limits L02..L36: .217 .172 .166 .222 .318 .216 .222 .212) | | | |
+  | overlap_state_topk_idx L02 / L08 / L14 / L20 | .921 / .931 / .933 / .913 | .836 / .849 / .881 / .849 | .920 / .930 / .933 / .913 |
+  | overlap_state_topk_idx L24 / L28 / L32 / L36 | .867 / .917 / .907 / .914 | .747 / .844 / .846 / .854 | .867 / .918 / .907 / .914 |
+  | err_state_index_k L02 / L08 / L14 / L20 | .0525 / .0607 / .0985 / .0870 | .0525 / .0612 / .0997 / .0856 | .0525 / .0607 / .0981 / .0853 |
+  | device_ms_indexer (p51200) | 7.18 | 6.97 | 7.04 |
+  | device_ms_total (p51200) | 183.27 | 185.11 | 183.56 |
+  | chunk_wall_ms (p51200; spread) | 204.3 (6.8) | 202.9 (12.0) | 206.5 (10.2) |
+  | chunk_wall_ms (quick, last chunk) | 179.8 | 180.8 | 181.4 |
+  | ring key buffers a chip, 56320 / 1,044,480 tokens | 93.7 / 1738 MB | 26.4 / 489 MB | 49.8 / 923 MB |
+
+  Reading: bfp8 scores like bf16 (top-k overlap within 0.001 of bf16 at every layer); bfp4 loses ~6-12 points of
+  overlap (L24: 0.747) but stays inside every limit. Time: indexer 7.0-7.2 ms a chunk in all three (diffs ~0.2 ms,
+  run noise level); wall within spread. err_state_index_k is the served fp8 rows (INDEX_K_SERVED), so the same in every
+  arm by design. Key-buffer bytes: 8 indexer layers each keep a replicated [T, 128] buffer (2 / 8 / 14 at T = seq / 2,
+  20 / 24 / 28 / 32 / 36 at T = seq); bytes a 128-row value: bf16 256, bfp8 136, bfp4 72.
+- Caveat (not in my paths): the F137 CPU diagnosis (reference/ds41_ref.py "index_k" site, bringup/hooks.py) models
+  only the bfp4 grid for index keys; under bfp8 it would model bfp4. Diagnosis only, never gated.
+- Re-run: `python -m models.demos.common.bringup.orchestrator measure --task P.40 --spec <spec>`; other arms:
+  `python /scratch/dnijemcevic/p40ab/drive.py bf16:ql bfp4:ql bfp8:l` then devjob `bash /scratch/dnijemcevic/p40ab/run.sh`.

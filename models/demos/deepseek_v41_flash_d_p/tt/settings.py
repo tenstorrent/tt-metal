@@ -712,13 +712,17 @@ TABLE = {
         "compressed layers: the fork's ROW_BFP4 kv_window bf16 rows), above the reference's e4m3 (comparison only)",
     ),
     "INDEX_K_FORMAT": Setting(
-        "bfp4",
-        ("bf16", "bfp4"),
+        "bfp8",
+        ("bf16", "bfp4", "bfp8"),
         "the index keys the indexer scores (DS41-150, OWNER DECISION 2026-10-29 13:00): the reference stores them as "
         "fp4 e2m1 with a power-of-two scale per 32 (ds41_ref.py _compressor). bfp4 = the tiled key slab rounded to "
         "bfloat4_b (ttnn.bringup.bfp_round, nearest even) and the ring's key buffer bfloat4_b (ring_indexer_score_dsa "
         "reads them through the unpacker): top-512 selection error 7.6-15.7 % vs the reference's own fp4 8.0-16.6 % "
-        "(CPU, native goldens), 3.6x less ring traffic. The served index-key cache stays bf16. bf16 = the path before",
+        "(CPU, native goldens), 3.6x less ring traffic. The served index-key cache stays bf16. bf16 = the path before. "
+        "bfp8 (P.40, owner A/B 2026-11-07; the default stays bfp4 until the owner decides): the same slab rounded to "
+        "bfloat8_b instead (ttnn.bringup.bfp_round, nearest even) and the ring's key buffer bfloat8_b, read by "
+        "ring_indexer_score_dsa through the unpacker as bfp4 is; the query keeps INDEX_Q_FORMAT. The served keys "
+        "(INDEX_K_SERVED) are untouched in every arm",
     ),
     "INDEX_K_SERVED": Setting(
         "fp8_row192",
