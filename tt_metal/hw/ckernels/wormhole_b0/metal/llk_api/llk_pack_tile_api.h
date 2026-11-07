@@ -95,6 +95,23 @@ inline void llk_pack(std::uint32_t tile_index, std::uint32_t output, std::uint32
     _llk_pack_<DST_SYNC_MODE, is_fp32_dest_acc_en, pack_mode>(tile_index, pack_tile_addr);
 }
 
+/**
+ * @brief Pack ntiles consecutive DST tiles to the output operand with one call.
+ *
+ * Out of order (out_of_order_output = true): DST tile (start_tile_index + i) is packed to page
+ * (output_tile_index + i) of the output's reserved region; the CB write-tile pointer is not advanced.
+ * In order (false): output_tile_index is ignored and each DST tile goes to the next page, advancing the
+ * CB write-tile pointer per tile.
+ *
+ * @tparam is_fp32_dest_acc_en  DST is in 32-bit accumulate mode.
+ * @tparam out_of_order_output  Address pages by output_tile_index (true) or by the running pointer (false).
+ * @tparam pack_mode            Packer mode; only PackMode::Default is supported (use the llk_pack_untilize APIs for
+ *                              untilize).
+ * @param  start_tile_index     First DST tile to pack.
+ * @param  output               Output operand (circular buffer) id.
+ * @param  ntiles               Number of consecutive DST tiles to pack.
+ * @param  output_tile_index    Page that receives DST tile start_tile_index (out-of-order output only).
+ */
 template <bool is_fp32_dest_acc_en, bool out_of_order_output = false, PackMode pack_mode = PackMode::Default>
 inline void llk_matmul_pack(
     std::uint32_t start_tile_index, std::uint32_t output, std::uint32_t ntiles, std::uint32_t output_tile_index = 0) {
@@ -120,8 +137,9 @@ inline void llk_matmul_pack(
         StateDiscard<std::uint32_t>(output_tile_index)));
 
     for (std::uint32_t tile_index = start_tile_index; tile_index < start_tile_index + ntiles; tile_index++) {
-        std::uint32_t pack_tile_addr =
-            get_output_tile_address<out_of_order_output, pack_mode>(output_id, output_tile_index);
+        // Per-tile page offset; only the out-of-order address helper reads it (see the header comment).
+        std::uint32_t pack_tile_addr = get_output_tile_address<out_of_order_output, pack_mode>(
+            output_id, output_tile_index + (tile_index - start_tile_index) /*output_tile_index*/);
 
         _llk_pack_<DST_SYNC_MODE, is_fp32_dest_acc_en, pack_mode>(tile_index, pack_tile_addr);
     }
