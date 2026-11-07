@@ -370,6 +370,29 @@ def test_msa_native_causal_multiband_pcc(device):
 
 
 @run_for_blackhole()
+@pytest.mark.parametrize("enable_kv_block_cache", [False, True], ids=["stream", "kv_cache"])
+def test_msa_native_multiband_bfp8_cache(device, enable_kv_block_cache):
+    # Three DEST bands, as in the causal multi-band test above. Each band's QK must unpack K in the cache's bfp8
+    # format, not the bf16 the previous band's PV left behind.
+    d, H, S, topk, nblk = _D, 288, 1, 16, 16
+    T = nblk * BLK_KV
+    q, k, v, indices = make_msa_inputs(H, 1, S, T, topk, d, causal=False, seed=288)
+    indices[0, 0, :, 2:] = SENTINEL  # two blocks: enough for one cross-chunk combine
+    gold = sparse_attention_ref_msa(q, k, v, indices, d**-0.5)
+    if enable_kv_block_cache:
+        device.clear_program_cache()
+        run_op_msa_native(q, k, v, indices, device, kv_dtype=ttnn.bfloat8_b)
+        entries = device.num_program_cache_entries()
+    out = run_op_msa_native(
+        q, k, v, indices, device, kv_dtype=ttnn.bfloat8_b, enable_kv_block_cache=enable_kv_block_cache
+    )
+    if enable_kv_block_cache:
+        assert device.num_program_cache_entries() == entries + 1, "the per-core K/V block cache did not engage"
+    band_pccs = [pcc(out[:, start : start + 96], gold[:, start : start + 96]) for start in (0, 96, 192)]
+    assert min(band_pccs) > DEVICE_PCC, f"bfp8 cache multi-band MSA band PCCs {band_pccs}"
+
+
+@run_for_blackhole()
 def test_msa_native_causal_fp8_q_rejected(device, expect_error):
     # fp8 q is silently inaccurate with the causal mask: fp8-specific, and not fp32-DEST-related -- bf16 q with
     # fp32_dest_acc_en forced on passes -- but the root cause is not yet identified. The op rejects the combo
