@@ -3838,23 +3838,67 @@
   },
   "attempt": 1,
   "attempts": 0,
-  "duration_s": 0.0,
+  "duration_s": 813.7,
+  "full_pending": true,
   "history": [
    {
     "s": 0.0,
     "status": "PASS",
     "t": "2026-11-07T18:46:30"
+   },
+   {
+    "reused": [
+     "P.43#test_short_turn",
+     "P.43#test_contract",
+     "P.43#test_adapter_acks",
+     "P.43#test_runner_contract",
+     "P.43#test_window_snapshot",
+     "P.43#test_window_snapshot.9.0"
+    ],
+    "s": 813.7,
+    "status": "PASS",
+    "t": "2026-11-07T19:04:48"
    }
   ],
-  "last_run": "2026-11-07T18:46:30",
+  "last_run": "2026-11-07T19:04:48",
   "log": "/scratch/dnijemcevic/bringup/deepseek_v41_flash_d_p/runs/galaxy_8x4-full/run1/logs/P.43.log",
   "rc": 0,
   "reason": [],
   "role": "perf",
-  "stamp": null,
-  "started": "2026-11-07T18:46:30",
+  "stamp": {
+   "reused": [
+    "P.43#test_short_turn",
+    "P.43#test_contract",
+    "P.43#test_adapter_acks",
+    "P.43#test_runner_contract",
+    "P.43#test_window_snapshot",
+    "P.43#test_window_snapshot.9.0"
+   ],
+   "units": {
+    "P.43#test_adapter_acks": "8a834134931a25ae",
+    "P.43#test_contract": "f83e4ba84930e8d7",
+    "P.43#test_kv_layout": "eb18dc0728eb6ff5",
+    "P.43#test_ladder": "e65559e3c102e097",
+    "P.43#test_profile": "ef9b2f8a871fe9b6",
+    "P.43#test_runner_contract": "523d421138338cb4",
+    "P.43#test_short_turn": "53bb3aa814a9abd6",
+    "P.43#test_window_snapshot": "88a62640f4e3268f",
+    "P.43#test_window_snapshot.9.0": "9216bf9e129c2a00"
+   }
+  },
+  "started": "2026-11-07T18:51:14",
   "status": "PASS",
-  "units": null,
+  "units": {
+   "P.43#test_adapter_acks": "PASS",
+   "P.43#test_contract": "PASS",
+   "P.43#test_kv_layout": "PASS",
+   "P.43#test_ladder": "PASS",
+   "P.43#test_profile": "PASS",
+   "P.43#test_runner_contract": "PASS",
+   "P.43#test_short_turn": "PASS",
+   "P.43#test_window_snapshot": "PASS",
+   "P.43#test_window_snapshot.9.0": "PASS"
+  },
   "waiting": null
  },
  "P.5": {
