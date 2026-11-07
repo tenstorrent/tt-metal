@@ -20,6 +20,7 @@ from helpers.test_variant_parameters import (
     NUM_BLOCKS,
     NUM_FACES,
     NUM_TILES_IN_BLOCK,
+    PACK_SRC_FROM_OUTPUT,
     TILE_COUNT,
     TILIZE,
 )
@@ -78,7 +79,7 @@ def get_valid_num_faces_datacopy(tilize):
     tilize=[Tilize.No],
     dest_index=0,
     num_blocks=[1, 2],
-    num_tiles_in_block=[4, 8],
+    num_tiles_in_block=[1, 2, 4, 8],
     loop_factor=[8, 128, 512],
 )
 def test_perf_pack_dest_bank(
@@ -93,9 +94,9 @@ def test_perf_pack_dest_bank(
     num_tiles_in_block,
     loop_factor,
 ):
-    if (num_blocks, num_tiles_in_block) not in {(1, 4), (2, 4), (1, 8)}:
+    if (num_blocks, num_tiles_in_block) not in {(1, 1), (1, 2), (1, 4), (2, 4), (1, 8)}:
         pytest.skip(
-            "Local perf sweep only uses 1x4, 2x4, and 1x8 blocked-pack patterns"
+            "Local perf sweep only uses 1x1, 1x2, 1x4, 2x4, and 1x8 blocked-pack patterns"
         )
 
     tile_cnt = num_blocks * num_tiles_in_block
@@ -117,6 +118,7 @@ def test_perf_pack_dest_bank(
         templates=[
             TILIZE(tilize),
             LOOP_FACTOR(loop_factor),
+            PACK_SRC_FROM_OUTPUT(),
         ],
         runtimes=[
             DEST_INDEX(dest_index),

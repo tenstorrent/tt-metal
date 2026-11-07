@@ -12,13 +12,15 @@ Tests the LLK pack kernel with:
 
 import pytest
 import torch
+from conftest import skip_for_wormhole
+from helpers.bfp_format_utils import QUANTIZE_TO_FORMAT
 from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from helpers.constraints import (
     get_valid_dest_accumulation_modes,
     get_valid_dest_indices,
 )
 from helpers.data_format_inference import infer_data_formats, unpacks_to_dest
-from helpers.format_config import DataFormat
+from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import (
     FACES_PER_TILE,
     TILE_DIMENSIONS,
@@ -31,8 +33,11 @@ from helpers.llk_params import (
     DestSync,
     PackerReluType,
     PerfRunType,
+    format_dict,
 )
 from helpers.param_config import (
+    DEST_SYNC_TILE_LIMITS,
+    effective_dest_acc,
     get_num_blocks_and_num_tiles_in_block,
     input_output_formats,
     parametrize,
@@ -40,6 +45,7 @@ from helpers.param_config import (
 from helpers.perf.core import create_test_or_perf_config
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
+from helpers.test_config import BuildMode, TestConfig
 from helpers.test_variant_parameters import (
     DEST_INDEX,
     DEST_SYNC,
@@ -47,12 +53,25 @@ from helpers.test_variant_parameters import (
     NUM_BLOCKS,
     NUM_FACES,
     NUM_TILES_IN_BLOCK,
+    PACK_BLOCK,
+    PACK_RMW_DEST,
+    PACK_SRC_FROM_OUTPUT,
     RELU_CONFIG,
     TILE_COUNT,
     TILIZE,
     generate_input_dim,
 )
+from helpers.unpack import unpack_res_tiles
 from helpers.utils import passed_test, result_tensor
+from ttexalens.tt_exalens_lib import read_from_device, write_to_device
+
+PACK_BLOCK_MIN_TILES = 4
+
+
+def golden_src_f32(src_A):
+    """The stimuli as the Float32 bit patterns a 32-bit DEST holds, as int32."""
+    return src_A.to(torch.float32).contiguous().view(torch.int32)
+
 
 PACK_FORMATS = input_output_formats(
     [
@@ -97,8 +116,12 @@ def test_pack(
     perf_report=None,
     run_types=None,
     loop_factor: int = 1,
+    pack_block: bool = False,
+    block_tiles: int | None = None,
+    allow_int32_mix: bool = False,
+    res_page_bytes: int | None = None,
 ):
-    if (formats.input_format == DataFormat.Int32) ^ (
+    if not allow_int32_mix and (formats.input_format == DataFormat.Int32) ^ (
         formats.output_format == DataFormat.Int32
     ):
         pytest.skip(
@@ -121,6 +144,30 @@ def test_pack(
     )
 
     unpack_to_dest = unpacks_to_dest(formats.input_format, dest_acc)
+    if (
+        formats.output_format in (DataFormat.Int32, DataFormat.Int8, DataFormat.UInt8)
+        and not formats.input_format.is_integer()
+        and dest_acc == DestAccumulation.Yes
+    ):
+        # A float in a 32-bit DEST packed to an integer format is the bit pattern read as a sign-magnitude Int32 (the early conversion is a bitcast), saturated to the output width
+        bits = golden_src_f32(src_A)
+        magnitude = (bits & 0x7FFFFFFF).to(torch.int64)
+        wide = torch.where(bits < 0, -magnitude, magnitude)
+        if formats.output_format == DataFormat.Int8:
+            wide = wide.clamp(-127, 127)
+        elif formats.output_format == DataFormat.UInt8:
+            wide = wide.abs().clamp(0, 255)
+        golden_tensor = wide.to(format_dict[formats.output_format])
+        golden_tensor = golden_tensor.view(tile_cnt_A, -1)[
+            :, : FACES_PER_TILE * 16 * 16
+        ].reshape(-1)
+
+    if formats.output_format in QUANTIZE_TO_FORMAT:
+        # block float and FP8 outputs the packer narrows: the golden carries the same quantization
+        golden_tensor = QUANTIZE_TO_FORMAT[formats.output_format](golden_tensor).to(
+            format_dict[formats.output_format]
+        )
+
     # To come as close as possible to actual hardware behavior, we infer data formats here
     # and use the inferred pack_src format for ReLU operations.
     data_formats = infer_data_formats(
@@ -170,22 +217,48 @@ def test_pack(
         data_formats.pack_src,
     )
 
-    num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
-        dest_sync,
-        dest_acc,
-        formats,
-        input_dimensions,
-        TILE_DIMENSIONS,
-        BlocksCalculationAlgorithm.Standard,
-    )
+    if block_tiles is None:
+        num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
+            dest_sync,
+            dest_acc,
+            formats,
+            input_dimensions,
+            TILE_DIMENSIONS,
+            BlocksCalculationAlgorithm.Standard,
+        )
+    else:
+        # sized below from block_tiles: the tile count need not divide into a DEST section
+        num_blocks, num_tiles_in_block = 0, 0
 
-    if dest_index != 0:
+    if block_tiles is not None:
+        # A block of block_tiles tiles from dest index dest_index, the call a kernel makes with a tile index (welford groupnorm packs two tiles from index 1).
+        dest_wide = (
+            effective_dest_acc(formats.input_format, formats.output_format, dest_acc)
+            == DestAccumulation.Yes
+            or formats.input_format.is_32_bit()
+        )
+        section_tiles = DEST_SYNC_TILE_LIMITS[dest_sync] // (2 if dest_wide else 1)
+        if tile_cnt_A % block_tiles != 0 or dest_index + block_tiles > section_tiles:
+            pytest.skip(
+                f"A block of {block_tiles} tiles from dest index {dest_index} does not fit tile count {tile_cnt_A} and {section_tiles} tiles per section."
+            )
+        num_tiles_in_block = block_tiles
+        num_blocks = tile_cnt_A // block_tiles
+    elif dest_index != 0:
         num_tiles_in_block = num_tiles_in_block - dest_index
         if num_tiles_in_block <= 0 or tile_cnt_A % num_tiles_in_block != 0:
             pytest.skip(
                 f"Dest index {dest_index} is not valid for tile count {tile_cnt_A} and num_tiles_in_block {num_tiles_in_block}."
             )
         num_blocks = tile_cnt_A // num_tiles_in_block
+
+    # llk_pack_block (LLK_PACK_BLOCK_MIN_TILES in llk_pack_tile_api.h) packs shorter blocks one tile at a time
+    # (negated in the report: its own key, the build is the per-tile one)
+    pack_block_arg = (
+        -int(pack_block)
+        if pack_block and num_tiles_in_block < PACK_BLOCK_MIN_TILES
+        else pack_block
+    )
 
     if is_perf and perf_report is None:
         raise ValueError("perf_report must be provided when is_perf=True")
@@ -200,6 +273,9 @@ def test_pack(
             generate_input_dim(input_dimensions, input_dimensions),
             TILIZE(),
             DEST_SYNC(dest_sync),
+            PACK_BLOCK(pack_block_arg),
+            PACK_SRC_FROM_OUTPUT(),
+            PACK_RMW_DEST(),
         ],
         "runtimes": [
             TILE_COUNT(tile_cnt_A),
@@ -219,6 +295,7 @@ def test_pack(
             tile_count_A=tile_cnt_A,
             tile_count_B=tile_cnt_B,
             tile_count_res=tile_cnt_A,
+            operand_res_tile_size=res_page_bytes,
         ),
         "dest_acc": dest_acc,
         "unpack_to_dest": unpack_to_dest,
@@ -233,7 +310,29 @@ def test_pack(
         configuration.run(perf_report)
         return
 
+    if res_page_bytes is not None and TestConfig.BUILD_MODE != BuildMode.PRODUCE:
+        # the run clears one unpadded stride per tile: fill the pages so a misplaced tile cannot match by luck
+        write_to_device(
+            TestConfig.TENSIX_LOCATION,
+            configuration.variant_stimuli.buf_res_addr,
+            [0xA5] * (tile_cnt_A * res_page_bytes),
+        )
     res_from_L1 = configuration.run().result
+    if res_page_bytes is not None:
+        # the result tiles sit one padded page apart
+        res_from_L1 = unpack_res_tiles(
+            read_from_device(
+                TestConfig.TENSIX_LOCATION,
+                configuration.variant_stimuli.buf_res_addr,
+                num_bytes=tile_cnt_A * res_page_bytes,
+            ),
+            formats.output_format,
+            tile_cnt_A,
+            False,
+            FACES_PER_TILE,
+            16,
+            tile_stride_bytes=res_page_bytes,
+        )
 
     res_tensor = result_tensor(res_from_L1, formats.output_format, golden_tensor)
 
@@ -261,3 +360,191 @@ def test_pack(
         test_passed = True
 
     assert test_passed
+
+
+PACK_BLOCK_SWEEP = dict(
+    formats=PACK_FORMATS,
+    dest_acc=get_valid_dest_accumulation_modes,
+    input_dimensions=[[32, 32], [64, 64], [128, 64], [128, 128]],
+    relu_type=[PackerReluType.NoRelu],
+    dest_sync=[DestSync.Half, DestSync.Full],
+    dest_index=lambda dest_acc, dest_sync, formats, input_dimensions: get_valid_dest_indices(
+        dest_sync, dest_acc, formats, input_dimensions
+    ),
+)
+
+
+PACK_BLOCK_PERF_SWEEP = dict(
+    formats=input_output_formats(
+        [DataFormat.Float16_b, DataFormat.Float32, DataFormat.Int32, DataFormat.Bfp8_b]
+    ),
+    dest_acc=get_valid_dest_accumulation_modes,
+    input_dimensions=[[64, 64], [128, 64], [128, 128]],
+    relu_type=[PackerReluType.NoRelu],
+    dest_sync=[DestSync.Half, DestSync.Full],
+    dest_index=[0],
+)
+
+
+@skip_for_wormhole
+@parametrize(**PACK_BLOCK_SWEEP)
+def test_pack_block(
+    formats,
+    dest_acc,
+    input_dimensions,
+    relu_type,
+    dest_sync,
+    dest_index,
+):
+    test_pack(
+        formats,
+        dest_acc,
+        input_dimensions,
+        relu_type,
+        dest_sync,
+        dest_index,
+        pack_block=True,
+    )
+
+
+@skip_for_wormhole
+@parametrize(**PACK_BLOCK_SWEEP)
+def test_pack_block_w(
+    formats,
+    dest_acc,
+    input_dimensions,
+    relu_type,
+    dest_sync,
+    dest_index,
+):
+    """The W offset block packs: one output address programmed up front, a call moves it with the packer W counter."""
+    test_pack(
+        formats,
+        dest_acc,
+        input_dimensions,
+        relu_type,
+        dest_sync,
+        dest_index,
+        pack_block=3,
+    )
+
+
+@skip_for_wormhole
+@parametrize(**PACK_BLOCK_SWEEP)
+def test_pack_block_plain(
+    formats,
+    dest_acc,
+    input_dimensions,
+    relu_type,
+    dest_sync,
+    dest_index,
+):
+    """The plain block and the closed block of llk_pack_block that program the output on every call (the first block of an output, LLK_PACK_W_OFFSET_OFF)."""
+    test_pack(
+        formats,
+        dest_acc,
+        input_dimensions,
+        relu_type,
+        dest_sync,
+        dest_index,
+        pack_block=5,
+    )
+
+
+@skip_for_wormhole
+@parametrize(
+    formats=input_output_formats([DataFormat.Float16_b, DataFormat.Float32]),
+    dest_acc=[DestAccumulation.Yes],
+    input_dimensions=[[32, 2304]],
+    relu_type=[PackerReluType.NoRelu],
+    dest_sync=[DestSync.Half, DestSync.Full],
+    dest_index=[0],
+    block_tiles=[4, 6, 8],
+)
+def test_pack_block_w_far(
+    formats,
+    dest_acc,
+    input_dimensions,
+    relu_type,
+    dest_sync,
+    dest_index,
+    block_tiles,
+):
+    """W offset block packs of 72 tiles: the blocks from output tile 64 on sit 256 KB or more past the base of a 32 bit output, where the channel-1 W offset wraps."""
+    test_pack(
+        formats,
+        dest_acc,
+        input_dimensions,
+        relu_type,
+        dest_sync,
+        dest_index,
+        pack_block=6,
+        block_tiles=block_tiles,
+    )
+
+
+@skip_for_wormhole
+@parametrize(
+    formats=InputOutputFormat(DataFormat.Float16_b, DataFormat.Bfp8_b),
+    dest_acc=get_valid_dest_accumulation_modes,
+    input_dimensions=[[32, 512]],
+    relu_type=[PackerReluType.NoRelu],
+    dest_sync=[DestSync.Half, DestSync.Full],
+    dest_index=[0],
+    block_tiles=[4, 8],
+)
+def test_pack_block_closed_w_far(
+    formats,
+    dest_acc,
+    input_dimensions,
+    relu_type,
+    dest_sync,
+    dest_index,
+    block_tiles,
+):
+    """Closed W offset blocks of Bfp8_b tiles in 20 KB pages: the blocks that reach output tile 13 sit 256 KB or more past the base."""
+    test_pack(
+        formats,
+        dest_acc,
+        input_dimensions,
+        relu_type,
+        dest_sync,
+        dest_index,
+        pack_block=6,
+        block_tiles=block_tiles,
+        res_page_bytes=20480,
+    )
+
+
+@skip_for_wormhole
+@parametrize(
+    formats=PACK_FORMATS,
+    dest_acc=get_valid_dest_accumulation_modes,
+    input_dimensions=[[96, 128], [160, 32], [224, 32]],
+    relu_type=[PackerReluType.NoRelu],
+    dest_sync=[DestSync.Half, DestSync.Full],
+    dest_index=[0, 1, 3],
+    block_tiles=[2, 3, 5, 6, 7],
+    pack_block=[2, 5],
+)
+def test_pack_block_tiles(
+    formats,
+    dest_acc,
+    input_dimensions,
+    relu_type,
+    dest_sync,
+    dest_index,
+    block_tiles,
+    pack_block,
+):
+    """Blocks of 2 to 7 tiles from dest index 0, 1 and 3 (a two tile block of tiles 3 and 4 straddles a four tile boundary of DEST), the default W offset forms (2) and the plain and closed blocks (5)."""
+    test_pack(
+        formats,
+        dest_acc,
+        input_dimensions,
+        relu_type,
+        dest_sync,
+        dest_index,
+        pack_block=pack_block,
+        block_tiles=block_tiles,
+    )

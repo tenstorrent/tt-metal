@@ -38,6 +38,7 @@ import os
 import re
 import signal
 import sys
+import zlib
 from dataclasses import asdict
 from pathlib import Path
 from typing import NoReturn, Optional
@@ -755,6 +756,23 @@ def _select_node_list(config, items):
     items[:] = selected
 
 
+def _thin_sweep(config, items):
+    """In the perf CI runner (--perf-splits), keep one id in LLK_SWEEP_STRIDE (default 50, chosen by a hash of the node id) of the tests marked llk_sweep; LLK_SWEEP_ALL=1 keeps every id."""
+    if (
+        config.getoption("--perf-splits") is None
+        or os.environ.get("LLK_SWEEP_ALL") == "1"
+    ):
+        return
+    stride = int(os.environ.get("LLK_SWEEP_STRIDE", "50"))
+    items[:] = [
+        item
+        for item in items
+        if item.get_closest_marker("llk_sweep") is None
+        or zlib.crc32(item.nodeid.encode()) % stride == 0
+        or item.name in getattr(item.module, "LLK_SWEEP_KEEP", ())
+    ]
+
+
 def _split_by_cost(config, items):
     """Cut the tests, in collection order, into --perf-splits chunks of equal estimated time.
 
@@ -909,6 +927,7 @@ def pytest_collection_modifyitems(config, items):
     result = yield
     _select_tests_by_op(config, items)
     _select_node_list(config, items)
+    _thin_sweep(config, items)
     _split_by_cost(config, items)
     _restore_test_order(config, items)
 

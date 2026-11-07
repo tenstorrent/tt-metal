@@ -56,6 +56,9 @@ class DataFormat(Enum):
     Float16_b = DataFormatInfo("Float16_b", 2)
     Bfp8 = DataFormatInfo("Bfp8", 1)  # WH/BH specific
     Bfp8_b = DataFormatInfo("Bfp8_b", 1)  # WH/BH specific
+    Bfp4 = DataFormatInfo("Bfp4", 1)  # BH, A exponent
+    Bfp2 = DataFormatInfo("Bfp2", 1)  # BH, A exponent
+    Lf8 = DataFormatInfo("Lf8", 1)  # BH, FP8 e5m2
     Bfp4_b = DataFormatInfo("Bfp4_b", 1)  # WH/BH specific
     Bfp2_b = DataFormatInfo("Bfp2_b", 1)  # WH/BH specific
     Float32 = DataFormatInfo("Float32", 4)
@@ -146,6 +149,9 @@ class DataFormat(Enum):
         return self in {
             DataFormat.Float16,
             DataFormat.Bfp8,
+            DataFormat.Bfp4,
+            DataFormat.Bfp2,
+            DataFormat.Lf8,
             DataFormat.MxFp4_2x_A,
         }
 
@@ -166,10 +172,10 @@ class DataFormat(Enum):
         num_exponents = 0
         if self in {DataFormat.Bfp8, DataFormat.Bfp8_b}:
             num_exponents = num_datums // 16
-        elif self in {DataFormat.Bfp4_b}:
+        elif self in {DataFormat.Bfp4_b, DataFormat.Bfp4}:
             num_exponents = num_datums // 16
             return (num_datums // 2) + num_exponents
-        elif self in {DataFormat.Bfp2_b}:
+        elif self in {DataFormat.Bfp2_b, DataFormat.Bfp2}:
             num_exponents = num_datums // 16
             return (num_datums // 4) + num_exponents
         elif self.is_mx_format():
@@ -178,6 +184,8 @@ class DataFormat(Enum):
             # For MxFp4, self.size = 0.5, so convert to int to avoid float in l1_align
             element_bytes = int(self.size * num_datums)
             return l1_align(num_scales) + l1_align(element_bytes)
+        elif self == DataFormat.Tf32:
+            return 4 * num_datums  # a 32-bit word per datum in L1
         # For formats with fractional byte sizes (e.g., hypothetically), ensure int result
         return int(self.size * num_datums) + num_exponents
 
@@ -225,7 +233,9 @@ class DataFormat(Enum):
         return self in {
             DataFormat.Bfp8,
             DataFormat.Bfp8_b,
+            DataFormat.Bfp4,
             DataFormat.Bfp4_b,
+            DataFormat.Bfp2,
             DataFormat.Bfp2_b,
         }
 
@@ -695,6 +705,9 @@ BLACKHOLE_DATA_FORMAT_ENUM_VALUES = {
     DataFormat.Int32: 8,
     DataFormat.UInt16: 9,
     DataFormat.Int8: 14,
+    DataFormat.Bfp4: 3,
+    DataFormat.Bfp2: 11,
+    DataFormat.Lf8: 10,
     DataFormat.UInt32: 24,
     DataFormat.Fp8_e4m3: 26,
     DataFormat.UInt8: 30,
