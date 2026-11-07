@@ -81,6 +81,7 @@ struct MeshSocketLocalCoreData {
 
 struct MeshSocketData {
     bool is_sender{};
+    bool peer_is_host{};
     uint64_t config_buffer_address{};
     uint64_t data_buffer_address{};
     uint64_t fifo_size{};

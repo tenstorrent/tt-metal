@@ -16,18 +16,19 @@ Description:
     gets one row each, numbered in Downstream #, with Peer naming the core that row describes.
     Match a sender's Downstream Addr to a receiver's Config Addr to pair the two halves of a socket
     (sockets, not cores). Node is a fabric node id, the one chip name shared across ranks; a peer on
-    this host shows its device id instead.
+    this host shows its device id instead. A D2H or H2D socket has only its device side: its Peer
+    reads host, and a D2H sender's Downstream Addr reads N/A.
 
     Counter columns, by source:
 
-      sent@snd    sender bytes_sent                                    kernel frame
-      acked@snd   sender_socket_md.bytes_acked_array[i]                L1, written by the receiver
+      sent@snd    sender bytes_sent                                    kernel frame, or L1 for D2H
+      acked@snd   sender_socket_md.bytes_acked_array[i]                L1, written by the receiver (the host for D2H)
       wr_off      sender write_ptr, offset from downstream_fifo_addr   kernel frame
-      sent@rcv    receiver_socket_md.bytes_sent                        L1, written by the sender
-      acked@rcv   receiver bytes_acked                                 kernel frame
+      sent@rcv    receiver_socket_md.bytes_sent                        L1, written by the sender (the host for H2D)
+      acked@rcv   receiver bytes_acked                                 kernel frame, or L1 for H2D
       rd_addr     receiver read_ptr, absolute L1 address               kernel frame
 
-    A kernel flushes its own counters to L1 only at exit, so live values are read from its
+    A D2D kernel flushes its own counters to L1 only at exit, so live values are read from its
     Socket{Sender,Receiver}Interface local, matched on config_addr. This halts the core. A kernel
     frame column reads N/A when no kernel was running on the core or the local was optimized out.
 
@@ -72,8 +73,11 @@ class Peer:
     core_x: int
     core_y: int
     device_id: int | None = None
+    is_host: bool = False
 
     def label(self) -> str:
+        if self.is_host:
+            return "host"
         where = f"dev{self.device_id}" if self.device_id is not None else node_label(self.mesh_id, self.fabric_chip_id)
         return f"{where} ({self.core_x},{self.core_y})"
 
@@ -220,16 +224,20 @@ def discover(inspector_data, id_mapping, run_checks) -> list[SocketCore]:
                     config_addr=int(s.configBufferAddress),
                     acked_offset=int(s.bytesAckedOffsetBytes),
                     acked_stride=int(s.bytesAckedStrideBytes),
-                    peers=[
-                        Peer(
-                            mesh_id=peer_mesh_id,
-                            fabric_chip_id=int(p.fabricChipId),
-                            core_x=int(p.coreX),
-                            core_y=int(p.coreY),
-                            device_id=fabric_to_device_id.get((peer_mesh_id, int(p.fabricChipId))),
-                        )
-                        for p in e.peers
-                    ],
+                    peers=(
+                        [Peer(mesh_id=0, fabric_chip_id=0, core_x=0, core_y=0, is_host=True)]
+                        if s.peerIsHost
+                        else [
+                            Peer(
+                                mesh_id=peer_mesh_id,
+                                fabric_chip_id=int(p.fabricChipId),
+                                core_x=int(p.coreX),
+                                core_y=int(p.coreY),
+                                device_id=fabric_to_device_id.get((peer_mesh_id, int(p.fabricChipId))),
+                            )
+                            for p in e.peers
+                        ]
+                    ),
                 )
             )
 
@@ -242,9 +250,9 @@ def sender_row(core: SocketCore, md: SenderMd, index: int) -> SocketRow:
         location=core.location,
         node=core.node,
         config_addr=core.config_addr,
-        downstream_config_addr=md.downstream_config_addr,
+        downstream_config_addr=None if core.peers[index].is_host else md.downstream_config_addr,
         downstream=index,
-        sent_at_sender=core.interface.get("bytes_sent"),
+        sent_at_sender=core.interface.get("bytes_sent", md.bytes_sent if md.is_d2h else None),
         acked_at_sender=md.bytes_acked[index],
         write_ptr=core.interface.get("write_ptr"),
         sent_at_receiver=None,  # receiver's buffer
@@ -268,7 +276,7 @@ def receiver_row(core: SocketCore, md: ReceiverMd) -> SocketRow:
         acked_at_sender=None,  # sender's buffer
         write_ptr=None,  # sender's buffer
         sent_at_receiver=md.bytes_sent,
-        acked_at_receiver=core.interface.get("bytes_acked"),
+        acked_at_receiver=core.interface.get("bytes_acked", md.bytes_acked if md.is_h2d else None),
         read_ptr=core.interface.get("read_ptr"),
         fifo_size=md.fifo_total_size,
         num_downstreams=None,  # sender's buffer

@@ -20,6 +20,7 @@ class MeshBuffer;
 class MeshDeviceImpl;
 class MeshWorkloadImpl;
 class MeshSocket;
+struct MeshCoreCoord;
 }  // namespace distributed
 
 namespace inspector {
@@ -60,6 +61,12 @@ public:
     static void mesh_buffer_deallocated(const distributed::MeshBuffer* mesh_buffer) noexcept;
 
     static void mesh_socket_created(const distributed::MeshSocket* socket) noexcept;
+    static void host_socket_created(
+        const distributed::MeshBuffer* config_buffer,
+        const distributed::MeshCoreCoord& core,
+        bool is_sender,
+        uint32_t fifo_size,
+        uint64_t data_buffer_address) noexcept;
 
     static void global_semaphore_created(const distributed::MeshBuffer* buffer, const CoreRangeSet& cores) noexcept;
     static void global_semaphore_reset(const distributed::MeshBuffer* buffer, uint32_t value) noexcept;
