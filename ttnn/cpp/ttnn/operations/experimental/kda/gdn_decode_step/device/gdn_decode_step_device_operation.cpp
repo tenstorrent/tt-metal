@@ -28,6 +28,15 @@ void check_tiled(const Tensor& t, std::string_view name, std::initializer_list<D
         ok = ok || t.dtype() == d;
     }
     TT_FATAL(ok, "{}: {} has unsupported dtype {}", kOp, name, t.dtype());
+    // the circular buffers and page reads are sized for 32x32 tiles
+    const auto& tile = t.tensor_spec().tile();
+    TT_FATAL(
+        tile.get_height() == tt::constants::TILE_HEIGHT && tile.get_width() == tt::constants::TILE_WIDTH,
+        "{}: {} must use 32x32 tiles (got {}x{})",
+        kOp,
+        name,
+        tile.get_height(),
+        tile.get_width());
 }
 }  // namespace
 
@@ -167,11 +176,17 @@ void GdnDecodeStepOperation::validate_on_program_cache_miss(const operation_attr
         if (in.state_pool2.has_value()) {
             check_tiled(*in.state_pool2, "state_pool2", {DataType::FLOAT32});
             check_same_device(in.qkv, *in.state_pool2, kOp, "state_pool2");
-            // the kernels address both pools with one accessor type
+            // the kernels address both pools with one accessor type and state's page size (same_layout_accessor)
             TT_FATAL(
                 in.state_pool2->buffer()->buffer_type() == in.state.buffer()->buffer_type(),
                 "{}: state_pool2 must be in the same memory (DRAM / L1) as state",
                 kOp);
+            TT_FATAL(
+                in.state_pool2->buffer()->aligned_page_size() == in.state.buffer()->aligned_page_size(),
+                "{}: state_pool2 must have the aligned page size of state ({} B, got {} B)",
+                kOp,
+                in.state.buffer()->aligned_page_size(),
+                in.state_pool2->buffer()->aligned_page_size());
             TT_FATAL(
                 in.state_pool2->buffer()->num_pages() >= kv_tiles,
                 "{}: state_pool2 must hold at least Dk * Dv / 1024 tiles",
@@ -184,6 +199,12 @@ void GdnDecodeStepOperation::validate_on_program_cache_miss(const operation_attr
                 in.conv_hist_pool2->buffer()->buffer_type() == in.conv_hist->buffer()->buffer_type(),
                 "{}: conv_hist_pool2 must be in the same memory (DRAM / L1) as conv_hist",
                 kOp);
+            TT_FATAL(
+                in.conv_hist_pool2->buffer()->aligned_page_size() == in.conv_hist->buffer()->aligned_page_size(),
+                "{}: conv_hist_pool2 must have the aligned page size of conv_hist ({} B, got {} B)",
+                kOp,
+                in.conv_hist->buffer()->aligned_page_size(),
+                in.conv_hist_pool2->buffer()->aligned_page_size());
             TT_FATAL(
                 in.conv_hist_pool2->buffer()->num_pages() >= 4, "{}: conv_hist_pool2 must hold at least 4 tiles", kOp);
         }
