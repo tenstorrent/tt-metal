@@ -281,13 +281,15 @@ void kernel_main() {
                     const uint32_t face_bytes = acc_tile_bytes / 4;
                     const uint32_t frow = acc_tile_bytes / 64;
                     const uint32_t row_off = gather_row_offset(member_idx, acc_tile_bytes);
+                    AGRMS_ZONE("AG_W_XW");
+                    // one write-state per peer (its NoC coords + the face-row size), then 2 * rows stateful writes
                     for (uint32_t m = 0; m < k; ++m) {
+                        noc_async_write_one_packet_set_state(peer_addr(peers_idx, m, slot_base), frow);
                         for (uint32_t r = 0; r < rows; ++r) {
                             const uint32_t s0 = src + r * acc_tile_bytes;
-                            const uint64_t dst =
-                                peer_addr(peers_idx, m, slot_base + r * row_gather * acc_tile_bytes + row_off);
-                            noc_async_write(s0, dst, frow);
-                            noc_async_write(s0 + face_bytes, dst + face_bytes, frow);
+                            const uint32_t d0 = slot_base + r * row_gather * acc_tile_bytes + row_off;
+                            noc_async_write_one_packet_with_state(s0, d0);
+                            noc_async_write_one_packet_with_state(s0 + face_bytes, d0 + face_bytes);
                         }
                     }
                 } else {
@@ -301,10 +303,16 @@ void kernel_main() {
                     }
                 }
                 // same NoC, VC and destination: the increments arrive after the data (flush, not barrier)
-                noc_async_writes_flushed();
+                {
+                    AGRMS_ZONE("AG_W_XF");
+                    noc_async_writes_flushed();
+                }
                 const uint32_t sem_addr = sem_par[parity];
-                for (uint32_t m = 0; m < k; ++m) {
-                    noc_semaphore_inc(peer_addr(peers_idx, m, sem_addr), 1);
+                {
+                    AGRMS_ZONE("AG_W_XI");
+                    for (uint32_t m = 0; m < k; ++m) {
+                        noc_semaphore_inc(peer_addr(peers_idx, m, sem_addr), 1);
+                    }
                 }
                 cb_pop_front(cb_partial_sumsq, rows);
                 partials_expected[parity] += k;

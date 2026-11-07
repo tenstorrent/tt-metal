@@ -185,3 +185,38 @@
   96×1792 L2 acceptance cases.
 - Tests added: `test_split_pins` updated (4 pins + the prescale gate). `perf_ablation_all_gather_rms_norm.py` gains
   `AGRMS_PERF_NUM_LINKS`.
+
+## Refinement 5 — Local work: cut the members' compute + combine time (perf, focus case)
+- Date: 2026-11-07
+- What was done (local work; measured with `perf_measure.py`, fastest chip, `eval.ccl_perf compare`):
+  - Breakdown first (gated zones, the writer's exchange split into partial wait / write issue / flush / increments /
+    peer wait). The LOCAL-only ablation and the full op's tail were both dominated by the symmetric exchange's SEND
+    round: 1.2–2.9 µs per block, NoC-bound, because all 96 member cores ship k = 8 column-0 partials (faces 0/2,
+    2 KiB at fp32) at the same moment — 16× the 128 B of row sums actually needed.
+  - **Row-form symmetric partials** (knob `ROW_PARTIALS`, env `AGRMS_ROW_PARTIALS=0` for A/B; compute CT 12, writer
+    CT 22): compute collapses with the owner path's `collapse_rows_to_row0` (ones-row × sumsq^T, row 0 = the 32 row
+    sums), the writer sends two 64 B face rows into row `member_idx` of the row's gather tile on every peer, and every
+    member runs `combine_rows_block<cb_inv_rms>` (REDUCE_COL + transpose_dest + finalize). The unused gather rows
+    k..31 are zeroed once (`zero_unused_gather_rows`, now also for the row form). `cb_gathered_sumsq` shrinks k×.
+    Focus 24.57 → 23.81 µs, LOCAL-only 13.16 → 11.56 µs.
+  - Stateful one-packet writes (`noc_async_write_one_packet_set_state` per peer) for the 2·rows face-row writes:
+    measured null (23.81 → 23.81; the slowest peer, not the issue rate, gates the wait), kept (correct, harmless).
+  - Re-checked k with the cheaper exchange: k = 4 24.76, k = 12 symmetric 33.59 µs; k = 8 stays.
+  - Not built: group-rectangle multicast (harvested columns differ per chip, one logical core set serves every chip);
+    writer order "send partial(b+1) before store(b)" (helps LOCAL-only only; needs cb_out to hold a block).
+  - Reused: `collapse_rows_to_row0`, `combine_rows_block` (templated on its output CB), `gather_row_offset`,
+    `zero_unused_gather_rows`, the parity semaphores and lockstep slots. Added: `ROW_PARTIALS` / `row_partials_on`,
+    one CT flag per kernel, the row-form send branch.
+- Perf (fastest chip, QB2 1×4 ring, 2 links): 640×384 [FOCUS] 24.57 → **23.81 µs** (slowest 25.86 → 24.76);
+  640×512 34.20 → **33.84 µs**; 640×1792 78.38 → **78.02 µs**. TRANSPORT-only 19.82 µs (unchanged), so the exposed
+  time went 4.76 → 3.99 µs.
+- Still binding (finding): the last landed row's chain (~4 µs): landing → partial ~0.85 µs of CB hand-offs, exchange
+  ~1.1 µs (slowest member), combine ~0.65, normalize ~0.5, store ~1.3 µs (DRAM write latency at the tail).
+- Accuracy achieved: acceptance PCC gates (bf16 0.995, fp32 0.999, bf8b 0.99) met on every unit case; precision
+  baseline test green (15 passed, 1 skipped) — the row form uses the same FPU collapse / combine as the owner path.
+- Golden test progress: slice of 60 cells (640×384, 1×1×32×2048, 1×1×64×1000, 2×4×128×512, 4×1×512×512; every dtype ×
+  fp32_dest_acc_en; INTERLEAVED + WIDTH_SHARDED; cluster_axis 1, 2 links, gamma bf16 RM): 50 passed, 10 xfailed
+  (the permanent fp32 / fp32_dest_acc_en=False EXCLUSION), 0 failed. The three loose perf cases pass their golden check
+  in `perf_measure.py`. Unit dir: acceptance 32/32, precision 15 + 1 skipped, native shard 6/6, debug 7/7.
+- Issues encountered: none.
+- Tests added: none (the symmetric path is covered by the existing acceptance cases, now on the row form).

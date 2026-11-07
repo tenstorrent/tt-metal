@@ -286,7 +286,7 @@ Item order: the upstream sends entry e's item xb at step `xb + e·relay_lag` (`r
 | `await_landing_block` | one block's landing tiles | all landed blocks | ≤ 2·L semaphore waits per block; one `cb_push_back` per block; regime N: ≤ G tail zero-fills per block |
 | `sum_squares_block` | `block_row_tiles × core_w_tiles` (N: `× land_w_tiles`) | cb_x_landing (not popped), cb_gamma | one call per block (mul init once); one DEST acquire + pack per tile-row |
 | `collapse_sumsq_block` | `ReduceInputBlockShape::of(block_row_tiles, 1)` | same | one `reduce` per block; k == 1: finalize post-op |
-| `exchange_partials_block` | `block_row_tiles` partials → `k·block_row_tiles` gathered (symmetric) / owner rows | same | one round per block: k unicast writes (faces 0/2) + flush + k semaphore incs + one wait. Owner: k partials in + k inv back per owned row |
+| `exchange_partials_block` | `block_row_tiles` partials → `block_row_tiles` row-form gather tiles (symmetric, Refinement 5) / owner rows | same | one round per block: per peer two 64 B face-row writes into row m of the row's gather tile (Refinement 5; was faces 0/2, 2 KiB) + flush + k semaphore incs + one wait. Owner: k partials in + k inv back per owned row |
 | `combine_partials_block` | `of(block_row_tiles, k)` with `ReduceWithinTile::Skip` / owner row combine | same | one `reduce` per block + finalize |
 | `compose_aligned_block` (N) | `out_w_tiles` dense tiles per row, in `out_unit` units | cb_x_landing | one reserve/push per unit; per tile a RISC-V datum copy from ≤ ⌈32/W_local⌉+1 landing tiles |
 | `normalize_block` | `grid(block_row_tiles, core_w_tiles)` (N: `out_w_tiles`, streamed from cb_x_aligned) | cb_x_landing, cb_inv_rms (popped at end), cb_gamma | one chain call per block: mul-bcast-col init + dest-reuse gamma init once |
@@ -577,3 +577,15 @@ Not built: member-direct landing notifications (fusing the increment into each m
 every packet, against rule 4's router stall; for the tail they would only save the port's notify hop, and they would
 un-gate earlier rows, which are not on the critical path here), the compute lookahead (no effect on the last block),
 and the Linear line-end notify loop (not on the flagged cases, untouched).
+
+### Refinement 5 deviation — symmetric combine on row-form partials
+
+The base op's symmetric combine ships each member's column-0 partial as faces 0/2 (2 KiB at fp32) to every peer. On the
+fused grid every member core sends at the same moment, so the 64 messages per row-group-block (k = 8) were NoC-bound:
+zones showed 1.2–2.9 µs per send round. The symmetric path now reuses the owner combine's row form: compute collapses
+with `collapse_rows_to_row0` (ones-row × sumsq^T, row 0 = the 32 row sums), the writer ships two 64 B face rows into
+row `member_idx` of the row's gather tile on every peer, and every member runs `combine_rows_block` (REDUCE_COL +
+transpose_dest + finalize) straight into `cb_inv_rms`. Same k² messages, 1/16 of the bytes, `cb_gathered_sumsq` k× smaller.
+Knob `ROW_PARTIALS` (env `AGRMS_ROW_PARTIALS=0`: column form, A/B only). Group-rectangle multicast was not built: the
+harvested worker columns (virtual x {1–3}, {5–7}, {11–15} on this QB2) differ per chip, and the CB addresses require
+one logical core set on every chip, so a logical rectangle is not a valid multicast rectangle everywhere.

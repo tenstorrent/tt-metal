@@ -224,7 +224,7 @@ members. Next would be member-direct landing notifications and a cheaper exchang
 2-level combine). Not done here: the notifications put an atomic on every packet (rule 4 router stall) for a
 port-notify hop of a few hundred ns, and the combine topology is Refinement 5's scope.
 
-### [ ] Refinement 5 — Local work: cut the members' compute + combine time (perf, focus case)
+### [x] Refinement 5 — Local work: cut the members' compute + combine time (perf, focus case)
 
 **Type**: perf
 
@@ -240,3 +240,18 @@ the x·γ pre-scale lamp during the combine wait (gate on the precision baseline
 **Done when**: the LOCAL-only ablation and the full-op fastest chip on the focus case both improve
 (`eval.ccl_perf compare` win), precision stays within the baseline in `verification_report.md`, the golden suite
 stays green, and the guard set does not regress.
+**Outcome**: fastest chip (`ccl_perf compare`: win, slowest chip lower too) focus **24.57 → 23.81 µs** (slowest 25.86 →
+24.76), LOCAL-only **13.16 → 11.56 µs**, exposed beyond TRANSPORT-only (19.82, unchanged) 4.76 → 3.99 µs; 640×512
+34.20 → 33.84, 640×1792 78.38 → 78.02. Breakdown first: split zones showed the symmetric exchange's send round was
+NoC-bound (1.2–2.9 µs: every member core sends k = 8 column-0 partials of 2 KiB at once, 16× the 128 B of payload). The
+lever: the symmetric combine now ships ROW-form partials (the owner path's ones-row × sumsq^T collapse; two 64 B face
+rows into row m of every peer's gather tile; `combine_rows_block` into `cb_inv_rms`), knob `ROW_PARTIALS`. After it the
+send round is 0.41 µs write issue + 0.25 µs semaphore incs + ~0.4 µs slowest-peer wait. Measured nulls / kept: stateful
+one-packet writes for the exchange (23.81 vs 23.81, kept: correct, harmless); k = 4 / 12-symmetric (24.76 / 33.59 µs:
+the transport's packets, not the combine, set k). Not built: group-rectangle multicast of the partials (harvested
+columns differ per chip; one logical core set must serve every chip), the writer order "send partial(b+1) before
+store(b)" (moves LOCAL-only only: in the full op block b+1 lands long after store(b) ends). Still binding: the last
+landed row's chain, ~4 µs on the focus: landing → partial ~0.85 µs (sumsq pack → collapse unpack → matmul → pack
+hand-offs), exchange ~1.1 µs (slowest member of the row group), combine ~0.65, one-multiply normalize ~0.5 (HiFi4 on
+fp32 x·γ), store ~1.3 µs (DRAM write latency with every group storing its last row at once). Next would be fusing the
+collapse into the Σx² pass (no CB round trip) and a transport order that lands the last rows earlier; each is ≤ 1 µs.
