@@ -46,7 +46,8 @@ bool prefill_format_supported(DataType dtype) {
 
 // Bands of mg whole grid rows share the band's M rows; the band's cores split N, nc tiles each. A band takes its M
 // tiles in chunks of mc and K in blocks of kb tiles (whole groups); the input arrives in units of ur rows x kb tiles.
-// ks = 2: K split, two bands with all M rows and half of K each, band 1 sending its fp32 sums to band 0.
+// ks = 2: K split, two bands with all M rows and half of K each, band 1 sending its fp32 sums per unit of rows to
+// band 0 through a two-unit ring.
 struct PrefillPlan {
     uint32_t mg = 0, nc = 0, mc = 0, kb = 0, ur = 1, ks = 1;
     double cost = 1e30;
@@ -78,8 +79,7 @@ std::optional<PrefillPlan> prefill_plan(
             const uint32_t kt = k_tiles / ks;
             const uint32_t nc = (n_tiles + band_cores - 1) / band_cores;
             for (uint32_t mc = 1; mc <= mb; mc++) {
-                // A K split holds a whole chunk of sums in flight, so it takes all M rows in one chunk.
-                if (mb % mc || (ks == 2 && mc != mb)) {
+                if (mb % mc) {
                     continue;
                 }
                 const uint32_t ur = mc % 4 == 0 ? 4 : mc % 2 == 0 ? 2 : 1;
@@ -88,7 +88,7 @@ std::optional<PrefillPlan> prefill_plan(
                         continue;
                     }
                     const uint32_t l1 = base_l1 + kPrefillInputSlots * ur * kb * 2048 + kb * nc * 4096 +
-                                        mc * nc * 4096 + (ks == 2 ? (mc + 2 * ur) * nc * 4096 : 0);
+                                        mc * nc * 4096 + (ks == 2 ? 4 * ur * nc * 4096 : 0);
                     if (l1 > kPrefillL1Budget) {
                         continue;
                     }
@@ -185,7 +185,7 @@ GgufMatmulPrefillProgramFactory::cached_program_t GgufMatmulPrefillProgramFactor
     add_prefill_cb(program, all, tt::CBIndex::c_24, tt::DataFormat::Float32, 4096, mc * nc);
     if (ks == 2) {
         add_prefill_cb(program, all, tt::CBIndex::c_17, tt::DataFormat::Float32, 4096, 2 * ur * nc);
-        add_prefill_cb(program, all, tt::CBIndex::c_18, tt::DataFormat::Float32, 4096, mc * nc);
+        add_prefill_cb(program, all, tt::CBIndex::c_18, tt::DataFormat::Float32, 4096, 2 * ur * nc);
     }
     add_prefill_cb(program, all, tt::CBIndex::c_16, tt::DataFormat::Float16_b, 2048, kPrefillOutTiles);
     const tt::tt_metal::Tile page_tile(
@@ -361,7 +361,8 @@ GgufMatmulPrefillProgramFactory::cached_program_t GgufMatmulPrefillProgramFactor
                 band % ks * kt,
                 krole,
                 uint32_t(partner_v.x),
-                uint32_t(partner_v.y)};
+                uint32_t(partner_v.y),
+                nc};
             SetRuntimeArgs(program, shared.writer[parity], core, writer_args);
             SetRuntimeArgs(program, compute_kernel, core, {my_nc, nc, sh, sw, krole});
             shared.cores.push_back(core);
