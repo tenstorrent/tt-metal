@@ -24,7 +24,8 @@ struct SRAMArenaImpl;
  * A moved-from arena permits destruction, assignment, and is_valueless_after_move().
  * Implementation access fails on a moved-from arena.
  *
- * This is used to implement arena allocation & is a blaze-only feature.
+ * This is an advanced feature: use it to allocate Program resources manually
+ * instead of with the runtime's default allocation.
  */
 struct SRAMArena {
     // No default constructor to be consistent with MeshTensor & MeshBuffer.
