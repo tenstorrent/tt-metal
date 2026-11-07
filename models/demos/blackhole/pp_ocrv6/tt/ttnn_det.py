@@ -85,7 +85,7 @@ class TtPPOCRv6SmallDet:
         x, _, _ = self.conv_down(x, batch, h2, w2)
         x = self.up(x)
         x = ttnn.sigmoid(self.final(x))
-        return x, h2, w2
+        return to_row_major(x), h2, w2
 
 
 def unshuffle_probability(sub_pixel, batch, h4, w4):

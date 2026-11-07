@@ -15,7 +15,7 @@ import torch
 from models.demos.blackhole.pp_ocrv6.common import (
     REC_HEIGHT,
     REC_WIDTH,
-    ctc_greedy_decode,
+    ctc_decode_indices,
     det_normalize_bgr,
     load_rec_charset,
     load_torch_det,
@@ -28,7 +28,7 @@ DB_THRESH = 0.2
 DB_BOX_THRESH = 0.45
 DB_UNCLIP_RATIO = 1.4
 MIN_BOX_SIDE = 3
-REC_BATCH_BUCKETS = (1, 8)
+REC_BATCH_BUCKETS = (1, 2, 4, 8)
 
 
 @dataclass
@@ -57,35 +57,78 @@ class TorchBackend:
 
     @torch.no_grad()
     def recognize(self, x):
-        return self.rec(x)
+        """[B, 3, 48, W] -> (argmax indices [B, T], their probabilities [B, T])."""
+        conf, idx = self.rec(x).max(-1)
+        return idx, conf
 
 
 class TtnnBackend:
+    """Detector and recognizer on device. traced=True replays one captured trace per input shape."""
+
     name = "ttnn-p150"
 
-    def __init__(self, device):
+    def __init__(self, device, traced=True):
         import ttnn
         from models.demos.blackhole.pp_ocrv6.tt.ttnn_det import TtPPOCRv6SmallDet
         from models.demos.blackhole.pp_ocrv6.tt.ttnn_rec import TtPPOCRv6SmallRec
 
         self.ttnn = ttnn
         self.device = device
+        self.traced = traced
         self.det = TtPPOCRv6SmallDet(device, load_torch_det())
         self.rec = TtPPOCRv6SmallRec(device, load_torch_rec())
+        self.runners = {}
+        if traced:
+            self._capture_traces()
+
+    def _host(self, x):
+        return self.ttnn.from_torch(x.permute(0, 2, 3, 1), dtype=self.ttnn.bfloat16)
+
+    def _det_fn(self, b, h, w):
+        return lambda t: self.det(t, b, h, w)[0]
+
+    def _rec_fn(self, b):
+        return lambda t: self.rec(t, b, REC_HEIGHT, REC_WIDTH, decode=True)
+
+    def _capture_traces(self):
+        from models.demos.blackhole.pp_ocrv6.tt.runner import TracedRunner
+
+        shapes = {("det", 1, DET_SIZE, DET_SIZE): (self._det_fn(1, DET_SIZE, DET_SIZE), (1, 3, DET_SIZE, DET_SIZE))}
+        for b in REC_BATCH_BUCKETS:
+            shapes[("rec", b)] = (self._rec_fn(b), (b, 3, REC_HEIGHT, REC_WIDTH))
+        hosts = {key: self._host(torch.zeros(shape)) for key, (_, shape) in shapes.items()}
+        for key, (fn, _) in shapes.items():
+            fn(hosts[key])
+        self.ttnn.synchronize_device(self.device)
+        for key, (fn, _) in shapes.items():
+            self.runners[key] = TracedRunner(self.device, fn, hosts[key])
+
+    def _run(self, key, fn, host):
+        if key in self.runners:
+            return self.runners[key](host)
+        if self.traced:
+            raise ValueError(
+                f"no trace captured for {key}; traced mode supports det {DET_SIZE}x{DET_SIZE}, rec {REC_BATCH_BUCKETS}"
+            )
+        return fn(host)
 
     def detect(self, x):
         from models.demos.blackhole.pp_ocrv6.tt.ttnn_det import unshuffle_probability
 
-        ttnn = self.ttnn
         b, _, h, w = x.shape
-        out, h4, w4 = self.det(ttnn.from_torch(x.permute(0, 2, 3, 1), dtype=ttnn.bfloat16), b, h, w)
-        return unshuffle_probability(ttnn.to_torch(out).float(), b, h4, w4)[0, 0]
+        out = self._run(("det", b, h, w), self._det_fn(b, h, w), self._host(x))
+        return unshuffle_probability(self.ttnn.to_torch(out).float(), b, h // 4, w // 4)[0, 0]
 
     def recognize(self, x):
+        """[B, 3, 48, W] -> (argmax indices [B, T], their probabilities [B, T])."""
         ttnn = self.ttnn
         b = x.shape[0]
-        out = self.rec(ttnn.from_torch(x.permute(0, 2, 3, 1), dtype=ttnn.bfloat16), b, REC_HEIGHT, REC_WIDTH)
-        return ttnn.to_torch(out).float().reshape(b, REC_WIDTH // 8, -1)
+        idx, conf = self._run(("rec", b), self._rec_fn(b), self._host(x))
+        steps = REC_WIDTH // 8
+        return (
+            ttnn.to_torch(idx).reshape(-1)[: b * steps].reshape(b, steps).long(),
+            ttnn.to_torch(conf).float().reshape(-1)[: b * steps].reshape(b, steps),
+        )
 
 
 def letterbox(bgr, size=DET_SIZE):
@@ -171,19 +214,20 @@ class PPOCRv6Pipeline:
         crops = [rec_normalize_bgr(crop_text_line(bgr, b)) for b in boxes]
         t["det_post_rec_pre"] = time.perf_counter()
 
-        probs = []
+        steps = []
         i = 0
         while i < len(crops):
             chunk = crops[i : i + REC_BATCH_BUCKETS[-1]]
             bucket = _bucket(len(chunk))
             batch = torch.cat(chunk + [torch.zeros_like(chunk[0])] * (bucket - len(chunk)))
-            probs.extend(self.backend.recognize(batch)[: len(chunk)])
+            idx, conf = self.backend.recognize(batch)
+            steps.extend(zip(idx[: len(chunk)], conf[: len(chunk)]))
             i += len(chunk)
         t["rec"] = time.perf_counter()
 
         lines = []
-        for box, p in zip(boxes, probs):
-            text, conf = ctc_greedy_decode(p, self.charset)
+        for box, (idx, conf) in zip(boxes, steps):
+            text, conf = ctc_decode_indices(idx, conf, self.charset)
             if text:
                 lines.append(TextLine(text, conf, box))
         t["rec_post"] = time.perf_counter()

@@ -7,7 +7,7 @@ import numpy as np
 import pytest
 from PIL import Image, ImageDraw, ImageFont
 
-from models.demos.blackhole.pp_ocrv6.common import DET_L1_SMALL_SIZE
+from models.demos.blackhole.pp_ocrv6.common import DEVICE_PARAMS
 from models.demos.blackhole.pp_ocrv6.demo.pipeline import PPOCRv6Pipeline, TorchBackend, TtnnBackend
 
 FONT = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
@@ -41,7 +41,7 @@ def torch_pipeline():
     return PPOCRv6Pipeline(TorchBackend())
 
 
-@pytest.mark.parametrize("device_params", [{"l1_small_size": DET_L1_SMALL_SIZE}], indirect=True)
+@pytest.mark.parametrize("device_params", [DEVICE_PARAMS], indirect=True)
 @pytest.mark.parametrize("case", list(CASES))
 def test_pipeline(device, torch_pipeline, case):
     bgr, expected = CASES[case]

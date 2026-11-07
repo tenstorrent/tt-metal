@@ -8,11 +8,11 @@ import pytest
 import torch
 
 import ttnn
-from models.demos.blackhole.pp_ocrv6.common import DET_L1_SMALL_SIZE, REC_HEIGHT, REC_WIDTH, load_torch_rec
+from models.demos.blackhole.pp_ocrv6.common import DEVICE_PARAMS, REC_HEIGHT, REC_WIDTH, load_torch_rec
 from models.demos.blackhole.pp_ocrv6.tt.ttnn_rec import TtPPOCRv6SmallRec
 
 
-@pytest.mark.parametrize("device_params", [{"l1_small_size": DET_L1_SMALL_SIZE}], indirect=True)
+@pytest.mark.parametrize("device_params", [DEVICE_PARAMS], indirect=True)
 @pytest.mark.parametrize("batch", [1, 8])
 def test_perf_rec(device, batch, iterations=20):
     tt_model = TtPPOCRv6SmallRec(device, load_torch_rec())

@@ -8,11 +8,11 @@ import pytest
 import torch
 
 import ttnn
-from models.demos.blackhole.pp_ocrv6.common import DET_L1_SMALL_SIZE, load_torch_det
+from models.demos.blackhole.pp_ocrv6.common import DEVICE_PARAMS, load_torch_det
 from models.demos.blackhole.pp_ocrv6.tt.ttnn_det import TtPPOCRv6SmallDet
 
 
-@pytest.mark.parametrize("device_params", [{"l1_small_size": DET_L1_SMALL_SIZE}], indirect=True)
+@pytest.mark.parametrize("device_params", [DEVICE_PARAMS], indirect=True)
 @pytest.mark.parametrize("size", [640])
 def test_perf_det(device, size, iterations=20):
     tt_model = TtPPOCRv6SmallDet(device, load_torch_det())

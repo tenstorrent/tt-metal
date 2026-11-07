@@ -8,7 +8,7 @@ import torch
 
 import ttnn
 from models.demos.blackhole.pp_ocrv6.common import (
-    DET_L1_SMALL_SIZE,
+    DEVICE_PARAMS,
     det_normalize_bgr,
     load_torch_det,
     synthetic_gate_image,
@@ -17,7 +17,7 @@ from models.demos.blackhole.pp_ocrv6.tt.ttnn_det import TtPPOCRv6SmallDet, unshu
 from tests.ttnn.utils_for_testing import check_with_pcc
 
 
-@pytest.mark.parametrize("device_params", [{"l1_small_size": DET_L1_SMALL_SIZE}], indirect=True)
+@pytest.mark.parametrize("device_params", [DEVICE_PARAMS], indirect=True)
 @pytest.mark.parametrize("size", [640])
 @pytest.mark.parametrize("source", ["gate_image", "random"])
 def test_det(device, size, source):

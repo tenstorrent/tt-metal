@@ -7,9 +7,10 @@ import torch
 
 import ttnn
 from models.demos.blackhole.pp_ocrv6.common import (
-    DET_L1_SMALL_SIZE,
+    DEVICE_PARAMS,
     REC_HEIGHT,
     REC_WIDTH,
+    ctc_decode_indices,
     ctc_greedy_decode,
     load_rec_charset,
     load_torch_rec,
@@ -33,7 +34,7 @@ def _crops(batch):
     return torch.cat(crops), TEXTS[:batch]
 
 
-@pytest.mark.parametrize("device_params", [{"l1_small_size": DET_L1_SMALL_SIZE}], indirect=True)
+@pytest.mark.parametrize("device_params", [DEVICE_PARAMS], indirect=True)
 @pytest.mark.parametrize("batch", [1, 8])
 @pytest.mark.parametrize("source", ["text_crop", "random"])
 def test_rec(device, batch, source):
@@ -63,7 +64,31 @@ def test_rec(device, batch, source):
     assert passed, pcc
 
 
-@pytest.mark.parametrize("device_params", [{"l1_small_size": DET_L1_SMALL_SIZE}], indirect=True)
+@pytest.mark.parametrize("device_params", [DEVICE_PARAMS], indirect=True)
+@pytest.mark.parametrize("batch", [1, 8])
+def test_rec_decode_on_device(device, batch):
+    """On-device argmax + confidence give the same text as decoding torch's probabilities."""
+    torch_model = load_torch_rec()
+    tt_model = TtPPOCRv6SmallRec(device, torch_model)
+    charset = load_rec_charset()
+    x, texts = _crops(batch)
+    with torch.no_grad():
+        ref = torch_model(x)
+    tt_x = ttnn.from_torch(x.permute(0, 2, 3, 1), dtype=ttnn.bfloat16)
+    idx, conf = tt_model(tt_x, batch, REC_HEIGHT, REC_WIDTH, decode=True)
+    steps = ref.shape[1]
+    idx = ttnn.to_torch(idx).reshape(-1)[: batch * steps].reshape(batch, steps).long()
+    conf = ttnn.to_torch(conf).float().reshape(-1)[: batch * steps].reshape(batch, steps)
+    ref_conf, ref_idx = ref.max(-1)
+    print(
+        f"[decode b{batch}] index match {(idx == ref_idx).float().mean():.2%}  max conf diff {(conf - ref_conf).abs().max():.4f}"
+    )
+    for i, expected in enumerate(texts):
+        tt_text, _ = ctc_decode_indices(idx[i], conf[i], charset)
+        assert tt_text == ctc_greedy_decode(ref[i], charset)[0] == expected
+
+
+@pytest.mark.parametrize("device_params", [DEVICE_PARAMS], indirect=True)
 def test_rec_mixed_batches(device):
     """One model instance serving several batch sizes, as the pipeline does."""
     torch_model = load_torch_rec()

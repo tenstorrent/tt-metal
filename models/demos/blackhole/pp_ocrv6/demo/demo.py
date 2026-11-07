@@ -10,7 +10,7 @@ import argparse
 import cv2
 import numpy as np
 
-from models.demos.blackhole.pp_ocrv6.common import DET_L1_SMALL_SIZE, synthetic_gate_image
+from models.demos.blackhole.pp_ocrv6.common import DEVICE_PARAMS, synthetic_gate_image
 from models.demos.blackhole.pp_ocrv6.demo.pipeline import PPOCRv6Pipeline, TorchBackend, TtnnBackend
 
 
@@ -46,7 +46,7 @@ def main():
     if args.backend == "ttnn":
         import ttnn
 
-        device = ttnn.open_device(device_id=0, l1_small_size=DET_L1_SMALL_SIZE)
+        device = ttnn.open_device(device_id=0, **DEVICE_PARAMS)
         backend = TtnnBackend(device)
     else:
         backend = TorchBackend()

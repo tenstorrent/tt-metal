@@ -105,7 +105,8 @@ class TtPPOCRv6SmallRec:
         self.norm = LayerNorm(device, enc.norm)
         self.head = Linear(device, torch_model.head.head.weight, torch_model.head.head.bias)
 
-    def __call__(self, x, batch, h, w):
+    def __call__(self, x, batch, h, w, decode=False):
+        """decode=False: probabilities [1, 1, B*T, C]. decode=True: (indices uint32 [1, 1, B*T], confidence [1, 1, B*T, 1])."""
         x, h, w = self.backbone(x, batch, h, w)[-1]
         x = ttnn.avg_pool2d(
             to_row_major(x),
@@ -129,5 +130,9 @@ class TtPPOCRv6SmallRec:
         for blk in self.blocks:
             x = blk(x, batch)
         x = ttnn.add(self.norm(x), skip)
-        logits = self.head(x)
-        return ttnn.softmax(logits, dim=-1, numeric_stable=True)
+        probs = ttnn.softmax(self.head(x), dim=-1, numeric_stable=True)
+        if not decode:
+            return probs
+        indices = ttnn.argmax(to_row_major(probs), dim=-1)
+        confidence = ttnn.max(probs, dim=-1, keepdim=True)
+        return indices, confidence

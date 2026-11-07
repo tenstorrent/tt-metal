@@ -12,6 +12,8 @@ from safetensors.torch import load_file
 DET_REPO = "PaddlePaddle/PP-OCRv6_small_det_safetensors"
 REC_REPO = "PaddlePaddle/PP-OCRv6_small_rec_safetensors"
 DET_L1_SMALL_SIZE = 32768
+TRACE_REGION_SIZE = 32 << 20
+DEVICE_PARAMS = {"l1_small_size": DET_L1_SMALL_SIZE, "trace_region_size": TRACE_REGION_SIZE, "num_command_queues": 2}
 
 DET_MEAN_BGR = (0.406, 0.456, 0.485)
 DET_STD_BGR = (0.225, 0.224, 0.229)
@@ -82,6 +84,11 @@ def rec_normalize_bgr(bgr_uint8_hwc, height=REC_HEIGHT, width=REC_WIDTH):
 def ctc_greedy_decode(probs, charset):
     """probs [T, C] -> (text, mean confidence). Index 0 is the CTC blank."""
     conf, idx = probs.max(-1)
+    return ctc_decode_indices(idx, conf, charset)
+
+
+def ctc_decode_indices(idx, conf, charset):
+    """Per-step argmax indices and their probabilities [T] -> (text, mean confidence)."""
     chars, scores, prev = [], [], 0
     for i, c in zip(idx.tolist(), conf.tolist()):
         if i != prev and i != 0:

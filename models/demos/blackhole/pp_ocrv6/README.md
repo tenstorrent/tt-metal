@@ -36,7 +36,8 @@ Weights (Apache 2.0):
 | `reference/det.py`, `reference/rec.py` | Standalone PyTorch models; parameter names match the safetensors |
 | `tt/common.py` | Shared ttnn blocks: conv/linear with folded BatchNorm, squeeze-excitation, LCNetV4 layer, stem, backbone |
 | `tt/ttnn_det.py` | Detector: LCNetV4 backbone, RepLKFPN neck, DB head (transposed convs as matmuls) |
-| `tt/ttnn_rec.py` | Recognizer: LCNetV4 backbone, LightSVTR encoder (heads padded 15 -> 32), CTC head |
+| `tt/ttnn_rec.py` | Recognizer: LCNetV4 backbone, LightSVTR encoder (heads padded 15 -> 32), CTC head, optional on-device argmax |
+| `tt/runner.py` | Trace capture and replay with two command queues |
 | `demo/pipeline.py` | End-to-end pipeline with torch and ttnn backends and per-stage timings |
 | `demo/demo.py` | Runs one image, prints text, saves a result picture |
 | `tests/pcc/` | Accuracy tests: detector, recognizer, pipeline |
@@ -73,17 +74,28 @@ python models/demos/blackhole/pp_ocrv6/demo/demo.py --image crop.jpg --out resul
 
 ## Measured performance
 
-Unoptimized: bf16, HiFi4, activations in DRAM, no trace. Includes host <-> device transfers.
+bf16, HiFi4, activations in DRAM. Traced with two command queues; the recognizer
+returns argmax indices and confidences instead of probabilities. Per call, including
+host <-> device transfers.
 
-| Stage | Time |
-|-------|-----:|
-| Detector, 640x640 | 16.9 ms |
-| Recognizer, 1 line | 8.3 ms |
-| Recognizer, batch 8 | 24.1 ms (3.0 ms per line) |
-| Full pipeline, 1 line (host pre/post included) | ~33 ms |
-| Same pipeline, torch on 24-core CPU | ~77 ms |
+| Stage | Untraced | Traced |
+|-------|---------:|-------:|
+| Detector, 640x640 | 16.9 ms | 20.3 ms (16.6 device, 3.0 input conversion, 1.0 readback, 0.3 unshuffle) |
+| Recognizer, 1 line | 8.3 ms | 3.1 ms |
+| Recognizer, batch 2 | - | 4.4 ms (2.2 per line) |
+| Recognizer, batch 4 | - | 6.8 ms (1.7 per line) |
+| Recognizer, batch 8 | 24.1 ms (3.0 per line) | 12.5 ms (1.6 per line) |
+| Full pipeline, 1 line (host pre/post included) | ~33 ms | ~26 ms |
+| Same pipeline, torch on 24-core CPU | ~77 ms | |
 
-Not yet inside the ~16 ms per request budget; see next steps.
+The untraced detector figure is device time. The detector is kernel-bound, so tracing helps
+little there; the recognizer was dispatch-bound and gets ~2.7x. Still above the ~16 ms
+per request budget; the detector kernels are the next target (Tracy, then tt-opt).
+
+Traced mode captures one trace per shape (detector 640x640, recognizer batch 1/2/4/8)
+when `TtnnBackend` is created. All shapes run once untraced before any capture, so
+prepared conv weights never land in another trace's scratch memory; otherwise replays
+corrupt them and the device hangs.
 
 ## Known limitations
 
@@ -101,11 +113,16 @@ Not yet inside the ~16 ms per request budget; see next steps.
 Updated at each milestone.
 
 ### 1. Performance (to ~16 ms per request on one chip)
-- [ ] On-device argmax + confidence for the recognizer (return 40 indices, not ~1.5 MB of probabilities per line)
-- [ ] Recognizer batch buckets 2 and 4 (two lines are padded to 8 today)
-- [ ] Trace capture + two command queues for detector and recognizer
-- [ ] L1-sharded activations instead of DRAM
+- [ ] Tracy profile of detector and recognizer: per-op kernel time, find the top ops
+- [ ] tt-optimization-loop (`tt-opt`), detector and recognizer as separate runs:
+  - profile_command: one traced forward under the device profiler
+  - gate_command: `tests/pcc` for that model (PCC + exact text)
+  - latency_command: traced replay time (it optimizes kernel time; op-to-op gaps are already gone with trace)
+  - Levers it can try: sharding/layout, bfp8 / LoFi, matmul and softmax configs, fusion. No conv2d config sweeps, so conv sharding below is manual
+- [ ] L1-sharded activations for the detector convs (manual; detector is kernel-bound at 16.6 ms)
 - [ ] bfp8 weights, lower math fidelity, approximate GELU, gated on the accuracy tests and the torch agreement rate
+- [ ] Detector input: build the bf16 NHWC tensor in preprocessing (saves ~3 ms of host conversion)
+- [ ] Pipelining across requests (overlap det of frame N+1 with rec of frame N) for the throughput target
 
 ### 2. YOLO11-small
 - [ ] Confirm scope with Dalar / Michael
@@ -131,3 +148,6 @@ Updated at each milestone.
 - [x] Detector and recognizer on device, verified against torch
 - [x] End-to-end pipeline, demo and tests
 - [x] Real-photo test; fixed conv weights being reused across batch sizes
+- [x] On-device argmax + confidence for the recognizer
+- [x] Recognizer batch buckets 1/2/4/8
+- [x] Trace capture + two command queues for detector and recognizer (recognizer ~2.7x faster)
