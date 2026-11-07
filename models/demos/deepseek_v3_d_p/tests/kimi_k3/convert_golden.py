@@ -24,9 +24,13 @@ copied as is. Rows past ``n_prompt_tokens`` are the recorded decode steps (teach
 ``completion_token_ids``); a consumer that reads the prompt length never sees them. ``metadata.json`` is the source's with ``layout`` rewritten, the source index (minus its shard
 list) and provenance added; it is written last, so a partial output never resolves as a trace.
 
+``--layers N`` keeps only the first N layers' streams (and every stream that is not per layer), for a
+golden that only has to serve the layers its consumer checks: K3's long-context check scores layers 0-23,
+and the 128K trace's 93 layers are ~500 GB. Recorded as ``converted_from.layers``.
+
 Host only::
 
-    python -m models.demos.deepseek_v3_d_p.tests.kimi_k3.convert_golden SRC DST
+    python -m models.demos.deepseek_v3_d_p.tests.kimi_k3.convert_golden SRC DST [--layers N]
 """
 
 from __future__ import annotations
@@ -34,6 +38,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import shutil
 import time
 from pathlib import Path
@@ -77,7 +82,13 @@ def _read_stream(src: Path, key: str, stream: dict) -> torch.Tensor:
     return tensor
 
 
-def convert(src: Path, dst: Path, log=print) -> None:
+def _stream_layer(key: str) -> int | None:
+    """The model layer a stream belongs to (`..._layer_N`), or None for a stream that is not per layer."""
+    match = re.search(r"_layer_(\d+)$", key)
+    return int(match[1]) if match else None
+
+
+def convert(src: Path, dst: Path, log=print, layers: int | None = None) -> None:
     index = json.loads((src / "index.json").read_text())
     if index["layout"] != SOURCE_LAYOUT:
         raise ValueError(f"{src} is {index['layout']!r}, expected {SOURCE_LAYOUT!r}")
@@ -85,13 +96,19 @@ def convert(src: Path, dst: Path, log=print) -> None:
     if (dst / "metadata.json").exists():
         raise FileExistsError(f"{dst} already holds a trace")
 
-    streams = index["tensor_streams"]
-    layers = sorted(int(key.rsplit("_", 1)[1]) for key in streams if key.startswith("decoder_output_layer_"))
+    streams = {
+        key: stream
+        for key, stream in index["tensor_streams"].items()
+        if layers is None or _stream_layer(key) is None or _stream_layer(key) < layers
+    }
+    decoder_layers = sorted(int(key.rsplit("_", 1)[1]) for key in streams if key.startswith("decoder_output_layer_"))
     # The running sum needs every layer of each block from its seal, and each layer's attention output.
-    missing = [layer for layer in layers if f"attn_output_layer_{layer}" not in streams]
-    if missing or layers != list(range(len(layers))):
-        raise ValueError(f"{src}: decoder_output layers {layers}, without attn_output {missing}; no running sum")
-    count = len(streams) + len(layers)  # every stream, plus each layer's FFN output kept beside its running sum
+    missing = [layer for layer in decoder_layers if f"attn_output_layer_{layer}" not in streams]
+    if missing or decoder_layers != list(range(len(decoder_layers))):
+        raise ValueError(
+            f"{src}: decoder_output layers {decoder_layers}, without attn_output {missing}; no running sum"
+        )
+    count = len(streams) + len(decoder_layers)  # every stream, plus each layer's FFN output kept beside its running sum
 
     def write(n: int, group: str, key: str, tensor: torch.Tensor) -> None:
         out = dst / stream_path(group, key)
@@ -107,7 +124,7 @@ def convert(src: Path, dst: Path, log=print) -> None:
             n += 1
             write(n, Path(stream["chunks"][0]["path"]).parts[0], key, _read_stream(src, key, stream))
 
-    for layer in layers:
+    for layer in decoder_layers:
         key = f"decoder_output_layer_{layer}"
         ffn = _read_stream(src, key, streams[key])
         attn = _read_stream(src, f"attn_output_layer_{layer}", streams[f"attn_output_layer_{layer}"])
@@ -123,7 +140,12 @@ def convert(src: Path, dst: Path, log=print) -> None:
             shutil.copyfile(src / name, dst / name)
     metadata["layout"] = LAYOUT
     metadata["source_index"] = {k: v for k, v in index.items() if k != "tensor_streams"}
-    metadata["converted_from"] = {"path": str(src), "layout": SOURCE_LAYOUT, "converter_version": CONVERTER_VERSION}
+    metadata["converted_from"] = {
+        "path": str(src),
+        "layout": SOURCE_LAYOUT,
+        "converter_version": CONVERTER_VERSION,
+        "layers": layers,
+    }
     (dst / "metadata.json").write_text(json.dumps(metadata, indent=1))
     log(f"[{time.strftime('%H:%M:%S')}] done: {count} streams -> {dst}")
 
@@ -132,10 +154,11 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("src", type=Path, help="chunked trace dir (holds index.json + metadata.json)")
     parser.add_argument("dst", type=Path, help="output dir; must not already hold a metadata.json")
+    parser.add_argument("--layers", type=int, default=None, help="keep only the first N layers' streams")
     args = parser.parse_args()
     # Shared Weka tree: group-writable, world-readable (see the Exabox Weka storage note).
     os.umask(0o002)
-    convert(args.src, args.dst, log=lambda line: print(line, flush=True))
+    convert(args.src, args.dst, log=lambda line: print(line, flush=True), layers=args.layers)
 
 
 if __name__ == "__main__":
