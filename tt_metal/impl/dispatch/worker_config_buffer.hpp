@@ -6,6 +6,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <utility>
 #include <vector>
 #include <tt-metalium/hal_types.hpp>
 
@@ -37,6 +38,15 @@ public:
     WorkerConfigBufferMgr();
 
     void init_add_buffer(uint32_t base_addr, uint32_t size);
+    bool configured() const { return !base_addrs_.empty(); }
+    // [base, end) of buffer `index`.
+    std::pair<uint32_t, uint32_t> bounds(size_t index) const { return {base_addrs_[index], end_addrs_[index]}; }
+    // Whether init_add_buffer was called with exactly these (base address, size) buffers, in order.
+    bool has_buffers(const std::vector<std::pair<uint32_t, uint32_t>>& buffers) const;
+    // Frees everything: the state init_add_buffer leaves the manager in, without reallocating. Then, when given, the
+    // next allocation of each buffer starts at start_hints[i] if it fits before the buffer's end, instead of at its
+    // base (a sub-device manager switch keeps the next program's config clear of where running programs keep theirs).
+    void reset(const std::vector<uint32_t>& start_hints = {});
     std::pair<ConfigBufferSync, std::vector<ConfigBufferEntry>&> reserve(const std::vector<uint32_t>& sizes);
     void free(uint32_t free_up_to_sync_count);
     void alloc(uint32_t when_freeable_sync_count);
@@ -48,6 +58,9 @@ public:
     // Returns the ring-buffer indices of the currently-queued (freeable) entries for a buffer type,
     // in walk order from free_index_ up to (but not including) alloc_index_.
     std::vector<size_t> get_queued_entry_indices(size_t buffer_type) const;
+    const ConfigBufferEntry& entry(size_t entry_index, size_t buffer_type) const {
+        return entries_[entry_index][buffer_type];
+    }
 
     void PrintStatus();
 
@@ -59,6 +72,8 @@ private:
     std::vector<uint32_t> free_index_;                     // points to the next entry to free
 
     std::vector<ConfigBufferEntry> reservation_;
+    // Per buffer, where its next allocation starts while it is empty after reset(start_hints); 0 when unset.
+    std::vector<uint32_t> start_hint_;
 };
 
 }  // namespace tt::tt_metal

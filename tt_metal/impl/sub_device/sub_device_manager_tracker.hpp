@@ -46,6 +46,11 @@ public:
 
     SubDeviceManager* get_active_sub_device_manager() const;
 
+    // Points the active manager at another one without loading it: no device commands, allocators untouched. Only for
+    // encoding a trace captured across manager switches, each part under its own manager; the caller restores the
+    // loaded one.
+    void set_active_sub_device_manager_view(SubDeviceManagerId sub_device_manager_id);
+
     SubDeviceManager* get_default_sub_device_manager() const;
 
     SubDeviceManager* find_sub_device_manager(SubDeviceManagerId sub_device_manager_id) const;

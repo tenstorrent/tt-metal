@@ -35,6 +35,37 @@ void WorkerConfigBufferMgr::init_add_buffer(uint32_t base_addr, uint32_t size) {
     this->entries_[0].back().addr = base_addr;
 
     this->reservation_.push_back({});
+    this->start_hint_.push_back(0);
+}
+
+bool WorkerConfigBufferMgr::has_buffers(const std::vector<std::pair<uint32_t, uint32_t>>& buffers) const {
+    if (buffers.size() != this->base_addrs_.size()) {
+        return false;
+    }
+    for (size_t i = 0; i < buffers.size(); i++) {
+        if (this->base_addrs_[i] != buffers[i].first || this->end_addrs_[i] != buffers[i].first + buffers[i].second) {
+            return false;
+        }
+    }
+    return true;
+}
+
+void WorkerConfigBufferMgr::reset(const std::vector<uint32_t>& start_hints) {
+    for (auto& entry : this->entries_) {
+        std::fill(entry.begin(), entry.end(), ConfigBufferEntry{0, 0, 0});
+    }
+    std::fill(this->alloc_index_.begin(), this->alloc_index_.end(), 0);
+    std::fill(this->free_index_.begin(), this->free_index_.end(), 0);
+    for (size_t i = 0; i < this->base_addrs_.size(); i++) {
+        this->entries_[0][i].addr = this->base_addrs_[i];
+    }
+    std::fill(this->reservation_.begin(), this->reservation_.end(), ConfigBufferEntry{});
+    std::fill(this->start_hint_.begin(), this->start_hint_.end(), 0);
+    for (size_t i = 0; i < start_hints.size() && i < this->start_hint_.size(); i++) {
+        if (start_hints[i] > this->base_addrs_[i] && start_hints[i] < this->end_addrs_[i]) {
+            this->start_hint_[i] = start_hints[i];
+        }
+    }
 }
 
 // First part of returned pair is true if reserving size bytes requires a sync on some core type
@@ -80,7 +111,9 @@ std::pair<ConfigBufferSync, std::vector<ConfigBufferEntry>&> WorkerConfigBufferM
                 break;
             }
             if (free_index == alloc_index) {
-                this->reservation_[idx].addr = this->base_addrs_[idx];
+                const uint32_t hint = this->start_hint_[idx];
+                this->reservation_[idx].addr =
+                    hint != 0 && hint + size <= this->end_addrs_[idx] ? hint : this->base_addrs_[idx];
                 break;
             }
             TT_ASSERT(size <= this->end_addrs_[idx] - this->base_addrs_[idx]);
@@ -171,6 +204,7 @@ void WorkerConfigBufferMgr::alloc(uint32_t when_freeable_sync_count) {
 
         this->entries_[alloc_index][idx].addr = this->reservation_[idx].addr;
         this->entries_[alloc_index][idx].size = this->reservation_[idx].size;
+        this->start_hint_[idx] = 0;
         this->entries_[alloc_index][idx].sync_count = when_freeable_sync_count;
 
         uint32_t old_alloc_index = alloc_index;
