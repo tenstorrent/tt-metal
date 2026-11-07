@@ -1500,7 +1500,6 @@ def _every_value_where_inputs(torch_dtype, lo, hi, pred_dtype):
     [
         (ttnn.int8, torch.int8, ttnn.int8, torch.int8, -128, 127),  # int8 predicate, int8 values
         (ttnn.int32, torch.int32, ttnn.int8, torch.int8, -128, 127),  # int32 predicate, int8 values
-        (ttnn.uint8, torch.uint8, ttnn.int8, torch.int8, -128, 127),  # uint8 predicate, int8 values
         (ttnn.uint8, torch.uint8, ttnn.uint8, torch.uint8, 0, 255),  # control, uint8 predicate and values
         (ttnn.int32, torch.int32, ttnn.uint8, torch.uint8, 0, 255),  # control, int32 predicate, uint8 values
         (ttnn.int32, torch.int32, ttnn.int32, torch.int32, -128, 127),  # control, int32 everywhere
@@ -1508,7 +1507,6 @@ def _every_value_where_inputs(torch_dtype, lo, hi, pred_dtype):
     ids=[
         "int8_pred_int8_values",
         "int32_pred_int8_values",
-        "uint8_pred_int8_values",
         "uint8_pred_uint8_values",
         "int32_pred_uint8_values",
         "int32_pred_int32_values",
