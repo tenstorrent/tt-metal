@@ -16,7 +16,7 @@ from loguru import logger
 
 import ttnn
 from tt_py_test_utils_common.utility_functions import run_for_blackhole, skip_with_llk_assert, skip_with_watcher
-from tests.ttnn.profiling.realtime_profiler_utils import profile_realtime_program
+from tests.ttnn.profiling.realtime_profiler_utils import is_perf_profiler_active, profile_realtime_program
 from tests.ttnn.unit_tests.operations.sdpa.sparse_sdpa_test_utils import (
     ATTENTION_SINK_SHAPES,
     make_attention_sink_inputs,
@@ -280,11 +280,11 @@ def test_sparse_sdpa_perf(device, S, T, TOPK, kc, nv, expected_ms):
     nv_fn = _NV[nv]
     q, kv, indices = make_inputs(H, S, T, TOPK, K_DIM, lambda s: nv_fn(s, T, TOPK))
 
-    if not ttnn.device.IsProgramRealtimeProfilerActive():
+    if not is_perf_profiler_active():
         # This runs only on the IOMMU-pinned sku (the broad non-IOMMU sdpa glob excludes it by marker), so an
         # inactive profiler means it regressed on a sku that should have it -- fail (not skip), matching the
         # sprint / ring-joint perf checks.
-        pytest.fail("Real-time profiler must be active for sparse_sdpa perf checks (needs IOMMU)")
+        pytest.fail("Streaming profiler must be active for sparse_sdpa perf checks (needs IOMMU)")
 
     # Profile the op with the real-time device profiler (one dispatch -> one device program record), same as
     # the single-chip SDPA sprint perf check. No golden; correctness is covered by the PCC tests.
@@ -411,8 +411,8 @@ _ATTENTION_SINK_EXPECTED_MS = {
 @skip_with_llk_assert("No need to verify LLK asserts for performance tests.")
 @skip_with_watcher("Watcher perturbs kernel timing; perf checks are not meaningful with it enabled.")
 def test_sparse_sdpa_attention_sink_perf(device, H, S, TOPK, dim, kc):
-    if not ttnn.device.IsProgramRealtimeProfilerActive():
-        pytest.fail("Real-time profiler must be active for attention sink perf checks (needs IOMMU)")
+    if not is_perf_profiler_active():
+        pytest.fail("Streaming profiler must be active for attention sink perf checks (needs IOMMU)")
     run = _attention_sink_op(device, H, S, TOPK, dim, kc)
     run()  # Compile and warm the program cache before measuring device execution.
     ttnn.synchronize_device(device)

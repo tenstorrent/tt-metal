@@ -14,7 +14,7 @@ from loguru import logger
 import ttnn
 from tt_py_test_utils_common.utility_functions import run_for_blackhole, skip_with_llk_assert, skip_with_watcher
 from tests.ttnn.nightly.unit_tests.operations.experimental.kda import kda_performance_model_test_utils as perf_model
-from tests.ttnn.profiling.realtime_profiler_utils import profile_realtime_program
+from tests.ttnn.profiling.realtime_profiler_utils import is_perf_profiler_active, profile_realtime_program
 from tests.ttnn.nightly.unit_tests.operations.experimental.kda.recurrent_chunk_scan_test_utils import (
     BF16_ALLOWED,
     CHUNK_SIZE,
@@ -434,8 +434,8 @@ def test_summarize_chunk_recurrence_rejects_unsupported_compute_config(
 @pytest.mark.parametrize("init", [True, False], ids=["identity-fill", "no-fill"])
 def test_summarize_chunk_recurrence_regression_performance(zero_actual_start, device: ttnn.Device, init: bool) -> None:
     case = _REGRESSION_CASE
-    if not ttnn.device.IsProgramRealtimeProfilerActive():
-        pytest.fail("Real-time profiler must be active for recurrence-summary performance checks")
+    if not is_perf_profiler_active():
+        pytest.fail("Streaming profiler must be active for recurrence-summary performance checks")
     _, inputs = _regression_protocol(device, seed=117)
 
     def run() -> ttnn.Tensor:
@@ -473,8 +473,8 @@ def test_summarize_chunk_recurrence_regression_performance(zero_actual_start, de
 def test_summarize_chunk_recurrence_production_performance(zero_actual_start, device: ttnn.Device, init: bool) -> None:
     """An unsplit rank's tail slots are all undefined, so identity-fill measures the worst-case fill cost."""
     case = _PRODUCTION_CASE
-    if not ttnn.device.IsProgramRealtimeProfilerActive():
-        pytest.fail("Real-time profiler must be active for recurrence-summary performance checks")
+    if not is_perf_profiler_active():
+        pytest.fail("Streaming profiler must be active for recurrence-summary performance checks")
     _, inputs = _production_protocol(device, seed=117)
     output_memory = group_summary_nd_sharded(device, 2, case.batch_heads, case.dim, case.dim)
     compute_config = _production_compute_config(device)

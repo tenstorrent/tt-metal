@@ -256,7 +256,7 @@ from tests.nightly.sdpa_perf_utils import (
     compute_cores_used,
     compute_math_utilization,
 )
-from tests.ttnn.profiling.realtime_profiler_utils import profile_realtime_program
+from tests.ttnn.profiling.realtime_profiler_utils import is_perf_profiler_active, profile_realtime_program
 
 
 def compute_sdpa_utilization(seqlen, head_dim, num_heads, duration_ns, core_count):
@@ -266,8 +266,8 @@ def compute_sdpa_utilization(seqlen, head_dim, num_heads, duration_ns, core_coun
 
 @pytest.fixture
 def sdpa_realtime_profiled_device(device):
-    if not ttnn.device.IsProgramRealtimeProfilerActive():
-        pytest.fail("Real-time profiler must be active for SDPA perf checks")
+    if not is_perf_profiler_active():
+        pytest.fail("Streaming profiler must be active for SDPA perf checks")
     return device
 
 

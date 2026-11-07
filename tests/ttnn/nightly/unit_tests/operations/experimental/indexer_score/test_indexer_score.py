@@ -35,7 +35,7 @@ from loguru import logger
 
 import ttnn
 from tt_py_test_utils_common.utility_functions import skip_with_llk_assert, skip_with_watcher
-from tests.ttnn.profiling.realtime_profiler_utils import profile_realtime_program
+from tests.ttnn.profiling.realtime_profiler_utils import is_perf_profiler_active, profile_realtime_program
 
 pytestmark = pytest.mark.skipif(not ttnn.device.is_blackhole(), reason="indexer_score is Blackhole-only")
 
@@ -1225,11 +1225,11 @@ def test_indexer_score_math_util(device, case_id, run_fn, mm_flops_thunk, expect
     with the real-time device profiler and compares the achieved math_util to the expected value (measured on
     a BH dev board). Marked requires_host_iommu so the marker-selected IOMMU job runs it and broad non-IOMMU
     jobs exclude it; an inactive profiler here is therefore a regression -> fail."""
-    if not ttnn.device.IsProgramRealtimeProfilerActive():
+    if not is_perf_profiler_active():
         # This runs only on the IOMMU-pinned sku (the broad non-IOMMU globs exclude it by marker), so an inactive
         # profiler means it regressed on a sku that should have it -- fail (not skip), matching the sprint /
         # ring-joint perf checks.
-        pytest.fail("Real-time profiler must be active for indexer_score perf checks (needs IOMMU)")
+        pytest.fail("Streaming profiler must be active for indexer_score perf checks (needs IOMMU)")
     _, perf_record = profile_realtime_program(device, lambda: run_fn(device))
     duration_ns = perf_record["duration_ns"]
     core_count = INDEXER_PERF_CORES

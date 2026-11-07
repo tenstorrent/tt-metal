@@ -9,7 +9,7 @@ import ttnn
 from loguru import logger
 
 from tt_py_test_utils_common.utility_functions import skip_with_llk_assert, skip_with_watcher
-from tests.ttnn.profiling.realtime_profiler_utils import profile_realtime_program
+from tests.ttnn.profiling.realtime_profiler_utils import is_perf_profiler_active, profile_realtime_program
 from tests.ttnn.utils_for_testing import assert_equal
 
 pytestmark = [
@@ -293,8 +293,8 @@ def test_topk_large_indices_production_perf_check(
     expected_duration_ns,
 ):
     """Check production-shape duration on the marker-selected host-IOMMU perf runner."""
-    if not ttnn.device.IsProgramRealtimeProfilerActive():
-        pytest.fail("Real-time profiler must be active for topk_large_indices perf checks (needs IOMMU)")
+    if not is_perf_profiler_active():
+        pytest.fail("Streaming profiler must be active for topk_large_indices perf checks (needs IOMMU)")
 
     torch_input = _make_large_index_input(num_rows=num_rows, n=n, k=k)
     tt_input = _to_device(torch_input, device)
@@ -332,8 +332,8 @@ def test_topk_large_indices_production_perf_check(
 @skip_with_watcher("Watcher perturbs kernel timing; perf checks are not meaningful with it enabled.")
 def test_topk_large_indices_metadata_trace_production_perf(device):
     """Compare traced scalar and metadata bounds for the production decode shape."""
-    if not ttnn.device.IsProgramRealtimeProfilerActive():
-        pytest.fail("Real-time profiler must be active for topk_large_indices perf checks (needs IOMMU)")
+    if not is_perf_profiler_active():
+        pytest.fail("Streaming profiler must be active for topk_large_indices perf checks (needs IOMMU)")
 
     num_rows = 160
     n = 512 * 1024

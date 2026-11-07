@@ -28,7 +28,7 @@ Profiler — realtime (lightweight), in-process (replaces Tracy)
 Timing comes from the in-process realtime device profiler
 (``tests/ttnn/profiling/realtime_profiler_utils.profile_realtime_program``), not Tracy. It is
 auto-enabled by device open on eligible hardware (real Blackhole, WORKER dispatch, fabric-tensix
-datamover off); the test gates on ``ttnn.device.IsProgramRealtimeProfilerActive()``. This removes the
+datamover off); the test gates on ``is_perf_profiler_active()``. This removes the
 Tracy subprocess, signposts, and ops-CSV re-parse — the same swap PR #49840 made for the sparse-MLA
 CCL benchmarks (LoudBox: ~11× faster wall-clock). Two semantic notes versus the Tracy harness:
 
@@ -147,7 +147,7 @@ from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat, init_kvpe_cache, init_mla_kv_cache
 from models.demos.deepseek_v3_d_p.utils.sub_device_trace import SubDeviceTraceController
 from models.demos.deepseek_v3_d_p.utils.test_utils import WH_WORKER_L1_SIZE
-from tests.ttnn.profiling.realtime_profiler_utils import profile_realtime_program
+from tests.ttnn.profiling.realtime_profiler_utils import is_perf_profiler_active, profile_realtime_program
 
 CACHE_TOKENS = int(os.environ.get("DS_PERF_CACHE", 51200))  # 50 * 1024 already cached
 CHUNK_TOKENS = int(os.environ.get("DS_PERF_CHUNK", 5120))  # 5 * 1024 processed this step
@@ -470,8 +470,8 @@ def _require_rt_profiler() -> None:
     """The realtime profiler is auto-enabled on eligible hardware; a False here means the current
     dispatch/fabric config disabled it (see realtime_profiler_manager eligibility) — fail loudly rather
     than silently mis-measure with an empty record set."""
-    if not ttnn.device.IsProgramRealtimeProfilerActive():
-        pytest.fail("Real-time profiler must be active for sparse MLA perf checks (eligible Blackhole HW required)")
+    if not is_perf_profiler_active():
+        pytest.fail("Streaming profiler must be active for sparse MLA perf checks (eligible Blackhole HW required)")
 
 
 def _op_label(kernel_sources) -> str:

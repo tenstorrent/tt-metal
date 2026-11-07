@@ -5,10 +5,16 @@
 #include "ttnn-nanobind/device.hpp"
 
 #include <tt-metalium/device_types.hpp>
+#include <algorithm>
 #include <array>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <map>
+#include <mutex>
+#include <set>
+#include <tuple>
 #include <new>
 #include <optional>
 #include <stdexcept>
@@ -51,6 +57,7 @@
 #include <tt-metalium/experimental/dispatch_context.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <tt-metalium/experimental/realtime_profiler.hpp>
+#include <tt-metalium/experimental/streaming_profiler.hpp>
 #include <tt-metalium/tt_metal.hpp>
 
 using namespace tt::tt_metal;
@@ -67,6 +74,154 @@ std::unordered_map<uint64_t, PyObject*> python_realtime_callback_refs;
 struct PythonProgramRealtimeRecordBatch {
     std::vector<tt::tt_metal::experimental::ProgramRealtimeRecord> records;
     uint64_t dropped = 0;
+};
+
+namespace streaming_profiler = tt::tt_metal::experimental::streaming_profiler;
+
+// Device duration of each program that runs while the collector is started, from the streaming profiler.
+// Aggregates the firmware "*-KERNEL" zones (one per RISC per program launch) into one record per
+// (chip, runtime id, execution): first kernel start to last kernel end over every core and RISC of that
+// program, on the host steady_clock timeline. Same aggregation as the streaming profiler's ops CSV.
+// Aggregation runs in C++ on the profiler's callback thread, so Python never sees per-zone traffic.
+class StreamingProgramCollector {
+public:
+    static constexpr std::size_t kNumProcessors = 7;  // streaming_profiler::Processor
+
+    struct ProgramRecord {
+        uint32_t chip_id = 0;
+        uint32_t runtime_id = 0;
+        uint32_t execution = 0;  // k-th launch of this runtime id on this chip since start()
+        int64_t start_ns = std::numeric_limits<int64_t>::max();  // steady_clock, since epoch
+        int64_t end_ns = std::numeric_limits<int64_t>::min();
+        uint64_t start_cycles = std::numeric_limits<uint64_t>::max();
+        uint64_t end_cycles = 0;
+        std::array<int64_t, kNumProcessors> processor_start_ns{};
+        std::array<int64_t, kNumProcessors> processor_end_ns{};
+        std::set<uint32_t> cores;                 // physical (y << 16) | x
+        std::vector<std::string> kernel_sources;  // filled by records()
+        // Sums over the program's "*-KERNEL" zones, for the average device clock while it ran.
+        uint64_t zone_cycles = 0;
+        int64_t zone_ns = 0;
+
+        ProgramRecord() {
+            processor_start_ns.fill(std::numeric_limits<int64_t>::max());
+            processor_end_ns.fill(std::numeric_limits<int64_t>::min());
+        }
+        double duration_ns() const { return end_ns > start_ns ? static_cast<double>(end_ns - start_ns) : 0.0; }
+        // Average device clock over the program's kernels, GHz (cycles per ns); below nominal when the chip throttled.
+        double clock_ghz() const {
+            return zone_ns > 0 ? static_cast<double>(zone_cycles) / static_cast<double>(zone_ns) : 0.0;
+        }
+    };
+
+    StreamingProgramCollector() = default;
+    StreamingProgramCollector(const StreamingProgramCollector&) = delete;
+    StreamingProgramCollector& operator=(const StreamingProgramCollector&) = delete;
+    ~StreamingProgramCollector() { stop(); }
+
+    void start() {
+        stop();
+        {
+            std::lock_guard lock(mutex_);
+            programs_.clear();
+            executions_seen_.clear();
+            dropped_bytes_ = 0;
+            stall_count_ = 0;
+            num_kernel_zones_ = 0;
+            start_ns_ = std::chrono::steady_clock::now().time_since_epoch().count();
+        }
+        callback_ = streaming_profiler::RegisterCallback(
+            [this](const streaming_profiler::Batch<streaming_profiler::Zone>& batch) { on_batch(batch); },
+            "ttnn-program-collector");
+    }
+
+    // Unregisters the callback; waits for an in-flight invocation to return.
+    void stop() { callback_.reset(); }
+
+    // Programs seen so far, ordered by start time.
+    std::vector<ProgramRecord> records() const {
+        std::vector<ProgramRecord> out;
+        {
+            std::lock_guard lock(mutex_);
+            out.reserve(programs_.size());
+            for (const auto& [key, record] : programs_) {
+                out.push_back(record);
+            }
+        }
+        std::ranges::sort(out, {}, &ProgramRecord::start_ns);
+        for (ProgramRecord& record : out) {
+            for (std::string_view source : streaming_profiler::KernelSources(record.runtime_id)) {
+                record.kernel_sources.emplace_back(source);
+            }
+        }
+        return out;
+    }
+
+    uint64_t dropped_bytes() const {
+        std::lock_guard lock(mutex_);
+        return dropped_bytes_;
+    }
+    uint64_t stall_count() const {
+        std::lock_guard lock(mutex_);
+        return stall_count_;
+    }
+    uint64_t num_kernel_zones() const {
+        std::lock_guard lock(mutex_);
+        return num_kernel_zones_;
+    }
+
+private:
+    void on_batch(const streaming_profiler::Batch<streaming_profiler::Zone>& batch) {
+        std::lock_guard lock(mutex_);
+        dropped_bytes_ += batch.dropped_bytes();
+        stall_count_ += batch.stall_count();
+        for (const streaming_profiler::Zone& zone : batch.records<streaming_profiler::Zone>()) {
+            if (zone.runtime_id() == 0 || !zone.descriptor().name.ends_with("-KERNEL")) {
+                continue;
+            }
+            // Zones of launches that started before start() can still be in flight to the host (a few ms, longer
+            // right after a mesh opens). Counting them would shift the per-RISC launch numbering on the cores whose
+            // zones arrived late, and a record would then span one core's launch k and another's launch k-1.
+            if (zone.start_time().time_since_epoch().count() < start_ns_) {
+                continue;
+            }
+            const streaming_profiler::Core core = zone.core();
+            const auto processor = static_cast<uint32_t>(core.processor);
+            const uint32_t core_key =
+                (static_cast<uint32_t>(core.physical.y) << 16) | static_cast<uint32_t>(core.physical.x);
+            // A "-KERNEL" zone never nests, so the k-th one on a RISC for a runtime id is that program's k-th launch.
+            uint32_t& execution = executions_seen_[{core.chip_id, core_key, processor, zone.runtime_id()}];
+            ProgramRecord& record = programs_[{core.chip_id, zone.runtime_id(), execution}];
+            record.chip_id = core.chip_id;
+            record.runtime_id = zone.runtime_id();
+            record.execution = execution;
+            execution++;
+            num_kernel_zones_++;
+
+            const int64_t start_ns = zone.start_time().time_since_epoch().count();
+            const int64_t end_ns = zone.end_time().time_since_epoch().count();
+            record.start_ns = std::min(record.start_ns, start_ns);
+            record.end_ns = std::max(record.end_ns, end_ns);
+            record.zone_cycles += zone.end_device_cycles() - zone.start_device_cycles();
+            record.zone_ns += end_ns - start_ns;
+            record.start_cycles = std::min(record.start_cycles, zone.start_device_cycles());
+            record.end_cycles = std::max(record.end_cycles, zone.end_device_cycles());
+            if (processor < kNumProcessors) {
+                record.processor_start_ns[processor] = std::min(record.processor_start_ns[processor], start_ns);
+                record.processor_end_ns[processor] = std::max(record.processor_end_ns[processor], end_ns);
+            }
+            record.cores.insert(core_key);
+        }
+    }
+
+    mutable std::mutex mutex_;
+    std::map<std::tuple<uint32_t, uint32_t, uint32_t>, ProgramRecord> programs_;  // (chip, runtime id, execution)
+    std::map<std::tuple<uint32_t, uint32_t, uint32_t, uint32_t>, uint32_t> executions_seen_;
+    uint64_t dropped_bytes_ = 0;
+    uint64_t stall_count_ = 0;
+    uint64_t num_kernel_zones_ = 0;
+    int64_t start_ns_ = 0;  // steady_clock at start(); earlier zones are ignored
+    streaming_profiler::Callback callback_;
 };
 
 void ttnn_device(nb::module_& mod) {
@@ -197,6 +352,51 @@ void py_device_module_types(nb::module_& m_device) {
             &PythonProgramRealtimeRecordBatch::dropped,
             "Records lost since this callback last ran; nonzero if the callback could not keep up with incoming "
             "profiler data");
+
+    using StreamingProgramRecord = StreamingProgramCollector::ProgramRecord;
+    nb::class_<StreamingProgramRecord>(
+        m_device, "StreamingProgramRecord", "One program launch on one chip, aggregated from streaming profiler zones.")
+        .def_ro("chip_id", &StreamingProgramRecord::chip_id)
+        .def_ro("runtime_id", &StreamingProgramRecord::runtime_id)
+        .def_ro("execution", &StreamingProgramRecord::execution, "k-th launch of this runtime id on this chip")
+        .def_ro("start_ns", &StreamingProgramRecord::start_ns, "First kernel start, host steady_clock ns")
+        .def_ro("end_ns", &StreamingProgramRecord::end_ns, "Last kernel end, host steady_clock ns")
+        .def_ro("start_cycles", &StreamingProgramRecord::start_cycles)
+        .def_ro("end_cycles", &StreamingProgramRecord::end_cycles)
+        .def_ro("kernel_sources", &StreamingProgramRecord::kernel_sources, "Kernel source paths of the program")
+        .def_prop_ro(
+            "duration_ns",
+            &StreamingProgramRecord::duration_ns,
+            "First kernel start to last kernel end, elapsed host time (includes clock throttling)")
+        .def_prop_ro(
+            "clock_ghz", &StreamingProgramRecord::clock_ghz, "Average device clock over the program's kernels, GHz")
+        .def_prop_ro("num_cores", [](const StreamingProgramRecord& record) { return record.cores.size(); })
+        .def_prop_ro(
+            "processor_duration_ns",
+            [](const StreamingProgramRecord& record) {
+                static constexpr std::array<const char*, StreamingProgramCollector::kNumProcessors> kNames = {
+                    "BRISC", "NCRISC", "TRISC0", "TRISC1", "TRISC2", "ERISC0", "ERISC1"};
+                std::map<std::string, double> out;
+                for (std::size_t i = 0; i < kNames.size(); i++) {
+                    if (record.processor_end_ns[i] > record.processor_start_ns[i]) {
+                        out[kNames[i]] = static_cast<double>(record.processor_end_ns[i] - record.processor_start_ns[i]);
+                    }
+                }
+                return out;
+            },
+            "Per-RISC span (first start to last end over cores), ns; RISCs with no kernel are omitted");
+
+    nb::class_<StreamingProgramCollector>(
+        m_device,
+        "StreamingProgramCollector",
+        "Collects per-program device durations from the streaming profiler (TT_METAL_STREAMING_PROFILER=1).")
+        .def(nb::init<>())
+        .def("start", &StreamingProgramCollector::start, nb::call_guard<nb::gil_scoped_release>())
+        .def("stop", &StreamingProgramCollector::stop, nb::call_guard<nb::gil_scoped_release>())
+        .def("records", &StreamingProgramCollector::records, nb::call_guard<nb::gil_scoped_release>())
+        .def_prop_ro("dropped_bytes", &StreamingProgramCollector::dropped_bytes)
+        .def_prop_ro("stall_count", &StreamingProgramCollector::stall_count)
+        .def_prop_ro("num_kernel_zones", &StreamingProgramCollector::num_kernel_zones);
 
     nb::class_<tt::tt_metal::detail::MemoryView>(
         m_device, "MemoryView", "Class representing view of the memory (dram, l1, l1_small, trace) of a device.")
@@ -947,6 +1147,25 @@ void device_module(nb::module_& m_device) {
                 >>> mesh_device = ttnn.open_mesh_device(...)
                 >>> if not ttnn.device.IsProgramRealtimeProfilerActive():
                 ...     pytest.skip("Real-time profiler not active on this configuration")
+        )doc");
+
+    m_device.def(
+        "SetStreamingProfilerEnabled",
+        [](bool enabled, uint32_t host_fifo_mb) { streaming_profiler::SetEnabled(enabled, host_fifo_mb); },
+        nb::arg("enabled"),
+        nb::arg("host_fifo_mb") = 16,
+        nb::call_guard<nb::gil_scoped_release>(),
+        R"doc(
+            Turn the streaming profiler on or off for the devices opened next, in place of
+            TT_METAL_STREAMING_PROFILER. Call it with every device closed and fabric DISABLED.
+        )doc");
+
+    m_device.def(
+        "IsStreamingProfilerActive",
+        []() { return streaming_profiler::IsActive(); },
+        R"doc(
+            Returns True if the streaming profiler (TT_METAL_STREAMING_PROFILER=1) is running on at least one device.
+            Call after opening the device.
         )doc");
 }
 

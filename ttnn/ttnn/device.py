@@ -264,10 +264,20 @@ RegisterProgramRealtimeProfilerCallback = ttnn._ttnn.device.RegisterProgramRealt
 UnregisterProgramRealtimeProfilerCallback = ttnn._ttnn.device.UnregisterProgramRealtimeProfilerCallback
 IsProgramRealtimeProfilerActive = ttnn._ttnn.device.IsProgramRealtimeProfilerActive
 
+# Streaming profiler per-program collector (experimental)
+StreamingProgramRecord = ttnn._ttnn.device.StreamingProgramRecord
+StreamingProgramCollector = ttnn._ttnn.device.StreamingProgramCollector
+IsStreamingProfilerActive = ttnn._ttnn.device.IsStreamingProfilerActive
+SetStreamingProfilerEnabled = ttnn._ttnn.device.SetStreamingProfilerEnabled
+
 __all__ = [
     "ProgramRealtimeRecord",
     "ProgramRealtimeRecordBatch",
     "RegisterProgramRealtimeProfilerCallback",
     "UnregisterProgramRealtimeProfilerCallback",
     "IsProgramRealtimeProfilerActive",
+    "StreamingProgramRecord",
+    "StreamingProgramCollector",
+    "IsStreamingProfilerActive",
+    "SetStreamingProfilerEnabled",
 ]

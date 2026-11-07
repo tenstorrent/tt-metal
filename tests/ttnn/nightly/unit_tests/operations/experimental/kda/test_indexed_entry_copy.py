@@ -10,7 +10,7 @@ from loguru import logger
 
 import ttnn
 from tests.ttnn.nightly.unit_tests.operations.experimental.kda import kda_performance_model_test_utils as perf_model
-from tests.ttnn.profiling.realtime_profiler_utils import profile_realtime_program_merged
+from tests.ttnn.profiling.realtime_profiler_utils import is_perf_profiler_active, profile_realtime_program_merged
 from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import all_zero_bits
 from tt_py_test_utils_common.utility_functions import run_for_blackhole, skip_with_llk_assert, skip_with_watcher
 
@@ -394,8 +394,8 @@ _PRODUCTION_CASES = (
 @skip_with_watcher("Watcher perturbs kernel timing; perf checks are not meaningful with it enabled.")
 @pytest.mark.parametrize("case", _PRODUCTION_CASES, ids=lambda case: case.case_id)
 def test_kimi_k3_production_performance(device, case: _ProductionCase) -> None:
-    if not ttnn.device.IsProgramRealtimeProfilerActive():
-        pytest.fail("Real-time profiler must be active for indexed_entry_copy performance checks")
+    if not is_perf_profiler_active():
+        pytest.fail("Streaming profiler must be active for indexed_entry_copy performance checks")
     slab_host = _random((_K3_SLOTS * _K3_LAYERS, *case.entry_shape), case.dtype, 11)
     slab = _to_device(slab_host, device, case.dtype, case.layout, _table_memory(device, case.nd_shard))
     carry_host = _random((1, *case.entry_shape), case.dtype, 10)
