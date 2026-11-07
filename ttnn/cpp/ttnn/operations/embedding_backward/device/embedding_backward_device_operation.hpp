@@ -32,6 +32,11 @@ struct EmbeddingBackwardDeviceOperation {
         const operation_attributes_t& operation_attributes, const tensor_args_t&);
 };
 
+// True when the output-stationary (one-hot matmul) program is used for these inputs: a bfloat16 gradient whose index
+// scratch fits in L1. It accumulates in FP32 DEST and writes each output tile once, for a bfloat16 output only: the FPU matmul accumulate
+// is not accurate enough for the FLOAT32 output contract, which stays on the scatter path.
+bool embedding_backward_uses_onehot(const Tensor& index_tensor, const Tensor& grad_tensor, uint32_t num_embeddings);
+
 ttnn::Tensor embedding_backward(
     const Tensor& index_tensor,
     const Tensor& grad_tensor,
