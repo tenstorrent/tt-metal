@@ -170,5 +170,44 @@ TEST_F(ProgramSpecTestGen1, CPU_RelaxTensorLayoutAlignment_InterleavedKernelHash
         << "Interleaved tile: an upper-dimension alignment must not reach the CTAs either.";
 }
 
+TEST_F(ProgramSpecTestGen1, CPU_RelaxTensorLayoutAlignment_PaddedShapeOnlyShardedKernelHashStable) {
+    // Under match_padded_shape_only, a sharded TensorParameter bakes its whole geometry, tensor shape
+    // included, into the CTAs. Those are derived from the padded shape, so two declarations that reach
+    // the same padded shape by different alignments build the same binary. A different padded shape
+    // does not, which shows the hash can tell them apart.
+    auto make_spec = [](const tt::tt_metal::Shape& shape, const tt::tt_metal::Alignment& alignment) {
+        ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
+        const tt::tt_metal::CoreRangeSet grid({tt::tt_metal::CoreRange({0, 0}, {1, 1})});
+        tt::tt_metal::MemoryConfig memory_config{
+            tt::tt_metal::BufferType::L1, tt::tt_metal::NdShardSpec{tt::tt_metal::Shape{1, 64, 64}, grid}};
+        auto tensor_layout = tt::tt_metal::TensorLayout(
+            tt::tt_metal::DataType::BFLOAT16,
+            tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
+            memory_config,
+            alignment);
+        TensorParameter tp{
+            .unique_id = TensorParamName{"input_tensor"},
+            .spec = tt::tt_metal::TensorSpec(shape, std::move(tensor_layout)),
+            .relaxations =
+                TensorSpecRelaxations{.match_padded_shape_only = true, .relax_tensor_layout_alignment = true},
+        };
+        spec.tensor_parameters = {tp};
+        BindTensorParameterToKernel(spec.kernels[0], "input_tensor", "input_ta");
+        return spec;
+    };
+    Program prog_default =
+        MakeProgramFromSpec(*mesh_device_, make_spec(tt::tt_metal::Shape{2, 32, 64}, tt::tt_metal::Alignment{}));
+    // {2, 20, 64} at alignment {32, 64} pads to {2, 32, 64}.
+    Program prog_realigned =
+        MakeProgramFromSpec(*mesh_device_, make_spec(tt::tt_metal::Shape{2, 20, 64}, tt::tt_metal::Alignment{32, 64}));
+    Program prog_taller =
+        MakeProgramFromSpec(*mesh_device_, make_spec(tt::tt_metal::Shape{3, 32, 64}, tt::tt_metal::Alignment{}));
+    const auto default_hash = prog_default.impl().get_kernel_by_spec_name("dm_kernel")->compute_hash();
+    EXPECT_EQ(default_hash, prog_realigned.impl().get_kernel_by_spec_name("dm_kernel")->compute_hash())
+        << "Sharded, same padded shape: the alignment must not reach the CTAs.";
+    EXPECT_NE(default_hash, prog_taller.impl().get_kernel_by_spec_name("dm_kernel")->compute_hash())
+        << "Sharded, different padded shape: the baked tensor shape must differ.";
+}
+
 }  // namespace
 }  // namespace tt::tt_metal::experimental
