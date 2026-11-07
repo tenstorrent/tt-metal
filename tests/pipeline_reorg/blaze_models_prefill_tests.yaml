@@ -334,6 +334,8 @@
           models/demos/deepseek_v3_d_p/tests/kimi_k3/test_cache_contract.py \
           models/demos/deepseek_v3_d_p/tests/kimi_k3/test_runtime_contract.py \
           models/demos/deepseek_v3_d_p/tests/kimi_k3/test_kimi_k3_1_variant.py \
+          models/demos/deepseek_v3_d_p/tests/kimi_k3/test_kv_cache_allocation.py::test_kvpe_format_must_match_the_attention \
+          models/demos/deepseek_v3_d_p/tests/kimi_k3/test_kv_cache_allocation.py::test_kimi_k3_1_defaults_to_scaled_fp8_and_k3_stays_dense \
           models/demos/deepseek_v3_d_p/tests/kimi_k3/test_kda_golden.py \
           models/demos/deepseek_v3_d_p/tests/test_kv_ack.py \
           models/demos/deepseek_v3_d_p/tests/attn_res/model/test_attn_res_pipeline_split.py
