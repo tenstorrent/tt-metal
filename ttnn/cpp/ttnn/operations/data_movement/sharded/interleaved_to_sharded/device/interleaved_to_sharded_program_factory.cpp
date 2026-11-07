@@ -4,6 +4,7 @@
 
 #include "interleaved_to_sharded_program_factory.hpp"
 
+#include <algorithm>
 #include <cmath>
 
 #include "ttnn/operations/math.hpp"
@@ -163,6 +164,18 @@ ttnn::device_operation::ProgramArtifacts InterleavedToShardedProgramFactory::cre
     uint32_t dram_alignment = hal::get_dram_alignment();
     uint32_t l1_alignment = hal::get_l1_alignment();
     uint32_t num_trids = 4;
+    constexpr uint32_t bank_runs_stage_bytes = 16 * 1024;
+    constexpr uint32_t bank_runs_max_page_bytes = 256;
+    constexpr uint32_t bank_runs_min_pages_per_bank = 8;
+    constexpr uint32_t bank_runs_min_cores = 32;
+    const uint32_t num_dram_banks = input.device()->allocator()->get_num_banks(BufferType::DRAM);
+    const uint32_t page_stride = src_is_dram ? static_cast<uint32_t>(src_buffer->aligned_page_size()) : 0;
+    const bool unaligned_pages = input_unit_size % dram_alignment != 0;
+    const bool use_bank_runs = is_blackhole && !is_tile && src_is_dram &&
+                               shard_strategy == TensorMemoryLayout::HEIGHT_SHARDED &&
+                               input_unit_size == src_buffer->page_size() && page_stride <= bank_runs_max_page_bytes &&
+                               num_units_per_shard_height >= bank_runs_min_pages_per_bank * num_dram_banks &&
+                               (unaligned_pages || all_cores.num_cores() >= bank_runs_min_cores);
     // The scratchpad stages DRAM (64B) reads down to L1 (16B) alignment. See issue #34414. Only the
     // row-major reader has a use for it -- the tile reader never receives a handle to it -- so the
     // tile path declares no spec at all rather than an unbound one.
@@ -172,9 +185,13 @@ ttnn::device_operation::ProgramArtifacts InterleavedToShardedProgramFactory::cre
     if (has_scratch) {
         uint32_t scratch_page_size = tt::align(input_unit_size + dram_alignment, dram_alignment);
         // Whole region the former DFB reserved on each node: entry_size * num_entries.
+        uint32_t scratch_size = scratch_page_size * num_trids;
+        if (use_bank_runs) {
+            scratch_size = std::min(bank_runs_stage_bytes, num_units_per_shard_height * page_stride);
+        }
         scratchpads.push_back(ScratchpadSpec{
             .unique_id = SCRATCH,
-            .size_per_node = scratch_page_size * num_trids,
+            .size_per_node = scratch_size,
         });
     }
 
@@ -220,6 +237,10 @@ ttnn::device_operation::ProgramArtifacts InterleavedToShardedProgramFactory::cre
             "ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/"
             "reader_unary_stick_layout_sharded_blocks_interleaved_start_id_metal2.cpp";
         reader.compile_time_args = {{"num_trids", num_trids}};
+        if (use_bank_runs) {
+            reader.compiler_options.defines.emplace("I2S_BANK_RUNS", "1");
+            reader.compiler_options.defines.emplace("I2S_BANK_RUNS_PAGE_STRIDE", std::to_string(page_stride));
+        }
         // The kernel reads no equivalent of the legacy arg 1 (num_units_per_row), so the named schema
         // has no slot for it.
         reader.runtime_arg_schema.runtime_arg_names = {
