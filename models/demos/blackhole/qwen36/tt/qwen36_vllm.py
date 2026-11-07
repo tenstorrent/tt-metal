@@ -1552,7 +1552,8 @@ class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
         c = torch.ones(B, dtype=torch.int64)
         cc = torch.as_tensor(mamba_state.accepted_counts).to(torch.int64).reshape(-1)
         c[: min(B, cc.numel())] = cc[:B]
-        chains = [group.chain for group in groups]
+        # A plugin without chained verifies (vllm-tt-plugin main) has no MambaGroupState.chain field.
+        chains = [getattr(group, "chain", None) for group in groups]
         if len({ch is None for ch in chains}) > 1:
             raise ValueError(f"mamba_state: chain in groups {[ch is not None for ch in chains]}, not in all or none")
         moves = None

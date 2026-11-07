@@ -63,19 +63,19 @@ def _names(g, seed=0):
     return tuple(names)
 
 
-def _mamba_state(windows, counts=None, ckpt=None, positions=None, chain=None):
-    """The plugin's mamba_state from per-group values in SpecGdnBlockState's group order, packed in ORDER."""
-    groups = tuple(
-        SimpleNamespace(
-            layer_names=_names(g),
-            windows=windows[g],
-            checkpoint_blocks=None if ckpt is None else ckpt[g],
-            chain=None
-            if chain is None
-            else SimpleNamespace(copies=chain[0][g], start_blocks=chain[1][g], windows=chain[2][g]),
-        )
-        for g in ORDER
-    )
+def _mamba_state(windows, counts=None, ckpt=None, positions=None, chain=None, chain_field=True):
+    """The plugin's mamba_state from per-group values in SpecGdnBlockState's group order, packed in ORDER.
+    ``chain_field=False``: the groups have no ``chain`` attribute, as vllm-tt-plugin main's MambaGroupState."""
+
+    def group(g):
+        fields = dict(layer_names=_names(g), windows=windows[g], checkpoint_blocks=None if ckpt is None else ckpt[g])
+        if chain is not None:
+            fields["chain"] = SimpleNamespace(copies=chain[0][g], start_blocks=chain[1][g], windows=chain[2][g])
+        elif chain_field:
+            fields["chain"] = None
+        return SimpleNamespace(**fields)
+
+    groups = tuple(group(g) for g in ORDER)
     return SimpleNamespace(groups=groups, accepted_counts=counts, checkpoint_positions=positions)
 
 
@@ -239,10 +239,11 @@ START0 = torch.tensor([2047, 500, 700, 0])
 ACTIVE = torch.tensor([True, True, True, False])
 
 
-def test_decode_passes_each_groups_window_and_the_counts():
+@pytest.mark.parametrize("chain_field", [True, False])
+def test_decode_passes_each_groups_window_and_the_counts(chain_field):
     st = _spec_state()
     counts = _i32([1, 3, 4])
-    blocks, c, moves = _decode(st, _mamba_state(DEC, counts=counts), chained=False)
+    blocks, c, moves = _decode(st, _mamba_state(DEC, counts=counts, chain_field=chain_field), chained=False)
     assert len(blocks) == G and moves is None
     for g in range(G):
         assert torch.equal(blocks[g], _pad(DEC[g]))
