@@ -492,7 +492,7 @@ uint64_t BankManager::allocate_buffer(
     // If using single allocator strategy, Algorithm::allocate handles address limit, which means it can only be used
     // with top-down allocation. Otherwise, address limit is used to clamp the available ranges regardless of bottom_up
     // vs. top-down allocation
-    if (dependent_allocators.empty()) {
+    if (dependent_allocators.empty() && additional_occupied_ranges.empty()) {
         auto address = alloc->allocate(size_per_bank, bottom_up, address_limit);
         if (!address.has_value()) {
             auto mem_stats = alloc->get_statistics();
@@ -530,13 +530,18 @@ uint64_t BankManager::allocate_buffer(
     std::vector<std::pair<DeviceAddr, DeviceAddr>> available_ranges = this->compute_available_addresses(
         allocator_id, size_per_bank, address_limit, additional_occupied_ranges, scoped_dependent_allocators);
 
+    // allocate_at_address reserves the size rounded to the algorithm's alignment, which can exceed
+    // size_per_bank when alignment_bytes_ is finer (LOCKSTEP L1), so fit that size, as
+    // Algorithm::allocate does on the path above.
+    const DeviceAddr reserved_size_per_bank = alloc->align(size_per_bank);
+
     // Choose an address from the allowed ranges respecting alignment and direction
     // Addresses should already be aligned to alignment_bytes_
     std::optional<DeviceAddr> chosen;
     if (bottom_up) {
         for (const auto& r : available_ranges) {
             DeviceAddr s = r.first;
-            if (s + size_per_bank <= r.second) {
+            if (s + reserved_size_per_bank <= r.second) {
                 chosen = s;
                 break;
             }
@@ -547,8 +552,8 @@ uint64_t BankManager::allocate_buffer(
             // Test the window's width rather than forming r.second - size_per_bank first: DeviceAddr
             // is unsigned, so a request wider than r.second wraps to a huge value that compares
             // >= r.first, and the allocation "succeeds" at a nonsense address instead of reporting.
-            if (r.second - r.first >= size_per_bank) {
-                chosen = r.second - size_per_bank;
+            if (r.second - r.first >= reserved_size_per_bank) {
+                chosen = r.second - reserved_size_per_bank;
                 break;
             }
         }

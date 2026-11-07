@@ -20,6 +20,7 @@
 #include "impl/internal/service/service_core_manager_impl.hpp"
 #include "impl/context/metal_context.hpp"
 #include "impl/context/metal_env_impl.hpp"
+#include "impl/allocator/allocator.hpp"
 #include "impl/program/slow_dispatch.hpp"
 #include "llrt/tt_cluster.hpp"
 #ifdef TT_METAL_USE_EMULE
@@ -160,6 +161,13 @@ void EventSynchronize(const MeshEvent& event) {
                event.impl().id()) {
             mesh_cq->throw_if_reader_failed();
         }
+    }
+    // In-flight marks are not tracked per device, so an event that waited on only part of the mesh
+    // leaves them for a later finish: the program may still be running on the other devices.
+    const auto& sub_device_ids = event.impl().sub_device_ids();
+    if (!sub_device_ids.empty() && event.impl().device_range() == MeshCoordinateRange(event.device()->shape())) {
+        event.device()->allocator_impl()->clear_in_flight_l1_regions(
+            event.impl().mesh_cq_id(), sub_device_ids, event.device()->num_sub_devices(), event.impl().id());
     }
 }
 
