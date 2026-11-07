@@ -226,6 +226,40 @@ class EncoderBackend(Protocol):
         ...
 
 
+def interleave_video_audio(backend, item, frames):
+    """A video with its audio track (tt/video_audio.py): the frames' rows ``frames`` [T * n_per_grid, hidden] and the
+    audio's (``va_audio_codes`` through ``backend.embed_audio_codes``) in the order of the item's embedding rows, as
+    vLLM 0.30's MiMoV2OmniForCausalLM.embed_multimodal lays them out: per group of T / n_segs grids, the group's frames,
+    then the group's audio segment (``video_audio_seg_lens``), the segments taken from the start of the audio in turn.
+    """
+    data = item.data
+    grid = torch.as_tensor(_field(data, "video_grid_thw")).reshape(-1, 3)
+    if grid.shape[0] != 1:
+        raise MMInputError(f"video item {item.identifier}: {grid.shape[0]} grids with an audio track")
+    n_segs = int(torch.as_tensor(_field(data, "video_audio_n_segs")).reshape(-1)[0])
+    seg_lens = [int(x) for x in torch.as_tensor(_field(data, "video_audio_seg_lens")).reshape(-1)[:n_segs]]
+    codes = _field(data, "va_audio_codes")
+    if codes is None:
+        raise MMInputError(f"video item {item.identifier}: an audio track without va_audio_codes")
+    if not hasattr(backend, "embed_audio_codes"):
+        raise MMInputError("this backend has no audio patch encoder (embed_audio_codes)")
+    audio = backend.embed_audio_codes(torch.as_tensor(codes))
+    t = int(grid[0, 0])
+    if n_segs <= 0 or t % n_segs or frames.shape[0] % t:
+        raise MMInputError(f"video item {item.identifier}: {t} grids in {n_segs} audio groups")
+    per_group = frames.shape[0] // t * (t // n_segs)
+    if sum(seg_lens) > audio.shape[0]:
+        raise MMInputError(
+            f"video item {item.identifier}: audio segments of {sum(seg_lens)} tokens, the track has {audio.shape[0]}"
+        )
+    rows, a = [], 0
+    for g, n in enumerate(seg_lens):
+        rows.append(frames[g * per_group : (g + 1) * per_group])
+        rows.append(audio[a : a + n].to(frames.dtype))
+        a += n
+    return torch.cat(rows)
+
+
 def encode_item(backend, item):
     """An item's embeddings [num_embeds, hidden] bf16 from its processor fields (raises MMInputError)."""
     if item.data is None:
@@ -235,14 +269,13 @@ def encode_item(backend, item):
             _field(item.data, "pixel_values"), torch.as_tensor(_field(item.data, "image_grid_thw")).reshape(-1, 3)
         )
     elif item.modality == "video":
-        if _field(item.data, "video_audio_n_segs") is not None and int(
-            torch.as_tensor(_field(item.data, "video_audio_n_segs")).sum()
-        ):
-            raise MMInputError("video with an interleaved audio track is not served yet")
         out = backend.embed_video(
             _field(item.data, "pixel_values_videos"),
             torch.as_tensor(_field(item.data, "video_grid_thw")).reshape(-1, 3),
         )
+        n_segs = _field(item.data, "video_audio_n_segs")
+        if n_segs is not None and int(torch.as_tensor(n_segs).sum()):
+            out = interleave_video_audio(backend, item, out)
     elif _field(item.data, "audio_embeds") is not None:
         out = torch.as_tensor(_field(item.data, "audio_embeds"))  # encoded in the front end: upload only
         if out.dim() == 3 and out.shape[0] == 1:
