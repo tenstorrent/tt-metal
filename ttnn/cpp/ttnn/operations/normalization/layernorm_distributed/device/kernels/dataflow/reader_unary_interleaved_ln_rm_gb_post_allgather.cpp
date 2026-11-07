@@ -209,6 +209,8 @@ void kernel_main() {
 #endif
 #endif
         }
+        // 2D core grid: advance from the end of this core's local row to the start of
+        // its next local row. No-op in the 1D path, where row_stride == Wt.
         inp_tile_idx += row_stride - Wt;
     }  // ncht loop
 }
