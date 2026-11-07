@@ -8,11 +8,15 @@
 #include <deque>
 #include <mutex>
 #include <shared_mutex>
+#include <string>
+#include <string_view>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
+#include <fmt/format.h>
 #include <tt-logger/tt-logger.hpp>
+#include <tt_stl/assert.hpp>
 #include <tt_stl/indestructible.hpp>
 
 #include "hostdev/observability_event_descriptor.h"
@@ -22,26 +26,30 @@ namespace tt::llrt {
 
 namespace {
 
-// Mirrors TT_EVENT_DESCRIPTOR_DEFINE_ID; the host walks the section at a fixed 16-byte stride.
-struct ObservabilityEventMetaRecord {
-    uint32_t descriptor_id;
-    uint32_t name_ptr;  // VMA into .tt_event_descriptor_str
-    uint32_t file_ptr;  // VMA into .tt_event_descriptor_str
+// The fixed part of a .tt_event_descriptor_meta record; the event's metadata fields follow
+// (hostdev/observability_event_descriptor.h).
+struct RecordHeader {
+    uint32_t descriptor_id;  // the handle's VMA in .tt_event_descriptor_ids, which RebaseDescriptorIds has
+                             // already moved
+    uint32_t signature_ptr;  // VMA into .tt_event_descriptor_str: "<type name>:<field codes>"
+    uint32_t file_ptr;       // VMA into .tt_event_descriptor_str
     uint32_t line;
 };
-static_assert(
-    sizeof(ObservabilityEventMetaRecord) == TT_EVENT_DESCRIPTOR_META_RECORD_BYTES,
-    "the device emitter writes exactly four .long fields");
+static_assert(sizeof(RecordHeader) == tt::observability_event::kRecordHeaderBytes);
+
+constexpr size_t align_up(size_t v, size_t a) { return (v + a - 1) / a * a; }
 
 struct State {
     mutable std::shared_mutex mtx;
-    std::unordered_set<std::string> ingested;
+    std::unordered_map<std::string, uint32_t> base_by_path;  // every image seen, and where its ids start
+    uint32_t next_id = 0;
     std::deque<ObservabilityEventMetaEntry> log;  // append-only; the listener keeps pointers into it
-    std::unordered_map<uint32_t, uint32_t> id_to_log_idx;
+    std::vector<int32_t> log_idx_by_id = std::vector<int32_t>(TT_EVENT_DESCRIPTOR_ID_COUNT, -1);
     ObservabilityEventMetaRegistry::Listener listener;
-    uint64_t collisions = 0;
+    std::unordered_set<std::string> strings;  // interned metadata strings; node-based, so pointers stay valid
+    uint64_t malformed_records = 0;
     uint64_t foreign_sections = 0;
-    bool collision_logged = false;
+    bool malformed_logged = false;
 };
 
 State& state() {
@@ -51,7 +59,7 @@ State& state() {
 
 // Resolve a device VMA in .tt_event_descriptor_str to a string inside the mapped section, rebased by the section's
 // own address so a non-ALLOC orphan at sh_addr 0 works too.
-const char* resolve(std::span<std::byte> str_bytes, uint64_t str_vma, uint32_t ptr) {
+const char* resolve(std::span<const std::byte> str_bytes, uint64_t str_vma, uint32_t ptr) {
     if (ptr < str_vma) {
         return nullptr;
     }
@@ -67,110 +75,210 @@ const char* resolve(std::span<std::byte> str_bytes, uint64_t str_vma, uint32_t p
     return base + off;
 }
 
+// The field codes after the signature's last ':', with a nested struct's braces balanced; nullptr if malformed.
+const char* field_codes(const char* sig) {
+    const char* colon = sig != nullptr ? std::strrchr(sig, ':') : nullptr;
+    if (colon == nullptr) {
+        return nullptr;
+    }
+    int depth = 0;
+    for (const char* c = colon + 1; *c != 0; c++) {
+        depth += *c == '{' ? 1 : *c == '}' ? -1 : 0;
+        if (depth < 0) {
+            return nullptr;
+        }
+    }
+    return depth == 0 ? colon + 1 : nullptr;
+}
+
 }  // namespace
+
+ParsedMetaRecords parse_meta_records(
+    std::span<const std::byte> meta, std::span<const std::byte> str, uint64_t str_vma) {
+    ParsedMetaRecords out;
+    size_t off = 0;
+    while (off + sizeof(RecordHeader) <= meta.size()) {
+        RecordHeader h{};
+        std::memcpy(&h, meta.data() + off, sizeof(h));
+        const char* sig = resolve(str, str_vma, h.signature_ptr);
+        const char* codes = field_codes(sig);
+        if (codes == nullptr) {
+            out.stopped_early = true;  // cannot size this record, so nothing after it can be found either
+            return out;
+        }
+        ObservabilityEventMetaEntry e{.descriptor_id = h.descriptor_id, .line = h.line};
+        const char* file = resolve(str, str_vma, h.file_ptr);
+        e.file = file != nullptr ? file : "";
+        e.meta.signature = sig;
+        size_t pos = off + sizeof(RecordHeader);
+        for (const char* c = codes; *c != 0; c++) {
+            if (*c == '{' || *c == '}') {
+                continue;  // a nested struct's bounds; its fields are laid out in place
+            }
+            const size_t bytes = tt::observability_event::detail::code_bytes(*c);
+            if (bytes == 0) {
+                out.stopped_early = true;  // a field code this reader does not know
+                return out;
+            }
+            pos = align_up(pos, bytes < 4 ? bytes : 4);
+            if (pos + bytes > meta.size()) {
+                out.stopped_early = true;
+                return out;
+            }
+            tt::observability_event::FieldValue v{.code = *c};
+            std::memcpy(&v.bits, meta.data() + pos, bytes);  // little-endian host and device
+            if (*c == 's') {
+                v.s = resolve(str, str_vma, static_cast<uint32_t>(v.bits));
+                if (v.s == nullptr) {
+                    out.stopped_early = true;
+                    return out;
+                }
+                if (e.name.empty()) {
+                    e.name = v.s;
+                }
+            }
+            e.meta.fields.push_back(v);
+            pos += bytes;
+        }
+        off = align_up(pos, 4);
+        out.entries.push_back(std::move(e));
+    }
+    return out;
+}
 
 ObservabilityEventMetaRegistry& ObservabilityEventMetaRegistry::instance() {
     static ObservabilityEventMetaRegistry inst;
     return inst;
 }
 
-void ObservabilityEventMetaRegistry::ingest_elf(const ll_api::ElfFile& elf, const std::string& elf_path) {
-    State& s = state();
-    {
-        std::shared_lock rd(s.mtx);
-        if (s.ingested.contains(elf_path)) {
-            return;
-        }
+void ObservabilityEventMetaRegistry::ingest_elf(const std::string& elf_path, ll_api::ElfFile& elf) {
+    uint64_t ids_vma = 0;
+    const size_t count = elf.GetSectionContents(".tt_event_descriptor_ids", ids_vma).size();
+    if (count == 0) {
+        return;  // no events: dispatch kernels, the relay, anything built without the producer
     }
 
+    State& s = state();
+    uint32_t base = 0;
+    bool first = false;
+    {
+        std::unique_lock wr(s.mtx);
+        auto [it, inserted] = s.base_by_path.try_emplace(elf_path, s.next_id);
+        if (inserted) {
+            // The block must stay below the stall id, the one value the device emits without a record.
+            TT_FATAL(
+                static_cast<uint64_t>(s.next_id) + count <= TT_ZONE_STALL_ID,
+                "observability-event-meta: loading '{}' ({} events) would exceed the {}-id descriptor id space ({} "
+                "assigned); "
+                "this process has loaded more distinct device events than the 16-bit id supports",
+                elf_path,
+                count,
+                TT_ZONE_STALL_ID,
+                s.next_id);
+            s.next_id += static_cast<uint32_t>(count);
+            first = true;
+        }
+        base = it->second;
+    }
+    // The image is this caller's; its text is packed for the device after we return, so the rebase must
+    // land here whether or not this path's names were already registered.
+    elf.RebaseDescriptorIds(base);
+    if (!first) {
+        return;
+    }
+
+    // Parsed outside the lock; string fields still point into the ELF until they are interned below.
     std::vector<ObservabilityEventMetaEntry> parsed;
     bool skipped_foreign = false;
+    uint64_t malformed = 0;
     try {
         uint64_t meta_vma = 0;
         auto meta = elf.GetSectionContents(".tt_event_descriptor_meta", meta_vma);
-        if (meta.empty()) {
-            return;  // not a streaming-profiler build: nothing to register
-        }
         uint64_t str_vma = 0;
         auto strs = elf.GetSectionContents(".tt_event_descriptor_str", str_vma);
-        // The JIT cache key does not cover this section's layout, so a stale root can be reused and walking it at
-        // our stride would bind plausible ids to wrong names; either guard failing means the section is not ours.
-        if (strs.empty()) {
+        // The JIT cache key does not cover this section's layout, so a stale root can be reused; every record is
+        // checked against its own signature, and the walk stops at the first one it cannot size.
+        if (meta.empty() || strs.empty()) {
             log_debug(
                 tt::LogLLRuntime,
-                "observability-event-meta: '{}' has .tt_event_descriptor_meta but no .tt_event_descriptor_str -- "
-                "foreign/stale record "
-                "layout, "
-                "ignoring the section (its events will render as Zone_<id>)",
+                "observability-event-meta: '{}' has descriptor ids but no "
+                ".tt_event_descriptor_meta/.tt_event_descriptor_str -- "
+                "foreign/stale record layout, ignoring the section (its events stay unnamed)",
                 elf_path);
             skipped_foreign = true;
-        } else if (meta.size() % sizeof(ObservabilityEventMetaRecord) != 0) {
-            log_warning(
-                tt::LogLLRuntime,
-                "observability-event-meta: '{}' has a .tt_event_descriptor_meta of {} bytes, not a multiple of the "
-                "{}-byte record "
-                "stride -- foreign/stale record layout, ignoring the section",
-                elf_path,
-                meta.size(),
-                sizeof(ObservabilityEventMetaRecord));
-            skipped_foreign = true;
         }
-        const size_t n = skipped_foreign ? 0 : meta.size() / sizeof(ObservabilityEventMetaRecord);
-        parsed.reserve(n);
-        for (size_t i = 0; i < n; i++) {
-            ObservabilityEventMetaRecord rec{};
-            std::memcpy(&rec, meta.data() + i * sizeof(ObservabilityEventMetaRecord), sizeof(rec));
-            const char* name = resolve(strs, str_vma, rec.name_ptr);
-            const char* file = resolve(strs, str_vma, rec.file_ptr);
-            if (name == nullptr) {
-                continue;
+        if (!skipped_foreign) {
+            ParsedMetaRecords records = parse_meta_records(meta, strs, str_vma);
+            skipped_foreign = records.stopped_early;
+            for (ObservabilityEventMetaEntry& e : records.entries) {
+                // Every record's id is a handle in this image's block; anything else is a layout we do not
+                // understand.
+                if (e.name.empty() || e.descriptor_id < base || e.descriptor_id >= base + count) {
+                    malformed++;
+                    continue;
+                }
+                parsed.push_back(std::move(e));
             }
-            parsed.push_back(ObservabilityEventMetaEntry{
-                rec.descriptor_id & TT_EVENT_DESCRIPTOR_ID_MASK, name, file != nullptr ? file : "", rec.line});
         }
     } catch (const std::exception& e) {
-        // Non-fatal: a kernel whose events cannot be named still profiles, rendering as "Zone_<id>".
+        // Non-fatal: a kernel whose events cannot be named still runs; its events stay unnamed.
         log_debug(tt::LogLLRuntime, "observability-event-meta: could not read '{}': {}", elf_path, e.what());
     }
 
     std::unique_lock wr(s.mtx);
-    if (!s.ingested.insert(elf_path).second) {
-        return;
-    }
     if (skipped_foreign) {
         s.foreign_sections++;
     }
     std::vector<const ObservabilityEventMetaEntry*> added;
     for (auto& e : parsed) {
-        auto it = s.id_to_log_idx.find(e.descriptor_id);
-        if (it != s.id_to_log_idx.end()) {
-            const ObservabilityEventMetaEntry& prev = s.log[it->second];
-            if (prev.name != e.name || prev.file != e.file || prev.line != e.line) {
-                s.collisions++;
-                if (!s.collision_logged) {
-                    s.collision_logged = true;
-                    log_warning(
-                        tt::LogLLRuntime,
-                        "observability-event-meta: structural descriptor id {} (tu {} local {}) claimed by two source "
-                        "locations: "
-                        "'{}' ({}:{}) and '{}' ({}:{}). Event names for these will be wrong. This means two "
-                        "translation units share a tu_id -- see get_or_assign_profiler_tu_id in "
-                        "jit_build/build.cpp.",
-                        e.descriptor_id,
-                        TT_EVENT_DESCRIPTOR_TU_OF(e.descriptor_id),
-                        TT_EVENT_DESCRIPTOR_LOCAL_OF(e.descriptor_id),
-                        prev.name,
-                        prev.file,
-                        prev.line,
-                        e.name,
-                        e.file,
-                        e.line);
-                }
-            }
-            continue;  // first writer wins: a name never changes under a consumer that already read it
+        if (s.log_idx_by_id[e.descriptor_id] >= 0) {
+            malformed++;  // two records on one handle: not something the emitter can produce
+            continue;
         }
-        s.id_to_log_idx.emplace(e.descriptor_id, static_cast<uint32_t>(s.log.size()));
+        // The ELF is gone once its image is packed; the registry owns every string an event's metadata names.
+        e.meta.signature = *s.strings.emplace(e.meta.signature).first;
+        for (tt::observability_event::FieldValue& v : e.meta.fields) {
+            if (v.s != nullptr) {
+                v.s = s.strings.emplace(v.s).first->c_str();
+            }
+        }
+        s.log_idx_by_id[e.descriptor_id] = static_cast<int32_t>(s.log.size());
         added.push_back(&s.log.emplace_back(std::move(e)));
+    }
+    if (malformed != 0) {
+        s.malformed_records += malformed;
+        if (!s.malformed_logged) {
+            s.malformed_logged = true;
+            log_warning(
+                tt::LogLLRuntime,
+                "observability-event-meta: '{}' has {} descriptor record(s) whose id is outside its own block [{}, {}) "
+                "or "
+                "unnamed; those events stay unnamed (stale .tt_event_descriptor_meta layout in the JIT cache?)",
+                elf_path,
+                malformed,
+                base,
+                base + count);
+        }
+    }
+    log_debug(
+        tt::LogLLRuntime,
+        "observability-event-meta: '{}' -> descriptor ids [{}, {}), {} named",
+        elf_path,
+        base,
+        base + count,
+        added.size());
+    for (const ObservabilityEventMetaEntry* e : added) {
+        if (auto c = e->meta.as<tt::observability_event::ZoneColorMeta>()) {
+            log_debug(
+                tt::LogLLRuntime,
+                "observability-event-meta: id {} '{}' ({}:{}) carries {} {{color={:#08x}}}",
+                e->descriptor_id,
+                c->name,
+                e->file,
+                e->line,
+                e->meta.type_name(),
+                c->color);
+        }
     }
     if (s.listener && !added.empty()) {
         s.listener(added);
@@ -191,10 +299,16 @@ void ObservabilityEventMetaRegistry::set_listener(Listener listener) {
     s.listener = std::move(listener);
 }
 
-uint64_t ObservabilityEventMetaRegistry::collisions() const {
+uint32_t ObservabilityEventMetaRegistry::ids_assigned() const {
     const State& s = state();
     std::shared_lock rd(s.mtx);
-    return s.collisions;
+    return s.next_id;
+}
+
+uint64_t ObservabilityEventMetaRegistry::malformed_records() const {
+    const State& s = state();
+    std::shared_lock rd(s.mtx);
+    return s.malformed_records;
 }
 
 uint64_t ObservabilityEventMetaRegistry::foreign_sections() const {
@@ -204,3 +318,27 @@ uint64_t ObservabilityEventMetaRegistry::foreign_sections() const {
 }
 
 }  // namespace tt::llrt
+
+namespace tt::observability_event::detail {
+
+void report_meta_mismatch(std::string_view record_signature, std::string_view host_signature, std::string_view reason) {
+    static std::mutex mtx;
+    static std::unordered_set<std::string> reported;
+    std::string key = fmt::format("{}\n{}\n{}", record_signature, host_signature, reason);
+    {
+        std::lock_guard lock(mtx);
+        if (!reported.insert(std::move(key)).second) {
+            return;
+        }
+    }
+    log_warning(
+        tt::LogLLRuntime,
+        "observability event metadata: the device recorded {} and this host reads it as {}, but {}; as<T>() returns "
+        "nullopt for these events. A device version in tt_metal/hw/observability/api, or a host built from an older "
+        "tt_metal/observability/api, makes the two differ.",
+        record_signature,
+        host_signature,
+        reason);
+}
+
+}  // namespace tt::observability_event::detail

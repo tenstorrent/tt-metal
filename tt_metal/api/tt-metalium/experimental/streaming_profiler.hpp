@@ -20,6 +20,7 @@
 
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/device_types.hpp>
+#include <tt-metalium/experimental/observability_event_meta.hpp>
 #include <tt_stl/strong_type.hpp>
 
 // The streaming profiler's host API. A callback registered here receives the profiler records that device kernels emit.
@@ -47,6 +48,9 @@ struct SourceLocation {
 struct ObservabilityEventDescriptor {
     std::string_view name;  // Valid for the lifetime of the process.
     SourceLocation location;
+    // The metadata struct the event was declared with (e.g. ZoneColorMeta for DeviceZoneScopedNC); read it with
+    // meta->as<T>(). Null for events without a record, such as the stall zone. Valid for the lifetime of the process.
+    const tt::observability_event::Metadata* meta = nullptr;
 };
 
 /**
@@ -73,24 +77,21 @@ class Callback;
 
 // Implementation detail.
 namespace detail {
-inline constexpr uint32_t EVENT_DESCRIPTOR_ID_BITS = 27;
-inline constexpr uint32_t EVENT_DESCRIPTOR_LOCAL_BITS = 14;
-inline constexpr uint32_t EVENT_DESCRIPTOR_TU_COUNT = 1u << (EVENT_DESCRIPTOR_ID_BITS - EVENT_DESCRIPTOR_LOCAL_BITS);
+// Descriptor ids are 16-bit and assigned per process: each device image gets the next block as it loads
+// (hostdev/observability_event_descriptor.h), so the table is flat and a lookup is one load.
+inline constexpr uint32_t EVENT_DESCRIPTOR_ID_BITS = 16;
+inline constexpr uint32_t EVENT_DESCRIPTOR_ID_COUNT = 1u << EVENT_DESCRIPTOR_ID_BITS;
 
-struct DescriptorTu {
-    std::span<const ObservabilityEventDescriptor* const> descriptors;
-};
 struct DescriptorRegistry {
-    static std::atomic<const DescriptorTu*> tus[EVENT_DESCRIPTOR_TU_COUNT];
+    static std::atomic<const ObservabilityEventDescriptor*> descriptors[EVENT_DESCRIPTOR_ID_COUNT];
 };
 inline constexpr ObservabilityEventDescriptor UNNAMED_DESCRIPTOR{};
 
 inline const ObservabilityEventDescriptor& descriptor_of(uint32_t descriptor_id) {
-    const DescriptorTu* tu =
-        DescriptorRegistry::tus[descriptor_id >> EVENT_DESCRIPTOR_LOCAL_BITS].load(std::memory_order_acquire);
-    const uint32_t local = descriptor_id & ((1u << EVENT_DESCRIPTOR_LOCAL_BITS) - 1u);
     const ObservabilityEventDescriptor* s =
-        tu != nullptr && local < tu->descriptors.size() ? tu->descriptors[local] : nullptr;
+        descriptor_id < EVENT_DESCRIPTOR_ID_COUNT
+            ? DescriptorRegistry::descriptors[descriptor_id].load(std::memory_order_acquire)
+            : nullptr;
     return s != nullptr ? *s : UNNAMED_DESCRIPTOR;
 }
 

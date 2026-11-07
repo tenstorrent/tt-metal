@@ -882,7 +882,7 @@ __attribute__((noinline)) void main_accumulate_end(uint32_t timer_id, bool start
     }
 }
 
-// Thin always-inline wrapper: heavy logic lives once in the helpers, so each site emits only two calls.
+// Thin always-inline wrapper: heavy logic lives once in the helpers, so each event emits only two calls.
 template <uint32_t timer_id, uint32_t index>
 struct profileScopeMainAccumulate {
     bool start_marked = false;
@@ -1172,3 +1172,18 @@ __attribute__((noinline)) void trace_only_init() {
 #ifndef DeviceZoneScopedNIf
 #define DeviceZoneScopedNIf(name, active) DeviceZoneScopedN(name)
 #endif
+
+// Only the streaming profiler carries per-event metadata; elsewhere the colour and unit are dropped.
+#ifndef DeviceZoneScopedNC
+#define DeviceZoneScopedNC(name, color) DeviceZoneScopedN(name)
+#endif
+
+#ifndef DeviceZoneScopedNCU
+#define DeviceZoneScopedNCU(name, color, unit) DeviceZoneScopedN(name)
+#endif
+
+// DeviceZoneScopedNCU's unit, named the same in every profiler mode so a kernel builds in all of them.
+#include "observability/api/observability_event_meta.h"
+namespace kernel_profiler {
+using ::tt::observability_event::TimeUnit;
+}  // namespace kernel_profiler
