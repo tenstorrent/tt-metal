@@ -27,8 +27,8 @@ Sensitivity, measured with the capture reading a stand-in word fixed at 0 (eager
 slot fails chunk 1 (slot 1) and a pinned start fails chunk 2 (5120), each at the KVPE cache check.
 
 Windows: the first DSA layer alone, two DSA layers (rank-local KV slots 0 and 1 of both caches), and
-KDA + DSA (layers 0-3), where the KDA carries take their slot from the same metadata. Dense-FFN stand-in
-for the MoE and synthetic weights, as `test_kimi_k3_1_dsa_block.py`.
+KDA + DSA (layers 0-3), where the KDA carries take their slot from the same metadata. Synthetic weights
+and dense-FFN stand-in for the MoE from `synthetic.py`, as `test_kimi_k3_1_dsa_block.py`.
 """
 
 import pytest
@@ -36,20 +36,20 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.demos.common.prefill.adapter import PrefillRunParams, get_adapter
-from models.demos.deepseek_v3_d_p.reference.kimi_k3_1_config import KimiK31Config, kimi_k3_1_hf_config
-from models.demos.deepseek_v3_d_p.tests.kimi_k3.test_kimi_k3_1_dsa_block import (
+from models.demos.deepseek_v3_d_p.tests.kimi_k3.synthetic import (
+    CACHE_LEN,
     CHUNK,
-    MAX_SEQ_LEN,
-    WINDOWS,
-    _DenseFfnK31,
-    _shards,
-    _synthetic_state_dict,
+    HF_CONFIGS,
+    build_stack,
+    compose,
+    placements,
+    release,
+    synthetic_state_dict,
+    token_ids,
+    upload_tokens,
 )
-from models.demos.deepseek_v3_d_p.tests.kimi_k3.test_transformer_depth import SP_AXIS, TP_AXIS, _compose
-from models.demos.deepseek_v3_d_p.tt.kimi_k3.transformer import TtKimiK3Transformer
+from models.demos.deepseek_v3_d_p.tests.kimi_k3.test_kimi_k3_1_dsa_block import WINDOWS, _shards
 from models.demos.deepseek_v3_d_p.tt.mla.rope import ChunkMetadata
-from models.demos.deepseek_v3_d_p.tt.runners.input_prep import prepare_prefill_input_tensor
 from models.demos.deepseek_v3_d_p.utils.sub_device_trace import SubDeviceTraceController
 
 NUM_USERS = 2
@@ -64,19 +64,8 @@ CHUNKS = [
     (2, 1, 0, 1000),
 ]
 NUM_REQUESTS = 3
-# The block test's placement plus a trace region; a few layers' capture fits well inside the runner's 256 MB.
-PLACEMENTS = [
-    pytest.param(
-        (8, 4),
-        {
-            "fabric_config": ttnn.FabricConfig.FABRIC_2D,
-            "l1_small_size": KimiK31Config.L1_SMALL_SIZE,
-            "trace_region_size": 64 * 1024 * 1024,
-        },
-        marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
-        id="fabric2d-8x4",
-    )
-]
+# A few layers' capture fits well inside the runner's 256 MB trace region.
+TRACE_REGION_SIZE = 64 * 1024 * 1024
 TRACE_WINDOWS = ["dsa_L3", "dsa_L3_L7", "hybrid_L0_3"]
 
 
@@ -93,64 +82,25 @@ def _scalar(mesh_device, value: int) -> ttnn.Tensor:
 
 
 @pytest.mark.timeout(1800)
-@pytest.mark.parametrize("mesh_device, device_params", PLACEMENTS, indirect=True)
+@pytest.mark.parametrize(
+    "model, mesh_device, device_params",
+    placements(["kimi_k3_1"], trace_region_size=TRACE_REGION_SIZE),
+    indirect=["mesh_device", "device_params"],
+)
 @pytest.mark.parametrize("window", TRACE_WINDOWS, ids=TRACE_WINDOWS)
-def test_k31_dsa_traced_replay_matches_eager(mesh_device, device_params, window):
+def test_k31_dsa_traced_replay_matches_eager(model, mesh_device, device_params, window):
     first_layer_idx, num_layers, kv_only = WINDOWS[window]
     assert not kv_only
-    adapter = get_adapter("kimi_k3_1")
-    config = kimi_k3_1_hf_config(max_seq=MAX_SEQ_LEN)
-    params = PrefillRunParams(
-        mesh_shape=tuple(mesh_device.shape),
-        num_layers=num_layers,
-        first_layer_idx=first_layer_idx,
-        is_first_rank=True,
-        is_last_rank=True,
-        max_seq_len=MAX_SEQ_LEN,
-        chunk_size=CHUNK,
-        num_users=NUM_USERS,
-        capacity_factor=2,
-        num_links=1,
-        gate_mode_name="DEVICE_FP32",
-        kv_only_last_layer=False,
-        weight_cache_path=None,
-        sp_axis=SP_AXIS,
-        tp_axis=TP_AXIS,
-        tp_shard_kv=True,
-        sparse_kv_cache_format=None,
-    )
-    model = TtKimiK3Transformer(
-        mesh_device,
-        config,
-        _DenseFfnK31,
-        _synthetic_state_dict(config, first_layer_idx, num_layers),
-        num_layers=num_layers,
-        seq_len=CHUNK,
-        first_layer_idx=first_layer_idx,
-        sp_axis=SP_AXIS,
-        tp_axis=TP_AXIS,
-        max_seq_len=MAX_SEQ_LEN,
-        is_chunked=True,
-        slot_num=NUM_USERS,
-        sparse_kv_cache_format=adapter.resolve_sparse_kv_cache_format(params.sparse_kv_cache_format),
-        tp_shard_kv=True,
-    )
-    caches = adapter.allocate_kv_cache(mesh_device=mesh_device, hf_config=config, params=params)
+    state_dict = synthetic_state_dict(HF_CONFIGS[model](CACHE_LEN), first_layer_idx, num_layers)
+    stack, caches = build_stack(mesh_device, model, state_dict, first_layer_idx, num_layers, num_users=NUM_USERS)
     kvpe, index = caches.kvpe, caches.index
-    model.kda_states = caches.kda_states
     # Fresh caches, restored in place before the traced pass so both passes start from the same state.
     pristine = (kvpe.storage.cpu(), index.cpu())
 
-    mesh_shape = tuple(mesh_device.shape)
-    streams = [
-        torch.randint(0, config.vocab_size, (3 * CHUNK,), generator=torch.Generator().manual_seed(7 + request)).tolist()
-        for request in range(NUM_REQUESTS)
-    ]
+    streams = [token_ids(3 * CHUNK, seed=7 + request) for request in range(NUM_REQUESTS)]
 
     def tokens(request, start):
-        return prepare_prefill_input_tensor(
-            streams[request][start : start + CHUNK], mesh_device, mesh_shape[SP_AXIS], False, mesh_shape, SP_AXIS
-        )
+        return upload_tokens(mesh_device, streams[request][start : start + CHUNK])
 
     def caches_now():
         return _shards(mesh_device, kvpe.storage).view(torch.uint8), _shards(mesh_device, index)
@@ -171,7 +121,7 @@ def test_k31_dsa_traced_replay_matches_eager(mesh_device, device_params, window)
 
     def forward_traced():
         # As `TtPrefillRuntime._forward_traced`: host bounds absent, the slot word on device.
-        return model.forward(
+        return stack.forward(
             input_tt,
             kvpe_cache=kvpe,
             index_kv_cache=index,
@@ -190,7 +140,7 @@ def test_k31_dsa_traced_replay_matches_eager(mesh_device, device_params, window)
         for request, slot, start, end in CHUNKS:
             logger.info(f"{window}: eager slot {slot} [{start}, {end})")
             chunk_tokens = tokens(request, start)
-            out = model.forward(
+            out = stack.forward(
                 chunk_tokens,
                 kvpe_cache=kvpe,
                 index_kv_cache=index,
@@ -200,13 +150,13 @@ def test_k31_dsa_traced_replay_matches_eager(mesh_device, device_params, window)
                 cache_user_id=slot,
             )
             ttnn.deallocate(chunk_tokens)
-            eager.append((_compose(mesh_device, out), *caches_now()))
+            eager.append((compose(mesh_device, out, CHUNK), *caches_now()))
             ttnn.deallocate(out)
         for (_, kvpe_a, index_a), (_, kvpe_b, index_b) in zip(eager, eager[1:]):
             assert not torch.equal(kvpe_a, kvpe_b) and not torch.equal(index_a, index_b), "a chunk wrote no cache"
 
         # Capture on slot 0 at position 0, after two warm forwards settle programs and persistent resources.
-        model.set_trace_controller(controller)
+        stack.set_trace_controller(controller)
         stage(0, 0, 0, CHUNK)
         for _ in range(2):
             ttnn.deallocate(forward_traced())
@@ -229,15 +179,13 @@ def test_k31_dsa_traced_replay_matches_eager(mesh_device, device_params, window)
             label = f"{window} chunk {i} (slot {slot}, [{start}, {end}))"
             assert torch.equal(kvpe_got, kvpe_want), f"{label}: traced KVPE cache differs from eager"
             assert torch.equal(index_got, index_want), f"{label}: traced index cache differs from eager"
-            assert torch.equal(_compose(mesh_device, traced_out), out_want), f"{label}: traced output differs"
+            assert torch.equal(compose(mesh_device, traced_out, CHUNK), out_want), f"{label}: traced output differs"
     finally:
         if captured:
             controller.release()
-        model.set_trace_controller(None)
+        stack.set_trace_controller(None)
         if traced_out is not None:
             ttnn.deallocate(traced_out)
-        if caches.kda_states is not None:
-            caches.kda_states.deallocate()
         for tensor in (input_tt, *metadata.scalars):
             ttnn.deallocate(tensor)
-        model.release_sub_device_managers()
+        release(stack, caches)
