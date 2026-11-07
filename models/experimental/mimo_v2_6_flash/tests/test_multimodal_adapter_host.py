@@ -1,10 +1,12 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Host checks of MiMoV2OmniForCausalLM.prefill_forward's routing (no device): a chunk holding an item's embedding
-rows runs eagerly on its own with the item rows merged (never in a prefill batch, never replayed), a cached prefix in
-front of an item is not recomputed in a batch, text rows and text-only steps run as in the text class, and malformed
-multimodal input is served as text instead of raising out of prefill."""
+"""Host checks of MiMoV2OmniForCausalLM.prefill_forward's routing (no device): on replicas whose traced passes take no
+multimodal rows a chunk holding an item's embedding rows runs eagerly on its own with the item rows merged (never in a
+prefill batch, never replayed), and on replicas whose traced passes take them (TtMiMoModel.enable_trace_embeds) it
+batches and replays as a text chunk does; a cached prefix in front of an item is not recomputed in a batch, text rows
+and text-only steps run as in the text class, and malformed multimodal input is served as text instead of raising out
+of prefill."""
 
 from types import SimpleNamespace
 
@@ -68,11 +70,11 @@ class Backend:
         return torch.full((int(mel.shape[0]) // 4, HIDDEN), float(mel[0, 0]), dtype=torch.bfloat16)
 
 
-def adapter(monkeypatch, cls=gv.MiMoV2OmniForCausalLM):
+def adapter(monkeypatch, cls=gv.MiMoV2OmniForCausalLM, replica=None):
     monkeypatch.setattr(gv, "PREFILL_BATCH", True)
     monkeypatch.setattr(gv, "PREFILL_CHUNK_TRACE", True)
     monkeypatch.setattr(gv, "KV_PAIR_SPLIT", True)
-    replica = Replica()
+    replica = Replica() if replica is None else replica
     gen = SimpleNamespace(models=[replica], dp=1, users_per_replica=4, cfg=SimpleNamespace(sliding_window=128))
     a = cls(gen, 1 << 16)
     a.layer_groups, a.pair_split = [0], True
@@ -82,6 +84,77 @@ def adapter(monkeypatch, cls=gv.MiMoV2OmniForCausalLM):
         hf = SimpleNamespace(image_token_id=IMAGE, vision_config={"spatial_merge_size": 2}, eos_token_id=EOS)
         a.setup_multimodal(None, hf, backends=[Backend()])
     return a, replica
+
+
+class TracedReplica(Replica):
+    """A replica whose traced passes take multimodal rows (TtMiMoModel.enable_trace_embeds), with traced later chunks
+    of the padded lengths in ``later``. Records each pass with whether it replays and the rows it merges."""
+
+    def __init__(self, later=(128, 256)):
+        super().__init__()
+        self.trace_rows = None
+        self._chunk_trace = lambda slot, start, tokens: (
+            object() if start > 0 and gv.prefill_padded_len(tokens.numel(), start, True) in later else None
+        )
+
+    def enable_trace_embeds(self):
+        self.trace_rows = []
+
+    def prefill_enqueue(self, chunk, slot, start_pos=0, history_continues=False, draft_group=0, allow_trace=True, **mm):
+        rows = mm.get("embed_rows")
+        replay = allow_trace and self._chunk_trace(slot, start_pos, chunk) is not None
+        merged = None if rows is None else rows.nonzero().flatten()
+        self.passes.append(("row", slot, start_pos, chunk.numel(), merged, "replay" if replay else "eager"))
+        if "embeds" in mm:
+            self.embeds[slot] = mm["embeds"]
+        return 1
+
+    def prefill_enqueue_batch(self, chunks, layers=None):
+        merged = [None if len(c) < 4 or c[3] is None else c[4].nonzero().flatten().tolist() for c in chunks]
+        self.passes.append(("batch", [(c[1], c[0].numel()) for c in chunks], merged))
+        for c in chunks:
+            if len(c) > 3 and c[3] is not None:
+                self.embeds[c[1]] = c[3]
+        return len(chunks)
+
+
+def test_multimodal_rows_batch_and_replay_when_traces_take_them(monkeypatch):
+    """With traced passes that take multimodal rows (MIMO_MM_TRACE), a chunk with an item's rows runs as a text chunk
+    does: a first chunk batched with the lane's other first chunks of its padded length (each user's rows merged),
+    a later chunk replaying its trace with its rows; a cached prefix in front of an item is still not recomputed in a
+    batch (it would encode the cached items again)."""
+    monkeypatch.setattr(gv, "PREFILL_TRACE", True)
+    monkeypatch.setattr(gv, "MM_TRACE", True)
+    monkeypatch.setattr(gv, "TIMING", True)
+    replica = TracedReplica()
+    a, _ = adapter(monkeypatch, replica=replica)
+    assert a._mm_traced() and replica.trace_rows == []
+    tokens = torch.zeros(4, 512, dtype=torch.int32)
+    # Row 0: text (300 tokens: padded 384). Row 1: an image at [10, 18) in a 300-token first chunk. Row 2: a prefix
+    # hit at 256 with an image at [300, 308) in its chunk (later, 144 tokens: padded 256, traced). Row 3: text, 100.
+    mm_items = [None, [image(1, 10)], [image(2, 300)], []]
+    a.prefill_forward(
+        tokens, [0, 0, 256, 0], [300, 300, 400, 100], None, None, empty_slots=[0, 1, 2, 3], mm_items=mm_items
+    )
+    replays = [p for p in replica.passes if p[0] == "row"]
+    batches = {tuple(s for s, _ in p[1]): p for p in replica.passes if p[0] == "batch"}
+    assert set(batches) == {(0, 1), (3,)}
+    assert batches[(0, 1)][2] == [None, list(range(10, 18))]
+    assert torch.equal(replica.embeds[1][10:18], torch.full((8, HIDDEN), 1.0, dtype=torch.bfloat16))
+    assert len(replays) == 1 and replays[0][1:4] == (2, 256, 144) and replays[0][5] == "replay"
+    assert replays[0][4].tolist() == list(range(44, 52))
+    assert replica.passes[0] is replays[0], "a lane's replayed later chunks go before its batches"
+
+
+def test_multimodal_rows_stay_eager_without_trace_embeds(monkeypatch):
+    """MIMO_MM_TRACE=0: the replicas' traced passes take no rows, so a multimodal chunk runs eagerly on its own."""
+    monkeypatch.setattr(gv, "MM_TRACE", False)
+    replica = TracedReplica()
+    a, _ = adapter(monkeypatch, replica=replica)
+    assert not a._mm_traced() and replica.trace_rows is None
+    tokens = torch.zeros(1, 512, dtype=torch.int32)
+    a.prefill_forward(tokens, [256], [400], None, None, empty_slots=[0], mm_items=[[image(2, 300)]])
+    assert replica.passes[-1][5] == "eager"
 
 
 def image(tag, offset, h=4, w=8, stripped=False):
