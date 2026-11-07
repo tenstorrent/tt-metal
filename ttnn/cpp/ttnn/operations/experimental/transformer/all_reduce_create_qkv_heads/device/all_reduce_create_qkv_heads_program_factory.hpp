@@ -7,6 +7,7 @@
 
 #include "ttnn/distributed/types.hpp"
 
+#include <tt-metalium/host_api.hpp>
 #include <tt-metalium/program_descriptors.hpp>
 
 #include <optional>
@@ -15,15 +16,21 @@ namespace ttnn::experimental::prim {
 
 struct AllReduceCreateQkvHeadsMeshWorkloadFactory {
     // Per-coord program build.  The GlobalSemaphore lives on
-    // AllReduceCreateQkvHeadsParams (allocated by the caller), so no
-    // prepare_resources hook is required -- the semaphore is passed through and
-    // its address is written into runtime args every dispatch via the normal
-    // apply_descriptor_runtime_args path.
+    // AllReduceCreateQkvHeadsParams (allocated by the caller) and is excluded
+    // from the program-cache key; override_runtime_arguments refreshes its
+    // address and all tensor buffer addresses on every program-cache hit.
     static tt::tt_metal::ProgramDescriptor create_descriptor(
         const AllReduceCreateQkvHeadsParams& operation_attributes,
         const AllReduceCreateQkvHeadsInputs& tensor_args,
         AllReduceCreateQkvHeadsResult& tensor_return_value,
         const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate);
+
+    static void override_runtime_arguments(
+        tt::tt_metal::Program& program,
+        const AllReduceCreateQkvHeadsParams& operation_attributes,
+        const AllReduceCreateQkvHeadsInputs& tensor_args,
+        AllReduceCreateQkvHeadsResult& tensor_return_value,
+        const std::optional<ttnn::MeshCoordinate>& coord = std::nullopt);
 };
 
 }  // namespace ttnn::experimental::prim
