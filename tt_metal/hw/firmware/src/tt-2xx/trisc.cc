@@ -135,6 +135,10 @@ thread_local ckernel::math::DataFormatConfigSet data_format_config_set __attribu
 // Unpack-to-dest: set once math has seen the unpacker's first UNPACK_MATH post of the program.
 thread_local bool unpack_math_seeded __attribute__((used)) = false;
 #endif
+#if defined(UCK_CHLKC_UNPACK)
+// Unpack-to-dest: the current DEST section was released early by llk_unpack_dest_handoff (tile_regs_handoff).
+thread_local bool unpack_dest_handed_off __attribute__((used)) = false;
+#endif
 
 // Called from trisc_irq_entry, which saves no vector registers, so built without the vector extension.
 extern "C" __attribute__((noinline, used, hot, target("arch=rv32im_zmmul_zaamo_zba_zbc_xtttensixqsr_xttzbkb"))) void
