@@ -422,9 +422,14 @@ class OpenRouterChat(lmms):
         for attempt in range(self.max_retries + 1):
             try:
                 resp = self.client.chat.completions.create(**standard, extra_body=extra or None)
-                choice = resp.choices[0]
-                usage = resp.usage.model_dump() if resp.usage else {}
-                return choice.message.content or "", usage, choice.finish_reason, 200
+                if resp.choices:
+                    choice = resp.choices[0]
+                    usage = resp.usage.model_dump() if resp.usage else {}
+                    return choice.message.content or "", usage, choice.finish_reason, 200
+                # OpenRouter can answer 200 with an error object and no choices (an upstream provider error): retry
+                # like a 5xx, and count it as a failure if it persists.
+                status = "200-no-choices"
+                last = f"200 without choices: {str((resp.model_extra or {}).get('error'))[:300]}"
             except openai.APIStatusError as exc:
                 status = exc.status_code
                 last = f"{status} {str(exc)[:300]}"
