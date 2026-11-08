@@ -7,11 +7,11 @@ import torch
 
 import ttnn
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from tt_py_test_utils_common.utility_functions import is_wormhole_b0
+from tt_py_test_utils_common.utility_functions import is_blackhole, is_wormhole_b0
 
 pytestmark = [
     pytest.mark.use_module_device,
-    pytest.mark.skipif(not is_wormhole_b0(), reason="Wormhole-only programs"),
+    pytest.mark.skipif(not (is_wormhole_b0() or is_blackhole()), reason="Wormhole and Blackhole programs"),
 ]
 
 DTYPES = [(ttnn.bfloat16, torch.bfloat16), (ttnn.float32, torch.float32)]
@@ -50,7 +50,17 @@ def test_softmax_long_rows(device, shape, dtypes):
 @pytest.mark.parametrize("dtypes", DTYPES, ids=DTYPE_IDS)
 @pytest.mark.parametrize(
     "shape",
-    [(1, 1, 32, 8192), (1, 1, 64, 8192), (1, 8, 32, 4096), (1, 32, 32, 4096), (1, 1, 1024, 1024), (1, 1, 256, 4096)],
+    [
+        (1, 1, 32, 8192),
+        (1, 1, 64, 8192),
+        (1, 8, 32, 4096),
+        (1, 32, 32, 4096),
+        (1, 1, 1024, 1024),
+        (1, 1, 256, 4096),
+        (1, 1, 32, 256),
+        (1, 1, 32, 992),
+        (1, 1, 32, 4128),
+    ],
 )
 def test_softmax_wide_rows_multi_core(device, shape, dtypes):
     _softmax_check(device, shape, dtypes, numeric_stable=True)
