@@ -68,6 +68,12 @@ struct SoftmaxDeviceOperation {
         static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
             const operation_attributes_t&, const tensor_args_t&, tensor_return_value_t&);
     };
+    // Blackhole interleaved memory: own plan table and kernels. See device/softmax_program_factory_attention_optimized_bh.cpp.
+    struct SoftmaxProgramFactoryAttentionOptimizedBH {
+        static SoftmaxInterleavedPlan select_plan(const operation_attributes_t&, const tensor_args_t&);
+        static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
+            const operation_attributes_t&, const tensor_args_t&, tensor_return_value_t&);
+    };
 
     using program_factory_t = std::variant<
         SoftmaxProgramFactoryGeneralWSmall,
@@ -76,7 +82,8 @@ struct SoftmaxDeviceOperation {
         SoftmaxProgramFactoryGeneralHLarge,
         SoftmaxProgramFactoryGeneralCLarge,
         SoftmaxShardedProgramFactoryAttentionOptimized,
-        SoftmaxProgramFactoryAttentionOptimized>;
+        SoftmaxProgramFactoryAttentionOptimized,
+        SoftmaxProgramFactoryAttentionOptimizedBH>;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
 

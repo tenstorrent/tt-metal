@@ -45,6 +45,8 @@ struct SoftmaxInterleavedPlan {
     bool deep_out = false;
     std::uint32_t split_active = 0;
     std::uint32_t chain_c = 0;
+    bool read_batch = false;
+    bool flush_writes = false;
 };
 
 struct SoftmaxParams {

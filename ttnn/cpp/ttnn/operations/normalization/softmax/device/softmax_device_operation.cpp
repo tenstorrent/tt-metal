@@ -134,6 +134,9 @@ SoftmaxDeviceOperation::program_factory_t SoftmaxDeviceOperation::select_program
                 if constexpr (std::is_same_v<ProgramConfigType, SoftmaxShardedMultiCoreProgramConfig>) {
                     return SoftmaxShardedProgramFactoryAttentionOptimized{};
                 } else {
+                    if (tensor_args.input_tensor.device()->arch() == tt::ARCH::BLACKHOLE) {
+                        return SoftmaxProgramFactoryAttentionOptimizedBH{};
+                    }
                     return SoftmaxProgramFactoryAttentionOptimized{};
                 }
             },
@@ -148,6 +151,9 @@ SoftmaxDeviceOperation::program_factory_t SoftmaxDeviceOperation::select_program
                 if constexpr (std::is_same_v<ProgramConfigType, SoftmaxShardedMultiCoreProgramConfig>) {
                     return SoftmaxShardedProgramFactoryAttentionOptimized{};
                 } else {
+                    if (tensor_args.input_tensor.device()->arch() == tt::ARCH::BLACKHOLE) {
+                        return SoftmaxProgramFactoryAttentionOptimizedBH{};
+                    }
                     return SoftmaxProgramFactoryAttentionOptimized{};
                 }
             },
@@ -811,10 +817,13 @@ Tensor softmax(
     };
     const SoftmaxInputs inputs{input_tensor, mask};
     const auto base = params({});
-    const auto plan = std::holds_alternative<SoftmaxDeviceOperation::SoftmaxProgramFactoryAttentionOptimized>(
-                          SoftmaxDeviceOperation::select_program_factory(base, inputs))
-                          ? SoftmaxDeviceOperation::SoftmaxProgramFactoryAttentionOptimized::select_plan(base, inputs)
-                          : SoftmaxInterleavedPlan{};
+    const auto factory = SoftmaxDeviceOperation::select_program_factory(base, inputs);
+    const auto plan =
+        std::holds_alternative<SoftmaxDeviceOperation::SoftmaxProgramFactoryAttentionOptimizedBH>(factory)
+            ? SoftmaxDeviceOperation::SoftmaxProgramFactoryAttentionOptimizedBH::select_plan(base, inputs)
+        : std::holds_alternative<SoftmaxDeviceOperation::SoftmaxProgramFactoryAttentionOptimized>(factory)
+            ? SoftmaxDeviceOperation::SoftmaxProgramFactoryAttentionOptimized::select_plan(base, inputs)
+            : SoftmaxInterleavedPlan{};
     return ttnn::device_operation::launch<SoftmaxDeviceOperation>(params(plan), inputs);
 }
 }  // namespace ttnn::prim
