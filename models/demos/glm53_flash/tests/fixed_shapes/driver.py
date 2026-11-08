@@ -127,7 +127,8 @@ def main() -> None:
                 res.append(run("G", base + e, 1))
             for e in off_ends:
                 res.append(run("G", base + e, 0))
-    lens = [1001, 1003, 2047, 2051, 2501, 4093, 7001, 9001, 12287, 24576, 41863, 41857, 41858, 102401, 110003]
+    # 61000: the pools view widens across a 16384-pool bucket at the padded end (16384 -> 32768 columns)
+    lens = [1001, 1003, 2047, 2051, 2501, 4093, 7001, 9001, 12287, 24576, 41863, 41857, 41858, 61000, 102401, 110003]
     if "D" in phases:
         for i, n in enumerate(lens):
             for fixed in (0, 1) if i % 2 == 0 else (1, 0):
