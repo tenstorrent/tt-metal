@@ -92,4 +92,7 @@ def test_it_is_wired_into_the_stop_gate():
     while the gate read an empty list and never fired once."""
     src = (_PA / "cc_optimize" / "perf_mcp.py").read_text()
     i = src.index("conv_block = _conv_gate(_gate_prof, attempts)")
-    assert "_fold_gate(_gate_prof, attempts)" in src[i : i + 400]
+    # The rest of the function the stop gate lives in (up to the next top-level def), not a fixed
+    # character window that breaks whenever another gate is added beside it.
+    end = src.find("\ndef ", i)
+    assert "_fold_gate(_gate_prof, attempts)" in src[i : end if end != -1 else len(src)]

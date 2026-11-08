@@ -27,6 +27,11 @@ def _no_live_agent_calls(monkeypatch):
     # Nor may a test install system packages (pkgtools.ensure_system_tool): the Galaxy reset path
     # installs its host tool when it is missing, and a test must never run apt-get on the machine.
     monkeypatch.setenv("TT_HW_PLANNER_NO_SYSTEM_INSTALL", "1")
+    # Nor may a result depend on whether the checkout happens to have uncommitted edits.
+    # record_kernel_attempt refuses an attempt with no source diff (NO SOURCE CHANGE), and it reads
+    # that diff from the live git tree -- so tests that record synthetic attempts passed in a dirty
+    # checkout and failed in a clean one. A test that exercises the diff gate itself unsets this.
+    monkeypatch.setenv("PERF_MCP_ALLOW_NO_DIFF", "1")
     yield
 
 
