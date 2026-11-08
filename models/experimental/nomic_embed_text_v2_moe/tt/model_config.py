@@ -180,6 +180,30 @@ MEMORY_CONFIG = ttnn.DRAM_MEMORY_CONFIG
 # sequences (tt/chunking.py).
 MAX_CHUNK_TOKENS = 8192
 
+# The DRAM banks the chunked weights of grouped_matmul_w1 / _w2 spread over (kGroupedWeightBanks): every dense
+# projection with a grouped path and both expert projections load into that layout, so the model needs exactly
+# this many. Blackhole p150 and p300c have 8; the p100 has 7.
+GROUPED_WEIGHT_BANKS = 8
+
+
+class UnsupportedDeviceError(RuntimeError):
+    """The device cannot hold the model's weights in the layouts its ops read."""
+
+
+def check_device_supported(device) -> None:
+    """Raise UnsupportedDeviceError unless the device has the DRAM banks the chunked weights need.
+
+    TtModelConfig.from_device calls it first, so building the model on such a device stops here with this
+    message instead of in the C++ weight preparation, partway through moving the weights.
+    """
+    dram = device.dram_grid_size()
+    banks = dram.x * dram.y
+    if banks != GROUPED_WEIGHT_BANKS:
+        raise UnsupportedDeviceError(
+            f"nomic-embed-text-v2-moe needs a device with {GROUPED_WEIGHT_BANKS} DRAM banks (Blackhole p150, "
+            f"p300c) for its chunked weights; this one has {banks}"
+        )
+
 
 class OpGroup(Enum):
     """The sets of ops that share one compute kernel config.
@@ -296,7 +320,12 @@ class TtModelConfig:
 
         Each group gets its own config object: ttnn's are mutable, so a shared one would let a
         change made for one group reach all of them.
+
+        Raises:
+            UnsupportedDeviceError: If the device lacks the DRAM banks the chunked weights need
+                (check_device_supported).
         """
+        check_device_supported(device)
         device_info = ttnn._ttnn.reports.get_device_info(device)
         return cls(
             core_grid=device.compute_with_storage_grid_size(),

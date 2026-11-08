@@ -208,8 +208,13 @@ per query, and with `--compare` reports the per-row cosine against the PyTorch r
 Tests skip rather than fail when what they need is absent: the checkpoint, the network, or a
 Blackhole device.
 
+The model needs a Blackhole chip with 8 DRAM banks (p150, p300c): its chunked expert and projection
+weights spread over exactly 8. On a p100, which has 7, `TtModelConfig.from_device` raises
+`UnsupportedDeviceError` before any weights load, and the model's device tests skip.
+
 The `test_ttnn_*.py` files need a Blackhole device and skip elsewhere;
-`test_checkpoint_contract.py` and `test_reference_vs_hf_e2e.py` need only the weights. Do not set
+`test_checkpoint_contract.py` and `test_reference_vs_hf_e2e.py` need only the weights, and
+`test_model_config.py` needs neither. Do not set
 `TT_VISIBLE_DEVICES`; on a p300c it fails with `Custom fabric mesh graph descriptor path must
 be specified for CUSTOM cluster type`.
 

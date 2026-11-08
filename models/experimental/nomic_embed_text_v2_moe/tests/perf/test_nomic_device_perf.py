@@ -16,6 +16,8 @@ the same debug resources.
 import pytest
 from loguru import logger
 
+import ttnn
+
 from models.common.utility_functions import run_for_blackhole
 from models.experimental.nomic_embed_text_v2_moe.tests.perf.perf_common import HEADLINE_SHAPE
 from models.perf.device_perf_utils import check_device_perf, prep_device_perf_report, run_device_perf
@@ -44,6 +46,9 @@ MARGIN = 0.03
 @run_for_blackhole()
 @pytest.mark.models_device_performance_bare_metal
 def test_device_perf_nomic_embed_text_v2_moe():
+    # The measured test skips on a p100 (TtModelConfig.from_device) and leaves no profiler log to read.
+    if ttnn.cluster.get_cluster_type() == ttnn.cluster.ClusterType.P100:
+        pytest.skip("the model needs 8 DRAM banks; a p100 has 7")
     batch, seqlen = HEADLINE_SHAPE
     subdir = "nomic_embed_text_v2_moe"
     command = (
