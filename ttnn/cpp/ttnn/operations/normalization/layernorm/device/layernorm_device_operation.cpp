@@ -362,7 +362,7 @@ void LayerNormDeviceOperation::validate_on_program_cache_miss(
                 const auto& shape = a.padded_shape();
                 uint32_t M = a.physical_volume() / shape[-1];
                 uint32_t K = shape[-1];
-                uint32_t Mt = M / tile_width;
+                uint32_t Mt = M / tile_height;
                 uint32_t Kt = K / tile_width;
                 // block
                 uint32_t block_h = program_config.block_h * tile_height;
