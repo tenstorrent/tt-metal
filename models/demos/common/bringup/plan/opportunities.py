@@ -76,6 +76,8 @@ def build(profile: dict, top: int) -> tuple[str, int]:
         "",
         "Pick entries by marking `[x]`. Each picked entry becomes a perf task behind a switch, gated on warm device time",
         "and on every accuracy gate. Changes that trade accuracy for speed need an explicit decision here.",
+        "How to read this list (host- vs device-bound, reachable vs total time, levers that usually pay):",
+        "`models/demos/common/bringup/knowledge/perf_guide.md`.",
         "",
         "| Pick | Rank | Section | Device ms | Share | Chip spread | Known issues | Repo map |",
         "|---|---|---|---|---|---|---|---|",

@@ -225,7 +225,8 @@ You start with no memory of earlier steps. Everything you need is in the brief a
   `models/demos/common/prefill/docs/ADDING_A_PREFILL_MODEL.md`). The runtime must accept the engine's uint32 device
   input with a padded tail, and must call the layer-completion sink only after that layer's state is on the device.
 - **perf**: one picked performance change (the brief's details say which). Faster, same accuracy; keep the old
-  behaviour selectable for comparison.
+  behaviour selectable for comparison. Read `models/demos/common/bringup/knowledge/perf_guide.md` first (how to tell
+  host-bound from device-bound, what fusion buys and when it only moves time, formats vs bandwidth, noise).
 - **scale**: the scaled model (a partial bring-up on a box smaller than the deployment box runs only the scaled model:
   its goldens and every step after use it): `scaling.yaml`, and a reference and hooks that read their dimensions from
   the reduced checkpoint.

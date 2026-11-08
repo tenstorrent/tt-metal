@@ -4,7 +4,7 @@ For a Claude Code session (and its human) picking up this model. Give this file 
 the bring-up is, its current state and defaults, how to set up, run and measure it, the prefill → decode (PD) serving
 hand-off, the open questions, and where everything is.
 
-Facts are as of 2026-11-08, branch `dnijemcevic/model_bringup` (same as `dnijemcevic/model_bringup_rebased`), through task P.36 (P.37-P.43 full gates passed; P.35 / P.36 full gates: see "Running now"). Items marked
+Facts are as of 2026-11-08, branch `dnijemcevic/model_bringup` (same as `dnijemcevic/model_bringup_rebased`), through task P.36 with every full gate passed (P.35 / P.36 full gates 2026-11-08 10:16). Items marked
 **(unverified)** were not checked against code or a run while this was written.
 
 ## 1. What this is
@@ -27,7 +27,7 @@ decode machine (tt-blaze) generates the tokens after a hand-off.
 | Accuracy now (rung `last`) | err_final_hidden 0.1321 (limit 0.242), top-5 1.0 (ladder with P.35 on, 2026-11-07; P.36 is bit-identical to P.35). Was 0.1313 before P.35 |
 | Perf now (one 5,120-token chunk at 51,200, P.36 tree) | device 186.92 ms, wall 203.1 ms, host overhead 16.2 ms, 1,704 host launches (section 4); +9.7 ms device since the contract work began (section 4, regression table) |
 | Tasks done in the last three days | P.37-P.43, then P.35 and P.36 (perf: norm inside mHC; FFN input steps fused), accepted and committed (section 3) |
-| Running now | Full gates of P.35 and P.36 (started 2026-11-08 after this commit); the orchestrator stopped after P.36 (`--until P.36`) |
+| Running now | Nothing; the orchestrator stopped after P.36 (`--until P.36`). P.35 / P.36 full gates passed (2026-11-08; one P.36 unit crashed in device close after its test passed and passed on re-run) |
 | PD hand-off | Our served table: `bringup/migration_configs.md`. Decode reviewed it (Brian Liu); Kartik Paigwar proposed a different final contract (section 8) |
 | Held | O.1, Z.1, F.1; the QuietBox run |
 
@@ -468,6 +468,7 @@ box has none of it). "/data" = NFS, shared, not in git.
 | `DEEPSEEK41_README.md` (repo root) | repo | this file |
 | `tt/model.py`, `tt/*.py` | repo | the all-device model (`TtDS41Model`) and its steps |
 | `tt/settings.py` | repo | every switch, with its default and its why |
+| `models/demos/common/bringup/knowledge/perf_guide.md` (absolute) | repo | general perf guide for any bring-up: reading a profile, what fuses, trade-offs, measuring (2026-11-08) |
 | `tt/ccl.py` | repo | collectives (per-axis high_bw semaphores, DS41-216) |
 | `tt/runners/adapter.py`, `tt/runners/kv_contract.py` | repo | the tt-d-gen prefill adapter and the served KV table |
 | `tt/moe_block_main_adapter.py`, `models/demos/moe_block_main/`, `ttnn/ttnn/bringup/moe_block_main_ttnn/` | repo | the main MoE block (`MOE_BLOCK_SRC=main`) |
