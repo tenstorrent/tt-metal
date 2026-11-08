@@ -777,3 +777,584 @@
       timeout: 300
   owner_id: U07J3K6KS1K
   workdir: tt_metal/tt-llk
+
+
+# =============================================================================
+# WH VERIFY MATRIX — transient on fu/verify/bh-matrix branch ONLY
+# 8 legs x 5 groups = 40 jobs. DO NOT merge to main.
+# =============================================================================
+
+# --- wh_ncsol_fwd --------
+- name: wh_verify_ncsol_fwd group 1/5
+  split_group: wh-verify-ncsol-fwd-1
+  team: llk
+  budget_type: perf
+  cmd: |
+    set -euo pipefail
+    export PERF_NC_WC=nc PERF_SOL=sol PERF_ORDER=fwd
+    ./tests/run_llk_perf_wormhole.sh 1 5
+  skus:
+    wh_n150_civ2:
+      timeout: 180
+  owner_id: U07J3K6KS1K
+  workdir: tt_metal/tt-llk
+
+- name: wh_verify_ncsol_fwd group 2/5
+  split_group: wh-verify-ncsol-fwd-2
+  team: llk
+  budget_type: perf
+  cmd: |
+    set -euo pipefail
+    export PERF_NC_WC=nc PERF_SOL=sol PERF_ORDER=fwd
+    ./tests/run_llk_perf_wormhole.sh 2 5
+  skus:
+    wh_n150_civ2:
+      timeout: 180
+  owner_id: U07J3K6KS1K
+  workdir: tt_metal/tt-llk
+
+- name: wh_verify_ncsol_fwd group 3/5
+  split_group: wh-verify-ncsol-fwd-3
+  team: llk
+  budget_type: perf
+  cmd: |
+    set -euo pipefail
+    export PERF_NC_WC=nc PERF_SOL=sol PERF_ORDER=fwd
+    ./tests/run_llk_perf_wormhole.sh 3 5
+  skus:
+    wh_n150_civ2:
+      timeout: 180
+  owner_id: U07J3K6KS1K
+  workdir: tt_metal/tt-llk
+
+- name: wh_verify_ncsol_fwd group 4/5
+  split_group: wh-verify-ncsol-fwd-4
+  team: llk
+  budget_type: perf
+  cmd: |
+    set -euo pipefail
+    export PERF_NC_WC=nc PERF_SOL=sol PERF_ORDER=fwd
+    ./tests/run_llk_perf_wormhole.sh 4 5
+  skus:
+    wh_n150_civ2:
+      timeout: 180
+  owner_id: U07J3K6KS1K
+  workdir: tt_metal/tt-llk
+
+- name: wh_verify_ncsol_fwd group 5/5
+  split_group: wh-verify-ncsol-fwd-5
+  team: llk
+  budget_type: perf
+  cmd: |
+    set -euo pipefail
+    export PERF_NC_WC=nc PERF_SOL=sol PERF_ORDER=fwd
+    ./tests/run_llk_perf_wormhole.sh 5 5
+  skus:
+    wh_n150_civ2:
+      timeout: 180
+  owner_id: U07J3K6KS1K
+  workdir: tt_metal/tt-llk
+
+
+# --- wh_ncsol_rev --------
+- name: wh_verify_ncsol_rev group 1/5
+  split_group: wh-verify-ncsol-rev-1
+  team: llk
+  budget_type: perf
+  cmd: |
+    set -euo pipefail
+    export PERF_NC_WC=nc PERF_SOL=sol PERF_ORDER=rev
+    ./tests/run_llk_perf_wormhole.sh 1 5
+  skus:
+    wh_n150_civ2:
+      timeout: 180
+  owner_id: U07J3K6KS1K
+  workdir: tt_metal/tt-llk
+
+- name: wh_verify_ncsol_rev group 2/5
+  split_group: wh-verify-ncsol-rev-2
+  team: llk
+  budget_type: perf
+  cmd: |
+    set -euo pipefail
+    export PERF_NC_WC=nc PERF_SOL=sol PERF_ORDER=rev
+    ./tests/run_llk_perf_wormhole.sh 2 5
+  skus:
+    wh_n150_civ2:
+      timeout: 180
+  owner_id: U07J3K6KS1K
+  workdir: tt_metal/tt-llk
+
+- name: wh_verify_ncsol_rev group 3/5
+  split_group: wh-verify-ncsol-rev-3
+  team: llk
+  budget_type: perf
+  cmd: |
+    set -euo pipefail
+    export PERF_NC_WC=nc PERF_SOL=sol PERF_ORDER=rev
+    ./tests/run_llk_perf_wormhole.sh 3 5
+  skus:
+    wh_n150_civ2:
+      timeout: 180
+  owner_id: U07J3K6KS1K
+  workdir: tt_metal/tt-llk
+
+- name: wh_verify_ncsol_rev group 4/5
+  split_group: wh-verify-ncsol-rev-4
+  team: llk
+  budget_type: perf
+  cmd: |
+    set -euo pipefail
+    export PERF_NC_WC=nc PERF_SOL=sol PERF_ORDER=rev
+    ./tests/run_llk_perf_wormhole.sh 4 5
+  skus:
+    wh_n150_civ2:
+      timeout: 180
+  owner_id: U07J3K6KS1K
+  workdir: tt_metal/tt-llk
+
+- name: wh_verify_ncsol_rev group 5/5
+  split_group: wh-verify-ncsol-rev-5
+  team: llk
+  budget_type: perf
+  cmd: |
+    set -euo pipefail
+    export PERF_NC_WC=nc PERF_SOL=sol PERF_ORDER=rev
+    ./tests/run_llk_perf_wormhole.sh 5 5
+  skus:
+    wh_n150_civ2:
+      timeout: 180
+  owner_id: U07J3K6KS1K
+  workdir: tt_metal/tt-llk
+
+
+# --- wh_wcsol_fwd --------
+- name: wh_verify_wcsol_fwd group 1/5
+  split_group: wh-verify-wcsol-fwd-1
+  team: llk
+  budget_type: perf
+  cmd: |
+    set -euo pipefail
+    export PERF_NC_WC=wc PERF_SOL=sol PERF_ORDER=fwd
+    ./tests/run_llk_perf_wormhole.sh 1 5
+  skus:
+    wh_n150_civ2:
+      timeout: 180
+  owner_id: U07J3K6KS1K
+  workdir: tt_metal/tt-llk
+
+- name: wh_verify_wcsol_fwd group 2/5
+  split_group: wh-verify-wcsol-fwd-2
+  team: llk
+  budget_type: perf
+  cmd: |
+    set -euo pipefail
+    export PERF_NC_WC=wc PERF_SOL=sol PERF_ORDER=fwd
+    ./tests/run_llk_perf_wormhole.sh 2 5
+  skus:
+    wh_n150_civ2:
+      timeout: 180
+  owner_id: U07J3K6KS1K
+  workdir: tt_metal/tt-llk
+
+- name: wh_verify_wcsol_fwd group 3/5
+  split_group: wh-verify-wcsol-fwd-3
+  team: llk
+  budget_type: perf
+  cmd: |
+    set -euo pipefail
+    export PERF_NC_WC=wc PERF_SOL=sol PERF_ORDER=fwd
+    ./tests/run_llk_perf_wormhole.sh 3 5
+  skus:
+    wh_n150_civ2:
+      timeout: 180
+  owner_id: U07J3K6KS1K
+  workdir: tt_metal/tt-llk
+
+- name: wh_verify_wcsol_fwd group 4/5
+  split_group: wh-verify-wcsol-fwd-4
+  team: llk
+  budget_type: perf
+  cmd: |
+    set -euo pipefail
+    export PERF_NC_WC=wc PERF_SOL=sol PERF_ORDER=fwd
+    ./tests/run_llk_perf_wormhole.sh 4 5
+  skus:
+    wh_n150_civ2:
+      timeout: 180
+  owner_id: U07J3K6KS1K
+  workdir: tt_metal/tt-llk
+
+- name: wh_verify_wcsol_fwd group 5/5
+  split_group: wh-verify-wcsol-fwd-5
+  team: llk
+  budget_type: perf
+  cmd: |
+    set -euo pipefail
+    export PERF_NC_WC=wc PERF_SOL=sol PERF_ORDER=fwd
+    ./tests/run_llk_perf_wormhole.sh 5 5
+  skus:
+    wh_n150_civ2:
+      timeout: 180
+  owner_id: U07J3K6KS1K
+  workdir: tt_metal/tt-llk
+
+
+# --- wh_wcsol_rev --------
+- name: wh_verify_wcsol_rev group 1/5
+  split_group: wh-verify-wcsol-rev-1
+  team: llk
+  budget_type: perf
+  cmd: |
+    set -euo pipefail
+    export PERF_NC_WC=wc PERF_SOL=sol PERF_ORDER=rev
+    ./tests/run_llk_perf_wormhole.sh 1 5
+  skus:
+    wh_n150_civ2:
+      timeout: 180
+  owner_id: U07J3K6KS1K
+  workdir: tt_metal/tt-llk
+
+- name: wh_verify_wcsol_rev group 2/5
+  split_group: wh-verify-wcsol-rev-2
+  team: llk
+  budget_type: perf
+  cmd: |
+    set -euo pipefail
+    export PERF_NC_WC=wc PERF_SOL=sol PERF_ORDER=rev
+    ./tests/run_llk_perf_wormhole.sh 2 5
+  skus:
+    wh_n150_civ2:
+      timeout: 180
+  owner_id: U07J3K6KS1K
+  workdir: tt_metal/tt-llk
+
+- name: wh_verify_wcsol_rev group 3/5
+  split_group: wh-verify-wcsol-rev-3
+  team: llk
+  budget_type: perf
+  cmd: |
+    set -euo pipefail
+    export PERF_NC_WC=wc PERF_SOL=sol PERF_ORDER=rev
+    ./tests/run_llk_perf_wormhole.sh 3 5
+  skus:
+    wh_n150_civ2:
+      timeout: 180
+  owner_id: U07J3K6KS1K
+  workdir: tt_metal/tt-llk
+
+- name: wh_verify_wcsol_rev group 4/5
+  split_group: wh-verify-wcsol-rev-4
+  team: llk
+  budget_type: perf
+  cmd: |
+    set -euo pipefail
+    export PERF_NC_WC=wc PERF_SOL=sol PERF_ORDER=rev
+    ./tests/run_llk_perf_wormhole.sh 4 5
+  skus:
+    wh_n150_civ2:
+      timeout: 180
+  owner_id: U07J3K6KS1K
+  workdir: tt_metal/tt-llk
+
+- name: wh_verify_wcsol_rev group 5/5
+  split_group: wh-verify-wcsol-rev-5
+  team: llk
+  budget_type: perf
+  cmd: |
+    set -euo pipefail
+    export PERF_NC_WC=wc PERF_SOL=sol PERF_ORDER=rev
+    ./tests/run_llk_perf_wormhole.sh 5 5
+  skus:
+    wh_n150_civ2:
+      timeout: 180
+  owner_id: U07J3K6KS1K
+  workdir: tt_metal/tt-llk
+
+
+# --- wh_ncnosol_fwd --------
+- name: wh_verify_ncnosol_fwd group 1/5
+  split_group: wh-verify-ncnosol-fwd-1
+  team: llk
+  budget_type: perf
+  cmd: |
+    set -euo pipefail
+    export PERF_NC_WC=nc PERF_SOL=nosol PERF_ORDER=fwd
+    ./tests/run_llk_perf_wormhole.sh 1 5
+  skus:
+    wh_n150_civ2:
+      timeout: 300
+  owner_id: U07J3K6KS1K
+  workdir: tt_metal/tt-llk
+
+- name: wh_verify_ncnosol_fwd group 2/5
+  split_group: wh-verify-ncnosol-fwd-2
+  team: llk
+  budget_type: perf
+  cmd: |
+    set -euo pipefail
+    export PERF_NC_WC=nc PERF_SOL=nosol PERF_ORDER=fwd
+    ./tests/run_llk_perf_wormhole.sh 2 5
+  skus:
+    wh_n150_civ2:
+      timeout: 300
+  owner_id: U07J3K6KS1K
+  workdir: tt_metal/tt-llk
+
+- name: wh_verify_ncnosol_fwd group 3/5
+  split_group: wh-verify-ncnosol-fwd-3
+  team: llk
+  budget_type: perf
+  cmd: |
+    set -euo pipefail
+    export PERF_NC_WC=nc PERF_SOL=nosol PERF_ORDER=fwd
+    ./tests/run_llk_perf_wormhole.sh 3 5
+  skus:
+    wh_n150_civ2:
+      timeout: 300
+  owner_id: U07J3K6KS1K
+  workdir: tt_metal/tt-llk
+
+- name: wh_verify_ncnosol_fwd group 4/5
+  split_group: wh-verify-ncnosol-fwd-4
+  team: llk
+  budget_type: perf
+  cmd: |
+    set -euo pipefail
+    export PERF_NC_WC=nc PERF_SOL=nosol PERF_ORDER=fwd
+    ./tests/run_llk_perf_wormhole.sh 4 5
+  skus:
+    wh_n150_civ2:
+      timeout: 300
+  owner_id: U07J3K6KS1K
+  workdir: tt_metal/tt-llk
+
+- name: wh_verify_ncnosol_fwd group 5/5
+  split_group: wh-verify-ncnosol-fwd-5
+  team: llk
+  budget_type: perf
+  cmd: |
+    set -euo pipefail
+    export PERF_NC_WC=nc PERF_SOL=nosol PERF_ORDER=fwd
+    ./tests/run_llk_perf_wormhole.sh 5 5
+  skus:
+    wh_n150_civ2:
+      timeout: 300
+  owner_id: U07J3K6KS1K
+  workdir: tt_metal/tt-llk
+
+
+# --- wh_ncnosol_rev --------
+- name: wh_verify_ncnosol_rev group 1/5
+  split_group: wh-verify-ncnosol-rev-1
+  team: llk
+  budget_type: perf
+  cmd: |
+    set -euo pipefail
+    export PERF_NC_WC=nc PERF_SOL=nosol PERF_ORDER=rev
+    ./tests/run_llk_perf_wormhole.sh 1 5
+  skus:
+    wh_n150_civ2:
+      timeout: 300
+  owner_id: U07J3K6KS1K
+  workdir: tt_metal/tt-llk
+
+- name: wh_verify_ncnosol_rev group 2/5
+  split_group: wh-verify-ncnosol-rev-2
+  team: llk
+  budget_type: perf
+  cmd: |
+    set -euo pipefail
+    export PERF_NC_WC=nc PERF_SOL=nosol PERF_ORDER=rev
+    ./tests/run_llk_perf_wormhole.sh 2 5
+  skus:
+    wh_n150_civ2:
+      timeout: 300
+  owner_id: U07J3K6KS1K
+  workdir: tt_metal/tt-llk
+
+- name: wh_verify_ncnosol_rev group 3/5
+  split_group: wh-verify-ncnosol-rev-3
+  team: llk
+  budget_type: perf
+  cmd: |
+    set -euo pipefail
+    export PERF_NC_WC=nc PERF_SOL=nosol PERF_ORDER=rev
+    ./tests/run_llk_perf_wormhole.sh 3 5
+  skus:
+    wh_n150_civ2:
+      timeout: 300
+  owner_id: U07J3K6KS1K
+  workdir: tt_metal/tt-llk
+
+- name: wh_verify_ncnosol_rev group 4/5
+  split_group: wh-verify-ncnosol-rev-4
+  team: llk
+  budget_type: perf
+  cmd: |
+    set -euo pipefail
+    export PERF_NC_WC=nc PERF_SOL=nosol PERF_ORDER=rev
+    ./tests/run_llk_perf_wormhole.sh 4 5
+  skus:
+    wh_n150_civ2:
+      timeout: 300
+  owner_id: U07J3K6KS1K
+  workdir: tt_metal/tt-llk
+
+- name: wh_verify_ncnosol_rev group 5/5
+  split_group: wh-verify-ncnosol-rev-5
+  team: llk
+  budget_type: perf
+  cmd: |
+    set -euo pipefail
+    export PERF_NC_WC=nc PERF_SOL=nosol PERF_ORDER=rev
+    ./tests/run_llk_perf_wormhole.sh 5 5
+  skus:
+    wh_n150_civ2:
+      timeout: 300
+  owner_id: U07J3K6KS1K
+  workdir: tt_metal/tt-llk
+
+
+# --- wh_wcnosol_fwd --------
+- name: wh_verify_wcnosol_fwd group 1/5
+  split_group: wh-verify-wcnosol-fwd-1
+  team: llk
+  budget_type: perf
+  cmd: |
+    set -euo pipefail
+    export PERF_NC_WC=wc PERF_SOL=nosol PERF_ORDER=fwd
+    ./tests/run_llk_perf_wormhole.sh 1 5
+  skus:
+    wh_n150_civ2:
+      timeout: 300
+  owner_id: U07J3K6KS1K
+  workdir: tt_metal/tt-llk
+
+- name: wh_verify_wcnosol_fwd group 2/5
+  split_group: wh-verify-wcnosol-fwd-2
+  team: llk
+  budget_type: perf
+  cmd: |
+    set -euo pipefail
+    export PERF_NC_WC=wc PERF_SOL=nosol PERF_ORDER=fwd
+    ./tests/run_llk_perf_wormhole.sh 2 5
+  skus:
+    wh_n150_civ2:
+      timeout: 300
+  owner_id: U07J3K6KS1K
+  workdir: tt_metal/tt-llk
+
+- name: wh_verify_wcnosol_fwd group 3/5
+  split_group: wh-verify-wcnosol-fwd-3
+  team: llk
+  budget_type: perf
+  cmd: |
+    set -euo pipefail
+    export PERF_NC_WC=wc PERF_SOL=nosol PERF_ORDER=fwd
+    ./tests/run_llk_perf_wormhole.sh 3 5
+  skus:
+    wh_n150_civ2:
+      timeout: 300
+  owner_id: U07J3K6KS1K
+  workdir: tt_metal/tt-llk
+
+- name: wh_verify_wcnosol_fwd group 4/5
+  split_group: wh-verify-wcnosol-fwd-4
+  team: llk
+  budget_type: perf
+  cmd: |
+    set -euo pipefail
+    export PERF_NC_WC=wc PERF_SOL=nosol PERF_ORDER=fwd
+    ./tests/run_llk_perf_wormhole.sh 4 5
+  skus:
+    wh_n150_civ2:
+      timeout: 300
+  owner_id: U07J3K6KS1K
+  workdir: tt_metal/tt-llk
+
+- name: wh_verify_wcnosol_fwd group 5/5
+  split_group: wh-verify-wcnosol-fwd-5
+  team: llk
+  budget_type: perf
+  cmd: |
+    set -euo pipefail
+    export PERF_NC_WC=wc PERF_SOL=nosol PERF_ORDER=fwd
+    ./tests/run_llk_perf_wormhole.sh 5 5
+  skus:
+    wh_n150_civ2:
+      timeout: 300
+  owner_id: U07J3K6KS1K
+  workdir: tt_metal/tt-llk
+
+
+# --- wh_wcnosol_rev --------
+- name: wh_verify_wcnosol_rev group 1/5
+  split_group: wh-verify-wcnosol-rev-1
+  team: llk
+  budget_type: perf
+  cmd: |
+    set -euo pipefail
+    export PERF_NC_WC=wc PERF_SOL=nosol PERF_ORDER=rev
+    ./tests/run_llk_perf_wormhole.sh 1 5
+  skus:
+    wh_n150_civ2:
+      timeout: 300
+  owner_id: U07J3K6KS1K
+  workdir: tt_metal/tt-llk
+
+- name: wh_verify_wcnosol_rev group 2/5
+  split_group: wh-verify-wcnosol-rev-2
+  team: llk
+  budget_type: perf
+  cmd: |
+    set -euo pipefail
+    export PERF_NC_WC=wc PERF_SOL=nosol PERF_ORDER=rev
+    ./tests/run_llk_perf_wormhole.sh 2 5
+  skus:
+    wh_n150_civ2:
+      timeout: 300
+  owner_id: U07J3K6KS1K
+  workdir: tt_metal/tt-llk
+
+- name: wh_verify_wcnosol_rev group 3/5
+  split_group: wh-verify-wcnosol-rev-3
+  team: llk
+  budget_type: perf
+  cmd: |
+    set -euo pipefail
+    export PERF_NC_WC=wc PERF_SOL=nosol PERF_ORDER=rev
+    ./tests/run_llk_perf_wormhole.sh 3 5
+  skus:
+    wh_n150_civ2:
+      timeout: 300
+  owner_id: U07J3K6KS1K
+  workdir: tt_metal/tt-llk
+
+- name: wh_verify_wcnosol_rev group 4/5
+  split_group: wh-verify-wcnosol-rev-4
+  team: llk
+  budget_type: perf
+  cmd: |
+    set -euo pipefail
+    export PERF_NC_WC=wc PERF_SOL=nosol PERF_ORDER=rev
+    ./tests/run_llk_perf_wormhole.sh 4 5
+  skus:
+    wh_n150_civ2:
+      timeout: 300
+  owner_id: U07J3K6KS1K
+  workdir: tt_metal/tt-llk
+
+- name: wh_verify_wcnosol_rev group 5/5
+  split_group: wh-verify-wcnosol-rev-5
+  team: llk
+  budget_type: perf
+  cmd: |
+    set -euo pipefail
+    export PERF_NC_WC=wc PERF_SOL=nosol PERF_ORDER=rev
+    ./tests/run_llk_perf_wormhole.sh 5 5
+  skus:
+    wh_n150_civ2:
+      timeout: 300
+  owner_id: U07J3K6KS1K
+  workdir: tt_metal/tt-llk
