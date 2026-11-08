@@ -87,6 +87,9 @@ void bind_slice(nb::module_& mod) {
 
             ``BFLOAT8_B`` tensors need a ``slice_step`` of 1.
 
+            ``BFLOAT16`` TILE input values must not be NaN when a ``slice_step`` value is not 1, or when the start
+            index of the last dim is not a multiple of 32.
+
             TILE layout tensors must use the standard 32x32 tile, and a pre-allocated ``output_tensor`` must
             carry the same tile as the input.
 

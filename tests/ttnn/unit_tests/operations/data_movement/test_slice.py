@@ -2584,20 +2584,33 @@ def test_slice_docstring_supported_inputs(dtype, layout, buffer_type, device, ex
     )
     expected = ttnn.to_torch(input_tensor)
 
-    output = ttnn.slice(input_tensor, [0, 0, 32, 0], [1, 1, 64, 64], memory_config=memory_config)
+    # Both slices keep the first row, which holds full_range_input's special values.
+    output = ttnn.slice(input_tensor, [0, 0, 0, 0], [1, 1, 32, 64], memory_config=memory_config)
     assert output.dtype == dtype
     assert output.layout == layout
     assert output.memory_config().buffer_type == buffer_type
-    assert_exact(expected[:, :, 32:, :], ttnn.to_torch(output))
+    assert_exact(expected[:, :, :32, :], ttnn.to_torch(output))
 
-    output = ttnn.slice(input_tensor, [0, 0, -32, 0], [1, 1, 64, 64], memory_config=memory_config)
-    assert_exact(expected[:, :, -32:, :], ttnn.to_torch(output))
+    output = ttnn.slice(input_tensor, [0, 0, -64, 0], [1, 1, -32, 64], memory_config=memory_config)
+    assert_exact(expected[:, :, -64:-32, :], ttnn.to_torch(output))
 
     if dtype in _docstring_unit_step_dtypes():
         with expect_error(RuntimeError, "Strided slice is not supported"):
             ttnn.slice(input_tensor, [0, 0, 0, 0], [1, 1, 64, 64], [1, 1, 2, 1], memory_config=memory_config)
     else:
+        # A strided TILE slice runs a compute kernel that holds BFLOAT16 zeros by value: a BFLOAT16 input leaves out
+        # NaN, as the docstring requires, and its zeros are compared by value.
+        bfloat16_tile = dtype == ttnn.bfloat16 and layout == ttnn.TILE_LAYOUT
+        if bfloat16_tile:
+            input_tensor = ttnn.from_torch(
+                full_range_input((1, 1, 64, 64), dtype, nan=False),
+                dtype=dtype,
+                layout=layout,
+                device=device,
+                memory_config=memory_config,
+            )
+            expected = ttnn.to_torch(input_tensor)
         output = ttnn.slice(input_tensor, [0, 0, 0, 0], [1, 1, 64, 64], [1, 1, 2, 1], memory_config=memory_config)
         assert output.dtype == dtype
         assert output.layout == layout
-        assert_exact(expected[:, :, ::2, :], ttnn.to_torch(output))
+        assert_exact(expected[:, :, ::2, :], ttnn.to_torch(output), signed_zeros=not bfloat16_tile)
