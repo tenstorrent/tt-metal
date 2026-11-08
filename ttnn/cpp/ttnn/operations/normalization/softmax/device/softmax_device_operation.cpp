@@ -135,6 +135,12 @@ SoftmaxDeviceOperation::program_factory_t SoftmaxDeviceOperation::select_program
                     return SoftmaxShardedProgramFactoryAttentionOptimized{};
                 } else {
                     if (tensor_args.input_tensor.device()->arch() == tt::ARCH::BLACKHOLE) {
+                        if (tensor_args.input_tensor.dtype() == DataType::FLOAT32) {
+                            return SoftmaxProgramFactoryAttentionOptimizedBHF{};
+                        }
+                        if (tensor_args.input_tensor.padded_shape()[-1] > 8192) {
+                            return SoftmaxProgramFactoryAttentionOptimizedBHL{};
+                        }
                         return SoftmaxProgramFactoryAttentionOptimizedBH{};
                     }
                     return SoftmaxProgramFactoryAttentionOptimized{};
@@ -152,6 +158,12 @@ SoftmaxDeviceOperation::program_factory_t SoftmaxDeviceOperation::select_program
                     return SoftmaxShardedProgramFactoryAttentionOptimized{};
                 } else {
                     if (tensor_args.input_tensor.device()->arch() == tt::ARCH::BLACKHOLE) {
+                        if (tensor_args.input_tensor.dtype() == DataType::FLOAT32) {
+                            return SoftmaxProgramFactoryAttentionOptimizedBHF{};
+                        }
+                        if (tensor_args.input_tensor.padded_shape()[-1] > 8192) {
+                            return SoftmaxProgramFactoryAttentionOptimizedBHL{};
+                        }
                         return SoftmaxProgramFactoryAttentionOptimizedBH{};
                     }
                     return SoftmaxProgramFactoryAttentionOptimized{};
@@ -821,6 +833,10 @@ Tensor softmax(
     const auto plan =
         std::holds_alternative<SoftmaxDeviceOperation::SoftmaxProgramFactoryAttentionOptimizedBH>(factory)
             ? SoftmaxDeviceOperation::SoftmaxProgramFactoryAttentionOptimizedBH::select_plan(base, inputs)
+        : std::holds_alternative<SoftmaxDeviceOperation::SoftmaxProgramFactoryAttentionOptimizedBHF>(factory)
+            ? SoftmaxDeviceOperation::SoftmaxProgramFactoryAttentionOptimizedBHF::select_plan(base, inputs)
+        : std::holds_alternative<SoftmaxDeviceOperation::SoftmaxProgramFactoryAttentionOptimizedBHL>(factory)
+            ? SoftmaxDeviceOperation::SoftmaxProgramFactoryAttentionOptimizedBHL::select_plan(base, inputs)
         : std::holds_alternative<SoftmaxDeviceOperation::SoftmaxProgramFactoryAttentionOptimized>(factory)
             ? SoftmaxDeviceOperation::SoftmaxProgramFactoryAttentionOptimized::select_plan(base, inputs)
             : SoftmaxInterleavedPlan{};
