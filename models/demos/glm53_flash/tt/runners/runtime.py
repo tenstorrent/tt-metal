@@ -168,6 +168,7 @@ class GLM53FlashPrefillRuntime:
             # the warm-up wrote the caches with its own ids outside the retention's view: start the serving empty
             self._prefix.reset("warm-up done")
             self._prefix_on = True
+        self._arm_dram_guard()
 
     def _dram_note(self) -> str:
         """DRAM held after a warm-up item (tt-blaze G53F-0256: each padded chunk length keeps DRAM resident and the
@@ -181,6 +182,111 @@ class GLM53FlashPrefillRuntime:
             )
         except Exception as e:  # noqa: BLE001 -- a report must not fail the warm-up
             return f", DRAM view unavailable ({type(e).__name__})"
+
+    _CONST_CACHE_ATTRS = ("_const_cache", "_slab_consts", "_cu_windows", "_pad_cache")
+    _const_dicts: list | None = None
+    _last_growth: tuple | None = None
+
+    def _growth_note(self) -> str:
+        """A served chunk's DRAM held, program-cache entries and cached device constants, appended to its log line only
+        when one of them moved (tt-blaze G53F-0313: a 1M runner OOM'd in the routed MoE after ~4,700 mixed-length
+        chunks, DRAM held 3786 -> 3991 MiB/bank since warm-up; this says which cache grows)."""
+        try:
+            if self._const_dicts is None:
+                found, seen, todo = [], set(), [self.model]
+                while todo:
+                    o = todo.pop()
+                    if id(o) in seen:
+                        continue
+                    seen.add(id(o))
+                    if isinstance(o, dict):
+                        todo.extend(v for v in o.values() if not isinstance(v, ttnn.Tensor))
+                    elif isinstance(o, (list, tuple)):
+                        todo.extend(v for v in o if not isinstance(v, ttnn.Tensor))
+                    elif type(o).__module__.startswith("models.") and hasattr(o, "__dict__"):
+                        for k, v in vars(o).items():
+                            if k in self._CONST_CACHE_ATTRS and isinstance(v, dict):
+                                found.append(v)
+                            elif not isinstance(v, (ttnn.Tensor, torch.Tensor, str, int, float, bool)):
+                                todo.append(v)
+                self._const_dicts = found
+            v = ttnn.get_memory_view(self.mesh_device, ttnn.BufferType.DRAM)
+            g = (
+                round(v.total_bytes_allocated_per_bank / 2**20, 1),
+                round(v.largest_contiguous_bytes_free_per_bank / 2**20, 1),
+                getattr(self.mesh_device, "num_program_cache_entries", lambda: -1)(),
+                sum(len(d) for d in self._const_dicts),
+            )
+        except Exception as e:  # noqa: BLE001 -- a report must not fail a request
+            return f", growth note unavailable ({type(e).__name__})"
+        if g == self._last_growth:
+            return ""
+        self._last_growth = g
+        return f", DRAM {g[0]} MiB/bank held, largest free {g[1]} MiB, programs {g[2]}, device consts {g[3]}"
+
+    # tt-blaze G53F-0313: every program the cache keeps holds its kernel binaries in DRAM (tt_metal program.cpp
+    # allocate_kernel_bin_buf_on_device), and the DSA layers compile new programs (and cache new device constants) per
+    # (chunk start, padded length) geometry -- ~1,200 at a 1M cache, far more than the ~290 MiB/bank warm-up leaves
+    # free. Served long enough on mixed lengths, a chunk's transient buffers stop fitting (a routed-MoE OOM after
+    # ~4,700 chunks). The guard: before a chunk, when the largest free DRAM block is more than this many MiB/bank below
+    # its post-warm-up size, drop the program cache and the cached device constants (both rebuild on demand: the JIT
+    # disk cache keeps the kernels). 0 disables. Prefill traces are off in serving (GLM53_MODEL_TRACE_MB=0), and the
+    # guard refuses to arm when a trace region is configured, since a captured trace replays binaries by address.
+    _dram_floor_mib: float | None = None
+    _guard_clears = 0
+
+    def _arm_dram_guard(self) -> None:
+        budget = float(os.environ.get("GLM53F_RUNNER_DRAM_GUARD_MIB", "64"))
+        if budget <= 0 or int(os.environ.get("GLM53_MODEL_TRACE_MB", "0") or 0) > 0:
+            logger.info(
+                f"[glm53f-runtime] DRAM guard off (budget {budget:g} MiB, trace MB {os.environ.get('GLM53_MODEL_TRACE_MB')})"
+            )
+            return
+        try:
+            v = ttnn.get_memory_view(self.mesh_device, ttnn.BufferType.DRAM)
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"[glm53f-runtime] DRAM guard off: no DRAM view ({type(e).__name__})")
+            return
+        free = v.largest_contiguous_bytes_free_per_bank / 2**20
+        self._dram_floor_mib = free - budget
+        logger.info(
+            f"[glm53f-runtime] DRAM guard armed: largest free {free:.1f} MiB/bank after warm-up, clear the program cache "
+            f"+ device consts below {self._dram_floor_mib:.1f} MiB (GLM53F_RUNNER_DRAM_GUARD_MIB={budget:g})"
+        )
+        if os.environ.get("GLM53F_RUNNER_DRAM_GUARD_SELFTEST", "0") == "1":
+            # one forced clear now: the first requests then run on rebuilt programs + constants (a correctness gate
+            # after this proves a guard clear is safe) and the log says what a clear frees and costs
+            floor, self._dram_floor_mib = self._dram_floor_mib, float("inf")
+            self._dram_guard(-1)
+            self._dram_floor_mib = floor
+
+    def _dram_guard(self, start: int) -> None:
+        if self._dram_floor_mib is None:
+            return
+        v = ttnn.get_memory_view(self.mesh_device, ttnn.BufferType.DRAM)
+        free = v.largest_contiguous_bytes_free_per_bank / 2**20
+        if free >= self._dram_floor_mib:
+            return
+        t0 = time.perf_counter()
+        if self._async:
+            self._xq.join()  # the export thread enqueues device work too: nothing in flight while the caches go
+        ttnn.synchronize_device(self.mesh_device)  # no program still reading the binaries about to be freed
+        self._growth_note()  # builds the const-dict list on first use
+        n_prog = self.mesh_device.num_program_cache_entries()
+        n_const = sum(len(d) for d in self._const_dicts or ())
+        for d in self._const_dicts or ():
+            d.clear()  # references only: a tensor another module still holds stays allocated
+        self.mesh_device.clear_program_cache()
+        self._last_growth = None
+        self._guard_clears += 1
+        w = ttnn.get_memory_view(self.mesh_device, ttnn.BufferType.DRAM)
+        logger.warning(
+            f"[glm53f-runtime] DRAM guard #{self._guard_clears} "
+            f"{'self-test (forced)' if start < 0 else f'before the chunk at {start}'}: largest free {free:.1f} MiB/bank "
+            f"(floor {self._dram_floor_mib:.1f}): dropped {n_prog} programs + {n_const} device consts in "
+            f"{time.perf_counter() - t0:.2f} s -> largest free {w.largest_contiguous_bytes_free_per_bank / 2**20:.1f} MiB, "
+            f"held {w.total_bytes_allocated_per_bank / 2**20:.1f} MiB/bank"
+        )
 
     def _warm_async(self, kv_caches, n: int, chunk: int) -> None:
         """Warm-up item ``aN``: an N-token prompt through ``prefill_chunk`` exactly as the engine drives it (export pipeline
@@ -226,6 +332,7 @@ class GLM53FlashPrefillRuntime:
         ids = self._ids_host(input_tensor)[: actual_end - actual_start]
         if not isinstance(input_tensor, torch.Tensor):
             ttnn.deallocate(input_tensor)
+        self._dram_guard(actual_start)
         t0 = time.perf_counter()
         if pr is not None:
             if actual_start == 0:
@@ -263,7 +370,7 @@ class GLM53FlashPrefillRuntime:
             self._xq.put(("chunk", kv_caches, actual_start, actual_end, request_id, rows))
             logger.info(
                 f"[glm53f-runtime] chunk {request_id} slot {slot_id} [{actual_start}, {actual_end}): prefill {t1 - t0:.3f} s, "
-                f"kda export + sync {time.perf_counter() - t1:.3f} s (DSA export async)"
+                f"kda export + sync {time.perf_counter() - t1:.3f} s (DSA export async){self._growth_note()}"
             )
             self._after_last(pr, last)
             return None
@@ -273,7 +380,7 @@ class GLM53FlashPrefillRuntime:
             pr.store_rows(ids, actual_start, actual_end, *self._store_payload(capture))
         logger.info(
             f"[glm53f-runtime] chunk {request_id} slot {slot_id} [{actual_start}, {actual_end}): prefill {t1 - t0:.3f} s, "
-            f"export {time.perf_counter() - t1:.3f} s"
+            f"export {time.perf_counter() - t1:.3f} s{self._growth_note()}"
         )
         if self._sink is not None:
             for layer in range(TABLE_LAYERS):

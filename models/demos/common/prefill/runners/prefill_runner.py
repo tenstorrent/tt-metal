@@ -934,4 +934,11 @@ if __name__ == "__main__":
     except (OSError, ValueError) as e:
         logger.warning(f"[prefill] could not raise RLIMIT_NPROC to the hard limit: {e}")
 
-    main()
+    try:
+        main()
+    except Exception:
+        # tt-blaze G53F-0313: an exception out of the request loop (a DRAM OOM) printed its traceback and left the
+        # process alive for 3 h (interpreter shutdown waits on the runner's other threads), so the launchers saw a live
+        # pid and reused a dead runner. Exit hard so the pid ends with the loop.
+        logger.exception("[prefill] the runner died; exiting")
+        os._exit(1)
