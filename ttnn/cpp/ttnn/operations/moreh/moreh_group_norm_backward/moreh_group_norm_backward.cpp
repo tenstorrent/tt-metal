@@ -29,6 +29,11 @@ std::vector<std::optional<Tensor>> moreh_group_norm_backward(
     std::vector<std::optional<Tensor>> outputs;
     outputs.reserve(3);
 
+    TT_FATAL(
+        are_required_outputs.size() == 3,
+        "are_required_outputs must have exactly 3 elements (for input_grad, gamma_grad, beta_grad), got {}",
+        are_required_outputs.size());
+
     if (are_required_outputs[0]) {
         outputs.push_back(ttnn::prim::moreh_group_norm_backward_input_grad(
             output_grad,
