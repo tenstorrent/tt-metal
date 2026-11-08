@@ -268,6 +268,17 @@ def test_pc_with_different_shapes_in_sequence(device):
             assert torch.allclose(z_torch, y, atol=1e-2), f"z_torch[{i}] != y"
 
 
+_BLOCK_FLOATS = (ttnn.bfloat8_b, ttnn.bfloat4_b)
+
+
+def _one_exponent_input(shape, seed=0):
+    """Values in +-[1, 2) for a block float. They share one exponent, so values an op moves into another block of the
+    tile come back exactly."""
+    torch.manual_seed(seed)
+    magnitude = 1 + torch.rand(shape)
+    return torch.where(torch.rand(shape) < 0.5, -magnitude, magnitude)
+
+
 @pytest.mark.parametrize("buffer_type", docstring_interleaved_buffer_type_params(ttnn.repeat))
 @pytest.mark.parametrize("dtype, layout", docstring_dtype_layout_params(ttnn.repeat))
 def test_repeat_docstring_supported_inputs(dtype, layout, buffer_type, device):
@@ -296,9 +307,15 @@ def test_repeat_docstring_supported_inputs(dtype, layout, buffer_type, device):
     # With memory_config=None, an interleaved input keeps its memory configuration.
     assert ttnn.repeat(input_tensor, [1, 2, 1, 1]).memory_config() == memory_config
 
-    # A shape that is not tile-aligned.
-    unaligned = ttnn.from_torch(
-        full_range_input((1, 1, 30, 30), dtype), dtype=dtype, layout=layout, device=device, memory_config=memory_config
-    )
+    # A shape that is not tile-aligned. On a TILE input, repeating its last two dims runs a compute kernel that holds
+    # BFLOAT16 zeros by value: a BFLOAT16 input leaves out NaN, as the docstring requires, and its zeros are compared
+    # by value. Values also move into new blocks, so block floats get values with one exponent.
+    bfloat16_tile = dtype == ttnn.bfloat16 and layout == ttnn.TILE_LAYOUT
+    if dtype in _BLOCK_FLOATS:
+        x = _one_exponent_input((1, 1, 30, 30))
+    else:
+        x = full_range_input((1, 1, 30, 30), dtype, nan=not bfloat16_tile)
+    unaligned = ttnn.from_torch(x, dtype=dtype, layout=layout, device=device, memory_config=memory_config)
     output = ttnn.repeat(unaligned, [1, 2, 1, 2], memory_config=memory_config)
-    assert_exact(ttnn.to_torch(unaligned).repeat(1, 2, 1, 2), ttnn.to_torch(output))
+    expected = ttnn.to_torch(unaligned).repeat(1, 2, 1, 2)
+    assert_exact(expected, ttnn.to_torch(output), signed_zeros=not bfloat16_tile)

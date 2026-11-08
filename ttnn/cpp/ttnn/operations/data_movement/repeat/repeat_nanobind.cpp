@@ -47,6 +47,9 @@ void bind_repeat(nb::module_& mod) {
 
             A 0 in ``repeat_dims`` returns an empty tensor.
 
+            For a ``BFLOAT16`` TILE input whose last two dims are not both multiples of 32, input values must not be
+            NaN when either of those dims is repeated.
+
         Memory Support:
             - Interleaved: DRAM and L1
             - Sharded: HEIGHT_SHARDED, WIDTH_SHARDED and BLOCK_SHARDED input and output in L1; DRAM-sharded input is also accepted
