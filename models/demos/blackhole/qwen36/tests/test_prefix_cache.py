@@ -22,12 +22,15 @@ from loguru import logger
 import ttnn
 from models.common.sampling.sampling_params import SamplingParams
 from models.common.utility_functions import run_for_blackhole
+from models.demos.blackhole.qwen36.tests.test_factory import kv_pool_blocks
 from models.demos.blackhole.qwen36.tt.qwen36_vllm import Qwen36ForCausalLM
+from models.demos.blackhole.qwen36.tt.tp_common import kv_block_size
 
-BLOCK = 64
+BLOCK = kv_block_size()
 MAX_SEQ = 16384
 BPU = MAX_SEQ // BLOCK  # page-table width (max_model_len / block_size)
-NUM_BLOCKS = 1024  # 65536 KV tokens
+# 65536 KV tokens; each prompt rounds up to whole blocks plus a spare one, so large blocks need a floor of blocks.
+NUM_BLOCKS = kv_pool_blocks(65536, min_blocks=96)
 WIDTH = 32  # max_num_seqs
 PCC_MIN = 0.99
 PCC_S4_MIN = 0.9999

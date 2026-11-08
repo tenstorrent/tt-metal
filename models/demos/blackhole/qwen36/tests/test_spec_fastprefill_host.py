@@ -94,6 +94,18 @@ def test_mtp_prefill_inputs_segment_with_only_slot_tp_minus_1():
     assert torch.equal(full[0, :32], row[0, :32]) and bool((full[0, 32:34] == SCRATCH).all())
 
 
+@pytest.mark.parametrize("Tp,cs,bucket", [(300, 0, 512), (1024 + 200, 1024, 256), (1024, 0, 1024)])
+def test_mtp_prefill_inputs_bucket_shorter_than_block(Tp, cs, bucket):
+    """QWEN36_KV_BLOCK_SIZE=1024: a 128..512 bucket fills the first rows of the segment's one block."""
+    bs = 1024
+    row = torch.arange(1, 9, dtype=torch.int32).reshape(1, 8)
+    toks, full, chunk = mtp_prefill_inputs(list(range(Tp)), cs, bucket, row, bs, SCRATCH, 8)
+    blk0 = cs // bs
+    assert chunk.tolist() == [[blk0 + 1]]
+    assert full[0, : blk0 + 1].tolist() == list(range(1, blk0 + 2))
+    assert toks.shape == (1, bucket) and int(toks[0, Tp - 2 - cs]) == Tp - 1
+
+
 def test_mtp_prefill_inputs_row_narrower_than_window():
     """A row narrower than the bucket window is zero-padded (null block) before the redirect; width = buf_blocks."""
     prompt = list(range(100))
