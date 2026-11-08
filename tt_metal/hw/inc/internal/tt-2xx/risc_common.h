@@ -376,6 +376,23 @@ inline __attribute__((always_inline)) void set_l1_data_cache() {
              )ASM" ::
                 : "t1");
     }
+#elif defined(ARCH_QUASAR) && defined(COMPILE_FOR_TRISC)
+    // Each Quasar TRISC has the same non-snooped L1 read cache as Blackhole, on at reset, controlled by CSR 0x7C0
+    // bit 3 (set = disabled). MEM_L1_UNCACHED_BASE does not bypass it for TRISCs.
+    if constexpr (enable) {
+        asm(R"ASM(
+            li t1, 0x8
+            csrrc zero, 0x7c0, t1
+             )ASM" ::
+                : "t1");
+    } else {
+        asm(R"ASM(
+            fence
+            li t1, 0x8
+            csrrs zero, 0x7c0, t1
+             )ASM" ::
+                : "t1");
+    }
 #endif
 }
 

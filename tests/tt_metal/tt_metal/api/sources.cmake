@@ -35,6 +35,7 @@ set(UNIT_TESTS_API_SOURCES
     distribution_spec/test_buffer_distribution_spec.cpp
     sram_arena/test_sram_arena.cpp
     test_kernel_thread_sync.cpp
+    test_trisc_l1_cache.cpp
     test_banked.cpp
     test_bit_utils.cpp
     test_buffer_types_device_sync.cpp

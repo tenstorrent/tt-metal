@@ -355,11 +355,13 @@ inline __attribute__((always_inline)) void configure_gathering() {
 }
 
 inline __attribute__((always_inline)) void configure_l1_data_cache() {
-#if defined(ARCH_BLACKHOLE)
+#if defined(ARCH_BLACKHOLE) || (defined(ARCH_QUASAR) && defined(COMPILE_FOR_TRISC))
     // Blackhole's L1 cache can be disabled by setting bit 3 and enabled by clearing it. Grayskull and Wormhole do not
     // have L1 cache The cache is default disabled. When hw APIs better hide L1 cache, we can keep it enabled L1 cache
     // can be enabled by setting `TT_METAL_ENABLE_L1_DATA_CACHE_RISCVS` env var. It can be enabled risc by risc export
     // TT_METAL_ENABLE_L1_DATA_CACHE_RISCVS=<BR,NC,TR*,ER*>
+    // Quasar TRISCs have the same non-snooped L1 read cache, on at reset, and MEM_L1_UNCACHED_BASE does not bypass it
+    // for them, so it is turned off the same way.
 #if defined(ENABLE_L1_DATA_CACHE)
     set_l1_data_cache<true>();
 #else
