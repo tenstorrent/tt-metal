@@ -64,9 +64,6 @@ inline void mirrored_parity_rational_tile(const float* num_coeffs, const float* 
 #pragma GCC unroll 32
     for (int d = 0; d < 32; d++) {
         vUInt raw_u16;
-        if constexpr (RawEarly && RawClass >= 0) {
-            raw_u16 = dst_reg[d].template mode<DataLayout::U16>();
-        }
         vFloat x_raw = dst_reg[d];
         vFloat x2 = x_raw * x_raw;
         vFloat numer, denom;
@@ -75,12 +72,6 @@ inline void mirrored_parity_rational_tile(const float* num_coeffs, const float* 
         vFloat result = numer * ckernel::sfpu::sfpu_reciprocal_iter<2>(denom);
         mirrored_class_terminals<BoundBits, true>(x_raw, result);
         // RawClass < 0: the body already gives -NaN its class, so no terminal.
-        if constexpr (RawClass >= 0) {
-            if constexpr (!RawEarly) {
-                raw_u16 = dst_reg[d].template mode<DataLayout::U16>();
-            }
-            negative_nan_class_terminal<RawClass, !RawEarly>(raw_u16, result);
-        }
         result = convert<vFloat16b>(result, RoundMode::Nearest);
         dst_reg[d] = result;
     }
