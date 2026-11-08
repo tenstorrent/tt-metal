@@ -2661,3 +2661,18 @@ class PACK_SRC_FROM_OUTPUT(TemplateParameter):
 
     def convert_to_cpp(self) -> str:
         return ""
+
+
+@dataclass
+class PACK_BLOCK_ALT(TemplateParameter):
+    """pack_block_alt_test.cpp: pack_block is "<alt format>/<l1 acc: a|n>/<form: h|m>": the second output's format, packer L1 accumulate on it, and head (llk_pack_block's form of the first block of an output) or main (every tile one by one)."""
+
+    pack_block: str
+
+    def convert_to_cpp(self) -> str:
+        fmt, acc, form = self.pack_block.split("/")
+        return (
+            f"constexpr DataFormat alt_pack_dst = DataFormat::{fmt};\n"
+            f"constexpr bool alt_l1_acc = {str(acc == 'a').lower()};\n"
+            f"constexpr bool alt_head_form = {str(form == 'h').lower()};"
+        )
