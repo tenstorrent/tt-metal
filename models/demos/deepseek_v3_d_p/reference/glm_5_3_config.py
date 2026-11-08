@@ -35,7 +35,15 @@ class GLM53Config:
     ROUTED_EXPERT_COMBINE_OVERLAP = True
     # Whether to use the fabric2d-optimized dispatch and combine ops in MoE
     # True = use them if the mesh allows, False = use older ops
-    MOE_FABRIC2D_TRANSPORT = True
+    #
+    # Off on Blackhole until dispatch_fabric2d can split a token: with the transport the mesh opens with a
+    # 12352 B fabric payload so every token crosses the fabric as one 12 KB packet, and the fabric routers'
+    # 12 KB NOC1 writes into DRAM hang the DRAM endpoint within an hour on an 8x4 galaxy (quad A 2026-11-07
+    # 03:46, quad B 2026-11-08 00:16, quad A 2026-11-08 01:48, on both the NOC0- and the NOC1-assigned
+    # subchannel; SYS-1419 class). With it off the mesh opens with the overlap payload (EMB_SIZE + 64 B),
+    # combine_fabric2d sends tokens as two 6 KB halves and dispatch runs the direct op, the configuration
+    # that soaked clean at 70d7d6c.
+    MOE_FABRIC2D_TRANSPORT = False
     INTERMEDIATE_SIZE = 12288  # Dense FFN hidden dimension
 
     # MoE configuration
