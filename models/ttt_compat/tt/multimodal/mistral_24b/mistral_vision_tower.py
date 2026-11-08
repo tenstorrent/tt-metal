@@ -117,19 +117,20 @@ class MistralVisionTower(LightweightModule):
         """
         patch_embeds = self.patch_conv(input_tensor)
         patch_embeds = ttnn.transpose(patch_embeds, 1, 2)
-        height, width = image_sizes[0]
+        # Use padded dimensions from input_tensor for reshape, not first image's size
+        padded_height, padded_width = input_tensor.shape[2], input_tensor.shape[3]
         patch_embeds = ttnn.reshape(
             patch_embeds,
-            [patch_embeds.shape[0], self.width, height // self.patch_size, width // self.patch_size],
+            [patch_embeds.shape[0], self.width, padded_height // self.patch_size, padded_width // self.patch_size],
         )
 
         patch_embeds_list = [
             ttnn.slice(
                 patch_embeds,
-                [0, 0, 0, 0],
-                [1, self.width, size[0] // self.patch_size, size[1] // self.patch_size],
+                [i, 0, 0, 0],  # Slice batch entry i for image i
+                [i + 1, self.width, size[0] // self.patch_size, size[1] // self.patch_size],
             )
-            for size in image_sizes
+            for i, size in enumerate(image_sizes)
         ]
 
         reshaped_patches = []
