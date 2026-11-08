@@ -187,7 +187,7 @@ def test_perf_matmul_ttsync_excl(perf_report, combos, math_fidelity):
             MATH_FIDELITY(math_fidelity),
             DEST_SYNC(dest_sync),
             THROTTLE_LEVEL(),
-            MATMUL_UNPACK_TTSYNC(),
+            MATMUL_UNPACK_TTSYNC.forced(formats, dims.ct_dim, dims.rt_dim, dims.kt_dim),
             MATMUL_UNPACK_TTSYNC_EXCL(),
             *MATMUL_STREAM_NARROW.for_block(
                 formats,

@@ -124,12 +124,43 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 #ifdef ARCH_BLACKHOLE
 #ifdef MATMUL_UNPACK_TTSYNC_EXCL
-    constexpr std::uint32_t unpack_auto_ttsync = 2;
+    constexpr std::uint32_t unpack_ttsync_req = 2;
 #elif defined(MATMUL_UNPACK_TTSYNC)
-    constexpr std::uint32_t unpack_auto_ttsync = 1;
+    constexpr std::uint32_t unpack_ttsync_req = 1;
 #else
-    constexpr std::uint32_t unpack_auto_ttsync = 0;
+    constexpr std::uint32_t unpack_ttsync_req = 0;
 #endif
+    // the opt-in runs only on the blocks that keep the ttsync unpack (llk_matmul_forms.h); a kernel without block keys keeps what it asks for
+#if defined(MATMUL_TTSYNC_BLOCK)
+    constexpr std::uint32_t unpack_auto_ttsync = !matmul_unpack_ttsync_cell(
+                                                     MATH_FIDELITY,
+                                                     dest_sync == ckernel::DstSync::SyncHalf,
+                                                     is_fp32_dest_acc_en,
+                                                     MATMUL_TTSYNC_IN1,
+                                                     MATMUL_TTSYNC_IN0,
+                                                     MATMUL_TTSYNC_OUT,
+                                                     MATMUL_TTSYNC_RT,
+                                                     MATMUL_TTSYNC_CT,
+                                                     MATMUL_TTSYNC_KT)
+                                                     ? 0
+                                                     : unpack_ttsync_req;
+#elif defined(MATMUL_BLOCK) && !defined(LLK_MAIN_ARM)
+    constexpr std::uint32_t unpack_auto_ttsync = (unpack_ttsync_req != 0 && !matmul_unpack_ttsync_cell(
+                                                                                MATH_FIDELITY,
+                                                                                dest_sync == ckernel::DstSync::SyncHalf,
+                                                                                is_fp32_dest_acc_en,
+                                                                                MATMUL_KEY_IN1,
+                                                                                MATMUL_KEY_IN0,
+                                                                                MATMUL_OUT_FORMAT,
+                                                                                MATMUL_BLOCK_RT,
+                                                                                MATMUL_BLOCK_CT,
+                                                                                MATMUL_BLOCK_KT))
+                                                     ? 0
+                                                     : unpack_ttsync_req;
+#else
+    constexpr std::uint32_t unpack_auto_ttsync = unpack_ttsync_req;
+#endif
+#line 69
     // the test chooses the 8-bit stream at compile time, as a kernel's compile-time formats do
 #ifdef MATMUL_STREAM_NARROW
     constexpr bool stream_narrow = !is_fp32_dest_acc_en;

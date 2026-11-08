@@ -66,6 +66,77 @@ constexpr char llk_matmul_row_mop_form() {
     return 0;
 }
 
+// Whether the caller's block is one of the cells llk_matmul_forms.h keeps on main's form (block keys given): an opt-in
+// (row_mop, unpack_auto_ttsync) on such a block runs main's default.
+template <
+    std::uint32_t block_rt,
+    std::uint32_t block_ct,
+    std::uint32_t block_kt,
+    DataFormat in0,
+    DataFormat in1,
+    DataFormat out_format>
+constexpr bool llk_matmul_main_cell() {
+#if defined(UCK_CHLKC_MATH) || defined(UCK_CHLKC_UNPACK)
+    if constexpr (
+        block_rt != 0 && block_ct != 0 && block_kt != 0 && in0 != DataFormat::Invalid && in1 != DataFormat::Invalid) {
+#ifdef PACKER_L1_ACC
+        constexpr bool l1_acc = true;
+#else
+        constexpr bool l1_acc = false;
+#endif
+        return matmul_grid_main_form(
+            MATH_FIDELITY,
+            DST_SYNC_MODE == DstSync::SyncHalf,
+            DST_ACCUM_MODE,
+            in1,
+            in0,
+            out_format,
+            block_rt,
+            block_ct,
+            block_kt,
+            MM_THROTTLE,
+            l1_acc);
+    }
+#endif
+    return false;
+}
+
+// The unpack_auto_ttsync the unpack calls run: the caller's, except on a block (keys given) that is a main form cell or
+// where the ttsync unpack measured slower than the default unpack (matmul_unpack_ttsync_cell). Decided at compile time,
+// so the unpack code of every other block is unchanged.
+template <
+    std::uint32_t unpack_auto_ttsync,
+    std::uint32_t block_rt,
+    std::uint32_t block_ct,
+    std::uint32_t block_kt,
+    DataFormat in0,
+    DataFormat in1,
+    DataFormat out_format>
+constexpr std::uint32_t llk_matmul_unpack_ttsync() {
+#if defined(UCK_CHLKC_MATH) || defined(UCK_CHLKC_UNPACK)
+    if constexpr (
+        unpack_auto_ttsync != 0 && block_rt != 0 && block_ct != 0 && block_kt != 0 && in0 != DataFormat::Invalid &&
+        in1 != DataFormat::Invalid) {
+        if (llk_matmul_main_cell<block_rt, block_ct, block_kt, in0, in1, out_format>()) {
+            return 0;
+        }
+        return matmul_unpack_ttsync_cell(
+                   MATH_FIDELITY,
+                   DST_SYNC_MODE == DstSync::SyncHalf,
+                   DST_ACCUM_MODE,
+                   in1,
+                   in0,
+                   out_format,
+                   block_rt,
+                   block_ct,
+                   block_kt)
+                   ? unpack_auto_ttsync
+                   : 0;
+    }
+#endif
+    return unpack_auto_ttsync;
+}
+
 // The fidelity whose phases a matmul runs for operand formats known at compile time (matmul_phase_fidelity); the requested
 // one when they are Invalid, mixed, or the output and DEST width are a cell that measured slower with the phases dropped.
 // Only the math calls take it; the unpack and math forms stay keyed on the requested fidelity (MATH_FIDELITY).
@@ -345,7 +416,17 @@ ALWI void matmul_block_init(
 #ifdef ARCH_BLACKHOLE
     constexpr std::uint32_t kt_key = llk_matmul_form_key<kt_per_section, block_rt, block_ct, block_kt, in0_format, in1_format, out_format, MM_THROTTLE>();
     constexpr char row_mop_form = llk_matmul_row_mop_form<row_mop, kt_per_section, block_rt, block_ct, block_kt, in0_format, in1_format, out_format>();
-    constexpr bool row_mop_on = row_mop && row_mop_form == 0;
+    constexpr bool row_mop_on =
+        row_mop && row_mop_form == 0 &&
+        !llk_matmul_main_cell<block_rt, block_ct, block_kt, in0_format, in1_format, out_format>();
+    constexpr std::uint32_t unpack_ttsync = llk_matmul_unpack_ttsync<
+        unpack_auto_ttsync,
+        block_rt,
+        block_ct,
+        block_kt,
+        in0_format,
+        in1_format,
+        out_format>();
     constexpr DataFormat form_out = row_mop_form != 0 ? matmul_forced_form_key(row_mop_form) : out_format;
 #else
     constexpr std::uint32_t kt_key = kt_per_section;
@@ -354,7 +435,8 @@ ALWI void matmul_block_init(
 #ifndef ARCH_QUASAR
     state_configure(in1_cb_id, in0_cb_id, call_line);
 #ifdef ARCH_BLACKHOLE
-    UNPACK((llk_unpack_AB_matmul_init<unpack_auto_ttsync, reuse_dir, stream_z>(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim, kt_dim)));
+    UNPACK((llk_unpack_AB_matmul_init<unpack_ttsync, reuse_dir, stream_z>(
+        in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim, kt_dim)));
     MATH((llk_math_matmul_init<
           matmul_elided_fidelity<in0_format, in1_format, out_format>(),
           MM_THROTTLE,
@@ -433,7 +515,17 @@ ALWI void matmul_block(
 #ifdef ARCH_BLACKHOLE
     constexpr std::uint32_t kt_key = llk_matmul_form_key<kt_per_section, block_rt, block_ct, block_kt, in0_format, in1_format, out_format, MM_THROTTLE>();
     constexpr char row_mop_form = llk_matmul_row_mop_form<row_mop, kt_per_section, block_rt, block_ct, block_kt, in0_format, in1_format, out_format>();
-    constexpr bool row_mop_on = row_mop && row_mop_form == 0;
+    constexpr bool row_mop_on =
+        row_mop && row_mop_form == 0 &&
+        !llk_matmul_main_cell<block_rt, block_ct, block_kt, in0_format, in1_format, out_format>();
+    constexpr std::uint32_t unpack_ttsync = llk_matmul_unpack_ttsync<
+        unpack_auto_ttsync,
+        block_rt,
+        block_ct,
+        block_kt,
+        in0_format,
+        in1_format,
+        out_format>();
     constexpr DataFormat form_out = row_mop_form != 0 ? matmul_forced_form_key(row_mop_form) : out_format;
 #else
     constexpr std::uint32_t kt_key = kt_per_section;
@@ -442,7 +534,7 @@ ALWI void matmul_block(
 #ifndef ARCH_QUASAR
     state_configure(in1_cb_id, in0_cb_id, call_line);
 #ifdef ARCH_BLACKHOLE
-    UNPACK((llk_unpack_AB_matmul<unpack_auto_ttsync, kt_key, form_out, reuse_dir, stream_z>(
+    UNPACK((llk_unpack_AB_matmul<unpack_ttsync, kt_key, form_out, reuse_dir, stream_z>(
         in0_cb_id, in1_cb_id, in0_tile_index, in1_tile_index, ct_dim, rt_dim, kt_dim)));
     // Dynamic throttling is only available on Blackhole architecture
     MATH((matmul_block_math_dynamic_throttle<
@@ -507,7 +599,9 @@ ALWI void matmul_block_k(
 #ifdef ARCH_BLACKHOLE
     constexpr std::uint32_t kt_key = llk_matmul_form_key<kt_per_section, block_rt, block_ct, block_kt, in0_format, in1_format, out_format, MM_THROTTLE>();
     constexpr char row_mop_form = llk_matmul_row_mop_form<row_mop, kt_per_section, block_rt, block_ct, block_kt, in0_format, in1_format, out_format>();
-    constexpr bool row_mop_on = row_mop && row_mop_form == 0;
+    constexpr bool row_mop_on =
+        row_mop && row_mop_form == 0 &&
+        !llk_matmul_main_cell<block_rt, block_ct, block_kt, in0_format, in1_format, out_format>();
     constexpr DataFormat form_out = row_mop_form != 0 ? matmul_forced_form_key(row_mop_form) : out_format;
 #else
     constexpr std::uint32_t kt_key = kt_per_section;

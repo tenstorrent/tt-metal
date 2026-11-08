@@ -1126,10 +1126,38 @@ class PACK_UNTILIZE_BENCHMARK(TemplateParameter):
 
 @dataclass
 class MATMUL_UNPACK_TTSYNC(TemplateParameter):
-    """Blackhole matmul unpack with the row base addresses written through GPRs and WRCFG under Auto TTSync."""
+    """Blackhole matmul unpack with the row base addresses written through GPRs and WRCFG under Auto TTSync.
+
+    block (rt, ct, kt, in1, in0, out): the keys of a sweep that forces the opt-in on every cell; the kernel then runs it only where the LLK keeps it
+    (llk_matmul_forms.h matmul_unpack_ttsync_cell), as the compute API does for a caller that gives its block keys.
+    """
+
+    block: tuple = None
 
     def convert_to_cpp(self) -> str:
-        return "#define MATMUL_UNPACK_TTSYNC"
+        if self.block is None:
+            return "#define MATMUL_UNPACK_TTSYNC"
+        rt, ct, kt, in1, in0, out = self.block
+        return (
+            "#define MATMUL_UNPACK_TTSYNC\n"
+            "#define MATMUL_TTSYNC_BLOCK\n"
+            f"constexpr std::uint32_t MATMUL_TTSYNC_RT = {rt}, MATMUL_TTSYNC_CT = {ct}, MATMUL_TTSYNC_KT = {kt};\n"
+            f"constexpr DataFormat MATMUL_TTSYNC_IN1 = DataFormat::{in1.name}, MATMUL_TTSYNC_IN0 = DataFormat::{in0.name}, MATMUL_TTSYNC_OUT = DataFormat::{out.name};"
+        )
+
+    @staticmethod
+    def forced(formats, ct_dim: int, rt_dim: int, kt_dim: int):
+        """The opt-in of a sweep that forces it on every cell, with the keys of the block."""
+        return MATMUL_UNPACK_TTSYNC(
+            (
+                rt_dim,
+                ct_dim,
+                kt_dim,
+                formats.input_format,
+                formats.input_format_B,
+                formats.output_format,
+            )
+        )
 
     @staticmethod
     def for_block(
@@ -1144,7 +1172,10 @@ class MATMUL_UNPACK_TTSYNC(TemplateParameter):
         """[MATMUL_UNPACK_TTSYNC()] for the blocks of up to 2x2 tiles that the K loop entry does not take and where the GPR form measured 0 slower than the context poll."""
         if get_chip_architecture() != ChipArchitecture.BLACKHOLE:
             return []
-        from helpers.matmul_prod_keys import mixed_main_form
+        from helpers.matmul_prod_keys import (
+            matmul_unpack_ttsync_cell,
+            mixed_main_form,
+        )
 
         if mixed_main_form(
             math_fidelity,
@@ -1162,131 +1193,21 @@ class MATMUL_UNPACK_TTSYNC(TemplateParameter):
             formats, dest_acc, math_fidelity, ct_dim, rt_dim, kt_dim
         ):
             return []
-        # the init stall of the ttsync unpack (about 11 cycles per kernel) costs more than its loop gain on these cells
-        if (
+        if matmul_reuse_dir_for(formats, math_fidelity, ct_dim, rt_dim, dest_sync):
+            return []
+        if not matmul_unpack_ttsync_cell(
             math_fidelity,
+            dest_sync == DestSync.Half,
+            dest_acc == DestAccumulation.Yes,
             formats.input_format,
             formats.input_format_B,
             formats.output_format,
-            ct_dim,
             rt_dim,
+            ct_dim,
             kt_dim,
-        ) in (
-            (
-                MathFidelity.LoFi,
-                DataFormat.Float32,
-                DataFormat.Float32,
-                DataFormat.Bfp8_b,
-                2,
-                1,
-                3,
-            ),
-            (
-                MathFidelity.LoFi,
-                DataFormat.Float32,
-                DataFormat.Float32,
-                DataFormat.Bfp8_b,
-                2,
-                1,
-                4,
-            ),
-            (
-                MathFidelity.LoFi,
-                DataFormat.Bfp8_b,
-                DataFormat.Bfp8_b,
-                DataFormat.Bfp8_b,
-                2,
-                2,
-                4,
-            ),
-            (
-                MathFidelity.HiFi2,
-                DataFormat.Bfp4_b,
-                DataFormat.Bfp8_b,
-                DataFormat.Float32,
-                1,
-                1,
-                1,
-            ),
-            (
-                MathFidelity.HiFi2,
-                DataFormat.Bfp8_b,
-                DataFormat.Bfp8_b,
-                DataFormat.Float32,
-                1,
-                1,
-                1,
-            ),
         ):
             return []
-        if matmul_reuse_dir_for(formats, math_fidelity, ct_dim, rt_dim, dest_sync):
-            return []
-        # the cells below measured 0 slower than the context poll over 1440 small-block rows (ABBA, both orders) and are the
-        # same cells bmm_unpack_auto_ttsync takes in the metal2 matmul kernel
-        half = dest_sync == DestSync.Half
-        fid = math_fidelity
-        one = rt_dim == 1 and ct_dim == 1
-        f32_acc = dest_acc == DestAccumulation.Yes
-        in_f, out_f = formats.input_format, formats.output_format
-        if kt_dim >= 5:
-            take = one and fid in (MathFidelity.HiFi2, MathFidelity.LoFi)
-        elif kt_dim >= 2:
-            take = (
-                one
-                and (
-                    fid in (MathFidelity.HiFi2, MathFidelity.LoFi)
-                    or (fid == MathFidelity.HiFi3 and half)
-                )
-                and not (
-                    fid == MathFidelity.HiFi3
-                    and in_f == DataFormat.Float16_b
-                    and out_f == DataFormat.Float32
-                    and not f32_acc
-                )
-            ) or (fid == MathFidelity.LoFi and half and rt_dim <= 2 and ct_dim <= 2)
-            if (
-                fid == MathFidelity.LoFi
-                and rt_dim == 1
-                and ct_dim == 2
-                and in_f == DataFormat.Float32
-                and out_f == DataFormat.Float16_b
-            ):
-                take = False
-            if rt_dim == 2 and ct_dim == 2 and in_f == DataFormat.Float32:
-                take = False
-            # a 2x1 block of Float32 to Float32 with a 16-bit DEST reads 0.3 cycles slower than the poll form
-            if (
-                fid == MathFidelity.LoFi
-                and rt_dim == 2
-                and ct_dim == 1
-                and in_f == out_f == DataFormat.Float32
-                and not f32_acc
-            ):
-                take = False
-        else:
-            take = (
-                one
-                and half
-                and fid in (MathFidelity.HiFi2, MathFidelity.LoFi)
-                and not (
-                    in_f == DataFormat.Float32
-                    and out_f == DataFormat.Float32
-                    and not f32_acc
-                )
-                and not (
-                    fid == MathFidelity.HiFi2
-                    and in_f == DataFormat.Bfp8_b
-                    and out_f == DataFormat.Float32
-                    and f32_acc
-                )
-                and not (
-                    fid == MathFidelity.HiFi2
-                    and in_f == DataFormat.Float16_b
-                    and out_f == DataFormat.Float32
-                    and not f32_acc
-                )
-            )
-        return [MATMUL_UNPACK_TTSYNC()] if take else []
+        return [MATMUL_UNPACK_TTSYNC()]
 
 
 @dataclass

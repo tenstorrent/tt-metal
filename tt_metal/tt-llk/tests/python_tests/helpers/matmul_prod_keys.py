@@ -1609,6 +1609,127 @@ _SHORT = {
 }
 
 
+# Cells where the ttsync unpack init stall (about 11 cycles per kernel) costs more than its loop gain; llk_matmul_forms.h matmul_ttsync_off_cells holds the same list
+_TTSYNC_OFF = (
+    (
+        MathFidelity.LoFi,
+        DataFormat.Float32,
+        DataFormat.Float32,
+        DataFormat.Bfp8_b,
+        2,
+        1,
+        3,
+    ),
+    (
+        MathFidelity.LoFi,
+        DataFormat.Float32,
+        DataFormat.Float32,
+        DataFormat.Bfp8_b,
+        2,
+        1,
+        4,
+    ),
+    (
+        MathFidelity.LoFi,
+        DataFormat.Bfp8_b,
+        DataFormat.Bfp8_b,
+        DataFormat.Bfp8_b,
+        2,
+        2,
+        4,
+    ),
+    (
+        MathFidelity.HiFi2,
+        DataFormat.Bfp4_b,
+        DataFormat.Bfp8_b,
+        DataFormat.Float32,
+        1,
+        1,
+        1,
+    ),
+    (
+        MathFidelity.HiFi2,
+        DataFormat.Bfp8_b,
+        DataFormat.Bfp8_b,
+        DataFormat.Float32,
+        1,
+        1,
+        1,
+    ),
+)
+
+
+def matmul_unpack_ttsync_cell(
+    math_fidelity, half, f32_acc, in_f, in_b, out_f, rt_dim, ct_dim, kt_dim
+) -> bool:
+    """Whether the ttsync unpack (unpack_auto_ttsync) is kept for a block: the cells where it measured 0 slower than the context poll over 1440 small-block rows (ABBA, both
+    orders), the same cells bmm_unpack_auto_ttsync takes in the metal2 matmul kernel. llk_matmul_forms.h matmul_unpack_ttsync_cell is the C++ twin, which runs the default unpack elsewhere.
+    """
+    if (math_fidelity, in_f, in_b, out_f, ct_dim, rt_dim, kt_dim) in _TTSYNC_OFF:
+        return False
+    fid = math_fidelity
+    one = rt_dim == 1 and ct_dim == 1
+    if kt_dim >= 5:
+        take = one and fid in (MathFidelity.HiFi2, MathFidelity.LoFi)
+    elif kt_dim >= 2:
+        take = (
+            one
+            and (
+                fid in (MathFidelity.HiFi2, MathFidelity.LoFi)
+                or (fid == MathFidelity.HiFi3 and half)
+            )
+            and not (
+                fid == MathFidelity.HiFi3
+                and in_f == DataFormat.Float16_b
+                and out_f == DataFormat.Float32
+                and not f32_acc
+            )
+        ) or (fid == MathFidelity.LoFi and half and rt_dim <= 2 and ct_dim <= 2)
+        if (
+            fid == MathFidelity.LoFi
+            and rt_dim == 1
+            and ct_dim == 2
+            and in_f == DataFormat.Float32
+            and out_f == DataFormat.Float16_b
+        ):
+            take = False
+        if rt_dim == 2 and ct_dim == 2 and in_f == DataFormat.Float32:
+            take = False
+        # a 2x1 block of Float32 to Float32 with a 16-bit DEST reads 0.3 cycles slower than the poll form
+        if (
+            fid == MathFidelity.LoFi
+            and rt_dim == 2
+            and ct_dim == 1
+            and in_f == out_f == DataFormat.Float32
+            and not f32_acc
+        ):
+            take = False
+    else:
+        take = (
+            one
+            and half
+            and fid in (MathFidelity.HiFi2, MathFidelity.LoFi)
+            and not (
+                in_f == DataFormat.Float32
+                and out_f == DataFormat.Float32
+                and not f32_acc
+            )
+            and not (
+                fid == MathFidelity.HiFi2
+                and in_f == DataFormat.Bfp8_b
+                and out_f == DataFormat.Float32
+                and f32_acc
+            )
+            and not (
+                fid == MathFidelity.HiFi2
+                and in_f == DataFormat.Float16_b
+                and out_f == DataFormat.Float32
+                and not f32_acc
+            )
+        )
+    return take
+
+
 def reinit_main_block(fidelity, half_sync, rt, ct, kb, throttle, l1_acc, nb) -> bool:
     """Full sync blocks of two tiles whose keyed row form re-initialises slower than main's tile form without reading faster (llk_matmul_forms.h matmul_reinit_main_block)."""
     return (
