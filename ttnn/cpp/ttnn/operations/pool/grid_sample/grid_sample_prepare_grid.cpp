@@ -13,6 +13,7 @@
 #include "ttnn/tensor/types.hpp"
 #include <cmath>
 #include <algorithm>
+#include <limits>
 #include <vector>
 #include <tt-metalium/experimental/distributed_tensor/distributed_tensor_apis.hpp>
 
@@ -219,6 +220,16 @@ ttnn::Tensor prepare_grid_sample_grid(
     TT_FATAL(grid.logical_shape()[-1] == 2, "Grid tensor last dimension must be 2 (x, y coordinates)");
     TT_FATAL(padding_mode == "zeros", "Currently only 'zeros' padding mode is supported");
     TT_FATAL(input_shape.size() == 4, "Input shape must have 4 dimensions [N, H, W, C]");
+    // Pixel coordinates are stored in the precomputed grid as int16 bit patterns, so the largest
+    // representable index is INT16_MAX. A larger extent would clamp the last row or column silently.
+    constexpr uint32_t max_input_extent = static_cast<uint32_t>(std::numeric_limits<int16_t>::max()) + 1;
+    TT_FATAL(
+        input_shape[1] <= max_input_extent && input_shape[2] <= max_input_extent,
+        "prepare_grid_sample_grid: input H ({}) and W ({}) must be at most {} because precomputed grid "
+        "coordinates are stored as int16",
+        input_shape[1],
+        input_shape[2],
+        max_input_extent);
     TT_FATAL(
         output_dtype == DataType::BFLOAT16 || !output_dtype.has_value(),
         "Currently only BFLOAT16 is supported for the grid output dtype");
