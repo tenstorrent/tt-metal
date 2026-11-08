@@ -301,7 +301,12 @@ Tensor full_like_impl(
             (dtype_value == DataType::BFLOAT8_B || dtype_value == DataType::BFLOAT16 ||
              dtype_value == DataType::FLOAT32) &&
             tensor.storage_type() == StorageType::DEVICE && dtype_value == tensor.dtype()) {
-            return ttnn::fill(tensor, fill_value, memory_config, optional_output_tensor);
+            // Round to bfloat16 on the host (ties to even, as the host path does), so the device
+            // stores exactly the value the host path would have written. Matches full_impl lines 228-231.
+            const float value = dtype_value == DataType::BFLOAT16
+                                    ? static_cast<float>(::bfloat16(static_cast<float>(fill_value)))
+                                    : static_cast<float>(fill_value);
+            return ttnn::fill(tensor, value, memory_config, optional_output_tensor);
         }
         return full_impl(
             tensor.logical_shape(),
