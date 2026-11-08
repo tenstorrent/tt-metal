@@ -1,7 +1,6 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
-#include "ckernel_sfpu_polygamma_bf16_replay_window.h"
 namespace ckernel::sfpu::ttpoly::polygamma {
 using namespace ::sfpi;
 using ::sfpi::DataLayout;
