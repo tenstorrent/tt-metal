@@ -260,6 +260,18 @@ TilizeDeviceOperation::spec_return_value_t TilizeDeviceOperation::compute_output
         operation_attributes.output_mem_config.memory_layout() != TensorMemoryLayout::INTERLEAVED &&
         operation_attributes.output_mem_config.memory_layout() != TensorMemoryLayout::ND_SHARDED;
     if (output_is_sharded && can_use_sharded_optimized_factories(operation_attributes, tensor_args)) {
+        // The optimized factory aliases the output buffer to the input shard, so the output keeps the
+        // input shard spec. A request for the other orientation would be silently replaced by it.
+        const auto& requested_shard_spec = operation_attributes.output_mem_config.shard_spec();
+        const auto& input_shard_spec = input_tensor.memory_config().shard_spec();
+        if (requested_shard_spec.has_value() && input_shard_spec.has_value()) {
+            TT_FATAL(
+                requested_shard_spec->orientation == input_shard_spec->orientation,
+                "tilize: the requested output shard orientation ({}) is not produced for a sharded input on the "
+                "optimized factory ({}); the output would use the input shard spec",
+                requested_shard_spec->orientation == ShardOrientation::ROW_MAJOR ? "ROW_MAJOR" : "COL_MAJOR",
+                input_shard_spec->orientation == ShardOrientation::ROW_MAJOR ? "ROW_MAJOR" : "COL_MAJOR");
+        }
         log_warning(
             tt::LogOp,
             "ttnn::tilize: Using input shard spec for output tensor because the legacy sharded optimized program "
