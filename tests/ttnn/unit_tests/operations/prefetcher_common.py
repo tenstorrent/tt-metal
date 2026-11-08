@@ -24,9 +24,9 @@ from tests.ttnn.nightly.unit_tests.operations.matmul.test_matmul_1d_gather_in0 i
 from tracy import signpost
 from models.demos.llama3_70b_galaxy.tt.prefetcher_common import get_core_ranges
 
-# Re-exported so the existing callers keep importing it from here; it lives in a leaf
-# module so tests that only need the skip gate can avoid this file's import chain.
-from tests.ttnn.unit_tests.operations.prefetcher_support import require_tensor_prefetcher
+# Re-exported so the existing callers keep importing them from here; they live in a leaf
+# module so tests that only need them can avoid this file's import chain.
+from tests.ttnn.unit_tests.operations.prefetcher_support import make_tensor_prefetcher_pipes, require_tensor_prefetcher
 
 
 def round_up(n, m):
@@ -108,20 +108,73 @@ def make_recv_contig_weight(
     from ``buffer_distribution_spec().num_shards()`` and takes the recv-contig
     path. The tensor keeps its (K, N) logical shape; only buffer placement changes.
     """
-    K = pt_weight.shape[-2]
-    N = pt_weight.shape[-1]
+    mem_config = recv_contig_weight_memory_config(
+        pt_weight.shape[-2], pt_weight.shape[-1], num_dram_banks, ring_size, distribution_strategy
+    )
+    return ttnn.as_tensor(pt_weight, device=device, dtype=dtype, memory_config=mem_config, layout=ttnn.TILE_LAYOUT)
+
+
+def recv_contig_weight_memory_config(
+    K,
+    N,
+    num_dram_banks: int,
+    ring_size: int,
+    distribution_strategy=ttnn.ShardDistributionStrategy.ROUND_ROBIN_1D,
+    shard_k=None,
+):
+    """The memory config ``make_recv_contig_weight`` allocates a (K, N) weight with. ``shard_k``
+    deepens each shard past K, as a gather ring whose last in0 shards are padded needs."""
     assert N % ring_size == 0, f"N={N} must be divisible by ring_size={ring_size}"
     n_per_recv = N // ring_size
     dram_core_range_set = ttnn.CoreRangeSet(
         {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_dram_banks - 1, 0))}
     )
     nd_shard = ttnn.NdShardSpec(
-        ttnn.Shape([K, n_per_recv]),
+        ttnn.Shape([K if shard_k is None else shard_k, n_per_recv]),
         dram_core_range_set,
         ttnn.ShardOrientation.ROW_MAJOR,
         distribution_strategy,
     )
-    mem_config = ttnn.MemoryConfig(ttnn.BufferType.DRAM, nd_shard)
+    return ttnn.MemoryConfig(ttnn.BufferType.DRAM, nd_shard)
+
+
+def recv_contig_grouped_weight_memory_config(
+    num_groups,
+    K,
+    N,
+    num_dram_banks: int,
+    ring_size: int,
+    distribution_strategy=ttnn.ShardDistributionStrategy.ROUND_ROBIN_1D,
+):
+    """The memory config of a grouped receiver-contiguous weight ((1, G, K, N), e.g. a fused MoE
+    expert stack): shard ``(G, K, N // ring_size)``, so every receiver's slab stacks all G groups and
+    the Tensor prefetcher can stream any subset of them to it."""
+    assert N % ring_size == 0, f"N={N} must be divisible by ring_size={ring_size}"
+    dram_core_range_set = ttnn.CoreRangeSet(
+        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_dram_banks - 1, 0))}
+    )
+    nd_shard = ttnn.NdShardSpec(
+        ttnn.Shape([num_groups, K, N // ring_size]),
+        dram_core_range_set,
+        ttnn.ShardOrientation.ROW_MAJOR,
+        distribution_strategy,
+    )
+    return ttnn.MemoryConfig(ttnn.BufferType.DRAM, nd_shard)
+
+
+def make_recv_contig_grouped_weight(
+    device,
+    pt_weight,
+    num_dram_banks: int,
+    ring_size: int,
+    dtype,
+    distribution_strategy=ttnn.ShardDistributionStrategy.ROUND_ROBIN_1D,
+):
+    """Allocate ``pt_weight`` ((1, G, K, N)) as a grouped receiver-contiguous weight (see
+    ``recv_contig_grouped_weight_memory_config``)."""
+    mem_config = recv_contig_grouped_weight_memory_config(
+        pt_weight.shape[-3], pt_weight.shape[-2], pt_weight.shape[-1], num_dram_banks, ring_size, distribution_strategy
+    )
     return ttnn.as_tensor(pt_weight, device=device, dtype=dtype, memory_config=mem_config, layout=ttnn.TILE_LAYOUT)
 
 
@@ -137,18 +190,21 @@ def make_krow_major_weight(device, pt_weight, num_dram_banks: int, dtype):
     ``[b * recv_per_bank, (b + 1) * recv_per_bank)``) to make shard index equal
     ring position.
     """
-    K = pt_weight.shape[-2]
-    N = pt_weight.shape[-1]
+    mem_config = krow_major_weight_memory_config(pt_weight.shape[-2], pt_weight.shape[-1], num_dram_banks)
+    return ttnn.as_tensor(pt_weight, device=device, dtype=dtype, memory_config=mem_config, layout=ttnn.TILE_LAYOUT)
+
+
+def krow_major_weight_memory_config(K, N, num_dram_banks: int):
+    """The memory config ``make_krow_major_weight`` allocates a (K, N) weight with."""
     assert N % num_dram_banks == 0, f"N={N} must be divisible by num_dram_banks={num_dram_banks}"
     dram_core_range_set = ttnn.CoreRangeSet(
         {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_dram_banks - 1, 0))}
     )
-    mem_config = ttnn.MemoryConfig(
+    return ttnn.MemoryConfig(
         ttnn.TensorMemoryLayout.WIDTH_SHARDED,
         ttnn.BufferType.DRAM,
         ttnn.ShardSpec(dram_core_range_set, [K, N // num_dram_banks], ttnn.ShardOrientation.ROW_MAJOR),
     )
-    return ttnn.as_tensor(pt_weight, device=device, dtype=dtype, memory_config=mem_config, layout=ttnn.TILE_LAYOUT)
 
 
 @contextlib.contextmanager

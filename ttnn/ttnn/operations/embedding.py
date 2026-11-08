@@ -3,15 +3,15 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
-from ttnn.operations.golden_common import golden_compute_gradients, golden_prepare_grad_inputs
+from ttnn.operations.golden_common import golden_compute_gradients, golden_prepare_grad_inputs, golden_to_output_dtype
 
 
-def _golden_function(input_tensor: ttnn.Tensor, weight: ttnn.Tensor, **_):
+def _golden_function(input_tensor: ttnn.Tensor, weight: ttnn.Tensor, *, dtype=None, **_):
     import torch
 
     # TTNN indices can be uint32, while torch embedding requires signed integer indices.
     output_tensor = torch.nn.functional.embedding(input_tensor.to(torch.int64), weight)
-    return output_tensor
+    return golden_to_output_dtype(output_tensor, dtype)
 
 
 ttnn.attach_golden_function(ttnn.embedding, golden_function=_golden_function)

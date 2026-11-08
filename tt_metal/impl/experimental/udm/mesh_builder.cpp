@@ -7,7 +7,6 @@
 #include <tt_stl/assert.hpp>
 #include <tt_stl/fmt.hpp>
 #include <tt-metalium/mesh_coord.hpp>
-#include <tt-metalium/experimental/fabric/routing_table_generator.hpp>
 #include <unordered_map>
 
 namespace tt::tt_metal::experimental::udm {
@@ -331,8 +330,6 @@ public:
         // Worker core to NOC coordinate mapping
         // This maps linearized worker core index (row-major) to packed NOC (x,y) coordinates
         // The mapping is the same for all devices in the mesh
-        // Get any device to query the core mapping (all devices have the same mapping)
-        auto* device = mesh_device_->get_devices()[0];
 
         // Compute total number of cores in grid
         uint32_t num_cores = 1;
@@ -362,7 +359,7 @@ public:
 
             // Get physical NOC coordinates from device
             CoreCoord logical_core(x, y);
-            CoreCoord physical_core = device->worker_core_from_logical_core(logical_core);
+            CoreCoord physical_core = mesh_device_->worker_core_from_logical_core(logical_core);
 
             if (idx > 0) {
                 noc_x_str += ", ";

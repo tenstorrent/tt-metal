@@ -4,13 +4,14 @@
 
 #pragma once
 
-#include <span>
-
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/mesh_workload.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+#include <tt-metalium/experimental/metal2_host_api/tensor_parameter.hpp>
+#include <tt-metalium/experimental/metal2_host_api/utility/table.hpp>
+#include <tt-metalium/mesh_coord.hpp>
 
 #include <unordered_map>
 
@@ -81,8 +82,9 @@ void SetProgramRunArgs(Program& program, const ProgramRunArgs& params, bool skip
 //
 // CAUTION: It is the caller's responsibility to ensure that the stateful arguments being retained
 // are still valid in the new execution context. This is especially important for retained tensor
-// arguments: if the previously-bound MeshTensor has gone out of scope (and its device memory has
-// been deallocated), re-enqueuing with the now-stale binding is undefined behavior.
+// arguments (and other user-managed resource arguments): if the previously-bound object has gone
+// out of scope (and its device memory has been deallocated), re-enqueuing with the now-stale
+// binding is undefined behavior.
 //
 // USE CASE: Program re-enqueue loops where only a subset of ProgramRunArgs change per iteration.
 // This saves the host overhead of re-computing, re-specifying and re-validating the full
@@ -93,14 +95,14 @@ void SetProgramRunArgs(Program& program, const ProgramRunArgs& params, bool skip
 void UpdateProgramRunArgs(Program& program, const ProgramRunArgs& params, bool skip_validation = false);
 
 // Fast-path partial update: refresh ONLY the TensorArgs of an existing Program.
-// All other ProgramRunArgs (named/vararg RTAs and CRTAs, DFB params) retain their values
-// from the most recent SetProgramRunArgs call.
+// All other ProgramRunArgs (named/vararg RTAs and CRTAs, DFB params) retain their current values
+// (as most recently set by SetProgramRunArgs or UpdateProgramRunArgs).
 //
 // PRE-CONDITION: SetProgramRunArgs must have been called previously.
 //
 // COMPLETENESS: A TensorArgument must be specified for every TensorParameter declared in the
 // ProgramSpec, exactly once. The supplied MeshTensor's TensorSpec must match the
-// TensorParameter's declared spec.
+// TensorParameter's declared spec (subject to any declared TensorSpecRelaxations).
 //
 // PRE-CONDITION: If skip_validation is true, the caller guarantees the completeness and
 // spec-match requirements above.

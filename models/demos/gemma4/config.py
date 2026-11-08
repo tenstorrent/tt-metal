@@ -6,6 +6,7 @@ This module defines the MeshConfig class which manages parallelization strategie
 across a mesh of devices for the Gemma4 MoE model.
 """
 
+import os
 from dataclasses import dataclass
 from enum import Enum
 
@@ -41,6 +42,7 @@ class MeshConfig:
         decode: ModeConfig,
         prefill: ModeConfig = None,
         tp_axis: int = 1,
+        weight_fracture: bool = False,
     ):
         self.mesh_shape = tuple(mesh_shape)
         self.tp_axis = tp_axis
@@ -48,6 +50,19 @@ class MeshConfig:
         self.sp_axis = self.ep_axis
 
         self.total_devices = mesh_shape[0] * mesh_shape[1]
+
+        # 2D weight fracture: shard one weight dim over both mesh axes (ways = rows*cols) so the box
+        # holds a single weight copy; partial matmuls are completed by ccl_allreduce_fractured per axis.
+        self.weight_fracture = weight_fracture
+        self.fracture_ways = self.total_devices if weight_fracture else decode.tp
+
+        # Lane sharding: the batch splits into one lane per non-tp column, each with its own KV contents,
+        # page tables and positions; fractured matmuls gather/scatter rows across lanes (see SharedMLP).
+        self.lane_sharded = False
+        self.lanes = self.mesh_shape[self.sp_axis]
+        # CP prefill: split each chunk's Q rows across the sp axis (per-column chunk_start offsets keep
+        # causality against the replicated paged cache). Set by ``create_tt_model``.
+        self.cp_prefill = False
 
         self.decode = decode
         self.prefill = prefill or ModeConfig(tp=decode.tp, sp=mesh_shape[0], ep=1)
@@ -70,6 +85,11 @@ class MeshConfig:
         tp_dim_size = self.mesh_shape[self.tp_axis]
         if config.tp > tp_dim_size:
             raise ValueError(f"{mode.value}: TP({config.tp}) > mesh_{self.tp_axis}_size({tp_dim_size})")
+        # EP shards the expert set over the ep axis (one local-expert mask per row of that axis),
+        # so it must span the whole axis.
+        ep_dim_size = self.mesh_shape[self.ep_axis]
+        if config.ep > 1 and config.ep != ep_dim_size:
+            raise ValueError(f"{mode.value}: EP({config.ep}) != mesh_{self.ep_axis}_size({ep_dim_size})")
 
     def get_config(self, mode: Mode) -> ModeConfig:
         return self.decode if mode == Mode.DECODE else self.prefill
@@ -79,6 +99,14 @@ class MeshConfig:
             mesh_dims = (None, tensor_dim) if self.tp_axis == 1 else (tensor_dim, None)
 
         return ttnn.ShardTensor2dMesh(mesh_device, mesh_device.shape, dims=mesh_dims)
+
+    def lane_shard_mapper(self, mesh_device, tensor_dim):
+        """Shard ``tensor_dim`` (the lane-major global batch) over the lane axis, replicating over tp.
+
+        Each chip then sees its own lane's slice at the per-chip shapes the decode ops already expect.
+        """
+        dims = (None, tensor_dim) if self.tp_axis == 0 else (tensor_dim, None)
+        return ttnn.ShardTensor2dMesh(mesh_device, mesh_device.shape, dims=dims)
 
     def column_parallel(self, mesh_device):
         return self.shard_mapper(mesh_device, tensor_dim=-1)
@@ -111,7 +139,7 @@ class MeshConfig:
             memory_config=memory_config,
             topology=ccl_manager.topology,
             cluster_axis=axis,
-            barrier_semaphore=ccl_manager.get_barrier_semaphore(),
+            barrier_semaphore=ccl_manager.get_barrier_semaphore(axis=axis),
         )
 
         gathered = ttnn.experimental.all_gather_async(
@@ -123,7 +151,7 @@ class MeshConfig:
             multi_device_global_semaphore=ccl_manager.get_ag_ping_pong_semaphore(),
             num_links=ccl_manager.num_links,
             memory_config=memory_config,
-            barrier_semaphore=ccl_manager.get_barrier_semaphore(),
+            barrier_semaphore=ccl_manager.get_barrier_semaphore(axis=axis),
         )
 
         if padded:
@@ -144,7 +172,7 @@ class MeshConfig:
             multi_device_global_semaphore=ccl_manager.get_ag_ping_pong_semaphore(),
             num_links=ccl_manager.num_links,
             memory_config=memory_config,
-            barrier_semaphore=ccl_manager.get_barrier_semaphore(),
+            barrier_semaphore=ccl_manager.get_barrier_semaphore(axis=axis),
         )
 
     def __repr__(self):
@@ -153,3 +181,8 @@ class MeshConfig:
         decode_str = f"decode[TP={self.decode.tp}, EP={self.decode.ep}, SP={self.decode.sp}, DP={decode_dp}]"
         prefill_str = f"prefill[TP={self.prefill.tp}, EP={self.prefill.ep}, SP={self.prefill.sp}, DP={prefill_dp}]"
         return f"MeshConfig({self.mesh_shape}, {decode_str}, {prefill_str})"
+
+
+def gemma4_kv_bfp8_enabled():
+    """bfloat8_b paged KV (GEMMA4_KV_BFP8=1) — read by the demo and the serving allocators."""
+    return os.environ.get("GEMMA4_KV_BFP8", "0") == "1"

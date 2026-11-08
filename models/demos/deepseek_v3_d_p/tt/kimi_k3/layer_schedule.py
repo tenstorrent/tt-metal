@@ -34,8 +34,7 @@ class KimiK3LayerSchedule:
         kv_slot_of_local: one entry per local layer — its rank-local KV slot, or `None` on a KDA
             layer, which writes no KV slab at all.
         num_mla_layers: how many of this rank's layers are MLA. This is what `ttMLA` must be given
-            as `layer_num`, and what the layer-ack channel must be configured with — not the model's
-            93, and not the rank's layer count.
+            as `layer_num` — not the model's 93, and not the rank's layer count.
     """
 
     first_layer_idx: int
@@ -84,6 +83,14 @@ class KimiK3LayerSchedule:
 
     def global_index(self, local_idx: int) -> int:
         return self.first_layer_idx + local_idx
+
+    @property
+    def num_kda_layers(self) -> int:
+        return self.num_layers - self.num_mla_layers
+
+    def rank_kda_layer_ids(self) -> tuple[int, ...]:
+        """Global indices of this rank's KDA layers, ascending: the layer axis of its KDA state slabs."""
+        return tuple(self.global_index(local) for local in range(self.num_layers) if not self.local_is_mla(local))
 
     def kv_slot(self, local_idx: int) -> int | None:
         """This rank's KV slot for a local layer, or `None` if the layer writes no KV."""

@@ -61,6 +61,8 @@ def test_gemma4_make_sampling_args_sets_sampling_dp_from_mesh_rows():
     mesh = _FakeMeshDevice((4, 8))
     args = Gemma4Model._make_sampling_args(_FakeConfig(), mesh, tp=mesh.shape[1])
     assert args.sampling_dp == 4
+    # Same-seed requests must stay bit-identical on the vLLM path (spec test non_uniform_seeding).
+    assert args.salt_duplicate_seeds is False
 
 
 def _make_sampling_args(mesh_device, *, use_topk_logprobs=False):

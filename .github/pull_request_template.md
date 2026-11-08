@@ -12,3 +12,8 @@
 
 ### Verification
 <!-- State what steps you took to verify the changes in this PR. -->
+
+### Code owners
+<!-- Tick to ping pending code owners on Slack (same as commenting /codeowners ping).
+     Untick and tick again to re-ping. Leave unticked until the PR is ready for their review. -->
+- [ ] Ping pending code owners

@@ -143,7 +143,8 @@ inline DeviceCausalGeometry device_causal_geometry(
         has_bc ? args.block_cyclic->sp : 0u,
         split);
     const uint32_t sp = has_bc ? args.block_cyclic->sp / split : 1u;
-    const uint32_t chunk_local = has_bc ? args.block_cyclic->chunk_local * split : 0u;
+    // Stored block-cyclic geometry is in compressed K rows; causal ownership remains in query-token units.
+    const uint32_t chunk_local = has_bc ? args.block_cyclic->chunk_local * args.key_compression_ratio * split : 0u;
     const auto ranks =
         has_bc ? query_geometry_ranks(args, device_index, tp_index) : QueryGeometryRanks{device_index, tp_index};
     device_index = ranks.device_index;

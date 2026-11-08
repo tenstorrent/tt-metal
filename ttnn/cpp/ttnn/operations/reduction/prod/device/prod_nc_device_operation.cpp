@@ -37,6 +37,12 @@ void ProdNcDeviceOperation::validate_on_program_cache_miss(
         "Error - unsupported data type for prod, expected BFLOAT16, FLOAT32 or BFLOAT8_B but got {}.",
         input.dtype());
 
+    TT_FATAL(
+        input.dtype() == output.dtype(),
+        "Error - prod requires input and output dtypes to match, got input: {} vs output: {}.",
+        input.dtype(),
+        output.dtype());
+
     const auto& out_memory_config = output.memory_config();
     ReduceOpDeviceGridValidationOptions prod_nc_grid_opts;
     prod_nc_grid_opts.shard_grid_contained_in_device_grid = &out_memory_config;

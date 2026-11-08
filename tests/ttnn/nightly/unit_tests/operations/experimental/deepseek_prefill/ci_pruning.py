@@ -35,8 +35,5 @@ bh_narrow_scales_to_bf16 = _ci_only(lambda **params: params["is_bh"] and params[
 # Blackhole prefill reads the scales back from the packed metadata, never precomputed.
 bh_scales_not_from_metadata = _ci_only(lambda **params: params["is_bh"] and not params["scales_from_metadata"])
 
-# fp32 logits cover the pre-#51009 host-typecast gate contract; production feeds bf16 directly.
-bh_fp32_input = _ci_only(lambda **params: params["is_bh"] and params["input_dtype"] == ttnn.float32)
-
 # The routed expert is always fed a row-major activation in production.
 tiled_x_input = _ci_only(lambda **params: not params["x_row_major"])

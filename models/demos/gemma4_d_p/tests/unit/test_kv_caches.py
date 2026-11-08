@@ -4,6 +4,7 @@
 from types import SimpleNamespace
 
 from models.demos.gemma4_d_p.tt.runners import kv_caches
+from models.demos.gemma4_d_p.tt.runners.adapters.gemma4 import Gemma4ServiceConfig
 
 
 def test_external_cache_allocation_preserves_semantic_layer_order(monkeypatch):
@@ -30,7 +31,9 @@ def test_external_cache_allocation_preserves_semantic_layer_order(monkeypatch):
     )
     mesh_config = SimpleNamespace(device=object(), cp_degree=8, tp_degree=4)
 
-    result = kv_caches.allocate_ring_kv_caches(mesh_config, hf, num_users=8, max_seq_len=262144)
+    result = kv_caches.allocate_ring_kv_caches(
+        mesh_config, hf, num_users=8, max_seq_len=262144, prefill_chunk_size=Gemma4ServiceConfig.CHUNK_SIZE
+    )
 
     assert result.layers == ["sliding-cache", "global-cache", "sliding-cache"]
     assert result.global_layers == (1,)

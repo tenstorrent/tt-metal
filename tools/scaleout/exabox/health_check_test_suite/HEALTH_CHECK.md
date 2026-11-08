@@ -3,8 +3,8 @@
 Pre-cluster hardware sanity check for Blackhole Galaxy 6U systems. Captures a
 `tt-smi` snapshot, decodes per-chip telemetry, runs a reset stability loop,
 invokes the `unit_tests_deployment` gtest binary, and on the longer tiers folds
-in the first-step triage tools and the QSFP tests. Emits a single JSON
-report with per-check PASS/WARN/FAIL/SKIP status grouped by IP.
+in the first-step triage tools, the QSFP tests and the sys-triage bundle. Emits
+a single JSON report with per-check PASS/WARN/FAIL/SKIP status grouped by IP.
 
 ## Quick start
 
@@ -25,14 +25,56 @@ cd $TT_METAL_HOME
 
 Output goes to `./diag_report.json` by default; gtest logs to `./logs/<test>.log`.
 
+### Running in Docker
+
+`run_diag_docker.sh` runs the same suite inside the `exabox-tools` image (the one
+the scheduled fleet run uses), so a host needs no build, and keeps the report,
+the per-step logs and the console transcript on the host:
+
+```bash
+# Medium tier into ./test_output_<date>-<time>/
+./tools/scaleout/exabox/health_check_test_suite/run_diag_docker.sh
+
+# Deploy tier with the QSFP phase, results in a named directory
+./tools/scaleout/exabox/health_check_test_suite/run_diag_docker.sh deploy \
+    --output-dir /data/hc-run-1 --gh-token "$GH_TOKEN"
+
+# Data collection before a BMC reboot, with the sys-triage bundle
+BMC_IP=... BMC_USER=... BMC_PASSWORD=... \
+    ./tools/scaleout/exabox/health_check_test_suite/run_diag_docker.sh pre_reboot
+```
+
+- The tier defaults to `medium`; `--image` defaults to `exabox-tools:latest`,
+  which is re-pulled on every run.
+- `--gh-token` (default `$GH_TOKEN`) installs `tt-syseng-diag` from its private
+  release (`tenstorrent/tt-syseng-diag-packages`, `--diag-pkg-version`, default
+  `0.0.4`). Without it the QSFP and sys-triage phases report SKIP; every other
+  check still runs.
+- `--bmc-ip` / `--bmc-user` / `--bmc-password` (default `$BMC_*`) feed the
+  sys-triage phase, `pre_reboot` only.
+- `--bmc-api-url` / `--bmc-api-token` (default `$TT_BMC_API_URL` /
+  `$TT_BMC_API_TOKEN`) feed the QSFP collector on every tier; without them it
+  reads the FRU with ipmitool and collects no QSFP cages.
+- Tokens and credentials reach the container through a 0600 `--env-file`, never
+  a command line.
+- `--output` is not forwardable — the wrapper owns the bind mount. Use
+  `--output-dir`. Most flags in [Flags](#flags) are forwarded directly; pass
+  `--tt-metal-path` after a `--` separator, using an in-container repo path.
+  Host paths (`--input-snapshot`, `--qsfp-descriptor`, `--triage-dir`) supplied
+  before the separator are mounted read-only for you.
+- The exit code is the suite's own: `1` on FAIL, `0` on PASS/WARN.
+
 ## Tiers
 
-| Tier | Resets | Tests | Triage | QSFP tests | Duration | Use when |
-|---|---|---|---|---|---|---|
-| `light`  | `tt-smi -r` × 1                            | eth_link_up                                                                | — | — | ~75 s   | Smoke check on every new unit |
-| `medium` | `tt-smi -r`, `tt-smi -glx_reset`, then `-glx_reset` after the tests | eth_link_up + eth_bandwidth + gddr_fast (DRAM_TEST_FAST=1)                | host_side + device_side | yes, if installed | ~5 min + triage + ~7 min | Pre-deployment validation |
-| `deploy` | `tt-smi -r`, `tt-smi -glx_reset` × 2, then `-glx_reset` after the tests | eth_link_up + eth_bandwidth + full gddr matrix (3 DramDeployment tests) + didt_matmul_galaxy (pytest, ~9 min) | host_side + device_side | yes, if installed | ~18 min + triage + ~7 min | Final deploy gate |
-| `pre_reboot` | none | — | host_side + device_side | yes, if installed | snapshot + triage + ~7 min | Collect data before a BMC reboot |
+| Tier | Resets | Tests | Triage | QSFP tests | sys-triage | Duration | Use when |
+|---|---|---|---|---|---|---|---|
+| `light`  | `tt-smi -r` × 1                            | eth_link_up                                                                | — | — | — | ~75 s   | Smoke check on every new unit |
+| `medium` | `tt-smi -r`, `tt-smi -glx_reset`, then `-glx_reset` after the tests | eth_link_up + eth_bandwidth + gddr_fast (DRAM_TEST_FAST=1)                | host_side + device_side | yes, if installed | — | ~5 min + triage + ~7 min | Pre-deployment validation |
+| `deploy` | `tt-smi -r`, `tt-smi -glx_reset` × 2, then `-glx_reset` after the tests | eth_link_up + eth_bandwidth + full gddr matrix (3 DramDeployment tests) + didt_matmul_galaxy (pytest, ~9 min) | host_side + device_side | yes, if installed | — | ~18 min + triage + ~7 min | Final deploy gate |
+| `pre_reboot` | none | — | host_side + device_side | yes, if installed | yes, if installed and BMC credentials set | snapshot + triage + ~7 min + sys-triage | Collect data before a BMC reboot |
+
+The [sys-triage phase](#sys-triage-phase) runs last on `pre_reboot` only; it
+collects a bundle for the ticket and never gates the run.
 
 `pre_reboot` collects data; it does not check the unit. It runs on a unit that is
 about to be power cycled through the BMC, so it records the state first and runs
@@ -196,6 +238,13 @@ its scripts, and a host that has not had the package installed simply **SKIPs
 with that reason on the report**. Nothing needs configuring to turn it on:
 install the package and the next `medium` run collects a dump.
 
+The cage sweep reads the QSFP modules through the BMC API, so the collector also
+needs `TT_BMC_API_URL` and `TT_BMC_API_TOKEN` in its environment
+(`run_diag_docker.sh` forwards them from `--bmc-api-url` / `--bmc-api-token`).
+Without them it reads the FRU with ipmitool and collects no cages: the ETH port
+records are still there, but the cage and module records — and with them
+`qsfp_cage_gaps` and `qsfp_modules` — are not.
+
 It runs last, after the post-test `-glx_reset`, for the two reasons the triage
 phase sits there — it opens every chip, so it must not overlap the gtests, and
 it has no SIGBUS handler, so a concurrent reset would kill it outright rather
@@ -313,6 +362,63 @@ timeout is 1200 s as a backstop. That has to stay well inside
 kills the process group and takes the report with it — so raise it when running
 `medium`, `deploy` or `pre_reboot` on a host that has the package.
 
+## sys-triage phase
+
+The last phase runs `sys-triage`, the syseng tool that collects a Blackhole
+Galaxy triage bundle: a directory of text files covering the Quanta FW stack
+(BMC, CPLD, Redfish device versions, KMD, ASIC FW bundle, UBB PHY), the full FRU,
+MB/PDB and per-tray CPLD DIAG, `tt-smi -s`, `ipmitool sdr elist`, `lspci -vvv`,
+`dmesg` and `journalctl -k`, each chip's reset-unit scratch registers and its
+`tt-fw-terminal` vuart. It is forensics for whoever picks up the ticket, not
+findings for this report to judge, so the phase **never gates** the run.
+
+It runs on `pre_reboot` only, as its last step: the bundle is the record of the
+unit's state before the BMC power cycles it, and the vuart and scratch reads are
+worth most on a unit nothing has reset since it misbehaved. It follows the QSFP
+tests because it opens every chip, so nothing may run beside it. The other tiers
+record it as **SKIP** with the reason.
+
+**Where it comes from.** `sys-triage` ships in the same syseng `.deb` as
+`tt-bh-glx-cluster-debug` and is probed for on PATH the same way
+(`--sys-triage-path` overrides). No package, or a package version that does not
+ship it yet, means **SKIP** with the reason; nothing else in the run changes.
+
+**BMC credentials are required.** `sys-triage` refuses to start without the BMC
+address, user and password, so the phase reports **SKIP** naming whichever is
+missing. Each comes from `--bmc-ip` / `--bmc-user` / `--bmc-password`, else from
+`$BMC_IP` / `$BMC_USER` / `$BMC_PASSWORD` — the variables `sys-triage` itself
+reads, so a launcher that already exports them needs no flags. They reach the
+tool through its environment only: never its argv, the logged command or the
+report, and the password is scrubbed from the captured output. Prefer the
+variable over `--bmc-password`, which is visible in the process list.
+
+| Status | Meaning |
+|---|---|
+| **PASS** | `triage.txt` written, nothing reported missing |
+| **WARN** | The bundle was written, but `sys-triage` printed `warning:` lines for sections it could not collect. They are listed in `details` and kept in `data.warnings`. |
+| **SKIP** | No bundle: the tier doesn't ask, the package or the credentials are missing, the run timed out (900 s backstop), or it exited without writing `triage.txt` |
+
+The bundle lands in `<output_dir>/logs/sys_triage/` beside `sys_triage.log`, so
+`collect_run_artifacts()` attaches it to the JIRA ticket with no extra wiring.
+
+**In a container** (`run_diag_docker.sh`), on `pre_reboot` only, a few host tools
+and paths the image lacks are provided, each best-effort and after the packages
+every tier needs, since a missing one costs a section of the bundle and nothing
+else. Other tiers get the same container as before the phase existed. An image
+whose baked-in suite predates the phase has the `--skip-sys-triage` and
+`--sys-triage-path` flags dropped rather than rejected, and simply runs without it.
+
+- `kmod` (`modinfo`, `lsmod`) for the KMD row. `sys-triage` builds the whole
+  FW-stack table in one pass, so without `modinfo` it loses the entire table,
+  not just that row (`warning: fw-version failed: ... 'modinfo'`).
+- `curl` for the Redfish device versions.
+- `systemd` for `journalctl`, with `/var/log/journal`, `/run/log/journal` and
+  `/etc/machine-id` mounted read-only so it reads the host journal. Installed
+  separately and best-effort; `dmesg` still covers the recent kernel log.
+- The KMD **package** version still reads `none` in a container:
+  `dpkg-query` sees the image's package database, not the host's. The
+  `module=` version from `modinfo` is correct.
+
 ## Flags
 
 | Flag | Default | Purpose |
@@ -328,9 +434,14 @@ kills the process group and takes the report with it — so raise it when runnin
 | `--qsfp-tool-path PATH` | `tt-bh-glx-cluster-debug` on PATH | Override the collector binary. A path that doesn't resolve is reported as its own SKIP rather than silently ignored. |
 | `--qsfp-descriptor PATH` | — | `factory_system_descriptor.textproto`, which gives the cage-attached links an expected partner. Without it only the soldered internal links are compared against a topology. |
 | `--qsfp-gating` | off | Report QSFP findings at their real severity and let them gate the run. Off records every finding in `details`/`data` but holds the status at PASS. |
+| `--skip-sys-triage` | off | Skip the sys-triage bundle entirely |
+| `--sys-triage-path PATH` | `sys-triage` on PATH | Override the sys-triage binary. A path that doesn't resolve is reported as its own SKIP. |
+| `--bmc-ip IP` | `$BMC_IP` | BMC address for sys-triage |
+| `--bmc-user USER` | `$BMC_USER` | BMC user for sys-triage |
+| `--bmc-password PASS` | `$BMC_PASSWORD` | BMC password for sys-triage. Prefer the variable: a flag value is visible in the process list. |
 | `--input-snapshot PATH` | — | Use a stored snapshot instead of calling tt-smi |
 | `--tt-smi-path PATH` | `/opt/tt_metal_infra/.../tt-smi` else `tt-smi` on PATH | Override tt-smi binary or repo path |
-| `--tt-metal-path PATH` | `$TT_METAL_HOME` | tt-metal repo root (must contain the deployment-test binary under `build_Release/`) |
+| `--tt-metal-path PATH` | `$TT_METAL_HOME` | tt-metal repo root. The deployment-test binary is looked up under `build_Release/`, `build/`, `build_Debug/` and `build_RelWithDebInfo/`, in that order (`DEPLOYMENT_BIN_CANDIDATES`). |
 | `--output PATH` | `./diag_report.json` | Where to write the JSON report. Gtest logs go to `<output_dir>/logs/`. |
 | `--snapshot-out PATH` | `/tmp/diag_snapshot.json` | Where `tt-smi -f` writes the raw snapshot |
 
@@ -508,12 +619,13 @@ Exit code: `1` on FAIL, `0` on PASS/WARN.
 
 ## Build prereqs
 
-The deployment-test binary is not in `build_metal.sh`'s default target list.
-Build with either:
+The `exabox-tools` image already carries the deployment-test binary (under
+`build/`), so `run_diag_docker.sh` needs no build. On a host checkout, note it is
+not in `build_metal.sh`'s default target list. Build with either:
 
 ```bash
 ./build_metal.sh --build-tests
-# or, after configure:
+# or, after configure (build_Release/ or build/, whichever your configure used):
 ninja -C build_Release unit_tests_deployment
 ```
 
@@ -522,6 +634,7 @@ ninja -C build_Release unit_tests_deployment
 ```
 tools/scaleout/exabox/health_check_test_suite/
 ├── run_diag.sh         # bash dispatcher (sets TT_METAL_HOME / PYTHONPATH / LD_LIBRARY_PATH, execs runner)
+├── run_diag_docker.sh  # runs run_diag.sh inside the exabox-tools image; results land on the host
 ├── diag_runner.py      # Python orchestrator (all check logic lives here). Also exposes run_diag() as a
 │                       #   programmatic entry point returning (exit_code, report_dict).
 ├── qsfp_ingest.py      # QSFP tests: cluster-debug JSONL dump -> checks. No hardware in it: a stored
@@ -537,10 +650,15 @@ tools/scaleout/exabox/health_check_test_suite/
         ├── telemetry.py                 # tt-telemetry (Prometheus) collection + formatting
         ├── report.py                    # post-reset normalization + actionable-failure verdict
         ├── jira_client.py               # JIRA ticket create / update / close / attach
+        ├── grafana.py                   # per-node tt-telemetry dashboard link for tickets
+        ├── node_recovery.py             # Slurm reboot-and-requeue self-heal
         ├── sftp_upload.py               # CSV upload to the Data-team SFTP endpoint
         ├── secrets_loader.py            # JIRA / SFTP credential-file parsing
         └── health_check_models.py       # Pydantic schema for the CSV output
 ```
+
+The unit tests for the parsers and the harness live outside this directory, in
+`tools/scaleout/exabox/tests/` (e.g. `test_diag_runner_parsers.py`).
 
 The `test_infrastructure/` harness previously lived in the `exabox-infra` repo and
 spun up a nested Docker container to run the diag suite. Now that the harness ships

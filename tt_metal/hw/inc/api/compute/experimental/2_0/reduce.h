@@ -7,6 +7,7 @@
 #include <cstdint>
 #include "api/compute/common_globals.h"
 #include "api/compute/experimental/2_0/llk_operand.h"
+#include "sanitizer/api.h"
 
 #ifdef TRISC_MATH
 #include "llk_math_reduce_api.h"
@@ -25,15 +26,52 @@ namespace experimental {
 
 // Id-free (2.0) reduce (data + scaler -> reduced). Takes one LLKOperand per input (data, scaler) and one for
 // the output. Format-free at the op level (formats set at compute_kernel_hw_startup); every LLK core here
-// consumes only geometry (data tile shape / output face_r_dim) + the two runtime input addresses. Geometry
-// (for MATH + unpack init) comes from the DATA operand. Packing is separate (experimental::pack_tile); the
-// packer edge mask is programmed here by reduce_init.
+// consumes only geometry (data, scaler and output tile shapes) + the two runtime input addresses. Geometry
+// for MATH comes from the DATA operand; the unpack init also uses the SCALER's. Packing is separate
+// (experimental::pack_tile); the packer edge mask is programmed here by reduce_init.
 
 // clang-format off
 /**
  * Reduce init: programs UNPACK (AB reduce), MATH, and the PACK edge-mask. compute_kernel_hw_startup(data,
- * scaler, out) must already have programmed the formats. Uses only DATA geometry and OUT's face_r_dim;
- * the scaler operand contributes nothing at init (it's passed to reduce_tile).
+ * scaler, out) must already have programmed the formats. Uses DATA, SCALER and OUT geometry. The scaler may be a
+ * [1,32] tile, except for SUM/AVG REDUCE_ROW: that path reads the scaler through the unpacker
+ * compute_kernel_hw_startup set up for the data, so the scaler must be shaped like the data.
+ *
+ * | Template | reduce_type | SUM / AVG / MAX                                | PoolType  | | True |
+ * | Template | reduce_dim  | REDUCE_ROW / REDUCE_COL / REDUCE_SCALAR       | ReduceDim | | True |
+ * | Template | is_fp32_dest_acc_en | fp32 dest-accumulate mode              | bool       | | False |
+ * | Function | data        | Input operand A (reduced); drives geometry    | LLKOperand | | True |
+ * | Function | scaler      | Scaler operand B                              | LLKOperand | | True |
+ * | Function | out         | Output operand (drives the packer edge mask)  | LLKOperand | | True |
+ */
+// clang-format on
+template <
+    PoolType reduce_type,
+    ReduceDim reduce_dim,
+    bool is_fp32_dest_acc_en = DST_ACCUM_MODE,
+    DataFormat DF,
+    TensorShape DS,
+    DataFormat SF,
+    TensorShape SS,
+    DataFormat OF,
+    TensorShape OS>
+ALWI void reduce_init(LLKOperand<DF, DS> /*data*/, LLKOperand<SF, SS> /*scaler*/, LLKOperand<OF, OS> /*out*/) {
+    SAN_HOOK(unsupported());
+    static_assert(is_legal_tile_shape(DS), "reduce_init: illegal data tile shape.");
+    static_assert(is_legal_tile_shape(SS), "reduce_init: illegal scaler tile shape.");
+    static_assert(is_legal_tile_shape(OS), "reduce_init: illegal output tile shape.");
+    static_assert(
+        !(reduce_dim == ReduceDim::REDUCE_ROW && reduce_type != PoolType::MAX) || same_tile_shape(DS, SS),
+        "reduce_init: REDUCE_ROW (non-MAX) unpacks the scaler with the data's face geometry, so they need the same "
+        "tile shape.");
+    UNPACK((llk_unpack_AB_reduce_init_impl<reduce_type, reduce_dim>(DS, SS)));
+    MATH((llk_math_reduce_init_impl<reduce_type, reduce_dim, is_fp32_dest_acc_en, MATH_FIDELITY>(DS)));
+    PACK((llk_pack_reduce_mask_config_impl<reduce_dim, PackMode::Default>(OS)));
+}
+
+// clang-format off
+/**
+ * reduce_init(data, scaler, out) for a scaler shaped like the data.
  *
  * | Template | reduce_type | SUM / AVG / MAX                                | PoolType  | | True |
  * | Template | reduce_dim  | REDUCE_ROW / REDUCE_COL / REDUCE_SCALAR       | ReduceDim | | True |
@@ -50,12 +88,8 @@ template <
     TensorShape DS,
     DataFormat OF,
     TensorShape OS>
-ALWI void reduce_init(LLKOperand<DF, DS> /*data*/, LLKOperand<OF, OS> /*out*/) {
-    static_assert(is_legal_tile_shape(DS), "reduce_init: illegal data tile shape.");
-    static_assert(is_legal_tile_shape(OS), "reduce_init: illegal output tile shape.");
-    UNPACK((llk_unpack_AB_reduce_init_impl<reduce_type, reduce_dim>(DS)));
-    MATH((llk_math_reduce_init_impl<reduce_type, reduce_dim, is_fp32_dest_acc_en, MATH_FIDELITY>(DS)));
-    PACK((llk_pack_reduce_mask_config_impl<reduce_dim, PackMode::Default>(OS.face_r_dim)));
+ALWI void reduce_init(LLKOperand<DF, DS> data, LLKOperand<OF, OS> out) {
+    reduce_init<reduce_type, reduce_dim, is_fp32_dest_acc_en>(data, data, out);
 }
 
 // clang-format off
@@ -84,6 +118,7 @@ ALWI void reduce_tile(
     std::uint32_t itile,
     std::uint32_t itile_scaler,
     std::uint32_t idst) {
+    SAN_HOOK(unsupported());
     static_assert(is_legal_tile_shape(DS), "reduce_tile: illegal data tile shape.");
     static_assert(is_legal_tile_shape(SS), "reduce_tile: illegal scaler tile shape.");
     // REDUCE_ROW for any pool other than MAX physically swaps the SrcA/SrcB byte streams in the LLK, but the
@@ -129,6 +164,7 @@ ALWI void reduce_block(
     std::uint32_t itile_scaler,
     std::uint32_t start_idst,
     std::uint32_t ntiles) {
+    SAN_HOOK(unsupported());
     static_assert(is_legal_tile_shape(DS), "reduce_block: illegal data tile shape.");
     static_assert(is_legal_tile_shape(SS), "reduce_block: illegal scaler tile shape.");
     for (std::uint32_t i = 0; i < ntiles; ++i) {
@@ -153,6 +189,7 @@ ALWI void reduce_block(
 // clang-format on
 template <PoolType reduce_type, ReduceDim reduce_dim, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void reduce_tile_math(std::uint32_t idst, std::uint32_t num_faces = MAX_NUM_FACES) {
+    SAN_HOOK(unsupported());
     MATH((llk_math_reduce<reduce_type, reduce_dim, is_fp32_dest_acc_en, MATH_FIDELITY>(
         idst, tensor_shape_from_num_faces(MAX_FACE_R_DIM, num_faces))));
 }
@@ -171,6 +208,7 @@ ALWI void reduce_tile_math(std::uint32_t idst, std::uint32_t num_faces = MAX_NUM
 // clang-format on
 template <PoolType reduce_type, ReduceDim reduce_dim, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void reduce_tile_math(std::uint32_t idst, const ckernel::TensorShape& tensor_shape) {
+    SAN_HOOK(unsupported());
     MATH((llk_math_reduce<reduce_type, reduce_dim, is_fp32_dest_acc_en, MATH_FIDELITY>(idst, tensor_shape)));
 }
 
@@ -180,6 +218,7 @@ ALWI void reduce_tile_math(std::uint32_t idst, const ckernel::TensorShape& tenso
  */
 // clang-format on
 ALWI void reduce_uninit() {
+    SAN_HOOK(unsupported());
     MATH((llk_math_reduce_uninit()));
     PACK((llk_pack_reduce_mask_clear()));
 }

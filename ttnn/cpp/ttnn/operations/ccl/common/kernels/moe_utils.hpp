@@ -71,167 +71,6 @@ struct PolarState {
 PolarState polar_state;
 }
 
-struct MuxSyncCoreArgs {
-    static constexpr uint16_t is_sync_core_arg_offset = 1;
-    static constexpr uint16_t termination_sync_address_arg_offset = 10;
-    static constexpr uint16_t termination_master_noc_x_arg_offset = 15;
-    static constexpr uint16_t termination_master_noc_y_arg_offset = 16;
-
-public:
-    const bool is_sync_core;
-    uint32_t termination_sync_address;
-    const uint32_t termination_master_noc_x;
-    const uint32_t termination_master_noc_y;
-
-    MuxSyncCoreArgs(const uint32_t arg_idx) :
-        is_sync_core(get_arg_val<uint32_t>(arg_idx + is_sync_core_arg_offset)),
-        termination_sync_address(get_semaphore(get_arg_val<uint32_t>(arg_idx + termination_sync_address_arg_offset))),
-        termination_master_noc_x(get_arg_val<uint32_t>(arg_idx + termination_master_noc_x_arg_offset)),
-        termination_master_noc_y(get_arg_val<uint32_t>(arg_idx + termination_master_noc_y_arg_offset)) {};
-};
-
-// 17 RT args per active mux sender from ttnn::ccl::fabric_mux_connection_rt_args
-template <uint32_t RtArgIncrement, uint32_t MxXRtOffset, uint32_t MxYRtOffset>
-struct MuxBaseArgsImpl {
-private:
-    static constexpr uint16_t fabric_mux_x_arg_offset = MxXRtOffset;
-    static constexpr uint16_t fabric_mux_y_arg_offset = MxYRtOffset;
-
-protected:
-    static constexpr uint32_t all_rt_arg_count = RtArgIncrement;
-
-public:
-    const uint8_t fabric_mux_x;
-    const uint8_t fabric_mux_y;
-
-    MuxBaseArgsImpl(const uint32_t arg_idx) :
-        fabric_mux_x(get_arg_val<uint32_t>(arg_idx + fabric_mux_x_arg_offset)),
-        fabric_mux_y(get_arg_val<uint32_t>(arg_idx + fabric_mux_y_arg_offset)) {};
-
-    static void increment(uint32_t& arg_idx) { arg_idx += all_rt_arg_count; };
-};
-// 17 RT args per active mux sender from ttnn::ccl::fabric_mux_connection_rt_args
-using MuxConnectionBaseArgs = MuxBaseArgsImpl<17, 2, 3>;
-
-template <size_t MuxStatusAddress>
-struct MuxConnectionStatusArgs : MuxConnectionBaseArgs {
-private:
-    // rt arg offsets from ttnn::ccl::fabric_mux_connection_rt_args
-    static constexpr uint16_t local_fabric_mux_status_address_arg_offset = 11;
-
-public:
-    static constexpr size_t fabric_mux_status_address = MuxStatusAddress;
-    uint32_t local_fabric_mux_status_address;
-
-    MuxConnectionStatusArgs(const uint32_t arg_idx) :
-        MuxConnectionBaseArgs(arg_idx),
-        local_fabric_mux_status_address(
-            get_semaphore(get_arg_val<uint32_t>(arg_idx + local_fabric_mux_status_address_arg_offset))) {};
-};
-
-template <uint8_t MuxNumBuffersPerChannel, size_t MuxChannelBufferSize, size_t MuxStatusAddress>
-struct MuxConnectionArgs : MuxConnectionStatusArgs<MuxStatusAddress> {
-private:
-    // rt arg offsets from ttnn::ccl::fabric_mux_connection_rt_args
-    static constexpr uint32_t fabric_mux_channel_id_arg_offset = 9;
-    static constexpr uint32_t fabric_mux_channel_base_address_arg_offset = 4;
-    static constexpr uint32_t fabric_mux_connection_info_address_arg_offset = 5;
-    static constexpr uint32_t fabric_mux_connection_handshake_address_arg_offset = 6;
-    static constexpr uint32_t fabric_mux_flow_control_address_arg_offset = 7;
-    static constexpr uint32_t fabric_mux_buffer_index_address_arg_offset = 8;
-    static constexpr uint32_t local_flow_control_address_arg_offset = 12;
-    static constexpr uint32_t local_teardown_address_arg_offset = 13;
-    static constexpr uint32_t local_buffer_index_address_arg_offset = 14;
-
-public:
-    const uint8_t fabric_mux_channel_id;
-    static constexpr uint8_t fabric_mux_num_buffers_per_channel = MuxNumBuffersPerChannel;
-    static constexpr size_t fabric_mux_channel_buffer_size_bytes = MuxChannelBufferSize;
-    const size_t fabric_mux_channel_base_address;
-    const size_t fabric_mux_connection_info_address;
-    const size_t fabric_mux_connection_handshake_address;
-    const size_t fabric_mux_flow_control_address;
-    const size_t fabric_mux_buffer_index_address;
-    uint32_t local_flow_control_address;
-    uint32_t local_teardown_address;
-    uint32_t local_buffer_index_address;
-
-    MuxConnectionArgs(const uint32_t arg_idx) :
-        MuxConnectionStatusArgs<MuxStatusAddress>(arg_idx),
-        fabric_mux_channel_id(get_arg_val<uint32_t>(arg_idx + fabric_mux_channel_id_arg_offset)),
-        fabric_mux_channel_base_address(get_arg_val<uint32_t>(arg_idx + fabric_mux_channel_base_address_arg_offset)),
-        fabric_mux_connection_info_address(
-            get_arg_val<uint32_t>(arg_idx + fabric_mux_connection_info_address_arg_offset)),
-        fabric_mux_connection_handshake_address(
-            get_arg_val<uint32_t>(arg_idx + fabric_mux_connection_handshake_address_arg_offset)),
-        fabric_mux_flow_control_address(get_arg_val<uint32_t>(arg_idx + fabric_mux_flow_control_address_arg_offset)),
-        fabric_mux_buffer_index_address(get_arg_val<uint32_t>(arg_idx + fabric_mux_buffer_index_address_arg_offset)),
-        local_flow_control_address(
-            get_semaphore(get_arg_val<uint32_t>(arg_idx + local_flow_control_address_arg_offset))),
-        local_teardown_address(get_semaphore(get_arg_val<uint32_t>(arg_idx + local_teardown_address_arg_offset))),
-        local_buffer_index_address(
-            get_semaphore(get_arg_val<uint32_t>(arg_idx + local_buffer_index_address_arg_offset))) {};
-};
-
-// 2 RT args per mux worker from ttnn::operations::ccl::moe::detail::add_termination_master_rt_args
-using MuxDisconnectionBaseArgs = MuxBaseArgsImpl<2, 0, 1>;
-
-template <size_t TerminationSignalAddress>
-struct MuxTerminationArgs : MuxDisconnectionBaseArgs {
-    static constexpr size_t fabric_mux_termination_signal_address = TerminationSignalAddress;
-
-    MuxTerminationArgs(const uint32_t arg_idx) : MuxDisconnectionBaseArgs(arg_idx) {};
-};
-
-template <size_t Size, uint8_t MuxNumBuffersPerChannel, size_t MuxChannelBufferSize, size_t MuxStatusAddress>
-inline void open_direction_connections_async(
-    const std::array<bool, Size>& directions,
-    std::array<WorkerToFabricMuxSender<MuxNumBuffersPerChannel>, Size>& connections,
-    uint32_t rt_args_idx) {
-    for (uint32_t i = 0; i < Size; ++i) {
-        if (directions[i]) {
-            MuxConnectionArgs<MuxNumBuffersPerChannel, MuxChannelBufferSize, MuxStatusAddress> args(rt_args_idx);
-
-            connections[i] = tt::tt_fabric::build_connection_to_fabric_endpoint<MuxNumBuffersPerChannel>(
-                args.fabric_mux_x,
-                args.fabric_mux_y,
-                args.fabric_mux_channel_id,
-                args.fabric_mux_num_buffers_per_channel,
-                args.fabric_mux_channel_buffer_size_bytes,
-                args.fabric_mux_channel_base_address,
-                args.fabric_mux_connection_info_address,
-                args.fabric_mux_connection_handshake_address,
-                args.fabric_mux_flow_control_address,
-                args.fabric_mux_buffer_index_address,
-                args.local_flow_control_address,
-                args.local_teardown_address,
-                args.local_buffer_index_address);
-
-            args.increment(rt_args_idx);
-        }
-    }
-}
-
-template <size_t Size, uint8_t MuxNumBuffersPerChannel, size_t MuxStatusAddress>
-inline void open_direction_connections_barrier(
-    const std::array<bool, Size>& directions,
-    std::array<WorkerToFabricMuxSender<MuxNumBuffersPerChannel>, Size>& connections,
-    uint32_t rt_args_idx) {
-    for (uint32_t i = 0; i < Size; ++i) {
-        if (directions[i]) {
-            MuxConnectionStatusArgs<MuxStatusAddress> args(rt_args_idx);
-
-            tt::tt_fabric::wait_for_fabric_endpoint_ready(
-                args.fabric_mux_x,
-                args.fabric_mux_y,
-                args.fabric_mux_status_address,
-                args.local_fabric_mux_status_address);
-            tt::tt_fabric::fabric_client_connect(connections[i]);
-            args.increment(rt_args_idx);
-        }
-    }
-}
-
 template <size_t Size>
 inline void open_direction_connections(
     const std::array<bool, Size>& directions,
@@ -276,39 +115,6 @@ inline void close_direction_connections(
     for (size_t i = 0; i < Size; ++i) {
         if (directions[i]) {
             connections[i].close();
-        }
-    }
-}
-
-template <
-    size_t Size,
-    uint8_t MuxNumBuffersPerChannel,
-    size_t TerminationSignalAddress,
-    size_t NumMuxWorkersPerLink = 0>
-inline void close_direction_connections(
-    const std::array<bool, Size>& directions,
-    std::array<WorkerToFabricMuxSender<MuxNumBuffersPerChannel>, Size>& connections,
-    bool is_sync_core,
-    uint32_t arg_idx = 0) {
-    for (uint32_t i = 0; i < Size; ++i) {
-        if (directions[i]) {
-            tt::tt_fabric::fabric_client_disconnect(connections[i]);
-        }
-    }
-
-    if (is_sync_core) {
-        // fast forward past the normal mux rt args to the list of coordinates needed by termination master
-        for (uint32_t i = 0; i < Size; ++i) {
-            if (directions[i]) {
-                MuxConnectionBaseArgs::increment(arg_idx);
-            }
-        }
-        for (uint32_t i = 0; i < NumMuxWorkersPerLink; ++i) {
-            MuxTerminationArgs<TerminationSignalAddress> args(arg_idx);
-            tt::tt_fabric::fabric_endpoint_terminate(
-                args.fabric_mux_x, args.fabric_mux_y, args.fabric_mux_termination_signal_address);
-
-            args.increment(arg_idx);
         }
     }
 }
@@ -444,8 +250,17 @@ inline void fabric_send_noc_unicast(
 
         tt::tt_fabric::linear::to_noc_unicast_write(
             align(curr_packet_size, alignment), packet_header, noc_page, addrgen, offset);
-        perform_payload_send<true, true, SenderType>(
-            fabric_connection, payload_l1_address, curr_packet_size, packet_header);
+        if constexpr (tt::tt_fabric::common::experimental::is_fabric_mux_v2_sender_v<SenderType>) {
+            // FabricMuxV2Sender has no *_blocking send variants: emulate FLUSH_BLOCKING (send, then wait for the
+            // NoC writes to be sent) so the caller may reuse `packet_header` and the payload L1 right away, exactly
+            // as the EDM sender path below does.
+            perform_payload_send<false, true, SenderType>(
+                fabric_connection, payload_l1_address, curr_packet_size, packet_header);
+            noc_async_writes_flushed();
+        } else {
+            perform_payload_send<true, true, SenderType>(
+                fabric_connection, payload_l1_address, curr_packet_size, packet_header);
+        }
 
         payload_l1_address += curr_packet_size;
         offset += curr_packet_size;

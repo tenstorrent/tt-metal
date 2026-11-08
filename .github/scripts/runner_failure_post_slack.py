@@ -44,6 +44,7 @@ class ScanHealth:
     failures: int
     failure_rate: float
     failure_statuses: Counter[str]
+    unavailable: int
 
 
 def parse_args() -> argparse.Namespace:
@@ -126,7 +127,13 @@ def scan_health_from_report(report: dict[str, Any]) -> ScanHealth:
     counts = report.get("counts") if isinstance(report.get("counts"), dict) else {}
     results = report.get("scan_results") if isinstance(report.get("scan_results"), list) else []
 
-    attempts = nonnegative_int(counts.get("log_download_attempts"), nonnegative_int(counts.get("jobs_to_scan")))
+    result_unavailable = sum(
+        1 for result in results if isinstance(result, dict) and result.get("log_unavailable") is True
+    )
+    unavailable = nonnegative_int(counts.get("log_download_unavailable"), result_unavailable)
+    attempts = nonnegative_int(
+        counts.get("log_download_attempts"), max(nonnegative_int(counts.get("jobs_to_scan")) - unavailable, 0)
+    )
     result_successes = sum(1 for result in results if isinstance(result, dict) and result.get("log_checked") is True)
     successes = nonnegative_int(counts.get("log_download_successes"), result_successes)
     failures = nonnegative_int(counts.get("log_download_failures"), max(attempts - successes, 0))
@@ -134,7 +141,7 @@ def scan_health_from_report(report: dict[str, Any]) -> ScanHealth:
 
     failure_statuses: Counter[str] = Counter()
     for result in results:
-        if not isinstance(result, dict) or result.get("log_checked") is True:
+        if not isinstance(result, dict) or result.get("log_checked") is True or result.get("log_unavailable") is True:
             continue
         status = " ".join(str(result.get("log_status") or "unknown error").split())
         failure_statuses[status] += 1
@@ -149,6 +156,7 @@ def scan_health_from_report(report: dict[str, Any]) -> ScanHealth:
         failures=failures,
         failure_rate=failure_rate,
         failure_statuses=failure_statuses,
+        unavailable=unavailable,
     )
 
 
@@ -171,6 +179,8 @@ def format_scan_health_alert(health: ScanHealth, threshold: float, workflow_run_
     )
     if workflow_run_url:
         text += f" {slack_link(workflow_run_url, 'View workflow run')}."
+    if health.unavailable:
+        text += f" {health.unavailable} additional job logs are unavailable and excluded from download health."
 
     if health.failure_statuses:
         status_summary = "; ".join(
@@ -659,6 +669,7 @@ def main() -> int:
             print(
                 f"Log download health: {health.successes}/{health.attempts} succeeded; "
                 f"{health.failures} failed ({health.failure_rate:.1%})."
+                f" {health.unavailable} unavailable (excluded)."
             )
             if not should_post_health_alert(health, args.failure_rate_threshold):
                 return 0

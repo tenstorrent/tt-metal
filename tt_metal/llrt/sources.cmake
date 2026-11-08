@@ -1,5 +1,6 @@
 set(LLRT_SRC
     llrt.cpp
+    binary_metadata.cpp
     core_descriptor.cpp
     dispatch_engine_cores.cpp
     firmware_capability.cpp
@@ -7,7 +8,7 @@ set(LLRT_SRC
     tt_cluster.cpp
     tt_elffile.cpp
     tt_memory.cpp
-    zone_meta.cpp
+    observability_event_meta.cpp
     hal.cpp
     tunnels_from_mmio_device.cpp
     metal_soc_descriptor.cpp

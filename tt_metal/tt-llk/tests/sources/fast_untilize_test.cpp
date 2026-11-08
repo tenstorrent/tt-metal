@@ -36,7 +36,6 @@ constexpr auto FAST_UNTILIZE_INTERNAL_DEST_SYNC = ckernel::FAST_UNTILIZE_INTERNA
 static constexpr bool DST_ACCUM_MODE = is_fp32_dest_acc_en;
 #endif
 
-static_assert(PERF_RUN_TYPE != PerfRunType::L1_CONGESTION, "L1 congestion mode is not supported for fast_untilize");
 static_assert(BLOCK_CT_DIM == FULL_CT_DIM, "fast_untilize_test expects one full tile row per kernel instance");
 static_assert(FULL_CT_DIM >= 2, "fast_untilize_test supports ct>=2; ct=1 uses the standard fallback path");
 
@@ -64,16 +63,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
         START_PERF_MEASURE("TILE_LOOP")
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
-            return;
+            // Keep the measured body empty, but continue to UNINIT below.
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
         {
-            _perf_unpack_loop_set_valid<true, is_fp32_dest_acc_en>(LOOP_FACTOR * FULL_RT_DIM * FULL_CT_DIM * 4);
-            PROFILER_SYNC();
-            return;
+            _perf_unpack_stream_set_valid<true, is_fp32_dest_acc_en, PERF_RUN_TYPE>(LOOP_FACTOR * FULL_RT_DIM * FULL_CT_DIM * 4);
         }
-
-        if constexpr (FAST_UNTILIZE_SINGLE_UNIT)
+        else if constexpr (FAST_UNTILIZE_SINGLE_UNIT)
         {
             constexpr std::uint32_t unit_dim = FULL_CT_DIM;
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
@@ -158,16 +154,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
         START_PERF_MEASURE("TILE_LOOP")
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
-            return;
+            // Keep the measured body empty, but continue to UNINIT below.
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE)
         {
-            _perf_math_loop_clear_valid<true, is_fp32_dest_acc_en>(LOOP_FACTOR * FULL_RT_DIM * FULL_CT_DIM * 4);
+            _perf_math_stream_clear_valid<true, is_fp32_dest_acc_en, PERF_RUN_TYPE>(LOOP_FACTOR * FULL_RT_DIM * FULL_CT_DIM * 4);
             PROFILER_SYNC();
-            return;
         }
-
-        if constexpr (FAST_UNTILIZE_SINGLE_UNIT)
+        else if constexpr (FAST_UNTILIZE_SINGLE_UNIT)
         {
             constexpr std::uint32_t unit_dim = FULL_CT_DIM;
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
@@ -185,6 +179,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     }
                 }
             }
+            PROFILER_SYNC();
         }
         else
         {
@@ -208,8 +203,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     }
                 }
             }
+            PROFILER_SYNC();
         }
-        PROFILER_SYNC();
     }
 
     {
@@ -266,10 +261,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
         START_PERF_MEASURE("TILE_LOOP")
         if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
         {
-            return;
+            // Keep the measured body empty, but continue to UNINIT below.
         }
-
-        if constexpr (FAST_UNTILIZE_SINGLE_UNIT)
+        else if constexpr (FAST_UNTILIZE_SINGLE_UNIT)
         {
             constexpr std::uint32_t unit_dim = FULL_CT_DIM;
             std::uint32_t prev_pack_unit_dim = 0;
@@ -291,6 +285,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     }
                 }
             }
+            PROFILER_SYNC();
         }
         else
         {
@@ -325,19 +320,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     }
                 }
             }
-        }
-        PROFILER_SYNC();
-        if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
-        {
-            if (NUM_GUARD == 0)
-            {
-                return;
-            }
+            PROFILER_SYNC();
         }
     }
     {
         ZONE_SCOPED("UNINIT")
-        ckernel::_llk_pack_fast_untilize_uninit_<ckernel::FAST_UNTILIZE_MAX_UNIT_DIM, FULL_CT_DIM>(formats.pack_src);
+        ckernel::_llk_pack_fast_untilize_uninit_(formats.pack_src);
     }
 
     if (NUM_GUARD > 1)

@@ -98,9 +98,8 @@ struct address_map {
 
     static constexpr std::int32_t AERISC_ROUTING_TABLE_BASE = MEM_AERISC_ROUTING_TABLE_BASE;
     static constexpr std::uint32_t FABRIC_COMPRESSED_ROUTING_PATH_SIZE_1D = COMPRESSED_ROUTING_PATH_SIZE_1D;
-    static constexpr std::uint32_t FABRIC_COMPRESSED_ROUTING_PATH_SIZE_2D = COMPRESSED_ROUTING_PATH_SIZE_2D;
     static constexpr std::uint32_t FABRIC_ROUTING_PATH_SIZE_1D = ROUTING_PATH_SIZE_1D;
-    static constexpr std::uint32_t FABRIC_ROUTING_PATH_SIZE_2D = FABRIC_COMPRESSED_ROUTING_PATH_SIZE_2D;
+    static constexpr std::uint32_t FABRIC_ROUTE_TABLE_SIZE_2D = ROUTE_TABLE_SIZE_2D;
     // Union size: 1D and 2D share the same memory
     static constexpr std::int32_t FABRIC_ROUTING_PATH_SIZE = MEM_ERISC_FABRIC_ROUTING_PATH_SIZE;
 

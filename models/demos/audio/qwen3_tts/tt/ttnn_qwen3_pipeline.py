@@ -29,6 +29,7 @@ clone the codec and speaker encoders. On host: tokenising, embedding gathers, th
 `text_projection`, the mel front-end, sampling and the quantizer's lookup.
 """
 
+import os
 import time
 
 import torch
@@ -41,6 +42,7 @@ from models.demos.audio.qwen3_tts import weights as checkpoint
 from models.demos.audio.qwen3_tts.frontend import AUTO_LANGUAGE
 from models.demos.audio.qwen3_tts.tt.ttnn_qwen3_code_predictor_decode import (
     TtCodePredictorCachedDecoder,
+    predictor_mlp_dtype,
     preprocess_cached_predictor_parameters,
 )
 from models.demos.audio.qwen3_tts.tt.ttnn_qwen3_codec import TtCodecDecoder, preprocess_codec_parameters
@@ -561,7 +563,7 @@ class Qwen3TTSPipeline:
     then captures the two step traces, since the two cannot coexist.
     """
 
-    def __init__(self, device, max_frames=DEFAULT_MAX_FRAMES, seed=None, profile=False):
+    def __init__(self, device, max_frames=DEFAULT_MAX_FRAMES, seed=None, profile=False, predictor_precision=None):
         self.device = device
         self.max_frames = max_frames
         # Charges each block of the frame loop separately, and syncs the device between them
@@ -578,7 +580,12 @@ class Qwen3TTSPipeline:
         self.prompt_room = self.talker_config.get("max_position_embeddings", 2048)
         room = min(self.prompt_room, 512) + max_frames + 8
         self.talker = TtTalkerCachedDecoder(device, preprocess_cached_talker_parameters(device), max_seq=room)
-        self.predictor = TtCodePredictorCachedDecoder(device, preprocess_cached_predictor_parameters(device))
+        precision = predictor_precision or os.environ.get("QWEN3_TTS_PREDICTOR_PRECISION", "main")
+        self.predictor = TtCodePredictorCachedDecoder(
+            device,
+            preprocess_cached_predictor_parameters(device, mlp_dtype=predictor_mlp_dtype(precision)),
+            precision=precision,
+        )
         self.codec = TtCodecDecoder(device, preprocess_codec_parameters(device))
         self.codec_head = ttnn.from_torch(
             self.tables.codec_head.t().contiguous(),
@@ -629,6 +636,8 @@ class Qwen3TTSPipeline:
         if not self.generation.get("do_sample", True):
             masked = row.clone()
             masked[suppress] = -float("inf")
+            # A logits processor, applied whether or not the checkpoint samples.
+            masked = sampling.apply_repetition_penalty(masked, seen, penalty)
             return int(masked.argmax())
         return sampling.sample(
             row,
@@ -847,6 +856,8 @@ class Qwen3TTSPipeline:
         causal and reads them as context. `x_vector_only=True` clones from the voice alone, with
         no transcript and nothing to cut.
         """
+        if not x_vector_only and str(instruct or "").strip():
+            raise ValueError("in-context cloning does not accept an instruction; use x_vector_only=True")
         limit = min(max_frames or self.max_frames, self.max_frames)
         if x_vector_only and streaming:
             embeddings, feed = build_streaming_x_vector_prefill(text, reference, language, self.tables, instruct)

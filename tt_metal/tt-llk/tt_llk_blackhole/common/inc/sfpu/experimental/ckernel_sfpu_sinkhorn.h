@@ -70,6 +70,7 @@
 #include "ckernel_instr_params.h"
 #include "ckernel_ops.h"
 #include "sfpi.h"
+#include "sfpu/ckernel_sfpu_load_config.h"
 
 namespace ckernel
 {
@@ -108,7 +109,8 @@ inline void _sinkhorn_zero_rect_padding_addrs_()
         }
         if constexpr (valid_rows < 4)
         {
-            v_if (sfpi::vConstTileId >= 16 * valid_rows)
+            // vConstTileId is a signed vInt; sfpi only compares it against a signed scalar.
+            v_if (sfpi::vConstTileId >= static_cast<std::int32_t>(16 * valid_rows))
             {
                 value = 0.0f;
             }
@@ -353,10 +355,10 @@ inline void _sinkhorn_strip_pair_multi_(std::uint32_t iters)
     // SFPSTORE → bf16 dst defaults to TRUNCATION (round-toward-zero).
     // Apply RNE here so the one-and-only bf16 conversion per strip-pair
     // is unbiased.
-    TTI_SFP_STOCH_RND(0, 0, 0, p_sfpu::LREG0, p_sfpu::LREG0, sfpi::SFPSTOCHRND_MOD1_FP32_TO_FP16B);
-    TTI_SFP_STOCH_RND(0, 0, 0, p_sfpu::LREG1, p_sfpu::LREG1, sfpi::SFPSTOCHRND_MOD1_FP32_TO_FP16B);
-    TTI_SFP_STOCH_RND(0, 0, 0, p_sfpu::LREG2, p_sfpu::LREG2, sfpi::SFPSTOCHRND_MOD1_FP32_TO_FP16B);
-    TTI_SFP_STOCH_RND(0, 0, 0, p_sfpu::LREG3, p_sfpu::LREG3, sfpi::SFPSTOCHRND_MOD1_FP32_TO_FP16B);
+    TTI_SFP_STOCH_RND(0, 0, p_sfpu::LCONST_0, p_sfpu::LREG0, p_sfpu::LREG0, sfpi::SFPSTOCHRND_MOD1_FP32_TO_FP16B);
+    TTI_SFP_STOCH_RND(0, 0, p_sfpu::LCONST_0, p_sfpu::LREG1, p_sfpu::LREG1, sfpi::SFPSTOCHRND_MOD1_FP32_TO_FP16B);
+    TTI_SFP_STOCH_RND(0, 0, p_sfpu::LCONST_0, p_sfpu::LREG2, p_sfpu::LREG2, sfpi::SFPSTOCHRND_MOD1_FP32_TO_FP16B);
+    TTI_SFP_STOCH_RND(0, 0, p_sfpu::LCONST_0, p_sfpu::LREG3, p_sfpu::LREG3, sfpi::SFPSTOCHRND_MOD1_FP32_TO_FP16B);
     TTI_SFPNOP;
 
     // ── Store. ─────────────────────────────────────────────────────────
@@ -427,6 +429,8 @@ inline void _sinkhorn_4x4_()
         // Face 3, strips 2+3.
         _sinkhorn_strip_pair_multi_<56, 58, 60, 62>(ITERS);
     }
+
+    _restore_lconst_neg1_();
 }
 
 } // namespace sfpu

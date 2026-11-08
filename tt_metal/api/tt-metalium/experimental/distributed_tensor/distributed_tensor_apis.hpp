@@ -5,10 +5,12 @@
 #pragma once
 
 #include <optional>
+#include <span>
 #include <utility>
 #include <vector>
 
 #include <tt-metalium/distributed_host_buffer.hpp>
+#include <tt-metalium/host_buffer.hpp>
 #include <tt-metalium/experimental/distributed_tensor/topology/tensor_topology.hpp>
 #include <tt-metalium/tensor/host_tensor.hpp>
 #include <tt-metalium/tensor/mesh_tensor.hpp>
@@ -17,6 +19,8 @@
 
 #include <tt_stl/optional_reference.hpp>
 #include <tt_stl/span.hpp>
+#include <tt-metalium/mesh_coord.hpp>
+#include <tt-metalium/tensor/spec/tensor_spec.hpp>
 
 namespace tt::tt_metal {
 class MemoryConfig;
@@ -174,5 +178,26 @@ std::vector<distributed::MeshCoordinate> enqueue_write_tensor(
     distributed::MeshCommandQueue& cq, const HostTensor& host_tensor, MeshTensor& device_tensor);
 
 }  // namespace non_uniform_data_movement
+
+// ======================================================================================
+//                                  Utility functions
+// ======================================================================================
+
+namespace host_buffer {
+
+// These declarations also remain in tensor_apis.hpp during the deprecation period.
+// TODO(#40348): This function has single device assumptions over inheritely multi-device constructs.
+// NOLINTNEXTLINE(readability-redundant-declaration)
+HostBuffer get_host_buffer(const HostTensor& tensor);
+
+template <typename T>
+// NOLINTNEXTLINE(readability-redundant-declaration)
+ttsl::Span<const T> get_as(const HostTensor& tensor);
+
+template <typename T>
+// NOLINTNEXTLINE(readability-redundant-declaration)
+ttsl::Span<T> get_as(HostTensor& tensor);
+
+}  // namespace host_buffer
 
 }  // namespace tt::tt_metal

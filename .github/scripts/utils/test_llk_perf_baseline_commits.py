@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import re
 import subprocess
 from pathlib import Path
 
@@ -17,9 +18,14 @@ CLASSIFY = SCRIPTS / "llk-perf-inputs-changed.sh"
 COMMITS = SCRIPTS / "llk-perf-baseline-commits.sh"
 
 
-def _classify(*paths):
+def _classify(*paths, cwd=None):
     out = subprocess.run(
-        ["bash", str(CLASSIFY)], input="".join(f"{p}\n" for p in paths), capture_output=True, text=True, check=True
+        ["bash", str(CLASSIFY)],
+        input="".join(f"{p}\n" for p in paths),
+        capture_output=True,
+        text=True,
+        check=True,
+        cwd=cwd,
     )
     return out.stdout.strip()
 
@@ -36,15 +42,69 @@ def _classify(*paths):
         ("tests/pipeline_reorg/llk_perf_merge_gate_tests.yaml", "true"),
         (".github/workflows/llk-perf-impl.yaml", "true"),
         (".github/scripts/llk-perf-inputs-changed.sh", "true"),
+        (".github/workflows/llk-perf-gate-impl.yaml", "true"),
+        ("tt_metal/tt-llk/perf/regression_compare.py", "true"),
+        ("tt_metal/hw/inc/internal/tt-1xx/blackhole/tensix_types.h", "true"),
+        ("tt_metal/hw/inc/internal/tt-1xx/wormhole/wormhole_b0_defines/cfg_defines.h", "true"),
+        ("tt_metal/hw/inc/internal/risc_attribs.h", "true"),
+        ("tt_metal/tt-llk/tests/sources/matmul_test.cpp", "true"),
+        ("tt_metal/tt-llk/tests/python_tests/helpers/test_variant_parameters.py", "true"),
+        ("tt_metal/tt-llk/tests/python_tests/test_pack.py", "true"),
         ("tt_metal/tt-llk/tt_llk_quasar/llk_lib/llk_math_matmul.h", "false"),
         ("tt_metal/tt-llk/tests/python_tests/quasar/test_matmul_quasar.py", "false"),
+        ("tt_metal/tt-llk/tests/python_tests/fuser/quasar/fpu/common.py", "false"),
+        ("tt_metal/tt-llk/tests/python_tests/fuser/tests/quasar/sfpu_unary_float_dest16.yaml", "false"),
+        ("tt_metal/tt-llk/tests/helpers/include/sfpu_operations_quasar.h", "false"),
+        ("tt_metal/tt-llk/tests/helpers/include/quasar_test_common.h", "false"),
+        ("tt_metal/tt-llk/tests/helpers/ld/memory.quasar.ld", "false"),
+        # The same trees for an architecture that does have a perf number.
+        ("tt_metal/tt-llk/tests/python_tests/fuser/wormhole/fpu/common.py", "true"),
+        ("tt_metal/tt-llk/tests/helpers/include/tensix_types.h", "true"),
         ("tt_metal/hw/ckernels/quasar/llk_api/llk_math_api.h", "false"),
         ("ttnn/cpp/ttnn/operations/eltwise/unary/unary.cpp", "false"),
         (".github/workflows/merge-gate.yaml", "false"),
+        (".github/workflows/llk-unit-tests-impl.yaml", "false"),
+        (".github/workflows/build-quasar-perf.yml", "false"),
+        (".github/scripts/llk-get-docker-tag.sh", "false"),
+        ("tests/pipeline_reorg/llk_unit_tests.yaml", "false"),
+        ("tt_metal/hw/inc/api/compute/compute_kernel_api.h", "false"),
+        ("tt_metal/hw/inc/api/numeric/bfloat16.h", "false"),
+        ("tt_metal/hw/inc/internal/profiler/perf_counters.hpp", "false"),
+        ("tt_metal/tt-llk/tools/include/sanitizer/api.h", "false"),
+        ("tt_metal/tt-llk/.github/Dockerfile.ci", "false"),
+        ("tt_metal/hw/inc/internal/tt-2xx/quasar/tensix_types.h", "false"),
+        ("tt_metal/tt-llk/tests/python_tests/test_matmul.py", "false"),
+        ("tt_metal/tt-llk/tests/hardware_free/accuracy/test_ulp_sweep.py", "false"),
+        ("tt_metal/tt-llk/tests/run_hardware_free.sh", "false"),
+        ("tt_metal/tt-llk/tests/python_tests/accuracy/test_sfpu_accuracy.py", "false"),
+        ("tt_metal/tt-llk/tests/run_quasar_regression.sh", "false"),
+        ("tt_metal/tt-llk/tt_llk_blackhole/README.md", "false"),
     ],
 )
 def test_classify_one_path(path, changed):
     assert _classify(path) == changed
+
+
+def test_classify_skips_a_quasar_only_change_whole():
+    """PR #61865 touched only Quasar, and the merge gate measured Wormhole and
+    Blackhole anyway: two of its paths fell through to the tests/ catch-all."""
+    paths = [
+        "tt_metal/hw/ckernels/quasar/metal/llk_api/llk_math_common_api.h",
+        "tt_metal/tt-llk/tt_llk_quasar/llk_lib/llk_math_common.h",
+        "tt_metal/tt-llk/tests/sources/quasar/matmul_quasar_test.cpp",
+        "tt_metal/tt-llk/tests/helpers/include/sfpu_operations_quasar.h",
+        "tt_metal/tt-llk/tests/python_tests/fuser/quasar/fpu/common.py",
+        "tt_metal/tt-llk/tests/python_tests/fuser/quasar/fpu/transpose_dest.py",
+    ]
+    assert _classify(*paths) == "false"
+
+
+def test_classify_does_not_depend_on_the_callers_directory(tmp_path):
+    """Deciding whether a perf test imports a functional one means reading the tree,
+    which must be found from the script, not from wherever it was run."""
+    imported = "tt_metal/tt-llk/tests/python_tests/test_pack.py"
+    assert _classify(imported, cwd=tmp_path) == "true"
+    assert _classify("tt_metal/tt-llk/tests/python_tests/test_matmul.py", cwd=tmp_path) == "false"
 
 
 def test_classify_any_changed_path_counts():
@@ -53,6 +113,17 @@ def test_classify_any_changed_path_counts():
 
 def test_classify_no_paths_is_false():
     assert _classify() == "false"
+
+
+def test_classify_counts_functional_tests_that_perf_tests_import():
+    python_tests = SCRIPTS.parent.parent / "tt_metal/tt-llk/tests/python_tests"
+    imported = {
+        name
+        for perf in python_tests.glob("perf_*.py")
+        for name in re.findall(r"^\s*(?:from|import)\s+(test_\w+)", perf.read_text(), re.M)
+    }
+    for name in imported:
+        assert _classify(f"tt_metal/tt-llk/tests/python_tests/{name}.py") == "true", name
 
 
 def _git(repo, *args):

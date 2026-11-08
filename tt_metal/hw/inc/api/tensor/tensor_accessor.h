@@ -9,6 +9,8 @@
 #include "api/tensor/tensor_binding_token.h"
 #include "internal/tensor/array_wrapper.h"
 #include "internal/tensor/dspec.h"
+#include "api/dataflow/buf_rw_note.h"
+#include "internal/tensor/transfer_noc_addr.h"
 #include "internal/tensor/helpers.h"
 #include "api/tensor/shard_pages_address_iterator.h"
 #include "api/tensor/pages_address_iterator.h"
@@ -125,6 +127,16 @@ public:
     // This will never be run in runtime & NullTensorBindingToken is not constructible.
     explicit TensorAccessor(const tensor_accessor::NullTensorBindingToken&) : TensorAccessor(size_t{0}, uint32_t{0}) {}
 
+    // Exists only to turn a "no matching constructor" error into an actionable one.
+    template <uint32_t CTA_OFFSET, uint32_t ADDR_RTA_OFFSET>
+    explicit TensorAccessor(tensor_accessor::PerNodeTensorBindingToken<CTA_OFFSET, ADDR_RTA_OFFSET>) :
+        TensorAccessor(size_t{0}, uint32_t{0}) {
+        static_assert(
+            !std::is_same_v<DSpec, DSpec>,
+            "A per-node tensor binding cannot build a TensorAccessor: each node knows only its own address. "
+            "Use LocalTensorAccessor instead.");
+    }
+
     constexpr const auto& dspec() const {
         if constexpr (DSpec::is_static) {
             return StaticDspec::instance;
@@ -144,28 +156,80 @@ public:
     FORCE_INLINE
     const uint32_t get_aligned_page_size() const { return aligned_page_size; }
 
-    // NOC APIs
+    // Op-to-op R/W inference: the public address getters hand the kernel a raw address, which it can then use with any
+    // NoC call (noc_async_read/write, a UnicastEndpoint, ...) or none, so the access can't be attributed later. Each
+    // notes the tensor as both read and written (api/dataflow/buf_rw_note.h). The library's own transfer paths use the
+    // un-noted transfer_* members instead (private; reached through internal/tensor/transfer_noc_addr.h), since each
+    // path notes its exact access itself. NOC APIs
     FORCE_INLINE
     std::uint64_t get_noc_addr(const uint32_t page_id, const uint32_t offset = 0, uint8_t noc = noc_index) const {
-        return get_noc_addr(get_bank_and_offset(page_id), offset, noc);
+        tt_buf_rw::note_read_write<DSpec::binding_id>();
+        return transfer_noc_addr(page_id, offset, noc);
     }
 
     template <typename ArrType, std::enable_if_t<tensor_accessor::detail::has_subscript_operator_v<ArrType>, int> = 0>
     FORCE_INLINE std::uint64_t get_noc_addr(
         const ArrType page_coord, const uint32_t offset = 0, uint8_t noc = noc_index) const {
+        tt_buf_rw::note_read_write<DSpec::binding_id>();
         return get_noc_addr(get_bank_and_offset(page_coord), offset, noc);
+    }
+
+    // Contiguity APIs (host twins on BufferDistributionSpec)
+    // Page-id step between the pages of a run; depends only on shapes. 1 unless the shard is one page
+    // wide in the trailing dims, then the product of those tensor dims (tensor {4,6}, shard {4,1}: 6).
+    FORCE_INLINE
+    uint32_t contiguous_page_stride() const { return dspec().tensor_strides()[contiguous_page_dim()]; }
+
+    // Number of pages from page_id (inclusive) contiguous in memory: page ids page_id + k * contiguous_page_stride()
+    // at get_noc_addr(page_id) + k * get_aligned_page_size(). A run stops at a shard edge, even if the next shard
+    // follows in the same bank, and at the tensor edge. Use shard_pages() to cover a whole shard.
+    FORCE_INLINE
+    uint32_t num_contiguous_pages(uint32_t page_id) const {
+        return num_contiguous_pages(page_id, dspec().tensor_volume());
+    }
+
+    // As above, but the run also stops before end_page_id, an exclusive page id (not a count).
+    uint32_t num_contiguous_pages(uint32_t page_id, uint32_t end_page_id) const {
+        ASSERT(page_id < end_page_id);
+        ASSERT(end_page_id <= dspec().tensor_volume());
+
+        const int d = contiguous_page_dim();
+        const uint32_t stride = dspec().tensor_strides()[d];
+
+        // The shard is one page wide after d, so the walk starts at d. Dividing by stride drops the dims after d;
+        // skip it when d is the last dim (stride 1), so runtime shapes don't pay for a divide.
+        uint32_t coords = (d == static_cast<int>(dspec().rank()) - 1) ? page_id : page_id / stride;
+
+        uint32_t run = 1;
+        uint32_t block = 1;  // run entries per step of dim i
+        for (int i = d; i >= 0; --i) {
+            const uint32_t extent = dspec().tensor_shape()[i];
+            const uint32_t shard_extent = dspec().shard_shape()[i];
+            const uint32_t page_coord = coords % extent;
+            coords /= extent;
+
+            const uint32_t to_shard_edge = shard_extent - page_coord % shard_extent;
+            const uint32_t to_tensor_edge = extent - page_coord;
+            run += ((to_shard_edge < to_tensor_edge ? to_shard_edge : to_tensor_edge) - 1) * block;
+
+            // Carry outward only if the shard covers this dim exactly.
+            if (shard_extent != extent) {
+                break;
+            }
+            block *= extent;
+        }
+
+        // end_page_id is in page ids, the run steps by stride.
+        const uint32_t room = (end_page_id - page_id - 1) / stride + 1;
+        return run < room ? run : room;
     }
 
     // Shard NOC APIs
     FORCE_INLINE
     std::uint64_t get_shard_noc_addr(
         const uint32_t shard_id, const uint32_t offset = 0, uint8_t noc = noc_index) const {
-        const auto bank_shard = shard_to_bank(shard_id);
-        PageMapping page_mapping{
-            .bank_id = bank_shard.bank_id,
-            .bank_page_offset = bank_shard.shard_in_bank * dspec().shard_volume(),
-        };
-        return get_noc_addr(page_mapping, offset, noc);
+        tt_buf_rw::note_read_write<DSpec::binding_id>();
+        return transfer_shard_noc_addr(shard_id, offset, noc);
     }
 
     template <typename ArrType, std::enable_if_t<tensor_accessor::detail::has_subscript_operator_v<ArrType>, int> = 0>
@@ -179,11 +243,6 @@ public:
         }
         return get_shard_noc_addr(shard_id, offset, noc);
     }
-
-    // Returns the bank-relative base address (offset) used by this accessor.
-    // (For L1-sharded tensors, this is the local L1 base address of the shard region.)
-    FORCE_INLINE
-    constexpr uint32_t get_bank_base_address() const { return bank_base_address; }
 
     // Helpers
     struct PageMapping {
@@ -241,7 +300,7 @@ public:
     // Locality APIs
     FORCE_INLINE
     bool is_local_bank(uint32_t virtual_x, uint32_t virtual_y, uint8_t noc = noc_index) const {
-        return virtual_x == my_x[noc] && virtual_y == my_y[noc];
+        return noc_address_backend::is_local_coordinate(virtual_x, virtual_y, noc);
     }
 
     FORCE_INLINE
@@ -315,6 +374,22 @@ public:
 private:
     const uint32_t bank_base_address = 0;
     const uint32_t aligned_page_size = 0;
+
+    // get_noc_addr / get_shard_noc_addr without the note, for the library's transfer paths (see get_noc_addr).
+    FORCE_INLINE
+    std::uint64_t transfer_noc_addr(const uint32_t page_id, const uint32_t offset, uint8_t noc) const {
+        return get_noc_addr(get_bank_and_offset(page_id), offset, noc);
+    }
+
+    FORCE_INLINE
+    std::uint64_t transfer_shard_noc_addr(const uint32_t shard_id, const uint32_t offset, uint8_t noc) const {
+        const auto bank_shard = shard_to_bank(shard_id);
+        PageMapping page_mapping{
+            .bank_id = bank_shard.bank_id,
+            .bank_page_offset = bank_shard.shard_in_bank * dspec().shard_volume(),
+        };
+        return get_noc_addr(page_mapping, offset, noc);
+    }
     // NOC APIs
     FORCE_INLINE
     std::uint64_t get_noc_addr(
@@ -380,6 +455,19 @@ private:
         return {bank_shard.bank_id, bank_page_offset};
     }
 
+    // Innermost dim the shard spans more than one page of (the last dim if none); runs walk this dim.
+    FORCE_INLINE
+    int contiguous_page_dim() const {
+        const int rank = static_cast<int>(dspec().rank());
+        ASSERT(rank > 0);
+        for (int i = rank - 1; i >= 0; --i) {
+            if (dspec().shard_shape()[i] > 1) {
+                return i;
+            }
+        }
+        return rank - 1;
+    }
+
     FORCE_INLINE
     uint16_t get_bank_x(uint16_t packed_xy_coord) const { return (packed_xy_coord >> 8) & 0xFF; }
 
@@ -389,8 +477,8 @@ private:
 public:
     friend class tensor_accessor::ShardPagesAddressIterator<TensorAccessor>;
     friend class tensor_accessor::StridedShardPagesIterator<TensorAccessor>;
-    friend class tensor_accessor::PagesAddressIteratorSharded<TensorAccessor>;
     friend class tensor_accessor::PagesAddressIteratorInterleaved<TensorAccessor>;
+    friend struct tensor_accessor::detail::TransferAccess;
 };
 
 #if defined(KERNEL_BUILD) || defined(FW_BUILD)
@@ -400,7 +488,8 @@ template <
     typename TensorShapeWrapper,
     typename ShardShapeWrapper,
     typename BankCoordsWrapper,
-    bool IsDram>
+    bool IsDram,
+    uint32_t BindingId>
 struct TensorAccessor<tensor_accessor::DistributionSpec<
     RankCT,
     NumBanksCT,
@@ -408,7 +497,9 @@ struct TensorAccessor<tensor_accessor::DistributionSpec<
     ShardShapeWrapper,
     BankCoordsWrapper,
     /* IsInterleaved */ true,
-    IsDram>> : public InterleavedAddrGen<IsDram> {
+    IsDram,
+    /* IsShardContiguous */ false,
+    BindingId>> : public InterleavedAddrGen<IsDram> {
     using DSpec = tensor_accessor::DistributionSpec<
         RankCT,
         NumBanksCT,
@@ -416,7 +507,9 @@ struct TensorAccessor<tensor_accessor::DistributionSpec<
         ShardShapeWrapper,
         BankCoordsWrapper,
         /* IsInterleaved */ true,
-        IsDram>;
+        IsDram,
+        /* IsShardContiguous */ false,
+        BindingId>;
 
     template <std::size_t CTA_OFFSET, std::size_t CRTA_OFFSET>
     TensorAccessor(
@@ -451,6 +544,36 @@ struct TensorAccessor<tensor_accessor::DistributionSpec<
     FORCE_INLINE
     const uint32_t get_aligned_page_size() const { return aligned_page_size; }
 
+    // Op-to-op R/W inference: the public address getters hand the kernel a raw address, which it can then use with any
+    // NoC call (noc_async_read/write, a UnicastEndpoint, ...) or none, so the access can't be attributed later. Each
+    // notes the tensor as both read and written (api/dataflow/buf_rw_note.h). The library's own transfer paths use the
+    // un-noted transfer_* members instead (private; reached through internal/tensor/transfer_noc_addr.h), since each
+    // path notes its exact access itself. These hide InterleavedAddrGen's get_noc_addr, which raw kernels also use
+    // directly.
+    FORCE_INLINE
+    std::uint64_t get_noc_addr(const uint32_t id, const uint32_t offset = 0, uint8_t noc = noc_index) const {
+        tt_buf_rw::note_read_write<BindingId>();
+        return transfer_noc_addr(id, offset, noc);
+    }
+
+    // Contiguity APIs
+    // Pages round-robin across banks, so within a bank every num_banks'th page id is contiguous.
+    FORCE_INLINE
+    uint32_t contiguous_page_stride() const { return IsDram ? NUM_DRAM_BANKS : NUM_L1_BANKS; }
+
+    // As for the sharded accessor, but end_page_id is required and is the only run bound.
+    // Bank pages sit InterleavedAddrGen::aligned_page_size apart; if the ctor's page size is not
+    // aligned, they are not get_aligned_page_size() apart, so every run is 1 page.
+    FORCE_INLINE
+    uint32_t num_contiguous_pages(uint32_t page_id, uint32_t end_page_id) const {
+        ASSERT(page_id < end_page_id);
+        if (aligned_page_size != InterleavedAddrGen<IsDram>::aligned_page_size) {
+            return 1;
+        }
+        const uint32_t stride = contiguous_page_stride();
+        return (end_page_id - page_id - 1) / stride + 1;
+    }
+
     // Locality APIs
     FORCE_INLINE
     bool is_local_bank(uint32_t virtual_x, uint32_t virtual_y, uint8_t noc = noc_index) const {
@@ -483,11 +606,6 @@ struct TensorAccessor<tensor_accessor::DistributionSpec<
             "TensorAccessor::is_local_shard is not supported by the interleaved tensor accessor");
         return false;
     }
-
-    // Returns the bank-relative base address (offset) used by this accessor.
-    // (For L1-sharded tensors, this is the local L1 base address of the shard region.)
-    FORCE_INLINE
-    constexpr uint32_t get_bank_base_address() const { return this->bank_base_address; }
 
     // Returns a proxy for shard pages iterator
     tensor_accessor::ShardPages<TensorAccessor> shard_pages(
@@ -527,6 +645,14 @@ struct TensorAccessor<tensor_accessor::DistributionSpec<
 
 private:
     const uint32_t aligned_page_size = 0;
+
+    // get_noc_addr without the note, for the library's transfer paths (see get_noc_addr).
+    FORCE_INLINE
+    std::uint64_t transfer_noc_addr(const uint32_t id, const uint32_t offset, uint8_t noc) const {
+        return InterleavedAddrGen<IsDram>::get_noc_addr(id, offset, noc);
+    }
+
+    friend struct tensor_accessor::detail::TransferAccess;
 };
 #endif
 
@@ -581,9 +707,20 @@ TensorAccessor(tensor_accessor::TensorBindingToken<CTA_OFFSET, ADDR_CRTA_OFFSET>
         /* IsInterleaved */ !TensorAccessorArgs<CTA_OFFSET, ADDR_CRTA_OFFSET / sizeof(uint32_t) + 1>::is_sharded,
         /* IsDram */ TensorAccessorArgs<CTA_OFFSET, ADDR_CRTA_OFFSET / sizeof(uint32_t) + 1>::is_dram,
         /* IsShardContiguous */
-        TensorAccessorArgs<CTA_OFFSET, ADDR_CRTA_OFFSET / sizeof(uint32_t) + 1>::is_shard_contiguous>>;
+        TensorAccessorArgs<CTA_OFFSET, ADDR_CRTA_OFFSET / sizeof(uint32_t) + 1>::is_shard_contiguous,
+        /* BindingId (op-to-op R/W inference): the token's ADDR_CRTA_OFFSET -- the byte offset of this
+           binding's base-address word in the CRTA -- identifies the binding, threaded into the type so it
+           survives to the NoC call site (see api/dataflow/buf_rw_note.h). The host resolves it straight to
+           the bound buffer: the runtime wrote that buffer's address into this very CRTA word at enqueue. */
+        ADDR_CRTA_OFFSET>>;
 
 TensorAccessor(const tensor_accessor::NullTensorBindingToken&) -> TensorAccessor<tensor_accessor::NullDSpec>;
+
+// Lets the static_assert in the matching ctor fire: without a guide, deduction fails first with an
+// opaque "no matching function" error. NullDSpec is arbitrary; the ctor never compiles.
+template <uint32_t CTA_OFFSET, uint32_t ADDR_RTA_OFFSET>
+TensorAccessor(tensor_accessor::PerNodeTensorBindingToken<CTA_OFFSET, ADDR_RTA_OFFSET>)
+    -> TensorAccessor<tensor_accessor::NullDSpec>;
 
 template <std::size_t CTA_OFFSET, std::size_t CRTA_OFFSET>
 TensorAccessor(const TensorAccessorArgs<CTA_OFFSET, CRTA_OFFSET>& args, size_t, uint32_t)
@@ -694,17 +831,40 @@ public:
         accessor_ptr(&accessor),
         get_noc_addr_fn([](const void* accessor, uint32_t page_idx, uint32_t offset, uint8_t noc) {
             return static_cast<const Accessor*>(accessor)->get_noc_addr(page_idx, offset, noc);
-        }) {}
+        }),
+        generated_noc_addr_fn(
+            [](const void* accessor, bool write, bool may_push, uint32_t page_idx, uint32_t offset, uint8_t noc) {
+                using tensor_accessor::detail::generated_noc_addr;
+                using tensor_accessor::detail::TransferDir;
+                const auto& a = *static_cast<const Accessor*>(accessor);
+                if (write) {
+                    return may_push ? generated_noc_addr<TransferDir::Write, true>(a, page_idx, offset, noc)
+                                    : generated_noc_addr<TransferDir::Write>(a, page_idx, offset, noc);
+                }
+                return may_push ? generated_noc_addr<TransferDir::Read, true>(a, page_idx, offset, noc)
+                                : generated_noc_addr<TransferDir::Read>(a, page_idx, offset, noc);
+            }) {
+        // Op-to-op R/W inference: past this point the accessor's type is erased, so a NoC transfer through the wrapper
+        // can't name its tensor, and the wrapper can't tell which the kernel will do.
+        tt_buf_rw::note_read_write<tt_buf_rw::binding_of<Accessor>>();
+    }
 
     uint64_t get_noc_addr(uint32_t page_idx, uint32_t offset = 0, uint8_t noc = noc_index) const {
         return get_noc_addr_fn(accessor_ptr, page_idx, offset, noc);
     }
 
 private:
+    // The NoC traits' generated address for the wrapped accessor (tensor_accessor::detail::generated_noc_addr).
+    template <tensor_accessor::detail::TransferDir Dir, bool MayPush>
+    friend uint64_t tensor_accessor::detail::generated_noc_addr(
+        const AbstractTensorAccessorWrapper& wrapper, uint32_t page_id, uint32_t offset, uint8_t noc);
+
     using GetNocAddrFn = uint64_t (*)(const void*, uint32_t, uint32_t, uint8_t);
+    using GeneratedNocAddrFn = uint64_t (*)(const void*, bool, bool, uint32_t, uint32_t, uint8_t);
 
     const void* accessor_ptr = nullptr;
     GetNocAddrFn get_noc_addr_fn = nullptr;
+    GeneratedNocAddrFn generated_noc_addr_fn = nullptr;
 };
 
 namespace tensor_accessor::detail {
@@ -747,5 +907,14 @@ struct ShardView {
     uint64_t get_noc_addr(uint32_t shard_id, uint32_t offset, uint8_t noc) const {
         return accessor.get_shard_noc_addr(shard_id, offset, noc);
     }
+};
+
+// Addresses the tensor by allocator bank: `{.bank_id, .offset_bytes}` names offset_bytes into the tensor's region of
+// bank bank_id (an L1 bank's worker core, or a DRAM bank; the tensor's memory type picks which). Use it where the
+// kernel already works in banks (e.g. a host-computed bank id per transfer) rather than pages or shards.
+template <typename Accessor>
+struct BankView {
+    const Accessor& accessor;
+    explicit BankView(const Accessor& acc) : accessor(acc) {}
 };
 // NOLINTEND(misc-unused-parameters)

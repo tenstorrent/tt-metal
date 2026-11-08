@@ -117,8 +117,16 @@ def test_cached_and_in_memory_layers_match(device: ttnn.Device, tmp_path: Path) 
         "cache-only": _forward(cache_only_layer, hidden, cache_only_layer.allocate_state()),
     }
 
-    assert_accurate(outputs["in-memory"], outputs["preloaded-cache"], name="preloaded cache", pcc_threshold=0.9999)
-    assert_accurate(outputs["in-memory"], outputs["cache-only"], name="cache-only", pcc_threshold=0.9999)
+    assert_accurate(
+        outputs["in-memory"],
+        outputs["preloaded-cache"],
+        name="preloaded cache",
+        pcc_threshold=0.9999,
+        nrmse_threshold=1e-06,
+    )
+    assert_accurate(
+        outputs["in-memory"], outputs["cache-only"], name="cache-only", pcc_threshold=0.9999, nrmse_threshold=1e-06
+    )
 
 
 @pytest.mark.use_module_device
@@ -168,6 +176,16 @@ def test_kimi_k3_fixed_geometry_configuration(local_rows, expected_group_chunks)
     config = kimi_k3_program_config(active_seq_len_local=local_rows, tp_ccl_topology=ttnn.Topology.Linear)
     assert config.recurrence.summary_group_chunks == expected_group_chunks
     assert config.recurrence.local_scan_strategy == "grouped"
+
+
+def test_kimi_k3_math_fidelity():
+    from models.demos.deepseek_v3_d_p.tt.kda.config import kimi_k3_program_config
+
+    config = kimi_k3_program_config(active_seq_len_local=640, tp_ccl_topology=ttnn.Topology.Linear)
+    assert config.recurrence.scan_math_fidelity == ttnn.MathFidelity.HiFi3
+    assert config.recurrence.affine_prefix_math_fidelity == ttnn.MathFidelity.HiFi3
+    assert config.output_projection_math_fidelity == ttnn.MathFidelity.HiFi3
+    assert config.input_projection_math_fidelity == ttnn.MathFidelity.HiFi2
 
 
 def test_kimi_k3_rejects_untuned_geometry(expect_error):

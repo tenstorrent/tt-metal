@@ -120,10 +120,7 @@ ProgramDescriptor AllReduceCreateQkvHeadsMeshWorkloadFactory::create_descriptor(
     auto* mesh_device = input_tensor.device();
     const auto& mesh_view = mesh_device->get_view();
 
-    auto* const target_device = mesh_device->get_device(mesh_coord);
-    std::vector<IDevice*> devices = (operation_attributes.cluster_axis == 0)
-                                        ? mesh_view.get_devices_on_column(mesh_coord[1])
-                                        : mesh_view.get_devices_on_row(mesh_coord[0]);
+    const uint32_t coord_index = mesh_coord[operation_attributes.cluster_axis];
     const auto fabric_node_ids = (operation_attributes.cluster_axis == 0)
                                      ? mesh_view.get_fabric_node_ids_on_column(mesh_coord[1])
                                      : mesh_view.get_fabric_node_ids_on_row(mesh_coord[0]);
@@ -132,7 +129,7 @@ ProgramDescriptor AllReduceCreateQkvHeadsMeshWorkloadFactory::create_descriptor(
     std::optional<tt::tt_fabric::FabricNodeId> backward_fabric_node_id = std::nullopt;
     uint32_t device_index = 0;
     for (uint32_t i = 0; i < operation_attributes.ring_size; ++i) {
-        if (devices.at(i) == target_device) {
+        if (i == coord_index) {
             device_index = i;
             if (i != 0) {
                 backward_fabric_node_id = fabric_node_ids.at(i - 1);
@@ -210,7 +207,7 @@ ProgramDescriptor AllReduceCreateQkvHeadsMeshWorkloadFactory::create_descriptor(
     tt::DataFormat cb_batch_offset_data_format =
         tt::tt_metal::datatype_to_dataformat_converter(batch_offset_tensor.dtype());
     uint32_t single_batch_offset_tile_size = tt::tile_size(cb_batch_offset_data_format);
-    batch_offset_index_stick_size = batch_offset_tensor.buffer()->aligned_page_size();
+    batch_offset_index_stick_size = batch_offset_tensor.mesh_buffer().aligned_page_size();
 
     desc.cbs.push_back(CBDescriptor{
         .total_size = single_batch_offset_tile_size,
@@ -222,9 +219,9 @@ ProgramDescriptor AllReduceCreateQkvHeadsMeshWorkloadFactory::create_descriptor(
         }}},
     });
 
-    uint32_t q_base_addr = q_output_tensor.buffer()->address();
-    uint32_t k_base_addr = k_output_tensor.buffer()->address();
-    uint32_t v_base_addr = v_output_tensor.buffer()->address();
+    uint32_t q_base_addr = q_output_tensor.mesh_buffer().address();
+    uint32_t k_base_addr = k_output_tensor.mesh_buffer().address();
+    uint32_t v_base_addr = v_output_tensor.mesh_buffer().address();
 
     // cores for q
     const uint32_t q_num_cores = q_cores.num_cores();  // number of cores of the output
@@ -281,11 +278,7 @@ ProgramDescriptor AllReduceCreateQkvHeadsMeshWorkloadFactory::create_descriptor(
     [[maybe_unused]] bool is_first_chip = device_index == 0;
     [[maybe_unused]] bool is_last_chip = device_index == operation_attributes.ring_size - 1;
     log_trace(
-        tt::LogOp,
-        "DEBUG: device: {}, is_first_chip: {}, is_last_chip: {}",
-        target_device->id(),
-        is_first_chip,
-        is_last_chip);
+        tt::LogOp, "DEBUG: device: {}, is_first_chip: {}, is_last_chip: {}", mesh_coord, is_first_chip, is_last_chip);
 
     // Get OP Config, topology config
     std::vector<Tensor> input_tensors_ccl = {input_tensor};
@@ -309,13 +302,13 @@ ProgramDescriptor AllReduceCreateQkvHeadsMeshWorkloadFactory::create_descriptor(
     }
 
     // Tensor Info
-    const auto input_tensor_num_pages = input_tensor.buffer()->num_pages();
+    const auto input_tensor_num_pages = input_tensor.mesh_buffer().num_pages();
     const auto input_tensor_cores = input_tensor.memory_config().shard_spec()->grid;
     const auto input_tensor_shard_shape = input_tensor.memory_config().shard_spec()->shape;
     const auto input_tensor_shard_num_pages =
         input_tensor_shard_shape[0] * input_tensor_shard_shape[1] / tt::constants::TILE_HW;
     const auto num_input_cores = input_tensor_cores.num_cores();
-    const auto output_tensor_num_pages = output_tensor.buffer()->num_pages();
+    const auto output_tensor_num_pages = output_tensor.mesh_buffer().num_pages();
     const auto output_tensor_cores = output_tensor.memory_config().shard_spec()->grid;
     const auto output_tensor_shard_shape = output_tensor.memory_config().shard_spec()->shape;
     const auto output_tensor_shard_num_pages =
@@ -341,7 +334,7 @@ ProgramDescriptor AllReduceCreateQkvHeadsMeshWorkloadFactory::create_descriptor(
     log_debug(tt::LogOp, "output_tensor_shard_num_pages: {}", output_tensor_shard_num_pages);
 
     // L1 Scratch CB Creation
-    const size_t packet_size_bytes = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
+    const size_t packet_size_bytes = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes(*mesh_device);
     uint32_t l1_scratch_cb_page_size_bytes = op_config.get_page_size();
     uint32_t num_pages_per_packet = packet_size_bytes / l1_scratch_cb_page_size_bytes;
     uint32_t cb_num_pages = input_tensor_num_pages;  // TODO: Reduce this to double-buffer packet-size?
@@ -615,7 +608,7 @@ ProgramDescriptor AllReduceCreateQkvHeadsMeshWorkloadFactory::create_descriptor(
         q_base_addr,
         k_base_addr,
         v_base_addr,
-        batch_offset_tensor.buffer()->address(),
+        batch_offset_tensor.mesh_buffer().address(),
         0,
         output_tensor_shard_num_pages};
     reader_writer_runtime_args_template.insert(
@@ -796,14 +789,26 @@ ProgramDescriptor AllReduceCreateQkvHeadsMeshWorkloadFactory::create_descriptor(
         if (forward_fabric_node_id.has_value()) {
             const auto target_device_fabric_node_id = mesh_device->get_fabric_node_id(mesh_coord);
             tt::tt_fabric::append_fabric_connection_rt_args<ProgramDescriptor>(
-                target_device_fabric_node_id, forward_fabric_node_id.value(), link, desc, core, writer_rt_args);
+                *mesh_device,
+                target_device_fabric_node_id,
+                forward_fabric_node_id.value(),
+                link,
+                desc,
+                core,
+                writer_rt_args);
         }
 
         writer_rt_args.push_back(backward_fabric_node_id.has_value());
         if (backward_fabric_node_id.has_value()) {
             const auto target_device_fabric_node_id = mesh_device->get_fabric_node_id(mesh_coord);
             tt::tt_fabric::append_fabric_connection_rt_args<ProgramDescriptor>(
-                target_device_fabric_node_id, backward_fabric_node_id.value(), link, desc, core, writer_rt_args);
+                *mesh_device,
+                target_device_fabric_node_id,
+                backward_fabric_node_id.value(),
+                link,
+                desc,
+                core,
+                writer_rt_args);
         }
 
         // Promote writer RT args to the descriptor.  None of the indices in this

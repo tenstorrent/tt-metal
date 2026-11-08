@@ -62,7 +62,7 @@ SoftmaxDeviceOperation::SoftmaxShardedProgramFactoryAttentionOptimized::create_p
     log_debug(tt::LogOp, "out0_cb_data_format: {}", out0_cb_data_format);
     log_debug(tt::LogOp, "mask_cb_data_format: {}", mask_cb_data_format);
     log_debug(tt::LogOp, "im_cb_data_format: {}", im_cb_data_format);
-    log_debug(tt::LogOp, "fused_attention_scale_cb_data_format: {}", im_cb_data_format);
+    log_debug(tt::LogOp, "fused_attention_scale_cb_data_format: {}", fused_attention_scale_cb_data_format);
     log_debug(tt::LogOp, "max_scaler_cb_data_format: {}", max_scaler_cb_data_format);
     log_debug(tt::LogOp, "sum_scaler_cb_data_format: {}", sum_scaler_cb_data_format);
     log_debug(tt::LogOp, "math_fidelity: {}", math_fidelity);
@@ -77,6 +77,12 @@ SoftmaxDeviceOperation::SoftmaxShardedProgramFactoryAttentionOptimized::create_p
     const std::uint32_t tile_hw = input_tensor.tensor_spec().tile().get_tile_hw();
     std::uint32_t num_cores_per_batch = (shape[1] * shape[2] * shape[3]) / (input_tensor.shard_spec().value().shape[0] *
                                                                             input_tensor.shard_spec().value().shape[1]);
+
+    // A last dimension that is not a multiple of the tile width leaves padding columns in the last tile of every
+    // row. The reader pushes a -inf padding tile that the compute adds to that tile, as the interleaved path does.
+    const std::uint32_t W_unpadded = input_tensor.logical_shape()[-1];
+    const bool mask_padded_data = shape[3] > W_unpadded;
+    const std::uint32_t num_datum_padded = shape[3] - W_unpadded;
 
     std::uint32_t mask_H = shape[2];
     if (has_mask) {
@@ -148,6 +154,27 @@ SoftmaxDeviceOperation::SoftmaxShardedProgramFactoryAttentionOptimized::create_p
     const DFBSpecName OUT0{"out0"};
     const DFBSpecName MAX{"max"};
     const DFBSpecName X{"x"};
+    const DFBSpecName MASK_PADDED{"mask_padded"};
+
+    constexpr std::uint32_t rows_per_pass_budget_bytes = 300 * 1024;
+    const std::uint32_t rows_per_pass = [&]() -> std::uint32_t {
+        if (arch != tt::ARCH::WORMHOLE_B0 || has_mask || !mask_padded_data || !attributes.numeric_stable) {
+            return 1u;
+        }
+        const std::uint64_t shard_tiles = std::uint64_t{program_config.block_w} * program_config.block_h;
+        const std::uint64_t fixed_bytes =
+            (shard_tiles * in0_tile_size) + (attributes.inplace ? 0 : shard_tiles * out0_tile_size) +
+            max_scaler_tile_size + sum_scaler_tile_size + tt::tile_size(tt::DataFormat::Float16_b);
+        const std::uint64_t l1_bytes = device->allocator()->get_bank_size(BufferType::L1);
+        for (std::uint32_t d = program_config.block_h; d >= 2; --d) {
+            const std::uint64_t pass_bytes = std::uint64_t{program_config.block_w + 3} * d * im_tile_size;
+            if (program_config.block_h % d == 0 && pass_bytes <= rows_per_pass_budget_bytes &&
+                fixed_bytes + pass_bytes <= l1_bytes) {
+                return d;
+            }
+        }
+        return 1u;
+    }();
 
     // ---- DataflowBuffers (mirrors legacy CB allocation; borrowed-memory DFBs for the sharded I/O) ----
     Group<DataflowBufferSpec> dfbs;
@@ -197,20 +224,31 @@ SoftmaxDeviceOperation::SoftmaxShardedProgramFactoryAttentionOptimized::create_p
     dfbs.push_back(DataflowBufferSpec{
         .unique_id = EXPS,
         .entry_size = im_tile_size,
-        .num_entries = program_config.block_w,
+        .num_entries = program_config.block_w * rows_per_pass,
         .data_format_metadata = im_cb_data_format});
     dfbs.push_back(DataflowBufferSpec{
         .unique_id = RECIP_SUM_EXPS,
         .entry_size = im_tile_size,
-        .num_entries = 1,
+        .num_entries = rows_per_pass,
         .data_format_metadata = im_cb_data_format});
+    if (mask_padded_data) {
+        // The reader fills the padding tile with bfloat16 -inf whatever the input and mask dtypes.
+        dfbs.push_back(DataflowBufferSpec{
+            .unique_id = MASK_PADDED,
+            .entry_size = tt::tile_size(tt::DataFormat::Float16_b),
+            .num_entries = 1,
+            .data_format_metadata = tt::DataFormat::Float16_b});
+    }
     if (attributes.numeric_stable) {
         dfbs.push_back(DataflowBufferSpec{
-            .unique_id = MAX, .entry_size = im_tile_size, .num_entries = 1, .data_format_metadata = im_cb_data_format});
+            .unique_id = MAX,
+            .entry_size = im_tile_size,
+            .num_entries = rows_per_pass,
+            .data_format_metadata = im_cb_data_format});
         dfbs.push_back(DataflowBufferSpec{
             .unique_id = X,
             .entry_size = im_tile_size,
-            .num_entries = program_config.block_w,
+            .num_entries = rows_per_pass > 1 ? rows_per_pass : program_config.block_w,
             .data_format_metadata = im_cb_data_format});
     }
 
@@ -228,11 +266,17 @@ SoftmaxDeviceOperation::SoftmaxShardedProgramFactoryAttentionOptimized::create_p
             reader_defines["SHARDED_CAUSAL_MASK"] = "1";
         }
     }
+    if (mask_padded_data) {
+        reader_defines["MASK_PADDED_DATA"] = "1";
+    }
     KernelSpec::CompilerOptions::Defines compute_defines = reader_defines;
     if (attributes.numeric_stable) {
         compute_defines["NUMERIC_STABLE"] = "1";
     }
     compute_defines["EXP_APPROX"] = math_approx_mode ? "1" : "0";
+    if (rows_per_pass > 1) {
+        compute_defines["ROWS_PER_PASS"] = std::to_string(rows_per_pass);
+    }
     compute_defines["ENABLE_FP32_DEST_ACC"] = fp32_dest_acc_en ? "1" : "0";
 
     // ---- Reader kernel ----
@@ -257,6 +301,12 @@ SoftmaxDeviceOperation::SoftmaxShardedProgramFactoryAttentionOptimized::create_p
     Group<TensorBinding> reader_tensor_bindings;
     std::vector<std::string> reader_rta_names;
     KernelSpec::CompileTimeArgs reader_cta;
+    if (mask_padded_data) {
+        reader_bindings.push_back(DFBBinding{
+            .dfb_spec_name = MASK_PADDED, .accessor_name = "mask_padded", .endpoint_type = DFBEndpointType::PRODUCER});
+        reader_cta.insert({"num_datum_padded", num_datum_padded});
+        reader_cta.insert({"tile_hw", tile_hw});
+    }
     if (has_mask) {
         reader_bindings.push_back(DFBBinding{
             .dfb_spec_name = FUSED_SCALE, .accessor_name = "fused_scale", .endpoint_type = DFBEndpointType::PRODUCER});
@@ -333,6 +383,10 @@ SoftmaxDeviceOperation::SoftmaxShardedProgramFactoryAttentionOptimized::create_p
                 .accessor_name = "fused_attn",
                 .endpoint_type = DFBEndpointType::CONSUMER});
         }
+    }
+    if (mask_padded_data) {
+        compute_bindings.push_back(DFBBinding{
+            .dfb_spec_name = MASK_PADDED, .accessor_name = "mask_padded", .endpoint_type = DFBEndpointType::CONSUMER});
     }
     if (attributes.numeric_stable) {
         add_self_loop(MAX, "max");

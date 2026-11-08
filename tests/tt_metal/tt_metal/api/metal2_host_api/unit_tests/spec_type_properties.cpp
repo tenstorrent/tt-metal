@@ -10,6 +10,7 @@
 #include <cstdint>
 #include <optional>
 #include <type_traits>
+#include <variant>
 
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include <tt_stl/reflection.hpp>
@@ -47,8 +48,6 @@ static_assert(hashable_v<ProgramSpec>, "ProgramSpec must be hashable via ttsl re
 static_assert(hashable_v<WorkUnitSpec>, "WorkUnitSpec must be hashable via ttsl reflection");
 static_assert(hashable_v<KernelSpec>, "KernelSpec must be hashable via ttsl reflection");
 static_assert(hashable_v<DataflowBufferSpec>, "DataflowBufferSpec must be hashable via ttsl reflection");
-static_assert(
-    hashable_v<CrossNodeDataflowBufferSpec>, "CrossNodeDataflowBufferSpec must be hashable via ttsl reflection");
 static_assert(hashable_v<SemaphoreSpec>, "SemaphoreSpec must be hashable via ttsl reflection");
 static_assert(hashable_v<ScratchpadSpec>, "ScratchpadSpec must be hashable via ttsl reflection");
 static_assert(hashable_v<TensorParameter>, "TensorParameter must be hashable via ttsl reflection");
@@ -59,6 +58,7 @@ static_assert(
     hashable_v<KernelSpec::CompilerOptions>, "KernelSpec::CompilerOptions must be hashable via ttsl reflection");
 static_assert(
     hashable_v<KernelSpec::RuntimeArgSchema>, "KernelSpec::RuntimeArgSchema must be hashable via ttsl reflection");
+static_assert(hashable_v<ArrayArgDecl>, "ArrayArgDecl must be hashable via ttsl reflection");
 static_assert(hashable_v<DFBBinding>, "DFBBinding must be hashable via ttsl reflection");
 static_assert(hashable_v<SemaphoreBinding>, "SemaphoreBinding must be hashable via ttsl reflection");
 static_assert(hashable_v<TensorBinding>, "TensorBinding must be hashable via ttsl reflection");
@@ -76,9 +76,16 @@ static_assert(hashable_v<ComputeHardwareConfig>, "ComputeHardwareConfig must be 
 static_assert(
     hashable_v<ComputeHardwareConfig::Compute1XXConfig>, "Compute1XXConfig must be hashable via ttsl reflection");
 static_assert(
+    hashable_v<ComputeHardwareConfig::Compute12XConfig>, "Compute12XConfig must be hashable via ttsl reflection");
+static_assert(
     hashable_v<ComputeHardwareConfig::Compute2XXConfig>, "Compute2XXConfig must be hashable via ttsl reflection");
 
 // Per-spec advanced options
+static_assert(hashable_v<ScratchpadAdvancedOptions>, "ScratchpadAdvancedOptions must be hashable via ttsl reflection");
+static_assert(std::is_aggregate_v<ScratchpadAdvancedOptions>, "ScratchpadAdvancedOptions must remain an aggregate");
+static_assert(std::is_aggregate_v<SRAMArenaAllocation>);
+static_assert(hashable_v<SRAMArenaAllocation>);
+static_assert(std::is_same_v<decltype(DataflowBufferSpec{}.borrowed_from), std::optional<TensorParamName>>);
 static_assert(hashable_v<KernelAdvancedOptions>, "KernelAdvancedOptions must be hashable via ttsl reflection");
 static_assert(hashable_v<DFBAdvancedOptions>, "DFBAdvancedOptions must be hashable via ttsl reflection");
 static_assert(hashable_v<SemaphoreAdvancedOptions>, "SemaphoreAdvancedOptions must be hashable via ttsl reflection");
@@ -144,6 +151,8 @@ static_assert(std::is_aggregate_v<ComputeHardwareConfig>, "ComputeHardwareConfig
 static_assert(
     std::is_aggregate_v<ComputeHardwareConfig::Compute1XXConfig>, "Compute1XXConfig must remain an aggregate");
 static_assert(
+    std::is_aggregate_v<ComputeHardwareConfig::Compute12XConfig>, "Compute12XConfig must remain an aggregate");
+static_assert(
     std::is_aggregate_v<ComputeHardwareConfig::Compute2XXConfig>, "Compute2XXConfig must remain an aggregate");
 static_assert(
     std::is_aggregate_v<KernelSpec::CompilerOptions>,
@@ -157,8 +166,7 @@ static_assert(
     std::is_aggregate_v<KernelSpec::RuntimeArgSchema>,
     "RuntimeArgSchema must remain an aggregate to support designated initializers");
 static_assert(
-    std::is_aggregate_v<CrossNodeDataflowBufferSpec>,
-    "CrossNodeDataflowBufferSpec must remain an aggregate to support designated initializers");
+    std::is_aggregate_v<ArrayArgDecl>, "ArrayArgDecl must remain an aggregate to support designated initializers");
 
 // These tests document the intended construction pattern using designated initializers.
 // They serve as living documentation and will fail to compile if aggregate status is broken.
@@ -217,7 +225,8 @@ TEST(AggregateSpecTypes, CPU_DataflowBufferSpecDesignatedInitializers) {
         .borrowed_from = TensorParamName{"input_tensor"},
     };
 
-    EXPECT_EQ(borrowed_dfb.borrowed_from, std::optional<TensorParamName>{TensorParamName{"input_tensor"}});
+    ASSERT_TRUE(borrowed_dfb.borrowed_from.has_value());
+    EXPECT_EQ(*borrowed_dfb.borrowed_from, TensorParamName{"input_tensor"});
 }
 
 TEST(AggregateSpecTypes, ScratchpadSpecDesignatedInitializers) {
@@ -400,18 +409,6 @@ TEST(AggregateSpecTypes, CPU_NestedStructsDesignatedInitializers) {
         .noc_mode = tt::tt_metal::NOC_MODE::DM_DEDICATED_NOC,
     };
     EXPECT_EQ(gen1.processor, tt::tt_metal::DataMovementProcessor::RISCV_1);
-
-    CrossNodeDataflowBufferSpec remote_dfb{
-        .dfb_spec =
-            DataflowBufferSpec{
-                .unique_id = DFBSpecName{"remote_dfb"},
-                .entry_size = 1024,
-                .num_entries = 2,
-            },
-        .producer_consumer_map = {{NodeCoord{0, 0}, NodeCoord{1, 0}}},
-    };
-    EXPECT_EQ(remote_dfb.producer_consumer_map.size(), 1u);
-    EXPECT_EQ(remote_dfb.dfb_spec.unique_id.get(), "remote_dfb");
 }
 
 }  // namespace

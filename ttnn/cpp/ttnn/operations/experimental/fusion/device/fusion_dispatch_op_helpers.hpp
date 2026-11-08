@@ -11,6 +11,7 @@
 
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/mesh_buffer.hpp>
 #include "ttnn/tensor/tensor.hpp"
 
 namespace ttnn::operations::experimental::fusion {
@@ -169,7 +170,7 @@ inline void patch_stale_descriptor(
     // Always patch — even when addresses match, the Buffer* pointers may be
     // stale (the L1 allocator can reuse the same address for a new Buffer object).
     for (const auto& slot : slots.per_core_rt_arg_slots) {
-        auto* buf = io_tensors[slot.io_tensor_index].buffer();
+        const auto* buf = &io_tensors[slot.io_tensor_index].mesh_buffer();
         if (buf) {
             auto& rt_args = desc.kernels[slot.kernel_idx].runtime_args;
             for (auto& [core, args] : rt_args) {
@@ -181,7 +182,7 @@ inline void patch_stale_descriptor(
         }
     }
     for (const auto& slot : slots.common_rt_arg_slots) {
-        auto* buf = io_tensors[slot.io_tensor_index].buffer();
+        const auto* buf = &io_tensors[slot.io_tensor_index].mesh_buffer();
         if (buf) {
             desc.kernels[slot.kernel_idx].common_runtime_args[slot.arg_idx] = buf->address();
         }

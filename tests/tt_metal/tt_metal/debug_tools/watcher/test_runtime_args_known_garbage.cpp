@@ -210,7 +210,7 @@ TEST_F(RTATestFixture, SentinelPatternHandlingAndMissingRTADetection) {
         CoreRangeSet core_range_set(std::vector{cores_with_rtas, cores_without_rtas});
 
         distributed::MeshWorkload workload;
-        Program program;
+        Program program = CreateProgram(*mesh_device);
 
         auto kernel = CreateKernel(
             program,
@@ -222,7 +222,7 @@ TEST_F(RTATestFixture, SentinelPatternHandlingAndMissingRTADetection) {
         // cores_without_rtas has NO RTAs set — 0xBEEF#### pattern -> rta_count = 0 -> assert
 
         workload.add_program(device_range, std::move(program));
-        RunProgram(mesh_device, workload);
+        RunProgramExpectingWatcherError(mesh_device, workload);
         ExpectWatcherException("unique runtime arg index out of bounds");
     }
 }
@@ -255,7 +255,7 @@ TEST_F(RTATestFixture, CorrectArgDispatchAndPayloadValidation) {
     }
 
     distributed::MeshWorkload workload;
-    Program program;
+    Program program = CreateProgram(*mesh_device);
     const experimental::KernelSpecName DM_KERNEL_NAME{"rta_dm"};
 
     // Pad to match default_rtas.size() (== num_runtime_varargs in the schema).
@@ -373,7 +373,6 @@ TEST_P(RTAAssertTest, OutOfBoundsArgAccessDetection) {
     const auto& params = GetParam();
 
     // Dispatch mode validation:
-    // - Quasar: SD only (FD not yet available)
     // - Other archs: FD only
     if (IsSlowDispatch() && !is_quasar) {
         GTEST_SKIP() << "This test requires fast dispatch mode (except on Quasar)";
@@ -387,7 +386,7 @@ TEST_P(RTAAssertTest, OutOfBoundsArgAccessDetection) {
     auto mesh_device = devices_[0];
 
     distributed::MeshWorkload workload;
-    Program program;
+    Program program = CreateProgram(*mesh_device);
 
     const experimental::KernelSpecName OOB_KERNEL_NAME{"rta_oob"};
 
@@ -462,7 +461,7 @@ TEST_P(RTAAssertTest, OutOfBoundsArgAccessDetection) {
     experimental::SetProgramRunArgs(program, params_m2);
 
     workload.add_program(device_range, std::move(program));
-    RunProgram(mesh_device, workload);
+    RunProgramExpectingWatcherError(mesh_device, workload);
 
     ExpectWatcherException(params.expected_message);
 }
@@ -479,7 +478,7 @@ TEST_F(RTATestFixture, QuasarMultiDMOutOfBoundsArgDetection) {
     CoreRangeSet core_range_set(std::vector{core_range});
 
     distributed::MeshWorkload workload;
-    Program program;
+    Program program = CreateProgram(*mesh_device);
 
     const experimental::KernelSpecName MULTI_DM_KERNEL_NAME{"multi_dm_oob"};
     experimental::KernelSpec dm_spec{
@@ -522,7 +521,7 @@ TEST_F(RTATestFixture, QuasarMultiDMOutOfBoundsArgDetection) {
     std::vector<uint32_t> zero_sync = {0, 0};
     slow_dispatch::WriteToL1(*mesh_device, core_range.start_coord, l1_unreserved_base, zero_sync);
 
-    RunProgram(mesh_device, workload);
+    RunProgramExpectingWatcherError(mesh_device, workload);
 
     // Any DM can report the error; just verify the bounds-check message appears
     ExpectWatcherException("unique runtime arg index out of bounds");

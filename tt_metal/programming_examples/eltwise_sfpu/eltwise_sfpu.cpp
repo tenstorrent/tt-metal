@@ -37,7 +37,7 @@ int main() {
         // simultaneously.
         distributed::MeshWorkload workload;
         distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
-        Program program = CreateProgram();
+        Program program = CreateProgram(*mesh_device);
 
         // This example program will only use 1 Tensix core. So we set the core to {0, 0}.
         constexpr CoreCoord core = {0, 0};
@@ -101,7 +101,7 @@ int main() {
             OVERRIDE_KERNEL_PREFIX "eltwise_sfpu/kernels/compute/eltwise_sfpu.cpp",
             core,
             ComputeConfig{
-                .math_fidelity = MathFidelity::HiFi4,
+                .math_fidelity = tt::tt_metal::MathFidelity::HiFi4,
                 .math_approx_mode = false,
             });
 
@@ -125,11 +125,11 @@ int main() {
             unary_reader_kernel_id,
             core,
             {
-                src0_dram_buffer->address(),
+                static_cast<uint32_t>(src0_dram_buffer->address()),
                 n_tiles,
             });
 
-        SetRuntimeArgs(program, unary_writer_kernel_id, core, {dst_dram_buffer->address(), n_tiles});
+        SetRuntimeArgs(program, unary_writer_kernel_id, core, {static_cast<uint32_t>(dst_dram_buffer->address()), n_tiles});
 
         // Enqueue the program as a mesh workload (non-blocking) and wait for completion before reading results.
         workload.add_program(device_range, std::move(program));

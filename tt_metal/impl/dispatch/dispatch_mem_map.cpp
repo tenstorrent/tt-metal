@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <enchantum/enchantum.hpp>
-#include <tt-metalium/tt_align.hpp>
+#include <tt-metalium/math.hpp>
 
 #include "dispatch_mem_map.hpp"
 #include <tt_stl/assert.hpp>
@@ -15,7 +15,30 @@
 #include <hostdevcommon/dispatch_telemetry_types.hpp>
 #include <tt_stl/enum.hpp>
 
+#include <filesystem>
+
 namespace tt::tt_metal {
+
+namespace {
+
+// Only validated on the RTL simulator so far. UMD picks the RTL simulator when TT_METAL_SIMULATOR names a directory
+// rather than a TTSim .so.
+bool use_prefetch_q_cached(const Hal& hal, const CoreType& core_type, const tt::llrt::RunTimeOptions& rtoptions) {
+    const std::filesystem::path& simulator = rtoptions.get_simulator_path();
+    const bool rtl_simulator = !simulator.empty() && simulator.extension() != ".so";
+    return hal.get_arch() == tt::ARCH::QUASAR && core_type != CoreType::ETH && rtl_simulator;
+}
+
+uint32_t get_l1_size(const Hal& hal, const CoreType& core_type) {
+    switch (core_type) {
+        case CoreType::WORKER: return hal.get_dev_size(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::BASE);
+        case CoreType::ETH: return hal.get_dev_size(HalProgrammableCoreType::IDLE_ETH, HalL1MemAddrType::BASE);
+        case CoreType::DISPATCH: return hal.get_dev_size(HalProgrammableCoreType::DISPATCH, HalL1MemAddrType::BASE);
+        default: TT_THROW("DispatchMemMap not implemented for core type");
+    }
+}
+
+}  // namespace
 
 DispatchMemMap::DispatchMemMap(
     const CoreType& core_type,
@@ -35,6 +58,8 @@ DispatchMemMap::DispatchMemMap(
 
         rtoptions.get_dram_backed_cq(),
 
+        get_l1_size(hal, core_type),
+
         hal.get_alignment(HalMemType::L1),
 
         // Prefetch queue entry width: each entry encodes the prefetch command size with the MSB reserved as a
@@ -43,6 +68,7 @@ DispatchMemMap::DispatchMemMap(
         // observed to fail on Quasar, and using one width everywhere keeps host/kernel code simple. WH ETH
         // stays at 2 bytes because of tighter memory constraints.
         (hal.get_arch() == tt::ARCH::WORMHOLE_B0 && core_type == CoreType::ETH) ? 2u : 4u)),
+    prefetch_q_cached_(use_prefetch_q_cached(hal, core_type, rtoptions)),
     num_cqs_per_core_(cq_layout.num_cqs_per_core),
     host_alignment_(hal.get_alignment(HalMemType::HOST)),
     l1_alignment_(hal.get_alignment(HalMemType::L1)),
@@ -52,18 +78,15 @@ DispatchMemMap::DispatchMemMap(
         hal.get_noc_stream_remote_dest_buf_space_available_update_reg_index()),
     has_stream_registers_(hal.has_stream_registers()) {
     uint32_t l1_base;
-    uint32_t l1_size;
+    const uint32_t l1_size = get_l1_size(hal, core_type);
     if (core_type == CoreType::WORKER) {
         l1_base = hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::DEFAULT_UNRESERVED);
-        l1_size = hal.get_dev_size(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::BASE);
         dispatch_stream_base_ = 48u;  // 64 streams; CBs use entries 8-39
     } else if (core_type == CoreType::ETH) {
         l1_base = hal.get_dev_addr(HalProgrammableCoreType::IDLE_ETH, HalL1MemAddrType::UNRESERVED);
-        l1_size = hal.get_dev_size(HalProgrammableCoreType::IDLE_ETH, HalL1MemAddrType::BASE);
         dispatch_stream_base_ = 16u;  // 32 streams
     } else if (core_type == CoreType::DISPATCH) {
         l1_base = hal.get_dev_addr(HalProgrammableCoreType::DISPATCH, HalL1MemAddrType::DEFAULT_UNRESERVED);
-        l1_size = hal.get_dev_size(HalProgrammableCoreType::DISPATCH, HalL1MemAddrType::BASE);
         dispatch_stream_base_ = 48u;
     } else {
         TT_THROW("DispatchMemMap not implemented for core type");
@@ -138,6 +161,18 @@ DispatchMemMap::DispatchMemMap(
     uint32_t prefetch_dispatch_unreserved_base =
         device_cq_addrs_[ttsl::as_underlying_type<CommandQueueDeviceAddrType>(CommandQueueDeviceAddrType::UNRESERVED)];
     cmddat_q_base_ = align(prefetch_dispatch_unreserved_base + settings.prefetch_q_size_, pcie_alignment);
+    // The prefetcher drops fetch queue lines from its cache without writeback, so the queue must fill whole lines and
+    // no line may also hold cmddat_q or other data. Other CQs on the core sit a whole number of 4 KB dispatch pages
+    // further on, so checking CQ0 covers them.
+    TT_FATAL(
+        !prefetch_q_cached_ || (prefetch_dispatch_unreserved_base % PREFETCH_Q_CACHE_LINE_BYTES == 0 &&
+                                settings.prefetch_q_size_ % PREFETCH_Q_CACHE_LINE_BYTES == 0 &&
+                                cmddat_q_base_ % PREFETCH_Q_CACHE_LINE_BYTES == 0),
+        "Fetch queue at {} with size {} B and cmddat_q at {} must be whole {} B cache lines",
+        prefetch_dispatch_unreserved_base,
+        settings.prefetch_q_size_,
+        cmddat_q_base_,
+        PREFETCH_Q_CACHE_LINE_BYTES);
     scratch_db_base_ = align(cmddat_q_base_ + settings.prefetch_cmddat_q_size_, pcie_alignment);
     if (cq_layout.fd_kernels_on_same_core) {
         // All FD kernels share one core (Quasar), so dispatch_buffer must not alias
@@ -222,6 +257,8 @@ DispatchMemMap::DispatchMemMap(
 uint32_t DispatchMemMap::prefetch_q_entries() const { return settings.prefetch_q_entries_; }
 
 uint32_t DispatchMemMap::prefetch_q_entry_size_bytes() const { return settings.prefetch_q_entry_size_bytes_; }
+
+bool DispatchMemMap::prefetch_q_cached() const { return prefetch_q_cached_; }
 
 uint32_t DispatchMemMap::prefetch_q_size() const { return settings.prefetch_q_size_; }
 

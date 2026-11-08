@@ -41,7 +41,7 @@ int main() {
     // A program is a collection of kernels. Note that unlike OpenCL/CUDA where every core must run the
     // same kernel at a given time. Metalium allows you to run different kernels on different cores
     // simultaneously.
-    Program program = CreateProgram();
+    Program program = CreateProgram(*mesh_device);
     // We will only be using one Tensix core for this particular example. As Tenstorrent processors are a 2D grid of
     // cores we can specify the core coordinates as (0, 0).
     constexpr CoreCoord core = {0, 0};
@@ -112,7 +112,8 @@ int main() {
         program,
         OVERRIDE_KERNEL_PREFIX "add_2_integers_in_compute/kernels/compute/add_2_tiles.cpp",
         core,
-        ComputeConfig{.math_fidelity = MathFidelity::HiFi4, .fp32_dest_acc_en = false, .math_approx_mode = false});
+        ComputeConfig{
+            .math_fidelity = tt::tt_metal::MathFidelity::HiFi4, .fp32_dest_acc_en = false, .math_approx_mode = false});
 
     // Create the data that will be used as input to the kernels.
     // src0 is a vector of bfloat16 values initialized to random values between 0.0f and 14.0f.

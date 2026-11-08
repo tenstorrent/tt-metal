@@ -9,7 +9,7 @@
 // The core data structure is defined in fabric_trimming_types.hpp (host+device).
 
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_trimming_types.hpp"
-#include "tt_metal/fabric/fabric_edm_packet_header.hpp"  // for NocSendType
+#include "hostdev/fabric_edm_packet_header.hpp"  // for NocSendType
 
 #include "internal/risc_attribs.h"
 

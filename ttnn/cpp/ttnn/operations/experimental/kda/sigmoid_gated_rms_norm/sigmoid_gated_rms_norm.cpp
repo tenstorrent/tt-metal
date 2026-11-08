@@ -15,22 +15,23 @@ ttnn::Tensor sigmoid_gated_rms_norm(
     float epsilon,
     const std::optional<ttnn::MemoryConfig>& memory_config,
     const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
-    DataType output_dtype) {
+    DataType output_dtype,
+    uint32_t gate_column_offset) {
     TT_FATAL(
-        input.storage_type() == StorageType::DEVICE && input.buffer() != nullptr,
+        input.storage_type() == StorageType::DEVICE && input.is_allocated(),
         "sigmoid_gated_rms_norm: input must be an allocated device tensor");
     const auto output_memory_config = memory_config.value_or(ttnn::DRAM_MEMORY_CONFIG);
     const auto kernel_config = init_device_compute_kernel_config(
         input.device()->arch(),
         compute_kernel_config,
-        MathFidelity::HiFi4,
+        tt::tt_metal::MathFidelity::HiFi4,
         /*default_approx_mode=*/true,
         /*default_fp32_acc=*/true,
         /*default_l1_acc=*/false,
         /*default_dst_full_sync_en=*/false,
         ttnn::operations::compute_throttle_utils::ThrottleLevel::NO_THROTTLE);
     return ttnn::experimental::prim::sigmoid_gated_rms_norm(
-        input, gate, weight, num_heads, epsilon, output_memory_config, kernel_config, output_dtype);
+        input, gate, weight, num_heads, epsilon, output_memory_config, kernel_config, output_dtype, gate_column_offset);
 }
 
 }  // namespace ttnn::experimental::kda

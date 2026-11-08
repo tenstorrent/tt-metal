@@ -6,8 +6,8 @@ import pytest
 import torch
 
 import ttnn
-from models.common.utility_functions import run_for_blackhole
-from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import make_actual_start
+from tt_py_test_utils_common.utility_functions import run_for_blackhole
+from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import assert_bit_identical, make_actual_start
 
 pytestmark = run_for_blackhole()
 
@@ -24,34 +24,29 @@ def test_padding_prefix_empty_and_partial_groups(mesh_device, width):
     def upload(tensor, dtype):
         return ttnn.from_torch(tensor, device=mesh_device, dtype=dtype, layout=ttnn.TILE_LAYOUT)
 
-    a_tt, b_tt, initial_tt = upload(a, ttnn.bfloat16), upload(b, ttnn.bfloat16), upload(initial, ttnn.float32)
+    # Two SP ranks need a tail slot; an unsplit start never reads it, so it is NaN.
+    head = torch.cat([a, b], dim=-1)
+    summaries_tt = upload(torch.stack([head, torch.full_like(head, float("nan"))]), ttnn.bfloat16)
+    initial_tt = upload(initial, ttnn.float32)
     start = make_actual_start(mesh_device, 0)
     end = make_actual_start(mesh_device, 512)
 
     def run():
-        reduced = ttnn.experimental.kda.reduce_affine_transforms(
-            a_tt, b_tt, 4, actual_start=start, actual_end=end, local_rows=256, sequence_parallel_axis=0
-        )
-        entries = ttnn.experimental.kda.affine_exclusive_scan(
-            a_tt,
-            b_tt,
+        return ttnn.experimental.kda.affine_exclusive_scan(
+            summaries_tt,
             initial_tt,
             4,
             actual_start=start,
             actual_end=end,
             local_rows=256,
             sequence_parallel_axis=0,
-            tail_a=a_tt,
-            tail_b=b_tt,
             tail_entry_states=initial_tt,
         )
-        return (*reduced, entries)
 
     for _ in range(2):
-        for tensor in run():
-            ttnn.deallocate(tensor)
+        ttnn.deallocate(run())
     trace = ttnn.begin_trace_capture(mesh_device, cq_id=0)
-    outputs = run()
+    entries = run()
     ttnn.end_trace_capture(mesh_device, trace, cq_id=0)
     try:
         # Hand-verifiable active group counts, rank 0 then rank 1.
@@ -60,18 +55,15 @@ def test_padding_prefix_empty_and_partial_groups(mesh_device, width):
             ttnn.copy(source, end)
             ttnn.deallocate(source)
             ttnn.execute_trace(mesh_device, trace, cq_id=0, blocking=True)
-            shards = [[ttnn.to_torch(t).float() for t in ttnn.get_device_tensors(out)] for out in outputs]
+            shards = [ttnn.to_torch(t).float() for t in ttnn.get_device_tensors(entries)]
             for device_index in range(8):
                 active = counts[device_index // 4]
-                # 0, 1, 1+2, 1+2+3, 1+2+3+4; no model formula copied here.
-                total = (0, 1, 3, 6, 10)[active]
-                torch.testing.assert_close(shards[0][device_index], eye.repeat(2, 1, 1), rtol=0, atol=0)
-                torch.testing.assert_close(shards[1][device_index], (total * eye).repeat(2, 1, 1), rtol=0, atol=0)
                 for head in range(2):
                     for group in range(active):
+                        # 0, 1, 1+2, 1+2+3; no model formula copied here.
                         expected = initial[head] + (0, 1, 3, 6)[group] * eye
-                        torch.testing.assert_close(shards[2][device_index][head * 4 + group], expected, rtol=0, atol=0)
+                        torch.testing.assert_close(shards[device_index][head * 4 + group], expected, rtol=0, atol=0)
     finally:
         ttnn.release_trace(mesh_device, trace)
-        for tensor in (*outputs, a_tt, b_tt, initial_tt, start, end):
+        for tensor in (entries, summaries_tt, initial_tt, start, end):
             ttnn.deallocate(tensor)

@@ -30,10 +30,6 @@
 /////////////
 // RISC-V Address map definition (hardware)
 #define MEM_L1_BASE 0x0
-#define MEM_L1_SIZE (4 * 1024 * 1024)
-// Note: RISC-V LR/SC and AMO atomics don't work with uncached L1 (they hang).
-// Both require the cache coherence system. Only plain loads/stores with fences work uncached.
-#define MEM_L1_UNCACHED_BASE (MEM_L1_BASE + MEM_L1_SIZE)  // upper 4MBs bypass cache
 
 #define MEM_ETH_BASE 0x0
 // Top 64K is reserved for syseng but host reads/writes from that region
@@ -53,7 +49,7 @@
 #define MEM_DM_FIRMWARE_SIZE (1024 * 12)
 #define MEM_TRISC_FIRMWARE_SIZE (1024 * 5)
 #define MEM_DM_KERNEL_SIZE (1024 * 48)
-#define MEM_DM_GLOBAL_SIZE (1024 * 2)
+#define MEM_DM_GLOBAL_SIZE (1024 * 4)  // the DM .data section also holds .rodata (the ATT map tables)
 #define MEM_TRISC_GLOBAL_SIZE (1024 * 2)
 // Per-DM stride of the local region: crt0 puts tp at base + n * size and sp at base + (n+1) * size,
 // so these also place every stack. The DM D$ indexes on addr[10:6] (2-way, 32 sets of 64 B), so keep
@@ -97,7 +93,7 @@
 #define UNCACHED_MEM_MAILBOX_BASE (0x400010)  // workaround for https://github.com/tenstorrent/tt-metal/issues/19265
 // Magic sizes must be big enough to hold mailboxes_t.  static_asserts will fire if either is too small.
 // The dispatch engine mailbox is DM-only (8 processors).
-#define MEM_MAILBOX_SIZE 59632
+#define MEM_MAILBOX_SIZE 59904
 #define MEM_DISPATCH_MAILBOX_SIZE 23616
 #define MEM_MAILBOX_END (MEM_MAILBOX_BASE + MEM_MAILBOX_SIZE)
 #define MEM_DISPATCH_MAILBOX_END (MEM_MAILBOX_BASE + MEM_DISPATCH_MAILBOX_SIZE)
@@ -151,19 +147,20 @@
 
 // Tensix routing table for fabric networking
 #define MEM_TENSIX_ROUTING_TABLE_BASE (MEM_FABRIC_CONNECTION_LOCK_BASE + MEM_FABRIC_CONNECTION_LOCK_SIZE)
-#define MEM_ROUTING_TABLE_SIZE 2576  // struct layout: base(516) + union(1024) + exit(1024) + pad(12)
+#define MEM_ROUTING_TABLE_SIZE 2704  // struct layout: base(516) + union(1160) + exit(1024) + coords(2) + shape(2)
 #define MEM_OFFSET_OF_ROUTING_PATHS 516
-#define MEM_ROUTING_TABLE_PADDING 12
+// Tail of routing_l1_info_t after exit_node_table: my_mesh_coord_y/x (2 B) + mesh_y/x_size (2 B).
+// Must match the struct tail in hostdevcommon/fabric_common.h.
+#define MEM_ROUTING_TABLE_PADDING 4
 
-#define ROUTING_PATH_SIZE_1D 1024  // Was 256 (64 chips × 16 bytes)
-// 2D uncompressed size is too large to fit in L1 memory
-#define COMPRESSED_ROUTING_PATH_SIZE_1D 0     // sizeof(intra_mesh_routing_path_t<1, true>)
-#define COMPRESSED_ROUTING_PATH_SIZE_2D 1024  // sizeof(intra_mesh_routing_path_t<2, true>)
+#define ROUTING_PATH_SIZE_1D 1024  // 64 chips × 16 bytes
+#define COMPRESSED_ROUTING_PATH_SIZE_1D 0  // sizeof(intra_mesh_routing_path_t<1, true>)
+#define ROUTE_TABLE_SIZE_2D 1160           // sizeof(route_table_2d_t)
 // Union: 1D and 2D routing tables share the same offset
 #define MEM_TENSIX_ROUTING_PATH_BASE (MEM_TENSIX_ROUTING_TABLE_BASE + MEM_OFFSET_OF_ROUTING_PATHS)
 #define MEM_TENSIX_ROUTING_PATH_BASE_1D MEM_TENSIX_ROUTING_PATH_BASE  // 516
 #define MEM_TENSIX_ROUTING_PATH_BASE_2D MEM_TENSIX_ROUTING_PATH_BASE  // 516
-#define MEM_TENSIX_ROUTING_PATH_SIZE 1024                             // max(1024, 1024)
+#define MEM_TENSIX_ROUTING_PATH_SIZE ROUTE_TABLE_SIZE_2D
 
 #define MEM_TENSIX_EXIT_NODE_TABLE_BASE (MEM_TENSIX_ROUTING_PATH_BASE + MEM_TENSIX_ROUTING_PATH_SIZE)
 #define MEM_EXIT_NODE_TABLE_SIZE 1024  // sizeof(exit_node_table_t)
@@ -276,10 +273,19 @@
 #error "Dispatch cached semaphore pool must start on a 64B cache line"
 #endif
 
+// Watcher ring buffer head, taken with a cached AMO. Nothing else may share its line: writing back the dirty line
+// would clobber neighbours written through the uncached alias.
+#define MEM_DISPATCH_WATCHER_RING_HEAD MEM_DISPATCH_SEM_REGIONS_END
+#define MEM_DISPATCH_WATCHER_RING_HEAD_END (MEM_DISPATCH_WATCHER_RING_HEAD + 64)
+#if (MEM_DISPATCH_WATCHER_RING_HEAD % 64 != 0)
+#error "Dispatch watcher ring buffer head must start on a 64B cache line"
+#endif
+
 // Everything above shifts with MEM_DISPATCH_MAP_END, so round the whole span up to the 2 kB L1 cache set
 // period: otherwise the kernel config ring and kernel text land on different sets.
-#define MEM_DISPATCH_MAP_END \
-    (MEM_DISPATCH_SEM_REGIONS_BASE + (((MEM_DISPATCH_SEM_REGIONS_END - MEM_DISPATCH_SEM_REGIONS_BASE) + 2047) & ~2047))
+#define MEM_DISPATCH_MAP_END         \
+    (MEM_DISPATCH_SEM_REGIONS_BASE + \
+     (((MEM_DISPATCH_WATCHER_RING_HEAD_END - MEM_DISPATCH_SEM_REGIONS_BASE) + 2047) & ~2047))
 
 // Pre-resolved form of the two layouts, so shared device code names one symbol instead of its own #if.
 #if defined(COMPILE_FOR_DISPATCH_ENGINE)
@@ -339,8 +345,7 @@
 #define MEM_AERISC_FABRIC_TELEMETRY_SIZE 128
 // Routing path sizes (union = same memory, consolidated from intermediate aliases)
 #define MEM_ERISC_FABRIC_ROUTING_PATH_SIZE_1D ROUTING_PATH_SIZE_1D
-#define MEM_ERISC_FABRIC_ROUTING_PATH_SIZE_2D COMPRESSED_ROUTING_PATH_SIZE_2D
-#define MEM_ERISC_FABRIC_ROUTING_PATH_SIZE MEM_ERISC_FABRIC_ROUTING_PATH_SIZE_2D  // Union size
+#define MEM_ERISC_FABRIC_ROUTING_PATH_SIZE ROUTE_TABLE_SIZE_2D  // Union size
 #define MEM_ERISC_MAILBOX_SIZE 12768
 #define MEM_ERISC_KERNEL_CONFIG_SIZE (25 * 1024)
 #define MEM_ERISC_BASE 0

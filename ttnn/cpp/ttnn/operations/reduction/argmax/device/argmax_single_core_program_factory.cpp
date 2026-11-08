@@ -8,6 +8,7 @@
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/work_split.hpp>
+#include <tt_stl/fmt.hpp>
 
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 

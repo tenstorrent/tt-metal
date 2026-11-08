@@ -7,6 +7,7 @@
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/program_descriptors.hpp>
 
+#include <tuple>
 #include <vector>
 #include <utility>
 

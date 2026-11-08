@@ -7,13 +7,13 @@ import os
 import pytest
 import torch
 import ttnn
-from models.common.utility_functions import (
+from tt_py_test_utils_common.utility_functions import (
     comp_allclose_and_pcc,
     is_blackhole,
     torch_random,
 )
 
-from tests.ttnn.utils_for_testing import assert_numeric_metrics
+from tests.ttnn.utils_for_testing import assert_numeric_metrics, merge_gate_subset
 
 TEST_PADDING_VALUE = -42
 
@@ -50,6 +50,35 @@ def test_std_var_small_population(device, ttnn_op, correction, shape, dim):
     expected = torch_op(values, dim=dim, keepdim=True, correction=int(correction))
     actual = ttnn.to_torch(ttnn_op(input_tensor, dim=dim, keepdim=True, correction=correction))
     torch.testing.assert_close(actual, expected, rtol=2e-3, atol=2e-4, equal_nan=True)
+
+
+@pytest.mark.parametrize("ttnn_op", [ttnn.var, ttnn.std], ids=["var", "std"])
+@pytest.mark.parametrize("dtype", [ttnn.float32, ttnn.bfloat16], ids=["fp32", "bf16"])
+@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT], ids=["tile", "row_major"])
+@pytest.mark.parametrize("keepdim", [True, False])
+@pytest.mark.parametrize(
+    "shape,dim",
+    [
+        ((1, 1, 32, 1), -1),
+        ((1, 1, 1, 32), -2),
+        ((2, 1, 1, 1), (-2, -1)),
+    ],
+)
+def test_std_var_singleton_nonfinite(device, ttnn_op, dtype, layout, keepdim, shape, dim):
+    # Without correction, a population of one gives 0, or NaN when the element is inf or NaN.
+    pattern = torch.tensor([1.5, float("inf"), float("-inf"), float("nan"), -2.0, 0.0, 3e38, -0.0])
+    values = pattern.repeat(4)[: torch.Size(shape).numel()].reshape(shape)
+    input_tensor = ttnn.from_torch(values, dtype=dtype, layout=layout, device=device)
+    torch_op = torch.var if ttnn_op == ttnn.var else torch.std
+    expected = torch_op(values, dim=dim, keepdim=keepdim, correction=0)
+    actual = ttnn.to_torch(ttnn_op(input_tensor, dim=dim, keepdim=keepdim, correction=False)).float()
+    assert actual.shape == expected.shape
+    if dtype == ttnn.float32:
+        torch.testing.assert_close(actual, expected, rtol=0, atol=0, equal_nan=True)
+    else:
+        # bfloat16 outputs pack NaN as inf, so check which results are finite instead.
+        assert torch.equal(torch.isfinite(actual), torch.isfinite(expected))
+        assert torch.count_nonzero(actual[torch.isfinite(actual)]) == 0
 
 
 @pytest.mark.parametrize("ttnn_op", [ttnn.var, ttnn.std], ids=["var", "std"])
@@ -188,9 +217,16 @@ def test_var_std_reject_off_default_tile(device, reduce_op, tile_shape, expect_e
 # element nor flipping its sign should change the answer. The scalar is applied after the
 # reduction as var(s*x) = s^2 * var(x).
 # The test covers all three reduction kernels (H, W, HW).
-@pytest.mark.parametrize("scalar", [1.0, 0, -1.0])
-@pytest.mark.parametrize("offset", [0.0, 1e6])
-@pytest.mark.parametrize("dim", [-1, -2, (-2, -1)])
+@pytest.mark.parametrize(
+    *merge_gate_subset(
+        {
+            "dim": [-1, -2, (-2, -1)],
+            "offset": [0.0, 1e6],
+            "scalar": [1.0, 0, -1.0],
+        },
+        keep=lambda dim, offset, scalar: scalar == 1.0 or (offset == 1e6 and scalar == -1.0),
+    )
+)
 def test_var_fp32_translation_invariance(device, dim, offset, scalar):
     correction = True
     # The input is read at full FP32 and reduced unscaled; scalar is applied afterwards
@@ -243,6 +279,7 @@ def test_var_fp32_translation_invariance(device, dim, offset, scalar):
 # the W-reduction kernel:
 #   - N=33  -> Wt = ceil(33/32)  = 2   (smallest multi-tile case; original regression target)
 #   - N=129 -> Wt = ceil(129/32) = 5   (deeper inner loop)
+@pytest.mark.merge_gate
 @pytest.mark.parametrize("scalar", [2.0, -2.0, 0.5, 4.0])
 @pytest.mark.parametrize("N", [33, 129], ids=["Wt2", "Wt5"])
 def test_var_fp32_doscale_wt_gt_1(device, scalar, N):
@@ -1071,6 +1108,7 @@ def test_run_reduce_sum_h_after_max_pool(device, input_shape, kernel_size):
     run_reduce_sum_h(device, 1, 32, 32, -2)
 
 
+@pytest.mark.merge_gate
 @pytest.mark.parametrize(
     argnames="tensor_shape, keepdim, dim, op, error_msg",
     argvalues=[

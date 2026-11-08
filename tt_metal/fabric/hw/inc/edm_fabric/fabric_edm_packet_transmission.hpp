@@ -7,7 +7,7 @@
 #include <cstdint>
 
 #include "api/dataflow/dataflow_api.h"
-#include "fabric/fabric_edm_packet_header.hpp"
+#include "hostdev/fabric_edm_packet_header.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_router_adapter.hpp"
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_router_ct_args.hpp"
@@ -93,46 +93,68 @@ FORCE_INLINE void print_pkt_header(volatile tt::tt_fabric::LowLatencyPacketHeade
 #endif
 }
 
+// Waits until two command buffers are ready, reading both before testing either so the reads overlap. A used read of
+// a buffer's ready state orders later NIU status reads after the commands issued on it: a transaction ID's counters
+// include a command only once the NIU has processed it, and a status read can otherwise overtake it (#59623).
+FORCE_INLINE void wait_cmd_bufs_ready(uint8_t noc_a, uint8_t cmd_buf_a, uint8_t noc_b, uint8_t cmd_buf_b) {
+    const bool ready_a = noc_cmd_buf_ready(noc_a, cmd_buf_a);
+    const bool ready_b = noc_cmd_buf_ready(noc_b, cmd_buf_b);
+    if (!(ready_a & ready_b)) {
+        while (!noc_cmd_buf_ready(noc_a, cmd_buf_a));
+        while (!noc_cmd_buf_ready(noc_b, cmd_buf_b));
+    }
+}
+
+// Waits until the receiver channel's earlier non-posted writes (local writes and forwards) are acknowledged, so that a
+// flushed atomic increment issued next is seen after them. Earlier atomics are not waited on.
+//
+// all_writes_counted: the caller counts every non-posted write it issues in the NoC's software counters (the API's
+// update_counter). On Blackhole, where local writes and forwards go out on this RISC's NoC (noc_index), one counter
+// check (ncrisc_noc_nonposted_writes_flushed) then covers every earlier write, instead of a check per transaction ID.
+// It waits for every channel's writes, not only this one's: never earlier than the per-ID wait. With or without
+// deadlock avoidance: a forward's write lands in a downstream slot its credit already reserved, so its acknowledgement
+// does not wait on the fabric.
+template <bool all_writes_counted = false>
 FORCE_INLINE void flush_write_to_noc_pipeline(uint8_t rx_channel_id) {
-    if constexpr (enable_deadlock_avoidance) {
-        auto start_trid = RX_CH_TRID_STARTS[rx_channel_id];
-        auto end_trid = start_trid + NUM_TRANSACTION_IDS;
-        for (int i = start_trid; i < end_trid; i++) {
-            if constexpr (tt::tt_fabric::local_chip_noc_equals_downstream_noc) {
-                while (
-                    !ncrisc_noc_nonposted_write_with_transaction_id_flushed(tt::tt_fabric::edm_to_local_chip_noc, i));
-            } else {
-                while (
-                    !ncrisc_noc_nonposted_write_with_transaction_id_flushed(tt::tt_fabric::edm_to_downstream_noc, i));
-                while (
-                    !ncrisc_noc_nonposted_write_with_transaction_id_flushed(tt::tt_fabric::edm_to_local_chip_noc, i));
-            }
-        }
-    } else {
-        for (size_t i = 0; i < NUM_TRANSACTION_IDS; i++) {
-            if constexpr (tt::tt_fabric::local_chip_noc_equals_downstream_noc) {
-                while (
-                    !ncrisc_noc_nonposted_write_with_transaction_id_flushed(tt::tt_fabric::edm_to_local_chip_noc, i));
-            } else {
-                while (
-                    !ncrisc_noc_nonposted_write_with_transaction_id_flushed(tt::tt_fabric::edm_to_downstream_noc, i));
-                while (
-                    !ncrisc_noc_nonposted_write_with_transaction_id_flushed(tt::tt_fabric::edm_to_local_chip_noc, i));
-            }
+#if defined(ARCH_BLACKHOLE)
+    if constexpr (
+        all_writes_counted && tt::tt_fabric::local_chip_noc_equals_downstream_noc &&
+        tt::tt_fabric::edm_to_local_chip_noc == noc_index) {
+        while (!ncrisc_noc_nonposted_writes_flushed(tt::tt_fabric::edm_to_local_chip_noc));
+        return;
+    }
+#endif
+    // The channel's own transaction IDs (its range from the host), with or without deadlock avoidance; read after the
+    // channel's last local write and forward reach the NIU (wait_cmd_bufs_ready).
+    wait_cmd_bufs_ready(
+        tt::tt_fabric::edm_to_local_chip_noc,
+        tt::tt_fabric::local_chip_data_cmd_buf,
+        tt::tt_fabric::edm_to_downstream_noc,
+        receiver_channel_forwarding_data_cmd_buf_ids[rx_channel_id]);
+    const uint32_t start_trid = RX_CH_TRID_STARTS[rx_channel_id];
+    const uint32_t end_trid = start_trid + RX_CH_NUM_TRIDS[rx_channel_id];
+    for (uint32_t i = start_trid; i < end_trid; i++) {
+        if constexpr (tt::tt_fabric::local_chip_noc_equals_downstream_noc) {
+            while (!ncrisc_noc_nonposted_write_with_transaction_id_flushed(tt::tt_fabric::edm_to_local_chip_noc, i));
+        } else {
+            while (!ncrisc_noc_nonposted_write_with_transaction_id_flushed(tt::tt_fabric::edm_to_downstream_noc, i));
+            while (!ncrisc_noc_nonposted_write_with_transaction_id_flushed(tt::tt_fabric::edm_to_local_chip_noc, i));
         }
     }
 }
 
 // Shifts the chunk encoding in a scatter write packet to the next chunk
-FORCE_INLINE void shift_to_next_chunk(uint8_t& chunk_encodings) { chunk_encodings >>= 2; }
+FORCE_INLINE void shift_to_next_chunk(uint8_t& chunk_encodings) {
+    chunk_encodings >>= tt::tt_fabric::NOC_SCATTER_CHUNK_ENCODING_BITS;
+}
 
 // Core implementation of unicast-to-local-chip dispatch.
 // Accepts pre-resolved payload_size_bytes and noc_send_type to avoid redundant uncached L1 reads
 // when the caller has already loaded these (e.g. via a packed 4B load).
 __attribute__((optimize("jump-tables")))
-#ifndef FABRIC_2D
+// #ifndef FABRIC_2D
 FORCE_INLINE
-#endif
+    // #endif
     void
     execute_chip_unicast_to_local_chip_impl(
         tt_l1_ptr PACKET_HEADER_TYPE* const packet_start,
@@ -257,7 +279,8 @@ FORCE_INLINE
                 chunk_size,
                 transaction_id,
                 tt::tt_fabric::local_chip_data_cmd_buf,
-                tt::tt_fabric::edm_to_local_chip_noc);
+                tt::tt_fabric::edm_to_local_chip_noc,
+                tt::tt_fabric::forward_and_local_write_noc_vc);
             offset += chunk_size;
             shift_to_next_chunk(packet_encoding);
 
@@ -270,7 +293,8 @@ FORCE_INLINE
                     chunk_size,
                     transaction_id,
                     tt::tt_fabric::local_chip_data_cmd_buf,
-                    tt::tt_fabric::edm_to_local_chip_noc);
+                    tt::tt_fabric::edm_to_local_chip_noc,
+                    tt::tt_fabric::forward_and_local_write_noc_vc);
                 offset += chunk_size;
                 shift_to_next_chunk(packet_encoding);
 
@@ -283,15 +307,16 @@ FORCE_INLINE
                         chunk_size,
                         transaction_id,
                         tt::tt_fabric::local_chip_data_cmd_buf,
-                        tt::tt_fabric::edm_to_local_chip_noc);
+                        tt::tt_fabric::edm_to_local_chip_noc,
+                        tt::tt_fabric::forward_and_local_write_noc_vc);
                     offset += chunk_size;
                     shift_to_next_chunk(packet_encoding);
                 }
             }
 
             // Last chunk is either a unicast write or a semaphore increment
-            constexpr uint8_t CHUNK_ENCODING_MASK = 0b11;  // Gets us the encoding of the least significant chunk
-            const ChunkEncoding chunk_encoding = static_cast<ChunkEncoding>(packet_encoding & CHUNK_ENCODING_MASK);
+            const ChunkEncoding chunk_encoding =
+                static_cast<ChunkEncoding>(packet_encoding & tt::tt_fabric::NOC_SCATTER_CHUNK_ENCODING_MASK);
             const uint64_t final_destination_noc_address = scatter.noc_address[last_chunk_index];
             if (chunk_encoding == ChunkEncoding::CHUNK_ENCODING_UNICAST_WRITE) {
                 const uint16_t final_chunk_size = static_cast<uint16_t>(payload_size_bytes - offset);
@@ -301,7 +326,8 @@ FORCE_INLINE
                     final_chunk_size,
                     transaction_id,
                     tt::tt_fabric::local_chip_data_cmd_buf,
-                    tt::tt_fabric::edm_to_local_chip_noc);
+                    tt::tt_fabric::edm_to_local_chip_noc,
+                    tt::tt_fabric::forward_and_local_write_noc_vc);
             } else if (chunk_encoding != ChunkEncoding::CHUNK_ENCODING_NOP) {
                 if (chunk_encoding == ChunkEncoding::CHUNK_ENCODING_SEMINC_FLUSH) {
                     flush_write_to_noc_pipeline(rx_channel_id);
@@ -333,9 +359,9 @@ FORCE_INLINE
 // The caller-provided payload_size_bytes is still used (not the packed copy) to preserve
 // existing call-site semantics.
 __attribute__((optimize("jump-tables")))
-#ifndef FABRIC_2D
+// #ifndef FABRIC_2D
 FORCE_INLINE
-#endif
+    // #endif
     void
     execute_chip_unicast_to_local_chip(
         tt_l1_ptr PACKET_HEADER_TYPE* const packet_start,
@@ -431,24 +457,16 @@ FORCE_INLINE void update_packet_header_for_next_hop(
     packet_header->routing_fields.value = new_value;
 }
 
+// Destination-major 2D action maps are complete at injection and immutable in transit. These no-op
+// overloads keep the shared 1D/2D forwarding path well-formed when it resolves updates by header type;
+// the 1D overloads above still advance their routes.
 FORCE_INLINE void update_packet_header_for_next_hop(
-    volatile tt_l1_ptr tt::tt_fabric::HybridMeshPacketHeader* packet_header,
-    tt::tt_fabric::LowLatencyMeshRoutingFields cached_routing_fields) {
-    if constexpr (UPDATE_PKT_HDR_ON_RX_CH) {
-        packet_header->routing_fields.value = cached_routing_fields.value + 1;
-    }
-}
+    volatile tt_l1_ptr tt::tt_fabric::HybridMeshPacketHeader* /*packet_header*/,
+    tt::tt_fabric::LowLatencyMeshRoutingFields /*cached_routing_fields*/) {}
 
 template <uint8_t NUM_SENDER_BUFFERS>
 void update_packet_header_for_next_hop(
-    tt::tt_fabric::EdmToEdmSender<NUM_SENDER_BUFFERS>& downstream_edm_interface, uint32_t value) {
-    if constexpr (UPDATE_PKT_HDR_ON_RX_CH) {
-        tt::tt_fabric::HybridMeshPacketHeader* packet_base = nullptr;
-        std::uintptr_t offset = reinterpret_cast<std::uintptr_t>(&(packet_base->routing_fields));
-        downstream_edm_interface.template update_edm_buffer_slot_word(
-            offset, value, tt::tt_fabric::edm_to_downstream_noc);
-    }
-}
+    tt::tt_fabric::EdmToEdmSender<NUM_SENDER_BUFFERS>& /*downstream_edm_interface*/, uint32_t /*value*/) {}
 
 // This function forwards a packet to the downstream EDM channel for eventual sending
 // to the next chip in the line/ring

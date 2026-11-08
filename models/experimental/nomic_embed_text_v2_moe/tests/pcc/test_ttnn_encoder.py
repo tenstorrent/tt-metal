@@ -228,9 +228,10 @@ def test_routing_agreement_holds_at_depth(device, config, reference_model, refer
             # block input: the block input is one sub-block short of where routing happens, so
             # measuring there would report decisions the model never makes.
             tt_attn = layer.attn(tensor, rot_mats)
-            tt_hidden = layer._norm(tt_attn, tensor, layer.norm1_weight, layer.norm1_bias)
-            _, _, indices = layer.mlp.router.select(flatten_tokens(tt_hidden))
-            selected = ttnn.to_torch(indices).long().reshape(tokens, config.moe_top_k)
+            tt_hidden = layer._norm(tt_attn, tensor, layer.norm1)
+            routing = layer.mlp.router(flatten_tokens(tt_hidden))
+            selected = ttnn.to_torch(routing.indices).long().reshape(tokens, config.moe_top_k)
+            routing.deallocate()
             with torch.no_grad():
                 block = reference.layers[idx]
                 ref_hidden = block.norm1(block.attn(reference_input, attention_mask=None) + reference_input)

@@ -209,7 +209,7 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create_
     make_cb(cb_q_arg, (stream_heads ? 2 : 1) * HB * QC * Dt, q_fmt, q_tile);
     make_cb(cb_k_arg, 2 * KC * Dt, k_fmt, k_tile);
     make_cb(cb_w_arg, Hi * QC, tt::DataFormat::Float16_b, bf16_tile);
-    make_cb(cb_mask_arg, num_mask_tiles, tt::DataFormat::Float16_b, bf16_tile);
+    make_cb(cb_mask_arg, args.key_compression_ratio + 1, tt::DataFormat::Float16_b, bf16_tile);
     const tt::DataFormat acc_fmt = fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
     const uint32_t acc_tile = fp32_dest_acc_en ? fp32_tile : bf16_tile;
     // cb_qk buffers a batch of relu(q.kT) tiles so compute runs the batch's matmuls then mul+accumulates,
@@ -240,8 +240,8 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create_
     // max(2*KC, .) keeps the QC<=2 double buffer and a whole multiple of QC*KC so a push never wraps mid-unit.
     make_cb(cb_acc_strip_arg, std::max(2u * KC, QC * KC), acc_fmt, acc_tile);
 
-    // Common args: 9 dims then the CB indices in CbArg order. chunk_t is NOT here (per-device runtime arg).
-    std::vector<uint32_t> common_ct = {Hi, Sqt, Tt, Dt, QC, KC, HB, G, block_tiles};
+    // Common dimensions (including compressed-key ratio), then CB indices. chunk_t stays a runtime arg.
+    std::vector<uint32_t> common_ct = {Hi, Sqt, Tt, Dt, QC, KC, HB, G, block_tiles, args.key_compression_ratio};
     common_ct.insert(common_ct.end(), cb_id.begin(), cb_id.end());
 
     // MSA synthesizes the constant gate in-kernel (no weights tensor / no fill op): the reader fills cb_w
@@ -381,7 +381,12 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create_
     const auto [k_batch_page_offset, kv_len_tiles] = persistent_cache_args(args, k);
     std::vector<uint32_t> reader_values(indexer_common::reader::Count, 0u);
     const std::array<uint32_t, 6> reader_prefix = {
-        q.buffer()->address(), k.buffer()->address(), w.buffer()->address(), 0u, k_batch_page_offset, kv_len_tiles};
+        q.mesh_buffer().address(),
+        k.mesh_buffer().address(),
+        w.mesh_buffer().address(),
+        0u,
+        k_batch_page_offset,
+        kv_len_tiles};
     std::copy(reader_prefix.begin(), reader_prefix.end(), reader_values.begin());
     append_multicast_axes(reader_values, phys);
     tt::tt_metal::SetCommonRuntimeArgs(program, reader_id, reader_values);
@@ -390,7 +395,7 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create_
     tt::tt_metal::SetCommonRuntimeArgs(
         program,
         writer_id,
-        {out.buffer()->address(), kv_len_tiles, chunk_t, geom.straddle_q_tile, geom.straddle_jump_tiles});
+        {out.mesh_buffer().address(), kv_len_tiles, chunk_t, geom.straddle_q_tile, geom.straddle_jump_tiles});
     for (uint32_t row = 0; row < rows_used; ++row) {
         for (uint32_t col = 0; col < cols_used; ++col) {
             const CoreCoord core{col, row};
@@ -442,13 +447,13 @@ void IndexerScoreProgramFactory::override_runtime_arguments(
     // Refresh the uniform reader block once per dispatch, then copy it to each program.
     // Fused-only slots stay zero on the single-chip/unfused path.
     const std::array<uint32_t, indexer_common::reader::Count> reader_values = {
-        tensors.q.buffer()->address(),
-        tensors.k.buffer()->address(),
-        tensors.weights.buffer()->address(),
+        tensors.q.mesh_buffer().address(),
+        tensors.k.mesh_buffer().address(),
+        tensors.weights.mesh_buffer().address(),
         0u,
         k_batch_page_offset,
         kv_len_tiles};
-    const uint32_t out_address = out.buffer()->address();
+    const uint32_t out_address = out.mesh_buffer().address();
     for (auto& [range, shared] : cached.shared_variables) {
         auto& program = cached.workload.get_programs().at(range);
         auto& reader_args = tt::tt_metal::GetCommonRuntimeArgs(program, shared.reader_kernel);

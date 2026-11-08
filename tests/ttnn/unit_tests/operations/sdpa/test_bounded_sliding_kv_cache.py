@@ -271,6 +271,38 @@ def test_paged_update_cache_modulo_must_be_multiple_of_block_size(device, expect
         )
 
 
+def test_paged_update_cache_modulo_must_fit_page_table(device, expect_error):
+    """``cache_position_modulo`` wider than ``page_table_width * block_size`` must fail: the kernel
+    would look up page-table entries past the end of the table."""
+    torch.manual_seed(3)
+    num_users = 1
+    num_kv_heads = 1
+    block_size = 32
+    head_dim = 128
+    num_blocks = 8
+    page_table_width = 4
+
+    cache_torch = torch.randn(num_blocks, num_kv_heads, block_size, head_dim).bfloat16().float()
+    cache_tt = ttnn.Tensor(cache_torch, ttnn.bfloat16).to(ttnn.TILE_LAYOUT).to(device)
+
+    page_table = torch.arange(page_table_width, dtype=torch.int32).reshape(num_users, page_table_width)
+    page_table_tt = ttnn.Tensor(page_table, ttnn.int32).to(device)
+    cache_idxs_tt = ttnn.Tensor(torch.zeros(num_users, dtype=torch.int32), ttnn.int32).to(device)
+
+    x = torch.randn([1, num_users, num_kv_heads, head_dim]).bfloat16().float()
+    x_padded = torch.nn.functional.pad(x, (0, 0, 0, 32 - num_kv_heads), "constant", 0)
+    xt = _sharded_kv_input(device, x_padded)
+
+    with expect_error(RuntimeError, "cache_position_modulo .* must fit in max_num_blocks_per_seq"):
+        ttnn.experimental.paged_update_cache(
+            cache_tt,
+            xt,
+            update_idxs_tensor=cache_idxs_tt,
+            page_table=page_table_tt,
+            cache_position_modulo=6 * block_size,  # fits the 8-block pool, not the 4-entry page table
+        )
+
+
 # ── paged_fill_cache: long prefill with wrap survives the last cache_position_modulo tokens ──
 
 

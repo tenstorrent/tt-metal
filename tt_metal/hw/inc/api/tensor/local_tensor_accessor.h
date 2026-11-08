@@ -9,9 +9,14 @@
 #include <tuple>
 
 #include "api/core_local_mem.h"
+#include "api/dataflow/buf_rw_note.h"
 #include "api/debug/assert.h"
 #include "api/tensor/tensor_accessor_args.h"
 #include "api/tensor/tensor_binding_token.h"
+
+// Forward declared from dataflow_api.h / compute/common.h
+template <typename T>
+T get_arg_val(int arg_idx);
 
 /**
  * @brief A minimal accessor for a tensor's node-local L1 region.
@@ -65,6 +70,27 @@ public:
         // ADDR_CRTA_OFFSET is a byte offset; dividing recovers the word index
         static_assert(
             ADDR_CRTA_OFFSET % sizeof(uint32_t) == 0, "TensorBindingToken: ADDR_CRTA_OFFSET must be 4-byte aligned");
+        // Op-to-op R/W inference: this hands the kernel the tensor's local memory (CPU loads/stores, LLK operands, raw
+        // NoC addresses), none of which carries the binding. Note it as both read and written; the slot is the binding
+        // id a TensorAccessor built from the same token uses.
+        tt_buf_rw::note_read_write<ADDR_CRTA_OFFSET>();
+    }
+
+    // Construct from a Metal 2.0 per-node binding token.
+    template <uint32_t CTA_OFFSET, uint32_t ADDR_RTA_OFFSET>
+    [[nodiscard]] explicit LocalTensorAccessor(
+        tensor_accessor::PerNodeTensorBindingToken<CTA_OFFSET, ADDR_RTA_OFFSET>) noexcept :
+        LocalTensorAccessor(get_arg_val<uint32_t>(ADDR_RTA_OFFSET / sizeof(uint32_t))) {
+        static_assert(
+            !tensor_accessor::PerNodeTensorBindingToken<CTA_OFFSET, ADDR_RTA_OFFSET>::args_t::is_dram,
+            "LocalTensorAccessor requires an L1-resident tensor, but this binding token is for a DRAM "
+            "tensor. A DRAM tensor has no node-local L1 region; use TensorAccessor instead.");
+        static_assert(
+            ADDR_RTA_OFFSET % sizeof(uint32_t) == 0,
+            "PerNodeTensorBindingToken: ADDR_RTA_OFFSET must be 4-byte aligned");
+        // Op-to-op R/W inference keys a binding by its one address, which a per-node tensor doesn't have.
+        // The accesses can't be attributed, so give up on the kernel rather than miss one.
+        tt_buf_rw::note_opaque();
     }
 
     // Construct from the "binding not present" token.
@@ -77,7 +103,7 @@ public:
     // (Typically a legacy Buffer's address passed into the kernel as a CRTA.)
     [[nodiscard]] explicit LocalTensorAccessor(uint32_t bank_base_address) noexcept :
         mem_(static_cast<uintptr_t>(bank_base_address)) {
-        ASSERT(mem_.get_address() % alignof(T) == 0);
+        ASSERT(bank_base_address % alignof(T) == 0);
     }
 
     /** @brief Access the element at the given index (read or write).
@@ -90,17 +116,6 @@ public:
      */
     [[nodiscard]] T& operator[](uint32_t index) const { return mem_[index]; }
 
-    /** @brief L1 base address of the local region, as a raw uint32_t byte address.
-     *
-     * This is the form most kernel-side APIs consume (NOC transfers, CB/LLK configuration, ...).
-     *
-     * @return the local region's L1 base address (as uint32_t).
-     */
-    [[nodiscard]] uint32_t get_bank_base_address() const noexcept {
-        // static_cast narrows to uint32_t (uintptr_t is 64-bit on Gen2); an L1 address always fits.
-        return static_cast<uint32_t>(mem_.get_address());
-    }
-
 #if defined(COMPILE_FOR_TRISC)
     // Returns the LLKOperand pointing to the base address of the local tensor accessor
     // Functionalities meant to be used with LLKOperand for LLK 2.0
@@ -109,7 +124,7 @@ public:
     // - Operand: The LLKOperand type to return. (hint: use LLKOperandFrom<tensor::token>)
     template <typename Operand>
     [[nodiscard]] Operand operand() const noexcept {
-        return Operand{(get_bank_base_address() >> 4) - 1};
+        return Operand{(static_cast<uint32_t>(local_mem::detail::AddressAccess::address(mem_)) >> 4) - 1};
     }
 #endif
 
@@ -126,7 +141,7 @@ public:
      * (pointer arithmetic, comparisons, ...).
      *
      * For element access, prefer operator[] within a scoped_lock() scope. Use this only when you
-     * need the raw underlying handle (e.g. local_mem().get_unsafe_ptr()).
+     * need the underlying handle (e.g. pointer arithmetic, or a helper's CoreLocalMem overload).
      */
     // Returned by value: CoreLocalMem<T> is trivially copyable and pointer-sized.
     [[nodiscard]] CoreLocalMem<T> local_mem() const noexcept { return mem_; }
@@ -135,47 +150,9 @@ private:
     CoreLocalMem<T> mem_;
 };
 
-// A LocalTensorAccessor names this node's L1 region of a tensor, so it can be either endpoint of a NoC
-// transaction. This specialization makes it usable directly as the Src or Dst of any Noc operation.
-//
-// Notes:
-//  - `offset_bytes` addresses within the local region. LocalTensorAccessor does not expose the
-//    region's extent, so no bounds ASSERT is possible here.
-//  - LocalTensorAccessor may be used by both DM and compute (TRISC) kernels, but only DM kernels have
-//    NoC access.
-#if !defined(COMPILE_FOR_TRISC)
-template <typename T>
-struct noc_traits_t<LocalTensorAccessor<T>> {
-    struct src_args_type {
-        uint32_t offset_bytes = 0;
-    };
-    struct dst_args_type {
-        uint32_t offset_bytes = 0;
-    };
-    struct dst_args_mcast_type {};
-
-    template <Noc::AddressType address_type>
-    static auto src_addr(const LocalTensorAccessor<T>& src, const Noc&, const src_args_type& args) {
-        static_assert(
-            address_type == Noc::AddressType::LOCAL_L1, "LocalTensorAccessor can only be used as a local L1 source");
-        return src.get_bank_base_address() + args.offset_bytes;
-    }
-    template <Noc::AddressType address_type>
-    static auto dst_addr(const LocalTensorAccessor<T>& dst, const Noc&, const dst_args_type& args) {
-        static_assert(
-            address_type == Noc::AddressType::LOCAL_L1,
-            "LocalTensorAccessor can only be used as a local L1 destination");
-        return dst.get_bank_base_address() + args.offset_bytes;
-    }
-    template <Noc::AddressType address_type>
-    static auto dst_addr_mcast(const LocalTensorAccessor<T>&, const Noc&, const dst_args_mcast_type&) {
-        static_assert(false, "LocalTensorAccessor cannot be used as a NoC multicast destination");
-    }
-};
-
-template <typename T>
-inline constexpr bool noc_zero_l1_endpoint_v<LocalTensorAccessor<T>> = true;
-#endif  // !defined(COMPILE_FOR_TRISC)
+// A LocalTensorAccessor names this node's L1 region of a tensor, so it can be either endpoint of a NoC transaction (DM
+// kernels only): see internal/local_mem/noc_traits.h.
+#include "internal/local_mem/noc_traits.h"
 
 /**
  * @brief Map a tensor sequence (tuple of TensorBindingToken) to an array of LocalTensorAccessor.

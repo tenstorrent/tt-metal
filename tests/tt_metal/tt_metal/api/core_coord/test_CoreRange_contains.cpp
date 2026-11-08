@@ -20,9 +20,9 @@ TEST_F(CoreCoordFixture, CPU_TestCoreRangeContains) {
     EXPECT_TRUE(this->cr1.contains(this->cr1));
     EXPECT_TRUE(this->cr4.contains(this->cr2));
     // Contains CoreRangeSet
-    EXPECT_TRUE(this->cr1.contains(::CoreRangeSet(this->sc1)));
-    EXPECT_TRUE(this->cr1.contains(::CoreRangeSet(this->cr1)));
-    EXPECT_TRUE(this->cr4.contains(::CoreRangeSet(std::vector{this->cr1, this->cr2, this->cr3})));
+    EXPECT_TRUE(this->cr1.contains(tt::tt_metal::CoreRangeSet(this->sc1)));
+    EXPECT_TRUE(this->cr1.contains(tt::tt_metal::CoreRangeSet(this->cr1)));
+    EXPECT_TRUE(this->cr4.contains(tt::tt_metal::CoreRangeSet(std::vector{this->cr1, this->cr2, this->cr3})));
 }
 
 TEST_F(CoreCoordFixture, CPU_TestCoreRangeNotContains) {
@@ -37,10 +37,10 @@ TEST_F(CoreCoordFixture, CPU_TestCoreRangeNotContains) {
     EXPECT_FALSE(this->cr1.contains(this->cr2));
     EXPECT_FALSE(this->cr7.contains(this->sc1));
     // Not Contains CoreRangeSet
-    EXPECT_FALSE(this->sc1.contains(::CoreRangeSet(this->cr1)));
-    EXPECT_FALSE(this->sc1.contains(::CoreRangeSet(this->sc2)));
-    EXPECT_FALSE(this->cr1.contains(::CoreRangeSet(std::vector{this->sc1, this->cr2})));
-    EXPECT_FALSE(this->cr10.contains(::CoreRangeSet(std::vector{this->sc3, this->sc4, this->sc1})));
+    EXPECT_FALSE(this->sc1.contains(tt::tt_metal::CoreRangeSet(this->cr1)));
+    EXPECT_FALSE(this->sc1.contains(tt::tt_metal::CoreRangeSet(this->sc2)));
+    EXPECT_FALSE(this->cr1.contains(tt::tt_metal::CoreRangeSet(std::vector{this->sc1, this->cr2})));
+    EXPECT_FALSE(this->cr10.contains(tt::tt_metal::CoreRangeSet(std::vector{this->sc3, this->sc4, this->sc1})));
 }
 
 }  // namespace basic_tests::CoreRange

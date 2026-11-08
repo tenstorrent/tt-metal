@@ -68,17 +68,21 @@ from ...encoders.qwen3vl.loader_minimax_h3 import (
     load_minimax_h3_text_encoder_weights,
 )
 from ...encoders.qwen3vl.model_qwen3vl import create_rope_tensors, mrope_position_ids, vision_token_runs
-from ...encoders.qwen3vl.vision_qwen3vl import pad_patches_for_sp, vision_cu_seqlens
+from ...encoders.qwen3vl.vision_qwen3vl import pad_patches_for_sp
+from ...encoders.vision import vision_cu_seqlens
 from ...layers.audio_ops import weights_variant
+from ...layers.module import Module
 from ...models.audio_vae.minimax_h3.convert_minimax_h3_audio import convert_minimax_h3_audio_state_dict
 from ...models.audio_vae.minimax_h3.decoder_minimax_h3_audio import MiniMaxH3AudioDecoder
 from ...models.audio_vae.minimax_h3.encoder_minimax_h3_audio import MiniMaxH3AudioEncoder
+from ...models.transformers.minimax_h3.adaln_tilerow import DEFAULT_MAX_MIXED_TILES, tilerow_remap
 from ...models.transformers.minimax_h3.attention_minimax_h3 import prepare_rope_tables
+from ...models.transformers.minimax_h3.length_classes import uncovered_class_lengths
 from ...models.transformers.minimax_h3.transformer_minimax_h3 import MiniMaxH3Transformer3DModel
 from ...models.vae.minimax_h3.vae_minimax_h3 import MiniMaxH3Vae, MiniMaxH3VaeConfig
 from ...parallel.config import DiTParallelConfig, EncoderParallelConfig, ParallelFactor, VAEParallelConfig
 from ...parallel.manager import CCLManager
-from ...utils import cache
+from ...utils import cache, dram_probe
 from ...utils.conv3d import conv3d_blocking_hash
 from ...utils.tensor import bf16_tensor, from_torch, local_device_to_torch, pad_single
 from ...utils.tracing import StateTensor
@@ -93,6 +97,7 @@ from .packing import (
     MINIMAX_H3_FPS,
     MINIMAX_H3_KEYFRAME_NOISE_AUG,
     MINIMAX_H3_MAX_DURATION,
+    MINIMAX_H3_MODALITY_NUM,
     MINIMAX_H3_TEXT_TAG,
     MINIMAX_H3_VIDEO_TAG,
     MiniMaxH3PackedSequence,
@@ -149,7 +154,8 @@ MINIMAX_H3_PIXEL_STD = _MINIMAX_H3_PIXEL_STD
 # conditioning rows, which sit at max(t, 0.999). See `references.py`.
 MINIMAX_H3_AUDIO_CONDITION_TIMESTEP = 1.0
 
-# Read from the two scheduler_config.json files, which hold nothing else.
+# Read from the two scheduler_config.json files, which hold nothing else. Distillation adapters may
+# need other shifts.
 VIDEO_SHIFT = 12.0
 AUDIO_SHIFT = 3.0
 
@@ -170,6 +176,121 @@ def _requested_audio_t_factor(audio_t_factor: int | None, default: int = _DEFAUL
         return int(raw), True
     except ValueError:
         raise ValueError(f"{_AUDIO_T_FACTOR_ENV}={raw!r} must be an integer T-shard factor") from None
+
+
+_DYNAMIC_LENGTH_ENV = "MINIMAX_H3_DYNAMIC_LENGTH"
+
+
+def _requested_dynamic_length(dynamic_length: bool | None, default: bool) -> tuple[bool, bool]:
+    """Explicit kwarg wins; else MINIMAX_H3_DYNAMIC_LENGTH=0|1; else `default`. Returns (dynamic, from_env)."""
+    if dynamic_length is not None:
+        return bool(dynamic_length), False
+    raw = os.environ.get(_DYNAMIC_LENGTH_ENV)
+    if raw is None:
+        return default, False
+    if raw not in ("0", "1"):
+        raise ValueError(f"{_DYNAMIC_LENGTH_ENV}={raw!r} must be '0' or '1'")
+    return raw == "1", True
+
+
+def _resolve_max_sequence_length(
+    bucket_ladder: tuple[int, ...],
+    max_sequence_length: int | None,
+    *,
+    bucket_denoise: bool,
+    dynamic_length: bool,
+    sp_alignment: int,
+) -> int:
+    """The admission cap: the top rung when bucketed, an explicit length when dynamic (default: that rung). Both
+    paths size the K/V gather pair from it, so on the bucketed path it may not sit below the top rung, which the
+    higher rungs would then overflow."""
+    cap = bucket_ladder[-1] if max_sequence_length is None else int(max_sequence_length)
+    if dynamic_length:
+        validate_bucket_ladder((cap,), sp_alignment)
+    elif bucket_denoise and cap < bucket_ladder[-1]:
+        raise ValueError(
+            f"max_sequence_length {cap} is below the top rung {bucket_ladder[-1]}: the bucketed path sizes the K/V "
+            "gather pair for every rung; raise it or shorten the ladder"
+        )
+    return cap
+
+
+class _DenoisePath(NamedTuple):
+    trace_denoise: bool
+    bucket_denoise: bool
+    dynamic_length: bool
+    dynamic_from_env: bool
+    line_fallback: bool = False  # the preset's dynamic default yielded to a line topology
+
+    @property
+    def name(self) -> str:
+        if self.dynamic_length:
+            return "dynamic length"
+        if self.line_fallback:
+            return "bucketed (line topology; dynamic length needs a ring)"
+        if self.trace_denoise:
+            return "bucketed, traced"
+        return "bucketed" if self.bucket_denoise else "unbucketed"
+
+
+def _resolve_denoise_path(
+    preset: Mapping,
+    *,
+    trace_denoise: bool | None,
+    bucket_denoise: bool | None,
+    bucket_ladder: tuple[int, ...] | None,
+    dynamic_length: bool | None,
+    coresident: bool,
+    topology: ttnn.Topology = ttnn.Topology.Ring,
+) -> _DenoisePath:
+    """The denoise path the constructor kwargs select on `preset`.
+
+    `dynamic_length` resolves kwarg > MINIMAX_H3_DYNAMIC_LENGTH > preset, and the preset's dynamic default
+    yields to a caller that pinned the bucketed path by any of `trace_denoise`, `bucket_denoise` or
+    `bucket_ladder`, and to a line `topology` (the fused AGMM / MMRS pins that give each length class one
+    program set are Ring-only; on a line the projections would fall back to length-keyed configs and every
+    new length would compile). A dynamic request (kwarg or env) on a line, or with `trace_denoise` or
+    `bucket_denoise=True`, is contradictory and raises; a ladder beside it only supplies the default
+    `max_sequence_length`.
+    """
+    trace = (preset.get("trace_denoise", False) if trace_denoise is None else trace_denoise) and coresident
+    pinned = trace_denoise is not None or bucket_denoise is not None or bucket_ladder is not None
+    dynamic, from_env = _requested_dynamic_length(dynamic_length, preset.get("dynamic_length", False) and not pinned)
+    line_fallback = False
+    if dynamic and topology != ttnn.Topology.Ring:
+        if dynamic_length is not None or from_env:
+            raise ValueError(
+                "dynamic_length needs a Ring topology: the fused AGMM / MMRS pins that give each length class one "
+                "program set are Ring-only, and on a line the projections fall back to length-keyed configs; use a "
+                "ring fabric or pass dynamic_length=False"
+            )
+        dynamic, line_fallback = False, True
+    if dynamic and trace:
+        raise ValueError("dynamic_length is eager-only: a captured denoise trace cannot take a new length")
+    if dynamic and bucket_denoise:
+        raise ValueError("dynamic_length and bucket_denoise=True select both denoise paths; pass one of them")
+    bucket = preset.get("bucket_denoise", False) if bucket_denoise is None else bucket_denoise
+    return _DenoisePath(bool(trace), bool(trace or (bucket and not dynamic)), dynamic, from_env, line_fallback)
+
+
+_DIT_FSDP_ENV = "MINIMAX_H3_DIT_FSDP"
+
+
+def _resolve_dit_fsdp(preset: Mapping, *, dit_fsdp: bool | None, task: str, dynamic_length: bool) -> tuple[bool, str]:
+    """MINIMAX_H3_DIT_FSDP=0|1 > kwarg > preset; else on for dynamic-length ref2va only, whose cap-sized gather
+    pair does not fit beside unsharded weights on a 4x8. Returns (dit_fsdp, source) for the construction log."""
+    raw = os.environ.get(_DIT_FSDP_ENV)
+    if raw is not None:
+        if raw not in ("0", "1"):
+            raise ValueError(f"{_DIT_FSDP_ENV} must be '0' or '1'")
+        return raw == "1", f"from {_DIT_FSDP_ENV}"
+    if dit_fsdp is not None:
+        return bool(dit_fsdp), "kwarg"
+    if "dit_fsdp" in preset:
+        return bool(preset["dit_fsdp"]), "preset"
+    if dynamic_length and task == "ref2va":
+        return True, "dynamic ref2va"
+    return False, "default"
 
 
 def _resolve_audio_t_shard(
@@ -274,13 +395,16 @@ class MiniMaxH3ArenaCaps:
 
 @dataclass
 class _BucketState:
-    """Per-rung device state whose shape depends on the padded length; bound once, never rebound."""
+    """Per-rung device state whose shape depends on the padded length; bound once, never rebound.
+    The dynamic-length pipeline keeps a single one, rebound at the live padded length per request."""
 
     rope_cos: StateTensor = field(default_factory=StateTensor)
     rope_sin: StateTensor = field(default_factory=StateTensor)
     adaln: StateTensor = field(default_factory=StateTensor)
     tsi: StateTensor = field(default_factory=StateTensor)
     assembly_idx: StateTensor = field(default_factory=StateTensor)
+    adaln_tile_map: StateTensor = field(default_factory=StateTensor)
+    adaln_expanded: StateTensor = field(default_factory=StateTensor)
     warm: bool = False
 
 
@@ -298,6 +422,9 @@ _PRESETS_BH: dict[tuple[int, ...], dict] = {
         "num_links": 2,
         "topology": ttnn.Topology.Ring,
         "coresident": True,
+        # Dynamic length by default; the ladder and `bucket_denoise` stay as the backup path (any bucketed
+        # kwarg or MINIMAX_H3_DYNAMIC_LENGTH=0 selects it) and the top rung is the default admission cap.
+        "dynamic_length": True,
         "bucket_denoise": True,
         "bucket_ladder": {"t2va": MINIMAX_H3_BUCKET_LADDER_4X8, "ref2va": MINIMAX_H3_REF2VA_BUCKET_LADDER_4X8},
         "use_persistent_ccl_buffers": False,
@@ -308,7 +435,7 @@ _PRESETS_BH: dict[tuple[int, ...], dict] = {
     #
     # `trace_denoise` is quad-only, mirroring Wan's `traced = mesh_shape == (4, 32)`: at SP=32 a step
     # is dispatch-bound, so the trace is what makes the extra devices pay. 4x8 has enough work per
-    # chip to not need it. Both meshes bucket.
+    # chip to not need it and serves the length dynamically; the quad buckets, since a trace freezes it.
     (4, 32): {
         "tp_axis": 0,
         "sp_axis": 1,
@@ -353,6 +480,8 @@ _PRESETS_WH: dict[tuple[int, ...], dict] = {
         "topology": ttnn.Topology.Ring,
         "coresident": False,
         "dit_fsdp": True,
+        # Bucketed: dynamic length is unmeasured on Wormhole.
+        "bucket_denoise": True,
         "use_persistent_ccl_buffers": False,
         "bucket_ladder": {"t2va": MINIMAX_H3_BUCKET_LADDER_4X8, "ref2va": MINIMAX_H3_REF2VA_BUCKET_LADDER_4X8},
     },
@@ -396,6 +525,13 @@ def resolve_mesh_preset(mesh_shape: tuple[int, ...], *, required: bool = True) -
             "Pass tp_axis, sp_axis, num_links and topology explicitly to run an untuned shape."
         )
         raise ValueError(msg)
+    # Overridden here because servers open their fabric from this preset; fabric and CCLs must agree.
+    override = os.environ.get("MINIMAX_H3_TOPOLOGY")
+    if override:
+        topologies = {"ring": ttnn.Topology.Ring, "linear": ttnn.Topology.Linear}
+        if override.lower() not in topologies:
+            raise ValueError(f"MINIMAX_H3_TOPOLOGY must be one of {sorted(topologies)}, got {override!r}")
+        preset = {**preset, "topology": topologies[override.lower()]}
     return preset
 
 
@@ -463,6 +599,10 @@ class MiniMaxH3Output:
         return self.audio.shape[-1] / self.sampling_rate
 
 
+def _skip_decode_warm() -> bool:
+    return os.environ.get("MINIMAX_H3_WARMUP_SKIP_DECODE_WARM", "0") == "1"
+
+
 def _is_host_rank() -> bool:
     return not ttnn.using_distributed_env() or int(ttnn.distributed_context_get_rank()) == 0
 
@@ -489,6 +629,8 @@ class MiniMaxH3Pipeline:
         topology: ttnn.Topology | None = None,
         coresident: bool | None = None,
         task: str = "t2va",
+        video_shift: float | None = None,
+        audio_shift: float | None = None,
         audio_split_mode: str | None = None,
         audio_t_factor: int | None = None,
         trace_audio: bool | None = None,
@@ -501,25 +643,49 @@ class MiniMaxH3Pipeline:
         vae_output_type: str = "yuv420",
         adaln_slot_roles: tuple[str, ...] | None = None,
         warmup: bool = True,
+        dynamic_length: bool | None = None,
+        max_sequence_length: int | None = None,
     ) -> None:
+        """`dynamic_length` serves every packed length up to `max_sequence_length` with one program set per
+        length class (eager only). It is the Blackhole 4x8 preset's default; `_resolve_denoise_path` has the
+        precedence (kwarg > MINIMAX_H3_DYNAMIC_LENGTH > preset) and how the bucketed kwargs keep that path."""
         self.mesh_device = mesh_device
         self.weights_dir = Path(weights_dir)
+        self.video_shift = VIDEO_SHIFT if video_shift is None else float(video_shift)
+        self.audio_shift = AUDIO_SHIFT if audio_shift is None else float(audio_shift)
         supplied = (tp_axis, sp_axis, num_links, topology)
         preset = resolve_mesh_preset(tuple(mesh_device.shape), required=any(v is None for v in supplied))
         tp_axis = preset["tp_axis"] if tp_axis is None else tp_axis
         sp_axis = preset["sp_axis"] if sp_axis is None else sp_axis
         num_links = preset["num_links"] if num_links is None else num_links
-        topology = preset["topology"] if topology is None else topology
+        if topology is None:
+            # A ring collective on a 1D line fabric aborts, so the open fabric wins over the preset.
+            fabric_is_line = ttnn.get_fabric_config() == ttnn.FabricConfig.FABRIC_1D
+            topology = ttnn.Topology.Linear if fabric_is_line else preset["topology"]
         coresident = preset.get("coresident", True) if coresident is None else coresident
-        self.trace_denoise = preset.get("trace_denoise", False) if trace_denoise is None else trace_denoise
         env_audio_t_shard = os.environ.get("MINIMAX_H3_AUDIO_T_SHARD")
         self.audio_t_shard = (
             env_audio_t_shard == "1" if env_audio_t_shard is not None else preset.get("audio_t_shard", False)
         )
         self.coresident = coresident
-        self.trace_denoise = self.trace_denoise and self.coresident
-        bucket_denoise = preset.get("bucket_denoise", False) if bucket_denoise is None else bucket_denoise
-        self.bucket_denoise = self.trace_denoise or bucket_denoise
+        path = _resolve_denoise_path(
+            preset,
+            trace_denoise=trace_denoise,
+            bucket_denoise=bucket_denoise,
+            bucket_ladder=bucket_ladder,
+            dynamic_length=dynamic_length,
+            coresident=coresident,
+            topology=topology,
+        )
+        self.trace_denoise = path.trace_denoise
+        self.bucket_denoise = path.bucket_denoise
+        self.dynamic_length = path.dynamic_length
+        self.dit_fsdp, fsdp_source = _resolve_dit_fsdp(
+            preset, dit_fsdp=dit_fsdp, task=task, dynamic_length=self.dynamic_length
+        )
+        source = f" (from {_DYNAMIC_LENGTH_ENV})" if path.dynamic_from_env else ""
+        fsdp = "on" if self.dit_fsdp else "off"
+        self._host_log(f"denoise path: {path.name}{source}; dit_fsdp: {fsdp} ({fsdp_source})")
         self.use_persistent_ccl_buffers = (
             preset.get("use_persistent_ccl_buffers", True)
             if use_persistent_ccl_buffers is None
@@ -531,7 +697,9 @@ class MiniMaxH3Pipeline:
         )
         self._log_generation = True
         self._buckets: dict[int, _BucketState] = {}
+        self._request_state = _BucketState()
         self._force_bucket: int | None = None
+        self._force_pad_to: int | None = None
         self._force_prompt_pad: int | None = None
         self._force_vision_pad: int | None = None
         self._tt_video = StateTensor()
@@ -541,7 +709,10 @@ class MiniMaxH3Pipeline:
         self._tt_video_out_idx = StateTensor()
         self._tt_audio_out_idx = StateTensor()
         self._tt_timestep = StateTensor()
+        self._tt_endpoint_timestep = StateTensor()
         self._tt_logical_n = StateTensor()
+        # True during `warmup`, whose output is discarded.
+        self._warming = False
         # One repository holds both partitions -- `transformer/` for t2va/fl2va and
         # `transformer_ref/` for ref2va -- with byte-identical `config.json`, so only the
         # weights differ. Fixed at construction because each is 62 GB and switching would
@@ -563,7 +734,17 @@ class MiniMaxH3Pipeline:
         if audio_split_mode not in ("off", "weight", "full", "kernel"):
             raise ValueError(f"audio_split_mode must be 'off', 'weight', 'full' or 'kernel', got {audio_split_mode!r}")
         self.audio_split_mode = audio_split_mode
-        self.trace_audio = preset.get("trace_audio", False) if trace_audio is None else bool(trace_audio)
+        if self.dynamic_length:
+            # The dynamic-length path is eager end to end: no stage of it is traced, so the preset's audio
+            # trace is not captured, and asking for one explicitly is an error.
+            if trace_audio:
+                raise ValueError("dynamic_length is eager-only: trace_audio cannot be combined with it")
+            self.trace_audio = False
+            if preset.get("trace_audio", False):
+                self._host_log("audio decode: eager (the dynamic-length path takes no traces)")
+        else:
+            self.trace_audio = preset.get("trace_audio", False) if trace_audio is None else bool(trace_audio)
+        # The audio traces are captured by `warmup`, which only a bucketed pipeline runs.
         assert not self.trace_audio or self.bucket_denoise, "trace_audio requires bucket_denoise"
         audio_t_factor, self._audio_t_factor_from_env = _requested_audio_t_factor(
             audio_t_factor, default=preset.get("audio_t_factor", _DEFAULT_AUDIO_T_FACTOR)
@@ -593,15 +774,22 @@ class MiniMaxH3Pipeline:
                     f"the top vision patch rung {self.vision_patch_ladder[-1]} is below the {max_patches} "
                     f"patches a ref2va request can reach"
                 )
-        if self.bucket_denoise:
+        self.max_sequence_length = _resolve_max_sequence_length(
+            self.bucket_ladder,
+            max_sequence_length,
+            bucket_denoise=self.bucket_denoise,
+            dynamic_length=self.dynamic_length,
+            sp_alignment=self.sp_factor * ttnn.TILE_SIZE,
+        )
+        if self.bucket_denoise or self.dynamic_length:
             caps = self.arena_caps
             admissible = caps.prompt + caps.condition_video_rows + caps.audio_rows + caps.video_rows
             if task == "ref2va":
                 admissible += caps.condition_audio_rows
-            if admissible > self.bucket_ladder[-1]:
+            if admissible > self.max_sequence_length:
                 raise ValueError(
-                    f"the arena caps admit a packed length up to {admissible}, beyond the top "
-                    f"bucket {self.bucket_ladder[-1]}; raise the ladder or lower the caps"
+                    f"the arena caps admit a packed length up to {admissible}, beyond the longest served "
+                    f"packed length {self.max_sequence_length}; raise it (or the ladder) or lower the caps"
                 )
         if adaln_slot_roles is None:
             adaln_slot_roles = MINIMAX_H3_ADALN_ROLES if task == "ref2va" else ("video", "audio", "condition_video")
@@ -652,21 +840,12 @@ class MiniMaxH3Pipeline:
         self._vision_config = None
         self._audio_decoder = None
         self._audio_encoder = None
-        # `None` takes the preset (Wormhole's 12 GB/chip needs the DiT sharded above 5 s; Blackhole does
-        # not), and MINIMAX_H3_DIT_FSDP=0/1 overrides both, like MINIMAX_H3_AUDIO_T_SHARD above.
-        self.dit_fsdp = preset.get("dit_fsdp", False) if dit_fsdp is None else dit_fsdp
-        env_dit_fsdp = os.environ.get("MINIMAX_H3_DIT_FSDP")
-        if env_dit_fsdp is not None:
-            if env_dit_fsdp not in ("0", "1"):
-                raise ValueError("MINIMAX_H3_DIT_FSDP must be '0' or '1'")
-            self.dit_fsdp = env_dit_fsdp == "1"
         self.last_seq_len: SeqLen | None = None
         self.last_program_cache_misses: dict[str, int] = {}
 
-        # Gather the packed sequence per SP shard instead of whole-then-partition: identical values, but
-        # the transformer never holds the full `[pad_to, hidden/TP]` sequence on every device.
-        # Arch-neutral in principle; enabled on Wormhole only until measured on Blackhole.
-        self._shard_assembly_indices = is_wormhole_b0() and self.sp_factor > 1
+        # Per-SP-shard gather instead of whole-then-partition: identical values, no full `[pad_to, hidden/TP]` sequence
+        # on every device and no length-keyed `mesh_partition` program. On Wormhole and on the dynamic-length path.
+        self._shard_assembly_indices = (is_wormhole_b0() or self.dynamic_length) and self.sp_factor > 1
 
         self._host_log("building the Qwen3-VL text encoder")
         self.encoder_ccl_manager = CCLManager(mesh_device=mesh_device, num_links=num_links, topology=topology)
@@ -704,11 +883,17 @@ class MiniMaxH3Pipeline:
             self._transformer.register_coresident_exclusions(self._text_encoder, *self._vae.modules)
             for module in self._vae.modules:
                 module.register_coresident_exclusions(self._text_encoder, self._transformer)
+            # The video VAE decoder needs most of DRAM, so the ref2va reference encoders yield to it and reload
+            # on demand via `MiniMaxH3Vae._ensure_loaded`.
+            self._vae.decoder.register_coresident_exclusions(
+                *(module for module in self._vae.modules if module is not self._vae.decoder)
+            )
 
         if self.coresident:
             self._prepare_transformer()
         self._prepare_text_encoder()
         self._prepare_audio_decoder()
+        dram_probe.register(self)
 
         if warmup:
             self._warmup_on_init()
@@ -726,6 +911,8 @@ class MiniMaxH3Pipeline:
         num_links: int | None = None,
         topology: ttnn.Topology | None = None,
         task: str = "t2va",
+        video_shift: float | None = None,
+        audio_shift: float | None = None,
         audio_split_mode: str | None = None,
         audio_t_factor: int | None = None,
         trace_audio: bool | None = None,
@@ -739,6 +926,9 @@ class MiniMaxH3Pipeline:
         adaln_slot_roles: tuple[str, ...] | None = None,
         warmup: bool = True,
         coresident: bool | None = None,
+        dynamic_length: bool | None = None,
+        max_sequence_length: int | None = None,
+        **subclass_kwargs,
     ) -> "MiniMaxH3Pipeline":
         """`task="t2va"` serves both t2va and fl2va; `task="ref2va"` loads `transformer_ref/`.
 
@@ -746,7 +936,10 @@ class MiniMaxH3Pipeline:
         `tp_axis`/`sp_axis`/`num_links`/`topology` to override it.
 
         `trace_denoise`, `bucket_denoise`, `use_persistent_ccl_buffers` and `bucket_ladder` default to the mesh preset;
-        `arena_caps` and `adaln_slot_roles` default to the task's envelope.
+        `arena_caps` and `adaln_slot_roles` default to the task's envelope. `dynamic_length` (the Blackhole 4x8
+        preset's default; kwarg > MINIMAX_H3_DYNAMIC_LENGTH=0|1 > preset) replaces the bucket ladder by the live
+        padded length up to `max_sequence_length`; passing any bucketed kwarg instead keeps that path. `dit_fsdp`
+        (MINIMAX_H3_DIT_FSDP=0|1 > kwarg > preset) is on by default for dynamic-length ref2va, see `_resolve_dit_fsdp`.
         """
         transformer_subfolder = "transformer_ref" if task == "ref2va" else "transformer"
         weights_dir = resolve_weights_dir(
@@ -764,6 +957,8 @@ class MiniMaxH3Pipeline:
             num_links=num_links,
             topology=topology,
             task=task,
+            video_shift=video_shift,
+            audio_shift=audio_shift,
             audio_split_mode=audio_split_mode,
             trace_audio=trace_audio,
             audio_t_factor=audio_t_factor,
@@ -777,6 +972,9 @@ class MiniMaxH3Pipeline:
             adaln_slot_roles=adaln_slot_roles,
             warmup=warmup,
             coresident=coresident,
+            dynamic_length=dynamic_length,
+            max_sequence_length=max_sequence_length,
+            **subclass_kwargs,
         )
 
     def _read_config(self, subfolder: str) -> dict:
@@ -1094,6 +1292,18 @@ class MiniMaxH3Pipeline:
         Every call runs the encoder; with the default co-residency the weights are already on
         device, so this costs the ~2.8 s forward, not the 50 GB reload.
         """
+        # The conditioner's CCL manager caches a ping-pong pair per presentation length for the life of the
+        # process; the returned taps are fresh tensors, so the pairs can go the moment the encode is done.
+        with self.encoder_ccl_manager.transient_ping_pong_buffers():
+            return self._encode_prompt_device(prompt, keyframes=keyframes, references=references)
+
+    def _encode_prompt_device(
+        self,
+        prompt: str,
+        *,
+        keyframes: Sequence[Image.Image] = (),
+        references: Sequence[MiniMaxH3PreparedReference] = (),
+    ) -> tuple[ttnn.Tensor, torch.Tensor]:
         if not isinstance(prompt, str) or not prompt.strip():
             raise ValueError("prompt must be a non-empty string")
         if keyframes and references:
@@ -1347,9 +1557,27 @@ class MiniMaxH3Pipeline:
             ccl_manager=self.ccl_manager,
             parallel_config=self.dit_parallel_config,
             is_fsdp=self.dit_fsdp,
-            # Bucketed rungs each pin their own K/V gather pair; size one at the top rung for all.
-            kv_gather_capacity=self.bucket_ladder[-1] if self.bucket_denoise else None,
+            # Bucketed rungs each pin their own K/V gather pair; size one at the longest length for all.
+            kv_gather_capacity=self.kv_gather_capacity,
+            dynamic_length=self.dynamic_length,
         )
+
+    @property
+    def kv_gather_capacity(self) -> int | None:
+        """Rows of the ring attention's K/V gather pair, shared by every served length; None when unbounded."""
+        return self.max_sequence_length if (self.bucket_denoise or self.dynamic_length) else None
+
+    def _bind_kv_gather_pair(self, transformer: MiniMaxH3Transformer3DModel) -> None:
+        """Allocate the capacity-sized K/V gather pair once, outside the per-request transient scope.
+        Idempotent."""
+        attn = transformer.transformer_blocks[0].attn
+        if self.kv_gather_capacity is None or not attn.use_ring:
+            return
+        shape = (1, attn.n_local_heads, ttnn.TILE_SIZE, attn.head_dim)
+        for _ in ("k", "v"):  # two calls leave the ping-pong index where attention expects it
+            self.ccl_manager.get_ag_ping_pong_buffer(
+                shape, 2, self.sp_axis, dtype=ttnn.bfloat16, capacity=self.kv_gather_capacity
+            )
 
     def _prepare_transformer(self) -> MiniMaxH3Transformer3DModel:
         cache.load_model(
@@ -1384,24 +1612,27 @@ class MiniMaxH3Pipeline:
         def seq_sharded(t):
             # tt_dit's own from_torch, not ttnn's: `mesh_axes` is the wrapper's mesh-distribution
             # spec, and the row axis is fractured on SP exactly as the model fractures the sequence.
-            return from_torch(
+            table = from_torch(
                 t.reshape(1, 1, padded_len, rotary_dim),
                 device=self.mesh_device,
                 dtype=ttnn.float32,
                 mesh_axes=[..., self.sp_axis, None],
+                on_host=self.dynamic_length,  # tilized on the host: no device tilize keyed on the length
             )
+            return ttnn.to_device(table, self.mesh_device) if self.dynamic_length else table
 
         return seq_sharded(cos), seq_sharded(sin)
 
     def _row_indices(self, values: torch.Tensor, padded_len: int) -> ttnn.Tensor:
-        """An integer per-row index tensor, ROW_MAJOR and sharded on SP along the row axis."""
+        """A per-row index tensor, ROW_MAJOR uint32 (what `ttnn.embedding` takes, so no device typecast; the
+        builders emit only values >= 0, so the bits equal int32's) and sharded on SP along the row axis."""
         pad = padded_len - values.shape[0]
         if pad:
             values = torch.cat([values, torch.zeros(pad, dtype=values.dtype)])
         return from_torch(
             values.to(torch.int32).reshape(1, 1, 1, padded_len),
             device=self.mesh_device,
-            dtype=ttnn.int32,
+            dtype=ttnn.uint32,
             layout=ttnn.Layout.ROW_MAJOR,
             mesh_axes=[..., None, self.sp_axis],
         )
@@ -1417,11 +1648,11 @@ class MiniMaxH3Pipeline:
         )
 
     def _replicated_indices(self, values: torch.Tensor) -> ttnn.Tensor:
-        """An integer index tensor, ROW_MAJOR and replicated -- `_row_indices` without the shard."""
+        """An index tensor, ROW_MAJOR uint32 and replicated -- `_row_indices` without the shard."""
         return from_torch(
             values.to(torch.int32).reshape(1, 1, 1, -1),
             device=self.mesh_device,
-            dtype=ttnn.int32,
+            dtype=ttnn.uint32,
             layout=ttnn.Layout.ROW_MAJOR,
             mesh_axes=[..., None, None],
         )
@@ -1436,6 +1667,22 @@ class MiniMaxH3Pipeline:
                 raise ValueError(f"forced bucket {rung} is smaller than the packed length {seq_len}")
             return rung
         return select_bucket(seq_len, self.bucket_ladder)
+
+    def _padded_length(self, seq_len: int) -> int:
+        """The unbucketed padded length: `warmup`'s forced length, else `seq_len` at the SP alignment. The
+        dynamic-length pipeline admits nothing beyond `max_sequence_length`."""
+        if self._force_pad_to is not None:
+            pad_to = self._force_pad_to
+            if seq_len > pad_to:
+                raise ValueError(f"forced padded length {pad_to} is smaller than the packed length {seq_len}")
+            return pad_to
+        pad_to = padded_sequence_length(seq_len, self.sp_factor)
+        if self.dynamic_length and pad_to > self.max_sequence_length:
+            raise ValueError(
+                f"packed sequence length {seq_len} pads to {pad_to}, beyond the longest served packed length "
+                f"{self.max_sequence_length}; shorten the request or deploy with a larger max_sequence_length"
+            )
+        return pad_to
 
     @staticmethod
     def _pad_host_rows(rows: torch.Tensor, capacity: int) -> torch.Tensor:
@@ -1531,7 +1778,7 @@ class MiniMaxH3Pipeline:
             t_factor = tuple(self.mesh_device.shape)[1] if self.audio_t_shard else 1
             audio_parallel = ParallelFactor(factor=t_factor, mesh_axis=1) if t_factor > 1 else None
             self._host_log(f"building the audio encoder (ref2va reference soundtracks, t_factor={t_factor})")
-            encoder = MiniMaxH3AudioEncoder(
+            self._audio_encoder = MiniMaxH3AudioEncoder(
                 encoder_dim=config["encoder_dim"],
                 encoder_rates=tuple(config["encoder_rates"]),
                 latent_dim=config["latent_dim"],
@@ -1543,29 +1790,44 @@ class MiniMaxH3Pipeline:
                 ccl_manager=self.audio_ccl_manager if audio_parallel is not None else None,
                 split_mode="weight",
             )
+            self._register_audio_module_residency(self._audio_encoder)
+        encoder = self._audio_encoder
 
-            def read_state() -> dict[str, torch.Tensor]:
-                converted = convert_minimax_h3_audio_state_dict(self._read_safetensors("audio_vae"))
-                return {
-                    k: v
-                    for k, v in converted.items()
-                    if k.startswith(("encoder.", "pre_block.", "mean_proj.", "logs_proj."))
-                }
+        def read_state() -> dict[str, torch.Tensor]:
+            converted = convert_minimax_h3_audio_state_dict(self._read_safetensors("audio_vae"))
+            return {
+                k: v
+                for k, v in converted.items()
+                if k.startswith(("encoder.", "pre_block.", "mean_proj.", "logs_proj."))
+            }
 
-            cache.load_model(
-                encoder,
-                model_name=MODEL_NAME,
-                # The audio precision levers change the module's parameter set, so they are part of
-                # the cache key -- read off the module so the key cannot drift from what was built.
-                subfolder="audio_encoder" + weights_variant(encoder.split_mode, encoder.max_c_in_block),
-                parallel_config=self.vae_parallel_config,
-                mesh_shape=tuple(self.mesh_device.shape),
-                mesh_device=self.mesh_device,
-                dtype="fp32",
-                get_torch_state_dict=read_state,
-            )
-            self._audio_encoder = encoder
-        return self._audio_encoder
+        # No-op while resident; reloads from the device-weight cache after the DiT or the video VAE
+        # decoder evicted it (non-coresident presets).
+        cache.load_model(
+            encoder,
+            model_name=MODEL_NAME,
+            # The audio precision levers change the module's parameter set, so they are part of
+            # the cache key -- read off the module so the key cannot drift from what was built.
+            subfolder="audio_encoder" + weights_variant(encoder.split_mode, encoder.max_c_in_block),
+            parallel_config=self.vae_parallel_config,
+            mesh_shape=tuple(self.mesh_device.shape),
+            mesh_device=self.mesh_device,
+            dtype="fp32",
+            get_torch_state_dict=read_state,
+        )
+        return encoder
+
+    def _register_audio_module_residency(self, module: Module) -> None:
+        """Non-coresident presets: the audio VAE halves yield to the DiT and the video VAE decoder.
+
+        Both are only needed outside the denoise and the video decode (the encoder before, the decoder
+        after), and the DRAM they hold is what the bucketed DiT's top rung is missing. They never evict
+        anything themselves: whatever is resident when they reload has room for them.
+        """
+        if self.coresident:
+            return
+        self._transformer.register_coresident_exclusions(module)
+        self._vae.decoder.register_coresident_exclusions(module)
 
     def _encode_keyframes(self, vae: MiniMaxH3Vae, keyframes: Sequence[Image.Image]) -> torch.Tensor:
         """Prepared keyframes to packed conditioning rows, via the device VAE encoder.
@@ -1647,7 +1909,8 @@ class MiniMaxH3Pipeline:
                     batch_shard_axis = other
                 else:
                     logger.warning(f"audio batch shard skipped: mesh axis {other} has one device")
-            decoder = MiniMaxH3AudioDecoder(
+
+            self._audio_decoder = MiniMaxH3AudioDecoder(
                 latent_channels=config["latent_channels"],
                 latent_dim=config["latent_dim"],
                 decoder_dim=config["decoder_dim"],
@@ -1663,40 +1926,43 @@ class MiniMaxH3Pipeline:
                 act_mode="fused",
                 batch_shard_axis=batch_shard_axis,
             )
+            self._register_audio_module_residency(self._audio_decoder)
+        decoder = self._audio_decoder
 
-            def read_state() -> dict[str, torch.Tensor]:
-                """Only the decoder's half of the converted checkpoint.
+        def read_state() -> dict[str, torch.Tensor]:
+            """Only the decoder's half of the converted checkpoint.
 
-                `convert_minimax_h3_audio_state_dict` returns both halves (`encoder.*`,
-                `pre_block.*`, `mean_proj.*`, `logs_proj.*` belong to the encoder), which is why the
-                existing tests load it with `strict=False`. Filtering to the two prefixes this module
-                owns keeps the load *strict* -- so a renamed key still fails -- and lets this go
-                through the same `cache.load_model` path as everything else.
-                """
-                converted = convert_minimax_h3_audio_state_dict(self._read_safetensors("audio_vae"))
-                return {k: v for k, v in converted.items() if k.startswith(("dec_in_proj.", "decoder."))}
+            `convert_minimax_h3_audio_state_dict` returns both halves (`encoder.*`,
+            `pre_block.*`, `mean_proj.*`, `logs_proj.*` belong to the encoder), which is why the
+            existing tests load it with `strict=False`. Filtering to the two prefixes this module
+            owns keeps the load *strict* -- so a renamed key still fails -- and lets this go
+            through the same `cache.load_model` path as everything else.
+            """
+            converted = convert_minimax_h3_audio_state_dict(self._read_safetensors("audio_vae"))
+            return {k: v for k, v in converted.items() if k.startswith(("dec_in_proj.", "decoder."))}
 
-            cache.load_model(
-                decoder,
-                model_name=MODEL_NAME,
-                # The audio precision levers change the module's parameter set, so they are part of
-                # the cache key -- read off the module so the key cannot drift from what was built.
-                subfolder="audio_decoder"
-                + weights_variant(
-                    decoder.split_mode,
-                    decoder.max_c_in_block,
-                    decoder.pack_bands,
-                    act_mode=decoder.act_mode,
-                    polyphase=decoder.polyphase_ups,
-                ),
-                parallel_config=self.vae_parallel_config,
-                mesh_shape=tuple(self.mesh_device.shape),
-                mesh_device=self.mesh_device,
-                dtype="fp32",
-                get_torch_state_dict=read_state,
-            )
-            self._audio_decoder = decoder
-        return self._audio_decoder
+        # No-op while resident; reloads after the DiT / video VAE decoder evicted it (see
+        # `_register_audio_module_residency`).
+        cache.load_model(
+            decoder,
+            model_name=MODEL_NAME,
+            # The audio precision levers change the module's parameter set, so they are part of
+            # the cache key -- read off the module so the key cannot drift from what was built.
+            subfolder="audio_decoder"
+            + weights_variant(
+                decoder.split_mode,
+                decoder.max_c_in_block,
+                decoder.pack_bands,
+                act_mode=decoder.act_mode,
+                polyphase=decoder.polyphase_ups,
+            ),
+            parallel_config=self.vae_parallel_config,
+            mesh_shape=tuple(self.mesh_device.shape),
+            mesh_device=self.mesh_device,
+            dtype="fp32",
+            get_torch_state_dict=read_state,
+        )
+        return decoder
 
     @property
     def audio_sampling_rate(self) -> int:
@@ -1755,7 +2021,7 @@ class MiniMaxH3Pipeline:
             height=height,
             width=width,
             # Warmup's forced runs shrink num_frames below the served range to fit the smaller rungs.
-            num_frames=num_frames if self._force_bucket is None else None,
+            num_frames=num_frames if self._force_bucket is None and self._force_pad_to is None else None,
         )
 
         if references is not None:
@@ -1812,10 +2078,7 @@ class MiniMaxH3Pipeline:
         # Both schedules. Built here rather than after the layout because the keyframe step below needs
         # `scale_noise`, which takes its `t` at face value and works before `set_timesteps` -- but they
         # are set up fully so there is only one place that decides the schedule.
-        scheduler = MiniMaxH3Scheduler(shift=VIDEO_SHIFT)
-        audio_scheduler = MiniMaxH3Scheduler(shift=AUDIO_SHIFT)
-        scheduler.set_timesteps(num_inference_steps)
-        audio_scheduler.set_timesteps(num_inference_steps)
+        scheduler, audio_scheduler = self._build_schedulers(num_inference_steps)
 
         # All noise for the request, off one generator, in the reference's draw order: conditioning
         # first, then video, then audio. The reference spreads these across two blocks -- the keyframe
@@ -1943,10 +2206,7 @@ class MiniMaxH3Pipeline:
         with self._track_cache_misses(on_event, "encoder"):
             prompt_embeds, text_token_tags = self.encode_prompt(prompt, references=prepared)
 
-        scheduler = MiniMaxH3Scheduler(shift=VIDEO_SHIFT)
-        audio_scheduler = MiniMaxH3Scheduler(shift=AUDIO_SHIFT)
-        scheduler.set_timesteps(num_inference_steps)
-        audio_scheduler.set_timesteps(num_inference_steps)
+        scheduler, audio_scheduler = self._build_schedulers(num_inference_steps)
 
         # 3. Reference VAE encode.
         has_visual = any(reference.kind != "audio" for reference in prepared)
@@ -1955,7 +2215,11 @@ class MiniMaxH3Pipeline:
         vae = self._vae if has_visual else None
         audio_encoder = self._prepare_audio_encoder() if has_audio else None
 
-        with self._track_cache_misses(on_event, "vae_encode"):
+        with (
+            self._track_cache_misses(on_event, "vae_encode"),
+            self.encoder_ccl_manager.transient_ping_pong_buffers(),
+            self._audio_ccl_transient(),
+        ):
             condition_rows, audio_condition_rows = encode_references(
                 prepared,
                 encode_clip=(lambda pixels: vae.encode_clip(pixels)) if has_visual else None,
@@ -2037,6 +2301,20 @@ class MiniMaxH3Pipeline:
             condition_spec=condition_spec,
         )
 
+    def _build_schedulers(self, num_inference_steps: int) -> tuple[MiniMaxH3Scheduler, MiniMaxH3Scheduler]:
+        """The video and audio schedules for one request."""
+        scheduler = MiniMaxH3Scheduler(shift=self.video_shift)
+        audio_scheduler = MiniMaxH3Scheduler(shift=self.audio_shift)
+        scheduler.set_timesteps(num_inference_steps)
+        audio_scheduler.set_timesteps(num_inference_steps)
+        return scheduler, audio_scheduler
+
+    def _step_endpoints(
+        self, scheduler: MiniMaxH3Scheduler, audio_scheduler: MiniMaxH3Scheduler
+    ) -> tuple[torch.Tensor, torch.Tensor] | None:
+        """Each step's video and audio endpoint `r` for two-time conditioning; None for single-time."""
+        return None
+
     def _denoise_and_decode(
         self,
         *,
@@ -2059,6 +2337,9 @@ class MiniMaxH3Pipeline:
         `condition_spec` is the only thing the tasks differ by here, and only `ref2va` passes one.
         """
         transformer = self._prepare_transformer()
+        if self.dynamic_length:
+            self._bind_kv_gather_pair(transformer)
+        dram_probe.report("after transformer load, before denoise")
         with self._track_cache_misses(on_event, "denoising"):
             video_rows, audio_rows = self._denoise(
                 transformer,
@@ -2079,8 +2360,9 @@ class MiniMaxH3Pipeline:
 
         with self._track_cache_misses(on_event, "audio"):
             audio = self._decode_audio(
-                self._audio_decoder, audio_rows, num_audio_latents, layout.num_condition_audio_rows
+                self._prepare_audio_decoder(), audio_rows, num_audio_latents, layout.num_condition_audio_rows
             )
+        dram_probe.report("end of request (after audio decode)")
 
         self._log(f"program cache misses: {self.last_program_cache_misses}")
         yuv = self.vae_output_type == "yuv420"
@@ -2111,7 +2393,7 @@ class MiniMaxH3Pipeline:
         num_frames = get_num_frames(5)
         if self.task != "ref2va":
             rung_requests = {
-                max(self.bucket_ladder): dict(
+                self.max_sequence_length: dict(
                     image=self._warmup_image(),
                     last_image=self._warmup_image(),
                     num_frames=num_frames,
@@ -2138,14 +2420,7 @@ class MiniMaxH3Pipeline:
             audio=waveform,
             sample_rate=sample_rate,
         )
-        rung_requests = {
-            ladder[0]: dict(
-                references=[MiniMaxH3Reference(image=self._warmup_image()), video_audio],
-                num_frames=full_frames,
-                height=height,
-                width=width,
-            )
-        }
+        rung_requests: dict[int, dict] = {}
         if len(ladder) > 1:
             images = [MiniMaxH3Reference(image=self._warmup_image()) for _ in range(MINIMAX_H3_MAX_REFERENCE_IMAGES)]
             rung_requests[ladder[1]] = dict(
@@ -2161,6 +2436,13 @@ class MiniMaxH3Pipeline:
                 height=height,
                 width=width,
             )
+        # Last: the full-duration request owns the cap (the top rung, or a dynamic cap that lands on a lower rung).
+        rung_requests[self.max_sequence_length] = dict(
+            references=[MiniMaxH3Reference(image=self._warmup_image()), video_audio],
+            num_frames=full_frames,
+            height=height,
+            width=width,
+        )
         self.warmup(
             references=[MiniMaxH3Reference(image=self._warmup_image())],
             num_frames=num_frames,
@@ -2183,10 +2465,11 @@ class MiniMaxH3Pipeline:
         rung_requests: Mapping[int, dict] | None = None,
     ) -> None:
         """
-        Buffer allocation and, when tracing, trace capture. Only a bucketed pipeline has a bounded
-        set of programs to compile, so a non-bucketed one has nothing to warm.
+        Buffer allocation and, when tracing, trace capture. A bucketed pipeline compiles one program set
+        per rung, a dynamic-length one warms its single set at the capacity point, the shortest request and
+        one point per uncovered class; the legacy unbucketed pipeline has nothing bounded to warm.
         """
-        if not self.bucket_denoise:
+        if not (self.bucket_denoise or self.dynamic_length):
             return
         generation_kwargs = dict(
             image=image,
@@ -2203,16 +2486,30 @@ class MiniMaxH3Pipeline:
         trace_audio = self.trace_audio
         self.trace_audio = False
         self._log_generation = False
+        self._warming = True
         try:
-            if self.vae_output_type == "yuv420":
-                self._warm_vae_decode()
-            self._warm_audio_decode()
+            # The ladder walk goes first: it is the only stage that can run out of DRAM (each rung's
+            # forced request binds the DiT's buffers and compiles its own decodes on the way), and on a
+            # memory-tight mesh an OOM should surface minutes after launch, not after the compile-only
+            # warms below have run for half an hour. Those only compile programs and cache a few MB of
+            # filter constants, so the DRAM picture at each rung is the same either way.
+            if self.dynamic_length:
+                fitted = self._warm_denoise_envelope(prompt, generation_kwargs, overrides)
+            else:
+                fitted = self._warm_denoise_buckets(prompt, generation_kwargs, overrides)
+            # Diagnostic mode (MINIMAX_H3_WARMUP_SKIP_DECODE_WARM=1): skip the decode length/canvas warms
+            # (the audio length warm has hung on this mesh).
+            if not _skip_decode_warm():
+                if self.vae_output_type == "yuv420":
+                    self._warm_vae_decode()
+                self._warm_audio_decode()
             self._warm_prompt_encoder()
-            fitted = self._warm_denoise_buckets(prompt, generation_kwargs, overrides)
+            # Every program is compiled by now; traces are captured last.
             self._capture_traces(prompt, fitted, overrides, trace_audio)
         finally:
             self.trace_audio = trace_audio
             self._log_generation = True
+            self._warming = False
 
     def _warm_denoise_buckets(
         self, prompt: str, generation_kwargs: dict, overrides: Mapping[int, dict]
@@ -2235,12 +2532,45 @@ class MiniMaxH3Pipeline:
             shrink = rung not in overrides
             request = overrides.get(rung, shrunk)
             if bucket is None or not bucket.warm:
+                # A rung whose forced request does not fit raises the allocator's "Out of Memory" here,
+                # before dispatch: the first unfittable rung ends the warmup.
                 request = self._run_forced_fit(rung, prompt, request, shrink=shrink)
                 if request is None:
                     continue
                 if shrink:
                     shrunk = request
             fitted[rung] = request
+        return fitted
+
+    def _warm_denoise_envelope(
+        self, prompt: str, generation_kwargs: dict, overrides: Mapping[int, dict]
+    ) -> dict[int, dict]:
+        """Dynamic-length warm-up: one two-step generation at the capacity, one at the shortest request, one
+        per remaining class. Returns the request that fit the capacity point."""
+        cap = self.max_sequence_length
+        request = self._run_forced_fit(cap, prompt, overrides.get(cap, generation_kwargs), shrink=cap not in overrides)
+        fitted = {cap: request} if request is not None else {}
+        dram_probe.report(f"after the capacity warm-up point, padded length {cap}")
+        # The shortest served request: the smallest canvas at the shortest duration, without keyframes.
+        height, width = resolve_canvas_size(1, 1)
+        short = dict(
+            generation_kwargs,
+            image=None,
+            last_image=None,
+            num_frames=get_num_frames(MINIMAX_H3_DURATIONS_S[0]),
+            height=height,
+            width=width,
+            aspect_ratio=(1, 1),
+        )
+        self._run_forced(None, prompt, short)
+        warmed = [cap, self.last_seq_len.padded]
+        for pad_to in uncovered_class_lengths(warmed, self.sp_factor):
+            self._run_forced(pad_to, prompt, short)
+            warmed.append(pad_to)
+        self._host_log(
+            f"dynamic-length denoise warmed at padded lengths {sorted(warmed)}: "
+            f"{self.mesh_device.num_program_cache_entries()} programs cached"
+        )
         return fitted
 
     def _capture_traces(
@@ -2268,13 +2598,17 @@ class MiniMaxH3Pipeline:
             if not self._rung_captured(rung):
                 self._run_forced_fit(rung, prompt, fitted[rung], shrink=rung not in overrides)
 
-    def _run_forced(self, rung: int, prompt: str, generation_kwargs: dict) -> None:
-        """One short generation padded to `rung` regardless of its natural rung -- warmup's ladder walk."""
-        self._force_bucket = rung
+    def _run_forced(self, rung: int | None, prompt: str, generation_kwargs: dict) -> None:
+        """One short generation padded to `rung` regardless of its natural length -- warmup's ladder walk or
+        the dynamic-length capacity point; `None` pads naturally."""
+        if self.bucket_denoise:
+            self._force_bucket = rung
+        else:
+            self._force_pad_to = rung
         try:
             self(prompt, num_inference_steps=2, **generation_kwargs)
         finally:
-            self._force_bucket = None
+            self._force_bucket = self._force_pad_to = None
 
     def _run_forced_fit(self, rung: int, prompt: str, generation_kwargs: dict, *, shrink: bool) -> dict | None:
         """`_run_forced`; with `shrink`, halve `num_frames` until the request fits `rung`. Returns the
@@ -2419,6 +2753,17 @@ class MiniMaxH3Pipeline:
         frames = sorted({get_num_frames(duration) for duration in MINIMAX_H3_DURATIONS_S})
         return [torch.zeros(2, channels, audio_latent_num_frames(num_frames)) for num_frames in frames]
 
+    def _audio_ccl_transient(self):
+        """Scope that frees the audio VAE's CCL ping-pong pairs on exit, on untraced non-persistent presets.
+
+        The audio decoder gathers through `audio_ccl_manager`, whose cache is keyed by shape and never
+        evicts, so the pairs outlive the decoder's own eviction and starve the DiT's top rung. The reference
+        audio encoder shares the manager. Traced presets keep the pairs their captures replay.
+        """
+        if self.audio_ccl_manager is None or self.use_persistent_ccl_buffers or self.trace_audio:
+            return nullcontext()
+        return self.audio_ccl_manager.transient_ping_pong_buffers()
+
     def _warm_audio_decode(self) -> None:
         """Compile the audio decode at every served length, strictly before trace capture."""
         decoder = self._prepare_audio_decoder()
@@ -2433,7 +2778,8 @@ class MiniMaxH3Pipeline:
             file=sys.stderr,
             bar_format=_TQDM_BAR_FORMAT,
         ):
-            decoder(latents)
+            with self._audio_ccl_transient():
+                decoder(latents)
         self._host_log(f"audio decode warmed: +{self.mesh_device.num_program_cache_entries() - before} programs")
 
     def _capture_audio(self, trace_audio: bool) -> None:
@@ -2553,6 +2899,10 @@ class MiniMaxH3Pipeline:
         host = _is_host_rank()
         if host:
             _tqdm_spacer()
+        with self.encoder_ccl_manager.transient_ping_pong_buffers():
+            self._warm_vision_merge_lengths(seq_lens, tower_sizes, encoder, tower, merge, hidden, zeros, host)
+
+    def _warm_vision_merge_lengths(self, seq_lens, tower_sizes, encoder, tower, merge, hidden, zeros, host) -> None:
         for seq_len in tqdm.tqdm(
             seq_lens,
             desc="Warming vision merge sequence lengths",
@@ -2579,8 +2929,8 @@ class MiniMaxH3Pipeline:
         if transformer is None:
             return False
         run_blocks = type(transformer).run_blocks
-        tracer = run_blocks._tracers_keyed.get(transformer, {}).get(rung)
-        return tracer is not None and tracer.trace_captured
+        tracers = run_blocks._tracers_keyed.get(transformer, {})
+        return any(key[0] == rung and tracer.trace_captured for key, tracer in tracers.items())
 
     def release_traces(self) -> None:
         decoder = self._audio_decoder
@@ -2652,7 +3002,7 @@ class MiniMaxH3Pipeline:
         if self.bucket_denoise:
             rung = self._select_bucket(layout.sequence_length)
         else:
-            rung = padded_sequence_length(layout.sequence_length, self.sp_factor)
+            rung = self._padded_length(layout.sequence_length)
         self.last_seq_len = SeqLen(padded=rung, logical=layout.sequence_length)
         self._log(
             f"packed sequence {layout.sequence_length} -> bucket {rung}, "
@@ -2661,10 +3011,11 @@ class MiniMaxH3Pipeline:
 
         timesteps = scheduler.timesteps
         audio_timesteps = audio_scheduler.timesteps
+        endpoints = self._step_endpoints(scheduler, audio_scheduler)
 
         row_slot, slot_roles = build_slot_routing(layout, roles=self.adaln_slot_roles)
 
-        state = self._buckets.setdefault(rung if self.bucket_denoise else 0, _BucketState())
+        state = self._buckets.setdefault(rung, _BucketState()) if self.bucket_denoise else self._request_state
         traced = self.trace_denoise and state.warm
         if self.trace_denoise and not state.warm:
             self.release_traces()
@@ -2695,16 +3046,58 @@ class MiniMaxH3Pipeline:
                 device=self.mesh_device,
             )
 
-        transformer.prepare_static_sources(
-            prompt_1BLP=prompt_device,
-            prompt_len=l_len,
-            condition_video_1BKC=self._tt_cond_video.value,
-            condition_audio_1BKC=self._tt_cond_audio.value if self.task == "ref2va" else None,
-            prompt_cap=caps.prompt,
-            traced=traced,
+        # The refiner / projection pass runs its collectives outside the step loop's transient scope below;
+        # on untraced non-persistent presets its cap-sized all-gather pairs would stay cached for the life of
+        # the process and starve the VAE decoder. Free them here; traced presets keep what a capture replays.
+        static_transient = (
+            self.ccl_manager.transient_ping_pong_buffers()
+            if not (self.use_persistent_ccl_buffers or self.trace_denoise)
+            else nullcontext()
         )
+        with static_transient:
+            try:
+                transformer.prepare_static_sources(
+                    prompt_1BLP=prompt_device,
+                    prompt_len=l_len,
+                    condition_video_1BKC=self._tt_cond_video.value,
+                    condition_audio_1BKC=self._tt_cond_audio.value if self.task == "ref2va" else None,
+                    prompt_cap=caps.prompt,
+                    traced=traced,
+                )
+            except RuntimeError as err:
+                if "Out of Memory" in str(err):
+                    dram_probe.report(f"after OOM in prepare_static_sources, rung {rung}")
+                raise
+            ttnn.synchronize_device(self.mesh_device)
+        # The refiner has consumed the prompt (its rows now live in the source table); nothing reads
+        # `prompt_embeds` after this point, but as a caller's local it would stay pinned in the middle of
+        # the heap through the whole denoise and decode, where the DiT's pairs and activations need to fit.
+        ttnn.deallocate(prompt_device)
+        dram_probe.report(f"after prepare_static_sources, rung {rung}")
 
-        state.adaln.update(self._row_indices(adaln_indices(layout.token_tags, row_slot), rung), traced=traced)
+        row_adaln = adaln_indices(layout.token_tags, row_slot)
+        state.adaln.update(self._row_indices(row_adaln, rung), traced=traced)
+        # The norms read their modulation through a per-tile-row map built once per request; a request with more
+        # run-boundary tiles than the map has slots falls back to the per-token one-hot gather.
+        tilerow_kwargs = {}
+        padded_adaln = torch.cat([row_adaln, torch.zeros(rung - row_adaln.shape[0], dtype=row_adaln.dtype)])
+        try:
+            tile_map, expanded = tilerow_remap(
+                padded_adaln,
+                num_rows=len(slot_roles) * MINIMAX_H3_MODALITY_NUM,
+                sp_factor=self.sp_factor,
+                max_mixed_tiles=int(os.environ.get("MINIMAX_H3_ADALN_MIXED_TILES", DEFAULT_MAX_MIXED_TILES)),
+            )
+        except ValueError as err:
+            self._log(f"adaLN tile-row map not used for this request ({err}); per-token gather instead")
+            tile_map = None
+        if tile_map is not None:
+            state.adaln_tile_map.update(self._row_indices(tile_map, tile_map.shape[0]), traced=traced)
+            state.adaln_expanded.update(self._row_indices(expanded, expanded.shape[0]), traced=traced)
+            tilerow_kwargs = {
+                "adaln_tile_map": state.adaln_tile_map.value,
+                "adaln_expanded_indices": state.adaln_expanded.value,
+            }
         state.tsi.update(self._row_indices(row_slot, rung), traced=traced)
         state.assembly_idx.update(
             self._assembly_indices(condition_spec, caps, l_len, a_target, v_target, rung), traced=traced
@@ -2731,19 +3124,32 @@ class MiniMaxH3Pipeline:
         t_preamble = time.time() - t_preamble
         t_first = t_steady = 0.0
 
-        def step_levels(i: int) -> torch.Tensor:
+        def step_levels(i: int) -> tuple[torch.Tensor, torch.Tensor | None]:
             t = float(timesteps[i])
             level_kwargs = {"video_timestep": t, "audio_timestep": float(audio_timesteps[i])}
             if "condition_video" in slot_roles:
                 level_kwargs["condition_video_timestep"] = max(t, MINIMAX_H3_KEYFRAME_NOISE_AUG)
             if "condition_audio" in slot_roles:
                 level_kwargs["condition_audio_timestep"] = MINIMAX_H3_AUDIO_CONDITION_TIMESTEP
-            return slot_levels(slot_roles, **level_kwargs)
+            if endpoints is None:
+                return slot_levels(slot_roles, **level_kwargs), None
+            # Conditioning slots are anchors with nowhere to go, so their interval is empty: r == t.
+            endpoint_kwargs = {
+                **level_kwargs,
+                "video_timestep": float(endpoints[0][i]),
+                "audio_timestep": float(endpoints[1][i]),
+            }
+            return slot_levels(slot_roles, **level_kwargs), slot_levels(slot_roles, **endpoint_kwargs)
 
-        def upload_levels(levels: torch.Tensor) -> None:
+        def upload_levels(levels: tuple[torch.Tensor, torch.Tensor | None]) -> None:
+            timestep, endpoint = levels
             self._tt_timestep.update(
-                levels.reshape(1, 1, -1, 1), traced=traced, dtype=ttnn.float32, device=self.mesh_device
+                timestep.reshape(1, 1, -1, 1), traced=traced, dtype=ttnn.float32, device=self.mesh_device
             )
+            if endpoint is not None:
+                self._tt_endpoint_timestep.update(
+                    endpoint.reshape(1, 1, -1, 1), traced=traced, dtype=ttnn.float32, device=self.mesh_device
+                )
 
         upload_levels(step_levels(0))
         if _is_host_rank():
@@ -2766,21 +3172,29 @@ class MiniMaxH3Pipeline:
                 )
             ):
                 t_step = time.time()
-                video_velocity, audio_velocity = transformer(
-                    video_1BVC=self._tt_video.value,
-                    audio_1BAC=self._tt_audio.value,
-                    assembly_indices=state.assembly_idx.value,
-                    video_out_indices=self._tt_video_out_idx.value,
-                    audio_out_indices=self._tt_audio_out_idx.value,
-                    timestep=self._tt_timestep.value,
-                    adaln_indices=state.adaln.value,
-                    timestep_indices=state.tsi.value,
-                    rope_cos=state.rope_cos.value,
-                    rope_sin=state.rope_sin.value,
-                    logical_n=self._tt_logical_n.value,
-                    pad_to=rung,
-                    traced=traced,
-                )
+                try:
+                    video_velocity, audio_velocity = transformer(
+                        video_1BVC=self._tt_video.value,
+                        audio_1BAC=self._tt_audio.value,
+                        assembly_indices=state.assembly_idx.value,
+                        video_out_indices=self._tt_video_out_idx.value,
+                        audio_out_indices=self._tt_audio_out_idx.value,
+                        timestep=self._tt_timestep.value,
+                        adaln_indices=state.adaln.value,
+                        timestep_indices=state.tsi.value,
+                        rope_cos=state.rope_cos.value,
+                        rope_sin=state.rope_sin.value,
+                        logical_n=self._tt_logical_n.value,
+                        pad_to=rung,
+                        traced=traced,
+                        **tilerow_kwargs,
+                        **({} if endpoints is None else {"endpoint_timestep": self._tt_endpoint_timestep.value}),
+                    )
+                except RuntimeError as err:
+                    if "Out of Memory" in str(err):
+                        # The forward's locals are gone by now; this is the resident set that remains.
+                        dram_probe.report(f"after OOM in step {i + 1}, rung {rung} (forward unwound)")
+                    raise
 
                 ttnn.multiply_(video_velocity, float(scheduler.step_coefficient(i)))
                 ttnn.add_(self._tt_video.value, video_velocity)
@@ -2791,6 +3205,8 @@ class MiniMaxH3Pipeline:
                 ttnn.synchronize_device(self.mesh_device)
                 if ttnn.using_distributed_env():
                     ttnn.distributed_context_barrier()
+                if i == 0:
+                    dram_probe.report(f"after step 1, rung {rung}")
                 t_step = time.time() - t_step
                 if i == 0:
                     t_first = t_step
@@ -2922,6 +3338,7 @@ class MiniMaxH3Pipeline:
         assert rows.shape[0] == expected, f"expected {expected} target audio rows to decode, got {rows.shape[0]}"
         latents = unpack_audio_tokens(rows, num_audio_latents)
         latents = self._denormalize(latents, self.audio_config["latents_mean"], self.audio_config["latents_std"])
-        waveform = audio_decoder(latents, traced=self.trace_audio)
+        with self._audio_ccl_transient():
+            waveform = audio_decoder(latents, traced=self.trace_audio)
         # The audio VAE is mono and took the two stereo channels as two batch items.
         return waveform.float().permute(1, 0, 2)

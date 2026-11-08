@@ -17,7 +17,33 @@ from models.demos.deepseek_v3_d_p.reference.kda.config import KDAConfig
 from models.demos.deepseek_v3_d_p.reference.kda.weights import normalize_kda_state_dict
 from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import FastCacheChecker
 
-_CACHE_SCHEMA_VERSION = 2
+# v2: projections at the caller's projection_dtype. v3: a bounded gate's decay_scale_flat and decay_bias_flat are FP32.
+_CACHE_SCHEMA_VERSION = 3
+
+# Stored at the caller's `projection_dtype`.
+PROJECTION_ARTIFACTS = ("input_projection_head_major", "decay_output_projection", "output_projection")
+# A bounded gate sigmoid(A (f_b r + dt_bias)) keeps its per-head scale A and offset A dt_bias in FP32, and the decay
+# projection writes FP32 logits that one FP32 add rounds once to the BF16 gate (ttKDA._compute_decay). In BF16, A and
+# A dt_bias bias every token's sigmoid argument of a channel the same way, a systematic gate error that the recurrence
+# accumulates over each chunk instead of averaging out. On the first 5,120 tokens of Kimi-K3 layers.0, against FP64:
+# mean dG/G -1.8e-4 and mean |per-channel bias| 2.1e-3, against +2.1e-3 and 1.0e-2 with BF16 scale and offset passed as
+# the matmul bias. The softplus gate and every other weight stay BF16.
+_FP32_ARTIFACTS = frozenset(("decay_scale_flat", "decay_bias_flat"))
+
+
+def _artifact_dtype(name: str, config: KDAConfig, projection_dtype: ttnn.DataType) -> ttnn.DataType:
+    if name in PROJECTION_ARTIFACTS:
+        return projection_dtype
+    bounded_gate = config.gate_lower_bound is not None
+    return ttnn.float32 if bounded_gate and name in _FP32_ARTIFACTS else ttnn.bfloat16
+
+
+def _cache_file_suffix(name: str, config: KDAConfig, projection_dtype: ttnn.DataType) -> str:
+    return f"_dtype_{_artifact_dtype(name, config, projection_dtype).name}_layout_{ttnn.TILE_LAYOUT.name}.tensorbin"
+
+
+def _cache_stem_head(cache_name_prefix: str, name: str) -> str:
+    return f"{cache_name_prefix}.{name}.v{_CACHE_SCHEMA_VERSION}"
 
 
 def _parallel_geometry(device: ttnn.Device | ttnn.MeshDevice, tensor_parallel_axis: int) -> tuple[tuple[int, int], int]:
@@ -41,6 +67,17 @@ def _cache_artifact_names(config: KDAConfig) -> tuple[str, ...]:
     return fixed + tuple(f"conv_tap_{tap}" for tap in range(config.conv_kernel_size))
 
 
+def current_cache_globs(cache_name_prefix: str, config: KDAConfig, projection_dtype: ttnn.DataType) -> tuple[str, ...]:
+    """One glob per KDA tensorbin as this code writes it: current schema version and per-artifact dtype.
+
+    A cache written by other code misses at least one.
+    """
+    return tuple(
+        f"{_cache_stem_head(cache_name_prefix, name)}.*{_cache_file_suffix(name, config, projection_dtype)}"
+        for name in _cache_artifact_names(config)
+    )
+
+
 def _cache_stem(
     cache_name_prefix: str,
     name: str,
@@ -51,7 +88,7 @@ def _cache_stem(
     config_payload = json.dumps(asdict(config), sort_keys=True, separators=(",", ":"))
     config_digest = hashlib.sha256(config_payload.encode("utf-8")).hexdigest()[:16]
     return (
-        f"{cache_name_prefix}.{name}.v{_CACHE_SCHEMA_VERSION}.{config_digest}."
+        f"{_cache_stem_head(cache_name_prefix, name)}.{config_digest}."
         f"mesh{mesh_shape[0]}x{mesh_shape[1]}.tpaxis{tensor_parallel_axis}"
     )
 
@@ -88,6 +125,7 @@ class KDAWeights:
         mesh_device: ttnn.Device | ttnn.MeshDevice,
         *,
         tensor_parallel_axis: int = 1,
+        projection_dtype: ttnn.DataType = ttnn.bfloat16,
     ) -> bool:
         """Return whether every dtype/layout/placement-specific KDA tensorbin exists."""
         if cache_path is None:
@@ -99,7 +137,7 @@ class KDAWeights:
         mesh_shape, _ = _parallel_geometry(mesh_device, tensor_parallel_axis)
         for name in _cache_artifact_names(config):
             stem = _cache_stem(cache_name_prefix, name, config, mesh_shape, tensor_parallel_axis)
-            pattern = f"{stem}_dtype_{ttnn.bfloat16.name}_layout_{ttnn.TILE_LAYOUT.name}.tensorbin"
+            pattern = f"{stem}{_cache_file_suffix(name, config, projection_dtype)}"
             if not checker.pattern_exists(pattern, "KDA"):
                 return False
         return True
@@ -114,6 +152,7 @@ class KDAWeights:
         mesh_device: ttnn.Device | ttnn.MeshDevice,
         *,
         tensor_parallel_axis: int = 1,
+        projection_dtype: ttnn.DataType = ttnn.bfloat16,
     ) -> None:
         """Build all KDA tensorbins without copying weights to device memory."""
         if not state_dict:
@@ -133,6 +172,7 @@ class KDAWeights:
             mesh_shape=mesh_shape,
             tensor_parallel_size=tensor_parallel_size,
             tensor_parallel_axis=tensor_parallel_axis,
+            projection_dtype=projection_dtype,
             place_on_device=False,
         )
 
@@ -145,6 +185,7 @@ class KDAWeights:
         mesh_device: ttnn.Device | ttnn.MeshDevice,
         *,
         tensor_parallel_axis: int = 1,
+        projection_dtype: ttnn.DataType = ttnn.bfloat16,
     ) -> "KDAWeights":
         """Construct device weights exclusively from a complete TTNN cache."""
         return load_kda_weights(
@@ -154,6 +195,7 @@ class KDAWeights:
             cache_path,
             cache_name_prefix=cache_name_prefix,
             tensor_parallel_axis=tensor_parallel_axis,
+            projection_dtype=projection_dtype,
         )
 
 
@@ -229,7 +271,7 @@ def _prepare_kda_host_weights(
     decay_scale = state_dict["A_log"].float().exp()
     if config.gate_lower_bound is None:
         decay_scale = -decay_scale
-    decay_bias = state_dict["dt_bias"].reshape(1, 1, config.num_heads, config.head_k_dim)
+    decay_bias = state_dict["dt_bias"].float().reshape(1, 1, config.num_heads, config.head_k_dim)
     decay_scale_flat = decay_scale.expand(-1, -1, -1, config.head_k_dim).reshape(1, 1, config.q_dim)
     decay_bias_flat = decay_bias.reshape(1, 1, config.q_dim)
 
@@ -281,6 +323,7 @@ def _materialize_kda_tensor(
     tensor_parallel_size: int,
     tensor_parallel_axis: int,
     shard_dim: int | None = None,
+    projection_dtype: ttnn.DataType,
     place_on_device: bool,
 ) -> ttnn.Tensor:
     cache_name = _cache_stem(cache_name_prefix, name, config, mesh_shape, tensor_parallel_axis)
@@ -288,14 +331,12 @@ def _materialize_kda_tensor(
     if host_tensor is None:
         if cache_file is None:
             raise ValueError("cache-only KDA weight loading requires tensor_cache_path")
-        serialized_cache_file = Path(
-            f"{cache_file}_dtype_{ttnn.bfloat16.name}_layout_{ttnn.TILE_LAYOUT.name}.tensorbin"
-        )
+        serialized_cache_file = Path(f"{cache_file}{_cache_file_suffix(name, config, projection_dtype)}")
         return ttnn.load_tensor(serialized_cache_file, device=device)
 
     return ttnn.as_tensor(
         host_tensor.contiguous(),
-        dtype=ttnn.bfloat16,
+        dtype=_artifact_dtype(name, config, projection_dtype),
         layout=ttnn.TILE_LAYOUT,
         device=device if place_on_device else None,
         mesh_mapper=_mesh_mapper(
@@ -320,6 +361,7 @@ def _materialize_kda_weights(
     mesh_shape: tuple[int, int],
     tensor_parallel_size: int,
     tensor_parallel_axis: int,
+    projection_dtype: ttnn.DataType,
     place_on_device: bool,
 ) -> tuple[dict[str, ttnn.Tensor], tuple[ttnn.Tensor, ...]]:
     if tensor_cache_path is not None:
@@ -337,6 +379,7 @@ def _materialize_kda_weights(
             tensor_parallel_size=tensor_parallel_size,
             tensor_parallel_axis=tensor_parallel_axis,
             shard_dim=-1,
+            projection_dtype=projection_dtype,
             place_on_device=place_on_device,
         ),
         "decay_output_projection": _materialize_kda_tensor(
@@ -350,6 +393,7 @@ def _materialize_kda_weights(
             tensor_parallel_size=tensor_parallel_size,
             tensor_parallel_axis=tensor_parallel_axis,
             shard_dim=-1,
+            projection_dtype=projection_dtype,
             place_on_device=place_on_device,
         ),
         "output_projection": _materialize_kda_tensor(
@@ -363,6 +407,7 @@ def _materialize_kda_weights(
             tensor_parallel_size=tensor_parallel_size,
             tensor_parallel_axis=tensor_parallel_axis,
             shard_dim=-2,
+            projection_dtype=projection_dtype,
             place_on_device=place_on_device,
         ),
         "decay_scale_flat": _materialize_kda_tensor(
@@ -376,6 +421,7 @@ def _materialize_kda_weights(
             tensor_parallel_size=tensor_parallel_size,
             tensor_parallel_axis=tensor_parallel_axis,
             shard_dim=-1,
+            projection_dtype=projection_dtype,
             place_on_device=place_on_device,
         ),
         "decay_bias_flat": _materialize_kda_tensor(
@@ -389,6 +435,7 @@ def _materialize_kda_weights(
             tensor_parallel_size=tensor_parallel_size,
             tensor_parallel_axis=tensor_parallel_axis,
             shard_dim=-1,
+            projection_dtype=projection_dtype,
             place_on_device=place_on_device,
         ),
         "norm": _materialize_kda_tensor(
@@ -401,6 +448,7 @@ def _materialize_kda_weights(
             mesh_shape=mesh_shape,
             tensor_parallel_size=tensor_parallel_size,
             tensor_parallel_axis=tensor_parallel_axis,
+            projection_dtype=projection_dtype,
             place_on_device=place_on_device,
         ),
     }
@@ -417,11 +465,32 @@ def _materialize_kda_weights(
             tensor_parallel_size=tensor_parallel_size,
             tensor_parallel_axis=tensor_parallel_axis,
             shard_dim=-1,
+            projection_dtype=projection_dtype,
             place_on_device=place_on_device,
         )
         for tap, tensor in enumerate(host_taps)
     )
     return materialized, convolution_taps
+
+
+def _fold_decay_scale(
+    projection: ttnn.Tensor, bias: ttnn.Tensor, scale: ttnn.Tensor
+) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+    """Fold the bounded gate's per-head FP32 scale into the decay projection and bias on device.
+
+    The bounded gate is lower_bound * sigmoid(scale * (x @ W + bias)) = lower_bound * sigmoid(x @ (scale W) + scale
+    bias). The folded projection is rounded to BF16 once (it is a matmul weight); the folded offset stays FP32 (see
+    _FP32_ARTIFACTS). Folding after the weights are loaded, rather than when they are prepared, keeps the cached tensors
+    unscaled.
+    """
+    scale_row = ttnn.reshape(scale, (1, scale.shape[-1]))
+    projection_fp32 = ttnn.typecast(projection, ttnn.float32)
+    product = ttnn.multiply(projection_fp32, scale_row, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    folded_projection = ttnn.typecast(product, ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    folded_bias = ttnn.multiply(bias, scale, dtype=ttnn.float32, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    for tensor in (projection_fp32, product, projection, bias):
+        ttnn.deallocate(tensor)
+    return folded_projection, folded_bias
 
 
 def load_kda_weights(
@@ -432,6 +501,7 @@ def load_kda_weights(
     *,
     cache_name_prefix: str = "kda",
     tensor_parallel_axis: int = 1,
+    projection_dtype: ttnn.DataType = ttnn.bfloat16,
 ) -> KDAWeights:
     """Prepare KDA weights and materialize them on the target device."""
     if state_dict is not None and not state_dict:
@@ -445,6 +515,7 @@ def load_kda_weights(
             config,
             device,
             tensor_parallel_axis=tensor_parallel_axis,
+            projection_dtype=projection_dtype,
         ):
             raise FileNotFoundError(f"incomplete KDA TTNN cache for {cache_name_prefix!r} at {cache_path!r}")
         host_weights = None
@@ -460,8 +531,15 @@ def load_kda_weights(
         mesh_shape=mesh_shape,
         tensor_parallel_size=tensor_parallel_size,
         tensor_parallel_axis=tensor_parallel_axis,
+        projection_dtype=projection_dtype,
         place_on_device=True,
     )
+    if config.gate_lower_bound is not None:
+        materialized["decay_output_projection"], materialized["decay_bias_flat"] = _fold_decay_scale(
+            materialized["decay_output_projection"],
+            materialized["decay_bias_flat"],
+            materialized["decay_scale_flat"],
+        )
     return KDAWeights(
         **materialized,
         convolution_taps=convolution_taps,
