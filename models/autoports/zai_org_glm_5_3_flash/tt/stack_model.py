@@ -958,10 +958,46 @@ class StackBackend(ModelBackend):
             self.nheads[w] = MKH.MkHead.width_view(self.head, w, _rows_view)
         return self.nembeds[w], self.nheads[w]
 
+    def _dsa_pools(self, kv: StackCache):
+        """GLM53_DSA_POOL=1: the sparse_dsa layers' MLA / MoE programs take their intermediates from AllocPools
+        (mk_stack.AllocPool: request i of a shape in ANY build = the same tensor), so every layer reuses one L1 set and
+        nothing is allocated or freed per layer or per capture (the per-call churn fragmented the L1 top and drifted the
+        floor ~4 KB per layer under the t = 16 MoE program's static CBs: 2026-11-06 census). The MLA programs share the
+        step's pool (kv.extra["pool"], the KDA stacks' intermediates: the programs run one after another); the MoE
+        programs take a pool of their own, so s1 -- the MLA intermediate the MoE program reads -- is never aliased by a
+        MoE intermediate. -> (mla_pool, moe_pool), or None (the per-call allocations + keep= frees)"""
+        if os.environ.get("GLM53_DSA_POOL", "0") != "1":
+            return None
+        if "dsa_moe_pool" not in kv.extra:
+            from models.autoports.zai_org_glm_5_3_flash.tt.mk_stack import AllocPool
+
+            kv.extra["dsa_moe_pool"] = AllocPool()
+        return kv.extra["pool"], kv.extra["dsa_moe_pool"]
+
+    def _dsa_layer(self, e: dict, x, latent, pt, pos, *, t: int, dsa_state: dict, out, pools) -> None:
+        """one sparse_dsa layer of a step: the MLA program (stack mode: reads / keeps the persistent residual) -> s1 ->
+        the MoE program into `out`. pools (self._dsa_pools): the pooled intermediates (keep=None: nothing is freed), else
+        the per-call ones (keep=("s1",) + an explicit free of s1)."""
+        if pools is None:
+            s1 = e["mla"](x, latent, pt, pos, t=t, keep=("s1",), stack=True, dsa_state=dsa_state)["s1"]
+            e["moe"](s1, t=t, out=out, live=self._moe_live())
+            # freed explicitly (not just dropped): an s1 still referenced elsewhere stays allocated after a capture ->
+            # buffers alive at the replay of an earlier-captured width trace; L1: must not stay allocated under the
+            # next stack program's CB region
+            ttnn.deallocate(s1)
+            del s1
+            return
+        mla_pool, moe_pool = pools
+        with mla_pool:
+            s1 = e["mla"](x, latent, pt, pos, t=t, stack=True, dsa_state=dsa_state)["s1"]
+        with moe_pool:
+            e["moe"](s1, t=t, out=out, live=self._moe_live())
+
     def _step_narrow(self, kv: StackCache, w: int):
         """a narrow width's step: the t = w embed into its stacked residual, the t = w stacks / sparse_dsa programs on
         the shared 32-row state (rows 0..w-1), the t = w head (top-K / sampling / position advance of rows < w)"""
         rw, masks, pool = kv.extra["nres"][w], kv.extra["nmasks"][w], kv.extra["pool"]
+        pools = self._dsa_pools(kv)
         embed, head = self._narrow_io(w)
         embed(self.head.topk_out, [rw])
         pool.alias = True
@@ -970,11 +1006,8 @@ class StackBackend(ModelBackend):
                 if stk is None:
                     e = self.seq[r[0]]
                     set_knobs("dsa", self.tp, w)
-                    s1 = e["mla"](rw, kv.extra["latent"][r[0]], kv.extra["pt_c"][0], self.pos_c[0], t=w, keep=("s1",),
-                                  stack=True, dsa_state=self._dsa_st(kv, r[0], 0))["s1"]  # fmt: skip
-                    e["moe"](s1, t=w, out=rw, live=self._moe_live())
-                    ttnn.deallocate(s1)
-                    del s1
+                    self._dsa_layer(e, rw, kv.extra["latent"][r[0]], kv.extra["pt_c"][0], self.pos_c[0], t=w,
+                                    dsa_state=self._dsa_st(kv, r[0], 0), out=rw, pools=pools)  # fmt: skip
                     continue
                 _narrow_knobs(self.nseq[w][r[0]]["sparse"], self.tp, w)
                 stk([kv.states[0][i][1] for i in r], masks, [kv.states[0][i][0] for i in r])
@@ -2019,20 +2052,16 @@ class StackBackend(ModelBackend):
             else:  # the 32-row head (its top-K scan costs every row: 3.7 ms at TP8 B=32 vs ~1 ms at t = 8)
                 self.head(kv.res, self.pos, pos_copies=self.pos_c)
             return
+        pools = self._dsa_pools(kv)
         for c in range(self.n_chunks) if chunks is None else chunks:
             for r, stk in kv.stacks[c]:
                 if stk is None:  # sparse_dsa: 7b's MkMla (stack mode: reads / keeps the persistent residual) + MkMoE
                     e = self.seq[r[0]]
                     if self.fl is not None:
                         set_knobs("dsa", self.tp, self.chunk)
-                    s1 = e["mla"](kv.res[c], kv.extra["latent"][r[0]], kv.extra["pt_c"][c], self.pos_c[c], t=self.chunk,
-                                  keep=("s1",), stack=True,
-                                  dsa_state=self._dsa_st(kv, r[0], c * self.chunk))["s1"]  # fmt: skip
-                    e["moe"](s1, t=self.chunk, out=kv.res[c], live=self._moe_live())
-                    # freed explicitly (not just dropped): an s1 still referenced elsewhere stays allocated after a
-                    # capture -> buffers alive at the replay of an earlier-captured width trace
-                    ttnn.deallocate(s1)
-                    del s1  # L1: must not stay allocated under the next stack program's CB region
+                    self._dsa_layer(e, kv.res[c], kv.extra["latent"][r[0]], kv.extra["pt_c"][c], self.pos_c[c],
+                                    t=self.chunk, dsa_state=self._dsa_st(kv, r[0], c * self.chunk), out=kv.res[c],
+                                    pools=pools)  # fmt: skip
                     continue
                 if self.fl is not None:  # the TP layers were built with the per-kind knobs (one chip: by the caller)
                     set_knobs(self.seq[r[0]]["sparse"], self.tp, self.chunk)
@@ -2058,6 +2087,7 @@ class StackBackend(ModelBackend):
         """the layers at native width w (rows 0..w-1) on the shared 32-row state; the embed / head stay 32-row (rows
         >= w are idle: never read)"""
         rw, masks, pool = kv.extra["wres"][w], kv.extra["wmasks"][w], kv.extra["pool"]
+        pools = self._dsa_pools(kv)
         pool.alias = True  # a width stack's first call builds its program: its intermediates alias the full width's
         try:
             for r, stk in kv.extra["wstacks"][w]:
@@ -2068,11 +2098,8 @@ class StackBackend(ModelBackend):
                     for o in (getattr(e["mla"], "mk", None), getattr(e["moe"], "mk", None)):
                         if o is not None:  # the full width's buffers exist (prepare_decode ran it first)
                             _seed_width(o, w, self.chunk)
-                    s1 = e["mla"](rw, kv.extra["latent"][r[0]], kv.extra["pt_c"][0], self.pos_c[0], t=w, keep=("s1",),
-                                  stack=True, dsa_state=self._dsa_st(kv, r[0], 0))["s1"]  # fmt: skip
-                    e["moe"](s1, t=w, out=rw, live=self._moe_live())
-                    ttnn.deallocate(s1)
-                    del s1
+                    self._dsa_layer(e, rw, kv.extra["latent"][r[0]], kv.extra["pt_c"][0], self.pos_c[0], t=w,
+                                    dsa_state=self._dsa_st(kv, r[0], 0), out=rw, pools=pools)  # fmt: skip
                     continue
                 if self.fl is not None:
                     set_knobs(self.wseq[w][r[0]]["sparse"], self.tp, w)

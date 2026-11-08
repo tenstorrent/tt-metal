@@ -87,7 +87,8 @@ RS1 along the column with 8 destinations, and a new 2-row slice format serves RS
 | 512 K | 4 distinct | 28.9 ms = 34.6 tok/s/u | 626 s | 6 GB trace region; the unsharded pool OOMs at 512 K x 1 |
 | 1 M | 1 | 19.3 ms = 51.7 tok/s/u | 345 s | 8 GB trace region, 1,402 / 1,649 MiB DRAM free per bank after compile |
 | 1 M | 4 distinct | 28.2 ms = 35.4 tok/s/u | 1,379 s | 4 x 1 M resident, 1,534 / 1,516 MiB DRAM per bank after gc |
-| 32 K / 128 K | 16 distinct | build throw | | the MoE decode program's static CBs at t = 16 vs the L1 floor (section 7) |
+| 32 K | 16 distinct | 68.3 ms = 14.6 tok/s/u | 143 s | with the shared m (section 7); 2 token lanes at t = 16 (32 helpers per lane): the decode perf item |
+| 128 K | 16 distinct | 71.3 ms = 14.0 tok/s/u | 583 s | with the shared m; 16 x 128 K resident (the unsharded pool holds 4) |
 
 Prefill runs 3.0-3.7 K tok/s flat from 32 K to 1 M (the TP prefill path, unchanged by the shard). The exchange costs
 +7-8 ms per decode step at 4 K / 32 K against the unsharded TP32 (the optimisation item), and the per-user decode
@@ -103,3 +104,9 @@ is the first clashing allocator, not the maximum. The unsharded TP32 B = 16 row 
 adds the stream sync words (4 x 1.5 KB per row count, shared across layers: `GLM53_DSA_SHARD_SHARE_SYNC`) under the
 floor. The 2x4 sharded B = 16 row threw the same with the floor at 1245056. Diagnostic: `GLM53_MK_CB_REPORT=2` (the
 shard CB report, the L1 census with tensors, the MoE CB map of `TPMoE._cb_map`).
+
+Fix (2026-11-06): the sparse_dsa layers share one shared-expert intermediate `m` (`GLM53_MOE_SHARE_M`, default on:
+10 x 2 KB per bank; the floor ended at 1275008 instead of 1253248 and the 32 K B = 16 row passed with identical B = 4
+ids). The remaining drift (2176 B per layer, a row-major per-layer tensor) and the per-call churn go away with
+`GLM53_MLA_SHARE_HANDOFF=1` (opt-in until validated): every layer's per-t MLA / MoE hand-offs come from the first
+layer's dict (MkMla / MkMoE persist), keyed by (t, call order, shape, dtype); keep= pops but never frees them.

@@ -755,11 +755,21 @@ class SpecMTP:
                 es.enter_context(env(GLM53_MLA_ATT_LANES_T4="2"))
             # dsa_state: a main sparse_dsa layer's DSA state under GLM53_STACK_DSA (None = the dense MkMla / the MTP
             # layer); the verify's rows all address slot 0 (mk_mla rev 56 MLA_DSA_ONE_SLOT), ACCEPT moves the rings
-            s1 = e["mla"](res, cache, pt, pos, t=t, keep=("s1",), stack=True, dsa_state=dsa_state)["s1"]
-        r = e["moe"](s1, t=t, out=res, live=self.vlive if verify else None)
+            pools = self.be._dsa_pools(self.kv)  # GLM53_DSA_POOL: the pooled intermediates (stack_model._dsa_layer)
+            if pools is None:
+                s1 = e["mla"](res, cache, pt, pos, t=t, keep=("s1",), stack=True, dsa_state=dsa_state)["s1"]
+            else:
+                with pools[0]:
+                    s1 = e["mla"](res, cache, pt, pos, t=t, stack=True, dsa_state=dsa_state)["s1"]
+        if pools is None:
+            r = e["moe"](s1, t=t, out=res, live=self.vlive if verify else None)
+        else:
+            with pools[1]:
+                r = e["moe"](s1, t=t, out=res, live=self.vlive if verify else None)
         if dbg is not None and self.dbg_ids is not None:
             ttnn.copy(r["ids"], self.dbg_ids[dbg])
-        ttnn.deallocate(s1)  # L1: must not stay allocated under the next program's CB region
+        if pools is None:
+            ttnn.deallocate(s1)  # L1: must not stay allocated under the next program's CB region
         del s1
 
     def _verify(self):
