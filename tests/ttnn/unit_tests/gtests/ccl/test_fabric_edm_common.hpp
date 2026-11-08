@@ -11,6 +11,7 @@
 #include <tt-metalium/host_api.hpp>
 #include "tt-metalium/kernel_types.hpp"
 #include <tt-metalium/experimental/fabric/fabric.hpp>
+#include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 #include "tt_metal/test_utils/df/df.hpp"
 #include "tt_metal/test_utils/env_vars.hpp"
 
@@ -434,7 +435,8 @@ bool RunPipelinedWorkersTest(
     TT_FATAL(mem_configs.size() == num_tensors, "Must have a memory config for each tensor");
     for (size_t i = 0; i < num_tensors; i++) {
         device_tensors.push_back(host_tensors[i].to_device(mesh_device.get(), mem_configs[i]));
-        log_info(tt::LogTest, "Tensor[{}] allocated starting at address {}", i, device_tensors[i].buffer()->address());
+        log_info(
+            tt::LogTest, "Tensor[{}] allocated starting at address {}", i, device_tensors[i].mesh_buffer().address());
     }
     TT_FATAL(
         device_tensors.size() == num_tensors,

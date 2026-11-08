@@ -862,18 +862,33 @@ TEST_F(RMSNormOpTest, GatedPreallocatedOutputsOnCachedProgram) {
 
     for (const bool compute_dgamma : {true, false}) {
         const std::string suffix = compute_dgamma ? "" : " without dgamma";
-        // Caches the programs with launches on other inputs into fresh outputs. Everything stays alive, so no buffer
-        // below can reuse their addresses.
+        // Caches the programs with preallocated launches on other inputs into other outputs, since the program key
+        // covers which optional tensors are passed. Everything stays alive, so no buffer below can reuse their
+        // addresses.
         const auto num_programs_before = device->num_program_cache_entries();
         const auto first = make_inputs(s, 29U, dtype, /* gated */ true);
         const auto first_x = to_device(first.x, dtype);
         const auto first_gate = to_device(first.gate);
         const auto first_gamma = to_device(first.gamma);
         const auto first_dy = to_device(first.dy);
-        const auto first_fw =
-            ttml::metal::rmsnorm_fw(first_x, first_gamma, /* return_intermediates */ true, kEps, first_gate);
-        const auto first_bw =
-            ttml::metal::rmsnorm_bw(first_x, first_gamma, first_fw[1].value(), first_dy, compute_dgamma, first_gate);
+        const auto first_out = ttml::core::zeros(ttnn::Shape(s.head_merged()), device);
+        const auto first_rms = ttml::core::zeros(ttnn::Shape(s.rms()), device);
+        const auto first_da = ttml::core::zeros(ttnn::Shape(s.head_major()), device);
+        const auto first_dgamma_components =
+            compute_dgamma ? std::make_optional(ttml::core::zeros(ttnn::Shape(s.head_major()), device)) : std::nullopt;
+        const auto first_dgate = ttml::core::zeros(ttnn::Shape(s.head_merged()), device);
+        ttnn::prim::ttml_rmsnorm_fw(
+            first_x, first_gamma, first_gate, /* return_intermediates */ true, kEps, first_rms, first_out);
+        ttnn::prim::ttml_rmsnorm_bw(
+            first_x,
+            first_gamma,
+            first_rms,
+            first_dy,
+            first_gate,
+            compute_dgamma,
+            first_da,
+            first_dgamma_components,
+            first_dgate);
         // Preallocated outputs, made before the entry count: core::zeros fills them on the device with a program.
         const auto out = ttml::core::zeros(ttnn::Shape(s.head_merged()), device);
         const auto rms = ttml::core::zeros(ttnn::Shape(s.rms()), device);
@@ -897,17 +912,17 @@ TEST_F(RMSNormOpTest, GatedPreallocatedOutputsOnCachedProgram) {
             ttnn::prim::ttml_rmsnorm_bw(x, gamma, rms, dy, gate, compute_dgamma, da, dgamma_components, dgate);
         EXPECT_EQ(device->num_program_cache_entries(), num_programs) << suffix;
 
-        EXPECT_EQ(fw[0].buffer()->address(), out.buffer()->address());
-        EXPECT_EQ(fw[1].buffer()->address(), rms.buffer()->address());
-        EXPECT_EQ(bw[0]->buffer()->address(), da.buffer()->address());
-        EXPECT_EQ(bw[2]->buffer()->address(), dgate.buffer()->address());
+        EXPECT_EQ(fw[0].mesh_buffer().address(), out.mesh_buffer().address());
+        EXPECT_EQ(fw[1].mesh_buffer().address(), rms.mesh_buffer().address());
+        EXPECT_EQ(bw[0]->mesh_buffer().address(), da.mesh_buffer().address());
+        EXPECT_EQ(bw[2]->mesh_buffer().address(), dgate.mesh_buffer().address());
         expect_close(ttml::core::to_xtensor(out), ref.out, "preallocated out" + suffix);
         expect_close(ttml::core::to_xtensor(rms), ref.rms, "preallocated rms" + suffix);
         expect_close(ttml::core::to_xtensor(da), ref.dx, "preallocated dx" + suffix, kDxTol);
         expect_close(ttml::core::to_xtensor(dgate), ref.dgate, "preallocated dgate" + suffix);
         ASSERT_EQ(bw[1].has_value(), compute_dgamma);
         if (compute_dgamma) {
-            EXPECT_EQ(bw[1]->buffer()->address(), dgamma_components->buffer()->address());
+            EXPECT_EQ(bw[1]->mesh_buffer().address(), dgamma_components->mesh_buffer().address());
             const xt::xarray<double> components = xt::cast<double>(ttml::core::to_xtensor(*dgamma_components));
             const xt::xarray<double> dgamma = xt::sum(components, {0, 1, 2}, xt::keep_dims);
             expect_close(dgamma, ref.dgamma, "preallocated dgamma");
@@ -1297,8 +1312,8 @@ void run_rmsnorm_fw_preallocated(bool return_intermediates) {
     }
 
     if (!return_intermediates) {
-        // With no rms to write, a preallocated one is rejected rather than ignored, also on a hit of the cached
-        // program: the op has no hit-only validation, so ttnn validates hits as misses.
+        // With no rms to write, a preallocated one is rejected rather than ignored. The program key covers which
+        // optional tensors are passed, so this launch misses, and validation rejects it before a program is built.
         const auto launch = static_cast<uint32_t>(launches.size());
         const auto in = make_forward_inputs(shape, launch, x_range_of_launch(launch));
         const auto preallocated_rms = test_utils::filled_on_device(rms_shape, kNotWritten);
@@ -1371,8 +1386,7 @@ TEST_F(RMSNormCacheHitTest, Forward_PreallocatedOutputsAcrossOptionalPresence_Tw
     run_rmsnorm_fw_preallocated(/*return_intermediates=*/true);
 }
 
-// The op only returns the output, so only the output's presence flips, and a preallocated rms is rejected once the
-// program is cached as well as before.
+// The op only returns the output, so only the output's presence flips, and a preallocated rms is rejected.
 TEST_F(RMSNormCacheHitTest, Forward_NoIntermediates_PreallocatedOutputsAcrossOptionalPresence_TwoCoreGroups) {
     run_rmsnorm_fw_preallocated(/*return_intermediates=*/false);
 }
@@ -1573,10 +1587,10 @@ TEST_F(RMSNormCacheHitTest, Backward_DistinctKeysCompileDistinctPrograms_TwoCore
 }
 
 // ----------------------------------------------------------------------------
-// Gated mode (see Section 4): the gate is one more input and dL_dgate one more output, and the program key holds the
-// head count, which is 0 without a gate. The inputs and references are Section 4's, at its kEps. Launch k scales x by
-// 2^k, which is exact, and negates gamma on odd k, so that a launch that reads another launch's x, rms or gamma fails
-// the reference check; each launch draws its own gate and dL_dout.
+// Gated mode (see Section 4): the gate is one more input and dL_dgate one more output, and the program key covers the
+// gate's spec, which gives its presence and the head count. The inputs and references are Section 4's, at its kEps.
+// Launch k scales x by 2^k, which is exact, and negates gamma on odd k, so that a launch that reads another launch's x,
+// rms or gamma fails the reference check; each launch draws its own gate and dL_dout.
 // ----------------------------------------------------------------------------
 
 namespace {
@@ -1972,9 +1986,10 @@ TEST_F(RMSNormCacheHitTest, Forward_GateAndHeadCountCompileDistinctPrograms_TwoC
 // The backward counterpart of Forward_GateAndHeadCountCompileDistinctPrograms_TwoCoreGroups, each mode without and with
 // compute_dgamma, which a frozen gamma turns off. In each mode the launch without dL_dgamma goes first: a launch with
 // it that reused that program would leave its dL_dgamma_components unwritten, while in the other order a launch
-// without it would write them through the absent output's address 0. Once the programs are cached, hits must still
-// reject a preallocated dL_dgamma_components without compute_dgamma and a preallocated dL_dgate without a gate: the op
-// has no hit-only validation, so ttnn validates hits as misses.
+// without it would write them through the absent output's address 0. Once the programs are cached, a preallocated
+// dL_dgamma_components without compute_dgamma and a preallocated dL_dgate without a gate must still be rejected. The
+// program key covers which optional tensors are passed, so these launches miss, and validation rejects them before a
+// program is built.
 TEST_F(RMSNormCacheHitTest, Backward_GateHeadCountAndDgammaCompileDistinctPrograms_TwoCoreGroups) {
     using namespace ttml;
     auto* device = &autograd::ctx().get_device();

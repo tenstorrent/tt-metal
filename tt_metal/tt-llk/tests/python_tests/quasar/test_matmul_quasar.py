@@ -30,6 +30,7 @@ from helpers.llk_params import (
     format_tile_sizes,
 )
 from helpers.param_config import (
+    DEST_DEPTH_BLOCK_COUNTS,
     input_output_formats,
     max_dest_tiles,
     parametrize,
@@ -253,7 +254,7 @@ TINY_MATMUL_SHAPE_CASES = [((16, 16), (16, 16))] + [
     for width in (16, 32)
     if (height, width) != (32, 32)
 ]
-TINY_MATMUL_FORMATS = [
+NON_MX_MATMUL_FORMATS = [
     format
     for format in MATMUL_FORMAT
     if not format.input_format.is_mx_format()
@@ -558,7 +559,7 @@ def test_matmul(
 @pytest.mark.quasar
 @parametrize(
     input_tile_dimensions=runtime(TINY_MATMUL_SHAPE_CASES),
-    format=TINY_MATMUL_FORMATS,
+    format=NON_MX_MATMUL_FORMATS,
     math_fidelity=[MathFidelity.LoFi],
     dest_sync_mode=[DestSync.Half],
     dest_acc=matmul_dest_acc_modes,
@@ -648,6 +649,159 @@ def test_matmul_int8_2x(
         transpose,
         run_types,
         loop_factor,
+    )
+
+
+def matmul_dest_depth_tile_dimensions(dest_acc, dest_sync_mode):
+    """(ct, rt, kt) whose output spans 4 and 8 full Dest sections, on both MOP reuse branches.
+
+    The kernel splits rt into blocks that each fill one section (matmul_rows_per_dest_section).
+    """
+    max_tiles = max_dest_tiles(dest_acc, dest_sync_mode)
+    # The non-reuse branch needs rt_block > ct; a 4-tile section only fits that at ct=1.
+    non_reuse_ct = 2 if max_tiles > 4 else 1
+    return [
+        (ct, blocks * rows, kt)
+        for ct, rows, kt in (
+            (max_tiles, 1, 2),
+            (non_reuse_ct, max_tiles // non_reuse_ct, 1),
+        )
+        for blocks in DEST_DEPTH_BLOCK_COUNTS
+    ]
+
+
+@pytest.mark.quasar
+@parametrize(
+    input_tile_dimensions=runtime(FULL_MATMUL_SHAPES),
+    format=[
+        InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b),
+        InputOutputFormat(DataFormat.Int8, DataFormat.Int32),
+    ],
+    dest_sync_mode=lambda: quasar_dest_sync_modes(),
+    dest_acc=matmul_dest_acc_modes,
+    matmul_tile_dims=runtime(
+        lambda dest_acc, dest_sync_mode: matmul_dest_depth_tile_dimensions(
+            dest_acc, dest_sync_mode
+        )
+    ),
+)
+def test_matmul_dest_depth(
+    input_tile_dimensions,
+    format,
+    dest_sync_mode,
+    dest_acc,
+    matmul_tile_dims,
+):
+    """Output larger than Dest: full Dest sections stacked along M."""
+    test_matmul(
+        input_tile_dimensions,
+        matmul_tile_dims,
+        MathFidelity.LoFi,
+        dest_sync_mode,
+        dest_acc,
+        format,
+        None,
+        False,
+        Transpose.No,
+        [PerfRunType.L1_TO_L1],
+        1,
+    )
+
+
+# kt beyond the main sweep's {1, 2, 4}: an odd depth and two long accumulations.
+DEEP_KT_DIMS = [3, 8, 16]
+MATMUL_LOFI_HIFI4 = [MathFidelity.LoFi, MathFidelity.HiFi4]
+
+
+def matmul_deep_k_tile_dimensions(format, dest_acc):
+    """(ct, rt, kt); a 16-bit Dest rounds every K-tile, so kt=16 Float16_b fails the 0.99 PCC gate."""
+    kt_dims = (
+        [kt for kt in DEEP_KT_DIMS if kt <= 8]
+        if format.input_format == DataFormat.Float16_b
+        and dest_acc == DestAccumulation.No
+        else DEEP_KT_DIMS
+    )
+    return [(ct, rt, kt) for ct, rt in ((2, 2), (1, 2)) for kt in kt_dims]
+
+
+@pytest.mark.quasar
+@parametrize(
+    input_tile_dimensions=runtime(FULL_MATMUL_SHAPES),
+    format=[
+        InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b),
+        InputOutputFormat(DataFormat.Float16, DataFormat.Float16),
+        InputOutputFormat(DataFormat.Int8, DataFormat.Int32),
+    ],
+    math_fidelity=lambda format: [
+        fidelity
+        for fidelity in get_valid_math_fidelities(format)
+        if fidelity in MATMUL_LOFI_HIFI4
+    ],
+    dest_acc=matmul_dest_acc_modes,
+    matmul_tile_dims=runtime(matmul_deep_k_tile_dimensions),
+)
+def test_matmul_deep_k(
+    input_tile_dimensions,
+    format,
+    math_fidelity,
+    dest_acc,
+    matmul_tile_dims,
+):
+    test_matmul(
+        input_tile_dimensions,
+        matmul_tile_dims,
+        math_fidelity,
+        DestSync.Half,
+        dest_acc,
+        format,
+        None,
+        False,
+        Transpose.No,
+        [PerfRunType.L1_TO_L1],
+        1,
+    )
+
+
+@pytest.mark.quasar
+@parametrize(
+    input_tile_dimensions=runtime(FULL_MATMUL_SHAPES),
+    format=[
+        InputOutputFormat(DataFormat.Float32, DataFormat.Float32),
+        InputOutputFormat(DataFormat.Float32, DataFormat.Float16_b),
+    ],
+    math_fidelity=lambda format: [
+        fidelity
+        for fidelity in get_valid_math_fidelities(format)
+        if fidelity in MATMUL_LOFI_HIFI4
+    ],
+    # A Float32 output needs a 32-bit Dest; the packer cannot upcast.
+    dest_acc=lambda format: (
+        [DestAccumulation.Yes]
+        if format.output_format.is_32_bit()
+        else [DestAccumulation.Yes, DestAccumulation.No]
+    ),
+    matmul_tile_dims=runtime([(1, 1, 1), (2, 2, 2), (4, 1, 2)]),
+)
+def test_matmul_float32(
+    input_tile_dimensions,
+    format,
+    math_fidelity,
+    dest_acc,
+    matmul_tile_dims,
+):
+    """Float32 L1 operands, read into SrcA/SrcB as Tf32 (32-bit Dest) or Float16_b."""
+    test_matmul(
+        input_tile_dimensions,
+        matmul_tile_dims,
+        math_fidelity,
+        DestSync.Half,
+        dest_acc,
+        format,
+        None,
+        False,
+        Transpose.No,
+        [PerfRunType.L1_TO_L1],
+        1,
     )
 
 
