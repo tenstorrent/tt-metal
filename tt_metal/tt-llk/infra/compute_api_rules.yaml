@@ -1,0 +1,2639 @@
+# Machine-readable compute-kernel and LLK API ordering rules per Tensix thread (UNPACK, MATH, PACK).
+# Read by tt_metal/tt-llk/infra/check_compute_api_order.py and validated against
+# tt_metal/tt-llk/tools/include/sanitizer/operation.h and .github/deprecations.json
+# by tt_metal/tt-llk/infra/tests/test_check_compute_api_order.py.
+#
+# Every entry cites its authoritative source: an API header doc comment, LLK implementation,
+# documentation file, or historical issue number.
+
+schema_version: 1
+deprecations_manifest: ".github/deprecations.json"
+sanitizer_header: "tt_metal/tt-llk/tools/include/sanitizer/operation.h"
+
+# ---------------------------------------------------------------------------
+# 1. LLK Sanitizer Operation Model Correspondence
+#    Must stay in 1-to-1 agreement with tt_metal/tt-llk/tools/include/sanitizer/operation.h.
+# ---------------------------------------------------------------------------
+sanitizer_operations:
+  OperationUnpackUnary:
+    exu: Unpack
+    thread: UNPACK
+    hoistable: true
+    state_fields:
+      - BroadcastType
+      - AccumulateToDest
+      - BinaryReuseDest
+      - UnpackToDest
+    llk_inits:
+      - llk_unpack_A_init
+      - llk_unpack_unary_operand_init
+    llk_execs:
+      - llk_unpack_A
+      - llk_unpack_unary_operand
+    llk_uninits: []
+    source: "tt_metal/tt-llk/tools/include/sanitizer/operation.h:175"
+
+  OperationUnpackBinary:
+    exu: Unpack
+    thread: UNPACK
+    hoistable: true
+    state_fields:
+      - BroadcastType
+      - Transpose
+    llk_inits:
+      - llk_unpack_AB_init
+    llk_execs:
+      - llk_unpack_AB
+    llk_uninits: []
+    source: "tt_metal/tt-llk/tools/include/sanitizer/operation.h:209"
+
+  OperationUnpackMatmul:
+    exu: Unpack
+    thread: UNPACK
+    hoistable: true
+    state_fields:
+      - KernelBroadcastA
+      - KernelBroadcastB
+      - Transpose
+      - CtDim
+      - RtDim
+      - KtDim
+      - PartialFaceA
+      - PartialFaceB
+    llk_inits:
+      - llk_unpack_AB_matmul_init
+    llk_execs:
+      - llk_unpack_AB_matmul
+    llk_uninits: []
+    source: "tt_metal/tt-llk/tools/include/sanitizer/operation.h:233"
+
+  OperationUnpackTilize:
+    exu: Unpack
+    thread: UNPACK
+    hoistable: false
+    state_fields:
+      - BlockCtDim
+      - NarrowTile
+    llk_inits:
+      - llk_unpack_tilize_init
+      - llk_unpack_tilizeA_B_init
+    llk_execs:
+      - llk_unpack_tilize
+      - llk_unpack_tilize_block
+      - llk_unpack_tilizeA_B
+      - llk_unpack_tilizeA_B_block
+    llk_uninits:
+      - llk_unpack_tilize_uninit
+    source: "tt_metal/tt-llk/tools/include/sanitizer/operation.h:287"
+
+  OperationUnpackReduce:
+    exu: Unpack
+    thread: UNPACK
+    hoistable: true
+    state_fields:
+      - PoolType
+      - ReduceDim
+      - FaceHeight
+      - NumFaces
+    llk_inits:
+      - llk_unpack_reduce_init
+      - llk_unpack_AB_reduce_init
+    llk_execs:
+      - llk_unpack_reduce
+      - llk_unpack_AB_reduce
+    llk_uninits:
+      - llk_unpack_reduce_uninit
+    source: "tt_metal/tt-llk/tools/include/sanitizer/operation.h:311"
+
+  OperationUnpackFastTilizeWh:
+    exu: Unpack
+    thread: UNPACK
+    hoistable: false
+    state_fields:
+      - FullDim
+    llk_inits:
+      - llk_unpack_fast_tilize_init
+    llk_execs:
+      - llk_unpack_fast_tilize_block
+    llk_uninits:
+      - llk_unpack_fast_tilize_uninit
+    source: "tt_metal/tt-llk/tools/include/sanitizer/operation.h:345"
+
+  OperationFpuMatmul:
+    exu: Fpu
+    thread: MATH
+    hoistable: true
+    state_fields:
+      - MathFidelity
+      - ThrottleLevel
+      - CtDim
+      - RtDim
+    llk_inits:
+      - llk_math_matmul_init
+    llk_execs:
+      - llk_math_matmul
+    llk_uninits: []
+    source: "tt_metal/tt-llk/tools/include/sanitizer/operation.h:364"
+
+  OperationFpuEltwiseBinary:
+    exu: Fpu
+    thread: MATH
+    hoistable: true
+    state_fields:
+      - EltwiseBinaryType
+      - BroadcastType
+      - MathFidelity
+      - ReuseDest
+      - AccToDest
+      - FaceHeight
+      - NumFaces
+      - NumFacesCDim
+    llk_inits:
+      - llk_math_eltwise_binary_init
+      - llk_math_eltwise_binary_init_with_operands
+    llk_execs:
+      - llk_math_eltwise_binary
+    llk_uninits: []
+    source: "tt_metal/tt-llk/tools/include/sanitizer/operation.h:398"
+
+  OperationFpuReduce:
+    exu: Fpu
+    thread: MATH
+    hoistable: true
+    state_fields:
+      - PoolType
+      - ReduceDim
+      - MathFidelity
+      - NumFacesRDim
+      - NumFacesCDim
+    llk_inits:
+      - llk_math_reduce_init
+      - llk_math_reduce_block_max_row_init
+    llk_execs:
+      - llk_math_reduce
+      - llk_math_reduce_block_max_row
+    llk_uninits:
+      - llk_math_reduce_block_max_row_uninit
+    source: "tt_metal/tt-llk/tools/include/sanitizer/operation.h:452"
+
+  OperationFpuEltwiseUnaryDatacopy:
+    exu: Fpu
+    thread: MATH
+    hoistable: true
+    state_fields:
+      - DataCopyType
+      - BroadcastType
+      - NumFaces
+    llk_inits:
+      - llk_math_eltwise_unary_datacopy_init
+    llk_execs:
+      - llk_math_eltwise_unary_datacopy
+      - llk_math_eltwise_unary_datacopy_block
+    llk_uninits: []
+    source: "tt_metal/tt-llk/tools/include/sanitizer/operation.h:491"
+
+  OperationFpuFastTilizeWh:
+    exu: Fpu
+    thread: MATH
+    hoistable: false
+    state_fields:
+      - AddrMod
+    llk_inits:
+      - llk_math_fast_tilize_init
+    llk_execs:
+      - llk_math_fast_tilize_block
+    llk_uninits:
+      - llk_math_fast_tilize_uninit
+    source: "tt_metal/tt-llk/tools/include/sanitizer/operation.h:520"
+
+  OperationPack:
+    exu: Pack
+    thread: PACK
+    hoistable: true
+    state_fields:
+      - NumTiles
+    llk_inits:
+      - llk_pack_init
+      - llk_pack_dest_init
+    llk_execs:
+      - llk_pack
+      - llk_pack_block
+    llk_uninits: []
+    source: "tt_metal/tt-llk/tools/include/sanitizer/operation.h:540"
+
+  OperationPackUntilize:
+    exu: Pack
+    thread: PACK
+    hoistable: false
+    state_fields:
+      - BlockCtDim
+      - FullCtDim
+      - Diagonal
+    llk_inits:
+      - llk_pack_untilize_init
+    llk_execs:
+      - llk_pack_untilize
+    llk_uninits:
+      - llk_pack_untilize_uninit
+    source: "tt_metal/tt-llk/tools/include/sanitizer/operation.h:556"
+
+  OperationPackFastTilizeWh:
+    exu: Pack
+    thread: PACK
+    hoistable: false
+    state_fields:
+      - AddrMod
+      - Use32BitDest
+    llk_inits:
+      - llk_pack_fast_tilize_init
+    llk_execs:
+      - llk_pack_fast_tilize_block
+    llk_uninits:
+      - llk_pack_fast_tilize_uninit
+    source: "tt_metal/tt-llk/tools/include/sanitizer/operation.h:585"
+
+# ---------------------------------------------------------------------------
+# 2. Per-Thread LLK API Rules (UNPACK, MATH, PACK)
+# ---------------------------------------------------------------------------
+llk_operations:
+  # ---- UNPACK thread (Exu::Unpack) ----
+  llk_unpack_A:
+    thread: UNPACK
+    exu: Unpack
+    sanitizer_op: OperationUnpackUnary
+    arches: [wormhole_b0, blackhole]
+    exec_calls:
+      - llk_unpack_A
+      - llk_unpack_unary_operand
+    required_inits:
+      - llk_unpack_A_init
+      - llk_unpack_unary_operand_init
+    matching_args:
+      - field: BroadcastType
+        init_template_index: 0
+        init_default: "BroadcastType::NONE"
+        exec_template_index: 0
+        exec_default: "BroadcastType::NONE"
+        source: "tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_unpack_A_api.h:47"
+      - field: AccumulateToDest
+        init_template_index: 1
+        init_default: "false"
+        exec_template_index: 1
+        exec_default: "false"
+        source: "tt_metal/hw/inc/api/compute/transpose.h:40 (#59276)"
+      - field: BinaryReuseDest
+        init_template_index: 2
+        init_default: "EltwiseBinaryReuseDestType::NONE"
+        exec_template_index: 2
+        exec_default: "EltwiseBinaryReuseDestType::NONE"
+        source: "tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_unpack_A_api.h:47"
+      - field: UnpackToDest
+        init_template_index: 3
+        init_default: "false"
+        exec_template_index: 3
+        exec_default: "false"
+        source: "tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_unpack_A_api.h:47"
+    invalidated_by:
+      - llk_unpack_AB_init
+      - llk_unpack_AB_matmul_init
+      - llk_unpack_tilize_init
+      - llk_unpack_tilizeA_B_init
+      - llk_unpack_untilize_init
+      - llk_unpack_reduce_init
+      - llk_unpack_AB_reduce_init
+      - llk_unpack_fast_tilize_init
+    requires_uninit: false
+    uninit_calls: []
+    hoistable: true
+    source: "tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_unpack_A_api.h:47 (#59276)"
+
+  llk_unpack_AB:
+    thread: UNPACK
+    exu: Unpack
+    sanitizer_op: OperationUnpackBinary
+    arches: [wormhole_b0, blackhole]
+    exec_calls:
+      - llk_unpack_AB
+    required_inits:
+      - llk_unpack_AB_init
+    matching_args:
+      - field: BroadcastType
+        init_template_index: 0
+        init_default: "BroadcastType::NONE"
+        exec_template_index: 0
+        exec_default: "BroadcastType::NONE"
+        source: "tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_unpack_AB_api.h:35"
+    invalidated_by:
+      - llk_unpack_A_init
+      - llk_unpack_unary_operand_init
+      - llk_unpack_AB_matmul_init
+      - llk_unpack_tilize_init
+      - llk_unpack_tilizeA_B_init
+      - llk_unpack_untilize_init
+      - llk_unpack_reduce_init
+      - llk_unpack_AB_reduce_init
+      - llk_unpack_fast_tilize_init
+    requires_uninit: false
+    uninit_calls: []
+    hoistable: true
+    source: "tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_unpack_AB_api.h:35"
+
+  llk_unpack_AB_matmul:
+    thread: UNPACK
+    exu: Unpack
+    sanitizer_op: OperationUnpackMatmul
+    arches: [wormhole_b0, blackhole]
+    exec_calls:
+      - llk_unpack_AB_matmul
+    required_inits:
+      - llk_unpack_AB_matmul_init
+    matching_args:
+      - field: CtDim
+        init_arg_index: 3
+        init_default: "1"
+        exec_arg_index: 4
+        exec_default: "1"
+        source: "tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_unpack_AB_matmul_api.h:20"
+      - field: RtDim
+        init_arg_index: 4
+        init_default: "1"
+        exec_arg_index: 5
+        exec_default: "1"
+        source: "tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_unpack_AB_matmul_api.h:20"
+      - field: KtDim
+        init_arg_index: 5
+        init_default: "1"
+        exec_arg_index: 6
+        exec_default: "1"
+        source: "tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_unpack_AB_matmul_api.h:20"
+    invalidated_by:
+      - llk_unpack_A_init
+      - llk_unpack_unary_operand_init
+      - llk_unpack_AB_init
+      - llk_unpack_tilize_init
+      - llk_unpack_tilizeA_B_init
+      - llk_unpack_untilize_init
+      - llk_unpack_reduce_init
+      - llk_unpack_AB_reduce_init
+      - llk_unpack_fast_tilize_init
+    requires_uninit: false
+    uninit_calls: []
+    hoistable: true
+    source: "tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_unpack_AB_matmul_api.h:20 (#39945)"
+
+  llk_unpack_tilize:
+    thread: UNPACK
+    exu: Unpack
+    sanitizer_op: OperationUnpackTilize
+    arches: [wormhole_b0, blackhole]
+    exec_calls:
+      - llk_unpack_tilize
+      - llk_unpack_tilize_block
+    required_inits:
+      - llk_unpack_tilize_init
+    matching_args: []
+    invalidated_by:
+      - llk_unpack_A_init
+      - llk_unpack_unary_operand_init
+      - llk_unpack_AB_init
+      - llk_unpack_AB_matmul_init
+      - llk_unpack_tilizeA_B_init
+      - llk_unpack_untilize_init
+      - llk_unpack_reduce_init
+      - llk_unpack_AB_reduce_init
+      - llk_unpack_fast_tilize_init
+      - llk_unpack_tilize_uninit
+    requires_uninit: true
+    uninit_calls:
+      - llk_unpack_tilize_uninit
+    hoistable: false
+    source: "tt_metal/hw/inc/api/compute/tilize.h:258 (#52175)"
+
+  llk_unpack_tilizeA_B:
+    thread: UNPACK
+    exu: Unpack
+    sanitizer_op: OperationUnpackTilize
+    arches: [wormhole_b0, blackhole]
+    exec_calls:
+      - llk_unpack_tilizeA_B
+      - llk_unpack_tilizeA_B_block
+    required_inits:
+      - llk_unpack_tilizeA_B_init
+    matching_args: []
+    invalidated_by:
+      - llk_unpack_A_init
+      - llk_unpack_unary_operand_init
+      - llk_unpack_AB_init
+      - llk_unpack_AB_matmul_init
+      - llk_unpack_tilize_init
+      - llk_unpack_untilize_init
+      - llk_unpack_reduce_init
+      - llk_unpack_AB_reduce_init
+      - llk_unpack_fast_tilize_init
+      - llk_unpack_tilize_uninit
+    requires_uninit: true
+    uninit_calls:
+      - llk_unpack_tilize_uninit
+    hoistable: false
+    source: "docs/source/tt-metalium/tools/llk_asserts.rst:114 (#39184)"
+
+  llk_unpack_untilize:
+    thread: UNPACK
+    exu: Unpack
+    sanitizer_op: null
+    arches: [wormhole_b0, blackhole]
+    exec_calls:
+      - llk_unpack_untilize
+    required_inits:
+      - llk_unpack_untilize_init
+    matching_args: []
+    invalidated_by:
+      - llk_unpack_A_init
+      - llk_unpack_unary_operand_init
+      - llk_unpack_AB_init
+      - llk_unpack_AB_matmul_init
+      - llk_unpack_tilize_init
+      - llk_unpack_tilizeA_B_init
+      - llk_unpack_reduce_init
+      - llk_unpack_AB_reduce_init
+      - llk_unpack_fast_tilize_init
+      - llk_unpack_untilize_uninit
+    requires_uninit: true
+    uninit_calls:
+      - llk_unpack_untilize_uninit
+    hoistable: false
+    source: "tt_metal/hw/inc/api/compute/untilize.h:61"
+
+  llk_unpack_reduce:
+    thread: UNPACK
+    exu: Unpack
+    sanitizer_op: OperationUnpackReduce
+    arches: [wormhole_b0, blackhole]
+    exec_calls:
+      - llk_unpack_reduce
+      - llk_unpack_AB_reduce
+    required_inits:
+      - llk_unpack_reduce_init
+      - llk_unpack_AB_reduce_init
+    matching_args:
+      - field: PoolType
+        init_template_index: 0
+        init_default: "PoolType::SUM"
+        exec_template_index: 0
+        exec_default: "PoolType::SUM"
+        source: "tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_unpack_AB_reduce_api.h:18"
+      - field: ReduceDim
+        init_template_index: 1
+        init_default: "ReduceDim::REDUCE_ROW"
+        exec_template_index: 1
+        exec_default: "ReduceDim::REDUCE_ROW"
+        source: "tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_unpack_AB_reduce_api.h:18"
+    invalidated_by:
+      - llk_unpack_A_init
+      - llk_unpack_unary_operand_init
+      - llk_unpack_AB_init
+      - llk_unpack_AB_matmul_init
+      - llk_unpack_tilize_init
+      - llk_unpack_tilizeA_B_init
+      - llk_unpack_untilize_init
+      - llk_unpack_fast_tilize_init
+      - llk_unpack_reduce_uninit
+    requires_uninit: true
+    uninit_calls:
+      - llk_unpack_reduce_uninit
+      - llk_unpack_A_init
+      - llk_unpack_AB_init
+      - llk_unpack_AB_matmul_init
+    hoistable: true
+    source: "tt_metal/hw/inc/api/compute/reduce.h:83 (#52175)"
+
+  llk_unpack_fast_tilize:
+    thread: UNPACK
+    exu: Unpack
+    sanitizer_op: OperationUnpackFastTilizeWh
+    arches: [wormhole_b0]
+    exec_calls:
+      - llk_unpack_fast_tilize_block
+    required_inits:
+      - llk_unpack_fast_tilize_init
+    matching_args:
+      - field: FullDim
+        init_arg_index: 1
+        exec_arg_index: 3
+        source: "tt_metal/tt-llk/tools/include/sanitizer/operation.h:345"
+    invalidated_by:
+      - llk_unpack_A_init
+      - llk_unpack_unary_operand_init
+      - llk_unpack_AB_init
+      - llk_unpack_AB_matmul_init
+      - llk_unpack_tilize_init
+      - llk_unpack_tilizeA_B_init
+      - llk_unpack_untilize_init
+      - llk_unpack_reduce_init
+      - llk_unpack_AB_reduce_init
+      - llk_unpack_fast_tilize_uninit
+    requires_uninit: true
+    uninit_calls:
+      - llk_unpack_fast_tilize_uninit
+    hoistable: false
+    source: "tt_metal/tt-llk/tools/include/sanitizer/operation.h:345"
+
+  # ---- MATH thread (Exu::Fpu) ----
+  llk_math_matmul:
+    thread: MATH
+    exu: Fpu
+    sanitizer_op: OperationFpuMatmul
+    arches: [wormhole_b0, blackhole]
+    exec_calls:
+      - llk_math_matmul
+    required_inits:
+      - llk_math_matmul_init
+    matching_args:
+      - field: MathFidelity
+        init_template_index: 0
+        exec_template_index: 0
+        source: "tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_math_matmul_api.h:16"
+      - field: ThrottleLevel
+        init_template_index: 1
+        init_default: "0"
+        exec_template_index: 1
+        exec_default: "0"
+        source: "tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_math_matmul_api.h:16"
+      - field: CtDim
+        init_arg_index: 3
+        init_default: "1"
+        exec_arg_index: 1
+        exec_default: "1"
+        source: "tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_math_matmul_api.h:27"
+      - field: RtDim
+        init_arg_index: 4
+        init_default: "1"
+        exec_arg_index: 2
+        exec_default: "1"
+        source: "tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_math_matmul_api.h:27"
+    invalidated_by:
+      - llk_math_eltwise_binary_init
+      - llk_math_eltwise_binary_init_with_operands
+      - llk_math_reduce_init
+      - llk_math_reduce_block_max_row_init
+      - llk_math_eltwise_unary_datacopy_init
+      - llk_math_transpose_dest_init
+      - llk_math_fast_tilize_init
+    requires_uninit: false
+    uninit_calls: []
+    hoistable: true
+    source: "tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_math_matmul_api.h:16"
+
+  llk_math_eltwise_binary:
+    thread: MATH
+    exu: Fpu
+    sanitizer_op: OperationFpuEltwiseBinary
+    arches: [wormhole_b0, blackhole]
+    exec_calls:
+      - llk_math_eltwise_binary
+    required_inits:
+      - llk_math_eltwise_binary_init
+      - llk_math_eltwise_binary_init_with_operands
+    matching_args:
+      - field: EltwiseBinaryType
+        init_template_index: 0
+        exec_template_index: 0
+        source: "tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_math_binary_api.h:30"
+      - field: BroadcastType
+        init_template_index: 1
+        init_default: "BroadcastType::NONE"
+        exec_template_index: 1
+        exec_default: "BroadcastType::NONE"
+        source: "tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_math_binary_api.h:30"
+      - field: MathFidelity
+        init_template_index: 2
+        init_default: "MathFidelity::LoFi"
+        exec_template_index: 3
+        exec_default: "MathFidelity::LoFi"
+        source: "tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_math_binary_api.h:30"
+      - field: ReuseDest
+        init_template_index: 3
+        init_default: "EltwiseBinaryReuseDestType::NONE"
+        exec_template_index: 4
+        exec_default: "EltwiseBinaryReuseDestType::NONE"
+        source: "tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_math_binary_api.h:30"
+    invalidated_by:
+      - llk_math_matmul_init
+      - llk_math_reduce_init
+      - llk_math_reduce_block_max_row_init
+      - llk_math_eltwise_unary_datacopy_init
+      - llk_math_transpose_dest_init
+      - llk_math_fast_tilize_init
+    requires_uninit: false
+    uninit_calls: []
+    hoistable: true
+    source: "tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_math_binary_api.h:30"
+
+  llk_math_reduce:
+    thread: MATH
+    exu: Fpu
+    sanitizer_op: OperationFpuReduce
+    arches: [wormhole_b0, blackhole]
+    exec_calls:
+      - llk_math_reduce
+    required_inits:
+      - llk_math_reduce_init
+    matching_args:
+      - field: PoolType
+        init_template_index: 0
+        init_default: "PoolType::SUM"
+        exec_template_index: 0
+        exec_default: "PoolType::SUM"
+        source: "tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_math_reduce_api.h:22"
+      - field: ReduceDim
+        init_template_index: 1
+        init_default: "ReduceDim::REDUCE_ROW"
+        exec_template_index: 1
+        exec_default: "ReduceDim::REDUCE_ROW"
+        source: "tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_math_reduce_api.h:22"
+      - field: MathFidelity
+        init_template_index: 3
+        init_default: "MathFidelity::LoFi"
+        exec_template_index: 3
+        exec_default: "MathFidelity::LoFi"
+        source: "tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_math_reduce_api.h:22"
+    invalidated_by:
+      - llk_math_matmul_init
+      - llk_math_eltwise_binary_init
+      - llk_math_eltwise_binary_init_with_operands
+      - llk_math_reduce_block_max_row_init
+      - llk_math_eltwise_unary_datacopy_init
+      - llk_math_transpose_dest_init
+      - llk_math_fast_tilize_init
+    requires_uninit: false
+    uninit_calls: []
+    hoistable: true
+    source: "tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_math_reduce_api.h:22"
+
+  llk_math_reduce_block_max_row:
+    thread: MATH
+    exu: Fpu
+    sanitizer_op: OperationFpuReduce
+    arches: [wormhole_b0, blackhole]
+    exec_calls:
+      - llk_math_reduce_block_max_row
+    required_inits:
+      - llk_math_reduce_block_max_row_init
+    matching_args:
+      - field: CtDim
+        init_template_index: 0
+        exec_template_index: 0
+        source: "tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_math_reduce_api.h:42"
+    invalidated_by:
+      - llk_math_matmul_init
+      - llk_math_eltwise_binary_init
+      - llk_math_eltwise_binary_init_with_operands
+      - llk_math_reduce_init
+      - llk_math_eltwise_unary_datacopy_init
+      - llk_math_transpose_dest_init
+      - llk_math_fast_tilize_init
+      - llk_math_reduce_block_max_row_uninit
+    requires_uninit: true
+    uninit_calls:
+      - llk_math_reduce_block_max_row_uninit
+    hoistable: false
+    source: "tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_math_reduce_api.h:42"
+
+  llk_math_eltwise_unary_datacopy:
+    thread: MATH
+    exu: Fpu
+    sanitizer_op: OperationFpuEltwiseUnaryDatacopy
+    arches: [wormhole_b0, blackhole]
+    exec_calls:
+      - llk_math_eltwise_unary_datacopy
+      - llk_math_eltwise_unary_datacopy_block
+    required_inits:
+      - llk_math_eltwise_unary_datacopy_init
+    matching_args:
+      - field: DataCopyType
+        init_template_index: 0
+        exec_template_index: 0
+        source: "tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_math_unary_datacopy_api.h:22"
+      - field: BroadcastType
+        init_template_index: 2
+        init_default: "BroadcastType::NONE"
+        exec_template_index: 2
+        exec_default: "BroadcastType::NONE"
+        source: "tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_math_unary_datacopy_api.h:22"
+    invalidated_by:
+      - llk_math_matmul_init
+      - llk_math_eltwise_binary_init
+      - llk_math_eltwise_binary_init_with_operands
+      - llk_math_reduce_init
+      - llk_math_reduce_block_max_row_init
+      - llk_math_transpose_dest_init
+      - llk_math_fast_tilize_init
+    requires_uninit: false
+    uninit_calls: []
+    hoistable: true
+    source: "tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_math_unary_datacopy_api.h:22"
+
+  llk_math_transpose_dest:
+    thread: MATH
+    exu: Fpu
+    sanitizer_op: null
+    arches: [wormhole_b0, blackhole]
+    exec_calls:
+      - llk_math_transpose_dest
+    required_inits:
+      - llk_math_transpose_dest_init
+    matching_args:
+      - field: TransposeOfFaces
+        init_template_index: 0
+        init_default: "true"
+        exec_template_index: 0
+        exec_default: "true"
+        source: "tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_math_transpose_dest_api.h:16"
+      - field: Is32Bit
+        init_template_index: 1
+        init_default: "false"
+        exec_template_index: 1
+        exec_default: "false"
+        source: "tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_math_transpose_dest_api.h:16"
+    invalidated_by:
+      - llk_math_matmul_init
+      - llk_math_eltwise_binary_init
+      - llk_math_eltwise_binary_init_with_operands
+      - llk_math_reduce_init
+      - llk_math_reduce_block_max_row_init
+      - llk_math_eltwise_unary_datacopy_init
+      - llk_math_fast_tilize_init
+    requires_uninit: false
+    uninit_calls: []
+    hoistable: true
+    source: "tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_math_transpose_dest_api.h:16"
+
+  llk_math_fast_tilize:
+    thread: MATH
+    exu: Fpu
+    sanitizer_op: OperationFpuFastTilizeWh
+    arches: [wormhole_b0]
+    exec_calls:
+      - llk_math_fast_tilize_block
+    required_inits:
+      - llk_math_fast_tilize_init
+    matching_args:
+      - field: AddrMod
+        init_arg_index: 1
+        exec_arg_index: 2
+        source: "tt_metal/tt-llk/tools/include/sanitizer/operation.h:520"
+    invalidated_by:
+      - llk_math_matmul_init
+      - llk_math_eltwise_binary_init
+      - llk_math_eltwise_binary_init_with_operands
+      - llk_math_reduce_init
+      - llk_math_reduce_block_max_row_init
+      - llk_math_eltwise_unary_datacopy_init
+      - llk_math_transpose_dest_init
+      - llk_math_fast_tilize_uninit
+    requires_uninit: true
+    uninit_calls:
+      - llk_math_fast_tilize_uninit
+    hoistable: false
+    source: "tt_metal/tt-llk/tools/include/sanitizer/operation.h:520"
+
+  # ---- PACK thread (Exu::Pack) ----
+  llk_pack:
+    thread: PACK
+    exu: Pack
+    sanitizer_op: OperationPack
+    arches: [wormhole_b0, blackhole]
+    exec_calls:
+      - llk_pack
+      - llk_pack_block
+    required_inits:
+      - llk_pack_init
+      - llk_pack_dest_init
+      - llk_pack_hw_configure_disaggregated
+    matching_args: []
+    invalidated_by:
+      - llk_pack_untilize_init
+      - llk_pack_fast_tilize_init
+    invalidated_by_arch:
+      blackhole:
+        - call: llk_pack_reconfig_data_format
+          when_init_mode: "tilize"
+          reason: "On Blackhole, pack_reconfig_data_format after tilize_init overwrites Tilize Z-stride (PCK_EDGE_OFFSET), corrupting half of every output tile (#61146)"
+          source: "tt_metal/hw/inc/api/compute/tilize.h:35 (#61146)"
+    requires_uninit: false
+    uninit_calls: []
+    hoistable: true
+    source: "tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_pack_tile_api.h:16 (#61146)"
+
+  llk_pack_untilize:
+    thread: PACK
+    exu: Pack
+    sanitizer_op: OperationPackUntilize
+    arches: [wormhole_b0, blackhole]
+    exec_calls:
+      - llk_pack_untilize
+    required_inits:
+      - llk_pack_untilize_init
+    matching_args:
+      - field: BlockCtDim
+        init_template_index: 0
+        exec_template_index: 0
+        source: "tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_pack_untilize_api.h:16"
+      - field: FullCtDim
+        init_template_index: 1
+        init_default: "BlockCtDim"
+        exec_template_index: 1
+        exec_default: "BlockCtDim"
+        source: "tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_pack_untilize_api.h:16"
+      - field: Diagonal
+        init_template_index: 2
+        init_default: "false"
+        exec_template_index: 2
+        exec_default: "false"
+        source: "tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_pack_untilize_api.h:16"
+    invalidated_by:
+      - llk_pack_init
+      - llk_pack_untilize_uninit
+      - llk_pack_fast_tilize_init
+    requires_uninit: true
+    uninit_calls:
+      - llk_pack_untilize_uninit
+    hoistable: false
+    source: "tt_metal/hw/inc/api/compute/pack_untilize.h:359 (#52175)"
+
+  llk_pack_reduce_mask:
+    thread: PACK
+    exu: Pack
+    sanitizer_op: null
+    arches: [wormhole_b0, blackhole]
+    exec_calls:
+      - llk_pack_reduce_mask_config
+    required_inits:
+      - llk_pack_init
+      - llk_pack_dest_init
+      - llk_pack_hw_configure_disaggregated
+    matching_args: []
+    invalidated_by:
+      - llk_pack_reduce_mask_clear
+    requires_uninit: true
+    uninit_calls:
+      - llk_pack_reduce_mask_clear
+    hoistable: false
+    source: "tt_metal/hw/inc/api/compute/reduce.h:83 (#52175)"
+
+  llk_pack_fast_tilize:
+    thread: PACK
+    exu: Pack
+    sanitizer_op: OperationPackFastTilizeWh
+    arches: [wormhole_b0]
+    exec_calls:
+      - llk_pack_fast_tilize_block
+    required_inits:
+      - llk_pack_fast_tilize_init
+    matching_args:
+      - field: Use32BitDest
+        init_template_index: 0
+        init_default: "false"
+        exec_template_index: 0
+        exec_default: "false"
+        source: "tt_metal/hw/ckernels/wormhole_b0/metal/llk_api/llk_pack_fast_tilize_api.h:22"
+      - field: AddrMod
+        init_arg_index: 1
+        exec_arg_index: 4
+        source: "tt_metal/tt-llk/tools/include/sanitizer/operation.h:585"
+    invalidated_by:
+      - llk_pack_init
+      - llk_pack_untilize_init
+      - llk_pack_fast_tilize_uninit
+    requires_uninit: true
+    uninit_calls:
+      - llk_pack_fast_tilize_uninit
+    hoistable: false
+    source: "tt_metal/hw/ckernels/wormhole_b0/metal/llk_api/llk_pack_fast_tilize_api.h:22"
+
+# ---------------------------------------------------------------------------
+# 3. SFPU Operations on MATH thread (Exu::Sfpu)
+#    SFPU operations run on MATH (TRISC_MATH) but use Exu::Sfpu state
+#    (vConstFloatPrgm0..2 / LREG12..14 and SFPLOADMACRO), independent of Exu::Fpu.
+#    Calling a different SFPU *_tile_init that reprograms vConstFloatPrgm0..2
+#    between an SFPU init and its tile call invalidates the earlier SFPU init (#50381).
+# ---------------------------------------------------------------------------
+sfpu_operations:
+  exp_tile:
+    thread: MATH
+    exu: Sfpu
+    exec_calls: [exp_tile, llk_math_eltwise_unary_sfpu_exp]
+    required_inits: [exp_tile_init, llk_math_eltwise_unary_sfpu_exp_init]
+    matching_args:
+      - field: FastAndApprox
+        init_template_index: 0
+        init_default: "false"
+        exec_template_index: 0
+        exec_default: "false"
+        source: "tt_metal/hw/inc/api/compute/eltwise_unary/exp.h:25"
+    clobbers_sfpu_constants: true
+    hoistable: true
+    source: "tt_metal/hw/inc/api/compute/eltwise_unary/exp.h:54 (#50381)"
+
+  recip_tile:
+    thread: MATH
+    exu: Sfpu
+    exec_calls: [recip_tile, llk_math_eltwise_unary_sfpu_reciprocal]
+    required_inits: [recip_tile_init, llk_math_eltwise_unary_sfpu_reciprocal_init]
+    matching_args: []
+    clobbers_sfpu_constants: true
+    hoistable: true
+    source: "tt_metal/hw/inc/api/compute/eltwise_unary/recip.h:23 (#50381)"
+
+  gelu_tile:
+    thread: MATH
+    exu: Sfpu
+    exec_calls: [gelu_tile, llk_math_eltwise_unary_sfpu_gelu]
+    required_inits: [gelu_tile_init, llk_math_eltwise_unary_sfpu_gelu_init]
+    matching_args:
+      - field: FastAndApprox
+        init_template_index: 0
+        init_default: "true"
+        exec_template_index: 0
+        exec_default: "true"
+        source: "tt_metal/hw/inc/api/compute/eltwise_unary/gelu.h:22"
+    clobbers_sfpu_constants: true
+    hoistable: true
+    source: "tt_metal/hw/inc/api/compute/eltwise_unary/gelu.h:22"
+
+  sqrt_tile:
+    thread: MATH
+    exu: Sfpu
+    exec_calls: [sqrt_tile, llk_math_eltwise_unary_sfpu_sqrt]
+    required_inits: [sqrt_tile_init, llk_math_eltwise_unary_sfpu_sqrt_init]
+    matching_args: []
+    clobbers_sfpu_constants: true
+    hoistable: true
+    source: "tt_metal/hw/inc/api/compute/eltwise_unary/sqrt.h:21"
+
+  rsqrt_tile:
+    thread: MATH
+    exu: Sfpu
+    exec_calls: [rsqrt_tile, llk_math_eltwise_unary_sfpu_rsqrt]
+    required_inits: [rsqrt_tile_init, llk_math_eltwise_unary_sfpu_rsqrt_init]
+    matching_args: []
+    clobbers_sfpu_constants: true
+    hoistable: true
+    source: "tt_metal/hw/inc/api/compute/eltwise_unary/rsqrt.h:24"
+
+  sigmoid_tile:
+    thread: MATH
+    exu: Sfpu
+    exec_calls: [sigmoid_tile, llk_math_eltwise_unary_sfpu_sigmoid]
+    required_inits: [sigmoid_tile_init, llk_math_eltwise_unary_sfpu_sigmoid_init]
+    matching_args: []
+    clobbers_sfpu_constants: true
+    hoistable: true
+    source: "ttnn/cpp/ttnn/operations/eltwise/unary/common/unary_op_utils.cpp:815"
+
+  log_tile:
+    thread: MATH
+    exu: Sfpu
+    exec_calls: [log_tile, llk_math_eltwise_unary_sfpu_log]
+    required_inits: [log_tile_init, llk_math_eltwise_unary_sfpu_log_init]
+    matching_args: []
+    clobbers_sfpu_constants: true
+    hoistable: true
+    source: "ttnn/cpp/ttnn/operations/eltwise/unary/common/unary_op_utils.cpp:763"
+
+  tanh_tile:
+    thread: MATH
+    exu: Sfpu
+    exec_calls: [tanh_tile, llk_math_eltwise_unary_sfpu_tanh]
+    required_inits: [tanh_tile_init, llk_math_eltwise_unary_sfpu_tanh_init]
+    matching_args: []
+    clobbers_sfpu_constants: true
+    hoistable: true
+    source: "ttnn/cpp/ttnn/operations/eltwise/unary/common/unary_op_utils.cpp:765"
+
+  erf_tile:
+    thread: MATH
+    exu: Sfpu
+    exec_calls: [erf_tile, llk_math_eltwise_unary_sfpu_erf]
+    required_inits: [erf_tile_init, llk_math_eltwise_unary_sfpu_erf_init]
+    matching_args: []
+    clobbers_sfpu_constants: true
+    hoistable: true
+    source: "tt_metal/hw/inc/api/compute/eltwise_unary/erf_erfc.h:20"
+
+  erfc_tile:
+    thread: MATH
+    exu: Sfpu
+    exec_calls: [erfc_tile, llk_math_eltwise_unary_sfpu_erfc]
+    required_inits: [erfc_tile_init, llk_math_eltwise_unary_sfpu_erfc_init]
+    matching_args: []
+    clobbers_sfpu_constants: true
+    hoistable: true
+    source: "tt_metal/hw/inc/api/compute/eltwise_unary/erf_erfc.h:40"
+
+  sin_tile:
+    thread: MATH
+    exu: Sfpu
+    exec_calls: [sin_tile, llk_math_eltwise_unary_sfpu_sine]
+    required_inits: [sin_tile_init, llk_math_eltwise_unary_sfpu_sine_init]
+    matching_args: []
+    clobbers_sfpu_constants: true
+    hoistable: true
+    source: "tt_metal/hw/inc/api/compute/eltwise_unary/trigonometry.h:25"
+
+  cos_tile:
+    thread: MATH
+    exu: Sfpu
+    exec_calls: [cos_tile, llk_math_eltwise_unary_sfpu_cosine]
+    required_inits: [cos_tile_init, llk_math_eltwise_unary_sfpu_cosine_init]
+    matching_args: []
+    clobbers_sfpu_constants: true
+    hoistable: true
+    source: "tt_metal/hw/inc/api/compute/eltwise_unary/trigonometry.h:45"
+
+  tan_tile:
+    thread: MATH
+    exu: Sfpu
+    exec_calls: [tan_tile, llk_math_eltwise_unary_sfpu_tan]
+    required_inits: [tan_tile_init, llk_math_eltwise_unary_sfpu_tan_init]
+    matching_args: []
+    clobbers_sfpu_constants: true
+    hoistable: true
+    source: "tt_metal/hw/inc/api/compute/eltwise_unary/trigonometry.h:65"
+
+  relu_tile:
+    thread: MATH
+    exu: Sfpu
+    exec_calls: [relu_tile, llk_math_eltwise_unary_sfpu_relu]
+    required_inits: [relu_tile_init, llk_math_eltwise_unary_sfpu_relu_init]
+    matching_args: []
+    clobbers_sfpu_constants: true
+    hoistable: true
+    source: "tt_metal/hw/inc/api/compute/eltwise_unary/relu.h:20"
+
+  abs_tile:
+    thread: MATH
+    exu: Sfpu
+    exec_calls: [abs_tile, llk_math_eltwise_unary_sfpu_abs]
+    required_inits: [abs_tile_init, llk_math_eltwise_unary_sfpu_abs_init]
+    matching_args: []
+    clobbers_sfpu_constants: true
+    hoistable: true
+    source: "ttnn/cpp/ttnn/operations/eltwise/unary/common/unary_op_utils.cpp:829"
+
+  square_tile:
+    thread: MATH
+    exu: Sfpu
+    exec_calls: [square_tile, llk_math_eltwise_unary_sfpu_square]
+    required_inits: [square_tile_init, llk_math_eltwise_unary_sfpu_square_init]
+    matching_args: []
+    clobbers_sfpu_constants: true
+    hoistable: true
+    source: "ttnn/cpp/ttnn/operations/eltwise/unary/common/unary_op_utils.cpp:850"
+
+  typecast_tile:
+    thread: MATH
+    exu: Sfpu
+    exec_calls: [typecast_tile, llk_math_eltwise_unary_sfpu_typecast]
+    required_inits: [typecast_tile_init, llk_math_eltwise_unary_sfpu_typecast_init]
+    matching_args: []
+    clobbers_sfpu_constants: true
+    hoistable: true
+    source: "tt_metal/hw/inc/api/compute/eltwise_unary/typecast.h:20"
+
+  silu_tile:
+    thread: MATH
+    exu: Sfpu
+    exec_calls: [silu_tile, llk_math_eltwise_unary_sfpu_silu]
+    required_inits: [silu_tile_init, llk_math_eltwise_unary_sfpu_silu_init]
+    matching_args: []
+    clobbers_sfpu_constants: true
+    hoistable: true
+    source: "ttnn/cpp/ttnn/operations/eltwise/unary/common/unary_op_utils.cpp:756"
+
+  fill_tile:
+    thread: MATH
+    exu: Sfpu
+    exec_calls: [fill_tile, llk_math_eltwise_unary_sfpu_fill]
+    required_inits: [fill_tile_init, llk_math_eltwise_unary_sfpu_fill_init]
+    matching_args: []
+    clobbers_sfpu_constants: true
+    hoistable: true
+    source: "tt_metal/hw/inc/api/compute/eltwise_unary/fill.h:15"
+
+  add_binary_tile:
+    thread: MATH
+    exu: Sfpu
+    exec_calls: [add_binary_tile]
+    required_inits: [add_binary_tile_init, binary_dest_reuse_tiles_init]
+    matching_args: []
+    clobbers_sfpu_constants: true
+    hoistable: true
+    source: "tt_metal/hw/inc/api/compute/eltwise_binary_sfpu.h:42"
+
+  sub_binary_tile:
+    thread: MATH
+    exu: Sfpu
+    exec_calls: [sub_binary_tile]
+    required_inits: [sub_binary_tile_init]
+    matching_args: []
+    clobbers_sfpu_constants: true
+    hoistable: true
+    source: "tt_metal/hw/inc/api/compute/eltwise_unary/binop_with_scalar.h:1"
+
+  mul_binary_tile:
+    thread: MATH
+    exu: Sfpu
+    exec_calls: [mul_binary_tile]
+    required_inits: [mul_binary_tile_init]
+    matching_args: []
+    clobbers_sfpu_constants: true
+    hoistable: true
+    source: "tt_metal/hw/inc/api/compute/eltwise_unary/binop_with_scalar.h:1"
+
+  div_binary_tile:
+    thread: MATH
+    exu: Sfpu
+    exec_calls: [div_binary_tile]
+    required_inits: [div_binary_tile_init]
+    matching_args: []
+    clobbers_sfpu_constants: true
+    hoistable: true
+    source: "tt_metal/hw/inc/api/compute/eltwise_unary/binop_with_scalar.h:1"
+
+# ---------------------------------------------------------------------------
+# 4. Data-Format Reconfiguration Rules
+#    Captures format-tracking and operand-order rules (e.g. #39945, #61146).
+# ---------------------------------------------------------------------------
+reconfig_operations:
+  reconfig_data_format:
+    threads: [UNPACK, MATH]
+    unpack_call: llk_unpack_reconfig_data_format
+    math_call: llk_math_reconfig_data_format
+    note: >
+      reconfig_data_format(srca_new, srcb_new) configures SrcA with argument 0 and SrcB with
+      argument 1. However, matmul_tiles(in0, in1, ...) and matmul_block(in0, in1, ...) unpack
+      in1 into SrcA and in0 into SrcB (#39945). Passing (in0, in1) to reconfig_data_format
+      before matmul_tiles(in0, in1, ...) when in0 != in1 causes a SrcA/SrcB format mismatch.
+    matmul_operand_order_reversed: true
+    source: "docs/source/tt-metalium/tools/llk_asserts.rst:152 (#39945)"
+
+  pack_reconfig_data_format:
+    threads: [PACK]
+    pack_call: llk_pack_reconfig_data_format
+    blackhole_invalidates_tilize_init: true
+    note: >
+      On Blackhole, calling pack_reconfig_data_format after tilize_init and before tilize_block
+      overwrites the packer's tilize Z-stride (PCK_EDGE_OFFSET), corrupting half of every
+      output tile (#61146). Call pack_reconfig_data_format before tilize_init instead.
+    source: "tt_metal/hw/inc/api/compute/tilize.h:35 (#61146)"
+
+# ---------------------------------------------------------------------------
+# 5. Compute Kernel API -> Per-Thread LLK Expansion Table
+#    Used alongside AST/header expansion so every compute-API call expands to its
+#    exact UNPACK, MATH, and PACK LLK operations and template/argument bindings.
+# ---------------------------------------------------------------------------
+compute_api_wrappers:
+  # Hardware startup (configures formats on UNPACK/MATH and initializes default PACK;
+  # operation-specific init on UNPACK/MATH is still required before execute calls).
+  compute_kernel_hw_startup:
+    PACK:
+      - call: llk_pack_init
+        template_args: ["false", "false"]
+        args: ["$arg2"]
+    source: "tt_metal/hw/inc/api/compute/compute_kernel_hw_startup.h:60"
+
+  binary_op_init_common:
+    PACK:
+      - call: llk_pack_init
+        template_args: ["false", "false"]
+        args: ["$arg2"]
+    source: "tt_metal/hw/inc/api/compute/compute_kernel_hw_startup.h:60"
+
+  unary_op_init_common:
+    UNPACK:
+      - call: llk_unpack_A_init
+        template_args: ["BroadcastType::NONE", "false", "EltwiseBinaryReuseDestType::NONE", "false"]
+        args: ["false", "false", "$arg0"]
+    MATH:
+      - call: llk_math_eltwise_unary_datacopy_init
+        template_args: ["A2D", "DST_ACCUM_MODE", "BroadcastType::NONE"]
+        args: ["$arg0"]
+    PACK:
+      - call: llk_pack_init
+        template_args: ["false", "false"]
+        args: ["$arg1"]
+    source: "tt_metal/hw/inc/api/compute/compute_kernel_hw_startup.h:61"
+
+  init_sfpu:
+    UNPACK:
+      - call: llk_unpack_A_init
+        template_args: ["BroadcastType::NONE", "false", "EltwiseBinaryReuseDestType::NONE", "false"]
+        args: ["false", "false", "$arg0"]
+    MATH:
+      - call: llk_math_eltwise_unary_datacopy_init
+        template_args: ["A2D", "DST_ACCUM_MODE", "BroadcastType::NONE"]
+        args: ["$arg0"]
+    PACK:
+      - call: llk_pack_init
+        template_args: ["false", "false"]
+        args: ["$arg1"]
+    source: "tt_metal/hw/inc/api/compute/compute_kernel_api.h:40"
+
+  # Eltwise binary (add / sub / mul)
+  binary_tiles_init:
+    UNPACK:
+      - call: llk_unpack_AB_init
+        template_args: ["BroadcastType::NONE"]
+        args: ["$arg0", "$arg1", "$arg2"]
+    MATH:
+      - call: llk_math_eltwise_binary_init_with_operands
+        template_args: ["$tpl1", "BroadcastType::NONE", "MATH_FIDELITY", "EltwiseBinaryReuseDestType::NONE"]
+        args: ["$arg0", "$arg1", "$arg2"]
+    source: "tt_metal/hw/inc/api/compute/eltwise_binary.h:45"
+
+  add_init:
+    UNPACK:
+      - call: llk_unpack_AB_init
+        template_args: ["BroadcastType::NONE"]
+        args: ["$arg0", "$arg1", "$arg2"]
+    MATH:
+      - call: llk_math_eltwise_binary_init_with_operands
+        template_args: ["ELWADD", "BroadcastType::NONE", "MATH_FIDELITY", "EltwiseBinaryReuseDestType::NONE"]
+        args: ["$arg0", "$arg1", "$arg2"]
+    source: "tt_metal/hw/inc/api/compute/eltwise_binary.h:158"
+
+  sub_init:
+    UNPACK:
+      - call: llk_unpack_AB_init
+        template_args: ["BroadcastType::NONE"]
+        args: ["$arg0", "$arg1", "$arg2"]
+    MATH:
+      - call: llk_math_eltwise_binary_init_with_operands
+        template_args: ["ELWSUB", "BroadcastType::NONE", "MATH_FIDELITY", "EltwiseBinaryReuseDestType::NONE"]
+        args: ["$arg0", "$arg1", "$arg2"]
+    source: "tt_metal/hw/inc/api/compute/eltwise_binary.h:188"
+
+  mul_init:
+    UNPACK:
+      - call: llk_unpack_AB_init
+        template_args: ["BroadcastType::NONE"]
+        args: ["$arg0", "$arg1"]
+    MATH:
+      - call: llk_math_eltwise_binary_init_with_operands
+        template_args: ["ELWMUL", "BroadcastType::NONE", "MATH_FIDELITY", "EltwiseBinaryReuseDestType::NONE"]
+        args: ["$arg0", "$arg1", "false"]
+    source: "tt_metal/hw/inc/api/compute/eltwise_binary.h:119"
+
+  add_tiles_init:
+    UNPACK:
+      - call: llk_unpack_AB_init
+        template_args: ["BroadcastType::NONE"]
+        args: ["$arg0", "$arg1", "$arg2"]
+    MATH:
+      - call: llk_math_eltwise_binary_init_with_operands
+        template_args: ["ELWADD", "BroadcastType::NONE", "MATH_FIDELITY", "EltwiseBinaryReuseDestType::NONE"]
+        args: ["$arg0", "$arg1", "$arg2"]
+    source: "tt_metal/hw/inc/api/compute/eltwise_binary.h:158"
+
+  sub_tiles_init:
+    UNPACK:
+      - call: llk_unpack_AB_init
+        template_args: ["BroadcastType::NONE"]
+        args: ["$arg0", "$arg1", "$arg2"]
+    MATH:
+      - call: llk_math_eltwise_binary_init_with_operands
+        template_args: ["ELWSUB", "BroadcastType::NONE", "MATH_FIDELITY", "EltwiseBinaryReuseDestType::NONE"]
+        args: ["$arg0", "$arg1", "$arg2"]
+    source: "tt_metal/hw/inc/api/compute/eltwise_binary.h:188"
+
+  mul_tiles_init:
+    UNPACK:
+      - call: llk_unpack_AB_init
+        template_args: ["BroadcastType::NONE"]
+        args: ["$arg0", "$arg1"]
+    MATH:
+      - call: llk_math_eltwise_binary_init_with_operands
+        template_args: ["ELWMUL", "BroadcastType::NONE", "MATH_FIDELITY", "EltwiseBinaryReuseDestType::NONE"]
+        args: ["$arg0", "$arg1", "false"]
+    source: "tt_metal/hw/inc/api/compute/eltwise_binary.h:119"
+
+  add_tiles:
+    UNPACK:
+      - call: llk_unpack_AB
+        template_args: ["BroadcastType::NONE"]
+        args: ["$arg0", "$arg1", "$arg2", "$arg3"]
+    MATH:
+      - call: llk_math_eltwise_binary
+        template_args: ["ELWADD", "BroadcastType::NONE", "DST_ACCUM_MODE", "MATH_FIDELITY", "EltwiseBinaryReuseDestType::NONE"]
+        args: ["$arg0", "$arg1", "$arg4", "false"]
+    source: "tt_metal/hw/inc/api/compute/eltwise_binary.h:222"
+
+  sub_tiles:
+    UNPACK:
+      - call: llk_unpack_AB
+        template_args: ["BroadcastType::NONE"]
+        args: ["$arg0", "$arg1", "$arg2", "$arg3"]
+    MATH:
+      - call: llk_math_eltwise_binary
+        template_args: ["ELWSUB", "BroadcastType::NONE", "DST_ACCUM_MODE", "MATH_FIDELITY", "EltwiseBinaryReuseDestType::NONE"]
+        args: ["$arg0", "$arg1", "$arg4", "false"]
+    source: "tt_metal/hw/inc/api/compute/eltwise_binary.h:248"
+
+  mul_tiles:
+    UNPACK:
+      - call: llk_unpack_AB
+        template_args: ["BroadcastType::NONE"]
+        args: ["$arg0", "$arg1", "$arg2", "$arg3"]
+    MATH:
+      - call: llk_math_eltwise_binary
+        template_args: ["ELWMUL", "BroadcastType::NONE", "DST_ACCUM_MODE", "MATH_FIDELITY", "EltwiseBinaryReuseDestType::NONE"]
+        args: ["$arg0", "$arg1", "$arg4", "false"]
+    source: "tt_metal/hw/inc/api/compute/eltwise_binary.h:275"
+
+  add_block:
+    UNPACK:
+      - call: llk_unpack_AB
+        template_args: ["BroadcastType::NONE"]
+        args: ["$arg0", "$arg1", "$arg2", "$arg3"]
+    MATH:
+      - call: llk_math_eltwise_binary
+        template_args: ["ELWADD", "BroadcastType::NONE", "DST_ACCUM_MODE", "MATH_FIDELITY", "EltwiseBinaryReuseDestType::NONE"]
+        args: ["$arg0", "$arg1", "$arg4", "false"]
+    source: "tt_metal/hw/inc/api/compute/eltwise_binary.h:290"
+
+  sub_block:
+    UNPACK:
+      - call: llk_unpack_AB
+        template_args: ["BroadcastType::NONE"]
+        args: ["$arg0", "$arg1", "$arg2", "$arg3"]
+    MATH:
+      - call: llk_math_eltwise_binary
+        template_args: ["ELWSUB", "BroadcastType::NONE", "DST_ACCUM_MODE", "MATH_FIDELITY", "EltwiseBinaryReuseDestType::NONE"]
+        args: ["$arg0", "$arg1", "$arg4", "false"]
+    source: "tt_metal/hw/inc/api/compute/eltwise_binary.h:300"
+
+  mul_block:
+    UNPACK:
+      - call: llk_unpack_AB
+        template_args: ["BroadcastType::NONE"]
+        args: ["$arg0", "$arg1", "$arg2", "$arg3"]
+    MATH:
+      - call: llk_math_eltwise_binary
+        template_args: ["ELWMUL", "BroadcastType::NONE", "DST_ACCUM_MODE", "MATH_FIDELITY", "EltwiseBinaryReuseDestType::NONE"]
+        args: ["$arg0", "$arg1", "$arg4", "false"]
+    source: "tt_metal/hw/inc/api/compute/eltwise_binary.h:280"
+
+  binary_dest_reuse_tiles_init:
+    UNPACK:
+      - call: llk_unpack_A_init
+        template_args: ["BroadcastType::NONE", "true", "$tpl1", "false"]
+        args: ["false", "false", "$arg0"]
+    MATH:
+      - call: llk_math_eltwise_binary_init
+        template_args: ["$tpl0", "BroadcastType::NONE", "MATH_FIDELITY", "$tpl1"]
+        args: ["false"]
+    source: "tt_metal/hw/inc/api/compute/eltwise_binary.h:308"
+
+  binary_reuse_dest_init:
+    UNPACK:
+      - call: llk_unpack_A_init
+        template_args: ["BroadcastType::NONE", "true", "$tpl1", "false"]
+        args: ["false", "false", "$arg0"]
+    MATH:
+      - call: llk_math_eltwise_binary_init
+        template_args: ["$tpl0", "BroadcastType::NONE", "MATH_FIDELITY", "$tpl1"]
+        args: ["false"]
+    source: "tt_metal/hw/inc/api/compute/eltwise_binary.h:100"
+
+  add_reuse_dest_init:
+    UNPACK:
+      - call: llk_unpack_A_init
+        template_args: ["BroadcastType::NONE", "true", "$tpl0", "false"]
+        args: ["false", "false", "$arg0"]
+    MATH:
+      - call: llk_math_eltwise_binary_init
+        template_args: ["ELWADD", "BroadcastType::NONE", "MATH_FIDELITY", "$tpl0"]
+        args: ["false"]
+    source: "tt_metal/hw/inc/api/compute/eltwise_binary.h:170"
+
+  sub_reuse_dest_init:
+    UNPACK:
+      - call: llk_unpack_A_init
+        template_args: ["BroadcastType::NONE", "true", "$tpl0", "false"]
+        args: ["false", "false", "$arg0"]
+    MATH:
+      - call: llk_math_eltwise_binary_init
+        template_args: ["ELWSUB", "BroadcastType::NONE", "MATH_FIDELITY", "$tpl0"]
+        args: ["false"]
+    source: "tt_metal/hw/inc/api/compute/eltwise_binary.h:200"
+
+  mul_reuse_dest_init:
+    UNPACK:
+      - call: llk_unpack_A_init
+        template_args: ["BroadcastType::NONE", "true", "$tpl0", "false"]
+        args: ["false", "false", "$arg0"]
+    MATH:
+      - call: llk_math_eltwise_binary_init
+        template_args: ["ELWMUL", "BroadcastType::NONE", "MATH_FIDELITY", "$tpl0"]
+        args: ["false"]
+    source: "tt_metal/hw/inc/api/compute/eltwise_binary.h:140"
+
+  binary_dest_reuse_tiles:
+    UNPACK:
+      - call: llk_unpack_A
+        template_args: ["BroadcastType::NONE", "true", "$tpl1", "false"]
+        args: ["$arg0", "$arg1", "false"]
+    MATH:
+      - call: llk_math_eltwise_binary
+        template_args: ["$tpl0", "BroadcastType::NONE", "DST_ACCUM_MODE", "MATH_FIDELITY", "$tpl1"]
+        args: ["$arg0", "$arg0", "$arg2", "false"]
+    source: "tt_metal/hw/inc/api/compute/eltwise_binary.h:335"
+
+  binary_reuse_dest_tiles:
+    UNPACK:
+      - call: llk_unpack_A
+        template_args: ["BroadcastType::NONE", "true", "$tpl1", "false"]
+        args: ["$arg0", "$arg1", "false"]
+    MATH:
+      - call: llk_math_eltwise_binary
+        template_args: ["$tpl0", "BroadcastType::NONE", "DST_ACCUM_MODE", "MATH_FIDELITY", "$tpl1"]
+        args: ["$arg0", "$arg0", "$arg2", "false"]
+    source: "tt_metal/hw/inc/api/compute/eltwise_binary.h:335"
+
+  add_reuse_dest_tiles:
+    UNPACK:
+      - call: llk_unpack_A
+        template_args: ["BroadcastType::NONE", "true", "$tpl0", "false"]
+        args: ["$arg0", "$arg1", "false"]
+    MATH:
+      - call: llk_math_eltwise_binary
+        template_args: ["ELWADD", "BroadcastType::NONE", "DST_ACCUM_MODE", "MATH_FIDELITY", "$tpl0"]
+        args: ["$arg0", "$arg0", "$arg2", "false"]
+    source: "tt_metal/hw/inc/api/compute/eltwise_binary.h:350"
+
+  sub_reuse_dest_tiles:
+    UNPACK:
+      - call: llk_unpack_A
+        template_args: ["BroadcastType::NONE", "true", "$tpl0", "false"]
+        args: ["$arg0", "$arg1", "false"]
+    MATH:
+      - call: llk_math_eltwise_binary
+        template_args: ["ELWSUB", "BroadcastType::NONE", "DST_ACCUM_MODE", "MATH_FIDELITY", "$tpl0"]
+        args: ["$arg0", "$arg0", "$arg2", "false"]
+    source: "tt_metal/hw/inc/api/compute/eltwise_binary.h:365"
+
+  mul_reuse_dest_tiles:
+    UNPACK:
+      - call: llk_unpack_A
+        template_args: ["BroadcastType::NONE", "true", "$tpl0", "false"]
+        args: ["$arg0", "$arg1", "false"]
+    MATH:
+      - call: llk_math_eltwise_binary
+        template_args: ["ELWMUL", "BroadcastType::NONE", "DST_ACCUM_MODE", "MATH_FIDELITY", "$tpl0"]
+        args: ["$arg0", "$arg0", "$arg2", "false"]
+    source: "tt_metal/hw/inc/api/compute/eltwise_binary.h:380"
+
+  # Broadcast (add/sub/mul_bcast_rows/cols/scalar)
+  init_bcast:
+    UNPACK:
+      - call: llk_unpack_AB_init
+        template_args: ["$tpl1"]
+        args: ["$arg0", "$arg1"]
+    MATH:
+      - call: llk_math_eltwise_binary_init_with_operands
+        template_args: ["$tpl0", "$tpl1", "MATH_FIDELITY", "EltwiseBinaryReuseDestType::NONE"]
+        args: ["$arg0", "$arg1", "false"]
+    PACK:
+      - call: llk_pack_init
+        template_args: ["false", "false"]
+        args: ["$arg2"]
+    source: "tt_metal/hw/inc/api/compute/bcast.h:335"
+
+  bcast_init:
+    UNPACK:
+      - call: llk_unpack_AB_init
+        template_args: ["$tpl1"]
+        args: ["$arg0", "$arg1"]
+    MATH:
+      - call: llk_math_eltwise_binary_init_with_operands
+        template_args: ["$tpl0", "$tpl1", "MATH_FIDELITY", "EltwiseBinaryReuseDestType::NONE"]
+        args: ["$arg0", "$arg1", "false"]
+    source: "tt_metal/hw/inc/api/compute/bcast.h:300"
+
+  unary_bcast_init:
+    UNPACK:
+      - call: llk_unpack_A_init
+        template_args: ["$tpl0", "false", "EltwiseBinaryReuseDestType::NONE", "false"]
+        args: ["false", "false", "$arg0"]
+    MATH:
+      - call: llk_math_eltwise_unary_datacopy_init
+        template_args: ["A2D", "DST_ACCUM_MODE", "$tpl0"]
+        args: ["$arg0"]
+    source: "tt_metal/hw/inc/api/compute/bcast.h:30"
+
+  unary_bcast:
+    UNPACK:
+      - call: llk_unpack_A
+        template_args: ["$tpl0", "false", "EltwiseBinaryReuseDestType::NONE", "false"]
+        args: ["$arg0", "$arg1", "false"]
+    MATH:
+      - call: llk_math_eltwise_unary_datacopy
+        template_args: ["A2D", "DST_ACCUM_MODE", "$tpl0"]
+        args: ["$arg2", "$arg0"]
+    source: "tt_metal/hw/inc/api/compute/bcast.h:40"
+
+  unary_bcast_uninit:
+    UNPACK:
+      - call: llk_unpack_A_init
+        template_args: ["BroadcastType::NONE", "false", "EltwiseBinaryReuseDestType::NONE", "false"]
+        args: ["false", "false", "$arg0"]
+    MATH:
+      - call: llk_math_eltwise_unary_datacopy_init
+        template_args: ["A2D", "DST_ACCUM_MODE", "BroadcastType::NONE"]
+        args: ["$arg0"]
+    source: "tt_metal/hw/inc/api/compute/bcast.h:50"
+
+  add_bcast_rows_init:
+    UNPACK:
+      - call: llk_unpack_AB_init
+        template_args: ["BroadcastType::ROW"]
+        args: ["$arg0", "$arg1"]
+    MATH:
+      - call: llk_math_eltwise_binary_init_with_operands
+        template_args: ["ELWADD", "BroadcastType::ROW", "MATH_FIDELITY", "EltwiseBinaryReuseDestType::NONE"]
+        args: ["$arg0", "$arg1", "false"]
+    source: "tt_metal/hw/inc/api/compute/bcast.h:168"
+
+  add_bcast_cols_init:
+    UNPACK:
+      - call: llk_unpack_AB_init
+        template_args: ["BroadcastType::COL"]
+        args: ["$arg0", "$arg1"]
+    MATH:
+      - call: llk_math_eltwise_binary_init_with_operands
+        template_args: ["ELWADD", "BroadcastType::COL", "MATH_FIDELITY", "EltwiseBinaryReuseDestType::NONE"]
+        args: ["$arg0", "$arg1", "false"]
+    source: "tt_metal/hw/inc/api/compute/bcast.h:204"
+
+  add_bcast_scalar_init:
+    UNPACK:
+      - call: llk_unpack_AB_init
+        template_args: ["BroadcastType::SCALAR"]
+        args: ["$arg0", "$arg1"]
+    MATH:
+      - call: llk_math_eltwise_binary_init_with_operands
+        template_args: ["ELWADD", "BroadcastType::SCALAR", "MATH_FIDELITY", "EltwiseBinaryReuseDestType::NONE"]
+        args: ["$arg0", "$arg1", "false"]
+    source: "tt_metal/hw/inc/api/compute/bcast.h:240"
+
+  sub_bcast_rows_init:
+    UNPACK:
+      - call: llk_unpack_AB_init
+        template_args: ["BroadcastType::ROW"]
+        args: ["$arg0", "$arg1"]
+    MATH:
+      - call: llk_math_eltwise_binary_init_with_operands
+        template_args: ["ELWSUB", "BroadcastType::ROW", "MATH_FIDELITY", "EltwiseBinaryReuseDestType::NONE"]
+        args: ["$arg0", "$arg1", "false"]
+    source: "tt_metal/hw/inc/api/compute/bcast.h:180"
+
+  sub_bcast_cols_init:
+    UNPACK:
+      - call: llk_unpack_AB_init
+        template_args: ["BroadcastType::COL"]
+        args: ["$arg0", "$arg1"]
+    MATH:
+      - call: llk_math_eltwise_binary_init_with_operands
+        template_args: ["ELWSUB", "BroadcastType::COL", "MATH_FIDELITY", "EltwiseBinaryReuseDestType::NONE"]
+        args: ["$arg0", "$arg1", "false"]
+    source: "tt_metal/hw/inc/api/compute/bcast.h:216"
+
+  sub_bcast_scalar_init:
+    UNPACK:
+      - call: llk_unpack_AB_init
+        template_args: ["BroadcastType::SCALAR"]
+        args: ["$arg0", "$arg1"]
+    MATH:
+      - call: llk_math_eltwise_binary_init_with_operands
+        template_args: ["ELWSUB", "BroadcastType::SCALAR", "MATH_FIDELITY", "EltwiseBinaryReuseDestType::NONE"]
+        args: ["$arg0", "$arg1", "false"]
+    source: "tt_metal/hw/inc/api/compute/bcast.h:252"
+
+  mul_bcast_rows_init:
+    UNPACK:
+      - call: llk_unpack_AB_init
+        template_args: ["BroadcastType::ROW"]
+        args: ["$arg0", "$arg1"]
+    MATH:
+      - call: llk_math_eltwise_binary_init_with_operands
+        template_args: ["ELWMUL", "BroadcastType::ROW", "MATH_FIDELITY", "EltwiseBinaryReuseDestType::NONE"]
+        args: ["$arg0", "$arg1", "false"]
+    source: "tt_metal/hw/inc/api/compute/bcast.h:192"
+
+  mul_bcast_cols_init:
+    UNPACK:
+      - call: llk_unpack_AB_init
+        template_args: ["BroadcastType::COL"]
+        args: ["$arg0", "$arg1"]
+    MATH:
+      - call: llk_math_eltwise_binary_init_with_operands
+        template_args: ["ELWMUL", "BroadcastType::COL", "MATH_FIDELITY", "EltwiseBinaryReuseDestType::NONE"]
+        args: ["$arg0", "$arg1", "false"]
+    source: "tt_metal/hw/inc/api/compute/bcast.h:228"
+
+  mul_bcast_scalar_init:
+    UNPACK:
+      - call: llk_unpack_AB_init
+        template_args: ["BroadcastType::SCALAR"]
+        args: ["$arg0", "$arg1"]
+    MATH:
+      - call: llk_math_eltwise_binary_init_with_operands
+        template_args: ["ELWMUL", "BroadcastType::SCALAR", "MATH_FIDELITY", "EltwiseBinaryReuseDestType::NONE"]
+        args: ["$arg0", "$arg1", "false"]
+    source: "tt_metal/hw/inc/api/compute/bcast.h:264"
+
+  any_tiles_bcast:
+    UNPACK:
+      - call: llk_unpack_AB
+        template_args: ["$tpl1"]
+        args: ["$arg0", "$arg1", "$arg2", "$arg3"]
+    MATH:
+      - call: llk_math_eltwise_binary
+        template_args: ["$tpl0", "$tpl1", "DST_ACCUM_MODE", "MATH_FIDELITY", "EltwiseBinaryReuseDestType::NONE"]
+        args: ["$arg0", "$arg1", "$arg4", "false"]
+    source: "tt_metal/hw/inc/api/compute/bcast.h:55"
+
+  add_bcast_rows_init_short:
+    UNPACK:
+      - call: llk_unpack_AB_init
+        template_args: ["BroadcastType::ROW"]
+        args: ["$arg0", "$arg1"]
+    MATH:
+      - call: llk_math_eltwise_binary_init_with_operands
+        template_args: ["ELWADD", "BroadcastType::ROW", "MATH_FIDELITY", "EltwiseBinaryReuseDestType::NONE"]
+        args: ["$arg0", "$arg1", "false"]
+    source: "tt_metal/hw/inc/api/compute/bcast.h:168"
+
+  add_bcast_cols_init_short:
+    UNPACK:
+      - call: llk_unpack_AB_init
+        template_args: ["BroadcastType::COL"]
+        args: ["$arg0", "$arg1"]
+    MATH:
+      - call: llk_math_eltwise_binary_init_with_operands
+        template_args: ["ELWADD", "BroadcastType::COL", "MATH_FIDELITY", "EltwiseBinaryReuseDestType::NONE"]
+        args: ["$arg0", "$arg1", "false"]
+    source: "tt_metal/hw/inc/api/compute/bcast.h:204"
+
+  add_bcast_scalar_init_short:
+    UNPACK:
+      - call: llk_unpack_AB_init
+        template_args: ["BroadcastType::SCALAR"]
+        args: ["$arg0", "$arg1"]
+    MATH:
+      - call: llk_math_eltwise_binary_init_with_operands
+        template_args: ["ELWADD", "BroadcastType::SCALAR", "MATH_FIDELITY", "EltwiseBinaryReuseDestType::NONE"]
+        args: ["$arg0", "$arg1", "false"]
+    source: "tt_metal/hw/inc/api/compute/bcast.h:240"
+
+  sub_bcast_rows_init_short:
+    UNPACK:
+      - call: llk_unpack_AB_init
+        template_args: ["BroadcastType::ROW"]
+        args: ["$arg0", "$arg1"]
+    MATH:
+      - call: llk_math_eltwise_binary_init_with_operands
+        template_args: ["ELWSUB", "BroadcastType::ROW", "MATH_FIDELITY", "EltwiseBinaryReuseDestType::NONE"]
+        args: ["$arg0", "$arg1", "false"]
+    source: "tt_metal/hw/inc/api/compute/bcast.h:180"
+
+  sub_bcast_cols_init_short:
+    UNPACK:
+      - call: llk_unpack_AB_init
+        template_args: ["BroadcastType::COL"]
+        args: ["$arg0", "$arg1"]
+    MATH:
+      - call: llk_math_eltwise_binary_init_with_operands
+        template_args: ["ELWSUB", "BroadcastType::COL", "MATH_FIDELITY", "EltwiseBinaryReuseDestType::NONE"]
+        args: ["$arg0", "$arg1", "false"]
+    source: "tt_metal/hw/inc/api/compute/bcast.h:216"
+
+  sub_bcast_scalar_init_short:
+    UNPACK:
+      - call: llk_unpack_AB_init
+        template_args: ["BroadcastType::SCALAR"]
+        args: ["$arg0", "$arg1"]
+    MATH:
+      - call: llk_math_eltwise_binary_init_with_operands
+        template_args: ["ELWSUB", "BroadcastType::SCALAR", "MATH_FIDELITY", "EltwiseBinaryReuseDestType::NONE"]
+        args: ["$arg0", "$arg1", "false"]
+    source: "tt_metal/hw/inc/api/compute/bcast.h:252"
+
+  mul_bcast_rows_init_short:
+    UNPACK:
+      - call: llk_unpack_AB_init
+        template_args: ["BroadcastType::ROW"]
+        args: ["$arg0", "$arg1"]
+    MATH:
+      - call: llk_math_eltwise_binary_init_with_operands
+        template_args: ["ELWMUL", "BroadcastType::ROW", "MATH_FIDELITY", "EltwiseBinaryReuseDestType::NONE"]
+        args: ["$arg0", "$arg1", "false"]
+    source: "tt_metal/hw/inc/api/compute/bcast.h:192"
+
+  mul_bcast_cols_init_short:
+    UNPACK:
+      - call: llk_unpack_AB_init
+        template_args: ["BroadcastType::COL"]
+        args: ["$arg0", "$arg1"]
+    MATH:
+      - call: llk_math_eltwise_binary_init_with_operands
+        template_args: ["ELWMUL", "BroadcastType::COL", "MATH_FIDELITY", "EltwiseBinaryReuseDestType::NONE"]
+        args: ["$arg0", "$arg1", "false"]
+    source: "tt_metal/hw/inc/api/compute/bcast.h:228"
+
+  mul_bcast_scalar_init_short:
+    UNPACK:
+      - call: llk_unpack_AB_init
+        template_args: ["BroadcastType::SCALAR"]
+        args: ["$arg0", "$arg1"]
+    MATH:
+      - call: llk_math_eltwise_binary_init_with_operands
+        template_args: ["ELWMUL", "BroadcastType::SCALAR", "MATH_FIDELITY", "EltwiseBinaryReuseDestType::NONE"]
+        args: ["$arg0", "$arg1", "false"]
+    source: "tt_metal/hw/inc/api/compute/bcast.h:264"
+
+  add_tiles_bcast:
+    UNPACK:
+      - call: llk_unpack_AB
+        template_args: ["$tpl0"]
+        args: ["$arg0", "$arg1", "$arg2", "$arg3"]
+    MATH:
+      - call: llk_math_eltwise_binary
+        template_args: ["ELWADD", "$tpl0", "DST_ACCUM_MODE", "MATH_FIDELITY", "EltwiseBinaryReuseDestType::NONE"]
+        args: ["$arg0", "$arg1", "$arg4", "false"]
+    source: "tt_metal/hw/inc/api/compute/bcast.h:61"
+
+  sub_tiles_bcast:
+    UNPACK:
+      - call: llk_unpack_AB
+        template_args: ["$tpl0"]
+        args: ["$arg0", "$arg1", "$arg2", "$arg3"]
+    MATH:
+      - call: llk_math_eltwise_binary
+        template_args: ["ELWSUB", "$tpl0", "DST_ACCUM_MODE", "MATH_FIDELITY", "EltwiseBinaryReuseDestType::NONE"]
+        args: ["$arg0", "$arg1", "$arg4", "false"]
+    source: "tt_metal/hw/inc/api/compute/bcast.h:83"
+
+  mul_tiles_bcast:
+    UNPACK:
+      - call: llk_unpack_AB
+        template_args: ["$tpl0"]
+        args: ["$arg0", "$arg1", "$arg2", "$arg3"]
+    MATH:
+      - call: llk_math_eltwise_binary
+        template_args: ["ELWMUL", "$tpl0", "DST_ACCUM_MODE", "MATH_FIDELITY", "EltwiseBinaryReuseDestType::NONE"]
+        args: ["$arg0", "$arg1", "$arg4", "false"]
+    source: "tt_metal/hw/inc/api/compute/bcast.h:105"
+
+  add_tiles_bcast_rows:
+    UNPACK:
+      - call: llk_unpack_AB
+        template_args: ["BroadcastType::ROW"]
+        args: ["$arg0", "$arg1", "$arg2", "$arg3"]
+    MATH:
+      - call: llk_math_eltwise_binary
+        template_args: ["ELWADD", "BroadcastType::ROW", "DST_ACCUM_MODE", "MATH_FIDELITY", "EltwiseBinaryReuseDestType::NONE"]
+        args: ["$arg0", "$arg1", "$arg4", "false"]
+    source: "tt_metal/hw/inc/api/compute/bcast.h:119"
+
+  add_tiles_bcast_cols:
+    UNPACK:
+      - call: llk_unpack_AB
+        template_args: ["BroadcastType::COL"]
+        args: ["$arg0", "$arg1", "$arg2", "$arg3"]
+    MATH:
+      - call: llk_math_eltwise_binary
+        template_args: ["ELWADD", "BroadcastType::COL", "DST_ACCUM_MODE", "MATH_FIDELITY", "EltwiseBinaryReuseDestType::NONE"]
+        args: ["$arg0", "$arg1", "$arg4", "false"]
+    source: "tt_metal/hw/inc/api/compute/bcast.h:132"
+
+  add_tiles_bcast_scalar:
+    UNPACK:
+      - call: llk_unpack_AB
+        template_args: ["BroadcastType::SCALAR"]
+        args: ["$arg0", "$arg1", "$arg2", "$arg3"]
+    MATH:
+      - call: llk_math_eltwise_binary
+        template_args: ["ELWADD", "BroadcastType::SCALAR", "DST_ACCUM_MODE", "MATH_FIDELITY", "EltwiseBinaryReuseDestType::NONE"]
+        args: ["$arg0", "$arg1", "$arg4", "false"]
+    source: "tt_metal/hw/inc/api/compute/bcast.h:145"
+
+  sub_tiles_bcast_rows:
+    UNPACK:
+      - call: llk_unpack_AB
+        template_args: ["BroadcastType::ROW"]
+        args: ["$arg0", "$arg1", "$arg2", "$arg3"]
+    MATH:
+      - call: llk_math_eltwise_binary
+        template_args: ["ELWSUB", "BroadcastType::ROW", "DST_ACCUM_MODE", "MATH_FIDELITY", "EltwiseBinaryReuseDestType::NONE"]
+        args: ["$arg0", "$arg1", "$arg4", "false"]
+    source: "tt_metal/hw/inc/api/compute/bcast.h:83"
+
+  sub_tiles_bcast_cols:
+    UNPACK:
+      - call: llk_unpack_AB
+        template_args: ["BroadcastType::COL"]
+        args: ["$arg0", "$arg1", "$arg2", "$arg3"]
+    MATH:
+      - call: llk_math_eltwise_binary
+        template_args: ["ELWSUB", "BroadcastType::COL", "DST_ACCUM_MODE", "MATH_FIDELITY", "EltwiseBinaryReuseDestType::NONE"]
+        args: ["$arg0", "$arg1", "$arg4", "false"]
+    source: "tt_metal/hw/inc/api/compute/bcast.h:83"
+
+  sub_tiles_bcast_scalar:
+    UNPACK:
+      - call: llk_unpack_AB
+        template_args: ["BroadcastType::SCALAR"]
+        args: ["$arg0", "$arg1", "$arg2", "$arg3"]
+    MATH:
+      - call: llk_math_eltwise_binary
+        template_args: ["ELWSUB", "BroadcastType::SCALAR", "DST_ACCUM_MODE", "MATH_FIDELITY", "EltwiseBinaryReuseDestType::NONE"]
+        args: ["$arg0", "$arg1", "$arg4", "false"]
+    source: "tt_metal/hw/inc/api/compute/bcast.h:83"
+
+  mul_tiles_bcast_rows:
+    UNPACK:
+      - call: llk_unpack_AB
+        template_args: ["BroadcastType::ROW"]
+        args: ["$arg0", "$arg1", "$arg2", "$arg3"]
+    MATH:
+      - call: llk_math_eltwise_binary
+        template_args: ["ELWMUL", "BroadcastType::ROW", "DST_ACCUM_MODE", "MATH_FIDELITY", "EltwiseBinaryReuseDestType::NONE"]
+        args: ["$arg0", "$arg1", "$arg4", "false"]
+    source: "tt_metal/hw/inc/api/compute/bcast.h:105"
+
+  mul_tiles_bcast_cols:
+    UNPACK:
+      - call: llk_unpack_AB
+        template_args: ["BroadcastType::COL"]
+        args: ["$arg0", "$arg1", "$arg2", "$arg3"]
+    MATH:
+      - call: llk_math_eltwise_binary
+        template_args: ["ELWMUL", "BroadcastType::COL", "DST_ACCUM_MODE", "MATH_FIDELITY", "EltwiseBinaryReuseDestType::NONE"]
+        args: ["$arg0", "$arg1", "$arg4", "false"]
+    source: "tt_metal/hw/inc/api/compute/bcast.h:158"
+
+  mul_tiles_bcast_scalar:
+    UNPACK:
+      - call: llk_unpack_AB
+        template_args: ["BroadcastType::SCALAR"]
+        args: ["$arg0", "$arg1", "$arg2", "$arg3"]
+    MATH:
+      - call: llk_math_eltwise_binary
+        template_args: ["ELWMUL", "BroadcastType::SCALAR", "DST_ACCUM_MODE", "MATH_FIDELITY", "EltwiseBinaryReuseDestType::NONE"]
+        args: ["$arg0", "$arg1", "$arg4", "false"]
+    source: "tt_metal/hw/inc/api/compute/bcast.h:276"
+
+  # Matmul
+  matmul_init:
+    UNPACK:
+      - call: llk_unpack_AB_matmul_init
+        template_args: []
+        args: ["$arg0", "$arg1", "$arg2", "1", "1", "1"]
+    MATH:
+      - call: llk_math_matmul_init
+        template_args: ["MATH_FIDELITY", "0"]
+        args: ["$arg0", "$arg1", "$arg2", "1", "1"]
+    source: "tt_metal/hw/inc/api/compute/matmul.h:107"
+
+  matmul_block_init:
+    UNPACK:
+      - call: llk_unpack_AB_matmul_init
+        template_args: []
+        args: ["$arg0", "$arg1", "$arg2", "$arg3", "$arg4", "$arg5"]
+    MATH:
+      - call: llk_math_matmul_init
+        template_args: ["MATH_FIDELITY", "0"]
+        args: ["$arg0", "$arg1", "$arg2", "$arg3", "$arg4"]
+    source: "tt_metal/hw/inc/api/compute/matmul.h:208"
+
+  mm_init:
+    UNPACK:
+      - call: llk_unpack_AB_matmul_init
+        template_args: []
+        args: ["$arg0", "$arg1", "$arg3", "1", "1", "1"]
+    MATH:
+      - call: llk_math_matmul_init
+        template_args: ["MATH_FIDELITY", "0"]
+        args: ["$arg0", "$arg1", "$arg3", "1", "1"]
+    PACK:
+      - call: llk_pack_init
+        template_args: ["false", "false"]
+        args: ["$arg2"]
+    source: "tt_metal/hw/inc/api/compute/matmul.h:39"
+
+  mm_init_short:
+    UNPACK:
+      - call: llk_unpack_AB_matmul_init
+        template_args: []
+        args: ["$arg0", "$arg1", "$arg2", "1", "1", "1"]
+    MATH:
+      - call: llk_math_matmul_init
+        template_args: ["MATH_FIDELITY", "0"]
+        args: ["$arg0", "$arg1", "$arg2", "1", "1"]
+    source: "tt_metal/hw/inc/api/compute/matmul.h:111"
+
+  mm_block_init:
+    UNPACK:
+      - call: llk_unpack_AB_matmul_init
+        template_args: []
+        args: ["$arg0", "$arg1", "$arg3", "$arg4", "$arg5", "$arg6"]
+    MATH:
+      - call: llk_math_matmul_init
+        template_args: ["MATH_FIDELITY", "0"]
+        args: ["$arg0", "$arg1", "$arg3", "$arg4", "$arg5"]
+    PACK:
+      - call: llk_pack_init
+        template_args: ["false", "false"]
+        args: ["$arg2"]
+    source: "tt_metal/hw/inc/api/compute/matmul.h:174"
+
+  mm_block_init_short:
+    UNPACK:
+      - call: llk_unpack_AB_matmul_init
+        template_args: []
+        args: ["$arg0", "$arg1", "$arg2", "$arg3", "$arg4", "$arg5"]
+    MATH:
+      - call: llk_math_matmul_init
+        template_args: ["MATH_FIDELITY", "0"]
+        args: ["$arg0", "$arg1", "$arg2", "$arg3", "$arg4"]
+    source: "tt_metal/hw/inc/api/compute/matmul.h:216"
+
+  matmul_tiles:
+    UNPACK:
+      - call: llk_unpack_AB_matmul
+        template_args: []
+        args: ["$arg0", "$arg1", "$arg2", "$arg3", "1", "1", "1"]
+    MATH:
+      - call: llk_math_matmul
+        template_args: ["MATH_FIDELITY", "0"]
+        args: ["$arg4", "1", "1"]
+    source: "tt_metal/hw/inc/api/compute/matmul.h:76"
+
+  matmul_block:
+    UNPACK:
+      - call: llk_unpack_AB_matmul
+        template_args: []
+        args: ["$arg0", "$arg1", "$arg2", "$arg3", "$arg6", "$arg7", "$arg8"]
+    MATH:
+      - call: llk_math_matmul
+        template_args: ["MATH_FIDELITY", "0"]
+        args: ["$arg4", "$arg6", "$arg7"]
+    source: "tt_metal/hw/inc/api/compute/matmul.h:258"
+
+  # Copy / Unary Datacopy / Transpose
+  copy_init:
+    UNPACK:
+      - call: llk_unpack_A_init
+        template_args: ["BroadcastType::NONE", "false", "EltwiseBinaryReuseDestType::NONE", "false"]
+        args: ["false", "false", "$arg0"]
+    MATH:
+      - call: llk_math_eltwise_unary_datacopy_init
+        template_args: ["A2D", "DST_ACCUM_MODE", "BroadcastType::NONE"]
+        args: ["$arg0"]
+    source: "tt_metal/hw/inc/api/compute/tile_move_copy.h:35"
+
+  copy_block:
+    UNPACK:
+      - call: llk_unpack_A
+        template_args: ["BroadcastType::NONE", "false", "EltwiseBinaryReuseDestType::NONE", "false"]
+        args: ["$arg0", "$arg1", "false"]
+    MATH:
+      - call: llk_math_eltwise_unary_datacopy
+        template_args: ["A2D", "DST_ACCUM_MODE", "BroadcastType::NONE", "false"]
+        args: ["$arg2", "$arg0"]
+    source: "tt_metal/hw/inc/api/compute/tile_move_copy.h:90"
+
+  transpose_init:
+    UNPACK:
+      - call: llk_unpack_A_init
+        template_args: ["BroadcastType::NONE", "false", "EltwiseBinaryReuseDestType::NONE", "false"]
+        args: ["true", "true", "$arg0"]
+    MATH:
+      - call: llk_math_eltwise_unary_datacopy_init
+        template_args: ["A2D", "DST_ACCUM_MODE", "BroadcastType::NONE"]
+        args: ["$arg0"]
+    source: "tt_metal/hw/inc/api/compute/transpose.h:40 (#59276)"
+
+  transpose_tile:
+    UNPACK:
+      - call: llk_unpack_A
+        template_args: ["BroadcastType::NONE", "false", "EltwiseBinaryReuseDestType::NONE", "false"]
+        args: ["$arg0", "$arg1", "false"]
+    MATH:
+      - call: llk_math_eltwise_unary_datacopy
+        template_args: ["A2D", "DST_ACCUM_MODE", "BroadcastType::NONE", "false"]
+        args: ["$arg2", "$arg0"]
+    source: "tt_metal/hw/inc/api/compute/transpose.h:62"
+
+  transpose_block:
+    UNPACK:
+      - call: llk_unpack_A
+        template_args: ["BroadcastType::NONE", "false", "EltwiseBinaryReuseDestType::NONE", "false"]
+        args: ["$arg0", "$arg1", "false"]
+    MATH:
+      - call: llk_math_eltwise_unary_datacopy
+        template_args: ["A2D", "DST_ACCUM_MODE", "BroadcastType::NONE", "false"]
+        args: ["$arg2", "$arg0"]
+    source: "tt_metal/hw/inc/api/compute/transpose.h:80"
+
+  transpose_dest_init:
+    MATH:
+      - call: llk_math_transpose_dest_init
+        template_args: ["$tpl0", "$tpl1"]
+        args: []
+    source: "tt_metal/hw/inc/api/compute/transpose_dest.h:22"
+
+  transpose_dest:
+    MATH:
+      - call: llk_math_transpose_dest
+        template_args: ["$tpl0", "$tpl1"]
+        args: ["$arg0"]
+    source: "tt_metal/hw/inc/api/compute/transpose_dest.h:35"
+
+  copy_tile_init:
+    UNPACK:
+      - call: llk_unpack_A_init
+        template_args: ["BroadcastType::NONE", "false", "EltwiseBinaryReuseDestType::NONE", "false"]
+        args: ["false", "false", "$arg0"]
+    MATH:
+      - call: llk_math_eltwise_unary_datacopy_init
+        template_args: ["A2D", "DST_ACCUM_MODE", "BroadcastType::NONE"]
+        args: ["$arg0"]
+    source: "tt_metal/hw/inc/api/compute/tile_move_copy.h:35"
+
+  copy_tile_to_dst_init_short:
+    UNPACK:
+      - call: llk_unpack_A_init
+        template_args: ["BroadcastType::NONE", "false", "EltwiseBinaryReuseDestType::NONE", "false"]
+        args: ["$arg1", "false", "$arg0"]
+    MATH:
+      - call: llk_math_eltwise_unary_datacopy_init
+        template_args: ["A2D", "DST_ACCUM_MODE", "BroadcastType::NONE"]
+        args: ["$arg0"]
+    source: "tt_metal/hw/inc/api/compute/tile_move_copy.h:27"
+
+  copy_tile:
+    UNPACK:
+      - call: llk_unpack_A
+        template_args: ["BroadcastType::NONE", "false", "EltwiseBinaryReuseDestType::NONE", "false"]
+        args: ["$arg0", "$arg1", "false"]
+    MATH:
+      - call: llk_math_eltwise_unary_datacopy
+        template_args: ["A2D", "DST_ACCUM_MODE", "BroadcastType::NONE", "false"]
+        args: ["$arg2", "$arg0"]
+    source: "tt_metal/hw/inc/api/compute/tile_move_copy.h:69"
+
+  transpose_wh_init:
+    UNPACK:
+      - call: llk_unpack_A_init
+        template_args: ["BroadcastType::NONE", "false", "EltwiseBinaryReuseDestType::NONE", "false"]
+        args: ["true", "true", "$arg0"]
+    MATH:
+      - call: llk_math_eltwise_unary_datacopy_init
+        template_args: ["A2D", "DST_ACCUM_MODE", "BroadcastType::NONE"]
+        args: ["$arg0"]
+    PACK:
+      - call: llk_pack_init
+        template_args: ["false", "false"]
+        args: ["$arg1"]
+    source: "tt_metal/hw/inc/api/compute/transpose.h:25"
+
+  transpose_wh_init_short:
+    UNPACK:
+      - call: llk_unpack_A_init
+        template_args: ["BroadcastType::NONE", "false", "EltwiseBinaryReuseDestType::NONE", "false"]
+        args: ["true", "true", "$arg0"]
+    MATH:
+      - call: llk_math_eltwise_unary_datacopy_init
+        template_args: ["A2D", "DST_ACCUM_MODE", "BroadcastType::NONE"]
+        args: ["$arg0"]
+    source: "tt_metal/hw/inc/api/compute/transpose.h:40 (#59276)"
+
+  transpose_wh_tile:
+    UNPACK:
+      - call: llk_unpack_A
+        template_args: ["BroadcastType::NONE", "false", "EltwiseBinaryReuseDestType::NONE", "false"]
+        args: ["$arg0", "$arg1", "false"]
+    MATH:
+      - call: llk_math_eltwise_unary_datacopy
+        template_args: ["A2D", "DST_ACCUM_MODE", "BroadcastType::NONE", "false"]
+        args: ["$arg2", "$arg0"]
+    source: "tt_metal/hw/inc/api/compute/transpose.h:62"
+
+  transpose_wh_dest_init_short:
+    MATH:
+      - call: llk_math_transpose_dest_init
+        template_args: ["$tpl0", "$tpl1"]
+        args: []
+    source: "tt_metal/hw/inc/api/compute/transpose_dest.h:22"
+
+  transpose_wh_dest:
+    MATH:
+      - call: llk_math_transpose_dest
+        template_args: ["$tpl0", "$tpl1"]
+        args: ["$arg0"]
+    source: "tt_metal/hw/inc/api/compute/transpose_dest.h:35"
+
+  # Tilize
+  tilize_init:
+    UNPACK:
+      - call: llk_unpack_tilize_init
+        template_args: []
+        args: ["$arg0", "$arg1"]
+    MATH:
+      - call: llk_math_eltwise_unary_datacopy_init
+        template_args: ["A2D", "DST_ACCUM_MODE", "BroadcastType::NONE"]
+        args: ["$arg0"]
+    PACK:
+      - call: llk_pack_init
+        template_args: ["false", "false", "true"]
+        args: ["$arg2"]
+        init_mode: "tilize"
+    source: "tt_metal/hw/inc/api/compute/tilize.h:35 (#61146)"
+
+  tilize_init_short:
+    UNPACK:
+      - call: llk_unpack_tilize_init
+        template_args: []
+        args: ["$arg0", "$arg1"]
+    MATH:
+      - call: llk_math_eltwise_unary_datacopy_init
+        template_args: ["A2D", "DST_ACCUM_MODE", "BroadcastType::NONE"]
+        args: ["$arg0"]
+    PACK:
+      - call: llk_pack_init
+        template_args: ["false", "false", "true"]
+        args: ["$arg2"]
+        init_mode: "tilize"
+    source: "tt_metal/hw/inc/api/compute/tilize.h:76"
+
+  tilize_block:
+    UNPACK:
+      - call: llk_unpack_tilize_block
+        template_args: []
+        args: ["$arg0", "$arg1"]
+    MATH:
+      - call: llk_math_eltwise_unary_datacopy_block
+        template_args: ["A2D", "DST_ACCUM_MODE", "BroadcastType::NONE", "false"]
+        args: ["0", "$arg1", "$arg0"]
+    PACK:
+      - call: llk_pack_block
+        template_args: ["false", "false", "false"]
+        args: ["0", "$arg2", "$arg1"]
+    source: "tt_metal/hw/inc/api/compute/tilize.h:158"
+
+  tilizeA_B_reduce_init:
+    UNPACK:
+      - call: llk_unpack_tilizeA_B_init
+        template_args: ["true", "true"]
+        args: ["$arg0", "$arg1", "$arg2"]
+    MATH:
+      - call: llk_math_reduce_init
+        template_args: ["$tpl0", "$tpl1", "DST_ACCUM_MODE", "MATH_FIDELITY"]
+        args: []
+    PACK:
+      - call: llk_pack_reduce_mask_config
+        template_args: ["false", "$tpl1"]
+        args: []
+    source: "tt_metal/hw/inc/api/compute/tilize.h:112"
+
+  tilizeA_B_dot_product_init:
+    UNPACK:
+      - call: llk_unpack_tilizeA_B_init
+        template_args: ["false", "false", "true"]
+        args: ["$arg0", "$arg1", "$arg2"]
+    MATH:
+      - call: llk_math_eltwise_binary_init_with_operands
+        template_args: ["ELWMUL", "BroadcastType::NONE", "MATH_FIDELITY", "EltwiseBinaryReuseDestType::NONE"]
+        args: ["$arg0", "$arg1", "true"]
+    PACK:
+      - call: llk_pack_init
+        template_args: ["false", "false", "true"]
+        args: ["$arg3"]
+        init_mode: "tilize"
+    source: "tt_metal/hw/inc/api/compute/tilize.h:136"
+
+  unpack_tilizeA_B_block:
+    UNPACK:
+      - call: llk_unpack_tilizeA_B_block
+        template_args: ["$tpl0", "$tpl1", "$tpl2"]
+        args: ["$arg0", "$arg1", "$arg2", "$arg3"]
+    source: "tt_metal/hw/inc/api/compute/tilize.h:211"
+
+  tilize_uninit:
+    UNPACK:
+      - call: llk_unpack_tilize_uninit
+        template_args: []
+        args: ["$arg0"]
+    PACK:
+      - call: llk_pack_init
+        template_args: []
+        args: ["$arg1"]
+    source: "tt_metal/hw/inc/api/compute/tilize.h:258"
+
+  tilize_uninit_with_dt:
+    UNPACK:
+      - call: llk_unpack_tilize_uninit
+        template_args: []
+        args: ["$arg1"]
+    PACK:
+      - call: llk_pack_init
+        template_args: []
+        args: ["$arg2"]
+    source: "tt_metal/hw/inc/api/compute/tilize.h:280"
+
+  # Fast tilize (Wormhole)
+  fast_tilize_init:
+    UNPACK:
+      - call: llk_unpack_fast_tilize_init
+        template_args: []
+        args: ["$arg0", "$arg1"]
+    MATH:
+      - call: llk_math_fast_tilize_init
+        template_args: []
+        args: ["$arg0", "$arg1"]
+    PACK:
+      - call: llk_pack_fast_tilize_init
+        template_args: ["DST_ACCUM_MODE"]
+        args: ["$arg0", "$arg2", "$arg1"]
+    source: "tt_metal/hw/inc/api/compute/tilize.h:308"
+
+  fast_tilize_block:
+    UNPACK:
+      - call: llk_unpack_fast_tilize_block
+        template_args: []
+        args: ["$arg0", "0", "$arg1", "$arg1"]
+    MATH:
+      - call: llk_math_fast_tilize_block
+        template_args: []
+        args: ["0", "$arg0", "$arg1"]
+    PACK:
+      - call: llk_pack_fast_tilize_block
+        template_args: ["DST_ACCUM_MODE"]
+        args: ["0", "$arg2", "$arg1", "0", "$arg1"]
+    source: "tt_metal/hw/inc/api/compute/tilize.h:350"
+
+  fast_tilize_uninit:
+    UNPACK:
+      - call: llk_unpack_fast_tilize_uninit
+        template_args: []
+        args: []
+    MATH:
+      - call: llk_math_fast_tilize_uninit
+        template_args: ["DST_ACCUM_MODE"]
+        args: ["$arg0"]
+    PACK:
+      - call: llk_pack_fast_tilize_uninit
+        template_args: ["DST_ACCUM_MODE"]
+        args: ["$arg1"]
+    source: "tt_metal/hw/inc/api/compute/tilize.h:380"
+
+  # Untilize
+  untilize_init:
+    UNPACK:
+      - call: llk_unpack_untilize_init
+        template_args: []
+        args: ["$arg0"]
+    MATH:
+      - call: llk_math_eltwise_unary_datacopy_init
+        template_args: ["A2D", "DST_ACCUM_MODE", "BroadcastType::NONE"]
+        args: ["$arg0"]
+    source: "tt_metal/hw/inc/api/compute/untilize.h:22"
+
+  untilize_init_short:
+    UNPACK:
+      - call: llk_unpack_untilize_init
+        template_args: []
+        args: ["$arg0"]
+    source: "tt_metal/hw/inc/api/compute/untilize.h:36"
+
+  untilize_block:
+    UNPACK:
+      - call: llk_unpack_untilize
+        template_args: []
+        args: ["$arg0", "$arg1"]
+    MATH:
+      - call: llk_math_eltwise_unary_datacopy
+        template_args: ["A2D", "DST_ACCUM_MODE", "BroadcastType::NONE", "false"]
+        args: ["0", "$arg0"]
+    PACK:
+      - call: llk_pack
+        template_args: ["false", "DST_ACCUM_MODE"]
+        args: ["0", "$arg2"]
+    source: "tt_metal/hw/inc/api/compute/untilize.h:45"
+
+  untilize_uninit:
+    UNPACK:
+      - call: llk_unpack_untilize_uninit
+        template_args: []
+        args: ["$arg0"]
+    source: "tt_metal/hw/inc/api/compute/untilize.h:61"
+
+  # Pack untilize
+  pack_untilize_init:
+    UNPACK:
+      - call: llk_unpack_A_init
+        template_args: ["BroadcastType::NONE", "false", "EltwiseBinaryReuseDestType::NONE", "false"]
+        args: ["false", "false", "$arg0"]
+    MATH:
+      - call: llk_math_eltwise_unary_datacopy_init
+        template_args: ["A2D", "DST_ACCUM_MODE", "BroadcastType::NONE"]
+        args: ["$arg0"]
+    PACK:
+      - call: llk_pack_untilize_init
+        template_args: ["$tpl0", "$tpl1", "false"]
+        args: ["$arg1"]
+    source: "tt_metal/hw/inc/api/compute/pack_untilize.h:33"
+
+  pack_untilize_dest_init:
+    PACK:
+      - call: llk_pack_untilize_init
+        template_args: ["$tpl0", "$tpl1", "$tpl2"]
+        args: ["$arg0"]
+    source: "tt_metal/hw/inc/api/compute/pack_untilize.h:76"
+
+  pack_untilize_dest:
+    PACK:
+      - call: llk_pack_untilize
+        template_args: ["$tpl0", "$tpl1", "$tpl2"]
+        args: ["$arg1", "$arg0"]
+    source: "tt_metal/hw/inc/api/compute/pack_untilize.h:97"
+
+  pack_untilize_dst_init_short:
+    PACK:
+      - call: llk_pack_untilize_init
+        template_args: ["$tpl0", "$tpl1", "$tpl2"]
+        args: ["$arg0"]
+    source: "tt_metal/hw/inc/api/compute/pack_untilize.h:76"
+
+  pack_untilize_block:
+    UNPACK:
+      - call: llk_unpack_A
+        template_args: ["BroadcastType::NONE", "false", "EltwiseBinaryReuseDestType::NONE", "false"]
+        args: ["$arg0", "0", "false"]
+    MATH:
+      - call: llk_math_eltwise_unary_datacopy
+        template_args: ["A2D", "DST_ACCUM_MODE", "BroadcastType::NONE", "false"]
+        args: ["0", "$arg0"]
+    PACK:
+      - call: llk_pack_untilize
+        template_args: ["$tpl0", "$tpl1", "false"]
+        args: ["0", "$arg2"]
+    source: "tt_metal/hw/inc/api/compute/pack_untilize.h:54"
+
+  pack_untilize_dst:
+    PACK:
+      - call: llk_pack_untilize
+        template_args: ["$tpl0", "$tpl1", "$tpl2"]
+        args: ["$arg1", "$arg0"]
+    source: "tt_metal/hw/inc/api/compute/pack_untilize.h:97"
+
+  pack_untilize_uninit:
+    PACK:
+      - call: llk_pack_untilize_uninit
+        template_args: []
+        args: ["$arg0"]
+      - call: llk_pack_init
+        template_args: ["false", "false"]
+        args: ["$arg0"]
+    source: "tt_metal/hw/inc/api/compute/pack_untilize.h:359"
+
+  # Reduce
+  reduce_init:
+    UNPACK:
+      - call: llk_unpack_AB_reduce_init
+        template_args: ["$tpl0", "$tpl1"]
+        args: ["$arg0", "$arg1"]
+    MATH:
+      - call: llk_math_reduce_init
+        template_args: ["$tpl0", "$tpl1", "DST_ACCUM_MODE", "MATH_FIDELITY"]
+        args: []
+    PACK:
+      - call: llk_pack_reduce_mask_config
+        template_args: ["false", "$tpl1"]
+        args: []
+    source: "tt_metal/hw/inc/api/compute/reduce.h:22"
+
+  reduce_init_short:
+    UNPACK:
+      - call: llk_unpack_AB_reduce_init
+        template_args: ["$tpl0", "$tpl1"]
+        args: ["$arg0", "$arg1"]
+    MATH:
+      - call: llk_math_reduce_init
+        template_args: ["$tpl0", "$tpl1", "DST_ACCUM_MODE", "MATH_FIDELITY"]
+        args: []
+    PACK:
+      - call: llk_pack_reduce_mask_config
+        template_args: ["false", "$tpl1"]
+        args: []
+    source: "tt_metal/hw/inc/api/compute/reduce.h:47"
+
+  reduce_block:
+    UNPACK:
+      - call: llk_unpack_AB_reduce
+        template_args: ["$tpl0", "$tpl1"]
+        args: ["$arg0", "$arg1", "$arg2", "$arg3"]
+    MATH:
+      - call: llk_math_reduce
+        template_args: ["$tpl0", "$tpl1", "DST_ACCUM_MODE", "MATH_FIDELITY"]
+        args: ["$arg4"]
+    source: "tt_metal/hw/inc/api/compute/reduce.h:130"
+
+  reduce_tile_math:
+    MATH:
+      - call: llk_math_reduce
+        template_args: ["$tpl0", "$tpl1", "DST_ACCUM_MODE", "MATH_FIDELITY"]
+        args: ["$arg0"]
+    source: "tt_metal/hw/inc/api/compute/reduce.h:150"
+
+  reduce_tile:
+    UNPACK:
+      - call: llk_unpack_AB_reduce
+        template_args: ["$tpl0", "$tpl1"]
+        args: ["$arg0", "$arg1", "$arg2", "$arg3"]
+    MATH:
+      - call: llk_math_reduce
+        template_args: ["$tpl0", "$tpl1", "DST_ACCUM_MODE", "MATH_FIDELITY"]
+        args: ["$arg4"]
+    source: "tt_metal/hw/inc/api/compute/reduce.h:113"
+
+  reduce_uninit:
+    UNPACK:
+      - call: llk_unpack_reduce_uninit
+        template_args: []
+        args: []
+    MATH:
+      - call: llk_math_reduce_uninit
+        template_args: []
+        args: ["$arg0"]
+    PACK:
+      - call: llk_pack_reduce_mask_clear
+        template_args: []
+        args: []
+    source: "tt_metal/hw/inc/api/compute/reduce.h:83 (#52175)"
+
+  reduce_block_max_row_init:
+    UNPACK:
+      - call: llk_unpack_AB_reduce_init
+        template_args: ["PoolType::MAX", "ReduceDim::REDUCE_ROW"]
+        args: ["$arg0", "$arg1"]
+    MATH:
+      - call: llk_math_reduce_block_max_row_init
+        template_args: ["$tpl0", "DST_ACCUM_MODE"]
+        args: []
+    PACK:
+      - call: llk_pack_reduce_mask_config
+        template_args: ["false", "ReduceDim::REDUCE_ROW"]
+        args: []
+    source: "tt_metal/hw/inc/api/compute/reduce_custom.h:21"
+
+  reduce_block_max_row:
+    UNPACK:
+      - call: llk_unpack_AB_reduce
+        template_args: ["PoolType::MAX", "ReduceDim::REDUCE_ROW"]
+        args: ["$arg0", "$arg1", "$arg2", "0"]
+    MATH:
+      - call: llk_math_reduce_block_max_row
+        template_args: ["$tpl0", "DST_ACCUM_MODE"]
+        args: ["$arg3"]
+    source: "tt_metal/hw/inc/api/compute/reduce_custom.h:40"
+
+  reduce_block_max_row_uninit:
+    UNPACK:
+      - call: llk_unpack_reduce_uninit
+        template_args: []
+        args: []
+    MATH:
+      - call: llk_math_reduce_block_max_row_uninit
+        template_args: []
+        args: []
+    PACK:
+      - call: llk_pack_reduce_mask_clear
+        template_args: []
+        args: []
+    source: "tt_metal/hw/inc/api/compute/reduce_custom.h:59"
+
+  # Pack
+  pack_init:
+    PACK:
+      - call: llk_pack_init
+        template_args: ["false", "false"]
+        args: ["$arg0"]
+    source: "tt_metal/hw/inc/api/compute/pack.h:20"
+
+  pack_block:
+    PACK:
+      - call: llk_pack_block
+        template_args: ["false", "DST_ACCUM_MODE"]
+        args: ["$arg0", "$arg1", "$arg2"]
+    source: "tt_metal/hw/inc/api/compute/pack.h:61"
+
+  pack_tile:
+    PACK:
+      - call: llk_pack
+        template_args: ["$tpl0", "DST_ACCUM_MODE"]
+        args: ["$arg0", "$arg1"]
+    source: "tt_metal/hw/inc/api/compute/pack.h:25"
+
+  matmul_pack_tile:
+    PACK:
+      - call: llk_pack_block
+        template_args: ["false", "DST_ACCUM_MODE"]
+        args: ["$arg0", "$arg1", "$arg2"]
+    source: "tt_metal/hw/inc/api/compute/pack.h:61"
+
+  # Data format reconfig wrappers
+  reconfig_data_format:
+    UNPACK:
+      - call: llk_unpack_reconfig_data_format
+        template_args: ["$tpl0"]
+        args: ["$arg0", "$arg1"]
+    MATH:
+      - call: llk_math_reconfig_data_format
+        template_args: ["$tpl0"]
+        args: ["$arg0", "$arg1"]
+    source: "tt_metal/hw/inc/api/compute/reconfig_data_format.h:25"
+
+  reconfig_data_format_srca:
+    UNPACK:
+      - call: llk_unpack_reconfig_data_format_srca
+        template_args: []
+        args: ["$arg0"]
+    MATH:
+      - call: llk_math_reconfig_data_format_srca
+        template_args: []
+        args: ["$arg0"]
+    source: "tt_metal/hw/inc/api/compute/reconfig_data_format.h:59"
+
+  reconfig_data_format_srcb:
+    UNPACK:
+      - call: llk_unpack_reconfig_data_format_srcb
+        template_args: []
+        args: ["$arg0"]
+    MATH:
+      - call: llk_math_reconfig_data_format_srcb
+        template_args: []
+        args: ["$arg0"]
+    source: "tt_metal/hw/inc/api/compute/reconfig_data_format.h:91"
+
+  pack_reconfig_data_format:
+    PACK:
+      - call: llk_pack_reconfig_data_format
+        template_args: []
+        args: ["$arg0"]
+    source: "tt_metal/hw/inc/api/compute/pack.h:85"
+
+# ---------------------------------------------------------------------------
+# 6. Deprecated Compute & LLK Init/Operation APIs
+#    Cross-checked with .github/deprecations.json and [[deprecated]] attributes
+#    in tt_metal/hw/inc/api/compute/ and docs/source/tt-metalium/tt_metal/apis/kernel_apis/compute/init_functions.rst.
+# ---------------------------------------------------------------------------
+deprecated_apis:
+  untilize_init_short:
+    replacement: untilize_init
+    threads: [UNPACK, MATH, PACK]
+    reason: "untilize_init_short is deprecated; use untilize_init instead."
+    source: "tt_metal/hw/inc/api/compute/untilize.h:36"
+
+  init_bcast:
+    replacement: "add_bcast_rows_init_short / add_bcast_cols_init_short / add_bcast_scalar_init_short (or sub/mul equivalents)"
+    threads: [UNPACK, MATH, PACK]
+    reason: "Composite init_bcast is deprecated in favor of short broadcast init functions."
+    source: "docs/source/tt-metalium/tt_metal/apis/kernel_apis/compute/init_functions.rst:12"
+
+  copy_dest_values_init:
+    replacement: binary_dest_reuse_tiles_init
+    threads: [UNPACK, MATH, PACK]
+    reason: "copy_dest_values_init is deprecated; use binary_dest_reuse_tiles_init instead."
+    source: "tt_metal/hw/inc/api/compute/copy_dest_values.h:60"
+
+  copy_dest_values:
+    replacement: binary_dest_reuse_tiles
+    threads: [UNPACK, MATH, PACK]
+    reason: "copy_dest_values is deprecated; use binary_dest_reuse_tiles or copy_dest_values<DataFormat> instead."
+    source: "tt_metal/hw/inc/api/compute/copy_dest_values.h:60"
+
+  acquire_dst:
+    replacement: tile_regs_acquire
+    threads: [UNPACK, MATH, PACK]
+    reason: "acquire_dst is deprecated; use tile_regs_acquire / tile_regs_wait instead."
+    source: "tt_metal/hw/inc/api/compute/reg_api.h:33"
+
+  release_dst:
+    replacement: "tile_regs_commit / tile_regs_release"
+    threads: [UNPACK, MATH, PACK]
+    reason: "release_dst is deprecated; use tile_regs_commit and tile_regs_release instead."
+    source: "tt_metal/hw/inc/api/compute/reg_api.h:54"
