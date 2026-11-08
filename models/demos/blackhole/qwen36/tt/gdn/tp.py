@@ -825,7 +825,6 @@ def load_gdn_weights_tp(mesh, sd, args, cache_dir=None):
     return tw
 
 
-
 def _dsmc_decode(x, weight, compute_cfg, progcfg, act_shard, out_memory_config):
     """QWEN36_BFP4_LAYOUT dsmc decode matmul (M <= 1 tile): x -> its K width shard (unless already in it), the
     multi-core DRAM-sharded pipeline into L1 width-sharded, then `out_memory_config` (interleaved)."""
@@ -837,6 +836,7 @@ def _dsmc_decode(x, weight, compute_cfg, progcfg, act_shard, out_memory_config):
     out = ttnn.to_memory_config(y, out_memory_config)
     ttnn.deallocate(y)
     return out
+
 
 class TPGatedDeltaNet:
     """Standalone TP GDN decode (per-device value-head recurrence + all-reduce)."""
@@ -3008,7 +3008,8 @@ class TPGatedDeltaNet:
         """Write one user's B=1 prefill state into decode `slot`, preserving every other (live)
         row. The per-slot analogue of assemble_batched_state for vLLM continuous batching.
 
-        rec:   [1, Nv, Dk, Dv] the user's recurrent state.
+        rec:   [1, Nv, Dk, Dv] the user's recurrent state, or None (QWEN36_MAMBA_SPEC: the verify reads the state from
+               the request's vLLM block, so rec_state rows are not read and only the conv taps are written).
         convs: list of K [1, 1, qkv_dim_tp] the user's conv taps (conv_states[m] column). Unlike
                assemble_batched_state (which zeroes tap 0), every tap is written straight from the
                user's B=1 prefill state, so decode continues from exactly the produced shift register.
@@ -3027,36 +3028,39 @@ class TPGatedDeltaNet:
             elif self._conv_fmt in ("both", "hist"):
                 self._write_conv_hist_slot(slot, convs)
         self.sync_conv_taps()  # read-modify-write of the taps: they must be current first
-        rec_src = rec if rec.dtype == self.rec_state.dtype else ttnn.typecast(rec, self.rec_state.dtype)
-        if rec_src is not rec and consume:
-            ttnn.deallocate(rec)
-        if self.rec_state.shape[0] > 1 and self._inplace_slot_write() and self._rec_row_layout_ok():
-            # A DRAM-interleaved TILE source makes slice_write re-tilize and re-seat rec_state (new address, stale for
-            # baked traces); the L1-sharded copy of the row is written tile-for-tile in place.
-            src = ttnn.slice(rec_src, (0, 0, 0, 0), tuple(rec_src.shape), memory_config=self._rec_row_shard_memcfg())
-            ttnn.experimental.slice_write(
-                src,
-                self.rec_state,
-                [slot, 0, 0, 0],
-                [slot + 1] + list(self.rec_state.shape)[1:],
-                [1, 1, 1, 1],
-            )
-            ttnn.deallocate(src)
-            if consume or rec_src is not rec:
-                ttnn.deallocate(rec_src)
-        elif self.rec_state.shape[0] > 1:
-            # In-place row write (no slice + concat + copy of the whole [B, Nv, Dk, Dv] state; bit-identical).
-            ttnn.experimental.slice_write(
-                rec_src,
-                self.rec_state,
-                [slot, 0, 0, 0],
-                [slot + 1] + list(self.rec_state.shape)[1:],
-                [1, 1, 1, 1],
-            )
-            if consume or rec_src is not rec:
-                ttnn.deallocate(rec_src)
-        else:
-            self._write_index(self.rec_state, rec_src, slot, dim=0, consume_src=consume or rec_src is not rec)
+        if rec is not None:
+            rec_src = rec if rec.dtype == self.rec_state.dtype else ttnn.typecast(rec, self.rec_state.dtype)
+            if rec_src is not rec and consume:
+                ttnn.deallocate(rec)
+            if self.rec_state.shape[0] > 1 and self._inplace_slot_write() and self._rec_row_layout_ok():
+                # A DRAM-interleaved TILE source makes slice_write re-tilize and re-seat rec_state (new address, stale
+                # for baked traces); the L1-sharded copy of the row is written tile-for-tile in place.
+                src = ttnn.slice(
+                    rec_src, (0, 0, 0, 0), tuple(rec_src.shape), memory_config=self._rec_row_shard_memcfg()
+                )
+                ttnn.experimental.slice_write(
+                    src,
+                    self.rec_state,
+                    [slot, 0, 0, 0],
+                    [slot + 1] + list(self.rec_state.shape)[1:],
+                    [1, 1, 1, 1],
+                )
+                ttnn.deallocate(src)
+                if consume or rec_src is not rec:
+                    ttnn.deallocate(rec_src)
+            elif self.rec_state.shape[0] > 1:
+                # In-place row write (no slice + concat + copy of the whole [B, Nv, Dk, Dv] state; bit-identical).
+                ttnn.experimental.slice_write(
+                    rec_src,
+                    self.rec_state,
+                    [slot, 0, 0, 0],
+                    [slot + 1] + list(self.rec_state.shape)[1:],
+                    [1, 1, 1, 1],
+                )
+                if consume or rec_src is not rec:
+                    ttnn.deallocate(rec_src)
+            else:
+                self._write_index(self.rec_state, rec_src, slot, dim=0, consume_src=consume or rec_src is not rec)
         # conv_states are stale (and fully rewritten by the hist -> states sync) while the fused history is the
         # authoritative format ("hist" / "packed"): skip the K slice+concat+copy writes then.
         write_states = not (self._hist_hook_active() and self._decode_B > 1 and self._conv_fmt in ("hist", "packed"))
@@ -3759,9 +3763,17 @@ class TPGatedDeltaNet:
         self._release_spec_bufs()
         B, Nv, Dk, Dv, K, C = self.B, self.Nv, self.Dk, self.Dv, self.K, self.qkv_dim_tp
         mc, cdt = ttnn.DRAM_MEMORY_CONFIG, self.conv_states[0].dtype
-        # fp32 unconditionally: the fused op's ring mode reads and writes fp32 state blocks.
-        self._spec_ring = ttnn.zeros(
-            [T * B * Nv, Dk, Dv], device=self.mesh, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, memory_config=mc
+        # fp32 unconditionally: the fused op's ring mode reads and writes fp32 state blocks. QWEN36_MAMBA_SPEC: the
+        # per-token states are written into the request's vLLM spec blocks (_spec_paged), so there is no ring.
+        paged = getattr(self, "_spec_paged", None)
+        if paged is not None and not self._spec_fused:
+            raise ValueError("QWEN36_MAMBA_SPEC needs the gdn_spec_step verify (QWEN36_VERIFY_SPEC_STEP=1)")
+        self._spec_ring = (
+            None
+            if paged is not None
+            else ttnn.zeros(
+                [T * B * Nv, Dk, Dv], device=self.mesh, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, memory_config=mc
+            )
         )
         if self._spec_fused:
             # QWEN36_VERIFY_SPEC_STEP=1: the window ping-pong pair (see __init__) instead of the single buffer, at
@@ -3843,14 +3855,20 @@ class TPGatedDeltaNet:
                 mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh),
             )
 
-    def _gdn_spec_step(self, qkvzab, win_a, win_b, ring, ctrl, T, B, max_users=None):
+    def _gdn_spec_step(self, qkvzab, win_a, win_b, ring, ctrl, T, B, max_users=None, paged=None):
         """The one fused dispatch (QWEN36_VERIFY_SPEC_STEP=1): raw [1, B*T, W] projection rows in, gated
         [1, B*T, Nv*Dv] bf16 (L1) out; ring / win[1-par] updated in place. Same call for the verify (ring =
         _spec_ring, the staged ctrl page) and the seed (ring = rec_state, the identity page, T = 1). dt_bias /
         neg_exp_A / norm weight / fast_mode / fp32_state and the default HiFi4 + fp32-accumulate kernel config are
-        exactly what _forward_decode_step_op hands gdn_decode_step, so one verify token is one plain decode step."""
+        exactly what _forward_decode_step_op hands gdn_decode_step, so one verify token is one plain decode step.
+        ``paged`` (QWEN36_MAMBA_SPEC, spec_block_state._LayerViews): ring is its K view, the per-token states go to the
+        pages of its ring_page_idx and the ctrl initial words are pages (V view as ring_pool2 when heads live there)."""
         tw = self.tw
         extra = {}
+        if paged is not None:
+            extra["ring_page_idx"] = paged.idx
+            if paged.two_pool:
+                extra["ring_pool2"] = paged.rec2
         _mu = max_users if max_users is not None else getattr(self, "_spec_max_users", 0)
         if _mu:
             extra["max_users"] = int(_mu)
@@ -3944,7 +3962,9 @@ class TPGatedDeltaNet:
         B, R = n_users, n_users * T
         win = self._verify_win_pair
         # B rows (a bucket b <= self.B) run on the shared self.B-wide ring / ctrl page: max_users = the state width.
-        gated = self._gdn_spec_step(qkvzab, win[0], win[1], self._spec_ring, ctrl, T, B, max_users=self.B)
+        paged = getattr(self, "_spec_paged", None)
+        ring = self._spec_ring if paged is None else paged.rec1
+        gated = self._gdn_spec_step(qkvzab, win[0], win[1], ring, ctrl, T, B, max_users=self.B, paged=paged)
         ttnn.deallocate(qkvzab)
         return self._out_proj_tail(gated, R, bucket, decode_ar=decode_ar)
 
@@ -3979,8 +3999,9 @@ class TPGatedDeltaNet:
         conv shift register -> the first K rows of E_prev (a mi = 0 conv_sel reads them as concat
         rows 1 .. K-1). The window's remaining T-1 rows are zero padding no mi = 0 selector reaches.
         """
-        assert self._spec_ring is not None, "seed_spec_state before prepare_spec_verify"
-        self._write_ring_slot0_all()
+        if getattr(self, "_spec_paged", None) is None:
+            assert self._spec_ring is not None, "seed_spec_state before prepare_spec_verify"
+            self._write_ring_slot0_all()  # QWEN36_MAMBA_SPEC: the start state is read from the request's block
         self.sync_conv_win()  # taps are the truth outside the spec loop; mirror them into the window
         full = (
             self._conv_win_buf
@@ -4064,11 +4085,14 @@ class TPGatedDeltaNet:
         The ring / E_prev the next verify reads are then those of seed_spec_rows(rows); rec_state, the taps and the
         staleness flags are untouched (nothing advanced them: the verify itself consumes the first token).
         Eager; every program it can run is compiled by warmup_fast_seed before capture."""
-        assert self._spec_ring is not None, "seed_spec_rows_select before prepare_spec_verify"
+        paged = getattr(self, "_spec_paged", None) is not None
+        assert paged or self._spec_ring is not None, "seed_spec_rows_select before prepare_spec_verify"
         B, Nv, Dk, Dv = self.B, self.Nv, self.Dk, self.Dv
         rows = sorted({int(u) for u in rows})
         assert rows and all(0 <= u < B for u in rows), f"rows {rows} outside range({B})"
-        if len(rows) == B:
+        if paged:
+            pass  # QWEN36_MAMBA_SPEC: the prefill wrote the recurrent state into the row's block
+        elif len(rows) == B:
             self._write_ring_slot0_all()
         else:
             assert self._rec_row_layout_ok(), "fast seed needs a rank-4 TILE interleaved rec_state"
@@ -4099,7 +4123,7 @@ class TPGatedDeltaNet:
         nothing eager has to run first (no unpack of a packed history, no stale taps, the decode binding). The engine
         calls seed_spec_rows_select when this is False."""
         return (
-            self._spec_ring is not None
+            (self._spec_ring is not None or getattr(self, "_spec_paged", None) is not None)
             and self._rec_row_layout_ok()
             and self._conv_hist_rm is not None
             and self.B == self._decode_B
@@ -4126,8 +4150,24 @@ class TPGatedDeltaNet:
     def _seed_masked_impl(self, mask, sel):
         """The op sequence of seed_spec_rows_masked, without the host predicate (warmup compiles it with it unmet).
         Per layer, fp32 rec_state: slice, where, to_memory_config, slice_write, to_layout (taps), concat, matmul,
-        copy = 8 ops (bf16 rec_state adds one typecast)."""
-        assert self._spec_ring is not None, "seed_spec_rows_masked before prepare_spec_verify"
+        copy = 8 ops (bf16 rec_state adds one typecast). QWEN36_MAMBA_SPEC (no ring; ``mask`` None): the conv window
+        part only, 4 ops: the prefill wrote the recurrent state into the row's block."""
+        paged = getattr(self, "_spec_paged", None) is not None
+        assert paged or self._spec_ring is not None, "seed_spec_rows_masked before prepare_spec_verify"
+        mc = ttnn.DRAM_MEMORY_CONFIG
+        if not paged:
+            self._seed_ring_masked(mask)
+        taps = self._fresh_taps_tile(route="hist")  # [B, K-1, C]
+        win = self.verify_win_cur()
+        cat = ttnn.concat([win, taps], dim=1, memory_config=mc)
+        ttnn.deallocate(taps)
+        new_win = ttnn.matmul(sel, cat, compute_kernel_config=self._cfg_onehot, memory_config=mc)
+        ttnn.deallocate(cat)
+        ttnn.copy(new_win, win)  # in place: the window buffer keeps its address
+        ttnn.deallocate(new_win)
+
+    def _seed_ring_masked(self, mask):
+        """The ring half of _seed_masked_impl: rec_state -> ring token slot 0 of the rows ``mask`` selects."""
         B, Nv, Dk, Dv = self.B, self.Nv, self.Dk, self.Dv
         T = self._spec_shape[1]
         mc = ttnn.DRAM_MEMORY_CONFIG
@@ -4146,14 +4186,6 @@ class TPGatedDeltaNet:
         ttnn.deallocate(new)
         ttnn.experimental.slice_write(sharded, ring4, [0, 0, 0, 0], [1, B * Nv, Dk, Dv], [1, 1, 1, 1])
         ttnn.deallocate(sharded)
-        taps = self._fresh_taps_tile(route="hist")  # [B, K-1, C]
-        win = self.verify_win_cur()
-        cat = ttnn.concat([win, taps], dim=1, memory_config=mc)
-        ttnn.deallocate(taps)
-        new_win = ttnn.matmul(sel, cat, compute_kernel_config=self._cfg_onehot, memory_config=mc)
-        ttnn.deallocate(cat)
-        ttnn.copy(new_win, win)  # in place: the window buffer keeps its address
-        ttnn.deallocate(new_win)
 
     def warmup_fast_seed(self, sel, mask=None):
         """Warmup only (spec engine, after prepare_spec_verify, before any capture): run seed_spec_rows_select for every
@@ -4164,7 +4196,8 @@ class TPGatedDeltaNet:
         for u in range(self.B):
             self.seed_spec_rows_select([u], sel)
         self.seed_spec_rows_select(range(self.B), sel)
-        if mask is not None and self._conv_hist_rm is not None:
+        paged = getattr(self, "_spec_paged", None) is not None
+        if (mask is not None or paged) and self._conv_hist_rm is not None:
             par = self._spec_win_par
             try:
                 for p in (0, 1) if self._spec_fused else (par,):

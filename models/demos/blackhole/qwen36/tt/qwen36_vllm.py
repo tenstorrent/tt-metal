@@ -27,11 +27,11 @@ from vllm.multimodal import MULTIMODAL_REGISTRY
 import ttnn
 from models.demos.blackhole.qwen36.tt.common import create_tt_model
 from models.demos.blackhole.qwen36.tt.generator_interface import prefill_dispatch, warmup_decode_buckets
+from models.demos.blackhole.qwen36.tt.kv_cache_spec import gdn_layer_name
 from models.demos.blackhole.qwen36.tt.model import paged_block_size, serve_device_decode_env_enabled
 from models.demos.blackhole.qwen36.tt.spec_engine import rows_to_engine, slot_map_after_remap, slot_map_inverse
 from models.demos.blackhole.qwen36.tt.tp_common import (
     fabric_router_config,
-    kv_block_size,
     kv_cache_bf8_enabled,
     mamba_spec_enabled,
     spec_chain_enabled,
@@ -174,7 +174,7 @@ def _build_model_capabilities():
     caps = {
         # Automatic prefix caching: vLLM reuses the attention KV blocks and passes start_pos (cached tokens, a multiple
         # of the KV block size); the model keeps its own GDN-state snapshots (tt/prefix_cache.py). QWEN36_PREFIX_CACHE=0
-        # disables it. Run vLLM with --block-size 64 (or QWEN36_KV_BLOCK_SIZE) and --enable-prefix-caching.
+        # disables it. Run vLLM with --block-size 64 and --enable-prefix-caching.
         "supports_prefix_caching": os.environ.get("QWEN36_PREFIX_CACHE", "1") == "1",
         # vLLM chunked prefill: a prompt longer than the per-step token budget (--max-num-batched-tokens) is prefilled
         # over several engine steps, with decode steps in between. Batched TP resumes each chunk from a GDN snapshot
@@ -210,6 +210,72 @@ def _build_model_capabilities():
     return caps
 
 
+# QWEN36_MAMBA_SPEC: the plugin passes the GDN state inputs of a step as one keyword, ``mamba_state``, read here by
+# attribute. ``mamba_state.groups`` has one entry per MambaSpec KV cache group, in KV cache group order: ``layer_names``
+# (the names get_kv_cache_spec gives the group's layers), ``windows`` int32 [R, 1 + K] (the step writes the state after
+# query token t into the block in column t; column 0 holds the running state), ``checkpoint_blocks`` int32 [R, W] or
+# None and ``chain`` None or (``copies`` [R, 1 + K, 2], ``start_blocks`` [R, 1 + K], ``windows`` [R, 1 + K, 1 + K]),
+# indexed by the pending verify's accepted count - 1. ``mamba_state.accepted_counts`` int32 [R] (-1 on a chained row)
+# and ``mamba_state.checkpoint_positions`` int32 [R, W] are None where they do not apply. The functions below turn it
+# into the per-group inputs of GdnBlockState and SpecGdnBlockState.
+def _mamba_groups(mamba_state, gdn_layers):
+    """{GDN layer index: index of its group in mamba_state.groups}, from the groups' layer_names. Raises unless each
+    layer of ``gdn_layers`` is in exactly one group and every name is one of theirs."""
+    index = {gdn_layer_name(i): i for i in gdn_layers}
+    group_of, unknown, twice = {}, [], []
+    for k, group in enumerate(mamba_state.groups):
+        for name in group.layer_names:
+            i = index.get(name)
+            if i is None:
+                unknown.append((k, name))
+            elif i in group_of:
+                twice.append((name, group_of[i], k))
+            else:
+                group_of[i] = k
+    missing = [gdn_layer_name(i) for i in gdn_layers if i not in group_of]
+    if unknown or twice or missing:
+        raise ValueError(
+            "mamba_state groups must hold every GDN layer once: (group, name) of names that are no GDN layer "
+            f"{unknown}, (name, group, group) of layers in two groups {twice}, layers in no group {missing}"
+        )
+    return group_of
+
+
+def _gdn_step_blocks(mamba_state, gdn_layers):
+    """GdnBlockState's inputs of a step: (window column 0 of each mamba_state group, int [R]: the block of row i's
+    running state; {GDN layer index: its group's index in that list})."""
+    group_of = _mamba_groups(mamba_state, gdn_layers)
+    return [group.windows[:, 0] for group in mamba_state.groups], group_of
+
+
+def _spec_mamba_groups(mamba_state, blocks):
+    """mamba_state.groups in the group order of ``blocks`` (SpecGdnBlockState: its group g holds the GDN layers that
+    ``blocks.layer_groups`` maps to g, from their layer slots at allocation). Raises unless both partition the GDN
+    layers the same way."""
+    group_of = _mamba_groups(mamba_state, blocks.layer_groups)
+    pairs = {(g, group_of[i]) for i, g in blocks.layer_groups.items()}
+    if len(mamba_state.groups) != blocks.G or len(pairs) != blocks.G or len({k for _, k in pairs}) != blocks.G:
+        bound = {g: sorted(i for i, h in blocks.layer_groups.items() if h == g) for g in range(blocks.G)}
+        given = {k: sorted(i for i, h in group_of.items() if h == k) for k in range(len(mamba_state.groups))}
+        raise ValueError(
+            f"mamba_state groups (GDN layer indices) {given} differ from the groups bound by layer slot {bound}"
+        )
+    k_of = dict(pairs)
+    return [mamba_state.groups[k_of[g]] for g in range(blocks.G)]
+
+
+def _spec_prefill_blocks(mamba_state, blocks):
+    """SpecGdnBlockState's inputs of a prefill step, in its group order: ([G] window column 0 int [R], [G] checkpoint
+    blocks int [R, W] or None)."""
+    groups = _spec_mamba_groups(mamba_state, blocks)
+    ckpt = [group.checkpoint_blocks for group in groups]
+    if len({c is None for c in ckpt}) > 1:
+        raise ValueError(
+            f"mamba_state: checkpoint_blocks in groups {[c is not None for c in ckpt]}, not in all or none"
+        )
+    return [group.windows[:, 0] for group in groups], (None if ckpt[0] is None else ckpt)
+
+
 _PREFILL_WARMUP_CHUNK = 2048
 _PREFILL_WARMUP_BUCKET = 4096
 
@@ -241,6 +307,8 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
     _tt_allow_decode_trace_buffer_reuse = True
     decode_input_update_contract = 1
     _ENABLE_MTP = False  # MTP contract subclass overrides
+    # Whose prefill_forward writes vLLM's prefill checkpoint states (QWEN36_MAMBA_SPEC=1, mode align)
+    _PREFILL_CHECKPOINTS = False
 
     # QWEN36_SERVE_DEVICE_DECODE=0: supports_async_decode=False -- the decode inputs (host-packed RoPE, [B,1] token
     # input) are reloaded every step, so there is no on-device token/position continuity, and replaying a stale
@@ -282,6 +350,8 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
         bs = int(cc.block_size)
         # Mode none: one state block per request and group, as upstream resolves mamba_block_size = max_model_len.
         max_len = int(vllm_config.model_config.max_model_len)
+        # A multimodal prompt writes its checkpoints too (MTPSpecEngine._paged_plan), so images and video keep them on.
+        ckpt = mode == "align" and cls._PREFILL_CHECKPOINTS
         return qwen36_kv_cache_spec(
             tc,
             _mesh_tp(),
@@ -290,6 +360,9 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
             num_speculative_blocks=cls._SPEC_K if cls._ENABLE_MTP else 0,
             mamba_cache_mode=mode,
             mamba_block_size=-(-max_len // bs) * bs if mode == "none" else bs,
+            # Block-aligned offsets: the prefill reaches a checkpoint state by ending a segment there, and a segment
+            # must start on a KV block boundary (paged_fill_cache writes from the first row of its first block).
+            prefill_checkpoint_alignment=bs if ckpt else None,
         )
 
     @classmethod
@@ -576,11 +649,12 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
         # the next decode must be a commanded reload (_decode_forward_resident refuses a steady step).
         self._decode_bucket_last = None
         model = self.model[0]
+        mamba_state = kwargs.pop("mamba_state", None)
         state_block_ids = None
         if getattr(self, "_gdn_blocks", None) is not None:
-            state_block_ids = kwargs.pop("state_block_ids_per_layer", None)
-            if state_block_ids is None:
-                raise ValueError("QWEN36_MAMBA_SPEC prefill needs state_block_ids_per_layer from the plugin")
+            if mamba_state is None:
+                raise ValueError("QWEN36_MAMBA_SPEC prefill needs mamba_state from the plugin")
+            state_block_ids = _gdn_step_blocks(mamba_state, [i for i, _ in self._gdn_blocks.layers])
             kwargs.pop("page_tables_per_layer", None)  # page_table is the attention group's table
         if model.num_devices > 1 and model.args.max_batch_size > 1:
             # Batched prefill into decode slots; multimodal users get their vision tokens lazily, per user.
@@ -683,9 +757,9 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
                      still the FULL prompt / page-table row). Resumed from the model's GDN snapshots when available.
         visual_kwargs: the vLLM kwargs carrying per-request pixel_values[u] / image_grid_thw[u] (and the *_videos
                      variants); a user with real visual data is prefilled multimodally (prefix cache bypassed).
-        state_block_ids: QWEN36_MAMBA_SPEC: the plugin's state_block_ids_per_layer; a user with start_pos > 0 resumes
-                     from its block, and each user's GDN state is copied from its decode row into its block after the
-                     prefill.
+        state_block_ids: QWEN36_MAMBA_SPEC: (the block of user u in each KV cache group, {GDN layer: its group}) from
+                     the plugin's mamba_state (_gdn_step_blocks); a user with start_pos > 0 resumes from its block, and
+                     each user's GDN state is copied from its decode row into its block after the prefill.
         Returns ([N, 1, vocab] host logits, [N] zero rope_deltas — the M-RoPE delta is kept model-side per slot).
         """
         N = tokens.shape[0]
@@ -712,7 +786,7 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
                 vision_list = vl
         gdn_resume = None
         if state_block_ids is not None:
-            self._gdn_blocks.set_prefill_blocks(state_block_ids)
+            self._gdn_blocks.set_prefill_blocks(*state_block_ids)
             gdn_resume = self._gdn_blocks
         host_logits = model.prefill_paged_slots(
             token_ids_list,
@@ -724,7 +798,7 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
             gdn_resume=gdn_resume,
         )
         if state_block_ids is not None:
-            self._gdn_blocks.write_prefill_rows(state_block_ids, empty_slots)
+            self._gdn_blocks.write_prefill_rows(*state_block_ids, empty_slots)
         if ns_commit is not None:
             self._ns_phys, self._ns_owned = ns_commit
         logits = torch.cat([hl.reshape(1, 1, -1) for hl in host_logits], dim=0)  # [N, 1, vocab]
@@ -883,9 +957,11 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
         if tokens is None:
             raise TypeError("decode_forward requires tokens")
         start_pos = kwargs.get("start_pos")
+        mamba_state = kwargs.pop("mamba_state", None)  # None in warmup: rows keep block 0
         state_block_ids = None
         if getattr(self, "_gdn_blocks", None) is not None:
-            state_block_ids = kwargs.pop("state_block_ids_per_layer", None)  # None in warmup: rows keep block 0
+            if mamba_state is not None:
+                state_block_ids = _gdn_step_blocks(mamba_state, [i for i, _ in self._gdn_blocks.layers])
             kwargs.pop("page_tables_per_layer", None)
         ns_phys = None
         if _ns_slotmap_enabled():
@@ -935,7 +1011,7 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
 
         model = self.model[0]
         if state_block_ids is not None:
-            self._gdn_blocks.set_decode_blocks(state_block_ids, row_of=ns_phys)
+            self._gdn_blocks.set_decode_blocks(*state_block_ids, row_of=ns_phys)
         # Batched fused GDN decode: make the conv state of this width class valid FIRST (in-place sync when the width
         # class changed since the last call; no-op otherwise / when the fused path is off). After this the conv tag is
         # the single needed format, so the remap below gathers only that one (both ops are row-wise: order-free).
@@ -1131,7 +1207,7 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
             # Round to a multiple of 32: paged/chunked SDPA needs the page-table stick % 32 == 0.
             num_blocks = math.ceil(int(kv_cache[0][0].shape[0]) / 32) * 32
         else:
-            num_blocks = math.ceil(_PREFILL_WARMUP_BUCKET / kv_block_size())
+            num_blocks = math.ceil(_PREFILL_WARMUP_BUCKET / paged_block_size(model))
         page_table = torch.arange(num_blocks, dtype=torch.int32).reshape(1, num_blocks)
         # Batched serving (max_num_seqs>1): the decode buffers are [B,...], but prefill runs B=1. Bind
         # the PERSISTENT B=1 GDN prefill scratch and capture the chunk trace against IT, so long prompts
@@ -1248,6 +1324,63 @@ def _mesh_tp(default=4):
         return default
 
 
+class _SpecStepClock:
+    """QWEN36_SPEC_STEP_TIMING=1: mean host wall time per spec decode step spent inside the model (decode_forward and
+    propose_draft_tokens) and between those calls (the plugin runner and the scheduler), logged every 256 steps. A
+    gap over one second (an idle server) is not counted."""
+
+    def __init__(self):
+        self.on = os.environ.get("QWEN36_SPEC_STEP_TIMING", "0") == "1"
+        self.inside = self.outside = 0.0
+        self.n = 0
+        self.t0 = self.last_exit = None
+
+    def enter(self):
+        import time
+
+        self.t0 = time.perf_counter()
+        if self.last_exit is not None and self.t0 - self.last_exit < 1.0:
+            self.outside += self.t0 - self.last_exit
+
+    def exit(self, step_end):
+        import time
+
+        t = time.perf_counter()
+        self.inside += t - self.t0
+        self.last_exit = t
+        if step_end:
+            self.n += 1
+            if self.n % 256 == 0:
+                logger.info(
+                    f"[spec step timing] {self.n} steps: inside the model {1e3 * self.inside / 256:.2f} ms/step, "
+                    f"runner and scheduler {1e3 * self.outside / 256:.2f} ms/step"
+                )
+                self.inside = self.outside = 0.0
+
+
+_SPEC_STEP_CLOCK = _SpecStepClock()
+
+
+def _spec_step_timed(step_end):
+    def deco(fn):
+        import functools
+
+        @functools.wraps(fn)
+        def wrap(self, *a, **k):
+            clk = _SPEC_STEP_CLOCK
+            if not clk.on:
+                return fn(self, *a, **k)
+            clk.enter()
+            try:
+                return fn(self, *a, **k)
+            finally:
+                clk.exit(step_end)
+
+        return wrap
+
+    return deco
+
+
 @MULTIMODAL_REGISTRY.register_processor(
     Qwen3VLMultiModalProcessor, info=TT_Qwen3_5SpecProcessingInfo, dummy_inputs=Qwen3VLDummyInputsBuilder
 )
@@ -1255,6 +1388,7 @@ class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
     """Plugin spec-decode contract adapter (B * (K+1) <= 32) over the MTP engine in tt/spec_engine.py."""
 
     _ENABLE_MTP = True
+    _PREFILL_CHECKPOINTS = True
     _SPEC_K = int(os.environ.get("QWEN36_SPEC_K", "3"))  # vLLM warmup does not carry K
     _SUPPORTED_K = (3, 7, 11)
     # decode_forward is overridden and does not execute the reload commands (DECODE_RELOAD_CONTRACT legacy mode)
@@ -1348,6 +1482,95 @@ class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
             raise RuntimeError(f"Qwen36MTPContractForCausalLM: {conflict}")
         return super().allocate_kv_cache(kv_cache_shape, dtype, num_layers)
 
+    def allocate_kv_cache_per_layer(self, per_layer_specs):
+        """vllm-tt-plugin per-layer allocation. MambaSpec entries (QWEN36_MAMBA_SPEC=1, num_speculative_blocks = K): every
+        GDN layer keeps its state in its layer slot's K and V buffers, 1 + K blocks per request window
+        (tt/spec_block_state.py)."""
+        from models.demos.blackhole.qwen36.tt.gdn_block_state import is_mamba_entry
+        from models.demos.blackhole.qwen36.tt.spec_block_state import SpecGdnBlockState
+
+        attn = [e for e in per_layer_specs if not is_mamba_entry(e)]
+        shape, dtype, _ = attn[0]
+        if any((tuple(s), d) != (tuple(shape), dtype) for s, d, _ in attn[1:]):
+            raise NotImplementedError("qwen36 allocates one KV shape for every attention layer")
+        kv = self.allocate_kv_cache(shape, dtype, len(attn))
+        model = self.model[0]
+        model._spec_blocks = None
+        if len(attn) < len(per_layer_specs):
+            if model.num_devices <= 1 or model.args.max_batch_size <= 1:
+                raise NotImplementedError(
+                    "QWEN36_MAMBA_SPEC (spec class) needs the batched TP engine (max_num_seqs > 1)"
+                )
+            if os.environ.get("QWEN36_SPEC_SLOTMAP", "1") == "0":
+                raise NotImplementedError("QWEN36_MAMBA_SPEC (spec class) needs QWEN36_SPEC_SLOTMAP=1")
+            vc = self._vllm_config_or_none()
+            cc = getattr(vc, "cache_config", None)
+            mode = getattr(cc, "mamba_cache_mode", "none") or "none"
+            model._spec_blocks = SpecGdnBlockState(
+                model,
+                per_layer_specs,
+                kv,
+                self._SPEC_K + 1,
+                cache_mode=mode,
+                mamba_block_size=int(getattr(cc, "block_size", 0) or 0) if mode == "align" else 0,
+                partial_prefix_hits=0
+                < int(getattr(cc, "prefix_match_unit", None) or 0)
+                < int(getattr(cc, "block_size", 0) or 0),
+            )
+            logger.info(
+                f"QWEN36_MAMBA_SPEC: GDN state in vLLM blocks, mode {mode}, "
+                f"{model._spec_blocks.layout.heads_in_k}/{model._spec_blocks.layout.nv} heads in K, "
+                f"{model._spec_blocks.G} GDN groups"
+            )
+        return kv
+
+    def zero_kv_cache_blocks(self, kv_cache=None, block_ids=()):
+        blocks = getattr(self.model[0], "_spec_blocks", None)
+        if blocks is None:
+            return super().zero_kv_cache_blocks(kv_cache, block_ids)
+        blocks.zero_blocks([int(b) for b in block_ids])
+
+    def copy_kv_cache_blocks(self, kv_cache=None, copies=()):
+        """vllm-tt-plugin block hook: (src, dst) whole-block copies in list order; a source that is a window column of a
+        row's latest verify also gets that column's conv history (SpecGdnBlockState.copy_blocks)."""
+        blocks = getattr(self.model[0], "_spec_blocks", None)
+        if blocks is None:
+            return super().copy_kv_cache_blocks(kv_cache, copies)
+        blocks.copy_blocks([(int(a), int(b)) for a, b in copies])
+
+    @staticmethod
+    def _gdn_windows(mamba_state, blocks, B):
+        """The engine's gdn_windows for a decode step (runner slots) from the plugin's mamba_state, in the group order
+        of ``blocks`` (SpecGdnBlockState): ([G] block windows [B, 1 + K], accepted counts [B], moves). ``moves`` is
+        None, or, on a chained step (the groups carry ``chain``), ([G] start blocks [B, 1 + K], [G] windows [B, 1 + K,
+        1 + K], [G] block copies [B, 1 + K, 2] or None when every entry is (0, 0)) indexed by the pending verify's
+        accepted count - 1."""
+        if mamba_state is None or mamba_state.accepted_counts is None:
+            raise ValueError("QWEN36_MAMBA_SPEC decode needs mamba_state with accepted_counts")
+        groups = _spec_mamba_groups(mamba_state, blocks)
+
+        def pad_rows(w):
+            out = torch.zeros((B,) + tuple(w.shape[1:]), dtype=torch.int64)
+            n = min(B, w.shape[0])
+            out[:n] = w[:n]
+            return out
+
+        out = [pad_rows(group.windows) for group in groups]
+        c = torch.ones(B, dtype=torch.int64)
+        cc = torch.as_tensor(mamba_state.accepted_counts).to(torch.int64).reshape(-1)
+        c[: min(B, cc.numel())] = cc[:B]
+        # A plugin without chained verifies (vllm-tt-plugin main) has no MambaGroupState.chain field.
+        chains = [getattr(group, "chain", None) for group in groups]
+        if len({ch is None for ch in chains}) > 1:
+            raise ValueError(f"mamba_state: chain in groups {[ch is not None for ch in chains]}, not in all or none")
+        moves = None
+        if chains[0] is not None:
+            cps = [pad_rows(ch.copies) for ch in chains]
+            if not any(bool((e[..., 0] != e[..., 1]).any()) for e in cps):  # (0, 0) everywhere at retention interval 0
+                cps = None
+            moves = ([pad_rows(ch.start_blocks) for ch in chains], [pad_rows(ch.windows) for ch in chains], cps)
+        return out, c, moves
+
     @classmethod
     def spec_plan(cls, vllm_config, max_num_seqs, requested_k):
         """Config-time plan; never raises and never touches devices."""
@@ -1367,10 +1590,11 @@ class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
             )
         if requested_k < k:
             return SpecReject(reason=f"requested_k={requested_k} < engine K={k}", supported_k=(k,))
+        # The engine takes vLLM's block size (the cache vLLM allocates); paged cache updates write whole 32-row tiles.
         bs = getattr(getattr(vllm_config, "cache_config", None), "block_size", None)
-        if bs is not None and int(bs) != kv_block_size():
+        if bs is not None and (int(bs) <= 0 or int(bs) % 32):
             return SpecReject(
-                reason=f"block_size={bs} unsupported; the engine serves QWEN36_KV_BLOCK_SIZE={kv_block_size()}",
+                reason=f"block_size={bs} unsupported; need a positive multiple of 32 (pass --block-size, e.g. 64)",
                 supported_k=(),
             )
         try:
@@ -1449,6 +1673,8 @@ class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
         exists (its first scratch bind can free spec buffers). Needs the batched B=1 scratch (max_batch_size > 1, TP).
         """
         model = self.model[0]
+        if getattr(model, "_spec_blocks", None) is not None:
+            return  # QWEN36_MAMBA_SPEC: prefix hits and later chunks resume from the request's vLLM block
         if not _spec_prefix_cache_enabled() or os.environ.get("QWEN36_PREFIX_CACHE", "1") != "1":
             return
         if not getattr(self, "_vllm_prefix_caching", True):
@@ -1529,6 +1755,16 @@ class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
             )
         eng = self._ensure_ready(kv_cache)
         model = self.model[0]
+        gdn = getattr(model, "_spec_blocks", None)
+        mamba_state = kwargs.pop("mamba_state", None)
+        if gdn is not None:
+            if mamba_state is None:
+                raise ValueError("QWEN36_MAMBA_SPEC prefill needs mamba_state from the plugin")
+            kwargs.pop("page_tables_per_layer", None)  # page_table is the attention group's table
+            ids, ckpt = _spec_prefill_blocks(mamba_state, gdn)
+            gdn.prefill_blocks = ids
+            gdn.set_prefill_checkpoints(ckpt, mamba_state.checkpoint_positions)
+        greq = (lambda i: {}) if gdn is None else (lambda i: {"gdn_req": i})
         slots = [int(x) for x in kwargs.get("empty_slots") or range(N)]
         table = self._table(page_table[:N])
         rows = []
@@ -1545,18 +1781,20 @@ class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
             vision_tokens = self._compute_vision_tokens(model, kwargs, i) if has_mm else None
             if nonfinal[i]:
                 assert starts is not None, "non-final prefill chunk without start_pos"
-                out = eng.prefill(slots[i], tokens[i, :L], table[i : i + 1], start_pos=starts[i], final=False)
+                out = eng.prefill(
+                    slots[i], tokens[i, :L], table[i : i + 1], start_pos=starts[i], final=False, **greq(i)
+                )
                 rows.append(out.float().reshape(-1))  # zero row: the plugin ignores a non-final chunk's output
                 continue
             if vision_tokens is not None:
                 # No prefix-cache resume: recompute from 0 (a preempted / resumed request may carry start_pos > 0).
                 out = eng.prefill(
-                    slots[i], tokens[i, :L], table[i : i + 1], start_pos=None, vision_tokens=vision_tokens
+                    slots[i], tokens[i, :L], table[i : i + 1], start_pos=None, vision_tokens=vision_tokens, **greq(i)
                 )
             elif starts is None:
-                out = eng.prefill(slots[i], tokens[i, :L], table[i : i + 1])
+                out = eng.prefill(slots[i], tokens[i, :L], table[i : i + 1], **greq(i))
             else:  # start_pos = num_computed_tokens (cached prefix, or a preemption resume)
-                out = eng.prefill(slots[i], tokens[i, :L], table[i : i + 1], start_pos=starts[i])
+                out = eng.prefill(slots[i], tokens[i, :L], table[i : i + 1], start_pos=starts[i], **greq(i))
             rows.append(out.float().reshape(-1))
         # Zero rope deltas, as the non-spec class: the plugin unpacks (logits, rope_deltas) for an M-RoPE model, and the
         # per-request delta is model-side (build_request_rope sets rope.rope_delta during the prefill).
@@ -1613,6 +1851,7 @@ class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
                 "supports_spec_device_mask is False: the engine has no mask traces (see the [spec_engine] mask trace log)"
             )
 
+    @_spec_step_timed(step_end=False)
     def decode_forward(self, *args, **kwargs):
         from vllm_tt_plugin.spec_decode import VerifyOutput, check_spec_side_tensors
 
@@ -1635,8 +1874,15 @@ class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
                 raise ValueError(
                     "decode_forward_begin takes no spec_sampling['mask']: pass the mask to decode_forward_finish"
                 )
+        gdn_kw = {}
+        models = getattr(self, "model", None)  # absent on the adapter tests' fakes
+        blocks = getattr(models[0], "_spec_blocks", None) if models else None
+        mamba_state = kwargs.pop("mamba_state", None)
+        if blocks is not None:
+            kwargs.pop("page_tables_per_layer", None)  # page_table is the attention group's table
+            gdn_kw["gdn_windows"] = self._gdn_windows(mamba_state, blocks, int(tokens.shape[0]))
         if narrow:
-            return self._decode_narrow(tokens, start_pos, page_table, kwargs, remap)
+            return self._decode_narrow(tokens, start_pos, page_table, kwargs, remap, **gdn_kw)
         num_valid_drafts = kwargs.pop("num_valid_drafts")
         accepted_counts = kwargs.pop("accepted_counts")
         spec_mode = kwargs.pop("spec_mode")
@@ -1686,6 +1932,7 @@ class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
             **({"defer_read": True} if defer_read else {}),
             **({} if chain_rows is None else {"chain_rows": chain_rows, "chain_tip": chain_tip}),
             **({} if not finishing_slots else {"finishing_slots": finishing_slots}),
+            **gdn_kw,
         )
         logits = res.logits if spec_mode == "logits" else None
         if split or (
@@ -1893,7 +2140,7 @@ class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
                         f"spec_sampling['penalties']['rebuild'][{slot}] needs 1-D int32 / int64 tensors, got {type(ids).__name__}"
                     )
 
-    def _decode_narrow(self, tokens, start_pos, page_table, kwargs, remap=None):
+    def _decode_narrow(self, tokens, start_pos, page_table, kwargs, remap=None, gdn_windows=None):
         """Ordinary [B, 1] decode step (no drafts) run as a 1-column verify; ``accepted_counts`` resolves a
         previous multi-token commit.
         Returns host float logits [B, 1, V]: the runner host-samples ``tt_out[rows, -1, :]``
@@ -1929,9 +2176,11 @@ class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
                 if kwargs.get("finishing_slots")
                 else {}
             ),
+            **({} if gdn_windows is None else {"gdn_windows": gdn_windows}),
         )
         return res.logits[:, :1].float()
 
+    @_spec_step_timed(step_end=True)
     def propose_draft_tokens(self, num_drafts, committed_tokens, committed_positions, accepted_counts, hidden=None):
         from vllm_tt_plugin.spec_decode import DraftOutput, check_spec_side_tensors
 

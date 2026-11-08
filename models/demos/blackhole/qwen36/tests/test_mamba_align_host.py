@@ -4,8 +4,10 @@
 
 A real TTScheduler (vllm-tt-plugin) over a real KVCacheManager schedules requests. The KV cache groups come from the
 model's own specs (tt/kv_cache_spec.qwen36_kv_cache_spec, 1 attention and 3 GDN groups of 16 layers). Each step, the
-plugin's MambaCacheGroups gives the state copies before the forward (begin_step) and each row's state block per group
-(step_inputs), the calls TTModelRunner makes. A ledger then plays the model:
+plugin's MambaCacheGroups gives the state copies before the forward (begin_step) and each row's state window per group
+(step_inputs), the calls TTModelRunner makes. The model's mamba_state keyword built from them goes through
+Qwen36ForCausalLM's conversion (qwen36_vllm._gdn_step_blocks), which maps the groups to the GDN layers by layer name.
+A ledger then plays the model:
 
 * block zeroing and (src, dst) copies as Qwen36ForCausalLM.zero_kv_cache_blocks / copy_kv_cache_blocks do them: whole
   blocks, in list order;
@@ -47,8 +49,9 @@ from vllm_tt_plugin.mamba_state import mamba_cache_groups  # noqa: E402
 from vllm_tt_plugin.scheduler import TTScheduler  # noqa: E402
 
 from models.demos.blackhole.qwen36.tests.test_kv_cache_spec_host import TEXT_CONFIG  # noqa: E402
-from models.demos.blackhole.qwen36.tt.kv_cache_spec import qwen36_kv_cache_spec  # noqa: E402
+from models.demos.blackhole.qwen36.tt.kv_cache_spec import gdn_layer_name, qwen36_kv_cache_spec  # noqa: E402
 from models.demos.blackhole.qwen36.tt.model import Qwen36Model  # noqa: E402
+from models.demos.blackhole.qwen36.tt.qwen36_vllm import _gdn_step_blocks  # noqa: E402
 
 MAX_NUM_SEQS = 4
 NUM_LAYERS = 64
@@ -73,6 +76,27 @@ _QWEN2 = {
 
 def _label(tokens):
     return hash(tuple(tokens))
+
+
+def plugin_windows(groups, tables, req_ids, num_computed, num_scheduled, num_rows):
+    """vllm-tt-plugin's MambaCacheGroups.step_inputs of one step: (each MambaSpec group's windows [num_rows, 1 + K] in
+    group_indices order, the start-state counts [num_rows] or None)."""
+    return groups.step_inputs(tables, req_ids, num_computed, num_scheduled, num_rows)
+
+
+def plugin_checkpoints(groups, checkpoints, req_ids, requests, num_rows):
+    """vllm-tt-plugin's MambaCacheGroups.checkpoint_inputs: (each MambaSpec group's checkpoint blocks [num_rows, W] in
+    group_indices order, the positions [num_rows, W])."""
+    return groups.checkpoint_inputs(checkpoints, req_ids, requests, num_rows)
+
+
+def mamba_state(groups, windows, rows, counts=None, checkpoints=None):
+    """The model's mamba_state keyword for ``rows`` of a step, from plugin_windows (``windows``, ``counts``) and, for a
+    prefill, plugin_checkpoints of those rows: vllm-tt-plugin's MambaCacheGroups.step_state."""
+    windows = [w[rows] for w in windows]
+    counts = None if counts is None else counts[rows]
+    blocks, positions = (None, None) if checkpoints is None else checkpoints
+    return groups.step_state(windows, counts, blocks, positions)
 
 
 class _Ledger:
@@ -152,6 +176,7 @@ class _Harness:
         )
         self.groups = mamba_cache_groups(self.kv.kv_cache_groups, cfg.cache_config, max_model_len)
         self.mamba = [i for i, g in enumerate(self.kv.kv_cache_groups) if isinstance(g.kv_cache_spec, MambaSpec)]
+        self.gdn_layers = [i for i in range(NUM_LAYERS) if gdn_layer_name(i) in specs]
         self.max_model_len = max_model_len
         self.ledger = _Ledger()
         self.req_states = {}
@@ -213,16 +238,16 @@ class _Harness:
                 ids = self.req_states[r].block_ids[g]
                 t[row, : len(ids)] = torch.tensor(ids, dtype=torch.int32)
             tables.append(t)
-        inputs = self.groups.step_inputs(
-            tables, req_ids, positions, out.num_scheduled_tokens, list(range(len(tables))), MAX_NUM_SEQS
-        )
+        windows, _ = plugin_windows(self.groups, tables, req_ids, positions, out.num_scheduled_tokens, MAX_NUM_SEQS)
+        state = mamba_state(self.groups, windows, list(range(len(req_ids))))
+        state_blocks, _ = _gdn_step_blocks(state, self.gdn_layers)
         sampled = []
         for row, r in enumerate(req_ids):
             request = self.scheduler.requests[r]
             nc, ns = self.req_states[r].num_computed_tokens, out.num_scheduled_tokens[r]
             tokens = list(request.all_token_ids)
             prefill = nc < request.num_prompt_tokens
-            blocks = [int(inputs.state_block_ids_per_layer[g][row, 0]) for g in self.mamba]
+            blocks = [int(b[row]) for b in state_blocks]
             assert 0 not in blocks, (r, nc, blocks)
             read = nc > 0
             if prefill and nc > 0:

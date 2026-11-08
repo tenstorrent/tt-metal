@@ -61,10 +61,11 @@ KV_BLOCK_SIZE_DEFAULT = 64
 
 
 def kv_block_size():
-    """QWEN36_KV_BLOCK_SIZE (default 64): tokens per paged KV block for the callers that size a cache or a page table
-    before one exists (demo and test allocations, the vLLM spec gate, the prefill warmup without a cache). Code that
-    holds a paged cache reads the block size from its shape (get_block_size), so this value only has to match the
-    cache that is allocated. A positive multiple of the 32-row tile: paged cache updates write whole tiles."""
+    """QWEN36_KV_BLOCK_SIZE (default 64): tokens per paged KV block for the runs without vLLM (the standalone demo and
+    the device tests) that size a cache or a page table before one exists. A vLLM launch does not need it: the vLLM
+    classes take vllm_config.cache_config.block_size (spec_plan) or the block size of the cache vLLM allocated
+    (paged_block_size), so --block-size alone sets it. Code that holds a paged cache reads the block size from its
+    shape (get_block_size). A positive multiple of the 32-row tile: paged cache updates write whole tiles."""
     bs = _env_int(KV_BLOCK_SIZE_ENV, KV_BLOCK_SIZE_DEFAULT)
     if bs <= 0 or bs % 32:
         raise ValueError(f"{KV_BLOCK_SIZE_ENV}={bs}: need a positive multiple of 32")
@@ -74,7 +75,10 @@ def kv_block_size():
 def mamba_spec_enabled():
     """QWEN36_MAMBA_SPEC (default "0"): the vLLM classes declare their KV cache layout to vLLM (get_kv_cache_spec): one
     FullAttentionSpec per attention layer and one MambaSpec per GDN layer, instead of the plugin's single
-    FullAttentionSpec. Off keeps the plugin's fallback."""
+    FullAttentionSpec. Off keeps the plugin's fallback. On, the spec class also declares prefill checkpoints in mode
+    align (get_kv_cache_spec) and applies the chained state moves of a chained verify (the chain of the mamba_state
+    groups), the prefill traces carry the in-replay GDN snapshots (prefill_intrace_snap_enabled), and the GDN block
+    writes and copies replay captured traces (SpecGdnBlockState._prepare_block_traces)."""
     return os.environ.get("QWEN36_MAMBA_SPEC", "0") == "1"
 
 
@@ -345,10 +349,13 @@ def prefill_intrace_snap_enabled():
     state re-packed by one more identity scan step), so
     such a saved snapshot differs in its low bits; the downstream prefill outputs were bit-identical in every device
     test (see the module docstring of prefill_plan.py). Needs the KDA conv (QWEN_GDN_CONV=kda) and the fused chunk op;
-    TP spec engine with B > 1 only. Read once (the traces capture whichever body is active at warm-up)."""
+    TP spec engine with B > 1 only. Read once (the traces capture whichever body is active at warm-up).
+    Also on with QWEN36_MAMBA_SPEC=1, for vLLM's prefill checkpoints: a checkpoint strictly inside a replay is written
+    from that replay's snapshot instead of ending a segment there (a later 16k chunk holds four checkpoints, and the
+    split cost about 0.5 s per chunk; _CheckpointSnapRun)."""
     global _PREFILL_INTRACE_SNAP
     if _PREFILL_INTRACE_SNAP is None:
-        _PREFILL_INTRACE_SNAP = os.environ.get("QWEN36_PREFILL_INTRACE_SNAP", "0") == "1"
+        _PREFILL_INTRACE_SNAP = os.environ.get("QWEN36_PREFILL_INTRACE_SNAP", "0") == "1" or mamba_spec_enabled()
     return _PREFILL_INTRACE_SNAP
 
 

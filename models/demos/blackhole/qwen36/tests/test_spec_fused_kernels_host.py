@@ -75,17 +75,21 @@ def emulate_accept(ids, tok, aux, pt_rows, B, K, W, nb):
     return w(pk), w(rs), w(rr)
 
 
-def emulate_chain(res, prev_aux, drafts, ovr, B, K, Nv, W_v, W_a):
-    """spec_chain_fused.cpp on host words: (tok [R], vaux [3, W_v], next aux [7, W_a]) as int64 bit patterns."""
+def emulate_chain(res, prev_aux, drafts, ovr, B, K, Nv, W_v, W_a, pages=None, G=0):
+    """spec_chain_fused.cpp on host words: (tok [R], vaux [2 + max(G, 1), W_v], next aux [7, W_a]) as int64 bit
+    patterns. ``pages`` (G > 0): the [B, T*G*Nv] start-page table words."""
     T, R = K + 1, B * (K + 1)
+    pg = None if pages is None else torch.as_tensor(pages).to(torch.int64).tolist()
     rs = [[_s32(x) for x in row] for row in torch.as_tensor(res).tolist()]
     pa = [[_s32(x) for x in row] for row in torch.as_tensor(prev_aux).tolist()]
     o = [[_s32(x) for x in row] for row in torch.as_tensor(ovr).tolist()]
     dr = [[int(x) for x in row] for row in torch.as_tensor(drafts).tolist()]  # [B][K]
     rows_m1, parity = o[5][2] - 1, o[9][0]
-    tok, pos, ridx, ctrl = [0] * R, [0] * W_v, [0] * W_v, [0] * W_v
+    tok, pos, ridx = [0] * R, [0] * W_v, [0] * W_v
+    ctrls = [[0] * W_v for _ in range(max(G, 1))]
     naux = [[0] * W_a for _ in range(7)]
-    ctrl[0] = _u32(parity)
+    for ctrl in ctrls:
+        ctrl[0] = _u32(parity)
     for u in range(B):
         nv, act, mask, cnt = o[0][u], o[1][u], o[6][u], rs[1][u]
         nm, m = 1 - mask, cnt - 1
@@ -98,9 +102,16 @@ def emulate_chain(res, prev_aux, drafts, ovr, B, K, Nv, W_v, W_a):
             tok[r] = _u32((tdev * nm + o[7][r] * mask) * act)
             pos[r] = _u32(p0n + j)
             ridx[r] = _u32(_rope_row(p0n + j, o[10][u], rows_m1))
-        ctrl[1 + u] = _u32(mi)
-        for h in range(Nv):
-            ctrl[1 + B + u * Nv + h] = _u32((mi * B + u) * Nv + h)
+        if G == 0:
+            ctrls[0][1 + u] = _u32(mi)
+            for h in range(Nv):
+                ctrls[0][1 + B + u * Nv + h] = _u32((mi * B + u) * Nv + h)
+        else:
+            col = mi if 0 <= mi < T else 0
+            for g in range(G):
+                ctrls[g][1 + u] = _u32(mi)
+                for h in range(Nv):
+                    ctrls[g][1 + B + u * Nv + h] = pg[u][col * G * Nv + g * Nv + h] & 0xFFFFFFFF
         naux[4][u] = p0n
     for i in range(W_a):
         for row in range(4):
@@ -110,7 +121,7 @@ def emulate_chain(res, prev_aux, drafts, ovr, B, K, Nv, W_v, W_a):
         naux[5][i] = o[5][i]
         naux[6][i] = o[10][i]
     w = lambda x: torch.as_tensor(x, dtype=torch.int64) & 0xFFFFFFFF
-    return w(tok), w([pos, ridx, ctrl]), w(naux)
+    return w(tok), w([pos, ridx, *ctrls]), w(naux)
 
 
 @pytest.mark.parametrize("mixed", [False, True], ids=["common_delta", "row_deltas"])
@@ -151,6 +162,37 @@ def test_chain_mirror_matches_reference(mixed):
             assert torch.equal(naux, ra.to(torch.int64) & 0xFFFFFFFF), f"next aux B={B} K={K} Nv={Nv} case {i}"
             n += 1
     assert n >= 1000, n
+
+
+@pytest.mark.parametrize("G", [1, 3])
+def test_chain_mirror_matches_reference_with_block_pages(G):
+    """QWEN36_MAMBA_SPEC: the kernel's per-group ctrl pages (start pages read from the pages table at column mi') equal
+    chain_reference with ring_idx, the op graph's twin."""
+    from models.demos.blackhole.qwen36.tt.spec_chain import chain_reference
+
+    n = 0
+    for B, K, Nv in CHAIN_SHAPES:
+        T, R = K + 1, B * (K + 1)
+        g = torch.Generator().manual_seed(91 * B + 3 * K + Nv + G)
+        W_v = -(-max(R, spec_ctrl_words(B, Nv)) // 32) * 32
+        W_a = -(-max(B, 5) // 32) * 32
+        for i in range(40):
+            c = chain_case(g, B, K, Nv, i % 2, mixed=False)
+            heads = torch.randint(1, 1 << 23, (B, T, G, Nv), generator=g)  # head pages below 2^24, as the guard keeps
+            pages = heads.reshape(B, -1)
+            ring_idx = [heads[:, :, gg, :].reshape(B, T * Nv) for gg in range(G)]
+            rt, rv, ra = chain_reference(
+                c["res"], c["drafts"], c["prev_aux"], c["ovr"], B=B, K=K, Nv=Nv, rope_rows=c["rope_rows"],
+                ctrl_words=spec_ctrl_words(B, Nv), ring_idx=ring_idx,
+            )  # fmt: skip
+            tok, vaux, naux = emulate_chain(
+                c["res"], c["prev_aux"], c["drafts"], c["ovr"], B, K, Nv, W_v, W_a, pages, G
+            )
+            assert torch.equal(tok, rt.to(torch.int64) & 0xFFFFFFFF), (B, K, Nv, i)
+            assert torch.equal(vaux, rv.to(torch.int64) & 0xFFFFFFFF), (B, K, Nv, i)
+            assert torch.equal(naux, ra.to(torch.int64) & 0xFFFFFFFF), (B, K, Nv, i)
+            n += 1
+    assert n >= 100, n
 
 
 def _accept_plan(nb, n_cores, grid=(11, 10)):

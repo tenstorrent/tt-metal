@@ -182,30 +182,34 @@ class GdnBlockState:
             ps.banks * _first_row(b, ps.bank_bytes_v, FP32_PAGE_BYTES),
         )
 
-    def _block_ids(self, state_block_ids_per_layer, i, n):
-        t = state_block_ids_per_layer[i]
-        assert t is not None, f"layer {i} is a GDN layer but has no state block ids"
-        return [int(x) for x in t.reshape(-1)[:n].tolist()]
+    @staticmethod
+    def _block_ids(blocks, g, n):
+        return [int(x) for x in blocks[g].reshape(-1)[:n].tolist()]
 
-    def set_decode_blocks(self, state_block_ids_per_layer, row_of=None):
-        """Point device row d of every GDN layer at its request's block. ``row_of[i]`` = device row of submitted row i
-        (None = identity); rows no request occupies point at block 0, vLLM's null block. Copies only changed indices."""
-        built = {}  # the layers of one KV cache group share block ids and page geometry: one host index for all
+    def set_decode_blocks(self, blocks, group_of, row_of=None):
+        """Point device row d of every GDN layer at its request's block. ``blocks``: per KV cache group, int [R]
+        (entry i = the block of submitted row i); ``group_of``: {GDN layer index: its group's index in ``blocks``};
+        ``row_of[i]`` = device row of submitted row i (None = identity). Rows no request occupies point at block 0,
+        vLLM's null block. Copies only changed indices."""
+        rows = []
+        for g in range(len(blocks)):
+            row = [0] * self.bmax
+            for r, b in enumerate(self._block_ids(blocks, g, self.bmax)):
+                row[r if row_of is None else row_of[r]] = b
+            rows.append(tuple(row))
+        built = {}  # the layers of one group share its blocks: one host index per group and page geometry
         for i, dn in self.layers:
-            ids = self._block_ids(state_block_ids_per_layer, i, self.bmax)
-            blocks = [0] * self.bmax
-            for r, b in enumerate(ids):
-                blocks[r if row_of is None else row_of[r]] = b
-            key = tuple(blocks)
+            g = group_of[i]
+            key = rows[g]
             prev = self._host_idx.get(i)
             if prev is not None and prev[0] == key:
                 continue
             ps = dn._paged_state
-            geom = (ps.banks, ps.bank_bytes_k, ps.bank_bytes_v, ps.heads_k, ps.rec_pages_k, ps.hist_pages)
-            geom += (ps.hist_first, dn.Nv, dn.Dk * dn.Dv // 1024, key)
+            geom = (g, ps.banks, ps.bank_bytes_k, ps.bank_bytes_v, ps.heads_k, ps.rec_pages_k, ps.hist_pages)
+            geom += (ps.hist_first, dn.Nv, dn.Dk * dn.Dv // 1024)
             host = built.get(geom)
             if host is None:
-                host = built[geom] = self._index_host(ps, dn, blocks)
+                host = built[geom] = self._index_host(ps, dn, list(key))
             ttnn.copy_host_to_device_tensor(host, ps.idx)
             # Held until the index changes again: the copy may read the host tensor after this call returns.
             self._host_idx[i] = (key, host)
@@ -223,12 +227,13 @@ class GdnBlockState:
             host, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh)
         )
 
-    def write_prefill_rows(self, state_block_ids_per_layer, rows):
+    def write_prefill_rows(self, blocks, group_of, rows):
         """Copy device row rows[u] of every GDN layer's decode buffers (the state prefill just wrote, packed for the
-        row's parity) into the block of prefilled request u."""
+        row's parity) into the block of prefilled request u (``blocks`` and ``group_of`` as for set_decode_blocks)."""
         self.model.prepare_gdn_decode_width(self.bmax)
+        ids_of = [self._block_ids(blocks, g, len(rows)) for g in range(len(blocks))]
         for i, dn in self.layers:
-            ids = self._block_ids(state_block_ids_per_layer, i, len(rows))
+            ids = ids_of[group_of[i]]
             ps = dn._paged_state
             nv, dk, dv, nr = dn.Nv, dn.Dk, dn.Dv, dn.Nv * 4
             halves, hk2 = 2 * nv, 2 * ps.heads_k
@@ -299,9 +304,10 @@ class GdnBlockState:
                     )
                     ttnn.deallocate(halves)
 
-    def set_prefill_blocks(self, state_block_ids_per_layer):
-        """The state block ids of this prefill step (row u = prefilled request u), for restore()."""
-        self._prefill_ids = state_block_ids_per_layer
+    def set_prefill_blocks(self, blocks, group_of):
+        """The state blocks of this prefill step (entry u = prefilled request u; ``blocks`` and ``group_of`` as for
+        set_decode_blocks), for restore()."""
+        self._prefill_ids = (blocks, group_of)
 
     def restore(self, u):
         """Load the state block of prefilled request u into the bound B=1 prefill scratch of every GDN layer
@@ -309,8 +315,9 @@ class GdnBlockState:
         The block holds the state after exactly start_pos tokens: the runner copied a prefix hit's boundary state into
         it (mamba_cache_mode "align"), or the previous chunk of this prompt wrote it. Same contract as
         GdnPrefixStateCache.restore (Qwen36Model._prefill_with_prefix_cache calls either)."""
+        blocks, group_of = self._prefill_ids
         for i, dn in self.layers:
-            blk = self._block_ids(self._prefill_ids, i, u + 1)[u]
+            blk = int(blocks[group_of[i]].reshape(-1)[u])
             if blk <= 0:
                 raise ValueError(f"layer {i}: resumed prefill of request {u} has the null block {blk}")
             ps = dn._paged_state
