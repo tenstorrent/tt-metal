@@ -117,6 +117,60 @@ def _s1_pin_strength(
     return min(s1s, _keyframe_s1_strength(s1_height))
 
 
+# Ref+fl end guide (LTX_REF_FL_END_GUIDE; sulphur task #3360): x0 pull toward the given last frame for the latent
+# frames before it, nearest first. "1" takes this default; "a,b,..." sets them; unset, "" or "0" is off.
+REF_FL_END_GUIDE_DEFAULT = (0.5, 0.25)
+
+
+def _ref_fl_end_guide_strengths(raw: str | None) -> tuple[float, ...]:
+    """Guide strengths from LTX_REF_FL_END_GUIDE (see REF_FL_END_GUIDE_DEFAULT), each clamped to [0, 1];
+    () is off."""
+    raw = (raw or "").strip()
+    if raw in ("", "0", "false", "False"):
+        return ()
+    if raw in ("1", "true", "True"):
+        return REF_FL_END_GUIDE_DEFAULT
+    return tuple(max(0.0, min(1.0, float(v))) for v in raw.split(",") if v.strip())
+
+
+def apply_ref_fl_end_guide(clean_latent, denoise_mask, pin_rows, conds, latent_frames, hw, strengths):
+    """Spread a ref+fl gen's last frame over the latent frames before it (task #3360).
+
+    On the full schedule the last latent frame is pinned hard and the frame before it is free, so the clip
+    runs its own way and then snaps to the given last frame in its last ~12 pixel frames (mistic-ic: 2.0-2.5x
+    the clip's median frame step there, against 0.9-1.5x in the source ref2v). Here latent frame
+    ``latent_frames - 1 - k`` (k = 1, 2, ...) gets the last frame's latent as its clean target at
+    ``strengths[k - 1]``: each step's x0 estimate is blended toward it by that much (``denoise_mask`` =
+    1 - strength). The rows stay out of ``pin_rows``, so their AdaLN timestep is the free sigma and their
+    start noise is a free frame's (the caller noises with ``guide_rows`` reset to 1). A frame already
+    conditioned (an interior keyframe) is left alone. Edits ``clean_latent``/``denoise_mask`` in place and
+    returns the guide rows ``[N]`` bool, or None when there is no last-frame cond or no strength."""
+    last = latent_frames - 1
+    lat = next((c[1] for c in conds if c[0] == last), None)
+    if lat is None or not any(strengths):
+        return None
+    tokens = lat.float().permute(0, 2, 3, 4, 1).reshape(1, -1, clean_latent.shape[-1])
+    guide_rows = torch.zeros(pin_rows.shape[0], dtype=torch.bool)
+    for k, strength in enumerate(strengths, start=1):
+        off = (last - k) * hw
+        if last - k < 1 or strength <= 0 or bool(pin_rows[off : off + hw].any()):
+            continue
+        clean_latent[:, off : off + hw, :] = tokens
+        denoise_mask[:, off : off + hw, :] = 1.0 - strength
+        guide_rows[off : off + hw] = True
+    return guide_rows if bool(guide_rows.any()) else None
+
+
+def ref_fl_end_guide_step_mask(denoise_mask, guide_rows, sigma_next, sigma_start):
+    """Per-step denoise mask with the end guide annealed: a guide row's pull is its strength times
+    sigma_next / sigma_start, so it steers the early steps and the last step (sigma_next = 0) keeps the
+    model's own x0 (no latent cross-fade toward the last frame). Pinned and free rows are unchanged."""
+    scale = max(0.0, min(1.0, sigma_next / sigma_start)) if sigma_start > 0 else 0.0
+    mask = denoise_mask.clone()
+    mask[:, guide_rows, :] = 1.0 - (1.0 - denoise_mask[:, guide_rows, :]) * scale
+    return mask
+
+
 def _keyframe_s1_sigmas(latent_frames: int) -> list[float]:
     """Trajectory-aligned S1 nodes for a non-frame-0 keyframe, scaled to the active tier's budget.
 
@@ -353,6 +407,8 @@ class _I2VConditioning:
     # their main-grid frame stays free. anchor_frame_indices lists each anchor's target latent frame.
     anchor_frame_indices: list[int] = field(default_factory=list)
     video_N_real_ext: int = 0  # grid + n_anchor*hw; == grid length when no append
+    # Ref+fl end guide (task #3360): free rows whose x0 is pulled toward the last frame; None = no guide.
+    guide_rows: torch.Tensor | None = None
 
 
 class LTXDistilledPipeline(LTXPipeline):
@@ -1517,6 +1573,15 @@ class LTXDistilledPipeline(LTXPipeline):
                 latent_w,
                 append_interior=append_interior,
             )
+        if has_ref and image_conds:
+            # Ref+fl end guide (task #3360): values-only edit of the trace-baked mask/clean buffers.
+            guide = _ref_fl_end_guide_strengths(os.environ.get("LTX_REF_FL_END_GUIDE"))
+            if guide:
+                i2v.guide_rows = apply_ref_fl_end_guide(
+                    i2v.clean_latent, i2v.denoise_mask, i2v.pin_rows, image_conds, latent_frames, hw, guide
+                )
+                if i2v.guide_rows is not None:
+                    logger.info(f"  ref+fl end guide: {guide} on {int(i2v.guide_rows.sum()) // hw} latent frame(s)")
         video_N_real = i2v.video_N_real_ext
         video_N = self._sp_pad_len(video_N_real)
         anchor_frames = i2v.anchor_frame_indices
@@ -1593,7 +1658,11 @@ class LTXDistilledPipeline(LTXPipeline):
                 noise_v, noise_a = self._seeded_noise(seed, v_shape, (B, audio_N_real, self.in_channels))
             else:
                 (noise_v,) = self._seeded_noise(seed, v_shape)
-            video_lat_real = self._noise_video_latent(base_v, i2v.denoise_mask, sigmas[0], noise_v)
+            init_mask = i2v.denoise_mask
+            if i2v.guide_rows is not None:  # guide rows start as free frames; only the x0 blend pulls them
+                init_mask = init_mask.clone()
+                init_mask[:, i2v.guide_rows, :] = 1.0
+            video_lat_real = self._noise_video_latent(base_v, init_mask, sigmas[0], noise_v)
 
             if video_N > video_N_real:
                 video_lat = torch.zeros(B, video_N, self.in_channels)
@@ -1676,6 +1745,15 @@ class LTXDistilledPipeline(LTXPipeline):
             state._tt_timestep.update(
                 torch.tensor([sigma]).reshape(1, 1, B, 1) * 1000.0, traced, device=self.mesh_device
             )
+            if image_cond and i2v.guide_rows is not None:  # annealed end guide: values-only mask update
+                step_mask = ref_fl_end_guide_step_mask(
+                    i2v.denoise_mask, i2v.guide_rows, sigma_next, sigmas[0].item()
+                )
+                mask_host = torch.ones(1, 1, video_N, 1)
+                mask_host[:, :, :video_N_real, :] = step_mask[0, :, 0].unsqueeze(-1)
+                state._tt_i2v_mask.update(
+                    mask_host, traced, mesh_axes=[None, None, sp_axis, None], device=self.mesh_device
+                )
             video_ts_pair_tt = video_pin_mask_tt = None
             if needs_video_ts:
                 # Per-token timestep has 2 values (pinned frame-0 vs. sigma): pass the (2,) pair +
