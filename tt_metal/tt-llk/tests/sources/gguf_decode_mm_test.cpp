@@ -12,7 +12,8 @@
 // GGUF_MM = false: one decoded Float32 [K][N] tile out per (nt, kt).
 // GGUF_MM = true: one Float32 output tile per N tile, D += in0[kt] * W[kt][nt] over the K tiles. DEST tile 0 is the
 // accumulator; the K tiles alternate between two slot sets (decoded tile, page, decoder scratch) 1..3 and 4..6, so the
-// next page is unpacked while this one decodes, as the matmul kernel these LLKs come from does.
+// next page is unpacked while this one decodes, as the matmul kernel these LLKs come from does; a phase 2 whose stores
+// are not arbitrated against the unpacker's DEST writes (sfpu_gguf_decode_body_unarbitrated) waits for the copy.
 
 #include <cstdint>
 
@@ -38,6 +39,13 @@ constexpr ckernel::gguf::PageLayout test_layout()
 }
 
 constexpr ckernel::gguf::PageLayout LAYOUT = test_layout();
+
+// MXFP4 and NVFP4 pages hold block-float codes, unpacked to the 16-bit DEST rows that the decoded tile's rows address
+// (Dst16b rows 64 tile), so the decoded tile is not tile 0: tile 1 (codes in tile 0), with matmul tiles 3 and 5
+// (codes in tiles 1 and 2); the page follows.
+constexpr bool BFP                = GGUF_FMT == ckernel::gguf::MXFP4 || GGUF_FMT == ckernel::gguf::NVFP4;
+constexpr std::uint32_t BFP_CODES = 1024, BFP_EXP = 15;
+constexpr std::uint32_t OUT                = BFP ? 1 : 0; // the decoded tile without matmul (GGUF_FMT == 0: the copied tile)
 constexpr std::uint32_t PAGE_BYTES         = LAYOUT.rows * 64;
 constexpr std::uint32_t PAGE_FACES         = LAYOUT.rows / 16;
 constexpr std::uint32_t PAGES_PER_N_TILE   = GGUF_KT / LAYOUT.page_tiles;
@@ -50,6 +58,7 @@ constexpr std::uint32_t OUT_FORMAT  = ckernel::to_underlying(DataFormat::Float32
 
 static_assert(dest_sync == ckernel::DstSync::SyncFull && is_fp32_dest_acc_en, "gguf_decode_mm_test: full sync, 32-bit DEST");
 static_assert(GGUF_PAGE_ROWS % 64 == 0 && (GGUF_PAGE_ROWS == 0 || GGUF_MM), "gguf_decode_mm_test: page rows offset with matmul only");
+static_assert(!BFP || GGUF_PAGE_ROWS == 0, "gguf_decode_mm_test: no page rows offset with block-float codes");
 
 inline std::uint32_t page_address(const std::uint32_t pages_base, const std::uint32_t nt, const std::uint32_t kt)
 {
@@ -75,8 +84,16 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t pages_base = params.buffer_A[0];
     const auto unpack_page         = [&](const std::uint32_t nt, const std::uint32_t kt)
     {
-        _llk_unpack_A_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, true>(
-            L1_ADDRESS(page_address(pages_base, nt, kt)), PAGE_FORMAT, PAGE_FORMAT);
+        if constexpr (BFP)
+        {
+            _llk_unpack_dest_srca_mm_codes_page_(
+                L1_ADDRESS(page_address(pages_base, nt, kt)), BFP_CODES, BFP_EXP, LAYOUT.scale_offset, 16, FACE_R_DIM * FACE_C_DIM - 1);
+        }
+        else
+        {
+            _llk_unpack_A_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, true>(
+                L1_ADDRESS(page_address(pages_base, nt, kt)), PAGE_FORMAT, PAGE_FORMAT);
+        }
     };
     for (std::uint32_t nt = 0; nt < GGUF_NT; nt++)
     {
@@ -127,19 +144,48 @@ inline void zero_tile(const std::uint32_t dst_index)
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
 }
 
+// Only the matmul runs copy the next page beside a decode; the others use the decoders for no DEST writer beside.
+constexpr bool BESIDE_UNPACK = GGUF_MM;
+
 // group: the first tile of its group decoded at dst_index (sfpu_gguf_decode_group). GGUF_PAGE_ROWS (a multiple of
-// 64): the same DEST rows, addressed GGUF_PAGE_ROWS / 64 tiles lower with that row offset.
-template <bool decode>
+// 64): the same DEST rows, addressed GGUF_PAGE_ROWS / 64 tiles lower with that row offset. PARAMS, BODY: the phases
+// to run (the group step goes with phase 1).
+template <bool decode, bool PARAMS = true, bool BODY = true>
 inline void decode_tile(const std::uint32_t dst_index, const std::uint32_t kt, const bool group)
 {
     if constexpr (decode)
     {
         const std::uint32_t base = dst_index - GGUF_PAGE_ROWS / 64;
-        if (group)
+        if (PARAMS && group)
         {
             sfpu::sfpu_gguf_decode_group<GGUF_FMT>(base, GGUF_PAGE_ROWS);
         }
-        sfpu::sfpu_gguf_decode_tile<GGUF_FMT>(base, kt % LAYOUT.group_tiles, GGUF_PAGE_ROWS);
+        sfpu::sfpu_gguf_decode_tile<GGUF_FMT, PARAMS, BODY, BESIDE_UNPACK>(base, kt % LAYOUT.group_tiles, GGUF_PAGE_ROWS);
+    }
+}
+
+constexpr bool body_after_copy()
+{
+    if constexpr (GGUF_FMT == 0)
+    {
+        return false;
+    }
+    else
+    {
+        return sfpu::sfpu_gguf_decode_body_unarbitrated<GGUF_FMT, BESIDE_UNPACK>();
+    }
+}
+
+// The unpack-to-DEST of the page into tile `page`, with its codes under the rows of tile `dec` when BFP.
+inline void page_post(const std::uint32_t page, const std::uint32_t dec)
+{
+    if constexpr (BFP)
+    {
+        _llk_math_dest_srca_mm_codes_post_(page, (dec << 6) + 2 * get_dest_buffer_base());
+    }
+    else
+    {
+        _llk_math_dest_srca_mm_unpack_post_(page);
     }
 }
 
@@ -148,7 +194,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_math_pack_sync_init_<dest_sync, is_fp32_dest_acc_en>();
     _llk_math_hw_configure_<is_fp32_dest_acc_en>(OUT_FORMAT, IN0_FORMAT);
     _llk_math_eltwise_unary_sfpu_init_<SfpuType::unused>();
-    sfpu::sfpu_gguf_decode_init<GGUF_FMT>();
+    sfpu::sfpu_gguf_decode_init<GGUF_FMT, BESIDE_UNPACK>();
     _llk_math_dest_srca_mm_init_<MATH_FIDELITY, GGUF_IN0_ROWS>();
 
     for (std::uint32_t nt = 0; nt < GGUF_NT; nt++)
@@ -157,22 +203,29 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             _llk_math_wait_for_dest_available_<dest_sync>();
             zero_tile(0);
-            _llk_math_dest_srca_mm_unpack_post_(2);
-            _llk_math_dest_srca_mm_unpack_wait_(2, PAGE_FACES);
+            // The decoded tile per set (its page is the next tile, scratch past it).
+            const auto out_of = [](const std::uint32_t set) -> std::uint32_t { return BFP ? (set ? 5 : 3) : (set ? 4 : 1); };
+            page_post(out_of(0) + 1, out_of(0));
+            _llk_math_dest_srca_mm_unpack_wait_(out_of(0) + 1, PAGE_FACES);
             std::uint32_t set = 0;
             for (std::uint32_t kt = 0; kt < GGUF_KT; kt++)
             {
-                const std::uint32_t out       = set ? 4 : 1; // the decoded tile; its page is out + 1, scratch out + 2
-                const std::uint32_t next_page = set ? 2 : 5;
+                const std::uint32_t out       = out_of(set);
+                const std::uint32_t next_page = out_of(set ^ 1) + 1;
                 const bool next               = kt + 1 < GGUF_KT;
                 if (next)
                 {
-                    _llk_math_dest_srca_mm_unpack_post_(next_page);
+                    page_post(next_page, out_of(set ^ 1));
                 }
-                decode_tile<GGUF_FMT != 0>(out, kt, kt % LAYOUT.group_tiles < 2); // a group starts in both sets
+                constexpr bool split = body_after_copy();
+                decode_tile<GGUF_FMT != 0, true, !split>(out, kt, kt % LAYOUT.group_tiles < 2); // a group starts in both sets
                 if (next)
                 {
                     _llk_math_dest_srca_mm_unpack_wait_(next_page, PAGE_FACES);
+                }
+                if constexpr (split)
+                {
+                    decode_tile<GGUF_FMT != 0, false, true>(out, kt, false);
                 }
                 _llk_math_dest_srca_mm_<MATH_FIDELITY, GGUF_IN0_ROWS>(GGUF_FMT != 0 ? out : out + 1, 0);
                 set ^= 1;
@@ -184,9 +237,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
             for (std::uint32_t kt = 0; kt < GGUF_KT; kt++)
             {
                 _llk_math_wait_for_dest_available_<dest_sync>();
-                _llk_math_dest_srca_mm_unpack_post_(1);
-                _llk_math_dest_srca_mm_unpack_wait_(1, PAGE_FACES);
-                decode_tile<GGUF_FMT != 0>(0, kt, true); // each tile is a DEST section of its own
+                page_post(OUT + 1, OUT);
+                _llk_math_dest_srca_mm_unpack_wait_(OUT + 1, PAGE_FACES);
+                decode_tile<GGUF_FMT != 0>(OUT, kt, true); // each tile is a DEST section of its own
                 _llk_math_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
             }
         }
@@ -210,7 +263,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     for (std::uint32_t tile = 0; tile < OUTPUT_TILES; tile++)
     {
         _llk_packer_wait_for_math_done_();
-        _llk_pack_<dest_sync, is_fp32_dest_acc_en, ckernel::PackMode::Default>(0, L1_ADDRESS(params.buffer_Res[tile]));
+        _llk_pack_<dest_sync, is_fp32_dest_acc_en, ckernel::PackMode::Default>(GGUF_MM ? 0 : OUT, L1_ADDRESS(params.buffer_Res[tile]));
         _llk_pack_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
     }
 }

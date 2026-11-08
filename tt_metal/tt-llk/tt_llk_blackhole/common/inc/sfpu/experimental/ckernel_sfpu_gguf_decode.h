@@ -12,6 +12,8 @@
 // 16p + 2c and 16p + 2c + 1 (low, high half).
 // Phase 1 (params) writes S[a][b][h] and M[a][b][h] to the scratch tile. Phase 2 (body) writes q * S + M (linear
 // formats) or v(q) * S (value-table and codebook formats).
+// MXFP4 and NVFP4 differ (ckernel_sfpu_gguf_decode_fp4.h): their codes are block-float datums in the 16-bit rows
+// that tile 0's rows address, their scratch is in tile 1 past the page's rows.
 
 #pragma once
 
@@ -75,9 +77,13 @@ inline void _calculate_gguf_decode_params_()
     {
         iq1_m_params<TI>();
     }
-    else if constexpr (FMT == MXFP4 || FMT == NVFP4)
+    else if constexpr (FMT == MXFP4)
     {
-        fp4_params<FMT, TI>();
+        fp4_bfp_mx_params<TI>();
+    }
+    else if constexpr (FMT == NVFP4)
+    {
+        fp4_bfp_params();
     }
     else if constexpr (FMT == IQ4_XS)
     {
@@ -93,8 +99,14 @@ inline void _calculate_gguf_decode_params_()
 template <int FMT>
 constexpr bool two_calls = FMT == IQ2_XS;
 
+// The linear formats' macro bodies count cycles (stores arbitrated) where an unpack to DEST may run beside phase 2
+// (BESIDE_UNPACK); otherwise they use the shorter instruction-counted streams. Q2_K keeps its instruction-counted
+// body beside an unpack too and waits for the copy instead (sfpu_gguf_decode_body_unarbitrated), which costs less.
+template <int FMT, bool BESIDE_UNPACK>
+constexpr bool cycle_body = BESIDE_UNPACK && FMT != Q2_K;
+
 // Phase 2 of one tile (IQ2_XS: of every tile).
-template <int FMT, int TI>
+template <int FMT, int TI, bool BESIDE_UNPACK>
 inline void _calculate_gguf_decode_body_()
 {
     if constexpr (FMT == IQ2_XXS)
@@ -132,15 +144,19 @@ inline void _calculate_gguf_decode_body_()
     }
     else if constexpr (macro_body<FMT> && macro_q4<FMT>)
     {
-        body_macro_q4();
+        body_macro_q4<false, cycle_body<FMT, BESIDE_UNPACK>>();
     }
-    else if constexpr (fp4_macro_body<FMT>)
+    else if constexpr (FMT == MXFP4)
     {
-        body_macro_fp4<FMT>();
+        body_fp4_bfp_mx();
+    }
+    else if constexpr (FMT == NVFP4)
+    {
+        body_fp4_bfp();
     }
     else if constexpr (macro_body<FMT>)
     {
-        body_macro<FMT, traits<FMT>::pair ? TI % 2 : 0>();
+        body_macro<FMT, traits<FMT>::pair ? TI % 2 : 0, cycle_body<FMT, BESIDE_UNPACK>>();
     }
     else if constexpr (iq4_macro_body<FMT> && FMT == IQ4_XS)
     {
@@ -156,21 +172,21 @@ inline void _calculate_gguf_decode_body_()
         {
             iq4_init();
         }
-        else if constexpr (FMT == MXFP4 || FMT == NVFP4)
-        {
-            e2m1_init();
-        }
         body<FMT, traits<FMT>::pair ? TI % 2 : 0>();
     }
 }
 
 // Load-macro setup of the formats whose phase 2 runs through SFPLOADMACRO.
-template <int FMT>
+template <int FMT, bool BESIDE_UNPACK>
 inline void macro_init()
 {
-    if constexpr (fp4_macro_body<FMT>)
+    if constexpr (FMT == MXFP4)
     {
-        macro_init_fp4();
+        macro_init_fp4_bfp_mx();
+    }
+    if constexpr (FMT == NVFP4)
+    {
+        macro_init_fp4_bfp();
     }
     if constexpr (iq4_macro_body<FMT>)
     {
@@ -178,7 +194,7 @@ inline void macro_init()
     }
     if constexpr (macro_body<FMT>)
     {
-        macro_init_linear<FMT>();
+        macro_init_linear<FMT, cycle_body<FMT, BESIDE_UNPACK>>();
     }
 }
 
@@ -196,14 +212,14 @@ inline void sfpu_gguf_decode_done()
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
 }
 
-template <int FMT, int TI, bool PARAMS, bool BODY>
+template <int FMT, int TI, bool PARAMS, bool BODY, bool BESIDE_UNPACK>
 inline void sfpu_gguf_decode_tile_ti(const std::uint32_t dst_index, const std::uint32_t rows)
 {
     sfpu_gguf_decode_start(dst_index, rows);
     if constexpr (PARAMS && BODY && gguf::k4_regs<FMT>)
     {
         gguf::k4_params_regs<TI>();
-        gguf::body_macro_q4<true>();
+        gguf::body_macro_q4<true, gguf::cycle_body<FMT, BESIDE_UNPACK>>();
     }
     else if constexpr (PARAMS && !BODY && gguf::k4_regs<FMT>)
     {
@@ -213,7 +229,7 @@ inline void sfpu_gguf_decode_tile_ti(const std::uint32_t dst_index, const std::u
     }
     else if constexpr (BODY && !PARAMS && gguf::k4_regs<FMT>)
     {
-        gguf::body_macro_q4<true>();
+        gguf::body_macro_q4<true, gguf::cycle_body<FMT, BESIDE_UNPACK>>();
     }
     else
     {
@@ -223,7 +239,7 @@ inline void sfpu_gguf_decode_tile_ti(const std::uint32_t dst_index, const std::u
         }
         if constexpr (BODY && !gguf::two_calls<FMT>)
         {
-            gguf::_calculate_gguf_decode_body_<FMT, TI>();
+            gguf::_calculate_gguf_decode_body_<FMT, TI, BESIDE_UNPACK>();
         }
     }
     sfpu_gguf_decode_done();
@@ -233,13 +249,29 @@ inline void sfpu_gguf_decode_tile_ti(const std::uint32_t dst_index, const std::u
  * @brief Set up the SFPU for @ref sfpu_gguf_decode_tile of format FMT.
  *
  * @tparam FMT: ckernel::gguf::Format of the pages.
+ * @tparam BESIDE_UNPACK: Whether an unpack to DEST may run beside phase 2; the same value as the tile calls'.
  * @note Call after _llk_math_eltwise_unary_sfpu_init_, and again after other SFPU code that programs the load macros
  *       or the programmable constants (IQ4_NL / IQ4_XS: 0..2; the others: 2).
  */
-template <int FMT>
+template <int FMT, bool BESIDE_UNPACK = true>
 inline void sfpu_gguf_decode_init()
 {
-    gguf::macro_init<FMT>();
+    gguf::macro_init<FMT, BESIDE_UNPACK>();
+}
+
+/**
+ * @brief Whether phase 2 of format FMT has DEST stores that are not arbitrated against the unpackers' DEST writes
+ *        (SFPLOADMACRO with delays that count instructions), so no unpack to DEST may run beside it. No SFPLOADMACRO
+ *        body may run beside the FPU's DEST writes.
+ *
+ * @tparam FMT: ckernel::gguf::Format of the pages.
+ * @tparam BESIDE_UNPACK: As @ref sfpu_gguf_decode_tile.
+ */
+template <int FMT, bool BESIDE_UNPACK = true>
+constexpr bool sfpu_gguf_decode_body_unarbitrated()
+{
+    using namespace gguf;
+    return iq4_macro_body<FMT> || (macro_body<FMT> && !cycle_body<FMT, BESIDE_UNPACK>);
 }
 
 /**
@@ -283,6 +315,9 @@ inline void sfpu_gguf_decode_group(const std::uint32_t dst_index, const std::uin
  * @tparam FMT: ckernel::gguf::Format of the page.
  * @tparam PARAMS, BODY: Run phase 1 (the scales) and phase 2 (the codes). A decoded tile needs both, in one call or in
  *                       two (phase 1, then phase 2 with no other SFPU code in between); one alone is for timing it.
+ * @tparam BESIDE_UNPACK: Whether an unpack to DEST may run beside phase 2 (where
+ *                        @ref sfpu_gguf_decode_body_unarbitrated is false); false selects shorter phase 2 streams
+ *                        for decodes with no DEST writer beside them.
  * @param dst_index: DEST tile of the output. The page must be in tile dst_index + 1 (unpacked to DEST as UInt32);
  *                   tile dst_index + 2 is scratch.
  * @param ti: The tile's index in its group of K tiles (page_layout<FMT>().group_tiles).
@@ -291,7 +326,7 @@ inline void sfpu_gguf_decode_group(const std::uint32_t dst_index, const std::uin
  * @note Needs a 32-bit DEST and @ref sfpu_gguf_decode_init (Q4_K, Q5_K, Q3_K, Q2_K: and @ref sfpu_gguf_decode_group
  *       for the tile's group). Overwrites the programmable constants and may record into the replay buffer.
  */
-template <int FMT, bool PARAMS = true, bool BODY = true>
+template <int FMT, bool PARAMS = true, bool BODY = true, bool BESIDE_UNPACK = true>
 inline void sfpu_gguf_decode_tile(const std::uint32_t dst_index, const std::uint32_t ti, const std::uint32_t rows = 0)
 {
     using namespace gguf;
@@ -299,52 +334,52 @@ inline void sfpu_gguf_decode_tile(const std::uint32_t dst_index, const std::uint
     {
         if (ti & 1)
         {
-            sfpu_gguf_decode_tile_ti<FMT, 1, PARAMS, BODY>(dst_index, rows);
+            sfpu_gguf_decode_tile_ti<FMT, 1, PARAMS, BODY, BESIDE_UNPACK>(dst_index, rows);
         }
         else
         {
-            sfpu_gguf_decode_tile_ti<FMT, 0, PARAMS, BODY>(dst_index, rows);
+            sfpu_gguf_decode_tile_ti<FMT, 0, PARAMS, BODY, BESIDE_UNPACK>(dst_index, rows);
         }
     }
     else if constexpr (!(FMT == Q6_K || FMT == Q4_K || FMT == Q5_K || FMT == Q3_K || FMT == Q2_K || FMT == IQ4_XS || FMT == IQ2_XS || FMT == IQ1_M ||
                          FMT == TQ1_0))
     {
-        sfpu_gguf_decode_tile_ti<FMT, 0, PARAMS, BODY>(dst_index, rows);
+        sfpu_gguf_decode_tile_ti<FMT, 0, PARAMS, BODY, BESIDE_UNPACK>(dst_index, rows);
     }
     else
     {
         switch (ti)
         {
             case 0:
-                sfpu_gguf_decode_tile_ti<FMT, 0, PARAMS, BODY>(dst_index, rows);
+                sfpu_gguf_decode_tile_ti<FMT, 0, PARAMS, BODY, BESIDE_UNPACK>(dst_index, rows);
                 break;
             case 1:
-                sfpu_gguf_decode_tile_ti<FMT, 1, PARAMS, BODY>(dst_index, rows);
+                sfpu_gguf_decode_tile_ti<FMT, 1, PARAMS, BODY, BESIDE_UNPACK>(dst_index, rows);
                 break;
             case 2:
-                sfpu_gguf_decode_tile_ti<FMT, 2, PARAMS, BODY>(dst_index, rows);
+                sfpu_gguf_decode_tile_ti<FMT, 2, PARAMS, BODY, BESIDE_UNPACK>(dst_index, rows);
                 break;
             case 3:
-                sfpu_gguf_decode_tile_ti<FMT, 3, PARAMS, BODY>(dst_index, rows);
+                sfpu_gguf_decode_tile_ti<FMT, 3, PARAMS, BODY, BESIDE_UNPACK>(dst_index, rows);
                 break;
             case 4:
-                sfpu_gguf_decode_tile_ti<FMT, 4, PARAMS, BODY>(dst_index, rows);
+                sfpu_gguf_decode_tile_ti<FMT, 4, PARAMS, BODY, BESIDE_UNPACK>(dst_index, rows);
                 break;
             case 5:
-                sfpu_gguf_decode_tile_ti<FMT, 5, PARAMS, BODY>(dst_index, rows);
+                sfpu_gguf_decode_tile_ti<FMT, 5, PARAMS, BODY, BESIDE_UNPACK>(dst_index, rows);
                 break;
             case 6:
-                sfpu_gguf_decode_tile_ti<FMT, 6, PARAMS, BODY>(dst_index, rows);
+                sfpu_gguf_decode_tile_ti<FMT, 6, PARAMS, BODY, BESIDE_UNPACK>(dst_index, rows);
                 break;
             default:
-                sfpu_gguf_decode_tile_ti<FMT, 7, PARAMS, BODY>(dst_index, rows);
+                sfpu_gguf_decode_tile_ti<FMT, 7, PARAMS, BODY, BESIDE_UNPACK>(dst_index, rows);
                 break;
         }
     }
     if constexpr (BODY && gguf::two_calls<FMT>)
     {
         sfpu_gguf_decode_start(dst_index, rows);
-        gguf::_calculate_gguf_decode_body_<FMT, 0>();
+        gguf::_calculate_gguf_decode_body_<FMT, 0, BESIDE_UNPACK>();
         sfpu_gguf_decode_done();
     }
 }

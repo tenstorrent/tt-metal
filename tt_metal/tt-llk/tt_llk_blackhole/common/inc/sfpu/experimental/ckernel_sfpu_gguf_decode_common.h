@@ -281,22 +281,6 @@ constexpr float IQ4_C2  = -1.4385637044906616f;
 constexpr float IQ4_C1  = 24.500598907470703f;
 constexpr float IQ4_C0R = 12582785.0f; // -127 + 1.5 * 2^23
 
-// E2M1 magnitudes kv = {0, 1, 2, 3, 4, 6, 8, 12} (doubled values) as nibbles, kv(e) at bits 28 - 4e .. 31 - 4e, so
-// that shifting left by 4e brings it to the top nibble.
-constexpr unsigned E2M1_TABLE = 0x0123468Cu;
-
-// E2M1 code in field f of w (sign in the field's bit 3): +-kv as fp32.
-sfpi_inline vFloat e2m1_value(const vUInt w, const int f)
-{
-    // 4 * (code & 7); the mask (programmable constant 1) drops the neighbouring field's bits.
-    const vUInt e4 = (f == 0 ? w << 2u : w >> static_cast<unsigned>(4 * f - 2)) & sfpi::as<vUInt>(sfpi::vConstIntPrgm1);
-    vUInt t        = sfpi::as<vUInt>(sfpi::vConstIntPrgm0);
-    t              = t << e4;
-    const vFloat m = ufloat(t >> 28u);
-    const vInt sgn = sfpi::as<vInt>(f == 7 ? w : w << static_cast<unsigned>(28 - 4 * f));
-    return sfpi::copysgn(m, sgn);
-}
-
 template <int FMT, int CP>
 sfpi_inline void body()
 {
@@ -352,7 +336,7 @@ sfpi_inline void body()
                         sfpi::dst_reg[oa] = va;
                         sfpi::dst_reg[ob] = vb;
                     }
-                    else if constexpr (FMT == IQ4_NL || FMT == IQ4_XS)
+                    else
                     {
                         const vFloat xa = ufloat(field<4>(l0, oa % 8));
                         const vFloat xb = ufloat(field<4>(l0, ob % 8));
@@ -371,13 +355,6 @@ sfpi_inline void body()
                         const vFloat rb   = pb * S;
                         sfpi::dst_reg[oa] = ra;
                         sfpi::dst_reg[ob] = rb;
-                    }
-                    else
-                    {
-                        const vFloat va   = e2m1_value(l0, oa % 8);
-                        const vFloat vb   = e2m1_value(l0, ob % 8);
-                        sfpi::dst_reg[oa] = va * S;
-                        sfpi::dst_reg[ob] = vb * S;
                     }
                 }
             }
