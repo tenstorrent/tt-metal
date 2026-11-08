@@ -120,6 +120,8 @@ ALWI void pack_tile(std::uint32_t ifrom_dst, std::uint32_t icb, std::uint32_t ou
  * NOTE: On Blackhole the block is one packer program run where the layout allows, which needs the default pack
  * program installed (the tilize and untilize uninits restore it).
  *
+ * NOTE: On Blackhole a matmul kernel passes the K tiles of its output block as the second template argument (pack_block<DST_ACCUM_MODE, K>), which picks the forms behind matmul math for that K.
+ *
  * Return value: None
  *
  * | Param Type | Name      | Description                                       | Type     | Valid Range                                          | Required |
@@ -129,11 +131,11 @@ ALWI void pack_tile(std::uint32_t ifrom_dst, std::uint32_t icb, std::uint32_t ou
  * | Function   | ntiles    | The number of tiles to copy from DEST to CB       | uint32_t | Must be less than the size of the DEST register (16) | True     |
  */
 // clang-format on
-template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE, std::uint32_t matmul_kt = 0>
 ALWI void pack_block(std::uint32_t ifrom_dst, std::uint32_t icb, std::uint32_t ntiles) {
     LLK_SAN_FUNCTION();
 #if defined(ARCH_BLACKHOLE)
-    PACK((llk_pack_block<is_fp32_dest_acc_en>(ifrom_dst, icb, ntiles)));
+    PACK((llk_pack_block<is_fp32_dest_acc_en, false, matmul_kt>(ifrom_dst, icb, ntiles)));
 #elif defined(ARCH_QUASAR)
     PACK((llk_pack_block(ifrom_dst, icb, ntiles)));
 #else
@@ -154,7 +156,7 @@ ALWI void pack_block(std::uint32_t ifrom_dst, std::uint32_t icb, std::uint32_t n
  * | Function   | ntiles    | The number of tiles to copy from DEST to CB       | uint32_t | ifrom_dst + ntiles within the acquired DEST tiles (8 or 16) | True     |
  */
 // clang-format on
-template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE, std::uint32_t matmul_kt = 0>
 ALWI void pack_block_mop(std::uint32_t ifrom_dst, std::uint32_t icb, std::uint32_t ntiles) {
     LLK_SAN_FUNCTION();
 #if defined(ARCH_BLACKHOLE)
@@ -162,7 +164,7 @@ ALWI void pack_block_mop(std::uint32_t ifrom_dst, std::uint32_t icb, std::uint32
     if (ntiles == 1) {
         PACK((llk_pack<is_fp32_dest_acc_en, false, PackMode::Default>(ifrom_dst, icb, 0)));
     } else {
-        PACK((llk_pack_block<is_fp32_dest_acc_en>(ifrom_dst, icb, ntiles)));
+        PACK((llk_pack_block<is_fp32_dest_acc_en, false, matmul_kt>(ifrom_dst, icb, ntiles)));
     }
 #elif defined(ARCH_QUASAR)
     PACK((llk_pack_block(ifrom_dst, icb, ntiles)));

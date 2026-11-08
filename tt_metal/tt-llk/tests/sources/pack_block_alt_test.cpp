@@ -219,10 +219,10 @@ inline void alt_pack_tile(const std::uint32_t fmt, const std::uint32_t tile, con
 
 // The form llk_pack_block takes for the first block of an output after a packer reconfigure: the rows of llk_pack_reconf_form (tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_pack_tile_api.h,
 // mirrored in hardware_free/kernels/test_pack_block_form.py) for the three formats of the pairs. Columns: half sync 16 bit DEST, half 32 bit, full 16 bit, full 32 bit.
-constexpr char alt_reconf_form[3][4][9] = {
-    {"TBBBBBBB", "TBTTTTTT", "TBBBBBBB", "TTBBBBBB"}, // Bfp8_b
-    {"BBBBBBBB", "BBTTTTTT", "BBBBBBBB", "BBBBBBBB"}, // Float32
-    {"BBBBBBBB", "BBBBBBBB", "BBBBBBBB", "BBBBBBBB"}, // Float16_b
+constexpr char alt_reconf_form[3][4][17] = {
+    {"TBBTBTBTBBBBBBBB", "TBTTBBBBBBBBBBBB", "TBBBBBBBBBBBBBBB", "TTBBBBBBBBBBBBBB"}, // Bfp8_b
+    {"BBBBBBBTBBBBBBBB", "BBTTTTTTTTTTTTTT", "BBBBBBBBBBBBBBBB", "BBBBBBBBBBBBBBBB"}, // Float32
+    {"BBBBBTBTBBBBBBBB", "BBTTTTTTTTTTTTTT", "BBBBBBBBBBBBBBBB", "BBBBBBBBBBBBBBBB"}, // Float16_b
 };
 
 inline std::uint32_t alt_form(const std::uint32_t fmt, const std::uint32_t ntiles, const std::uint32_t head)
@@ -230,7 +230,7 @@ inline std::uint32_t alt_form(const std::uint32_t fmt, const std::uint32_t ntile
     const bool bfp = fmt == static_cast<std::uint32_t>(DataFormat::Bfp8_b);
     const bool wide = fmt == static_cast<std::uint32_t>(DataFormat::Float32);
     const std::uint32_t column = (dest_sync == DstSync::SyncFull ? 2 : 0) + (is_fp32_dest_acc_en ? 1 : 0);
-    if (!head || alt_reconf_form[bfp ? 0 : (wide ? 1 : 2)][column][(ntiles < 8 ? ntiles : 8) - 1] == 'T')
+    if (!head || alt_reconf_form[bfp ? 0 : (wide ? 1 : 2)][column][(ntiles < 16 ? ntiles : 16) - 1] == 'T')
     {
         return 0; // per tile
     }

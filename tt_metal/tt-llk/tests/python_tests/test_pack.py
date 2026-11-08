@@ -548,3 +548,113 @@ def test_pack_block_tiles(
         pack_block=pack_block,
         block_tiles=block_tiles,
     )
+
+
+@skip_for_wormhole
+@parametrize(
+    formats=PACK_FORMATS,
+    dest_acc=[DestAccumulation.No],
+    input_dimensions=lambda block_tiles: [[64, 32 * block_tiles]],
+    relu_type=[PackerReluType.NoRelu],
+    dest_sync=[DestSync.Full],
+    dest_index=[0],
+    block_tiles=[9, 10, 12, 13, 16],
+    pack_block=[2, 3, 5],
+)
+def test_pack_block_tiles_full(
+    formats,
+    dest_acc,
+    input_dimensions,
+    relu_type,
+    dest_sync,
+    dest_index,
+    block_tiles,
+    pack_block,
+):
+    """Blocks of 9 to 16 tiles, which only a full sync section of a 16 bit DEST holds: the default W offset forms (2), the W offset forms (3), the plain and closed blocks (5)."""
+    test_pack(
+        formats,
+        dest_acc,
+        input_dimensions,
+        relu_type,
+        dest_sync,
+        dest_index,
+        pack_block=pack_block,
+        block_tiles=block_tiles,
+    )
+
+
+PACK_BLOCK_OTHER_FORMATS = [
+    InputOutputFormat(DataFormat.Float16, DataFormat.Float16),
+    InputOutputFormat(DataFormat.UInt16, DataFormat.UInt16),
+    InputOutputFormat(DataFormat.Int8, DataFormat.Int8),
+    InputOutputFormat(DataFormat.UInt8, DataFormat.UInt8),
+    InputOutputFormat(DataFormat.Lf8, DataFormat.Lf8),
+    InputOutputFormat(DataFormat.Fp8_e4m3, DataFormat.Fp8_e4m3),
+    InputOutputFormat(DataFormat.Float16_b, DataFormat.Fp8_e4m3),
+    InputOutputFormat(DataFormat.Float16_b, DataFormat.Tf32),
+    InputOutputFormat(DataFormat.Float32, DataFormat.Tf32),
+    InputOutputFormat(DataFormat.Float16_b, DataFormat.Int8),
+    InputOutputFormat(DataFormat.Float16_b, DataFormat.UInt8),
+    InputOutputFormat(DataFormat.Float16_b, DataFormat.UInt16),
+    InputOutputFormat(DataFormat.Float16_b, DataFormat.Lf8),
+    InputOutputFormat(DataFormat.Int32, DataFormat.Int8),
+    InputOutputFormat(DataFormat.Int32, DataFormat.UInt8),
+    InputOutputFormat(DataFormat.Int32, DataFormat.UInt16),
+    InputOutputFormat(DataFormat.UInt32, DataFormat.UInt32),
+]
+
+
+# The golden does not model these conversions: the per-tile pack fails them the same way.
+PACK_BLOCK_GOLDEN_GAPS = {
+    (DataFormat.Float16_b, DataFormat.Int8, DestAccumulation.No),
+    (DataFormat.Float16_b, DataFormat.UInt8, DestAccumulation.No),
+    (DataFormat.Float16_b, DataFormat.UInt16, DestAccumulation.No),
+    (DataFormat.Float16_b, DataFormat.UInt16, DestAccumulation.Yes),
+    (DataFormat.Float16_b, DataFormat.Lf8, DestAccumulation.No),
+    (DataFormat.Float16_b, DataFormat.Lf8, DestAccumulation.Yes),
+    (DataFormat.Int32, DataFormat.UInt16, DestAccumulation.Yes),
+    (DataFormat.Int8, DataFormat.Int8, DestAccumulation.No),
+    (DataFormat.UInt8, DataFormat.UInt8, DestAccumulation.No),
+    (DataFormat.Lf8, DataFormat.Lf8, DestAccumulation.Yes),
+}
+
+
+@skip_for_wormhole
+@parametrize(
+    formats=PACK_BLOCK_OTHER_FORMATS,
+    dest_acc=get_valid_dest_accumulation_modes,
+    input_dimensions=[[96, 128]],
+    relu_type=[PackerReluType.NoRelu],
+    dest_sync=[DestSync.Half, DestSync.Full],
+    dest_index=[0],
+    block_tiles=[2, 3, 4],
+    pack_block=[2, 3, 5],
+    allow_int32_mix=[True],
+)
+def test_pack_block_other_formats(
+    formats,
+    dest_acc,
+    input_dimensions,
+    relu_type,
+    dest_sync,
+    dest_index,
+    block_tiles,
+    pack_block,
+    allow_int32_mix,
+):
+    """Plain output formats beyond Float16_b, Float32 and Int32: blocks of 2 to 4 tiles in the default W offset forms (2), the W offset forms (3) and the plain blocks (5)."""
+    if (formats.input_format, formats.output_format, dest_acc) in PACK_BLOCK_GOLDEN_GAPS:
+        pytest.skip("The golden does not model this conversion.")
+    test_pack(
+        formats,
+        dest_acc,
+        input_dimensions,
+        relu_type,
+        dest_sync,
+        dest_index,
+        pack_block=pack_block,
+        block_tiles=block_tiles,
+        allow_int32_mix=allow_int32_mix,
+    )
+
