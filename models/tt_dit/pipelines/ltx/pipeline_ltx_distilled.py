@@ -633,11 +633,19 @@ class LTXDistilledPipeline(LTXPipeline):
                 logger.info(f"warmup image encoder (before capture): {height // 2}x{width // 2} + {height}x{width}")
                 # Static mesh: capture one encode trace per stage resolution here, below every DiT
                 # capture; each gen replays it ("enc" in LTX_GEN_EAGER_STAGES keeps it eager).
-                self.vae_encoder.traced = True
-                self.vae_encoder.capture_open = True
+                # Both shapes run eager first, so every load, program and buffer the encoder needs is
+                # allocated before the first encode capture: an allocation while that capture is live
+                # (allocator.cpp:140 "active trace" warning) was followed by a stage-1 hang (#3354).
+                # "enc" in LTX_GEN_EAGER_STAGES captures nothing: the eager A/B leg holds no encode trace.
+                self.vae_encoder.traced = False
                 self._warmup_encode(height // 2, width // 2)
                 self._warmup_encode(height, width)
-                self.vae_encoder.capture_open = False
+                if "enc" not in {s.strip() for s in os.environ.get("LTX_GEN_EAGER_STAGES", "").split(",")}:
+                    self.vae_encoder.traced = True
+                    self.vae_encoder.capture_open = True
+                    self._warmup_encode(height // 2, width // 2)
+                    self._warmup_encode(height, width)
+                    self.vae_encoder.capture_open = False
                 # The IC-LoRA reference encoders are also built once and never reloaded here, so the
                 # same before-capture rule applies; the late warmup below skips them on this path.
                 if ref_num_frames is not None:
