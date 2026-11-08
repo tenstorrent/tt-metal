@@ -182,6 +182,36 @@ directories on bhg4: `/data/ttuser-agentx/mm/eval_runs/20261107T043703Z/` (refer
   fixtures (the checkpoint's answer, see above). The fixtures are now coloured shapes on white: 55 of 55 pass in the
   container and on 2 row engines on bhg2 (8574442976a).
 
+### Text regression on this branch (2026-11-08)
+
+The text suite of `mimo-v2.6/dev` rerun on bhg2 with this branch (tt-metal 8574442976a, vllm-tt-plugin b4acf686, 4 row
+engines, text-only class), against the 2026-11-03 `mimo-v2.6/dev` runs on the same box and client (AgentX `agentx_head2`,
+SPEED-Bench `mergecheck`). Outputs in `/home/zni/mimo/mm/mmimg/text/` on bhg2.
+
+* Device tests: smoke, MoE, spec inputs (12), spec groups, verify sampler, traced, large, decode and spec decode all
+  pass. VSB at 1 / 2 / 3 / 4 users: 225.4 / 160.9 / 103.9 / 91.3 tok/s.
+* AgentX (InferenceX `inferencex-agentx-mvp`, full, 3,600 s, concurrency 16), metrics from `profile_export.jsonl`:
+
+  | | requests | errors | full-response tok/s/user (p50) | report Out Tok/s/User (p50) | token soup | spec collapse windows |
+  |---|---|---|---|---|---|---|
+  | dev, 2026-11-03 | 2,102 | 3 | 108.0 (103.4) | 130.5 (104.8) | 0 | 0 |
+  | multimodal | 2,115 | 3 | 110.7 (105.4) | 125.9 (107.1) | 0 | 0 |
+
+  The 3 errors in both runs are AIPerf's `InvalidInferenceResultError` (a stream with no content). Cache hit 93.9%
+  (theoretical 96.9%).
+* SPEED-Bench 1k (throughput set, max 8,192 output tokens), output tok/s and per-user tok/s (p50); 0 of 176 responses
+  with token soup in both:
+
+  | concurrency | dev, 2026-11-03 | multimodal |
+  |---|---|---|
+  | 4 | 516 / 136 | 524 / 142 |
+  | 8 | 804 / 109 | 792 / 108 |
+  | 12 | 1,027 / 96 | 984 / 98 |
+  | 16 | 1,180 / 86 | 1,173 / 88 |
+
+  Per-user rates match; the lower total at concurrency 12 comes with shorter answers (mean output 5,086 vs 5,675
+  tokens, sampled), which leave the batch less full.
+
 ## Suite and estimates
 
 Chosen suite (~2 per modality plus OpenRouter's two):
