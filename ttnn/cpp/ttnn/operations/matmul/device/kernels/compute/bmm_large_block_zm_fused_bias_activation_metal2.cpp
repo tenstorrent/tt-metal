@@ -115,9 +115,6 @@ FORCE_INLINE void reload_from_dfb_to_dst(
     // reload copies through that alias while the FPU consumer keeps the original view. The alias
     // has its own read pointer, so align it with the partials buffer's current read position
     // before copying.
-    // Reconfigure input
-    reconfig_data_format_srca(in1_dfb_id, mm_partials_reload_dfb_id);
-    copy_init(mm_partials_reload_dfb_id);
     mm_partials_dfb.wait_front(static_cast<uint16_t>(out_subblock_num_tiles));
 
 #ifdef MM_PARTIALS_RELOAD_ALIAS
@@ -127,15 +124,19 @@ FORCE_INLINE void reload_from_dfb_to_dst(
     }
 #endif
 
-    const uint32_t start_dst_index = 0;
-    const uint32_t start_tile_index = 0;
-    copy_block(mm_partials_reload_dfb_id, start_tile_index, start_dst_index, out_subblock_num_tiles);
+    // Copy the partials into DST and return the unpacker and math engine to the matmul.
+    matmul_block_reload_partials(
+        in0_dfb_id,
+        in1_dfb_id,
+        mm_partials_reload_dfb_id,
+        0,
+        out_subblock_num_tiles,
+        in1_transpose_tile,
+        out_subblock_w,
+        out_subblock_h,
+        in0_block_w);
 
     mm_partials_dfb.pop_front(static_cast<uint16_t>(out_subblock_num_tiles));
-    // Reconfigure srcA back
-    reconfig_data_format_srca(mm_partials_reload_dfb_id, in1_dfb_id);
-    matmul_block_init(
-        in0_dfb_id, in1_dfb_id, static_cast<uint32_t>(in1_transpose_tile), out_subblock_w, out_subblock_h, in0_block_w);
 }
 
 template <uint32_t out_subblock_w, uint32_t out_block_w, typename IntermDFB, typename OutDFB>
@@ -299,6 +300,9 @@ void kernel_main() {
     // src-register handshake and hangs. The factory must not pad per_core_N_compute on Quasar.
     static_assert(!last_subblock_padded, "a narrowed last in1 subblock (padded per_core_N) is not supported on Quasar");
 #endif
+#if defined MM_ROW_MOP && MM_ROW_MOP
+    static_assert(!last_subblock_padded, "MM_ROW_MOP needs every matmul_block call at the init's subblock");
+#endif
 
 #ifdef SFPU_ACTIVATION
     constexpr KernelActivation activation_type = static_cast<KernelActivation>(get_arg(args::activation_type));
@@ -315,7 +319,41 @@ void kernel_main() {
     constexpr uint32_t in1_transpose_tile = 0;
 #endif
 
+#ifdef IN1_MCAST_CHUNKS
+#ifdef ARCH_QUASAR
+#error "IN1_MCAST_CHUNKS waits for growing in1 prefixes, which Quasar's dataflow buffers do not allow"
+#endif
+    // in1 is delivered in IN1_MCAST_CHUNKS chunks of whole columns per K-block (see the in1 reader), each a
+    // whole number of output subblocks wide.
+    static_assert(in1_num_subblocks % IN1_MCAST_CHUNKS == 0, "an in1 chunk is a whole number of output subblocks");
+    constexpr uint32_t in1_chunk_subblocks = in1_num_subblocks / IN1_MCAST_CHUNKS;
+    constexpr uint32_t in1_chunk_num_tiles = in1_block_num_tiles / IN1_MCAST_CHUNKS;
+    // The reader lays the block out chunk-major: chunk c is the in1_chunk_num_tiles tiles from tile
+    // c * in1_chunk_num_tiles, row-major with in1_k_stride tiles per K-row.
+    constexpr uint32_t in1_k_stride = in1_block_w / IN1_MCAST_CHUNKS;
+#else
+    constexpr uint32_t in1_k_stride = in1_block_w;
+#endif
+
     constexpr bool spill = num_blocks_inner_dim > 1;
+    // With packer L1 accumulation (and nothing else packing into the partials), the partials are reserved once per
+    // output block and each subblock is packed in place at its slot, where the next K block accumulates onto it; they
+    // are pushed once, for the last K block's reload. The unpacker then never waits on the packer between K blocks.
+#if defined PACKER_L1_ACC and not defined FUSE_BIAS and not defined ARCH_QUASAR
+    constexpr bool l1_acc_in_place = !untilize_out && !in0_transpose_tile && num_blocks_inner_dim > 2;
+#else
+    constexpr bool l1_acc_in_place = false;
+#endif
+    // Chunk-major order: with in1 delivered in column chunks and several rows of subblocks, a K block that is not the
+    // last walks its subblocks column by column (every row of a chunk before the next chunk), so each chunk carries
+    // in0_num_subblocks subblocks of compute instead of one and the first block keeps pace with the delivery. Only with
+    // the partials packed in place (slots are addressed by subblock); the last block packs the output row by row, the
+    // order the writer drains it in.
+#ifdef IN1_MCAST_CHUNKS
+    constexpr bool chunk_major_blocks = l1_acc_in_place && in0_num_subblocks > 1;
+#else
+    constexpr bool chunk_major_blocks = false;
+#endif
 
     compute_kernel_hw_startup<SrcOrder::Reverse>(in0_dfb_id, in1_dfb_id, mm_partials_dfb_id);
     matmul_block_init(in0_dfb_id, in1_dfb_id, in1_transpose_tile, out_subblock_w, out_subblock_h, in0_block_w);
@@ -369,6 +407,9 @@ void kernel_main() {
 #endif
                 }
 
+                if constexpr (l1_acc_in_place) {
+                    mm_partials_dfb.reserve_back(out_block_num_tiles);
+                }
                 for (uint32_t block = 0; block < num_blocks_inner_dim; block++) {
                     const bool last_out = block == (num_blocks_inner_dim - 1);
 
@@ -416,12 +457,19 @@ void kernel_main() {
 #endif
 
                     in0_dfb.wait_front(in0_block_num_tiles);
+#ifndef IN1_MCAST_CHUNKS
                     in1_dfb.wait_front(in1_block_num_tiles);
+#endif
 
-                    uint32_t in0_index_subblock_offset = 0;
-                    for (uint32_t in0_subblock = 0; in0_subblock < in0_num_subblocks; in0_subblock++) {
-                        uint32_t in1_index_subblock_offset = 0;
-                        for (uint32_t in1_subblock = 0; in1_subblock < in1_num_subblocks; in1_subblock++) {
+                    const bool chunk_major = chunk_major_blocks && !last_out;
+                    for (uint32_t row = 0; row < in0_num_subblocks; row++) {
+                        for (uint32_t col = 0; col < in1_num_subblocks; col++) {
+                            // The subblock this step computes: row by row, or column by column (chunk_major).
+                            const uint32_t step = row * in1_num_subblocks + col;
+                            const uint32_t in0_subblock = chunk_major ? step % in0_num_subblocks : row;
+                            const uint32_t in1_subblock = chunk_major ? step / in0_num_subblocks : col;
+                            const uint32_t in0_index_subblock_offset = in0_subblock * in0_subblock_num_tiles;
+                            const uint32_t in1_index_subblock_offset = in1_subblock * out_subblock_w;
                             // When last_subblock_padded is true the last in1 subblock has
                             // (out_subblock_w - last_subblock_w_valid) padded lanes whose in1 tiles were
                             // never pushed by the reader. Narrow matmul_block so the unpacker only touches
@@ -432,6 +480,13 @@ void kernel_main() {
                             const uint32_t effective_subblock_w =
                                 is_last_in1_subblock_padded ? last_subblock_w_valid : out_subblock_w;
 
+#ifdef IN1_MCAST_CHUNKS
+                            // in1 arrives in column chunks of in1_chunk_subblocks output subblocks: before the
+                            // first row of subblocks reads a chunk, wait for it (the later rows find it there).
+                            if (in0_subblock == 0 && in1_subblock % in1_chunk_subblocks == 0) {
+                                in1_dfb.wait_front((in1_subblock / in1_chunk_subblocks + 1) * in1_chunk_num_tiles);
+                            }
+#endif
                             tile_regs_acquire();
                             if (enable_reload) {
                                 reload_from_dfb_to_dst(
@@ -447,31 +502,28 @@ void kernel_main() {
                             }
 
 #ifndef SKIP_COMPUTE
-                            // Compute output sub-block
-                            const uint32_t dst_index =
-                                0;  // start at 0, each call to matmul_block internally increments dst_index
-                            uint32_t in0_index = in0_index_subblock_offset;  // offset into in0 block
-                            uint32_t in1_index = in1_index_subblock_offset;  // offset into in1 block
-                            // inner dim that we accumulate is the inner dim of in0/in1, which is in0_block_w
-                            for (uint32_t inner_dim_idx = 0; inner_dim_idx < in0_block_w; ++inner_dim_idx) {
-                                // matmul outer product of (out_subblock_h x out_subblock_w) tiles that fill dst
-                                // accumulation is done by iterating matmul_block across inner dim
-                                // in0_block_w is passed as innder dim (kt) to matmul_block, internally used to stride
-                                // in0
-                                matmul_block(
-                                    in0_dfb_id,
-                                    in1_dfb_id,
-                                    in0_index,
-                                    in1_index,
-                                    dst_index,
-                                    in1_transpose_tile,
-                                    effective_subblock_w,
-                                    out_subblock_h,
-                                    in0_block_w);
-                                in0_index++;               // stride right by 1
-                                in1_index += in1_block_w;  // to stride down by 1 need to stride by in_per_core_w
-                                                           // (should be called in1_block_w)
-                            }
+                            // Compute output sub-block: accumulate the in0_block_w inner-dim steps into DST. Step k
+                            // reads in0 tile in0_index_subblock_offset + k (in0 rows are in0_block_w tiles wide) and
+                            // in1 tile in1_tile_index + k * in1_k_stride: the subblock's first column in its K-row 0,
+                            // in the row-major block or (IN1_MCAST_CHUNKS) in its chunk of the chunk-major block.
+#ifdef IN1_MCAST_CHUNKS
+                            const uint32_t in1_tile_index = (in1_subblock / in1_chunk_subblocks) * in1_chunk_num_tiles +
+                                                            (in1_subblock % in1_chunk_subblocks) * out_subblock_w;
+#else
+                            const uint32_t in1_tile_index = in1_index_subblock_offset;
+#endif
+                            matmul_block_k(
+                                in0_dfb_id,
+                                in1_dfb_id,
+                                in0_index_subblock_offset,
+                                in1_tile_index,
+                                0,
+                                in1_transpose_tile,
+                                effective_subblock_w,
+                                out_subblock_h,
+                                in0_block_w,
+                                in0_block_w,
+                                in1_k_stride);
 
 #endif  // SKIP_COMPUTE
 
@@ -512,7 +564,9 @@ void kernel_main() {
 
                             } else {
                                 tile_regs_commit();
-                                mm_partials_dfb.reserve_back(out_subblock_num_tiles);
+                                if constexpr (!l1_acc_in_place) {
+                                    mm_partials_dfb.reserve_back(out_subblock_num_tiles);
+                                }
                                 tile_regs_wait();
 
 #ifdef PACKER_L1_ACC
@@ -527,16 +581,22 @@ void kernel_main() {
                                 }
 #endif
 
-                                const uint32_t start_dst_index = 0;
-                                pack_block(start_dst_index, mm_partials_dfb_id, out_subblock_num_tiles);
+                                if constexpr (l1_acc_in_place) {
+                                    const uint32_t slot =
+                                        (in0_subblock * in1_num_subblocks + in1_subblock) * out_subblock_num_tiles;
+                                    for (uint32_t i = 0; i < out_subblock_num_tiles; i++) {
+                                        pack_tile<true>(i, mm_partials_dfb_id, slot + i);
+                                    }
+                                    tile_regs_release();
+                                } else {
+                                    const uint32_t start_dst_index = 0;
+                                    pack_block(start_dst_index, mm_partials_dfb_id, out_subblock_num_tiles);
 
-                                tile_regs_release();
-                                mm_partials_dfb.push_back(out_subblock_num_tiles);
+                                    tile_regs_release();
+                                    mm_partials_dfb.push_back(out_subblock_num_tiles);
+                                }
                             }
-
-                            in1_index_subblock_offset += out_subblock_w;
                         }
-                        in0_index_subblock_offset += in0_subblock_num_tiles;
                     }
 
 #ifdef PACKER_L1_ACC
@@ -563,10 +623,16 @@ void kernel_main() {
                     // never reload when with bias, bias uses intermediate buffer
                     enable_reload = false;
 #else
-                    // Last iteration does spill and reload to output buffer
-                    if (block < num_blocks_inner_dim - 2) {
-                        for (uint32_t s = 0; s < out_block_num_tiles; s += out_subblock_num_tiles) {
-                            mm_partials_dfb.wait_front(out_subblock_num_tiles);
+                    if constexpr (l1_acc_in_place) {
+                        if (block == num_blocks_inner_dim - 2) {
+                            mm_partials_dfb.push_back(out_block_num_tiles);
+                            enable_reload = true;
+                        }
+                    } else {
+                        // Last iteration does spill and reload to output buffer
+                        if (block < num_blocks_inner_dim - 2) {
+                            for (uint32_t s = 0; s < out_block_num_tiles; s += out_subblock_num_tiles) {
+                                mm_partials_dfb.wait_front(out_subblock_num_tiles);
 #ifdef ARCH_QUASAR
                             // TEN-4746 (#48552): bare wait_front->pop_front drain -- see the FUSE_BIAS drain
                             // above. dummy_unpack orders the POP after the WAIT on Quasar (UNPACR_NOP, reads
@@ -574,11 +640,12 @@ void kernel_main() {
                             dummy_unpack(mm_partials_dfb_id);
 #endif
                             mm_partials_dfb.pop_front(out_subblock_num_tiles);
+                            }
                         }
-                    }
                     if (block == num_blocks_inner_dim - 2) {
                         enable_reload = true;
                     }  // reload when last iteration
+                    }
 #endif
 #else
                     if constexpr (spill) {

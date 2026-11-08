@@ -1768,3 +1768,50 @@ def test_linear_in0_column_offset_rejects_invalid_window(
     config = _in0_column_window_config(1, 1, 4) if program_config == "mcast2d" else None
     with expect_error(RuntimeError, message):
         ttnn.linear(wide, weight, program_config=config, transpose_a=transpose_a, in0_column_offset=offset)
+
+
+@pytest.mark.parametrize("program", ["mcast2d", "mcast2d-blocks", "mcast1d"])
+def test_linear_packer_l1_acc_partials(device, program):
+    """Packer L1 accumulation over several K blocks, with the partials packed in place: one or several output blocks
+    per core, multi-tile subblocks and the 1D multicast program."""
+    M, K, N = 256, 512, 512
+    torch.manual_seed(0)
+    activation = torch.randn(1, M, K).bfloat16()
+    weight = (torch.randn(K, N) * 0.05).bfloat16()
+    to_device = lambda t: ttnn.from_torch(t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    compute_config = ttnn.init_device_compute_kernel_config(
+        device.arch(), math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True, packer_l1_acc=True
+    )
+    if program == "mcast1d":
+        # 16 cores of 8 x 1 tiles; K in four 4-tile blocks.
+        config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            compute_with_storage_grid_size=(4, 4),
+            in0_block_w=4,
+            out_subblock_h=4,
+            out_subblock_w=1,
+            per_core_M=8,
+            per_core_N=1,
+            fuse_batch=True,
+            fused_activation=None,
+            mcast_in0=True,
+        )
+    else:
+        # 4x4 cores of 2 x 4 tiles, as one 2 x 4 block or four 1 x 2 blocks; K in four 4-tile blocks.
+        blocks = program == "mcast2d-blocks"
+        config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+            compute_with_storage_grid_size=ttnn.CoreCoord(4, 4),
+            in0_block_w=4,
+            out_subblock_h=1 if blocks else 2,
+            out_subblock_w=2,
+            out_block_h=1 if blocks else 2,
+            out_block_w=2 if blocks else 4,
+            per_core_M=2,
+            per_core_N=4,
+            transpose_mcast=False,
+            fused_activation=None,
+            fuse_batch=True,
+        )
+    actual = ttnn.linear(
+        to_device(activation), to_device(weight), program_config=config, compute_kernel_config=compute_config
+    )
+    assert_with_pcc(activation.float() @ weight.float(), ttnn.to_torch(actual).float(), 0.9999)

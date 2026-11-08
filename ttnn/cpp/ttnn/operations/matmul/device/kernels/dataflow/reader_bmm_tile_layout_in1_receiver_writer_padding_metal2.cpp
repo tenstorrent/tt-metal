@@ -125,9 +125,21 @@ void kernel_main() {
                     // Operand 1
                     dfb_in1.reserve_back(in1_block_num_tiles);
 
+#ifdef IN1_MCAST_CHUNKS
+                    // The sender multicasts the block in IN1_MCAST_CHUNKS column chunks, one piecewise round,
+                    // publishing the count sent after each: hand each chunk to compute as soon as it has landed.
+                    static_assert(in1_block_num_tiles % IN1_MCAST_CHUNKS == 0, "a chunk is a whole number of columns");
+                    receiver.signal_ready();
+                    for (uint32_t chunk = 1; chunk <= IN1_MCAST_CHUNKS; ++chunk) {
+                        receiver.wait_pieces(chunk);
+                        dfb_in1.push_back(in1_block_num_tiles / IN1_MCAST_CHUNKS);
+                    }
+                    receiver.finish_pieces();
+#else
                     receiver.receive();
 
                     dfb_in1.push_back(in1_block_num_tiles);
+#endif  // IN1_MCAST_CHUNKS
                 }
 
 #ifdef FUSE_BIAS
@@ -197,8 +209,9 @@ void kernel_main() {
                             out_tensor_sb_row_start_tile_id += out_tensor_stride_h;
                         }
 
-                        noc.async_write_barrier();
-
+                        // Tiles only need to leave the buffer before the pop: the writes
+                        // complete at the final barrier (or before the fused op's signal).
+                        noc.async_writes_flushed();
                         dfb_out.pop_front(out_subblock_tile_count);
                         out_tensor_sbw_start_tile_id += out_tensor_next_subblock_stride_w;
                     }
@@ -223,6 +236,7 @@ void kernel_main() {
 
 #ifdef FUSE_OP_REDUCE_SCATTER
         // Signal reduce_scatter to go
+        noc.async_write_barrier();  // the output lands before reduce-scatter reads it
         op_signaler.synchronize_workers_and_signal_op(0);
 #endif
     }
@@ -237,4 +251,5 @@ void kernel_main() {
     // Pop the same number of tiles that were waited for.
     dfb_out.pop_front(out_num_tiles);
 #endif
+    noc.async_write_barrier();
 }

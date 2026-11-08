@@ -678,6 +678,8 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_spe
         device.arch(), cores.size(), mm_kernel_defines);
     ttnn::operations::compute_throttle_utils::throttle_mm_perf(
         device.arch(), cores.size(), mm_kernel_defines, throttle_level);
+    operations::matmul::utilities::add_row_mop_define_if_supported(
+        device.arch(), in0_tile, in1_tile, mm_kernel_defines);
 
     if (in0_height_sharded) {
         mm_kernel_in0_sender_interleaved_defines["IN0_SHARDED"] = "1";
@@ -692,6 +694,20 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_spe
             }
         } else {
             mm_kernel_in1_sender_writer_defines["IN1_SHARDED"] = "1";
+        }
+    }
+
+    // Interleaved, multicast in1 goes out in column chunks that compute starts on as they land: one piecewise round
+    // of the in1 multicast pipe per K-block.
+    if (!in1_is_sharded && in1_receiver.num_cores() > 0) {
+        const uint32_t in1_chunks = operations::matmul::utilities::in1_mcast_column_chunks(
+            device.arch(), in0_block_w, in1_block_w, out_subblock_w, in1_single_tile_size);
+        if (in1_chunks > 0) {
+            const std::string chunks = std::to_string(in1_chunks);
+            mm_kernel_defines["IN1_MCAST_CHUNKS"] = chunks;
+            mm_kernel_in1_sender_writer_defines["IN1_MCAST_CHUNKS"] = chunks;
+            mm_kernel_in1_receiver_writer_defines["IN1_MCAST_CHUNKS"] = chunks;
+            mm_kernel_in1_receiver_writer_other_noc_setup_defines["IN1_MCAST_CHUNKS"] = chunks;
         }
     }
 
