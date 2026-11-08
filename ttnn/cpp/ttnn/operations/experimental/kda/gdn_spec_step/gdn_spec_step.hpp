@@ -46,6 +46,8 @@ ttnn::Tensor gdn_spec_step(
     bool fp32_state = false,
     uint32_t max_users = 0,     // 0 = B; ring/ctrl layout width when > B (rows 0..B-1 of a max_users-wide layout)
     uint32_t value_blocks = 1,  // cores per (u, h) state (column split, bit-identical); clamped to the grid
-    uint32_t kernel_opts = 0);  // GdnSpecStepKernelOpt bits (bit-identical restructurings); 0 = the original program
+    uint32_t kernel_opts = 0,   // GdnSpecStepKernelOpt bits (bit-identical restructurings); 0 = the original program
+    const std::optional<ttnn::Tensor>& ring_page_idx = std::nullopt,  // [>= B, T*Nv]: per-token, per-head ring pages
+    const std::optional<ttnn::Tensor>& ring_pool2 = std::nullopt);    // second fp32 pool past ring's pages
 
 }  // namespace ttnn::experimental::kda
