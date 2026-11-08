@@ -90,14 +90,14 @@ std::vector<Tensor> clamp_bw(
         input.memory_config());  // TODO: Remove after ternary forward ops migration is completed
     TT_FATAL((max.has_value() || min.has_value()), "Only one of 'min' or 'max' can be None. Please provide one value");
     if (!max.has_value()) {
-        Tensor minT = ttnn::ge(input, min.value(), std::nullopt, output_mem_config);
-        Tensor result = ttnn::where(minT, grad, 0.0f, output_mem_config);
+        Tensor minT = ttnn::ge(input, min.value(), std::nullopt, output_memory_config);
+        Tensor result = ttnn::where(minT, grad, 0.0f, output_memory_config);
         grad_tensor.emplace_back(result);
         return grad_tensor;
     }
     if (!min.has_value()) {
-        Tensor maxT = ttnn::le(input, max.value(), std::nullopt, output_mem_config);
-        Tensor result = ttnn::where(maxT, grad, 0.0f, output_mem_config);
+        Tensor maxT = ttnn::le(input, max.value(), std::nullopt, output_memory_config);
+        Tensor result = ttnn::where(maxT, grad, 0.0f, output_memory_config);
         grad_tensor.emplace_back(result);
         return grad_tensor;
     }
@@ -120,14 +120,14 @@ std::vector<Tensor> clamp_bw(
         input.memory_config());  // TODO: Remove after ternary forward ops migration is completed
     TT_FATAL((max.has_value() || min.has_value()), "Only one of 'min' or 'max' can be None. Please provide one value");
     if (!max.has_value()) {
-        Tensor minT = ttnn::ge(input, min.value(), std::nullopt, output_mem_config);
-        Tensor in_grad = ttnn::where(minT, grad, 0.0f, output_mem_config);
+        Tensor minT = ttnn::ge(input, min.value(), std::nullopt, output_memory_config);
+        Tensor in_grad = ttnn::where(minT, grad, 0.0f, output_memory_config);
         grad_tensor.emplace_back(in_grad);
         return grad_tensor;
     }
     if (!min.has_value()) {
-        Tensor maxT = ttnn::le(input, max.value(), std::nullopt, output_mem_config);
-        Tensor in_grad = ttnn::where(maxT, grad, 0.0f, output_mem_config);
+        Tensor maxT = ttnn::le(input, max.value(), std::nullopt, output_memory_config);
+        Tensor in_grad = ttnn::where(maxT, grad, 0.0f, output_memory_config);
         grad_tensor.emplace_back(in_grad);
         return grad_tensor;
     }
@@ -682,7 +682,7 @@ std::vector<Tensor> hardsigmoid_bw(
             std::nullopt,
             output_mem_config),
         0.f,
-        ttnn::multiply(grad, 1.0f / 6.0f),
+        ttnn::multiply(grad, 1.0f / 6.0f, std::nullopt, output_mem_config),
         output_mem_config);
     grad_tensor.emplace_back(grad_a);
     return grad_tensor;
