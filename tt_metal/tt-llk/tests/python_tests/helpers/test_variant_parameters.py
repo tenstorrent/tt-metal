@@ -1208,6 +1208,15 @@ class MATMUL_UNPACK_TTSYNC(TemplateParameter):
                 1,
                 1,
             ),
+            (
+                MathFidelity.HiFi2,
+                DataFormat.Bfp8_b,
+                DataFormat.Bfp8_b,
+                DataFormat.Float32,
+                1,
+                1,
+                1,
+            ),
         ):
             return []
         if matmul_reuse_dir_for(formats, math_fidelity, ct_dim, rt_dim, dest_sync):
