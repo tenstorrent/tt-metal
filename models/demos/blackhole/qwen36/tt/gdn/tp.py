@@ -2097,11 +2097,13 @@ class TPGatedDeltaNet:
             out_memory_config=ttnn.L1_MEMORY_CONFIG,
         )
         qkvzab = ttnn.reshape(qkvzab, (1, B, qkvzab.shape[-1]))
+        # QWEN36_MAMBA_SPEC: the state of row b lives in its request's vLLM block (gdn_block_state.GdnBlockState).
+        paged = getattr(self, "_paged_state", None)
         gated = ttnn.experimental.kda.gdn_decode_step(
             qkvzab,
             tw["dt_bias_fp32"],
             tw["neg_exp_A_fp32"],
-            self.rec_state,
+            self.rec_state if paged is None else paged.rec_pool,
             tw["norm_w_1d"],
             self.Nv,
             self.Nk,
@@ -2110,11 +2112,12 @@ class TPGatedDeltaNet:
             scale=self.scale,
             memory_config=ttnn.L1_MEMORY_CONFIG,
             output_dtype=ttnn.bfloat16,
-            conv_hist=self._conv_hist_packed,
+            conv_hist=self._conv_hist_packed if paged is None else paged.hist_pool,
             conv_taps=tw["conv_taps_packed"],
             qkvz_dim=self.qkvz_dim_tp,
             fast_mode=True,
             fp32_state=self._decode_step_fp32_state,
+            **({} if paged is None else {"state_page_idx": paged.idx}),
         )  # [1, B, Nv*Dv] bf16
         ttnn.deallocate(qkvzab)
         partial = self._row_proj(gated, tw["out"])

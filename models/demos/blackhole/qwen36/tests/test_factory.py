@@ -229,6 +229,15 @@ def torch_routed_experts_reference(moe_state, x, routing):
 # --------------------------------------------------------------------------- #
 # PCC helpers
 # --------------------------------------------------------------------------- #
+def kv_pool_blocks(tokens, min_blocks=1, align=1):
+    """Paged KV blocks of kv_block_size() tokens that hold ``tokens``: at least ``min_blocks``, rounded up to ``align``.
+    Pools and page tables written in tokens give the same block counts at the default block size of 64."""
+    from models.demos.blackhole.qwen36.tt.tp_common import kv_block_size
+
+    n = max(int(min_blocks), -(-int(tokens) // kv_block_size()))
+    return -(-n // int(align)) * int(align)
+
+
 def compute_pcc(a, b):
     """Pearson correlation between two tensors (single canonical implementation)."""
     a_flat = a.float().flatten()

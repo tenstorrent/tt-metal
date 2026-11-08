@@ -51,6 +51,7 @@ ttnn::device_operation::ProgramArtifacts GdnDecodeStepProgramFactory::create_pro
     const auto& output = output_tensor.mesh_tensor();
     const auto& device = qkv.device();
     const bool fused = a.fuse_conv;
+    const bool paged = in.state_page_idx.has_value();  // validated: fused only
 
     const uint32_t Kt = a.key_dim / TILE_WIDTH;
     const uint32_t Vt = a.value_dim / TILE_WIDTH;
@@ -86,6 +87,11 @@ ttnn::device_operation::ProgramArtifacts GdnDecodeStepProgramFactory::create_pro
     const m2::TensorParamName OUT{"out"};
     const m2::TensorParamName HIST{"hist"};
     const m2::TensorParamName TAPS{"taps"};
+    const m2::TensorParamName PIDX{"state_page_idx"};
+    const m2::TensorParamName STATE2{"state_pool2"};
+    const m2::TensorParamName HIST2{"conv_hist_pool2"};
+    const bool state2 = in.state_pool2.has_value();  // validated: only with state_page_idx
+    const bool hist2 = in.conv_hist_pool2.has_value();
 
     const auto fp32 = tt::DataFormat::Float32;
     const auto bf16 = tt::DataFormat::Float16_b;
@@ -176,6 +182,19 @@ ttnn::device_operation::ProgramArtifacts GdnDecodeStepProgramFactory::create_pro
             });
         }
     }
+    // paged: each data movement kernel keeps its own copy of its head's two state_page_idx pages (state, conv_hist).
+    // The entry is the aligned page size, so the whole DRAM page slot is read in one aligned transfer.
+    const uint32_t pidx_entry = paged ? in.state_page_idx->buffer()->aligned_page_size() : 0u;
+    if (paged) {
+        for (const char* name : {"pidx_r", "pidx_w"}) {
+            dfbs.push_back(m2::DataflowBufferSpec{
+                .unique_id = m2::DFBSpecName{name},
+                .entry_size = pidx_entry,
+                .num_entries = 2,
+                .data_format_metadata = tt::DataFormat::UInt32,
+            });
+        }
+    }
     using EP = m2::DFBEndpointType;
     auto bind = [](const std::string& name, EP type) { return m2::DFBBinding{m2::DFBSpecName{name}, name, type}; };
 
@@ -249,6 +268,32 @@ ttnn::device_operation::ProgramArtifacts GdnDecodeStepProgramFactory::create_pro
         writer.compile_time_args = {{"Kt", Kt}, {"Vt", Vt}, {"Nk", Nk}, {"Nv", Nv}};
     } else {
         writer.compile_time_args = {{"Kt", Kt}, {"Vt", Vt}};
+    }
+
+    if (paged) {
+        reader.dfb_bindings.push_back(bind("pidx_r", EP::PRODUCER));
+        reader.dfb_bindings.push_back(bind("pidx_r", EP::CONSUMER));
+        reader.tensor_bindings.push_back(m2::TensorBinding{PIDX, "pidx"});
+        reader.compiler_options.defines.emplace("GDN_STATE_PAGE_IDX", "1");
+        writer.dfb_bindings.push_back(bind("pidx_w", EP::PRODUCER));
+        writer.dfb_bindings.push_back(bind("pidx_w", EP::CONSUMER));
+        writer.tensor_bindings.push_back(m2::TensorBinding{PIDX, "pidx"});
+        writer.compiler_options.defines.emplace("GDN_STATE_PAGE_IDX", "1");
+    }
+    // second pools: the define carries the first pool's page count, where the second pool's pages start in the index
+    if (state2) {
+        const auto pages_a = std::to_string(in.state.buffer()->num_pages());
+        reader.tensor_bindings.push_back(m2::TensorBinding{STATE2, "state2"});
+        reader.compiler_options.defines.emplace("GDN_STATE_POOL2", pages_a);
+        writer.tensor_bindings.push_back(m2::TensorBinding{STATE2, "state2_out"});
+        writer.compiler_options.defines.emplace("GDN_STATE_POOL2", pages_a);
+    }
+    if (hist2) {
+        const auto pages_a = std::to_string(in.conv_hist->buffer()->num_pages());
+        reader.tensor_bindings.push_back(m2::TensorBinding{HIST2, "hist2"});
+        reader.compiler_options.defines.emplace("GDN_HIST_POOL2", pages_a);
+        writer.tensor_bindings.push_back(m2::TensorBinding{HIST2, "hist2_w"});
+        writer.compiler_options.defines.emplace("GDN_HIST_POOL2", pages_a);
     }
 
     // ---- compute
@@ -334,6 +379,21 @@ ttnn::device_operation::ProgramArtifacts GdnDecodeStepProgramFactory::create_pro
             m2::TensorParameter{.unique_id = TAPS, .spec = in.conv_taps->mesh_tensor().tensor_spec()});
         run_args.tensor_args.emplace(HIST, in.conv_hist->mesh_tensor());
         run_args.tensor_args.emplace(TAPS, in.conv_taps->mesh_tensor());
+    }
+    if (paged) {
+        tensor_parameters.push_back(
+            m2::TensorParameter{.unique_id = PIDX, .spec = in.state_page_idx->mesh_tensor().tensor_spec()});
+        run_args.tensor_args.emplace(PIDX, in.state_page_idx->mesh_tensor());
+    }
+    if (state2) {
+        tensor_parameters.push_back(
+            m2::TensorParameter{.unique_id = STATE2, .spec = in.state_pool2->mesh_tensor().tensor_spec()});
+        run_args.tensor_args.emplace(STATE2, in.state_pool2->mesh_tensor());
+    }
+    if (hist2) {
+        tensor_parameters.push_back(
+            m2::TensorParameter{.unique_id = HIST2, .spec = in.conv_hist_pool2->mesh_tensor().tensor_spec()});
+        run_args.tensor_args.emplace(HIST2, in.conv_hist_pool2->mesh_tensor());
     }
 
     m2::ProgramSpec spec{

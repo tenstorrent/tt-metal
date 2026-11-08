@@ -30,12 +30,15 @@ import ttnn
 from models.common.utility_functions import run_for_blackhole
 from models.demos.blackhole.qwen36.demo.text_demo import _MESH_SHAPE, _MULTI, DEVICE_PARAMS
 from models.demos.blackhole.qwen36.tests.spec_helpers import _prompt_pool
+from models.demos.blackhole.qwen36.tests.test_factory import kv_pool_blocks
 from models.demos.blackhole.qwen36.tt.qwen36_vllm import Qwen36MTPContractForCausalLM
+from models.demos.blackhole.qwen36.tt.tp_common import kv_block_size
 
-BLOCK = 64
+BLOCK = kv_block_size()
 MAX_SEQ = 8192
 BPU = math.ceil(MAX_SEQ / BLOCK)
-NUM_BLOCKS = 640
+# 40960 KV tokens; each prompt rounds up to whole blocks plus a spare one, so large blocks need a floor of blocks.
+NUM_BLOCKS = kv_pool_blocks(40960, min_blocks=96)
 WIDTH = 2  # max_num_seqs: slot 0 = request under test, slot 1 = reference
 PCC_MIN = 0.99
 
