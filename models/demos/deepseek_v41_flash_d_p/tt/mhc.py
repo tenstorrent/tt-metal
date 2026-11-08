@@ -55,6 +55,9 @@ class TtHcMixes:
 
     out_sites = (None, None)  # FORK_OUT_BUFFERS=on (P.16, tt/host_alloc.reserve_forks): fused()'s hc / y sites
     _given = (None, None)  # POST_COLLAPSE (P.34): the site outputs of the last collapse_kwargs call
+    # NORM_IN_MHC=on (P.35, set by the block): the tt/norm.py:TtDistributedRmsNorm that reads this step's y (whole
+    # bf16 rows); collapse_kwargs then asks the pass for its output instead of y
+    norm = None
 
     def __init__(
         self, mesh, fn, scale, base, hidden: int, norm_eps: float, hc_eps: float, iters: int, rows: bool = False
@@ -140,7 +143,15 @@ class TtHcMixes:
             hc_sinkhorn_iters=self.iters,
             hc_output=self._given[0],
             y_output=self._given[1],
+            **self.norm_kwargs(),
         )
+
+    def norm_kwargs(self) -> dict:
+        """NORM_IN_MHC=on (P.35): mhc_post's norm_weight / norm_eps (the norm's own replicated whole-row weight, [1, 1,
+        1, H] fp32 TILE); {} = off."""
+        if self.norm is None:
+            return {}
+        return dict(norm_weight=self.norm.weight, norm_eps=self.norm.eps)
 
     def collapse_outputs(self, hc: ttnn.Tensor, y: ttnn.Tensor):
         """(hc, y) of a collapse_kwargs call: the kept site objects where given (the op returns new wrappers of their

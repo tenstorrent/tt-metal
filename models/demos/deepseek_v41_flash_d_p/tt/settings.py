@@ -536,6 +536,18 @@ TABLE = {
         "Layer 0's attn_hc and the hc steps after a layer the model does not run keep their mhc_pre_xing. off = the "
         "P.23 path (mhc_post stats row + mhc_pre_xing(collapse_pre=) a hc step)",
     ),
+    "NORM_IN_MHC": Setting(
+        "on",
+        ("on", "off"),
+        "P.35 (owner 2026-11-06, mHC study opportunity #3; needs POST_COLLAPSE's conditions and bf16 attn_norm / "
+        "ffn_norm outputs on whole rows). on = a residual pass that writes the next hc step's collapsed y "
+        "(POST_COLLAPSE) writes the RMS norm of it instead (fork option mhc_post norm_weight: the sum of y^2 an exact "
+        "fp32 SFPU sum in a spare column of the partial rows, rsqrt on each row's root, (y rsqrt) w on the SFPU, one "
+        "bf16 rounding); attn_norm / ffn_norm then run no rms_norm (80 programs a chunk fewer). Not bit-identical to "
+        "off: the rms_norm fork's statistic is FPU-grade (TF32 reads, a -1.6e-4 row-scale bias, README Limits), this "
+        "one exact, so some outputs differ by one bf16 step (fork test: 1e-5 of the elements one step off float64). "
+        "Layer 0's attn_hc and any hc step that keeps mhc_pre_xing keep their rms_norm. off = the P.34 path",
+    ),
     "HC_SINKHORN": Setting(
         "sfpu_fp32",
         ("sfpu_fp32", "fpu"),

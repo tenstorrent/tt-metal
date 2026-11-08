@@ -66,6 +66,10 @@ void MhcPostStatsDeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(
             t.collapse_pre->storage_type() == ttnn::StorageType::DEVICE, "mhc_post: every operand must be on a device");
     }
+    if (t.norm_weight.has_value()) {
+        TT_FATAL(
+            t.norm_weight->storage_type() == ttnn::StorageType::DEVICE, "mhc_post: every operand must be on a device");
+    }
 }
 
 void MhcPostStatsDeviceOperation::validate_on_program_cache_hit(
@@ -121,6 +125,12 @@ MhcPostStatsDeviceOperation::tensor_return_value_t MhcPostStatsDeviceOperation::
 
 ttsl::hash::hash_t MhcPostStatsDeviceOperation::compute_program_hash(
     const operation_attributes_t& attrs, const tensor_args_t& t) {
+    if (attrs.norm) {  // P.35: the hash without the norm, then the weight's spec (the scalars are runtime args)
+        auto off = attrs;
+        off.norm = false;
+        return tt::tt_metal::operation::hash_operation<MhcPostStatsDeviceOperation>(
+            compute_program_hash(off, t), true, true, t.norm_weight->tensor_spec());
+    }
     if (attrs.collapse) {  // P.34: the off hash, then collapse_pre's spec (the scalars are runtime args); off: below
         auto off = attrs;
         off.collapse = false;
@@ -206,6 +216,12 @@ std::vector<ttnn::Tensor> mhc_post_stats(
         args.collapse_pre = collapse->collapse_pre;
         args.hc_output = collapse->hc_output;
         args.y_output = collapse->y_output;
+        if (collapse->norm_weight.has_value()) {  // P.35
+            attrs.norm = true;
+            attrs.rms_inv_w = 1.0 / static_cast<double>(input.logical_shape()[-1]);
+            attrs.rms_eps = collapse->rms_eps;
+            args.norm_weight = collapse->norm_weight;
+        }
     }
     return ttnn::device_operation::launch<OperationType>(attrs, args);
 }

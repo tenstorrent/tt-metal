@@ -187,3 +187,45 @@ two perf-tournament rounds); its golden suite is `eval/golden_tests/mhc_post` on
 - Files: `mhc_post_ttnn.{hpp,cpp}`, `mhc_post_ttnn_nanobind.cpp`, `device/mhc_post_stats_device_operation.{hpp,cpp}`,
   `device/mhc_post_stats_program_factory.cpp`, `kernels/mhc_post_stats_{writer,compute}.cpp`,
   `kernels/mhc_post_hc_sfpu.hpp` (new), `tests/unit/test_mhc_post_collapse.py` (new).
+
+### norm_weight: the collapsed y comes out RMS-normalized (deepseek_v41_flash_d_p P.35)
+- What: opt-in `norm_weight=w` ((..., 1, C) fp32 TILE DRAM, leading dims 1) and `norm_eps` with `collapse_pre`: y
+  (and `y_output`) is bf16((y * rsqrt(sum_c y^2 / C + eps)) * w) of the bf16 collapse y instead of y. Define
+  MHC_POST_NORM (all three kernels), CBs 11-15 / 24 / 25, semaphore 1; the weight's address is a reader common arg, eps
+  and 1 / C compute common args after the hc scalars; the hash adds the weight's spec. Off (default): every program,
+  arg and hash unchanged. Per program:
+  - Unit loop: the unit's y tiles stay in cb_y (sized max units a core x B). One DEST window squares and sums them
+    lane-wise (exact bf16 values in fp32), then folds each row's 32 columns to 8 (lane-wise adds of the 4 DEST vectors
+    that share its lanes). The writer turns those 8 columns coefficient-major (256 words: the 1024-word transpose costs
+    8.2 us on BRISC). slot_total8 sums them, and they land in column n (n + 2) + 1 of the unit's partial row. The
+    reader lays out the unit's weight tile (slot 4 c + g; two 64-byte reads a column tile).
+  - Roots: with a spare core per row (units < cores: 100 units on 110 cores at [160, 5120]) the rows' roots are those
+    cores, so they own no units. Otherwise the roots stay where they are.
+  - Root's sum window: also computes rsqrt(sum / C + eps) of that column (the hc's Newton rsqrt; row-major, no
+    transpose) -> cb_nrs. The root's idle reader then sends the 32 values (128 B) into page j of cb_nr on the owner of
+    each of the row's units, plus one semaphore increment each, while the writer transposes the row for the hc.
+  - Owners: each owner's reader lays out its rstd tiles (slot = DEST vector row block).
+  - Norm phase (after the hc rows): R and W tiles once a window, up to 6 y columns, (y rstd) w fp32 on the SFPU (one
+    template instance a column, DS41-189), one bf16 rounding -> cb_yn -> y.
+- Why: under OWN_ROWS the model's attn_norm / ffn_norm were separate rms_norm programs on the y this pass just wrote
+  (80 a chunk, 0.70 + 0.70 ms device, ~5 ms host a chunk on the 8x4).
+- Measured (8x4, [160, 5120] bf16 a chip, 110 cores, traced 50 calls): mhc_post collapse 134.4 us a call, with
+  norm_weight 139.4 us; the rms_norm it replaces 18.7 us. Device profile of the first version: the per-unit and root
+  word-copy transposes (cols_to_soa 8.2 us, soa_to_cols 5.6 us on BRISC, volatile loops) dominate the program's tail.
+  They are not changed here: the collapse program without the norm keeps them, and is a candidate pick of its own.
+- Precision: the statistic is an exact fp32 sum of the bf16 values (the rms_norm fork's is FPU-grade, README Limits),
+  so the output is closer to float64 than the separate norm, and not bit-identical to it (one bf16 step on some
+  elements).
+- Tests: `tests/unit/test_mhc_post_norm.py` (8x4 Galaxy, FABRIC_2D, 11 x 10 cap; 6 passed):
+  - X' and hc are bit-identical to the call without norm_weight; stats too, except column 25 (= sum y^2, rel < 1e-5
+    vs float64).
+  - y_n vs float64 of the formula on the op's own bf16 y: at most one bf16 step, 1.0-1.3e-5 of the elements one step
+    off.
+  - Shapes: [160, 5120] (spare-core roots), [1280, 5120] (8 units a core, unit roots), [640, 1280], [64, 640]
+    (ragged).
+  - A cache hit with another weight / eps into a given y buffer; a negative control; refusals.
+  - Fork regression not run on the 8x4 (owner OV-25).
+- Needed by: deepseek_v41_flash_d_p P.35 (setting NORM_IN_MHC: tt/mhc.py norm_kwargs, tt/model.py).
+- Files: `mhc_post_ttnn.{hpp,cpp}`, `mhc_post_ttnn_nanobind.cpp`, `device/mhc_post_stats_device_operation.{hpp,cpp}`,
+  `device/mhc_post_stats_program_factory.cpp`, `kernels/mhc_post_stats_{reader,writer,compute}.cpp`,
+  `tests/unit/test_mhc_post_norm.py` (new).

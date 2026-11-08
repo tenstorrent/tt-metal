@@ -13,6 +13,11 @@
 //   mhc_pre_xing_writer.cpp build_pre_blocks); after the X' tiles, the unit's y tiles (cb_y) -> y pages r Ct + b B + c.
 //   Root phase: the row's sum (cb_fin) also -> coefficient-major (cb_hsoa); the compute's hc (cb_hsoa_out) -> the
 //   row-major stage (columns n (n + 2)..31 zero) -> hc page r. All moves are fp32 word copies (bit-exact).
+// MHC_POST_NORM (P.35): the y tiles stay with the compute (no y write in the unit loop); the unit's lane-wise y^2 tile
+//   (cb_nsq, ready before the matmul's) goes coefficient-major first through the same row-total pass (cb_soa holds 2)
+//   into column ss_col + 1 of the partial (8 folded columns a row: 256 words). The roots' rstd go out through the
+//   reader (mhc_post_stats_reader.cpp), so this kernel's root phase is the collapse's. Then the rooted rows' hc (the
+//   compute's Sinkhorn before its norm phase), then per unit the normalized y tiles (cb_yn) -> y pages r Ct + b B + c.
 
 #include <cstdint>
 
@@ -77,6 +82,29 @@ inline void build_coefficients(
         }
     }
 }
+
+#ifdef MHC_POST_NORM
+// dst coefficient-major slots [0, 8) <- src row-major columns 0, 2, .., 14 (the compute's folded y^2 tile: slot m, lane
+// l = row l's sum over columns 2 m, 2 m + 1, 2 m + 16, 2 m + 17); 256 words, plain loads (after the CB wait)
+inline void folded_to_soa8(const uint32_t* src, uint32_t* dst) {
+    asm volatile("" ::: "memory");
+#pragma GCC unroll 2
+    for (uint32_t l = 0; l < 32; ++l) {
+        const uint32_t* s = src + rc_index(l, 0);
+        uint32_t v[8];
+#pragma GCC unroll 8
+        for (uint32_t m = 0; m < 8; ++m) {
+            v[m] = s[2 * m];
+        }
+        uint32_t* d = dst + slot_index(0, l);
+#pragma GCC unroll 8
+        for (uint32_t m = 0; m < 8; ++m) {
+            d[slot_index(m, 0)] = v[m];
+        }
+    }
+    asm volatile("" ::: "memory");
+}
+#endif
 
 #ifdef MHC_POST_COLLAPSE
 // Pre-block tile (mhc_pre_xing_writer.cpp, the same words): slot 8 i + b, lane l <- pre_i (row-major column i) of
@@ -171,6 +199,11 @@ void kernel_main() {
     const auto hc_acc = TensorAccessor(hc_args, get_common_arg_val<uint32_t>(1), page);
     const auto y_acc = TensorAccessor(y_args, get_common_arg_val<uint32_t>(2), o_page);
 #endif
+#ifdef MHC_POST_NORM
+    constexpr uint32_t nx0 = y_args.next_compile_time_args_offset();
+    constexpr uint32_t cb_nsq = get_compile_time_arg_val(nx0);
+    constexpr uint32_t cb_yn = get_compile_time_arg_val(nx0 + 1);
+#endif
 
     auto build = [&](uint32_t u) {
         const mhc_stats::Unit U = mhc_stats::unit_of(u, rt, bw, ct);
@@ -214,7 +247,7 @@ void kernel_main() {
             noc_async_writes_flushed();
             cb_pop_front(cb_out, n * bw);
         }
-#ifdef MHC_POST_COLLAPSE
+#if defined(MHC_POST_COLLAPSE) && !defined(MHC_POST_NORM)
         cb_wait_front(cb_y, bw);  // the unit's y tiles, tile c = y[r, b B + c]
         {
             const uint32_t src = get_read_ptr(cb_y);
@@ -226,15 +259,34 @@ void kernel_main() {
         }
 #endif
         // the unit's partial row
+#ifdef MHC_POST_NORM
+        cb_wait_front(cb_nsq, 1);  // the folded y^2 tile first (ready before the matmul's): its 8 columns a row
+        cb_reserve_back(cb_soa, 1);
+        folded_to_soa8(
+            reinterpret_cast<const uint32_t*>(get_read_ptr(cb_nsq)),
+            reinterpret_cast<uint32_t*>(get_write_ptr(cb_soa)));
+        cb_push_back(cb_soa, 1);
+        cb_pop_front(cb_nsq, 1);
+#endif
         cb_wait_front(cb_sfin, 1);
         cb_reserve_back(cb_soa, 1);
         cols_to_soa(reinterpret_cast<ptr_t>(get_read_ptr(cb_sfin)), reinterpret_cast<ptr_t>(get_write_ptr(cb_soa)));
         cb_push_back(cb_soa, 1);
         cb_pop_front(cb_sfin, 1);
-        cb_wait_front(cb_soa_out, 1);
         cb_wait_front(cb_mfin, 1);
-        ptr_t tot = reinterpret_cast<ptr_t>(get_read_ptr(cb_soa_out));
         ptr_t mix = reinterpret_cast<ptr_t>(get_read_ptr(cb_mfin));
+#ifdef MHC_POST_NORM
+        cb_wait_front(cb_soa_out, 1);  // the y^2 totals -> column ss_col + 1
+        {
+            const ptr_t ytot = reinterpret_cast<ptr_t>(get_read_ptr(cb_soa_out));
+            for (uint32_t l = 0; l < 32; ++l) {
+                mix[rc_index(l, ss_col + 1)] = ytot[slot_index(0, l)];
+            }
+        }
+        cb_pop_front(cb_soa_out, 1);
+#endif
+        cb_wait_front(cb_soa_out, 1);
+        ptr_t tot = reinterpret_cast<ptr_t>(get_read_ptr(cb_soa_out));
         for (uint32_t l = 0; l < 32; ++l) {
             mix[rc_index(l, ss_col)] = tot[slot_index(0, l)];
         }
@@ -256,6 +308,16 @@ void kernel_main() {
         }
     }
 #endif
+#ifdef MHC_POST_COLLAPSE
+    // a rooted row's hc: the compute's coefficient-major tile (cb_hsoa_out) -> the row-major stage -> hc page r
+    auto hc_out = [&](uint32_t r) {
+        cb_wait_front(cb_hsoa_out, 1);
+        noc_async_write_barrier();  // the previous row's hc write has left the stage
+        soa_to_cols<hc_cols>(reinterpret_cast<ptr_t>(get_read_ptr(cb_hsoa_out)), stage);
+        cb_pop_front(cb_hsoa_out, 1);
+        noc_async_write_page(r, hc_acc, reinterpret_cast<uint32_t>(stage));
+    };
+#endif
     for (uint32_t i = 0; i < n_rooted; ++i) {
         const uint32_t r = get_arg_val<uint32_t>(8 + i);
         cb_wait_front(cb_fin, 1);
@@ -267,14 +329,25 @@ void kernel_main() {
 #endif
         noc_async_writes_flushed();
         cb_pop_front(cb_fin, 1);
-#ifdef MHC_POST_COLLAPSE
-        cb_wait_front(cb_hsoa_out, 1);
-        noc_async_write_barrier();  // the previous row's hc write has left the stage
-        soa_to_cols<hc_cols>(reinterpret_cast<ptr_t>(get_read_ptr(cb_hsoa_out)), stage);
-        cb_pop_front(cb_hsoa_out, 1);
-        noc_async_write_page(r, hc_acc, reinterpret_cast<uint32_t>(stage));
+#if defined(MHC_POST_COLLAPSE) && !defined(MHC_POST_NORM)
+        hc_out(r);
 #endif
     }
+#ifdef MHC_POST_NORM
+    for (uint32_t i = 0; i < n_rooted; ++i) {  // the rooted rows' hc (the compute's Sinkhorn while the rstd travel)
+        hc_out(get_arg_val<uint32_t>(8 + i));
+    }
+    for (uint32_t u = start; u < start + count; ++u) {  // the normalized y of each unit
+        const mhc_stats::Unit U = mhc_stats::unit_of(u, rt, bw, ct);
+        cb_wait_front(cb_yn, bw);
+        const uint32_t src = get_read_ptr(cb_yn);
+        for (uint32_t c = 0; c < U.valid; ++c) {
+            noc_async_write_page(U.r * ct + U.col0 + c, y_acc, src + c * o_page);
+        }
+        noc_async_writes_flushed();
+        cb_pop_front(cb_yn, bw);
+    }
+#endif
     noc_async_write_barrier();
     noc_async_atomic_barrier();
 }
