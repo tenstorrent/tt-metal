@@ -166,6 +166,29 @@ def test_solver_for_scheduler_dispatch(expect_error) -> None:
         solver_for_scheduler(object())
 
 
+def test_solver_for_scheduler_rejects_unsupported_unipc_configs(expect_error) -> None:
+    """UniPCSolver hard-codes several behaviours; the factory must reject configs that diverge."""
+    base_kwargs = dict(use_flow_sigmas=True, flow_shift=3.0, prediction_type="flow_prediction", solver_order=2, solver_type="bh2")
+
+    with expect_error(ValueError, "prediction_type"):
+        solver_for_scheduler(UniPCMultistepScheduler(**{**base_kwargs, "prediction_type": "epsilon"}))
+
+    with expect_error(ValueError, "disable_corrector"):
+        solver_for_scheduler(UniPCMultistepScheduler(**{**base_kwargs, "disable_corrector": [0]}))
+
+    with expect_error(ValueError, "lower_order_final"):
+        solver_for_scheduler(UniPCMultistepScheduler(**{**base_kwargs, "lower_order_final": False}))
+
+    with expect_error(ValueError, "thresholding"):
+        solver_for_scheduler(UniPCMultistepScheduler(**{**base_kwargs, "thresholding": True}))
+
+    with expect_error(ValueError, "predict_x0"):
+        solver_for_scheduler(UniPCMultistepScheduler(**{**base_kwargs, "predict_x0": False}))
+
+    with expect_error(ValueError, "solver_p"):
+        solver_for_scheduler(UniPCMultistepScheduler(**{**base_kwargs, "solver_p": 2}))
+
+
 def test_custom_sigma_scheduler_dispatches_to_a_scheduler_less_euler() -> None:
     """The marker asks for Euler over sigmas the caller supplies, taken as given."""
     solver = solver_for_scheduler(CustomSigmaScheduler())
