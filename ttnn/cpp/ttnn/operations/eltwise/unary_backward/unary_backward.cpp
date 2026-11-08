@@ -496,7 +496,7 @@ std::vector<Tensor> lgamma_bw(
     auto output_memory_config = output_mem_config.value_or(
         input.memory_config());  // TODO: Remove after ternary forward ops migration is completed
     std::vector<Tensor> grad_tensor;
-    Tensor grad_result = ttnn::multiply(grad, ttnn::digamma(input, output_mem_config), std::nullopt, output_mem_config);
+    Tensor grad_result = ttnn::multiply(grad, ttnn::digamma(input, output_memory_config), std::nullopt, output_memory_config);
     grad_tensor.emplace_back(grad_result);
     return grad_tensor;
 }
@@ -1611,25 +1611,25 @@ std::vector<Tensor> digamma_bw(
     auto output_memory_config = output_mem_config.value_or(input.memory_config());
     float t_inf = std::numeric_limits<float>::infinity();
     float t_nan = std::nanf("");
-    Tensor grad_a = ttnn::multiply(grad, ttnn::polygamma(input, 1, output_mem_config), std::nullopt, output_mem_config);
+    Tensor grad_a = ttnn::multiply(grad, ttnn::polygamma(input, 1, output_memory_config), std::nullopt, output_memory_config);
     grad_a = where(
         ttnn::logical_and(
-            ttnn::eqz(input, output_mem_config), ttnn::eqz(grad, output_mem_config), std::nullopt, output_mem_config),
+            ttnn::eqz(input, output_memory_config), ttnn::eqz(grad, output_memory_config), std::nullopt, output_memory_config),
         t_nan,
         grad_a,
-        output_mem_config);
+        output_memory_config);
     grad_a = where(
         ttnn::logical_and(
-            ttnn::eqz(input, output_mem_config), ttnn::ltz(grad, output_mem_config), std::nullopt, output_mem_config),
+            ttnn::eqz(input, output_memory_config), ttnn::ltz(grad, output_memory_config), std::nullopt, output_memory_config),
         -t_inf,
         grad_a,
-        output_mem_config);
+        output_memory_config);
     grad_a = where(
         ttnn::logical_and(
-            ttnn::eqz(input, output_mem_config), ttnn::gtz(grad, output_mem_config), std::nullopt, output_mem_config),
+            ttnn::eqz(input, output_memory_config), ttnn::gtz(grad, output_memory_config), std::nullopt, output_memory_config),
         t_inf,
         grad_a,
-        output_mem_config);
+        output_memory_config);
     grad_tensor.emplace_back(grad_a);
     return grad_tensor;
 }
@@ -1644,28 +1644,28 @@ std::vector<Tensor> polygamma_bw(
         pos_neg = -1.0f;
     }
     Tensor grad_a =
-        ttnn::multiply(grad, ttnn::polygamma(input, (n + 1), output_mem_config), std::nullopt, output_mem_config);
+        ttnn::multiply(grad, ttnn::polygamma(input, (n + 1), output_memory_config), std::nullopt, output_memory_config);
     grad_a = where(
         ttnn::logical_and(
-            ttnn::le(input, 0.0f, std::nullopt, output_mem_config),
-            ttnn::eqz(grad, output_mem_config),
+            ttnn::le(input, 0.0f, std::nullopt, output_memory_config),
+            ttnn::eqz(grad, output_memory_config),
             std::nullopt,
-            output_mem_config),
+            output_memory_config),
         t_nan,
         grad_a,
-        output_mem_config);
+        output_memory_config);
     grad_a = where(
         ttnn::logical_and(
-            ttnn::eqz(input, output_mem_config), ttnn::gtz(grad, output_mem_config), std::nullopt, output_mem_config),
+            ttnn::eqz(input, output_memory_config), ttnn::gtz(grad, output_memory_config), std::nullopt, output_memory_config),
         (-std::numeric_limits<float>::infinity() * pos_neg),
         grad_a,
-        output_mem_config);
+        output_memory_config);
     grad_a = where(
         ttnn::logical_and(
-            ttnn::eqz(input, output_mem_config), ttnn::ltz(grad, output_mem_config), std::nullopt, output_mem_config),
+            ttnn::eqz(input, output_memory_config), ttnn::ltz(grad, output_memory_config), std::nullopt, output_memory_config),
         (std::numeric_limits<float>::infinity() * pos_neg),
         grad_a,
-        output_mem_config);
+        output_memory_config);
     grad_tensor.emplace_back(grad_a);
     return grad_tensor;
 }
