@@ -246,7 +246,22 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 void pack_dest_bank_block(const Operand& buffer_Res, int dst_index, int block, std::uint32_t num_tiles_in_block)
 {
-    _llk_pack_<DstSync::SyncHalf, is_fp32_dest_acc_en, ckernel::PackMode::Default>(dst_index, L1_ADDRESS(buffer_Res[block * num_tiles_in_block]));
+    if constexpr (tilize_en)
+    {
+        // The Blackhole tilize MOP handles one tile per invocation regardless of its init-time num_tiles.
+        for (std::uint32_t tile = 0; tile < num_tiles_in_block; ++tile)
+        {
+            LLK_ASSERT(
+                (dst_index + tile < ckernel::get_dest_max_tiles<DstSync::SyncHalf, is_fp32_dest_acc_en, ckernel::DstTileShape::Tile32x32>()),
+                "tile exceeds max dest tiles");
+            _llk_pack_<DstSync::SyncHalf, is_fp32_dest_acc_en, ckernel::PackMode::Default>(
+                dst_index + tile, L1_ADDRESS(buffer_Res[block * num_tiles_in_block + tile]));
+        }
+    }
+    else
+    {
+        _llk_pack_<DstSync::SyncHalf, is_fp32_dest_acc_en, ckernel::PackMode::Default>(dst_index, L1_ADDRESS(buffer_Res[block * num_tiles_in_block]));
+    }
 }
 
 void run_kernel(RUNTIME_PARAMETERS params)
@@ -278,7 +293,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             num_faces,
             false /* partial_face */,
             false /* narrow_tile */,
-            NUM_TILES_IN_BLOCK /* num_tiles */);
+            tilize_en ? 1 : NUM_TILES_IN_BLOCK /* num_tiles */);
         _llk_pack_dest_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
         reconfigure_packer_l1_acc(L1_ACC);
         PROFILER_SYNC();
