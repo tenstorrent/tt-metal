@@ -852,10 +852,6 @@ class TtDSAIndexer(LightweightModule):
         # for equal slabs), so the same bounded top-k with the rows' TRUE bounds (row-sharded) selects exactly.
         bounded = False
         seq_axes = [0]
-        # tt-blaze G53F-0313: a BOUNDED selection (per-row bounds in ``_topk_bounded``: the extra columns are scored,
-        # never ranked) may take its width from the padded chunk end, so it is a function of the chunk geometry; the
-        # unbounded top-k (single-row meshes, the custom scorer's rows form) keeps the prompt's valid pools
-        nb = num_pools_valid if num_pools_bounded is None else max(num_pools_valid, num_pools_bounded)
         if col_stride and row_starts is not None and not q_rows_form:
             # G53F-0224: device (r, c) holds the T queries at row_starts[r] + c*col_stride + s. The op's linear form
             # (seq_shard_axes=[]: device index d = r*cols + c, its chunk start op_start + d*T) is a superset of every
@@ -865,18 +861,29 @@ class TtDSAIndexer(LightweightModule):
             op_start = max(s + c * col_stride - (r * C + c) * T for r, s in enumerate(row_starts) for c in range(C))
             bounded = True
             seq_axes = []
-            kv_len = self._kv_len(cache, max(nb, (op_start + R * C * T) // self.P))
+            width = lambda nv: self._kv_len(cache, max(nv, (op_start + R * C * T) // self.P))  # noqa: E731
         elif row_starts is not None and not q_rows_form:
             R = len(row_starts)
             op_start = max(s - r * T for r, s in enumerate(row_starts))
             bounded = R > 1
             # every row's chunk start (op_start + r*T) must lie inside the scored width: cover the last row's end
-            kv_len = self._kv_len(cache, max(nb if bounded else num_pools_valid, (op_start + R * T) // self.P))
+            width = lambda nv: self._kv_len(cache, max(nv, (op_start + R * T) // self.P))  # noqa: E731
         else:
             op_start = query_start + self.row_offset_sim * T
             extra = 0 if q_rows_form else self._extra_rows()
             bounded = bool(extra)
-            kv_len = self._kv_len(cache, nb if bounded else num_pools_valid, extra * T)
+            width = lambda nv: self._kv_len(cache, nv, extra * T)  # noqa: E731
+        kv_len = width(num_pools_valid)
+        # tt-blaze G53F-0313 (``num_pools_bounded``, GLM53_PREFILL_FIXED_SHAPES): a BOUNDED selection (per-row bounds in
+        # ``_topk_bounded``: the extra columns are scored, never ranked) takes its width from the padded chunk end, a
+        # function of the chunk geometry; the unbounded top-k (single-row meshes, the custom scorer's rows form) keeps
+        # the prompt's valid pools. The score rows' pitch must not move: a different pools-view width changed the
+        # selections on device (K1 run 2, prompt 61000), so only with the uncropped rows (GLM53_INDEXER_NO_CROP=1: the
+        # pitch is the view's / allocation's, not kv_len) and never past the view the per-length path uses.
+        if bounded and _no_crop() and num_pools_bounded is not None and num_pools_bounded > num_pools_valid:
+            kv_pad = width(num_pools_bounded)
+            if pools_view is None or row is not None or kv_pad <= pools_view[1]:
+                kv_len = kv_pad
         if q_rows_form:
             scores_rm = self._score_prefill_rows(q, w, cache, user, positions=positions, kv_len=kv_len)
             self._mark("index_score")
