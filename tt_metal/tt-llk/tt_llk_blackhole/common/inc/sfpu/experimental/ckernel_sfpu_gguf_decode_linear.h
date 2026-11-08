@@ -290,9 +290,10 @@ sfpi_inline void linear_params()
     }
 }
 
-// body() of the linear formats but Q8_0 and TQ1_0 through SFPLOADMACRO. Three slots per output: the macro (shift,
-// cast, S q + M, store), a shift of the output's field to the top of its word, and a slot without a Simple instruction
-// for the macro's Round-unit shift. Under DISABLE_SFPLOADMACRO (ttsim) these formats use body().
+// body() of the linear formats but Q8_0 and TQ1_0 through SFPLOADMACRO: per output a shift of its field to the top of
+// a word (v) and a macro (shift right, cast, S v + M, store). Under DISABLE_SFPLOADMACRO (ttsim) these formats use
+// body(). Two variants: CYC (delays count cycles, stores arbitrated against the unpackers, may run beside an unpack
+// to DEST) and instruction-counted (shorter streams, nothing may write DEST beside them).
 
 template <int FMT>
 constexpr bool macro_q4 = FMT == Q4_0 || FMT == Q4_1 || FMT == Q4_K;
@@ -300,10 +301,11 @@ constexpr bool macro_q4 = FMT == Q4_0 || FMT == Q4_1 || FMT == Q4_K;
 template <int FMT>
 constexpr bool macro_body = LOADMACRO && traits<FMT>::linear && FMT != Q8_0 && FMT != TQ1_0;
 
-// Instruction templates: 0 = x >> (32 - B) (amount in LReg14), 1 = int to fp32, 2 / 3 = S x + M with S, M in L4, L5 /
-// L6, L7. Macro b (column half b) runs the shift, cast, MAD (into LReg16) and store of LReg16 1, 2, 3 and 5
-// instructions after it.
-template <int FMT>
+// Instruction templates: 0 = v >> (32 - B) (amount in LReg14), 1 = int to fp32, 2 / 3 = S v + M with S, M in L4, L5 /
+// L6, L7. Macro b (column half b) runs the shift, cast, MAD (into LReg16) and store of LReg16 1, 2, 3 and 5 cycles
+// after it (CYC), or 1, 2, 3 and 5 instructions after it. Blackhole arbitrates a macro's DEST write against the
+// unpackers' only when it lands within 7 cycles of the macro, which delays that count instructions do not guarantee.
+template <int FMT, bool CYC>
 sfpi_inline void macro_init_linear()
 {
     sfpi::vConstIntPrgm2 = mfield<FMT>::B - 32;
@@ -311,17 +313,18 @@ sfpi_inline void macro_init_linear()
     TTI_SFPCAST(0, 13, sfpi::SFPCAST_MOD1_SM32_TO_FP32_RNE);
     TTI_SFPMAD(4, 0, 5, 14, sfpi::SFPMAD_MOD1_OFFSET_NONE);
     TTI_SFPMAD(6, 0, 7, 15, sfpi::SFPMAD_MOD1_OFFSET_NONE);
-    constexpr std::uint32_t simple = (2 << 3) | 5;
-    constexpr std::uint32_t round  = 0x80 | (1 << 3) | 4;
-    constexpr std::uint32_t store  = 0x40 | (5 << 3) | 3;
-    constexpr std::uint32_t mad0   = 0xC0 | (3 << 3) | 6;
+    constexpr std::uint32_t d      = CYC ? 0 : 1; // a delay of d counts d + 1 cycles, or d instructions
+    constexpr std::uint32_t simple = ((1 + d) << 3) | 5;
+    constexpr std::uint32_t round  = 0x80 | (d << 3) | 4;
+    constexpr std::uint32_t store  = 0x40 | ((4 + d) << 3) | 3;
+    constexpr std::uint32_t mad0   = 0xC0 | ((2 + d) << 3) | 6;
     TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_LOWER, (mad0 << 8) | simple);
     TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_UPPER, (store << 8) | round);
     TTI_SFPCONFIG(0, 4, 0);
     TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_LOWER, ((mad0 + 1) << 8) | simple);
     TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_UPPER, (store << 8) | round);
     TTI_SFPCONFIG(0, 5, 0);
-    TTI_SFPCONFIG(0xF00, 8, sfpi::SFPCONFIG_MOD1_ARG_IMM); // stores as sfpi's; delays count instructions
+    TTI_SFPCONFIG(CYC ? 0 : 0xF00, 8, sfpi::SFPCONFIG_MOD1_ARG_IMM); // stores as sfpi's
     TTI_SFPNOP;
 }
 
@@ -417,10 +420,190 @@ sfpi_inline void k4_params_regs()
     TTI_SFPNOP;
 }
 
-// Q4_0, Q4_1 and Q4_K: field i of code word 2h + a (L3) through macro i % 2, v in L0..L2 in turn; third slots load
-// the next code word or S, M. IN_REGS: a = 0's S / M are already in L4..L7 (k4_params_regs).
-template <bool IN_REGS = false>
-sfpi_inline void body_macro_q4()
+// The issue stream of the macro bodies, planned at compile time (make_mplan). A stall of the issue (a DEST access
+// losing arbitration) delays later instructions but not the scheduled operations of earlier macros, so the plan holds
+// without assuming issue timing: every input of a macro is written before the macro, an instruction that overwrites
+// one comes after the macro's read, and no Simple / Round instruction (one LReg write port) is issued between a macro
+// and its cast. Stream position j decodes output position k = order[j]; v of position j is LReg j % NV; code words in
+// L3 (NV = 3) or alternating L3 / L2 (NV = 2); S / M of column half b in L4 + 2b / L5 + 2b.
+
+enum : int
+{
+    MS_NOP,
+    MS_MACRO, // macro x (column half), v = LReg y, row z
+    MS_SHIFT, // v x = word register y << z
+    MS_LOAD,  // register x, SFPLOAD mode y, row z
+};
+
+// The macro's load replaces only the low 16 bits of v (the shifted field stays in the top bits).
+constexpr std::uint32_t LOAD_LO16_ONLY = 14;
+
+// Cycles after a macro: its cast (last Simple / Round operation), its MAD (last read of v, S, M), its store.
+constexpr int MC_CAST  = 2;
+constexpr int MC_MAD   = 3;
+constexpr int MC_STORE = 5;
+
+constexpr int MSLOTS = 176;
+
+struct mplan
+{
+    mslot s[MSLOTS];
+    int n;
+};
+
+template <int FMT>
+constexpr int mgroup(const int k)
+{
+    return 2 * (k / 16) + (traits<FMT>::has_h ? k / 8 % 2 : 0);
+}
+
+// Output order ORD: 0 = k; 1 = by scale group, then column half (one S / M pair per run, the other one reloads
+// meanwhile); 2 = by code word, then column half.
+template <int FMT, int CP, int ORD>
+constexpr int morder_key(const int k)
+{
+    const int major = ORD == 1 ? mgroup<FMT>(k) : ORD == 2 ? mword<FMT, CP>(k) : 0;
+    return (major * 2 + (ORD == 0 ? 0 : k % 2)) * 32 + k;
+}
+
+// IN_REGS: the first scale group's S / M are already in L4..L7 (k4_params_regs).
+template <int FMT, int CP, int NV, int ORD, bool IN_REGS>
+constexpr mplan make_mplan()
+{
+    using M         = mfield<FMT>;
+    constexpr int N = M::clean;
+    mplan p {};
+    int ord[32] {}, ts[32] {}, tm[32] {}, wreg[32] {}, wload[32] {}, pload[32] {}, pdep[32] {};
+    bool wneed[32] {};
+    for (int j = 0; j < N; j++)
+    {
+        int i = j;
+        for (; i > 0 && morder_key<FMT, CP, ORD>(ord[i - 1]) > morder_key<FMT, CP, ORD>(j); i--)
+        {
+            ord[i] = ord[i - 1];
+        }
+        ord[i] = j;
+    }
+    // Code word loads (wload[j]: issue slot, if j loads its word) and S / M loads (pload[j]: loads issued, 0..2).
+    for (int j = 0, r = 2; j < N; j++)
+    {
+        const int k = ord[j];
+        ts[j] = tm[j] = wload[j] = pdep[j] = -1;
+        wneed[j]                           = j == 0 || mword<FMT, CP>(k) != mword<FMT, CP>(ord[j - 1]);
+        if (wneed[j])
+        {
+            r = NV == 3 ? 3 : 5 - r;
+        }
+        wreg[j] = r;
+        for (int i = j - 1; i >= 0 && pdep[j] < 0; i--)
+        {
+            pdep[j] = ord[i] % 2 == k % 2 ? i : -1; // the column half's previous position
+        }
+        const bool need = pdep[j] < 0 ? !IN_REGS || mgroup<FMT>(k) != 0 : mgroup<FMT>(ord[pdep[j]]) != mgroup<FMT>(k);
+        pload[j]        = need ? 0 : 2;
+        if (IN_REGS && need && mgroup<FMT>(k) == 0)
+        {
+            p.n = MSLOTS; // the first group's S / M exist only in registers: an order that returns to it is unusable
+            return p;
+        }
+    }
+    int last_m = -100, ns = 0, nm = 0;
+    while (nm < N && p.n < MSLOTS)
+    {
+        const int t = p.n;
+        // Shift of position ns: its word loaded, its v free (macro ns - NV past its MAD), past the last macro's cast.
+        bool can_s = ns < N && (!wneed[ns] || wload[ns] >= 0) && t > last_m + MC_CAST;
+        if (can_s && ns >= NV)
+        {
+            can_s = tm[ns - NV] >= 0 && t > tm[ns - NV] + MC_MAD;
+        }
+        if (can_s)
+        {
+            ts[ns]     = t;
+            p.s[p.n++] = {MS_SHIFT, ns % NV, wreg[ns], 32 - M::B - mlsb<FMT>(ord[ns])};
+            ns++;
+            continue;
+        }
+        if (nm < ns && t > ts[nm] && t >= last_m + 2 && pload[nm] == 2)
+        {
+            tm[nm]     = t;
+            last_m     = t;
+            p.s[p.n++] = {MS_MACRO, ord[nm] % 2, nm % NV, mrow(ord[nm])};
+            nm++;
+            continue;
+        }
+        // A load: the code word of the next position that needs one (after the last shift reading its register), or
+        // the S / M of the next position that needs them (after the last MAD reading their registers).
+        int wj = -1, pj = -1;
+        for (int j = ns; j < N && wj < 0; j++)
+        {
+            if (wneed[j] && wload[j] < 0)
+            {
+                bool free = true;
+                for (int i = 0; i < j; i++)
+                {
+                    free = free && !(wreg[i] == wreg[j] && ts[i] < 0);
+                }
+                wj = free ? j : -2;
+            }
+        }
+        for (int j = nm; j < N && pj < 0; j++)
+        {
+            if (pload[j] < 2)
+            {
+                const int d = pdep[j];
+                pj          = d < 0 || (tm[d] >= 0 && t > tm[d] + MC_MAD) ? j : -2;
+            }
+        }
+        if (wj >= 0 && (pj < 0 || wj <= pj))
+        {
+            wload[wj]  = t;
+            p.s[p.n++] = {MS_LOAD, wreg[wj], sfpi::SFPLOAD_MOD0_FMT_INT32, CO + mword<FMT, CP>(ord[wj])};
+        }
+        else if (pj >= 0)
+        {
+            const int k = ord[pj], b = k % 2, a = k / 16, h = traits<FMT>::has_h ? k / 8 % 2 : 0;
+            const int f = pload[pj]++;
+            p.s[p.n++]  = {MS_LOAD, 4 + 2 * b + f, sfpi::SFPLOAD_MOD0_FMT_SRCB, (f ? PM : PS) + pidx(a, b, h)};
+        }
+        else
+        {
+            p.s[p.n++] = {MS_NOP, 0, 0, 0};
+        }
+    }
+    // Nothing else on the SFPU until the last store.
+    while (p.n <= last_m + MC_STORE && p.n < MSLOTS)
+    {
+        p.s[p.n++] = {MS_NOP, 0, 0, 0};
+    }
+    return p;
+}
+
+// The shortest of the register splits and output orders.
+template <int FMT, int CP, bool IN_REGS>
+constexpr mplan make_mplan_best()
+{
+    constexpr mplan c[6] = {
+        make_mplan<FMT, CP, 3, 0, IN_REGS>(),
+        make_mplan<FMT, CP, 3, 1, IN_REGS>(),
+        make_mplan<FMT, CP, 3, 2, IN_REGS>(),
+        make_mplan<FMT, CP, 2, 0, IN_REGS>(),
+        make_mplan<FMT, CP, 2, 1, IN_REGS>(),
+        make_mplan<FMT, CP, 2, 2, IN_REGS>()};
+    int best = 0;
+    for (int i = 1; i < 6; i++)
+    {
+        best = c[i].n < c[best].n ? i : best;
+    }
+    return c[best];
+}
+
+// The instruction-counted streams, three slots per output: the macro, the shift of its field into v (the macro's
+// shift runs one instruction later) and a slot without a Simple instruction for the macro's Round-unit shift (a load
+// or a NOP). Q4_0, Q4_1 and Q4_K: field i of code word 2h + a (L3) through macro i % 2, v in L0..L2 in turn; third
+// slots load the next code word or S, M. IN_REGS: a = 0's S / M are already in L4..L7 (k4_params_regs).
+template <bool IN_REGS>
+sfpi_inline void body_macro_q4_icount()
 {
     TTI_SFPLOAD(3, sfpi::SFPLOAD_MOD0_FMT_INT32, ADDR_MOD_7, 2 * CO);
     if constexpr (!IN_REGS)
@@ -469,17 +652,8 @@ sfpi_inline void body_macro_q4()
     }
 }
 
-// The other macro formats: an issue stream planned at compile time (make_mplan) in stream order k; loads take free
-// third slots or extra slots. v alternates L0 / L1, code words L3 / L2, S / M of column half b in L4 + 2b / L5 + 2b.
-
-enum : int
-{
-    MS_NOP,
-    MS_MACRO, // macro x (column half), v = LReg y, row z
-    MS_SHIFT, // v x = word register y << z
-    MS_LOAD,  // register x, SFPLOAD mode y, row z
-};
-
+// The other formats: tasks (code word and S / M loads) placed in free third slots or extra slots, earliest
+// deadline first; code words alternate L3 / L2.
 enum : int
 {
     MT_WORD,
@@ -496,14 +670,6 @@ enum : int
 struct mtask
 {
     int kind, k, reg, row, after, dep, late, done;
-};
-
-constexpr int MSLOTS = 144;
-
-struct mplan
-{
-    mslot s[MSLOTS];
-    int n;
 };
 
 // Task x may run in slot t: its register is free.
@@ -552,7 +718,7 @@ constexpr int mpick(const mtask* tk, const int nt, const int* T, const int t, co
 }
 
 template <int FMT, int CP>
-constexpr mplan make_mplan()
+constexpr mplan make_mplan_icount()
 {
     using M = mfield<FMT>;
     mplan p {};
@@ -631,16 +797,16 @@ constexpr mplan make_mplan()
     return p;
 }
 
-template <int FMT, int CP>
-constexpr mplan mplan_v = make_mplan<FMT, CP>();
+template <int FMT, int CP, bool IN_REGS, bool CYC>
+constexpr mplan mplan_v = CYC ? make_mplan_best<FMT, CP, IN_REGS>() : make_mplan_icount<FMT, CP>();
 
-template <int FMT, int CP, int I>
+template <int FMT, int CP, bool IN_REGS, bool CYC, int I>
 sfpi_inline void mslot_issue()
 {
-    constexpr mslot s = mplan_v<FMT, CP>.s[I];
+    constexpr mslot s = mplan_v<FMT, CP, IN_REGS, CYC>.s[I];
     if constexpr (s.kind == MS_MACRO)
     {
-        TTI_SFPLOADMACRO((s.x << 2) | s.y, LOAD_NONE, ADDR_MOD_7, 2 * s.z);
+        TTI_SFPLOADMACRO((s.x << 2) | s.y, CYC ? LOAD_LO16_ONLY : LOAD_NONE, ADDR_MOD_7, 2 * s.z);
     }
     else if constexpr (s.kind == MS_SHIFT)
     {
@@ -656,14 +822,29 @@ sfpi_inline void mslot_issue()
     }
 }
 
-template <int FMT, int CP, int... I>
+template <int FMT, int CP, bool IN_REGS, bool CYC, int... I>
 sfpi_inline void mslots_issue(std::integer_sequence<int, I...>)
 {
-    (mslot_issue<FMT, CP, I>(), ...);
+    (mslot_issue<FMT, CP, IN_REGS, CYC, I>(), ...);
+}
+
+// Q4_0, Q4_1 and Q4_K (one plan: four-bit fields, no k-halves). IN_REGS: a = 0's S / M are already in L4..L7
+// (k4_params_regs).
+template <bool IN_REGS, bool CYC>
+sfpi_inline void body_macro_q4()
+{
+    if constexpr (CYC)
+    {
+        mslots_issue<Q4_0, 0, IN_REGS, true>(std::make_integer_sequence<int, mplan_v<Q4_0, 0, IN_REGS, true>.n> {});
+    }
+    else
+    {
+        body_macro_q4_icount<IN_REGS>();
+    }
 }
 
 // The split rows (B not dividing 32) through body()'s arithmetic, then the planned stream.
-template <int FMT, int CP>
+template <int FMT, int CP, bool CYC>
 sfpi_inline void body_macro()
 {
     using M = mfield<FMT>;
@@ -675,7 +856,7 @@ sfpi_inline void body_macro()
         const vFloat x   = ufloat(code_of<FMT, CP>(o));
         sfpi::dst_reg[o] = x * sfpi::dst_reg[PS + pi] + sfpi::dst_reg[PM + pi];
     }
-    mslots_issue<FMT, CP>(std::make_integer_sequence<int, mplan_v<FMT, CP>.n> {});
+    mslots_issue<FMT, CP, false, CYC>(std::make_integer_sequence<int, mplan_v<FMT, CP, false, CYC>.n> {});
 }
 
 // TQ1_0: one page holds the group's eight K tiles as GGUF bytes. Byte j of lane (r, c): word-vector 4a + 2h + b

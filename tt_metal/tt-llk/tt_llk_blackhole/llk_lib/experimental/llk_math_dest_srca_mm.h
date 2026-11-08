@@ -26,7 +26,8 @@ using namespace ckernel::math;
 //   output: one [in0_rows, 32] block of a Float32 DEST tile
 //   needs a 32-bit DEST; any fidelity
 // The unpack-to-DEST copy that brings a 32-bit tile into DEST is split in two (_unpack_post_, _unpack_wait_), so that
-// math work can run while the unpacker copies the next tile.
+// math work can run while the unpacker copies the next tile; not an SFPLOADMACRO body whose stores are not arbitrated
+// against the unpacker's DEST writes (sfpu_gguf_decode_body_unarbitrated).
 
 /**
  * @brief Configure the math thread for dest_srca_mm: the matmul's address mods and MOP, SrcA format TF32.
@@ -73,6 +74,17 @@ inline void _llk_math_dest_srca_mm_uninit_()
 inline void _llk_math_dest_srca_mm_unpack_post_(const std::uint32_t dst_index)
 {
     math_unpack_to_dest_math_ready();
+    math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::DestReg>(dst_index);
+}
+
+/**
+ * @brief As @ref _llk_math_dest_srca_mm_unpack_post_, with the 16-bit DEST rows of a page's block-float codes first
+ * (@ref _llk_unpack_dest_srca_mm_codes_): Dst16b rows from codes_row, which must be a multiple of 4 from 4.
+ */
+inline void _llk_math_dest_srca_mm_codes_post_(const std::uint32_t dst_index, const std::uint32_t codes_row)
+{
+    math_unpack_to_dest_math_ready();
+    mailbox_write(ThreadId::UnpackThreadId, (codes_row - 4) / 2);
     math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::DestReg>(dst_index);
 }
 
