@@ -67,6 +67,22 @@ from ttexalens.tt_exalens_lib import read_from_device, write_to_device
 
 PACK_BLOCK_MIN_TILES = 2
 
+# bytes of one tile of a plain output format in L1
+EQUIV_TILE_BYTES = {
+    DataFormat.Float16: 2048,
+    DataFormat.Float16_b: 2048,
+    DataFormat.UInt16: 2048,
+    DataFormat.Int8: 1024,
+    DataFormat.UInt8: 1024,
+    DataFormat.Lf8: 1024,
+    DataFormat.Fp8_e4m3: 1024,
+    DataFormat.Float32: 4096,
+    DataFormat.Int32: 4096,
+    DataFormat.UInt32: 4096,
+    DataFormat.Tf32: 4096,
+    DataFormat.Bfp8_b: 1088,
+}
+
 
 def golden_src_f32(src_A):
     """The stimuli as the Float32 bit patterns a 32-bit DEST holds, as int32."""
@@ -120,6 +136,7 @@ def test_pack(
     block_tiles: int | None = None,
     allow_int32_mix: bool = False,
     res_page_bytes: int | None = None,
+    equiv_out: dict | None = None,
 ):
     if not allow_int32_mix and (formats.input_format == DataFormat.Int32) ^ (
         formats.output_format == DataFormat.Int32
@@ -310,6 +327,18 @@ def test_pack(
         configuration.run(perf_report)
         return
 
+    if equiv_out is not None:
+        # the raw L1 bytes of the result tiles, for the form equivalence check
+        raw_bytes = tile_cnt_A * EQUIV_TILE_BYTES[formats.output_format]
+        if TestConfig.BUILD_MODE != BuildMode.PRODUCE:
+            write_to_device(TestConfig.TENSIX_LOCATION, configuration.variant_stimuli.buf_res_addr, [0xA5] * raw_bytes)
+        configuration.run()
+        equiv_out[pack_block] = (
+            bytes(read_from_device(TestConfig.TENSIX_LOCATION, configuration.variant_stimuli.buf_res_addr, num_bytes=raw_bytes))
+            if TestConfig.BUILD_MODE != BuildMode.PRODUCE
+            else b""
+        )
+        return
     if res_page_bytes is not None and TestConfig.BUILD_MODE != BuildMode.PRODUCE:
         # the run clears one unpadded stride per tile: fill the pages so a misplaced tile cannot match by luck
         write_to_device(
@@ -658,3 +687,53 @@ def test_pack_block_other_formats(
         allow_int32_mix=allow_int32_mix,
     )
 
+
+_EQUIV_PER_TILE = {}
+
+
+@skip_for_wormhole
+@parametrize(
+    formats=PACK_BLOCK_OTHER_FORMATS,
+    dest_acc=get_valid_dest_accumulation_modes,
+    input_dimensions=[[96, 128]],
+    relu_type=[PackerReluType.NoRelu],
+    dest_sync=[DestSync.Half, DestSync.Full],
+    dest_index=[0],
+    block_tiles=[2, 3, 4],
+    pack_block=[0, 2, 3, 5],
+    allow_int32_mix=[True],
+)
+def test_pack_block_equivalence(
+    formats,
+    dest_acc,
+    input_dimensions,
+    relu_type,
+    dest_sync,
+    dest_index,
+    block_tiles,
+    pack_block,
+    allow_int32_mix,
+):
+    """The default W offset (2), W offset (3) and plain (5) block forms write the same L1 bytes as the per-tile packs (0, the first of the four runs of a cell), for the formats the golden cannot judge too."""
+    if formats.output_format in (DataFormat.Int8, DataFormat.UInt8) and dest_acc == DestAccumulation.No:
+        pytest.skip("llk_pack_block keeps these per tile: from a 16 bit DEST the per-tile pack writes two faces, the block forms four.")
+    raw = {}
+    test_pack(
+        formats,
+        dest_acc,
+        input_dimensions,
+        relu_type,
+        dest_sync,
+        dest_index,
+        pack_block=pack_block,
+        block_tiles=block_tiles,
+        allow_int32_mix=allow_int32_mix,
+        equiv_out=raw,
+    )
+    cell = (formats.input_format, formats.output_format, dest_acc, dest_sync, block_tiles)
+    if pack_block == 0:
+        _EQUIV_PER_TILE[cell] = raw[0]
+    elif TestConfig.BUILD_MODE != BuildMode.PRODUCE:
+        ref = _EQUIV_PER_TILE[cell]
+        diff = [i for i in range(len(ref)) if ref[i] != raw[pack_block][i]]
+        assert not diff, f"pack_block form {pack_block} differs from the per-tile packs in {len(diff)} of {len(ref)} bytes, from byte {diff[0]} ref {ref[diff[0]:diff[0]+24].hex()} form {raw[pack_block][diff[0]:diff[0]+24].hex()} last diff {diff[-1]} (tile bytes {len(ref) // (96 * 128 // 1024)})"

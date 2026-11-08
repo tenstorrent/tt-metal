@@ -219,18 +219,25 @@ inline void alt_pack_tile(const std::uint32_t fmt, const std::uint32_t tile, con
 
 // The form llk_pack_block takes for the first block of an output after a packer reconfigure: the rows of llk_pack_reconf_form (tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_pack_tile_api.h,
 // mirrored in hardware_free/kernels/test_pack_block_form.py) for the three formats of the pairs. Columns: half sync 16 bit DEST, half 32 bit, full 16 bit, full 32 bit.
-constexpr char alt_reconf_form[3][4][17] = {
-    {"TBBTBTBTBBBBBBBB", "TBTTBBBBBBBBBBBB", "TBBBBBBBBBBBBBBB", "TTBBBBBBBBBBBBBB"}, // Bfp8_b
-    {"BBBBBBBTBBBBBBBB", "BBTTTTTTTTTTTTTT", "BBBBBBBBBBBBBBBB", "BBBBBBBBBBBBBBBB"}, // Float32
-    {"BBBBBTBTBBBBBBBB", "BBTTTTTTTTTTTTTT", "BBBBBBBBBBBBBBBB", "BBBBBBBBBBBBBBBB"}, // Float16_b
+constexpr char alt_reconf_form[2][3][4][17] = {
+    {
+        {"TBBTBTBTBBBBBBBB", "TBBTBBBBBBBBBBBB", "TBBBBBBBBBBBBBBB", "TBBBBBBBBBBBBBBB"}, // Bfp8_b
+        {"BBBBBBBTBBBBBBBB", "BBBBBBBBBBBBBBBB", "BBBBBBBBBBBBBBBB", "BBBBBBBBBBBBBBBB"}, // Float32
+        {"BBBBBTBTBBBBBBBB", "BBBBBBBBBBBBBBBB", "BBBBBBBBBBBBBBBB", "BBBBBBBBBBBBBBBB"}, // Float16_b
+    },
+    {
+        {"TBBTBTBTBBBBBBBB", "TTTTBBBBBBBBBBBB", "TBBBBBBBBBBBBBBB", "TTBBBBBBBBBBBBBB"}, // Bfp8_b
+        {"BBBBBBBTBBBBBBBB", "BBTTTTTTTTTTTTTT", "BBBBBBBBBBBBBBBB", "BBBBBBBBBBBBBBBB"}, // Float32
+        {"BBBBBTBTBBBBBBBB", "BBTTTTTTTTTTTTTT", "BBBBBBBBBBBBBBBB", "BBBBBBBBBBBBBBBB"}, // Float16_b
+    },
 };
 
-inline std::uint32_t alt_form(const std::uint32_t fmt, const std::uint32_t ntiles, const std::uint32_t head)
+inline std::uint32_t alt_form(const std::uint32_t fmt, const std::uint32_t ntiles, const std::uint32_t head, const bool src32)
 {
     const bool bfp = fmt == static_cast<std::uint32_t>(DataFormat::Bfp8_b);
     const bool wide = fmt == static_cast<std::uint32_t>(DataFormat::Float32);
     const std::uint32_t column = (dest_sync == DstSync::SyncFull ? 2 : 0) + (is_fp32_dest_acc_en ? 1 : 0);
-    if (!head || alt_reconf_form[bfp ? 0 : (wide ? 1 : 2)][column][(ntiles < 16 ? ntiles : 16) - 1] == 'T')
+    if (!head || alt_reconf_form[src32 ? 1 : 0][bfp ? 0 : (wide ? 1 : 2)][column][(ntiles < 16 ? ntiles : 16) - 1] == 'T')
     {
         return 0; // per tile
     }
@@ -275,9 +282,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
     }
     // the form of each output is decided once, as a kernel with constant tile counts has it folded
     // read through a volatile so the main arm compiles to the same loop as the head arm and the two differ in data only
+    // a 32 bit output CB next to a 32 bit DEST is the family llk_pack_block takes the forms no sweep read slower for
+    const bool alt_src32 = is_fp32_dest_acc_en && (fmt_a == static_cast<std::uint32_t>(DataFormat::Float32) || fmt_b == static_cast<std::uint32_t>(DataFormat::Float32));
     const volatile std::uint32_t head_v = alt_head_form ? 1 : 0;
-    const std::uint32_t form_a          = alt_form(fmt_a, NUM_TILES_IN_BLOCK, 1) & (0u - head_v);
-    const std::uint32_t form_b          = alt_form(fmt_b, NUM_TILES_IN_BLOCK, 1) & (0u - head_v);
+    const std::uint32_t form_a          = alt_form(fmt_a, NUM_TILES_IN_BLOCK, 1, alt_src32) & (0u - head_v);
+    const std::uint32_t form_b          = alt_form(fmt_b, NUM_TILES_IN_BLOCK, 1, alt_src32) & (0u - head_v);
     {
         START_PERF_MEASURE("TILE_LOOP")
         if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
