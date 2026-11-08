@@ -112,6 +112,9 @@ class _AttnCore(Module):
     def norm_k(self, k):
         return _bf16(self.k_norm(ttnn.typecast(_heads(k), ttnn.float32)))
 
+    def forward(self, q, k, v):
+        return self.attend(q, k, v)
+
     def attend(self, q, k, v):
         out = ttnn.transformer.scaled_dot_product_attention(
             q, k, v, is_causal=False, program_config=self.sdpa_cfg, compute_kernel_config=self.sdpa_kernel
@@ -241,6 +244,9 @@ class TtShapeVAEDecoder(Module):
                 state["geo." + k[len("geo_decoder.") :]] = state.pop(k)
             elif k.startswith(("encoder.", "pre_kl.")):
                 del state[k]
+
+    def forward(self, latents: torch.Tensor) -> ttnn.Tensor:
+        return self.decode_latents(latents)
 
     def decode_latents(self, latents: torch.Tensor) -> ttnn.Tensor:
         """Sampler output [1, 4096, 64] (before 1/scale_factor) -> transformer output on device [1, 1, 4096, 1024] fp32."""
