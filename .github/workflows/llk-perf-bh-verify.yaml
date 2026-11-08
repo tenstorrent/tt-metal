@@ -1,0 +1,1485 @@
+name: "LLK perf BH verify matrix"
+# Transient workflow on fu/verify/bh-matrix branch ONLY.
+# Produces the 8-leg BH verification matrix (4 tags × 2 orderings).
+# DO NOT merge into main.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  checks: write
+  contents: read
+  packages: write
+
+env:
+  LLK_PATH: tt_metal/tt-llk
+
+jobs:
+  build-images:
+    name: "Docker setup"
+    uses: ./.github/workflows/build-docker-artifact.yaml
+    secrets: inherit
+
+  # ---------------------------------------------------------------------------
+  # ncsol fwd — nc + speed-of-light + forward order
+  # ---------------------------------------------------------------------------
+  ncsol-fwd-g1:
+    name: "BH verify ncsol fwd 1/5"
+    needs: [build-images]
+    runs-on: [tt-ubuntu-2204-P150b-stable]
+    timeout-minutes: 180
+    container:
+      image: ${{ needs.build-images.outputs.llk-ci-tag }}
+      options: "--rm --device /dev/tenstorrent --ulimit nofile=4096:4096"
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+      - name: Install SFPI
+        working-directory: ${{ env.LLK_PATH }}
+        run: cd tests && ./setup_testing_env.sh && cd ..
+      - name: Run
+        working-directory: ${{ env.LLK_PATH }}
+        env:
+          PERF_NC_WC: "nc"
+          PERF_SOL: "sol"
+          PERF_ORDER: "fwd"
+          TT_LLK_DISABLE_ASSERTS: "1"
+        run: ./tests/run_llk_perf_blackhole.sh 1 5
+      - name: Zip perf data
+        if: always()
+        working-directory: ${{ env.LLK_PATH }}
+        run: |
+          if compgen -G "tests/python_tests/perf_data/**" > /dev/null 2>&1; then
+            cd tests/python_tests && zip -r perf_data-bh-verify-ncsol-fwd-1.zip perf_data/
+          fi
+      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        if: always()
+        with:
+          name: perf-data-bh-verify-ncsol-fwd-1
+          path: ${{ env.LLK_PATH }}/tests/python_tests/perf_data-bh-verify-ncsol-fwd-1.zip
+          if-no-files-found: ignore
+
+  ncsol-fwd-g2:
+    name: "BH verify ncsol fwd 2/5"
+    needs: [build-images]
+    runs-on: [tt-ubuntu-2204-P150b-stable]
+    timeout-minutes: 180
+    container:
+      image: ${{ needs.build-images.outputs.llk-ci-tag }}
+      options: "--rm --device /dev/tenstorrent --ulimit nofile=4096:4096"
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+      - name: Install SFPI
+        working-directory: ${{ env.LLK_PATH }}
+        run: cd tests && ./setup_testing_env.sh && cd ..
+      - name: Run
+        working-directory: ${{ env.LLK_PATH }}
+        env:
+          PERF_NC_WC: "nc"
+          PERF_SOL: "sol"
+          PERF_ORDER: "fwd"
+          TT_LLK_DISABLE_ASSERTS: "1"
+        run: ./tests/run_llk_perf_blackhole.sh 2 5
+      - name: Zip perf data
+        if: always()
+        working-directory: ${{ env.LLK_PATH }}
+        run: |
+          if compgen -G "tests/python_tests/perf_data/**" > /dev/null 2>&1; then
+            cd tests/python_tests && zip -r perf_data-bh-verify-ncsol-fwd-2.zip perf_data/
+          fi
+      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        if: always()
+        with:
+          name: perf-data-bh-verify-ncsol-fwd-2
+          path: ${{ env.LLK_PATH }}/tests/python_tests/perf_data-bh-verify-ncsol-fwd-2.zip
+          if-no-files-found: ignore
+
+  ncsol-fwd-g3:
+    name: "BH verify ncsol fwd 3/5"
+    needs: [build-images]
+    runs-on: [tt-ubuntu-2204-P150b-stable]
+    timeout-minutes: 180
+    container:
+      image: ${{ needs.build-images.outputs.llk-ci-tag }}
+      options: "--rm --device /dev/tenstorrent --ulimit nofile=4096:4096"
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+      - name: Install SFPI
+        working-directory: ${{ env.LLK_PATH }}
+        run: cd tests && ./setup_testing_env.sh && cd ..
+      - name: Run
+        working-directory: ${{ env.LLK_PATH }}
+        env:
+          PERF_NC_WC: "nc"
+          PERF_SOL: "sol"
+          PERF_ORDER: "fwd"
+          TT_LLK_DISABLE_ASSERTS: "1"
+        run: ./tests/run_llk_perf_blackhole.sh 3 5
+      - name: Zip perf data
+        if: always()
+        working-directory: ${{ env.LLK_PATH }}
+        run: |
+          if compgen -G "tests/python_tests/perf_data/**" > /dev/null 2>&1; then
+            cd tests/python_tests && zip -r perf_data-bh-verify-ncsol-fwd-3.zip perf_data/
+          fi
+      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        if: always()
+        with:
+          name: perf-data-bh-verify-ncsol-fwd-3
+          path: ${{ env.LLK_PATH }}/tests/python_tests/perf_data-bh-verify-ncsol-fwd-3.zip
+          if-no-files-found: ignore
+
+  ncsol-fwd-g4:
+    name: "BH verify ncsol fwd 4/5"
+    needs: [build-images]
+    runs-on: [tt-ubuntu-2204-P150b-stable]
+    timeout-minutes: 180
+    container:
+      image: ${{ needs.build-images.outputs.llk-ci-tag }}
+      options: "--rm --device /dev/tenstorrent --ulimit nofile=4096:4096"
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+      - name: Install SFPI
+        working-directory: ${{ env.LLK_PATH }}
+        run: cd tests && ./setup_testing_env.sh && cd ..
+      - name: Run
+        working-directory: ${{ env.LLK_PATH }}
+        env:
+          PERF_NC_WC: "nc"
+          PERF_SOL: "sol"
+          PERF_ORDER: "fwd"
+          TT_LLK_DISABLE_ASSERTS: "1"
+        run: ./tests/run_llk_perf_blackhole.sh 4 5
+      - name: Zip perf data
+        if: always()
+        working-directory: ${{ env.LLK_PATH }}
+        run: |
+          if compgen -G "tests/python_tests/perf_data/**" > /dev/null 2>&1; then
+            cd tests/python_tests && zip -r perf_data-bh-verify-ncsol-fwd-4.zip perf_data/
+          fi
+      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        if: always()
+        with:
+          name: perf-data-bh-verify-ncsol-fwd-4
+          path: ${{ env.LLK_PATH }}/tests/python_tests/perf_data-bh-verify-ncsol-fwd-4.zip
+          if-no-files-found: ignore
+
+  ncsol-fwd-g5:
+    name: "BH verify ncsol fwd 5/5"
+    needs: [build-images]
+    runs-on: [tt-ubuntu-2204-P150b-stable]
+    timeout-minutes: 180
+    container:
+      image: ${{ needs.build-images.outputs.llk-ci-tag }}
+      options: "--rm --device /dev/tenstorrent --ulimit nofile=4096:4096"
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+      - name: Install SFPI
+        working-directory: ${{ env.LLK_PATH }}
+        run: cd tests && ./setup_testing_env.sh && cd ..
+      - name: Run
+        working-directory: ${{ env.LLK_PATH }}
+        env:
+          PERF_NC_WC: "nc"
+          PERF_SOL: "sol"
+          PERF_ORDER: "fwd"
+          TT_LLK_DISABLE_ASSERTS: "1"
+        run: ./tests/run_llk_perf_blackhole.sh 5 5
+      - name: Zip perf data
+        if: always()
+        working-directory: ${{ env.LLK_PATH }}
+        run: |
+          if compgen -G "tests/python_tests/perf_data/**" > /dev/null 2>&1; then
+            cd tests/python_tests && zip -r perf_data-bh-verify-ncsol-fwd-5.zip perf_data/
+          fi
+      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        if: always()
+        with:
+          name: perf-data-bh-verify-ncsol-fwd-5
+          path: ${{ env.LLK_PATH }}/tests/python_tests/perf_data-bh-verify-ncsol-fwd-5.zip
+          if-no-files-found: ignore
+
+  # ---------------------------------------------------------------------------
+  # ncsol rev — nc + speed-of-light + reversed order
+  # ---------------------------------------------------------------------------
+  ncsol-rev-g1:
+    name: "BH verify ncsol rev 1/5"
+    needs: [build-images]
+    runs-on: [tt-ubuntu-2204-P150b-stable]
+    timeout-minutes: 180
+    container:
+      image: ${{ needs.build-images.outputs.llk-ci-tag }}
+      options: "--rm --device /dev/tenstorrent --ulimit nofile=4096:4096"
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+      - name: Install SFPI
+        working-directory: ${{ env.LLK_PATH }}
+        run: cd tests && ./setup_testing_env.sh && cd ..
+      - name: Run
+        working-directory: ${{ env.LLK_PATH }}
+        env:
+          PERF_NC_WC: "nc"
+          PERF_SOL: "sol"
+          PERF_ORDER: "rev"
+          TT_LLK_DISABLE_ASSERTS: "1"
+        run: ./tests/run_llk_perf_blackhole.sh 1 5
+      - name: Zip perf data
+        if: always()
+        working-directory: ${{ env.LLK_PATH }}
+        run: |
+          if compgen -G "tests/python_tests/perf_data/**" > /dev/null 2>&1; then
+            cd tests/python_tests && zip -r perf_data-bh-verify-ncsol-rev-1.zip perf_data/
+          fi
+      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        if: always()
+        with:
+          name: perf-data-bh-verify-ncsol-rev-1
+          path: ${{ env.LLK_PATH }}/tests/python_tests/perf_data-bh-verify-ncsol-rev-1.zip
+          if-no-files-found: ignore
+
+  ncsol-rev-g2:
+    name: "BH verify ncsol rev 2/5"
+    needs: [build-images]
+    runs-on: [tt-ubuntu-2204-P150b-stable]
+    timeout-minutes: 180
+    container:
+      image: ${{ needs.build-images.outputs.llk-ci-tag }}
+      options: "--rm --device /dev/tenstorrent --ulimit nofile=4096:4096"
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+      - name: Install SFPI
+        working-directory: ${{ env.LLK_PATH }}
+        run: cd tests && ./setup_testing_env.sh && cd ..
+      - name: Run
+        working-directory: ${{ env.LLK_PATH }}
+        env:
+          PERF_NC_WC: "nc"
+          PERF_SOL: "sol"
+          PERF_ORDER: "rev"
+          TT_LLK_DISABLE_ASSERTS: "1"
+        run: ./tests/run_llk_perf_blackhole.sh 2 5
+      - name: Zip perf data
+        if: always()
+        working-directory: ${{ env.LLK_PATH }}
+        run: |
+          if compgen -G "tests/python_tests/perf_data/**" > /dev/null 2>&1; then
+            cd tests/python_tests && zip -r perf_data-bh-verify-ncsol-rev-2.zip perf_data/
+          fi
+      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        if: always()
+        with:
+          name: perf-data-bh-verify-ncsol-rev-2
+          path: ${{ env.LLK_PATH }}/tests/python_tests/perf_data-bh-verify-ncsol-rev-2.zip
+          if-no-files-found: ignore
+
+  ncsol-rev-g3:
+    name: "BH verify ncsol rev 3/5"
+    needs: [build-images]
+    runs-on: [tt-ubuntu-2204-P150b-stable]
+    timeout-minutes: 180
+    container:
+      image: ${{ needs.build-images.outputs.llk-ci-tag }}
+      options: "--rm --device /dev/tenstorrent --ulimit nofile=4096:4096"
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+      - name: Install SFPI
+        working-directory: ${{ env.LLK_PATH }}
+        run: cd tests && ./setup_testing_env.sh && cd ..
+      - name: Run
+        working-directory: ${{ env.LLK_PATH }}
+        env:
+          PERF_NC_WC: "nc"
+          PERF_SOL: "sol"
+          PERF_ORDER: "rev"
+          TT_LLK_DISABLE_ASSERTS: "1"
+        run: ./tests/run_llk_perf_blackhole.sh 3 5
+      - name: Zip perf data
+        if: always()
+        working-directory: ${{ env.LLK_PATH }}
+        run: |
+          if compgen -G "tests/python_tests/perf_data/**" > /dev/null 2>&1; then
+            cd tests/python_tests && zip -r perf_data-bh-verify-ncsol-rev-3.zip perf_data/
+          fi
+      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        if: always()
+        with:
+          name: perf-data-bh-verify-ncsol-rev-3
+          path: ${{ env.LLK_PATH }}/tests/python_tests/perf_data-bh-verify-ncsol-rev-3.zip
+          if-no-files-found: ignore
+
+  ncsol-rev-g4:
+    name: "BH verify ncsol rev 4/5"
+    needs: [build-images]
+    runs-on: [tt-ubuntu-2204-P150b-stable]
+    timeout-minutes: 180
+    container:
+      image: ${{ needs.build-images.outputs.llk-ci-tag }}
+      options: "--rm --device /dev/tenstorrent --ulimit nofile=4096:4096"
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+      - name: Install SFPI
+        working-directory: ${{ env.LLK_PATH }}
+        run: cd tests && ./setup_testing_env.sh && cd ..
+      - name: Run
+        working-directory: ${{ env.LLK_PATH }}
+        env:
+          PERF_NC_WC: "nc"
+          PERF_SOL: "sol"
+          PERF_ORDER: "rev"
+          TT_LLK_DISABLE_ASSERTS: "1"
+        run: ./tests/run_llk_perf_blackhole.sh 4 5
+      - name: Zip perf data
+        if: always()
+        working-directory: ${{ env.LLK_PATH }}
+        run: |
+          if compgen -G "tests/python_tests/perf_data/**" > /dev/null 2>&1; then
+            cd tests/python_tests && zip -r perf_data-bh-verify-ncsol-rev-4.zip perf_data/
+          fi
+      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        if: always()
+        with:
+          name: perf-data-bh-verify-ncsol-rev-4
+          path: ${{ env.LLK_PATH }}/tests/python_tests/perf_data-bh-verify-ncsol-rev-4.zip
+          if-no-files-found: ignore
+
+  ncsol-rev-g5:
+    name: "BH verify ncsol rev 5/5"
+    needs: [build-images]
+    runs-on: [tt-ubuntu-2204-P150b-stable]
+    timeout-minutes: 180
+    container:
+      image: ${{ needs.build-images.outputs.llk-ci-tag }}
+      options: "--rm --device /dev/tenstorrent --ulimit nofile=4096:4096"
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+      - name: Install SFPI
+        working-directory: ${{ env.LLK_PATH }}
+        run: cd tests && ./setup_testing_env.sh && cd ..
+      - name: Run
+        working-directory: ${{ env.LLK_PATH }}
+        env:
+          PERF_NC_WC: "nc"
+          PERF_SOL: "sol"
+          PERF_ORDER: "rev"
+          TT_LLK_DISABLE_ASSERTS: "1"
+        run: ./tests/run_llk_perf_blackhole.sh 5 5
+      - name: Zip perf data
+        if: always()
+        working-directory: ${{ env.LLK_PATH }}
+        run: |
+          if compgen -G "tests/python_tests/perf_data/**" > /dev/null 2>&1; then
+            cd tests/python_tests && zip -r perf_data-bh-verify-ncsol-rev-5.zip perf_data/
+          fi
+      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        if: always()
+        with:
+          name: perf-data-bh-verify-ncsol-rev-5
+          path: ${{ env.LLK_PATH }}/tests/python_tests/perf_data-bh-verify-ncsol-rev-5.zip
+          if-no-files-found: ignore
+
+  # ---------------------------------------------------------------------------
+  # wcsol fwd — wc + speed-of-light + forward order
+  # ---------------------------------------------------------------------------
+  wcsol-fwd-g1:
+    name: "BH verify wcsol fwd 1/5"
+    needs: [build-images]
+    runs-on: [tt-ubuntu-2204-P150b-stable]
+    timeout-minutes: 180
+    container:
+      image: ${{ needs.build-images.outputs.llk-ci-tag }}
+      options: "--rm --device /dev/tenstorrent --ulimit nofile=4096:4096"
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+      - name: Install SFPI
+        working-directory: ${{ env.LLK_PATH }}
+        run: cd tests && ./setup_testing_env.sh && cd ..
+      - name: Run
+        working-directory: ${{ env.LLK_PATH }}
+        env:
+          PERF_NC_WC: "wc"
+          PERF_SOL: "sol"
+          PERF_ORDER: "fwd"
+          TT_LLK_DISABLE_ASSERTS: "1"
+        run: ./tests/run_llk_perf_blackhole.sh 1 5
+      - name: Zip perf data
+        if: always()
+        working-directory: ${{ env.LLK_PATH }}
+        run: |
+          if compgen -G "tests/python_tests/perf_data/**" > /dev/null 2>&1; then
+            cd tests/python_tests && zip -r perf_data-bh-verify-wcsol-fwd-1.zip perf_data/
+          fi
+      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        if: always()
+        with:
+          name: perf-data-bh-verify-wcsol-fwd-1
+          path: ${{ env.LLK_PATH }}/tests/python_tests/perf_data-bh-verify-wcsol-fwd-1.zip
+          if-no-files-found: ignore
+
+  wcsol-fwd-g2:
+    name: "BH verify wcsol fwd 2/5"
+    needs: [build-images]
+    runs-on: [tt-ubuntu-2204-P150b-stable]
+    timeout-minutes: 180
+    container:
+      image: ${{ needs.build-images.outputs.llk-ci-tag }}
+      options: "--rm --device /dev/tenstorrent --ulimit nofile=4096:4096"
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+      - name: Install SFPI
+        working-directory: ${{ env.LLK_PATH }}
+        run: cd tests && ./setup_testing_env.sh && cd ..
+      - name: Run
+        working-directory: ${{ env.LLK_PATH }}
+        env:
+          PERF_NC_WC: "wc"
+          PERF_SOL: "sol"
+          PERF_ORDER: "fwd"
+          TT_LLK_DISABLE_ASSERTS: "1"
+        run: ./tests/run_llk_perf_blackhole.sh 2 5
+      - name: Zip perf data
+        if: always()
+        working-directory: ${{ env.LLK_PATH }}
+        run: |
+          if compgen -G "tests/python_tests/perf_data/**" > /dev/null 2>&1; then
+            cd tests/python_tests && zip -r perf_data-bh-verify-wcsol-fwd-2.zip perf_data/
+          fi
+      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        if: always()
+        with:
+          name: perf-data-bh-verify-wcsol-fwd-2
+          path: ${{ env.LLK_PATH }}/tests/python_tests/perf_data-bh-verify-wcsol-fwd-2.zip
+          if-no-files-found: ignore
+
+  wcsol-fwd-g3:
+    name: "BH verify wcsol fwd 3/5"
+    needs: [build-images]
+    runs-on: [tt-ubuntu-2204-P150b-stable]
+    timeout-minutes: 180
+    container:
+      image: ${{ needs.build-images.outputs.llk-ci-tag }}
+      options: "--rm --device /dev/tenstorrent --ulimit nofile=4096:4096"
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+      - name: Install SFPI
+        working-directory: ${{ env.LLK_PATH }}
+        run: cd tests && ./setup_testing_env.sh && cd ..
+      - name: Run
+        working-directory: ${{ env.LLK_PATH }}
+        env:
+          PERF_NC_WC: "wc"
+          PERF_SOL: "sol"
+          PERF_ORDER: "fwd"
+          TT_LLK_DISABLE_ASSERTS: "1"
+        run: ./tests/run_llk_perf_blackhole.sh 3 5
+      - name: Zip perf data
+        if: always()
+        working-directory: ${{ env.LLK_PATH }}
+        run: |
+          if compgen -G "tests/python_tests/perf_data/**" > /dev/null 2>&1; then
+            cd tests/python_tests && zip -r perf_data-bh-verify-wcsol-fwd-3.zip perf_data/
+          fi
+      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        if: always()
+        with:
+          name: perf-data-bh-verify-wcsol-fwd-3
+          path: ${{ env.LLK_PATH }}/tests/python_tests/perf_data-bh-verify-wcsol-fwd-3.zip
+          if-no-files-found: ignore
+
+  wcsol-fwd-g4:
+    name: "BH verify wcsol fwd 4/5"
+    needs: [build-images]
+    runs-on: [tt-ubuntu-2204-P150b-stable]
+    timeout-minutes: 180
+    container:
+      image: ${{ needs.build-images.outputs.llk-ci-tag }}
+      options: "--rm --device /dev/tenstorrent --ulimit nofile=4096:4096"
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+      - name: Install SFPI
+        working-directory: ${{ env.LLK_PATH }}
+        run: cd tests && ./setup_testing_env.sh && cd ..
+      - name: Run
+        working-directory: ${{ env.LLK_PATH }}
+        env:
+          PERF_NC_WC: "wc"
+          PERF_SOL: "sol"
+          PERF_ORDER: "fwd"
+          TT_LLK_DISABLE_ASSERTS: "1"
+        run: ./tests/run_llk_perf_blackhole.sh 4 5
+      - name: Zip perf data
+        if: always()
+        working-directory: ${{ env.LLK_PATH }}
+        run: |
+          if compgen -G "tests/python_tests/perf_data/**" > /dev/null 2>&1; then
+            cd tests/python_tests && zip -r perf_data-bh-verify-wcsol-fwd-4.zip perf_data/
+          fi
+      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        if: always()
+        with:
+          name: perf-data-bh-verify-wcsol-fwd-4
+          path: ${{ env.LLK_PATH }}/tests/python_tests/perf_data-bh-verify-wcsol-fwd-4.zip
+          if-no-files-found: ignore
+
+  wcsol-fwd-g5:
+    name: "BH verify wcsol fwd 5/5"
+    needs: [build-images]
+    runs-on: [tt-ubuntu-2204-P150b-stable]
+    timeout-minutes: 180
+    container:
+      image: ${{ needs.build-images.outputs.llk-ci-tag }}
+      options: "--rm --device /dev/tenstorrent --ulimit nofile=4096:4096"
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+      - name: Install SFPI
+        working-directory: ${{ env.LLK_PATH }}
+        run: cd tests && ./setup_testing_env.sh && cd ..
+      - name: Run
+        working-directory: ${{ env.LLK_PATH }}
+        env:
+          PERF_NC_WC: "wc"
+          PERF_SOL: "sol"
+          PERF_ORDER: "fwd"
+          TT_LLK_DISABLE_ASSERTS: "1"
+        run: ./tests/run_llk_perf_blackhole.sh 5 5
+      - name: Zip perf data
+        if: always()
+        working-directory: ${{ env.LLK_PATH }}
+        run: |
+          if compgen -G "tests/python_tests/perf_data/**" > /dev/null 2>&1; then
+            cd tests/python_tests && zip -r perf_data-bh-verify-wcsol-fwd-5.zip perf_data/
+          fi
+      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        if: always()
+        with:
+          name: perf-data-bh-verify-wcsol-fwd-5
+          path: ${{ env.LLK_PATH }}/tests/python_tests/perf_data-bh-verify-wcsol-fwd-5.zip
+          if-no-files-found: ignore
+
+  # ---------------------------------------------------------------------------
+  # wcsol rev — wc + speed-of-light + reversed order
+  # ---------------------------------------------------------------------------
+  wcsol-rev-g1:
+    name: "BH verify wcsol rev 1/5"
+    needs: [build-images]
+    runs-on: [tt-ubuntu-2204-P150b-stable]
+    timeout-minutes: 180
+    container:
+      image: ${{ needs.build-images.outputs.llk-ci-tag }}
+      options: "--rm --device /dev/tenstorrent --ulimit nofile=4096:4096"
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+      - name: Install SFPI
+        working-directory: ${{ env.LLK_PATH }}
+        run: cd tests && ./setup_testing_env.sh && cd ..
+      - name: Run
+        working-directory: ${{ env.LLK_PATH }}
+        env:
+          PERF_NC_WC: "wc"
+          PERF_SOL: "sol"
+          PERF_ORDER: "rev"
+          TT_LLK_DISABLE_ASSERTS: "1"
+        run: ./tests/run_llk_perf_blackhole.sh 1 5
+      - name: Zip perf data
+        if: always()
+        working-directory: ${{ env.LLK_PATH }}
+        run: |
+          if compgen -G "tests/python_tests/perf_data/**" > /dev/null 2>&1; then
+            cd tests/python_tests && zip -r perf_data-bh-verify-wcsol-rev-1.zip perf_data/
+          fi
+      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        if: always()
+        with:
+          name: perf-data-bh-verify-wcsol-rev-1
+          path: ${{ env.LLK_PATH }}/tests/python_tests/perf_data-bh-verify-wcsol-rev-1.zip
+          if-no-files-found: ignore
+
+  wcsol-rev-g2:
+    name: "BH verify wcsol rev 2/5"
+    needs: [build-images]
+    runs-on: [tt-ubuntu-2204-P150b-stable]
+    timeout-minutes: 180
+    container:
+      image: ${{ needs.build-images.outputs.llk-ci-tag }}
+      options: "--rm --device /dev/tenstorrent --ulimit nofile=4096:4096"
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+      - name: Install SFPI
+        working-directory: ${{ env.LLK_PATH }}
+        run: cd tests && ./setup_testing_env.sh && cd ..
+      - name: Run
+        working-directory: ${{ env.LLK_PATH }}
+        env:
+          PERF_NC_WC: "wc"
+          PERF_SOL: "sol"
+          PERF_ORDER: "rev"
+          TT_LLK_DISABLE_ASSERTS: "1"
+        run: ./tests/run_llk_perf_blackhole.sh 2 5
+      - name: Zip perf data
+        if: always()
+        working-directory: ${{ env.LLK_PATH }}
+        run: |
+          if compgen -G "tests/python_tests/perf_data/**" > /dev/null 2>&1; then
+            cd tests/python_tests && zip -r perf_data-bh-verify-wcsol-rev-2.zip perf_data/
+          fi
+      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        if: always()
+        with:
+          name: perf-data-bh-verify-wcsol-rev-2
+          path: ${{ env.LLK_PATH }}/tests/python_tests/perf_data-bh-verify-wcsol-rev-2.zip
+          if-no-files-found: ignore
+
+  wcsol-rev-g3:
+    name: "BH verify wcsol rev 3/5"
+    needs: [build-images]
+    runs-on: [tt-ubuntu-2204-P150b-stable]
+    timeout-minutes: 180
+    container:
+      image: ${{ needs.build-images.outputs.llk-ci-tag }}
+      options: "--rm --device /dev/tenstorrent --ulimit nofile=4096:4096"
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+      - name: Install SFPI
+        working-directory: ${{ env.LLK_PATH }}
+        run: cd tests && ./setup_testing_env.sh && cd ..
+      - name: Run
+        working-directory: ${{ env.LLK_PATH }}
+        env:
+          PERF_NC_WC: "wc"
+          PERF_SOL: "sol"
+          PERF_ORDER: "rev"
+          TT_LLK_DISABLE_ASSERTS: "1"
+        run: ./tests/run_llk_perf_blackhole.sh 3 5
+      - name: Zip perf data
+        if: always()
+        working-directory: ${{ env.LLK_PATH }}
+        run: |
+          if compgen -G "tests/python_tests/perf_data/**" > /dev/null 2>&1; then
+            cd tests/python_tests && zip -r perf_data-bh-verify-wcsol-rev-3.zip perf_data/
+          fi
+      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        if: always()
+        with:
+          name: perf-data-bh-verify-wcsol-rev-3
+          path: ${{ env.LLK_PATH }}/tests/python_tests/perf_data-bh-verify-wcsol-rev-3.zip
+          if-no-files-found: ignore
+
+  wcsol-rev-g4:
+    name: "BH verify wcsol rev 4/5"
+    needs: [build-images]
+    runs-on: [tt-ubuntu-2204-P150b-stable]
+    timeout-minutes: 180
+    container:
+      image: ${{ needs.build-images.outputs.llk-ci-tag }}
+      options: "--rm --device /dev/tenstorrent --ulimit nofile=4096:4096"
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+      - name: Install SFPI
+        working-directory: ${{ env.LLK_PATH }}
+        run: cd tests && ./setup_testing_env.sh && cd ..
+      - name: Run
+        working-directory: ${{ env.LLK_PATH }}
+        env:
+          PERF_NC_WC: "wc"
+          PERF_SOL: "sol"
+          PERF_ORDER: "rev"
+          TT_LLK_DISABLE_ASSERTS: "1"
+        run: ./tests/run_llk_perf_blackhole.sh 4 5
+      - name: Zip perf data
+        if: always()
+        working-directory: ${{ env.LLK_PATH }}
+        run: |
+          if compgen -G "tests/python_tests/perf_data/**" > /dev/null 2>&1; then
+            cd tests/python_tests && zip -r perf_data-bh-verify-wcsol-rev-4.zip perf_data/
+          fi
+      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        if: always()
+        with:
+          name: perf-data-bh-verify-wcsol-rev-4
+          path: ${{ env.LLK_PATH }}/tests/python_tests/perf_data-bh-verify-wcsol-rev-4.zip
+          if-no-files-found: ignore
+
+  wcsol-rev-g5:
+    name: "BH verify wcsol rev 5/5"
+    needs: [build-images]
+    runs-on: [tt-ubuntu-2204-P150b-stable]
+    timeout-minutes: 180
+    container:
+      image: ${{ needs.build-images.outputs.llk-ci-tag }}
+      options: "--rm --device /dev/tenstorrent --ulimit nofile=4096:4096"
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+      - name: Install SFPI
+        working-directory: ${{ env.LLK_PATH }}
+        run: cd tests && ./setup_testing_env.sh && cd ..
+      - name: Run
+        working-directory: ${{ env.LLK_PATH }}
+        env:
+          PERF_NC_WC: "wc"
+          PERF_SOL: "sol"
+          PERF_ORDER: "rev"
+          TT_LLK_DISABLE_ASSERTS: "1"
+        run: ./tests/run_llk_perf_blackhole.sh 5 5
+      - name: Zip perf data
+        if: always()
+        working-directory: ${{ env.LLK_PATH }}
+        run: |
+          if compgen -G "tests/python_tests/perf_data/**" > /dev/null 2>&1; then
+            cd tests/python_tests && zip -r perf_data-bh-verify-wcsol-rev-5.zip perf_data/
+          fi
+      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        if: always()
+        with:
+          name: perf-data-bh-verify-wcsol-rev-5
+          path: ${{ env.LLK_PATH }}/tests/python_tests/perf_data-bh-verify-wcsol-rev-5.zip
+          if-no-files-found: ignore
+
+  # ---------------------------------------------------------------------------
+  # ncnosol fwd — nc + no speed-of-light + forward order
+  # ---------------------------------------------------------------------------
+  ncnosol-fwd-g1:
+    name: "BH verify ncnosol fwd 1/5"
+    needs: [build-images]
+    runs-on: [tt-ubuntu-2204-P150b-stable]
+    timeout-minutes: 300
+    container:
+      image: ${{ needs.build-images.outputs.llk-ci-tag }}
+      options: "--rm --device /dev/tenstorrent --ulimit nofile=4096:4096"
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+      - name: Install SFPI
+        working-directory: ${{ env.LLK_PATH }}
+        run: cd tests && ./setup_testing_env.sh && cd ..
+      - name: Run
+        working-directory: ${{ env.LLK_PATH }}
+        env:
+          PERF_NC_WC: "nc"
+          PERF_SOL: "nosol"
+          PERF_ORDER: "fwd"
+          TT_LLK_DISABLE_ASSERTS: "1"
+        run: ./tests/run_llk_perf_blackhole.sh 1 5
+      - name: Zip perf data
+        if: always()
+        working-directory: ${{ env.LLK_PATH }}
+        run: |
+          if compgen -G "tests/python_tests/perf_data/**" > /dev/null 2>&1; then
+            cd tests/python_tests && zip -r perf_data-bh-verify-ncnosol-fwd-1.zip perf_data/
+          fi
+      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        if: always()
+        with:
+          name: perf-data-bh-verify-ncnosol-fwd-1
+          path: ${{ env.LLK_PATH }}/tests/python_tests/perf_data-bh-verify-ncnosol-fwd-1.zip
+          if-no-files-found: ignore
+
+  ncnosol-fwd-g2:
+    name: "BH verify ncnosol fwd 2/5"
+    needs: [build-images]
+    runs-on: [tt-ubuntu-2204-P150b-stable]
+    timeout-minutes: 300
+    container:
+      image: ${{ needs.build-images.outputs.llk-ci-tag }}
+      options: "--rm --device /dev/tenstorrent --ulimit nofile=4096:4096"
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+      - name: Install SFPI
+        working-directory: ${{ env.LLK_PATH }}
+        run: cd tests && ./setup_testing_env.sh && cd ..
+      - name: Run
+        working-directory: ${{ env.LLK_PATH }}
+        env:
+          PERF_NC_WC: "nc"
+          PERF_SOL: "nosol"
+          PERF_ORDER: "fwd"
+          TT_LLK_DISABLE_ASSERTS: "1"
+        run: ./tests/run_llk_perf_blackhole.sh 2 5
+      - name: Zip perf data
+        if: always()
+        working-directory: ${{ env.LLK_PATH }}
+        run: |
+          if compgen -G "tests/python_tests/perf_data/**" > /dev/null 2>&1; then
+            cd tests/python_tests && zip -r perf_data-bh-verify-ncnosol-fwd-2.zip perf_data/
+          fi
+      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        if: always()
+        with:
+          name: perf-data-bh-verify-ncnosol-fwd-2
+          path: ${{ env.LLK_PATH }}/tests/python_tests/perf_data-bh-verify-ncnosol-fwd-2.zip
+          if-no-files-found: ignore
+
+  ncnosol-fwd-g3:
+    name: "BH verify ncnosol fwd 3/5"
+    needs: [build-images]
+    runs-on: [tt-ubuntu-2204-P150b-stable]
+    timeout-minutes: 300
+    container:
+      image: ${{ needs.build-images.outputs.llk-ci-tag }}
+      options: "--rm --device /dev/tenstorrent --ulimit nofile=4096:4096"
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+      - name: Install SFPI
+        working-directory: ${{ env.LLK_PATH }}
+        run: cd tests && ./setup_testing_env.sh && cd ..
+      - name: Run
+        working-directory: ${{ env.LLK_PATH }}
+        env:
+          PERF_NC_WC: "nc"
+          PERF_SOL: "nosol"
+          PERF_ORDER: "fwd"
+          TT_LLK_DISABLE_ASSERTS: "1"
+        run: ./tests/run_llk_perf_blackhole.sh 3 5
+      - name: Zip perf data
+        if: always()
+        working-directory: ${{ env.LLK_PATH }}
+        run: |
+          if compgen -G "tests/python_tests/perf_data/**" > /dev/null 2>&1; then
+            cd tests/python_tests && zip -r perf_data-bh-verify-ncnosol-fwd-3.zip perf_data/
+          fi
+      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        if: always()
+        with:
+          name: perf-data-bh-verify-ncnosol-fwd-3
+          path: ${{ env.LLK_PATH }}/tests/python_tests/perf_data-bh-verify-ncnosol-fwd-3.zip
+          if-no-files-found: ignore
+
+  ncnosol-fwd-g4:
+    name: "BH verify ncnosol fwd 4/5"
+    needs: [build-images]
+    runs-on: [tt-ubuntu-2204-P150b-stable]
+    timeout-minutes: 300
+    container:
+      image: ${{ needs.build-images.outputs.llk-ci-tag }}
+      options: "--rm --device /dev/tenstorrent --ulimit nofile=4096:4096"
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+      - name: Install SFPI
+        working-directory: ${{ env.LLK_PATH }}
+        run: cd tests && ./setup_testing_env.sh && cd ..
+      - name: Run
+        working-directory: ${{ env.LLK_PATH }}
+        env:
+          PERF_NC_WC: "nc"
+          PERF_SOL: "nosol"
+          PERF_ORDER: "fwd"
+          TT_LLK_DISABLE_ASSERTS: "1"
+        run: ./tests/run_llk_perf_blackhole.sh 4 5
+      - name: Zip perf data
+        if: always()
+        working-directory: ${{ env.LLK_PATH }}
+        run: |
+          if compgen -G "tests/python_tests/perf_data/**" > /dev/null 2>&1; then
+            cd tests/python_tests && zip -r perf_data-bh-verify-ncnosol-fwd-4.zip perf_data/
+          fi
+      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        if: always()
+        with:
+          name: perf-data-bh-verify-ncnosol-fwd-4
+          path: ${{ env.LLK_PATH }}/tests/python_tests/perf_data-bh-verify-ncnosol-fwd-4.zip
+          if-no-files-found: ignore
+
+  ncnosol-fwd-g5:
+    name: "BH verify ncnosol fwd 5/5"
+    needs: [build-images]
+    runs-on: [tt-ubuntu-2204-P150b-stable]
+    timeout-minutes: 300
+    container:
+      image: ${{ needs.build-images.outputs.llk-ci-tag }}
+      options: "--rm --device /dev/tenstorrent --ulimit nofile=4096:4096"
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+      - name: Install SFPI
+        working-directory: ${{ env.LLK_PATH }}
+        run: cd tests && ./setup_testing_env.sh && cd ..
+      - name: Run
+        working-directory: ${{ env.LLK_PATH }}
+        env:
+          PERF_NC_WC: "nc"
+          PERF_SOL: "nosol"
+          PERF_ORDER: "fwd"
+          TT_LLK_DISABLE_ASSERTS: "1"
+        run: ./tests/run_llk_perf_blackhole.sh 5 5
+      - name: Zip perf data
+        if: always()
+        working-directory: ${{ env.LLK_PATH }}
+        run: |
+          if compgen -G "tests/python_tests/perf_data/**" > /dev/null 2>&1; then
+            cd tests/python_tests && zip -r perf_data-bh-verify-ncnosol-fwd-5.zip perf_data/
+          fi
+      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        if: always()
+        with:
+          name: perf-data-bh-verify-ncnosol-fwd-5
+          path: ${{ env.LLK_PATH }}/tests/python_tests/perf_data-bh-verify-ncnosol-fwd-5.zip
+          if-no-files-found: ignore
+
+  # ---------------------------------------------------------------------------
+  # ncnosol rev — nc + no speed-of-light + reversed order
+  # ---------------------------------------------------------------------------
+  ncnosol-rev-g1:
+    name: "BH verify ncnosol rev 1/5"
+    needs: [build-images]
+    runs-on: [tt-ubuntu-2204-P150b-stable]
+    timeout-minutes: 300
+    container:
+      image: ${{ needs.build-images.outputs.llk-ci-tag }}
+      options: "--rm --device /dev/tenstorrent --ulimit nofile=4096:4096"
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+      - name: Install SFPI
+        working-directory: ${{ env.LLK_PATH }}
+        run: cd tests && ./setup_testing_env.sh && cd ..
+      - name: Run
+        working-directory: ${{ env.LLK_PATH }}
+        env:
+          PERF_NC_WC: "nc"
+          PERF_SOL: "nosol"
+          PERF_ORDER: "rev"
+          TT_LLK_DISABLE_ASSERTS: "1"
+        run: ./tests/run_llk_perf_blackhole.sh 1 5
+      - name: Zip perf data
+        if: always()
+        working-directory: ${{ env.LLK_PATH }}
+        run: |
+          if compgen -G "tests/python_tests/perf_data/**" > /dev/null 2>&1; then
+            cd tests/python_tests && zip -r perf_data-bh-verify-ncnosol-rev-1.zip perf_data/
+          fi
+      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        if: always()
+        with:
+          name: perf-data-bh-verify-ncnosol-rev-1
+          path: ${{ env.LLK_PATH }}/tests/python_tests/perf_data-bh-verify-ncnosol-rev-1.zip
+          if-no-files-found: ignore
+
+  ncnosol-rev-g2:
+    name: "BH verify ncnosol rev 2/5"
+    needs: [build-images]
+    runs-on: [tt-ubuntu-2204-P150b-stable]
+    timeout-minutes: 300
+    container:
+      image: ${{ needs.build-images.outputs.llk-ci-tag }}
+      options: "--rm --device /dev/tenstorrent --ulimit nofile=4096:4096"
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+      - name: Install SFPI
+        working-directory: ${{ env.LLK_PATH }}
+        run: cd tests && ./setup_testing_env.sh && cd ..
+      - name: Run
+        working-directory: ${{ env.LLK_PATH }}
+        env:
+          PERF_NC_WC: "nc"
+          PERF_SOL: "nosol"
+          PERF_ORDER: "rev"
+          TT_LLK_DISABLE_ASSERTS: "1"
+        run: ./tests/run_llk_perf_blackhole.sh 2 5
+      - name: Zip perf data
+        if: always()
+        working-directory: ${{ env.LLK_PATH }}
+        run: |
+          if compgen -G "tests/python_tests/perf_data/**" > /dev/null 2>&1; then
+            cd tests/python_tests && zip -r perf_data-bh-verify-ncnosol-rev-2.zip perf_data/
+          fi
+      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        if: always()
+        with:
+          name: perf-data-bh-verify-ncnosol-rev-2
+          path: ${{ env.LLK_PATH }}/tests/python_tests/perf_data-bh-verify-ncnosol-rev-2.zip
+          if-no-files-found: ignore
+
+  ncnosol-rev-g3:
+    name: "BH verify ncnosol rev 3/5"
+    needs: [build-images]
+    runs-on: [tt-ubuntu-2204-P150b-stable]
+    timeout-minutes: 300
+    container:
+      image: ${{ needs.build-images.outputs.llk-ci-tag }}
+      options: "--rm --device /dev/tenstorrent --ulimit nofile=4096:4096"
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+      - name: Install SFPI
+        working-directory: ${{ env.LLK_PATH }}
+        run: cd tests && ./setup_testing_env.sh && cd ..
+      - name: Run
+        working-directory: ${{ env.LLK_PATH }}
+        env:
+          PERF_NC_WC: "nc"
+          PERF_SOL: "nosol"
+          PERF_ORDER: "rev"
+          TT_LLK_DISABLE_ASSERTS: "1"
+        run: ./tests/run_llk_perf_blackhole.sh 3 5
+      - name: Zip perf data
+        if: always()
+        working-directory: ${{ env.LLK_PATH }}
+        run: |
+          if compgen -G "tests/python_tests/perf_data/**" > /dev/null 2>&1; then
+            cd tests/python_tests && zip -r perf_data-bh-verify-ncnosol-rev-3.zip perf_data/
+          fi
+      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        if: always()
+        with:
+          name: perf-data-bh-verify-ncnosol-rev-3
+          path: ${{ env.LLK_PATH }}/tests/python_tests/perf_data-bh-verify-ncnosol-rev-3.zip
+          if-no-files-found: ignore
+
+  ncnosol-rev-g4:
+    name: "BH verify ncnosol rev 4/5"
+    needs: [build-images]
+    runs-on: [tt-ubuntu-2204-P150b-stable]
+    timeout-minutes: 300
+    container:
+      image: ${{ needs.build-images.outputs.llk-ci-tag }}
+      options: "--rm --device /dev/tenstorrent --ulimit nofile=4096:4096"
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+      - name: Install SFPI
+        working-directory: ${{ env.LLK_PATH }}
+        run: cd tests && ./setup_testing_env.sh && cd ..
+      - name: Run
+        working-directory: ${{ env.LLK_PATH }}
+        env:
+          PERF_NC_WC: "nc"
+          PERF_SOL: "nosol"
+          PERF_ORDER: "rev"
+          TT_LLK_DISABLE_ASSERTS: "1"
+        run: ./tests/run_llk_perf_blackhole.sh 4 5
+      - name: Zip perf data
+        if: always()
+        working-directory: ${{ env.LLK_PATH }}
+        run: |
+          if compgen -G "tests/python_tests/perf_data/**" > /dev/null 2>&1; then
+            cd tests/python_tests && zip -r perf_data-bh-verify-ncnosol-rev-4.zip perf_data/
+          fi
+      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        if: always()
+        with:
+          name: perf-data-bh-verify-ncnosol-rev-4
+          path: ${{ env.LLK_PATH }}/tests/python_tests/perf_data-bh-verify-ncnosol-rev-4.zip
+          if-no-files-found: ignore
+
+  ncnosol-rev-g5:
+    name: "BH verify ncnosol rev 5/5"
+    needs: [build-images]
+    runs-on: [tt-ubuntu-2204-P150b-stable]
+    timeout-minutes: 300
+    container:
+      image: ${{ needs.build-images.outputs.llk-ci-tag }}
+      options: "--rm --device /dev/tenstorrent --ulimit nofile=4096:4096"
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+      - name: Install SFPI
+        working-directory: ${{ env.LLK_PATH }}
+        run: cd tests && ./setup_testing_env.sh && cd ..
+      - name: Run
+        working-directory: ${{ env.LLK_PATH }}
+        env:
+          PERF_NC_WC: "nc"
+          PERF_SOL: "nosol"
+          PERF_ORDER: "rev"
+          TT_LLK_DISABLE_ASSERTS: "1"
+        run: ./tests/run_llk_perf_blackhole.sh 5 5
+      - name: Zip perf data
+        if: always()
+        working-directory: ${{ env.LLK_PATH }}
+        run: |
+          if compgen -G "tests/python_tests/perf_data/**" > /dev/null 2>&1; then
+            cd tests/python_tests && zip -r perf_data-bh-verify-ncnosol-rev-5.zip perf_data/
+          fi
+      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        if: always()
+        with:
+          name: perf-data-bh-verify-ncnosol-rev-5
+          path: ${{ env.LLK_PATH }}/tests/python_tests/perf_data-bh-verify-ncnosol-rev-5.zip
+          if-no-files-found: ignore
+
+  # ---------------------------------------------------------------------------
+  # wcnosol fwd — wc + no speed-of-light + forward order
+  # ---------------------------------------------------------------------------
+  wcnosol-fwd-g1:
+    name: "BH verify wcnosol fwd 1/5"
+    needs: [build-images]
+    runs-on: [tt-ubuntu-2204-P150b-stable]
+    timeout-minutes: 300
+    container:
+      image: ${{ needs.build-images.outputs.llk-ci-tag }}
+      options: "--rm --device /dev/tenstorrent --ulimit nofile=4096:4096"
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+      - name: Install SFPI
+        working-directory: ${{ env.LLK_PATH }}
+        run: cd tests && ./setup_testing_env.sh && cd ..
+      - name: Run
+        working-directory: ${{ env.LLK_PATH }}
+        env:
+          PERF_NC_WC: "wc"
+          PERF_SOL: "nosol"
+          PERF_ORDER: "fwd"
+          TT_LLK_DISABLE_ASSERTS: "1"
+        run: ./tests/run_llk_perf_blackhole.sh 1 5
+      - name: Zip perf data
+        if: always()
+        working-directory: ${{ env.LLK_PATH }}
+        run: |
+          if compgen -G "tests/python_tests/perf_data/**" > /dev/null 2>&1; then
+            cd tests/python_tests && zip -r perf_data-bh-verify-wcnosol-fwd-1.zip perf_data/
+          fi
+      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        if: always()
+        with:
+          name: perf-data-bh-verify-wcnosol-fwd-1
+          path: ${{ env.LLK_PATH }}/tests/python_tests/perf_data-bh-verify-wcnosol-fwd-1.zip
+          if-no-files-found: ignore
+
+  wcnosol-fwd-g2:
+    name: "BH verify wcnosol fwd 2/5"
+    needs: [build-images]
+    runs-on: [tt-ubuntu-2204-P150b-stable]
+    timeout-minutes: 300
+    container:
+      image: ${{ needs.build-images.outputs.llk-ci-tag }}
+      options: "--rm --device /dev/tenstorrent --ulimit nofile=4096:4096"
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+      - name: Install SFPI
+        working-directory: ${{ env.LLK_PATH }}
+        run: cd tests && ./setup_testing_env.sh && cd ..
+      - name: Run
+        working-directory: ${{ env.LLK_PATH }}
+        env:
+          PERF_NC_WC: "wc"
+          PERF_SOL: "nosol"
+          PERF_ORDER: "fwd"
+          TT_LLK_DISABLE_ASSERTS: "1"
+        run: ./tests/run_llk_perf_blackhole.sh 2 5
+      - name: Zip perf data
+        if: always()
+        working-directory: ${{ env.LLK_PATH }}
+        run: |
+          if compgen -G "tests/python_tests/perf_data/**" > /dev/null 2>&1; then
+            cd tests/python_tests && zip -r perf_data-bh-verify-wcnosol-fwd-2.zip perf_data/
+          fi
+      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        if: always()
+        with:
+          name: perf-data-bh-verify-wcnosol-fwd-2
+          path: ${{ env.LLK_PATH }}/tests/python_tests/perf_data-bh-verify-wcnosol-fwd-2.zip
+          if-no-files-found: ignore
+
+  wcnosol-fwd-g3:
+    name: "BH verify wcnosol fwd 3/5"
+    needs: [build-images]
+    runs-on: [tt-ubuntu-2204-P150b-stable]
+    timeout-minutes: 300
+    container:
+      image: ${{ needs.build-images.outputs.llk-ci-tag }}
+      options: "--rm --device /dev/tenstorrent --ulimit nofile=4096:4096"
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+      - name: Install SFPI
+        working-directory: ${{ env.LLK_PATH }}
+        run: cd tests && ./setup_testing_env.sh && cd ..
+      - name: Run
+        working-directory: ${{ env.LLK_PATH }}
+        env:
+          PERF_NC_WC: "wc"
+          PERF_SOL: "nosol"
+          PERF_ORDER: "fwd"
+          TT_LLK_DISABLE_ASSERTS: "1"
+        run: ./tests/run_llk_perf_blackhole.sh 3 5
+      - name: Zip perf data
+        if: always()
+        working-directory: ${{ env.LLK_PATH }}
+        run: |
+          if compgen -G "tests/python_tests/perf_data/**" > /dev/null 2>&1; then
+            cd tests/python_tests && zip -r perf_data-bh-verify-wcnosol-fwd-3.zip perf_data/
+          fi
+      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        if: always()
+        with:
+          name: perf-data-bh-verify-wcnosol-fwd-3
+          path: ${{ env.LLK_PATH }}/tests/python_tests/perf_data-bh-verify-wcnosol-fwd-3.zip
+          if-no-files-found: ignore
+
+  wcnosol-fwd-g4:
+    name: "BH verify wcnosol fwd 4/5"
+    needs: [build-images]
+    runs-on: [tt-ubuntu-2204-P150b-stable]
+    timeout-minutes: 300
+    container:
+      image: ${{ needs.build-images.outputs.llk-ci-tag }}
+      options: "--rm --device /dev/tenstorrent --ulimit nofile=4096:4096"
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+      - name: Install SFPI
+        working-directory: ${{ env.LLK_PATH }}
+        run: cd tests && ./setup_testing_env.sh && cd ..
+      - name: Run
+        working-directory: ${{ env.LLK_PATH }}
+        env:
+          PERF_NC_WC: "wc"
+          PERF_SOL: "nosol"
+          PERF_ORDER: "fwd"
+          TT_LLK_DISABLE_ASSERTS: "1"
+        run: ./tests/run_llk_perf_blackhole.sh 4 5
+      - name: Zip perf data
+        if: always()
+        working-directory: ${{ env.LLK_PATH }}
+        run: |
+          if compgen -G "tests/python_tests/perf_data/**" > /dev/null 2>&1; then
+            cd tests/python_tests && zip -r perf_data-bh-verify-wcnosol-fwd-4.zip perf_data/
+          fi
+      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        if: always()
+        with:
+          name: perf-data-bh-verify-wcnosol-fwd-4
+          path: ${{ env.LLK_PATH }}/tests/python_tests/perf_data-bh-verify-wcnosol-fwd-4.zip
+          if-no-files-found: ignore
+
+  wcnosol-fwd-g5:
+    name: "BH verify wcnosol fwd 5/5"
+    needs: [build-images]
+    runs-on: [tt-ubuntu-2204-P150b-stable]
+    timeout-minutes: 300
+    container:
+      image: ${{ needs.build-images.outputs.llk-ci-tag }}
+      options: "--rm --device /dev/tenstorrent --ulimit nofile=4096:4096"
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+      - name: Install SFPI
+        working-directory: ${{ env.LLK_PATH }}
+        run: cd tests && ./setup_testing_env.sh && cd ..
+      - name: Run
+        working-directory: ${{ env.LLK_PATH }}
+        env:
+          PERF_NC_WC: "wc"
+          PERF_SOL: "nosol"
+          PERF_ORDER: "fwd"
+          TT_LLK_DISABLE_ASSERTS: "1"
+        run: ./tests/run_llk_perf_blackhole.sh 5 5
+      - name: Zip perf data
+        if: always()
+        working-directory: ${{ env.LLK_PATH }}
+        run: |
+          if compgen -G "tests/python_tests/perf_data/**" > /dev/null 2>&1; then
+            cd tests/python_tests && zip -r perf_data-bh-verify-wcnosol-fwd-5.zip perf_data/
+          fi
+      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        if: always()
+        with:
+          name: perf-data-bh-verify-wcnosol-fwd-5
+          path: ${{ env.LLK_PATH }}/tests/python_tests/perf_data-bh-verify-wcnosol-fwd-5.zip
+          if-no-files-found: ignore
+
+  # ---------------------------------------------------------------------------
+  # wcnosol rev — wc + no speed-of-light + reversed order
+  # ---------------------------------------------------------------------------
+  wcnosol-rev-g1:
+    name: "BH verify wcnosol rev 1/5"
+    needs: [build-images]
+    runs-on: [tt-ubuntu-2204-P150b-stable]
+    timeout-minutes: 300
+    container:
+      image: ${{ needs.build-images.outputs.llk-ci-tag }}
+      options: "--rm --device /dev/tenstorrent --ulimit nofile=4096:4096"
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+      - name: Install SFPI
+        working-directory: ${{ env.LLK_PATH }}
+        run: cd tests && ./setup_testing_env.sh && cd ..
+      - name: Run
+        working-directory: ${{ env.LLK_PATH }}
+        env:
+          PERF_NC_WC: "wc"
+          PERF_SOL: "nosol"
+          PERF_ORDER: "rev"
+          TT_LLK_DISABLE_ASSERTS: "1"
+        run: ./tests/run_llk_perf_blackhole.sh 1 5
+      - name: Zip perf data
+        if: always()
+        working-directory: ${{ env.LLK_PATH }}
+        run: |
+          if compgen -G "tests/python_tests/perf_data/**" > /dev/null 2>&1; then
+            cd tests/python_tests && zip -r perf_data-bh-verify-wcnosol-rev-1.zip perf_data/
+          fi
+      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        if: always()
+        with:
+          name: perf-data-bh-verify-wcnosol-rev-1
+          path: ${{ env.LLK_PATH }}/tests/python_tests/perf_data-bh-verify-wcnosol-rev-1.zip
+          if-no-files-found: ignore
+
+  wcnosol-rev-g2:
+    name: "BH verify wcnosol rev 2/5"
+    needs: [build-images]
+    runs-on: [tt-ubuntu-2204-P150b-stable]
+    timeout-minutes: 300
+    container:
+      image: ${{ needs.build-images.outputs.llk-ci-tag }}
+      options: "--rm --device /dev/tenstorrent --ulimit nofile=4096:4096"
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+      - name: Install SFPI
+        working-directory: ${{ env.LLK_PATH }}
+        run: cd tests && ./setup_testing_env.sh && cd ..
+      - name: Run
+        working-directory: ${{ env.LLK_PATH }}
+        env:
+          PERF_NC_WC: "wc"
+          PERF_SOL: "nosol"
+          PERF_ORDER: "rev"
+          TT_LLK_DISABLE_ASSERTS: "1"
+        run: ./tests/run_llk_perf_blackhole.sh 2 5
+      - name: Zip perf data
+        if: always()
+        working-directory: ${{ env.LLK_PATH }}
+        run: |
+          if compgen -G "tests/python_tests/perf_data/**" > /dev/null 2>&1; then
+            cd tests/python_tests && zip -r perf_data-bh-verify-wcnosol-rev-2.zip perf_data/
+          fi
+      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        if: always()
+        with:
+          name: perf-data-bh-verify-wcnosol-rev-2
+          path: ${{ env.LLK_PATH }}/tests/python_tests/perf_data-bh-verify-wcnosol-rev-2.zip
+          if-no-files-found: ignore
+
+  wcnosol-rev-g3:
+    name: "BH verify wcnosol rev 3/5"
+    needs: [build-images]
+    runs-on: [tt-ubuntu-2204-P150b-stable]
+    timeout-minutes: 300
+    container:
+      image: ${{ needs.build-images.outputs.llk-ci-tag }}
+      options: "--rm --device /dev/tenstorrent --ulimit nofile=4096:4096"
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+      - name: Install SFPI
+        working-directory: ${{ env.LLK_PATH }}
+        run: cd tests && ./setup_testing_env.sh && cd ..
+      - name: Run
+        working-directory: ${{ env.LLK_PATH }}
+        env:
+          PERF_NC_WC: "wc"
+          PERF_SOL: "nosol"
+          PERF_ORDER: "rev"
+          TT_LLK_DISABLE_ASSERTS: "1"
+        run: ./tests/run_llk_perf_blackhole.sh 3 5
+      - name: Zip perf data
+        if: always()
+        working-directory: ${{ env.LLK_PATH }}
+        run: |
+          if compgen -G "tests/python_tests/perf_data/**" > /dev/null 2>&1; then
+            cd tests/python_tests && zip -r perf_data-bh-verify-wcnosol-rev-3.zip perf_data/
+          fi
+      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        if: always()
+        with:
+          name: perf-data-bh-verify-wcnosol-rev-3
+          path: ${{ env.LLK_PATH }}/tests/python_tests/perf_data-bh-verify-wcnosol-rev-3.zip
+          if-no-files-found: ignore
+
+  wcnosol-rev-g4:
+    name: "BH verify wcnosol rev 4/5"
+    needs: [build-images]
+    runs-on: [tt-ubuntu-2204-P150b-stable]
+    timeout-minutes: 300
+    container:
+      image: ${{ needs.build-images.outputs.llk-ci-tag }}
+      options: "--rm --device /dev/tenstorrent --ulimit nofile=4096:4096"
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+      - name: Install SFPI
+        working-directory: ${{ env.LLK_PATH }}
+        run: cd tests && ./setup_testing_env.sh && cd ..
+      - name: Run
+        working-directory: ${{ env.LLK_PATH }}
+        env:
+          PERF_NC_WC: "wc"
+          PERF_SOL: "nosol"
+          PERF_ORDER: "rev"
+          TT_LLK_DISABLE_ASSERTS: "1"
+        run: ./tests/run_llk_perf_blackhole.sh 4 5
+      - name: Zip perf data
+        if: always()
+        working-directory: ${{ env.LLK_PATH }}
+        run: |
+          if compgen -G "tests/python_tests/perf_data/**" > /dev/null 2>&1; then
+            cd tests/python_tests && zip -r perf_data-bh-verify-wcnosol-rev-4.zip perf_data/
+          fi
+      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        if: always()
+        with:
+          name: perf-data-bh-verify-wcnosol-rev-4
+          path: ${{ env.LLK_PATH }}/tests/python_tests/perf_data-bh-verify-wcnosol-rev-4.zip
+          if-no-files-found: ignore
+
+  wcnosol-rev-g5:
+    name: "BH verify wcnosol rev 5/5"
+    needs: [build-images]
+    runs-on: [tt-ubuntu-2204-P150b-stable]
+    timeout-minutes: 300
+    container:
+      image: ${{ needs.build-images.outputs.llk-ci-tag }}
+      options: "--rm --device /dev/tenstorrent --ulimit nofile=4096:4096"
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+      - name: Install SFPI
+        working-directory: ${{ env.LLK_PATH }}
+        run: cd tests && ./setup_testing_env.sh && cd ..
+      - name: Run
+        working-directory: ${{ env.LLK_PATH }}
+        env:
+          PERF_NC_WC: "wc"
+          PERF_SOL: "nosol"
+          PERF_ORDER: "rev"
+          TT_LLK_DISABLE_ASSERTS: "1"
+        run: ./tests/run_llk_perf_blackhole.sh 5 5
+      - name: Zip perf data
+        if: always()
+        working-directory: ${{ env.LLK_PATH }}
+        run: |
+          if compgen -G "tests/python_tests/perf_data/**" > /dev/null 2>&1; then
+            cd tests/python_tests && zip -r perf_data-bh-verify-wcnosol-rev-5.zip perf_data/
+          fi
+      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        if: always()
+        with:
+          name: perf-data-bh-verify-wcnosol-rev-5
+          path: ${{ env.LLK_PATH }}/tests/python_tests/perf_data-bh-verify-wcnosol-rev-5.zip
+          if-no-files-found: ignore
