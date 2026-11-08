@@ -51,7 +51,13 @@ from models.demos.glm53_flash.custom_ops.kda_decode.op import selector_tiles
 from models.demos.glm53_flash.custom_ops.paged_pool_gather.op import PagedPoolGather
 from models.demos.glm53_flash.custom_ops.topk_rows.op import TopkRows
 from models.demos.glm53_flash.tt.config import GLM53FlashConfig
-from models.demos.glm53_flash.tt.indexer import TtDSAIndexer, TtIndexCache, colsplit_enabled, height_shard_rows
+from models.demos.glm53_flash.tt.indexer import (
+    TtDSAIndexer,
+    TtIndexCache,
+    colsplit_enabled,
+    fixed_shapes_enabled,
+    height_shard_rows,
+)
 from models.demos.glm53_flash.tt.matmul_configs import PREFILL_ROW_BLOCK, DecodeLinear, prefill_linear
 from models.demos.glm53_flash.tt.mesh import TP_AXIS, GLMMesh, single_chip
 
@@ -1181,7 +1187,9 @@ class TtDSA(LightweightModule):
         kv_rm, kv_owned = cache.prefix_rows_rm(user, start, T, chunk_c=c)
         ttnn.deallocate(c)
         self._mark("kv_copy")
-        o_sparse = self._sparse_rows(x, q_resid, q, cache, user, kv_rm, start=start, end=end, r0=split, r1=T)
+        o_sparse = self._sparse_rows(
+            x, q_resid, q, cache, user, kv_rm, start=start, end=end, r0=split, r1=T, end_pad=start + T
+        )
         ttnn.deallocate(q_resid)
         ttnn.deallocate(q)
         if kv_owned:
@@ -1289,6 +1297,7 @@ class TtDSA(LightweightModule):
             end=end,
             r0=0,
             r1=T_loc,
+            end_pad=start + T,
             row_starts_of=lambda q0: tuple(start + r * T_loc + q0 for r in range(rows)),
             pos_floor=self.sparse_row_start,
         )
@@ -1340,6 +1349,7 @@ class TtDSA(LightweightModule):
         r1: int,
         row_starts_of=None,
         pos_floor: int = 0,
+        end_pad: int | None = None,
     ) -> ttnn.Tensor:
         """The sparse-path attention output [1,1,r1-r0,H*Dv] of chunk (or slab) rows [r0, r1) of ``x`` /
         ``q_resid`` / ``q`` (all [1,1,T,*] of the chunk; ``x`` is the normalized input, ``q`` the per-head queries)
@@ -1365,7 +1375,11 @@ class TtDSA(LightweightModule):
         Memory: the attention block's transient peak is ~4 x rows x H_total x L bf16 (the gathered 64-head queries
         in TILE and ROW_MAJOR, the sparse_sdpa output in both: 274 MB at 2048 rows), against the score sub-block's
         [rows, pools] block in TILE and ROW_MAJOR (268 MB at 256 rows x 262 K pools, 536 MB at 512): at the 32-user
-        1 M point (QBLOCK 256) the default ABLOCK 2048 adds ~6 MB to the chunk's peak; ABLOCK 1024 halves it."""
+        1 M point (QBLOCK 256) the default ABLOCK 2048 adds ~6 MB to the chunk's peak; ABLOCK 1024 halves it.
+
+        ``end_pad`` (the padded chunk's end): with ``GLM53_PREFILL_FIXED_SHAPES=1`` (tt-blaze G53F-0313) the bounded
+        selections' scored width comes from it instead of the prompt end ``end`` (rows rank their own causal prefix
+        either way), within the pools view of the prompt end (``TtDSAIndexer._rank_pools``)."""
         idx = self.indexer
         qb, ab = prefill_blocks()
         n = r1 - r0
@@ -1380,7 +1394,11 @@ class TtDSA(LightweightModule):
         self._mark("index_queries")
         slot = cache.index.prefill_slot(user)
         n_pools_valid = end // idx.P
-        # G53F-0198: the chunk's pools as a bucket-wide copy for the scorer (GLM53_INDEXER_POOL_BUCKET; None = off)
+        fixed = end_pad is not None and fixed_shapes_enabled()
+        n_pools_bounded = end_pad // idx.P if fixed else None  # G53F-0313: the bounded width from the padded chunk
+        # G53F-0198: the chunk's pools as a bucket-wide copy for the scorer (GLM53_INDEXER_POOL_BUCKET; None = off). Its
+        # width stays the prompt end's under G53F-0313's fixed shapes too (it moves only every 64k tokens): a padded-end
+        # width changed the selections on device (K1 run 2, prompt 61000: 16384 -> 32768 columns)
         pv = idx.pools_view(cache.index, slot, end, qb)
         o_parts = []
         for a0, a1, subs in sparse_block_plan(r0, r1, qb, ab):
@@ -1389,6 +1407,7 @@ class TtDSA(LightweightModule):
                     self._sparse_block_colsplit(
                         q_i, w_i, q, cache, user, kv_rm, slot=slot, start=start, r0=r0, a0=a0, a1=a1, qb=qb,
                         row_starts_of=row_starts_of, pos_floor=pos_floor, n_pools_valid=n_pools_valid, pv=pv,
+                        n_pools_bounded=n_pools_bounded,
                     )
                 )  # fmt: skip
                 continue
@@ -1425,6 +1444,7 @@ class TtDSA(LightweightModule):
                         row_starts=row_starts,
                         pos_floor=pos_floor,
                         pools_view=pv,
+                        num_pools_bounded=n_pools_bounded,
                     )
                 )  # [1,1,q1-q0,512] ranked pool ids
                 if q_b is not q_i:
@@ -1482,7 +1502,7 @@ class TtDSA(LightweightModule):
 
     def _sparse_block_colsplit(
         self, q_i, w_i, q, cache, user, kv_rm, *, slot, start, r0, a0, a1, qb, row_starts_of, pos_floor,
-        n_pools_valid, pv,
+        n_pools_valid, pv, n_pools_bounded=None,
     ) -> ttnn.Tensor:  # fmt: skip
         """One attention block [a0, a1) of ``_sparse_rows`` with the column-split selection (``_colsplit_block``):
         column c takes rows [a0 + c*nq, a0 + (c+1)*nq) of the index queries (``partition_cols``: a per-device
@@ -1522,6 +1542,7 @@ class TtDSA(LightweightModule):
                     pos_floor=pos_floor,
                     pools_view=pv,
                     col_stride=nq,
+                    num_pools_bounded=n_pools_bounded,
                 )
             )  # [1,1,j1-j0,512]: this column's rows
             if q_b is not q_q:
