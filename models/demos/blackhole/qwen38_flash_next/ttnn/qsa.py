@@ -8481,6 +8481,18 @@ class Qwen38TTNNQSA:
             sliced = owned = ttnn.slice(full, (0, 0, 0, 0), (1, 1, count, width), memory_config=ttnn.DRAM_MEMORY_CONFIG)
         return ttnn.reshape(sliced, ttnn.Shape((count, width))), owned
 
+    def _lane_wide_page_table(self, lane_constants, count: int):
+        """``(table, owned)`` for the wide ``indexer_score_dsa``: its logical k is ``users * paged_user_rows``, so the
+        table holds only the first ``count`` lanes' rows.  At the full row count the lane table itself comes back
+        (``owned`` is ``None``); below it the slice is a new tensor (``owned``) that the caller releases."""
+
+        full = lane_constants.page_table
+        if count == int(full.shape[2]):
+            return full, None
+        width = int(full.shape[3])
+        owned = ttnn.slice(full, (0, 0, 0, 0), (1, 1, count, width), memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        return owned, owned
+
     def _lane_index_tail_kwargs(self, state: Qwen38TTNNQSALaneState, lane_constants) -> dict:
         """The ``index_tail`` page keywords of the lane decode (empty on the per-lane index cache): row u of the
         lane table is lane u's."""
@@ -8491,9 +8503,9 @@ class Qwen38TTNNQSA:
 
     def _lane_indexer_kwargs(self, state: Qwen38TTNNQSALaneState, lane_constants, *, count: int, wide: bool) -> dict:
         """The ``indexer_score_dsa`` page keywords over the shared Index pool (empty on the per-lane cache).  The
-        logical k of the wide form is the flat view's ``[1, 1, 32 * (blocks + 32), 128]`` (the table's 32 rows are the
-        users) and ``kv_len`` bounds it to the first ``count`` users; the per-lane form takes ``cache_batch_idx``
-        from its caller."""
+        logical k of the wide form is the flat view's ``[1, 1, users * (blocks + 32), 128]`` (the table's rows are the
+        users; the wide callers pass the first ``count`` rows through ``_lane_wide_page_table``) and ``kv_len``
+        bounds it to the first ``count`` users; the per-lane form takes ``cache_batch_idx`` from its caller."""
 
         if not self._lane_index_paged(state, lane_constants):
             return {}
@@ -8621,6 +8633,10 @@ class Qwen38TTNNQSA:
         # of the lane-local [32, blocks] score rows the chunk stages take (rows past B zero).
         lane_rows = []
         if lane_constants.indexer_form == "wide":
+            page_kwargs = self._lane_indexer_kwargs(state, lane_constants, count=count, wide=True)
+            owned_wide_table = None
+            if page_kwargs:
+                page_kwargs["page_table"], owned_wide_table = self._lane_wide_page_table(lane_constants, count)
             local_scores = ttnn.experimental.indexer_score_dsa(
                 index_query,
                 state.compressed_index_cache if state.pools_shared else state.compressed_index_cache_flat,
@@ -8628,10 +8644,11 @@ class Qwen38TTNNQSA:
                 chunk_start_idx=count * rows - ttnn.TILE_SIZE,
                 compute_kernel_config=self.indexer_compute_config,
                 seq_shard_axes=[STAGING_AXIS],
-                **self._lane_indexer_kwargs(state, lane_constants, count=count, wide=True),
+                **page_kwargs,
                 **_idx_kc_kwargs(),
                 **_idx_rowwrite_kwargs(1, rows),  # lane u reads row u of its own columns only
             )
+            _deallocate(owned_wide_table)
             for lane in range(count):
                 lane_rows.append(
                     ttnn.slice(
@@ -9110,9 +9127,11 @@ class Qwen38TTNNQSA:
         rows = blocks + ttnn.TILE_SIZE
         if state.pools_shared:
             page_kwargs = self._lane_indexer_kwargs(state, lane_constants, count=count, wide=True)
+            page_kwargs["page_table"], owned_wide_table = self._lane_wide_page_table(lane_constants, count)
             cache = state.compressed_index_cache
         else:
             page_kwargs = {}
+            owned_wide_table = None
             cache = state.compressed_index_cache_flat
         local_scores = ttnn.experimental.indexer_score_dsa(
             index_query,
@@ -9127,6 +9146,7 @@ class Qwen38TTNNQSA:
             # never read
             **_idx_rowwrite_kwargs(lane_verify.rows, rows),
         )
+        _deallocate(owned_wide_table)
         score_rows = self._lane_score_rows_of(local_scores, lane_verify.lanes_of_rows, count, rows, blocks)
         _deallocate(local_scores)
         _require_shape(score_rows, (1, 1, CHUNK_ROWS, blocks), "local QSA lane verify block scores")
@@ -9359,10 +9379,12 @@ class Qwen38TTNNQSA:
         if lane_constants.indexer_form == "wide":
             # A bucket view scores the first ``count`` users of the parent's flat cache: kv_len bounds the keys.
             if state.pools_shared:
-                # The pool's logical k is the table's 32 users; kv_len bounds it to the first ``count``.
+                # The pool's logical k is the table's users (the first ``count`` rows); kv_len bounds it as well.
                 view_kwargs = self._lane_indexer_kwargs(state, lane_constants, count=count, wide=True)
+                view_kwargs["page_table"], owned_wide_table = self._lane_wide_page_table(lane_constants, count)
                 cache = state.compressed_index_cache
             else:
+                owned_wide_table = None
                 view_kwargs = {"kv_len": count * rows} if state.is_view and not state.lane_prefix else {}
                 cache = state.compressed_index_cache_flat
             if os.environ.get("QWEN38_IDX_LEN", "1") == "1":
@@ -9384,6 +9406,7 @@ class Qwen38TTNNQSA:
                 **view_kwargs,
                 **_idx_kc_kwargs(),
             )
+            _deallocate(owned_wide_table)
             if self._lane_score_rows_fused is not None:
                 lane_rows.append(self._lane_score_rows_fused(local_scores, count, rows, blocks))
             else:

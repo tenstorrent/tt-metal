@@ -58,6 +58,7 @@ def _lanes_warm_hook(mesh_device, lanes_session: Qwen38LanesSession, allocated_c
             live=live,
             reserved_bytes_per_bank=reserved,
             gdn_rows_scan=fused_module.enabled(gdn_rows_scan_module.NAME),
+            paged=opened_chain.paging is not None,
         )
         lanes_session.admission = admission
         if not admission["fits"]:

@@ -42,6 +42,7 @@ WIDEN_COMPUTE = fp.kernel_source(NAME, "widen_compute.cpp")
 SELECTION_ROW = fp.kernel_source(NAME, "selection_row.cpp")
 SELECTION_ROW_SPREAD = fp.kernel_source(NAME, "selection_row_spread.cpp")
 LANE_SCORE_ROWS = fp.kernel_source(NAME, "lane_score_rows.cpp")
+LANE_SCORE_ROWS_CHUNK_BYTES = 32768  # lane_score_rows row copy chunk: CB 0 holds one chunk
 LANE_COLUMNS = 8  # lane u's core sits in column u % 8 of its core row: up to 32 lanes on 4 core rows
 SCORE_MERGE = {role: fp.kernel_source(NAME, f"score_merge_{role}.cpp") for role in ("reader", "compute", "writer")}
 MAIN_TAIL = {
@@ -1838,16 +1839,17 @@ def lane_score_rows_of(local_scores, lanes_of_rows, lanes: int, cache_rows: int,
     out = fp.allocate((1, 1, rows, blocks), BF16, ttnn.ROW_MAJOR_LAYOUT, mesh)
     cores = _lane_cores(rows, 0)
     core_set = _core_rows(cores)
+    chunk = min(blocks * 2, LANE_SCORE_ROWS_CHUNK_BYTES)
     kernel = fp.reader_kernel(
         LANE_SCORE_ROWS,
         core_set,
         [*fp.accessor_args(local_scores), *fp.accessor_args(out)],
         [
-            (core, [local_scores.buffer_address(), out.buffer_address(), row, int(lane), cache_rows, blocks])
+            (core, [local_scores.buffer_address(), out.buffer_address(), row, int(lane), cache_rows, blocks, chunk])
             for row, (core, lane) in enumerate(zip(cores, lanes_of_rows))
         ],
     )
-    cbs = [fp.cb_descriptor(0, BF16, blocks * 2, 1, core_set)]
+    cbs = [fp.cb_descriptor(0, BF16, chunk, 1, core_set)]
     meta = fp.program_meta(  # each row's window of the wide scores in, the rows out; data movement
         NAME, "lane_score_rows", rows, writes=(out,), partial=((local_scores, rows * blocks * 2),), cores=rows
     )

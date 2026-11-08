@@ -170,6 +170,9 @@ def test_lane_decode_source_passes_the_lane_table_to_the_index_tail():
     assert "paged_kwargs=self._lane_index_tail_kwargs(state, lane_constants)" in source
 
 
+_LANE_TABLE = _Tensor((1, 1, 32, 8), ttnn.ROW_MAJOR_LAYOUT)
+
+
 def _score_kwargs(monkeypatch, state, form, count=LANES, composed=False):
     captured = []
 
@@ -184,6 +187,11 @@ def _score_kwargs(monkeypatch, state, form, count=LANES, composed=False):
     module = _module()
     constants = _constants()
     constants.indexer_form = form
+    if form == "wide":
+        constants.page_table = _LANE_TABLE
+        monkeypatch.setattr(
+            ttnn, "slice", lambda tensor, start, end, **kw: _Tensor(tuple(e - s for s, e in zip(start, end)))
+        )
     method = module._score_blocks_lanes if composed else module._score_blocks_lanes_fused
     with pytest.raises(_Stop):  # allow-pytest.raises: host check
         method(None, state, SimpleNamespace(kv_block_start="kv_block_start"), constants)
@@ -196,7 +204,8 @@ def test_wide_indexer_scores_the_pool(allocation, monkeypatch, composed):
     state = module.allocate_lane_state(LANES, pools=_pools())
     args, kwargs = _score_kwargs(monkeypatch, state, "wide", composed=composed)
     assert args[1] is state.compressed_index_cache
-    assert kwargs["page_table"] == TABLE and kwargs["paged_block_rows"] == PAGE // 4
+    assert kwargs["page_table"].shape == (1, 1, LANES, 8) and kwargs["page_table"] is not _LANE_TABLE
+    assert kwargs["paged_block_rows"] == PAGE // 4
     assert kwargs["paged_user_rows"] == ROWS and kwargs["paged_wide"] is True
     assert kwargs["kv_len"] == LANES * ROWS and kwargs["chunk_start_idx"] == LANES * ROWS - ttnn.TILE_SIZE
     assert "cache_batch_idx" not in kwargs
@@ -355,3 +364,16 @@ def test_constants_view_takes_a_parent_narrower_than_the_maximum(monkeypatch):
     assert view.lanes == 4 and view.page_table is TABLE and not view.owns_page_table
     with pytest.raises(ValueError):  # allow-pytest.raises: no-device Python-level check
         qsa_module.Qwen38TTNNQSALaneConstants.build_view("mesh", _Contract(), parent, lanes=16)
+
+
+@pytest.mark.parametrize("count", [1, 8, 32])
+def test_wide_page_table_holds_the_first_count_rows_and_frees_only_its_slice(monkeypatch, count):
+    module = _module()
+    fake = _TableTtnn()
+    monkeypatch.setattr(qsa_module.ttnn, "slice", fake.slice)
+    full = _Tensor((1, 1, 32, 16), ttnn.ROW_MAJOR_LAYOUT)
+    table, owned = module._lane_wide_page_table(SimpleNamespace(page_table=full), count)
+    if count == 32:
+        assert table is full and owned is None and fake.calls == []
+    else:
+        assert table is owned and owned is not full and table.shape == (1, 1, count, 16)
