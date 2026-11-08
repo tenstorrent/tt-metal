@@ -19,13 +19,6 @@
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/math.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/core/optional.hpp"
 
-#ifdef BHL_PROF
-#include "api/debug/kernel_profiler.hpp"
-#define BHLZ(n) DeviceZoneScopedN(n)
-#else
-#define BHLZ(n)
-#endif
-
 namespace ckl = compute_kernel_lib;
 
 void kernel_main() {
@@ -69,7 +62,6 @@ void kernel_main() {
     for (std::uint32_t r = 0; r < num_rows; ++r) {
 #ifdef NUMERIC_STABLE
         {
-        BHLZ("C_MAX");
 #ifdef BHL_MAXSTREAM
         reconfig_data_format(dfb_max_scaler, dfb_in0);
         pack_reconfig_data_format(dfb_pmax);
@@ -100,7 +92,6 @@ void kernel_main() {
 
 #ifndef BHL_ABL_NOMAXX
         if (c == 0) {
-            BHLZ("C_COMB");
             rmax.wait_front(static_cast<uint16_t>(C));
             reconfig_data_format_srca(dfb::rmax);
             pack_reconfig_data_format(dfb::mout);
@@ -143,7 +134,6 @@ void kernel_main() {
 #endif
 
         {
-        BHLZ("C_EXP");
         reconfig_data_format(dfb_in0, dfb_mcb);
         pack_reconfig_data_format(dfb_exps);
         ckl::eltwise_chain(
@@ -195,11 +185,9 @@ void kernel_main() {
         }
 #endif
         if (bhl_chain) {
-            BHLZ("C_WACC");
             racc.wait_front(1);
         }
         {
-        BHLZ("C_SUM");
 #ifdef BHL_PRESTAGE
         if (!bhl_chain) {
             reduce_init<PoolType::SUM, ReduceDim::REDUCE_ROW>(dfb_exps, dfb_sum_scaler, sum_out);
@@ -255,7 +243,6 @@ void kernel_main() {
             racc.pop_front(1);
         }
 
-        BHLZ("C_MUL");
         ckl::mul<
             ckl::input(dfb_exps, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd, ckl::InputTileMapping::Block),
             ckl::input(dfb_rcb, ckl::BroadcastDim::Col, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd),

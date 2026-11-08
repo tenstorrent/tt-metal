@@ -19,7 +19,6 @@
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/math.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/core/optional.hpp"
 
-
 namespace ckl = compute_kernel_lib;
 
 #if defined(BH_ACC)
@@ -34,8 +33,6 @@ namespace ckl = compute_kernel_lib;
 #define BH_ACC_REDUCE(CB, I) reduce_tile<PoolType::SUM, ReduceDim::REDUCE_ROW>(CB, dfb::sum_scaler, I, 0, 0)
 #endif
 #endif
-
-
 
 void kernel_main() {
     const std::uint32_t T = get_arg(args::T);
@@ -75,7 +72,7 @@ void kernel_main() {
     max_scaler.wait_front(1);
     sum_scaler.wait_front(1);
 #if defined(BH_ACC)
-    [[maybe_unused]] const bool f5_send = c > 0;
+    [[maybe_unused]] const bool sm_send = c > 0;
 #endif
 #if defined(BH_ACC)
     const bool is_last = c == 0;
@@ -148,7 +145,7 @@ void kernel_main() {
             const std::uint32_t rem = (b + ndst > T) ? (T - b) : ndst;
             exps.reserve_back(static_cast<uint16_t>(rem));
 #if defined(BH_ACC)
-            if (f5_send) {
+            if (sm_send) {
                 exs.reserve_back(static_cast<uint16_t>(rem));
             }
 #endif
@@ -165,7 +162,7 @@ void kernel_main() {
                 pack_tile(d, dfb::exps);
             }
 #if defined(BH_ACC)
-            if (f5_send) {
+            if (sm_send) {
                 for (std::uint32_t d = 0; d < rem; ++d) {
                     pack_tile(d, dfb::exs);
                 }
@@ -174,7 +171,7 @@ void kernel_main() {
             tile_regs_release();
             exps.push_back(static_cast<uint16_t>(rem));
 #if defined(BH_ACC)
-            if (f5_send) {
+            if (sm_send) {
                 exs.push_back(static_cast<uint16_t>(rem));
             }
 #endif
@@ -222,7 +219,7 @@ void kernel_main() {
 #if defined(BH_ACC)
         if (c == 0) {
             DataflowBuffer exr(dfb::exr);
-            const std::uint32_t f5_wt = get_arg(args::Wt);
+            const std::uint32_t sm_wt = get_arg(args::Wt);
             reconfig_data_format(dfb_sum_scaler, dfb_exps);
             pack_reconfig_data_format(dfb::rout);
             rout.reserve_back(1);
@@ -235,8 +232,8 @@ void kernel_main() {
             for (std::uint32_t t = 0; t < T; ++t) {
                 BH_ACC_REDUCE(dfb_exps, t);
             }
-            for (std::uint32_t b = T; b < f5_wt; b += ndst) {
-                const std::uint32_t rem = (b + ndst > f5_wt) ? (f5_wt - b) : ndst;
+            for (std::uint32_t b = T; b < sm_wt; b += ndst) {
+                const std::uint32_t rem = (b + ndst > sm_wt) ? (sm_wt - b) : ndst;
                 exr.wait_front(static_cast<uint16_t>(b + rem));
                 for (std::uint32_t d = 0; d < rem; ++d) {
                     BH_ACC_REDUCE(dfb::exr, b + d);
@@ -255,24 +252,24 @@ void kernel_main() {
             tile_regs_release();
             rout.push_back(1);
             reduce_uninit();
-            exr.pop_front(static_cast<uint16_t>(f5_wt));
+            exr.pop_front(static_cast<uint16_t>(sm_wt));
         }
 #else
         reconfig_data_format(dfb_sum_scaler, dfb_exps);
-        const bool f5_chain = c > 0;
-        if (f5_chain) {
+        const bool sm_chain = c > 0;
+        if (sm_chain) {
             reconfig_data_format_srca(dfb::racc);
             copy_init(dfb::racc);
         }
-        if (f5_chain) {
+        if (sm_chain) {
             racc.wait_front(1);
         }
         {
-        if (!f5_chain) {
+        if (!sm_chain) {
             reduce_init<PoolType::SUM, ReduceDim::REDUCE_ROW>(dfb_exps, dfb_sum_scaler, sum_out);
         }
         tile_regs_acquire();
-        if (f5_chain) {
+        if (sm_chain) {
             copy_tile(dfb::racc, 0, 0);
             reconfig_data_format(dfb_sum_scaler, dfb_exps);
             reduce_init<PoolType::SUM, ReduceDim::REDUCE_ROW>(dfb_exps, dfb_sum_scaler, sum_out);
@@ -317,7 +314,7 @@ void kernel_main() {
             reduce_uninit();
         }
         }
-        if (f5_chain) {
+        if (sm_chain) {
             racc.pop_front(1);
         }
 #endif

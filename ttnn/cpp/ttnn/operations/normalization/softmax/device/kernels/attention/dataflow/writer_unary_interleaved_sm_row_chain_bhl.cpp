@@ -11,13 +11,6 @@
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
 #include "experimental/kernel_args.h"
-#ifdef BHL_PROF
-#include "api/debug/kernel_profiler.hpp"
-#define BHLZ(n) DeviceZoneScopedN(n)
-#else
-#define BHLZ(n)
-#endif
-
 void kernel_main() {
     const std::uint32_t c = get_arg(args::c);
     const std::uint32_t C = get_arg(args::C);
@@ -65,7 +58,6 @@ void kernel_main() {
 
     for (std::uint32_t r = 0; r < num_rows; ++r) {
         {
-        BHLZ("W_MAX");
 #if defined(NUMERIC_STABLE) && defined(BHL_ABL_NOMAXX)
         pmax.wait_front(1);
         pmax.pop_front(1);
@@ -144,7 +136,6 @@ void kernel_main() {
         }
 
         {
-        BHLZ("W_ACC");
 #ifdef BHL_ABL_NOSUM
         if (!is_last) {
             pacc.wait_front(1);
@@ -152,7 +143,6 @@ void kernel_main() {
         }
 #else
         if (c > 0) {
-            BHLZ("W_RWAIT");
             racc.reserve_back(1);
             sem_acc.wait_min(1);
             sem_acc.set(0);
@@ -160,10 +150,8 @@ void kernel_main() {
         }
         if (!is_last) {
             {
-            BHLZ("W_PWAIT");
             pacc.wait_front(1);
             }
-            BHLZ("W_SEND");
             CoreLocalMem<std::uint32_t> src(pacc.get_read_ptr());
             noc.async_write(
                 src,
@@ -186,7 +174,6 @@ void kernel_main() {
         }
 
         {
-        BHLZ("W_RB");
         rcb.reserve_back(1);
 #ifdef BHL_ABL_NORB
         if (is_last) {
@@ -236,7 +223,6 @@ void kernel_main() {
 #endif
         rcb.push_back(1);
         }
-        BHLZ("W_OUT");
 
         std::uint32_t tile = (row0 + r * rstride) * Wt + t0;
         for (std::uint32_t j = 0; j < T; j += blk) {

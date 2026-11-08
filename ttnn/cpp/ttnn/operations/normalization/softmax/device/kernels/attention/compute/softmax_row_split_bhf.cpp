@@ -18,13 +18,6 @@
 #include "api/dataflow/dataflow_buffer.h"
 #include "experimental/kernel_args.h"
 
-#ifdef BHF_PROF
-#include "api/debug/kernel_profiler.hpp"
-#define BHFZ(n) DeviceZoneScopedN(n)
-#else
-#define BHFZ(n)
-#endif
-
 template <typename InDFB, typename OutDFB>
 ALWI void exp_range(InDFB& /*in0*/, OutDFB& exps, std::uint32_t start, std::uint32_t len, std::uint32_t blk) {
     reconfig_data_format_srca(dfb::in0);
@@ -132,7 +125,6 @@ void kernel_main() {
 
     for (std::uint32_t r = 0; r < num_rows; ++r) {
         {
-        BHFZ("S_MAX");
         compute_kernel_lib::reduce<
             PoolType::MAX,
             ReduceDim::REDUCE_ROW,
@@ -148,7 +140,6 @@ void kernel_main() {
 #else
         if (is_comb) {
 #endif
-            BHFZ("S_COMB");
             rmax.wait_front(static_cast<uint16_t>(active));
             reconfig_data_format_srca(dfb::rmax);
             pack_reconfig_data_format(dfb::mout);
@@ -191,7 +182,6 @@ void kernel_main() {
 
         mcb.wait_front(1);
         {
-        BHFZ("S_EXPSUM");
 #ifdef BHF_KEEPEXP
         std::uint32_t bhf_base = 0;
         for (std::uint32_t k = 0; k < nck; ++k) {
@@ -268,7 +258,6 @@ void kernel_main() {
         }
 
         if (is_comb) {
-            BHFZ("S_ADD");
             rsum.wait_front(static_cast<uint16_t>(nchunk));
             pack_reconfig_data_format(dfb::prev);
             for (std::uint32_t k = 0; k < nchunk; ++k) {
@@ -316,7 +305,6 @@ void kernel_main() {
             tile_regs_release();
         }
 
-        BHFZ("S_EXPMUL");
         rcb.wait_front(1);
         for (std::uint32_t k = 0; k < nck; ++k) {
             const std::uint32_t len = (ck0 + k == nchunk - 1) ? last_len : L;

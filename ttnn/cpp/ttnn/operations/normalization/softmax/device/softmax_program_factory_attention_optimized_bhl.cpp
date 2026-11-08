@@ -95,7 +95,7 @@ const char* bhl_s(const char* n, const char* d) {
 }
 #define bhl_read_batch_tiles bhl_s("BHL_SM_RBT", "32")
 #define bhl_large_kernel_read_batch_tiles bhl_s("BHL_SM_RBTL", "16")
-}  // namespace
+}
 
 #define bhl_row_parallel_min_tiles bhl_k("BHL_SM_MIN", 8)
 #define bhl_short_row_max_tiles bhl_k("BHL_SM_SHORT", 16)
@@ -303,7 +303,6 @@ SoftmaxDeviceOperation::SoftmaxProgramFactoryAttentionOptimizedBHL::create_progr
 
     log_debug(tt::LogMetal, "SoftmaxProgramFactoryAttentionOptimizedBHL selected");
 
-    // Constants
     const auto& input_tensor = tensor_args.input_tensor;
     const auto& shape = input_tensor.padded_shape();
     const std::uint32_t NC = shape.rank() >= 4 ? shape[0] : 1, W = shape[-1], H = (input_tensor.physical_volume() / (NC * shape[-1]));
@@ -315,9 +314,6 @@ SoftmaxDeviceOperation::SoftmaxProgramFactoryAttentionOptimizedBHL::create_progr
     const auto& shape_unpadded = input_tensor.logical_shape();
 
     const bool has_mask = tensor_args.mask.has_value();
-    // is_causal_mask without an actual mask is contradictory and unsupported. Fail cleanly here rather
-    // than letting a CAUSAL_MASK-without-FUSED_SCALE_MASK kernel reach JIT and fail opaquely (the host
-    // used to throw std::bad_optional_access on this input before the mask-arg reads were guarded).
     TT_FATAL(
         has_mask || !attributes.is_causal_mask,
         "Causal-mask softmax requires an attention mask (is_causal_mask=true with no mask is unsupported).");
@@ -373,33 +369,8 @@ SoftmaxDeviceOperation::SoftmaxProgramFactoryAttentionOptimizedBHL::create_progr
     const tt::DataFormat mask_cb_data_format =
         has_mask ? datatype_to_dataformat_converter(tensor_args.mask.value().dtype()) : tt::DataFormat::Float16_b;
     const std::uint32_t mask_tile_size = tt::tile_size(mask_cb_data_format);
-    // The writer fills the padding tile with bfloat16 -inf whatever the mask dtype.
     const std::uint32_t mask_padded_tile_size = tt::tile_size(tt::DataFormat::Float16_b);
 
-    // The intermediate buffers split into two groups with different needs, and treating them alike
-    // is what makes fp32 accumulation look expensive in L1.
-    //
-    // The bulk buffers - EXPS, X, SCALE_MASK - are Wt deep in the small kernel and capped near 80
-    // entries in the large one. They hold one value per element, so widening them buys element
-    // precision, which is not what is wrong, and costs L1 that grows with the row length. Widening
-    // them also pulls the use_large_kernel switch below down to shorter rows. They stay 16-bit. A
-    // float32 input keeps the wide buffers it has always had, since narrowing those would throw
-    // away input precision rather than accumulator precision.
-    //
-    // The sum accumulators - RECIP_SUM_EXPS, its PREV_REDUCE ping-pong partner in the large kernel,
-    // and RECIP - are one entry each and carry the running sum, which round-trips through L1 once
-    // per pass. That round trip is exactly where a 16-bit store undoes what an fp32 Dest just
-    // earned, and one entry of it costs 2 KB. They follow fp32_dest_acc_en.
-    //
-    // MAX and PREV_MAX stay with the bulk group. They are subtracted from the bulk buffers for
-    // numeric stability, and fp32 there against 16-bit operands widened the per-row spread at
-    // w <= 4096 (worst row 0.9916 -> 0.9648) for no gain in the mean.
-    //
-    // All of the above is for the defaulted compute config. A caller that passes fp32_dest_acc_en
-    // explicitly keeps Float32 bulk buffers, as before fp32 accumulation became the default: an
-    // explicit accurate config (e.g. HiFi4, approx off, fp32 acc) relies on exp(x - max) staying
-    // fp32 until the final multiply, and its program, including the use_large_kernel switch below,
-    // must not change underneath it.
     const bool bulk_fp32 = fp32_dest_acc_en && (in0_cb_data_format == tt::DataFormat::Float32 ||
                                                 attributes.has_explicit_compute_kernel_config);
     const tt::DataFormat im_cb_data_format = bulk_fp32 ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
@@ -411,12 +382,8 @@ SoftmaxDeviceOperation::SoftmaxProgramFactoryAttentionOptimizedBHL::create_progr
     const tt::DataFormat sum_scaler_cb_data_format = acc_cb_data_format;
     const std::uint32_t sum_scaler_tile_size = acc_tile_size;
 
-    // Fixed block size that maximizes dest register usage: 4 with fp32 accumulation, 8 otherwise.
-    // Widths not divisible by block_size are handled by the kernels via a clamped final block.
     std::uint32_t block_size = fp32_dest_acc_en ? 4 : 8;
 
-    // Prefer an exact divisor of Wt when it costs no extra register batches: uniform blocks keep every
-    // CB capacity a multiple of the block, so no fifo needs realignment between tile rows.
     if (Wt % block_size != 0) {
         const std::uint32_t divisor = static_cast<std::uint32_t>(tt::tt_metal::find_max_divisor(Wt, block_size));
         if (tt::div_up(Wt, block_size) == Wt / divisor) {
@@ -424,45 +391,33 @@ SoftmaxDeviceOperation::SoftmaxProgramFactoryAttentionOptimizedBHL::create_progr
         }
     }
 
-    // calc_numeric_stable() in softmax.cpp uses indexed access over Wt tiles of its input CB and a
-    // WaitUpfrontNoPop reduce, so whichever CB it consumes must be sized to Wt:
-    //   - no mask, no padding: it consumes cb_in0 directly.
-    //   - fused scale-mask path or mask-padded path: it consumes cb_x (cb_in0 is streamed/popped per block).
     const bool small_kernel_numeric_stable_uses_cb_in0_at_wt =
         attributes.numeric_stable && !has_mask && !mask_padded_data;
     const bool small_kernel_numeric_stable_uses_cb_x_at_wt =
         attributes.numeric_stable && (has_mask || mask_padded_data);
 
-    // These tile capacity counts for CBs need to match the number of tiles expected by the kernel (softmax.cpp)
     std::uint32_t in0_t =
         small_kernel_numeric_stable_uses_cb_in0_at_wt ? tt::div_up(Wt, block_size) * block_size : block_size * 2;
     std::uint32_t out0_t = block_size * 2;
-    std::uint32_t im1_t = 1;  // 1/sum(exp(x))
-    std::uint32_t in2_t = 1;  // scaler for reduce coming from reader
-    std::uint32_t in3_t = 1;  // 1/sqrt() scaler tile cb for fused scale/mask/softmax variant
+    std::uint32_t im1_t = 1;
+    std::uint32_t in2_t = 1;
+    std::uint32_t in3_t = 1;
     std::uint32_t in4_t =
-        tt::div_up(Wt, block_size) * block_size;  // attention mask (N,C,32,W) - Wt is reused for each Ht, NC is cycled
+        tt::div_up(Wt, block_size) * block_size;
     std::uint32_t in5_t = 1;
-    // numeric_stable cb max
     std::uint32_t im2_t = 1;
     std::uint32_t im4_t = tt::div_up(Wt, block_size) * block_size;
 
-    // cb_exps - keeps exps in tt::CBIndex in L1 to avoid recomputing (rounded up to a multiple of block_size)
     std::uint32_t im0_t = block_size * tt::div_up(Wt, block_size);
 
-    // used for buffering scale-mask
-    // can't easily reuse im0_t because cumulative wait for Wt needs to have Wt tiles contiguous free
     std::uint32_t im3_t = block_size * (tt::div_up(Wt, block_size) + 1);
 
     std::uint32_t dfb_length = in0_t;
     bool use_large_kernel = false;
-    // Noisy CB estimator, if the cbs used take up 90% of L1 switch to large kernel implementation
-    constexpr std::uint32_t single_tile_cb_count = 5;  // approximate
+    constexpr std::uint32_t single_tile_cb_count = 5;
     std::uint32_t cb_size_sum_bytes = (in0_t * in0_tile_size) + (im0_t * im_tile_size) + (out0_t * out0_tile_size) +
                                       (single_tile_cb_count * im_tile_size);
     if (small_kernel_numeric_stable_uses_cb_x_at_wt) {
-        // cb_x (c_10) is only allocated for the small kernel when calc_numeric_stable consumes it.
-        // In the no-mask numeric_stable path the kernel aliases cb_x to cb_exps, so no extra CB is needed.
         cb_size_sum_bytes += im4_t * im_tile_size;
     }
     if (has_mask) {
@@ -470,7 +425,6 @@ SoftmaxDeviceOperation::SoftmaxProgramFactoryAttentionOptimizedBHL::create_progr
             (im3_t * im_tile_size) + (in3_t * fused_attention_scale_tile_size) + (in4_t * mask_tile_size);
     }
 
-    // Program specific checks
     if ((device->l1_size_per_core() * 0.9) < cb_size_sum_bytes || plan.split_active != 0) {
         use_large_kernel = true;
         const std::uint32_t streamed_entry_bytes =
@@ -494,7 +448,6 @@ SoftmaxDeviceOperation::SoftmaxProgramFactoryAttentionOptimizedBHL::create_progr
         im4_t = large_kernel_cb_size;
         im0_t = large_kernel_cb_size;
         im3_t = large_kernel_cb_size;
-        // c_4 is streamed a pass at a time too, and both large kernels align its pad to cb_length_t.
         in4_t = large_kernel_cb_size;
     }
     if (!use_large_kernel) {
@@ -539,7 +492,6 @@ SoftmaxDeviceOperation::SoftmaxProgramFactoryAttentionOptimizedBHL::create_progr
                 --bhl_cs;
             }
         }
-        // f5 long-row knobs (bf16 input, one tile row only)
         const bool bhl_lr = in0_cb_data_format != tt::DataFormat::Float32 && NC * Ht == 1;
         std::uint32_t bhl_seg = (bhl_lr && bhl_k("BHL_SM_KEEPEXP", 0) != 0) ? bhl_k("BHL_SM_LRSEG", 0) : 0u;
         {
@@ -560,7 +512,6 @@ SoftmaxDeviceOperation::SoftmaxProgramFactoryAttentionOptimizedBHL::create_progr
         const std::uint32_t rect_h = tt::div_up(active, rect_w);
         const std::uint32_t rect_n = rect_w * rect_h;
         std::vector<std::uint32_t> ck0(rect_n, 0), nck(rect_n, 0), tcount(rect_n, 0), tstart(rect_n, 0);
-        // segment model: a core's tile range split at chunk boundaries (at most 2 pieces since range <= L)
         std::vector<std::uint32_t> sg_n(rect_n, 0), sg_o0(rect_n, 0), sg_n0(rect_n, 0), sg_f0(rect_n, 0),
             sg_o1(rect_n, 0), sg_n1(rect_n, 0), sg_f1(rect_n, 0), sg_snd(rect_n, 0), sg_rcv(rect_n, 0),
             sg_sfirst(rect_n, 0), sg_nps(rect_n, 0), sg_pk0(rect_n, 0), sg_pk1(rect_n, 0);
@@ -599,7 +550,7 @@ SoftmaxDeviceOperation::SoftmaxProgramFactoryAttentionOptimizedBHL::create_progr
                     kk[ns] = k;
                     ++ns;
                 }
-                TT_FATAL(ns >= 1 && ns <= 2 && (ts / L + ns - 1) == (te - 1) / L, "f5 lrseg: core spans >2 chunks");
+                TT_FATAL(ns >= 1 && ns <= 2 && (ts / L + ns - 1) == (te - 1) / L, "softmax lrseg: core spans >2 chunks");
                 sg_n[c] = ns;
                 sg_o0[c] = o[0];
                 sg_n0[c] = n[0];
@@ -609,7 +560,6 @@ SoftmaxDeviceOperation::SoftmaxProgramFactoryAttentionOptimizedBHL::create_progr
                 sg_f1[c] = f[1];
                 sg_rcv[c] = (f[0] & 1u) ? 0u : 1u;
                 sg_snd[c] = (f[ns - 1] & 2u) ? 0u : 1u;
-                // compute does a free head segment (seg1, chunk-first) before the waiting tail (seg0)
                 const bool head_first = ns == 2 && (f[1] & 1u);
                 sg_sfirst[c] = head_first ? 1u : 0u;
                 std::uint32_t np = 0, pk[2] = {0, 0};
@@ -664,7 +614,7 @@ SoftmaxDeviceOperation::SoftmaxProgramFactoryAttentionOptimizedBHL::create_progr
                     const auto a = device->worker_core_from_logical_core(CoreCoord{x - 1, 0});
                     const auto b = device->worker_core_from_logical_core(CoreCoord{x, 0});
                     if (b.x != a.x + 1) {
-                        TT_FATAL(bhl_gx1 == 0 && b.x > a.x, "f5 split: more than one column gap");
+                        TT_FATAL(bhl_gx1 == 0 && b.x > a.x, "softmax split: more than one column gap");
                         bhl_gx0 = static_cast<std::uint32_t>(a.x + 1);
                         bhl_gx1 = static_cast<std::uint32_t>(b.x);
                     }
@@ -672,7 +622,7 @@ SoftmaxDeviceOperation::SoftmaxProgramFactoryAttentionOptimizedBHL::create_progr
                         TT_FATAL(device->worker_core_from_logical_core(CoreCoord{x, y}).x == b.x &&
                                      device->worker_core_from_logical_core(CoreCoord{x, y}).y ==
                                          device->worker_core_from_logical_core(CoreCoord{0, 0}).y + y,
-                                 "f5 split: rows not contiguous");
+                                 "softmax split: rows not contiguous");
                     }
                 }
             } else {
@@ -688,7 +638,7 @@ SoftmaxDeviceOperation::SoftmaxProgramFactoryAttentionOptimizedBHL::create_progr
             const TensorParamName W_DST{"dst"};
             const DFBSpecName W_IN0{"in0"}, W_OUT0{"out0"}, W_MAXSC{"max_scaler"}, W_SUMSC{"sum_scaler"},
                 W_EXPS{"exps"}, W_PMAX{"pmax"}, W_RMAX{"rmax"}, W_MOUT{"mout"}, W_MCB{"mcb"}, W_PSUM{"psum"},
-                W_RSUM{"rsum"}, W_PREV{"prev"}, W_ROUT{"rout"}, W_RCB{"rcb"}, W_PACC{"pacc"}, W_RACC{"racc"}, W_RMAX2{"rmax2"}, W_F5FL{"f5fl"}, W_F5CP{"f5cp"}, W_F5CO{"f5co"};
+                W_RSUM{"rsum"}, W_PREV{"prev"}, W_ROUT{"rout"}, W_RCB{"rcb"}, W_PACC{"pacc"}, W_RACC{"racc"}, W_RMAX2{"rmax2"}, W_F5FL{"smfl"}, W_F5CP{"smcp"}, W_F5CO{"smco"};
             const SemaphoreSpecName S_RMAX{"rmax_sem"}, S_RSUM{"rsum_sem"}, S_M{"m_sem"}, S_R{"r_sem"},
                 S_ACC{"acc_sem"}, S_RMAX2{"rmax2_sem"};
 
@@ -712,7 +662,7 @@ SoftmaxDeviceOperation::SoftmaxProgramFactoryAttentionOptimizedBHL::create_progr
             }
             const bool bhl_keep = bhl_k("BHL_SM_KEEPEXP", 0) != 0 && (n_rows <= n_groups || bhl_even) &&
                                  bhl_keep_need <= static_cast<std::uint64_t>(device->l1_size_per_core() * bhl_l1_cb_fraction);
-            TT_FATAL(bhl_seg == 0 || bhl_keep, "f5 lrseg needs the exps kept in L1");
+            TT_FATAL(bhl_seg == 0 || bhl_keep, "softmax lrseg needs the exps kept in L1");
             add_dfb(W_EXPS, im_tile_size, bhl_keep ? t_max : L, im_cb_data_format);
             add_dfb(W_PMAX, im_tile_size, 1, im_cb_data_format);
             const std::uint32_t bhl_tg_raw = bhl_lr ? bhl_k("BHL_SM_LRTREE", 0) : 0u;
@@ -756,9 +706,6 @@ SoftmaxDeviceOperation::SoftmaxProgramFactoryAttentionOptimizedBHL::create_progr
             if (bhl_lr && bhl_k("BHL_SM_LRWFL", 0) != 0) {
                 wbase["BHL_WFLUSH"] = "1";
             }
-            if (bhl_k("BHL_SM_PROF", 0) != 0) {
-                wbase["BHL_PROF"] = "1";
-            }
             if (bhl_lr && fp32_dest_acc_en && bhl_k("BHL_SM_LRADD", 0) != 0 && bhl_k("BHL_SM_LRASTR", 0) != 0 && nchunk <= 240) {
                 wbase["BHL_LRASTR"] = "1";
                 wcomp["BHL_LRASTR"] = "1";
@@ -792,9 +739,6 @@ SoftmaxDeviceOperation::SoftmaxProgramFactoryAttentionOptimizedBHL::create_progr
                 }
             }
             wcomp["EXP_APPROX"] = math_approx_mode ? "1" : "0";
-            if (bhl_k("BHL_SM_PROF", 0) != 0) {
-                wcomp["BHL_PROF"] = "1";
-            }
             if (bhl_keep) {
                 wcomp["BHL_KEEPEXP"] = "1";
             }
@@ -899,11 +843,11 @@ SoftmaxDeviceOperation::SoftmaxProgramFactoryAttentionOptimizedBHL::create_progr
                      DFBBinding{
                          .dfb_spec_name = W_RMAX2, .accessor_name = "rmax2", .endpoint_type = DFBEndpointType::PRODUCER},
                      DFBBinding{
-                         .dfb_spec_name = W_F5FL, .accessor_name = "f5fl", .endpoint_type = DFBEndpointType::PRODUCER},
+                         .dfb_spec_name = W_F5FL, .accessor_name = "smfl", .endpoint_type = DFBEndpointType::PRODUCER},
                      DFBBinding{
-                         .dfb_spec_name = W_F5CP, .accessor_name = "f5cp", .endpoint_type = DFBEndpointType::PRODUCER},
+                         .dfb_spec_name = W_F5CP, .accessor_name = "smcp", .endpoint_type = DFBEndpointType::PRODUCER},
                      DFBBinding{
-                         .dfb_spec_name = W_F5CO, .accessor_name = "f5co", .endpoint_type = DFBEndpointType::CONSUMER}},
+                         .dfb_spec_name = W_F5CO, .accessor_name = "smco", .endpoint_type = DFBEndpointType::CONSUMER}},
                 .semaphore_bindings =
                     {SemaphoreBinding{.semaphore_spec_name = S_RMAX2, .accessor_name = "rmax2_sem"},
                      SemaphoreBinding{.semaphore_spec_name = S_RMAX, .accessor_name = "rmax_sem"},
@@ -954,11 +898,11 @@ SoftmaxDeviceOperation::SoftmaxProgramFactoryAttentionOptimizedBHL::create_progr
                 DFBBinding{
                     .dfb_spec_name = W_RMAX2, .accessor_name = "rmax2", .endpoint_type = DFBEndpointType::CONSUMER},
                 DFBBinding{
-                    .dfb_spec_name = W_F5FL, .accessor_name = "f5fl", .endpoint_type = DFBEndpointType::CONSUMER},
+                    .dfb_spec_name = W_F5FL, .accessor_name = "smfl", .endpoint_type = DFBEndpointType::CONSUMER},
                 DFBBinding{
-                    .dfb_spec_name = W_F5CP, .accessor_name = "f5cp", .endpoint_type = DFBEndpointType::CONSUMER},
+                    .dfb_spec_name = W_F5CP, .accessor_name = "smcp", .endpoint_type = DFBEndpointType::CONSUMER},
                 DFBBinding{
-                    .dfb_spec_name = W_F5CO, .accessor_name = "f5co", .endpoint_type = DFBEndpointType::PRODUCER},
+                    .dfb_spec_name = W_F5CO, .accessor_name = "smco", .endpoint_type = DFBEndpointType::PRODUCER},
             };
             for (const auto* n : {&W_EXPS, &W_PREV}) {
                 const char* acc = (n == &W_EXPS) ? "exps" : "prev";
@@ -1162,7 +1106,7 @@ SoftmaxDeviceOperation::SoftmaxProgramFactoryAttentionOptimizedBHL::create_progr
                     const auto pa0 = device->worker_core_from_logical_core(CoreCoord{x - 1, 0});
                     const auto pb0 = device->worker_core_from_logical_core(CoreCoord{x, 0});
                     if (pb0.x != pa0.x + 1) {
-                        TT_FATAL(bhl_cx1 == 0 && pb0.x > pa0.x, "f5 chain: more than one column gap");
+                        TT_FATAL(bhl_cx1 == 0 && pb0.x > pa0.x, "softmax chain: more than one column gap");
                         bhl_cx0 = static_cast<std::uint32_t>(pa0.x + 1);
                         bhl_cx1 = static_cast<std::uint32_t>(pb0.x);
                     }
@@ -1172,7 +1116,7 @@ SoftmaxDeviceOperation::SoftmaxProgramFactoryAttentionOptimizedBHL::create_progr
                     for (std::uint32_t x = 0; x < gx; ++x) {
                         const auto v = device->worker_core_from_logical_core(CoreCoord{x, y});
                         const auto vr = device->worker_core_from_logical_core(CoreCoord{x, 0});
-                        TT_FATAL(v.x == vr.x && v.y == v00.y + y, "f5 chain: rows not contiguous");
+                        TT_FATAL(v.x == vr.x && v.y == v00.y + y, "softmax chain: rows not contiguous");
                     }
                 }
             } else {
@@ -1223,9 +1167,6 @@ SoftmaxDeviceOperation::SoftmaxProgramFactoryAttentionOptimizedBHL::create_progr
                         cbase[abl_names[i]] = "1";
                     }
                 }
-            }
-            if (bhl_k("BHL_SM_PROF", 0) != 0) {
-                cbase["BHL_PROF"] = "1";
             }
             {
                 std::string kd = bhl_s("BHL_SM_KDEF", "");
@@ -1424,7 +1365,6 @@ SoftmaxDeviceOperation::SoftmaxProgramFactoryAttentionOptimizedBHL::create_progr
         }
     }
 
-    // Work split
     const std::uint32_t num_tile_rows = NC * Ht;
     const auto grid_size = device->compute_with_storage_grid_size();
     auto
@@ -1435,7 +1375,6 @@ SoftmaxDeviceOperation::SoftmaxProgramFactoryAttentionOptimizedBHL::create_progr
          num_tile_rows_per_core_group_1,
          num_tile_rows_per_core_group_2] = tt::tt_metal::split_work_to_cores(grid_size, num_tile_rows, true);
 
-    // ---- Resource names (program-scope; local to avoid unity-build symbol clashes) ----
     const KernelSpecName READER{"reader"};
     const KernelSpecName WRITER{"writer"};
     const KernelSpecName COMPUTE{"compute"};
@@ -1460,7 +1399,6 @@ SoftmaxDeviceOperation::SoftmaxProgramFactoryAttentionOptimizedBHL::create_progr
     const DFBSpecName PREV_MAX{"prev_max"};
     const DFBSpecName RECIP{"recip"};
 
-    // ---- DataflowBuffers (mirrors the legacy CB allocation set exactly) ----
     Group<DataflowBufferSpec> dfbs;
     dfbs.push_back(DataflowBufferSpec{
         .unique_id = IN0,
@@ -1538,9 +1476,6 @@ SoftmaxDeviceOperation::SoftmaxProgramFactoryAttentionOptimizedBHL::create_progr
             .num_entries = im2_t,
             .data_format_metadata = im_cb_data_format});
     }
-    // cb_x: only needed when calc_numeric_stable consumes a separate post-mask buffer (mask or
-    // mask-padded path), or when the streaming large kernel is selected. In the no-mask
-    // numeric_stable path softmax.cpp aliases cb_x to cb_exps, so we skip the allocation.
     const bool alloc_cb_x = small_kernel_numeric_stable_uses_cb_x_at_wt || use_large_kernel;
     if (alloc_cb_x) {
         dfbs.push_back(DataflowBufferSpec{
@@ -1550,7 +1485,6 @@ SoftmaxDeviceOperation::SoftmaxProgramFactoryAttentionOptimizedBHL::create_progr
             .data_format_metadata = im_cb_data_format});
     }
 
-    // ---- Defines ----
     KernelSpec::CompilerOptions::Defines base_defines;
     if (has_mask) {
         base_defines["FUSED_SCALE_MASK"] = "1";
@@ -1573,13 +1507,10 @@ SoftmaxDeviceOperation::SoftmaxProgramFactoryAttentionOptimizedBHL::create_progr
     }
     compute_defines["EXP_APPROX"] = math_approx_mode ? "1" : "0";
     compute_defines["ENABLE_FP32_DEST_ACC"] = fp32_dest_acc_en ? "1" : "0";
-    // The small compute kernel gates the pad-mask (c_5) intermediate (c_10) path on the host-known
-    // MASK_PADDED_DATA define; the large compute keeps mask_padded_data as a runtime arg.
     if (!use_large_kernel && mask_padded_data) {
         compute_defines["MASK_PADDED_DATA"] = "1";
     }
 
-    // ---- Reader kernel ----
     Group<DFBBinding> reader_bindings = {
         DFBBinding{.dfb_spec_name = IN0, .accessor_name = "in0", .endpoint_type = DFBEndpointType::PRODUCER},
         DFBBinding{
@@ -1606,10 +1537,8 @@ SoftmaxDeviceOperation::SoftmaxProgramFactoryAttentionOptimizedBHL::create_progr
     }
     KernelSpec::CompileTimeArgs reader_cta;
     if (use_large_kernel) {
-        // The large reader pads in0/fused_attn so each streamed pass ends on the fifo base.
         reader_cta.insert({"dfb_length", dfb_length});
     } else {
-        // The small reader pads in0 up to this capacity so its fifo ends each tile row on the base.
         reader_cta.insert({"in0_t", in0_t});
     }
     if (has_mask && attributes.is_causal_mask) {
@@ -1631,7 +1560,6 @@ SoftmaxDeviceOperation::SoftmaxProgramFactoryAttentionOptimizedBHL::create_progr
         .hw_config = ttnn::create_reader_datamovement_config(),
     };
 
-    // ---- Writer kernel ----
     KernelSpec writer{
         .unique_id = WRITER,
         .source =
@@ -1649,12 +1577,6 @@ SoftmaxDeviceOperation::SoftmaxProgramFactoryAttentionOptimizedBHL::create_progr
         .hw_config = ttnn::create_writer_datamovement_config(),
     };
 
-    // for broadcasting in H direction we need to
-    // NCHt, Nt, Wt
-    // if wtpc < Ht then since we pass tpc to the kernel as Ht, the broadcasts should be correct
-    // if wtpc >= Ht then tpc should be a multiple of Ht
-
-    // ---- Compute kernel ----
     Group<DFBBinding> compute_bindings = {
         DFBBinding{.dfb_spec_name = IN0, .accessor_name = "in0", .endpoint_type = DFBEndpointType::CONSUMER},
         DFBBinding{
@@ -1664,7 +1586,6 @@ SoftmaxDeviceOperation::SoftmaxProgramFactoryAttentionOptimizedBHL::create_progr
         DFBBinding{
             .dfb_spec_name = MASK_PADDED, .accessor_name = "mask_padded", .endpoint_type = DFBEndpointType::CONSUMER},
         DFBBinding{.dfb_spec_name = OUT0, .accessor_name = "out0", .endpoint_type = DFBEndpointType::PRODUCER},
-        // exps and recip_sum_exps are compute-internal (self-loop: PRODUCER + CONSUMER).
         DFBBinding{.dfb_spec_name = EXPS, .accessor_name = "exps", .endpoint_type = DFBEndpointType::PRODUCER},
         DFBBinding{.dfb_spec_name = EXPS, .accessor_name = "exps", .endpoint_type = DFBEndpointType::CONSUMER},
         DFBBinding{
@@ -1708,8 +1629,6 @@ SoftmaxDeviceOperation::SoftmaxProgramFactoryAttentionOptimizedBHL::create_progr
         compute_rta_names = {"num_rows", "Ht", "Wt", "blk", "start_ht"};
     }
 
-    // Compute hardware config (Style A). Legacy defaulted unpack_to_dest_mode (=> UnpackToSrc); Metal 2.0
-    // requires an explicit entry for every Float32 DFB the compute consumes under enable_32_bit_dest.
     auto compute_hw = ttnn::to_compute_hardware_config(attributes.compute_kernel_config);
     if (fp32_dest_acc_en) {
         auto& gen1 = compute_hw;
@@ -1718,9 +1637,6 @@ SoftmaxDeviceOperation::SoftmaxProgramFactoryAttentionOptimizedBHL::create_progr
                 gen1.unpack_modes.insert({name, tt::tt_metal::UnpackMode::UnpackToSrc});
             }
         };
-        // Each DFB registers under the format it was declared with. The sum accumulators
-        // follow acc_cb_data_format, the bulk buffers follow im_cb_data_format, and the two
-        // differ for a non-fp32 input.
         add_unpack(IN0, in0_cb_data_format);
         add_unpack(MAX_SCALER, max_scaler_cb_data_format);
         add_unpack(SUM_SCALER, sum_scaler_cb_data_format);
@@ -1747,7 +1663,6 @@ SoftmaxDeviceOperation::SoftmaxProgramFactoryAttentionOptimizedBHL::create_progr
 
     KernelSpec::CompileTimeArgs compute_cta;
     if (!use_large_kernel) {
-        // The small compute drains the pad the reader pushed to in0, so both agree on the capacity.
         compute_cta.insert({"in0_t", in0_t});
     }
 
@@ -1762,7 +1677,6 @@ SoftmaxDeviceOperation::SoftmaxProgramFactoryAttentionOptimizedBHL::create_progr
         .hw_config = compute_hw,
     };
 
-    // ---- Assemble spec ----
     Group<TensorParameter> tensor_parameters = {
         TensorParameter{.unique_id = SRC, .spec = input_tensor.tensor_spec()},
         TensorParameter{.unique_id = DST, .spec = output_tensor.tensor_spec()}};
@@ -1781,7 +1695,6 @@ SoftmaxDeviceOperation::SoftmaxProgramFactoryAttentionOptimizedBHL::create_progr
         .work_units = std::move(work_units),
     };
 
-    // ---- Run args ----
     ProgramRunArgs run_args;
     KernelRunArgs reader_ra{.kernel = READER};
     KernelRunArgs writer_ra{.kernel = WRITER};
@@ -1803,8 +1716,8 @@ SoftmaxDeviceOperation::SoftmaxProgramFactoryAttentionOptimizedBHL::create_progr
 
         std::uint32_t tile_offset = curr_row * Wt;
         std::uint32_t curr_ht = curr_row % Ht;
-        std::uint32_t mask_curr_ht = curr_ht % mask_Ht;            // the start offset for causal mask
-        std::uint32_t mask_offset = curr_row / Ht * mask_Ht * Wt;  // causal mask batch offset
+        std::uint32_t mask_curr_ht = curr_ht % mask_Ht;
+        std::uint32_t mask_offset = curr_row / Ht * mask_Ht * Wt;
         std::uint32_t mask_id = attributes.is_causal_mask ? ((mask_curr_ht * Wt) + mask_offset) : (curr_row / Ht * Wt);
 
         AddRuntimeArgsForNode(
@@ -1866,4 +1779,4 @@ SoftmaxDeviceOperation::SoftmaxProgramFactoryAttentionOptimizedBHL::create_progr
     return ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)};
 }
 
-}  // namespace ttnn::prim
+}

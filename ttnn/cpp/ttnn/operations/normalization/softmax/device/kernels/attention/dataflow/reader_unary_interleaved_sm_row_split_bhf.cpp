@@ -9,13 +9,6 @@
 #include "api/tensor/noc_traits.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 #include "experimental/kernel_args.h"
-#ifdef BHF_PROF
-#include "api/debug/kernel_profiler.hpp"
-#define BHFZ(n) DeviceZoneScopedN(n)
-#else
-#define BHFZ(n)
-#endif
-
 void kernel_main() {
     const std::uint32_t T = get_arg(args::T);
     const std::uint32_t t0 = get_arg(args::t0);
@@ -70,7 +63,6 @@ void kernel_main() {
     }
 
     for (std::uint32_t r = 0; r < num_rows; ++r) {
-        BHFZ("R_RD");
         std::uint32_t tile = (row0 + r * rstride) * Wt + t0;
         for (std::uint32_t j = 0; j < T; j += rbk) {
             const std::uint32_t rem = (j + rbk > T) ? (T - j) : rbk;

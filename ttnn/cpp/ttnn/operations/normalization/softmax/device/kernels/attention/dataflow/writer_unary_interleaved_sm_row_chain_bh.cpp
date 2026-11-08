@@ -12,11 +12,9 @@
 #include "api/tensor/noc_traits.h"
 #include "experimental/kernel_args.h"
 
-
 #if defined(BH_RECIP_MCAST)
-// one multicast to the group's rectangle (sender included); returns false when the rectangle spans the BH column gap
 template <typename SrcT>
-inline bool f5_mcast(const Noc& noc, const SrcT& src, std::uint32_t bytes, std::uint32_t x0, std::uint32_t y0, std::uint32_t x1,
+inline bool sm_mcast(const Noc& noc, const SrcT& src, std::uint32_t bytes, std::uint32_t x0, std::uint32_t y0, std::uint32_t x1,
                      std::uint32_t y1, std::uint32_t gx0, std::uint32_t gx1, std::uint32_t addr) {
     if (gx1 > gx0 && x0 < gx1 && x1 >= gx0) {
         return false;
@@ -86,14 +84,14 @@ void kernel_main() {
     DataflowBuffer exr(dfb::exr);
     DataflowBuffer exs(dfb::exs);
     DataflowBuffer flg(dfb::flg);
-    const std::uint32_t f5_xr = exr.get_write_ptr();
-    const std::uint32_t f5_fl = flg.get_write_ptr();
+    const std::uint32_t sm_xr = exr.get_write_ptr();
+    const std::uint32_t sm_fl = flg.get_write_ptr();
     if (c == 0) {
         for (std::uint32_t i = 0; i < Wt * 4; ++i) {
-            reinterpret_cast<volatile std::uint32_t*>(f5_fl)[i] = 0;
+            reinterpret_cast<volatile std::uint32_t*>(sm_fl)[i] = 0;
         }
     }
-    const Noc f5_nb(static_cast<std::uint8_t>(1 - noc_index));
+    const Noc sm_nb(static_cast<std::uint8_t>(1 - noc_index));
 #endif
     [[maybe_unused]] const std::uint32_t acc_bytes = pacc.get_entry_size();
 
@@ -157,7 +155,7 @@ void kernel_main() {
             for (std::uint32_t b = T; b < Wt; b += blk) {
                 const std::uint32_t rem = (b + blk > Wt) ? (Wt - b) : blk;
                 for (std::uint32_t i = 0; i < rem; ++i) {
-                    volatile std::uint32_t* f = reinterpret_cast<volatile std::uint32_t*>(f5_fl + (b + i) * 16);
+                    volatile std::uint32_t* f = reinterpret_cast<volatile std::uint32_t*>(sm_fl + (b + i) * 16);
                     while (*f < r + 1) {
                         invalidate_l1_cache();
                     }
@@ -170,20 +168,20 @@ void kernel_main() {
                 exs.wait_front(static_cast<uint16_t>(rem));
                 const std::uint32_t fo = (t0 + j) * 16;
                 for (std::uint32_t i = 0; i < rem; ++i) {
-                    *reinterpret_cast<volatile std::uint32_t*>(f5_fl + fo + i * 16) = r + 1;
+                    *reinterpret_cast<volatile std::uint32_t*>(sm_fl + fo + i * 16) = r + 1;
                 }
                 CoreLocalMem<std::uint32_t> xs(exs.get_read_ptr());
-                CoreLocalMem<std::uint32_t> fs(f5_fl + fo);
-                const Noc& nn = (c & 1) ? f5_nb : noc;
+                CoreLocalMem<std::uint32_t> fs(sm_fl + fo);
+                const Noc& nn = (c & 1) ? sm_nb : noc;
                 nn.async_write(
                     xs,
                     UnicastEndpoint{},
                     rem * im_bytes,
                     {.offset_bytes = 0},
-                    {.noc_x = comb_x, .noc_y = comb_y, .addr = f5_xr + (t0 + j) * im_bytes});
+                    {.noc_x = comb_x, .noc_y = comb_y, .addr = sm_xr + (t0 + j) * im_bytes});
                 nn.async_writes_flushed();
                 nn.async_write(
-                    fs, UnicastEndpoint{}, rem * 16, {.offset_bytes = 0}, {.noc_x = comb_x, .noc_y = comb_y, .addr = f5_fl + fo});
+                    fs, UnicastEndpoint{}, rem * 16, {.offset_bytes = 0}, {.noc_x = comb_x, .noc_y = comb_y, .addr = sm_fl + fo});
                 nn.async_writes_flushed();
                 exs.pop_front(static_cast<uint16_t>(rem));
             }
@@ -218,7 +216,7 @@ void kernel_main() {
                 CoreLocalMem<std::uint32_t> one(rout.get_read_ptr());
                 const std::uint32_t daddr = rcb.get_write_ptr();
 #if defined(BH_RECIP_MCAST)
-                if (!f5_mcast(noc, one, acc_bytes, x0, y0, x1, y1, gx0, gx1, daddr))
+                if (!sm_mcast(noc, one, acc_bytes, x0, y0, x1, y1, gx0, gx1, daddr))
 #endif
                 for (std::uint32_t y = y0; y <= y1; ++y) {
                     for (std::uint32_t x = x0; x <= x1; ++x) {
@@ -266,7 +264,7 @@ void kernel_main() {
     }
     noc.async_write_barrier();
 #if defined(BH_ACC)
-    f5_nb.async_write_barrier();
+    sm_nb.async_write_barrier();
 #endif
     noc.async_atomic_barrier();
 }

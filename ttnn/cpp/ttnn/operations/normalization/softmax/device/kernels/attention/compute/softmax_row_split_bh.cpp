@@ -18,7 +18,6 @@
 #include "api/dataflow/dataflow_buffer.h"
 #include "experimental/kernel_args.h"
 
-
 template <typename InDFB, typename OutDFB>
 ALWI void exp_range(InDFB& /*in0*/, OutDFB& exps, std::uint32_t start, std::uint32_t len, std::uint32_t blk) {
     reconfig_data_format_srca(dfb::in0);
@@ -150,7 +149,7 @@ void kernel_main() {
         mcb.wait_front(1);
         {
 #if defined(BH_KEEP_EXPS)
-        std::uint32_t f5_base = 0;
+        std::uint32_t sm_base = 0;
         for (std::uint32_t k = 0; k < nck; ++k) {
             const std::uint32_t len = (ck0 + k == nchunk - 1) ? last_len : L;
             exp_range(in0, exps, k * L, len, blk);
@@ -159,8 +158,8 @@ void kernel_main() {
             reduce_init<PoolType::SUM, ReduceDim::REDUCE_ROW>(dfb::exps, dfb::sum_scaler, dfb::psum);
             tile_regs_acquire();
             for (std::uint32_t t = 0; t < len; ++t) {
-                exps.wait_front(static_cast<uint16_t>(f5_base + t + 1));
-                reduce_tile<PoolType::SUM, ReduceDim::REDUCE_ROW>(dfb::exps, dfb::sum_scaler, f5_base + t, 0, 0);
+                exps.wait_front(static_cast<uint16_t>(sm_base + t + 1));
+                reduce_tile<PoolType::SUM, ReduceDim::REDUCE_ROW>(dfb::exps, dfb::sum_scaler, sm_base + t, 0, 0);
             }
             psum.reserve_back(1);
             tile_regs_commit();
@@ -169,7 +168,7 @@ void kernel_main() {
             tile_regs_release();
             psum.push_back(1);
             reduce_uninit();
-            f5_base += len;
+            sm_base += len;
         }
 #else
         for (std::uint32_t k = 0; k < nck; ++k) {

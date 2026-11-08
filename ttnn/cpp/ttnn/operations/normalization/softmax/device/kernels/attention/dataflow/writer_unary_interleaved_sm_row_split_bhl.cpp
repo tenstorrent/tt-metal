@@ -11,13 +11,6 @@
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
 #include "experimental/kernel_args.h"
-#ifdef BHL_PROF
-#include "api/debug/kernel_profiler.hpp"
-#define BHLZ(n) DeviceZoneScopedN(n)
-#else
-#define BHLZ(n)
-#endif
-
 #if defined(BHL_MCASTM) || defined(BHL_MCASTR) || defined(BHL_LRMSM)
 template <typename Src>
 inline void bhl_mcast(
@@ -128,9 +121,9 @@ void kernel_main() {
     const std::uint32_t im_bytes = pmax.get_entry_size();
     const std::uint32_t acc_bytes = psum.get_entry_size();
 #if defined(BHL_LRASTR) || defined(BHL_LRMSM)
-    DataflowBuffer f5fl(dfb::f5fl);
-    const std::uint32_t bhl_fb = f5fl.get_write_ptr();         // tile 0: chunk-sum flags, tile 1: max flags
-    const std::uint32_t bhl_fsrc = bhl_fb + 2 * acc_bytes - 16;  // local word = 1, source of every flag write
+    DataflowBuffer smfl(dfb::smfl);
+    const std::uint32_t bhl_fb = smfl.get_write_ptr();
+    const std::uint32_t bhl_fsrc = bhl_fb + 2 * acc_bytes - 16;
     reinterpret_cast<volatile std::uint32_t*>(bhl_fsrc)[0] = 1u;
     auto bhl_flag = [&](std::uint32_t addr) {
         noc.async_write(
@@ -143,7 +136,6 @@ void kernel_main() {
         }
     };
 #endif
-    // acc tile → (x, y, addr); with face_pair only faces 0 and 2 (column 0 lives there)
     auto bhl_put = [&](std::uint32_t src_addr, std::uint32_t x, std::uint32_t y, std::uint32_t addr, bool face_pair) {
         if (face_pair) {
             const std::uint32_t fb = acc_bytes / 4;
@@ -167,12 +159,10 @@ void kernel_main() {
     const Noc noc_alt(static_cast<uint8_t>(1 - noc.get_noc_id()));
 #endif
 #ifdef BHL_LRACMP
-    DataflowBuffer f5cp(dfb::f5cp);
-    DataflowBuffer f5co(dfb::f5co);
+    DataflowBuffer smcp(dfb::smcp);
+    DataflowBuffer smco(dfb::smco);
 #endif
-    // flag word inside the chunk-sum tile: last word actually sent (column 0 never reaches it)
     [[maybe_unused]] const std::uint32_t bhl_fw = bhl_pcol ? (3 * acc_bytes / 4 - 4) : (acc_bytes - 4);
-    // send one chunk sum to the combiner's slot (data + arrival signal in whichever form is compiled in)
     auto bhl_psend = [&](std::uint32_t src, std::uint32_t slot) {
 #if defined(BHL_ACMPS) && defined(BHL_LRACMP) && defined(BHL_LRASTR)
         {
@@ -187,7 +177,7 @@ void kernel_main() {
             }
             asm volatile("fence" ::: "memory");
             const std::uint32_t q = slot % 16;
-            const std::uint32_t cpa = f5cp.get_write_ptr() + (slot / 16) * acc_bytes + ((q / 4) * 256 + (q % 4) * 64) * 4;
+            const std::uint32_t cpa = smcp.get_write_ptr() + (slot / 16) * acc_bytes + ((q / 4) * 256 + (q % 4) * 64) * 4;
             noc.async_write(CoreLocalMem<std::uint32_t>(src), UnicastEndpoint{}, 256, {.offset_bytes = 0}, {.noc_x = comb_x, .noc_y = comb_y, .addr = cpa});
         }
 #elif defined(BHL_FIND) && defined(BHL_LRASTR)
@@ -233,7 +223,6 @@ void kernel_main() {
         }
 #endif
         {
-        BHLZ("W_MAX");
 #ifdef BHL_LRTREE
         if (is_lead) {
             rmax.reserve_back(static_cast<uint16_t>(gsz));
@@ -401,7 +390,6 @@ void kernel_main() {
         mcb.push_back(1);
         }
         {
-        BHLZ("W_ACC");
 
         if (is_comb) {
             rsum.reserve_back(static_cast<uint16_t>(nchunk));
@@ -472,14 +460,13 @@ void kernel_main() {
         }
         }
         {
-        BHLZ("W_RB");
         rcb.reserve_back(1);
         if (is_comb) {
 #if defined(BHL_LRACMP)
             {
                 const std::uint32_t ncomp = (nchunk + 15) / 16;
-                f5cp.reserve_back(static_cast<uint16_t>(ncomp));
-                volatile std::uint32_t* cp = reinterpret_cast<volatile std::uint32_t*>(f5cp.get_write_ptr());
+                smcp.reserve_back(static_cast<uint16_t>(ncomp));
+                volatile std::uint32_t* cp = reinterpret_cast<volatile std::uint32_t*>(smcp.get_write_ptr());
                 const std::uint32_t rs = rsum.get_write_ptr();
                 for (std::uint32_t k = 0; k < nchunk; ++k) {
 #if defined(BHL_FIND) && !defined(BHL_ACMPS)
@@ -497,18 +484,18 @@ void kernel_main() {
                     }
                 }
                 asm volatile("fence" ::: "memory");
-                f5cp.push_back(static_cast<uint16_t>(ncomp));
+                smcp.push_back(static_cast<uint16_t>(ncomp));
                 sem_rsum.wait(nsend);
                 sem_rsum.set(0);
-                f5co.wait_front(1);
+                smco.wait_front(1);
                 const std::uint32_t j = nchunk - 1;
-                volatile std::uint32_t* res = reinterpret_cast<volatile std::uint32_t*>(f5co.get_read_ptr()) + ((j % 16) / 4) * 256 + (j % 4) * 64;
+                volatile std::uint32_t* res = reinterpret_cast<volatile std::uint32_t*>(smco.get_read_ptr()) + ((j % 16) / 4) * 256 + (j % 4) * 64;
                 volatile std::uint32_t* out = reinterpret_cast<volatile std::uint32_t*>(rs);
                 for (std::uint32_t r = 0; r < 32; ++r) {
                     out[r < 16 ? r * 16 : 512 + (r - 16) * 16] = res[(r / 8) * 16 + 2 * (r % 8)];
                 }
                 asm volatile("fence" ::: "memory");
-                f5co.pop_front(1);
+                smco.pop_front(1);
                 rsum.push_back(1);
             }
 #else
@@ -609,7 +596,6 @@ void kernel_main() {
 #endif
         rcb.push_back(1);
         }
-        BHLZ("W_OUT");
 
         std::uint32_t tile = (row0 + r * rstride) * Wt + t0;
         for (std::uint32_t j = 0; j < T; j += blk) {

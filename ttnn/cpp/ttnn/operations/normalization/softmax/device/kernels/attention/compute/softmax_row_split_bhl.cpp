@@ -18,13 +18,6 @@
 #include "api/dataflow/dataflow_buffer.h"
 #include "experimental/kernel_args.h"
 
-#ifdef BHL_PROF
-#include "api/debug/kernel_profiler.hpp"
-#define BHLZ(n) DeviceZoneScopedN(n)
-#else
-#define BHLZ(n)
-#endif
-
 #ifdef BHL_LRMAXC
 #define BHL_MAXVM VectorMode::C
 #else
@@ -33,8 +26,6 @@
 
 #if defined(BHL_LRADD) && defined(TRISC_MATH)
 namespace ckernel::sfpu {
-// dst[out] = dst[in_new] + tf32(dst[in_run]); MODE 1 clears the 13 low mantissa bits of the running sum
-// (the value main's PREV round trip through srcA keeps), MODE 2 adds it unchanged.
 template <int ITERATIONS, int MODE>
 inline void bhl_trunc_add(const std::uint32_t in_new, const std::uint32_t in_run, const std::uint32_t out) {
     for (int d = 0; d < ITERATIONS; d++) {
@@ -52,8 +43,6 @@ inline void bhl_trunc_add(const std::uint32_t in_new, const std::uint32_t in_run
         sfpi::dst_reg++;
     }
 }
-// running sum over n compacted chunk-sum rows (one SFPU row = one chunk's 32 values), in chunk order:
-// run = new + trunc(run); result truncated and left in the last row
 template <int ITERATIONS, int MODE>
 inline void bhl_cmp_add(const std::uint32_t, const std::uint32_t, const std::uint32_t, const std::uint32_t n) {
     sfpi::vFloat run = sfpi::dst_reg[0];
@@ -82,10 +71,9 @@ inline void bhl_trunc_only(const std::uint32_t in0, const std::uint32_t in1, con
         sfpi::dst_reg++;
     }
 }
-}  // namespace ckernel::sfpu
+}
 #endif
 
-// merge n max tiles from cb into dst 0 (first: dst 0 is loaded from tile 0)
 ALWI void bhl_maxmerge(std::uint32_t cb, std::uint32_t n, bool first) {
     reconfig_data_format_srca(cb);
     std::uint32_t i = 0;
@@ -109,7 +97,6 @@ ALWI void bhl_maxmerge(std::uint32_t cb, std::uint32_t n, bool first) {
 }
 
 #ifdef BHL_LRMSM
-// same merge as bhl_maxmerge(first=true) but waits for the partial maxima one batch at a time
 template <typename RmDFB>
 ALWI void bhl_maxmerge_s(RmDFB& rm, std::uint32_t cb, std::uint32_t n) {
     reconfig_data_format_srca(cb);
@@ -274,7 +261,7 @@ void kernel_main() {
     [[maybe_unused]] DataflowBuffer pacc(dfb::pacc);
     [[maybe_unused]] DataflowBuffer racc(dfb::racc);
     [[maybe_unused]] DataflowBuffer rmax2(dfb::rmax2);
-    [[maybe_unused]] DataflowBuffer f5fl(dfb::f5fl);
+    [[maybe_unused]] DataflowBuffer smfl(dfb::smfl);
 
     compute_kernel_hw_startup(dfb::in0, dfb::max_scaler, dfb::exps);
     max_scaler.wait_front(1);
@@ -282,7 +269,6 @@ void kernel_main() {
 
     for (std::uint32_t r = 0; r < num_rows; ++r) {
         {
-        BHLZ("S_MAX");
 #ifdef BHL_LRMSTR
         reconfig_data_format(dfb::max_scaler, dfb::in0);
         pack_reconfig_data_format(dfb::pmax);
@@ -320,7 +306,6 @@ void kernel_main() {
         const bool bhl_merge_here = is_comb;
 #endif
         if (bhl_merge_here) {
-            BHLZ("S_COMB");
 #ifdef BHL_LRMSM
             pack_reconfig_data_format(dfb::mout);
             tile_regs_acquire();
@@ -352,7 +337,6 @@ void kernel_main() {
         }
 #else
         if (is_comb) {
-            BHLZ("S_COMB");
             rmax.wait_front(static_cast<uint16_t>(active));
             reconfig_data_format_srca(dfb::rmax);
             pack_reconfig_data_format(dfb::mout);
@@ -396,7 +380,6 @@ void kernel_main() {
 
         mcb.wait_front(1);
         {
-        BHLZ("S_EXPSUM");
 #if defined(BHL_LRSEG)
         exp_range(in0, exps, 0, T, blk);
         if (nseg == 2) {
@@ -482,27 +465,26 @@ void kernel_main() {
 
 #if defined(BHL_LRACMP)
         if (is_comb) {
-            BHLZ("S_ADD");
-            DataflowBuffer f5cp(dfb::f5cp);
-            DataflowBuffer f5co(dfb::f5co);
+            DataflowBuffer smcp(dfb::smcp);
+            DataflowBuffer smco(dfb::smco);
             const std::uint32_t ncomp = (nchunk + 15) / 16;
-            f5cp.wait_front(static_cast<uint16_t>(ncomp));
-            reconfig_data_format_srca(dfb::f5cp);
-            pack_reconfig_data_format(dfb::f5co);
+            smcp.wait_front(static_cast<uint16_t>(ncomp));
+            reconfig_data_format_srca(dfb::smcp);
+            pack_reconfig_data_format(dfb::smco);
             tile_regs_acquire();
-            copy_init(dfb::f5cp);
+            copy_init(dfb::smcp);
             for (std::uint32_t t = 0; t < ncomp; ++t) {
-                copy_tile(dfb::f5cp, t, t);
+                copy_tile(dfb::smcp, t, t);
             }
             add_binary_tile_init();
             MATH((SFPU_BINARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, bhl_cmp_add, (8, 1), 0, 0, 0, VectorMode::RC_custom, nchunk)));
             tile_regs_commit();
-            f5co.reserve_back(1);
+            smco.reserve_back(1);
             tile_regs_wait();
-            pack_tile((nchunk - 1) / 16, dfb::f5co);
+            pack_tile((nchunk - 1) / 16, dfb::smco);
             tile_regs_release();
-            f5co.push_back(1);
-            f5cp.pop_front(static_cast<uint16_t>(ncomp));
+            smco.push_back(1);
+            smcp.pop_front(static_cast<uint16_t>(ncomp));
             rsum.wait_front(1);
             reconfig_data_format_srca(dfb::rsum);
             pack_reconfig_data_format(dfb::rout);
@@ -521,7 +503,6 @@ void kernel_main() {
         }
 #elif defined(BHL_LRADD)
         if (is_comb) {
-            BHLZ("S_ADD");
 #ifdef BHL_LRASTR
             rsum.wait_front(1);
 #else
@@ -561,7 +542,6 @@ void kernel_main() {
         }
 #else
         if (is_comb) {
-            BHLZ("S_ADD");
             rsum.wait_front(static_cast<uint16_t>(nchunk));
             pack_reconfig_data_format(dfb::prev);
             for (std::uint32_t k = 0; k < nchunk; ++k) {
@@ -610,7 +590,6 @@ void kernel_main() {
         }
 #endif
 
-        BHLZ("S_EXPMUL");
         rcb.wait_front(1);
 #ifdef BHL_LRSEG
         mul_range(exps, out0, T, blk);

@@ -19,13 +19,6 @@
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/math.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/core/optional.hpp"
 
-#ifdef BHF_PROF
-#include "api/debug/kernel_profiler.hpp"
-#define BHFZ(n) DeviceZoneScopedN(n)
-#else
-#define BHFZ(n)
-#endif
-
 namespace ckl = compute_kernel_lib;
 #if defined(BHF_COMBCOL)
 #define BHF_VM_COMB , VectorMode::C
@@ -110,7 +103,6 @@ void kernel_main() {
     sum_scaler.wait_front(1);
 #if defined(BHF_STREAM) && defined(BHF_BLOCKACC)
     if (am == 2) {
-        BHFZ("A_SUM");
         reconfig_data_format(dfb_sum_scaler, dfb::gexp);
         if (bi == 0) {
             pack_reconfig_data_format(dfb_exps);
@@ -191,7 +183,6 @@ void kernel_main() {
     }
 #elif defined(BHF_STREAM)
     if (am == 2) {
-        BHFZ("A_SUM");
 #ifdef BHF_ACCSEQ
         const std::uint32_t tb = gi == 0 ? 0u : th;
         const std::uint32_t te = gi == 0 ? th : gt;
@@ -271,7 +262,6 @@ void kernel_main() {
     for (std::uint32_t r = 0; r < num_rows; ++r) {
 #ifdef NUMERIC_STABLE
         {
-        BHFZ("C_MAX");
 #ifdef BHF_MAXSTREAM
         reconfig_data_format(dfb_max_scaler, dfb_in0);
         pack_reconfig_data_format(dfb_pmax);
@@ -311,7 +301,6 @@ void kernel_main() {
         const std::uint32_t bhf_nc = C;
         if (c == 0) {
 #endif
-            BHFZ("C_COMB");
 #ifdef BHF_COMBSTREAM
             rmax.wait_front(1);
             reconfig_data_format_srca(dfb::rmax);
@@ -399,7 +388,6 @@ void kernel_main() {
                     ckl::PushPolicy::PerBlockSize,
                     ckl::DataFormatReconfig::Disabled)>{pacc});
 #if defined(BHF_STREAM) && defined(BHF_DIRECT)
-            BHFZ("C_MUL");
             ckl::mul<
                 ckl::input(dfb::gexp, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd, ckl::InputTileMapping::Block),
                 ckl::input(dfb_rcb, ckl::BroadcastDim::Col, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd),
@@ -410,7 +398,6 @@ void kernel_main() {
         }
 #endif
         {
-        BHFZ("C_EXP");
         reconfig_data_format(dfb_in0, dfb_mcb);
         pack_reconfig_data_format(dfb_exps);
         ckl::eltwise_chain(
@@ -450,7 +437,6 @@ void kernel_main() {
         exps.wait_front(static_cast<uint16_t>(T));
 #ifdef BHF_GROUPMUL
         if (is_member) {
-            BHFZ("P_COPY");
             reconfig_data_format_srca(dfb_exps);
             pack_reconfig_data_format(dfb::pacc);
             copy_init(dfb_exps);
@@ -483,11 +469,9 @@ void kernel_main() {
         }
 #endif
         if (bhf_chain) {
-            BHFZ("C_WACC");
             racc.wait_front(1);
         }
         {
-        BHFZ("C_SUM");
 #ifdef BHF_PRESTAGE
         if (!bhf_chain) {
             BHF_SUM_INIT(dfb_exps, dfb_sum_scaler, sum_out);
@@ -557,7 +541,6 @@ void kernel_main() {
 #endif
         }
 
-        BHFZ("C_MUL");
 #if defined(BHF_GROUP) && !defined(BHF_GROUPMUL)
         if (gt != 0) {
             ckl::mul<

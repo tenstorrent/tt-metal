@@ -11,13 +11,6 @@
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
 #include "experimental/kernel_args.h"
-#ifdef BHF_PROF
-#include "api/debug/kernel_profiler.hpp"
-#define BHFZ(n) DeviceZoneScopedN(n)
-#else
-#define BHFZ(n)
-#endif
-
 #if defined(BHF_MAXRISC) || defined(BHF_MAXAG) || defined(BHF_MAXAGC)
 inline std::uint32_t bhf_key(std::uint32_t b) { return (b & 0x80000000u) ? ~b : (b | 0x80000000u); }
 inline std::uint32_t bhf_col(std::uint32_t i) { return i < 16 ? i * 16 : 512 + (i - 16) * 16; }
@@ -195,7 +188,6 @@ void kernel_main() {
 #endif
 #ifdef BHF_STREAM
     if (am == 2) {
-        BHFZ("A_POLL");
         const std::uint32_t eb = gexp.get_entry_size();
         const std::uint32_t gbase = gexp.get_write_ptr();
         volatile std::uint32_t* fl = reinterpret_cast<volatile std::uint32_t*>(gbase + FLB * eb);
@@ -319,7 +311,6 @@ void kernel_main() {
 #endif
     for (std::uint32_t r = 0; r < num_rows; ++r) {
         {
-        BHFZ("W_MAX");
 #if defined(NUMERIC_STABLE) && defined(BHF_ABL_NOMAXX)
         pmax.wait_front(1);
         pmax.pop_front(1);
@@ -585,7 +576,6 @@ void kernel_main() {
 
 #ifdef BHF_STREAM
         if (is_member) {
-            BHFZ("P_FWD");
             const std::uint32_t eb = gexp.get_entry_size();
             const std::uint32_t gbase = gexp.get_write_ptr();
             volatile std::uint32_t* myfl = reinterpret_cast<volatile std::uint32_t*>(gbase + FLB * eb);
@@ -693,7 +683,6 @@ void kernel_main() {
         }
 #endif
         if (!is_member) {
-        BHFZ("W_ACC");
 #ifdef BHF_ABL_NOSUM
         if (!is_last) {
             pacc.wait_front(1);
@@ -701,7 +690,6 @@ void kernel_main() {
         }
 #else
         if (c > 0) {
-            BHFZ("W_RWAIT");
             racc.reserve_back(1);
             sem_acc.wait_min(1);
             sem_acc.set(0);
@@ -717,10 +705,8 @@ void kernel_main() {
 #endif
         if (!is_last) {
             {
-            BHFZ("W_PWAIT");
             pacc.wait_front(1);
             }
-            BHFZ("W_SEND");
             CoreLocalMem<std::uint32_t> src(pacc.get_read_ptr());
 #ifdef BHF_ACCHALF
             noc.async_write(
@@ -752,7 +738,6 @@ void kernel_main() {
         }
 
         {
-        BHFZ("W_RB");
         rcb.reserve_back(1);
 #ifdef BHF_ABL_NORB
         if (is_last) {
@@ -811,7 +796,6 @@ void kernel_main() {
 #endif
         rcb.push_back(1);
         }
-        BHFZ("W_OUT");
 
         std::uint32_t tile = (row0 + r * rstride) * Wt + t0;
 #if defined(BHF_GROUP) && !defined(BHF_GROUPMUL)
