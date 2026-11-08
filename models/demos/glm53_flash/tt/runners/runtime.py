@@ -155,6 +155,8 @@ class GLM53FlashPrefillRuntime:
                 f"[glm53f-runtime] warm-up {item} ({len(parts)} chunk(s), {parts[-1][1]} tokens): prefill {tp:.2f} s, "
                 f"export {te:.2f} s, wall {time.perf_counter() - tw:.2f} s{self._dram_note()}"
             )
+        if os.environ.get("GLM53F_RUNNER_HEADROOM_PROBE", "0") == "1":
+            self._headroom_probe()
         self._arm_dram_guard()
 
     def _dram_note(self) -> str:
@@ -169,6 +171,56 @@ class GLM53FlashPrefillRuntime:
             )
         except Exception as e:  # noqa: BLE001 -- a report must not fail the warm-up
             return f", DRAM view unavailable ({type(e).__name__})"
+
+    def _headroom_probe(self) -> None:
+        """Diagnostic (tt-blaze G53F-0313, ``GLM53F_RUNNER_HEADROOM_PROBE=1``): after the warm-up, the largest DRAM ballast
+        (MiB per bank, a step of ``GLM53F_RUNNER_HEADROOM_STEP_MIB``) beside which a cold full chunk at start 0 still
+        prefills -- the margin a serving config keeps for fragmentation and program growth. Logged, then the ballast is
+        freed; the runner serves on as usual."""
+        step = int(os.environ.get("GLM53F_RUNNER_HEADROOM_STEP_MIB", "8"))
+        n = self.config.chunk_size
+        ids = torch.tensor(([785, 6722, 315, 9621] * (n // 4 + 1))[:n], dtype=torch.int64)
+        cols = 512  # bf16 row-major pages of 1 KiB; a mesh tensor allocates the same bytes on every chip, over 8 banks
+
+        def ballast(mib):
+            if mib <= 0:
+                return None
+            return ttnn.empty(
+                shape=[mib * 8 * 1024, cols],
+                dtype=ttnn.bfloat16,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=self.mesh_device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+
+        def fits(mib):
+            b = None
+            try:
+                b = ballast(mib)
+                self._prefill(ids, 0)
+                ttnn.synchronize_device(self.mesh_device)
+                return True
+            except RuntimeError as e:
+                if "Out of Memory" not in str(e):
+                    raise
+                return False
+            finally:
+                if b is not None:
+                    ttnn.deallocate(b)
+
+        v = ttnn.get_memory_view(self.mesh_device, ttnn.BufferType.DRAM)
+        free0 = v.largest_contiguous_bytes_free_per_bank / 2**20
+        ok, mib = 0, step
+        while fits(mib):
+            ok, mib = mib, mib * 2
+        lo, hi = ok, mib  # fits(lo) (or lo = 0 untested), fails at hi
+        while hi - lo > step:
+            mid = (lo + hi) // 2 // step * step
+            lo, hi = (mid, hi) if fits(mid) else (lo, mid)
+        logger.info(
+            f"[glm53f-runtime] headroom probe: a cold {n}-token chunk at 0 still fits beside {lo} MiB/bank of ballast "
+            f"(fails at {hi}); largest free before {free0:.1f} MiB/bank -> the chunk's peak needs ~{free0 - lo:.0f} MiB of it"
+        )
 
     _CONST_CACHE_ATTRS = ("_const_cache", "_slab_consts", "_cu_windows", "_pad_cache")
     _const_dicts: list | None = None
