@@ -964,7 +964,7 @@ class StackBackend(ModelBackend):
         return self.nembeds[w], self.nheads[w]
 
     def _dsa_pools(self, kv: StackCache):
-        """GLM53_DSA_POOL=1: the sparse_dsa layers' MLA / MoE programs take their intermediates from AllocPools
+        """GLM53_DSA_POOL (default 1): the sparse_dsa layers' MLA / MoE programs take their intermediates from AllocPools
         (mk_stack.AllocPool: request i of a shape in ANY build = the same tensor), so every layer reuses one L1 set and
         nothing is allocated or freed per layer or per capture (the per-call churn fragmented the L1 top and drifted the
         floor ~4 KB per layer under the t = 16 MoE program's static CBs: 2026-11-06 census). The MLA and MoE programs
@@ -972,7 +972,7 @@ class StackBackend(ModelBackend):
         intermediates alias (they run one after another). s1 -- the MLA -> MoE hand-off -- comes from pool.child(),
         the persistent-hand-off pool no build intermediate aliases (a MoE request of s1's shape would otherwise
         take its buffer). -> the pool, or None (the per-call allocations + keep= frees)"""
-        if os.environ.get("GLM53_DSA_POOL", "0") != "1":
+        if os.environ.get("GLM53_DSA_POOL", "1") != "1":  # default on (2026-11-08: ids identical, perf unchanged)
             return None
         return kv.extra["pool"]
 
