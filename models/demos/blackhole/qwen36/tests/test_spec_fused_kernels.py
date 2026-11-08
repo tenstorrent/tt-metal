@@ -152,7 +152,7 @@ def chain_case(g, B, K, Nv, parity, mixed=False, zero=False, W_res=32):
     ref = chain_reference(
         res, drafts, prev_aux, ovr, B=B, K=K, Nv=Nv, rope_rows=rope_rows, ctrl_words=spec_ctrl_words(B, Nv)
     )
-    return dict(res=res, prev_aux=prev_aux, drafts=drafts, ovr=ovr, ref=ref)
+    return dict(res=res, prev_aux=prev_aux, drafts=drafts, ovr=ovr, ref=ref, rope_rows=rope_rows)
 
 
 # --------------------------------------------------------------------------------------------------------------------- #
@@ -345,6 +345,83 @@ def test_chain_kernel_matches(mesh, mixed):
                 n_cases += 1
         print(f"RESULT chain B={B} K={K} Nv={Nv} mixed={mixed} ok")
     print(f"RESULT chain cases={n_cases} all identical")
+
+
+@pytest.mark.parametrize("G", [1, 3])
+def test_chain_kernel_matches_with_block_pages(mesh, G):
+    """QWEN36_MAMBA_SPEC: one ctrl page per GDN group with start pages read at column mi' from the block-page tables
+    (fp32 TILE for the op graph, uint32 RM for the kernel): kernel == op graph == chain_reference(ring_idx)."""
+    n_cases = 0
+    for B, K, Nv in [x for x in CHAIN_SHAPES if not _PROD or (x[0], x[1]) == (8, 3)]:
+        T = K + 1
+        g = torch.Generator().manual_seed(9100 + 100 * B + 10 * K + Nv + G)
+        heads = torch.randint(1, 1 << 23, (B, T, G, Nv), generator=g)
+        pages = heads.reshape(B, -1)
+        rep = ttnn.ReplicateTensorToMesh(mesh)
+        pf = ttnn.from_torch(pages.float(), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=mesh, mesh_mapper=rep)
+        pw = ttnn.from_torch(
+            pages.to(torch.int32), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh, mesh_mapper=rep
+        )
+        ring_idx = [heads[:, :, gg, :].reshape(B, T * Nv) for gg in range(G)]
+        cd = ChainDevice.allocate(mesh, B, K, Nv, result_rows=2, ring_pages=(pf, G), ring_pages_rm=pw)
+        assert ChainKernel.supports(cd) is None, ChainKernel.supports(cd)
+        kern = ChainKernel(cd)
+        for j in range(8):
+            c = chain_case(g, B, K, Nv, j % 2, W_res=cd.W_res)
+            c["ref"] = chain_reference(
+                c["res"], c["drafts"], c["prev_aux"], c["ovr"], B=B, K=K, Nv=Nv, rope_rows=c["rope_rows"],
+                ctrl_words=spec_ctrl_words(B, Nv), ring_idx=ring_idx,
+            )  # fmt: skip
+            chain_pair(cd, kern, c, f"chain pages G={G} B={B} K={K} Nv={Nv} case {j}")
+            n_cases += 1
+    print(f"RESULT chain pages G={G} cases={n_cases} all identical")
+
+
+@pytest.mark.parametrize("G", [1, 3])
+def test_chain_kernel_matches_with_moves(mesh, G):
+    """Chained state moves: the chain also writes each group's ring_page_idx from the window table at count column
+    mi' (fp32 TILE for the op graph, uint32 RM for the kernel): kernel == op graph on every output, and each
+    ring_page_idx row is the window table row at that row's mi' (read back from the ctrl page)."""
+    n_cases = 0
+    for B, K, Nv in [x for x in CHAIN_SHAPES if not _PROD or (x[0], x[1]) == (8, 3)]:
+        T = K + 1
+        g = torch.Generator().manual_seed(9300 + 100 * B + 10 * K + Nv + G)
+        heads = torch.randint(1, 1 << 23, (B, T, G, Nv), generator=g)
+        wins = torch.randint(1, 1 << 23, (B, T, G, T, Nv), generator=g)
+        rep = ttnn.ReplicateTensorToMesh(mesh)
+        f32 = lambda x: ttnn.from_torch(
+            x.reshape(B, -1).float(), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=mesh, mesh_mapper=rep
+        )
+        u32 = lambda x: ttnn.from_torch(
+            x.reshape(B, -1).to(torch.int32), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh, mesh_mapper=rep
+        )
+        outs = [u32(torch.zeros(B, T * Nv, dtype=torch.int64)) for _ in range(G)]
+        cd = ChainDevice.allocate(
+            mesh, B, K, Nv, result_rows=2, ring_pages=(f32(heads), G), ring_pages_rm=u32(heads),
+            ring_windows=(f32(wins), outs), ring_windows_rm=u32(wins),
+        )  # fmt: skip
+        assert ChainKernel.supports(cd) is None, ChainKernel.supports(cd)
+        kern = ChainKernel(cd)
+        for j in range(8):
+            c = chain_case(g, B, K, Nv, j % 2, W_res=cd.W_res)
+            tag = f"chain moves G={G} B={B} K={K} Nv={Nv} case {j}"
+            stage_chain(cd, c)
+            _graph_body(cd)
+            graph = read_chain(cd)
+            graph.update({f"idx{gg}": _words(mesh, t) for gg, t in enumerate(outs)})
+            stage_chain(cd, c)
+            for t in (cd.tok_out, cd.vaux_out, *outs):
+                _poison(mesh, t)
+            kern.run()
+            got = read_chain(cd)
+            got.update({f"idx{gg}": _words(mesh, t) for gg, t in enumerate(outs)})
+            assert_same(got, graph, f"{tag} kernel vs op graph")
+            mi = got["vaux_out"][2, 1 : 1 + B]  # ctrl page of group 0: word 1 + u = mi'
+            for gg in range(G):
+                want = torch.stack([wins[u, int(mi[u]), gg].reshape(-1) for u in range(B)])
+                assert torch.equal(got[f"idx{gg}"].reshape(B, -1), _w(want)), f"{tag}: ring_page_idx of group {gg}"
+            n_cases += 1
+    print(f"RESULT chain moves G={G} cases={n_cases} all identical")
 
 
 @pytest.mark.parametrize("nb", [537, 4097])

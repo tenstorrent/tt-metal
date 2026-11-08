@@ -433,16 +433,20 @@ def test_spec_plan_broken_config_rejected():
     assert isinstance(CLS.spec_plan(SimpleNamespace(), 1, 3), SpecReject)
 
 
-@pytest.mark.parametrize("bs,ok", [(128, False), (64, True)])
-def test_spec_plan_block_size(hf_config, bs, ok):
-    """Only the engine's 64-token block size is planned."""
+@pytest.mark.parametrize("bs,ok", [(16, False), (48, False), (64, True), (128, True), (1024, True)])
+def test_spec_plan_block_size(hf_config, monkeypatch, bs, ok):
+    """vLLM's block size alone is planned (QWEN36_KV_BLOCK_SIZE is not read): any positive multiple of the 32-row tile,
+    with the page-table costs of that block size."""
+    monkeypatch.setenv("QWEN36_KV_BLOCK_SIZE", "2048")
     cfg = _vcfg(hf_config)
     cfg.cache_config = SimpleNamespace(block_size=bs)
     r = CLS.spec_plan(cfg, 1, 3)
     if ok:
+        c = spec_memory_costs(hf_config.get_text_config(), 4, 1, 3, block_size=bs, max_seq_len=MAX_LEN)
         assert isinstance(r, SpecPlan)
+        assert r.extra_bytes_per_seq == int(c["per_seq"]["total"] + c["fixed"]["total"])
     else:
-        assert isinstance(r, SpecReject) and "block_size=128" in r.reason and r.supported_k == ()
+        assert isinstance(r, SpecReject) and f"block_size={bs}" in r.reason and r.supported_k == ()
 
 
 def test_decode_input_update_contract():

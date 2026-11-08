@@ -523,7 +523,7 @@ def test_verify_accepts_bucket_rows_and_passes_max_users(monkeypatch, b):
     g = _bucket_layer(8, 4, calls)
     assert TPGatedDeltaNet.forward_verify_recurrent(g, "x", b * 4, n_users=b, spec_ctrl="ctrl") == ("fused", b * 4, b)
     assert TPGatedDeltaNet._verify_fullbatch_fused(g, "qkv", 4, b, 32, "ctrl") == ("out", b * 4)
-    assert calls == [((4, b), {"max_users": 8})], "T, B=b rows, max_users = the shared state width"
+    assert calls == [((4, b), {"max_users": 8, "paged": None})], "T, B=b rows, max_users = the shared state width"
 
 
 def test_verify_rejects_rows_outside_one_to_B(expect_error):

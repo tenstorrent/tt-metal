@@ -30,6 +30,7 @@ from models.demos.blackhole.qwen36.tests.test_spec_prefix_fast_host import _cach
 from models.demos.blackhole.qwen36.tt import tp_common
 from models.demos.blackhole.qwen36.tt.model import Qwen36Model
 from models.demos.blackhole.qwen36.tt.prefix_cache import SpecPoints
+from models.demos.blackhole.qwen36.tt.spec_block_state import CheckpointPoints
 from models.demos.blackhole.qwen36.tt.spec_engine import MTPSpecEngine, _SnapRun
 
 __all__ = ["fake_ttnn"]  # fixture re-export
@@ -232,6 +233,24 @@ def test_intrace_min_rows_keeps_the_split_for_small_bodies(fake_ttnn):
     model.snap_rows_ok = lambda rows: rows >= 2048
     e = _engine(8, model=model)
     assert MTPSpecEngine._snap_run_plan(e, torch.tensor([tokens]), _row(), 8320, Tp, pts) == (None, None)
+
+
+@pytest.mark.parametrize("Tp, masked_big", [(1025, False), (1026, False), (2049, True), (2050, True)])
+def test_intrace_refuses_a_checkpoint_within_2_rows_of_a_short_replay_end(fake_ttnn, monkeypatch, Tp, masked_big):
+    """_replay_short_trace snapshots rows 3 <= r <= actual_len - 3 only. vLLM's checkpoint at the last full block of a
+    prompt 1 or 2 rows longer than it (2048 of 2049, in a masked big replay or a tail) takes the split, not the cost
+    model's decision."""
+    if masked_big:
+        monkeypatch.setenv("QWEN36_PREFILL_MASKED_BIG", "1")
+    point = (Tp - 1) // 1024 * 1024
+    calls = []
+    model = _snap_model(calls, None, trace_lengths=(Tp, Tp - point, point, Tp - 2048), snap_on=True)
+    base = model._short_trace_for
+    model._short_trace_for = lambda L, bucket=None: base(L)
+    e = _engine(8, model=model)
+    pts = CheckpointPoints([(point, 5)], write=lambda b: None, write_snap=lambda b, k: None)
+    assert MTPSpecEngine._snap_run_plan(e, torch.tensor([_prompt(Tp)]), _row(), 0, Tp, pts) == (None, None)
+    assert getattr(e, "intrace_declined", 0) == 0  # refused before the cost model
 
 
 def test_intrace_non_final_chunk_saves_end(fake_ttnn):

@@ -66,6 +66,12 @@ def _model(n_layers=8, bmax=8, nv=NV):
     )
 
 
+def _group_of(model):
+    """{GDN layer index: its KV cache group}: group i % 4, so layer slot j holds GDN layers 4j, 4j + 1, 4j + 2 of groups
+    0, 1, 2 (as _specs places them)."""
+    return {i: i % 4 for i, layer in enumerate(model.layers) if not layer.is_full_attention}
+
+
 def _specs(model, kv_dtype="bf8", block=4096):
     """per_layer_specs as the plugin builds them: attention j -> tensor_idx j, GDN layer -> the slot of its group."""
     specs, j = [], 0
@@ -145,9 +151,9 @@ def test_state_pages_lie_inside_their_block_on_every_bank(fake, dtype, block, nv
     blocks = list(range(1, NUM_BLOCKS))
     for lo in range(0, len(blocks), 8):
         row = blocks[lo : lo + 8]
-        ids = [torch.tensor(row + [0] * (8 - len(row)), dtype=torch.int32).reshape(-1, 1) for _ in model.layers]
+        ids = [torch.tensor(row + [0] * (8 - len(row)), dtype=torch.int32)] * 3
         st._host_idx.clear()
-        st.set_decode_blocks(ids)
+        st.set_decode_blocks(ids, _group_of(model))
         idx = ps.idx.data
         for d, b in enumerate(row):
             used = set()  # (bank, byte) granules of 2048 B owned by this block's pages
@@ -172,9 +178,9 @@ def test_state_pages_lie_inside_their_block_on_every_bank(fake, dtype, block, nv
 def test_decode_index_follows_rows_and_skips_unchanged(fake):
     model = _model()
     st = gbs.GdnBlockState(model, _specs(model), _kv(2))
-    ids = [torch.tensor([[5], [7], [0], [0], [0], [0], [0], [0]], dtype=torch.int32) for _ in model.layers]
+    ids = [torch.tensor([5, 7, 0, 0, 0, 0, 0, 0], dtype=torch.int32)] * 3
     row_of = [3, 0, 1, 2, 4, 5, 6, 7]  # runner slot 0 -> device row 3, slot 1 -> row 0
-    st.set_decode_blocks(ids, row_of=row_of)
+    st.set_decode_blocks(ids, _group_of(model), row_of=row_of)
     i, dn = st.layers[0]
     idx = dn._paged_state.idx.data
     assert list(idx.shape) == [2 * NV, 8]
@@ -183,8 +189,26 @@ def test_decode_index_follows_rows_and_skips_unchanged(fake):
         assert idx[NV + h].tolist() == [7 * 544 + 4 * h, 4 * h, 4 * h, 5 * 544 + 4 * h] + [4 * h] * 4
     n = len(fake["h2d"])
     assert n == len(st.layers)
-    st.set_decode_blocks(ids, row_of=row_of)
+    st.set_decode_blocks(ids, _group_of(model), row_of=row_of)
     assert len(fake["h2d"]) == n  # unchanged indices: no copies
+
+
+def test_decode_index_of_each_layer_follows_its_group(fake):
+    """Each GDN layer points at the block its group holds for the row; a later step that moves one group's block
+    copies only that group's layers."""
+    model = _model()
+    st = gbs.GdnBlockState(model, _specs(model), _kv(2))
+    group_of = _group_of(model)
+    ids = [torch.tensor([3 + 2 * g] + [0] * 7, dtype=torch.int32) for g in range(3)]
+    st.set_decode_blocks(ids, group_of)
+    for i, dn in st.layers:
+        assert int(dn._paged_state.idx.data[0, 0]) == (3 + 2 * group_of[i]) * 272, i
+    n = len(fake["h2d"])
+    ids[1] = torch.tensor([9] + [0] * 7, dtype=torch.int32)
+    st.set_decode_blocks(ids, group_of)
+    assert len(fake["h2d"]) - n == sum(1 for g in group_of.values() if g == 1)
+    for i, dn in st.layers:
+        assert int(dn._paged_state.idx.data[0, 0]) == (9 if group_of[i] == 1 else 3 + 2 * group_of[i]) * 272, i
 
 
 def test_mirror_table_duplicates_the_row_parity():
@@ -341,13 +365,10 @@ def _staged_model(monkeypatch, bmax=8, n_layers=8, block=4096, nv=NV, nk=NK):
 
 
 def _ids(model, bases):
-    """state_block_ids_per_layer: request u holds block bases[u] + 8 * g in GDN group g = layer % 4 (one group owns a
-    block id, so the GDN layers that share a layer slot never share a block)."""
-    out = []
-    for i, _ in enumerate(model.layers):
-        blocks = [b + 8 * (i % 4) for b in bases]
-        out.append(torch.tensor(blocks + [0] * (8 - len(blocks)), dtype=torch.int32).reshape(-1, 1))
-    return out
+    """(blocks, group_of) of GdnBlockState: request u holds block bases[u] + 8 * g in GDN group g = layer % 4 (one
+    group owns a block id, so the GDN layers that share a layer slot never share a block)."""
+    blocks = [torch.tensor([b + 8 * g for b in bases] + [0] * (8 - len(bases)), dtype=torch.int32) for g in range(3)]
+    return blocks, _group_of(model)
 
 
 def _group_copies(src, dst):
@@ -365,12 +386,12 @@ def test_prefill_rows_survive_block_copy_and_restore(torch_ttnn, monkeypatch, bl
     model, kv, carries = _staged_model(monkeypatch, block=block, nv=nv, nk=nk)
     st = gbs.GdnBlockState(model, _specs(model, block=block), kv)
     rec0 = {i: dn.rec_state.clone() for i, dn in st.layers}
-    st.write_prefill_rows(_ids(model, [src, 2]), rows=[3, 0])  # request 0 on device row 3, request 1 on row 0
+    st.write_prefill_rows(*_ids(model, [src, 2]), rows=[3, 0])  # request 0 on device row 3, request 1 on row 0
     st.copy_blocks(_group_copies(src, dst))
     for i, dn in st.layers:  # the B=1 prefill scratch, bound
         dn.rec_state = torch.zeros(1, nv, DK, DV)
         dn.conv_carry = torch.zeros(1, KCONV - 1, dn.qkv_dim_tp, dtype=torch.bfloat16)
-    st.set_prefill_blocks(_ids(model, [dst, 2]))
+    st.set_prefill_blocks(*_ids(model, [dst, 2]))
     for u, row in ((0, 3), (1, 0)):
         st.restore(u)
         for i, dn in st.layers:
@@ -381,7 +402,7 @@ def test_prefill_rows_survive_block_copy_and_restore(torch_ttnn, monkeypatch, bl
 def test_pooled_history_holds_both_parities(torch_ttnn, monkeypatch):
     model, kv, _ = _staged_model(monkeypatch)
     st = gbs.GdnBlockState(model, _specs(model), kv)
-    st.write_prefill_rows(_ids(model, [4, 6]), rows=[1, 2])
+    st.write_prefill_rows(*_ids(model, [4, 6]), rows=[1, 2])
     nck = 2 * (DK // 32) + DV // 32
     for i, dn in st.layers:
         for base, row in ((4, 1), (6, 2)):

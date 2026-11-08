@@ -56,6 +56,7 @@ from ttnn.tools import trace_allocation_tracker
 import ttnn
 from models.demos.blackhole.qwen36.tt import prefill_plan
 from models.demos.blackhole.qwen36.tt.mtp import draft_argmax
+from models.demos.blackhole.qwen36.tt.spec_block_state import WARMUP_REQ, CheckpointPoints
 from models.demos.blackhole.qwen36.tt.spec_bucket import apply_row_swap, pick_bucket, plan_row_swap
 from models.demos.blackhole.qwen36.tt.spec_chain import (
     ChainDevice,
@@ -109,6 +110,7 @@ from models.demos.blackhole.qwen36.tt.tp_common import (
     engine_spec_buckets,
     join_logits_one_copy_enabled,
     kv_block_size,
+    mamba_spec_enabled,
     pack_u32_rows,
     prefill_host_tolist_enabled,
     prefill_masked_big_enabled,
@@ -569,7 +571,7 @@ def spec_round_up(n, mult=32):
 
 def spec_table_width(max_seq_len, draft_len, block_size=None):
     """Page-table width (blocks) the engine needs: max_seq_len + K + 1 lookahead (no padding; fits vLLM's pool).
-    ``block_size`` None = kv_block_size() (QWEN36_KV_BLOCK_SIZE)."""
+    ``block_size`` None = kv_block_size() (runs without vLLM; the vLLM class passes its cache's block size)."""
     block_size = kv_block_size() if block_size is None else block_size
     return -(-(int(max_seq_len) + int(draft_len) + 1) // int(block_size))
 
@@ -750,7 +752,8 @@ def spec_memory_costs(
     n_gdn = sum(1 for i in range(L) if types[i % len(types)] != "full_attention")
     bf, f32, i32 = 2, 4, 4
 
-    ring = n_gdn * B * _tile_bytes([T * nv_tp, dk, dv], f32)  # [T*B*Nv, Dk, Dv]
+    # [T*B*Nv, Dk, Dv]; QWEN36_MAMBA_SPEC: the per-token states live in the request's vLLM spec blocks, no ring
+    ring = 0 if mamba_spec_enabled() else n_gdn * B * _tile_bytes([T * nv_tp, dk, dv], f32)
     win_rows = [kconv - 1 + T, kconv] + ([T - 1] if T > 1 else [])  # _verify_win_buf, _conv_win_buf, _spec_win_pad
     if os.environ.get("QWEN36_VERIFY_SPEC_STEP", "1") == "1":  # gdn_spec_step keeps E_prev as a ping-pong pair
         win_rows.append(kconv - 1 + T)
@@ -949,6 +952,25 @@ class _SnapRun:
         self.saved.append(p)
 
 
+class _CheckpointSnapRun(_SnapRun):
+    """_SnapRun for vLLM's prefill checkpoints (QWEN36_MAMBA_SPEC=1, mode align): a checkpoint strictly inside a
+    replay is written into its vLLM block from the replay's in-replay snapshot, one at a replay end from the bound
+    state, so the prefill call runs as one segment instead of splitting at every checkpoint."""
+
+    def __init__(self, model, points):
+        super().__init__(model, None, None, points)
+        self._ckpt = points
+
+    def after(self, cs, rows, inside):
+        for k, p in enumerate(inside):
+            self._ckpt.save(p, snap=k)
+            self.saved.append(p)
+            self.n_inside += 1
+        if cs + rows in self._set:
+            self._ckpt.save(cs + rows)
+            self.saved.append(cs + rows)
+
+
 class MTPSpecEngine:
     """MTP speculative decode engine over B users (see module docstring)."""
 
@@ -1131,6 +1153,10 @@ class MTPSpecEngine:
         # QWEN36_SPEC_JOIN_TRACE: persistent fresh-row mask (fresh_row_mask), the two seed traces (one per conv-window
         # parity), the buffers they were captured against, and the replay / fallback counters
         self._fj_mask = None
+        # QWEN36_MAMBA_SPEC: engine row -> its running state block per GDN group (re-prefill target); the live rows of the
+        # step whose windows decode_forward staged (one verify consumes them)
+        self._paged_row_blocks = {}
+        self._paged_step_rows = None
         self._seed_trace = None
         self._seed_trace_bufs = None
         self._fj_mask_dims = None
@@ -1901,8 +1927,10 @@ class MTPSpecEngine:
                 if prev is not None:
                     model._unbind_gdn_prefill_scratch(prev)
         warm_lens = [L for L in _WARM_PROMPT_LENS if L + T + 1 <= cap]
+        # QWEN36_MAMBA_SPEC: the dummy prompts write their GDN state into vLLM's null block 0
+        warm_kw = {} if self._paged_state() is None else {"gdn_req": WARMUP_REQ}
         for L in warm_lens:  # dummy prompts through the real (eager) prefill path on engine row 0
-            self._prefill_row(0, [1] * L, pt[0:1], _cap_blocks=width)
+            self._prefill_row(0, [1] * L, pt[0:1], _cap_blocks=width, **warm_kw)
             self._fresh.pop(0, None)
             self._active.discard(0)
 
@@ -2019,7 +2047,7 @@ class MTPSpecEngine:
             self._fj_sel = self._alloc_host_replicated(
                 fresh_row_select(range(B), B, T, self._kc), ttnn.bfloat16, ttnn.TILE_LAYOUT
             )
-            if self._gdn and spec_join_trace_enabled():
+            if self._gdn and spec_join_trace_enabled() and self._paged_state() is None:
                 # QWEN36_SPEC_JOIN_TRACE: the mask buffer (shared by every layer, so every layer must agree on Nv, Dk);
                 # warmup compiles the masked seed for both window parities before any capture
                 dims = {(dn.Nv, dn.Dk) for dn in self._gdn}
@@ -2040,7 +2068,8 @@ class MTPSpecEngine:
             self._join_keep = self._alloc_host_replicated(
                 torch.zeros(1, 1, B * T, B * T, dtype=torch.bfloat16), ttnn.bfloat16, ttnn.TILE_LAYOUT
             )
-            for dn in self._gdn:
+            # QWEN36_MAMBA_SPEC: no ring, no eager seed or join (fast join only) and no device slot remap to compile
+            for dn in self._gdn if self._paged_state() is None else ():
                 dn.seed_spec_rows(range(0, B, 2))
                 dn.seed_spec_rows(range(1, B, 2))
                 # Also with the host slot map: the per-user ring / E_prev slices this compiles are the ones
@@ -2151,6 +2180,10 @@ class MTPSpecEngine:
             if spec_fused_enabled():
                 self._prepare_fused()
 
+        if self._paged_state() is not None:
+            # the fused steps' result buffers: the copy traces select chained copies from their counts
+            self._paged_state().chain_results = [d.result_out for d in (self._fa, self._fs) if d is not None]
+            self._paged_state().warmup()
         ttnn.synchronize_device(self.mesh)
         self.prepared = True
         logger.info(
@@ -2207,6 +2240,20 @@ class MTPSpecEngine:
             )
             return
         kw = dict(aux_prev_in=fa.aux_in, tok_out=model._vfy_token_buf, vaux_out=model._vfy_aux_buf)
+        paged = self._paged_state()
+        if paged is not None:
+            # QWEN36_MAMBA_SPEC: one ctrl page per GDN group, start pages gathered from its ring_page_idx in fp32
+            if 2 * paged.layout.pool1_pages >= 1 << 24:
+                raise ValueError(
+                    f"QWEN36_SPEC_CHAIN with QWEN36_MAMBA_SPEC: {2 * paged.layout.pool1_pages} state pages exceed the "
+                    "chain body's exact fp32 range (2^24)"
+                )
+            kw["ring_pages"] = (paged.pages_dev, paged.G)
+            if paged.pages_rm_dev is not None:  # QWEN36_SPEC_CHAIN_KERNEL
+                kw["ring_pages_rm"] = paged.pages_rm_dev
+            kw["ring_windows"] = (paged.windows_dev, list(paged._idx_dev))  # chained state moves
+            if paged.windows_rm_dev is not None:  # QWEN36_SPEC_CHAIN_KERNEL
+                kw["ring_windows_rm"] = paged.windows_rm_dev
         Nv = int(model._vfy_Nv)
         ch_g = ch_s = None
         try:
@@ -2469,7 +2516,8 @@ class MTPSpecEngine:
         self._seed_trace = self._seed_trace_bufs = None
         if not spec_join_trace_enabled():
             return
-        if not self._gdn or self._fj_mask is None or not self.fast_join:
+        paged = self._paged_state() is not None  # QWEN36_MAMBA_SPEC: the window-only seed needs no mask
+        if not self._gdn or (self._fj_mask is None and not paged) or not self.fast_join:
             logger.info("[spec_engine] join seed trace not captured: no GDN layers / mask buffer / fast join")
             return
         bad = [i for i, dn in enumerate(self._gdn) if not dn.seed_masked_ok()]
@@ -2593,6 +2641,9 @@ class MTPSpecEngine:
                 self._addr_snap = snap
         finally:
             self.mesh.set_program_cache_misses_allowed(True)
+        if self._paged_state() is not None:  # after every other trace, so no later buffer lands on its intermediates
+            self._paged_state().capture_write_trace()
+            self._paged_state().capture_copy_traces()
         self.captured = True
 
     def _zero_shared_outputs(self):
@@ -2958,10 +3009,119 @@ class MTPSpecEngine:
             self._row_gen = [0] * self.B
         return self._row_gen
 
+    # ---- QWEN36_MAMBA_SPEC: GDN state in vLLM spec blocks (tt/spec_block_state.py) ----
+    def _paged_state(self):
+        """The model's SpecGdnBlockState, or None (the engine owns the GDN state: ring, parking, snapshots)."""
+        return getattr(getattr(self, "model", None), "_spec_blocks", None)
+
+    def _paged_plan(self, start_pos, Tp, vision_tokens, final, gdn_req):
+        """The prefill_for_spec plan with the GDN state in vLLM blocks: (s, (state, gdn_req) | None, []) resumes at
+        s = vLLM's start_pos from the request's block, with no snapshot saves; None = the unchanged from-0 prefill.
+        Recompute from 0 when start_pos is 0, off the 128 grid or off a KV block boundary (paged_fill_cache writes a
+        segment from the first row of its first block), or leaves fewer than 3 tokens: the cached KV is rewritten with
+        the same values. A multimodal prompt always recomputes.
+        vLLM's prefill checkpoints of the request (mode align) become the save points: the prompt runs as segments
+        that end at them, and each one's state goes into vLLM's block (CheckpointPoints). A multimodal prompt does the
+        same from position 0 (its segments splice their vision rows), so no checkpoint block it gets is left
+        unwritten: vLLM can match a block before the first image to a text prompt."""
+        paged = self._paged_state()
+        ckpts = [] if gdn_req is None or gdn_req == WARMUP_REQ else paged.prefill_checkpoints(gdn_req)
+        s = 0 if vision_tokens is not None else int(start_pos or 0)
+        from models.demos.blackhole.qwen36.tt.prefix_cache import SPEC_PREFIX_ALIGN
+
+        if s <= 0 or s % SPEC_PREFIX_ALIGN or s % self.block_size or Tp - s < 3:
+            s = 0
+        for n, _ in ckpts:
+            if not s < n < Tp or n % self.block_size:
+                raise ValueError(
+                    f"prefill row {gdn_req} [{s}, {Tp}): checkpoint at {n} is not a KV block boundary inside the "
+                    f"prefill (block {self.block_size})"
+                )
+        if s == 0 and final and not ckpts:
+            return None
+        points = CheckpointPoints(ckpts, paged.write_checkpoint, paged.write_checkpoint_snapshot) if ckpts else []
+        return (s, (paged, gdn_req) if s > 0 else None, points)
+
+    def _paged_reprefill(self, row):
+        """Point the block state's prefill blocks at engine row ``row``'s running blocks (the staged step's start
+        columns, else the blocks of its prefill) for a re-prefill outside prefill_forward; returns its gdn_req (0)."""
+        paged = self._paged_state()
+        blocks = paged.step_start_blocks(row)
+        if blocks is None:
+            blocks = self._paged_row_blocks.get(row)
+        if blocks is None:
+            raise RuntimeError(f"QWEN36_MAMBA_SPEC: re-prefill of engine row {row} without a known state block")
+        paged.prefill_blocks = [torch.tensor([int(b)], dtype=torch.int64) for b in blocks]
+        return 0
+
+    def _stage_gdn_windows(self, gdn_windows, start0, active):
+        """Stage one step's GDN state windows (QWEN36_MAMBA_SPEC). ``gdn_windows`` = ([G] int64 [B, 1 + K] block windows,
+        int64 [B] mamba_state.accepted_counts[, moves]), runner slots; ``start0`` / ``active`` in engine rows. Rows the
+        step does not compute are held (ctrl page HOLD). ``moves`` (a chained step, from the chain of the mamba_state
+        groups): ([G] start blocks [B, 1 + K], [G] windows [B, 1 + K, 1 + K][, [G] block copies [B, 1 + K, 2] or None])
+        per accepted count of the pending verify, for the chained rows (accepted count -1)."""
+        paged = self._paged_state()
+        if gdn_windows is None:
+            raise ValueError("QWEN36_MAMBA_SPEC: decode_forward needs gdn_windows (from mamba_state)")
+        blocks, counts, *rest = gdn_windows
+        moves = rest[0] if rest else None
+        if len(blocks) != paged.G:
+            raise ValueError(f"gdn_windows has {len(blocks)} groups, the model binds {paged.G}")
+        blocks = [torch.as_tensor(b).to(torch.int64) for b in self._to_rows(*blocks)]
+        (counts,) = self._to_rows(torch.as_tensor(counts).to(torch.int64).reshape(-1))
+        for b in blocks:
+            if tuple(b.shape) != (self.B, self.T):
+                raise ValueError(f"gdn window {tuple(b.shape)} != [{self.B}, {self.T}]")
+        act = torch.as_tensor(active, dtype=torch.bool).reshape(-1)
+        live = torch.nonzero(act).reshape(-1).tolist()
+        c = counts[act]
+        # -1: a chained row, whose count only the device knows (the chain body gathers its start pages at column mi');
+        # if the step falls back to the host, verify() starts it at its materialized count - 1
+        self._paged_unknown = [u for u, n in zip(live, c.tolist()) if n == -1] if bool((c == -1).any()) else []
+        if bool(((c != -1) & ((c < 1) | (c > self.T))).any()):
+            raise ValueError(f"mamba_state.accepted_counts {counts.tolist()} out of [1, {self.T}] on live rows {live}")
+        for g, b in enumerate(blocks):
+            if bool((b[act] <= 0).any()):
+                null = [u for u in live if bool((b[u] <= 0).any())]
+                raise ValueError(
+                    f"group {g}: live rows {null} have a null block in their state window {b[null].tolist()}"
+                )
+        boundary = []
+        if paged.cache_mode == "align":
+            sp = torch.as_tensor(start0).to(torch.int64).reshape(-1)
+            boundary = [
+                (u, 0) for u in torch.nonzero(act & ((sp + 1) % paged.mamba_block_size == 0)).reshape(-1).tolist()
+            ]
+        copies = moves[2] if moves is not None and len(moves) > 2 else None
+        paged.chain_copies = []  # only this step's copies may run before its verify
+        if copies is not None and self._paged_unknown:  # looked up in the pending verify's windows, before set_step
+            cps = [torch.as_tensor(x).to(torch.int64) for x in self._to_rows(*copies)]
+            if any(tuple(x.shape) != (self.B, self.T, 2) for x in cps):
+                raise ValueError(f"chained block copies for {len(cps)} groups do not have [{self.B}, {self.T}, 2]")
+            paged.capture_chain_copies(cps, self._paged_unknown)
+        paged.set_step(blocks, (counts - 1).clamp(0, self.T - 1), live, boundary)
+        if moves is not None and self._paged_unknown:
+            starts = [torch.as_tensor(x).to(torch.int64) for x in self._to_rows(*moves[0])]
+            wins = [torch.as_tensor(x).to(torch.int64) for x in self._to_rows(*moves[1])]
+            if any(tuple(x.shape) != (self.B, self.T) for x in starts) or any(
+                tuple(x.shape) != (self.B, self.T, self.T) for x in wins
+            ):
+                raise ValueError(f"chained state moves for {len(starts)} groups do not have [{self.B}, {self.T}(, T)]")
+            paged.set_moves(starts, wins, self._paged_unknown)
+        self.model._spec_hold = torch.nonzero(~act).reshape(-1).tolist()
+        self._paged_step_rows = live
+
+    def _paged_chain_twin(self):
+        """_vfy_aux_host kwargs that make it build the chain body's words (QWEN36_MAMBA_SPEC): start pages at column
+        mi', no HOLD rows. Empty without the flag."""
+        return {} if self._paged_state() is None else dict(predict=True, hold=())
+
     def release(self, slot):
         """Mark runner slot ``slot`` (engine row _phys[slot]) empty and re-offer drafts to every row (no device work)."""
         slot = self._phys[int(slot)]
         self._row_gens()[slot] += 1
+        if self._paged_state() is not None:
+            self._paged_state().forget_row(slot)
         self._active.discard(slot)
         self._fresh.pop(slot, None)
         self._parked.pop(slot, None)
@@ -2993,6 +3153,8 @@ class MTPSpecEngine:
         if self.host_slotmap:
             self._set_slot_map(slot_map_after_remap(self._phys, idx))
             return
+        if self._paged_state() is not None:
+            raise ValueError("QWEN36_MAMBA_SPEC needs the host slot map (QWEN36_SPEC_SLOTMAP=1)")
         if getattr(self, "_ch_g", None) is not None:  # QWEN36_SPEC_CHAIN
             self._chain_drop("slot_change")  # the device remap moves the engine rows the chain state describes
         for dn in self._gdn:
@@ -3027,7 +3189,15 @@ class MTPSpecEngine:
     # Prefill
     # --------------------------------------------------------------------- #
     def prefill(
-        self, slot, prompt_ids, page_table_row, _cap_blocks=None, start_pos=None, vision_tokens=None, final=True
+        self,
+        slot,
+        prompt_ids,
+        page_table_row,
+        _cap_blocks=None,
+        start_pos=None,
+        vision_tokens=None,
+        final=True,
+        gdn_req=None,
     ):
         """Eager prefill of runner slot ``slot`` (engine row _phys[slot]), warming its MTP KV; returns host float
         logits [vocab]. Replays the recorded chunk trace when B == 1 and record_prefill ran, else the eager path.
@@ -3068,12 +3238,31 @@ class MTPSpecEngine:
         vis_kw = {} if vision_tokens is None else dict(vision_tokens=vision_tokens)
         if not final:
             vis_kw["final"] = False
+        if gdn_req is not None:
+            vis_kw["gdn_req"] = gdn_req
         return self._prefill_row(self._phys[int(slot)], prompt_ids, page_table_row, _cap_blocks, start_pos, **vis_kw)
 
     def _prefill_row(
-        self, slot, prompt_ids, page_table_row, _cap_blocks=None, start_pos=None, vision_tokens=None, final=True
+        self,
+        slot,
+        prompt_ids,
+        page_table_row,
+        _cap_blocks=None,
+        start_pos=None,
+        vision_tokens=None,
+        final=True,
+        gdn_req=None,
     ):
-        """``prefill`` of engine row ``slot`` (``final`` False: a non-final chunk, see ``prefill``)."""
+        """``prefill`` of engine row ``slot`` (``final`` False: a non-final chunk, see ``prefill``). ``gdn_req``
+        (QWEN36_MAMBA_SPEC): the request's index in the prefill step's state blocks (SpecGdnBlockState.prefill_blocks):
+        the prefill resumes from that block at start_pos and writes its final GDN state there."""
+        paged = self._paged_state()
+        if paged is not None:
+            if gdn_req is None:
+                raise ValueError("QWEN36_MAMBA_SPEC prefill needs gdn_req (the request's state block index)")
+            paged.forget_row(slot)
+            if final and gdn_req != WARMUP_REQ:
+                self._paged_row_blocks[slot] = [paged.prefill_block(g, gdn_req) for g in range(paged.G)]
         reset_draft_skip(self, slot)
         self._parked.pop(slot, None)
         # A prefill of the row ends its pending progress (see _chunk_exact_resume): the request it belongs to consumes it, any
@@ -3082,6 +3271,9 @@ class MTPSpecEngine:
         self.__dict__.setdefault("_finishing", set()).discard(slot)  # a prefill gives the slot a new request
         self._fresh_dirty.discard(slot)
         model = self.model
+        if vision_tokens is not None and hasattr(model, "vision_rows_host"):  # absent on test fakes
+            # one host copy before any replay: every route splices from it (see Qwen36Model.vision_rows_host)
+            vision_tokens = model.vision_rows_host(vision_tokens)
         assert 0 <= slot < self.B, f"slot {slot} out of range [0,{self.B})"
         assert self._last_hidden, "prefill before prepare"
         prompt_row = None
@@ -3134,7 +3326,10 @@ class MTPSpecEngine:
         exact_mode = chunk_exact_resume_enabled()
         # Option B: snapshot the chunk end + capture the hidden row of slot e-1 (needs an aligned end)
         save_end = (not final) and exact_mode and not unaligned_end
-        if not final:
+        if not final and paged is not None:
+            if self.B <= 1:
+                raise RuntimeError("non-final prefill chunk needs the batched spec engine")
+        elif not final:
             if self.B <= 1 or getattr(model, "_prefix_cache", None) is None:
                 raise RuntimeError("non-final prefill chunk needs the batched spec engine and the GDN prefix cache")
             if unaligned_end:
@@ -3155,11 +3350,14 @@ class MTPSpecEngine:
             plan_kw["exact_resume"] = exact
         if save_end or unaligned_end:
             plan_kw["nonfinal"] = True  # unaligned: the forced point replaces the end checkpoint; a plan is always made
-        plan = (
-            model.plan_spec_prefix(prompt[0], Tp, start_pos, **plan_kw)
-            if start_pos is not None and self.B > 1 and vision_tokens is None
-            else None
-        )
+        if paged is not None:
+            plan = self._paged_plan(start_pos, Tp, vision_tokens, final, gdn_req)
+        else:
+            plan = (
+                model.plan_spec_prefix(prompt[0], Tp, start_pos, **plan_kw)
+                if start_pos is not None and self.B > 1 and vision_tokens is None
+                else None
+            )
         if not final and plan is None and (force or save_end):
             raise RuntimeError(f"non-final chunk [{start_pos}, {Tp}): no prefix plan (forced save point {force[:1]})")
         if exact is not None and (plan is None or int(plan[0]) != exact):
@@ -3168,7 +3366,8 @@ class MTPSpecEngine:
             self.chunk_exact_misses = getattr(self, "chunk_exact_misses", 0) + 1
             self._chunk_bump("refusals")
             logger.warning(f"[spec_engine] chunk exact resume: snapshot at {start_pos} evicted, Option A resume")
-        self._note_resume_fallback(prompt_list, start_pos, Tp, plan, final)
+        if paged is None:
+            self._note_resume_fallback(prompt_list, start_pos, Tp, plan, final)
         vis_kw = {} if vision_tokens is None else dict(vision_tokens=vision_tokens)  # text: the calls are unchanged
         # The prompt the drafter fuses its next-token column from. A non-final fast-prefill segment [a, b) narrows it
         # to prompt[:b+1] so padded bucket rows never fuse (and write drafter KV for) tokens past b.
@@ -3191,24 +3390,42 @@ class MTPSpecEngine:
             self.chunk_exact_resumes = getattr(self, "chunk_exact_resumes", 0) + 1
             self._chunk_bump("exact_resumes")
         logits_dev = None
-        if self.fast_prefill and self.prefill_recorded and self.recorded_prefill:
+        # QWEN36_MAMBA_SPEC: the eager path, which hands the bound B=1 scratch to gdn_write before it is unbound
+        gkw = {} if paged is None else dict(gdn_write=lambda: paged.write_prefill(gdn_req))
+        if self.fast_prefill and self.prefill_recorded and self.recorded_prefill and (paged is None or self.B > 1):
             fast_kw = {} if plan is None else dict(plan=plan, mtp_prompt=mtp_prompt)
             fast_kw.update(vis_kw)
+            fast_kw.update(gkw)
             if not final:
                 fast_kw["final_row"] = False
-                fast_kw["save_end"] = save_end
+                fast_kw["save_end"] = save_end and paged is None  # the chunk end state goes to the request's block
             logits_dev = self._prefill_fast(slot, prompt_list, prompt, pt_row, Tp, _on_chunk, captured_row, **fast_kw)
-        if logits_dev is None and self.B == 1 and self.prefill_recorded and self.recorded_prefill:
+        if logits_dev is None and self.B == 1 and self.prefill_recorded and self.recorded_prefill and paged is None:
             pt_rec = model._fit_spec_page_table(pt_row, self.nb_prefill)  # MTP chunk fill keeps the nb-wide pt_row
             logits_dev = model.prefill_traced_chunked(prompt, pt_rec, Tp, on_chunk=_on_chunk, **vis_kw)
         if logits_dev is None:
+            if self.fast_prefill and self.prefill_recorded and self.recorded_prefill:
+                self._note_eager_prefill(
+                    "whole prompt",
+                    f"slot {slot} [{0 if plan is None else int(plan[0])}, {Tp}): no trace serves it",
+                )
             if plan is None:
-                logits_dev = model.prefill_for_spec(prompt, pt_row, Tp, _on_chunk, slot=slot, **vis_kw)
+                logits_dev = model.prefill_for_spec(prompt, pt_row, Tp, _on_chunk, slot=slot, **vis_kw, **gkw)
             elif final:
-                logits_dev = model.prefill_for_spec(prompt, pt_row, Tp, _on_chunk, slot=slot, plan=plan)
+                logits_dev = model.prefill_for_spec(
+                    prompt, pt_row, Tp, _on_chunk, slot=slot, plan=plan, **vis_kw, **gkw
+                )
             else:
                 model.prefill_for_spec(
-                    prompt, pt_row, Tp, _on_chunk, slot=slot, plan=plan, final=False, save_end=save_end
+                    prompt,
+                    pt_row,
+                    Tp,
+                    _on_chunk,
+                    slot=slot,
+                    plan=plan,
+                    final=False,
+                    save_end=save_end and paged is None,  # the chunk end state goes to the request's block
+                    **gkw,
                 )
         self._chunk_unpin(slot)  # the previous chunk's snapshot was restored above (or refused): its pin ends
         self._note_prefill_done()
@@ -3253,6 +3470,7 @@ class MTPSpecEngine:
         vision_tokens=None,
         final_row=True,
         save_end=False,
+        gdn_write=None,
     ):
         """QWEN36_SPEC_FAST_PREFILL=1 body of _prefill_row: traced prefill of one prompt on the GDN binding the traces
         were captured against (the B=1 scratch at B > 1, the decode buffers at B == 1), then the scratch -> slot write.
@@ -3272,7 +3490,10 @@ class MTPSpecEngine:
 
         ``final_row`` False (non-final chunk): the scratch is not written to the row's GDN slot and no host logits are read
         (the returned value is meaningless). ``save_end`` (with final_row False; Option B): the state after tokens[:Tp]
-        is also snapshotted into the prefix cache (no extra segment: Tp is the last segment's end)."""
+        is also snapshotted into the prefix cache (no extra segment: Tp is the last segment's end).
+
+        ``gdn_write`` (QWEN36_MAMBA_SPEC): called with the scratch still bound after the last segment, to write the state
+        into the request's vLLM block; ``plan`` then resumes from that block (its restore) and saves nothing."""
         model = self.model
         batched = self.B > 1
         if plan is None:
@@ -3282,18 +3503,33 @@ class MTPSpecEngine:
         bounds = list(points) + [Tp]
         run, seg_kw = None, {}  # QWEN36_PREFILL_INTRACE_SNAP: the single segment's _SnapRun
         # The traces' GDN binding check (_short_trace_for) needs the binding the requests run on, so bind first.
+        if plan is not None and vision_tokens is not None:
+            # every segment splices from this host copy: the device rows can be overwritten by the replays before it
+            vision_tokens = model.vision_rows_host(vision_tokens)
         prev = model._bind_gdn_prefill_scratch() if batched else None
         try:
             self._skip_logits_read = not final_row
             if plan is not None:
-                assert vision_tokens is None, "a multimodal prompt bypasses the prefix cache"
-                model._build_request_rope(prompt, None)  # one table for the whole prompt: every segment slices it
+                assert vision_tokens is None or (
+                    s0 == 0 and isinstance(points, CheckpointPoints)
+                ), "a multimodal prompt bypasses the prefix cache (only vLLM's prefill checkpoints, from position 0)"
+                # one table for the whole prompt: every segment slices it
+                model._build_request_rope(prompt, vision_tokens)
                 if s0 > 0:
                     src[0].restore(src[1])
                 run, mb_choice = self._snap_run_plan(prompt, pt_row, s0, Tp, points)
                 if run is not None:
                     bounds = [Tp]  # ONE segment: every save point is a replay end or an in-replay snapshot
                     seg_kw = dict(snap=run, mb_choice=mb_choice)
+                elif isinstance(points, CheckpointPoints):
+                    self.ckpt_split_prefills = getattr(self, "ckpt_split_prefills", 0) + 1
+                    if self.ckpt_split_prefills == 1:
+                        logger.warning(
+                            f"[spec_engine] prefill checkpoints {list(points)} of [{s0}, {Tp}) end segments: the "
+                            "in-replay snapshot path does not serve this call (no snapshot traces, a checkpoint in "
+                            "an eager replay or 1 or 2 rows before a short replay's end, too many in one replay, a trash "
+                            "block collision, or a cheaper split); counted in ckpt_split_prefills"
+                        )
             host, saved, a = None, [], s0
             for i, b in enumerate(bounds):
                 final = i == len(bounds) - 1
@@ -3314,18 +3550,22 @@ class MTPSpecEngine:
                     captured_row=captured_row,
                     decline_ok=(i == 0 and s0 == 0),
                     **({} if vision_tokens is None else dict(vision_tokens=vision_tokens)),
+                    **({"rope_staged": True} if plan is not None and vision_tokens is not None else {}),
                     **seg_kw,
                 )
                 if host is None:
                     return None  # only the first from-0 segment may decline, before any side effect
                 if not final:
                     # the bound scratch = the state after tokens[:b]
-                    model._prefix_cache.save(
-                        prompt[0],
-                        b,
-                        low_prio=b in getattr(points, "low", ()),
-                        protect=b in getattr(points, "end", ()),
-                    )
+                    if isinstance(points, CheckpointPoints):
+                        points.save(b)
+                    else:
+                        model._prefix_cache.save(
+                            prompt[0],
+                            b,
+                            low_prio=b in getattr(points, "low", ()),
+                            protect=b in getattr(points, "end", ()),
+                        )
                     saved.append(b)
                 a = b
             if run is not None:
@@ -3334,7 +3574,9 @@ class MTPSpecEngine:
                 assert plan is not None
                 model._prefix_cache.save(prompt[0], Tp)  # the bound scratch = the state after tokens[:Tp]
                 saved.append(Tp)
-            if plan is not None:
+            if gdn_write is not None:
+                gdn_write()
+            if plan is not None and getattr(model, "_prefix_cache", None) is not None:
                 model._prefix_cache.log(Tp, -1, s0, saved)
         finally:
             self._skip_logits_read = False
@@ -3376,8 +3618,9 @@ class MTPSpecEngine:
         choice, passed on to it so the decision is made once)."""
         model = self.model
         cache = getattr(model, "_prefix_cache", None)
+        ckpt = isinstance(points, CheckpointPoints)  # vLLM's checkpoints: written into its blocks, no prefix cache
         active = getattr(model, "gdn_snap_active", None)  # absent on test fakes
-        if cache is None or active is None or not active() or not points:
+        if (cache is None and not ckpt) or active is None or not active() or not points:
             return None, None
         chunk = model._chunked_chunk_size or 2048
         n = Tp - s0
@@ -3395,6 +3638,10 @@ class MTPSpecEngine:
                 continue
             if len(inside) > GDN_SNAP_SLOTS:
                 return None, None
+            # _replay_short_trace snapshots only rows 3 <= r <= actual_len - 3 (a vLLM checkpoint at 2048 in a 2049-row
+            # prompt is r = 2048 of 2049 rows): the split ends a segment there instead.
+            if rep.kind in ("tail", "mbig") and any(not 3 <= p - rep.start <= rep.rows - 3 for p in inside):
+                return None, None
             if rep.kind == "tail":
                 if rep.rows < 3 or model._short_trace_for(rep.rows) is None or not model.snap_rows_ok(rep.bucket):
                     return None, None
@@ -3408,6 +3655,7 @@ class MTPSpecEngine:
             nreal = -(-Tp // int(self.block_size))
             if trash is not None and bool((torch.as_tensor(pt_row).reshape(-1)[:nreal] == int(trash)).any()):
                 return None, None  # a short trace would decline this request (trash block collision): legacy split
+
         # The cheaper of the two plans by the replay cost model: merging small segments can round them up to a bigger
         # short-trace bucket, and the whole call's tail can be 1-2 rows (an eager masked bucket) where the last segment
         # of the split plan never is.
@@ -3420,6 +3668,8 @@ class MTPSpecEngine:
         if cost_one >= cost_split:
             self.intrace_declined = getattr(self, "intrace_declined", 0) + 1
             return None, None
+        if ckpt:
+            return _CheckpointSnapRun(model, points), choice
         return _SnapRun(model, cache, prompt[0], points), choice
 
     _MASKED_BIG_LOG_FIRST = 20  # INFO-log the first N plan decisions
@@ -3503,6 +3753,7 @@ class MTPSpecEngine:
         snap=None,
         mb_choice=None,
         _masked_big=True,
+        rope_staged=False,
     ):
         """Traced prefill of the prompt segment [a, b) (a % 128 == 0) on the bound B=1 GDN scratch: full chunks by the
         chunk trace, the tail by the spec short trace (drafter warm-up fused) or the eager masked bucket. carry: continue
@@ -3517,7 +3768,8 @@ class MTPSpecEngine:
         QWEN36_PREFILL_MASKED_BIG (text only, n >= 2048): after the n // 8192 full big blocks the remainder runs as ONE
         masked 4096 / 8192 spec short trace when the cost model finds it cheaper than 2048 replays + the masked tail
         (``mb_choice``: the caller's _masked_big_choice for this segment). ``_masked_big=False`` (internal) keeps the
-        existing plan, used for the fallback after a declined replay."""
+        existing plan, used for the fallback after a declined replay. ``rope_staged``: the caller staged the whole
+        prompt's RoPE table (a multimodal prompt split at vLLM's prefill checkpoints); a segment at 0 keeps it."""
         model = self.model
         vis_kw = {} if vision_tokens is None else dict(vision_tokens=vision_tokens)
         snap_kw = {} if snap is None else dict(snap=snap)
@@ -3583,6 +3835,7 @@ class MTPSpecEngine:
         if num_full == 0:
             # `prompt[:, a:]` (not [:, a:b]): the replay slices the first n tokens, and at a == 0 builds the request RoPE
             # from what it gets, which must be the whole prompt when later segments follow.
+            rs_kw = {"rope_staged": True} if rope_staged else {}
             host = self._replay_spec_short(
                 slot,
                 mtp_list,
@@ -3594,11 +3847,15 @@ class MTPSpecEngine:
                 captured_row,
                 **self._vis_replay_kw(prompt, a, vision_tokens),
                 **snap_kw,
+                **rs_kw,
             )
             if host is None:
                 if decline_ok:
                     return None  # no spec short trace for this length / trash-block collision: nothing staged, eager
                 assert snap is None or not snap.inside(a, n), "in-replay snapshot points in an eager replay"
+                self._note_eager_prefill(
+                    "segment", f"slot {slot} [{a}, {b}): {self._short_decline_reason(n)}, eager masked bucket"
+                )
                 pt_rec = model._fit_spec_page_table(pt_row, self.nb_prefill)
                 logits, hidden = model.prefill_masked_bucket(
                     prompt[:, a:b],
@@ -3607,6 +3864,7 @@ class MTPSpecEngine:
                     chunk_start=a,
                     return_hidden=True,
                     **self._vis_replay_kw(prompt, a, vision_tokens),
+                    **rs_kw,
                 )
                 on_chunk(hidden, a, n)
                 ttnn.deallocate(hidden)
@@ -3624,6 +3882,7 @@ class MTPSpecEngine:
             # The uncached long-prompt path: the chunk trace replays every full chunk and the eager masked-bucket tail
             # runs inside it (its tail slice is right for start == 0).
             assert snap is None or not snap.inside(cs, tail), "in-replay snapshot points in an eager tail"
+            self._note_eager_prefill("tail", f"slot {slot} [{cs}, {b}): {self._short_decline_reason(tail)}")
             logits = model._prefill_traced_chunked_tp(
                 prompt,
                 pt_rec,
@@ -3688,6 +3947,7 @@ class MTPSpecEngine:
             )
         if host is None:  # no short trace for the tail (< 3 tokens / uncaptured bucket) or a trash-block collision
             assert snap is None or not snap.inside(cs, tail), "in-replay snapshot points in an eager tail"
+            self._note_eager_prefill("tail", f"slot {slot} [{cs}, {b}): {self._short_decline_reason(tail)}")
             logits, hidden = model.prefill_masked_bucket(
                 prompt[:, cs:b],
                 pt_rec,
@@ -3723,6 +3983,7 @@ class MTPSpecEngine:
         vis_row_offset=0,
         bucket=None,
         snap=None,
+        rope_staged=False,
     ):
         """One replay of the spec short trace over the prompt segment [chunk_start, chunk_start + L) = the prompt's last
         segment (slot Tp-1 is its last real row): base forward + MTP KV warm-up + feed row, then the feed row of slot
@@ -3739,6 +4000,8 @@ class MTPSpecEngine:
             prompt_list, chunk_start, tr.bucket, pt_row, self.block_size, self._scratch_block, tr.buf_blocks
         )
         vis_kw = {} if vision_tokens is None else dict(vision_tokens=vision_tokens, vis_row_offset=vis_row_offset)
+        if rope_staged:
+            vis_kw["rope_staged"] = True
         inside = snap.inside(chunk_start, L) if snap is not None else []
         if snap is not None:
             vis_kw["snap_rows"] = [p - chunk_start for p in inside]
@@ -3797,6 +4060,25 @@ class MTPSpecEngine:
         if join_logits_one_copy_enabled():
             return ttnn.to_torch(ttnn.get_device_tensors(logits_dev)[0])
         return ttnn.to_torch(logits_dev, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh, dim=0))
+
+    def _note_eager_prefill(self, reason, detail):
+        """Count a prefill (or a part of one) that runs eagerly although QWEN36_SPEC_FAST_PREFILL is on and its traces are
+        recorded: eager and traced prefill give slightly different numerics (greedy text can differ), so every such
+        path is visible. WARNING the first time per ``reason``, then DEBUG; counts in ``self.eager_prefills``."""
+        counts = self.__dict__.setdefault("eager_prefills", {})
+        counts[reason] = counts.get(reason, 0) + 1
+        (logger.warning if counts[reason] == 1 else logger.debug)(
+            f"[spec_engine] eager prefill #{counts[reason]} ({reason}): {detail}"
+            + (" (first of its kind; later ones log at DEBUG)" if counts[reason] == 1 else "")
+        )
+
+    def _short_decline_reason(self, n):
+        """Why no spec short trace served an n-token piece (for _note_eager_prefill)."""
+        if n < 3:
+            return f"{n} tokens (a short trace needs 3 for the conv carry)"
+        if self.model._short_trace_for(n) is None:
+            return f"no short trace for {n} tokens"
+        return f"trash block {getattr(self.model, 'prefill_trash_block', None)} is one of the request's blocks"
 
     def _note_resume_fallback(self, prompt_list, start_pos, Tp, plan, final):
         """Count (and log) a prefill with start_pos > 0 that resumes from a GDN snapshot below spec_resume_cap (the
@@ -3890,7 +4172,11 @@ class MTPSpecEngine:
         logger.info(f"[spec_engine] re-prefill engine row {slot} ({len(prompt)} tokens)")
         # Same vLLM start_pos as the original prefill (its cached blocks are still the request's).
         vis_kw = {} if slot not in _row_vision_of(self) else dict(vision_tokens=_row_vision_of(self)[slot])
-        if rest:
+        if self._paged_state() is not None:
+            self._prefill_row(
+                slot, prompt, row, start_pos=0 if rest else None, gdn_req=self._paged_reprefill(slot), **vis_kw
+            )
+        elif rest:
             self._prefill_row(slot, prompt, row, start_pos=rest[0], **vis_kw)
         else:
             self._prefill_row(slot, prompt, row, **vis_kw)
@@ -3933,7 +4219,10 @@ class MTPSpecEngine:
                 f"row with {sp} tokens (vLLM start_pos {vstart})"
             )
             vis_kw = {} if u not in _row_vision_of(self) else dict(vision_tokens=_row_vision_of(self)[u])
-            self._prefill_row(u, prompt[:sp], row, start_pos=vstart, **vis_kw)
+            if self._paged_state() is not None:  # the row's block holds the state after the long prefill
+                self._prefill_row(u, prompt[:sp], row, start_pos=0, gdn_req=self._paged_reprefill(u), **vis_kw)
+            else:
+                self._prefill_row(u, prompt[:sp], row, start_pos=vstart, **vis_kw)
             out[u] = self._fresh[u]
         return out
 
@@ -4017,9 +4306,17 @@ class MTPSpecEngine:
             self._def_ctx is None
         ):  # deferred serving decided the bucket in _decode_forward_deferred (before the chain reason)
             self._bucket_step(rows)
-        # contract 4e: a live row left out of a step keeps its GDN state on host until it returns
+        # contract 4e: a live row left out of a step keeps its GDN state on host until it returns. QWEN36_MAMBA_SPEC:
+        # its state stays in its vLLM blocks and the verify holds it (ctrl page HOLD: no state writes, window copied)
+        paged = self._paged_state() is not None
+        if paged and self._paged_step_rows is None:
+            raise RuntimeError(
+                "QWEN36_MAMBA_SPEC verify without the step's GDN state windows (decode_forward gdn_windows)"
+            )
         to_park = [
-            u for u in range(B) if not act[u] and u in self._active and u not in self._fresh and u not in self._parked
+            u
+            for u in range(B)
+            if not paged and not act[u] and u in self._active and u not in self._fresh and u not in self._parked
         ]
         if to_park:
             t0 = time.perf_counter()
@@ -4032,7 +4329,7 @@ class MTPSpecEngine:
                     f"[spec_engine] parked slot {u} (left out of a step), {self._park_last_ms:.1f} ms for {len(to_park)} row(s)"
                 )
             self._chain_ev = self._chain_ev or "park"
-        back = [u for u in rows if u in self._parked]
+        back = [] if paged else [u for u in rows if u in self._parked]
         if back:
             self._chain_ev = self._chain_ev or "unpark"
         if back:
@@ -4067,6 +4364,16 @@ class MTPSpecEngine:
             self._chain_ev = self._chain_ev or "fresh"
             # a row prefilled past its prompt (vLLM pad_spec_decode placeholders) is re-prefilled at the true length
             fresh_now = self._reconcile_fresh_rows(fresh_now, start_pos)
+        if paged:
+            self._paged_step_rows = None  # one verify per staged window set
+            if fresh_now and not self.fast_join:
+                raise ValueError("QWEN36_MAMBA_SPEC needs the fast join (QWEN36_SPEC_FAST_JOIN=1)")
+            if any(not act[u] and u in self._active for u in range(B)):
+                self._chain_ev = self._chain_ev or "park"  # a held row: the chain body has no HOLD rows
+            unknown = self.__dict__.pop("_paged_unknown", ())
+            if unknown:  # a chain row the host staged: its start column is its materialized count - 1
+                self._paged_state().run_chain_copies(counts={u: int(mi_prev[u]) + 1 for u in unknown})
+                self._paged_state().set_start({u: int(mi_prev[u]) for u in unknown}, start_pos)
         if fresh_now and self.fast_join:
             # QWEN36_SPEC_FAST_JOIN=1: seed the fresh rows' ring slot 0 / E_prev in place, then verify them in THIS
             # replay as 0-draft rows at mi = 0 next to the running rows (one forward for the whole step).
@@ -4184,9 +4491,10 @@ class MTPSpecEngine:
                 # one trace replay for all layers: the mask (engine rows, as fresh_row_select) selects the fresh rows
                 # only, equal to the eager partial path (also when every active row is fresh)
                 p = self._gdn[0]._spec_win_par
-                self._stage(
-                    fresh_row_mask(fresh, B, *self._fj_mask_dims), self._fj_mask, ttnn.float32, ttnn.TILE_LAYOUT
-                )
+                if self._fj_mask is not None:
+                    self._stage(
+                        fresh_row_mask(fresh, B, *self._fj_mask_dims), self._fj_mask, ttnn.float32, ttnn.TILE_LAYOUT
+                    )
                 ttnn.execute_trace(self.mesh, self._seed_trace[p], cq_id=0, blocking=False)
                 self.join_trace_replays += 1
             else:
@@ -4359,6 +4667,7 @@ class MTPSpecEngine:
         chain_rows=None,
         chain_tip=None,
         finishing_slots=None,
+        gdn_windows=None,
     ):
         """Runner verify contract over a [B, 1+K] block (see sanitize_verify_block) in runner slots; slot_remap is
         applied after validation, then every per-row input is scattered to engine rows (_to_rows) and the outputs
@@ -4371,7 +4680,9 @@ class MTPSpecEngine:
         synchronize, and return VerifyResult(handle=FusedHandle); ``chain_rows`` (bool [B], runner order) / ``chain_tip`` (the tip_id of the
         newest fused step): rows whose placeholder tokens (-1), provisional positions and counts (-1) the device replaces from that step.
         See _decode_forward_deferred. ``finishing_slots`` (runner slots, QWEN36 plugin contract): requests left out of this step
-        only because the step in flight ends them at max_tokens; freed without parking (see _apply_finishing)."""
+        only because the step in flight ends them at max_tokens; freed without parking (see _apply_finishing).
+        ``gdn_windows`` (QWEN36_MAMBA_SPEC, runner slots): ([G] int64 [B, 1 + K] state block windows, int64 [B]
+        mamba_state.accepted_counts) of the step (see _stage_gdn_windows)."""
         if spec_mode not in SPEC_MODES:
             raise ValueError(f"spec_mode {spec_mode!r} not in {SPEC_MODES}")
         if self._split_pending is not None and not self._split_begin:
@@ -4407,6 +4718,7 @@ class MTPSpecEngine:
                 chain_rows,
                 chain_tip,
                 finishing_slots,
+                gdn_windows=gdn_windows,
             )
         if chain_rows is not None or chain_tip is not None:
             raise ValueError("chain_rows / chain_tip need defer_read=True")
@@ -4437,6 +4749,8 @@ class MTPSpecEngine:
             clean, start0, active, num_valid_drafts, accepted_counts, page_table
         )
         self._check_finishing_rows([u for u in range(self.B) if bool(active[u])])
+        if self._paged_state() is not None:
+            self._stage_gdn_windows(gdn_windows, start0, active)
         self._no_draft = note_withheld_drafts(
             self._offered,
             self._no_draft,
@@ -4978,6 +5292,9 @@ class MTPSpecEngine:
         cn, p0 = prev["counts"], prev["p0"]
         if not torch.equal(mi[cont], cn[cont] - 1):
             return "counts_differ"
+        paged = self._paged_state()
+        if paged is not None and not torch.equal(paged.book.step_start[cont], mi[cont]):
+            return "mamba_start"  # a state move reset the row's start column: the chain body starts at column mi'
         if not torch.equal(torch.as_tensor(start_pos).to(torch.int64)[cont], (p0 + cn)[cont]):
             return "position_differs"
         tok0 = prev["committed"].gather(1, (cn - 1)[:, None])  # [B, 1] the bonus / correction token
@@ -5020,7 +5337,9 @@ class MTPSpecEngine:
             return None
         exp_tok = torch.as_tensor(args[0]).to(torch.int64).reshape(-1)
         # at the parity the replay reads, with the per-row deltas the trace reads (the common delta with the flag off; inactive rows too)
-        exp_aux = model._vfy_aux_host(model._vfy_row_positions(args[1]), args[2], rope_delta=rope_delta)
+        exp_aux = model._vfy_aux_host(
+            model._vfy_row_positions(args[1]), args[2], rope_delta=rope_delta, **self._paged_chain_twin()
+        )
         return exp_tok, exp_aux, torch.as_tensor(aux).clone()
 
     def _chain_exec(self, prev):
@@ -5244,6 +5563,7 @@ class MTPSpecEngine:
         chain_rows,
         chain_tip,
         finishing_slots=None,
+        gdn_windows=None,
     ):
         """decode_forward(defer_read=True): see the section comment. Returns VerifyResult(spec_mode, None, handle=FusedHandle)."""
         B, K, T = self.B, self.K, self.T
@@ -5295,6 +5615,8 @@ class MTPSpecEngine:
             self.remap_slots(slot_remap)
         clean, start0, active, nv_rows, acc_rows, pt_rows = self._to_rows(clean, start0, active, nv_in, acc, page_table)
         self._check_finishing_rows([u for u in range(B) if bool(active[u])])
+        if self._paged_state() is not None:
+            self._stage_gdn_windows(gdn_windows, start0, active)
         cmask = None if cr is None else (self._to_rows(cr)[0] & active)
         if cmask is not None and not bool(cmask.any()):
             cmask = None
@@ -5403,9 +5725,23 @@ class MTPSpecEngine:
         kw = dict(read_logits=False, page_tables=vpt, inactive=(~active).tolist())
         self._bucket_kw(kw)  # the bucket was decided in _decode_forward_deferred
         chain = dict(chain, lo=lo, hi=hi)
-        return self._def_enqueue(
+        paged = self._paged_state()
+        moved = paged is not None and bool(paged.book.moves)
+        if moved:  # chained state moves: conv write of the count that starts at a block's last position
+            paged.chain_boundaries(lo)
+        if paged is not None and paged.chain_copies:  # behind the pending step, before this one: its count selects them
+            prev = chain["prev"]
+            paged.run_chain_copies(result=self._fa.result_out if prev.kind == "g" else self._fs.result_out)
+        h = self._def_enqueue(
             "s" if sampling is not None else "g", clean, start_hi, pt, active, nv_rows, args, kw, sampling, aux, chain
         )
+        if moved:  # the moves follow the PENDING step's counts: adopted once the reader has them (``wait``: read now)
+            paged.moves_counts = lambda wait=False, p=chain["prev"]: (
+                p._data["counts"]
+                if p._data is not None
+                else (self._def_data(p, engine_thread=True)["counts"] if wait else None)
+            )
+        return h
 
     def _def_enqueue(self, kind, tokens, start_pos, pt, active, nv, args, kw, sampling, aux, chain=None):
         """The enqueue half of a fused step (greedy 'g' or sampled 's'; ``chain`` None = host-staged first step of a chain): the call
@@ -5584,6 +5920,9 @@ class MTPSpecEngine:
             event = ttnn.record_event(self.mesh, 0)
             if h is None:
                 h = FusedHandle(self, self._def_next_tip(), kind)
+            if audit is not None and self._paged_state() is not None:
+                # the audit runs at read time (reader thread), after later steps restaged the windows
+                audit["gdn_pages"] = self._paged_state().book.start_pages_snapshot()
             h.event, h.res_t, h.aux_t, h.dr_ts, h.ids_t, h.union, h.audit = (
                 event,
                 res_t,
@@ -5797,8 +6136,15 @@ class MTPSpecEngine:
         min_ = torch.where(cm, pd["counts"] - 1, h.mi_host) * act
         exp_tok = self._def_tokens(h, pd).reshape(-1)
         delta = aux_row_deltas(h.aux, B)  # the per-row deltas this step's fused aux carries (row AUX_DELTA)
+        twin = self._paged_chain_twin()
+        if twin:
+            twin["gdn_pages"] = h.audit["gdn_pages"]
         exp_aux = model._vfy_aux_host(
-            model._vfy_row_positions(p0n.tolist()), min_.tolist(), parity=h.parity, rope_delta=delta
+            model._vfy_row_positions(p0n.tolist()),
+            min_.tolist(),
+            parity=h.parity,
+            rope_delta=delta,
+            **twin,
         )
         exp_fa = h.aux.clone().to(torch.int64)
         exp_fa[AUX_P0, :B] = p0n
