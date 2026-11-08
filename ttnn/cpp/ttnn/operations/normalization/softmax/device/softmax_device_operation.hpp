@@ -68,19 +68,16 @@ struct SoftmaxDeviceOperation {
         static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
             const operation_attributes_t&, const tensor_args_t&, tensor_return_value_t&);
     };
-    // Blackhole interleaved memory: own plan table and kernels. See device/softmax_program_factory_attention_optimized_bh.cpp.
     struct SoftmaxProgramFactoryAttentionOptimizedBH {
         static SoftmaxInterleavedPlan select_plan(const operation_attributes_t&, const tensor_args_t&);
         static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
             const operation_attributes_t&, const tensor_args_t&, tensor_return_value_t&);
     };
-    // Blackhole fp32 rows. See device/softmax_program_factory_attention_optimized_bhf.cpp.
     struct SoftmaxProgramFactoryAttentionOptimizedBHF {
         static SoftmaxInterleavedPlan select_plan(const operation_attributes_t&, const tensor_args_t&);
         static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
             const operation_attributes_t&, const tensor_args_t&, tensor_return_value_t&);
     };
-    // Blackhole bf16 rows wider than 8192. See device/softmax_program_factory_attention_optimized_bhl.cpp.
     struct SoftmaxProgramFactoryAttentionOptimizedBHL {
         static SoftmaxInterleavedPlan select_plan(const operation_attributes_t&, const tensor_args_t&);
         static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
