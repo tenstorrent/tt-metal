@@ -27,6 +27,9 @@ from models.demos.deepseek_v3_d_p.tt.kda.config import (
     convolution_tail_shape,
     decay_projection_program_config,
     l1_when_it_fits,
+    matmul_core_grid,
+    matmul_grid,
+    padded_projection_width,
     tuned_projection_matmul_configs,
     validate_convolution_page_channels,
 )
@@ -128,6 +131,79 @@ class _HistoryExchange:
 _history_exchanges: dict[tuple[int, int], _HistoryExchange] = {}
 
 
+@dataclass
+class _TpGather:
+    """Persistent state of the input projection's in-program TP all-gather (ttnn.experimental.all_gather_minimal_matmul_async, tuned path).
+
+    Peers write this rank's gathered input and bump its counters, possibly before this rank's call starts (once it has
+    started its previous one), so both outlive every call. The ready semaphore lives on the gather column beside the
+    matmul grid, the slice counters on the matmul's first column (its in0 senders), in L1_SMALL when the device has one.
+
+    Every KDA layer on a mesh shares one: the gather's entry handshake orders calls, not layers.
+    """
+
+    gathered: ttnn.Tensor
+    ready: ttnn.GlobalSemaphore
+    counters: list[ttnn.GlobalSemaphore]
+    # Each device's rows of what differs between the devices, so that the op is one program for the mesh.
+    table: ttnn.Tensor
+
+    @classmethod
+    def shared(
+        cls, mesh_device: ttnn.MeshDevice, rows: int, width: int, ranks: int, matmul_grid, axis: int, num_links: int
+    ) -> _TpGather:
+        """The mesh's gather for this geometry, allocated on first use (mesh ids are never reused)."""
+        key = (mesh_device.id(), rows, width, ranks, matmul_grid.x, matmul_grid.y, axis, num_links)
+        if key not in _tp_gathers:
+            gather_column = ttnn.CoreRangeSet(
+                [ttnn.CoreRange(ttnn.CoreCoord(matmul_grid.x, 0), ttnn.CoreCoord(matmul_grid.x, matmul_grid.y - 1))]
+            )
+            in0_senders = ttnn.CoreRangeSet(
+                [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, matmul_grid.y - 1))]
+            )
+            ready = persistent_semaphores(mesh_device, 1, gather_column)[0]
+            counters = persistent_semaphores(mesh_device, ranks - 1, in0_senders)
+            _tp_gathers[key] = cls(
+                gathered=ttnn.allocate_tensor_on_device(
+                    ttnn.Shape([1, rows, width]),
+                    ttnn.bfloat16,
+                    ttnn.TILE_LAYOUT,
+                    mesh_device,
+                    ttnn.DRAM_MEMORY_CONFIG,
+                ),
+                ready=ready,
+                counters=counters,
+                table=_gather_table(mesh_device, axis, num_links, matmul_grid, counters),
+            )
+        return _tp_gathers[key]
+
+
+_tp_gathers: dict[tuple, _TpGather] = {}
+
+
+def _gather_table(mesh_device: ttnn.MeshDevice, axis: int, num_links: int, matmul_grid, counters) -> ttnn.Tensor:
+    """all_gather_minimal_matmul_async's tuned-path per-device table, one [1, 1, rows, 64] UINT32 page-per-row DRAM shard per device."""
+    tables = ttnn._ttnn.operations.experimental.ccl_experimental.all_gather_minimal_matmul_async_gather_table(
+        mesh_device, cluster_axis=axis, num_links=num_links, matmul_grid=matmul_grid, slice_counters=counters
+    )
+    row_words = 64
+    rows = max(len(table) for table in tables) // row_words
+    mesh_shape = tuple(mesh_device.shape)
+    host = torch.zeros((*mesh_shape, rows, row_words), dtype=torch.int64)
+    for index, table in enumerate(tables):
+        host[index // mesh_shape[1], index % mesh_shape[1], : len(table) // row_words] = torch.tensor(
+            table, dtype=torch.int64
+        ).reshape(-1, row_words)
+    return ttnn.from_torch(
+        host.to(torch.int32),  # uint32 bit patterns, wrapped into int32
+        dtype=ttnn.uint32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=mesh_device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(0, 1), mesh_shape=mesh_shape),
+    )
+
+
 @dataclass(frozen=True)
 class KdaState:
     """Caller-owned KDA carries.
@@ -200,6 +276,7 @@ class ttKDA:
         self.gated_rms_output_dtype = program_config.gated_rms_output_dtype
         if weights is not None and state_dict is not None:
             raise ValueError("pass either constructed KDAWeights or host state_dict, not both")
+        owns_weights = weights is None
         if weights is None:
             weights = load_kda_weights(
                 mesh_device,
@@ -281,19 +358,45 @@ class ttKDA:
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
         )
+        # Every projection matmul runs on the matmul grid (KDAProgramConfig.max_matmul_cores).
+        self._matmul_grid = matmul_grid(mesh_device.compute_with_storage_grid_size(), program_config.max_matmul_cores)
+        if program_config.tuned_projection_matmuls:
+            self._pad_input_projection(owns_weights)
         self.input_projection_program_config, self.output_projection_program_config = (
             tuned_projection_matmul_configs(
-                mesh_device.compute_with_storage_grid_size(),
+                self._matmul_grid,
                 self.active_seq_len_local,
                 self.weights.input_projection.shape[-1],
                 *tuple(self.weights.output_projection.shape)[-2:],
+                weight_dtype=self.weights.input_projection.dtype,
             )
             if program_config.tuned_projection_matmuls
             else (None, None)
         )
+        # The TP all-gather of a sharded input runs inside the input projection's program (fuse_tp_gather), on the
+        # worker column right of the matmul grid.
+        self._tp_gather = None
+        device_grid = mesh_device.compute_with_storage_grid_size()
+        if (
+            program_config.fuse_tp_gather
+            and self.tensor_parallel_size > 1
+            and self.input_projection_program_config is not None
+            and self._matmul_grid.x < device_grid.x
+        ):
+            # Two senders per link share the gather column.
+            self._tp_gather_links = max(1, min(self._tp_num_links, self._matmul_grid.y // 2))
+            self._tp_gather = _TpGather.shared(
+                mesh_device,
+                self.active_seq_len_local,
+                self.config.hidden_size,
+                self.tensor_parallel_size,
+                self._matmul_grid,
+                self.tensor_parallel_axis,
+                self._tp_gather_links,
+            )
         decay_width = self.config.num_heads * self.config.head_k_dim
         self.decay_program_config = decay_projection_program_config(
-            mesh_device.compute_with_storage_grid_size(),
+            self._matmul_grid,
             self.active_seq_len_local,
             self.config.head_k_dim,
             decay_width,
@@ -350,12 +453,32 @@ class ttKDA:
                 )
                 == ttnn.Topology.Ring
             )
+            # The op's per-mesh semaphores and mailbox, now: created on its first call they would land in L1 between
+            # this layer's tensors, and a trace captured after one warm-up call would plan on a different free L1.
+            ttnn.matmul_reduce_scatter_prefill_reserve(mesh_device)
             self._fused_output_ccl_kwargs = dict(
                 cluster_axis=self.tensor_parallel_axis,
                 scatter_dim=-1,
                 topology=ttnn.Topology.Ring if ring else ttnn.Topology.Linear,
                 num_links=min(self._tp_num_links, 2),
             )
+
+    def _pad_input_projection(self, owns_weights: bool) -> None:
+        """Pad the input projection's columns to a multiple of the DRAM bank count (padded_projection_width).
+
+        The padding columns are zero and come after every semantic column, so the projection's column offsets are
+        unchanged. A layer that loaded its weights frees the unpadded tensor; caller-provided weights stay intact.
+        """
+        weight = self.weights.input_projection
+        dram_grid = self.device.dram_grid_size()
+        width = padded_projection_width(weight.shape[-1], dram_grid.x * dram_grid.y)
+        if width == weight.padded_shape[-1]:
+            return
+        padding = [(0, 0)] * (len(weight.shape) - 1) + [(0, width - weight.shape[-1])]
+        padded = ttnn.pad(weight, padding=padding, value=0.0, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        if owns_weights:
+            ttnn.deallocate(weight)
+        self.weights = replace(self.weights, input_projection=padded)
 
     @property
     def _convolution_width(self) -> int:
@@ -441,25 +564,49 @@ class ttKDA:
         if state.convolution.dtype != ttnn.bfloat16 or state.convolution.layout != ttnn.ROW_MAJOR_LAYOUT:
             raise ValueError("convolution state must be BF16 row-major")
 
+    def _fuses_tp_gather(self, hidden_states: ttnn.Tensor) -> bool:
+        """Whether this TP-sharded input is gathered inside the input projection's program."""
+        return self._tp_gather is not None and hidden_states.shape[-1] == self._tp_input_width
+
     def _project_inputs(
         self,
         hidden_states: ttnn.Tensor,
     ) -> _ProjectedInputs:
-        """Run the fused input projection and locate its semantic columns."""
+        """Run the fused input projection and locate its semantic columns.
+
+        A TP-sharded input (_fuses_tp_gather) is gathered inside the projection's program, into _TpGather.gathered.
+        """
         config = self.config
         weights = self.weights
         # The tuned schedule writes the projection to L1: it is only read back by this layer (the QKV, decay, beta
         # and output-gate columns, all in place), and its DRAM write would otherwise sit after the last K block,
         # outside the compute.
-        projected = ttnn.linear(
-            hidden_states,
-            weights.input_projection,
-            program_config=self.input_projection_program_config,
-            memory_config=(
-                ttnn.DRAM_MEMORY_CONFIG if self.input_projection_program_config is None else ttnn.L1_MEMORY_CONFIG
-            ),
-            compute_kernel_config=self.input_projection_compute_config,
-        )
+        if self._fuses_tp_gather(hidden_states):
+            gather = self._tp_gather
+            projected = ttnn.experimental.all_gather_minimal_matmul_async(
+                input_tensor=hidden_states,
+                weight_tensor=weights.input_projection,
+                multi_device_global_semaphore=gather.counters,
+                cluster_axis=self.tensor_parallel_axis,
+                persistent_output_buffer=gather.gathered,
+                barrier_semaphore=gather.ready,
+                gather_table=gather.table,
+                matmul_program_config=self.input_projection_program_config,
+                num_links=self._tp_gather_links,
+                compute_kernel_config=self.input_projection_compute_config,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+            )[0]
+        else:
+            projected = ttnn.linear(
+                hidden_states,
+                weights.input_projection,
+                program_config=self.input_projection_program_config,
+                core_grid=None if self.input_projection_program_config else matmul_core_grid(self._matmul_grid),
+                memory_config=(
+                    ttnn.DRAM_MEMORY_CONFIG if self.input_projection_program_config is None else ttnn.L1_MEMORY_CONFIG
+                ),
+                compute_kernel_config=self.input_projection_compute_config,
+            )
         auxiliary_start = self._convolution_width
         return _ProjectedInputs(
             projected=projected,
@@ -566,6 +713,7 @@ class ttKDA:
             weights.output_projection,
             memory_config=self.partial_output_memory_config,
             program_config=self.output_projection_program_config,
+            core_grid=None if self.output_projection_program_config else matmul_core_grid(self._matmul_grid),
             compute_kernel_config=self.output_projection_compute_config,
         )
         if self.tensor_parallel_size > 1:
@@ -614,10 +762,13 @@ class ttKDA:
         # convolution's history-exchange entry barrier below keeps every rank from relaying until all have reserved it:
         # keep an SP barrier between this reservation and the recurrence.
         self.recurrence.reserve_affine_relay()
-        hidden_states, gathered = self._gather_tp_input(hidden_states)
-        inputs = self._project_inputs(hidden_states)
-        if gathered:
-            ttnn.deallocate(hidden_states)
+        if self._fuses_tp_gather(hidden_states):
+            inputs = self._project_inputs(hidden_states)
+        else:
+            hidden_states, gathered = self._gather_tp_input(hidden_states)
+            inputs = self._project_inputs(hidden_states)
+            if gathered:
+                ttnn.deallocate(hidden_states)
         q, k, v, new_convolution = ttnn.experimental.kda.qkv_causal_conv1d_silu_with_carry(
             inputs.projected,
             state.convolution,

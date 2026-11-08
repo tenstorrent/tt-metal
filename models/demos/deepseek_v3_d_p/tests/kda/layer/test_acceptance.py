@@ -153,7 +153,8 @@ def test_synthetic_kimi_k3_accuracy_and_determinism(
     padded = case.hidden.clone()
     padded[:, length:] = float("nan")
     ttnn.deallocate(hidden_tt)
-    hidden_tt = to_sp_input(padded[:, permutation, :], mesh_device, sequence_parallel_axis)
+    # TP-sharded, as the model's residual hands it over: the layer gathers it (inside the input projection on Galaxy).
+    hidden_tt = to_sp_input(padded[:, permutation, :], mesh_device, sequence_parallel_axis, tensor_parallel_axis)
     valid_rows = to_sp_input(
         (permutation < length).to(torch.bfloat16).reshape(1, -1, 1), mesh_device, sequence_parallel_axis
     )
