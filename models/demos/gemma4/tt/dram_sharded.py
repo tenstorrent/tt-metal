@@ -342,12 +342,16 @@ PREFILL_WIDE_GRID_ENV = "GEMMA4_PREFILL_WIDE_GRID"
 # (1, 4) x hidden 3840 (12B TP4): measured 2026-11-06 on a Galaxy QB2 block (12B P300X2 entry, same seeds): TTFT
 # 128/128 c1 99 -> 72 ms, 2K 346 -> 293, 8K 1409 -> 1276, 32K 6468 -> 5916, c32 1466 -> 1229 (aggregate +5 %), decode
 # flat, coherence PASS, matmul PCC vs torch identical to the narrow grid; test_full_model 0.955 -> 0.984.
+# (1, 4) x hidden 2816 (26B TP4): measured 2026-11-08 on a Galaxy QB2 block (26B P300X2 entry, same seeds, the six port
+# knobs together vs off): every point up (prose c1 59.9 -> 63.6 tok/s, c8 302 -> 356, +17.8 %), TTFT lower at every
+# point (c1 136.6 -> 125.7 ms), coherence PASS, GPQA subset 66/80 vs 67/80; the same arm without the grid read flat
+# to +5 % with the c1 TTFT unchanged, so the grid carries the 26B's TTFT gain.
 # (1, 8) x hidden 3840 (12B TP8): measured 2026-11-07 on the Galaxy DP4 engines with the six port knobs together
 # (see default_ccl_oneshot). 5376 (31B) stays out on both shapes: with the grid forced on, the 31B single-user
-# TTFTs improved (QB2 c1 128/1K 156 -> 130 ms, Galaxy 154 -> 128) but the multi-user TTFT read worse in both pairs
-# (QB2 c8 662 -> 855 ms, Galaxy c32 797 -> 852) while c16 improved; the other knobs carry the single-user gain, so
-# 5376 waits for a prefill microbenchmark that isolates the grid.
-PREFILL_WIDE_GRID_DEFAULT = {(1, 4): (3840,), (1, 8): (3840,)}
+# TTFTs improved (QB2 c1 128/1K 137 -> 130 ms, Galaxy 136 -> 128 vs the five-knob arm) but the multi-user TTFT read
+# worse than both the five-knob arm and the knobs-off arm (QB2 c8 593 / 662 -> 855 ms, Galaxy c32 747 / 797 -> 852),
+# so 5376 waits for a prefill microbenchmark that isolates the grid.
+PREFILL_WIDE_GRID_DEFAULT = {(1, 4): (3840, 2816), (1, 8): (3840,)}
 # in0_block_w cap of the wide config (the largest divisor of the K tiles up to it whose CBs fit the budget).
 PREFILL_WIDE_IN0_CAP = max(1, int(os.environ.get("GEMMA4_PREFILL_WIDE_IN0_CAP", "8")))
 
@@ -361,8 +365,8 @@ def prefill_wide_grid_default(mesh_device, k=None, n=None) -> bool:
     config stays). An uneven split over 10+ columns garbled the 31B once (``prefill_max_cols_default``), so only
     exact divisors are taken and the default is per model: ``GEMMA4_PREFILL_WIDE_GRID=1|0`` overrides, else on when
     ``PREFILL_WIDE_GRID_DEFAULT`` lists the weight's hidden size (``k`` or ``n``) for the Blackhole mesh shape (those
-    measured with the PCC gates intact: the 12B 1x4 QB2 block, the (1,8) Galaxy DP4 engine), off elsewhere (Wormhole;
-    the P150x8 Loudbox shares the (1,8) shape and is unmeasured)."""
+    measured with the PCC gates intact: the 12B and 26B 1x4 QB2 blocks, the 12B (1,8) Galaxy DP4 engine), off
+    elsewhere (Wormhole; the P150x8 Loudbox shares the (1,8) shape and is unmeasured)."""
     env = os.environ.get(PREFILL_WIDE_GRID_ENV, "").strip().lower()
     if env:
         return env in ("1", "true", "yes", "on")

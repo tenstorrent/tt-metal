@@ -443,6 +443,7 @@ def test_prefill_wide_progcfg_host(monkeypatch):
 
     mesh = type("M", (), {"shape": (1, 4)})()
     monkeypatch.delenv(PREFILL_WIDE_GRID_ENV, raising=False)
+    assert ds.PREFILL_WIDE_GRID_DEFAULT == {(1, 4): (3840, 2816), (1, 8): (3840,)}  # the shipped table
     monkeypatch.setattr(ds, "PREFILL_WIDE_GRID_DEFAULT", {(1, 4): (3840,), (1, 8): (3840, 5376)})
     monkeypatch.setattr(ds, "is_blackhole", lambda: True)
     assert prefill_wide_grid_default(mesh, 3840, 7680) is True
