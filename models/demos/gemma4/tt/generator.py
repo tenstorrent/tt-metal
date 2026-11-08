@@ -14,6 +14,7 @@ from transformers import AutoTokenizer
 import ttnn
 from models.common.sampling import SamplingParams, slice_sampling_params
 from models.common.sampling.tt_log_probs import LogProbsResult
+from models.common.utility_functions import is_blackhole
 from models.demos.gemma4.tt.common import GEMMA4_CP_PREFILL_CHUNK, create_tt_model, gemma4_cp_prefill_engaged
 from models.demos.gemma4.tt.generator_trace import (
     apply_gemma4_prefill_trace_policy,
@@ -683,8 +684,8 @@ def _g4_dram_bottom_up_bytes(view) -> int:
 
 
 TOKEN_READ_SHARD0_ENV = "GEMMA4_TOKEN_READ_SHARD0"
-# Mesh shapes where the one-shard decode readback is the default (measured: see token_read_shard0_default).
-TOKEN_READ_SHARD0_DEFAULT_SHAPES = ((1, 4),)
+# Blackhole mesh shapes where the one-shard decode readback is the default (measured: see token_read_shard0_default).
+TOKEN_READ_SHARD0_DEFAULT_SHAPES = ((1, 4), (1, 8))
 
 
 def token_read_shard0_default(mesh_device) -> bool:
@@ -694,9 +695,11 @@ def token_read_shard0_default(mesh_device) -> bool:
     Under TP the decode logits are all-gathered inside the model and the device sampler's tokens are replicated, so
     every chip holds the same bytes and ``Gemma4Model.process_output_decode`` consumes shard 0 only; a read of the
     mesh tensor first pins one fresh host buffer per shard (PinnedMemoryCache::try_pin, 1-4 ms per read at TP 4..8),
-    the one-shard read pins one. ``GEMMA4_TOKEN_READ_SHARD0=1|0`` overrides. Policy when unset: on for the mesh
-    shapes in ``TOKEN_READ_SHARD0_DEFAULT_SHAPES`` (those where the served A/B measured a win with the PCC gates
-    intact; the 12B 1x4 QB2 block is the measured basis), off elsewhere (the Galaxy (1,8) line awaits its own A/B).
+    the one-shard read pins one. ``GEMMA4_TOKEN_READ_SHARD0=1|0`` overrides. Policy when unset: on for the Blackhole
+    mesh shapes in ``TOKEN_READ_SHARD0_DEFAULT_SHAPES`` (those where the served A/B measured a win with the PCC
+    gates intact: the 12B 1x4 QB2 block, and the (1,8) Galaxy DP4 engine with the six port knobs together on the
+    12B and the 31B, see ``default_ccl_oneshot``), off elsewhere (Wormhole; the P150x8 Loudbox shares the (1,8)
+    shape and is unmeasured).
     Never on the lane engine (each lane's chip holds its own rows) or under a row-sharded sampler
     (``sampling_dp > 1``), whatever the env says: ``_g4_shard0_read_ok``.
     """
@@ -704,7 +707,7 @@ def token_read_shard0_default(mesh_device) -> bool:
     if env:
         return env in ("1", "true", "yes", "on")
     shape = tuple(int(s) for s in mesh_device.shape) if hasattr(mesh_device, "shape") else ()
-    return shape in TOKEN_READ_SHARD0_DEFAULT_SHAPES
+    return is_blackhole() and shape in TOKEN_READ_SHARD0_DEFAULT_SHAPES
 
 
 class ChunkedPrefillPageTableGuardMixin:

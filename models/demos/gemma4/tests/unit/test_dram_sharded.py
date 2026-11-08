@@ -443,11 +443,19 @@ def test_prefill_wide_progcfg_host(monkeypatch):
 
     mesh = type("M", (), {"shape": (1, 4)})()
     monkeypatch.delenv(PREFILL_WIDE_GRID_ENV, raising=False)
-    monkeypatch.setattr(ds, "PREFILL_WIDE_GRID_DEFAULT", {(1, 4): (3840,)})
+    monkeypatch.setattr(ds, "PREFILL_WIDE_GRID_DEFAULT", {(1, 4): (3840,), (1, 8): (3840, 5376)})
+    monkeypatch.setattr(ds, "is_blackhole", lambda: True)
     assert prefill_wide_grid_default(mesh, 3840, 7680) is True
     assert prefill_wide_grid_default(mesh, 1024, 3840) is True
     assert prefill_wide_grid_default(mesh, 5376, 10752) is False
-    assert prefill_wide_grid_default(type("M", (), {"shape": (1, 8)})(), 3840, 7680) is False
+    galaxy_engine = type("M", (), {"shape": (1, 8)})()
+    assert prefill_wide_grid_default(galaxy_engine, 3840, 7680) is True
+    assert prefill_wide_grid_default(galaxy_engine, 5376, 10752) is True
+    assert prefill_wide_grid_default(type("M", (), {"shape": (8, 4)})(), 3840, 7680) is False
+    monkeypatch.setattr(ds, "is_blackhole", lambda: False)  # Wormhole (T3K is (1,8) too)
+    assert prefill_wide_grid_default(mesh, 3840, 7680) is False
+    assert prefill_wide_grid_default(galaxy_engine, 3840, 7680) is False
+    monkeypatch.setattr(ds, "is_blackhole", lambda: True)
     monkeypatch.setenv(PREFILL_WIDE_GRID_ENV, "0")
     assert prefill_wide_grid_default(mesh, 3840, 7680) is False
     monkeypatch.setenv(PREFILL_WIDE_GRID_ENV, "1")

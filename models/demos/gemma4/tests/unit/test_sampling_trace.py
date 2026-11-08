@@ -162,5 +162,8 @@ def test_sampling_trace_default_policy(monkeypatch):
     from models.demos.gemma4.tt import model as model_module
 
     monkeypatch.setattr(model_module, "SAMPLING_TRACE_DEFAULT_SHAPES", ((1, 4),))
+    monkeypatch.setattr(model_module, "is_blackhole", lambda: True)
     assert sampling_trace_default(mesh) is True
     assert sampling_trace_default(SimpleNamespace(shape=(1, 8))) is False
+    monkeypatch.setattr(model_module, "is_blackhole", lambda: False)  # Wormhole: never by default
+    assert sampling_trace_default(mesh) is False

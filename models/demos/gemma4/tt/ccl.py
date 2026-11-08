@@ -121,15 +121,15 @@ def allreduce_gather_sum_enabled() -> bool:
 ONESHOT_SLOTS = ("o", "down")
 # Mesh shapes whose builds take the one-shot all-reduce by default (default_ccl_oneshot); the measured basis is in
 # its docstring. A shape joins when a served knob A/B measures a decode win with the PCC gates intact.
-_ONESHOT_DEFAULT_ON_SHAPES = ((1, 4),)
+_ONESHOT_DEFAULT_ON_SHAPES = ((1, 4), (1, 8))
 
 
 def default_ccl_oneshot(mesh_shape=None) -> bool:
     """Default of the one-shot decode all-reduce for a mesh shape (``GEMMA4_CCL_ONESHOT=0|1`` overrides).
 
-    Policy: ON only for the shapes in ``_ONESHOT_DEFAULT_ON_SHAPES``, i.e. where a knob A/B on the served model
-    measured a decode gain with every PCC gate intact; OFF everywhere else (unmeasured shapes, the lane engine, the
-    fractured Galaxy, Wormhole).
+    Policy: ON only on Blackhole for the shapes in ``_ONESHOT_DEFAULT_ON_SHAPES``, i.e. where a knob A/B on the
+    served model measured a decode gain with every PCC gate intact; OFF everywhere else (unmeasured shapes, the lane
+    engine, the fractured Galaxy, and Wormhole: the T3K shares the (1,8) shape and is unmeasured).
 
     Measured basis for (1,4), 12B on the 4-chip Blackhole QB2 mesh (2026-11-06, tt-metal-port, bf16 payload):
     traced B=1 decode step 17.59 -> 15.67 ms on the Linear line and 16.93 -> 15.31 ms on the ring with 2 links
@@ -142,11 +142,17 @@ def default_ccl_oneshot(mesh_shape=None) -> bool:
     layer, 24 batched-attention nodes, full model) vs the composite on the same tree: 28 / 30 nodes equal or higher
     (full-model decode 0.9697 -> 0.9735), two attention nodes 1e-6 and 2e-6 lower (bf16 summation order, below the
     thresholds' precision; with fp32 destination accumulation 29 / 30 and one node 6e-6 lower at the same step
-    time); the bfp8 payload lowers 26 / 30 nodes by 1e-5..9e-5 and stays excluded. The (1,8) Galaxy DP4 engine is
-    unmeasured (needs ``GEMMA4_CCL_TOPOLOGY=linear``: ``default_ccl_topology`` picks Ring for 8 Blackhole chips and
-    the engine has no ring route).
+    time); the bfp8 payload lowers 26 / 30 nodes by 1e-5..9e-5 and stays excluded.
+
+    Measured basis for (1,8), the Blackhole Galaxy DP4 engine (2026-11-07, the six port knobs together on the
+    BLACKHOLE_GALAXY entries, same seeds, 0 throws): 12B greedy 128/1K c1 68.6 -> 89.0 tok/s/u, sampled c1 +10 %,
+    prose c1 / c16 / c32 +8 / +14 / +7 %, TTFT lower at every point, GPQA subset 31/40 = base; 31B greedy c1
+    51.8 -> 55.8, sampled c1 +5 %, prose c1 / c16 / c32 +6 / +8 / +9 %, greedy after sampled +21 %, GPQA subset
+    65/80 with the six knobs vs 66/80 base over two rounds (five knobs without the wide grid 34/40, without the
+    one-shot 36/40: all within noise). The P150x8 Loudbox shares the arch and the shape and is unmeasured; the
+    T3K (Wormhole) is excluded by the arch guard.
     """
-    if mesh_shape is None:
+    if mesh_shape is None or not is_blackhole():
         return False
     return tuple(int(d) for d in mesh_shape) in _ONESHOT_DEFAULT_ON_SHAPES
 

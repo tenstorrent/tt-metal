@@ -60,14 +60,19 @@ def _pcc(a, b):
     return float(comp_pcc(a, b, 0.0)[1])
 
 
-def test_oneshot_knobs(monkeypatch):
+def test_oneshot_knobs(monkeypatch, expect_error):
     """Host-only: the policy default, the env override, the payload dtype and the build-level gate."""
     monkeypatch.delenv("GEMMA4_CCL_ONESHOT", raising=False)
     monkeypatch.delenv("GEMMA4_CCL_ONESHOT_DTYPE", raising=False)
     assert ccl_mod.ccl_oneshot_enabled(mesh_shape=None) is False
+    monkeypatch.setattr(ccl_mod, "is_blackhole", lambda: True)
     for shape in ((1, 4), (4, 1), (1, 8), (8, 4), (1, 1)):
         assert ccl_mod.ccl_oneshot_enabled(mesh_shape=shape) == ccl_mod.default_ccl_oneshot(shape)
         assert ccl_mod.default_ccl_oneshot(shape) == (shape in ccl_mod._ONESHOT_DEFAULT_ON_SHAPES)
+    assert ccl_mod.default_ccl_oneshot((1, 4)) and ccl_mod.default_ccl_oneshot((1, 8))
+    monkeypatch.setattr(ccl_mod, "is_blackhole", lambda: False)  # Wormhole (T3K is (1,8) too): never by default
+    assert not any(ccl_mod.default_ccl_oneshot(s) for s in ((1, 4), (1, 8)))
+    monkeypatch.setattr(ccl_mod, "is_blackhole", lambda: True)
     monkeypatch.setenv("GEMMA4_CCL_ONESHOT", "0")
     assert not any(ccl_mod.ccl_oneshot_enabled(mesh_shape=s) for s in ((1, 4), (1, 8)))
     monkeypatch.setenv("GEMMA4_CCL_ONESHOT", "1")
@@ -76,7 +81,7 @@ def test_oneshot_knobs(monkeypatch):
     monkeypatch.setenv("GEMMA4_CCL_ONESHOT_DTYPE", "bfp8")
     assert ccl_mod.ccl_oneshot_dtype() == ttnn.bfloat8_b
     monkeypatch.setenv("GEMMA4_CCL_ONESHOT_DTYPE", "fp32")
-    with pytest.raises(ValueError):
+    with expect_error(ValueError, "expected bf16 or bfp8"):
         ccl_mod.ccl_oneshot_dtype()
     monkeypatch.setenv("GEMMA4_CCL_ONESHOT_DTYPE", "bfp8")
     manager = object()

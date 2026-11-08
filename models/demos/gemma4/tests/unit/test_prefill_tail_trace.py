@@ -130,11 +130,18 @@ def test_prefill_tail_in_trace_default_policy(monkeypatch):
     monkeypatch.setenv(PREFILL_TAIL_TRACE_ENV, "0")
     assert prefill_tail_in_trace_default(mesh) is False
     monkeypatch.delenv(PREFILL_TAIL_TRACE_ENV)
-    assert prefill_tail_in_trace_default(mesh) is False
     from models.demos.gemma4.tt import model as model_module
 
-    monkeypatch.setattr(model_module, "PREFILL_TAIL_TRACE_DEFAULT_SHAPES", ((1, 4),))
+    monkeypatch.setattr(model_module, "is_blackhole", lambda: True)
+    assert prefill_tail_in_trace_default(mesh) is True  # the shipped (1,4) default
+    monkeypatch.setattr(model_module, "PREFILL_TAIL_TRACE_DEFAULT_SHAPES", ())
+    assert prefill_tail_in_trace_default(mesh) is False
+    monkeypatch.setattr(model_module, "PREFILL_TAIL_TRACE_DEFAULT_SHAPES", ((1, 4), (1, 8)))
     assert prefill_tail_in_trace_default(mesh) is True
+    assert prefill_tail_in_trace_default(SimpleNamespace(shape=(1, 8))) is True
+    assert prefill_tail_in_trace_default(SimpleNamespace(shape=(8, 4))) is False
+    monkeypatch.setattr(model_module, "is_blackhole", lambda: False)  # Wormhole (T3K is (1,8) too)
+    assert prefill_tail_in_trace_default(mesh) is False
     assert prefill_tail_in_trace_default(SimpleNamespace(shape=(1, 8))) is False
 
 

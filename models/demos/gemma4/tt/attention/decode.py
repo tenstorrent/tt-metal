@@ -12,6 +12,7 @@ import os
 from loguru import logger
 
 import ttnn
+from models.common.utility_functions import is_blackhole
 from models.demos.gemma4.custom_ops.grid import (
     SDPA_DECODE_TILE_BYTES,
     plan_packed_sdpa,
@@ -235,8 +236,8 @@ def packed_kv_write_loop(
 
 
 KV_FUSED_UPDATE_ENV = "GEMMA4_KV_FUSED_UPDATE"
-# Mesh shapes where the fused K+V cache write is the default (measured: see kv_fused_update_default).
-KV_FUSED_UPDATE_DEFAULT_SHAPES = ((1, 4),)
+# Blackhole mesh shapes where the fused K+V cache write is the default (measured: see kv_fused_update_default).
+KV_FUSED_UPDATE_DEFAULT_SHAPES = ((1, 4), (1, 8))
 KV_FUSED_STATS = {"fused": 0}  # fused-program calls (unit-test hook)
 _KV_FUSED_NOTED = set()
 
@@ -245,17 +246,18 @@ def kv_fused_update_default(mesh_device) -> bool:
     """Whether the decode K and V cache writes run as ONE ``paged_fused_update_cache`` program per layer (item 11 of
     the gemma4_12b_qb2 port) instead of two ``paged_update_cache`` programs.
 
-    ``GEMMA4_KV_FUSED_UPDATE=1|0`` overrides. Policy when unset: on for the mesh shapes in
-    ``KV_FUSED_UPDATE_DEFAULT_SHAPES`` (those where the served A/B measured a win with the PCC gates intact; the
-    12B 1x4 QB2 block is the measured basis), off everywhere else (the Galaxy (1,8) line and the lane / fractured
-    meshes await their own A/B). The fused program needs V on cores disjoint from K's, which the composite head path
+    ``GEMMA4_KV_FUSED_UPDATE=1|0`` overrides. Policy when unset: on for the Blackhole mesh shapes in
+    ``KV_FUSED_UPDATE_DEFAULT_SHAPES`` (those where the served A/B measured a win with the PCC gates intact: the
+    12B 1x4 QB2 block, and the (1,8) Galaxy DP4 engine with the six port knobs together on the 12B and the 31B,
+    see ``default_ccl_oneshot``), off everywhere else (Wormhole, the lane / fractured meshes; the P150x8 Loudbox
+    shares the (1,8) shape and is unmeasured). The fused program needs V on cores disjoint from K's, which the composite head path
     gives for free and ``QkvHeadsNormRope`` emits on request; the ``QkvNormRope`` form (the MoE and lane builds) keeps
     K and V on one grid and stays on two programs regardless (``kv_fused_update_reason``)."""
     env = os.environ.get(KV_FUSED_UPDATE_ENV, "").strip().lower()
     if env:
         return env in ("1", "true", "yes", "on")
     shape = tuple(int(s) for s in mesh_device.shape) if hasattr(mesh_device, "shape") else ()
-    return shape in KV_FUSED_UPDATE_DEFAULT_SHAPES
+    return is_blackhole() and shape in KV_FUSED_UPDATE_DEFAULT_SHAPES
 
 
 def kv_fused_update_reason(k_cache, v_cache, config, num_local_kv_heads, *, batch, page_table, sequential, qkv_path):

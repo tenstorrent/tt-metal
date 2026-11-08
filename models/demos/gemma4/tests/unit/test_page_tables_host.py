@@ -325,14 +325,14 @@ def test_warmup_broadcast_then_per_group_tables_land_on_the_same_buffers(monkeyp
     assert len(copies) == 3
 
 
-def test_a_layer_that_leaves_its_group_slot_raises_instead_of_reallocating(monkeypatch):
+def test_a_layer_that_leaves_its_group_slot_raises_instead_of_reallocating(monkeypatch, expect_error):
     copies = []
     m = _model_persistent_page_table_sharing(monkeypatch, copies)
     m.update_persistent_per_layer_page_tables(_group_tables(0, m._page_table_slots))
     buffers = list(m._persistent_per_layer_page_tables)
     tables = _group_tables(3, m._page_table_slots)
     tables[2] = tables[2].clone() + 1000  # layer 2 leaves slot 0 (layer 0's)
-    with pytest.raises(ValueError, match="layers 0 and 2 differ inside one KV-cache group slot"):
+    with expect_error(ValueError, "layers 0 and 2 differ inside one KV-cache group slot"):
         m.update_persistent_per_layer_page_tables(tables)
     assert m._persistent_per_layer_page_tables == buffers
 
@@ -356,8 +356,13 @@ def test_share_page_tables_default_policy(monkeypatch):
     monkeypatch.delenv(model_module.SHARE_PAGE_TABLES_ENV)
     monkeypatch.setattr(model_module, "SHARE_PAGE_TABLES_DEFAULT_SHAPES", ())
     assert model_module.share_page_tables_default(mesh) is False
-    monkeypatch.setattr(model_module, "SHARE_PAGE_TABLES_DEFAULT_SHAPES", ((1, 4),))
+    monkeypatch.setattr(model_module, "SHARE_PAGE_TABLES_DEFAULT_SHAPES", ((1, 4), (1, 8)))
+    monkeypatch.setattr(model_module, "is_blackhole", lambda: True)
     assert model_module.share_page_tables_default(mesh) is True
+    assert model_module.share_page_tables_default(SimpleNamespace(shape=(1, 8))) is True
+    assert model_module.share_page_tables_default(SimpleNamespace(shape=(8, 4))) is False
+    monkeypatch.setattr(model_module, "is_blackhole", lambda: False)  # Wormhole (T3K is (1,8) too)
+    assert model_module.share_page_tables_default(mesh) is False
     assert model_module.share_page_tables_default(SimpleNamespace(shape=(1, 8))) is False
 
 

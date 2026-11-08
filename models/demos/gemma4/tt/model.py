@@ -287,7 +287,7 @@ class _LaneSamplingGenerator(SamplingGenerator):
 
 
 SAMPLING_TRACE_ENV = "GEMMA4_SAMPLING_TRACE"
-# Mesh shapes where the replayed sampling trace is the default (measured: see sampling_trace_default).
+# Blackhole mesh shapes where the replayed sampling trace is the default (measured: see sampling_trace_default).
 SAMPLING_TRACE_DEFAULT_SHAPES = ()
 
 
@@ -301,9 +301,9 @@ def sampling_trace_default(mesh_device, mesh_config=None) -> bool:
     plain keys (greedy = force-argmax, and sampled) during the warmup sweep and replays them; requests with an
     explicit seed, penalties, log probs or a grammar mask keep the eager sampler (the seed tensor is rewritten
     every token on the host), as does any key without a captured trace outside the warmup (no capture under load).
-    ``GEMMA4_SAMPLING_TRACE=1|0`` overrides. Policy when unset: on for the mesh shapes in
-    ``SAMPLING_TRACE_DEFAULT_SHAPES`` (those where the served A/B measured a win with the PCC gates intact; the 12B
-    1x4 QB2 block is the measured basis), off elsewhere. Never on the lane engine or a fractured mesh, whatever the
+    ``GEMMA4_SAMPLING_TRACE=1|0`` overrides. Policy when unset: on for the Blackhole mesh shapes in
+    ``SAMPLING_TRACE_DEFAULT_SHAPES`` (none: on the 12B 1x4 QB2 block the replay lost at single-user sampled, TTFT
+    99 -> 206 ms with decode-trace re-captures), off elsewhere. Never on the lane engine or a fractured mesh, whatever the
     env says (the lane sampler groups rows per lane column; the fracture-aware sampler drops the top-k programs).
     """
     if mesh_config is not None and (
@@ -314,15 +314,16 @@ def sampling_trace_default(mesh_device, mesh_config=None) -> bool:
     if env:
         return env in ("1", "true", "yes", "on")
     shape = tuple(int(s) for s in mesh_device.shape) if hasattr(mesh_device, "shape") else ()
-    return shape in SAMPLING_TRACE_DEFAULT_SHAPES
+    return is_blackhole() and shape in SAMPLING_TRACE_DEFAULT_SHAPES
 
 
 SHARE_PAGE_TABLES_ENV = "GEMMA4_SHARE_PAGE_TABLES"
-# Mesh shapes where the per-group page-table buffers are the default (measured: see share_page_tables_default).
+# Blackhole mesh shapes where the per-group page-table buffers are the default (measured: see share_page_tables_default).
 # (1, 4): measured 2026-11-06 on a Galaxy QB2 block (12B P300X2 entry, same seeds): the 48 per-layer page-table
 # copies per prefill become 6 per-group ones (install 9.2 -> 5.7 ms x2), TTFT 128/128 c1 99 -> 90 ms, decode flat,
 # coherence PASS, PCC bit-identical.
-SHARE_PAGE_TABLES_DEFAULT_SHAPES = ((1, 4),)
+# (1, 8): measured 2026-11-07 on the Galaxy DP4 engines with the six port knobs together (see default_ccl_oneshot).
+SHARE_PAGE_TABLES_DEFAULT_SHAPES = ((1, 4), (1, 8))
 
 
 def page_table_group_slots(layer_types, kv_shared_layer_map=None):
@@ -351,9 +352,10 @@ def share_page_tables_default(mesh_device, mesh_config=None, *, bounded_sliding=
     (``page_table_group_slots``), never on the host objects a call carries: the warmup broadcasts one legacy table
     to every layer, so the earlier host-identity sharing put all 48 layers on one buffer and had to rebuild them
     under the captured decode traces and the speculative records at the first real request (the 2026-11-05 hang).
-    ``GEMMA4_SHARE_PAGE_TABLES=1|0`` overrides. Policy when unset: on for the mesh shapes in
-    ``SHARE_PAGE_TABLES_DEFAULT_SHAPES`` (those where the served A/B measured a win with the PCC gates intact; the
-    12B 1x4 QB2 block is the measured basis), off elsewhere. Never on the lane engine or a fractured mesh (the
+    ``GEMMA4_SHARE_PAGE_TABLES=1|0`` overrides. Policy when unset: on for the Blackhole mesh shapes in
+    ``SHARE_PAGE_TABLES_DEFAULT_SHAPES`` (those where the served A/B measured a win with the PCC gates intact: the
+    12B 1x4 QB2 block and the (1,8) Galaxy DP4 engine), off elsewhere (Wormhole; the P150x8 Loudbox shares the
+    (1,8) shape and is unmeasured). Never on the lane engine or a fractured mesh (the
     device layout is per layer), under bounded sliding (the ring remap is per layer) or with KV-shared layers (the
     grouping is unverified there), whatever the env says.
     """
@@ -367,14 +369,15 @@ def share_page_tables_default(mesh_device, mesh_config=None, *, bounded_sliding=
     if env:
         return env in ("1", "true", "yes", "on")
     shape = tuple(int(s) for s in mesh_device.shape) if hasattr(mesh_device, "shape") else ()
-    return shape in SHARE_PAGE_TABLES_DEFAULT_SHAPES
+    return is_blackhole() and shape in SHARE_PAGE_TABLES_DEFAULT_SHAPES
 
 
 PREFILL_TAIL_TRACE_ENV = "GEMMA4_PREFILL_TAIL_IN_TRACE"
-# Mesh shapes where the traced prefill tail is the default (measured: see prefill_tail_in_trace_default).
+# Blackhole mesh shapes where the traced prefill tail is the default (measured: see prefill_tail_in_trace_default).
 # (1, 4): measured 2026-11-06 on a Galaxy QB2 block (12B P300X2 entry, same seeds): TTFT 2K/128 c1 346 -> 329 ms,
 # 128/128 flat, decode flat, coherence PASS, traced tail bit-exact vs the eager tail.
-PREFILL_TAIL_TRACE_DEFAULT_SHAPES = ((1, 4),)
+# (1, 8): measured 2026-11-07 on the Galaxy DP4 engines with the six port knobs together (see default_ccl_oneshot).
+PREFILL_TAIL_TRACE_DEFAULT_SHAPES = ((1, 4), (1, 8))
 
 
 def prefill_tail_in_trace_default(mesh_device, mesh_config=None) -> bool:
@@ -384,9 +387,10 @@ def prefill_tail_in_trace_default(mesh_device, mesh_config=None) -> bool:
     logits stay TP-sharded on their chips: the host reads one row per chip and concatenates the vocabulary
     (``process_output_prefill``), the device sampler takes the shards as it does for decode. The eager tail stays
     for the batched form, the traced chunk walk and bounded sliding (``_prefill_tail_in_trace_applies``).
-    ``GEMMA4_PREFILL_TAIL_IN_TRACE=1|0`` overrides. Policy when unset: on for the mesh shapes in
-    ``PREFILL_TAIL_TRACE_DEFAULT_SHAPES`` (those where the served A/B measured a win with the PCC gates intact; the
-    12B 1x4 QB2 block is the measured basis), off elsewhere. Never on the lane engine or a fractured mesh (the
+    ``GEMMA4_PREFILL_TAIL_IN_TRACE=1|0`` overrides. Policy when unset: on for the Blackhole mesh shapes in
+    ``PREFILL_TAIL_TRACE_DEFAULT_SHAPES`` (those where the served A/B measured a win with the PCC gates intact: the
+    12B 1x4 QB2 block and the (1,8) Galaxy DP4 engine), off elsewhere (Wormhole; the P150x8 Loudbox shares the
+    (1,8) shape and is unmeasured). Never on the lane engine or a fractured mesh (the
     owner-lane readback and the fracture-aware sampler read the gathered tile), whatever the env says.
     """
     if mesh_config is not None and (
@@ -397,7 +401,7 @@ def prefill_tail_in_trace_default(mesh_device, mesh_config=None) -> bool:
     if env:
         return env in ("1", "true", "yes", "on")
     shape = tuple(int(s) for s in mesh_device.shape) if hasattr(mesh_device, "shape") else ()
-    return shape in PREFILL_TAIL_TRACE_DEFAULT_SHAPES
+    return is_blackhole() and shape in PREFILL_TAIL_TRACE_DEFAULT_SHAPES
 
 
 class Gemma4Model:

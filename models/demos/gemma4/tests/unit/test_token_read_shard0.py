@@ -109,6 +109,11 @@ def test_token_read_shard0_gates(monkeypatch):
     monkeypatch.delenv(TOKEN_READ_SHARD0_ENV)
     from models.demos.gemma4.tt import generator as generator_module
 
-    monkeypatch.setattr(generator_module, "TOKEN_READ_SHARD0_DEFAULT_SHAPES", ((1, 4),))
+    monkeypatch.setattr(generator_module, "TOKEN_READ_SHARD0_DEFAULT_SHAPES", ((1, 4), (1, 8)))
+    monkeypatch.setattr(generator_module, "is_blackhole", lambda: True)
     assert token_read_shard0_default(mesh) is True
+    assert token_read_shard0_default(SimpleNamespace(shape=(1, 8))) is True
     assert token_read_shard0_default(SimpleNamespace(shape=(8, 4))) is False
+    monkeypatch.setattr(generator_module, "is_blackhole", lambda: False)  # Wormhole (T3K is (1,8) too)
+    assert token_read_shard0_default(mesh) is False
+    assert token_read_shard0_default(SimpleNamespace(shape=(1, 8))) is False

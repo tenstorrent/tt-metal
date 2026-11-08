@@ -231,7 +231,12 @@ def test_kv_fused_update_default_policy(monkeypatch):
     monkeypatch.delenv(KV_FUSED_UPDATE_ENV)
     from models.demos.gemma4.tt.attention import decode as decode_module
 
-    monkeypatch.setattr(decode_module, "KV_FUSED_UPDATE_DEFAULT_SHAPES", ((1, 4),))
+    monkeypatch.setattr(decode_module, "KV_FUSED_UPDATE_DEFAULT_SHAPES", ((1, 4), (1, 8)))
+    monkeypatch.setattr(decode_module, "is_blackhole", lambda: True)
     assert kv_fused_update_default(mesh) is True
+    assert kv_fused_update_default(SimpleNamespace(shape=(1, 8))) is True
     assert kv_fused_update_default(SimpleNamespace(shape=(8, 4))) is False
     assert kv_fused_update_default(None) is False
+    monkeypatch.setattr(decode_module, "is_blackhole", lambda: False)  # Wormhole (T3K is (1,8) too)
+    assert kv_fused_update_default(mesh) is False
+    assert kv_fused_update_default(SimpleNamespace(shape=(1, 8))) is False
