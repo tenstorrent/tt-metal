@@ -55,19 +55,15 @@ uint64_t required_cb_bytes(const BandGeometry& g, uint32_t tile_bytes) {
     return static_cast<uint64_t>(3 * g.total_in_wt + 3 * g.out_wt) * tile_bytes;
 }
 
-// Static conditions only (layout, dtype, dims, alignment); no L1 budget. Shared by the
-// eligibility check and the post-selection sanity check in create_descriptor, which runs
-// after the output buffer is allocated and therefore must not re-evaluate the budget.
-bool is_supported_tiled_unaligned_config(
+// Every condition the factory can decide from the tensors and attributes alone, apart from the input
+// count. Split out so the composite ttnn::concat can tell a call this factory could serve if only it
+// took fewer inputs (which it serves by grouping them) from one it cannot serve at all.
+bool is_tiled_unaligned_candidate(
     const std::vector<Tensor>& input_tensors,
     uint32_t normalized_dim,
     unsigned int groups,
     const tt::tt_metal::MemoryConfig& output_mem_config) {
     if (groups != 1 || input_tensors.size() < 2) {
-        return false;
-    }
-    // Runtime args stay well within limits for any practical input count; cap defensively.
-    if (input_tensors.size() > 32) {
         return false;
     }
     if (output_mem_config.is_sharded()) {
@@ -107,7 +103,37 @@ bool is_supported_tiled_unaligned_config(
     return compute_band_geometry(input_tensors).num_bands > 0;
 }
 
+// Static conditions only (layout, dtype, dims, alignment); no L1 budget. Shared by the
+// eligibility check and the post-selection sanity check in create_descriptor, which runs
+// after the output buffer is allocated and therefore must not re-evaluate the budget.
+bool is_supported_tiled_unaligned_config(
+    const std::vector<Tensor>& input_tensors,
+    uint32_t normalized_dim,
+    unsigned int groups,
+    const tt::tt_metal::MemoryConfig& output_mem_config) {
+    if (!is_tiled_unaligned_candidate(input_tensors, normalized_dim, groups, output_mem_config)) {
+        return false;
+    }
+    // The circular buffers hold a whole band of every input at once, so their size is what bounds
+    // how many inputs one program can carry. That bound is measured at runtime against the free L1
+    // window in can_use_tiled_unaligned_concat, which rejects a call that does not fit; the count
+    // limit here is the point past which ttnn::concat groups the inputs instead, so that a count
+    // which does not fit is served by several programs rather than falling back to the composite
+    // untilize/transpose/chunk pipeline.
+    return input_tensors.size() <= kMaxTiledUnalignedConcatInputs;
+}
+
 }  // namespace
+
+// Static eligibility with the input count ignored. ttnn::concat uses it to decide that a long input
+// list should be grouped across several factory programs rather than handed to the composite path.
+bool is_tiled_unaligned_concat_candidate(
+    const std::vector<Tensor>& input_tensors,
+    uint32_t normalized_dim,
+    unsigned int groups,
+    const tt::tt_metal::MemoryConfig& output_mem_config) {
+    return is_tiled_unaligned_candidate(input_tensors, normalized_dim, groups, output_mem_config);
+}
 
 bool can_use_tiled_unaligned_concat(
     const std::vector<Tensor>& input_tensors,
