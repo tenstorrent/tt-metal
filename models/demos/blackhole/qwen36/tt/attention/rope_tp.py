@@ -8,6 +8,7 @@ HuggingFace split-halves format. These operate on per-device head shards, so
 they are unchanged by TP (each device rotates its local heads).
 """
 import itertools
+import os
 
 import torch
 
@@ -333,9 +334,67 @@ def apply_partial_rope_decode(x, cos_tt, sin_tt, n_heads, batch_size, rope_dim):
     ttnn.deallocate(roped_t)
     if rope_dim == hd:
         return roped
-    x_pass = ttnn.to_memory_config(ttnn.slice(x, (0, 0, 0, rope_dim), (1, B, n_heads, hd)), ttnn.DRAM_MEMORY_CONFIG)
+    from models.demos.blackhole.qwen36.tt.tp_common import attn_glue_cuts_enabled
+
+    if attn_glue_cuts_enabled():  # QWEN36_ATTN_GLUE_CUTS: the slice writes DRAM itself (same bytes, no copy op)
+        x_pass = ttnn.slice(x, (0, 0, 0, rope_dim), (1, B, n_heads, hd), memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    else:
+        x_pass = ttnn.to_memory_config(
+            ttnn.slice(x, (0, 0, 0, rope_dim), (1, B, n_heads, hd)), ttnn.DRAM_MEMORY_CONFIG
+        )
     result = ttnn.concat([roped, x_pass], dim=-1)
     ttnn.deallocate(roped)
+    ttnn.deallocate(x_pass)
+    return result
+
+
+def apply_partial_rope_decode_single(
+    x, cos_tt, sin_tt, rope_dim, memory_config=ttnn.L1_MEMORY_CONFIG, out_memory_config=None
+):
+    """Single-user (B == 1) decode partial-RoPE with NO transposes (lean decode path).
+
+    x: [1, 1, n_heads, HD] TILE interleaved; cos/sin: [1, 1, 1, rope_dim] TILE (HF split-halves
+    ``cat([freqs, freqs])`` -- what ``rot_mats_decode`` / ``unpack_rope`` hand the layer at B == 1).
+    Rotates the first ``rope_dim`` dims, passes the tail through. Consumes (deallocates) ``x``.
+    ``memory_config`` is used for the intermediates; ``out_memory_config`` (default: ``memory_config``) is the memory
+    config of the returned tensor (e.g. DRAM for a q that feeds paged SDPA decode, which rejects L1-interleaved q).
+
+    The heads sit on the row axis, so ``ttnn.experimental.rotary_embedding(..., token_index=0)`` (its decode
+    mode: the single cos/sin row ``token_index % 32`` is broadcast over every input row) rotates all heads
+    of the one user directly -- vs ``apply_partial_rope_decode``, which transposes the heads onto the
+    column axis and back to use per-row cos/sin. B > 1 needs per-user cos/sin (a different row per user),
+    which this mode cannot express, so callers keep ``apply_partial_rope_decode`` for B > 1.
+
+    Same rotation convention as ``rotary_embedding_hf``: both ops compute ``x*cos + rotate_half(x)*sin`` with
+    rotate_half = tile-granular half swap (first half of the tiles gets ``-1 * second half``), i.e. HF
+    ``cat(-x2, x1)``; at rope_dim == 64 the midpoint is exactly the tile boundary (x1 = dims 0-31).
+    The op returns the input's *padded* shape as its logical shape ([1,1,32,rope_dim]); the reshape restores
+    the logical heads (a pure view) so the concat with the pass-through slice lines up.
+    """
+    assert x.shape[1] == 1, "apply_partial_rope_decode_single is the B == 1 path"
+    n_heads, hd = x.shape[-2], x.shape[-1]
+    if list(cos_tt.shape) != [1, 1, 1, rope_dim]:
+        cos_tt = ttnn.reshape(cos_tt, (1, 1, 1, rope_dim))
+        sin_tt = ttnn.reshape(sin_tt, (1, 1, 1, rope_dim))
+    part = ttnn.slice(x, (0, 0, 0, 0), (1, 1, n_heads, rope_dim), memory_config=memory_config)
+    rotated = ttnn.reshape(
+        ttnn.experimental.rotary_embedding(part, cos_tt, sin_tt, token_index=0, memory_config=memory_config),
+        part.shape,
+        part.padded_shape,
+    )
+    ttnn.deallocate(part)
+    out_memory_config = out_memory_config or memory_config
+    if rope_dim == hd:
+        ttnn.deallocate(x)
+        if out_memory_config != memory_config:
+            moved = ttnn.to_memory_config(rotated, out_memory_config)
+            ttnn.deallocate(rotated)
+            return moved
+        return rotated
+    x_pass = ttnn.slice(x, (0, 0, 0, rope_dim), (1, 1, n_heads, hd), memory_config=memory_config)
+    ttnn.deallocate(x)
+    result = ttnn.concat([rotated, x_pass], dim=-1, memory_config=out_memory_config)
+    ttnn.deallocate(rotated)
     ttnn.deallocate(x_pass)
     return result
 
@@ -360,3 +419,175 @@ def apply_partial_rope_prefill(x, cos_tt, sin_tt, n_heads, rope_dim):
     ttnn.deallocate(roped)
     ttnn.deallocate(x_pass)
     return result
+
+
+# ---------------------------------------------------------------------------------------------------------------
+# QWEN36_ROPE_PERM: full-width RoPE on channel-permuted q/k heads (full-attention layers; not the MTP drafter).
+#
+# HF partial RoPE rotates channels [0, rd) of each head with rotate-half pairs (i, i + rd/2). The q/k projection rows and
+# the q_norm / k_norm weights are permuted at load so that pair (i, i + rd/2), i < rd/2, sits at lanes (i, i + hd/2) and the
+# hd - rd pass-through channels fill the other lanes in order. Then ONE rotary_embedding_hf over the whole head (its
+# tile-granular half swap pairs lane i with i + hd/2) with hd-wide cos/sin (cos = 1, sin = 0 on pass-through lanes) equals
+# the slice / rotate / concat chain followed by the same permutation, bit for bit. q.k is invariant when q and k share the
+# permutation; V, the KV layout and wo need no change.
+# ---------------------------------------------------------------------------------------------------------------
+def rope_perm_env_on():
+    """QWEN36_ROPE_PERM (default "1"); "0" keeps the old code and the old weight cache keys."""
+    return os.environ.get("QWEN36_ROPE_PERM", "1") == "1"
+
+
+def rope_perm_supported(hd, rd):
+    """Partial rotary with whole-tile halves (the op needs head_dim == 32 or a multiple of 64)."""
+    return rd < hd and rd % 2 == 0 and hd % 64 == 0 and (rd // 2) <= hd // 2
+
+
+def rope_perm_index(hd, rd):
+    """perm[j] = ORIGINAL channel stored at permuted lane j (same permutation as work/scratch/opt/rope_bench.py make_perm)."""
+    h, r2 = hd // 2, rd // 2
+    perm = [None] * hd
+    for i in range(r2):
+        perm[i] = i
+        perm[h + i] = r2 + i
+    rest = iter(range(rd, hd))
+    for j in range(hd):
+        if perm[j] is None:
+            perm[j] = next(rest)
+    return torch.tensor(perm)
+
+
+def widen_cos_sin(cos, sin, hd):
+    """cos/sin [..., rd] (cat([f, f]) layout) -> permuted hd-wide [..., hd]: rotary lanes (i, i + hd/2) take
+    (cos[i], cos[i + rd/2]); pass-through lanes cos = 1, sin = 0. Keeps the dtype (bf16 values are copied, not recomputed).
+    """
+    rd = cos.shape[-1]
+    h, r2 = hd // 2, rd // 2
+    c = torch.ones(*cos.shape[:-1], hd, dtype=cos.dtype)
+    s = torch.zeros(*sin.shape[:-1], hd, dtype=sin.dtype)
+    c[..., :r2], s[..., :r2] = cos[..., :r2], sin[..., :r2]
+    c[..., h : h + r2], s[..., h : h + r2] = cos[..., r2:], sin[..., r2:]
+    return c, s
+
+
+def narrow_cos_sin_dev(cos, sin, hd, rd):
+    """Device inverse of widen_cos_sin (hd-wide permuted -> rd-wide cat([f, f])), for the MTP drafter that shares a prefill
+    cos/sin buffer with the base. Slices + concat only (a few ops per call; prefill only)."""
+    h, r2 = hd // 2, rd // 2
+    out = []
+    for t in (cos, sin):
+        s = list(t.shape)
+        a = ttnn.slice(t, (0, 0, 0, 0), (s[0], s[1], s[2], r2))
+        b = ttnn.slice(t, (0, 0, 0, h), (s[0], s[1], s[2], h + r2))
+        out.append(ttnn.concat([a, b], dim=-1))
+        ttnn.deallocate(a)
+        ttnn.deallocate(b)
+    return out[0], out[1]
+
+
+def rot_mats_decode_wide(device, rope_dim, hd, theta, positions):
+    """rot_mats_decode with permuted hd-wide cos/sin: [1, B, 1, hd]."""
+    inv_freq = 1.0 / (theta ** (torch.arange(0, rope_dim, 2).float() / rope_dim))
+    freqs = torch.outer(positions.float(), inv_freq)
+    emb = torch.cat([freqs, freqs], dim=-1)
+    B = positions.shape[0]
+    c, s = widen_cos_sin(emb.cos().to(torch.bfloat16), emb.sin().to(torch.bfloat16), hd)
+    mk = lambda t: ttnn.from_torch(
+        t.reshape(1, B, 1, hd),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(device),
+    )
+    return mk(c), mk(s)
+
+
+def apply_full_rope_prefill(x, cos_tt, sin_tt):
+    """Permuted-layout prefill RoPE: x [1, n_heads, S, hd]; cos/sin [1, 1, S, hd] (widen_cos_sin). One op, no slice / concat."""
+    return ttnn.experimental.rotary_embedding_hf(
+        x, cos_tt, sin_tt, is_decode_mode=False, memory_config=ttnn.L1_MEMORY_CONFIG
+    )
+
+
+_DECODE_CFG_CACHE = {}
+
+
+def rope_decode_cfgs(mesh, B, hd):
+    """(q_cfg, k_cfg) HEIGHT_SHARDED L1 configs for the decode-mode rotary_embedding_hf at B rows: one 32 x hd shard per row,
+    cols = largest divisor of B that is <= 8; q on the grid at y0 = 0, k on the grid right below it (y0 = B // cols), the
+    layout rope_bench.py proved. None when two grids do not fit the device (the caller then uses the interleaved fallback).
+    """
+    key = (id(mesh), B, hd)
+    if key not in _DECODE_CFG_CACHE:
+        grid = mesh.compute_with_storage_grid_size()
+        cols = next(c for c in range(min(8, B), 0, -1) if B % c == 0)
+        rws = B // cols
+        if cols > grid.x or 2 * rws > grid.y:
+            _DECODE_CFG_CACHE[key] = None
+        else:
+
+            def cfg(y0):
+                cores = ttnn.CoreRangeSet(
+                    {ttnn.CoreRange(ttnn.CoreCoord(0, y0), ttnn.CoreCoord(cols - 1, y0 + rws - 1))}
+                )
+                return ttnn.MemoryConfig(
+                    ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                    ttnn.BufferType.L1,
+                    ttnn.ShardSpec(cores, [ttnn.TILE_SIZE, hd], ttnn.ShardOrientation.ROW_MAJOR),
+                )
+
+            _DECODE_CFG_CACHE[key] = (cfg(0), cfg(rws))
+    return _DECODE_CFG_CACHE[key]
+
+
+class DecodeRope:
+    """Per-trace / per-step decode cos/sin of the permuted layout, height-sharded ONCE for every full-attention layer
+    (the layers only read it). Built from hd-wide cos/sin [1, B, 1, hd] TILE (one tile row per user); passed through
+    layer.forward in place of the cos argument. ``sharded`` False (B does not fit two shard grids): cos_i / sin_i
+    [1, 1, B, hd] interleaved for the transpose + prefill-mode fallback."""
+
+    def __init__(self, mesh, cos, sin, hd):
+        self.hd = hd
+        self.B = cos.shape[1]
+        cfgs = rope_decode_cfgs(mesh, self.B, hd)
+        self.sharded = cfgs is not None
+        self.cfg_q, self.cfg_k = cfgs if self.sharded else (None, None)
+        if self.sharded:
+            self.cos_q, self.sin_q = ttnn.to_memory_config(cos, self.cfg_q), ttnn.to_memory_config(sin, self.cfg_q)
+            self.cos_k, self.sin_k = ttnn.to_memory_config(cos, self.cfg_k), ttnn.to_memory_config(sin, self.cfg_k)
+            self._owned = [self.cos_q, self.sin_q, self.cos_k, self.sin_k]
+        else:
+            self.cos_q = self.cos_k = ttnn.reshape(cos, (1, 1, self.B, hd))
+            self.sin_q = self.sin_k = ttnn.reshape(sin, (1, 1, self.B, hd))
+            self._owned = []
+
+    def free(self):
+        for t in self._owned:
+            ttnn.deallocate(t)
+        self._owned = []
+
+
+def apply_full_rope_decode(x, dr, which, out_memory_config):
+    """Permuted-layout decode RoPE of x [1, B, n_heads, hd] TILE interleaved (consumed). which: "q" or "k". Sharded form:
+    to_memory_config(height shard) + ONE decode-mode rotary_embedding_hf (+ to_memory_config(out_memory_config) unless
+    out_memory_config is None, which returns the roped tensor still sharded on the k grid for the KV-write reshard).
+    Fallback (no shard grid): transpose onto the seq axis + prefill-mode op + transpose back."""
+    cos_t, sin_t = (dr.cos_q, dr.sin_q) if which == "q" else (dr.cos_k, dr.sin_k)
+    if not dr.sharded:
+        n_heads = x.shape[2]
+        xt = ttnn.transpose(x, 1, 2)  # [1, n_heads, B, hd]
+        ttnn.deallocate(x)
+        yt = ttnn.experimental.rotary_embedding_hf(
+            xt, cos_t, sin_t, is_decode_mode=False, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
+        ttnn.deallocate(xt)
+        y = ttnn.transpose(yt, 1, 2)
+        ttnn.deallocate(yt)
+        return ttnn.to_memory_config(y, out_memory_config) if out_memory_config is not None else y
+    xs = ttnn.to_memory_config(x, dr.cfg_q if which == "q" else dr.cfg_k)
+    ttnn.deallocate(x)
+    y = ttnn.experimental.rotary_embedding_hf(xs, cos_t, sin_t, is_decode_mode=True)
+    ttnn.deallocate(xs)
+    if out_memory_config is None:
+        return y
+    o = ttnn.to_memory_config(y, out_memory_config)
+    ttnn.deallocate(y)
+    return o

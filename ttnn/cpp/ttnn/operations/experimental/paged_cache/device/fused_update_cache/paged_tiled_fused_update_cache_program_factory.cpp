@@ -225,9 +225,18 @@ ttnn::device_operation::ProgramArtifacts PagedTiledFusedUpdateCacheProgramFactor
 
     uint32_t num_input_tiles = input1_shard_spec.value().shape[0] * input1_shard_spec.value().shape[1] / TILE_HW;
 
+    // rows_per_user > 1: each core owns one user's T = rows_per_user input tile rows and writes them in
+    // one program, one read-modify-write pass per distinct cache tile (see the *_multi_row kernels).
+    // num_passes = T covers any positions (every row in its own tile); passes with no rows skip DRAM.
+    const uint32_t rows_per_user = operation_attributes.rows_per_user;
+    const bool multi_row = rows_per_user > 1;
+    const uint32_t num_passes = rows_per_user;
+
     uint32_t num_cache_tiles = 2 * Wt;   // double buffered
     uint32_t num_interm_tiles = 2 * Wt;  // double buffered
     uint32_t num_output_tiles = B * Wt;
+    // The writer holds every untilized input row until the last pass, so the multi-row buffer holds all T.
+    const uint32_t num_untilized_input_tiles = multi_row ? rows_per_user * Wt : num_interm_tiles;
 
     // ---------------- Dataflow buffers ----------------
 
@@ -276,7 +285,7 @@ ttnn::device_operation::ProgramArtifacts PagedTiledFusedUpdateCacheProgramFactor
         DataflowBufferSpec{
             .unique_id = TF_UNTILIZED_INPUT,
             .entry_size = interm_single_tile_size,
-            .num_entries = num_interm_tiles,
+            .num_entries = num_untilized_input_tiles,
             .data_format_metadata = interm_dfb_data_format,
         },
         DataflowBufferSpec{
@@ -426,10 +435,12 @@ ttnn::device_operation::ProgramArtifacts PagedTiledFusedUpdateCacheProgramFactor
             }
         }
 
-        kernels.push_back(KernelSpec{
+        KernelSpec reader_spec{
             .unique_id = reader_id,
-            .source = "ttnn/cpp/ttnn/operations/experimental/paged_cache/device/kernels/dataflow/"
-                      "reader_paged_fused_update_cache_interleaved_start_id.cpp",
+            .source = multi_row ? "ttnn/cpp/ttnn/operations/experimental/paged_cache/device/kernels/dataflow/"
+                                  "reader_paged_fused_update_cache_multi_row.cpp"
+                                : "ttnn/cpp/ttnn/operations/experimental/paged_cache/device/kernels/dataflow/"
+                                  "reader_paged_fused_update_cache_interleaved_start_id.cpp",
             .compiler_options = {.defines = optional_resource_defines},
             .dfb_bindings = std::move(reader_dfb_bindings),
             .semaphore_bindings =
@@ -458,12 +469,19 @@ ttnn::device_operation::ProgramArtifacts PagedTiledFusedUpdateCacheProgramFactor
             .runtime_arg_schema =
                 {.runtime_arg_names = {"has_work", "cache_start_id", "my_batch_idx", "wait_to_start"}},
             .hw_config = create_reader_datamovement_config(),
-        });
+        };
+        if (multi_row) {
+            reader_spec.compile_time_args.emplace("rows_per_user", rows_per_user);
+            reader_spec.compile_time_args.emplace("num_passes", num_passes);
+        }
+        kernels.push_back(std::move(reader_spec));
 
-        kernels.push_back(KernelSpec{
+        KernelSpec writer_spec{
             .unique_id = writer_id,
-            .source = "ttnn/cpp/ttnn/operations/experimental/paged_cache/device/kernels/dataflow/"
-                      "writer_paged_fused_update_cache_interleaved_start_id.cpp",
+            .source = multi_row ? "ttnn/cpp/ttnn/operations/experimental/paged_cache/device/kernels/dataflow/"
+                                  "writer_paged_fused_update_cache_multi_row.cpp"
+                                : "ttnn/cpp/ttnn/operations/experimental/paged_cache/device/kernels/dataflow/"
+                                  "writer_paged_fused_update_cache_interleaved_start_id.cpp",
             .compiler_options = {.defines = optional_resource_defines},
             .dfb_bindings = std::move(writer_dfb_bindings),
             .semaphore_bindings =
@@ -503,7 +521,12 @@ ttnn::device_operation::ProgramArtifacts PagedTiledFusedUpdateCacheProgramFactor
                       "send_core_x",
                       "send_core_y"}},
             .hw_config = create_writer_datamovement_config(),
-        });
+        };
+        if (multi_row) {
+            writer_spec.compile_time_args.emplace("rows_per_user", rows_per_user);
+            writer_spec.compile_time_args.emplace("num_passes", num_passes);
+        }
+        kernels.push_back(std::move(writer_spec));
 
         // Legacy built a ComputeConfigDescriptor that set only fp32_dest_acc_en, leaving every other
         // knob at its default even when the caller's compute_kernel_config specified one.
@@ -525,10 +548,12 @@ ttnn::device_operation::ProgramArtifacts PagedTiledFusedUpdateCacheProgramFactor
             require_unpack_mode(TF_UNTILIZED_CACHE2, interm_dfb_data_format);
         }
 
-        kernels.push_back(KernelSpec{
+        KernelSpec compute_spec{
             .unique_id = compute_id,
-            .source = "ttnn/cpp/ttnn/operations/experimental/paged_cache/device/kernels/compute/"
-                      "paged_fused_update_cache.cpp",
+            .source = multi_row ? "ttnn/cpp/ttnn/operations/experimental/paged_cache/device/kernels/compute/"
+                                  "paged_fused_update_cache_multi_row.cpp"
+                                : "ttnn/cpp/ttnn/operations/experimental/paged_cache/device/kernels/compute/"
+                                  "paged_fused_update_cache.cpp",
             // Legacy compute kernels default to O3; Metal 2.0's type-agnostic default is O2, so it is
             // set explicitly here to keep the compile and link at the level the op has always used.
             .compiler_options = {.opt_level = KernelBuildOptLevel::O3},
@@ -572,7 +597,12 @@ ttnn::device_operation::ProgramArtifacts PagedTiledFusedUpdateCacheProgramFactor
                 },
             .runtime_arg_schema = {.runtime_arg_names = {"has_work"}},
             .hw_config = compute_hw,
-        });
+        };
+        if (multi_row) {
+            compute_spec.compile_time_args.emplace("rows_per_user", rows_per_user);
+            compute_spec.compile_time_args.emplace("num_passes", num_passes);
+        }
+        kernels.push_back(std::move(compute_spec));
     };
 
     add_kernel_triple(TF_READER1, TF_WRITER1, TF_COMPUTE1, TF_INPUT1, TF_CACHE1);

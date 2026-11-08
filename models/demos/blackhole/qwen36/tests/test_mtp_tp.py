@@ -25,6 +25,7 @@ Run:
 """
 import os
 
+import pytest
 import torch
 from loguru import logger
 
@@ -288,3 +289,75 @@ def test_mtp_sharded_argmax_matches_gathered(mesh_device, B, reset_seeds):
 
     for t in (sharded, full, ref_out, m._shard_off, m._sel_lane):
         ttnn.deallocate(t)
+
+
+@torch.no_grad()
+@parametrize_mesh_tp()
+@pytest.mark.parametrize("b", [1, 2, 4])
+def test_mtp_argmax_rows_match_8row(mesh_device, b, reset_seeds, monkeypatch):
+    """draft_argmax on b rows (b in the spec buckets) gives the ids of rows 0..b-1 of the same call at 8 rows.
+
+    Rows are independent, so the b-row call (its own argmax constants, _maxval_dev sized by shard.shape[2]) must equal the
+    8-row call on the same rows, forced ties and a bf16-close pair included.
+    """
+    from types import SimpleNamespace
+
+    from models.demos.blackhole.qwen36.tt.mtp import Qwen36MTP, draft_argmax
+    from models.tt_transformers.tt.ccl import TT_CCL
+    from models.tt_transformers.tt.model_config import ModelArgs
+
+    monkeypatch.setenv("QWEN36_SPEC_BUCKETS", "1,2,4,8")
+    nd = mesh_device.get_num_devices()
+    vocab = 248320
+    shard = vocab // nd
+    m = Qwen36MTP.__new__(Qwen36MTP)
+    m.device = m.mesh_device = mesh_device
+    m.num_devices = nd
+    m.tt_ccl = TT_CCL(mesh_device)
+    m.args = SimpleNamespace(
+        vocab_size=vocab,
+        max_batch_size=8,
+        ccl_topology=lambda: ModelArgs.ccl_topology(SimpleNamespace(num_devices=nd)),
+    )
+    m._init_sharded_argmax(SimpleNamespace(_lmhead_vocab_sharded=True))
+    assert m._sharded_argmax and sorted(m._argmax_consts) == [1, 2, 4, 8]
+
+    logits = torch.randn(1, 1, 8, vocab, dtype=torch.float32)
+    logits[0, 0, 0, 100] = logits[0, 0, 0, 2 * shard + 500] = 20.0  # tie across shards -> lower id
+    logits[0, 0, 1, 3 * shard + 1000] = logits[0, 0, 1, 3 * shard + 40000] = 21.0  # tie inside the last shard
+    logits[0, 0, 2, shard + 7] = 30.0
+    logits[0, 0, 2, 3 * shard + 9] = 30.001  # fp32-close pair
+    logits[0, 0, 3, vocab - 5] = 25.0
+    logits[0, 0, 4:, :] += torch.randn(4, 1)  # shifted random rows
+
+    def up(t):
+        return ttnn.from_torch(
+            t.contiguous(),
+            dtype=ttnn.float32,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=-1),
+        )
+
+    def ids(t, rows):
+        assert tuple(t.shape) == (1, 1, rows, 1) and t.dtype == ttnn.uint32 and t.layout == ttnn.ROW_MAJOR_LAYOUT
+        per_dev = [ttnn.to_torch(d).reshape(-1)[:rows].to(torch.int64) for d in ttnn.get_device_tensors(t)]
+        for d in per_dev[1:]:
+            assert torch.equal(d, per_dev[0]), "devices disagree on the picked ids"
+        return per_dev[0]
+
+    expected = torch.argmax(logits, dim=-1).reshape(-1)
+    got = {}
+    for rows in (8, b):
+        s = up(logits[:, :, :rows])
+        out = draft_argmax(m, s)
+        got[rows] = ids(out, rows)
+        ttnn.deallocate(out)
+        ttnn.deallocate(s)
+    assert torch.equal(got[8], expected), f"8-row {got[8].tolist()} != torch {expected.tolist()}"
+    assert torch.equal(got[b], got[8][:b]), f"{b}-row {got[b].tolist()} != 8-row rows {got[8][:b].tolist()}"
+    logger.info(f"b={b}: {got[b].tolist()} == 8-row {got[8][:b].tolist()}")
+    for sh_off, sel in m._argmax_consts.values():
+        ttnn.deallocate(sh_off)
+        ttnn.deallocate(sel)

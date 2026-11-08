@@ -150,6 +150,52 @@ void ChunkGdnDeviceOperation::validate_on_program_cache_miss(
                 in.final_state_out->memory_config() == attrs.output_mem_config,
             "chunk_gdn: preallocated outputs must use the op's output memory config");
     }
+    // Mid-scan snapshots: both tensors iff num_snapshots > 0, Fused only (the receivers' scan writer emits them).
+    TT_FATAL(
+        (attrs.num_snapshots > 0) == in.snapshot_index.has_value() &&
+            (attrs.num_snapshots > 0) == in.snapshot_state.has_value(),
+        "chunk_gdn: snapshot_index and snapshot_state are given together, exactly when num_snapshots > 0");
+    if (attrs.num_snapshots > 0) {
+        TT_FATAL(attrs.impl == ChunkGdnImpl::Fused, "chunk_gdn: mid-scan snapshots need the fused program (not mono)");
+        TT_FATAL(
+            attrs.num_snapshots <= gdn_handoff::kMaxSnapshots,
+            "chunk_gdn: {} snapshot slots exceed the {}-word control page",
+            attrs.num_snapshots,
+            gdn_handoff::kMaxSnapshots);
+        // The scan writer puts a head's snapshot at its output row (as o / final_state). That is the head's row of
+        // the inputs, as snapshot_state needs, only with the shared outputs or with head_offset 0.
+        TT_FATAL(
+            in.o_out.has_value() || attrs.head_offset == 0,
+            "chunk_gdn: mid-scan snapshots with head_offset {} need the preallocated o_out / final_state_out",
+            attrs.head_offset);
+        const Tensor& si = *in.snapshot_index;
+        TT_FATAL(si.is_allocated(), "chunk_gdn: snapshot_index must be on device");
+        TT_FATAL(si.layout() == Layout::ROW_MAJOR, "chunk_gdn: snapshot_index must be ROW_MAJOR");
+        TT_FATAL(
+            si.dtype() == DataType::UINT32 || si.dtype() == DataType::INT32,
+            "chunk_gdn: snapshot_index must be uint32 (or int32)");
+        TT_FATAL(
+            si.buffer()->page_size() >= attrs.num_snapshots * sizeof(uint32_t) &&
+                si.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM && !si.is_sharded(),
+            "chunk_gdn: snapshot_index must be DRAM interleaved with its {} words in page 0 (page {} B)",
+            attrs.num_snapshots,
+            si.buffer()->page_size());
+        const Tensor& ss = *in.snapshot_state;
+        check_gdn_tensor(ss, "snapshot_state", DataType::FLOAT32);
+        TT_FATAL(
+            ss.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM && !ss.is_sharded(),
+            "chunk_gdn: snapshot_state must be DRAM interleaved");
+        const auto& s = ss.padded_shape();
+        TT_FATAL(
+            s.rank() >= 2 && s[s.rank() - 1] == attrs.val_dim && s[s.rank() - 2] == attrs.key_dim &&
+                s.volume() == static_cast<uint64_t>(attrs.num_snapshots) * rows * attrs.key_dim * attrs.val_dim,
+            "chunk_gdn: snapshot_state must hold [S={}, rows={}, K={}, V={}] (got {})",
+            attrs.num_snapshots,
+            rows,
+            attrs.key_dim,
+            attrs.val_dim,
+            s);
+    }
 
     const auto grid = in.q.device()->compute_with_storage_grid_size();
     if (attrs.impl == ChunkGdnImpl::Mono) {
@@ -865,7 +911,9 @@ std::vector<Tensor> chunk_gdn(
     uint32_t num_heads,
     uint32_t head_offset,
     const std::optional<Tensor>& o_out,
-    const std::optional<Tensor>& final_state_out) {
+    const std::optional<Tensor>& final_state_out,
+    const std::optional<Tensor>& snapshot_index,
+    const std::optional<Tensor>& snapshot_state) {
     const auto& q_shape = q.logical_shape();  // [BH,NC,C,K] head-major, or flat [B,T,Hk*K] when qk_flat
     const auto& v_shape = v.logical_shape();  // [BH,NC,C,V] head-major, or flat [B,T,HV*V] when v_flat
     // Dim derivation identical to chunk_gdn_prep (both factories consume prep's inputs; the flat forms
@@ -1002,6 +1050,23 @@ std::vector<Tensor> chunk_gdn(
             "chunk_gdn: the mono program computes the WY inverse with Horner only; "
             "wy_inverse=FORWARD_SUBSTITUTION is not available on it (use HORNER or AUTO)");
     }
+    // Mid-scan snapshots: S = the slot count of snapshot_state (validated against the index page and the shape).
+    // A slot holds every head of the inputs (rows), so the waves of one plan share snapshot_state.
+    TT_FATAL(
+        snapshot_index.has_value() == snapshot_state.has_value(),
+        "chunk_gdn: snapshot_index and snapshot_state are given together");
+    if (snapshot_state.has_value()) {
+        const auto& ss = snapshot_state->padded_shape();
+        const uint64_t slot = static_cast<uint64_t>(rows) * key_dim * val_dim;
+        TT_FATAL(
+            slot > 0 && ss.volume() % slot == 0 && ss.volume() / slot >= 1,
+            "chunk_gdn: snapshot_state {} is not a whole number of [rows={}, K={}, V={}] slots",
+            ss,
+            rows,
+            key_dim,
+            val_dim);
+        attrs.num_snapshots = static_cast<uint32_t>(ss.volume() / slot);
+    }
     auto tensor_args = ChunkGdnDeviceOperation::tensor_args_t{
         .q = q,
         .k = k,
@@ -1014,7 +1079,9 @@ std::vector<Tensor> chunk_gdn(
         .masks_c = masks_c,
         .initial_state = initial_state,
         .o_out = o_out,
-        .final_state_out = final_state_out};
+        .final_state_out = final_state_out,
+        .snapshot_index = snapshot_index,
+        .snapshot_state = snapshot_state};
     return ttnn::device_operation::launch<ChunkGdnDeviceOperation>(attrs, tensor_args);
 }
 

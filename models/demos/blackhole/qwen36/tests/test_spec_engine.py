@@ -372,7 +372,9 @@ def test_spec_restaging_protects_other_requests_blocks(mesh_device):
 @pytest.mark.parametrize("mesh_device", [_MESH_SHAPE], indirect=True)
 @pytest.mark.parametrize("device_params", DEVICE_PARAMS, indirect=True)
 def test_spec_engine_no_late_allocations(mesh_device):
-    """Catches a buffer allocated after the verify capture still alive at replay (tracker raises at execute_trace)."""
+    """Catches a buffer allocated after the verify capture still alive at replay (tracker raises at execute_trace).
+    Also run it with QWEN36_SPEC_JOIN_TRACE=1: the join seed traces are captured last in capture_decode (when the
+    engine's layers pass seed_masked_ok(); the log line says whether they were) and must not trip the tracker."""
     if not trace_allocation_tracker.TRACE_ALLOC_TRACKING:
         pytest.skip("needs TT_METAL_TRACE_ALLOC_TRACKING=1")
     if not _MULTI:
