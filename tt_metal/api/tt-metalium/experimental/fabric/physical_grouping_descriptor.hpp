@@ -479,6 +479,7 @@ public:
     bool add_required_constraint(
         const std::set<MeshId>& mesh_ids,
         const std::vector<std::unordered_set<tt::tt_metal::experimental::PhysicalNodeId>>& pools);
+    bool add_required_constraint(const PlacedMesh& placed);
     bool exclude_mapping(const AssignedMeshes& assigned);
 
 private:

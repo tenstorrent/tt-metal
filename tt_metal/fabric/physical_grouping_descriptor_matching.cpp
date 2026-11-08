@@ -3452,6 +3452,10 @@ bool SatPlacementEnumerationSession::add_required_constraint(
     return true;
 }
 
+bool SatPlacementEnumerationSession::add_required_constraint(const PlacedMesh& placed) {
+    return add_required_constraint({placed.mesh_id}, {placed.placement.asics});
+}
+
 bool SatPlacementEnumerationSession::exclude_mapping(const AssignedMeshes& assigned) {
     if (!ready_ || assigned.empty()) {
         return false;

@@ -3741,6 +3741,21 @@ top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
         held.insert(has_left ? 100 : 103);
     }
     EXPECT_EQ(held.size(), 2u);
+
+    // PlacedMesh form: pins each mesh to the exact seat it was just given, so a fresh session re-yields it.
+    SatPlacementEnumerationSession pinned(pgd, unlinked, line, nullptr, {});
+    for (const PlacedMesh& placed : placements) {
+        ASSERT_TRUE(pinned.add_required_constraint(placed));
+    }
+    const auto re_yielded = pinned.next();
+    ASSERT_EQ(re_yielded.size(), 2u);
+    for (const PlacedMesh& placed : re_yielded) {
+        for (const PlacedMesh& expected : placements) {
+            if (expected.mesh_id == placed.mesh_id) {
+                EXPECT_EQ(placed.placement.asics, expected.placement.asics);
+            }
+        }
+    }
 }
 
 // Linked 1x2 meshes must sit on touching pairs; the same meshes with no seam may sit on
