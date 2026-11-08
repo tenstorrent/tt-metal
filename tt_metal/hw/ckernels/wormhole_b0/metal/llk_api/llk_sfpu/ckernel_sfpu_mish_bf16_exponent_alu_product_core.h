@@ -1,7 +1,6 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
-#include "ckernel_sfpu_mish_bf16_replay_window.h"
 namespace ckernel::sfpu::ttpoly::mish {
 using namespace ::sfpi;
 using ::sfpi::DataLayout;
