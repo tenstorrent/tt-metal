@@ -40,7 +40,7 @@ inline void bhf_colmax(std::uint32_t dst, std::uint32_t src, std::uint32_t n, st
     asm volatile("fence" ::: "memory");
 }
 #endif
-#if defined(BHF_MCASTM) || defined(BHF_MCASTR)
+#if defined(BHF_MCASTM) || defined(BHF_MCASTR) || defined(BHF_MCASTRS)
 template <typename Src>
 inline std::uint32_t bhf_mcast(
     const Noc& noc, const Src& src, std::uint32_t bytes, std::uint32_t addr, std::uint32_t x0, std::uint32_t y0,
@@ -133,9 +133,11 @@ void kernel_main() {
     [[maybe_unused]] const std::uint32_t acy6 = get_arg(args::acy6);
     [[maybe_unused]] const std::uint32_t acx7 = get_arg(args::acx7);
     [[maybe_unused]] const std::uint32_t acy7 = get_arg(args::acy7);
-#ifdef BHF_BLOCKACC
+#if defined(BHF_BLOCKACC) || defined(BHF_TREEK)
     const std::uint32_t acx[8] = {acx0, acx1, acx2, acx3, acx4, acx5, acx6, acx7};
     const std::uint32_t acy[8] = {acy0, acy1, acy2, acy3, acy4, acy5, acy6, acy7};
+#endif
+#ifdef BHF_BLOCKACC
     const std::uint32_t FLB = bl;
 #else
     [[maybe_unused]] const std::uint32_t FLB = Wt;
@@ -177,6 +179,19 @@ void kernel_main() {
 
 #ifndef BHF_NACCV
 #define BHF_NACCV 1
+#endif
+#ifdef BHF_MAXCOLF
+#define BHF_IMW(SRCA, X, Y, DADDR)                                                                                \
+    do {                                                                                                         \
+        noc.async_write(CoreLocalMem<std::uint32_t>(SRCA), UnicastEndpoint{}, im_bytes / 4, {.offset_bytes = 0}, \
+                        {.noc_x = (X), .noc_y = (Y), .addr = (DADDR)});                                          \
+        noc.async_write(CoreLocalMem<std::uint32_t>((SRCA) + im_bytes / 2), UnicastEndpoint{}, im_bytes / 4,     \
+                        {.offset_bytes = 0}, {.noc_x = (X), .noc_y = (Y), .addr = (DADDR) + im_bytes / 2});      \
+    } while (0)
+#else
+#define BHF_IMW(SRCA, X, Y, DADDR)                                                                            \
+    noc.async_write(CoreLocalMem<std::uint32_t>(SRCA), UnicastEndpoint{}, im_bytes, {.offset_bytes = 0}, \
+                    {.noc_x = (X), .noc_y = (Y), .addr = (DADDR)})
 #endif
 #ifdef BHF_STREAM
     if (am == 2) {
@@ -265,6 +280,10 @@ void kernel_main() {
 #endif
             CoreLocalMem<std::uint32_t> one(rout.get_read_ptr());
             const std::uint32_t daddr = rcb.get_write_ptr();
+#if defined(BHF_MCASTRS) && BHF_NACCV == 1
+            (void)off;
+            bhf_mcast(noc, one, nb, daddr, x0, y0, x1, y1, gx0, gx1, mx, false, nullptr);
+#else
             for (std::uint32_t y = y0; y <= y1; ++y) {
                 for (std::uint32_t x = x0; x <= x1; ++x) {
                     if (x >= gx0 && x < gx1) {
@@ -273,8 +292,18 @@ void kernel_main() {
                     noc.async_write(one, UnicastEndpoint{}, nb, {.offset_bytes = off}, {.noc_x = x, .noc_y = y, .addr = daddr + off});
                 }
             }
+#endif
         }
+#if !(defined(BHF_RLINK) && defined(BHF_MCASTRS) && BHF_NACCV == 1)
         noc.async_write_barrier();
+#endif
+#if defined(BHF_MCASTRS) && BHF_NACCV == 1
+        sem_r.set(1);
+        bhf_mcast(noc, CoreLocalMem<std::uint32_t>(rcb.get_write_ptr()), 0, 0, x0, y0, x1, y1, gx0, gx1, mx, true, &sem_r);
+        noc.async_write_barrier();
+        rout.pop_front(1);
+        return;
+#endif
         for (std::uint32_t y = y0; y <= y1; ++y) {
             for (std::uint32_t x = x0; x <= x1; ++x) {
                 if (x >= gx0 && x < gx1) {
@@ -364,6 +393,14 @@ void kernel_main() {
         if (is_comb || c == th) {
             rmax.reserve_back(static_cast<uint16_t>(is_comb ? th + 1 : C - th));
         }
+#elif defined(BHF_TREEK)
+        const std::uint32_t bhf_l = c / th;
+        const std::uint32_t bhf_nl = (C + th - 1) / th;
+        const std::uint32_t bhf_dx = bhf_l == 0 ? comb_x : acx[bhf_l - 1], bhf_dy = bhf_l == 0 ? comb_y : acy[bhf_l - 1];
+        const std::uint32_t bhf_slot = c - bhf_l * th;
+        if (bhf_slot == 0) {
+            rmax.reserve_back(static_cast<uint16_t>(is_comb ? (C < th ? C : th) + bhf_nl - 1 : (C - c < th ? C - c : th)));
+        }
 #else
         const std::uint32_t bhf_dx = comb_x, bhf_dy = comb_y, bhf_slot = c;
         if (is_comb) {
@@ -372,13 +409,7 @@ void kernel_main() {
 #endif
         pmax.wait_front(1);
         {
-            CoreLocalMem<std::uint32_t> src(pmax.get_read_ptr());
-            noc.async_write(
-                src,
-                UnicastEndpoint{},
-                im_bytes,
-                {.offset_bytes = 0},
-                {.noc_x = bhf_dx, .noc_y = bhf_dy, .addr = rmax.get_write_ptr() + bhf_slot * im_bytes});
+            BHF_IMW(pmax.get_read_ptr(), bhf_dx, bhf_dy, rmax.get_write_ptr() + bhf_slot * im_bytes);
 #ifdef BHF_FLUSH
             noc.async_writes_flushed();
 #else
@@ -408,13 +439,34 @@ void kernel_main() {
         if (c == th) {
             sem_rmax.wait(C - th);
             sem_rmax.set(0);
+#ifdef BHF_TREEFIX
+            const std::uint32_t bhf_rb = rmax.get_write_ptr();
+#endif
             rmax.push_back(static_cast<uint16_t>(C - th));
             mout.wait_front(1);
             {
+#ifdef BHF_TREEFIX
+                BHF_IMW(mout.get_read_ptr(), comb_x, comb_y, bhf_rb + th * im_bytes);
+#else
                 CoreLocalMem<std::uint32_t> one(mout.get_read_ptr());
                 noc.async_write(one, UnicastEndpoint{}, im_bytes, {.offset_bytes = 0},
                                 {.noc_x = comb_x, .noc_y = comb_y, .addr = rmax.get_write_ptr() + th * im_bytes});
+#endif
             }
+            noc.async_write_barrier();
+            sem_rmax.up(noc, comb_x, comb_y, 1);
+            noc.async_atomic_barrier();
+            mout.pop_front(1);
+        }
+#elif defined(BHF_TREEK)
+        if (bhf_slot == 0 && !is_comb) {
+            const std::uint32_t bhf_gn = C - c < th ? C - c : th;
+            sem_rmax.wait(bhf_gn);
+            sem_rmax.set(0);
+            const std::uint32_t bhf_rb = rmax.get_write_ptr();
+            rmax.push_back(static_cast<uint16_t>(bhf_gn));
+            mout.wait_front(1);
+            BHF_IMW(mout.get_read_ptr(), comb_x, comb_y, bhf_rb + (th + bhf_l - 1) * im_bytes);
             noc.async_write_barrier();
             sem_rmax.up(noc, comb_x, comb_y, 1);
             noc.async_atomic_barrier();
@@ -428,6 +480,11 @@ void kernel_main() {
             sem_rmax.wait(th + 1);
             sem_rmax.set(0);
             rmax.push_back(static_cast<uint16_t>(th + 1));
+            mout.wait_front(1);
+#elif defined(BHF_TREEK)
+            sem_rmax.wait((C < th ? C : th) + bhf_nl - 1);
+            sem_rmax.set(0);
+            rmax.push_back(static_cast<uint16_t>((C < th ? C : th) + bhf_nl - 1));
             mout.wait_front(1);
 #elif defined(BHF_COMBSTREAM)
             {
@@ -451,7 +508,7 @@ void kernel_main() {
 #if defined(BHF_MAXRISC) && !defined(BHF_TREE2)
             invalidate_l1_cache();
             bhf_colmax(rmax.get_write_ptr(), rmax.get_write_ptr(), C, im_bytes, false);
-#elif !defined(BHF_TREE2)
+#elif !defined(BHF_TREE2) && !defined(BHF_TREEK)
 #ifndef BHF_COMBSTREAM
             rmax.push_back(static_cast<uint16_t>(C));
 #endif
@@ -465,9 +522,17 @@ void kernel_main() {
 #endif
                 const std::uint32_t daddr = mcb.get_write_ptr();
 #ifdef BHF_MCASTM
+#ifdef BHF_MAXCOLF
+                bhf_mcast(noc, one, im_bytes / 4, daddr, x0, y0, x1, y1, gx0, gx1, x0, false, nullptr);
+                bhf_mcast(noc, CoreLocalMem<std::uint32_t>(mout.get_read_ptr() + im_bytes / 2), im_bytes / 4, daddr + im_bytes / 2,
+                         x0, y0, x1, y1, gx0, gx1, x0, false, nullptr);
+#else
                 bhf_mcast(noc, one, im_bytes, daddr, x0, y0, x1, y1, gx0, gx1, x0, false, nullptr);
+#endif
             }
+#ifndef BHF_MLINK
             noc.async_write_barrier();
+#endif
             sem_m.set(1);
             bhf_mcast(noc, CoreLocalMem<std::uint32_t>(mcb.get_write_ptr()), 0, 0, x0, y0, x1, y1, gx0, gx1, x0, true, &sem_m);
             noc.async_write_barrier();
@@ -477,12 +542,17 @@ void kernel_main() {
                         if (x >= gx0 && x < gx1) {
                             continue;
                         }
+#if defined(BHF_MAXCOLF) && !(defined(BHF_MAXRISC) && !defined(BHF_TREE2))
+                        (void)one;
+                        BHF_IMW(mout.get_read_ptr(), x, y, daddr);
+#else
                         noc.async_write(
                             one,
                             UnicastEndpoint{},
                             im_bytes,
                             {.offset_bytes = 0},
                             {.noc_x = x, .noc_y = y, .addr = daddr});
+#endif
                     }
                 }
             }
@@ -546,15 +616,21 @@ void kernel_main() {
                 CoreLocalMem<std::uint32_t> src(pacc.get_read_ptr());
                 CoreLocalMem<std::uint32_t> fsrc(gbase + FLB * eb + slot * 16);
 #if BHF_NACCV == 2
+#if defined(BHF_DUALH) && defined(BHF_DUALNOC)
+                const Noc& nh = noc_alt;
+#else
+                const Noc& nh = noc;
+#endif
                 noc.async_write(src, UnicastEndpoint{}, eb / 2, {.offset_bytes = 0},
                                 {.noc_x = ux, .noc_y = uy, .addr = gbase + slot * eb});
-                noc.async_write(src, UnicastEndpoint{}, eb / 2, {.offset_bytes = eb / 2},
-                                {.noc_x = lx, .noc_y = ly, .addr = gbase + slot * eb + eb / 2});
+                nh.async_write(src, UnicastEndpoint{}, eb / 2, {.offset_bytes = eb / 2},
+                               {.noc_x = lx, .noc_y = ly, .addr = gbase + slot * eb + eb / 2});
                 noc.async_writes_flushed();
+                nh.async_writes_flushed();
                 noc.async_write(fsrc, UnicastEndpoint{}, 16, {.offset_bytes = 0},
                                 {.noc_x = ux, .noc_y = uy, .addr = gbase + FLB * eb + slot * 16});
-                noc.async_write(fsrc, UnicastEndpoint{}, 16, {.offset_bytes = 0},
-                                {.noc_x = lx, .noc_y = ly, .addr = gbase + FLB * eb + slot * 16});
+                nh.async_write(fsrc, UnicastEndpoint{}, 16, {.offset_bytes = 0},
+                               {.noc_x = lx, .noc_y = ly, .addr = gbase + FLB * eb + slot * 16});
 #elif defined(BHF_BLOCKACC)
                 noc.async_write(src, UnicastEndpoint{}, eb, {.offset_bytes = 0}, {.noc_x = ux, .noc_y = uy, .addr = gbase + slot * eb});
                 noc.async_writes_flushed();
@@ -573,12 +649,19 @@ void kernel_main() {
                 const Noc& nn = noc;
 #endif
                 nn.async_write(src, UnicastEndpoint{}, eb, {.offset_bytes = 0}, {.noc_x = dx, .noc_y = dy, .addr = gbase + tg * eb});
+#ifdef BHF_NOFLAGFL
+                noc.async_writes_flushed();
+#endif
                 nn.async_writes_flushed();
                 nn.async_write(fsrc, UnicastEndpoint{}, 16, {.offset_bytes = 0},
                                {.noc_x = dx, .noc_y = dy, .addr = gbase + Wt * eb + tg * 16});
+#ifndef BHF_NOFLAGFL
                 nn.async_writes_flushed();
 #endif
+#endif
+#ifndef BHF_NOFLAGFL
                 noc.async_writes_flushed();
+#endif
                 pacc.pop_front(1);
             }
             noc.async_write_barrier();

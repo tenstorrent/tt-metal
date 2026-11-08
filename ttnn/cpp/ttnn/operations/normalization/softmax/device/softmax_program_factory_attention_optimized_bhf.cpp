@@ -31,7 +31,7 @@ using namespace tt::tt_metal::experimental;
 namespace {
 std::uint32_t g_bhf_wt = 0;
 const char* bhf_plan_value(const char* n) {
-    static const char* const t0[][2] = {{"BHF_SM_BH", "1"}, {"BHF_SM_SPLITFIT", "2"}, {"BHF_SM_DEEPD", "8"}, {"BHF_SM_CHAINBH", "1"}, {"BHF_SM_RANK23", "1"}, {"BHF_SM_CHAINNS", "2"}, {"BHF_SM_RBT", "8"}, {"BHF_SM_KDEF", "MAXSTREAM,COMBFAST,PRESTAGE,FLUSH"}, {"BHF_SM_KEEPEXP", "1"}, {"BHF_SM_R32", "1"}, {"BHF_SM_CHAINANY32_R", "1"}, {"BHF_SM_CHAINMAX32_R", "16"}, {"BHF_SM_CHAINMIN32_R", "1"}, {"BHF_SM_CCHAIN32_R", "8"}, {"BHF_SM_STREAM_R", "1"}, {"BHF_SM_KDEF32_R", "DIRECT,DUALNOC"}, {"BHF_SM_L32", "129"}, {"BHF_SM_CHAINANY32_L", "1"}, {"BHF_SM_CHAINMIN32_L", "1"}, {"BHF_SM_CCHAIN32_L", "8"}, {"BHF_SM_STREAM_L", "2"}, {"BHF_SM_BLOCKACC_L", "1"}, {"BHF_SM_CHAINLARGE32_L", "1"}, {"BHF_SM_CHAINMAX32_L", "24"}, {"BHF_SM_KDEF32_L", "DIRECT"}};
+    static const char* const t0[][2] = {{"BHF_SM_BH", "1"}, {"BHF_SM_SPLITFIT", "2"}, {"BHF_SM_DEEPD", "8"}, {"BHF_SM_CHAINBH", "1"}, {"BHF_SM_RANK23", "1"}, {"BHF_SM_CHAINNS", "2"}, {"BHF_SM_RBT", "8"}, {"BHF_SM_KDEF", "MAXSTREAM,COMBFAST,PRESTAGE,FLUSH"}, {"BHF_SM_KEEPEXP", "1"}, {"BHF_SM_R32", "1"}, {"BHF_SM_CHAINANY32_R", "1"}, {"BHF_SM_CHAINMAX32_R", "24"}, {"BHF_SM_CHAINMIN32_R", "1"}, {"BHF_SM_CCHAIN32_R", "8"}, {"BHF_SM_STREAM_R", "1"}, {"BHF_SM_KDEF32_R", "DIRECT,DUALNOC,TREEK,COMBCOL,MCASTM,NOFLAGFL,MCASTRS,RDFIRST,NOSUMSC,MLINK,RLINK"}, {"BHF_SM_L32", "129"}, {"BHF_SM_CHAINANY32_L", "1"}, {"BHF_SM_CHAINMIN32_L", "1"}, {"BHF_SM_CCHAIN32_L", "8"}, {"BHF_SM_STREAM_L", "2"}, {"BHF_SM_BLOCKACC_L", "1"}, {"BHF_SM_CHAINLARGE32_L", "1"}, {"BHF_SM_CHAINMAX32_L", "24"}, {"BHF_SM_KDEF32_L", "DIRECT"}, {"BHF_SM_TREEG_R", "6"}};
     if (g_bhf_wt <= 1073741824u) {
         for (const auto& e : t0) {
             if (std::strcmp(n, e[0]) == 0) {
@@ -1167,7 +1167,7 @@ SoftmaxDeviceOperation::SoftmaxProgramFactoryAttentionOptimizedBHF::create_progr
                 }
             }
             if (n_rows > G) {
-                for (const char* bhf_k : {"BHF_TREE2", "BHF_MCASTM", "BHF_MCASTR"}) {
+                for (const char* bhf_k : {"BHF_TREE2", "BHF_TREEFIX", "BHF_TREEK", "BHF_MCASTM", "BHF_MCASTR", "BHF_MCASTRS"}) {
                     cbase.erase(bhf_k);
                     ccomp.erase(bhf_k);
                 }
@@ -1342,8 +1342,11 @@ SoftmaxDeviceOperation::SoftmaxProgramFactoryAttentionOptimizedBHF::create_progr
                     const std::uint32_t bhf_gi = c % GM;
                     const std::uint32_t bhf_nx = GM > 1 ? (bhf_gi != 0 ? c - bhf_gi : (c + GM < C ? c + GM : c)) : (c + 1 < C ? c + 1 : c);
                     const auto pn = device->worker_core_from_logical_core(logical(g, bhf_nx));
-                    const std::uint32_t bhf_th = C / 2;
-                    const auto pt = device->worker_core_from_logical_core(logical(g, bhf_th));
+                    const std::uint32_t bhf_tg0 = in0_cb_data_format == tt::DataFormat::Float32 ? bhf_k("BHF_SM_TREEG", 0) : 0u;
+                    const std::uint32_t bhf_pn = NA != 0 ? SP : C;
+                    const std::uint32_t bhf_tg = bhf_tg0 == 0 ? 0u : std::max<std::uint32_t>(bhf_tg0, (bhf_pn + 8) / 9);
+                    const std::uint32_t bhf_th = bhf_tg != 0 ? bhf_tg : C / 2;
+                    const auto pt = device->worker_core_from_logical_core(logical(g, std::min<std::uint32_t>(bhf_th, C - 1)));
                     const std::uint32_t t0 = NA != 0 ? (c < SP ? (SCT ? c * Wt / SP : c) : 0u) : bhf_t0(c);
                     const std::uint32_t Tc = NA != 0 ? (c < SP && SCT ? (c + 1) * Wt / SP - c * Wt / SP : s_T(c)) : bhf_tc(c);
                     const std::uint32_t s_am = NA != 0 ? (c < SP ? 1u : 2u) : 0u;
@@ -1358,6 +1361,11 @@ SoftmaxDeviceOperation::SoftmaxProgramFactoryAttentionOptimizedBHF::create_progr
                     std::uint32_t s_ax[8] = {0, 0, 0, 0, 0, 0, 0, 0}, s_ay[8] = {0, 0, 0, 0, 0, 0, 0, 0};
                     for (std::uint32_t q = 0; BLK && q < NAB; ++q) {
                         const auto pq = device->worker_core_from_logical_core(logical(g, SP + q));
+                        s_ax[q] = static_cast<std::uint32_t>(pq.x);
+                        s_ay[q] = static_cast<std::uint32_t>(pq.y);
+                    }
+                    for (std::uint32_t q = 0; !BLK && bhf_tg != 0 && q < 8 && (q + 1) * bhf_tg < (NA != 0 ? SP : C); ++q) {
+                        const auto pq = device->worker_core_from_logical_core(logical(g, (q + 1) * bhf_tg));
                         s_ax[q] = static_cast<std::uint32_t>(pq.x);
                         s_ay[q] = static_cast<std::uint32_t>(pq.y);
                     }

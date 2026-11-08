@@ -104,6 +104,9 @@ void kernel_main() {
 
     compute_kernel_hw_startup(dfb_in0, dfb_max_scaler, dfb_exps);
     max_scaler.wait_front(1);
+#ifdef BHF_NOSUMSC
+    if (get_arg(args::am) != 1)
+#endif
     sum_scaler.wait_front(1);
 #if defined(BHF_STREAM) && defined(BHF_BLOCKACC)
     if (am == 2) {
@@ -301,6 +304,9 @@ void kernel_main() {
 #ifdef BHF_TREE2
         const std::uint32_t bhf_nc = c == 0 ? th + 1 : C - th;
         if (c == 0 || c == th) {
+#elif defined(BHF_TREEK)
+        const std::uint32_t bhf_nc = c == 0 ? (C < th ? C : th) + (C + th - 1) / th - 1 : (C - c < th ? C - c : th);
+        if (c % th == 0) {
 #else
         const std::uint32_t bhf_nc = C;
         if (c == 0) {

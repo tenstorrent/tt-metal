@@ -37,9 +37,31 @@ void kernel_main() {
 
     DataflowBuffer max_scaler(dfb::max_scaler);
     DataflowBuffer sum_scaler(dfb::sum_scaler);
+    const Noc noc;
+#ifdef READ_BATCH
+    const std::uint32_t rbk = READ_BATCH;
+#else
+    const std::uint32_t rbk = blk;
+#endif
+#ifdef BHF_RDFIRST
+    const std::uint32_t rem0 = (T == 0) ? 0u : (rbk > T ? T : rbk);
+    if (rem0 > 0) {
+        in0.reserve_back(static_cast<uint16_t>(rem0));
+        std::uint32_t tile = row0 * Wt + t0;
+        std::uint32_t off = 0;
+        for (std::uint32_t i = 0; i < rem0; ++i) {
+            noc.async_read(src, in0, tile_bytes, {.page_id = tile}, {.offset_bytes = off});
+            tile += ts;
+            off += tile_bytes;
+        }
+    }
+#endif
     dataflow_kernel_lib::
         calculate_and_prepare_reduce_scaler<dfb::max_scaler, ckernel::PoolType::MAX, ckernel::ReduceDim::REDUCE_ROW>(
             max_scaler);
+#ifdef BHF_NOSUMSC
+    if (am != 1)
+#endif
     dataflow_kernel_lib::
         calculate_and_prepare_reduce_scaler<dfb::sum_scaler, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>(
             sum_scaler);
@@ -47,17 +69,17 @@ void kernel_main() {
         return;
     }
 
-    const Noc noc;
     for (std::uint32_t r = 0; r < num_rows; ++r) {
         BHFZ("R_RD");
         std::uint32_t tile = (row0 + r * rstride) * Wt + t0;
-#ifdef READ_BATCH
-        const std::uint32_t rbk = READ_BATCH;
-#else
-        const std::uint32_t rbk = blk;
-#endif
         for (std::uint32_t j = 0; j < T; j += rbk) {
             const std::uint32_t rem = (j + rbk > T) ? (T - j) : rbk;
+#ifdef BHF_RDFIRST
+            if (r == 0 && j == 0) {
+                tile += rem * ts;
+            } else
+#endif
+            {
             in0.reserve_back(static_cast<uint16_t>(rem));
             std::uint32_t off = 0;
             for (std::uint32_t i = 0; i < rem; ++i) {
@@ -66,6 +88,7 @@ void kernel_main() {
 #endif
                 tile += ts;
                 off += tile_bytes;
+            }
             }
             noc.async_read_barrier();
             in0.push_back(static_cast<uint16_t>(rem));
