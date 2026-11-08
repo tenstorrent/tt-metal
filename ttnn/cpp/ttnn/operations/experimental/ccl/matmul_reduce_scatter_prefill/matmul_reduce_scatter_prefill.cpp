@@ -280,4 +280,8 @@ Tensor experimental::matmul_reduce_scatter_prefill(
     return ttnn::prim::matmul_reduce_scatter_prefill(input_tensor, weight, output_tensor, params);
 }
 
+void experimental::matmul_reduce_scatter_prefill_reserve(tt::tt_metal::distributed::MeshDevice& mesh_device) {
+    ttnn::operations::experimental::ccl::matmul_reduce_scatter_prefill::ensure_mesh_resources(&mesh_device);
+}
+
 }  // namespace ttnn

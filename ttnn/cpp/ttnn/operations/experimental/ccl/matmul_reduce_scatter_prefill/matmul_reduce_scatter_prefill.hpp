@@ -41,4 +41,11 @@ Tensor matmul_reduce_scatter_prefill(
     const std::optional<Tensor>& output_tensor = std::nullopt,
     const std::optional<uint32_t>& l1_headroom = std::nullopt);
 
+// Create the op's per-mesh resources (its global semaphores and mailbox) now, instead of on the mesh's first call.
+// The first call allocates them in L1 when L1_SMALL cannot hold them, between whatever tensors are live, which leaves
+// later calls planning on a different free L1 than the first compiled for (a trace captured after a single warm-up
+// call then misses the program cache). A model that calls the op calls this before allocating its per-call tensors.
+// Untraced, synchronizes the mesh on the first call; a no-op afterwards.
+void matmul_reduce_scatter_prefill_reserve(tt::tt_metal::distributed::MeshDevice& mesh_device);
+
 }  // namespace ttnn::experimental

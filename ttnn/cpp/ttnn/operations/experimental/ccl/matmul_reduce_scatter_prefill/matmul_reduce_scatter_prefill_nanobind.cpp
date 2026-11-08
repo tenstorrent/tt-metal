@@ -116,6 +116,19 @@ void bind_matmul_reduce_scatter_prefill(nb::module_& mod) {
         nb::arg("l1_headroom") = nb::none());
 
     mod.def(
+        "matmul_reduce_scatter_prefill_reserve",
+        [](tt::tt_metal::distributed::MeshDevice& mesh_device) {
+            ttnn::experimental::matmul_reduce_scatter_prefill_reserve(mesh_device);
+        },
+        nb::arg("mesh_device"),
+        R"doc(
+        Create matmul_reduce_scatter_prefill's per-mesh semaphores and mailbox now rather than on the mesh's first
+        call. Without L1_SMALL room the first call allocates them in L1 between the live tensors, so later calls plan
+        on a different free L1 than the first compiled for. Call before allocating per-call tensors; not traceable on
+        the first call; a no-op afterwards.
+        )doc");
+
+    mod.def(
         "_matmul_reduce_scatter_prefill_last_plan",
         &matmul_reduce_scatter_prefill::last_plan_dict,
         "The plan the last matmul_reduce_scatter_prefill call used (debugging aid).");
