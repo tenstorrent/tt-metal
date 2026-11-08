@@ -47,21 +47,30 @@ def _crc(t: torch.Tensor) -> int:
     return zlib.crc32(t.contiguous().view(torch.uint8).numpy().tobytes()) & 0xFFFFFFFF
 
 
-def _read_dev(t, k: int) -> torch.Tensor:
-    """Device ``k``'s shard of mesh tensor ``t`` (one chip's command-queue read; whole-mesh read as the fallback)."""
-    try:
-        return ttnn.to_torch(ttnn.get_device_tensors(t)[k])
-    except Exception:  # noqa: BLE001 -- e.g. an ND-sharded layout the per-device path refuses
-        return ttnn.to_torch(ttnn.get_device_tensors(ttnn.from_device(t))[k])
+class _Reader:
+    """Device ``k``'s shard of mesh tensor ``t``: one chip's command-queue read, or -- if the per-device path refuses
+    the layout (e.g. ND-sharded) -- one whole-mesh read shared by every shard asked for in this digest."""
+
+    def __init__(self, t):
+        self.t, self.host = t, None
+
+    def __call__(self, k: int) -> torch.Tensor:
+        if self.host is None:
+            try:
+                return ttnn.to_torch(ttnn.get_device_tensors(self.t)[k])
+            except Exception:  # noqa: BLE001
+                self.host = ttnn.get_device_tensors(ttnn.from_device(self.t))
+        return ttnn.to_torch(self.host[k])
 
 
 def _digest(rt, kv, S: int) -> dict:
     t0 = time.perf_counter()
     npg, nrow = -(-S // TPP), -(-S // POOL_CHUNK_TOKENS)
     per_layer, crc_all, notes = {}, 0, []
+    read_lat, read_pool = _Reader(kv.latent), _Reader(kv.pool)
     for i, layer in enumerate(kv.dsa_layers):
-        lat = _read_dev(kv.latent, i).reshape(-1, LATENT_PAGE_BYTES)[:npg]
-        pool = _read_dev(kv.pool, i).reshape(-1, POOL_ROW_BYTES)[:nrow]
+        lat = read_lat(i).reshape(-1, LATENT_PAGE_BYTES)[:npg]
+        pool = read_pool(i).reshape(-1, POOL_ROW_BYTES)[:nrow]
         if i in (0, len(kv.dsa_layers) - 1):  # the command-queue read must be the chip the export raw-writes
             raw = kv._banks.read(kv._dev_ids[i], 0, kv.latent.buffer_address(), LATENT_PAGE_BYTES)
             if bytes(lat[0].contiguous().numpy().tobytes()) != bytes(raw):
@@ -72,9 +81,10 @@ def _digest(rt, kv, S: int) -> dict:
     kda = []
     rows, cols = tuple(rt.mesh_device.shape)
     for t in (kv.kda_rec, kv.kda_conv):
-        kda.append([_crc(_read_dev(t, c)) for c in range(cols)])
+        read = _Reader(t)
+        kda.append([_crc(read(c)) for c in range(cols)])
         # SP replicas must agree (the KV Manager may read any row): the last row's column 0
-        if _crc(_read_dev(t, (rows - 1) * cols)) != kda[-1][0]:
+        if _crc(read((rows - 1) * cols)) != kda[-1][0]:
             notes.append("KDA slab replicas differ across SP rows")
     return {
         "notes": notes,
