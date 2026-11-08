@@ -198,7 +198,7 @@ which the runner's `PREFILL_PRODUCER_MULTI_TURN_PROB` mode (off by default) exer
 
 **Zone profiler** (`tests/perf/profile_prefill.py`, driven by `scripts/run_prefill_profile.sh`): `PROFILE_CHUNK`,
 `PROFILE_CACHE`, `PROFILE_NUM_LAYERS`, `PROFILE_LAYER_IDS`, `PROFILE_READ_EVERY`, `PROFILE_READ_IN_CHUNK`,
-`PROFILE_SKIP_PREFIX`, `PROFILE_STAGES`, `PROFILE_STAGE`, `PROFILE_FABRIC`, `PROFILE_DRY_RUN` and the script's
+`PROFILE_SKIP_PREFIX`, `PROFILE_STAGES`, `PROFILE_STAGE`, `M3_FABRIC`, `PROFILE_DRY_RUN` and the script's
 short aliases (`CHUNK`, `CACHE`, `LAYERS`, `LAYER_IDS`, `LEVEL`, `STAGES`, `STAGE`, `FABRIC`, `NOC_TRACES`,
 `SKIP_PREFIX`, `RESULTS_DIR`) are documented in the harness docstring and the script header; see
 [`tests/perf/README_profiling.md`](tests/perf/README_profiling.md).
