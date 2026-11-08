@@ -243,7 +243,8 @@ def test_gather(device):
     )
 
     # Gather elements along dimension 1 using the index tensor
-    ttnn.gather(ttnn_input, 1, index=ttnn_index)
+    gathered_tensor = ttnn.gather(ttnn_input, 1, index=ttnn_index)
+    logger.info(f"Gathered Tensor Shape: {gathered_tensor.shape}")  # Shape([4, 2])
 
 
 def test_sort(device):
