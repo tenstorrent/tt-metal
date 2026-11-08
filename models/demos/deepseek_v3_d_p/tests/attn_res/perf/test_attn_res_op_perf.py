@@ -72,25 +72,33 @@ STEPS = tuple(f"{batch}/{op}" for batch in BATCHES for op in OPS)
 
 # Device kernel duration (us) per step, as CI hardware (bh_sc1_high_power) measures it. None reports without gating.
 #
-# PROVISIONAL -- re-measure on a high-power Galaxy. Until tt_metal_tracker-ao3i.10 the boundary was one 25-site batch
-# over C = 7 with the owed read closed. The block step (C = 7, 24 sites) keeps that batch's references, the nearest
-# high-power measurement of its shape; the owed step (C = 6, one site) has none yet and only reports.
+# Until tt_metal_tracker-ao3i.10 the boundary was one 25-site batch over C = 7 with the owed read closed; the CI pool
+# measured it (runs 41962421284 and 42058182913, medians over 20 synced blocks: block_stats 139.0 / 119.0, block_mix
+# 275.5 / 275.6, gather_softmax 67.5 / 68.2; run 42340900388: 137.8 / 275.0 / 69.0).
 #
-# The 25-site references: SP8xTP4 is the mean of two CI Galaxies' medians over 20 synced blocks, runs 41962421284 and
-# 42058182913: block_stats 139.0 / 119.0, block_mix 275.5 / 275.6, gather_softmax 67.5 / 68.2. SP4xTP4 has no CI job:
-# it was measured on a Galaxy off the CI pool (bh-glx-120-b07u02, 2026-11-05), which runs the end-to-end boundary layer
-# of `test_attn_res_perf.py` at ~416 us against its 394 us CI reference, and is scaled by 394 / 416. Local medians,
-# synced: block_stats 209.9 / 218.4 / 208.4, block_mix 568.4 / 570.2 / 570.2, gather_softmax 120.2 / 121.2 / 123.4.
+# SP8xTP4 references are derived, not measured on the pool: each step's median on one off-pool Galaxy at 130 W
+# (bh-glx-120-b07u08, 2026-11-08, 7 runs) times that Galaxy's pool ratio for the same op, from the old 25-site code run
+# there interleaved (3 runs: block_mix 292.1, gather_softmax 69.1 us) against run 42340900388. That Galaxy runs
+# block_mix ~6% slower than the pool and gather_softmax at the pool's speed. Medians there: block/block_mix 290.3,
+# block/gather_softmax 68.6, owed/block_mix 95.2 us. block_stats and the owed gather_softmax settle per process into
+# one of several levels (block_stats 76 / 117 / 139 us there, 119 / 139 on the pool; owed gather_softmax 54 / 77 /
+# 113 us), as both wait on their peers, so no ratio holds for them: block/block_stats keeps the pool's mean of its two
+# levels, and the owed step's two only report.
+#
+# SP4xTP4 has no CI job: it was measured on a Galaxy off the CI pool (bh-glx-120-b07u02, 2026-11-05), which runs the
+# end-to-end boundary layer of `test_attn_res_perf.py` at ~416 us against its 394 us CI reference, and is scaled by
+# 394 / 416. Local medians, synced: block_stats 209.9 / 218.4 / 208.4, block_mix 568.4 / 570.2 / 570.2,
+# gather_softmax 120.2 / 121.2 / 123.4.
 # Locally, run with ATTN_RES_PERF_REPORT_ONLY=1.
 _CI_OVER_LOCAL = 394.0 / 416.0
 _REFERENCE_US = {
     "SP8xTP4": {
         "owed/attn_res_block_stats": None,
-        "owed/attn_res_block_mix": None,
+        "owed/attn_res_block_mix": 89.6,
         "owed/attn_res_gather_softmax": None,
         "block/attn_res_block_stats": 129.0,
-        "block/attn_res_block_mix": 275.6,
-        "block/attn_res_gather_softmax": 67.9,
+        "block/attn_res_block_mix": 273.4,
+        "block/attn_res_gather_softmax": 68.5,
     },
     "SP4xTP4": {
         "owed/attn_res_block_stats": None,

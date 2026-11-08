@@ -99,13 +99,15 @@ _GALAXY = "SP8xTP4"
 # The boundary layer was 394 us traced and untraced (run 41946792821 read untraced at 372 us) while it scored the
 # straddling read as a closed site of the next block's batch. Taking that read as the undivided walk does (a one-site
 # `inter_block` over the inherited set, then the read) makes a split stack bit-identical to the undivided one and
-# costs three more programs (a stats/mix pair and a read). Measured off the CI pool on bh-glx-110-c10u14 (2026-11-07),
-# interleaved A/B: traced 392.9 -> 591.8 us and untraced 374.8 -> 644.6 us, where the old code read 392.9 against its
-# 394 CI reference. Untraced no longer reaches traced, so it has its own reference. Both boundary references are
-# provisional until CI runs re-baseline them.
+# costs three more programs (a stats/mix pair and a read), so untraced no longer reaches traced and has its own
+# reference. Both boundary references are derived, not measured on the pool: the CI pool's old-code reading (run
+# 42340900388, bh-glx-120-d08u08: traced 388.8, untraced 382.1 us) times the new/old ratio measured on one off-pool
+# Galaxy at 130 W (bh-glx-120-b07u08, 2026-11-08, old and new code interleaved, medians: traced 413.3 -> 622.1 us,
+# untraced 394.6 -> 631.1 us). That Galaxy runs this layer ~6% slower than the pool; an earlier A/B on
+# bh-glx-110-c10u14 (traced 392.9 -> 591.8 us) agrees with the derived traced reference.
 _GALAXY_REFERENCE_E2E_US = {
-    "traced": {"boundary": 592.0, "ordinary": 118.0},
-    "untraced": {"boundary": 645.0, "ordinary": 150.0},
+    "traced": {"boundary": 585.0, "ordinary": 118.0},
+    "untraced": {"boundary": 611.0, "ordinary": 150.0},
 }
 # LoudBox references, per SKU: a run opts in with ATTN_RES_PERF_SKU, so a box of another SKU never
 # gates against them. To gate a layout, add its CI numbers here and drop it from _REPORT_ONLY_LAYOUTS.
