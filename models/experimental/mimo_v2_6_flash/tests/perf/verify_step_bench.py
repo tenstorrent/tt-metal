@@ -48,6 +48,11 @@ PROFILING = os.environ.get("TT_METAL_DEVICE_PROFILER") == "1"
 
 
 PERF_JSON = os.environ.get("VSB_PERF_JSON")  # with PROFILING: each read's per-program device times, one chip
+# VSB_TOKENS: print each request's first committed tokens; VSB_DUP: request i takes prompt i % VSB_DUP (rows computed
+# alike must commit the same tokens).
+TOKENS = int(os.environ.get("VSB_TOKENS", "0"))
+DUP = int(os.environ.get("VSB_DUP", "0"))
+EAGER = os.environ.get("VSB_EAGER") == "1"  # plain steps without the trace (MIMO_DEBUG_ROWS)
 _perf = []
 
 
@@ -156,6 +161,8 @@ def main():
     cfg = MiMoConfig.from_model_path(path)
     pair = generator_vllm.KV_PAIR_SPLIT
     groups, buffers = vllm_kv_layout(cfg)
+    layers = int(os.environ.get("VSB_LAYERS", cfg.num_hidden_layers))  # fewer layers: a debugging aid
+    groups = groups[:layers]
     MiMoV2ForCausalLM._layer_groups = groups
     MiMoV2ForCausalLM.prefill_token_budget = a.budget
     max_seq_len = -(-(max(ctxs + [a.interleave_ctx]) + 8192) // 128) * 128  # pair-split global blocks
@@ -187,17 +194,18 @@ def main():
     )
     try:
         t0 = time.time()
-        hf = SimpleNamespace(num_hidden_layers=cfg.num_hidden_layers, _name_or_path=path)
+        hf = SimpleNamespace(num_hidden_layers=layers, _name_or_path=path)
         model = MiMoV2ForCausalLM.initialize_vllm_model(hf, mesh, rows, max_seq_len, tt_data_parallel=1)
         specs = []
-        for i in range(cfg.num_hidden_layers):
+        for i in range(layers):
             dims = cfg.attention_dims(i)
             block = 2 * BLOCK_SIZE if pair and not cfg.is_swa(i) else BLOCK_SIZE
             specs.append(((num_blocks, 1, block, dims.head_dim), torch.bfloat16, buffers[i]))
         kv = model.allocate_kv_cache_per_layer(specs)
         model.warmup_model_prefill(kv)
         model.warmup_model_decode(kv, enable_trace=False)
-        model.warmup_model_decode(kv, enable_trace=True)
+        if not EAGER:  # VSB_EAGER: no decode trace, every plain step runs eagerly
+            model.warmup_model_decode(kv, enable_trace=True)
         say(f"built and warmed up in {time.time() - t0:.0f} s, {num_blocks} blocks")
 
         from transformers import AutoTokenizer
@@ -205,6 +213,8 @@ def main():
         tokenizer = AutoTokenizer.from_pretrained(path, trust_remote_code=True)
         texts = prompts(tokenizer, ctxs[:users] + ([a.interleave_ctx] if a.interleave else []))
         extra = {"slot": users, "pos": 0, "chunks": 0}
+        if DUP:  # rows computed alike must agree
+            texts = [texts[i % DUP] for i in range(len(texts))]
         rng = torch.Generator().manual_seed(1234)
         last = []
         t0 = time.time()
@@ -233,7 +243,7 @@ def main():
             # pos[r]: the position of request r's last committed token tok[r] (not yet in the cache).
             pos = getattr(main, "_pos", list(ctxs[:users]))
             tok = getattr(main, "_tok", list(last))
-            times, per_step_tokens = [], []
+            times, per_step_tokens, per_request = [], [], []
             emitted = [[] for _ in range(n)]  # each request's committed tokens (the run's digest)
             if plain:
                 for s in range(a.steps):
@@ -243,7 +253,7 @@ def main():
                         tokens[r, 0], positions[r] = tok[r], pos[r]
                     t1 = time.perf_counter()
                     logits = model.decode_forward(
-                        tokens, positions, tables[0], kv, enable_trace=True, page_tables_per_layer=layer_tables
+                        tokens, positions, tables[0], kv, enable_trace=not EAGER, page_tables_per_layer=layer_tables
                     )
                     times.append(time.perf_counter() - t1)
                     if PROFILING:
@@ -336,10 +346,17 @@ def main():
                         emitted[r] += [int(x) for x in ids[r, :c]]
                     counts[n:] = 1
                     per_step_tokens.append(sum(got) / n)
+                    per_request.append(got)
                 mode = f"spec{k}"
             main._pos, main._tok = pos, tok
             t = times[a.warm :]
             tps = statistics.mean(per_step_tokens[a.warm :])
+            if TOKENS:  # each request's first committed tokens (greedy: the same at any draft length)
+                for r in range(n):
+                    say(f"users={n} request={r} tokens={emitted[r][:TOKENS]}")
+            if per_request:  # each request's tokens per step (a verify's slots: a request per draft group)
+                each = [statistics.mean(g[r] for g in per_request[a.warm :]) for r in range(n)]
+                say(f"users={n} per_request_tokens_per_step={[round(v, 2) for v in each]}")
             med = statistics.median(t)
             say(
                 f"users={n} mode={mode} step_ms={1e3 * med:.2f} mean={1e3 * statistics.mean(t):.2f} "
