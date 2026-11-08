@@ -259,18 +259,23 @@ ttnn::Tensor pad_impl(
         if (width_distinct(input_logical_shape, output_padded_shape)) {
             std::array<uint32_t, 4> output_shape_width_padded{
                 input_logical_shape[0], input_logical_shape[1], input_logical_shape[2], output_w};
+            // Only the shard width has to change for the wider output, so keep the orientation the
+            // caller asked for instead of silently replacing it with ROW_MAJOR.
+            const auto requested_orientation = output_memory_config.shard_spec().has_value()
+                                                   ? output_memory_config.shard_spec()->orientation
+                                                   : ShardOrientation::ROW_MAJOR;
             log_warning(
                 tt::LogOp,
                 "ttnn.pad: Input is HEIGHT_SHARDED and width padding is required. "
-                "Ignoring the provided output memory config and recomputing a HEIGHT_SHARDED config "
-                "with shard width equal to the padded output width.");
+                "Ignoring the provided output shard shape and recomputing a HEIGHT_SHARDED config "
+                "with shard width equal to the padded output width and the requested orientation.");
             auto width_pad_memory_config = create_sharded_memory_config(
                 ttnn::Shape{output_shape_width_padded},
                 input_tensor.shard_spec()->grid,  // reuse input cores for now: FIXME: can we do better?
                                                   // it's complicated because we need the input shards to be local
                                                   // to the core holding the output shard currently.
                 ShardStrategy::HEIGHT,            // stay height sharded
-                ShardOrientation::ROW_MAJOR);
+                requested_orientation);
             output_memory_config = width_pad_memory_config;
 
             if (height_distinct(input_logical_shape, output_padded_shape)) {
