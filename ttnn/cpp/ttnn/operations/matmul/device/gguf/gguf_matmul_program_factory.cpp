@@ -291,8 +291,10 @@ GgufMatmulProgramFactory::cached_program_t GgufMatmulProgramFactory::create(
         add_cb(program, compute, tt::CBIndex::c_3, tt::DataFormat::UInt32, 64, 1, tt::tt_metal::Tile());
     }
 
-    // Reads in flight: two for Q4_0 and Q4_1, one for the others, which a second one slows down (measured, decode).
-    const bool two_in_flight = weight.dtype() == DataType::GGUF_Q4_0 || weight.dtype() == DataType::GGUF_Q4_1;
+    // Reads in flight: two for Q4_0, Q4_1, MXFP4 and NVFP4, one for the others, which a second one slows down
+    // (measured, decode).
+    const bool two_in_flight = weight.dtype() == DataType::GGUF_Q4_0 || weight.dtype() == DataType::GGUF_Q4_1 ||
+                               weight.dtype() == DataType::GGUF_MXFP4 || weight.dtype() == DataType::GGUF_NVFP4;
     std::vector<uint32_t> reader_ct =
         tq2 ? std::vector<uint32_t>{kTq2Units * unit, unit, kTq2InFlight, window, kScaleTiles, scale_tile_bytes}
             : std::vector<uint32_t>{
