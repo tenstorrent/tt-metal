@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Device kernel time of ttnn.silu_glu's one binary_ng program against the composite it replaces, on the same BF16
+"""Device kernel time of ttnn.geglu_tanh's one binary_ng program against the composite it replaces, on the same BF16
 operands, each call first checked to launch the path it names."""
 
 import os
@@ -14,9 +14,9 @@ import torch
 import ttnn
 from loguru import logger
 
-# The boards the route runs silu_glu_tile on; Wormhole keeps the composite.
+# The boards the route runs geglu_tanh_tile on; Wormhole keeps the composite.
 ROUTE_BOARDS = ("blackhole",)
-OP_TYPE = "SILU_GLU"
+OP_TYPE = "GEGLU_TANH"
 
 
 def _board(device=None):
@@ -40,7 +40,7 @@ REPEATS = 5
 MARGIN = 0.05
 # The operands' range per input: twice the leaf's clamp, its ratio's hold, or 16 for an unclamped leaf.
 REACH = (32.0, 32.0)
-PATH = "tests/ttnn/perf_tests/operations/eltwise/test_silu_glu_device_perf.py"
+PATH = "tests/ttnn/nightly/unit_tests/operations/eltwise/perf/geglu_tanh_device_perf.py"
 # The profiled calls run only inside the device profiler, which the device-perf test launches: run on their
 # own, they would hold the device that the profiler's run of them then waits for.
 IN_PROFILER = pytest.mark.skipif(
@@ -64,16 +64,16 @@ def _calls(a, b, out):
         "composite": lambda: ttnn.multiply(
             a,
             b,
-            input_tensor_a_activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU)],
+            input_tensor_a_activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.GELU_TANH)],
             input_tensor_b_activations=[],
             output_tensor=out,
         ),
-        "fused": lambda: ttnn.silu_glu(a, b),
+        "fused": lambda: ttnn.geglu_tanh(a, b),
     }
 
 
 @IN_PROFILER
-def test_silu_glu_profiled_calls(device):
+def test_geglu_tanh_profiled_calls(device):
     """Each call's path, then the calls the device-perf test profiles, between signposts that name each one."""
     from tracy import signpost
 
@@ -115,17 +115,17 @@ def _kernel_ns_per_region(csv_path):
 
 
 @pytest.mark.models_device_performance_bare_metal
-def test_silu_glu_device_perf():
+def test_geglu_tanh_device_perf():
     from tracy.common import clear_profiler_runtime_artifacts
     from tracy.process_model_log import get_latest_ops_log_filename, run_device_profiler
 
     board = _board()
     if board not in ROUTE_BOARDS:
         pytest.skip("this board keeps the composite")
-    subdir = "silu_glu_device_perf"
+    subdir = "geglu_tanh_device_perf"
     clear_profiler_runtime_artifacts()
     run_device_profiler(
-        f"pytest {PATH}::test_silu_glu_profiled_calls", subdir, device_analysis_types=["device_kernel_duration"]
+        f"pytest {PATH}::test_geglu_tanh_profiled_calls", subdir, device_analysis_types=["device_kernel_duration"]
     )
     regions = _kernel_ns_per_region(get_latest_ops_log_filename(subdir))
     slow = []
@@ -137,7 +137,7 @@ def test_silu_glu_device_perf():
             per_call[path] = (sorted(ns for ns, _ in measured)[REPEATS // 2], measured[0][1])
         (composite, composite_programs), (fused, fused_programs) = per_call["composite"], per_call["fused"]
         logger.info(
-            f"DEVICE_PERF silu_glu {board} {height}x{width} composite={composite:.0f}ns ({composite_programs} programs) "
+            f"DEVICE_PERF geglu_tanh {board} {height}x{width} composite={composite:.0f}ns ({composite_programs} programs) "
             f"fused={fused:.0f}ns ({fused_programs} programs) speedup={composite / fused:.2f}x"
         )
         if fused > composite * (1 - MARGIN):
