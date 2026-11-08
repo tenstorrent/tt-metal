@@ -12,7 +12,12 @@ ttnn::Tensor wan_fused_rmsnorm_pre_allgather(
     const ttnn::Tensor& input_tensor,
     const DataType dtype,
     const std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
-    const std::optional<MemoryConfig>& /*memory_config*/) {
+    const std::optional<MemoryConfig>& memory_config) {
+    // The prim builds the stats output from the input's memory config and never reads this argument.
+    TT_FATAL(
+        !memory_config.has_value(),
+        "wan_fused_rmsnorm_pre_allgather does not support memory_config; the stats tensor uses the input's memory "
+        "config");
     auto arch = input_tensor.device()->arch();
     auto kernel_config_val =
         init_device_compute_kernel_config(arch, compute_kernel_config, tt::tt_metal::MathFidelity::HiFi4, false, true, false);
