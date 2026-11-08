@@ -29,7 +29,17 @@ from models.demos.deepseek_v3_d_p.reference.cpu_deepseek_v32 import pretrained_m
 from models.demos.deepseek_v3_d_p.reference.glm_5_3.block import glm_decoder_layer_reference
 from models.demos.deepseek_v3_d_p.reference.glm_5_3_config import GLM53Config
 from models.demos.deepseek_v3_d_p.reference.tt.moe.moe import load_moe_weights_from_hf
-from models.demos.deepseek_v3_d_p.tests.fabric_profiles import moe_fabric_payload, torus_xy_device_params
+from models.demos.deepseek_v3_d_p.tests.conftest import find_local_model
+from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
+    fabric2d_device_params,
+    moe_fabric_payload,
+    torus_xy_device_params,
+)
+from models.demos.deepseek_v3_d_p.tests.glm_synthetic_weights import (
+    glm_norm_weight,
+    glm_random_dense_ffn_weights,
+    glm_random_moe_weights,
+)
 from models.demos.deepseek_v3_d_p.tests.sparse_mla.sparse_mla_reference import build_weights
 from models.demos.deepseek_v3_d_p.tt.mla.indexer import indexer_layer_is_reused, num_full_indexer_layers
 from models.demos.deepseek_v3_d_p.tt.mla.rope import RotarySetup
@@ -41,6 +51,7 @@ from models.demos.deepseek_v3_d_p.tt.mla.utils import (
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode, assert_gate_mode_matches_adapter
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from models.demos.deepseek_v3_d_p.tt.tt_prefill_block import TtPrefillBlock
+from models.demos.deepseek_v3_d_p.utils.chunk_config import PREFILL_CHUNK_TOKENS_PER_CHIP
 from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import init_checker
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat, init_kvpe_cache, init_mla_kv_cache
 from models.demos.deepseek_v3_d_p.utils.transformer_helpers import (
@@ -574,37 +585,6 @@ def _first_full_moe_layer(config):
     return idx
 
 
-def _glm_norm_weight(hidden, seed):
-    return (torch.randn(hidden, generator=torch.Generator().manual_seed(seed)) * 0.1 + 1.0).to(torch.bfloat16)
-
-
-def _glm_random_dense_ffn_weights(hidden, intermediate, seed):
-    g = torch.Generator().manual_seed(seed)
-    return {
-        "gate_proj": (torch.randn(intermediate, hidden, generator=g) * hidden**-0.5).to(torch.bfloat16),
-        "up_proj": (torch.randn(intermediate, hidden, generator=g) * hidden**-0.5).to(torch.bfloat16),
-        "down_proj": (torch.randn(hidden, intermediate, generator=g) * intermediate**-0.5).to(torch.bfloat16),
-    }
-
-
-def _glm_random_moe_weights(hidden, moe_intermediate, n_routed, seed):
-    g = torch.Generator().manual_seed(seed)
-    hs, ds = hidden**-0.5, moe_intermediate**-0.5
-
-    def _expert():
-        return {
-            "gate_proj": (torch.randn(moe_intermediate, hidden, generator=g) * hs).to(torch.bfloat16),
-            "up_proj": (torch.randn(moe_intermediate, hidden, generator=g) * hs).to(torch.bfloat16),
-            "down_proj": (torch.randn(hidden, moe_intermediate, generator=g) * ds).to(torch.bfloat16),
-        }
-
-    gate_weights = {
-        "weight": (torch.randn(n_routed, hidden, generator=g) * hs).to(torch.bfloat16),
-        "e_score_correction_bias": (torch.randn(n_routed, generator=g) * 0.01).to(torch.float32),
-    }
-    return gate_weights, [_expert() for _ in range(n_routed)], _expert()
-
-
 def _glm_pretrained_weights(config, model_dir, layer_idx, is_moe):
     """Load layer-``layer_idx`` host weights from a local checkpoint dir; fp8 tensors are block-dequantized."""
     from models.demos.deepseek_v3_d_p.reference.cpu_deepseek_v32.weights import _dequant_fp8
@@ -661,10 +641,24 @@ def _glm_pretrained_weights(config, model_dir, layer_idx, is_moe):
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
             id="torus-xy-8x4",
         ),
+        # LoudBox. SP=2, TP=4 keeps 16 heads per chip, so the heads<->sequence all-to-all around sparse_sdpa
+        # runs exactly as on the galaxy; a 4x2 mesh (32 heads per chip) would skip it.
+        pytest.param(
+            (2, 4),
+            fabric2d_device_params(
+                fabric_payload_size=moe_fabric_payload(GLM53Config),
+                worker_l1_size=ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE,
+            ),
+            1,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"),
+            id="fabric2d-2x4",
+        ),
     ],
     indirect=["mesh_device", "device_params"],
 )
-@pytest.mark.parametrize("seq_len", [5120], ids=["seq5120"])
+# Each mesh runs the sequence that gives it the production per-chip shape (640 rows per SP row); the other
+# combinations are skipped in the test body.
+@pytest.mark.parametrize("seq_len", [5120, 1280], ids=["seq5120", "seq1280"])
 @pytest.mark.parametrize("layer_type", ["dense", "moe"], ids=["dense", "moe"])
 # KV dedup through TtPrefillBlock -> ttMLA (the whole norm/attn/FFN stack, not just the MLA-level tests
 # in tests/sparse_mla/).
@@ -679,10 +673,17 @@ def test_glm_prefill_block(
     num_links,
     seq_len,
     layer_type,
-    model_path,
-    weight_cache_path,
+    request,
 ):
     """One fused GLM decoder block (sparse-SDPA MLA + norm/residual + dense|MoE FFN) vs composed CPU ref."""
+    sp_factor = mesh_device.shape[0]
+    rows_per_chip = seq_len // sp_factor
+    if rows_per_chip != PREFILL_CHUNK_TOKENS_PER_CHIP:
+        pytest.skip(f"seq_len {seq_len} on SP={sp_factor} is {rows_per_chip} rows/chip, not a shape under test")
+    # Resolve the checkpoint only if it is already on this host: the model_path fixture downloads it
+    # otherwise, and the random-weight path below needs nothing.
+    model_path = find_local_model(variant)
+    weight_cache_path = request.getfixturevalue("weight_cache_path") if model_path is not None else None
     topology = per_axis_topology(device_params["fabric_config"])
     is_moe = layer_type == "moe"
     config = config_only
@@ -726,9 +727,9 @@ def test_glm_prefill_block(
     else:
         # Random weights for both device (built from host) and reference.
         mla_weights, _ = build_weights(variant, config, seed=42)
-        attn_norm_w, ffn_norm_w = _glm_norm_weight(hidden, 1), _glm_norm_weight(hidden, 2)
+        attn_norm_w, ffn_norm_w = glm_norm_weight(hidden, 1), glm_norm_weight(hidden, 2)
         if is_moe:
-            gate_weights, routed, shared = _glm_random_moe_weights(
+            gate_weights, routed, shared = glm_random_moe_weights(
                 hidden, GLM53Config.MOE_INTERMEDIATE_SIZE, GLM53Config.NUM_ROUTED_EXPERTS, seed=3
             )
             moe_weights = {
@@ -738,7 +739,7 @@ def test_glm_prefill_block(
             }
             ffn_weights = None
         else:
-            ffn_weights = _glm_random_dense_ffn_weights(hidden, config.intermediate_size, seed=3)
+            ffn_weights = glm_random_dense_ffn_weights(hidden, config.intermediate_size, seed=3)
             moe_weights = None
         device_state_dict = {"attn_norm_weight": attn_norm_w, "mla_weights": mla_weights, "ffn_norm_weight": ffn_norm_w}
         if is_moe:

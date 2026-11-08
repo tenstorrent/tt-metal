@@ -191,6 +191,10 @@ def test_packed_payload(env):
     assert mtp is None
     assert rows.shape == (sp, 1, forward_chunks * C // sp)
     chunks = decode_forward_metadata(list(struct.unpack(f"<{len(metadata) // 4}i", metadata)), forward_chunks)
+    # Runs ending in a partial chunk go last, whole, so its pad rows route through no MoE call and each slot's chunks
+    # stay one run.
+    pushes = [pushes[2], pushes[0], pushes[1]]
+    validate_chunks(chunks, chunk_size=C, forward_chunks=forward_chunks, num_users=2, max_seq_len=MAX_SEQ_LEN)
     assert chunks == [PrefillChunk(p.slot_id, p.actual_start, p.actual_end) for p in pushes] + [EMPTY_CHUNK]
     s = C // sp
     for k, p in enumerate(pushes):
