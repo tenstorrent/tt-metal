@@ -1565,8 +1565,9 @@ class LTXVideoEncoder(Module):
         # shape (the pipeline encodes at both stage resolutions); each gen copies its pixels into the
         # captured input buffer and replays. "enc" in LTX_GEN_EAGER_STAGES runs it eager at runtime.
         self.traced = False
-        # Captures are taken only while the pipeline holds this open (its warmup, below every DiT
-        # trace). A shape first seen later runs eager: a capture then would allocate under live traces.
+        # While the pipeline holds this open (its early warmup, before any capture), a new shape gets
+        # its trace input and prep run; capture_traces() records them after every other capture. A
+        # shape first seen later runs eager: a capture then would allocate under live traces.
         self.capture_open = False
         self._encode_tracers: dict[tuple, Tracer] = {}
         self._encode_logical_hw: dict[tuple, tuple[int, int]] = {}
@@ -1629,23 +1630,26 @@ class LTXVideoEncoder(Module):
         if traced:
             key = (tuple(sample_tt.shape), logical_h, logical_w)
             tracer = self._encode_tracers.get(key)
-            if tracer is None and not self.capture_open:
-                logger.warning(f"image encoder: no capture for {key}, encoding eager")
-                traced = False
-                sample_tt = ttnn.to_device(sample_tt, self.mesh_device)
-        if traced:
-            if tracer is None:
+            if tracer is None and self.capture_open:
+                # Allocate the trace input and run the prep run now (below every capture); the trace
+                # itself is recorded later by capture_traces(), after every other persistent allocation.
                 tracer = Tracer(self.encode_device, device=self.mesh_device, prep_run=True, clone_prep_inputs=True)
                 self._encode_tracers[key] = tracer
                 # A host round-trip cannot be captured: the downsample gathers on device inside the trace.
                 self._set_device_gather(True)
                 try:
-                    sample_tt = tracer(sample_tt, logical_h, logical_w)
+                    sample_tt = tracer.prepare(sample_tt, logical_h, logical_w)
                 finally:
                     self._set_device_gather(False)
                 self._encode_logical_hw[key] = self._last_logical_hw
-            else:
+                logger.info(f"image encoder: trace input + prep run for {key}, capture deferred")
+            elif tracer is not None and tracer.trace_captured:
                 sample_tt = tracer(sample_tt, logical_h, logical_w)
+            else:
+                logger.warning(f"image encoder: no capture for {key}, encoding eager")
+                traced = False
+                sample_tt = ttnn.to_device(sample_tt, self.mesh_device)
+        if traced:
             logical_h, logical_w = self._encode_logical_hw[key]
         else:
             sample_tt = self.encode_device(sample_tt, logical_h, logical_w)
@@ -1711,6 +1715,21 @@ class LTXVideoEncoder(Module):
         sample_tt = ttnn.multiply(ttnn.subtract(sample_tt, mean), ttnn.reciprocal(std))
         self._last_logical_hw = (logical_h, logical_w)
         return sample_tt
+
+    def capture_traces(self) -> None:
+        """Capture every prepared encode trace. The pipeline calls this after its last other capture
+        and persistent allocation, so nothing allocated later sits in an encode trace's activation
+        region and no encode replay overwrites a live buffer (#3354: the stage-1 hang)."""
+        pending = [t for t in self._encode_tracers.values() if not t.trace_captured]
+        if not pending:
+            return
+        self._set_device_gather(True)
+        try:
+            for tracer in pending:
+                tracer.capture_prepared()
+        finally:
+            self._set_device_gather(False)
+        logger.info(f"image encoder: captured {len(pending)} encode trace(s) after every other capture")
 
     def release_trace(self) -> None:
         """Release every encode capture before rebuilding or unloading weights."""
