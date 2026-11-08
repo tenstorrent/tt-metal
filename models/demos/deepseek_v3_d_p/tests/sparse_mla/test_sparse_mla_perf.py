@@ -82,7 +82,9 @@ GATE_CASES = {
 # cache-length-dependent work, and its warm case has only been seen in the slow mode on Galaxy, so it takes the long
 # case's untraced time. LoudBox GLM-5.3 warm untraced is from two unclamped CI runs (4.54, 4.62 ms) on 2026-11-07 (the
 # first target was a copy error); its host overhead over traced is ~1 ms above the other cases, so it may be the slow
-# mode and needs re-centring from clamped runs.
+# mode and needs re-centring from clamped runs. LoudBox K3.1 untraced is from two clamped CI runs (warm 3.019, 3.014;
+# long 4.234, 4.234 ms) on 2026-11-07: the earlier warm target was a slow-mode run, and long is re-centred with it. Its
+# traced targets keep the earlier means (the clamped runs were within ~1.5% below them).
 _TARGETS_MS = {
     "Galaxy": {
         "kimi_k3_1": (3.99, 3.10, 7.23, 6.71),
@@ -90,7 +92,7 @@ _TARGETS_MS = {
         "glm_5_3-no_indexer": (2.93, 2.19, 2.93, 2.25),
     },
     "LoudBox": {
-        "kimi_k3_1": (3.72, 2.77, 4.39, 4.04),
+        "kimi_k3_1": (3.01, 2.77, 4.23, 4.04),
         "glm_5_3": (4.54, 2.40, 4.88, 3.60),
         "glm_5_3-no_indexer": (2.18, 2.10, 2.83, 2.72),
     },
