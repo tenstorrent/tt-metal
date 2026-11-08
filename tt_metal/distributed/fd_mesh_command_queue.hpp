@@ -38,6 +38,8 @@ class SubDeviceSetupCacheTestAccessor;
 struct MeshReadEventDescriptor;
 struct MeshBufferReadDescriptor;
 struct MeshCoreDataReadDescriptor;
+struct PerDeviceRuntimeArgs;
+struct ResolvedPerDeviceRuntimeArgsField;
 
 using MeshCompletionReaderVariant =
     std::variant<MeshBufferReadDescriptor, MeshReadEventDescriptor, MeshCoreDataReadDescriptor>;
@@ -77,6 +79,14 @@ private:
         ProgramCommandSequence& program_cmd_seq,
         bool stall_first,
         bool stall_before_program);
+    // As above for a program with per-device runtime args: each local device of `device_range` gets the sequence
+    // with its own values patched in.
+    void write_program_commands_to_devices(
+        const MeshCoordinateRange& device_range,
+        ProgramCommandSequence& program_cmd_seq,
+        bool stall_first,
+        bool stall_before_program,
+        const std::vector<ResolvedPerDeviceRuntimeArgsField>& per_device_runtime_args);
     // For a given MeshWorkload, a subgrid is unused if no programs are run on it. Dispatch sequences
     // must be sent to this subgrid to ensure consistent global state across the Virtual Mesh.
     // This function generates and writes dispatch commands forwarding go signal sequences to
@@ -135,6 +145,8 @@ private:
 
     struct MeshTraceNode {
         std::vector<std::pair<MeshCoordinateRange, TraceNode>> trace_nodes;
+        // Per trace_nodes entry: a capture-time snapshot of the program's per-device runtime args, or null.
+        std::vector<std::shared_ptr<const PerDeviceRuntimeArgs>> per_device_runtime_args;
         bool multicast_go_signals{false};
         SubDeviceId sub_device_id;
     };

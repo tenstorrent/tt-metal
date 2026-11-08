@@ -91,6 +91,9 @@ void EnqueueMeshWorkload(MeshCommandQueue& mesh_cq, MeshWorkload& mesh_workload,
         }
 
         if (is_service_workload.value()) {
+            TT_FATAL(
+                !mesh_workload.impl().has_per_device_runtime_args(),
+                "Per-device runtime args are not supported for service workloads");
             // Service workload: dispatch each program via SD, bypassing FD. Re-confirm each core is still
             // a claimed service core (this loop runs every enqueue, unlike the cached scan): guards the
             // cached classification against a core released between enqueues, failing loudly instead of
