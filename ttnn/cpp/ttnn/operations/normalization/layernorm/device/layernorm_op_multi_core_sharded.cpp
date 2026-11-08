@@ -163,7 +163,7 @@ ttnn::device_operation::ProgramArtifacts LayerNormShardedProgramFactory::create_
     const std::uint32_t logical_K = a.logical_shape()[-1];
 
     // Compute grid and worker distribution using helper structs
-    auto grid = GridParams::compute(a, block_ht, device->compute_with_storage_grid_size());
+    auto grid = GridParams::compute(a, block_ht, device->compute_with_storage_grid_size(), is_post_all_gather);
     auto workers = WorkerDistribution::compute(grid, block_ht);
     auto core_ranges = CoreRanges::compute(grid, workers);
 
