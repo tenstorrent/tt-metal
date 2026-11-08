@@ -30,6 +30,8 @@ from perf_schema_derive import (  # noqa: E402
     ROOT,
     class_field_specs,
     class_post_init_copies,
+    column_sets_in_tree,
+    derive_perf_test_column_sets,
     derive_perf_test_schemas,
     emitted_fields,
     enum_member_names,
@@ -228,6 +230,117 @@ def test_test_name_aliases_reject_missing_and_stale_key():
     problems = _test_name_alias_problems(catalog)
     assert any("missing test_name_aliases" in p for p in problems)
     assert any("still a catalog key" in p for p in problems)
+
+
+def _column_set_problems(column_sets) -> list:
+    problems = []
+    for name, groups in sorted(column_sets.items()):
+        if len(groups) < 2:
+            continue
+        common = frozenset.intersection(*groups)
+        problems.append(f"  '{name}': {len(groups)} column sets in one CSV")
+        for cols, labels in sorted(groups.items(), key=lambda g: -len(g[1])):
+            unique = sorted(cols - common)
+            problems.append(
+                f"    {', '.join(labels)}: "
+                + (f"also emits {unique}" if unique else "emits the common set")
+            )
+    return problems
+
+
+def _assert_one_column_set_per_file(column_sets, arch):
+    problems = _column_set_problems(column_sets)
+    msg = [
+        f"{arch} perf test file(s) emit more than one column set:",
+        "",
+        *problems,
+        "",
+        "One perf test writes one CSV, so every function that builds its config "
+        "must emit the same columns. Add the missing parameter with a neutral "
+        "value, or give each perf test its own runner.",
+    ]
+    assert not problems, "\n".join(msg)
+
+
+def test_one_column_set_per_perf_test_file():
+    column_sets = derive_perf_test_column_sets(quasar=False)
+    assert sum(map(len, column_sets["perf_eltwise_binary_sfpu"].values())) >= 4
+    assert sum(map(len, column_sets["perf_eltwise_binary"].values())) >= 2
+    _assert_one_column_set_per_file(column_sets, "WH/BH")
+
+
+def test_one_column_set_per_perf_test_file_qsr():
+    column_sets = derive_perf_test_column_sets(quasar=True)
+    assert sum(map(len, column_sets["perf_eltwise_binary_sfpu_quasar"].values())) >= 3
+    _assert_one_column_set_per_file(column_sets, "Quasar")
+
+
+def _synthetic_column_sets(source):
+    specs = class_field_specs()
+    return column_sets_in_tree(
+        ast.parse(source),
+        specs,
+        helper_returned_param_calls(specs),
+        class_post_init_copies(),
+    )
+
+
+def test_nested_helper_folds_into_its_parent():
+    groups = _synthetic_column_sets(
+        """
+def _run_a():
+    def build():
+        return PerfConfig(templates=[LOOP_FACTOR(1)])
+    cfg = {"test_name": "sources/a.cpp", "runtimes": [NUM_FACES()]}
+    return build()
+
+async def _run_b():
+    cfg = {"test_name": "sources/a.cpp", "runtimes": [NUM_FACES()]}
+    return PerfConfig(templates=[LOOP_FACTOR(1)])
+"""
+    )
+    assert list(groups.values()) == [
+        ["sources/a.cpp (_run_a)", "sources/a.cpp (_run_b)"]
+    ]
+
+
+def test_functional_only_and_partly_visible_functions_are_skipped():
+    groups = _synthetic_column_sets(
+        """
+def _run_perf():
+    return PerfConfig(templates=[LOOP_FACTOR(1), NUM_FACES()])
+
+def test_functional():
+    return create_test_or_perf_config(is_perf=False, templates=[LOOP_FACTOR(1)])
+
+def _run_spread(extra):
+    return PerfConfig(templates=[LOOP_FACTOR(1), *extra])
+
+def _run_conditional(c):
+    return PerfConfig(templates=[LOOP_FACTOR(1), NUM_FACES() if c else None])
+"""
+    )
+    assert list(groups.values()) == [["_run_perf"]]
+
+
+def test_functions_that_disagree_are_reported_with_the_odd_column():
+    problems = _column_set_problems(
+        {
+            "perf_x": {
+                frozenset({"a", "b"}): ["sources/x.cpp"],
+                frozenset({"a"}): ["sources/x_bcast.cpp"],
+            }
+        }
+    )
+    assert any("'perf_x': 2 column sets in one CSV" in p for p in problems)
+    assert any("sources/x.cpp: also emits ['b']" in p for p in problems)
+    assert any("sources/x_bcast.cpp: emits the common set" in p for p in problems)
+
+
+def test_functions_that_agree_are_not_reported():
+    assert not _column_set_problems(
+        {"perf_x": {frozenset({"a", "b"}): ["sources/x.cpp", "sources/y.cpp"]}}
+    )
 
 
 # ── Metric-vocabulary drift (global) ──────────────────────────────────

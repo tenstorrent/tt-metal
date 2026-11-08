@@ -12,9 +12,7 @@
 #include <tt-metalium/buffer.hpp>
 #include "impl/buffers/buffer_impl.hpp"
 #include <enchantum/enchantum.hpp>
-#include <functional>
 #include <algorithm>
-#include <string>
 #include <mutex>
 
 #include <tt_stl/assert.hpp>
@@ -24,7 +22,6 @@
 #include "impl/trace/trace_buffer.hpp"
 #include <tt-metalium/math.hpp>
 #include <tt-logger/tt-logger.hpp>
-#include <umd/device/types/xy_pair.hpp>
 #include "impl/allocator/allocator.hpp"
 
 namespace tt::tt_metal {
@@ -426,6 +423,18 @@ std::unordered_set<Buffer*> AllocatorImpl::get_allocated_buffers() const {
 size_t AllocatorImpl::get_num_allocated_buffers() const {
     std::lock_guard<std::mutex> lock(mutex_);
     return allocated_buffers_.size();
+}
+
+std::vector<std::pair<DeviceAddr, DeviceAddr>> AllocatorImpl::get_dram_allocations() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return dram_manager_->get_allocated_ranges();
+}
+
+bool AllocatorImpl::is_buffer_allocated_at(size_t unique_id, DeviceAddr address) const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return std::any_of(allocated_buffers_.begin(), allocated_buffers_.end(), [&](const Buffer* buffer) {
+        return buffer->unique_id() == unique_id && buffer->address() == address;
+    });
 }
 
 uint32_t AllocatorImpl::get_num_banks(const BufferType& buffer_type) const {

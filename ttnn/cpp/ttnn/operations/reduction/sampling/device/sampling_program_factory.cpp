@@ -197,7 +197,10 @@ ttnn::device_operation::ProgramArtifacts SamplingProgramFactory::create_program_
 
     uint32_t num_out_tiles = Ht;
 
-    // random number
+    // Random digits stay in a BF16 tile. They are integers 0..255 (exact in BF16); the writer
+    // assembles three of them into a k/2^24 threshold. The tile is not Float32: on Wormhole and
+    // Blackhole this kernel leaves FP32 dest accumulation off so top-k indices stay 16-bit, and a
+    // wider pack of that dest would not keep a finer uniform than the digits already do.
     const uint32_t rand_tile_size = tile_size(tt::DataFormat::Float16_b);
 
     // final indices

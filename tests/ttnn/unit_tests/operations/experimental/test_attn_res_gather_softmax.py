@@ -87,6 +87,9 @@ MESH_ARMS = [
     pytest.param((8, 4), FABRIC_2D, id="fabric2d-mesh-8x4"),
     pytest.param((8, 4), TORUS_X, id="torusx-mesh-8x4"),
     pytest.param((8, 4), TORUS_XY, id="torusxy-mesh-8x4"),
+    # A 4x4 pipeline stage: a Galaxy carved to 16 chips, see `SUBTORUS_4X4_ENV` in the AttnRes
+    # model harness.
+    pytest.param((4, 4), TORUS_XY, id="torusxy-mesh-4x4"),
 ]
 
 
@@ -105,14 +108,17 @@ def _oracle(partial, running_sum, shift, mass, query):
     return (partial * rescale + running_sum * live_weight) / (mass * rescale + live_weight)
 
 
+# The K3 chunk a chip, then 14k tokens over a 4x4 stage's SP4: more rows than the grid has
+# cores, so each core takes several.
+@pytest.mark.parametrize("per_chip_tokens", [PER_CHIP_TOKENS, 3584], ids=["k3", "long"])
 @pytest.mark.parametrize("mesh_device, device_params", MESH_ARMS, indirect=True)
 @pytest.mark.parametrize("fuse_add", [False, True], ids=["plain", "settle"])
-def test_matches_torch(mesh_device, device_params, fuse_add):
+def test_matches_torch(mesh_device, device_params, fuse_add, per_chip_tokens):
     torch.manual_seed(2026)
 
     mesh_shape = tuple(mesh_device.shape)
     tp_factor, sp_factor = mesh_shape[TP_AXIS], mesh_shape[SP_AXIS]
-    num_tokens = PER_CHIP_TOKENS * sp_factor
+    num_tokens = per_chip_tokens * sp_factor
 
     stream_dims, vector_dims, scalar_dims = [None, None], [None, None], [None, None]
     stream_dims[SP_AXIS], stream_dims[TP_AXIS] = 2, 3

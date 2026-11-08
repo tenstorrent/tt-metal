@@ -17,19 +17,23 @@ from enum import Enum
 from pathlib import Path
 from typing import Iterable
 
+from .chip_architecture import ChipArchitecture
 from .llk_params import MathOperation
 from .ulp_domains import Domain, largest_figure, usable_budget_ceiling
 from .ulp_table import (
-    MEASURED_ARCH,
+    TABLE_PATHS,
     BudgetKey,
     Measurement,
     Metric,
     Row,
     Table,
+    arch_of_table,
     load_table,
+    measured_arch,
     most_specific,
     read_measurements,
     steps_bind,
+    table_arch,
 )
 
 # The op and the key of the row that decides a cell.
@@ -180,12 +184,18 @@ def _recorded(row: Row) -> int | None:
     return row.measured if row.input is not None and row.output is not None else None
 
 
-def _held(table: Table, op: MathOperation, query: BudgetKey, full: bool) -> Held:
+def _held(
+    table: Table,
+    op: MathOperation,
+    query: BudgetKey,
+    full: bool,
+    arch: ChipArchitecture,
+) -> Held:
     row = _resolve(table, op, query)
     gated = (
         row is not None
         and row.contract.metric is Metric.ULP
-        and steps_bind(row.key, query)
+        and steps_bind(row.key, query, arch)
     )
     declared = (
         None
@@ -196,13 +206,13 @@ def _held(table: Table, op: MathOperation, query: BudgetKey, full: bool) -> Held
 
 
 def _variants(
-    base: Table, head: Table, op: MathOperation
+    base: Table, head: Table, op: MathOperation, arch: ChipArchitecture
 ) -> Iterable[tuple[BudgetKey, bool]]:
     """Every query the registry could be asked about *op*, as far as either table can
     tell them apart (each dimension takes every value some row pins, or is left unset; a
-    pinned two-valued flag takes both values; the arch always includes
-    :data:`MEASURED_ARCH`), and whether it is a full measured cell: every dimension some
-    row pins is set."""
+    pinned two-valued flag takes both values; the arch always includes the tables'
+    *arch*), and whether it is a full measured cell: every dimension some row pins is
+    set."""
     names = [f.name for f in fields(BudgetKey)]
     keys = [row.key for row in (*base.get(op, ()), *head.get(op, ()))]
     values = {name: {getattr(key, name) for key in keys} - {None} for name in names}
@@ -210,7 +220,7 @@ def _variants(
     for flag in ("approx_mode", "dest_acc"):
         if values[flag]:
             values[flag] |= set(type(next(iter(values[flag]))))
-    values["arch"].add(MEASURED_ARCH)
+    values["arch"].add(arch)
     axes = [
         sorted(values[name], key=lambda v: v.name) + ([] if name == "arch" else [None])
         for name in names
@@ -261,7 +271,7 @@ def _classify(was: Held, now: Held) -> Kind | None:
     return Kind.ADDED if was.row is None and now.row is not None else None
 
 
-def _spans(held: Held, query: BudgetKey) -> list[Span]:
+def _spans(held: Held, query: BudgetKey, arch: ChipArchitecture) -> list[Span]:
     """*held*'s row over ``(-inf, inf)``: its list's entries, or one span for a plain
     row. An entry with no ``ulp`` is held to the row's largest figure (by the sweep
     where that figure fits the ceiling, by the headroom report past it), so it is
@@ -271,7 +281,8 @@ def _spans(held: Held, query: BudgetKey) -> list[Span]:
     if row is None:
         return [Span(-_INF, _INF, State.NONE)]
     if row.domains:
-        binds, ceiling = steps_bind(row.key, query), usable_budget_ceiling(row.output)
+        binds = steps_bind(row.key, query, arch)
+        ceiling = usable_budget_ceiling(row.output)
         largest = largest_figure(row.domains)
         spans = []
         for d in row.domains:
@@ -343,7 +354,7 @@ class Change:
 
 
 def _segment_changes(
-    was: Held, now: Held, query: BudgetKey
+    was: Held, now: Held, query: BudgetKey, arch: ChipArchitecture
 ) -> list[tuple[Kind, tuple[float, float], str, str]]:
     """``(kind, segment, held_before, held_after)`` per run of the input over which the
     two rows' gates differ, over the union of both lists' edges, then the cell-wide
@@ -352,7 +363,7 @@ def _segment_changes(
     figure on both sides (gated or past the ceiling, either way round) a widened floor
     ranks after a raise or a lost gate and before a tightening or a new gate: both
     figures are measured outside the floor, so a wider one forgives lanes."""
-    before, after = _spans(was, query), _spans(now, query)
+    before, after = _spans(was, query, arch), _spans(now, query, arch)
     edges = sorted(
         {e for spans in (before, after) for s in spans for e in (s.low, s.high)}
     )
@@ -393,20 +404,25 @@ def _segment_changes(
     return changes
 
 
-def compare(base: Table, head: Table) -> list[Change]:
+def compare(
+    base: Table, head: Table, arch: ChipArchitecture | None = None
+) -> list[Change]:
     """Every cell whose *resolved* gate differs, strongest change first; where either
-    side's row carries a list, segment by segment."""
+    side's row carries a list, segment by segment. An unkeyed step budget binds on
+    *arch*, the tables' architecture (default: this session's)."""
+    arch = arch or measured_arch()
     grouped: dict[tuple, Change] = {}
     for op in sorted(set(base) | set(head), key=lambda o: o.name):
-        for query, full in _variants(base, head, op):
-            was, now = _held(base, op, query, full), _held(head, op, query, full)
+        for query, full in _variants(base, head, op, arch):
+            was = _held(base, op, query, full, arch)
+            now = _held(head, op, query, full, arch)
             deciding = now.row if now.row is not None else was.row
             if deciding is None:
                 continue
             if (was.row is not None and was.row.domains) or (
                 now.row is not None and now.row.domains
             ):
-                found = _segment_changes(was, now, query)
+                found = _segment_changes(was, now, query, arch)
             else:
                 kind = _classify(was, now)
                 found = (
@@ -569,13 +585,19 @@ class Headroom:
         return sum(f.verdict.fails for f in self.findings) if self.measured else 1
 
 
-def judge(table: Table, measurements: Iterable[Measurement]) -> Headroom:
+def judge(
+    table: Table,
+    measurements: Iterable[Measurement],
+    arch: ChipArchitecture | None = None,
+) -> Headroom:
     """Every recorded cell against the row it resolves to: a gated cell over its figure
     or a tolerance cell over its recorded one has regressed, and a better reading is a
     re-emit's to tighten. A list is judged entry by entry, a null entry's ranked strays
     held to the row's largest figure; a sweep record with no reading over an entry was
     measured against another list and fails. A cell that ranked no lane against a
-    figure has regressed too."""
+    figure has regressed too. An unkeyed step budget binds on *arch*, the table's
+    architecture (default: this session's)."""
+    arch = arch or measured_arch()
     cells = read_cells(measurements)
     out = Headroom(measured=len(cells))
     for cell, reading in sorted(
@@ -615,7 +637,7 @@ def judge(table: Table, measurements: Iterable[Measurement]) -> Headroom:
                 elif entry.ulp is not None and seen < entry.ulp:
                     found(Finding(cell, Verdict.TIGHTENS, seen, entry.ulp, entry))
             continue
-        if row.contract.metric is Metric.ULP and steps_bind(row.key, key):
+        if row.contract.metric is Metric.ULP and steps_bind(row.key, key, arch):
             budget = row.contract.max_ulp
             if reading.worst != budget:
                 verdict = (
@@ -681,6 +703,37 @@ def render_headroom(headroom: Headroom) -> str:
 # ── Command line ──────────────────────────────────────────────────────────────
 
 
+def _tables_arch(given: str | None, *paths: Path) -> ChipArchitecture:
+    """The architecture the tables at *paths* were measured on: *given* (``--arch``),
+    else the first path whose file name says, never the shell's ``CHIP_ARCH``: judging a
+    table under another architecture's rules stops its plain rows binding."""
+    if given is not None:
+        return ChipArchitecture.from_string(given)
+    for path in paths:
+        arch = arch_of_table(path)
+        if arch is not None:
+            return arch
+    raise ValueError(
+        f"cannot tell which architecture {', '.join(map(str, paths))} was measured "
+        "on from the file name; pass --arch"
+    )
+
+
+def _check_records_arch(
+    records: list[Measurement], arch: ChipArchitecture, path: Path
+) -> None:
+    """Refuse records run on a chip that does not read the *arch* table: judged against
+    another architecture's table, plain rows stop binding and lists are held to the
+    other chip's figures, and the report can still pass."""
+    ran_on = {table_arch(m.key.arch) for m in records if m.key.arch is not None}
+    if ran_on - {arch}:
+        raise ValueError(
+            f"{path} holds records run on "
+            f"{', '.join(sorted(a.value for a in ran_on))}, judged against the "
+            f"{arch.value} table; judge each chip's records against its own table"
+        )
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
@@ -695,10 +748,17 @@ def main(argv: list[str] | None = None) -> int:
     headroom.add_argument("--measured", type=Path, required=True)
     for command in (diff, headroom):
         command.add_argument("--out", type=Path, help="also write the report here")
+        command.add_argument(
+            "--arch",
+            choices=[arch.value for arch in TABLE_PATHS],
+            help="the architecture the table(s) were measured on (default: from the "
+            "file name, e.g. sfpu_accuracy_budget_bh.yaml)",
+        )
     args = parser.parse_args(argv)
     try:
         if args.command == "diff":
-            changes = compare(load_table(args.base), load_table(args.head))
+            arch = _tables_arch(args.arch, args.head, args.base)
+            changes = compare(load_table(args.base), load_table(args.head), arch)
             report = render_budget_diff(changes)
             loosened = any(c.kind.loosens for c in changes)
             status = 1 if loosened and not args.allow_raises else 0
@@ -706,7 +766,10 @@ def main(argv: list[str] | None = None) -> int:
             # The reader takes a missing file as no records (a sweep that died before its
             # first cell); here it is an input that is not there, so it cannot load.
             args.measured.stat()
-            headroom = judge(load_table(args.table), read_measurements(args.measured))
+            arch = _tables_arch(args.arch, args.table)
+            records = read_measurements(args.measured)
+            _check_records_arch(records, arch, args.measured)
+            headroom = judge(load_table(args.table), records, arch)
             report = render_headroom(headroom)
             status = 1 if headroom.regressions else 0
     except (ValueError, OSError) as refused:

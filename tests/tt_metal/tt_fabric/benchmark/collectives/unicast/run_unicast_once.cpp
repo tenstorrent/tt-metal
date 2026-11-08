@@ -161,7 +161,7 @@ Notes:
 
     // Global semaphore so a remote chip can signal it.
     // Fabric guarantees payload is visible before the bump is seen.
-    tt::tt_metal::Program receiver_prog = tt::tt_metal::CreateProgram();
+    tt::tt_metal::Program receiver_prog = tt::tt_metal::CreateProgram(*mesh);
     static std::optional<tt::tt_metal::GlobalSemaphore> gsemA;
     static std::optional<tt::tt_metal::GlobalSemaphore> gsemB;
     // Create the semaphore on the specific receiver logical core of the *mesh*.
@@ -194,7 +194,7 @@ Notes:
     tt::tt_metal::SetRuntimeArgs(receiver_prog, rx_wait_k, receiver_core, {gsem.address(), 1u});
 
     // Sender program: READER (RISCV_0) + WRITER (RISCV_1)
-    tt::tt_metal::Program sender_prog = tt::tt_metal::CreateProgram();
+    tt::tt_metal::Program sender_prog = tt::tt_metal::CreateProgram(*mesh);
 
     const uint32_t NUM_PAGES = (p.tensor_bytes + p.page_size - 1) / p.page_size;
     const uint32_t CB_ID = tt::CBIndex::c_0;
@@ -255,7 +255,7 @@ Notes:
     // This establishes the send path (routing/link identifiers) for fabric traffic.
     // The device kernel must unpack these in the same order via build_from_args(...).
     tt::tt_fabric::append_fabric_connection_rt_args(
-        src, dst, /*link_idx=*/link_idx, sender_prog, p.sender_core, writer_rt);
+        *mesh, src, dst, /*link_idx=*/link_idx, sender_prog, p.sender_core, writer_rt);
     tt::tt_metal::SetRuntimeArgs(sender_prog, writer_k, p.sender_core, writer_rt);
     // -------------------------- end PROGRAM FACTORY --------------------------
 

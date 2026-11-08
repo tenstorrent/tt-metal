@@ -37,12 +37,9 @@ inline void _llk_unpack_unary_operand_to_dest_mop_config_(const std::uint32_t bu
  * @brief Initializes the unpacker to unpack a single operand directly into the math DEST register, synchronized with
  *        math and pack through the UNPACK_PACK / UNPACK_MATH / MATH_PACK semaphores.
  *
- * Unpack-to-dest counterpart of @ref _llk_unpack_unary_operand_init_ (llk_unpack_unary_operand.h). The two families are
- * independent: this one owns its MOP (@ref _llk_unpack_unary_operand_to_dest_mop_config_) and its DEST handshake is the
- * semaphore protocol of the section calls rather than dest-dvalid. The unpack_to_dest = true arm of the unary operand
- * family is a compatibility path for callers not yet ported (the tt-llk test infra and fuser): it keeps that family's
- * init-sized MOP and brackets one @ref _llk_unpack_unary_operand_to_dest_tile_ run with the section handshake itself;
- * new callers use this family directly.
+ * Unpack-to-dest counterpart of @ref _llk_unpack_unary_operand_init_ (llk_unpack_unary_operand.h), which only unpacks to
+ * SrcA / SrcB. The two families are independent: this one owns its MOP (@ref _llk_unpack_unary_operand_to_dest_mop_config_)
+ * and its DEST handshake is the semaphore protocol of the section calls, or dest-dvalid (see the last @note).
  *
  * Per-op init: programs the transpose config and the MOP only. It does not touch the DEST bank tracking, so it is
  * safe to call inside a tile loop; the once-per-program bank reset lives in @ref _llk_unpack_dest_init_.
@@ -52,8 +49,9 @@ inline void _llk_unpack_unary_operand_to_dest_mop_config_(const std::uint32_t bu
  * @note Transpose is forced off for both unpacker engines: UNP_DEST does not support it. Tiny tiles are not supported.
  * @note Math thread (T1) contract: math runs no datacopy MOP here (skip @ref _llk_math_eltwise_unary_datacopy_init_); it
  *       only forwards UNPACK_MATH into MATH_PACK. Once per program, @ref _llk_math_pack_sync_init_ (seeds MATH_PACK, the
- *       semaphore T1 posts) and then @ref _llk_sync_barrier_pass_ (semaphore::UNPACK_INIT) before T1's first wait, so the
- *       wait is armed only once T0 has seeded UNPACK_MATH / UNPACK_PACK. Per section, T1 waits on UNPACK_MATH
+ *       semaphore T1 posts). Right before T1's first UNPACK_MATH wait, not at init, @ref _llk_sync_spin_until_posted_
+ *       (semaphore::UNPACK_MATH), so the wait is armed only after T0's seed has landed; a program with no sections
+ *       never posts, so a spin at init would never end. Per section, T1 waits on UNPACK_MATH
  *       (@ref _llk_sync_wait_), does its work, posts MATH_PACK (@ref _llk_sync_post_) and gets UNPACK_MATH
  *       (@ref _llk_sync_get_). SyncHalf: T1 flips its own section base (@ref _llk_sync_advance_dest_section_) so its
  *       SFPU work follows the bank the unpacker wrote.
@@ -62,8 +60,7 @@ inline void _llk_unpack_unary_operand_to_dest_mop_config_(const std::uint32_t bu
  *       (@ref _set_packer_dest_registers_), as the regular path does. DEST_TARGET_REG_CFG_MATH_SEC2 does not move PACR.
  * @note @ref _llk_unpack_dest_init_ must have run once on this thread before the first call, followed by the seeds of
  *       the semaphores this thread posts, @ref _llk_sync_init_ for semaphore::UNPACK_MATH and semaphore::UNPACK_PACK,
- *       each with max N (1 for SyncFull, 2 for SyncHalf) and value 0, and the startup-barrier raise behind them,
- *       @ref _llk_sync_barrier_raise_ (semaphore::UNPACK_INIT). Per section on this
+ *       each with max N (1 for SyncFull, 2 for SyncHalf) and value 0. Per section on this
  *       thread: @ref _llk_sync_wait_ STALL_ON_MAX on UNPACK_PACK (a DEST bank is free), any number of
  *       @ref _llk_unpack_unary_operand_to_dest_tile_ / @ref _llk_unpack_unary_operand_to_dest_block_, then, behind an
  *       UNPACK0 drain, @ref _llk_sync_post_ UNPACK_PACK and UNPACK_MATH in that order; SyncHalf:
@@ -71,6 +68,10 @@ inline void _llk_unpack_unary_operand_to_dest_mop_config_(const std::uint32_t bu
  *       each below N would still admit a third section into a two-bank DEST (tt-metal #58903). tt-metal runs this
  *       sequence in tile_regs_acquire / tile_regs_commit (llk_unpack_wait_for_dest_available /
  *       llk_unpack_dest_section_done, quasar llk_unpack_common_api.h).
+ * @note Dest-dvalid form (the standalone tt-llk tests): the tile / block calls carry no synchronization, so they can be
+ *       bracketed with the dest-dvalid handshake instead. Run @ref _llk_unpack_dest_init_ once so the bank tile offset
+ *       stays 0, never call @ref _llk_unpack_dest_section_advance_ (dest-dvalid moves this client between banks in
+ *       hardware), and close each section with @ref _llk_unpack_dest_dvalid_section_done_.
  */
 inline void _llk_unpack_unary_operand_to_dest_init_(const std::uint32_t buf_desc_id)
 {

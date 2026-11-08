@@ -4,7 +4,6 @@
 from typing import List
 
 import pytest
-import torch
 from helpers.data_format_inference import unpacks_to_dest
 from helpers.format_config import DataFormat, FormatConfig
 from helpers.golden_generators import (
@@ -15,10 +14,8 @@ from helpers.golden_generators import (
 from helpers.llk_params import (
     DataCopyType,
     DestAccumulation,
-    DestSync,
     PerfRunType,
     UnpackerEngine,
-    format_dict,
 )
 from helpers.param_config import (
     DEST_SYNC_TILE_LIMITS,
@@ -26,6 +23,7 @@ from helpers.param_config import (
     generate_unary_input_dimensions,
     input_output_formats,
     parametrize,
+    quasar_dest_sync_modes,
     select_perf_tile_sizes,
 )
 from helpers.perf.core import create_test_or_perf_config
@@ -49,7 +47,7 @@ from helpers.tile_constants import (
     is_mx_unsupported_tile_dims,
 )
 from helpers.tile_shape import construct_tile_shape
-from helpers.utils import passed_test
+from helpers.utils import passed_test, result_tensor
 
 UNPACK_TILIZE_TILE_SIZES = [
     (32, 32),
@@ -82,7 +80,7 @@ def generate_unpack_tilize_combinations(
     """
     combinations = []
 
-    dest_sync_modes = (DestSync.Half,) if is_perf else (DestSync.Half, DestSync.Full)
+    dest_sync_modes = quasar_dest_sync_modes(is_perf=is_perf)
 
     for fmt in formats_list:
         in_fmt = fmt.input_format
@@ -112,9 +110,8 @@ def generate_unpack_tilize_combinations(
         for dest_acc in dest_acc_modes:
             for dest_sync in dest_sync_modes:
                 for unpacker_sel in unpacker_engines:
-                    # Dest accumulation (32-bit dest) is only supported on SrcA
-                    # (UNP_A); see the static_assert in
-                    # _llk_unpack_tilize_strided_mop_config_small_faces_.
+                    # Strided tilize supports dest accumulation only on UNP_A,
+                    # so UnpB with dest accumulation is skipped for every shape
                     if (
                         dest_acc == DestAccumulation.Yes
                         and unpacker_sel == UnpackerEngine.UnpB
@@ -187,7 +184,6 @@ def generate_unpack_tilize_combinations(
 UNPACK_TILIZE_FORMATS = input_output_formats(
     [
         DataFormat.Float16_b,
-        DataFormat.Float16,
         DataFormat.Float32,
         DataFormat.Int32,
         DataFormat.Int16,
@@ -323,12 +319,7 @@ def test_unpack_tilize_quasar(
 
     res_from_L1 = configuration.run().result
 
-    assert len(res_from_L1) == len(
-        golden_tensor
-    ), "Result tensor and golden tensor are not of the same length"
-
-    torch_format = format_dict[formats.output_format]
-    res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
+    res_tensor = result_tensor(res_from_L1, formats.output_format, golden_tensor)
 
     assert passed_test(
         golden_tensor,

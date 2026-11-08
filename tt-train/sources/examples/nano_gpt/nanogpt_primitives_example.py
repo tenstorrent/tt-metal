@@ -1035,7 +1035,7 @@ def main():
         instance.set_seed(training_config.seed)
         optimizer = create_optimizer(model, yaml_config)
         print(f"   - Optimizer: {optimizer.get_name()}")
-        print(f"   - Learning rate: {optimizer.get_lr()}")
+        print(f"   - Learning rate: {optimizer.get_group_lrs()}")
 
         print("\n4. Setting up learning rate scheduler...")
         scheduler_fn = None
