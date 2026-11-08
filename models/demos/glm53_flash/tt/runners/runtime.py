@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import os
 import queue
+import struct
 import threading
 import time
 from types import SimpleNamespace
@@ -22,6 +23,7 @@ from loguru import logger
 
 import ttnn
 from models.demos.common.prefill.runners.migration import KvCacheStage
+from models.demos.glm53_flash.tt.runners.export_guard import ExportDrainGuard
 from models.demos.glm53_flash.tt.runners.kv_export import (
     DSA_LAYERS,
     LATENT_DIM,
@@ -99,8 +101,18 @@ class GLM53FlashPrefillRuntime:
         self._async = os.environ.get("GLM53F_EXPORT_ASYNC", "") in ("1", "pack")
         self._async_pack = os.environ.get("GLM53F_EXPORT_ASYNC", "") == "pack"
         self._xq: queue.Queue = queue.Queue()
+        # tt-blaze G53F-0309: the async export hung the live server at every prompt's last chunk (G53F-0256, 22:14):
+        # the main thread went back to the H2D socket while the worker still owed that chunk's acks, and the engine
+        # sends nothing more until it has them; the socket wait holds the GIL (ttnn.from_device in _decode_metadata),
+        # so the worker cannot send them. The guard (export_guard.py) runs just before each socket wait: it lets the
+        # export overlap the next chunk when one is already in the socket, and drains the queue otherwise.
+        self._guard = ExportDrainGuard(self._xq, log=logger.info)
+        self._guard_seen = False  # the socket wrapper ran (so every serving chunk passed the guard)
+        self._warming = False  # _warm_async drives prefill_chunk without a socket
+        self._unguarded_warned = False
         if self._async:
             threading.Thread(target=self._export_worker, name="glm53f-export", daemon=True).start()
+            self._install_socket_guard()
         logger.info(f"[glm53f-runtime] model built in {time.time() - t0:.0f} s (max_seq_len {params.max_seq_len})")
 
     # ------------------------------------------------------------------ the runner contract
@@ -177,6 +189,7 @@ class GLM53FlashPrefillRuntime:
             return
         acks, saved = [0], self._sink
         self._sink = lambda layer, request_id: acks.__setitem__(0, acks[0] + 1)
+        self._warming = True
         try:
             tw = time.perf_counter()
             for k, s in enumerate(range(0, n, chunk)):
@@ -191,6 +204,7 @@ class GLM53FlashPrefillRuntime:
             )
         finally:
             self._sink = saved
+            self._warming = False
 
     def prefill_chunk(self, input_tensor, kv_caches, *, slot_id, actual_start, actual_end, request_id=0, **_):
         if not isinstance(input_tensor, torch.Tensor) and actual_end <= actual_start:
@@ -201,6 +215,7 @@ class GLM53FlashPrefillRuntime:
             logger.info(f"[glm53f-runtime] chunk {request_id} slot {slot_id} empty (declined before compute)")
             if self._async:
                 self._xq.put(("ack", None, 0, 0, request_id, None))
+                self._unguarded_drain()
             elif self._sink is not None:
                 for layer in range(TABLE_LAYERS):
                     self._sink(layer, request_id)
@@ -221,8 +236,9 @@ class GLM53FlashPrefillRuntime:
             self._xq.put(("chunk", kv_caches, actual_start, actual_end, request_id, rows))
             logger.info(
                 f"[glm53f-runtime] chunk {request_id} slot {slot_id} [{actual_start}, {actual_end}): prefill {t1 - t0:.3f} s, "
-                f"kda export + sync {time.perf_counter() - t1:.3f} s (DSA export async)"
+                f"dsa read + kda export + sync {time.perf_counter() - t1:.3f} s (DSA pack + write + acks async)"
             )
+            self._unguarded_drain()
             return None
         self._export(kv_caches, actual_start, actual_end)
         logger.info(
@@ -233,6 +249,76 @@ class GLM53FlashPrefillRuntime:
             for layer in range(TABLE_LAYERS):
                 self._sink(layer, request_id)
         return None
+
+    # ------------------------------------------------------------------ async export: the socket guard (G53F-0309)
+    def _install_socket_guard(self) -> None:
+        """Run ``self._guard`` right before the runner blocks on the H2D socket. The common runner reads its next
+        chunk with ``ttnn.experimental.deepseek_prefill.inbound_socket_service_sync(h2d_service, ...)``, looked up at
+        call time, so wrapping that attribute (only when GLM53F_EXPORT_ASYNC is on) reaches the one blocking call
+        without a change to the common runner (prefill_up.sh syncs only this package). The wrapper also hands the
+        guard its probe, built from the service on first use. D2D services pass through untouched."""
+        ns = ttnn.experimental.deepseek_prefill
+        real = ns.inbound_socket_service_sync
+        if getattr(real, "_glm53f_socket_guard", False):
+            return
+
+        def guarded(service, *args, **kwargs):
+            if isinstance(service, ttnn.H2DStreamService):
+                if not self._guard_seen:
+                    self._guard_seen = True
+                    self._guard.probe = self._socket_probe(service)
+                self._guard.before_socket_wait()
+            return real(service, *args, **kwargs)
+
+        guarded._glm53f_socket_guard = True
+        guarded.__wrapped__ = real
+        ns.inbound_socket_service_sync = guarded
+        logger.info("[glm53f-export] async export: socket guard installed (drain before a socket wait with no chunk)")
+
+    def _socket_probe(self, service):
+        """A non-blocking look at the H2D service: None while no transfer is waiting, else the waiting transfer's
+        (slot, start, end) header. The service's writer kernel lands a transfer in the backing tensor, multicasts its
+        inline header to ``get_metadata_addr()`` and only then increments the data-ready semaphore on the worker cores;
+        the consumer program resets that semaphore to 0 as it starts (persistent_h2d_writer.cpp /
+        inbound_socket_service_sync_writer.cpp). So the semaphore is non-zero on a chip exactly while a landed transfer
+        waits there, and the header beside it is that transfer's. Read raw over the NOC (UMD, no command queue), on
+        every chip of the mesh: the socket call then has nothing left to wait for."""
+        try:
+            sem = int(service.get_data_ready_sem_addr())
+            hdr = int(service.get_metadata_addr())
+            hdr_bytes = int(service.metadata_size_bytes())
+            core = self.mesh_device.worker_core_from_logical_core(service.get_worker_cores().start)
+            x, y = int(core.x), int(core.y)
+            devs = [int(d) for d in self.mesh_device.get_device_ids()]
+            assert hdr_bytes >= 12 and devs, (hdr_bytes, devs)
+        except Exception as e:  # noqa: BLE001 -- no probe means drain-always (safe, no overlap)
+            logger.warning(f"[glm53f-export] no socket probe ({type(e).__name__}: {e}); draining before every wait")
+            return None
+        logger.info(
+            f"[glm53f-export] socket probe: data-ready sem L1 {sem:#x}, header L1 {hdr:#x}, worker core ({x}, {y}) "
+            f"on {len(devs)} chips"
+        )
+
+        def probe():
+            for d in devs:
+                if int.from_bytes(ttnn.cluster.read_from_core(d, x, y, sem, 4), "little") == 0:
+                    return None
+            return struct.unpack("<3i", ttnn.cluster.read_from_core(devs[0], x, y, hdr, 12))
+
+        return probe
+
+    def _unguarded_drain(self) -> None:
+        """Fail-safe: a serving chunk that did not come through the guarded socket call (a runner that reads its input
+        some other way) must not leave its acks to a worker the main thread may then starve -- export synchronously."""
+        if self._guard_seen or self._warming:
+            return
+        if not self._unguarded_warned:
+            self._unguarded_warned = True
+            logger.warning(
+                "[glm53f-export] async export without the socket guard (the chunk did not come through "
+                "inbound_socket_service_sync with an H2D service): draining after every chunk, no overlap"
+            )
+        self._xq.join()
 
     # ------------------------------------------------------------------ KV table
     def kv_migration_stages(self, kv_caches, first_layer_idx=None, num_my_layers=None):

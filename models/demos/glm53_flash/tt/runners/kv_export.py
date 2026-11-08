@@ -305,6 +305,13 @@ class GlmRingExport:
             pack_s, write_s = pack_s + (t4 - t3), write_s + (time.perf_counter() - t4)
         self.stats["pack_s"] = self.stats.get("pack_s", 0.0) + pack_s
         self.stats["write_s"] = self.stats.get("write_s", 0.0) + write_s
+        if os.environ.get("GLM53F_EXPORT_DIGEST") == "1":
+            # tt-blaze G53F-0309: crc32 over every packed byte this chunk writes (latent pages, then pool rows, layer by
+            # layer), printed by log_export -- the sync and async export paths must write the same bytes
+            crc = zlib.crc32(pages.contiguous().numpy(), self.stats.get("crc32", 0))
+            if pools is not None and int(pools.shape[0]):
+                crc = zlib.crc32(rows.contiguous().numpy(), crc)
+            self.stats["crc32"] = crc
         self._banks.read(
             dev, 0, self.latent.buffer_address(), 64
         )  # a read behind the posted writes on this chip's path
@@ -449,4 +456,8 @@ def kda_window_range(real_len: int, versions: int) -> tuple[int, int]:
 def log_export(stats: dict, start: int, end: int, t0: float) -> None:
     stats["chunks"] = stats.get("chunks", 0) + 1
     stats["s"] = stats.get("s", 0.0) + (time.perf_counter() - t0)
-    logger.info(f"[glm53f-export] chunk [{start}, {end}) exported in {time.perf_counter() - t0:.3f} s")
+    crc = stats.pop("crc32", None)  # GLM53F_EXPORT_DIGEST
+    logger.info(
+        f"[glm53f-export] chunk [{start}, {end}) exported in {time.perf_counter() - t0:.3f} s"
+        + ("" if crc is None else f", crc32 {crc:08x}")
+    )
