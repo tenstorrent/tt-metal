@@ -415,6 +415,9 @@ Tensor div_scalar_impl(
         cast_after_rounding ? std::optional<const DataType>{} : output_dtype;
     const std::optional<Tensor> quotient_output = cast_after_rounding ? std::optional<Tensor>{} : output_tensor;
 
+    // Post activations describe the output of the whole div, so they must see the rounded
+    // quotient: floor/trunc(act(a / b)) is not act(floor/trunc(a / b)). Fusing them into the
+    // divide applied them before the rounding step.
     // ttnn::divide's tensor-scalar overload takes no scalar_is_lhs, so go straight to the
     // primitive here to forward it.
     std::optional<Tensor> divided = ttnn::detail::invoke_binary_ng(
@@ -424,7 +427,7 @@ Tensor div_scalar_impl(
         quotient_dtype,
         output_mem_config,
         quotient_output,
-        post_activations,
+        /*post_activations=*/{},
         lhs_activations,
         rhs_activations,
         effective_fap,
@@ -435,6 +438,14 @@ Tensor div_scalar_impl(
     Tensor rounded = (rounding_mode == "trunc")
                          ? ttnn::trunc(divided.value(), output_mem_config, quotient_output, sub_core_grids)
                          : ttnn::floor(divided.value(), output_mem_config, quotient_output, sub_core_grids);
+    if (!post_activations.empty()) {
+        rounded = operations::unary::detail::unary_impl(
+            rounded,
+            std::vector<unary::EltwiseUnaryWithParam>(post_activations.begin(), post_activations.end()),
+            output_mem_config,
+            quotient_output,
+            sub_core_grids);
+    }
     if (!cast_after_rounding) {
         return rounded;
     }
@@ -622,13 +633,14 @@ Tensor div(
         cast_after_rounding ? std::optional<const DataType>{} : output_dtype;
     const std::optional<Tensor> quotient_output = cast_after_rounding ? std::optional<Tensor>{} : output_tensor;
 
+    // Same ordering rule as the scalar path: post activations apply after the rounding.
     std::optional<Tensor> divided = ttnn::divide(
         input_a,
         input_b,
         quotient_dtype,
         output_mem_config,
         quotient_output,
-        post_activations,
+        /*post_activations=*/{},
         lhs_activations,
         rhs_activations,
         effective_fap,
@@ -638,6 +650,14 @@ Tensor div(
     Tensor rounded = (rounding_mode == "trunc")
                          ? ttnn::trunc(divided.value(), output_mem_config, quotient_output, sub_core_grids)
                          : ttnn::floor(divided.value(), output_mem_config, quotient_output, sub_core_grids);
+    if (!post_activations.empty()) {
+        rounded = operations::unary::detail::unary_impl(
+            rounded,
+            std::vector<unary::EltwiseUnaryWithParam>(post_activations.begin(), post_activations.end()),
+            output_mem_config,
+            quotient_output,
+            sub_core_grids);
+    }
     if (!cast_after_rounding) {
         return rounded;
     }
