@@ -26,15 +26,7 @@ __attribute__((always_inline)) inline vFloat polynomial_horner_step(const Coeffi
 template <uint32_t DEGREE, typename Coefficients>
 __attribute__((always_inline)) inline vFloat eval_polynomial(const Coefficients& coeffs, vFloat x) {
     static_assert(DEGREE <= 16 || DEGREE == 32, "unsupported canonical polynomial degree");
-    if constexpr (DEGREE == 32) {
-        vFloat result = coeffs[32];
-        for (int i = 31; i >= 0; --i) {
-            result = sfpu_mad(result, x, coeffs[i]);
-        }
-        return result;
-    } else {
-        return polynomial_horner_step<DEGREE, 0>(coeffs, x);
-    }
+    return polynomial_horner_step<DEGREE, 0>(coeffs, x);
 }
 
 }  // namespace ckernel::sfpu::ttpoly::acos
