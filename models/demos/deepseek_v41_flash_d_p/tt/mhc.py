@@ -58,6 +58,10 @@ class TtHcMixes:
     # NORM_IN_MHC=on (P.35, set by the block): the tt/norm.py:TtDistributedRmsNorm that reads this step's y (whole
     # bf16 rows); collapse_kwargs then asks the pass for its output instead of y
     norm = None
+    # FFN_FEED=on (P.36, set by the block on ffn_hc): a callable giving mhc_post's feed kwargs ({} = not this call);
+    # ``fed`` records that the last collapse_kwargs asked the pass for the feed (the block reads and clears it)
+    feed = None
+    fed = False
 
     def __init__(
         self, mesh, fn, scale, base, hidden: int, norm_eps: float, hc_eps: float, iters: int, rows: bool = False
@@ -144,7 +148,18 @@ class TtHcMixes:
             hc_output=self._given[0],
             y_output=self._given[1],
             **self.norm_kwargs(),
+            **self.feed_kwargs(),
         )
+
+    def feed_kwargs(self) -> dict:
+        """FFN_FEED=on (P.36): mhc_post's feed_output / feed_semaphores / feed_num_links / feed_cluster_axis (needs the
+        norm: the feed carries the normalized y); {} = off."""
+        self.fed = False
+        if self.feed is None or self.norm is None:
+            return {}
+        kw = self.feed()
+        self.fed = bool(kw)
+        return kw
 
     def norm_kwargs(self) -> dict:
         """NORM_IN_MHC=on (P.35): mhc_post's norm_weight / norm_eps (the norm's own replicated whole-row weight, [1, 1,

@@ -18,12 +18,20 @@
 //   into column ss_col + 1 of the partial (8 folded columns a row: 256 words). The roots' rstd go out through the
 //   reader (mhc_post_stats_reader.cpp), so this kernel's root phase is the collapse's. Then the rooted rows' hc (the
 //   compute's Sinkhorn before its norm phase), then per unit the normalized y tiles (cb_yn) -> y pages r Ct + b B + c.
+// MHC_POST_FEED (P.36, with the norm): a normalized y tile of column k belongs to group chip t = k / cpt. My own block
+//   (t == me, from the feed table: common args 4..) goes straight into feed_output page (me RT + r) cpt + k - me cpt;
+//   the others go to y (the ports' staging). After a unit's writes have landed, one increment on the port of each
+//   (target, link) pair of the unit's feed word (a target other than me: port side(me, t) L + l;
+//   mhc_post_feed_reader.cpp).
 
 #include <cstdint>
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc_semaphore.h"
 #include "mhc_post_stats_common.hpp"
+#ifdef MHC_POST_FEED
+#include "mhc_post_feed_common.hpp"
+#endif
 
 namespace {
 
@@ -204,6 +212,17 @@ void kernel_main() {
     constexpr uint32_t cb_nsq = get_compile_time_arg_val(nx0);
     constexpr uint32_t cb_yn = get_compile_time_arg_val(nx0 + 1);
 #endif
+#ifdef MHC_POST_FEED
+    constexpr uint32_t fx0 = nx0 + 2;
+    constexpr uint32_t cpt = get_compile_time_arg_val(fx0);
+    constexpr uint32_t sem_feed_id = get_compile_time_arg_val(fx0 + 1);
+    constexpr auto f_args = TensorAccessorArgs<fx0 + 2>();
+    const auto f_acc = TensorAccessor(f_args, get_common_arg_val<uint32_t>(3), o_page);
+    const mhc_feed::Table<4> ftab;
+    const uint32_t me = ftab.me;
+    const uint32_t feed_arg0 = root_arg0 + count;  // per unit: its feed word
+    const uint32_t sem_feed = get_semaphore(sem_feed_id);
+#endif
 
     auto build = [&](uint32_t u) {
         const mhc_stats::Unit U = mhc_stats::unit_of(u, rt, bw, ct);
@@ -342,10 +361,34 @@ void kernel_main() {
         cb_wait_front(cb_yn, bw);
         const uint32_t src = get_read_ptr(cb_yn);
         for (uint32_t c = 0; c < U.valid; ++c) {
+#ifdef MHC_POST_FEED
+            const uint32_t k = U.col0 + c;
+            if (k / cpt == me) {
+                noc_async_write_page((me * rt + U.r) * cpt + (k - me * cpt), f_acc, src + c * o_page);
+                continue;
+            }
+#endif
             noc_async_write_page(U.r * ct + U.col0 + c, y_acc, src + c * o_page);
         }
         noc_async_writes_flushed();
         cb_pop_front(cb_yn, bw);
+#ifdef MHC_POST_FEED
+        const uint32_t fw = get_arg_val<uint32_t>(feed_arg0 + (u - start));
+        bool fenced = false;
+        for (uint32_t h = 0; h < 2; ++h) {
+            const uint32_t half = (fw >> (16 * h)) & 0xFFFFu;
+            if (half == 0 || (half & 0xFFu) - 1 == me) {
+                continue;
+            }
+            const uint32_t t = (half & 0xFFu) - 1, l = half >> 8;
+            if (!fenced) {
+                noc_async_write_barrier();  // the staged tiles have landed before the port reads them
+                fenced = true;
+            }
+            const uint32_t xy = ftab.port_xy(ftab.side(me, t) * ftab.L + l);
+            noc_semaphore_inc(get_noc_addr(xy >> 16, xy & 0xFFFFu, sem_feed), 1);
+        }
+#endif
     }
 #endif
     noc_async_write_barrier();

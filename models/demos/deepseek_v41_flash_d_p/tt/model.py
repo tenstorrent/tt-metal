@@ -58,7 +58,7 @@ import torch
 import ttnn
 from models.demos.common.bringup.reference.interface import Ctx, run_block
 
-from . import ccl, host_alloc
+from . import ccl, ffn_feed, host_alloc
 from .attention import TtWindowAttention, TtWindowCache, WindowTables, attention_weights, snapshot_cap, window_keep
 from .ccl import dealloc
 from .collapse import TtHcCollapse
@@ -602,6 +602,17 @@ class TtDS41Block:
             # P.12: the shared expert reads its x rows from the routed experts' gathered row-major q(x) (experts runs
             # first in the block graph)
             self.experts.keep_rows = bool(self.shared.reads_rows)
+        # FFN_FEED=on (P.36): ffn_hc's pass (attn_residual's mhc_post) also writes the head's input on the TP peers
+        # (the main block's OWN_ROWS path; the carried block and the block's own forward fall back to the all-to-all)
+        self.ffn_hc.feed = None
+        if (
+            getattr(model, "ffn_feed", None)
+            and self.ffn_hc.norm is not None
+            and hasattr(self.moe_block, "can_feed")
+            and self.moe_block.can_feed()
+        ):
+            self.moe_block.feed_buffer()  # (allocated at load: no buffer born inside a forward, DS41-146)
+            self.ffn_hc.feed = self._ffn_feed_kwargs
         # NORM_INTO_MOE=on (P.21): ffn_norm (the column split, bf16, the fork) writes the MoE block's own x and its
         # bfloat8_b xq (bfp8_twin) in one program; the fused head reads both in place
         self.norm_into_moe = (
@@ -626,6 +637,15 @@ class TtDS41Block:
         self.dead = {
             s.name: [n for n in dict.fromkeys(s.inputs) if last[n] == s.name and n != "in"] for s in self.steps
         }
+
+    def _ffn_feed_kwargs(self) -> dict:
+        """FFN_FEED=on (P.36): mhc_post's feed arguments for this layer's ffn_hc pass."""
+        return dict(
+            feed_output=self.moe_block.feed_buffer(),
+            feed_semaphores=self.model.ffn_feed,
+            feed_num_links=ffn_feed.links(),
+            feed_cluster_axis=TP_AXIS,
+        )
 
     # ------------------------------------------------------------------ steps
     def _fns(self) -> dict:
@@ -770,6 +790,8 @@ class TtDS41Block:
 
             def experts(ctx, x, routing):  # noqa: F811
                 ready, self._moe_xq_ready = self._moe_xq_ready, False
+                if ctx.extra.pop("ffn_fed", False):  # FFN_FEED=on (P.36): attn_residual's pass wrote the head's x
+                    return self.moe_block(x, xq_ready=ready, fed=True)
                 return self.moe_block(x, xq_ready=ready)
 
             def shared_expert(ctx, x):  # noqa: F811
@@ -812,6 +834,8 @@ class TtDS41Block:
                     hc, y = self.ffn_hc.fused(h, ctx.extra["attn_mix"], row=row)
                 ctx.extra["ffn_in"] = y
                 ctx.extra["ffn_normed"] = normed
+                ctx.extra["ffn_fed"] = normed and self.ffn_hc.fed  # FFN_FEED=on (P.36): the head's input is written
+                self.ffn_hc.fed = False
                 return hc
 
             def ffn_collapse(ctx, h, mix):  # noqa: F811
@@ -988,6 +1012,12 @@ class TtDS41Model:
             missing = [j for j in cfg.sources(i) if j not in self.layers]
             assert not missing, f"layer {i} reads the state of layers {missing}, which are not loaded"
         ccl.setup(mesh)  # CCL_IMPL=fabric: the fabric collectives' semaphores and plans, once at load (agent rule 5)
+        # FFN_FEED=on (P.36): the attn_residual pass writes the MoE head's input on the TP peers (mhc_post feed_output;
+        # tt/ffn_feed.py): needs NORM_IN_MHC's pass, the block MoE and a TP group; its global semaphores made here,
+        # before the MoE blocks place their persistent L1. The layers that cannot take it run the TP all-to-all.
+        self.ffn_feed = None
+        if self.norm_in_mhc and settings.get("MOE_IMPL") == "block" and self.tp >= 2:
+            self.ffn_feed = ffn_feed.prepare(mesh)
         self.tables = WindowTables(mesh, self.chunk)
         self._rope, self._crope, self._sparse = {}, {}, None
         self.state = None

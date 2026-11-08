@@ -341,6 +341,30 @@ class TtMoEBlockMainLayer:
             bufs = _INPUTS[key] = (self.mesh, x, xq)
         return bufs[1], bufs[2]
 
+    def can_feed(self) -> bool:
+        """FFN_FEED (P.36): whether this layer's head input can come from the attn_residual pass (feed_buffer): the
+        OWN_ROWS path with its one TP all-to-all into the head (no token loops / splits / padded rows)."""
+        hit = getattr(self, "_can_feed", None)
+        if hit is None:
+            blk = self.block()
+            hit = self._can_feed = bool(self.own_rows and blk.loops * blk.splits == 1 and not blk.pad_rows)
+        return hit
+
+    def feed_buffer(self) -> ttnn.Tensor:
+        """FFN_FEED (P.36): the head's persistent bf16 input [1, 1, S/SP, H/TP] (the column split the TP all-to-all
+        wrote), one a (mesh, chunk), pinned: the same address on every chip, written by mhc_post(feed_output=)."""
+        key = (id(self.mesh), self.chunk)
+        hit = _FEED.get(key)
+        if hit is None or hit[0] is not self.mesh:
+            rows, cols = tuple(self.mesh.shape)
+            shape = [1, 1, self.chunk // rows, int(self.cfg.dim) // cols]
+            x = ttnn.allocate_tensor_on_device(
+                ttnn.Shape(shape), ttnn.bfloat16, ttnn.TILE_LAYOUT, self.mesh, ttnn.DRAM_MEMORY_CONFIG
+            )
+            ccl.pin(self.mesh, x)
+            hit = _FEED[key] = (self.mesh, x)
+        return hit[1]
+
     def at_chunk(self, chunk: int) -> "TtMoEBlockMainLayer":
         """This layer at another chunk (DECODER_SKIP=replay128, P.31: the decoder tail's 1024-row chunk on 8x4): the
         (mesh, chunk)'s own block (resources, plans, programs; built here), the routed experts' device weights shared
@@ -350,6 +374,7 @@ class TtMoEBlockMainLayer:
         out = copy.copy(self)
         out.chunk = int(chunk)
         out.head_w = None
+        out._can_feed = None  # (FFN_FEED: that block's own answer)
         blk = out.block()
         if _weight_layout(self.lay) == _weight_layout(out._plan(blk)):
             logger.info(
@@ -360,10 +385,11 @@ class TtMoEBlockMainLayer:
             out.gidx, out.w_gu, out.w_d = out._routed(blk)
         return out
 
-    def __call__(self, x: ttnn.Tensor, xq_ready: bool = False) -> ttnn.Tensor:
+    def __call__(self, x: ttnn.Tensor, xq_ready: bool = False, fed: bool = False) -> ttnn.Tensor:
         """x: ffn_norm's output (the column split [1, 1, S/SP, H/TP]; OWN_ROWS: [1, 1, S/(SP TP), H]) -> the MoE
         output, same rows. xq_ready (NORM_INTO_MOE=on): x is input_buffers()[0] and the norm wrote input_buffers()[1]
-        (xq) from it."""
+        (xq) from it. fed (FFN_FEED=on, P.36): the attn_residual pass wrote the head's input into feed_buffer()
+        (x is then only its staging: its shape stands for the rows)."""
         assert x.layout == ttnn.TILE_LAYOUT
         blk = self.block()
         weights = self._head_weights(blk)
@@ -375,9 +401,10 @@ class TtMoEBlockMainLayer:
             ), "xq_ready needs x = input_buffers()[0] (the norm wrote xq from it)"
         xb = cast(x, ttnn.bfloat16)
         if not self.own_rows:
+            assert not fed, "FFN_FEED: the feed is the OWN_ROWS path's"
             y = blk(xb, weights, xq=xq)
         else:
-            y = self._own_rows(blk, xb, weights)
+            y = self._own_rows(blk, xb, weights, fed=fed)
         if xb is not x:
             dealloc(xb)
         if not self.fold:
@@ -386,11 +413,13 @@ class TtMoEBlockMainLayer:
             y = y32
         return y
 
-    def _own_rows(self, blk, x_own, weights):
+    def _own_rows(self, blk, x_own, weights, fed: bool = False):
         """OWN_ROWS: x [1, 1, S/(SP TP), H] -> one TP all-to-all into [1, 1, S/SP, H/TP] -> head, dispatch, experts +
-        combine -> the combine's owner rows [S/(SP TP), H] (row-major) tilized + the shared expert's owner rows."""
+        combine -> the combine's owner rows [S/(SP TP), H] (row-major) tilized + the shared expert's owner rows.
+        fed (FFN_FEED=on, P.36): no all-to-all, the head reads feed_buffer() (written by the attn_residual pass)."""
         mb = _mb()
         if blk.loops * blk.splits != 1 or blk.pad_rows:  # (token loops / splits / padding: the block's own forward)
+            assert not fed, "FFN_FEED: can_feed() refuses the block's own forward"
             xc = ttnn.experimental.all_to_all_async_generic(
                 x_own, in_dim=2, out_dim=3, num_links=2, memory_config=DRAM, cluster_axis=TP_AXIS
             )
@@ -401,9 +430,12 @@ class TtMoEBlockMainLayer:
             )
             dealloc(y)
             return out
-        x = ttnn.experimental.all_to_all_async_generic(
-            x_own, in_dim=2, out_dim=3, num_links=2, memory_config=DRAM, cluster_axis=TP_AXIS
-        )
+        if fed:
+            x = self.feed_buffer()
+        else:
+            x = ttnn.experimental.all_to_all_async_generic(
+                x_own, in_dim=2, out_dim=3, num_links=2, memory_config=DRAM, cluster_axis=TP_AXIS
+            )
         if blk.exchange_spec is None:
             blk.one_arena = blk._one_arena_fits()
         xq = blk.to_xq(x) if blk.bf8_x else None  # (GEMM_INPUTS=bfp8: the shared expert's x, one typecast)
@@ -424,7 +456,8 @@ class TtMoEBlockMainLayer:
             arena=arena,
             **({"xq": xq} if xq is not None else {}),
         )
-        dealloc(x)
+        if not fed:  # (the feed buffer is persistent)
+            dealloc(x)
         if x_full is not None:
             dealloc(x_full)
         if blk.exchange_spec is None:
@@ -467,6 +500,7 @@ class TtMoEBlockMainLayer:
 
 _FW = None
 _INPUTS: dict = {}  # (id(mesh), chunk) -> (mesh, x bf16, xq bfp8 or None): NORM_INTO_MOE's input buffers
+_FEED: dict = {}  # (id(mesh), chunk) -> (mesh, x bf16): FFN_FEED's head input (P.36)
 # the flat plan's facts the routed weights' layout depends on (flat_routed_expert_weights.flat_weight_regions /
 # bank_sharded): two plans equal in these lay the same weights out the same
 _WEIGHT_KEYS = ("banks", "col0s", "n_rd", "n_rd_sg", "nd", "nk_gu", "np", "nu", "pcds", "rg", "wd_rot_tiles")

@@ -84,7 +84,11 @@ std::tuple<Tensor, Tensor, Tensor, Tensor> mhc_post_with_collapse(
     const std::optional<Tensor>& y_output = std::nullopt,
     std::optional<tt::tt_metal::CoreCoord> max_grid = std::nullopt,
     const std::optional<Tensor>& norm_weight = std::nullopt,
-    double norm_eps = 1e-6);
+    double norm_eps = 1e-6,
+    const std::optional<Tensor>& feed_output = std::nullopt,
+    const std::optional<std::vector<uint32_t>>& feed_semaphores = std::nullopt,
+    int64_t feed_num_links = 1,
+    int64_t feed_cluster_axis = 1);
 
 // The Python entry: X' without stats_weight (the op as it was), (X', stats) with it, (X', stats, hc, y) with
 // collapse_pre.
@@ -112,6 +116,10 @@ std::variant<Tensor, std::tuple<Tensor, Tensor>, std::tuple<Tensor, Tensor, Tens
     const std::optional<Tensor>& hc_output = std::nullopt,
     const std::optional<Tensor>& y_output = std::nullopt,
     const std::optional<Tensor>& norm_weight = std::nullopt,
-    double norm_eps = 1e-6);
+    double norm_eps = 1e-6,
+    const std::optional<Tensor>& feed_output = std::nullopt,
+    const std::optional<std::vector<uint32_t>>& feed_semaphores = std::nullopt,
+    int64_t feed_num_links = 1,
+    int64_t feed_cluster_axis = 1);
 
 }  // namespace ttnn::operations::bringup::mhc_post_ttnn

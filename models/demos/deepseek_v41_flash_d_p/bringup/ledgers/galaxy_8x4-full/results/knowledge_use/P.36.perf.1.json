@@ -1,0 +1,108 @@
+{
+ "used": [
+  {
+   "id": "DS41-138",
+   "how": "the feed layout = all_to_all_async_generic's (concat on in_dim 2, split on out_dim 3): chip q's rows at [q T, (q+1) T) of block p; the fork test compares X to the stock all-to-all bit for bit",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "DS41-146",
+   "how": "the persistent feed buffer is allocated at model load (block init), not inside a forward",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "DS41-147",
+   "how": "the per-coordinate first version paid 336 us host a call; moved to one program with a chip-independent table (110 us)",
+   "traced": false,
+   "cited": true
+  },
+  {
+   "id": "DS41-210",
+   "how": "the per-unit feed words appended after the variable-length per-core lists; the buffer / semaphore addresses are common args patched in override_runtime_arguments",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-183",
+   "how": "every measure and fork test run detached through devjob",
+   "traced": null,
+   "cited": false
+  },
+  {
+   "id": "DS41-203",
+   "how": "no point_to_point on 2D fabric: the ports open fabric connections and route with fabric_set_unicast_route directly",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "DS41-145",
+   "how": "chip-dependent data in common args (one copy), per-core args kept to 2-5 words on the ports",
+   "traced": false,
+   "cited": false
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "the model's mesh is FABRIC_2D_TORUS_XY (TP axis a ring): a port's targets must be grouped by the fabric's first hop, not by position (added DS41-224)",
+  "a fabric op can run as one program on every chip: the routing table's my_device_id names the chip, a common-arg table the rest (added DS41-225)",
+  "scripts/tt-probe.sh saves its probe under tests/ttnn/unit_tests/operations/<name>/, outside a perf step's allowed paths"
+ ],
+ "overseer": [
+  {
+   "id": "OV-3",
+   "answer": "done",
+   "evidence": "no padding or duplicated work: column blocks that straddle two chips' blocks are split per tile (mhc_post_feed_common.hpp for_each_tile), units over the cores before the ports"
+  },
+  {
+   "id": "OV-23",
+   "answer": "n/a",
+   "evidence": "the op touched is the C++ descriptor op ttnn.bringup.mhc_post (not Python-built); addresses patched on cache hits; host 109.6 us a call with the feed (101.8 without), measured on the 8x4"
+  },
+  {
+   "id": "OV-25",
+   "answer": "done",
+   "evidence": "only the new tests/unit/test_mhc_post_feed.py ran on the 8x4 (24 passed) plus the model measure; no fork regression suite"
+  }
+ ],
+ "cited_only": [
+  "DS41-224",
+  "DS41-225"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "P.36",
+  "role": "perf",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-11-08T08:25:58",
+  "head": "98bad201aa7",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/knowledge_use/P.36.perf.1.json",
+   "models/demos/deepseek_v41_flash_d_p/tt/ffn_feed.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/mhc.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/model.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/moe_block_main_adapter.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/settings.py",
+   "ttnn/ttnn/bringup/INDEX.md",
+   "ttnn/ttnn/bringup/mhc_post_ttnn/CHANGELOG.md",
+   "ttnn/ttnn/bringup/mhc_post_ttnn/README.md",
+   "ttnn/ttnn/bringup/mhc_post_ttnn/device/mhc_post_stats_device_operation.cpp",
+   "ttnn/ttnn/bringup/mhc_post_ttnn/device/mhc_post_stats_device_operation.hpp",
+   "ttnn/ttnn/bringup/mhc_post_ttnn/device/mhc_post_stats_program_factory.cpp",
+   "ttnn/ttnn/bringup/mhc_post_ttnn/kernels/mhc_post_feed_common.hpp",
+   "ttnn/ttnn/bringup/mhc_post_ttnn/kernels/mhc_post_feed_layout.hpp",
+   "ttnn/ttnn/bringup/mhc_post_ttnn/kernels/mhc_post_feed_reader.cpp",
+   "ttnn/ttnn/bringup/mhc_post_ttnn/kernels/mhc_post_feed_sender.cpp",
+   "ttnn/ttnn/bringup/mhc_post_ttnn/kernels/mhc_post_stats_writer.cpp",
+   "ttnn/ttnn/bringup/mhc_post_ttnn/mhc_post_ttnn.cpp",
+   "ttnn/ttnn/bringup/mhc_post_ttnn/mhc_post_ttnn.hpp",
+   "ttnn/ttnn/bringup/mhc_post_ttnn/mhc_post_ttnn_nanobind.cpp",
+   "ttnn/ttnn/bringup/mhc_post_ttnn/tests/unit/test_mhc_post_feed.py"
+  ]
+ }
+}

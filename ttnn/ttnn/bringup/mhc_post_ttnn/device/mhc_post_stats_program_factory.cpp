@@ -13,6 +13,7 @@
 // after its own units, waits for NB partials per rooted row, sums them in block order (fp32 SFPU) and writes the row.
 
 #include "mhc_post_stats_device_operation.hpp"
+#include "../kernels/mhc_post_feed_layout.hpp"
 
 #include <algorithm>
 #include <bit>
@@ -20,7 +21,9 @@
 #include <vector>
 
 #include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/work_split.hpp>
 
@@ -70,10 +73,16 @@ constexpr uint8_t CB_GSTAGE = 14;  // the unit's weight row (B x 32 fp32)       
 constexpr uint8_t CB_NSQ = 24;     // the unit's lane-wise sum of y^2 tile               compute -> writer
 constexpr uint8_t CB_YN = 25;      // the unit's normalized y tiles                     compute -> writer
 constexpr uint8_t CB_NRS = 15;     // a root row's rstd (slot n (n + 2) + 1)            compute -> writer
+// feed (P.36) only, on the port cores:
+constexpr uint8_t CB_FEED = 26;  // packet slots (up to P y tiles a slot)             port reader -> port sender
+constexpr uint32_t FEED_SLOTS = 8;
 constexpr uint32_t SEM_ROOT = 0;
 constexpr uint32_t SEM_NORM = 1;
+constexpr uint32_t SEM_FEED = 2;  // a port's count of finished units (one increment per (unit, target) it carries)
+constexpr uint32_t SEM_FEED_TEARDOWN = 3, SEM_FEED_BUFIDX = 4;  // a port's fabric connection's worker semaphores
 
 constexpr uint32_t READER_KERNEL = 0, WRITER_KERNEL = 1, COMPUTE_KERNEL = 2;
+constexpr uint32_t FEED_READER_KERNEL = 3, FEED_SENDER_KERNEL = 4;
 
 uint32_t f32_bits(double v) { return std::bit_cast<uint32_t>(static_cast<float>(v)); }
 
@@ -138,9 +147,203 @@ void append_accessor(std::vector<uint32_t>& ct, const Tensor& t) {
     ct.insert(ct.end(), a.begin(), a.end());
 }
 
-}  // namespace
+// P.36 (feed): the chip-independent feed table, the common args every feed kernel reads (mhc_post_feed_common.hpp):
+// one program for every chip of the mesh; a kernel finds its own chip through the fabric routing table in L1
+// (my_device_id), then its position, its group's chips, its ports' sides and fabric channels in these tables.
+struct FeedTable {
+    std::vector<uint32_t> head;  // FT_WORDS words (the table without the channels)
+    std::vector<uint32_t> chan;  // FT_CHAN_WORDS words: the fabric channel (byte) of port slot s of chip pos, pos 8 + s
+};
 
-tt::tt_metal::ProgramDescriptor MhcPostStatsProgramFactory::create_descriptor(
+void put_byte(std::vector<uint32_t>& w, uint32_t base, uint32_t k, uint32_t v) {
+    w[base + k / 4] = (w[base + k / 4] & ~(0xFFu << (8 * (k % 4)))) | ((v & 0xFFu) << (8 * (k % 4)));
+}
+
+// Port s = d L + l (side d: the eth direction of the fabric's first hop toward a target, one of the two on the
+// group's axis - on a torus axis the far chips go round the wrap, DS41-224 - and link l) carries, to every target t
+// on its side, the units u in [u_lo[t], u_hi[t]) with (u - u_lo[t]) mod L == l, the tiles of column block t.
+FeedTable feed_table(
+    tt::tt_metal::distributed::MeshDevice* mesh,
+    const MhcPostStatsParams& params,
+    const std::vector<CoreCoord>& ports,
+    uint32_t cpt,
+    uint32_t RT,
+    uint32_t B,
+    uint32_t col_tiles) {
+    using namespace mhc_feed_layout;
+    const auto& ms = mesh->shape();
+    TT_FATAL(ms.dims() == 2, "mhc_post stats: feed needs a 2D mesh, got {} dims", ms.dims());
+    const uint32_t R = ms[0], C = ms[1], axis = params.feed_axis, L = params.feed_links;
+    TT_FATAL(axis < 2, "mhc_post stats: feed_axis {} of a 2D mesh", axis);
+    const uint32_t G = axis == 1 ? C : R;
+    TT_FATAL(G >= 2 && G <= FT_MAX_G, "mhc_post stats: feed needs a group of 2..{} chips, got {}", FT_MAX_G, G);
+    TT_FATAL(R * C <= FT_MAX_CHIPS, "mhc_post stats: feed: {} chips > {}", R * C, FT_MAX_CHIPS);
+    TT_FATAL(L >= 1 && 2 * L <= FT_MAX_PORTS, "mhc_post stats: feed: {} links (1..{})", L, FT_MAX_PORTS / 2);
+    std::vector<tt::tt_fabric::FabricNodeId> node;
+    for (uint32_t pos = 0; pos < R * C; ++pos) {
+        node.push_back(mesh->get_fabric_node_id(ttnn::MeshCoordinate(pos / C, pos % C)));
+        TT_FATAL(node.back().mesh_id == node.front().mesh_id, "mhc_post stats: feed: the mesh spans fabric meshes");
+        TT_FATAL(node.back().chip_id < FT_MAX_CHIP_ID, "mhc_post stats: feed: fabric chip id {}", node.back().chip_id);
+    }
+    const auto at = [&](uint32_t pos, uint32_t t) {  // chip pos's group chip at position t
+        const uint32_t r = pos / C, c = pos % C;
+        return axis == 1 ? r * C + t : t * C + c;
+    };
+    // the sides: an eth direction per side, the same pattern in every group (checked)
+    int32_t dir_of_side[2] = {-1, -1};
+    std::vector<int32_t> side(G * G, -1);
+    for (uint32_t pos = 0; pos < R * C; ++pos) {
+        const uint32_t me = axis == 1 ? pos % C : pos / C;
+        for (uint32_t t = 0; t < G; ++t) {
+            if (t == me) {
+                continue;
+            }
+            const auto d = tt::tt_fabric::get_eth_forwarding_direction(node[pos], node[at(pos, t)]);
+            TT_FATAL(d.has_value(), "mhc_post stats: feed: no fabric route from chip {} to {}", pos, at(pos, t));
+            const bool zero =
+                *d == tt::tt_fabric::eth_chan_directions::EAST || *d == tt::tt_fabric::eth_chan_directions::NORTH;
+            const int32_t sd = zero ? 0 : 1;
+            TT_FATAL(
+                dir_of_side[sd] < 0 || dir_of_side[sd] == static_cast<int32_t>(*d),
+                "mhc_post stats: feed: the group's routes leave by more than two directions");
+            dir_of_side[sd] = static_cast<int32_t>(*d);
+            TT_FATAL(
+                side[me * G + t] < 0 || side[me * G + t] == sd,
+                "mhc_post stats: feed: the groups route {} -> {} differently",
+                me,
+                t);
+            side[me * G + t] = sd;
+        }
+    }
+    FeedTable ft;
+    ft.head.assign(FT_WORDS, 0);
+    auto& h = ft.head;
+    h[FT_G] = G;
+    h[FT_AXIS] = axis;
+    h[FT_C] = C;
+    h[FT_L] = L;
+    h[FT_MESH] = static_cast<uint32_t>(*node.front().mesh_id);
+    for (uint32_t k = 0; k < FT_MAX_CHIP_ID; ++k) {
+        put_byte(h, FT_POS_OF_CHIP, k, 0xFF);
+    }
+    for (uint32_t pos = 0; pos < R * C; ++pos) {
+        put_byte(h, FT_POS_OF_CHIP, node[pos].chip_id, pos);
+        put_byte(h, FT_CHIP_OF_POS, pos, node[pos].chip_id);
+    }
+    for (uint32_t k = 0; k < G * G; ++k) {
+        h[FT_SIDE + k / 32] |= static_cast<uint32_t>(std::max(side[k], 0)) << (k % 32);
+    }
+    h[FT_DIR] = static_cast<uint32_t>(std::max(dir_of_side[0], 0));
+    h[FT_DIR + 1] = static_cast<uint32_t>(std::max(dir_of_side[1], 0));
+    for (uint32_t sl = 0; sl < 2 * L; ++sl) {
+        const CoreCoord v = mesh->worker_core_from_logical_core(ports[sl]);
+        h[FT_PORTS + sl] = (static_cast<uint32_t>(v.x) << 16) | static_cast<uint32_t>(v.y);
+    }
+    for (uint32_t t = 0; t < G; ++t) {
+        h[FT_ULO + t] = (t * cpt / B) * RT;
+        h[FT_UHI + t] = std::min((((t + 1) * cpt + B - 1) / B), (col_tiles + B - 1) / B) * RT;
+    }
+    // the channels: the link-l channel of side d's direction on each chip (append_fabric_connection_rt_args' choice)
+    ft.chan.assign(FT_CHAN_WORDS, 0xFFFFFFFFu);
+    for (uint32_t pos = 0; pos < R * C; ++pos) {
+        const uint32_t me = axis == 1 ? pos % C : pos / C;
+        for (uint32_t d = 0; d < 2; ++d) {
+            uint32_t tgt = G;
+            for (uint32_t t = 0; t < G && tgt == G; ++t) {
+                if (t != me && side[me * G + t] == static_cast<int32_t>(d)) {
+                    tgt = t;
+                }
+            }
+            if (tgt == G) {
+                continue;
+            }
+            for (uint32_t l = 0; l < L; ++l) {
+                tt::tt_metal::ProgramDescriptor scratch;
+                std::vector<uint32_t> a;
+                tt::tt_fabric::append_fabric_connection_rt_args<tt::tt_metal::ProgramDescriptor>(
+                    node[pos], node[at(pos, tgt)], l, scratch, ports[d * L + l], a);
+                TT_FATAL(!a.empty() && a[0] < 0xFF, "mhc_post stats: feed: no fabric channel");
+                const uint32_t k = pos * FT_MAX_PORTS + d * L + l;
+                ft.chan[k / 4] &= ~(0xFFu << (8 * (k % 4)));
+                ft.chan[k / 4] |= a[0] << (8 * (k % 4));
+            }
+        }
+    }
+    return ft;
+}
+
+// P.36 (feed): the port cores' kernels; every port core of every chip runs both (a side with no target: none); port 0
+// also waits for the (G - 1) L arrivals into its chip's feed_output.
+void add_feed_ports(
+    ProgramDescriptor& desc,
+    const MhcPostStatsParams& params,
+    const MhcPostStatsInputs& in,
+    std::vector<Tensor>& outputs,
+    const std::vector<CoreCoord>& ports,
+    const FeedTable& ft,
+    uint32_t grp,
+    uint32_t cpt,
+    uint32_t RT,
+    uint32_t B,
+    uint32_t col_tiles) {
+    const Tensor& y = outputs.at(4);
+    const Tensor& fo = *in.feed_output;
+    const uint32_t L = params.feed_links;
+    const uint32_t o_page = y.buffer()->page_size();
+    TT_FATAL(fo.buffer()->page_size() == o_page, "mhc_post stats: feed_output must be in y's tiles");
+    TT_FATAL(fo.dtype() == y.dtype(), "mhc_post stats: feed_output must have y's dtype");
+    TT_FATAL(
+        fo.padded_shape()[-2] == grp * RT * TILE_HW && fo.padded_shape()[-1] == cpt * TILE_HW,
+        "mhc_post stats: feed_output must be [{} rows, {} columns]",
+        grp * RT * TILE_HW,
+        cpt * TILE_HW);
+    const size_t max_payload = tt::tt_fabric::get_tt_fabric_max_payload_size_bytes();
+    const uint32_t P = std::max<uint32_t>(1, std::min<uint32_t>(4, static_cast<uint32_t>(max_payload / o_page)));
+    std::vector<CoreRange> rr;
+    for (const auto& c : ports) {
+        rr.emplace_back(c, c);
+    }
+    const CoreRangeSet port_set(rr);
+    desc.cbs.push_back(make_cb(CB_FEED, P * o_page, FEED_SLOTS, port_set, y.dtype()));
+    for (uint32_t id : {SEM_FEED, SEM_FEED_TEARDOWN, SEM_FEED_BUFIDX}) {  // (the last two: the fabric connection's)
+        desc.semaphores.push_back(SemaphoreDescriptor{
+            .id = id, .core_type = tt::CoreType::WORKER, .core_ranges = port_set, .initial_value = 0});
+    }
+
+    std::vector<uint32_t> common = {P, RT, B, col_tiles, cpt};
+    std::vector<uint32_t> rd_ct = {CB_FEED, o_page};
+    rd_ct.insert(rd_ct.end(), common.begin(), common.end());
+    rd_ct.push_back(SEM_FEED);
+    append_accessor(rd_ct, y);
+    std::vector<uint32_t> sd_ct = {CB_FEED, o_page};
+    sd_ct.insert(sd_ct.end(), common.begin(), common.end());
+    append_accessor(sd_ct, fo);
+
+    KernelDescriptor::RuntimeArgs rd_rt, sd_rt;
+    for (uint32_t d = 0; d < 2; ++d) {
+        for (uint32_t l = 0; l < L; ++l) {
+            const CoreCoord core = ports[d * L + l];
+            rd_rt.emplace_back(core, std::vector<uint32_t>{d, l});
+            // (arg 2: the chip's fabric channel, written by the kernel from the table before build_from_args)
+            sd_rt.emplace_back(core, std::vector<uint32_t>{d, l, 0u, SEM_FEED_TEARDOWN, SEM_FEED_BUFIDX});
+        }
+    }
+    desc.kernels.push_back(
+        make_kernel("mhc_post_feed_reader.cpp", port_set, rd_ct, rd_rt, tt::tt_metal::ReaderConfigDescriptor{}));
+    desc.kernels.push_back(
+        make_kernel("mhc_post_feed_sender.cpp", port_set, sd_ct, sd_rt, tt::tt_metal::WriterConfigDescriptor{}));
+    TT_FATAL(desc.kernels.size() == FEED_SENDER_KERNEL + 1, "mhc_post stats: feed kernels out of place");
+    auto& rc = desc.kernels[FEED_READER_KERNEL].common_runtime_args;
+    rc = {addr(y)};
+    rc.insert(rc.end(), ft.head.begin(), ft.head.end());
+    auto& sc = desc.kernels[FEED_SENDER_KERNEL].common_runtime_args;
+    sc = {addr(fo), params.feed_sems[0], params.feed_sems[1]};
+    sc.insert(sc.end(), ft.head.begin(), ft.head.end());
+    sc.insert(sc.end(), ft.chan.begin(), ft.chan.end());
+}
+
+// The program (P.36 feed: plus the feed's ports; one program for every chip).
+tt::tt_metal::ProgramDescriptor build_descriptor(
     const MhcPostStatsParams& params, const MhcPostStatsInputs& in, std::vector<Tensor>& outputs) {
     const Tensor& f = in.input;
     const Tensor& x = in.residual;
@@ -186,8 +389,25 @@ tt::tt_metal::ProgramDescriptor MhcPostStatsProgramFactory::create_descriptor(
     }
 
     const CoreCoord grid = cut_grid(device->compute_with_storage_grid_size(), params.max_grid);
+    // P.36 (feed): the ports take the grid's last 2 L cores (row-wise, port s = core G - 1 - s, the same logical cores
+    // on every chip); the units split over the cores before them. Off: the split as it always was.
+    const bool feed = params.feed;
+    TT_FATAL(!feed || params.norm, "mhc_post stats: feed needs norm");
+    std::vector<CoreCoord> ports;
+    CoreRangeSet work_set;
+    if (feed) {
+        const uint32_t G = grid.x * grid.y, np = 2 * params.feed_links;
+        TT_FATAL(params.feed_links >= 1 && G > np + 1, "mhc_post stats: feed: {} ports do not fit {} cores", np, G);
+        for (uint32_t s2 = 0; s2 < np; ++s2) {
+            const uint32_t i = G - 1 - s2;
+            ports.push_back(CoreCoord{i % grid.x, i / grid.x});
+        }
+        work_set = tt::tt_metal::num_cores_to_corerangeset(G - np, grid, true);
+    }
+    auto is_port = [&](const CoreCoord& c) { return std::find(ports.begin(), ports.end(), c) != ports.end(); };
     auto [num_cores, all_cores, group_1, group_2, units_1, units_2] =
-        tt::tt_metal::split_work_to_cores(grid, p.units, true);
+        feed ? tt::tt_metal::split_work_to_cores(work_set, p.units, true)
+             : tt::tt_metal::split_work_to_cores(grid, p.units, true);
     std::vector<CoreCoord> cores;
     std::vector<uint32_t> starts, counts;
     uint32_t start = 0;
@@ -217,7 +437,7 @@ tt::tt_metal::ProgramDescriptor MhcPostStatsProgramFactory::create_descriptor(
         for (uint32_t yy = 0; yy < grid.y; ++yy) {
             for (uint32_t xx = 0; xx < grid.x; ++xx) {
                 const CoreCoord c{xx, yy};
-                if (!all_cores.contains(c)) {
+                if (!all_cores.contains(c) && !is_port(c)) {
                     spare.push_back(c);
                 }
             }
@@ -250,6 +470,33 @@ tt::tt_metal::ProgramDescriptor MhcPostStatsProgramFactory::create_descriptor(
     uint32_t max_rooted = 0;
     for (const auto& rr : rooted) {
         max_rooted = std::max<uint32_t>(max_rooted, rr.size());
+    }
+
+    // P.36 (feed): the group along feed_axis, the feed table, and each unit's (target, link) pairs: chip-independent
+    // (the writer skips its own block's pair and finds the port from the table)
+    uint32_t grp = 1, cpt = 0;
+    std::vector<uint32_t> feed_word;  // per unit: up to 2 (t + 1) | l << 8 halves, 0 = none
+    FeedTable ft;
+    if (feed) {
+        const auto& ms = device->shape();
+        TT_FATAL(ms.dims() == 2 && params.feed_axis < 2, "mhc_post stats: feed needs a 2D mesh and axis 0 or 1");
+        grp = ms[params.feed_axis];
+        TT_FATAL(grp >= 2, "mhc_post stats: feed needs a group of >= 2 chips along axis {}", params.feed_axis);
+        TT_FATAL(p.col_tiles % grp == 0, "mhc_post stats: feed: {} column tiles over {} chips", p.col_tiles, grp);
+        cpt = p.col_tiles / grp;
+        TT_FATAL(cpt >= B, "mhc_post stats: feed: a chip's {} column tiles < the block's {}", cpt, B);
+        ft = feed_table(device, params, ports, cpt, RT, B, p.col_tiles);
+        const uint32_t L = params.feed_links;
+        feed_word.assign(p.units, 0u);
+        for (uint32_t t = 0; t < grp; ++t) {
+            const uint32_t lo = ft.head[mhc_feed_layout::FT_ULO + t], hi = ft.head[mhc_feed_layout::FT_UHI + t];
+            for (uint32_t u = lo; u < hi; ++u) {
+                const uint32_t half = ((t + 1) | (((u - lo) % L) << 8));
+                auto& w = feed_word[u];
+                TT_FATAL((w >> 16) == 0, "mhc_post stats: feed: unit {} touches more than 2 chips' blocks", u);
+                w = (w == 0) ? half : (w | (half << 16));
+            }
+        }
     }
 
     ProgramDescriptor desc;
@@ -337,6 +584,10 @@ tt::tt_metal::ProgramDescriptor MhcPostStatsProgramFactory::create_descriptor(
     if (norm) {  // P.35: after the collapse's
         writer_ct.insert(writer_ct.end(), {CB_NSQ, CB_YN});
     }
+    if (feed) {  // P.36: after the norm's
+        writer_ct.insert(writer_ct.end(), {cpt, SEM_FEED});
+        append_accessor(writer_ct, *in.feed_output);
+    }
     std::vector<uint32_t> compute_ct = common_ct;
     compute_ct.insert(
         compute_ct.end(),
@@ -374,6 +625,11 @@ tt::tt_metal::ProgramDescriptor MhcPostStatsProgramFactory::create_descriptor(
         w.insert(w.end(), rooted[i].begin(), rooted[i].end());
         for (uint32_t u = s; u < s + c; ++u) {
             w.push_back(root_xy[u % RT]);  // unit u's row r = u mod RT
+        }
+        if (feed) {  // P.36: per unit, its (target, link) pairs
+            for (uint32_t u = s; u < s + c; ++u) {
+                w.push_back(feed_word[u]);
+            }
         }
         TT_FATAL(w.size() < 300, "mhc_post stats: {} runtime args on one core", w.size());
         writer_rt.emplace_back(cores[i], std::move(w));
@@ -435,6 +691,13 @@ tt::tt_metal::ProgramDescriptor MhcPostStatsProgramFactory::create_descriptor(
         }
         desc.kernels[READER_KERNEL].common_runtime_args = {addr(*in.norm_weight)};
     }
+    if (feed) {  // P.36: the writer's feed address (common arg 3), the feed table (from 4), then the ports
+        desc.kernels[WRITER_KERNEL].defines.emplace_back("MHC_POST_FEED", "1");
+        auto& wc = desc.kernels[WRITER_KERNEL].common_runtime_args;
+        wc.push_back(addr(*in.feed_output));
+        wc.insert(wc.end(), ft.head.begin(), ft.head.end());
+        add_feed_ports(desc, params, in, outputs, ports, ft, grp, cpt, RT, B, p.col_tiles);
+    }
     if (params.post_col != 0 || params.comb_col != 0) {  // absent when 0 / 0: the writer unchanged
         TT_FATAL(
             params.post_col + n <= TILE_HW && params.comb_col + n * n <= TILE_HW,
@@ -451,12 +714,20 @@ tt::tt_metal::ProgramDescriptor MhcPostStatsProgramFactory::create_descriptor(
     return desc;
 }
 
-void MhcPostStatsProgramFactory::override_runtime_arguments(
+}  // namespace
+
+tt::tt_metal::ProgramDescriptor MhcPostStatsProgramFactory::create_descriptor(
+    const MhcPostStatsParams& params, const MhcPostStatsInputs& in, std::vector<Tensor>& outputs) {
+    return build_descriptor(params, in, outputs);
+}
+
+namespace {
+void override_stats(
     tt::tt_metal::Program& program,
     const MhcPostStatsParams& params,
     const MhcPostStatsInputs& in,
     std::vector<Tensor>& outputs,
-    const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
+    bool feed) {
     const uint32_t scratch = addr(outputs.at(2));
     for (auto& col : tt::tt_metal::GetRuntimeArgs(program, READER_KERNEL)) {
         for (auto& args : col) {
@@ -494,6 +765,24 @@ void MhcPostStatsProgramFactory::override_runtime_arguments(
     if (params.norm) {  // P.35: the weight's address (its scalars: in hc_scalar_args above)
         tt::tt_metal::GetCommonRuntimeArgs(program, READER_KERNEL)[0] = addr(*in.norm_weight);
     }
+    if (feed) {  // P.36: the feed's addresses (y staging, feed_output) and the semaphores
+        tt::tt_metal::GetCommonRuntimeArgs(program, WRITER_KERNEL)[3] = addr(*in.feed_output);
+        tt::tt_metal::GetCommonRuntimeArgs(program, FEED_READER_KERNEL)[0] = addr(outputs.at(4));
+        auto& sd = tt::tt_metal::GetCommonRuntimeArgs(program, FEED_SENDER_KERNEL);
+        sd[0] = addr(*in.feed_output);
+        sd[1] = params.feed_sems[0];
+        sd[2] = params.feed_sems[1];
+    }
+}
+}  // namespace
+
+void MhcPostStatsProgramFactory::override_runtime_arguments(
+    tt::tt_metal::Program& program,
+    const MhcPostStatsParams& params,
+    const MhcPostStatsInputs& in,
+    std::vector<Tensor>& outputs,
+    const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
+    override_stats(program, params, in, outputs, params.feed);
 }
 
 }  // namespace ttnn::operations::bringup::mhc_post_ttnn
