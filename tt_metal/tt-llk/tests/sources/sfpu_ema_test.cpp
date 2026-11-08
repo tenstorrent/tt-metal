@@ -133,12 +133,29 @@ void run_kernel(RUNTIME_PARAMETERS)
         {
             return;
         }
-        else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE && perf_mock_mop<PERF_RUN_TYPE>() && !unpack_to_dest) // Wormhole: one MOP stream
-        {
-            // unpack_A publishes a SrcB valid with every SrcA valid, so both are retired here.
-            _perf_math_stream_clear_valid</* clear A */ true, /* clear B */ true, PERF_RUN_TYPE>(num_faces * TILE_CNT * LOOP_FACTOR);
-        }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE)
+        {
+            if constexpr (unpack_to_dest)
+            {
+                // The unpack_to_dest path signals the UNPACK_TO_DEST semaphore per tile;
+                // acknowledge both semaphores without the full MOVD2B/MOVB2D data movement.
+                for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
+                {
+                    for (std::uint32_t tile = 0; tile < TILE_CNT; ++tile)
+                    {
+                        math_unpack_to_dest_math_ready();
+                        math::math_unpack_to_dest_tile_ready();
+                    }
+                }
+            }
+            else
+            {
+                // Batch all source-handshake retirements into a single stream call.
+                // unpack_A publishes a SrcB valid with every SrcA valid, so retire both.
+                _perf_math_stream_clear_valid</* clear A */ true, /* clear B */ true, PERF_RUN_TYPE>(LOOP_FACTOR * TILE_CNT * num_faces);
+            }
+        }
+        else if constexpr (PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
             {
@@ -146,8 +163,9 @@ void run_kernel(RUNTIME_PARAMETERS)
                 {
                     if constexpr (unpack_to_dest)
                     {
-                        _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DST_SYNC, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
-                            EMA_INPUT_DST_INDEX, formats.math, formats.math);
+                        // Acknowledge both semaphores without data movement.
+                        math_unpack_to_dest_math_ready();
+                        math::math_unpack_to_dest_tile_ready();
                     }
                     else
                     {
@@ -243,7 +261,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     {
         START_PERF_MEASURE("TILE_LOOP")
 
-        if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
+        if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
             {
