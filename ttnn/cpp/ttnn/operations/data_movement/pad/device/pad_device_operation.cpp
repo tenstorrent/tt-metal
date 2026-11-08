@@ -35,6 +35,12 @@ bool can_use_sharded_optimized_factory(const PadParams& operation_attributes, co
     if (input_tensor.memory_config().memory_layout() != TensorMemoryLayout::HEIGHT_SHARDED) {
         return false;
     }
+    if (!operation_attributes.output_mem_config.shard_spec().has_value()) {
+        return false;
+    }
+    if (!operation_attributes.output_mem_config.is_l1()) {
+        return false;
+    }
     if (!operation_attributes.output_mem_config.is_sharded()) {
         return false;
     }
@@ -42,6 +48,9 @@ bool can_use_sharded_optimized_factory(const PadParams& operation_attributes, co
         return false;
     }
     if (operation_attributes.sub_core_grids.has_value()) {
+        return false;
+    }
+    if (input_tensor.padded_shape()[-1] != input_tensor.shard_spec()->shape[1]) {
         return false;
     }
     if (operation_attributes.output_padded_shape[-1] != operation_attributes.output_mem_config.shard_spec()->shape[1]) {
@@ -87,7 +96,10 @@ PadDeviceOperation::program_factory_t PadDeviceOperation::select_program_factory
                     1,
                     std::multiplies<uint32_t>());
 
-                if (input_w != output_w && input_tot_h == output_tot_h) {
+                const auto& in_spec = input_tensor.shard_spec().value();
+                const auto& out_spec = operation_attributes.output_mem_config.shard_spec().value();
+                if (input_w != output_w && input_tot_h == output_tot_h && in_spec.grid == out_spec.grid &&
+                    in_spec.orientation == out_spec.orientation && in_spec.shape[0] == out_spec.shape[0]) {
                     return PadRmShardedWidthOnlyProgramFactory{};
                 }
                 if (input_w == output_w) {

@@ -2250,3 +2250,67 @@ def test_pad_one_row_block_shards_squeezed_rank1(device):
 
     expected = torch.nn.functional.pad(torch_input, (0, 0, 0, 0, 0, 0, 0, 3))
     assert torch.equal(ttnn.to_torch(output), expected)
+
+
+def test_pad_rm_sharded_width_only_reshard_orientation_and_uint16_pad_value(device):
+    """Regression tests for PadRmShardedWidthOnlyProgramFactory and can_use_sharded_optimized_factory."""
+    torch.manual_seed(0)
+
+    # 1) Width-only padding when output shard height > input shard height (4 cores x 32 -> 2 cores x 64)
+    torch_in1 = torch.arange(128 * 32, dtype=torch.float32).reshape(1, 1, 128, 32).to(torch.bfloat16)
+    expected1 = torch.nn.functional.pad(torch_in1, (0, 32, 0, 0), value=1.5)
+    in_grid1 = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0))})
+    out_grid1 = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0))})
+    in_mem1 = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(in_grid1, (32, 32), ttnn.ShardOrientation.ROW_MAJOR),
+    )
+    out_mem1 = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(out_grid1, (64, 64), ttnn.ShardOrientation.ROW_MAJOR),
+    )
+    tt_in1 = ttnn.from_torch(
+        torch_in1, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=in_mem1
+    )
+    tt_out1 = ttnn.pad(tt_in1, ((0, 0), (0, 0), (0, 0), (0, 32)), value=1.5, memory_config=out_mem1)
+    assert torch.equal(ttnn.to_torch(tt_out1), expected1)
+
+    # 2) Width-only padding on 2x2 grid when input is ROW_MAJOR and output is COL_MAJOR
+    grid_2x2 = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))})
+    in_mem2 = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(grid_2x2, (32, 32), ttnn.ShardOrientation.ROW_MAJOR),
+    )
+    out_mem2 = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(grid_2x2, (32, 64), ttnn.ShardOrientation.COL_MAJOR),
+    )
+    tt_in2 = ttnn.from_torch(
+        torch_in1, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=in_mem2
+    )
+    tt_out2 = ttnn.pad(tt_in2, ((0, 0), (0, 0), (0, 0), (0, 32)), value=1.5, memory_config=out_mem2)
+    assert torch.equal(ttnn.to_torch(tt_out2), expected1)
+
+    # 3) Width-only sharded padding with UINT16 and non-zero pad_value (must not pad with 0)
+    torch_in3 = torch.arange(64 * 32, dtype=torch.int32).reshape(1, 1, 64, 32)
+    expected3 = torch.nn.functional.pad(torch_in3, (0, 32, 0, 0), value=7)
+    grid_1x2 = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0))})
+    in_mem3 = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(grid_1x2, (32, 32), ttnn.ShardOrientation.ROW_MAJOR),
+    )
+    out_mem3 = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(grid_1x2, (32, 64), ttnn.ShardOrientation.ROW_MAJOR),
+    )
+    tt_in3 = ttnn.from_torch(
+        torch_in3, dtype=ttnn.uint16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=in_mem3
+    )
+    tt_out3 = ttnn.pad(tt_in3, ((0, 0), (0, 0), (0, 0), (0, 32)), value=7, memory_config=out_mem3)
+    assert torch.equal(ttnn.to_torch(tt_out3).to(torch.int32), expected3)
