@@ -162,9 +162,9 @@ def test_a_step_with_a_mask_row_and_a_penalty_row_replays_the_traces_in_order(mo
     r, logits, tok, pos, nvd, ss, mask = _case(monkeypatch, [0.0, 0.0, 0.0], pen_rows=[1])
     res = r.step(tok, pos, nvd, ONES(B), _pt(B), ss)
     tr = _traces(r)
-    # main, mask, pen, topk, accept (certificate variant: a masked step), pen update, drafter
-    assert tr == [VFY, MASKT, PEN, TOPK, FSC, UPD, DRAFT], tr
-    assert FS not in tr and STATS not in tr
+    # main, mask, pen, topk, accept (greedy rows as top_k 1: every k-th value is real, the plain accept), pen update, drafter
+    assert tr == [VFY, MASKT, PEN, TOPK, FS, UPD, DRAFT], tr
+    assert FSC not in tr and STATS not in tr
     assert r.e.mask_steps == 1 and r.e.pen_steps == 1 and not r.e.__dict__.get("fused_fallbacks")
     h2d = [x[1] for x in r.log if x[0] == "h2d"]
     assert h2d.count("mask_in") == 1
@@ -193,7 +193,7 @@ def test_mask_only_and_pen_only_steps_keep_their_own_trace_logs(monkeypatch):
     B = 3
     r, logits, tok, pos, nvd, ss, mask = _case(monkeypatch, [0.0, 0.0, 0.0], pen_rows=[])
     r.step(tok, pos, nvd, ONES(B), _pt(B), ss)  # penalties key present, every row neutral
-    assert _traces(r) == [VFY, MASKT, TOPK, FSC, DRAFT]
+    assert _traces(r) == [VFY, MASKT, TOPK, FS, DRAFT]
     r, logits, tok, pos, nvd, ss, mask = _case(monkeypatch, [0.0, 0.0, 0.0], pen_rows=[1])
     del ss["mask"]
     r.step(tok, pos, nvd, ONES(B), _pt(B), ss)

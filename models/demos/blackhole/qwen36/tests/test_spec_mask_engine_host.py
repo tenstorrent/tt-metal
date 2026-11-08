@@ -366,7 +366,8 @@ def test_an_all_greedy_masked_step_is_a_sampled_step_with_greedy_rows_as_top_k_1
     ss = {**ss, "mask": mask}
     res = r.step(tok, pos, nvd, ONES(B), _pt(B), ss)
     tr = _traces(r)
-    assert FA not in tr and MASKT in tr and FSC in tr  # S1 would commit the unmasked ids
+    # S1 would commit the unmasked ids; every masked row is a greedy row as top_k 1: the plain sampled accept (kernel)
+    assert FA not in tr and MASKT in tr and FS in tr and FSC not in tr
     samp = r.fs.samp_in.data
     # users 0 and 2 have a constrained row: sampled T 1, top_k 1, top_p 0, greedy 0; user 1 stays greedy
     assert samp[0, :B].tolist() == [1.0, 0.0, 1.0] or samp[0, 1].item() != 1.0  # temperature row (user 1: its own)
@@ -512,7 +513,7 @@ def test_split_step_with_no_mask_is_an_s2_step_with_the_plain_accept_and_no_mask
     h = _begin(r, tok, pos, nvd, _sampling(B, nvd, [0.0] * B)).handle
     assert _traces(r) == [VFY]
     r.e.decode_forward_finish(h, _mask(B, {(0, 0): [5, 9]}))
-    assert _traces(r) == [VFY, MASKT, TOPK, FSC, DRAFT]
+    assert _traces(r) == [VFY, MASKT, TOPK, FS, DRAFT]  # greedy rows as top_k 1: every k-th value is real
 
 
 def test_split_step_order_rules(monkeypatch):
@@ -693,7 +694,21 @@ def test_accept_trace_selection(monkeypatch):
     B = 3
     r, logits, tok, pos, nvd, ss, mask = _case(monkeypatch, B)
     e = r.e
-    assert e._accept_trace(ss) == FS and e._accept_trace(ss, masked=True) == FSC
+    assert e._accept_trace(ss) == FS
+    # a masked step: the certificate variant only when a constrained column of a sampled row allows fewer than top_k tokens
+    # (ss: rows 0 and 2 sampled with top_k 3, row 1 greedy)
+    narrow = dict(ss, mask=e_rows(e, _mask(B, {(0, 1): [5, 9]})))  # 2 allowed < top_k 3: the k-th value is MASK_NEG
+    wide = dict(ss, mask=e_rows(e, _mask(B, {(0, 1): [5, 9, 11], (2, 0): range(0, 40)})))  # >= 3 allowed everywhere
+    greedy_narrow = dict(ss, mask=e_rows(e, _mask(B, {(1, 0): [5]})))  # the greedy row: no k-th value
+    assert e._accept_trace(narrow, masked=True) == FSC
+    assert e._accept_trace(wide, masked=True) == FS and e._accept_trace(greedy_narrow, masked=True) == FS
+    rewritten = dict(ss)
+    assert e._attach_mask(rewritten, _mask(B, {(1, 0): [5]})) and int(rewritten["top_k"][1]) == 1
+    assert e._accept_trace(rewritten, masked=True) == FS  # a greedy row rewritten as top_k 1 with one allowed token
+    # with the sampled accept kernel attached (it has the same tie guard) every masked step without a certificate row takes it
+    e._fs._kernel = object()
+    assert e._accept_trace(narrow, masked=True) == FS and e._accept_trace(wide, masked=True) == FS
+    e._fs._kernel = None
     cert = dict(
         ss,
         top_k=torch.zeros(B, dtype=torch.int32),
@@ -701,6 +716,34 @@ def test_accept_trace_selection(monkeypatch):
         greedy=torch.zeros(B, dtype=torch.bool),
     )
     assert e._accept_trace(cert) == FSC and e._accept_trace(cert, masked=True) == FSC
+    e._fs._kernel = object()  # the kernel has no certificate: a certificate row keeps the op graph variant
+    assert e._accept_trace(dict(cert, mask=narrow["mask"]), masked=True) == FSC
+    e._fs._kernel = None
+
+
+def e_rows(e, mask):
+    """The plugin's mask as the engine-row mask of ``sampling["mask"]``."""
+    return SM.mask_to_engine_rows(mask, None if e._phys_perm is None else e._phys_perm[1], e.B, T)
+
+
+def test_a_masked_step_with_real_kth_values_commits_the_same_with_either_accept(monkeypatch):
+    """The plain accept (kernel) a masked step replays when every k-th value is real gives the certificate variant's commit: the
+    tie-guard factor is exactly 1 on such rows (sampled rows, top_k 3, >= 3 allowed tokens per constrained column)."""
+    B = 3
+    rows = {(0, 0): [5, 9, 11, 30], (0, 1): range(0, 40, 3), (2, 2): [7, 8, 60]}
+    out = []
+    for force_cert in (False, True):
+        r, logits, tok, pos, nvd, ss, mask = _case(monkeypatch, B, rows=rows)
+        if force_cert:
+            monkeypatch.setattr(se_mod.MTPSpecEngine, "_mask_kth_real", lambda self, sampling: False)
+        res = r.step(tok, pos, nvd, ONES(B), _pt(B), {**ss, "mask": mask})
+        tr = _traces(r)
+        assert (FSC in tr) == force_cert and (FS in tr) == (not force_cert), tr
+        assert r.e.mask_kernel_steps == (0 if force_cert else 1)
+        out.append(res)
+        monkeypatch.undo()
+    assert torch.equal(out[0].accepted_token_ids, out[1].accepted_token_ids)
+    assert torch.equal(out[0].accepted_counts, out[1].accepted_counts)
 
 
 def test_the_cert_body_carries_the_tie_guard_factor():

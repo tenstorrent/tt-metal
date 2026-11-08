@@ -77,6 +77,8 @@ constexpr uint32_t SAMP_TEMP = 0, SAMP_TOPK = 1, SAMP_TOPP = 2, SAMP_GREEDY = 3,
 constexpr uint32_t SEM_ROW = 0, SEM_BACK = 1, SEM_USER = 2;
 
 constexpr uint32_t F_ONE = 0x3F800000u, F_NAN = 0x7FC00000u, F_INF = 0x7F800000u, F_NEG_INF = 0xFF800000u;
+// spec_masks.MASK_KTH_GUARD (-1e20f): a k-th value below it is a masked value (MASK_NEG / T): no top-k tie rule there
+constexpr uint32_t F_MASK_KTH_GUARD = 0xE0AD78ECu;
 constexpr int32_t E_FRAC = 56, P_FRAC = 62;
 
 static_assert(K >= 1 && B >= 1 && R <= 32, "one 32-row verify bucket");
@@ -462,7 +464,8 @@ void row_work(
             kth = vi;
         }
     }
-    const uint32_t ovf = (n_keep == M && fgt(kth, F_NEG_INF)) ? 1u : 0u;
+    // phase 3: a row whose allowed set is smaller than top_k keeps its masked candidates (exp 0) and raises no tie flag
+    const uint32_t ovf = (n_keep == M && fgt(kth, F_NEG_INF) && fgt(kth, F_MASK_KTH_GUARD)) ? 1u : 0u;
     // 3. e = exp(v - v0), s = sum(e) (exact, rounded once)
     uint64_t es = 0;
     for (uint32_t i = 0; i < n_keep; ++i) {

@@ -567,7 +567,8 @@ class FusedSampledDevice(FusedGreedyDevice):
         import ttnn
 
         # QWEN36_SPEC_ACCEPT_KERNEL_SAMPLED: one program instead of the op graph. The kernel has no certificate: the
-        # certificate / mask variant (cert=True, phase 2/3) always records the op graph below on the same buffers.
+        # certificate variant (cert=True, phase 2/3) always records the op graph below on the same buffers. The kernel has the
+        # mask tie guard (kth > MASK_KTH_GUARD), so a masked step without a certificate row replays the kernel.
         if self._kernel is not None and not cert:
             self._kernel.run()
             return

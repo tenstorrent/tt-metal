@@ -23,6 +23,8 @@ token ``s * 31040 + 32 * w + k``). The host repacks only the constrained rows (`
 a contiguous int32 ``[8, 32, 970]`` (shard, row, word) sharded on dim 0.
 """
 
+from collections import OrderedDict
+
 import numpy as np
 import torch
 
@@ -35,6 +37,7 @@ MASK_WORDS = VOCAB // WORD_BITS  # 7760
 MASK_ROWS = 32  # one tile row: the largest engine row count of a bucket (B*T <= 32)
 RING_DEPTH = 2
 PERM_RING_DEPTH = 4  # permuted staging buffers: a step's host tensor stays alive until its event
+PERM_CACHE_ROWS = 512  # permuted rows the staging ring keeps (LRU, 31 KB each)
 MASK_NEG = -(2.0**99)  # what the device AND the host write at a disallowed token (raw logits, before the temperature)
 MASK_KTH_GUARD = (
     -1e20
@@ -294,9 +297,12 @@ class PermMaskStagingRing:
     returned buffer (and the ttnn host tensor built from it) alive until the step's event: the buffer is reused PERM_RING_DEPTH
     stages later."""
 
-    def __init__(self, depth=PERM_RING_DEPTH):
+    def __init__(self, depth=PERM_RING_DEPTH, cache_rows=PERM_CACHE_ROWS):
         self.bufs = [torch.full((SHARDS, MASK_ROWS, SHARD_WORDS), -1, dtype=torch.int32) for _ in range(depth)]
         self.next_index = 0
+        # standard row bytes -> permuted [8, 970] row (LRU): grammar states repeat, the repack is the step's host cost
+        self.cache, self.cache_rows = OrderedDict(), int(cache_rows)
+        self.hits = self.misses = 0
 
     def stage(self, rows, idx):
         rows = torch.as_tensor(rows)
@@ -306,7 +312,23 @@ class PermMaskStagingRing:
         buf = self.bufs[self.next_index]
         buf.fill_(-1)
         if idx:
-            sel = torch.as_tensor(idx, dtype=torch.int64)
-            buf[:, sel] = repack_to_permuted(rows[sel]).permute(1, 0, 2)
+            std = np.ascontiguousarray(rows[torch.as_tensor(idx, dtype=torch.int64)].to(torch.int32).numpy())
+            keys = [std[i].tobytes() for i in range(len(idx))]
+            miss = [i for i, k in enumerate(keys) if k not in self.cache]
+            if miss:
+                perm = repack_to_permuted(torch.from_numpy(std[miss]))
+                for i, p in zip(miss, perm):
+                    self.cache[keys[i]] = p
+                    if len(self.cache) > self.cache_rows:
+                        self.cache.popitem(last=False)
+            self.hits += len(idx) - len(miss)
+            self.misses += len(miss)
+            for r, k in zip(idx, keys):
+                p = self.cache.get(k)
+                if p is None:  # evicted within this call (more distinct rows than the cache holds)
+                    p = repack_to_permuted(torch.from_numpy(std[idx.index(r)][None]))[0]
+                else:
+                    self.cache.move_to_end(k)
+                buf[:, r] = p
         self.next_index = (self.next_index + 1) % len(self.bufs)
         return buf

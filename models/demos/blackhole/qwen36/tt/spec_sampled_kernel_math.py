@@ -75,6 +75,7 @@ EXP2_TAB = (  # round(2^(i/64) * 2^62), i = 0..63
 E_FRAC = 56  # fixed-point fraction bits of the exp sums (e <= 1, at most 64 terms: < 2^7)
 P_FRAC = 62  # fixed-point fraction bits of the probability sums (each <= 1, total < 2)
 F_ONE, F_NAN, F_INF, F_NEG_INF = 0x3F800000, 0x7FC00000, 0x7F800000, 0xFF800000
+F_MASK_KTH_GUARD = 0xE0AD78EC  # spec_masks.MASK_KTH_GUARD (-1e20) as float32: a k-th value below it is masked
 
 # spec_fused.AUX_* / CONST_* rows and spec_fused_sampled.SAMP_PARAM_ROWS (duplicated: this module imports nothing)
 AUX_NUM_VALID, AUX_ACTIVE, AUX_DECLINED, AUX_KEEP, AUX_P0, AUX_CONSTS, AUX_DELTA = range(7)
@@ -341,7 +342,8 @@ def row_state(vals, ids, *, TP, M, per_shard, temp_b, k, omp_b, draft, corr):
         if len(v) == k:
             kth = vi
     n_keep = len(v)
-    ovf = int(n_keep == M and fgt(kth, F_NEG_INF))
+    # phase 3: no tie rule on a masked k-th value (MASK_NEG / T)
+    ovf = int(n_keep == M and fgt(kth, F_NEG_INF) and fgt(kth, F_MASK_KTH_GUARD))
     e = [exp_f32(fsub(v[i], v[0])) for i in range(n_keep)]
     s = fix2f(sum(f2fix(x, E_FRAC) for x in e), E_FRAC)
     n2 = n_keep

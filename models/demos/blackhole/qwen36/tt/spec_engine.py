@@ -49,6 +49,7 @@ import weakref
 from dataclasses import dataclass
 from typing import Callable
 
+import numpy as np
 import torch
 from loguru import logger
 from ttnn.tools import trace_allocation_tracker
@@ -151,6 +152,8 @@ EAGER_RESEED_PROMPT_LEN = 131072
 # Verify rows B*(K+1) must fit one decode tile (QKV heads, matmul configs, GDN core budget).
 MAX_SPEC_ROWS = ttnn.TILE_SIZE
 _MASK_AUDIT = os.environ.get("QWEN36_SPEC_MASK_AUDIT", "0") == "1"  # debug: check every masked commit against its mask
+# debug: host timings of split (masked) steps, logged every 512 of them
+_MASK_PROF = os.environ.get("QWEN36_SPEC_MASK_PROF", "0") == "1"
 # split steps: the reasoning-end ids after which a row never decides a token from an all-ones mask column (reasoning_boundary_cap)
 _REASONING_END_IDS = tuple(
     int(x) for x in os.environ.get("QWEN36_SPEC_REASONING_END_IDS", "248069,248058").replace(" ", "").split(",") if x
@@ -895,6 +898,7 @@ class FusedHandle:
         # not (no event, no reads: nobody may wait on the handle); ``post`` = the closure the finish runs; ``mask_keep`` = the host
         # buffers of the mask write, alive until the event
         self.pending, self.post, self.mask_keep, self.sync_tail = False, None, None, None
+        self.prof_masked = False  # QWEN36_SPEC_MASK_PROF: the step replayed the mask trace
         self.t_done = None  # perf_counter() right after the event wait returned (_def_data); None until read (or for a ready handle)
 
     def wait(self):
@@ -974,7 +978,7 @@ class MTPSpecEngine:
     # phase 3 defaults (class level: a test stub built without __init__ has them too)
     _split_begin = False  # True inside decode_forward_begin
     _split_pending = None  # the FusedHandle whose second half (decode_forward_finish) is due
-    mask_steps = mask_rows = mask_late_finish = mask_fallback_rows = mask_chain_steps = 0
+    mask_steps = mask_rows = mask_late_finish = mask_fallback_rows = mask_chain_steps = mask_kernel_steps = 0
     mask_hole_caps = mask_hole_chained = 0
 
     _dr_hostset = False  # class default (engines built without __init__ in tests); set by _alloc_drafter_inputs
@@ -1080,6 +1084,7 @@ class MTPSpecEngine:
         # input, the counters (steps with a mask trace, constrained engine rows, split steps finished late), the split-step state
         self._mask_ring = PermMaskStagingRing()
         self.mask_steps = self.mask_rows = self.mask_late_finish = self.mask_fallback_rows = self.mask_chain_steps = 0
+        self.mask_kernel_steps = 0  # masked steps on the plain sampled accept (kernel): every k-th value real
         self.mask_hole_caps = 0  # rows a mask hole capped (mask_hole_cap): drafts the scheduler never saw
         self.mask_hole_chained = 0  # chained rows the cap would apply to (not applied: the device built their aux)
         self._split_begin = False
@@ -5566,10 +5571,21 @@ class MTPSpecEngine:
                 flip_parity=True,
             )
         t_begin = time.perf_counter()
+        if split and _MASK_PROF and self.__dict__.get("_prof_last_finish") is not None:
+            # the previous split step's finish -> this begin (scheduler + build): the device has the previous step's post only
+            self._prof_add("finish_to_next_begin_ms", (t_begin - self._prof_last_finish) * 1e3)
 
         def post(mask=None):
             nonlocal vh, h, audit, nv, aux
+            t_post = time.perf_counter()
             midx, mask_buf, ex = [], None, dict(extra)
+            if split and _MASK_PROF:
+                # begin -> finish (plugin + scheduler), and the previous step's read -> finish (the device may idle when it is
+                # longer than the forward: the forward of this step starts when the previous step ends)
+                self._prof_add("begin_to_finish_ms", (t_post - t_begin) * 1e3)
+                if chain is not None and prev.t_done is not None:
+                    self._prof_add("prev_read_to_finish_ms", (t_post - prev.t_done) * 1e3)
+                self._prof_add("chained", float(chain is not None))
             if split:
                 self._finish_sampling_mask(sampling, mask)
                 # host-staged: re-stage the aux words when a mask hole caps a row (before the accept reads them)
@@ -5597,7 +5613,11 @@ class MTPSpecEngine:
                     raise RuntimeError(
                         "a masked step reached the device path without the mask traces (engine._mask_ok())"
                     )
+                t_st = time.perf_counter()
                 mask_buf = self._mask_stage(sampling, midx)
+                if _MASK_PROF:
+                    self._prof_add("mask_stage_ms", (time.perf_counter() - t_st) * 1e3)
+                    self._prof_add("mask_rows", float(len(midx)))
                 ex.update(execute_mask=True, mask_host=mask_buf)
                 if split and chain is not None:
                     self.mask_chain_steps += 1
@@ -5691,6 +5711,11 @@ class MTPSpecEngine:
             self._fused_note(None)
             self._def_last = h
             h.pending, h.post = False, None
+            h.prof_masked = bool(midx)
+            if split and _MASK_PROF:
+                self._prof_last_finish = time.perf_counter()
+                self._prof_add("post_ms", (self._prof_last_finish - t_post) * 1e3)
+                self._prof_flush()
             return h
 
         if split:
@@ -5768,6 +5793,11 @@ class MTPSpecEngine:
             else:
                 ttnn.event_synchronize(h.event)
             h.t_done = time.perf_counter()
+            if _MASK_PROF:  # the read-to-read period of consecutive steps, by whether the step carried a mask
+                last = self.__dict__.get("_prof_last_done")
+                if last is not None:
+                    self._prof_add("period_masked_ms" if h.prof_masked else "period_plain_ms", (h.t_done - last) * 1e3)
+                self._prof_last_done = h.t_done
             d = self._def_parse(h)
             self._def_check(h, d)
             h._data = d
@@ -6089,6 +6119,23 @@ class MTPSpecEngine:
         con = ~is_unconstrained(mask) & torch.as_tensor(active).bool().reshape(self.B, 1)
         return torch.nonzero(con.reshape(-1)).reshape(-1).tolist()
 
+    def _prof_add(self, name, value):
+        """QWEN36_SPEC_MASK_PROF: one sample of ``name`` (lists, engine and reader thread; append is atomic)."""
+        self.__dict__.setdefault("_prof", {}).setdefault(name, []).append(float(value))
+
+    def _prof_flush(self, every=512):
+        """QWEN36_SPEC_MASK_PROF: every ``every`` split steps, log mean / p50 / p90 of each sample list and reset."""
+        prof = self.__dict__.get("_prof") or {}
+        if len(prof.get("post_ms", ())) < every:
+            return
+        self._prof = {}
+        parts = []
+        for name, xs in sorted(prof.items()):
+            xs = sorted(xs)
+            q = lambda f: xs[min(len(xs) - 1, int(f * len(xs)))]  # noqa: E731
+            parts.append(f"{name} n={len(xs)} mean={sum(xs) / len(xs):.2f} p50={q(0.5):.2f} p90={q(0.9):.2f}")
+        logger.info("[spec_engine] mask prof: " + "; ".join(parts))
+
     def _mask_cap_nv(self, sampling, tokens, nv, active=None, split=False):
         """``nv`` [B] (engine rows) capped by the step's mask holes (spec_masks.mask_hole_cap): a constrained row never verifies
         a draft past a constrained column whose next column is all ones. That column was built from no draft: vLLM fills the
@@ -6143,7 +6190,7 @@ class MTPSpecEngine:
         if self.mask_steps == 1 or self.mask_steps % 256 == 0:
             logger.info(
                 f"[spec_engine] device masks: {self.mask_steps} steps, {self.mask_rows} rows, {self.mask_chain_steps} chained, "
-                f"{self.mask_late_finish} late, {self.mask_fallback_rows} fallback rows, "
+                f"{self.mask_late_finish} late, {self.mask_fallback_rows} fallback rows, {self.mask_kernel_steps} kernel accepts, "
                 f"{self.mask_hole_caps} hole caps, {self.mask_hole_chained} chained holes"
             )
         return buf
@@ -6233,8 +6280,60 @@ class MTPSpecEngine:
     def _accept_trace(self, sampling, masked=False):
         """The sampled accept trace of a step: the certificate variant when a live row is a certificate row OR a live row is masked
         (the variant carries the ``kth > -1e20`` tie guard of a masked row), else the plain one (normal steps replay the same trace
-        as without the certificate)."""
-        return self._fs_trace_c if masked or bool(self._cert_rows(sampling).any()) else self._fs_trace
+        as without the certificate). A masked step without a certificate row replays the plain trace when the sampled accept
+        kernel is attached (QWEN36_SPEC_ACCEPT_KERNEL_SAMPLED: the kernel has the same ``kth > MASK_KTH_GUARD`` tie guard), or,
+        on the plain op graph, when every constrained column of a sampled row allows at least its top_k tokens (a real k-th value,
+        where the guard factor is exactly 1). ``mask_kernel_steps`` counts the masked steps on the plain trace."""
+        if bool(self._cert_rows(sampling).any()):
+            if masked and _MASK_PROF:
+                self._prof_add("cert_for_cert_row", 1.0)
+            return self._fs_trace_c
+        if masked:
+            # the sampled accept kernel (QWEN36_SPEC_ACCEPT_KERNEL_SAMPLED) carries the kth > MASK_KTH_GUARD factor itself; the
+            # plain op graph does not, so without the kernel only a step whose k-th values are all real takes it
+            if getattr(self._fs, "_kernel", None) is None and not self._mask_kth_real(sampling):
+                if _MASK_PROF:
+                    self._prof_add("cert_for_narrow_mask", 1.0)
+                    n = len(self.__dict__.get("_prof", {}).get("cert_for_narrow_mask", ()))
+                    if n <= 4:
+                        logger.info(
+                            f"[spec_engine] mask prof: certificate accept for a narrow mask: top_k {sampling['top_k'].tolist()} "
+                            f"greedy {torch.as_tensor(sampling['greedy']).int().tolist()} "
+                            f"temperature {torch.as_tensor(sampling['temperature']).tolist()}"
+                        )
+                return self._fs_trace_c
+            self.mask_kernel_steps += 1
+        return self._fs_trace
+
+    def _mask_kth_real(self, sampling):
+        """True when every constrained column of a sampled (non-greedy) row of the step's mask allows at least its top_k tokens:
+        the k-th union value of such a row is then a real logit (the allowed tokens rank above every MASK_NEG candidate) and the
+        plain sampled accept (kernel or op graph, without the ``kth > MASK_KTH_GUARD`` factor) gives exactly the certificate
+        variant's result. A greedy-rewritten row has top_k 1 (one allowed token; an empty row is refused upstream). A greedy row
+        commits the argmax ids and needs nothing. Pure host work on the engine-row mask."""
+        mask = None if sampling is None else sampling.get("mask")
+        if mask is None:
+            return True
+        B, T = self.B, self.T
+        mask = torch.as_tensor(mask).reshape(B, T, -1)
+        greedy = torch.as_tensor(sampling["greedy"]).bool().reshape(B)
+        k = torch.as_tensor(sampling["top_k"]).to(torch.int64).reshape(B)
+        need = ~is_unconstrained(mask) & ~greedy[:, None]  # [B, T] constrained columns of sampled rows
+        if not bool(need.any()):
+            return True
+        kk = k[:, None].expand(B, T)[need]  # [n]
+        vocab = int(getattr(self.model, "vocab_size", 32 * int(mask.shape[-1])))
+        rows = mask[need][:, : (vocab + 31) // 32]  # [n, W'] the words of real logit columns
+        if vocab % 32:
+            rows = rows.clone()
+            rows[:, -1] &= (1 << (vocab % 32)) - 1
+        nz = (rows != 0).sum(dim=-1)  # nonzero words: a lower bound of the allowed count
+        low = nz < kk
+        if not bool(low.any()):
+            return True
+        a = np.ascontiguousarray(rows[low].to(torch.int32).numpy()).view(np.uint8)
+        bits = torch.from_numpy(np.unpackbits(a, axis=-1).sum(axis=-1).astype(np.int64))
+        return bool((bits >= kk[low]).all())
 
     def _cands_to_slots(self, cand):
         """DeviceCandidates engine rows -> runner slots (the same permutation as _to_slots)."""

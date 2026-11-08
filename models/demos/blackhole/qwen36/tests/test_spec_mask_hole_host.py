@@ -202,3 +202,20 @@ def test_deferred_split_step_caps_a_reasoning_boundary_row(monkeypatch):
     ids, counts, _ = h.wait()
     assert h.nvv.tolist()[:2] == [1, 3] and int(counts[0]) <= 2
     assert END not in ids[0, : int(counts[0]) - 1].tolist()  # the end id can only be the step's last token
+
+
+# --------------------------------------------------------------------------- #
+# c. the staging ring's repack cache (the masked step's host cost)
+# --------------------------------------------------------------------------- #
+def test_perm_staging_ring_cache_equals_the_repack():
+    g = torch.Generator().manual_seed(7)
+    base = torch.randint(-(2**31), 2**31 - 1, (6, SM.MASK_WORDS), generator=g, dtype=torch.int64).to(torch.int32)
+    ring = SM.PermMaskStagingRing(cache_rows=4)
+    for step in range(40):
+        rows = base[torch.randint(0, 6, (12,), generator=g)]  # repeated rows, more distinct rows than the cache holds
+        idx = sorted(set(torch.randint(0, 12, (7,), generator=g).tolist()))
+        buf = ring.stage(rows, idx).clone()
+        want = torch.full((SM.SHARDS, SM.MASK_ROWS, SM.SHARD_WORDS), -1, dtype=torch.int32)
+        want[:, idx] = SM.repack_to_permuted(rows[idx]).permute(1, 0, 2)
+        assert torch.equal(buf, want), step
+    assert ring.hits > 0 and ring.misses > 0 and len(ring.cache) <= 4

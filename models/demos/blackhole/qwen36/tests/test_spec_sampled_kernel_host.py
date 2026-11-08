@@ -517,3 +517,87 @@ def test_audit_topp_class_only_with_kernel():
     far[:, 2] = 0.07
     ref2 = ref._replace(cum=far)
     assert audit_boundary_users(ref2, uni, dev_committed, dev_counts, drafts, nv, B=B, K=K, M=M, top_p=torch.tensor([0.95])) == {}
+
+
+# ------------------------------------------------------------------------------------------------ masked rows (phase 3)
+def _masked_case(g, c, K, M, PS, TP):
+    """A packed token mask over the case's union (the device edits the shard logits before the topk trace, so the union it
+    reads back holds MASK_NEG at a disallowed candidate): per row, all ones, or the draft plus 1..30 random union candidates
+    (often fewer than top_k: a masked k-th value), or 1..3 candidates. Returns (union values, local ids, mask)."""
+    from models.demos.blackhole.qwen36.tt import spec_masks as SM
+    from models.demos.blackhole.qwen36.tt.spec_fused_sampled import _mask_union
+
+    B, T = c["B"], K + 1
+    R = B * T
+    V = PS * TP
+    allowed = torch.ones(R, V, dtype=torch.bool)
+    gid = c["ul"].to(torch.int64) + (torch.arange(c["ul"].shape[1]) // M) * PS
+    for r in range(R):
+        kind = int(torch.randint(0, 3, (1,), generator=g))
+        if kind == 0:
+            continue
+        n = int(torch.randint(1, 31 if kind == 1 else 4, (1,), generator=g))
+        pick = gid[r][torch.randperm(gid.shape[1], generator=g)[:n]]
+        allowed[r] = False
+        allowed[r, pick] = True
+        u, j = divmod(r, T)
+        if j < K and bool(torch.rand(1, generator=g) < 0.5):
+            allowed[r, int(c["tok_buf"][r + 1])] = True  # the draft stays allowed (it may still be accepted)
+    mask = SM.pack_allowed(allowed, words=(V + 31) // 32)
+    uv = _mask_union(c["uv"], c["ul"], PS, M, mask).to(torch.bfloat16)
+    # the device masks the shard logits BEFORE the topk trace: each shard's M candidates arrive sorted (value desc, id asc),
+    # the masked ones last
+    ul = c["ul"].clone()
+    for r in range(R):
+        for s in range(TP):
+            sl = slice(s * M, (s + 1) * M)
+            order = sorted(range(M), key=lambda i: (-float(uv[r, sl][i]), int(ul[r, sl][i])))
+            uv[r, sl], ul[r, sl] = uv[r, sl][order].clone(), ul[r, sl][order].clone()
+    return uv, ul, mask
+
+
+def test_model_matches_reference_on_masked_rows():
+    """The kernel's tie-overflow flag carries the phase-3 guard ``kth > MASK_KTH_GUARD`` (a row whose allowed set is smaller
+    than top_k has kth = MASK_NEG / T): masked steps can replay the kernel instead of the certificate op graph. Every user
+    equals fused_sampled_reference(mask=...) except float32 boundary users; overflow flags equal."""
+    g = torch.Generator().manual_seed(20261108)
+    K, TP, M, PS = fsh.K, fsh.TP, fsh.M, fsh.PER_SHARD
+    T = K + 1
+    st = dict(users=0, masked_kth=0, compared=0, exact=0, boundary=0, ovf=0)
+    for case in range(600):
+        B = (1, 4, 8)[case % 3]
+        c = fsh._case(g, B)
+        uv, ul, mask = _masked_case(g, c, K, M, PS, TP)
+        c = dict(c, uv=uv, ul=ul)
+        uni = torch.rand(B, K + 2, generator=g).clamp(max=_ONE_MINUS)
+        ids = c["mi"].reshape(B, T, M)[:, :, 0].reshape(-1)
+        ref = fused_sampled_reference(
+            uv, ul, c["tok_buf"], ids, c["aux"], c["pt"], B=B, K=K, per_shard=PS, M=M,
+            greedy=c["greedy"], temperature=c["temp"], top_k=c["top_k"], top_p=c["top_p"], uniforms=uni, mask=mask,
+        )  # fmt: skip
+        pk, rs, rr = _twin_case(c, uni, K, M, PS, TP)
+        R = B * T
+        committed = torch.as_tensor(((rr[0, :R] + 2**31) % 2**32 - 2**31).reshape(B, T))
+        counts, ovf = torch.as_tensor(rr[1, :B]), torch.as_tensor(rr[2, :B])
+        bits = np.unpackbits(np.ascontiguousarray(mask.numpy()).view(np.uint8), axis=-1)
+        nallowed = torch.from_numpy(bits.astype(np.int64).sum(axis=-1))
+        for u in range(B):
+            st["users"] += 1
+            if not bool(c["greedy"][u]) and bool((nallowed[u * T : (u + 1) * T] < int(c["top_k"][u])).any()):
+                st["masked_kth"] += 1
+            if int(ovf[u]) != int(ref.overflow[u]):
+                bnd = _boundary(c, ref, uni, u, [int(ref.counts[u]) - 1, int(counts[u]) - 1], K, M)
+                assert bnd and int(counts[u]) != int(ref.counts[u]), (case, u, "overflow flag", int(ovf[u]))
+                continue
+            if int(ref.overflow[u]):
+                st["ovf"] += 1
+                continue
+            st["compared"] += 1
+            if torch.equal(committed[u], ref.committed[u].to(torch.int64)) and int(counts[u]) == int(ref.counts[u]):
+                st["exact"] += 1
+                continue
+            assert _boundary(c, ref, uni, u, [int(ref.counts[u]) - 1, int(counts[u]) - 1], K, M), (case, u)
+            st["boundary"] += 1
+    print(f"\n[model vs reference, masked rows] {st}")
+    assert st["masked_kth"] > 0.2 * st["users"] and st["compared"] > 0.6 * st["users"]
+    assert st["boundary"] <= max(3, st["compared"] // 500)
