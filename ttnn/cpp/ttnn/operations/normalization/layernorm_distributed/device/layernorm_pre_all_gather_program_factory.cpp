@@ -75,7 +75,7 @@ constexpr const char* PRE2D_READER_KERNEL =
     "reader_layernorm_preallgather_2d.cpp";
 constexpr const char* PRE2D_COMPUTE_KERNEL =
     "ttnn/cpp/ttnn/operations/normalization/layernorm_distributed/device/kernels/compute/"
-    "layernorm_pre_allgather_2d.cpp";
+    "rmsnorm_pre_allgather_2d.cpp";
 
 }  // namespace
 
