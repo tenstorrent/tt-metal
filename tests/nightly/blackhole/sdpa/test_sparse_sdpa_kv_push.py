@@ -206,23 +206,23 @@ def test_sparse_kv_push_real_topk_matches_gather(mesh_device, layer):
     manager = mesh_device.create_sub_device_manager([ttnn.SubDevice([sdpa_grid]), ttnn.SubDevice([push_grid])], 0)
     mesh_device.load_sub_device_manager(manager)
     push(compact_next, 1, Part.PREFIX, core_grid=push_grid)
-    # Attention on sub-device 0's cores only: a restricted grid must not change the result.
+    # Attention on sub-device 0's cores only. The grid sets the work split (and so the rounding): compare on this grid.
     beside_prefix = ttnn.transformer.sparse_sdpa(q, compact_l, compact_idx, V_DIM, **sdpa_kw)
     mesh_device.clear_loaded_sub_device_manager()
     mesh_device.remove_sub_device_manager(manager)
     push(compact_next, 1, Part.REST)
 
-    def dense(slot):
+    def dense(slot, **grid):
         out = _zero_kv_buffer(mesh_device, cache_tokens, kv_fmt)
         ttnn.experimental.high_bw_all_gather(
             cache, dim=2, output_tensor=out, cluster_axis=None, num_links=links, input_batch_index=slot
         )
-        return _sparse_sdpa(q, out, idx_natural, s_local * TP, kv_fmt)
+        return _sparse_sdpa(q, out, idx_natural, s_local * TP, kv_fmt, **grid)
 
     host = lambda t: ttnn.to_torch(t, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=2))
     want = {slot: host(dense(slot)) for slot in (0, 1)}
     assert torch.equal(
-        want[0], host(beside_prefix)
+        host(dense(0, sub_core_grids=sdpa_grid)), host(beside_prefix)
     ), f"layer {layer}: attention on the sub-device, beside the prefix push, differs from the dense gather"
     for slot, buf in ((0, compact_l), (1, compact_next)):
         got = host(ttnn.transformer.sparse_sdpa(q, buf, compact_idx, V_DIM, **sdpa_kw))
