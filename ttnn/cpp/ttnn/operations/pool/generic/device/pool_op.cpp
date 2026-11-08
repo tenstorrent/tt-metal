@@ -22,7 +22,7 @@ void validate_pool2d(
     const Pool2DType pool_type,
     const sliding_window::SlidingWindowConfig& sliding_window_config,
     const MemoryConfig& out_mem_config,
-    const std::optional<const int32_t> /*divisor_override*/,
+    const std::optional<const int32_t> divisor_override,
     const bool return_indices,
     const Layout& output_layout) {
     // check the input tensor
@@ -32,6 +32,7 @@ void validate_pool2d(
     TT_FATAL(input.layout() == Layout::ROW_MAJOR, "Only ROW_MAJOR supported for now. Tracked by issue #23338");
 
     TT_FATAL(input.memory_config().is_sharded(), "Input needs to be sharded");
+    TT_FATAL(!divisor_override.has_value() || divisor_override.value() != 0, "divisor_override must be non-zero");
     TT_FATAL(input.shard_spec().has_value(), "Pool2D input shard spec should not be empty");
     const auto& shard_spec = input.shard_spec().value();
     sliding_window::validate_sliding_window_shard_grid(
