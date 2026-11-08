@@ -891,6 +891,7 @@ _GRID_MAIN_ROWS = (
     ("HiFi2", True, False, "B4", "F32", "B8", 3, 1, 2, 0, False, 1),
     ("HiFi2", True, True, "B4", "F32", "F16", 1, 2, 1, 0, False, 1),
     ("HiFi2", True, False, "B8", "B4", "B4", 2, 1, 1, 0, True, 2),
+    ("HiFi2", True, False, "B8", "B8", "B8", 4, 2, 4, 0, False, 1),
     ("HiFi2", True, True, "B8", "F16b", "F32", 3, 1, 1, 1, False, 1),
     ("HiFi2", True, False, "B8", "F32", "B8", 5, 1, 3, 5, False, 1),
     ("HiFi2", True, True, "B8", "F32", "F16", 1, 2, 1, 0, False, 1),
@@ -1905,6 +1906,7 @@ _TINY_MAIN_ROWS = (
     ("LoFi", True, False, "F32", "F16b", "B4", 4, 16, 1, 4, 1),
     ("LoFi", True, True, "F32", "B8", "B4", 4, 16, 2, 2, 4),
     ("LoFi", True, True, "F32", "F16b", "B4", 4, 16, 1, 4, 1),
+    ("LoFi", True, False, "F16b", "B8", "B4", 16, 32, 1, 4, 4),
 )
 _TINY_MAIN = frozenset(_TINY_MAIN_ROWS)
 

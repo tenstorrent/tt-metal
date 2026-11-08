@@ -711,6 +711,7 @@ inline constexpr matmul_grid_main_cell matmul_grid_main_cells[] = {
     {MathFidelity::HiFi2, true, false, DataFormat::Bfp4_b, DataFormat::Float32, DataFormat::Bfp8_b, 3, 1, 2, 0, false, 1},
     {MathFidelity::HiFi2, true, true, DataFormat::Bfp4_b, DataFormat::Float32, DataFormat::Float16, 1, 2, 1, 0, false, 1},
     {MathFidelity::HiFi2, true, false, DataFormat::Bfp8_b, DataFormat::Bfp4_b, DataFormat::Bfp4_b, 2, 1, 1, 0, true, 2},
+    {MathFidelity::HiFi2, true, false, DataFormat::Bfp8_b, DataFormat::Bfp8_b, DataFormat::Bfp8_b, 4, 2, 4, 0, false, 1},
     {MathFidelity::HiFi2, true, true, DataFormat::Bfp8_b, DataFormat::Float16_b, DataFormat::Float32, 3, 1, 1, 1, false, 1},
     {MathFidelity::HiFi2, true, false, DataFormat::Bfp8_b, DataFormat::Float32, DataFormat::Bfp8_b, 5, 1, 3, 5, false, 1},
     {MathFidelity::HiFi2, true, true, DataFormat::Bfp8_b, DataFormat::Float32, DataFormat::Float16, 1, 2, 1, 0, false, 1},
@@ -2504,6 +2505,7 @@ inline constexpr matmul_tiny_main_cell matmul_tiny_main_cells[] = {
     {MathFidelity::LoFi, true, false, DataFormat::Float32, DataFormat::Float16_b, DataFormat::Bfp4_b, 4, 16, 1, 4, 1},
     {MathFidelity::LoFi, true, true, DataFormat::Float32, DataFormat::Bfp8_b, DataFormat::Bfp4_b, 4, 16, 2, 2, 4},
     {MathFidelity::LoFi, true, true, DataFormat::Float32, DataFormat::Float16_b, DataFormat::Bfp4_b, 4, 16, 1, 4, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float16_b, DataFormat::Bfp8_b, DataFormat::Bfp4_b, 16, 32, 1, 4, 4},
 };
 
 constexpr bool matmul_tiny_main_form(const MathFidelity fidelity, const bool half_sync, const bool fp32_acc, const DataFormat in1, const DataFormat in0, const DataFormat out,
