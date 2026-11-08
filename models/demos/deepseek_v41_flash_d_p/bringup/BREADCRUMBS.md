@@ -3636,3 +3636,49 @@ Each item has its own setting (tt/settings.py, default on, off = the path before
   host arithmetic counts as device code. The code is attempt 1's. pre-commit passed on every changed file and
   rewrote nothing. `orchestrator measure --task P.35` reused quick / p51200 / p512000 (code 99663929581d1fa6,
   measured 22:55-23:02 after the last kernel edit at 22:54): rc 0, with the numbers above.
+
+## P.36 perf (8x4, 2026-11-08): FFN_FEED, the MoE head's x written by attn_residual's mhc_post over the fabric
+- What: setting FFN_FEED (on / off, default on) + FFN_FEED_LINKS (2). Fork option `ttnn.bringup.mhc_post(...,
+  norm_weight=, feed_output=X, feed_semaphores=[ready, arrival], feed_num_links=, feed_cluster_axis=1)`: the pass that
+  writes ffn_norm's output (POST_COLLAPSE + NORM_IN_MHC) also writes the MoE head's column-split input X
+  [S/SP, H/TP] on every TP chip, as all_to_all_async_generic(in_dim 2, out_dim 3) did (DS41-138). Fork CHANGELOG
+  "feed_output" has the kernel design.
+  - tt/ffn_feed.py: the two global semaphores, made once a mesh at model load (after ccl.setup, before the MoE blocks
+    place their persistent L1), over the capped worker grid.
+  - tt/moe_block_main_adapter.py: `can_feed()` (OWN_ROWS path, no token loops / splits / padding; reset in at_chunk),
+    `feed_buffer()` (persistent bf16 [S/SP, H/TP] per (mesh, chunk), pinned, allocated at load: DS41-146),
+    `__call__(fed=True)` -> `_own_rows` skips the all-to-all and reads the buffer (not freed).
+  - tt/mhc.py: `TtHcMixes.feed` (callable) / `feed_kwargs()` / `fed`; tt/model.py: the block sets `ffn_hc.feed` when
+    model.ffn_feed (norm_in_mhc, MOE_IMPL=block, TP >= 2), ffn_norm's hc has the norm and the MoE layer can_feed;
+    ffn_hc marks ctx.extra["ffn_fed"], experts passes fed=True.
+  - Fallback (no refusal): the carried block (MOE_BLOCK_SRC=carried, no can_feed) and the main block's own forward
+    run the TP all-to-all as before.
+- Bit-identical: quick (rung last, every layer vs golden): all 205 err metrics equal to P.35's to the last digit,
+  pcc_chunk_out 0.6054857891895873 both, host_transfers_per_layer 0. Fork test: X bit-identical to the stock
+  all-to-all of y.
+- Measured (`orchestrator measure --task P.36`, change on, final code; vs P.35's change-on run = this task's off path,
+  unpaired): p51200 wall 203.2 -> 203.1 ms, device 187.16 -> 186.92 (attn_residual 5.52 -> 7.06, experts 107.13 ->
+  105.28); p512000 wall 247.0 -> 246.1, device 225.30 -> 223.95 (attn_residual 5.51 -> 7.64, experts 106.67 ->
+  103.36). Launches 1744 -> 1704 a chunk (-40 all_to_all_async_generic), programs 53280 -> 52000 (-40 a chip).
+  The skew wait moved into attn_residual (the brief's risk): the op ends when every TP peer's block has landed.
+  The paired off / on table is the orchestrator's.
+- Re-measured on main (op alone, 8x4 torus, [160, 5120], 2 links, 50-100 calls; probe `/tmp/p36_timing_probe.py`,
+  not kept): host enqueue mhc_post 101.8 us, + feed 109.6 us, the all-to-all it replaces 98.4 us; synced loop 146.7 /
+  192.1 / 98.0 us. So about -90 us host and -50 us device a call when the chips are in step.
+- Gotchas:
+  - The model's mesh is FABRIC_2D_TORUS_XY (TP axis a 4-ring): ports grouped by position hung at the ready fence;
+    group targets by get_eth_forwarding_direction (DS41-224). The fork test runs both fabrics.
+  - One program per chip (create_descriptor with the coordinate) cost 336 us host a call; the uniform program reads
+    its chip from the routing table and the rest from a common-arg table: 110 us (DS41-225).
+  - tt-probe saves probes under tests/ttnn/unit_tests/operations/<name>/ (outside this task's paths): deleted.
+- Rule 18: the op's cores = units + spare-core roots + 2 L ports inside the 11 x 10 cap (8x4 [160, 5120]: 100 + 5 + 4
+  = 109). Rule 4: FABRIC_2D / FABRIC_2D_TORUS_XY only. OV-23: a C++ descriptor op (addresses patched on cache hits),
+  110 us host a call.
+- Re-run: `scripts/run_safe_pytest.sh --run-all ttnn/ttnn/bringup/mhc_post_ttnn/tests/unit/test_mhc_post_feed.py`
+  (24 passed); `python -m models.demos.common.bringup.orchestrator measure --spec <spec> --task P.36`.
+- Attempt 2 (2026-11-08): no code change. Attempt 1 failed on two checks only: a python3 heredoc that edited
+  settings.py was read as device code, and the DS41-225 bullet was 602 chars (now cut to fit by rewording one
+  phrase). pre-commit on every changed file: passes (the only failure is check-large-files on the orchestrator's
+  dashboard/*.html, which are not this step's files). `orchestrator measure --task P.36` reused quick / p51200 /
+  p512000 (same code and switch): rc 0, with attempt 1's numbers above (quick chunk_wall 184.7 ms, p51200 203.1,
+  p512000 246.1).

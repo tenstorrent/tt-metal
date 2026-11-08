@@ -115,6 +115,19 @@ void bind_mhc_post_ttnn(nb::module_& mod) {
                 so that column of stats holds sum y^2), its rsqrt on each row's root core, (y * rsqrt) * w fp32 on
                 the SFPU, one bf16 rounding.
             norm_eps (float, optional): the norm's epsilon (default 1e-6).
+            feed_output (ttnn.Tensor, optional; default None = off; deepseek_v41_flash_d_p P.36): (..., G T, C / G)
+                in the residual's dtype, TILE DRAM interleaved, at the same address on every chip (a persistent
+                buffer); needs norm_weight and feed_semaphores. The normalized y also goes where an all-to-all over
+                mesh axis feed_cluster_axis (G chips, in_dim -2, out_dim -1) of y would put it: chip p's feed_output
+                holds column block p of every group chip's y, chip q's rows at [q T, (q + 1) T). The chip's own block
+                is written by the units; the others leave y_output (their staging) over the fabric from port cores
+                (one per direction and link: the grid's last 2 feed_num_links cores, inside max_grid), behind a
+                ready fence; the op returns when this chip's feed_output is complete. One program per chip.
+            feed_semaphores (list[int], optional): [ready, arrival], the L1 addresses of two global semaphores
+                (ttnn.create_global_semaphore(mesh, cores, 0) over cores that include the grid's last
+                2 feed_num_links cores; ttnn.get_global_semaphore_address), at 0, used only by this op.
+            feed_num_links (int, optional): fabric links per direction (default 1).
+            feed_cluster_axis (int, optional): the mesh axis of the group (default 1).
 
         Returns:
             ttnn.Tensor: X' (..., T, n*C), the residual's dtype, TILE, DRAM interleaved; with stats_weight the tuple
@@ -145,7 +158,11 @@ void bind_mhc_post_ttnn(nb::module_& mod) {
         nb::arg("hc_output") = nb::none(),
         nb::arg("y_output") = nb::none(),
         nb::arg("norm_weight") = nb::none(),
-        nb::arg("norm_eps") = 1e-6);
+        nb::arg("norm_eps") = 1e-6,
+        nb::arg("feed_output") = nb::none(),
+        nb::arg("feed_semaphores") = nb::none(),
+        nb::arg("feed_num_links") = 1,
+        nb::arg("feed_cluster_axis") = 1);
 
     mod.def(
         "_mhc_post_ttnn_program_descriptor",

@@ -548,6 +548,25 @@ TABLE = {
         "one exact, so some outputs differ by one bf16 step (fork test: 1e-5 of the elements one step off float64). "
         "Layer 0's attn_hc and any hc step that keeps mhc_pre_xing keep their rms_norm. off = the P.34 path",
     ),
+    "FFN_FEED": Setting(
+        "on",
+        ("on", "off"),
+        "P.36 (owner 2026-11-06, mHC study opportunity #2; needs NORM_IN_MHC's conditions, OWN_ROWS, MOE_IMPL=block "
+        "with MOE_BLOCK_SRC=main and a mesh with >= 2 chips over TP). on = the attn_residual pass that writes ffn_norm's "
+        "output (mhc_post collapse_pre + norm_weight) also writes the MoE head's input (the column split [S/SP, H/TP]) "
+        "on every chip of the TP group: the own column block locally, the others over the fabric from port cores "
+        "(fork option mhc_post feed_output: one port per direction and link in the grid cap's last cores, a ready "
+        "fence and an arrival count on two global semaphores made at load, tt/ffn_feed.py); the MoE layer then runs no "
+        "all_to_all_async_generic (40 a chunk fewer). Bit-identical to off (the same bf16 values, moved). The carried "
+        "block (MOE_BLOCK_SRC=carried) and the main block's token-loop / padded path fall back to off. off = the P.35 "
+        "path (the TP all-to-all in tt/moe_block_main_adapter.py)",
+    ),
+    "FFN_FEED_LINKS": Setting(
+        2,
+        None,
+        "P.36: fabric links per direction of FFN_FEED's port cores (2 ports a link: 4 cores of the 110-core cap at 2; "
+        "the all-to-all it replaces used num_links=2)",
+    ),
     "HC_SINKHORN": Setting(
         "sfpu_fp32",
         ("sfpu_fp32", "fpu"),

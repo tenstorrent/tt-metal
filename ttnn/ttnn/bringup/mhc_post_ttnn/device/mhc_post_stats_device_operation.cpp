@@ -8,6 +8,8 @@
 #include <algorithm>
 #include <vector>
 
+#include <tt-metalium/mesh_device.hpp>
+
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operation.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
@@ -58,7 +60,7 @@ MhcPostStatsPlan mhc_post_stats_plan(
 }
 
 void MhcPostStatsDeviceOperation::validate_on_program_cache_miss(
-    const operation_attributes_t& /*attrs*/, const tensor_args_t& t) {
+    const operation_attributes_t& attrs, const tensor_args_t& t) {
     for (const Tensor* x : {&t.input, &t.residual, &t.post, &t.comb, &t.weight}) {
         TT_FATAL(x->storage_type() == ttnn::StorageType::DEVICE, "mhc_post: every operand must be on a device");
     }
@@ -69,6 +71,11 @@ void MhcPostStatsDeviceOperation::validate_on_program_cache_miss(
     if (t.norm_weight.has_value()) {
         TT_FATAL(
             t.norm_weight->storage_type() == ttnn::StorageType::DEVICE, "mhc_post: every operand must be on a device");
+    }
+    if (attrs.feed) {  // P.36
+        TT_FATAL(attrs.norm && t.feed_output.has_value(), "mhc_post: feed_output needs norm_weight");
+        TT_FATAL(
+            t.feed_output->storage_type() == ttnn::StorageType::DEVICE, "mhc_post: every operand must be on a device");
     }
 }
 
@@ -125,6 +132,18 @@ MhcPostStatsDeviceOperation::tensor_return_value_t MhcPostStatsDeviceOperation::
 
 ttsl::hash::hash_t MhcPostStatsDeviceOperation::compute_program_hash(
     const operation_attributes_t& attrs, const tensor_args_t& t) {
+    if (attrs.feed) {  // P.36: the hash without the feed, then the feed's spec, links, axis and the mesh shape (the
+                       // semaphore addresses are runtime args)
+        auto off = attrs;
+        off.feed = false;
+        const auto& ms = t.input.device()->shape();
+        std::vector<uint32_t> mesh_dims;
+        for (size_t i = 0; i < ms.dims(); ++i) {
+            mesh_dims.push_back(ms[i]);
+        }
+        return tt::tt_metal::operation::hash_operation<MhcPostStatsDeviceOperation>(
+            compute_program_hash(off, t), t.feed_output->tensor_spec(), attrs.feed_links, attrs.feed_axis, mesh_dims);
+    }
     if (attrs.norm) {  // P.35: the hash without the norm, then the weight's spec (the scalars are runtime args)
         auto off = attrs;
         off.norm = false;
@@ -221,6 +240,14 @@ std::vector<ttnn::Tensor> mhc_post_stats(
             attrs.rms_inv_w = 1.0 / static_cast<double>(input.logical_shape()[-1]);
             attrs.rms_eps = collapse->rms_eps;
             args.norm_weight = collapse->norm_weight;
+        }
+        if (collapse->feed_output.has_value()) {  // P.36
+            TT_FATAL(collapse->feed_semaphores.size() == 2, "mhc_post: feed_semaphores must be (ready, arrival)");
+            attrs.feed = true;
+            attrs.feed_axis = collapse->feed_axis;
+            attrs.feed_links = collapse->feed_links;
+            attrs.feed_sems = {collapse->feed_semaphores[0], collapse->feed_semaphores[1]};
+            args.feed_output = collapse->feed_output;
         }
     }
     return ttnn::device_operation::launch<OperationType>(attrs, args);

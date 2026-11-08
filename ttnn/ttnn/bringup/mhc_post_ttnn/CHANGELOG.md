@@ -229,3 +229,54 @@ two perf-tournament rounds); its golden suite is `eval/golden_tests/mhc_post` on
 - Files: `mhc_post_ttnn.{hpp,cpp}`, `mhc_post_ttnn_nanobind.cpp`, `device/mhc_post_stats_device_operation.{hpp,cpp}`,
   `device/mhc_post_stats_program_factory.cpp`, `kernels/mhc_post_stats_{reader,writer,compute}.cpp`,
   `tests/unit/test_mhc_post_norm.py` (new).
+
+### feed_output: the normalized y also goes into the TP peers' column-split buffer (deepseek_v41_flash_d_p P.36)
+- What: opt-in `feed_output=X` ((..., G T, C / G) in the residual's dtype, TILE DRAM interleaved, a persistent buffer
+  at the same address on every chip) with `feed_semaphores=[ready, arrival]` (two global semaphores' L1 addresses),
+  `feed_num_links` (default 1) and `feed_cluster_axis` (default 1); needs `norm_weight`. X then also receives what
+  `all_to_all_async_generic(y, in_dim=2, out_dim=3, cluster_axis=axis)` would write: chip p of a group gets column
+  block p of every group chip's normalized y, chip q's rows at [q T, (q + 1) T).
+  - One program for every chip (the stats program from the same `build_descriptor`, plus the ports). Everything that
+    differs per chip comes from a chip-independent feed table in the common args (`kernels/mhc_post_feed_layout.hpp`:
+    fabric chip id -> mesh position, position -> chip id, the side of each group pair, the two sides' eth directions,
+    the port cores, each target's unit range, and each chip's fabric channel per port slot); each kernel finds its own
+    chip from the fabric routing table in L1 (`routing_l1_info_t::my_device_id`, `kernels/mhc_post_feed_common.hpp`
+    Table). A first version with one program per chip (create_descriptor with the mesh coordinate) cost 336 us of
+    host a call (DS41-147); the table version 110 us.
+  - Ports: the grid's last 2 L cores (row-wise, the same logical cores on every chip), port d L + l for side d (the
+    fabric's first hop toward the target: east / north 0, west / south 1, from get_eth_forwarding_direction - on a
+    torus ring the far chip goes round the wrap; DS41-224; the same pattern in every group, checked) and link l;
+    the units split over the cores before them (the norm's spare-core roots skip the ports). Each port carries to
+    every target on its side the units u in [u_lo(t), u_hi(t)) with (u - u_lo) mod L == l, their tiles of column
+    block t (`kernels/mhc_post_feed_common.hpp`).
+  - Writer (define MHC_POST_FEED, common arg 3 = X's address, the table from 4): in the norm phase a y_n tile of the
+    chip's own block goes straight to X; the others go to `y_output` (the staging); after a unit's writes land, one
+    increment (semaphore 2) on the port of each (target, link) pair of the unit (one word a unit after the root list).
+  - Port reader (`kernels/mhc_post_feed_reader.cpp`, NCRISC): waits for its units, reads the staged tiles into packet
+    slots (CB 26, 8 slots of up to P tiles).
+  - Port sender (`kernels/mhc_post_feed_sender.cpp`, BRISC): the chip's channel for its slot from the table into
+    runtime arg 2, then the connection (semaphores 3 / 4); ready fence (an atomic increment into each target's port
+    toward this chip, wait for one from each), then fabric scatter writes of up to P = min(4, payload / tile) tiles
+    into the target's X, the stream's last tile alone fused with an increment of the target's arrival semaphore on its
+    port 0; port 0 waits for the (G - 1) L arrivals. Each wait re-arms its semaphore by what it saw before anything
+    the peers' next call could answer is sent.
+  - Hash: the off hash + X's spec, links, axis, mesh shape; the semaphore and buffer addresses are runtime args
+    patched on a cache hit (`override_runtime_arguments`). Off (default): every program, CT / RT arg, define and
+    hash unchanged.
+- Why: under OWN_ROWS DeepSeek-V4.1's MoE head takes the column split, so every layer ran a TP
+  all_to_all_async_generic of ffn_norm's output (40 a chunk, a launch and ~0.1 ms host each, plus TP arrival skew).
+  With NORM_IN_MHC that output is written by this pass.
+- Measured (8x4 Galaxy, FABRIC_2D_TORUS_XY, [160, 5120] a chip, 2 links, 110 cores incl. 4 ports; 50-100 calls,
+  wall): host enqueue 101.8 us without the feed, 109.6 us with it (the all-to-all it replaces: 98.4 us); synced loop
+  146.7 / 192.1 us (+ the all-to-all: 98.0 us).
+- Tests: `tests/unit/test_mhc_post_feed.py` (8x4 Galaxy opened 8 x 4, FABRIC_2D and FABRIC_2D_TORUS_XY, the 11 x 10
+  grid cap; 24 passed): X bit-identical to the column blocks of the op's own y and to the stock all-to-all of y; X',
+  stats, hc bit-identical to the call without feed_output; [160, 5120], [32, 5120], [1280, 5120] (several units a
+  core), [640, 1280] (unit blocks straddle the chips' blocks), [64, 640]; links 1 and 2; 5 repeated calls on two
+  buffers with the same semaphores; refusals. Fork regression not run on the 8x4 (owner OV-25: F.1 runs every suite).
+- Needed by: deepseek_v41_flash_d_p P.36 (setting FFN_FEED: tt/ffn_feed.py, tt/mhc.py, tt/model.py,
+  tt/moe_block_main_adapter.py).
+- Files: `mhc_post_ttnn.{hpp,cpp}`, `mhc_post_ttnn_nanobind.cpp`, `device/mhc_post_stats_device_operation.{hpp,cpp}`,
+  `device/mhc_post_stats_program_factory.cpp`, `kernels/mhc_post_stats_writer.cpp`,
+  `kernels/mhc_post_feed_{layout.hpp,common.hpp,reader.cpp,sender.cpp}` (new), `tests/unit/test_mhc_post_feed.py`
+  (new).

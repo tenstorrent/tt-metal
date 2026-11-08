@@ -12,6 +12,8 @@
 #include <fmt/format.h>
 #include <fmt/ranges.h>
 
+#include <tt-metalium/mesh_device.hpp>
+
 #include "device/mhc_post_ttnn_device_operation.hpp"
 #include "device/mhc_post_stats_device_operation.hpp"
 #include "device/mhc_post_ttnn_device_operation_types.hpp"
@@ -256,7 +258,11 @@ std::tuple<Tensor, Tensor, Tensor, Tensor> mhc_post_with_collapse(
     const std::optional<Tensor>& y_output,
     std::optional<tt::tt_metal::CoreCoord> max_grid,
     const std::optional<Tensor>& norm_weight,
-    double norm_eps) {
+    double norm_eps,
+    const std::optional<Tensor>& feed_output,
+    const std::optional<std::vector<uint32_t>>& feed_semaphores,
+    int64_t feed_num_links,
+    int64_t feed_cluster_axis) {
     // the stats_weight checks first (the same refusals), then the collapse's own
     const auto cfg = compute_kernel_config.value_or(default_compute_kernel_config());
     check_supported(input_tensor, residual, cfg);
@@ -326,6 +332,44 @@ std::tuple<Tensor, Tensor, Tensor, Tensor> mhc_post_with_collapse(
             throw ValueErrorCpp("mhc_post: norm_eps must be >= 0");
         }
     }
+    if (feed_output.has_value()) {  // P.36: (..., G T, C / G) in X's dtype, TILE DRAM interleaved; needs the norm
+        if (!norm_weight.has_value()) {
+            throw ValueErrorCpp("mhc_post: feed_output needs norm_weight");
+        }
+        if (!feed_semaphores.has_value() || feed_semaphores->size() != 2) {
+            throw ValueErrorCpp(
+                "mhc_post: feed_output needs feed_semaphores = [ready, arrival] (global semaphore addresses)");
+        }
+        const auto& ms = input_tensor.device()->shape();
+        if (feed_cluster_axis < 0 || feed_cluster_axis >= static_cast<int64_t>(ms.dims())) {
+            throw ValueErrorCpp(
+                fmt::format("mhc_post: feed_cluster_axis {} of a {}-d mesh", feed_cluster_axis, ms.dims()));
+        }
+        const int64_t G = ms[static_cast<int32_t>(feed_cluster_axis)];
+        if (G < 2 || C % (G * TILE_HW) != 0 || feed_num_links < 1) {
+            throw ValueErrorCpp(fmt::format(
+                "mhc_post: feed needs >= 2 chips along feed_cluster_axis, C % (32 G) == 0 and feed_num_links >= 1 "
+                "(G {}, C {}, links {})",
+                G,
+                C,
+                feed_num_links));
+        }
+        const auto od = dims(*feed_output);
+        const int64_t T = fd[fd.size() - 2];
+        const auto& omc = feed_output->memory_config();
+        if (od.size() != fd.size() || !std::equal(od.begin(), od.end() - 2, fd.begin()) || od[od.size() - 2] != G * T ||
+            od.back() != C / G || feed_output->dtype() != residual.dtype() || feed_output->layout() != Layout::TILE ||
+            omc.memory_layout() != TensorMemoryLayout::INTERLEAVED || omc.buffer_type() != BufferType::DRAM) {
+            throw ValueErrorCpp(fmt::format(
+                "mhc_post: feed_output must be (..., G T = {}, C / G = {}) in the residual's dtype, TILE, DRAM "
+                "interleaved, got {}",
+                G * T,
+                C / G,
+                dims_str(od)));
+        }
+    } else if (feed_semaphores.has_value()) {
+        throw ValueErrorCpp("mhc_post: feed_semaphores need feed_output");
+    }
     MhcPostCollapseArgs ca{
         .collapse_pre = collapse_pre,
         .scale = {hc_scale[0], hc_scale[1], hc_scale[2]},
@@ -337,7 +381,11 @@ std::tuple<Tensor, Tensor, Tensor, Tensor> mhc_post_with_collapse(
         .hc_output = hc_output,
         .y_output = y_output,
         .norm_weight = norm_weight,
-        .rms_eps = norm_eps};
+        .rms_eps = norm_eps,
+        .feed_output = feed_output,
+        .feed_semaphores = feed_semaphores.value_or(std::vector<uint32_t>{}),
+        .feed_links = static_cast<uint32_t>(feed_num_links),
+        .feed_axis = static_cast<uint32_t>(feed_cluster_axis)};
     auto out = ttnn::prim::bringup::mhc_post_stats(
         input_tensor,
         residual,
@@ -380,7 +428,11 @@ std::variant<Tensor, std::tuple<Tensor, Tensor>, std::tuple<Tensor, Tensor, Tens
     const std::optional<Tensor>& hc_output,
     const std::optional<Tensor>& y_output,
     const std::optional<Tensor>& norm_weight,
-    double norm_eps) {
+    double norm_eps,
+    const std::optional<Tensor>& feed_output,
+    const std::optional<std::vector<uint32_t>>& feed_semaphores,
+    int64_t feed_num_links,
+    int64_t feed_cluster_axis) {
     if (collapse_pre.has_value()) {  // P.34
         if (!stats_weight.has_value() || !hc_scale.has_value() || !hc_base.has_value()) {
             throw ValueErrorCpp("mhc_post: collapse_pre needs stats_weight, hc_scale and hc_base");
@@ -409,11 +461,16 @@ std::variant<Tensor, std::tuple<Tensor, Tensor>, std::tuple<Tensor, Tensor, Tens
             y_output,
             max_grid,
             norm_weight,
-            norm_eps);
+            norm_eps,
+            feed_output,
+            feed_semaphores,
+            feed_num_links,
+            feed_cluster_axis);
     }
     if (hc_output.has_value() || y_output.has_value() || hc_scale.has_value() || hc_base.has_value() ||
-        norm_weight.has_value()) {
-        throw ValueErrorCpp("mhc_post: hc_scale / hc_base / hc_output / y_output / norm_weight need collapse_pre");
+        norm_weight.has_value() || feed_output.has_value()) {
+        throw ValueErrorCpp(
+            "mhc_post: hc_scale / hc_base / hc_output / y_output / norm_weight / feed_output need collapse_pre");
     }
     if (stats_weight.has_value()) {
         return mhc_post_with_stats(

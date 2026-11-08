@@ -54,6 +54,20 @@ struct MhcPostStatsParams {
     bool norm = false;
     double rms_inv_w = 0.0;
     double rms_eps = 1e-6;
+    // Fork option feed_output (deepseek_v41_flash_d_p P.36, FFN_FEED; false = off: every program, arg and hash as
+    // before; needs norm): the normalized y also goes, as the TP all-to-all of the MoE head's input would put it, into
+    // feed_output on every chip of the chip's group along mesh axis feed_axis (the column split [G T, C / G]: chip p
+    // of the group gets y's column block p, the rows of chip q at rows [q T, (q + 1) T)). The own block is written
+    // locally by the units; the other blocks leave y_output (their staging) through per-chip port cores over the
+    // fabric (one port per first-hop direction and link, the last 2 feed_links cores of the grid), with a ready fence
+    // (global semaphore feed_sems[0]) and an arrival count (feed_sems[1], on port 0): the op ends when this chip's
+    // feed_output is complete. One program for every chip: chip-dependent values (position, peers, sides, fabric
+    // channels) come from a chip-independent table in the common args (the kernels find their chip in the fabric
+    // routing table). The semaphore addresses are runtime args.
+    bool feed = false;
+    uint32_t feed_axis = 1;
+    uint32_t feed_links = 1;
+    std::array<uint32_t, 2> feed_sems{};
 };
 
 // The collapse option's call arguments (P.34): the next step's pre, its coefficient scalars, the caller's buffers.
@@ -70,6 +84,11 @@ struct MhcPostCollapseArgs {
     // P.35 (norm): the norm's weight (..., 1, C) fp32 TILE (None = off) and epsilon
     std::optional<Tensor> norm_weight;
     double rms_eps = 1e-6;
+    // P.36 (feed): the head's input buffer (the column split over the axis), its two global semaphores, links, axis
+    std::optional<Tensor> feed_output;
+    std::vector<uint32_t> feed_semaphores;
+    uint32_t feed_links = 1;
+    uint32_t feed_axis = 1;
 };
 
 struct MhcPostStatsInputs {
@@ -88,6 +107,8 @@ struct MhcPostStatsInputs {
     std::optional<Tensor> y_output;
     // P.35 (norm): the norm's weight, (..., 1, C) fp32 TILE
     std::optional<Tensor> norm_weight;
+    // P.36 (feed): the head's input (..., G T, C / G) in X's dtype, written on every chip of the group
+    std::optional<Tensor> feed_output;
 };
 
 // The work plan (host): column blocks of `cols_per_block` tiles; a unit = one block of one token tile-row, units
