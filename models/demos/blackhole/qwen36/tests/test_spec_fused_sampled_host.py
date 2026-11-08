@@ -475,10 +475,18 @@ def test_predraw_equals_the_plugin_copy():
         assert all(torch.equal(a[u].get_state(), b[u].get_state()) for u in seeded)
 
 
-def test_host_redo_walk_equals_the_plugin_full_logits_walk():
-    """host_redo_walk (float64, the overflow redo) commits what the plugin's full-logits walk commits with the same uniforms."""
-    from vllm_tt_plugin.spec_accept import accept_sampled_drafts
+def _plugin_full_vocab_walk(logits, drafts, nv, sampling, uniforms):
+    """The walk a fused_sample model owes the plugin (accept_sampled_support on the given uniforms) with the whole
+    vocabulary as its support, in (value desc, id asc) order: every position is decidable, so the table holds the cut over
+    the full logits. The plugin's logits mode walks with exponential races instead, which no uniform table reproduces.
+    """
+    vals, ids = torch.sort(logits, dim=-1, descending=True, stable=True)
+    return accept_sampled_support(ids[..., 0].to(torch.int32), vals, ids, drafts, nv, sampling, uniforms=uniforms)
 
+
+def test_host_redo_walk_equals_the_plugin_full_logits_walk():
+    """host_redo_walk (float64, the overflow redo) commits what the plugin's support walk over the full logits commits with
+    the same uniforms."""
     from models.demos.blackhole.qwen36.tt.spec_fused_sampled import host_redo_walk
 
     V, Bs = 512, 4
@@ -502,15 +510,11 @@ def test_host_redo_walk_equals_the_plugin_full_logits_walk():
             .to(torch.int32)
         )
         seeded = [u for u in range(B) if int(nv[u]) > 0 and case % 2 == 0 and u % 2 == 0]
-        a = {u: torch.Generator().manual_seed(9000 + case * 10 + u) for u in seeded}
         b = {u: torch.Generator().manual_seed(9000 + case * 10 + u) for u in seeded}
-        sampling = SpecSamplingInputs(
-            vocab_size=V, temperature=temp, top_k=top_k.to(torch.int64), top_p=top_p, generators=a
-        )
-        torch.manual_seed(case)
-        plug = accept_sampled_drafts(logits, drafts, nv, sampling)
+        sampling = SpecSamplingInputs(vocab_size=V, temperature=temp, top_k=top_k.to(torch.int64), top_p=top_p)
         torch.manual_seed(case)
         uni = predraw_uniforms(b, B, K, nv)
+        plug = _plugin_full_vocab_walk(logits, drafts, nv, sampling, uni)
         tok = torch.cat([torch.zeros(B, 1, dtype=torch.int64), drafts.to(torch.int64)], dim=1)
         committed, counts = host_redo_walk(
             logits.reshape(B * T, V),

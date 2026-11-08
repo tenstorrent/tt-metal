@@ -4,7 +4,7 @@
 
 H2 bit layout, H6 tie guard and greedy tie rule, H10 masked host_redo_walk against the float64 full-vocabulary reference,
 the masked fused_sampled_reference against the masked host walk, H4-lite (the composed mask path commits what the plugin's
-accept_sampled_drafts commits with the same grammar bitmask rows and uniforms), and the engine plumbing on a stub engine.
+filters and support walk commit with the same grammar bitmask rows and uniforms), and the engine plumbing on a stub engine.
 
 Run: pytest -o addopts="" --import-mode=importlib -q models/demos/blackhole/qwen36/tests/test_spec_masks_host.py"""
 
@@ -659,21 +659,38 @@ def test_masked_reference_applies_the_mask_to_an_unmasked_union_that_contains_th
 
 
 # --------------------------------------------------------------------------- #
-# H4-lite: the composed mask path equals the plugin accept_sampled_drafts
+# H4-lite: the composed mask path equals the plugin's filters and support walk
 # --------------------------------------------------------------------------- #
 try:
-    from vllm_tt_plugin.spec_accept import SpecSamplingInputs, SpecTokenFilters, accept_sampled_drafts
+    import vllm_tt_plugin.spec_accept as SA
+    from vllm_tt_plugin.spec_accept import (
+        SpecSamplingInputs,
+        SpecTokenFilters,
+        accept_sampled_support,
+        apply_speculative_token_filters,
+    )
 
     _HAVE_PLUGIN = True
 except ImportError:  # pragma: no cover
     _HAVE_PLUGIN = False
 
 
+def _plugin_filtered_walk(logits, drafts, nv, filters, sampling, uniforms):
+    """The plugin's rules for a masked fused_sample step: the grammar bitmask, then apply_speculative_token_filters, then
+    the walk a fused_sample model owes (accept_sampled_support on the given uniforms) with the whole vocabulary as its
+    support in (value desc, id asc) order. The plugin's logits mode walks with exponential races instead, which no
+    uniform table reproduces."""
+    lg = SA._apply_grammar_bitmask(logits, filters.grammar_bitmask)
+    lg = apply_speculative_token_filters(lg, drafts, nv, filters)
+    vals, ids = torch.sort(lg, dim=-1, descending=True, stable=True)
+    return accept_sampled_support(ids[..., 0].to(torch.int32), vals, ids, drafts, nv, sampling, uniforms=uniforms)
+
+
 @pytest.mark.skipif(not _HAVE_PLUGIN, reason="vllm_tt_plugin not importable")
-def test_composed_mask_path_equals_the_plugin_accept_sampled_drafts():
-    """Plugin: grammar bitmask [B, 1+K, W] + allowed_token_ids + min_tokens as filters, full logits, its own uniforms.
-    Here: ONE composed packed mask (the AND), host_redo_walk(mask=) and the masked fused_sampled_reference on the union of
-    the device-masked logits, with the same uniforms (predraw_uniforms from the same seed). Greedy rows and sampled rows.
+def test_composed_mask_path_equals_the_plugin_filtered_support_walk():
+    """Plugin: grammar bitmask [B, 1+K, W] + allowed_token_ids + min_tokens as filters on the full logits, then its support
+    walk. Here: ONE composed packed mask (the AND), host_redo_walk(mask=) and the masked fused_sampled_reference on the union
+    of the device-masked logits. Both sides walk the same uniforms (predraw_uniforms). Greedy rows and sampled rows.
     """
     per, B = 512, 4
     V = TP * per
@@ -722,13 +739,14 @@ def test_composed_mask_path_equals_the_plugin_accept_sampled_drafts():
         )
         # the plugin and the composed mask must agree on the rows
         sampling = SpecSamplingInputs(
-            vocab_size=V, temperature=temp, top_k=c["top_k"].to(torch.int64), top_p=c["top_p"], filters=filters
+            vocab_size=V, temperature=temp, top_k=c["top_k"].to(torch.int64), top_p=c["top_p"]
         )
         drafts = c["tok"][:, 1:].to(torch.int32)
         torch.manual_seed(case)
-        plug = accept_sampled_drafts(x.float().reshape(B, T, V), drafts, c["nv"].to(torch.int32), sampling)
-        torch.manual_seed(case)
         uni = predraw_uniforms({}, B, K, c["nv"])
+        plug = _plugin_filtered_walk(
+            x.float().reshape(B, T, V), drafts, c["nv"].to(torch.int32), filters, sampling, uni
+        )
         params = {"temperature": temp, "top_k": c["top_k"], "top_p": c["top_p"], "greedy": greedy}
         got_c, got_n = host_redo_walk(
             x, c["tok"], params, uni, B=B, K=K, num_valid=c["nv"], mask=grammar_eff.reshape(B, T, -1)
