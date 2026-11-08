@@ -224,6 +224,14 @@ class GLM53FlashPrefillRuntime:
 
     def _arm_dram_guard(self) -> None:
         budget = float(os.environ.get("GLM53F_RUNNER_DRAM_GUARD_MIB", "64"))
+        if os.environ.get("TT_METAL_SHM_TRACKING_DISABLED", "") not in ("1", "true", "True"):
+            # G53F-0313: with tt-smi's SHM stats on, every dropped program rescans every live program's CB regions on
+            # each of its 32 devices (Device::get_total_cb_allocated in ~ProgramImpl): one clear of 2,347 programs took
+            # 546 s on host 30. The runner must start with TT_METAL_SHM_TRACKING_DISABLED=1 for the guard to be usable.
+            logger.warning(
+                "[glm53f-runtime] DRAM guard off: TT_METAL_SHM_TRACKING_DISABLED is not set (a clear would stall ~9 min)"
+            )
+            return
         if budget <= 0 or int(os.environ.get("GLM53_MODEL_TRACE_MB", "0") or 0) > 0:
             logger.info(
                 f"[glm53f-runtime] DRAM guard off (budget {budget:g} MiB, trace MB {os.environ.get('GLM53_MODEL_TRACE_MB')})"
