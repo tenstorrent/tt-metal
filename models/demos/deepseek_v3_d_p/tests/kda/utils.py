@@ -15,6 +15,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.common.ci_failure import assert_perf_gate
 from models.demos.deepseek_v3_d_p.reference.kda import KDAReferenceState, kda_forward_reference
 from models.demos.deepseek_v3_d_p.reference.kda.config import KDAConfig
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config
@@ -131,9 +132,12 @@ def median_device_us(mesh_device: ttnn.MeshDevice, call: Callable, kernel: str, 
 
 def assert_device_time(median_us: float, reference_us: float, margin: float, label: str) -> None:
     lower, upper = reference_us * (1 - margin), reference_us * (1 + margin)
-    assert lower <= median_us <= upper, (
-        f"{label}: {median_us:.1f} us outside [{lower:.1f}, {upper:.1f}] "
-        f"(reference {reference_us} us, margin +/- {margin * 100:.0f}%)"
+    assert_perf_gate(
+        lower <= median_us <= upper,
+        (
+            f"{label}: {median_us:.1f} us outside [{lower:.1f}, {upper:.1f}] "
+            f"(reference {reference_us} us, margin +/- {margin * 100:.0f}%)"
+        ),
     )
 
 
