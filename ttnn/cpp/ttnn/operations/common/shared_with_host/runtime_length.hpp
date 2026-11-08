@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <utility>
 
 // Compiled by both host and device: the kernel API's div_up on device, tt-metalium's on the host.
 #if defined(KERNEL_BUILD) || defined(FW_BUILD)
@@ -25,6 +26,8 @@
 //   writes against the total.
 // - balanced_start / balanced_end: split_work_to_cores' order, for ops whose default (host-split) factory the
 //   runtime-rows path mirrors.
+// chunked_range pairs core_start / core_end (per_core = div_up(total, num_cores)) and balanced_range pairs
+// balanced_start / balanced_end, each as one core's [start, end).
 namespace ttnn::runtime_length {
 
 // Ceiling division (`b` non-zero), pinned to the uint32_t the splits use: the kernel API's div_up on device,
@@ -68,6 +71,18 @@ constexpr uint32_t balanced_start(uint32_t core_idx, uint32_t total, uint32_t nu
 
 constexpr uint32_t balanced_end(uint32_t core_idx, uint32_t total, uint32_t num_cores) {
     return balanced_start(core_idx + 1, total, num_cores);
+}
+
+// This core's [start, end) under the clamped uniform split of `total` units over `num_cores` (the
+// split_blocks_for_tilize order); empty for a core past the end.
+constexpr std::pair<uint32_t, uint32_t> chunked_range(uint32_t core_idx, uint32_t total, uint32_t num_cores) {
+    const uint32_t per_core = div_up(total, num_cores);
+    return {core_start(core_idx, per_core, total), core_end(core_idx, per_core, total)};
+}
+
+// This core's [start, end) under the balanced split.
+constexpr std::pair<uint32_t, uint32_t> balanced_range(uint32_t core_idx, uint32_t total, uint32_t num_cores) {
+    return {balanced_start(core_idx, total, num_cores), balanced_end(core_idx, total, num_cores)};
 }
 
 }  // namespace ttnn::runtime_length
