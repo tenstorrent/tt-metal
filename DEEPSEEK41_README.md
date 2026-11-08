@@ -4,7 +4,7 @@ For a Claude Code session (and its human) picking up this model. Give this file 
 the bring-up is, its current state and defaults, how to set up, run and measure it, the prefill → decode (PD) serving
 hand-off, the open questions, and where everything is.
 
-Facts are as of 2026-11-08, branch `dnijemcevic/model_bringup` (same as `dnijemcevic/model_bringup_rebased`), through task P.36 with every full gate passed (P.35 / P.36 full gates 2026-11-08 10:16). Items marked
+Facts are as of 2026-11-08, branch `dnijemcevic/model_bringup` (the only branch; work happens in `~/repos/tt-metal` on the Galaxy node), through task P.36 with every full gate passed (P.35 / P.36 full gates 2026-11-08 10:16). Items marked
 **(unverified)** were not checked against code or a run while this was written.
 
 ## 1. What this is
@@ -406,8 +406,8 @@ $B gate <task> --spec $S [--unit U | --continue | --status | --no-commit | --com
 $B rerun --from <task> --spec $S            # reset it and everything downstream, then sweep
 ```
 
-- The run is started by `/scratch/dnijemcevic/run_ds41_8x4_rebased.sh` (last used `resume --until P.36`) in a tmux
-  session; it sources `/scratch/dnijemcevic/node_env.sh` and works in `/scratch/dnijemcevic/tt-metal-rebase`.
+- The run is started by `/scratch/dnijemcevic/run_ds41_8x4.sh` (last used `resume --until P.36`) in a tmux
+  session; it sources `/scratch/dnijemcevic/node_env.sh` and works in `/home/dnijemcevic/repos/tt-metal`.
 - **A/B accept flow (perf picks, P.\*).** (1) An agent makes the change behind a `tt/settings.py` switch. (2) The
   orchestrator measures off and on, one process a side: a quick run (last chunk after the golden prefix, accuracy vs
   limits) and p51200 (device / host time). (3) It writes `ab/<task>/table.md` and stops with exit code 3 (waiting for
@@ -487,8 +487,8 @@ box has none of it). "/data" = NFS, shared, not in git.
 | `models/demos/common/bringup/` | repo | the framework: `README.md`, `defaults.yaml`, `orchestrator.py`, `tests/`, `testing/` (incl. `contract.py`), `docs/` |
 | `ttnn/ttnn/bringup/` (`INDEX.md`) | repo | the forked ops (`ttnn.bringup.*`) |
 | `scripts/run_safe_pytest.sh` | repo | the only way to run on the device |
-| `/scratch/dnijemcevic/tt-metal-rebase` | scratch | the worktree the orchestrator runs in (do not edit while it runs) |
-| `/scratch/dnijemcevic/run_ds41_8x4_rebased.sh`, `/scratch/dnijemcevic/node_env.sh` | scratch | run script; node environment |
+| `/home/dnijemcevic/repos/tt-metal` | node home | the checkout the orchestrator runs in, branch model_bringup (do not edit while it runs) |
+| `/scratch/dnijemcevic/run_ds41_8x4.sh`, `/scratch/dnijemcevic/node_env.sh` | scratch | run script; node environment |
 | `/scratch/dnijemcevic/bringup/deepseek_v41_flash_d_p/runs/galaxy_8x4-full/run1/` | scratch | orchestrator.log, logs/, agents/, briefs/, ab/<task>/table.md |
 | `/scratch/dnijemcevic/rebase/HANDOFF_2026-11-06.md` | scratch | hand-off before the 2026-11-06 reboot |
 | `/scratch/dnijemcevic/rebase/ds41_216/` (`NOTES.md`, logs, repro) | scratch | DS41-216 / DS41-220 root cause |
