@@ -76,14 +76,14 @@ STEPS = tuple(f"{batch}/{op}" for batch in BATCHES for op in OPS)
 # measured it (runs 41962421284 and 42058182913, medians over 20 synced blocks: block_stats 139.0 / 119.0, block_mix
 # 275.5 / 275.6, gather_softmax 67.5 / 68.2; run 42340900388: 137.8 / 275.0 / 69.0).
 #
-# SP8xTP4 references are derived, not measured on the pool: each step's median on one off-pool Galaxy at 130 W
-# (bh-glx-120-b07u08, 2026-11-08, 7 runs) times that Galaxy's pool ratio for the same op, from the old 25-site code run
-# there interleaved (3 runs: block_mix 292.1, gather_softmax 69.1 us) against run 42340900388. That Galaxy runs
-# block_mix ~6% slower than the pool and gather_softmax at the pool's speed. Medians there: block/block_mix 290.3,
-# block/gather_softmax 68.6, owed/block_mix 95.2 us. block_stats and the owed gather_softmax settle per process into
-# one of several levels (block_stats 76 / 117 / 139 us there, 119 / 139 on the pool; owed gather_softmax 54 / 77 /
-# 113 us), as both wait on their peers, so no ratio holds for them: block/block_stats keeps the pool's mean of its two
-# levels, and the owed step's two only report.
+# SP8xTP4 block references are derived, not measured on the pool: each step's median on one off-pool Galaxy at 130 W
+# (bh-glx-120-b07u08, 2026-11-08, 10 runs: block_mix 290.6, gather_softmax 68.6 us) times that Galaxy's pool ratio for
+# the same op, from run 42340900388's commit dbc10eb0a4c run there interleaved (3 runs: block_mix 292.2, gather_softmax
+# 68.1 us). That Galaxy runs block_mix ~6% slower than the pool and gather_softmax at about the pool's speed.
+# block_stats and the owed gather_softmax settle per process into one of several levels (block_stats 75 / 117 / 139 us
+# there, 119 / 139 on the pool; owed gather_softmax 54 / 77 / 113 us), as both wait on their peers, so no ratio holds
+# for them: block/block_stats keeps the pool's mean of its two levels. The owed step only reports: it has no pool
+# reading, and its shape (one site, C = 6) need not share block_mix's ratio (b07u08 95.3 us; c10u14 85.3 us at 75 W).
 #
 # SP4xTP4 has no CI job: it was measured on a Galaxy off the CI pool (bh-glx-120-b07u02, 2026-11-05), which runs the
 # end-to-end boundary layer of `test_attn_res_perf.py` at ~416 us against its 394 us CI reference, and is scaled by
@@ -94,11 +94,11 @@ _CI_OVER_LOCAL = 394.0 / 416.0
 _REFERENCE_US = {
     "SP8xTP4": {
         "owed/attn_res_block_stats": None,
-        "owed/attn_res_block_mix": 89.6,
+        "owed/attn_res_block_mix": None,
         "owed/attn_res_gather_softmax": None,
         "block/attn_res_block_stats": 129.0,
-        "block/attn_res_block_mix": 273.4,
-        "block/attn_res_gather_softmax": 68.5,
+        "block/attn_res_block_mix": 273.6,
+        "block/attn_res_gather_softmax": 69.5,
     },
     "SP4xTP4": {
         "owed/attn_res_block_stats": None,
