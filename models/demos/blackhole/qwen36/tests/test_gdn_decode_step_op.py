@@ -43,6 +43,9 @@ def _build(mesh, Bmax, monkeypatch):
     tw = load_gdn_weights_tp(mesh, sd, args)
     go = TPGatedDeltaNet(mesh, args, tw, tt_ccl)
     monkeypatch.setenv("QWEN36_GDN_DECODE_STEP_OP", "0")
+    # The gdn_spec_step verify (default on) refuses a layer whose plain decode is not on gdn_decode_step; these tests
+    # exercise plain decode only.
+    monkeypatch.setenv("QWEN36_VERIFY_SPEC_STEP", "0")
     gr = TPGatedDeltaNet(mesh, args, tw, tt_ccl)
     assert go._decode_op and not gr._decode_op and gr._fused_batched
     return args, go, gr
