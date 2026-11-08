@@ -10,6 +10,7 @@
 #include "codegen/gather_codegen_supported.hpp"
 #include "device/gather_device_operation.hpp"
 
+#include "ttnn/operations/copy/typecast/typecast.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/operations/data_movement/fill_pad/fill_pad.hpp"
@@ -543,6 +544,17 @@ Tensor gather(
     const std::optional<CoreRangeSet>& sub_core_grids) {
     namespace detail = operations::data_movement::detail;
     namespace gather_ns = operations::data_movement::gather;
+
+    if (input_index_tensor.dtype() == DataType::INT32) {
+        return ttnn::gather(
+            input_tensor,
+            dim,
+            ttnn::typecast(input_index_tensor, DataType::UINT32),
+            sparse_grad,
+            memory_config,
+            std::move(optional_output_tensor),
+            sub_core_grids);
+    }
 
     const bool use_codegen =
         operations::data_movement::codegen_supported_on_arch(input_tensor) &&
