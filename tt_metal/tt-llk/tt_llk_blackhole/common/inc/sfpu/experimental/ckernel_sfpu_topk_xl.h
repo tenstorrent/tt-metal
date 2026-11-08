@@ -77,10 +77,11 @@
 // The kernel programs several ADDR_MODs at init time so that SFPSTORE can
 // advance Dst by configurable strides without a separate INCRWC issue:
 //
-//   ADDR_MOD_7 : zero advance (used by SFPLOAD/SFPSTORE that don't move Dst).
-//                On MATH it arrives via `_llk_math_eltwise_unary_sfpu_init_`,
-//                and PACK gets it through `_topk_xl_remove_msb_values_init_`.
-//   ADDR_MOD_6 : +32 (one face row)
+//   ADDR_MOD_7 : zero advance (its SFPU-wide invariant, set by hw_configure).
+//                Used by SFPLOAD/SFPSTORE that don't move Dst.
+//   ADDR_MOD_6 : +32 (one face row) — the execute-scoped stride: each execute
+//                that stores through it sets it at entry and restores the
+//                dest += 2 invariant on exit.
 //   ADDR_MOD_5 : +16 (half face row)
 //   ADDR_MOD_4 : +8     (unfused) / +16 (add_lsb_indices reuses this slot)
 //   ADDR_MOD_3 : +40 = 32 + 8     (folds trailing +8 into the last store)

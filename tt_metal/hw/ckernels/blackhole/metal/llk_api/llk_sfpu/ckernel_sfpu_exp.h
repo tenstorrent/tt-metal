@@ -73,8 +73,8 @@ sfpi_inline sfpi::vFloat _sfpu_exp_21f_bf16_unsafe_(sfpi::vFloat val, C0 c0, C1 
     sfpi::vFloat z = sfpi::as<sfpi::vFloat>(_float_to_int32_for_exp_21f_(xlog2));
 
     sfpi::vInt exponential_part =
-        sfpi::exexp(z, sfpi::ExponentMode::Biased);    // Extract exponent ( = 2**(integer part of val/ln2))
-    sfpi::vMag fractional_part = sfpi::exman(z);       // Extract mantissa ( = leftover part, in [0; 1])
+        sfpi::exexp(z, sfpi::ExponentMode::Biased);  // Extract exponent ( = 2**(integer part of val/ln2))
+    sfpi::vMag fractional_part = sfpi::exman(z);     // Extract mantissa ( = leftover part, in [0; 1])
 
     sfpi::vFloat frac = sfpi::convert<sfpi::vFloat>(fractional_part, sfpi::RoundMode::Nearest);
 
@@ -232,8 +232,7 @@ sfpi_inline sfpi::vFloat _sfpu_exp_21f_bf16_prgm_(sfpi::vFloat val, C0 c0, C1 c1
  * This implementation is faster, and give comparable accuracy as _sfpu_exp_21f_bf16_
  * (~< 1 ULP).
  *
- * Requires _init_exponential_tti_bf16_() to have been called to configure
- * ADDR_MOD_6 (dest auto-increment by 2 on SFPSTORE) and to load:
+ * Requires exp_init<false, 0, false, true>() to have been called to load:
  *   - LREG12 = 1/ln2 (sfpi::vConstFloatPrgm0)
  *   - LREG13 = c2    (sfpi::vConstFloatPrgm1)  — poly coeff 4.791750e-15f
  */
@@ -521,9 +520,7 @@ sfpi_inline sfpi::vFloat _sfpu_exp_fp32_accurate_prgm_(sfpi::vFloat a, H neg_ln2
     return _sfpu_exp_fp32_accurate_<unsafe>(a, sfpi::vConstFloatPrgm1, neg_ln2_hi, p0, p1);
 }
 
-sfpi_inline sfpi::vFloat _sfpu_exp_fp32_accurate_unsafe_(sfpi::vFloat x) {
-    return _sfpu_exp_fp32_accurate_<true>(x);
-}
+sfpi_inline sfpi::vFloat _sfpu_exp_fp32_accurate_unsafe_(sfpi::vFloat x) { return _sfpu_exp_fp32_accurate_<true>(x); }
 
 // 2^x with the overflow/underflow guards of the base-e form, for x that is not NaN. The base-e
 // form multiplies by log2(e) before rounding, which canonicalizes NaN to +NaN; here x is rounded
@@ -571,7 +568,7 @@ inline void _sfpu_exp_fp32_load_imm32_() {
  * @tparam SCALE_EN: Multiply the input by exp_base_scale_factor first
  * @tparam ITERATIONS: Vectors per call
  * @param exp_base_scale_factor: fp16b scale, read when SCALE_EN.
- * @note Requires exp_init<false, scale, clamp, true> (LREG12..14 and ADDR_MOD_6). Writes LREG0..7 and replay
+ * @note Requires exp_init<false, scale, clamp, true> (LREG12..14). Writes LREG0..7 and replay
  * slots [0, 15 + SCALE_EN).
  * @note LREG12..14 are the SFPU's shared programmable constants (sfpi::vConstFloatPrgm0..2). Other SFPU ops'
  * inits (reciprocal, tanh, sqrt, typecast, reduce, ...) reprogram them, so any such init between exp_init and
@@ -709,7 +706,7 @@ template <
     bool SCALE_EN = false,
     int ITERATIONS = 8,
     bool CLAMP_NEGATIVE = true>
-void calculate_exponential(const uint exp_base_scale_factor = p_sfpu::kCONST_1_FP16B) {
+void calculate_exponential(const std::uint32_t exp_base_scale_factor = p_sfpu::kCONST_1_FP16B) {
     if constexpr (!APPROXIMATION_MODE) {
         if constexpr (!is_fp32_dest_acc_en) {
             // bfloat16-accurate path: hand-tuned TTI exp_21f kernel.
@@ -931,11 +928,7 @@ void calculate_exponential(const uint exp_base_scale_factor = p_sfpu::kCONST_1_F
 #endif
 }
 
-template <
-    bool APPROXIMATION_MODE,
-    uint32_t scale,
-    bool CLAMP_NEGATIVE,
-    bool is_fp32_dest_acc_en>
+template <bool APPROXIMATION_MODE, std::uint32_t scale, bool CLAMP_NEGATIVE, bool is_fp32_dest_acc_en>
 void exp_init() {
     // Common SFPU init inlined (SFPU config register + counter reset), then the op-specific
     // exp setup below -- one self-contained init, no separate shared-common-init call. Same functionality as

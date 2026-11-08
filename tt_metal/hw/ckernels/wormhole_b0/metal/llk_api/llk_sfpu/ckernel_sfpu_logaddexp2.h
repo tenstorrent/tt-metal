@@ -94,8 +94,8 @@ inline void calculate_sfpu_logaddexp2(
 // exactly the ones the log1p correction expects.
 template <bool is_fp32_dest_acc_en>
 inline void calculate_sfpu_logaddexp2_init() {
-    // Identical setup to logaddexp: both need the log1p coefficients and the store's
-    // ADDR_MOD_6, and nothing else. This forwards instead of repeating the setup so the two
+    // Identical setup to logaddexp: both need the log1p coefficients, and nothing
+    // else; the store runs on ADDR_MOD_6's dest += 2 invariant. This forwards instead of repeating the setup so the two
     // cannot drift apart.
     calculate_sfpu_logaddexp_init<is_fp32_dest_acc_en>();
 }
