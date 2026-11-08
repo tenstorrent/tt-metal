@@ -24,7 +24,7 @@ R() { ssh -o BatchMode=yes -o ServerAliveInterval=30 -o LogLevel=ERROR $P "$1" <
 
 busy=$(R "sudo -n lsof /dev/tenstorrent/* 2>/dev/null | awk 'NR>1{print \$1\":\"\$2}' | sort -u | tr '\n' ' '")
 [ -z "$busy" ] || { log "host $H chips are held ($busy) -- not running"; exit 1; }
-log "host $H free; SRC $(git -C $SRC log --oneline -1 | cut -c1-12) ($(git -C $SRC status --short | wc -l) local change(s)), OUT $OUT"
+log "host $H free; SHM_OFF=${SHM_OFF:-0}; SRC $(git -C $SRC log --oneline -1 | cut -c1-12) ($(git -C $SRC status --short | wc -l) local change(s)), OUT $OUT"
 R "md5sum $WT/models/demos/glm53_flash/tt/indexer.py $WT/models/demos/glm53_flash/tt/dsa.py $WT/models/demos/glm53_flash/tt/runners/*.py" > $OUT/wt_md5_before.txt
 R "rm -rf $RUN && mkdir -p $RUN/scripts && cd $WT && tar czf $RUN/wt_backup.tgz $FILES" || { log "backup failed"; exit 1; }
 restore() {
@@ -41,6 +41,9 @@ rsync -a $SRC/models/demos/glm53_flash/tests/fixed_shapes/ $P:$RUN/scripts/
 R "md5sum $WT/models/demos/glm53_flash/tt/indexer.py $WT/models/demos/glm53_flash/tt/dsa.py" | tee -a $OUT/check.log
 
 BASE_ENV="cd $WT && export TT_METAL_HOME=$WT TT_METAL_RUNTIME_ROOT=$WT PYTHONPATH=$WT:$WT/ttnn ARCH_NAME=blackhole HF_HOME=$GP/hf_home TT_METAL_CACHE=/dev/shm/tt-metal-cache-glm53fp-wave LOGURU_LEVEL=INFO"
+# SHM_OFF=1: the serving config since 11-08 (tt-smi SHM memory stats off: every program create / destroy otherwise rescans
+# every live program's CBs on all 32 chips, G53F-0313 12:20)
+[ "${SHM_OFF:-0}" = 1 ] && BASE_ENV="$BASE_ENV TT_METAL_SHM_TRACKING_DISABLED=1"
 if [[ ",$PHASES," == *",A,"* ]]; then
   log "phase A: unit_device.py on one chip"
   R "$BASE_ENV TT_VISIBLE_DEVICES=0 && timeout 1200 systemd-run --user --scope -q -p MemoryMax=40G $PYBIN $RUN/scripts/unit_device.py > $RUN/unit.log 2>&1; echo unit rc \$?" | tee -a $OUT/check.log
