@@ -38,6 +38,11 @@ void bind_indexed_entry_copy(nb::module_& mod) {
                     read on device like ``index``. When it reads 0 the destination entry is filled with zeros, in
                     either direction, without reading ``source``; any other value copies as usual. Defaults to None,
                     which always copies.
+                paired_source (ttnn.Tensor, optional): A second source, copied by the same program with the same
+                    entry (and ``zero_fill_at_zero``) into ``paired_destination``: one dispatch for, e.g., the two
+                    parts of a carry. Its multi-entry side must be the same as the first pair's.
+                paired_destination (ttnn.Tensor, optional): The second destination; pass it with
+                    ``paired_source``.
 
             Returns:
                 ttnn.Tensor: ``destination``.
@@ -53,7 +58,9 @@ void bind_indexed_entry_copy(nb::module_& mod) {
         nb::kw_only(),
         nb::arg("index_scale"),
         nb::arg("index_offset"),
-        nb::arg("zero_fill_at_zero") = nb::none());
+        nb::arg("zero_fill_at_zero") = nb::none(),
+        nb::arg("paired_source") = nb::none(),
+        nb::arg("paired_destination") = nb::none());
 }
 
 }  // namespace ttnn::operations::experimental::kda::indexed_entry_copy::detail
