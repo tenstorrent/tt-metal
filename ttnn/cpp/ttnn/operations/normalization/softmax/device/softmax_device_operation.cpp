@@ -12,6 +12,7 @@
 
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/operations/core/core.hpp"
+#include "ttnn/operations/core/program_cache_l1.hpp"
 #include "ttnn/operations/data_movement/tilize_with_val_padding/tilize_with_val_padding.hpp"
 #include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
 #include "ttnn/operations/normalization/shard_spec_validation.hpp"
@@ -830,6 +831,74 @@ Tensor softmax(
     const SoftmaxInputs inputs{input_tensor, mask};
     const auto base = params({});
     const auto factory = SoftmaxDeviceOperation::select_program_factory(base, inputs);
+    const bool bh_factory =
+        std::holds_alternative<SoftmaxDeviceOperation::SoftmaxProgramFactoryAttentionOptimizedBH>(factory) ||
+        std::holds_alternative<SoftmaxDeviceOperation::SoftmaxProgramFactoryAttentionOptimizedBHF>(factory) ||
+        std::holds_alternative<SoftmaxDeviceOperation::SoftmaxProgramFactoryAttentionOptimizedBHL>(factory);
+    if (bh_factory && !has_explicit_compute_kernel_config) {
+        struct BhPlanKey {
+            std::size_t factory;
+            const void* device;
+            ttnn::Shape shape;
+            std::uint32_t logical_w;
+            std::uint32_t tile_h;
+            std::uint32_t tile_w;
+            DataType dtype;
+            BufferType in_buffer;
+            TensorMemoryLayout in_layout;
+            BufferType out_buffer;
+            TensorMemoryLayout out_layout;
+            SoftmaxOperationType type;
+            int8_t dim;
+            bool numeric_stable;
+            bool has_mask;
+            bool inplace;
+            std::optional<float> scale;
+            bool is_causal_mask;
+            bool is_scale_causal_mask_hw_dims;
+            std::size_t program_config;
+            std::uint64_t l1_capacity;
+            std::uint64_t l1_bank;
+            bool operator==(const BhPlanKey&) const = default;
+        };
+        auto* device = input_tensor.device();
+        const auto& in_mem = input_tensor.memory_config();
+        const auto& tile = input_tensor.tensor_spec().tile();
+        const BhPlanKey key{
+            factory.index(),
+            device,
+            input_tensor.padded_shape(),
+            input_tensor.logical_shape()[-1],
+            tile.get_height(),
+            tile.get_width(),
+            input_tensor.dtype(),
+            in_mem.buffer_type(),
+            in_mem.memory_layout(),
+            output_mem_config.buffer_type(),
+            output_mem_config.memory_layout(),
+            softmax_type,
+            dim,
+            numeric_stable,
+            mask.has_value(),
+            inplace,
+            scale,
+            is_causal_mask,
+            is_scale_causal_mask_hw_dims_softmax,
+            program_config.index(),
+            ttnn::operations::core::usable_program_l1_capacity(device),
+            device->allocator()->get_bank_size(BufferType::L1)};
+        thread_local std::optional<std::pair<BhPlanKey, SoftmaxInterleavedPlan>> last;
+        if (!last || !(last->first == key)) {
+            last.emplace(
+                key,
+                std::holds_alternative<SoftmaxDeviceOperation::SoftmaxProgramFactoryAttentionOptimizedBH>(factory)
+                    ? SoftmaxDeviceOperation::SoftmaxProgramFactoryAttentionOptimizedBH::select_plan(base, inputs)
+                : std::holds_alternative<SoftmaxDeviceOperation::SoftmaxProgramFactoryAttentionOptimizedBHF>(factory)
+                    ? SoftmaxDeviceOperation::SoftmaxProgramFactoryAttentionOptimizedBHF::select_plan(base, inputs)
+                    : SoftmaxDeviceOperation::SoftmaxProgramFactoryAttentionOptimizedBHL::select_plan(base, inputs));
+        }
+        return ttnn::device_operation::launch<SoftmaxDeviceOperation>(params(last->second), inputs);
+    }
     const auto plan =
         std::holds_alternative<SoftmaxDeviceOperation::SoftmaxProgramFactoryAttentionOptimizedBH>(factory)
             ? SoftmaxDeviceOperation::SoftmaxProgramFactoryAttentionOptimizedBH::select_plan(base, inputs)
