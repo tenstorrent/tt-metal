@@ -22,6 +22,7 @@ import torch
 
 import ttnn
 from models.tt_transformers.tt.rope import RotarySetup
+from models.ttt_compat.tt.common import get_rot_transformation_mat
 
 
 def meta_rope_permutation(head_dim, rope_dim):
@@ -97,6 +98,28 @@ class MiMoRotarySetup(RotarySetup):
         self.rope_dim = rope_dim
         self.theta = rope_theta
         self.datatype = datatype
+        # rotary_embedding_llama (decode) reads each user's cos / sin and transformation tile on the core that holds
+        # the user's query shard, and nlp_create_qkv_heads_decode lays the users' query shards out row by row over the
+        # device's compute grid (12 x 10 on a Blackhole row). RotarySetup puts a batch of 32 on an 8 x 8 grid instead,
+        # which agrees for users 0-7 only (with 16 decode users, users 8-11 found no cos / sin and 12-15 read those of
+        # 8-11). Shard cos / sin (decode_rot_mats) and the transformation matrix as the queries are.
+        users = self.batch_size_per_device_group
+        self.batch_grid = ttnn.num_cores_to_corerangeset(users, device.compute_with_storage_grid_size(), row_wise=True)
+        self.transformation_mat.deallocate(True)
+        self.transformation_mat = ttnn.from_torch(
+            get_rot_transformation_mat(dhead=ttnn.TILE_SIZE).repeat(1, 1, users, 1),
+            device=device,
+            layout=ttnn.TILE_LAYOUT,
+            dtype=datatype,
+            memory_config=ttnn.create_sharded_memory_config(
+                shape=(ttnn.TILE_SIZE, ttnn.TILE_SIZE),
+                core_grid=self.batch_grid,
+                strategy=ttnn.ShardStrategy.HEIGHT,
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=True,
+            ),
+            mesh_mapper=ttnn.ReplicateTensorToMesh(device),
+        )
         self.prefill_cache = None  # {(start, seq_len): [cos, sin]} while a prefill chunk is enqueued
         self.prefill_pinned = set()  # its keys the caller owns
 
