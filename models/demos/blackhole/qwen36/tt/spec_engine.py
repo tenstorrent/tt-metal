@@ -2620,7 +2620,7 @@ class MTPSpecEngine:
                                 self._dr_traces_full[("ksp", b)] = tid
                                 ttnn.synchronize_device(self.mesh)
                         logger.info(
-                            f"[spec_engine] full-head drafter traces captured for buckets {sorted(self._dr_traces_full)} "
+                            f"[spec_engine] full-head drafter traces captured for buckets {sorted(self._dr_traces_full, key=str)} "
                             f"(QWEN36_DRAFT_VOCAB_FALLBACK)"
                         )
                         self._log_trace_memory("F")
