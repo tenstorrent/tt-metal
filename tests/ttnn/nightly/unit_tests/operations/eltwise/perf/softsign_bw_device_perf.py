@@ -17,7 +17,7 @@ SHAPES = [(512, 512), (1024, 1024)]
 REPEATS = 5
 MARGIN = 0.05
 FUSED_BOARDS = ("blackhole",)
-PATH = "tests/ttnn/perf_tests/operations/eltwise/test_softsign_bw_device_perf.py"
+PATH = "tests/ttnn/nightly/unit_tests/operations/eltwise/perf/softsign_bw_device_perf.py"
 # The profiled calls run only inside the device profiler, which the device-perf test launches: run on their
 # own, they would hold the device that the profiler's run of them then waits for.
 IN_PROFILER = pytest.mark.skipif(
