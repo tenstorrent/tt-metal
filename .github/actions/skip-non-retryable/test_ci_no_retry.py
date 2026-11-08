@@ -168,3 +168,9 @@ def test_triggering_actor_defaults_to_the_actions_env(capsys, monkeypatch):
     argv = ["x", "job-check", "--job-id", "3", "--repo", REPO, "--run-id", RUN, "--attempt", "2"]
     monkeypatch.setattr(sys, "argv", argv)
     assert ci_no_retry.main() == ci_no_retry.SKIP_EXIT
+
+
+def test_triggering_actor_match_ignores_case(capsys, monkeypatch):
+    attempts = {1: [job(1, "leg", "failure", [MARK])], 2: [job(3, "leg", None)]}
+    rc, _ = check(capsys, monkeypatch, attempts, 2, 3, actor=ci_no_retry.AUTO_RETRY_ACTOR.upper())
+    assert rc == ci_no_retry.SKIP_EXIT

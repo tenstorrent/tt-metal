@@ -30,8 +30,10 @@ SHORT_CIRCUIT_PREFIX = " failed deterministically: "
 SHORT_CIRCUIT_SUFFIX = " -- auto-retry cannot change that; re-run it by hand to measure again"
 # Who auto-retry's re-runs are triggered as: the owner of RETRY_WORKFLOW_TOKEN in
 # .github/workflows/_auto-retry-nightly-workflows.yaml. A re-run started by anyone else (by hand, to measure
-# again) is never short-circuited. If the token changes owner, update this; until then marked jobs simply
-# re-run as they did before ci-no-retry existed.
+# again) is never short-circuited. Known exception: the token owner is a person, so their own manual re-runs
+# look like auto-retry and are short-circuited too (moving the token to a GitHub App would remove this).
+# If the token changes owner, update this; the auto-retry workflow warns when they differ, and until then
+# marked jobs simply re-run as they did before ci-no-retry existed.
 AUTO_RETRY_ACTOR = "tt-rkim"
 
 
@@ -83,7 +85,7 @@ def job_check(args):
     repo, run_id, attempt = args.repo, args.run_id, args.attempt
     if attempt <= 1:
         return 0
-    if args.triggering_actor != args.auto_retry_actor:
+    if args.triggering_actor.casefold() != args.auto_retry_actor.casefold():  # logins are case-insensitive
         print(f"re-run started by '{args.triggering_actor}', not by auto-retry ('{args.auto_retry_actor}'); running it")
         return 0
     name = api(f"repos/{repo}/actions/jobs/{args.job_id}")["name"]

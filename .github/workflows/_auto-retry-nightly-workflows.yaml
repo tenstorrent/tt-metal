@@ -126,6 +126,13 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.RETRY_WORKFLOW_TOKEN }}
         run: |
+          # skip-non-retryable short-circuits marked jobs only on re-runs triggered as this token's owner.
+          # Warn (never fail) when its expected login has drifted, which would quietly disable the short-circuit.
+          expected=$(python3 -c "import runpy; print(runpy.run_path('.github/actions/skip-non-retryable/ci_no_retry.py')['AUTO_RETRY_ACTOR'])" 2>/dev/null) || expected=""
+          owner=$(gh api user --jq .login 2>/dev/null) || owner=""
+          if [ -z "$expected" ] || [ -z "$owner" ] || [ "$(echo "$owner" | tr A-Z a-z)" != "$(echo "$expected" | tr A-Z a-z)" ]; then
+            echo "::warning title=ci-no-retry-actor-mismatch::RETRY_WORKFLOW_TOKEN owner '${owner:-unknown}' != AUTO_RETRY_ACTOR '${expected:-unknown}' in .github/actions/skip-non-retryable/ci_no_retry.py; marked jobs will re-run in full until it is updated"
+          fi
           echo "Re-running jobs here"
           # gh api /repos/tenstorrent/tt-metal/actions/runs/${{ steps.get-run-id-and-attempt.outputs.run-id }}/timing
           gh api --method POST \
