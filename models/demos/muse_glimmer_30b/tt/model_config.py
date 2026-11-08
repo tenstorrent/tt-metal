@@ -18,6 +18,11 @@ from safetensors import safe_open
 
 import ttnn
 
+# Prefill padding (see model.prefill_len): prompts up to PREFILL_COARSE_MAX tokens use coarse buckets that a generator
+# compiles before its first trace capture; every bucket pads a prompt by less than PREFILL_MAX_PAD rows.
+PREFILL_COARSE_MAX = 131072
+PREFILL_MAX_PAD = 16384
+
 DEFAULT_CKPT_DIR = "/mnt/tt-data/Muse-Glimmer-30B"
 _PREFIX = "model.language_model."
 _LAYER_KEYS = [
@@ -302,9 +307,9 @@ class MuseGlimmerModelArgs:
 
     @property
     def sliding_kv_blocks(self) -> int:
-        """Per-user KV blocks of a sliding layer: a ring of the window plus one 256-row prefill pad, so the last
+        """Per-user KV blocks of a sliding layer: a ring of the window plus the largest prefill pad, so the last
         `sliding_window` real rows of a padded prompt survive the fill. Never more than the full span."""
-        return min(self.max_num_blocks_per_user, math.ceil((self.sliding_window + 256) / self.block_size))
+        return min(self.max_num_blocks_per_user, math.ceil((self.sliding_window + PREFILL_MAX_PAD) / self.block_size))
 
     def is_sliding(self, i: int) -> bool:
         return self.layer_types[i] == "sliding_attention"

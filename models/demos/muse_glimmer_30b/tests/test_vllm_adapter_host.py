@@ -38,11 +38,12 @@ class FakeEngine:
         self.calls = []
         self.traces_released = 0
         self.n_propose = 0
+        self.q_draft = 0.25  # drafter probability of each sampled draft (the 3 other candidates share the rest)
 
     def start_slot(self, slot, prompt_ids, return_logits=False, **kwargs):
         assert return_logits and not kwargs
         self.calls.append(("start", slot, list(prompt_ids)))
-        self.slots[slot] = SimpleNamespace(p=len(prompt_ids), anchor=None)
+        self.slots[slot] = SimpleNamespace(p=len(prompt_ids), anchor=None, sp=None, gen=None)
         return torch.arange(V, dtype=torch.float32) + 100 * slot
 
     def verify_slots(self, rows, mode):
@@ -56,6 +57,9 @@ class FakeEngine:
             s.anchor = toks[0]
             if mode == "argmax":
                 out[u] = [1000 * (u + 1) + j for j in range(R)]
+            elif mode == "topk":
+                ids = 10000 * (u + 1) + 100 * torch.arange(R).reshape(R, 1) + torch.arange(32).reshape(1, 32)
+                out[u] = (torch.arange(32, 0, -1, dtype=torch.float32).reshape(1, 32).repeat(R, 1), ids)
             else:
                 assert mode == "logits"
                 out[u] = torch.arange(R, dtype=torch.float32).reshape(R, 1).repeat(1, V) + 100 * u
@@ -74,9 +78,22 @@ class FakeEngine:
         self.calls.append(("propose", tuple(slots)))
         out = {}
         for u in slots:
-            assert self.slots[u].anchor is not None
-            out[u] = ([200 + 20 * self.n_propose + 1000 * u + j for j in range(R - 1)], None, None)
+            s = self.slots[u]
+            assert s.anchor is not None
+            d = [self.draft(u, j) for j in range(R - 1)]
+            if s.sp is None:
+                out[u] = (d, None, None)
+            else:  # drafter candidates: the draft and 3 others, the draft with probability q_draft
+                rest = (1 - self.q_draft) / 3
+                out[u] = (
+                    d,
+                    torch.tensor([[self.q_draft, rest, rest, rest]] * len(d)),
+                    torch.tensor([[t, t + 1, t + 2, t + 3] for t in d]),
+                )
         return out
+
+    def draft(self, u, j):
+        return 200 + 20 * self.n_propose + 1000 * u + j
 
     def release_slot(self, slot):
         self.calls.append(("release", slot))
@@ -105,7 +122,7 @@ def prefill(ad, lens, slots):
     )
 
 
-def ordinary(ad, tokens, positions, rows=None, slot_remap=None):
+def ordinary(ad, tokens, positions, rows=None, slot_remap=None, **extra):
     """Ordinary decode; positions -1 mark padding rows."""
     b = len(tokens) if rows is None else rows
     t = torch.zeros(b, 1, dtype=torch.int32)
@@ -113,7 +130,7 @@ def ordinary(ad, tokens, positions, rows=None, slot_remap=None):
     t[: len(tokens), 0] = torch.tensor(tokens, dtype=torch.int32)
     p[: len(positions)] = torch.tensor(positions, dtype=torch.int32)
     kw = {} if slot_remap is None else {"slot_remap": torch.tensor(slot_remap, dtype=torch.int32)}
-    return ad.decode_forward(t, p, page_table=None, **kw)
+    return ad.decode_forward(t, p, page_table=None, **kw, **extra)
 
 
 def propose(ad, counts, blocks, positions, k=K):
@@ -128,7 +145,7 @@ def propose(ad, counts, blocks, positions, k=K):
     return ad.propose_draft_tokens(k, block, pos, torch.tensor(counts, dtype=torch.int32))
 
 
-def verify(ad, anchors, drafts, positions, mode, n=None, width=1 + K, slot_remap=None):
+def verify(ad, anchors, drafts, positions, mode, n=None, width=1 + K, slot_remap=None, **extra):
     """Verify block per row: anchors[i], drafts[i] (list), positions[i] (-1 = padding row)."""
     b = len(anchors)
     n = [len(d) for d in drafts] if n is None else n
@@ -148,6 +165,7 @@ def verify(ad, anchors, drafts, positions, mode, n=None, width=1 + K, slot_remap
         accepted_counts=torch.ones(b, dtype=torch.int32),
         spec_mode=mode,
         **kw,
+        **extra,
     )
 
 
@@ -157,7 +175,7 @@ def test_declarations(expect_error):
     assert tuple(caps["spec_requirements"]) == ("device_propose",)
     assert tuple(caps["spec_hidden_handoff"]) == ("on_device",)
     assert caps["output_tokens_per_step"] == 1
-    assert not caps["supports_sample_on_device"] and not caps["supports_async_decode"]
+    assert not caps["supports_async_decode"]
     assert not caps["supports_async_spec_decode"] and not caps["supports_prefix_caching"]
     assert not caps["supports_chunked_prefill"]
     from vllm_tt_plugin.spec_decode import SpecPlan, SpecReject
@@ -444,3 +462,100 @@ def test_slot_remap_is_bookkeeping(expect_error):
 
     ad.release_request(0)
     assert eng.of("release")[-1] == (1,)
+
+
+def _sampling(temperature, top_k, seed, top_p=None):
+    from vllm_tt_plugin.model_input import TTSamplingParams
+
+    n = len(temperature)
+    return TTSamplingParams(
+        temperature=list(temperature),
+        top_k=list(top_k),
+        top_p=[1.0] * n if top_p is None else list(top_p),
+        seed=list(seed),
+    )
+
+
+def _sampled_verify_ids(seed, n=(3, 2), width=4):
+    """Prefill two rows, then one argmax_ids verify with row 0 sampled (top_k 32) and row 1 greedy."""
+    ad, eng = make()
+    prefill(ad, [20, 30], [0, 1])
+    sp = _sampling([1.0, 0.0], [32, 1], [seed, None])
+    drafts = [[5, 6, 7][: n[0]], [8, 9, 10][: n[1]]]
+    v = verify(ad, [1, 2], drafts, [20, 30], "argmax_ids", n=list(n), width=width, sampling_params=sp)
+    return v.argmax_ids, eng
+
+
+def test_declares_device_sampled_ids():
+    caps = MuseGlimmerDFlash2ForCausalLM.model_capabilities
+    assert caps["supports_sample_on_device"] is True and caps["max_device_top_k"] == 32
+    assert caps["spec_ids_are_sampled"] is True and caps["supports_device_penalties"] is False
+
+
+def test_device_sampled_decode_returns_ids():
+    ad, eng = make()
+    prefill(ad, [20, 30], [0, 1])
+    sp = _sampling([1.0, 0.0], [8, 1], [7, None])
+    out = ordinary(ad, [5, 6], [20, 30], sampling_params=sp)
+    assert out.shape == (2,) and out.dtype == torch.int32
+    assert int(out[0]) in {10000 + c for c in range(8)}
+    assert int(out[1]) == 20000
+    assert [c[3] for c in eng.calls if c[0] == "verify"] == ["topk", "topk"]
+
+
+def test_device_sampled_verify_draws_every_column():
+    ids, eng = _sampled_verify_ids(11)
+    assert ids.shape == (2, 4) and ids.dtype == torch.int32
+    for j in range(4):  # row 0: num_valid 3, columns 0..3 are draws from row j of slot 0
+        assert int(ids[0, j]) in {10000 + 100 * j + c for c in range(32)}
+    for j in range(3):  # row 1: num_valid 2, greedy columns 0..2 are the top candidate of row j of slot 1
+        assert int(ids[1, j]) == 20000 + 100 * j
+    assert int(ids[1, 3]) == 0
+    assert [c[3] for c in eng.calls if c[0] == "verify"] == ["topk", "topk"]
+
+
+def test_device_sampled_seed_reproducible():
+    a, _ = _sampled_verify_ids(11)
+    b, _ = _sampled_verify_ids(11)
+    assert torch.equal(a, b)
+    others = [_sampled_verify_ids(s)[0][0] for s in (12, 13, 14, 15)]
+    assert any(not torch.equal(a[0], o) for o in others)
+
+
+def _rejection_round(draft, q_draft, seed=3):
+    """One sampled request: a sampled ordinary decode (sets the slot's sampling), a propose (drafts drawn from q), then
+    an argmax_ids verify of the 15 drafts. Returns (drafts, verify ids [16])."""
+    ad, eng = make(max_users=1)
+    prefill(ad, [20], [0])
+    sp = _sampling([1.0], [32], [seed])
+    first = int(ordinary(ad, [7], [20], sampling_params=sp)[0])
+    assert eng.slots[0].sp == (1.0, 1.0, 32) and eng.slots[0].gen is ad._rng[0]
+    eng.draft, eng.q_draft = draft, q_draft
+    d = propose(ad, [1], [[first]], [21])
+    drafts = d.draft_token_ids[0].tolist()
+    v = verify(ad, [first], [drafts], [21], "argmax_ids", sampling_params=sp)
+    assert eng.calls[-1][3] == "topk"
+    return drafts, v.argmax_ids[0].tolist()
+
+
+def test_device_sampled_verify_rejection_sampling():
+    # Each draft is the target's top candidate (p ~ 0.63) with q = 0.25: p >= q, so every draft is accepted and the
+    # bonus is a draw from the last row.
+    drafts, ids = _rejection_round(lambda u, j: 10000 + 100 * j, 0.25)
+    assert ids[:K] == drafts and ids[K] in {10000 + 100 * K + c for c in range(32)}
+    # Each draft is outside the target's candidates (p = 0) with q = 1: the first draft is rejected and the residual
+    # draw from row 0 commits in its place.
+    drafts, ids = _rejection_round(lambda u, j: 99999, 1.0)
+    assert ids[0] in {10000 + c for c in range(32)} and ids[1:] == [0] * K
+
+
+def test_greedy_verify_with_sampling_params_uses_argmax():
+    ad, eng = make()
+    prefill(ad, [20, 30], [0, 1])
+    sp = _sampling([0.0, 1e-6], [1, 32], [None, 3])
+    v = verify(ad, [1, 2], [[5, 6], [8]], [20, 30], "argmax_ids", n=[2, 1], width=3, sampling_params=sp)
+    assert [c[3] for c in eng.calls if c[0] == "verify"] == ["argmax", "argmax"]
+    ad2, _ = make()
+    prefill(ad2, [20, 30], [0, 1])
+    ref = verify(ad2, [1, 2], [[5, 6], [8]], [20, 30], "argmax_ids", n=[2, 1], width=3)
+    assert torch.equal(v.argmax_ids, ref.argmax_ids)

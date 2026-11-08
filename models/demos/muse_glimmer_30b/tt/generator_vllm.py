@@ -43,6 +43,8 @@ _SUPPORTED_TP = (4,)
 _TIMING = os.environ.get("MUSE_VLLM_TIMING") == "1"  # read once; log one MUSE_TIMING line per adapter entry
 _K_BY_ROWS = ((2, 15), (4, 7), (8, 3))  # (max live rows, drafts per row): the plugin's draft cap and the engine's R - 1
 _MAX_SEQS = _K_BY_ROWS[-1][0]
+_MAX_DEVICE_TOP_K = 32  # the engine's topk verify reads the top 32 candidates of every row (model_config max_top_k)
+_GREEDY_TEMPERATURE = 1e-5  # at or below: the target argmax (vLLM's sampling epsilon)
 
 
 def _round_up(x, m):
@@ -78,14 +80,22 @@ class MuseGlimmerDFlash2ForCausalLM:
     # The scheduler's KV bookkeeping is one uniform group; the model owns the physical cache.
     _HYBRID_KV_CACHE_GROUPS_ENABLED = False
 
-    # The plugin samples prefill and ordinary decode on the host from our logits, and rejection-samples verify rows
-    # on the host (accept mode "logits") or walks argmax ids (greedy).
+    # Prefill and host-sampled steps return host logits for the plugin's host sampler; a host-sampled verify returns
+    # argmax ids (greedy) or logits (accept mode "logits"). On a device-sampled step (sample_on_device_mode
+    # "decode_only", every sampled row with 1 <= top_k <= 32) the engine reads only its top-32 candidates per row and
+    # the adapter draws the tokens: an ordinary decode returns them, and an argmax_ids verify returns the ids up to the
+    # first mismatch (spec_ids_are_sampled). After a request's first sampled step, its drafts come from the drafter
+    # distribution and the verify ids are the engine's lossless rejection sample; before it, one draw per column.
     model_capabilities = {
         "supports_spec_decode": True,
         "spec_requirements": ("device_propose",),
         "spec_hidden_handoff": ("on_device",),
         "output_tokens_per_step": 1,
-        "supports_sample_on_device": False,
+        "supports_sample_on_device": True,
+        "max_device_top_k": _MAX_DEVICE_TOP_K,
+        "spec_ids_are_sampled": True,
+        "supports_device_penalties": False,
+        "supports_device_grammar": False,
         "supports_async_decode": False,
         "supports_async_spec_decode": False,
         "supports_prefix_caching": False,
@@ -98,7 +108,8 @@ class MuseGlimmerDFlash2ForCausalLM:
         self.n_slots = int(engine.max_users)
         self.phys = list(range(self.n_slots))  # plugin state slot -> engine slot (see the module docstring)
         self._outstanding = set()  # engine slots whose last verify is not committed yet
-        self._last_drafts = {}  # engine slot -> drafts the last propose offered (for the mismatch warning)
+        self._last_drafts = {}  # engine slot -> (drafts, q) of the last propose (mismatch warning, rejection sampling)
+        self._rng = {}  # engine slot -> torch.Generator of its request's device-sampled draws (seeded on first use)
 
     @classmethod
     def _from_engine(cls, engine, kv_handles=None):
@@ -259,6 +270,50 @@ class MuseGlimmerDFlash2ForCausalLM:
         self.phys = phys
         self._outstanding.update(live.values())
 
+    def _sampler(self, e, sp, i):
+        """(temperature, top_p, top_k, generator) of decode row i (engine slot e) from TTSamplingParams, or None for a
+        greedy row. A seeded request's generator starts from its seed at its first draw; an unseeded one from a random
+        seed. Draws advance it in row and column order. The first call also sets the engine slot's sampling, so the
+        slot's later proposals draw their drafts from the drafter distribution (lossless rejection sampling)."""
+        t, k = float(sp.temperature[i]), int(sp.top_k[i])
+        if t <= _GREEDY_TEMPERATURE or k == 1:
+            return None
+        if not 1 <= k <= _MAX_DEVICE_TOP_K:
+            raise RuntimeError(f"row {i}: device-sampled top_k={k} outside [1, {_MAX_DEVICE_TOP_K}]")
+        gen = self._rng.get(e)
+        if gen is None:
+            gen = torch.Generator()
+            seed = sp.seed[i]
+            if seed is None:
+                gen.seed()
+            else:
+                gen.manual_seed(int(seed))
+            self._rng[e] = gen
+        s = self.engine.slots[e]
+        if s.sp is None:
+            s.sp, s.gen = (t, float(sp.top_p[i]), k), gen
+        return t, float(sp.top_p[i]), k, gen
+
+    @staticmethod
+    def _draws(cand, n, sampler, drafts=(), q=None):
+        """Tokens for the first n rows of a slot's topk candidates (values [R, C], ids [R, C]). A greedy row (sampler
+        None) gets the top candidate of each row. A sampled row whose n-1 drafts were drawn from the drafter
+        probabilities q = (probs [n-1, kq], ids [n-1, kq]) gets the lossless rejection sample: the accepted drafts, then
+        the residual or bonus draw (the plugin accepts while the drafts match and commits the first mismatch). Any other
+        sampled row gets one draw per row."""
+        from models.demos.muse_glimmer_30b.tt.dflash.sampling import rejection_sample
+        from models.demos.muse_glimmer_30b.tt.sampling import draw, filtered_probs
+
+        values, ids = (torch.as_tensor(x) for x in cand)
+        if sampler is None:
+            return [int(ids[j, int(values[j].float().argmax())]) for j in range(n)]
+        t, top_p, k, gen = sampler
+        probs, pids = filtered_probs(values[:n], ids[:n], t, top_p, k)
+        if q is not None:
+            acc, bonus = rejection_sample(list(drafts), q[0], q[1], probs, pids, gen)
+            return list(drafts[:acc]) + [bonus]
+        return [draw(probs[j], pids[j], gen) for j in range(n)]
+
     # ---- prefill / decode
     def prefill_forward(self, tokens, page_table=None, kv_cache=None, prompt_lens=None, **kwargs):
         tokens = torch.as_tensor(tokens)
@@ -285,6 +340,7 @@ class MuseGlimmerDFlash2ForCausalLM:
             e = self.phys[s]
             self._outstanding.discard(e)
             self._last_drafts.pop(e, None)
+            self._rng.pop(e, None)
             logits = self.engine.start_slot(e, [int(t) for t in tokens[r, :n].tolist()], return_logits=True)
             out.append(logits.float().reshape(1, -1))
         return torch.stack(out)  # host logits [N, 1, V]
@@ -311,6 +367,7 @@ class MuseGlimmerDFlash2ForCausalLM:
         phys = self._remapped(slot_remap)
         eng = self.engine
         vocab = int(eng.model.args.vocab_size)
+        sp = kwargs.get("sampling_params")
         live = {i: self._engine_slot(phys, i) for i in range(rows) if int(start_pos[i, 0]) >= 0}
         for i, e in live.items():
             q = int(start_pos[i, 0])
@@ -320,7 +377,15 @@ class MuseGlimmerDFlash2ForCausalLM:
                 raise RuntimeError(f"decode row {i} at position {q} but engine slot {e} is at {eng.slots[e].p}")
 
         if spec_mode is None:
-            # Ordinary decode: a one-row verify per live row, host logits [B, 1, V] for the plugin's host sampler.
+            if sp is not None:  # device-sampled: the drawn ids, int32 [B]
+                cand = eng.verify_slots({e: [int(tokens[i, 0])] for i, e in live.items()}, "topk") if live else {}
+                ids = torch.zeros(rows, dtype=torch.int32)
+                for i, e in live.items():
+                    ids[i] = self._draws(cand[e], 1, self._sampler(e, sp, i))[0]
+                    self._last_drafts.pop(e, None)
+                self._settle(phys, live)
+                return ids
+            # Host-sampled ordinary decode: a one-row verify per live row, host logits [B, 1, V] for the host sampler.
             lg = eng.verify_slots({e: [int(tokens[i, 0])] for i, e in live.items()}, "logits") if live else {}
             out = torch.zeros(rows, 1, vocab, dtype=torch.float32)
             for i, e in live.items():
@@ -333,22 +398,32 @@ class MuseGlimmerDFlash2ForCausalLM:
         if width > _ROWS:
             raise ValueError(f"verify block of {width} columns exceeds the engine's {_ROWS} rows")
         nv = torch.as_tensor(num_valid_drafts).reshape(-1)
-        req = {}
+        req, qs = {}, {}
         for i, e in live.items():
             n = int(nv[i])
             if not 0 <= n <= width - 1:
                 raise ValueError(f"num_valid_drafts[{i}]={n} outside [0, {width - 1}]")
             toks = [int(t) for t in tokens[i, : 1 + n].tolist()]
-            offered = self._last_drafts.pop(e, None)
+            offered, q = self._last_drafts.pop(e, (None, None))
             if offered is not None and toks[1:] != offered[:n]:
                 logger.warning(f"row {i}: verify drafts {toks[1:]} differ from the proposed {offered[:n]}")
+            elif q is not None:  # the drafts were drawn from q
+                qs[e] = (q[0][:n], q[1][:n])
             req[e] = toks
         if spec_mode == "argmax_ids":
-            am = eng.verify_slots(req, "argmax") if req else {}
+            samplers = {} if sp is None else {i: self._sampler(e, sp, i) for i, e in live.items()}
             ids = torch.zeros(rows, width, dtype=torch.int32)
-            for i, e in live.items():
-                c = min(len(am[e]), width)
-                ids[i, :c] = torch.tensor([int(a) for a in am[e][:c]], dtype=torch.int32)
+            if any(s is not None for s in samplers.values()):
+                # Device-sampled with a sampled row (spec_ids_are_sampled): the ids up to the first mismatch.
+                cand = eng.verify_slots(req, "topk")
+                for i, e in live.items():
+                    out = self._draws(cand[e], len(req[e]), samplers[i], req[e][1:], qs.get(e))
+                    ids[i, : len(out)] = torch.tensor(out, dtype=torch.int32)
+            else:
+                am = eng.verify_slots(req, "argmax") if req else {}
+                for i, e in live.items():
+                    c = min(len(am[e]), width)
+                    ids[i, :c] = torch.tensor([int(a) for a in am[e][:c]], dtype=torch.int32)
             self._settle(phys, live)
             return VerifyOutput(spec_mode="argmax_ids", argmax_ids=ids)
         if spec_mode == "logits":
@@ -394,7 +469,8 @@ class MuseGlimmerDFlash2ForCausalLM:
             self._last_drafts.pop(e, None)
         for i, e in ready.items():
             d = [int(t) for t in drafts[e][0]][:k]
-            self._last_drafts[e] = d
+            q, qc = drafts[e][1], drafts[e][2]
+            self._last_drafts[e] = (d, None if q is None else (q[: len(d)], qc[: len(d)]))
             ids[i, : len(d)] = torch.tensor(d, dtype=torch.int32)
             num_valid[i] = len(d)
         return DraftOutput(draft_token_ids=ids, num_valid=num_valid)
@@ -405,6 +481,7 @@ class MuseGlimmerDFlash2ForCausalLM:
         self.engine.release_slot(e)
         self._outstanding.discard(e)
         self._last_drafts.pop(e, None)
+        self._rng.pop(e, None)
 
     def note_state_slots_moved(self, moves):
         """decode_forward already applied the matching slot_remap to `phys`; nothing moves on the device."""
@@ -460,6 +537,8 @@ def _install_timing():
 
     def decode_kind(kw):
         m = kw.get("spec_mode")
+        if m is None and kw.get("sampling_params") is not None:
+            return "decode_sampled"
         return "decode" if m is None else ("verify_argmax" if m == "argmax_ids" else "verify_logits")
 
     wrap("prefill_forward", lambda kw: "prefill")

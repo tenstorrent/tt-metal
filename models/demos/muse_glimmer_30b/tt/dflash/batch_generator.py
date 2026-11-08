@@ -17,7 +17,7 @@ from loguru import logger
 
 import ttnn
 from models.demos.muse_glimmer_30b.tt.attention import kv_page_table
-from models.demos.muse_glimmer_30b.tt.dflash.generator import DFlash2Generator, _mean_ms
+from models.demos.muse_glimmer_30b.tt.dflash.generator import _WARM_SAMPLING, DFlash2Generator, _mean_ms
 from models.demos.muse_glimmer_30b.tt.dflash.layout import RowLayout
 from models.demos.muse_glimmer_30b.tt.dflash.sampling import rejection_sample
 from models.demos.muse_glimmer_30b.tt.dflash.topk import TOPK_PER_DEVICE, device_topk, read_topk
@@ -128,11 +128,20 @@ class DFlash2BatchGenerator(DFlash2Generator):
         return self._ctx_rows[key]
 
     def start_slot(
-        self, slot, prompt_ids, max_new_tokens=None, sampling=None, seed=0, ignore_eos=False, return_logits=False
+        self,
+        slot,
+        prompt_ids,
+        max_new_tokens=None,
+        sampling=None,
+        seed=0,
+        ignore_eos=False,
+        return_logits=False,
+        warm=False,
     ):
         """Prefill `slot` with layer taps, fill its drafter context and draw its first token (returned). With
         return_logits=True, return the last-position logits (torch float32 [vocab]) instead: the slot then has no
-        anchor until its first verify, whose row 0 is the caller's token. max_new_tokens None: no token budget."""
+        anchor until its first verify, whose row 0 is the caller's token. max_new_tokens None: no token budget.
+        warm=True (warm_prefill): run every drafter context chunk of the bucket."""
         assert 0 <= slot < self.max_users and (max_new_tokens is None or max_new_tokens >= 1)
         m, d, cfg = self.model, self.drafter, self.cfg
         sp = normalize_sampling(sampling, m.args.max_top_k)
@@ -142,7 +151,7 @@ class DFlash2BatchGenerator(DFlash2Generator):
         if self.traces and m.prefill_is_new(prompt.numel()):
             logger.info(f"prefill length {prompt.numel()} is new: releasing traces (recaptured on next use)")
             self.release_traces(keep_seen=True)
-        logits_tt, taps, s0, s_real = m.prefill_with_taps(
+        logits_tt, taps, t0, s0, s_real = m.prefill_with_taps(
             prompt, slot, self.page_table_tt, ids, tap_window=cfg.sliding_window
         )
         if return_logits:
@@ -162,17 +171,7 @@ class DFlash2BatchGenerator(DFlash2Generator):
             probs, pids = filtered_probs(values, tids, temperature, top_p, k)
             first = draw(probs[0], pids[0], gen)
         ttnn.deallocate(logits_tt)
-        h = int(taps[ids[0]].shape[-1])
-        for c0 in range(s0, s_real, DECODE_B_PAD):
-            r = c0 - s0
-            chunk = [ttnn.slice(taps[i], [0, 0, r, 0], [1, 1, r + DECODE_B_PAD, h]) for i in ids]
-            rope_idx = d.make_rope_idx(range(c0, c0 + DECODE_B_PAD))
-            write_idxs = d.make_write_idxs(c0, DECODE_B_PAD, valid=min(DECODE_B_PAD, s_real - c0))
-            d.context_pass(chunk, rope_idx, write_idxs, d.fill_table(slot), 1)
-            for t in chunk + [rope_idx] + write_idxs:
-                ttnn.deallocate(t)
-        for t in taps.values():
-            ttnn.deallocate(t)
+        self._fill_context(taps, t0, s0, s_real, d.fill_table(slot), 1, all_chunks=warm)
         budget = max_new_tokens if max_new_tokens is not None else 1 << 62
         if return_logits:
             s = _Slot(p=s_real, anchor=None, sp=sp, gen=gen, budget=budget, ignore_eos=ignore_eos)
@@ -375,6 +374,17 @@ class DFlash2BatchGenerator(DFlash2Generator):
         """Forget the slot's request; the next prefill into the slot rewrites its KV rows and drafter context."""
         self.slots.pop(slot, None)
 
+    def _warm_start(self, prompt, sampling, return_logits):
+        self.start_slot(0, prompt, max_new_tokens=1, sampling=sampling, return_logits=return_logits, warm=True)
+        self.release_slot(0)
+
+    def _warm_decode_runs(self, prompt):
+        """Every row layout (one per K) in both verify modes, then the inherited single-user path."""
+        for users, _ in self.k_by_users:
+            for sampling in (None, _WARM_SAMPLING):
+                self.generate_batch([prompt] * users, 4, sampling=sampling, ignore_eos=True)
+        super()._warm_decode_runs(prompt)
+
     def batch_round(self):
         """One draft + verify round for every active slot -> {slot: new tokens}."""
         self._t_capture = 0.0
@@ -490,9 +500,10 @@ class DFlash2BatchGenerator(DFlash2Generator):
         super().close()
 
 
-def build_batch_generator(model, max_users, enable_trace=True, k_by_users=K_BY_USERS):
+def build_batch_generator(model, max_users, enable_trace=True, k_by_users=K_BY_USERS, warm=True):
     """Drafter (max_users rings) + selector + DFlash2BatchGenerator on `model` (args.max_batch_size >= max_users).
-    Slot u owns row u of kv_page_table(args, max_users)."""
+    Slot u owns row u of kv_page_table(args, max_users).
+    warm (with enable_trace): compile every prefill and decode program first (warm)."""
     from models.demos.muse_glimmer_30b.tt.dflash.drafter import TtDFlash2Drafter
     from models.demos.muse_glimmer_30b.tt.dflash.selector import HostCandidateSelector
 
@@ -507,7 +518,7 @@ def build_batch_generator(model, max_users, enable_trace=True, k_by_users=K_BY_U
         mesh_mapper=ttnn.ReplicateTensorToMesh(mesh),
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
-    return DFlash2BatchGenerator(
+    gen = DFlash2BatchGenerator(
         model,
         drafter,
         HostCandidateSelector.from_checkpoint(),
@@ -517,3 +528,6 @@ def build_batch_generator(model, max_users, enable_trace=True, k_by_users=K_BY_U
         enable_trace=enable_trace,
         k_by_users=k_by_users,
     )
+    if enable_trace and warm:
+        gen.warm()
+    return gen

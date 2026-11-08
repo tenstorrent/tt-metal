@@ -8,14 +8,17 @@ import time
 
 import torch
 from loguru import logger
+from ttnn.tools import trace_allocation_tracker
 
 import ttnn
 from models.demos.muse_glimmer_30b.tt.common import replicate_mapper
 from models.demos.muse_glimmer_30b.tt.dflash.sampling import rejection_sample
 from models.demos.muse_glimmer_30b.tt.dflash.topk import TOPK_PER_DEVICE, device_topk, read_topk
 from models.demos.muse_glimmer_30b.tt.dflash.verify import TargetVerifier
-from models.demos.muse_glimmer_30b.tt.model import DECODE_B_PAD
+from models.demos.muse_glimmer_30b.tt.model import DECODE_B_PAD, prefill_buckets
 from models.demos.muse_glimmer_30b.tt.sampling import draw, filtered_probs, normalize_sampling
+
+_WARM_SAMPLING = dict(temperature=1.0, top_p=0.95, top_k=32)  # any sampled request: compiles the sampled paths
 
 
 def _mean_ms(xs):
@@ -117,23 +120,24 @@ class DFlash2Generator:
         self._copy_rope(range(p_prev, p_prev + self.rows), self.ctx_rope_idx)
         self._copy_write_rows([p_prev + i if i < valid else -1 for i in range(self.rows)], self.ctx_write_rows)
 
-    def start(self, prompt_ids, sampling=None, seed=0, return_logits=False):
+    def start(self, prompt_ids, sampling=None, seed=0, return_logits=False, warm=False):
         """Reset the request state, prefill user 0 with taps and fill the drafter context.
 
         Returns the first token (greedy or sampled), or with return_logits=True the last-position logits as torch
-        float32 [vocab_size] (and self.anchor = None: the caller samples and passes the token to verify())."""
+        float32 [vocab_size] (and self.anchor = None: the caller samples and passes the token to verify()).
+        warm=True (warm_prefill): run every drafter context chunk of the bucket."""
         self.round_times = []
         self.sp = normalize_sampling(sampling, self.model.args.max_top_k)
         self.gen = torch.Generator().manual_seed(seed) if self.sp is not None else None
         self.pending = None
         self._ctx_done = True
-        m, d, cfg = self.model, self.drafter, self.cfg
+        m, cfg = self.model, self.cfg
         prompt = torch.tensor(list(prompt_ids), dtype=torch.int64)
         ids = list(cfg.target_layer_ids)
         if self.traces and m.prefill_is_new(prompt.numel()):
             logger.info(f"prefill length {prompt.numel()} is new: releasing traces (recaptured on next use)")
             self.release_traces(keep_seen=True)
-        logits_tt, taps, s0, s_real = m.prefill_with_taps(
+        logits_tt, taps, t0, s0, s_real = m.prefill_with_taps(
             prompt, 0, self.page_table_tt, ids, tap_window=cfg.sliding_window
         )
         if return_logits:
@@ -158,20 +162,76 @@ class DFlash2Generator:
             probs, pids = filtered_probs(values, tids, temperature, top_p, k)
             first = draw(probs[0], pids[0], self.gen)
         ttnn.deallocate(logits_tt)
-        h = int(taps[ids[0]].shape[-1])
-        for c0 in range(s0, s_real, DECODE_B_PAD):
-            r = c0 - s0
+        self._fill_context(taps, t0, s0, s_real, all_chunks=warm)
+        self.p = s_real
+        self.anchor = None if return_logits else first
+        return first
+
+    def _fill_context(self, taps, t0, s0, s_real, page_table=None, batch=None, all_chunks=False):
+        """Drafter context pass over prompt rows s0..s_real, 32 rows at a time, from taps holding rows t0.. (see
+        MuseGlimmerModel.prefill_with_taps); frees taps. A chunk's slice program depends only on the tap shape and the
+        chunk offset. all_chunks=True (warmup) also runs the chunks outside s0..s_real (they write no rows), so every
+        chunk program of the bucket gets compiled."""
+        d, ids = self.drafter, list(self.cfg.target_layer_ids)
+        rows, h = int(taps[ids[0]].shape[-2]), int(taps[ids[0]].shape[-1])
+        for c0 in range(t0, t0 + rows, DECODE_B_PAD):
+            valid = 0 if c0 < s0 else max(0, min(DECODE_B_PAD, s_real - c0))
+            if not valid and not all_chunks:
+                continue
+            r = c0 - t0
             chunk = [ttnn.slice(taps[i], [0, 0, r, 0], [1, 1, r + DECODE_B_PAD, h]) for i in ids]
             rope_idx = d.make_rope_idx(range(c0, c0 + DECODE_B_PAD))
-            write_idxs = d.make_write_idxs(c0, DECODE_B_PAD, valid=min(DECODE_B_PAD, s_real - c0))
-            d.context_pass(chunk, rope_idx, write_idxs)
+            write_idxs = d.make_write_idxs(c0, DECODE_B_PAD, valid=valid)
+            d.context_pass(chunk, rope_idx, write_idxs, page_table, batch)
             for t in chunk + [rope_idx] + write_idxs:
                 ttnn.deallocate(t)
         for t in taps.values():
             ttnn.deallocate(t)
-        self.p = s_real
-        self.anchor = None if return_logits else first
-        return first
+
+    def _warm_start(self, prompt, sampling, return_logits):
+        """One warmup prefill (warm_prefill) that leaves no request the caller depends on."""
+        self.start(prompt, sampling=sampling, return_logits=return_logits, warm=True)
+
+    def warm_prefill(self):
+        """Compile every prefill program of every bucket up to min(max_prefill_len, PREFILL_COARSE_MAX) before the
+        first trace capture. A program built after a capture allocates persistent device memory (its kernel binary,
+        CCL semaphores) that the trace's replays can overwrite. One prompt per bucket; the smallest bucket also runs the
+        sampled and the logits first-token paths. A longer prompt still releases the traces (prefill_is_new)."""
+        assert not self.traces, "warm_prefill must run before the first trace capture"
+        a, t = self.model.args, time.perf_counter()
+        pad = a.pad_token_id if a.pad_token_id is not None else 0
+        buckets = prefill_buckets(a.max_prefill_len)
+        for i, s in enumerate(buckets):
+            self._warm_start([pad] * s, None, False)
+            if i == 0:
+                self._warm_start([pad] * s, _WARM_SAMPLING, False)
+                self._warm_start([pad] * s, None, True)
+        logger.info(
+            f"warm_prefill: {len(buckets)} prefill buckets up to {buckets[-1]} in {time.perf_counter() - t:.1f}s"
+        )
+
+    def _warm_decode_runs(self, prompt):
+        """The eager runs of warm_decode: the single-user path, greedy and sampled."""
+        self.generate(prompt, 4)
+        self.generate(prompt, 4, sampling=_WARM_SAMPLING)
+
+    def warm_decode(self):
+        """Compile every decode-step program (draft, verify in both modes, drafter context) with eager runs before the
+        first trace capture, for the reason in warm_prefill. Stop tokens are ignored meanwhile, so every run decodes."""
+        assert not self.traces, "warm_decode must run before the first trace capture"
+        a, t = self.model.args, time.perf_counter()
+        trace, stop = self.enable_trace, self.stop_ids
+        self.enable_trace, self.stop_ids = False, set()
+        try:
+            self._warm_decode_runs([a.pad_token_id if a.pad_token_id is not None else 0] * 128)
+        finally:
+            self.enable_trace, self.stop_ids = trace, stop
+        logger.info(f"warm_decode: {time.perf_counter() - t:.1f}s")
+
+    def warm(self):
+        """warm_prefill and warm_decode: after this, serving builds no new device program while a trace exists."""
+        self.warm_prefill()
+        self.warm_decode()
 
     # ---- device parts (traceable: no tensor creation from host)
     def _draft_device(self):
@@ -201,9 +261,12 @@ class DFlash2Generator:
         already (the key ran eager once)."""
         t0 = time.perf_counter()
         self._sync()
-        self.traces[key] = ttnn.begin_trace_capture(self.mesh, cq_id=0)
-        self.trace_out[key] = fn()
-        ttnn.end_trace_capture(self.mesh, self.traces[key], cq_id=0)
+        # Each trace's outputs are read right after its replay, before any other trace runs, so the other traces'
+        # replays may overwrite them in between.
+        with trace_allocation_tracker.corruptible_allocation_scope(self.mesh):
+            self.traces[key] = ttnn.begin_trace_capture(self.mesh, cq_id=0)
+            self.trace_out[key] = fn()
+            ttnn.end_trace_capture(self.mesh, self.traces[key], cq_id=0)
         self._sync()
         self._t_capture += time.perf_counter() - t0
 

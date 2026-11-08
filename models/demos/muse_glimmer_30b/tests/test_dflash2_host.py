@@ -13,7 +13,8 @@ from safetensors import safe_open
 from models.demos.muse_glimmer_30b.reference.dflash2 import CandidateSelector, DFlash2Config
 from models.demos.muse_glimmer_30b.tt.dflash.sampling import rejection_sample
 from models.demos.muse_glimmer_30b.tt.dflash.selector import HostCandidateSelector, merge_device_topk
-from models.demos.muse_glimmer_30b.tt.model_config import dflash_checkpoint_dir
+from models.demos.muse_glimmer_30b.tt.model import prefill_buckets, prefill_len
+from models.demos.muse_glimmer_30b.tt.model_config import PREFILL_COARSE_MAX, PREFILL_MAX_PAD, dflash_checkpoint_dir
 from models.demos.muse_glimmer_30b.tt.sampling import filtered_probs, normalize_sampling
 
 
@@ -236,3 +237,16 @@ def test_batch_layout_policy(expect_error):
     assert lay.slots == (0, 5, 2, 6, 7, None, None, None)
     lay = plan_layout([5, 2], 16, lay)
     assert lay.slots == (5, 2)
+
+
+def test_prefill_buckets():
+    """Coarse prefill buckets: few, 256-aligned (or 128), capped by max_len, every pad below PREFILL_MAX_PAD."""
+    b = prefill_buckets(PREFILL_COARSE_MAX)
+    assert len(b) == 33 and b[0] == 128 and b[-1] == PREFILL_COARSE_MAX and b == sorted(set(b))
+    assert all(x == 128 or x % 256 == 0 for x in b)
+    for s in range(1, PREFILL_COARSE_MAX + 1):
+        p = prefill_len(s)
+        assert p in b and 0 <= p - s < PREFILL_MAX_PAD
+    assert prefill_len(20000) == 20480 and prefill_len(140000) == 140032
+    assert prefill_buckets(8448)[-1] == 8448 and prefill_len(8300, 8448) == 8448
+    assert prefill_len(100, 100) == 128

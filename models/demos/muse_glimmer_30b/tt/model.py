@@ -22,16 +22,33 @@ from models.demos.muse_glimmer_30b.tt.common import (
     shard_mapper,
 )
 from models.demos.muse_glimmer_30b.tt.decoder import MuseGlimmerDecoderLayer
+from models.demos.muse_glimmer_30b.tt.model_config import PREFILL_COARSE_MAX, PREFILL_MAX_PAD
 from models.demos.muse_glimmer_30b.tt.rms_norm import RMSNorm
 from models.demos.muse_glimmer_30b.tt.weight_packing import pack_lm_head
 
 DECODE_B_PAD = 32  # decode batch is always padded to one tile of rows
 
 
-def prefill_len(s_real: int) -> int:
-    """Padded prefill length: 128, or a multiple of the 256-row prefill SDPA Q chunk (a partial last Q chunk gives
-    wrong sliding-window rows)."""
-    return 128 if s_real <= 128 else -(-s_real // 256) * 256
+def prefill_len(s_real: int, max_len: int = None) -> int:
+    """Padded prefill length (bucket): 128 or a multiple of the 256-row prefill SDPA Q chunk (a partial last Q chunk
+    gives wrong sliding-window rows). Up to PREFILL_COARSE_MAX tokens: multiples of 256 up to 2048, then 4 buckets per
+    power of two (33 buckets up to 131072, pad < PREFILL_MAX_PAD), so a generator can compile every prefill program
+    before its first trace capture (prefill_buckets). Above: multiples of 256. max_len: the longest prompt; no bucket
+    exceeds it rounded up to 256."""
+    step = 256
+    if s_real <= PREFILL_COARSE_MAX:
+        step = max(256, 1 << ((s_real - 1).bit_length() - 3)) if s_real > 128 else 128
+    s = -(-s_real // step) * step
+    return s if max_len is None else min(s, max(128, -(-max_len // 256) * 256))
+
+
+def prefill_buckets(max_len: int) -> list:
+    """The buckets of prompts up to min(max_len, PREFILL_COARSE_MAX) tokens (prefill_len with this max_len), ascending."""
+    out, s = [], 1
+    while s <= min(max_len, PREFILL_COARSE_MAX):
+        out.append(prefill_len(s, max_len))
+        s = out[-1] + 1
+    return out
 
 
 def make_sampling_generator(mesh_device, args, num_links):
@@ -225,11 +242,17 @@ class MuseGlimmerModel:
         full = ttnn.to_torch(logits_tt, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=-1))
         return full[0, 0, :num_rows, : self.args.vocab_size].float()
 
+    def prefill_bucket(self, s_real: int) -> int:
+        """The padded prefill length of an s_real-token prompt (prefill_len capped by max_prefill_len)."""
+        return prefill_len(s_real, self.args.max_prefill_len)
+
     def prefill_is_new(self, s_real: int) -> bool:
         """True if a prefill of s_real tokens builds new programs. A new CCL program allocates persistent device state
         (global semaphores). Allocated while a trace exists, that state can sit on memory the trace uses for its
-        intermediates, and every replay overwrites it. Callers release their traces before such a prefill."""
-        return prefill_len(s_real) not in self.prefill_lens
+        intermediates, and every replay overwrites it. Callers release their traces before such a prefill. Kernel
+        binaries are such state too, so any new program after a capture is unsafe; warm_prefill (DFlash2Generator)
+        compiles every coarse bucket first."""
+        return self.prefill_bucket(s_real) not in self.prefill_lens
 
     def _prefill_hidden(self, tokens: torch.Tensor, user_id: int, page_table_tt, on_layer=None):
         """Run embedding + all layers for one prompt -> (hidden [1,1,S,H], s_real, S)."""
@@ -237,7 +260,7 @@ class MuseGlimmerModel:
         tokens = tokens.reshape(-1)
         s_real = tokens.shape[0]
         assert 0 < s_real <= a.max_prefill_len, f"prompt length {s_real} > max_prefill_len {a.max_prefill_len}"
-        s = prefill_len(s_real)
+        s = self.prefill_bucket(s_real)
         self.prefill_lens.add(s)
         assert s <= a.max_seq_len, f"padded prefill length {s} exceeds max_seq_len {a.max_seq_len}"
         pad_id = a.pad_token_id if a.pad_token_id is not None else 0
@@ -267,7 +290,8 @@ class MuseGlimmerModel:
         """Row s_real-1 of x [1,1,S,H] as row 0 of [1,1,32,H] (other rows 0). The slice start depends only on S and a
         one-hot matmul picks the row, so a new prompt length in a known bucket compiles no new program."""
         s = x.shape[-2]
-        b = min(s, 256)  # s is 128 or a multiple of 256, so row s_real-1 is in the last b rows
+        # Every bucket pads a prompt by less than PREFILL_MAX_PAD rows, so row s_real-1 is in the last b rows.
+        b = min(s, PREFILL_MAX_PAD)
         blk = x if b == s else ttnn.slice(x, (0, 0, s - b, 0), (1, 1, s, x.shape[-1]))
         sel = torch.zeros(1, 1, 32, b, dtype=torch.bfloat16)
         sel[0, 0, 0, s_real - 1 - (s - b)] = 1
@@ -302,26 +326,30 @@ class MuseGlimmerModel:
         return logits
 
     def prefill_with_taps(self, tokens: torch.Tensor, user_id: int, page_table_tt, tap_layers, tap_window=2048):
-        """Prefill one prompt and keep the last `tap_window` rows of the listed layers' outputs.
+        """Prefill one prompt and keep the last rows of the listed layers' outputs.
 
-        Returns (logits_tt, taps, s0, s_real): logits as prefill_forward_logits_tt; taps {layer: [1,1,s1-s0,H] DRAM
-        tensor (caller frees)} covering rows s0..s1 of the prompt, s1 = roundup32(s_real); s0 = first tapped row."""
+        Returns (logits_tt, taps, t0, s0, s_real): logits as prefill_forward_logits_tt; taps {layer: [1,1,S-t0,H] DRAM
+        tensor (caller frees)} holding padded rows t0..S of the bucket S; s0 = the first of the last `tap_window` prompt
+        rows (32-aligned, s0 >= t0). t0 depends only on S, so a new prompt length in a known bucket compiles no new
+        slice program."""
         h = self.args.hidden_size
         s_real = int(tokens.reshape(-1).shape[0])
-        s1 = -(-s_real // 32) * 32
+        s = self.prefill_bucket(s_real)
         s0 = max(0, (s_real - tap_window) // 32 * 32)
+        t0 = max(0, (s - PREFILL_MAX_PAD - tap_window) // 32 * 32)
         tap_set = set(tap_layers)
         taps = {}
 
         def on_layer(i, x):
             if i in tap_set:
-                if s0 == 0 and s1 == x.shape[2]:  # a full-extent slice aliases x, which prefill frees: copy instead
+                assert x.shape[2] == s, (x.shape, s)
+                if t0 == 0:  # a full-extent slice aliases x, which prefill frees: copy instead
                     taps[i] = ttnn.clone(x, memory_config=ttnn.DRAM_MEMORY_CONFIG)
                 else:
-                    taps[i] = ttnn.slice(x, [0, 0, s0, 0], [1, 1, s1, h], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                    taps[i] = ttnn.slice(x, [0, 0, t0, 0], [1, 1, s, h], memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
         logits = self.prefill_forward_logits_tt(tokens, user_id, page_table_tt, on_layer=on_layer)
-        return logits, taps, s0, s_real
+        return logits, taps, t0, s0, s_real
 
     def prefill_forward(self, tokens: torch.Tensor, user_id: int, page_table_tt, return_all_logits=False):
         a = self.args
