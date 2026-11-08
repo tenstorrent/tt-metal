@@ -528,11 +528,14 @@ refuses to start.
   per slab of mask ops).  The masks hold 1 KiB per token of context at 2048 rows: 32 MiB at a 32k context, 64 MiB at
   64k, 128 MiB at 128k, 256 MiB at 256k.  The hoist is admitted once, when the slab's QSA chunk constants are built
   after the model (`hoist_masks` on them, with the numbers; one log line at the build names the decision and
-  its numbers in the same words): the masks must be within the 64 MiB cap
-  (`HOISTED_MASK_BYTES_MAX`) and the DRAM free per device at that point must hold them plus the slab's working set
-  (the dense-linear admission's term: 988.5 MiB at 2048 rows).  So contexts to 64k hoist their masks when that DRAM
-  is free; 128k and 256k contexts, or a process short of the headroom, derive the masks per layer as before (the
-  bitwise slab body either way; only the mask programs' count differs).
+  its numbers in the same words): the masks must be within the 256 MiB cap
+  (`HOISTED_MASK_BYTES_MAX`; `QWEN38_HOIST_MASK_CAP_MIB=64` restores the previous 64 MiB cap) and the DRAM free per
+  device at that point must hold them plus the slab's working set (the dense-linear admission's term: 988.5 MiB at
+  2048 rows).  The masks are slab-trace transients (built in the traced slab body at each replay, freed by
+  `qsa_chunk.deallocate()`), so the cap and that gate bound the extra transient peak.  So contexts to 256k hoist their
+  masks when that DRAM is free, 128k and 256k included; a process short of the headroom, or a cap below the masks,
+  derives the masks per layer as before (one [512, blocks] mask at a time; the bitwise slab body either way; only the
+  mask programs' count differs).
 - `qsa_scores_rs_ag` (tolerance, off): each 512-row score block's four device partials are masked on every device,
   summed by a `reduce_scatter` over the block's rows, ranked per device on its 128 rows and the block ids gathered, in
   place of broadcasting every device's scores to every device and summing locally.  A third of the score payload

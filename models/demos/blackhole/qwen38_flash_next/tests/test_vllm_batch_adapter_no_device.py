@@ -72,6 +72,7 @@ class FakeDecoder:
         self.ls = None
         self.warm_logits_gather = False
         self.shared_pools = kwargs.get("shared_pools", False)
+        self.pack_arg = kwargs.get("pack")  # the ``pack=`` the adapter passed (None: not passed)
         self.pack_enabled = type(self).pack_default
         self.pack_buckets = (128, 256, 512, 1024) if self.pack_enabled else ()
         self.page_table_dirty = False
@@ -432,6 +433,83 @@ def test_the_batch_prefill_takes_the_pack_when_the_decoder_has_it_enabled(monkey
     monkeypatch.setattr(rig.model, "_prefill_batch_grouped", grouped)
     rig.prefill([_prompt(20, 5), _prompt(21, 50)], [0, 1], [[1], [2]], greedy_batch_sampling_params(2))
     assert taken == [(2, [0, 1])]
+
+
+@pytest.mark.parametrize(
+    "lanes, env, expected",
+    (
+        (8, None, True),
+        (16, None, True),
+        (32, None, True),
+        (2, None, False),
+        (7, None, False),
+        (8, "0", False),
+        (32, "0", False),
+        (2, "1", True),
+    ),
+)
+def test_open_batch_passes_the_pack_decision_to_the_lane_decoder(monkeypatch, lanes, env, expected) -> None:
+    """``_open_batch`` drives fine with the fakes: the decoder gets ``pack=prefill_pack_enabled(lanes=..., shared_pools=True)``."""
+
+    if env is None:
+        monkeypatch.delenv("QWEN38_PREFILL_PACK", raising=False)
+    else:
+        monkeypatch.setenv("QWEN38_PREFILL_PACK", env)
+    rig = Rig(monkeypatch, lanes=lanes)
+    assert rig.decoder.shared_pools and rig.decoder.pack_arg is expected
+
+
+def test_mambaspec_prefill_packs_only_the_rows_that_touch_no_state_block(monkeypatch) -> None:
+    monkeypatch.setattr(FakeDecoder, "pack_default", True)
+    rig = Rig(monkeypatch, block_size=1024)
+    model = rig.model
+    monkeypatch.setattr(type(model), "_mamba_spec_on", classmethod(lambda cls: True))
+    monkeypatch.setattr(model, "_mamba_layer_blocks", lambda ids, i: {"row": i})
+    grouped_calls, single_calls = [], []
+
+    def grouped(prompts, pages, policies, slots, claimed=None):
+        grouped_calls.append(([len(p) for p in prompts], list(slots), claimed))
+        return torch.tensor([[len(p)] for p in prompts], dtype=torch.int32)
+
+    def single(decoder, slot, prompt, pages, policy, claimed=None, start=0, layer_blocks=None):
+        single_calls.append((slot, len(prompt), start, layer_blocks))
+        return torch.tensor([[len(prompt)]], dtype=torch.int32)
+
+    monkeypatch.setattr(model, "_prefill_batch_grouped", grouped)
+    monkeypatch.setattr(model, "_prefill_row_single", single)
+    prompts = [_prompt(300, 5), _prompt(1024, 6), _prompt(1500, 7), _prompt(700, 8)]
+    starts = torch.tensor([0, 0, 1024, 0], dtype=torch.int32)
+    out, deltas = rig.prefill(
+        prompts,
+        [0, 1, 2, 3],
+        [[1], [2], [3, 4], [5]],
+        greedy_batch_sampling_params(4),
+        start_pos=starts,
+        state_block_ids_per_layer=object(),
+    )
+    assert [(lens, slots) for lens, slots, _ in grouped_calls] == [([300, 700], [0, 3])]  # rows 0 and 3, in order
+    assert single_calls == [(1, 1024, 0, {"row": 1}), (2, 1500, 1024, {"row": 2})]  # their own start and state blocks
+    assert grouped_calls[0][2] is not None  # the lanes the pack takes are shared with the per-row path
+    assert out.flatten().tolist() == [300, 1024, 1500, 700]  # the original row order
+    assert deltas.shape == (4,) and int(deltas.abs().sum()) == 0
+
+
+def test_mambaspec_prefill_without_a_packable_row_never_calls_the_grouped_path(monkeypatch) -> None:
+    monkeypatch.setattr(FakeDecoder, "pack_default", True)
+    rig = Rig(monkeypatch, block_size=1024)
+    model = rig.model
+    monkeypatch.setattr(type(model), "_mamba_spec_on", classmethod(lambda cls: True))
+    monkeypatch.setattr(model, "_mamba_layer_blocks", lambda ids, i: {"row": i})
+    monkeypatch.setattr(model, "_prefill_batch_grouped", lambda *a, **k: pytest.fail("no row may be packed"))
+    monkeypatch.setattr(model, "_prefill_row_single", lambda *a, **k: torch.zeros(1, 1, dtype=torch.int32))
+    rig.prefill(
+        [_prompt(1024, 6), _prompt(1500, 7)],
+        [0, 1],
+        [[1], [3, 4]],
+        greedy_batch_sampling_params(2),
+        start_pos=torch.tensor([0, 1024], dtype=torch.int32),
+        state_block_ids_per_layer=object(),
+    )
 
 
 def test_release_persistent_capture_releases_the_lanes_before_it_closes_the_chain(rig: Rig) -> None:

@@ -1341,10 +1341,28 @@ def qsa_chunk_constant_rows(allocated_compressed_blocks: int, rows: int = CHUNK_
 
 
 # qsa_mask_hoist keeps at most this many bytes of hoisted masks per slab (rows / 512 masks of [512, blocks] BF16 at
-# 2048 rows: 32 MB at a 32k context, 64 MB at 64k, 128 MB at 128k); past it, or when the free DRAM after the build would
-# not hold the masks plus the slab's working set, the slab derives the masks per layer (the previous form) instead of
-# taking the slab body's transient headroom.
-HOISTED_MASK_BYTES_MAX = 64 << 20
+# 2048 rows: 32 MiB at a 32k context, 64 MiB at 64k, 128 MiB at 128k, 256 MiB at 256k).  The hoisted masks are
+# slab-trace transients (built inside the traced slab body at each replay and freed by ``qsa_chunk.deallocate()``), so
+# this cap and the free-DRAM gate bound the extra transient peak; past either, the slab derives the masks per layer
+# (the previous form), which holds one [512, blocks] mask at a time.  QWEN38_HOIST_MASK_CAP_MIB overrides the cap
+# ("64" restores the previous one).
+HOISTED_MASK_BYTES_MAX = 256 << 20
+HOISTED_MASK_CAP_ENV = "QWEN38_HOIST_MASK_CAP_MIB"
+
+
+def hoisted_mask_bytes_max() -> int:
+    """The hoisted masks' cap in bytes: ``HOISTED_MASK_BYTES_MAX``, or ``QWEN38_HOIST_MASK_CAP_MIB`` MiB when set."""
+
+    value = os.environ.get(HOISTED_MASK_CAP_ENV, "")
+    if value == "":
+        return HOISTED_MASK_BYTES_MAX
+    try:
+        mib = int(value)
+    except ValueError:
+        mib = -1
+    if mib < 0:
+        raise ValueError(f"{HOISTED_MASK_CAP_ENV} must be a non-negative integer of MiB, got {value!r}")
+    return mib << 20
 
 
 def _mib(value: int) -> str:
@@ -1380,12 +1398,13 @@ def admit_hoisted_masks(
     *,
     free_bytes_per_device: int | None = None,
     slab_working_set: int | None = None,
-    limit: int = HOISTED_MASK_BYTES_MAX,
+    limit: int | None = None,
 ) -> Qwen38HoistedMaskAdmission:
     """The hoist admission on numbers alone (no device): the masks fit the cap and, when the free DRAM is given, the
     free bytes hold the masks plus the slab's working set; otherwise the per-layer form, with the numbers."""
 
     mib = _mib
+    limit = hoisted_mask_bytes_max() if limit is None else limit
     mask_bytes = hoisted_mask_bytes(rows, blocks)
     numbers = dict(
         rows=rows,
@@ -1447,7 +1466,7 @@ def slab_hoisted_mask_admission(
             _mib(hoisted_mask_bytes(rows, blocks)),
             rows,
             blocks,
-            _mib(HOISTED_MASK_BYTES_MAX),
+            _mib(hoisted_mask_bytes_max()),
         )
         return None
     view = ttnn.get_memory_view(mesh_device, ttnn.BufferType.DRAM)

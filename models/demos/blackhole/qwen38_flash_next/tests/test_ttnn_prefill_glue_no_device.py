@@ -269,23 +269,23 @@ def test_hoisted_block_masks_are_the_per_position_masks(expect_error, slab_fake,
 def test_hoist_admission_takes_the_cap_and_the_free_dram_and_names_the_fallback(expect_error) -> None:
     working_set = qsa_module.slab_working_set_bytes(SLAB)
     assert working_set == 1_036_507_648  # the dense admission's term at 2048 rows (988.5 MiB)
-    # The cap: the masks are 1 KiB per context token at 2048 rows, so 32k (32 MiB) and 64k (64 MiB, the cap itself)
-    # hoist; 128k (128 MiB) and 256k fall back to the per-layer derivation.
-    for context, admitted in ((32_768, True), (65_536, True), (131_072, False), (262_144, False)):
+    # The cap: the masks are 1 KiB per context token at 2048 rows, so 32k to 256k (256 MiB, the cap itself) hoist.
+    for context, admitted in ((32_768, True), (65_536, True), (131_072, True), (262_144, True)):
         blocks = context // qsa_module.COMPRESS_RATIO
         admission = qsa_module.admit_hoisted_masks(SLAB, blocks)
         assert admission.mask_bytes == qsa_module.hoisted_mask_bytes(SLAB, blocks) == context * 1024
-        assert (admission.rows, admission.blocks, admission.limit_bytes) == (SLAB, blocks, 64 << 20)
+        assert (admission.rows, admission.blocks, admission.limit_bytes) == (SLAB, blocks, 256 << 20)
         assert admission.hoist is admitted, (context, admission.reason)
         assert admission.free_bytes_per_device is None and admission.slab_working_set_bytes is None
-        if not admitted:
-            assert "HOISTED_MASK_BYTES_MAX" in admission.reason and "derived per layer" in admission.reason
     # The free DRAM after the build must hold the masks plus the slab's working set, byte for byte.
     blocks_32k = 32_768 // qsa_module.COMPRESS_RATIO
     needed = (32 << 20) + working_set
     admitted = qsa_module.admit_hoisted_masks(
         SLAB, blocks_32k, free_bytes_per_device=needed, slab_working_set=working_set
     )
+    # A cap below the masks (an explicit limit) names the fallback.
+    over = qsa_module.admit_hoisted_masks(SLAB, 262_144 // qsa_module.COMPRESS_RATIO, limit=128 << 20)
+    assert not over.hoist and "HOISTED_MASK_BYTES_MAX" in over.reason and "derived per layer" in over.reason
     assert admitted.hoist and (admitted.free_bytes_per_device, admitted.slab_working_set_bytes) == (needed, working_set)
     assert "working set" in admitted.reason
     short = qsa_module.admit_hoisted_masks(
@@ -295,6 +295,25 @@ def test_hoist_admission_takes_the_cap_and_the_free_dram_and_names_the_fallback(
     assert "1020.5 MiB" in short.reason  # the need, so the log names the number that decided
     with expect_error(ValueError, match="working-set term"):  # allow-pytest.raises: pure contract test
         qsa_module.admit_hoisted_masks(SLAB, blocks_32k, free_bytes_per_device=needed)
+
+
+def test_hoist_mask_cap_env_restores_the_old_cap_and_rejects_bad_values(expect_error, monkeypatch) -> None:
+    env = qsa_module.HOISTED_MASK_CAP_ENV
+    assert env == "QWEN38_HOIST_MASK_CAP_MIB"
+    monkeypatch.delenv(env, raising=False)
+    assert qsa_module.hoisted_mask_bytes_max() == qsa_module.HOISTED_MASK_BYTES_MAX == 256 << 20
+    monkeypatch.setenv(env, "")
+    assert qsa_module.hoisted_mask_bytes_max() == 256 << 20
+    monkeypatch.setenv(env, "64")  # the previous cap: 128k falls back, 64k still hoists
+    assert qsa_module.hoisted_mask_bytes_max() == 64 << 20
+    blocks_128k = 131_072 // qsa_module.COMPRESS_RATIO
+    old = qsa_module.admit_hoisted_masks(SLAB, blocks_128k)
+    assert not old.hoist and "exceed the 64.0 MiB cap" in old.reason
+    assert qsa_module.admit_hoisted_masks(SLAB, 65_536 // qsa_module.COMPRESS_RATIO).hoist
+    for bad in ("abc", "-1"):
+        monkeypatch.setenv(env, bad)
+        with expect_error(ValueError, match=env):  # allow-pytest.raises: pure contract test
+            qsa_module.hoisted_mask_bytes_max()
 
 
 class _PropagateToLogging(logging.Handler):
@@ -341,7 +360,7 @@ def test_slab_hoist_admission_reads_the_allocator_for_a_slab_under_the_form_only
     # the per-layer form and the form's absence with the masks' size and the cap ...
     assert _mask_lines(loguru_caplog) == [
         "prefill slab QSA block masks derived per layer: qsa_mask_hoist is not named by QWEN38_PREFILL_GLUE "
-        "(32.0 MiB of masks per slab (2048 rows, 8192 blocks), cap 64.0 MiB)"
+        "(32.0 MiB of masks per slab (2048 rows, 8192 blocks), cap 256.0 MiB)"
     ]
     admitted = qsa_module.slab_hoisted_mask_admission("mesh", SLAB, blocks_32k, _policy("qsa_mask_hoist"))
     assert admitted.hoist and admitted.free_bytes_per_device == 1_600_000_000 and reads == ["dram"]
@@ -352,7 +371,7 @@ def test_slab_hoist_admission_reads_the_allocator_for_a_slab_under_the_form_only
         == "prefill slab QSA block masks hoisted: " + admitted.reason
         == (
             "prefill slab QSA block masks hoisted: 32.0 MiB of hoisted QSA block masks per slab (2048 rows, 8192 blocks) "
-            "within the 64.0 MiB cap; 1525.9 MiB free per device hold them plus the slab's 988.5 MiB working set"
+            "within the 256.0 MiB cap; 1525.9 MiB free per device hold them plus the slab's 988.5 MiB working set"
         )
     )
     free_per_bank[0] = 100_000_000  # 0.8 GB per device: the per-layer form, under the default policy too

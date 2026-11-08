@@ -2730,7 +2730,9 @@ class Qwen38ForCausalLM:
         decoder = Qwen38PlainLaneDecoder(
             self.lanes,
             paging=paging,
-            shared_pools=True,  # the chain's pools are the lanes' pools; the pack is off with them
+            shared_pools=True,  # the chain's pools are the lanes' pools; the pack still runs on them (flat pack table row)
+            # QWEN38_PREFILL_PACK: "1" on, "0" off; unset: on with at least PACK_DEFAULT_MIN_LANES (8) lanes.
+            pack=prefill_pack_enabled(lanes=self.lanes, shared_pools=True),
             indexer_form=BATCH_LANE_INDEXER_FORM,
             candidates=self.batch_candidates,
             normalizer=self.batch_normalizer,
@@ -2952,22 +2954,36 @@ class Qwen38ForCausalLM:
                 slots[0], prompts[0], pages[0], policy, start=starts[0], layer_blocks=blocks[0]
             )
             return out, torch.zeros(rows, dtype=torch.long)
-        if decoder.pack_enabled and not self._mamba_spec_on():  # the packed path has no state-block copies
+        if decoder.pack_enabled and not self._mamba_spec_on():
             return self._prefill_batch_grouped(prompts, pages, policies, slots), torch.zeros(rows, dtype=torch.long)
-        outputs: list[torch.Tensor] = []
+        outputs: list[torch.Tensor | None] = [None] * rows
         claimed: set[int] = set()  # the lanes this call hands out (not live until their row is imported)
-        for i in range(rows):
-            outputs.append(
-                self._prefill_row_single(
-                    decoder,
-                    slots[i],
-                    prompts[i],
-                    pages[i],
-                    policies[i],
-                    claimed,
-                    start=starts[i],
-                    layer_blocks=blocks[i],
+        todo = list(range(rows))
+        if decoder.pack_enabled:
+            # MambaSpec: the packed path has no state-block copies, so only a row that touches no state block (it starts
+            # at 0 and does not end on a block boundary) may be packed; every other row keeps the per-row path.
+            packable = [i for i in todo if starts[i] == 0 and not self._needs_state_blocks(len(prompts[i]), starts[i])]
+            if packable:
+                packed = self._prefill_batch_grouped(
+                    [prompts[i] for i in packable],
+                    [pages[i] for i in packable],
+                    [policies[i] for i in packable],
+                    [slots[i] for i in packable],
+                    claimed=claimed,
                 )
+                for k, i in enumerate(packable):
+                    outputs[i] = packed[k : k + 1]
+                todo = [i for i in todo if outputs[i] is None]
+        for i in todo:
+            outputs[i] = self._prefill_row_single(
+                decoder,
+                slots[i],
+                prompts[i],
+                pages[i],
+                policies[i],
+                claimed,
+                start=starts[i],
+                layer_blocks=blocks[i],
             )
         return torch.cat(outputs, dim=0), torch.zeros(rows, dtype=torch.long)
 
@@ -3209,6 +3225,7 @@ class Qwen38ForCausalLM:
         pages: list[list[int]],
         policies: list[Qwen38HostSamplingPolicy | None],
         slots: list[int],
+        claimed: set[int] | None = None,
     ) -> torch.Tensor:
         """Pack on (P3d-4; the default with at least 8 lanes, ``QWEN38_PREFILL_PACK`` overrides): plan the rows into
         packs and single-path rows (:func:`qwen38_pack_plan.plan_prefill_groups`; ``QWEN38_PACK_FORCE=1`` packs every row that fits a bucket), run the
@@ -3217,7 +3234,9 @@ class Qwen38ForCausalLM:
         row is the host argmax (torch.argmax returns the lowest id among equal maxima, the device greedy's tie rule), any other row the
         single path's host draw (penalties over the prompt, ``position_generator(seed, P - 1)``).  Without sampling params
         the row's output is its masked logits ``[1, 1, VOCAB_SIZE]``, as in the single path.  A pack's tokens are in the
-        tolerance class of the single path's, not bitwise (docs/PREFILL.md)."""
+        tolerance class of the single path's, not bitwise (docs/PREFILL.md).  Every row here starts at 0 and needs no
+        state block (under MambaSpec the caller passes only such rows), so the single-path rows of the plan take the
+        defaults ``start=0, layer_blocks=None``.  ``claimed``: the lanes already handed out by this prefill call."""
 
         decoder = self.decoder
         rows = len(prompts)
@@ -3228,7 +3247,7 @@ class Qwen38ForCausalLM:
         self.last_prefill_groups = groups
         logger.info(f"prefill groups for lengths {lengths}: {groups}")
         outputs: dict[int, torch.Tensor] = {}
-        claimed: set[int] = set()  # the lanes this call hands out (not live until their group is admitted)
+        claimed = set() if claimed is None else claimed  # the lanes this call hands out (not live until admitted)
         for group in groups:
             if group[0] == "single":
                 (i,) = group[1]

@@ -41,8 +41,9 @@ FORMS: dict[str, tuple[str, str]] = {
     "gr_gather_tuned": (BITWISE, "gr.read_rows"),
     # The QSA block selection's causal block masks derived once per slab (they depend on the position and the row
     # index only) and read by every QSA layer (a default).  Admitted once, with the slab's chunk constants, when the
-    # masks fit HOISTED_MASK_BYTES_MAX and the free DRAM after the build holds them plus the slab's working set
-    # (qsa.admit_hoisted_masks); otherwise the slab derives them per layer as before.
+    # masks fit the 256 MiB cap (HOISTED_MASK_BYTES_MAX; QWEN38_HOIST_MASK_CAP_MIB=64 restores the old 64 MiB cap) and
+    # the free DRAM after the build holds them plus the slab's working set (qsa.admit_hoisted_masks); otherwise the
+    # slab derives them per layer as before.
     "qsa_mask_hoist": (BITWISE, "qsa.slab_hoisted_mask_admission"),
     # The QSA block scores summed by a reduce-scatter over the block's rows, top-k per device, the block ids gathered
     # (in place of the all-broadcast + local sum of every device's scores).
