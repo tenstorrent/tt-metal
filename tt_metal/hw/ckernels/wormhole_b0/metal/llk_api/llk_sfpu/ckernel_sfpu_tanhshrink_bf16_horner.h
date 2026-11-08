@@ -58,15 +58,7 @@ template <uint32_t DEGREE, typename Coefficients>
 __attribute__((always_inline)) inline void eval_polynomial_dual(
     const Coefficients& coeffs, vFloat x1, vFloat x2, vFloat& result1, vFloat& result2) {
     static_assert(DEGREE <= 16, "unsupported canonical paired polynomial degree");
-    if constexpr (DEGREE == 1) {
-        vFloat c1 = coeffs[1];
-        vFloat c0 = coeffs[0];
-        result1 = c0 + c1 * x1;
-        result2 = c0 + c1 * x2;
-    } else {
-        eval_polynomial_transport<DEGREE>(
-            polynomial_indexed_coefficients<Coefficients>{coeffs}, x1, x2, result1, result2);
-    }
+    eval_polynomial_transport<DEGREE>(polynomial_indexed_coefficients<Coefficients>{coeffs}, x1, x2, result1, result2);
 }
 
 }  // namespace ckernel::sfpu::ttpoly::tanhshrink
