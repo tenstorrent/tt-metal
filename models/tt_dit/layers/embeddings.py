@@ -240,7 +240,7 @@ class CombinedTimestepGuidanceTextProjEmbeddings(Module):
             assert guidance is not None
             assert guidance.shape == [batch_size, 1]
 
-            emb = guidance * self.time_proj_factor
+            emb = guidance * 1000.0 * self.time_proj_factor
             c = ttnn.cos(emb)
             s = ttnn.sin(emb)
             guidances_proj = ttnn.concat([c, s], dim=-1)
