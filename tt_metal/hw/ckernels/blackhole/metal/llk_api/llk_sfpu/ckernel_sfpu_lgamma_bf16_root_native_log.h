@@ -34,8 +34,8 @@ inline void calculate_root_native_log() {
             sfpi::vFloat effective = raw;
             effective = ttpoly::lgamma::raw_daz_action_coordinate(raw);
             ttpoly::lgamma::apply_raw_domain_records<Config, Config::kDomainActionCount - 1>(effective, result);
-            ttpoly::lgamma::negative_infinity_terminal<1>(effective, result);
-            ttpoly::lgamma::zero_class_terminal<1>(effective, result);
+            ttpoly::lgamma::negative_infinity_terminal(effective, result);
+            ttpoly::lgamma::zero_class_terminal(effective, result);
         },
         [](sfpi::vUInt raw, sfpi::vFloat& result) __attribute__((always_inline)) {
             ttpoly::lgamma::negative_nan_class_terminal<Config::kRawNegativeNanClass, false>(raw, result);

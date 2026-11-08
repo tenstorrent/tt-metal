@@ -27,11 +27,10 @@ __attribute__((always_inline)) inline vFloat target_raw_terminal_value(vFloat co
     }
 }
 
-template <int Code>
 __attribute__((always_inline)) inline void negative_infinity_terminal(vFloat input, vFloat& result) {
-    if constexpr (Code != 5) {
+    {
         constexpr float bf16_min_finite = -3.3895313892515355e+38f;
-        v_if(input < bf16_min_finite) { result = target_raw_terminal_value<Code>(result); }
+        v_if(input < bf16_min_finite) { result = target_raw_terminal_value<1>(result); }
         v_endif;
     }
 }
@@ -115,11 +114,8 @@ __attribute__((always_inline)) inline vFloat raw_daz_action_coordinate(vFloat x_
     v_endif;
     return effective;
 }
-template <int Code>
 __attribute__((always_inline)) inline void zero_class_terminal(vFloat input, vFloat& result) {
-    if constexpr (Code != 5) {
-        v_if(is_zero(input)) { result = target_raw_terminal_value<Code>(result); }
-        v_endif;
-    }
+    v_if(is_zero(input)) { result = target_raw_terminal_value<1>(result); }
+    v_endif;
 }
 }  // namespace ckernel::sfpu::ttpoly::lgamma
