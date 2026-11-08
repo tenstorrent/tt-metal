@@ -207,9 +207,8 @@ class TPMla:
         io2, mpd = self._hooked(io, desc, t)
         ttnn.generic_op(io2, mpd)
         if keep is not None:
-            shared = self.mk.shared_ids()  # (share_handoffs: the persisted per-t hand-offs are popped, never freed)
             for k in [k for k in out if k not in keep]:
                 v = out.pop(k)
-                if v is not None and id(v) not in shared:  # stack mode: no x_out
+                if v is not None:  # stack mode: no x_out
                     ttnn.deallocate(v)
         return out

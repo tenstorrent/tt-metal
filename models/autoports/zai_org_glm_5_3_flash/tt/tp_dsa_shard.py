@@ -487,10 +487,9 @@ class TPMlaShard(TPM.TPMla):
         io2, mpd = self._hooked_shard(io, desc, t, st)
         ttnn.generic_op(io2, mpd)
         if keep is not None:
-            shared = self.mk.shared_ids()  # (share_handoffs: the persisted per-t hand-offs are popped, never freed)
             for k in [k for k in out if k not in keep]:
                 v = out.pop(k)
-                if v is not None and id(v) not in shared:
+                if v is not None:
                     ttnn.deallocate(v)
         return out
 

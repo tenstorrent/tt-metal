@@ -50,7 +50,7 @@ class MkMoE:
                  expert_ring_slots: int | None = None, xtp: int | None = None,
                  local_experts: list | None = None, replica_home: list | None = None,
                  chip: int = 0, xsl: int | None = None, xsl_tp: int = 8, xsl_sliced: bool = False,
-                 persist: dict | None = None, share_handoffs: bool = False):  # fmt: skip
+                 persist: dict | None = None):  # fmt: skip
         """mlp: the decoder layer's OptimizedMoE (router DSLinear + its RouterTail bias, the shared expert's DSLinears,
         the routed experts' weight lists); e_lo / num_experts: expert parallelism (this chip's experts are mlp.gate_up /
         mlp.down); xtp = c: expert TP slice c of every expert (mk_experts.ReaderExperts; its semaphore SEM_XTP = 15 is
@@ -91,10 +91,6 @@ class MkMoE:
         self.nt = self.i_tiles // len(self.place["k"])
         self.limit_shared = shared.limit
         self.persist = persist if persist is not None else {}
-        # share_handoffs (GLM53_MLA_SHARE_HANDOFF=1, with persist = the first layer's dict): every per-t L1 hand-off
-        # of __call__ (hn, post, comb, coef, the reader outputs, ids, scores, weights, y) from the dict, allocated once
-        # per (t, call order, shape, dtype) -- no per-layer allocate / free churn under the L1 floor (mk_mla.MkMla)
-        self.share_handoffs = bool(share_handoffs)
         self.calls = 0
 
     def _persistent(self, key, make):
@@ -113,25 +109,13 @@ class MkMoE:
         rm = residual_modes(t)
         mhc, dev, rd = self.mhc, self.device, self.readers
         mk = lambda shape, dt, mem=L1: ttnn.empty(shape, dt, ttnn.TILE_LAYOUT, dev, mem)  # noqa: E731
-        if self.share_handoffs:  # the per-t L1 hand-offs from the shared dict, in call order (mk_mla.MkMla: the same)
-            seq, mk_new = [0], mk
-
-            def mk(shape, dt, mem=L1):  # noqa: F811
-                if mem is not L1:
-                    return mk_new(shape, dt, mem)
-                seq[0] += 1
-                return self._persistent(("h", t, seq[0], tuple(int(v) for v in shape), str(dt)),
-                                        lambda: mk_new(shape, dt, mem))  # fmt: skip
-
         hn = mk((1, 1, t, mhc.hidden), BF16)
         post, comb = (mk(sh, FP32) for sh in rm["pc_shapes"])
         coef = mk((1, 1, 32, 32), FP32)
         roles, mhc_cbs, mhc_sems = mhc.parts(s1, hn, post, comb, None, coef, t=t, x_mode=rm["s1_x"],
                                              xout_mode=_mhc.XOUT_NONE, pc_mode=rm["pc"],
                                              signal=(SEM_HN, rd.noc_coords()))  # fmt: skip
-        logits, gu, y2 = (
-            self._persistent(("rd_out", t), lambda: rd.outputs(t)) if self.share_handoffs else rd.outputs(t)
-        )
+        logits, gu, y2 = rd.outputs(t)
         # the shared expert's intermediate, persistent per TILE ROW count (not per t): every t <= 32 is the same one tile
         # row, so a server's widths (32, 8, 16, narrow 1..4) share ONE buffer per layer instead of each width's first
         # call allocating another L1 buffer below the programs already compiled (Stage 14b: 11 sparse_dsa layers x ~1 KB

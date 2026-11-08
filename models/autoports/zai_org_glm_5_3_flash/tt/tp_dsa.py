@@ -276,11 +276,9 @@ class TPDsaLayer:
         self.attn, self.mla = self._build_mla(cfg, source, ocfg, ts, share, dsa and not defer)
         # GLM53_MOE_SHARE_M (default 1): every sparse_dsa layer's MoE shares the first layer's shared-expert intermediate
         # m (MkMoE.persist): one L1 buffer per stack instead of one per layer (mk_moe.MkMoE.__call__)
-        hs = os.environ.get("GLM53_MLA_SHARE_HANDOFF", "0") == "1"  # (+ every per-t hand-off: mk_moe / _build_mla)
-        shm = (share.moe.mk.persist if share is not None and (hs or os.environ.get("GLM53_MOE_SHARE_M", "1") == "1")
-               else None)  # fmt: skip
+        shm = share.moe.mk.persist if share is not None and os.environ.get("GLM53_MOE_SHARE_M", "1") == "1" else None
         self.moe = TPMoE(mesh, mhc_host_args(source, cfg, layer, "ffn"), moe, ts=ts,
-                         fabrics=share.moe.fabrics if share else None, persist=shm, share_handoffs=hs)  # fmt: skip
+                         fabrics=share.moe.fabrics if share else None, persist=shm)  # fmt: skip
 
     # ---- the slice sidecar (GLM53_DSA_SLICE_CACHE=<local dir>; unset: off): MeshHeadShard's fp32 host copies of q_b /
     # o_proj / W_uk / W_uv (what the per-rank uploads and host_weights are cut from), saved by the first attach_dsa of a
@@ -383,10 +381,6 @@ class TPDsaLayer:
         kb_mla = MLA_KB_SHARD if int(mesh.get_num_devices()) <= 8 else MLA_KB_SHARD_WIDE
         if os.environ.get("GLM53_MLA_PROBE") == "1":  # per-phase marks of the MLA program (mk_mla.decode_probe; eager
             ix = dict(ix, probe=True)  # steps only: read chip 0's shard of MkMla.probe after a decode step)
-        # GLM53_MLA_SHARE_HANDOFF=1: the per-t L1 hand-offs of every sparse_dsa layer's MLA / MoE programs from ONE dict
-        # (the first layer's; mk_mla.MkMla persist): no per-layer allocate / free churn under the L1 floor
-        hs = os.environ.get("GLM53_MLA_SHARE_HANDOFF", "0") == "1"
-        ix = dict(ix, share_handoffs=hs, persist=share.mla.mk.persist if (share is not None and hs) else None)
         mla = cls(mesh, mhc_host_args(source, cfg, layer, "attn"), attn, kb=kb_mla,
                   rings=rings, fabrics=share.mla.fabrics if share else None,
                   ts=ts, host_full=host_full, keep_full=keep_full, **ix)  # fmt: skip

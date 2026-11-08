@@ -1092,7 +1092,7 @@ class MkMla(_MlaBase):
     def __init__(self, device, mhc_args: dict, attn, *, readers_per_bank: int | None = None, probe: bool = False,
                  kb: tuple | None = None, rings: tuple | None = None, lookahead: bool | None = None,
                  dsa: DsaIndexer | None = None, dsa_kb: tuple = (32, 8), ukv_bf8: bool | None = None,
-                 dsa_shard: bool = False, persist: dict | None = None, share_handoffs: bool = False):  # fmt: skip
+                 dsa_shard: bool = False):  # fmt: skip
         """ukv_bf8 (GLM53_MLA_UKV_BF8, default 0): W_uk / W_uv as bfloat8_b (HiFi2, as the DS projections) in K blocks
         of 64-tile ring slots, so q_b, W_uk, W_uv and o_proj stream through ONE bfp8 ring (no bf16 ring: its L1 goes to
         the shared ring, which prefetches o_proj during the attention) and the 25 MB of bf16 per-head weights halve.
@@ -1102,15 +1102,6 @@ class MkMla(_MlaBase):
         tokens with p + 1 > 2051 (kernels/mla/att_dsa_*.cpp); every token's ring row and pooled key are written."""
         super().__init__(device, attn, readers_per_bank=readers_per_bank, probe=probe)
         self.dsa, self.dsa_kb = dsa, dsa_kb
-        # share_handoffs (tp_dsa.TPDsaLayer, GLM53_MLA_SHARE_HANDOFF=1): the per-t L1 hand-offs of __call__ (hn, post,
-        # comb, coef, qk, q, q_r, q_lat, latent, o_lat, o_t, o, a, q_ix, mbox, hist) come from `persist` -- the first
-        # sparse_dsa layer's dict, shared by every later layer -- allocated once per (t, call order, shape, dtype)
-        # instead of allocated / freed per call: the per-layer churn fragmented the L1 top and drifted the floor ~4 KB
-        # per layer (2026-11-06 census: 1321472 -> 1253248 over 11 layers, under the t = 16 MoE program's static CBs).
-        # Safe: layers never run concurrently and every hand-off is produced and consumed inside one layer's program
-        # (s1, the MLA -> MoE hand-off the stack frees itself, stays per call). keep= never frees a persisted tensor.
-        self.persist = persist if persist is not None else {}
-        self.share_handoffs = bool(share_handoffs)
         # dsa_shard (tt/tp_dsa_shard.py): the sequence-sharded split-K variant -- the call takes shard= (the exchange
         # tensors / lanes), the owner, index and latent kernels compile their MLA_DSA_SHARD paths, W_uk also signals
         # the latent core (it copies q_lat into the all-gather block)
@@ -1362,23 +1353,6 @@ class MkMla(_MlaBase):
         if cur_pos.layout != ttnn.ROW_MAJOR_LAYOUT or _a64(4 * int(cur_pos.shape[-1])) > DSA_POS_BYTES:
             raise ValueError(f"MkMla: cur_pos must be row-major int32, <= 32 entries per page ({cur_pos.shape})")
         mk = self._mk
-        seq = [0]
-        if self.share_handoffs:  # the per-t L1 hand-offs from the shared dict, in call order (shape / dtype in the key)
-
-            def mk(shape, dt, mem=L1):  # noqa: F811
-                if mem is not L1:
-                    return self._mk(shape, dt, mem)
-                seq[0] += 1
-                return self._persistent(("h", t, seq[0], tuple(int(v) for v in shape), str(dt)),
-                                        lambda: self._mk(shape, dt, mem))  # fmt: skip
-
-        def su32(cores, n, words):  # the DSA mailbox / histogram slots (uninitialised L1 scratch, written per launch)
-            seq[0] += 1
-            if not self.share_handoffs:
-                return _sharded_u32(self.device, cores, n, words)
-            return self._persistent(("su32", t, seq[0], int(n), int(words)),
-                                    lambda: _sharded_u32(self.device, cores, n, words))  # fmt: skip
-
         hn = mk((1, 1, t, mhc.hidden), BF16)
         post, comb = (mk(sh, FP32) for sh in rm["pc_shapes"])
         # P6's attention residual: t <= 4 P1's stacked copy of x (stack: x itself); t > 4 x itself (flat, no copy)
@@ -1436,20 +1410,22 @@ class MkMla(_MlaBase):
             )  # L1: I3's 32-B face-row scatter (validated to L1)
             wsc = mk((1, 1, TILE, TILE), FP32, DRAM)
             kc = mhc.kcores
-            mbox = su32(kc, len(self.place["k"]),
+            mbox = _sharded_u32(self.device, kc, len(self.place["k"]),
                                 dsa_mbox_bytes(t, shard is not None, int(shard["C"]) if shard is not None else 8) // 4)  # fmt: skip
             ixc = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in self._ix_cores(t)])
             nl = self.att_lanes(t)
             if shard is not None:  # the coordinators' merge scratch (ix_dm0.cpp MLA_DSA_SHARD; rev 60: one per lane)
-                hist = su32(ixc, len(self._ix_cores(t)),
+                hist = _sharded_u32(self.device, ixc, len(self._ix_cores(t)),
                                     shard_coord_words(self.chunks // nl, int(shard["C"])))  # fmt: skip
             elif self.ix_lanes(t) > 1:  # rev 47: each lane index core holds its C / L histogram slots (CB_CSCR scratch)
-                hist = su32(ixc, nl, (self.chunks // nl) * 16)
+                hist = _sharded_u32(self.device, ixc, nl, (self.chunks // nl) * 16)
             elif nl > 1:  # rev 40: each lane's coordinator holds its C / L histogram slots + 512 B of scratch
                 coc = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in self.co_cores[:nl]])
-                hist = su32(coc, nl, (self.chunks // nl) * 16 + 128 + 16)  # + 64 B: aligned scratch
+                hist = _sharded_u32(
+                    self.device, coc, nl, (self.chunks // nl) * 16 + 128 + 16
+                )  # + 64 B: aligned scratch
             else:
-                hist = su32(ixc, 1, self.chunks * 16)
+                hist = _sharded_u32(self.device, ixc, 1, self.chunks * 16)
             xs.update(i1=hn, i3=qk if self.qfold else q_r)
             ys.update(i1=y_ix, i3=q_ix)
             pools_a, ring_a = dsa_slot_addrs(dsa_state, t)
@@ -1581,26 +1557,14 @@ class MkMla(_MlaBase):
             out["invh"] = invh
         out.update(post=post, comb=comb)
         if keep is not None:
-            # (mbox / hist are outputs since revs 51 / 53: freed here unless kept - no second explicit deallocate;
-            # the persisted hand-offs (share_handoffs) are popped but never freed)
-            shared = self.shared_ids()
+            # (mbox / hist are outputs since revs 51 / 53: freed here unless kept - no second explicit deallocate)
             for k in [k for k in out if k not in keep]:
                 v = out.pop(k)
-                if v is not None and id(v) not in shared:
+                if v is not None:
                     ttnn.deallocate(v)
         else:
             out.pop("post"), out.pop("comb")
         return out
-
-    def _persistent(self, key, make):
-        """the shared per-t hand-off dict (persist=): allocate once, reuse on every later call / layer"""
-        if key not in self.persist:
-            self.persist[key] = make()
-        return self.persist[key]
-
-    def shared_ids(self) -> set:
-        """id() of every persisted tensor (keep= must not deallocate them)"""
-        return {id(v) for v in self.persist.values()}
 
     def att_lanes(self, t: int) -> int:
         """token lanes of the attention phase (kernels/mla/att_common.hpp LANES; attention_args): 1 at t <= 4; with DSA
