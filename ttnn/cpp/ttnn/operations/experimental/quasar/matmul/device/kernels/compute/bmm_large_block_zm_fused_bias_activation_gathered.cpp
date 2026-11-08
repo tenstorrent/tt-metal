@@ -27,6 +27,8 @@ FORCE_INLINE void reload_from_cb_to_dst(
     uint32_t out_subblock_h,
     uint32_t in0_block_w) {
     CircularBuffer mm_partials_cb(mm_partials_cb_id);
+    // Undo the MxFp4 2x src format matmul_init latched (see mm_uninit); no-op otherwise.
+    mm_uninit(in0_cb_id, in1_cb_id);
     // Reconfigure input
     reconfig_data_format_srca(in1_cb_id, mm_partials_cb_id);
     copy_init(mm_partials_cb_id);

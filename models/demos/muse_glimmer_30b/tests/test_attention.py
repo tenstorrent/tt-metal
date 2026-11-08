@@ -4,22 +4,23 @@
 
 """Device test: MuseGlimmerAttention (prefill + decode) vs the torch reference, real weights, layers 0 (sliding+RoPE) and 3 (full+NoPE)."""
 
+import functools
+
 import pytest
 import torch
 from loguru import logger
 
-import models.demos.gemma4.tt.attention.operations as gemma4_ops
 import models.demos.muse_glimmer_30b.tt.attention as attention_mod
 import ttnn
 from models.common.utility_functions import comp_pcc
 from models.demos.muse_glimmer_30b.reference.model import Attention, RotaryEmbedding, build_attention_mask
-from models.demos.muse_glimmer_30b.tt.attention import MuseGlimmerAttention, allocate_kv_cache
+from models.demos.muse_glimmer_30b.tt.attention import MuseGlimmerAttention, allocate_kv_cache, kv_page_table
 from models.demos.muse_glimmer_30b.tt.ccl import MuseCCL
 from models.demos.muse_glimmer_30b.tt.common import RopeTables
 from models.demos.muse_glimmer_30b.tt.mesh_utils import mesh_test_params, skip_and_submesh
-from models.demos.muse_glimmer_30b.tt.model_config import MuseGlimmerModelArgs
+from models.demos.muse_glimmer_30b.tt.model_config import LOW_PRECISION, MuseGlimmerModelArgs
 
-PCC_THRESHOLD = 0.99
+PCC_THRESHOLD = 0.90 if LOW_PRECISION else 0.99
 
 
 mesh_fabric = mesh_test_params()
@@ -63,11 +64,6 @@ def _read(t, mesh_device):
     return ttnn.to_torch(t, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))[0]
 
 
-def _page_table(args, num_users):
-    nb = args.max_num_blocks_per_user
-    return torch.arange(num_users * nb, dtype=torch.int32).reshape(num_users, nb)
-
-
 def _run_prefill(mesh_device, tp, layer_idx, seq_len, user_id=0):
     sub = skip_and_submesh(mesh_device, tp)
     args, cfg, ccl, tt_attn, ref = _setup(sub, layer_idx)
@@ -78,8 +74,10 @@ def _run_prefill(mesh_device, tp, layer_idx, seq_len, user_id=0):
     rope = None
     if args.uses_rope(layer_idx):
         rope = RopeTables(sub, args.head_dim, args.rope_theta, args.max_seq_len).prefill(0, seq_len)
-    kv_cache = allocate_kv_cache(args, sub)
-    pt = _to_dev(_page_table(args, args.max_batch_size), sub, ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
+    kv_cache = allocate_kv_cache(args, sub, args.is_sliding(layer_idx))
+    pt = _to_dev(
+        kv_page_table(args, args.max_batch_size, args.is_sliding(layer_idx)), sub, ttnn.int32, ttnn.ROW_MAJOR_LAYOUT
+    )
     tt_x = _to_dev(x.unsqueeze(0), sub, ttnn.bfloat16, ttnn.TILE_LAYOUT)
 
     tt_out = tt_attn.forward_prefill(tt_x, rope, kv_cache, pt, user_id=user_id)
@@ -103,11 +101,14 @@ def test_attention_prefill(mesh_device, tp, layer_idx, seq_len):
 @pytest.mark.parametrize("layer_idx", [0, 3], ids=["sliding_rope", "full_nope"])
 @pytest.mark.parametrize("seq_len", [4096, 3328])
 def test_attention_prefill_chunked(mesh_device, tp, layer_idx, seq_len, monkeypatch):
-    """Long-prompt paths (gemma4 chunked SDPA) forced at short lengths; 3328 has a short tail chunk,
+    """Long-prompt paths (chunked SDPA) forced at short lengths; 3328 has a short tail chunk,
     user 1 checks the page-table row slice."""
     monkeypatch.setattr(attention_mod, "PREFILL_SDPA_MAX_SEQ", 1024)
-    monkeypatch.setattr(gemma4_ops, "PREFILL_CHUNK_SIZE", 1024)
-    monkeypatch.setattr(gemma4_ops, "PREFILL_SLIDING_CHUNK_SIZE", 1024)
+    monkeypatch.setattr(attention_mod, "GLOBAL_PREFILL_CHUNK", 1024)
+    # Several sliding strides (with history, trimming and a short tail); the default stride is bound at def time.
+    monkeypatch.setattr(
+        attention_mod, "sliding_prefill_sdpa", functools.partial(attention_mod.sliding_prefill_sdpa, stride=1024)
+    )
     _run_prefill(mesh_device, tp, layer_idx, seq_len, user_id=1)
 
 
@@ -122,8 +123,10 @@ def test_attention_decode(mesh_device, tp, layer_idx):
     B = len(lengths)
     H = args.hidden_size
     tables = RopeTables(sub, args.head_dim, args.rope_theta, args.max_seq_len)
-    kv_cache = allocate_kv_cache(args, sub)
-    pt = _to_dev(_page_table(args, args.max_batch_size), sub, ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
+    kv_cache = allocate_kv_cache(args, sub, args.is_sliding(layer_idx))
+    pt = _to_dev(
+        kv_page_table(args, args.max_batch_size, args.is_sliding(layer_idx)), sub, ttnn.int32, ttnn.ROW_MAJOR_LAYOUT
+    )
 
     hist = [(torch.randn(1, L, H) * 1.0).to(torch.bfloat16) for L in lengths]
     new = (torch.randn(1, B, H) * 1.0).to(torch.bfloat16)  # one new token per user

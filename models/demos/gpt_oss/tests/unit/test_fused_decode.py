@@ -144,3 +144,20 @@ def test_stock_logits_layout(mesh_device, device_params):
         got = ttnn.to_torch(shard).float().reshape(TILE, t.stock_width)
         assert torch.equal(got[0], padded[d * t.stock_width : (d + 1) * t.stock_width]), f"device {d}: shard mismatch"
         assert not got[1:].any(), f"device {d}: rows 1..31 must be zero"
+
+
+def test_reset_params_passes_log_probs_enable_temperature(monkeypatch):
+    from models.common.sampling.tt_sampling import TTSampling
+    from models.demos.gpt_oss.tt.fused_decode.terminal import FusedDecodeSampling
+
+    calls = []
+    monkeypatch.setattr(TTSampling, "reset_params", lambda self, *args, **kwargs: calls.append(kwargs))
+    sampling = FusedDecodeSampling.__new__(FusedDecodeSampling)
+    sampling._params_key = None
+    sampling._allow_force_argmax_sampling = False
+    sampling.max_top_k = 32
+
+    for enable in ([False], [True]):
+        sampling.reset_params([1], [0.0], [0.7], log_probs_enable_temperature=enable)
+
+    assert [c["log_probs_enable_temperature"] for c in calls] == [[False], [True]]
