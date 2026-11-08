@@ -171,6 +171,7 @@ class PrefixRetention:
         self.matching = False
         self.cursor = 0
         self.prompt_resumed = False
+        self.last_resume: Optional[dict] = None  # set by a chunk that resumed a matched prompt (for the caller's log)
         self.stats = ReuseStats()
 
     # ------------------------------------------------------------------ state
@@ -246,6 +247,7 @@ class PrefixRetention:
     def _prepare_compute(self, start: int) -> None:
         resume = self.matching and start > 0 and start == self.cursor
         self.matching = False
+        self.last_resume = None
         if not resume:
             if start == 0:
                 # a new prompt computed from scratch (the model zeroes the KDA carries at start 0): only [0, 0) stays
@@ -256,6 +258,7 @@ class PrefixRetention:
                 self.reset(f"chunk start {start} is neither 0 nor the retained end {self.length}")
             return
         at = self.carries_at(start)
+        self.last_resume = {"start": start, "how": "live" if at is not None and at[0] == "live" else "checkpoint"}
         if at is not None and at[0] == "live":
             self._set_next_start(start)  # the live carries are already at start (the retained prompt ended there)
         elif at is not None:
@@ -275,6 +278,7 @@ class PrefixRetention:
                 self._record(self.tokens[x:y], x, y)
                 n += 1
             self.stats.silent_chunks += n
+            self.last_resume = {"start": start, "how": f"rebuilt from {b}", "silent": n}
             self.log(f"[glm53f-prefix] rebuilt the KDA carries at {start} from {b} ({n} chunk(s), no export)")
         self._truncate(start)
 

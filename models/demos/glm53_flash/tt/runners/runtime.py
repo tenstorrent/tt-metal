@@ -232,7 +232,13 @@ class GLM53FlashPrefillRuntime:
                 logger.info(f"[glm53f-prefix] new prompt at chunk {request_id}: {pr.summary()}")
             if pr.begin_chunk(ids, actual_start, actual_end, last):
                 return self._skip_chunk(slot_id, actual_start, actual_end, request_id, t0)
-            t0 = time.perf_counter()  # a resume's restore / rebuild is logged by the retention, not as this chunk
+            if pr.last_resume is not None:  # once per resumed prompt: what the resume cost the device
+                ttnn.synchronize_device(self.mesh_device)
+                logger.info(
+                    f"[glm53f-prefix] chunk {request_id}: resumed at {actual_start} ({pr.last_resume['how']}) in "
+                    f"{time.perf_counter() - t0:.3f} s after skipping {actual_start // self.config.chunk_size} chunk(s)"
+                )
+            t0 = time.perf_counter()
             try:
                 self._prefill(ids, actual_start)
             except Exception:
