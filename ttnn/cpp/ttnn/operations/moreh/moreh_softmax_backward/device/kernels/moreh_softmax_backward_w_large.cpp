@@ -15,6 +15,8 @@
 
 namespace ckl = compute_kernel_lib;
 
+constexpr uint32_t kSumBlock = 32;
+
 void kernel_main() {
     constexpr uint32_t onetile = 1;
 
@@ -97,12 +99,23 @@ void kernel_main() {
                 mul_tiles_to_dfb<dfb::y, dfb::dy, dfb::ydy>(dfb_y_obj, dfb_dy_obj, dfb_ydy_obj);
             }
 
-            if (w == 0) {
+            if (w % kSumBlock == 0) {
                 copy_tile_to_dfb<dfb::ydy, dfb::add>(dfb_ydy_obj, dfb_add_obj);
             } else {
                 add_tiles_to_dfb<dfb::add, dfb::ydy, dfb::add>(dfb_add_obj, dfb_ydy_obj, dfb_add_obj);
             }
+            // The FPU add reads the running sum at TF32, so a tile added to a much larger sum is lost. Sum
+            // blocks of tiles and fold each block into dy_m_sum, which is free until the sum is done.
+            if (w % kSumBlock == kSumBlock - 1 || w == Wt - 1) {
+                if (w < kSumBlock) {
+                    copy_tile_to_dfb<dfb::add, dfb::dy_m_sum>(dfb_add_obj, dfb_dy_m_sum_obj);
+                } else {
+                    add_tiles_to_dfb<dfb::dy_m_sum, dfb::add, dfb::dy_m_sum>(
+                        dfb_dy_m_sum_obj, dfb_add_obj, dfb_dy_m_sum_obj);
+                }
+            }
         }
+        copy_tile_to_dfb<dfb::dy_m_sum, dfb::add>(dfb_dy_m_sum_obj, dfb_add_obj);
 
         // step 2, compute sum(y * dy)
         ckl::reduce<PoolType::SUM, ReduceDim::REDUCE_ROW, dfb::add, dfb::scaler, dfb::sum>(
