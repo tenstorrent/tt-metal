@@ -533,6 +533,7 @@ class VAEDecoderAdapter:
         self.device = ccl_manager.mesh_device
         self.scaling_factor = torch_vae.config["scaling_factor"]
         self.shift_factor = 0.0 if skip_shift else torch_vae.config["shift_factor"]
+        self._image_shift_factor = torch_vae.config["shift_factor"]
         self._unpack_fn = unpack_fn
 
         if use_torch:
