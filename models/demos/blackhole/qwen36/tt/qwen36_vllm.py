@@ -342,7 +342,9 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
         if join_topp_candidates_enabled():  # QWEN36_JOIN_TOPP_CANDIDATES: plugin host sampler without the full sort
             from models.demos.blackhole.qwen36.tt.host_topp import install_plugin_topp_candidates
 
-            logger.info(f"QWEN36_JOIN_TOPP_CANDIDATES: plugin sampler hook installed={install_plugin_topp_candidates()}")
+            logger.info(
+                f"QWEN36_JOIN_TOPP_CANDIDATES: plugin sampler hook installed={install_plugin_topp_candidates()}"
+            )
         # Weights dir: MODEL_WEIGHTS_DIR → HF_MODEL → hf_config._name_or_path; a hub id resolves to a local snapshot.
         name_or_path = os.environ.get("MODEL_WEIGHTS_DIR") or os.environ.get("HF_MODEL") or hf_config._name_or_path
         if name_or_path and not os.path.isdir(os.path.expanduser(name_or_path)):
@@ -475,6 +477,16 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
         from models.demos.blackhole.qwen36.tt.gdn_block_state import zero_kv_blocks
 
         zero_kv_blocks(self.model[0], [int(b) for b in block_ids])
+
+    def copy_kv_cache_blocks(self, kv_cache=None, copies=()):
+        """vllm-tt-plugin block hook: copy each (src, dst) block in every K and V buffer, in list order (with the GDN
+        state bound, GdnBlockState.copy_blocks, which also moves head pages that sit at another offset in dst)."""
+        from models.demos.blackhole.qwen36.tt.gdn_block_state import copy_kv_blocks
+
+        if getattr(self, "_gdn_blocks", None) is not None:
+            self._gdn_blocks.copy_blocks(copies)
+        else:
+            copy_kv_blocks(self.model[0], copies)
 
     @staticmethod
     def _has_visual(kwargs, pixel_key, u=0):
@@ -666,8 +678,9 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
                      still the FULL prompt / page-table row). Resumed from the model's GDN snapshots when available.
         visual_kwargs: the vLLM kwargs carrying per-request pixel_values[u] / image_grid_thw[u] (and the *_videos
                      variants); a user with real visual data is prefilled multimodally (prefix cache bypassed).
-        state_block_ids: QWEN36_MAMBA_SPEC: the plugin's state_block_ids_per_layer; each user's GDN state is copied
-                     from its decode row into its block after the prefill.
+        state_block_ids: QWEN36_MAMBA_SPEC: the plugin's state_block_ids_per_layer; a user with start_pos > 0 resumes
+                     from its block, and each user's GDN state is copied from its decode row into its block after the
+                     prefill.
         Returns ([N, 1, vocab] host logits, [N] zero rope_deltas — the M-RoPE delta is kept model-side per slot).
         """
         N = tokens.shape[0]
@@ -684,8 +697,6 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
         if start_pos is not None:
             start_pos = [int(x) for x in (start_pos.tolist() if hasattr(start_pos, "tolist") else start_pos)]
             assert len(start_pos) == N, "one start_pos per request"
-            if state_block_ids is not None and any(start_pos):
-                raise NotImplementedError("QWEN36_MAMBA_SPEC supports mamba_cache_mode none only (start_pos 0)")
         vision_list = None
         if visual_kwargs is not None:
             vl = []
@@ -694,8 +705,18 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
                 vl.append((lambda u=u: self._compute_vision_tokens(model, visual_kwargs, u)) if has_mm else None)
             if any(v is not None for v in vl):
                 vision_list = vl
+        gdn_resume = None
+        if state_block_ids is not None:
+            self._gdn_blocks.set_prefill_blocks(state_block_ids)
+            gdn_resume = self._gdn_blocks
         host_logits = model.prefill_paged_slots(
-            token_ids_list, pt, empty_slots, valid_lens=plens, start_positions=start_pos, vision_tokens_list=vision_list
+            token_ids_list,
+            pt,
+            empty_slots,
+            valid_lens=plens,
+            start_positions=start_pos,
+            vision_tokens_list=vision_list,
+            gdn_resume=gdn_resume,
         )
         if state_block_ids is not None:
             self._gdn_blocks.write_prefill_rows(state_block_ids, empty_slots)
@@ -1121,19 +1142,21 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
         )
         env_pc = os.environ.get("QWEN36_PREFIX_CACHE", "1") == "1"
         vllm_pc = getattr(self, "_vllm_prefix_caching", True)
-        if batched and model._prefix_cache is None and model.short_prefill_trace_enabled():
+        # QWEN36_MAMBA_SPEC: prefix hits and later chunks resume from the GDN state in vLLM blocks, not from snapshots.
+        snap = batched and getattr(self, "_gdn_blocks", None) is None
+        if snap and model._prefix_cache is None and model.short_prefill_trace_enabled():
             logger.info(
                 f"GDN prefix-state cache {'enabled' if env_pc and vllm_pc else 'disabled'} "
                 f"(QWEN36_PREFIX_CACHE={'1' if env_pc else '0'}, vLLM enable_prefix_caching={vllm_pc})"
             )
-        if batched and model._prefix_cache is None and env_pc and vllm_pc and model.short_prefill_trace_enabled():
+        if snap and model._prefix_cache is None and env_pc and vllm_pc and model.short_prefill_trace_enabled():
             # GDN prefix-state cache (APC): allocates the snapshot slots (+ the B=1 scratch they mirror) NOW, before any
             # prefill/decode trace is captured. The batched slot path is the only one that resumes from snapshots.
             from models.demos.blackhole.qwen36.tt.prefix_cache import GdnPrefixStateCache
 
             model._prefix_cache = GdnPrefixStateCache(model)
         chunked = getattr(self, "_vllm_chunked_prefill", (None, 0, 128))
-        if batched and chunked and model.short_prefill_trace_enabled() and model._chunk_state_cache is None:
+        if snap and chunked and model.short_prefill_trace_enabled() and model._chunk_state_cache is None:
             # Chunked-prefill continuation store: one GDN snapshot per in-flight prompt chunk end (vLLM schedules the
             # running partial prefill first, so normally one at a time). Allocated NOW, before any trace is captured.
             from models.demos.blackhole.qwen36.tt.prefix_cache import GdnPrefixStateCache
