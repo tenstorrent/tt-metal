@@ -227,6 +227,25 @@ def test_optional_output_shape_must_match(device, a_shape, b_shape, out_shape, r
     assert_with_pcc(expected, ttnn.to_torch(out).float(), 0.999)
 
 
+@pytest.mark.parametrize("out_layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
+def test_optional_output_must_be_tile_layout(device, out_layout, expect_error):
+    torch.manual_seed(0)
+    torch_a = torch.randn((1, 1, 64, 128), dtype=torch.bfloat16)
+    torch_b = torch.randn((1, 1, 128, 256), dtype=torch.bfloat16)
+    a = ttnn.from_torch(torch_a, layout=ttnn.TILE_LAYOUT, device=device)
+    b = ttnn.from_torch(torch_b, layout=ttnn.TILE_LAYOUT, device=device)
+    expected = torch.matmul(torch_a.float(), torch_b.float())
+    out = ttnn.from_torch(torch.zeros((1, 1, 64, 256), dtype=torch.bfloat16), layout=out_layout, device=device)
+    if out_layout == ttnn.ROW_MAJOR_LAYOUT:
+        # The matmul program writes tile-sized pages, so a row-major output buffer gets
+        # the right tiles in the wrong places instead of the requested conversion.
+        with expect_error(RuntimeError, "Unsupported optional output tensor layout"):
+            ttnn.matmul(a, b, optional_output_tensor=out)
+        return
+    ttnn.matmul(a, b, optional_output_tensor=out)
+    assert_with_pcc(expected, ttnn.to_torch(out).float(), 0.999)
+
+
 def test_linear_broadcast_bias_into_optional_output(device):
     torch.manual_seed(0)
     torch_a = torch.randn((1, 1, 32, 64), dtype=torch.bfloat16)

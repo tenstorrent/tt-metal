@@ -247,6 +247,16 @@ void validate_matmul_optional_tensors(
             "Type mismatch between optional output tensor {} & output tensor {}",
             optional_output_tensor_c->dtype(),
             attributes.output_dtype.value());
+        // Matmul is a tilized program, so it can only fill a tilized page: the multi-core
+        // compute writes tile-sized blocks into the output buffer, which is not what a
+        // ROW_MAJOR output buffer wants (the last tile of each row is only partly
+        // meaningful, and the row strides are twice the tile height). A caller who wants
+        // ROW_MAJOR output has to untilize the result, the way the op itself does for
+        // untilize_out, or ask for a TILE output and convert afterwards.
+        TT_FATAL(
+            optional_output_tensor_c->layout() == Layout::TILE,
+            "Unsupported optional output tensor layout: {}, has to be TILE",
+            optional_output_tensor_c->layout());
         TT_FATAL(
             optional_output_tensor_c->memory_config() == attributes.output_mem_config,
             "Memory config mismatch between optional output tensor {} & output "
