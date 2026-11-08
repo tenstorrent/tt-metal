@@ -197,3 +197,583 @@
     LLK_PERF_RUN_TYPES: "ALL_MODES"
     PIPELINE: "pr"
     TT_LLK_DISABLE_ASSERTS: "1"
+
+# =============================================================================
+# BH VERIFY MATRIX — transient on fu/verify/bh-matrix branch ONLY
+# 8 legs x 5 groups = 40 jobs. DO NOT merge to main.
+# =============================================================================
+
+# --- ncsol_fwd fwd --------
+- name: bh_verify_ncsol_fwd group 1/5
+  split_group: verify-ncsol-fwd-1
+  team: llk
+  budget_type: perf
+  cmd: |
+    set -euo pipefail
+    export PERF_NC_WC=nc PERF_SOL=sol PERF_ORDER=fwd
+    ./tests/run_llk_perf_blackhole.sh 1 5
+  skus:
+    bh_p150b_civ2:
+      timeout: 180
+  owner_id: U07J3K6KS1K
+  workdir: tt_metal/tt-llk
+
+- name: bh_verify_ncsol_fwd group 2/5
+  split_group: verify-ncsol-fwd-2
+  team: llk
+  budget_type: perf
+  cmd: |
+    set -euo pipefail
+    export PERF_NC_WC=nc PERF_SOL=sol PERF_ORDER=fwd
+    ./tests/run_llk_perf_blackhole.sh 2 5
+  skus:
+    bh_p150b_civ2:
+      timeout: 180
+  owner_id: U07J3K6KS1K
+  workdir: tt_metal/tt-llk
+
+- name: bh_verify_ncsol_fwd group 3/5
+  split_group: verify-ncsol-fwd-3
+  team: llk
+  budget_type: perf
+  cmd: |
+    set -euo pipefail
+    export PERF_NC_WC=nc PERF_SOL=sol PERF_ORDER=fwd
+    ./tests/run_llk_perf_blackhole.sh 3 5
+  skus:
+    bh_p150b_civ2:
+      timeout: 180
+  owner_id: U07J3K6KS1K
+  workdir: tt_metal/tt-llk
+
+- name: bh_verify_ncsol_fwd group 4/5
+  split_group: verify-ncsol-fwd-4
+  team: llk
+  budget_type: perf
+  cmd: |
+    set -euo pipefail
+    export PERF_NC_WC=nc PERF_SOL=sol PERF_ORDER=fwd
+    ./tests/run_llk_perf_blackhole.sh 4 5
+  skus:
+    bh_p150b_civ2:
+      timeout: 180
+  owner_id: U07J3K6KS1K
+  workdir: tt_metal/tt-llk
+
+- name: bh_verify_ncsol_fwd group 5/5
+  split_group: verify-ncsol-fwd-5
+  team: llk
+  budget_type: perf
+  cmd: |
+    set -euo pipefail
+    export PERF_NC_WC=nc PERF_SOL=sol PERF_ORDER=fwd
+    ./tests/run_llk_perf_blackhole.sh 5 5
+  skus:
+    bh_p150b_civ2:
+      timeout: 180
+  owner_id: U07J3K6KS1K
+  workdir: tt_metal/tt-llk
+
+
+# --- ncsol_rev rev --------
+- name: bh_verify_ncsol_rev group 1/5
+  split_group: verify-ncsol-rev-1
+  team: llk
+  budget_type: perf
+  cmd: |
+    set -euo pipefail
+    export PERF_NC_WC=nc PERF_SOL=sol PERF_ORDER=rev
+    ./tests/run_llk_perf_blackhole.sh 1 5
+  skus:
+    bh_p150b_civ2:
+      timeout: 180
+  owner_id: U07J3K6KS1K
+  workdir: tt_metal/tt-llk
+
+- name: bh_verify_ncsol_rev group 2/5
+  split_group: verify-ncsol-rev-2
+  team: llk
+  budget_type: perf
+  cmd: |
+    set -euo pipefail
+    export PERF_NC_WC=nc PERF_SOL=sol PERF_ORDER=rev
+    ./tests/run_llk_perf_blackhole.sh 2 5
+  skus:
+    bh_p150b_civ2:
+      timeout: 180
+  owner_id: U07J3K6KS1K
+  workdir: tt_metal/tt-llk
+
+- name: bh_verify_ncsol_rev group 3/5
+  split_group: verify-ncsol-rev-3
+  team: llk
+  budget_type: perf
+  cmd: |
+    set -euo pipefail
+    export PERF_NC_WC=nc PERF_SOL=sol PERF_ORDER=rev
+    ./tests/run_llk_perf_blackhole.sh 3 5
+  skus:
+    bh_p150b_civ2:
+      timeout: 180
+  owner_id: U07J3K6KS1K
+  workdir: tt_metal/tt-llk
+
+- name: bh_verify_ncsol_rev group 4/5
+  split_group: verify-ncsol-rev-4
+  team: llk
+  budget_type: perf
+  cmd: |
+    set -euo pipefail
+    export PERF_NC_WC=nc PERF_SOL=sol PERF_ORDER=rev
+    ./tests/run_llk_perf_blackhole.sh 4 5
+  skus:
+    bh_p150b_civ2:
+      timeout: 180
+  owner_id: U07J3K6KS1K
+  workdir: tt_metal/tt-llk
+
+- name: bh_verify_ncsol_rev group 5/5
+  split_group: verify-ncsol-rev-5
+  team: llk
+  budget_type: perf
+  cmd: |
+    set -euo pipefail
+    export PERF_NC_WC=nc PERF_SOL=sol PERF_ORDER=rev
+    ./tests/run_llk_perf_blackhole.sh 5 5
+  skus:
+    bh_p150b_civ2:
+      timeout: 180
+  owner_id: U07J3K6KS1K
+  workdir: tt_metal/tt-llk
+
+
+# --- wcsol_fwd fwd --------
+- name: bh_verify_wcsol_fwd group 1/5
+  split_group: verify-wcsol-fwd-1
+  team: llk
+  budget_type: perf
+  cmd: |
+    set -euo pipefail
+    export PERF_NC_WC=wc PERF_SOL=sol PERF_ORDER=fwd
+    ./tests/run_llk_perf_blackhole.sh 1 5
+  skus:
+    bh_p150b_civ2:
+      timeout: 180
+  owner_id: U07J3K6KS1K
+  workdir: tt_metal/tt-llk
+
+- name: bh_verify_wcsol_fwd group 2/5
+  split_group: verify-wcsol-fwd-2
+  team: llk
+  budget_type: perf
+  cmd: |
+    set -euo pipefail
+    export PERF_NC_WC=wc PERF_SOL=sol PERF_ORDER=fwd
+    ./tests/run_llk_perf_blackhole.sh 2 5
+  skus:
+    bh_p150b_civ2:
+      timeout: 180
+  owner_id: U07J3K6KS1K
+  workdir: tt_metal/tt-llk
+
+- name: bh_verify_wcsol_fwd group 3/5
+  split_group: verify-wcsol-fwd-3
+  team: llk
+  budget_type: perf
+  cmd: |
+    set -euo pipefail
+    export PERF_NC_WC=wc PERF_SOL=sol PERF_ORDER=fwd
+    ./tests/run_llk_perf_blackhole.sh 3 5
+  skus:
+    bh_p150b_civ2:
+      timeout: 180
+  owner_id: U07J3K6KS1K
+  workdir: tt_metal/tt-llk
+
+- name: bh_verify_wcsol_fwd group 4/5
+  split_group: verify-wcsol-fwd-4
+  team: llk
+  budget_type: perf
+  cmd: |
+    set -euo pipefail
+    export PERF_NC_WC=wc PERF_SOL=sol PERF_ORDER=fwd
+    ./tests/run_llk_perf_blackhole.sh 4 5
+  skus:
+    bh_p150b_civ2:
+      timeout: 180
+  owner_id: U07J3K6KS1K
+  workdir: tt_metal/tt-llk
+
+- name: bh_verify_wcsol_fwd group 5/5
+  split_group: verify-wcsol-fwd-5
+  team: llk
+  budget_type: perf
+  cmd: |
+    set -euo pipefail
+    export PERF_NC_WC=wc PERF_SOL=sol PERF_ORDER=fwd
+    ./tests/run_llk_perf_blackhole.sh 5 5
+  skus:
+    bh_p150b_civ2:
+      timeout: 180
+  owner_id: U07J3K6KS1K
+  workdir: tt_metal/tt-llk
+
+
+# --- wcsol_rev rev --------
+- name: bh_verify_wcsol_rev group 1/5
+  split_group: verify-wcsol-rev-1
+  team: llk
+  budget_type: perf
+  cmd: |
+    set -euo pipefail
+    export PERF_NC_WC=wc PERF_SOL=sol PERF_ORDER=rev
+    ./tests/run_llk_perf_blackhole.sh 1 5
+  skus:
+    bh_p150b_civ2:
+      timeout: 180
+  owner_id: U07J3K6KS1K
+  workdir: tt_metal/tt-llk
+
+- name: bh_verify_wcsol_rev group 2/5
+  split_group: verify-wcsol-rev-2
+  team: llk
+  budget_type: perf
+  cmd: |
+    set -euo pipefail
+    export PERF_NC_WC=wc PERF_SOL=sol PERF_ORDER=rev
+    ./tests/run_llk_perf_blackhole.sh 2 5
+  skus:
+    bh_p150b_civ2:
+      timeout: 180
+  owner_id: U07J3K6KS1K
+  workdir: tt_metal/tt-llk
+
+- name: bh_verify_wcsol_rev group 3/5
+  split_group: verify-wcsol-rev-3
+  team: llk
+  budget_type: perf
+  cmd: |
+    set -euo pipefail
+    export PERF_NC_WC=wc PERF_SOL=sol PERF_ORDER=rev
+    ./tests/run_llk_perf_blackhole.sh 3 5
+  skus:
+    bh_p150b_civ2:
+      timeout: 180
+  owner_id: U07J3K6KS1K
+  workdir: tt_metal/tt-llk
+
+- name: bh_verify_wcsol_rev group 4/5
+  split_group: verify-wcsol-rev-4
+  team: llk
+  budget_type: perf
+  cmd: |
+    set -euo pipefail
+    export PERF_NC_WC=wc PERF_SOL=sol PERF_ORDER=rev
+    ./tests/run_llk_perf_blackhole.sh 4 5
+  skus:
+    bh_p150b_civ2:
+      timeout: 180
+  owner_id: U07J3K6KS1K
+  workdir: tt_metal/tt-llk
+
+- name: bh_verify_wcsol_rev group 5/5
+  split_group: verify-wcsol-rev-5
+  team: llk
+  budget_type: perf
+  cmd: |
+    set -euo pipefail
+    export PERF_NC_WC=wc PERF_SOL=sol PERF_ORDER=rev
+    ./tests/run_llk_perf_blackhole.sh 5 5
+  skus:
+    bh_p150b_civ2:
+      timeout: 180
+  owner_id: U07J3K6KS1K
+  workdir: tt_metal/tt-llk
+
+
+# --- ncnosol_fwd fwd --------
+- name: bh_verify_ncnosol_fwd group 1/5
+  split_group: verify-ncnosol-fwd-1
+  team: llk
+  budget_type: perf
+  cmd: |
+    set -euo pipefail
+    export PERF_NC_WC=nc PERF_SOL=nosol PERF_ORDER=fwd
+    ./tests/run_llk_perf_blackhole.sh 1 5
+  skus:
+    bh_p150b_civ2:
+      timeout: 300
+  owner_id: U07J3K6KS1K
+  workdir: tt_metal/tt-llk
+
+- name: bh_verify_ncnosol_fwd group 2/5
+  split_group: verify-ncnosol-fwd-2
+  team: llk
+  budget_type: perf
+  cmd: |
+    set -euo pipefail
+    export PERF_NC_WC=nc PERF_SOL=nosol PERF_ORDER=fwd
+    ./tests/run_llk_perf_blackhole.sh 2 5
+  skus:
+    bh_p150b_civ2:
+      timeout: 300
+  owner_id: U07J3K6KS1K
+  workdir: tt_metal/tt-llk
+
+- name: bh_verify_ncnosol_fwd group 3/5
+  split_group: verify-ncnosol-fwd-3
+  team: llk
+  budget_type: perf
+  cmd: |
+    set -euo pipefail
+    export PERF_NC_WC=nc PERF_SOL=nosol PERF_ORDER=fwd
+    ./tests/run_llk_perf_blackhole.sh 3 5
+  skus:
+    bh_p150b_civ2:
+      timeout: 300
+  owner_id: U07J3K6KS1K
+  workdir: tt_metal/tt-llk
+
+- name: bh_verify_ncnosol_fwd group 4/5
+  split_group: verify-ncnosol-fwd-4
+  team: llk
+  budget_type: perf
+  cmd: |
+    set -euo pipefail
+    export PERF_NC_WC=nc PERF_SOL=nosol PERF_ORDER=fwd
+    ./tests/run_llk_perf_blackhole.sh 4 5
+  skus:
+    bh_p150b_civ2:
+      timeout: 300
+  owner_id: U07J3K6KS1K
+  workdir: tt_metal/tt-llk
+
+- name: bh_verify_ncnosol_fwd group 5/5
+  split_group: verify-ncnosol-fwd-5
+  team: llk
+  budget_type: perf
+  cmd: |
+    set -euo pipefail
+    export PERF_NC_WC=nc PERF_SOL=nosol PERF_ORDER=fwd
+    ./tests/run_llk_perf_blackhole.sh 5 5
+  skus:
+    bh_p150b_civ2:
+      timeout: 300
+  owner_id: U07J3K6KS1K
+  workdir: tt_metal/tt-llk
+
+
+# --- ncnosol_rev rev --------
+- name: bh_verify_ncnosol_rev group 1/5
+  split_group: verify-ncnosol-rev-1
+  team: llk
+  budget_type: perf
+  cmd: |
+    set -euo pipefail
+    export PERF_NC_WC=nc PERF_SOL=nosol PERF_ORDER=rev
+    ./tests/run_llk_perf_blackhole.sh 1 5
+  skus:
+    bh_p150b_civ2:
+      timeout: 300
+  owner_id: U07J3K6KS1K
+  workdir: tt_metal/tt-llk
+
+- name: bh_verify_ncnosol_rev group 2/5
+  split_group: verify-ncnosol-rev-2
+  team: llk
+  budget_type: perf
+  cmd: |
+    set -euo pipefail
+    export PERF_NC_WC=nc PERF_SOL=nosol PERF_ORDER=rev
+    ./tests/run_llk_perf_blackhole.sh 2 5
+  skus:
+    bh_p150b_civ2:
+      timeout: 300
+  owner_id: U07J3K6KS1K
+  workdir: tt_metal/tt-llk
+
+- name: bh_verify_ncnosol_rev group 3/5
+  split_group: verify-ncnosol-rev-3
+  team: llk
+  budget_type: perf
+  cmd: |
+    set -euo pipefail
+    export PERF_NC_WC=nc PERF_SOL=nosol PERF_ORDER=rev
+    ./tests/run_llk_perf_blackhole.sh 3 5
+  skus:
+    bh_p150b_civ2:
+      timeout: 300
+  owner_id: U07J3K6KS1K
+  workdir: tt_metal/tt-llk
+
+- name: bh_verify_ncnosol_rev group 4/5
+  split_group: verify-ncnosol-rev-4
+  team: llk
+  budget_type: perf
+  cmd: |
+    set -euo pipefail
+    export PERF_NC_WC=nc PERF_SOL=nosol PERF_ORDER=rev
+    ./tests/run_llk_perf_blackhole.sh 4 5
+  skus:
+    bh_p150b_civ2:
+      timeout: 300
+  owner_id: U07J3K6KS1K
+  workdir: tt_metal/tt-llk
+
+- name: bh_verify_ncnosol_rev group 5/5
+  split_group: verify-ncnosol-rev-5
+  team: llk
+  budget_type: perf
+  cmd: |
+    set -euo pipefail
+    export PERF_NC_WC=nc PERF_SOL=nosol PERF_ORDER=rev
+    ./tests/run_llk_perf_blackhole.sh 5 5
+  skus:
+    bh_p150b_civ2:
+      timeout: 300
+  owner_id: U07J3K6KS1K
+  workdir: tt_metal/tt-llk
+
+
+# --- wcnosol_fwd fwd --------
+- name: bh_verify_wcnosol_fwd group 1/5
+  split_group: verify-wcnosol-fwd-1
+  team: llk
+  budget_type: perf
+  cmd: |
+    set -euo pipefail
+    export PERF_NC_WC=wc PERF_SOL=nosol PERF_ORDER=fwd
+    ./tests/run_llk_perf_blackhole.sh 1 5
+  skus:
+    bh_p150b_civ2:
+      timeout: 300
+  owner_id: U07J3K6KS1K
+  workdir: tt_metal/tt-llk
+
+- name: bh_verify_wcnosol_fwd group 2/5
+  split_group: verify-wcnosol-fwd-2
+  team: llk
+  budget_type: perf
+  cmd: |
+    set -euo pipefail
+    export PERF_NC_WC=wc PERF_SOL=nosol PERF_ORDER=fwd
+    ./tests/run_llk_perf_blackhole.sh 2 5
+  skus:
+    bh_p150b_civ2:
+      timeout: 300
+  owner_id: U07J3K6KS1K
+  workdir: tt_metal/tt-llk
+
+- name: bh_verify_wcnosol_fwd group 3/5
+  split_group: verify-wcnosol-fwd-3
+  team: llk
+  budget_type: perf
+  cmd: |
+    set -euo pipefail
+    export PERF_NC_WC=wc PERF_SOL=nosol PERF_ORDER=fwd
+    ./tests/run_llk_perf_blackhole.sh 3 5
+  skus:
+    bh_p150b_civ2:
+      timeout: 300
+  owner_id: U07J3K6KS1K
+  workdir: tt_metal/tt-llk
+
+- name: bh_verify_wcnosol_fwd group 4/5
+  split_group: verify-wcnosol-fwd-4
+  team: llk
+  budget_type: perf
+  cmd: |
+    set -euo pipefail
+    export PERF_NC_WC=wc PERF_SOL=nosol PERF_ORDER=fwd
+    ./tests/run_llk_perf_blackhole.sh 4 5
+  skus:
+    bh_p150b_civ2:
+      timeout: 300
+  owner_id: U07J3K6KS1K
+  workdir: tt_metal/tt-llk
+
+- name: bh_verify_wcnosol_fwd group 5/5
+  split_group: verify-wcnosol-fwd-5
+  team: llk
+  budget_type: perf
+  cmd: |
+    set -euo pipefail
+    export PERF_NC_WC=wc PERF_SOL=nosol PERF_ORDER=fwd
+    ./tests/run_llk_perf_blackhole.sh 5 5
+  skus:
+    bh_p150b_civ2:
+      timeout: 300
+  owner_id: U07J3K6KS1K
+  workdir: tt_metal/tt-llk
+
+
+# --- wcnosol_rev rev --------
+- name: bh_verify_wcnosol_rev group 1/5
+  split_group: verify-wcnosol-rev-1
+  team: llk
+  budget_type: perf
+  cmd: |
+    set -euo pipefail
+    export PERF_NC_WC=wc PERF_SOL=nosol PERF_ORDER=rev
+    ./tests/run_llk_perf_blackhole.sh 1 5
+  skus:
+    bh_p150b_civ2:
+      timeout: 300
+  owner_id: U07J3K6KS1K
+  workdir: tt_metal/tt-llk
+
+- name: bh_verify_wcnosol_rev group 2/5
+  split_group: verify-wcnosol-rev-2
+  team: llk
+  budget_type: perf
+  cmd: |
+    set -euo pipefail
+    export PERF_NC_WC=wc PERF_SOL=nosol PERF_ORDER=rev
+    ./tests/run_llk_perf_blackhole.sh 2 5
+  skus:
+    bh_p150b_civ2:
+      timeout: 300
+  owner_id: U07J3K6KS1K
+  workdir: tt_metal/tt-llk
+
+- name: bh_verify_wcnosol_rev group 3/5
+  split_group: verify-wcnosol-rev-3
+  team: llk
+  budget_type: perf
+  cmd: |
+    set -euo pipefail
+    export PERF_NC_WC=wc PERF_SOL=nosol PERF_ORDER=rev
+    ./tests/run_llk_perf_blackhole.sh 3 5
+  skus:
+    bh_p150b_civ2:
+      timeout: 300
+  owner_id: U07J3K6KS1K
+  workdir: tt_metal/tt-llk
+
+- name: bh_verify_wcnosol_rev group 4/5
+  split_group: verify-wcnosol-rev-4
+  team: llk
+  budget_type: perf
+  cmd: |
+    set -euo pipefail
+    export PERF_NC_WC=wc PERF_SOL=nosol PERF_ORDER=rev
+    ./tests/run_llk_perf_blackhole.sh 4 5
+  skus:
+    bh_p150b_civ2:
+      timeout: 300
+  owner_id: U07J3K6KS1K
+  workdir: tt_metal/tt-llk
+
+- name: bh_verify_wcnosol_rev group 5/5
+  split_group: verify-wcnosol-rev-5
+  team: llk
+  budget_type: perf
+  cmd: |
+    set -euo pipefail
+    export PERF_NC_WC=wc PERF_SOL=nosol PERF_ORDER=rev
+    ./tests/run_llk_perf_blackhole.sh 5 5
+  skus:
+    bh_p150b_civ2:
+      timeout: 300
+  owner_id: U07J3K6KS1K
+  workdir: tt_metal/tt-llk
