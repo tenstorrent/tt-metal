@@ -38,8 +38,8 @@ using namespace ckernel::gguf;
 template <int FMT>
 struct traits
 {
-    static constexpr int lo      = FMT == Q8_0 ? 8 : (FMT == Q3_K || FMT == Q2_K || FMT == TQ2_0 || FMT == Q2_0) ? 2 : FMT == Q1_0 ? 1 : 4;
-    static constexpr int hi      = (FMT == Q5_K || FMT == Q3_K || FMT == Q5_0 || FMT == Q5_1) ? 1 : FMT == Q6_K ? 2 : 0;
+    static constexpr int lo      = static_cast<int>(code_lo_bits(static_cast<Format>(FMT)));
+    static constexpr int hi      = static_cast<int>(code_hi_bits(static_cast<Format>(FMT)));
     static constexpr bool pair   = FMT == Q5_K || FMT == Q3_K || FMT == Q1_0 || FMT == Q5_0 || FMT == Q5_1;
     static constexpr bool has_h  = FMT == NVFP4 || FMT == Q6_K || FMT == Q3_K || FMT == Q2_K;
     static constexpr bool linear = !(FMT == IQ4_NL || FMT == IQ4_XS || FMT == MXFP4 || FMT == NVFP4);
@@ -210,6 +210,18 @@ inline void sfpu_gguf_decode_start(const std::uint32_t dst_index, const std::uin
 inline void sfpu_gguf_decode_done()
 {
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
+}
+
+// Float32 zeros in DEST tile dst_index, e.g. the accumulator of the DEST-fed matmul.
+inline void sfpu_gguf_zero_tile(const std::uint32_t dst_index)
+{
+    sfpu_gguf_decode_start(dst_index, 0);
+#pragma GCC unroll 8
+    for (int i = 0; i < 32; i++)
+    {
+        sfpi::dst_reg[i] = 0.0f;
+    }
+    sfpu_gguf_decode_done();
 }
 
 template <int FMT, int TI, bool PARAMS, bool BODY, bool BESIDE_UNPACK>

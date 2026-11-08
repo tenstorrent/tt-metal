@@ -51,9 +51,8 @@ sfpi_inline vFloat ue4m3_half(const vUInt x7)
 // -2 S, -8 S on [0, .5), [.5, 1), [1, 1.5), [1.5, 2) (S = the scale times 0.5: values kv S, kv the doubled E2M1
 // magnitude), and 0 from 2 on, where a code of sign 1 and magnitude 0 lands (-0). NVFP4's table holds its scale; each
 // output is one SFPLOADMACRO: load x, the table into LReg16, store over the output in place. Without SFPLOADMACRO:
-// load, table, store. The page (its scale row, scratch around it) is in the next DEST tile.
-template <int FMT>
-constexpr bool fp4_bfp = FMT == NVFP4 || FMT == MXFP4;
+// load, table, store. The page (its scale row, scratch around it) is in the next DEST tile. fp4_bfp, FP4_CODE_EXP:
+// experimental/ckernel_gguf_page.h.
 
 // NVFP4: table words of group p = pidx(a, b, h), BFP_PS + 3 p + 0..2; MXFP4: S of (a, b), BFP_PS + pidx(a, b, 0).
 constexpr int BFP_PS = CO + 8;

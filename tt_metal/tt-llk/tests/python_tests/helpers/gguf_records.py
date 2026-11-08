@@ -3,8 +3,8 @@
 
 """GGUF weights as the Blackhole SFPU decoders read them.
 
-tt_llk_blackhole/common/inc/experimental/ckernel_gguf_page.h describes the pages and
-sfpu/experimental/ckernel_sfpu_gguf_decode.h each format's rows. This module builds, for an [N, K] weight:
+tt_llk_blackhole/common/inc/experimental/ckernel_gguf_page.h describes the pages (FORMATS reads its format ids and
+layouts) and sfpu/experimental/ckernel_sfpu_gguf_decode.h each format's rows. This module builds, for an [N, K] weight:
   - random ggml blocks (random code bits, finite scale fields);
   - its records: the GGUF bytes regrouped per 32-column N tile and group of K tiles, the size of the GGUF tensor;
   - the L1 pages a reader assembles from the records (code bytes at code_offset, the group's scale fields at
@@ -16,15 +16,46 @@ SFPU output o of lane (r, c) is element k = 16 (o / 16) + 4 ((o / 2) % 4) + r, n
 covers columns 16p + 2c + b.
 """
 
+import re
 from dataclasses import dataclass
+from pathlib import Path
 
 import numpy as np
 from gguf import GGMLQuantizationType, quants
 
+# helpers -> python_tests -> tests -> tt-llk
+_PAGE_H = (
+    Path(__file__).resolve().parents[3]
+    / "tt_llk_blackhole/common/inc/experimental/ckernel_gguf_page.h"
+)
+
+
+def _layout_args(values):
+    """make_layout's arguments, code_offset (default 0) included."""
+    args = tuple(int(a) for a in values.split(","))
+    return args + (0,) * (6 - len(args))
+
+
+def _header_layouts():
+    """The format ids and page_layout arguments of ckernel_gguf_page.h (the one table of the page layouts)."""
+    text = _PAGE_H.read_text()
+    ids = {name: int(v) for name, v in re.findall(r"^\s+(\w+)\s+= (\d+),$", text, re.M)}
+    args = {
+        name: _layout_args(values)
+        for name, values in re.findall(
+            r"case (\w+):\s+return make_layout\(([^)]*)\);", text
+        )
+    }
+    assert ids and set(ids) == set(args), f"{_PAGE_H}: format ids and layouts differ"
+    return ids, args
+
+
+_IDS, _LAYOUTS = _header_layouts()
+
 
 @dataclass(frozen=True)
 class GgufFormat:
-    """One decoder format; the numbers mirror ckernel_gguf_page.h page_layout."""
+    """One decoder format: GGUF block size and bytes, the page layout of ckernel_gguf_page.h."""
 
     name: str
     id: int  # ckernel::gguf::Format
@@ -72,34 +103,41 @@ class GgufFormat:
         return 8 * self.block_bytes / self.block_elems
 
 
+def _format(name, block_elems, block_bytes, table_entries=0):
+    layout = _LAYOUTS[name]
+    return GgufFormat(
+        name, _IDS[name], block_elems, block_bytes, *layout, table_entries
+    )
+
+
 FORMATS = {
     f.name: f
     for f in (
-        GgufFormat("Q8_0", 1, 32, 34, 1, 1, 1024, 1, 0),
-        GgufFormat("Q4_0", 2, 32, 18, 1, 1, 512, 1, 0),
-        GgufFormat("IQ4_NL", 3, 32, 18, 1, 1, 512, 1, 0),
-        GgufFormat("MXFP4", 4, 32, 17, 2, 1, 512, 1, 0),
-        GgufFormat("NVFP4", 5, 64, 36, 1, 1, 512, 1, 0),
-        GgufFormat("Q6_K", 6, 256, 210, 8, 1, 768, 9, 1),
-        GgufFormat("Q4_K", 7, 256, 144, 8, 1, 512, 8, 0),
-        GgufFormat("Q5_K", 8, 256, 176, 8, 2, 1280, 8, 0),
-        GgufFormat("Q3_K", 9, 256, 110, 8, 2, 768, 7, 0),
-        GgufFormat("Q2_K", 10, 256, 84, 8, 1, 256, 10, 0),
-        GgufFormat("IQ4_XS", 11, 256, 136, 8, 1, 512, 4, 1),
-        GgufFormat("TQ2_0", 12, 256, 66, 8, 1, 256, 1, 0),
-        GgufFormat("Q2_0", 13, 64, 18, 2, 1, 256, 1, 0),
-        GgufFormat("Q1_0", 14, 128, 18, 4, 2, 256, 1, 0),
-        GgufFormat("IQ2_XXS", 15, 256, 66, 8, 1, 256, 1, 1, 256, 256),
-        GgufFormat("IQ1_S", 16, 256, 50, 8, 1, 192, 1, 1, 256, 2048),
-        GgufFormat("IQ2_S", 17, 256, 82, 8, 1, 320, 1, 1, 256, 1024),
-        GgufFormat("IQ3_S", 18, 256, 110, 8, 1, 432, 1, 1, 512, 512),
-        GgufFormat("IQ3_XXS", 19, 256, 98, 8, 1, 384, 1, 1, 512, 256),
-        GgufFormat("IQ2_XS", 20, 256, 74, 8, 1, 256, 5, 1, 256, 512),
-        GgufFormat("IQ1_M", 21, 256, 56, 8, 1, 192, 4, 1, 256, 2048),
-        GgufFormat("Q4_1", 22, 32, 20, 1, 1, 512, 2, 0),
-        GgufFormat("Q5_0", 23, 32, 22, 2, 2, 1280, 2, 0),
-        GgufFormat("Q5_1", 24, 32, 24, 2, 2, 1280, 4, 0),
-        GgufFormat("TQ1_0", 25, 256, 54, 8, 8, 1536, 3, 0),
+        _format("Q8_0", 32, 34),
+        _format("Q4_0", 32, 18),
+        _format("IQ4_NL", 32, 18),
+        _format("MXFP4", 32, 17),
+        _format("NVFP4", 64, 36),
+        _format("Q6_K", 256, 210),
+        _format("Q4_K", 256, 144),
+        _format("Q5_K", 256, 176),
+        _format("Q3_K", 256, 110),
+        _format("Q2_K", 256, 84),
+        _format("IQ4_XS", 256, 136),
+        _format("TQ2_0", 256, 66),
+        _format("Q2_0", 64, 18),
+        _format("Q1_0", 128, 18),
+        _format("IQ2_XXS", 256, 66, 256),
+        _format("IQ1_S", 256, 50, 2048),
+        _format("IQ2_S", 256, 82, 1024),
+        _format("IQ3_S", 256, 110, 512),
+        _format("IQ3_XXS", 256, 98, 256),
+        _format("IQ2_XS", 256, 74, 512),
+        _format("IQ1_M", 256, 56, 2048),
+        _format("Q4_1", 32, 20),
+        _format("Q5_0", 32, 22),
+        _format("Q5_1", 32, 24),
+        _format("TQ1_0", 256, 54),
     )
 }
 
