@@ -34,6 +34,7 @@ from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config, 
 from models.demos.deepseek_v3_d_p.tests.kda.checkpoint_utils import load_kda_layer_state_dict, resolve_model_root
 from models.demos.deepseek_v3_d_p.tt.kda.config import KIMI_K3_PROJECTION_DTYPE
 from models.demos.deepseek_v3_d_p.tt.kda.weights import current_cache_globs as kda_current_cache_globs
+import models.demos.deepseek_v3_d_p.tt.kda.weights as kda_weights_module
 
 # What each TT module reads out of a layer's state dict. Kept here rather than inline so the map
 # from checkpoint name to TT name is in one place and can be read against the modules.
@@ -262,9 +263,16 @@ def _marker_exists(root: Path | None, layer_idx: int) -> bool:
 def _kda_cache_current(root: Path, layer_idx: int) -> bool:
     """Whether every KDA tensorbin of this layer is in the current KDA cache format, projections at
     `KIMI_K3_PROJECTION_DTYPE`."""
-    return all(
+    prefix = f"layer_{layer_idx}.kda"
+    if all(
         any(root.glob(pattern))
-        for pattern in kda_current_cache_globs(f"layer_{layer_idx}.kda", kimi_k3_kda_config(), KIMI_K3_PROJECTION_DTYPE)
+        for pattern in kda_current_cache_globs(prefix, kimi_k3_kda_config(), KIMI_K3_PROJECTION_DTYPE)
+    ):
+        return True
+    # (KDA_CACHE_V2_FALLBACK: a layer whose KDA tensorbins are all v2 loads them - kda/weights.py V2_FALLBACK)
+    return kda_weights_module.V2_FALLBACK and all(
+        any(root.glob(pattern))
+        for pattern in kda_weights_module.v2_cache_globs(prefix, kimi_k3_kda_config(), KIMI_K3_PROJECTION_DTYPE)
     )
 
 

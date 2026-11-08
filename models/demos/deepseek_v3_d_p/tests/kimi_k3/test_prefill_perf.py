@@ -125,6 +125,7 @@ def test_prefill_cost(mesh_device, device_params, num_layers, num_chunks):
         weight_cache_path=cache,
         # Dense KV dedup needs the chunked path.
         tp_shard_kv=num_chunks > 1,
+        moe_impl="ttmoe",  # (TtMoe: this test opens its mesh without the MoE block's L1_SMALL / payload)
     )
 
     slabs = attach_kda_states(mesh_device, model, sp_axis=SP_AXIS, tp_axis=TP_AXIS)
