@@ -4560,3 +4560,6 @@ LoFi,Bfp8_b,Float16_b,Float32,2,1,8,0,True,True,1,perf_matmul_grid(fix3),0.13,,T
 LoFi,Float16_b,Float16_b,Bfp8_b,4,2,4,0,False,False,1,perf_matmul_row_mop(fix3),6.43,,True,True,main,Half,
 LoFi,Float32,Bfp8_b,Float16_b,1,2,3,0,False,False,1,perf_matmul_grid,0.797,0.0,True,False,pt,Half,
 HiFi2,Bfp8_b,Bfp8_b,Bfp8_b,4,2,4,0,False,False,1,dyn1(fix3),0.22,,True,True,main,Half,
+HiFi2,Float16_b,Float16_b,Bfp8_b,2,1,1,0,False,False,1,perf_matmul_unpack_ttsync(fix3),0.66,,True,True,main,Half,
+HiFi3,Float32,Float32,Float32,1,1,1,0,False,True,1,perf_matmul_unpack_ttsync(fix3),0.92,,True,True,main,Half,
+LoFi,Float16_b,Float16_b,Float32,2,2,1,0,False,True,1,perf_matmul_unpack_ttsync(fix3),1.93,,True,True,main,Half,
