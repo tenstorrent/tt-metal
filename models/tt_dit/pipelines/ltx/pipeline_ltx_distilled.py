@@ -118,19 +118,52 @@ def _s1_pin_strength(
 
 
 # Ref+fl end guide (LTX_REF_FL_END_GUIDE; sulphur task #3360): x0 pull toward the given last frame for the latent
-# frames before it, nearest first. "1" takes this default; "a,b,..." sets them; unset, "" or "0" is off.
+# frames before it, nearest first. "1" takes this default; "a,b,..." sets them; unset, "" or "0" is off. A
+# "pin:s" item instead (or as well) softens the last frame's own pin to strength s (apply_ref_fl_end_softpin).
 REF_FL_END_GUIDE_DEFAULT = (0.5, 0.25)
 
 
 def _ref_fl_end_guide_strengths(raw: str | None) -> tuple[float, ...]:
     """Guide strengths from LTX_REF_FL_END_GUIDE (see REF_FL_END_GUIDE_DEFAULT), each clamped to [0, 1];
-    () is off."""
+    () is off. "pin:s" items are the soft pin's, not guide strengths."""
     raw = (raw or "").strip()
     if raw in ("", "0", "false", "False"):
         return ()
     if raw in ("1", "true", "True"):
         return REF_FL_END_GUIDE_DEFAULT
-    return tuple(max(0.0, min(1.0, float(v))) for v in raw.split(",") if v.strip())
+    items = [v.strip() for v in raw.split(",") if v.strip() and not v.strip().startswith("pin:")]
+    return tuple(max(0.0, min(1.0, float(v))) for v in items)
+
+
+def _ref_fl_end_softpin(raw: str | None) -> float | None:
+    """The last frame's soft-pin strength from a "pin:s" item of LTX_REF_FL_END_GUIDE, clamped to [0, 1); None
+    is off (the hard pin)."""
+    for v in (raw or "").split(","):
+        v = v.strip()
+        if v.startswith("pin:"):
+            return max(0.0, min(0.999, float(v[4:])))
+    return None
+
+
+def apply_ref_fl_end_softpin(clean_latent, denoise_mask, pin_rows, conds, latent_frames, hw, strength):
+    """Soften a ref+fl gen's hard last-frame pin (task #3360, variant "pin:s").
+
+    The hard pin keeps the last latent frame at the given frame at timestep 0 from the first step, so the
+    frames before it run their own way and snap to it at the end. Here its rows leave ``pin_rows`` (free AdaLN
+    timestep, so the model denoises the frame with its neighbours) and keep the given frame as an x0 target at
+    ``strength`` every step (``denoise_mask`` = 1 - strength): the last frame ends as ``strength`` x given +
+    (1 - strength) x the model's own estimate. Edits ``pin_rows``/``denoise_mask`` in place (``clean_latent``
+    already holds the frame) and returns the soft rows ``[N]`` bool, or None when the last frame is not
+    conditioned in place."""
+    last = latent_frames - 1
+    off = last * hw
+    if not any(c[0] == last for c in conds) or not bool(pin_rows[off : off + hw].all()):
+        return None
+    pin_rows[off : off + hw] = False
+    denoise_mask[:, off : off + hw, :] = 1.0 - strength
+    soft_rows = torch.zeros(pin_rows.shape[0], dtype=torch.bool)
+    soft_rows[off : off + hw] = True
+    return soft_rows
 
 
 def apply_ref_fl_end_guide(clean_latent, denoise_mask, pin_rows, conds, latent_frames, hw, strengths):
@@ -1573,9 +1606,18 @@ class LTXDistilledPipeline(LTXPipeline):
                 latent_w,
                 append_interior=append_interior,
             )
+        soft_rows = None
         if has_ref and image_conds:
-            # Ref+fl end guide (task #3360): values-only edit of the trace-baked mask/clean buffers.
-            guide = _ref_fl_end_guide_strengths(os.environ.get("LTX_REF_FL_END_GUIDE"))
+            # Ref+fl end guide (task #3360): values-only edit of the trace-baked mask/clean/pin buffers.
+            guide_raw = os.environ.get("LTX_REF_FL_END_GUIDE")
+            softpin = _ref_fl_end_softpin(guide_raw)
+            if softpin is not None:
+                soft_rows = apply_ref_fl_end_softpin(
+                    i2v.clean_latent, i2v.denoise_mask, i2v.pin_rows, image_conds, latent_frames, hw, softpin
+                )
+                if soft_rows is not None:
+                    logger.info(f"  ref+fl end soft pin: last latent frame at strength {softpin}")
+            guide = _ref_fl_end_guide_strengths(guide_raw)
             if guide:
                 i2v.guide_rows = apply_ref_fl_end_guide(
                     i2v.clean_latent, i2v.denoise_mask, i2v.pin_rows, image_conds, latent_frames, hw, guide
@@ -1638,6 +1680,8 @@ class LTXDistilledPipeline(LTXPipeline):
             # pin_rows now indexes frame-0 (in-place) and/or the appended anchor block; a free interior
             # frame keeps its base value (zeros=noise at S1, the upsampled latent at S2).
             base_v[:, i2v.pin_rows, :] = i2v.clean_latent[:, i2v.pin_rows, :]
+            if soft_rows is not None:  # soft-pinned last frame starts from the given frame, noised at 1 - s
+                base_v[:, soft_rows, :] = i2v.clean_latent[:, soft_rows, :]
         elif initial_video_latent_device is not None:  # T2V S2, device-resident: handled below
             base_v = None
         elif initial_video_latent is not None:  # T2V S2: upsampled latent arrives at (B, video_N_real, C)
