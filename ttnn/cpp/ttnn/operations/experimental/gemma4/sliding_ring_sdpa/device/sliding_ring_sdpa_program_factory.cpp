@@ -184,6 +184,26 @@ std::vector<uint32_t> halo_collected_arrival_keys(
     return keys;
 }
 
+// The collector waits once per key, so each key must name its own counter. Semaphore handles aren't in the
+// program hash, so this runs at program creation and on every cache hit.
+template <typename Semaphores>
+void validate_halo_arrival_semaphores(const Semaphores& semaphores, const std::vector<uint32_t>& keys) {
+    std::set<uint32_t> addresses;
+    for (const uint32_t key : keys) {
+        TT_FATAL(
+            halo_rt::kHaloArrivalSemaphoreBase + key < semaphores.size(),
+            "Sliding halo needs halo arrival semaphore {}, got {} semaphores",
+            key,
+            semaphores.size());
+        addresses.insert(static_cast<uint32_t>(semaphores[halo_rt::kHaloArrivalSemaphoreBase + key].address()));
+    }
+    TT_FATAL(
+        addresses.size() == keys.size(),
+        "Sliding halo needs a distinct arrival semaphore per predecessor: {} predecessors, {} distinct semaphores",
+        keys.size(),
+        addresses.size());
+}
+
 // A one-hop or multicast halo spreads each exchange over every link; a unicast multi-hop halo gives each
 // hop one link.
 uint32_t halo_links_per_exchange(
@@ -447,6 +467,7 @@ void apply_ring_joint_scalar_runtime_args(
     };
     const auto collected_keys =
         halo_collected_arrival_keys(runtime_chunked_sliding_layout, ring_write_plan.transport_rank);
+    validate_halo_arrival_semaphores(semaphores, collected_keys);
     for (uint32_t exchange = 0; exchange < halo_exchanges.size(); ++exchange) {
         const uint32_t writer_address = arrival_semaphore_address(halo_arrival_key(
             runtime_chunked_sliding_layout, ring_write_plan.transport_rank, halo_exchanges[exchange].hop));
@@ -2215,12 +2236,8 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
             .initial_value = 0,
         });
     }
-    // The collector waits once per key, so a receiver's predecessors must not share one.
     const auto collector_keys = halo_collected_arrival_keys(chunked_sliding_halo_layout, transport_rank);
-    TT_FATAL(
-        std::set<uint32_t>(collector_keys.begin(), collector_keys.end()).size() == collector_keys.size(),
-        "Sliding halo predecessors of ring device {} share an arrival key",
-        transport_rank);
+    validate_halo_arrival_semaphores(ag_attrs.semaphore, collector_keys);
     for (uint32_t exchange = 0; exchange < halo_exchange_count; ++exchange) {
         const auto& plan = halo_exchanges[exchange];
         const uint32_t destination_rank = (transport_rank + plan.hop) % ring_size;
