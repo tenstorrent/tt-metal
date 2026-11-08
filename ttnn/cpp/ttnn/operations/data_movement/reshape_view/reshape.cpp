@@ -757,9 +757,16 @@ ttnn::Tensor reshape_dispatch(
     // A metadata-only view keeps the input's buffer, so it only needs matching sharded-ness and
     // L1/DRAM placement. Full MemoryConfig equality is deliberately avoided: operator== is
     // provenance-sensitive and would force needless reshards on functionally-identical configs.
+    // A view can never change the shard spec either, since the buffer it keeps carries the input's
+    // own, so an explicit request for a functionally different sharded config is routed through the
+    // reshape path below instead of being silently dropped. Compared functionally rather than with
+    // operator== for the provenance reason above: a caller that passes the tensor's own config back,
+    // or one built from an equivalent NdShardSpec, still takes this view.
     bool this_is_view =
         (tensor_shape_last_dim == shape_last_dim) && (mem_config.is_sharded() == tensor.memory_config().is_sharded()) &&
         (mem_config.is_l1() == tensor.memory_config().is_l1()) &&
+        (!explicit_memory_config ||
+         operations::data_movement::is_functionally_same_memory_config(mem_config, tensor.memory_config())) &&
         ((tensor.layout() == ttnn::ROW_MAJOR_LAYOUT) ||              // Its row major
          (tensor_shape_second_last_dim == shape_second_last_dim) ||  // Second last dimension is the same
          (shape_second_last_dim % tile_second_dim == 0 &&
