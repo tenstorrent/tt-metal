@@ -4769,6 +4769,12 @@ _SAME_GRID_DIFFERENT_SPEC_CASES = [
     ),
     pytest.param(
         (64, 64),
+        _l1_sharded(ttnn.TensorMemoryLayout.BLOCK_SHARDED, [32, 64], _GRID_2x2),
+        _l1_sharded(ttnn.TensorMemoryLayout.BLOCK_SHARDED, [64, 32], _GRID_2x2),
+        id="same_layout_different_shard_shape",
+    ),
+    pytest.param(
+        (64, 64),
         _l1_sharded(ttnn.TensorMemoryLayout.BLOCK_SHARDED, [32, 32], _GRID_2x2),
         _l1_sharded(ttnn.TensorMemoryLayout.BLOCK_SHARDED, [32, 32], _GRID_2x2, ttnn.ShardOrientation.COL_MAJOR),
         id="row_major_to_col_major",
