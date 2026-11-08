@@ -18,6 +18,7 @@
 #include "hostdev/fabric_edm_packet_header.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_worker_adapters.hpp"
 #include "tt_metal/fabric/hw/inc/packet_header_pool.h"
+#include "tt_metal/fabric/hw/inc/linear/addrgen_api.h"
 #include "ttnn/operations/ccl/kernel_common/worker_routing_utils.hpp"
 #include "fabric_all_gather_common.hpp"
 
@@ -143,10 +144,12 @@ void kernel_main() {
                 outgoing_shard_chunk_half(outgoing_shard),
                 [&](uint32_t outer_slice, uint32_t page_in_slice, uint32_t num_pages) {
                     chunk_cb.wait_front(pages_per_fabric_chunk * (chunks_in_batch + 1));
-                    const uint64_t dst_noc_addr = output.get_noc_addr(
-                        output_page_index(geometry, outgoing_shard_rank(outgoing_shard), outer_slice, page_in_slice),
-                        0,
-                        0);
+                    // Through the fabric's helper, as every address a packet carries must be: the router on the
+                    // destination chip writes it on ITS NoC, and on Blackhole each DRAM bank has a different
+                    // endpoint per NoC, so a NOC0-resolved address puts NOC1 traffic on the NOC0 endpoint (SYS-1419).
+                    const uint64_t dst_noc_addr = tt::tt_fabric::linear::addrgen_detail::get_noc_address(
+                        output,
+                        output_page_index(geometry, outgoing_shard_rank(outgoing_shard), outer_slice, page_in_slice));
                     const uint32_t chunk_slot = chunk_cb.get_read_ptr() + chunks_in_batch * fabric_chunk_bytes;
                     const uint32_t chunk_payload_bytes = num_pages * page_bytes;
                     const bool last_chunk_of_shard = ++chunks_sent == shard_fabric_chunks;
