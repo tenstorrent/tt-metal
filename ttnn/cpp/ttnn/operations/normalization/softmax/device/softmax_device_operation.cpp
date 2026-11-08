@@ -859,11 +859,14 @@ Tensor softmax(
             std::size_t program_config;
             std::uint64_t l1_capacity;
             std::uint64_t l1_bank;
+            std::size_t grid_x;
+            std::size_t grid_y;
             bool operator==(const BhPlanKey&) const = default;
         };
         auto* device = input_tensor.device();
         const auto& in_mem = input_tensor.memory_config();
         const auto& tile = input_tensor.tensor_spec().tile();
+        const auto grid = device->compute_with_storage_grid_size();
         const BhPlanKey key{
             factory.index(),
             device,
@@ -886,7 +889,9 @@ Tensor softmax(
             is_scale_causal_mask_hw_dims_softmax,
             program_config.index(),
             ttnn::operations::core::usable_program_l1_capacity(device),
-            device->allocator()->get_bank_size(BufferType::L1)};
+            device->allocator()->get_bank_size(BufferType::L1),
+            grid.x,
+            grid.y};
         thread_local std::optional<std::pair<BhPlanKey, SoftmaxInterleavedPlan>> last;
         if (!last || !(last->first == key)) {
             last.emplace(

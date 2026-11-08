@@ -78,3 +78,33 @@ def test_softmax_row_width_thresholds(device, width, dtypes, numeric_stable):
 @pytest.mark.parametrize("shape", [(1, 12, 384, 384), (8, 12, 128, 128), (1, 1, 32, 8192)])
 def test_scale_mask_softmax_wide_rows(device, shape, dtypes, numeric_stable):
     _softmax_check(device, shape, dtypes, numeric_stable, scale=0.125, mask_shape=(shape[0], 1, 32, shape[-1]))
+
+
+def _run_softmax(device, shape, ttnn_dtype, torch_dtype, memory_config, numeric_stable):
+    torch.manual_seed(0)
+    x = (torch.randn(shape) * 4).to(torch_dtype)
+    x_tt = ttnn.from_torch(x, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device, memory_config=memory_config)
+    out = ttnn.to_torch(ttnn.softmax(x_tt, dim=-1, numeric_stable=numeric_stable))
+    assert_with_pcc(torch.softmax(x.float(), dim=-1), out.float(), 0.999)
+    return out
+
+
+def test_softmax_repeated_calls_change_config(device):
+    bf16, fp32 = DTYPES
+    configs = [
+        ((1, 1, 32, 2048), bf16, ttnn.DRAM_MEMORY_CONFIG, True),
+        ((1, 1, 32, 2048), fp32, ttnn.DRAM_MEMORY_CONFIG, True),
+        ((1, 1, 32, 2048), bf16, ttnn.L1_MEMORY_CONFIG, True),
+        ((1, 1, 32, 2048), bf16, ttnn.DRAM_MEMORY_CONFIG, False),
+        ((1, 1, 128, 2048), bf16, ttnn.DRAM_MEMORY_CONFIG, True),
+        ((1, 1, 32, 256), fp32, ttnn.DRAM_MEMORY_CONFIG, True),
+        ((1, 1, 32, 16384), bf16, ttnn.DRAM_MEMORY_CONFIG, True),
+    ]
+    reference = []
+    for shape, (tt_dtype, th_dtype), mem, stable in configs:
+        _run_softmax(device, (1, 1, 32, 64), ttnn.bfloat16, torch.bfloat16, ttnn.DRAM_MEMORY_CONFIG, True)
+        reference.append(_run_softmax(device, shape, tt_dtype, th_dtype, mem, stable))
+    order = [0, 1, 0, 2, 0, 3, 1, 2, 4, 0, 5, 1, 6, 0, 3, 2, 5, 6, 4]
+    for i in order:
+        shape, (tt_dtype, th_dtype), mem, stable = configs[i]
+        assert torch.equal(_run_softmax(device, shape, tt_dtype, th_dtype, mem, stable), reference[i])
