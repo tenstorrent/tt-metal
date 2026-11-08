@@ -68,32 +68,23 @@ inline void log1p_replay_body() {
     } else {
         TTI_SFPNOP;
     }
-    if constexpr (Degree == 2) {
-        TTI_SFPMAD(
-            ckernel::p_sfpu::LREG13,
-            ckernel::p_sfpu::LREG1,
-            ckernel::p_sfpu::LREG14,
-            ckernel::p_sfpu::LREG3,
-            0);  // p = c2*r + c1 [MAD]
-        if constexpr (Normalized) {
-            TTI_SFPAND(0, ckernel::p_sfpu::LREG5, ckernel::p_sfpu::LREG4, 0);
-        } else {
-            TTI_SFPNOP;
-        }
-        TTI_SFPMAD(
-            ckernel::p_sfpu::LREG3,
-            ckernel::p_sfpu::LREG1,
-            ckernel::p_sfpu::LREG7,
-            ckernel::p_sfpu::LREG3,
-            0);  // p = p*r + c0 [MAD]
+    TTI_SFPMAD(
+        ckernel::p_sfpu::LREG13,
+        ckernel::p_sfpu::LREG1,
+        ckernel::p_sfpu::LREG14,
+        ckernel::p_sfpu::LREG3,
+        0);  // p = c2*r + c1 [MAD]
+    if constexpr (Normalized) {
+        TTI_SFPAND(0, ckernel::p_sfpu::LREG5, ckernel::p_sfpu::LREG4, 0);
     } else {
-        TTI_SFPMAD(
-            ckernel::p_sfpu::LREG13,
-            ckernel::p_sfpu::LREG1,
-            ckernel::p_sfpu::LREG14,
-            ckernel::p_sfpu::LREG3,
-            0);  // p = c1*r + c0 [MAD]
+        TTI_SFPNOP;
     }
+    TTI_SFPMAD(
+        ckernel::p_sfpu::LREG3,
+        ckernel::p_sfpu::LREG1,
+        ckernel::p_sfpu::LREG7,
+        ckernel::p_sfpu::LREG3,
+        0);  // p = p*r + c0 [MAD]
     TTI_SFPMUL(
         ckernel::p_sfpu::LREG1,
         ckernel::p_sfpu::LREG1,
