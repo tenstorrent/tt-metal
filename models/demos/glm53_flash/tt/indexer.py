@@ -313,6 +313,17 @@ class TtIndexCache:
         )
 
 
+def fixed_shapes_enabled() -> bool:
+    """tt-blaze G53F-0313 (``GLM53_PREFILL_FIXED_SHAPES=1``; read per call, default off = the per-length programs):
+    every shape a prefill chunk's index maintenance and pool selection compiles is a function of the PADDED chunk
+    (start, T_pad), never of the prompt's actual end -- so prompts whose last chunks share (start, padded bucket) share
+    their programs and cached constants. The per-length path compiles ~10-16 programs (~0.2 MiB/bank of kernel binaries
+    each new length, never freed) for every new prompt end: the pooled-key slices / pooling / pad of ``end // P`` pools,
+    the tail-row slices at the end's row, the export's row ranges. The results are the same bytes (see
+    ``TtDSAIndexer._maintain_fixed``, ``TtDSA._sparse_rows``, ``runners/runtime.py``)."""
+    return os.environ.get("GLM53_PREFILL_FIXED_SHAPES", "0") == "1"
+
+
 def _expand_custom() -> bool:
     """G53F-0210: the index rows from the ranked pools in one data-movement pass (``custom_ops/pool_expand``) instead of
     the typecast / repeat / multiply / add / typecast / concat chain (``GLM53_INDEXER_EXPAND=custom``; read per call).
@@ -484,6 +495,8 @@ class TtDSAIndexer(LightweightModule):
             for t in (k_idx, g_idx, k_tile, g_tile):
                 ttnn.deallocate(t)
             return
+        if fixed_shapes_enabled() and self._maintain_fixed(cache, user, k_idx, g_idx, start=start, seq_len=seq_len):
+            return
         end = start + seq_len
         r = start % P  # rows of pool start // P already in the ring
         lead = min((P - r) % P, seq_len)  # this chunk's rows of that straddling pool
@@ -537,6 +550,100 @@ class TtDSAIndexer(LightweightModule):
             g_row = ttnn.reshape(ttnn.slice(g_idx, [0, 0, row, 0], [1, 1, row + 1, D]), [1, 1, 1, D])
             for pt in cache.prefill_ring_tables(user):
                 cache.write_ring_rows(k_row, g_row, cache._slot_ids[slot0 + j], page_table=pt)
+
+    # tt-blaze G53F-0313: the one-hot tail selector of the latest chunk, shared by every layer's indexer (one upload per
+    # chunk, not one cached tensor per prompt end): {id(device): ((T, row0, tail), tensor)}
+    _tail_sel_shared: dict = {}
+
+    def _maintain_fixed(self, cache: TtIndexCache, user: int, k_idx, g_idx, *, start: int, seq_len: int) -> bool:
+        """``maintain_prefill`` with every shape a function of the padded chunk (``fixed_shapes_enabled``): the SAME
+        cache bytes as the per-length path, which pools ``n = seq_len // P`` pools (slices of n*P rows: new programs per
+        n), zero-pads the last written tile (``write_pools``) and leaves later tiles untouched, then writes the tail rows
+        with one-row slices at row n*P (new programs per row). Here: the pools of the whole padded chunk (N = T_pad / P,
+        rows past n are padding), and over the chunk's N/32 pool tiles the cache gets pools < n new, the rest of tile
+        ceil(n/32) zero, every later tile its OWN old content (read back, re-written) -- two row-index compares against
+        host scalars (runtime args, no program per value) and two selects; the tail rows come from a one-hot [32, T_pad]
+        selector matmul (exact, as the traced prefill's ``ring_sel``) and fixed slices of rows 0..tail-1. Only the
+        common geometry (start a multiple of 128 tokens, T_pad of 128, not user-partitioned, inside the allocation);
+        returns False (nothing consumed) otherwise and the caller takes the per-length path."""
+        P, D = self.P, self.D
+        T = int(k_idx.shape[-2])
+        N = T // P
+        start_pool = start // P
+        b0 = start_pool // TILE
+        if (
+            start % (P * TILE)
+            or T % (P * TILE)
+            or not 0 < seq_len <= T
+            or cache.partition
+            or b0 + N // TILE > cache.pool_blocks
+        ):
+            return False
+        n, tail = seq_len // P, seq_len % P
+        pooled = self.pool(k_idx, g_idx)  # [1,1,N,D] bf16: every pool of the padded chunk
+        blk = cache.prefill_slot(user) * cache.pool_blocks + b0  # identity page table: a slot's blocks are contiguous
+        old = ttnn.reshape(ttnn.slice(cache.pool_cache, [blk, 0, 0, 0], [blk + N // TILE, 1, TILE, D]), [1, 1, N, D])
+        if old.dtype != ttnn.bfloat16:
+            old16 = ttnn.typecast(old, ttnn.bfloat16)
+            ttnn.deallocate(old)
+            old = old16
+        rows = self._pool_rows(N)  # [1,1,N,1] fp32: the row (pool) index within the chunk
+
+        def mask(op, bound: int) -> ttnn.Tensor:  # [1,1,N,1] bf16 0/1 (the scalar is a runtime arg: one program)
+            m32 = op(rows, float(bound))
+            m = ttnn.typecast(m32, ttnn.bfloat16)
+            ttnn.deallocate(m32)
+            return m
+
+        past = mask(ttnn.ge, -(-n // TILE) * TILE)  # past the per-length write's last tile: keep the old content
+        rest = ttnn.where(past, old, 0.0)
+        is_new = mask(ttnn.lt, n)
+        out = ttnn.where(is_new, pooled, rest)
+        for t in (old, past, rest, is_new, pooled):
+            ttnn.deallocate(t)
+        cache.write_pools(out, user, start_pool=start_pool)
+        ttnn.deallocate(out)
+        if tail:
+            sel = self._tail_selector(T, n * P, tail)  # [1,1,32,T] bf16: row j = chunk row n*P + j (j < tail)
+            k_sel = ttnn.matmul(sel, k_idx, dtype=ttnn.bfloat16, compute_kernel_config=self.fp32)  # [1,1,32,D]
+            g_sel = ttnn.matmul(sel, g_idx, dtype=ttnn.bfloat16, compute_kernel_config=self.fp32)
+            for j in range(tail):
+                k_row = ttnn.reshape(ttnn.slice(k_sel, [0, 0, j, 0], [1, 1, j + 1, D]), [1, 1, 1, D])
+                g_row = ttnn.reshape(ttnn.slice(g_sel, [0, 0, j, 0], [1, 1, j + 1, D]), [1, 1, 1, D])
+                for pt in cache.prefill_ring_tables(user):
+                    cache.write_ring_rows(k_row, g_row, cache._slot_ids[j], page_table=pt)
+                ttnn.deallocate(k_row)
+                ttnn.deallocate(g_row)
+            ttnn.deallocate(k_sel)
+            ttnn.deallocate(g_sel)
+        ttnn.deallocate(k_idx)
+        ttnn.deallocate(g_idx)
+        return True
+
+    def _pool_rows(self, N: int) -> ttnn.Tensor:
+        """[1,1,N,1] fp32 TILE row indices 0..N-1 (exact; cached per padded pool count)."""
+        key = ("pool_rows", N)
+        if key not in self._const_cache:
+            t = torch.arange(N, dtype=torch.float32).reshape(1, 1, N, 1)
+            self._const_cache[key] = _upload(self.device, t, ttnn.float32)
+        return self._const_cache[key]
+
+    def _tail_selector(self, T: int, row0: int, tail: int) -> ttnn.Tensor:
+        """[1,1,32,T] bf16 TILE one-hot: row j < tail selects chunk row row0 + j, the other rows are zero. Depends on
+        the prompt end, so it is NOT cached per value: one shared entry, replaced when the chunk changes."""
+        key = (T, row0, tail)
+        dev = id(self.device)
+        hit = TtDSAIndexer._tail_sel_shared.get(dev)
+        if hit is not None and hit[0] == key:
+            return hit[1]
+        sel = torch.zeros(1, 1, TILE, T, dtype=torch.bfloat16)
+        for j in range(tail):
+            sel[0, 0, j, row0 + j] = 1.0
+        t = _upload(self.device, sel, ttnn.bfloat16)
+        if hit is not None:
+            ttnn.deallocate(hit[1])  # the queue is in order: earlier chunks' reads of it are already enqueued
+        TtDSAIndexer._tail_sel_shared[dev] = (key, t)
+        return t
 
     def maintain_decode(
         self, x: ttnn.Tensor, cache: TtIndexCache, pool_ids: ttnn.Tensor, ring_slots: ttnn.Tensor, kg=None
@@ -633,6 +740,7 @@ class TtDSAIndexer(LightweightModule):
         pos_floor: int = 0,
         pools_view: tuple[ttnn.Tensor, int] | None = None,
         col_stride: int = 0,
+        num_pools_bounded: int | None = None,
     ) -> ttnn.Tensor:
         """The score + top-k half of ``select`` for a prefill sub-block: the ranked pool ids [1,1,T,512] uint32
         ROW_MAJOR of the T queries (descending score, each row over its own causal prefix), BEFORE the token
@@ -640,7 +748,10 @@ class TtDSAIndexer(LightweightModule):
         batches it over several sub-blocks (``TtDSA._sparse_rows``); the score block ([T, pools] bf16, 268 MB per
         512 rows at 1 M positions) lives only inside this call. Same arguments as ``select`` (no ``row``).
         ``col_stride`` (G53F-0224, with ``row_starts``): the T queries of mesh column c sit ``c * col_stride`` rows
-        after its mesh row's start (each column holds its own rows, ``colsplit_enabled``)."""
+        after its mesh row's start (each column holds its own rows, ``colsplit_enabled``). ``num_pools_bounded``
+        (tt-blaze G53F-0313, ``fixed_shapes_enabled``: the padded chunk end's pools): the scored width of a BOUNDED
+        selection covers these pools instead of ``num_pools_valid`` (every row still ranks its own causal prefix only).
+        """
         T = q.shape[1] if q_rows_form else q.shape[-2]
         positions = self._row_positions(T, query_start, row_starts, pos_floor, col_stride)
         return self._rank_pools(
@@ -656,6 +767,7 @@ class TtDSAIndexer(LightweightModule):
             row_starts=row_starts,
             pools_view=pools_view,
             col_stride=col_stride,
+            num_pools_bounded=num_pools_bounded,
         )
 
     def pools_view(self, cache: "TtIndexCache", slot: int, end: int, rows: int) -> tuple[ttnn.Tensor, int] | None:
@@ -714,6 +826,7 @@ class TtDSAIndexer(LightweightModule):
         row_starts: tuple[int, ...] | None = None,
         pools_view: tuple[ttnn.Tensor, int] | None = None,
         col_stride: int = 0,
+        num_pools_bounded: int | None = None,
     ) -> ttnn.Tensor:
         """Scores + top-512 pools of the T queries: [1,1,T,512] uint32 ROW_MAJOR ranked pool ids ([1,1,1,512] with
         ``row``). The score block is released here. ``pools_view`` (``pools_view``): score against that W-wide copy
@@ -732,6 +845,10 @@ class TtDSAIndexer(LightweightModule):
         # for equal slabs), so the same bounded top-k with the rows' TRUE bounds (row-sharded) selects exactly.
         bounded = False
         seq_axes = [0]
+        # tt-blaze G53F-0313: a BOUNDED selection (per-row bounds in ``_topk_bounded``: the extra columns are scored,
+        # never ranked) may take its width from the padded chunk end, so it is a function of the chunk geometry; the
+        # unbounded top-k (single-row meshes, the custom scorer's rows form) keeps the prompt's valid pools
+        nb = num_pools_valid if num_pools_bounded is None else max(num_pools_valid, num_pools_bounded)
         if col_stride and row_starts is not None and not q_rows_form:
             # G53F-0224: device (r, c) holds the T queries at row_starts[r] + c*col_stride + s. The op's linear form
             # (seq_shard_axes=[]: device index d = r*cols + c, its chunk start op_start + d*T) is a superset of every
@@ -741,18 +858,18 @@ class TtDSAIndexer(LightweightModule):
             op_start = max(s + c * col_stride - (r * C + c) * T for r, s in enumerate(row_starts) for c in range(C))
             bounded = True
             seq_axes = []
-            kv_len = self._kv_len(cache, max(num_pools_valid, (op_start + R * C * T) // self.P))
+            kv_len = self._kv_len(cache, max(nb, (op_start + R * C * T) // self.P))
         elif row_starts is not None and not q_rows_form:
             R = len(row_starts)
             op_start = max(s - r * T for r, s in enumerate(row_starts))
             bounded = R > 1
             # every row's chunk start (op_start + r*T) must lie inside the scored width: cover the last row's end
-            kv_len = self._kv_len(cache, max(num_pools_valid, (op_start + R * T) // self.P))
+            kv_len = self._kv_len(cache, max(nb if bounded else num_pools_valid, (op_start + R * T) // self.P))
         else:
             op_start = query_start + self.row_offset_sim * T
             extra = 0 if q_rows_form else self._extra_rows()
             bounded = bool(extra)
-            kv_len = self._kv_len(cache, num_pools_valid, extra * T)
+            kv_len = self._kv_len(cache, nb if bounded else num_pools_valid, extra * T)
         if q_rows_form:
             scores_rm = self._score_prefill_rows(q, w, cache, user, positions=positions, kv_len=kv_len)
             self._mark("index_score")

@@ -22,6 +22,7 @@ from loguru import logger
 
 import ttnn
 from models.demos.common.prefill.runners.migration import KvCacheStage
+from models.demos.glm53_flash.tt.indexer import fixed_shapes_enabled
 from models.demos.glm53_flash.tt.runners.kv_export import (
     DSA_LAYERS,
     LATENT_DIM,
@@ -391,6 +392,20 @@ class GLM53FlashPrefillRuntime:
             ttnn.deallocate(part)
         return out.reshape(-1, out.shape[-1])
 
+    def _slice_end(self, start: int, end: int) -> int:
+        """The row the export's device slices run to: the prompt end, or with ``GLM53_PREFILL_FIXED_SHAPES=1`` (tt-blaze
+        G53F-0313) the end of the padded chunk the model ran (``mesh_model.prefill``'s T_pad), so the slice programs
+        are per (start, padded length), not per prompt end; the host trims to [start, end) as before."""
+        if not fixed_shapes_enabled():
+            return end
+        n = end - start
+        unit = 32 * self.model.mesh.rows
+        t_pad = -(-n // unit) * unit
+        b = pad_bucket(n)
+        if b:
+            t_pad = max(t_pad, -(-b // unit) * unit)
+        return start + t_pad
+
     _prof_pk = _prof_wr = 0.0  # GLM53F_EXPORT_PROFILE: the export stats' pack / write totals at the last profile line
     _chk_cq = _chk_raw = 0.0  # GLM53F_EXPORT_CHECK: summed read times, command queue vs raw
 
@@ -410,14 +425,17 @@ class GLM53FlashPrefillRuntime:
     def _dsa_rows_cq(self, start: int, end: int) -> dict:
         """{layer: (latent, pools)} of every DSA layer for rows [start, end), read through the command queue."""
         out = {}
+        e_dev = self._slice_end(start, end)
+        qe = -(-e_dev // POOL_RATIO)  # pools the device slice covers (== q1 unless G53F-0313 fixed shapes)
         for layer in DSA_LAYERS:
             c = self.decs[layer].cache
-            latent = self._rows(c.cache, start // TPP, -(-end // TPP))[: end - start].to(torch.bfloat16)
+            b1 = min(-(-e_dev // TPP), int(c.cache.shape[0]))
+            latent = self._rows(c.cache, start // TPP, b1)[: end - start].to(torch.bfloat16)
             pools = None
             idx = getattr(c, "index", None)
             if idx is not None:
                 q0, q1 = start // POOL_RATIO, -(-end // POOL_RATIO)
-                r0, r1 = q0 // 32, min(-(-q1 // 32), int(idx.pool_blocks))
+                r0, r1 = q0 // 32, min(-(-qe // 32), int(idx.pool_blocks))
                 pools = self._rows(idx.pool_cache, r0, r1)[: q1 - q0]
             out[layer] = (latent, pools)
         return out
@@ -446,9 +464,11 @@ class GLM53FlashPrefillRuntime:
         prof = os.environ.get("GLM53F_EXPORT_PROFILE") == "1"  # tt-blaze G53F-0256: where a chunk's export time goes
         t_read = t_dsa = 0.0
         nbytes = 0
+        e_dev = self._slice_end(start, end)
+        qe = -(-e_dev // POOL_RATIO)  # pools the device slice covers (== q1 unless G53F-0313 fixed shapes)
         for layer in DSA_LAYERS:
             c = self.decs[layer].cache
-            b0, b1 = start // TPP, -(-end // TPP)
+            b0, b1 = start // TPP, min(-(-e_dev // TPP), int(c.cache.shape[0]))
             tr = time.perf_counter()
             if os.environ.get("GLM53F_EXPORT_RAWREAD") == "1":
                 latent, pools = self._dsa_rows_raw(ex, layer, start, end)
@@ -458,7 +478,7 @@ class GLM53FlashPrefillRuntime:
                 idx = getattr(c, "index", None)
                 if idx is not None:
                     q0, q1 = start // POOL_RATIO, -(-end // POOL_RATIO)
-                    r0, r1 = q0 // 32, min(-(-q1 // 32), int(idx.pool_blocks))
+                    r0, r1 = q0 // 32, min(-(-qe // 32), int(idx.pool_blocks))
                     pools = self._rows(idx.pool_cache, r0, r1)[: q1 - q0]
                 if os.environ.get("GLM53F_EXPORT_CHECK") == "1":
                     t_cq = time.perf_counter() - tr
