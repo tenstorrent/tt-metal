@@ -8,8 +8,7 @@
 
         vFloat x = x_orig;
 
-        // Clamping unnecessary: segment cascade v_if(x >= boundary) naturally selects
-        // the edge segment for out-of-range inputs. Removing saves SFPU registers.
+        // The segment cascade selects the edge segment for an out-of-range input.
         vFloat& x_clamped = x;
 
         // Segment 0: evaluate P(x) and Q(x) (no reciprocal yet)
@@ -31,17 +30,13 @@
             denom
         );
 
-        // ONE reciprocal for all segments — saves ~10 instructions per eliminated recip
+        // One reciprocal for all segments.
         vFloat result = numer * rational_reciprocal(denom);
 
         result = apply_output_postcompose(result, x_orig);
         finalize_raw_domain_actions(x_raw, result);
 
-        // bf16 dst: round to nearest before the store. SFPI Nearest breaks ties to
-        // even on Blackhole and away from zero on Wormhole. SFPSTORE narrows
-        // fp32->bf16 by truncation (RTZ) in hardware; rounding here makes the
-        // already-bf16 value lossless under SFPSTORE and recovers the half-ULP
-        // that RTZ would otherwise drop (the ML-pass output bias).
+        // BF16 DEST: round to nearest here, as SFPSTORE truncates.
         result = convert<vFloat16b>(result, RoundMode::Nearest);
         dst_reg[d] = result;
     }

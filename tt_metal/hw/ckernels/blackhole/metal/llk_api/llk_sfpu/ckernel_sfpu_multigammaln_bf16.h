@@ -32,7 +32,6 @@ constexpr std::array<float, LUT_SIZE> LUT_DATA = {
      1.9727556407451630e-01f,
      2.6383467018604279e-02f}};
 
-// Certified selected rational core plus aggregate Stirling tail.
 constexpr uint32_t TT_SELECTED_STIRLING_CORE_LOWER_BITS = 0x3fc00000u;
 constexpr uint32_t TT_SELECTED_STIRLING_CORE_UPPER_BITS = 0x42480000u;
 constexpr uint32_t TT_SELECTED_STIRLING_OVERFLOW_BITS = 0x7b47f955u;
@@ -95,8 +94,6 @@ constexpr std::array<float, 7> TT_SELECTED_STIRLING_LOG_SINE_RATIO = {
      -7.6610094308853149e-01f}};
 constexpr std::array<uint32_t, 2> TT_SELECTED_STIRLING_REFLECTION_STOCK_WINDOW_BITS = {{0xbb600000u, 0x3b200000u}};
 
-// Declared special-value policy from the typed activation specification.
-// 0=NaN 1=+Inf 2=-Inf 3=+0 4=-0 5=finite_other(pass through)
 #define TT_TARGET_BH_BF16_SPECIAL_COMPARE_COUNT 2
 
 #include "ckernel_sfpu_multigammaln_bf16_aggregate_stirling_core.inc"
@@ -114,8 +111,6 @@ __attribute__((always_inline)) inline vFloat apply_output_postcompose(vFloat y, 
 #include "ckernel_sfpu_multigammaln_bf16_target_special_policy.inc"
 #include "ckernel_sfpu_multigammaln_bf16_domain_action_coordinate.inc"
 #include "ckernel_sfpu_multigammaln_bf16_domain_finalize.inc"
-// Upstream LLK runs several tiles in one DEST half, so the coefficients are
-// immediates rather than rows parked past this tile.
 inline void tile() {
     constexpr uint32_t NUM_COEFFS = NUM_DEGREE + 1, COEFF_OFFSET = NUM_SEGMENTS + 1;
     const auto& lut = LUT_DATA;
