@@ -174,9 +174,7 @@ def helper_returned_param_calls(specs: dict) -> dict:
             continue
         for fn in (n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)):
             # Returns from a function nested inside fn belong to that function.
-            # Only a bare ``return PARAM(...)`` joins the global map. A returned
-            # list is followed per file (see _local_returned_param_calls): the
-            # same helper name can return different classes in different tests.
+            # Only bare parameter returns are global; returned lists stay per-file to avoid helper-name collisions.
             nested = {
                 n
                 for d in ast.walk(fn)
