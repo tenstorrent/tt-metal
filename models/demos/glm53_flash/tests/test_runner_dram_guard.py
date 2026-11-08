@@ -50,6 +50,7 @@ def rt(monkeypatch):
     monkeypatch.setattr(RT.ttnn, "synchronize_device", lambda dev: setattr(d, "syncs", d.syncs + 1))
     for k in ("GLM53F_RUNNER_DRAM_GUARD_SELFTEST", "GLM53F_RUNNER_DRAM_GUARD_MIB", "GLM53_MODEL_TRACE_MB"):
         monkeypatch.delenv(k, raising=False)
+    monkeypatch.setenv("TT_METAL_SHM_TRACKING_DISABLED", "1")
     a, b = _Leaf(), _Leaf()
     a._const_cache = {("bounds", 1): object(), ("tail", 2): object()}
     b._cu_windows = {5: object()}
@@ -92,7 +93,10 @@ def test_selftest_forces_one_clear_and_keeps_the_floor(rt, monkeypatch):
     assert r._dram_floor_mib == pytest.approx(212)
 
 
-@pytest.mark.parametrize("env", [{"GLM53_MODEL_TRACE_MB": "512"}, {"GLM53F_RUNNER_DRAM_GUARD_MIB": "0"}])
+@pytest.mark.parametrize(
+    "env",
+    [{"GLM53_MODEL_TRACE_MB": "512"}, {"GLM53F_RUNNER_DRAM_GUARD_MIB": "0"}, {"TT_METAL_SHM_TRACKING_DISABLED": "0"}],
+)
 def test_guard_refuses_to_arm(rt, monkeypatch, env):
     r, d, _, _ = rt
     for k, v in env.items():
