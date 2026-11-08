@@ -414,15 +414,14 @@ class GLM53FlashPrefillRuntime:
         (the model's own ``fill`` / ``write_pools``, replicated uploads), then its export-slab pages packed again from
         the same rows (``export_dsa``, the export's own functions)."""
         t0 = time.perf_counter()
-        mesh = self.model.mesh
         for L, (latent, pools) in rows.items():
             c = self.decs[L].cache
             n = int(latent.shape[0])
-            dev = mesh.upload(latent.reshape(1, 1, n, LATENT_DIM), ttnn.bfloat16)
+            dev = self._upload_replicated(latent.reshape(1, 1, n, LATENT_DIM))
             c.fill(dev, 0, start=start)
             ttnn.deallocate(dev)
             if pools is not None:
-                devp = mesh.upload(pools.reshape(1, 1, int(pools.shape[0]), POOL_WIDTH), ttnn.bfloat16)
+                devp = self._upload_replicated(pools.reshape(1, 1, int(pools.shape[0]), POOL_WIDTH))
                 c.index.write_pools(devp, 0, start_pool=start // POOL_RATIO)
                 ttnn.deallocate(devp)
             c.release_prefix()  # GLM53_PREFIX_INCREMENTAL's arena (off in serving) must not keep older rows
@@ -432,6 +431,17 @@ class GLM53FlashPrefillRuntime:
         logger.info(
             f"[glm53f-prefix] restored [{start}, {start + int(next(iter(rows.values()))[0].shape[0])}) from the host "
             f"store: caches {t1 - t0:.3f} s (dispatch), slab pages {time.perf_counter() - t1:.3f} s"
+        )
+
+    def _upload_replicated(self, t: torch.Tensor):
+        """bf16 TILE on every chip (the model's own replicated-upload form, ``mesh.replicate()``)."""
+        return ttnn.from_torch(
+            t.contiguous(),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=self.model.mesh.replicate(),
         )
 
     def _spill_carries(self, slot: int) -> tuple:
