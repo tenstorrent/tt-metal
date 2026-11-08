@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <array>
 #include <enchantum/enchantum.hpp>
+#include <iterator>
 #include <set>
 
 #include <tt-metalium/constants.hpp>
@@ -103,6 +104,35 @@ void check_device_scalar(
     check_interleaved(scalar, operation_name, scalar_name);
     check_same_device(reference, scalar, operation_name, scalar_name);
     TT_FATAL(scalar.logical_shape().volume() == 1, "{}: {} must be a scalar", operation_name, scalar_name);
+}
+
+void check_allocated_on_device(
+    const Tensor& reference,
+    std::initializer_list<std::pair<const Tensor*, std::string_view>> tensors,
+    std::string_view operation_name) {
+    for (const auto& [tensor, name] : tensors) {
+        if (tensor != nullptr) {
+            check_allocated_device_tensor(*tensor, operation_name, name);
+            check_same_device(reference, *tensor, operation_name, name);
+        }
+    }
+}
+
+void check_distinct_buffers(
+    std::initializer_list<std::pair<const Tensor*, std::string_view>> tensors, std::string_view operation_name) {
+    for (const auto* first = tensors.begin(); first != tensors.end(); ++first) {
+        if (first->first == nullptr) {
+            continue;
+        }
+        for (const auto* second = std::next(first); second != tensors.end(); ++second) {
+            TT_FATAL(
+                second->first == nullptr || first->first->buffer() != second->first->buffer(),
+                "{}: {} and {} must be different tensors",
+                operation_name,
+                first->second,
+                second->second);
+        }
+    }
 }
 
 void check_actual_start(const Tensor& reference, const Tensor& actual_start, std::string_view operation_name) {
@@ -224,6 +254,47 @@ ValueBlockDistribution distribute_value_blocks(
     // intermittently twice as slow.
     const uint32_t row_blocks = best_split(grid.x, grid.y);
     const bool vertical = row_blocks > 1 && best_split(grid.y, grid.x) == row_blocks;
+    // When neither one orientation fits a larger split (11x10: 4 blocks fit 2 heads per row or column, 20 or 22 heads),
+    // heads fill grid columns first and the rows the columns leave over take the rest, each head's blocks still in one
+    // contiguous line.
+    const auto grid_x = static_cast<uint32_t>(grid.x);
+    const auto grid_y = static_cast<uint32_t>(grid.y);
+    const auto mixed_capacity = [&](uint32_t blocks) {
+        return (grid_y / blocks) * grid_x + (grid_y % blocks) * (grid_x / blocks);
+    };
+    uint32_t mixed_blocks = 1;
+    for (uint32_t candidate = std::min(value_tiles, grid_y); candidate > row_blocks; --candidate) {
+        if (value_tiles % candidate == 0 && batch_heads <= mixed_capacity(candidate)) {
+            mixed_blocks = candidate;
+            break;
+        }
+    }
+    if (mixed_blocks > row_blocks) {
+        const uint32_t heads_per_column = grid_y / mixed_blocks;
+        const uint32_t column_heads = heads_per_column * grid_x;
+        const uint32_t heads_per_row = grid_x / mixed_blocks;
+        const uint32_t first_row = heads_per_column * mixed_blocks;
+        ValueBlockDistribution result;
+        result.value_blocks = mixed_blocks;
+        result.value_tiles_per_core = value_tiles / mixed_blocks;
+        std::vector<tt::tt_metal::CoreRange> lines;
+        for (uint32_t head = 0; head < batch_heads; ++head) {
+            const bool in_column = head < column_heads;
+            const uint32_t x0 =
+                in_column ? head / heads_per_column : (head - column_heads) % heads_per_row * mixed_blocks;
+            const uint32_t y0 =
+                in_column ? head % heads_per_column * mixed_blocks : first_row + (head - column_heads) / heads_per_row;
+            for (uint32_t block = 0; block < mixed_blocks; ++block) {
+                result.cores.push_back(
+                    in_column ? tt::tt_metal::CoreCoord{x0, y0 + block} : tt::tt_metal::CoreCoord{x0 + block, y0});
+                result.head.push_back(head);
+                result.value_block.push_back(block);
+            }
+            lines.emplace_back(result.cores[result.cores.size() - mixed_blocks], result.cores.back());
+        }
+        result.core_set = tt::tt_metal::CoreRangeSet(lines).merge_ranges();
+        return result;
+    }
     const uint32_t value_blocks = row_blocks;
     const uint32_t line = vertical ? grid.y : grid.x;
     const uint32_t heads_per_line = line / value_blocks;
@@ -248,6 +319,48 @@ ValueBlockDistribution distribute_value_blocks(
     // Merged ranges keep dispatch to one multicast when the lanes fill the same span.
     result.core_set = tt::tt_metal::CoreRangeSet(lanes).merge_ranges();
     return result;
+}
+
+tt::tt_metal::CoreRangeSet merged_core_set(std::span<const tt::tt_metal::CoreCoord> cores) {
+    return tt::tt_metal::CoreRangeSet(ttsl::Span<const tt::tt_metal::CoreCoord>(cores.data(), cores.size()))
+        .merge_ranges();
+}
+
+bool same_cores(const tt::tt_metal::CoreRangeSet& set, std::span<const tt::tt_metal::CoreCoord> cores) {
+    const auto set_cores = tt::tt_metal::corerange_to_cores(set);
+    return std::set<tt::tt_metal::CoreCoord>(set_cores.begin(), set_cores.end()) ==
+           std::set<tt::tt_metal::CoreCoord>(cores.begin(), cores.end());
+}
+
+std::vector<tt::tt_metal::CoreCoord> shard_cores(const Tensor& tensor) {
+    const auto& shard = *tensor.memory_config().shard_spec();
+    return tt::tt_metal::corerange_to_cores(
+        shard.grid, std::nullopt, shard.orientation == tt::tt_metal::ShardOrientation::ROW_MAJOR);
+}
+
+tt::tt_metal::CBDescriptor cb_descriptor(
+    uint32_t index,
+    uint32_t pages,
+    uint32_t page_size,
+    tt::DataFormat format,
+    const tt::tt_metal::CoreRangeSet& cores) {
+    return tt::tt_metal::CBDescriptor{
+        .total_size = pages * page_size,
+        .core_ranges = cores,
+        .format_descriptors = {{tt::tt_metal::CBFormatDescriptor{
+            .buffer_index = index, .data_format = format, .page_size = page_size}}},
+    };
+}
+
+tt::tt_metal::ComputeConfigDescriptor compute_config_descriptor(
+    tt::ARCH arch, const DeviceComputeKernelConfig& compute_kernel_config) {
+    const auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
+        ttnn::get_compute_kernel_config_args(arch, compute_kernel_config);
+    return tt::tt_metal::ComputeConfigDescriptor{
+        .math_fidelity = math_fidelity,
+        .fp32_dest_acc_en = fp32_dest_acc_en,
+        .dst_full_sync_en = dst_full_sync_en,
+        .math_approx_mode = math_approx_mode};
 }
 
 }  // namespace ttnn::experimental::prim::kda_factory_detail

@@ -220,8 +220,8 @@ void enumerate_core_rt_args(
     const uint32_t input_tile_bytes = tile_size(input_df);
     const uint32_t output_tile_bytes = tile_size(output_df);
 
-    const uint32_t input_page_bytes = rm_interleaved ? static_cast<uint32_t>(input.buffer()->page_size()) : 0;
-    const uint32_t output_page_bytes = rm_interleaved ? static_cast<uint32_t>(output.buffer()->page_size()) : 0;
+    const uint32_t input_page_bytes = rm_interleaved ? static_cast<uint32_t>(input.mesh_buffer().page_size()) : 0;
+    const uint32_t output_page_bytes = rm_interleaved ? static_cast<uint32_t>(output.mesh_buffer().page_size()) : 0;
     RmChunkConstants k;
     k.chunks_per_row = rm_interleaved ? (input_page_bytes + input_tile_bytes - 1) / input_tile_bytes : 1;
     k.input_chunk_size = input_tile_bytes;
@@ -230,11 +230,11 @@ void enumerate_core_rt_args(
     k.output_chunk_size = output_tile_bytes;
     k.output_last_chunk_size =
         rm_interleaved ? output_page_bytes - ((k.chunks_per_row - 1) * output_tile_bytes) : output_tile_bytes;
-    k.total_rows = rm_interleaved ? output.buffer()->num_pages() : 0;
+    k.total_rows = rm_interleaved ? output.mesh_buffer().num_pages() : 0;
     if (rm_interleaved && input_page_bytes > 0 && input_page_bytes < input_tile_bytes) {
         const uint32_t input_element_size = datum_size(input_df);
         const uint32_t row_width_elements = input_page_bytes / input_element_size;
-        const uint32_t aligned_page_size = static_cast<uint32_t>(input.buffer()->aligned_page_size());
+        const uint32_t aligned_page_size = static_cast<uint32_t>(input.mesh_buffer().aligned_page_size());
         if (input_page_bytes == aligned_page_size && row_width_elements > 0) {
             k.rows_per_tile = tile_hw / row_width_elements;
         }
@@ -532,6 +532,16 @@ ttnn::device_operation::ProgramArtifacts UnaryDeviceOperation::ProgramFactory::c
     const bool math_approx_mode = false;
     std::map<std::string, std::string> unary_defines = get_block_defines(ops_chain, "0", "0", input.dtype());
     add_input_dtype_defines(input.dtype(), unary_defines);
+    if (const auto relu_config = get_pack_relu_config(
+            ops_chain,
+            input.dtype(),
+            output.dtype(),
+            operation_attributes.fp32_dest_acc_en,
+            src_sharded && dst_sharded)) {
+        // The packer applies the op as it writes each tile out, which leaves the SFPU no work.
+        unary_defines = {{"PACK_RELU_CONFIG", *relu_config}};
+        add_input_dtype_defines(input.dtype(), unary_defines);
+    }
     const bool logit_clamp_enabled = pack_first_op_scalars(ops_chain[0], input.dtype(), packed_scalar1, packed_scalar2);
 
     const std::string compute_path = fmt::format(
