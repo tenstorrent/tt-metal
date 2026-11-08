@@ -95,15 +95,22 @@ def chunk_gated_delta_rule_fused_adapter(
     device=None,
     cached_masks=None,  # unused (the fused op builds its own constants)
     valid_len=None,  # scalar: zero padded positions >= valid_len (masked-bucket prefill)
-    qkv_head_dims=None,  # (Nk, Dk, Nv, Dv) when q/k/v are flat; Dv != Dk passes num_key_heads=Nk to the op
+    qkv_head_dims=None,  # (Nk, Dk, Nv, Dv) when q/k/v are flat
     return_o_bh=False,  # True: return o as [B*Nv, T, V]; else [B, T, Nv, V]
     const_tiles=None,  # (eye, tril, ones, masks) device tensors built once by the caller (layer);
     # passed to the op so it stays stateless. Required under trace (the op's internal build does a
     # host upload, illegal under trace); if None, the op builds them eagerly.
     program_config=None,  # ttnn.ChunkGdnFusedProgramConfig / ChunkGdnPhasedProgramConfig / ChunkGdnMono...:
     # None: the op's own dispatch — fused or phased depending on the cost model.
+    masks=None,  # (m_bg, m_qkv) PERSISTENT device masks for a traced masked-bucket prefill (valid_len must be None):
+    # m_bg [B, T, 1] fp32 TILE (1 for t < valid_len), multiplied into beta and g exactly like the host-built `_m`;
+    # m_qkv (optional, may be None) [B, T, 1] in q's dtype, multiplied into flat q/k/v like `_mq` (bit-parity only).
+    # Used INSTEAD of the host-built masks (whose ttnn.from_torch uploads are illegal under trace capture).
     wy_inverse=None,  # ttnn.ChunkGdnWyInverse.HORNER / FORWARD_SUBSTITUTION / AUTO: the WY-inverse arithmetic. None = the
     # op's AUTO (the forward-substitution solve on Blackhole at chunk 32, Horner elsewhere).
+    snapshot=None,  # (snapshot_index, snapshot_state) of QWEN36_PREFILL_INTRACE_SNAP: the op copies the carried state after
+    # the staged 32-row chunks into the [S, B*Nv, Dk, Dv] buffer (see ttnn.transformer.chunk_gated_delta_rule). None = the
+    # unchanged call.
 ):
     global _logged_path
     if not _logged_path:
@@ -152,7 +159,19 @@ def chunk_gated_delta_rule_fused_adapter(
     # Scalar (one length for all rows) or a per-row list/tuple of B lengths (grouped batched prefill:
     # each user its own real length within the shared bucket).
     _is_per_row = isinstance(valid_len, (list, tuple))
-    if _is_per_row or (valid_len is not None and valid_len < T):
+    if masks is not None:
+        # Traced masked bucket: the masks are persistent device inputs rewritten per request (no host upload here).
+        assert valid_len is None, "masks= (persistent device masks) and valid_len= (host-built masks) are exclusive"
+        _dram = ttnn.DRAM_MEMORY_CONFIG
+        _m_bg, _m_qkv = masks
+        beta = ttnn.multiply(beta, _m_bg, memory_config=_dram)  # same ops/dtypes as the host-built path below
+        g = ttnn.multiply(g, _m_bg, memory_config=_dram)
+        if _m_qkv is not None:
+            assert len(q.shape) == 3, "the persistent q/k/v mask needs flat [B, T, C] q/k/v (flat_qkv)"
+            q = ttnn.multiply(q, _m_qkv, memory_config=_dram)
+            k = ttnn.multiply(k, _m_qkv, memory_config=_dram)
+            v = ttnn.multiply(v, _m_qkv, memory_config=_dram)
+    elif _is_per_row or (valid_len is not None and valid_len < T):
         _dram = ttnn.DRAM_MEMORY_CONFIG  # op CBs clash with L1 inputs at small buckets
         _mt = torch.zeros(B, T, 1, dtype=torch.float32)
         if _is_per_row:
@@ -178,11 +197,6 @@ def chunk_gated_delta_rule_fused_adapter(
         if s0.dtype != ttnn.float32:
             s0 = ttnn.typecast(s0, ttnn.float32)
 
-    # Flat q/k with Dk != Dv (e.g. the sequence-parallel fold's augmented value, Dv' = Dk + Dv): the op cannot read the key
-    # head count off a flat width (it assumes K == V), so pass it. Only then is the kwarg sent: every Dk == Dv call stays
-    # identical to before (and keeps working on a library without ``num_key_heads``).
-    _extra_kwargs = {"num_key_heads": Nk} if (qkv_head_dims is not None and Dk != Dv) else {}
-
     # output_head_major=return_o_bh: skip token<->head permute when caller wants [BH,T,V].
     _eye, _tril, _ones, _masks = const_tiles if const_tiles is not None else (None, None, None, None)
     o, final_state = ttnn.transformer.chunk_gated_delta_rule(
@@ -202,7 +216,7 @@ def chunk_gated_delta_rule_fused_adapter(
         ones=_ones,
         masks=_masks,
         **({"wy_inverse": wy_inverse} if wy_inverse is not None else {}),
-        **_extra_kwargs,
+        **({} if snapshot is None else {"snapshot_index": snapshot[0], "snapshot_state": snapshot[1]}),
     )
 
     if return_o_bh:

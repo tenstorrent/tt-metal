@@ -60,6 +60,7 @@ ttnn::experimental::prim::PagedFusedUpdateCacheResult paged_fused_update_cache(
     const std::optional<const Tensor>& page_table,
     uint32_t batch_offset,
     std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config,
-    const std::optional<const std::set<ttnn::MeshCoordinate>>& mesh_coords);
+    const std::optional<const std::set<ttnn::MeshCoordinate>>& mesh_coords,
+    uint32_t rows_per_user = 1);
 
 }  // namespace ttnn::prim
