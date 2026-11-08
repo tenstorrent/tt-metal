@@ -581,26 +581,33 @@ class TtDSAIndexer(LightweightModule):
             return False
         n, tail = seq_len // P, seq_len % P
         pooled = self.pool(k_idx, g_idx)  # [1,1,N,D] bf16: every pool of the padded chunk
-        blk = cache.prefill_slot(user) * cache.pool_blocks + b0  # identity page table: a slot's blocks are contiguous
-        old = ttnn.reshape(ttnn.slice(cache.pool_cache, [blk, 0, 0, 0], [blk + N // TILE, 1, TILE, D]), [1, 1, N, D])
-        if old.dtype != ttnn.bfloat16:
-            old16 = ttnn.typecast(old, ttnn.bfloat16)
-            ttnn.deallocate(old)
-            old = old16
-        rows = self._pool_rows(N)  # [1,1,N,1] fp32: the row (pool) index within the chunk
+        if n == N:  # a full chunk: every pool is new, the per-length path's own shapes
+            out = pooled
+        else:
+            blk = (
+                cache.prefill_slot(user) * cache.pool_blocks + b0
+            )  # identity page table: a slot's blocks are contiguous
+            old = ttnn.reshape(
+                ttnn.slice(cache.pool_cache, [blk, 0, 0, 0], [blk + N // TILE, 1, TILE, D]), [1, 1, N, D]
+            )
+            if old.dtype != ttnn.bfloat16:
+                old16 = ttnn.typecast(old, ttnn.bfloat16)
+                ttnn.deallocate(old)
+                old = old16
+            rows = self._pool_rows(N)  # [1,1,N,1] fp32: the row (pool) index within the chunk
 
-        def mask(op, bound: int) -> ttnn.Tensor:  # [1,1,N,1] bf16 0/1 (the scalar is a runtime arg: one program)
-            m32 = op(rows, float(bound))
-            m = ttnn.typecast(m32, ttnn.bfloat16)
-            ttnn.deallocate(m32)
-            return m
+            def mask(op, bound: int) -> ttnn.Tensor:  # [1,1,N,1] bf16 0/1 (the scalar is a runtime arg: one program)
+                m32 = op(rows, float(bound))
+                m = ttnn.typecast(m32, ttnn.bfloat16)
+                ttnn.deallocate(m32)
+                return m
 
-        past = mask(ttnn.ge, -(-n // TILE) * TILE)  # past the per-length write's last tile: keep the old content
-        rest = ttnn.where(past, old, 0.0)
-        is_new = mask(ttnn.lt, n)
-        out = ttnn.where(is_new, pooled, rest)
-        for t in (old, past, rest, is_new, pooled):
-            ttnn.deallocate(t)
+            past = mask(ttnn.ge, -(-n // TILE) * TILE)  # past the per-length write's last tile: keep the old content
+            rest = ttnn.where(past, old, 0.0)
+            is_new = mask(ttnn.lt, n)
+            out = ttnn.where(is_new, pooled, rest)
+            for t in (old, past, rest, is_new, pooled):
+                ttnn.deallocate(t)
         cache.write_pools(out, user, start_pool=start_pool)
         ttnn.deallocate(out)
         if tail:
