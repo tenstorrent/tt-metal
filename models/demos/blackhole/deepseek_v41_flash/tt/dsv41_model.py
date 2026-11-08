@@ -1682,37 +1682,16 @@ class Model:
     # lives there) until it is finished or evicted by another user
     def _slot_alloc(self, wave, resume):
         """assign a prefill slot (global index r * Up + i) to every user of ``wave`` [(b, tokens, start, end)]; users that continue keep theirs. Returns {b: slot}."""
-        Up, U = self.Up, self.U
-        owner = self.__dict__.setdefault("pf_slot_owner", [None] * (self.rows * Up))
+        from models.demos.blackhole.deepseek_v41_flash.tt.prefill_waves import slot_alloc
+
+        owner = self.__dict__.setdefault("pf_slot_owner", [None] * (self.rows * self.Up))
         of = self.__dict__.setdefault("pf_slot_of", {})
-        out, taken = {}, set()
-        for b, _, st, _ in wave:
-            if st > 0:
-                assert of.get(b) is not None and owner[of[b]] == b, f"user {b} has no prefill slot to continue"
-                out[b] = of[b]
-                taken.add(of[b])
-        for b, _, st, _ in wave:
-            if st > 0:
-                continue
-            r = b // U
-            cand = [r * Up + i for i in range(Up) if r * Up + i not in taken]
-            assert cand, "more users of one mesh row than prefill slots in one wave"
-            if of.get(b) in cand:
-                sl = of[b]
-            else:  # a slot whose owner is finished / not resumable first, else evict (its owner has to recompute from position 0)
-                free = [c for c in cand if owner[c] is None or owner[c] not in resume]
-                sl = free[0] if free else cand[0]
-            o = owner[sl]
-            if o is not None and o != b:
-                if self.__dict__.get("_kx_pending"):
-                    self.flush_key_exports([o], "slot eviction")  # (its carried key FIFO is about to be overwritten)
-                resume.pop(o, None)
-                of.pop(o, None)
-            if b in of and of[b] != sl:
-                owner[of[b]] = None
-            owner[sl], of[b], out[b] = b, sl, sl
-            taken.add(sl)
-        return out
+
+        def on_evict(o):
+            if self.__dict__.get("_kx_pending"):
+                self.flush_key_exports([o], "slot eviction")  # (its carried key FIFO is about to be overwritten)
+
+        return slot_alloc(owner, of, self.Up, self.U, wave, resume, on_evict)
 
     def enable_apc(self, budget_bytes, policy="pow2"):
         """Automatic prefix caching of the interleaved prefill (tt/prefix_cache.py): host snapshots of the carried prefill state at chunk boundaries, restored into any user."""
@@ -2174,23 +2153,14 @@ class Model:
         prebuild_next = (
             async_win and per_row and os.environ.get("DSV41_PF_PREBUILD", "1") == "1"
         )  # (position-only tables of the next call's first window, see DynCtx.prebuild)
-        if per_row:
-            groups = [
-                sorted(items, key=lambda it: it[2] == 0)
-            ]  # (continuations first: a new prompt of the same call must not evict a slot a continuation still needs)
-        else:
-            groups = [
-                [it for it in items if it[2] == st0] for st0 in sorted({st for _, _, st, _ in items}, reverse=True)
-            ]  # continuations FIRST: a new prompt of the same call must not evict a slot a continuation still needs
+        from models.demos.blackhole.deepseek_v41_flash.tt.prefill_waves import plan_groups, split_waves
+
+        groups = plan_groups(
+            items, hit_todo, per_row
+        )  # (continuations FIRST, then the users that need a slot: a new prompt / a pending prefix hit of the same call must not evict a slot a continuation of a later wave still needs)
         for grp in groups:
             if general:  # waves: at most Up users of a mesh row per wave
-                by_row = {}
-                for it in grp:
-                    by_row.setdefault(it[0] // U, []).append(it)
-                waves = [
-                    [it for r in sorted(by_row) for it in by_row[r][k * Up : (k + 1) * Up]]
-                    for k in range(-(-max(len(v) for v in by_row.values()) // Up))
-                ]
+                waves = split_waves(grp, Up, U)
             else:
                 waves = [grp]
             for wave in waves:
