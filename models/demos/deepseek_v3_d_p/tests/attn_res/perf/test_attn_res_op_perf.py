@@ -81,10 +81,11 @@ STEPS = tuple(f"{batch}/{op}" for batch in BATCHES for op in OPS)
 # 68.1 us). That Galaxy runs block_mix ~6% slower than the pool and gather_softmax at about the pool's speed.
 # The pool confirmed both (run 42490578916: block_mix 274.4, gather_softmax 70.0 us).
 # block_stats only reports: it settles per process into one of three levels, ~105 / ~117 / ~136 us across 27 pool
-# readings (2026-11-05..08, medians 101.5-139.6, one Galaxy showing all three; b07u08 adds ~76), and the level follows
-# how far apart the chips start, which host dispatch changes. No band around one reference fits that spread and still
-# catches a regression; see tt_metal_tracker-ao3i.2.5.2. The owed steps only report too: no pool reading when set, and
-# the owed shape (one site, C = 6) need not share block_mix's ratio (b07u08 95.3 us; c10u14 85.3 us at 75 W).
+# readings (2026-11-05..08, medians 101.5-139.6, one Galaxy showing all three; b07u08 adds ~76). The level correlates
+# with host launch skew (a cheaper host dispatch made the low level likely), which is the suspected cause but is not
+# established. No band around one reference fits that spread and still catches a regression; see
+# tt_metal_tracker-ao3i.2.5.2. The owed steps only report too: no pool reading when set, and the owed shape (one site,
+# C = 6) need not share block_mix's ratio (b07u08 95.3 us; c10u14 85.3 us at 75 W).
 #
 # SP4xTP4 has no CI job: it was measured on a Galaxy off the CI pool (bh-glx-120-b07u02, 2026-11-05), which runs the
 # end-to-end boundary layer of `test_attn_res_perf.py` at ~416 us against its 394 us CI reference, and is scaled by
