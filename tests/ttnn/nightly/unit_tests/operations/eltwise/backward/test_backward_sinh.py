@@ -161,7 +161,7 @@ def _sinh_bw_torch_reference(grad, x, flush):
 
 
 def _sinh_bw_reference(grad, x, flush):
-    """Torch, except on the declared lanes."""
+    """Torch, except: grad times a signed infinity where f'(x) alone overflows FP32, for a nonzero grad."""
     result = _sinh_bw_torch_reference(grad, x, flush)
     unit = _sinh_bw_torch_reference(torch.ones_like(grad), x, flush)
     g = _sinh_bw_flush(grad.to(torch.float64)) if flush else grad.to(torch.float64)
