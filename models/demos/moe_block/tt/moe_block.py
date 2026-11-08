@@ -233,8 +233,8 @@ class MoEBlock:
         or metadata = main's (slot_id, actual_start, actual_end) tensors as they are. The chunk is in main's KV-pad-aware
         rotated layout over the SP rows (moe_padding_config; chunk-aligned start: the natural order, the first
         end - start tokens real). Padding tokens are not routed, dispatched, computed by the routed experts or combined,
-        and the head's shared expert and the tail skip the row tiles holding none: the padding rows of the output are
-        undefined (discard them).
+        and the head's shared expert and the tail skip the row tiles holding none: the padding row tiles of the output
+        are zero (without a latent; with one, the tail computes them).
         None: every row is real.
 
         A packed forward (MoEBlockConfig.forward_chunks F, common/prefill/prefill_chunk.py): x holds F chunks, each SP

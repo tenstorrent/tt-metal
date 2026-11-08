@@ -378,6 +378,7 @@ def _check_padded(s, ref, o, span):
     m = real_mask(*span)
     assert _same(o["y_own"][m], ref["y_own"][m]), f"{span}: the real tokens' y_own differs"
     assert _same(o["out"][m], ref["out"][m]), f"{span}: the real tokens' block output differs"
+    assert torch.isfinite(o["out"].float()).all(), f"{span}: the block output has non-finite rows (padding included)"
     pad = o["y_own"][~m]
     assert int(pad.abs().sum()) == 0 and not torch.isnan(pad).any(), f"{span}: padding rows' routed output"
     hist = torch.bincount(o["picks"][m].reshape(-1), minlength=E)

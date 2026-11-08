@@ -41,7 +41,7 @@ void bind_fused_tail(nb::module_& mod) {
                 output hold k loops' rows, one loop's after the other's; one program a chip whose kernels loop.
             actual_start, actual_end, metadata: a padded forward's span, as fused_head's (one chunk's scalars, or the
                 forward's metadata words). Without a latent the padding row tiles are skipped: their output rows are
-                undefined. The latent engine computes every row.
+                zero. The latent engine computes every row.
             loop: the call's first loop of the forward (split x token loops + loop), as fused_head's; with a span only.
 
         Returns:

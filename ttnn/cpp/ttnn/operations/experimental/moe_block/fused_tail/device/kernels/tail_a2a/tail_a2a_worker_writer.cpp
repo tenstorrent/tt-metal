@@ -33,7 +33,10 @@ MB_LOOP_BODY {
         noc_async_atomic_barrier();
     }
 #ifdef TL_SKIP
-    const uint64_t live = tl_live(p0 + np, get_write_ptr(CB_LIVE) + LIVE_BRISC, RT);  // (after the ports' list)
+    const uint32_t la = p0 + np;  // (the live args: after the ports' list)
+    const RtRows rr = tl_rows(la, get_write_ptr(CB_LIVE) + LIVE_BRISC);
+    const uint32_t row0 = tl_row0(la);
+    const uint64_t live = tl_mask(rr, row0, RT);
 #else
     constexpr uint64_t live = 0;
 #endif
@@ -55,6 +58,32 @@ MB_LOOP_BODY {
             noc_semaphore_inc(get_noc_addr(xy & 0xFFFF, xy >> 16, zr_addr + 16 * r), 1);
         }
     }
+#ifdef TL_SKIP
+    // (my output's padding row tiles - every chip's owner rows of my SP row, my block's columns: zeros, the units (row
+    // tile, W columns) round-robin over the workers; nothing else writes them)
+    {
+        const uint32_t ncg = NTB / W, nwk = NTH / W, wi = c0 / W, units = (NTH / NTB) * RT * ncg;
+        const uint32_t sp0 = row0 - me * 32 * RT, zt = get_write_ptr(CB_LIVE) + LIVE_ZERO;
+        bool filled = false;
+        for (uint32_t u = wi; u < units; u += nwk) {
+            const uint32_t st = u / ncg, cg = u % ncg;
+            if (rt_tile_real(rr, sp0, st)) {
+                continue;
+            }
+            if (!filled) {
+                volatile tt_l1_ptr uint32_t* zp = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(zt);
+                for (uint32_t i = 0; i < 512; ++i) {
+                    zp[i] = 0;
+                }
+                filled = true;
+            }
+            for (uint32_t t = 0; t < W; ++t) {
+                noc_async_write(zt, o.get_noc_addr(st * NTB + cg * W + t), 2048);
+            }
+        }
+        noc_async_write_barrier();
+    }
+#endif
     noc_async_atomic_barrier();
 }
 

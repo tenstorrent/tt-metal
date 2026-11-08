@@ -625,6 +625,7 @@ tt::tt_metal::WorkloadDescriptor fused_tail_factory_detail::a2a_workload(
     Buffer* span1 = args.metadata.has_value() || !args.actual_end.has_value() ? nullptr : args.actual_end->buffer();
     const bool skip = span0 != nullptr;
     TT_FATAL(!skip || g.RT <= 64, "fused_tail (a2a): a padded forward's {} row tiles a chip (at most 64)", g.RT);
+    TT_FATAL(g.NTB % W == 0, "fused_tail (a2a): a worker's {} columns straddle a chip's block of {}", W, g.NTB);
     auto live_args = [&](KernelDescriptor::RTArgList& l, uint32_t sp_row, uint32_t p) {
         l.push_back(span0);
         if (span1 != nullptr) {
@@ -678,7 +679,8 @@ tt::tt_metal::WorkloadDescriptor fused_tail_factory_detail::a2a_workload(
         desc.cbs.push_back(cb(CB_A2A_OUT, work, ring_pages(2 * W, {W}) * kPage, bf16, kPage));
         desc.cbs.push_back(cb(CB_A2A_CH, pcrs, ring_pages(2 * g.group * g.RP, {g.group * g.RP}) * kPage, bf16, kPage));
         if (skip) {
-            desc.cbs.push_back(cb(CB_A2A_LIVE, work.merge(pcrs), 3 * 128, tt::DataFormat::UInt32, 128));
+            // (128 B pages: the NCRISC's words, the BRISC's 256 B on, the workers' zero tile 512 B on - tail_rows.hpp)
+            desc.cbs.push_back(cb(CB_A2A_LIVE, work.merge(pcrs), 512 + kPage, tt::DataFormat::UInt32, 128));
         }
 
         auto wreader =
