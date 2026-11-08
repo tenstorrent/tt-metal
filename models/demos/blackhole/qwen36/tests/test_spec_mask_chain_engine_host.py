@@ -542,7 +542,7 @@ def test_mask_counter_log_line(monkeypatch):
         h = p.begin(h, sampling=_ss(B, 2))
         p.finish(h, _mask(B, {(0, 0): [5, 9]}))
         mine = [x for x in lines if x.startswith("[spec_engine] device masks:")]
-        assert len(mine) == 1 and "1 steps, 1 rows, " in mine[0] and mine[0].endswith("fallback rows"), mine
+        assert len(mine) == 1 and "1 steps, 1 rows, " in mine[0] and mine[0].endswith("chained holes"), mine
         r.e.mask_steps = 255  # the next mask step is the 256th
         h = p.begin(h, sampling=_ss(B, 3))
         p.finish(h, _mask(B, {(0, 0): [5, 9]}))

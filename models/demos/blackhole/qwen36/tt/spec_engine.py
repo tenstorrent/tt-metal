@@ -65,6 +65,7 @@ from models.demos.blackhole.qwen36.tt.spec_chain import (
 )
 from models.demos.blackhole.qwen36.tt.spec_fused import (
     AUX_ACTIVE,
+    AUX_NUM_VALID,
     AUX_DECLINED,
     AUX_KEEP,
     AUX_P0,
@@ -94,8 +95,11 @@ from models.demos.blackhole.qwen36.tt.spec_masks import (
     PermMaskStagingRing,
     apply_to_logits,
     is_unconstrained,
+    mask_hole_cap,
     mask_rows_flat,
+    reasoning_boundary_cap,
     mask_to_engine_rows,
+    token_allowed,
 )
 from models.demos.blackhole.qwen36.tt.spec_penalties import (
     PenaltyDevice,
@@ -146,6 +150,12 @@ from models.demos.blackhole.qwen36.tt.tp_common import (
 EAGER_RESEED_PROMPT_LEN = 131072
 # Verify rows B*(K+1) must fit one decode tile (QKV heads, matmul configs, GDN core budget).
 MAX_SPEC_ROWS = ttnn.TILE_SIZE
+_MASK_AUDIT = os.environ.get("QWEN36_SPEC_MASK_AUDIT", "0") == "1"  # debug: check every masked commit against its mask
+# split steps: the reasoning-end ids after which a row never decides a token from an all-ones mask column (reasoning_boundary_cap)
+_REASONING_END_IDS = tuple(
+    int(x) for x in os.environ.get("QWEN36_SPEC_REASONING_END_IDS", "248069,248058").replace(" ", "").split(",") if x
+)
+
 # Prompt lengths warmed in prepare: exact bucket lengths take the no-mask prefill path, the others the masked one.
 _WARM_PROMPT_LENS = (100, 128, 200, 256, 400, 512, 900, 1024, 1900, 2048, 2148, 2248, 2448, 2948, 3948, 4096)
 # Runner contract: token id for unused tail columns of a returned block.
@@ -965,6 +975,7 @@ class MTPSpecEngine:
     _split_begin = False  # True inside decode_forward_begin
     _split_pending = None  # the FusedHandle whose second half (decode_forward_finish) is due
     mask_steps = mask_rows = mask_late_finish = mask_fallback_rows = mask_chain_steps = 0
+    mask_hole_caps = mask_hole_chained = 0
 
     _dr_hostset = False  # class default (engines built without __init__ in tests); set by _alloc_drafter_inputs
     # QWEN36_DRAFT_VOCAB_FALLBACK (tt/draft_vocab.py) class defaults: no guard, no full-head drafter traces (set in __init__)
@@ -1069,6 +1080,8 @@ class MTPSpecEngine:
         # input, the counters (steps with a mask trace, constrained engine rows, split steps finished late), the split-step state
         self._mask_ring = PermMaskStagingRing()
         self.mask_steps = self.mask_rows = self.mask_late_finish = self.mask_fallback_rows = self.mask_chain_steps = 0
+        self.mask_hole_caps = 0  # rows a mask hole capped (mask_hole_cap): drafts the scheduler never saw
+        self.mask_hole_chained = 0  # chained rows the cap would apply to (not applied: the device built their aux)
         self._split_begin = False
         self._split_pending = None
         # phase 3 part 2: the penalty state / bodies (PenaltyDevice), the pen update trace, and the counters of the steps that carried a
@@ -4494,6 +4507,8 @@ class MTPSpecEngine:
                 spec_sampling, active
             )  # None: nothing sampled and no logprobs row (the S1 step)
             self._pen_stage(sampling)
+            # a one-call masked step (a split step caps at the finish)
+            nv_rows = self._mask_cap_nv(sampling, clean, nv_rows, active)
             ids, _, fz = self.verify(
                 clean,
                 start0,
@@ -4770,6 +4785,9 @@ class MTPSpecEngine:
         B, K = self.B, self.K
         if mask is None:
             mask = sampling.get("mask")
+        # the device paths' cap (idempotent): never walk into a mask hole (spec_masks.mask_hole_cap)
+        if mask is not None:
+            num_valid = mask_hole_cap(torch.as_tensor(mask).reshape(B, K + 1, -1), tokens, num_valid)
         lg = torch.as_tensor(logits).reshape(B * (K + 1), -1)[:, : self.vocab]
         pen = sampling.get("pen")
         walked = (
@@ -4858,12 +4876,14 @@ class MTPSpecEngine:
                 split = self._split_begin
 
                 def fallback(mask=None):
+                    nv_f = nv
                     if split:
                         self._finish_sampling_mask(sampling, mask)
+                        nv_f = self._mask_cap_nv(sampling, tokens, nv, active, split=True)
                     ids, vfeed, lt = self.model.verify_traced(*args, **dict(kw, read_logits=True))
                     self._vfeed = vfeed
                     ids = torch.tensor(ids, dtype=torch.int32).reshape(B, T)
-                    return self._fused_fallback_result(ids, tokens, nv, reason, logits=lt, sampling=sampling)
+                    return self._fused_fallback_result(ids, tokens, nv_f, reason, logits=lt, sampling=sampling)
 
                 if split:  # decode_forward_begin: nothing is enqueued; the finish runs the fallback with the mask
                     return None, None, self._split_handle(fallback)
@@ -5406,6 +5426,8 @@ class MTPSpecEngine:
             ):  # decode_forward_begin with a chain: the finish needs the same tail as a host-staged begin
                 h.sync_tail = dict(defer=True, start0=start0, active=active)
             return VerifyResult("fused_sample", None, handle=h)
+        # a one-call masked step (a split step caps at the finish)
+        nv_rows = self._mask_cap_nv(sampling, clean, nv_rows, active)
         self._def_ctx = {"sampling": sampling}
         try:
             ids, _, fz = self.verify(
@@ -5546,10 +5568,20 @@ class MTPSpecEngine:
         t_begin = time.perf_counter()
 
         def post(mask=None):
-            nonlocal vh, h, audit
+            nonlocal vh, h, audit, nv, aux
             midx, mask_buf, ex = [], None, dict(extra)
             if split:
                 self._finish_sampling_mask(sampling, mask)
+                # host-staged: re-stage the aux words when a mask hole caps a row (before the accept reads them)
+                if chain is None:
+                    nv_c = self._mask_cap_nv(sampling, tokens, nv, active, split=True)
+                    if not torch.equal(nv_c, torch.as_tensor(nv).to(torch.int64).reshape(B)):
+                        aux = aux.clone()
+                        aux[AUX_NUM_VALID, :B] = nv_c.to(aux.dtype)
+                        fa.stage_aux(aux)
+                        nv = nv_c
+                else:
+                    self._mask_hole_note_chained(sampling, cmask, nv)
                 midx = self._mask_rows(sampling, active)
                 fs.stage_samp(
                     sampling["temperature"],
@@ -5805,6 +5837,8 @@ class MTPSpecEngine:
                     f"deferred fused step {h.tip_id}: device p0 {p0.tolist()} != previous p0 + count {want.tolist()}"
                 )
         tokens = self._def_tokens(h, pd)
+        if _MASK_AUDIT and h.sampling is not None and h.sampling.get("mask") is not None:
+            self._mask_audit(h, committed, counts, tokens)
         ids = d["ids"]
         if ids is not None and h.kind == "g":
             w_c, w_n = fused_greedy_walk(ids, tokens, h.nvv, K)
@@ -5827,6 +5861,41 @@ class MTPSpecEngine:
         if h.audit is not None:
             d["n_chain_audit"] = 1
             self._def_chain_audit(h, d, pd)
+
+    def _mask_audit(self, h, committed, counts, tokens):
+        """QWEN36_SPEC_MASK_AUDIT (debug, reader thread, never raises): every token a masked step committed must be allowed by the
+        engine-row mask row of its column. Logs violations (the device ignored its mask) and "holes" (a constrained user whose
+        mask column j <= nv is all ones: the device may commit an unconstrained token there)."""
+        try:
+            B, T = self.B, self.T
+            mask = torch.as_tensor(h.sampling["mask"]).reshape(B, T, -1)
+            con = ~is_unconstrained(mask)  # [B, T]
+            live = h.active & con.any(dim=1)
+            if not bool(live.any()):
+                return
+            ok = token_allowed(mask.reshape(B * T, -1), committed.reshape(B * T, 1)).reshape(B, T)
+            col = torch.arange(T)[None, :]
+            bad = live[:, None] & (col < counts[:, None]) & ~ok
+            hole = live[:, None] & (col <= h.nvv[:, None]) & ~con
+            hole_hit = hole & (col < counts[:, None])
+            st = self.__dict__.setdefault("_mask_audit_n", {"steps": 0, "bad": 0, "hole": 0, "hole_hit": 0})
+            st["steps"] += 1
+            st["bad"] += int(bad.any(dim=1).sum())
+            st["hole"] += int(hole.any(dim=1).sum())
+            st["hole_hit"] += int(hole_hit.any(dim=1).sum())
+            if bool(bad.any()) or bool(hole_hit.any()):
+                for u in torch.nonzero(bad.any(dim=1) | hole_hit.any(dim=1)).reshape(-1).tolist():
+                    logger.warning(
+                        f"[spec_engine] MASK AUDIT step {h.tip_id} row {u} slot {self._slot_of(u)}: "
+                        f"{'VIOLATION' if bool(bad[u].any()) else 'hole hit'} committed {committed[u].tolist()} "
+                        f"count {int(counts[u])} tokens {tokens[u].tolist()} nv {int(h.nvv[u])} con {con[u].int().tolist()} "
+                        f"ok {ok[u].int().tolist()} chained {bool(h.cmask is not None and bool(h.cmask[u]))} "
+                        f"bucket {h.bucket} perm {None if h.perm is None else h.perm[0].tolist()}"
+                    )
+            if st["steps"] % 512 == 0:
+                logger.info(f"[spec_engine] mask audit: {st}")
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"[spec_engine] mask audit error: {e!r}")
 
     def _def_chain_audit(self, h, d, pd):
         """The deferred CHAIN audit: the token buffer, packed aux buffer and fused aux the chain trace wrote for THIS step (copied
@@ -6020,6 +6089,48 @@ class MTPSpecEngine:
         con = ~is_unconstrained(mask) & torch.as_tensor(active).bool().reshape(self.B, 1)
         return torch.nonzero(con.reshape(-1)).reshape(-1).tolist()
 
+    def _mask_cap_nv(self, sampling, tokens, nv, active=None, split=False):
+        """``nv`` [B] (engine rows) capped by the step's mask holes (spec_masks.mask_hole_cap): a constrained row never verifies
+        a draft past a constrained column whose next column is all ones. That column was built from no draft: vLLM fills the
+        scheduler rows 1..K from the drafts only when it defers sampling (``take_draft_token_ids``); otherwise they come from the
+        ``-1`` placeholders and only row 0 is the grammar. Walking into it commits a token the grammar may forbid (vLLM then
+        terminates the request). Returns ``nv`` itself (int64) when nothing is capped. Counts ``mask_hole_caps``."""
+        mask = None if sampling is None else sampling.get("mask")
+        nv = torch.as_tensor(nv).to(torch.int64).reshape(self.B)
+        mask = None if mask is None else torch.as_tensor(mask).reshape(self.B, self.T, -1)
+        capped = nv if mask is None else mask_hole_cap(mask, tokens, nv)
+        # a split step carries the plugin's grammar rows: also the reasoning boundary (reasoning_boundary_cap)
+        if split:
+            capped = reasoning_boundary_cap(mask, tokens, capped, _REASONING_END_IDS)
+        if active is not None:
+            capped = torch.where(torch.as_tensor(active).bool().reshape(self.B), capped, nv)
+        hit = capped < nv
+        if not bool(hit.any()):
+            return nv
+        n = self.mask_hole_caps
+        self.mask_hole_caps = n + int(hit.sum())
+        if n < 16 or (n // 256) != (self.mask_hole_caps // 256):
+            logger.info(
+                f"[spec_engine] mask hole cap: rows {hit.nonzero().reshape(-1).tolist()} num_valid {nv.tolist()} -> "
+                f"{capped.tolist()} ({self.mask_hole_caps} capped rows so far)"
+            )
+        return capped
+
+    def _mask_hole_note_chained(self, sampling, cmask, nv):
+        """A chained split step cannot re-stage its aux (the chain trace built it on the device): count the chained rows the hole cap
+        would change (a chained grammar row has its drafts handed over by the plugin, so its scheduler rows follow them and only a
+        grammar that ended at a draft leaves a hole, which keeps no token past it)."""
+        mask = None if sampling is None else sampling.get("mask")
+        if mask is None or cmask is None:
+            return
+        nv = torch.as_tensor(nv).to(torch.int64).reshape(self.B)
+        con = ~is_unconstrained(torch.as_tensor(mask).reshape(self.B, self.T, -1))
+        # a hole within the verified columns after a constrained one (tokens are on the device: no allowed-draft test here)
+        col = torch.arange(self.T)[None, :]
+        prev_con = torch.cat([torch.zeros(self.B, 1, dtype=torch.bool), con[:, :-1]], dim=1)
+        hole = (prev_con & ~con & (col <= nv[:, None]) & (col >= 1)).any(dim=1) & torch.as_tensor(cmask).bool()
+        self.mask_hole_chained += int(hole.sum())
+
     def _mask_stage(self, sampling, rows):
         """The device input of the mask write: the permuted [8, 32, 970] buffer of the constrained engine rows ``rows`` (repack of those
         rows only, all other rows ones), from the staging ring. The caller keeps it alive until the step's event."""
@@ -6032,7 +6143,8 @@ class MTPSpecEngine:
         if self.mask_steps == 1 or self.mask_steps % 256 == 0:
             logger.info(
                 f"[spec_engine] device masks: {self.mask_steps} steps, {self.mask_rows} rows, {self.mask_chain_steps} chained, "
-                f"{self.mask_late_finish} late, {self.mask_fallback_rows} fallback rows"
+                f"{self.mask_late_finish} late, {self.mask_fallback_rows} fallback rows, "
+                f"{self.mask_hole_caps} hole caps, {self.mask_hole_chained} chained holes"
             )
         return buf
 
@@ -6271,10 +6383,16 @@ class MTPSpecEngine:
         t_begin = time.perf_counter()
 
         def post(mask=None):
-            nonlocal vh
+            nonlocal vh, nv, aux
             midx = []
             if split:
                 self._finish_sampling_mask(sampling, mask)
+                nv_c = self._mask_cap_nv(sampling, tokens, nv, active, split=True)  # never chained: aux is host-staged
+                if not torch.equal(nv_c, nv):
+                    aux = aux.clone()
+                    aux[AUX_NUM_VALID, :B] = nv_c.to(aux.dtype)
+                    fa.stage_aux(aux)
+                    nv = nv_c
                 fs.stage_samp(
                     sampling["temperature"],
                     sampling["top_k"],

@@ -157,6 +157,65 @@ def token_allowed(mask_rows, ids):
     return (((words >> (ids & 31).to(torch.int32)) & 1) == 1) & inside
 
 
+def mask_hole_cap(mask, tokens, num_valid):
+    """``num_valid`` [B] int64, capped so the accept walk never examines an unconstrained column it reaches through a
+    constrained one. ``mask`` [B, T, W] engine rows, ``tokens`` [B, T] the verify block (column 0 the last committed token,
+    columns 1..K the drafts), ``num_valid`` [B] the drafts each row verifies.
+
+    The walk compares draft ``d_c`` (token column c) against the decision at column ``c - 1``; it reaches column ``c`` only when
+    that column allows ``d_c``. A row is capped at ``c - 1`` (column ``c - 1`` becomes the bonus) at the first ``c <= num_valid``
+    where column ``c - 1`` is constrained, allows ``d_c``, and column ``c`` is all ones. The plugin's contract (4m) makes column
+    ``c`` all ones there only when the scheduler built it from no draft (``-1`` placeholders: vLLM fills rows 1..K from the drafts
+    only on its deferred-sampling path, ``take_draft_token_ids``) or when the grammar ended at ``d_c``: in the first case the
+    column would admit a token the grammar forbids (vLLM terminates the request), in the second nothing after ``d_c`` is kept,
+    so the cap changes no output. Columns before the first constrained one (an open reasoning phase) and rows with no
+    constraint are untouched; a walk that stops before ``c`` (``d_c`` refused) is untouched."""
+    mask = torch.as_tensor(mask)
+    B, T = int(mask.shape[0]), int(mask.shape[1])
+    tok = torch.as_tensor(tokens).to(torch.int64).reshape(B, T)
+    nv = torch.as_tensor(num_valid).to(torch.int64).reshape(B).clone()
+    con = ~is_unconstrained(mask)  # [B, T]
+    for u in torch.nonzero(con.any(dim=1)).reshape(-1).tolist():
+        for c in range(1, min(int(nv[u]), T - 1) + 1):
+            if not bool(con[u, c - 1]):
+                continue  # an unconstrained column (open reasoning phase): the walk goes on
+            if not bool(token_allowed(mask[u, c - 1 : c], tok[u, c : c + 1].reshape(1, 1))[0, 0]):
+                break  # d_c is refused: the walk stops at column c - 1 whatever follows
+            if not bool(con[u, c]):
+                nv[u] = c - 1
+                break
+    return nv
+
+
+# the Qwen3 reasoning parser end set: "</think>", "<tool_call>" (the engine reads QWEN36_SPEC_REASONING_END_IDS)
+REASONING_END_IDS = (248069, 248058)
+
+
+def reasoning_boundary_cap(mask, tokens, num_valid, end_ids=REASONING_END_IDS):
+    """``num_valid`` [B] int64, capped so a row never decides the token after a drafted reasoning-end id from an all-ones mask
+    column. ``mask`` [B, T, W] engine rows or None (no row constrained), ``tokens`` [B, T], ``num_valid`` [B].
+
+    vLLM starts a structured request's grammar after the reasoning-end id; when its scheduler rows come from the ``-1``
+    placeholders (no deferred sampling, see mask_hole_cap) it cannot see an end id among the drafts, so every row of the request
+    stays all ones and the column after the end id (the grammar's start state) is unconstrained too. A row is capped at
+    ``c - 1`` at the first ``c <= num_valid`` with draft ``d_c`` an end id and column ``c`` all ones: the step commits at most
+    up to the end id, the next step starts with the grammar. A row whose column ``c`` is constrained (the scheduler had the
+    drafts) is untouched; a row with no structured output loses at most the drafts after its end id, once."""
+    tok = torch.as_tensor(tokens).to(torch.int64)
+    B, T = int(tok.shape[0]), int(tok.shape[1])
+    nv = torch.as_tensor(num_valid).to(torch.int64).reshape(B).clone()
+    if not end_ids:
+        return nv
+    con = torch.zeros(B, T, dtype=torch.bool) if mask is None else ~is_unconstrained(torch.as_tensor(mask))
+    is_end = torch.isin(tok, torch.as_tensor(list(end_ids), dtype=torch.int64))
+    for u in torch.nonzero(is_end[:, 1:].any(dim=1)).reshape(-1).tolist():
+        for c in range(1, min(int(nv[u]), T - 1) + 1):
+            if bool(is_end[u, c]) and not bool(con[u, c]):
+                nv[u] = c - 1
+                break
+    return nv
+
+
 def apply_to_logits(logits, mask, fill=float("-inf")):
     """``logits`` ``[N, V]`` with every disallowed token set to ``fill``; ``mask`` ``[N, W]``. A new tensor (the input is not
     changed); a row with no constraint is copied as it is."""
