@@ -253,8 +253,14 @@ inline void sfpu_gguf_decode_tile_ti(const std::uint32_t dst_index, const std::u
     if constexpr (PARAMS && gguf::k4_regs<FMT>)
     {
         // Phase 1 alone (e.g. a pack-thread decode that waits between the phases): a = 0's S / M stay in L4..L7 for
-        // the body of the next call, so nothing else may run on this SFPU in between.
-        gguf::k4_params_regs<TI>();
+        // the body of the next call, so nothing else may run on this SFPU in between. The cycle-counted body's first
+        // macro is far enough from phase 1's last SFPMUL without phase 1's tail NOPs.
+        constexpr bool cyc = gguf::cycle_body<FMT, BESIDE_UNPACK>;
+        if constexpr (cyc)
+        {
+            static_assert(gguf::mfirst_macro(gguf::mplan_v<gguf::Q4_0, 0, true, true>) >= 3);
+        }
+        gguf::k4_params_regs<TI, !cyc>();
     }
     else if constexpr (PARAMS)
     {
@@ -311,7 +317,7 @@ constexpr bool sfpu_gguf_decode_body_unarbitrated()
  * @param rows: As @ref sfpu_gguf_decode_tile; the same value as the group's tile calls.
  * @note Call before the first tile of a group that @ref sfpu_gguf_decode_tile decodes at dst_index and rows; nothing
  *       else may write scratch tile dst_index + 2 (entries 0..15) or tile dst_index + 1 past its page until the
- *       group ends.
+ *       group ends. Q4_K, Q5_K, Q3_K: overwrites programmable constants 0 and 1.
  */
 template <int FMT>
 inline void sfpu_gguf_decode_group(const std::uint32_t dst_index, const std::uint32_t rows = 0)

@@ -44,35 +44,41 @@ template <int FMT>
 sfpi_inline void k4_group()
 {
     constexpr int src = CO + scale_row<FMT>() / 2;
+    // The masks in programmable constants 0 and 1 (the macro bodies use only constant 2).
+    sfpi::vConstIntPrgm0 = 0x0F0F0F0F;
+    sfpi::vConstIntPrgm1 = 0x30303030;
+    const auto lo4       = sfpi::as<vUInt>(sfpi::vConstIntPrgm0);
+    const auto hi2       = sfpi::as<vUInt>(sfpi::vConstIntPrgm1);
 #pragma GCC unroll 2
     for (int a = 0; a < 2; a++)
     {
         const int w0 = K4 + 8 * a, w1 = w0 + 4;
-        // Scale bytes 0..15 (rows 0..3): column half 0's scales of tiles 0..3, mins of 0..3, low / high nibbles of
-        // tiles 4..7; column half 1's scales of tiles 0..3.
+        // Scale bytes 0..15 (rows 0..3, r): column half 0's scales of tiles 0..3, mins of 0..3, low / high nibbles of
+        // tiles 4..7; column half 1's scales of tiles 0..3. Bytes 16..23 (rows 4, 5, q): column half 1's mins of tiles
+        // 0..3, nibbles of tiles 4..7. One SFPTRANSP for both (LRegs 0..3 and 4..7).
         vUInt r0 = ldu(src + a), r1 = r0, r2 = r0, r3 = r0;
-        transp4(r0, r1, r2, r3);
+        vUInt q0 = ldu(src + 2 + a), q1 = q0, q2 = q0, q3 = q0;
+        sfpi::subvec_transp(r0, r1, r2, r3, q0, q1, q2, q3);
+
+        // Rows 6, 7 (q2, q3: fp16 d and dmin, column half b in bits 16b) wait where column half 1's fp32 values go.
+        sfpi::dst_reg[pf32_idx<FMT>(0, 1, a)].template mode<sfpi::DataLayout::U32>() = q2;
+        sfpi::dst_reg[pf32_idx<FMT>(1, 1, a)].template mode<sfpi::DataLayout::U32>() = q3;
+
         sfpi::dst_reg[w0 + 0].mode<sfpi::DataLayout::U32>() = r0;
         sfpi::dst_reg[w0 + 2].mode<sfpi::DataLayout::U32>() = r1;
-        sfpi::dst_reg[w0 + 1].mode<sfpi::DataLayout::U32>() = (r2 & vUInt(0x0F0F0F0Fu)) | ((r0 >> 2u) & vUInt(0x30303030u));
-        sfpi::dst_reg[w0 + 3].mode<sfpi::DataLayout::U32>() = ((r2 >> 4u) & vUInt(0x0F0F0F0Fu)) | ((r1 >> 2u) & vUInt(0x30303030u));
         sfpi::dst_reg[w1 + 0].mode<sfpi::DataLayout::U32>() = r3;
-        sfpi::dst_reg[w1 + 1].mode<sfpi::DataLayout::U32>() = (r3 >> 2u) & vUInt(0x30303030u);
-        // Bytes 16..23 (rows 4, 5): column half 1's mins of tiles 0..3, nibbles of tiles 4..7.
-        vUInt q0 = ldu(src + 2 + a), q1 = q0, q2 = q0, q3 = q0;
-        transp4(q0, q1, q2, q3);
         sfpi::dst_reg[w1 + 2].mode<sfpi::DataLayout::U32>() = q0;
-        sfpi::dst_reg[w1 + 1].mode<sfpi::DataLayout::U32>() = ldu(w1 + 1) | (q1 & vUInt(0x0F0F0F0Fu));
-        sfpi::dst_reg[w1 + 3].mode<sfpi::DataLayout::U32>() = ((q1 >> 4u) & vUInt(0x0F0F0F0Fu)) | ((q0 >> 2u) & vUInt(0x30303030u));
-        {
-            // Rows 6, 7 (q2, q3): fp16 d and dmin, column half b in bits 16b.
+        sfpi::dst_reg[w0 + 1].mode<sfpi::DataLayout::U32>() = (r2 & lo4) | ((r0 >> 2u) & hi2);
+        sfpi::dst_reg[w0 + 3].mode<sfpi::DataLayout::U32>() = ((r2 >> 4u) & lo4) | ((r1 >> 2u) & hi2);
+        sfpi::dst_reg[w1 + 1].mode<sfpi::DataLayout::U32>() = ((r3 >> 2u) & hi2) | (q1 & lo4);
+        sfpi::dst_reg[w1 + 3].mode<sfpi::DataLayout::U32>() = ((q1 >> 4u) & lo4) | ((q0 >> 2u) & hi2);
+
 #pragma GCC unroll 2
-            for (int F = 0; F < 2; F++)
-            {
-                const vUInt w                         = F ? q3 : q2;
-                sfpi::dst_reg[pf32_idx<FMT>(F, 0, a)] = k4_f16<0>(w);
-                sfpi::dst_reg[pf32_idx<FMT>(F, 1, a)] = k4_f16<1>(w);
-            }
+        for (int F = 0; F < 2; F++)
+        {
+            const vUInt w                         = ldu(pf32_idx<FMT>(F, 1, a));
+            sfpi::dst_reg[pf32_idx<FMT>(F, 0, a)] = k4_f16<0>(w);
+            sfpi::dst_reg[pf32_idx<FMT>(F, 1, a)] = k4_f16<1>(w);
         }
     }
 }
@@ -98,17 +104,20 @@ sfpi_inline void q2_group()
 // column half b, word parity a. Row 6 (fp16 d) to fp32, where pf32 reads it, past the page.
 constexpr int Q3 = 2 * TILE;
 
+// Masks 0x0F0F0F0F, 0x03030303 in programmable constants 0, 1 (q3_group).
 template <unsigned LS, unsigned HS>
 sfpi_inline vUInt q3_word(const vUInt lo, const vUInt hi)
 {
     const vUInt l = LS ? lo >> LS : lo;
     const vUInt h = HS ? hi >> HS : hi;
-    return (l & vUInt(0x0F0F0F0Fu)) | ((h & vUInt(0x03030303u)) << 4u);
+    return (l & sfpi::as<vUInt>(sfpi::vConstIntPrgm0)) | ((h & sfpi::as<vUInt>(sfpi::vConstIntPrgm1)) << 4u);
 }
 
 template <int FMT>
 sfpi_inline void q3_group()
 {
+    sfpi::vConstIntPrgm0 = 0x0F0F0F0F;
+    sfpi::vConstIntPrgm1 = 0x03030303;
 #pragma GCC unroll 2
     for (int a = 0; a < 2; a++)
     {
@@ -367,8 +376,9 @@ sfpi_inline void k4_codes(const unsigned r0, const unsigned n)
 }
 
 // The body's first macro must start six instructions after the last SFPMUL (with four, some Blackhole dies decoded
-// wrong tiles): three stores and two NOPs here, then the body's first load.
-template <int TI>
+// wrong tiles): three stores here, then two NOPs and the body's first load, or (TAIL = false) a body whose first
+// macro is in its fourth slot or later.
+template <int TI, bool TAIL = true>
 sfpi_inline void k4_params_regs()
 {
 #pragma GCC unroll 2
@@ -416,8 +426,11 @@ sfpi_inline void k4_params_regs()
     TTI_SFPSTORE(1, 0, ADDR_MOD_7, 2 * (PM + pidx(1, 0, 0)));
     TTI_SFPSTORE(2, 0, ADDR_MOD_7, 2 * (PS + pidx(1, 1, 0)));
     TTI_SFPSTORE(3, 0, ADDR_MOD_7, 2 * (PM + pidx(1, 1, 0)));
-    TTI_SFPNOP;
-    TTI_SFPNOP;
+    if constexpr (TAIL)
+    {
+        TTI_SFPNOP;
+        TTI_SFPNOP;
+    }
 }
 
 // The issue stream of the macro bodies, planned at compile time (make_mplan). A stall of the issue (a DEST access
@@ -799,6 +812,16 @@ constexpr mplan make_mplan_icount()
 
 template <int FMT, int CP, bool IN_REGS, bool CYC>
 constexpr mplan mplan_v = CYC ? make_mplan_best<FMT, CP, IN_REGS>() : make_mplan_icount<FMT, CP>();
+
+constexpr int mfirst_macro(const mplan& p)
+{
+    int i = 0;
+    while (i < p.n && p.s[i].kind != MS_MACRO)
+    {
+        i++;
+    }
+    return i;
+}
 
 template <int FMT, int CP, bool IN_REGS, bool CYC, int I>
 sfpi_inline void mslot_issue()
