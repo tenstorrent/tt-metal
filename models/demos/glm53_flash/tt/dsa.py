@@ -1377,10 +1377,9 @@ class TtDSA(LightweightModule):
         [rows, pools] block in TILE and ROW_MAJOR (268 MB at 256 rows x 262 K pools, 536 MB at 512): at the 32-user
         1 M point (QBLOCK 256) the default ABLOCK 2048 adds ~6 MB to the chunk's peak; ABLOCK 1024 halves it.
 
-        ``end_pad`` (the padded chunk's end): with ``GLM53_PREFILL_FIXED_SHAPES=1`` (tt-blaze G53F-0313) the pools view and
-        the bounded selections' scored width come from it instead of the prompt end ``end``, so no shape or cached
-        constant of the selection depends on where the prompt ends inside its padded chunk (rows rank their own causal
-        prefix either way)."""
+        ``end_pad`` (the padded chunk's end): with ``GLM53_PREFILL_FIXED_SHAPES=1`` (tt-blaze G53F-0313) the bounded
+        selections' scored width comes from it instead of the prompt end ``end`` (rows rank their own causal prefix
+        either way), within the pools view of the prompt end (``TtDSAIndexer._rank_pools``)."""
         idx = self.indexer
         qb, ab = prefill_blocks()
         n = r1 - r0
@@ -1397,8 +1396,10 @@ class TtDSA(LightweightModule):
         n_pools_valid = end // idx.P
         fixed = end_pad is not None and fixed_shapes_enabled()
         n_pools_bounded = end_pad // idx.P if fixed else None  # G53F-0313: the bounded width from the padded chunk
-        # G53F-0198: the chunk's pools as a bucket-wide copy for the scorer (GLM53_INDEXER_POOL_BUCKET; None = off)
-        pv = idx.pools_view(cache.index, slot, end_pad if fixed else end, qb)
+        # G53F-0198: the chunk's pools as a bucket-wide copy for the scorer (GLM53_INDEXER_POOL_BUCKET; None = off). Its
+        # width stays the prompt end's under G53F-0313's fixed shapes too (it moves only every 64k tokens): a padded-end
+        # width changed the selections on device (K1 run 2, prompt 61000: 16384 -> 32768 columns)
+        pv = idx.pools_view(cache.index, slot, end, qb)
         o_parts = []
         for a0, a1, subs in sparse_block_plan(r0, r1, qb, ab):
             if self._colsplit_block(a1 - a0, row_starts_of, cache, user):

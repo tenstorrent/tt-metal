@@ -290,3 +290,57 @@ def test_slice_end_of_the_export(monkeypatch):
     assert rt._slice_end(12288, 12288 + 9000) == 12288 + 9216  # 1024-token steps above 8192
     monkeypatch.setenv("GLM53F_RUNNER_BUCKETS", "")
     assert rt._slice_end(0, 300) == 512  # the model's own 256-row units
+
+
+def _rank(monkeypatch, *, nv, nb, view_w, no_crop="1", start=49152, T_pad=12288):
+    """``_rank_pools`` of the slab colsplit form (8x4 mesh, one sub-block per column quarter) with the scorer and the
+    bounded top-k stubbed: returns (kv_len the scorer got, whether it scored the view, the top-k's kv_len)."""
+    got = {}
+
+    class _S:
+        layout = "RM"
+        shape = (1, 1, 384, view_w)
+
+        def is_allocated(self):
+            return False
+
+    def score(q, k, w, **kw):
+        got["kv_len"], got["view"] = kw["kv_len"], k == "VIEW"
+        return _S()
+
+    emu = types.SimpleNamespace(
+        experimental=types.SimpleNamespace(indexer_score_dsa=score),
+        ROW_MAJOR_LAYOUT="RM",
+        deallocate=lambda t: None,
+        slice=lambda t, a, b: _S(),
+    )
+    monkeypatch.setattr(IX, "ttnn", emu)
+    monkeypatch.setenv("GLM53_INDEXER_NO_CROP", no_crop)
+    idx = IX.TtDSAIndexer.__new__(IX.TtDSAIndexer)
+    idx.cfg = types.SimpleNamespace(index_select_pools=512)
+    idx.P, idx.mesh, idx.score_cfg, idx.stage_timer = P, types.SimpleNamespace(rows=8, cols=4), None, None
+    idx._topk_bounded = lambda s, T, kv_len, pos: got.__setitem__("topk_kv", kv_len) or "TOP"
+    cache = types.SimpleNamespace(pools_per_user=264448, pools_batched=lambda: "ALL")
+    T, nq = 384, T_pad // 8 // 4
+    row_starts = tuple(start + r * (T_pad // 8) for r in range(8))
+    idx._rank_pools(
+        types.SimpleNamespace(shape=(1, 32, T, D)), None, cache, 0, T=T, positions=None, query_start=start,
+        num_pools_valid=nv, row_starts=row_starts, pools_view=("VIEW", view_w), col_stride=nq, num_pools_bounded=nb,
+    )  # fmt: skip
+    return got["kv_len"], got["view"], got["topk_kv"]
+
+
+def test_bounded_width_guard(monkeypatch):
+    """The padded end's width replaces the prompt's only for a bounded selection with uncropped score rows and only
+    inside the pools view the per-length path uses (K1 run 2: a wider view changed the selections)."""
+    # 61000: valid 15250 pools, padded end 61440 = 15360; the colsplit superset is the padded end already
+    assert _rank(monkeypatch, nv=15250, nb=None, view_w=16384) == (15392, True, 15392)
+    assert _rank(monkeypatch, nv=15250, nb=15360, view_w=16384) == (15392, True, 15392)
+    # start 0, T_pad 12288: the superset is 3072 pools; a padded end at or below it changes nothing
+    assert _rank(monkeypatch, nv=2000, nb=3000, view_w=16384, start=0) == (3104, True, 3104)
+    kv_today, _, _ = _rank(monkeypatch, nv=3100, nb=None, view_w=16384, start=0)
+    assert kv_today == 3104
+    # nb above the superset: padded width used when it fits the view, the prompt's when not, and never with the crop
+    assert _rank(monkeypatch, nv=3100, nb=4000, view_w=16384, start=0) == (4032, True, 4032)
+    assert _rank(monkeypatch, nv=3100, nb=4000, view_w=4000, start=0) == (3104, True, 3104)
+    assert _rank(monkeypatch, nv=3100, nb=4000, view_w=16384, start=0, no_crop="0")[0] == 3104
