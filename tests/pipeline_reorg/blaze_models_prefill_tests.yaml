@@ -347,10 +347,11 @@
     )
 
     k3_kda() (
-      timeout -k 2m 12m mpirun --bind-to none --pernode --tag-output bash -lc '
+      timeout -k 2m 18m mpirun --bind-to none --pernode --tag-output bash -lc '
         set -e
         export OMP_NUM_THREADS=$(nproc)
         python3 -m pytest models/demos/deepseek_v3_d_p/tests/kda/layer/test_acceptance.py::test_synthetic_kimi_k3_accuracy_and_determinism -k "SP8xTP4" -vvv --tb=short
+        python3 -m pytest models/demos/deepseek_v3_d_p/tests/kda/components/test_relay_affine_prefix.py models/demos/deepseek_v3_d_p/tests/kda/components/test_entry_correction.py models/demos/deepseek_v3_d_p/tests/kda/components/test_select_final_carry.py -k "SP8xTP4 and not perf" -vvv --tb=short
         export KIMI_K3_CKPT=/mnt/weka/model-weights/llm/moonshotai/Kimi-K3-dequantized
         python3 -m pytest models/demos/deepseek_v3_d_p/tests/kda/layer/test_acceptance.py::test_kimi_k3_layer_1_real_weights_accuracy -k "SP8xTP4" -vvv --tb=short
       '
@@ -378,7 +379,7 @@
 
     echo "===== [1/4] (Kimi-K3-2.8T) golden-contract, layer-schedule, cache and KV-ack gates ====="
     k3_contracts || exit $?
-    echo "===== [2/4] (Kimi-K3-2.8T) KDA accuracy, determinism 5k SP8xTP4 + layer-1 real weights ====="
+    echo "===== [2/4] (Kimi-K3-2.8T) KDA accuracy, determinism 5k SP8xTP4 + SP ops + layer-1 real weights ====="
     k3_kda || exit $?
     echo "===== [3/4] (Kimi-K3-2.8T) MLA chunked accuracy 10k@5k + determinism 5k@5k ====="
     k3_mla || exit $?
@@ -391,9 +392,8 @@
   test_group: module
   skus:
     bh_sc1:
-      # Exactly the sum of the per-section bounds (12 + 12 + 12 + 12),
-      # with 2 min added to [1/4] for the AttnRes determinism tests.
-      timeout: 48
+      # Exactly the sum of the per-section bounds (12 + 18 + 12 + 12).
+      timeout: 54
       tier: 2
       release_ready: false
   owner_id: U0ACLAM77PS  # Kosta Grujcic
@@ -412,6 +412,7 @@
       export OMP_NUM_THREADS=$(nproc)
       uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/kda/perf/test_layer_perf.py::test_synthetic_kimi_k3_perf -k "SP8xTP4" -vvv --tb=short
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/kda/components/test_relay_affine_prefix.py::test_relay_affine_prefix_kimi_k3_perf models/demos/deepseek_v3_d_p/tests/kda/components/test_entry_correction.py::test_entry_correction_kimi_k3_perf models/demos/deepseek_v3_d_p/tests/kda/components/test_select_final_carry.py::test_select_final_carry_kimi_k3_perf -k "SP8xTP4" -vvv --tb=short
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_mla.py::test_mla_chunked_perf_check -k "k3 and torus-xy-8x4" -vvv --tb=short
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/attn_res/perf/test_attn_res_perf.py::test_attn_res_layer_perf -k "SP8xTP4" -vvv --tb=short
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/attn_res/perf/test_attn_res_op_perf.py::test_attn_res_op_perf -k "SP8xTP4" -vvv --tb=short
@@ -1216,7 +1217,7 @@
   budget_type: demo
   skus:
     bh_sc1:
-      timeout: 30
+      timeout: 18
       tier: 1
       release_ready: false
   owner_id: U02LLCK5MML # Sasha Vuckovic
@@ -1246,7 +1247,54 @@
   budget_type: demo
   skus:
     bh_sc1:
-      timeout: 30
+      timeout: 27
+      tier: 1
+      release_ready: false
+  owner_id: U02LLCK5MML # Sasha Vuckovic
+  team: models
+  sp_config: sc1
+
+# Gemma4 continuous batching: one 4-lane traced step per chunk (2048 tokens per lane, prefixes to 8k, lane 0 the
+# deepest) against each request prefilled alone, every 2048-row block of every head in the early layers, and a slot no
+# step names left bit-identical; the lanes sliding ring SDPA against one call per request with lane 0 at the shortest
+# prefix (it alone drives the ring masks); and the packed serving path (PREFILL_FORWARD_TOKENS_BUDGET=8192: producer, batched
+# runtime, D2H layer acks, each completion checked against its chunk) against the same prompts served one chunk per
+# forward. The serving test xfails only on the unbatched run's min-head gate, as these prompts do on main; any batched,
+# ack or other golden failure fails it. Mid-chunk resume (#61878): unbatched at chunk 2048 / 4096 / 8192 and in packed
+# forwards, each against the same tokens prefilled from 0, plus a control resuming inside a slab that must fail (about 3 min).
+- name: "(Gemma4-31B-it) D_P continuous batching 4 lanes @2k"
+  fabric_profile: 1d
+  artifact_subdir: gemma4_mock256k  # the serving test's runner / producer logs and reports
+  cmd: |
+    export TT_METAL_HOME=/home/user/tt-metal
+    export PYTHONPATH="$TT_METAL_HOME"
+    export PYTHONUNBUFFERED=1
+    export HF_HUB_OFFLINE=1
+    export HF_HOME=/mnt/models/huggingface
+    export HF_MODEL=google/gemma-4-31B-it
+    export TT_CACHE_PATH=/mnt/models/huggingface/tt_cache/gemma4_d_p/google--gemma-4-31B-it
+    export PREFILL_TRACE_DIR=/mnt/models/huggingface/gpu_traces/gemma4_d_p/gutenberg-135
+    mpirun --bind-to none --pernode --tag-output bash -lc '
+      set -e
+      export OMP_NUM_THREADS=$(nproc)
+      python3 -m pytest \
+        "models/demos/gemma4_d_p/tests/test_batched_prefill.py::test_batched_kv_matches_unbatched[blackhole-B4-8x4]" \
+        "models/demos/gemma4_d_p/tests/test_batched_prefill.py::test_lanes_sdpa_matches_per_request[blackhole-lane0_empty-8x4]" \
+        models/demos/gemma4_d_p/tests/test_mid_chunk_resume.py \
+        -vv --tb=short
+      # Its own process: the serving test launches a runner that opens the mesh, which the cases above keep open
+      # until their pytest exits.
+      python3 -m pytest \
+        "models/demos/gemma4_d_p/tests/test_prefill_migration.py::test_batched_prefill_migration[mock]" \
+        -vv --tb=short
+    '
+  test_type: gemma4_d_p_batching
+  test_tags: [gemma4_d_p, batching]
+  test_group: module
+  budget_type: demo
+  skus:
+    bh_sc1:
+      timeout: 28
       tier: 1
       release_ready: false
   owner_id: U02LLCK5MML # Sasha Vuckovic

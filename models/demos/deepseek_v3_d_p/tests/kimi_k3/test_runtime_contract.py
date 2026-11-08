@@ -28,7 +28,9 @@ from unittest.mock import Mock, create_autospec
 import pytest
 
 import ttnn
+from models.demos.deepseek_v3_d_p.tt.kda.config import KDAProgramConfig
 from models.demos.deepseek_v3_d_p.tt.kda.kda import ttKDA
+from models.demos.deepseek_v3_d_p.tt.kda.state_contract import KDA_CONVOLUTION_PAGE_CHANNELS
 from models.demos.deepseek_v3_d_p.tt.kimi_k3 import attention as attention_module
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.attention import (
     K3AttnContext,
@@ -147,6 +149,7 @@ def test_the_block_kwargs_that_are_swept_through_are_genuinely_block_level():
 @pytest.mark.parametrize("sp_axis,tp_axis", [(0, 1), (1, 0)])
 def test_kda_construction_passes_global_and_local_geometry(monkeypatch, sp_axis, tp_axis):
     constructor = create_autospec(ttKDA)
+    constructor.return_value.convolution_page_channels = KDA_CONVOLUTION_PAGE_CHANNELS
     monkeypatch.setattr("models.demos.deepseek_v3_d_p.tt.kda.kda.ttKDA", constructor)
     monkeypatch.setattr("models.demos.deepseek_v3_d_p.tt.tt_ccl.get_tt_ccl", lambda device: None)
     build_attention(
@@ -164,6 +167,7 @@ def test_kda_construction_passes_global_and_local_geometry(monkeypatch, sp_axis,
     )
     kwargs = constructor.call_args.kwargs
     assert kwargs["active_seq_len"] == 2560
+    assert kwargs["program_config"].convolution_page_channels == KDA_CONVOLUTION_PAGE_CHANNELS
     # SP8 owns 320 rows (10 chunks); SP4 owns 640 rows (20 chunks).
     assert kwargs["program_config"].recurrence.summary_group_chunks == (10 if sp_axis == 0 else 20)
 
@@ -206,6 +210,7 @@ def test_build_kda_scalars_rejects_invalid_host_bounds_before_upload(monkeypatch
 def test_kda_forward_loads_and_stores_its_slot_through_the_shared_scratch(monkeypatch):
     kdas = [create_autospec(ttKDA, instance=True) for _ in range(2)]
     for kda in kdas:
+        kda.convolution_page_channels = KDA_CONVOLUTION_PAGE_CHANNELS
         kda.forward.return_value = object(), SimpleNamespace(recurrent=object(), convolution=object())
     slot, start, end = object(), object(), object()
     from_torch, deallocate = Mock(), Mock()
@@ -240,6 +245,13 @@ def test_kda_forward_loads_and_stores_its_slot_through_the_shared_scratch(monkey
     assert all(call.args not in ((slot,), (start,), (end,)) for call in deallocate.call_args_list)
 
 
+def test_kda_attention_rejects_a_layer_without_the_contract_convolution_pages(expect_error):
+    # A default-config layer keeps its convolution tail token-paged.
+    kda = Mock(convolution_page_channels=KDAProgramConfig().convolution_page_channels)
+    with expect_error(ValueError, f"convolution_page_channels={KDA_CONVOLUTION_PAGE_CHANNELS}"):
+        TtK3KdaAttention(kda, 1, 1, 1, ttnn.Topology.Linear, object())
+
+
 @pytest.mark.parametrize(
     "ctx,message",
     [
@@ -254,7 +266,9 @@ def test_kda_forward_loads_and_stores_its_slot_through_the_shared_scratch(monkey
 def test_kda_forward_requires_scalars_and_slabs_before_device_work(monkeypatch, expect_error, ctx, message):
     gather = Mock()
     monkeypatch.setattr(ttnn, "all_gather", gather)
-    attention = TtK3KdaAttention(Mock(), 1, 1, 1, ttnn.Topology.Linear, object())
+    attention = TtK3KdaAttention(
+        Mock(convolution_page_channels=KDA_CONVOLUTION_PAGE_CHANNELS), 1, 1, 1, ttnn.Topology.Linear, object()
+    )
     with expect_error(ValueError, message):
         attention.forward(object(), ctx)
     gather.assert_not_called()

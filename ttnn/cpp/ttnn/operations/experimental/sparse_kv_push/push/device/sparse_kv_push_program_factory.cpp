@@ -86,6 +86,7 @@ tt::tt_fabric::FabricMuxConfig mux_config(
     tt::tt_metal::ProgramDescriptor& desc,
     const CoreLayout& layout) {
     tt::tt_fabric::FabricMuxConfig mux(
+        *mesh_device,
         /*num_full_size_channels=*/kSendersPerChannel,
         /*num_header_only_channels=*/0,
         /*num_buffers_full_size_channel=*/kMuxBuffersPerChannel,
@@ -323,6 +324,7 @@ tt::tt_metal::ProgramDescriptor SparseKvPushProgramFactory::create_descriptor(
     for (uint32_t c = 0; c < layout.channels(); ++c) {
         tt::tt_metal::KernelDescriptor::RTArgList rt;
         rt.append(mux.get_fabric_mux_run_time_args(
+            *mesh_device,
             mesh_device->get_fabric_node_id(coord),
             mesh_device->get_fabric_node_id(neighbors[c % kDirections]),
             c / kDirections,
