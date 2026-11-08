@@ -176,6 +176,12 @@ inline void _calculate_gguf_decode_body_()
     }
 }
 
+// Formats with up to eight tile indices per group whose phase 2 does not depend on the index (but for its parity): one
+// out-of-line copy of phase 2 for every index, as a copy per index makes the decode loop too large for the TRISC
+// instruction cache.
+template <int FMT>
+constexpr bool shared_body = macro_body<FMT> && (FMT == Q4_K || FMT == Q5_K || FMT == Q6_K || FMT == Q3_K);
+
 // Load-macro setup of the formats whose phase 2 runs through SFPLOADMACRO.
 template <int FMT, bool BESIDE_UNPACK>
 inline void macro_init()
@@ -224,35 +230,44 @@ inline void sfpu_gguf_zero_tile(const std::uint32_t dst_index)
     sfpu_gguf_decode_done();
 }
 
-template <int FMT, int TI, bool PARAMS, bool BODY, bool BESIDE_UNPACK>
-inline void sfpu_gguf_decode_tile_ti(const std::uint32_t dst_index, const std::uint32_t rows)
+// Phase 2 of the shared_body formats and the end of the tile, called from each tile index. Q4_K: a = 0's S / M are in
+// L4..L7 (k4_params_regs).
+template <int FMT, int CP, bool BESIDE_UNPACK>
+[[gnu::noinline]] void sfpu_gguf_decode_shared_body()
 {
-    sfpu_gguf_decode_start(dst_index, rows);
-    if constexpr (PARAMS && BODY && gguf::k4_regs<FMT>)
-    {
-        gguf::k4_params_regs<TI>();
-        gguf::body_macro_q4<true, gguf::cycle_body<FMT, BESIDE_UNPACK>>();
-    }
-    else if constexpr (PARAMS && !BODY && gguf::k4_regs<FMT>)
-    {
-        // Phase 1 alone (e.g. a pack-thread decode that waits between the phases): a = 0's S / M stay in L4..L7 for
-        // the body of the next call, so nothing else may run on this SFPU in between.
-        gguf::k4_params_regs<TI>();
-    }
-    else if constexpr (BODY && !PARAMS && gguf::k4_regs<FMT>)
+    if constexpr (gguf::k4_regs<FMT>)
     {
         gguf::body_macro_q4<true, gguf::cycle_body<FMT, BESIDE_UNPACK>>();
     }
     else
     {
-        if constexpr (PARAMS)
-        {
-            gguf::_calculate_gguf_decode_params_<FMT, TI>();
-        }
-        if constexpr (BODY && !gguf::two_calls<FMT>)
-        {
-            gguf::_calculate_gguf_decode_body_<FMT, TI, BESIDE_UNPACK>();
-        }
+        gguf::_calculate_gguf_decode_body_<FMT, CP, BESIDE_UNPACK>();
+    }
+    sfpu_gguf_decode_done();
+}
+
+template <int FMT, int TI, bool PARAMS, bool BODY, bool BESIDE_UNPACK>
+inline void sfpu_gguf_decode_tile_ti(const std::uint32_t dst_index, const std::uint32_t rows)
+{
+    sfpu_gguf_decode_start(dst_index, rows);
+    if constexpr (PARAMS && gguf::k4_regs<FMT>)
+    {
+        // Phase 1 alone (e.g. a pack-thread decode that waits between the phases): a = 0's S / M stay in L4..L7 for
+        // the body of the next call, so nothing else may run on this SFPU in between.
+        gguf::k4_params_regs<TI>();
+    }
+    else if constexpr (PARAMS)
+    {
+        gguf::_calculate_gguf_decode_params_<FMT, TI>();
+    }
+    if constexpr (BODY && gguf::shared_body<FMT>)
+    {
+        sfpu_gguf_decode_shared_body<FMT, gguf::traits<FMT>::pair ? TI % 2 : 0, BESIDE_UNPACK>();
+        return;
+    }
+    if constexpr (BODY && !gguf::two_calls<FMT>)
+    {
+        gguf::_calculate_gguf_decode_body_<FMT, TI, BESIDE_UNPACK>();
     }
     sfpu_gguf_decode_done();
 }
