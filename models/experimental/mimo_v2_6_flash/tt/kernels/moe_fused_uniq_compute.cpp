@@ -10,6 +10,9 @@
 // Down: once every core's h of every expert is in cb_hall (expert j's h_kt tiles at j * h_kt), the sum over experts of
 // h_j @ w_down_j[:, this core's cols output tiles], all cols tiles accumulating in fp32 dest at once (the Compact
 // layout: 16 rows per [rows <= 8, 32] tile), the down blocks arriving expert by expert, down_rows K rows each.
+//
+// Two row halves (16 users): a listing of half 1 (the listings past half 0's count) multiplies x rows 8-15 (cb_x's
+// second kt tiles); down runs twice, over half 0's listings and then half 1's, each packing its own cols tiles.
 #include <cstdint>
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/experimental/custom_mm.h"
@@ -47,6 +50,7 @@ void kernel_main() {
     // Timing experiments only (MIMO_MOE_STREAM_DEBUG; wrong results): 2 = no matmuls, the weight blocks are only
     // waited for and popped (the stream's own rate).
     constexpr uint32_t debug = get_compile_time_arg_val(14);
+    constexpr uint32_t halves = get_compile_time_arg_val(15);
     constexpr bool mm = debug != 2;
     constexpr uint32_t ct = 2;  // gate, up
     constexpr uint32_t block_tiles = block_k * ct;
@@ -57,24 +61,26 @@ void kernel_main() {
     MOE_MARK(30);
     constexpr auto dest_layout = CustomMmDestLayout::DefaultSplitAcc;
     custom_mm_block_init<false, dest_layout>(cb_x, cb_w, cb_h, ct);
-    cb_wait_front(cb_x, kt);
+    cb_wait_front(cb_x, halves * kt);
     cb_wait_front(cb_cnt, 1);
     const uint32_t n = read_tile_value(cb_cnt, 0, 0);
+    const uint32_t n0 = halves == 1 ? n : read_tile_value(cb_cnt, 0, 1);  // half 0's listings
     cb_pop_front(cb_cnt, 1);
     MOE_MARK(31);
 
     for (uint32_t j = 0; j < n; j++) {
+        const uint32_t x0 = j < n0 ? 0 : kt;  // the listing's half's x tiles
         tile_regs_acquire();
         for (uint32_t b = 0; b < blocks_per_pair - 1; b++) {
             cb_wait_front(cb_w, block_tiles);
             if constexpr (mm) {
-                custom_mm_block<dest_layout, false>(cb_x, cb_w, b * block_k, 0, 0, block_k, ct);
+                custom_mm_block<dest_layout, false>(cb_x, cb_w, x0 + b * block_k, 0, 0, block_k, ct);
             }
             cb_pop_front(cb_w, block_tiles);
         }
         cb_wait_front(cb_w, block_tiles);
         if constexpr (mm) {
-            custom_mm_block<dest_layout>(cb_x, cb_w, (blocks_per_pair - 1) * block_k, 0, 0, block_k, ct);
+            custom_mm_block<dest_layout>(cb_x, cb_w, x0 + (blocks_per_pair - 1) * block_k, 0, 0, block_k, ct);
         }
         cb_pop_front(cb_w, block_tiles);
 
@@ -109,7 +115,7 @@ void kernel_main() {
             MOE_MARK(32);
         }
     }
-    cb_pop_front(cb_x, kt);
+    cb_pop_front(cb_x, halves * kt);
     MOE_MARK(33);
 
     // Down: every expert's blocks accumulate into the same cols dest tiles.
@@ -118,24 +124,28 @@ void kernel_main() {
     custom_mm_block_init_short<false, down_layout>(cb_hall, cb_w, cb_out, cols);
     cb_wait_front(cb_hall, n * h_kt);
     MOE_MARK(34);
-    tile_regs_acquire();
-    for (uint32_t j = 0; j < n; j++) {
-        for (uint32_t b = 0; b < down_blocks; b++) {
-            cb_wait_front(cb_w, block_tiles);
-            if constexpr (mm) {
-                custom_mm_block<down_layout>(cb_hall, cb_w, j * h_kt + b * down_rows, 0, 0, down_rows, cols);
+    for (uint32_t h = 0; h < halves; h++) {
+        const uint32_t lo = h == 0 ? 0 : n0;
+        const uint32_t hi = h == 0 ? n0 : n;
+        tile_regs_acquire();
+        for (uint32_t j = lo; j < hi; j++) {
+            for (uint32_t b = 0; b < down_blocks; b++) {
+                cb_wait_front(cb_w, block_tiles);
+                if constexpr (mm) {
+                    custom_mm_block<down_layout>(cb_hall, cb_w, j * h_kt + b * down_rows, 0, 0, down_rows, cols);
+                }
+                cb_pop_front(cb_w, block_tiles);
             }
-            cb_pop_front(cb_w, block_tiles);
         }
+        tile_regs_commit();
+        cb_reserve_back(cb_out, cols);
+        tile_regs_wait();
+        for (uint32_t c = 0; c < cols; c++) {
+            pack_tile(c, cb_out);
+        }
+        tile_regs_release();
+        cb_push_back(cb_out, cols);
     }
-    tile_regs_commit();
-    cb_reserve_back(cb_out, cols);
-    tile_regs_wait();
-    for (uint32_t c = 0; c < cols; c++) {
-        pack_tile(c, cb_out);
-    }
-    tile_regs_release();
-    cb_push_back(cb_out, cols);
     custom_mm_block_uninit<down_layout>(cb_out);
     cb_pop_front(cb_hall, n * h_kt);
     MOE_MARK(35);

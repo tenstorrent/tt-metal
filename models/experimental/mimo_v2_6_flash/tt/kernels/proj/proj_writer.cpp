@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-// BRISC: the user rows 0..rows-1 (rows 4 or 8) of every bf16 x tile into cb_x (block_rows tiles per push, the order
+// BRISC: the user rows 0..rows-1 (rows 4, 8 or 16) of every bf16 x tile into cb_x (block_rows tiles per push, the order
 // compute consumes), then this core's output tiles: the user rows from the packed results, the other rows zero.
 //
 // x arrives one of three ways (runtime arg role): 0 reads every tile from the x tensor; 1 (the loader of a bank group)
@@ -36,7 +36,7 @@ void kernel_main() {
     // > 0: write the user rows of output tile column n into the compact rows layout instead (DRAM tiles: rows
     // rows * c .. of compact tile n % compact_tiles, c = n / compact_tiles), the layout the row reduction moves.
     constexpr uint32_t compact_tiles = get_compile_time_arg_val(9);
-    constexpr uint32_t rows = get_compile_time_arg_val(10);  // the user rows: 4 or 8
+    constexpr uint32_t rows = get_compile_time_arg_val(10);  // the user rows: 4, 8 or 16
     constexpr uint32_t x_sem = get_compile_time_arg_val(11);
     constexpr uint32_t x_wait = get_compile_time_arg_val(12);
     constexpr uint32_t tile_bytes = 2048;                    // bf16 32x32
@@ -117,7 +117,9 @@ void kernel_main() {
     for (uint32_t j = 0; j < valid_cols; j++) {
         const uint64_t dst = page_noc_addr<false>(out_addr, first_col + j * col_stride, tile_bytes);
         noc_async_write(src, dst, user_bytes);
-        noc_async_write(zero_l1, dst + user_bytes, face_bytes - user_bytes);
+        if constexpr (face_bytes > user_bytes) {  // 16 user rows fill face 0
+            noc_async_write(zero_l1, dst + user_bytes, face_bytes - user_bytes);
+        }
         noc_async_write(src + face_bytes, dst + face_bytes, user_bytes);
         noc_async_write(zero_l1, dst + face_bytes + user_bytes, tile_bytes - face_bytes - user_bytes);
         src += tile_bytes;

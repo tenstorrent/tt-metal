@@ -3,8 +3,8 @@
 
 // Decode routing on the data-movement RISCs (tt/moe_stream.py): per user, the fp32 top-k over the biased sigmoid
 // scores (ties to the lower expert id, sorted descending like ttnn.topk) and the normalized, scaled, bf16-rounded
-// and token-masked routing weights from the unbiased scores, read from the user rows (0..rows-1, rows 4 or 8) of the
-// [32, E] fp32 tiles.
+// and token-masked routing weights from the unbiased scores, read from the user rows (0..rows-1, rows 4, 8 or 16) of
+// the [32, E] fp32 tiles.
 #pragma once
 
 #include <cstdint>
@@ -217,6 +217,54 @@ inline uint32_t table_experts(uint32_t tbl, uint32_t entry_bytes, uint32_t* uniq
                 uniq[n++] = id;
             }
         }
+    }
+    return n;
+}
+
+// table_experts per row half (FusedStream with two halves: users h * per_half .. (h + 1) * per_half - 1): half 0's
+// distinct experts, then half 1's (an expert both halves selected is listed in each); with no active user at all,
+// user 0's, in half 0. ``counts[h]``: half h's count. Returns the total.
+template <uint32_t topk, uint32_t per_half, uint32_t halves, uint32_t experts>
+inline uint32_t table_experts_halves(uint32_t tbl, uint32_t entry_bytes, uint32_t* uniq, uint32_t* counts) {
+    static_assert(experts % 32 == 0);
+    uint32_t n = 0;
+    for (uint32_t h = 0; h < halves; h++) {
+        uint32_t seen[experts / 32];
+        for (uint32_t w = 0; w < experts / 32; w++) {
+            seen[w] = 0;
+        }
+        const uint32_t start = n;
+        for (uint32_t u = h * per_half; u < (h + 1) * per_half; u++) {
+            volatile tt_l1_ptr uint32_t* e = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(tbl + u * entry_bytes);
+            if (e[0] == 0) {
+                continue;
+            }
+            for (uint32_t i = 0; i < topk; i++) {
+                const uint32_t id = e[1 + i];
+                const uint32_t bit = 1u << (id & 31u);
+                if ((seen[id >> 5] & bit) == 0) {
+                    seen[id >> 5] |= bit;
+                    uniq[n++] = id;
+                }
+            }
+        }
+        counts[h] = n - start;
+    }
+    if (n == 0) {
+        volatile tt_l1_ptr uint32_t* e = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(tbl);
+        uint32_t seen[experts / 32];
+        for (uint32_t w = 0; w < experts / 32; w++) {
+            seen[w] = 0;
+        }
+        for (uint32_t i = 0; i < topk; i++) {
+            const uint32_t id = e[1 + i];
+            const uint32_t bit = 1u << (id & 31u);
+            if ((seen[id >> 5] & bit) == 0) {
+                seen[id >> 5] |= bit;
+                uniq[n++] = id;
+            }
+        }
+        counts[0] = n;
     }
     return n;
 }

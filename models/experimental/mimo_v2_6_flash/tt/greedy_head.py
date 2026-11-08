@@ -28,7 +28,7 @@ def _is_dram(t):
 
 class GreedyHead:
     def __init__(self, plan, vocab_local, users, max_batch):
-        assert vocab_local % TILE == 0 and 1 <= users <= 8 and max_batch * 4 <= 1024
+        assert vocab_local % TILE == 0 and 1 <= users <= 16 and max_batch * 4 <= 1024
         self.plan, self.vocab_local, self.users, self.max_batch = plan, vocab_local, users, max_batch
         device = plan.mesh_device
         grid = device.compute_with_storage_grid_size()
@@ -84,7 +84,8 @@ class GreedyHead:
 
     def _merge_program(self, gathered, token_input):
         tp = self.plan.tp
-        crs, cb = self._scratch([self.merge_core], tp * 2 * 1024 + self.max_batch * 4)
+        halves = 2 if self.users > 8 else 1  # users 8-15 in the partial rows' right faces
+        crs, cb = self._scratch([self.merge_core], tp * halves * 2 * 1024 + self.max_batch * 4)
         rt = ttnn.RuntimeArgs()
         out1 = token_input.buffer_address() if token_input is not None else 0
         rt[self.merge_core.x][self.merge_core.y] = [

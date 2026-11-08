@@ -49,33 +49,35 @@ plan after the device chained a draft from a different commit) finds the same on
 import os
 from dataclasses import dataclass, field
 
-# Decode slots of a verify pass: 4, or 8 (MIMO_SPEC_SLOTS=8: DFlash's block of 7 drafts, or two requests of 3; the
-# verify then runs the pass in 8 decode slots, so the lane decodes 8 users). Fixed per process: every layout below
-# derives from it.
+# Decode slots of a verify pass: 4, 8 (MIMO_SPEC_SLOTS=8: DFlash's block of 7 drafts, or two requests of 3; the
+# verify then runs the pass in 8 decode slots, so the lane decodes 8 users) or 16 (four requests of 3, or eight of 1:
+# the lane decodes 16 users). Fixed per process: every layout below derives from it.
 SPEC_SLOTS = int(os.environ.get("MIMO_SPEC_SLOTS", "4"))
-assert SPEC_SLOTS in (4, 8), f"MIMO_SPEC_SLOTS={SPEC_SLOTS}: 4 or 8"
+assert SPEC_SLOTS in (4, 8, 16), f"MIMO_SPEC_SLOTS={SPEC_SLOTS}: 4, 8 or 16"
 # Requests a pass drafts for: 1, 2 or 4 (MIMO_SPEC_GROUPS with MIMO_SPEC_SLOTS=8: a lane's requests, each in a draft
 # group of GROUP_SLOTS consecutive slots with its own drafter state; 2: c=8 over 4 lanes with 3 drafts each, 4: c=16
-# with 1 draft each, which one MTP layer drafts through the planned program, planned_drafts).
-# MIMO_SPEC_GROUPS=adaptive (with MIMO_SPEC_SLOTS=8): each pass picks its group width from its requests (pass_width):
-# groups of 4 slots (3 drafts each, every MTP layer) for up to ADAPTIVE_WIDE_ROWS requests, groups of 2 (1 draft) for
-# more. DRAFT_GROUPS and GROUP_SLOTS are then the most groups (4) and the widest group (4) a pass may have: the drafter
-# state (rings, stash slots, descriptions, chain blocks, result sections) is laid out for both, and a group's width
-# travels with it (its chain block's source word and its description's drafting word hold the width).
+# with 1 draft each, which one MTP layer drafts through the planned program, planned_drafts); with MIMO_SPEC_SLOTS=16
+# 4 (3 drafts each) or 8 (1 draft each).
+# MIMO_SPEC_GROUPS=adaptive (with MIMO_SPEC_SLOTS=8 or 16): each pass picks its group width from its requests
+# (pass_width): groups of 4 slots (3 drafts each, every MTP layer) for up to ADAPTIVE_WIDE_ROWS requests (SPEC_SLOTS /
+# 4), groups of 2 (1 draft) for more. DRAFT_GROUPS and GROUP_SLOTS are then the most groups (SPEC_SLOTS / 2) and the
+# widest group (4) a pass may have: the drafter state (rings, stash slots, descriptions, chain blocks, result sections)
+# is laid out for both, and a group's width travels with it (its chain block's source word and its description's
+# drafting word hold the width).
 _GROUPS = os.environ.get("MIMO_SPEC_GROUPS", "1")
 ADAPTIVE = _GROUPS == "adaptive"
 if ADAPTIVE:
-    assert SPEC_SLOTS == 8, "MIMO_SPEC_GROUPS=adaptive needs MIMO_SPEC_SLOTS=8"
-    DRAFT_GROUPS, GROUP_SLOTS = 4, 4
+    assert SPEC_SLOTS in (8, 16), "MIMO_SPEC_GROUPS=adaptive needs MIMO_SPEC_SLOTS=8 or 16"
+    DRAFT_GROUPS, GROUP_SLOTS = SPEC_SLOTS // 2, 4
 else:
     DRAFT_GROUPS = int(_GROUPS)
     assert DRAFT_GROUPS == 1 or (
-        DRAFT_GROUPS in (2, 4) and SPEC_SLOTS == 8
-    ), f"MIMO_SPEC_GROUPS={DRAFT_GROUPS}: 1, or 2 / 4 / adaptive with MIMO_SPEC_SLOTS=8"
+        SPEC_SLOTS > 4 and DRAFT_GROUPS in (SPEC_SLOTS // 4, SPEC_SLOTS // 2)
+    ), f"MIMO_SPEC_GROUPS={DRAFT_GROUPS}: 1, or groups of 4 / 2 slots / adaptive with MIMO_SPEC_SLOTS=8 or 16"
     GROUP_SLOTS = SPEC_SLOTS // DRAFT_GROUPS
 MAX_DRAFTS = GROUP_SLOTS - 1  # drafts per request: its last committed token and drafts fill one draft group
 WIDTHS = (2, 4) if ADAPTIVE else (GROUP_SLOTS,)  # the group widths a pass may use
-ADAPTIVE_WIDE_ROWS = int(os.environ.get("MIMO_SPEC_WIDE_ROWS", "2"))
+ADAPTIVE_WIDE_ROWS = int(os.environ.get("MIMO_SPEC_WIDE_ROWS", str(SPEC_SLOTS // 4)))
 
 
 def pass_width(live_rows):

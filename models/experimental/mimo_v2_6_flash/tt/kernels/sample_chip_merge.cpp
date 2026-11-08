@@ -29,7 +29,7 @@ void kernel_main() {
     constexpr uint32_t K = get_compile_time_arg_val(1);
     constexpr uint32_t cb_scratch = get_compile_time_arg_val(2);
     constexpr uint32_t max_batch = get_compile_time_arg_val(3);
-    constexpr uint32_t slots = get_compile_time_arg_val(4);  // user slots of a scan core's block: 4, or 8
+    constexpr uint32_t slots = get_compile_time_arg_val(4);  // user slots of a scan core's block: 4, 8 or 16
     constexpr uint32_t slot_bytes = K * 8;
     constexpr uint32_t block_bytes = slots * slot_bytes;
     constexpr uint32_t blocks_per_page = 4096 / block_bytes;
@@ -97,6 +97,8 @@ void kernel_main() {
 
     const InterleavedAddrGen<false> cands_gen = {.bank_base_address = cands_addr, .page_size = 4096};
     noc_async_write(list_l1, get_noc_addr(0, cands_gen, u * slot_bytes), slot_bytes);
-    noc_async_write(sum_l1, get_noc_addr(0, cands_gen, 2048 + u * 16), 16);
+    // 16 slots: the lists fill the first page, the normalizers go to the second
+    constexpr bool two_pages = slots * slot_bytes > 2048;
+    noc_async_write(sum_l1, get_noc_addr(two_pages ? 1 : 0, cands_gen, (two_pages ? 0 : 2048) + u * 16), 16);
     noc_async_write_barrier();
 }

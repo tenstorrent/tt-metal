@@ -28,8 +28,8 @@ void kernel_main() {
     constexpr uint32_t cb_s = get_compile_time_arg_val(2);
     constexpr uint32_t cb_out = get_compile_time_arg_val(3);
     constexpr uint32_t cb_ready = get_compile_time_arg_val(4);
-    constexpr uint32_t slots = get_compile_time_arg_val(5);  // user slots of a core's block: 4, or 8
-    static_assert(users <= slots && (slots == 4 || slots == 8));
+    constexpr uint32_t slots = get_compile_time_arg_val(5);  // user slots of a core's block: 4, 8 or 16
+    static_assert(users <= slots && (slots == 4 || slots == 8 || slots == 16));
     constexpr uint32_t half = slots / 2;  // the reader's slots
     constexpr uint32_t slot_bytes = K * 8;
     constexpr uint32_t block_bytes = slots * slot_bytes;

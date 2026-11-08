@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // NCRISC (NOC 0) of the deduplicated MoE stream with gate|up and down in one launch (tt/moe_stream.py FusedStream):
-// the routing of user `bank` (bank core b routes user b), shared with every bank core through the routing table,
+// the routing of user `bank` (bank core b routes user b, and with two row halves also user b + banks), shared with
+// every bank core through the routing table,
 // then from this core's DRAM bank the gate|up slice of every distinct expert the active users selected, then the
 // down slice of the same experts, one stream.
 //
@@ -10,7 +11,9 @@
 // weight bits[topk]] of user u. Core b writes entry b into every bank core's table, then raises their route_sem; a
 // core reads the table once route_sem counts banks. The distinct experts are listed in user order (the active users'
 // top-k in order, each expert at its first selection; with no active user, user 0's experts, weighted zero) by
-// mimo_moe::table_experts, on every bank core and both of its data-movement RISCs alike.
+// mimo_moe::table_experts, on every bank core and both of its data-movement RISCs alike. With two row halves (16
+// users) each half lists its own (table_experts_halves), half 0's first: an expert both halves selected streams twice,
+// and compute multiplies each listing by its half's 8 rows only.
 //
 // w_gate_up [1, E, K, 2 * 8 * 32]: bank b holds gate column b and up column b of every expert, contiguous per
 // expert as [kt][gate, up]. w_down [1, E, I, 8 * cols * 32]: bank b holds expert e as I / 32 rows of cols tiles
@@ -42,7 +45,7 @@ void kernel_main() {
     constexpr bool has_scale = get_compile_time_arg_val(16) == 1;
     constexpr uint32_t scale_bits = get_compile_time_arg_val(17);
     constexpr bool has_mask = get_compile_time_arg_val(18) == 1;
-    constexpr uint32_t rows = get_compile_time_arg_val(19);         // the user rows of the score tiles: 4 or 8
+    constexpr uint32_t rows = get_compile_time_arg_val(19);         // the user rows of the score tiles: 4, 8 or 16
     constexpr uint32_t down_blocks = get_compile_time_arg_val(20);  // blocks per expert's down slice
     constexpr uint32_t down_expert_bytes = get_compile_time_arg_val(21);
     constexpr uint32_t banks = get_compile_time_arg_val(22);
@@ -51,9 +54,10 @@ void kernel_main() {
     // Timing experiments only (MIMO_MOE_STREAM_DEBUG; wrong results): 1 = no weight reads, the stream only cycles
     // the ring (compute's own rate).
     constexpr uint32_t debug = get_compile_time_arg_val(25);
+    constexpr uint32_t halves = get_compile_time_arg_val(26);  // row halves of 8 users: 1, or 2 (16 users)
     constexpr uint32_t users = num_pairs / topk;
     static_assert(down_blocks * block_bytes == down_expert_bytes);
-    static_assert(users <= banks && (2 * topk + 1) * 4 <= entry_bytes);
+    static_assert(users <= banks * halves && (2 * topk + 1) * 4 <= entry_bytes && (halves == 1 || users == 16));
 
     const uint32_t bank_id = get_arg_val<uint32_t>(0);
     const uint32_t vc = get_arg_val<uint32_t>(1);
@@ -72,16 +76,16 @@ void kernel_main() {
     noc_async_read_barrier();
     MOE_MARK(11);
 
-    // This core's user: its entry into every bank core's table (user 0's ids even when idle: the fallback).
-    if (bank_id < users) {
-        const uint32_t mine = tbl + bank_id * entry_bytes;
+    // This core's users: their entries into every bank core's table (user 0's ids even when idle: the fallback).
+    for (uint32_t u = bank_id; u < users; u += banks) {
+        const uint32_t mine = tbl + u * entry_bytes;
         volatile tt_l1_ptr uint32_t* entry = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(mine);
-        const bool active = mimo_moe::user_active<expert_tiles, has_mask, rows>(stage, bank_id);
+        const bool active = mimo_moe::user_active<expert_tiles, has_mask, rows>(stage, u);
         uint32_t ids[topk];
         uint32_t weights[topk];
-        if (active || bank_id == 0) {
+        if (active || u == 0) {
             mimo_moe::select_user<topk, expert_tiles, norm, has_scale, scale_bits, has_mask, rows>(
-                stage, bank_id, ids, weights);
+                stage, u, ids, weights);
         } else {
             for (uint32_t i = 0; i < topk; i++) {
                 ids[i] = 0;
@@ -100,8 +104,8 @@ void kernel_main() {
                 noc_async_write(mine, get_noc_addr(x, y, mine), entry_bytes);
             }
         }
-        noc_async_write_barrier();
     }
+    noc_async_write_barrier();
     const uint32_t sem_addr = get_semaphore(route_sem);
     for (uint32_t c = 0; c < banks; c++) {
         const uint32_t x = get_arg_val<uint32_t>(peers_at + 2 * c);
@@ -112,7 +116,10 @@ void kernel_main() {
     MOE_MARK(12);
 
     uint32_t uniq[num_pairs];
-    const uint32_t n = mimo_moe::table_experts<topk, users, expert_tiles * 32>(tbl, entry_bytes, uniq);
+    uint32_t counts[halves];
+    const uint32_t n = halves == 1 ? mimo_moe::table_experts<topk, users, expert_tiles * 32>(tbl, entry_bytes, uniq)
+                                   : mimo_moe::table_experts_halves<topk, users / halves, halves, expert_tiles * 32>(
+                                         tbl, entry_bytes, uniq, counts);
     MOE_MARK(13);
 
     // Stream: block i goes to CB slot i % num_buffers with trid (i % num_buffers) + 1; at most in_flight blocks

@@ -8,8 +8,8 @@
 // rows 0..users-1 (< 16): their values are the first users*16 elements of face 0 (columns 0-15) and of face 1
 // (columns 16-31) of every tile.
 // Output: row `core` of a [32, 32] uint32 TILE tensor (L1 interleaved, one page): columns 2u, 2u+1 = (key, local
-// index) of user u's maximum (u < 8: one face row), where key orders like the value (sign-adjusted bits). Ties keep
-// the lowest index.
+// index) of user u's maximum (users 0-7 in the row's left face, 8-15 in its right face), where key orders like the
+// value (sign-adjusted bits). Ties keep the lowest index.
 
 #include <cstdint>
 
@@ -62,7 +62,8 @@ void kernel_main() {
     constexpr uint32_t cb_scratch = get_compile_time_arg_val(1);
     constexpr uint32_t max_tiles = get_compile_time_arg_val(2);
     constexpr uint32_t elem_bytes = get_compile_time_arg_val(3);  // 2: bf16, 4: fp32
-    static_assert(users >= 1 && users <= 8, "users in rows 0-7 (8 entries of 2 uint32 per partial row)");
+    static_assert(
+        users >= 1 && users <= 16, "users in rows 0-15 (8 entries of 2 uint32 per face row of a partial row)");
     static_assert(elem_bytes == 2 || elem_bytes == 4, "bf16 or fp32 logits");
     constexpr uint32_t tile_bytes = 1024 * elem_bytes;
     constexpr uint32_t face_bytes = 256 * elem_bytes;
@@ -99,14 +100,19 @@ void kernel_main() {
         out[u * 2 + 0] = best_key;
         out[u * 2 + 1] = best_idx;
     }
-    for (uint32_t u = users; u < 8; ++u) {
+    constexpr uint32_t faces = users > 8 ? 2 : 1;  // face rows of the partial row
+    for (uint32_t u = users; u < 8 * faces; ++u) {
         out[u * 2 + 0] = 0;
         out[u * 2 + 1] = 0;
     }
 
-    // Row `core` of the uint32 partials tile: face 0 (rows 0-15) or face 2 (rows 16-31), columns 0-15.
+    // Row `core` of the uint32 partials tile: face 0 (rows 0-15) or face 2 (rows 16-31), columns 0-15; with more than
+    // 8 users also the same row of face 1 or 3, columns 16-31.
     const InterleavedAddrGen<false> part_gen = {.bank_base_address = partials_addr, .page_size = 4096};
     const uint32_t offset = (core < 16 ? 0 : 2 * kFaceBytesU32) + (core % 16) * kRowBytesU32;
     noc_async_write(out_l1, get_noc_addr(0, part_gen, offset), kRowBytesU32);
+    if constexpr (faces == 2) {
+        noc_async_write(out_l1 + kRowBytesU32, get_noc_addr(0, part_gen, offset + kFaceBytesU32), kRowBytesU32);
+    }
     noc_async_write_barrier();
 }

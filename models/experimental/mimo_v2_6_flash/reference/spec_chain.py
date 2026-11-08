@@ -51,7 +51,8 @@ the device tables (they end at max_seq_len).
 
 Layouts:
 
-- chain row (row CHAIN_ROW of the verify upload, int32, B wide): source (1: a draft chains behind this pass), the
+- chain row (row CHAIN_ROW of the verify upload, int32, B wide, continuing into the rows after it as the draft
+  groups' blocks and the history's slots need): source (1: a draft chains behind this pass), the
   source's columns n + 1, limit, then the source's slots [SPEC_SLOTS] (-1 past its columns), relay (1: the relay step
   writes the source's tokens and positions), each verify slot's request slot + 1 [SPEC_SLOTS] (the MTP history's,
   reference/mtp_backfill.py; 0: none), zeros. The source's request is the pass's only one: group 0 of the accept page
@@ -147,8 +148,8 @@ def chain_row(max_batch, source=None, limit=0, relay=False, hslots=None):
     is declined at, ``relay`` the relay step writes the sources' tokens and positions from the lane's last result page
     (a chained verify), ``hslots`` each verify slot's request slot in the lane (None: no history write) for the history
     (reference/mtp_backfill.py)."""
-    words = (VERIFY_ROWS - CHAIN_ROW) * max_batch  # with ADAPTIVE groups the history's slots spill into a fourth row
-    assert words >= CHAIN_HSLOTS + SPEC_SLOTS and max_batch >= CHAIN_WORDS
+    words = (VERIFY_ROWS - CHAIN_ROW) * max_batch  # the chain blocks and the history's slots, over the rows they take
+    assert words >= CHAIN_HSLOTS + SPEC_SLOTS
     sources = _sources(source)
     assert sources or not relay, "the relay writes a source's columns"
     row = [0] * words
@@ -178,7 +179,7 @@ def _header(verify, accept, argmax):
     header[POSITIONS_AT : POSITIONS_AT + SPEC_SLOTS] = [int(p) & 0xFFFFFFFF for p in pos[:SPEC_SLOTS]]
     for g in range(DRAFT_GROUPS):
         header[STATUS_AT + g * STATUS_WORDS : STATUS_AT + (g + 1) * STATUS_WORDS] = [0, NO_SLOT, 0, 0]
-    return header, pos, verify[CHAIN_ROW * b : (CHAIN_ROW + 1) * b]
+    return header, pos, verify[CHAIN_ROW * b :]
 
 
 def _commits(header, pos, chain, accept):

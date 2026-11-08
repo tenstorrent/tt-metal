@@ -200,7 +200,7 @@ class BankStreamMatmul:
         START_SEM counts ``start`` increments, and x (in DRAM) is read once X_READY_SEM of the bank groups' x
         loaders (``self.x_loaders(x)``) counts ``x_wait``; compute then runs on the resident weights."""
         assert x.dtype == ttnn.bfloat16 and x.layout == ttnn.TILE_LAYOUT
-        assert _is_interleaved(x) and rows in (4, 8)
+        assert _is_interleaved(x) and rows in (4, 8, 16)
         assert not start or (x.memory_config().buffer_type == ttnn.BufferType.DRAM and self.can_share and x_wait)
         compact_tiles = 0
         if compact_out is not None:
@@ -340,7 +340,7 @@ class RouterScoreStream:
     def __init__(self, plan, k, n, bias, rows=4):
         """``bias``: the experts' score-correction bias, torch [n]. ``rows``: the user rows (4 or 8)."""
         device = plan.mesh_device
-        assert rows in (4, 8), rows
+        assert rows in (4, 8, 16), rows
         self.plan, self.k, self.n, self.rows = plan, k, n, rows
         self.banks = device.dram_grid_size().x
         self.kt = k // TILE

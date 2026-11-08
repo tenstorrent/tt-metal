@@ -19,7 +19,7 @@ accept trace goes on with the chain step (tt/spec_chain.py), which copies this p
 derives the MTP draft from it; an ``argmax_ids`` step runs it too, every request greedy.
 
 GreedyVerify is the accept step of a verify whose slots the device sampler does not serve (more slots than the
-replica's decode users, which it serves up to 8): every request greedy on the argmax ids (kernels/greedy_verify.cpp),
+replica's decode users, which it serves up to 16): every request greedy on the argmax ids (kernels/greedy_verify.cpp),
 the same pages.
 """
 
