@@ -61,8 +61,7 @@ _ITERATIONS = 20
 # Set to report without gating, e.g. while re-baselining.
 _REPORT_ONLY = os.environ.get("ATTN_RES_PERF_REPORT_ONLY") == "1"
 # Band around each op's reference. block_stats' window runs until the slowest peer's statistics land, so it also
-# times how far the chips are apart, and that differs by machine: two CI Galaxies put its median at 139.0 and 119.0
-# us, each tight on its own. Its band covers both and still catches a regression of more than ~15%.
+# times how far apart the chips start, which is why its band is wider (it gates only SP4xTP4; see below).
 _MARGIN = {"attn_res_block_stats": 0.15, "attn_res_block_mix": 0.05, "attn_res_gather_softmax": 0.05}
 # Each op's program, by the kernel directory it is built from.
 OPS = ("attn_res_block_stats", "attn_res_block_mix", "attn_res_gather_softmax")
@@ -71,15 +70,26 @@ STEPS = tuple(f"{batch}/{op}" for batch in BATCHES for op in OPS)
 
 # Device kernel duration (us) per step, as CI hardware (bh_sc1_high_power) measures it. None reports without gating.
 #
-# PROVISIONAL -- re-measure on a high-power Galaxy. Until tt_metal_tracker-ao3i.10 the boundary was one 25-site batch
-# over C = 7 with the owed read closed. The block step (C = 7, 24 sites) keeps that batch's references, the nearest
-# high-power measurement of its shape; the owed step (C = 6, one site) has none yet and only reports.
+# Until tt_metal_tracker-ao3i.10 the boundary was one 25-site batch over C = 7 with the owed read closed; the CI pool
+# measured it (runs 41962421284 and 42058182913, medians over 20 synced blocks: block_stats 139.0 / 119.0, block_mix
+# 275.5 / 275.6, gather_softmax 67.5 / 68.2; run 42340900388: 137.8 / 275.0 / 69.0).
 #
-# The 25-site references: SP8xTP4 is the mean of two CI Galaxies' medians over 20 synced blocks, runs 41962421284 and
-# 42058182913: block_stats 139.0 / 119.0, block_mix 275.5 / 275.6, gather_softmax 67.5 / 68.2. SP4xTP4 has no CI job:
-# it was measured on a Galaxy off the CI pool (bh-glx-120-b07u02, 2026-11-05), which runs the end-to-end boundary layer
-# of `test_attn_res_perf.py` at ~416 us against its 394 us CI reference, and is scaled by 394 / 416. Local medians,
-# synced: block_stats 209.9 / 218.4 / 208.4, block_mix 568.4 / 570.2 / 570.2, gather_softmax 120.2 / 121.2 / 123.4.
+# SP8xTP4 block references are derived, not measured on the pool: each step's median on one off-pool Galaxy at 130 W
+# (bh-glx-120-b07u08, 2026-11-08, 10 runs: block_mix 290.6, gather_softmax 68.6 us) times that Galaxy's pool ratio for
+# the same op, from run 42340900388's commit dbc10eb0a4c run there interleaved (3 runs: block_mix 292.2, gather_softmax
+# 68.1 us). That Galaxy runs block_mix ~6% slower than the pool and gather_softmax at about the pool's speed.
+# The pool confirmed both (run 42490578916: block_mix 274.4, gather_softmax 70.0 us).
+# block_stats only reports: it settles per process into one of three levels, ~105 / ~117 / ~136 us across 27 pool
+# readings (2026-11-05..08, medians 101.5-139.6, one Galaxy showing all three; b07u08 adds ~76). The level correlates
+# with host launch skew (a cheaper host dispatch made the low level likely), which is the suspected cause but is not
+# established. No band around one reference fits that spread and still catches a regression; see
+# tt_metal_tracker-ao3i.2.5.2. The owed steps only report too: no pool reading when set, and the owed shape (one site,
+# C = 6) need not share block_mix's ratio (b07u08 95.3 us; c10u14 85.3 us at 75 W).
+#
+# SP4xTP4 has no CI job: it was measured on a Galaxy off the CI pool (bh-glx-120-b07u02, 2026-11-05), which runs the
+# end-to-end boundary layer of `test_attn_res_perf.py` at ~416 us against its 394 us CI reference, and is scaled by
+# 394 / 416. Local medians, synced: block_stats 209.9 / 218.4 / 208.4, block_mix 568.4 / 570.2 / 570.2,
+# gather_softmax 120.2 / 121.2 / 123.4.
 # Locally, run with ATTN_RES_PERF_REPORT_ONLY=1.
 _CI_OVER_LOCAL = 394.0 / 416.0
 _REFERENCE_US = {
@@ -87,9 +97,9 @@ _REFERENCE_US = {
         "owed/attn_res_block_stats": None,
         "owed/attn_res_block_mix": None,
         "owed/attn_res_gather_softmax": None,
-        "block/attn_res_block_stats": 129.0,
-        "block/attn_res_block_mix": 275.6,
-        "block/attn_res_gather_softmax": 67.9,
+        "block/attn_res_block_stats": None,
+        "block/attn_res_block_mix": 273.6,
+        "block/attn_res_gather_softmax": 69.5,
     },
     "SP4xTP4": {
         "owed/attn_res_block_stats": None,
