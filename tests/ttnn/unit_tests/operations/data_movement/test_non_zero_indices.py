@@ -526,7 +526,8 @@ def test_nonzero_docstring_supported_inputs(dtype, layout, input_buffer_type, ou
     """Runs every dtype, layout and interleaved input and output buffer type the ttnn.nonzero docstring lists."""
     check_readable(dtype, layout, input_buffer_type, output_buffer_type)
     x = full_range_input((1, 2, 32, 64), dtype)
-    x.view(-1)[::3] = 0
+    # Zero every third value after the first five, which hold full_range_input's special values.
+    x.view(-1)[5::3] = 0
     input_tensor = ttnn.from_torch(
         x, dtype=dtype, layout=layout, device=device, memory_config=interleaved_memory_config(input_buffer_type)
     )
