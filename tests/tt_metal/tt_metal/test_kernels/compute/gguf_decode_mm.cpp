@@ -8,8 +8,8 @@
 //   GGUF_MM = 1: one output tile, the sum over K tiles of in0 * decoded weight tile. Per K tile, DEST tiles 1 / 4 hold
 //                the decoded tile, 2 / 5 its page, 3 / 6 scratch, alternating; tile 0 accumulates.
 //   GGUF_OVERLAP = 1: the pack thread decodes (gguf_decode_overlap_*).
-//   GGUF_SPLIT = 1: the next page is copied while this one decodes (page_post / page_unpack / page_wait); 0: after it
-//                   (page_to_dest).
+//   GGUF_SPLIT = 1: the next page is copied in steps (page_post / page_unpack / page_wait), while this one decodes on
+//                   the pack thread; 0: after the decode (page_to_dest).
 // Runtime arg: K tiles. Defines: GGUF_FMT (one-page K tiles, groups of one), GGUF_IN0_ROWS.
 
 #include <cstdint>
@@ -55,10 +55,11 @@ void kernel_main() {
         const uint32_t out = set ? 4 : 1;
         const uint32_t next_page = set ? 2 : 5;
         const bool next = kt + 1 < kt_count;
+#if GGUF_OVERLAP
+        gguf_decode_overlap_body_ready<GGUF_FMT, false>();
         if (GGUF_SPLIT && next) {
             dest_srca_mm_page_post(next_page);
         }
-#if GGUF_OVERLAP
         gguf_decode_overlap_wait_page();
         if (kt == 0) {
             gguf_zero_tile<thr>(0);
@@ -67,6 +68,10 @@ void kernel_main() {
         gguf_decode_overlap_tile_done();
 #else
         gguf_decode_tile<GGUF_FMT, thr>(out, 0);
+        // After the decode: the copy may not run beside a phase 2 with unarbitrated stores.
+        if (GGUF_SPLIT && next) {
+            dest_srca_mm_page_post(next_page);
+        }
 #endif
         dest_srca_mm_unpack(cb_in0, kt);
         if (next) {
@@ -81,12 +86,10 @@ void kernel_main() {
 #endif
         }
 #if GGUF_OVERLAP
+        gguf_decode_overlap_body_ready<GGUF_FMT, true>();
         gguf_decode_overlap_wait_tile();
 #endif
         dest_srca_mm_math<GGUF_IN0_ROWS>(out, 0);
-#if GGUF_OVERLAP
-        gguf_decode_overlap_matmul_done();
-#endif
         set ^= 1;
     }
     tile_regs_commit();

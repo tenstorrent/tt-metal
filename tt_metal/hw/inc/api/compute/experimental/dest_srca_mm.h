@@ -31,7 +31,8 @@ namespace ckernel {
  *
  * The page_* calls bring a 32-bit tile of a CB (e.g. a GGUF page, UInt32) into DEST unchanged. page_to_dest does it in
  * one step; page_post / page_unpack / page_wait split it so that math work can run while the unpacker copies, and a
- * kernel orders each of them on its own thread. A copy must not overlap dest_srca_mm: wait for it first.
+ * kernel orders each of them on its own thread. A copy must not overlap dest_srca_mm (wait for it first), nor a decode
+ * body whose stores are not arbitrated against the copy's DEST writes (gguf_decode.h).
  *
  * Call after compute_kernel_hw_startup(page_cb, in0_cb, out_cb); dest_srca_mm_uninit restores the math state.
  *
@@ -72,6 +73,50 @@ ALWI void dest_srca_mm_page_to_dest(
     const std::uint32_t page_cb, const std::uint32_t tile_index, const std::uint32_t idst) {
     dest_srca_mm_page_post(idst);
     dest_srca_mm_page_unpack(page_cb, tile_index);
+    dest_srca_mm_page_wait(page_cb, idst);
+}
+
+// clang-format off
+/**
+ * The page_* calls for a page whose first codes are 4-bit block-float datums (BFP4, sign in bit 3) to be read with a
+ * fixed exponent, e.g. GGUF MXFP4 / NVFP4 (gguf_decode.h): the codes go, as FP16, to the 16-bit rows of DEST that the rows of
+ * tile codes_idst address (where the SFPU reads them in that tile's order), and `words` 32-bit words of the page from
+ * byte words_offset (e.g. its scale fields) to DEST tile idst, as many rows in as they are in the page.
+ *
+ * | Argument     | Description                                              | Type     | Valid Range          | Required |
+ * |--------------|----------------------------------------------------------|----------|----------------------|----------|
+ * | codes_idst   | DEST tile whose row numbers the codes' 16-bit rows take  | uint32_t | 1 to 7               | True     |
+ * | codes        | Codes at the start of the page                           | uint32_t | 16 to 1024, x 16     | True     |
+ * | exp          | Exponent of every code (FP16 bias)                       | uint32_t | 0 to 30              | True     |
+ * | words_offset | Byte offset of the words in the page                     | uint32_t | multiple of 64       | True     |
+ * | words        | 32-bit words copied                                      | uint32_t | 16 to 256, x 16      | True     |
+ */
+// clang-format on
+ALWI void dest_srca_mm_page_post_codes(const std::uint32_t idst, const std::uint32_t codes_idst) {
+    MATH((llk_math_dest_srca_mm_codes_post(idst, codes_idst)));
+}
+
+ALWI void dest_srca_mm_page_unpack_codes(
+    const std::uint32_t page_cb,
+    const std::uint32_t tile_index,
+    const std::uint32_t codes,
+    const std::uint32_t exp,
+    const std::uint32_t words_offset,
+    const std::uint32_t words) {
+    UNPACK((llk_unpack_dest_srca_mm_codes_page(page_cb, tile_index, codes, exp, words_offset, words)));
+}
+
+ALWI void dest_srca_mm_page_to_dest_codes(
+    const std::uint32_t page_cb,
+    const std::uint32_t tile_index,
+    const std::uint32_t idst,
+    const std::uint32_t codes_idst,
+    const std::uint32_t codes,
+    const std::uint32_t exp,
+    const std::uint32_t words_offset,
+    const std::uint32_t words) {
+    dest_srca_mm_page_post_codes(idst, codes_idst);
+    dest_srca_mm_page_unpack_codes(page_cb, tile_index, codes, exp, words_offset, words);
     dest_srca_mm_page_wait(page_cb, idst);
 }
 
