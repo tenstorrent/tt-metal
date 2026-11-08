@@ -28,7 +28,8 @@ log "host $H free; SHM_OFF=${SHM_OFF:-0}; SRC $(git -C $SRC log --oneline -1 | c
 R "md5sum $WT/models/demos/glm53_flash/tt/indexer.py $WT/models/demos/glm53_flash/tt/dsa.py $WT/models/demos/glm53_flash/tt/runners/*.py" > $OUT/wt_md5_before.txt
 R "rm -rf $RUN && mkdir -p $RUN/scripts && cd $WT && tar czf $RUN/wt_backup.tgz $FILES" || { log "backup failed"; exit 1; }
 restore() {
-  R "[ -f $RUN/runner.pid ] && kill -0 \$(cat $RUN/runner.pid) 2>/dev/null && { kill -TERM \$(cat $RUN/runner.pid); sleep 20; kill -KILL \$(cat $RUN/runner.pid) 2>/dev/null; }; cd $WT && tar xzf $RUN/wt_backup.tgz && rm -rf models/demos/glm53_flash/tt/__pycache__/indexer* models/demos/glm53_flash/tt/__pycache__/dsa* models/demos/glm53_flash/tt/runners/__pycache__" > /dev/null
+  # runner.pid is the `timeout` wrapper's pid: signal its python child too (K1 run 1 left a warmed runner on the chips)
+  R "[ -f $RUN/runner.pid ] && kill -0 \$(cat $RUN/runner.pid) 2>/dev/null && { pkill -TERM -P \$(cat $RUN/runner.pid); kill -TERM \$(cat $RUN/runner.pid); sleep 20; pkill -KILL -P \$(cat $RUN/runner.pid); kill -KILL \$(cat $RUN/runner.pid) 2>/dev/null; }; cd $WT && tar xzf $RUN/wt_backup.tgz && rm -rf models/demos/glm53_flash/tt/__pycache__/indexer* models/demos/glm53_flash/tt/__pycache__/dsa* models/demos/glm53_flash/tt/runners/__pycache__" > /dev/null
   R "md5sum $WT/models/demos/glm53_flash/tt/indexer.py $WT/models/demos/glm53_flash/tt/dsa.py $WT/models/demos/glm53_flash/tt/runners/*.py" > $OUT/wt_md5_after.txt
   cmp -s $OUT/wt_md5_before.txt $OUT/wt_md5_after.txt && log "WT files restored (md5s = before)" || log "WARNING: WT md5s differ from before"
   rsync -a $P:$RUN/runner.log $P:$RUN/driver.log $P:$RUN/unit.log $P:$RUN/results.json $OUT/ 2>/dev/null
