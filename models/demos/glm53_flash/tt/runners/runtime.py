@@ -229,9 +229,12 @@ class GLM53FlashPrefillRuntime:
         t0 = time.perf_counter()
         if pr is not None:
             if actual_start == 0:
-                logger.info(f"[glm53f-prefix] new prompt at chunk {request_id}: {pr.summary()}")
+                rss = f"; runner RSS {self._rss_gib():.1f} GiB" if pr.store is not None else ""
+                logger.info(f"[glm53f-prefix] new prompt at chunk {request_id}: {pr.summary()}{rss}")
             if pr.begin_chunk(ids, actual_start, actual_end, last):
-                return self._skip_chunk(slot_id, actual_start, actual_end, request_id, t0)
+                self._skip_chunk(slot_id, actual_start, actual_end, request_id, t0)
+                self._after_last(pr, last)
+                return None
             if pr.last_resume is not None:  # once per resumed prompt: what the resume cost the device
                 ttnn.synchronize_device(self.mesh_device)
                 logger.info(
@@ -252,6 +255,8 @@ class GLM53FlashPrefillRuntime:
             # KDA states: device copies now (the next chunk mutates them in place), then one sync; the DSA rows of
             # [actual_start, actual_end) are final, and the next chunk writes only rows past them
             rows = self._dsa_rows_cq(actual_start, actual_end) if self._async_pack else None
+            if pr is not None and rows is not None and pr.wants_rows(actual_start, actual_end):
+                pr.store_rows(ids, actual_start, actual_end, *self._store_payload(rows))
             for layer in kv_caches.kda_layers:
                 kv_caches.export_kda(layer, self.decs[layer].kda_batched)
             ttnn.synchronize_device(self.mesh_device)
@@ -260,8 +265,12 @@ class GLM53FlashPrefillRuntime:
                 f"[glm53f-runtime] chunk {request_id} slot {slot_id} [{actual_start}, {actual_end}): prefill {t1 - t0:.3f} s, "
                 f"kda export + sync {time.perf_counter() - t1:.3f} s (DSA export async)"
             )
+            self._after_last(pr, last)
             return None
-        self._export(kv_caches, actual_start, actual_end)
+        capture = {} if pr is not None and pr.wants_rows(actual_start, actual_end) else None
+        self._export(kv_caches, actual_start, actual_end, capture)
+        if capture:
+            pr.store_rows(ids, actual_start, actual_end, *self._store_payload(capture))
         logger.info(
             f"[glm53f-runtime] chunk {request_id} slot {slot_id} [{actual_start}, {actual_end}): prefill {t1 - t0:.3f} s, "
             f"export {time.perf_counter() - t1:.3f} s"
@@ -269,6 +278,7 @@ class GLM53FlashPrefillRuntime:
         if self._sink is not None:
             for layer in range(TABLE_LAYERS):
                 self._sink(layer, request_id)
+        self._after_last(pr, last)
         return None
 
     # ------------------------------------------------------------------ prefix reuse (tt-blaze G53F-0311)
@@ -305,6 +315,21 @@ class GLM53FlashPrefillRuntime:
             )
         after = self._dram_bytes()
         per = (after - before) / max(n, 1) / 2**20 if before is not None and after is not None else float("nan")
+        host_gb = float(os.environ.get("GLM53F_PREFIX_HOST_GB", "0"))
+        store = None
+        if host_gb > 0:
+            # phase 2 (several retained prompts): the restore writes the caches through the model's own fills and
+            # packs the slab pages with the export's functions; both assume the bf16 caches of the serving config
+            for L in DSA_LAYERS:
+                c = self.decs[L].cache
+                assert c.dtype == ttnn.bfloat16 and c.index.pool_dtype == ttnn.bfloat16, (
+                    L,
+                    c.dtype,
+                    c.index.pool_dtype,
+                )
+                assert not c.partition, "phase 2 needs GLM53_PARTITION_USERS=0 (one user, identity page table)"
+            assert not (self._async and not self._async_pack), "phase 2 needs the sync or 'pack' export (rows read)"
+            store = prefix_reuse.ChunkStore(int(host_gb * 2**30), log=logger.info)
         self._prefix = prefix_reuse.PrefixRetention(
             chunk=self.config.chunk_size,
             n_ckpts=n,
@@ -314,7 +339,18 @@ class GLM53FlashPrefillRuntime:
             set_next_start=self._set_next_start,
             compute_silent=lambda ids, start: self._prefill(ids, start),
             log=logger.info,
+            store=store,
+            restore_rows=self._restore_rows,
+            spill=self._spill_carries,
+            load_carries=self._load_carries,
+            spill_tips=int(os.environ.get("GLM53F_PREFIX_SPILL_TIPS", "2")),
         )
+        if store is not None:
+            logger.info(
+                f"[glm53f-prefix] phase 2 ON: host chunk store {host_gb:g} GiB (~"
+                f"{int(host_gb * 2**30 // (len(DSA_LAYERS) * self.config.chunk_size * (LATENT_DIM + POOL_WIDTH // POOL_RATIO) * 2))}"
+                f" chunks of {self.config.chunk_size} tokens), spill {self._prefix.spill_tips} tip(s) per prompt left"
+            )
         logger.info(
             f"[glm53f-prefix] prefix reuse ON: {n} checkpoint slot(s) x {len(kda)} KDA layers, {per:.2f} MiB per bank "
             f"each{self._dram_note()}"
@@ -346,6 +382,82 @@ class GLM53FlashPrefillRuntime:
     def _set_next_start(self, pos: int) -> None:
         for dec in self.model.layers:
             dec.next_start[0] = int(pos)
+
+    # ---- phase 2: the host chunk store (several retained prompts)
+    def _after_last(self, pr, last) -> None:
+        """After a burst's last chunk is acknowledged: read the pinned checkpoints of the prompt the device left."""
+        if pr is not None and last and pr.pending_spills:
+            t0 = time.perf_counter()
+            n = len(pr.pending_spills)
+            pr.flush_spills()
+            logger.info(
+                f"[glm53f-prefix] spilled {n} checkpoint(s) to the host store in {time.perf_counter() - t0:.3f} s"
+            )
+
+    @staticmethod
+    def _rss_gib() -> float:
+        try:
+            with open("/proc/self/statm") as f:
+                return int(f.read().split()[1]) * os.sysconf("SC_PAGE_SIZE") / 2**30
+        except OSError:
+            return float("nan")
+
+    @staticmethod
+    def _store_payload(rows: dict) -> tuple:
+        """(rows, bytes) of one chunk for the store: {DSA layer: (latent [n, 512] bf16, pools [n / 4, 128] bf16)}."""
+        size = lambda t: 0 if t is None else int(t.numel()) * t.element_size()  # noqa: E731
+        nbytes = sum(size(a) + size(b) for a, b in rows.values())
+        return {L: (a.contiguous(), None if b is None else b.contiguous()) for L, (a, b) in rows.items()}, nbytes
+
+    def _restore_rows(self, rows: dict, start: int) -> None:
+        """A stored chunk back into the device: every DSA layer's latent rows and pooled keys into every chip's caches
+        (the model's own ``fill`` / ``write_pools``, replicated uploads), then its export-slab pages packed again from
+        the same rows (``export_dsa``, the export's own functions)."""
+        t0 = time.perf_counter()
+        mesh = self.model.mesh
+        for L, (latent, pools) in rows.items():
+            c = self.decs[L].cache
+            n = int(latent.shape[0])
+            dev = mesh.upload(latent.reshape(1, 1, n, LATENT_DIM), ttnn.bfloat16)
+            c.fill(dev, 0, start=start)
+            ttnn.deallocate(dev)
+            if pools is not None:
+                devp = mesh.upload(pools.reshape(1, 1, int(pools.shape[0]), POOL_WIDTH), ttnn.bfloat16)
+                c.index.write_pools(devp, 0, start_pool=start // POOL_RATIO)
+                ttnn.deallocate(devp)
+            c.release_prefix()  # GLM53_PREFIX_INCREMENTAL's arena (off in serving) must not keep older rows
+        t1 = time.perf_counter()
+        for L, (latent, pools) in rows.items():
+            self._kv.export_dsa(L, latent, start // TPP, pools, start // POOL_CHUNK_TOKENS)
+        logger.info(
+            f"[glm53f-prefix] restored [{start}, {start + int(next(iter(rows.values()))[0].shape[0])}) from the host "
+            f"store: caches {t1 - t0:.3f} s (dispatch), slab pages {time.perf_counter() - t1:.3f} s"
+        )
+
+    def _spill_carries(self, slot: int) -> tuple:
+        """Checkpoint ``slot`` -> host: per KDA layer the recurrent + conv carries of each TP column (row 0 chips; the
+        SP rows hold replicas)."""
+        cols = tuple(self.mesh_device.shape)[1]
+        out, nbytes = {}, 0
+        for L, st in self._ckpt[slot].items():
+            pair = []
+            for t in (st.recurrent, st.convolution):
+                devs = ttnn.get_device_tensors(t)
+                pair.append([ttnn.to_torch(devs[c]) for c in range(cols)])
+                nbytes += sum(int(x.numel()) * x.element_size() for x in pair[-1])
+            out[L] = tuple(pair)
+        return out, nbytes
+
+    def _load_carries(self, carries: dict) -> None:
+        """Host carries -> the live KDA carries (each TP column's tensors, replicated over the SP rows)."""
+        mesh = self.model.mesh
+        for L, (rec_cols, conv_cols) in carries.items():
+            dst = self.decs[L].kda_batched
+            for parts, t in ((rec_cols, dst.recurrent), (conv_cols, dst.convolution)):
+                shard = len(parts[0].shape) - 1 if len(parts[0].shape) == 3 else 1  # conv: the width; rec: the heads
+                tmp = mesh.upload(torch.cat(parts, dim=shard), t.dtype, cols=shard, layout=t.layout)
+                ttnn.copy(tmp, t)
+                ttnn.deallocate(tmp)
 
     # ------------------------------------------------------------------ KV table
     def kv_migration_stages(self, kv_caches, first_layer_idx=None, num_my_layers=None):
@@ -447,7 +559,7 @@ class GLM53FlashPrefillRuntime:
             finally:
                 self._xq.task_done()
 
-    def _export(self, ex: GlmRingExport, start: int, end: int) -> None:
+    def _export(self, ex: GlmRingExport, start: int, end: int, capture: dict | None = None) -> None:
         t0 = time.perf_counter()
         prof = os.environ.get("GLM53F_EXPORT_PROFILE") == "1"  # tt-blaze G53F-0256: where a chunk's export time goes
         t_read = t_dsa = 0.0
@@ -481,6 +593,8 @@ class GLM53FlashPrefillRuntime:
                     )
             tw = time.perf_counter()
             t_read += tw - tr
+            if capture is not None:  # G53F-0311 phase 2: the rows this export read, kept for the host store
+                capture[layer] = (latent.clone(), None if pools is None else pools.clone())
             nbytes += ex.export_dsa(layer, latent, start // TPP, pools, start // POOL_CHUNK_TOKENS)
             t_dsa += time.perf_counter() - tw
         tk = time.perf_counter()

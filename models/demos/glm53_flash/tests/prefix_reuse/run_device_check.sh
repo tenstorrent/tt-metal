@@ -14,6 +14,10 @@ WT=${WT:-/home/ttuser/sdawle/tt-metal-glm53fp-wave}; PYBIN=${PYBIN:-/home/ttuser
 RUN=${RUN:-/home/ttuser/sdawle/prefill_runs/prefix_check}
 OUT=${OUT:-/home/ttuser/sdawle/glm53f_logs/trackH_prefix_reuse/$(date +%m%d_%H%M)}
 CHUNK=${CHUNK:-12288}; MAXSEQ=${MAXSEQ:-110592}; CKPTS=${CKPTS:-4}; SERVICE=glm53f_prefix_check
+# phase 2: HOST_GB > 0 turns the host chunk store on (GLM53F_PREFIX_HOST_GB); PHASES picks the driver's phases (R,S,T,U = H1;
+# M = several retained prompts); WARMUP / BUCKETS override the runner's (the live 1M config: MAXSEQ=1056768 + its buckets)
+HOST_GB=${HOST_GB:-0}; PHASES=${PHASES:-R,S,T,U}
+WARMUP=${WARMUP:-c83864,c41864,c39288,4092:0}; BUCKETS=${BUCKETS:-512:4096,1024:8192,2048:12288}
 GP=/mnt/tt-data/sdawle/glm53f/prefill
 FILES="models/demos/glm53_flash/tt/runners models/demos/glm53_flash/tests/test_runner_kv_export.py models/demos/common/prefill/adapter.py"
 mkdir -p $OUT
@@ -49,11 +53,11 @@ export PREFILL_MANIFEST=models/demos/glm53_flash/tt/runners/manifests/glm53_flas
   PREFILL_H2D_SERVICE_ID=$SERVICE PREFILL_TTNN_CACHE=$GP/mesh_cache PREFILL_ENABLE_LAYER_ACK=1 \\
   PREFILL_ENABLE_MIGRATION=0 PREFILL_MIGRATION_EXPORT_TO_FILE=1 PREFILL_MIGRATION_TABLE_PATH=$RUN/glm_table.pb \\
   PREFILL_MIGRATION_DEVICE_MAP_PATH=$RUN/glm_devmap.txt GLM53F_KDA_VERSIONS=2 PREFILL_LAYER_COMPLETION_RING=/tt_prefix_check_lcr \\
-  GLM53F_RUNNER_WARMUP=c83864,c41864,c39288,4092:0 GLM53F_RUNNER_BUCKETS=512:4096,1024:8192,2048:12288
+  GLM53F_RUNNER_WARMUP=$WARMUP GLM53F_RUNNER_BUCKETS=$BUCKETS
 export GLM53_MESH_CACHE=$GP/mesh_cache GLM53_PARTITION_USERS=0 GLM53_PREFILL_EXPERTS=regions GLM53_REGIONS_T=16384 GLM53_PREFILL_QBLOCK=512 GLM53_MODEL_TRACE_MB=0 \\
   GLM53_REGIONS_BUF=full GLM53_REGIONS_COMBINE=fused GLM53_PREFILL_ABLOCK=2048 GLM53_CCL_GATHER_TOPOLOGY=ring GLM53_INDEXER_NO_CROP=1 \\
   GLM53_REGIONS_RANK=mm GLM53_REGIONS_UNTILIZE=used GLM53_REGIONS_SPANS=1 GLM53_INDEXER_EXPAND=custom GLM53_INDEXER_COLSPLIT=1 GLM53_KDA_CHRONO_ANCHOR=1
-export GLM53F_PREFIX_REUSE=1 GLM53F_PREFIX_CKPTS=$CKPTS PREFIX_CHECK_CTL=$RUN/ctl \\
+export GLM53F_PREFIX_REUSE=1 GLM53F_PREFIX_CKPTS=$CKPTS GLM53F_PREFIX_HOST_GB=$HOST_GB PREFIX_CHECK_PHASES=$PHASES PREFIX_CHECK_CTL=$RUN/ctl \\
   PREFIX_CHECK_STACKS=$RUN/stacks.txt PREFIX_CHECK_RUNNER_LOG=$RUN/runner.log PREFIX_CHECK_OUT=$RUN
 EOF
 rsync -a $OUT/env.sh $P:$RUN/env.sh
@@ -65,6 +69,7 @@ for i in $(seq 1 240); do
 done
 R "grep -q 'entering request loop' $RUN/runner.log" || { log "runner not ready after 60 min"; exit 1; }
 R "grep -h 'model built\|warm-up\|glm53f-prefix\|slabs:' $RUN/runner.log | cut -c1-260" | tee -a $OUT/check.log
+R "free -g | head -2; ps -o rss= --ppid \$(cat $RUN/runner.pid) | awk '{print \"runner RSS after warm-up \" \$1/1048576 \" GiB\"}'" | tee -a $OUT/check.log
 log "driver start"
 R "source $RUN/env.sh && timeout 3600 systemd-run --user --scope -q -p MemoryMax=40G nice -n 19 $PYBIN $RUN/scripts/driver.py > $RUN/driver.log 2>&1; echo driver rc \$?" | tee -a $OUT/check.log
 R "grep '\[driver\]' $RUN/driver.log" | tee -a $OUT/check.log

@@ -49,7 +49,29 @@ A2 = A + _rng(11, 12000)
 A3 = A2 + _rng(13, 30000)
 B = A[: CHUNK + 7000] + _rng(17, 20000)
 Ap = A[: 2 * CHUNK]
-PROMPTS = {"X": X, "A": A, "A2": A2, "A3": A3, "B": B, "Ap": Ap}
+# phase 2 (several retained prompts, GLM53F_PREFIX_HOST_GB > 0): two conversations and two siblings, interleaved
+M_A1 = _rng(101, 4 * CHUNK + 3000)
+M_B1 = _rng(103, 3 * CHUNK + 2000)
+M_A2 = M_A1 + _rng(105, 2 * CHUNK)  # 6C + 3000: A1's 4 full chunks stored, resume at 4C on A1's spilled tip
+M_B2 = M_B1 + _rng(107, CHUNK + 5000)  # 4C + 7000: resume at 3C on B1's spilled tip
+M_SYS = _rng(109, 2 * CHUNK + 500)
+M_S1 = M_SYS + _rng(111, CHUNK)
+M_S2 = M_SYS + _rng(113, CHUNK + 4000)  # 2 chunks restored from S1's, carries rebuilt (no boundary of S1 spilled there)
+PROMPTS = {
+    "X": X,
+    "A": A,
+    "A2": A2,
+    "A3": A3,
+    "B": B,
+    "Ap": Ap,
+    "MA1": M_A1,
+    "MB1": M_B1,
+    "MA2": M_A2,
+    "MB2": M_B2,
+    "MS1": M_S1,
+    "MS2": M_S2,
+}
+PHASES = os.environ.get("PREFIX_CHECK_PHASES", "R,S,T,U").split(",")
 
 
 def log(msg: str) -> None:
@@ -161,18 +183,34 @@ def main() -> None:
         f"attached: payload {PAYLOAD} B, chunk {CHUNK}, prompts {{{', '.join(f'{k}: {len(v)}' for k, v in PROMPTS.items())}}}"
     )
     res.append(run_prompt("warm", "X", "off"))
-    # R: cold references, each after an unrelated prompt (different stale rows than the reuse runs see)
-    for name in ("A", "A2", "A3", "B", "Ap"):
-        res.append(run_prompt("R", "X", "cold"))
-        res.append(run_prompt("R", name, "cold", digest=True))
-    res.append(run_prompt("R2", "X", "cold"))
-    res.append(run_prompt("R2", "A3", "cold", digest=True))  # run-to-run determinism of the reference itself
-    # S: the reuse sequence; every digest must equal R's
-    res.append(run_prompt("S", "X", "cold"))
-    for name in ("A", "A2", "A3", "A3", "B", "A", "Ap", "A3"):
-        res.append(run_prompt("S", name, "reuse", digest=True))
-    # T: timing, the same prompts per arm, interleaved (no digest flushes inside a measured prompt)
-    for rep in range(2):
+    if "R" in PHASES:
+        # R: cold references, each after an unrelated prompt (different stale rows than the reuse runs see)
+        for name in ("A", "A2", "A3", "B", "Ap"):
+            res.append(run_prompt("R", "X", "cold"))
+            res.append(run_prompt("R", name, "cold", digest=True))
+        res.append(run_prompt("R2", "X", "cold"))
+        res.append(run_prompt("R2", "A3", "cold", digest=True))  # run-to-run determinism of the reference itself
+    if "S" in PHASES:
+        # S: the reuse sequence; every digest must equal R's
+        res.append(run_prompt("S", "X", "cold"))
+        for name in ("A", "A2", "A3", "A3", "B", "A", "Ap", "A3"):
+            res.append(run_prompt("S", name, "reuse", digest=True))
+    if "M" in PHASES:
+        # M (phase 2): references with retention OFF (a cold arm would still find chunks in the host store), then
+        # two conversations and two siblings interleaved, each digest equal to its reference; timing of a next turn
+        # whose conversation the device left (restored from the store) against the same prompt cold
+        for name in ("MA1", "MB1", "MA2", "MB2", "MS1", "MS2"):
+            res.append(run_prompt("R", "X", "off"))
+            res.append(run_prompt("R", name, "off", digest=True))
+        res.append(run_prompt("M", "X", "off"))
+        for name in ("MA1", "MB1", "MA2", "MB2", "MS1", "X", "MS2", "MA2", "MB2"):
+            res.append(run_prompt("M", name, "off" if name == "X" else "reuse", digest=name != "X"))
+        for rep in range(2):
+            res.append(run_prompt(f"MT{rep}", "X", "off"))
+            res.append(run_prompt(f"MT{rep}", "MA2", "off"))
+            res.append(run_prompt(f"MT{rep}", "MB2", "reuse"))  # the device now holds B2; A's chunks only in the store
+            res.append(run_prompt(f"MT{rep}", "MA2", "reuse"))  # restored + resumed at A2's tip: the ragged tail only
+    for rep in range(2 if "T" in PHASES else 0):
         res.append(run_prompt(f"T{rep}", "X", "off"))
         res.append(run_prompt(f"T{rep}", "A3", "off"))
         res.append(run_prompt(f"T{rep}", "X", "cold"))
@@ -180,10 +218,11 @@ def main() -> None:
         res.append(run_prompt(f"T{rep}", "A2", "reuse"))
         res.append(run_prompt(f"T{rep}", "A3", "reuse"))  # extends A2: resume at 4C
         res.append(run_prompt(f"T{rep}", "A3", "reuse"))  # unchanged: every chunk skipped
-    # U: no last-chunk mark from here on (the runner must notice and stay correct)
-    res.append(run_prompt("U", "X", "cold", mark=False))
-    for name in ("A", "A2", "A3", "B", "Ap"):
-        res.append(run_prompt("U", name, "reuse", digest=True, mark=False))
+    if "U" in PHASES:
+        # U: no last-chunk mark from here on (the runner must notice and stay correct)
+        res.append(run_prompt("U", "X", "cold", mark=False))
+        for name in ("A", "A2", "A3", "B", "Ap"):
+            res.append(run_prompt("U", name, "reuse", digest=True, mark=False))
     pp._push(service, PAYLOAD, pp._h2d_rows([1] * CHUNK, 0), None, struct.pack("<3i", -1, -1, -1))
     log("SHUTDOWN sentinel sent")
     time.sleep(10)
@@ -196,7 +235,7 @@ def main() -> None:
     verdict = {}
     for k, v in d.items():
         phase, name = k.split(".")[0], k.split(":")[1]
-        if phase in ("S", "U", "R2"):
+        if phase in ("S", "U", "R2", "M"):
             ref = refs.get(name)
             verdict[k] = None if ref is None else all(v[f] == ref[f] for f in ("S", "dsa", "kda_rec", "kda_conv"))
     log(f"digest verdicts vs the cold references: {verdict}")
