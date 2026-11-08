@@ -12,7 +12,7 @@ about 11 s a layer, 8 min for DS41's 40 layers): this writes <stem>.bm.bin besid
 bytes per chip and DRAM bank; --verify reads them back and compares every shard after the inverse permutation). The .tensorbin files are left as they are: delete them yourself
 once converted (nothing reads them; the weight cache's shared master never takes them, core/weight_cache.py).
 
-    cd /scratch/dnijemcevic/tt-metal-rebase && source python_env/bin/activate
+    cd ~/repos/tt-metal && source python_env/bin/activate
     PYTHONPATH=$PWD ionice -c3 nice -n19 python models/demos/deepseek_v41_flash_d_p/tools/convert_expert_cache.py \\
         --layers $(seq 0 39) [--impl bfp4_mse] [--cache <dir>] [--verify]
     ... convert_expert_cache.py <file>.tensorbin ...      # any FlatRoutedExpert cache file (e.g. another model's)
