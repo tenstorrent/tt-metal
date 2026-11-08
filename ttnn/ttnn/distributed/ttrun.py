@@ -83,18 +83,51 @@ class RankfileSyntax(Enum):
     MCA_RMAPS_RANKFILE_PATH = "mca_rmaps_rankfile_path"  # -mca rmaps_rankfile_path <path> (fallback)
 
 
+def _plain_mpirun_beside(launcher: str) -> Optional[str]:
+    """Return the ``mpirun`` executable installed beside ``launcher`` (after resolving symlinks), or ``None``.
+
+    ``mpirun-ulfm`` is a symlink to the ULFM-capable ``mpirun`` (tenstorrent/ompi .deb and current Docker
+    images), but older Docker images shipped it as a shell wrapper that execs the sibling ``mpirun`` with
+    ``--with-ft ulfm``. In both layouts the plain launcher of that Open MPI installation is ``<resolved dir>/mpirun``.
+    """
+    try:
+        resolved = Path(launcher).resolve(strict=True)
+    except OSError:
+        return None
+    candidate = resolved.with_name("mpirun")
+    if candidate.is_file() and os.access(candidate, os.X_OK):
+        return str(candidate)
+    return None
+
+
 def get_mpi_launcher() -> str:
     """Get the MPI launcher executable for the current PATH.
 
-    Prefers ``mpirun-ulfm`` from :func:`shutil.which` if found; otherwise logs and
-    returns ``\"mpirun\"``.
+    ``mpirun-ulfm`` on ``PATH`` locates the ULFM-capable Open MPI installation that tt-metal links against, but
+    the launcher returned is that installation's plain ``mpirun``, never the ``mpirun-ulfm`` wrapper itself.
+
+    Such a wrapper adds ``--with-ft ulfm``, which makes PRRTE treat the job as recoverable: a rank killed by a
+    signal (SIGABRT from ``TT_FATAL``, SIGSEGV, ...) no longer aborts the job, surviving ranks keep waiting, and
+    ``mpirun`` can exit 0 even when every rank crashed, so a failing CI step reports success
+    (https://github.com/tenstorrent/tt-metal/issues/57698). Nothing later on the command line can turn that
+    mode off again. Programs that recover from rank failures themselves can opt in with
+    ``--mpi-args "--with-ft ulfm"``.
+
+    Falls back to ``mpirun-ulfm`` itself when no sibling ``mpirun`` exists, and to ``mpirun`` when neither is found.
     """
-    mpi_launcher = shutil.which("mpirun-ulfm")
-    if not mpi_launcher:
+    ulfm_launcher = shutil.which("mpirun-ulfm")
+    if not ulfm_launcher:
         logger.warning(f"{TT_RUN_PREFIX} mpirun-ulfm not found in PATH, falling back to mpirun")
         return "mpirun"
 
-    return mpi_launcher
+    plain_launcher = _plain_mpirun_beside(ulfm_launcher)
+    if plain_launcher is None:
+        logger.warning(
+            f"{TT_RUN_PREFIX} No mpirun found next to {ulfm_launcher}; launching with it directly. "
+            "If it enables ULFM (--with-ft ulfm), crashed ranks may not be reflected in tt-run's exit code."
+        )
+        return ulfm_launcher
+    return plain_launcher
 
 
 def rankfile_path_for_mpi_cli(rankfile: Union[str, Path], cwd: Optional[Path] = None) -> str:

@@ -809,7 +809,7 @@ MeshWorkload make_stub_fabric_workload(
 
         std::vector<uint32_t> rt_args;
         tt::tt_fabric::append_fabric_connection_rt_args(
-            sender_node, downstream_node, links.front(), program, stub_core, rt_args);
+            *mesh, sender_node, downstream_node, links.front(), program, stub_core, rt_args);
         SetRuntimeArgs(program, kernel, stub_core, rt_args);
         workload.add_program(MeshCoordinateRange(coord), std::move(program));
     }
@@ -890,7 +890,8 @@ MeshWorkload make_stress_fabric_workload(
             expected_per_iter,
         };
         for (const auto& [neighbor_node, link] : conns) {
-            tt::tt_fabric::append_fabric_connection_rt_args(sender_node, neighbor_node, link, program, fabric_core, rt);
+            tt::tt_fabric::append_fabric_connection_rt_args(
+                *mesh, sender_node, neighbor_node, link, program, fabric_core, rt);
             rt.push_back(static_cast<uint32_t>(neighbor_node.chip_id));
             rt.push_back(static_cast<uint32_t>(*neighbor_node.mesh_id));
         }
@@ -1350,21 +1351,24 @@ TEST_F(CrossProcessD2DFixture, ExportPipelineDescriptor) {
     const D2DEndpointConfig to_next{
         .sender_rank = Rank{rank}, .receiver_rank = Rank{rank + 1}, .distributed_context = ctx};
     // Channels between the same two ranks pair up in creation order, so every rank builds them
-    // in the same order: inbound before outbound, gated before plain.
+    // in the same order: inbound before outbound, gated before plain. Each direction's two
+    // channels share the routers in one lease group, like the prefill runner.
     std::vector<std::unique_ptr<D2DStreamServiceReceiver>> inbound;
     std::vector<std::unique_ptr<D2DStreamServiceSender>> outbound;
     for (const bool gated : {true, false}) {
         const uint32_t metadata_bytes = gated ? kMetadataBytes : 0;
         if (rank > 0) {
             auto cfg = make_cfg(mesh_device_, global_shape, kWorkerCores, metadata_bytes);
+            cfg.fabric_link_group = "export-inbound";
             if (gated) {
                 cfg.stage_gate = gate_cfg;
             }
             inbound.push_back(D2DStreamService::create_receiver(mesh_device_, std::move(cfg), from_prev));
         }
         if (rank + 1 < world_size) {
-            outbound.push_back(D2DStreamService::create_sender(
-                mesh_device_, make_cfg(mesh_device_, global_shape, kWorkerCores, metadata_bytes), to_next));
+            auto cfg = make_cfg(mesh_device_, global_shape, kWorkerCores, metadata_bytes);
+            cfg.fabric_link_group = "export-outbound";
+            outbound.push_back(D2DStreamService::create_sender(mesh_device_, std::move(cfg), to_next));
         }
     }
 

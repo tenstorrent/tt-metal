@@ -138,6 +138,23 @@ void StridedAllGatherFusedOpSignaler::init_all_gather(
     initialized_all_gather = true;
 }
 
+void StridedAllGatherFusedOpSignaler::init_all_gather(
+    ProgramDescriptor& desc,
+    const tt::tt_metal::distributed::MeshDevice* device,
+    const CoreRangeSet& all_gather_workers,
+    const std::vector<CoreCoord>& all_gather_worker_cores) {
+    // The sync semaphore is only needed when more than one worker core has to synchronize
+    if (all_gather_worker_cores.size() > 1) {
+        this->all_gather_worker_sync_semaphore = add_semaphore_descriptor(desc, all_gather_workers);
+    }
+
+    this->all_gather_worker_cores_noc.clear();
+    for (const auto& core : all_gather_worker_cores) {
+        this->all_gather_worker_cores_noc.push_back(device->worker_core_from_logical_core(core));
+    }
+    initialized_all_gather = true;
+}
+
 void StridedAllGatherFusedOpSignaler::push_all_gather_fused_op_rt_args(
     std::vector<uint32_t>& out_rt_args,
 
@@ -290,6 +307,44 @@ size_t add_kernel_descriptor(
         config);
     desc.kernels.push_back(std::move(kernel));
     return desc.kernels.size() - 1;
+}
+
+void emplace_runtime_args_with_buffers(
+    KernelDescriptor& kernel,
+    const CoreCoord& core,
+    const std::vector<uint32_t>& args,
+    std::initializer_list<std::pair<size_t, Buffer*>> buffer_slots) {
+    KernelDescriptor::RTArgList list;
+    list.reserve(args.size());
+    for (size_t i = 0; i < args.size(); ++i) {
+        Buffer* buffer = nullptr;
+        for (const auto& [slot, slot_buffer] : buffer_slots) {
+            if (slot == i) {
+                buffer = slot_buffer;
+            }
+        }
+        if (buffer != nullptr) {
+            list.push_back(buffer);
+        } else {
+            list.push_back(args[i]);
+        }
+    }
+    kernel.emplace_runtime_args(core, list);
+}
+
+void set_runtime_arg_on_all_cores(Program& program, KernelHandle kernel, size_t slot, uint32_t value) {
+    auto& runtime_args_by_core = GetRuntimeArgs(program, kernel);
+    for (auto& column : runtime_args_by_core) {
+        for (auto& runtime_args : column) {
+            // The grid spans the kernel's bounding box from (0,0); cores outside the kernel have no args.
+            if (runtime_args.size() == 0) {
+                continue;
+            }
+            TT_FATAL(
+                runtime_args.size() > slot, "Runtime arg slot {} out of range ({} args)", slot, runtime_args.size());
+            runtime_args[slot] = value;
+        }
+    }
 }
 
 CBDescriptor make_cb_descriptor(
