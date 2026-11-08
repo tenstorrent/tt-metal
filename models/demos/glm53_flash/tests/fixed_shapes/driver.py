@@ -9,6 +9,7 @@ Phases (token ids from one fixed-seed pool; C = PREFILL_CHUNK_SIZE = 12288 in th
      ends), then the per-length path at other fresh ends; at 3C + 4.2k..4.7k (bucket 5120), single-chunk 3.1k..3.4k
      (bucket 3584), and 8C + 10.0k..10.2k (bucket 10240);
   D  bit identity: every length once per arm (order alternating), digests compared; one OFF repeat (determinism);
+  P  (with G) per arm: 3 fresh ends 100 apart in (3C, 5120), then the same 3 lengths again (warmed controls);
   T  warmed timing: lengths both arms have seen, two reps.
     PREFILL_* env as the runner's, FS_CHECK_CTL, FS_CHECK_OUT -> python driver.py
 """
@@ -127,6 +128,13 @@ def main() -> None:
                 res.append(run("G", base + e, 1))
             for e in off_ends:
                 res.append(run("G", base + e, 0))
+        # P: the probe with same-length controls, per arm: 3 fresh ends 100 apart in (3C, bucket 5120), then the same 3
+        # lengths again -- the per-new-length cost (program creation; with TT_METAL_SHM_TRACKING_DISABLED unset, also the
+        # SHM stats rescans) against the warmed cost of the same chunks
+        for fixed, ends in ((0, (4801, 4901, 5001)), (1, (4851, 4951, 5051))):
+            for rep in ("P", "Pw"):
+                for e in ends:
+                    res.append(run(rep, 3 * C + e, fixed))
     # 61000: the pools view widens across a 16384-pool bucket at the padded end (16384 -> 32768 columns)
     lens = [1001, 1003, 2047, 2051, 2501, 4093, 7001, 9001, 12287, 24576, 41863, 41857, 41858, 61000, 102401, 110003]
     if "D" in phases:
