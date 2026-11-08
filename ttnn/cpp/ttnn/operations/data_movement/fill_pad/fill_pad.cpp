@@ -6,12 +6,27 @@
 #include "device/fill_pad_device_operation.hpp"
 #include "ttnn/operation.hpp"
 #include "ttnn/operations/core/core.hpp"
-#include <utility>
 #include "ttnn/operations/copy/typecast/typecast.hpp"
+#include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
+#include <utility>
 #include <tt-metalium/math.hpp>
 
 namespace ttnn {
+
+namespace {
+// prim::fill_pad writes through the input buffer and returns that tensor, so the requested memory config
+// never reaches the result. Honor it here instead of dropping it: move the filled tensor when the caller
+// explicitly asked for a different config, and return the tensor untouched otherwise (same-config requests
+// and omitted requests keep the current in-place aliasing).
+Tensor move_to_requested_memory_config(const Tensor& tensor, const std::optional<MemoryConfig>& memory_config) {
+    if (memory_config.has_value() &&
+        !operations::data_movement::is_functionally_same_memory_config(tensor.memory_config(), *memory_config)) {
+        return ttnn::to_memory_config(tensor, *memory_config, std::nullopt);
+    }
+    return tensor;
+}
+}  // namespace
 
 Tensor fill_implicit_tile_padding(
     const Tensor& input_tensor,
@@ -24,7 +39,7 @@ Tensor fill_implicit_tile_padding(
     uint32_t padded_width =
         tt::div_up(input_tensor.logical_shape()[-1], tt::constants::TILE_WIDTH) * tt::constants::TILE_WIDTH;
     if (padded_width == input_tensor.logical_shape()[-1] && padded_height == input_tensor.logical_shape()[-2]) {
-        return input_tensor;
+        return move_to_requested_memory_config(input_tensor, memory_config);
     }
     auto mutable_input_tensor = input_tensor;
     auto output_memory_config = memory_config.value_or(input_tensor.memory_config());
@@ -73,9 +88,11 @@ Tensor fill_implicit_tile_padding(
     // return path, including the rank>3 branch (previously the cast-back only fired on the rank<=3 path,
     // leaking BFLOAT16 for rank>3 block-float inputs).
     if (is_block_float(input_tensor.dtype())) {
-        return ttnn::typecast(output_tensor, input_tensor.dtype(), std::nullopt, std::nullopt, sub_core_grids);
+        return move_to_requested_memory_config(
+            ttnn::typecast(output_tensor, input_tensor.dtype(), std::nullopt, std::nullopt, sub_core_grids),
+            memory_config);
     }
-    return output_tensor;
+    return move_to_requested_memory_config(output_tensor, memory_config);
 }
 
 }  // namespace ttnn
