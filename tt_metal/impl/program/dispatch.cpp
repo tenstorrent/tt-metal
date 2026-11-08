@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <atomic>
 #include <tt_stl/fmt.hpp>
 #include "tt_metal/impl/program/dispatch.hpp"
 #include "tt_metal/impl/program/sub_device_setup_batch.hpp"
@@ -747,17 +748,22 @@ using RtaDataPair =
 // later in-place RTA edits (and re-enqueues) update the command directly. If a kernel's rt_args_data was
 // already retargeted by a previous command sequence, schedule an rta_update copy from there instead.
 // `base` points at the start of this core's RTA payload in the command buffer; kernels are laid out back
-// to back at their [count | args] stride. Shared by the packed and large-unicast RTA emission paths.
+// to back at the kernel group's per-kernel stride (std::get<2> of kernel_data_and_sizes, the same stride the
+// writers use), whether or not a kernel has args on this core. Each slot's location is also recorded in
+// `rta_locations` (per-device runtime args). Shared by the packed and large-unicast RTA emission paths.
 void repoint_rta_data_into_command_stream(
     char* base,
     std::vector<RtaDataPair>& kernel_rta_pairs,
-    [[maybe_unused]] const std::vector<std::tuple<const void*, uint32_t, uint32_t>>& kernel_data_and_sizes,
+    const std::vector<std::tuple<const void*, uint32_t, uint32_t>>& kernel_data_and_sizes,
+    const std::vector<uint64_t>& slot_keys,
     uint32_t count_word_offset,
-    std::vector<ProgramCommandSequence::RtaUpdate>& rta_updates) {
+    std::vector<ProgramCommandSequence::RtaUpdate>& rta_updates,
+    std::unordered_map<uint64_t, uint32_t*>& rta_locations) {
     uint32_t offset = 0;
     for (uint32_t j = 0; j < kernel_rta_pairs.size(); ++j) {
         auto& data = kernel_rta_pairs[j];
         uint32_t* data_in_sequence = reinterpret_cast<uint32_t*>(base + offset) + count_word_offset;
+        rta_locations[slot_keys[j]] = data_in_sequence;
         // rt_args_data points to args; data.second.get().data() points to count when watcher enabled.
         auto& rta = data.first.get();
         if (rta.data() == (data.second.get().data() + count_word_offset)) {
@@ -768,7 +774,7 @@ void repoint_rta_data_into_command_stream(
                 (reinterpret_cast<const uint32_t*>(std::get<0>(kernel_data_and_sizes[j])) + count_word_offset));
             rta_updates.emplace_back(rta.data(), data_in_sequence, rta.size() * sizeof(uint32_t));
         }
-        offset += (rta.size() + count_word_offset) * sizeof(uint32_t);
+        offset += std::get<2>(kernel_data_and_sizes[j]);
     }
 }
 
@@ -784,6 +790,8 @@ void generate_runtime_args_cmds(
     std::vector<std::vector<
         std::pair<std::reference_wrapper<RuntimeArgsData>, std::reference_wrapper<const std::vector<uint32_t>>>>>&
         rt_args_data,
+    const std::vector<std::vector<uint64_t>>& rt_slot_keys,
+    std::unordered_map<uint64_t, uint32_t*>& rta_locations,
     const CommandConstants& constants,
     bool no_stride,
     enum DispatchWriteOffsets write_offset_index) {
@@ -879,8 +887,10 @@ void generate_runtime_args_cmds(
                 reinterpret_cast<char*>(runtime_args_command_sequences.back().data()) + data_offset,
                 rt_args_data[i],
                 rt_data_and_sizes[i],
+                rt_slot_keys[i],
                 count_word_offset,
-                rta_updates);
+                rta_updates,
+                rta_locations);
             data_offset += data_inc;
         }
         num_packed_cmds_in_seq -= num_packed_cmds;
@@ -943,6 +953,8 @@ void generate_runtime_args_cmds_large_unicast(
     std::vector<std::vector<
         std::pair<std::reference_wrapper<RuntimeArgsData>, std::reference_wrapper<const std::vector<uint32_t>>>>>&
         rt_args_data,
+    const std::vector<std::vector<uint64_t>>& rt_slot_keys,
+    std::unordered_map<uint64_t, uint32_t*>& rta_locations,
     uint32_t max_prefetch_command_size,
     uint32_t write_offset_index) {
     const uint32_t l1_alignment = metal_ctx.hal().get_alignment(HalMemType::L1);
@@ -1011,8 +1023,10 @@ void generate_runtime_args_cmds_large_unicast(
                 reinterpret_cast<char*>(data_collection_location[k]),
                 rt_args_data[i],
                 rt_data_and_sizes[i],
+                rt_slot_keys[i],
                 count_word_offset,
-                rta_updates);
+                rta_updates,
+                rta_locations);
         }
         offset_idx += num_in_chunk;
     }
@@ -1039,6 +1053,8 @@ struct Transfer {
     CoreCoord dfb_logical_core;
     // RTAs must be updated from data every time update_program_dispatch_commmands is called.
     RuntimeArgsData* rta_data = nullptr;
+    // Device-local handle of the kernel whose common runtime args rta_data is (per-device runtime-arg locations).
+    uint32_t rta_kernel = 0;
     // If set, this transfer materializes one host-only CrossNode page into its
     // dedicated config Buffer and must be refreshed before every cached enqueue.
     std::optional<std::pair<CoreCoord, uint8_t>> cross_node_config;
@@ -1068,9 +1084,15 @@ BatchedTransfers assemble_runtime_args_commands(
     std::vector<CQDispatchWritePackedUnicastSubCmd> unique_sub_cmds;
     std::vector<std::vector<std::tuple<const void*, uint32_t, uint32_t>>> unique_rt_data_and_sizes;
     std::vector<std::vector<RtaDataPair>> unique_rt_args_data;
+    // Per core, the slot key of each entry of unique_rt_args_data (per-device runtime-arg locations).
+    std::vector<std::vector<uint64_t>> unique_rt_slot_keys;
     // Common runtime args are multicast to TENSIX workers via the kernel-group transfers map below.
 
     program_command_sequence.runtime_args_command_sequences = {};
+    static std::atomic<uint64_t> next_assembly_id{1};
+    program_command_sequence.assembly_id = next_assembly_id.fetch_add(1, std::memory_order_relaxed);
+    program_command_sequence.unique_rta_locations.clear();
+    program_command_sequence.common_rta_locations.clear();
     uint32_t command_count = 0;
     TT_ASSERT(program_command_sequence.ctx != nullptr);
     MetalContext& metal_ctx = *program_command_sequence.ctx;
@@ -1141,7 +1163,8 @@ BatchedTransfers assemble_runtime_args_commands(
                         .data = ttsl::Span<const uint8_t>(
                             reinterpret_cast<uint8_t*>(kernel->common_runtime_args().data()), size),
                         .cbs = {},
-                        .rta_data = &kernel->common_runtime_args_data()}};
+                        .rta_data = &kernel->common_runtime_args_data(),
+                        .rta_kernel = device_local_kernel_handle}};
             }
         }
     }
@@ -1162,6 +1185,7 @@ BatchedTransfers assemble_runtime_args_commands(
                 // up front (one entry per core) instead of growing one element at a time.
                 const size_t kg_num_cores = kg->core_ranges.num_cores();
                 unique_rt_args_data.reserve(kg_num_cores);
+                unique_rt_slot_keys.reserve(kg_num_cores);
                 unique_rt_data_and_sizes.reserve(kg_num_cores);
                 unique_sub_cmds.reserve(kg_num_cores);
                 for (const CoreRange& core_range : kg->core_ranges.ranges()) {
@@ -1170,6 +1194,7 @@ BatchedTransfers assemble_runtime_args_commands(
                             CoreCoord core_coord(x, y);
 
                             unique_rt_args_data.resize(unique_rt_args_data.size() + 1);
+                            unique_rt_slot_keys.resize(unique_rt_slot_keys.size() + 1);
                             unique_rt_data_and_sizes.resize(unique_rt_data_and_sizes.size() + 1);
                             for (uint32_t idx = 0; idx < kg->kernel_ids.size(); idx++) {
                                 auto device_local_kernel_handle = get_device_local_kernel_handle(kg->kernel_ids[idx]);
@@ -1178,6 +1203,8 @@ BatchedTransfers assemble_runtime_args_commands(
                                     const auto& runtime_args_data = kernel->runtime_args(core_coord);
                                     unique_rt_args_data.back().emplace_back(
                                         RtaDataPair(kernel->runtime_args_data(core_coord), runtime_args_data));
+                                    unique_rt_slot_keys.back().push_back(
+                                        unique_rta_slot_key(device_local_kernel_handle, x, y));
                                     TT_ASSERT(runtime_args_data.size() * sizeof(uint32_t) <= kg->rta_sizes[idx]);
                                     // Back up pointer to include count word for dispatch
                                     // Device expects [count | args...] layout for watcher bounds checking
@@ -1214,6 +1241,8 @@ BatchedTransfers assemble_runtime_args_commands(
                         unique_rt_data_and_sizes,
                         kg->total_rta_size,
                         unique_rt_args_data,
+                        unique_rt_slot_keys,
+                        program_command_sequence.unique_rta_locations,
                         constants.max_prefetch_command_size,
                         get_dispatch_write_offset(programmable_core_type));
                 } else {
@@ -1226,6 +1255,8 @@ BatchedTransfers assemble_runtime_args_commands(
                         unique_rt_data_and_sizes,
                         kg->total_rta_size / sizeof(uint32_t),
                         unique_rt_args_data,
+                        unique_rt_slot_keys,
+                        program_command_sequence.unique_rta_locations,
                         constants,
                         false,
                         get_dispatch_write_offset(programmable_core_type));
@@ -1242,6 +1273,7 @@ BatchedTransfers assemble_runtime_args_commands(
                 unique_sub_cmds.clear();
                 unique_rt_data_and_sizes.clear();
                 unique_rt_args_data.clear();
+                unique_rt_slot_keys.clear();
             }
         }
     }
@@ -2137,6 +2169,8 @@ public:
                          static_cast<uint32_t>(transfer.data.size())});
                 }
                 if (transfer.rta_data) {
+                    program_command_sequence.common_rta_locations[transfer.rta_kernel].push_back(
+                        reinterpret_cast<uint32_t*>(data_collection_location[j] + count_word_byte_offset));
                     // When watcher enabled, transfer.data contains [count | args...]
                     // rt_args_data points to args location (data + offset)
                     // rta_updates only copy args (count already written during initial copy)
@@ -3178,6 +3212,115 @@ void pack_program_command_sequence(
             }
         });
     TT_FATAL(offset == size, "Packed command size mismatch: {} vs {}", offset, size);
+}
+
+void pack_program_command_sequence(
+    const ProgramCommandSequence& program_command_sequence,
+    bool stall_first,
+    bool stall_before_program,
+    bool send_binary,
+    vector_aligned<uint32_t>& packed,
+    std::vector<PackedCommandChunk>& chunks) {
+    const auto size = program_command_sequence.get_one_shot_fetch_size(stall_first, stall_before_program, send_binary);
+    packed.resize(size / sizeof(uint32_t));
+    chunks.clear();
+    uint32_t offset = 0;
+    for_each_program_command_sequence_chunk_impl(
+        program_command_sequence,
+        stall_first,
+        stall_before_program,
+        send_binary,
+        [&](const void* data, uint32_t bytes) {
+            TT_FATAL(offset + bytes <= size, "Packed command exceeds reserved size");
+            if (bytes) {
+                std::memcpy(reinterpret_cast<uint8_t*>(packed.data()) + offset, data, bytes);
+                chunks.push_back({static_cast<const uint8_t*>(data), bytes, offset});
+                offset += bytes;
+            }
+        });
+    TT_FATAL(offset == size, "Packed command size mismatch: {} vs {}", offset, size);
+}
+
+uint32_t packed_offset_of(const std::vector<PackedCommandChunk>& chunks, const void* location, uint32_t size_bytes) {
+    const auto* loc = static_cast<const uint8_t*>(location);
+    for (const auto& chunk : chunks) {
+        if (loc >= chunk.data && loc + size_bytes <= chunk.data + chunk.size_bytes) {
+            return chunk.packed_offset + static_cast<uint32_t>(loc - chunk.data);
+        }
+    }
+    TT_THROW("Per-device runtime args: location is not in any command chunk of this enqueue");
+}
+
+void write_program_command_sequence(
+    const ProgramCommandSequence& program_command_sequence,
+    SystemMemoryManager& manager,
+    uint32_t command_queue_id,
+    bool stall_first,
+    bool stall_before_program,
+    bool send_binary,
+    ttsl::Span<const RtaPatch> patches,
+    std::vector<uint32_t>* patch_write_offsets) {
+    const MetalContext& metal_ctx = *program_command_sequence.ctx;
+    const uint32_t one_shot_fetch_size =
+        program_command_sequence.get_one_shot_fetch_size(stall_first, stall_before_program, send_binary);
+    const bool one_shot = one_shot_fetch_size <= metal_ctx.dispatch_mem_map().max_prefetch_command_size();
+    if (one_shot) {
+        manager.issue_queue_reserve(one_shot_fetch_size, command_queue_id);
+    }
+    uint32_t one_shot_write_ptr = manager.get_issue_queue_write_ptr(command_queue_id);
+    if (patch_write_offsets) {
+        patch_write_offsets->assign(patches.size(), UINT32_MAX);
+    }
+    static thread_local std::vector<uint8_t> scratch;
+
+    auto write_chunk = [&](const void* data, uint32_t size_bytes) {
+        if (!size_bytes) {
+            return;
+        }
+        const auto* chunk = static_cast<const uint8_t*>(data);
+        const uint32_t write_ptr = one_shot ? one_shot_write_ptr : manager.get_issue_queue_write_ptr(command_queue_id);
+        // Copy the chunk and patch it if it holds any patch.
+        const void* out = data;
+        for (size_t i = 0; i < patches.size(); ++i) {
+            const auto* loc = reinterpret_cast<const uint8_t*>(patches[i].location);
+            const uint32_t bytes = patches[i].num_words * sizeof(uint32_t);
+            if (loc < chunk || loc + bytes > chunk + size_bytes) {
+                continue;
+            }
+            if (out == data) {
+                scratch.assign(chunk, chunk + size_bytes);
+                out = scratch.data();
+            }
+            std::memcpy(scratch.data() + (loc - chunk), patches[i].src, bytes);
+            if (patch_write_offsets) {
+                (*patch_write_offsets)[i] = write_ptr + static_cast<uint32_t>(loc - chunk);
+            }
+        }
+        if (one_shot) {
+            manager.cq_write(out, size_bytes, one_shot_write_ptr);
+            one_shot_write_ptr += size_bytes;
+        } else {
+            manager.issue_queue_reserve(size_bytes, command_queue_id);
+            manager.cq_write(out, size_bytes, manager.get_issue_queue_write_ptr(command_queue_id));
+            manager.issue_queue_push_back(size_bytes, command_queue_id);
+            manager.fetch_queue_reserve_back(command_queue_id);
+            manager.fetch_queue_write(size_bytes, command_queue_id);
+        }
+    };
+    for_each_program_command_sequence_chunk_impl(
+        program_command_sequence, stall_first, stall_before_program, send_binary, write_chunk);
+    if (one_shot) {
+        manager.issue_queue_push_back(one_shot_fetch_size, command_queue_id);
+        manager.fetch_queue_reserve_back(command_queue_id);
+        manager.fetch_queue_write(one_shot_fetch_size, command_queue_id);
+    }
+    if (patch_write_offsets) {
+        for (const uint32_t write_offset : *patch_write_offsets) {
+            TT_FATAL(
+                write_offset != UINT32_MAX,
+                "Per-device runtime args: a patch location is not in any command chunk of this enqueue");
+        }
+    }
 }
 
 void write_program_command_sequence(

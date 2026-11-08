@@ -11,6 +11,7 @@
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
 #include "program/program_impl.hpp"
+#include "tt_metal/impl/program/program_command_sequence.hpp"
 
 namespace tt::tt_metal {
 namespace distributed {
@@ -25,7 +26,50 @@ uint32_t program_base_addr_on_core(distributed::MeshWorkloadImpl&, distributed::
 }  // namespace tt::tt_metal
 
 namespace tt::tt_metal::distributed {
-using RuntimeArgsPerCore = std::vector<std::vector<RuntimeArgsData>>;
+
+// Per-device runtime args of one program of a MeshWorkload (see distributed::SetRuntimeArgs on a MeshWorkload):
+// words [first_word, first_word + num_words) of one runtime-arg slot (a kernel's unique args on a core, or its
+// common args) whose value is set per device. Other words, and devices without a value, keep the program's own args.
+struct PerDeviceRuntimeArgsField {
+    uint32_t kernel = 0;            // device-local kernel handle
+    std::optional<CoreCoord> core;  // nullopt: the kernel's common runtime args
+    uint32_t first_word = 0;
+    uint32_t num_words = 0;
+    std::vector<uint32_t> values;  // [coordinate index in the program's range][num_words]
+    std::vector<uint8_t> present;  // [coordinate index in the program's range]
+};
+// A field's words in one command sequence: where they sit, and the field (values per device).
+struct ResolvedPerDeviceRuntimeArgsField {
+    const uint32_t* location;
+    const PerDeviceRuntimeArgsField* field;
+};
+
+struct PerDeviceRuntimeArgs {
+    uint64_t program_id = 0;                                         // the Program the fields were set for
+    std::vector<std::unique_ptr<PerDeviceRuntimeArgsField>> fields;  // stable while others are added
+    uint64_t generation = 0;                                         // bumps when a field is added
+    // The fields resolved against the last command sequence enqueued (see resolve_per_device_runtime_args).
+    struct ResolvedCache {
+        uint64_t assembly_id = 0;
+        uint64_t generation = 0;
+        std::vector<ResolvedPerDeviceRuntimeArgsField> resolved;
+    };
+    mutable ResolvedCache resolved_cache;
+};
+
+// Linear index of `coord` in `range`, in the range's iteration order.
+uint32_t coordinate_index_in_range(const MeshCoordinateRange& range, const MeshCoordinate& coord);
+// Locations of every field (each copy of common args) in `sequence`; fails if a slot has no recorded location.
+std::vector<ResolvedPerDeviceRuntimeArgsField> resolve_per_device_runtime_args(
+    const PerDeviceRuntimeArgs& per_device_args, const ProgramCommandSequence& sequence);
+// As above, cached on `per_device_args` for the sequence's assembly and the fields' generation.
+const std::vector<ResolvedPerDeviceRuntimeArgsField>& resolve_per_device_runtime_args_cached(
+    const PerDeviceRuntimeArgs& per_device_args, const ProgramCommandSequence& sequence);
+// The patches for the device at `coord_index`: each field's value on that device, or the sequence's own words.
+void per_device_runtime_args_patches(
+    const std::vector<ResolvedPerDeviceRuntimeArgsField>& resolved,
+    uint32_t coord_index,
+    std::vector<RtaPatch>& patches);
 
 class MeshCommandQueue;
 class FDMeshCommandQueue;
@@ -81,7 +125,14 @@ private:
     std::unordered_map<MeshCoordinateRange, Program> programs_;
     // Presence marks the workload finalized and makes all derived enqueue metadata available together.
     std::optional<FinalizedMetadata> finalized_metadata_;
-    std::unordered_map<MeshCoordinateRange, std::unordered_map<KernelHandle, RuntimeArgsPerCore>> runtime_args_;
+    // Per-device runtime args per program range (see PerDeviceRuntimeArgs); empty for almost every workload.
+    std::unordered_map<MeshCoordinateRange, PerDeviceRuntimeArgs> per_device_runtime_args_;
+    PerDeviceRuntimeArgsField& per_device_runtime_args_field(
+        const MeshCoordinateRange& program_range,
+        KernelHandle kernel,
+        const std::optional<CoreCoord>& core,
+        uint32_t first_word,
+        uint32_t num_words);
     MeshCommandQueue* last_used_command_queue_ = nullptr;
 
     // Cached service-vs-normal classification (see EnqueueMeshWorkload), computed before normal finalization.
@@ -106,6 +157,32 @@ public:
     ~MeshWorkloadImpl();
 
     uint64_t get_id() const { return id; }
+
+    // Per-device runtime args (see distributed::SetRuntimeArgs on a MeshWorkload).
+    void set_per_device_runtime_args(
+        const MeshCoordinateRange& program_range,
+        const MeshCoordinate& device,
+        KernelHandle kernel,
+        const std::optional<CoreCoord>& core,
+        uint32_t first_word,
+        ttsl::Span<const uint32_t> values);
+    void set_per_device_runtime_args(
+        const MeshCoordinateRange& program_range,
+        KernelHandle kernel,
+        const std::optional<CoreCoord>& core,
+        uint32_t first_word,
+        uint32_t num_words,
+        ttsl::Span<const uint32_t> values_in_range_order);
+    void clear_per_device_runtime_args(
+        const MeshCoordinateRange& program_range,
+        const MeshCoordinate& device,
+        KernelHandle kernel,
+        const std::optional<CoreCoord>& core,
+        uint32_t first_word);
+    bool has_per_device_runtime_args() const { return !per_device_runtime_args_.empty(); }
+    // The per-device runtime args of the program at `program_range`, or null; fails if the program there is not the
+    // one they were set for.
+    const PerDeviceRuntimeArgs* per_device_runtime_args(const MeshCoordinateRange& program_range) const;
 
     void add_program(const MeshCoordinateRange& device_range, Program&& program);
     std::unordered_map<MeshCoordinateRange, Program>& get_programs() { return programs_; }

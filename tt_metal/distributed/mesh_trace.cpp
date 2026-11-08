@@ -161,8 +161,35 @@ void MeshTrace::populate_mesh_buffer(
         }
         auto write_region =
             BufferRegion(write_offset_per_device_range.at(device_range), write_data.size() * sizeof(uint32_t));
-        mesh_cq.enqueue_write_shard_to_sub_grid(
-            *(trace_buffer->mesh_buffer), write_data.data(), device_range, true, write_region);
+        if (mesh_trace_data.device_patches.empty()) {
+            mesh_cq.enqueue_write_shard_to_sub_grid(
+                *(trace_buffer->mesh_buffer), write_data.data(), device_range, true, write_region);
+        } else {
+            // Per-device runtime args: each device of the range gets the stream with its own words patched in.
+            std::vector<uint32_t> device_data;
+            for (const auto& coord : device_range) {
+                if (!mesh_cq.device()->impl().is_local(coord)) {
+                    continue;
+                }
+                device_data = write_data;
+                for (const auto& patch : mesh_trace_data.device_patches) {
+                    if (patch.device != coord) {
+                        continue;
+                    }
+                    TT_FATAL(
+                        patch.byte_offset % sizeof(uint32_t) == 0 &&
+                            patch.byte_offset + patch.words.size() * sizeof(uint32_t) <=
+                                mesh_trace_data.data.size() * sizeof(uint32_t),
+                        "Per-device runtime args trace patch out of bounds");
+                    std::copy(
+                        patch.words.begin(),
+                        patch.words.end(),
+                        device_data.begin() + patch.byte_offset / sizeof(uint32_t));
+                }
+                mesh_cq.enqueue_write_shard_to_sub_grid(
+                    *(trace_buffer->mesh_buffer), device_data.data(), MeshCoordinateRange(coord), true, write_region);
+            }
+        }
         write_offset_per_device_range.at(device_range) += mesh_trace_data.data.size() * sizeof(uint32_t);
     }
 }

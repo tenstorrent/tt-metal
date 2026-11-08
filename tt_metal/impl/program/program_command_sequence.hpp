@@ -5,6 +5,7 @@
 #pragma once
 
 #include <memory>
+#include <unordered_map>
 #include <vector>
 #include <cstdint>
 
@@ -20,6 +21,22 @@ class CircularBufferImpl;
 
 constexpr uint32_t UncachedStallSequenceIdx = 0;
 constexpr uint32_t CachedStallSequenceIdx = 1;
+
+// Key of a unique runtime-arg slot (device-local kernel handle, logical core) in
+// ProgramCommandSequence::unique_rta_locations.
+inline uint64_t unique_rta_slot_key(uint32_t device_local_kernel_handle, std::size_t core_x, std::size_t core_y) {
+    return (static_cast<uint64_t>(device_local_kernel_handle) << 32) | (static_cast<uint64_t>(core_x & 0xFFFF) << 16) |
+           static_cast<uint64_t>(core_y & 0xFFFF);
+}
+
+// Words to overwrite in one device's copy of a command sequence (per-device runtime args): `num_words` words at
+// `location` (inside one of the sequence's command buffers) are replaced by `src`. The sequence itself is never
+// written.
+struct RtaPatch {
+    const uint32_t* location;
+    const uint32_t* src;
+    uint32_t num_words;
+};
 
 struct ProgramCommandSequence {
     explicit ProgramCommandSequence(MetalContext& metal_ctx) :
@@ -103,6 +120,15 @@ struct ProgramCommandSequence {
     // Note: some RTAs may be have their RuntimeArgsData modified so the source-of-truth of their data is the command
     // sequence. They won't be listed in rta_updates.
     std::vector<RtaUpdate> rta_updates;
+    // Where each runtime-arg slot's first argument word (after any watcher count word) sits in this sequence's command
+    // buffers, recorded at assembly for every program. Per-device runtime args (distributed::SetRuntimeArgs on a
+    // MeshWorkload) are patched at these words in each device's copy of the sequence. The buffers are reserved up
+    // front, so the pointers stay valid for the sequence's lifetime.
+    std::unordered_map<uint64_t, uint32_t*> unique_rta_locations;  // unique_rta_slot_key(...) -> first arg word
+    // Device-local kernel handle -> first arg word of every multicast copy of its common runtime args.
+    std::unordered_map<uint32_t, std::vector<uint32_t*>> common_rta_locations;
+    // Distinct for every assembly (never reused), so state derived from the locations above can be cached per sequence.
+    uint64_t assembly_id = 0;
     // Copies the current host-only CrossNode page image into the cached launch command
     // before each enqueue. The destination is the dedicated config Buffer.
     std::vector<CrossNodeConfigUpdate> cross_node_config_updates;
