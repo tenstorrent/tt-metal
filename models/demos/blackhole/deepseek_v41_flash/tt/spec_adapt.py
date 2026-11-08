@@ -198,3 +198,11 @@ def nearest_runner_k(ks, kv):
     target's own argmax, so the committed tokens are the target's either way), else the largest k (the block is cut)."""
     ks = sorted(ks)
     return next((q for q in ks if q >= kv), ks[-1])
+
+
+def bucket_route(ks, kv):
+    """Runner of a decode bucket holding the k's ``ks`` for a verify block of ``kv`` drafts: ``kv`` itself, the next larger k (the block is padded, lossless) or None = the block is LONGER than every runner of the
+    bucket: the round runs on the full trace (its offer was built when more users were live, e.g. k=5 on the full trace, and the live set shrank into the bucket before the verify).
+    """
+    ks = sorted(ks)
+    return next((q for q in ks if q >= kv), None)

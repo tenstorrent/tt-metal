@@ -7,7 +7,7 @@ keeps the live users inside the smallest bucket (vllm_state.SlotTable.claim_rowa
 import torch
 
 from models.demos.blackhole.deepseek_v41_flash.tt import vllm_state as VS
-from models.demos.blackhole.deepseek_v41_flash.tt.spec_adapt import AdaptiveVerify, nearest_runner_k
+from models.demos.blackhole.deepseek_v41_flash.tt.spec_adapt import AdaptiveVerify, bucket_route, nearest_runner_k
 
 
 class FakeRunner:
@@ -97,3 +97,37 @@ def test_nearest_runner_rule():
     assert nearest_runner_k([3, 5], 4) == 5
     assert nearest_runner_k([5, 3], 2) == 3
     assert nearest_runner_k([3, 5], 5) == 5
+
+
+def test_bucket_route_block_k_below_equal_above():
+    """the 2026-11-08 crash: bucket holds k=3 only; a block of k=5 (offered on the full trace) must go to the full runner, never to the bucket"""
+    assert bucket_route([3], 0) == 3  # below: padded
+    assert bucket_route([3], 2) == 3
+    assert bucket_route([3], 3) == 3  # equal
+    assert bucket_route([3], 5) is None  # above: full trace
+    assert bucket_route([3, 5], 4) == 5
+    assert bucket_route([3, 5], 5) == 5
+    assert bucket_route([5], 3) == 5
+
+
+def test_choose_in_a_bucket_offers_only_its_ks_and_mixed_users_pin_the_bucket():
+    """per-bucket adaptive choice offers only the bucket's k; users at in-row index >= Ub (a straggler) pin the full width (no bucket => the full set of k's)"""
+    ad = AdaptiveVerify.__new__(AdaptiveVerify)  # (no device: only tables and the pure rule are used)
+    ad.ks = [3, 5]
+    ad.btimes = {1: {3: 30.0}}
+    ad.bsince = {}
+    ad.ad = type("A", (), {"times": {3: 50.0, 5: 52.0}})()
+    ad.since = {}
+    ad.candidates = lambda max_pos=None: [3, 5]
+    ad.runners = {}
+    ad.probe_every = 0
+    ad._cur = None
+    ad.policy = None
+    import torch
+
+    conf = torch.full((2, 5), 0.9)
+    k_b = AdaptiveVerify.choose(ad, conf, torch.ones(2, dtype=torch.bool), max_pos=100, bucket=1)
+    assert k_b == 3  # the bucket only has k=3
+    # without a bucket (full trace, or a straggler pinned the full width) both k's are candidates
+    ad.btimes = {}
+    assert AdaptiveVerify.candidates(ad) == [3, 5]

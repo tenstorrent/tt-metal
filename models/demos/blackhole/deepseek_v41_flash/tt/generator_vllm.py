@@ -2002,19 +2002,30 @@ class DeepseekV41ForCausalLM(SupportsMultiModal):
             need = self._load_bucket()
             if need is not None:
                 rs_ = self.spec_bucket_sets[need]
-                if (
-                    kv not in rs_
-                ):  # the bucket holds a subset of the k's: the nearest runner at or above kv (shorter blocks are padded: a pad draft is only accepted when it equals the target's own token), else the largest
-                    from models.demos.blackhole.deepseek_v41_flash.tt.spec_adapt import nearest_runner_k
+                from models.demos.blackhole.deepseek_v41_flash.tt.spec_adapt import bucket_route
 
-                    kv = nearest_runner_k(rs_, kv)
-                    n = kv + 1
-                    tokens = (
-                        tokens[:, :n]
-                        if tokens.shape[1] >= n
-                        else torch.nn.functional.pad(tokens, (0, n - tokens.shape[1]))
-                    )
-                runner, Ub = rs_[kv], need
+                kb = bucket_route(rs_, kv)
+                if kb is None:
+                    # the block was offered at a k the bucket does not hold (propose_draft_tokens ran on the full trace with more users live; the live set has shrunk into the bucket since): this round runs on the
+                    # full trace, which has every k. The offered drafts are intact (no truncation, no engine error).
+                    if not getattr(self, "_bucket_reroute_logged", False):
+                        self._bucket_reroute_logged = True
+                        logger.warning(
+                            f"DSV4.1 load traces: block k={kv} is longer than the runners of bucket B'={VS.MESH_ROWS * need} (k in {sorted(rs_)}): the round runs on the full trace (logged once)"
+                        )
+                    self.bucket_reroutes = getattr(self, "bucket_reroutes", 0) + 1
+                else:
+                    if (
+                        kb != kv
+                    ):  # a shorter block: padded up to the bucket's runner (a pad draft is only accepted when it equals the target's own token)
+                        kv = kb
+                        n = kv + 1
+                        tokens = (
+                            tokens[:, :n]
+                            if tokens.shape[1] >= n
+                            else torch.nn.functional.pad(tokens, (0, n - tokens.shape[1]))
+                        )
+                    runner, Ub = rs_[kv], need
         B = VS.MESH_ROWS * Ub if runner is not base_runner else self.B
         row_of = None if runner is base_runner else {int(q): r for r, q in enumerate(runner.phys.tolist())}
         X = torch.zeros(B, n, dtype=torch.long)
