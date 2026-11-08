@@ -319,9 +319,16 @@ TilizeDeviceOperation::program_factory_t TilizeDeviceOperation::select_program_f
         return ttnn::prim::TilizeMultiCoreBlockProgramFactory{};
     }
 
-    bool use_single_core = (operation_attributes.use_low_perf) || (!operation_attributes.use_multicore) ||
-                           (operation_attributes.sub_core_grids.has_value() &&
-                            (operation_attributes.sub_core_grids.value().num_cores() < 2));
+    // The single-core factory reads whole rows from one input page, which only works when a row lies
+    // inside one shard. WIDTH_SHARDED and BLOCK_SHARDED inputs split rows across shards, so route
+    // them to the sharded or multicore factory even for a one-core sub grid or a low-perf request.
+    const auto input_memory_layout = input_tensor_a.memory_config().memory_layout();
+    const bool input_rows_split_across_shards = input_memory_layout == TensorMemoryLayout::WIDTH_SHARDED ||
+                                                input_memory_layout == TensorMemoryLayout::BLOCK_SHARDED;
+    bool use_single_core = ((operation_attributes.use_low_perf) || (!operation_attributes.use_multicore) ||
+                            (operation_attributes.sub_core_grids.has_value() &&
+                             (operation_attributes.sub_core_grids.value().num_cores() < 2))) &&
+                           !input_rows_split_across_shards;
     if (use_single_core) {
         return ttnn::prim::TilizeSingleCoreProgramFactory{};
     }
