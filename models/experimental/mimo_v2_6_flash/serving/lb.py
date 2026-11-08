@@ -323,11 +323,31 @@ def map_greedy_thinking(req, sampling):
     return dict(req, temperature=sampling[0], top_p=sampling[1])
 
 
+def map_structured_outputs(req):
+    """``req`` with a schema-less ``json_schema`` response format as JSON mode and an empty ``structured_outputs``
+    dropped, or ``req`` itself.
+
+    vLLM 0.30 builds a structured-outputs constraint with every field empty from ``response_format: {"type":
+    "json_schema", "json_schema": {...}}`` without ``schema`` (optional in the OpenAI API) and answers 400 ("You must
+    use one kind of structured outputs constraint but none are specified"); OpenRouter's tool-call checks send exactly
+    that. Same rule as tt-inference-server's engine_proxy (``normalize_structured_outputs``)."""
+    out = req
+    fmt = req.get("response_format")
+    if isinstance(fmt, dict) and fmt.get("type") == "json_schema":
+        schema = fmt.get("json_schema")
+        if not isinstance(schema, dict) or schema.get("schema") is None:
+            out = dict(out, response_format={"type": "json_object"})
+    so = req.get("structured_outputs")
+    if isinstance(so, dict) and all(v in (None, False, "", [], {}) for v in so.values()):
+        out = {k: v for k, v in out.items() if k != "structured_outputs"}
+    return out
+
+
 def rewrite_chat(req, shim):
     """A chat-completions request rewritten for vLLM 0.30 (``_rewrite_part`` on every content part, ``map_reasoning``,
     ``map_greedy_thinking``), or ``req`` itself when nothing applies. Raises ShimError for a request that cannot be
     rewritten."""
-    out = map_greedy_thinking(map_reasoning(req), shim.thinking_greedy)
+    out = map_greedy_thinking(map_reasoning(map_structured_outputs(req)), shim.thinking_greedy)
     messages = out.get("messages")
     if isinstance(messages, list):
         new_messages = []

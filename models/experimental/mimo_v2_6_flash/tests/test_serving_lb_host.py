@@ -1066,3 +1066,36 @@ def test_proxy_resends_once_after_an_unanswered_disconnect(close_first, want_sta
     assert status == want_status
     assert requests == 2  # one resend, never more
     assert snap["prefix"]["stale_retried"] == 1
+
+
+
+@pytest.mark.parametrize(
+    "fmt",
+    [
+        {"type": "json_schema", "json_schema": {"name": "answer"}},
+        {"type": "json_schema", "json_schema": {"name": "a", "strict": True, "schema": None}},
+        {"type": "json_schema"},
+    ],
+)
+def test_map_structured_outputs_schema_less_json_schema_is_json_mode(fmt):
+    req = {"model": "m", "messages": [], "tools": [{"type": "function"}], "response_format": fmt}
+    out = lb.map_structured_outputs(req)
+    assert out["response_format"] == {"type": "json_object"} and out["tools"] == req["tools"]
+
+
+@pytest.mark.parametrize(
+    "req",
+    [
+        {"model": "m", "messages": []},
+        {"model": "m", "messages": [], "response_format": {"type": "json_object"}},
+        {"model": "m", "messages": [], "response_format": {"type": "json_schema", "json_schema": {"name": "a", "schema": {}}}},
+        {"model": "m", "messages": [], "structured_outputs": {"choice": ["a", "b"]}},
+    ],
+)
+def test_map_structured_outputs_leaves_valid_requests(req):
+    assert lb.map_structured_outputs(req) is req
+
+
+def test_map_structured_outputs_drops_empty_structured_outputs():
+    assert "structured_outputs" not in lb.map_structured_outputs({"model": "m", "structured_outputs": {}})
+    assert "structured_outputs" not in lb.map_structured_outputs({"model": "m", "structured_outputs": {"json": None}})
