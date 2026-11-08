@@ -2134,8 +2134,10 @@ def create_prefill_matmul_program_config(m, k, n, grid_size=None, fused_activati
     else:
         in0_block_w = min(cap, max(1, k_tiles // grid_size[0]))
 
-    out_block_h = per_core_M
-    if m > PREFILL_L1_MAX_SEQ:
+    # The 2048-row block height above is the one the 8192-row prefill chunk traces were tuned with; the CB-budget walk
+    # covers the other large-M shapes.
+    out_block_h = blocked.get("out_block_h", per_core_M)
+    if m > PREFILL_L1_MAX_SEQ and not blocked:
         per_core_M, out_block_h = _large_m_blocking(math.ceil(m / TILE_SIZE), grid_size[1], per_core_N, in0_block_w)
 
     return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
@@ -2149,7 +2151,6 @@ def create_prefill_matmul_program_config(m, k, n, grid_size=None, fused_activati
         transpose_mcast=False,
         fused_activation=fused_activation,
         fuse_batch=False,
-        **blocked,
     )
 
 
