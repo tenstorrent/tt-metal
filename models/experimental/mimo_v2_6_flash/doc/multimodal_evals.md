@@ -149,20 +149,22 @@ the reference and through TT, answer agreement per item.
 
 ## Results (2026-11-07)
 
-TT: 4 row engines on bhg4 with the MTP release settings and the multimodal class (`serving/serve_mm_eval.sh`, behind
-`serving/lb.py`), concurrency 32. OpenRouter: the same client (`run_suite.sh --target openrouter`) pinned to one
+TT rows: 4 row engines on bhg4 with the MTP release settings and the multimodal class (`serving/serve_mm_eval.sh`,
+behind `serving/lb.py`), concurrency 32. TT container: the tt-inference-server image (tt-metal 6312ef6d4dc, vllm-tt-plugin
+b4acf686, tt-inference-server 1e0bb95d, `--impl mimo-v2.6-flash-mm`, its engine_proxy), bhg4, concurrency 32, run
+directory `/data/ttuser-agentx/mm/eval_runs/20261108T054216Z/tti`; no request failed in any set. OpenRouter: the same client (`run_suite.sh --target openrouter`) pinned to one
 provider. "failed = wrong" counts a request that got no answer as wrong; "answered" scores only answered items. Run
 directories on bhg4: `/data/ttuser-agentx/mm/eval_runs/20261107T043703Z/` (references and the first TT sweep),
 `20261107T150944Z/tt` (Video-MME), `20261107T163302Z/tt` (VGI-Bench).
 
-| Bench | TT | GMICloud (bf16) | Xiaomi (fp8, first party) | Other |
-|---|---|---|---|---|
-| OCRBench (1,000) | 84.0 | 87.6 | 86.4 | |
-| MMAU test-mini (1,000) | 61.1 | 62.4 | 63.0 | |
-| LibriSpeech test-clean (WER, 2,620) | 2.02 | 1.71 | 1.81 | |
-| Video-MME short (900) | 80.8 | 75.6 (78.4 answered) | 81.4 | |
-| MMMU-Pro, AA protocol (1,730) | 64.05 | 68.38 | 69.65 | AA: 73.06 |
-| VGI-Bench (439) | 36.2 | | 33.0 (38.2 answered; refuses videos > 300 MB) | OpenRouter: 35.5 +/- 4 |
+| Bench | TT rows | TT container | GMICloud (bf16) | Xiaomi (fp8, first party) | Other |
+|---|---|---|---|---|---|
+| OCRBench (1,000) | 84.0 | 83.6 | 87.6 | 86.4 | |
+| MMAU test-mini (1,000) | 61.1 | 61.6 | 62.4 | 63.0 | |
+| LibriSpeech test-clean (WER, 2,620) | 2.02 | 1.73 | 1.71 | 1.81 | |
+| Video-MME short (900) | 80.8 | 81.6 | 75.6 (78.4 answered) | 81.4 | |
+| MMMU-Pro, AA protocol (1,730) | 64.05 | not run | 68.38 | 69.65 | AA: 73.06 |
+| VGI-Bench (439) | 36.2 | not run | | 33.0 (38.2 answered; refuses videos > 300 MB) | OpenRouter: 35.5 +/- 4 |
 
 * TT code: OCRBench, MMAU, LibriSpeech and MMMU-Pro on 885d4142564 (before the prefix-cache race fix), Video-MME on
   9c014d841ad, VGI-Bench on fc60826e361 (a video's audio track tokenized on the device). Video-MME was 60.6 on
@@ -177,7 +179,8 @@ directories on bhg4: `/data/ttuser-agentx/mm/eval_runs/20261107T043703Z/` (refer
   MOPD; on uniform-colour images TT answers as the fp32 host reference does (`reference/answer_image_fp32.py`), as
   does Makora (vLLM) on OpenRouter, while Xiaomi and GMICloud answer differently.
 * API conformance (`test_api_conformance.py`) on 885d4142564: 46 of 55 passed; the 9 failures were all uniform-colour
-  fixtures (the checkpoint's answer, see above). The fixtures are now coloured shapes on white.
+  fixtures (the checkpoint's answer, see above). The fixtures are now coloured shapes on white: 55 of 55 pass in the
+  container and on 2 row engines on bhg2 (8574442976a).
 
 ## Suite and estimates
 
@@ -270,7 +273,6 @@ are the closest templates. No video eval exists anywhere.
 ## Not done
 
 * The text benchmarks (GPQA-Diamond, tau2) are out of scope for now.
-* The tt-inference-server container (`--impl mimo-v2.6-flash-mm`) has not served a full suite yet; every score above
-  is from row engines behind `lb.py`.
+* MMMU-Pro (8 h) and VGI-Bench have not run in the container.
 * The image gap to OpenRouter's providers is open (see Results).
 * Encoder latency (ViT, audio) is not in the estimates.
