@@ -17,6 +17,7 @@
 namespace ttnn::operations::data_movement::detail {
 
 void bind_repeat_interleave(nb::module_& mod) {
+    // The BFLOAT16 NaN rule in this docstring tracks tenstorrent/tt-metal#31406; drop it once that issue is fixed.
     const auto* doc = R"doc(
         Repeats each element of `input_tensor` `repeats` times along dimension `dim`.
 
@@ -44,10 +45,13 @@ void bind_repeat_interleave(nb::module_& mod) {
                * - BFLOAT8_B, BFLOAT4_B
                  - TILE
 
+            ``BFLOAT16`` input values must not be NaN when the last dimension is repeated, or the second-to-last
+            dimension of a TILE input.
+
         Memory Support:
             - Interleaved: DRAM and L1
             - Sharded, with ``repeats`` > 1 and no ``memory_config``: a ROW_MAJOR rank-4 input that is HEIGHT_SHARDED, WIDTH_SHARDED or BLOCK_SHARDED in L1 keeps the same sharding when a dimension other than the last is repeated. Repeating the last dimension gives an L1 output whose sharding depends on the shard geometry. HEIGHT_SHARDED and BLOCK_SHARDED inputs on this path need a device opened with a non-zero ``l1_small_size``.
-            - With ``repeats`` > 1 and no ``memory_config``, TILE sharded inputs, DRAM-sharded inputs and sharded inputs of rank other than 4 are first converted to DRAM interleaved and give a DRAM interleaved output
+            - With ``repeats`` > 1 and no ``memory_config``, TILE sharded inputs, DRAM-sharded inputs and sharded inputs of rank other than 4 are first converted to DRAM interleaved and give a DRAM interleaved output.
     )doc";
 
     ttnn::bind_function<"repeat_interleave">(

@@ -125,6 +125,17 @@ def test_repeat_interleave_with_repeat_tensor(device):
     assert_equal(torch_result, output)
 
 
+_BLOCK_FLOATS = (ttnn.bfloat8_b, ttnn.bfloat4_b)
+
+
+def _one_exponent_input(shape, seed=0):
+    """Values in +-[1, 2) for a block float. They share one exponent, so values an op moves into another block of the
+    tile come back exactly."""
+    torch.manual_seed(seed)
+    magnitude = 1 + torch.rand(shape)
+    return torch.where(torch.rand(shape) < 0.5, -magnitude, magnitude)
+
+
 @pytest.mark.parametrize("buffer_type", docstring_interleaved_buffer_type_params(ttnn.repeat_interleave))
 @pytest.mark.parametrize("dtype, layout", docstring_dtype_layout_params(ttnn.repeat_interleave))
 def test_repeat_interleave_docstring_supported_inputs(dtype, layout, buffer_type, device):
@@ -132,17 +143,23 @@ def test_repeat_interleave_docstring_supported_inputs(dtype, layout, buffer_type
     an outer dim and the last dim."""
     check_readable(dtype, layout, buffer_type)
     memory_config = interleaved_memory_config(buffer_type)
-    input_tensor = ttnn.from_torch(
-        full_range_input((2, 3, 32, 64), dtype), dtype=dtype, layout=layout, device=device, memory_config=memory_config
-    )
-    expected = ttnn.to_torch(input_tensor)
     for dim in (1, -1):
+        # A last-dim repeat runs a compute kernel that holds BFLOAT16 zeros by value: a BFLOAT16 input leaves out NaN,
+        # as the docstring requires, and its zeros are compared by value. Values also move into new blocks, so block
+        # floats get values with one exponent.
+        last_dim_bfloat16 = dim == -1 and dtype == ttnn.bfloat16
+        if dim == -1 and dtype in _BLOCK_FLOATS:
+            x = _one_exponent_input((2, 3, 32, 64))
+        else:
+            x = full_range_input((2, 3, 32, 64), dtype, nan=not last_dim_bfloat16)
+        input_tensor = ttnn.from_torch(x, dtype=dtype, layout=layout, device=device, memory_config=memory_config)
         output = ttnn.repeat_interleave(input_tensor, 2, dim=dim, memory_config=memory_config)
 
         assert output.dtype == dtype
         assert output.layout == layout
         assert output.memory_config().buffer_type == buffer_type
-        assert_exact(torch.repeat_interleave(expected, 2, dim=dim), ttnn.to_torch(output))
+        expected = torch.repeat_interleave(ttnn.to_torch(input_tensor), 2, dim=dim)
+        assert_exact(expected, ttnn.to_torch(output), signed_zeros=not last_dim_bfloat16)
 
 
 def _docstring_kept_shard_layouts():
@@ -173,7 +190,8 @@ def test_repeat_interleave_docstring_sharded_inputs(memory_layout, dim, device):
     the last is repeated, and a last-dim repeat gives an L1 output."""
     check_readable(memory_layout)
     shape, core_grid, strategy = _SHARDED_INPUTS[memory_layout]
-    x = torch.rand(shape, dtype=torch.bfloat16)
+    # A last-dim repeat holds zeros by value and needs input values that are not NaN, as the docstring says.
+    x = full_range_input(shape, ttnn.bfloat16, nan=dim != -1)
     sharded = ttnn.create_sharded_memory_config(list(shape), core_grid, strategy, ttnn.ShardOrientation.ROW_MAJOR)
     input_tensor = ttnn.to_memory_config(ttnn.from_torch(x, layout=ttnn.ROW_MAJOR_LAYOUT, device=device), sharded)
     output = ttnn.repeat_interleave(input_tensor, 2, dim=dim)
@@ -181,4 +199,4 @@ def test_repeat_interleave_docstring_sharded_inputs(memory_layout, dim, device):
     assert output.memory_config().buffer_type == ttnn.BufferType.L1
     if dim != -1:
         assert output.memory_config().memory_layout == memory_layout
-    assert_exact(torch.repeat_interleave(x, 2, dim=dim), ttnn.to_torch(output))
+    assert_exact(torch.repeat_interleave(x, 2, dim=dim), ttnn.to_torch(output), signed_zeros=dim != -1)
