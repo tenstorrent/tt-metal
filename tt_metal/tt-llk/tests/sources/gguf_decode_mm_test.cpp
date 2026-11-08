@@ -43,8 +43,7 @@ constexpr ckernel::gguf::PageLayout LAYOUT = test_layout();
 // MXFP4 and NVFP4 pages hold block-float codes, unpacked to the 16-bit DEST rows that the decoded tile's rows address
 // (Dst16b rows 64 tile), so the decoded tile is not tile 0: tile 1 (codes in tile 0), with matmul tiles 3 and 5
 // (codes in tiles 1 and 2); the page follows.
-constexpr bool BFP                = GGUF_FMT == ckernel::gguf::MXFP4 || GGUF_FMT == ckernel::gguf::NVFP4;
-constexpr std::uint32_t BFP_CODES = 1024, BFP_EXP = 15;
+constexpr bool BFP                         = ckernel::gguf::fp4_bfp<GGUF_FMT>;
 constexpr std::uint32_t OUT                = BFP ? 1 : 0; // the decoded tile without matmul (GGUF_FMT == 0: the copied tile)
 constexpr std::uint32_t PAGE_BYTES         = LAYOUT.rows * 64;
 constexpr std::uint32_t PAGE_FACES         = LAYOUT.rows / 16;
@@ -87,7 +86,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
         if constexpr (BFP)
         {
             _llk_unpack_dest_srca_mm_codes_page_(
-                L1_ADDRESS(page_address(pages_base, nt, kt)), BFP_CODES, BFP_EXP, LAYOUT.scale_offset, 16, FACE_R_DIM * FACE_C_DIM - 1);
+                L1_ADDRESS(page_address(pages_base, nt, kt)),
+                ckernel::gguf::FP4_CODES,
+                ckernel::gguf::FP4_CODE_EXP,
+                LAYOUT.scale_offset,
+                ckernel::gguf::FP4_SCALE_WORDS,
+                FACE_R_DIM * FACE_C_DIM - 1);
         }
         else
         {
@@ -130,19 +134,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "sfpu/experimental/ckernel_sfpu_gguf_decode.h"
 
 using namespace ckernel;
-
-// The accumulator: a Float32 DEST tile of zeros, written by the SFPU.
-inline void zero_tile(const std::uint32_t dst_index)
-{
-    TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, (dst_index << 6) + get_dest_buffer_base());
-    TTI_STALLWAIT(p_stall::STALL_SFPU, p_stall::MATH);
-#pragma GCC unroll 8
-    for (int i = 0; i < 32; i++)
-    {
-        sfpi::dst_reg[i] = 0.0f;
-    }
-    TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
-}
 
 // Only the matmul runs copy the next page beside a decode; the others use the decoders for no DEST writer beside.
 constexpr bool BESIDE_UNPACK = GGUF_MM;
@@ -202,7 +193,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         if constexpr (GGUF_MM)
         {
             _llk_math_wait_for_dest_available_<dest_sync>();
-            zero_tile(0);
+            sfpu::sfpu_gguf_zero_tile(0); // the accumulator
             // The decoded tile per set (its page is the next tile, scratch past it).
             const auto out_of = [](const std::uint32_t set) -> std::uint32_t { return BFP ? (set ? 5 : 3) : (set ? 4 : 1); };
             page_post(out_of(0) + 1, out_of(0));

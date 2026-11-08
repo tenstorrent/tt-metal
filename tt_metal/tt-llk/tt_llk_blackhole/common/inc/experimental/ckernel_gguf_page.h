@@ -88,11 +88,10 @@ constexpr PageLayout make_layout(
     return {group_tiles, page_tiles, code_bytes, scale_rows, fp16_rows, code_offset, scale_offset, scale_bytes, rows};
 }
 
-template <Format FMT>
-constexpr PageLayout page_layout()
+constexpr PageLayout page_layout(const Format fmt)
 {
     // clang-format off
-    switch (FMT)
+    switch (fmt)
     {
         case Q8_0:    return make_layout(1, 1, 1024, 1, 0);
         case Q4_0:    return make_layout(1, 1, 512, 1, 0);
@@ -123,5 +122,35 @@ constexpr PageLayout page_layout()
     // clang-format on
     return {};
 }
+
+template <Format FMT>
+constexpr PageLayout page_layout()
+{
+    return page_layout(FMT);
+}
+
+// Linear formats: bits of a code's low plane and of its high plane above it (Q6_K: ql | qh << 4).
+constexpr std::uint32_t code_lo_bits(const Format fmt)
+{
+    return fmt == Q8_0 ? 8 : (fmt == Q3_K || fmt == Q2_K || fmt == TQ2_0 || fmt == Q2_0) ? 2 : fmt == Q1_0 ? 1 : 4;
+}
+
+constexpr std::uint32_t code_hi_bits(const Format fmt)
+{
+    return (fmt == Q5_K || fmt == Q3_K || fmt == Q5_0 || fmt == Q5_1) ? 1 : fmt == Q6_K ? 2 : 0;
+}
+
+// The formats whose group step (sfpu_gguf_decode_group) converts the fp16 d and dmin of a group once, past the page.
+template <std::uint32_t FMT>
+constexpr bool group_scales = FMT == Q4_K || FMT == Q5_K || FMT == Q3_K || FMT == Q2_K;
+
+// MXFP4, NVFP4: a page's FP4_CODES codes are 4-bit block-float datums, unpacked to DEST with the exponent forced to
+// FP4_CODE_EXP, followed by FP4_SCALE_WORDS words of scale fields at scale_offset (ckernel_sfpu_gguf_decode_fp4.h).
+template <std::uint32_t FMT>
+constexpr bool fp4_bfp = FMT == NVFP4 || FMT == MXFP4;
+
+constexpr std::uint32_t FP4_CODES       = 1024;
+constexpr std::uint32_t FP4_CODE_EXP    = 15;
+constexpr std::uint32_t FP4_SCALE_WORDS = 16;
 
 } // namespace ckernel::gguf
