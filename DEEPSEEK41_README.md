@@ -4,7 +4,7 @@ For a Claude Code session (and its human) picking up this model. Give this file 
 the bring-up is, its current state and defaults, how to set up, run and measure it, the prefill → decode (PD) serving
 hand-off, the open questions, and where everything is.
 
-Facts are as of 2026-11-07, branch `dnijemcevic/model_bringup` (same as `dnijemcevic/model_bringup_rebased`), through task P.43 with every full gate passed. Items marked
+Facts are as of 2026-11-08, branch `dnijemcevic/model_bringup` (same as `dnijemcevic/model_bringup_rebased`), through task P.36 (P.37-P.43 full gates passed; P.35 / P.36 full gates: see "Running now"). Items marked
 **(unverified)** were not checked against code or a run while this was written.
 
 ## 1. What this is
@@ -24,12 +24,12 @@ decode machine (tt-blaze) generates the tokens after a hand-off.
 | Deployment box / spec | Galaxy 8x4: `models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/spec.yaml` |
 | Seed run | QuietBox 2x2, partial (layers 0-3, 14, 20, 21, 24, scaled model): `bringup/spec.yaml`, ledger in `bringup/` |
 | Last full run | X.3 PASS 2026-11-05 (full 56,320-token ladder, every limit holds) |
-| Accuracy now (rung `last`) | err_final_hidden 0.1313 (limit 0.242), top-5 1.0 (P.40 / P.41 agents' ladder runs; P.42 left every layer's error identical to the digit) |
-| Perf now (one 5,120-token chunk at 51,200, P.43 tree) | device 189.02 ms, wall 204.4 ms, host overhead 15.4 ms (section 4); +11.7 ms device since the contract work began (section 4, regression table) |
-| Tasks done in the last two days | P.37-P.43 accepted and committed (section 3); their full gates are still pending (they run before the final task) |
-| Running now | Nothing; the orchestrator stopped after P.43 (`--until P.43`) |
+| Accuracy now (rung `last`) | err_final_hidden 0.1321 (limit 0.242), top-5 1.0 (ladder with P.35 on, 2026-11-07; P.36 is bit-identical to P.35). Was 0.1313 before P.35 |
+| Perf now (one 5,120-token chunk at 51,200, P.36 tree) | device 186.92 ms, wall 203.1 ms, host overhead 16.2 ms, 1,704 host launches (section 4); +9.7 ms device since the contract work began (section 4, regression table) |
+| Tasks done in the last three days | P.37-P.43, then P.35 and P.36 (perf: norm inside mHC; FFN input steps fused), accepted and committed (section 3) |
+| Running now | Full gates of P.35 and P.36 (started 2026-11-08 after this commit); the orchestrator stopped after P.36 (`--until P.36`) |
 | PD hand-off | Our served table: `bringup/migration_configs.md`. Decode reviewed it (Brian Liu); Kartik Paigwar proposed a different final contract (section 8) |
-| Held | P.35, P.36, O.1, Z.1, F.1; the QuietBox run |
+| Held | O.1, Z.1, F.1; the QuietBox run |
 
 ## 2. Current defaults
 
@@ -47,6 +47,8 @@ flipping one. Every option below is kept behind its switch; nothing old was dele
 | `WINDOW_KV_KEEP` | `snapshot128` | `full`, `ring`, `none` | P.42 (2026-11-07) | Serve a 128-row window snapshot per layer at cap (section 8). The model keeps 192 rows a layer for its own attention |
 | `REINDEX_SERVE` | `alias` | `copy` | P.42 | Re-index layers 24, 28, 32, 36 served as aliases of layer 20's index rows |
 | `KV_BLOCK_SIZE` | 64 | any (32 legal in tt-d-gen) | P.42 | The serving engine's `kv_block_size`; sets cap |
+| `NORM_IN_MHC` | `on` | `off` | P.35 (2026-11-08) | The RMS norm of the collapsed input runs inside the mHC collapse pass; the separate attn_norm / ffn_norm calls are gone. Not bit-identical (err_layer_L39 0.707 → 0.911, limit 1.533; final hidden 0.1313 → 0.1321) |
+| `FFN_FEED` | `on` | `off` | P.36 (2026-11-08) | ffn_hc + ffn_norm + the MoE input all_to_all in one program (rows sent over fabric into the MoE head's input). Bit-identical |
 | `DECODER_SKIP` | `off` | `exact`, `replay128` | P.30 / P.31 | Skip layers 20-39 on chunks marked not-last. Off until the owner decides |
 | `CCL_IMPL` | `fabric_bf16` | `fabric`, `stock` | P.5 / P.6 | Collectives: gathers on `ttnn.experimental.high_bw_all_gather`, reduce-scatters on `ttnn.bringup.fabric_reduce_scatter`, TP partial sums in bf16 |
 | `ENGRAM_TABLE` | `resident` (tests: `mmap`) | `mmap` | FIX.10 | Engram tables in host RAM vs the checkpoint mmap. Bit-identical. Timed runs set resident |
@@ -56,7 +58,7 @@ flipping one. Every option below is kept behind its switch; nothing old was dele
 | `MAX_WORKER_CORES` | 110 | 0 = no cap | FIX.15 | Galaxy power rule: never more than 110 cores an op. Never 0 on a Galaxy |
 | `EXPERTS_WEIGHT_CACHE`, `EXPERTS_PREFETCH` | `on` | `off` | | Bank-major expert cache and read-ahead |
 
-## 3. Tasks of the last two days (2026-11-05 to 2026-11-07)
+## 3. Tasks of the last three days (2026-11-05 to 2026-11-08)
 
 "Device" and "wall" are one 5,120-token chunk at position 51,200 (p51200), off → on, from the A/B tables
 `/scratch/dnijemcevic/bringup/deepseek_v41_flash_d_p/runs/galaxy_8x4-full/run1/ab/<task>/table.md`. Device = time
@@ -75,21 +77,25 @@ the chips spend; wall = host clock for the chunk; host overhead = wall - device.
 | DS41-216 fix | One `high_bw_all_gather` semaphore pair per mesh axis (section 9) | in `902322e6f77` | Stress tests: 2,048 wrong replicas → 0 |
 | P.42 | Re-index layers as aliases of layer 20; window KV as a 128-row snapshot at cap (decode's review) | `902322e6f77` | device 184.13 → 188.74 ms (+4.6: the snapshot writes, in section ffn_residual 5.06 → 11.69), wall 202.9 → 206.5; window + copies 1,377 → 20 MiB a chip a slot at 1M; accuracy identical |
 | P.43 | Decode hand-off clean-up. (1) `SKIP_TAIL_START=cap` (default; `end` = old): under `DECODER_SKIP=exact` / `replay128` the last chunk starts from cap (replay128 at or before min(end - 128, cap - 128); exact at or before min(end - 2688, cap - 2668)); a later last chunk is refused (ValueError); every layer's snapshot is written in both modes. (2) The framework contract check (`testing/contract.py`) checks Snapshot configs only at the request's last chunk, as tt-d-gen ships them (DS41-218); new host unit test `test_contract_acks.py`; full `test_contract` passes (acks_early 0). (3) `0_window_kv` declares `max_sequence_length` 128. Owner accepted (2026-11-07) the snapshot test's limit for the 8 layers with official per-position references taken from the official reference's own error (DS41-193 method; layer 20 rows [0, 64): 0.144 -> ~0.180). Under replay128, layers 21-39's snapshot rows are 0.97-2.2x their limit by design (DS41-221: the tail's window starts empty), recorded, not gated | `f087d1b682a` | device 190.0 → 189.0, wall 208.0 → 204.4 (no change: the harness never marks a last chunk, so the skip does not act); accuracy identical |
+| P.35 | `NORM_IN_MHC`: the input RMS norm inside the mHC collapse pass (attn_norm / ffn_norm calls removed) | `98bad201aa7` | device 191.97 → 187.16 ms, wall 205.3 → 203.2 ms, launches 1,823 → 1,744; at 512,000: device 226.69 → 225.30, wall 253.4 → 247.0. Not bit-identical; all limits hold; ladder err_final_hidden 0.1321, top-5 1.0 |
+| P.36 | `FFN_FEED`: ffn_hc + ffn_norm + MoE all_to_all in one program, on the main MoE block (`tt/moe_block_main_adapter.py`) | `ba77b348d9b` | device 189.07 → 186.92 ms (experts -3.6, attn_residual +1.5), wall 204.8 → 203.1 ms, launches 1,744 → 1,704; bit-identical. The A/B showed a wider wall spread on; a re-measure (2 more runs a side, `/scratch/dnijemcevic/rebase/p36_spread/`) found the same 20-45 ms outlier runs on both sides: noise. Mean of 3 medians: 203.9 on vs 205.7 off |
 
 Owner process notes: P.41 accepted by the owner 2026-11-07 09:25; P.42 held until DS41-216 was root-caused, then
-re-measured on the fixed tree (17:19) and committed (17:26). P.43 accepted 18:45 (commit rebased onto the README commit `cf686613dff`, so `f50b38ac87f` in the orchestrator log is now `f087d1b682a`).
+re-measured on the fixed tree (17:19) and committed (17:26). P.43 accepted 18:45 (commit rebased onto the README commit `cf686613dff`, so `f50b38ac87f` in the orchestrator log is now `f087d1b682a`). P.35 accepted 2026-11-08 06:50, P.36 09:24.
 
 ## 4. Perf and accuracy headline (current defaults)
 
-One 5,120-token chunk at 51,200, P.43 tree, `ENGRAM_TABLE=resident`, from `ab/P.43/table.md` (2026-11-07 18:25;
-section split below from `ab/P.42/table.md`, unchanged by P.43):
+One 5,120-token chunk at 51,200, P.36 tree, `ENGRAM_TABLE=resident`, from `ab/P.36/table.md` (2026-11-08 08:27, the
+'on' side):
 
 | Number | Value |
 |---|---|
-| device_ms_total (profiled) | 189.02 ms |
-| chunk_wall_ms (clean warm, median of 10) | 204.4 ms |
-| host overhead (wall - device) | 15.4 ms |
-| last chunk after the golden 51,200 prefix (quick run) | wall 186.9 ms |
+| device_ms_total (profiled) | 186.92 ms |
+| chunk_wall_ms (clean warm, median of 10) | 203.1 ms (three re-measures: 202.3-206.2) |
+| host overhead (wall - device) | 16.2 ms |
+| host launches / device programs (all 40 layers) | 1,704 / 52,000 (1,625 op calls) |
+| at 512,000 | device 223.95 ms, wall 246.1 ms |
+| last chunk after the golden 51,200 prefix (quick run) | wall 184.7 ms |
 
 ### What got slower since the contract work began (P.38 on)
 
@@ -105,22 +111,25 @@ Run-to-run noise is about ±1 ms device and ±3 ms wall.
 | P.41 | drop the bf16 index-key copy | ~0 | ~0 | indexer -0.2 |
 | P.42 | 128-row window snapshot, layer-20 aliases | +4.6 | +3.6 | ffn_residual +6.6 (the snapshot rewrite), attention -1.8 |
 | P.43 | skip-mode tail start, contract check | ~0 | ~0 | noise |
-| **Now** | | **189.0** | **204.4** | **+11.7 ms (+6.6%) device, +10.4 ms (+5.4%) wall** |
+| P.35 (perf) | norm inside the mHC collapse | -4.8 | -2.1 | attn_norm / ffn_norm -1.4, experts -3.1 (partly noise) |
+| P.36 (perf) | FFN input steps in one program | -2.2 | -1.7 | experts -3.6, attn_residual +1.5 |
+| **Now** | | **186.9** | **203.1** | **+9.7 ms (+5.4%) device, +9.1 ms (+4.7%) wall** |
 
-By section (device ms), P.37 baseline → now (P.43):
+By section (device ms), P.37 baseline → now (P.36):
 
 | Section | P.37 | Now | Change |
 |---|---|---|---|
-| attention | 44.12 | 48.17 | +4.05 (bf16 KV, P.38) |
-| ffn_residual (now includes the snapshot write) | 5.06 | 11.69 | +6.63 (snapshot rewrite, P.42) |
-| experts (MoE) | 106.80 | 107.72 | +0.92 (noise) |
-| compressor | 1.77 | 2.01 | +0.24 |
-| indexer | 6.97 | 6.88 | -0.09 |
-| attn_residual | 5.30 | 5.31 | +0.01 |
+| attention | 44.12 | 48.10 | +3.98 (bf16 KV, P.38) |
+| ffn_residual (now includes the snapshot write) | 5.06 | 11.63 | +6.57 (snapshot rewrite, P.42) |
+| experts (MoE) | 106.80 | 105.28 | -1.52 (P.36 fusion; experts vary ±2 run to run) |
+| attn_residual | 5.30 | 7.06 | +1.76 (P.36's fused program is counted here) |
+| compressor | 1.77 | 2.07 | +0.30 |
+| indexer | 6.97 | 6.89 | -0.08 |
 | kv | 0.72 | 0.73 | +0.01 |
-| **device_ms_total** | **177.27** | **189.02** | **+11.75** |
-| chunk_wall_ms | 194.0 | 204.4 | +10.4 |
-| host overhead | 16.7 | 15.4 | -1.3 (noise) |
+| attn_norm + ffn_norm | 1.40 | 0.02 | -1.38 (inside mHC, P.35) |
+| **device_ms_total** | **177.27** | **186.92** | **+9.65** |
+| chunk_wall_ms | 194.0 | 203.1 | +9.1 |
+| host overhead | 16.7 | 16.2 | -0.5 (noise) |
 
 Both costs are recoverable:
 - **bf16 KV (~4 ms)** is the temporary format for the first e2e run. Back to 4-bit (`CKV_FORMAT=bfp4_rows`) once
@@ -132,24 +141,24 @@ Both costs are recoverable:
 
 | Section | Device ms |
 |---|---|
-| experts (MoE) | 107.36 |
-| attention | 48.14 |
-| ffn_residual (includes the snapshot writes) | 11.69 |
-| indexer | 6.88 |
-| attn_residual | 5.31 |
-| q_a | 3.41 |
-| compressor | 2.01 |
-| engram_kv | 0.94 |
-| kv, ffn_norm, attn_norm, engram_add, attn_hc | 0.73, 0.70, 0.70, 0.62, 0.25 |
+| experts (MoE) | 105.28 |
+| attention | 48.10 |
+| ffn_residual (includes the snapshot writes) | 11.63 |
+| attn_residual (includes P.36's fused FFN input) | 7.06 |
+| indexer | 6.89 |
+| q_a | 3.42 |
+| compressor | 2.07 |
+| engram_kv | 0.84 |
+| kv, engram_add, attn_hc, attn_norm | 0.73, 0.63, 0.25, 0.02 (ffn_norm 0: inside mHC since P.35) |
 
 | Accuracy (rung `last`) | Value | Limit | Source |
 |---|---|---|---|
-| err_final_hidden | 0.1313 | 0.242 | P.40 / P.41 agent ladder runs (bfp8 index keys) |
+| err_final_hidden | 0.1321 | 0.242 | ladder with P.35 on (`/scratch/dnijemcevic/rebase/p35_ladder/`); 0.1313 before P.35 |
 | top5_overlap | 1.000 | >= 0.994 | same |
-| err_layer_L39 | 0.7067 | 1.533 | P.42 gate |
-| worst state metric share of limit | 0.42 (topk_idx L24) | | P.42 A/B |
+| err_layer_L39 | 0.9115 | 1.533 | P.35 / P.36 A/B (0.7067 before P.35) |
+| worst metric share of limit | 0.75 (err_state_window_kv L25) | | P.36 A/B |
 
-- Final hidden error of the P.42 tree itself was not measured: every layer error is identical to P.41's (P.42 agent).
+- P.36 is bit-identical to P.35 (every error equal in its A/B), so the P.35 ladder stands for the P.36 tree.
 - The quick A/B's "min layer PCC" (~0.75 at L39) is not a regression signal: L39 is the noisy last layer.
 - Full 56k prefill: 2,503 ms on the rebased build (X.3 re-run, before P.34, mmap engram). Not re-measured since.
 
@@ -397,7 +406,7 @@ $B gate <task> --spec $S [--unit U | --continue | --status | --no-commit | --com
 $B rerun --from <task> --spec $S            # reset it and everything downstream, then sweep
 ```
 
-- The run is started by `/scratch/dnijemcevic/run_ds41_8x4_rebased.sh` (last used `resume --until P.43`) in a tmux
+- The run is started by `/scratch/dnijemcevic/run_ds41_8x4_rebased.sh` (last used `resume --until P.36`) in a tmux
   session; it sources `/scratch/dnijemcevic/node_env.sh` and works in `/scratch/dnijemcevic/tt-metal-rebase`.
 - **A/B accept flow (perf picks, P.\*).** (1) An agent makes the change behind a `tt/settings.py` switch. (2) The
   orchestrator measures off and on, one process a side: a quick run (last chunk after the golden prefix, accuracy vs
