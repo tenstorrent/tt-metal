@@ -44,6 +44,8 @@ def test_perf_[op]_quasar(perf_report, <sweep args>, run_types, loop_factor, is_
   test's `L1_TO_L1`.
 - Perf runs `DestSync.Half` only. The comparer still reports the missing
   `DestSync.Full` as a perf subset; that one difference is expected.
+  Exception: `perf_matmul_quasar.py` also sweeps `DestSync.Full` for non-MX
+  formats so it pairs with WH/BH `perf_matmul`.
 - Do not put `approx_mode` on `_PERF_AXES` when a family already constrains
   it: a keyword after `**SWEEP` that the dict already holds raises
   `TypeError`. Copy the sweep and replace the key (see `perf-coverage`).

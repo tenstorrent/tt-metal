@@ -780,24 +780,28 @@ def test_matmul_deep_k(
     )
 
 
+# Matmul pairs with a 32-bit side: Float32 operands (read as Tf32 into a 32-bit Dest, or as
+# Float16_b), and Float16_b operands accumulated into a Float32 output.
+FLOAT32_MATMUL_FORMATS = [
+    InputOutputFormat(DataFormat.Float32, DataFormat.Float32),
+    InputOutputFormat(DataFormat.Float32, DataFormat.Float16_b),
+    InputOutputFormat(DataFormat.Float16_b, DataFormat.Float32),
+]
+
+
+def float32_matmul_dest_acc_modes(formats):
+    """A Float32 output needs a 32-bit Dest; the packer cannot upcast."""
+    if formats.output_format.is_32_bit():
+        return [DestAccumulation.Yes]
+    return [DestAccumulation.Yes, DestAccumulation.No]
+
+
 @pytest.mark.quasar
 @parametrize(
     input_tile_dimensions=runtime(FULL_MATMUL_SHAPES),
-    formats=[
-        InputOutputFormat(DataFormat.Float32, DataFormat.Float32),
-        InputOutputFormat(DataFormat.Float32, DataFormat.Float16_b),
-    ],
-    math_fidelity=lambda formats: [
-        fidelity
-        for fidelity in get_valid_math_fidelities(formats)
-        if fidelity in MATMUL_LOFI_HIFI4
-    ],
-    # A Float32 output needs a 32-bit Dest; the packer cannot upcast.
-    dest_acc=lambda formats: (
-        [DestAccumulation.Yes]
-        if formats.output_format.is_32_bit()
-        else [DestAccumulation.Yes, DestAccumulation.No]
-    ),
+    formats=FLOAT32_MATMUL_FORMATS,
+    math_fidelity=lambda formats: get_valid_math_fidelities(formats),
+    dest_acc=float32_matmul_dest_acc_modes,
     ct_dim=runtime([1, 2, 4]),
     rt_dim=runtime(lambda ct_dim: [2] if ct_dim == 2 else [1]),
     kt_dim=runtime(lambda ct_dim: [1] if ct_dim == 1 else [2]),
@@ -811,7 +815,7 @@ def test_matmul_float32(
     rt_dim,
     kt_dim,
 ):
-    """Float32 L1 operands, read into SrcA/SrcB as Tf32 (32-bit Dest) or Float16_b."""
+    """Matmul with a 32-bit operand or output; Float32 operands read as Tf32 or Float16_b."""
     test_matmul(
         input_tile_dimensions,
         ct_dim,

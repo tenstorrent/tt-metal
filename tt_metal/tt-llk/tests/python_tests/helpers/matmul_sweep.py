@@ -203,6 +203,15 @@ def mid_fill_rt_ct_pairs(max_tiles: int) -> List[tuple]:
     ]
 
 
+def dest_corner_mn(max_tiles: int) -> List[tuple]:
+    """(rt, ct): 1×1, dest-fill vectors/square, dest occupancy blocks, and half-dest mid-fill when they fit."""
+    square = int(max_tiles**0.5)
+    corners = [(1, 1), (1, max_tiles), (max_tiles, 1), (square, square)]
+    corners.extend((rt, ct) for rt, ct in DEST_RT_CT_BLOCKS if rt * ct <= max_tiles)
+    corners.extend(mid_fill_rt_ct_pairs(max_tiles))
+    return list(dict.fromkeys(corners))
+
+
 def unpack_matmul_fits_perf_ring(
     rt_dim: int, ct_dim: int, kt_dim: int, ring_tiles: int = PERF_RING_TILES
 ) -> bool:
