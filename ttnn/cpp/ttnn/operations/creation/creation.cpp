@@ -450,6 +450,12 @@ Tensor empty_like(
     MemoryConfig mem_cfg = memory_config.value_or(tensor.memory_config());
     MeshDevice* device_ptr = device.has_value() ? &device->get() : tensor.device();
 
+    if (device_ptr == nullptr) {
+        // A host tensor has no device to allocate uninitialized memory on. Match zeros_like and build
+        // a host tensor of the same spec instead of dereferencing a null device.
+        return full_like_impl(tensor, 0.0f, dtype, layout, device, memory_config, std::nullopt);
+    }
+
     std::optional<tt::tt_metal::TensorTopology> topology = std::nullopt;
     if (is_device_tensor(tensor) &&
         device_ptr->shape().mesh_size() == tensor.tensor_topology().distribution_shape().mesh_size()) {

@@ -3617,3 +3617,11 @@ def test_untilize_multi_core_width_or_dtype_change_misses(device):
     device.disable_and_clear_program_cache()
     device.enable_program_cache()
     assert_program_cache_flat(device, run, variants, miss_indices=(3, 4, 5))
+
+
+def test_untilize_host_tensor_raises(expect_error):
+    torch_input_tensor = torch.ones((2, 3, 4, 4), dtype=torch.bfloat16)
+    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT)
+
+    with expect_error(RuntimeError, "untilize: input tensor must be on device"):
+        ttnn.untilize(input_tensor)

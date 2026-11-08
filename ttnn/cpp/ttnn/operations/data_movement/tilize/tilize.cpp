@@ -50,6 +50,8 @@ ttnn::Tensor tilize(
     bool use_low_perf,
     tt::tt_metal::Tile tile,
     const std::optional<CoreRangeSet>& sub_core_grids) {
+    TT_FATAL(input_tensor.storage_type() == ttnn::StorageType::DEVICE, "tilize: input tensor must be on device");
+
     // A zero-volume input has nothing to tilize. Legacy tolerated the resulting empty program, but the
     // Metal 2.0 spec validator rejects it (no work cores -> the output DFB has no producer), so
     // short-circuit to a correctly-shaped empty output the way the sibling tilize_with_val_padding does.
