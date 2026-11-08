@@ -102,9 +102,10 @@ def test_api_errors_fail_open(capsys, monkeypatch, make_error):
     assert out[-1] == "rerun" and "check-failed" in out[0]
 
 
-def check(capsys, monkeypatch, attempts, attempt, job_id):
+def check(capsys, monkeypatch, attempts, attempt, job_id, actor=ci_no_retry.AUTO_RETRY_ACTOR):
     monkeypatch.setattr(ci_no_retry, "api", FakeApi(attempts))
     argv = ["x", "job-check", "--job-id", str(job_id), "--repo", REPO, "--run-id", RUN, "--attempt", str(attempt)]
+    argv += ["--triggering-actor", actor]
     monkeypatch.setattr(sys, "argv", argv)
     return ci_no_retry.main(), capsys.readouterr().out
 
@@ -118,7 +119,7 @@ def test_marked_previous_attempt_short_circuits_and_remarks(capsys, monkeypatch)
     rc, out = check(capsys, monkeypatch, attempts, 2, 3)
     assert rc == ci_no_retry.SKIP_EXIT
     assert out.startswith("::error title=ci-no-retry::Not re-run: attempt 1 failed deterministically: ")
-    assert "TPS GATE FAIL" in out and "start a new run" in out
+    assert "TPS GATE FAIL" in out and "re-run it by hand" in out
 
 
 def test_short_circuit_reason_does_not_nest(capsys, monkeypatch):
@@ -130,7 +131,7 @@ def test_short_circuit_reason_does_not_nest(capsys, monkeypatch):
     assert rc == ci_no_retry.SKIP_EXIT
     assert out.strip() == (
         "::error title=ci-no-retry::Not re-run: attempt 2 failed deterministically: "
-        f"{MARK['message']} -- a re-run of this run cannot change that; start a new run to measure again"
+        f"{MARK['message']} -- auto-retry cannot change that; re-run it by hand to measure again"
     )
 
 
@@ -146,3 +147,24 @@ def test_short_circuit_reason_does_not_nest(capsys, monkeypatch):
 def test_job_runs_unless_its_previous_attempt_was_marked(capsys, monkeypatch, previous):
     rc, _ = check(capsys, monkeypatch, {1: previous, 2: [job(3, "leg", None)]}, 2, 3)
     assert rc == 0
+
+
+@pytest.mark.parametrize("actor", ["someone-else", ""])
+def test_rerun_not_started_by_auto_retry_runs_marked_job(capsys, monkeypatch, actor):
+    # A manual re-run (or an unknown actor) measures again: no short-circuit, and no API call is needed.
+    attempts = {1: [job(1, "leg", "failure", [MARK])], 2: [job(3, "leg", None)]}
+    monkeypatch.setattr(ci_no_retry, "api", FakeApi(attempts, fail=AssertionError("no API call expected")))
+    argv = ["x", "job-check", "--job-id", "3", "--repo", REPO, "--run-id", RUN, "--attempt", "2"]
+    monkeypatch.setattr(sys, "argv", argv + ["--triggering-actor", actor])
+    assert ci_no_retry.main() == 0
+    out = capsys.readouterr().out
+    assert "not by auto-retry" in out and "::error" not in out
+
+
+def test_triggering_actor_defaults_to_the_actions_env(capsys, monkeypatch):
+    monkeypatch.setenv("GITHUB_TRIGGERING_ACTOR", ci_no_retry.AUTO_RETRY_ACTOR)
+    attempts = {1: [job(1, "leg", "failure", [MARK])], 2: [job(3, "leg", None)]}
+    monkeypatch.setattr(ci_no_retry, "api", FakeApi(attempts))
+    argv = ["x", "job-check", "--job-id", "3", "--repo", REPO, "--run-id", RUN, "--attempt", "2"]
+    monkeypatch.setattr(sys, "argv", argv)
+    assert ci_no_retry.main() == ci_no_retry.SKIP_EXIT

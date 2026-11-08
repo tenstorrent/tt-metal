@@ -4,9 +4,10 @@
 
 """Decide whether CI jobs marked `ci-no-retry` should be re-run. See ../classify-failure/README.md.
 
-  job-check --job-id ID --run-id ID --attempt N
-                                           run by a job on a re-run attempt: exit 3 if this job's previous
-                                           attempt was marked (it emits the marker again), else 0
+  job-check --job-id ID --run-id ID --attempt N [--triggering-actor LOGIN]
+                                           run by a job on a re-run attempt: exit 3 if auto-retry started the
+                                           re-run and this job's previous attempt was marked (it emits the
+                                           marker again), else 0. A re-run started by anyone else runs the job.
   run-decision --run-id ID --attempt N     run by auto-retry: prints "skip" if every unsuccessful job of
                                            attempt N is marked, else "rerun"; also sets the step output
                                            all-non-retryable=true when it prints "skip"
@@ -26,7 +27,12 @@ SKIP_EXIT = 3
 # Conclusions rerun-failed-jobs would not re-run; anything else (failure, timed_out, cancelled, ...) would be.
 SETTLED = {"success", "skipped", "neutral"}
 SHORT_CIRCUIT_PREFIX = " failed deterministically: "
-SHORT_CIRCUIT_SUFFIX = " -- a re-run of this run cannot change that; start a new run to measure again"
+SHORT_CIRCUIT_SUFFIX = " -- auto-retry cannot change that; re-run it by hand to measure again"
+# Who auto-retry's re-runs are triggered as: the owner of RETRY_WORKFLOW_TOKEN in
+# .github/workflows/_auto-retry-nightly-workflows.yaml. A re-run started by anyone else (by hand, to measure
+# again) is never short-circuited. If the token changes owner, update this; until then marked jobs simply
+# re-run as they did before ci-no-retry existed.
+AUTO_RETRY_ACTOR = "tt-rkim"
 
 
 def api(url):
@@ -77,6 +83,9 @@ def job_check(args):
     repo, run_id, attempt = args.repo, args.run_id, args.attempt
     if attempt <= 1:
         return 0
+    if args.triggering_actor != args.auto_retry_actor:
+        print(f"re-run started by '{args.triggering_actor}', not by auto-retry ('{args.auto_retry_actor}'); running it")
+        return 0
     name = api(f"repos/{repo}/actions/jobs/{args.job_id}")["name"]
     prev = [j for j in attempt_jobs(repo, run_id, attempt - 1) if j["name"] == name]
     if len(prev) != 1:
@@ -118,6 +127,8 @@ def main():
     sub = parser.add_subparsers(dest="cmd", required=True)
     jc = sub.add_parser("job-check")
     jc.add_argument("--job-id", required=True)
+    jc.add_argument("--triggering-actor", default=os.environ.get("GITHUB_TRIGGERING_ACTOR", ""))
+    jc.add_argument("--auto-retry-actor", default=AUTO_RETRY_ACTOR)
     rd = sub.add_parser("run-decision")
     for p in (jc, rd):
         p.add_argument("--repo", default=os.environ.get("GITHUB_REPOSITORY", "tenstorrent/tt-metal"))

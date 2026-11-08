@@ -7,8 +7,8 @@ result. A job can mark such a failure, and then:
 
 - if every unsuccessful job of a run is marked, auto-retry does not re-run the run;
 - otherwise the run is re-run as before, and each marked job fails within seconds at its first step
-  (`skip-non-retryable`) instead of running again. This also applies to a re-run started by hand. To
-  measure again, start a new run (new commit or `workflow_dispatch`).
+  (`skip-non-retryable`) instead of running again. This applies only to re-runs started by auto-retry: a
+  re-run started by hand (UI, `gh run rerun`) runs every job again, so a perf miss can be measured again.
 
 Everything is opt-in. A job that doesn't opt in, or whose records are missing, is retried exactly as before.
 Any API error also leads to a normal re-run.
