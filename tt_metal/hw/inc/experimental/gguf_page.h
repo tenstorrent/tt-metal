@@ -136,6 +136,21 @@ constexpr const std::uint16_t* level_table() {
     }
 }
 
+// The level table for lookups on a RISC-V core: tables of up to 1 KiB are copied to `copy` (512 entries) in the core's
+// local data memory, faster to load from than L1.
+template <Format FMT>
+inline const std::uint16_t* local_level_table(std::uint16_t* copy) {
+    static_assert(is_codebook<FMT>(), "local_level_table: not a codebook format");
+    const std::uint16_t* table = level_table<FMT>();
+    if constexpr (table_entries<FMT>() * 2 <= 1024) {
+        for (std::uint32_t j = 0; j < table_entries<FMT>() / 2; j++) {
+            reinterpret_cast<std::uint32_t*>(copy)[j] = reinterpret_cast<const std::uint32_t*>(table)[j];
+        }
+        table = copy;
+    }
+    return table;
+}
+
 // Index words of a codebook page, four grid indices each.
 template <Format FMT>
 constexpr std::uint32_t index_words() {
@@ -146,6 +161,15 @@ constexpr std::uint32_t index_words() {
 template <Format FMT>
 constexpr std::uint32_t index_offset() {
     return page_layout<FMT>().code_offset + (FMT == Format::IQ1_S || FMT == Format::IQ1_M ? 0 : 128);
+}
+
+// Expanded layouts (DataType::GGUF_*_EXPANDED, gguf_host_packing.cpp) hold per K tile the decoder's page up to the
+// index words (index_offset bytes: the level codes, then any sign words) and the decoder's bytes after the index words,
+// expanded_tail of them: none for IQ3_S, whose high index bits and scales are in its level codes.
+template <Format FMT>
+constexpr std::uint32_t expanded_tail() {
+    constexpr PageLayout L = page_layout<FMT>();
+    return FMT == Format::IQ3_S ? 0 : L.code_offset + L.code_bytes - index_offset<FMT>() - 4 * index_words<FMT>();
 }
 
 // Codebook formats: the level codes of a page's grid indices, two 16-bit codes per output word, element i of a grid

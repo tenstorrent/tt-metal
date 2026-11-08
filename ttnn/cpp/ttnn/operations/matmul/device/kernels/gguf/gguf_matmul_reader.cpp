@@ -24,12 +24,7 @@
 #include "api/dataflow/noc_semaphore.h"
 #include "experimental/gguf_page.h"
 
-// Level tables of up to 1 KiB are read from a copy in this RISC's local data memory, faster to load from than L1.
-template <experimental::gguf::Format FMT>
-constexpr bool local_table() {
-    return experimental::gguf::is_codebook<FMT>() && experimental::gguf::table_entries<FMT>() * 2 <= 1024;
-}
-alignas(4) std::uint16_t table_copy[1024 / 2];
+alignas(4) std::uint16_t table_copy[1024 / 2];  // local_level_table
 
 void kernel_main() {
     using namespace experimental::gguf;
@@ -49,9 +44,9 @@ void kernel_main() {
     // Expanded: per K tile the page's first `head` bytes (level codes, sign words), then `tail` bytes of the decoder's
     // that follow the index words (IQ1_S, IQ1_M, IQ2_S).
     constexpr bool expanded = GGUF_EXPANDED;
-    constexpr uint32_t index_bytes = FMT == Format::IQ3_S || FMT == Format::IQ3_XXS ? 256 : 128;
+    constexpr uint32_t index_bytes = 4 * index_words<FMT>();
     constexpr uint32_t head = index_offset<FMT>();
-    constexpr uint32_t tail = !expanded || FMT == Format::IQ3_S ? 0 : L.code_offset + L.code_bytes - head - index_bytes;
+    constexpr uint32_t tail = expanded ? expanded_tail<FMT>() : 0;
     constexpr uint32_t tile_bytes = expanded ? head + tail : L.code_bytes;
     constexpr uint32_t record = scale_bytes + P * tile_bytes;
 
@@ -164,13 +159,7 @@ void kernel_main() {
         Semaphore requests(request_sem), answers(answer_sem), address(address_sem);
         uint32_t asked = 0;
         if constexpr (is_codebook<FMT>() && !expanded) {
-            table = level_table<FMT>();
-            if constexpr (local_table<FMT>()) {
-                for (uint32_t j = 0; j < table_entries<FMT>() / 2; j++) {
-                    reinterpret_cast<uint32_t*>(table_copy)[j] = reinterpret_cast<const uint32_t*>(table)[j];
-                }
-                table = table_copy;
-            }
+            table = local_level_table<FMT>(table_copy);
         }
         for (uint32_t i = 0; i < total; i++) {
             if (i + in_flight < total) {

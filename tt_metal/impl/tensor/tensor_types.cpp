@@ -7,6 +7,8 @@
 #include <tt-metalium/tensor/tensor_types.hpp>
 #include <tt_stl/assert.hpp>
 
+#include "tt_metal/tt-llk/tt_llk_blackhole/common/inc/experimental/ckernel_gguf_page.h"
+
 namespace tt::tt_metal {
 
 namespace {
@@ -18,45 +20,61 @@ struct GgufFormat {
     GgufTraits traits;
 };
 
-// In DataType order. The numbers match the decoder's page_layout (ckernel_gguf_page.h).
+// A format: the decoder's format number, the GGUF block size and bytes (expanded layouts: page bytes per block_elems
+// rows of a column); the rest is the decoder's page_layout.
+constexpr GgufFormat make_format(std::string_view name, uint32_t id, uint32_t block_elems, uint32_t block_bytes) {
+    const ckernel::gguf::PageLayout l = ckernel::gguf::page_layout(static_cast<ckernel::gguf::Format>(id));
+    return {
+        name,
+        {id,
+         block_elems,
+         block_bytes,
+         l.group_tiles,
+         l.page_tiles,
+         l.code_bytes,
+         l.scale_rows,
+         l.fp16_rows,
+         l.code_offset}};
+}
+
+// In DataType order.
 // clang-format off
 constexpr std::array<GgufFormat, 33> kGgufFormats{{
-    // name                   id  blk  bytes G  page code  scale fp16 code_offset
-    {"DataType::GGUF_Q8_0",    {1, 32, 34, 1, 1, 1024, 1, 0, 0}},
-    {"DataType::GGUF_Q4_0",    {2, 32, 18, 1, 1, 512, 1, 0, 0}},
-    {"DataType::GGUF_IQ4_NL",  {3, 32, 18, 1, 1, 512, 1, 0, 0}},
-    {"DataType::GGUF_MXFP4",   {4, 32, 17, 2, 1, 512, 1, 0, 0}},
-    {"DataType::GGUF_NVFP4",   {5, 64, 36, 1, 1, 512, 1, 0, 0}},
-    {"DataType::GGUF_Q6_K",    {6, 256, 210, 8, 1, 768, 9, 1, 0}},
-    {"DataType::GGUF_Q4_K",    {7, 256, 144, 8, 1, 512, 8, 0, 0}},
-    {"DataType::GGUF_Q5_K",    {8, 256, 176, 8, 2, 1280, 8, 0, 0}},
-    {"DataType::GGUF_Q3_K",    {9, 256, 110, 8, 2, 768, 7, 0, 0}},
-    {"DataType::GGUF_Q2_K",    {10, 256, 84, 8, 1, 256, 10, 0, 0}},
-    {"DataType::GGUF_IQ4_XS",  {11, 256, 136, 8, 1, 512, 4, 1, 0}},
-    {"DataType::GGUF_TQ2_0",   {12, 256, 66, 8, 1, 256, 1, 0, 0}},
-    {"DataType::GGUF_Q2_0",    {13, 64, 18, 2, 1, 256, 1, 0, 0}},
-    {"DataType::GGUF_Q1_0",    {14, 128, 18, 4, 2, 256, 1, 0, 0}},
-    {"DataType::GGUF_IQ2_XXS", {15, 256, 66, 8, 1, 256, 1, 1, 256}},
-    {"DataType::GGUF_IQ1_S",   {16, 256, 50, 8, 1, 192, 1, 1, 256}},
-    {"DataType::GGUF_IQ2_S",   {17, 256, 82, 8, 1, 320, 1, 1, 256}},
-    {"DataType::GGUF_IQ3_S",   {18, 256, 110, 8, 1, 432, 1, 1, 512}},
-    {"DataType::GGUF_IQ3_XXS", {19, 256, 98, 8, 1, 384, 1, 1, 512}},
-    {"DataType::GGUF_IQ2_XS",  {20, 256, 74, 8, 1, 256, 5, 1, 256}},
-    {"DataType::GGUF_IQ1_M",   {21, 256, 56, 8, 1, 192, 4, 1, 256}},
-    {"DataType::GGUF_Q4_1",    {22, 32, 20, 1, 1, 512, 2, 0, 0}},
-    {"DataType::GGUF_Q5_0",    {23, 32, 22, 2, 2, 1280, 2, 0, 0}},
-    {"DataType::GGUF_Q5_1",    {24, 32, 24, 2, 2, 1280, 4, 0, 0}},
-    {"DataType::GGUF_TQ1_0",   {25, 256, 54, 8, 8, 1536, 3, 0, 0}},
+    make_format("DataType::GGUF_Q8_0", 1, 32, 34),
+    make_format("DataType::GGUF_Q4_0", 2, 32, 18),
+    make_format("DataType::GGUF_IQ4_NL", 3, 32, 18),
+    make_format("DataType::GGUF_MXFP4", 4, 32, 17),
+    make_format("DataType::GGUF_NVFP4", 5, 64, 36),
+    make_format("DataType::GGUF_Q6_K", 6, 256, 210),
+    make_format("DataType::GGUF_Q4_K", 7, 256, 144),
+    make_format("DataType::GGUF_Q5_K", 8, 256, 176),
+    make_format("DataType::GGUF_Q3_K", 9, 256, 110),
+    make_format("DataType::GGUF_Q2_K", 10, 256, 84),
+    make_format("DataType::GGUF_IQ4_XS", 11, 256, 136),
+    make_format("DataType::GGUF_TQ2_0", 12, 256, 66),
+    make_format("DataType::GGUF_Q2_0", 13, 64, 18),
+    make_format("DataType::GGUF_Q1_0", 14, 128, 18),
+    make_format("DataType::GGUF_IQ2_XXS", 15, 256, 66),
+    make_format("DataType::GGUF_IQ1_S", 16, 256, 50),
+    make_format("DataType::GGUF_IQ2_S", 17, 256, 82),
+    make_format("DataType::GGUF_IQ3_S", 18, 256, 110),
+    make_format("DataType::GGUF_IQ3_XXS", 19, 256, 98),
+    make_format("DataType::GGUF_IQ2_XS", 20, 256, 74),
+    make_format("DataType::GGUF_IQ1_M", 21, 256, 56),
+    make_format("DataType::GGUF_Q4_1", 22, 32, 20),
+    make_format("DataType::GGUF_Q5_0", 23, 32, 22),
+    make_format("DataType::GGUF_Q5_1", 24, 32, 24),
+    make_format("DataType::GGUF_TQ1_0", 25, 256, 54),
     // Expanded layouts: the decoder's page of the source format, per K tile its level codes and the code bytes the
     // decoder reads (gguf_host_packing.cpp); TQ1_0's is TQ2_0's.
-    {"DataType::GGUF_IQ2_XXS_EXPANDED", {15, 256, 98, 8, 1, 256, 1, 1, 256}},
-    {"DataType::GGUF_IQ1_S_EXPANDED",   {16, 256, 82, 8, 1, 192, 1, 1, 256}},
-    {"DataType::GGUF_IQ2_S_EXPANDED",   {17, 256, 114, 8, 1, 320, 1, 1, 256}},
-    {"DataType::GGUF_IQ3_S_EXPANDED",   {18, 256, 162, 8, 1, 432, 1, 1, 512}},
-    {"DataType::GGUF_IQ3_XXS_EXPANDED", {19, 256, 162, 8, 1, 384, 1, 1, 512}},
-    {"DataType::GGUF_IQ2_XS_EXPANDED",  {20, 256, 106, 8, 1, 256, 5, 1, 256}},
-    {"DataType::GGUF_IQ1_M_EXPANDED",   {21, 256, 88, 8, 1, 192, 4, 1, 256}},
-    {"DataType::GGUF_TQ1_0_EXPANDED",   {12, 256, 66, 8, 1, 256, 1, 0, 0}},
+    make_format("DataType::GGUF_IQ2_XXS_EXPANDED", 15, 256, 98),
+    make_format("DataType::GGUF_IQ1_S_EXPANDED", 16, 256, 82),
+    make_format("DataType::GGUF_IQ2_S_EXPANDED", 17, 256, 114),
+    make_format("DataType::GGUF_IQ3_S_EXPANDED", 18, 256, 162),
+    make_format("DataType::GGUF_IQ3_XXS_EXPANDED", 19, 256, 162),
+    make_format("DataType::GGUF_IQ2_XS_EXPANDED", 20, 256, 106),
+    make_format("DataType::GGUF_IQ1_M_EXPANDED", 21, 256, 88),
+    make_format("DataType::GGUF_TQ1_0_EXPANDED", 12, 256, 66),
 }};
 // clang-format on
 static_assert(kFirstGguf + static_cast<int>(kGgufFormats.size()) == static_cast<int>(DataType::INVALID));
@@ -171,6 +189,10 @@ bool is_block_float(DataType dtype) {
 bool is_gguf(DataType dtype) { return static_cast<int>(dtype) >= kFirstGguf && dtype < DataType::INVALID; }
 
 const GgufTraits& gguf_traits(DataType dtype) { return gguf_format(dtype).traits; }
+
+uint32_t GgufTraits::l1_page_bytes() const {
+    return ckernel::gguf::page_layout(static_cast<ckernel::gguf::Format>(format_id)).rows * 64;
+}
 
 bool is_gguf_expanded(DataType dtype) { return dtype > DataType::GGUF_TQ1_0 && dtype < DataType::INVALID; }
 

@@ -10,49 +10,15 @@ import pytest
 
 import ttnn
 
-gguf = pytest.importorskip("gguf")
+from tests.ttnn.unit_tests.tensor.gguf_test_utils import blocks as gguf_blocks, k_of as _k, name as _name
 
-# [K, N] per case: two pages along K for every format (lcm of page rows and block size), three N tiles.
-K_UNIT = {
-    "Q8_0": 32,
-    "Q4_0": 32,
-    "IQ4_NL": 32,
-    "Q4_1": 32,
-    "MXFP4": 64,
-    "NVFP4": 64,
-    "Q5_0": 64,
-    "Q5_1": 64,
-    "Q2_0": 64,
-    "Q1_0": 128,
-}
 N = 96
 
 
-def _name(dtype):
-    return dtype.name.removeprefix("GGUF_")
-
-
-def _qtype(dtype):
-    qtype = getattr(gguf.GGMLQuantizationType, _name(dtype), None)
-    if qtype is None:
-        pytest.skip(f"gguf-py has no {_name(dtype)}")
-    return qtype
-
-
 def _blocks(dtype, k, n, seed=0):
-    """The GGUF bytes of an [N, K] weight: gguf-py's quantization where it has one, random bytes otherwise (the
-    conversion only moves bits, so any bytes round-trip)."""
-    qtype = _qtype(dtype)
-    rng = np.random.default_rng(seed)
-    try:
-        return gguf.quants.quantize(rng.standard_normal((n, k), dtype=np.float32), qtype)
-    except NotImplementedError:
-        block_elems, block_bytes = gguf.GGML_QUANT_SIZES[qtype]
-        return rng.integers(0, 256, size=(n, k // block_elems * block_bytes), dtype=np.uint8)
-
-
-def _k(dtype):
-    return 2 * K_UNIT.get(_name(dtype), 256)
+    """gguf-py's quantization where it has one, random bytes otherwise (the conversion only moves bits, so any bytes
+    round-trip)."""
+    return gguf_blocks(dtype, k, n, seed, raw=True)
 
 
 @pytest.mark.parametrize("dtype", ttnn.GGUF_DTYPES, ids=_name)

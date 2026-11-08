@@ -27,6 +27,7 @@
 #include "experimental/ckernel_gguf_page.h"
 #include "experimental/gguf_page.h"
 #include "internal/tt-1xx/cache.h"
+#include "gguf_matmul_compute_common.hpp"
 
 namespace {
 
@@ -223,15 +224,14 @@ void kernel_main() {
     constexpr uint32_t chunk = get_compile_time_arg_val(2);
     constexpr uint32_t in0_rows = get_compile_time_arg_val(3);
     constexpr gguf::PageLayout L = gguf::page_layout<static_cast<gguf::Format>(fmt)>();
-    constexpr bool group_step = fmt == gguf::Q4_K || fmt == gguf::Q5_K || fmt == gguf::Q3_K || fmt == gguf::Q2_K;
+    constexpr bool group_step = gguf::group_scales<fmt>;
     constexpr auto pack = GgufDecodeThread::Pack;
-    constexpr uint32_t cb_page = tt::CBIndex::c_0, cb_in0 = tt::CBIndex::c_1, cb_out = tt::CBIndex::c_16;
-    constexpr uint32_t cb_part = tt::CBIndex::c_17, cb_remote = tt::CBIndex::c_18, cb_own = tt::CBIndex::c_20;
+    constexpr uint32_t cb_page = tt::CBIndex::c_0, cb_in0 = tt::CBIndex::c_1, cb_out = gguf_matmul::cb_out;
     const uint32_t segments = get_arg_val<uint32_t>(0);
     // DEST tiles of the two sets: decoded tile, its page in the next tile, scratch past the page. MXFP4 and NVFP4:
     // decoded tiles 3 and 5, pages 4 and 6; their block-float codes go to the 16-bit rows that the decoded tile's
     // rows address (dest_srca_mm_page_unpack_codes), in tiles 1 and 2.
-    constexpr bool bfp = fmt == gguf::MXFP4 || fmt == gguf::NVFP4;
+    constexpr bool bfp = gguf::fp4_bfp<fmt>;
     auto out_of = [](uint32_t set) -> uint32_t { return bfp ? (set ? 5 : 3) : (set ? 4 : 1); };
     auto page_of = [](uint32_t set) -> uint32_t { return bfp ? (set ? 6 : 4) : (set ? 5 : 2); };
 
@@ -248,30 +248,9 @@ void kernel_main() {
         const uint32_t k1 = get_arg_val<uint32_t>(2 + 3 * s);
         const uint32_t role = get_arg_val<uint32_t>(3 + 3 * s);
         if (role == finish) {
-            // This core's partial into DEST tile 0, the k0 others' into 1 .. k0, added in fp32. Always the last
-            // segment.
-            const uint32_t parts = k0;
+            // k0 is the count of the other cores' partials. Always the last segment.
             dest_srca_mm_uninit();
-            copy_init(cb_own);
-            tile_regs_acquire();
-            cb_wait_front(cb_own, 1);
-            copy_tile(cb_own, 0, 0);
-            cb_wait_front(cb_remote, parts);
-            for (uint32_t p = 0; p < parts; p++) {
-                copy_tile(cb_remote, p, 1 + p);
-            }
-            add_binary_tile_init();
-            for (uint32_t p = 0; p < parts; p++) {
-                add_binary_tile(0, 1 + p, 0);
-            }
-            cb_pop_front(cb_own, 1);
-            cb_pop_front(cb_remote, parts);
-            tile_regs_commit();
-            cb_reserve_back(cb_out, 1);
-            tile_regs_wait();
-            pack_tile(0, cb_out);
-            tile_regs_release();
-            cb_push_back(cb_out, 1);
+            gguf_matmul::finish_segment(k0);
             continue;
         }
 
@@ -281,7 +260,15 @@ void kernel_main() {
         lookups.segment_start();
         lookups.before_unpack();
         if constexpr (bfp) {
-            dest_srca_mm_page_to_dest_codes(cb_page, 0, page_of(0), out_of(0), 1024, 15, L.scale_offset, 16);
+            dest_srca_mm_page_to_dest_codes(
+                cb_page,
+                0,
+                page_of(0),
+                out_of(0),
+                gguf::FP4_CODES,
+                gguf::FP4_CODE_EXP,
+                L.scale_offset,
+                gguf::FP4_SCALE_WORDS);
         } else {
             dest_srca_mm_page_to_dest(cb_page, 0, page_of(0));
         }
@@ -323,7 +310,8 @@ void kernel_main() {
                     lookups.before_unpack();
                 }
                 if constexpr (bfp) {
-                    dest_srca_mm_page_unpack_codes(cb_page, 0, 1024, 15, L.scale_offset, 16);
+                    dest_srca_mm_page_unpack_codes(
+                        cb_page, 0, gguf::FP4_CODES, gguf::FP4_CODE_EXP, L.scale_offset, gguf::FP4_SCALE_WORDS);
                 } else {
                     dest_srca_mm_page_unpack(cb_page, 0);
                 }
@@ -337,19 +325,7 @@ void kernel_main() {
             set ^= 1;
         }
         cb_pop_front(cb_page, 1);
-        tile_regs_commit();
-        const uint32_t cb = role == whole ? cb_out : cb_part;
-        cb_reserve_back(cb, 1);
-        tile_regs_wait();
-        if (role != whole) {
-            pack_reconfig_data_format(cb_part);
-        }
-        pack_tile(0, cb);
-        if (role != whole) {
-            pack_reconfig_data_format(cb_out);
-        }
-        tile_regs_release();
-        cb_push_back(cb, 1);
+        gguf_matmul::pack_segment(role == whole);
     }
     dest_srca_mm_uninit();
 }

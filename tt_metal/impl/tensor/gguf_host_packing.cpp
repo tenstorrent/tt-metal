@@ -16,12 +16,13 @@
 #include <cstring>
 #include <mutex>
 #include <numeric>
+#include <type_traits>
 #include <vector>
 
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/tensor/tensor_apis.hpp>
 
-#include "tt_metal/hw/inc/experimental/gguf_level_tables.h"
+#include "tt_metal/hw/inc/experimental/gguf_page.h"
 
 namespace tt::tt_metal {
 namespace {
@@ -29,6 +30,7 @@ namespace {
 static_assert(std::endian::native == std::endian::little, "GGUF fields and the pages are little-endian words");
 
 using enum DataType;
+namespace gg = ::experimental::gguf;
 
 uint16_t rd16(const uint8_t* p) {
     uint16_t v;
@@ -155,11 +157,9 @@ struct CodePlanes {
 
 CodePlanes planes_of(DataType type, int blk) {
     CodePlanes p;
-    const bool two = type == GGUF_Q3_K || type == GGUF_Q2_K || type == GGUF_Q2_0;
-    p.lo.bits = type == GGUF_Q8_0 ? 8 : type == GGUF_Q1_0 ? 1 : two ? 2 : 4;
-    p.hi.bits = type == GGUF_Q6_K                                                                  ? 2
-                : type == GGUF_Q5_K || type == GGUF_Q3_K || type == GGUF_Q5_0 || type == GGUF_Q5_1 ? 1
-                                                                                                   : 0;
+    const auto format = static_cast<gg::Format>(gguf_traits(type).format_id);
+    p.lo.bits = int(ckernel::gguf::code_lo_bits(format));
+    p.hi.bits = int(ckernel::gguf::code_hi_bits(format));
     for (int w = 0; w < blk; ++w) {
         const int h = w / 128, t = w % 128 / 32, e = w % 32, j = w / 32;
         uint8_t& lb = p.lo.byte[w];
@@ -745,69 +745,47 @@ void unpack_pages(DataType type, const uint8_t* pages, int64_t K, int64_t N, uin
 
 struct ExpandedTile {
     const std::uint16_t* table;  // the level table
+    uint32_t entries;            // its grid entries
     uint32_t index_offset;       // the index words in a codes part
     uint32_t index_bytes;
     uint32_t head;  // bytes of the decoder's L1 page before the index words
     uint32_t tail;  // bytes of the decoder's bits after them
+    // The level codes of a codes part (lookup_grid), code_offset bytes.
+    void (*level_codes)(const uint8_t* part, uint8_t* levels);
 };
 
 ExpandedTile expanded_tile(DataType source) {
-    namespace lv = ::experimental::gguf::levels;
-    const GgufTraits& f = gguf_traits(source);
-    ExpandedTile x{};
-    const bool iq1 = source == GGUF_IQ1_S || source == GGUF_IQ1_M;
-    const bool iq3 = source == GGUF_IQ3_S || source == GGUF_IQ3_XXS;
+    const auto tile = [](auto format) {
+        using F = decltype(format);
+        constexpr ckernel::gguf::PageLayout L = gg::page_layout<F::value>();
+        return ExpandedTile{
+            gg::level_table<F::value>(),
+            gg::table_entries<F::value>(),
+            gg::index_offset<F::value>() - L.code_offset,
+            4 * gg::index_words<F::value>(),
+            gg::index_offset<F::value>(),
+            gg::expanded_tail<F::value>(),
+            [](const uint8_t* part, uint8_t* levels) {
+                constexpr ckernel::gguf::PageLayout layout = gg::page_layout<F::value>();
+                uint32_t words[108] = {};  // the largest codes part, IQ3_S's
+                std::memcpy(words, part, layout.code_bytes);
+                uint32_t codes[128];
+                gg::lookup_grid<F::value>(
+                    words + (gg::index_offset<F::value>() - layout.code_offset) / 4,
+                    gg::level_table<F::value>(),
+                    codes);
+                std::memcpy(levels, codes, layout.code_offset);
+            }};
+    };
     switch (source) {
-        case GGUF_IQ2_XXS: x.table = lv::iq2_xxs; break;
-        case GGUF_IQ2_XS: x.table = lv::iq2_xs; break;
-        case GGUF_IQ2_S: x.table = lv::iq2_s; break;
-        case GGUF_IQ3_XXS: x.table = lv::iq3_xxs; break;
-        case GGUF_IQ3_S: x.table = lv::iq3_s; break;
-        case GGUF_IQ1_S:
-        case GGUF_IQ1_M: x.table = lv::iq1_s; break;
+        case GGUF_IQ2_XXS: return tile(std::integral_constant<gg::Format, gg::Format::IQ2_XXS>{});
+        case GGUF_IQ1_S: return tile(std::integral_constant<gg::Format, gg::Format::IQ1_S>{});
+        case GGUF_IQ2_S: return tile(std::integral_constant<gg::Format, gg::Format::IQ2_S>{});
+        case GGUF_IQ3_S: return tile(std::integral_constant<gg::Format, gg::Format::IQ3_S>{});
+        case GGUF_IQ3_XXS: return tile(std::integral_constant<gg::Format, gg::Format::IQ3_XXS>{});
+        case GGUF_IQ2_XS: return tile(std::integral_constant<gg::Format, gg::Format::IQ2_XS>{});
+        case GGUF_IQ1_M: return tile(std::integral_constant<gg::Format, gg::Format::IQ1_M>{});
         default: TT_THROW("{} has no expanded codebook layout", source);
-    }
-    x.index_offset = iq1 ? 0 : 128;
-    x.index_bytes = iq3 ? 256 : 128;
-    x.head = f.code_offset + x.index_offset;
-    // IQ3_S's high index bits and scales after its indices are in the level codes too.
-    x.tail = source == GGUF_IQ3_S ? 0 : f.code_bytes - x.index_offset - x.index_bytes;
-    return x;
-}
-
-// Grid index of byte k of index word m of a codes part, with its high bits (as lookup_grid reads them).
-uint32_t grid_index(DataType source, const uint32_t* idx, uint32_t m, uint32_t k) {
-    const uint32_t low = idx[m] >> (8 * k) & 0xFF;
-    switch (source) {
-        case GGUF_IQ1_S:
-        case GGUF_IQ1_M:
-        case GGUF_IQ2_S: {
-            const uint32_t w = source == GGUF_IQ2_S ? 2 : 3;
-            const uint32_t even[4] = {8, 8 + w, 24, 24 + w}, odd[4] = {0, w, 16, 16 + w};
-            return low | (idx[32 + m / 2] >> (m % 2 ? odd[k] : even[k]) & ((1u << w) - 1)) << 8;
-        }
-        case GGUF_IQ2_XS: return low | ((idx - 32)[16 * (m / 16) + 2 * (m % 8) + m / 8 % 2] >> (8 * k + 7) & 1) << 8;
-        case GGUF_IQ3_S: return low | (idx[64 + m / 8] >> (8 * k + m % 8) & 1) << 8;
-        default: return low;
-    }
-}
-
-// The level codes of a codes part, lookup_grid's: code 4m + k of index word m's byte k; IQ3_S ORs each column's scale
-// nibble into bits 12..15 of the codes of its entry 0 (index words m with m / 8 % 4 == 0, bytes 0, 1).
-void level_codes(DataType source, const ExpandedTile& x, const uint8_t* part, uint16_t* codes) {
-    uint32_t words[108] = {};  // the largest codes part, IQ3_S's
-    std::memcpy(words, part, gguf_traits(source).code_bytes);
-    const uint32_t* idx = words + x.index_offset / 4;
-    const uint32_t entries = x.index_bytes / 4;
-    const auto* scales = reinterpret_cast<const uint8_t*>(idx + 72);
-    for (uint32_t m = 0; m < entries; ++m) {
-        for (uint32_t k = 0; k < 4; ++k) {
-            uint16_t code = x.table[grid_index(source, idx, m, k)];
-            if (source == GGUF_IQ3_S && m / 8 % 4 == 0 && k < 2) {
-                code |= (scales[8 * (m / 32) + m % 8] >> (4 * k) & 15) << 12;
-            }
-            codes[4 * m + k] = code;
-        }
     }
 }
 
@@ -830,17 +808,6 @@ const std::vector<int32_t>& grid_of_code(const std::uint16_t* table, uint32_t en
     return inverses.back().second;
 }
 
-uint32_t table_entries(DataType source) {
-    switch (source) {
-        case GGUF_IQ2_XXS:
-        case GGUF_IQ3_XXS: return 256;
-        case GGUF_IQ2_XS:
-        case GGUF_IQ3_S: return 512;
-        case GGUF_IQ2_S: return 1024;
-        default: return 2048;
-    }
-}
-
 // GGUF pages of `source` <-> its expanded pages; `pages` pages.
 void expand_pages(DataType source, const uint8_t* in, size_t pages, uint8_t* out) {
     const GgufTraits& f = gguf_traits(source);
@@ -852,7 +819,7 @@ void expand_pages(DataType source, const uint8_t* in, size_t pages, uint8_t* out
         in += scale_bytes;
         out += scale_bytes;
         for (uint32_t t = 0; t < f.group_tiles; ++t, in += f.code_bytes) {
-            level_codes(source, x, in, reinterpret_cast<uint16_t*>(l1.data()));
+            x.level_codes(in, l1.data());
             std::memcpy(l1.data() + f.code_offset, in, f.code_bytes);
             out = std::copy_n(l1.data(), x.head, out);
             out = std::copy_n(l1.data() + x.head + x.index_bytes, x.tail, out);
@@ -863,10 +830,10 @@ void expand_pages(DataType source, const uint8_t* in, size_t pages, uint8_t* out
 void compact_pages(DataType source, const uint8_t* in, size_t pages, uint8_t* out) {
     const GgufTraits& f = gguf_traits(source);
     const ExpandedTile x = expanded_tile(source);
-    const std::vector<int32_t>& grid = grid_of_code(x.table, table_entries(source));
+    const std::vector<int32_t>& grid = grid_of_code(x.table, x.entries);
     const uint32_t scale_bytes = 64 * f.scale_rows;
     std::vector<uint8_t> l1(f.code_offset + f.code_bytes);
-    std::vector<uint16_t> check(f.code_offset / 2);
+    std::vector<uint8_t> check(f.code_offset);
     for (size_t p = 0; p < pages; ++p) {
         std::memcpy(out, in, scale_bytes);
         in += scale_bytes;
@@ -893,7 +860,7 @@ void compact_pages(DataType source, const uint8_t* in, size_t pages, uint8_t* ou
                 }
             }
             // The bits kept beside the codes (high index bits) must agree with them.
-            level_codes(source, x, part, check.data());
+            x.level_codes(part, check.data());
             TT_FATAL(
                 std::memcmp(check.data(), l1.data(), f.code_offset) == 0,
                 "{}: an expanded page's level codes disagree with its high index bits",

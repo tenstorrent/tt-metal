@@ -13,16 +13,15 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
+#include "ttnn/operations/matmul/device/gguf/gguf_matmul_program_common.hpp"
+
 namespace ttnn::prim {
 
 using namespace tt::tt_metal;
+using namespace gguf_program;
 
 namespace {
 
-constexpr auto kPrefillKernels = "ttnn/cpp/ttnn/operations/matmul/device/kernels/gguf/";
-constexpr uint32_t kPrefillGroupsPerRead = 4;
-constexpr uint32_t kPrefillPageUnits = 4;
-constexpr uint32_t kPrefillRecordSlots = 3;
 constexpr uint32_t kPrefillInputSlots = 4;          // input blocks in flight per core (c_1)
 constexpr uint32_t kPrefillSenders = 2;             // input senders per band, on different NoCs
 constexpr uint32_t kPrefillDestTiles = 4;           // Float32 tiles in half of DEST
@@ -70,12 +69,7 @@ bool prefill_partners_fit(uint32_t n_tiles, uint32_t nc0, uint32_t nc1) {
     return true;
 }
 
-uint32_t prefill_fixed_l1(const GgufTraits& f) {
-    const uint32_t pages_per_group = f.group_tiles / f.page_tiles;
-    const uint32_t unit = pages_per_group > 1 ? pages_per_group : kPrefillGroupsPerRead;
-    return kPrefillPageUnits * unit * f.l1_page_bytes() +
-           (pages_per_group > 1 ? kPrefillRecordSlots * f.page_bytes() : 0) + kPrefillOutTiles * 2048;
-}
+uint32_t prefill_fixed_l1(const GgufTraits& f) { return weight_reader_l1_bytes(f) + kPrefillOutTiles * 2048; }
 
 // The least modeled time within the L1 budget: per core, the decodes (once per M chunk), the multiplies, a fixed cost
 // per block and, on band 0 of a K split, the sums' exchange, against the band's input stream (measured multicast rates
@@ -151,22 +145,6 @@ std::optional<PrefillPlan> prefill_plan(
     return best;
 }
 
-void add_prefill_cb(
-    Program& program,
-    const CoreRangeSet& cores,
-    tt::CBIndex index,
-    tt::DataFormat format,
-    uint32_t page_bytes,
-    uint32_t pages,
-    std::optional<tt::tt_metal::Tile> tile = std::nullopt) {
-    CircularBufferConfig config =
-        CircularBufferConfig(page_bytes * pages, {{index, format}}).set_page_size(index, page_bytes);
-    if (tile) {
-        config.set_tile_dims(index, *tile);
-    }
-    CreateCircularBuffer(program, cores, config);
-}
-
 uint32_t prefill_rows(const Tensor& input) { return input.padded_shape().volume() / input.padded_shape()[-1]; }
 
 }  // namespace
@@ -192,10 +170,7 @@ GgufMatmulPrefillProgramFactory::cached_program_t GgufMatmulPrefillProgramFactor
     const GgufTraits& f = gguf_traits(weight.dtype());
     const uint32_t k_tiles = weight.logical_shape()[0] / 32, n_tiles = weight.logical_shape()[1] / 32;
     const uint32_t m_tiles = prefill_rows(input) / 32;
-    const uint32_t pages_per_group = f.group_tiles / f.page_tiles;
     const CoreCoord grid = device->compute_with_storage_grid_size();
-    const uint32_t l1_page = f.l1_page_bytes();
-    const uint32_t unit = pages_per_group > 1 ? pages_per_group : kPrefillGroupsPerRead;
 
     const std::optional<PrefillPlan> p = prefill_plan(f, m_tiles, k_tiles, n_tiles, grid);
     TT_FATAL(p.has_value(), "GGUF prefill matmul: no blocking fits ({} M tiles, {} K tiles)", m_tiles, k_tiles);
@@ -233,23 +208,15 @@ GgufMatmulPrefillProgramFactory::cached_program_t GgufMatmulPrefillProgramFactor
     Program program = CreateProgram();
     const CoreRangeSet all(CoreRange(CoreCoord(0, 0), CoreCoord(grid.x - 1, grid.y - 1)));
     // Every core of the grid has the same circular buffers, so each is at the same address on all of them.
-    add_prefill_cb(program, all, tt::CBIndex::c_1, tt::DataFormat::Float16_b, 2048, kPrefillInputSlots * ur * kb);
-    add_prefill_cb(program, all, tt::CBIndex::c_4, tt::DataFormat::Float32, 4096, kb * nc);
-    add_prefill_cb(program, all, tt::CBIndex::c_24, tt::DataFormat::Float32, 4096, mc * nc);
+    add_cb(program, all, tt::CBIndex::c_1, tt::DataFormat::Float16_b, 2048, kPrefillInputSlots * ur * kb);
+    add_cb(program, all, tt::CBIndex::c_4, tt::DataFormat::Float32, 4096, kb * nc);
+    add_cb(program, all, tt::CBIndex::c_24, tt::DataFormat::Float32, 4096, mc * nc);
     if (ks == 2) {
-        add_prefill_cb(program, all, tt::CBIndex::c_17, tt::DataFormat::Float32, 4096, 2 * ur * nc);
-        add_prefill_cb(program, all, tt::CBIndex::c_18, tt::DataFormat::Float32, 4096, 2 * ur * nc);
+        add_cb(program, all, tt::CBIndex::c_17, tt::DataFormat::Float32, 4096, 2 * ur * nc);
+        add_cb(program, all, tt::CBIndex::c_18, tt::DataFormat::Float32, 4096, 2 * ur * nc);
     }
-    add_prefill_cb(program, all, tt::CBIndex::c_16, tt::DataFormat::Float16_b, 2048, kPrefillOutTiles);
-    const tt::tt_metal::Tile page_tile(
-        l1_page == 1024   ? std::array<uint32_t, 2>{16, 16}
-        : l1_page == 2048 ? std::array<uint32_t, 2>{16, 32}
-                          : std::array<uint32_t, 2>{32, 32});
-    add_prefill_cb(
-        program, all, tt::CBIndex::c_0, tt::DataFormat::UInt32, l1_page, kPrefillPageUnits * unit, page_tile);
-    if (pages_per_group > 1) {
-        add_prefill_cb(program, all, tt::CBIndex::c_2, tt::DataFormat::UInt32, kPrefillRecordSlots * f.page_bytes(), 1);
-    }
+    add_cb(program, all, tt::CBIndex::c_16, tt::DataFormat::Float16_b, 2048, kPrefillOutTiles);
+    add_weight_reader_cbs(program, all, f);
     const uint32_t request_sem = CreateSemaphore(program, all, 0);
     const uint32_t answer_sem = CreateSemaphore(program, all, 0);
     const uint32_t address_sem = CreateSemaphore(program, all, 0);
@@ -264,17 +231,7 @@ GgufMatmulPrefillProgramFactory::cached_program_t GgufMatmulPrefillProgramFactor
     const uint32_t partial_sem1 = CreateSemaphore(program, all, 0);
     const uint32_t senders = std::min<uint32_t>(kPrefillSenders, grid.x);
 
-    const bool two_in_flight = weight.dtype() == DataType::GGUF_Q4_0 || weight.dtype() == DataType::GGUF_Q4_1;
-    std::vector<uint32_t> reader_ct = {
-        f.format_id,
-        kPrefillPageUnits * unit,
-        kPrefillGroupsPerRead,
-        kPrefillRecordSlots,
-        request_sem,
-        answer_sem,
-        address_sem,
-        two_in_flight ? 2u : 1u};
-    TensorAccessorArgs(*weight.buffer()).append_to(reader_ct);
+    const std::vector<uint32_t> reader_ct = weight_reader_args(weight, request_sem, answer_sem, address_sem);
     std::vector<uint32_t> writer_ct = {
         k_tiles,
         n_tiles,
@@ -297,14 +254,8 @@ GgufMatmulPrefillProgramFactory::cached_program_t GgufMatmulPrefillProgramFactor
     TensorAccessorArgs(*output.buffer()).append_to(writer_ct);
 
     // The reader generates the core's records itself; the prefill formats have no codebook lookups.
-    const std::map<std::string, std::string> reader_defines = {
-        {"GGUF_PREFILL", "1"},
-        {"GGUF_EXPANDED", "0"},
-        {"GGUF_LOOKUP_PARTS", "2"},
-        {"GGUF_READER_PARTS", "1"},
-        {"GGUF_WRITER_PARTS", "1"},
-        {"GGUF_MATH_PARTS", "0"},
-        {"GGUF_UNPACK_PARTS", "0"}};
+    std::map<std::string, std::string> reader_defines = lookup_defines(weight);
+    reader_defines["GGUF_PREFILL"] = "1";
     shared_variables_t shared;
     for (uint32_t parity = 0; parity < 2; parity++) {
         CoreRangeSet ranges;
@@ -314,27 +265,21 @@ GgufMatmulPrefillProgramFactory::cached_program_t GgufMatmulPrefillProgramFactor
         if (ranges.empty()) {
             continue;
         }
-        shared.reader[parity] = CreateKernel(
+        add_movers(
             program,
-            std::string(kPrefillKernels) + "gguf_matmul_reader.cpp",
             ranges,
-            DataMovementConfig{
-                .processor = DataMovementProcessor::RISCV_1,
-                .noc = parity ? NOC::NOC_1 : NOC::NOC_0,
-                .compile_args = reader_ct,
-                .defines = reader_defines});
-        shared.writer[parity] = CreateKernel(
-            program,
-            std::string(kPrefillKernels) + "gguf_matmul_prefill_writer.cpp",
-            ranges,
-            DataMovementConfig{
-                .processor = DataMovementProcessor::RISCV_0,
-                .noc = parity ? NOC::NOC_0 : NOC::NOC_1,
-                .compile_args = writer_ct});
+            parity,
+            "gguf_matmul_reader.cpp",
+            "gguf_matmul_prefill_writer.cpp",
+            reader_ct,
+            writer_ct,
+            reader_defines,
+            {},
+            shared);
     }
     const KernelHandle compute_kernel = CreateKernel(
         program,
-        std::string(kPrefillKernels) + "gguf_matmul_prefill_compute.cpp",
+        std::string(kKernels) + "gguf_matmul_prefill_compute.cpp",
         all,
         ComputeConfig{
             .math_fidelity = MathFidelity::HiFi2,
@@ -447,14 +392,7 @@ GgufMatmulPrefillProgramFactory::cached_program_t GgufMatmulPrefillProgramFactor
 
 void GgufMatmulPrefillProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program, const GgufMatmulParams&, const GgufMatmulInputs& inputs, Tensor& output) {
-    const shared_variables_t& shared = cached_program.shared_variables;
-    for (const CoreCoord& core : shared.cores) {
-        const uint32_t parity = core.x % 2;
-        GetRuntimeArgs(cached_program.program, shared.reader[parity], core)[0] = inputs.weight.buffer()->address();
-        auto& writer_args = GetRuntimeArgs(cached_program.program, shared.writer[parity], core);
-        writer_args[0] = inputs.input.buffer()->address();
-        writer_args[1] = output.buffer()->address();
-    }
+    override_addresses(cached_program, inputs, output, 0);
 }
 
 }  // namespace ttnn::prim
