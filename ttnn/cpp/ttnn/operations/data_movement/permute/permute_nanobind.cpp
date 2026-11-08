@@ -48,6 +48,8 @@ void bind_permute(nb::module_& mod) {
 
             ``BFLOAT8_B`` is supported for interleaved tensors of rank 4 or less.
 
+            ``BFLOAT16`` input values must not be NaN when ``dims`` moves the last dimension.
+
         Memory Support:
             - Interleaved: DRAM and L1
             - Sharded: HEIGHT_SHARDED, WIDTH_SHARDED and BLOCK_SHARDED input and output; DRAM-sharded input is also accepted
