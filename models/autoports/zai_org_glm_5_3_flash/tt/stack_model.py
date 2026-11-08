@@ -637,7 +637,12 @@ class StackBackend(ModelBackend):
                 if d is None:  # a cached layer serves every t <= 4 + this chunk (its fabric phases per row count)
                     moe = build(self.mesh, self.cfg, source, L, OptimizedDecoderConfig())
                     # (native widths > 4 run on the 32-row phases: tp_mla.fabric / tp_dsa._hooked fall back to them)
-                    ts = tuple(sorted({1, 2, 3, 4, self.chunk})) if self.weight_cache is not None else (self.chunk,)
+                    # (the weight cache: the row counts this construction runs -- the chunk, the narrow widths and the
+                    # spec verify width K + 1 -- not every t <= 4: each row count holds a fabric phase (2 x 896 B of
+                    # L1 sync words) and, on the shard, 4 stream syncs (4 x 1536 B) for the life of the stack)
+                    k_spec = int(os.environ.get("GLM53_SPEC_K", "0"))
+                    ts = (tuple(sorted({self.chunk} | set(self.narrow_widths) | ({k_spec + 1} if k_spec > 0 else set())))
+                          if self.weight_cache is not None else (self.chunk,))  # fmt: skip
                     d = TPD.TPDsaLayer(self.mesh, self.cfg, L, source, OptimizedDecoderConfig(), moe=moe, ts=ts,
                                        share=dsa_share, dsa=self.dsa_decode, defer=self.dsa_defer,
                                        shard=self.dsa_shard)  # fmt: skip
@@ -962,17 +967,14 @@ class StackBackend(ModelBackend):
         """GLM53_DSA_POOL=1: the sparse_dsa layers' MLA / MoE programs take their intermediates from AllocPools
         (mk_stack.AllocPool: request i of a shape in ANY build = the same tensor), so every layer reuses one L1 set and
         nothing is allocated or freed per layer or per capture (the per-call churn fragmented the L1 top and drifted the
-        floor ~4 KB per layer under the t = 16 MoE program's static CBs: 2026-11-06 census). The MLA programs share the
-        step's pool (kv.extra["pool"], the KDA stacks' intermediates: the programs run one after another); the MoE
-        programs take a pool of their own, so s1 -- the MLA intermediate the MoE program reads -- is never aliased by a
-        MoE intermediate. -> (mla_pool, moe_pool), or None (the per-call allocations + keep= frees)"""
+        floor ~4 KB per layer under the t = 16 MoE program's static CBs: 2026-11-06 census). The MLA and MoE programs
+        build under the step's pool (kv.extra["pool"], the KDA stacks' intermediates): the three programs' same-shape
+        intermediates alias (they run one after another). s1 -- the MLA -> MoE hand-off -- comes from pool.child(),
+        the persistent-hand-off pool no build intermediate aliases (a MoE request of s1's shape would otherwise
+        take its buffer). -> the pool, or None (the per-call allocations + keep= frees)"""
         if os.environ.get("GLM53_DSA_POOL", "0") != "1":
             return None
-        if "dsa_moe_pool" not in kv.extra:
-            from models.autoports.zai_org_glm_5_3_flash.tt.mk_stack import AllocPool
-
-            kv.extra["dsa_moe_pool"] = AllocPool()
-        return kv.extra["pool"], kv.extra["dsa_moe_pool"]
+        return kv.extra["pool"]
 
     def _dsa_layer(self, e: dict, x, latent, pt, pos, *, t: int, dsa_state: dict, out, pools) -> None:
         """one sparse_dsa layer of a step: the MLA program (stack mode: reads / keeps the persistent residual) -> s1 ->
@@ -987,10 +989,12 @@ class StackBackend(ModelBackend):
             ttnn.deallocate(s1)
             del s1
             return
-        mla_pool, moe_pool = pools
-        with mla_pool:
-            s1 = e["mla"](x, latent, pt, pos, t=t, stack=True, dsa_state=dsa_state)["s1"]
-        with moe_pool:
+        pool = pools
+        with pool.child():  # s1 from the persistent-hand-off pool: never aliased by a build intermediate
+            s1 = e["mla"].mk.s1_buffer(t)
+        with pool:  # the MLA / MoE intermediates alias each other's and the KDA stacks' (one L1 set per step)
+            e["mla"](x, latent, pt, pos, t=t, stack=True, dsa_state=dsa_state, s1=s1)
+        with pool:
             e["moe"](s1, t=t, out=out, live=self._moe_live())
 
     def _step_narrow(self, kv: StackCache, w: int):

@@ -1297,6 +1297,7 @@ class MkMla(_MlaBase):
 
     def __call__(
         self, x, cache, page_table, cur_pos, *, t: int, dsa_state: dict | None = None, keep=None, stack: bool = False,
+        s1=None,
         shard: dict | None = None
     ):  # fmt: skip
         """x [1,1,t,16384] fp32 (the layer input), t <= 32 -> dict(s1 (t <= 4: [t,1,4,4096] fp32 stacked; t > 4: flat
@@ -1395,7 +1396,7 @@ class MkMla(_MlaBase):
         o_t = mk((1, 1, t, attn.h * attn.kv_lora), BF16) if self.ot(t) else None  # rev 30: W_uv's token-row in0
         o = mk((1, 1, t, attn.h * attn.dv), BF16)
         a = mk((1, 1, t, attn.ds_o.n_pad), BF16)
-        s1 = self.post.output(t, rm["s1_out"], out_memory_config=self.s1_memory(t))
+        s1 = s1 if s1 is not None else self.post.output(t, rm["s1_out"], out_memory_config=self.s1_memory(t))
         rd = self.readers(t)
         n_r = len(rd.assign)
         pa = self.probe.buffer_address() if self.probe is not None else None
@@ -1698,6 +1699,13 @@ class MkMla(_MlaBase):
         if t != TILE and os.environ.get("GLM53_MLA_OT_SMALL", "1") != "1":  # rev 35: on by default (34: opt-in)
             return False
         return self.attn.h <= TILE or self.attn.h % TILE == 0
+
+    def s1_buffer(self, t: int):
+        """the s1 hand-off (the attention sublayer's residual, the MoE program's input) a caller allocates itself
+        (stack_model._dsa_layer: from the stack's persistent-hand-off pool) and passes as __call__(s1=)"""
+        from models.autoports.zai_org_glm_5_3_flash.tt.mk_layer import residual_modes
+
+        return self.post.output(t, residual_modes(t)["s1_out"], out_memory_config=self.s1_memory(t))
 
     def s1_memory(self, t: int):
         """s1's memory: L1 (t <= 4 always; the stacked 512 KB / row); t > 4 the flat [1,1,t,16384] fp32 (2 MB) goes to

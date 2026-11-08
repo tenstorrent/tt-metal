@@ -183,7 +183,17 @@ class TPMla:
         return list(io) + fab.io(), mpd
 
     def __call__(
-        self, x, cache, page_table, cur_pos, *, t: int, dsa_state: dict | None = None, keep=None, stack: bool = False
+        self,
+        x,
+        cache,
+        page_table,
+        cur_pos,
+        *,
+        t: int,
+        dsa_state: dict | None = None,
+        keep=None,
+        stack: bool = False,
+        s1=None,
     ):
         """MkMla's call on every chip (+ the all-reduce of a): -> MkMla's outputs dict. keep: as MkMla's, applied after
         the launch (under the capture the program is not enqueued yet). stack: MkMla's stack mode (Stage 14b: x = the
@@ -192,7 +202,7 @@ class TPMla:
         if self.nofab:
             return self.mk(x, cache, page_table, cur_pos, t=t, dsa_state=dsa_state, keep=keep, stack=stack)
         with _Capture() as cap:
-            out = self.mk(x, cache, page_table, cur_pos, t=t, dsa_state=dsa_state, stack=stack)
+            out = self.mk(x, cache, page_table, cur_pos, t=t, dsa_state=dsa_state, stack=stack, s1=s1)
         ((io, desc),) = cap.calls
         io2, mpd = self._hooked(io, desc, t)
         ttnn.generic_op(io2, mpd)

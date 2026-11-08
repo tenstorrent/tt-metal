@@ -474,7 +474,7 @@ class TPMlaShard(TPM.TPMla):
         return list(io) + fab.io() + extra, mpd
 
     def __call__(self, x, cache, page_table, cur_pos, *, t: int, dsa_state: dict | None = None, keep=None,
-                 stack: bool = False):  # fmt: skip
+                 stack: bool = False, s1=None):  # fmt: skip
         """MkMla's call on every chip with the split-K phase: cache / page_table / dsa_state are the per-chip SHARDED
         tensors (tt/dsa_shard.py ShardMap: local blocks, local page table, local pooled keys; the ring replicated)."""
         self.calls += 1
@@ -482,7 +482,7 @@ class TPMlaShard(TPM.TPMla):
         if st is None:
             raise ValueError(f"TPMlaShard: no streams for t = {t} (built for {sorted(self.streams)}: ts / stream_ts)")
         with _Capture() as cap:
-            out = self.mk(x, cache, page_table, cur_pos, t=t, dsa_state=dsa_state, stack=stack, shard=st)
+            out = self.mk(x, cache, page_table, cur_pos, t=t, dsa_state=dsa_state, stack=stack, shard=st, s1=s1)
         ((io, desc),) = cap.calls
         io2, mpd = self._hooked_shard(io, desc, t, st)
         ttnn.generic_op(io2, mpd)

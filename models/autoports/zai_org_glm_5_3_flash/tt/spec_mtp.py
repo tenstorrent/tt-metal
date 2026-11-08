@@ -755,20 +755,22 @@ class SpecMTP:
                 es.enter_context(env(GLM53_MLA_ATT_LANES_T4="2"))
             # dsa_state: a main sparse_dsa layer's DSA state under GLM53_STACK_DSA (None = the dense MkMla / the MTP
             # layer); the verify's rows all address slot 0 (mk_mla rev 56 MLA_DSA_ONE_SLOT), ACCEPT moves the rings
-            pools = self.be._dsa_pools(self.kv)  # GLM53_DSA_POOL: the pooled intermediates (stack_model._dsa_layer)
-            if pools is None:
+            pool = self.be._dsa_pools(self.kv)  # GLM53_DSA_POOL: the pooled intermediates (stack_model._dsa_layer)
+            if pool is None:
                 s1 = e["mla"](res, cache, pt, pos, t=t, keep=("s1",), stack=True, dsa_state=dsa_state)["s1"]
             else:
-                with pools[0]:
-                    s1 = e["mla"](res, cache, pt, pos, t=t, stack=True, dsa_state=dsa_state)["s1"]
-        if pools is None:
+                with pool.child():  # s1 from the persistent-hand-off pool (never aliased by a build intermediate)
+                    s1 = e["mla"].mk.s1_buffer(t)
+                with pool:
+                    e["mla"](res, cache, pt, pos, t=t, stack=True, dsa_state=dsa_state, s1=s1)
+        if pool is None:
             r = e["moe"](s1, t=t, out=res, live=self.vlive if verify else None)
         else:
-            with pools[1]:
+            with pool:
                 r = e["moe"](s1, t=t, out=res, live=self.vlive if verify else None)
         if dbg is not None and self.dbg_ids is not None:
             ttnn.copy(r["ids"], self.dbg_ids[dbg])
-        if pools is None:
+        if pool is None:
             ttnn.deallocate(s1)  # L1: must not stay allocated under the next program's CB region
         del s1
 
