@@ -9,6 +9,7 @@ from helpers.format_config import DataFormat, FormatConfig, InputOutputFormat
 from helpers.golden_generators import UntilizeGolden, get_golden_generator
 from helpers.llk_params import (
     DestAccumulation,
+    DestSync,
     PerfRunType,
 )
 from helpers.param_config import (
