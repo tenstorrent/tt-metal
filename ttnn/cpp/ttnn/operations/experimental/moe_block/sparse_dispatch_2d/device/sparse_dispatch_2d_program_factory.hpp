@@ -8,6 +8,7 @@
 #include "ttnn/device_operation.hpp"
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/operations/experimental/moe_block/common/address_patches.hpp"
+#include "ttnn/operations/experimental/moe_block/common/chip_program.hpp"
 
 namespace ttnn::operations::experimental::moe_block::sparse_dispatch_2d {
 
@@ -17,6 +18,8 @@ namespace ttnn::operations::experimental::moe_block::sparse_dispatch_2d {
 struct SparseDispatch2dProgramFactory {
     struct shared_variables_t {
         AddressPatches patches;
+        // one program for the mesh: the chips' arg patch blocks (common/chip_program.hpp), kept with the program
+        std::shared_ptr<const void> chip_table;
     };
     using cached_mesh_workload_t = ttnn::device_operation::AdaptedCachedMeshWorkload<shared_variables_t>;
 

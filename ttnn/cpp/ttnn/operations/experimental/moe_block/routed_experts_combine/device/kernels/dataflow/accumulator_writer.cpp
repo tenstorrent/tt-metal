@@ -5,16 +5,24 @@
 // Accumulator writer: accumulator `me`'s finished token rows (tokens me, me + A, ...)
 // to the output.
 
+#include "ttnn/cpp/ttnn/operations/experimental/moe_block/common/kernels/mb_loop.hpp"
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
 
-constexpr uint32_t cb_out = get_compile_time_arg_val(0);
-constexpr uint32_t row_bytes = get_compile_time_arg_val(1);
-constexpr uint32_t NT = get_compile_time_arg_val(2);
-constexpr uint32_t A = get_compile_time_arg_val(3);
-constexpr auto o_args = TensorAccessorArgs<4>();
+#ifndef CMB_CT0  // (the first compile-time arg of this role: 0 alone, past the other role's in a pool cell's binary)
+#define CMB_CT0 0
+#endif
+constexpr uint32_t cb_out = get_compile_time_arg_val(CMB_CT0 + 0);
+constexpr uint32_t row_bytes = get_compile_time_arg_val(CMB_CT0 + 1);
+constexpr uint32_t NT = get_compile_time_arg_val(CMB_CT0 + 2);
+constexpr uint32_t A = get_compile_time_arg_val(CMB_CT0 + 3);
+constexpr auto o_args = TensorAccessorArgs<CMB_CT0 + 4>();
 
-void kernel_main() {
+#ifdef CMB_ROLE_FN  // (a role of a pool cell's binary - combine_cell_reader / _writer.cpp)
+void CMB_ROLE_FN() {
+#else
+MB_LOOP_BODY {
+#endif
     const uint32_t o_addr = get_arg_val<uint32_t>(0), n_tok = get_arg_val<uint32_t>(1), me = get_arg_val<uint32_t>(2);
     const auto o = TensorAccessor(o_args, o_addr, row_bytes);
     for (uint32_t i = 0; i < n_tok; ++i) {
@@ -25,3 +33,7 @@ void kernel_main() {
     }
     noc_async_write_barrier();
 }
+
+#ifndef CMB_ROLE_FN
+#include "ttnn/cpp/ttnn/operations/experimental/moe_block/common/kernels/mb_loop_main.hpp"
+#endif

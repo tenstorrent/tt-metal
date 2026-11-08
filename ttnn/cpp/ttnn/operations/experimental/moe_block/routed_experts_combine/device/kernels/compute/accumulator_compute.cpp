@@ -8,6 +8,7 @@
 // add is exact while the partial sums stay below 2^24 q - the sum is then the same in any landing order. The reader
 // ends the rows with a 0xFFFFFFFF token (the device plan's counts: the compute does not know them).
 
+#include "ttnn/cpp/ttnn/operations/experimental/moe_block/common/kernels/mb_loop.hpp"
 #include <cstdint>
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/common.h"
@@ -21,7 +22,7 @@
 
 constexpr uint32_t DH = 4;  // fp32 tiles per DEST half
 
-void kernel_main() {
+MB_LOOP_BODY {
     constexpr uint32_t cb_row = get_compile_time_arg_val(0);
     constexpr uint32_t cb_meta = get_compile_time_arg_val(1);
     constexpr uint32_t cb_acc = get_compile_time_arg_val(2);
@@ -30,6 +31,9 @@ void kernel_main() {
     constexpr uint32_t MAXT = get_compile_time_arg_val(5);
     constexpr uint32_t cb_w = get_compile_time_arg_val(6);
     constexpr uint32_t SNAP = get_compile_time_arg_val(7);  // (fp32 bits of C = 1.5 x 2^23 q; 0: off)
+    if (get_arg_val<uint32_t>(1) == 0) {  // (a pool cell that is no accumulator on this chip: one program for the mesh)
+        return;
+    }
     const uint32_t n_tok = get_arg_val<uint32_t>(0);
     compute_kernel_hw_startup(cb_row, cb_w, cb_acc);
     mul_bcast_scalar_init(cb_row, cb_w);
@@ -118,3 +122,5 @@ void kernel_main() {
         cb_push_back(cb_out, NT);
     }
 }
+
+#include "ttnn/cpp/ttnn/operations/experimental/moe_block/common/kernels/mb_loop_main.hpp"

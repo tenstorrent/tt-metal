@@ -2,8 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// The token loops' kernel_main (mb_loop.hpp): included after the kernel's MB_LOOP_BODY. Nothing without MB_LOOPS.
+// The token loops' kernel_main (mb_loop.hpp): included after the kernel's MB_LOOP_BODY. Without MB_LOOPS: kernel_main
+// with MB_CHIP (the chip's args first, then the body), else nothing.
 #pragma once
+
+#include "ttnn/cpp/ttnn/operations/experimental/moe_block/common/kernels/mb_chip.hpp"
 
 #ifdef MB_LOOPS
 #include "internal/circular_buffer_init.h"
@@ -216,6 +219,12 @@ MB_LOOP_FN void enter(uint32_t l) {
 }  // namespace mb_loop
 
 void kernel_main() {
+#ifdef MB_CHIP
+    mb_chip::apply();
+#endif
+#ifdef MB_CHIP_WAIT
+    mb_chip::wait();
+#endif
     for (uint32_t l = 0; l < MB_LOOPS; ++l) {
         mb_loop::g_loop = l;
         if (l) {
@@ -227,5 +236,17 @@ void kernel_main() {
         }
     }
     mb_loop::done();
+}
+#endif
+
+#if (defined(MB_CHIP) || defined(MB_CHIP_WAIT)) && !defined(MB_LOOPS)
+void kernel_main() {
+#ifdef MB_CHIP
+    mb_chip::apply();
+#endif
+#ifdef MB_CHIP_WAIT
+    mb_chip::wait();
+#endif
+    mb_loop_body();
 }
 #endif

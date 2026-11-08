@@ -11,6 +11,7 @@
 // TensorAccessorArgs of out, plan.
 // Runtime args: out, plan, words (the port's semaphore words), ring_offs, ring_mask, my_r, my_c, dir, lnk.
 
+#include "ttnn/cpp/ttnn/operations/experimental/moe_block/common/kernels/mb_loop.hpp"
 #include "sparse_dispatch_2d_common.hpp"
 
 namespace sa {
@@ -202,8 +203,13 @@ void read(const ReaderArgs& args) {
 
 }  // namespace sa
 
-void kernel_main() {
+MB_LOOP_BODY {
     constexpr uint32_t cb_man = get_compile_time_arg_val(0);
+    if (get_arg_val<uint32_t>(7) == sa::IDLE_PORT) {  // (a port core of another chip only: one program for the mesh)
+        return;
+    }
     size_t a = 0;
     sa::read(sa::reader_args(a, get_write_ptr(cb_man)));
 }
+
+#include "ttnn/cpp/ttnn/operations/experimental/moe_block/common/kernels/mb_loop_main.hpp"

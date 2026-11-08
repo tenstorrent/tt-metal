@@ -21,6 +21,10 @@
 
 namespace sa {
 
+// A port core of another chip only (one program for the mesh, common/chip_program.hpp): the reader's direction arg
+// (7) or the sender's ready x (2) is this, and the kernel returns.
+constexpr uint32_t IDLE_PORT = 0xFFFFFFFFu;
+
 constexpr uint32_t R = SA_R;
 constexpr uint32_t C = SA_C;
 constexpr uint32_t S = SA_S;

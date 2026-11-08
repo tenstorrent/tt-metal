@@ -8,20 +8,32 @@
 // (the column-0 writer also wrote the trailer: header word and flags). Counters are cumulative within a call
 // (misc[101]: this port's rows before this call; the state is zeroed every call). Its row count is the device plan's.
 
+#include "ttnn/cpp/ttnn/operations/experimental/moe_block/common/kernels/mb_loop.hpp"
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
 #include "combine_zero_gate.hpp"
 #include "ttnn/cpp/ttnn/operations/experimental/moe_block/common/combine_plan_words.hpp"
 
-constexpr uint32_t cb_inj = get_compile_time_arg_val(0);
-constexpr uint32_t cb_tab = get_compile_time_arg_val(1);
-constexpr uint32_t MISC = get_compile_time_arg_val(2);
-constexpr uint32_t WORDS_OFF = get_compile_time_arg_val(3);  // the writers' words (arena-relative, on their cores)
-constexpr uint32_t BAR_SLOT = get_compile_time_arg_val(4);
-constexpr auto plan_args = TensorAccessorArgs<CMB_PLAN_CT>();  // (the device plan)
+#ifndef CMB_CT0  // (the first compile-time arg of this role: 0 alone, past the other role's in a pool cell's binary)
+#define CMB_CT0 0
+#endif
+constexpr uint32_t cb_inj = get_compile_time_arg_val(CMB_CT0 + 0);
+constexpr uint32_t cb_tab = get_compile_time_arg_val(CMB_CT0 + 1);
+constexpr uint32_t MISC = get_compile_time_arg_val(CMB_CT0 + 2);
+constexpr uint32_t WORDS_OFF =
+    get_compile_time_arg_val(CMB_CT0 + 3);  // the writers' words (arena-relative, on their cores)
+constexpr uint32_t BAR_SLOT = get_compile_time_arg_val(CMB_CT0 + 4);
+constexpr auto plan_args = TensorAccessorArgs<CMB_CT0 + CMB_PLAN_CT>();  // (the device plan)
 constexpr uint32_t GRANT_B = 8;  // grants go out in batches of this many slots (or the rest)
 
-void kernel_main() {
+#ifdef CMB_ROLE_FN  // (a role of a pool cell's binary - combine_cell_reader / _writer.cpp)
+void CMB_ROLE_FN() {
+#else
+MB_LOOP_BODY {
+#endif
+    if (get_arg_val<uint32_t>(4) == 0xFFFFFFFFu) {  // (an idle port core: another chip's port cell - kIdlePort)
+        return;
+    }
     size_t a = 0;
     const uint32_t area = get_arg_val<uint32_t>(a++);  // the arena (same address on every core and chip)
     const uint32_t plan = get_arg_val<uint32_t>(a++);
@@ -78,3 +90,7 @@ void kernel_main() {
     misc[101] = base + n;
     noc_async_atomic_barrier();
 }
+
+#ifndef CMB_ROLE_FN
+#include "ttnn/cpp/ttnn/operations/experimental/moe_block/common/kernels/mb_loop_main.hpp"
+#endif

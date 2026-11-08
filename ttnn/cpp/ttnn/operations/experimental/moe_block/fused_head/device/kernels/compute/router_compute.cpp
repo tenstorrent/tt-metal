@@ -57,6 +57,10 @@ inline void rt_key() {
 // args: nops, ops (entry << 8 | 2: a fin), per entry: arrivals to add (the fin: G - 1, from the zone's slots 0 ..);
 // then the top-K's done word. Every tile here is TRANSPOSED: logits^T [ET][32 tokens] - a
 // token is a column.
+#ifdef RT_CHIP_RDY
+uint32_t rt_p = 0;  // (this chip's TP position, from the RDY page)
+#endif
+
 MB_LOOP_BODY {
     // (the PACK -> MATH word: zero before anything - L1 scratch, PACK sets it only after the top-K)
     MATH((*reinterpret_cast<volatile uint32_t*>(RT_MSYNC) = 0));
@@ -69,6 +73,13 @@ MB_LOOP_BODY {
 #endif
     for (uint32_t it = 0; it < NIT; ++it) {
         cb_wait_front(12, 1);  // (the engine's partial logits are in my HOLD: RDY - UNPACK; PACK on word 112)
+#ifdef RT_CHIP_RDY
+        if (it == 0) {  // (this chip's index and TP position: words 1, 2 of the RDY page - every thread the same; one
+                        // program for the mesh, common/chip_program.hpp)
+            rw_::ME = read_tile_value(12, 0, 1);
+            rt_p = read_tile_value(12, 0, 2);
+        }
+#endif
 #ifdef RT_VALID
         // (a padded forward: is my row tile of this iteration live - the BRISC's bits, in the RDY page: every thread
         // the same; an all-padding tile: every CB and word as ever, no sums, scores, top-K, rows or route words - its
@@ -96,7 +107,11 @@ MB_LOOP_BODY {
         cb_wait_front(BIAS, ET);
         const uint32_t nops = get_arg_val<uint32_t>(0), et0 = 1 + nops;
         for (uint32_t o = 0; o < nops; ++o) {
+#ifdef RT_CHIP_RDY
+            const uint32_t e = rt_p;  // (my owner block)
+#else
             const uint32_t e = get_arg_val<uint32_t>(1 + o) >> 8;
+#endif
             const uint32_t na = get_arg_val<uint32_t>(et0 + e);  // (the one fin: the owner's - G - 1 sources)
             cb_reserve_back(SC, ET);
             cb_wait_front(IDX, ET);
@@ -272,7 +287,12 @@ MB_LOOP_BODY {
         {  // the joint rows' last two shares (tokens 16 .. 23 the MATH thread, 24 .. 31 the PACK thread; soft float):
            // the BEST page is in L1 once PACK passed its push - PACK tells MATH (RT_MSYNC)
             const uint32_t bvc = get_arg_val<uint32_t>(t1 + 1), olc = get_arg_val<uint32_t>(t1 + 2);
-            const uint32_t scl = get_arg_val<uint32_t>(t1 + 3), sv = get_arg_val<uint32_t>(t1 + 4);
+#ifdef RT_CHIP_RDY
+            const uint32_t sv = get_arg_val<uint32_t>(t1 + 4) + rt_p * RT_SV_STRIDE;  // (my block of HOLD)
+#else
+            const uint32_t sv = get_arg_val<uint32_t>(t1 + 4);
+#endif
+            const uint32_t scl = get_arg_val<uint32_t>(t1 + 3);
             PACK(({
                 *reinterpret_cast<volatile uint32_t*>(RT_MSYNC) = 1;
                 if (live) {

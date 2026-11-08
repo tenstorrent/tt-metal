@@ -10,6 +10,7 @@
 // CT: 0 IN1_CB, 1 SLOT_TILES, 2 TILE_BYTES, 3 BLOCKS (all experts), 4 BATCH, 5 NUM_E
 // RT: 0 weight bank base address, 1 bank id, 2 byte offset of this core's region in the bank, 3.. expert_schedule.hpp
 // args
+#include "ttnn/cpp/ttnn/operations/experimental/moe_block/common/kernels/mb_loop.hpp"
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "expert_schedule.hpp"
@@ -21,7 +22,7 @@
 #include "combine_done.hpp"  // (combine overlap: this core's y writer reports to combine's collector)
 #endif
 
-void kernel_main() {
+MB_LOOP_BODY {
     constexpr uint32_t cb = get_compile_time_arg_val(0);
     constexpr uint32_t slot = get_compile_time_arg_val(1);
     constexpr uint32_t tile_bytes = get_compile_time_arg_val(2);
@@ -135,3 +136,5 @@ void kernel_main() {
     // leave no NoC transaction in flight (reads, writes, atomics, posted writes): the next program starts clean
     noc_async_full_barrier();
 }
+
+#include "ttnn/cpp/ttnn/operations/experimental/moe_block/common/kernels/mb_loop_main.hpp"

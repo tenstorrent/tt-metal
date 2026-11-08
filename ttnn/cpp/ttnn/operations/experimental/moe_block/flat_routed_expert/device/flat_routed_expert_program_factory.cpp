@@ -6,6 +6,8 @@
 #include "flat_routed_expert_program_factory.hpp"
 
 #include "flat_routed_expert_plan.hpp"
+#include "ttnn/operations/experimental/moe_block/common/chip_program.hpp"
+#include "ttnn/operations/experimental/moe_block/common/desc_api.hpp"
 
 #include <algorithm>
 #include <array>
@@ -82,12 +84,13 @@ std::vector<std::pair<std::string, std::string>> flat_schedule_defines(
 }
 
 FlatProgramHandles add_flat_routed_expert_program(
-    tt::tt_metal::Program& program,
+    tt::tt_metal::ProgramDescriptor& program,
     tt::tt_metal::distributed::MeshDevice& mesh_device,
     const FlatRoutedExpertConfig& cfg,
     const FlatRoutedExpertPlan& p,
     const FlatRoutedExpertInputs& t) {
     using namespace tt::tt_metal;
+    using namespace desc_api;
     auto* device = &mesh_device;
     FlatProgramHandles sv;
     const auto phys = [device](const CoreCoord& c) { return device->worker_core_from_logical_core(c); };
@@ -675,9 +678,16 @@ FlatProgramHandles add_flat_routed_expert_program(
     const auto work_cores = p.work_cores();
     arena_cb(6, p.meta_off, meta_bytes, work_cores, tt::DataFormat::UInt32, meta_bytes);
     arena_cb(7, p.dyn_off, 4 * dyn_half, work_cores, tt::DataFormat::UInt32, 4 * dyn_half);
-
-    override_flat_routed_expert_addresses(program, sv, t);
     return sv;
+}
+
+void finalize_flat_handles(
+    tt::tt_metal::Program& program, FlatProgramHandles& handles, const FlatRoutedExpertInputs& t) {
+    const auto ids = desc_api::cb_ids(program);
+    for (auto& [cb, off] : handles.arena_cbs) {
+        cb = ids.at(cb);
+    }
+    override_flat_routed_expert_addresses(program, handles, t);
 }
 
 void override_flat_routed_expert_addresses(
@@ -723,11 +733,14 @@ FlatRoutedExpertConfig with_combine_overlap(FlatRoutedExpertConfig cfg, const Fl
     return cfg;
 }
 
-void set_flat_combine_report(
-    tt::tt_metal::Program& program,
+namespace {
+template <typename Common, typename Rt>
+void fill_combine_report(
     const FlatProgramHandles& handles,
     const FlatRoutedExpertConfig& cfg,
-    const FlatCombineReport& report) {
+    const FlatCombineReport& report,
+    Common common_of,
+    Rt rt_of) {
     using namespace tt::tt_metal;
     TT_FATAL(cfg.cmb_rt > 0, "flat_routed_expert: set_flat_combine_report on a program built without cmb_rt");
     TT_FATAL(
@@ -742,7 +755,7 @@ void set_flat_combine_report(
     uint32_t widx = 0;
     for (const auto& [k, core] : handles.y_writers) {
         if (done.insert(k).second) {
-            auto& c = GetCommonRuntimeArgs(program, k);
+            auto& c = common_of(k);
             TT_FATAL(
                 c.size() == 4 + (cfg.y_l1 ? kFlatYL1Args : 0),
                 "flat_routed_expert: writer common args of {}",
@@ -756,9 +769,47 @@ void set_flat_combine_report(
             }
         }
         if (cfg.y_l1 && !report.l1_args.empty()) {
-            GetRuntimeArgs(program, k, core)[handles.y_widx_arg] = widx++;
+            rt_of(k, core)[handles.y_widx_arg] = widx++;
         }
     }
+}
+}  // namespace
+
+void set_flat_combine_report(
+    tt::tt_metal::Program& program,
+    const FlatProgramHandles& handles,
+    const FlatRoutedExpertConfig& cfg,
+    const FlatCombineReport& report) {
+    fill_combine_report(
+        handles,
+        cfg,
+        report,
+        [&](tt::tt_metal::KernelHandle k) -> tt::tt_metal::RuntimeArgsData& {
+            return tt::tt_metal::GetCommonRuntimeArgs(program, k);
+        },
+        [&](tt::tt_metal::KernelHandle k, const CoreCoord& c) -> tt::tt_metal::RuntimeArgsData& {
+            return tt::tt_metal::GetRuntimeArgs(program, k, c);
+        });
+}
+
+void set_flat_combine_report(
+    tt::tt_metal::ProgramDescriptor& program,
+    const FlatProgramHandles& handles,
+    const FlatRoutedExpertConfig& cfg,
+    const FlatCombineReport& report) {
+    fill_combine_report(
+        handles,
+        cfg,
+        report,
+        [&](tt::tt_metal::KernelHandle k) -> std::vector<uint32_t>& { return program.kernels[k].common_runtime_args; },
+        [&](tt::tt_metal::KernelHandle k, const CoreCoord& c) -> std::vector<uint32_t>& {
+            for (auto& [core, a] : program.kernels[k].runtime_args) {
+                if (core == c) {
+                    return a;
+                }
+            }
+            TT_THROW("flat_routed_expert: writer core {} has no args", c.str());
+        });
 }
 
 std::vector<tt::tt_metal::CoreCoord> flat_y_writers(const FlatRoutedExpertPlan& plan) {
@@ -784,14 +835,14 @@ FlatRoutedExpertProgramFactory::cached_mesh_workload_t FlatRoutedExpertProgramFa
     tt::tt_metal::distributed::MeshWorkload workload;
     std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared;
     for (const auto& range : tensor_coords.ranges()) {
-        for (const auto& coord : range) {
-            tt::tt_metal::Program program{};
-            auto handles = add_flat_routed_expert_program(
-                program, mesh_device, cfg, *flat_routed_expert_plan(mesh_device, cfg), t);
-            const ttnn::MeshCoordinateRange r(coord, coord);
-            workload.add_program(r, std::move(program));
-            shared.emplace(r, std::move(handles));
-        }
+        // (every chip's program is the same: one program for the range)
+        tt::tt_metal::ProgramDescriptor desc;
+        auto handles =
+            add_flat_routed_expert_program(desc, mesh_device, cfg, *flat_routed_expert_plan(mesh_device, cfg), t);
+        tt::tt_metal::Program program(desc);
+        finalize_flat_handles(program, handles, t);
+        workload.add_program(range, std::move(program));
+        shared.emplace(range, std::move(handles));
     }
     return cached_mesh_workload_t{std::move(workload), std::move(shared)};
 }

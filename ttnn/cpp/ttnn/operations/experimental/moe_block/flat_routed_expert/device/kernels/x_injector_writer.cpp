@@ -11,6 +11,7 @@
 // acknowledged. CT: 0 SB_CB, 1 MT, 2 TILE_BYTES, 3 X_SLOTS, 4 XARR_SEM, 5 KBLK, 6 NUM_E, 7 NSB RT: 0 x ring address, 1
 // snake head xy, 2 the head's freed word address (here), 3 helper 0 xy, 4 landing rings
 //     address, 5 landing slots, 6 helper 1 xy, 7.. the expert_schedule.hpp args
+#include "ttnn/cpp/ttnn/operations/experimental/moe_block/common/kernels/mb_loop.hpp"
 #include <stdint.h>
 constexpr uint32_t kXnh = 2;  // the helper relays feeding a primary
 #ifndef SE_SBT
@@ -19,7 +20,7 @@ constexpr uint32_t kXnh = 2;  // the helper relays feeding a primary
 #include "api/dataflow/dataflow_api.h"
 #include "expert_schedule.hpp"
 
-void kernel_main() {
+MB_LOOP_BODY {
     constexpr uint32_t mt = get_compile_time_arg_val(1);
     constexpr uint32_t tb = get_compile_time_arg_val(2);
     constexpr uint32_t x_slots = get_compile_time_arg_val(3);
@@ -113,3 +114,5 @@ void kernel_main() {
     // leave no NoC transaction in flight (reads, writes, atomics, posted writes): the next program starts clean
     noc_async_full_barrier();
 }
+
+#include "ttnn/cpp/ttnn/operations/experimental/moe_block/common/kernels/mb_loop_main.hpp"

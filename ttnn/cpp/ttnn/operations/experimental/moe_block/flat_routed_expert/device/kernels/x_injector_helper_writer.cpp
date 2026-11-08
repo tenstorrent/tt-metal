@@ -11,6 +11,7 @@
 // NUM_E, 7 NSB
 //     (SE_DYN)
 // RT: 0 primary xy, 1 landing ring address, 2 super-blocks, 3 round, 4 place, 5.. expert_schedule.hpp args (SE_DYN)
+#include "ttnn/cpp/ttnn/operations/experimental/moe_block/common/kernels/mb_loop.hpp"
 #include <stdint.h>
 #ifndef SE_SBT
 #define SE_SBT 32  // K tiles per super-block (the row-major chunk width / 32 columns)
@@ -18,7 +19,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "expert_schedule.hpp"
 
-void kernel_main() {
+MB_LOOP_BODY {
     constexpr uint32_t sb_cb = get_compile_time_arg_val(0);
     constexpr uint32_t mt = get_compile_time_arg_val(1);
     constexpr uint32_t tb = get_compile_time_arg_val(2);
@@ -67,3 +68,5 @@ void kernel_main() {
     // leave no NoC transaction in flight (reads, writes, atomics, posted writes): the next program starts clean
     noc_async_full_barrier();
 }
+
+#include "ttnn/cpp/ttnn/operations/experimental/moe_block/common/kernels/mb_loop_main.hpp"

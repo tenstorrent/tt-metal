@@ -119,6 +119,18 @@ void append_accessor(KernelDescriptor& k, const Buffer* b) {
 uint32_t u32(size_t v) { return static_cast<uint32_t>(v); }
 uint32_t xy(const CoreCoord& v) { return u32(v.x | v.y << 16); }
 
+std::vector<CoreCoord> cores_of_set(const CoreRangeSet& s) {
+    std::vector<CoreCoord> v;
+    for (const auto& r : s.ranges()) {
+        for (auto y = r.start_coord.y; y <= r.end_coord.y; ++y) {
+            for (auto x = r.start_coord.x; x <= r.end_coord.x; ++x) {
+                v.emplace_back(x, y);
+            }
+        }
+    }
+    return v;
+}
+
 CoreRangeSet cells(const std::vector<CoreCoord>& cores) {
     std::vector<CoreRange> ranges;
     for (const auto& c : cores) {
@@ -158,12 +170,16 @@ std::array<Buffer*, 9> sources_of(const FusedTailInputs& a, const Tensor& output
 
 // The cached workload of one chip's program descriptors, with each program's address patches.
 TailEngineFactory::cached_mesh_workload_t to_cached(
-    tt::tt_metal::WorkloadDescriptor descriptors, const FusedTailInputs& args, const Tensor& output) {
+    tt::tt_metal::WorkloadDescriptor descriptors,
+    const FusedTailInputs& args,
+    const Tensor& output,
+    std::shared_ptr<const void> chip_table = nullptr) {
     const auto sources = sources_of(args, output);
     tt::tt_metal::distributed::MeshWorkload workload;
     std::unordered_map<ttnn::MeshCoordinateRange, TailEngineFactory::shared_variables_t> shared;
     for (auto& [range, desc] : descriptors.programs) {
-        TailEngineFactory::shared_variables_t sv{.patches = take_address_patches(desc, sources)};
+        TailEngineFactory::shared_variables_t sv{
+            .patches = take_address_patches(desc, sources), .chip_table = chip_table};
         workload.add_program(range, tt::tt_metal::Program(desc));
         shared.emplace(range, std::move(sv));
     }
@@ -282,10 +298,11 @@ TailA2AFactory::cached_mesh_workload_t TailA2AFactory::create_mesh_workload(
     const ttnn::MeshCoordinateRangeSet& tensor_coords,
     const FusedTailInputs& tensor_args,
     Tensor& output) {
-    return to_cached(
+    auto [w, table] = merge_chip_workload(
         merge_loops(a2a_workload(attrs, tensor_args, output, tensor_coords), attrs, tensor_args, output),
-        tensor_args,
-        output);
+        *tensor_args.y_own.device(),
+        "fused_tail");
+    return to_cached(std::move(w), tensor_args, output, std::move(table));
 }
 
 void TailA2AFactory::override_runtime_arguments(
@@ -657,16 +674,17 @@ tt::tt_metal::WorkloadDescriptor fused_tail_factory_detail::a2a_workload(
     for (const auto& coord : coords_of(tensor_coords)) {
         const uint32_t r = coord[0], p = coord[1];
         const ChipCoord ch{r, p};
-        // (this chip's port cores: the port kernels and their CB go only there)
+        // (this chip's port cores; the port kernels and their CB go on every chip's - the union, the same program on
+        // every chip (one program for the mesh): a core that is no port of this chip runs them idle)
         std::vector<std::pair<TailSchedule::Port, CoreCoord>> my_ports;
-        std::vector<CoreCoord> port_list;
+        std::set<std::pair<size_t, size_t>> mine;
         for (const auto& [key, core] : plan.ports) {
             if (std::get<0>(key) == ch) {
                 my_ports.push_back({{p, std::get<1>(key), std::get<2>(key)}, core});
-                port_list.push_back(core);
+                mine.insert({core.x, core.y});
             }
         }
-        const CoreRangeSet pcrs = cells(port_list);
+        const CoreRangeSet& pcrs = plan.port_union;
 
         ProgramDescriptor desc;
         // (the z-ready words, a row tile's 16 B apart: this call's, zeroed by each carrying port - the first CB on the
@@ -723,13 +741,13 @@ tt::tt_metal::WorkloadDescriptor fused_tail_factory_detail::a2a_workload(
             for (uint32_t x : {g.RT, g.NTH, g.NTB, l, plan.num_links, static_cast<uint32_t>(ds.size())}) {
                 pr.push_back(x);
             }
+            if (skip) {  // (at a fixed place: the same args bind the same buffers on every chip)
+                live_args(pr, r, p);
+            }
             for (const auto& u : ds) {
                 pr.push_back(u.pos | u.part << 8);
             }
             pr.append(worker_xy);  // (the workers it releases once its z-ready words are zeroed)
-            if (skip) {
-                live_args(pr, r, p);
-            }
             preader.emplace_runtime_args(core, pr);
 
             const auto rs = sc.readies(port);
@@ -746,6 +764,9 @@ tt::tt_metal::WorkloadDescriptor fused_tail_factory_detail::a2a_workload(
             ps.push_back(sc.expect(port));
             ps.push_back(rdy);
             ps.push_back(static_cast<uint32_t>(dest_chips.size()));
+            if (skip) {
+                live_args(ps, r, p);
+            }
             ps.push_back(static_cast<uint32_t>(rs.size()));
             for (const auto& [xp, xd, xl] : rs) {
                 const auto n = node(r, xp);
@@ -764,9 +785,6 @@ tt::tt_metal::WorkloadDescriptor fused_tail_factory_detail::a2a_workload(
                 ps.push_back(g.RT * sc.runs(u.part, l));
                 ps.push_back(xy(virt(plan.ports.at({ChipCoord{r, u.pos}, opposite(d), l}))));
             }
-            if (skip) {
-                live_args(ps, r, p);
-            }
             if (!ds.empty() || !rs.empty()) {
                 const auto peer = row_neighbor(p, g.G, plan.ring, d);
                 TT_FATAL(
@@ -781,6 +799,37 @@ tt::tt_metal::WorkloadDescriptor fused_tail_factory_detail::a2a_workload(
                     *mesh, node(r, p), node(r, *peer), links.at(l), desc, core, fabric);
                 ps.append(fabric);
             }
+            psender.emplace_runtime_args(core, ps);
+        }
+        // (the union's cores that are no port of this chip: idle - no destination, no ready, nothing expected)
+        for (const auto& core : cores_of_set(pcrs)) {
+            if (mine.contains({core.x, core.y})) {
+                continue;
+            }
+            KernelDescriptor::RTArgList pr;
+            pr.push_back(z);
+            pr.push_back(g.NW);
+            for (uint32_t x : {g.RT, g.NTH, g.NTB, 0u, plan.num_links, 0u}) {
+                pr.push_back(x);
+            }
+            if (skip) {
+                live_args(pr, r, p);
+            }
+            preader.emplace_runtime_args(core, pr);
+            KernelDescriptor::RTArgList ps;
+            ps.push_back(out);
+            for (uint32_t x : {p, g.RT, g.NTB, 0u, plan.num_links}) {
+                ps.push_back(x);
+            }
+            ps.push_back(arr);
+            ps.push_back(0u);
+            ps.push_back(rdy);
+            ps.push_back(0u);
+            if (skip) {
+                live_args(ps, r, p);
+            }
+            ps.push_back(0u);  // (no ready)
+            ps.push_back(0u);  // (no destination)
             psender.emplace_runtime_args(core, ps);
         }
 
@@ -816,11 +865,11 @@ tt::tt_metal::WorkloadDescriptor fused_tail_factory_detail::a2a_workload(
             for (uint32_t x : {c0, g.RT, g.NTH, g.NTB, p}) {
                 wr.push_back(x);
             }
-            wr.push_back(static_cast<uint32_t>(pxy.size()));
-            wr.append(pxy);
             if (skip) {
                 live_args(wr, r, p);
             }
+            wr.push_back(static_cast<uint32_t>(pxy.size()));
+            wr.append(pxy);
             wwriter.emplace_runtime_args(core, wr);
         }
 

@@ -16,6 +16,7 @@
 // RT: 0 dispatch buffer address, 1 STRIDE, 2 OFF (this relay takes super-blocks OFF, OFF + STRIDE, ... in stream
 // order),
 //     then per expert: region row offset, token count
+#include "ttnn/cpp/ttnn/operations/experimental/moe_block/common/kernels/mb_loop.hpp"
 #include <stdint.h>
 #ifndef SE_SBT
 #define SE_SBT 32  // K tiles per super-block (the row-major chunk width / 32 columns)
@@ -24,7 +25,7 @@
 #include "flat_accessors.hpp"
 #include "expert_schedule.hpp"
 
-void kernel_main() {
+MB_LOOP_BODY {
     constexpr uint32_t rm_cb = get_compile_time_arg_val(0);
     constexpr uint32_t row_bytes = get_compile_time_arg_val(1);  // x page bytes
     constexpr uint32_t num_e = get_compile_time_arg_val(2);
@@ -119,3 +120,5 @@ void kernel_main() {
     // leave no NoC transaction in flight (reads, writes, atomics, posted writes): the next program starts clean
     noc_async_full_barrier();
 }
+
+#include "ttnn/cpp/ttnn/operations/experimental/moe_block/common/kernels/mb_loop_main.hpp"

@@ -8,7 +8,12 @@
 #pragma once
 // (dispatch prep's route words, one token at a time)
 namespace rw_ {
-constexpr uint32_t R = RW_R, C = RW_C, ME = RW_ME, K = RW_K, RW = RW_RW;
+constexpr uint32_t R = RW_R, C = RW_C, K = RW_K, RW = RW_RW;
+#ifdef RT_CHIP_RDY
+inline uint32_t ME = 0;  // (this chip's index: the router NCRISC's RDY page word 1 - router_compute.cpp sets it)
+#else
+constexpr uint32_t ME = RW_ME;
+#endif
 constexpr bool WRAP_X = RW_WRAPX, WRAP_Y = RW_WRAPY;
 constexpr uint8_t XRING[WRAP_X ? (1u << C) * 2 : 1] = {RW_XRING_INIT};
 constexpr uint8_t YRING[WRAP_Y ? (1u << R) * 2 : 1] = {RW_YRING_INIT};

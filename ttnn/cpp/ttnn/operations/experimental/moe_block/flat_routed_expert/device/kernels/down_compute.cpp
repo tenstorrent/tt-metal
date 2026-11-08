@@ -10,6 +10,7 @@
 // down_weight_reader.cpp) for its S sub-blocks and are popped after the last one.
 //
 // CT: 0 MT, 1 KT_D, 2 KBLK_D, 3 PCD, 4 NUM_EXPERTS, 5 S, 6 SLOT_TILES, 7 RING
+#include "ttnn/cpp/ttnn/operations/experimental/moe_block/common/kernels/mb_loop.hpp"
 #include "schedule_meta.hpp"
 #include <cstdint>
 #include "api/compute/matmul.h"
@@ -79,7 +80,7 @@ FORCE_INLINE uint32_t wblock(uint32_t a) {
     return static_cast<uint32_t>(static_cast<int32_t>(a % ring) - static_cast<int32_t>(popped % ring)) * slot;
 }
 
-void kernel_main() {
+MB_LOOP_BODY {
     compute_kernel_hw_startup<SrcOrder::Reverse>(h_all_cb, in1_cb, out_cb);
 #ifdef SE_PACK_SRND  // stochastic rounding in the packer (the default rounds bf16 -> bfp8 ties away from zero)
     UNPACK((_llk_unpack_configure_stoch_rnd_<StochRndType::Pack>()));
@@ -176,3 +177,5 @@ void kernel_main() {
     }
     cb_pop_front(tt::CBIndex::c_6, 1);
 }
+
+#include "ttnn/cpp/ttnn/operations/experimental/moe_block/common/kernels/mb_loop_main.hpp"

@@ -12,9 +12,12 @@
 
 namespace ra {
 
-constexpr uint32_t K = RAP_K, EPC = RAP_EPC, R = RAP_R, C = RAP_C, N = R * C, ME = RAP_ME;
-constexpr uint32_t A = RAP_A, L = RAP_L, P = RAP_P, TPP = RAP_TPP, M = RAP_M, NG = N * EPC, E0 = ME * EPC;
-constexpr uint32_t HBP = RAP_HBP, BB = RAP_BB, BBP = RAP_BBP, PCAP = RAP_PCAP, NPORT = RAP_NPORT;
+constexpr uint32_t K = RAP_K, EPC = RAP_EPC, R = RAP_R, C = RAP_C, N = R * C;
+constexpr uint32_t A = RAP_A, L = RAP_L, TPP = RAP_TPP, M = RAP_M, NG = N * EPC;
+constexpr uint32_t HBP = RAP_HBP, BB = RAP_BB, BBP = RAP_BBP, PCAP = RAP_PCAP;
+// (this chip's index, its first expert, its ports and the ports it serves: set by plan() - runtime values, one program
+// for the mesh (common/chip_program.hpp))
+inline uint32_t ME = 0, E0 = 0, P = 0, NPORT = 0;
 constexpr uint32_t ROWB = 4 * K, PB = TPP * ROWB, PSZ = (PB + 63) / 64 * 64;
 constexpr uint32_t NOWN = (A + M - 1) / M;  // accumulators a core owns at most
 constexpr uint32_t al16(uint32_t v) { return (v + 15) / 16 * 16; }
@@ -83,6 +86,10 @@ FORCE_INLINE uint32_t first_hop(uint32_t src, uint32_t dst) {  // DIRS index: 0 
 }
 
 FORCE_INLINE void plan(uint32_t a0, uint32_t B) {
+    ME = RAP_ME;
+    E0 = ME * EPC;
+    P = RAP_P;
+    NPORT = RAP_NPORT;
 #ifdef RAP_DUAL
     const bool idle = !mb_loop::is_last();  // (an earlier token loop's: no token)
     const Lay lay = idle ? Lay(RAPI_S, RAPI_ROWS_CAP, RAPI_ENT_CAP) : Lay(RAP_S, RAP_ROWS_CAP, RAP_ENT_CAP);

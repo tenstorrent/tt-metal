@@ -9,6 +9,7 @@
 // entry's weight load and ring region; a load's blocks are popped right after its last use.
 //
 // CT: 0 KBLK, 1 MT, 2 NK_GU, 3 SLOT_TILES, 4 NP, 5 RING_SLOTS (in1 ring capacity in blocks; 0: one load)
+#include "ttnn/cpp/ttnn/operations/experimental/moe_block/common/kernels/mb_loop.hpp"
 #include "schedule_meta.hpp"
 #include <cstdint>
 #include "api/compute/matmul.h"
@@ -254,7 +255,7 @@ FORCE_INLINE void gate_up_rp(uint32_t e, bool last, uint32_t ph0, uint32_t rows)
 }
 #endif
 
-void kernel_main() {
+MB_LOOP_BODY {
 #ifdef SE_HG_NU
     hg_lead = get_arg_val<uint32_t>(0);  // (RT 0: this core's first unit is odd)
 #endif
@@ -302,3 +303,5 @@ void kernel_main() {
     }
     cb_pop_front(tt::CBIndex::c_6, 1);
 }
+
+#include "ttnn/cpp/ttnn/operations/experimental/moe_block/common/kernels/mb_loop_main.hpp"

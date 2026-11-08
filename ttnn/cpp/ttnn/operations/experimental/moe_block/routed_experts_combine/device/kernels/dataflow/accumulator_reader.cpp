@@ -11,33 +11,38 @@
 // slot | tag << 24) and counted (RET / MRTOT, as the credits are with rings): the port forwards them in its snapshots.
 // Taken slots go back on the free list and to the sources with rows still to grant.
 
+#include "ttnn/cpp/ttnn/operations/experimental/moe_block/common/kernels/mb_loop.hpp"
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
 #include "combine_zero_gate.hpp"
 #include "combine_pool.hpp"
 #include "ttnn/cpp/ttnn/operations/experimental/moe_block/common/combine_plan_words.hpp"
 
-constexpr uint32_t cb_row = get_compile_time_arg_val(0);
-constexpr uint32_t cb_meta = get_compile_time_arg_val(1);
-constexpr uint32_t cb_tab = get_compile_time_arg_val(2);
-constexpr uint32_t row_bytes = get_compile_time_arg_val(3);
-constexpr uint32_t SLOT = get_compile_time_arg_val(4);
-constexpr uint32_t PSL = get_compile_time_arg_val(5);  // landing pool slots (one ring per source, carved per call)
-constexpr uint32_t A = get_compile_time_arg_val(6);
+#ifndef CMB_CT0  // (the first compile-time arg of this role: 0 alone, past the other role's in a pool cell's binary)
+#define CMB_CT0 0
+#endif
+constexpr uint32_t cb_row = get_compile_time_arg_val(CMB_CT0 + 0);
+constexpr uint32_t cb_meta = get_compile_time_arg_val(CMB_CT0 + 1);
+constexpr uint32_t cb_tab = get_compile_time_arg_val(CMB_CT0 + 2);
+constexpr uint32_t row_bytes = get_compile_time_arg_val(CMB_CT0 + 3);
+constexpr uint32_t SLOT = get_compile_time_arg_val(CMB_CT0 + 4);
+constexpr uint32_t PSL =
+    get_compile_time_arg_val(CMB_CT0 + 5);  // landing pool slots (one ring per source, carved per call)
+constexpr uint32_t A = get_compile_time_arg_val(CMB_CT0 + 6);
 constexpr uint32_t AP = (A + 3) / 4 * 4;
-constexpr uint32_t NT = get_compile_time_arg_val(7);
-constexpr uint32_t N = get_compile_time_arg_val(8);
-constexpr uint32_t L = get_compile_time_arg_val(9);
-constexpr uint32_t RET = get_compile_time_arg_val(10), MISC = get_compile_time_arg_val(11),
-                   RINGS = get_compile_time_arg_val(12), LAYO = get_compile_time_arg_val(13);
-constexpr uint32_t cb_w = get_compile_time_arg_val(14);
-constexpr uint32_t MTAKEN = get_compile_time_arg_val(15), MRTOT = get_compile_time_arg_val(16);
-constexpr uint32_t ALAND = get_compile_time_arg_val(17);    // (128, or 160 when ports share the core)
-constexpr uint32_t ALBASE = get_compile_time_arg_val(18);   // (101, or 103 when ports share the core)
-constexpr uint32_t LOC_OFF = get_compile_time_arg_val(19);  // the local ring (arena-relative)
-constexpr uint32_t WORDS_OFF = get_compile_time_arg_val(20);
-constexpr uint32_t BAR_SLOT = get_compile_time_arg_val(21);
-constexpr auto plan_args = TensorAccessorArgs<CMB_PLAN_CT>();  // (the device plan)
+constexpr uint32_t NT = get_compile_time_arg_val(CMB_CT0 + 7);
+constexpr uint32_t N = get_compile_time_arg_val(CMB_CT0 + 8);
+constexpr uint32_t L = get_compile_time_arg_val(CMB_CT0 + 9);
+constexpr uint32_t RET = get_compile_time_arg_val(CMB_CT0 + 10), MISC = get_compile_time_arg_val(CMB_CT0 + 11),
+                   RINGS = get_compile_time_arg_val(CMB_CT0 + 12), LAYO = get_compile_time_arg_val(CMB_CT0 + 13);
+constexpr uint32_t cb_w = get_compile_time_arg_val(CMB_CT0 + 14);
+constexpr uint32_t MTAKEN = get_compile_time_arg_val(CMB_CT0 + 15), MRTOT = get_compile_time_arg_val(CMB_CT0 + 16);
+constexpr uint32_t ALAND = get_compile_time_arg_val(CMB_CT0 + 17);    // (128, or 160 when ports share the core)
+constexpr uint32_t ALBASE = get_compile_time_arg_val(CMB_CT0 + 18);   // (101, or 103 when ports share the core)
+constexpr uint32_t LOC_OFF = get_compile_time_arg_val(CMB_CT0 + 19);  // the local ring (arena-relative)
+constexpr uint32_t WORDS_OFF = get_compile_time_arg_val(CMB_CT0 + 20);
+constexpr uint32_t BAR_SLOT = get_compile_time_arg_val(CMB_CT0 + 21);
+constexpr auto plan_args = TensorAccessorArgs<CMB_CT0 + CMB_PLAN_CT>();  // (the device plan)
 constexpr uint32_t LASTPB = row_bytes;  // the row's 32 B trailer (one fabric packet a row)
 #ifdef REC_SHARED
 constexpr uint32_t SHARED = 1, G = REC_G, GIDH = REC_GIDH;
@@ -56,7 +61,11 @@ constexpr uint32_t POOL = 1, PROWS = REC_POOL_ROWS;
 constexpr uint32_t POOL = 0, PROWS = 2;
 #endif
 
-void kernel_main() {
+#ifdef CMB_ROLE_FN  // (a role of a pool cell's binary - combine_cell_reader / _writer.cpp)
+void CMB_ROLE_FN() {
+#else
+MB_LOOP_BODY {
+#endif
     size_t a = 0;
     const uint32_t area = get_arg_val<uint32_t>(a++);  // the arena (same address on every core and chip)
     const uint32_t plan = get_arg_val<uint32_t>(a++);
@@ -510,3 +519,7 @@ void kernel_main() {
     misc[ALBASE] = lbase + n_local;
     noc_async_atomic_barrier();
 }
+
+#ifndef CMB_ROLE_FN
+#include "ttnn/cpp/ttnn/operations/experimental/moe_block/common/kernels/mb_loop_main.hpp"
+#endif

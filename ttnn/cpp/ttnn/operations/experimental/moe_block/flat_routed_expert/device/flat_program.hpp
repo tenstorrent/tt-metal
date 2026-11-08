@@ -78,14 +78,19 @@ struct FlatProgramHandles {
 // The y writers' L1 hand-off args after the 4 report args (y_row_major.hpp SE_Y_L1).
 constexpr uint32_t kFlatYL1Args = 8 + 5 * 32;
 
-// Adds the flat routed expert's kernels, circular buffers and semaphores to `program`, the program of one chip of
-// `mesh_device` (every chip gets the same fragment: buffers are at lockstep addresses). `tensors.output` is y.
+// Adds the flat routed expert's kernels, circular buffers and semaphores to `program`, the program descriptor of one
+// chip of `mesh_device` (every chip gets the same fragment: buffers are at lockstep addresses). `tensors.output` is
+// y. The handles' CBs are descriptor indices until finalize_flat_handles (on the Program built from it).
 FlatProgramHandles add_flat_routed_expert_program(
-    tt::tt_metal::Program& program,
+    tt::tt_metal::ProgramDescriptor& program,
     tt::tt_metal::distributed::MeshDevice& mesh_device,
     const FlatRoutedExpertConfig& config,
     const FlatRoutedExpertPlan& plan,
     const FlatRoutedExpertInputs& tensors);
+
+// The Program built from the descriptor: the handles' CBs as its CB ids, every address written.
+void finalize_flat_handles(
+    tt::tt_metal::Program& program, FlatProgramHandles& handles, const FlatRoutedExpertInputs& tensors);
 
 // Re-applies every buffer address of `tensors` (a program-cache hit; only addresses differ from the build).
 void override_flat_routed_expert_addresses(
@@ -105,6 +110,12 @@ struct FlatCombineReport {
 };
 void set_flat_combine_report(
     tt::tt_metal::Program& program,
+    const FlatProgramHandles& handles,
+    const FlatRoutedExpertConfig& config,
+    const FlatCombineReport& report);
+// (the same into a chip's descriptor, before its programs merge - one program for the mesh)
+void set_flat_combine_report(
+    tt::tt_metal::ProgramDescriptor& program,
     const FlatProgramHandles& handles,
     const FlatRoutedExpertConfig& config,
     const FlatCombineReport& report);

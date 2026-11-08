@@ -6,6 +6,7 @@
 // virtual expert) arrives as MT row-major chunks of 32 rows x 32 tiles (x_injector_reader.cpp) and leaves as MT x 32
 // bfp8 tiles, row tile major, for the relay's multicaster (x_injector_writer.cpp). CT: 0 RM_CB, 1 SB_CB, 2 MT; RT: 0
 // super-blocks in total
+#include "ttnn/cpp/ttnn/operations/experimental/moe_block/common/kernels/mb_loop.hpp"
 #include <cstdint>
 #ifndef SE_SBT
 #define SE_SBT 32  // K tiles per super-block (the row-major chunk width / 32 columns)
@@ -13,7 +14,7 @@
 #include "api/compute/tilize.h"
 #include "api/compute/compute_kernel_hw_startup.h"
 
-void kernel_main() {
+MB_LOOP_BODY {
     constexpr uint32_t rm_cb = get_compile_time_arg_val(0);
     constexpr uint32_t sb_cb = get_compile_time_arg_val(1);
     constexpr uint32_t mt = get_compile_time_arg_val(2);
@@ -42,3 +43,5 @@ void kernel_main() {
     }
     fast_tilize_uninit(rm_cb, sb_cb, SE_SBT);
 }
+
+#include "ttnn/cpp/ttnn/operations/experimental/moe_block/common/kernels/mb_loop_main.hpp"

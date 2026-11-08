@@ -20,6 +20,9 @@
 //    its packet header pool.
 // Chips are not barriered here: the ops' cross-chip fences are per launch, they run per loop as they ran per call.
 //
+// MB_CHIP (one program for the mesh, common/chip_program.hpp): kernel_main first writes this chip's arg values
+// (mb_chip.hpp), then runs the body (its loops).
+//
 // The loop table: common args from MB_LT (the kernel's own common args come first, unchanged):
 //   [0] W - the loop words (persistent, L1_SMALL, the same address on every core: done words a RISC 16 B apart at
 //       W + 16 rid, the go word at W + 80, the coordinator's count at W + 96)
@@ -43,6 +46,13 @@ namespace mb_loop {
 inline uint32_t g_loop = 0;
 inline __attribute__((always_inline)) uint32_t index() { return g_loop; }
 inline __attribute__((always_inline)) bool is_last() { return g_loop + 1 == MB_LOOPS; }
+}  // namespace mb_loop
+#elif defined(MB_CHIP) || defined(MB_CHIP_WAIT)  // (one program for the mesh: the chip's args first)
+#define MB_LOOP_BODY void mb_loop_body()
+void mb_loop_body();
+namespace mb_loop {
+constexpr uint32_t index() { return 0; }
+constexpr bool is_last() { return true; }
 }  // namespace mb_loop
 #else
 #define MB_LOOP_BODY void kernel_main()

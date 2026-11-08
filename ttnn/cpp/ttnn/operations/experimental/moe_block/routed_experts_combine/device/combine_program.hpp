@@ -86,6 +86,10 @@ struct CombinePlan {
     uint32_t A = 0, MAXT = 0, PSL = 0, D = 0, QP = 0, QL = 0;
     bool fused = false;    // acc_on_ports
     bool perchip = false;  // per-chip accumulator roles (ports apart): the senders' DRAM LUT
+    // (ports apart) every cell that is a port or an accumulator on some chip: each runs one binary a RISC with both
+    // roles and picks this chip's (combine_cell_reader / _writer.cpp) - the same program on every chip, one program for
+    // the mesh (common/chip_program.hpp)
+    std::vector<tt::tt_metal::CoreCoord> cells;
     bool shared = false;   // the shared landing pool (CombineLanding::Shared)
     // CombineLanding::FlatCores: accumulator o's ring slot i is pool slot o x PSL + i of the flat cells' free arena,
     // pool_args its description (kernels/dataflow/combine_pool.hpp; the same cells on every chip), pool_slots its slots
@@ -147,6 +151,12 @@ struct CombinePatch {
     uint32_t offset;
 };
 
+// A role block of a pool cell that is not this chip's role (combine_cell_reader.cpp): the port reader's arg 4 / the
+// sender's arg 3 is this (never run - the block holds its buffers at a real block's args).
+inline constexpr uint32_t kIdlePort = 0xFFFFFFFFu;
+// the port reader's table CB when the cell carries both roles (the accumulators' kCbTab sits elsewhere in the arena)
+inline constexpr uint8_t kCbTabP = 8;
+
 inline constexpr uint32_t kUnpatched = 0xFFFFFFFFu;
 
 inline std::array<uint32_t, static_cast<size_t>(CombineBuf::Count)> filled_unpatched() {
@@ -172,9 +182,10 @@ struct CombineHandles {
     std::vector<CombineArg> l1_args;
 };
 
-// The combine's kernels, CBs and runtime args on chip `chip` of `program` (the flat expert's go on its own cells).
+// The combine's kernels, CBs and runtime args on chip `chip` of `program`, a program descriptor (the flat expert's go
+// on its own cells). The handles' CBs are descriptor indices until finalize_combine_handles.
 CombineHandles add_combine_program(
-    tt::tt_metal::Program& program,
+    tt::tt_metal::ProgramDescriptor& program,
     const CombinePlan& plan,
     ChipCoord chip,
     tt::tt_metal::distributed::MeshDevice& mesh_device,
@@ -184,6 +195,8 @@ CombineHandles add_combine_program(
 // Re-applies the buffers' addresses (a program-cache hit): a source's args (and the arena's CBs) only when its address
 // moved.
 void override_combine_addresses(tt::tt_metal::Program& program, const CombineHandles& h, const CombineBuffers& buffers);
+// The Program built from the descriptor: the handles' CBs as its CB ids, every address written.
+void finalize_combine_handles(tt::tt_metal::Program& program, CombineHandles& h, const CombineBuffers& buffers);
 
 // The writers' l1_args with the buffers' current addresses.
 std::vector<uint32_t> resolve_l1_args(const CombineHandles& h, const CombineBuffers& buffers);

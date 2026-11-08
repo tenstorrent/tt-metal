@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "combine_program.hpp"
+#include "ttnn/operations/experimental/moe_block/common/desc_api.hpp"
 
 #include <algorithm>
 #include <limits>
@@ -76,7 +77,7 @@ struct Args {
 };
 
 void set_args(
-    tt::tt_metal::Program& program,
+    tt::tt_metal::ProgramDescriptor& program,
     tt::tt_metal::KernelHandle k,
     const CoreCoord& core,
     const Args& a,
@@ -90,18 +91,18 @@ void set_args(
             h.patches.push_back({k, core, i, *x.buf, x.value});
         }
     }
-    tt::tt_metal::SetRuntimeArgs(program, k, core, vals);
+    desc_api::SetRuntimeArgs(program, k, core, vals);
 }
 
 tt::tt_metal::KernelHandle dm_kernel(
-    tt::tt_metal::Program& program,
+    tt::tt_metal::ProgramDescriptor& program,
     const std::string& file,
     const CoreRangeSet& cores,
     std::vector<uint32_t> ct,
     bool riscv0,
     std::map<std::string, std::string> defines = {}) {
     // dedicated NoCs, fixed per RISC: RISCV_0 on NoC1, RISCV_1 on NoC0
-    return tt::tt_metal::CreateKernel(
+    return desc_api::CreateKernel(
         program,
         std::string(kKernelDir) + file,
         cores,
@@ -306,6 +307,21 @@ std::shared_ptr<const CombinePlan> make_combine_plan(
         for (auto& [ch, v] : plan->accs) {
             v.resize(A_);
         }
+        // (the role cells: every chip's ports and accumulators)
+        auto add_cell = [&](const CoreCoord& c) {
+            if (std::none_of(
+                    plan->cells.begin(), plan->cells.end(), [&](const CoreCoord& x) { return same_cell(x, c); })) {
+                plan->cells.push_back(c);
+            }
+        };
+        for (const auto& [key, c] : plan->port_core) {
+            add_cell(c);
+        }
+        for (const auto& [ch, v] : plan->accs) {
+            for (const auto& c : v) {
+                add_cell(c);
+            }
+        }
     }
     const uint32_t A = plan->accs.begin()->second.size();
     TT_FATAL(A <= kAccMax, "routed_experts_combine: {} accumulators > {}", A, kAccMax);
@@ -429,7 +445,7 @@ std::shared_ptr<const CombinePlan> make_combine_plan(
 }
 
 CombineHandles add_combine_program(
-    tt::tt_metal::Program& program,
+    tt::tt_metal::ProgramDescriptor& program,
     const CombinePlan& plan,
     ChipCoord ch,
     tt::tt_metal::distributed::MeshDevice& mesh_device,
@@ -469,7 +485,10 @@ CombineHandles add_combine_program(
         }
     }
     const auto& accs = plan.accs.at(ch);
-    const auto pset = cores_of(pcells), aset = cores_of(accs);
+    // ports apart: every role cell runs both roles' binaries (plan.cells; combine_cell_reader / _writer.cpp)
+    const bool dual = !plan.fused;
+    const auto pset = dual ? cores_of(plan.cells) : cores_of(pcells),
+               aset = dual ? cores_of(plan.cells) : cores_of(accs);
     auto is_acc = [&](const CoreCoord& c) {
         return std::any_of(accs.begin(), accs.end(), [&](const CoreCoord& x) { return same_cell(x, c); });
     };
@@ -491,17 +510,11 @@ CombineHandles add_combine_program(
             c.set_page_size(i, page);
             c.set_globally_allocated_address(arena);
             c.set_address_offset(off);
-            h.arena_cbs.emplace_back(tt::tt_metal::CreateCircularBuffer(program, cores, c), off);
+            h.arena_cbs.emplace_back(desc_api::CreateCircularBuffer(program, cores, c), off);
         };
     arena_cb(kCbInj, pset, plan.inj_off, plan.QP * ISLOT, tt::DataFormat::UInt32, ISLOT);
-    if (!plan.fused) {
-        std::vector<CoreCoord> only_ports;
-        for (const auto& c : pcells) {
-            if (!is_acc(c)) {
-                only_ports.push_back(c);
-            }
-        }
-        arena_cb(kCbTab, cores_of(only_ports), plan.tab_off_port, kTabCbBytes, tt::DataFormat::UInt32, kTabCbBytes);
+    if (dual) {  // (the port reader's table at its own index: the cell's accumulator table is kCbTab)
+        arena_cb(kCbTabP, pset, plan.tab_off_port, kTabCbBytes, tt::DataFormat::UInt32, kTabCbBytes);
     }
     arena_cb(kCbTab, aset, plan.tab_off_acc, plan.tab_acc, tt::DataFormat::UInt32, plan.tab_acc);
     arena_cb(kCbRow, aset, plan.row_off, plan.row_depth * NT * kTile, tt::DataFormat::Float16_b, kTile);
@@ -531,6 +544,37 @@ CombineHandles add_combine_program(
     // the RISC split: the sender (and the accumulator writer) on RISCV_0 / NoC1, the port reader on RISCV_1 / NoC0
     constexpr bool s_riscv0 = true, r_riscv0 = false;
     constexpr uint32_t s_slot = 0, r_slot = 1;  // (bar call-count slots per RISC)
+    // (dual: each role's kernel is recorded - its compile-time args, defines and each cell's args - and the cells' two
+    // binaries composed after the accumulators)
+    struct Pend {
+        std::vector<uint32_t> ct;
+        std::map<std::string, std::string> defs;
+        std::map<std::pair<size_t, size_t>, Args> args;
+    };
+    enum : uint32_t { R_PR = 0, R_PW = 1, R_AR = 2, R_AW = 3 };
+    constexpr tt::tt_metal::KernelHandle kPend = 0x10000;
+    std::array<Pend, 4> pend;
+    auto kern = [&](uint32_t role,
+                    const std::string& file,
+                    const CoreRangeSet& cores,
+                    std::vector<uint32_t> ct,
+                    bool riscv0,
+                    std::map<std::string, std::string> defs) -> tt::tt_metal::KernelHandle {
+        if (dual) {
+            pend[role].ct = std::move(ct);
+            pend[role].defs = std::move(defs);
+            return kPend + role;
+        }
+        return dm_kernel(program, file, cores, std::move(ct), riscv0, std::move(defs));
+    };
+    auto put = [&](tt::tt_metal::KernelHandle k, const CoreCoord& core, const Args& a) {
+        if (k >= kPend) {
+            pend[k - kPend].args[{core.x, core.y}] = a;
+        } else {
+            set_args(program, k, core, a, bufs, h);
+        }
+    };
+    std::map<std::pair<size_t, size_t>, uint32_t> acc_tok;  // (dual: the compute's tokens a cell)
 
     std::vector<uint32_t> o_ct;
     tt::tt_metal::TensorAccessorArgs(*bufs[CombineBuf::Out]).append_to(o_ct);
@@ -543,11 +587,10 @@ CombineHandles add_combine_program(
 
     // port readers (ports apart only: fused ports run the hand-off on the sender)
     if (!plan.fused) {
-        std::vector<uint32_t> ct = {kCbInj, kCbTab, st.MISC, words_off, r_slot};
+        std::vector<uint32_t> ct = {kCbInj, dual ? kCbTabP : kCbTab, st.MISC, words_off, r_slot};
         std::map<std::string, std::string> defs;
         accessor(ct, defs, "CMB_PLAN_CT", CombineBuf::Plan);
-        const auto k =
-            dm_kernel(program, "dataflow/combine_port_reader.cpp", pset, std::move(ct), r_riscv0, std::move(defs));
+        const auto k = kern(R_PR, "dataflow/combine_port_reader.cpp", pset, std::move(ct), r_riscv0, std::move(defs));
         for (uint32_t pid = 0; pid < n_pid; ++pid) {
             Args a;
             a.buf(CombineBuf::Arena);
@@ -555,7 +598,7 @@ CombineHandles add_combine_program(
             a.buf(CombineBuf::Bar);
             a.lits({W, pid, plan.QP});
             a.lits(wxy);
-            set_args(program, k, my[pid].core, a, bufs, h);
+            put(k, my[pid].core, a);
         }
     }
 
@@ -618,8 +661,7 @@ CombineHandles add_combine_program(
         if (plan.perchip) {
             accessor(ct, defs, "CMB_LUT_CT", CombineBuf::Lut);
         }
-        const auto k =
-            dm_kernel(program, "dataflow/combine_port_writer.cpp", pset, std::move(ct), s_riscv0, std::move(defs));
+        const auto k = kern(R_PW, "dataflow/combine_port_writer.cpp", pset, std::move(ct), s_riscv0, std::move(defs));
         std::vector<uint32_t> acc_xy;
         for (const auto& c : accs) {
             const auto v = virt(c);
@@ -692,7 +734,29 @@ CombineHandles add_combine_program(
                 a.lit(static_cast<uint32_t>(bt.size() / 3));
                 a.lits(bt);
             }
-            set_args(program, k, p.core, a, bufs, h);
+            put(k, p.core, a);
+        }
+        if (dual) {  // (the template of a cell's port block where the cell is no port of this chip: its buffers at a
+                     // sender's args)
+            Args a;
+            a.buf(CombineBuf::Arena);
+            a.lits({plan.mesh_id, idx(ch), kIdlePort});
+            a.buf(CombineBuf::Bar);
+            a.lits({0u, 0u});
+            a.buf(CombineBuf::Plan);
+            a.lit(0u);
+            a.lits(plan.chip_ids);
+            if (plan.perchip) {
+                a.buf(CombineBuf::Lut);
+            } else {
+                a.lits(std::vector<uint32_t>(acc_xy.size(), 0u));
+            }
+            if (plan.flat_pool) {
+                a.lits(std::vector<uint32_t>(plan.pool_args.size(), 0u));
+            }
+            a.lits(std::vector<uint32_t>(2 * N, 0u));
+            a.buf(CombineBuf::Hcache);
+            pend[R_PW].args[{SIZE_MAX, SIZE_MAX}] = a;
         }
     }
 
@@ -733,11 +797,12 @@ CombineHandles add_combine_program(
         }
         accessor(rd_ct, rd_defs, "CMB_PLAN_CT", CombineBuf::Plan);
         const auto rd =
-            dm_kernel(program, "dataflow/accumulator_reader.cpp", aset, std::move(rd_ct), r_riscv0, std::move(rd_defs));
+            kern(R_AR, "dataflow/accumulator_reader.cpp", aset, std::move(rd_ct), r_riscv0, std::move(rd_defs));
         // (the fp32 sums unpacked straight to DEST: the default narrows a Float32 CB to TF32 on its way)
         std::vector<tt::tt_metal::UnpackToDestMode> u2d(NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
         u2d[kCbAcc] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
-        const auto cp = tt::tt_metal::CreateKernel(
+        // (its args: the tokens, 1 - a role cell that is no accumulator of this chip gets 0, 0 and returns)
+        const auto cp = desc_api::CreateKernel(
             program,
             std::string(kKernelDir) + "compute/accumulator_compute.cpp",
             aset,
@@ -756,7 +821,7 @@ CombineHandles add_combine_program(
         aw_ct.insert(aw_ct.end(), o_ct.begin(), o_ct.end());
         std::optional<tt::tt_metal::KernelHandle> aw;
         if (!aw_cells.empty()) {
-            aw = dm_kernel(program, "dataflow/accumulator_writer.cpp", cores_of(aw_cells), std::move(aw_ct), s_riscv0);
+            aw = kern(R_AW, "dataflow/accumulator_writer.cpp", cores_of(aw_cells), std::move(aw_ct), s_riscv0, {});
         }
         for (uint32_t i = 0; i < A; ++i) {
             const auto& core = accs[i];
@@ -788,14 +853,95 @@ CombineHandles add_combine_program(
             }
             a.lits({plan.QL, W, n_pid + i});
             a.lits(wxy);
-            set_args(program, rd, core, a, bufs, h);
-            tt::tt_metal::SetRuntimeArgs(program, cp, core, {n_tok});
+            put(rd, core, a);
+            desc_api::SetRuntimeArgs(program, cp, core, {n_tok, 1u});
             if (!plan.fused || !is_port(core)) {
                 Args w;
                 w.buf(CombineBuf::Out);
                 w.lits({n_tok, i});
-                set_args(program, *aw, core, w, bufs, h);
+                put(*aw, core, w);
             }
+        }
+        if (dual) {  // (a role cell that is no accumulator of this chip: the compute returns)
+            for (const auto& c : plan.cells) {
+                if (!is_acc(c)) {
+                    desc_api::SetRuntimeArgs(program, cp, c, {0u, 0u});
+                }
+            }
+        }
+    }
+
+    // (dual) the role cells' binaries: the NCRISC's port reader + accumulator reader, the BRISC's sender + accumulator
+    // writer (combine_cell_reader / _writer.cpp). A cell's args: its role (0 none, 1 port, 2 accumulator), the
+    // accumulator block (padded to one length on every chip), the port block - a block not this chip's role holds a
+    // template with the buffers at a real block's args, so every chip's address args sit at the same args and the
+    // host's cache-hit rewrite keeps every chip's right (one program for the mesh)
+    if (dual) {
+        auto append = [](Args& to, const Args& b) { to.v.insert(to.v.end(), b.v.begin(), b.v.end()); };
+        auto pad = [](Args& a, size_t n) {
+            TT_FATAL(a.v.size() <= n, "routed_experts_combine: a role block of {} args over its {}", a.v.size(), n);
+            while (a.v.size() < n) {
+                a.lit(0u);
+            }
+        };
+        Args pr_t, ar_t, aw_t;
+        pr_t.buf(CombineBuf::Arena);
+        pr_t.buf(CombineBuf::Plan);
+        pr_t.buf(CombineBuf::Bar);
+        pr_t.lits({W, kIdlePort});
+        ar_t.buf(CombineBuf::Arena);
+        ar_t.buf(CombineBuf::Plan);
+        ar_t.lits({0u, 0u});
+        ar_t.buf(CombineBuf::Bar);
+        aw_t.buf(CombineBuf::Out);
+        const Args& pw_t = pend[R_PW].args.at({SIZE_MAX, SIZE_MAX});
+        // (the accumulator reader's block: its args but the gate's core list, plus room for that list on any cell)
+        const size_t amax =
+            7 + 2 * N + (plan.flat_pool ? plan.pool_args.size() : 0) + 3 + 3 + 2 * W + 2 * plan.cells.size();
+        constexpr size_t awmax = 3;
+        auto merged_defs = [](std::map<std::string, std::string> d,
+                              const std::vector<std::pair<std::string, std::string>>& rename) {
+            for (const auto& [from, to] : rename) {
+                if (const auto it = d.find(from); it != d.end()) {
+                    d[to] = it->second;
+                    d.erase(it);
+                }
+            }
+            return d;
+        };
+        // reader: the port reader's compile-time args, then the accumulator reader's
+        std::vector<uint32_t> r_ct = pend[R_PR].ct;
+        r_ct.insert(r_ct.end(), pend[R_AR].ct.begin(), pend[R_AR].ct.end());
+        auto r_defs = merged_defs(pend[R_AR].defs, {{"CMB_PLAN_CT", "CMB_AR_PLAN_CT"}});
+        r_defs["CMB_PR_PLAN_CT"] = pend[R_PR].defs.at("CMB_PLAN_CT");
+        r_defs["CMB_AR_CT0"] = std::to_string(pend[R_PR].ct.size());
+        r_defs["CMB_P0"] = std::to_string(1 + amax);
+        const auto rk = dm_kernel(program, "dataflow/combine_cell_reader.cpp", pset, std::move(r_ct), r_riscv0, r_defs);
+        // writer: the sender's, then the accumulator writer's
+        std::vector<uint32_t> w_ct = pend[R_PW].ct;
+        w_ct.insert(w_ct.end(), pend[R_AW].ct.begin(), pend[R_AW].ct.end());
+        auto w_defs = merged_defs(
+            pend[R_PW].defs,
+            {{"CMB_PLAN_CT", "CMB_PW_PLAN_CT"}, {"CMB_HC_CT", "CMB_PW_HC_CT"}, {"CMB_LUT_CT", "CMB_PW_LUT_CT"}});
+        w_defs["CMB_AW_CT0"] = std::to_string(pend[R_PW].ct.size());
+        w_defs["CMB_P0"] = std::to_string(1 + awmax);
+        const auto wk = dm_kernel(program, "dataflow/combine_cell_writer.cpp", pset, std::move(w_ct), s_riscv0, w_defs);
+        for (const auto& c : plan.cells) {
+            const std::pair<size_t, size_t> key{c.x, c.y};
+            const uint32_t role = is_port(c) ? 1u : is_acc(c) ? 2u : 0u;
+            Args r, w;
+            r.lit(role);
+            Args ab = role == 2 ? pend[R_AR].args.at(key) : ar_t;
+            pad(ab, amax);
+            append(r, ab);
+            append(r, role == 1 ? pend[R_PR].args.at(key) : pr_t);
+            w.lit(role);
+            Args wb = role == 2 ? pend[R_AW].args.at(key) : aw_t;
+            pad(wb, awmax);
+            append(w, wb);
+            append(w, role == 1 ? pend[R_PW].args.at(key) : pw_t);
+            set_args(program, rk, c, r, bufs, h);
+            set_args(program, wk, c, w, bufs, h);
         }
     }
 
@@ -830,6 +976,14 @@ CombineHandles add_combine_program(
         at(CombineBuf::Arena, st.MISC + (plan.fused ? 640u : 512u));
     }
     return h;
+}
+
+void finalize_combine_handles(tt::tt_metal::Program& program, CombineHandles& h, const CombineBuffers& bufs) {
+    const auto ids = desc_api::cb_ids(program);
+    for (auto& [cb, off] : h.arena_cbs) {
+        cb = ids.at(cb);
+    }
+    override_combine_addresses(program, h, bufs);
 }
 
 void override_combine_addresses(tt::tt_metal::Program& program, const CombineHandles& h, const CombineBuffers& bufs) {

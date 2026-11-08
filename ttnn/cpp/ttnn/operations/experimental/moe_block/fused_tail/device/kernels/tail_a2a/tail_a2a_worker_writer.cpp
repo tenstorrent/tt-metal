@@ -21,7 +21,12 @@ MB_LOOP_BODY {
     const uint32_t o_addr = get_arg_val<uint32_t>(a++), z_addr = get_arg_val<uint32_t>(a++),
                    c0 = get_arg_val<uint32_t>(a++);
     const uint32_t RT = get_arg_val<uint32_t>(a++), NTH = get_arg_val<uint32_t>(a++), NTB = get_arg_val<uint32_t>(a++);
-    const uint32_t me = get_arg_val<uint32_t>(a++), zr_addr = get_write_ptr(CB_ZR), np = get_arg_val<uint32_t>(a++);
+    const uint32_t me = get_arg_val<uint32_t>(a++), zr_addr = get_write_ptr(CB_ZR);
+#ifdef TL_SKIP
+    const uint32_t la = a;  // (the live args, at a fixed place)
+    a += 7;
+#endif
+    const uint32_t np = get_arg_val<uint32_t>(a++);
     const uint32_t p0 = a;
     const auto o = TensorAccessor(o_args, o_addr, 2048);
     const auto z = TensorAccessor(z_args, z_addr, 2048);
@@ -33,7 +38,6 @@ MB_LOOP_BODY {
         noc_async_atomic_barrier();
     }
 #ifdef TL_SKIP
-    const uint32_t la = p0 + np;  // (the live args: after the ports' list)
     const RtRows rr = tl_rows(la, get_write_ptr(CB_LIVE) + LIVE_BRISC);
     const uint32_t row0 = tl_row0(la);
     const uint64_t live = tl_mask(rr, row0, RT);

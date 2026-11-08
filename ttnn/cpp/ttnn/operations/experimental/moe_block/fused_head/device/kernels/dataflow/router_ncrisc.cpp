@@ -74,6 +74,13 @@ MB_LOOP_BODY {
                 *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(RDY)) = lv;
             }
 #endif
+#ifdef RT_ME
+            {  // (this chip's index and TP position for the compute: one program for the mesh)
+                volatile tt_l1_ptr uint32_t* w = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(RDY));
+                w[1] = RT_ME;
+                w[2] = RT_P;
+            }
+#endif
             cb_push_back(RDY, 1);
             // (and word 112 for the compute's PACK thread: the RDY wait holds only UNPACK, and PACK's hand-off pushes
             // (FINC) would hand HOLD to the ports before the engine's partials landed - stale HOLD: the last call's

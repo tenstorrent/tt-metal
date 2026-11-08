@@ -5,6 +5,7 @@
 #include "sparse_dispatch_2d_program_factory.hpp"
 
 #include <array>
+#include <set>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -116,6 +117,16 @@ tt::tt_metal::WorkloadDescriptor build_workload(const SparseDispatch2dParams& ar
     const auto virt = [&](const tt::tt_metal::CoreCoord& c) { return mesh->worker_core_from_logical_core(c); };
     const auto node = [&](ChipCoord ch) { return mesh->get_fabric_node_id(ttnn::MeshCoordinate(ch.r, ch.c)); };
 
+    // (every chip's port cores: the port kernels and their CBs go on the union, the same program on every chip (one
+    // program for the mesh) - a core that is no port of a chip runs them idle)
+    std::vector<CoreRange> all_ranges;
+    std::set<std::pair<size_t, size_t>> all_taken;
+    for (const auto& [key, core] : port_cores) {
+        if (all_taken.insert({core.x, core.y}).second) {
+            all_ranges.emplace_back(core, core);
+        }
+    }
+    const CoreRangeSet port_set(all_ranges);
     tt::tt_metal::WorkloadDescriptor workload;
     for (const auto& [chip, ports] : plan.chips) {
         struct Port {
@@ -124,7 +135,7 @@ tt::tt_metal::WorkloadDescriptor build_workload(const SparseDispatch2dParams& ar
             tt::tt_metal::CoreCoord core;
         };
         std::vector<Port> mine;
-        std::vector<CoreRange> ranges;
+        std::set<std::pair<size_t, size_t>> taken;
         for (Dir d : kDirs) {
             const auto& p = ports[static_cast<size_t>(d)];
             if (!p) {
@@ -133,11 +144,10 @@ tt::tt_metal::WorkloadDescriptor build_workload(const SparseDispatch2dParams& ar
             for (uint32_t li = 0; li < p->links.size(); ++li) {
                 const auto core = port_cores.at(PortKey{.chip = chip, .dir = d, .link_index = li});
                 mine.push_back(Port{d, li, core});
-                ranges.emplace_back(core, core);
+                taken.insert({core.x, core.y});
             }
         }
         TT_FATAL(!mine.empty(), "sparse_dispatch_2d: chip ({}, {}) has no port", chip.r, chip.c);
-        const CoreRangeSet port_set(ranges);
 
         tt::tt_metal::ProgramDescriptor desc;
         // (the manifest first: at the CB base, the same address on every port core of every chip - remote senders
@@ -225,6 +235,22 @@ tt::tt_metal::WorkloadDescriptor build_workload(const SparseDispatch2dParams& ar
             sd.append(tail);
             sender.emplace_runtime_args(core, sd);
         }
+        for (const auto& [key, core] : port_cores) {  // (another chip's port core only: idle - sa::IDLE_PORT)
+            if (!taken.insert({core.x, core.y}).second) {
+                continue;
+            }
+            KernelDescriptor::RTArgList rd;
+            rd.push_back(out_buf);
+            rd.push_back(plan_buf);
+            rd.push_back(sems_buf);
+            rd.append({0u, 0u, 0u, 0u, 0xFFFFFFFFu, 0u});
+            reader.emplace_runtime_args(core, rd);
+            KernelDescriptor::RTArgList sd;
+            sd.push_back(out_buf);
+            sd.push_back(sems_buf);
+            sd.append({0xFFFFFFFFu});
+            sender.emplace_runtime_args(core, sd);
+        }
         desc.kernels.push_back(std::move(reader));
         desc.kernels.push_back(std::move(sender));
         const ttnn::MeshCoordinate coord(chip.r, chip.c);
@@ -242,11 +268,11 @@ SparseDispatch2dProgramFactory::cached_mesh_workload_t SparseDispatch2dProgramFa
     Tensor& /*output*/) {
     using namespace sparse_dispatch_2d_detail;
     const auto sources = sources_of(t);
-    auto descriptors = build_workload(args, t);
+    auto [descriptors, table] = merge_chip_workload(build_workload(args, t), *t.xbuf.device(), "sparse_dispatch_2d");
     tt::tt_metal::distributed::MeshWorkload workload;
     std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared;
     for (auto& [range, desc] : descriptors.programs) {
-        shared_variables_t sv{.patches = take_address_patches(desc, sources)};
+        shared_variables_t sv{.patches = take_address_patches(desc, sources), .chip_table = table};
         workload.add_program(range, tt::tt_metal::Program(desc));
         shared.emplace(range, std::move(sv));
     }

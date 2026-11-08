@@ -14,11 +14,12 @@
 // free word on the predecessor,
 //     3 successor xy (0: chain tail), 4 relay xy, 5 the relay's word for this core (a chain head), 6.. the
 //     gate_up_weight_read.hpp args
+#include "ttnn/cpp/ttnn/operations/experimental/moe_block/common/kernels/mb_loop.hpp"
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "gate_up_weight_read.hpp"
 
-void kernel_main() {
+MB_LOOP_BODY {
     constexpr uint32_t x_slots = get_compile_time_arg_val(0), x_bytes = get_compile_time_arg_val(1);
     constexpr uint32_t xp = get_compile_time_arg_val(2), xarr_id = get_compile_time_arg_val(3);
     constexpr uint32_t sfree_id = get_compile_time_arg_val(4), xcons_id = get_compile_time_arg_val(5);
@@ -120,3 +121,5 @@ void kernel_main() {
     noc_async_atomic_barrier();
     noc_async_write_set_trid(0);
 }
+
+#include "ttnn/cpp/ttnn/operations/experimental/moe_block/common/kernels/mb_loop_main.hpp"

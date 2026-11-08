@@ -1209,6 +1209,11 @@ public:
     }
 
     ProgramDescriptor build(HeadPatches* patches);
+    // One program for the mesh (common/chip_program.hpp): this chip's own scalars (its index, its ports) as runtime
+    // values - a data-movement kernel's RA_ME_ / RAP_ME / RAP_P / RAP_NPORT / RT_ME read trailing common args (the
+    // values differ by chip, the defines do not); the router compute gets its index and TP position in the RDY page
+    // (RT_CHIP_RDY).
+    void chip_values();
 
 private:
     const HeadModel& h;
@@ -2669,12 +2674,12 @@ std::vector<KernelDescriptor> ChipProgram::router(std::vector<CBDescriptor>& cbs
         add(n, sv_);
         add(n, ra_args2(j));
         n_rt.emplace_back(core, n);
-        Args c = {1u, 2 | p << 8};  // (one op: the fin of my owner block)
+        Args c = {1u, 2u};  // (one op: the fin of my owner block - the compute's TP position, RT_CHIP_RDY)
         for (uint32_t bb = 0; bb < G; ++bb) {
-            add(c, bb == p ? G - 1 : 0u);
+            add(c, G - 1);  // (its sources: only my own block's entry is read)
         }
         add(c, tail);
-        add(c, Args{sv_, RA("route"), 32 * (j % RB)});
+        add(c, Args{RA("hold"), RA("route"), 32 * (j % RB)});  // (HOLD's base: my block p ET pages on)
         c_rt.emplace_back(core, c);
         const uint32_t jr = j % RB;
         Args b = {S(SRC_ROWS)};
@@ -2795,6 +2800,9 @@ std::vector<KernelDescriptor> ChipProgram::router(std::vector<CBDescriptor>& cbs
         define(ck, "RW_R", iv(h.R));
         define(ck, "RW_C", iv(h.C));
         define(ck, "RW_ME", iv(me));
+        define(nk, "RT_ME", iv(me));  // (the compute's chip index and TP position, through the RDY page: one program
+        define(nk, "RT_P", iv(p));    // for the mesh)
+        define(ck, "RT_SV_STRIDE", iv(int64_t(ET) * 4096));
         define(ck, "RW_K", iv(K));
         define(ck, "RW_RW", iv(route_words(h.N)));
         define(ck, "RW_E", iv(h.ET * 32 / h.cfg.shape.fold));
@@ -2924,6 +2932,7 @@ ProgramDescriptor ChipProgram::build(HeadPatches* patches) {
             desc.kernels.push_back(std::move((*v)[i]));
         }
     }
+    chip_values();
     if (patches) {
         std::stable_sort(
             patches->args.begin(), patches->args.end(), [](const auto& a, const auto& b) { return a.src < b.src; });
@@ -3032,6 +3041,25 @@ tt::tt_metal::WorkloadDescriptor build_head_workload(
         }
     }
     return workload;
+}
+
+void ChipProgram::chip_values() {
+    static const std::set<std::string> scalars = {"RA_ME_", "RAP_ME", "RAP_P", "RAP_NPORT", "RT_ME", "RT_P"};
+    for (auto& k : desc.kernels) {
+        const bool compute = std::holds_alternative<tt::tt_metal::ComputeConfigDescriptor>(k.config);
+        for (auto& [n, v] : k.defines) {
+            if (compute) {
+                if (n == "RW_ME") {
+                    n = "RT_CHIP_RDY";
+                    v = "1";
+                }
+            } else if (scalars.contains(n)) {
+                const uint32_t i = u32(k.common_runtime_args.size());
+                k.common_runtime_args.push_back(u32(std::stoll(v)));
+                v = "(get_common_arg_val<uint32_t>(" + iv(i) + "))";
+            }
+        }
+    }
 }
 
 void patch_head_program(

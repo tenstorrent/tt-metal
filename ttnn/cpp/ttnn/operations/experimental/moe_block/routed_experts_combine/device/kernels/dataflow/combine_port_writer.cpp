@@ -10,6 +10,7 @@
 // REC_ACC_LUT (per-chip roles: a home chip's accumulator cells from a DRAM table), REC_SHARED (the shared landing pool:
 // slot grants instead of rings - REC_G, REC_GIDH, REC_GREC).
 
+#include "ttnn/cpp/ttnn/operations/experimental/moe_block/common/kernels/mb_loop.hpp"
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
 #include "hostdev/fabric_edm_packet_header.hpp"
@@ -20,42 +21,48 @@
 #include "ttnn/cpp/ttnn/operations/experimental/moe_block/common/combine_plan_words.hpp"
 using namespace tt::tt_fabric;
 
-constexpr uint32_t cb_inj = get_compile_time_arg_val(0);
-constexpr uint32_t row_bytes = get_compile_time_arg_val(1);
-constexpr uint32_t SLOT = get_compile_time_arg_val(2);
-constexpr uint32_t PSL = get_compile_time_arg_val(3);  // landing pool slots at each accumulator (carved per call)
-constexpr uint32_t A = get_compile_time_arg_val(4);
+#ifndef CMB_CT0  // (the first compile-time arg of this role: 0 alone, past the other role's in a pool cell's binary)
+#define CMB_CT0 0
+#endif
+constexpr uint32_t cb_inj = get_compile_time_arg_val(CMB_CT0 + 0);
+constexpr uint32_t row_bytes = get_compile_time_arg_val(CMB_CT0 + 1);
+constexpr uint32_t SLOT = get_compile_time_arg_val(CMB_CT0 + 2);
+constexpr uint32_t PSL =
+    get_compile_time_arg_val(CMB_CT0 + 3);  // landing pool slots at each accumulator (carved per call)
+constexpr uint32_t A = get_compile_time_arg_val(CMB_CT0 + 4);
 constexpr uint32_t AP = (A + 3) / 4 * 4;  // credit words per home (16-byte aligned arrays: they travel as NoC writes)
-constexpr uint32_t N = get_compile_time_arg_val(5);
-constexpr uint32_t L = get_compile_time_arg_val(6);
-constexpr uint32_t ISLOT = get_compile_time_arg_val(7);
-constexpr uint32_t CRED = get_compile_time_arg_val(8), USED = get_compile_time_arg_val(9),
-                   RET = get_compile_time_arg_val(10), MISC = get_compile_time_arg_val(11),
-                   HDRS = get_compile_time_arg_val(12), RINGS = get_compile_time_arg_val(13),
-                   LAYR = get_compile_time_arg_val(14), LAYO = get_compile_time_arg_val(15),
-                   U0 = get_compile_time_arg_val(16);
-constexpr uint32_t CRED_THR = get_compile_time_arg_val(17);  // rows consumed from a source before its credits go back
-constexpr uint32_t CRED_IDLE = get_compile_time_arg_val(18),
-                   CRED_AGE = get_compile_time_arg_val(19);  // (idle: CRED_IDLE rows, or CRED_AGE cycles old)
+constexpr uint32_t N = get_compile_time_arg_val(CMB_CT0 + 5);
+constexpr uint32_t L = get_compile_time_arg_val(CMB_CT0 + 6);
+constexpr uint32_t ISLOT = get_compile_time_arg_val(CMB_CT0 + 7);
+constexpr uint32_t CRED = get_compile_time_arg_val(CMB_CT0 + 8), USED = get_compile_time_arg_val(CMB_CT0 + 9),
+                   RET = get_compile_time_arg_val(CMB_CT0 + 10), MISC = get_compile_time_arg_val(CMB_CT0 + 11),
+                   HDRS = get_compile_time_arg_val(CMB_CT0 + 12), RINGS = get_compile_time_arg_val(CMB_CT0 + 13),
+                   LAYR = get_compile_time_arg_val(CMB_CT0 + 14), LAYO = get_compile_time_arg_val(CMB_CT0 + 15),
+                   U0 = get_compile_time_arg_val(CMB_CT0 + 16);
+constexpr uint32_t CRED_THR =
+    get_compile_time_arg_val(CMB_CT0 + 17);  // rows consumed from a source before its credits go back
+constexpr uint32_t CRED_IDLE = get_compile_time_arg_val(CMB_CT0 + 18),
+                   CRED_AGE = get_compile_time_arg_val(CMB_CT0 + 19);  // (idle: CRED_IDLE rows, or CRED_AGE cycles old)
 constexpr uint32_t LASTPB = row_bytes;                       // the row's 32 B trailer (one fabric packet a row)
-constexpr uint32_t NH = get_compile_time_arg_val(20);  // rotating row headers: flush (and pop the sent pages) every NH
-constexpr uint32_t HSZ = get_compile_time_arg_val(21);
+constexpr uint32_t NH =
+    get_compile_time_arg_val(CMB_CT0 + 20);  // rotating row headers: flush (and pop the sent pages) every NH
+constexpr uint32_t HSZ = get_compile_time_arg_val(CMB_CT0 + 21);
 static_assert(sizeof(PACKET_HEADER_TYPE) <= HSZ, "header stride");
 constexpr uint32_t HW = sizeof(PACKET_HEADER_TYPE) / 4;
 // barrier: every port core counts one atomic increment from every other chip in a persistent word (bar[0], cumulative;
 // bar[1] its calls) and sends nothing remote before all N - 1 of this call are in; each chip's port facing a chip
 // increments that chip's ports. A chip's ports increment only after its zeroing (combine_zero_gate.hpp).
-constexpr uint32_t MRTOT = get_compile_time_arg_val(22), MRDONE = get_compile_time_arg_val(23);
-constexpr uint32_t BAR_SLOT = get_compile_time_arg_val(24);
-constexpr auto plan_args = TensorAccessorArgs<CMB_PLAN_CT>();  // (the device plan)
-constexpr auto hc_args = TensorAccessorArgs<CMB_HC_CT>();      // (the routed-header cache)
+constexpr uint32_t MRTOT = get_compile_time_arg_val(CMB_CT0 + 22), MRDONE = get_compile_time_arg_val(CMB_CT0 + 23);
+constexpr uint32_t BAR_SLOT = get_compile_time_arg_val(CMB_CT0 + 24);
+constexpr auto plan_args = TensorAccessorArgs<CMB_CT0 + CMB_PLAN_CT>();  // (the device plan)
+constexpr auto hc_args = TensorAccessorArgs<CMB_CT0 + CMB_HC_CT>();      // (the routed-header cache)
 #ifdef REC_ACC_LUT
-constexpr auto lut_args = TensorAccessorArgs<CMB_LUT_CT>();  // (the per-chip accumulator LUT)
+constexpr auto lut_args = TensorAccessorArgs<CMB_CT0 + CMB_LUT_CT>();  // (the per-chip accumulator LUT)
 #endif
-constexpr uint32_t ZERO = get_compile_time_arg_val(25);  // 1: this kernel zeroes the core's state [0, RINGS)
-constexpr uint32_t WORDS_OFF = get_compile_time_arg_val(26);
-constexpr uint32_t LUT_OFF = get_compile_time_arg_val(27);
-constexpr uint32_t LUT_BYTES = get_compile_time_arg_val(28);
+constexpr uint32_t ZERO = get_compile_time_arg_val(CMB_CT0 + 25);  // 1: this kernel zeroes the core's state [0, RINGS)
+constexpr uint32_t WORDS_OFF = get_compile_time_arg_val(CMB_CT0 + 26);
+constexpr uint32_t LUT_OFF = get_compile_time_arg_val(CMB_CT0 + 27);
+constexpr uint32_t LUT_BYTES = get_compile_time_arg_val(CMB_CT0 + 28);
 // shared landing: a home's accumulators grant slot ids (GIDH at this port, per (source, accumulator) G words, id |
 // tag << 24; RET counts them) and this port forwards each source a snapshot of its validated grant counts and ids
 // (GREC at the source's port, per home: AP counts then AP x G ids); a row goes into its grant's slot. Grants replace
@@ -76,12 +83,19 @@ constexpr uint32_t POOL = 1;
 constexpr uint32_t POOL = 0;
 #endif
 #ifdef REC_FUSED
-constexpr uint32_t cb_out = get_compile_time_arg_val(29);
-constexpr uint32_t NT_ = get_compile_time_arg_val(30);
-constexpr auto o_args = TensorAccessorArgs<31>();
+constexpr uint32_t cb_out = get_compile_time_arg_val(CMB_CT0 + 29);
+constexpr uint32_t NT_ = get_compile_time_arg_val(CMB_CT0 + 30);
+constexpr auto o_args = TensorAccessorArgs<CMB_CT0 + 31>();
 #endif
 
-void kernel_main() {
+#ifdef CMB_ROLE_FN  // (a role of a pool cell's binary - combine_cell_reader / _writer.cpp)
+void CMB_ROLE_FN() {
+#else
+MB_LOOP_BODY {
+#endif
+    if (get_arg_val<uint32_t>(3) == 0xFFFFFFFFu) {  // (an idle port core: another chip's port cell - kIdlePort)
+        return;
+    }
     size_t a = 0;
     const uint32_t area = get_arg_val<uint32_t>(a++);  // the arena (same address on every core and chip)
     const uint16_t mesh = static_cast<uint16_t>(get_arg_val<uint32_t>(a++));
@@ -531,3 +545,7 @@ void kernel_main() {
     conn.close();
     noc_async_atomic_barrier();
 }
+
+#ifndef CMB_ROLE_FN
+#include "ttnn/cpp/ttnn/operations/experimental/moe_block/common/kernels/mb_loop_main.hpp"
+#endif

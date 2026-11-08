@@ -18,6 +18,10 @@ MB_LOOP_BODY {
     const uint32_t zr_addr = get_write_ptr(CB_ZR), RT = get_arg_val<uint32_t>(a++);
     const uint32_t NTH = get_arg_val<uint32_t>(a++), NTB = get_arg_val<uint32_t>(a++);
     const uint32_t l = get_arg_val<uint32_t>(a++), L = get_arg_val<uint32_t>(a++), nd = get_arg_val<uint32_t>(a++);
+#ifdef TL_SKIP
+    const uint32_t la = a;  // (the live args, at a fixed place)
+    a += 7;
+#endif
     const uint32_t d0 = a, w0 = d0 + nd;  // (my destinations, then my workers' x | y << 16, NW of them)
     const auto z = TensorAccessor(z_args, z_addr, PB);
     volatile tt_l1_ptr uint32_t* zr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(zr_addr);
@@ -32,7 +36,7 @@ MB_LOOP_BODY {
         noc_semaphore_inc(get_noc_addr(xy & 0xFFFF, xy >> 16, get_semaphore(SZR)), 1);
     }
 #ifdef TL_SKIP
-    const uint64_t live = tl_live(w0 + NW, get_write_ptr(CB_LIVE), RT);  // (after the workers' list)
+    const uint64_t live = tl_live(la, get_write_ptr(CB_LIVE), RT);
 #else
     constexpr uint64_t live = 0;
 #endif

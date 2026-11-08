@@ -24,6 +24,7 @@
 //     core's index, 10.. the expert_schedule.hpp args. Common args: the N_GU gate/up core xy. "go" is released on the
 //     minimum of the done words (a summed count would let fast down cores stand in for a slow one); the coordinator
 //     zeroes them again at the end.
+#include "ttnn/cpp/ttnn/operations/experimental/moe_block/common/kernels/mb_loop.hpp"
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "flat_accessors.hpp"
@@ -36,7 +37,7 @@
 // The h exchange's unicast VC (gate/up -> down heads, the down chains): its own, off the default write VC (1)
 constexpr uint8_t h_vc = 0;
 
-void kernel_main() {
+MB_LOOP_BODY {
     constexpr uint32_t h_all_cb = get_compile_time_arg_val(0);
     constexpr uint32_t h_all_tiles = get_compile_time_arg_val(1);
     constexpr uint32_t h_tile_bytes = get_compile_time_arg_val(2);
@@ -212,3 +213,5 @@ void kernel_main() {
     // leave no NoC transaction in flight (reads, writes, atomics, posted writes): the next program starts clean
     noc_async_full_barrier();
 }
+
+#include "ttnn/cpp/ttnn/operations/experimental/moe_block/common/kernels/mb_loop_main.hpp"

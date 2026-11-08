@@ -38,6 +38,12 @@ MB_LOOP_BODY {
     const uint32_t NTB = get_arg_val<uint32_t>(a++), l = get_arg_val<uint32_t>(a++), L = get_arg_val<uint32_t>(a++);
     const uint32_t arr_addr = get_arg_val<uint32_t>(a++), expect_in = get_arg_val<uint32_t>(a++);
     const uint32_t ready_addr = get_arg_val<uint32_t>(a++), nready = get_arg_val<uint32_t>(a++);
+#ifdef TL_SKIP
+    const uint64_t live = tl_live(a, get_write_ptr(CB_LIVE) + LIVE_BRISC, RT);  // (at a fixed place)
+    a += 7;
+#else
+    constexpr uint64_t live = 0;
+#endif
     const uint32_t nrs = get_arg_val<uint32_t>(a++);  // (readies I send: x | y << 16, chip, mesh, hops)
     const uint32_t rs0 = a;
     a += 4 * nrs;
@@ -45,12 +51,6 @@ MB_LOOP_BODY {
         get_arg_val<uint32_t>(a++);  // (destinations: q | part << 8, chip, mesh, hops, runs, x | y << 16)
     const uint32_t d0 = a;
     a += 6 * nd;
-#ifdef TL_SKIP
-    const uint64_t live = tl_live(a, get_write_ptr(CB_LIVE) + LIVE_BRISC, RT);  // (before the fabric connection's)
-    a += 7;
-#else
-    constexpr uint64_t live = 0;
-#endif
     const auto out = TensorAccessor(out_args, out_addr, PB);
     if (nd > 0 || nrs > 0) {
         auto conn = WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(a);  // (appended last)

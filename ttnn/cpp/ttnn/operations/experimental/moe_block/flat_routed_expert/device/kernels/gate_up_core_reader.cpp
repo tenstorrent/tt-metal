@@ -18,6 +18,7 @@
 //     14 X_SLOTS, 15 NP, 16-17 GATH ids of h buffers 1, 2, 18 X_PIECES (XARR counts pieces), 19 NUM_E
 // RT: 0 the grant counter's sem id here, 1 column group CG, 2 NH (chain heads of the group), 3 the GATH sem id, 4
 //     h_all address, 5.. the expert_schedule.hpp args. Common args: the NH head xy
+#include "ttnn/cpp/ttnn/operations/experimental/moe_block/common/kernels/mb_loop.hpp"
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "expert_schedule.hpp"
@@ -27,7 +28,7 @@
 // The h exchange's unicast VC (gate/up -> down heads, the down chains): its own, off the default write VC (1)
 constexpr uint8_t h_vc = 0;
 
-void kernel_main() {
+MB_LOOP_BODY {
     constexpr uint32_t x_cb = get_compile_time_arg_val(0);
     constexpr uint32_t x_blk = get_compile_time_arg_val(1);
     constexpr uint32_t in1_cb = get_compile_time_arg_val(2);
@@ -203,3 +204,5 @@ void kernel_main() {
     // leave no NoC transaction in flight (reads, writes, atomics, posted writes): the next program starts clean
     noc_async_full_barrier();
 }
+
+#include "ttnn/cpp/ttnn/operations/experimental/moe_block/common/kernels/mb_loop_main.hpp"

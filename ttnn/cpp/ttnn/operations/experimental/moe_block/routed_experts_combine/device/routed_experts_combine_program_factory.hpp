@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include "ttnn/operations/experimental/moe_block/common/chip_program.hpp"
+
 #include <array>
 
 #include "combine_program.hpp"
@@ -22,6 +24,8 @@ struct RoutedExpertsCombineFactory {
         CombineHandles combine;
         flat_routed_expert::FlatProgramHandles flat;
         std::array<uint32_t, 3> report{};  // (the arena, table and bar addresses the y writers' report holds)
+        // one program for the mesh: the chips' arg patch blocks (common/chip_program.hpp), kept with the program
+        std::shared_ptr<const void> chip_table;
     };
     using cached_mesh_workload_t = ttnn::device_operation::AdaptedCachedMeshWorkload<shared_variables_t>;
 

@@ -14,6 +14,7 @@
 // (0: continue, 1 / 2: turn + / -) on (0 off, 1 on, 2 terminal: END(GMAX) only), x, y, ring k; then the neighbour's
 // coordinates nb_r, nb_c and dir; then the fabric connection's.
 
+#include "ttnn/cpp/ttnn/operations/experimental/moe_block/common/kernels/mb_loop.hpp"
 #include "sparse_dispatch_2d_common.hpp"
 #include "hostdev/fabric_edm_packet_header.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_worker_adapters.hpp"
@@ -212,8 +213,11 @@ void send(const SenderArgs& args, CONN& conn) {
 
 }  // namespace sa
 
-void kernel_main() {
+MB_LOOP_BODY {
     constexpr uint32_t cb_man = get_compile_time_arg_val(0);
+    if (get_arg_val<uint32_t>(2) == sa::IDLE_PORT) {  // (a port core of another chip only: one program for the mesh)
+        return;
+    }
     size_t a = 0;
     const sa::SenderArgs args = sa::sender_args(a, get_write_ptr(cb_man));
     auto conn = tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(a);
@@ -221,3 +225,5 @@ void kernel_main() {
     sa::send(args, conn);
     conn.close();
 }
+
+#include "ttnn/cpp/ttnn/operations/experimental/moe_block/common/kernels/mb_loop_main.hpp"
