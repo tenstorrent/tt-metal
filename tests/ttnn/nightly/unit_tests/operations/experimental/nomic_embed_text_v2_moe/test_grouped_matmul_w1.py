@@ -30,7 +30,23 @@ HIDDEN = 768
 INTERMEDIATE = 3072
 
 grouped_matmul = ttnn.experimental.nomic_embed_text_v2_moe.grouped_matmul_w1
-prepare_grouped_matmul_weight = ttnn.experimental.nomic_embed_text_v2_moe.prepare_grouped_matmul_w1_weight
+# The chunked weight's layout spreads the chunks over exactly this many DRAM banks.
+GROUPED_WEIGHT_BANKS = 8
+
+
+def skip_without_grouped_weight_banks(device):
+    dram = device.dram_grid_size()
+    banks = dram.x * dram.y
+    if banks != GROUPED_WEIGHT_BANKS:
+        pytest.skip(f"a chunked weight needs {GROUPED_WEIGHT_BANKS} DRAM banks, the device has {banks}")
+
+
+def prepare_grouped_matmul_weight(weight, num_experts, *, device, **kwargs):
+    skip_without_grouped_weight_banks(device)
+    return ttnn.experimental.nomic_embed_text_v2_moe.prepare_grouped_matmul_w1_weight(
+        weight, num_experts, device=device, **kwargs
+    )
+
 
 # The model's two calls: w1 with its GELU, accurate (param 0) and fast (param 1), into bf8_b; w2 read
 # transposed into bf16, in tiles and in rows for the combine.

@@ -29,12 +29,19 @@ from tests.ttnn.nightly.unit_tests.operations.experimental.nomic_embed_text_v2_m
     expert_counts,
     gathered_rows,
     make_weight,
+    skip_without_grouped_weight_banks,
 )
 
 pytestmark = [run_for_blackhole(), pytest.mark.use_module_device]
 
 module = ttnn.experimental.nomic_embed_text_v2_moe
 CHUNK_TILES = 48
+
+
+@pytest.fixture(autouse=True)
+def grouped_weight_banks(device):
+    """Every call reads a chunked weight."""
+    skip_without_grouped_weight_banks(device)
 
 
 def written_rows(counts: torch.Tensor, rows: int) -> int:
