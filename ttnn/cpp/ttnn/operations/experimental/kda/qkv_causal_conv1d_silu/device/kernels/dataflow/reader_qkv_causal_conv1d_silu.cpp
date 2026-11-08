@@ -36,6 +36,8 @@ template <
     uint32_t input_wt,
     uint32_t input_ct_offset,
     uint32_t exchange,
+    uint32_t token_paged,
+    uint32_t page_channels,
     uint32_t sp_rank,
     uint32_t sp_size,
     uint32_t local_rows>
@@ -75,15 +77,23 @@ TT_KERNEL void reader(uint32_t wi_start, uint32_t wi_count) {
     const uint32_t local_split_row = topology.local_split ? topology.head_rows : 0;
     const bool initial_from_predecessor = topology.rank != topology.first_rank;
 
-    // Read history_rows rows of this channel block's columns into the rows staging area.
-    const auto read_rows = [&](const auto& source, uint32_t first_row, uint32_t ct_start) {
+    // Read the predecessor's history_rows rows of this channel block's columns into the rows staging area, from the
+    // exchange buffer's full-row pages.
+    const auto read_exchange_rows = [&](uint32_t ct_start) {
         for (uint32_t row = 0; row < history_rows; ++row) {
             noc.async_read(
-                source,
+                predecessor,
                 scratch,
                 block_row_bytes,
-                {.page_id = first_row + row, .offset_bytes = ct_start * tile_row_bytes},
+                {.page_id = predecessor_page + row, .offset_bytes = ct_start * tile_row_bytes},
                 {.offset_bytes = offset_of(rows) + row * block_row_bytes});
+        }
+    };
+    // The same, from a convolution tail (`history`, or the bare predecessor carry).
+    const auto read_tail = [&](const auto& source, uint32_t ct_start) {
+        for (uint32_t row = 0; row < history_rows; ++row) {
+            read_tail_row<token_paged, page_channels>(
+                noc, source, scratch, row, ct_start, block_ct, offset_of(rows) + row * block_row_bytes);
         }
     };
 
@@ -148,11 +158,14 @@ TT_KERNEL void reader(uint32_t wi_start, uint32_t wi_count) {
                 predecessor_ready.wait_min(1);
                 predecessor_arrived = true;
             }
-            // Without the exchange, predecessor is the bare three-row carry, read at the same pages.
-            static_assert(predecessor_page == 0);
-            read_rows(predecessor, predecessor_page, ct_start);
+            if constexpr (exchange) {
+                read_exchange_rows(ct_start);
+            } else {
+                // Without the exchange, predecessor is a bare carry in the history's layout.
+                read_tail(predecessor, ct_start);
+            }
         } else if (segment_start) {
-            read_rows(history, 0, ct_start);
+            read_tail(history, ct_start);
         } else if (!from_previous_strip) {
             // The previous tile's bottom faces.
             for (uint32_t ct = 0; ct < block_ct; ++ct) {

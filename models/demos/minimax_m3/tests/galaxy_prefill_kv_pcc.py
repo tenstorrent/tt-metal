@@ -121,6 +121,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.common.ci_failure import record_deterministic_failure
 from models.demos.common.prefill.prefill_chunk import PrefillChunk
 from models.demos.minimax_m3.tt.ccl import L1_SMALL_SIZE
 from models.demos.minimax_m3.tt.moe import shared_overlap
@@ -575,10 +576,13 @@ def run_one(runtime, state: dict, mesh, spec: RunSpec, num_layers, hf_config) ->
             flush=True,
         )
         if not (low <= whole_tps <= high):
-            raise GateFailure(
+            msg = (
                 f"whole-sequence throughput {whole_tps:.1f} tok/s outside baseline "
                 f"{spec.expected_tps:.1f} tok/s +/- {spec.perf_margin * 100:.1f}% band [{low:.1f}, {high:.1f}]"
             )
+            # GateFailure is caught by the run loop (and also covers PCC), so record the perf verdict here.
+            record_deterministic_failure(msg)
+            raise GateFailure(msg)
 
     # --- accuracy: per-layer KV PCC vs golden (skipped in perf-only mode; synthetic
     # traces carry only metadata.json, so there is no golden KV cache to compare against) ---
