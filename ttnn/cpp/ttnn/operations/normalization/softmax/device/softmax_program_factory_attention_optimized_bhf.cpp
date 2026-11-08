@@ -31,7 +31,7 @@ using namespace tt::tt_metal::experimental;
 namespace {
 std::uint32_t g_bhf_wt = 0;
 const char* bhf_plan_value(const char* n) {
-    static const char* const t0[][2] = {{"BHF_SM_BH", "1"}, {"BHF_SM_SPLITFIT", "2"}, {"BHF_SM_DEEPD", "8"}, {"BHF_SM_CHAINBH", "1"}, {"BHF_SM_RANK23", "1"}, {"BHF_SM_CHAINNS", "2"}, {"BHF_SM_RBT", "8"}, {"BHF_SM_KDEF", "MAXSTREAM,COMBFAST,PRESTAGE,FLUSH"}, {"BHF_SM_KEEPEXP", "1"}, {"BHF_SM_CHAINANY32", "1"}, {"BHF_SM_CHAINMAX32", "16"}, {"BHF_SM_CHAINMIN32", "1"}, {"BHF_SM_CCHAIN32", "8"}, {"BHF_SM_STREAM", "1"}, {"BHF_SM_KDEF32", "DIRECT,DUALNOC"}, {"BHF_SM_L32", "129"}, {"BHF_SM_STREAM_L", "2"}, {"BHF_SM_BLOCKACC_L", "1"}, {"BHF_SM_CHAINLARGE32_L", "1"}, {"BHF_SM_CHAINMAX32_L", "24"}, {"BHF_SM_KDEF32_L", "DIRECT"}};
+    static const char* const t0[][2] = {{"BHF_SM_BH", "1"}, {"BHF_SM_SPLITFIT", "2"}, {"BHF_SM_DEEPD", "8"}, {"BHF_SM_CHAINBH", "1"}, {"BHF_SM_RANK23", "1"}, {"BHF_SM_CHAINNS", "2"}, {"BHF_SM_RBT", "8"}, {"BHF_SM_KDEF", "MAXSTREAM,COMBFAST,PRESTAGE,FLUSH"}, {"BHF_SM_KEEPEXP", "1"}, {"BHF_SM_R32", "1"}, {"BHF_SM_CHAINANY32_R", "1"}, {"BHF_SM_CHAINMAX32_R", "16"}, {"BHF_SM_CHAINMIN32_R", "1"}, {"BHF_SM_CCHAIN32_R", "8"}, {"BHF_SM_STREAM_R", "1"}, {"BHF_SM_KDEF32_R", "DIRECT,DUALNOC"}, {"BHF_SM_L32", "129"}, {"BHF_SM_CHAINANY32_L", "1"}, {"BHF_SM_CHAINMIN32_L", "1"}, {"BHF_SM_CCHAIN32_L", "8"}, {"BHF_SM_STREAM_L", "2"}, {"BHF_SM_BLOCKACC_L", "1"}, {"BHF_SM_CHAINLARGE32_L", "1"}, {"BHF_SM_CHAINMAX32_L", "24"}, {"BHF_SM_KDEF32_L", "DIRECT"}};
     if (g_bhf_wt <= 1073741824u) {
         for (const auto& e : t0) {
             if (std::strcmp(n, e[0]) == 0) {
@@ -42,10 +42,10 @@ const char* bhf_plan_value(const char* n) {
     }
     return nullptr;
 }
-thread_local bool bhf_lm = false;
+thread_local const char* bhf_lm = nullptr;
 const char* bhf_env(const char* n) {
-    if (bhf_lm) {
-        const std::string ln = std::string(n) + "_L";
+    if (bhf_lm != nullptr) {
+        const std::string ln = std::string(n) + bhf_lm;
         const char* lv = bhf_plan_value(ln.c_str());
         if (lv != nullptr && *lv != 0) {
             return lv;
@@ -53,10 +53,10 @@ const char* bhf_env(const char* n) {
     }
     return bhf_plan_value(n);
 }
-struct F5LGuard {
-    bool old;
-    explicit F5LGuard(bool on) : old(bhf_lm) { bhf_lm = on; }
-    ~F5LGuard() { bhf_lm = old; }
+struct BhfRowGuard {
+    const char* old;
+    explicit BhfRowGuard(const char* sfx) : old(bhf_lm) { bhf_lm = sfx; }
+    ~BhfRowGuard() { bhf_lm = old; }
 };
 std::uint32_t bhf_k(const char* n, std::uint32_t d) {
     const char* v = bhf_env(n);
@@ -139,8 +139,11 @@ SoftmaxInterleavedPlan SoftmaxDeviceOperation::SoftmaxProgramFactoryAttentionOpt
     const std::uint32_t Wt = W / input_tensor.tensor_spec().tile().get_width();
     g_bhf_wt = Wt;
     const std::uint32_t Ht = H / input_tensor.tensor_spec().tile().get_height();
-    const F5LGuard bhf_lg(!tensor_args.mask.has_value() && attributes.numeric_stable && input_tensor.dtype() == DataType::FLOAT32 &&
-                         NC * Ht == 1 && Wt <= 256 && bhf_k("BHF_SM_L32", 0) != 0 && Wt >= bhf_k("BHF_SM_L32", 0));
+    const bool bhf_one32 = !tensor_args.mask.has_value() && attributes.numeric_stable && input_tensor.dtype() == DataType::FLOAT32 && NC * Ht == 1;
+    const BhfRowGuard bhf_lg(
+        (bhf_one32 && Wt <= 256 && bhf_k("BHF_SM_L32", 0) != 0 && Wt >= bhf_k("BHF_SM_L32", 0)) ? "_L"
+        : (bhf_one32 && bhf_k("BHF_SM_R32", 0) != 0)                                         ? "_R"
+                                                                                         : nullptr);
     if ((arch != tt::ARCH::WORMHOLE_B0 && !(arch == tt::ARCH::BLACKHOLE && bhf_k("BHF_SM_BH", 0) != 0)) || tensor_args.mask.has_value() || Wt < bhf_row_parallel_min_tiles ||
         !plain_dram(input_tensor.memory_config().buffer_type(), input_tensor.dtype()) ||
         !plain_dram(out_spec.memory_config().buffer_type(), out_spec.data_type())) {
@@ -347,8 +350,11 @@ SoftmaxDeviceOperation::SoftmaxProgramFactoryAttentionOptimizedBHF::create_progr
     const std::uint32_t Wt = W / tile_width;
     g_bhf_wt = Wt;
     const std::uint32_t Ht = H / tile_height;
-    const F5LGuard bhf_lg(!tensor_args.mask.has_value() && attributes.numeric_stable && input_tensor.dtype() == DataType::FLOAT32 &&
-                         NC * Ht == 1 && Wt <= 256 && bhf_k("BHF_SM_L32", 0) != 0 && Wt >= bhf_k("BHF_SM_L32", 0));
+    const bool bhf_one32 = !tensor_args.mask.has_value() && attributes.numeric_stable && input_tensor.dtype() == DataType::FLOAT32 && NC * Ht == 1;
+    const BhfRowGuard bhf_lg(
+        (bhf_one32 && Wt <= 256 && bhf_k("BHF_SM_L32", 0) != 0 && Wt >= bhf_k("BHF_SM_L32", 0)) ? "_L"
+        : (bhf_one32 && bhf_k("BHF_SM_R32", 0) != 0)                                         ? "_R"
+                                                                                         : nullptr);
     const auto& shape_unpadded = input_tensor.logical_shape();
 
     const bool has_mask = tensor_args.mask.has_value();
