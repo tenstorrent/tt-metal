@@ -31,9 +31,27 @@ using namespace tt::tt_metal::experimental;
 namespace {
 std::uint32_t g_bhf_wt = 0;
 const char* bhf_plan_value(const char* n) {
-    static const char* const t0[][2] = {{"BHF_SM_BH", "1"}, {"BHF_SM_SPLITFIT", "2"}, {"BHF_SM_DEEPD", "8"}, {"BHF_SM_CHAINBH", "1"}, {"BHF_SM_RANK23", "1"}, {"BHF_SM_CHAINNS", "2"}, {"BHF_SM_RBT", "8"}, {"BHF_SM_KDEF", "MAXSTREAM,COMBFAST,PRESTAGE,FLUSH"}, {"BHF_SM_KEEPEXP", "1"}, {"BHF_SM_R32", "1"}, {"BHF_SM_CHAINANY32_R", "1"}, {"BHF_SM_CHAINMAX32_R", "24"}, {"BHF_SM_CHAINMIN32_R", "1"}, {"BHF_SM_STREAM_R", "1"}, {"BHF_SM_KDEF32_R", "DIRECT,DUALNOC,TREEK,COMBCOL,MCASTM,NOFLAGFL,MCASTRS,RDFIRST,NOSUMSC,MLINK,RLINK"}, {"BHF_SM_L32", "129"}, {"BHF_SM_CHAINANY32_L", "1"}, {"BHF_SM_CHAINMIN32_L", "1"}, {"BHF_SM_CCHAIN32_L", "8"}, {"BHF_SM_STREAM_L", "2"}, {"BHF_SM_BLOCKACC_L", "1"}, {"BHF_SM_CHAINLARGE32_L", "1"}, {"BHF_SM_CHAINMAX32_L", "24"}, {"BHF_SM_KDEF32_L", "DIRECT"}, {"BHF_SM_TREEG_R", "6"}};
-    if (g_bhf_wt <= 1073741824u) {
+    static const char* const t0[][2] = {{"BHF_SM_BH", "1"}, {"BHF_SM_SPLITFIT", "2"}, {"BHF_SM_DEEPD", "8"}, {"BHF_SM_CHAINBH", "1"}, {"BHF_SM_RANK23", "1"}, {"BHF_SM_CHAINNS", "2"}, {"BHF_SM_RBT", "8"}, {"BHF_SM_KDEF", "MAXSTREAM,COMBFAST,PRESTAGE,FLUSH"}, {"BHF_SM_KEEPEXP", "1"}, {"BHF_SM_L32", "129"}, {"BHF_SM_CHAINANY32_L", "1"}, {"BHF_SM_CHAINMIN32_L", "1"}, {"BHF_SM_CCHAIN32_L", "8"}, {"BHF_SM_STREAM_L", "2"}, {"BHF_SM_BLOCKACC_L", "1"}, {"BHF_SM_CHAINLARGE32_L", "1"}, {"BHF_SM_CHAINMAX32_L", "24"}, {"BHF_SM_KDEF32_L", "DIRECT"}};
+    static const char* const t1[][2] = {{"BHF_SM_BH", "1"}, {"BHF_SM_SPLITFIT", "2"}, {"BHF_SM_DEEPD", "8"}, {"BHF_SM_CHAINBH", "1"}, {"BHF_SM_RANK23", "1"}, {"BHF_SM_CHAINNS", "2"}, {"BHF_SM_RBT", "8"}, {"BHF_SM_KDEF", "MAXSTREAM,COMBFAST,PRESTAGE,FLUSH"}, {"BHF_SM_KEEPEXP", "1"}, {"BHF_SM_R32", "1"}, {"BHF_SM_CHAINANY32_R", "1"}, {"BHF_SM_CHAINMAX32_R", "24"}, {"BHF_SM_CHAINMIN32_R", "1"}, {"BHF_SM_STREAM_R", "1"}, {"BHF_SM_KDEF32_R", "DIRECT,DUALNOC,TREEK,COMBCOL,MCASTM,NOFLAGFL,MCASTRS,RDFIRST,NOSUMSC,MLINK,RLINK"}, {"BHF_SM_L32", "129"}, {"BHF_SM_CHAINANY32_L", "1"}, {"BHF_SM_CHAINMIN32_L", "1"}, {"BHF_SM_CCHAIN32_L", "8"}, {"BHF_SM_STREAM_L", "2"}, {"BHF_SM_BLOCKACC_L", "1"}, {"BHF_SM_CHAINLARGE32_L", "1"}, {"BHF_SM_CHAINMAX32_L", "24"}, {"BHF_SM_KDEF32_L", "DIRECT"}, {"BHF_SM_TREEG_R", "6"}};
+    static const char* const t2[][2] = {{"BHF_SM_BH", "1"}, {"BHF_SM_SPLITFIT", "2"}, {"BHF_SM_DEEPD", "8"}, {"BHF_SM_CHAINBH", "1"}, {"BHF_SM_RANK23", "1"}, {"BHF_SM_CHAINNS", "2"}, {"BHF_SM_RBT", "8"}, {"BHF_SM_KDEF", "MAXSTREAM,COMBFAST,PRESTAGE,FLUSH"}, {"BHF_SM_KEEPEXP", "1"}, {"BHF_SM_L32", "129"}, {"BHF_SM_CHAINANY32_L", "1"}, {"BHF_SM_CHAINMIN32_L", "1"}, {"BHF_SM_CCHAIN32_L", "8"}, {"BHF_SM_STREAM_L", "2"}, {"BHF_SM_BLOCKACC_L", "1"}, {"BHF_SM_CHAINLARGE32_L", "1"}, {"BHF_SM_CHAINMAX32_L", "24"}, {"BHF_SM_KDEF32_L", "DIRECT"}};
+    if (g_bhf_wt <= 31u) {
         for (const auto& e : t0) {
+            if (std::strcmp(n, e[0]) == 0) {
+                return e[1];
+            }
+        }
+        return nullptr;
+    }
+    if (g_bhf_wt <= 256u) {
+        for (const auto& e : t1) {
+            if (std::strcmp(n, e[0]) == 0) {
+                return e[1];
+            }
+        }
+        return nullptr;
+    }
+    if (g_bhf_wt <= 1073741824u) {
+        for (const auto& e : t2) {
             if (std::strcmp(n, e[0]) == 0) {
                 return e[1];
             }
