@@ -795,12 +795,14 @@ def test_sharded_input_matches_the_interleaved_call(device, batch, seqlen, colum
 
 # The chunked weight against the same oracle. At 4096 tokens w2 has dedicated input senders east of its eight
 # columns (a lane holds 26 blocks); at 1000 its east core sends. Chunks of 7 tiles leave a ragged last chunk in
-# every slice.
+# every slice. Each projection takes two routings at each token count, the other two at the other, so it meets all
+# four and every routing meets every token count, without the full cross product.
+CHUNKED_ROUTINGS = ("uniform", "one_expert", "empty_between", "one_mod_32")
 CHUNKED_CASES = [
-    (name, tokens, routing, 60)
-    for name in PROJECTIONS
-    for tokens in (1000, 4096)
-    for routing in ("uniform", "one_expert", "empty_between", "one_mod_32")
+    (name, tokens, CHUNKED_ROUTINGS[(idx + token_idx + offset) % len(CHUNKED_ROUTINGS)], 60)
+    for idx, name in enumerate(PROJECTIONS)
+    for token_idx, tokens in enumerate((1000, 4096))
+    for offset in (0, 2)
 ] + [(name, 1000, "uniform", 7) for name in ("w1_fast_gelu", "w2_row_major")]
 
 

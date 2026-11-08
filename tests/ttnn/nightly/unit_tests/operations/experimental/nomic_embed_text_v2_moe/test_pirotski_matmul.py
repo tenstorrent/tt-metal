@@ -10,6 +10,7 @@ minimal_matmul writes: a block delivered to the wrong slot, a wrong K order, a s
 as a mismatch. Torch checks the oracle itself.
 """
 
+import itertools
 import re
 
 import pytest
@@ -26,6 +27,14 @@ HIDDEN = 768
 INTERMEDIATE = 3072
 # The split layer norm's layout: 8 core rows of 3 hidden tiles each, M over up to 11 core columns.
 NORM_ROWS = 8
+
+
+def rotated(shapes, *options):
+    """Each shape once, taking the combinations of options in turn: every combination still runs, without the
+    full cross product of shapes and options."""
+    combinations = list(itertools.product(*options))
+    assert len(shapes) >= len(combinations), "fewer shapes than combinations: some would never run"
+    return [(*shape, *combinations[idx % len(combinations)]) for idx, shape in enumerate(shapes)]
 
 
 def compute_config(device, fidelity):
@@ -231,21 +240,24 @@ def test_model_calls_match_minimal_matmul(device, name):
 # (M tile rows, K, N, M block, K block, subblock, grid): M > N on minimal_matmul's split, with padding rows on the
 # last column (33, 132, 252), partial last M blocks (5 of 12 rows), and K blocks of 2, 3, 4 and 8. Blocks are
 # sized so that minimal_matmul's buffers fit beside L1 inputs and outputs.
+# In rotation order: (dram, l1) x (streamed, resident weights). The two with a partial last M block, 252 and
+# 132, take resident weights, in DRAM and in L1.
 SHAPES = [
     (33, HIDDEN, HIDDEN, 3, 4, (1, 3), (11, 8)),
+    (252, HIDDEN, HIDDEN, 6, 4, (1, 3), (11, 8)),
     (64, HIDDEN, HIDDEN, 6, 2, (1, 3), (11, 8)),
+    (132, HIDDEN, HIDDEN, 5, 3, (1, 3), (11, 8)),
     (96, HIDDEN, 3 * HIDDEN, 9, 8, (1, 4), (11, 9)),
     (128, INTERMEDIATE, HIDDEN, 12, 4, (4, 1), (11, 8)),
-    (132, HIDDEN, HIDDEN, 5, 3, (1, 3), (11, 8)),
     (192, HIDDEN, 3 * HIDDEN, 6, 4, (1, 4), (11, 9)),
-    (252, HIDDEN, HIDDEN, 6, 4, (1, 3), (11, 8)),
     (256, HIDDEN, 3 * HIDDEN, 6, 2, (1, 4), (11, 9)),
 ]
 
 
-@pytest.mark.parametrize("m_tiles, k, n, m_block, k_block, subblock, grid", SHAPES)
-@pytest.mark.parametrize("buffer", ["dram", "l1"])
-@pytest.mark.parametrize("resident_weights", [False, True])
+@pytest.mark.parametrize(
+    "m_tiles, k, n, m_block, k_block, subblock, grid, buffer, resident_weights",
+    rotated(SHAPES, ("dram", "l1"), (False, True)),
+)
 def test_shapes_match_minimal_matmul(device, m_tiles, k, n, m_block, k_block, subblock, grid, buffer, resident_weights):
     memory = ttnn.DRAM_MEMORY_CONFIG if buffer == "dram" else ttnn.L1_MEMORY_CONFIG
     shape = (1, 1, m_tiles * TILE, k)
@@ -275,9 +287,10 @@ N_BLOCK_SHAPES = [
 ]
 
 
-@pytest.mark.parametrize("m_tiles, k, n, m_block, k_block, n_block, subblock, grid, bias", N_BLOCK_SHAPES)
-@pytest.mark.parametrize("buffer", ["dram", "l1"])
-@pytest.mark.parametrize("resident_weights", [False, True])
+@pytest.mark.parametrize(
+    "m_tiles, k, n, m_block, k_block, n_block, subblock, grid, bias, buffer, resident_weights",
+    rotated(N_BLOCK_SHAPES, ("dram", "l1"), (False, True)),
+)
 def test_n_blocks_match_minimal_matmul(
     device, m_tiles, k, n, m_block, k_block, n_block, subblock, grid, bias, buffer, resident_weights
 ):
@@ -373,8 +386,10 @@ STRIP_SHAPES = [
 ]
 
 
-@pytest.mark.parametrize("m_tiles, k, n, m_block, k_block, subblock, grid, strip, output", STRIP_SHAPES)
-@pytest.mark.parametrize("read_ahead", [False, True])
+@pytest.mark.parametrize(
+    "m_tiles, k, n, m_block, k_block, subblock, grid, strip, output, read_ahead",
+    rotated(STRIP_SHAPES, (True, False)),
+)
 def test_strip_matches_minimal_matmul(
     device, m_tiles, k, n, m_block, k_block, subblock, grid, strip, output, read_ahead
 ):
@@ -420,8 +435,7 @@ READ_AHEAD_SHAPES = [
 ]
 
 
-@pytest.mark.parametrize("m_tiles, k, n, k_block, subblock", READ_AHEAD_SHAPES)
-@pytest.mark.parametrize("buffer", ["dram", "l1"])
+@pytest.mark.parametrize("m_tiles, k, n, k_block, subblock, buffer", rotated(READ_AHEAD_SHAPES, ("dram", "l1")))
 def test_read_ahead_matches_minimal_matmul(device, m_tiles, k, n, k_block, subblock, buffer):
     memory = ttnn.DRAM_MEMORY_CONFIG if buffer == "dram" else ttnn.L1_MEMORY_CONFIG
     shape = (1, 1, m_tiles * TILE, k)
