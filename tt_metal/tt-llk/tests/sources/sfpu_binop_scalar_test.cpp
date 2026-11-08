@@ -136,15 +136,24 @@ void run_kernel(RUNTIME_PARAMETERS)
         {
             if constexpr (unpack_to_dest)
             {
-                // The unpack_to_dest path signals the UNPACK_TO_DEST semaphore per tile;
-                // acknowledge both semaphores without the full MOVD2B/MOVB2D data movement.
-                for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
+                // unpack_to_dest's handshake depends on the input width (llk_math_eltwise_unary_datacopy_):
+                //   32-bit: unpack writes to the MATH->UNPACK dest-write-addr mailbox per tile; math acks.
+                //   non-32-bit: unpack uses the regular SrcA valid handshake, so math clears it.
+                if (is_32bit_input(formats.math, formats.math))
                 {
-                    for (std::uint32_t tile = 0; tile < TILE_CNT; ++tile)
+                    for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
                     {
-                        math_unpack_to_dest_math_ready();
-                        math::math_unpack_to_dest_tile_ready();
+                        for (std::uint32_t tile = 0; tile < TILE_CNT; ++tile)
+                        {
+                            math_unpack_to_dest_math_ready();
+                            math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::DestReg>(tile);
+                            math::math_unpack_to_dest_tile_ready();
+                        }
                     }
+                }
+                else
+                {
+                    _perf_math_stream_clear_valid</* clear A */ true, /* clear B */ true, PERF_RUN_TYPE>(LOOP_FACTOR * TILE_CNT * num_faces);
                 }
             }
             else
@@ -164,9 +173,16 @@ void run_kernel(RUNTIME_PARAMETERS)
                     {
                         if constexpr (unpack_to_dest)
                         {
-                            // Acknowledge both semaphores without data movement.
-                            math_unpack_to_dest_math_ready();
-                            math::math_unpack_to_dest_tile_ready();
+                            if (is_32bit_input(formats.math, formats.math))
+                            {
+                                math_unpack_to_dest_math_ready();
+                                math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::DestReg>(block_tile);
+                                math::math_unpack_to_dest_tile_ready();
+                            }
+                            else
+                            {
+                                _perf_math_loop_clear_valid</* clear A */ true, /* clear B */ true>(num_faces);
+                            }
                         }
                         else
                         {
