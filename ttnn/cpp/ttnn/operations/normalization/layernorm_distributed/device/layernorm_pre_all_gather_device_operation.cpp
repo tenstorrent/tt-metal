@@ -76,8 +76,8 @@ void LayerNormPreAllGatherDeviceOperation::validate_on_program_cache_miss(
     // Additional validation for 2D core grid - it doesn't support Welford or LAYERNORM
     if (args.use_2d_core_grid.has_value() && args.use_2d_core_grid.value()) {
         TT_FATAL(
-            args.norm_type != LayerNormDistributedType::LAYERNORM,
-            "LayerNorm does not support 2D core grid. Only RMSNorm is supported with 2D core grid.");
+            args.norm_type == LayerNormDistributedType::RMSNORM,
+            "2D core grid is only supported by rms_norm_pre_all_gather, got LayerNorm.");
         if (std::holds_alternative<LayerNormDefaultProgramConfig>(args.program_config)) {
             const auto& program_config = std::get<LayerNormDefaultProgramConfig>(args.program_config);
             if (program_config.use_welford) {
