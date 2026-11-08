@@ -106,7 +106,7 @@ jobs:
           cat "$out"/* 2>/dev/null
 
       - name: Checkout repository
-        uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@8146c9d2746a20109da97143663494805274ce8c # cachew checkout
+        uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@090ad9244007fd7a14fbf383414c538d146913cd # cachew checkout
         with:
           # build_metal.sh cannot configure without these.
           submodules: recursive

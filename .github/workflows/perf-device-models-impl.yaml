@@ -182,7 +182,7 @@ jobs:
         working-directory: /work # https://github.com/actions/runner/issues/878
     steps:
       - name: 🧬 Checkout Repository
-        uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@8146c9d2746a20109da97143663494805274ce8c # cachew checkout
+        uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@090ad9244007fd7a14fbf383414c538d146913cd # cachew checkout
         timeout-minutes: 20
         with:
           submodules: recursive
@@ -194,7 +194,7 @@ jobs:
           build-artifact-name: ${{ inputs.build-artifact-name }}
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
       - name: vit tests
-        uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@main
+        uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@090ad9244007fd7a14fbf383414c538d146913cd
         with:
           device_perf_model_name: "vit"
           commands: |
@@ -205,7 +205,7 @@ jobs:
       - name: panoptic_deeplab tests (110 cores)
         env:
           TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE: "10,9"
-        uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@main
+        uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@090ad9244007fd7a14fbf383414c538d146913cd
         with:
           device_perf_model_name: "panoptic_deeplab_110_cores"
           commands: |
@@ -213,7 +213,7 @@ jobs:
         if: ${{ !cancelled() && matrix.test-info.civ2-compatible && matrix.test-info.job-blackhole-set1 && fromJSON(needs.define-models.outputs.models-to-run)['panoptic-deeplab'] }}
 
       - name: ops perf tests
-        uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@main
+        uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@090ad9244007fd7a14fbf383414c538d146913cd
         with:
           device_perf_model_name: "ops-perf-tests"
           commands: |
@@ -249,7 +249,7 @@ jobs:
 
       - name: Upload benchmark data
         if: ${{ !cancelled() && steps.save-environment-data.conclusion == 'success' && steps.save-environment-data.outputs.has_benchmark_data == 'true' }}
-        uses: tenstorrent/tt-metal/.github/actions/upload-data-via-sftp@main
+        uses: tenstorrent/tt-metal/.github/actions/upload-data-via-sftp@090ad9244007fd7a14fbf383414c538d146913cd
         with:
           ssh-private-key: ${{ secrets.SFTP_BENCHMARK_WRITER_KEY }}
           sftp-batchfile: /work/.github/actions/upload-data-via-sftp/benchmark_data_batchfile.txt
@@ -276,11 +276,11 @@ jobs:
           name: ${{ env.ARTIFACT_NAME }}
           path: /work/${{ steps.generate-device-perf-report.outputs.device_perf_report_filename }}
 
-      - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
+      - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@090ad9244007fd7a14fbf383414c538d146913cd
         timeout-minutes: 10
         if: ${{ !cancelled() }}
         with:
           prefix: "test_reports_"
 
-      - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
+      - uses: tenstorrent/tt-metal/.github/actions/cleanup@090ad9244007fd7a14fbf383414c538d146913cd
         if: always()

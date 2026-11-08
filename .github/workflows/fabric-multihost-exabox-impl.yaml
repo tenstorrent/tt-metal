@@ -128,7 +128,7 @@ jobs:
       test-result: ${{ steps.run-test.outcome }}
     steps:
       - name: Checkout repository
-        uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@8146c9d2746a20109da97143663494805274ce8c # cachew checkout
+        uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@090ad9244007fd7a14fbf383414c538d146913cd # cachew checkout
         timeout-minutes: 20
 
       - name: Setup multihost job
@@ -171,7 +171,7 @@ jobs:
         run: |
           sudo rm -rf "$PIPELINE_DIR"
 
-      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
+      - uses: tenstorrent/tt-metal/.github/actions/slack-report@090ad9244007fd7a14fbf383414c538d146913cd
         if: ${{ failure() }}
         with:
           slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
