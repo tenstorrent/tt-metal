@@ -254,7 +254,9 @@ std::tuple<Tensor, Tensor, Tensor, Tensor> mhc_post_with_collapse(
     const std::optional<Tensor>& stats_scratch,
     const std::optional<Tensor>& hc_output,
     const std::optional<Tensor>& y_output,
-    std::optional<tt::tt_metal::CoreCoord> max_grid) {
+    std::optional<tt::tt_metal::CoreCoord> max_grid,
+    const std::optional<Tensor>& norm_weight,
+    double norm_eps) {
     // the stats_weight checks first (the same refusals), then the collapse's own
     const auto cfg = compute_kernel_config.value_or(default_compute_kernel_config());
     check_supported(input_tensor, residual, cfg);
@@ -305,6 +307,25 @@ std::tuple<Tensor, Tensor, Tensor, Tensor> mhc_post_with_collapse(
         mc.memory_layout() != TensorMemoryLayout::INTERLEAVED || mc.buffer_type() != BufferType::DRAM) {
         throw ValueErrorCpp("mhc_post: stats_weight must be float32 TILE, DRAM interleaved");
     }
+    if (norm_weight.has_value()) {  // P.35: (..., 1, C) fp32 TILE DRAM, leading dims 1
+        const auto nd = dims(*norm_weight);
+        int64_t vol = 1;
+        for (const auto d : nd) {
+            vol *= d;
+        }
+        const auto& nmc = norm_weight->memory_config();
+        if (nd.empty() || nd.back() != C || vol != C || norm_weight->dtype() != DataType::FLOAT32 ||
+            norm_weight->layout() != Layout::TILE || nmc.memory_layout() != TensorMemoryLayout::INTERLEAVED ||
+            nmc.buffer_type() != BufferType::DRAM) {
+            throw ValueErrorCpp(fmt::format(
+                "mhc_post: norm_weight must be (..., 1, C = {}) float32 TILE, DRAM interleaved, got {}",
+                C,
+                dims_str(nd)));
+        }
+        if (!(norm_eps >= 0.0)) {
+            throw ValueErrorCpp("mhc_post: norm_eps must be >= 0");
+        }
+    }
     MhcPostCollapseArgs ca{
         .collapse_pre = collapse_pre,
         .scale = {hc_scale[0], hc_scale[1], hc_scale[2]},
@@ -314,7 +335,9 @@ std::tuple<Tensor, Tensor, Tensor, Tensor> mhc_post_with_collapse(
         .hc_eps = hc_eps,
         .sinkhorn_iters = static_cast<uint32_t>(hc_sinkhorn_iters),
         .hc_output = hc_output,
-        .y_output = y_output};
+        .y_output = y_output,
+        .norm_weight = norm_weight,
+        .rms_eps = norm_eps};
     auto out = ttnn::prim::bringup::mhc_post_stats(
         input_tensor,
         residual,
@@ -355,7 +378,9 @@ std::variant<Tensor, std::tuple<Tensor, Tensor>, std::tuple<Tensor, Tensor, Tens
     double hc_eps,
     int64_t hc_sinkhorn_iters,
     const std::optional<Tensor>& hc_output,
-    const std::optional<Tensor>& y_output) {
+    const std::optional<Tensor>& y_output,
+    const std::optional<Tensor>& norm_weight,
+    double norm_eps) {
     if (collapse_pre.has_value()) {  // P.34
         if (!stats_weight.has_value() || !hc_scale.has_value() || !hc_base.has_value()) {
             throw ValueErrorCpp("mhc_post: collapse_pre needs stats_weight, hc_scale and hc_base");
@@ -382,10 +407,13 @@ std::variant<Tensor, std::tuple<Tensor, Tensor>, std::tuple<Tensor, Tensor, Tens
             stats_scratch,
             hc_output,
             y_output,
-            max_grid);
+            max_grid,
+            norm_weight,
+            norm_eps);
     }
-    if (hc_output.has_value() || y_output.has_value() || hc_scale.has_value() || hc_base.has_value()) {
-        throw ValueErrorCpp("mhc_post: hc_scale / hc_base / hc_output / y_output need collapse_pre");
+    if (hc_output.has_value() || y_output.has_value() || hc_scale.has_value() || hc_base.has_value() ||
+        norm_weight.has_value()) {
+        throw ValueErrorCpp("mhc_post: hc_scale / hc_base / hc_output / y_output / norm_weight need collapse_pre");
     }
     if (stats_weight.has_value()) {
         return mhc_post_with_stats(

@@ -82,7 +82,9 @@ std::tuple<Tensor, Tensor, Tensor, Tensor> mhc_post_with_collapse(
     const std::optional<Tensor>& stats_scratch = std::nullopt,
     const std::optional<Tensor>& hc_output = std::nullopt,
     const std::optional<Tensor>& y_output = std::nullopt,
-    std::optional<tt::tt_metal::CoreCoord> max_grid = std::nullopt);
+    std::optional<tt::tt_metal::CoreCoord> max_grid = std::nullopt,
+    const std::optional<Tensor>& norm_weight = std::nullopt,
+    double norm_eps = 1e-6);
 
 // The Python entry: X' without stats_weight (the op as it was), (X', stats) with it, (X', stats, hc, y) with
 // collapse_pre.
@@ -108,6 +110,8 @@ std::variant<Tensor, std::tuple<Tensor, Tensor>, std::tuple<Tensor, Tensor, Tens
     double hc_eps = 1e-6,
     int64_t hc_sinkhorn_iters = 20,
     const std::optional<Tensor>& hc_output = std::nullopt,
-    const std::optional<Tensor>& y_output = std::nullopt);
+    const std::optional<Tensor>& y_output = std::nullopt,
+    const std::optional<Tensor>& norm_weight = std::nullopt,
+    double norm_eps = 1e-6);
 
 }  // namespace ttnn::operations::bringup::mhc_post_ttnn

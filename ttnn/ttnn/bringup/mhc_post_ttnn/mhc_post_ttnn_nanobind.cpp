@@ -108,6 +108,13 @@ void bind_mhc_post_ttnn(nb::module_& mod) {
                 y = sum_i collapse_pre[:, i] X'_i (..., T, C) bfloat16 and, from the stats row, that step's
                 hc (..., T, n (n + 2)) float32 = ttnn.bringup.mhc_pre_xing(stats, X', deepseek=True,
                 collapse_pre=collapse_pre, ...) bit for bit. hc_output / y_output: the caller's buffers for them.
+            norm_weight (ttnn.Tensor, optional; default None = off; deepseek_v41_flash_d_p P.35): (..., 1, C)
+                float32 TILE DRAM, leading dims 1; needs collapse_pre. y (and y_output) is then the RMS norm of the
+                bf16 collapse instead: bf16(y * rsqrt(sum_c y^2 / C + norm_eps) * norm_weight), y the bf16 collapse,
+                the row statistic an exact fp32 SFPU sum on the bf16 values (the partial rows' column n (n + 2) + 1,
+                so that column of stats holds sum y^2), its rsqrt on each row's root core, (y * rsqrt) * w fp32 on
+                the SFPU, one bf16 rounding.
+            norm_eps (float, optional): the norm's epsilon (default 1e-6).
 
         Returns:
             ttnn.Tensor: X' (..., T, n*C), the residual's dtype, TILE, DRAM interleaved; with stats_weight the tuple
@@ -136,7 +143,9 @@ void bind_mhc_post_ttnn(nb::module_& mod) {
         nb::arg("hc_eps") = 1e-6,
         nb::arg("hc_sinkhorn_iters") = 20,
         nb::arg("hc_output") = nb::none(),
-        nb::arg("y_output") = nb::none());
+        nb::arg("y_output") = nb::none(),
+        nb::arg("norm_weight") = nb::none(),
+        nb::arg("norm_eps") = 1e-6);
 
     mod.def(
         "_mhc_post_ttnn_program_descriptor",

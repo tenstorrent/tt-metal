@@ -3587,3 +3587,52 @@ Each item has its own setting (tt/settings.py, default on, off = the path before
 - `orchestrator measure --task P.43` (change on; the harness never marks a chunk last, so the skip does not act):
   quick L39 0.7067 (limit 1.533, identical to P.42), host_transfers_per_layer 0, wall 186.9; p51200 chunk_wall_ms
   204.4 (spread 39.2), device_ms_total 189.02 (P.42's on run: 206.5 / 188.74).
+
+## P.35 perf (8x4, 2026-11-07): NORM_IN_MHC, attn_norm / ffn_norm inside the collapse pass
+- What: setting NORM_IN_MHC (on / off; on by default). Fork option `ttnn.bringup.mhc_post(..., collapse_pre=,
+  norm_weight=w, norm_eps=)`: the y that POST_COLLAPSE writes for the next hc step comes out normalized,
+  bf16((y * rsqrt(sum y^2 / C + eps)) * w), y = the bf16 collapse.
+  - tt/mhc.py: `TtHcMixes.norm` (set by the block) and `norm_kwargs()` add norm_weight / norm_eps in collapse_kwargs.
+    The weight is the norm's own replicated [1, 1, 1, H] fp32 tile.
+  - tt/model.py: the block sets `attn_hc.norm = attn_norm` and `ffn_hc.norm = ffn_norm` when both of these hold:
+    `model.norm_in_mhc` (POST_COLLAPSE's conditions + the setting), and a whole-row norm (not split) with a bf16
+    output.
+  - attn_hc / ffn_hc mark `ctx.extra["attn_normed"/"ffn_normed"]` when the y came from the residual's pass. The norm
+    step then hands its input on. Layer 0's attn_hc (mhc_pre_xing) keeps its rms_norm: 1 program a chunk.
+- Kernel design and the measured cost are in the fork CHANGELOG ("norm_weight"). In short:
+  - y^2 is summed exactly into a spare column (25) of the partial rows.
+  - The rstd is computed in the root's sum window.
+  - The root's reader sends the 32 values per row straight into the owners' L1. With a spare core per row, the roots
+    sit on cores with no units.
+  - The norm runs on the SFPU after the hc.
+- Traced, 8x4, [160, 5120] a chip: mhc_post 134.4 -> 139.4 us a call. The rms_norm it replaces is 18.7 us, so about
+  -13.7 us device a call: -1.1 ms device a chunk (80 calls) and 80 programs fewer. Each removed rms_norm also had
+  ~45-60 us of host a call (P.43 profile: attn_norm 2.4 + ffn_norm 4.7 ms host a chunk).
+- First design: +27 us a call. A device-zone timeline (zones added only while probing, then removed) traced the
+  cost to the BRISC word-copy transposes (DS41-222) and to the rstd waiting behind the root's Sinkhorn and
+  transposes.
+- Precision: not bit-identical to off. The rms_norm fork's statistic is FPU-grade (README Limits); this one is exact
+  fp32. Fork test: y_n is within one bf16 step of float64 everywhere, and 1.0-1.3e-5 of the elements are one step off.
+  X' and hc are bit-identical to POST_COLLAPSE without the norm.
+- Gotcha: a spare-core root (no units) kept hw_startup's bf16 formats; it gave NaN hc until the reconfig (DS41-223).
+  The hc rows after the norm phase need srcA / the packer back on fp32.
+- Not done: the bfp8 twin for q_a (+0.55 ms). The rms_norm fork's twin is a separate pack path; the y_n tile is in
+  DEST, so a precise bfp8 pack of the same DEST value could follow in a later pick. The collapse program's own
+  transposes (3 x 5.6-8.2 us on its critical path) are another candidate pick: about -1 ms device a chunk, and they
+  are left unchanged so off stays today's program.
+- Boxes: [1280, 5120] (2x2 own rows, 8 units a core, no spare cores: roots stay on unit cores) and [640, 1280] pass
+  in the fork test. The scratch shape is unchanged.
+- `orchestrator measure --task P.35` (switch on; final code): rc 0.
+  - quick: every one of the 205 err limits held; worst ratio 0.746 (err_state_window_kv_L25 0.147 / 0.197).
+    L00-L38 within ~1 % of P.43's, L39 0.911 (limit 1.533; P.43 0.707, the chaotic last layer).
+    host_transfers_per_layer 0. chunk_wall 186.7 ms.
+  - p51200: wall 203.2 ms. Sections: attn_norm 0.70 -> 0.017 ms (layer 0 only), ffn_norm 0.70 -> 0, attn_residual
+    5.31 -> 5.52 (P.43 profile at rung last; mhc_post is position-independent). 53280 programs (-2528: 79 launches a
+    chip).
+  - p512000: wall 247.0 ms (spread 52.6). The off side and the gate are the orchestrator's.
+- Re-run: `scripts/run_safe_pytest.sh --run-all ttnn/ttnn/bringup/mhc_post_ttnn/tests/unit/test_mhc_post_norm.py`;
+  `python -m models.demos.common.bringup.orchestrator measure --spec <spec> --task P.35`.
+- Attempt 2 (2026-11-07): no code change. Attempt 1 failed only on the command-log check: a python3 heredoc doing
+  host arithmetic counts as device code. The code is attempt 1's. pre-commit passed on every changed file and
+  rewrote nothing. `orchestrator measure --task P.35` reused quick / p51200 / p512000 (code 99663929581d1fa6,
+  measured 22:55-23:02 after the last kernel edit at 22:54): rc 0, with the numbers above.

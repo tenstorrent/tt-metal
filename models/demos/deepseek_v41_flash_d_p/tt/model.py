@@ -534,6 +534,12 @@ class TtDS41Block:
             self.ffn_norm = build_norm(mesh, ck, cfg, i, "ffn_norm", gather=False if fused_head else None)
         self.attn_res = build_residual(cfg)
         self.ffn_res = build_residual(cfg, step="ffn_residual")
+        # NORM_IN_MHC=on (P.35): the pass that writes an hc step's collapsed y (POST_COLLAPSE) writes its norm (whole
+        # bf16 rows only); the norm step then hands it on (ctx.extra["attn_normed"] / ["ffn_normed"])
+        for hc, norm in ((self.attn_hc, self.attn_norm), (self.ffn_hc, self.ffn_norm)):
+            hc.norm = None
+            if getattr(model, "norm_in_mhc", False) and not norm.split and norm.out_dtype == ttnn.bfloat16:
+                hc.norm = norm
         # attention input: one fused [wq_a | wkv] projection for q_a and kv
         proj = TtAttnInProj(mesh, attn_in_weights(ck, cfg, i), full_rows=self.sp32)
         q_scale = float(cfg.head_dim) ** -0.5  # (the attention's softmax scale, TtWindowAttention.scale)
@@ -645,6 +651,8 @@ class TtDS41Block:
             return self.collapse(x.streams, x.pre)
 
         def attn_norm(ctx, x):
+            if ctx.extra.pop("attn_normed", False):  # NORM_IN_MHC=on (P.35): attn_hc's pass wrote the norm
+                return x
             if self.sp32 and not self.own:  # ATTN_SP32=on (P.10): [S/SP, H/TP] -> the chip's rows, a local norm
                 xr = cols_to_rows(self.mesh, x)
                 y = self.attn_norm(xr)
@@ -715,6 +723,9 @@ class TtDS41Block:
             return self.collapse(h, mix)
 
         def ffn_norm(ctx, x):
+            if ctx.extra.pop("ffn_normed", False):  # NORM_IN_MHC=on (P.35): ffn_hc's pass wrote the norm
+                self._moe_xq_ready = False
+                return x
             if self.norm_into_moe:  # (P.21: into the block's buffers; pinned, the block frees nothing of them)
                 xb, xq = self.moe_block.input_buffers()
                 if xb is not None and tuple(xb.shape) == tuple(x.shape) and xb.dtype == ttnn.bfloat16:
@@ -773,11 +784,13 @@ class TtDS41Block:
             # with the pending pre (the previous ffn_hc's whole mixes), ffn_hc h_mid with attn_hc's mixes (DS41-3).
             def attn_hc(ctx, x):  # noqa: F811
                 row = x.take_stats(i)
+                normed = isinstance(row, tuple) and self.attn_hc.norm is not None  # NORM_IN_MHC=on (P.35)
                 if isinstance(row, tuple):  # POST_COLLAPSE=on (P.34): the previous residual's pass made them
                     hc, y = row
                 else:
                     hc, y = self.attn_hc.fused(x.streams, x.pre, row=row)
                 ctx.extra["attn_in"] = y
+                ctx.extra["attn_normed"] = normed
                 ctx.extra["attn_mix"] = hc  # ffn_hc's collapse pre (freed by the block after ffn_collapse)
                 return hc
 
@@ -792,11 +805,13 @@ class TtDS41Block:
 
             def ffn_hc(ctx, h):  # noqa: F811
                 row = ctx.extra.pop("ffn_row", None)
+                normed = isinstance(row, tuple) and self.ffn_hc.norm is not None  # NORM_IN_MHC=on (P.35)
                 if isinstance(row, tuple):  # POST_COLLAPSE=on (P.34): attn_residual's pass made them
                     hc, y = row
                 else:
                     hc, y = self.ffn_hc.fused(h, ctx.extra["attn_mix"], row=row)
                 ctx.extra["ffn_in"] = y
+                ctx.extra["ffn_normed"] = normed
                 return hc
 
             def ffn_collapse(ctx, h, mix):  # noqa: F811
@@ -966,6 +981,8 @@ class TtDS41Model:
             and settings.get("HC_SINKHORN") == "sfpu_fp32"
             and ccl.glue_fold()
         )
+        # NORM_IN_MHC=on (P.35): those passes also normalize the collapsed y (the norm's weight and eps; tt/mhc.py)
+        self.norm_in_mhc = self.post_collapse and settings.get("NORM_IN_MHC") == "on"
         ccl.configure()  # GLUE_FOLD=on (P.19): tt/ccl.py:dealloc through the binding
         for i in self.layers:
             missing = [j for j in cfg.sources(i) if j not in self.layers]

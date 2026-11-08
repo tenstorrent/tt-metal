@@ -46,6 +46,14 @@ struct MhcPostStatsParams {
     double hc_norm_eps = 1e-6;
     double hc_eps = 1e-6;
     uint32_t hc_sinkhorn_iters = 20;
+    // Fork option norm_weight (deepseek_v41_flash_d_p P.35, NORM_IN_MHC; false = off: every program, arg and hash as
+    // before; needs collapse): y_output holds rms_norm(y) * norm_weight instead of y, y = the bf16 collapse:
+    // bf16(bf16(y) * rsqrt(sum bf16(y)^2 / C + rms_eps) * w), the statistic an exact fp32 SFPU sum (a spare column of
+    // the partial rows, n (n + 2) + 1), rsqrt on each row's root, sent back to the row's units through the scratch.
+    // The scalars are runtime args (not hashed).
+    bool norm = false;
+    double rms_inv_w = 0.0;
+    double rms_eps = 1e-6;
 };
 
 // The collapse option's call arguments (P.34): the next step's pre, its coefficient scalars, the caller's buffers.
@@ -59,6 +67,9 @@ struct MhcPostCollapseArgs {
     uint32_t sinkhorn_iters = 20;
     std::optional<Tensor> hc_output;
     std::optional<Tensor> y_output;
+    // P.35 (norm): the norm's weight (..., 1, C) fp32 TILE (None = off) and epsilon
+    std::optional<Tensor> norm_weight;
+    double rms_eps = 1e-6;
 };
 
 struct MhcPostStatsInputs {
@@ -75,6 +86,8 @@ struct MhcPostStatsInputs {
     std::optional<Tensor> collapse_pre;
     std::optional<Tensor> hc_output;
     std::optional<Tensor> y_output;
+    // P.35 (norm): the norm's weight, (..., 1, C) fp32 TILE
+    std::optional<Tensor> norm_weight;
 };
 
 // The work plan (host): column blocks of `cols_per_block` tiles; a unit = one block of one token tile-row, units
