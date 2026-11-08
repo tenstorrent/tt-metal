@@ -201,6 +201,9 @@ static inline std::uint32_t alt_page_bytes(const std::uint32_t fmt)
     return fmt == static_cast<std::uint32_t>(DataFormat::Float32) ? 4096 : (fmt == static_cast<std::uint32_t>(DataFormat::Bfp8_b) ? 1088 : 2048);
 }
 
+// llk_pack_block writes the destination by bytes under full sync (llk_pack_rmw_gate)
+constexpr bool alt_rmw = dest_sync == DstSync::SyncFull;
+
 template <bool fp32>
 inline void alt_pack_tile(const std::uint32_t fmt, const std::uint32_t tile, const std::uint32_t addr)
 {
@@ -210,20 +213,24 @@ inline void alt_pack_tile(const std::uint32_t fmt, const std::uint32_t tile, con
     }
     else
     {
-        _llk_pack_<dest_sync, fp32, ckernel::PackMode::Default>(tile, addr);
+        _llk_pack_<dest_sync, fp32, ckernel::PackMode::Default, false, alt_rmw>(tile, addr);
     }
 }
 
-// The form llk_pack_block takes for the first block of an output (tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_pack_tile_api.h, mirrored in
-// hardware_free/kernels/test_pack_block_form.py).
+// The form llk_pack_block takes for the first block of an output after a packer reconfigure: the rows of llk_pack_reconf_form (tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_pack_tile_api.h,
+// mirrored in hardware_free/kernels/test_pack_block_form.py) for the three formats of the pairs. Columns: half sync 16 bit DEST, half 32 bit, full 16 bit, full 32 bit.
+constexpr char alt_reconf_form[3][4][9] = {
+    {"TBBBBBBB", "TBTTTTTT", "TBBBBBBB", "TTBBBBBB"}, // Bfp8_b
+    {"BBBBBBBB", "BBTTTTTT", "BBBBBBBB", "BBBBBBBB"}, // Float32
+    {"BBBBBBBB", "BBBBBBBB", "BBBBBBBB", "BBBBBBBB"}, // Float16_b
+};
+
 inline std::uint32_t alt_form(const std::uint32_t fmt, const std::uint32_t ntiles, const std::uint32_t head)
 {
-    const bool bfp  = fmt == static_cast<std::uint32_t>(DataFormat::Bfp8_b);
+    const bool bfp = fmt == static_cast<std::uint32_t>(DataFormat::Bfp8_b);
     const bool wide = fmt == static_cast<std::uint32_t>(DataFormat::Float32);
-    const bool b8   = fmt == static_cast<std::uint32_t>(DataFormat::Bfp8_b);
-    const bool b42  = fmt == static_cast<std::uint32_t>(DataFormat::Bfp4_b) || fmt == static_cast<std::uint32_t>(DataFormat::Bfp2_b);
-    const bool loses = dest_sync == DstSync::SyncFull && is_fp32_dest_acc_en && ((b8 && (ntiles == 5 || ntiles == 7)) || (b42 && ntiles == 5));
-    if (!head || ntiles < 4 || (wide && ntiles <= 8) || (bfp && ntiles == 4) || loses)
+    const std::uint32_t column = (dest_sync == DstSync::SyncFull ? 2 : 0) + (is_fp32_dest_acc_en ? 1 : 0);
+    if (!head || alt_reconf_form[bfp ? 0 : (wide ? 1 : 2)][column][(ntiles < 8 ? ntiles : 8) - 1] == 'T')
     {
         return 0; // per tile
     }
@@ -260,6 +267,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
             formats.pack_src, fmt_a, page_a, FACE_R_DIM, TILE_C_DIM, num_faces, false, false, RELU_CONFIG);
         _llk_pack_init_wrapper_<llk_test_pack_mode_v<false, tilize_en>, false>(fmt_a, FACE_R_DIM, TILE_C_DIM, num_faces);
         _llk_pack_dest_init_<dest_sync, is_fp32_dest_acc_en>();
+        if constexpr (alt_rmw)
+        {
+            _llk_pack_rmw_dest_init_<true>();
+        }
         PROFILER_SYNC();
     }
     // the form of each output is decided once, as a kernel with constant tile counts has it folded
@@ -308,11 +319,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     }
                     else if (form == 1)
                     {
-                        _llk_pack_block_<dest_sync, is_fp32_dest_acc_en>(DST_INDEX, addr0, NUM_TILES_IN_BLOCK);
+                        _llk_pack_block_<dest_sync, is_fp32_dest_acc_en, ckernel::PackMode::Default, alt_rmw>(DST_INDEX, addr0, NUM_TILES_IN_BLOCK);
                     }
                     else
                     {
-                        _llk_pack_block_closed_<dest_sync, is_fp32_dest_acc_en>(DST_INDEX, addr0, NUM_TILES_IN_BLOCK, page);
+                        _llk_pack_block_closed_<dest_sync, is_fp32_dest_acc_en, alt_rmw>(DST_INDEX, addr0, NUM_TILES_IN_BLOCK, page);
                     }
                     if constexpr (PERF_RUN_TYPE != PerfRunType::PACK_ISOLATE)
                     {

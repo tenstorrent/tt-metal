@@ -65,7 +65,7 @@ from helpers.unpack import unpack_res_tiles
 from helpers.utils import passed_test, result_tensor
 from ttexalens.tt_exalens_lib import read_from_device, write_to_device
 
-PACK_BLOCK_MIN_TILES = 4
+PACK_BLOCK_MIN_TILES = 2
 
 
 def golden_src_f32(src_A):
@@ -252,7 +252,7 @@ def test_pack(
             )
         num_blocks = tile_cnt_A // num_tiles_in_block
 
-    # llk_pack_block (LLK_PACK_BLOCK_MIN_TILES in llk_pack_tile_api.h) packs shorter blocks one tile at a time
+    # llk_pack_block (the form tables in llk_pack_tile_api.h) packs a one tile block one tile at a time
     # (negated in the report: its own key, the build is the per-tile one)
     pack_block_arg = (
         -int(pack_block)

@@ -317,7 +317,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const int RELU_CONFIG                  = params.RELU_CONFIG;
     const Operand& buffer_Res              = params.buffer_Res;
 #endif
-    // llk_pack_block takes the closed block without W here (llk_pack_tile_api.h), so the W base is not programmed
+    // a cell whose closed block runs without W (the output programmed on every call), so the W base is not programmed
     [[maybe_unused]] const bool closed_no_w_cell =
         is_fp32_dest_acc_en && dest_sync == DstSync::SyncHalf && NUM_TILES_IN_BLOCK == 4 && formats.pack_dst == static_cast<std::uint32_t>(DataFormat::Bfp8_b);
     {
