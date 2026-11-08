@@ -26,7 +26,7 @@
 #include "api/core_local_mem.h"
 #include "experimental/gguf_page.h"
 
-alignas(4) std::uint16_t table_copy[1024 / 2];  // level tables of up to 1 KiB, as in gguf_matmul_reader.cpp
+alignas(4) std::uint16_t table_copy[1024 / 2];  // local_level_table
 
 void kernel_main() {
     using namespace experimental::gguf;
@@ -73,13 +73,7 @@ void kernel_main() {
     uint32_t served = 0;
     [[maybe_unused]] const std::uint16_t* table = nullptr;
     if constexpr (split) {
-        table = level_table<FMT>();
-        if constexpr (table_entries<FMT>() * 2 <= 1024) {
-            for (uint32_t j = 0; j < table_entries<FMT>() / 2; j++) {
-                reinterpret_cast<uint32_t*>(table_copy)[j] = reinterpret_cast<const uint32_t*>(table)[j];
-            }
-            table = table_copy;
-        }
+        table = local_level_table<FMT>(table_copy);
     }
     auto serve = [&]() {
         if constexpr (split) {

@@ -37,11 +37,11 @@ void kernel_main() {
     constexpr uint32_t mchunks = get_compile_time_arg_val(3);
     constexpr uint32_t ur = get_compile_time_arg_val(4);  // input rows per unit (c_1 holds units of ur x kb tiles)
     constexpr gguf::PageLayout L = gguf::page_layout<static_cast<gguf::Format>(fmt)>();
-    constexpr bool group_step = fmt == gguf::Q4_K || fmt == gguf::Q5_K || fmt == gguf::Q3_K || fmt == gguf::Q2_K;
+    constexpr bool group_step = gguf::group_scales<fmt>;
     constexpr uint32_t block_groups = kb / L.group_tiles;
     // Decoded tile 0, its page in tile 1. MXFP4, NVFP4: decoded tile 1, page 2, the block-float codes in the 16-bit
     // rows that tile 1's rows address (in tile 0, dest_srca_mm_page_unpack_codes).
-    constexpr bool bfp = fmt == gguf::MXFP4 || fmt == gguf::NVFP4;
+    constexpr bool bfp = gguf::fp4_bfp<fmt>;
     constexpr uint32_t out = bfp ? 1 : 0;
     // Each page is copied before its decode starts, so no unpack to DEST runs beside one: the faster decoders.
     constexpr auto thr = GgufDecodeThread::Math;
@@ -90,7 +90,15 @@ void kernel_main() {
                         }
                         tile_regs_acquire();
                         if constexpr (bfp) {
-                            dest_srca_mm_page_to_dest_codes(cb_page, 0, out + 1, out, 1024, 15, L.scale_offset, 16);
+                            dest_srca_mm_page_to_dest_codes(
+                                cb_page,
+                                0,
+                                out + 1,
+                                out,
+                                gguf::FP4_CODES,
+                                gguf::FP4_CODE_EXP,
+                                L.scale_offset,
+                                gguf::FP4_SCALE_WORDS);
                         } else {
                             dest_srca_mm_page_to_dest(cb_page, 0, out + 1);
                         }

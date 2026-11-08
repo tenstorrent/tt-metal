@@ -29,6 +29,7 @@
 #include "api/compute/reconfig_data_format.h"
 #include "api/compute/reg_api.h"
 #include "api/compute/tile_move_copy.h"
+#include "gguf_matmul_compute_common.hpp"
 
 void kernel_main() {
     using namespace ckernel;
@@ -38,8 +39,7 @@ void kernel_main() {
     constexpr bool one_row = get_compile_time_arg_val(2) == 1;
     constexpr uint32_t window = get_compile_time_arg_val(3);
     constexpr uint32_t cb_w = tt::CBIndex::c_0, cb_in0 = tt::CBIndex::c_1, cb_scale = tt::CBIndex::c_3;
-    constexpr uint32_t cb_out = tt::CBIndex::c_16, cb_part = tt::CBIndex::c_17;
-    constexpr uint32_t cb_remote = tt::CBIndex::c_18, cb_own = tt::CBIndex::c_20;
+    constexpr uint32_t cb_out = gguf_matmul::cb_out, cb_own = gguf_matmul::cb_own;
     constexpr uint32_t record_pages = 33;               // c_0 pages of 64 B: eight 256-byte tiles, then the scales
     constexpr uint32_t in0_pages = one_row ? 64 : 1;   // c_1 pages per input tile
     constexpr uint32_t scale_dst = 2;
@@ -93,31 +93,10 @@ void kernel_main() {
         const uint32_t k1 = get_arg_val<uint32_t>(2 + 3 * s);
         const uint32_t role = get_arg_val<uint32_t>(3 + 3 * s);
         if (role == finish) {
-            // This core's partial into DEST tile 0, the k0 others' into 1 .. k0, added in fp32. Always the last
-            // segment.
-            const uint32_t parts = k0;
+            // k0 is the count of the other cores' partials. Always the last segment.
             srca_forced_exp_off();
             reconfig_data_format_srca(cb_w, cb_own);
-            copy_init(cb_own);
-            tile_regs_acquire();
-            cb_wait_front(cb_own, 1);
-            copy_tile(cb_own, 0, 0);
-            cb_wait_front(cb_remote, parts);
-            for (uint32_t p = 0; p < parts; p++) {
-                copy_tile(cb_remote, p, 1 + p);
-            }
-            add_binary_tile_init();
-            for (uint32_t p = 0; p < parts; p++) {
-                add_binary_tile(0, 1 + p, 0);
-            }
-            cb_pop_front(cb_own, 1);
-            cb_pop_front(cb_remote, parts);
-            tile_regs_commit();
-            cb_reserve_back(cb_out, 1);
-            tile_regs_wait();
-            pack_tile(0, cb_out);
-            tile_regs_release();
-            cb_push_back(cb_out, 1);
+            gguf_matmul::finish_segment(k0);
             continue;
         }
 
@@ -152,18 +131,6 @@ void kernel_main() {
             }
             apply_scales(part);
         }
-        tile_regs_commit();
-        const uint32_t cb = role == whole ? cb_out : cb_part;
-        cb_reserve_back(cb, 1);
-        tile_regs_wait();
-        if (role != whole) {
-            pack_reconfig_data_format(cb_part);
-        }
-        pack_tile(0, cb);
-        if (role != whole) {
-            pack_reconfig_data_format(cb_out);
-        }
-        tile_regs_release();
-        cb_push_back(cb, 1);
+        gguf_matmul::pack_segment(role == whole);
     }
 }

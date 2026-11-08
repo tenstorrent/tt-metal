@@ -14,24 +14,22 @@
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
+#include "ttnn/operations/matmul/device/gguf/gguf_matmul_program_common.hpp"
+
 namespace ttnn::prim {
 
 using namespace tt::tt_metal;
+using namespace gguf_program;
 
 namespace {
 
 constexpr uint32_t kMaxPartials = 7;    // a finishing core adds its fp32 partial and up to 7 others in DEST's 8 tiles
 constexpr uint32_t kInputChunk = 16;    // input tiles per multicast
-constexpr uint32_t kGroupsPerRead = 4;  // one-page groups: records per unit of reads
-constexpr uint32_t kPageUnits = 4;      // units of pages c_0 holds
-constexpr uint32_t kRecordSlots = 3;    // multi-page groups: records staged in L1, two of them in flight from DRAM
 constexpr uint32_t kMaxSegments = 64;   // keeps each kernel's runtime arguments within the limit
 constexpr uint32_t kScaleTiles = 3;     // TQ2_0: scale tiles in c_3
 constexpr uint32_t kTq2Unit = 2;        // TQ2_0: records per unit of reads (measured, decode)
 constexpr uint32_t kTq2Units = 8;       // TQ2_0: units c_0 holds
 constexpr uint32_t kTq2InFlight = 2;    // TQ2_0: units in flight
-
-constexpr auto kKernels = "ttnn/cpp/ttnn/operations/matmul/device/kernels/gguf/";
 
 // Compute order of a core's work on one N tile; must match gguf_matmul_compute.cpp and gguf_matmul_writer.cpp.
 enum Role : uint32_t {
@@ -109,22 +107,6 @@ CoreRangeSet core_ranges(const std::vector<CoreCoord>& cores) {
     return ranges;
 }
 
-void add_cb(
-    Program& program,
-    const CoreRangeSet& cores,
-    tt::CBIndex index,
-    tt::DataFormat format,
-    uint32_t page_bytes,
-    uint32_t pages,
-    std::optional<tt::tt_metal::Tile> tile = std::nullopt) {
-    CircularBufferConfig config =
-        CircularBufferConfig(page_bytes * pages, {{index, format}}).set_page_size(index, page_bytes);
-    if (tile) {
-        config.set_tile_dims(index, *tile);
-    }
-    CreateCircularBuffer(program, cores, config);
-}
-
 }  // namespace
 
 GgufMatmulProgramFactory::cached_program_t GgufMatmulProgramFactory::create(
@@ -134,7 +116,7 @@ GgufMatmulProgramFactory::cached_program_t GgufMatmulProgramFactory::create(
     auto* device = input.device();
     const GgufTraits& f = gguf_traits(weight.dtype());
     const uint32_t k_tiles = weight.logical_shape()[0] / 32, n_tiles = weight.logical_shape()[1] / 32;
-    const uint32_t groups = k_tiles / f.group_tiles, pages_per_group = f.group_tiles / f.page_tiles;
+    const uint32_t groups = k_tiles / f.group_tiles;
     const uint32_t rows = input.logical_shape().volume() / input.logical_shape()[-1];
     const uint32_t in0_rows = rows > 16 ? 32 : rows > 8 ? 16 : 8;
     // TQ2_0 and expanded TQ1_0 (TQ2_0's pages): block-float weight tiles, no decoding (gguf_matmul_tq2_*.cpp). With one
@@ -216,17 +198,12 @@ GgufMatmulProgramFactory::cached_program_t GgufMatmulProgramFactory::create(
     } else {
         add_cb(program, full, tt::CBIndex::c_1, tt::DataFormat::Float16_b, 2048, k_tiles);
     }
-    const uint32_t l1_page = f.l1_page_bytes();
-    const tt::tt_metal::Tile page_tile(
-        l1_page == 1024   ? std::array<uint32_t, 2>{16, 16}
-        : l1_page == 2048 ? std::array<uint32_t, 2>{16, 32}
-                          : std::array<uint32_t, 2>{32, 32});
-    const uint32_t unit = tq2 ? kTq2Unit : pages_per_group > 1 ? pages_per_group : kGroupsPerRead;
     // TQ2_0: whole records in 64-byte pages (the matmul indexes the weight tiles at 256-byte steps), and the scale
     // tiles, fp32: [16, 32] with one input row, else [32, 32].
     const uint32_t scale_tile_bytes = one_row ? 2048 : 4096;
     if (tq2) {
-        add_cb(program, compute, tt::CBIndex::c_0, tt::DataFormat::Bfp4_b, 64, kTq2Units * unit * f.page_bytes() / 64);
+        add_cb(
+            program, compute, tt::CBIndex::c_0, tt::DataFormat::Bfp4_b, 64, kTq2Units * kTq2Unit * f.page_bytes() / 64);
         add_cb(
             program,
             compute,
@@ -236,10 +213,7 @@ GgufMatmulProgramFactory::cached_program_t GgufMatmulProgramFactory::create(
             kScaleTiles,
             tt::tt_metal::Tile(one_row ? std::array<uint32_t, 2>{16, 32} : std::array<uint32_t, 2>{32, 32}));
     } else {
-        add_cb(program, compute, tt::CBIndex::c_0, tt::DataFormat::UInt32, l1_page, kPageUnits * unit, page_tile);
-    }
-    if (pages_per_group > 1 && !tq2) {
-        add_cb(program, compute, tt::CBIndex::c_2, tt::DataFormat::UInt32, kRecordSlots * f.page_bytes(), 1);
+        add_weight_reader_cbs(program, compute, f);
     }
     add_cb(program, compute, tt::CBIndex::c_16, tt::DataFormat::Float16_b, 2048, 2);
     add_cb(program, compute, tt::CBIndex::c_17, tt::DataFormat::Float32, 4096, 1);
@@ -269,52 +243,24 @@ GgufMatmulProgramFactory::cached_program_t GgufMatmulProgramFactory::create(
         {{uint32_t(v1.x), uint32_t(v1.y), uint32_t(v0.x), uint32_t(v0.y)},
          {uint32_t(v0.x), uint32_t(v0.y), uint32_t(v1.x), uint32_t(v1.y)}}};
 
-    // Codebook formats: each page's index words in equal parts, looked up by the reader, the writer, and the compute
-    // kernel's math and unpack threads; the pack thread takes the rest.
-    struct LookupSplit {
-        uint32_t parts, reader, writer, math, unpack;
-    };
-    // An expanded codebook layout holds the level codes: no lookups.
-    const bool expanded = is_gguf_expanded(weight.dtype()) && f.code_offset > 0;
-    const LookupSplit split = expanded            ? LookupSplit{4, 0, 0, 0, 0}
-                              : f.code_offset > 0 ? LookupSplit{4, 1, 1, 1, 1}
-                                                  : LookupSplit{2, 1, 1, 0, 0};
-    const std::map<std::string, std::string> lookup_defines = {
-        {"GGUF_EXPANDED", expanded ? "1" : "0"},
-        {"GGUF_LOOKUP_PARTS", std::to_string(split.parts)},
-        {"GGUF_READER_PARTS", std::to_string(split.reader)},
-        {"GGUF_WRITER_PARTS", std::to_string(split.writer)},
-        {"GGUF_MATH_PARTS", std::to_string(split.math)},
-        {"GGUF_UNPACK_PARTS", std::to_string(split.unpack)}};
-    if (f.code_offset > 0 && !expanded) {
+    const std::map<std::string, std::string> defines = lookup_defines(weight);
+    if (f.code_offset > 0 && !is_gguf_expanded(weight.dtype())) {
         // The page counts of the compute kernel's lookups (gguf_matmul_compute.cpp).
         add_cb(program, compute, tt::CBIndex::c_3, tt::DataFormat::UInt32, 64, 1, tt::tt_metal::Tile());
     }
 
-    // Reads in flight: two for Q4_0, Q4_1, MXFP4 and NVFP4, one for the others, which a second one slows down
-    // (measured, decode).
-    const bool two_in_flight = weight.dtype() == DataType::GGUF_Q4_0 || weight.dtype() == DataType::GGUF_Q4_1 ||
-                               weight.dtype() == DataType::GGUF_MXFP4 || weight.dtype() == DataType::GGUF_NVFP4;
     std::vector<uint32_t> reader_ct =
-        tq2 ? std::vector<uint32_t>{kTq2Units * unit, unit, kTq2InFlight, window, kScaleTiles, scale_tile_bytes}
-            : std::vector<uint32_t>{
-                  f.format_id,
-                  kPageUnits * unit,
-                  kGroupsPerRead,
-                  kRecordSlots,
-                  request_sem,
-                  answer_sem,
-                  address_sem,
-                  two_in_flight ? 2u : 1u};
-    TensorAccessorArgs(*weight.buffer()).append_to(reader_ct);
+        tq2 ? std::vector<uint32_t>{kTq2Units * kTq2Unit, kTq2Unit, kTq2InFlight, window, kScaleTiles, scale_tile_bytes}
+            : weight_reader_args(weight, request_sem, answer_sem, address_sem);
+    if (tq2) {
+        TensorAccessorArgs(*weight.buffer()).append_to(reader_ct);
+    }
     const uint32_t chunk = std::min(kInputChunk, k_tiles);
     std::vector<uint32_t> writer_ct = {
         k_tiles, chunk, input_sem, partial_sem, f.format_id, request_sem, answer_sem, address_sem, one_row ? 1u : 0u};
     TensorAccessorArgs(*input.buffer()).append_to(writer_ct);
     TensorAccessorArgs(*output.buffer()).append_to(writer_ct);
 
-    // The weight reader of a core uses one NoC and its writer the other, alternating by column so that both NoCs carry
-    // DRAM reads.
     shared_variables_t shared;
     shared.cores = cores;
     for (uint32_t parity = 0; parity < 2; parity++) {
@@ -327,25 +273,17 @@ GgufMatmulProgramFactory::cached_program_t GgufMatmulProgramFactory::create(
         if (sub.empty()) {
             continue;
         }
-        const CoreRangeSet ranges = core_ranges(sub);
-        shared.reader[parity] = CreateKernel(
+        add_movers(
             program,
-            std::string(kKernels) + (tq2 ? "gguf_matmul_tq2_reader.cpp" : "gguf_matmul_reader.cpp"),
-            ranges,
-            DataMovementConfig{
-                .processor = DataMovementProcessor::RISCV_1,
-                .noc = parity ? NOC::NOC_1 : NOC::NOC_0,
-                .compile_args = reader_ct,
-                .defines = lookup_defines});
-        shared.writer[parity] = CreateKernel(
-            program,
-            std::string(kKernels) + "gguf_matmul_writer.cpp",
-            ranges,
-            DataMovementConfig{
-                .processor = DataMovementProcessor::RISCV_0,
-                .noc = parity ? NOC::NOC_0 : NOC::NOC_1,
-                .compile_args = writer_ct,
-                .defines = lookup_defines});
+            core_ranges(sub),
+            parity,
+            tq2 ? "gguf_matmul_tq2_reader.cpp" : "gguf_matmul_reader.cpp",
+            "gguf_matmul_writer.cpp",
+            reader_ct,
+            writer_ct,
+            defines,
+            defines,
+            shared);
     }
     const KernelHandle compute_kernel = CreateKernel(
         program,
@@ -361,7 +299,7 @@ GgufMatmulProgramFactory::cached_program_t GgufMatmulProgramFactory::create(
             .dst_full_sync_en = true,
             .compile_args = tq2 ? std::vector<uint32_t>{k_tiles, chunk, one_row ? 1u : 0u, window}
                                 : std::vector<uint32_t>{f.format_id, k_tiles, chunk, in0_rows},
-            .defines = lookup_defines});
+            .defines = defines});
 
     for (size_t i = 0; i < cores.size(); i++) {
         const uint32_t parity = cores[i].x % 2;
@@ -395,14 +333,7 @@ GgufMatmulProgramFactory::cached_program_t GgufMatmulProgramFactory::create(
 
 void GgufMatmulProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program, const GgufMatmulParams&, const GgufMatmulInputs& inputs, Tensor& output) {
-    const shared_variables_t& shared = cached_program.shared_variables;
-    for (const CoreCoord& core : shared.cores) {
-        const uint32_t parity = core.x % 2;
-        GetRuntimeArgs(cached_program.program, shared.reader[parity], core)[0] = inputs.weight.buffer()->address();
-        auto& writer_args = GetRuntimeArgs(cached_program.program, shared.writer[parity], core);
-        writer_args[1] = inputs.input.buffer()->address();
-        writer_args[2] = output.buffer()->address();
-    }
+    override_addresses(cached_program, inputs, output, 1);
 }
 
 }  // namespace ttnn::prim

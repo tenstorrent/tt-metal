@@ -1,9 +1,8 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-// GGUF dtypes on the host: the format table against the Blackhole decoder's, page geometry and sharding, the
-// from_gguf / to_gguf round trip (also of the expanded layouts), and GGUF tensors failing cleanly outside from_gguf /
-// to_gguf.
+// GGUF dtypes on the host: the format table, page geometry and sharding, the from_gguf / to_gguf round trip (also of
+// the expanded layouts), and GGUF tensors failing cleanly outside from_gguf / to_gguf.
 
 #include <gtest/gtest.h>
 
@@ -11,7 +10,6 @@
 #include <cstdint>
 #include <numeric>
 #include <random>
-#include <utility>
 #include <vector>
 
 #include <tt-metalium/tensor/host_tensor.hpp>
@@ -19,8 +17,6 @@
 #include <tt-metalium/tensor/tensor_apis.hpp>
 #include <tt-metalium/tensor/tensor_types.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
-
-#include "tt_metal/tt-llk/tt_llk_blackhole/common/inc/experimental/ckernel_gguf_page.h"
 
 namespace tt::tt_metal {
 namespace {
@@ -57,33 +53,15 @@ std::vector<std::byte> random_blocks(size_t bytes, uint32_t seed) {
     return blocks;
 }
 
-template <std::uint32_t... Ids>
-ckernel::gguf::PageLayout decoder_layout(uint32_t id, std::integer_sequence<std::uint32_t, Ids...>) {
-    ckernel::gguf::PageLayout layout{};
-    ((id == Ids + 1 ? (layout = ckernel::gguf::page_layout<static_cast<ckernel::gguf::Format>(Ids + 1)>(), 0) : 0),
-     ...);
-    return layout;
-}
-
-TEST(GgufDtypesTest, TraitsMatchDecoderPageLayout) {
+// The formats in DataType order are the decoder's format numbers 1 .. 25 (the traits take its page layouts).
+TEST(GgufDtypesTest, FormatIdsInDataTypeOrder) {
     const auto dtypes = gguf_dtypes();
     ASSERT_EQ(dtypes.size(), 25u);
     for (size_t i = 0; i < dtypes.size(); ++i) {
         const DataType dtype = dtypes[i];
         SCOPED_TRACE(fmt::format("{}", dtype));
         EXPECT_TRUE(is_gguf(dtype));
-        const auto& f = gguf_traits(dtype);
-        EXPECT_EQ(f.format_id, i + 1);
-        const auto layout = decoder_layout(f.format_id, std::make_integer_sequence<std::uint32_t, 25>{});
-        EXPECT_EQ(f.group_tiles, layout.group_tiles);
-        EXPECT_EQ(f.page_tiles, layout.page_tiles);
-        EXPECT_EQ(f.code_bytes, layout.code_bytes);
-        EXPECT_EQ(f.scale_rows, layout.scale_rows);
-        EXPECT_EQ(f.fp16_rows, layout.fp16_rows);
-        EXPECT_EQ(f.code_offset, layout.code_offset);
-        EXPECT_EQ(f.l1_scale_offset(), layout.scale_offset);
-        EXPECT_EQ(f.l1_scale_bytes(), layout.scale_bytes);
-        EXPECT_EQ(f.l1_page_bytes(), layout.rows * 64);
+        EXPECT_EQ(gguf_traits(dtype).format_id, i + 1);
     }
     EXPECT_FALSE(is_gguf(DataType::MXINT2));
     EXPECT_FALSE(is_gguf(DataType::INVALID));

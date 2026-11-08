@@ -15,84 +15,13 @@ import torch
 
 import ttnn
 
-gguf = pytest.importorskip("gguf")
+from tests.ttnn.unit_tests.tensor.gguf_test_utils import SOURCE, gguf
+from tests.ttnn.unit_tests.tensor.gguf_test_utils import blocks as _blocks, k_of as _k, name as _name, qtype as _qtype
 
 pytestmark = pytest.mark.skipif(not ttnn.device.is_blackhole(), reason="GGUF weights need Blackhole")
 
 PCC = 0.9999
 MAX_ERROR = 0.01  # of the largest output
-
-# gguf-py quantizes these; the others get random bytes with sane scale fields.
-QUANTIZED = {"Q8_0", "Q4_0", "Q4_1", "Q5_0", "Q5_1", "MXFP4", "TQ1_0", "TQ2_0", "Q1_0", "Q2_0"}
-# Byte offsets of the fp16 scale fields in a block of each format that gguf-py cannot quantize.
-FP16_FIELDS = {
-    "IQ4_NL": (0,),
-    "Q6_K": (208,),
-    "Q4_K": (0, 2),
-    "Q5_K": (0, 2),
-    "Q3_K": (108,),
-    "Q2_K": (80, 82),
-    "IQ4_XS": (0,),
-    "IQ2_XXS": (0,),
-    "IQ2_XS": (0,),
-    "IQ2_S": (0,),
-    "IQ3_XXS": (0,),
-    "IQ3_S": (0,),
-    "IQ1_S": (0,),
-}
-
-
-# Expanded layout -> its GGUF format.
-SOURCE = {expanded: source for source, expanded in ttnn.GGUF_EXPANDED.items()}
-
-
-def _name(dtype):
-    return dtype.name.removeprefix("GGUF_")
-
-
-def _format(dtype):
-    """The GGUF format of a dtype's blocks."""
-    return _name(SOURCE.get(dtype, dtype))
-
-
-def _qtype(dtype):
-    qtype = getattr(gguf.GGMLQuantizationType, _format(dtype), None)
-    if qtype is None:
-        pytest.skip(f"gguf-py has no {_format(dtype)}")
-    return qtype
-
-
-def _blocks(dtype, k, n, seed=0):
-    """The GGUF bytes of an [N, K] weight."""
-    name, qtype = _format(dtype), _qtype(dtype)
-    rng = np.random.default_rng(seed)
-    if name in QUANTIZED:
-        return gguf.quants.quantize(rng.standard_normal((n, k), dtype=np.float32), qtype)
-    block_elems, block_bytes = gguf.GGML_QUANT_SIZES[qtype]
-    blocks = rng.integers(0, 256, size=(n * k // block_elems, block_bytes), dtype=np.uint8)
-    scales = (rng.uniform(0.5, 1.0, size=(blocks.shape[0], 4)) * 2.0**-7).astype(np.float16).view(np.uint8)
-    if name == "NVFP4":  # four UE4M3 scales: exponents 5..8, any mantissa
-        blocks[:, :4] = (
-            rng.integers(5, 9, size=(blocks.shape[0], 4)) << 3 | rng.integers(0, 8, (blocks.shape[0], 4))
-        ).astype(np.uint8)
-    elif name == "IQ1_M":  # d is the top nibbles of the four 16-bit scale words at bytes 48..55
-        d = scales[:, :2].copy().view(np.uint16)[:, 0]
-        words = blocks[:, 48:56].copy().view(np.uint16)
-        for j in range(4):
-            words[:, j] = (words[:, j] & 0x0FFF) | (((d >> (4 * j)) & 0xF) << 12)
-        blocks[:, 48:56] = words.view(np.uint8)
-    else:
-        for i, offset in enumerate(FP16_FIELDS[name]):
-            blocks[:, offset : offset + 2] = scales[:, 2 * i : 2 * i + 2]
-    return blocks.reshape(n, -1)
-
-
-def _k(dtype, groups=2):
-    """K of `groups` GGUF pages: whole pages and whole blocks."""
-    page_rows = {"Q8_0": 32, "Q4_0": 32, "IQ4_NL": 32, "Q4_1": 32, "NVFP4": 64}.get(_format(dtype))
-    if page_rows is None:
-        page_rows = {"MXFP4": 64, "Q5_0": 64, "Q5_1": 64, "Q2_0": 64, "Q1_0": 128}.get(_format(dtype), 256)
-    return groups * page_rows
 
 
 def _check(out, x, blocks, dtype, k, n):

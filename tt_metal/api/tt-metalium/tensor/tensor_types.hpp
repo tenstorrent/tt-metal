@@ -139,19 +139,8 @@ struct GgufTraits {
     uint32_t page_height() const { return 32 * group_tiles; }
     uint32_t page_bytes() const { return 32 * page_height() * block_bytes / block_elems; }
 
-    // The decoder's L1 page of page_tiles K tiles (ckernel::gguf::page_layout): the codes from code_offset, the scale
-    // fields from l1_scale_offset, with their fp32 copies l1_scale_bytes in all.
-    uint32_t l1_scale_offset() const { return (code_offset + code_bytes + 255) / 256 * 256; }
-    uint32_t l1_scale_bytes() const {
-        return fp16_rows ? ((scale_rows + 3) / 4 * 4 + 8 * fp16_rows) * 64 : scale_rows * 64;
-    }
-    uint32_t l1_page_bytes() const {
-        uint32_t bytes = 1024;
-        while (bytes < l1_scale_offset() + l1_scale_bytes()) {
-            bytes *= 2;
-        }
-        return bytes;
-    }
+    // Bytes of the decoder's L1 page of page_tiles K tiles (ckernel::gguf::page_layout).
+    uint32_t l1_page_bytes() const;
 };
 
 const GgufTraits& gguf_traits(DataType dtype);

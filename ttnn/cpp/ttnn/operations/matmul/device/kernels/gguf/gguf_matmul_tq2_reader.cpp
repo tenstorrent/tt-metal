@@ -15,27 +15,7 @@
 #include "api/dataflow/circular_buffer.h"
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/endpoints.h"
-
-// fp16 bits -> fp32 bits, exactly.
-inline uint32_t fp16_to_fp32(uint32_t h) {
-    const uint32_t sign = (h & 0x8000) << 16, exp = h >> 10 & 31;
-    uint32_t mant = h & 0x3FF;
-    if (exp == 31) {
-        return sign | 0x7F800000 | mant << 13;
-    }
-    if (exp != 0) {
-        return sign | (exp + 112) << 23 | mant << 13;
-    }
-    if (mant == 0) {
-        return sign;
-    }
-    uint32_t e = 113;  // subnormal: normalize
-    while (!(mant & 0x400)) {
-        mant <<= 1;
-        e--;
-    }
-    return sign | e << 23 | (mant & 0x3FF) << 13;
-}
+#include "experimental/gguf_page.h"
 
 void kernel_main() {
     constexpr uint32_t ring = get_compile_time_arg_val(0);
@@ -140,8 +120,8 @@ void kernel_main() {
             for (uint32_t w = 0; w < 16; w++) {
                 const uint32_t pair = src[w];
                 const uint32_t c = 2 * w + (w >= 8 ? 256 - 16 : 0);  // word of column 2w in the tile
-                dst[c] = fp16_to_fp32(pair & 0xFFFF);
-                dst[c + 1] = fp16_to_fp32(pair >> 16);
+                dst[c] = experimental::gguf::fp16_to_fp32(pair & 0xFFFF);
+                dst[c + 1] = experimental::gguf::fp16_to_fp32(pair >> 16);
             }
             if (last) {
                 scales.push_back(1);
