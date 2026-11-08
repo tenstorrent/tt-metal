@@ -36,6 +36,11 @@ struct MatmulDeviceOperation {
     static void validate_on_program_cache_miss(
         const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
 
+    // The program cache keys on the attributes and every tensor's spec, so a hit re-checks only what that key leaves
+    // out: the tensors being allocated on the operands' device.
+    static void validate_on_program_cache_hit(
+        const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
+
     static spec_return_value_t compute_output_specs(
         const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
 

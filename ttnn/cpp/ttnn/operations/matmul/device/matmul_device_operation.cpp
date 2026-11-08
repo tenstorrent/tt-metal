@@ -2774,6 +2774,29 @@ MatmulDeviceOperation::program_factory_t MatmulDeviceOperation::select_program_f
         config);
 }
 
+void MatmulDeviceOperation::validate_on_program_cache_hit(
+    const operation_attributes_t& /*attributes*/, const tensor_args_t& args) {
+    const auto* device = args.input_tensors.at(0).device();
+    const auto check = [&](const Tensor& tensor) {
+        TT_FATAL(
+            tensor.storage_type() == StorageType::DEVICE && tensor.is_allocated() && tensor.device() == device,
+            "Matmul tensors need to be allocated on the operands' device");
+    };
+    for (const auto& tensor : args.input_tensors) {
+        check(tensor);
+    }
+    for (const auto& tensor : args.optional_input_tensors) {
+        if (tensor.has_value()) {
+            check(*tensor);
+        }
+    }
+    for (const auto& tensor : args.optional_output_tensors) {
+        if (tensor.has_value()) {
+            check(*tensor);
+        }
+    }
+}
+
 // ===========================================================================
 // Entry point. Runs the universal validators, then the config-based shared validators,
 // then the per-config dispatch (std::visit) below.
