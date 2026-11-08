@@ -474,7 +474,11 @@ public:
 
     bool add_forbidden_constraint(MeshId mesh_id, const std::unordered_set<tt::tt_metal::experimental::PhysicalNodeId>& asics);
     bool add_forbidden_constraint(const PlacedMesh& placed);
-    bool add_required_constraint(MeshId mesh_id, const std::unordered_set<tt::tt_metal::experimental::PhysicalNodeId>& asics);
+    // Many-to-many: every mesh in `mesh_ids` sits on a footprint holding any one of `pools` (an OR within one
+    // call, an AND across calls on the same mesh); a pool the size of the footprint names that exact seat.
+    bool add_required_constraint(
+        const std::set<MeshId>& mesh_ids,
+        const std::vector<std::unordered_set<tt::tt_metal::experimental::PhysicalNodeId>>& pools);
     bool add_required_constraint(const PlacedMesh& placed);
     bool exclude_mapping(const AssignedMeshes& assigned);
 
@@ -499,7 +503,11 @@ private:
     std::vector<AssignedMeshes> pending_;
     std::size_t pending_index_ = 0;
     std::vector<std::pair<MeshId, std::unordered_set<tt::tt_metal::experimental::PhysicalNodeId>>> extra_forbidden_;
-    std::vector<std::pair<MeshId, std::unordered_set<tt::tt_metal::experimental::PhysicalNodeId>>> extra_required_;
+    struct RequiredSeats {
+        std::set<MeshId> mesh_ids;
+        std::vector<std::unordered_set<tt::tt_metal::experimental::PhysicalNodeId>> pools;
+    };
+    std::vector<RequiredSeats> extra_required_;
     std::vector<std::map<MeshId, std::unordered_set<tt::tt_metal::experimental::PhysicalNodeId>>> yielded_footprints_;
 
     // Live SAT session. next() is another model from it when the mode and host cap still match.

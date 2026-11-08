@@ -253,12 +253,27 @@ run_test() {
     status=1
   fi
   rm -f "$out"
+  # run_test_expect_fail: a nonzero exit is the pass.
+  if [[ "${EXPECT_FAIL:-0}" -eq 1 ]]; then
+    if [[ $status -eq 0 ]]; then
+      echo "error: command was expected to fail but exited 0" >&2
+      status=1
+    else
+      echo "(expected failure: exit ${status})" >&2
+      status=0
+    fi
+  fi
   if [[ $status -ne 0 ]]; then
     FAILURES+=("[${CURRENT_GROUP}] exit ${status}: ${cmd_str% }")
     if [[ "$KEEP_GOING" -eq 0 ]]; then
       _fabric_cpu_only_abort "$status"
     fi
   fi
+}
+
+# run_test for a command that must exit nonzero.
+run_test_expect_fail() {
+  EXPECT_FAIL=1 run_test "$@"
 }
 
 print_failure_summary() {
@@ -635,6 +650,14 @@ for mock in \
     "${SC4_REVC_SUBTORUS_AISLED_SINGLE_POD_CLUSTER_DESC_MAPPING}"; do
   run_test env TT_METAL_SLOW_DISPATCH_MODE=1 tt-run --mesh-graph-descriptor "${MGD_CUSTOM}/llama_8b_4galaxy_mesh_graph_descriptor.textproto" --mock-cluster-rank-binding "${mock}" --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="${GTEST_GALAXY_LAYOUT_CHECK}"
 done
+# --mesh-pinning-file end to end on the 8x4 mesh of four 4x2 galaxy slices: exact, partial and any_of pins, then an oversized pin.
+SC4_GALAXY_SLICE_MESH_PINNINGS=tests/tt_metal/distributed/config/sc4_galaxy_slice_mesh_pinnings_swapped.yaml
+SC4_GALAXY_SLICE_MESH_PINNINGS_ANY_OF=tests/tt_metal/distributed/config/sc4_galaxy_slice_mesh_pinnings_any_of.yaml
+SC4_GALAXY_SLICE_MESH_PINNINGS_PARTIAL=tests/tt_metal/distributed/config/sc4_galaxy_slice_mesh_pinnings_partial.yaml
+run_test env TT_METAL_SLOW_DISPATCH_MODE=1 TT_METAL_TEST_MESH_PINNING_FILE="${SC4_GALAXY_SLICE_MESH_PINNINGS}" tt-run --mesh-graph-descriptor "${MGD_CUSTOM}/bh_galaxy_8x4_2x2_hosts_mesh_graph_descriptor.textproto" --mock-cluster-rank-binding "${SC4_REVAB_AISLED_SINGLE_POD_CLUSTER_DESC_MAPPING}" --mesh-pinning-file "${SC4_GALAXY_SLICE_MESH_PINNINGS}" --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="MultiHost.MeshPinningFileHonored"
+run_test env TT_METAL_SLOW_DISPATCH_MODE=1 TT_METAL_TEST_MESH_PINNING_FILE="${SC4_GALAXY_SLICE_MESH_PINNINGS_PARTIAL}" tt-run --mesh-graph-descriptor "${MGD_CUSTOM}/bh_galaxy_8x4_2x2_hosts_mesh_graph_descriptor.textproto" --mock-cluster-rank-binding "${SC4_REVAB_AISLED_SINGLE_POD_CLUSTER_DESC_MAPPING}" --mesh-pinning-file "${SC4_GALAXY_SLICE_MESH_PINNINGS_PARTIAL}" --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="MultiHost.MeshPinningFileHonored"
+run_test env TT_METAL_SLOW_DISPATCH_MODE=1 TT_METAL_TEST_MESH_PINNING_FILE="${SC4_GALAXY_SLICE_MESH_PINNINGS_ANY_OF}" tt-run --mesh-graph-descriptor "${MGD_CUSTOM}/bh_galaxy_8x4_2x2_hosts_mesh_graph_descriptor.textproto" --mock-cluster-rank-binding "${SC4_REVAB_AISLED_SINGLE_POD_CLUSTER_DESC_MAPPING}" --mesh-pinning-file "${SC4_GALAXY_SLICE_MESH_PINNINGS_ANY_OF}" --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="MultiHost.MeshPinningFileHonored"
+run_test_expect_fail env TT_METAL_SLOW_DISPATCH_MODE=1 tt-run --mesh-graph-descriptor "${MGD_CUSTOM}/bh_galaxy_8x4_2x2_hosts_mesh_graph_descriptor.textproto" --mock-cluster-rank-binding "${SC4_REVAB_AISLED_SINGLE_POD_CLUSTER_DESC_MAPPING}" --mesh-pinning-file tests/tt_metal/distributed/config/sc4_galaxy_slice_mesh_pinnings_invalid.yaml --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="MultiHost.MeshPinningFileHonored"
 # Quad-galaxy heterogeneous 4x8+4x2 10-stage ring (128 ASICs): 2x 4x8 RING+RING + 8x 4x2 RING+LINE on subtorus mock.
 # Homogeneous 4x2 hops use NESW (no assign_z_direction); heterogeneous 4x8<->4x2 hops use assign_z_direction.
 # Runs the pipeline-builder and layout checks. Corner-pin checks are not run because the corner-fold

@@ -161,6 +161,10 @@ struct TopologyMappingConfig {
     // one host rank, rank bindings disabled) when the PSD spans several hosts, so the mesh lands on the
     // calling host's chips instead of an arbitrary host. Default empty (no restriction).
     std::set<tt::tt_metal::experimental::PhysicalNodeId> placement_asic_allowlist;
+
+    // --mesh-pinning-file pins keyed by solver MeshIds; a host rank's ASICs must include its pool (exact if same size).
+    std::map<std::pair<MeshId, MeshHostRankId>, std::set<tt::tt_metal::experimental::PhysicalNodeId>>
+        mesh_host_rank_pinnings;
 };
 
 /**
