@@ -76,6 +76,9 @@ overseer: |
 perf: |
   Role: perf. Make one performance change to $model and keep it correct:
   $details
+  Before you change code, read `models/demos/common/bringup/knowledge/perf_guide.md` (what usually pays, what moves
+  time instead of removing it, how the A/B is judged) and write your expected saving per chunk (device and host) in
+  `$breadcrumbs`.
   Keep the previous behaviour selectable with the switch the task names ($ab_switch), a `Setting` in the model's
   `tt/settings.py`: the orchestrator sets it explicitly for both sides, change on and off, so its default does not matter.
   Make the change the default and never revert it when a test fails: the owner decides from the measurements. Do not

@@ -116,6 +116,9 @@ starts in the background during the spec review; by hand: start it from a sessio
 
 ## Perf picks (F57)
 
+Rules of thumb for choosing and judging a pick (host- vs device-bound, fusion, formats, collectives, noise):
+`knowledge/perf_guide.md`; the perf agent and the opportunity list point to it.
+
 A pick has no gate before or after its agent. The agent makes the change behind a `tt/settings.py` switch and runs the
 gate's frozen tests once; at the first failure it stops (nothing is profiled while a frozen test fails). The
 orchestrator then measures the change off (`ab.env`) and on (`ab.change`), both set explicitly: every frozen test, the
