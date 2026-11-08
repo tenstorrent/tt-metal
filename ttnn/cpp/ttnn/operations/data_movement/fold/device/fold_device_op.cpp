@@ -166,6 +166,11 @@ ttnn::operations::data_movement::Fold::tensor_return_value_t fold(
     auto operation_attributes = OperationType::operation_attributes_t{
         .stride_h = stride_h, .stride_w = stride_w, .collapse_output = collapse_output};
     auto tensor_args = OperationType::tensor_args_t{.input_tensor = input_tensor};
+    // An empty input folds to an empty output, and the DRAM factory divides by its zero patch count.
+    if (input_tensor.logical_volume() == 0) {
+        OperationType::validate_on_program_cache_miss(operation_attributes, tensor_args);
+        return OperationType::create_output_tensors(operation_attributes, tensor_args);
+    }
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
 }  // namespace ttnn::prim

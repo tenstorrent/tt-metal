@@ -146,10 +146,15 @@ ttnn::Tensor rotate(
     const std::string& interpolation_mode,
     const std::optional<MemoryConfig>& memory_config) {
     using Op = ttnn::operations::rotate::RotateDeviceOperation;
-    return ttnn::device_operation::launch<Op>(
-        Op::operation_attributes_t{
-            angle, center, fill, expand, interpolation_mode, memory_config.value_or(input.memory_config())},
-        Op::tensor_args_t{input});
+    const Op::operation_attributes_t attributes{
+        angle, center, fill, expand, interpolation_mode, memory_config.value_or(input.memory_config())};
+    const Op::tensor_args_t tensor_args{input};
+    // An empty input rotates to an empty output, and the factories divide by its dims.
+    if (input.logical_volume() == 0) {
+        Op::validate_on_program_cache_miss(attributes, tensor_args);
+        return Op::create_output_tensors(attributes, tensor_args);
+    }
+    return ttnn::device_operation::launch<Op>(attributes, tensor_args);
 }
 
 }  // namespace ttnn::prim
