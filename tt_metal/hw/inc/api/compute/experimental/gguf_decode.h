@@ -31,12 +31,14 @@ enum class GgufDecodeThread : std::uint8_t { Math, Pack };
 /**
  * Sets up the SFPU of thread thr to decode GGUF weight tiles of format fmt (ckernel::gguf::Format,
  * experimental/ckernel_gguf_page.h). Call again after other SFPU code on that thread. Needs fp32_dest_acc_en.
+ * beside_unpack: whether an unpack to DEST (e.g. the next page's copy) may run beside a decode; false selects faster
+ * decoders that nothing may write DEST beside. The same value as the gguf_decode_tile calls'.
  */
 // clang-format on
-template <std::uint32_t fmt, GgufDecodeThread thr = GgufDecodeThread::Math>
+template <std::uint32_t fmt, GgufDecodeThread thr = GgufDecodeThread::Math, bool beside_unpack = true>
 ALWI void gguf_decode_init() {
     static_assert(DST_ACCUM_MODE, "gguf_decode needs fp32_dest_acc_en: pages are UInt32 in DEST");
-    GGUF_DECODE_ON(thr, llk_math_gguf_decode_init<fmt>());
+    GGUF_DECODE_ON(thr, llk_math_gguf_decode_init<fmt, beside_unpack>());
 }
 
 // Group step of the formats that convert a group's scales once (Q4_K, Q5_K, Q3_K, Q2_K; nothing for the others): call
@@ -60,13 +62,15 @@ ALWI void gguf_decode_group(const std::uint32_t idst, const std::uint32_t rows =
  * | rows     | DEST row offset of the page inside tile idst + 1 (several pages copied as one tile)          | uint32_t | 0, 2 * 16 * j            | False    |
  */
 // clang-format on
-template <std::uint32_t fmt, GgufDecodeThread thr = GgufDecodeThread::Math>
+template <std::uint32_t fmt, GgufDecodeThread thr = GgufDecodeThread::Math, bool beside_unpack = true>
 ALWI void gguf_decode_tile(const std::uint32_t idst, const std::uint32_t ti, const std::uint32_t rows = 0) {
+    static_assert(thr == GgufDecodeThread::Math || beside_unpack, "the overlap protocol copies pages beside decodes");
     if constexpr (thr == GgufDecodeThread::Math) {
-        MATH((llk_math_gguf_decode_tile<fmt>(idst, ti, rows)));
+        MATH((llk_math_gguf_decode_tile<fmt, true, true, beside_unpack>(idst, ti, rows)));
     } else {
-        // Phase 2 waits for the matmul of the tile before (gguf_decode_overlap_matmul_done): an SFPLOADMACRO body
-        // that runs while the FPU writes DEST gives wrong outputs.
+        // Phase 2 waits for the matmul of the tile before (an SFPLOADMACRO body beside the FPU's DEST writes loses
+        // stores) and, where its stores are not arbitrated against the unpacker either, for the copy of the next page
+        // (gguf_decode_overlap_body_ready).
         PACK((llk_math_gguf_decode_tile<fmt, true, false>(idst, ti, rows)));
         PACK((TTI_SEMWAIT(
             p_stall::STALL_SFPU | p_stall::STALL_SYNC, semaphore::t6_sem(semaphore::PACK_DONE), p_stall::STALL_ON_ZERO)));
@@ -89,9 +93,12 @@ ALWI void gguf_zero_tile(const std::uint32_t idst) {
  * full-sync DEST acquire, with three Tensix semaphores, two as sdpa.h's FPU <-> SFPU handoff:
  *   PAGE = FPU_SFPU, math -> pack: page k is in DEST, and the DEST rows its decoded tile overwrites are free;
  *   TILE = UNPACK_MATH_DONE, pack -> math: decoded tile k is complete;
- *   MM = PACK_DONE, math -> pack: the matmul of tile k is done; phase 2 of tile k + 1 waits for it.
- * Per K tile k, math:  [dest_srca_mm_page_post(next)]; [page_wait(next); overlap_page_ready()];
- *                      overlap_wait_tile(); dest_srca_mm_math(tile k); overlap_matmul_done()
+ *   BODY = PACK_DONE, math -> pack: phase 2 of tile k may start: the matmul of tile k - 1 is done, and so is the copy
+ *   of page k + 1 where phase 2's stores are not arbitrated against the unpacker
+ *   (llk_math_gguf_decode_body_unarbitrated).
+ * Per K tile k, math:  overlap_body_ready<fmt, false>(); [dest_srca_mm_page_post(next)];
+ *                      [page_wait(next); overlap_page_ready()]; overlap_body_ready<fmt, true>();
+ *                      overlap_wait_tile(); dest_srca_mm_math(tile k)
  *            pack:     overlap_wait_page(); gguf_decode_tile<fmt, Pack>(k); overlap_tile_done()
  * Math hands page k + 1 over before it waits for tile k, so phase 1 of tile k + 1 overlaps the matmul of tile k. A
  * page the next tile also decodes from (several pages in one DEST tile) is handed over again after the matmul has
@@ -102,7 +109,7 @@ ALWI void gguf_zero_tile(const std::uint32_t idst) {
 // clang-format on
 ALWI void gguf_decode_overlap_init() {
     MATH((t6_semaphore_init(semaphore::FPU_SFPU, 0, 2)));
-    MATH((t6_semaphore_init(semaphore::PACK_DONE, 1, 2)));
+    MATH((t6_semaphore_init(semaphore::PACK_DONE, 0, 2)));
     PACK((t6_semaphore_init(semaphore::UNPACK_MATH_DONE, 0, 2)));
 }
 
@@ -124,8 +131,17 @@ ALWI void gguf_decode_overlap_tile_done() {
     PACK((t6_semaphore_post<p_stall::NONE>(semaphore::UNPACK_MATH_DONE)));
 }
 
-// MATH, after each dest_srca_mm_math: once the matmul is done, the next decode's phase 2 may start.
-ALWI void gguf_decode_overlap_matmul_done() { MATH((t6_semaphore_post<p_stall::MATH>(semaphore::PACK_DONE))); }
+// MATH, twice per K tile: first (after_copy false) and after the copy of the next page, or where it would be (true).
+// Posts BODY at one of the two, once the math before it is done: at the second where fmt's phase 2 has stores that
+// are not arbitrated against the unpacker.
+template <std::uint32_t fmt, bool after_copy>
+ALWI void gguf_decode_overlap_body_ready() {
+    MATH(({
+        if constexpr (llk_math_gguf_decode_body_unarbitrated<fmt>() == after_copy) {
+            t6_semaphore_post<p_stall::MATH>(semaphore::PACK_DONE);
+        }
+    }));
+}
 
 // MATH: waits for a decoded tile.
 ALWI void gguf_decode_overlap_wait_tile() {
