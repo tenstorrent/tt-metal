@@ -488,7 +488,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     _llk_math_wait_for_dest_available_<DST_SYNC>();
 
-    // _top32_rm_init_ programs this family's ADDR_MODs, MOP and REPLAY buffer. It cannot
+    // _llk_math_top32_rm_init_ programs this family's ADDR_MODs and MOP; _top32_rm_init_
+    // loads the SFPU control register (the execute sets/restores ADDR_MOD_6). It cannot
     // coexist with _topk_xl_init_<K, fused>() in one kernel -- they overlap in all three
     // (measured on BH p100a: the math thread hangs) -- which is why nothing here touches
     // the topk_xl family.

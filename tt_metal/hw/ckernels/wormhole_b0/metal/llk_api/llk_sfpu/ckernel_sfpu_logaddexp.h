@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include "ckernel.h"
 #include "ckernel_addrmod.h"
 #include "ckernel_defs.h"
@@ -65,8 +66,9 @@ sfpi_inline sfpi::vFloat _sfpu_logaddexp_log1p_unit_bf16_(const sfpi::vFloat& y)
 // chosen by the destination precision instead, and is never the approximate body, which is
 // not accurate enough here.
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
-inline void calculate_sfpu_logaddexp(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
-    constexpr uint dst_tile_size_sfpi = 32;
+inline void calculate_sfpu_logaddexp(
+    const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
+    constexpr std::uint32_t dst_tile_size_sfpi = 32;
     // The first two of exp_21f's fractional-part coefficients, loaded once for the whole loop
     // instead of as two SFPLOADIs each per element. Only the bfloat16 path uses them. The third,
     // or the 88 and 1/ln 2 below, would not fit: holding one more constant across the loop runs
@@ -104,7 +106,7 @@ inline void calculate_sfpu_logaddexp(const uint dst_index_in0, const uint dst_in
             result = sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::Nearest);
         }
 
-        // ADDR_MOD_6 (calculate_sfpu_logaddexp_init) advances the destination on the store,
+        // ADDR_MOD_6 at its dest += 2 invariant advances the destination on the store,
         // in place of a separate dst_reg++. Wormhole's SFPU load and store pick ADDR_MOD_4..7
         // with a two-bit field, so ADDR_MOD_6 is selected as 2, as in binary max/min.
         sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi].mode(ADDR_MOD_2) = result;
@@ -113,8 +115,7 @@ inline void calculate_sfpu_logaddexp(const uint dst_index_in0, const uint dst_in
 
 // The corrections read their polynomial coefficients from the program constant registers,
 // so they have to be loaded here: an SFPU helper called from another op's kernel does not
-// carry its own initialisation. The same goes for ADDR_MOD_6, which the kernels store
-// through.
+// carry its own initialisation. ADDR_MOD_6 carries its dest += 2 invariant.
 //
 // The coefficient set differs by destination precision, which is why this init is
 // templated where the surrounding binary inits are not.

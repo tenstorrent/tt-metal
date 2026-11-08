@@ -1696,7 +1696,8 @@ void call_binary_sfpu_operation_init([[maybe_unused]] std::uint32_t zero_point =
         BINOP == BinaryOp::ADD || BINOP == BinaryOp::SUB || BINOP == BinaryOp::MUL || BINOP == BinaryOp::DIV || BINOP == BinaryOp::RSUB ||
         BINOP == BinaryOp::XLOGY)
     {
-        // BinaryOps without a dedicated SfpuType use the baseline binary addrmod setup.
+        // BinaryOps without a dedicated SfpuType use the baseline binary init
+        // (config reg + counter reset).
         SFPU_BINARY_INIT_FN(add1, sfpu_binary_init, (APPROXIMATION_MODE, BINOP));
     }
     else if constexpr (BINOP == BinaryOp::POW)
@@ -1739,8 +1740,8 @@ void call_binary_sfpu_operation_init([[maybe_unused]] std::uint32_t zero_point =
     {
         // logaddexp's log1p reads its polynomial coefficients from the program
         // constant registers; the coefficient set differs by destination precision,
-        // so the init is templated on DST_ACCUM_MODE. Baseline (add1) addrmod setup,
-        // like fmod/remainder. Mirrors logaddexp_binary_tile_init().
+        // so the init is templated on DST_ACCUM_MODE. Baseline (add1) init, like
+        // fmod/remainder. Mirrors logaddexp_binary_tile_init().
         SFPU_BINARY_INIT_FN(add1, sfpu::calculate_sfpu_logaddexp_init, (DST_ACCUM_MODE));
     }
     else if constexpr (BINOP == BinaryOp::LOGADDEXP2)
@@ -1787,7 +1788,7 @@ void call_binary_sfpu_operation_init([[maybe_unused]] std::uint32_t zero_point =
     }
     else if constexpr (BINOP == BinaryOp::ATAN2)
     {
-        // atan2 has no dedicated SfpuType, so use the baseline add1 addrmod. Its init
+        // atan2 has no dedicated SfpuType, so use the baseline add1 init. Its init
         // just loads the reciprocal polynomial; the is_fp32_dest_acc_en variant selects
         // the fp32 vs bf16 reciprocal (matching the minimax branch in the kernel), so it
         // must match DST_ACCUM_MODE used by the paired call_binary_sfpu_operation().
@@ -1809,7 +1810,7 @@ void call_binary_sfpu_operation_init([[maybe_unused]] std::uint32_t zero_point =
         SFPU_BINARY_INIT(ne_int);
     }
     // Integer max/min: binary_max_min_int32_init programs the SFPLOADMACRO templates
-    // and is keyed on the matching {max,min}_{int32,uint32} SfpuType addrmod allow-list.
+    // keyed on the matching {max,min}_{int32,uint32} SfpuType.
     else if constexpr (BINOP == BinaryOp::MAX_INT32)
     {
         SFPU_BINARY_INIT_FN(max_int32, binary_max_min_int32_init, (true /* IS_MAX */, false /* IS_UNSIGNED */));
@@ -1893,20 +1894,20 @@ void call_binary_sfpu_operation_init([[maybe_unused]] std::uint32_t zero_point =
     }
     else if constexpr (BINOP == BinaryOp::COPY_DEST)
     {
-        // copy_dest_value_init is empty. The baseline addrmod setup is enough.
+        // copy_dest_value_init is empty. The baseline init is enough.
         SFPU_BINARY_INIT(add1);
     }
     else if constexpr (BINOP == BinaryOp::LOGSIGMOID)
     {
-        // logsigmoid_tile_init: baseline addrmod setup plus logsigmoid_init, which loads the
+        // logsigmoid_tile_init: baseline init plus logsigmoid_init, which loads the
         // polynomial coefficients the Wormhole kernel keeps in vConstFloatPrgm0..2.
         SFPU_BINARY_INIT_FN(add1, logsigmoid_init, (APPROXIMATION_MODE));
     }
     else
     {
-        // BinaryOps without a dedicated SfpuType use the baseline binary addrmod setup.
+        // BinaryOps without a dedicated SfpuType use the baseline binary init.
         // BITWISE_AND/OR/XOR, RSUB_INT32 and MASK(_POSINF) land here: those kernels need
-        // no per-op init beyond the standard binary addrmod configuration.
+        // no per-op init beyond the standard config-reg + counter reset.
         SFPU_BINARY_INIT(add1);
     }
 }
@@ -2365,7 +2366,7 @@ void call_binary_sfpu_operation(
     {
         // logsigmoid(x) = -softplus(-x), with x = in0 and exp(-x) = in1 (the compute
         // kernel is expected to supply exp(-x) as the second operand; the test bakes
-        // it into the paired stimuli). Init: baseline add1 addrmod + logsigmoid_init.
+        // it into the paired stimuli). Init: baseline add1 init + logsigmoid_init.
         SFPU_BINARY_CALL(
             DST_SYNC_MODE,
             DST_ACCUM_MODE,
@@ -2595,7 +2596,7 @@ void call_ternary_sfpu_operation_init()
     }
     else if constexpr (OPERATION == SfpuType::addcmul)
     {
-        // addcmul has no per-op init beyond the shared addrmod setup.
+        // addcmul has no per-op init beyond the shared init.
         SFPU_TERNARY_INIT(addcmul);
     }
     else if constexpr (OPERATION == SfpuType::addcdiv)
