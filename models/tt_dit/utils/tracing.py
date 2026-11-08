@@ -174,6 +174,30 @@ class Tracer:
         self._trace_ids: tuple[ttnn.MeshTraceId, ...] | None = None
         self.capture_count = 0
         self.replay_count = 0
+        # Set by prepare(): inputs are on device and the prep run is done; capture_prepared() records.
+        self._prepared = False
+
+    def prepare(self, *args: Any, **kwargs: Any) -> Any:
+        """Allocate the input buffers and run the prep run now, but capture later.
+
+        Lets a caller put a trace's inputs and everything its first run allocates below other
+        traces, and record the trace itself after every other persistent allocation, so no later
+        allocation sits in its activation region. Returns the prep run's outputs (``None`` without
+        ``prep_run``). Follow with ``capture_prepared()``."""
+        if self._trace_ids is not None or self._prepared:
+            msg = "prepare() must come before the capture, once"
+            raise RuntimeError(msg)
+        self._stage_inputs(args, kwargs)
+        outputs = self._run_prep()
+        self._prepared = True
+        return outputs
+
+    def capture_prepared(self, *, cq_id: int = 0, execute: bool = False) -> None:
+        """Capture the trace of a ``prepare()``d tracer on its stored inputs."""
+        if not self._prepared or self._trace_ids is not None:
+            msg = "capture_prepared() needs a prepared, uncaptured tracer"
+            raise RuntimeError(msg)
+        self._record(cq_id=cq_id, blocking_execution=True, execute=execute)
 
     def __call__(
         self,
@@ -254,10 +278,15 @@ class Tracer:
             msg = "tracer cannot be reused after the trace was released"
             raise RuntimeError(msg)
 
-        args = _tree_map(_verify_value, args, path_label="args")
-        kwargs = _tree_map(_verify_value, kwargs, path_label="kwargs")
-        self._args = _tree_map(self._tensor_to_device, args, path_label="args")
-        self._kwargs = _tree_map(self._tensor_to_device, kwargs, path_label="kwargs")
+        if self._prepared:
+            # Inputs already sit in their buffers from prepare(): copy this call's values in.
+            _tree_map(self._update_input, self._args, args, path_label="args")
+            for name, new in kwargs.items():
+                _tree_map(self._update_input, self._kwargs[name], new, path_label=f'kwargs["{name}"]')
+            self._record(cq_id=cq_id, blocking_execution=blocking_execution, execute=execute)
+            return
+
+        self._stage_inputs(args, kwargs)
 
         if _kernel_prewarm_capturing:
             # Record the trace-variant kernels by running the forward once (program construction writes
@@ -266,17 +295,27 @@ class Tracer:
             self._outputs = self._function(*self._args, **self._kwargs)
             return
 
-        if self._prep_run:
-            if self._clone_prep_inputs:
-                prep_args = _tree_map(_clone_tensor, self._args, path_label="args")
-                prep_kwargs = _tree_map(_clone_tensor, self._kwargs, path_label="kwargs")
-            else:
-                prep_args = self._args
-                prep_kwargs = self._kwargs
+        self._run_prep()
+        self._record(cq_id=cq_id, blocking_execution=blocking_execution, execute=execute)
 
-            self._function(*prep_args, **prep_kwargs)
-            del prep_args, prep_kwargs
+    def _stage_inputs(self, args: tuple[Any, ...], kwargs: dict[str, Any]) -> None:
+        args = _tree_map(_verify_value, args, path_label="args")
+        kwargs = _tree_map(_verify_value, kwargs, path_label="kwargs")
+        self._args = _tree_map(self._tensor_to_device, args, path_label="args")
+        self._kwargs = _tree_map(self._tensor_to_device, kwargs, path_label="kwargs")
 
+    def _run_prep(self) -> Any:
+        if not self._prep_run:
+            return None
+        if self._clone_prep_inputs:
+            prep_args = _tree_map(_clone_tensor, self._args, path_label="args")
+            prep_kwargs = _tree_map(_clone_tensor, self._kwargs, path_label="kwargs")
+        else:
+            prep_args = self._args
+            prep_kwargs = self._kwargs
+        return self._function(*prep_args, **prep_kwargs)
+
+    def _record(self, *, cq_id: int, blocking_execution: bool, execute: bool) -> None:
         # capture trace
         logger.debug("capturing trace...")
         trace_ids = tuple(ttnn.begin_trace_capture(d, cq_id=cq_id) for d in self._devices)
@@ -355,6 +394,7 @@ class Tracer:
         trace_ids = self._trace_ids
         # Failed capture and kernel-prewarm calls also retain input/output buffers.
         self._trace_ids = None
+        self._prepared = False
         self._args = ()
         self._kwargs = {}
         self._outputs = None

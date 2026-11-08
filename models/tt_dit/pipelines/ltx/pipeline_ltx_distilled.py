@@ -631,12 +631,12 @@ class LTXDistilledPipeline(LTXPipeline):
             # puts its weights and anything its first forward allocates below every trace.
             if self.vae_encoder is not None and warm_encoders:
                 logger.info(f"warmup image encoder (before capture): {height // 2}x{width // 2} + {height}x{width}")
-                # Static mesh: capture one encode trace per stage resolution here, below every DiT
-                # capture; each gen replays it ("enc" in LTX_GEN_EAGER_STAGES keeps it eager).
-                # Both shapes run eager first, so every load, program and buffer the encoder needs is
-                # allocated before the first encode capture: an allocation while that capture is live
-                # (allocator.cpp:140 "active trace" warning) was followed by a stage-1 hang (#3354).
-                # "enc" in LTX_GEN_EAGER_STAGES captures nothing: the eager A/B leg holds no encode trace.
+                # Static mesh: one encode trace per stage resolution; each gen replays it ("enc" in
+                # LTX_GEN_EAGER_STAGES keeps it eager and captures nothing). Both shapes run eager, then
+                # both get their trace input and prep run here, before any capture. The traces are
+                # recorded last, in _capture_warmup_traces after the DiT and Gemma captures, so no
+                # persistent buffer (ref encoders, DiT statics, CCL buffers, trace io) is allocated
+                # after an encode capture and overwritten by its replay (#3354: the stage-1 hang).
                 self.vae_encoder.traced = False
                 self._warmup_encode(height // 2, width // 2)
                 self._warmup_encode(height, width)
@@ -965,6 +965,10 @@ class LTXDistilledPipeline(LTXPipeline):
         t_dit = time.time() - t0
         self.gemma_encoder_pair.open_trace_gate()
         self.gemma_encoder_pair.capture_trace()
+        # The image encode traces go last: their inputs and prep runs were allocated in the early
+        # encoder warmup, and nothing persistent is allocated after this.
+        if self.vae_encoder is not None:
+            self.vae_encoder.capture_traces()
         logger.info(
             f"warmup trace capture: DiT {t_dit:.1f}s, Gemma {time.time() - t0 - t_dit:.1f}s "
             f"({len(pending)} warmup call(s))"
