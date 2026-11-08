@@ -762,7 +762,7 @@ PERF_TEST_SCHEMAS = {
             "num_tiles_in_block",
             "output_num_blocks",
             "output_num_tiles_in_block",
-            "pack_block",
+            "pack_block_alt",
             "relu_config",
             "tile_cnt",
             "tilize",
