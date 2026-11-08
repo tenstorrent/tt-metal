@@ -238,17 +238,24 @@ struct Untilized {
         }
     }
 
+    // Whether batch `batch` has been handed over.
+    static bool staged(uint32_t batch) {
+        invalidate_l1_cache();
+        return *produced_by(owner(batch)) >= batch / ct.num_untilizers + 1;
+    }
+
     // Where `page`'s row sits, blocking until the batch holding it has been staged. Hands back everything
     // before it FIRST: the producer reuses those slots to build this one, so holding them back would be
     // waiting on a core that is waiting on us.
+    //
+    // The wait here moves nothing else, so it must not be where a reader sits waiting on the group: that is
+    // Reader::await_rows, called before every batch of tokens with nothing claimed, which leaves this a
+    // check that passes. It stays a wait so that a row is never read before it exists.
     uint64_t take(const ::cmbf2d::GroupWalk& walk, uint32_t page) {
         const uint32_t batch = expert_base + walk.batch_of(page);
         if (batch != open) {
             release_through(batch);
-            volatile tt_l1_ptr uint32_t* produced = produced_by(owner(batch));
-            invalidate_l1_cache();
-            while (*produced < batch / ct.num_untilizers + 1) {
-                invalidate_l1_cache();
+            while (!staged(batch)) {
             }
             open = batch;
         }
@@ -411,6 +418,36 @@ struct Reader {
         return credit < want ? credit : want;
     }
 
+#if TILE
+    // Block until the untilizer batches holding pages [lo, hi) are staged, moving channels meanwhile.
+    //
+    // The untilizer counterpart of reserve_downstream, for the same reason. A batch slot comes back to the
+    // group only when the SLOWER of its two readers has released it (Ring::reclaim_one takes the minimum), so
+    // waiting on the group is waiting on the other stream of this direction -- which may itself be waiting
+    // on downstream credit that only channels on this core can free, final-write ones included. A reader
+    // that waited here without moving its channels closed that cycle: one such wait per chip, chained by
+    // full channels around the ring, deadlocked every chip of a column (quad B, 2026-11-08).
+    //
+    // Called only between batches, with nothing claimed but unannounced, which is what makes serving
+    // channels from inside it safe (see stage_run_slice). Everything before `first` is handed back first:
+    // the producer reuses those slots to build the batches wanted here.
+    void await_rows(uint32_t lo, uint32_t hi) {
+        const uint32_t a = untilized.expert_base + walk.batch_of(lo);
+        const uint32_t b = untilized.expert_base + walk.batch_of(hi - 1);
+        const uint32_t first = a < b ? a : b;
+        const uint32_t last = a < b ? b : a;
+        untilized.release_through(first);
+        for (uint32_t batch = first; batch <= last; batch++) {
+            while (!Untilized::staged(batch)) {
+                flush_publish();  // never make the sender wait on slots we are holding
+                if (!serve_one_channel()) {
+                    flush_credits();  // nothing of ours to move; make sure what we owe is posted
+                }
+            }
+        }
+    }
+#endif
+
     // Hand `n` pages of our channel `vc` back to the chip that wrote them. It cannot be told directly --
     // a stream's fabric connection only points downstream -- so the credit goes to the opposite
     // direction's worker on this chip, whose sender is aimed at exactly that chip and carries it across.
@@ -550,6 +587,10 @@ struct Reader {
                 if (own_vc != ::cmbf2d::VC_NONE) {
                     k = reserve_downstream(own_vc, k);
                 }
+#if TILE
+                // The batch's rows, like its room downstream: before its first slot is claimed, never inside.
+                await_rows(ct.walks_down ? base + n - q - k : base + q, ct.walks_down ? base + n - q : base + q + k);
+#endif
                 for (uint32_t j = 0; j < k; j++) {
                     issue_token(dst_chip_id, own_vc, base + pad_at(n, q + j), pad_at(n, q + j));
                 }
@@ -669,12 +710,6 @@ struct Reader {
     // alike — before the next one starts; that costs some overlap with the fabric work still draining, and
     // whether these copies belong on separate cores entirely is a stage-3 question.
     void run_local_phase(uint32_t local_expert) {
-        // One slot serves as the staging buffer for the whole phase, and is deliberately NEVER published:
-        // the sender must not see these tokens, or it would send them over the fabric as well. Slot
-        // `published % num_l1_slots` is the next one the sender has yet to be told about, so it is ours to
-        // scribble in; claim_slot() is still what proves at least one slot is free before we take it, and
-        // `published` does not move during this phase so it stays free. The CMD_END slot below reclaims it.
-        const uint32_t slot_addr = slot_addr_of(claim_slot());
         const uint32_t e = expert_of(ctl, ct.my_dg_index, local_expert);
         const uint32_t begin = ctl.run_begin(ct.my_dg_index, e);
         const uint32_t n = ctl.run_end(ct.my_dg_index, e) - begin;
@@ -683,20 +718,32 @@ struct Reader {
         walk_pages(lo, hi, [&](uint32_t base, uint32_t window) {
             for (uint32_t i = 0; i < window; i++) {
                 const uint32_t pad = pad_at(window, i);
+                const uint32_t page = base + pad;
+#if TILE
+                // With no slot held: the wait moves channels, and those claim and announce slots of their own.
+                await_rows(page, page + 1);
+#endif
+                // One slot serves as the staging buffer for this token, and is deliberately NEVER published:
+                // the sender must not see it, or it would send the token over the fabric as well. Slot
+                // `published % num_l1_slots` is the next one the sender has yet to be told about, so it is
+                // ours to scribble in; claim_slot() is still what proves at least one slot is free before we
+                // take it, and `published` does not move while we hold it so it stays free. Taken per token
+                // rather than per phase so that nothing is held across the wait above.
+                const uint32_t slot_addr = slot_addr_of(claim_slot());
                 volatile tt_l1_ptr uint32_t* meta =
                     reinterpret_cast<volatile tt_l1_ptr uint32_t*>(meta_pads_addr + pad * ::cmbf2d::META_PAD_STRIDE);
                 const uint32_t out_page = meta[1] * ct.num_experts_per_tok + meta[2];
                 const uint64_t out_addr = dram.out.get_noc_addr(out_page);
-                noc_async_read(token_source(base + pad), slot_addr, ct.token_size_bytes);
+                noc_async_read(token_source(page), slot_addr, ct.token_size_bytes);
                 noc_async_read_barrier();
                 noc_async_write(slot_addr, out_addr, ct.token_size_bytes);
                 // Serialised on purpose: the slot IS the buffer, so it cannot be refilled until the write
                 // has read it out. Overlapping these needs several buffers in flight, tracked separately
                 // from the sender's ring accounting.
                 noc_async_write_barrier();
+                claimed--;  // hand the staging slot back; nothing was ever announced for it
             }
         });
-        claimed--;  // hand the staging slot back; nothing was ever announced for it
     }
 
     // Tokens the upstream chip on this stream writes straight into OUR output over the whole launch. Every
