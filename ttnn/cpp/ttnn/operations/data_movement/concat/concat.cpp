@@ -13,6 +13,7 @@
 #include "ttnn/operations/data_movement/concat/codegen/concat_codegen_supported.hpp"
 #include "ttnn/operations/data_movement/concat/concat.hpp"
 #include "ttnn/operations/data_movement/concat/concat_force.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/operations/data_movement/pad/pad.hpp"
 #include "ttnn/operations/data_movement/tilize/tilize.hpp"
 #include "ttnn/operations/data_movement/untilize_with_unpadding/untilize_with_unpadding.hpp"
@@ -286,6 +287,15 @@ ttnn::Tensor concat_native(
     };
 
     ttnn::Shape logical_output_shape = compute_output_shape(input_tensors, dim);
+
+    // An empty output has nothing to copy, and the concat and transpose factories divide by its zero extents, which
+    // kills the process. Return a correctly-shaped empty tensor, the way tilize and untilize do for empty inputs.
+    if (logical_output_shape.volume() == 0 && ttnn::is_device_tensor(first_tensor)) {
+        tt::tt_metal::TensorSpec spec(
+            logical_output_shape,
+            tt::tt_metal::TensorLayout(first_tensor.dtype(), first_tensor.tensor_spec().page_config(), mem_config));
+        return ttnn::create_device_tensor(spec, first_tensor.device());
+    }
 
     // For interleaved outputs, if sub_core_grids is provided, use direct path to avoid massaged operations
     // which don't currently support sub_core_grids

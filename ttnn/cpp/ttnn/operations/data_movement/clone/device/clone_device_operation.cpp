@@ -88,14 +88,19 @@ ttnn::Tensor clone(
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config,
     const std::optional<CoreRangeSet>& sub_core_grids) {
     using OperationType = ttnn::operations::data_movement::clone::CloneOperation;
-    return ttnn::device_operation::launch<OperationType>(
-        OperationType::operation_attributes_t{
-            dtype.value_or(input.dtype()),
-            memory_config.value_or(input.memory_config()),
-            init_device_compute_kernel_config(
-                input.device()->arch(), compute_kernel_config, tt::tt_metal::MathFidelity::HiFi4),
-            sub_core_grids,
-        },
-        OperationType::tensor_args_t{input});
+    OperationType::operation_attributes_t attributes{
+        dtype.value_or(input.dtype()),
+        memory_config.value_or(input.memory_config()),
+        init_device_compute_kernel_config(
+            input.device()->arch(), compute_kernel_config, tt::tt_metal::MathFidelity::HiFi4),
+        sub_core_grids,
+    };
+    OperationType::tensor_args_t tensor_args{input};
+    // An empty input has nothing to copy, and the factory divides by its dims.
+    if (input.logical_volume() == 0) {
+        OperationType::validate_on_program_cache_miss(attributes, tensor_args);
+        return OperationType::create_output_tensors(attributes, tensor_args);
+    }
+    return ttnn::device_operation::launch<OperationType>(attributes, tensor_args);
 }
 }  // namespace ttnn::prim

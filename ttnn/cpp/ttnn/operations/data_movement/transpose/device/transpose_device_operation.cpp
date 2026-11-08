@@ -456,6 +456,20 @@ ttnn::Tensor transpose(
     float pad_value,
     bool output_mem_config_is_explicit) {
     using OperationType = ttnn::prim::TransposeDeviceOperation;
+    // An empty input transposes to an empty output, and the factories divide by its dims.
+    if (input_tensor.logical_volume() == 0) {
+        OperationType::operation_attributes_t attributes{
+            .dim = dim,
+            .output_mem_config = output_mem_config,
+            .pad_value = pad_value,
+            .output_mem_config_is_explicit = output_mem_config_is_explicit,
+        };
+        TransposeInputs inputs{
+            .input = input_tensor,
+        };
+        OperationType::validate_on_program_cache_miss(attributes, inputs);
+        return OperationType::create_output_tensors(attributes, inputs);
+    }
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
             .dim = dim,
