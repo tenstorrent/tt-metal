@@ -130,9 +130,13 @@ class Media:
         return self._memo[key]
 
     def animated_gif(self):
+        """Three frames, each a coloured shape on white (red circle first). Shapes, not uniform frames: MiMo-V2.6-Flash
+        names the colour of a shape, but answers 'Black' / 'White' for a uniformly coloured picture, and so does the
+        fp32 host reference (reference/answer_image_fp32.py), so a uniform fixture tests the checkpoint, not the API."""
         from PIL import Image
 
-        frames = [Image.new("RGB", (256, 256), c) for c in ((220, 20, 20), (20, 20, 220), (20, 160, 20))]
+        shapes = (("circle", (220, 20, 20)), ("square", (20, 20, 220)), ("triangle", (20, 160, 20)))
+        frames = [Image.open(io.BytesIO(self.image("png", (256, 256), s, c))).convert("RGB") for s, c in shapes]
         buf = io.BytesIO()
         frames[0].save(buf, "GIF", save_all=True, append_images=frames[1:], duration=300, loop=0)
         return buf.getvalue()
@@ -165,17 +169,23 @@ class Media:
                     self._memo[key] = Path(out).read_bytes()
         return self._memo[key]
 
-    def video(self, fmt="mp4", seconds=4, size="320x240", color="red", with_audio=False):
+    def video(self, fmt="mp4", seconds=4, size="320x240", color=(220, 20, 20), with_audio=False):
+        """A still red circle on white (``image``'s shape) for ``seconds`` at 24 fps, optionally with a 440 Hz audio
+        track. A shape, not a uniform colour: see ``animated_gif``."""
         key = ("video", fmt, seconds, size, color, with_audio)
         if key not in self._memo:
             codec_args, _ = VIDEO_FORMATS[fmt]
-            args = ["-f", "lavfi", "-i", f"color=c={color}:size={size}:rate=24:duration={seconds}"]
-            if with_audio:
-                args += ["-f", "lavfi", "-i", f"sine=frequency=440:duration={seconds}", "-c:a", "aac", "-shortest"]
-            if fmt in ("mp4", "mov"):
-                codec_args = codec_args + ["-movflags", "+faststart"]
-            # mp4 / mov muxers need a seekable output, so every format goes through a temporary file.
+            w, h = (int(v) for v in size.split("x"))
             with tempfile.TemporaryDirectory() as tmp:
+                still = os.path.join(tmp, "still.png")
+                Path(still).write_bytes(self.image("png", (w, h), "circle", color))
+                args = ["-loop", "1", "-framerate", "24", "-i", still]
+                if with_audio:
+                    args += ["-f", "lavfi", "-i", f"sine=frequency=440:duration={seconds}", "-c:a", "aac"]
+                args += ["-t", str(seconds), "-pix_fmt", "yuv420p"]
+                if fmt in ("mp4", "mov"):
+                    codec_args = codec_args + ["-movflags", "+faststart"]
+                # mp4 / mov muxers need a seekable output, so every format goes through a temporary file.
                 out = os.path.join(tmp, f"v.{fmt}")
                 _ffmpeg(args + codec_args + [out])
                 self._memo[key] = Path(out).read_bytes()
@@ -215,7 +225,7 @@ def body(*messages, max_tokens=512, **extra):
 
 
 COLOR_Q = "What color is the shape in the image? Answer with one word."
-VIDEO_Q = "What is the dominant color of this video? Answer with one word."
+VIDEO_Q = "What color is the shape in this video? Answer with one word."
 ASR_Q = "Transcribe the speech in this audio."
 SPEECH_WORDS = ("dream", "nation", "children", "character", "judged")
 
@@ -274,7 +284,7 @@ def _cases():
         Case(
             "image_gif_animated",
             lambda m: body(
-                user(text("What color is this image? One word."), image_part(data_uri("image/gif", m.animated_gif())))
+                user(text("What color is the shape in this image? One word."), image_part(data_uri("image/gif", m.animated_gif())))
             ),
             expect_any=("red", "blue", "green"),
             note="first frame is red",
@@ -517,7 +527,7 @@ def _cases():
             "mixed_image_video",
             lambda m: body(
                 user(
-                    text("Name the color of the shape in the image and the color of the video, two words."),
+                    text("Name the color of the shape in the image and the color of the shape in the video, two words."),
                     image_part(_img("png", color=(20, 20, 220))(m)),
                     video_part(data_uri("video/mp4", m.video("mp4"))),
                 )

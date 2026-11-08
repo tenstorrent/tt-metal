@@ -140,12 +140,44 @@ broken encoder path, they do not prove parity. `summarize_results.py` prints eac
 
 | Bench | Bar | Basis (published, other protocols) |
 |---|---|---|
-| Video-MME short, w/o subtitles | >= 75.0% | short videos: Gemini 1.5 Pro 81.7, InternVL2.5-72B 82.8 (64 frames), Qwen2-VL-72B 80.1, GPT-4o 80.0 (video-mme.github.io leaderboard); whole set: Qwen3-Omni-30B-A3B-Instruct 70.5, Qwen2.5-Omni-7B 64.3. We sample 32 frames |
+| Video-MME short, w/o subtitles | >= 75.0% | short videos: Gemini 1.5 Pro 81.7, InternVL2.5-72B 82.8 (64 frames), Qwen2-VL-72B 80.1, GPT-4o 80.0 (video-mme.github.io leaderboard); whole set: Qwen3-Omni-30B-A3B-Instruct 70.5, Qwen2.5-Omni-7B 64.3. We sample 2 frames per second, as MiMo's own endpoint |
 | MMAU test-mini | >= 65.6% | Qwen2.5-Omni-7B 65.60 (model card, split not stated); Qwen3-Omni-30B-A3B-Instruct 77.5 (MMAU-v05.15.25) |
 | LibriSpeech test-clean | WER <= 2.5% | Qwen3-Omni-30B-A3B-Instruct 1.22, Qwen2.5-Omni-7B 1.8, Whisper-large-v3 1.8 (model cards) |
 
 A stronger check than any of these, once the host fp32 multimodal reference runs end to end: the same items through
 the reference and through TT, answer agreement per item.
+
+## Results (2026-11-07)
+
+TT: 4 row engines on bhg4 with the MTP release settings and the multimodal class (`serving/serve_mm_eval.sh`, behind
+`serving/lb.py`), concurrency 32. OpenRouter: the same client (`run_suite.sh --target openrouter`) pinned to one
+provider. "failed = wrong" counts a request that got no answer as wrong; "answered" scores only answered items. Run
+directories on bhg4: `/data/ttuser-agentx/mm/eval_runs/20261107T043703Z/` (references and the first TT sweep),
+`20261107T150944Z/tt` (Video-MME), `20261107T163302Z/tt` (VGI-Bench).
+
+| Bench | TT | GMICloud (bf16) | Xiaomi (fp8, first party) | Other |
+|---|---|---|---|---|
+| OCRBench (1,000) | 84.0 | 87.6 | 86.4 | |
+| MMAU test-mini (1,000) | 61.1 | 62.4 | 63.0 | |
+| LibriSpeech test-clean (WER, 2,620) | 2.02 | 1.71 | 1.81 | |
+| Video-MME short (900) | 80.8 | 75.6 (78.4 answered) | 81.4 | |
+| MMMU-Pro, AA protocol (1,730) | 64.05 | 68.38 | 69.65 | AA: 73.06 |
+| VGI-Bench (439) | 36.2 | | 33.0 (38.2 answered; refuses videos > 300 MB) | OpenRouter: 35.5 +/- 4 |
+
+* TT code: OCRBench, MMAU, LibriSpeech and MMMU-Pro on 885d4142564 (before the prefix-cache race fix), Video-MME on
+  9c014d841ad, VGI-Bench on fc60826e361 (a video's audio track tokenized on the device). Video-MME was 60.6 on
+  885d4142564: the same-step prefix-cache race (142 of 762 answers garbage), vLLM's 32-frame sampling and the missing
+  audio track; after the three fixes it is 80.8.
+* VGI-Bench ran at temperature 1.0 / top_p 0.95, not OpenRouter's 0: Xiaomi's endpoint samples in thinking mode
+  whatever the request asks (3 of 3 different outputs at 0), and MiMo's greedy reasoning loops to the token limit on
+  hard long-video questions (4 of 5 smoke questions; also at 0.05 and 0.2, never at 1.0). On the 380 questions Xiaomi
+  answered: TT 36.8, Xiaomi 38.2 (95% interval of the difference +/- 4.9). `lb.py --thinking-greedy 1.0,0.95` (and
+  tt-inference-server's `TT_PROXY_THINKING_GREEDY`) applies that mapping on request; off by default.
+* The image gap (OCRBench -3 to -4, MMMU-Pro -4 to -6) is not explained. OpenRouter serves the RL checkpoint, we serve
+  MOPD; on uniform-colour images TT answers as the fp32 host reference does (`reference/answer_image_fp32.py`), as
+  does Makora (vLLM) on OpenRouter, while Xiaomi and GMICloud answer differently.
+* API conformance (`test_api_conformance.py`) on 885d4142564: 46 of 55 passed; the 9 failures were all uniform-colour
+  fixtures (the checkpoint's answer, see above). The fixtures are now coloured shapes on white.
 
 ## Suite and estimates
 
@@ -185,7 +217,12 @@ decode rate (the README's documented text throughput at c16, ~1,000 tok/s with M
 run costs little: at GMICloud's list price ($0.112 / $0.224 per M) the full suite including GPQA is a few dollars;
 tau2's gpt-4.1 user simulator is about 6M input tokens (~$12, assumed 8K tokens per user turn).
 
-## tt-inference-server plan (not a branch yet)
+## tt-inference-server plan
+
+Done on tt-inference-server `mimo-v2.6-flash/multimodal` (`--impl mimo-v2.6-flash-mm`: the MTP entry's engine settings
+plus the multimodal class, frames at 2 per second, the proxy shim, the multimodal eval venvs and tasks); the plan below
+is kept as written. Images are built from tt-metal `mimo-v2.6/multimodal` and vllm-tt-plugin
+`mimo-v2.6-flash/multimodal`; these multimodal branches take the text branches' changes, they do not merge back.
 
 Read on bhg4 at `mimo-v2.6-flash/inference-server-dev` 81b1f848. MiMo lives only in `workflows/model_specs/dev/llm.yaml`
 (three entries: GPU reference, `impl: mimo_v2_6_flash`, and the default MTP entry), `model_type` unset (LLM),
@@ -232,8 +269,8 @@ are the closest templates. No video eval exists anywhere.
 
 ## Not done
 
-* No real scores: no TT server and no OpenRouter key yet. Each benchmark is one command once either exists.
-* The online conformance suite has not run against a server.
-* Encoder latency (ViT, audio) is not in the estimates; the vision and audio workstreams measure it.
-* tau2's user simulator needs `OPENROUTER_API_KEY` (or `OPENAI_API_KEY`); OpenRouter does not say which user model its
-  harness uses.
+* The text benchmarks (GPQA-Diamond, tau2) are out of scope for now.
+* The tt-inference-server container (`--impl mimo-v2.6-flash-mm`) has not served a full suite yet; every score above
+  is from row engines behind `lb.py`.
+* The image gap to OpenRouter's providers is open (see Results).
+* Encoder latency (ViT, audio) is not in the estimates.
