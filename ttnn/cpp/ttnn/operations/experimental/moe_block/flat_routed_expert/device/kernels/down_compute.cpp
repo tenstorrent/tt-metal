@@ -11,6 +11,7 @@
 //
 // CT: 0 MT, 1 KT_D, 2 KBLK_D, 3 PCD, 4 NUM_EXPERTS, 5 S, 6 SLOT_TILES, 7 RING
 #include "schedule_meta.hpp"
+#include "flat_prof.hpp"
 #include <cstdint>
 #include "api/compute/matmul.h"
 #include "api/compute/compute_kernel_hw_startup.h"
@@ -20,6 +21,10 @@
 #include "api/compute/pack_untilize.h"
 #endif
 
+#ifdef SE_BENCH  // compute-only microbenchmark (as gate_up_compute.cpp): no CB waits / reserves, SE_BENCH sub-blocks
+#define cb_wait_front(...) ((void)0)
+#define cb_reserve_back(...) ((void)0)
+#endif
 constexpr uint32_t in1_cb = tt::CBIndex::c_1;
 constexpr uint32_t h_all_cb = tt::CBIndex::c_2;
 constexpr uint32_t out_cb = tt::CBIndex::c_16;
@@ -62,24 +67,66 @@ static_assert(pcd % cpw == 0);
 #endif
 
 uint32_t popped = 0;
+uint32_t d_rd = 0;  // popped % RING, kept by the pops (no division in the K loop)
+// (profiler: cycles waiting for h / weights (UNPACK), out space and math (PACK), DST (MATH), the matmul (MATH))
+FP_VAR(fp_wh);
+FP_VAR(fp_ww);
+FP_VAR(fp_ores);
+FP_VAR(fp_regw);
+FP_VAR(fp_acq);
+FP_VAR(fp_mm);
 
 #ifdef SE_DN_REG
 // Pinned schedule (expert_schedule.hpp): load l's block j is stream block l * NBLK + j in ring slot region(l) * NBLK +
 // j, popped by count after its last use (as gate_up_compute.cpp's gate/up ring).
 FORCE_INLINE uint32_t wblock_dyn(uint32_t p, uint32_t phys) {
     if (p + 1 > popped) {
+        FP_T0(t);
         cb_wait_front(in1_cb, (p + 1 - popped) * slot);
+        FP_ADD(fp_ww, t);
     }
-    return static_cast<uint32_t>(static_cast<int32_t>(phys) - static_cast<int32_t>(popped % ring)) * slot;
+    return static_cast<uint32_t>(static_cast<int32_t>(phys) - static_cast<int32_t>(d_rd)) * slot;
 }
 #endif
 
-FORCE_INLINE uint32_t wblock(uint32_t a) {
+// a: the stream block, ar: its ring slot (a % RING)
+FORCE_INLINE uint32_t wblock(uint32_t a, uint32_t ar) {
+    FP_T0(t);
     cb_wait_front(in1_cb, (a - popped + 1) * slot);
-    return static_cast<uint32_t>(static_cast<int32_t>(a % ring) - static_cast<int32_t>(popped % ring)) * slot;
+    FP_ADD(fp_ww, t);
+    return static_cast<uint32_t>(static_cast<int32_t>(ar) - static_cast<int32_t>(d_rd)) * slot;
+}
+
+// One row tile's column pass [c0, c0 + cw): DST += h_all row r @ the resident weights over all KT_D K tiles, a weight
+// block (KBLK_D K tiles) at a time. b0: the load's first stream block, ph0: its first ring slot (SE_DN_REG; else b0 %
+// RING). POP: the expert's last row's final pass - each weight block goes as soon as it is used, so the next expert's
+// blocks stream into the ring while this row still runs. Only POP = false is inlined: the TRISCs' code fetch limits
+// the K loop once it grows (as gate_up_compute.cpp's row passes), so the popping row is out of line.
+template <bool POP>
+FORCE_INLINE void dn_row(uint32_t r, uint32_t c0, uint32_t cw, uint32_t b0, uint32_t ph0) {
+    for (uint32_t j = 0; j < nblk; ++j) {
+#ifdef SE_DN_REG
+        const uint32_t w = wblock_dyn(b0 + j, ph0 + j);
+#else
+        const uint32_t w = wblock(b0 + j, ph0 + j < ring ? ph0 + j : ph0 + j - ring);
+#endif
+        for (uint32_t i = 0; i < kblk_d; ++i) {
+            matmul_block(h_all_cb, in1_cb, r + (j * kblk_d + i) * mt, w + i * pcd + c0, 0, false, cw, 1, hk);
+        }
+        if constexpr (POP) {
+            cb_pop_front(in1_cb, slot);
+            ++popped;
+            d_rd = d_rd + 1 == ring ? 0 : d_rd + 1;
+        }
+    }
+}
+template <bool POP>
+__attribute__((noinline)) void dn_row_cold(uint32_t r, uint32_t c0, uint32_t cw, uint32_t b0, uint32_t ph0) {
+    dn_row<POP>(r, c0, cw, b0, ph0);
 }
 
 void kernel_main() {
+    FP_ZONE("FRE-DN-C");
     compute_kernel_hw_startup<SrcOrder::Reverse>(h_all_cb, in1_cb, out_cb);
 #ifdef SE_PACK_SRND  // stochastic rounding in the packer (the default rounds bf16 -> bfp8 ties away from zero)
     UNPACK((_llk_unpack_configure_stoch_rnd_<StochRndType::Pack>()));
@@ -87,6 +134,31 @@ void kernel_main() {
     matmul_block_init(h_all_cb, in1_cb, false, cpw, 1, hk);
 #ifdef SE_Y_RM
     pack_untilize_dest_init<cpw, pcd>(out_cb);
+#endif
+#ifdef SE_BENCH
+    {
+        FP_ZONE("DN-BENCH");
+        const uint32_t brows = get_arg_val<uint32_t>(1), bb0 = get_arg_val<uint32_t>(2);
+        for (uint32_t v = 0; v < SE_BENCH; ++v) {
+            for (uint32_t r = 0; r < brows; ++r) {
+                tile_regs_acquire();
+#ifdef SE_BENCH_COLD  // (the op's code shape: the popping row's out-of-line path present, a runtime flag)
+                if (get_arg_val<uint32_t>(0) && r == brows - 1) {
+                    dn_row_cold<true>(r, 0, pcd <= cpw ? pcd : cpw, bb0, bb0);
+                } else
+#endif
+                    dn_row<false>(r, 0, pcd <= cpw ? pcd : cpw, bb0, bb0);
+                tile_regs_commit();
+                tile_regs_wait();
+                for (uint32_t i = 0; i < pcd; ++i) {
+                    pack_tile<true>(i, out_cb, r * pcd + i);
+                }
+                tile_regs_release();
+            }
+            cb_push_back(out_cb, mt * pcd);
+        }
+    }
+    return;
 #endif
     // Dynamic counts: CB 6 holds [n_act, num_v, subs of each active expert] (from the down core's data movement); the
     // in1 ring holds only the active experts, so an active expert's index is its place in the stream.
@@ -108,11 +180,18 @@ void kernel_main() {
         const bool last_sub = s + 1 == subs_e;
 #endif
         {
+            FP_T0(t);
             cb_wait_front(h_all_cb, h_all_tiles);
+            FP_ADD(fp_wh, t);
         }
+#ifdef SE_PROF_SB  // (profiler: one zone a sub-block's down projection, after its h has landed)
+        DeviceZoneScopedN("DN-SB");
+#endif
 #ifndef SE_Y_RM
         {
+            FP_T0(t);
             cb_reserve_back(out_cb, mt * pcd);
+            FP_ADD(fp_ores, t);
         }
 #endif
         for (uint32_t r = 0; r < rows; ++r) {
@@ -122,31 +201,35 @@ void kernel_main() {
             }
 #endif
             for (uint32_t c0 = 0; c0 < pcd; c0 += cpw) {
-                const uint32_t cw = pcd - c0 < cpw ? pcd - c0 : cpw;
+                // (one column pass when PCD fits DST: its width a constant)
+                const uint32_t cw = pcd <= cpw ? pcd : (pcd - c0 < cpw ? pcd - c0 : cpw);
                 const bool final_pass = c0 + cw == pcd;
                 if constexpr (pcd > cpw) {
                     matmul_block_init(h_all_cb, in1_cb, false, cw, 1, hk);
                 }
-                tile_regs_acquire();
-                uint32_t w = 0;
-                for (uint32_t kk = 0; kk < kt_d; ++kk) {
-                    if (kk % kblk_d == 0) {
-#ifdef SE_DN_REG
-                        w = wblock_dyn(ld * nblk + kk / kblk_d, ph0 + kk / kblk_d);
-#else
-                        w = wblock(e * nblk + kk / kblk_d);
-#endif
-                    }
-                    matmul_block(h_all_cb, in1_cb, r + kk * mt, w + (kk % kblk_d) * pcd + c0, 0, false, cw, 1, hk);
-                    // The expert's last row (final column pass): each weight block goes as soon as it is used, so
-                    // the next expert's blocks stream into the ring while this row still runs.
-                    if (last_sub && final_pass && r == rows - 1 && kk % kblk_d == kblk_d - 1) {
-                        cb_pop_front(in1_cb, slot);
-                        ++popped;
-                    }
+                {
+                    FP_T0(t);
+                    tile_regs_acquire();
+                    FP_ADD(fp_acq, t);
                 }
+                FP_T0(tmm);
+#ifdef SE_DN_REG
+                const uint32_t b0 = ld * nblk, r0 = ph0;
+#else
+                const uint32_t b0 = e * nblk, r0 = b0 % ring;
+#endif
+                if (last_sub && final_pass && r == rows - 1) {
+                    dn_row_cold<true>(r, c0, cw, b0, r0);
+                } else {
+                    dn_row<false>(r, c0, cw, b0, r0);
+                }
+                FP_ADD(fp_mm, tmm);
                 tile_regs_commit();
-                tile_regs_wait();
+                {
+                    FP_T0(t);
+                    tile_regs_wait();
+                    FP_ADD(fp_regw, t);
+                }
 #if defined(SE_Y_RM)
                 pack_untilize_dest<cpw, pcd>(out_cb, 1, c0 / cpw);
 #else
@@ -175,4 +258,10 @@ void kernel_main() {
         }
     }
     cb_pop_front(tt::CBIndex::c_6, 1);
+    FP_EMIT("DN-WH", fp_wh);
+    FP_EMIT("DN-WW", fp_ww);
+    FP_EMIT("DN-ORES", fp_ores);
+    FP_EMIT("DN-REGW", fp_regw);
+    FP_EMIT("DN-ACQ", fp_acq);
+    FP_EMIT("DN-MM", fp_mm);
 }

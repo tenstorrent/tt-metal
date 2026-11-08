@@ -12,8 +12,10 @@
 #endif
 #include "api/compute/tilize.h"
 #include "api/compute/compute_kernel_hw_startup.h"
+#include "flat_prof.hpp"
 
 void kernel_main() {
+    FP_ZONE("FRE-XI-TC");
     constexpr uint32_t rm_cb = get_compile_time_arg_val(0);
     constexpr uint32_t sb_cb = get_compile_time_arg_val(1);
     constexpr uint32_t mt = get_compile_time_arg_val(2);
@@ -25,13 +27,20 @@ void kernel_main() {
     UNPACK((_llk_unpack_configure_stoch_rnd_<StochRndType::Pack>()));
 #endif
     fast_tilize_init(rm_cb, SE_SBT, sb_cb);
+    // (profiler: cycles waiting for sb space (PACK) / row-major chunks (UNPACK))
+    FP_VAR(fp_sres);
+    FP_VAR(fp_wrm);
     for (uint32_t b = 0; b < num_sb; ++b) {
         {
+            FP_T0(t);
             cb_reserve_back(sb_cb, mt * SE_SBT);
+            FP_ADD(fp_sres, t);
         }
         for (uint32_t m = 0; m < mt; ++m) {
             {
+                FP_T0(t);
                 cb_wait_front(rm_cb, 32);
+                FP_ADD(fp_wrm, t);
             }
             {
                 fast_tilize_block(rm_cb, SE_SBT, sb_cb, 0, m * SE_SBT);
@@ -41,4 +50,6 @@ void kernel_main() {
         cb_push_back(sb_cb, mt * SE_SBT);
     }
     fast_tilize_uninit(rm_cb, sb_cb, SE_SBT);
+    FP_EMIT("XT-SRES", fp_sres);
+    FP_EMIT("XT-WRM", fp_wrm);
 }

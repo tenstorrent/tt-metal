@@ -20,8 +20,10 @@
 #include "y_row_major.hpp"
 #include "combine_done.hpp"  // (combine overlap: this core's y writer reports to combine's collector)
 #endif
+#include "flat_prof.hpp"
 
 void kernel_main() {
+    FP_ZONE("FRE-DN-WR");
     constexpr uint32_t cb = get_compile_time_arg_val(0);
     constexpr uint32_t slot = get_compile_time_arg_val(1);
     constexpr uint32_t tile_bytes = get_compile_time_arg_val(2);
@@ -88,6 +90,19 @@ void kernel_main() {
 #else
     auto y_poll = []() {};
 #endif
+#ifdef SE_DW_SPLIT
+    // (SE_DW_SPLIT q: the down core's BRISC reads the last q quarters of each block on NOC1, down_core_writer.cpp; here
+    // the rest on NOC0 - the weight stream over both of the DRAM banks' worker ports. RESV: blocks reserved here (their
+    // slots may be filled), LAND: blocks whose BRISC part has landed)
+    static_assert(SE_DN_REG, "SE_DW_SPLIT: the pinned schedule's ring addressing");
+    constexpr uint32_t blk_bytes = slot * tile_bytes, nc_bytes = blk_bytes / 4 * (4 - SE_DW_SPLIT);
+    volatile tt_l1_ptr uint32_t* dw_resv =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(SE_DW_RESV_SEM));
+    volatile tt_l1_ptr uint32_t* dw_land =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(SE_DW_LAND_SEM));
+#else
+    constexpr uint32_t nc_bytes = slot * tile_bytes;
+#endif
     for (uint32_t b = 0; b < total;) {
         uint32_t n = total - b < batch ? total - b : batch;
 #ifdef SE_DN_REG
@@ -108,13 +123,25 @@ void kernel_main() {
             cb_reserve_back(cb, (i + 1) * slot);
             l1[i] = dst(b + i, i);
         }
+#ifdef SE_DW_SPLIT
+        *dw_resv = b + n;
+#endif
         for (uint32_t i = 0; i < n; ++i) {
-            noc_async_read(wsrc(blk(b + i)), l1[i], slot * tile_bytes);
+            noc_async_read(wsrc(blk(b + i)), l1[i], nc_bytes);
         }
         while (!ncrisc_noc_reads_flushed(noc_index)) {
             y_poll();
         }
         noc_async_read_barrier();
+#ifdef SE_DW_SPLIT
+        while (true) {
+            invalidate_l1_cache();
+            if (*dw_land >= b + n) {
+                break;
+            }
+            y_poll();
+        }
+#endif
         cb_push_back(cb, n * slot);
         b += n;
     }
@@ -131,6 +158,10 @@ void kernel_main() {
     cmb.report();  // the experts this core writes nothing of
 #endif
     noc_async_write_set_trid(0);  // (the next program's plain writes carry ID 0)
+#endif
+#ifdef SE_DW_SPLIT
+    *dw_resv = 0;  // (both words restart at zero every launch: the BRISC has seen every block land)
+    *dw_land = 0;
 #endif
     // leave no NoC transaction in flight (reads, writes, atomics, posted writes): the next program starts clean
     noc_async_full_barrier();

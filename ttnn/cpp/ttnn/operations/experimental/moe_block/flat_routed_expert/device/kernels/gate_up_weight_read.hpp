@@ -26,6 +26,9 @@ struct SeGuRead {
     // a block read as PIECES reads of blk / PIECES (DEPTH counts pieces in flight); iss / done count pieces, pc the
     // next piece of the block being issued
     static constexpr uint32_t pieces = SE_GU_PIECES;
+    // this reader's pieces of each block: [p_lo, p_lo + p_n) (SE_GU_SPLIT: the NCRISC on NOC0 reads the first half, the
+    // BRISC on NOC1 the second - the weight stream leaves the DRAM banks over both their worker ports)
+    uint32_t p_lo = 0, p_n = pieces;
     uint32_t pbytes = 0, pc = 0;
     volatile tt_l1_ptr uint32_t* grant = nullptr;
     volatile tt_l1_ptr uint32_t* data = nullptr;
@@ -39,7 +42,9 @@ struct SeGuRead {
         uint32_t n_load,
         const volatile tt_l1_ptr uint32_t* loads_,
         volatile tt_l1_ptr uint32_t* grant_,
-        volatile tt_l1_ptr uint32_t* data_) {
+        volatile tt_l1_ptr uint32_t* data_,
+        uint32_t p_lo_ = 0,
+        uint32_t p_n_ = pieces) {
         base = get_arg_val<uint32_t>(a0) + get_arg_val<uint32_t>(a0 + 2);
         bank = get_arg_val<uint32_t>(a0 + 1);
         chunk = get_arg_val<uint32_t>(a0 + 3);
@@ -48,7 +53,9 @@ struct SeGuRead {
         per_e = per_e_;
         depth = depth_;
         pbytes = blk / pieces;
-        total = n_load * per_e * pieces;
+        p_lo = p_lo_;
+        p_n = p_n_;
+        total = n_load * per_e * p_n;
         loads = loads_;
         grant = grant_;
         data = data_;
@@ -57,15 +64,15 @@ struct SeGuRead {
     // Issues the granted reads, publishes the landed ones; true once every chunk has landed (call with the L1 cache
     // invalidated: the grant counter is the receiver's)
     bool step() {
-        while (iss < total && iss - done < depth && *grant >= iss / pieces + 1) {
+        while (iss < total && iss - done < depth && *grant >= iss / p_n + 1) {
             const uint32_t v = loads[l];
-            const uint32_t src = base + ((v & 0xFF) * per_e + ce) * chunk + pc * pbytes;
-            const uint32_t dst = land + (((v >> 8) & 0xFF) * per_e + ce) * blk + pc * pbytes;
+            const uint32_t src = base + ((v & 0xFF) * per_e + ce) * chunk + (p_lo + pc) * pbytes;
+            const uint32_t dst = land + (((v >> 8) & 0xFF) * per_e + ce) * blk + (p_lo + pc) * pbytes;
             noc_async_read_set_trid(SE_GU_TRID0 + ri);
             noc_async_read(get_noc_addr_from_bank_id<true>(bank, src), dst, pbytes);
             ++iss;
             ri = ri + 1 == depth ? 0 : ri + 1;
-            if (++pc == pieces) {
+            if (++pc == p_n) {
                 pc = 0;
                 if (++ce == per_e) {
                     ce = 0;
@@ -83,7 +90,7 @@ struct SeGuRead {
             moved = true;
         }
         if (moved) {
-            *data = done / pieces;
+            *data = done / p_n;
         }
         return done == total;
     }

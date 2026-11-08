@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
 #include <functional>
 #include <initializer_list>
 #include <iterator>
@@ -272,7 +273,11 @@ FlatRoutedExpertPlan make_plan(
         }
         const uint32_t np = per / 2;
         const bool pairs = per % 2 == 0 && p.It % np == 0 && (p.It / np) % 16 == 0;
-        for (uint32_t xs : {24u, 16u, 12u}) {
+        std::vector<uint32_t> xs_try = {24u, 16u, 12u};
+        if (const char* v = std::getenv("FRE_X_SLOTS")) {  // (TEMP tuning: try this many x slots first)
+            xs_try.insert(xs_try.begin(), static_cast<uint32_t>(std::stoul(v)));
+        }
+        for (uint32_t xs : xs_try) {
             const uint32_t dst = pairs ? gu_dst(np, p.Ht, xs).first : gu_dst((per + 1) / 2, p.Ht, xs, true).first;
             const uint32_t mt_ = std::min(dst / per, mt_max);
             // (a gate/up core's arena: the weight ring and the x ring)
@@ -484,7 +489,11 @@ FlatRoutedExpertPlan make_plan(
     // (GLM-5.3 / M3 32 x 6, K2.7 32 x 7, GLM-5.3-Flash 32 x 4, V4.1-Flash 32 x 5, K3 28 x 4; K3 at M 2048, us per
     // expert: 26 down 5 columns max 409, 28 / 30 at 4 384, 32 at 4 400); the rest of the cells are left to the combine
     if (!p.down.empty()) {
-        const uint32_t n = std::min<uint32_t>(32u, p.down.size());
+        uint32_t dn_max = 32;  // (TEMP tuning: FRE_DN_MAX overrides the down-core cap)
+        if (const char* v = std::getenv("FRE_DN_MAX")) {
+            dn_max = std::stoul(v);
+        }
+        const uint32_t n = std::min<uint32_t>(dn_max, p.down.size());
         const uint32_t per = (p.rem_cols + n - 1) / n;
         p.down.resize(std::min<size_t>(p.down.size(), (p.rem_cols + per - 1) / per));
         ND = p.down.size();

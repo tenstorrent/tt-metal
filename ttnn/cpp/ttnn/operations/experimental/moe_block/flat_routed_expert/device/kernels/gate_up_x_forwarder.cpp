@@ -17,8 +17,10 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "gate_up_weight_read.hpp"
+#include "flat_prof.hpp"
 
 void kernel_main() {
+    FP_ZONE("FRE-GU-XF");
     constexpr uint32_t x_slots = get_compile_time_arg_val(0), x_bytes = get_compile_time_arg_val(1);
     constexpr uint32_t xp = get_compile_time_arg_val(2), xarr_id = get_compile_time_arg_val(3);
     constexpr uint32_t sfree_id = get_compile_time_arg_val(4), xcons_id = get_compile_time_arg_val(5);
@@ -51,7 +53,22 @@ void kernel_main() {
         }
         volatile tt_l1_ptr uint32_t* mb =
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(tt::CBIndex::c_7) + 2 * SE_DYN_HALF);
+#ifdef SE_GU_SPLIT  // (the first half of each block's pieces here on NOC0; the receiver reads the rest on NOC1)
+        static_assert(SeGuRead::pieces % 2 == 0, "SE_GU_SPLIT: an even number of pieces a block");
+        gr.init(
+            6,
+            SE_GU_BLK,
+            SE_GU_PER_E,
+            SE_GU_DEPTH,
+            mb[0],
+            mb + 1,
+            sem(SE_GU_GRANT_SEM),
+            sem(SE_GU_DATA_SEM),
+            0,
+            SeGuRead::pieces / 2);
+#else
         gr.init(6, SE_GU_BLK, SE_GU_PER_E, SE_GU_DEPTH, mb[0], mb + 1, sem(SE_GU_GRANT_SEM), sem(SE_GU_DATA_SEM));
+#endif
         g_done = gr.total == 0;
     }
     // a short last sub-block: its blocks' pieces past its row tiles holding tokens carry nothing - counted (XARR), not
@@ -67,8 +84,33 @@ void kernel_main() {
         cnp = (lr * xp + mt - 1) / mt;
     };
     set_np();
+#if defined(PROFILE_KERNEL)
+    // (profiler: each loop's cycles go to the state its top saw - the weight reads: all landed / DEPTH in flight
+    // (the NoC / DRAM) / waiting for a grant (the receiver's free slots); x: none to forward / waiting for the
+    // predecessor's data / the successor's free slot / DEPTH in flight)
+    uint32_t fp_prev = fp_now(), fp_gs = 0, fp_xs = 0;
+    uint32_t fp_g[3] = {0, 0, 0}, fp_x[4] = {0, 0, 0, 0};
+#endif
     while (true) {
         invalidate_l1_cache();
+#if defined(PROFILE_KERNEL)
+        {
+            const uint32_t now = fp_now();
+            fp_g[fp_gs] += now - fp_prev;
+            fp_x[fp_xs] += now - fp_prev;
+            fp_prev = now;
+            fp_gs = g_done ? 0 : (gr.iss - gr.done >= gr.depth ? 1 : (*gr.grant < gr.iss / gr.p_n + 1 ? 2 : 1));
+            if (!sxy) {
+                fp_xs = 0;
+            } else if (iss >= *xarr) {
+                fp_xs = 1;
+            } else if (iss - fwd >= depth) {
+                fp_xs = 3;
+            } else {
+                fp_xs = (iss / xp < x_slots || *sfree >= iss / xp + 1 - x_slots) ? 3 : 2;
+            }
+        }
+#endif
         if (!g_done) {
             g_done = gr.step();
         }
@@ -115,6 +157,15 @@ void kernel_main() {
             break;
         }
     }
+#if defined(PROFILE_KERNEL)
+    DeviceTimestampedData("XF-G-DONE", fp_g[0]);
+    DeviceTimestampedData("XF-G-INFL", fp_g[1]);
+    DeviceTimestampedData("XF-G-GRANT", fp_g[2]);
+    DeviceTimestampedData("XF-X-NONE", fp_x[0]);
+    DeviceTimestampedData("XF-X-ARR", fp_x[1]);
+    DeviceTimestampedData("XF-X-SFREE", fp_x[2]);
+    DeviceTimestampedData("XF-X-INFL", fp_x[3]);
+#endif
     gr.finish();
     noc_async_write_barrier();
     noc_async_atomic_barrier();

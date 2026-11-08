@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstdlib>
 #include <map>
 #include <string>
 
@@ -119,10 +120,21 @@ FlatProgramHandles add_flat_routed_expert_program(
     // traffic. Each primary unicasts its blocks into its rectangle's snake head; the gate/up cores forward them
     // along the snake (down a column, wrapping inside the rectangle, one column over, on down), each piece once its
     // successor has freed the block's slot. One snake a rectangle (2: the relay writes every block twice - GLM-5.3 M
-    // 1024 238.7 vs 205.5 us / expert, multicast 211.5), 4 cut-through pieces, the forwarder on the gate/up NCRISC
-    // (gate_up_x_forwarder.cpp) on NOC0 with 3 pieces in flight, the receiver (gate_up_core_reader.cpp, BRISC) on NOC1.
+    // 1024 238.7 vs 205.5 us / expert, multicast 211.5), cut-through pieces of at least 8 KB, the forwarder on the
+    // gate/up NCRISC (gate_up_x_forwarder.cpp) on NOC0 with 3 pieces in flight, the receiver (gate_up_core_reader.cpp,
+    // BRISC) on NOC1. The pieces: the most (4 / 2 / 1) of at least 8 KB - the forwarder's bytes in flight bound the
+    // snake's x rate, and 3 x 4.3 KB starved the gate/up cores of 64-row sub-blocks (flat us at M 256 / 1024 / 2048, 4
+    // vs 2 pieces: M3 (16 experts a chip) 1555 / 5244 / 10194 vs 1430 / 4302 / 8333, DSv4.1-Flash (12) 946 / 3128 /
+    // 6034 vs 748 / 2610 / 5089; deeper (5, 7 in flight) or whole blocks no better; 128-row sub-blocks (GLM-5.3) keep
+    // 4)
     const auto aligned = [&](uint32_t n) { return x_bytes % n == 0 && (x_bytes / n) % 16 == 0; };
-    const uint32_t x_pieces = aligned(4) ? 4 : (aligned(2) ? 2 : 1);
+    uint32_t x_pieces = 1;
+    for (uint32_t n : {4u, 2u}) {
+        if (aligned(n) && x_bytes / n >= 8 * 1024) {
+            x_pieces = n;
+            break;
+        }
+    }
     constexpr uint32_t X_FWD_DEPTH = 3;
     log_info(
         tt::LogOp,
@@ -282,6 +294,10 @@ FlatProgramHandles add_flat_routed_expert_program(
         if (cfg.down_fp32) {
             d = with(d, {{"SE_DN_FP32", "1"}, {"SE_DN_FULL_SYNC", "1"}});
         }
+        if (std::getenv("FRE_PROF_SB")) {  // (TEMP profiling: a device-profiler zone a down sub-block)
+            d["SE_PROF_SB"] = "1";
+            d["SE_PROF_LIGHT"] = "1";
+        }
         return d;
     };
 
@@ -425,7 +441,14 @@ FlatProgramHandles add_flat_routed_expert_program(
             {{"SE_X_FWD_NC_CONS", "2"}, {"SE_X_FWD_NC_END", "3"}, {"SE_X_FWD_DEPTH", std::to_string(X_FWD_DEPTH)}});
         // gate/up weights read by the gate/up cores (gate_up_weight_read.hpp): the receiver's grant counter (GRANT) and
         // its landed-blocks count (DATA), semaphore 0 the loads-list mailbox to the NCRISC reader
-        const Defines gu_def = {
+        // (TEMP tuning: FRE_GU_SPLIT=1 - half of each weight block's pieces read by the receiver on NOC1, the weight
+        // stream over both of the DRAM banks' worker ports)
+        const bool gu_split = std::getenv("FRE_GU_SPLIT") != nullptr;
+        TT_FATAL(
+            !gu_split || p.gu_pieces % 2 == 0,
+            "FRE_GU_SPLIT: {} weight pieces a block (layout gu_read_pieces 2 / 4)",
+            p.gu_pieces);
+        Defines gu_def = {
             {"SE_GU_BLK", std::to_string(p.slot * w_tile)},
             {"SE_GU_PER_E", std::to_string(p.nk_gu)},
             {"SE_GU_DEPTH", std::to_string(p.gu_depth)},
@@ -434,7 +457,13 @@ FlatProgramHandles add_flat_routed_expert_program(
             {"SE_GU_GRANT_SEM", std::to_string(GRANT)},
             {"SE_GU_DATA_SEM", std::to_string(DATA)},
             {"SE_DYN_HALF", dyn_def.at("SE_DYN_HALF")}};
+        if (gu_split) {
+            gu_def["SE_GU_SPLIT"] = "1";
+        }
         gu_reader_def.insert(gu_def.begin(), gu_def.end());
+        if (std::getenv("FRE_GU_STAGGER")) {  // (TEMP tuning: the second load's slots granted after sub-block 0's x)
+            gu_reader_def["SE_GU_STAGGER"] = "1";
+        }
         if (p.nu) {  // 16-column units: the h run from K-tile cg NU / 2, half tiles at the ends
             gu_reader_def["SE_HG_NU"] = std::to_string(p.nu);
             gu_reader_def["SE_HPC"] = std::to_string(p.hpc);
@@ -456,10 +485,14 @@ FlatProgramHandles add_flat_routed_expert_program(
                NOC::NOC_0,
                {p.x_slots, x_bytes, x_pieces, XARR, SFREE, 2, 3, X_FWD_DEPTH, p.nsb * p.sbt / kKBlk, MT},
                gu_def);
-        const bool gu_rp = p.gu_rp && !p.gu_full_sync;
+        // (TEMP tuning: FRE_GU_BF16=1 - gate/up accumulated in a bf16 half-sync DST of 8 tiles, the sub-block in one
+        // pass)
+        const bool gu_bf16 = std::getenv("FRE_GU_BF16") && p.mt * p.gwt <= 8;
+        const bool gu_rp = p.gu_rp && !p.gu_full_sync && !gu_bf16;
         Defines cdef = with(
             dyn_def,
-            {{"SE_DST_TILES", std::to_string(gu_rp ? 4 : p.dst_tiles)}, {"SE_ACT", std::to_string(cfg.activation)}});
+            {{"SE_DST_TILES", std::to_string(gu_bf16 ? 8 : (gu_rp ? 4 : p.dst_tiles))},
+             {"SE_ACT", std::to_string(cfg.activation)}});
         if (gu_rp) {
             cdef["SE_GU_RP"] = std::to_string(std::max(1u, 4 / p.gwt));
             cdef["SE_XSLOTS"] = std::to_string(p.x_slots);
@@ -470,20 +503,26 @@ FlatProgramHandles add_flat_routed_expert_program(
         if (p.hg) {  // half-width gate / up tiles: the face-wise activation
             cdef["SE_HG"] = "1";
         }
+        if (std::getenv("FRE_PROF_SB")) {  // (TEMP profiling: a device-profiler zone a gate/up sub-block, no sums)
+            cdef["SE_PROF_SB"] = "1";
+            cdef["SE_PROF_LIGHT"] = "1";
+        }
         if (p.nu) {  // 16-column units per core (RT 1: the core's first unit odd)
             cdef["SE_HG_NU"] = std::to_string(p.nu);
             cdef["SE_HPC"] = std::to_string(p.hpc);
         }
         const auto kc =
-            cp("gate_up_compute.cpp", p.gu, {kKBlk, MT, p.nk_gu, p.slot, NP, p.ring_g}, cdef, true, p.gu_full_sync);
+            cp("gate_up_compute.cpp",
+               p.gu,
+               {kKBlk, MT, p.nk_gu, p.slot, NP, p.ring_g},
+               cdef,
+               !gu_bf16,
+               p.gu_full_sync && !gu_bf16);
         for (uint32_t r = 0; r < n_rd; ++r) {
             for (uint32_t j = 0; j < p.r_; ++j) {
                 const uint32_t ci = p.gu_at(r, j);
                 const CoreCoord gc = p.gu[ci];
                 const uint32_t cg_ = r * p.rg + j;  // (the core's column group)
-                Args a;
-                // the grant counter's semaphore id, column group, chain heads, GATH, h_all, head xy
-                a.lit(GRANT).lit(cg_).lit(head_xy.size()).lit(GATH).a(FlatAddr::Arena, p.h_off).lits(head_xy).cat(dyn);
                 // the gate/up weight reads (gate_up_weight_read.hpp, on this core's NCRISC): weights, bank, this core's
                 // first block (slot region + block j), chunk bytes, landing ring (the arena's start)
                 Args gw;
@@ -492,6 +531,14 @@ FlatProgramHandles add_flat_routed_expert_program(
                     .lit((r / banks) * p.region_bytes + j * p.slot * w_tile)
                     .lit(p.rg * p.slot * w_tile)
                     .a(FlatAddr::Arena, 0);
+                Args a;
+                // the grant counter's semaphore id, column group, chain heads, GATH, h_all, head xy (SE_GU_SPLIT: then
+                // the weight read args, the receiver reads half of each block too)
+                a.lit(GRANT).lit(cg_).lit(head_xy.size()).lit(GATH).a(FlatAddr::Arena, p.h_off).lits(head_xy);
+                if (gu_split) {
+                    a.cat(gw);
+                }
+                a.cat(dyn);
                 add_rt(kr, gc, a);
                 // x ring, predecessor (+ its free word's sem), successor, relay + this core's word there
                 Args f;
@@ -529,25 +576,40 @@ FlatProgramHandles add_flat_routed_expert_program(
             a.insert(b.begin(), b.end());
             return a;
         };
+        // (TEMP tuning: FRE_DW_SPLIT=q - the down writer (BRISC, NOC1) reads the last q quarters of each down weight
+        // block, the NCRISC reader (NOC0) the rest: the weight stream over both of the DRAM banks' worker ports)
+        const uint32_t dw_split = std::getenv("FRE_DW_SPLIT") ? std::stoul(std::getenv("FRE_DW_SPLIT")) : 0;
+        TT_FATAL(dw_split <= 3 && (!dw_split || (dn_reg && !y_nc)), "FRE_DW_SPLIT: 1..3, the pinned schedule");
+        Defines dw_split_def;
+        if (dw_split) {
+            dw_split_def = {
+                {"SE_DW_SPLIT", std::to_string(dw_split)},
+                {"SE_DW_RESV_SEM", "13"},
+                {"SE_DW_LAND_SEM", "1"},
+                {"SE_DW_BLK", std::to_string(slot * w_tile)},
+                {"SE_DW_PER_E", std::to_string(nblk)},
+                {"SE_DW_ROT", std::to_string(banks)}};
+        }
+        const bool dw_noc1 = false;
         const auto kr =
             dm("down_core_writer.cpp",
                cores,
                DataMovementProcessor::RISCV_0,
-               NOC::NOC_1,
+               dw_noc1 ? NOC::NOC_0 : NOC::NOC_1,
                {2,    p.h_tiles, kBf8Tile, H_PIECES, 16, out, V,  S,    ngu,   ND,    HARR, HSFREE,
                 GATH, DONE,      GO,       p.hbuf,   MT, pw,  Ht, GATH, GATH1, GATH2, E},
-               plus(yrm_def(dyn_def, pw), ync));
+               plus(plus(yrm_def(dyn_def, pw), ync), dw_split_def));
         const auto kw =
             dm("down_weight_reader.cpp",
                cores,
                DataMovementProcessor::RISCV_1,
-               NOC::NOC_0,
+               dw_noc1 ? NOC::NOC_1 : NOC::NOC_0,
                {1, slot, w_tile, E * nblk, DW_BATCH, E, MT, pw, Ht},
                plus(
                    plus(
                        y_nc ? plus(plus(yrm_def(dyn_def, pw), ync), cmb_def) : dyn_def,
                        Defines{{"SE_DW_ROT", std::to_string(banks)}}),
-                   Defines{{"SE_DW_RING", std::to_string(ring)}}));
+                   plus(Defines{{"SE_DW_RING", std::to_string(ring)}}, dw_split_def)));
         const auto kc =
             cp("down_compute.cpp",
                cores,
@@ -572,6 +634,9 @@ FlatProgramHandles add_flat_routed_expert_program(
                 .lit(d)
                 .lits(gu_xy)
                 .cat(dyn);
+            if (dw_split) {  // (the writer's part of the down weight reads: as the reader's RT 0..2)
+                a.a(FlatAddr::Down).lit(d % banks).lit(d * p.wd_rot_region);
+            }
             add_rt(kr, dc, y_nc ? a : add_writer_rt(kr, dc, a));
             Args w;
             w.a(FlatAddr::Down).lit(d % banks).lit(d * p.wd_rot_region).cat(dyn);

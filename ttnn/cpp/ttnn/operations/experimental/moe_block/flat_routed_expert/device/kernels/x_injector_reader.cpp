@@ -23,8 +23,10 @@
 #include "api/dataflow/dataflow_api.h"
 #include "flat_accessors.hpp"
 #include "expert_schedule.hpp"
+#include "flat_prof.hpp"
 
 void kernel_main() {
+    FP_ZONE("FRE-XI-R");
     constexpr uint32_t rm_cb = get_compile_time_arg_val(0);
     constexpr uint32_t row_bytes = get_compile_time_arg_val(1);  // x page bytes
     constexpr uint32_t num_e = get_compile_time_arg_val(2);
@@ -50,8 +52,22 @@ void kernel_main() {
     const uint32_t idx_l1 = get_write_ptr(tt::CBIndex::c_7);  // MT x 32 words (<= 512 B <= 2 SE_DYN_HALF)
 #endif
     uint32_t in_batch = 0, l1 = 0;
+    // (profiler: cycles in the read barrier (DRAM) / waiting for row-major CB space (the tilizer))
+    FP_VAR(fp_bar);
+    FP_VAR(fp_res);
+#if defined(PROFILE_KERNEL)
+    bool fp_first = true;
+#endif
     auto flush = [&]() {
+        FP_T0(t);
         noc_async_read_barrier();
+        FP_ADD(fp_bar, t);
+#if defined(PROFILE_KERNEL)
+        if (fp_first) {  // (profiler: the first batch of x rows landed from DRAM)
+            DeviceTimestampedData("XR-B0", fp_now());
+            fp_first = false;
+        }
+#endif
         cb_push_back(rm_cb, 32 * in_batch);
         in_batch = 0;
     };
@@ -94,7 +110,9 @@ void kernel_main() {
                 }
                 for (uint32_t m = 0; m < mt; ++m) {
                     if (in_batch == 0) {
+                        FP_T0(t);
                         cb_reserve_back(rm_cb, 32 * batch);
+                        FP_ADD(fp_res, t);
                         l1 = get_write_ptr(rm_cb);
                     }
                     const uint32_t dst = l1 + in_batch * 32 * seg;
@@ -118,4 +136,6 @@ void kernel_main() {
     }
     // leave no NoC transaction in flight (reads, writes, atomics, posted writes): the next program starts clean
     noc_async_full_barrier();
+    FP_EMIT("XR-BAR", fp_bar);
+    FP_EMIT("XR-RES", fp_res);
 }

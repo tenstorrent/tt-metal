@@ -22,12 +22,14 @@
 #include "api/dataflow/dataflow_api.h"
 #include "expert_schedule.hpp"
 #include "gate_up_weight_read.hpp"
+#include "flat_prof.hpp"
 #define SE_H_WRITE(...) noc_async_write(__VA_ARGS__)
 
 // The h exchange's unicast VC (gate/up -> down heads, the down chains): its own, off the default write VC (1)
 constexpr uint8_t h_vc = 0;
 
 void kernel_main() {
+    FP_ZONE("FRE-GU-R");
     constexpr uint32_t x_cb = get_compile_time_arg_val(0);
     constexpr uint32_t x_blk = get_compile_time_arg_val(1);
     constexpr uint32_t in1_cb = get_compile_time_arg_val(2);
@@ -71,7 +73,11 @@ void kernel_main() {
     // Dynamic counts: the active experts' weights and sub-blocks only; RT 5 + NH.. are the expert_schedule.hpp args, CB
     // 7 this RISC's scratch; the compute gets them in CB 6.
     SeDyn dyn;
+#ifdef SE_GU_SPLIT  // (RT 5 + NH: this core's gate/up weight read args, gate_up_weight_read.hpp; the schedule's after)
+    se_dyn_load<num_e>(dyn, heads0 + nh + SE_GU_RT_ARGS, get_write_ptr(tt::CBIndex::c_7), mt * 32);
+#else
     se_dyn_load<num_e>(dyn, heads0 + nh, get_write_ptr(tt::CBIndex::c_7), mt * 32);
+#endif
     se_dyn_publish(dyn, tt::CBIndex::c_6);
     const uint32_t total_w = dyn.n_load * nk_gu;  // gate/up loads
     const uint32_t num_v = dyn.num_v;
@@ -96,18 +102,61 @@ void kernel_main() {
         }
         *sem(SE_GU_MBOX_SEM) = 1;
     }
+#ifdef SE_GU_SPLIT
+    // the second half of each weight block's pieces, read from here on NOC1 into the same granted landing slots (the
+    // NCRISC reads the first half on NOC0): a block is published once both halves have landed
+    SeGuRead gb;
+    uint32_t gb_data = 0;
+    gb.init(
+        heads0 + nh,
+        SE_GU_BLK,
+        SE_GU_PER_E,
+        SE_GU_DEPTH,
+        dyn.n_load,
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(tt::CBIndex::c_7) + 2 * SE_DYN_HALF) + 1,
+        sem(credit_sem_id),
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(&gb_data),
+        SeGuRead::pieces / 2,
+        SeGuRead::pieces / 2);
+    bool gb_done = gb.total == 0;
+#endif
+#ifdef SE_GU_STAGGER
+    // the first load's slots only, the rest once sub-block 0's x has all arrived: the first expert's weights and x do
+    // not share DRAM / NoC with the next load's prefetch
+    const uint32_t g0 = w_slots < nk_gu ? w_slots : nk_gu;
+    grant(g0);
+    uint32_t granted = g0, pushed = 0;
+    bool staggered = g0 < w_slots;
+#else
     grant(w_slots);  // every landing slot starts free
     uint32_t granted = w_slots, pushed = 0;
+#endif
     uint32_t x_pub = 0, x_cons = 0;
     uint32_t h_sent = 0, h_pending = 0;
 
     while (h_sent < num_v || pushed < total_w) {
         invalidate_l1_cache();
-        while (granted < total_w && cb_pages_reservable_at_back(in1_cb, (granted - pushed + 1) * slot)) {
-            grant(1);
-            ++granted;
+#ifdef SE_GU_STAGGER
+        if (staggered) {
+            if (*xarr_sem / xp >= nk_gu || *data_sem >= total_w) {
+                grant(w_slots - granted);
+                granted = w_slots;
+                staggered = false;
+            }
+        } else
+#endif
+            while (granted < total_w && cb_pages_reservable_at_back(in1_cb, (granted - pushed + 1) * slot)) {
+                grant(1);
+                ++granted;
+            }
+#ifdef SE_GU_SPLIT
+        if (!gb_done) {
+            gb_done = gb.step();
         }
+        while (*data_sem > pushed && gb_data > pushed) {
+#else
         while (*data_sem > pushed) {
+#endif
             cb_push_back(in1_cb, slot);
             ++pushed;
         }
@@ -198,6 +247,9 @@ void kernel_main() {
     }
     *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(SE_X_FWD_NC_CONS)) = x_cons;
     *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(SE_X_FWD_NC_END)) = x_cons + 1;
+#ifdef SE_GU_SPLIT
+    gb.finish();
+#endif
     noc_async_write_barrier();
     noc_async_atomic_barrier();
     // leave no NoC transaction in flight (reads, writes, atomics, posted writes): the next program starts clean

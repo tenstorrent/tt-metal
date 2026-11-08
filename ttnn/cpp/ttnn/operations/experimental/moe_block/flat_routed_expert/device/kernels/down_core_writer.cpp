@@ -31,11 +31,13 @@
 #ifdef SE_Y_RM
 #include "y_row_major.hpp"
 #endif
+#include "flat_prof.hpp"
 
 // The h exchange's unicast VC (gate/up -> down heads, the down chains): its own, off the default write VC (1)
 constexpr uint8_t h_vc = 0;
 
 void kernel_main() {
+    FP_ZONE("FRE-DN-W");
     constexpr uint32_t h_all_cb = get_compile_time_arg_val(0);
     constexpr uint32_t h_all_tiles = get_compile_time_arg_val(1);
     constexpr uint32_t h_tile_bytes = get_compile_time_arg_val(2);
@@ -106,13 +108,47 @@ void kernel_main() {
         }
     };
 
+#ifdef SE_DW_SPLIT
+    // the last SE_DW_SPLIT quarters of each down weight block, read from here on NOC1 into the slots the NCRISC reader
+    // (down_weight_reader.cpp) has reserved (RESV), LAND counting the landed ones; its addressing as the reader's (RT
+    // after the schedule's args: weight bank base, bank id, this core's region offset)
+    constexpr uint32_t dw_blk = SE_DW_BLK, dw_part = dw_blk / 4 * SE_DW_SPLIT, dw_off = dw_blk - dw_part;
+    constexpr uint32_t dw_depth = 4;  // (parts in flight)
+    const uint32_t dwa = 10 + n_gu + SE_DYN_NARGS;
+    const uint32_t dw_bank = get_arg_val<uint32_t>(dwa + 1),
+                   dw_addr = get_arg_val<uint32_t>(dwa) + get_arg_val<uint32_t>(dwa + 2);
+    const uint32_t dw_total = dyn.n_load * SE_DW_PER_E, dw_ring = get_write_ptr(tt::CBIndex::c_1);
+    volatile tt_l1_ptr uint32_t* dw_resv = sem(SE_DW_RESV_SEM);
+    volatile tt_l1_ptr uint32_t* dw_land = sem(SE_DW_LAND_SEM);
+    uint32_t dw_iss = 0, dw_done = 0;
+    auto dw_step = [&]() {
+        const uint32_t resv = *dw_resv;
+        while (dw_iss < dw_total && dw_iss < resv && dw_iss - dw_done < dw_depth) {
+            const uint32_t l = dw_iss / SE_DW_PER_E, j = dw_iss % SE_DW_PER_E;
+            const uint32_t k =
+                dyn.load_eid[l] * SE_DW_PER_E + j;  // the stream block (its bank rotation as the reader's)
+            const uint64_t src =
+                get_noc_addr_from_bank_id<true>((dw_bank + k) % SE_DW_ROT, dw_addr + (k / SE_DW_ROT) * dw_blk + dw_off);
+            noc_async_read(src, dw_ring + (dyn.region[l] * SE_DW_PER_E + j) * dw_blk + dw_off, dw_part);
+            ++dw_iss;
+        }
+        if (dw_done < dw_iss && ncrisc_noc_reads_flushed(noc_index)) {
+            dw_done = dw_iss;
+            *dw_land = dw_done;
+        }
+    };
+#else
+    auto dw_step = []() {};
+    constexpr uint32_t dw_total = 0, dw_done = 0;
+#endif
     uint32_t h_pub = 0, h_cons = 0, h_iss = 0, h_fwd = 0, h_rep = 0, h_done = 0;
     uint32_t out_done = 0, go_sent = 0, done_sent = 0;
     bool y_pending = false;
     constexpr bool all_h = false;
     while (out_done < num_v || done_sent < num_v || (sxy_e && h_fwd < num_v * h_pieces) ||
-           (is_coord && go_sent + 1 < num_v) || (all_h && h_pub < num_v)) {
+           (is_coord && go_sent + 1 < num_v) || (all_h && h_pub < num_v) || dw_done < dw_total) {
         invalidate_l1_cache();
+        dw_step();
         if (head) {  // h(v) is complete once all slices of it are in its buffer
             while (h_done < num_v && *gath[h_done % hbuf] >= n_slices * (h_done / hbuf + 1)) {
                 ++h_done;

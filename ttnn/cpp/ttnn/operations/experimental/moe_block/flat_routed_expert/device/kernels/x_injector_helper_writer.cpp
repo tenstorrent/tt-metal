@@ -17,8 +17,10 @@
 #endif
 #include "api/dataflow/dataflow_api.h"
 #include "expert_schedule.hpp"
+#include "flat_prof.hpp"
 
 void kernel_main() {
+    FP_ZONE("FRE-XH-W");
     constexpr uint32_t sb_cb = get_compile_time_arg_val(0);
     constexpr uint32_t mt = get_compile_time_arg_val(1);
     constexpr uint32_t tb = get_compile_time_arg_val(2);

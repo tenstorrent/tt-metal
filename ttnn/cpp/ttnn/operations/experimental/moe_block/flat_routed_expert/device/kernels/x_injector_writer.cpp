@@ -18,8 +18,10 @@ constexpr uint32_t kXnh = 2;  // the helper relays feeding a primary
 #endif
 #include "api/dataflow/dataflow_api.h"
 #include "expert_schedule.hpp"
+#include "flat_prof.hpp"
 
 void kernel_main() {
+    FP_ZONE("FRE-XI-W");
     constexpr uint32_t mt = get_compile_time_arg_val(1);
     constexpr uint32_t tb = get_compile_time_arg_val(2);
     constexpr uint32_t x_slots = get_compile_time_arg_val(3);
@@ -63,27 +65,39 @@ void kernel_main() {
             ++cb_done;
         }
     };
+    // (profiler: cycles waiting for the helpers' super-blocks / the snake head's free ring slots)
+    FP_VAR(fp_wh);
+    FP_VAR(fp_wf);
     for (uint32_t b = 0; b < num_sb; ++b) {
         // Super-block b was read and tilized by helper h = b % kXnh (x_injector_helper_writer.cpp) into landing ring h
         // here (ring h follows ring h - 1); DATA sem help_sem[h] here counts arrivals, the CREDIT sem XMC_CREDIT_SEM on
         // the helper counts freed slots.
         const uint32_t hh = b % kXnh, hb = b / kXnh;
         constexpr uint32_t help_sem[kXnh] = {4, 7};
+        FP_T0(twh);
         while (*reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(help_sem[hh])) < hb + 1) {
             invalidate_l1_cache();
             chain_retire(XMC_CHAIN_DEPTH);  // (waiting: count acknowledged batches into the head's XARR)
         }
         noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(help_sem[hh])), hb + 1);
+        FP_ADD(fp_wh, twh);
+#if defined(PROFILE_KERNEL)
+        if (b == 0) {  // (profiler: the first tilized super-block's arrival from the helpers)
+            DeviceTimestampedData("XW-SB0", fp_now());
+        }
+#endif
         const uint32_t src = land + (hh * land_slots + hb % land_slots) * sb_tiles * tb;
         // The whole super-block goes out as one batch once its last block's ring slot is free. Batches in flight are
         // only counted into the head's XARR on retirement: every wait retires the acknowledged ones, else a compute
         // that needs the whole ring (row passes: all Ht / KBLK blocks of a sub-block resident, GLM-5.3 24 of 24)
         // never sees the last batch and never frees one (deadlock).
         invalidate_l1_cache();
+        FP_T0(twf);
         while (sent + per_sb > *freed + x_slots) {
             chain_retire(XMC_CHAIN_DEPTH);
             invalidate_l1_cache();
         }
+        FP_ADD(fp_wf, twf);
         // the batch's pieces into the snake head (unicast, under the batch's transaction id); the head forwards them
         // along the snake, gate_up_core_reader.cpp
         chain_retire(XMC_CHAIN_DEPTH - 1);  // (room for this batch's id)
@@ -108,6 +122,8 @@ void kernel_main() {
             1);  // slot free
     }
     chain_retire(0);
+    FP_EMIT("XW-WH", fp_wh);
+    FP_EMIT("XW-WF", fp_wf);
     noc_async_write_set_trid(0);
     noc_async_write_barrier();
     // leave no NoC transaction in flight (reads, writes, atomics, posted writes): the next program starts clean
