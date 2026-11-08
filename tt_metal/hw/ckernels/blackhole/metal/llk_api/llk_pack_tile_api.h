@@ -321,6 +321,18 @@ constexpr bool llk_pack_block_closed_pays(const bool block_float_out, const std:
            (math_fidelity == MathFidelity::HiFi4 && (ntiles == 4 || ntiles == 8));
 }
 
+// The block-float closed block that reads slower than the per-tile packs after a packer reconfigure (crossover sweep, 5 shifts on 2 cards).
+template <DstSync dst_sync, bool fp32_dest>
+constexpr bool llk_pack_block_closed_loses(const std::uint32_t format, const std::uint32_t ntiles) {
+    if (!(dst_sync == DstSync::SyncFull && fp32_dest)) {
+        return false;
+    }
+    if (format == static_cast<std::uint32_t>(DataFormat::Bfp8_b) || format == static_cast<std::uint32_t>(DataFormat::Bfp8)) {
+        return ntiles == 5 || ntiles == 7;
+    }
+    return (format == static_cast<std::uint32_t>(DataFormat::Bfp4_b) || format == static_cast<std::uint32_t>(DataFormat::Bfp2_b)) && ntiles == 5;
+}
+
 // Which outputs pack block float: two constant masks, so the per-call test is a shift, not a load and a format switch.
 constexpr std::uint32_t llk_pack_dst_bfp_mask(const std::uint32_t first) {
     std::uint32_t mask = 0;
@@ -387,10 +399,14 @@ __attribute__((always_inline)) inline void llk_pack_block(std::uint32_t start_ti
     // Right after an init the plain block is slower than the per-tile pack for 32 bit outputs (Float32, Int32, UInt32,
     // Tf32) up to 8 tiles and for a 4 tile block-float block, and the closed block of two small tiles is slower than
     // their per-tile packs: the first block of an output takes the per-tile pack there (the next one the W offset).
+    // From a 32 bit DEST at full sync, the closed block of a block-float output is 5 to 7 cycles per call slower than the per-tile packs for 5 and 7 Bfp8_b
+    // tiles and for 5 Bfp4_b or Bfp2_b tiles (6 and 8 tiles, 16 bit DEST and half sync read faster closed): the section release waits for the packer, so its
+    // fewer RISC issue cycles do not reach the total, and it rewrites the W stride after every packer reconfigure.
     const bool first_block = pack_w_last != output_id;
     if (first_block &&
         ((ntiles <= 8 && datum_size_in_bytes(pack_dst_format[output_id]) == 4) ||
-         (ntiles == 4 && llk_pack_dst_is_bfp(output_id)) || (ntiles == 2 && llk_pack_block_is_small(output_id)))) {
+         (ntiles == 4 && llk_pack_dst_is_bfp(output_id)) || (ntiles == 2 && llk_pack_block_is_small(output_id)) ||
+         llk_pack_block_closed_loses<DST_SYNC_MODE, is_fp32_dest_acc_en>(pack_dst_format[output_id], ntiles))) {
         if (pack_w_last != output_id) {
             _llk_pack_close_fast_untilize_<DST_SYNC_MODE>();
             pack_w_last = output_id;

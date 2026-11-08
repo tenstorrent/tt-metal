@@ -28,6 +28,7 @@ def pack_block_form(
     bfp=False,
     fp32_dest=False,
     half_sync=False,
+    full_sync=False,
 ):
     """Form of one llk_pack_block call of a plain-format or block-float output with full tiles."""
     if ntiles < BLOCK_MIN_TILES and not (ntiles >= 2 and small_tile):
@@ -36,6 +37,7 @@ def pack_block_form(
         (dst_format in WIDE_FORMATS and ntiles <= 8)
         or (bfp and ntiles == 4)
         or (ntiles == 2 and small_tile)
+        or (bfp and full_sync and fp32_dest and ((dst_format in ("Bfp8_b", "Bfp8") and ntiles in (5, 7)) or (dst_format in ("Bfp4_b", "Bfp2_b") and ntiles == 5)))
     ):
         return "per_tile"
     if fp32_dest and half_sync and ntiles == 4 and dst_format == "Bfp8_b":
@@ -62,14 +64,23 @@ def test_mirror_cells():
     assert pack_block_form(4, "Bfp8_b", False, **kw) == "closed"
     assert pack_block_form(4, "Bfp4_b", False, **kw) == "w_offset"
     assert pack_block_form(4, "Bfp8_b", False, bfp=True, fp32_dest=True) == "w_offset"
-
+    wide = dict(bfp=True, full_sync=True, fp32_dest=True)
+    assert pack_block_form(5, "Bfp8_b", True, **wide) == "per_tile"
+    assert pack_block_form(7, "Bfp8_b", True, **wide) == "per_tile"
+    assert pack_block_form(6, "Bfp8_b", True, **wide) == "plain"
+    assert pack_block_form(8, "Bfp8_b", True, **wide) == "plain"
+    assert pack_block_form(5, "Bfp4_b", True, **wide) == "per_tile"
+    assert pack_block_form(7, "Bfp4_b", True, **wide) == "plain"
+    assert pack_block_form(7, "Bfp8_b", True, bfp=True, full_sync=True) == "plain"
+    assert pack_block_form(7, "Bfp8_b", True, bfp=True, fp32_dest=True) == "plain"
+    assert pack_block_form(7, "Bfp8_b", False, **wide) == "w_offset"
 
 def test_header_matches_mirror():
     src = " ".join(API.read_text().split())
     assert re.search(rf"#define LLK_PACK_BLOCK_MIN_TILES {BLOCK_MIN_TILES}\b", src)
     assert "LLK_PACK_W_MIN_TILES" not in src
     assert (
-        "if (first_block && ((ntiles <= 8 && datum_size_in_bytes(pack_dst_format[output_id]) == 4) || (ntiles == 4 && llk_pack_dst_is_bfp(output_id)) || (ntiles == 2 && llk_pack_block_is_small(output_id)))) {"
+        "if (first_block && ((ntiles <= 8 && datum_size_in_bytes(pack_dst_format[output_id]) == 4) || (ntiles == 4 && llk_pack_dst_is_bfp(output_id)) || (ntiles == 2 && llk_pack_block_is_small(output_id)) || llk_pack_block_closed_loses<DST_SYNC_MODE, is_fp32_dest_acc_en>(pack_dst_format[output_id], ntiles))) {"
         in src
     )
     assert (

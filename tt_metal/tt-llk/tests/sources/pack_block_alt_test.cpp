@@ -220,7 +220,10 @@ inline std::uint32_t alt_form(const std::uint32_t fmt, const std::uint32_t ntile
 {
     const bool bfp  = fmt == static_cast<std::uint32_t>(DataFormat::Bfp8_b);
     const bool wide = fmt == static_cast<std::uint32_t>(DataFormat::Float32);
-    if (!head || ntiles < 4 || (wide && ntiles <= 8) || (bfp && ntiles == 4))
+    const bool b8   = fmt == static_cast<std::uint32_t>(DataFormat::Bfp8_b);
+    const bool b42  = fmt == static_cast<std::uint32_t>(DataFormat::Bfp4_b) || fmt == static_cast<std::uint32_t>(DataFormat::Bfp2_b);
+    const bool loses = dest_sync == DstSync::SyncFull && is_fp32_dest_acc_en && ((b8 && (ntiles == 5 || ntiles == 7)) || (b42 && ntiles == 5));
+    if (!head || ntiles < 4 || (wide && ntiles <= 8) || (bfp && ntiles == 4) || loses)
     {
         return 0; // per tile
     }
@@ -262,8 +265,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // the form of each output is decided once, as a kernel with constant tile counts has it folded
     // read through a volatile so the main arm compiles to the same loop as the head arm and the two differ in data only
     const volatile std::uint32_t head_v = alt_head_form ? 1 : 0;
-    const std::uint32_t form_a          = alt_form(fmt_a, NUM_TILES_IN_BLOCK, head_v);
-    const std::uint32_t form_b          = alt_form(fmt_b, NUM_TILES_IN_BLOCK, head_v);
+    const std::uint32_t form_a          = alt_form(fmt_a, NUM_TILES_IN_BLOCK, 1) & (0u - head_v);
+    const std::uint32_t form_b          = alt_form(fmt_b, NUM_TILES_IN_BLOCK, 1) & (0u - head_v);
     {
         START_PERF_MEASURE("TILE_LOOP")
         if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
