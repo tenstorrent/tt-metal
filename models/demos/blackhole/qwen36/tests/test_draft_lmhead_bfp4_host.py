@@ -52,7 +52,8 @@ def _record_as_tensor(monkeypatch):
 @pytest.mark.parametrize("sharded,nd", [(True, 8), (False, 8), (False, 1)])
 def test_build_lm_head_weight_cache_names(monkeypatch, sharded, nd):
     calls = _record_as_tensor(monkeypatch)
-    fake = types.SimpleNamespace(_lmhead_vocab_sharded=sharded, mesh_device="mesh", num_devices=nd)
+    mesh = types.SimpleNamespace(shape=(1, nd))  # a 1xN mesh: tp_shard_mapper reads its shape
+    fake = types.SimpleNamespace(_lmhead_vocab_sharded=sharded, mesh_device=mesh, num_devices=nd)
     cache = pathlib.Path("/cache")
     stem = "output.weight.vshard" if sharded else "output.weight"
     Qwen36Model._build_lm_head_weight(fake, "W", cache, ttnn.bfloat8_b)

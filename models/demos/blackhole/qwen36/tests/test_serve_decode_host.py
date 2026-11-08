@@ -110,6 +110,7 @@ def test_capabilities_flag_on(monkeypatch):
     assert caps["supports_chunked_prefill"] is False  # opt-in (QWEN36_CHUNKED_PREFILL=1)
     assert caps["max_device_top_k"] == 32
     assert caps["supports_device_penalties"] is False
+    assert "supports_device_grammar" not in caps  # not validated on the device-resident decode
     assert Qwen36ForCausalLM.decode_input_update_contract == 1
 
 
@@ -124,11 +125,15 @@ def test_capabilities_flag_off_is_the_old_dict(monkeypatch):
     monkeypatch.delenv("QWEN36_CHUNKED_PREFILL", raising=False)
     caps = _build_model_capabilities()
     caps.pop("fabric_config", None)  # the fabric packet payload (multi-device meshes) does not depend on this flag
+    # The host-resident decode keeps the device grammar of the main-branch model; prefix caching and chunked prefill
+    # follow their own flags.
     assert caps == {
         "supports_prefix_caching": True,
         "supports_chunked_prefill": False,
         "supports_async_decode": False,
         "supports_sample_on_device": True,
+        "supports_device_grammar": True,
+        "max_device_top_k": 32,
     }
 
 

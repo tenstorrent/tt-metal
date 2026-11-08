@@ -451,16 +451,15 @@ def test_spec_memory_costs_counts_the_topk_buffers_only_under_the_flag(monkeypat
         num_hidden_layers=4,
     )
     monkeypatch.setenv("QWEN36_VERIFY_DEVICE_TOPK", "0")
-    off = spec_memory_costs(tc, 4, 2, 3, nb=16)
+    off = spec_memory_costs(tc, 4, 2, 3, nb=16, buckets=(1, 2))
     monkeypatch.setenv("QWEN36_VERIFY_DEVICE_TOPK", "1")
     monkeypatch.setenv("QWEN36_VERIFY_TOPK_M", "64")
-    on = spec_memory_costs(tc, 4, 2, 3, nb=16)
+    on = spec_memory_costs(tc, 4, 2, 3, nb=16, buckets=(1, 2))
     assert on["per_seq"] == off["per_seq"] and on["per_token"] == off["per_token"]
-    rows = 2 * 4
     shard = 32 * 1024 * 2  # [1,1,rows->32, 4096/4=1024] bf16
     outs = 32 * 256 * 2 + 32 * 256 * 4  # [1,1,32, 4*64] bf16 + int32
-    assert on["fixed"]["verify_io"] - off["fixed"]["verify_io"] == shard + outs
-    del rows
+    bucket_shard = 32 * 1024 * 2  # the 1-row bucket's own shard logits [1,1,1*4->32, 1024] bf16
+    assert on["fixed"]["verify_io"] - off["fixed"]["verify_io"] == shard + outs + bucket_shard
 
 
 # --------------------------------------------------------------------------- #

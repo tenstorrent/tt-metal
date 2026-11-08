@@ -75,7 +75,16 @@ def test_shipped_rank_file():
     assert rank.min() >= 0 and rank.max() < VOCAB
     assert always.tolist() == SPECIALS
     assert meta["format"] == "draft_vocab_rank_v2" and meta["vocab_size"] == VOCAB
-    assert meta["groups"] == {"qwen": 1.0, "en": 1.0, "es": 0.25, "pt": 0.25, "fr": 0.25, "de": 0.25, "it": 0.25, "ru": 0.25}
+    assert meta["groups"] == {
+        "qwen": 1.0,
+        "en": 1.0,
+        "es": 0.25,
+        "pt": 0.25,
+        "fr": 0.25,
+        "de": 0.25,
+        "it": 0.25,
+        "ru": 0.25,
+    }
     assert 248046 in rank[:5000].tolist()  # <|im_end|> ends every stopped Qwen completion
 
 
@@ -298,7 +307,8 @@ def test_build_lm_head_weight_rows(monkeypatch):
     calls = []
     monkeypatch.setattr(ttnn, "as_tensor", lambda t, **kw: calls.append((t, kw)) or "dev")
     monkeypatch.setattr(ttnn, "ShardTensorToMesh", lambda dev, dim: ("shard", dim))
-    fake = types.SimpleNamespace(_lmhead_vocab_sharded=True, mesh_device="mesh", num_devices=8)
+    mesh = types.SimpleNamespace(shape=(1, 8))  # a 1xN mesh: tp_shard_mapper reads its shape
+    fake = types.SimpleNamespace(_lmhead_vocab_sharded=True, mesh_device=mesh, num_devices=8)
     rows = torch.tensor([1, 4, 6, 7, 9, 10, 12, 15], dtype=torch.int64)
     w = torch.arange(16 * 3, dtype=torch.float32).reshape(16, 3)  # [vocab, dim]
     Qwen36Model._build_lm_head_weight(fake, w, pathlib.Path("/c"), ttnn.bfloat8_b, cache_tag=".draft_top8_x", rows=rows)
