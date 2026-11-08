@@ -6,7 +6,8 @@
 // (api/compute/experimental/gguf_decode.h, dest_srca_mm.h). Per segment of an N tile one full-sync DEST acquire holds
 // the Float32 accumulator (tile 0) and two sets of (decoded tile, page, decoder scratch), tiles 1-3 and 4-6,
 // alternating per K tile. The pack thread decodes K tile k + 1 while the math thread multiplies tile k
-// (gguf_decode_overlap_*); the unpacker copies the next page into DEST meanwhile. The input arrives in chunks
+// (gguf_decode_overlap_*); the unpacker copies the next page into DEST meanwhile, before phase 2 where that phase's
+// stores are not arbitrated against it (MXFP4, IQ4_NL, IQ4_XS, Q2_K). The input arrives in chunks
 // (gguf_matmul_writer.cpp) and each K tile is waited for when first reached. Compile args: format id, K tiles, input
 // tiles per chunk, input rows the matmul computes (8, 16 or 32). Runtime args: segments, then per segment its first and
 // end K tile and its role (gguf_matmul_program_factory.cpp Role); a finish has the count of other cores' partials in
@@ -227,6 +228,12 @@ void kernel_main() {
     constexpr uint32_t cb_page = tt::CBIndex::c_0, cb_in0 = tt::CBIndex::c_1, cb_out = tt::CBIndex::c_16;
     constexpr uint32_t cb_part = tt::CBIndex::c_17, cb_remote = tt::CBIndex::c_18, cb_own = tt::CBIndex::c_20;
     const uint32_t segments = get_arg_val<uint32_t>(0);
+    // DEST tiles of the two sets: decoded tile, its page in the next tile, scratch past the page. MXFP4 and NVFP4:
+    // decoded tiles 3 and 5, pages 4 and 6; their block-float codes go to the 16-bit rows that the decoded tile's
+    // rows address (dest_srca_mm_page_unpack_codes), in tiles 1 and 2.
+    constexpr bool bfp = fmt == gguf::MXFP4 || fmt == gguf::NVFP4;
+    auto out_of = [](uint32_t set) -> uint32_t { return bfp ? (set ? 5 : 3) : (set ? 4 : 1); };
+    auto page_of = [](uint32_t set) -> uint32_t { return bfp ? (set ? 6 : 4) : (set ? 5 : 2); };
 
     compute_kernel_hw_startup(cb_page, cb_in0, cb_out);
     gguf_decode_init<fmt, pack>();
@@ -273,16 +280,25 @@ void kernel_main() {
         cb_wait_front(cb_page, 1);
         lookups.segment_start();
         lookups.before_unpack();
-        dest_srca_mm_page_to_dest(cb_page, 0, 2);
+        if constexpr (bfp) {
+            dest_srca_mm_page_to_dest_codes(cb_page, 0, page_of(0), out_of(0), 1024, 15, L.scale_offset, 16);
+        } else {
+            dest_srca_mm_page_to_dest(cb_page, 0, page_of(0));
+        }
         gguf_decode_overlap_page_ready();
         uint32_t set = 0;
         for (uint32_t kt = k0; kt < k1; kt++) {
             const uint32_t t = kt % L.group_tiles;
-            const uint32_t out = set ? 4 : 1;
-            const uint32_t next_page = set ? 2 : 5;
+            const uint32_t out = out_of(set);
+            const uint32_t next_page = page_of(set ^ 1);
             const bool next = kt + 1 < k1;
+            gguf_decode_overlap_body_ready<fmt, false>();
             if (next) {
-                dest_srca_mm_page_post(next_page);
+                if constexpr (bfp) {
+                    dest_srca_mm_page_post_codes(next_page, out_of(set ^ 1));
+                } else {
+                    dest_srca_mm_page_post(next_page);
+                }
             }
             gguf_decode_overlap_wait_page();
             if (kt == k0) {
@@ -306,13 +322,17 @@ void kernel_main() {
                     cb_wait_front(cb_page, 1);
                     lookups.before_unpack();
                 }
-                dest_srca_mm_page_unpack(cb_page, 0);
+                if constexpr (bfp) {
+                    dest_srca_mm_page_unpack_codes(cb_page, 0, 1024, 15, L.scale_offset, 16);
+                } else {
+                    dest_srca_mm_page_unpack(cb_page, 0);
+                }
                 dest_srca_mm_page_wait(cb_page, next_page);
                 gguf_decode_overlap_page_ready();
             }
+            gguf_decode_overlap_body_ready<fmt, true>();
             gguf_decode_overlap_wait_tile();
             dest_srca_mm_math<in0_rows>(out, 0);
-            gguf_decode_overlap_matmul_done();
             lookups.matmul_done();
             set ^= 1;
         }

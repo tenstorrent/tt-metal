@@ -225,6 +225,20 @@ void pack_codes(const GgufTraits& f, const CodePlanes& p, const TileRows& t, int
     }
 }
 
+// MXFP4, NVFP4: K tile kt's codes as 4-bit block-float datums of the 32x32 [K][N] tile in face order: element e in
+// bits 4 (e % 2) .. of byte e / 2. The decoder unpacks them with a fixed exponent (fp4_codes maps the magnitudes).
+void pack_codes_fp4(const GgufTraits& f, const CodePlanes& p, const TileRows& t, int64_t kt, uint8_t* out) {
+    std::memset(out, 0, 512);
+    const int64_t b = 32 * kt / f.block_elems;
+    const int w0 = int(32 * kt % f.block_elems);
+    for (int k = 0; k < 32; ++k) {
+        for (int n = 0; n < 32; ++n) {
+            const int e = 512 * (k / 16) + 256 * (n / 16) + 16 * (k % 16) + n % 16;
+            out[e / 2] |= uint8_t(p.lo.at(t.block(n, b), w0 + k) << 4 * (e % 2));
+        }
+    }
+}
+
 // Group g of a plane format: its scale rows and its group_tiles / page_tiles codes parts. A group with one codes part
 // stores it first, so that one read fills an L1 page in the decoder's order.
 uint8_t* group_planes(
@@ -304,7 +318,11 @@ uint8_t* group_planes(
         out = put(out, S[0], 16 * int(f.scale_rows));
     }
     for (int i = 0; i < parts; ++i) {
-        pack_codes(f, p, t, parts * g + i, words.data());
+        if (type == GGUF_MXFP4 || type == GGUF_NVFP4) {
+            pack_codes_fp4(f, p, t, parts * g + i, reinterpret_cast<uint8_t*>(words.data()));
+        } else {
+            pack_codes(f, p, t, parts * g + i, words.data());
+        }
         out = put(out, words.data(), int(f.code_bytes / 4));
     }
     if (parts == 1) {
@@ -384,6 +402,27 @@ void tq2_0_codes(uint8_t* blocks, size_t bytes, int64_t row_blocks, bool to_devi
                     index % row_blocks);
             }
             blocks[block + j] = map[b];
+        }
+    }
+}
+
+// MXFP4 / NVFP4 E2M1 codes <-> the page's block-float codes: the sign bit stays, magnitudes 0, 0.5, 1, 1.5, 2, 3, 4,
+// 6 (codes 0..7) become codes 0, 1, 4, 5, 6, 7, 2, 3, so that the decoder's table segments (x = code / 4) hold them in
+// pairs. A permutation of the 16 codes, applied to the code bytes (the last block_elems / 2) of each block by
+// pack_pages and unpack_pages, around the bit permutations.
+void fp4_codes(const GgufTraits& f, uint8_t* blocks, size_t bytes, bool to_device) {
+    constexpr uint8_t to_page[8] = {0, 1, 4, 5, 6, 7, 2, 3};
+    constexpr uint8_t from_page[8] = {0, 1, 6, 7, 2, 3, 4, 5};
+    std::array<uint8_t, 256> map{};
+    for (int v = 0; v < 256; ++v) {
+        for (int f = 0; f < 2; ++f) {
+            const int c = v >> 4 * f & 15;
+            map[v] |= uint8_t(((c & 8) | (to_device ? to_page : from_page)[c & 7]) << 4 * f);
+        }
+    }
+    for (size_t block = 0; block < bytes; block += f.block_bytes) {
+        for (size_t j = f.block_bytes - f.block_elems / 2; j < f.block_bytes; ++j) {
+            blocks[block + j] = map[blocks[block + j]];
         }
     }
 }
@@ -669,16 +708,21 @@ void unpack_page_bits(DataType type, const uint8_t* pages, int64_t K, int64_t N,
     }
 }
 
-// GGUF blocks <-> pages. TQ2_0 maps its codes for the block-float tiles first (tq2_0_codes, which refuses code 3);
-// the rest is a bit permutation.
+// GGUF blocks <-> pages. TQ2_0, MXFP4 and NVFP4 map their codes for the block-float codes first (tq2_0_codes, which
+// refuses code 3; fp4_codes); the rest is a bit permutation.
 void pack_pages(DataType type, const uint8_t* blocks, int64_t K, int64_t N, uint8_t* pages) {
-    if (type != GGUF_TQ2_0) {
+    if (type != GGUF_TQ2_0 && type != GGUF_MXFP4 && type != GGUF_NVFP4) {
         pack_page_bits(type, blocks, K, N, pages);
         return;
     }
-    const size_t bytes = size_t(N) * size_t(K / 256) * 66;
+    const GgufTraits& f = gguf_traits(type);
+    const size_t bytes = size_t(N) * size_t(K / f.block_elems) * f.block_bytes;
     std::vector<uint8_t> codes(blocks, blocks + bytes);
-    tq2_0_codes(codes.data(), bytes, K / 256, true);
+    if (type == GGUF_TQ2_0) {
+        tq2_0_codes(codes.data(), bytes, K / 256, true);
+    } else {
+        fp4_codes(f, codes.data(), bytes, true);
+    }
     pack_page_bits(type, codes.data(), K, N, pages);
 }
 
@@ -686,6 +730,9 @@ void unpack_pages(DataType type, const uint8_t* pages, int64_t K, int64_t N, uin
     unpack_page_bits(type, pages, K, N, blocks);
     if (type == GGUF_TQ2_0) {
         tq2_0_codes(blocks, size_t(N) * size_t(K / 256) * 66, K / 256, false);
+    } else if (type == GGUF_MXFP4 || type == GGUF_NVFP4) {
+        const GgufTraits& f = gguf_traits(type);
+        fp4_codes(f, blocks, size_t(N) * size_t(K / f.block_elems) * f.block_bytes, false);
     }
 }
 

@@ -6,12 +6,13 @@
 // core's kb x nc weight tiles are decoded once into c_4 (Float32, [kb][nc] tiles), then multiplied against all mc rows
 // of the input (c_1: units of ur rows x kb tiles, [ur][kb]) in sh x sw subblocks. Partials accumulate in L1 (c_24,
 // Float32, packer L1 accumulation); in the last K block each unit of rows goes to c_16 as bf16 once its sums are
-// complete. Decode: per tile, the page is copied into DEST tile 1 and decoded into tile 0 on the math thread, then
-// packed. K split (krole): band 1 packs its sums to c_17 for the writer to send, band 0 adds the partners' (c_18);
-// both in units of ur rows x the planned N tiles, the rows of each N tile together (subblocks of ur x 1).
-// Compile args: format id, mc, kb, M chunks, ur (sh divides it). Runtime args: N tiles of this core (0: nothing to
-// do), N tiles the circular buffers are sized for (c_4 and c_24 advance by whole blocks of that width, so that c_24's
-// L1 accumulation lands on the same tiles), sh, sw, krole (0: no K split, 1: send sums, 2: add them), K blocks.
+// complete. Decode: per tile, the page is copied into DEST tile 1 and decoded into tile 0 on the math thread (MXFP4,
+// NVFP4: tiles 2 and 1), then packed. K split (krole): band 1 packs its sums to c_17 for the writer to send, band 0
+// adds the partners' (c_18); both in units of ur rows x the planned N tiles, the rows of each N tile together
+// (subblocks of ur x 1). Compile args: format id, mc, kb, M chunks, ur (sh divides it). Runtime args: N tiles of this
+// core (0: nothing to do), N tiles the circular buffers are sized for (c_4 and c_24 advance by whole blocks of that
+// width, so that c_24's L1 accumulation lands on the same tiles), sh, sw, krole (0: no K split, 1: send sums, 2: add
+// them), K blocks.
 
 #include <cstdint>
 
@@ -38,6 +39,13 @@ void kernel_main() {
     constexpr gguf::PageLayout L = gguf::page_layout<static_cast<gguf::Format>(fmt)>();
     constexpr bool group_step = fmt == gguf::Q4_K || fmt == gguf::Q5_K || fmt == gguf::Q3_K || fmt == gguf::Q2_K;
     constexpr uint32_t block_groups = kb / L.group_tiles;
+    // Decoded tile 0, its page in tile 1. MXFP4, NVFP4: decoded tile 1, page 2, the block-float codes in the 16-bit
+    // rows that tile 1's rows address (in tile 0, dest_srca_mm_page_unpack_codes).
+    constexpr bool bfp = fmt == gguf::MXFP4 || fmt == gguf::NVFP4;
+    constexpr uint32_t out = bfp ? 1 : 0;
+    // Each page is copied before its decode starts, so no unpack to DEST runs beside one: the faster decoders.
+    constexpr auto thr = GgufDecodeThread::Math;
+    constexpr bool beside_unpack = false;
     constexpr uint32_t cb_page = tt::CBIndex::c_0, cb_in0 = tt::CBIndex::c_1, cb_w = tt::CBIndex::c_4;
     constexpr uint32_t cb_out = tt::CBIndex::c_16, cb_acc = tt::CBIndex::c_24;
     constexpr uint32_t cb_send = tt::CBIndex::c_17, cb_recv = tt::CBIndex::c_18;
@@ -65,7 +73,7 @@ void kernel_main() {
         for (uint32_t blk = 0; blk < kblocks; blk++) {
             // Decode the K block's weight tiles, in record order (per group, per N tile, per tile of the group).
             srca_to(cb_page);
-            gguf_decode_init<fmt>();
+            gguf_decode_init<fmt, thr, beside_unpack>();
             dest_srca_mm_init<32>(cb_in0, cb_page);
             pack_reconfig_data_format(cb_w);
             pack_reconfig_l1_acc(0);
@@ -81,17 +89,21 @@ void kernel_main() {
                             cb_wait_front(cb_page, 1);
                         }
                         tile_regs_acquire();
-                        dest_srca_mm_page_to_dest(cb_page, 0, 1);
-                        if (group_step && t < 2) {
-                            gguf_decode_group<fmt>(0);
+                        if constexpr (bfp) {
+                            dest_srca_mm_page_to_dest_codes(cb_page, 0, out + 1, out, 1024, 15, L.scale_offset, 16);
+                        } else {
+                            dest_srca_mm_page_to_dest(cb_page, 0, out + 1);
                         }
-                        gguf_decode_tile<fmt>(0, t);
+                        if (group_step && t < 2) {
+                            gguf_decode_group<fmt>(out);
+                        }
+                        gguf_decode_tile<fmt, thr, beside_unpack>(out, t);
                         tile_regs_commit();
                         if ((t + 1) % L.page_tiles == 0) {
                             cb_pop_front(cb_page, 1);
                         }
                         tile_regs_wait();
-                        pack_tile<true>(0, cb_w, (g * L.group_tiles + t) * nca + j);
+                        pack_tile<true>(out, cb_w, (g * L.group_tiles + t) * nca + j);
                         if (group_step && left > 2) {
                             PACK((_llk_pack_dest_section_done_<DST_SYNC_MODE, DST_ACCUM_MODE, false>()));
                         } else {
