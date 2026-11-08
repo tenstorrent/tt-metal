@@ -3,6 +3,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "moreh_group_norm_device_operation.hpp"
+
+#include <limits>
+
+#include "ttnn/operations/creation/creation.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/device_operation.hpp"
 
@@ -178,6 +182,24 @@ ttnn::operations::moreh::moreh_group_norm::MorehGroupNormOperation::tensor_retur
         rstd_memory_config.value_or(input.memory_config()),
         init_device_compute_kernel_config(input.device()->arch(), compute_kernel_config, tt::tt_metal::MathFidelity::HiFi4)};
     auto tensor_args = OperationType::tensor_args_t{input, gamma, beta, output, mean, rstd};
+    // An empty input has an empty output and, as in torch, NaN mean and rstd; the program never completes on it.
+    if (input.logical_volume() == 0) {
+        OperationType::validate_on_program_cache_miss(operation_attributes, tensor_args);
+        auto result = OperationType::create_output_tensors(operation_attributes, tensor_args);
+        for (size_t i = 1; i < result.size(); ++i) {
+            if (result[i].has_value() && result[i]->logical_volume() > 0) {
+                ttnn::full(
+                    result[i]->logical_shape(),
+                    std::numeric_limits<float>::quiet_NaN(),
+                    result[i]->dtype(),
+                    result[i]->layout(),
+                    *result[i]->device(),
+                    result[i]->memory_config(),
+                    *result[i]);
+            }
+        }
+        return result;
+    }
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
 }  // namespace ttnn::prim

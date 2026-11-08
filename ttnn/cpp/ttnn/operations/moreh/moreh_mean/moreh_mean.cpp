@@ -4,6 +4,7 @@
 
 #include "moreh_mean.hpp"
 
+#include "ttnn/operations/data_movement/clone/clone.hpp"
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 #include "ttnn/operations/moreh/moreh_mean/device/moreh_mean_device_operation.hpp"
 
@@ -17,7 +18,12 @@ Tensor moreh_mean(
     const std::optional<Tensor>& output,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
+    // The mean of a rank 0 tensor is the scalar itself, and the dim loop below indexes an empty dim list.
     ttsl::SmallVector<int64_t> dims = operations::get_dim(dim, input.logical_shape().rank());
+    if (dims.empty()) {
+        TT_FATAL(!output.has_value(), "moreh_mean: an output tensor is not supported for a rank 0 input.");
+        return ttnn::clone(input, std::nullopt, memory_config.value_or(input.memory_config()), compute_kernel_config);
+    }
     std::sort(dims.begin(), dims.end());
 
     auto temp_input = input;
