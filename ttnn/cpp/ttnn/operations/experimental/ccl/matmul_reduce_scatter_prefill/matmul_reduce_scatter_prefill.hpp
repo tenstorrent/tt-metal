@@ -29,6 +29,8 @@ namespace ttnn::experimental {
 //   l1_headroom            bytes of each core's L1 the plan always leaves free; default 64 KiB. The plan also stays
 //                          below every L1 tensor live at the call (L1 operands, resident tensors) and leaves room for
 //                          an L1 output it allocates. The op holds no L1 between calls.
+//   core_grid              run on the [0, x) x [0, y) block of worker cores instead of the full grid, e.g. to leave
+//                          the other columns to a program on another sub-device
 Tensor matmul_reduce_scatter_prefill(
     const Tensor& input_tensor,
     const Tensor& weight,
@@ -39,6 +41,7 @@ Tensor matmul_reduce_scatter_prefill(
     const std::optional<tt::tt_metal::ComputeConfigDescriptor>& compute_kernel_config = std::nullopt,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     const std::optional<Tensor>& output_tensor = std::nullopt,
-    const std::optional<uint32_t>& l1_headroom = std::nullopt);
+    const std::optional<uint32_t>& l1_headroom = std::nullopt,
+    const std::optional<CoreCoord>& core_grid = std::nullopt);
 
 }  // namespace ttnn::experimental

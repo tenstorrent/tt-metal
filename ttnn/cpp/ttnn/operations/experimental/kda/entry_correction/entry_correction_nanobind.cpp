@@ -47,6 +47,9 @@ void bind_entry_correction(nb::module_& mod) {
                 the final state from row ``j``. ``cores_per_head`` must divide ``chunks``.
             actual_end (ttnn.Tensor, optional): Replicated UINT32 row-major exclusive valid end.
             sequence_parallel_axis (int, optional): Mesh axis partitioning the sequence.
+            sp_rank (ttnn.Tensor, optional): Each device's UINT32 row-major scalar rank along
+                ``sequence_parallel_axis``. With it one program serves the whole mesh, which the host queues
+                faster; without it each SP rank gets its own program.
             memory_config (ttnn.MemoryConfig, optional): Interleaved memory of the chunk outputs. Defaults to
                 DRAM.
             compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): Compute-kernel configuration;
@@ -73,7 +76,8 @@ void bind_entry_correction(nb::module_& mod) {
         nb::arg("actual_end") = nb::none(),
         nb::arg("sequence_parallel_axis") = 0,
         nb::arg("memory_config") = nb::none(),
-        nb::arg("compute_kernel_config") = nb::none());
+        nb::arg("compute_kernel_config") = nb::none(),
+        nb::arg("sp_rank") = nb::none());
 }
 
 }  // namespace ttnn::operations::experimental::kda::entry_correction::detail

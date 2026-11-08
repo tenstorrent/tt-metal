@@ -24,6 +24,22 @@ PrepareChunkRecurrenceOperation::program_factory_t PrepareChunkRecurrenceOperati
     return PrepareChunkRecurrenceProgramFactory{};
 }
 
+// A cache hit matches every attribute and tensor spec the miss validated: only where the tensors live can differ.
+void PrepareChunkRecurrenceOperation::validate_on_program_cache_hit(
+    const operation_attributes_t&, const tensor_args_t& in) {
+    kda_factory_detail::check_allocated_on_device(
+        in.q,
+        {{&in.q, "q"},
+         {&in.k, "k"},
+         {&in.v, "v"},
+         {&in.g, "g"},
+         {&in.beta, "beta"},
+         {in.actual_start ? &*in.actual_start : nullptr, "actual_start"},
+         {in.actual_end ? &*in.actual_end : nullptr, "actual_end"},
+         {in.sp_rank ? &*in.sp_rank : nullptr, "sp_rank"}},
+        "prepare_chunk_recurrence");
+}
+
 void PrepareChunkRecurrenceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& attrs, const tensor_args_t& in) {
     using namespace kda_factory_detail;
@@ -196,7 +212,8 @@ std::vector<Tensor> prepare_chunk_recurrence(
     const std::optional<Tensor>& actual_end,
     uint32_t sequence_parallel_axis,
     float gate_scale,
-    uint32_t beta_logits_column_offset) {
+    uint32_t beta_logits_column_offset,
+    const std::optional<Tensor>& sp_rank) {
     TT_FATAL(std::isfinite(gate_scale), "prepare_chunk_recurrence: gate_scale must be finite");
     TT_FATAL(!actual_end || actual_start, "prepare_chunk_recurrence: actual_end requires actual_start");
     if (actual_start) {
@@ -204,6 +221,9 @@ std::vector<Tensor> prepare_chunk_recurrence(
     }
     if (actual_end) {
         kda_factory_detail::check_actual_start(q, *actual_end, "prepare_chunk_recurrence");
+    }
+    if (sp_rank) {
+        kda_factory_detail::check_device_scalar(q, *sp_rank, "prepare_chunk_recurrence", "sp_rank");
     }
     const auto& q_shape = q.logical_shape();
     const auto& v_shape = v.logical_shape();
@@ -233,7 +253,14 @@ std::vector<Tensor> prepare_chunk_recurrence(
             .output_mem_config = output_mem_config,
             .compute_kernel_config = compute_kernel_config},
         PrepareChunkRecurrenceInputs{
-            .q = q, .k = k, .v = v, .g = g, .beta = beta, .actual_start = actual_start, .actual_end = actual_end});
+            .q = q,
+            .k = k,
+            .v = v,
+            .g = g,
+            .beta = beta,
+            .actual_start = actual_start,
+            .actual_end = actual_end,
+            .sp_rank = sp_rank});
 }
 
 }  // namespace ttnn::experimental::prim

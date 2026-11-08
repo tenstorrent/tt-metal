@@ -116,18 +116,30 @@ TT_KERNEL void reader(
     {
         DataflowBuffer chronology(dfb::chronology_compute);
         chronology.reserve_back(1);
+        auto* words = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(chronology.get_write_ptr());
+        // With one program for the whole mesh, the device's rank is in the sp_rank tensor.
+        uint32_t rank = sp_rank;
+        if constexpr (sp_rank == kda_chronology::rank_from_tensor) {
+            noc.async_read(
+                TensorAccessor(*tensor::get_token_if_present<"sp_rank">()),
+                chronology,
+                sizeof(uint32_t),
+                {.page_id = 0},
+                {});
+            noc.async_read_barrier();
+            rank = words[0];
+        }
         const auto actual_start = TensorAccessor(tensor::actual_start);
         noc.async_read(actual_start, chronology, sizeof(uint32_t), {.page_id = 0}, {});
         noc.async_read_barrier();
-        auto* words = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(chronology.get_write_ptr());
         const uint32_t start = words[0];
         if constexpr (has_actual_end) {
             const auto end = TensorAccessor(*tensor::get_token_if_present<"actual_end">());
             noc.async_read(end, chronology, sizeof(uint32_t), {.page_id = 0}, {});
             noc.async_read_barrier();
-            topology = kda_chronology::derive_interval(start, words[0], sp_rank, sp_size, local_rows);
+            topology = kda_chronology::derive_interval(start, words[0], rank, sp_size, local_rows);
         } else {
-            topology = kda_chronology::derive(start, sp_rank, sp_size, local_rows);
+            topology = kda_chronology::derive(start, rank, sp_size, local_rows);
         }
         kda_chronology::store(words, topology);
         chronology.push_back(1);

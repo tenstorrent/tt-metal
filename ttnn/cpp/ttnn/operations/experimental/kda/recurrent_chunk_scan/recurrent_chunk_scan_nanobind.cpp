@@ -188,6 +188,9 @@ void bind_recurrent_chunk_scan(nb::module_& mod) {
             emit_memory_config (ttnn.MemoryConfig, optional): Memory configuration of the
                 emitted terms. Height-sharded, a shard holds one block (``C`` is its height over
                 64); otherwise ``C = N``. Defaults to ``memory_config``.
+            sp_rank (ttnn.Tensor, optional): Each device's UINT32 row-major scalar rank along
+                ``sequence_parallel_axis``. With it one program serves the whole mesh, which the host queues
+                faster; without it each SP rank gets its own program.
 
         Returns:
             ttnn.Tensor: BFLOAT16 TILE tensor ``[S, B*H*G, K, K+V]`` with ``S = 2`` when
@@ -220,8 +223,8 @@ void bind_recurrent_chunk_scan(nb::module_& mod) {
             bool tail,
             bool init,
             bool emit_outputs,
-            const std::optional<ttnn::MemoryConfig>& emit_memory_config)
-            -> std::variant<ttnn::Tensor, std::vector<ttnn::Tensor>> {
+            const std::optional<ttnn::MemoryConfig>& emit_memory_config,
+            const std::optional<ttnn::Tensor>& sp_rank) -> std::variant<ttnn::Tensor, std::vector<ttnn::Tensor>> {
             auto outputs = ttnn::experimental::kda::summarize_chunk_recurrence(
                 v_beta,
                 kd,
@@ -239,7 +242,8 @@ void bind_recurrent_chunk_scan(nb::module_& mod) {
                 tail,
                 init,
                 emit_outputs,
-                emit_memory_config);
+                emit_memory_config,
+                sp_rank);
             if (emit_outputs) {
                 return outputs;
             }
@@ -264,7 +268,8 @@ void bind_recurrent_chunk_scan(nb::module_& mod) {
         nb::arg("tail") = false,
         nb::arg("init") = true,
         nb::arg("emit_outputs") = false,
-        nb::arg("emit_memory_config") = nb::none());
+        nb::arg("emit_memory_config") = nb::none(),
+        nb::arg("sp_rank") = nb::none());
 }
 
 }  // namespace ttnn::operations::experimental::kda::recurrent_chunk_scan::detail
