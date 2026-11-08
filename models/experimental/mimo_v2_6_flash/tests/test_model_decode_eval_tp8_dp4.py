@@ -30,7 +30,9 @@ from models.experimental.mimo_v2_6_flash.tests.common import (
 from models.experimental.mimo_v2_6_flash.tt.generator import MiMoGalaxyGenerator
 
 PREFILL = 8
-USERS = 4
+# Decode users per replica (MIMO_DECODE_EVAL_USERS, default 4); 16 checks the 16-row decode (the 32 sequences then fill
+# replicas 0 and 1).
+USERS = int(os.environ.get("MIMO_DECODE_EVAL_USERS", "4"))
 
 
 @pytest.mark.parametrize("device_params", [GALAXY_DEVICE_PARAMS], indirect=True)
