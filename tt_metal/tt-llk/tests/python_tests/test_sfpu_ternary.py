@@ -448,12 +448,12 @@ def test_ttnn_where(
     elif test_case == "all_zeros":
         src_A = torch.zeros_like(src_A)
     elif test_case == "all_negative_zeros":
-        if formats.input_format == DataFormat.Int32:
-            pytest.skip("Negative zero condition not applicable for Int32")
+        if formats.input_format != DataFormat.Float32:
+            pytest.skip("Negative zero in Dest only applies to Float32 unpack_to_dest")
         src_A = torch.full_like(src_A, -0.0)
     elif test_case == "signed_zeros":
-        if formats.input_format == DataFormat.Int32:
-            pytest.skip("Negative zero condition not applicable for Int32")
+        if formats.input_format != DataFormat.Float32:
+            pytest.skip("Negative zero in Dest only applies to Float32 unpack_to_dest")
         pattern = torch.tensor([0.0, -0.0, 1.0, -1.0], dtype=src_A.dtype)
         src_A = pattern.repeat(src_A.numel() // 4).reshape(src_A.shape)
 

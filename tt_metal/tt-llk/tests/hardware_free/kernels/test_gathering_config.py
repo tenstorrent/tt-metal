@@ -206,11 +206,10 @@ DISABLE_WINDOW_WORDS = 16
 # scheduled among them) and follows unconditional jumps (GCC cross-jumps common body tails).
 BODY_WALK_LIMIT_WORDS = 512
 TT_OPCODE_REPLAY = 0x04
-# _calculate_where_'s plain-SFPLOAD path (DISABLE_SFPLOADMACRO) records 7 instructions for
-# floating-point formats (6 for integer formats): three SFPLOADs, SFPSHFT (fp only), SFPSETCC,
-# SFPENCC, SFPSTORE. Its SFPLOADMACRO paths record 4 and 5 (3 and 4 for int), so the length
+# _calculate_where_'s plain-SFPLOAD path (DISABLE_SFPLOADMACRO) records 6 instructions: three
+# SFPLOADs, SFPSETCC, SFPENCC, SFPSTORE. Its SFPLOADMACRO paths record 3 and 4, so the length
 # tells the site under test apart from the two that were already bracketed.
-WHERE_PLAIN_SFPLOAD_RECORD_LEN = 7
+WHERE_PLAIN_SFPLOAD_RECORD_LEN = 6
 
 
 def _cfg0_csr_op(word):

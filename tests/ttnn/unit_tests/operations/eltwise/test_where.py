@@ -95,7 +95,7 @@ def test_ttnn_where(c_shape, t_shape, f_shape, scalar, variant, condition, devic
     ],
 )
 def test_ttnn_where_signed_zero_predicate(dtype, ttnn_dtype, device):
-    # Tests that both +0.0 and -0.0 predicates correctly evaluate to false branch (closes #56522)
+    # Tests that both +0.0 and -0.0 predicates correctly evaluate to false branch
     torch.manual_seed(0)
     shape = (1, 1, 32, 32)
     c_data = torch.tensor([0.0, -0.0, 1.0, -1.0], dtype=dtype).repeat(32 * 32 // 4).reshape(shape)
