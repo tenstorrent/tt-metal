@@ -1124,15 +1124,23 @@ class PACK_UNTILIZE_BENCHMARK(TemplateParameter):
         )
 
 
-@dataclass
+@dataclass(init=False, repr=False, eq=False)
 class MATMUL_UNPACK_TTSYNC(TemplateParameter):
     """Blackhole matmul unpack with the row base addresses written through GPRs and WRCFG under Auto TTSync.
 
     block (rt, ct, kt, in1, in0, out): the keys of a sweep that forces the opt-in on every cell; the kernel then runs it only where the LLK keeps it
-    (llk_matmul_forms.h matmul_unpack_ttsync_cell), as the compute API does for a caller that gives its block keys.
-    """
+    (llk_matmul_forms.h matmul_unpack_ttsync_cell), as the compute API does for a caller that gives its block keys. Not a report column; the repr
+    holds it, as the variant hash reads it."""
 
-    block: tuple = None
+    def __init__(self, block=None):
+        self.block = block
+
+    def __repr__(self):
+        return (
+            "MATMUL_UNPACK_TTSYNC()"
+            if self.block is None
+            else f"MATMUL_UNPACK_TTSYNC(block={self.block})"
+        )
 
     def convert_to_cpp(self) -> str:
         if self.block is None:
