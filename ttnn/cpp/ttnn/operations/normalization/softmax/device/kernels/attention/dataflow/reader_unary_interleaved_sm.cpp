@@ -134,6 +134,7 @@ void kernel_main() {
             ht = 0;
             mask_ht = 0;
             mask_id_offset += num_tiles_causal_mask;
+            mask_id = mask_id_offset;
         } else if (mask_ht == mask_Ht) {
             mask_ht = 0;
             mask_id = mask_id_offset;
