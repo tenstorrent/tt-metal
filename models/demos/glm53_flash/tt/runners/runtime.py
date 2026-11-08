@@ -22,6 +22,7 @@ from loguru import logger
 
 import ttnn
 from models.demos.common.prefill.runners.migration import KvCacheStage
+from models.demos.glm53_flash.tt.runners import prefix_reuse
 from models.demos.glm53_flash.tt.runners.kv_export import (
     DSA_LAYERS,
     LATENT_DIM,
@@ -99,6 +100,12 @@ class GLM53FlashPrefillRuntime:
         self._async = os.environ.get("GLM53F_EXPORT_ASYNC", "") in ("1", "pack")
         self._async_pack = os.environ.get("GLM53F_EXPORT_ASYNC", "") == "pack"
         self._xq: queue.Queue = queue.Queue()
+        # tt-blaze G53F-0311 prefill-side prefix reuse (GLM53F_PREFIX_REUSE=1; off = this runner exactly as before): built
+        # in compile() (the checkpoint pool is allocated before the warm-up, so the warm-up runs beside it)
+        self._prefix: prefix_reuse.PrefixRetention | None = None
+        self._prefix_on = False
+        self._ckpt: list[dict] = []
+        self._kv = None
         if self._async:
             threading.Thread(target=self._export_worker, name="glm53f-export", daemon=True).start()
         logger.info(f"[glm53f-runtime] model built in {time.time() - t0:.0f} s (max_seq_len {params.max_seq_len})")
@@ -126,6 +133,8 @@ class GLM53FlashPrefillRuntime:
         tt-blaze G53F-0256 G4b), so the default covers the cuts S' = 4 * floor((S - 1) / 4) of ISL 1k / 2k / 4k / 16k.
         """
         chunk = self.config.chunk_size
+        if prefix_reuse.enabled():
+            self._build_prefix(kv_caches)
         spec = os.environ.get("GLM53F_RUNNER_WARMUP", f"1020:0,2044:0,4092:0,c{2 * chunk - 4}")
         for item in [v.strip() for v in spec.split(",") if v.strip()]:
             if item.startswith("a"):  # tt-blaze G53F-0256: a whole prompt through prefill_chunk (the async export path)
@@ -155,6 +164,10 @@ class GLM53FlashPrefillRuntime:
                 f"[glm53f-runtime] warm-up {item} ({len(parts)} chunk(s), {parts[-1][1]} tokens): prefill {tp:.2f} s, "
                 f"export {te:.2f} s, wall {time.perf_counter() - tw:.2f} s{self._dram_note()}"
             )
+        if self._prefix is not None:
+            # the warm-up wrote the caches with its own ids outside the retention's view: start the serving empty
+            self._prefix.reset("warm-up done")
+            self._prefix_on = True
 
     def _dram_note(self) -> str:
         """DRAM held after a warm-up item (tt-blaze G53F-0256: each padded chunk length keeps DRAM resident and the
@@ -193,9 +206,14 @@ class GLM53FlashPrefillRuntime:
             self._sink = saved
 
     def prefill_chunk(self, input_tensor, kv_caches, *, slot_id, actual_start, actual_end, request_id=0, **_):
+        # tt-d-gen device.prefill.mark_last_chunk: bit 29 of the slot word on every chunk, bit 30 on a burst's last one
+        slot_id, last = prefix_reuse.split_slot_word(slot_id)
+        pr = self._prefix if self._prefix_on else None
         if not isinstance(input_tensor, torch.Tensor) and actual_end <= actual_start:
             ttnn.deallocate(input_tensor)
         if actual_end <= actual_start:
+            if pr is not None:
+                pr.note_empty()
             # tt-d-gen prefill_wait_for_arm_us: a request the decode side declined before its first chunk sends one
             # EMPTY chunk only to retire its burst -- nothing to compute or export, every layer acknowledged
             logger.info(f"[glm53f-runtime] chunk {request_id} slot {slot_id} empty (declined before compute)")
@@ -209,7 +227,20 @@ class GLM53FlashPrefillRuntime:
         if not isinstance(input_tensor, torch.Tensor):
             ttnn.deallocate(input_tensor)
         t0 = time.perf_counter()
-        self._prefill(ids, actual_start)
+        if pr is not None:
+            if actual_start == 0:
+                logger.info(f"[glm53f-prefix] new prompt at chunk {request_id}: {pr.summary()}")
+            if pr.begin_chunk(ids, actual_start, actual_end, last):
+                return self._skip_chunk(slot_id, actual_start, actual_end, request_id, t0)
+            t0 = time.perf_counter()  # a resume's restore / rebuild is logged by the retention, not as this chunk
+            try:
+                self._prefill(ids, actual_start)
+            except Exception:
+                pr.invalidate("a chunk failed")
+                raise
+            pr.end_compute(ids, actual_start, actual_end)
+        else:
+            self._prefill(ids, actual_start)
         t1 = time.perf_counter()
         if self._async:
             # KDA states: device copies now (the next chunk mutates them in place), then one sync; the DSA rows of
@@ -233,6 +264,82 @@ class GLM53FlashPrefillRuntime:
             for layer in range(TABLE_LAYERS):
                 self._sink(layer, request_id)
         return None
+
+    # ------------------------------------------------------------------ prefix reuse (tt-blaze G53F-0311)
+    def _skip_chunk(self, slot_id, start, end, request_id, t0) -> None:
+        """A chunk the device already holds (``PrefixRetention.begin_chunk``): acknowledge every layer, nothing computed."""
+        if self._async:
+            self._xq.put(("ack", None, 0, 0, request_id, None))
+        elif self._sink is not None:
+            for layer in range(TABLE_LAYERS):
+                self._sink(layer, request_id)
+        logger.info(
+            f"[glm53f-runtime] chunk {request_id} slot {slot_id} [{start}, {end}): SKIPPED (retained prefix) in "
+            f"{time.perf_counter() - t0:.3f} s"
+        )
+        return None
+
+    def _build_prefix(self, kv_caches) -> None:
+        """The retention + its device-DRAM checkpoint pool: ``GLM53F_PREFIX_CKPTS`` slots (default 8), each a copy of
+        every KDA layer's carries (recurrent fp32 [1, H, 128, 128] + conv history, the model's own layouts)."""
+        n = int(os.environ.get("GLM53F_PREFIX_CKPTS", "8"))
+        self._kv = kv_caches
+        kda = [L for L in sorted(self.decs) if self.decs[L].kda_batched is not None]
+        before = self._dram_bytes()
+        self._ckpt = []
+        for _ in range(n):
+            self._ckpt.append(
+                {
+                    L: SimpleNamespace(
+                        recurrent=ttnn.clone(self.decs[L].kda_batched.recurrent),
+                        convolution=ttnn.clone(self.decs[L].kda_batched.convolution),
+                    )
+                    for L in kda
+                }
+            )
+        after = self._dram_bytes()
+        per = (after - before) / max(n, 1) / 2**20 if before is not None and after is not None else float("nan")
+        self._prefix = prefix_reuse.PrefixRetention(
+            chunk=self.config.chunk_size,
+            n_ckpts=n,
+            save=self._ckpt_save,
+            restore=self._ckpt_restore,
+            export_carries=self._export_carries,
+            set_next_start=self._set_next_start,
+            compute_silent=lambda ids, start: self._prefill(ids, start),
+            log=logger.info,
+        )
+        logger.info(
+            f"[glm53f-prefix] prefix reuse ON: {n} checkpoint slot(s) x {len(kda)} KDA layers, {per:.2f} MiB per bank "
+            f"each{self._dram_note()}"
+        )
+
+    def _dram_bytes(self):
+        try:
+            return ttnn.get_memory_view(self.mesh_device, ttnn.BufferType.DRAM).total_bytes_allocated_per_bank
+        except Exception:  # noqa: BLE001 -- a report must not fail the build
+            return None
+
+    def _ckpt_save(self, slot: int) -> None:
+        for L, st in self._ckpt[slot].items():
+            ttnn.copy(self.decs[L].kda_batched.recurrent, st.recurrent)
+            ttnn.copy(self.decs[L].kda_batched.convolution, st.convolution)
+
+    def _ckpt_restore(self, slot: int) -> None:
+        for L, st in self._ckpt[slot].items():
+            ttnn.copy(st.recurrent, self.decs[L].kda_batched.recurrent)
+            ttnn.copy(st.convolution, self.decs[L].kda_batched.convolution)
+
+    def _export_carries(self, slot) -> None:
+        """The KDA carries of checkpoint ``slot`` (None = the live ones) into the export slabs: what the KV Manager ships
+        after a burst whose last chunk was skipped."""
+        for L in self._kv.kda_layers:
+            self._kv.export_kda(L, self.decs[L].kda_batched if slot is None else self._ckpt[slot][L])
+        ttnn.synchronize_device(self.mesh_device)
+
+    def _set_next_start(self, pos: int) -> None:
+        for dec in self.model.layers:
+            dec.next_start[0] = int(pos)
 
     # ------------------------------------------------------------------ KV table
     def kv_migration_stages(self, kv_caches, first_layer_idx=None, num_my_layers=None):
