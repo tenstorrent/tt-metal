@@ -10,7 +10,7 @@ import torch
 import ttnn
 
 from ..parallel.manager import CCLManager
-from ..utils.tensor import bf16_tensor, typed_tensor, unflatten
+from ..utils.tensor import bf16_tensor, float32_tensor, typed_tensor, unflatten
 from .linear import ColParallelLinear, Linear, RowParallelLinear
 from .module import Module, Parameter
 
@@ -34,7 +34,7 @@ class Timesteps(Module):
         max_period: int = 10000,
         downscale_freq_shift: float = 0,
         scale: int = 1,
-        dtype: ttnn.DataType = ttnn.bfloat16,
+        dtype: ttnn.DataType = ttnn.float32,
         mesh_device=None,
     ):
         super().__init__()
@@ -148,7 +148,7 @@ class SD35CombinedTimestepTextProjEmbeddings(Module):
         exponent = exponent / half_dim
         factor = torch.exp(exponent)
 
-        return ttnn.unsqueeze_to_4D(bf16_tensor(factor, device=self.mesh_device))
+        return ttnn.unsqueeze_to_4D(float32_tensor(factor, device=self.mesh_device))
 
     def forward(self, timestep: ttnn.Tensor, pooled_projection: ttnn.Tensor | None = None) -> ttnn.Tensor:
         # Time projection (sinusoidal embedding)
