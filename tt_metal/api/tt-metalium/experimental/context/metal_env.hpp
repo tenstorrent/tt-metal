@@ -50,6 +50,10 @@ class MetalEnvImpl;
 //
 // This is a lightweight, copyable, non-owning view. It is valid only while the MetalEnv it was obtained from is
 // alive. Values are read from the environment on each call.
+//
+// Every entry point (MetalEnv::get_device_properties() and the MeshDevice overloads in mesh_device_properties.hpp)
+// returns this view, so a new property is added here, implemented against MetalEnvImpl in metal_env.cpp, and is then
+// answered by all of them.
 class MetalDeviceProperties {
 public:
     /// @return Architecture of the devices.

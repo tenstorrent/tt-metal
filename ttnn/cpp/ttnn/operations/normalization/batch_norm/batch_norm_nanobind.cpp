@@ -31,7 +31,7 @@ void bind_batch_norm_operation(nb::module_& mod) {
             - :math:`\epsilon` is a small constant.
 
         Args:
-            input_tensor (ttnn.Tensor): the input tensor of shape `[N, C, H, W]`.
+            input (ttnn.Tensor): the input tensor of shape `[N, C, H, W]`.
 
         Keyword args:
             eps (float, optional): Epsilon value. Defaults to `1e-05`.
@@ -41,7 +41,7 @@ void bind_batch_norm_operation(nb::module_& mod) {
             weight (ttnn.Tensor, optional): the weight or gamma value of shape `[1, C, 1, 1]`. Defaults to `None`.
             bias (ttnn.Tensor, optional): the bias or beta value of shape `[1, C, 1, 1]`. Defaults to `None`.
             training (bool, optional): Selection between training mode and inference (evaluation) mode. Defaults to `False` (Inference mode).
-            output (ttnn.Tensor, optional): Preallocated output tensor to store batch norm result of shape `[N, C, H, W]`. Must have the same dtype as :attr:`input_tensor`. Defaults to `None`.
+            output (ttnn.Tensor, optional): Preallocated output tensor to store batch norm result of shape `[N, C, H, W]`. Must have the same dtype as :attr:`input`. Defaults to `None`.
             memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
             compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): device compute kernel configuration for the operation. Defaults to `None`.
 

@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <array>
+#include <string>
 
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/constants.hpp>
@@ -141,11 +142,29 @@ void QkvCausalConv1dSiluOperation::validate_on_program_cache_miss(
             std::ranges::none_of(attrs.exchange_semaphore_addresses, [](uint32_t address) { return address == 0; }),
             "qkv_causal_conv1d_silu: exchange_buffer needs its exchange semaphores");
     }
+    if (attrs.page_channels.has_value()) {
+        const uint32_t page_channels = *attrs.page_channels;
+        TT_FATAL(
+            page_channels > 0 && page_channels % tt::constants::TILE_WIDTH == 0 && channels % page_channels == 0,
+            "qkv_causal_conv1d_silu: page_channels must be a positive multiple of {} dividing Q+K+V = {}, got {}",
+            tt::constants::TILE_WIDTH,
+            channels,
+            page_channels);
+    }
+    // The declared layout fixes history's shape; a token-paged [1, 3, W] and a channel-paged [1, W/P, 3P] with W = 3P
+    // coincide, so the shape alone cannot tell them apart.
+    const auto tail = qkv_causal_conv1d_silu_tail_layout(attrs);
+    const auto width = static_cast<uint32_t>(channels);
+    const Shape expected_history_shape =
+        tail.token_paged ? Shape({1, qkv_conv::history_rows, width})
+                         : Shape({1, width / tail.page_channels, qkv_conv::history_rows * tail.page_channels});
     TT_FATAL(
-        history_shape.rank() == 3 && history_shape[0] == 1 && history_shape[1] == qkv_conv::history_rows &&
-            history_shape[2] == channels,
-        "qkv_causal_conv1d_silu: history must be [1,{},Q+K+V]",
-        qkv_conv::history_rows);
+        history_shape == expected_history_shape,
+        "qkv_causal_conv1d_silu: history must be {} for Q+K+V = {} and page_channels = {}, got {}",
+        expected_history_shape,
+        channels,
+        tail.token_paged ? std::string("None (token-paged)") : std::to_string(tail.page_channels),
+        history_shape);
     TT_FATAL(
         attrs.sequence > 0 && attrs.sequence % tt::constants::TILE_HEIGHT == 0,
         "qkv_causal_conv1d_silu: sequence must be positive and tile aligned");
