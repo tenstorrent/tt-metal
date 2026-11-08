@@ -45,13 +45,6 @@ constexpr bool llk_math_gguf_decode_body_unarbitrated() {
 }
 
 // Float32 zeros in DEST tile dst_index, e.g. the accumulator of dest_srca_mm.
-inline void llk_math_gguf_zero_tile(const std::uint32_t dst_index) {
-    sfpu::sfpu_gguf_decode_start(dst_index, 0);
-#pragma GCC unroll 8
-    for (std::uint32_t i = 0; i < 32; i++) {
-        sfpi::dst_reg[i] = 0.0f;
-    }
-    sfpu::sfpu_gguf_decode_done();
-}
+inline void llk_math_gguf_zero_tile(const std::uint32_t dst_index) { sfpu::sfpu_gguf_zero_tile(dst_index); }
 
 }  // namespace ckernel

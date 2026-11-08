@@ -6,15 +6,23 @@
 
 #include <cstdint>
 
-#include "internal/risc_attribs.h"
+#if __has_include("experimental/ckernel_gguf_page.h")
 #include "experimental/ckernel_gguf_page.h"
+#else  // host code, which has no tt-llk include directory
+#include "tt_metal/tt-llk/tt_llk_blackhole/common/inc/experimental/ckernel_gguf_page.h"
+#endif
 #include "experimental/gguf_level_tables.h"
+#if defined(__riscv)
+#include "internal/risc_attribs.h"
+#endif
 
 // RISC-V side of the Blackhole GGUF decoders (tt-llk sfpu/experimental/ckernel_sfpu_gguf_decode.h): the steps a data
 // movement core or a TRISC runs on a GGUF page in L1 before it is unpacked to DEST. The page layout and the format ids
 // are the LLK's (experimental/ckernel_gguf_page.h).
 //   prepare_scales: fp32 copies of the page's fp16 scale fields, so the SFPU needs no fp16 conversion for them;
 //   lookup_grid:    the codebook formats' grid indices to level codes, through the format's level table.
+// The host uses lookup_grid too (from_gguf / to_gguf of the expanded layouts); prepare_scales and prepare_page are
+// RISC-V only.
 
 namespace experimental::gguf {
 
@@ -63,6 +71,7 @@ inline std::uint32_t fp16_to_fp32(const std::uint32_t h) {
     return sign | (exp << 23) | ((mag & 0x3FFu) << 13);
 }
 
+#if defined(__riscv)
 // The fp32 copies of a page's fp16 scale rows: fp16 row raw_rows + f, half b (column 16p + 2c + b of word 2c + p) goes
 // to rows R + 8f + 4b .. R + 8f + 4b + 3 (raw_rows = scale_rows - fp16_rows), R = scale_rows rounded up to 4, the same
 // 16 words in each of the four rows, so that one SFPU load gives every lane its column's value. `scales` points at the
@@ -110,6 +119,7 @@ inline void prepare_scales(volatile tt_l1_ptr std::uint32_t* scales) {
         }
     }
 }
+#endif
 
 // The level table of a codebook format (nullptr for the others).
 template <Format FMT>
@@ -124,6 +134,12 @@ constexpr const std::uint16_t* level_table() {
         case Format::IQ1_M: return levels::iq1_s;
         default: return nullptr;
     }
+}
+
+// Index words of a codebook page, four grid indices each.
+template <Format FMT>
+constexpr std::uint32_t index_words() {
+    return FMT == Format::IQ3_S || FMT == Format::IQ3_XXS ? 64 : 32;
 }
 
 // Byte offset of a codebook page's index words: they follow 128 bytes of sign words, except IQ1_S / IQ1_M's.
@@ -152,7 +168,7 @@ inline __attribute__((always_inline)) void lookup_grid(
     const std::uint32_t part = 0,
     const std::uint32_t parts = 1) {
     static_assert(is_codebook<FMT>(), "lookup_grid: not a codebook format");
-    constexpr std::uint32_t words = FMT == Format::IQ3_S || FMT == Format::IQ3_XXS ? 64 : 32;
+    constexpr std::uint32_t words = index_words<FMT>();
     const std::uint32_t m_begin = part * words / parts;
     const std::uint32_t m_end = (part + 1) * words / parts;
     if constexpr (FMT == Format::IQ3_S || FMT == Format::IQ3_XXS) {
@@ -252,6 +268,7 @@ inline __attribute__((always_inline)) void lookup_grid(
     }
 }
 
+#if defined(__riscv)
 // Both steps for the page at L1 byte address `page`: what a page needs between its arrival in L1 and its unpack.
 template <Format FMT, bool branch_free = true>
 inline void prepare_page(const std::uint32_t page) {
@@ -266,5 +283,6 @@ inline void prepare_page(const std::uint32_t page) {
             reinterpret_cast<volatile tt_l1_ptr std::uint32_t*>(page));
     }
 }
+#endif
 
 }  // namespace experimental::gguf
