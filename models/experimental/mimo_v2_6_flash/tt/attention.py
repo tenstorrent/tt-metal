@@ -215,6 +215,13 @@ def page_table_width(blocks):
 DEBUG_ROWS = [int(r) for r in os.environ.get("MIMO_DEBUG_ROWS", "").split(",") if r]
 
 
+def _debug_norms(t, per_user):
+    """Per-row norms of a tensor on chip 0 (MIMO_DEBUG_ROWS, eager decode only)."""
+    v = ttnn.to_torch(ttnn.get_device_tensors(t)[0]).float()
+    v = v[0] if per_user else v[0, 0]
+    return [round(float(v[r].norm()), 3) if r < v.shape[0] else None for r in DEBUG_ROWS]
+
+
 class SwaDecodeQkv:
     """SWA decode, users in rows 0-3 (or 0-7: 8 users, 0-15: 16): the fused qkv row [1, 1, 32, (nh + 2) * D] (L1 tiles) -> the RoPE'd query in
     the height-sharded layout paged SDPA decode reads ([1, 32, nh, D], one [32, D] shard per user) and the RoPE'd key
@@ -733,6 +740,7 @@ class TtMiMoAttention:
             exp_approx_mode=False,
         )
         self._split_sdpa_programs = {}
+        self._wide_sdpa_program = None
         # The KV pair split (vLLM mode, MIMO_KV_PAIR_SPLIT): the model's PairSplit, on the global layers.
         self.pair = None
         # The zero query rows in front of a later SWA chunk (its cached window's rows), {lead rows: tensor}, shared by
@@ -740,15 +748,37 @@ class TtMiMoAttention:
         # host, which a captured later chunk cannot do. Missing: made per chunk.
         self.lead_zeros = {}
 
+    def _swa_sdpa_program(self, batch):
+        """SWA decode SDPA program for ``batch`` page-table rows.
+
+        Paged decode SDPA takes its batch from the page table and reads batch b's query from its reducer core, which
+        it places at (b % grid.x, b // grid.x) of the program's grid; nlp_create_qkv_heads_decode (whose layout
+        SwaDecodeQkv copies) shards the users' queries row by row over the device's compute grid (12 x 10 on a
+        Blackhole row). The two agree on every user only when the program's grid is that grid: with the 8 x 8 grid,
+        users 8-15 read other users' queries (8-11 those of 12-15, 12-15 zero padding). Up to 8 users all of them
+        sit in the first row of both, so the validated 8 x 8 program stays."""
+        if batch <= 8:
+            return self.decode_sdpa_program
+        if self._wide_sdpa_program is None:
+            self._wide_sdpa_program = ttnn.SDPAProgramConfig(
+                compute_with_storage_grid_size=self.plan.mesh_device.compute_with_storage_grid_size(),
+                q_chunk_size=0,
+                k_chunk_size=128,
+                exp_approx_mode=False,
+            )
+        return self._wide_sdpa_program
+
     def _split_sdpa_program(self, batch, table_tokens):
         """Global decode SDPA program for a batch of ``batch`` page-table rows: every core of the 8 x 8 grid works
-        (64 / batch per user; the tree reduction allows up to 64) and 256-token K chunks where the table allows."""
+        (64 / batch per user; the tree reduction allows up to 64) and 256-token K chunks where the table allows. More
+        than 8 rows (or MIMO_SDPA_FULL_GRID=1) take the device's compute grid, where the queries' shards are
+        (``_swa_sdpa_program``)."""
         if batch >= TILE:
-            return self.decode_sdpa_program
+            return self._swa_sdpa_program(batch)
         key = (batch, table_tokens)
         if key not in self._split_sdpa_programs:
             grid = ttnn.CoreCoord(8, 8)
-            if os.environ.get("MIMO_SDPA_FULL_GRID", "0") == "1":
+            if os.environ.get("MIMO_SDPA_FULL_GRID", "0") == "1" or batch > 8:
                 grid = self.plan.mesh_device.compute_with_storage_grid_size()
             self._split_sdpa_programs[key] = ttnn.SDPAProgramConfig(
                 compute_with_storage_grid_size=grid,
@@ -1540,7 +1570,7 @@ class TtMiMoAttention:
             scale=self.scale,
             sliding_window_size=self.sliding_window,
             attention_sink=self.decode_sinks,
-            program_config=self.decode_sdpa_program,
+            program_config=self._swa_sdpa_program(page_table.shape[0]),
             compute_kernel_config=self.decode_sdpa_config,
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
@@ -1645,6 +1675,8 @@ class TtMiMoAttention:
         (PairSplit.merge); the row reduction after the o projection adds the pair's two."""
         batch = x.shape[-2]
         xqkv = self._decode_qkv(x, self.wqkv_decode, self.decode_qkv_program)
+        if DEBUG_ROWS:
+            logger.info(f"MIMO_DEBUG_ROWS pair attn: x {_debug_norms(x, False)} xqkv {_debug_norms(xqkv, False)}")
         q, k, v = ttnn.experimental.nlp_create_qkv_heads_decode(
             xqkv,
             num_heads=self.nh_decode,
@@ -1659,6 +1691,8 @@ class TtMiMoAttention:
         k.deallocate(True)
         v_shard = finite_kv(self._cache_width_v(v, batch, self.v_head_dim))
         k_rot = finite_kv(k_rot)
+        if DEBUG_ROWS:
+            logger.info(f"MIMO_DEBUG_ROWS pair attn: q {_debug_norms(q_rot, True)} k {_debug_norms(k_rot, True)}")
 
         k_cache, v_cache = kv_cache
         for pos in positions.get("pair_serial") or [positions["pair_write"]]:
@@ -1678,8 +1712,16 @@ class TtMiMoAttention:
             attn, lse = self._verify_grouped(q_rot, kv_cache, table, pos, positions.get("verify_groups"))
         else:
             attn, lse = self._paged_mla_decode_lse(q_rot, kv_cache, table, pos)  # [1, B or n, 16, 128], [.., 16, 1]
+        if DEBUG_ROWS:
+            pv = ttnn.to_torch(ttnn.get_device_tensors(pos)[0]).reshape(-1)[:16].tolist()
+            logger.info(
+                f"MIMO_DEBUG_ROWS pair attn: sdpa {_debug_norms(attn, True)} lse {_debug_norms(lse, True)} "
+                f"table rows {table.shape[0]} pos {pv}"
+            )
         q_rot.deallocate(True)
         attn_cat = self.pair.merge_heads(attn, lse, self.concat_heads)
+        if DEBUG_ROWS:
+            logger.info(f"MIMO_DEBUG_ROWS pair attn: merged {_debug_norms(attn_cat, False)}")
         attn.deallocate(True)
         lse.deallocate(True)
         return self._decode_o(attn_cat, compact)
