@@ -27,7 +27,7 @@ inline __attribute__((always_inline)) void lookup_grid_rvv(
     const std::uint32_t part = 0,
     const std::uint32_t parts = 1) {
     static_assert(is_codebook<FMT>(), "lookup_grid_rvv: not a codebook format");
-    constexpr std::uint32_t words = FMT == Format::IQ3_S || FMT == Format::IQ3_XXS ? 64 : 32;
+    constexpr std::uint32_t words = index_words<FMT>();
     const std::uint32_t m_begin = part * words / parts;
     const std::uint32_t m_end = (part + 1) * words / parts;
     auto* out = reinterpret_cast<std::uint16_t*>(const_cast<std::uint32_t*>(levels));

@@ -14,7 +14,6 @@
 #include <memory>
 #include <random>
 #include <string>
-#include <utility>
 #include <vector>
 
 #include <gtest/gtest.h>
@@ -34,14 +33,7 @@ using ckernel::gguf::PageLayout;
 
 constexpr std::uint32_t kPages = 4;
 
-template <std::size_t... I>
-PageLayout layout_of(std::uint32_t fmt, std::index_sequence<I...>) {
-    PageLayout l{};
-    ((fmt == I + 1 ? (l = ckernel::gguf::page_layout<static_cast<Format>(I + 1)>(), 0) : 0), ...);
-    return l;
-}
-
-PageLayout layout_of(std::uint32_t fmt) { return layout_of(fmt, std::make_index_sequence<25>{}); }
+PageLayout layout_of(std::uint32_t fmt) { return ckernel::gguf::page_layout(static_cast<Format>(fmt)); }
 
 const std::uint16_t* table_of(std::uint32_t fmt) {
     namespace lv = ::experimental::gguf::levels;

@@ -21,12 +21,13 @@
 #include <tt-metalium/tt_metal.hpp>
 
 #include "llk_device_fixture.hpp"
+#include "tt_metal/tt-llk/tt_llk_blackhole/common/inc/experimental/ckernel_gguf_page.h"
 
 namespace tt::tt_metal {
 namespace {
 
-constexpr std::uint32_t kQ8_0 = 1;
-constexpr std::uint32_t kQ4_0 = 2;
+constexpr std::uint32_t kQ8_0 = ckernel::gguf::Q8_0;
+constexpr std::uint32_t kQ4_0 = ckernel::gguf::Q4_0;
 
 struct Case {
     std::uint32_t fmt = kQ8_0;
@@ -61,10 +62,14 @@ struct Inputs {
     std::vector<float> activations;    // [32][k_tiles * 32]
 };
 
-// Page bytes and code bytes of the two formats (ckernel_gguf_page.h page_layout): Q8_0 2 KiB with 1 KiB of codes,
-// Q4_0 1 KiB with 512 bytes; the scale row (fp16 d of column 16 p + 2 c + b at half b of word 2 c + p) follows them.
-std::uint32_t page_bytes(std::uint32_t fmt) { return fmt == kQ8_0 ? 2048 : 1024; }
-std::uint32_t code_bytes(std::uint32_t fmt) { return fmt == kQ8_0 ? 1024 : 512; }
+// Page bytes and code bytes of the two formats (Q8_0 2 KiB with 1 KiB of codes, Q4_0 1 KiB with 512 bytes); the scale
+// row (fp16 d of column 16 p + 2 c + b at half b of word 2 c + p) follows the codes.
+std::uint32_t page_bytes(std::uint32_t fmt) {
+    return ckernel::gguf::page_layout(static_cast<ckernel::gguf::Format>(fmt)).rows * 64;
+}
+std::uint32_t code_bytes(std::uint32_t fmt) {
+    return ckernel::gguf::page_layout(static_cast<ckernel::gguf::Format>(fmt)).code_bytes;
+}
 
 Inputs make_inputs(const Case& c, std::mt19937& rng) {
     Inputs in;
