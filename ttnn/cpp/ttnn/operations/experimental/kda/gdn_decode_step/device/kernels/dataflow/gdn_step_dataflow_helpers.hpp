@@ -159,7 +159,8 @@ template <typename Acc, typename Token>
 inline Acc same_layout_accessor(const Acc& a, Token token) {
     const auto other = TensorAccessor(token);
     tt_buf_rw::note_read_write<std::decay_t<decltype(other)>::DSpec::binding_id>();
-    return Acc(typename Acc::DSpec{}, other.get_bank_base_address(), a.get_aligned_page_size());
+    return Acc(
+        typename Acc::DSpec{}, tensor_accessor::detail::TransferAccess::bank_base(other), a.get_aligned_page_size());
 }
 
 // Two-pool page space: pages [0, pages_a) are pool a's, pages from pages_a on are pool b's (page - pages_a). A run of
