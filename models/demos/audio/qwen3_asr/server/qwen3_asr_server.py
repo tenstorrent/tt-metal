@@ -52,12 +52,55 @@ _LOCK = threading.Lock()
 app = FastAPI()
 STATE = {}
 
+# Forced-language names the model was trained with (same table as transformers' Qwen3-ASR processor).
+LANGUAGE_CODE_TO_NAME = {
+    "ar": "Arabic",
+    "yue": "Cantonese",
+    "zh": "Chinese",
+    "cs": "Czech",
+    "da": "Danish",
+    "nl": "Dutch",
+    "en": "English",
+    "fil": "Filipino",
+    "fi": "Finnish",
+    "fr": "French",
+    "de": "German",
+    "el": "Greek",
+    "hi": "Hindi",
+    "hu": "Hungarian",
+    "id": "Indonesian",
+    "it": "Italian",
+    "ja": "Japanese",
+    "ko": "Korean",
+    "mk": "Macedonian",
+    "ms": "Malay",
+    "fa": "Persian",
+    "pl": "Polish",
+    "pt": "Portuguese",
+    "ro": "Romanian",
+    "ru": "Russian",
+    "es": "Spanish",
+    "sv": "Swedish",
+    "th": "Thai",
+    "tr": "Turkish",
+    "vi": "Vietnamese",
+}
+
+
+def _language_name(language):
+    """Code or name in any case -> the model's language name. Unknown values pass through unchanged."""
+    key = language.strip().lower()
+    for code, name in LANGUAGE_CODE_TO_NAME.items():
+        if key in (code, name.lower()):
+            return name
+    return language
+
 
 def _build_prompt(processor, force_language):
     msgs = [{"role": "system", "content": ""}, {"role": "user", "content": [{"type": "audio", "audio": ""}]}]
     base = processor.apply_chat_template(msgs, add_generation_prompt=True, tokenize=False)
     if force_language:
-        base = base + f"language {force_language}<asr_text>"
+        base = base + f"language {_language_name(force_language)}<asr_text>"
     return base
 
 
@@ -237,15 +280,11 @@ def _segment(w):
 
 
 def _hallucinated(text):
-    """Repetition hallucination (e.g. '厉害厉害…' on non-speech): one char dominating."""
-    import re
-
+    """Repetition hallucination (e.g. '厉害厉害…' on non-speech), by the thresholds of upstream Qwen3-ASR's
+    detect_and_fix_repetitions: a character repeated more than 20 times, or in 40 or more characters, a unit of 1-20
+    characters repeated 20 times in a row."""
     s = re.sub(r"[\s\W_]+", "", text)
-    if len(s) < 10:
-        return False
-    from collections import Counter
-
-    return Counter(s).most_common(1)[0][1] / len(s) > 0.35
+    return re.search(r"(.)\1{20}", s) is not None or (len(s) >= 40 and re.search(r"(.{1,20}?)\1{19}", s) is not None)
 
 
 @app.get("/health")
