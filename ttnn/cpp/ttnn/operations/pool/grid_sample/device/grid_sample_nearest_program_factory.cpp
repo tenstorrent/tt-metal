@@ -26,7 +26,6 @@ ProgramDescriptor GridSampleNearestProgramFactory::create_descriptor(
     const bool use_precomputed_grid = operation_attributes.use_precomputed_grid;
     const bool align_corners = operation_attributes.align_corners;
 
-    const bool is_sharded = grid_tensor.is_sharded();
     ProgramDescriptor desc;
 
     // Data formats and device
@@ -42,6 +41,14 @@ ProgramDescriptor GridSampleNearestProgramFactory::create_descriptor(
     const uint32_t grid_height = grid_shape[1], grid_width = grid_shape[2];
     const uint32_t grid_hw = grid_height * grid_width;
     const uint32_t grid_batching_factor = get_grid_batching_factor(grid_tensor, use_precomputed_grid, "nearest");
+    const uint32_t output_sticks_per_grid_stick =
+        operation_attributes.batch_output_channels ? 1U : grid_batching_factor;
+    const bool is_sharded =
+        grid_tensor.is_sharded() && output_tensor.is_sharded() &&
+        grid_tensor.shard_spec().value().grid == output_tensor.shard_spec().value().grid &&
+        grid_tensor.shard_spec().value().orientation == output_tensor.shard_spec().value().orientation &&
+        output_tensor.shard_spec().value().shape[0] ==
+            grid_tensor.shard_spec().value().shape[0] * output_sticks_per_grid_stick;
     const bool enable_split_reader =
         should_use_split_reader(input_tensor, grid_tensor, use_precomputed_grid, "nearest");
     tt::tt_metal::CoreRangeSet all_cores;
@@ -61,8 +68,6 @@ ProgramDescriptor GridSampleNearestProgramFactory::create_descriptor(
         all_cores = output_shard_spec.grid;
         num_cores = output_shard_spec.num_cores();
         output_nsticks_per_core = output_shard_spec.shape[0];
-        const uint32_t output_sticks_per_grid_stick =
-            operation_attributes.batch_output_channels ? 1U : grid_batching_factor;
         TT_FATAL(
             output_nsticks_per_core % output_sticks_per_grid_stick == 0,
             "Nearest grid_sample output shard height must be divisible by the number of output rows per grid row ({})",
