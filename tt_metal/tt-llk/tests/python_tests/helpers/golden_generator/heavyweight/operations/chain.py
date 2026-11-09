@@ -5,8 +5,8 @@
 
 A :class:`Chain` is an ordered list of :class:`Step`, run one after another over
 a shared :class:`Registers` namespace. That is the whole model. It knows nothing
-about the hardware — the data-transfer blocks are turned into steps by
-:class:`~.golden.Golden` — so a chain is free to be any shape:
+about the hardware. The data-transfer blocks are turned into steps by
+:class:`~.golden.Golden` so a chain is free to be any shape:
 
     unpack, unpack, math, pack                  a binary op
     unpack, math, pack, unpack, math, pack      two passes
@@ -27,7 +27,7 @@ import torch
 class Registers:
     """The named slots a chain passes between steps.
 
-    Holds whatever a step wants to put there — L1 byte buffers, src-register
+    Holds whatever a step wants to put there: L1 byte buffers, src-register
     tensors, Dest, loop counters. No slot is special.
     """
 
@@ -117,12 +117,7 @@ class Chain:
         return self
 
     def repeat(self, times: int, steps: Iterable[Step]) -> "Chain":
-        """Append `steps` `times` over — a loop, unrolled.
-
-        Steps are re-run against the same registers, so a loop body that wants
-        distinct inputs per iteration should be built with a comprehension
-        instead, giving each iteration its own step objects.
-        """
+        """Append `steps` `times` over a loop, unrolled."""
         body = list(steps)
         for _ in range(times):
             self.steps.extend(body)
@@ -175,8 +170,7 @@ class Chain:
         The mirror of :meth:`dry_run`. That one catches a step reading a
         register nothing wrote, which fails loudly the moment it runs. This
         catches the quieter mistake in the other direction: a value staged into
-        the registers that the chain never looks at, so the run completes and
-        returns a confident answer computed from less input than it was given.
+        the registers that the chain never looks at.
         """
         consumed = {name for step in self.steps for name in step.reads}
         return [name for name in available if name not in consumed]

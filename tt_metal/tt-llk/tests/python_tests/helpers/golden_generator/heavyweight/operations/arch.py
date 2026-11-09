@@ -9,12 +9,6 @@ that once here and every operation takes one as an argument. Everything an
 operation needs to know about the hardware itself it asks the blocks: the FPU
 carries its own multiplier width, the packer its own edge-mask polarity.
 
-Before this, each fact was restated once per operation: `blocks` appeared in
-five files and the Quasar mantissa split in three. The file count grew as
-``ops x architectures`` for information that is ``ops + architectures``, so a
-new operation meant three near-identical subclasses and a new architecture
-meant four.
-
 The familiar names are kept as factories at the bottom, so
 ``QuasarMatmulGolden(MathFidelity.HiFi4)`` still works.
 """
