@@ -108,16 +108,16 @@ RMSNormBackwardBuffers get_buffers(const tensor_args_t& tensor_args, const tenso
 
 }  // namespace
 
-// Wt is the tiles of each row a core holds, its slice with num_slices > 1, which adds the partial exchange.
-bool fits_in_l1_check(
+// L1 bytes when the Wt tiles of each row a core holds stay resident: its slice with num_slices > 1, which adds the
+// partial exchange.
+uint64_t required_l1_bytes(
     const uint32_t Wt,
     const uint32_t num_slices,
     const uint32_t input_single_tile_size_bytes,
     const uint32_t bfloat16_single_tile_size_bytes,
     const uint32_t float32_single_tile_size_bytes,
     const bool compute_dgamma,
-    const bool gated,
-    const uint64_t available_L1_in_bytes) {
+    const bool gated) {
     const uint32_t twice_block_size = 2U * get_block_size(Wt, 2U);
 
     // Memory of input tensors
@@ -144,12 +144,9 @@ bool fits_in_l1_check(
     const uint64_t partials_memory = rmsnorm::row_slice_exchange_l1_bytes(num_slices);
 
     // Total L1 memory required
-    const uint64_t required_L1_in_bytes = input_memory + mask_memory + scaler_memory + gamma_memory + rms_a_memory +
-                                          dL_dout_memory + gate_memory + du_memory + matmul_reduce_memory +
-                                          dL_da_memory + dL_dgamma_components_memory + dL_dgate_memory +
-                                          recip_rms_a_bcasted_memory + scale_memory + zero_memory + partials_memory;
-
-    return required_L1_in_bytes <= available_L1_in_bytes;
+    return input_memory + mask_memory + scaler_memory + gamma_memory + rms_a_memory + dL_dout_memory + gate_memory +
+           du_memory + matmul_reduce_memory + dL_da_memory + dL_dgamma_components_memory + dL_dgate_memory +
+           recip_rms_a_bcasted_memory + scale_memory + zero_memory + partials_memory;
 }
 
 namespace {
@@ -158,21 +155,19 @@ namespace {
 rmsnorm::RowSlicePlan make_plan(const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input = tensor_args.input;
     const bool gated = tensor_args.gate.has_value();
-    const uint64_t available_L1_in_bytes = available_l1_bytes(*input.device());
     const uint32_t input_single_tile_size_bytes = tt::tile_size(datatype_to_dataformat_converter(input.dtype()));
     const uint32_t bfloat16_single_tile_size_bytes = tt::tile_size(tt::DataFormat::Float16_b);
     const uint32_t float32_single_tile_size_bytes = tt::tile_size(tt::DataFormat::Float32);
     return rmsnorm::make_row_slice_plan(
         input, gated, args.max_row_slices, [&](const uint32_t slice_tiles, const uint32_t num_slices) {
-            return fits_in_l1_check(
+            return required_l1_bytes(
                 slice_tiles,
                 num_slices,
                 input_single_tile_size_bytes,
                 bfloat16_single_tile_size_bytes,
                 float32_single_tile_size_bytes,
                 args.compute_dgamma,
-                gated,
-                available_L1_in_bytes);
+                gated);
         });
 }
 
@@ -222,7 +217,6 @@ tt::tt_metal::ProgramDescriptor RMSNormBackwardProgramFactory::create_descriptor
     // Get number of free cores
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
 
-    const uint64_t available_L1_in_bytes = available_l1_bytes(*device);
     const auto plan = make_plan(args, tensor_args);
     const uint32_t St = plan.slice_tiles;
     const uint32_t num_slices = plan.num_slices;
@@ -241,15 +235,7 @@ tt::tt_metal::ProgramDescriptor RMSNormBackwardProgramFactory::create_descriptor
     // -------------------------------------------------------------------------
     const uint32_t twice_block_size = 2U * block_size;
 
-    const bool everything_fits_in_l1 = fits_in_l1_check(
-        St,
-        num_slices,
-        input_single_tile_size_bytes,
-        bfloat16_single_tile_size_bytes,
-        float32_single_tile_size_bytes,
-        compute_dgamma,
-        gated,
-        available_L1_in_bytes);
+    const bool everything_fits_in_l1 = plan.fits_in_l1();
     check_gated_row_fits_in_l1(gated, everything_fits_in_l1, Wt);
 
     const uint32_t num_input_tiles =

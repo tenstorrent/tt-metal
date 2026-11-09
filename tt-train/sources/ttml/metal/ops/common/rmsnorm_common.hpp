@@ -10,7 +10,6 @@
 #include <string_view>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/work_split.hpp>
-#include <utility>
 #include <vector>
 
 #include "metal/common/program_utils.hpp"
@@ -61,9 +60,16 @@ struct RowSlicePlan {
     uint32_t rows_per_group_2 = 0U;
     uint32_t num_cores = 0U;
     uint32_t num_cores_y = 0U;
+    // L1 bytes each core needs for its slice_tiles and has, both from make_row_slice_plan, so the factory sizes its
+    // CBs from the same budget the planner chose by. plan_row_slices leaves them 0.
+    uint64_t l1_bytes_required = 0U;
+    uint64_t l1_bytes_available = 0U;
 
     [[nodiscard]] bool has_group_2() const {
         return num_groups_1 * num_slices < num_cores;
+    }
+    [[nodiscard]] bool fits_in_l1() const {
+        return l1_bytes_required <= l1_bytes_available;
     }
 };
 
@@ -127,18 +133,23 @@ RowSlicePlan plan_row_slices(
     return plan;
 }
 
-// plan_row_slices over a TILE-layout input's tile rows on its device's compute grid. Gated rows are single heads,
-// already one work item per head, so they are never sliced. create_descriptor() builds its cores from the plan, and
-// override_runtime_arguments() walks the same cores from it.
-template <typename SliceFitsInL1>
+// plan_row_slices over input's tile rows, keeping slices whose required_l1_bytes fit in free L1; gated rows are never
+// sliced. The plan carries the chosen split's L1, which for whole rows may not fit (they then stream).
+template <typename RequiredL1Bytes>
 RowSlicePlan make_row_slice_plan(
-    const ttnn::Tensor& input, const bool gated, const uint32_t max_row_slices, SliceFitsInL1&& slice_fits_in_l1) {
-    return plan_row_slices(
+    const ttnn::Tensor& input, const bool gated, const uint32_t max_row_slices, RequiredL1Bytes&& required_l1_bytes) {
+    const uint64_t l1_bytes_available = available_l1_bytes(*input.device());
+    auto plan = plan_row_slices(
         input.device()->compute_with_storage_grid_size(),
         num_tile_rows(input),
         input.padded_shape()[-1] / tt::constants::TILE_WIDTH,
         /* max_slices */ gated ? 1U : max_row_slices,
-        std::forward<SliceFitsInL1>(slice_fits_in_l1));
+        [&](const uint32_t slice_tiles, const uint32_t num_slices) {
+            return required_l1_bytes(slice_tiles, num_slices) <= l1_bytes_available;
+        });
+    plan.l1_bytes_required = required_l1_bytes(plan.slice_tiles, plan.num_slices);
+    plan.l1_bytes_available = l1_bytes_available;
+    return plan;
 }
 
 // The cores of a plan made by plan_row_slices on the same grid: all of them, and those of each row-group size.

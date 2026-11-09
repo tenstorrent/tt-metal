@@ -105,12 +105,10 @@ uint64_t required_l1_bytes(
 rmsnorm::RowSlicePlan make_plan(const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input = tensor_args.input;
     const bool gated = tensor_args.gate.has_value();
-    const uint64_t available_L1_in_bytes = available_l1_bytes(*input.device());
     const uint32_t input_single_tile_size_bytes = tt::tile_size(datatype_to_dataformat_converter(input.dtype()));
     return rmsnorm::make_row_slice_plan(
         input, gated, args.max_row_slices, [&](const uint32_t slice_tiles, const uint32_t num_slices) {
-            return required_l1_bytes(slice_tiles, num_slices, input_single_tile_size_bytes, gated) <=
-                   available_L1_in_bytes;
+            return required_l1_bytes(slice_tiles, num_slices, input_single_tile_size_bytes, gated);
         });
 }
 
@@ -177,7 +175,6 @@ tt::tt_metal::ProgramDescriptor RMSNormForwardProgramFactory::create_descriptor(
     uint32_t packed_eps = pack_two_bfloat16_to_uint32(args.epsilon);
     uint32_t mask_w = num_inner % tt::constants::TILE_WIDTH;
 
-    const uint64_t available_L1_in_bytes = available_l1_bytes(*device);
     const auto plan = make_plan(args, tensor_args);
     const uint32_t St = plan.slice_tiles;
     const uint32_t num_slices = plan.num_slices;
@@ -192,13 +189,12 @@ tt::tt_metal::ProgramDescriptor RMSNormForwardProgramFactory::create_descriptor(
     // -------------------------------------------------------------------------
     uint32_t twice_block_size = 2U * block_size;
 
-    const uint64_t required_L1_in_bytes = required_l1_bytes(St, num_slices, input_single_tile_size_bytes, gated);
-    const bool everything_fits_in_l1 = required_L1_in_bytes <= available_L1_in_bytes;
+    const bool everything_fits_in_l1 = plan.fits_in_l1();
     check_gated_row_fits_in_l1(gated, everything_fits_in_l1, Wt);
 
-    const uint64_t required_L1_in_bytes_except_gamma = required_L1_in_bytes - St * bfloat16_single_tile_size_bytes +
+    const uint64_t required_L1_in_bytes_except_gamma = plan.l1_bytes_required - St * bfloat16_single_tile_size_bytes +
                                                        twice_block_size * bfloat16_single_tile_size_bytes;
-    const bool everything_except_gamma_fits_in_l1 = required_L1_in_bytes_except_gamma <= available_L1_in_bytes;
+    const bool everything_except_gamma_fits_in_l1 = required_L1_in_bytes_except_gamma <= plan.l1_bytes_available;
 
     const uint32_t num_input_tiles =
         (everything_fits_in_l1 | everything_except_gamma_fits_in_l1) ? St : twice_block_size;
