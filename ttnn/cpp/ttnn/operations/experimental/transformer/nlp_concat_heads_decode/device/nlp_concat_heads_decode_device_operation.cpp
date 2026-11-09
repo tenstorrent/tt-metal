@@ -35,6 +35,13 @@ void NLPConcatHeadsDecodeDeviceOperation::validate_on_program_cache_miss(
         input_tensor.layout() == tt::tt_metal::Layout::TILE,
         "Input tensor layout must be TILE but got {}",
         input_tensor.layout());
+    // compute_output_specs takes the head dim from padded_shape()[3] (hidden dim = heads * that) and
+    // the kernel copies whole head tiles, so a logical head dim that is not tile-aligned comes back
+    // with tile padding inside every head and a wider hidden dim than heads * head_dim.
+    TT_FATAL(
+        input_tensor.logical_shape()[3] % 32 == 0,
+        "nlp_concat_heads_decode: the logical head dim (last dim) must be a multiple of 32, got {}",
+        input_tensor.logical_shape()[3]);
     TT_FATAL(input_shape[0] == 1, "seqlen=1 for decode");
     TT_FATAL(input_shape[1] <= 32, "currently only support less than 32 users");
     TT_FATAL(input_shape[2] % 32 == 0, "padded heads must be a multiple of TILE_HEIGHT (32), got {}", input_shape[2]);
