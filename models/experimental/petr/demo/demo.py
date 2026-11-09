@@ -103,8 +103,8 @@ def load_images_with_calibration(data_root="models/experimental/petr/resources/s
         else:
             img = np.zeros((900, 1600, 3), dtype=np.uint8)
 
-        # Resize to model input size
-        img = cv2.resize(img, (800, 320))
+        # PETR's test-time preprocessing: resize by 0.5, crop the top 130 rows
+        img = cv2.resize(img, (800, 450))[130:, :]
         camera_images.append(img.copy())  # Store for visualization
 
         # Normalize
@@ -209,20 +209,20 @@ class Det3DDataPreprocessor:
 
 def get_box_corners_3d(box):
     """Convert box to 8 corner coordinates."""
-    x, y, z, w, l, h, yaw = box[:7]
+    x, y, z, w, l, h, yaw = box[:7]  # z is the bottom centre (see get_bboxes)
 
-    hw, hl, hh = w / 2, l / 2, h / 2
+    hw, hl = w / 2, l / 2
 
     local_corners = np.array(
         [
-            [-hl, -hw, -hh],
-            [hl, -hw, -hh],
-            [hl, hw, -hh],
-            [-hl, hw, -hh],
-            [-hl, -hw, hh],
-            [hl, -hw, hh],
-            [hl, hw, hh],
-            [-hl, hw, hh],
+            [-hl, -hw, 0],
+            [hl, -hw, 0],
+            [hl, hw, 0],
+            [-hl, hw, 0],
+            [-hl, -hw, h],
+            [hl, -hw, h],
+            [hl, hw, h],
+            [-hl, hw, h],
         ],
         dtype=np.float64,
     )
