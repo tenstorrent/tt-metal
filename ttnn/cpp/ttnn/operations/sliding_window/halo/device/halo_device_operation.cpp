@@ -65,6 +65,9 @@ HaloDeviceOperation::spec_return_value_t HaloDeviceOperation::compute_output_spe
     log_debug(
         tt::LogOp, "output_shape: [{} {} {} {}]", output_shape[0], output_shape[1], output_shape[2], output_shape[3]);
     log_debug(tt::LogOp, "max_out_nsticks_per_core: {}", args.max_out_nsticks_per_core);
+    TT_FATAL(
+        input_tensor.memory_config().shard_spec().has_value(),
+        "Halo: sharded input tensor must have shard_spec");
     log_debug(
         tt::LogOp, "size : {}", args.in_nsticks_per_core * input_tensor.memory_config().shard_spec()->shape[1] * 2);
     log_debug(tt::LogOp, "num_cores_nhw: {}", args.config.num_cores_nhw);
