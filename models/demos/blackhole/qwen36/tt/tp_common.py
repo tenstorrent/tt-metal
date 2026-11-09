@@ -1855,6 +1855,13 @@ DECODE_HARVEST_GRID_ENV = "QWEN36_DECODE_HARVEST_GRID"
 # per step at 32K / 4K. Keys not listed keep the tuned grid.
 DECODE_HARVEST_GRID_BFP8 = "down=12x4,wo=12x4,gdnout=12x4,qkv=11x3,w1=11x7,w3=11x7"
 DECODE_HARVEST_GRID_BFP4 = "gdnin=8x5,down=11x5,w1=11x4,w3=11x4"
+# r12 production stack (QWEN36_BFP4_LAYOUT=1 + QWEN36_VERIFY_OUT_RES40=1): down / gate-up are DRAM-sharded (dsmc) and the
+# GDN out / attn wo partials come from the RES40-out 1D matmul on the fixed 10x4 all-reduce grid, so the only 1D-mcast
+# decode matmuls left on a re-griddable grid are GDN in (bfp4 1d 44c ibw20, 48 per verify) and attn qkv (60c, 16 per
+# verify). r5 profile (d21u14): east-harvested chips 1/4/6 ran 1D-mcast matmuls 11-20% slower and every all-reduce
+# waited for them (0.86-0.94 ms/verify of max-min arrival skew).
+DECODE_HARVEST_GRID_R12 = "gdnin=8x5,qkv=11x3"
+DECODE_HARVEST_GRID_KEYS = ("down", "wo", "gdnout", "gdnin", "qkv", "w1", "w3")
 
 
 def decode_harvest_grids():
@@ -1864,14 +1871,53 @@ def decode_harvest_grids():
     if v in ("", "0"):
         return {}
     if v == "1":
-        v = DECODE_HARVEST_GRID_BFP4 if os.environ.get("QWEN36_GPTQ_BFP4", "0") == "1" else DECODE_HARVEST_GRID_BFP8
+        if os.environ.get(BFP4_LAYOUT_ENV, "0").strip().lower() in ("1", "on", "true", "yes"):
+            v = DECODE_HARVEST_GRID_R12
+        else:
+            v = DECODE_HARVEST_GRID_BFP4 if os.environ.get("QWEN36_GPTQ_BFP4", "0") == "1" else DECODE_HARVEST_GRID_BFP8
     out = {}
     for item in v.split(","):
+        if not item.strip():
+            continue
         key, grid = item.split("=")
+        if key.strip() not in DECODE_HARVEST_GRID_KEYS:
+            raise ValueError(f"{DECODE_HARVEST_GRID_ENV}: unknown key {key!r} (one of {DECODE_HARVEST_GRID_KEYS})")
         cols, rows = (int(t) for t in grid.lower().split("x"))
         out[key.strip()] = (cols, rows)
     logger.info(f"{DECODE_HARVEST_GRID_ENV}: decode 1D matmul grids {out}")
     return out
+
+
+def apply_decode_harvest_grids(args, m, grids, spec, decode_grid_w):
+    """Re-grid the decode 1D-mcast program configs on `args` for QWEN36_DECODE_HARVEST_GRID `grids` ({key: (cols, rows)}).
+
+    spec: {key: (attr, K, N, fused activation, in0_block_w cap)}. For every key, the base `attr` and, when
+    QWEN36_BFP4_LAYOUT set a 1D twin `<attr>_bfp4` (prod: gdn_in 1d 44c ibw20), that twin too. The replaced config's
+    in0_block_w is kept as the cap, and a change of in0_block_w raises (the K loop, hence every output tile, must stay
+    bit-identical). Keys wider than decode_grid_w are skipped. Returns {attr: (cols, rows)} of what was re-gridded."""
+    done = {}
+    for key, (cols, rows) in grids.items():
+        attr, k, n, act, ibw = spec[key]
+        if cols > decode_grid_w:
+            continue
+        for a in (attr, f"{attr}_bfp4"):
+            old_pc = getattr(args, a, None)
+            if old_pc is None:
+                continue
+            cap = getattr(old_pc, "in0_block_w", None) or ibw
+            new_pc = create_matmul_1d_decode_progcfg(
+                m, k, n, num_cores=cols * rows, fused_activation=act, grid_w=cols, max_in0_block_w=cap
+            )
+            if getattr(new_pc, "in0_block_w", None) != getattr(old_pc, "in0_block_w", getattr(new_pc, "in0_block_w", None)):
+                raise ValueError(
+                    f"{DECODE_HARVEST_GRID_ENV}: {key}={cols}x{rows} changes {a} in0_block_w "
+                    f"{old_pc.in0_block_w} -> {new_pc.in0_block_w} (would not be bit-identical)"
+                )
+            setattr(args, a, new_pc)
+            done[a] = (cols, rows)
+    if done:
+        logger.info(f"{DECODE_HARVEST_GRID_ENV}: re-gridded {done}")
+    return done
 
 
 def create_matmul_1d_decode_progcfg(

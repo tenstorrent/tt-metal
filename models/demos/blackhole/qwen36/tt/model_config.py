@@ -342,17 +342,7 @@ class Qwen36ModelArgs(ModelArgs):
                 "w1": ("mlp_w1_decode_1d_progcfg", self.dim, self.hidden_dim // tp, ttnn.UnaryOpType.SILU, ibw_gu),
                 "w3": ("mlp_w3_decode_1d_progcfg", self.dim, self.hidden_dim // tp, None, ibw_gu),
             }
-            for key, (cols, rows) in hg.items():
-                attr, k, n, act, ibw = spec[key]
-                if cols > self.decode_grid_w:
-                    continue
-                setattr(
-                    self,
-                    attr,
-                    tpc.create_matmul_1d_decode_progcfg(
-                        M, k, n, num_cores=cols * rows, fused_activation=act, grid_w=cols, max_in0_block_w=ibw
-                    ),
-                )
+            tpc.apply_decode_harvest_grids(self, M, hg, spec, self.decode_grid_w)
 
         # Prefill matmul factory (M = seq_len)
         self._prefill_grid = tpc.prefill_grid_default()
