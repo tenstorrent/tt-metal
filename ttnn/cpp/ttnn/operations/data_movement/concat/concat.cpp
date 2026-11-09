@@ -430,19 +430,9 @@ PreparedConcat prepare_concat(
         memory_config.value_or(ttnn::DRAM_MEMORY_CONFIG);  // should match input tensor memory config when unpopulated
                                                            // but causes CI errors for now
 
-    // One input has nothing to validate; the entries differ on what a lone input means (native and the routed entry
-    // convert its memory config, forced codegen rejects it at the gate).
-    if (input_tensors.size() == 1) {
-        return {mem_config, dim};
-    }
-
-    // TODO: Issue #8426: Add validation for ttnn.concat for sharded inputs
-    // const bool all_tensors_are_tile_layout_without_padding = std::all_of(input_tensors.begin(), input_tensors.end(),
-    // [dim](const ttnn::Tensor& input_tensor){
-    //    return input_tensor.layout() == ttnn::TILE_LAYOUT and not has_tile_padding(input_tensor, dim);
-    //});
-    // TT_FATAL(all_tensors_are_tile_layout_without_padding, "Not Implemented");
-
+    // The concatenation dimension is an argument on every call, including a single-input call, so
+    // validate it before the one-input shortcut below. A lone input used to return unchanged for
+    // any dim, including dims torch rejects with IndexError.
     const ttnn::Tensor& first_tensor = input_tensors.front();
     const int rank = first_tensor.logical_shape().rank();
 
@@ -453,6 +443,19 @@ PreparedConcat prepare_concat(
         "ttnn: Dimension out of range: dim {} cannot be used for tensors of rank {}",
         dim,
         rank);
+
+    // One input has nothing else to validate; the entries differ on what a lone input means (native and the routed
+    // entry convert its memory config, forced codegen rejects it at the gate).
+    if (input_tensors.size() == 1) {
+        return {mem_config, dim};
+    }
+
+    // TODO: Issue #8426: Add validation for ttnn.concat for sharded inputs
+    // const bool all_tensors_are_tile_layout_without_padding = std::all_of(input_tensors.begin(), input_tensors.end(),
+    // [dim](const ttnn::Tensor& input_tensor){
+    //    return input_tensor.layout() == ttnn::TILE_LAYOUT and not has_tile_padding(input_tensor, dim);
+    //});
+    // TT_FATAL(all_tensors_are_tile_layout_without_padding, "Not Implemented");
 
     const bool shapes_match =
         std::all_of(input_tensors.begin(), input_tensors.end(), [first_tensor, dim](const ttnn::Tensor& t) {
