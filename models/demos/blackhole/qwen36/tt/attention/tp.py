@@ -289,6 +289,9 @@ class TPAttention:
         # Must match load_attention_weights_tp gates
         self._dram_sharded = getattr(args, "attn_qg_weight_memcfg", None) is not None
         self._wo_sharded = getattr(args, "attn_wo_weight_memcfg", None) is not None
+        # QWEN36_PREFILL_STRIDED_RS: its shared L1 counters are allocated at init, never inside a trace capture.
+        if tt_ccl is not None and tuple(mesh.shape) == (1, 8):
+            tpc.strided_rs_counters(mesh, tt_ccl)
         self._fused_qkv = getattr(args, "attn_qkv_fused_weight_memcfg", None) is not None
         self._qg_deint = self._fused_qkv
         # Fuse prefill norm-allgather + fused-QKV in-proj (all_gather_minimal_matmul_async).
@@ -427,6 +430,27 @@ class TPAttention:
     def _wo_res40_ok(self, x):
         """QWEN36_VERIFY_OUT_RES40 applies only where _wo_proj would take its 1D decode matmul (interleaved wo)."""
         return tpc.verify_out_res40_enabled() and getattr(self.args, "proj_1d_decode", False) and x.shape[-2] <= tpc.TILE_SIZE
+
+    def _wo_reduce_prefill(self, gated, weight):
+        """Prefill out-proj + reduce-scatter on dim=3 (consumes `gated`). Today: _wo_proj, then tt_all_reduce. With
+        QWEN36_PREFILL_STRIDED_RS (interleaved wo, rows >= its wo floor): one strided MMRS call, not bit-identical."""
+        if not self._wo_sharded and tpc.prefill_strided_rs_ok("wo", gated.shape[-2], self.mesh):
+            out = tpc.strided_rs_prefill(gated, weight, self.mesh, self.tt_ccl, self.compute_cfg, self.args.ccl_topology())
+            ttnn.deallocate(gated)
+            return out
+        partial = self._wo_proj(gated, weight)
+        ttnn.deallocate(gated)
+        return tt_all_reduce(
+            partial,
+            self.mesh,
+            self.tt_ccl,
+            cluster_axis=0,
+            dim=3,
+            num_reduce_scatter_links=tpc.prefill_rs_links(partial.shape[-2]),
+            topology=self.args.ccl_topology(),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            **tpc.prefill_rs_kwargs(partial.shape[-2]),
+        )
 
     def _wo_proj(self, x, weight):
         """Row-parallel output projection: DRAM-sharded decode/prefill matmul (K=attn_out_dim_tp),
@@ -684,19 +708,7 @@ class TPAttention:
         )
         ttnn.deallocate(attn)
         ttnn.deallocate(gate_flat)
-        partial = self._wo_proj(gated, tw["wo"])
-        ttnn.deallocate(gated)
-        return tt_all_reduce(
-            partial,
-            self.mesh,
-            self.tt_ccl,
-            cluster_axis=0,
-            dim=3,
-            num_reduce_scatter_links=tpc.prefill_rs_links(partial.shape[-2]),
-            topology=self.args.ccl_topology(),
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            **tpc.prefill_rs_kwargs(partial.shape[-2]),
-        )
+        return self._wo_reduce_prefill(gated, tw["wo"])
 
     def _kv_shard_cfg(self, B):
         """Height shard for paged_update_cache (one user per core), sized to the ACTIVE width B.
@@ -2160,16 +2172,4 @@ class TPAttention:
         )
         ttnn.deallocate(attn)
         ttnn.deallocate(gate_flat)
-        partial = self._wo_proj(gated, tw["wo"])
-        ttnn.deallocate(gated)
-        return tt_all_reduce(
-            partial,
-            self.mesh,
-            self.tt_ccl,
-            cluster_axis=0,
-            dim=3,
-            num_reduce_scatter_links=tpc.prefill_rs_links(partial.shape[-2]),
-            topology=self.args.ccl_topology(),
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            **tpc.prefill_rs_kwargs(partial.shape[-2]),
-        )
+        return self._wo_reduce_prefill(gated, tw["wo"])

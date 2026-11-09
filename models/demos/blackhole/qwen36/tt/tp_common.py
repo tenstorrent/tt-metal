@@ -177,6 +177,157 @@ def prefill_rs_kwargs(rows):
     return {} if w is None else {"num_workers_per_link": w}
 
 
+_STRIDED_RS = None
+
+
+def prefill_strided_rs_cfg():
+    """QWEN36_PREFILL_STRIDED_RS (default "0" = today's prefill MLP-down / attention-wo: 2D-mcast ttnn.linear, then
+    tt_all_reduce -> reduce_scatter_minimal_async, byte for byte): "1" runs those row-parallel matmuls as ONE
+    ttnn.experimental.minimal_matmul_strided_reduce_scatter_async call. The minimal matmul runs on a 12 x 8 grid
+    (K block 4 = today's in0_block_w), and the strided RS workers on the two grid rows above it consume the matmul's
+    output blocks as they finish, through a 2-block L1 window (no DRAM round-trip of the partial).
+
+    Not bit-identical: about 55% of the outputs move by 1-2 bf16 ulps. Against an fp32 host reference of the full
+    reduction (op test, random data, HiFi2 as the model) the relative RMS error is 0.00499 against today's 0.00447
+    (+12%), with HiFi4 0.00505 against 0.00377: the strided path adds an error of its own that does not depend on the
+    matmul fidelity. Opt-in only after an accuracy sign-off.
+
+    Device time per op on the 8-chip ring (traced op test, min of 5): MLP-down 8192 rows 2.90 -> 1.59 ms, 2048 rows
+    0.67 -> 0.47; attention-wo 8192 rows 1.81 -> 1.47, 2048 rows 0.40 -> 0.45. In the model's 8K chunk trace only the
+    MLP-down arm pays (8K chunk -14..-31 ms, single 16K call -58 ms); the attention-wo arm measured neutral to slower
+    (8K chunk -5..+13 ms), so it is off by default.
+
+    Knobs (read once):
+    * QWEN36_PREFILL_STRIDED_RS_DOWN_MIN: MLP-down row floor, default 2048.
+    * QWEN36_PREFILL_STRIDED_RS_WO_MIN: attention-wo row floor, default 1 << 30 (off); 8192 takes the 8K chunk.
+    * QWEN36_PREFILL_STRIDED_RS_WIN: L1 window blocks, default 2; 0 = DRAM matmul output.
+    * QWEN36_PREFILL_STRIDED_RS_WORKERS / _LINKS: RS workers per link (default 5) and links (default 2).
+    * QWEN36_PREFILL_STRIDED_RS_KB: matmul K block in tiles, default 4.
+    * QWEN36_PREFILL_STRIDED_RS_SMALL_M: "1" also takes 512-row (and 256-row) calls; accuracy stress only."""
+    global _STRIDED_RS
+    if _STRIDED_RS is None:
+        env = os.environ.get
+
+        def _i(name, default):
+            raw = env(name, "").strip()
+            return int(raw) if raw else default
+
+        _STRIDED_RS = dict(
+            on=env("QWEN36_PREFILL_STRIDED_RS", "0") == "1",
+            down_min=_i("QWEN36_PREFILL_STRIDED_RS_DOWN_MIN", 2048),
+            wo_min=_i("QWEN36_PREFILL_STRIDED_RS_WO_MIN", 1 << 30),
+            win=_i("QWEN36_PREFILL_STRIDED_RS_WIN", 2),
+            workers=_i("QWEN36_PREFILL_STRIDED_RS_WORKERS", 5),
+            links=_i("QWEN36_PREFILL_STRIDED_RS_LINKS", 2),
+            kb=_i("QWEN36_PREFILL_STRIDED_RS_KB", 4),
+            small_m=env("QWEN36_PREFILL_STRIDED_RS_SMALL_M", "0") == "1",
+        )
+        if _STRIDED_RS["on"]:
+            logger.info(f"QWEN36_PREFILL_STRIDED_RS on: {_STRIDED_RS}")
+    return _STRIDED_RS
+
+
+_STRIDED_RS_GRID_ROWS = 8  # matmul rows 0..7; RS workers on rows 8..9
+
+
+def _strided_rs_m_block(rows, small=False):
+    """M block (tiles) for `rows` rows on the 8-row matmul grid, or None when the rows do not split evenly into it
+    (only shapes measured in the microbench are taken: whole M blocks per grid row). small: also 1 / 2 tiles per grid
+    row (256 / 512 rows), for QWEN36_PREFILL_STRIDED_RS_SMALL_M."""
+    if rows % TILE_SIZE:
+        return None
+    mt = rows // TILE_SIZE
+    if mt % _STRIDED_RS_GRID_ROWS:
+        return None
+    per_row = mt // _STRIDED_RS_GRID_ROWS
+    if small and per_row in (1, 2):
+        return per_row
+    mb = 8 if per_row >= 16 else 4
+    return mb if per_row % mb == 0 else None
+
+
+def prefill_strided_rs_ok(kind, rows, mesh):
+    """True when the QWEN36_PREFILL_STRIDED_RS fused op serves this prefill row-parallel matmul + reduce-scatter.
+    kind: "down" (MLP w2) or "wo" (attention out-proj); rows: the matmul's M. Only the measured 1x8 TP ring."""
+    c = prefill_strided_rs_cfg()
+    if not c["on"] or tuple(mesh.shape) != (1, 8):
+        return False
+    floor = c["down_min"] if kind == "down" else c["wo_min"]
+    return rows >= floor and _strided_rs_m_block(rows, c["small_m"]) is not None
+
+
+def strided_rs_counters(mesh, tt_ccl):
+    """The caller-owned MM->RS progress / RS->MM credit counters of the windowed L1 hand-off: one [slots, slots] uint32
+    L1 HEIGHT_SHARDED pair over the whole compute grid (shard [1, slots], slots = grid area), shared by every call.
+    Allocated once per TT_CCL at model init (never inside a trace capture); None when the window is off."""
+    c = prefill_strided_rs_cfg()
+    if not c["on"] or c["win"] <= 0:
+        return None
+    cnt = getattr(tt_ccl, "_q36_strided_rs_counters", None)
+    if cnt is None:
+        g = mesh.compute_with_storage_grid_size()
+        slots = g.x * g.y
+        allc = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(g.x - 1, g.y - 1))})
+        mc = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(allc, [1, slots], ttnn.ShardOrientation.ROW_MAJOR),
+        )
+        cnt = tuple(
+            ttnn.allocate_tensor_on_device(ttnn.Shape([slots, slots]), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, mesh, mc)
+            for _ in range(2)
+        )
+        tt_ccl._q36_strided_rs_counters = cnt
+    return cnt
+
+
+def strided_rs_prefill(x, weight, mesh, tt_ccl, compute_cfg, topology):
+    """Row-parallel prefill matmul + reduce-scatter(dim=3) as one minimal_matmul_strided_reduce_scatter_async call
+    (QWEN36_PREFILL_STRIDED_RS; the caller checked prefill_strided_rs_ok). x [1,1,M,K_local], weight [K_local,N] ->
+    [1,1,M,N/nd] bf16 in DRAM, the same shape / dtype / memory as the tt_all_reduce path it replaces."""
+    c = prefill_strided_rs_cfg()
+    M, K_local = x.shape[-2], x.shape[-1]
+    x4 = x if len(x.shape) == 4 and x.shape[0] == 1 and x.shape[1] == 1 else ttnn.reshape(x, (1, 1, M, K_local))
+    g = mesh.compute_with_storage_grid_size()
+    gx, gy = min(12, g.x), _STRIDED_RS_GRID_ROWS
+    mb = _strided_rs_m_block(M, c["small_m"])
+    cfg = ttnn.MinimalMatmulConfig(
+        M_block_size=mb,
+        K_block_size=c["kb"],
+        N_block_size=8,
+        subblock_h=min(2, mb),  # the op needs M_block % subblock_h == 0 (M block 1 at 256 rows)
+        subblock_w=2,
+        compute_with_storage_grid_size=ttnn.CoreCoord(gx, gy),
+    )
+    kw = {}
+    cnt = strided_rs_counters(mesh, tt_ccl) if c["win"] > 0 else None
+    if cnt is not None:
+        kw = dict(mm_window_blocks=c["win"], mm_progress_counters=cnt[0], mm_credit_counters=cnt[1])
+    res = ttnn.experimental.minimal_matmul_strided_reduce_scatter_async(
+        x4,
+        weight,
+        3,
+        tt_ccl.get_and_cycle_rs_semaphore_handles(),
+        ttnn.CoreCoord(0, gy),
+        num_links=c["links"],
+        memory_config_mm=ttnn.L1_MEMORY_CONFIG if cnt is not None else ttnn.DRAM_MEMORY_CONFIG,
+        rs_output_mem_config=ttnn.DRAM_MEMORY_CONFIG,
+        topology=topology,
+        cluster_axis=1,
+        config=cfg,
+        compute_kernel_config=compute_cfg,
+        barrier_semaphore=tt_ccl.get_and_cycle_barrier_semaphore_handle(),
+        num_workers_per_link=c["workers"],
+        chunk_width_in_mm_blocks=1,
+        dtype=ttnn.bfloat16,
+        **kw,
+    )
+    for t in res[2:]:
+        ttnn.deallocate(t)
+    ttnn.deallocate(res[0])
+    return res[1]
+
+
 _R6_FLAGS = {}
 
 
