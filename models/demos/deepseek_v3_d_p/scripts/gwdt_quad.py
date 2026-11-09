@@ -47,6 +47,11 @@ REQUEST_LEN = CHUNK_SIZE * CHUNKS
 # bank 0, which needs a multiple of 8192 (kv_bank_alignment). 40960 is the smallest that is both.
 MAX_SEQ_LEN = 40960
 LAYERS_PER_STAGE = 2
+# The same prompt rotates over this many KV slots, so a slot comes back only after its chunks have been acked by
+# every stage: re-sending a (slot, position range) still in flight is a duplicate ack the ack-ring reader rejects.
+# A rotation (SLOTS * CHUNKS chunks) must outlast what can be in flight: 8 forwards in the H2D FIFO plus about two
+# per stage in the D2D path.
+SLOTS = 16
 UNBOUNDED_REQUESTS = 10**9
 TCP_INTERFACE = os.environ.get("PREFILL_TCP_INTERFACE", "ens5f0np0")
 
@@ -95,6 +100,7 @@ def runner_cmd(repo: Path, hosts: list[str], mode: str, fabric: str, results_dir
         "PREFILL_FABRIC_MODE": fabric,
         "PREFILL_QUAD_RESULTS_DIR": str(results_dir),
         "PREFILL_NUM_LAYERS": str(LAYERS_PER_STAGE * len(hosts)),
+        "PREFILL_NUM_USERS": str(SLOTS),
         # A device hang raises in the rank instead of blocking forever, and the rank file records it.
         "TT_METAL_OPERATION_TIMEOUT_SECONDS": "120",
     }
@@ -123,7 +129,7 @@ def producer_cmd(
     """The H2D feeder runs on rank 0's host: it attaches to rank 0's H2D service and drains the ack ring."""
     exports = _common_env(repo) | {
         "PREFILL_MODEL": f"quad_{mode}",
-        "PREFILL_NUM_USERS": "1",
+        "PREFILL_NUM_USERS": str(SLOTS),
         "PREFILL_CHUNK_SIZE": str(CHUNK_SIZE),
         "PREFILL_MAX_SEQ_LEN": str(MAX_SEQ_LEN),
         "PREFILL_NUM_LAYERS": str(LAYERS_PER_STAGE * n_hosts),

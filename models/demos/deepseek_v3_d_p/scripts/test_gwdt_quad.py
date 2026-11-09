@@ -203,3 +203,13 @@ def test_environment_fault_skips_fallback(tmp_path):
     pt = {s.key: s for s in build_quad_steps(HOSTS, 900, run_once=run_once)}["quad:passthrough-smoke"]
     assert pt.run(_ctx(tmp_path), pt.state).reason.startswith(ENV_FAULT)
     assert calls == [("passthrough", "2d_torus_xy")] and pt.state.fallbacks == []
+
+
+def test_same_prompt_rotates_over_more_slots_than_chunks_in_flight():
+    from gwdt_quad import CHUNKS, SLOTS
+
+    run = _inner(runner_cmd(REPO, HOSTS, "passthrough", "2d_torus_xy", Path("/r")))
+    feed = _inner(producer_cmd(REPO, "h0", "passthrough", 4, Path("/t"), duration_s=None, max_requests=3))
+    assert f"export PREFILL_NUM_USERS={SLOTS};" in run and f"export PREFILL_NUM_USERS={SLOTS};" in feed
+    # In flight on a quad: 8 forwards in the H2D FIFO, about two per stage in the D2D path, one being pushed.
+    assert SLOTS * CHUNKS > 8 + 2 * 4 + 1

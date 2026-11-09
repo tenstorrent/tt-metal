@@ -13,7 +13,7 @@
 ## Global Constraints
 
 - Shapes as `block-random`: chunk 5120, 2 chunks per request, K2.7 L0 dense + L1 MoE, weight seed 42, input seed 1234.
-- `PREFILL_NUM_USERS=1`, `PREFILL_MAX_SEQ_LEN=10240`, `PREFILL_USE_TRACE=0`, `PREFILL_LAYER_ACK_D2H=0`, `PREFILL_TP_SHARD_KV=1`.
+- `PREFILL_NUM_USERS=16` (same prompt rotates over 16 KV slots so no in-flight slot is re-sent), `PREFILL_MAX_SEQ_LEN=10240`, `PREFILL_USE_TRACE=0`, `PREFILL_LAYER_ACK_D2H=0`, `PREFILL_TP_SHARD_KV=1`.
 - `PREFILL_NUM_LAYERS = 2 * ranks`.
 - Budgets: passthrough 3 requests; block-random smoke 300 s; soak 900 s default, `--soak-minutes`.
 - Fabric `2d_torus_xy` first, fallback `2d`.
