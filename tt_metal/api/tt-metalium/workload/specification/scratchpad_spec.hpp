@@ -40,13 +40,14 @@ namespace tt::tt_metal {
 //   ScratchpadAdvancedOptions::allocation_override.
 //
 // INSTANCING: Like KernelSpec, a ScratchpadSpec is a *per-node template*. One
-//   independent scratchpad instance is allocated per node in its effective placement,
-//   in that node's local SRAM ("L1").
+//   independent scratchpad instance is allocated per node where its bound kernel
+//   runs, in that node's local SRAM ("L1").
 //
 // PLACEMENT: Derived from its bound kernel(s)'s WorkUnitSpec membership, like DFB.
 //   Node-local resources (scratchpad, DFB) derive their node set from their
 //   kernel bindings; semaphores must specify their node set explicitly.
-//   Note that placement can be overriden see advanced_options.hpp for more infomation.
+//   Advanced users may restrict where backing memory is allocated through
+//   ScratchpadAdvancedOptions::override_placement.
 //
 // CAUTION: Scratchpad is a raw memory with no synchronization semantics.
 //   Be cautious when using it in compute kernels, as the Unpack/Math/Pack pipeline
@@ -63,7 +64,7 @@ struct ScratchpadSpec {
     ScratchpadSpecName unique_id;
 
     // Size of the SRAM ("L1") region reserved on each node, in bytes.
-    // (Only occupies space on nodes where the scratchpad is emplaced on.)
+    // (Only occupies space on nodes where the scratchpad's bound kernel instances run.)
     uint32_t size_per_node = 0;
 
     ////////////////////////////////////

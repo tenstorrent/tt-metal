@@ -25,8 +25,8 @@ struct ScratchpadSpec {
     std::optional<tt::tt_metal::Tile> tile_format_metadata = std::nullopt;
 
     // Invariant: on Gen2 (Quasar), multi-binding on a node is permitted only between DM kernels.
-    // An explicit override_placement must be non-empty and within the worker grid.
-    // Sharing rules apply only on reserved nodes; access outside them is undefined behavior.
+    // advanced_options.override_placement, when set, is a non-empty subset of the bound kernels' nodes.
+    // With an override, multi-binding rules apply only on the overridden nodes.
     ScratchpadAdvancedOptions advanced_options;
 };
 

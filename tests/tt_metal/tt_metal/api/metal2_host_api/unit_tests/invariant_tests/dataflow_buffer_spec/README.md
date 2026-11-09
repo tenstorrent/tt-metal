@@ -30,8 +30,7 @@ struct DataflowBufferSpec {
     // - The tensor has L1/SRAM storage on every node occupied by the DFB.
     // - Its TensorSpec is L1-resident (L1 or L1_SMALL), and each occupied node's
     //   allocation can hold entry_size * num_entries bytes.
-    // - Cannot be combined with an allocation override, a PrefetcherPipe relay, or
-    //   advanced_options.override_placement.
+    // - Cannot be combined with an allocation override or a PrefetcherPipe relay.
     std::optional<TensorParamName> borrowed_from = std::nullopt;
 
     DFBAdvancedOptions advanced_options;
