@@ -28,10 +28,15 @@
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 
+#include "ttnn/graph/graph_serialization.hpp"
+#include "ttnn/operations/data_movement/reshape_new/reshape_new.hpp"
+#include <internal/graph_function_abort.hpp>
+
 #include "reshape.hpp"
 #include "reshape_common.hpp"
 #include "device/reshape_device_operation.hpp"
 #include "reshape_force.hpp"
+#include "reshape_policy.hpp"
 #include "codegen/reshape_codegen_device_operation.hpp"
 #include "codegen/reshape_codegen_supported.hpp"
 #include <tt-metalium/experimental/tensor_layout_apis_with_custom_alignment.hpp>
@@ -860,6 +865,42 @@ ttnn::Tensor reshape_force_codegen(
         ReshapeImpl::CODEGEN);
 }
 
+ttnn::Tensor reshape_legacy(
+    const ttnn::Tensor& input_tensor,
+    const ttnn::Shape& logical_shape,
+    const ttnn::Shape& padded_shape,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<PadValue>& pad_value,
+    const TileReshapeMapMode reshape_map_mode,
+    const std::optional<CoreRangeSet>& sub_core_grid,
+    const bool skip_padding_fill) {
+    const ScopedReshapeExecutionPolicy pin(ReshapeExecutionPolicy::Legacy);
+    return reshape_dispatch(
+        input_tensor,
+        logical_shape,
+        padded_shape,
+        memory_config,
+        pad_value,
+        reshape_map_mode,
+        sub_core_grid,
+        skip_padding_fill,
+        ReshapeImpl::ROUTED);
+}
+
+ttnn::Tensor reshape_new(
+    const ttnn::Tensor& input_tensor,
+    const ttnn::Shape& logical_shape,
+    const ttnn::Shape& padded_shape,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<PadValue>& pad_value,
+    const TileReshapeMapMode /*reshape_map_mode*/,
+    const std::optional<CoreRangeSet>& sub_core_grid,
+    const bool skip_padding_fill) {
+    const ScopedReshapeExecutionPolicy pin(ReshapeExecutionPolicy::New);
+    return ttnn::operations::data_movement::reshape_new::reshape(
+        input_tensor, logical_shape, padded_shape, memory_config, pad_value, sub_core_grid, skip_padding_fill);
+}
+
 }  // namespace ttnn::operations::data_movement::detail
 
 // Free function implementations
@@ -872,16 +913,53 @@ ttnn::Tensor ttnn::reshape(
     const TileReshapeMapMode reshape_map_mode,
     const std::optional<CoreRangeSet>& sub_core_grid,
     const bool skip_padding_fill) {
-    return operations::data_movement::detail::reshape_dispatch(
-        tensor,
-        logical_input_shape,
-        padded_input_shape,
-        memory_config,
-        pad_value,
-        reshape_map_mode,
-        sub_core_grid,
-        skip_padding_fill,
-        operations::data_movement::detail::ReshapeImpl::ROUTED);
+    using namespace operations::data_movement::detail;
+
+    const ReshapeRequest request{
+        tensor, logical_input_shape, padded_input_shape, memory_config, pad_value, sub_core_grid, skip_padding_fill};
+    tt::tt_metal::internal::ScopedTrackedFunction tracked("ttnn::reshape", tensor, ReshapeCallRecord{request});
+
+    auto run = [&](auto implementation) {
+        return implementation(
+            tensor,
+            logical_input_shape,
+            padded_input_shape,
+            memory_config,
+            pad_value,
+            reshape_map_mode,
+            sub_core_grid,
+            skip_padding_fill);
+    };
+
+    ttnn::Tensor output;
+    switch (reshape_execution_policy()) {
+        case ReshapeExecutionPolicy::Legacy: output = run(reshape_legacy); break;
+        case ReshapeExecutionPolicy::New: output = run(reshape_new); break;
+        case ReshapeExecutionPolicy::Compare: {
+            // Legacy runs first so a new-path failure cannot hide behind it. A case legacy rejects is one the
+            // new implementation is meant to add, so it is reported and the new result returned unchecked.
+            std::optional<ttnn::Tensor> legacy_output;
+            try {
+                legacy_output = run(reshape_legacy);
+            } catch (const std::exception& e) {
+                log_warning(
+                    tt::LogOp,
+                    "TT_METAL_EXECUTION_POLICY_RESHAPE=compare: legacy reshape failed, so the new result is returned "
+                    "without a comparison. input spec: {}, requested shape: {} (padded {}). Legacy error: {}",
+                    tensor.tensor_spec(),
+                    logical_input_shape,
+                    padded_input_shape,
+                    e.what());
+            }
+            output = run(reshape_new);
+            if (legacy_output.has_value()) {
+                compare_reshape_results(request, *legacy_output, output);
+            }
+            break;
+        }
+    }
+    tracked.end(output);
+    return output;
 }
 
 ttnn::Tensor ttnn::reshape(

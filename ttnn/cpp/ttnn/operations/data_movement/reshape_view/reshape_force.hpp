@@ -37,4 +37,27 @@ ttnn::Tensor reshape_force_codegen(
     const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,
     bool skip_padding_fill = false);
 
+// The two implementations behind the TT_METAL_EXECUTION_POLICY_RESHAPE switch, unconditionally and with the
+// full `ttnn::reshape` argument list. Each pins the policy for the calls nested inside it, so a reshape that an
+// implementation issues internally runs on that same implementation. `reshape_map_mode` only affects legacy.
+ttnn::Tensor reshape_legacy(
+    const ttnn::Tensor& input_tensor,
+    const ttnn::Shape& logical_shape,
+    const ttnn::Shape& padded_shape,
+    const std::optional<MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<PadValue>& pad_value = std::nullopt,
+    TileReshapeMapMode reshape_map_mode = TileReshapeMapMode::CACHE,
+    const std::optional<CoreRangeSet>& sub_core_grid = std::nullopt,
+    bool skip_padding_fill = false);
+
+ttnn::Tensor reshape_new(
+    const ttnn::Tensor& input_tensor,
+    const ttnn::Shape& logical_shape,
+    const ttnn::Shape& padded_shape,
+    const std::optional<MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<PadValue>& pad_value = std::nullopt,
+    TileReshapeMapMode reshape_map_mode = TileReshapeMapMode::CACHE,
+    const std::optional<CoreRangeSet>& sub_core_grid = std::nullopt,
+    bool skip_padding_fill = false);
+
 }  // namespace ttnn::operations::data_movement::detail

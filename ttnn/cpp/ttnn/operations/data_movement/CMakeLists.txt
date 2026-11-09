@@ -48,6 +48,8 @@ file(
     reshape_view/device/device/*.cpp
     reshape_view/codegen/kernels/*.cpp
     reshape_view/codegen/kernels/*.h
+    reshape_new/device/kernels/*.cpp
+    reshape_new/device/kernels/*.hpp
     scatter/device/kernels/*.cpp
     scatter/device/kernels/*.hpp
     sharded/device/kernels/*.cpp
@@ -211,6 +213,13 @@ target_sources(
             reshape_view/device/reshape_device_operation_types.hpp
             reshape_view/device/reshape_row_major_program_factory.hpp
             reshape_view/device/reshape_tiled_program_factory.hpp
+            reshape_view/reshape_policy.hpp
+            # reshape_new/
+            reshape_new/reshape_new.hpp
+            reshape_new/reshape_new_plan.hpp
+            reshape_new/reshape_new_topology.hpp
+            reshape_new/device/reshape_new_device_operation.hpp
+            reshape_new/device/reshape_new_device_operation_types.hpp
             # roll/
             roll/roll.hpp
             roll/roll_nanobind.hpp

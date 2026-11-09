@@ -180,7 +180,8 @@ def test_stack_trailing_axis_device_ops(device, input_shapes, dim, layout, expec
     # is one concat and one permute, while unsqueeze-then-concat starts with a reshape per input and,
     # for row-major, wraps the concat in transposes. A single tile input stays on the reshape.
     # Expected ops are name prefixes because an op can run as more than one device operation
-    # (reshape picks ReshapeView or ReshapeCodegen by shape and arch); the route is what is asserted.
+    # (reshape runs ReshapeNew, or ReshapeView / ReshapeCodegen under the legacy policy); the route is
+    # what is asserted.
     torch_tensors = [torch.rand(shape, dtype=torch.bfloat16) for shape in input_shapes]
     ttnn_tensors = [
         ttnn.from_torch(tensor, layout=layout, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG)

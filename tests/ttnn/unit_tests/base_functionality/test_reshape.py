@@ -863,8 +863,8 @@ def test_reshape_oob(device):
 )
 @pytest.mark.parametrize("dim", [0, 1])
 @pytest.mark.parametrize("interleaved", [False])
-def test_reshape_nd_sharded(shape, shard_shape, output_shape, dim, interleaved, device):
-    pytest.skip("skipped but must be resolved later - issue 36172")
+@pytest.mark.parametrize("explicit_output_config", [False, True])
+def test_reshape_nd_sharded(shape, shard_shape, output_shape, dim, interleaved, explicit_output_config, device):
     torch.manual_seed(0)
 
     torch_input_tensor = torch_random(shape, -100, 100, dtype=torch.bfloat16)
@@ -884,10 +884,14 @@ def test_reshape_nd_sharded(shape, shard_shape, output_shape, dim, interleaved, 
         torch_input_tensor, layout=ttnn.TILE_LAYOUT, memory_config=memory_config, device=device
     )
 
-    output_tensor = ttnn.reshape(input_tensor, output_shape)
+    output_tensor = ttnn.reshape(
+        input_tensor, output_shape, memory_config=output_memory_config if explicit_output_config else None
+    )
+    if explicit_output_config:
+        assert output_tensor.memory_config().nd_shard_spec == output_memory_config.nd_shard_spec
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.995)
+    assert torch.equal(torch_output_tensor, output_tensor)
 
 
 @pytest.mark.parametrize(

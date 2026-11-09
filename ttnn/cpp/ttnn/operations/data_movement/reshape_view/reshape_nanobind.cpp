@@ -5,15 +5,18 @@
 #include "reshape_nanobind.hpp"
 
 #include <optional>
+#include <string>
 
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
+#include <nanobind/stl/string.h>
 
 #include "ttnn-nanobind/bind_function.hpp"
 #include "ttnn-nanobind/export_enum.hpp"
 #include "ttnn-nanobind/small_vector_caster.hpp"
 #include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
 #include "ttnn/operations/data_movement/reshape_view/reshape_force.hpp"
+#include "ttnn/operations/data_movement/reshape_view/reshape_policy.hpp"
 #include "ttnn/types.hpp"
 #include "ttnn/operations/data_movement/reshape_view/reshape_common.hpp"
 
@@ -57,7 +60,7 @@ void bind_reshape_view_operation(nb::module_& mod) {
                 memory_config (ttnn.MemoryConfig, optional): Memory configuration of the output tensor. Defaults to `None`, which matches the input tensor's memory configuration. If ``memory_config`` specifies a sharded layout without ``shard_spec``, the input tensor's ``shard_spec`` is used as the seed grid (layout should match the input).
                 pad_value (float or int, optional): Value to fill the output tensor's tile padding with when the reshape moves data. Defaults to `None`, which leaves the padding unspecified, except for ``BFLOAT8_B`` and ``BFLOAT4_B`` outputs, whose padding is filled with 0. For ``FLOAT32`` tensors, ``pad_value`` must be a float, such as ``1.0`` rather than ``1``.
                 reshape_tile_mode (ttnn.TileReshapeMapMode, optional): ``CACHE`` and ``RECREATE`` give the same result. Defaults to `CACHE`. The tuple/list shape overload previously named this keyword ``recreate_mapping_tensor``.
-                sub_core_grids (ttnn.CoreRangeSet, optional): Specifies sub-core grid ranges for advanced core selection control, for interleaved input and output. ``BFLOAT8_B`` and ``BFLOAT4_B`` tensors must leave it as `None`. Defaults to `None`, which uses all the cores in the device.
+                sub_core_grids (ttnn.CoreRangeSet, optional): Specifies sub-core grid ranges for advanced core selection control. Defaults to `None`, which uses all the cores in the device.
                 skip_padding_fill (bool, optional): If `True`, tile padding is left as-is. Defaults to `False`, which applies ``pad_value`` when one is given. ``BFLOAT8_B`` and ``BFLOAT4_B`` outputs always have their padding filled.
 
             Returns:
@@ -71,23 +74,21 @@ void bind_reshape_view_operation(nb::module_& mod) {
 
                    * - Dtypes
                      - Layouts
-                   * - BFLOAT16, FLOAT32, INT32, UINT32
+                   * - BFLOAT16, FLOAT32, INT32, UINT32, UINT16, UINT8
                      - TILE, ROW_MAJOR
                    * - BFLOAT8_B, BFLOAT4_B
                      - TILE
-                   * - UINT16
-                     - TILE, ROW_MAJOR
-
-                ``UINT16`` reshapes that move data need Wormhole B0 or Blackhole, input and output interleaved in DRAM or
-                L1, TILE tiles padded only in the last two dims (ROW_MAJOR input unpadded), no explicit ``pad_value`` on
-                a padded TILE output, and enough L1 for one of the reshape programs.
 
                 ``BFLOAT8_B`` and ``BFLOAT4_B`` reshapes that move data go through a ``BFLOAT16`` typecast.
+
+                The implementation is selected by ``TT_METAL_EXECUTION_POLICY_RESHAPE``: ``new`` (the default),
+                ``legacy`` (the frozen previous implementation, which lacks ``UINT8`` and native ND sharding), or
+                ``compare`` (both, checked bit for bit, returning the ``new`` result).
 
             Memory Support:
                 - Interleaved: DRAM and L1
                 - Sharded: HEIGHT_SHARDED, WIDTH_SHARDED and BLOCK_SHARDED input and output
-                - ND sharded: supported through a DRAM-interleaved intermediate
+                - ND sharded: input and output
         )doc";
 
     ttnn::bind_function<"reshape">(
@@ -215,6 +216,97 @@ void bind_reshape_view_operation(nb::module_& mod) {
 
             Returns:
                 ttnn.Tensor: the output tensor with the new shape.
+        )doc");
+
+    const auto* pinned_doc = R"doc(
+            Verification only: runs one implementation behind TT_METAL_EXECUTION_POLICY_RESHAPE unconditionally,
+            whatever the policy. Reshapes nested inside it run on the same implementation. Not part of the ttnn
+            API; use ttnn.reshape.
+
+            Args:
+                input_tensor (ttnn.Tensor): the input tensor.
+                logical_shape (ttnn.Shape): the output logical shape.
+                padded_shape (ttnn.Shape, optional): the output padded shape. Defaults to `logical_shape`.
+
+            Keyword Args:
+                memory_config (ttnn.MemoryConfig, optional): memory configuration for the output.
+                    Defaults to `None`, which matches the input.
+                pad_value (number, optional): value for the output padding. Defaults to `None`, which is 0.
+                reshape_tile_mode (ttnn.TileReshapeMapMode): as for ttnn.reshape; only the legacy
+                    implementation reads it. Defaults to `CACHE`.
+                sub_core_grids (ttnn.CoreRangeSet, optional): sub core grids to run the operation on.
+                    Defaults to `None`.
+                skip_padding_fill (bool): as for ttnn.reshape. Defaults to `False`.
+
+            Returns:
+                ttnn.Tensor: the output tensor with the new shape.
+        )doc";
+
+    auto bind_pinned = [&](const char* name, auto implementation) {
+        mod.def(
+            name,
+            [implementation](
+                const ttnn::Tensor& input_tensor,
+                const ttnn::Shape& logical_shape,
+                const std::optional<ttnn::Shape>& padded_shape,
+                const std::optional<MemoryConfig>& memory_config,
+                const std::optional<PadValue>& pad_value,
+                const ttnn::TileReshapeMapMode reshape_tile_mode,
+                const std::optional<CoreRangeSet>& sub_core_grids,
+                const bool skip_padding_fill) {
+                return implementation(
+                    input_tensor,
+                    logical_shape,
+                    padded_shape.value_or(logical_shape),
+                    memory_config,
+                    pad_value,
+                    reshape_tile_mode,
+                    sub_core_grids,
+                    skip_padding_fill);
+            },
+            nb::arg("input_tensor"),
+            nb::arg("logical_shape"),
+            nb::arg("padded_shape") = nb::none(),
+            nb::kw_only(),
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("pad_value") = nb::none(),
+            nb::arg("reshape_tile_mode") = nb::cast(ttnn::TileReshapeMapMode::CACHE),
+            nb::arg("sub_core_grids") = nb::none(),
+            nb::arg("skip_padding_fill") = false,
+            nb::call_guard<nb::gil_scoped_release>(),
+            pinned_doc);
+    };
+    bind_pinned("reshape_legacy", &reshape_legacy);
+    bind_pinned("reshape_new", &reshape_new);
+
+    mod.def(
+        "set_reshape_execution_policy",
+        [](const std::optional<std::string>& policy) {
+            set_reshape_execution_policy_override(
+                policy.has_value() ? std::optional(parse_reshape_execution_policy(*policy)) : std::nullopt);
+        },
+        nb::arg("policy") = nb::none(),
+        R"doc(
+            Testing only: overrides TT_METAL_EXECUTION_POLICY_RESHAPE for the whole process.
+
+            Args:
+                policy (str, optional): "new", "legacy" or "compare". `None` restores the policy taken from
+                    the environment (default "new").
+        )doc");
+
+    mod.def(
+        "get_reshape_execution_policy",
+        []() -> std::string {
+            switch (reshape_execution_policy()) {
+                case ReshapeExecutionPolicy::Legacy: return "legacy";
+                case ReshapeExecutionPolicy::New: return "new";
+                case ReshapeExecutionPolicy::Compare: return "compare";
+            }
+            return "new";
+        },
+        R"doc(
+            Testing only: the reshape execution policy in effect on the calling thread: "new", "legacy" or
+            "compare".
         )doc");
 }
 
