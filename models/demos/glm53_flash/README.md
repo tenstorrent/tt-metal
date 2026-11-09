@@ -93,6 +93,49 @@ partitioned spec state and the sparse-range verify. Off by default (`GLM53_SPEC_
 
 ## Serving (vLLM + tt-inference-server)
 
+The served path is the persistent megakernel stack over all 32 chips (`models/autoports/zai_org_glm_5_3_flash/tt`:
+TP32 x EP32 with the sequence-sharded DSA pool, `doc/perf/shard_8x4_design.md`) through its vLLM adapter
+[`tt/generator_vllm_stack.py`](tt/generator_vllm_stack.py) (`GLM53StackForCausalLM`). It replaces the TP4 x 8-row
+served path described further down (kept as history; that model's code stays in the folder).
+
+Stack: stock vLLM 0.31.0 + `vllm-tt-plugin` (the model is registered in the plugin's built-in map on branch
+`arg/glm53_stack_registration`; a plugin without it selects the adapter through the generic
+`TT_MODEL_CLASS_OVERRIDES=Glm5NextForConditionalGeneration=models.demos.glm53_flash.tt.generator_vllm_stack:GLM53StackForCausalLM,...`),
+transformers 5.20.2. tt-inference-server catalog (branch `arg/glm53_stack_galaxy`, BLACKHOLE_GALAXY only): profiles
+`glm53_flash` = 1 M context x 4 resident users (the default) and `glm53_flash_128k` = 128 K x 16. Text only; greedy
+requests sample on the device (the head's argmax inside the traced decode step), sampled requests (temperature /
+top-p) on the host from the returned logits (~32 ms per step at 4 slots, ~50 ms at 16); no prefix cache, synchronous
+scheduling, chunked prefill on the stack's 8192-token bucket grid (`prefill_chunk_alignment 8192`,
+`max_num_batched_tokens` = one bucket + one decode token per slot). The device is opened before the model, so the
+catalog carries the 1D fabric, the per-context trace region (8 GiB / 3 GiB), `worker_l1_size 1280896`,
+`l1_small_size 32768` and `--block-size 64`; the adapter applies the validated Galaxy knobs (`tt/galaxy_defaults.py`)
+and places its caches under `TT_CACHE_PATH` (the reference-format tile cache, built on the first boot, and the permuted
+expert copies). `max_num_seqs` must equal the stack's construction width (every served user is resident for the whole
+context); the plugin's slot gathers are absorbed into a plugin-slot to generator-slot alias (no state copies).
+
+Served on an 8x4 from the catalog entries (2026-11-09, 45 layers, OSL 128, one request = prefill + 128 tokens):
+
+| profile | request | wall | note |
+|---|---|---|---|
+| 1 M (4 slots) | 128 tokens, 1 user | 4.1 s | greedy text identical to the e2e row's |
+| 1 M | 128 tokens, 4 identical / 4 distinct users | 5.6 s each | the 4 texts identical |
+| 1 M | 32 K tokens, 1 user / 4 users | 13.5 s / 42.9 s each | TTFT 39 s for 4 x 32 K; texts identical across 1 and 4 users and to the e2e row at the same cache length |
+| 1 M | 1,047,610 tokens, 1 user | 355.9 s | 95 thought + 33 answer tokens |
+| 1 M | 1,047,610 tokens, 4 identical / 4 distinct users | 1,404 s / 1,407 s each | vLLM prefills the four back to back (~345 s each: the e2e's 1,379 s TTFT), all four resident; the identical set's texts equal the lone request's |
+| 128 K (16 slots) | 128 tokens, 1 user / 16 identical / 16 distinct | 7.8 s / 15.2 s / 15.7 s each | 16 identical prompts: 1 text variant in one run, 3 in another (the two token lanes' reduction orders flip a near-tie) |
+| 128 K | 130,815 tokens, 1 user | 44.3 s | prefill ~3 K tok/s |
+| 128 K | 130,815 tokens, 16 identical / 16 distinct users | 583-600 s / 587-601 s each | the 16 prefills back to back (the e2e's 579 s TTFT), all 16 resident and coherent; identical prompts split into 6 text variants |
+
+Boot: ~11-12 min on a warm cache (the stack build ~5.5 min + the prefill-bucket and decode captures). Greedy outputs
+are deterministic for a given live count; a different live count (1 vs 16 users) or cache length (the e2e's 64 K
+default vs the served 1 M) can flip a near-tie later in the generation, so the served texts are compared with e2e rows
+of the same configuration; at 16 slots identical prompts in one batch split into several variants (two token lanes
+plus per-slot numerics), all coherent. Smoke: `_logs/mesh/serve_stack_catalog.sh` on the box (the catalog entry as-is, then
+`serve_stack_client.py`: the e2e prompt greedy vs the reference text, N identical and N distinct concurrent users, one
+sampled request).
+
+### The TP4 x 8-row served path (2026-10-27 .. 2026-10-30, superseded by the stack)
+
 Stack: stock vLLM 0.30.0 + `vllm-tt-plugin` main (the model is registered in the plugin's built-in map on branch
 `arg/glm53_registration`; until it merges the catalog passes
 `TT_MODEL_CLASS_OVERRIDES=Glm5NextForConditionalGeneration=models.demos.glm53_flash.tt.generator_vllm:GLM53FlashForCausalLM`),
