@@ -1473,3 +1473,76 @@ def test_concat_height_sharded_taller_output_shard(device, expect_error, layout)
     ]
     small_out = ttnn.concat(small_inputs, dim=3, memory_config=mem((64, 64), small_grid))
     assert_equal(torch.cat(small_torch_inputs, dim=3), ttnn.to_torch(small_out))
+
+
+_BLOCK_WIDTH_SHARD_ERR = "requires the output shard height to match the input shard heights"
+_BLOCK_HEIGHT_SHARD_ERR = "requires the output shard width to match the input shard widths"
+
+
+# Block-sharded zero-copy concat reads the concat-dim shard size from the output shard and lays
+# that dimension out from the plan, but it copies the OTHER dimension straight from each source
+# shard (concat_block_sharded_program_factory.cpp:273-315 for width concat, :320-383 for height
+# concat). A different shard size in that other dimension therefore reads the wrong source rows or
+# columns. Probe results on stock 54effbfbb42: width concat with a shorter output shard height had
+# 12284/16384 wrong values and height concat with a narrower output shard width had 12285/16384,
+# both accepted with mc_match=true (silent). Taller/wider variants crashed the simulator. The concat
+# dimension itself is handled by the plan and may differ (out shard width 48 vs 32, out shard
+# height 64 vs 32 both exact). A tensor that fits in one shard stays correct with a different other
+# dimension as long as the copied band fits inside the source shard, which the validation keeps.
+@pytest.mark.parametrize(
+    "layout, shapes, shard_shape, out_shard, grid_cols, grid_rows, dim, error",
+    [
+        # Controls: natural output shard, concat dimension summed.
+        (ttnn.TILE_LAYOUT, [(1, 1, 128, 64)] * 2, (32, 64), (32, 128), 1, 4, 3, None),
+        (ttnn.TILE_LAYOUT, [(1, 1, 64, 128)] * 2, (32, 128), (32, 128), 1, 4, 2, None),
+        # The concat dimension may differ: handled by the block plan, values exact on stock.
+        (ttnn.ROW_MAJOR_LAYOUT, [(1, 1, 128, 64)] * 2, (32, 32), (32, 48), 4, 4, 3, None),
+        (ttnn.TILE_LAYOUT, [(1, 1, 64, 128)] * 2, (32, 128), (64, 128), 1, 4, 2, None),
+        # Single-shard allowance: the whole tensor fits in one shard and the copy band fits in the
+        # source shard, so the other dimension may differ.
+        (ttnn.TILE_LAYOUT, [(1, 1, 32, 64)] * 2, (64, 64), (32, 64), 2, 1, 3, None),
+        (ttnn.TILE_LAYOUT, [(1, 1, 64, 32)] * 2, (64, 64), (128, 32), 2, 1, 2, None),
+        # Silent on stock: rejected after the fix.
+        (ttnn.TILE_LAYOUT, [(1, 1, 128, 64)] * 2, (64, 64), (32, 128), 1, 4, 3, _BLOCK_WIDTH_SHARD_ERR),
+        (ttnn.TILE_LAYOUT, [(1, 1, 64, 128)] * 2, (64, 64), (128, 32), 4, 1, 2, _BLOCK_HEIGHT_SHARD_ERR),
+    ],
+    ids=[
+        "width_control",
+        "height_control",
+        "width_out_shard_width_diff",
+        "height_out_shard_height_diff",
+        "width_single_shard_allowed",
+        "height_single_shard_allowed",
+        "width_shorter_out_shard_height",
+        "height_narrower_out_shard_width",
+    ],
+)
+def test_concat_block_sharded_output_shard_shape_mismatch(
+    device, expect_error, layout, shapes, shard_shape, out_shard, grid_cols, grid_rows, dim, error
+):
+    dtype = ttnn.bfloat16
+    grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_cols - 1, grid_rows - 1))})
+
+    def mem(shard):
+        return ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(grid, shard, ttnn.ShardOrientation.ROW_MAJOR),
+        )
+
+    torch_inputs = [random_torch_tensor(dtype, s) for s in shapes]
+    torch_output = torch.cat(torch_inputs, dim=dim)
+    ttnn_inputs = [
+        ttnn.from_torch(t, dtype=dtype, layout=layout, device=device, memory_config=mem(shard_shape))
+        for t in torch_inputs
+    ]
+    output_mem = mem(out_shard)
+
+    if error is not None:
+        with expect_error(RuntimeError, error):
+            ttnn.concat(ttnn_inputs, dim=dim, memory_config=output_mem)
+        return
+
+    output = ttnn.concat(ttnn_inputs, dim=dim, memory_config=output_mem)
+    assert output.memory_config() == output_mem
+    assert_equal(torch_output, ttnn.to_torch(output))
