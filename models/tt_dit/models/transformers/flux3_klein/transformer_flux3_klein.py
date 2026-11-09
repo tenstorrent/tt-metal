@@ -16,7 +16,7 @@ from ....layers.linear import ColParallelLinear, Linear, prepare_chunked_linear_
 from ....layers.module import Module, ModuleList
 from ....layers.normalization import DistributedLayerNorm
 from ....utils import tensor
-from ....utils.matmul import register_matmul_configs
+from ....utils.matmul import FusedMMRSConfig, register_fused_mmrs_configs, register_matmul_configs
 from ....utils.substate import rename_substate
 from .transformer_block_flux3_klein import HIDDEN, Flux3KleinTransformerBlock
 
@@ -66,6 +66,17 @@ STATE_PREFIXES = (
     ("content_mode_blocks", "early.content_mode_blocks"),
     ("txt_mode_blocks", "early.txt_mode_blocks"),
     ("final_layer.image.linear", "proj_out"),
+)
+
+
+# proj_out (fused matmul + strided reduce-scatter + addcmul) at the 4096 per-device rows: N block 8 = the core's whole
+# 8 N tiles, K block 8
+register_fused_mmrs_configs(
+    {
+        ttnn.CoreCoord(12, 10): {
+            (m, 3072, 3072): FusedMMRSConfig(ttnn.CoreCoord(12, 8), 6, 8, 8, 2, 2, None, 1) for m in (8192, 8320, 8960)
+        }
+    }
 )
 
 
