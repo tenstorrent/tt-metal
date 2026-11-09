@@ -2168,7 +2168,7 @@ ProgramDescriptor build_program_descriptor(
                 }
             }
             tt::tt_fabric::append_routing_plane_connection_manager_rt_args(
-                src_node, dst_nodes, {link}, desc, ar_sender_id, ar_senders[link], sender_args, api_type);
+                *device, src_node, dst_nodes, {link}, desc, ar_sender_id, ar_senders[link], sender_args, api_type);
             desc.kernels[ar_sender_id].runtime_args.emplace_back(
                 ar_senders[link], KernelDescriptor::CoreRuntimeArgs(sender_args.begin(), sender_args.end()));
         }
@@ -2331,6 +2331,7 @@ ProgramDescriptor build_program_descriptor(
                 }
                 // Link 0: the root's reduce senders hold no connection in the outputs' direction.
                 tt::tt_fabric::append_routing_plane_connection_manager_rt_args(
+                    *device,
                     src_node,
                     {tt::tt_fabric::FabricNodeId(
                         tt::tt_fabric::MeshId{params.output_connection_mesh_id}, params.output_connection_chip_id)},

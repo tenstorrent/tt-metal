@@ -82,10 +82,14 @@ from models.experimental.deepseek_v41_flash.tt.decode.dspark import DeepSeekV41D
 from models.experimental.deepseek_v41_flash.tt.decode.moe import DeepSeekV41PreloadedExperts
 from models.experimental.deepseek_v41_flash.tt import host_rs
 from models.experimental.deepseek_v41_flash.tt.engram_lookup import (
+    ENGRAM_RAM_MARGIN,
+    STAGE_DIR,
     EngramHostLookup,
     engram_ram_needed,
     engram_table_nbytes,
     load_engram_table,
+    stage_engram_tables,
+    staged_copy,
 )
 from models.experimental.deepseek_v41_flash.tt.lm_head import DeepSeekV41DeviceSampler, DeepSeekV41LMHead
 from models.experimental.deepseek_v41_flash.tt.prefill.model import DeepSeekV41PrefillModel
@@ -134,7 +138,6 @@ from models.experimental.deepseek_v4_flash.tt.weight_cache import WeightCache, _
 from models.experimental.deepseek_v4_flash.tt.weight_loader import DeepseekV4WeightLoader
 
 # Host RAM kept free above the Engram tables, matching the decoder-layer test.
-_ENGRAM_RAM_MARGIN = 1.25
 _ROW_NAMES = ("new_kv_row", "new_key_row")
 _CANDIDATE_NAMES = ("cand_blocks", "pool_count")
 # Rows of a session slot in the shared compressor windows: one tile, so a slot starts on a tile row.
@@ -355,7 +358,7 @@ class DeepSeekV41Model(DeepSeekV4Model):
         self._mtp_pack = None
         self._mtp_hiddens = None
 
-        self._require_engram_ram()
+        self._stage_and_require_engram_ram()
         # A verify block's rows outnumber a socket's pages, so decode_verify writes them from a second thread.
         engram_sockets = {
             li: open_rows_sockets(self.submeshes[self.layer_submesh_ids[li]], rows_page_bytes(config))
@@ -499,17 +502,26 @@ class DeepSeekV41Model(DeepSeekV4Model):
     def _engram_ids(self) -> list[int]:
         return [i for i in self.config.engram_layer_ids if i < self.num_layers]
 
-    def _require_engram_ram(self) -> None:
-        """Refuse to build when the Engram tables (plus the same headroom the tests use) do not fit."""
+    def _stage_and_require_engram_ram(self) -> None:
+        """Stage the tables in :data:`~.engram_lookup.STAGE_DIR` (unless already staged or turned off), then refuse
+        to build when what is left to read or map, plus the same headroom the tests use, does not fit.
+
+        Staging is what lets a second process -- or a second run -- share the one copy of the ~203 GB instead of
+        reading its own: the files it copies are mapped by :func:`load_engram_table` and need no RAM of their own.
+        """
         ids = self._engram_ids()
         if not ids:
             return
+        _, copied = stage_engram_tables(self.loader, ids)
+        if copied:
+            logger.info(f"Engram tables of layers {ids} staged in {STAGE_DIR}: {copied / 1e9:.0f} GB copied")
         need = engram_ram_needed(self.loader, ids)
         available = _host_mem_available()
-        if available < _ENGRAM_RAM_MARGIN * need:
+        if available < ENGRAM_RAM_MARGIN * need:
             raise MemoryError(
-                f"Engram tables for layers {ids} need {_ENGRAM_RAM_MARGIN * need / 1e9:.0f} GB with headroom; "
-                f"{available / 1e9:.0f} GB is available"
+                f"Engram tables for layers {ids} need {ENGRAM_RAM_MARGIN * need / 1e9:.0f} GB with headroom; "
+                f"{available / 1e9:.0f} GB is available. Stage them in {STAGE_DIR} to share one copy between runs "
+                f"(python models/experimental/deepseek_v41_flash/tools/stage_engram_tables.py)"
             )
 
     @property
@@ -787,6 +799,10 @@ class DeepSeekV41Model(DeepSeekV4Model):
         if self._engram_layers:
             ids = [layer_idx for layer_idx, _ in self._engram_layers]
             total = sum(engram_table_nbytes(self.loader, i) for i in ids)
+            staged = all(
+                staged_copy(self.loader.shard_of(f"layers.{i}.engram.embed.weight", translate=False)) for i in ids
+            )
+            source = f"mapped from {STAGE_DIR}" if staged else "read from the checkpoint"
             t0 = time.perf_counter()
             # Drawn on a terminal only (disable=None); a log file gets the summary line below.
             with tqdm(
@@ -804,7 +820,7 @@ class DeepSeekV41Model(DeepSeekV4Model):
                     tables[layer_idx] = load_engram_table(self.loader, layer_idx, progress=advance)
             seconds = time.perf_counter() - t0
             logger.info(
-                f"Engram tables of layers {ids} read: {total / 1e9:.0f} GB in {seconds:.0f}s "
+                f"Engram tables of layers {ids} {source}: {total / 1e9:.0f} GB in {seconds:.0f}s "
                 f"({total / 1e9 / max(seconds, 1e-9):.1f} GB/s)"
             )
             lookup_cls = host_rs.RustEngramLookup if host_rs.enabled() else EngramHostLookup

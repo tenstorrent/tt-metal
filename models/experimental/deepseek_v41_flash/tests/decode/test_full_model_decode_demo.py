@@ -21,8 +21,10 @@ down), q_a's 32-receiver ring, kv's 16-receiver ring and the router gate's
 indexer, and the per-rank shared-expert gate/up copy DRAM -> L1.
 
 The final collapse uses the last layer's FFN ``pre_mix``; there is no ``hc_head``.
-Engram layers 1 and 14 read host n-gram tables (~101 GB each) and skip the test
-when that RAM is not free.
+Engram layers 1 and 14 read host n-gram tables (~101 GB each). They are staged in tmpfs
+(``DEEPSEEK_V41_ENGRAM_STAGE_DIR``, default ``/dev/shm/deepseek_v41_engram``) before the build, so one copy
+is shared by every run and process rather than each reading its own; ``DEEPSEEK_V41_ENGRAM_STAGE=0`` turns
+that off. The test skips when the tables fit neither as staged copies nor as a private read.
 
 All attention, routed-expert and ``lm_head`` weights live on device in ``bfloat4_b``.
 Set ``DEEPSEEK_V4_CACHE_DIR`` to reuse the converted ttnn weight tiles across runs,
@@ -79,7 +81,11 @@ from models.experimental.deepseek_v41_flash.tt.config import (
     pipeline_stage_count,
 )
 from models.experimental.deepseek_v41_flash.tt.decode.decode_prefetch import ENGRAM_WKV_RING, O_B_RING, SHARED_DOWN_RING
-from models.experimental.deepseek_v41_flash.tt.engram_lookup import engram_ram_needed
+from models.experimental.deepseek_v41_flash.tt.engram_lookup import (
+    ENGRAM_RAM_MARGIN,
+    engram_ram_needed,
+    stage_engram_tables,
+)
 from models.experimental.deepseek_v41_flash.tt.lm_head import DeepSeekV41LMHead
 from models.experimental.deepseek_v41_flash.tt.model import DeepSeekV41Model
 from models.experimental.deepseek_v4_flash.encoding_dsv4 import encode_messages
@@ -114,7 +120,6 @@ if int(os.environ.get("DEEPSEEK_V4_MAX_NEW_TOKENS", "4096")) < 10:
 _WEIGHT_DTYPE = ttnn.bfloat4_b
 # Accepted by prepare_static_decode for the V4 call shape. The index pool uses CSA_INDEX_BLOCK_SIZE.
 _PAGE_BLOCK_SIZE = 32
-_ENGRAM_RAM_MARGIN = 1.25
 _DEVICE_SAMPLING = os.environ.get("DEEPSEEK_V4_DEVICE_SAMPLING", "0") not in ("0", "", "false", "False")
 _TEMPERATURE = float(os.environ.get("DEEPSEEK_V4_TEMPERATURE", "0"))
 _SEED = int(os.environ.get("DEEPSEEK_V4_SEED", "1234"))
@@ -351,8 +356,11 @@ def _build_and_prefill(
     )
     engram_ids = [i for i in config.engram_layer_ids if i < max_layers]
     if engram_ids:
+        # Stage the tables in tmpfs first, so the build maps one shared copy instead of reading ~203 GB of its
+        # own; the skip below then only fires when they neither fit as copies nor as a private read.
+        stage_engram_tables(loader, engram_ids)
         nbytes = engram_ram_needed(loader, engram_ids)
-        if _available_bytes() < _ENGRAM_RAM_MARGIN * nbytes:
+        if _available_bytes() < ENGRAM_RAM_MARGIN * nbytes:
             pytest.skip(f"needs {nbytes / 1e9:.0f} GB of free memory for the Engram tables of layers {engram_ids}")
 
     max_new_tokens = int(os.environ.get("DEEPSEEK_V4_MAX_NEW_TOKENS", "2560"))
@@ -460,6 +468,10 @@ def _build_like_server(
 
     args = server.parse_args(shlex.split(os.environ.get("DEEPSEEK_V4_SERVER_ARGS", "")))
     args.tp_size, args.num_stages = tp_size, num_stages
+    # The server's own pre-flight (``main`` does it before ``serve``): stage the Engram tables and refuse early
+    # when they do not fit, rather than failing part-way through the build.
+    if not server._stage_engram_tables(args):
+        pytest.skip("not enough host RAM for the Engram tables of this build")
     if args.prefill:
         if args.l1_small_size != _L1_SMALL_SIZE:
             logger.warning(

@@ -208,7 +208,7 @@ inline void set_all_gather_writer_runtime_args(
         const auto sender_node = tensor_a.device()->get_fabric_node_id(sender_coord);
         tt::tt_metal::KernelHandle writer_id_mut = writer_id;
         tt::tt_fabric::append_routing_plane_connection_manager_rt_args<tt::tt_metal::ProgramDescriptor>(
-            sender_node, route.dst_nodes, link_indices, desc, writer_id_mut, core, rt);
+            *tensor_a.device(), sender_node, route.dst_nodes, link_indices, desc, writer_id_mut, core, rt);
         std::vector<std::variant<uint32_t, tt::tt_metal::Buffer*>> var;
         var.reserve(rt.size());
         for (size_t i = 0; i < rt.size(); ++i) {

@@ -179,9 +179,9 @@ tt::tt_metal::ProgramDescriptor PersistentMoeRequestDeviceOperation::MultiCore::
     // Two connections, each its own manager: the ack to the responder may leave in the request's direction,
     // which one manager cannot hold twice.
     tt::tt_fabric::append_routing_plane_connection_manager_rt_args(
-        src, {routes.front().next}, {0u}, desc, kernel_id, core, args, tt::tt_fabric::FabricApiType::Mesh);
+        *mesh, src, {routes.front().next}, {0u}, desc, kernel_id, core, args, tt::tt_fabric::FabricApiType::Mesh);
     tt::tt_fabric::append_routing_plane_connection_manager_rt_args(
-        src, {endpoints->responder}, {1u}, desc, kernel_id, core, args, tt::tt_fabric::FabricApiType::Mesh);
+        *mesh, src, {endpoints->responder}, {1u}, desc, kernel_id, core, args, tt::tt_fabric::FabricApiType::Mesh);
     desc.kernels[kernel_id].runtime_args.emplace_back(
         core, KernelDescriptor::CoreRuntimeArgs(args.begin(), args.end()));
     return desc;

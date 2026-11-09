@@ -10,19 +10,27 @@ are dequantized exactly as ``ParallelEngramEmbedding`` does it, to bf16
 ``[B, L, n_hash_cols * head_dim]``. The device half (:mod:`.decode.engram`) receives them over an
 H2D socket.
 
-``tools/stage_engram_tables.py`` copies the tables' checkpoint files into :data:`STAGE_DIR` (tmpfs, so
-the copy stays in RAM between processes); :func:`load_engram_table` then maps the copy instead of reading
-the checkpoint.
+:func:`stage_engram_tables` copies the tables' checkpoint files into :data:`STAGE_DIR` (tmpfs, so the copy
+stays in RAM between processes) and :func:`load_engram_table` then maps the copy instead of reading the
+checkpoint: one copy of the ~203 GB, shared by every process instead of one private copy each. The demo and
+the full-model tests call it before building the model, so repeated and concurrent runs share it; it is a
+no-op once the files are staged, and falls back to reading the checkpoint when they do not fit. Set
+``DEEPSEEK_V41_ENGRAM_STAGE=0`` to turn it off, and ``tools/stage_engram_tables.py`` to stage (or ``--remove``
+the copies) ahead of time.
 """
 
+import contextlib
 import ctypes
+import fcntl
 import importlib.util
 import json
 import math
 import mmap
 import os
+import shutil
 import struct
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from types import SimpleNamespace
@@ -30,18 +38,39 @@ from typing import Optional
 
 import torch
 import torch.nn.functional as F
+from loguru import logger
 
 from models.experimental.deepseek_v4_flash.tt.weight_loader import DeepseekV4WeightLoader
 
 # One E8M0 scale per this many consecutive values of a table row.
 TABLE_BLOCK = 32
-# Where tools/stage_engram_tables.py keeps the tables' checkpoint files. tmpfs pages are not reclaimed
-# under memory pressure the way page cache is, so a staged table stays resident until removed or reboot.
+# Headroom above the Engram tables a run needs, whether it stages a copy of them or reads them: the copy holds
+# the source's page cache plus the new tmpfs pages while it is made, and the build needs room above either.
+ENGRAM_RAM_MARGIN = 1.25
+# Where tools/stage_engram_tables.py and :func:`stage_engram_tables` keep the tables' checkpoint files. tmpfs
+# pages are not reclaimed under memory pressure the way page cache is, so a staged table stays resident until
+# removed or reboot.
 STAGE_DIR = Path(os.environ.get("DEEPSEEK_V41_ENGRAM_STAGE_DIR", "/dev/shm/deepseek_v41_engram"))
 # Linux 5.14+: fault a range's pages into the page tables without touching them from user space.
 _MADV_POPULATE_READ = 22
 _libc = ctypes.CDLL(None, use_errno=True)
 _libc.madvise.argtypes = [ctypes.c_void_p, ctypes.c_size_t, ctypes.c_int]
+
+
+def host_mem_available() -> int:
+    """Bytes of host RAM ``MemAvailable`` currently reports."""
+    with open("/proc/meminfo") as meminfo:
+        return next(int(line.split()[1]) * 1024 for line in meminfo if line.startswith("MemAvailable:"))
+
+
+def _drop_page_cache(path) -> None:
+    """Drop ``path`` from the page cache (``POSIX_FADV_DONTNEED``), so a staged copy of it does not hold the
+    source's pages as well. Pages another running process has mapped stay as long as it maps them."""
+    fd = os.open(path, os.O_RDONLY)
+    try:
+        os.posix_fadvise(fd, 0, 0, os.POSIX_FADV_DONTNEED)
+    finally:
+        os.close(fd)
 
 
 def tensor_region(path, name: str) -> tuple[int, list]:
@@ -112,6 +141,107 @@ def staged_copy(path) -> Optional[Path]:
     if copy.is_file() and copy.stat().st_size == path.stat().st_size:
         return copy
     return None
+
+
+def _copy_shard(src: Path, dst: Path, threads: int, chunk: int = 1 << 30) -> None:
+    """``src`` copied to ``dst`` by ``threads`` ``sendfile`` copies of ``chunk`` bytes, then written out of the
+    page cache so the copy does not hold the source's pages too."""
+    size = src.stat().st_size
+    with open(dst, "wb") as f:
+        f.truncate(size)
+
+    def copy(begin):
+        end = min(begin + chunk, size)
+        with open(src, "rb", buffering=0) as fin, open(dst, "r+b", buffering=0) as fout:
+            fout.seek(begin)
+            while begin < end:
+                n = os.sendfile(fout.fileno(), fin.fileno(), begin, end - begin)
+                assert n, f"short read of {src} at {begin}"
+                begin += n
+
+    with ThreadPoolExecutor(threads) as pool:
+        list(pool.map(copy, range(0, size, chunk)))
+    _drop_page_cache(src)
+
+
+def engram_shards(loader: DeepseekV4WeightLoader, layer_ids) -> list[Path]:
+    """The checkpoint files holding ``layer_ids``' tables, deduplicated in layer order. A file holds one layer's
+    ``weight`` and ``scale`` and nothing else, so this is one file per layer on the shipped checkpoint."""
+    return list(
+        dict.fromkeys(
+            Path(loader.shard_of(f"layers.{i}.engram.embed.{part}", translate=False)).resolve()
+            for i in layer_ids
+            for part in ("weight", "scale")
+        )
+    )
+
+
+@contextlib.contextmanager
+def _staging_lock():
+    """An exclusive lock on :data:`STAGE_DIR`, so two processes starting at once copy the tables once: the loser
+    waits here, then finds the files staged and copies nothing."""
+    STAGE_DIR.mkdir(parents=True, exist_ok=True)
+    with open(STAGE_DIR / ".lock", "w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(lock, fcntl.LOCK_UN)
+
+
+def stage_engram_tables(loader: DeepseekV4WeightLoader, layer_ids, threads: int = 16) -> tuple[list[Path], int]:
+    """Stage ``layer_ids``' tables in :data:`STAGE_DIR` so every process maps one copy instead of reading the
+    checkpoint into memory itself: the copies outlive the process, and with them a run takes no Engram RAM of
+    its own (:func:`engram_ram_needed` returns 0 for a staged layer).
+
+    Skips files already staged, and returns the staged paths and the bytes this call copied (0 when nothing had
+    to be). Falls back to leaving the files alone -- the model then reads the checkpoint as before -- when they
+    do not fit next to the RAM a build needs, or when ``DEEPSEEK_V41_ENGRAM_STAGE=0``. Copies go to a partial
+    name first and are renamed into place, and the whole staging runs under a lock on :data:`STAGE_DIR`, so
+    processes starting at once share the copy rather than racing for it.
+
+    Must be called before the model reads the tables (``DeepSeekV41Model.prepare_static_decode``). It copies
+    ~203 GB for the two layers of the checkpoint, so it is worth calling once per host even from a test.
+    """
+    if os.environ.get("DEEPSEEK_V41_ENGRAM_STAGE", "1") in ("0", "", "false", "False"):
+        return [], 0
+    shards = engram_shards(loader, layer_ids)
+    with _staging_lock():
+        todo = [shard for shard in shards if staged_copy(shard) is None]
+        if not todo:
+            return shards, 0
+        need = sum(shard.stat().st_size for shard in todo)
+        # The copy holds the bytes twice while it is made (the source's page cache and the new tmpfs pages), and
+        # the build still needs its own headroom above what is staged.
+        parent = STAGE_DIR
+        while not parent.exists():
+            parent = parent.parent
+        available = min(shutil.disk_usage(parent).free, host_mem_available())
+        if available < ENGRAM_RAM_MARGIN * need:
+            logger.warning(
+                f"Engram tables of layers {list(layer_ids)} not staged: {need / 1e9:.0f} GB to copy, "
+                f"{available / 1e9:.0f} GB available in {parent} and host RAM; reading the checkpoint instead"
+            )
+            return shards, 0
+        logger.info(f"staging Engram tables of layers {list(layer_ids)} in {STAGE_DIR}: {need / 1e9:.0f} GB to copy")
+        copied = 0
+        for shard in todo:
+            dst = STAGE_DIR / shard.name
+            partial = dst.with_name(f".{dst.name}.{os.getpid()}.partial")
+            start = time.monotonic()
+            try:
+                _copy_shard(shard, partial, threads)
+                partial.chmod(0o644)
+                os.replace(partial, dst)
+            finally:
+                partial.unlink(missing_ok=True)
+            seconds = time.monotonic() - start
+            copied += shard.stat().st_size
+            logger.info(
+                f"staged {shard.name}: {shard.stat().st_size / 1e9:.0f} GB in {seconds:.0f}s "
+                f"({shard.stat().st_size / 1e9 / max(seconds, 1e-9):.1f} GB/s)"
+            )
+        return shards, copied
 
 
 def engram_table_nbytes(loader: DeepseekV4WeightLoader, layer_idx: int) -> int:
