@@ -153,13 +153,15 @@ jobs:
       checkout-filter: tree:0
       # Use the merge commit (github.sha) — see build-docker-images job for rationale.
       # Pass pre-built docker images to avoid duplicate builds
-      ci-build-docker-image: ${{ needs.resolve-docker-pull-refs.outputs.ci-build-docker-image }}
+      # TEMP: pull straight from GHCR; GitHub-hosted runners can't reach the in-cluster Harbor proxy.
+      ci-build-docker-image: ${{ needs.build-docker-images.outputs.ci-build-tag }}
       ci-test-docker-image: ${{ needs.resolve-docker-pull-refs.outputs.ci-test-docker-image }}
       dev-docker-image: ${{ needs.resolve-docker-pull-refs.outputs.dev-docker-image }}
       basic-dev-docker-image: ${{ needs.resolve-docker-pull-refs.outputs.basic-dev-docker-image }}
       basic-ttnn-runtime-docker-image: ${{ needs.resolve-docker-pull-refs.outputs.basic-ttnn-runtime-docker-image }}
       manylinux-docker-image: ${{ needs.resolve-docker-pull-refs.outputs.manylinux-docker-image }}
-      runs-on: ${{ github.event_name == 'merge_group' && 'tt-ubuntu-2204-large-prio-stable' || 'tt-ubuntu-2204-large-stable' }}
+      # TEMP: compile on the GitHub-hosted 32-core runner.
+      runs-on: tt-gh-linux-32-core
   find-changed-files:
     if: github.event.action != 'destroyed' && (github.event_name != 'pull_request' || !github.event.pull_request.draft)
     runs-on: ubuntu-slim
