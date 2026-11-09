@@ -11,6 +11,8 @@ from dataclasses import dataclass
 
 import ttnn
 
+SWIGLU_TO_SHARD_ENV = "QWEN36_MLP_SWIGLU_TO_SHARD"
+
 
 @dataclass(frozen=True)
 class MLPWeights:
@@ -503,6 +505,23 @@ class Qwen36MLP:
         lofi = getattr(self, "compute_kernel_config_decode_bfp4", None)
         return lofi if (lofi is not None and weight.dtype == ttnn.bfloat4_b) else ckc
 
+    def _down_takes_dsmc_act(self, decode_ar):
+        """QWEN36_MLP_SWIGLU_TO_SHARD (default 0): True when _down_decode will run the dsmc pipeline on w2_dec (so the
+        split-SwiGLU may write its activation shard directly). Mirrors _down_decode's path choice: never for the RES40-out
+        1D matmul, a prefetch-registered w2, or a w2 without a decode twin."""
+        from models.demos.blackhole.qwen36.tt import tp_common as tpc
+        from models.demos.blackhole.qwen36.tt import weight_prefetch
+
+        if os.environ.get(SWIGLU_TO_SHARD_ENV, "0") != "1":
+            return False
+        w = self.weights
+        if w.w2_dec is None or getattr(self.args, "mlp_w2_dsmc_act_shard_bfp4", None) is None:
+            return False
+        if decode_ar is not None and tpc.verify_out_res40_enabled() and not weight_prefetch.is_registered(w.w2):
+            if tpc.verify_out_res40_down_mode() == "1d":
+                return False
+        return True
+
     def _down_decode(self, hidden, ckc, decode_ar=None):
         """Decode down projection (M <= 1 tile) of an L1-interleaved `hidden` into an L1-interleaved partial for the
         all-reduce: the 1D matmul (the QWEN36_BFP4_LAYOUT down=1d config when w2 is bfloat4_b), or under
@@ -526,7 +545,9 @@ class Qwen36MLP:
             if res40 is not None:
                 return res40
         if w.w2_dec is not None:
-            h_sh = ttnn.to_memory_config(hidden, args.mlp_w2_dsmc_act_shard_bfp4)
+            # QWEN36_MLP_SWIGLU_TO_SHARD: the split-SwiGLU already wrote `hidden` in this activation shard (no reshard).
+            prestaged = hidden.memory_config() == args.mlp_w2_dsmc_act_shard_bfp4
+            h_sh = hidden if prestaged else ttnn.to_memory_config(hidden, args.mlp_w2_dsmc_act_shard_bfp4)
             y = ttnn.linear(
                 h_sh,
                 w.w2_dec,
@@ -534,7 +555,8 @@ class Qwen36MLP:
                 compute_kernel_config=ckc,
                 memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
             )
-            ttnn.deallocate(h_sh)
+            if not prestaged:
+                ttnn.deallocate(h_sh)
             partial = tpc.res40_pack(y, decode_ar, site="mlp_down_dsmc") if res40_mode == "auto" else None
             if partial is None:
                 partial = ttnn.to_memory_config(y, ttnn.L1_MEMORY_CONFIG)
@@ -586,7 +608,14 @@ class Qwen36MLP:
                 memory_config=ttnn.L1_MEMORY_CONFIG,
             )
             ttnn.deallocate(x_il)
-        hidden = self._swiglu(gu)  # [M, hidden/tp] L1 interleaved: the 1D down projection's in0, as r5's mul output
+        # [M, hidden/tp] L1 interleaved (the 1D down projection's in0, as r5's mul output), or with
+        # QWEN36_MLP_SWIGLU_TO_SHARD=1 straight in the dsmc down projection's width-sharded activation layout: the split
+        # kernel's writer is a TensorAccessor, so this only changes where the same bytes land (bit-identical) and drops
+        # the reshard in _down_decode.
+        hidden_mc = ttnn.L1_MEMORY_CONFIG
+        if self._down_takes_dsmc_act(decode_ar):
+            hidden_mc = args.mlp_w2_dsmc_act_shard_bfp4
+        hidden = self._swiglu(gu, memory_config=hidden_mc)
         ttnn.deallocate(gu)
         # QWEN36_VERIFY_OUT_RES40 (default off): the partial may come back already in RES40 (no reshard before the AR)
         partial = self._down_decode(hidden, ckc, decode_ar)
