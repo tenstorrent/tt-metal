@@ -31,6 +31,6 @@ ttnn::Tensor fill_pad(
     const Tensor& input,
     ttnn::PadValue fill_value,
     const MemoryConfig& output_memory_config,
-    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
+    const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids = std::nullopt);
 
 }  // namespace ttnn::prim

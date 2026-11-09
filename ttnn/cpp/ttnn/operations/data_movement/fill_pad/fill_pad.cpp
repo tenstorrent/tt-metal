@@ -54,7 +54,7 @@ Tensor fill_implicit_tile_padding(
             /*memory_config=*/std::nullopt,
             /*pad_value=*/std::nullopt,
             ttnn::TileReshapeMapMode::CACHE,
-            /*sub_core_grid=*/sub_core_grids,
+            sub_core_grids,
             /*skip_padding_fill=*/true);
 
         reshaped_tensor = ttnn::prim::fill_pad(reshaped_tensor, fill_value, output_memory_config, sub_core_grids);
@@ -64,7 +64,7 @@ Tensor fill_implicit_tile_padding(
             /*memory_config=*/std::nullopt,
             /*pad_value=*/std::nullopt,
             ttnn::TileReshapeMapMode::CACHE,
-            /*sub_core_grid=*/sub_core_grids,
+            sub_core_grids,
             /*skip_padding_fill=*/true);
     } else {
         output_tensor = ttnn::prim::fill_pad(mutable_input_tensor, fill_value, output_memory_config, sub_core_grids);

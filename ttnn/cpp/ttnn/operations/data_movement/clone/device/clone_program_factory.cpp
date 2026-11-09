@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cmath>
+#include <tuple>
 
 #include "clone_device_operation.hpp"
 #include <tt-metalium/work_split.hpp>
@@ -73,6 +74,14 @@ ttnn::device_operation::ProgramArtifacts CloneProgramFactory::create_program_art
 
         // Walk the shard's own CoreRangeSet, not a bbox rectangle (wrong unless the grid is a rectangle at the origin).
         cores = corerange_to_cores(all_cores, num_cores, shard_spec.orientation() == ShardOrientation::ROW_MAJOR);
+    } else if (operation_attributes.sub_core_grids.has_value()) {
+        std::tie(
+            num_cores, all_cores, core_group_1, core_group_2, num_units_per_core_group_1, num_units_per_core_group_2) =
+            split_work_to_cores(*operation_attributes.sub_core_grids, num_units);
+        // The runtime-args loop below gives the first core_group_1.num_cores() cores the group-1 share.
+        cores = corerange_to_cores(core_group_1);
+        const auto group_2_cores = corerange_to_cores(core_group_2);
+        cores.insert(cores.end(), group_2_cores.begin(), group_2_cores.end());
     } else {
         auto compute_with_storage_grid_size = output.device()->compute_with_storage_grid_size();
         auto
@@ -81,20 +90,17 @@ ttnn::device_operation::ProgramArtifacts CloneProgramFactory::create_program_art
              core_group_1_result,
              core_group_2_result,
              num_units_per_core_group_1_result,
-             num_units_per_core_group_2_result] =
-                operation_attributes.sub_core_grids.has_value()
-                    ? split_work_to_cores(*operation_attributes.sub_core_grids, num_units)
-                    : split_work_to_cores(compute_with_storage_grid_size, num_units);
+             num_units_per_core_group_2_result] = split_work_to_cores(compute_with_storage_grid_size, num_units);
         num_cores = num_cores_result;
         all_cores = all_cores_result;
         core_group_1 = core_group_1_result;
         core_group_2 = core_group_2_result;
         num_units_per_core_group_1 = num_units_per_core_group_1_result;
         num_units_per_core_group_2 = num_units_per_core_group_2_result;
-        cores = corerange_to_cores(all_cores, num_cores, false);
+        cores = grid_to_cores(num_cores, compute_with_storage_grid_size.x, compute_with_storage_grid_size.y);
     }
 
-    auto alignment = input.buffer()->alignment();
+    auto alignment = input.mesh_buffer().alignment();
     uint32_t aligned_input_unit_size = tt::align(input_unit_size, alignment);
     uint32_t aligned_output_unit_size = tt::align(output_unit_size, alignment);
 
@@ -260,9 +266,10 @@ ttnn::device_operation::ProgramArtifacts CloneProgramFactory::create_program_art
     KernelRunArgs writer_ra{.kernel = WRITER};
 
     uint32_t start_id = 0;
-    for (const auto& core : cores) {
-        uint32_t num_units_per_core =
-            core_group_1.contains(core) ? num_units_per_core_group_1 : num_units_per_core_group_2;
+    uint32_t num_cores_group_1 = core_group_1.num_cores();
+    for (size_t i = 0; i < cores.size(); ++i) {
+        const auto& core = cores[i];
+        uint32_t num_units_per_core = i < num_cores_group_1 ? num_units_per_core_group_1 : num_units_per_core_group_2;
 
         if (is_sharded) {
             if (tilized) {

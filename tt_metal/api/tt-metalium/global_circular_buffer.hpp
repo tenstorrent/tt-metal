@@ -26,6 +26,7 @@ class Program;
 class IDevice;
 
 namespace distributed {
+class MeshCommandQueue;
 class MeshDevice;
 }  // namespace distributed
 
@@ -37,13 +38,25 @@ class GlobalCircularBuffer {
 public:
     explicit GlobalCircularBuffer(GlobalCircularBufferImpl impl);
 
-    // `cq_id` is the command queue used for the config write.
+    // `cq_id` is the id of the command queue used for the config write (cq 0 if not provided), looked up with
+    // `device.mesh_command_queue(cq_id)`. Prefer the overload below that takes a MeshCommandQueue&.
     GlobalCircularBuffer(
         distributed::MeshDevice& device,
         const std::vector<std::pair<CoreCoord, CoreRangeSet>>& sender_receiver_core_mapping,
         uint32_t size,
         BufferType buffer_type = BufferType::L1,
         uint8_t cq_id = 0,
+        std::optional<DeviceAddr> buffer_address = std::nullopt,
+        std::optional<DeviceAddr> config_address = std::nullopt);
+
+    // The buffer is created on `mesh_cq`'s mesh device, and the config write goes through `mesh_cq`.
+    // `buffer_address` and `config_address` must be supplied together; when set, both buffers are
+    // allocated and owned at exactly those addresses.
+    GlobalCircularBuffer(
+        distributed::MeshCommandQueue& mesh_cq,
+        const std::vector<std::pair<CoreCoord, CoreRangeSet>>& sender_receiver_core_mapping,
+        uint32_t size,
+        BufferType buffer_type = BufferType::L1,
         std::optional<DeviceAddr> buffer_address = std::nullopt,
         std::optional<DeviceAddr> config_address = std::nullopt);
 
@@ -87,7 +100,7 @@ private:
  * @param sender_receiver_core_mapping The mapping of remote sender to remote receiver cores for the circular buffer.
  * @param size Size of the global circular buffer per core in bytes.
  * @param buffer_type Buffer type to store the global circular buffer. Can only be an L1 buffer type.
- * @param cq_id Command queue used for the config write.
+ * @param cq_id Id of the command queue used for the config write (cq 0 if not provided).
  * @param buffer_address Optional exact data address. Both addresses must be supplied together.
  * @param config_address Optional exact configuration address. Fails if either range is unavailable.
  * @return The allocated global circular buffer.
@@ -98,6 +111,18 @@ GlobalCircularBuffer CreateGlobalCircularBuffer(
     uint32_t size,
     BufferType buffer_type = BufferType::L1,
     uint8_t cq_id = 0,
+    std::optional<DeviceAddr> buffer_address = std::nullopt,
+    std::optional<DeviceAddr> config_address = std::nullopt);
+
+/**
+ * @brief Same as above, but the buffer is created on `mesh_cq`'s mesh device, and the config write goes through
+ * `mesh_cq`.
+ */
+GlobalCircularBuffer CreateGlobalCircularBuffer(
+    distributed::MeshCommandQueue& mesh_cq,
+    const std::vector<std::pair<CoreCoord, CoreRangeSet>>& sender_receiver_core_mapping,
+    uint32_t size,
+    BufferType buffer_type = BufferType::L1,
     std::optional<DeviceAddr> buffer_address = std::nullopt,
     std::optional<DeviceAddr> config_address = std::nullopt);
 

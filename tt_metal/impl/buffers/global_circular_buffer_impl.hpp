@@ -30,12 +30,12 @@ namespace experimental {
 // go through GlobalCircularBuffer::impl().
 class GlobalCircularBufferImpl {
 public:
+    // The buffer is created on `mesh_cq`'s device.
     GlobalCircularBufferImpl(
-        distributed::MeshDevice& device,
+        distributed::MeshCommandQueue& mesh_cq,
         const std::vector<std::pair<CoreCoord, CoreRangeSet>>& sender_receiver_core_mapping,
         uint32_t size,
         BufferType buffer_type,
-        uint8_t cq_id = 0,
         std::optional<DeviceAddr> buffer_address = std::nullopt,
         std::optional<DeviceAddr> config_address = std::nullopt);
 
@@ -67,7 +67,7 @@ private:
     void setup_cb_buffers(
         BufferType buffer_type,
         uint32_t max_num_receivers_per_sender,
-        uint8_t cq_id,
+        distributed::MeshCommandQueue& mesh_cq,
         std::optional<DeviceAddr> buffer_address = std::nullopt,
         std::optional<DeviceAddr> config_address = std::nullopt);
 

@@ -20,9 +20,13 @@
 #include "program_device_map.hpp"          // ProgramTransferInfo
 #include "program_allocation_support.hpp"
 #include "impl/buffers/semaphore.hpp"
+#include "impl/metal2_host_api/sram_arena_support.hpp"
 #include "tt-metalium/sub_device_types.hpp"
 #include "tt-metalium/tensor/spec/tensor_spec.hpp"                               // Metal 2.0 TensorParameter registry
 #include "tt-metalium/experimental/metal2_host_api/tensor_spec_relaxations.hpp"  // Metal 2.0 TensorParameter relaxations
+#include "tt-metalium/experimental/sram_arena/sram_arena_properties.hpp"
+#include "tt-metalium/experimental/metal2_host_api/sram_arena_parameter.hpp"
+#include "tt-metalium/experimental/metal2_host_api/tensor_parameter.hpp"
 #include "tt-metalium/experimental/prefetcher_pipe.hpp"                          // PrefetcherPipeIdentity
 #include "tt_metal/impl/dataflow_buffer/dataflow_buffer_impl.hpp"
 #include <impl/context/context_types.hpp>
@@ -44,6 +48,7 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
+#include <variant>
 #include <tt_stl/span.hpp>
 
 namespace tt::tt_metal {
@@ -289,6 +294,8 @@ public:
     // Metal 2.0 only: allocate Program-scope L1 for each kernel's scratchpads,
     // and patch the base address into the CRTA buffer
     void allocate_scratchpads(const IDevice* device);
+    // Reject arena scratchpads whose storage has not been bound before execution. Mock devices are exempt.
+    void validate_scratchpad_bindings() const;
     bool is_finalized() const;
     bool is_compiled() const { return !compiled_.empty(); }
     void set_finalized();
@@ -390,8 +397,9 @@ public:
     // Per-core PrefetcherPipe slot record. A slot is reserved (geometry only) before the program
     // compiles and bound to a live pipe object afterwards: `pipe_identity` / `config_page_addr` /
     // `num_credit_lanes` stay 0 / 0 / 1 until commit_prefetcher_pipe_slot_bind copies them from the
-    // pipe for this core. The record holds values only, so dispatch never reads the pipe itself;
-    // by the time a program is enqueued every participant must be bound.
+    // core's own pipe or, on one of the slot's extra cores, the accessor group's first pipe. The record
+    // holds values only, so dispatch never reads the pipe itself; by the time a program is enqueued
+    // every participant must be bound.
     struct PrefetcherPipeParticipant {
         uint8_t prefetcher_pipe_id;
         uint32_t config_page_addr;
@@ -413,6 +421,9 @@ public:
     struct PrefetcherPipeSlot {
         CoreRangeSet cores;           // every core the slot is present on in this program
         CoreRangeSet receiver_cores;  // subset of `cores` where this slot's kernel is a pipe receiver
+        // Subset of `cores` where this slot's kernel runs but none of its pipes has a sender or receiver (the
+        // binding's extra_nodes); they take the record of the accessor group's first pipe.
+        CoreRangeSet extra_cores;
         uint32_t ring_size = 0;
         uint32_t entry_size = 0;
         // Receiver-side credit lanes P this program declares for the slot (the receiver kernel's
@@ -453,12 +464,14 @@ public:
     const PrefetcherPipeSlot& get_prefetcher_pipe_slot(uint8_t prefetcher_pipe_id) const;
 
     // Reserve a PrefetcherPipe slot from geometry alone (before compile). `receiver_cores` is the
-    // subset of `cores` on which this slot's kernel consumes; `num_credit_lanes` is the P those
+    // subset of `cores` on which this slot's kernel consumes, and `extra_cores` the subset, disjoint
+    // from it, on which no pipe of the slot has an endpoint; `num_credit_lanes` is the P those
     // receivers run with (1 when `receiver_cores` is empty). Returns the dense slot id the kernel
     // constructs its PrefetcherPipe with.
     uint8_t reserve_prefetcher_pipe_slot(
         const CoreRangeSet& cores,
         const CoreRangeSet& receiver_cores,
+        const CoreRangeSet& extra_cores,
         uint32_t ring_size,
         uint32_t entry_size,
         uint32_t num_credit_lanes);
@@ -531,8 +544,8 @@ public:
     // Metal 2.0: a PrefetcherPipeParameter's placement in this program. One parameter may feed
     // several slots (one per accessor group that names it), on the cores where that group's
     // kernel runs and the parameter's pipe is present. The spec names no sender: on a sender-role
-    // slot `cores` is every node the sender kernel runs on (one per pipe in the accessor group),
-    // and the bind claims the one that is the supplied pipe's sender.
+    // slot `cores` is every node the sender kernel runs on other than its extra nodes (one per pipe
+    // in the accessor group), and the bind claims the one that is the supplied pipe's sender.
     struct PrefetcherPipeParameterBinding {
         // Mesh the program was built for; a bound pipe must live on it (its config pages and ring
         // are L1 on that mesh).
@@ -542,6 +555,9 @@ public:
         struct SlotCores {
             uint8_t prefetcher_pipe_id;
             CoreRangeSet cores;
+            // This parameter is its accessor group's first pipe, so its bind also gives the slot's
+            // extra cores this pipe's record.
+            bool binds_extra_cores = false;
             bool sender_role = false;
         };
         std::vector<SlotCores> slots;
@@ -657,6 +673,24 @@ public:
     void register_tensor_parameter(
         const std::string& name, const TensorSpec& spec, const experimental::TensorSpecRelaxations& relaxations);
 
+    // Describes the required properties and device of an SRAMArena argument.
+    struct RegisteredSRAMArenaParameter {
+        experimental::SRAMArenaProperties properties;
+        // invariant: The device outlives the program.
+        std::reference_wrapper<const distributed::MeshDevice> device;
+    };
+
+    // Declare the required properties and device for a named allocation argument.
+    // precondition: device outlives the program.
+    // side-effect: Add the declaration to the program's runtime argument schema.
+    void register_sram_arena_parameter(
+        const std::string& name,
+        const experimental::SRAMArenaProperties& properties,
+        const distributed::MeshDevice& device);
+
+    // Return the program's SRAMArena parameter declarations.
+    const std::unordered_map<std::string, RegisteredSRAMArenaParameter>& get_sram_arena_parameters() const;
+
     // Metal 2.0: Get handle from name (TT_FATAL if not found)
     KernelHandle get_kernel_handle(const std::string& name) const;
     uint32_t get_dfb_handle(const std::string& name) const;
@@ -672,10 +706,16 @@ public:
     void set_bound_tensor_footprint(const std::string& name, const BoundTensorFootprint& footprint);
     const BoundTensorFootprint* get_bound_tensor_footprint(const std::string& name) const;
 
-    // Metal 2.0: register that DFB `dfb_id` borrows its backing L1 memory from the MeshTensor
-    // bound to `tensor_parameter_name`.
-    void register_dfb_borrowed_binding(uint32_t dfb_id, const std::string& tensor_parameter_name);
-    const std::vector<std::pair<uint32_t, std::string>>& get_dfb_borrowed_bindings() const;
+    // Identifies the tensor storage or SRAM arena allocation used by a DFB.
+    struct DFBStorageBinding {
+        uint32_t dfb_id;
+        std::variant<experimental::TensorParamName, SRAMArenaSource> source;
+    };
+
+    // Register the tensor storage or SRAM arena allocation used by a DFB.
+    void register_dfb_storage_binding(DFBStorageBinding binding);
+    // Return the program's DFB storage bindings.
+    const std::vector<DFBStorageBinding>& get_dfb_storage_bindings() const;
 
     // Metal 2.0: Get kernel by name (TT_FATAL if not found)
     std::shared_ptr<Kernel> get_kernel_by_spec_name(const std::string& name) const {
@@ -811,9 +851,9 @@ private:
             std::optional<BoundTensorFootprint> bound;
         };
         std::unordered_map<std::string, RegisteredTensorParameter> tensor_parameter_layouts;
+        std::unordered_map<std::string, RegisteredSRAMArenaParameter> sram_arena_parameters;
 
-        // Borrowed-memory DFB bindings: each entry is (dfb_id, tensor_parameter_name).
-        std::vector<std::pair<uint32_t, std::string>> dfb_borrowed_bindings;
+        std::vector<DFBStorageBinding> dfb_storage_bindings;
     };
     std::optional<Metal2NameRegistry> metal2_registry_;  // Only populated for Metal 2.0 programs
 

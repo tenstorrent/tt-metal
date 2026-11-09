@@ -34,14 +34,13 @@
 namespace tt::tt_metal::experimental {
 
 GlobalCircularBufferImpl::GlobalCircularBufferImpl(
-    distributed::MeshDevice& device,
+    distributed::MeshCommandQueue& mesh_cq,
     const std::vector<std::pair<CoreCoord, CoreRangeSet>>& sender_receiver_core_mapping,
     uint32_t size,
     BufferType buffer_type,
-    uint8_t cq_id,
     std::optional<DeviceAddr> buffer_address,
     std::optional<DeviceAddr> config_address) :
-    device_(&device), sender_receiver_core_mapping_(sender_receiver_core_mapping), size_(size) {
+    device_(mesh_cq.device()), sender_receiver_core_mapping_(sender_receiver_core_mapping), size_(size) {
     const uint32_t num_sender_cores = sender_receiver_core_mapping.size();
     TT_FATAL(num_sender_cores > 0, "At least one sender required");
     uint32_t num_receiver_cores = 0;
@@ -59,13 +58,13 @@ GlobalCircularBufferImpl::GlobalCircularBufferImpl(
     TT_FATAL(num_receiver_cores == receiver_cores_.num_cores(), "Duplicate receiver cores found");
     all_cores_ = sender_cores_.merge(receiver_cores_);
     TT_FATAL(all_cores_.num_cores() == num_sender_cores + num_receiver_cores, "Duplicate cores found");
-    this->setup_cb_buffers(buffer_type, max_num_receivers_per_sender, cq_id, buffer_address, config_address);
+    this->setup_cb_buffers(buffer_type, max_num_receivers_per_sender, mesh_cq, buffer_address, config_address);
 }
 
 void GlobalCircularBufferImpl::setup_cb_buffers(
     BufferType buffer_type,
     uint32_t max_num_receivers_per_sender,
-    uint8_t cq_id,
+    distributed::MeshCommandQueue& mesh_cq,
     std::optional<DeviceAddr> requested_buffer_address,
     std::optional<DeviceAddr> requested_config_address) {
     TT_FATAL(
@@ -174,8 +173,7 @@ void GlobalCircularBufferImpl::setup_cb_buffers(
     }
 
     // Every device gets the same config page, so one broadcast write covers the mesh.
-    distributed::EnqueueWriteMeshBuffer(
-        device_->mesh_command_queue(cq_id), cb_config_buffer_, cb_config_host_buffer, false);
+    distributed::EnqueueWriteMeshBuffer(mesh_cq, cb_config_buffer_, cb_config_host_buffer, false);
 }
 
 const Buffer& GlobalCircularBufferImpl::cb_buffer() const { return *cb_buffer_->get_reference_buffer(); }
@@ -206,8 +204,23 @@ GlobalCircularBuffer::GlobalCircularBuffer(
     uint8_t cq_id,
     std::optional<DeviceAddr> buffer_address,
     std::optional<DeviceAddr> config_address) :
+    GlobalCircularBuffer(
+        device.mesh_command_queue(cq_id),
+        sender_receiver_core_mapping,
+        size,
+        buffer_type,
+        buffer_address,
+        config_address) {}
+
+GlobalCircularBuffer::GlobalCircularBuffer(
+    distributed::MeshCommandQueue& mesh_cq,
+    const std::vector<std::pair<CoreCoord, CoreRangeSet>>& sender_receiver_core_mapping,
+    uint32_t size,
+    BufferType buffer_type,
+    std::optional<DeviceAddr> buffer_address,
+    std::optional<DeviceAddr> config_address) :
     GlobalCircularBuffer(GlobalCircularBufferImpl(
-        device, sender_receiver_core_mapping, size, buffer_type, cq_id, buffer_address, config_address)) {}
+        mesh_cq, sender_receiver_core_mapping, size, buffer_type, buffer_address, config_address)) {}
 
 GlobalCircularBuffer CreateGlobalCircularBuffer(
     distributed::MeshDevice& device,
@@ -218,7 +231,23 @@ GlobalCircularBuffer CreateGlobalCircularBuffer(
     std::optional<DeviceAddr> buffer_address,
     std::optional<DeviceAddr> config_address) {
     return GlobalCircularBuffer(
-        device, sender_receiver_core_mapping, size, buffer_type, cq_id, buffer_address, config_address);
+        device.mesh_command_queue(cq_id),
+        sender_receiver_core_mapping,
+        size,
+        buffer_type,
+        buffer_address,
+        config_address);
+}
+
+GlobalCircularBuffer CreateGlobalCircularBuffer(
+    distributed::MeshCommandQueue& mesh_cq,
+    const std::vector<std::pair<CoreCoord, CoreRangeSet>>& sender_receiver_core_mapping,
+    uint32_t size,
+    BufferType buffer_type,
+    std::optional<DeviceAddr> buffer_address,
+    std::optional<DeviceAddr> config_address) {
+    return GlobalCircularBuffer(
+        mesh_cq, sender_receiver_core_mapping, size, buffer_type, buffer_address, config_address);
 }
 
 GlobalCircularBuffer::GlobalCircularBuffer(GlobalCircularBufferImpl impl) :
@@ -265,9 +294,9 @@ void GlobalCircularBufferImpl::deallocate() {
 
 void GlobalCircularBufferImpl::acknowledge_corruptible() {
     for (const auto& buffer : {cb_buffer_, cb_config_buffer_}) {
-        const auto* backing_buffer = buffer->get_backing_buffer();
-        TT_FATAL(backing_buffer, "Cannot acknowledge a deallocated global circular buffer");
-        device_->impl().remove_unsafe_tracked_id(backing_buffer->unique_id());
+        TT_FATAL(buffer->is_allocated(), "Cannot acknowledge a deallocated global circular buffer");
+        // Both buffers are owning allocations, so the ID is always present.
+        device_->impl().remove_unsafe_tracked_id(buffer->unique_id().value());
     }
 }
 
