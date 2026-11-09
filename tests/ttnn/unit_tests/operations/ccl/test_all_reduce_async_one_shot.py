@@ -92,10 +92,12 @@ def _partials(mesh_device, tp, rows, mem, seed):
     return full, t
 
 
-def _ar(mesh_device, inp, buf, sem, mem, one_shot, residual=None):
+def _ar(mesh_device, inp, buf, sem, mem, one_shot, residual=None, live=False):
     extra = {}
     if one_shot:
         extra["one_shot"] = True
+    if live:
+        extra["live_rows_packing"] = True
     if residual is not None:
         extra["residual_tensor"] = residual
     return ttnn.experimental.all_reduce_async(
@@ -208,4 +210,121 @@ def test_all_reduce_async_one_shot_bench(mesh_device):
     logger.info(
         f"ONESHOT_VERDICT default={d:.2f} us one_shot={o:.2f} us saving={d - o:.2f} us/call "
         f"(gate >= {GATE_US:.1f} us): {verdict}"
+    )
+
+
+# ---------------------------------------------------------------------------------------------------------------------
+# one_shot + live_rows_packing (QWEN36_DECODE_AR_ONESHOT_LIVE_ROWS): <= 16 logical rows move only each tile's live half.
+#
+# test_all_reduce_async_one_shot_live_rows_correctness: rows 0..rows-1 of the live-rows one-shot output are
+# byte-identical to the default output on every device (16, 8, 4 and 1 logical rows, plain and with a fused residual),
+# padding rows are finite, a program-cache hit is identical, and a full-tile call after a live call is still identical
+# to default (no state leaks through the persistent buffer).
+# test_all_reduce_async_one_shot_live_rows_bench: traced latency of one_shot vs one_shot+live at LIVE_BENCH_ROWS (16)
+# rows, interleaved twice; logs ONESHOT_LIVE_BENCH per arm and ONESHOT_LIVE_VERDICT (GO when live saves >=
+# ONESHOT_LIVE_GATE_US = 1.5 us per call; x128 calls per verify step).
+LIVE_BENCH_ROWS = int(os.environ.get("LIVE_BENCH_ROWS", "16"))
+LIVE_GATE_US = float(os.environ.get("ONESHOT_LIVE_GATE_US", "1.5"))
+
+
+@pytest.mark.parametrize("device_params", [_device_params(8 << 20)], indirect=True)
+@pytest.mark.parametrize("mesh_device", [pytest.param((1, 8), id="1x8")], indirect=True)
+def test_all_reduce_async_one_shot_live_rows_correctness(mesh_device):
+    tp, mem, sems, buf = _setup(mesh_device)
+    n_checked = 0
+    for rows in (16, 8, 4, 1):
+        for fused in (False, True):
+            full, inp = _partials(mesh_device, tp, rows, mem, seed=rows + 100 * fused + 7)
+            residual = None
+            if fused:
+                res_t = torch.randn(1, 1, rows, DIM).to(torch.bfloat16)
+                residual = ttnn.from_torch(
+                    res_t,
+                    dtype=ttnn.bfloat16,
+                    layout=ttnn.TILE_LAYOUT,
+                    device=mesh_device,
+                    memory_config=mem,
+                    mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+                )
+            outs = {}
+            arms = (
+                ("default", False, False),
+                ("live", True, True),
+                ("live#2", True, True),
+                ("one_shot", True, False),
+            )
+            for i, (name, one_shot, live) in enumerate(arms):
+                out = _ar(mesh_device, inp, buf, sems[i % 2], mem, one_shot, residual, live)
+                ttnn.synchronize_device(mesh_device)
+                outs[name] = _per_device(out)
+                ttnn.deallocate(out)
+            for dev in range(tp):
+                d = outs["default"][dev][..., :rows, :]
+                o = outs["live"][dev][..., :rows, :]
+                o2 = outs["live#2"][dev][..., :rows, :]
+                fs = outs["one_shot"][dev][..., :rows, :]
+                assert torch.equal(o, d), (
+                    f"rows={rows} fused={fused} dev {dev}: live one_shot != default "
+                    f"(max |diff| {(o.float() - d.float()).abs().max().item():.3e})"
+                )
+                assert torch.equal(o2, o), f"rows={rows} fused={fused} dev {dev}: cached live call differs"
+                assert torch.equal(fs, d), f"rows={rows} fused={fused} dev {dev}: full one_shot after live != default"
+                assert torch.isfinite(outs["live"][dev].float()).all(), f"rows={rows} dev {dev}: non-finite padding"
+                n_checked += 1
+            logger.info(
+                f"ONESHOT_LIVE_CHECK rows={rows} fused_residual={fused}: live rows byte-identical to default on {tp} devices"
+            )
+            ttnn.deallocate(inp)
+            if residual is not None:
+                ttnn.deallocate(residual)
+    assert n_checked == 8 * tp
+
+
+@pytest.mark.parametrize("device_params", [_device_params(16 << 20)], indirect=True)
+@pytest.mark.parametrize("mesh_device", [pytest.param((1, 8), id="1x8")], indirect=True)
+def test_all_reduce_async_one_shot_live_rows_bench(mesh_device):
+    tp, mem, sems, buf = _setup(mesh_device)
+    _, inp = _partials(mesh_device, tp, LIVE_BENCH_ROWS, mem, seed=11)
+
+    def trace(live):
+        out = _ar(mesh_device, inp, buf, sems[0], mem, True, live=live)
+        ttnn.synchronize_device(mesh_device)
+        ttnn.deallocate(out)
+        tid = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+        prev = None
+        for i in range(ITERS):
+            out = _ar(mesh_device, inp, buf, sems[i % 2], mem, True, live=live)
+            if prev is not None:
+                ttnn.deallocate(prev)
+            prev = out
+        ttnn.end_trace_capture(mesh_device, tid, cq_id=0)
+        ttnn.synchronize_device(mesh_device)
+        return tid, prev
+
+    def time_trace(tid):
+        ttnn.execute_trace(mesh_device, tid, cq_id=0, blocking=True)  # warm
+        t0 = time.perf_counter()
+        for _ in range(REPLAYS):
+            ttnn.execute_trace(mesh_device, tid, cq_id=0, blocking=False)
+        ttnn.synchronize_device(mesh_device)
+        return (time.perf_counter() - t0) * 1e6 / (ITERS * REPLAYS)
+
+    traces = {name: trace(live) for name, live in (("one_shot", False), ("one_shot_live", True))}
+    results = {name: [] for name in traces}
+    for _ in range(2):
+        for name in traces:
+            us = time_trace(traces[name][0])
+            results[name].append(us)
+            logger.info(
+                f"ONESHOT_LIVE_BENCH {name}: {us:.2f} us/all-reduce ([1,1,{LIVE_BENCH_ROWS},{DIM}] bf16, RES40, 2 links, ring)"
+            )
+    for tid, last in traces.values():
+        ttnn.release_trace(mesh_device, tid)
+        ttnn.deallocate(last)
+    f = min(results["one_shot"])
+    h = min(results["one_shot_live"])
+    verdict = "GO" if f - h >= LIVE_GATE_US else "STOP"
+    logger.info(
+        f"ONESHOT_LIVE_VERDICT rows={LIVE_BENCH_ROWS} one_shot={f:.2f} us live={h:.2f} us saving={f - h:.2f} us/call "
+        f"(~{(f - h) * 128 / 1000:.2f} ms per 128-all-reduce verify; gate >= {LIVE_GATE_US:.1f} us): {verdict}"
     )

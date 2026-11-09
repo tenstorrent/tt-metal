@@ -24,6 +24,9 @@ constexpr uint32_t chunk_tiles = get_compile_time_arg_val(5);
 constexpr uint32_t in_page_size = get_compile_time_arg_val(6);
 constexpr uint32_t ring_size = get_compile_time_arg_val(7);
 constexpr uint32_t ag_ready_sem_id = get_compile_time_arg_val(8);
+// Live-rows packing: the half-tile all-gather writes only rows 0..15 (the first half of each tile page) of a gather
+// core's output shard. Zero rows 16..31 while waiting, so the padding rows are 0, not stale L1.
+constexpr bool half_tile = get_compile_time_arg_val(9) != 0;
 
 constexpr uint32_t kRoleNone = 0;
 constexpr uint32_t kRoleOwner = 2;
@@ -40,6 +43,17 @@ void kernel_main() {
         get_common_arg_val<uint32_t>(ttnn::ccl::AllReduceSemaphoreCommonArgs::semaphore));
 
     if (role != kRoleOwner) {
+        if constexpr (half_tile) {
+            const uint32_t out_base = get_write_ptr(out_cb_id);
+            constexpr uint32_t half_words = in_page_size / 2 / sizeof(uint32_t);
+            for (uint32_t t = 0; t < chunk_tiles; t++) {
+                volatile tt_l1_ptr uint32_t* p =
+                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_base + t * in_page_size + in_page_size / 2);
+                for (uint32_t w = 0; w < half_words; w++) {
+                    p[w] = 0;
+                }
+            }
+        }
         noc_semaphore_wait(sem, wait_value);
         noc_semaphore_set(sem, 0);
         return;

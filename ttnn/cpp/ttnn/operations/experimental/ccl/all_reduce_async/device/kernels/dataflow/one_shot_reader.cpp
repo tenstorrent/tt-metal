@@ -20,6 +20,11 @@ constexpr uint32_t out_page_size = get_compile_time_arg_val(3);
 constexpr uint32_t chunk_tiles = get_compile_time_arg_val(4);
 constexpr uint32_t batch_chunks = get_compile_time_arg_val(5);
 constexpr uint32_t ag_ready_sem_id = get_compile_time_arg_val(6);
+// Live-rows packing: stage only the first half (faces 0/1 = rows 0..15) of every tile, packed back to back within each
+// chunk's CB slot (chunk i of a batch still starts at i * chunk_tiles pages, so the writer's CB stepping is unchanged).
+constexpr bool half_tile = get_compile_time_arg_val(7) != 0;
+constexpr uint32_t half_in_page = in_page_size / 2;
+constexpr uint32_t half_out_page = out_page_size / 2;
 
 void kernel_main() {
     const uint32_t in_addr = get_common_arg_val<uint32_t>(0);
@@ -42,11 +47,25 @@ void kernel_main() {
                 const uint32_t xy = get_arg_val<uint32_t>(arg_idx++);
                 const uint32_t first_tile = get_arg_val<uint32_t>(arg_idx++);
                 const uint32_t tiles = get_arg_val<uint32_t>(arg_idx++);
-                noc_async_read(
-                    get_noc_addr(xy >> 16, xy & 0xFFFF, in_addr + first_tile * in_page_size),
-                    l1_write_addr,
-                    tiles * in_page_size);
-                l1_write_addr += tiles * in_page_size;
+                if constexpr (half_tile) {
+                    for (uint32_t t = 0; t < tiles; t++) {
+                        noc_async_read(
+                            get_noc_addr(xy >> 16, xy & 0xFFFF, in_addr + (first_tile + t) * in_page_size),
+                            l1_write_addr + t * half_in_page,
+                            half_in_page);
+                    }
+                    l1_write_addr += tiles * half_in_page;
+                } else {
+                    noc_async_read(
+                        get_noc_addr(xy >> 16, xy & 0xFFFF, in_addr + first_tile * in_page_size),
+                        l1_write_addr,
+                        tiles * in_page_size);
+                    l1_write_addr += tiles * in_page_size;
+                }
+            }
+            if constexpr (half_tile) {
+                // Next chunk starts at its full-size CB slot (the writer pops chunk_tiles pages per chunk).
+                l1_write_addr += chunk_tiles * half_in_page;
             }
         }
         noc_async_read_barrier();
@@ -62,7 +81,17 @@ void kernel_main() {
         uint32_t l1_write_addr = cb_ag.get_write_ptr();
         for (uint32_t j = 0; j < num_ag_chunks; j++) {
             const uint32_t xy = get_arg_val<uint32_t>(arg_idx++);
-            noc_async_read(get_noc_addr(xy >> 16, xy & 0xFFFF, out_addr), l1_write_addr, chunk_tiles * out_page_size);
+            if constexpr (half_tile) {
+                for (uint32_t t = 0; t < chunk_tiles; t++) {
+                    noc_async_read(
+                        get_noc_addr(xy >> 16, xy & 0xFFFF, out_addr + t * out_page_size),
+                        l1_write_addr + t * half_out_page,
+                        half_out_page);
+                }
+            } else {
+                noc_async_read(
+                    get_noc_addr(xy >> 16, xy & 0xFFFF, out_addr), l1_write_addr, chunk_tiles * out_page_size);
+            }
             l1_write_addr += chunk_tiles * out_page_size;
         }
         noc_async_read_barrier();

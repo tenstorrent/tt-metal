@@ -29,6 +29,41 @@ constexpr uint32_t chunk_tiles = get_compile_time_arg_val(6);
 constexpr uint32_t in_pages_per_packet = get_compile_time_arg_val(7);
 constexpr uint32_t out_pages_per_packet = get_compile_time_arg_val(8);
 constexpr uint32_t reduction_cb_id = get_compile_time_arg_val(9);
+// Live-rows packing: the reader staged only the first half (rows 0..15) of each tile, back to back per chunk. Every 4
+// half-tiles go as one 4-chunk scatter write to their 4 tiles' first halves, and each chunk ends with a header-only
+// semaphore increment (flush=true: the receiving router lands the chunk's writes before the increment).
+constexpr bool half_tile = get_compile_time_arg_val(10) != 0;
+constexpr uint32_t kHalves = NOC_SCATTER_WRITE_MAX_CHUNKS;
+static_assert(!half_tile || NOC_SCATTER_WRITE_MAX_CHUNKS == 4, "live-rows packing sends 4 half-tiles per packet");
+static_assert(!half_tile || in_page_size == out_page_size, "live-rows packing needs equal in/out page sizes");
+static_assert(!half_tile || chunk_tiles % kHalves == 0, "live-rows packing needs chunk_tiles % 4 == 0");
+constexpr uint32_t half_page = in_page_size / 2;
+
+// 4 half-tiles staged back to back at l1_read_addr -> first halves of 4 consecutive tiles at dest_base (stride page).
+FORCE_INLINE void send_half_packet(
+    tt::tt_fabric::WorkerToFabricEdmSender& connection,
+    volatile PACKET_HEADER_TYPE* pkt_hdr,
+    uint32_t l1_read_addr,
+    uint8_t noc_x,
+    uint8_t noc_y,
+    uint32_t dest_base,
+    uint32_t page) {
+    uint64_t addrs[kHalves];
+    for (uint32_t c = 0; c < kHalves; c++) {
+        addrs[c] = safe_get_noc_addr(noc_x, noc_y, dest_base + c * page, 0);
+    }
+    const uint16_t sizes[kHalves - 1] = {half_page, half_page, half_page};
+    pkt_hdr->to_noc_unicast_scatter_write(
+        tt::tt_fabric::NocUnicastScatterCommandHeader(addrs, sizes, static_cast<uint8_t>(kHalves)), kHalves * half_page);
+    perform_payload_send(connection, l1_read_addr, kHalves * half_page, pkt_hdr);
+}
+
+FORCE_INLINE void send_sem_inc(
+    tt::tt_fabric::WorkerToFabricEdmSender& connection, volatile PACKET_HEADER_TYPE* pkt_hdr, uint64_t sem_noc_addr) {
+    pkt_hdr->to_noc_unicast_atomic_inc(tt::tt_fabric::NocUnicastAtomicIncCommandHeader{sem_noc_addr, 1});
+    connection.wait_for_empty_write_slot();
+    connection.send_payload_flush_non_blocking_from_address((uint32_t)pkt_hdr, sizeof(PACKET_HEADER_TYPE));
+}
 
 FORCE_INLINE void send_chunk_packet(
     tt::tt_fabric::WorkerToFabricEdmSender& connection,
@@ -100,6 +135,18 @@ void kernel_main() {
 
         cb_rs.wait_front(chunk_tiles);
         const uint32_t l1_read_addr = cb_rs.get_read_ptr();
+        if constexpr (half_tile) {
+            for (uint32_t t = 0; t < chunk_tiles; t += kHalves) {
+                send_half_packet(
+                    connection, pkt_hdr, l1_read_addr + t * half_page, noc_x, noc_y, slot_addr + t * in_page_size,
+                    in_page_size);
+                noc_async_writes_flushed();
+            }
+            send_sem_inc(connection, pkt_hdr, sem_noc_addr);
+            noc_async_writes_flushed();
+            cb_rs.pop_front(chunk_tiles);
+            continue;
+        }
         for (uint32_t t = 0; t < chunk_tiles; t += in_pages_per_packet) {
             const uint32_t n = std::min(in_pages_per_packet, chunk_tiles - t);
             send_chunk_packet(
@@ -133,6 +180,30 @@ void kernel_main() {
             const uint8_t noc_x = xy >> 16;
             const uint8_t noc_y = xy & 0xFFFF;
             const uint64_t sem_noc_addr = safe_get_noc_addr(noc_x, noc_y, sem_addr, 0);
+            if constexpr (half_tile) {
+                for (uint32_t t = 0; t < chunk_tiles; t += kHalves) {
+                    if (fwd_range > 0) {
+                        send_half_packet(
+                            fabric_connection.get_forward_connection(), pkt_hdr_forward, l1_read_addr + t * half_page,
+                            noc_x, noc_y, out_addr + t * out_page_size, out_page_size);
+                    }
+                    if (bwd_range > 0) {
+                        send_half_packet(
+                            fabric_connection.get_backward_connection(), pkt_hdr_backward,
+                            l1_read_addr + t * half_page, noc_x, noc_y, out_addr + t * out_page_size, out_page_size);
+                    }
+                    noc_async_writes_flushed();
+                }
+                if (fwd_range > 0) {
+                    send_sem_inc(fabric_connection.get_forward_connection(), pkt_hdr_forward, sem_noc_addr);
+                }
+                if (bwd_range > 0) {
+                    send_sem_inc(fabric_connection.get_backward_connection(), pkt_hdr_backward, sem_noc_addr);
+                }
+                noc_async_writes_flushed();
+                l1_read_addr += chunk_tiles * out_page_size;
+                continue;
+            }
             for (uint32_t t = 0; t < chunk_tiles; t += out_pages_per_packet) {
                 const uint32_t n = std::min(out_pages_per_packet, chunk_tiles - t);
                 const uint64_t dest_noc_addr = safe_get_noc_addr(noc_x, noc_y, out_addr + t * out_page_size, 0);

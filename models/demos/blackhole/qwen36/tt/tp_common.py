@@ -2469,12 +2469,25 @@ DECODE_AR_FUSE_ENV = "QWEN36_DECODE_AR_FUSE_RESIDUAL"
 DECODE_AR_FUSE_LIVE_ROWS_ENV = "QWEN36_DECODE_AR_FUSE_LIVE_ROWS"
 DECODE_AR_LIVE_ROWS_ENV = "QWEN36_DECODE_AR_LIVE_ROWS"
 DECODE_AR_ONESHOT_ENV = "QWEN36_DECODE_AR_ONESHOT"
+# QWEN36_DECODE_AR_ONESHOT_LIVE_ROWS (default "0" = off): with QWEN36_DECODE_AR_ONESHOT=1, a bf16 decode all-reduce of
+# <= 16 logical rows (spec verify / drafter buckets of <= 4 users x 4 rows, plain decode at <= 16 users) also passes
+# live_rows_packing=True: the one-shot op then moves only the live half (rows 0..15) of every tile in both its
+# reduce-scatter and all-gather (one 4-half-tile scatter packet + a header-only increment per chunk), halving the
+# fabric bytes. Rows 0..15 are byte-identical to the full-tile one-shot; padding rows 16..31 of the result are 0 on
+# gather devices and stale-but-finite partial sums on the owner device (never consumed). Residual-fused all-reduces
+# take it too (the owner still reduces and adds full tiles). The persistent buffer is zero-filled at construction.
+DECODE_AR_ONESHOT_LIVE_ROWS_ENV = "QWEN36_DECODE_AR_ONESHOT_LIVE_ROWS"
 DECODE_AR_LIVE_ROWS_MAX = TILE_SIZE // 2  # rows that fit faces 0/1 of a 32x32 tile (the op's own eligibility bound)
 
 
 def decode_ar_live_rows_enabled():
     """QWEN36_DECODE_AR_LIVE_ROWS (default "0" = off): <= 16-row decode all-reduces send only each tile's live half."""
     return os.environ.get(DECODE_AR_LIVE_ROWS_ENV, "0") == "1"
+
+
+def decode_ar_oneshot_live_rows_enabled():
+    """QWEN36_DECODE_AR_ONESHOT_LIVE_ROWS (default "0" = off): one-shot <= 16-row all-reduces move only live halves."""
+    return os.environ.get(DECODE_AR_ONESHOT_LIVE_ROWS_ENV, "0") == "1"
 
 
 _DAR_GRID = (10, 4)  # RES40 core grid (x, y)
@@ -2600,6 +2613,8 @@ class DecodeResidualAllReduce:
     # QWEN36_DECODE_AR_ONESHOT, set per instance in __init__; the class default keeps instances built without
     # __init__ (host-test fakes) on the default all-reduce.
     one_shot = False
+    # QWEN36_DECODE_AR_ONESHOT_LIVE_ROWS, likewise (fakes built without __init__ keep full tiles).
+    oneshot_live_rows = False
 
     def __init__(
         self,
@@ -2611,6 +2626,7 @@ class DecodeResidualAllReduce:
         live_rows=False,
         fuse_live_rows=False,
         one_shot=False,
+        oneshot_live_rows=False,
     ):
         self.mesh = mesh_device
         self.tt_ccl = tt_ccl
@@ -2642,6 +2658,8 @@ class DecodeResidualAllReduce:
         if self.one_shot and ncores % self.tp:
             logger.warning(f"{DECODE_AR_ONESHOT_ENV}=1 ignored: tp={self.tp} does not divide the {ncores} RES40 cores")
             self.one_shot = False
+        # QWEN36_DECODE_AR_ONESHOT_LIVE_ROWS: only meaningful on the one-shot path.
+        self.oneshot_live_rows = bool(self.one_shot and oneshot_live_rows)
         grid = ttnn.CoreRangeSet(
             {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(_DAR_GRID[0] - 1, _DAR_GRID[1] - 1))}
         )
@@ -2668,7 +2686,7 @@ class DecodeResidualAllReduce:
         buf_mem = width_mem(self.dim * self.tp // ncores)
 
         def alloc(dtype):
-            if self.live_rows:
+            if self.live_rows or self.oneshot_live_rows:
                 # Live-rows packing never rewrites rows 16..31 of the remote slots: start them at zero, not at whatever
                 # an uninitialised L1 buffer holds, so the reduction's padding rows stay finite.
                 return ttnn.from_torch(
@@ -2805,6 +2823,8 @@ class DecodeResidualAllReduce:
             extra["residual_tensor"] = residual
         if self.one_shot and dtype == ttnn.bfloat16:
             extra["one_shot"] = True
+            if self.oneshot_live_rows and self.live_rows_eligible(packed):
+                extra["live_rows_packing"] = True
         elif self.live_rows and self.live_rows_eligible(packed) and (residual is None or self.fuse_live_rows):
             extra["live_rows_packing"] = True
         out = ttnn.experimental.all_reduce_async(
@@ -2872,12 +2892,14 @@ def get_decode_allreduce(args, tt_ccl):
                 live_rows=decode_ar_live_rows_enabled(),
                 fuse_live_rows=os.environ.get(DECODE_AR_FUSE_LIVE_ROWS_ENV, "0") == "1",
                 one_shot=os.environ.get(DECODE_AR_ONESHOT_ENV, "0") == "1",
+                oneshot_live_rows=decode_ar_oneshot_live_rows_enabled(),
             )
             logger.info(
                 f"{DECODE_AR_ENV}=1: decode uses the replicated 40-core L1 residual + all_reduce_async "
                 f"(gdn_fp32={inst.gdn_fp32}, fuse_residual={inst.fuse_residual}, num_links={inst.num_links}, "
                 f"topology={inst.topology}, live_rows={inst.live_rows})"
                 + (f" one_shot={inst.one_shot}" if inst.one_shot else "")
+                + (" oneshot_live_rows=True" if inst.oneshot_live_rows else "")
             )
     tt_ccl._qwen36_decode_ar = inst
     return inst

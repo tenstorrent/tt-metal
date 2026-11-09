@@ -227,6 +227,39 @@ tt::tt_metal::ProgramDescriptor create_one_shot_descriptor(
         in_page_size,
         out_page_size);
 
+    // Live-rows packing in one-shot mode (live_rows_packing together with one_shot): with <= 16 logical rows in the
+    // single 32-row tile row, every live row sits in faces 0/1 = the first half of each bf16 tile page. The reduce-
+    // scatter and all-gather then move only those halves: one 4-chunk scatter write of 4 half-tiles per packet
+    // followed by a header-only semaphore increment (flush=true orders it after the data), halving the fabric
+    // bytes of both phases. Remote slots' rows 16..31 keep what they held (the caller zero-fills the persistent
+    // buffer once); the owners reduce full tiles as before, so rows 0..15 are byte-identical to the full-tile op.
+    // Gather-role cores zero rows 16..31 of their output shard (never written by the half-tile all-gather) while
+    // they wait, so padding rows are 0 instead of stale L1. Any other shape keeps the full-tile one-shot path.
+    constexpr uint32_t kOneShotHalvesPerPacket = 4;  // == NOC_SCATTER_WRITE_MAX_CHUNKS (static_assert in the writer)
+    bool half_tile = false;
+    if (operation_attributes.live_rows_packing) {
+        const auto& input_logical_shape = input_tensor.logical_shape();
+        const auto& input_padded_shape = input_tensor.padded_shape();
+        const auto& input_tile = input_tensor.tensor_spec().tile();
+        const uint64_t padded_rows = input_padded_shape.volume() / input_padded_shape[-1];
+        const uint64_t logical_rows = input_logical_shape.volume() / input_logical_shape[-1];
+        half_tile = input_tensor.dtype() == DataType::BFLOAT16 && operation_attributes.dtype == DataType::BFLOAT16 &&
+                    input_tile.get_height() == TILE_HEIGHT && input_tile.get_width() == TILE_WIDTH &&
+                    input_tile.get_face_shape()[0] == FACE_HEIGHT && input_tile.get_face_shape()[1] == FACE_WIDTH &&
+                    !input_tile.get_transpose_within_face() && !input_tile.get_transpose_of_faces() &&
+                    in_shard_spec.shape[0] == TILE_HEIGHT && padded_rows == TILE_HEIGHT &&
+                    logical_rows <= FACE_HEIGHT && in_page_size == out_page_size && in_page_size % 2 == 0 &&
+                    chunk_tiles % kOneShotHalvesPerPacket == 0 &&
+                    kOneShotHalvesPerPacket * (in_page_size / 2) <= packet_size_bytes;
+        log_debug(
+            tt::LogOp,
+            "all_reduce_async one_shot live_rows_packing: logical_rows={} padded_rows={} chunk_tiles={} -> half_tile={}",
+            logical_rows,
+            padded_rows,
+            chunk_tiles,
+            half_tile);
+    }
+
     // Sender workers: the default path's placement (one per link, outside the output cores' bounding boxes).
     auto sub_device_cores = mesh_device->worker_cores(
         tt::tt_metal::HalProgrammableCoreType::TENSIX,
@@ -436,6 +469,7 @@ tt::tt_metal::ProgramDescriptor create_one_shot_descriptor(
         in_page_size,
         ring_size,
         ag_ready_sem_id,
+        static_cast<uint32_t>(half_tile),
     };
     receiver_desc.config = tt::tt_metal::DataMovementConfigDescriptor{
         .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
@@ -481,6 +515,7 @@ tt::tt_metal::ProgramDescriptor create_one_shot_descriptor(
         chunk_tiles,
         kOneShotRsBatchChunks,
         ag_ready_sem_id,
+        static_cast<uint32_t>(half_tile),
     };
     reader_desc.config = tt::tt_metal::DataMovementConfigDescriptor{
         .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
@@ -506,6 +541,7 @@ tt::tt_metal::ProgramDescriptor create_one_shot_descriptor(
         in_pages_per_packet,
         out_pages_per_packet,
         reduction_cb_index,
+        static_cast<uint32_t>(half_tile),
     };
     writer_desc.config = tt::tt_metal::DataMovementConfigDescriptor{
         .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
