@@ -394,8 +394,6 @@ struct DFBAdvancedOptions {
     //    allow_instance_multi_binding apply on the nodes that have a DFB instance.
     //  - Placement is fixed for the Program lifetime. DFBRunOverrides can still change
     //    entry_size and num_entries.
-    //  - Kernel placement, device configuration, and slot reuse still follow the bound
-    //    kernels' nodes.
     std::optional<NodeRangeSet> override_placement = std::nullopt;
 };
 
@@ -438,13 +436,6 @@ struct ScratchpadAdvancedOptions {
     //
     // Invariants:
     //  - The override is a non-empty subset of the bound kernels' nodes (equality is allowed).
-    //
-    // Notes:
-    //  - The overridden nodes need not be contiguous.
-    //  - allow_instance_multi_binding and its architecture restrictions apply on the nodes
-    //    that have a scratchpad instance; bindings on excluded nodes may overlap.
-    //  - Placement is fixed for the Program lifetime. size_per_node and kernel placement
-    //    are unchanged.
     std::optional<NodeRangeSet> override_placement = std::nullopt;
 
     ////////////////////////////////////////////////////////////////////////////////
