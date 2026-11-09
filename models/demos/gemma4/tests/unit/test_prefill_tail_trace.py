@@ -53,9 +53,12 @@ def _prefill(generator, kv, tokens, page_table, prompt_lens, *, enable_trace, sa
     return (out.squeeze(1) if out.dim() == 3 else out).float()
 
 
+@pytest.mark.gemma4_prefill_trace  # loads the checkpoint: skipped under a config-only HF_MODEL (tests/conftest.py)
 @parametrize_mesh_with_fabric(mesh_shapes=[(1, 4)])
 def test_prefill_tail_in_trace_bit_exact(mesh_device, device_params, reset_seeds):
-    """Traced prefill, tail outside vs inside the capture: identical host logits and sampler tokens; eager parity."""
+    """Traced prefill, tail outside vs inside the capture: identical host logits and sampler tokens; eager parity.
+    Then the retained tail-in-trace capture of each bucket replays prompts whose last token sits in another tile
+    (the generator rewrites the persistent tile bounds before every replay) and still matches the eager prefill."""
     hf_config = TestFactory.create_hf_config()
     if int(getattr(hf_config, "hidden_size_per_layer_input", 0) or 0) > 0:
         pytest.skip("PLI models disable prefill trace")
@@ -117,6 +120,33 @@ def test_prefill_tail_in_trace_bit_exact(mesh_device, device_params, reset_seeds
         if off_tokens is not None:
             assert torch.equal(off_tokens, on_tokens), f"sampler tokens {off_tokens.tolist()} vs {on_tokens.tolist()}"
             assert int(on_tokens[0]) == int(on_logits.argmax(-1)[0]), "the device sampler's greedy token != argmax"
+        # The tail-in-trace capture is still live (no release): replay it for prompts whose last token lands in
+        # other tiles of the bucket (first tile, a middle tile, and the capture's tile again at another row); every
+        # replay must slice the tile the generator wrote for that request, not the capture-time one.
+        assert generator.trace_id_prefill.get(prefill_len) is not None or any(
+            v is not None for v in generator.trace_id_prefill.values()
+        ), "the tail-in-trace capture should be retained for the replays below"
+        for prompt_len in (1, prefill_len // 2 + 5, prefill_len - 30):
+            tokens = torch.zeros(1, prefill_len, dtype=torch.int32)
+            tokens[0, :prompt_len] = torch.randint(10, hf_config.vocab_size - 10, (prompt_len,), generator=gen)
+            prompt_lens = torch.tensor([prompt_len], dtype=torch.long)
+            eager_pl = _prefill(generator, fresh_kv(), tokens, page_table, prompt_lens, enable_trace=False)
+            traced_pl = _prefill(generator, fresh_kv(), tokens, page_table, prompt_lens, enable_trace=True)
+            passing, pcc = compare_tensors(traced_pl, eager_pl, pcc_threshold=0.99)
+            logger.info(
+                f"prefill_len={prefill_len} prompt_len={prompt_len} (tile {((prompt_len - 1) // 32) * 32}): replayed tail vs eager PCC {pcc}"
+            )
+            assert passing, f"prompt_len={prompt_len}: replayed tail vs eager {pcc}"
+            assert int(traced_pl.argmax(-1)[0]) == int(
+                eager_pl.argmax(-1)[0]
+            ), f"prompt_len={prompt_len}: the replayed tail's argmax differs from the eager prefill's"
+            if models[0].sampling is not None:
+                tokens_pl = _prefill(
+                    generator, fresh_kv(), tokens, page_table, prompt_lens, enable_trace=True, sampling=greedy
+                )
+                assert int(tokens_pl[0]) == int(
+                    eager_pl.argmax(-1)[0]
+                ), f"prompt_len={prompt_len}: the replayed sampler token != the eager argmax"
     _release_prefill_traces(generator)
 
 
