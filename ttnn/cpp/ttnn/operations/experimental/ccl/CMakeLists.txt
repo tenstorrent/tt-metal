@@ -29,6 +29,8 @@ file(
     reduce_scatter_minimal_async/device/kernels/*.cpp
     reduce_scatter_minimal_direct/device/kernels/*.cpp
     matmul_reduce_scatter_prefill/device/kernels/*.cpp
+    all_gather_minimal_matmul_async/device/tuned/kernels/*.cpp
+    all_gather_minimal_matmul_async/device/tuned/kernels/*.hpp
     matmul_reduce_scatter_prefill/device/kernels/*.hpp
     ring_attention_all_gather_async/device/kernels/*.cpp
     ring_attention_all_gather_async/device/kernels/*.hpp

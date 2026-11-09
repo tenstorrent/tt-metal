@@ -59,6 +59,8 @@ set(TTNN_OP_EXPERIMENTAL_CCL_SRCS
     reduce_scatter_minimal_async/device/reduce_scatter_minimal_async_program.cpp
     reduce_scatter_minimal_direct/reduce_scatter_minimal_direct.cpp
     matmul_reduce_scatter_prefill/matmul_reduce_scatter_prefill.cpp
+    all_gather_minimal_matmul_async/device/tuned/agmm_tuned_device_operation.cpp
+    all_gather_minimal_matmul_async/device/tuned/agmm_tuned_program_factory.cpp
     matmul_reduce_scatter_prefill/device/matmul_reduce_scatter_prefill_device_operation.cpp
     matmul_reduce_scatter_prefill/device/matmul_reduce_scatter_prefill_planner.cpp
     matmul_reduce_scatter_prefill/device/matmul_reduce_scatter_prefill_program_factory.cpp
@@ -138,6 +140,8 @@ set(TTNN_OP_EXPERIMENTAL_CCL_API_HEADERS
     reduce_scatter_minimal_direct/device/reduce_scatter_minimal_direct_factory.hpp
     reduce_scatter_minimal_direct/reduce_scatter_minimal_direct.hpp
     matmul_reduce_scatter_prefill/matmul_reduce_scatter_prefill.hpp
+    all_gather_minimal_matmul_async/device/tuned/agmm_tuned_device_operation.hpp
+    all_gather_minimal_matmul_async/device/tuned/agmm_tuned_device_operation_types.hpp
     matmul_reduce_scatter_prefill/device/matmul_reduce_scatter_prefill_device_operation.hpp
     matmul_reduce_scatter_prefill/device/matmul_reduce_scatter_prefill_device_operation_types.hpp
     matmul_reduce_scatter_prefill/device/matmul_reduce_scatter_prefill_planner.hpp

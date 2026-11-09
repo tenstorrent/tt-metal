@@ -18,6 +18,8 @@
 //   IN1_DRAM_WIDTH_SHARDED    -- in1 is read bank-by-bank from DRAM using tensor::in1's base address
 //   IN1_DRAM_HEIGHT_SHARDED   -- ditto, one complete [K, N] matrix per bank
 //   SPARSITY                  -- the sparsity operand (dfb::sparsity + tensor::sparsity) is bound
+//   IN1_K_SLICE_ORDER         -- in0 is all-gathered inside the program (IN0_TP_GATHER on the in0 sender): the K
+//                                blocks run slice by slice in gather_slice_order, and in1's K rows follow them.
 //   IN1_MCAST_CHUNKS=<n>      -- (interleaved, multicast in1 only) each K-block is read, published and
 //                                multicast in n column chunks, one in1_mcast piecewise round per K-block;
 //                                receivers and compute must get the same n
@@ -47,6 +49,10 @@
 
 #include <stdint.h>
 
+#ifdef IN1_K_SLICE_ORDER
+#include "api/scratchpad.h"
+#include "ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_minimal_matmul_async/device/tuned/kernels/agmm_tuned_table.hpp"
+#endif
 #include "api/dataflow/dataflow_api.h"
 #include "api/debug/assert.h"
 #include "hostdevcommon/common_values.hpp"
@@ -102,6 +108,24 @@ void kernel_main() {
 #endif
     // in1 tensor args
     uint32_t in1_tensor_start_tile_id = get_arg(args::in1_tensor_start_tile_id);
+#ifdef IN1_K_SLICE_ORDER
+    constexpr uint32_t in1_gather_slices = get_arg(args::gather_slices);
+    uint32_t in1_gather_order[in1_gather_slices];
+    {
+        // This device's rank: row 0 of agmm_tuned's per-device table.
+        Scratchpad<volatile uint32_t> row(scratch::gather_row);
+        const Noc table_noc;
+        table_noc.async_read(
+            TensorAccessor(tensor::gather_table),
+            row,
+            4 * agmm_tuned_table::kTableRowWords,
+            {.page_id = 0},
+            {.offset_bytes = 0});
+        table_noc.async_read_barrier();
+        agmm_tuned_table::slice_order(
+            row[agmm_tuned_table::kRank], in1_gather_slices, in1_gather_order);
+    }
+#endif
 
     // WRITER
     // out tensor args
@@ -454,6 +478,17 @@ void kernel_main() {
 #ifndef IN1_SHARDED
                         uint64_t in1_start_address = 0;
 #endif
+#ifdef IN1_K_SLICE_ORDER
+                        {
+                            // in0 is all-gathered inside the program (IN0_TP_GATHER on the in0 sender): the K blocks
+                            // run slice by slice in its order, and in1's K rows follow.
+                            constexpr uint32_t blocks_per_slice = get_arg(args::gather_blocks_per_slice);
+                            const uint32_t slice = in1_gather_order[block / blocks_per_slice];
+                            in1_tensor_current_inner_dim_block_start_tile_id =
+                                in1_tensor_current_w_dim_block_tile_id +
+                                (slice * blocks_per_slice + block % blocks_per_slice) * in1_tensor_next_block_stride;
+                        }
+#endif  // IN1_K_SLICE_ORDER
 #ifdef FUSE_OP_ALL_GATHER
                         fused_op_receiver.update_current_block_start_tile_id(
                             block, in1_tensor_current_inner_dim_block_start_tile_id, in1_batch_tile_id);

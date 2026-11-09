@@ -161,6 +161,18 @@ void bind_all_gather_minimal_matmul_async(nb::module_& mod) {
         num_buffers_per_channel : Optional[int], default: 1
             The number of buffers per channel for the mux cores used for all gather.
 
+        matmul_program_config : Optional[ttnn.MatmulMultiCoreReuseMultiCastProgramConfig], default: None
+            Tuned Blackhole Fabric2D path. With a 2D multicast schedule the TP all-gather of the input runs inside that
+            matmul's program, on the worker column right of its grid, and the matmul starts on this device's own K
+            slice while the others arrive. Needs cluster_axis, persistent_output_buffer (the gathered [M, K] buffer),
+            barrier_semaphore (the gather's ready semaphore), ranks - 1 slice counters in
+            multi_device_global_semaphore and gather_table; config, bias, addcmul, activation, SwiGLU, chunks and FSDP
+            do not apply.
+
+        gather_table : Optional[ttnn.Tensor], default: None
+            Tuned path only: each device's rows from all_gather_minimal_matmul_async_gather_table, so one program
+            serves the mesh.
+
         Returns
         -------
         std::vector<ttnn.Tensor>
@@ -253,7 +265,25 @@ void bind_all_gather_minimal_matmul_async(nb::module_& mod) {
             nb::arg("fsdp_topology") = nb::none(),
             nb::arg("fuse_swiglu") = false,
             nb::arg("chunk_sizes") = std::vector<uint32_t>{},
-            nb::arg("transpose_core_grid") = nb::none()});
+            nb::arg("transpose_core_grid") = nb::none(),
+            nb::arg("matmul_program_config") = nb::none(),
+            nb::arg("gather_table") = nb::none()});
+
+    mod.def(
+        "all_gather_minimal_matmul_async_gather_table",
+        &ttnn::all_gather_minimal_matmul_async_gather_table,
+        nb::arg("mesh_device"),
+        nb::kw_only(),
+        nb::arg("cluster_axis"),
+        nb::arg("num_links"),
+        nb::arg("matmul_grid"),
+        nb::arg("slice_counters"),
+        R"doc(
+        Each device's gather_table rows for all_gather_minimal_matmul_async's tuned path (a list of uint32 lists,
+        devices in row-major mesh order, 64 words a row): its rank, and its gather senders' destinations and fabric
+        connections. Upload them as a per-device [1, 1, rows, 64] UINT32 row-major DRAM tensor and pass it to every
+        call; matmul_grid is the schedule's compute grid and slice_counters the ranks - 1 counters passed to the op.
+        )doc");
 }
 
 }  // namespace ttnn::operations::experimental::ccl
