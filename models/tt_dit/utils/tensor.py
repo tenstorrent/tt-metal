@@ -511,6 +511,7 @@ def float_to_uint8(t: ttnn.Tensor) -> ttnn.Tensor:
     t = ttnn.to_layout(t, ttnn.TILE_LAYOUT)
     t = ttnn.add(t, 1.0)  # shift to [0, 2.0]
     t = ttnn.multiply(t, 0.5 * 255.0)  # scale to [0, 1.0] then [0, 255]
+    t = ttnn.add(t, 0.5)  # round to nearest integer before truncation
     t = ttnn.clamp(t, min=0.0, max=255.0)
     t = ttnn.to_layout(t, ttnn.ROW_MAJOR_LAYOUT)
     return ttnn.typecast(t, ttnn.uint8)
