@@ -256,8 +256,7 @@ class TPAttention:
                 x,
                 tw["wqkv_fused"],
                 self.tt_ccl,
-                # QWEN36_ATTN_QKV_LOFI=1: LoFi for the prefill qkv AGMM (as QWEN36_GDN_IN_LOFI for the GDN in-proj)
-                tpc.COMPUTE_LOFI if os.environ.get("QWEN36_ATTN_QKV_LOFI", "0") == "1" else self.compute_cfg,
+                tpc.COMPUTE_LOFI if getattr(self.args, "prefill_attn_qkv_lofi", False) else self.compute_cfg,
                 self.args.ccl_topology(),
                 persistent_output_buffer=tpc.agmm_gather_buffer(self.tt_ccl, x, act_bf8=_bf8),
                 act_bf8=_bf8,
@@ -1305,7 +1304,7 @@ class TPAttention:
             for o in outs:
                 ttnn.deallocate(o)
         attn = self._concat_heads(attn)
-        _gkw = {"dtype": ttnn.bfloat8_b} if return_gated and os.environ.get("QWEN36_TOKPAR_A2A_BF8", "0") == "1" else {}
+        _gkw = {"dtype": ttnn.bfloat8_b} if return_gated and getattr(self.args, "prefill_tokpar_a2a_bf8", False) else {}
         gated = ttnn.multiply(attn, ttnn.sigmoid(gate_flat, memory_config=_mc), memory_config=_mc, **_gkw)
         ttnn.deallocate(attn)
         ttnn.deallocate(gate_flat)

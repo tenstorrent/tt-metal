@@ -281,12 +281,7 @@ PREFILL_L1_MAX_SEQ = 2048
 
 def prefill_act_mem(seq_len, l1_cfg=ttnn.L1_MEMORY_CONFIG):
     """Placement of a prefill activation whose size scales with S: `l1_cfg` up to PREFILL_L1_MAX_SEQ rows, else DRAM."""
-    # QWEN36_PREFILL_ACT_L1_MAX: this placement threshold alone (not the matmul blocking, which keeps PREFILL_L1_MAX_SEQ)
-    return (
-        l1_cfg
-        if seq_len <= int(os.environ.get("QWEN36_PREFILL_ACT_L1_MAX", PREFILL_L1_MAX_SEQ))
-        else ttnn.DRAM_MEMORY_CONFIG
-    )
+    return l1_cfg if seq_len <= PREFILL_L1_MAX_SEQ else ttnn.DRAM_MEMORY_CONFIG
 
 
 def is_2d_mesh(mesh):
@@ -782,12 +777,13 @@ def fused_norm_resources(tt_ccl, x, weight, num_links, cluster_axis=1):
     return pairs[idx]
 
 
-def fused_distributed_rmsnorm(x, weight, eps, tt_ccl, topology, compute_cfg, memory_config, cluster_axis=1):
+def fused_distributed_rmsnorm(x, weight, eps, tt_ccl, topology, compute_cfg, memory_config, cluster_axis=1, dtype=None):
     """Prefill distributed RMSNorm as ONE op (stats partial sums + fabric all-gather + normalize) replacing
     rms_norm_pre_all_gather / all_gather_async / rms_norm_post_all_gather.
 
     x: hidden-fractured [1,1,S,dim/tp] bf16 TILE; weight: TILE [1,1,dim] (1+gamma) sharded on dim 2 -> [1,1,dim/tp] per
-    chip. Output dtype/placement match the 3-op path: x's dtype, `memory_config`. compute_cfg needs fp32_dest_acc_en."""
+    chip. Output dtype/placement match the 3-op path: x's dtype (or `dtype`), `memory_config`. compute_cfg needs
+    fp32_dest_acc_en."""
     sems, stats = fused_norm_resources(tt_ccl, x, weight, FUSED_NORM_LINKS, cluster_axis)
     return ttnn.experimental.dit_fused_distributed_rmsnorm(
         x,
@@ -797,8 +793,7 @@ def fused_distributed_rmsnorm(x, weight, eps, tt_ccl, topology, compute_cfg, mem
         topology=topology,
         epsilon=eps,
         weight=weight,
-        # QWEN36_FUSED_NORM_BF8=1: emit bf8 (every prefill consumer -- the bf8 AGMM / all-gather -- casts to it anyway)
-        dtype=ttnn.bfloat8_b if os.environ.get("QWEN36_FUSED_NORM_BF8", "0") == "1" else x.dtype,
+        dtype=x.dtype if dtype is None else dtype,
         persistent_output_buffer=stats,
         num_preferred_links=FUSED_NORM_LINKS,
         memory_config=memory_config,

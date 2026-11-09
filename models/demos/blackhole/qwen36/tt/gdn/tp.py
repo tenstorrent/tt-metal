@@ -544,8 +544,8 @@ class TPGatedDeltaNet:
         self.K = args.gdn_conv_kernel_size
         self.scale = self.Dk**-0.5
         self.cfg = tpc.COMPUTE_HIFI2
-        # QWEN36_GDN_IN_LOFI=1: LoFi for the prefill in-projection AGMM (bf8 weights, fp32 accumulation)
-        self.cfg_prefill_in = tpc.COMPUTE_LOFI if os.environ.get("QWEN36_GDN_IN_LOFI", "0") == "1" else self.cfg
+        # args.prefill_gdn_in_lofi: LoFi for the prefill in-projection AGMM (bf8 weights, fp32 accumulation)
+        self.cfg_prefill_in = tpc.COMPUTE_LOFI if getattr(args, "prefill_gdn_in_lofi", False) else self.cfg
         # In-proj decode matmul only (prefill keeps self.cfg = HiFi2)
         self.cfg_in = tpc.COMPUTE_LOFI if tpc.bfp4_gdn_in_enabled() else self.cfg
         # Must match load_gdn_weights_tp gates
@@ -2210,14 +2210,14 @@ class TPGatedDeltaNet:
             return_gated
             and o_head_major
             and B == 1
-            and os.environ.get("QWEN36_GDN_SGNORM", "0") == "1"
+            and getattr(self.args, "prefill_gdn_sgnorm", False)
             and "norm_w_1d" in tw
             and z.dtype == ttnn.bfloat16
         ):
-            # QWEN36_GDN_SGNORM=1 (token-parallel out-proj tail): ONE kda op does the per-head RMSNorm, the
+            # args.prefill_gdn_sgnorm (token-parallel out-proj tail): ONE kda op does the per-head RMSNorm, the
             # head->token relayout and norm * w * sigmoid(z); one multiply by z completes norm * w * silu(z)
             # (replaces rms_norm + nlp_concat_heads + silu + multiply).
-            _gdt = ttnn.bfloat8_b if os.environ.get("QWEN36_TOKPAR_A2A_BF8", "0") == "1" else ttnn.bfloat16
+            _gdt = ttnn.bfloat8_b if getattr(self.args, "prefill_tokpar_a2a_bf8", False) else ttnn.bfloat16
             z3 = ttnn.reshape(z, (1, M, self.value_dim_tp))
             o3 = ttnn.reshape(o, (Nv, M, Dv)) if len(o.shape) != 3 else o
             _gmc = ttnn.DRAM_MEMORY_CONFIG
@@ -2252,7 +2252,7 @@ class TPGatedDeltaNet:
             ttnn.deallocate(out_n)
         if return_gated:
             # token-parallel out-proj (layer.forward_tokpar): the caller all-to-alls the gated [1, M, value_dim_tp]
-            _gdt = ttnn.bfloat8_b if os.environ.get("QWEN36_TOKPAR_A2A_BF8", "0") == "1" else ttnn.bfloat16
+            _gdt = ttnn.bfloat8_b if getattr(self.args, "prefill_tokpar_a2a_bf8", False) else ttnn.bfloat16
             gated = _silu_mul(out_f, z, ttnn.DRAM_MEMORY_CONFIG, dtype=_gdt)
             ttnn.deallocate(out_f)
             ttnn.deallocate(z)
@@ -2262,8 +2262,8 @@ class TPGatedDeltaNet:
             # only numerics change vs the fp32 MMRS arm: activation quantized to bf16 before the
             # matmul, as every other projection in the model already does).
             _bf8 = getattr(self.args, "prefill_agmm_bf8", False)
-            # QWEN36_GDN_GATED_BF8=1 (with the bf8 AGMM): the gate multiply emits the bf8 the gather sends (no cast op)
-            _gdt = ttnn.bfloat8_b if (_bf8 and os.environ.get("QWEN36_GDN_GATED_BF8", "0") == "1") else ttnn.bfloat16
+            # args.prefill_gdn_gated_bf8 (with the bf8 AGMM): the gate multiply emits the bf8 the gather sends (no cast)
+            _gdt = ttnn.bfloat8_b if (_bf8 and getattr(self.args, "prefill_gdn_gated_bf8", False)) else ttnn.bfloat16
             gated = _silu_mul(out_f, z, _L1, dtype=_gdt)
             ttnn.deallocate(out_f)
             ttnn.deallocate(z)
@@ -2419,9 +2419,9 @@ class TPGatedDeltaNet:
         assert M == Bg * Tb, (M, Bg, Tb)
 
         # Projection is per token: run it over all M rows, then split the user dim back out (DRAM outputs).
-        # QWEN36_GDN_PROJ_L1=1: the in-proj output and its qkv / a / b slices in L1 (z stays DRAM: _project_qkvzab)
+        # args.prefill_gdn_proj_l1: the in-proj output and its qkv / a / b slices in L1 (z stays DRAM: _project_qkvzab)
         qkv_f, z, a, b = self._project_qkvzab(
-            x, M, out_mc=ttnn.L1_MEMORY_CONFIG if os.environ.get("QWEN36_GDN_PROJ_L1", "0") == "1" else None
+            x, M, out_mc=ttnn.L1_MEMORY_CONFIG if getattr(self.args, "prefill_gdn_proj_l1", False) else None
         )
         qkv = ttnn.reshape(qkv_f, (Bg, Tb, C))
         # init (resumed rows): {"rec": [Bg,Nv,Dk,Dv] fp32 initial state, "pad": [Bg,32,C] conv-history block}
@@ -2438,10 +2438,10 @@ class TPGatedDeltaNet:
                 self._kda_actual_start,
                 emit_state=False,
             )
-            # QWEN36_GDN_CONVSEL_TAIL=W (rows, a tile multiple): the selected rows valid_len-3..valid_len-1 are known to
+            # args.prefill_gdn_convsel_tail = W (rows, a tile multiple): the selected rows valid_len-3..valid_len-1 are known to
             # lie in the bucket's last W rows (the caller guarantees valid_len - 3 >= Tb - W): select from those
             # rows only instead of a [3, Tb] x [Tb, C] one-hot matmul over the whole bucket (bit-identical).
-            _w = int(os.environ.get("QWEN36_GDN_CONVSEL_TAIL", "0"))
+            _w = int(getattr(self.args, "prefill_gdn_convsel_tail", 0))
             if 0 < _w < Tb:
                 _q = ttnn.slice(qkv, (0, Tb - _w, 0), (1, Tb, qkv.shape[-1]), memory_config=ttnn.DRAM_MEMORY_CONFIG)
                 _s = ttnn.slice(

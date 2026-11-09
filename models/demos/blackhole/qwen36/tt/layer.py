@@ -6,8 +6,6 @@ Dispatches to either Gated DeltaNet (linear attention) or Gated Full Attention
 based on the layer index. Both share the same RMSNorm + residual pattern and MLP.
 """
 
-import os
-
 import ttnn
 from models.common.rmsnorm import RMSNorm
 from models.demos.blackhole.qwen36.tt import tp_common as tpc
@@ -21,29 +19,6 @@ from models.tt_transformers.tt.common import Mode
 def pg_batched_attn(pg):
     """Grouped prefill attention batched over the rows: the group carries the rows' rope tables back to back."""
     return pg.get("cos_cat") is not None
-
-
-def tokpar_enabled():
-    """QWEN36_TOKPAR=1: token-parallel residual stream for TP prefill (forward_tokpar)."""
-    import os
-
-    return os.environ.get("QWEN36_TOKPAR", "0") == "1"
-
-
-def tokpar_out_enabled():
-    """QWEN36_TOKPAR_OUT=1 (with QWEN36_TOKPAR=1): the mixer out-projection (GDN out_proj / attention o_proj) also runs
-    token-parallel with the full weight: the gated pre-projection activation is all-to-all'ed instead of the AGMM /
-    matmul + reduce-scatter."""
-    import os
-
-    return os.environ.get("QWEN36_TOKPAR_OUT", "0") == "1"
-
-
-def tokpar_a2a_bf8():
-    """QWEN36_TOKPAR_A2A_BF8=1: the two mixer all-to-alls of forward_tokpar carry bf8 (their consumers cast to bf8)."""
-    import os
-
-    return os.environ.get("QWEN36_TOKPAR_A2A_BF8", "0") == "1"
 
 
 def tokpar_a2a(x, to_tokens):
@@ -118,6 +93,7 @@ class _FusedDistRMSNorm(RMSNorm):
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
+        self.out_dtype = None  # None = the input dtype; the layer sets bf8 under args.prefill_fused_norm_bf8
         # The fused op wants gamma TILE [1,1,dim] sharded on dim 2 (weight_distributed is ROW_MAJOR [1,1,dim/32,32]).
         dim, device, cache = kwargs["dim"], kwargs["device"], kwargs.get("weight_cache_path")
         name = f"{kwargs['state_dict_prefix']}{kwargs['weight_key']}.weight"
@@ -146,7 +122,14 @@ class _FusedDistRMSNorm(RMSNorm):
         shape = tuple(inp.shape)
         x = inp if len(shape) == 4 else ttnn.reshape(inp, (1,) * (4 - len(shape)) + shape)  # the op needs rank 4
         out = tpc.fused_distributed_rmsnorm(
-            x, self.weight_fused, epsilon, self.tt_ccl, self.ccl_topology, compute_kernel_config, mc
+            x,
+            self.weight_fused,
+            epsilon,
+            self.tt_ccl,
+            self.ccl_topology,
+            compute_kernel_config,
+            mc,
+            dtype=self.out_dtype,
         )
         return out if len(shape) == 4 else ttnn.reshape(out, shape)
 
@@ -261,12 +244,12 @@ class Qwen36DecoderLayer:
             )
         else:
             self.feed_forward = Qwen36MLP(mesh_device, mlp_state, mlp_cache, args=args, tt_ccl=tt_ccl)
-        # QWEN36_TOKPAR=1 (prefill, TP meshes, dense MLP): token-parallel residual stream. Full MLP weights replicated on
+        # args.prefill_tokpar (prefill, TP meshes, dense MLP): token-parallel residual stream. Full MLP weights replicated on
         # every chip; see forward_tokpar.
         self._tokpar = None
-        if tokpar_enabled() and self.num_devices > 1 and not args.is_moe_layer(layer_num):
+        if getattr(args, "prefill_tokpar", False) and self.num_devices > 1 and not args.is_moe_layer(layer_num):
             self._tokpar = _load_tokpar_mlp(mesh_device, mlp_state, mlp_cache)
-            if tokpar_out_enabled():
+            if getattr(args, "prefill_tokpar_out", False):
                 key = "self_attn.o_proj.weight" if self.is_full_attention else "linear_attn.out_proj.weight"
                 self._tokpar["wo"] = ttnn.as_tensor(
                     state_dict[f"layers.{layer_num}.{key}"],
@@ -319,6 +302,8 @@ class Qwen36DecoderLayer:
                 else {}
             ),
         )
+        if fused and getattr(args, "prefill_fused_norm_bf8", False):
+            norm.out_dtype = ttnn.bfloat8_b  # every prefill consumer (the bf8 AGMM / all-gather) casts to bf8 anyway
         if self.num_devices > 1:
             from models.tt_transformers.tt.distributed_norm import DistributedNorm
 
@@ -330,15 +315,13 @@ class Qwen36DecoderLayer:
     def _tokpar_norm(self, x, norm, dtype=None):
         """Local rms_norm of this chip's [1,1,S/tp,dim] rows -> DRAM interleaved (dtype: optional output dtype, e.g.
         bf8 for the consumers that cast anyway). The interleaved norm parallelizes over tile rows only (21 cores at
-        S/tp=672); QWEN36_TOKPAR_NORM_SHARD=1 block-shards the rows over gy x 8 cores (gy = the largest divisor of the
+        S/tp=672); args.prefill_tokpar_norm_shard block-shards the rows over gy x 8 cores (gy = the largest divisor of the
         tile rows <= 10, >= 3), norms there and writes back interleaved in `dtype` (one op for the cast)."""
-        import os
-
         M, D = int(x.shape[-2]), int(x.shape[-1])
         mt, dt_ = M // 32, D // 32
         gy = max((d for d in range(1, 11) if mt % d == 0), default=1)
         gx = 8
-        if os.environ.get("QWEN36_TOKPAR_NORM_SHARD", "0") == "1" and gy >= 3 and dt_ % gx == 0:
+        if getattr(self.args, "prefill_tokpar_norm_shard", False) and gy >= 3 and dt_ % gx == 0:
             key = (M, D, gy, gx)
             cache = self.__dict__.setdefault("_tokpar_norm_cfg", {})
             if key not in cache:
@@ -389,8 +372,6 @@ class Qwen36DecoderLayer:
 
     def _tokpar_mlp(self, x):
         """Token-parallel SwiGLU MLP on this chip's [1,1,S/tp,dim] rows with the full weights (no CCL)."""
-        import os
-
         w = self._tokpar
         M, K = x.shape[-2], x.shape[-1]
         F = w["w1"].shape[-1]
@@ -403,13 +384,13 @@ class Qwen36DecoderLayer:
         x8 = x
         if x.dtype != ttnn.bfloat8_b:
             x8 = ttnn.typecast(x, ttnn.bfloat8_b, memory_config=dram)
-        # QWEN36_TOKPAR_MLP_L1=1: gate / up / hidden in L1 (interleaved); QWEN36_TOKPAR_SILU_MUL=1: SiLU applied by the
+        # prefill_tokpar_mlp_l1: gate / up / hidden in L1 (interleaved); prefill_tokpar_silu_mul: SiLU applied by the
         # multiply (input activation) instead of the gate matmul's packer
-        act_mc = ttnn.L1_MEMORY_CONFIG if os.environ.get("QWEN36_TOKPAR_MLP_L1", "0") == "1" else dram
-        silu_mul = os.environ.get("QWEN36_TOKPAR_SILU_MUL", "0") == "1"
-        # QWEN36_TOKPAR_MLP_CFG2=1 (session 5 sweep, mb_mlp5.py): gate/up with bf16 dest accumulation and 1x8 subblocks,
+        act_mc = ttnn.L1_MEMORY_CONFIG if getattr(self.args, "prefill_tokpar_mlp_l1", False) else dram
+        silu_mul = getattr(self.args, "prefill_tokpar_silu_mul", False)
+        # prefill_tokpar_mlp_cfg2: gate/up with bf16 dest accumulation and 1x8 subblocks,
         # down with in0_block_w 16 / 3x1 subblocks, bf16 dest (263 vs 267-273 us and 242 vs ~258 us at M=672)
-        cfg2 = os.environ.get("QWEN36_TOKPAR_MLP_CFG2", "0") == "1"
+        cfg2 = getattr(self.args, "prefill_tokpar_mlp_cfg2", False)
         if cfg2:
             ck = ttnn.WormholeComputeKernelConfig(
                 math_fidelity=ck.math_fidelity, fp32_dest_acc_en=False, packer_l1_acc=True
@@ -460,7 +441,7 @@ class Qwen36DecoderLayer:
         return out
 
     def forward_tokpar(self, x, prefill_group, chunk_size=128):
-        """Grouped TP prefill with a TOKEN-parallel residual stream (QWEN36_TOKPAR=1).
+        """Grouped TP prefill with a TOKEN-parallel residual stream (args.prefill_tokpar).
 
         x: [1,1,S/tp,dim] this chip's rows of the group's S = Bg*Tb rows (chip d owns rows [d*S/tp, (d+1)*S/tp)).
         The mixer (GDN / full attention) runs unchanged, head-parallel: its K-sharded input is the local norm output
@@ -468,7 +449,7 @@ class Qwen36DecoderLayer:
         distributed-norm CCL); the MLP is token-parallel with the full weights (no all-gather / reduce-scatter)."""
         pg = prefill_group
         out_tp = "wo" in self._tokpar
-        a2a_bf8 = tokpar_a2a_bf8()
+        a2a_bf8 = getattr(self.args, "prefill_tokpar_a2a_bf8", False)
         # a2a_bf8: the in-proj AGMM gathers bf8 anyway (QWEN36_AGMM_BF8): the norm emits bf8 before the all-to-all
         xn = self._tokpar_norm(x, self.attention_norm, dtype=ttnn.bfloat8_b if a2a_bf8 else None)
         xh = tokpar_a2a(xn, to_tokens=False)
@@ -519,15 +500,15 @@ class Qwen36DecoderLayer:
                 a8,
                 self._tokpar["wo"],
                 compute_kernel_config=(
-                    tpc.COMPUTE_LOFI if os.environ.get("QWEN36_TOKPAR_OUT_LOFI", "0") == "1" else tpc.COMPUTE_HIFI2
+                    tpc.COMPUTE_LOFI if getattr(self.args, "prefill_tokpar_out_lofi", False) else tpc.COMPUTE_HIFI2
                 ),
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 program_config=_tokpar_pc(M, K, self._tokpar["wo"].shape[-1], _TOKPAR_BW),
             )
             ttnn.deallocate(a8)
-        # QWEN36_TOKPAR_RES_L1=1: the [S/tp, dim] residual stream lives in L1 (interleaved, ~46 KB/core at S/tp=672)
+        # prefill_tokpar_res_l1: the [S/tp, dim] residual stream lives in L1 (interleaved, ~46 KB/core at S/tp=672)
         res_mc = (
-            ttnn.L1_MEMORY_CONFIG if os.environ.get("QWEN36_TOKPAR_RES_L1", "0") == "1" else ttnn.DRAM_MEMORY_CONFIG
+            ttnn.L1_MEMORY_CONFIG if getattr(self.args, "prefill_tokpar_res_l1", False) else ttnn.DRAM_MEMORY_CONFIG
         )
         h = ttnn.add(x, at, memory_config=res_mc)
         ttnn.deallocate(at)

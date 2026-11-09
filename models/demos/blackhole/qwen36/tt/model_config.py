@@ -159,7 +159,38 @@ class Qwen36ModelArgs(ModelArgs):
         self.prefill_rs_bf8 = False
         # prefill projections at S <= this use all-gather + 1D matmul instead of the fused all-gather-matmul (which has a
         # ~100 µs floor at short S); 0 = off
-        self.prefill_small_m_max = int(os.environ.get("QWEN36_PREFILL_SMALL_M_MAX", "0"))
+        self.prefill_small_m_max = 0
+        # Prefill options measured for a dense dim-4096 checkpoint on one (1, 4) column (Qwen3.5-9B / the FLUX.3 Klein
+        # prompt upsampler); all off here, set_column_prefill_profile() turns on the measured set.
+        # prefill_tokpar: token-parallel residual stream + MLP (Qwen36DecoderLayer.forward_tokpar; full MLP weights on
+        # every chip); _out: the mixer out-projection token-parallel too (full wo); _a2a_bf8: its all-to-alls carry bf8;
+        # _norm_shard: block-sharded local rms_norm; _silu_mul: SiLU on the multiply input; _mlp_cfg2: bf16-dest gate/up
+        # with 1x8 subblocks, down in0_block_w 16; _mlp_l1 / _res_l1: MLP activations / residual stream in L1;
+        # _out_lofi: LoFi token-parallel out-projection.
+        self.prefill_tokpar = False
+        self.prefill_tokpar_out = False
+        self.prefill_tokpar_a2a_bf8 = False
+        self.prefill_tokpar_norm_shard = False
+        self.prefill_tokpar_silu_mul = False
+        self.prefill_tokpar_mlp_cfg2 = False
+        self.prefill_tokpar_mlp_l1 = False
+        self.prefill_tokpar_res_l1 = False
+        self.prefill_tokpar_out_lofi = False
+        # LoFi prefill in-projections (GDN qkvzab AGMM / attention qkv AGMM); GDN out tail as one sigmoid_gated_rms_norm;
+        # GDN gate multiply and fused distributed norm emit bf8; GDN in-proj outputs in L1; MLP packer L1 accumulation.
+        self.prefill_gdn_in_lofi = False
+        self.prefill_attn_qkv_lofi = False
+        self.prefill_gdn_sgnorm = False
+        self.prefill_gdn_gated_bf8 = False
+        self.prefill_fused_norm_bf8 = False
+        self.prefill_gdn_proj_l1 = False
+        self.prefill_mlp_l1acc = False
+        # grouped prefill: the GDN conv-state select reads only the bucket's last W rows (the caller guarantees every
+        # row's valid_len - 3 >= Tb - W); 0 = the whole bucket
+        self.prefill_gdn_convsel_tail = 0
+        # grouped prefill runs token-parallel only from this many group rows (Bg * Tb) up: below it the all-to-alls cost
+        # more than the CCLs they remove (t2i 128 x 8: 8.75 vs 8.42 ms per request)
+        self.prefill_tokpar_min_rows = 1536
         # cap (channels) for the GDN prefill conv's channel_chunk_size (gdn/tp.py kda_channel_chunk_size); smaller chunks
         # spread work over more cores (bit-exact)
         self.kda_conv_chunk_cap = 512
@@ -431,6 +462,76 @@ class Qwen36ModelArgs(ModelArgs):
         if layer_idx in self.mlp_only_layers:
             return False
         return (layer_idx + 1) % self.moe_decoder_sparse_step == 0
+
+    # Prefill AGMM launch configs of the column profile: (grid_x, grid_y, workers/link, M_block, N_block) per call site,
+    # for S >= 2048 rows and per S (the 128- / 384- / 1152-row buckets) below it; missing = the team default.
+    _COLUMN_AGMM_LARGE = {
+        "*": (12, 9, 6, None, None),
+        "gdn_in": (12, 9, 6, 4, 12),
+        "attn_qkv": (12, 9, 6, 4, 12),
+        "mlp_gateup": (12, 9, 6, 8, 12),
+    }
+    _COLUMN_AGMM_SMALL = {
+        "mlp_gateup@128": (12, 9, 6, 1, 8),
+        "mlp_gateup@384": (12, 9, 6, 1, 8),
+        "mlp_gateup": (12, 9, 6, 4, 12),
+        "gdn_in@128": (8, 9, 6, 4, 8),
+        "gdn_in@384": (12, 9, 6, 2, 8),
+        "gdn_in": (12, 9, 6, 8, 12),
+        "attn_qkv@128": (12, 9, 6, 2, 16),
+        "attn_qkv@384": (12, 9, 6, 1, 12),
+        "attn_qkv": (12, 9, 6, 8, 12),
+        "gdn_out@1152": (12, 9, 6, 4, 16),
+    }
+    _COLUMN_AGMM_LARGE_MIN_S = 2048
+
+    def set_column_prefill_profile(self):
+        """Prefill settings measured for a dense dim-4096 checkpoint (Qwen3.5-9B / the FLUX.3 Klein prompt upsampler) on
+        one (1, 4) Blackhole column: token-parallel residual stream, LoFi projections and MLP, bf8 CCLs, L1 placement,
+        per-site AGMM launch configs. Call after construction, before the layers are built. Logits stay top-1 = HF on
+        the upsampler's request set (pcc >= 0.997 vs HF)."""
+        assert (
+            self.moe_num_experts <= 0 and self.dim == 4096 and self.cluster_shape[0] == 1
+        ), "dense dim-4096, (1, N) mesh"
+        self.prefill_fused_dist_norm = True
+        self.prefill_agmm_bf8 = True
+        import ttnn
+
+        self.mlp_math_fidelity = ttnn.MathFidelity.LoFi
+        self.prefill_small_m_max = 128
+        self.prefill_sdpa_config_fn = lambda S: (128, 128, True)
+        for name in (
+            "tokpar",
+            "tokpar_out",
+            "tokpar_a2a_bf8",
+            "tokpar_norm_shard",
+            "tokpar_silu_mul",
+            "tokpar_mlp_cfg2",
+            "tokpar_mlp_l1",
+            "tokpar_res_l1",
+            "tokpar_out_lofi",
+            "gdn_in_lofi",
+            "attn_qkv_lofi",
+            "gdn_sgnorm",
+            "gdn_gated_bf8",
+            "fused_norm_bf8",
+            "gdn_proj_l1",
+            "mlp_l1acc",
+        ):
+            setattr(self, f"prefill_{name}", True)
+        self.prefill_gdn_convsel_tail = 160  # covers the 128-token buckets
+        self.prefill_agmm_config_fn = self._column_agmm_config
+
+    def _column_agmm_config(self, S, name):
+        table = self._COLUMN_AGMM_LARGE if S >= self._COLUMN_AGMM_LARGE_MIN_S else self._COLUMN_AGMM_SMALL
+        for key in (f"{name}@{S}", name, "*"):
+            if key in table:
+                gx, gy, workers, mb, nb = table[key]
+                cfg = {"grid_x": gx, "grid_y": gy, "num_workers_per_link": workers}
+                if mb is not None:
+                    cfg.update(M_block=mb, N_block=nb)
+                return cfg
+        return None
 
     def is_distributed_norm(self, mode):
         """Force the distributed-norm path for multi-device MoE prefill.
