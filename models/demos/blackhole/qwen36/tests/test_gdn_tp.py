@@ -4,7 +4,8 @@
 Run:
     MESH_DEVICE=P150x4 HF_MODEL=Qwen/Qwen3.6-27B \
       pytest models/demos/blackhole/qwen36/tests/test_gdn_tp.py -v -s
-The prefill conv-path tests at the end (test_conv_paths_*, test_kda_*) use random data and need no checkpoint.
+The prefill conv-path tests at the end (test_conv_paths_*, test_kda_*) and test_gdn_gate_* use random data and need no
+checkpoint.
 """
 import os
 
@@ -29,6 +30,8 @@ from models.demos.blackhole.qwen36.tests.test_factory import (
 )
 from models.demos.blackhole.qwen36.tt.gdn.tp import (
     TPGatedDeltaNet,
+    _gdn_gate,
+    gdn_gate_constants,
     kda_channel_chunk_size,
     kda_conv_prefill,
     load_gdn_weights_tp,
@@ -1267,3 +1270,40 @@ def test_kda_channel_chunk_size(channels, expected):
 def test_kda_channel_chunk_size_rejects_unaligned(expect_error):
     with expect_error(ValueError, "no tile-aligned channel chunk divides 100"):
         kda_channel_chunk_size(100)
+
+
+@torch.no_grad()
+@parametrize_mesh_tp()
+@pytest.mark.parametrize("a_dtype", [ttnn.bfloat16, ttnn.float32], ids=["a_bf16", "a_fp32"])
+@pytest.mark.parametrize("out_dtype", [ttnn.float32, ttnn.bfloat16], ids=["g_fp32", "g_bf16"])
+def test_gdn_gate_matches_fp32_reference(mesh_device, a_dtype, out_dtype, reset_seeds, ensure_gc):
+    """Decay gate g = -exp(A_log) * softplus(a + dt_bias) vs torch fp32, with a + dt_bias in [-12, 8].
+
+    A bf16 softplus returns 0 for x < -5, so g = 0 there (no decay). Random data, no checkpoint."""
+    mesh = mesh_device
+    tp = mesh.get_num_devices()
+    T, nv_per = 64, 32
+    Nv = nv_per * tp
+    A_log = torch.empty(Nv).uniform_(-2.0, 2.0)
+    dt_bias = torch.empty(Nv).uniform_(-4.0, 2.0)
+    a = (torch.linspace(-8.0, 6.0, T)[:, None] + 0.1 * torch.randn(T, Nv)).reshape(1, T, Nv)
+    a_dev = a.to(torch.bfloat16).float() if a_dtype == ttnn.bfloat16 else a
+    x = a_dev + dt_bias
+    ref = -torch.exp(A_log) * F.softplus(x)
+    assert (x < -5).float().mean() > 0.2, "test inputs must cover the x < -5 tail"
+
+    tw = gdn_gate_constants(dt_bias, A_log, mesh)
+    a_tt = shard_to_device(mesh, a, dim=-1, dtype=a_dtype)
+    g = _gdn_gate(tw, a_tt, dtype=out_dtype)
+    assert g.dtype == out_dtype
+    g4 = ttnn.reshape(g, (1, 1, T, nv_per))
+    got = ttnn.to_torch(g4, mesh_composer=tp_composer(mesh)).float().reshape(1, T, Nv)
+    for t in (g4, a_tt, *tw.values()):
+        ttnn.deallocate(t)
+
+    tail = x < -5
+    assert (got[tail] != 0).all(), f"g == 0 on {(got[tail] == 0).sum().item()} of {tail.sum().item()} x < -5 entries"
+    rtol = 2e-2 if out_dtype == ttnn.bfloat16 else 1e-2
+    rel = ((got - ref).abs() / ref.abs().clamp_min(1e-30)).max().item()
+    logger.info(f"gate max rel err {rel:.3e} (tp={tp}, a {a_dtype}, g {out_dtype})")
+    assert rel < rtol, f"gate max rel err {rel:.3e} >= {rtol}"

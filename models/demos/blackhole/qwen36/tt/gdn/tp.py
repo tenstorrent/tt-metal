@@ -31,9 +31,42 @@ def _replace(old, new):
     return new
 
 
-def _softplus_add(a, bias):
-    """g-gate: softplus(a + bias) fused into one op (softplus as a post-activation on the add)."""
-    return ttnn.add(a, bias, activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.SOFTPLUS, 1.0, 20.0)])
+def _gdn_gate(tw, a, memory_config=None, dtype=ttnn.float32):
+    """Decay gate g = -exp(A_log) * softplus(a + dt_bias), computed in fp32.
+
+    softplus must run on fp32 input: the bf16 SFPU softplus returns 0 for x < -5, which removes the
+    decay on every (token, value head) with a + dt_bias < -5 (30-45% of them in Qwen3.5-9B).
+    dtype: output dtype (the decode paths keep the dtype of ``a``)."""
+    mc = {} if memory_config is None else {"memory_config": memory_config}
+    a32 = a if a.dtype == ttnn.float32 else ttnn.typecast(a, ttnn.float32, **mc)
+    x = ttnn.add(a32, tw["dt_bias"], **mc)
+    if a32 is not a:
+        ttnn.deallocate(a32)
+    g = ttnn.multiply(
+        tw["neg_exp_A"],
+        x,
+        input_tensor_b_activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.SOFTPLUS, 1.0, 20.0)],
+        dtype=dtype,
+        **mc,
+    )
+    ttnn.deallocate(x)
+    return g
+
+
+def gdn_gate_constants(dt_bias, A_log, mesh, cache_path=None):
+    """fp32 dt_bias and -exp(A_log) [1, 1, Nv], sharded over the TP axis, for ``_gdn_gate``."""
+    out = {}
+    for key, val in (("dt_bias", dt_bias.float()), ("neg_exp_A", -torch.exp(A_log.float()))):
+        out[key] = ttnn.as_tensor(
+            val.reshape(1, 1, -1),
+            dtype=ttnn.float32,
+            device=mesh,
+            mesh_mapper=tpc.tp_shard_mapper(mesh, -1),
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            cache_file_name=cache_path(key + "_f32") if cache_path is not None else None,
+        )
+    return out
 
 
 def _silu_mul(x, z, memory_config, dtype=None):
@@ -319,9 +352,7 @@ def load_gdn_weights_tp(mesh, sd, args, cache_dir=None):
             dtype=ttnn.bfloat8_b,
         )
     # Per-head params
-    tw["dt_bias"] = tpc.shard_small(sd[P + "dt_bias"].float(), mesh, c("dt_bias"))
-    A_log = tpc.shard_small(sd[P + "A_log"].float(), mesh, c("A_log"))
-    tw["neg_exp_A"] = ttnn.neg(ttnn.exp(A_log))
+    tw.update(gdn_gate_constants(sd[P + "dt_bias"], sd[P + "A_log"], mesh, c))
     tw["norm_w"] = tpc.replicate(sd[P + "norm.weight"].float(), mesh, c("norm_w"))
     # Conv taps (4), sharded per Q/K/V head grouping
     taps = tpc.prepare_conv_taps(conv1d_w, key_dim, nk, dk, nv, dv, args.gdn_conv_kernel_size, tp)
@@ -858,7 +889,7 @@ class TPGatedDeltaNet:
         # GQA late-expand: adapter L2-norms at Nk, expands to Nv after
         beta = ttnn.reshape(ttnn.sigmoid(b), (1, T, Nv))
         ttnn.deallocate(b)
-        g = ttnn.reshape(ttnn.multiply(tw["neg_exp_A"], _softplus_add(a, tw["dt_bias"])), (1, T, Nv))
+        g = ttnn.reshape(_gdn_gate(tw, a), (1, T, Nv))
         ttnn.deallocate(a)
 
         _init_state = self.rec_state if carry else (None if return_state else self._zero_rec_f32)
@@ -1348,7 +1379,7 @@ class TPGatedDeltaNet:
 
         beta = ttnn.reshape(ttnn.sigmoid(b), (B, T, Nv))
         ttnn.deallocate(b)
-        g = ttnn.reshape(ttnn.multiply(tw["neg_exp_A"], _softplus_add(a, tw["dt_bias"])), (B, T, Nv))
+        g = ttnn.reshape(_gdn_gate(tw, a), (B, T, Nv))
         ttnn.deallocate(a)
 
         # Chunk-parallel recurrence over the BH = B*Nv batch (each row an independent scan). Fused
@@ -1505,7 +1536,7 @@ class TPGatedDeltaNet:
 
         beta = ttnn.reshape(ttnn.sigmoid(b, memory_config=_L1), (B, 1, Nv))
         ttnn.deallocate(b)
-        g = ttnn.multiply(tw["neg_exp_A"], _softplus_add(a, tw["dt_bias"]), memory_config=_L1)
+        g = _gdn_gate(tw, a, memory_config=_L1, dtype=a.dtype)
         ttnn.deallocate(a)
         g = ttnn.reshape(g, (B, 1, Nv))
 
@@ -1944,7 +1975,7 @@ class TPGatedDeltaNet:
         b_new = self._rows_to_users(b_all, B, T, Nv)
         beta_all = ttnn.sigmoid(b_new, memory_config=_L1)
         ttnn.deallocate(b_new)
-        g_all = ttnn.multiply(tw["neg_exp_A"], _softplus_add(a_new, tw["dt_bias"]), memory_config=_L1)
+        g_all = _gdn_gate(tw, a_new, memory_config=_L1, dtype=a_new.dtype)
         ttnn.deallocate(a_new)
         return q_all, k_all, v_all, beta_all, g_all
 
