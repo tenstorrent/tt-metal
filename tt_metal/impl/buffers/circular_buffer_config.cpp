@@ -85,6 +85,10 @@ CircularBufferConfig::CircularBufferConfig(const CBDescriptor& descriptor) : tot
 
     auto process_format_descriptor = [this](const CBFormatDescriptor& format_descriptor) {
         validate_buffer_index_capacity(format_descriptor.buffer_index, this->data_formats_.size());
+        TT_FATAL(
+            format_descriptor.page_size > 0,
+            "Circular buffer page size must be greater than 0 for buffer index {}",
+            format_descriptor.buffer_index);
         this->data_formats_[format_descriptor.buffer_index] = format_descriptor.data_format;
         if (this->total_size_ % format_descriptor.page_size != 0) {
             TT_THROW(
@@ -159,6 +163,7 @@ CircularBufferConfig& CircularBufferConfig::set_page_size(uint8_t buffer_index, 
             "during config creation",
             buffer_index);
     }
+    TT_FATAL(page_size > 0, "Circular buffer page size must be greater than 0 for buffer index {}", buffer_index);
     if (this->total_size_ % page_size != 0) {
         TT_THROW(
             "Failed allocation attempt on buffer index {}. Total circular buffer size {} B must be divisible by page "
