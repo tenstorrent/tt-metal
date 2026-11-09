@@ -129,6 +129,7 @@ import uuid
 from collections import OrderedDict, deque
 from dataclasses import dataclass
 from email.parser import BytesHeaderParser
+from pathlib import Path
 from types import SimpleNamespace
 from urllib.parse import parse_qs, unquote, urlparse
 
