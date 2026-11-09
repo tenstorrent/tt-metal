@@ -6,6 +6,7 @@
 * The per-ratio page-table groups (64-row blocks, no ring) and their shared pool sizes.
 * Blocks come out ascending, so a fresh session's prompt is one contiguous run of ``comp_kv`` blocks.
 * The step packet names the session's slot: ring row, page-table row and window row.
+* A session started from another's prefix shares its blocks, counted per session, and never writes them.
 
 Run::
 
@@ -82,6 +83,70 @@ def test_fresh_session_blocks_are_contiguous() -> None:
         used = g.compressed_blocks_for(prompt - 1)
         assert row[:used] == list(range(1, used + 1)), f"{name}: blocks not one ascending run"
         assert all(b == ZERO_BLOCK for b in row[used:])
+
+
+def test_attached_prefix_shares_blocks_until_both_release_them() -> None:
+    groups = _groups()
+    paged = PagedKVManager(groups, plan_pool_blocks(groups, 2, 2 * MAX_SEQ))
+    free = {name: pool.free_blocks for name, pool in paged.pools.items()}
+    donor, sharer = paged.open_session(), paged.open_session()
+    paged.ensure_capacity(donor, 4096 - 1)
+    prefix = 2048
+    paged.attach(sharer, donor, prefix)
+    for name, g in groups.items():
+        shared = prefix // g.compress_rate // BLOCK
+        donor_row, sharer_row = paged.page_row(donor, name)[0].tolist(), paged.page_row(sharer, name)[0].tolist()
+        assert sharer_row[:shared] == donor_row[:shared]
+        assert all(b == ZERO_BLOCK for b in sharer_row[shared:])
+        assert paged.block_refs(sharer, name)[:shared] == [2] * shared
+        assert paged.block_refs(donor, name)[shared : g.compressed_blocks_for(4096 - 1)] == [1] * (
+            g.compressed_blocks_for(4096 - 1) - shared
+        )
+    # The sharer grows into blocks of its own, past the shared ones.
+    paged.ensure_capacity(sharer, 3000)
+    for name, g in groups.items():
+        row = paged.page_row(sharer, name)[0].tolist()
+        own = row[prefix // g.compress_rate // BLOCK : g.compressed_blocks_for(3000)]
+        assert own and all(paged.pools[name].refs(b) == 1 for b in own)
+    paged.reset_session(donor)
+    for name, g in groups.items():
+        assert paged.block_refs(sharer, name)[: prefix // g.compress_rate // BLOCK] == [1] * (
+            prefix // g.compress_rate // BLOCK
+        ), "the donor's reset must leave the sharer its prefix"
+    paged.reset_session(sharer)
+    assert {name: pool.free_blocks for name, pool in paged.pools.items()} == free
+
+
+def test_attach_refuses_what_it_cannot_share(expect_error) -> None:
+    groups = _groups()
+    paged = PagedKVManager(groups, plan_pool_blocks(groups, 3, 3 * MAX_SEQ))
+    donor, sharer, other = paged.open_session(), paged.open_session(), paged.open_session()
+    paged.ensure_capacity(donor, 1024 - 1)
+    with expect_error(ValueError, "not a whole number of blocks"):
+        paged.attach(sharer, donor, 64)  # one ratio-1 block, half a ratio-2 one
+    with expect_error(ValueError, "holds no"):
+        paged.attach(sharer, donor, 4096)
+    paged.ensure_capacity(other, 0)
+    with expect_error(ValueError, "already holds"):
+        paged.attach(other, donor, 128)
+    assert all(b == ZERO_BLOCK for name in groups for b in paged.page_row(sharer, name)[0].tolist())
+
+
+def test_truncate_keeps_shared_blocks_whole(expect_error) -> None:
+    groups = _groups()
+    paged = PagedKVManager(groups, plan_pool_blocks(groups, 2, 2 * MAX_SEQ))
+    donor, sharer = paged.open_session(), paged.open_session()
+    paged.ensure_capacity(donor, 2048 - 1)
+    paged.attach(sharer, donor, 1024)
+    with expect_error(ValueError, "part-way through a shared block"):
+        paged.truncate_session(sharer, 1000)
+    paged.truncate_session(sharer, 512)
+    for name, g in groups.items():
+        kept = 512 // g.compress_rate // BLOCK
+        assert paged.block_refs(sharer, name)[:kept] == [2] * kept
+        assert paged.block_refs(donor, name)[kept : 1024 // g.compress_rate // BLOCK] == [1] * (
+            1024 // g.compress_rate // BLOCK - kept
+        )
 
 
 @pytest.mark.parametrize("slot, pos", [(0, 5), (3, 1000)])

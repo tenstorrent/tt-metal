@@ -251,7 +251,8 @@ class PagedLayerView:
 
 
 class _BlockPool:
-    """Free-list allocator over physical block ids ``[1, num_blocks)``."""
+    """Free-list allocator over physical block ids ``[1, num_blocks)``, each allocated block
+    counting the session rows that map it (:meth:`share` adds one, :meth:`free` drops one)."""
 
     def __init__(self, num_blocks: int):
         """``num_blocks`` counts ``ZERO_BLOCK`` too; a pool needs at least one allocatable
@@ -261,6 +262,7 @@ class _BlockPool:
         self.num_blocks = num_blocks
         # Popped from the end, so a fresh pool hands out ascending, contiguous ids.
         self._free = list(range(num_blocks - 1, 0, -1))
+        self._refs: dict[int, int] = {}
 
     @property
     def free_blocks(self) -> int:
@@ -273,12 +275,32 @@ class _BlockPool:
         :class:`PagedCacheFull` when fewer than ``n`` are free."""
         if n > len(self._free):
             raise PagedCacheFull(f"need {n} blocks, {len(self._free)} free of {self.num_blocks - 1}")
-        return [self._free.pop() for _ in range(n)]
+        ids = [self._free.pop() for _ in range(n)]
+        for block in ids:
+            self._refs[block] = 1
+        return ids
+
+    def share(self, ids) -> None:
+        """Count one more row mapping each allocated block in ``ids``."""
+        if any(block not in self._refs for block in ids):
+            raise ValueError(f"sharing blocks that are not allocated: {[b for b in ids if b not in self._refs]}")
+        for block in ids:
+            self._refs[block] += 1
+
+    def refs(self, block: int) -> int:
+        """How many rows map ``block`` (0 for a free block or ``ZERO_BLOCK``)."""
+        return self._refs.get(block, 0)
 
     def free(self, ids) -> None:
-        """Return the physical block ids in ``ids`` to the free list. ``ZERO_BLOCK`` is never
-        passed -- callers filter it out -- so block 0 never becomes allocatable."""
-        self._free.extend(ids)
+        """Drop one row's mapping of each block in ``ids``, returning to the free list those no
+        row maps any more. ``ZERO_BLOCK`` is never passed -- callers filter it out -- so block 0
+        never becomes allocatable."""
+        for block in ids:
+            refs = self._refs.pop(block) - 1
+            if refs:
+                self._refs[block] = refs
+            else:
+                self._free.append(block)
 
 
 @dataclass
@@ -359,13 +381,52 @@ class PagedKVManager:
     def truncate_session(self, sid: int, pos: int) -> None:
         """Rewind a session to position ``pos``: keep the compressed blocks holding the entries of
         positions ``< pos`` and release the rest (back to ``ZERO_BLOCK``). ``pos == 0`` is
-        :meth:`reset_session`."""
+        :meth:`reset_session`.
+
+        Raises ``ValueError`` when ``pos`` ends part-way through a block the session shares
+        (:meth:`attach`): its next entries would be written into the other sessions' block."""
         session = self._sessions[sid]
+        for name, g in self.groups.items():
+            if g.compress_rate is None or not pos:
+                continue
+            rows = g.sliding_window + pos // g.compress_rate
+            boundary = session.rows[name][rows // g.block_size] if rows % g.block_size else ZERO_BLOCK
+            if self.pools[name].refs(boundary) > 1:
+                raise ValueError(f"session {sid}: {name} position {pos} is part-way through a shared block")
         for name, g in self.groups.items():
             row = session.rows[name]
             keep = g.ring_blocks + (g.compressed_blocks_for(pos - 1) if pos else 0)
             self.pools[name].free([b for b in row[keep:] if b != ZERO_BLOCK])
             row[keep:] = [ZERO_BLOCK] * (len(row) - keep)
+
+    def attach(self, sid: int, donor: int, pos: int) -> None:
+        """Map session ``sid``'s first blocks onto ``donor``'s: the blocks holding the entries of
+        positions ``< pos``, now shared (counted once more each, so either session's reset or
+        truncate keeps them for the other).
+
+        ``sid`` must hold no blocks, no group may page a ring (it is per session), and ``pos``
+        must be whole blocks of every group's entries, so both sessions append only past the
+        shared blocks. Changes nothing when it raises ``ValueError``."""
+        session, source = self._sessions[sid], self._sessions[donor]
+        shared = {}
+        for name, g in self.groups.items():
+            if g.ring_blocks:
+                raise ValueError(f"{name} pages a sliding ring, which a session cannot share")
+            if any(b != ZERO_BLOCK for b in session.rows[name]):
+                raise ValueError(f"session {sid} already holds {name} blocks")
+            if pos % (g.compress_rate * g.block_size):
+                raise ValueError(f"{name}: position {pos} is not a whole number of blocks")
+            blocks = source.rows[name][: pos // g.compress_rate // g.block_size]
+            if ZERO_BLOCK in blocks:
+                raise ValueError(f"session {donor} holds no {name} entries up to position {pos}")
+            shared[name] = blocks
+        for name, blocks in shared.items():
+            self.pools[name].share(blocks)
+            session.rows[name][: len(blocks)] = blocks
+
+    def block_refs(self, sid: int, group: str) -> list[int]:
+        """How many session rows map each of session ``sid``'s logical blocks of ``group``."""
+        return [self.pools[group].refs(b) for b in self._sessions[sid].rows[group]]
 
     def has_session(self, sid: int) -> bool:
         """Whether ``sid`` is currently open."""
