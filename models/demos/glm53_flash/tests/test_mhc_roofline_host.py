@@ -333,13 +333,15 @@ def test_pre_block_extras_abi_and_defines():
     r, w, c = MhcPreBlock.runtime_args_for_core(
         xi=3, yi=2, count=1, c0=7, noc_x=noc_x, noc_y=noc_y, count_proj=1, extras=((2, 127),), max_extra=2, **addrs
     )
-    assert len(r0) == 10 and len(c0) == 3 and w == w0  # the writer never changes
+    assert (
+        len(r0) == 10 and c0 == [1, 0, 0, 32] and w == w0
+    )  # compute = [count, leader, coord, rows]; the writer never changes
     assert r[:10] == r0 and r[10:] == [1, 1, 2, 127, 0, 0]
-    assert c[:3] == c0 and c[3:] == [1, 1]
+    assert c == c0[:3] + [1, 1] + [32]  # ... + [count_proj, n_extra] with the extras split, the rows last
     r2, _, c2 = MhcPreBlock.runtime_args_for_core(
         xi=0, yi=0, count=2, c0=0, noc_x=noc_x, noc_y=noc_y, count_proj=1, extras=(), max_extra=2, **addrs
     )
-    assert r2[10:] == [1, 0, 0, 0, 0, 0] and c2[3:] == [1, 0]  # a donor: projects one of its two columns
+    assert r2[10:] == [1, 0, 0, 0, 0, 0] and c2[3:5] == [1, 0]  # a donor: projects one of its two columns
     # the CB plan with extras: X / FN / PARTS grow by the extras, the rest is unchanged
     plain = MhcPreBlock.cb_plan(N, 12, 10, 1)
     ext = MhcPreBlock.cb_plan(N, 12, 10, 1, max_extra=2)
@@ -352,7 +354,7 @@ def test_pre_block_extras_abi_and_defines():
     assert total <= 512 * 1024, total
     op_src = (PRE_KERNEL_DIR.parent / "op.py").read_text()
     assert '("MHC_SINKHORN_FUSED", "1")' in op_src and '("MHC_MAX_EXTRA", str(self.max_extra))' in op_src
-    assert MhcPreBlock.SINKHORN_MODES == ("llk", "fused") and MhcPreBlock.SPLIT_MODES == ("cols", "extras")
+    assert MhcPreBlock.SINKHORN_MODES == ("llk", "fused", "dst") and MhcPreBlock.SPLIT_MODES == ("cols", "extras")
 
 
 def test_fused_sinkhorn_kernel_structure():
@@ -589,8 +591,9 @@ def test_d13_colsharded_math_matches_replicated():
 
 # ------------------------------------------------------------------------------------------------- knobs
 def test_knob_defaults_are_todays_path():
-    # the defaults since 3722af90ca0: the fused pre-Sinkhorn and the "extras" splits (+14 % decode, gates green)
-    assert mhc_mod.MHC_KSUM == "exact" and mhc_mod.MHC_PRE_SINKHORN == "fused"
+    # the defaults: the "extras" splits since 3722af90ca0 (+14 % decode, gates green), the dest-resident pre-Sinkhorn
+    # since 40d423056be (41.72 ms, chain pcc 0.9547 on the 8x4)
+    assert mhc_mod.MHC_KSUM == "exact" and mhc_mod.MHC_PRE_SINKHORN == "dst"
     assert (
         mhc_mod.MHC_PRE_SPLIT == "extras" and mhc_mod.MHC_POST_SPLIT == "extras" and mhc_mod.MHC_LAYOUT == "replicated"
     )
