@@ -85,7 +85,8 @@ DistributedLlamaBlock::DistributedLlamaBlock(
     uint32_t num_groups,
     const ops::RotaryEmbeddingParams& rope_params,
     float dropout_prob,
-    std::optional<uint32_t> intermediate_dim) {
+    std::optional<uint32_t> intermediate_dim,
+    ops::distributed::RingAttentionLayout cp_layout) {
     m_mlp = std::make_shared<DistributedLlamaMLP>(embedding_size, dropout_prob, intermediate_dim);
     m_attention_norm = std::make_shared<RMSNormLayer>(embedding_size);
     m_mlp_norm = std::make_shared<RMSNormLayer>(embedding_size);
@@ -95,6 +96,7 @@ DistributedLlamaBlock::DistributedLlamaBlock(
         .num_groups = num_groups,
         .dropout_prob = dropout_prob,
         .rope_params = rope_params,
+        .cp_layout = cp_layout,
     });
 
     create_name("llama_block");

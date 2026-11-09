@@ -215,7 +215,7 @@ std::pair<ttnn::Tensor, ttnn::Tensor> gen_freqs(
     xt::xarray<float> pos = xt::arange<float>(static_cast<float>(sequence_length));
     if (striped_cp_size > 1U) {
         for (uint32_t i = 0; i < sequence_length; ++i) {
-            pos(i) = static_cast<float>(autograd::cp_striped_global_position(i, sequence_length, striped_cp_size));
+            pos(i) = static_cast<float>(distributed::striped_global_position(i, sequence_length, striped_cp_size));
         }
     }
     pos.reshape({sequence_length, 1u});  // member reshape
@@ -254,7 +254,11 @@ ttnn::Tensor gen_trans_mat() {
 }
 
 RotaryEmbeddingParams build_rope_params(
-    uint32_t sequence_length, uint32_t head_dim, float theta, RopeScalingParams scaling_params) {
+    uint32_t sequence_length,
+    uint32_t head_dim,
+    float theta,
+    RopeScalingParams scaling_params,
+    distributed::RingAttentionLayout cp_layout) {
     if (head_dim % 32U != 0U) {
         throw std::invalid_argument(fmt::format("RoPE head_dim must be divisible by 32, but is {}", head_dim));
     }
@@ -286,7 +290,7 @@ RotaryEmbeddingParams build_rope_params(
 
             auto* device = &autograd::ctx().get_device();
             mapper = ttnn::distributed::shard_tensor_to_mesh_mapper(*device, /*dim=*/2, cp_axis.value());
-            if (pctx.is_cp_striped()) {
+            if (cp_layout == distributed::RingAttentionLayout::Striped) {
                 striped_cp_size = cp_size;
             }
         }

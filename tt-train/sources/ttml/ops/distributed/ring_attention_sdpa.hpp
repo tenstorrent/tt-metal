@@ -7,17 +7,9 @@
 #include "autograd/tensor.hpp"
 #include "metal/ops/ring_sdpa_bw/ring_sdpa_bw.hpp"
 #include "metal/ops/ring_sdpa_fw/ring_sdpa_fw.hpp"
+#include "ops/distributed/ring_attention_layout.hpp"
 
 namespace ttml::ops::distributed {
-
-// How the global sequence is laid out across the CP ring.
-// - Contiguous: rank d holds tokens [d*S_local, (d+1)*S_local).
-// - Striped (causal load balancing): global token p lives on rank p mod N as local row p div N.
-//   Every rank runs one causal block of the same shape at every ring step: on its query for K/V
-//   from ranks <= itself, and on its query shifted up one row (strict causal) for later ranks.
-//   The caller (data loader, RoPE positions) must lay tokens out this way; this op only
-//   schedules the work.
-enum class RingAttentionLayout : uint8_t { Contiguous = 0, Striped = 1 };
 
 /**
  * Ring Attention SDPA for Context Parallelism.

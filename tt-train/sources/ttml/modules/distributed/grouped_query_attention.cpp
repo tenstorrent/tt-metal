@@ -16,7 +16,10 @@
 namespace ttml::modules::distributed {
 
 DistributedGroupedQueryAttention::DistributedGroupedQueryAttention(const GQAConfig& config) :
-    m_embedding_dim(config.embedding_dim), m_num_heads(config.num_heads), m_num_groups(config.num_groups) {
+    m_embedding_dim(config.embedding_dim),
+    m_num_heads(config.num_heads),
+    m_num_groups(config.num_groups),
+    m_cp_layout(config.cp_layout) {
     const auto& pctx = autograd::ctx().get_parallelism_context();
     auto tp_axis = pctx.get_tp_axis();
     auto tp_size = pctx.get_tp_size();
@@ -120,8 +123,7 @@ ttml::autograd::TensorPtr DistributedGroupedQueryAttention::operator()(
             value_with_heads,
             std::nullopt,
             ttml::metal::AttentionMaskType::Causal,
-            pctx.is_cp_striped() ? ops::distributed::RingAttentionLayout::Striped
-                                 : ops::distributed::RingAttentionLayout::Contiguous);
+            m_cp_layout);
     } else {
         attention = ops::scaled_dot_product_attention(query_with_heads, key_with_heads, value_with_heads, mask);
     }

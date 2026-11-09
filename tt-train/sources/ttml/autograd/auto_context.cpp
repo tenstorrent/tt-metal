@@ -167,9 +167,7 @@ void AutoContext::initialize_socket_manager(ttnn::distributed::SocketType socket
 }
 
 ParallelismContext::ParallelismContext(
-    const ttnn::distributed::MeshDevice& mesh_device, const DistributedConfig& config) :
-    m_cp_striped(config.cp_striped) {
-    TT_FATAL(!config.cp_striped || config.enable_cp, "The striped CP layout requires context parallelism (enable_cp)");
+    const ttnn::distributed::MeshDevice& mesh_device, const DistributedConfig& config) {
     const uint32_t num_enabled_parallelisms =
         (uint32_t)config.enable_ddp + (uint32_t)config.enable_cp + (uint32_t)config.enable_tp;
     const auto& mesh_shape = mesh_device.shape();
