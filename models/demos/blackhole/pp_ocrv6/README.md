@@ -74,23 +74,30 @@ python models/demos/blackhole/pp_ocrv6/demo/demo.py --image crop.jpg --out resul
 
 ## Measured performance
 
-bf16, HiFi4, activations in DRAM. Traced with two command queues; the recognizer
-returns argmax indices and confidences instead of probabilities. Per call, including
-host <-> device transfers.
+bf16, HiFi4, activations in DRAM. Traced with two command queues; packed input copy;
+the recognizer decodes on device (argmax index + confidence). Per call, including
+host <-> device transfers. "Kernel" is the Tracy kernel sum from the tt-opt baselines.
 
-| Stage | Untraced | Traced |
-|-------|---------:|-------:|
-| Detector, 640x640 | 16.9 ms | 20.3 ms (16.6 device, 3.0 input conversion, 1.0 readback, 0.3 unshuffle) |
-| Recognizer, 1 line | 8.3 ms | 3.1 ms |
-| Recognizer, batch 2 | - | 4.4 ms (2.2 per line) |
-| Recognizer, batch 4 | - | 6.8 ms (1.7 per line) |
-| Recognizer, batch 8 | 24.1 ms (3.0 per line) | 12.5 ms (1.6 per line) |
-| Full pipeline, 1 line (host pre/post included) | ~33 ms | ~26 ms |
-| Same pipeline, torch on 24-core CPU | ~77 ms | |
+| Stage | Untraced, first bring-up | Traced | + packed input, tiled decode | Kernel |
+|-------|------:|------:|------:|------:|
+| Detector, 640x640 | 16.9 ms | 20.3 ms | 9.3 ms | 6.7 ms |
+| Recognizer, 1 line | 8.3 ms | 3.1 ms | 2.6 ms | |
+| Recognizer, batch 2 | - | 4.4 ms | 3.5 ms | |
+| Recognizer, batch 4 | - | 6.8 ms | 4.6 ms | |
+| Recognizer, batch 8 | 24.1 ms | 12.5 ms | 8.3 ms (1.0 per line) | 7.5 ms before tiled decode |
+| Full pipeline, 1 line (host pre/post included) | ~33 ms | ~26 ms | **~14 ms** | |
+| Same pipeline, torch on 24-core CPU | ~77 ms | | | |
 
-The untraced detector figure is device time. The detector is kernel-bound, so tracing helps
-little there; the recognizer was dispatch-bound and gets ~2.7x. Still above the ~16 ms
-per request budget; the detector kernels are the next target (Tracy, then tt-opt).
+What moved the numbers:
+- **Packed input copy.** NHWC row-major with 3 channels makes every page one pixel (6 bytes);
+  the 640x640 copy took 9.7 ms. The host now sends `[1, 1, B*H, W*3]` (one image row per page,
+  0.16 ms) and a reshape inside the trace restores NHWC (0.43 ms). Casting to bf16 in torch
+  before `from_torch` cut host conversion from 2.7 to 0.25 ms.
+- **Tiled decode.** max, compare, then min over the matching 1-based class indices (fp32, exact)
+  instead of softmax + row-major argmax over 18,710 classes: 7.53 -> 6.59 ms traced at batch 8,
+  same indices. Confidence is 1 / sum(exp(logit - max)).
+
+Inside the ~16 ms per request budget for det + rec of one line; YOLO11-small is not counted yet.
 
 Traced mode captures one trace per shape (detector 640x640, recognizer batch 1/2/4/8)
 when `TtnnBackend` is created. All shapes run once untraced before any capture, so
@@ -113,15 +120,14 @@ corrupt them and the device hangs.
 Updated at each milestone.
 
 ### 1. Performance (to ~16 ms per request on one chip)
-- [ ] Tracy profile of detector and recognizer: per-op kernel time, find the top ops
-- [ ] tt-optimization-loop (`tt-opt`), detector and recognizer as separate runs:
-  - profile_command: one traced forward under the device profiler
-  - gate_command: `tests/pcc` for that model (PCC + exact text)
-  - latency_command: traced replay time (it optimizes kernel time; op-to-op gaps are already gone with trace)
-  - Levers it can try: sharding/layout, bfp8 / LoFi, matmul and softmax configs, fusion. No conv2d config sweeps, so conv sharding below is manual
-- [ ] L1-sharded activations for the detector convs (manual; detector is kernel-bound at 16.6 ms)
+Full list with estimates: [optimization_strategies.md](optimization_strategies.md).
+- [ ] tt-opt detector run: harness, gate and baseline done (6.7 ms kernel); experiments blocked while outbound internet is closed (security incident)
+- [ ] Review tt-opt recognizer keeps (branch `tt-opt/pp_ocrv6_rec/decode-20261107-181455`, 7.46 -> 7.13 ms kernel at batch 8). Batch-8 shape guards only; port the general ones (SiLU fused into fc1, HiFi2) by hand
+- [ ] Smaller detector input on YOLO crops (320x320 or size buckets)
+- [ ] Normalization folded into the first detector conv
+- [ ] Recognizer width bucket 160 for short lines
+- [ ] L1-sharded activations for the detector convs (manual; tt-opt has no conv2d sweeps)
 - [ ] bfp8 weights, lower math fidelity, approximate GELU, gated on the accuracy tests and the torch agreement rate
-- [ ] Detector input: build the bf16 NHWC tensor in preprocessing (saves ~3 ms of host conversion)
 - [ ] Pipelining across requests (overlap det of frame N+1 with rec of frame N) for the throughput target
 
 ### 2. YOLO11-small
@@ -151,3 +157,6 @@ Updated at each milestone.
 - [x] On-device argmax + confidence for the recognizer
 - [x] Recognizer batch buckets 1/2/4/8
 - [x] Trace capture + two command queues for detector and recognizer (recognizer ~2.7x faster)
+- [x] tt-opt recognizer run, 20 experiments, 11 keeps (on the tool's branch, not merged)
+- [x] Packed host-to-device input copy and bf16 host cast (pipeline ~26 -> ~17 ms)
+- [x] Tiled on-device decode instead of softmax + argmax (pipeline ~14 ms, recognizer batch 8 8.3 ms)

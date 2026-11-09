@@ -87,6 +87,13 @@ class Block:
         return ttnn.add(x, self.fc2(self.fc1(self.ln2(x))))
 
 
+def rec_decode_to_torch(index, confidence, batch, steps):
+    """Device decode outputs -> (0-based class indices long [B, T], probabilities float [B, T])."""
+    index = ttnn.to_torch(index).float().reshape(-1)[: batch * steps].reshape(batch, steps)
+    confidence = ttnn.to_torch(confidence).float().reshape(-1)[: batch * steps].reshape(batch, steps)
+    return index.long() - 1, confidence
+
+
 class TtPPOCRv6SmallRec:
     """Input NHWC [B, 48, W, 3] in [-1, 1]. Returns character probabilities [1, 1, B*W/8, NUM_CLASSES]."""
 
@@ -104,9 +111,17 @@ class TtPPOCRv6SmallRec:
         self.blocks = [Block(device, b) for b in enc.svtr_block]
         self.norm = LayerNorm(device, enc.norm)
         self.head = Linear(device, torch_model.head.head.weight, torch_model.head.head.bias)
+        num_classes = torch_model.head.head.weight.shape[0]
+        # 1-based class index in fp32 (exact up to 2^24; bf16 is not exact past 256).
+        self.class_index = ttnn.from_torch(
+            torch.arange(1, num_classes + 1, dtype=torch.float32).reshape(1, 1, 1, -1),
+            dtype=ttnn.float32,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+        )
 
-    def __call__(self, x, batch, h, w, decode=False):
-        """decode=False: probabilities [1, 1, B*T, C]. decode=True: (indices uint32 [1, 1, B*T], confidence [1, 1, B*T, 1])."""
+    def logits(self, x, batch, h, w):
+        """Pre-softmax character scores [1, 1, B*T, C]."""
         x, h, w = self.backbone(x, batch, h, w)[-1]
         x = ttnn.avg_pool2d(
             to_row_major(x),
@@ -130,9 +145,21 @@ class TtPPOCRv6SmallRec:
         for blk in self.blocks:
             x = blk(x, batch)
         x = ttnn.add(self.norm(x), skip)
-        probs = ttnn.softmax(self.head(x), dim=-1, numeric_stable=True)
+        return self.head(x)
+
+    def __call__(self, x, batch, h, w, decode=False):
+        """decode=False: probabilities [1, 1, B*T, C].
+        decode=True: (1-based argmax index, float32 [1, 1, B*T, 1]; its probability [1, 1, B*T, 1]).
+
+        The decode stays in tile layout (max, compare, min over matching class indices) instead of
+        softmax + row-major argmax, which is ~1 ms cheaper at batch 8. Ties pick the first class.
+        """
+        logits = self.logits(x, batch, h, w)
         if not decode:
-            return probs
-        indices = ttnn.argmax(to_row_major(probs), dim=-1)
-        confidence = ttnn.max(probs, dim=-1, keepdim=True)
-        return indices, confidence
+            return ttnn.softmax(logits, dim=-1, numeric_stable=True)
+        best = ttnn.max(logits, dim=-1, keepdim=True)
+        hit = ttnn.typecast(ttnn.eq(logits, best), ttnn.float32)
+        miss_penalty = ttnn.multiply(ttnn.rsub(hit, 1.0), 1e9)
+        index = ttnn.min(ttnn.add(ttnn.multiply(hit, self.class_index), miss_penalty), dim=-1, keepdim=True)
+        confidence = ttnn.reciprocal(ttnn.sum(ttnn.exp(ttnn.subtract(logits, best)), dim=-1, keepdim=True))
+        return index, confidence

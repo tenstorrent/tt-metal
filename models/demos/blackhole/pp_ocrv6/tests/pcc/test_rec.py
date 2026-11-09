@@ -17,7 +17,7 @@ from models.demos.blackhole.pp_ocrv6.common import (
     rec_normalize_bgr,
     synthetic_gate_image,
 )
-from models.demos.blackhole.pp_ocrv6.tt.ttnn_rec import TtPPOCRv6SmallRec
+from models.demos.blackhole.pp_ocrv6.tt.ttnn_rec import TtPPOCRv6SmallRec, rec_decode_to_torch
 from tests.ttnn.utils_for_testing import check_with_pcc
 
 TEXTS = ["TRLU 482913", "MSCU 7731045", "53 FT 0921", "XTRA 51207", "UNIT 4417", "JBHU 238811", "GATE 3", "HUB 99"]
@@ -77,8 +77,7 @@ def test_rec_decode_on_device(device, batch):
     tt_x = ttnn.from_torch(x.permute(0, 2, 3, 1), dtype=ttnn.bfloat16)
     idx, conf = tt_model(tt_x, batch, REC_HEIGHT, REC_WIDTH, decode=True)
     steps = ref.shape[1]
-    idx = ttnn.to_torch(idx).reshape(-1)[: batch * steps].reshape(batch, steps).long()
-    conf = ttnn.to_torch(conf).float().reshape(-1)[: batch * steps].reshape(batch, steps)
+    idx, conf = rec_decode_to_torch(idx, conf, batch, steps)
     ref_conf, ref_idx = ref.max(-1)
     print(
         f"[decode b{batch}] index match {(idx == ref_idx).float().mean():.2%}  max conf diff {(conf - ref_conf).abs().max():.4f}"

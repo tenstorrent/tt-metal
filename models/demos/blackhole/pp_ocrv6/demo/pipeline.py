@@ -82,13 +82,21 @@ class TtnnBackend:
             self._capture_traces()
 
     def _host(self, x):
-        return self.ttnn.from_torch(x.permute(0, 2, 3, 1), dtype=self.ttnn.bfloat16)
+        # One image row per page: an NHWC row-major tensor with C=3 has 6-byte pages,
+        # which makes the host-to-device copy ~60x slower. Unpacked on device by _nhwc.
+        # torch's own bf16 cast is ~10x faster than letting from_torch convert float32.
+        b, c, h, w = x.shape
+        x = x.permute(0, 2, 3, 1).reshape(1, 1, b * h, w * c).to(torch.bfloat16)
+        return self.ttnn.from_torch(x, dtype=self.ttnn.bfloat16)
+
+    def _nhwc(self, t, b, h, w):
+        return self.ttnn.reshape(t, (b, h, w, 3))
 
     def _det_fn(self, b, h, w):
-        return lambda t: self.det(t, b, h, w)[0]
+        return lambda t: self.det(self._nhwc(t, b, h, w), b, h, w)[0]
 
     def _rec_fn(self, b):
-        return lambda t: self.rec(t, b, REC_HEIGHT, REC_WIDTH, decode=True)
+        return lambda t: self.rec(self._nhwc(t, b, REC_HEIGHT, REC_WIDTH), b, REC_HEIGHT, REC_WIDTH, decode=True)
 
     def _capture_traces(self):
         from models.demos.blackhole.pp_ocrv6.tt.runner import TracedRunner
@@ -121,14 +129,11 @@ class TtnnBackend:
 
     def recognize(self, x):
         """[B, 3, 48, W] -> (argmax indices [B, T], their probabilities [B, T])."""
-        ttnn = self.ttnn
+        from models.demos.blackhole.pp_ocrv6.tt.ttnn_rec import rec_decode_to_torch
+
         b = x.shape[0]
         idx, conf = self._run(("rec", b), self._rec_fn(b), self._host(x))
-        steps = REC_WIDTH // 8
-        return (
-            ttnn.to_torch(idx).reshape(-1)[: b * steps].reshape(b, steps).long(),
-            ttnn.to_torch(conf).float().reshape(-1)[: b * steps].reshape(b, steps),
-        )
+        return rec_decode_to_torch(idx, conf, b, REC_WIDTH // 8)
 
 
 def letterbox(bgr, size=DET_SIZE):
