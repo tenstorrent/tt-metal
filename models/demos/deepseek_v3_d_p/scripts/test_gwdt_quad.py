@@ -183,3 +183,23 @@ def test_ring_order_mismatch_exits(monkeypatch, capsys):
     assert main(["--quad", "--co", "--hosts", "h0,h2,h1,h3"]) == 2
     out = capsys.readouterr().out
     assert "h0,h1,h2,h3" in out
+
+
+def test_kmd_lock_blocker_named():
+    from gwdt_quad import bringup_blocker
+
+    log = (
+        "[1,2]<stdout>: 01:08:05.938 | warning | UMD | Waiting for KMD lock 20 on /dev/tenstorrent/0, which is "
+        "currently held by another handle (kmd_mutex.cpp:140)\n"
+    )
+    assert "held by another process" in bringup_blocker(log)
+    assert bringup_blocker("[pp rank 0] setup complete, entering request loop\n") is None
+
+
+def test_environment_fault_skips_fallback(tmp_path):
+    from gwdt_quad import ENV_FAULT
+
+    calls, run_once = _scripted({("passthrough", "2d_torus_xy"): Result(Status.FAIL, f"{ENV_FAULT}chips held")})
+    pt = {s.key: s for s in build_quad_steps(HOSTS, 900, run_once=run_once)}["quad:passthrough-smoke"]
+    assert pt.run(_ctx(tmp_path), pt.state).reason.startswith(ENV_FAULT)
+    assert calls == [("passthrough", "2d_torus_xy")] and pt.state.fallbacks == []

@@ -56,6 +56,10 @@ POLL_S = 5
 RESET_TRIES = 3
 
 _SETUP = re.compile(r"\[pp rank (\d+)\] setup complete, entering request loop")
+_KMD_LOCK = re.compile(r"Waiting for KMD lock .* held by another handle")
+KMD_LOCK_S = 300
+# A run that never reached the hardware question; its fallback would meet the same wall.
+ENV_FAULT = "environment: "
 
 
 def mgd_path(n_hosts: int, fabric: str) -> str:
@@ -186,6 +190,16 @@ def setup_ranks(log_text: str) -> set[int]:
     return {int(m.group(1)) for m in _SETUP.finditer(log_text)}
 
 
+def bringup_blocker(log_text: str) -> str | None:
+    """Why bring-up is stuck when the cause is not the galaxy: another process still holds the chips."""
+    if _KMD_LOCK.search(log_text):
+        return (
+            f"{ENV_FAULT}chips held by another process (UMD waits on the KMD lock); not a hardware verdict. "
+            "Stop the leftover process on that host, then rerun"
+        )
+    return None
+
+
 def rank0_host(ttrun_cwd: Path, hosts: list[str]) -> str:
     """tt-run's discovery decides which host is rank 0; its rankfile says so."""
     rankfiles = sorted(ttrun_cwd.glob("generated/ttrun/*/rankfile"), key=lambda p: p.stat().st_mtime)
@@ -295,8 +309,15 @@ def run_once(
     try:
         runner = _spawn(runner_cmd(ctx.repo, hosts, mode, fabric, results), runner_log, ttrun_cwd, ctx.repo)
         follow, ready, start = _Follower(runner_log), set(), time.time()
+        last_ready = start
         while len(ready) < len(hosts):
-            ready |= setup_ranks(follow.read())
+            now_ready = ready | setup_ranks(follow.read())
+            if now_ready != ready:
+                ready, last_ready = now_ready, time.time()
+            blocker = bringup_blocker(follow.text) if time.time() - last_ready > KMD_LOCK_S else None
+            if blocker is not None:
+                r = Result(Status.FAIL, f"{blocker}; log {runner_log}")
+                return r
             state.now = f"bring-up {len(ready)}/{len(hosts)} ranks ready ({fabric})"
             ctx.tick()
             if runner.poll() is not None:
@@ -377,7 +398,7 @@ def build_quad_steps(hosts: list[str], soak_s: int, run_once=run_once) -> list[S
                 d = ctx.run_dir / "quad"
                 return would_run(runner_cmd(ctx.repo, hosts, mode, TORUS, d / "results"))
             r = run_once(ctx, state, mode, TORUS, hosts, duration_s, max_requests)
-            if r.status not in (Status.FAIL, Status.HANG):
+            if r.status not in (Status.FAIL, Status.HANG) or r.reason.startswith(ENV_FAULT):
                 return r
             f = State(Result(Status.RUN), start=time.time(), attempt=2, env={"PREFILL_FABRIC_MODE": MESH})
             state.fallbacks.append(f)
