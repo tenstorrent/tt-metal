@@ -11,6 +11,7 @@
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/work_split.hpp>
+#include <tt-metalium/mesh_buffer.hpp>
 
 #include <algorithm>
 #include <bit>
@@ -755,7 +756,8 @@ void require_buffer_distribution_matches_spec(
     const Tensor& tensor,
     const std::optional<tt::tt_metal::BufferDistributionSpec>& spec_distribution,
     const char* slot) {
-    const auto& buffer_distribution = tensor.buffer()->buffer_distribution_spec();
+    const auto& buffer_distribution =
+        tensor.mesh_buffer().device_local_config().sharding_args.buffer_distribution_spec();
     if (buffer_distribution.has_value() && spec_distribution.has_value() &&
         buffer_distribution->shard_shape_in_pages() == spec_distribution->shard_shape_in_pages() &&
         buffer_distribution->cores() == spec_distribution->cores()) {
