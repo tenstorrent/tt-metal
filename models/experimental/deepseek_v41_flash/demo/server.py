@@ -42,6 +42,13 @@ What V4.1 imposes on the serving side:
   A user decoding alone keeps ``--decode-ahead`` (32) steps posted, as the decode demo does; a reply that stops
   early feeds the steps still posted a rerun of its last one (:meth:`V41ChatEngine.repeat_traced`).
   Speculative decode is single-user.
+* Shared prefixes. A prompt that continues no conversation starts from the longest prefix of it any other slot's
+  cache holds, running or parked (a common system prompt, a forked conversation): the two slots share that prefix's
+  compressed KV blocks, counted per slot so either can rewind or reset without the other losing them, and the
+  prefill model rebuilds the new slot's sliding window from them by replaying the 128 tokens before the prefix's end
+  (``DeepSeekV41Model.attach_session_prefix``, ``_Scheduler._share_prefix`` in the V4 server). The prefix is matched
+  on the tokens the other slot was fed, in multiples of 128, up to the first image token, and is counted as
+  ``prompt_cache_hit_tokens``.
 * Context. ``--max-context`` is 1048576 tokens by default (prompt + reply), the model's full context. The pools
   hold ``--total-context`` tokens, by default 204800 per user (64 x 204800 is what fits in device DRAM), and are
   paged, so any one user can grow to the full context while the others leave blocks free; a user that needs a

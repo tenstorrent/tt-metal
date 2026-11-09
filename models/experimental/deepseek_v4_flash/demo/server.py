@@ -157,6 +157,7 @@ import argparse
 import contextlib
 import itertools
 import json
+import math
 import os
 import queue
 import socket
@@ -1371,6 +1372,7 @@ class _Turn:
         # rewound position that the prefill model replays first, to rebuild the sliding window.
         self.replay_ids: list[int] = []
         self.resumed_from = 0  # ... the position it rewound to (0: not resumed)
+        self.prefix_donor: int | None = None  # ... the slot whose cached prefix it started from (see _share_prefix)
         self.rebuilt = False  # a continued conversation rewound and re-prefilled whole, since that was faster
         self.t_replay = 0.0  # when this turn's prompt tokens started going through decode
         self.next_id: int | None = None  # produced but not yet fed back
@@ -1843,11 +1845,15 @@ class _Scheduler:
         )
         try:
             # Before the request's options touch the slot: what it holds is the previous conversation's.
-            if not cut_short and not _continues(turn.body["messages"], user.messages):
+            new_conversation = not cut_short and not _continues(turn.body["messages"], user.messages)
+            if new_conversation:
                 self._offload(turn.slot, turn.previous_owner)
             if turn.restore is not None:
                 if self._restore(user, turn):
-                    cut_short = False
+                    cut_short = new_conversation = False
+            if new_conversation:
+                user.thinking_mode = self.server.thinking_mode
+                user.reasoning_effort = self.server.reasoning_effort
             self.server._apply_options(user, turn.body)
             if cut_short and not self._resume(user, turn):
                 user.reset()
@@ -1862,7 +1868,8 @@ class _Scheduler:
                     user.messages = user.messages + [turn.message]
                     user._next_render = 0
                     turn.ids = self.server._render_ids(user, include_assistant=True)
-                self._choose_feed(user, turn, continuing)
+                if continuing or not self._share_prefix(user, turn):
+                    self._choose_feed(user, turn, continuing)
             self._make_room(len(turn.ids), turn.slot)
             self._check_capacity(user, turn.ids)
         except Exception as e:  # noqa: BLE001 - reported to the client, the server stays up
@@ -1887,7 +1894,9 @@ class _Scheduler:
             omit_ids=frozenset({self.engine.eos_id}) if turn.ignore_eos else frozenset(),
         )
         self._active.append(turn)
-        if turn.resumed_from:
+        if turn.prefix_donor is not None:
+            how = f"started from slot {turn.prefix_donor}'s cached {turn.resumed_from}-token prefix"
+        elif turn.resumed_from:
             how = f"resumed from the cache at {turn.resumed_from}"
         else:
             how = "re-prefill whole conversation" if turn.rebuilt else "continuing" if continuing else "fresh session"
@@ -2042,6 +2051,69 @@ class _Scheduler:
         del user.tokens[resume_at:]
         user.messages = list(messages)
         turn.ids = ids
+        turn.device_prefill = n
+        turn.prefill_from = 0
+        return True
+
+    def _share_prefix(self, user: UserSession, turn: _Turn) -> bool:
+        """Start ``user``, empty, from the longest prefix of ``turn.ids`` another slot's cache holds (running or
+        parked) instead of from position 0; returns whether it did.
+
+        The two slots then share that prefix's compressed KV blocks (``attach_session_prefix``), which neither
+        writes again, and the prefill model rebuilds ``user``'s sliding window by replaying the ``replay_window``
+        tokens before the prefix's end (SWA bounded replay), as :meth:`_resume` does within one slot. The prefix
+        is matched against the tokens the other slot was fed, ends on a multiple of the model's
+        ``prefix_alignment`` before that slot's position, stops at the first image token (an image's span ids name
+        embedding rows another image may take later), and leaves at least ``replay_window`` prompt tokens. Only
+        when that beats prefilling the prompt whole.
+        """
+        model, prefiller = self.engine.model, self.server.prefiller
+        if user.pos or prefiller is None or not hasattr(model, "attach_session_prefix"):
+            return False
+        window, step, rate = prefiller.replay_window, prefiller.continue_alignment, self.replay_rate
+        if not window or not step:
+            return False
+        unit = math.lcm(model.prefix_alignment, step, window)
+        ids = turn.ids
+        vocab = model.config.vocab_size
+        limit = min(next((i for i, t in enumerate(ids) if t >= vocab), len(ids)), len(ids) - window)
+        best, donor = 0, None
+        for other in self.engine.users:
+            if other is user or len(other.tokens) != other.pos:
+                continue
+            reach = min(limit, other.pos - 1) // unit * unit
+            k = 0
+            while k < reach and other.tokens[k : k + unit] == ids[k : k + unit]:
+                k += unit
+            if k > best:
+                best, donor = k, other
+        while best > window:
+            n = prefiller.aligned(window + len(ids) - best, best - window, bounded=True)
+            if n:
+                break
+            best -= unit
+        else:
+            return False
+
+        n -= window
+        seconds = prefiller.seconds(window + n) + (len(ids) - best - n) / rate
+        n_whole = prefiller.aligned(len(ids))
+        whole_seconds = prefiller.seconds(n_whole) + (len(ids) - n_whole) / rate if n_whole else len(ids) / rate
+        if seconds >= whole_seconds:
+            return False
+
+        logger.debug(
+            f"user {turn.user_key!r}: starting from slot {donor.index}'s cached {best}-token prefix of the "
+            f"{len(ids)}-token prompt: {window} cached tokens replayed for the window, {n} by the prefill model, "
+            f"{len(ids) - best - n} through decode (~{seconds:.1f}s instead of ~{whole_seconds:.1f}s prefilling it)"
+        )
+        turn.resumed_from = best  # set first: a failure from here resets the session, releasing its shared blocks
+        model.attach_session_prefix(user.sid, donor.sid, best)
+        turn.prefix_donor = donor.index
+        user.pos = best
+        user.tokens = list(ids[:best])
+        turn.replay_ids = ids[best - window : best]
+        turn.ids = ids[best:]
         turn.device_prefill = n
         turn.prefill_from = 0
         return True
@@ -2655,7 +2727,9 @@ class _Scheduler:
             how = "all through decode"
         if turn.rebuilt:
             how += ", whole conversation re-prefilled"
-        if turn.resumed_from:
+        if turn.prefix_donor is not None:
+            how += f", started from slot {turn.prefix_donor}'s cached {turn.resumed_from}-token prefix"
+        elif turn.resumed_from:
             how += f", resumed from the cache at {turn.resumed_from}"
         prefill_rate = len(turn.ids) / turn.prefill_seconds if turn.prefill_seconds > 0 else 0.0
         logger.info(
@@ -2792,10 +2866,16 @@ class GenerationServer:
         host_bytes: int = 0,
         max_running: int = 0,
         slot_idle_timeout: float = 0.0,
+        think: bool = False,
+        reasoning_effort: str | None = None,
     ):
         self.engine = engine
         self.model_id = model_id
         self.temperature = temperature  # for requests that send no ``temperature``
+        # For a new conversation that sends no ``thinking`` / ``reasoning_effort``: a slot
+        # must not keep the options of whoever held it before.
+        self.thinking_mode = "thinking" if think else "chat"
+        self.reasoning_effort = reasoning_effort
         self.max_body_bytes = max_body_bytes
         self.prefiller = prefiller
         if host_users and not hasattr(engine.model, "export_session"):
@@ -3816,6 +3896,8 @@ def serve(
                 host_bytes=int(args.host_cache_gb * 2**30),
                 max_running=args.max_running,
                 slot_idle_timeout=args.slot_idle_timeout,
+                think=args.think,
+                reasoning_effort=args.reasoning_effort,
             )
             # The scheduler is the only thread that touches the device from here on; the
             # traces it replays were captured by the warmup above, which a pipelined

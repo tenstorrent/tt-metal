@@ -1246,6 +1246,43 @@ class DeepSeekV41Model(DeepSeekV4Model):
         self._session_pos[sid] = pos
         self._write_page_tables()
 
+    @property
+    def prefix_alignment(self) -> int:
+        """:meth:`attach_session_prefix` shares prefixes in multiples of this: whole blocks of every ratio's entries."""
+        return math.lcm(*(ratio * CSA_INDEX_BLOCK_SIZE for ratio in self._paged_ratios))
+
+    def attach_session_prefix(self, sid: int, donor: int, pos: int) -> None:
+        """Start session ``sid`` (at position 0) from session ``donor``'s first ``pos`` positions, at ``pos``: its
+        page-table rows map the blocks of ``donor``'s compressed entries before ``pos``, which the two sessions then
+        share (:meth:`PagedKVManager.attach`), and its Engram history is a copy of ``donor``'s.
+
+        Neither session writes a shared block again: ``pos`` is a multiple of :attr:`prefix_alignment`, so each
+        appends past them, and before ``donor``'s position, so the rerun of its newest step
+        (:meth:`end_session_at`) is past them too. Like :meth:`truncate_session` it leaves ``sid``'s ring and
+        windows stale: only a prefill that rebuilds the window (:meth:`seed_prefill` with ``tails=False``, then
+        :meth:`commit_prefill_state` from ``pos``) may follow. Call it with no step in flight.
+        """
+        paged = self._require_paged()
+        for s in (sid, donor):
+            if s not in self._slot_of:
+                raise KeyError(f"no such session {s}")
+        if sid == donor or self._session_pos[sid]:
+            raise ValueError(f"session {sid} must be at position 0 to start from session {donor}")
+        if pos <= 0 or pos % self.prefix_alignment or pos >= self._session_pos[donor]:
+            raise ValueError(
+                f"cannot share {pos} positions of session {donor} (at {self._session_pos[donor]}): a positive "
+                f"multiple of {self.prefix_alignment} before its position"
+            )
+        self._wait_replays_dispatched()
+        with self._cq_lock:
+            with self._paged_lock:
+                paged.attach(sid, donor, pos)
+            self._write_page_tables()
+        if self._engram_lookup is not None:
+            history = self._engram_lookup.export_history(self._slot_of[donor], pos)
+            self._engram_lookup.import_history(self._slot_of[sid], history)
+        self._session_pos[sid] = pos
+
     def export_session(self, sid: int) -> SessionSnapshot:
         """Copy session ``sid``'s decode state at its position ``P`` into host memory, for :meth:`import_session`.
 
@@ -1937,9 +1974,12 @@ class DeepSeekV41Model(DeepSeekV4Model):
         lo = first_entry // block
         if lo >= blocks:
             return
-        page_row = self._require_paged().page_row(session_id, group)[0].tolist()
+        paged = self._require_paged()
+        page_row = paged.page_row(session_id, group)[0].tolist()
         if ZERO_BLOCK in page_row[lo:blocks]:
             raise RuntimeError(f"{group}: {n} entries reach an unmapped block; capacity was not ensured")
+        if any(refs > 1 for refs in paged.block_refs(session_id, group)[lo:blocks]):
+            raise RuntimeError(f"{group}: session {session_id}'s entries from {first_entry} reach a shared block")
         device = scache.idx_key_cache.device()
         dh, key_dim = entries.shape[3], keys.shape[3]
         if lo:
