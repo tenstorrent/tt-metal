@@ -69,7 +69,8 @@ Tensor rms_norm(
 
     auto arch = input_tensor.storage_type() == StorageType::DEVICE ? input_tensor.device()->arch()
                                                                    : ttnn::GetDefaultDevice()->arch();
-    // fp32 accumulation can overflow L1 with a ROW_MAJOR weight or bias, and DEST with subblock_w > 4: use bf16 there.
+    // fp32 accumulation can overflow L1 with a ROW_MAJOR weight or bias, and DEST with subblock_w > 4. Those cases
+    // use HiFi4, math_approx_mode=true, fp32_dest_acc_en=false, the default of rms_norm_pre/post_all_gather.
     const bool row_major_affine = (weight.has_value() && weight->layout() == Layout::ROW_MAJOR) ||
                                   (bias.has_value() && bias->layout() == Layout::ROW_MAJOR);
     const auto* sharded_config = program_config.has_value()
