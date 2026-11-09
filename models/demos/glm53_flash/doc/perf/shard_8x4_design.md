@@ -94,6 +94,8 @@ Prefill runs 3.0-3.7 K tok/s flat from 32 K to 1 M (the TP prefill path, unchang
 +7-8 ms per decode step at 4 K / 32 K against the unsharded TP32 (the optimisation item), and the per-user decode
 at 128 K x 8 (43.3 ms) is the first measurement of the sharded split-K at 8 token lanes on 32 helpers.
 
+Re-validated at HEAD (the DSA `AllocPool` default, under the e2e numerics gates, 2026-11-09): 32 K x 4 27.3 ms = 36.7 tok/s/u (TTFT 35.4 s), 128 K x 16 distinct 72.0 ms = 13.9 (TTFT 579 s), 1 M x 1 19.0 ms = 52.7 (TTFT 345 s); the ids are those of the rows above.
+
 ## 7. The L1 floor (B = 16): closed
 
 `program.cpp validate_circular_buffer_region` ("Statically allocated circular buffers in program N clash with L1
