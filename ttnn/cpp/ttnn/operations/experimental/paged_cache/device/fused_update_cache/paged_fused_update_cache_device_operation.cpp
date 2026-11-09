@@ -101,6 +101,10 @@ void PagedFusedUpdateCacheDeviceOperation::validate_on_program_cache_miss(
                 "Expect page table to have memory layout in ROW MAJOR");
 
             if (page_table.value().is_sharded()) {
+                TT_FATAL(
+                    page_table.value().memory_config().shard_spec().has_value(),
+                    "Paged fused update cache: sharded page_table must have a legacy shard_spec (ND_SHARDED is not "
+                    "supported)");
                 uint32_t num_cores = page_table.value().memory_config().shard_spec()->grid.num_cores();
                 uint32_t page_table_shard_height = page_table.value().padded_shape()[0] / num_cores;
                 TT_FATAL(
@@ -183,6 +187,10 @@ void PagedFusedUpdateCacheDeviceOperation::validate_on_program_cache_miss(
             TT_FATAL(
                 input_tensor.memory_config().memory_layout() != TensorMemoryLayout::WIDTH_SHARDED,
                 "Expect input_tensor to NOT have memory layout WIDTH SHARDED");
+            TT_FATAL(
+                input_tensor.shard_spec().has_value(),
+                "Paged fused update cache: sharded input_tensor must have a legacy shard_spec (ND_SHARDED is not "
+                "supported)");
             TT_FATAL(
                 input_tensor.shard_spec().value().shape[1] == input_tensor.padded_shape()[-1],
                 "Expect input_tensor to have shard width ({}) equal to the last dimension of the input tensor padded "
