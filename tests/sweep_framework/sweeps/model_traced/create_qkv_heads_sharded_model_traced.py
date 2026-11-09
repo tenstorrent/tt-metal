@@ -187,8 +187,8 @@ def run(
 
     start_time = start_measuring_time()
     # This operation creates QKV heads from input tensor
-    # Note: Using nlp_create_qkv_heads which is the actual implementation
-    q, k, v = ttnn.experimental.nlp_create_qkv_heads(
+    # Note: Using create_qkv_heads which is the actual implementation
+    q, k, v = ttnn.experimental.create_qkv_heads(
         input_tensor_a,
         num_heads=num_heads,
         num_kv_heads=num_kv_heads,

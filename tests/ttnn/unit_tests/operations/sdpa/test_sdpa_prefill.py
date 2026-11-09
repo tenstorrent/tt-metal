@@ -764,7 +764,7 @@ def test_sdpa_with_attention_sink(device, b, nh, nkv, s, d, dtype, is_causal, q_
     )
 
 
-# output_concat_heads: SDPA writing [b x 1 x s x nh*d] directly, against SDPA followed by nlp_concat_heads.
+# output_concat_heads: SDPA writing [b x 1 x s x nh*d] directly, against SDPA followed by concat_heads.
 # Rows dropped from the logical length in the view case; not a tile multiple, so the last tile is partial.
 CONCAT_HEADS_VIEW_PAD_ROWS = 27
 
@@ -776,7 +776,7 @@ CONCAT_HEADS_VIEW_PAD_ROWS = 27
     ids=["b1_nh8_s1024_d64", "b1_nh32_s1824_d64", "b2_nh4_s512_d128"],
 )
 def test_sdpa_output_concat_heads(device, b, nh, s, d, pad_rows):
-    """The fused layout must be bit-identical to nlp_concat_heads on the valid rows."""
+    """The fused layout must be bit-identical to concat_heads on the valid rows."""
     torch.manual_seed(0)
     valid = s - pad_rows
     dim = nh * d
@@ -805,7 +805,7 @@ def test_sdpa_output_concat_heads(device, b, nh, s, d, pad_rows):
     ref = ttnn.transformer.scaled_dot_product_attention(q, k, v, **sdpa_kwargs)
     if valid != s:
         ref = ttnn.reshape(ref, padded, padded)
-    ref = ttnn.reshape(ttnn.experimental.nlp_concat_heads(ref), (b, s, dim))
+    ref = ttnn.reshape(ttnn.experimental.concat_heads(ref), (b, s, dim))
 
     out = ttnn.transformer.scaled_dot_product_attention(q, k, v, output_concat_heads=True, **sdpa_kwargs)
     assert tuple(out.shape) == (b, 1, valid, dim)

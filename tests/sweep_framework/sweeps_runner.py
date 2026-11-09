@@ -608,7 +608,7 @@ def _populate_result_from_response(result, response, config, suite_name, input_h
             # feeding vectors to a device that will manufacture more.
             #
             # This is what run 31295900210 needed. On UF-MN-B4-GWH03 a device timeout was
-            # followed by add/linear/nlp_create_qkv_heads_decode each returning PCC exactly 0.0;
+            # followed by add/linear/create_qkv_heads_decode each returning PCC exactly 0.0;
             # all three were booked as test failures and all three pass in other runs on other
             # boxes. The exception text alone could not tell them apart from real regressions --
             # a health probe can.

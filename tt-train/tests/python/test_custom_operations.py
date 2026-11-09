@@ -228,8 +228,8 @@ class PythonGroupedHeadsCreationOp(Function):
         ttnn_qs = qs.get_value()
         ttnn_kvs = kvs.get_value()
 
-        # nlp_create_qkv_heads splits qs into q heads and kvs into k,v heads
-        q, k, v = ttnn.experimental.nlp_create_qkv_heads(
+        # create_qkv_heads splits qs into q heads and kvs into k,v heads
+        q, k, v = ttnn.experimental.create_qkv_heads(
             ttnn_qs,
             ttnn_kvs,
             num_heads=num_heads,
@@ -254,11 +254,11 @@ class PythonGroupedHeadsCreationOp(Function):
         """
         # Concatenate heads back
         # (B, num_heads, S, E/num_heads) -> (B, 1, S, E)
-        grad_qs = ttnn.experimental.nlp_concat_heads(grad_q)
+        grad_qs = ttnn.experimental.concat_heads(grad_q)
 
         # (B, num_groups, S, E_kv/num_groups) -> (B, 1, S, E_kv)
-        grad_k_concat = ttnn.experimental.nlp_concat_heads(grad_k)
-        grad_v_concat = ttnn.experimental.nlp_concat_heads(grad_v)
+        grad_k_concat = ttnn.experimental.concat_heads(grad_k)
+        grad_v_concat = ttnn.experimental.concat_heads(grad_v)
 
         # Concatenate k and v gradients along dim 3
         # (B, 1, S, E_kv) + (B, 1, S, E_kv) -> (B, 1, S, E_kv * 2)

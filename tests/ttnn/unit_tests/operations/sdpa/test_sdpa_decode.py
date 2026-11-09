@@ -123,7 +123,7 @@ def test_sdpa_decode_non_tile_aligned_heads(device, b, nh, nkv, s, d, dtype, gri
     """Regression test for models with num_heads not a multiple of 32 (e.g. Whisper-large with 20 heads).
 
     The output logical shape must preserve the unpadded head count so that downstream
-    ops like nlp_concat_heads produce the correct hidden dimension.
+    ops like concat_heads produce the correct hidden dimension.
     """
     if nkv > 1 and q_dtype != ttnn.bfloat16:
         pytest.skip("nkv > 1 requires q_dtype to be bfloat16")

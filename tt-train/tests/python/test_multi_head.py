@@ -142,7 +142,7 @@ def test_rejects_invalid_arguments(shape, num_heads, message, expect_error):
 
 
 def test_rejects_sharded_input(expect_error):
-    """nlp_create_qkv_heads picks its program factory from the input alone, and the sharded
+    """create_qkv_heads picks its program factory from the input alone, and the sharded
     factory divides by num_kv_heads, which split_heads passes as 0. The op must refuse the
     input rather than let that reach the kernel."""
     batch, seq_len, num_heads, head_dim = 1, 128, 8, 64

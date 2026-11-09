@@ -43,7 +43,7 @@ void kernel_main() {
     // block so the accessor offset chain stays intact for all configs.
     constexpr auto windowed_mode = static_cast<WindowedMode>(get_compile_time_arg_val(21));
     constexpr bool use_windowed_mask = is_windowed_mode(windowed_mode);
-    // Write the heads side by side as [B x 1 x S x NQH*DH] (what nlp_concat_heads produces) instead of [B x NQH x S x
+    // Write the heads side by side as [B x 1 x S x NQH*DH] (what concat_heads produces) instead of [B x NQH x S x
     // DH].
     constexpr bool out_concat_heads = get_compile_time_arg_val(22) == 1;
 

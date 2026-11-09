@@ -53,7 +53,7 @@ void batch_loop(
     uint32_t local_count,
     tt_l1_ptr uint32_t* in0_mcast_noc_x,
     tt_l1_ptr uint32_t* in0_mcast_noc_y,
-    bool nlp_local,
+    bool concat_local,
     uint32_t second_half_core,
     uint32_t start_row) {
     const uint32_t read_offset = output_row_size * second_half_core + start_row * input_row_size;
@@ -71,7 +71,7 @@ void batch_loop(
         qkv_noc_x = in0_mcast_noc_x[cur_core_idx];
         qkv_noc_y = in0_mcast_noc_y[cur_core_idx];
         qkv_addr = q_start_addr + read_offset;
-        if (nlp_local) {
+        if (concat_local) {
             qkv_noc_x = core_noc_x[local_count];
             qkv_noc_y = core_noc_y[local_count];
             qkv_addr = tensor_address0 + read_offset;
@@ -79,20 +79,20 @@ void batch_loop(
     }
 };
 
-void nlp_concat(
+void concat_heads(
     Noc noc_obj,
     CircularBuffer cb_q_out,
     uint32_t q_start_addr,
     uint32_t tensor_address0,
-    bool nlp_local,
+    bool concat_local,
     uint32_t start_local,
     tt_l1_ptr uint32_t* in0_mcast_noc_x,
     tt_l1_ptr uint32_t* in0_mcast_noc_y,
     uint32_t second_half_core,
     uint32_t start_row) {
-    uint32_t start = nlp_local ? start_local : batch_start_1;
-    uint32_t end = nlp_local ? start_local + 8 : batch_end_1;
-    uint32_t idx_end = nlp_local ? 1 : batch_size;
+    uint32_t start = concat_local ? start_local : batch_start_1;
+    uint32_t end = concat_local ? start_local + 8 : batch_end_1;
+    uint32_t idx_end = concat_local ? 1 : batch_size;
     uint32_t local_count = 0;
 
     uint32_t cur_core_idx = batch_start_1;
@@ -102,7 +102,7 @@ void nlp_concat(
     uint32_t qkv_noc_y = in0_mcast_noc_y[cur_core_idx];
     uint32_t qkv_addr = q_start_addr + read_offset;
 
-    if (nlp_local) {
+    if (concat_local) {
         qkv_noc_x = core_noc_x[local_count];
         qkv_noc_y = core_noc_y[local_count];
         qkv_addr = tensor_address0 + read_offset;
@@ -125,7 +125,7 @@ void nlp_concat(
             local_count,
             in0_mcast_noc_x,
             in0_mcast_noc_y,
-            nlp_local,
+            concat_local,
             second_half_core,
             start_row);
         start = batch_start_2;
@@ -159,7 +159,7 @@ void kernel_main() {
     Noc noc_obj;
     CircularBuffer cb_q_out(cb_id_q_out);
 
-    nlp_concat(
+    concat_heads(
         noc_obj,
         cb_q_out,
         q_start_addr,
@@ -178,7 +178,7 @@ void kernel_main() {
         signal_sem2.set(0);
     }
 
-    nlp_concat(
+    concat_heads(
         noc_obj,
         cb_q_out,
         q_start_addr,

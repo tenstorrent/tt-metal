@@ -55,7 +55,7 @@ class Qwen3Attention(AbstractModuleBase):
         )
         # Fused KV projection (Llama-style): a single [hidden -> 2*kv_out] matmul
         # produces the [K | V] tensor that grouped_heads_creation consumes directly. Layout is K features
-        # first, V features second (grouped_heads_creation / nlp_create_qkv_heads
+        # first, V features second (grouped_heads_creation / create_qkv_heads
         # splits the last dim at the midpoint into K then V). The HF loader builds
         # this fused weight by concatenating k_proj (K rows) and v_proj (V rows).
         self.kv_proj = LinearLayer(

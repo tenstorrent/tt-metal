@@ -24,16 +24,16 @@
 #include "ttnn/operations/experimental/transformer/concatenate_heads/concatenate_heads_nanobind.hpp"
 #include "ttnn/operations/experimental/transformer/create_qkv_heads_sharded/create_qkv_heads_sharded_nanobind.hpp"
 #include "ttnn/operations/experimental/transformer/create_qkv_heads_from_separate_tensors/create_qkv_heads_from_separate_tensors_nanobind.hpp"
-#include "ttnn/operations/experimental/transformer/nlp_concat_heads/nlp_concat_heads_nanobind.hpp"
-#include "ttnn/operations/experimental/transformer/nlp_concat_heads_decode/nlp_concat_heads_decode_nanobind.hpp"
-#include "ttnn/operations/experimental/transformer/nlp_concat_heads_boltz/nlp_concat_heads_boltz_nanobind.hpp"
-#include "ttnn/operations/experimental/transformer/nlp_create_qkv_heads/nlp_create_qkv_heads_nanobind.hpp"
-#include "ttnn/operations/experimental/transformer/nlp_create_qkv_heads_decode/nlp_create_qkv_heads_decode_nanobind.hpp"
-#include "ttnn/operations/experimental/transformer/nlp_create_qkv_heads_falcon7b/nlp_create_qkv_heads_falcon7b_nanobind.hpp"
-#include "ttnn/operations/experimental/transformer/nlp_create_qkv_heads_vit/nlp_create_qkv_heads_vit_nanobind.hpp"
-#include "ttnn/operations/experimental/transformer/nlp_create_qkv_heads_segformer/nlp_create_qkv_heads_segformer_nanobind.hpp"
-#include "ttnn/operations/experimental/transformer/nlp_create_qkv_heads_boltz/nlp_create_qkv_heads_boltz_nanobind.hpp"
-#include "ttnn/operations/experimental/transformer/nlp_kv_cache_load_slice/nlp_kv_cache_load_slice_nanobind.hpp"
+#include "ttnn/operations/experimental/transformer/concat_heads/concat_heads_nanobind.hpp"
+#include "ttnn/operations/experimental/transformer/concat_heads_decode/concat_heads_decode_nanobind.hpp"
+#include "ttnn/operations/experimental/transformer/concat_heads_boltz/concat_heads_boltz_nanobind.hpp"
+#include "ttnn/operations/experimental/transformer/create_qkv_heads/create_qkv_heads_nanobind.hpp"
+#include "ttnn/operations/experimental/transformer/create_qkv_heads_decode/create_qkv_heads_decode_nanobind.hpp"
+#include "ttnn/operations/experimental/transformer/create_qkv_heads_falcon7b/create_qkv_heads_falcon7b_nanobind.hpp"
+#include "ttnn/operations/experimental/transformer/create_qkv_heads_vit/create_qkv_heads_vit_nanobind.hpp"
+#include "ttnn/operations/experimental/transformer/create_qkv_heads_segformer/create_qkv_heads_segformer_nanobind.hpp"
+#include "ttnn/operations/experimental/transformer/create_qkv_heads_boltz/create_qkv_heads_boltz_nanobind.hpp"
+#include "ttnn/operations/experimental/transformer/kv_cache_load_slice/kv_cache_load_slice_nanobind.hpp"
 #include "ttnn/operations/experimental/indexed_page_cache/indexed_page_cache_nanobind.hpp"
 #include "ttnn/operations/experimental/paged_cache/paged_cache_nanobind.hpp"
 #include "ttnn/operations/experimental/transformer/fused_distributed_rmsnorm/rmsnorm_distributed_nanobind.hpp"
@@ -129,17 +129,17 @@ void py_module(nb::module_& mod) {
 
     transformer::detail::bind_concatenate_heads(mod);
     transformer::detail::bind_split_qkv(mod);
-    transformer::detail::bind_nlp_create_qkv_heads(mod);
+    transformer::detail::bind_create_qkv_heads(mod);
     transformer::detail::bind_create_qkv_heads_from_separate_tensors(mod);
-    nlp_concat_heads_decode::detail::bind_nlp_concat_heads_decode(mod);
-    nlp_concat_heads::detail::bind_nlp_concat_heads(mod);
-    transformer::detail::bind_nlp_concat_heads_boltz(mod);
-    transformer::detail::bind_nlp_create_qkv_heads_decode(mod);
-    transformer::detail::bind_nlp_create_qkv_heads_falcon7b(mod);
-    transformer::detail::bind_nlp_create_qkv_heads_vit(mod);
-    transformer::detail::bind_nlp_create_qkv_heads_segformer(mod);
-    transformer::detail::bind_nlp_create_qkv_heads_boltz(mod);
-    transformer::detail::bind_nlp_kv_cache_load_slice(mod);
+    concat_heads_decode::detail::bind_concat_heads_decode(mod);
+    concat_heads::detail::bind_concat_heads(mod);
+    transformer::detail::bind_concat_heads_boltz(mod);
+    transformer::detail::bind_create_qkv_heads_decode(mod);
+    transformer::detail::bind_create_qkv_heads_falcon7b(mod);
+    transformer::detail::bind_create_qkv_heads_vit(mod);
+    transformer::detail::bind_create_qkv_heads_segformer(mod);
+    transformer::detail::bind_create_qkv_heads_boltz(mod);
+    transformer::detail::bind_kv_cache_load_slice(mod);
     transformer::detail::bind_all_reduce_create_qkv_heads(mod);
 
     transformer::bind_wan_fused_distributed_rmsnorm(mod);

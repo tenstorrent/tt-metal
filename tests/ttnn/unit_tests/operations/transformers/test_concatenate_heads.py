@@ -155,7 +155,7 @@ def test_concatenate_heads_runtime_rows_ignored_on_sharded(device):
             ),
         )
         entries_before = device.num_program_cache_entries()
-        output = ttnn.experimental.nlp_concat_heads(input_tensor, memory_config=output_memory_config, runtime_rows=True)
+        output = ttnn.experimental.concat_heads(input_tensor, memory_config=output_memory_config, runtime_rows=True)
         assert device.num_program_cache_entries() == entries_before + 1, f"rows={rows} reused a program"
         output = ttnn.to_torch(ttnn.sharded_to_interleaved(output, ttnn.DRAM_MEMORY_CONFIG))
         expected = torch_input_tensor.transpose(1, 2).reshape(1, 1, rows, heads * head_dim)

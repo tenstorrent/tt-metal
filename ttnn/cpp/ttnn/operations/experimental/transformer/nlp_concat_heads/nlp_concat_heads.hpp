@@ -1,20 +1,22 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
+// Deprecated: nlp_concat_heads was renamed to concat_heads. This header keeps the old include path and
+// the old function name building for one release; include
+// "ttnn/operations/experimental/transformer/concat_heads/concat_heads.hpp" and call ttnn::experimental::concat_heads
+// instead.
+
 #pragma once
 
-#include <optional>
+#include <utility>
 
-#include "ttnn/tensor/memory_config/memory_config.hpp"
-#include "ttnn/tensor/tensor.hpp"
-#include "ttnn/types.hpp"
+#include "ttnn/operations/experimental/transformer/concat_heads/concat_heads.hpp"
 
 namespace ttnn::experimental {
 
-ttnn::Tensor nlp_concat_heads(
-    const Tensor& input_tensor,
-    const std::optional<MemoryConfig>& memory_config = std::nullopt,
-    bool runtime_rows = false);
-
+template <typename... Args>
+auto nlp_concat_heads(Args&&... args) {
+    return concat_heads(std::forward<Args>(args)...);
+}
 }  // namespace ttnn::experimental

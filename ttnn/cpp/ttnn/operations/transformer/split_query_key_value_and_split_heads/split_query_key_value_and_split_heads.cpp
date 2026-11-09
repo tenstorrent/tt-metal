@@ -6,8 +6,8 @@
 
 #include "ttnn/operations/core/core.hpp"
 
-#include "ttnn/operations/experimental/transformer/nlp_create_qkv_heads/nlp_create_qkv_heads.hpp"
-#include "ttnn/operations/experimental/transformer/nlp_create_qkv_heads_falcon7b/nlp_create_qkv_heads_falcon7b.hpp"
+#include "ttnn/operations/experimental/transformer/create_qkv_heads/create_qkv_heads.hpp"
+#include "ttnn/operations/experimental/transformer/create_qkv_heads_falcon7b/create_qkv_heads_falcon7b.hpp"
 #include "ttnn/operations/experimental/transformer/create_qkv_heads_sharded/create_qkv_heads_sharded.hpp"
 
 #include "ttnn/operations/experimental/reshape/view.hpp"
@@ -133,7 +133,7 @@ std::tuple<Tensor, Tensor, Tensor> split_query_key_value_and_split_heads(
         const auto input_4d = ttnn::experimental::view(
             input_tensor, ttnn::Shape{padded_input_shape[0], 1, padded_input_shape[1], padded_input_shape[2]});
 
-        auto outputs = ttnn::experimental::nlp_create_qkv_heads_falcon7b(
+        auto outputs = ttnn::experimental::create_qkv_heads_falcon7b(
             input_4d, memory_config.value_or(input_tensor.memory_config()));
         return ttnn::operations::transformer::detail::reshape_outputs_of_split_query_key_value_and_split_heads(
             {std::get<0>(outputs), std::get<1>(outputs), std::get<2>(outputs)},
@@ -232,7 +232,7 @@ std::tuple<Tensor, Tensor, Tensor> split_query_key_value_and_split_heads(
             input_tensor_kv.value(),
             ttnn::Shape{padded_input_shape_kv[0], 1, padded_input_shape_kv[1], padded_input_shape_kv[2]});
     }
-    const auto outputs = ttnn::experimental::nlp_create_qkv_heads(
+    const auto outputs = ttnn::experimental::create_qkv_heads(
         input_tensor_4d,
         input_tensor_kv_4d,
         num_heads,

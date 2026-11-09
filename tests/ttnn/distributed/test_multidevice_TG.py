@@ -501,11 +501,11 @@ def num_to_corerange(total_max_cores):
         "Llama3-405B-decode-singlecore-sharded",
     ],
 )
-# Llama nlp_create_heads for decode
+# Llama create_qkv_heads_decode
 # 8 attention groups are fractured over 8 devices along the column
 # users are fractured over 4 devices along the rows (batch of 8)
 # Note: interleaved inputs are not supported
-def test_galaxy_nlp_create_heads_decode(
+def test_galaxy_create_qkv_heads_decode(
     batch, seq_len, head_dim, n_local_heads, n_local_kv_heads, is_multicore, mesh_device
 ):
     torch.manual_seed(1234)
@@ -545,7 +545,7 @@ def test_galaxy_nlp_create_heads_decode(
         q_heads_tt,  # [seqlen, bsz, padded_n_local_heads, head_dim]
         k_heads_tt,  # [seqlen, bsz, padded_n_local_kv_heads, head_dim]
         v_heads_tt,  # [seqlen, bsz, padded_n_local_kv_heads, head_dim]
-    ) = ttnn.experimental.nlp_create_qkv_heads_decode(
+    ) = ttnn.experimental.create_qkv_heads_decode(
         qkv_heads,
         num_heads=n_local_heads,
         num_kv_heads=n_local_kv_heads,
@@ -1035,7 +1035,7 @@ def test_sdpa_decode_sharded(mesh_device, b, nh, nkv, s, d, dtype, grid_size, q_
     ],
     ids=["Llama3-70B-decode", "Llama3-405B-decode"],
 )
-def test_galaxy_nlp_concat_heads_decode(
+def test_galaxy_concat_heads_decode(
     batch, seq_len, head_dim, n_local_heads, n_local_kv_heads, padded_local_heads, mesh_device
 ):
     torch.manual_seed(1234)
@@ -1065,7 +1065,7 @@ def test_galaxy_nlp_concat_heads_decode(
         mesh_mapper=ReplicateTensorToMesh(mesh_device),
     )
 
-    concat_head_output = ttnn.experimental.nlp_concat_heads_decode(
+    concat_head_output = ttnn.experimental.concat_heads_decode(
         concat_head_input_tt,
         num_heads=n_local_heads,
     )  # (seqlen, 1, batch, hidden_size)

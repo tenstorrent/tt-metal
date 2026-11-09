@@ -1,23 +1,22 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
+// Deprecated: nlp_create_qkv_heads_decode was renamed to create_qkv_heads_decode. This header keeps the old include
+// path and the old function name building for one release; include
+// "ttnn/operations/experimental/transformer/create_qkv_heads_decode/create_qkv_heads_decode.hpp" and call
+// ttnn::experimental::create_qkv_heads_decode instead.
+
 #pragma once
 
-#include "device/nlp_create_qkv_heads_decode_device_operation.hpp"
-#include "ttnn/tensor/tensor.hpp"
-#include "ttnn/types.hpp"
+#include <utility>
+
+#include "ttnn/operations/experimental/transformer/create_qkv_heads_decode/create_qkv_heads_decode.hpp"
 
 namespace ttnn::experimental {
 
-std::tuple<Tensor, Tensor, Tensor> nlp_create_qkv_heads_decode(
-    const Tensor& input_tensor,
-    uint32_t num_heads,
-    std::optional<const uint32_t> num_kv_heads,
-    std::optional<std::array<Tensor, 3>>& optional_output_tensors,
-    std::optional<const bool> overlap_qk_coregrid = true,
-    const std::optional<const Tensor>& batch_offset = std::nullopt,
-    std::optional<const uint32_t> slice_size = std::nullopt,
-    const std::optional<MemoryConfig>& memory_config = std::nullopt);
-
+template <typename... Args>
+auto nlp_create_qkv_heads_decode(Args&&... args) {
+    return create_qkv_heads_decode(std::forward<Args>(args)...);
+}
 }  // namespace ttnn::experimental

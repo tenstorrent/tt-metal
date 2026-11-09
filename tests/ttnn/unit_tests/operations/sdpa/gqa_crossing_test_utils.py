@@ -5,7 +5,7 @@
 Non-causal GQA SDPA lets a Q chunk run on into the next query head of its group when ``q_chunk_size`` does not
 divide S and that lowers the most Q chunks any core runs. The schedule is then that of the plain op on Q viewed as
 ``[B, NKH, (NQH / NKH) * S, d]`` (the same memory for a tile-aligned S, and no GQA, so no crossing decision), so the
-output must be bit-identical to it, and with ``output_concat_heads`` to ``nlp_concat_heads`` of the head-major output.
+output must be bit-identical to it, and with ``output_concat_heads`` to ``concat_heads`` of the head-major output.
 """
 
 import pytest
@@ -68,8 +68,8 @@ def check_gqa_crossing(device, b, nh, nkv, s, d, q_chunk, k_chunk, grid, dtype):
     out_cat = ttnn.transformer.scaled_dot_product_attention(tq, tk, tv, output_concat_heads=True, **kwargs)
     assert tuple(out_cat.shape) == (b, 1, s, nh * d)
     assert torch.equal(
-        ttnn.to_torch(out_cat), ttnn.to_torch(ttnn.experimental.nlp_concat_heads(out))
-    ), "crossing concat layout must be bit-identical to nlp_concat_heads of the head-major output"
+        ttnn.to_torch(out_cat), ttnn.to_torch(ttnn.experimental.concat_heads(out))
+    ), "crossing concat layout must be bit-identical to concat_heads of the head-major output"
 
     assert_with_pcc(_torch_ref(q, k, v, nh, nkv), got.float(), 0.99 if dtype == ttnn.bfloat8_b else 0.999)
 
@@ -92,8 +92,8 @@ def check_concat_wrap_non_streaming(device, b, nh, nkv, s, d, q_chunk, k_chunk, 
     out = ttnn.transformer.scaled_dot_product_attention(tq, tk, tv, **kwargs)
     out_cat = ttnn.transformer.scaled_dot_product_attention(tq, tk, tv, output_concat_heads=True, **kwargs)
     assert torch.equal(
-        ttnn.to_torch(out_cat), ttnn.to_torch(ttnn.experimental.nlp_concat_heads(out))
-    ), "crossing concat layout must be bit-identical to nlp_concat_heads of the head-major output"
+        ttnn.to_torch(out_cat), ttnn.to_torch(ttnn.experimental.concat_heads(out))
+    ), "crossing concat layout must be bit-identical to concat_heads of the head-major output"
     assert_with_pcc(_torch_ref(q, k, v, nh, nkv), ttnn.to_torch(out).float(), 0.999)
 
 

@@ -363,9 +363,9 @@ An end-to-end example of the prefill attention module is in the [attention.py](.
       ```
 
 2. Reshape Q, K, V to match the expected input shape for scaled dot product attention.
-   - We split the fused QKV tensor into individual Q, K, V tensors using a custom optimized TM OP, `ttnn.experimental.nlp_create_qkv_heads`. For example:
+   - We split the fused QKV tensor into individual Q, K, V tensors using a custom optimized TM OP, `ttnn.experimental.create_qkv_heads`. For example:
      ```python
-     Q, K, V = ttnn.experimental.nlp_create_qkv_heads(xqkv_fused, num_heads=n_q_heads, num_kv_heads=n_kv_heads, transpose_k_heads=False)
+     Q, K, V = ttnn.experimental.create_qkv_heads(xqkv_fused, num_heads=n_q_heads, num_kv_heads=n_kv_heads, transpose_k_heads=False)
      ```
    - Input/Output shapes:
       ```python
@@ -411,9 +411,9 @@ An end-to-end example of the prefill attention module is in the [attention.py](.
      ```
 
 6. Output reshape and output matmul.
-   - Finally, we use `ttnn.experimental.nlp_concat_heads` to reshape the output of the attention op, followed by a standard `ttnn.linear` to do the output projection. For example:
+   - Finally, we use `ttnn.experimental.concat_heads` to reshape the output of the attention op, followed by a standard `ttnn.linear` to do the output projection. For example:
      ```python
-     attn_output = ttnn.experimental.nlp_concat_heads(attn_output)
+     attn_output = ttnn.experimental.concat_heads(attn_output)
      output = ttnn.linear(attn_output, wo)
      ```
    - Input/Output shapes:
@@ -435,11 +435,11 @@ An end-to-end example of the decode attention module is in the [attention.py](..
 
 2. **Reshape QKV**
    - Reshape Q, K, and V to match the expected input shape for scaled dot product attention.
-   - We split the fused QKV tensor into individual Q, K, V tensors using `ttnn.experimental.nlp_create_qkv_heads_decode`.
+   - We split the fused QKV tensor into individual Q, K, V tensors using `ttnn.experimental.create_qkv_heads_decode`.
 > [!NOTE]
->  This is a different OP than `ttnn.experimental.nlp_create_qkv_heads` used in prefill mode. For example:
+>  This is a different OP than `ttnn.experimental.create_qkv_heads` used in prefill mode. For example:
 > ```python
-> Q, K, V = ttnn.experimental.nlp_create_qkv_heads_decode(
+> Q, K, V = ttnn.experimental.create_qkv_heads_decode(
 >  xqkv_fused,
 >  num_heads=n_q_heads,
 >  num_kv_heads=n_kv_heads,
@@ -494,9 +494,9 @@ An end-to-end example of the decode attention module is in the [attention.py](..
      ```
 
 6. **Output Reshape and Output Matmul**
-   - Finally, use `ttnn.experimental.nlp_concat_heads_decode` to reshape the output of the attention OP, followed by a standard `ttnn.linear` to do the output projection. For example:
+   - Finally, use `ttnn.experimental.concat_heads_decode` to reshape the output of the attention OP, followed by a standard `ttnn.linear` to do the output projection. For example:
      ```python
-     attn_output = ttnn.experimental.nlp_concat_heads_decode(attn_output, num_heads=n_q_heads)
+     attn_output = ttnn.experimental.concat_heads_decode(attn_output, num_heads=n_q_heads)
      output = ttnn.linear(attn_output, wo)
      ```
    - Input/Output shapes:

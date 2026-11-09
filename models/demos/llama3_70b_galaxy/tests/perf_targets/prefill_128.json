@@ -53,7 +53,7 @@
         "op_to_op_duration_relative_margin": 0.2,
         "dispatch_duration_relative_margin": 0.3
     },
-    "NlpCreateHeadsDeviceOperation_0": {
+    "CreateHeadsDeviceOperation_0": {
         "op_name": "CreateQKVHeads",
         "kernel_duration": 21994,
         "op_to_op": 1.0,
@@ -152,7 +152,7 @@
         "op_to_op_duration_relative_margin": 0.2,
         "dispatch_duration_relative_margin": 0.3
     },
-    "NLPConcatHeadsDeviceOperation_0": {
+    "ConcatHeadsDeviceOperation_0": {
         "op_name": "concat_heads",
         "kernel_duration": 17667,
         "op_to_op": 1.0,

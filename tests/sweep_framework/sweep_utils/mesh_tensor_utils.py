@@ -632,7 +632,7 @@ def device_canary(device) -> Tuple[bool, str]:
     exception text a vector produced, so a device that returns plausible-looking garbage is
     indistinguishable from an op that computed the wrong answer. Lead-models run 31295900210
     is the case in point -- after a device timeout, `add`, `linear` and
-    `nlp_create_qkv_heads_decode` each came back at PCC exactly 0.0 (an all-zeros readback)
+    `create_qkv_heads_decode` each came back at PCC exactly 0.0 (an all-zeros readback)
     and were booked as three separate test failures. All three pass in other runs on other
     boxes. A health probe answers the question directly instead of inferring it from prose.
 

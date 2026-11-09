@@ -1329,7 +1329,7 @@ def test_sharded_concat_heads(
                 ttnn.ShardOrientation.COL_MAJOR,
             )
 
-        output_t = ttnn.experimental.nlp_concat_heads(
+        output_t = ttnn.experimental.concat_heads(
             in0_t,
             memory_config=output_mem_config,
         )
@@ -1377,7 +1377,7 @@ def test_sharded_concat_heads_interleaved_output_rejected(
     )
 
     with expect_error(RuntimeError, "Sharded input requires a sharded output memory config"):
-        ttnn.experimental.nlp_concat_heads(
+        ttnn.experimental.concat_heads(
             in0_t,
             memory_config=interleaved_mem_config,
         )

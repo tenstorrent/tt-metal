@@ -1,0 +1,20 @@
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#pragma once
+
+#include <optional>
+
+#include "ttnn/tensor/memory_config/memory_config.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/types.hpp"
+
+namespace ttnn::experimental {
+
+ttnn::Tensor concat_heads(
+    const Tensor& input_tensor,
+    const std::optional<MemoryConfig>& memory_config = std::nullopt,
+    bool runtime_rows = false);
+
+}  // namespace ttnn::experimental

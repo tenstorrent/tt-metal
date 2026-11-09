@@ -14,41 +14,41 @@ set(TTNN_OP_EXPERIMENTAL_TRANSFORMER_SRCS
     create_qkv_heads_from_separate_tensors/create_qkv_heads_from_separate_tensors.cpp
     create_qkv_heads_from_separate_tensors/device/create_qkv_heads_from_separate_tensors_device_operation.cpp
     create_qkv_heads_from_separate_tensors/device/create_qkv_heads_from_separate_tensors_program_factory.cpp
-    nlp_concat_heads/device/nlp_concat_heads_device_operation.cpp
-    nlp_concat_heads/device/nlp_concat_heads_program_factory.cpp
-    nlp_concat_heads/device/nlp_concat_heads_runtime_rows_program_factory.cpp
-    nlp_concat_heads/nlp_concat_heads.cpp
-    nlp_concat_heads_decode/device/nlp_concat_heads_decode_device_operation.cpp
-    nlp_concat_heads_decode/device/nlp_concat_heads_decode_program_factory.cpp
-    nlp_concat_heads_decode/device/nlp_concat_heads_decode_subcoregrids_program_factory.cpp
-    nlp_concat_heads_decode/nlp_concat_heads_decode.cpp
-    nlp_concat_heads_boltz/device/nlp_concat_heads_boltz_device_operation.cpp
-    nlp_concat_heads_boltz/device/nlp_concat_heads_boltz_program_factory.cpp
-    nlp_concat_heads_boltz/nlp_concat_heads_boltz.cpp
-    nlp_create_qkv_heads/device/nlp_create_qkv_heads_device_operation.cpp
-    nlp_create_qkv_heads/device/nlp_create_qkv_heads_program_factory.cpp
-    nlp_create_qkv_heads/device/nlp_create_qkv_heads_runtime_rows_program_factory.cpp
-    nlp_create_qkv_heads/nlp_create_qkv_heads.cpp
-    nlp_create_qkv_heads_decode/device/nlp_create_qkv_heads_decode_device_operation.cpp
-    nlp_create_qkv_heads_decode/device/nlp_create_qkv_heads_decode_interleaved_program_factory.cpp
-    nlp_create_qkv_heads_decode/device/nlp_create_qkv_heads_decode_sharded_program_factory.cpp
-    nlp_create_qkv_heads_decode/device/nlp_create_qkv_heads_decode_sharded_subcoregrid_program_factory.cpp
-    nlp_create_qkv_heads_decode/nlp_create_qkv_heads_decode.cpp
-    nlp_create_qkv_heads_falcon7b/device/nlp_create_qkv_heads_falcon7b_device_operation.cpp
-    nlp_create_qkv_heads_falcon7b/device/nlp_create_qkv_heads_falcon7b_program_factory.cpp
-    nlp_create_qkv_heads_falcon7b/nlp_create_qkv_heads_falcon7b.cpp
-    nlp_create_qkv_heads_segformer/device/nlp_create_qkv_heads_segformer_device_operation.cpp
-    nlp_create_qkv_heads_segformer/device/nlp_create_qkv_heads_segformer_program_factory.cpp
-    nlp_create_qkv_heads_segformer/nlp_create_qkv_heads_segformer.cpp
-    nlp_create_qkv_heads_vit/device/nlp_create_qkv_heads_vit_device_operation.cpp
-    nlp_create_qkv_heads_vit/device/nlp_create_qkv_heads_vit_program_factory.cpp
-    nlp_create_qkv_heads_vit/nlp_create_qkv_heads_vit.cpp
-    nlp_create_qkv_heads_boltz/device/nlp_create_qkv_heads_boltz_device_operation.cpp
-    nlp_create_qkv_heads_boltz/device/nlp_create_qkv_heads_boltz_program_factory.cpp
-    nlp_create_qkv_heads_boltz/nlp_create_qkv_heads_boltz.cpp
-    nlp_kv_cache_load_slice/device/nlp_kv_cache_load_slice_device_operation.cpp
-    nlp_kv_cache_load_slice/device/nlp_kv_cache_load_slice_program_factory.cpp
-    nlp_kv_cache_load_slice/nlp_kv_cache_load_slice.cpp
+    concat_heads/device/concat_heads_device_operation.cpp
+    concat_heads/device/concat_heads_program_factory.cpp
+    concat_heads/device/concat_heads_runtime_rows_program_factory.cpp
+    concat_heads/concat_heads.cpp
+    concat_heads_decode/device/concat_heads_decode_device_operation.cpp
+    concat_heads_decode/device/concat_heads_decode_program_factory.cpp
+    concat_heads_decode/device/concat_heads_decode_subcoregrids_program_factory.cpp
+    concat_heads_decode/concat_heads_decode.cpp
+    concat_heads_boltz/device/concat_heads_boltz_device_operation.cpp
+    concat_heads_boltz/device/concat_heads_boltz_program_factory.cpp
+    concat_heads_boltz/concat_heads_boltz.cpp
+    create_qkv_heads/device/create_qkv_heads_device_operation.cpp
+    create_qkv_heads/device/create_qkv_heads_program_factory.cpp
+    create_qkv_heads/device/create_qkv_heads_runtime_rows_program_factory.cpp
+    create_qkv_heads/create_qkv_heads.cpp
+    create_qkv_heads_decode/device/create_qkv_heads_decode_device_operation.cpp
+    create_qkv_heads_decode/device/create_qkv_heads_decode_interleaved_program_factory.cpp
+    create_qkv_heads_decode/device/create_qkv_heads_decode_sharded_program_factory.cpp
+    create_qkv_heads_decode/device/create_qkv_heads_decode_sharded_subcoregrid_program_factory.cpp
+    create_qkv_heads_decode/create_qkv_heads_decode.cpp
+    create_qkv_heads_falcon7b/device/create_qkv_heads_falcon7b_device_operation.cpp
+    create_qkv_heads_falcon7b/device/create_qkv_heads_falcon7b_program_factory.cpp
+    create_qkv_heads_falcon7b/create_qkv_heads_falcon7b.cpp
+    create_qkv_heads_segformer/device/create_qkv_heads_segformer_device_operation.cpp
+    create_qkv_heads_segformer/device/create_qkv_heads_segformer_program_factory.cpp
+    create_qkv_heads_segformer/create_qkv_heads_segformer.cpp
+    create_qkv_heads_vit/device/create_qkv_heads_vit_device_operation.cpp
+    create_qkv_heads_vit/device/create_qkv_heads_vit_program_factory.cpp
+    create_qkv_heads_vit/create_qkv_heads_vit.cpp
+    create_qkv_heads_boltz/device/create_qkv_heads_boltz_device_operation.cpp
+    create_qkv_heads_boltz/device/create_qkv_heads_boltz_program_factory.cpp
+    create_qkv_heads_boltz/create_qkv_heads_boltz.cpp
+    kv_cache_load_slice/device/kv_cache_load_slice_device_operation.cpp
+    kv_cache_load_slice/device/kv_cache_load_slice_program_factory.cpp
+    kv_cache_load_slice/kv_cache_load_slice.cpp
     fused_distributed_rmsnorm/rmsnorm_pre_all_gather.cpp
     fused_distributed_rmsnorm/rmsnorm_post_all_gather.cpp
     fused_distributed_rmsnorm/device/fused_rmsnorm_pre_all_gather_device_operation.cpp
@@ -88,9 +88,20 @@ set(TTNN_OP_EXPERIMENTAL_TRANSFORMER_SRCS
 )
 
 set(TTNN_OP_EXPERIMENTAL_TRANSFORMER_API_HEADERS
+    concat_heads/concat_heads.hpp
+    create_qkv_heads/device/create_qkv_heads_device_operation.hpp
+    create_qkv_heads/create_qkv_heads.hpp
+    kv_cache_load_slice/kv_cache_load_slice.hpp
+    # deprecated forwarding headers at the old nlp_ paths; remove with ttnn/experimental_renames.py
     nlp_concat_heads/nlp_concat_heads.hpp
-    nlp_create_qkv_heads/device/nlp_create_qkv_heads_device_operation.hpp
+    nlp_concat_heads_decode/nlp_concat_heads_decode.hpp
+    nlp_concat_heads_boltz/nlp_concat_heads_boltz.hpp
     nlp_create_qkv_heads/nlp_create_qkv_heads.hpp
+    nlp_create_qkv_heads_decode/nlp_create_qkv_heads_decode.hpp
+    nlp_create_qkv_heads_falcon7b/nlp_create_qkv_heads_falcon7b.hpp
+    nlp_create_qkv_heads_vit/nlp_create_qkv_heads_vit.hpp
+    nlp_create_qkv_heads_segformer/nlp_create_qkv_heads_segformer.hpp
+    nlp_create_qkv_heads_boltz/nlp_create_qkv_heads_boltz.hpp
     nlp_kv_cache_load_slice/nlp_kv_cache_load_slice.hpp
     rotary_embedding_llama/rotary_embedding_llama.hpp
 )
@@ -105,16 +116,16 @@ set(TTNN_OP_EXPERIMENTAL_TRANSFORMER_NANOBIND_SRCS
     concatenate_heads/concatenate_heads_nanobind.cpp
     create_qkv_heads_sharded/create_qkv_heads_sharded_nanobind.cpp
     create_qkv_heads_from_separate_tensors/create_qkv_heads_from_separate_tensors_nanobind.cpp
-    nlp_concat_heads/nlp_concat_heads_nanobind.cpp
-    nlp_concat_heads_decode/nlp_concat_heads_decode_nanobind.cpp
-    nlp_concat_heads_boltz/nlp_concat_heads_boltz_nanobind.cpp
-    nlp_create_qkv_heads/nlp_create_qkv_heads_nanobind.cpp
-    nlp_create_qkv_heads_decode/nlp_create_qkv_heads_decode_nanobind.cpp
-    nlp_create_qkv_heads_falcon7b/nlp_create_qkv_heads_falcon7b_nanobind.cpp
-    nlp_create_qkv_heads_segformer/nlp_create_qkv_heads_segformer_nanobind.cpp
-    nlp_create_qkv_heads_vit/nlp_create_qkv_heads_vit_nanobind.cpp
-    nlp_create_qkv_heads_boltz/nlp_create_qkv_heads_boltz_nanobind.cpp
-    nlp_kv_cache_load_slice/nlp_kv_cache_load_slice_nanobind.cpp
+    concat_heads/concat_heads_nanobind.cpp
+    concat_heads_decode/concat_heads_decode_nanobind.cpp
+    concat_heads_boltz/concat_heads_boltz_nanobind.cpp
+    create_qkv_heads/create_qkv_heads_nanobind.cpp
+    create_qkv_heads_decode/create_qkv_heads_decode_nanobind.cpp
+    create_qkv_heads_falcon7b/create_qkv_heads_falcon7b_nanobind.cpp
+    create_qkv_heads_segformer/create_qkv_heads_segformer_nanobind.cpp
+    create_qkv_heads_vit/create_qkv_heads_vit_nanobind.cpp
+    create_qkv_heads_boltz/create_qkv_heads_boltz_nanobind.cpp
+    kv_cache_load_slice/kv_cache_load_slice_nanobind.cpp
     fused_distributed_rmsnorm/rmsnorm_distributed_nanobind.cpp
     dit_layernorm_pre_all_gather/dit_layernorm_pre_all_gather_nanobind.cpp
     dit_layernorm_post_all_gather/dit_layernorm_post_all_gather_nanobind.cpp

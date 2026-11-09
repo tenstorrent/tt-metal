@@ -1,0 +1,48 @@
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#pragma once
+
+#include <variant>
+
+#include "ttnn/operations/experimental/transformer/create_qkv_heads_segformer/device/create_qkv_heads_segformer_device_operation_types.hpp"
+#include "ttnn/device_operation.hpp"
+#include "ttnn/metal_v2_artifacts.hpp"
+
+#include "ttnn/tensor/tensor.hpp"
+
+namespace ttnn::experimental::prim {
+
+struct CreateHeadsSegformerDeviceOperation {
+    using operation_attributes_t = CreateQkvHeadsSegformerParams;
+    using tensor_args_t = CreateQkvHeadsSegformerInputs;
+    using spec_return_value_t = CreateQkvHeadsSegformerResultSpec;
+    using tensor_return_value_t = CreateQkvHeadsSegformerResult;
+
+    struct CreateQkvHeadsSegformerProgramFactory {
+        // The input and q-output buffer addresses are the only per-dispatch state; the work split and
+        // every per-core tile offset derive from the input's padded shape and the compute grid, both
+        // covered by the program hash. The tensor bindings are therefore the whole cache-hit refresh.
+        static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
+            const operation_attributes_t& operation_attributes,
+            const tensor_args_t& tensor_args,
+            tensor_return_value_t& output);
+    };
+    using program_factory_t = std::variant<CreateQkvHeadsSegformerProgramFactory>;
+
+    static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
+
+    static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
+
+    static tensor_return_value_t create_output_tensors(const operation_attributes_t& args, const tensor_args_t&);
+};
+
+}  // namespace ttnn::experimental::prim
+
+namespace ttnn::prim {
+std::tuple<Tensor, Tensor, Tensor> create_qkv_heads_segformer(
+    const Tensor& input_tensor,
+    const MemoryConfig& output_mem_config,
+    const std::vector<std::optional<Tensor>>& optional_output_tensors = {});
+}  // namespace ttnn::prim

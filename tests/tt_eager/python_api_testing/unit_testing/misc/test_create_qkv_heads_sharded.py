@@ -144,7 +144,7 @@ def run_create_qkv_heads_sharded_test(
         (7, 384, 12, 12, 64, 7, 6),
     ),
 )
-def test_nlp_create_qkv_heads_test(
+def test_create_qkv_heads_test(
     batch,
     seq_len,
     num_q_heads,
@@ -312,7 +312,7 @@ def run_create_q_and_kv_heads_test(
         (2, 64, 96, 8, 8, 160, 2, 8),
     ),
 )
-def test_nlp_create_q_and_kv_heads_separate_test(
+def test_create_q_and_kv_heads_separate_test(
     batch,
     q_seq_len,
     kv_seq_len,

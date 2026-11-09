@@ -1034,7 +1034,7 @@ SDPA replaces the traditional multi-step attention computation with a single fus
 
 #### 6.3.2 QKV Projection and Head Splitting
 
-The attention block begins with a fused QKV projection followed by head splitting using the optimized `nlp_create_qkv_heads` operation.
+The attention block begins with a fused QKV projection followed by head splitting using the optimized `create_qkv_heads` operation.
 
 **Fused QKV Projection:**
 
@@ -1057,13 +1057,13 @@ def vit_attention(config, hidden_states, parameters):
     query_key_value = ttnn.to_memory_config(query_key_value, ttnn.L1_MEMORY_CONFIG)
 ```
 
-**Head Splitting with `nlp_create_qkv_heads`:**
+**Head Splitting with `create_qkv_heads`:**
 
-Unlike the standard 224×224 implementation which uses `ttnn.transformer.split_query_key_value_and_split_heads`, the high-resolution version uses `ttnn.experimental.nlp_create_qkv_heads` for more efficient head creation:
+Unlike the standard 224×224 implementation which uses `ttnn.transformer.split_query_key_value_and_split_heads`, the high-resolution version uses `ttnn.experimental.create_qkv_heads` for more efficient head creation:
 
 ```python
     # Efficient head splitting - outputs directly to DRAM
-    query, key, value = ttnn.experimental.nlp_create_qkv_heads(
+    query, key, value = ttnn.experimental.create_qkv_heads(
         query_key_value,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,  # Direct to DRAM
         num_heads=num_heads,

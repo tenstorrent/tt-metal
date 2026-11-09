@@ -36,8 +36,8 @@ static_assert(kWorkerWriterBufferArg != kWorkerWriterSemaphoreArg);
 static_assert(kConcatReaderBufferArg != kConcatReaderInputBufferArg);
 
 struct llama_config {
-    CoreRange nlp_only_core_range_1 = CoreRange({1, 1}, {3, 1});  // cores that are used for NLP op only
-    CoreRange nlp_only_core_range_2 = CoreRange({1, 2}, {2, 2});
+    CoreRange concat_only_core_range_1 = CoreRange({1, 1}, {3, 1});  // cores that are used for the concat-heads op only
+    CoreRange concat_only_core_range_2 = CoreRange({1, 2}, {2, 2});
     uint32_t num_cores_input_tensor = 8;
     std::array<CoreRange, 3> semaphore_mcast_ranges = {
         CoreRange({5, 9}, {6, 9}),  // cores waiting for all gather op to finish to start nlp op
@@ -60,7 +60,8 @@ SenderWorkerPlacement sender_worker_placement(uint32_t num_links) {
     return SenderWorkerPlacement{std::move(core_range), std::move(cores)};
 }
 
-// Concat reader runtime args are omitted on the three NLP worker cores. Create and the cache-hit override share this.
+// Concat reader runtime args are omitted on the three concat-heads worker cores. Create and the cache-hit override
+// share this.
 bool skips_concat_reader_runtime_args(const CoreCoord& core) {
     return core.y == 0 && (core.x == 1 || core.x == 2 || core.x == 3);
 }
@@ -216,7 +217,7 @@ ProgramDescriptor build_program_descriptor(
         ::ttnn::ccl::get_forward_backward_configuration(
             operation_attributes.ring_size, ring_index, operation_attributes.topology);
 
-    // To overlap NLP local data with all gather, we divide the batches for each device into:
+    // To overlap concat-heads local data with all gather, we divide the batches for each device into:
     //      - local batch (starts with start_local)
     //      - remote batches
     //          - batch 1 (from batch_start_1 to batch end_1)
@@ -517,14 +518,14 @@ ProgramDescriptor build_program_descriptor(
 
     log_trace(tt::LogOp, "output_cores_this_device: {}", output_cores_this_device);
 
-    std::vector<uint32_t> nlp_local_core_x;
-    nlp_local_core_x.reserve(llama_configuration.num_cores_input_tensor);
-    std::vector<uint32_t> nlp_local_core_y;
-    nlp_local_core_y.reserve(llama_configuration.num_cores_input_tensor);
+    std::vector<uint32_t> concat_local_core_x;
+    concat_local_core_x.reserve(llama_configuration.num_cores_input_tensor);
+    std::vector<uint32_t> concat_local_core_y;
+    concat_local_core_y.reserve(llama_configuration.num_cores_input_tensor);
     for (uint32_t k = 0; k < llama_configuration.num_cores_input_tensor; k++) {
         auto this_core = mesh_device->worker_core_from_logical_core(input_cores_vec[k]);
-        nlp_local_core_x.push_back(this_core.x);
-        nlp_local_core_y.push_back(this_core.y);
+        concat_local_core_x.push_back(this_core.x);
+        concat_local_core_y.push_back(this_core.y);
     }
 
     const uint32_t semaphore_address = static_cast<uint32_t>(operation_attributes.semaphore.address());

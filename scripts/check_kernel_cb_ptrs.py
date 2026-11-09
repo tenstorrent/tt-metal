@@ -38,8 +38,8 @@ BLOCK_COMMENT_RE = re.compile(r"/\*.*?\*/", re.DOTALL)
 KNOWN_VIOLATIONS: frozenset[str] = frozenset(
     {
         "ttnn/cpp/ttnn/operations/experimental/ccl/llama_reduce_scatter_create_heads/device/kernels/dataflow/writer_llama_reduce_scatter.cpp",
-        "ttnn/cpp/ttnn/operations/experimental/transformer/nlp_concat_heads_boltz/device/kernels/dataflow/reader_tm_tile_layout_nlp_concat_heads_boltz_sharded.cpp",
-        "ttnn/cpp/ttnn/operations/experimental/transformer/nlp_concat_heads/device/kernels/dataflow/reader_tm_tile_layout_nlp_concat_heads_sharded.cpp",
+        "ttnn/cpp/ttnn/operations/experimental/transformer/concat_heads_boltz/device/kernels/dataflow/reader_tm_tile_layout_concat_heads_boltz_sharded.cpp",
+        "ttnn/cpp/ttnn/operations/experimental/transformer/concat_heads/device/kernels/dataflow/reader_tm_tile_layout_concat_heads_sharded.cpp",
         "ttnn/cpp/ttnn/operations/data_movement/tilize_with_val_padding/device/kernels/dataflow/reader_unary_pad_height_width_sharded.cpp",
         "ttnn/cpp/ttnn/operations/transformer/sdpa_decode/device/kernels/dataflow/dataflow_common.hpp",
         "tt-train/sources/ttml/metal/ops/select_target_logit/device/kernels/dataflow/select_target_logit_reader.cpp",

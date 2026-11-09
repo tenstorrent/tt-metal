@@ -15,9 +15,9 @@
 // and out are head-merged [B, 1, T, H*V], the layout the output projection consumes.
 //
 // Gated arms, each including the relayouts it needs:
-//   composite       rmsnorm_fw on x, nlp_concat_heads to the head-merged layout, then ttnn::multiply
+//   composite       rmsnorm_fw on x, concat_heads to the head-merged layout, then ttnn::multiply
 //                   with a SILU rhs activation. Backward: dgate and du = dy * silu(gate) from one
-//                   swiglu_elemwise_bw (SwiGLU gating with up = y), nlp_create_qkv_heads to bring du back to
+//                   swiglu_elemwise_bw (SwiGLU gating with up = y), create_qkv_heads to bring du back to
 //                   head-major, then rmsnorm_bw. Every tensor is freed at its last use.
 //   composite+cast  the composite on x typecast to bf16 first, as the RMSNorm on main requires.
 //   fused           rmsnorm_fw/rmsnorm_bw in gated mode.
@@ -262,7 +262,7 @@ Forward composite_forward(const Case& c, const Inputs& in, const bool cast_input
     const auto x = cast_input ? ttnn::typecast(in.x, ttnn::DataType::BFLOAT16) : in.x;
     auto fw = ttml::metal::rmsnorm_fw(x, in.gamma, /* return_intermediates */ true, kEpsilon);
     // [B*H, 1, T, V] -> [B, H, T, V] -> [B, 1, T, H*V]
-    const auto y = ttnn::experimental::nlp_concat_heads(
+    const auto y = ttnn::experimental::concat_heads(
         ttnn::reshape(fw[0].value(), ttnn::Shape({c.batch, c.heads, c.sequence_length, c.head_dim})));
     return Forward{.out = times_silu(y, in.gate), .saved = Saved{.x = x, .rms = fw[1].value(), .y = y}};
 }
@@ -272,7 +272,7 @@ Grads composite_backward(const Case& c, const Inputs& in, Saved saved) {
     auto [dgate, du] = ttml::metal::swiglu_elemwise_bw(in.gate, saved.y.value(), in.dL_dout);
     saved.y.reset();
     // [B, 1, T, H*V] -> [B, H, T, V] -> [B*H, 1, T, V]
-    const auto du_heads = std::get<0>(ttnn::experimental::nlp_create_qkv_heads(
+    const auto du_heads = std::get<0>(ttnn::experimental::create_qkv_heads(
         du, std::nullopt, c.heads, /* num_kv_heads */ 0U, /* transpose_k_heads */ false));
     du.deallocate();
     auto grads = ttml::metal::rmsnorm_bw(

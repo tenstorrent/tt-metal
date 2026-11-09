@@ -1,0 +1,158 @@
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#include "concat_heads_device_operation.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
+#include "ttnn/device_operation.hpp"
+#include "ttnn/operation.hpp"
+#include "ttnn/operations/common/hash_without_rows.hpp"
+
+namespace ttnn::experimental::prim {
+
+namespace {
+// The runtime-rows program serves an interleaved input and output only; sharded keeps the default program.
+bool row_free(const ConcatHeadsParams& args, const Tensor& input) {
+    return args.runtime_rows && !input.is_sharded() && !args.output_mem_config.is_sharded();
+}
+}  // namespace
+
+ConcatHeadsDeviceOperation::program_factory_t ConcatHeadsDeviceOperation::select_program_factory(
+    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    if (row_free(args, tensor_args)) {
+        return ConcatHeadsRuntimeRowsProgramFactory{};
+    }
+    return ConcatHeadsProgramFactory{};
+}
+
+void ConcatHeadsDeviceOperation::validate_on_program_cache_miss(
+    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    const auto& input_tensor = tensor_args;
+
+    TT_FATAL(input_tensor.storage_type() == ttnn::StorageType::DEVICE, "Operands to TM need to be on device!");
+    TT_FATAL(input_tensor.is_allocated(), "Operands to TM need to be allocated in buffers on device!");
+    TT_FATAL(
+        input_tensor.dtype() == tt::tt_metal::DataType::FLOAT32 ||
+            input_tensor.dtype() == tt::tt_metal::DataType::BFLOAT16 ||
+            input_tensor.dtype() == tt::tt_metal::DataType::BFLOAT8_B,
+        "Unsupported data format");
+    TT_FATAL(
+        input_tensor.layout() == tt::tt_metal::Layout::TILE,
+        "Input tensor layout must be TILE but got {}",
+        input_tensor.layout());
+
+    if (input_tensor.is_sharded()) {
+        TT_FATAL(
+            input_tensor.memory_config().memory_layout() != tt::tt_metal::TensorMemoryLayout::WIDTH_SHARDED,
+            "Input tensor memory layout must not be WIDTH_SHARDED but got {}",
+            input_tensor.memory_config().memory_layout());
+        auto shard_spec = input_tensor.shard_spec().value();
+        TT_FATAL(
+            shard_spec.shape[1] == input_tensor.padded_shape()[-1],
+            "Input tensor shard width ({}) must equal padded width ({})",
+            shard_spec.shape[1],
+            input_tensor.padded_shape()[-1]);
+        TT_FATAL(
+            shard_spec.shape[0] % input_tensor.padded_shape()[-2] == 0,
+            "Input tensor shard height ({}) must be divisible by padded height ({})",
+            shard_spec.shape[0],
+            input_tensor.padded_shape()[-2]);
+        TT_FATAL(
+            input_tensor.padded_shape()[1] % (shard_spec.shape[0] / input_tensor.padded_shape()[-2]) == 0,
+            "Input tensor padded height ({}) must be divisible by shard height / padded height ({} / {})",
+            input_tensor.padded_shape()[1],
+            shard_spec.shape[0],
+            input_tensor.padded_shape()[-2]);
+        TT_FATAL(
+            args.output_mem_config.memory_layout() != tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED,
+            "Output memory config layout must not be HEIGHT_SHARDED but got {}",
+            args.output_mem_config.memory_layout());
+        // The sharded kernel writes directly into the output shard; an interleaved output has no
+        // shard to write to (legacy silently produced garbage through an unconfigured CB here).
+        TT_FATAL(
+            args.output_mem_config.is_sharded(),
+            "Sharded input requires a sharded output memory config but got {}",
+            args.output_mem_config.memory_layout());
+    } else {
+        TT_FATAL(
+            args.output_mem_config.memory_layout() == tt::tt_metal::TensorMemoryLayout::INTERLEAVED,
+            "Output memory config layout must be INTERLEAVED but got {}",
+            args.output_mem_config.memory_layout());
+    }
+}
+
+void ConcatHeadsDeviceOperation::validate_on_program_cache_hit(
+    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    if (!row_free(args, tensor_args)) {
+        validate_on_program_cache_miss(args, tensor_args);
+        return;
+    }
+    TT_FATAL(
+        tensor_args.padded_shape()[-2] % tt::constants::TILE_HEIGHT == 0,
+        "Input height {} must be tile aligned",
+        tensor_args.padded_shape()[-2]);
+}
+
+ttsl::hash::hash_t ConcatHeadsDeviceOperation::compute_program_hash(
+    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    if (!row_free(args, tensor_args)) {
+        return ttsl::hash::hash_objects_with_default_seed(
+            ttsl::hash::type_hash<ConcatHeadsDeviceOperation>, args, tensor_args);
+    }
+    return tt::tt_metal::operation::hash_operation<ConcatHeadsDeviceOperation>(
+        args, ttnn::operations::common::hash_spec_without_rows(tensor_args));
+}
+
+ConcatHeadsDeviceOperation::spec_return_value_t ConcatHeadsDeviceOperation::compute_output_specs(
+    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    const auto& input_tensor = tensor_args;
+    const auto& input_shape = input_tensor.logical_shape();
+
+    auto num_heads = input_shape[1];
+    auto sequence_length = input_shape[2];
+    auto head_dim = input_shape[3];
+
+    auto hidden_dim = num_heads * head_dim;
+
+    Shape output_shape({input_shape[0], 1, sequence_length, hidden_dim});
+
+    if (args.output_mem_config.is_sharded()) {
+        tt::tt_metal::ShardSpec shard_spec = input_tensor.shard_spec().value();
+        uint32_t heads_per_shard = shard_spec.shape[0] / input_tensor.padded_shape()[-2];
+        shard_spec.shape = {shard_spec.shape[0] / heads_per_shard, shard_spec.shape[1] * heads_per_shard};
+        auto mem_config = tt::tt_metal::MemoryConfig(
+            args.output_mem_config.memory_layout(), args.output_mem_config.buffer_type(), shard_spec);
+        return tt::tt_metal::TensorSpec(
+            output_shape,
+            tt::tt_metal::TensorLayout(
+                input_tensor.dtype(), tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE), mem_config));
+    }
+
+    return tt::tt_metal::TensorSpec(
+        output_shape,
+        tt::tt_metal::TensorLayout(
+            input_tensor.dtype(), tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE), args.output_mem_config));
+}
+
+ConcatHeadsDeviceOperation::tensor_return_value_t ConcatHeadsDeviceOperation::create_output_tensors(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const auto& input_tensor = tensor_args;
+    return create_device_tensor(compute_output_specs(operation_attributes, tensor_args), input_tensor.device());
+}
+
+}  // namespace ttnn::experimental::prim
+
+namespace ttnn::prim {
+
+Tensor concat_heads(const Tensor& input_tensor, const std::optional<MemoryConfig>& memory_config, bool runtime_rows) {
+    using OperationType = ttnn::experimental::prim::ConcatHeadsDeviceOperation;
+
+    auto operation_attributes = OperationType::operation_attributes_t{
+        .output_mem_config = memory_config.value_or(input_tensor.memory_config()),
+        .runtime_rows = runtime_rows,
+    };
+
+    return ttnn::device_operation::launch<OperationType>(operation_attributes, input_tensor);
+}
+
+}  // namespace ttnn::prim

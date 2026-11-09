@@ -4,7 +4,7 @@
 
 #include "concatenate_heads.hpp"
 
-#include "ttnn/operations/experimental/transformer/nlp_concat_heads/device/nlp_concat_heads_device_operation.hpp"
+#include "ttnn/operations/experimental/transformer/concat_heads/device/concat_heads_device_operation.hpp"
 #include "ttnn/operations/data_movement/squeeze/squeeze.hpp"
 #include "ttnn/operations/core/core.hpp"
 
@@ -43,7 +43,7 @@ ttnn::Tensor concatenate_heads(
                   input_tensor, MemoryConfig{TensorMemoryLayout::INTERLEAVED, resolved_mem_config.buffer_type()})
             : input_tensor;
 
-    auto output = ttnn::prim::nlp_concat_heads(actual_input, memory_config, runtime_rows);
+    auto output = ttnn::prim::concat_heads(actual_input, memory_config, runtime_rows);
 
     return ttnn::squeeze(output, 1);
 }

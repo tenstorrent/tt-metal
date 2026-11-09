@@ -1,0 +1,33 @@
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#pragma once
+
+#include "device/create_qkv_heads_device_operation.hpp"
+#include "ttnn/operations/core/core.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/types.hpp"
+
+namespace ttnn::experimental {
+
+std::tuple<Tensor, Tensor, Tensor> create_qkv_heads(
+    const Tensor& input_tensor_q,
+    const std::optional<Tensor>& input_tensor_kv,
+    uint32_t num_q_heads,
+    std::optional<uint32_t> num_kv_heads,
+    bool transpose_k_heads,
+    bool kv_tied = false,
+    const std::optional<MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<std::vector<std::optional<Tensor>>>& optional_output_tensors = std::nullopt,
+    bool runtime_rows = false);
+
+// Q-only head creation with two tile-aligned channel outputs, without materializing full heads.
+std::tuple<Tensor, Tensor> create_q_heads_split(
+    const Tensor& input,
+    uint32_t num_heads,
+    uint32_t split_head_dim,
+    const std::optional<MemoryConfig>& memory_config = std::nullopt,
+    bool runtime_rows = false);
+
+}  // namespace ttnn::experimental

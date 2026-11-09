@@ -14,8 +14,8 @@
 #include "core/tt_tensor_utils.hpp"
 #include "ttnn/operations/data_movement/concat/concat.hpp"
 #include "ttnn/operations/data_movement/transpose/transpose.hpp"
-#include "ttnn/operations/experimental/transformer/nlp_concat_heads/nlp_concat_heads.hpp"
-#include "ttnn/operations/experimental/transformer/nlp_create_qkv_heads/nlp_create_qkv_heads.hpp"
+#include "ttnn/operations/experimental/transformer/concat_heads/concat_heads.hpp"
+#include "ttnn/operations/experimental/transformer/create_qkv_heads/create_qkv_heads.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
 namespace ttml::ops {
@@ -32,7 +32,7 @@ uint32_t validate_head_dim(uint32_t width, uint32_t num_heads, std::string_view 
         throw std::invalid_argument(fmt::format(
             "{} expects the input width ({}) to be divisible by {} ({}).", op_name, width, heads_name, num_heads));
     }
-    // nlp_create_qkv_heads derives its tile count as head_dim / TILE_WIDTH, so a sub-tile head_dim
+    // create_qkv_heads derives its tile count as head_dim / TILE_WIDTH, so a sub-tile head_dim
     // silently writes nothing and returns a tile-padded tensor of garbage.
     const uint32_t head_dim = width / num_heads;
     if (head_dim % tt::constants::TILE_WIDTH != 0U) {
@@ -48,7 +48,7 @@ uint32_t validate_head_dim(uint32_t width, uint32_t num_heads, std::string_view 
     return head_dim;
 }
 
-// Splits `qs` (and `kvs`, when given) into heads with nlp_create_qkv_heads:
+// Splits `qs` (and `kvs`, when given) into heads with create_qkv_heads:
 // q: (B, num_heads, S, head_dim); k, v: (B, num_kv_heads, S, head_dim).
 // Without `kvs`, `qs` holds [Q | K | V]; with it, `qs` holds Q and `kvs` holds [K | V].
 std::tuple<autograd::TensorPtr, autograd::TensorPtr, autograd::TensorPtr> create_heads(
@@ -76,7 +76,7 @@ std::tuple<autograd::TensorPtr, autograd::TensorPtr, autograd::TensorPtr> create
         validate_head_dim(qs_width, num_heads + 2U * num_kv_heads, op_name, "num_heads + 2 * num_groups");
     }
 
-    auto [q, k, v] = ttnn::experimental::nlp_create_qkv_heads(
+    auto [q, k, v] = ttnn::experimental::create_qkv_heads(
         qs->get_value(),
         kvs ? std::optional<ttnn::Tensor>(kvs->get_value()) : std::nullopt,
         /*num_q_heads=*/num_heads,
@@ -92,9 +92,9 @@ std::tuple<autograd::TensorPtr, autograd::TensorPtr, autograd::TensorPtr> create
 
     autograd::GradFunction grad_q = [out_q, out_k, out_v, qs, kvs]() {
         // (B, heads, S, head_dim) -> (B, 1, S, heads * head_dim)
-        auto grad_q = ttnn::experimental::nlp_concat_heads(out_q->get_grad());
-        auto grad_k = ttnn::experimental::nlp_concat_heads(out_k->get_grad());
-        auto grad_v = ttnn::experimental::nlp_concat_heads(out_v->get_grad());
+        auto grad_q = ttnn::experimental::concat_heads(out_q->get_grad());
+        auto grad_k = ttnn::experimental::concat_heads(out_k->get_grad());
+        auto grad_v = ttnn::experimental::concat_heads(out_v->get_grad());
         if (kvs) {
             qs->add_grad(grad_q);
             kvs->add_grad(ttnn::concat(std::vector<ttnn::Tensor>({grad_k, grad_v}), /* dim */ 3));
@@ -131,7 +131,7 @@ autograd::TensorPtr split_heads(const autograd::TensorPtr& x, uint32_t num_heads
             fmt::format("split_heads expects an input of shape (B, 1, S, E), but dim 1 is {}.", x_shape[1]));
     }
     validate_head_dim(x_shape[3], num_heads, "split_heads", "num_heads");
-    // nlp_create_qkv_heads picks its program factory from the input alone, and the sharded factory
+    // create_qkv_heads picks its program factory from the input alone, and the sharded factory
     // divides by num_kv_heads, which is 0 here. Reject rather than take a SIGFPE inside the kernel.
     if (x->get_value().is_sharded()) {
         throw std::invalid_argument("split_heads does not support sharded inputs; provide an interleaved tensor.");
@@ -139,7 +139,7 @@ autograd::TensorPtr split_heads(const autograd::TensorPtr& x, uint32_t num_heads
 
     // (B, 1, S, E) -> (B, num_heads, S, E / num_heads)
     // num_kv_heads = 0 splits the whole input into query heads, leaving the k and v outputs empty.
-    auto [q, k, v] = ttnn::experimental::nlp_create_qkv_heads(
+    auto [q, k, v] = ttnn::experimental::create_qkv_heads(
         x->get_value(),
         std::nullopt,
         /*num_q_heads=*/num_heads,
@@ -153,7 +153,7 @@ autograd::TensorPtr split_heads(const autograd::TensorPtr& x, uint32_t num_heads
 
     autograd::GradFunction grad = [out, x]() {
         // (B, num_heads, S, E / num_heads) -> (B, 1, S, E)
-        x->add_grad(ttnn::experimental::nlp_concat_heads(out->get_grad()));
+        x->add_grad(ttnn::experimental::concat_heads(out->get_grad()));
     };
 
     out->set_node(autograd::add_backward_node(std::move(grad), out, x));
@@ -170,7 +170,7 @@ autograd::TensorPtr heads_fusion(const autograd::TensorPtr& x) {
     uint32_t embedding_dim = x_shape[3];
 
     // (B, H, S, E/H) -> (B, 1, S, E)
-    auto fused_heads = ttnn::experimental::nlp_concat_heads(x->get_value());
+    auto fused_heads = ttnn::experimental::concat_heads(x->get_value());
     auto out = autograd::create_tensor(fused_heads);
 
     autograd::GradFunction grad = [out, x, num_heads, batch_size, sequence_length, embedding_dim]() {

@@ -94,7 +94,7 @@ void AllReduceCreateQkvHeadsDeviceOperation::validate_on_program_cache_miss(
     const auto& input_shape = input_tensor.logical_shape();
 
     // TODO: Rewrite validation for this decode case
-    // NOTE: Checks for head_dim and shape[3] is done in nlp_create_qkv_heads because it's needed to infer head_dim
+    // NOTE: Checks for head_dim and shape[3] is done in create_qkv_heads because it's needed to infer head_dim
     TT_FATAL(
         operation_attributes.dtype == tt::tt_metal::DataType::BFLOAT16,
         "Unsupported data format {}, currently only bfloat16 is supported",

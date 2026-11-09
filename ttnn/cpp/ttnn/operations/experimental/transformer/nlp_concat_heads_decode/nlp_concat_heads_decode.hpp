@@ -1,19 +1,22 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
+// Deprecated: nlp_concat_heads_decode was renamed to concat_heads_decode. This header keeps the old include path and
+// the old function name building for one release; include
+// "ttnn/operations/experimental/transformer/concat_heads_decode/concat_heads_decode.hpp" and call
+// ttnn::experimental::concat_heads_decode instead.
+
 #pragma once
 
-#include "ttnn/tensor/tensor.hpp"
-#include "ttnn/types.hpp"
+#include <utility>
+
+#include "ttnn/operations/experimental/transformer/concat_heads_decode/concat_heads_decode.hpp"
 
 namespace ttnn::experimental {
 
-ttnn::Tensor nlp_concat_heads_decode(
-    const Tensor& input_tensor,
-    uint32_t num_heads,
-    const std::optional<MemoryConfig>& memory_config = std::nullopt,
-    const std::optional<Tensor>& optional_output_tensor = std::nullopt,
-    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
-
+template <typename... Args>
+auto nlp_concat_heads_decode(Args&&... args) {
+    return concat_heads_decode(std::forward<Args>(args)...);
+}
 }  // namespace ttnn::experimental

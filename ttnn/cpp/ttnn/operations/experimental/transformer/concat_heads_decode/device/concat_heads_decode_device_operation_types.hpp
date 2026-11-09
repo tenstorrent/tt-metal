@@ -1,0 +1,22 @@
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#pragma once
+
+#include "ttnn/tensor/tensor.hpp"
+
+namespace ttnn::experimental::prim {
+
+struct ConcatHeadsDecodeParams {
+    uint32_t num_heads{};
+    bool on_subcoregrids{};
+    std::optional<tt::tt_metal::CoreRangeSet> sub_core_grids;
+};
+
+struct ConcatHeadsDecodeInputs {
+    Tensor input;
+    std::optional<Tensor> preallocated_output;
+};
+
+}  // namespace ttnn::experimental::prim

@@ -20,16 +20,16 @@ file(
     create_qkv_heads_sharded/device/kernels/*.cpp
     create_qkv_heads_from_separate_tensors/device/kernels/*.cpp
     fused_distributed_rmsnorm/device/kernels/*.cpp
-    nlp_concat_heads/device/kernels/*.cpp
-    nlp_concat_heads_boltz/device/kernels/*.cpp
-    nlp_concat_heads_decode/device/kernels/*.cpp
-    nlp_create_qkv_heads/device/kernels/*.cpp
-    nlp_create_qkv_heads_boltz/device/kernels/*.cpp
-    nlp_create_qkv_heads_decode/device/kernels/*.cpp
-    nlp_create_qkv_heads_falcon7b/device/kernels/*.cpp
-    nlp_create_qkv_heads_segformer/device/kernels/*.cpp
-    nlp_create_qkv_heads_vit/device/kernels/*.cpp
-    nlp_kv_cache_load_slice/device/kernels/*.cpp
+    concat_heads/device/kernels/*.cpp
+    concat_heads_boltz/device/kernels/*.cpp
+    concat_heads_decode/device/kernels/*.cpp
+    create_qkv_heads/device/kernels/*.cpp
+    create_qkv_heads_boltz/device/kernels/*.cpp
+    create_qkv_heads_decode/device/kernels/*.cpp
+    create_qkv_heads_falcon7b/device/kernels/*.cpp
+    create_qkv_heads_segformer/device/kernels/*.cpp
+    create_qkv_heads_vit/device/kernels/*.cpp
+    kv_cache_load_slice/device/kernels/*.cpp
     rotary_embedding/device/kernels/*.cpp
     rotary_embedding_hf/device/kernels/*.cpp
     rotary_embedding_llama/device/kernels/*.cpp
