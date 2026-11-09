@@ -209,6 +209,13 @@ TensorSpec TensorSpec::sharded_across_dims(
     ttsl::Span<const int32_t> dims, CoreRangeSet grid, ShardOrientation orientation) const {
     Shape shard_shape = padded_shape();
     for (auto dim : dims) {
+        // Shape::operator[] accepts indices down to -4 for every rank by design (negative indexing
+        // reaches the internal padding), so a dim below -rank used to be a silent no-op here.
+        TT_FATAL(
+            dim >= -static_cast<int32_t>(shard_shape.rank()) && dim < static_cast<int32_t>(shard_shape.rank()),
+            "sharded_across_dims dimension {} is out of range for a tensor of rank {}",
+            dim,
+            shard_shape.rank());
         shard_shape[dim] = 1;
     }
     NdShardSpec shard_spec(std::move(shard_shape), std::move(grid), orientation);
@@ -220,6 +227,13 @@ TensorSpec TensorSpec::sharded_across_dims_except(
     const auto& padded_shape = this->padded_shape();
     Shape shard_shape = Shape().to_rank(padded_shape.rank());
     for (auto dim : dims) {
+        // Same padding-index pitfall as sharded_across_dims: an out-of-range negative dim would
+        // write the padding and leave the dimension sharded instead of excepted.
+        TT_FATAL(
+            dim >= -static_cast<int32_t>(shard_shape.rank()) && dim < static_cast<int32_t>(shard_shape.rank()),
+            "sharded_across_dims_except dimension {} is out of range for a tensor of rank {}",
+            dim,
+            shard_shape.rank());
         shard_shape[dim] = padded_shape[dim];
     }
     auto shard_spec = NdShardSpec(std::move(shard_shape), std::move(grid), orientation);
