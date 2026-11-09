@@ -30,6 +30,7 @@ from ....models.transformers.minimax_h3.attention_minimax_h3 import MiniMaxH3Att
 from ....models.transformers.minimax_h3.token_refiner_minimax_h3 import MiniMaxH3TokenRefiner
 from ....models.transformers.minimax_h3.transformer_block_minimax_h3 import MiniMaxH3TransformerBlock
 from ....models.transformers.minimax_h3.transformer_minimax_h3 import MiniMaxH3Transformer3DModel
+from ....models.transformers.minimax_h3.vsa_prepass import MiniMaxH3VSAConfig, VSAPrepass
 from ....parallel.config import DiTParallelConfig, ParallelFactor
 from ....parallel.manager import CCLManager
 from ....pipelines.minimax_h3.packing import (
@@ -41,7 +42,9 @@ from ....pipelines.minimax_h3.packing import (
     resolve_canvas_size,
     video_latent_num_frames,
 )
+from ....pipelines.minimax_h3.pipeline_minimax_h3 import MINIMAX_H3_BUCKET_LADDER_4X8, select_bucket
 from ....pipelines.minimax_h3.policy import align_num_frames
+from ....pipelines.minimax_h3.vsa_geometry import build_vsa_geometry, vsa_min_padded_len
 from ....utils.check import assert_quality
 from ....utils.tensor import bf16_tensor, bf16_tensor_2dshard, from_torch, local_device_to_torch
 from ....utils.test import skip_if_unsupported_num_links
@@ -54,6 +57,7 @@ from .common import (
     TAG_TEXT,
     TAG_VIDEO,
     TT_BLOCK_CONFIG,
+    format_host_times,
     packed_layout,
     randomize_norm_weights,
     upload_rope,
@@ -1160,6 +1164,155 @@ def test_minimax_h3_transformer_block_perf(
     local = local_device_to_torch(tt_out).float()
     assert torch.isfinite(local).all(), "block output contains NaN or Inf"
     logger.info(f"output {tuple(tt_out.shape)}, local shard std={local.std().item():.4f}")
+
+
+VSA_SPARSITY = 0.9
+
+
+@GALAXY_RING
+@pytest.mark.parametrize(
+    "duration_s",
+    [
+        pytest.param(5.0, id="5s_768p"),
+        pytest.param(15.0, id="15s_768p"),
+    ],
+)
+@pytest.mark.parametrize("attention", ["dense", "vsa"])
+def test_minimax_h3_transformer_block_vsa_perf(
+    mesh_device: ttnn.MeshDevice,
+    sp_axis: int,
+    tp_axis: int,
+    num_links: int,
+    duration_s: float,
+    attention: str,
+    is_fsdp: bool,
+    topology: ttnn.Topology,
+    reset_seeds,
+) -> None:
+    """One block at the FastH3 VSA request's rung, dense or VSA, so the two profiles differ only in attention."""
+    skip_if_unsupported_num_links(mesh_device, num_links)
+    sp_factor = tuple(mesh_device.shape)[sp_axis]
+    tp_factor = tuple(mesh_device.shape)[tp_axis]
+    if sp_factor != 8:
+        pytest.skip("the rung comes from the 4x8 bucket ladder")
+
+    sizes = _packed_sizes(duration_s, CALIBRATED_FOX_PROMPT_NUM_TOKENS)
+    seq_len = sizes["seq_len"]
+    segments = (sizes["num_text"], 0, sizes["num_audio"])
+    frame = sizes["grid_h"] * sizes["grid_w"]
+    grid = (sizes["num_video"] // frame, sizes["grid_h"], sizes["grid_w"])
+    rung = select_bucket(vsa_min_padded_len(segments, grid, sp_factor), MINIMAX_H3_BUCKET_LADDER_4X8)
+    logger.info(f"{duration_s:g}s @ {sizes['height']}x{sizes['width']}: seq_len {seq_len}, rung {rung}, {attention}")
+
+    num_timesteps = 2
+    position_ids, tags, timestep_indices = packed_layout(
+        sizes["num_text"], sizes["num_audio"], sizes["num_video"], (sizes["grid_h"], sizes["grid_w"]), rung
+    )
+    adaln_indices = timestep_indices * MINIMAX_H3_MODALITY_NUM + tags.clamp(min=0)
+
+    geometry = None
+    if attention == "vsa":
+        geometry = build_vsa_geometry(segments, grid, sp_factor=sp_factor, padded_len=rung)
+        position_ids = geometry.permute_metadata(position_ids[:seq_len])
+        adaln_indices = geometry.permute_metadata(adaln_indices[:seq_len])
+
+    rope = MiniMaxH3RotaryPosEmbed(rope_freq_dim=ROPE_FREQ_DIM, rope_theta=ROPE_THETA)
+    with torch.no_grad():
+        rope_cos, rope_sin = rope(position_ids)
+    rope_cos, rope_sin = prepare_rope_tables(rope_cos, rope_sin, ATTENTION_HEAD_DIM)
+
+    ccl_manager = CCLManager(mesh_device=mesh_device, num_links=num_links, topology=topology)
+    parallel_config = DiTParallelConfig(
+        tensor_parallel=ParallelFactor(mesh_axis=tp_axis, factor=tp_factor),
+        sequence_parallel=ParallelFactor(mesh_axis=sp_axis, factor=sp_factor),
+        cfg_parallel=None,
+    )
+    tt_block = MiniMaxH3TransformerBlock(
+        **TT_BLOCK_CONFIG,
+        rotary_dim=2 * 3 * ROPE_FREQ_DIM,
+        mesh_device=mesh_device,
+        ccl_manager=ccl_manager,
+        parallel_config=parallel_config,
+        is_fsdp=is_fsdp,
+        vsa_config=MiniMaxH3VSAConfig(sparsity=VSA_SPARSITY) if geometry is not None else None,
+    )
+    torch_block = TorchMiniMaxH3Block(**REAL_BLOCK_CONFIG).to(torch.float32)
+    tt_block.load_torch_state_dict(torch_block.state_dict())
+    del torch_block
+
+    host_ms = {}
+    update_ms = {}
+    logical_n = seq_len
+    if geometry is not None:
+        prepass = VSAPrepass(
+            rung=rung,
+            sp_factor=sp_factor,
+            sparsity=VSA_SPARSITY,
+            num_heads=REAL_BLOCK_CONFIG["num_attention_heads"] // tp_factor,
+            head_dim=ATTENTION_HEAD_DIM,
+            mesh_device=mesh_device,
+            ccl_manager=ccl_manager,
+            sp_axis=sp_axis,
+        )
+        prepass.update(geometry, traced=False)
+        tt_block.attn.set_vsa_prepass(prepass)
+
+        # Timed again once warm.
+        ttnn.synchronize_device(mesh_device)
+        t0 = time.perf_counter()
+        geometry = build_vsa_geometry(segments, grid, sp_factor=sp_factor, padded_len=rung)
+        host_ms["build_vsa_geometry"] = (time.perf_counter() - t0) * 1e3
+        ttnn.synchronize_device(mesh_device)
+        t0 = time.perf_counter()
+        prepass.update(geometry, traced=False, timings=update_ms)
+        host_ms["prepass.update"] = (time.perf_counter() - t0) * 1e3
+        t0 = time.perf_counter()
+        tt_block.attn.set_vsa_prepass(prepass)
+        host_ms["set_vsa_prepass"] = (time.perf_counter() - t0) * 1e3
+        logical_n = geometry.logical_n
+
+    tt_spatial = bf16_tensor_2dshard(
+        torch.randn(1, 1, rung, HIDDEN_SIZE),
+        device=mesh_device,
+        shard_mapping={sp_axis: 2, tp_axis: 3},
+    )
+    tt_temb = from_torch(torch.randn(1, 1, num_timesteps, TIME_EMBED_DIM), device=mesh_device, dtype=ttnn.float32)
+    tt_adaln = from_torch(
+        adaln_indices.to(torch.int32).reshape(1, 1, 1, rung),
+        device=mesh_device,
+        dtype=ttnn.int32,
+        layout=ttnn.Layout.ROW_MAJOR,
+        mesh_axes=[..., None, sp_axis],
+    )
+    tt_rope_cos, tt_rope_sin = upload_rope(rope_cos, rope_sin, mesh_device=mesh_device, sp_axis=sp_axis)
+    tt_logical_n = logical_length_tensor(mesh_device, logical_n)
+
+    def run_block() -> ttnn.Tensor:
+        out = tt_block(
+            tt_spatial,
+            tt_logical_n,
+            temb=tt_temb,
+            adaln_indices=tt_adaln,
+            rope_cos=tt_rope_cos,
+            rope_sin=tt_rope_sin,
+        )
+        ttnn.synchronize_device(mesh_device)
+        return out
+
+    logger.info("iteration 1: compiling kernels and populating the program cache")
+    ttnn.deallocate(run_block())
+    ttnn.synchronize_device(mesh_device)
+
+    logger.info("iteration 2: warm run (the profiled region)")
+    signpost("start")
+    t0 = time.perf_counter()
+    tt_out = run_block()
+    host_ms["warm run"] = (time.perf_counter() - t0) * 1e3
+    signpost("stop")
+
+    local = local_device_to_torch(tt_out).float()
+    assert torch.isfinite(local).all(), "block output contains NaN or Inf"
+    logger.info(f"{attention} host times:\n" + format_host_times(host_ms, {"prepass.update": update_ms}))
 
 
 # ---- the token refiner ----

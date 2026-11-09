@@ -295,6 +295,27 @@ def upload_rope(rope_cos: torch.Tensor, rope_sin: torch.Tensor, *, mesh_device, 
     return _upload(rope_cos), _upload(rope_sin)
 
 
+def format_host_times(host_ms: dict[str, float], breakdown: dict[str, dict[str, float]]) -> str:
+    """One line per step and the total; a step in `breakdown` also lists its sub-steps and the unaccounted rest."""
+    lines = []
+    for name, ms in host_ms.items():
+        lines.append(f"  {name:<26} {ms:10.3f} ms")
+        sub = breakdown.get(name, {})
+        lines += [f"    {sub_name:<24} {sub_ms:10.3f} ms" for sub_name, sub_ms in sub.items()]
+        if sub:
+            lines.append(f"    {'other':<24} {ms - sum(sub.values()):10.3f} ms")
+    lines.append(f"  {'total':<26} {sum(host_ms.values()):10.3f} ms")
+    return "\n".join(lines)
+
+
+def grid_position_ids(seq_len: int) -> torch.Tensor:
+    """A (t, h, w) grid covering `seq_len` rows: 768p-like 48x84 frames, t-major, truncated."""
+    grid_h, grid_w = 48, 84
+    grid_t = -(-seq_len // (grid_h * grid_w))
+    coords = torch.meshgrid(torch.arange(grid_t), torch.arange(grid_h), torch.arange(grid_w), indexing="ij")
+    return torch.stack([c.reshape(-1) for c in coords], dim=-1)[:seq_len]
+
+
 def build_visual_encoder(config: dict, mesh_device, num_frames: int, **overrides):
     from ....models.vae.minimax_h3.encoder_minimax_h3 import MiniMaxH3Encoder3d
 
