@@ -47,6 +47,12 @@ class Conv2d(Module):
     # single buffering and then to the unsharded path; `no_shard` pins shapes to the unsharded path.
     shard_layout: ttnn.TensorMemoryLayout | None = None
     no_shard: frozenset = frozenset()
+    # Run a call as `cout_split` sub-convs over output-channel slices of the weights, each with `split_shard_layout`
+    # and the full inner dim resident, then concatenate on the channel dim; only for inputs of at least
+    # `split_min_pixels` (h x w) per device.
+    cout_split: int = 1
+    split_min_pixels: int = 0
+    split_shard_layout: ttnn.TensorMemoryLayout | None = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
 
     # Mesh shape -> (input height, input width, in channels, out channels) -> number of DRAM width
     # slices; 1 runs the conv on the whole input in L1. A shape missing here gets no slice config,
@@ -503,18 +509,47 @@ class Conv2d(Module):
         self._release_prepared()
         super().deallocate_weights()
 
-    def _conv_at_level(self, x, b, h, w, in_channels, out_channels, slice_config, num_slices, level):
+    def _weight_split(self, i: int, n: int):
+        """Output-channel part i of n of the OIHW weight and of the bias, as replicated host tensors (cached). The
+        parameters live on host (row-major, replicated when neither channel dim is mesh-sharded), so the part is cut
+        from device 0's copy."""
+        cache = self.__dict__.setdefault("_weight_splits", {})
+        if (i, n) not in cache:
+            assert self.in_mesh_axis is None and self.out_mesh_axis is None, "cout split needs replicated weights"
+
+            def part(t: ttnn.Tensor, dim: int) -> ttnn.Tensor:
+                try:
+                    full = ttnn.to_torch(ttnn.get_device_tensors(t)[0])
+                except Exception:  # noqa: BLE001
+                    full = ttnn.to_torch(t, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=0))
+                    full = full[: t.shape[0]]
+                step = full.shape[dim] // n
+                piece = full.narrow(dim, i * step, step).contiguous()
+                return ttnn.from_torch(
+                    piece,
+                    dtype=t.dtype,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+                )
+
+            cache[(i, n)] = (part(self.weight.data, 0), part(self.bias.data, 3) if self.bias is not None else None)
+        return cache[(i, n)]
+
+    def _conv_at_level(
+        self, x, b, h, w, in_channels, out_channels, slice_config, num_slices, level, split=None, shard_layout=None
+    ):
         """One conv2d at a fallback level: 0 = shard layout + double buffering (as configured), 1 = shard layout
-        without double buffering, 2 = no shard layout (today's behaviour)."""
+        without double buffering, 2 = no shard layout (today's behaviour). `split` = (i, n): output-channel part i
+        of n, with `shard_layout` and the full inner dim."""
         double_buffer = self.double_buffer and level != 1
-        shard = self.shard_layout if level < 2 else None
+        shard = (shard_layout if split is not None else self.shard_layout) if level < 2 else None
         conv_config = ttnn.Conv2dConfig(
             act_block_h_override=self.act_block_h_override,
             weights_dtype=self.weight.dtype,
             config_tensors_in_dram=self.config_tensors_in_dram,
             enable_act_double_buffer=double_buffer,
             enable_weights_double_buffer=double_buffer,
-            full_inner_dim=self.full_inner_dim,
+            full_inner_dim=self.full_inner_dim or split is not None,
             **({"shard_layout": shard} if shard is not None else {}),
         )
 
@@ -522,6 +557,10 @@ class Conv2d(Module):
         # config, layout and dtype also reach prepare_conv_weights but are not in the key: this assumes each Conv2d
         # instance always gets inputs with the same memory config, layout and dtype.
         prepared_key = (b, h, w, num_slices) if self.shard_layout is None else (b, h, w, num_slices, level)
+        weight_data, bias_data = self.weight.data, (self.bias.data if self.bias is not None else None)
+        if split is not None:
+            prepared_key = (*prepared_key, split)
+            weight_data, bias_data = self._weight_split(*split)
         prepared_weight, prepared_bias = self._prepared.get(prepared_key, (None, None))
         if prepared_weight is None:
             base_kwargs = {
@@ -539,7 +578,7 @@ class Conv2d(Module):
                 "conv_config": conv_config,
             }
             prepared_weight = ttnn.prepare_conv_weights(
-                weight_tensor=self.weight.data,
+                weight_tensor=weight_data,
                 weights_format="OIHW",
                 input_memory_config=x.memory_config(),
                 input_layout=x.get_layout(),
@@ -551,7 +590,7 @@ class Conv2d(Module):
             prepared_weight = ttnn.to_device(prepared_weight, self.mesh_device)
             if self.bias is not None:
                 prepared_bias = ttnn.prepare_conv_bias(
-                    bias_tensor=self.bias.data,
+                    bias_tensor=bias_data,
                     input_memory_config=x.memory_config(),
                     input_layout=x.get_layout(),
                     input_dtype=x.dtype,
@@ -630,14 +669,46 @@ class Conv2d(Module):
 
         in_channels = self.in_channels // self.in_mesh_axis_size
         out_channels = self.weight.data.shape[0]
+        n_split = self.cout_split if self.cout_split > 1 and self.in_mesh_axis is None else 1
+        if n_split > 1 and (h * w < self.split_min_pixels or out_channels % n_split):
+            n_split = 1
         shape_key = (h, w, self.in_channels, self.out_channels)
-        sharded = self.shard_layout is not None and shape_key not in self.no_shard
+        if n_split > 1:
+            shape_key = (*shape_key, n_split)  # its own fallback level
+            sharded = self.split_shard_layout is not None and shape_key[:4] not in self.no_shard
+        else:
+            sharded = self.shard_layout is not None and shape_key not in self.no_shard
         level = self._fallback_level.get(shape_key, 0) if sharded else 2
         while True:
             try:
-                x_out, out_height, out_width, prepared_key, prepared_weight, prepared_bias = self._conv_at_level(
-                    x, b, h, w, in_channels, out_channels, slice_config, num_slices, level
-                )
+                if n_split == 1:
+                    x_out, out_height, out_width, prepared_key, prepared_weight, prepared_bias = self._conv_at_level(
+                        x, b, h, w, in_channels, out_channels, slice_config, num_slices, level
+                    )
+                else:
+                    parts = []
+                    for i in range(n_split):
+                        o, out_height, out_width, k_i, w_i, b_i = self._conv_at_level(
+                            x,
+                            b,
+                            h,
+                            w,
+                            in_channels,
+                            out_channels // n_split,
+                            slice_config,
+                            num_slices,
+                            level,
+                            split=(i, n_split),
+                            shard_layout=self.split_shard_layout,
+                        )
+                        self._prepared[k_i] = (w_i, b_i)
+                        if o.is_sharded():
+                            o = ttnn.sharded_to_interleaved(o, ttnn.DRAM_MEMORY_CONFIG)
+                        parts.append(o)
+                    x_out = ttnn.concat(parts, dim=-1)
+                    for o in parts:
+                        ttnn.deallocate(o)
+                    prepared_key = None
                 break
             except RuntimeError as e:
                 text = str(e)
@@ -656,7 +727,8 @@ class Conv2d(Module):
                 self._fallback_level[shape_key] = level
                 logger.debug(f"conv2d {shape_key}: fallback to level {level}: {text.splitlines()[0][:160]}")
         x = x_out
-        self._prepared[prepared_key] = (prepared_weight, prepared_bias)
+        if prepared_key is not None:
+            self._prepared[prepared_key] = (prepared_weight, prepared_bias)
 
         x = ttnn.reshape(x, (b, out_height, out_width, -1))
 

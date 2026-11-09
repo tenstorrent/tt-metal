@@ -88,10 +88,25 @@ UNSHARDABLE_DECODER_CONVS = frozenset({(258, 2048, 512, 512)})
 
 # L1 budget of a conv's full-K weights plus its activation block (the TP convs reach 1.33 MB)
 CONV_FULL_K_L1_BYTES = 1_350_000
+# smallest per-device input (pixels) whose convs split their output channels when the full-K weights do not fit
+COUT_SPLIT_MIN_PIXELS = 100_000
 
 
-def _full_inner_dim_fits(conv: Conv2d) -> bool:
-    return 2 * 9 * conv.in_channels * (conv.out_channels + 64) <= CONV_FULL_K_L1_BYTES
+def _full_inner_dim_fits(conv: Conv2d, out_channels: int | None = None) -> bool:
+    cout = conv.out_channels if out_channels is None else out_channels
+    return 2 * 9 * conv.in_channels * (cout + 64) <= CONV_FULL_K_L1_BYTES
+
+
+def _cout_split_for(conv: Conv2d) -> int:
+    """The output-channel split of a conv whose full-K weights do not fit, 1 for none."""
+    for n in (2, 4, 8, 16):
+        if (
+            conv.out_channels % n == 0
+            and conv.out_channels // n >= 32
+            and _full_inner_dim_fits(conv, conv.out_channels // n)
+        ):
+            return n
+    return 1
 
 
 def _configure(module, *, decoder: bool, spatial_2d: bool = False) -> None:
@@ -100,14 +115,18 @@ def _configure(module, *, decoder: bool, spatial_2d: bool = False) -> None:
         module.config_tensors_in_dram = True
         module.act_block_h_override = 64
         module.double_buffer = True
-        module.full_inner_dim = decoder and (not spatial_2d or _full_inner_dim_fits(module))
+        fits = not spatial_2d or _full_inner_dim_fits(module)
+        if decoder and spatial_2d and not fits:
+            module.cout_split = _cout_split_for(module)
+            module.split_min_pixels = COUT_SPLIT_MIN_PIXELS
+        module.full_inner_dim = decoder and fits
         if decoder:
             # height-sharded activations; shapes that do not fit next to the resident DiT fall back per conv. With
             # full channels (2D layout) a core cannot hold a 512-input conv's weights (4.7 MB): split them over the
             # core columns instead (block sharding); those convs sit at the small latent and 1024 levels
             module.shard_layout = (
                 ttnn.TensorMemoryLayout.BLOCK_SHARDED
-                if spatial_2d and not _full_inner_dim_fits(module)
+                if spatial_2d and not fits
                 else ttnn.TensorMemoryLayout.HEIGHT_SHARDED
             )
             module.no_shard = UNSHARDABLE_DECODER_CONVS
