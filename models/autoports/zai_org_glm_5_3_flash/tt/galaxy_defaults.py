@@ -43,7 +43,14 @@ def trace_mb(seq: int) -> int:
 
 
 def sparse_t(seq: int) -> str:
-    return SPARSE_T.get(int(seq)) or ",".join(str(max(4096, int(seq) // 4) * k) for k in range(1, 5))
+    """the ladder for a cache length: the validated table, else quarter-cache steps of at least 4 K that stay inside
+    the cache ("" when none fits -- a 2 K cache has no sparse region: the DSA path starts past 2,051 rows; the TP
+    prefill then compiles no sparse bucket, as before)"""
+    seq = int(seq)
+    if seq in SPARSE_T:
+        return SPARSE_T[seq]
+    step = max(4096, seq // 4)
+    return ",".join(str(step * k) for k in range(1, 5) if step * k <= seq)
 
 
 def apply(mesh_shape, seq: int, isl: int | None = None) -> dict:
@@ -52,7 +59,9 @@ def apply(mesh_shape, seq: int, isl: int | None = None) -> dict:
         return {}
     want = dict(KNOBS)
     want["GLM53_MODEL_TRACE_MB"] = str(trace_mb(int(seq)))
-    want["GLM53_PF_SPARSE_T"] = sparse_t(int(seq))
+    ladder = sparse_t(int(seq))
+    if ladder:
+        want["GLM53_PF_SPARSE_T"] = ladder
     if (
         isl is None or int(isl) >= 2048
     ):  # the 2 K / 8 K prefill buckets (a 127-token prompt keeps the 256 / 512 / 2048 defaults)
