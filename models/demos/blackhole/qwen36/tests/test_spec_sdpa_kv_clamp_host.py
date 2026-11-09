@@ -78,7 +78,7 @@ def test_kv_clamp_kwargs(monkeypatch):
 def test_every_paged_decode_call_passes_the_clamp_kwargs():
     src = open(os.path.join(os.path.dirname(atp.__file__), "tp.py")).read()
     calls = [m.start() for m in re.finditer(r"ttnn\.transformer\.paged_scaled_dot_product_attention_decode\(", src)]
-    assert len(calls) == 4, f"expected the 4 known call sites, found {len(calls)}"
+    assert len(calls) == 6, f"expected the 6 known call sites (r12: + the two KV-split calls), found {len(calls)}"
     for start in calls:
         depth, i = 0, src.index("(", start)
         for j in range(i, len(src)):

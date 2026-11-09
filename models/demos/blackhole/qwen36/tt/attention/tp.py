@@ -1980,6 +1980,7 @@ class TPAttention:
             memory_config=ttnn.L1_MEMORY_CONFIG,
             spec_multi_pos_tiles=_tiles,
             **({"spec_pack_heads": _pack} if _pack else {}),
+            **sdpa_kv_clamp_kwargs(),  # QWEN36_SPEC_ADAPTIVE_K / _SDPA_KV_CLAMP ({} flag off)
         )
         ttnn.deallocate(q)
         Ro = c["Ro"]
@@ -2023,6 +2024,7 @@ class TPAttention:
             scale=self.scale,
             program_config=cfg,
             memory_config=ttnn.L1_MEMORY_CONFIG,
+            **sdpa_kv_clamp_kwargs(),  # QWEN36_SPEC_ADAPTIVE_K / _SDPA_KV_CLAMP ({} flag off)
         )
         ttnn.deallocate(q)
         return self._kv_split_out(attn, gate, B, c, decode_ar)
