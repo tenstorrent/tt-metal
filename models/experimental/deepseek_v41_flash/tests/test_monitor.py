@@ -35,14 +35,14 @@ def _counters(path, **values):
             f.write(data)
 
 
-def _turn(serial, user, slot, phase, prompt, prefilled, generated):
+def _turn(serial, user, slot, phase, prompt, prefilled, generated, cached=0):
     return {
         "serial": serial,
         "user": user,
         "slot": slot,
         "phase": phase,
         "prompt_tokens": prompt,
-        "cached_tokens": 0,
+        "cached_tokens": cached,
         "prefilled": prefilled,
         "generated": generated,
         "max_tokens": 1000,
@@ -111,12 +111,16 @@ def test_monitor_rates_totals_and_history(tmp_path):
         "serial": 1, "user": "alice", "slot": 0, "outcome": "stop", "ended": 101.9, "queued_s": 0.1,
         "prompt_tokens": 50, "cached_tokens": 0, "prefilled": 50, "prefilled_on_device": 0, "generated": 40,
         "prefill_s": 0.5, "decode_s": 2.0, "total_turns": 1, "total_prefilled": 50, "total_generated": 40,
+        "total_input": 50, "total_cached": 0,
     }  # fmt: skip
     _write(
         path,
         _snapshot(
             102.0,
-            [_turn(1, "alice", 0, "decode", 50, 50, 40), _turn(2, "bob", 1, "decode", 1000, 1000, 5)],
+            [
+                _turn(1, "alice", 0, "decode", 50, 50, 40),
+                _turn(2, "bob", 1, "decode", 1000, 1000, 5, cached=400),
+            ],
             ended=[record],
             log=[(2, 101.0, "DEBUG", "round"), (3, 102.0, "INFO", "done")],
         ),
@@ -128,7 +132,8 @@ def test_monitor_rates_totals_and_history(tmp_path):
     assert point["prefill"] == pytest.approx(400.0)  # (50 + 1000) - (50 + 600)
     assert point["users"] == {"alice": pytest.approx(10.0), "bob": pytest.approx(5.0)}
     view = mon.view(0, 0, 0, 0)
-    assert view["state"]["totals"] == {"generated": 45, "prefilled": 1050, "turns": 1}
+    # alice from her record's totals, bob (still active) from his prompt and cache hit
+    assert view["state"]["totals"] == {"generated": 45, "prefilled": 1050, "input": 1450, "cached": 400, "turns": 1}
     assert [turn["serial"] for turn in view["state"]["turns"]] == [2]
     assert [line[0] for line in view["log"]] == [1, 2, 3]
     (ended,) = view["history"]

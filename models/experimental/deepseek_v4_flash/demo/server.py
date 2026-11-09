@@ -1704,6 +1704,8 @@ class _Scheduler:
         self.ended = 0
         self.ended_prefilled = 0
         self.ended_generated = 0
+        self.ended_input = 0  # prompt tokens of the ended turns, those that hit the cache included (see _usage)
+        self.ended_cached = 0  # ... of which these were already in the slot's cache
         self.ended_turns: deque[dict] = deque(maxlen=_ENDED_TURNS)
         self._t_started = time.perf_counter()
         self._thread = threading.Thread(target=self._loop, name="decode-scheduler", daemon=True)
@@ -2824,6 +2826,8 @@ class _Scheduler:
             self._feed_posted(turn)
         self.ended_prefilled += turn.fed
         self.ended_generated += len(turn.generated)
+        self.ended_input += turn.cached + len(turn.ids)
+        self.ended_cached += turn.cached
         self.ended += 1
         # The record carries the totals, and goes in before the turn leaves the active ones: a monitor that reads
         # the records and then the active turns finds every turn in exactly one of them.
@@ -2833,6 +2837,8 @@ class _Scheduler:
                 "total_turns": self.ended,
                 "total_prefilled": self.ended_prefilled,
                 "total_generated": self.ended_generated,
+                "total_input": self.ended_input,
+                "total_cached": self.ended_cached,
             }
         )
         if turn in self._active:
