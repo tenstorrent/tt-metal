@@ -71,6 +71,17 @@ class MigrationDriver:
         self.layers = _parse_layers(os.environ.get("PREFILL_MIGRATION_LAYERS", ""))
         self.done_file = os.environ.get("MIGRATION_DONE_FILE", "/tmp/migration_done.sentinel")
         self.handoff_path = os.environ.get("PREFILL_MIGRATION_HANDOFF_PATH", "")
+        # Prompt tokens past the prefilled ones that the handoff leaves for decode to run (``tail_tokens``). A model
+        # with recurrent state (Kimi-K3's KDA) needs at least one: decode cannot re-run a token the migrated state
+        # already applied, and prefill samples no first token. The adapter sets the default.
+        tail = os.environ.get("PREFILL_MIGRATION_HANDOFF_TAIL")
+        if tail is None:
+            from models.demos.common.prefill.runners import prefill_producer as producer
+
+            tail = getattr(producer.ADAPTER, "migration_handoff_tail_tokens", 0)
+        self.handoff_tail = int(tail)
+        if self.handoff_tail < 0:
+            raise ValueError(f"PREFILL_MIGRATION_HANDOFF_TAIL must be >= 0, got {self.handoff_tail}")
         self.client = None
 
     @property
@@ -233,6 +244,26 @@ class MigrationDriver:
         slots = []
         for src, dst, real_len in triples:
             pool = pools_by_trace[slot_traces[src]]
+            if self.handoff_tail:
+                # The prompt continues past what prefill applied: decode runs pool[real_len : real_len + tail] and
+                # takes its first token from the last of them.
+                end = real_len + self.handoff_tail
+                if end > len(pool):
+                    raise ValueError(
+                        f"slot {src}: a {self.handoff_tail}-token handoff tail needs prompt tokens up to {end}, but "
+                        f"its pool holds {len(pool)}; shorten the request or use a longer trace"
+                    )
+                tail = [int(t) for t in pool[real_len:end]]
+                slots.append(
+                    {
+                        "dst_slot": int(dst),
+                        "prompt_len": int(end),
+                        "prefill_len": int(real_len),
+                        "tail_tokens": tail,
+                        "last_prompt_token": tail[-1],
+                    }
+                )
+                continue
             last_tok = int(pool[real_len - 1]) if 1 <= real_len <= len(pool) else int(pool[-1])
             slots.append({"dst_slot": int(dst), "prompt_len": int(real_len), "last_prompt_token": last_tok})
         base_dir = os.path.abspath(os.path.dirname(self.handoff_path) or ".")
