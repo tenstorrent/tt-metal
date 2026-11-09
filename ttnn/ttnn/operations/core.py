@@ -129,6 +129,17 @@ def __getitem__(input_tensor: ttnn.Tensor, slices) -> ttnn.Tensor:
             if step is None:
                 step = 1
 
+            # Python clamps start and stop to the dimension size. ttnn.slice measures them
+            # against the tile-padded shape instead, so an unclamped stop (e.g. :64 on a
+            # logical width of 40) returns the tile padding as real data.
+            if step > 0:
+                if start < 0:
+                    start += shape[dim_idx]
+                if stop < 0:
+                    stop += shape[dim_idx]
+                start = min(max(start, 0), shape[dim_idx])
+                stop = min(max(stop, 0), shape[dim_idx])
+
             final_slices.append(slice(start, stop, step))
         else:
             raise TypeError(f"Invalid slice type: {s}")
