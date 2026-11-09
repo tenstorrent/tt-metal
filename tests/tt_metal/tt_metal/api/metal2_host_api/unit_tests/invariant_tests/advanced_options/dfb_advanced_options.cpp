@@ -127,12 +127,25 @@ TEST_F(ProgramSpecTestQuasar, CPU_DFBPlacementRejectsPrefetcherRelay) {
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("override_placement")));
 }
 
-TEST_F(ProgramSpecTestQuasar, CPU_DFBPlacementPreservesGen2MultiBindingRestriction) {
-    // Gen2 rejects multi-binding even when the placement override excludes all endpoint nodes.
-    distributed::MeshDevice& fixture_device = *mesh_device_;
+// Endpoint kernels run on (0,0)-(1,0); the DFB placement override keeps only (0,0).
+ProgramSpec MakeQuasarSubsetPlacementSpecForTest() {
     auto spec = test_helpers::MakeDFBPlacementSpec(tt::ARCH::QUASAR);
+    spec.work_units[0].target_nodes = NodeRange({0, 0}, {1, 0});
+    spec.dataflow_buffers[0].advanced_options.override_placement = NodeRangeSet(NodeRange({0, 0}));
+    return spec;
+}
+
+TEST_F(ProgramSpecTestQuasar, CPU_DFBPlacementAcceptsSubsetOnGen2) {
+    // A placement override on a strict subset of the endpoint nodes is accepted on Gen2.
+    EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, MakeQuasarSubsetPlacementSpecForTest()));
+}
+
+TEST_F(ProgramSpecTestQuasar, CPU_DFBPlacementPreservesGen2MultiBindingRestriction) {
+    // Gen2 rejects allow_instance_multi_binding even with a valid placement override.
+    // The spec is otherwise valid (CPU_DFBPlacementAcceptsSubsetOnGen2), so the flag causes the rejection.
+    distributed::MeshDevice& fixture_device = *mesh_device_;
+    auto spec = MakeQuasarSubsetPlacementSpecForTest();
     spec.dataflow_buffers[0].advanced_options.allow_instance_multi_binding = true;
-    spec.dataflow_buffers[0].advanced_options.override_placement = CoreRangeSet(CoreRange({2, 0}));
     EXPECT_THAT(
         [&] { MakeProgramFromSpec(fixture_device, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("allow_instance_multi_binding")));
