@@ -313,6 +313,8 @@ class WanPipeline(PipelineAPIMixin):
             Whether to expand timesteps per-token for image-to-video (Wan2.2 TI2V) conditioning.
         dynamic_load (`bool`, *optional*, defaults to `False`):
             If `True`, model components are loaded/offloaded to device dynamically during inference.
+            Mutually exclusive with traced calls: a captured trace bakes in weight addresses, which
+            a dynamic reload does not preserve, so `__call__` rejects `traced=True` in this mode.
         topology (`ttnn.Topology`, *optional*, defaults to `ttnn.Topology.Linear`):
             Fabric topology to use for CCL operations across devices.
         is_fsdp (`bool`, *optional*, defaults to `True`):
@@ -925,6 +927,15 @@ class WanPipeline(PipelineAPIMixin):
         ``width`` and ``height`` must be one of the configured resolutions, and default to the
         first.
         """
+        if traced and self.dynamic_load:
+            msg = (
+                "TDM-130: traced=True is unsupported with dynamic_load=True: a captured trace replays "
+                "the weight addresses it saw at capture, and dynamic_load evicts and reloads "
+                "weights within every request. Run untraced, or configure dynamic_load=False "
+                "on a mesh with enough DRAM to keep both transformers and the VAE resident."
+            )
+            raise ValueError(msg)
+
         on_event = on_event if on_event is not None else null_callback
 
         width, height = self._resolve_size(width, height, image_prompt)
