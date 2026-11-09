@@ -42,7 +42,8 @@ std::pair<ttnn::Tensor, ttnn::Tensor> gen_freqs(
     uint32_t sequence_length,
     float theta,
     const RopeScalingParams& rope_scaling_params,
-    const ttnn::distributed::TensorToMesh* mesh_mapper = nullptr);
+    const ttnn::distributed::TensorToMesh* mesh_mapper = nullptr,
+    uint32_t striped_cp_size = 1U);
 
 ttnn::Tensor gen_trans_mat();
 

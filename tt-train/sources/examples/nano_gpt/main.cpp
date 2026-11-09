@@ -237,6 +237,9 @@ struct DeviceConfig {
     bool enable_ddp = false;
     bool enable_tp = false;
     bool enable_cp = false;
+    // device_config.cp_layout: contiguous (default) or striped (causal load balancing, see
+    // ttml::autograd::DistributedConfig::cp_striped).
+    bool cp_striped = false;
 };
 
 DeviceConfig parse_device_config(const YAML::Node &yaml_config) {
@@ -249,6 +252,14 @@ DeviceConfig parse_device_config(const YAML::Node &yaml_config) {
     config.enable_ddp = device_node["enable_ddp"].as<bool>(false);
     config.enable_tp = device_node["enable_tp"].as<bool>(false);
     config.enable_cp = device_node["enable_cp"].as<bool>(false);
+    const auto cp_layout = device_node["cp_layout"].as<std::string>("contiguous");
+    if (cp_layout != "contiguous" && cp_layout != "striped") {
+        throw std::runtime_error("device_config.cp_layout must be 'contiguous' or 'striped', got '" + cp_layout + "'");
+    }
+    config.cp_striped = cp_layout == "striped";
+    if (config.cp_striped && !config.enable_cp) {
+        throw std::runtime_error("device_config.cp_layout: striped requires enable_cp");
+    }
 
     auto mesh_shape_node = device_node["mesh_shape"];
     bool multidevice = config.enable_ddp || config.enable_tp || config.enable_cp;
@@ -437,6 +448,7 @@ int main(int argc, char **argv) {
         fmt::println("Device config:");
         fmt::println("  Tensor parallel enabled: {}", device_config.enable_tp);
         fmt::println("  Context parallel enabled: {}", device_config.enable_cp);
+        fmt::println("  Context parallel layout: {}", device_config.cp_striped ? "striped" : "contiguous");
         fmt::println("  Distributed data-parallel enabled: {}", device_config.enable_ddp);
         fmt::println("  Mesh shape: {}", device_config.mesh_shape);
         fmt::println("  Device IDs: {}", device_config.device_ids);
@@ -444,7 +456,8 @@ int main(int argc, char **argv) {
         ttml::autograd::ctx().initialize_parallelism_context(
             {.enable_ddp = device_config.enable_ddp,
              .enable_tp = device_config.enable_tp,
-             .enable_cp = device_config.enable_cp});
+             .enable_cp = device_config.enable_cp,
+             .cp_striped = device_config.cp_striped});
     }
 
     if (multihost_config.enable_mpi) {
@@ -588,6 +601,24 @@ int main(int argc, char **argv) {
             auto create_data_and_targets = [&]() -> std::tuple<TensorPtr, TensorPtr> {
                 if (is_pctx_initialized()) {
                     const auto &pctx = ttml::autograd::ctx().get_parallelism_context();
+                    if (pctx.is_cp_striped()) {
+                        // Striped CP layout: reorder every sequence so that sharding the sequence dim over
+                        // the CP axis gives rank d the tokens d, N + d, 2N + d, ... (targets follow their
+                        // tokens, so each (token, next token) pair is kept; the per-token loss is unchanged).
+                        const uint32_t cp_size = pctx.get_cp_size();
+                        auto to_striped = [&](std::vector<uint32_t> &values) {
+                            std::vector<uint32_t> natural = values;
+                            for (uint32_t b = 0; b < batch_size; ++b) {
+                                const size_t row = static_cast<size_t>(b) * sequence_length;
+                                for (uint32_t i = 0; i < sequence_length; ++i) {
+                                    values[row + i] = natural
+                                        [row + ttml::autograd::cp_striped_global_position(i, sequence_length, cp_size)];
+                                }
+                            }
+                        };
+                        to_striped(data);
+                        to_striped(targets);
+                    }
                     const auto &mesh_device = ttml::autograd::ctx().get_device();
                     const uint32_t BATCH_DIM = 0;
                     const uint32_t SEQUENCE_DIM_DATA = 3;

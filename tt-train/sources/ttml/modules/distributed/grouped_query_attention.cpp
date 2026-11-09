@@ -115,7 +115,13 @@ ttml::autograd::TensorPtr DistributedGroupedQueryAttention::operator()(
             !mask.has_value(),
             "Non-causal mask is not supported in CP mode for now, pass nullopt if you want to use causal mask");
         attention = ops::distributed::ring_attention_sdpa(
-            query_with_heads, key_with_heads, value_with_heads, std::nullopt, ttml::metal::AttentionMaskType::Causal);
+            query_with_heads,
+            key_with_heads,
+            value_with_heads,
+            std::nullopt,
+            ttml::metal::AttentionMaskType::Causal,
+            pctx.is_cp_striped() ? ops::distributed::RingAttentionLayout::Striped
+                                 : ops::distributed::RingAttentionLayout::Contiguous);
     } else {
         attention = ops::scaled_dot_product_attention(query_with_heads, key_with_heads, value_with_heads, mask);
     }

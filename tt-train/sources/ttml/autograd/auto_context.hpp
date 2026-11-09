@@ -25,7 +25,20 @@ struct DistributedConfig {
     bool enable_ddp = false;
     bool enable_tp = false;
     bool enable_cp = false;
+    // Striped CP sequence layout (causal load balancing for ring attention): global token p lives on
+    // CP rank p mod cp_size as local row p div cp_size. Requires enable_cp. The data (tokens, targets)
+    // must be laid out this way; RoPE positions and ring attention follow this flag.
+    bool cp_striped = false;
 };
+
+// Global sequence position of the token at position `device_order_pos` of the striped CP layout, where
+// device order is the rank-major concatenation of the local sequences (what sharding the sequence dim
+// over the CP axis produces): rank d's local row l, at device_order_pos = d * (seq_len / cp_size) + l,
+// is global token l * cp_size + d.
+inline uint32_t cp_striped_global_position(uint32_t device_order_pos, uint32_t seq_len, uint32_t cp_size) {
+    const uint32_t local_len = seq_len / cp_size;
+    return (device_order_pos % local_len) * cp_size + device_order_pos / local_len;
+}
 
 class ParallelismContext {
 public:
@@ -60,6 +73,10 @@ public:
     [[nodiscard]] const bool is_cp_enabled() const {
         return m_cp_axis.has_value();
     }
+    // True when CP is enabled with the striped sequence layout (see DistributedConfig::cp_striped).
+    [[nodiscard]] bool is_cp_striped() const {
+        return m_cp_striped && is_cp_enabled() && m_num_cp_devices > 1U;
+    }
 
 private:
     std::optional<uint32_t> m_ddp_axis = std::nullopt;
@@ -68,6 +85,7 @@ private:
     uint32_t m_num_cp_devices = 1U;
     uint32_t m_num_ddp_devices = 1U;
     uint32_t m_num_tp_devices = 1U;
+    bool m_cp_striped = false;
 };
 
 class AutoContext {
