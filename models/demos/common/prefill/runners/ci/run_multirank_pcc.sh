@@ -18,11 +18,13 @@ set -- "${POSITIONAL[@]+"${POSITIONAL[@]}"}"
 MODEL="${1:?${USAGE}}"
 RUN_NAME="${MODEL}${VARIANT}"
 # First entry is the default; membership is the validation. These models support sc1 only.
-# Kimi-K3's and GLM-5.3's sc4 and sc1 are 4x4 stages, two per galaxy (their manifests' layout); the _8x4
-# configs keep the one-stage-per-galaxy layout for hand comparisons and GLM-5.3's MTP variants.
+# Kimi-K3's sc4 and sc1 are 4x4 stages, two per galaxy (its manifest's layout); its _8x4 configs keep the
+# one-stage-per-galaxy layout for hand comparisons. GLM-5.3's sc4 and sc1 are 8x4 stages, its production
+# layout; its _4x4 configs run 4x4 stages, two per galaxy.
 case "${MODEL}" in
   mistral4|gptoss120b) MODEL_CONFIGS="sc1" ;;
-  kimi_k3|glm53)       MODEL_CONFIGS="sc4 sc1 sc4_8x4 sc1_8x4" ;;
+  kimi_k3)             MODEL_CONFIGS="sc4 sc1 sc4_8x4 sc1_8x4" ;;
+  glm53)               MODEL_CONFIGS="sc4 sc1 sc4_4x4 sc1_4x4" ;;
   *)                   MODEL_CONFIGS="sc4 sc1" ;;
 esac
 CONFIG="${2:-${MODEL_CONFIGS%% *}}"
@@ -30,7 +32,7 @@ case " ${MODEL_CONFIGS} " in
   *" ${CONFIG} "*) ;;
   *) echo "${MODEL} does not support config '${CONFIG}' (supported: ${MODEL_CONFIGS})" >&2; exit 2 ;;
 esac
-# The galaxy count without the layout suffix: sc4_8x4 runs as sc4 does, on sc4's descriptor.
+# The galaxy count without the layout suffix: sc4_8x4 and sc4_4x4 run on sc4's descriptor.
 SCALE="${CONFIG%%_*}"
 
 : "${TT_METAL_HOME:?TT_METAL_HOME must be set}"
@@ -71,6 +73,8 @@ DFLASH_PCC_THRESHOLD=""
 TABLE_WAIT_DEFAULT=3600
 VARIANT_MAX_SEQ_LEN=""
 MTP=0
+# The manifest that holds a 4x4 run's stage layout when it is not the run's own (GLM-5.3's MTP variants).
+LAYOUT_MANIFEST=""
 DFLASH=0
 # sc1 runs a single galaxy, so both of these exist to shrink the sc4 model down to what one fits.
 SC1_MAX_SEQ_LEN=""
@@ -121,12 +125,25 @@ case "${MODEL}" in
       [ "${SCALE}" = sc1 ] && TABLE_WAIT_DEFAULT=5400
     fi
     case "${CONFIG}" in
-      sc4|sc1)
-        # The manifest (the MTP variants' too) describes a 4x4 stage: SP=4 on mesh axis 1, 2560-token chunks (640 tokens per chip,
-        # GLM's 8x4 per-chip load), TP-deduped KV and the slots that layout fits. Its 1064960 window is a
-        # multiple of the deduped cache's 16 x 256 = 4096-token bank quantum and of the chunk. Two ranks per
-        # galaxy, bound by tt-run discovery as for Kimi-K3 below: 8 stages for sc4, two (all 78 layers) for sc1.
-        CHUNK_SIZE=$(manifest_env PREFILL_CHUNK_SIZE)
+      *_4x4)
+        # 4x4 stages, two per galaxy, bound by tt-run discovery as for Kimi-K3 below: 8 stages for sc4, two
+        # (all 78 layers) for sc1. glm53_4x4.json holds the layout: SP=4 on mesh axis 1, 2560-token chunks
+        # (640 tokens per chip, GLM's 8x4 per-chip load), TP-deduped KV and the slots it fits. Its 1064960
+        # window is a multiple of the deduped cache's 16 x 256 = 4096-token bank quantum and of the chunk.
+        # The trunk runs that manifest; the MTP variants export its layout over their own, keeping their
+        # slot counts.
+        LAYOUT_MANIFEST="${MANIFEST_DIR}/glm53_4x4.json"
+        if [ "${MTP}" -eq 0 ]; then
+          MANIFEST="${LAYOUT_MANIFEST}"
+        else
+          LAYOUT_4X4=""
+          for k in PREFILL_SP PREFILL_TP PREFILL_SP_AXIS PREFILL_CHUNK_SIZE PREFILL_TP_SHARD_KV; do
+            LAYOUT_4X4+=" export ${k}=$(MANIFEST="${LAYOUT_MANIFEST}" manifest_env "${k}");"
+          done
+          RUNNER_ENV+="${LAYOUT_4X4}"
+          PRODUCER_ENV+="${LAYOUT_4X4}"
+        fi
+        CHUNK_SIZE=$(MANIFEST="${LAYOUT_MANIFEST}" manifest_env PREFILL_CHUNK_SIZE)
         PP_4X4_HOSTS=1
         [ "${SCALE}" = sc4 ] && PP_4X4_HOSTS=4
         PP_RANKS=$((2 * PP_4X4_HOSTS))
@@ -135,15 +152,6 @@ case "${MODEL}" in
         GLM_CACHE="${PREFILL_TTNN_CACHE:-/mnt/weka/model-cache/scratch/zai-org/GLM-5.3-Cache/GLM-5.3-Cache-prefill}"
         PP_CACHE_DIR="${GLM_CACHE}/glm_5_3_bh_16dev/4x4_sp1"
         RUNNER_ENV+=" export PREFILL_TTNN_CACHE='${GLM_CACHE}';"
-        ;;
-      *_8x4)
-        # One 8x4 stage per galaxy, SP=8 on axis 0, 5120-token chunks, at the 54 slots that layout fits
-        # (the MTP variants keep their manifest's slots). Exported to runner and producer, ahead of the
-        # manifest.
-        if [ "${MTP}" -eq 0 ] && [ "${SCALE}" = sc4 ]; then : "${PREFILL_NUM_USERS:=54}"; export PREFILL_NUM_USERS; fi
-        LAYOUT_8X4="export PREFILL_SP=8; export PREFILL_TP=4; export PREFILL_SP_AXIS=0; export PREFILL_CHUNK_SIZE=${CHUNK_SIZE};"
-        RUNNER_ENV+=" ${LAYOUT_8X4}"
-        PRODUCER_ENV+=" ${LAYOUT_8X4}"
         ;;
     esac
     ;;
@@ -422,7 +430,8 @@ if [ "${PP_4X4_HOSTS}" -ne 0 ]; then
   [ -f "${MGD}" ] || { echo "no mesh-graph descriptor for ${CONFIG} at ${MGD}" >&2; exit 2; }
   # The stage shape comes from the manifest (the runner applies it under the launch line's exports);
   # a manifest without it would bring 8x4 settings up on a 4x4 mesh.
-  [ "$(manifest_env PREFILL_SP_AXIS)" = 1 ] || { echo "${MANIFEST} does not set the 4x4 stage's PREFILL_SP_AXIS=1" >&2; exit 2; }
+  LAYOUT_SOURCE="${LAYOUT_MANIFEST:-${MANIFEST}}"
+  [ "$(MANIFEST="${LAYOUT_SOURCE}" manifest_env PREFILL_SP_AXIS)" = 1 ] || { echo "${LAYOUT_SOURCE} does not set the 4x4 stage's PREFILL_SP_AXIS=1" >&2; exit 2; }
   "${MPIRUN}" -np "${PP_4X4_HOSTS}" --host "$(printf '%s:1,' "${HOST_LIST[@]}" | sed 's/,$//')" --map-by slot \
     --bind-to none --allow-run-as-root \
     bash -lc "[ -n \"\$(ls -A '${PP_CACHE_DIR}' 2>/dev/null)\" ] || { echo \"\$(hostname): no 4x4 weight cache at ${PP_CACHE_DIR} (or set PREFILL_TTNN_CACHE)\" >&2; exit 1; }"
