@@ -20,8 +20,9 @@ from loguru import logger
 import ttnn
 from models.autoports.zai_org_glm_5_3_flash.tt import optimized_decoder as OD
 from models.autoports.zai_org_glm_5_3_flash.tt.config import load_hf_text_config
+from models.autoports.zai_org_glm_5_3_flash.tt.mk_sources import HFSource
 from models.demos.glm53_flash.reference.checkpoint import default_snapshot_dir
-from models.demos.glm53_flash.tests.test_mk_backend_probe import HFSource, _layers
+from models.demos.glm53_flash.tests.test_mk_backend_probe import _layers
 from models.demos.glm53_flash.tests.test_mk_layer_check import pcc
 from models.demos.glm53_flash.tt.mesh import mesh_device_params
 

@@ -1,0 +1,655 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
+"""Host-only (no ttnn, no device, no vLLM) test of the persistent-stack vLLM adapter
+(``tt/generator_vllm_stack.py``): the plugin's hooks driven over the real ``Glm53Generator`` on a CPU ``ModelBackend``
+mock. This tree carries no ``tests/mock_model.py`` (the reference workspace's), so the mock below mirrors
+``StackBackend``'s contract flags -- fused sampling inside the decode trace, one full-width trace, 64-token pages --
+on torch tensors with a deterministic model (next token = (token + 1) % V) and a per-slot ledger of the tokens each
+slot's state consumed. Covered: the plugin's zero-padded block tables (trimmed to the live blocks, grown block by
+block), chunked prefill (intermediate chunk host-routed, the continuation sliced out of the full history), a decode
+between two chunks, releases, the condensing slot remaps the plugin builds after a finish (a 2-cycle through the
+freed slot, a 3-chain), the host-sampled logits route, the async read, the teardown hooks and the refusals.
+
+    PYTHONPATH=<worktree> <tt-metal>/python_env/bin/pytest --noconftest -p no:cacheprovider -q \\
+        models/demos/glm53_flash/tests/test_stack_adapter_host.py
+"""
+
+from __future__ import annotations
+
+import contextlib
+import inspect
+import sys
+import types
+from dataclasses import dataclass, field
+from types import SimpleNamespace
+
+import pytest
+import torch
+from loguru import logger
+
+from models.autoports.zai_org_glm_5_3_flash.tt.generator import (
+    BLOCK_SIZE,
+    DecodeIO,
+    DecodeOutput,
+    Glm53Generator,
+    ModelBackend,
+    PendingTokens,
+)
+from models.autoports.zai_org_glm_5_3_flash.tt.sampling import SamplingParams
+from models.demos.glm53_flash.tt import generator_vllm_stack as gvs
+from models.demos.glm53_flash.tt.generator_vllm_stack import (
+    LATENT_DIM,
+    GLM53StackForCausalLM,
+    row_params,
+    trim_page_rows,
+)
+
+VOCAB = 64
+B = 4  # max_num_seqs = the backend's slots
+SEQ = 2048  # max_model_len
+BPS = SEQ // BLOCK_SIZE  # the plugin's block-table width: cdiv(max_model_len, block_size)
+NUM_BLOCKS = B * SEQ // BLOCK_SIZE + B  # worker.py:737-785: the budget + one block per user; block 0 = the null block
+
+
+@contextlib.contextmanager
+def expect_error(error, message):
+    """The root conftest's ``expect_error`` fixture (the CI triager's [EXPECTED_ERROR] markers), local to this module:
+    the host test runs with ``--noconftest`` because the root conftest imports ttnn at collection."""
+    logger.info(f'[EXPECTED_ERROR BEGIN] {error.__name__} message="{message}"')
+    try:
+        with pytest.raises(error, match=message) as exc_info:  # allow-pytest.raises: the fixture body, no conftest here
+            yield exc_info
+    finally:
+        logger.info(f'[EXPECTED_ERROR END] {error.__name__} message="{message}"')
+
+
+def test_module_imports_without_ttnn():
+    """The adapter module must be importable on a host without ttnn (every ttnn use is lazy); without ttnn the fabric
+    capability is None (the plugin's hardware default) and the other declarations are the first adapter's."""
+    assert "models.demos.glm53_flash.tt.generator_vllm_stack" in sys.modules
+    assert "ttnn" not in sys.modules, "importing the adapter must not import ttnn"
+    caps = GLM53StackForCausalLM.model_capabilities
+    assert caps["supports_chunked_prefill"] is True
+    assert caps["supports_sample_on_device"] is True and caps["max_device_top_k"] == 1
+    assert caps["device_top_k_unbounded_as"] is None and caps["supports_device_penalties"] is False
+    assert caps["fabric_config"] is None
+    for key in (
+        "supports_prefix_caching",
+        "confirms_prefix_cache_hits",
+        "supports_async_decode",
+        "supports_async_spec_decode",
+        "supports_spec_decode",
+        "supports_device_grammar",
+        "supports_compact_host_logits",
+        "supports_selective_host_readback",
+    ):
+        assert caps[key] is False, key
+    assert GLM53StackForCausalLM.decode_input_update_contract == 1
+    assert GLM53StackForCausalLM.tt_supported_decode_batch_sizes == ()
+
+
+def test_adapter_satisfies_the_vllm_model_protocol():
+    """vLLM >= 0.30 admits the generate runner only for classes that pass ``is_vllm_model``: an ``__init__`` accepting
+    ``vllm_config`` (``**kwargs`` counts), ``embed_input_ids``, a ``forward`` with ``input_ids`` and ``positions``,
+    plus ``compute_logits``. Signature-only check: the plugin never calls these."""
+
+    def accepts(fn, name):
+        params = inspect.signature(fn).parameters
+        return name in params or any(p.kind is inspect.Parameter.VAR_KEYWORD for p in params.values())
+
+    assert accepts(GLM53StackForCausalLM.__init__, "vllm_config")
+    assert callable(getattr(GLM53StackForCausalLM, "embed_input_ids", None))
+    assert callable(getattr(GLM53StackForCausalLM, "compute_logits", None))
+    forward = inspect.signature(GLM53StackForCausalLM.forward).parameters
+    assert "input_ids" in forward and "positions" in forward
+
+
+# ------------------------------------------------------------------------------------------ the CPU backend mock
+class _Buf:
+    """A DecodeIO field: the host tensor the generator writes / reads (``write`` replaces it whole, as a device copy
+    into a same-shaped buffer would)."""
+
+    def __init__(self, t: torch.Tensor):
+        self.t = t
+
+
+@dataclass
+class _Cache:
+    num_blocks: int
+    state: dict = field(default_factory=dict)  # slot -> the tokens its recurrent state consumed, in order
+    page_table_host: torch.Tensor | None = None
+
+
+class _MockStackBackend(ModelBackend):
+    """StackBackend's contract on CPU: one full-width decode trace that samples greedily itself (fused sampling,
+    every token row rewritten), the TP prefill's 64-token alignment, 128-token chunks (so a 200-token prompt is two
+    chunks). Model: next token = (token + 1) % VOCAB; the per-slot ledger asserts positions and page coverage."""
+
+    vocab_size = VOCAB
+    logits_width = VOCAB
+    block_size = BLOCK_SIZE
+    prefill_align = 64
+    continuation_align = 64
+    prefill_chunk_tokens = 128
+    supported_context = SEQ
+    width_bucketed_decode = False
+    samples_in_decode_trace = True
+    copy_slot_keeps_sampler_rng = True
+    layer_kinds = ("dense_kda",)
+
+    def __init__(self, max_batch: int):
+        self.max_batch = max_batch
+        self.chunks: list = []  # (slot, chunk_start, n_valid, logits_rows, sampled)
+        self.traces: list = []
+        self.released: list = []
+        self.releases: list = []
+        self.decodes = 0
+        self.prepared = (False, False)
+
+    # ---- state ownership
+    def allocate_kv_cache(self, *, max_batch, max_seq_len, num_blocks=None):
+        nb = num_blocks or max_batch * (max_seq_len // BLOCK_SIZE)
+        return _Cache(num_blocks=nb, state={s: [] for s in range(max_batch)})
+
+    def allocate_decode_io(self, kv):
+        n = self.max_batch
+        return DecodeIO(
+            tokens=_Buf(torch.zeros(n, dtype=torch.int32)),
+            cur_pos=_Buf(torch.full((n,), -1, dtype=torch.int32)),
+            page_table=_Buf(torch.zeros(n, 1, dtype=torch.int32)),
+            logits=_Buf(torch.zeros(n, VOCAB)),
+            sampled=_Buf(torch.zeros(n, dtype=torch.int32)),
+            k=_Buf(torch.ones(n, dtype=torch.int32)),
+            p=_Buf(torch.zeros(n)),
+            temp=_Buf(torch.ones(n)),
+            seeds=_Buf(torch.full((n,), -2, dtype=torch.int64)),
+        )
+
+    def write(self, buf, value):
+        buf.t = torch.as_tensor(value).clone()
+
+    def read(self, buf):
+        return buf.t.clone()
+
+    def set_page_table_host(self, kv, page_table):
+        kv.page_table_host = torch.as_tensor(page_table).clone()
+
+    def reset_slot(self, kv, slot):
+        kv.state[slot] = []
+
+    def copy_slot(self, kv, src, dst):
+        kv.state[dst] = list(kv.state[src])
+
+    def reset_all(self, kv):
+        for s in kv.state:
+            kv.state[s] = []
+
+    def release_slot(self, kv, slot):
+        self.releases.append(slot)
+
+    # ---- prefill
+    def prepare_prefill(self, kv):
+        self.prepared = (True, self.prepared[1])
+
+    def prefill_chunk(self, tokens, *, kv_cache, slot, chunk_start, n_valid, logits_rows, sample=None, io=None, **sio):
+        st = kv_cache.state[slot]
+        if chunk_start == 0:
+            st.clear()
+        assert len(st) == chunk_start, f"slot {slot}: state holds {len(st)} tokens, chunk starts at {chunk_start}"
+        st.extend(int(t) for t in tokens[:n_valid].tolist())
+        self.chunks.append((slot, chunk_start, n_valid, logits_rows, sample is not None))
+        if logits_rows == "none":
+            return None
+        nxt = (st[-1] + 1) % VOCAB
+        if sample is not None:
+            io.tokens.t[slot] = nxt
+            io.sampled.t[slot] = nxt
+            return nxt
+        if logits_rows == "all":
+            logits = torch.zeros(int(tokens.numel()), VOCAB)
+            for i, t in enumerate(st[chunk_start:]):
+                logits[i, (t + 1) % VOCAB] = 1.0
+            return logits
+        logits = torch.zeros(1, VOCAB)
+        logits[0, nxt] = 1.0
+        return logits
+
+    # ---- decode
+    def prepare_decode(self, io, kv, widths):
+        self.widths = tuple(widths)
+        self.prepared = (self.prepared[0], True)
+
+    def decode(self, io, kv, width):
+        self.decodes += 1
+        pos, tok = io.cur_pos.t, io.tokens.t
+        logits = torch.zeros(self.max_batch, VOCAB)
+        sampled = torch.zeros(self.max_batch, dtype=torch.int32)
+        for s in range(self.max_batch):
+            p = int(pos[s])
+            if p < 0:
+                continue
+            st = kv.state[s]
+            assert len(st) == p, f"slot {s}: state holds {len(st)} tokens, decode position {p}"
+            blk = int(io.page_table.t[s, p // BLOCK_SIZE])
+            assert blk > 0, f"slot {s}: position {p} maps to block {blk} (null / unmapped)"
+            st.append(int(tok[s]))
+            nxt = (int(tok[s]) + 1) % VOCAB
+            logits[s, nxt] = 1.0
+            sampled[s] = nxt
+        io.logits.t = logits
+        io.sampled.t = sampled  # the fused sampler writes every row (0 on inactive rows) ...
+        io.tokens.t = sampled.clone()  # ... and feeds it back as the next input
+        io.cur_pos.t = torch.where(pos >= 0, pos + 1, pos)
+
+    def sample(self, io, mode):
+        return None  # fused into the decode step
+
+    def capture_decode(self, io, kv, width):
+        trace = ("decode", width, io, kv)
+        self.traces.append(trace)
+        return trace
+
+    def capture_sampling(self, io, mode):
+        raise AssertionError("fused sampling: the generator captures no sampler trace")
+
+    def replay(self, trace):
+        assert trace[0] == "decode"
+        self.decode(trace[2], trace[3], trace[1])
+
+    def release(self, trace):
+        self.released.append(trace)
+
+
+# ------------------------------------------------------------------------------------------ helpers
+def _adapter():
+    backend = _MockStackBackend(B)
+    gen = Glm53Generator(backend, tokenizer=SimpleNamespace(stop_token_ids=()), max_batch=B, max_seq_len=SEQ)
+    ad = GLM53StackForCausalLM(gen, B, SEQ)
+    kv = ad.allocate_kv_cache((NUM_BLOCKS, 1, BLOCK_SIZE, LATENT_DIM), torch.bfloat16, 45)
+    # model_runner.py:4770-4799: eager phase for both, then the traced phase (prefill first)
+    ad.warmup_model_prefill(kv_cache=kv, enable_trace=False, can_sample_on_device=True)
+    ad.warmup_model_decode(kv_cache=kv, enable_trace=False, max_batch_size=B, num_blocks=BPS, can_sample_on_device=True)
+    assert ad.tt_supported_decode_batch_sizes == ()
+    ad.warmup_model_prefill(kv_cache=kv, enable_trace=True, can_sample_on_device=True)
+    ad.warmup_model_decode(kv_cache=kv, enable_trace=True, max_batch_size=B, num_blocks=BPS, can_sample_on_device=True)
+    assert ad.tt_supported_decode_batch_sizes == (B,)
+    assert backend.prepared == (True, True) and len(backend.traces) == 1  # one full-width decode trace
+    return ad, backend, gen, kv
+
+
+def _greedy(n: int):
+    """The plugin's TTSamplingParams on a device-sampling call: per-row lists, seed None = vLLM gave none."""
+    return SimpleNamespace(
+        temperature=[0.0] * n,
+        top_k=[1] * n,
+        top_p=[1.0] * n,
+        presence_penalty=[0.0] * n,
+        frequency_penalty=[0.0] * n,
+        repetition_penalty=[1.0] * n,
+        seed=[None] * n,
+    )
+
+
+def _prompt(n: int, base: int) -> list[int]:
+    return [(base + i) % VOCAB for i in range(n)]
+
+
+def _blocks(req: int, n_tokens: int) -> list[int]:
+    """vLLM's block ids for request ``req`` holding ``n_tokens`` positions: a fixed pool per request, never block 0."""
+    return [1 + req * BPS + j for j in range(-(-n_tokens // BLOCK_SIZE))]
+
+
+def _table(rows: list[list[int]], n_rows: int) -> torch.Tensor:
+    """The plugin's block table (input_batch.py:789-808): ``[n_rows, BPS]`` int32, zero past each row's live blocks,
+    all-zero padding rows."""
+    t = torch.zeros(n_rows, BPS, dtype=torch.int32)
+    for i, blocks in enumerate(rows):
+        t[i, : len(blocks)] = torch.tensor(blocks, dtype=torch.int32)
+    return t
+
+
+def _history(prompts: list[list[int]]) -> torch.Tensor:
+    """``tokens [B, T]``: every row's history from position 0 (model_runner.py:4009-4063), zero past its end."""
+    t = torch.zeros(len(prompts), max(len(p) for p in prompts), dtype=torch.int32)
+    for i, p in enumerate(prompts):
+        t[i, : len(p)] = torch.tensor(p, dtype=torch.int32)
+    return t
+
+
+def _decode(ad, kv, tokens: list[int], positions: list[int], rows: list[list[int]], *, remap=None, read=False):
+    """One device-sampled decode step as the plugin submits it (async_decode.py:1335-1440): ``B`` padded rows."""
+    out = ad.decode_forward(
+        torch.tensor(tokens, dtype=torch.int32).reshape(B, 1),
+        torch.tensor(positions, dtype=torch.int32),
+        page_table=_table(rows, B),
+        kv_cache=kv,
+        enable_trace=True,
+        read_from_device=read,
+        sampling_params=_greedy(B),
+        slot_remap=None if remap is None else torch.tensor(remap, dtype=torch.int32),
+        reload_inputs=True,
+        reload_page_table=False,
+        reload_sampling_params=remap is not None,
+        reset_sampling_state=remap is not None,
+    )
+    return out
+
+
+# ------------------------------------------------------------------------------------------ the hooks
+def test_page_rows_trim():
+    """Zero padding past the live blocks -> negative-terminated rows; column 0 untouched (a dead row stays [0, -1 ...])."""
+    t = trim_page_rows(torch.tensor([[5, 6, 0, 0], [7, 0, 0, 0], [0, 0, 0, 0], [1, 2, 3, 4]], dtype=torch.int32))
+    assert t.dtype == torch.int64
+    assert t.tolist() == [[5, 6, -1, -1], [7, -1, -1, -1], [0, -1, -1, -1], [1, 2, 3, 4]]
+    assert trim_page_rows(torch.tensor([9, 0, 0])).tolist() == [[9, -1, -1]]
+
+
+def test_row_params_conversion():
+    """The plugin's per-row lists -> SamplingParams: greedy rows, vLLM's unset top-k (0 / -1), None seeds."""
+    sp = SimpleNamespace(
+        temperature=[0.0, 0.7, 0.9, 1.0], top_k=[1, 1, 0, 40], top_p=[1.0, 0.9, 0.95, 1.0], seed=[None, 3, -1, None]
+    )
+    assert row_params(sp, 0) == SamplingParams(top_k=1) and row_params(sp, 0).is_greedy
+    assert (
+        row_params(sp, 1) == SamplingParams(temperature=0.7, top_k=1, top_p=0.9, seed=3) and row_params(sp, 1).is_greedy
+    )
+    assert row_params(sp, 2) == SamplingParams(temperature=0.9, top_k=None, top_p=0.95, seed=None)
+    assert row_params(sp, 3) == SamplingParams(temperature=1.0, top_k=40, top_p=1.0, seed=None)
+    assert row_params(SimpleNamespace(), 5).is_greedy  # missing fields read as greedy
+
+
+def test_kv_cache_spec_and_budget(monkeypatch):
+    """worker.py:737-785 / 630-652: the token budget and the one latent-page spec; the block size must be 64."""
+    spec_calls = []
+
+    class FullAttentionSpec:
+        def __init__(self, **kw):
+            spec_calls.append(kw)
+
+    for name in ("vllm", "vllm.v1", "vllm.v1.kv_cache_interface"):
+        monkeypatch.setitem(sys.modules, name, types.ModuleType(name))
+    sys.modules["vllm.v1.kv_cache_interface"].FullAttentionSpec = FullAttentionSpec
+    assert GLM53StackForCausalLM.get_max_tokens_all_users(max_model_len=SEQ, max_num_seqs=B) == B * SEQ
+    with expect_error(ValueError, "needs max_model_len"):
+        GLM53StackForCausalLM.get_max_tokens_all_users(max_model_len=SEQ)
+    cfg = SimpleNamespace(cache_config=SimpleNamespace(block_size=64))
+    spec = GLM53StackForCausalLM.get_kv_cache_spec(cfg)
+    assert list(spec) == ["glm53_latent"]
+    assert spec_calls == [dict(block_size=64, num_kv_heads=1, head_size=LATENT_DIM, dtype=torch.bfloat16)]
+    with expect_error(ValueError, "must be 64"):
+        GLM53StackForCausalLM.get_kv_cache_spec(SimpleNamespace(cache_config=SimpleNamespace(block_size=32)))
+
+
+def test_initialize_refuses_data_parallel_and_bad_batch():
+    """loader.py:38-45: refused before any device / ttnn work."""
+    with expect_error(ValueError, "tt_data_parallel must be 1"):
+        GLM53StackForCausalLM.initialize_vllm_model(None, None, B, SEQ, tt_data_parallel=2)
+    with expect_error(ValueError, "outside"):
+        GLM53StackForCausalLM.initialize_vllm_model(None, None, 33, SEQ)
+    assert "ttnn" not in sys.modules
+
+
+def test_allocate_kv_cache_enforces_the_block_size():
+    backend = _MockStackBackend(B)
+    gen = Glm53Generator(backend, tokenizer=None, max_batch=B, max_seq_len=SEQ)
+    ad = GLM53StackForCausalLM(gen, B, SEQ)
+    with expect_error(ValueError, "block size 32"):
+        ad.allocate_kv_cache((NUM_BLOCKS, 1, 32, LATENT_DIM), torch.bfloat16, 45)
+    with expect_error(RuntimeError, "allocate_kv_cache must run"):
+        ad.warmup_model_prefill(enable_trace=False)
+    kv = ad.allocate_kv_cache((NUM_BLOCKS, 1, BLOCK_SIZE, LATENT_DIM), torch.bfloat16, 45)
+    assert kv is ad.kv_cache and kv.num_blocks == NUM_BLOCKS
+
+
+def test_serving_flow_prefill_decode_remap_release():
+    """The plugin's step sequence end to end: three admissions (one chunked by the mock's 128-token chunks),
+    padded decode steps with block-by-block table growth, a chunked prefill with a decode in between its chunks,
+    the async read, releases and the condensing remaps (a 2-cycle through the freed slot, then a 3-chain)."""
+    ad, backend, gen, kv = _adapter()
+    prompts = [_prompt(100, 5), _prompt(200, 11), _prompt(70, 40)]
+    last = [p[-1] for p in prompts]
+    # ---- step 1: three fresh prompts, device greedy
+    out = ad.prefill_forward(
+        _history(prompts),
+        page_table=_table([_blocks(i, len(p)) for i, p in enumerate(prompts)], 3),
+        kv_cache=kv,
+        enable_trace=True,
+        prompt_lens=[len(p) for p in prompts],
+        start_pos=torch.zeros(3, dtype=torch.int32),
+        empty_slots=[0, 1, 2],
+        sampling_params=_greedy(3),
+    )
+    assert isinstance(out, tuple) and out[1] is None
+    ids = out[0]
+    assert ids.shape == (3, 1) and ids.dtype == torch.int32
+    assert ids.reshape(-1).tolist() == [(t + 1) % VOCAB for t in last]
+    assert backend.chunks == [
+        (0, 0, 100, "last", True),
+        (1, 0, 128, "none", False),  # the 200-token prompt: an intermediate chunk without the head ...
+        (1, 128, 72, "last", True),  # ... and its last chunk, sampled on device
+        (2, 0, 70, "last", True),
+    ]
+    assert gen.live_slots(kv) == [0, 1, 2]
+    assert [len(kv.state[s]) for s in range(B)] == [100, 200, 70, 0]
+    # ---- decode steps: rows = slots, padding row 3; the tables grow a block every 64 positions, as vLLM's do
+    cur = [int(v) for v in ids.reshape(-1).tolist()]
+    pos = [100, 200, 70]
+    for step in range(30):
+        rows = [_blocks(i, pos[i] + 1) for i in range(3)]
+        out = _decode(ad, kv, cur + [0], pos + [-1], rows, read=False)
+        assert isinstance(out, DecodeOutput)
+        if step % 2:  # the sync path: decode_forward's raw handle straight into process_decode_output_host
+            got = ad.process_decode_output_host(out, is_tokens=True)
+        else:  # the async path: read_decode_output enqueues the copy, the handle is formatted after the events
+            handle, events = ad.read_decode_output(out, async_read=True)
+            assert isinstance(handle, PendingTokens) and events == []
+            got = ad.process_decode_output_host(handle, is_tokens=True)
+        assert got.shape == (B, 1) and got.dtype == torch.int32
+        assert got.reshape(-1).tolist() == [(t + 1) % VOCAB for t in cur] + [0]
+        cur = got.reshape(-1).tolist()[:3]
+        pos = [p + 1 for p in pos]
+    assert pos == [130, 230, 100]  # slot 0 crossed its second page boundary (position 128 needed a third block)
+    assert [len(kv.state[s]) for s in range(B)] == [130, 230, 100, 0]
+    assert backend.decodes == 30 and gen.counters["decode_trace_replays"] == 30
+    assert gen.counters["page_rows_unchanged"] > 0  # the unchanged-row fast path saw the trimmed rows
+    # ---- a 300-token prompt in two scheduler steps (slot 3): the intermediate chunk is host-routed by the plugin
+    long = _prompt(300, 23)
+    logits = ad.prefill_forward(
+        _history([long[:128]]),
+        page_table=_table([_blocks(3, 128)], 1),
+        kv_cache=kv,
+        prompt_lens=[128],
+        start_pos=[0],
+        empty_slots=[3],
+        sampling_params=None,
+    )
+    assert isinstance(logits, torch.Tensor) and logits.shape == (1, 1, VOCAB) and logits.dtype == torch.float32
+    assert int(logits[0, 0].argmax()) == (long[127] + 1) % VOCAB
+    assert backend.chunks[-1] == (3, 0, 128, "last", False)
+    # a decode of the other three between the two chunks leaves slot 3 alone
+    rows = [_blocks(i, pos[i] + 1) for i in range(3)]
+    got = ad.process_decode_output_host(_decode(ad, kv, cur + [0], pos + [-1], rows), is_tokens=True)
+    cur, pos = got.reshape(-1).tolist()[:3], [p + 1 for p in pos]
+    assert len(kv.state[3]) == 128
+    out = ad.prefill_forward(
+        _history([long]),  # the whole history: the adapter slices [128, 300)
+        page_table=_table([_blocks(3, 300)], 1),
+        kv_cache=kv,
+        prompt_lens=[300],
+        start_pos=[128],
+        empty_slots=[3],
+        sampling_params=_greedy(1),
+    )
+    assert out[0].reshape(-1).tolist() == [(long[-1] + 1) % VOCAB]
+    assert backend.chunks[-2:] == [(3, 128, 128, "none", False), (3, 256, 44, "last", True)]
+    assert kv.state[3] == long and gen.live_slots(kv) == [0, 1, 2, 3]
+    cur.append(int(out[0][0, 0]))
+    pos.append(300)
+    got = ad.process_decode_output_host(
+        _decode(ad, kv, cur, pos, [_blocks(i, pos[i] + 1) for i in range(4)]), is_tokens=True
+    )
+    assert got.reshape(-1).tolist() == [(t + 1) % VOCAB for t in cur]
+    cur, pos = got.reshape(-1).tolist(), [p + 1 for p in pos]
+    # ---- request 1 finishes: release, then the plugin condenses rows [0, 3, 2] -> remap [0, 3, 2, 1]
+    #      (a 2-cycle between slot 3 and the freed slot 1: only the live move 3 -> 1 reaches the generator)
+    ad.release_request(1)
+    assert backend.releases == [1] and gen.live_slots(kv) == [0, 2, 3]
+    state3 = list(kv.state[3])
+    tokens = [cur[0], cur[3], cur[2], 0]
+    positions = [pos[0], pos[3], pos[2], -1]
+    rows = [_blocks(0, pos[0] + 1), _blocks(3, pos[3] + 1), _blocks(2, pos[2] + 1)]
+    got = ad.process_decode_output_host(_decode(ad, kv, tokens, positions, rows, remap=[0, 3, 2, 1]), is_tokens=True)
+    assert got.reshape(-1).tolist() == [(t + 1) % VOCAB for t in tokens[:3]] + [0]
+    assert kv.state[1] == state3 + [tokens[1]]  # the former slot 3 state decoded in slot 1
+    assert gen.live_slots(kv) == [0, 1, 2]
+    ad.note_state_slots_moved({3: 1, 1: 3})  # the plugin's notification of the applied gather: a no-op
+    cur = [got[0, 0].item(), got[1, 0].item(), got[2, 0].item()]
+    pos = [positions[0] + 1, positions[1] + 1, positions[2] + 1]
+    # ---- request 0 finishes: rows [slot 1, slot 2] -> remap [1, 2, 0, 3]: the 3-chain 1 -> 0, 2 -> 1 (0 freed)
+    ad.release_request(0)
+    assert gen.live_slots(kv) == [1, 2]
+    state1, state2 = list(kv.state[1]), list(kv.state[2])
+    tokens = [cur[1], cur[2], 0, 0]
+    positions = [pos[1], pos[2], -1, -1]
+    rows = [_blocks(3, pos[1] + 1), _blocks(2, pos[2] + 1)]
+    got = ad.process_decode_output_host(_decode(ad, kv, tokens, positions, rows, remap=[1, 2, 0, 3]), is_tokens=True)
+    assert got.reshape(-1).tolist() == [(t + 1) % VOCAB for t in tokens[:2]] + [0, 0]
+    assert kv.state[0] == state1 + [tokens[0]] and kv.state[1] == state2 + [tokens[1]]
+    assert gen.live_slots(kv) == [0, 1]
+    # ---- teardown
+    ad.release_persistent_capture()
+    assert backend.released == backend.traces and ad.tt_supported_decode_batch_sizes == ()
+
+
+def test_host_sampled_decode_route():
+    """Without ``sampling_params`` the plugin samples on the host from ``(logits [B_pad, 1, V], None)`` (read back even
+    though DP=1 submits ``read_from_device=False``) and feeds its token back on the next step."""
+    ad, backend, gen, kv = _adapter()
+    p = _prompt(50, 3)
+    out = ad.prefill_forward(
+        _history([p]),
+        page_table=_table([_blocks(0, 50)], 1),
+        kv_cache=kv,
+        prompt_lens=[50],
+        start_pos=[0],
+        empty_slots=[0],
+        sampling_params=_greedy(1),
+    )
+    tok = int(out[0][0, 0])
+    out = ad.decode_forward(
+        torch.tensor([[tok], [0], [0], [0]], dtype=torch.int32),
+        torch.tensor([50, -1, -1, -1], dtype=torch.int32),
+        page_table=_table([_blocks(0, 51)], B),
+        kv_cache=kv,
+        enable_trace=True,
+        read_from_device=False,
+        sampling_params=None,
+        reload_inputs=True,
+    )
+    assert isinstance(out, tuple) and out[1] is None
+    logits = out[0]
+    assert logits.shape == (B, 1, VOCAB) and logits.dtype == torch.float32
+    assert int(logits[0, 0].argmax()) == (tok + 1) % VOCAB
+    assert ad.process_decode_output_host(out, is_tokens=False) is out  # a host output passes through
+    passed, events = ad.read_decode_output(out, async_read=True)
+    assert passed is out and events == []
+    host_pick = (tok + 7) % VOCAB  # the host sampler chose another token: the next step must consume it
+    got = ad.process_decode_output_host(
+        _decode(ad, kv, [host_pick, 0, 0, 0], [51, -1, -1, -1], [_blocks(0, 52)]), is_tokens=True
+    )
+    assert got.reshape(-1).tolist() == [(host_pick + 1) % VOCAB, 0, 0, 0]
+    assert kv.state[0] == p + [tok, host_pick]
+    assert gen.counters["logits_readback"] == 1 and gen.counters["token_refresh"] >= 1
+
+
+def test_refusals():
+    """Undeclared routes fail loudly: sampled rows on the device route, selective readback, speculative kwargs, the
+    legacy reload keyword, a resident-input chain, multimodal rows."""
+    ad, backend, gen, kv = _adapter()
+    p = _prompt(10, 1)
+    sampled = SimpleNamespace(temperature=[0.8], top_k=[50], top_p=[0.9], seed=[None])
+    with expect_error(ValueError, "sampled"):
+        ad.prefill_forward(
+            _history([p]),
+            page_table=_table([_blocks(0, 10)], 1),
+            kv_cache=kv,
+            prompt_lens=[10],
+            start_pos=[0],
+            empty_slots=[0],
+            sampling_params=sampled,
+        )
+    with expect_error(NotImplementedError, "multimodal"):
+        ad.prefill_forward(
+            _history([p]),
+            page_table=_table([_blocks(0, 10)], 1),
+            kv_cache=kv,
+            prompt_lens=[10],
+            start_pos=[0],
+            empty_slots=[0],
+            pixel_values=[None],
+        )
+    out = ad.prefill_forward(
+        _history([p]),
+        page_table=_table([_blocks(0, 10)], 1),
+        kv_cache=kv,
+        prompt_lens=[10],
+        start_pos=[0],
+        empty_slots=[0],
+        sampling_params=_greedy(1),
+    )
+    tok = int(out[0][0, 0])
+    kw = dict(page_table=_table([_blocks(0, 11)], B), kv_cache=kv, enable_trace=True, read_from_device=False)
+    tokens, positions = torch.tensor([[tok], [0], [0], [0]], dtype=torch.int32), torch.tensor([10, -1, -1, -1])
+    with expect_error(NotImplementedError, "speculative"):
+        ad.decode_forward(tokens, positions, sampling_params=_greedy(B), spec_mode="verify", num_valid_drafts=[1], **kw)
+    with expect_error(TypeError, "reset_batch"):
+        ad.decode_forward(tokens, positions, sampling_params=_greedy(B), reset_batch=True, **kw)
+    with expect_error(ValueError, "reload_inputs=False"):
+        ad.decode_forward(tokens, positions, sampling_params=_greedy(B), reload_inputs=False, **kw)
+    with expect_error(ValueError, "sampled"):
+        ad.decode_forward(
+            tokens,
+            positions,
+            sampling_params=SimpleNamespace(temperature=[0.5] * B, top_k=[0] * B, top_p=[1.0] * B, seed=[None] * B),
+            **kw,
+        )
+    out = ad.decode_forward(tokens, positions, sampling_params=_greedy(B), **kw)
+    with expect_error(NotImplementedError, "selective"):
+        ad.read_decode_output(out, async_read=True, sample_rows=[0])
+    with expect_error(NotImplementedError, "compact"):
+        ad.process_decode_output_host(out, is_tokens=True, sample_rows=[0])
+    with expect_error(TypeError, "expects a DecodeOutput"):
+        ad.read_decode_output(object(), async_read=True)
+    assert ad.process_decode_output_host(out, is_tokens=True).reshape(-1).tolist() == [(tok + 1) % VOCAB, 0, 0, 0]
+    ad.release_request(7)  # outside the slot range: logged, ignored
+    assert backend.releases == []
+
+
+def test_fabric_capability_uses_set_fabric_config_keywords(monkeypatch):
+    """With ttnn present the capability carries ``config`` from ``stack_model.serving_fabric_config`` and the
+    ``reliability_mode`` / ``router_config`` of ``tt/mesh.py::mesh_device_params`` (stubbed: both import ttnn)."""
+    stack = types.ModuleType("models.autoports.zai_org_glm_5_3_flash.tt.stack_model")
+    stack.serving_fabric_config = lambda: {"config": "FABRIC_1D", "router_config": "default-router"}
+    mesh = types.ModuleType("models.demos.glm53_flash.tt.mesh")
+    seen = []
+
+    def mesh_device_params(rows, cols, **overrides):
+        seen.append((rows, cols))
+        return {"fabric_config": "TORUS", "reliability_mode": "RELAXED", "fabric_router_config": "max-payload"}
+
+    mesh.mesh_device_params = mesh_device_params
+    monkeypatch.setitem(sys.modules, "ttnn", types.ModuleType("ttnn"))
+    monkeypatch.setitem(sys.modules, "models.autoports.zai_org_glm_5_3_flash.tt.stack_model", stack)
+    monkeypatch.setitem(sys.modules, "models.demos.glm53_flash.tt.mesh", mesh)
+    monkeypatch.setenv("GLM53_MESH_SHAPE", "8,4")
+    assert gvs._fabric_capability() == {
+        "config": "FABRIC_1D",
+        "reliability_mode": "RELAXED",
+        "router_config": "max-payload",
+    }
+    assert seen == [(8, 4)]
+
+
+def test_zz_no_ttnn_was_imported_by_the_suite():
+    """Runs last (file order): every adapter path the mock exercised stayed off ttnn."""
+    assert "ttnn" not in sys.modules

@@ -24,16 +24,8 @@ from loguru import logger
 import ttnn
 from models.autoports.zai_org_glm_5_3_flash.tt import optimized_decoder as OD
 from models.autoports.zai_org_glm_5_3_flash.tt.config import load_hf_text_config
-from models.autoports.zai_org_glm_5_3_flash.tt.weights import WeightSource, cache_dtype
-from models.demos.glm53_flash.reference.checkpoint import (
-    FINAL_NORM_KEY,
-    LM_HEAD_KEY,
-    default_snapshot_dir,
-    load_embedding,
-    load_layer_raw,
-    load_tensors,
-    shard_headers,
-)
+from models.autoports.zai_org_glm_5_3_flash.tt.mk_sources import HFSource
+from models.demos.glm53_flash.reference.checkpoint import default_snapshot_dir
 from models.demos.glm53_flash.tt.mesh import mesh_device_params
 
 MESH = tuple(int(v) for v in os.environ.get("GLM53_MESH_SHAPE", "2,4").split(","))
@@ -46,7 +38,6 @@ TRACE_MB = int(os.environ.get("GLM53_MODEL_TRACE_MB", "512"))
 # 1,264,512 -- the 45-layer stack sits at that floor (the sharded pool / the attached TP prefill clashed by 1 KB,
 # 2026-11-05: "static circular buffers clash with L1 buffers ... 1269248 ... 1270272")
 WORKER_L1 = int(os.environ.get("GLM53_MK_WORKER_L1", "1280896"))
-DRAM = ttnn.DRAM_MEMORY_CONFIG
 
 
 def _layers() -> list[int]:
@@ -59,104 +50,6 @@ def _layers() -> list[int]:
         else:
             out.append(int(part))
     return out
-
-
-class HFSource(WeightSource):
-    """The reference's weight source over our HF checkpoint: ``host`` / ``device`` per layer in the tile-cache layout
-    (linear weights [in, out], hyper-connection ``fn`` [16384, 24], conv taps [4, C], ``kv_b_proj`` split into
-    ``W_uk`` [h, nope, r] / ``W_uv`` [h, r, v]), the per-expert ``mlp.experts.{e}.gate_up_proj`` [H, 2I] /
-    ``down_proj`` [I, H], and the head's ``tensors`` / ``_load`` entries (lm_head [4096, V] bfp8, norm, embed_tokens).
-    """
-
-    def __init__(self, snapshot, cfg):
-        self.snapshot, self.cfg = snapshot, cfg
-        self.headers = shard_headers(snapshot)
-        self.raw: dict[int, dict] = {}
-        self.cache: dict[tuple[int, str], torch.Tensor] = {}
-        V, H = int(cfg.vocab_size), int(cfg.hidden_size)
-        self.tensors = {
-            "lm_head.weight": {"shape": [H, V], "dtype": "bfloat8_b"},
-            "norm.weight": {"shape": [H], "dtype": "bfloat16"},
-            "embed_tokens.weight": {"shape": [V, H], "dtype": "bfloat16"},
-        }
-
-    def _raw(self, layer_idx: int) -> dict:
-        if layer_idx not in self.raw:
-            # one layer resident at a time: a sparse layer's raw experts are ~14 GB in bf16 and the backend builds the
-            # layers in order (45 layers resident = the host OOM of mk_backend_45)
-            for old in [k for k in self.raw if k != layer_idx]:
-                del self.raw[old]
-            for key in [k for k in self.cache if k[0] != layer_idx]:
-                del self.cache[key]
-            # return the previous layer's ~14 GB of expert tensors to the OS now (the host RSS otherwise climbs
-            # ~4 GB per built layer through the allocator's retained blocks)
-            import ctypes
-            import gc
-
-            gc.collect()
-            try:
-                ctypes.CDLL("libc.so.6").malloc_trim(0)
-            except OSError:
-                pass
-            self.raw[layer_idx] = load_layer_raw(self.snapshot, layer_idx, self.headers)
-        return self.raw[layer_idx]
-
-    def host(self, layer_idx: int, name: str) -> torch.Tensor:
-        key = (layer_idx, name)
-        if key in self.cache:
-            return self.cache[key]
-        raw = self._raw(layer_idx)
-        cfg = self.cfg
-        if name.startswith("mlp.experts.") and name.endswith(("gate_up_proj", "down_proj")):
-            e = name.split(".")[2]
-            if name.endswith("gate_up_proj"):
-                v = torch.cat(
-                    [raw[f"mlp.experts.{e}.gate_proj.weight"].t(), raw[f"mlp.experts.{e}.up_proj.weight"].t()], -1
-                )
-            else:
-                v = raw[f"mlp.experts.{e}.down_proj.weight"].t()
-        elif name in ("self_attn.kv_b_proj.W_uk", "self_attn.kv_b_proj.W_uv"):
-            h, nope, vd, r = cfg.num_attention_heads, cfg.qk_nope_head_dim, cfg.v_head_dim, cfg.kv_lora_rank
-            w = raw["self_attn.kv_b_proj.weight"].view(h, nope + vd, r)
-            v = w[:, :nope, :] if name.endswith("W_uk") else w[:, nope:, :].mT
-        else:
-            if name not in raw:
-                raise KeyError(f"layer {layer_idx}: {name} not in the raw HF dict ({sorted(raw)[:12]}...)")
-            v = raw[name]
-            if name in ("hc_attn_fn", "hc_ffn_fn"):
-                v = v.t()
-            elif "conv1d" in name:
-                v = v.reshape(v.shape[0], -1).t()
-            elif v.dim() == 2 and (name.endswith(".weight") or name.endswith("index_kpool_compress_gate")):
-                v = v.t()  # HF [out, in] -> [in, out] (the indexer's compress gate [128, 4096] is a linear weight too)
-        self.cache[key] = v.contiguous()
-        return self.cache[key]
-
-    def device(self, layer_idx: int, name: str, mesh_device) -> ttnn.Tensor:
-        t = self.host(layer_idx, name)
-        dtype = cache_dtype(name)
-        return ttnn.from_torch(
-            t.to(torch.float32 if dtype == ttnn.float32 else torch.bfloat16),
-            dtype=dtype,
-            layout=ttnn.TILE_LAYOUT,
-            device=mesh_device,
-            memory_config=DRAM,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-        )
-
-    # the head's entries (mk_head.lm_head_host / norm_host / embed_host read `tensors[name]` and `_load(entry)`)
-    def _load(self, e: dict, device=None) -> ttnn.Tensor:
-        shape = e["shape"]
-        if shape == self.tensors["lm_head.weight"]["shape"]:
-            w = load_tensors(self.snapshot, [LM_HEAD_KEY], self.headers)[LM_HEAD_KEY].t().contiguous()  # [H, V]
-            return ttnn.from_torch(w.to(torch.bfloat16), dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT)
-        if shape == self.tensors["norm.weight"]["shape"]:
-            w = load_tensors(self.snapshot, [FINAL_NORM_KEY], self.headers)[FINAL_NORM_KEY].reshape(-1)
-            return ttnn.from_torch(
-                w.to(torch.bfloat16).reshape(1, 1, 1, -1), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT
-            )
-        w = load_embedding(self.snapshot, self.headers)  # [V, H]
-        return ttnn.from_torch(w.to(torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
 
 
 @pytest.mark.timeout(5400)

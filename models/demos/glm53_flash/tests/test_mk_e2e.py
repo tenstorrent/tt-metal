@@ -11,21 +11,18 @@ text. Prefill runs through the backend's decode-program chunks (GLM53_STACK_PREF
 
 from __future__ import annotations
 
-import json
 import os
 import time
 
 import pytest
-import torch
 from loguru import logger
 
 import ttnn
 from models.autoports.zai_org_glm_5_3_flash.tt import galaxy_defaults as GD
 from models.autoports.zai_org_glm_5_3_flash.tt import optimized_decoder as OD
 from models.autoports.zai_org_glm_5_3_flash.tt.config import load_hf_text_config
-from models.autoports.zai_org_glm_5_3_flash.tt.weights import TileCacheSource, cache_dtype
+from models.autoports.zai_org_glm_5_3_flash.tt.mk_sources import MkTileCacheSource, TileCache, open_weight_source
 from models.demos.glm53_flash.reference.checkpoint import default_snapshot_dir
-from models.demos.glm53_flash.tests.test_mk_backend_probe import HFSource
 from models.demos.glm53_flash.tt.mesh import mesh_device_params
 
 MESH = tuple(int(v) for v in os.environ.get("GLM53_MESH_SHAPE", "8,4").split(","))
@@ -82,195 +79,6 @@ def chat_prompt(tok, isl: int, user: int = 0) -> list[int]:
     return ids
 
 
-class MkTileCacheSource(TileCacheSource):
-    """GLM53_MK_TILE_CACHE_V3=<dir>: the reference-format tile cache (tools/tile_cache_build.py: one .tensorbin per
-    tensor in its cache dtype + manifest.json): the stack's own loaders read it directly (TileCacheSource.device/host,
-    fused_decoder.load_fused_experts / load_xsl_experts cut the expert files byte-exactly), no host packing at load
-    time. The head's entries (mk_head: source.tensors[name] -> source._load(e)) are the manifest's "lm_head.weight" /
-    "norm.weight" / "embed_tokens.weight". SELF-EXTENDING: a tensor the manifest lacks (e.g. the MTP layer 45, which
-    only the speculative step asks for) is built on demand from the HF source (`inner`), dumped and added to the
-    manifest, so the cache grows with what the stack asks."""
-
-    def __init__(self, cache_dir: str, manifest_path: str, inner=None):
-        super().__init__(cache_dir, manifest_path)
-        self.inner, self.manifest_path = inner, manifest_path
-        self._added = 0
-        self.ready = os.path.isfile(os.path.join(cache_dir, "COMPLETE"))
-
-    @classmethod
-    def open(cls, cache_dir: str, inner) -> "MkTileCacheSource":
-        """the cache at cache_dir, complete or not: a missing manifest starts empty (the run builds every tensor the
-        stack asks for, then complete() marks it)"""
-        os.makedirs(cache_dir, exist_ok=True)
-        mp = os.path.join(cache_dir, "manifest.json")
-        if not os.path.isfile(mp):
-            with open(mp, "w") as f:
-                json.dump({"tensors": {}, "tt_metal_sha": ""}, f)
-        return cls(cache_dir, mp, inner=inner)
-
-    def complete(self) -> None:
-        """the manifest saved and COMPLETE written (a later run reads every tensor from the cache)"""
-        self.save_manifest()
-        with open(os.path.join(self.cache_dir, "COMPLETE"), "w") as f:
-            f.write(time.strftime("%Y-%m-%d %H:%M:%S\n"))
-        self.ready = True
-        logger.info(f"MkTileCacheSource {self.cache_dir}: COMPLETE ({len(self.tensors)} tensors, {self._added} built)")
-
-    def _entry(self, layer_idx: int, name: str) -> dict:
-        key = f"layers.{layer_idx}.{name}"
-        if key not in self.tensors:
-            if self.inner is None:
-                raise KeyError(f"{key} not in the weight-cache manifest")
-            import hashlib
-
-            t = self.inner.host(layer_idx, name)
-            dt = cache_dtype(name)
-            h = ttnn.from_torch(t.to(torch.float32 if dt == ttnn.float32 else torch.bfloat16), dtype=dt,
-                                layout=ttnn.TILE_LAYOUT)  # fmt: skip
-            rel = os.path.join(f"L{layer_idx:02d}", f"{name}.tensorbin")
-            full = os.path.join(self.cache_dir, rel)
-            os.makedirs(os.path.dirname(full), exist_ok=True)
-            ttnn.dump_tensor(full, h, mode=ttnn.DumpTensorMode.LOCAL)
-            self.tensors[key] = {"path": rel, "shape": [int(v) for v in t.shape], "dtype": str(dt).split(".")[-1].lower(),
-                                 "layout": "TILE", "sha256": hashlib.sha256(key.encode()).hexdigest(),
-                                 "bytes": os.path.getsize(full)}  # fmt: skip
-            self._added += 1
-            if self._added % 64 == 1 or name.endswith("down_proj") and ".experts.287." in name:
-                self.save_manifest()
-            if self._added == 1:
-                logger.info(f"MkTileCacheSource: building layer {layer_idx} on demand from the HF source ({name} ...)")
-        return self.tensors[key]
-
-    def save_manifest(self) -> None:
-        tmp = self.manifest_path + ".tmp"
-        with open(tmp, "w") as f:
-            json.dump({"tensors": self.tensors, "tt_metal_sha": self.tt_metal_sha}, f)
-        os.replace(tmp, self.manifest_path)
-
-    def _load(self, e: dict, device=None) -> ttnn.Tensor:
-        t = ttnn.load_tensor(os.path.join(self.cache_dir, e["path"]))
-        return ttnn.to_device(t, device) if device is not None else t
-
-
-class TileCache:
-    """GLM53_MK_TILE_CACHE=<dir>: the HF source's DEQUANTISED per-layer tensors on disk (torch bf16 / fp32 in the cache
-    layout: one L??.pt per layer, head.pt, manifest.json), so the ~27-min host dequantisation of the FP8 checkpoint
-    (HFSource.load_layer_raw) is paid once; a run then torch.loads each layer (mmap) and converts to the device exactly
-    as HFSource.device does (the same numerics as the plain HF path). Without a COMPLETE marker: BUILD mode -- every
-    tensor the stack asks for comes from the HF source, is buffered per layer and torch.saved when the stack moves to
-    the next layer (layers already on disk are reused: resumable); the marker is written when the e2e passes. With it:
-    READ mode -- the HF source is never opened. (v1 dumped device tiles per tensor: the stack reads the routed experts
-    through host() and slices them itself, so that path packed bfp4 on the host at 12 MB/s.)"""
-
-    def __init__(self, inner, cache_dir: str):
-        self.inner, self.dir = inner, cache_dir
-        os.makedirs(cache_dir, exist_ok=True)
-        self.manifest_path = os.path.join(cache_dir, "manifest.json")
-        self.ready = os.path.isfile(os.path.join(cache_dir, "COMPLETE"))
-        self.meta = {"layers": {}, "head": {}}
-        if os.path.isfile(self.manifest_path):
-            with open(self.manifest_path) as f:
-                self.meta = json.load(f)
-        if self.ready and not self.meta["layers"]:
-            raise FileNotFoundError(f"{self.manifest_path}: COMPLETE but empty")
-        # the head's entries (mk_head: source.tensors[name] -> source._load(e)): the inner's shape / dtype + our key
-        self.tensors = {k: dict(v, key=k) for k, v in inner.tensors.items()}
-        self._buf: dict = {}  # BUILD: layer -> {name: torch} until the stack moves on (then torch.saved)
-        self._res: dict = {}  # the resident cached layer(s) (one at a time: a sparse layer is ~14.5 GB)
-        self._head: dict = {}
-        logger.info(f"TileCache {cache_dir}: {'READ' if self.ready else 'BUILD'} mode, "
-                    f"{len(self.meta['layers'])} layers + {len(self.meta['head'])} head tensors on disk")  # fmt: skip
-
-    def _lpath(self, L: int) -> str:
-        return os.path.join(self.dir, f"L{int(L):02d}.pt")
-
-    def _save_meta(self) -> None:
-        tmp = self.manifest_path + ".tmp"
-        with open(tmp, "w") as f:
-            json.dump(self.meta, f)
-        os.replace(tmp, self.manifest_path)
-
-    def _flush(self, L: int) -> None:
-        d = self._buf.pop(L)
-        tmp = self._lpath(L) + ".tmp"
-        torch.save({k: v.contiguous() for k, v in d.items()}, tmp)
-        os.replace(tmp, self._lpath(L))
-        self.meta["layers"][str(L)] = sorted(d)
-        self._save_meta()
-        logger.info(f"TileCache: layer {L} saved ({len(d)} tensors)")
-
-    def _on_disk(self, L: int) -> bool:
-        return str(L) in self.meta["layers"] and os.path.isfile(self._lpath(L))
-
-    def _layer(self, L: int) -> dict:
-        if L not in self._res:
-            self._res.clear()
-            self._res[L] = torch.load(self._lpath(L), mmap=True, weights_only=True)
-        return self._res[L]
-
-    def complete(self) -> None:
-        for L in list(self._buf):
-            self._flush(L)
-        self._save_meta()
-        with open(os.path.join(self.dir, "COMPLETE"), "w") as f:
-            f.write(time.strftime("%Y-%m-%d %H:%M:%S\n"))
-        self.ready = True
-        logger.info(f"TileCache {self.dir}: COMPLETE ({len(self.meta['layers'])} layers)")
-
-    # ------------------------------------------------------------------ the WeightSource surface
-    def host(self, L: int, name: str) -> torch.Tensor:
-        if self._on_disk(L):
-            d = self._layer(L)
-            if name in d:
-                return d[name]
-            if self.ready:
-                raise KeyError(f"layer {L}: {name} not in the tile cache {self.dir} (remove COMPLETE to rebuild)")
-        elif self.ready:
-            raise KeyError(f"layer {L} not in the tile cache {self.dir} (remove COMPLETE to rebuild)")
-        t = self.inner.host(L, name)
-        for old in [k for k in self._buf if k != L]:  # the stack builds the layers in order
-            self._flush(old)
-        self._buf.setdefault(L, {})[name] = t
-        return t
-
-    def device(self, L: int, name: str, mesh) -> ttnn.Tensor:
-        t = self.host(L, name)
-        dtype = cache_dtype(name)
-        return ttnn.from_torch(
-            t.to(torch.float32 if dtype == ttnn.float32 else torch.bfloat16),
-            dtype=dtype,
-            layout=ttnn.TILE_LAYOUT,
-            device=mesh,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh),
-        )
-
-    def experts(self, *args, **kwargs):
-        return self.inner.experts(*args, **kwargs)
-
-    def _load(self, e: dict, device=None) -> ttnn.Tensor:
-        key = e["key"]
-        hp = os.path.join(self.dir, "head.pt")
-        m = self.meta["head"].get(key)
-        if m is not None and os.path.isfile(hp):
-            if not self._head:
-                self._head = torch.load(hp, mmap=True, weights_only=True)
-            t = ttnn.from_torch(self._head[key], dtype=getattr(ttnn, m["dtype"]), layout=getattr(ttnn, m["layout"]))
-        else:
-            if self.ready:
-                raise KeyError(f"{key} not in the tile cache {self.dir} (remove COMPLETE to rebuild)")
-            t = self.inner._load(e)
-            w = ttnn.to_torch(t)
-            d = torch.load(hp, weights_only=True) if os.path.isfile(hp) else {}
-            d[key] = w.contiguous()
-            torch.save(d, hp + ".tmp")
-            os.replace(hp + ".tmp", hp)
-            self.meta["head"][key] = {"dtype": str(t.dtype).split(".")[-1].lower(),
-                                      "layout": str(t.layout).split(".")[-1] + "_LAYOUT", "shape": list(e["shape"])}  # fmt: skip
-            self._save_meta()
-        return ttnn.to_device(t, device) if device is not None else t
-
-
 @pytest.mark.timeout(7000)
 @pytest.mark.parametrize(
     "device_params",
@@ -288,17 +96,10 @@ def test_mk_e2e(mesh_device, monkeypatch):
     tok = load_tokenizer(snapshot)
     if DEFAULTS:
         logger.info(f"galaxy defaults applied: {DEFAULTS}")
-    v3 = os.environ.get("GLM53_MK_TILE_CACHE_V3")
-    if v3:  # the reference-format tile cache (MkTileCacheSource): READ when COMPLETE, else BUILT by this run (every
-        # tensor the stack asks for is dumped from the HF source as it loads: ~1 h on a cold runner) and marked COMPLETE
-        source = MkTileCacheSource.open(v3, inner=HFSource(snapshot, cfg))
-        logger.info(
-            f"MkTileCacheSource {v3}: {len(source.tensors)} entries, {'READ' if source.ready else 'BUILD'} mode"
-        )
-    else:
-        source = HFSource(snapshot, cfg)
-        if os.environ.get("GLM53_MK_TILE_CACHE"):  # the dequantised per-layer torch files (see TileCache)
-            source = TileCache(source, os.environ["GLM53_MK_TILE_CACHE"])
+    # the weight source (tt/mk_sources.py): GLM53_MK_TILE_CACHE_V3 = the reference-format tile cache (MkTileCacheSource:
+    # READ when COMPLETE, else BUILT by this run -- every tensor the stack asks for is dumped from the HF source as it
+    # loads, ~1 h on a cold runner -- and marked COMPLETE below), else the HF source (GLM53_MK_TILE_CACHE: TileCache)
+    source = open_weight_source(snapshot, cfg)
     monkeypatch.setattr(OD, "FdTileCacheSource", lambda cache_dir, manifest: source)
     layers = _layers()
     ep = os.environ.get("GLM53_MK_EP", "1") == "1"

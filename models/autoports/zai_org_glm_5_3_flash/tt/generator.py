@@ -2296,6 +2296,12 @@ class Glm53Generator(_ReadinessGenerator):
             release(b.kv_cache, slot)
         self.counters["slot_releases"] += 1
 
+    def live_slots(self, kv_cache) -> list:
+        """The slots holding a live request (admitted by a prefill, not released): what a serving adapter may move
+        with a slot remap and must not hand to a new request."""
+        b = self._binding(kv_cache)
+        return [s for s in range(b.max_batch) if b.slots[s].active]
+
     # ================================================================================================ high level
     def prefill_logits(self, prompt_token_ids: List[int]) -> torch.Tensor:
         """Readiness prefill driver: generator-owned cache, slot 0 (its own blocks), logits for every logical
