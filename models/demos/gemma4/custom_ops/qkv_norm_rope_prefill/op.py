@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 """``QkvNormRopePrefill``: the prefill per-head q/k/v RMSNorm (gamma on q and k, none on v) and the q/k RoPE as one
-program on the ``[B, H, S, D]`` head tensors ``nlp_create_qkv_heads`` produces (bf16, TILE, DRAM or L1 interleaved).
+program on the ``[B, H, S, D]`` head tensors ``create_qkv_heads`` produces (bf16, TILE, DRAM or L1 interleaved).
 
 Replaces, per layer, ``rms_norm x3`` with their flatten / unflatten ``reshape`` pairs (not views: the heads dim is
 tile-padded) and the two ``rotary_embedding`` programs: 11 programs -> 1. The work unit is one ``[32, D]`` tile row

@@ -537,7 +537,7 @@ def test_full_model_decode(mesh_device, reset_seeds, request):
 
     test_full_model only checks the prefill path. This exercises the full decode
     path (on-device embedding, embedding-lookup RoPE, sharded RMSNorm,
-    nlp_concat_heads_decode, paged/non-paged SDPA decode) by prefilling a prompt
+    concat_heads_decode, paged/non-paged SDPA decode) by prefilling a prompt
     and comparing the *next* token's decode-step logits TT vs HF (teacher-forced
     with the same input token so the comparison is apples-to-apples).
 

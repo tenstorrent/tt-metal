@@ -634,7 +634,7 @@ class TTNNSpeechT5Attention:
                 query,
                 key,
                 value,
-            ) = ttnn.experimental.nlp_create_qkv_heads(
+            ) = ttnn.experimental.create_qkv_heads(
                 qkv_states,
                 memory_config=ttnn.L1_MEMORY_CONFIG,
                 num_heads=self.num_heads,
@@ -695,7 +695,7 @@ class TTNNSpeechT5Attention:
                 attn_output = ttnn.transpose(attn_output, 0, 2)  # [1, H, B, d] -> [B, H, 1, d]
 
                 # Concatenate heads
-                attn_output = ttnn.experimental.nlp_concat_heads(attn_output, memory_config=ttnn.L1_MEMORY_CONFIG)
+                attn_output = ttnn.experimental.concat_heads(attn_output, memory_config=ttnn.L1_MEMORY_CONFIG)
 
                 # Cast back to original dtype if we downcast for SDPA
                 if original_dtype != ttnn.bfloat16:
@@ -703,7 +703,7 @@ class TTNNSpeechT5Attention:
 
             else:
                 # Standard self-attention (prefill mode)
-                # K is already transposed by nlp_create_qkv_heads
+                # K is already transposed by create_qkv_heads
 
                 # Apply scaling
                 query = ttnn.multiply(query, self.scaling, memory_config=ttnn.L1_MEMORY_CONFIG)
@@ -758,7 +758,7 @@ class TTNNSpeechT5Attention:
                 # Only unsqueeze if 3D (from decode mode it might be 4D)
                 if len(query.shape) == 3:
                     query = ttnn.unsqueeze(query, dim=1)
-                query = ttnn.experimental.nlp_create_qkv_heads(
+                query = ttnn.experimental.create_qkv_heads(
                     query,
                     memory_config=ttnn.L1_MEMORY_CONFIG,
                     num_heads=self.num_heads,
@@ -794,21 +794,21 @@ class TTNNSpeechT5Attention:
                 # Only unsqueeze query if it's 3D (from decode mode it might be 4D)
                 if len(query.shape) == 3:
                     query = ttnn.unsqueeze(query, dim=1)
-                query = ttnn.experimental.nlp_create_qkv_heads(
+                query = ttnn.experimental.create_qkv_heads(
                     query,
                     memory_config=ttnn.L1_MEMORY_CONFIG,
                     num_heads=self.num_heads,
                     num_kv_heads=0,
                 )[0]
 
-                key = ttnn.experimental.nlp_create_qkv_heads(
+                key = ttnn.experimental.create_qkv_heads(
                     key,
                     memory_config=ttnn.L1_MEMORY_CONFIG,
                     num_heads=self.num_heads,
                     num_kv_heads=0,
                 )[0]
 
-                value = ttnn.experimental.nlp_create_qkv_heads(
+                value = ttnn.experimental.create_qkv_heads(
                     value,
                     memory_config=ttnn.L1_MEMORY_CONFIG,
                     num_heads=self.num_heads,

@@ -51,7 +51,7 @@ _L1 = ttnn.L1_MEMORY_CONFIG
 
 def _split_heads(qkv, B):
     """[1,B*3,6144] -> q [B,32,3,128], k/v [B,8,3,128], by slice/reshape/permute rather than the
-    fused `nlp_create_qkv_heads`, which is slower at this shape."""
+    fused `create_qkv_heads`, which is slower at this shape."""
     t = ttnn.reshape(qkv, [B, 1, 3, _QKV_WIDTH])
 
     def take(lo, hi, nh):

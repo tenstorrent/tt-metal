@@ -147,17 +147,17 @@ def calculate_key_values(config, key_value_states, *, parameters):
     key_states = fused_kv[:, :, :, :hidden_size]
     value_states = fused_kv[:, :, :, hidden_size:]
 
-    # num_kv_heads=0 is required here because we're calling nlp_create_qkv_heads
+    # num_kv_heads=0 is required here because we're calling create_qkv_heads
     # on just the K or V tensor (not combined QKV)
     # K stays [B, H, S_enc, d] (same head layout as V) for fused cross-attention SDPA — no extra permute.
-    key_states = ttnn.experimental.nlp_create_qkv_heads(
+    key_states = ttnn.experimental.create_qkv_heads(
         key_states,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         num_heads=config.encoder_attention_heads,
         num_kv_heads=0,
     )[0]
 
-    value_states = ttnn.experimental.nlp_create_qkv_heads(
+    value_states = ttnn.experimental.create_qkv_heads(
         value_states,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         num_heads=config.encoder_attention_heads,
@@ -421,7 +421,7 @@ def whisper_attention(
     is_cross_attention = encoder_hidden_states is not None
     self_kv_prefill = not is_cross_attention and is_decode and kv_cache is not None and tgt_len > 1
     sdpa_with_kv_cache = not is_cross_attention and is_decode and kv_cache is not None and not self_kv_prefill
-    # Enabling encoder SDPA, to disable the K-transpose in ttnn.experimental.nlp_create_qkv_heads
+    # Enabling encoder SDPA, to disable the K-transpose in ttnn.experimental.create_qkv_heads
     encoder_sdpa_attention = not is_decode
     if encoder_sdpa_attention:
         transpose_k_heads = False
@@ -487,7 +487,7 @@ def whisper_attention(
             query_states,
             key_states,
             value_states,
-        ) = ttnn.experimental.nlp_create_qkv_heads(
+        ) = ttnn.experimental.create_qkv_heads(
             fused_qkv,
             num_heads=config.decoder_attention_heads,
             num_kv_heads=config.decoder_attention_heads,
@@ -556,7 +556,7 @@ def whisper_attention(
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )  # [1, B, H, d]
 
-            # Transpose back to [B, H, S, d] format for nlp_concat_heads
+            # Transpose back to [B, H, S, d] format for concat_heads
             attn_output = ttnn.transpose(attn_output, 1, 2)  # [1, B, H, d] -> [1, H, B, d]
             attn_output = ttnn.transpose(attn_output, 0, 2)  # [1, H, B, d] -> [B, H, 1, d]
         else:
@@ -573,7 +573,7 @@ def whisper_attention(
             ttnn.deallocate(key_states)
             ttnn.deallocate(value_states)
 
-    attn_output = ttnn.experimental.nlp_concat_heads(attn_output)
+    attn_output = ttnn.experimental.concat_heads(attn_output)
     attn_output = _linear_lofi_l1_roundtrip(attn_output, parameters.out_proj.weight, parameters.out_proj.bias)
     return attn_output
 

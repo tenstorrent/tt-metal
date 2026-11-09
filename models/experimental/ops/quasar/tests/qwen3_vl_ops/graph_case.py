@@ -26,7 +26,7 @@ What a case run does
 3. call the op;
 4. check every returned tensor against its captured output spec — shape, dtype,
    layout and memory config (so a relayout op that hands back its input untouched
-   fails), plus finiteness. A multi-output op such as ``nlp_create_qkv_heads`` has
+   fails), plus finiteness. A multi-output op such as ``create_qkv_heads`` has
    all of Q, K and V checked. Where the capture never observed an output, what the
    call itself pins down is used instead (``_derived_spec``), and ops whose result
    metadata cannot show they did anything get an explicit ``POSTCONDITION``;
@@ -705,8 +705,8 @@ def _ref_view(inputs, kwargs, case):
 
 
 # The head ops below mirror the references the hand-written tests/ops suite verified
-# on hardware — test_nlp_create_qkv_heads.py:57-60, test_nlp_create_qkv_heads_decode.py:110-113,
-# test_nlp_concat_heads.py:51 — so a permutation or a mis-split of the fused QKV is
+# on hardware — test_create_qkv_heads.py:57-60, test_create_qkv_heads_decode.py:110-113,
+# test_concat_heads.py:51 — so a permutation or a mis-split of the fused QKV is
 # caught here too, instead of only shape/dtype. Each returns None if the captured
 # shapes do not match the layout it models, so an unfamiliar capture falls back to the
 # structural checks rather than failing against a reference that does not apply.
@@ -905,10 +905,10 @@ GOLDEN = {
     "ttnn.embedding": _ref_embedding,
     "ttnn.reshape": _ref_view,
     "ttnn.unsqueeze_to_4D": _ref_view,
-    "ttnn.experimental.nlp_create_qkv_heads": _ref_create_qkv_heads,
-    "ttnn.experimental.nlp_create_qkv_heads_decode": _ref_create_qkv_heads_decode,
-    "ttnn.experimental.nlp_concat_heads": _ref_concat_heads,
-    "ttnn.experimental.nlp_concat_heads_decode": _ref_concat_heads_decode,
+    "ttnn.experimental.create_qkv_heads": _ref_create_qkv_heads,
+    "ttnn.experimental.create_qkv_heads_decode": _ref_create_qkv_heads_decode,
+    "ttnn.experimental.concat_heads": _ref_concat_heads,
+    "ttnn.experimental.concat_heads_decode": _ref_concat_heads_decode,
     "ttnn.to_layout": _ref_identity,
     "ttnn.unsqueeze": _ref_view,
     "ttnn.layer_norm": _ref_layer_norm,
@@ -1104,11 +1104,11 @@ def _input_elements(case):
 
 
 # Ops whose inputs include padding the op never reads, so _input_elements overstates the leading
-# region it writes. nlp_concat_heads_decode's input pads the heads dim to a tile row and the op
+# region it writes. concat_heads_decode's input pads the heads dim to a tile row and the op
 # writes only num_heads heads per user; with fewer than 32 heads, the rest of the output's first
 # rows stays unwritten.
 _WRITTEN_ELEMENTS = {
-    "ttnn.experimental.nlp_concat_heads_decode": lambda case: (
+    "ttnn.experimental.concat_heads_decode": lambda case: (
         case["args"][0]["shape"][1] * case["kwargs"]["num_heads"]["v"] * case["args"][0]["shape"][3]
     ),
 }
@@ -1193,7 +1193,7 @@ def _check_output(out, case, mesh_device, op_name):
     """Check every returned tensor against its captured spec, then its values.
 
     ``case["outs"]`` holds one spec per tensor the op returned in the capture, in
-    order — multi-output ops (``nlp_create_qkv_heads``: Q, K, V) get all of theirs
+    order — multi-output ops (``create_qkv_heads``: Q, K, V) get all of theirs
     checked, not just the first. An entry is None when that output was never
     consumed again in the capture, so its spec was never observed; the entry is
     still present, which is what makes the output *count* checkable, and the checks
@@ -1350,11 +1350,11 @@ def _bfp_specs(case):
 
 
 # Ops that put one unit of work on each of a fixed number of cores, derived from the call rather than
-# from a memory config the harness could shrink. nlp_concat_heads_decode width-shards its output one
+# from a memory config the harness could shrink. concat_heads_decode width-shards its output one
 # head per core, so it needs num_heads cores (from sub_core_grids when given, else the device grid);
 # a smaller grid FATALs in the op's num_cores_to_corerangeset.
 _REQUIRED_CORES = {
-    "ttnn.experimental.nlp_concat_heads_decode": lambda case: case["kwargs"]["num_heads"]["v"],
+    "ttnn.experimental.concat_heads_decode": lambda case: case["kwargs"]["num_heads"]["v"],
 }
 
 

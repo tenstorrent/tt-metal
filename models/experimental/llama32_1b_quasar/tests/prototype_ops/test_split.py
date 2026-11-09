@@ -13,7 +13,7 @@ The single-device top-k strategy splits the vocab in half along the last dim
 is ``torch.split`` along dim 3; each half compared with PCC 0.999.
 
 NOTE: the QKV projection is *not* split with ttnn.split — it uses
-``ttnn.experimental.nlp_create_qkv_heads`` (attention_1d.py:470). The only
+``ttnn.experimental.create_qkv_heads`` (attention_1d.py:470). The only
 real ttnn.split call site is this vocab-halving one, which is what is covered.
 """
 

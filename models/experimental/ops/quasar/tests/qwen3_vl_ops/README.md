@@ -49,9 +49,9 @@ tower still contributes its own cases: `layer_norm`, the 24-block attention shap
 the patch-merger `linear`s all appear with their real (much taller) activations.
 
 Both halves of the model are represented: `ttnn.layer_norm` / `ttnn.transformer.
-scaled_dot_product_attention` / `ttnn.experimental.nlp_create_qkv_heads` come from the
+scaled_dot_product_attention` / `ttnn.experimental.create_qkv_heads` come from the
 vision tower and text prefill, while `ttnn.experimental.paged_update_cache` /
-`paged_scaled_dot_product_attention_decode` / `nlp_create_qkv_heads_decode` are the
+`paged_scaled_dot_product_attention_decode` / `create_qkv_heads_decode` are the
 decode path. `ttnn.scatter` and `ttnn.mesh_partition` are Qwen3-VL-specific: the
 vision-token merge and the vision tower's output partition.
 

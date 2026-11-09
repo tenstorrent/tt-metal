@@ -1034,7 +1034,7 @@ class Attention(Module):
 
         x = self.qkv_proj.forward(x)
 
-        q, k, v = ttnn.experimental.nlp_create_qkv_heads(
+        q, k, v = ttnn.experimental.create_qkv_heads(
             ttnn.unsqueeze(x, 1),
             num_heads=self._num_local_heads,
             num_kv_heads=self._num_local_kv_heads,
@@ -1121,7 +1121,7 @@ class Attention(Module):
 
         x = self.qkv_proj.forward(x)
 
-        q, k, v = ttnn.experimental.nlp_create_qkv_heads_decode(
+        q, k, v = ttnn.experimental.create_qkv_heads_decode(
             x.reshape([1, 1, batch_size, -1]),
             num_heads=self._num_local_heads,
             num_kv_heads=self._num_local_kv_heads,
@@ -1168,7 +1168,7 @@ class Attention(Module):
             use_height_and_width_as_shard_shape=True,
         )
         x = ttnn.to_memory_config(x, memory_config)
-        x = ttnn.experimental.nlp_concat_heads_decode(x, num_heads=self._num_local_heads)
+        x = ttnn.experimental.concat_heads_decode(x, num_heads=self._num_local_heads)
         x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
 
         if self._tp_axis is not None:

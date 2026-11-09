@@ -1085,7 +1085,7 @@ fewer Euler steps or a cheaper step.
   - Each of the 56 transformer blocks transposes SDPA's `[2, 8, 512, 64]` to `[2, 512, 8, 64]`, then reshapes it to
     `[2, 512, 512]` (`tt/flow/decoder.py`).
   - In tile layout the 8 heads pad to a 32-row tile, so the reshape moves data: 0.27 ms per call.
-  - `ttnn.experimental.nlp_concat_heads` does the same merge in one op, as the QKV side already does with the fused
+  - `ttnn.experimental.concat_heads` does the same merge in one op, as the QKV side already does with the fused
     split. Not measured here.
 - **The host takes about 54 µs to enqueue each op, against about 41 µs of device time per op.** At the first chunk's
   size, then, cutting device time alone does not shorten an eager step. The ops have to become fewer, or the step

@@ -191,9 +191,9 @@ WORKAROUNDS = [
     ),
     Workaround(
         name="concat_heads_decode_small_grid",
-        target="ttnn.experimental.nlp_concat_heads_decode",
+        target="ttnn.experimental.concat_heads_decode",
         reason="the op places one head per core and needs num_heads (32) cores; the emulator has 2 (QUASAR_GAPS G1)",
-        remove_when="nlp_concat_heads_decode packs several heads per core",
+        remove_when="concat_heads_decode packs several heads per core",
         applies=_fewer_cores_than_heads,
         rewrite=_merge_heads_on_device,
     ),
@@ -389,18 +389,18 @@ FALLBACKS = {
         ),
         HostFallback("ttnn.experimental.minimal_matmul", "graph_case", _graph_case("_ref_matmul", lambda a, k: [()])),
         HostFallback(
-            "ttnn.experimental.nlp_create_qkv_heads", "graph_case", _graph_case("_ref_create_qkv_heads", _qkv_shapes)
+            "ttnn.experimental.create_qkv_heads", "graph_case", _graph_case("_ref_create_qkv_heads", _qkv_shapes)
         ),
         HostFallback(
-            "ttnn.experimental.nlp_create_qkv_heads_decode",
+            "ttnn.experimental.create_qkv_heads_decode",
             "graph_case",
             _graph_case("_ref_create_qkv_heads_decode", _qkv_decode_shapes),
         ),
         HostFallback(
-            "ttnn.experimental.nlp_concat_heads", "graph_case", _graph_case("_ref_concat_heads", lambda a, k: [()])
+            "ttnn.experimental.concat_heads", "graph_case", _graph_case("_ref_concat_heads", lambda a, k: [()])
         ),
         HostFallback(
-            "ttnn.experimental.nlp_concat_heads_decode",
+            "ttnn.experimental.concat_heads_decode",
             "graph_case",
             _graph_case("_ref_concat_heads_decode", lambda a, k: [()]),
         ),
@@ -423,10 +423,10 @@ CERTIFIED: dict = {
     "ttnn.transformer.scaled_dot_product_attention": "test_fallbacks.py[test_scaled_dot_product_attention-*] (2 cases) @ ttsim WH 5e83042c98a",
     "ttnn.transformer.paged_scaled_dot_product_attention_decode": "test_fallbacks.py[test_paged_scaled_dot_product_attention_decode-*] (1 cases) @ ttsim WH 5e83042c98a",
     "ttnn.experimental.minimal_matmul": "test_fallbacks.py[test_minimal_matmul-*] (2 cases) @ ttsim WH 5e83042c98a",
-    "ttnn.experimental.nlp_create_qkv_heads": "test_fallbacks.py[test_nlp_create_qkv_heads-*] (2 cases) @ ttsim WH 5e83042c98a",
-    "ttnn.experimental.nlp_create_qkv_heads_decode": "test_fallbacks.py[test_nlp_create_qkv_heads_decode-*] (1 cases) @ ttsim WH 5e83042c98a",
-    "ttnn.experimental.nlp_concat_heads": "test_fallbacks.py[test_nlp_concat_heads-*] (2 cases) @ ttsim WH 5e83042c98a",
-    "ttnn.experimental.nlp_concat_heads_decode": "test_fallbacks.py[test_nlp_concat_heads_decode-*] (1 cases) @ ttsim WH 5e83042c98a",
+    "ttnn.experimental.create_qkv_heads": "test_fallbacks.py[test_create_qkv_heads-*] (2 cases) @ ttsim WH 5e83042c98a",
+    "ttnn.experimental.create_qkv_heads_decode": "test_fallbacks.py[test_create_qkv_heads_decode-*] (1 cases) @ ttsim WH 5e83042c98a",
+    "ttnn.experimental.concat_heads": "test_fallbacks.py[test_concat_heads-*] (2 cases) @ ttsim WH 5e83042c98a",
+    "ttnn.experimental.concat_heads_decode": "test_fallbacks.py[test_concat_heads_decode-*] (1 cases) @ ttsim WH 5e83042c98a",
     "ttnn.experimental.rotary_embedding_llama": "test_fallbacks.py[test_rotary_embedding_llama-*] (5 cases) @ ttsim WH 5e83042c98a",
     "ttnn.experimental.paged_update_cache": "test_fallbacks.py[test_paged_update_cache-*] (1 cases) @ ttsim WH 5e83042c98a",
     "ttnn.experimental.paged_fill_cache": "test_fallbacks.py[test_paged_fill_cache-*] (1 cases) @ ttsim WH 5e83042c98a",

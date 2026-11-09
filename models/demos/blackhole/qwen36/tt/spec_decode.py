@@ -68,7 +68,7 @@ class SpeculativeDecoder:
             f"page_tables has {self.B} rows but the model was built for max_batch_size="
             f"{self.args.max_batch_size}; the verify trace's row count is baked in at capture"
         )
-        # Verify/reseed row count. One decode tile carries every row: nlp_create_qkv_heads_decode, the
+        # Verify/reseed row count. One decode tile carries every row: create_qkv_heads_decode, the
         # 1-tile-row decode matmul configs and the fused GDN kernel's core budget all assume 32 rows.
         self.R = self.B * self.T
         assert self.R <= ttnn.TILE_SIZE, (

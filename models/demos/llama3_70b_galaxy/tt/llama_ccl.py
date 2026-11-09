@@ -1705,7 +1705,7 @@ class TT_CCL:
         gather_memory_config = memory_config
         if self.mode == "decode" and dim == 1:
             # Keep the existing gather axis: it produces the 32x32 tile shape
-            # required by nlp_concat_heads_decode. We only swap the logical
+            # required by concat_heads_decode. We only swap the logical
             # users/head axes below before invoking the concat op.
             gather_memory_config = self.model_config["GATHER_USERS_MEMCFG"](self.cluster_shape[1])
         buffer_key = "SDPA" if self.mode == "decode" else None
@@ -1720,11 +1720,11 @@ class TT_CCL:
         )
 
         if self.mode == "decode":
-            concat_heads_op = ttnn.experimental.nlp_concat_heads_decode
+            concat_heads_op = ttnn.experimental.concat_heads_decode
         else:
-            concat_heads_op = getattr(ttnn, "nlp_concat_heads", None)
+            concat_heads_op = getattr(ttnn, "concat_heads", None)
             if concat_heads_op is None:
-                concat_heads_op = ttnn.experimental.nlp_concat_heads
+                concat_heads_op = ttnn.experimental.concat_heads
 
         concat_input = gathered
         if self.mode == "decode" and dim == 1:
@@ -1735,10 +1735,10 @@ class TT_CCL:
             try:
                 gathered_memcfg = gathered.memory_config()
                 if self.mode != "decode" and gathered_memcfg.memory_layout == ttnn.TensorMemoryLayout.WIDTH_SHARDED:
-                    # nlp_concat_heads does not accept WIDTH_SHARDED input.
+                    # concat_heads does not accept WIDTH_SHARDED input.
                     concat_input = ttnn.to_memory_config(gathered, ttnn.DRAM_MEMORY_CONFIG)
             except Exception as e:
-                # nlp_concat_heads does not accept WIDTH_SHARDED input.
+                # concat_heads does not accept WIDTH_SHARDED input.
                 logger.warning(f"all_gather_concat: memory_config introspection failed, using gathered as-is: {e}")
                 concat_input = gathered
 

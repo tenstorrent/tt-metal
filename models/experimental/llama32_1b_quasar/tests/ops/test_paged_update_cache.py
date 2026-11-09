@@ -16,7 +16,7 @@ matching tests/ttnn/.../test_paged_update_cache.py) and ``current_pos`` is a
 per-user position tensor. The op's device validate requires the new-KV input to be
 HEIGHT_SHARDED, one user per core: shard width == head_dim, shard grid num_cores ==
 num_users, ROW_MAJOR (paged_update_cache_device_operation.cpp:231-266). This matches
-the model, where k_heads/v_heads come out of nlp_create_qkv_heads_decode already
+the model, where k_heads/v_heads come out of create_qkv_heads_decode already
 sharded (decode_create_qkv_head_memcfg, attention_1d.py:685-691). This test uses the
 contiguous (non-paged, page_table=None) cache ``[batch, n_kv_heads, max_seq_len,
 head_dim]``, updates one token per user, reads back and verifies each user's written

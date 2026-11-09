@@ -555,7 +555,7 @@ class LlamaDecoder(LightweightModule):
         return ttnn.typecast(result, self.residual_dtype) if result.dtype != self.residual_dtype else result
 
     def _create_decode_heads(self, packed, batch):
-        return ttnn.experimental.nlp_create_qkv_heads_decode(
+        return ttnn.experimental.create_qkv_heads_decode(
             ttnn.to_memory_config(packed, ttnn.L1_MEMORY_CONFIG),
             num_heads=8,
             num_kv_heads=2,
@@ -567,7 +567,7 @@ class LlamaDecoder(LightweightModule):
         if batch <= 4:
             return ttnn.reshape(attention, (1, 1, batch, 1024), skip_padding_fill=True)
         attention = ttnn.to_memory_config(attention, memcfg)
-        result = ttnn.experimental.nlp_concat_heads_decode(attention, num_heads=8, sub_core_grids=self.core_grid)
+        result = ttnn.experimental.concat_heads_decode(attention, num_heads=8, sub_core_grids=self.core_grid)
         result = ttnn.to_memory_config(result, ttnn.L1_MEMORY_CONFIG)
         return ttnn.reshape(
             result, ttnn.Shape((1, 1, batch, 1024)), ttnn.Shape((1, 1, 32, 1024)), skip_padding_fill=True
@@ -627,7 +627,7 @@ class LlamaDecoder(LightweightModule):
                     else part
                 )
                 n = self._norm_input(part, decode=False, site="attn")
-                q, k, v = ttnn.experimental.nlp_create_qkv_heads(
+                q, k, v = ttnn.experimental.create_qkv_heads(
                     self._linear(n, "qkv"),
                     num_heads=8,
                     num_kv_heads=2,
@@ -661,7 +661,7 @@ class LlamaDecoder(LightweightModule):
                     ),
                     compute_kernel_config=self.sdpa_compute,
                 )
-                attention = ttnn.experimental.nlp_concat_heads(
+                attention = ttnn.experimental.concat_heads(
                     attention,
                     memory_config=ttnn.L1_MEMORY_CONFIG,
                 )

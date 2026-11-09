@@ -164,7 +164,7 @@ class TtAttention(LightweightModule):
                 q_heads,
                 k_heads,
                 v_heads,
-            ) = ttnn.experimental.nlp_create_qkv_heads(
+            ) = ttnn.experimental.create_qkv_heads(
                 qkv_fused, num_heads=self.heads, transpose_k_heads=False, memory_config=ttnn.L1_MEMORY_CONFIG
             )
             ttnn.deallocate(qkv_fused)
@@ -191,7 +191,7 @@ class TtAttention(LightweightModule):
                 program_config=self.v_program_config,
             )
 
-            q_heads, _, _ = ttnn.experimental.nlp_create_qkv_heads(
+            q_heads, _, _ = ttnn.experimental.create_qkv_heads(
                 q_heads,
                 num_heads=self.heads,
                 num_kv_heads=0,
@@ -199,7 +199,7 @@ class TtAttention(LightweightModule):
                 memory_config=ttnn.L1_MEMORY_CONFIG,
             )
 
-            v_heads, _, _ = ttnn.experimental.nlp_create_qkv_heads(
+            v_heads, _, _ = ttnn.experimental.create_qkv_heads(
                 v_heads,
                 num_heads=self.heads,
                 num_kv_heads=0,
@@ -207,7 +207,7 @@ class TtAttention(LightweightModule):
                 memory_config=ttnn.L1_MEMORY_CONFIG,
             )
 
-            k_heads, _, _ = ttnn.experimental.nlp_create_qkv_heads(
+            k_heads, _, _ = ttnn.experimental.create_qkv_heads(
                 k_heads,
                 num_heads=self.heads,
                 num_kv_heads=0,
@@ -225,7 +225,7 @@ class TtAttention(LightweightModule):
             compute_kernel_config=self.sdpa_compute_kernel_config,
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
-        hidden_states = ttnn.experimental.nlp_concat_heads(hidden_states, memory_config=ttnn.L1_MEMORY_CONFIG)
+        hidden_states = ttnn.experimental.concat_heads(hidden_states, memory_config=ttnn.L1_MEMORY_CONFIG)
 
         hidden_states = ttnn.linear(
             hidden_states,

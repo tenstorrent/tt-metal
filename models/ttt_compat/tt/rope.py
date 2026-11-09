@@ -691,7 +691,7 @@ class HfRotarySetup(LightweightModule):
         Returns tensors shaped [1, batch, 1, head_dim] for use with rotary_embedding_hf.
 
         The cos/sin tensors are placed in HEIGHT_SHARDED memory with the same core grid
-        layout that nlp_create_qkv_heads_decode uses for Q/K, ensuring the sharded
+        layout that create_qkv_heads_decode uses for Q/K, ensuring the sharded
         rotary_embedding_hf kernel reads matching data on each core.
 
         Args:

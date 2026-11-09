@@ -962,7 +962,7 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
         # rather than lazily on the first runtime prefill. A cold *eager*
         # prefill dispatched after a shared-Generator traced-decode session
         # (the release workflow's evals phase) wedges the fetch queue
-        # (nlp_concat_heads) at ISL=2048 — capturing every bucket up front so
+        # (concat_heads) at ISL=2048 — capturing every bucket up front so
         # runtime only *replays* removes that trace->eager transition.
         #
         # The hybrid per-layer page tables diverge from the single broadcast
@@ -2013,7 +2013,7 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
             # (see ``warmup_model_prefill``), routed through ``prefill_forward``
             # for the hybrid per-layer case. A cold *eager* prefill dispatched
             # after a shared-Generator traced-decode session (the release
-            # workflow's evals phase) wedges the fetch queue (nlp_concat_heads)
+            # workflow's evals phase) wedges the fetch queue (concat_heads)
             # at ISL=2048; capturing every bucket up front so runtime only
             # *replays* removes that trace->eager transition. Capturing at warmup
             # (before any traced decode) is what makes it safe — a lazy

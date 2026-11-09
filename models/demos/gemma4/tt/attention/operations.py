@@ -10,7 +10,7 @@ No Meta-format weight conversion needed. No transformation matrices needed.
 Handles:
 - Per-head RMSNorm (q_norm, k_norm, v_norm) via reshape trick
 - Partial RoPE for global layers (split, rotate, concat)
-- K=V tying (fused Q+K+K weight, standard nlp_create_qkv_heads split)
+- K=V tying (fused Q+K+K weight, standard create_qkv_heads split)
 - No bias on any projection
 - scaling=1.0 (no 1/sqrt(d_k))
 """
@@ -106,7 +106,7 @@ def split_qkv_heads_decode(xqkv_fused, config, is_global: bool, tp: int = 1, kv_
     """
     num_local_heads = config.num_attention_heads // tp
     num_local_kv_heads = 1 if kv_replicated else config.num_key_value_heads // tp
-    # Workaround for Blackhole bug in nlp_create_qkv_heads_decode interleaved
+    # Workaround for Blackhole bug in create_qkv_heads_decode interleaved
     # reader kernel: with DRAM input the kernel zeros odd-indexed Q rows due
     # to a NoC DRAM-read alignment-match violation (see tt-metal #16667). Move
     # the fused QKV from DRAM to L1 before the split — the L1 path uses a
@@ -114,7 +114,7 @@ def split_qkv_heads_decode(xqkv_fused, config, is_global: bool, tp: int = 1, kv_
     # preserved; small extra L1 copy in exchange for arch-portable behavior).
     if xqkv_fused.memory_config().buffer_type == ttnn.BufferType.DRAM:
         xqkv_fused = ttnn.to_memory_config(xqkv_fused, ttnn.L1_MEMORY_CONFIG)
-    return ttnn.experimental.nlp_create_qkv_heads_decode(
+    return ttnn.experimental.create_qkv_heads_decode(
         xqkv_fused,
         num_heads=num_local_heads,
         num_kv_heads=num_local_kv_heads,
@@ -138,7 +138,7 @@ def split_qkv_heads_prefill(
     """
     num_local_heads = config.num_attention_heads // tp
     num_local_kv_heads = 1 if kv_replicated else config.num_key_value_heads // tp
-    return ttnn.experimental.nlp_create_qkv_heads(
+    return ttnn.experimental.create_qkv_heads(
         xqkv_fused,
         num_heads=num_local_heads,
         num_kv_heads=num_local_kv_heads,
@@ -734,8 +734,8 @@ def concat_heads(
 ):
     """Concatenate attention heads back to hidden dimension.
 
-    Decode uses ``nlp_concat_heads_decode`` (multi-core, width-sharded output)
-    instead of ``transpose + nlp_concat_heads``. The decode op needs a
+    Decode uses ``concat_heads_decode`` (multi-core, width-sharded output)
+    instead of ``transpose + concat_heads``. The decode op needs a
     height-sharded input ([1, batch, heads_padded_to_32, head_dim] sharded with
     one core per user), so the SDPA output (DRAM, [1, batch, heads, head_dim]) is
     resharded first across ``batch`` cores. The old path ran the concat on a
@@ -789,7 +789,7 @@ def concat_heads(
         )
         tensor_sh = ttnn.to_memory_config(tensor, shard_cfg)
         # Output is [1, 1, B(padded to 32), num_heads*head_dim] width-sharded.
-        out = ttnn.experimental.nlp_concat_heads_decode(tensor_sh, num_heads=num_heads)
+        out = ttnn.experimental.concat_heads_decode(tensor_sh, num_heads=num_heads)
         tensor_sh.deallocate(True)
         out_sh = out
         out = ttnn.sharded_to_interleaved(out_sh, ttnn.DRAM_MEMORY_CONFIG)
@@ -802,7 +802,7 @@ def concat_heads(
             out_padded.deallocate(True)
         return out
     memory_config = memory_config or ttnn.DRAM_MEMORY_CONFIG
-    return ttnn.experimental.nlp_concat_heads(tensor, memory_config=memory_config)
+    return ttnn.experimental.concat_heads(tensor, memory_config=memory_config)
 
 
 def apply_output_projection(tensor, weights: AttentionWeights, prefill=False):

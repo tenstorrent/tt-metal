@@ -185,7 +185,7 @@ class HunyuanTtDecoderLayer(LightweightModule):
             decode_step=decode_step,
         )
         ttnn.deallocate(h)
-        # Attention emits [B, 1, S, H] (4-D, from nlp_create_qkv_heads); collapse
+        # Attention emits [B, 1, S, H] (4-D, from create_qkv_heads); collapse
         # the singleton head-group dim back to the [B, S, H] residual-stream rank
         # so the layer's output rank matches its input — required when stacking
         # layers (a 4-D hidden would break the next layer's QKV reshape).

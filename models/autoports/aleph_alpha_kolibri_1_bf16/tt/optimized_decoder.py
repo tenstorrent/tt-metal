@@ -677,7 +677,7 @@ class OptimizedDecoder(LightweightModule):
         n = self._norm(x, "input_layernorm")
         packed = self._linear(n, self.projections["qkv"])
         packed = ttnn.to_memory_config(packed, DRAM)
-        q, k, v = ttnn.experimental.nlp_create_qkv_heads(packed, num_heads=48, num_kv_heads=4, transpose_k_heads=False)
+        q, k, v = ttnn.experimental.create_qkv_heads(packed, num_heads=48, num_kv_heads=4, transpose_k_heads=False)
         q, k, v = [ttnn.slice(t, (0, 0, 0, 0), (1, h, s, 128)) for t, h in [(q, 48), (k, 4), (v, 4)]]
         q = self._norm(q, "self_attn.q_norm")
         k = self._norm(k, "self_attn.k_norm")
@@ -777,7 +777,7 @@ class OptimizedDecoder(LightweightModule):
         )
         n = self._norm(hidden_states, "input_layernorm")
         packed = self._linear(n, self.projections["qkv"])
-        q, k, v = ttnn.experimental.nlp_create_qkv_heads_decode(packed, num_heads=48, num_kv_heads=4, memory_config=mem)
+        q, k, v = ttnn.experimental.create_qkv_heads_decode(packed, num_heads=48, num_kv_heads=4, memory_config=mem)
         q = self._norm(ttnn.to_memory_config(q, DRAM), "self_attn.q_norm")
         k = self._norm(ttnn.to_memory_config(k, DRAM), "self_attn.k_norm")
         if self.sliding:

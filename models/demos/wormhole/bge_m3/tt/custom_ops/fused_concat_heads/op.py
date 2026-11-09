@@ -6,7 +6,7 @@
 Two variants:
 
   - ``bge_concat_heads_stock``: thin shim around
-    ``ttnn.experimental.nlp_concat_heads``; matches the production
+    ``ttnn.experimental.concat_heads``; matches the production
     ``BgeM3Attention.forward`` call. Used by sweeps as the timing baseline.
 
   - ``bge_concat_heads_tracka``: ``generic_op`` wrapper that wires a custom

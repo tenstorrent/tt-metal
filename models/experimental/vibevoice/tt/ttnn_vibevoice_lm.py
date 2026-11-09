@@ -62,10 +62,10 @@ _PREFILL_WO_PROGCFG = _mm2d_prefill(6, 8, 6, 2, 8)  # 256x1536x1536
 _PREFILL_GATEUP_PROGCFG = _mm2d_prefill(10, 8, 12, 2, 28)  # 256x1536x8960
 _PREFILL_DOWN_PROGCFG = _mm2d_prefill(8, 8, 14, 2, 6)  # 256x8960x1536
 
-# Fused wq|wk|wv decode projection: ONE wqkv (1536x2048) matmul + nlp_create_qkv_heads(qkv) instead
+# Fused wq|wk|wv decode projection: ONE wqkv (1536x2048) matmul + create_qkv_heads(qkv) instead
 # of separate wq (1536x1536) + wkv (1536x512).  Byte-identical: the fused output [q|k|v] equals the
 # column concat of the separate matmuls (block matmul; fp32-dest reduction is blocking-invariant),
-# and nlp_create_qkv_heads splits it into the same q/k/v.  Saves one launch + one bias-add per layer
+# and create_qkv_heads splits it into the same q/k/v.  Saves one launch + one bias-add per layer
 # on the latency-bound qkv matmuls.  N=2048=64 tiles / 8x4=32 cores.
 _QKV_DECODE_PROGCFG_B2 = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
     compute_with_storage_grid_size=ttnn.CoreCoord(8, 4),
@@ -212,7 +212,7 @@ def load_vibevoice_lm_weights(model_path: str) -> Dict[str, torch.Tensor]:
 class LayerWeights:
     # Fully-fused wq|wk|wv projection (was separate wq + fused wkv).  Byte-identical: the fused
     # output [q|k|v] is the column concat of the separate matmuls (fp32-dest reduction is
-    # blocking-invariant) and nlp_create_qkv_heads splits it into the same q/k/v.
+    # blocking-invariant) and create_qkv_heads splits it into the same q/k/v.
     wqkv: ttnn.Tensor  # TILE [1,1,hidden,(n_heads+2*n_kv)*head_dim]
     wo: ttnn.Tensor  # TILE [1,1,n_heads*head_dim,hidden]
     w1: ttnn.Tensor  # [ffn_dim, hidden]  gate
@@ -342,7 +342,7 @@ def preprocess_lm_weights(
 
         # Fully-fused wq|wk|wv on the out dim, built once at load (host torch.cat).  Only wq/wk are
         # RoPE-permuted (wv raw).  Byte-identical to separate wq + wkv matmuls — the fused output
-        # [q|k|v] is their column concat, and nlp_create_qkv_heads splits it identically.
+        # [q|k|v] is their column concat, and create_qkv_heads splits it identically.
         wqkv_tt = _tile(
             lambda: torch.cat(
                 [
@@ -878,7 +878,7 @@ class TTVibeVoiceLM:
         )
         if layer_w.qkv_bias is not None:
             qkv = ttnn.add(qkv, layer_w.qkv_bias, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        q, k, v = ttnn.experimental.nlp_create_qkv_heads(
+        q, k, v = ttnn.experimental.create_qkv_heads(
             qkv,
             num_heads=n_heads,
             num_kv_heads=n_kv,
@@ -952,7 +952,7 @@ class TTVibeVoiceLM:
             out = ttnn.reshape(out, [B, n_heads, S, head_dim])
             out = ttnn.typecast(out, ttnn.bfloat16)
             # [B, n_heads, S, hd] → [B, 1, S, n_heads*hd]; byte-identical to permute+reshape.
-            out = ttnn.experimental.nlp_concat_heads(out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            out = ttnn.experimental.concat_heads(out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         else:
             # ── Decode: write one token at start_pos, then fused flash-decode over the
             # cache prefix.  GQA handled natively (no KV-head materialization, no fp32
@@ -1236,7 +1236,7 @@ class TTVibeVoiceLM:
         )
         if layer_w.qkv_bias is not None:
             qkv = ttnn.add(qkv, layer_w.qkv_bias, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        q, k, v = ttnn.experimental.nlp_create_qkv_heads(
+        q, k, v = ttnn.experimental.create_qkv_heads(
             qkv,
             num_heads=n_heads,
             num_kv_heads=n_kv,
@@ -1405,7 +1405,7 @@ class TTVibeVoiceLM:
         )
 
     def _to_sdpa_b2(self, t: ttnn.Tensor) -> ttnn.Tensor:
-        """[2, n, 1, hd] (nlp_create_qkv_heads / RoPE output) → [1, 2, n, hd] height-sharded L1.
+        """[2, n, 1, hd] (create_qkv_heads / RoPE output) → [1, 2, n, hd] height-sharded L1.
 
         Both steps are exact: the permute is pure data movement and ``[2,1,n,hd] → [1,2,n,hd]``
         only relabels the two outer singleton dims, so the padded tile layout is untouched.
@@ -1417,7 +1417,7 @@ class TTVibeVoiceLM:
     def _qkv_split_b2(self, qkv: ttnn.Tensor):
         """[2,1,1,(n_heads+2*n_kv)*hd] fused projection → q/k/v as [1,2,n,hd] height-sharded L1.
 
-        The layout ``nlp_create_qkv_heads`` + ``_to_sdpa_b2`` produce together, but without the
+        The layout ``create_qkv_heads`` + ``_to_sdpa_b2`` produce together, but without the
         2-core head-split op: each CFG row's ``n*hd`` slice IS its ``n`` heads of ``hd`` laid out
         contiguously, so ``[2,1,1,n*hd] → [1,2,n,hd]`` is the same relabeling (verified
         maxabsdiff==0 against the op).
@@ -1468,7 +1468,7 @@ class TTVibeVoiceLM:
         n_kv = cfg.num_key_value_heads
 
         # Batched weight-bound projection — fused wqkv read once for both CFG rows, split below
-        # by nlp_create_qkv_heads or, on the batched path, by slicing straight into the attention
+        # by create_qkv_heads or, on the batched path, by slicing straight into the attention
         # layout.  Byte-identical vs separate wq + wkv (same column values, same split); saves one
         # launch + one bias-add/layer.
         qkv = ttnn.linear(
@@ -1483,7 +1483,7 @@ class TTVibeVoiceLM:
 
         if isinstance(kv_caches, KVCache):
             # ── Shared batch-2 cache: ONE attention for both CFG rows ──────────────────
-            # nlp_create_qkv_heads runs on 2 cores (it shards over batch) and its output is then
+            # create_qkv_heads runs on 2 cores (it shards over batch) and its output is then
             # permuted into the [1,2,n,hd] the batched attention wants.  Slicing the projection and
             # reshaping straight into that layout does the same rearrangement in ops that spread
             # over the whole grid.  Exact: both are pure relabelings of the same contiguous
@@ -1525,7 +1525,7 @@ class TTVibeVoiceLM:
         # ── Two SEPARATE [1,..] caches: split the rows and run the B=1 attention twice ──
         # The head-split op is only needed here; the batched path above slices the projection
         # straight into the attention layout.
-        q, k, v = ttnn.experimental.nlp_create_qkv_heads(
+        q, k, v = ttnn.experimental.create_qkv_heads(
             qkv,
             num_heads=n_heads,
             num_kv_heads=n_kv,

@@ -212,7 +212,7 @@ class MLAReference(nn.Module):
         attn_output = attn_output.reshape(bsz, q_len, attn.num_heads * attn.v_head_dim)
 
         # Kimi-K3 output gate; head-major over the last dim, as the device path applies it after
-        # nlp_concat_heads. Cannot move before wkv_b2: g * (attn @ W_b2) != (g * attn) @ W_b2.
+        # concat_heads. Cannot move before wkv_b2: g * (attn @ W_b2) != (g * attn) @ W_b2.
         if self.use_output_gate:
             attn_output = attn_output * attn.g_proj(hidden_states).sigmoid()
 

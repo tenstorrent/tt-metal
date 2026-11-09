@@ -160,7 +160,7 @@ class DFlashPrefill:
         return combined
 
     def _heads(self, projection):
-        heads, _, _ = ttnn.experimental.nlp_create_qkv_heads(
+        heads, _, _ = ttnn.experimental.create_qkv_heads(
             projection,
             num_heads=self.local_heads,
             num_kv_heads=0,

@@ -9,7 +9,7 @@
 # Source capture: generated/ttnn/reports/gpt_oss_demo_aug28_1452/graph_capture.python_io.slim.json
 # ---------------------------------------------------------------------------
 """
-Per-op test: ``ttnn.experimental.nlp_concat_heads`` — every distinct call the model made, as captured.
+Per-op test: ``ttnn.experimental.create_qkv_heads`` — every distinct call the model made, as captured.
 
 Captured 48 call(s) to this op; 1 distinct signature(s) covering 48 of them.
 
@@ -26,23 +26,26 @@ import pytest
 import ttnn
 from models.experimental.ops.quasar.tests.gpt_oss_ops import graph_case as G
 
-_OP = ttnn.experimental.nlp_concat_heads
+_OP = ttnn.experimental.create_qkv_heads
 
 CASES = [
     {
-        "id": "00_64x128x64_bf16_int-dram",
-        "op": "ttnn.experimental.nlp_concat_heads",
+        "id": "00_128x5120_bf16_int-dram",
+        "op": "ttnn.experimental.create_qkv_heads",
         "count": 48,
         "args": [
             {
                 "k": "t",
-                "shape": [1, 64, 128, 64],
+                "shape": [1, 1, 128, 5120],
                 "dtype": "BFLOAT16",
                 "layout": "TILE",
                 "mem": {"layout": "INTERLEAVED", "buffer": "DRAM", "shard": None},
             },
         ],
         "kwargs": {
+            "num_heads": {"k": "lit", "v": 64},
+            "num_kv_heads": {"k": "lit", "v": 8},
+            "transpose_k_heads": {"k": "lit", "v": False},
             "memory_config": {"layout": "INTERLEAVED", "buffer": "DRAM", "shard": None, "k": "mem"},
         },
         "outs": [
@@ -51,7 +54,21 @@ CASES = [
                 "k": "t",
                 "layout": "TILE",
                 "mem": {"buffer": "DRAM", "layout": "INTERLEAVED", "shard": None},
-                "shape": [1, 1, 128, 4096],
+                "shape": [1, 64, 128, 64],
+            },
+            {
+                "dtype": "BFLOAT16",
+                "k": "t",
+                "layout": "TILE",
+                "mem": {"buffer": "DRAM", "layout": "INTERLEAVED", "shard": None},
+                "shape": [1, 8, 128, 64],
+            },
+            {
+                "dtype": "BFLOAT16",
+                "k": "t",
+                "layout": "TILE",
+                "mem": {"buffer": "DRAM", "layout": "INTERLEAVED", "shard": None},
+                "shape": [1, 8, 128, 64],
             },
         ],
     },
@@ -60,5 +77,5 @@ CASES = [
 
 @G.with_default_mesh()
 @pytest.mark.parametrize("case", CASES, ids=[c["id"] for c in CASES])
-def test_nlp_concat_heads(ttnn_mesh_device, reset_seeds, case):
+def test_create_qkv_heads(ttnn_mesh_device, reset_seeds, case):
     G.run_case(_OP, case, ttnn_mesh_device)

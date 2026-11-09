@@ -43,7 +43,7 @@ def split_qkv_heads_prefill(xqkv_fused, num_heads: int, num_kv_heads: int):
     Returns:
         Tuple (Q, K, V) with shapes [1, num_heads, seq_len, head_dim]
     """
-    return ttnn.experimental.nlp_create_qkv_heads(
+    return ttnn.experimental.create_qkv_heads(
         xqkv_fused,
         num_heads=num_heads,
         num_kv_heads=num_kv_heads,
@@ -138,7 +138,7 @@ def concat_heads(tensor):
     Returns:
         Tensor with concatenated heads [batch, seq_len, hidden_size]
     """
-    return ttnn.experimental.nlp_concat_heads(tensor, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    return ttnn.experimental.concat_heads(tensor, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
 
 def apply_output_projection(tensor, weights: AttentionWeights, activation_dtype):

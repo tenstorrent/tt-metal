@@ -71,11 +71,11 @@ def decode_forward(
             raise ValueError(f"Decode mode requires seq_len=1, got {seq_len}")
 
     # QKV projection. With TP>1 the per-device QKV is small enough to fit in
-    # an L1 width-sharded layout that nlp_create_qkv_heads_decode consumes
+    # an L1 width-sharded layout that create_qkv_heads_decode consumes
     # directly. With TP=1 (e.g. single Blackhole card) the per-device QKV is
     # TP× larger and overflows the per-core CB if width-sharded, so we use
     # DRAM interleaved instead. The kernel-side aligned-read fix in
-    # nlp_create_qkv_heads_decode (PR #43292) handles the BH NOC alignment
+    # create_qkv_heads_decode (PR #43292) handles the BH NOC alignment
     # constraint for DRAM-interleaved inputs; before that fix this path
     # produced silent corruption (every odd Q/K/V head returned the previous
     # user's row).
@@ -93,7 +93,7 @@ def decode_forward(
         assert rope_mats[0].shape[1] == 2 * batch_size, "fused decode needs the fused-QK RoPE layout (use_qk_fused)"
         # Streamed QKV + bias (fused_decode/stream.py) from the flat norm output, written straight into the shared
         # Q / K / V head tensors: Q and K on disjoint cores (V shares Q's), the layout the fused QK RoPE and the fused
-        # K/V cache update require (what nlp_create_qkv_heads_decode(overlap_qk_coregrid=False) produced).
+        # K/V cache update require (what create_qkv_heads_decode(overlap_qk_coregrid=False) produced).
         qkv_stream = ccl_manager.get_decode_linear_stream(
             "qkv",
             hidden_size // ttnn.TILE_SIZE,
@@ -137,7 +137,7 @@ def decode_forward(
         # (tt_transformers RotarySetup), the KV update (get_kv_memory_config) and the decode SDPA program use. With the
         # op's default (the device's whole grid, 11 wide on Blackhole) the users that land in columns 8-10 found no
         # RoPE data on their core and the SDPA read users 24-31's queries from cores that held none, from batch 9 up.
-        tt_q, tt_k, tt_v = ttnn.experimental.nlp_create_qkv_heads_decode(
+        tt_q, tt_k, tt_v = ttnn.experimental.create_qkv_heads_decode(
             xqkv_fused,
             num_heads=num_local_heads,
             num_kv_heads=num_local_kv_heads,
@@ -256,7 +256,7 @@ def decode_forward(
 
     tt_sdpa_tensor = ttnn.to_memory_config(tt_sdpa_tensor, height_sharded_mem_config)
     # Concat heads and apply output projection
-    tt_sdpa_out = ttnn.experimental.nlp_concat_heads_decode(tt_sdpa_tensor, num_heads=num_local_heads)
+    tt_sdpa_out = ttnn.experimental.concat_heads_decode(tt_sdpa_tensor, num_heads=num_local_heads)
     tt_sdpa_tensor.deallocate(True)
     if return_partial and batched_oproj is not None:
         partial = batched_oproj(tt_sdpa_out)

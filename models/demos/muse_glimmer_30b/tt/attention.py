@@ -376,7 +376,7 @@ class MuseGlimmerAttention:
 
         xqkvg = self.wqkvg(x)
         qkv, gate = self._split_qkv_gate(xqkvg)
-        q, k, v = ttnn.experimental.nlp_create_qkv_heads(
+        q, k, v = ttnn.experimental.create_qkv_heads(
             qkv,
             num_heads=a.q_heads_local,
             num_kv_heads=a.kv_heads_local,
@@ -435,7 +435,7 @@ class MuseGlimmerAttention:
         for t in (q, k, v):
             t.deallocate(True)
 
-        attn = ttnn.experimental.nlp_concat_heads(sdpa, memory_config=ttnn.DRAM_MEMORY_CONFIG)  # [1,1,S,ql*128]
+        attn = ttnn.experimental.concat_heads(sdpa, memory_config=ttnn.DRAM_MEMORY_CONFIG)  # [1,1,S,ql*128]
         sdpa.deallocate(True)
         return self._gate_oproj(attn, gate)
 
@@ -448,7 +448,7 @@ class MuseGlimmerAttention:
         xqkvg = self.wqkvg.decode(x)
         qkv, gate = self._split_qkv_gate(xqkvg)
         qkv = ttnn.to_memory_config(qkv, decode_memcfg(a.qkv_width_local, self.mesh_device))
-        q, k, v = ttnn.experimental.nlp_create_qkv_heads_decode(
+        q, k, v = ttnn.experimental.create_qkv_heads_decode(
             qkv, num_heads=a.q_heads_local, num_kv_heads=a.kv_heads_local, memory_config=heads_mem
         )
         qkv.deallocate(True)
@@ -553,7 +553,7 @@ class MuseGlimmerAttention:
         # A batch that is not a multiple of 8 puts the users on two core ranges; the op then needs the grid
         # to place its output heads (same cores as the single-range path).
         all_cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))})
-        attn = ttnn.experimental.nlp_concat_heads_decode(
+        attn = ttnn.experimental.concat_heads_decode(
             ttnn.to_memory_config(sdpa, heads_memcfg(sb, a.head_dim)),
             num_heads=a.q_heads_local,
             sub_core_grids=all_cores,

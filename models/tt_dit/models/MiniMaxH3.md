@@ -371,7 +371,7 @@ The Blackhole 4x8 preset serves the packed length dynamically (`"dynamic_length"
 `max_sequence_length=`, default the ladder's top rung, 120320 for t2va): a request is padded only to the SP
 alignment (256 rows), and the DiT ops that used to key a program on the padded length
 (`all_gather_minimal_matmul_async`, the fused ff2 MM+reduce-scatter, the ring SDPA, the standalone
-`minimal_matmul` heads, the fused distributed RMS/LayerNorm, `nlp_create_qkv_heads`, `nlp_concat_heads`,
+`minimal_matmul` heads, the fused distributed RMS/LayerNorm, `create_qkv_heads`, `concat_heads`,
 `all_gather_async`, `embedding` and its `untilize`) take the per-device row count as a runtime word
 instead; the norms' worker split (`row_capacity`) is sized once at `max_sequence_length / 8` rows per device
 and the ring attention's K/V gather pair, which holds the whole gathered sequence on every device, at
@@ -441,7 +441,7 @@ pipeline-level hashes.
   come from a config object pinned at construction (`length_classes.py`), never from the shape.
 - A converted op is opt-in: the runtime-row program is selected by a hashed bool attribute
   (`runtime_rows`, `dynamic_local_n`, a pinned config), default off, and the model passes
-  `runtime_rows=self.dynamic_length` (`nlp_create_qkv_heads`, `concatenate_heads`, `ttnn.embedding`, which
+  `runtime_rows=self.dynamic_length` (`create_qkv_heads`, `concatenate_heads`, `ttnn.embedding`, which
   forwards it to the TILE table's untilize). Without the flag the op is main's: main's work split, kernels,
   hash and cache-hit validation, so every other model's programs are byte-identical to main's.
 - One common runtime word per kernel carries the per-device row count, and every per-core range is derived

@@ -126,7 +126,7 @@ class HunyuanImage3SDPAAttention(nn.Module):
         None            (no KV-cache update in this reference)
 
     Notes for TT-Metal port:
-    - QKV split: use ttnn.experimental.nlp_create_qkv_heads() — handles GQA
+    - QKV split: use ttnn.experimental.create_qkv_heads() — handles GQA
       expansion internally; pass num_heads and num_kv_heads.
     - RoPE:      use ttnn.experimental.rotary_embedding_llama() with
       transformation matrix from get_rot_transformation_mat().
@@ -135,7 +135,7 @@ class HunyuanImage3SDPAAttention(nn.Module):
     - SDPA:      ttnn.transformer.scaled_dot_product_attention() with
       is_causal=True for causal text; is_causal=False + explicit mask for
       the mixed causal/bidirectional Hunyuan mask.
-    - Concat:    ttnn.experimental.nlp_concat_heads()
+    - Concat:    ttnn.experimental.concat_heads()
     - o_proj:    ttnn.linear()
     """
 

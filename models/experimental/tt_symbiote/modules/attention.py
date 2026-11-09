@@ -220,7 +220,7 @@ class TTNNFusedQKVSelfAttention(TTNNModule):
             hidden_states = ttnn.unsqueeze(hidden_states, 1)
         query_key_value = self.linear(hidden_states).ttnn_tensor
         query_key_value = ttnn.to_memory_config(query_key_value, ttnn.L1_MEMORY_CONFIG)
-        queries, keys, values = ttnn.experimental.nlp_create_qkv_heads(
+        queries, keys, values = ttnn.experimental.create_qkv_heads(
             query_key_value,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             num_heads=self.num_attention_heads,
@@ -303,7 +303,7 @@ class TTNNSelfAttention(TTNNModule):
             scaling=self.scaling,
             transpose_output=False,
         )
-        context_layer = ttnn.experimental.nlp_concat_heads(context_layer.to_ttnn)
+        context_layer = ttnn.experimental.concat_heads(context_layer.to_ttnn)
         # context_layer = ttnn.typecast(context_layer, original_dtype)
         context_layer = ttnn.typecast(context_layer, original_dtype)
         context_layer = ttnn.squeeze(context_layer, 1)
@@ -468,7 +468,7 @@ class TTNNWhisperAttention(TTNNModule):
             hidden_states = ttnn.unsqueeze(hidden_states, 1)
             query_key_value = self.qkv_proj(hidden_states).ttnn_tensor
             query_key_value = ttnn.to_memory_config(query_key_value, ttnn.L1_MEMORY_CONFIG)
-            query, key, value = ttnn.experimental.nlp_create_qkv_heads(
+            query, key, value = ttnn.experimental.create_qkv_heads(
                 query_key_value,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 num_heads=self.num_heads,

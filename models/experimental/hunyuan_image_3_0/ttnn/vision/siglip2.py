@@ -355,7 +355,7 @@ class HunyuanTtSiglip2VisionEmbeddings(LightweightModule):
 
 
 def _ensure_bsh(x: ttnn.Tensor) -> ttnn.Tensor:
-    """Normalize activations to [B, S, H]. Some ops (nlp_concat_heads, layer_norm) emit [B, 1, S, H]."""
+    """Normalize activations to [B, S, H]. Some ops (concat_heads, layer_norm) emit [B, 1, S, H]."""
     if len(x.shape) == 4 and x.shape[1] == 1:
         return ttnn.reshape(x, [x.shape[0], x.shape[2], x.shape[3]])
     return x
@@ -533,7 +533,7 @@ class HunyuanTtSiglip2Attention(LightweightModule):
         ttnn.deallocate(k)
         ttnn.deallocate(v)
         qkv_4d = ttnn.reshape(qkv, [bsz, 1, seq_len, qkv.shape[-1]])
-        qh, kh, vh = ttnn.experimental.nlp_create_qkv_heads(
+        qh, kh, vh = ttnn.experimental.create_qkv_heads(
             qkv_4d,
             num_heads=self.num_heads,
             num_kv_heads=self.num_heads,
@@ -565,7 +565,7 @@ class HunyuanTtSiglip2Attention(LightweightModule):
         vh.deallocate(True)
 
         # ---- 4. Merge heads: [B, S, H] ----
-        attn = ttnn.experimental.nlp_concat_heads(attn, memory_config=ttnn.L1_MEMORY_CONFIG)
+        attn = ttnn.experimental.concat_heads(attn, memory_config=ttnn.L1_MEMORY_CONFIG)
         attn = _ensure_bsh(attn)
 
         # ---- 5. Output projection ----

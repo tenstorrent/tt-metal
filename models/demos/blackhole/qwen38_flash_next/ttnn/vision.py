@@ -363,7 +363,7 @@ class VisionTower:
         qkv = self._linear(normed, block.qkv_weight, block.qkv_bias)
         if probe is not None:
             probe(f"block{index}.qkv")
-        q, k, v = ttnn.experimental.nlp_create_qkv_heads(
+        q, k, v = ttnn.experimental.create_qkv_heads(
             qkv,
             num_heads=self.config.num_heads,
             num_kv_heads=self.config.num_heads,
@@ -403,7 +403,7 @@ class VisionTower:
         ttnn.deallocate(q_rot)
         ttnn.deallocate(k_rot)
         ttnn.deallocate(v)
-        concatenated = ttnn.experimental.nlp_concat_heads(attended, memory_config=DRAM)
+        concatenated = ttnn.experimental.concat_heads(attended, memory_config=DRAM)
         ttnn.deallocate(attended)
         output = self._linear(concatenated, block.proj_weight, block.proj_bias)
         ttnn.deallocate(concatenated)

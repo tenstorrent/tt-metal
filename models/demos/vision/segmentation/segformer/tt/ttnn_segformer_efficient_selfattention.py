@@ -96,9 +96,7 @@ class TtSegformerEfficientSelfAttention:
         if self.num_attention_heads == 1:
             query_layer = query
         else:
-            query_layer = ttnn.experimental.nlp_create_qkv_heads_segformer(query, memory_config=ttnn.L1_MEMORY_CONFIG)[
-                0
-            ]
+            query_layer = ttnn.experimental.create_qkv_heads_segformer(query, memory_config=ttnn.L1_MEMORY_CONFIG)[0]
 
         if self.sr_ratio > 1:
             if len(hidden_states.shape) == 3:
@@ -146,7 +144,7 @@ class TtSegformerEfficientSelfAttention:
         if self.num_attention_heads == 1:
             key_layer = key
         else:
-            key_layer = ttnn.experimental.nlp_create_qkv_heads_segformer(key, memory_config=ttnn.L1_MEMORY_CONFIG)[0]
+            key_layer = ttnn.experimental.create_qkv_heads_segformer(key, memory_config=ttnn.L1_MEMORY_CONFIG)[0]
         key_layer = ttnn.permute(key_layer, (0, 1, 3, 2))
 
         value = ttnn.linear(
@@ -163,9 +161,7 @@ class TtSegformerEfficientSelfAttention:
         if self.num_attention_heads == 1:
             value_layer = value
         else:
-            value_layer = ttnn.experimental.nlp_create_qkv_heads_segformer(value, memory_config=ttnn.L1_MEMORY_CONFIG)[
-                0
-            ]
+            value_layer = ttnn.experimental.create_qkv_heads_segformer(value, memory_config=ttnn.L1_MEMORY_CONFIG)[0]
 
         query_layer = ttnn.to_layout(query_layer, ttnn.TILE_LAYOUT)
 
@@ -223,7 +219,7 @@ class TtSegformerEfficientSelfAttention:
 
         if self.num_attention_heads > 1:
             context_layer = ttnn.to_memory_config(context_layer, ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat8_b)
-            context_layer = ttnn.experimental.nlp_concat_heads(
+            context_layer = ttnn.experimental.concat_heads(
                 context_layer, memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)
             )
 

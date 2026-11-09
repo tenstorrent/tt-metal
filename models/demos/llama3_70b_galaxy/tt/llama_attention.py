@@ -170,13 +170,13 @@ class TtLlamaAttention(LightweightModule):
             qkv_list.append(qkv)
 
         self._qkv_n_local = self.n_local_heads * self.head_dim + 2 * self.n_local_kv_heads * self.head_dim
-        # nlp_create_qkv_heads_decode only honors batch_offset/slice_size in its WIDTH_SHARDED
+        # create_qkv_heads_decode only honors batch_offset/slice_size in its WIDTH_SHARDED
         # program factory. The model's CREATE_HEAD_INPUT_MEMCFG is sized for the llama_rs path
-        # (8 cores / width 1024 on Blackhole), not our per-device nlp fused width
+        # (8 cores / width 1024 on Blackhole), not our per-device create_qkv_heads fused width
         # (_qkv_n_local = (n_q + 2*n_kv)*head_dim = 1280 -> 10 heads). Build a dedicated
         # width-sharded config with one head (head_dim) per core so batch_offset selects the
         # correct per-column users.
-        self._create_head_input_memcfg_nlp = None
+        self._create_head_input_memcfg_fused = None
         sub_core_grids = getattr(configuration, "sub_core_grids", None)
         start_core = getattr(configuration, "start_core", None)
         # Worker sub-core grid used to pin auto-gridding tail ops (e.g. the create-head slice) so they
@@ -184,7 +184,7 @@ class TtLlamaAttention(LightweightModule):
         self._worker_sub_core_grids = sub_core_grids
         if sub_core_grids is not None and start_core is not None and self._qkv_n_local % self.head_dim == 0:
             n_qkv_heads_local = self._qkv_n_local // self.head_dim
-            self._create_head_input_memcfg_nlp = ttnn.MemoryConfig(
+            self._create_head_input_memcfg_fused = ttnn.MemoryConfig(
                 ttnn.TensorMemoryLayout.WIDTH_SHARDED,
                 ttnn.BufferType.L1,
                 ttnn.ShardSpec(
@@ -670,7 +670,7 @@ class TtLlamaAttention(LightweightModule):
                 # Prefetcher resident: the ring QKV matmul already emitted a width-sharded L1 tensor on
                 # the worker cores (SHARDED_QKV_OUT_RING_MEMCFG: padded N = 12288//8 over RING_SIZE
                 # cores, [32, head_dim/2] per shard). Feed it straight into the common column all-reduce
-                # + nlp_create_qkv_heads_decode below, exactly like the proven BH LB/QB tt_transformers
+                # + create_qkv_heads_decode below, exactly like the proven BH LB/QB tt_transformers
                 # decode path: the create-head op consumes the first (n_q + 2*n_kv)*head_dim = 1280
                 # valid columns and ignores the N padding (its width-sharded factory only requires the
                 # shard width to divide head_dim, which 64 does). This avoids any unpad ttnn.slice /
@@ -706,10 +706,10 @@ class TtLlamaAttention(LightweightModule):
                         ttnn.TILE_LAYOUT,
                         memory_config=ttnn.L1_MEMORY_CONFIG,
                     )
-                # nlp_create_qkv_heads_decode only honors batch_offset/slice_size in its WIDTH_SHARDED
+                # create_qkv_heads_decode only honors batch_offset/slice_size in its WIDTH_SHARDED
                 # program factory; width-shard the fused tensor so batch_offset selects users
                 # [col*8:col*8+8] per column.
-                create_head_input_memcfg = self._create_head_input_memcfg_nlp
+                create_head_input_memcfg = self._create_head_input_memcfg_fused
                 if create_head_input_memcfg is not None:
                     xqkv_fused_create_head_in = ttnn.to_memory_config(
                         xqkv_fused_interleaved, memory_config=create_head_input_memcfg
@@ -722,7 +722,7 @@ class TtLlamaAttention(LightweightModule):
             # on device and trace-capturable. The width-sharded [32, head_dim]x(qkv_n_local/head_dim)
             # L1 layout matches persistent_buffers[1] for the cluster-axis-1 all-reduce.
             # bf8 input matches the bf8 interim buffer CB sizing; output bf16 because
-            # nlp_create_qkv_heads_decode only accepts bf16/fp32.
+            # create_qkv_heads_decode only accepts bf16/fp32.
             xqkv_fused_create_head_in = self.tt_ccl.line_all_reduce(
                 xqkv_fused_create_head_in,
                 cluster_axis=1,
@@ -734,11 +734,11 @@ class TtLlamaAttention(LightweightModule):
             if self.use_unfused_ccl:
                 # The ring QKV output + column all-reduce leave the fused tensor width-sharded on the
                 # ring cores == the prefetcher's global-CB receiver cores (cols 1-3, rows 0-7). Running
-                # nlp_create_qkv_heads_decode there while the resident dram_prefetcher is still streaming
+                # create_qkv_heads_decode there while the resident dram_prefetcher is still streaming
                 # weights into the global CB on those same cores deadlocks the create-head kernels. Move
                 # the create-head input onto non-receiver worker columns (5-6) first, so create-heads
                 # (and its output) never touch the live global-CB receiver cores. One head (head_dim)
-                # per core, width-sharded, so nlp_create_qkv_heads_decode's batch_offset factory works.
+                # per core, width-sharded, so create_qkv_heads_decode's batch_offset factory works.
                 _ch_w = int(xqkv_fused_create_head_in.shape[-1])
                 _ch_ncores = _ch_w // self.head_dim
                 _off_receiver_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(5, 0), ttnn.CoreCoord(6, 9))])
@@ -758,7 +758,7 @@ class TtLlamaAttention(LightweightModule):
                 q_heads_pre_rot_1BQD,
                 k_heads_pre_rot_1BKD,
                 v_heads_1BKD,
-            ) = ttnn.experimental.nlp_create_qkv_heads_decode(
+            ) = ttnn.experimental.create_qkv_heads_decode(
                 xqkv_fused_create_head_in,
                 num_heads=self.n_local_heads,
                 num_kv_heads=self.n_local_kv_heads,
@@ -941,7 +941,7 @@ class TtLlamaAttention(LightweightModule):
 
         if not fused_ccl:
             # Device SDPA output is batch-first [1, B_local, H_local, D] (8 users/col). Order matters:
-            # nlp_concat_heads_decode pads batch to 32, so gather users across cols FIRST (8 -> 32),
+            # concat_heads_decode pads batch to 32, so gather users across cols FIRST (8 -> 32),
             # then concat heads. Mimic tt_transformers.tt_all_gather: all_gather_async with
             # persistent_output_tensor=None AND a barrier semaphore (passing the persistent SDPA
             # buffer with barrier=None throws map::at here).
@@ -970,7 +970,7 @@ class TtLlamaAttention(LightweightModule):
                 concat_sub_core_grids = gathered_users.memory_config().shard_spec.grid
             except Exception:
                 concat_sub_core_grids = None
-            attn_output_cat = ttnn.experimental.nlp_concat_heads_decode(  # [1, 1, 32, 1024]
+            attn_output_cat = ttnn.experimental.concat_heads_decode(  # [1, 1, 32, 1024]
                 gathered_users,
                 num_heads=self.n_local_heads,
                 sub_core_grids=concat_sub_core_grids,
@@ -1083,7 +1083,7 @@ class TtLlamaAttention(LightweightModule):
             # No-prefetch (Blackhole) per-device QKV: column-fractured activation (K=k_local=1280)
             # @ interleaved DRAM wqkv [k_local, qkv_n_local]. The padded ring weight expects K=1536;
             # the unpadded per-device weight matches the activation and keeps N=qkv_n_local so the
-            # downstream line_all_reduce(cluster_axis=1) + nlp_create_qkv_heads stay correct.
+            # downstream line_all_reduce(cluster_axis=1) + create_qkv_heads stay correct.
             xqkv = ttnn.linear(
                 x_11SH,
                 self.wqkv_per_device,
@@ -1124,7 +1124,7 @@ class TtLlamaAttention(LightweightModule):
             q_heads_1QSD_pre_rot,
             k_heads_1KSD_pre_rot,
             v_heads_1VSD,
-        ) = ttnn.experimental.nlp_create_qkv_heads(
+        ) = ttnn.experimental.create_qkv_heads(
             xqkv_fused,
             num_heads=self.n_local_heads,
             num_kv_heads=self.n_local_kv_heads,
@@ -1300,7 +1300,7 @@ class TtLlamaAttention(LightweightModule):
         ###
         # Output matmul
         ###
-        attn_output_11SH = ttnn.experimental.nlp_concat_heads(
+        attn_output_11SH = ttnn.experimental.concat_heads(
             attn_output_1QSD,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )

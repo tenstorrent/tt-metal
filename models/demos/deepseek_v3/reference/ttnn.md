@@ -93,16 +93,16 @@ Chunked attention for processing very long sequences in smaller chunks during pr
 
 ## Experimental Operations
 
-### `ttnn.experimental.nlp_create_qkv_heads(fused_qkv, num_heads, num_kv_heads, transpose_k_heads=False, memory_config=None)`
+### `ttnn.experimental.create_qkv_heads(fused_qkv, num_heads, num_kv_heads, transpose_k_heads=False, memory_config=None)`
 Splits fused QKV tensor into separate Q, K, V tensors for prefill mode with proper head reshaping.
 
-### `ttnn.experimental.nlp_create_qkv_heads_decode(fused_qkv, num_heads, num_kv_heads, memory_config=None)`
+### `ttnn.experimental.create_qkv_heads_decode(fused_qkv, num_heads, num_kv_heads, memory_config=None)`
 Splits fused QKV tensor for decode mode with height-sharded output across batch dimension.
 
-### `ttnn.experimental.nlp_concat_heads(tensor, memory_config=None)`
+### `ttnn.experimental.concat_heads(tensor, memory_config=None)`
 Concatenates attention heads back to original dimension for prefill mode.
 
-### `ttnn.experimental.nlp_concat_heads_decode(tensor, num_heads)`
+### `ttnn.experimental.concat_heads_decode(tensor, num_heads)`
 Concatenates attention heads for decode mode with proper batch handling.
 
 ### `ttnn.experimental.rotary_embedding_llama(tensor, cos_matrix, sin_matrix, transformation_matrix, is_decode_mode=False)`
@@ -360,7 +360,7 @@ w2_out = ttnn.linear(w2_in, w2, memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFI
 xqkv_fused = ttnn.linear(x, wqkv, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
 # Split into Q, K, V with shape (1, num_heads, seq_len, head_dim)
-q, k, v = ttnn.experimental.nlp_create_qkv_heads(
+q, k, v = ttnn.experimental.create_qkv_heads(
     xqkv_fused,
     num_heads=num_heads,
     num_kv_heads=num_kv_heads,
@@ -389,7 +389,7 @@ attn_output = ttnn.transformer.scaled_dot_product_attention(
 )
 
 # Concat heads back to (1, 1, seq_len, dim)
-attn_concat = ttnn.experimental.nlp_concat_heads(attn_output)
+attn_concat = ttnn.experimental.concat_heads(attn_output)
 
 # Output projection
 output = ttnn.linear(attn_concat, wo, memory_config=ttnn.DRAM_MEMORY_CONFIG)
@@ -402,7 +402,7 @@ output = ttnn.linear(attn_concat, wo, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 xqkv_fused = ttnn.linear(x, wqkv, memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG)
 
 # Split into Q, K, V with shape (1, batch_size, num_heads, head_dim)
-q, k, v = ttnn.experimental.nlp_create_qkv_heads_decode(
+q, k, v = ttnn.experimental.create_qkv_heads_decode(
     xqkv_fused,
     num_heads=num_heads,
     num_kv_heads=num_kv_heads,
@@ -434,7 +434,7 @@ attn_output = ttnn.transformer.paged_scaled_dot_product_attention_decode(
 )
 
 # Concat heads for decode
-attn_concat = ttnn.experimental.nlp_concat_heads_decode(attn_output, num_heads)
+attn_concat = ttnn.experimental.concat_heads_decode(attn_output, num_heads)
 
 # Output projection with sharded output
 output = ttnn.linear(attn_concat, wo, memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG)

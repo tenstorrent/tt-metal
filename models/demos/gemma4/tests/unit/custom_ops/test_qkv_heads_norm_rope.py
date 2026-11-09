@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 """QkvHeadsNormRope (custom op: head split + per-head norms + RoPE straight from the fused QKV projection output)
-vs the shipped chain (nlp_create_qkv_heads_decode -> QkvNormRope) and the torch golden, single chip, at the dense
+vs the shipped chain (create_qkv_heads_decode -> QkvNormRope) and the torch golden, single chip, at the dense
 per-chip head counts (31B / 12B at TP=4 / TP=8)."""
 
 import os
@@ -79,9 +79,9 @@ def test_qkv_heads_norm_rope_matches_chain(mesh_device, device_params, B, hq, hk
     )
     tgq, tgk = dev_tile(gq.reshape(1, 1, 1, D)), dev_tile(gk.reshape(1, 1, 1, D))
     tcos, tsin = dev_tile(cos.reshape(1, 1, 32, D)), dev_tile(sin.reshape(1, 1, 32, D))
-    # the shipped chain on the same L1 input: nlp_create_qkv_heads_decode (one user per core) then the fused
+    # the shipped chain on the same L1 input: create_qkv_heads_decode (one user per core) then the fused
     # norm + RoPE op (the same compute kernel), so the two must agree bit for bit on the head rows
-    q_s, k_s, v_s = ttnn.experimental.nlp_create_qkv_heads_decode(
+    q_s, k_s, v_s = ttnn.experimental.create_qkv_heads_decode(
         tx, num_heads=hq, num_kv_heads=hkv, memory_config=ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG
     )
     if grid is not None:  # the chain's shards sit on the device grid; move them to the capped grid's cores
@@ -98,8 +98,8 @@ def test_qkv_heads_norm_rope_matches_chain(mesh_device, device_params, B, hq, hk
         p = _pcc(g, o)
         print(f"[B{B} hq{hq} hkv{hkv} D{D} {name}] pcc vs golden {p:.6f} max|diff| vs chain {(r - o).abs().max():.4f}")
         assert p > 0.9999, (name, p)
-        assert torch.equal(o, r), f"{name}: differs from nlp_create_qkv_heads_decode + QkvNormRope"
-    assert outs[0].memory_config() == q_s.memory_config(), "q layout must match nlp_create_qkv_heads_decode"
+        assert torch.equal(o, r), f"{name}: differs from create_qkv_heads_decode + QkvNormRope"
+    assert outs[0].memory_config() == q_s.memory_config(), "q layout must match create_qkv_heads_decode"
     # program-cache hit on a fresh input buffer
     tx2 = ttnn.from_torch(
         x, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, memory_config=ttnn.L1_MEMORY_CONFIG

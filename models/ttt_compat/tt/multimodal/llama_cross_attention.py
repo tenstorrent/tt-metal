@@ -168,14 +168,14 @@ class TtLlamaCrossAttention(LightweightModule):
             xv = ttnn.reshape(xv, [B, 1, seqlen_y, -1])
         else:
             # 1, B, S, D -> B, NH, S, DH
-            xk, _, _ = ttnn.experimental.nlp_create_qkv_heads(
+            xk, _, _ = ttnn.experimental.create_qkv_heads(
                 xk,
                 xk,
                 num_heads=self.n_local_kv_heads,
                 num_kv_heads=self.n_local_kv_heads // 2,
                 transpose_k_heads=False,
             )
-            xv, _, _ = ttnn.experimental.nlp_create_qkv_heads(
+            xv, _, _ = ttnn.experimental.create_qkv_heads(
                 xv,
                 xv,
                 num_heads=self.n_local_kv_heads,
@@ -220,7 +220,7 @@ class TtLlamaCrossAttention(LightweightModule):
             program_config=self.model_config["VISION_XATTN_Q_PROGCFG"](batch),
         )
 
-        xq, _, _ = ttnn.experimental.nlp_create_qkv_heads(
+        xq, _, _ = ttnn.experimental.create_qkv_heads(
             xq, xq, num_heads=self.n_local_heads, num_kv_heads=self.n_local_heads // 2, transpose_k_heads=False
         )
         xq = ttnn.to_layout(xq, layout=ttnn.ROW_MAJOR_LAYOUT)
@@ -272,7 +272,7 @@ class TtLlamaCrossAttention(LightweightModule):
         output = ttnn.transpose(output, 1, 2)  # 1, B, NH, DH -> 1, NH, B, DH
         output = ttnn.slice(output, (0, 0, 0, 0), (1, self.n_local_heads, batch, self.head_dim))
         output = ttnn.to_layout(output, layout=ttnn.TILE_LAYOUT)
-        output = ttnn.experimental.nlp_concat_heads(output)
+        output = ttnn.experimental.concat_heads(output)
         # NOTE: The rest of the model expects output to be padded to tile height
         output = ttnn.reshape(output, output.padded_shape, output.padded_shape)
 
@@ -340,7 +340,7 @@ class TtLlamaCrossAttention(LightweightModule):
 
         ttnn.deallocate(x_11SH)
 
-        xq, _, _ = ttnn.experimental.nlp_create_qkv_heads(
+        xq, _, _ = ttnn.experimental.create_qkv_heads(
             xq, xq, num_heads=self.n_local_heads, num_kv_heads=self.n_local_heads // 2, transpose_k_heads=False
         )
 
@@ -367,7 +367,7 @@ class TtLlamaCrossAttention(LightweightModule):
         # WARNING: this broadcast is also broken, must broadcast on host
         output = ttnn.mul(output, full_text_row_masked_out_mask_1NSH)
 
-        output = ttnn.experimental.nlp_concat_heads(output)
+        output = ttnn.experimental.concat_heads(output)
         if seq_len > 1024:
             output = ttnn.reshape(output, [1, seq_len // 1024, 1024, -1])
 

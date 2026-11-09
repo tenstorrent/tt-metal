@@ -110,7 +110,7 @@ MLA_MATMUL_CONFIG = {
                 "out_dtype": ttnn.bfloat16,
             },
             # Mistral-Small-4: same [640,1024]x[1024,1024] per-device shape as its q_a_proj. L1 both sides:
-            # in0 is the q_a_layernorm output (act_mem_config), out feeds nlp_create_q_heads_split, which
+            # in0 is the q_a_layernorm output (act_mem_config), out feeds create_q_heads_split, which
             # pins DRAM itself. 12.1 us L1->L1 vs 16.8 DRAM->DRAM.
             {
                 **_MISTRAL4_TAGS,

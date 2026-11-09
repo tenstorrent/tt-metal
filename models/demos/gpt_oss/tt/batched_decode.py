@@ -105,7 +105,7 @@ class BatchedQKV:
     """QKV projection of the batched decode as a DRAM-sharded matmul (the weight streams from all DRAM banks; ~13 us
     against ~43 us for the auto-configured interleaved matmul at [32, 2880] x [2880, 1280]). The weight is resharded
     from the interleaved decode weight once, on device. The output is resharded to one head_dim-wide shard per core,
-    the layout nlp_create_qkv_heads_decode reads."""
+    the layout create_qkv_heads_decode reads."""
 
     CORES = 9  # divides K = 90 tiles; the measured best for this shape
 

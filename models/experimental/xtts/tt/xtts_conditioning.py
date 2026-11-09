@@ -299,7 +299,7 @@ class TtXttsConditioning(LightweightModule):
         )
         b, s, _ = qkv.shape
         qkv = ttnn.reshape(qkv, (b, 1, s, 3 * HIDDEN_SIZE))
-        q, k, v = ttnn.experimental.nlp_create_qkv_heads(
+        q, k, v = ttnn.experimental.create_qkv_heads(
             qkv, num_heads=NUM_ATTN_HEADS, transpose_k_heads=False, memory_config=L1
         )
         ttnn.deallocate(qkv)
@@ -349,7 +349,7 @@ class TtXttsConditioning(LightweightModule):
         ttnn.deallocate(ctx)
         n = qkv.shape[1]
         qkv = ttnn.reshape(qkv, (1, 1, n, 3 * PERCEIVER_INNER))
-        q_all, k, v = ttnn.experimental.nlp_create_qkv_heads(
+        q_all, k, v = ttnn.experimental.create_qkv_heads(
             qkv, num_heads=PERCEIVER_HEADS, transpose_k_heads=False, memory_config=L1
         )
         ttnn.deallocate(qkv)

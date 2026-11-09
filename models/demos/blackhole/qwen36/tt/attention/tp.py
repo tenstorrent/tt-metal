@@ -165,8 +165,8 @@ class TPAttention:
         # Fuse prefill norm-allgather + fused-QKV in-proj (all_gather_minimal_matmul_async).
         # Norm's prefill post-AG disabled in layer.py; decode path unchanged.
         self._fuse_agmm = self._fused_qkv
-        # Decode head split/merge via nlp_create/concat_heads_decode (the batched-decode idiom).
-        self._use_nlp_decode_heads = True
+        # Decode head split/merge via create/concat_heads_decode (the batched-decode idiom).
+        self._use_decode_heads_ops = True
         # Per-instance override for the decode SDPA's max_cores_per_head_batch (None = the ttnn
         # default of 16). Only the MTP drafter sets it — see Qwen36MTP.__init__.
         self.decode_sdpa_max_cores = None
@@ -348,9 +348,9 @@ class TPAttention:
         )
 
     def _make_heads(self, qg, kp, vp, S):
-        """Split qg into heads; returns (q, gate_flat, k, v) via fused nlp_create_qkv_heads.
+        """Split qg into heads; returns (q, gate_flat, k, v) via fused create_qkv_heads.
 
-        gate_flat stays flat [1,1,S,NH*HD] (col h*HD+d = head h, dim d), matching nlp_concat_heads'
+        gate_flat stays flat [1,1,S,NH*HD] (col h*HD+d = head h, dim d), matching concat_heads'
         column order. Gate is applied AFTER concat_heads (see forward_prefill*), so no head-major
         reshape/transpose is needed; bit-identical to per-head gating, saves ~1 ms/attn-layer at S=2048.
         """
@@ -359,12 +359,12 @@ class TPAttention:
             # Fused [q|k|v|gate] weight (_qkv sentinel vp=None): qg is the contiguous [q|k|v] block,
             # kp is the gate. Slice q and (already-contiguous) kv directly — no concat needed.
             gate_flat = kp
-            # q_flat, kv feed nlp_create_qkv_heads then free immediately -> L1 (short-lived, no clash); DRAM > S=2048.
+            # q_flat, kv feed create_qkv_heads then free immediately -> L1 (short-lived, no clash); DRAM > S=2048.
             _hm = tpc.prefill_act_mem(S, ttnn.L1_MEMORY_CONFIG)
             q_flat = ttnn.slice(qg, (0, 0, 0, 0), (1, 1, S, NH * HD), memory_config=_hm)
             kv = ttnn.slice(qg, (0, 0, 0, NH * HD), (1, 1, S, NH * HD + 2 * NKV * HD), memory_config=_hm)
             ttnn.deallocate(qg)
-            q, k, v = ttnn.experimental.nlp_create_qkv_heads(
+            q, k, v = ttnn.experimental.create_qkv_heads(
                 q_flat,
                 kv,
                 num_heads=NH,
@@ -386,7 +386,7 @@ class TPAttention:
         kv = ttnn.concat([kp, vp], dim=-1)
         ttnn.deallocate(kp)
         ttnn.deallocate(vp)
-        q, k, v = ttnn.experimental.nlp_create_qkv_heads(
+        q, k, v = ttnn.experimental.create_qkv_heads(
             q_flat,
             kv,
             num_heads=NH,
@@ -399,14 +399,14 @@ class TPAttention:
         return q, gate_flat, k, v
 
     def _concat_heads(self, gated):
-        """Prefill concat-heads via nlp_concat_heads (post-gate). L1 output: short-lived post-SDPA temp,
+        """Prefill concat-heads via concat_heads (post-gate). L1 output: short-lived post-SDPA temp,
         no kernel-CB clash (DRAM above S=2048)."""
-        return ttnn.experimental.nlp_concat_heads(
+        return ttnn.experimental.concat_heads(
             gated, memory_config=tpc.prefill_act_mem(gated.shape[-2], ttnn.L1_MEMORY_CONFIG)
         )
 
     def _make_heads_decode(self, qg, kp, vp, B):
-        """Decode head-split via nlp_create_qkv_heads_decode (the batched-decode idiom).
+        """Decode head-split via create_qkv_heads_decode (the batched-decode idiom).
 
         Returns (q, gate, k, v): q [1,B,NH,HD], gate [1,B,NH,HD], k/v [1,B,NKV,HD], all L1-interleaved.
         The kernel only shuffles a fused Q|K|V, so the gate half of qg is split off first and applied
@@ -440,7 +440,7 @@ class TPAttention:
             ttnn.deallocate(q_flat)
             ttnn.deallocate(kp)
             ttnn.deallocate(vp)
-        q, k, v = ttnn.experimental.nlp_create_qkv_heads_decode(
+        q, k, v = ttnn.experimental.create_qkv_heads_decode(
             qkv, num_heads=NH, num_kv_heads=NKV, memory_config=ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG
         )
         ttnn.deallocate(qkv)
@@ -452,7 +452,7 @@ class TPAttention:
         return q, gate, k, v
 
     def _concat_heads_decode(self, gated, B):
-        """Decode concat-heads via nlp_concat_heads_decode. gated [1,B,NH,HD] L1 -> [1,B,NH*HD] L1.
+        """Decode concat-heads via concat_heads_decode. gated [1,B,NH,HD] L1 -> [1,B,NH*HD] L1.
 
         The op wants a height-sharded input ([1,B,heads-padded-to-32,HD], one core per user), so the
         gated SDPA output is resharded across `B` cores first (a grid-width-aligned rectangle — a
@@ -477,11 +477,11 @@ class TPAttention:
         )
         gated_sh = ttnn.to_memory_config(gated, shard_cfg)
         ttnn.deallocate(gated)
-        out_sh = ttnn.experimental.nlp_concat_heads_decode(gated_sh, num_heads=NH)
+        out_sh = ttnn.experimental.concat_heads_decode(gated_sh, num_heads=NH)
         ttnn.deallocate(gated_sh)
         out = ttnn.sharded_to_interleaved(out_sh, _L1)  # [1, 1, 32, NH*HD] (batch padded to 32)
         ttnn.deallocate(out_sh)
-        # nlp_concat_heads_decode always emits batch padded to 32; slice back to the real B before
+        # concat_heads_decode always emits batch padded to 32; slice back to the real B before
         # the reshape (a no-op at B=32, required for B<32 e.g. the B=1 demo/vLLM path).
         if out.shape[-2] != B:
             out = ttnn.slice(out, (0, 0, 0, 0), (1, 1, B, NH * HD), memory_config=_L1)
@@ -828,7 +828,7 @@ class TPAttention:
 
         qg, kp, vp = self._qkv(x)
 
-        if self._use_nlp_decode_heads:
+        if self._use_decode_heads_ops:
             q, gate, k, v = self._make_heads_decode(qg, kp, vp, B)
         elif vp is None:
             # Fused [q|k|v|gate] weight (_qkv sentinel vp=None): qg is contiguous [q|k|v], kp is gate.
@@ -1035,7 +1035,7 @@ class TPAttention:
         ttnn.deallocate(attn_out)
         ttnn.deallocate(gate)
 
-        if self._use_nlp_decode_heads:
+        if self._use_decode_heads_ops:
             gated_flat = self._concat_heads_decode(gated, B)  # consumes + deallocates gated
         else:
             gated_flat = ttnn.reshape(gated, (1, B, NH * HD))

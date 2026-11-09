@@ -7,7 +7,7 @@ tile per user, the heads on its rows) to the o_proj input ``[1, 1, B, H*D]`` (bf
 ``heads_per_unit`` heads (default: the smallest group that fits the units on the worker grid, so ``H * D/32``
 units of one head on the 26B's 4 local heads): the core reads the ``B`` input tiles ``(b, c)`` once and assembles
 its output tiles with 32-byte face-row copies. This replaces ``to_memory_config (interleaved -> height sharded),
-nlp_concat_heads_decode, sharded_to_interleaved`` (and the ``[:, :, :B]`` slice at B < 32): 3-4 programs -> 1.
+concat_heads_decode, sharded_to_interleaved`` (and the ``[:, :, :B]`` slice at B < 32): 3-4 programs -> 1.
 The one-unit-per-column form (``heads_per_unit = H``, 8 / 16 cores) took 27.8 us per layer on the 26B; the
 per-head split spreads the same copies over 32 / 64 cores.
 """

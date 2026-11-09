@@ -8,7 +8,7 @@ Input ``x`` is the projection output ``[1, 1, B, N]`` (bf16, TILE, **L1** interl
 tile, ``N = (hq + 2 hkv) * D`` laid out ``[q heads | k heads | v heads]``), ``gq`` / ``gk`` the norm gammas
 ``[1, 1, 1, D]`` (bf16 TILE), ``cos`` / ``sin`` the position-gathered rows ``[1, 1, 32, D]`` (row ``u`` = user
 ``u``). Outputs ``q [1, B, hq, D]``, ``k`` / ``v [1, B, hkv, D]`` (bf16, TILE, L1 HEIGHT_SHARDED, one user per core,
-shard ``[32, D]`` with the heads on the rows: the layout ``nlp_create_qkv_heads_decode`` emits, so SDPA and
+shard ``[32, D]`` with the heads on the rows: the layout ``create_qkv_heads_decode`` emits, so SDPA and
 ``paged_update_cache`` take them unchanged).
 
 One work unit per core = (user, tensor) when the grid holds 3 B cores (3 at batch 1, 96 at batch 32 on Blackhole),
@@ -18,7 +18,7 @@ plans it from the device grid), so a batch-1 step spreads the three tensors over
 tiles of its tensor into head-row tiles; the compute is the v2 compute of ``custom_ops/qkv_norm_rope`` for one
 tensor (``x^2`` on the FPU, FPU row reduce, ``rsqrt(sum / D + eps)`` on the SFPU, ``x * inv * gamma``, NeoX RoPE
 on the FPU with the user's cos / sin row broadcast; v: norm only); the writer ships the tiles to the user's output
-shard over the NoC. This replaces ``to_memory_config (DRAM -> L1), nlp_create_qkv_heads_decode`` + the
+shard over the NoC. This replaces ``to_memory_config (DRAM -> L1), create_qkv_heads_decode`` + the
 ``qkv_norm_rope`` program (or the composite's ``to_memory_config x3, rms_norm x3, the q and k RoPE,
 to_memory_config x2``): the head tensors are never materialized before the norm.
 """
@@ -37,7 +37,7 @@ TILE = 32
 
 def heads_sharded_memory_config(device, batch: int, head_dim: int):
     """The L1 height-sharded config of the decode head tensors: one user per core (row-major core order, as
-    ``nlp_create_qkv_heads_decode``), shard ``[32, head_dim]``."""
+    ``create_qkv_heads_decode``), shard ``[32, head_dim]``."""
     gx, gy = compute_grid(device)
     core_grid = ttnn.num_cores_to_corerangeset(batch, ttnn.CoreCoord(gx, gy), True)
     return ttnn.create_sharded_memory_config(

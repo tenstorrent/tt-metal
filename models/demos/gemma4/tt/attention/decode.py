@@ -44,7 +44,7 @@ from .operations import (
 from .weights import AttentionWeights
 
 # Cache for the L1 height-sharded ``MemoryConfig`` that
-# ``nlp_create_qkv_heads_decode`` produces. The spec only depends on shape
+# ``create_qkv_heads_decode`` produces. The spec only depends on shape
 # constants (B, num_heads_local, head_dim, qkv_dim, kv_replicated/global flags)
 # — all fixed for a given model+batch. By caching across calls we avoid the
 # per-layer probe decode-split that exists ONLY to discover this spec.
@@ -235,7 +235,7 @@ def packed_kv_write_loop(
 
 def _q_sharded_mem_key(B, qkv_dim, config, weights, tp):
     """Hashable key for the q_sharded_mem cache. Captures every input that
-    affects ``nlp_create_qkv_heads_decode``'s output shard spec."""
+    affects ``create_qkv_heads_decode``'s output shard spec."""
     return (
         int(B),
         int(qkv_dim),
@@ -313,7 +313,7 @@ def decode_forward(
     )
     # GEMMA4_QKV_HEADS_FUSED=1 (with GEMMA4_QKV_L1_OUT=1): the head split, the per-head norms and the q/k RoPE as
     # one program straight from the L1 projection output (custom_ops/qkv_heads_norm_rope), in place of
-    # nlp_create_qkv_heads_decode + qkv_norm_rope; the head_dim-256 (sliding) layers, as the fresh-output form.
+    # create_qkv_heads_decode + qkv_norm_rope; the head_dim-256 (sliding) layers, as the fresh-output form.
     heads_fused = (
         decode_flag("GEMMA4_QKV_HEADS_FUSED") == "1"
         and fused_rope_ok
@@ -1013,7 +1013,7 @@ def packed_decode_forward(
     qkv_dim = xqkv.shape[-1]
 
     # ── ② L1 height-sharded MemoryConfig for the fallback paged_update_cache ─
-    # ``paged_update_cache`` needs the layout ``nlp_create_qkv_heads_decode``
+    # ``paged_update_cache`` needs the layout ``create_qkv_heads_decode``
     # emits; the spec depends only on shape constants, so probe once and cache.
     cache_key = _q_sharded_mem_key(B, qkv_dim, config, weights, tp)
     q_sharded_mem = _Q_SHARDED_MEM_CACHE.get(cache_key)
@@ -1232,9 +1232,9 @@ def packed_decode_forward(
     tt_sdpa = ttnn.reshape(tt_sdpa, (1, B * P, H_local, head_dim))
     tt_sdpa = ttnn.to_layout(tt_sdpa, ttnn.TILE_LAYOUT, memory_config=l1)
 
-    # Decode-layout concat: transpose batch/heads then nlp_concat_heads.
+    # Decode-layout concat: transpose batch/heads then concat_heads.
     tt_sdpa = ttnn.transpose(tt_sdpa, 1, 2)
-    tt_out = ttnn.experimental.nlp_concat_heads(tt_sdpa, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    tt_out = ttnn.experimental.concat_heads(tt_sdpa, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     ttnn.deallocate(tt_sdpa)
     tt_out = apply_output_projection(tt_out, weights)
     tt_out = apply_allreduce(tt_out, mesh_config, ccl_manager, config.hidden_size)

@@ -31,9 +31,9 @@ def _cos_sin(B, D, partial=None, seed=0):
 
 
 def _sharded(t, device, B):
-    """[1, B, H, D] -> L1 height sharded, one user per core, shard [32, D] (the nlp_create_qkv_heads_decode form)."""
+    """[1, B, H, D] -> L1 height sharded, one user per core, shard [32, D] (the create_qkv_heads_decode form)."""
     grid = device.compute_with_storage_grid_size()
-    core_grid = ttnn.num_cores_to_corerangeset(B, grid, True)  # row-major, like nlp_create_qkv_heads_decode
+    core_grid = ttnn.num_cores_to_corerangeset(B, grid, True)  # row-major, like create_qkv_heads_decode
     mem = ttnn.create_sharded_memory_config(
         shape=(32, t.shape[-1]),
         core_grid=core_grid,

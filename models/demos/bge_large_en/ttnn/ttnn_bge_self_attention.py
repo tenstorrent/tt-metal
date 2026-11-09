@@ -132,7 +132,7 @@ class TtnnBGESelfAttention:
         ttnn.deallocate(value_layer)
         context_layer = ttnn.reallocate(context_layer)
 
-        context_layer = ttnn.experimental.nlp_concat_heads(
+        context_layer = ttnn.experimental.concat_heads(
             context_layer,
             memory_config=ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG,
         )

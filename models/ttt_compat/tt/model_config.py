@@ -851,7 +851,7 @@ class ModelArgs:
             # ============================================================================
             # Parameter initialization
             # ============================================================================
-            # nlp_concat_heads_decode will shard the data across this number of cores
+            # concat_heads_decode will shard the data across this number of cores
             assert (
                 self.n_heads % self.cluster_shape[1] == 0
             ), f"n_heads must be divisible by num_devices: {self.n_heads} % {self.cluster_shape[1]}"

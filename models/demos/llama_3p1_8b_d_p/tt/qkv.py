@@ -131,7 +131,7 @@ class QKVProjection:
             dtype=ttnn.bfloat16,
             compute_kernel_config=self.compute_kernel_config,
         )
-        q, k, v = ttnn.experimental.nlp_create_qkv_heads(
+        q, k, v = ttnn.experimental.create_qkv_heads(
             fused,
             num_heads=layout.local_q_heads,
             num_kv_heads=layout.local_kv_heads,

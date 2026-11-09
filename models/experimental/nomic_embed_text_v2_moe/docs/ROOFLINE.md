@@ -84,10 +84,10 @@ per projection multiplies each expert's rows by that expert's weights. Windows o
 | op | ttnn call | 1x128 us | % | 4x288 us | % | 8x256 us | % | 8x512 us | % |
 |---|---|---|---|---|---|---|---|---|---|
 | QKV projection | `ttnn.linear`; `ttnn.experimental.minimal_matmul` above 1024 tokens | 13.5 | **10.6** | 44.8 | **13.0** | 64.6 | **13.6** | 112.3 | **12.2** |
-| head split | `ttnn.experimental.nlp_create_qkv_heads` | 1.9 | **1.5** | 9.9 | **2.9** | 16.2 | **3.4** | 36.2 | **3.9** |
+| head split | `ttnn.experimental.create_qkv_heads` | 1.9 | **1.5** | 9.9 | **2.9** | 16.2 | **3.4** | 36.2 | **3.9** |
 | rotary on q and k | `ttnn.experimental.rotary_embedding_hf` x2 | 8.5 | **6.6** | 25.3 | **7.3** | 42.0 | **8.8** | 81.3 | **8.8** |
 | attention | `ttnn.transformer.scaled_dot_product_attention` | 7.4 | **5.8** | 29.1 | **8.4** | 32.9 | **6.9** | 111.8 | **12.1** |
-| head concat | `ttnn.experimental.nlp_concat_heads` | 1.7 | **1.3** | 3.3 | **1.0** | 5.3 | **1.1** | 11.7 | **1.3** |
+| head concat | `ttnn.experimental.concat_heads` | 1.7 | **1.3** | 3.3 | **1.0** | 5.3 | **1.1** | 11.7 | **1.3** |
 | attention output projection | `ttnn.linear`; `minimal_matmul` above 1024 tokens | 9.0 | **7.0** | 23.8 | **6.9** | 31.0 | **6.5** | 52.6 | **5.7** |
 | residual add + norm1 | `ttnn.layer_norm` | 19.2 | **15.0** | 22.5 | **6.5** | 27.8 | **5.8** | 52.5 | **5.7** |
 | fc1 + GELU (FFN up-projection) | `ttnn.linear` + `ttnn.gelu`; one `ttnn.matmul` with the GELU fused above 1024 tokens | 22.1 | **17.3** | 82.3 | **23.9** | 140.0 | **29.4** | 259.4 | **28.2** |
@@ -100,10 +100,10 @@ per projection multiplies each expert's rows by that expert's weights. Windows o
 | op | ttnn call | 1x128 us | % | 4x288 us | % | 8x256 us | % | 8x512 us | % |
 |---|---|---|---|---|---|---|---|---|---|
 | QKV projection | `ttnn.linear`; `ttnn.experimental.minimal_matmul` above 1024 tokens | 13.2 | **4.6** | 44.3 | **8.4** | 65.4 | **9.4** | 112.3 | **9.4** |
-| head split | `ttnn.experimental.nlp_create_qkv_heads` | 2.0 | **0.7** | 9.7 | **1.8** | 16.4 | **2.4** | 36.5 | **3.1** |
+| head split | `ttnn.experimental.create_qkv_heads` | 2.0 | **0.7** | 9.7 | **1.8** | 16.4 | **2.4** | 36.5 | **3.1** |
 | rotary on q and k | `ttnn.experimental.rotary_embedding_hf` x2 | 8.7 | **3.0** | 25.4 | **4.8** | 42.1 | **6.1** | 81.2 | **6.8** |
 | attention | `ttnn.transformer.scaled_dot_product_attention` | 7.5 | **2.6** | 28.8 | **5.4** | 32.8 | **4.7** | 113.6 | **9.6** |
-| head concat | `ttnn.experimental.nlp_concat_heads` | 1.7 | **0.6** | 3.3 | **0.6** | 5.2 | **0.8** | 11.6 | **1.0** |
+| head concat | `ttnn.experimental.concat_heads` | 1.7 | **0.6** | 3.3 | **0.6** | 5.2 | **0.8** | 11.6 | **1.0** |
 | attention output projection | `ttnn.linear`; `minimal_matmul` above 1024 tokens | 8.6 | **3.0** | 23.7 | **4.5** | 30.8 | **4.4** | 52.5 | **4.4** |
 | residual add + norm1 | `ttnn.layer_norm` | 19.1 | **6.7** | 22.6 | **4.3** | 27.8 | **4.0** | 52.8 | **4.4** |
 | router scores | `ttnn.linear` + `ttnn.add` | 9.1 | **3.2** | 16.5 | **3.1** | 24.5 | **3.5** | 46.9 | **3.9** |

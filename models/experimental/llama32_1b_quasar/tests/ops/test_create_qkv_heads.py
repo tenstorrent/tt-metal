@@ -2,13 +2,13 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Per-op test: ``ttnn.experimental.nlp_create_qkv_heads`` (prefill head split).
+Per-op test: ``ttnn.experimental.create_qkv_heads`` (prefill head split).
 
 Model call site (modules/attention/attention_1d.py):
   * L470  prefill_forward STAGE 4 — splits the fused QKV projection output into
           separate Q / K / V head tensors:
 
-            q_heads, k_heads, v_heads = ttnn.experimental.nlp_create_qkv_heads(
+            q_heads, k_heads, v_heads = ttnn.experimental.create_qkv_heads(
                 xqkv_fused,
                 num_heads=n_local_heads,
                 num_kv_heads=n_local_kv_heads,
@@ -25,7 +25,7 @@ three output tensors have the expected head shapes / dtype and are finite.
 import pytest
 
 import ttnn
-from models.experimental.llama32_1b_quasar.tests.prototype_ops import op_utils as U
+from models.experimental.llama32_1b_quasar.tests.ops import op_utils as U
 
 
 @U.with_default_mesh()
@@ -33,14 +33,14 @@ from models.experimental.llama32_1b_quasar.tests.prototype_ops import op_utils a
     "seq",
     [pytest.param(seq, id=f"prefill-seq{seq}") for seq in U.PREFILL_SEQ_LENS],
 )
-def test_nlp_create_qkv_heads(ttnn_mesh_device, reset_seeds, seq):
+def test_create_qkv_heads(ttnn_mesh_device, reset_seeds, seq):
     mesh = ttnn_mesh_device
 
     # Fused QKV projection output: [1, 1, seq, QKV_DIM] (Q|K|V concatenated on -1).
     xqkv_torch = U.torch_rand((1, 1, seq, U.QKV_DIM))
     xqkv_fused = U.to_tt(xqkv_torch, mesh, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
-    q_heads, k_heads, v_heads = ttnn.experimental.nlp_create_qkv_heads(
+    q_heads, k_heads, v_heads = ttnn.experimental.create_qkv_heads(
         xqkv_fused,
         num_heads=U.N_HEADS,
         num_kv_heads=U.N_KV_HEADS,

@@ -472,7 +472,7 @@ class OptimizedDecoder(LightweightModule):
             )
         else:
             qkv = self._linear(normed, self.wqkv)
-        q, k, v = ttnn.experimental.nlp_create_qkv_heads_decode(
+        q, k, v = ttnn.experimental.create_qkv_heads_decode(
             qkv,
             num_heads=32,
             num_kv_heads=8,
@@ -558,7 +558,7 @@ class OptimizedDecoder(LightweightModule):
             x = ttnn.pad(x, [(0, 0), (0, 0), (0, physical - logical), (0, 0)], 0)
             rope = tuple(ttnn.pad(r, [(0, 0), (0, 0), (0, physical - logical), (0, 0)], 0) for r in rope)
         qkv = self._linear(self._norm(x), self.wqkv)
-        q, k, v = ttnn.experimental.nlp_create_qkv_heads(
+        q, k, v = ttnn.experimental.create_qkv_heads(
             qkv, num_heads=32, num_kv_heads=8, transpose_k_heads=False, memory_config=ttnn.DRAM_MEMORY_CONFIG
         )
         q, k = self._rope(q, rope), self._rope(k, rope)
@@ -599,7 +599,7 @@ class OptimizedDecoder(LightweightModule):
                 q_chunk_size=sdpa_chunk,
                 k_chunk_size=sdpa_chunk,
             )
-        attention = ttnn.experimental.nlp_concat_heads(attention, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        attention = ttnn.experimental.concat_heads(attention, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         # Prefill assembles chunks and decode-assisted prefix tokens in one public
         # interleaved layout, including a short tail that uses sharded matmuls.
         return ttnn.to_memory_config(self._finish(x, attention), ttnn.DRAM_MEMORY_CONFIG)[:, :, :logical, :]

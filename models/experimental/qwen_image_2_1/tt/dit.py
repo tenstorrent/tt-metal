@@ -421,7 +421,7 @@ class QwenImageDiT:
         fused = self._mm(x, layer.wqkv, S, c.hidden, 3 * c.hidden)
         if len(fused.shape) != 4:
             fused = ttnn.reshape(fused, [1, 1, S, 3 * c.hidden])
-        q, k, v = ttnn.experimental.nlp_create_qkv_heads(
+        q, k, v = ttnn.experimental.create_qkv_heads(
             fused,
             num_heads=c.heads,
             num_kv_heads=c.heads,
@@ -492,7 +492,7 @@ class QwenImageDiT:
                 )
             )
             ttnn.deallocate(chunk)
-        v, _, _ = ttnn.experimental.nlp_create_qkv_heads(
+        v, _, _ = ttnn.experimental.create_qkv_heads(
             vc, num_heads=c.heads, num_kv_heads=0, transpose_k_heads=False, memory_config=ttnn.DRAM_MEMORY_CONFIG
         )
         ttnn.deallocate(vc)

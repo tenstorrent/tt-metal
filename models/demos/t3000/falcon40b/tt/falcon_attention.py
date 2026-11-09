@@ -319,7 +319,7 @@ class TtFalconAttention:
             transpose_mcast=True,
         )
 
-        query_layer, key_layer, value_layer = ttnn.experimental.nlp_create_qkv_heads(
+        query_layer, key_layer, value_layer = ttnn.experimental.create_qkv_heads(
             fused_query_key_value,
             num_heads=self.num_heads // self.num_devices,
             num_kv_heads=self.num_kv_heads // self.num_devices,
@@ -361,7 +361,7 @@ class TtFalconAttention:
         value_layer.deallocate(True)
 
         # Output projection
-        attn_output = ttnn.experimental.nlp_concat_heads(
+        attn_output = ttnn.experimental.concat_heads(
             attn_output,
             memory_config=self.model_config["CONCAT_HEADS_OUTPUT_MEMCFG"],
         )
@@ -457,7 +457,7 @@ class TtFalconAttention:
                 fused_query_key_value,
                 self.model_config["CREATE_QKV_HEADS_INPUT_MEMCFG"],
             )
-        query_layer, key_layer, value_layer = ttnn.experimental.nlp_create_qkv_heads(
+        query_layer, key_layer, value_layer = ttnn.experimental.create_qkv_heads(
             fused_query_key_value,
             num_heads=self.num_heads // self.num_devices,
             num_kv_heads=self.num_kv_heads // self.num_devices,
@@ -584,7 +584,7 @@ class TtFalconAttention:
         #########################
         ### ATTENTION SELFOUT ###
         #########################
-        attn_output = ttnn.experimental.nlp_concat_heads(
+        attn_output = ttnn.experimental.concat_heads(
             attn_output,
             memory_config=self.model_config["CONCAT_HEADS_OUTPUT_MEMCFG"],
         )

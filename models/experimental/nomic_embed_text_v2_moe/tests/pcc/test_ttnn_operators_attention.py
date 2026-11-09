@@ -6,7 +6,7 @@
 Four device operators stand in for the reference's whole attention path. Three of them encode
 a convention that the wrong choice satisfies just as well:
 
-  nlp_create_qkv_heads   three-major [q | k | v], not head-major
+  create_qkv_heads   three-major [q | k | v], not head-major
   rotary_embedding_hf    NeoX half-split with concat-widened tables, not GPT-J interleaved
   SDPA                   bidirectional, not causal
 
@@ -92,8 +92,8 @@ def fold_batch_into_heads(x: torch.Tensor) -> torch.Tensor:
 
 @pytest.mark.parametrize("batch, seqlen", TOKEN_SHAPES)
 @pytest.mark.parametrize("index", [pytest.param(0, id="query"), pytest.param(1, id="key"), pytest.param(2, id="value")])
-def test_nlp_create_qkv_heads(device, config, batch, seqlen, index):
-    """aten.view + aten.select + aten.permute -> ttnn.experimental.nlp_create_qkv_heads.
+def test_create_qkv_heads(device, config, batch, seqlen, index):
+    """aten.view + aten.select + aten.permute -> ttnn.experimental.create_qkv_heads.
 
     Wqkv is three-major: q, k and v are contiguous blocks of hidden_size with heads contiguous
     inside each.
@@ -101,7 +101,7 @@ def test_nlp_create_qkv_heads(device, config, batch, seqlen, index):
     heads, head_dim = config.num_attention_heads, config.head_dim
     qkv = torch.randn(batch, 1, seqlen, config.qkv_dim)
 
-    parts = ttnn.experimental.nlp_create_qkv_heads(
+    parts = ttnn.experimental.create_qkv_heads(
         to_device(qkv, device), num_heads=heads, num_kv_heads=heads, transpose_k_heads=False
     )
 
@@ -119,7 +119,7 @@ def test_head_major_qkv_view_is_decorrelated(device, config):
     heads, head_dim = config.num_attention_heads, config.head_dim
     qkv = torch.randn(batch, 1, seqlen, config.qkv_dim)
 
-    query, _, _ = ttnn.experimental.nlp_create_qkv_heads(
+    query, _, _ = ttnn.experimental.create_qkv_heads(
         to_device(qkv, device), num_heads=heads, num_kv_heads=heads, transpose_k_heads=False
     )
 
@@ -508,12 +508,12 @@ def test_sdpa_where_three_query_chunks_a_head_are_wrong(device, tt_config, confi
 
 
 @pytest.mark.parametrize("batch, seqlen", TOKEN_SHAPES)
-def test_nlp_concat_heads(device, config, batch, seqlen):
-    """aten.permute + aten.reshape -> ttnn.experimental.nlp_concat_heads."""
+def test_concat_heads(device, config, batch, seqlen):
+    """aten.permute + aten.reshape -> ttnn.experimental.concat_heads."""
     heads, head_dim = config.num_attention_heads, config.head_dim
     context = torch.randn(batch, heads, seqlen, head_dim)
 
-    out = ttnn.experimental.nlp_concat_heads(to_device(context, device))
+    out = ttnn.experimental.concat_heads(to_device(context, device))
 
     ref = context.permute(0, 2, 1, 3).reshape(batch, 1, seqlen, config.hidden_size)
     assert_with_pcc(ref, out, OPERATOR_PCC)

@@ -343,7 +343,7 @@ class TtVoxtralCodecDecoder:
         k = ttnn.rms_norm(k, weight=w["kn"], epsilon=CODEC_QK_NORM_EPS, compute_kernel_config=COMPUTE_CONFIG)
         # Head split/merge via the fused ops, not reshape+permute, which is far slower here.
         kv = ttnn.concat([k, v], dim=-1)
-        qh, kh, vh = ttnn.experimental.nlp_create_qkv_heads(
+        qh, kh, vh = ttnn.experimental.create_qkv_heads(
             ttnn.reshape(q, [1, 1, L, CODEC_DIM]),
             ttnn.reshape(kv, [1, 1, L, 2 * CODEC_DIM]),
             num_heads=CODEC_N_HEADS,

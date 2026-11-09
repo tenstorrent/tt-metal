@@ -19,10 +19,10 @@ from tests.ttnn.unit_tests.operations.fused.test_distributed_layernorm_sharded i
 from tests.ttnn.unit_tests.operations.sdpa.sdpa_test_utils import (
     run_test_sdpa_decode_paged_attention_single_iter,
 )
-from tests.tt_eager.python_api_testing.unit_testing.misc.test_nlp_create_qkv_heads_decode import (
+from tests.tt_eager.python_api_testing.unit_testing.misc.test_create_qkv_heads_decode import (
     run_test_create_min_width_shard,
 )
-from tests.tt_eager.python_api_testing.unit_testing.misc.test_nlp_concat_heads_decode import run_test_concat_head
+from tests.tt_eager.python_api_testing.unit_testing.misc.test_concat_heads_decode import run_test_concat_head
 from tests.ttnn.unit_tests.operations.transformers.test_paged_fused_update_cache import (
     run_test_paged_fused_update_cache_decode,
 )
@@ -363,7 +363,7 @@ def test_qwen_tg_ScaledDotProductAttentionDecodeSweep(
         ),
     ),
 )
-def test_qwen_tg_NLPCreateHeadsDecodeDeviceOperation(
+def test_qwen_tg_CreateQKVHeadsDecodeDeviceOperation(
     device,
     batch,
     batch_offset,
@@ -410,7 +410,7 @@ def test_qwen_tg_NLPCreateHeadsDecodeDeviceOperation(
         ),
     ),
 )
-def test_qwen_tg_NLPConcatHeadsDecodeDeviceOperation(
+def test_qwen_tg_ConcatHeadsDecodeDeviceOperation(
     device,
     n_local_heads,
     padded_local_heads,

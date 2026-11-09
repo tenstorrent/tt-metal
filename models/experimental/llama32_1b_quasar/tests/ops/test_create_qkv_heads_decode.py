@@ -2,13 +2,13 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Per-op test: ``ttnn.experimental.nlp_create_qkv_heads_decode`` (decode head split).
+Per-op test: ``ttnn.experimental.create_qkv_heads_decode`` (decode head split).
 
 Model call site (modules/attention/attention_1d.py):
   * L685  decode_forward STAGE 3 — splits the fused QKV projection into Q/K/V
           heads for the single-token-per-user decode path:
 
-            q_heads, k_heads, v_heads = ttnn.experimental.nlp_create_qkv_heads_decode(
+            q_heads, k_heads, v_heads = ttnn.experimental.create_qkv_heads_decode(
                 xqkv_fused,
                 num_heads=n_local_heads,
                 num_kv_heads=n_local_kv_heads,
@@ -23,13 +23,13 @@ device n_local_heads = 32 and n_local_kv_heads = 8. Output heads are
 (K/V).
 
 Two tests:
-  * ``test_nlp_create_qkv_heads_decode`` — interleaved input. Routes to the
+  * ``test_create_qkv_heads_decode`` — interleaved input. Routes to the
     ``InterleavedProgramFactory`` (reader_interleaved_* kernel). The model never
     feeds interleaved input, but keeping this exercises that program factory.
-  * ``test_nlp_create_qkv_heads_decode_sharded`` — WIDTH_SHARDED input, the path
+  * ``test_create_qkv_heads_decode_sharded`` — WIDTH_SHARDED input, the path
     the model actually uses. select_program_factory() branches on
     input.is_sharded() to a *different* program factory + reader kernel
-    (nlp_create_qkv_heads_decode_device_operation.cpp:12-24), so this is the real
+    (create_qkv_heads_decode_device_operation.cpp:12-24), so this is the real
     coverage. Verified with a torch reference (the split has a closed form).
 """
 
@@ -44,14 +44,14 @@ from models.experimental.llama32_1b_quasar.tests.ops import op_utils as U
     "batch",
     [pytest.param(batch, id=f"decode-batch{batch}") for batch in U.DECODE_BATCHES],
 )
-def test_nlp_create_qkv_heads_decode(ttnn_mesh_device, reset_seeds, batch):
+def test_create_qkv_heads_decode(ttnn_mesh_device, reset_seeds, batch):
     mesh = ttnn_mesh_device
 
     # Fused QKV projection reshaped for decode: [1, 1, batch, QKV_DIM].
     xqkv_torch = U.torch_rand((1, 1, batch, U.QKV_DIM))
     xqkv_fused = U.to_tt(xqkv_torch, mesh, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
-    q_heads, k_heads, v_heads = ttnn.experimental.nlp_create_qkv_heads_decode(
+    q_heads, k_heads, v_heads = ttnn.experimental.create_qkv_heads_decode(
         xqkv_fused,
         num_heads=U.N_HEADS,
         num_kv_heads=U.N_KV_HEADS,
@@ -80,12 +80,12 @@ def test_nlp_create_qkv_heads_decode(ttnn_mesh_device, reset_seeds, batch):
     "batch",
     [pytest.param(batch, id=f"decode-batch{batch}") for batch in U.DECODE_BATCHES],
 )
-def test_nlp_create_qkv_heads_decode_sharded(ttnn_mesh_device, reset_seeds, batch):
+def test_create_qkv_heads_decode_sharded(ttnn_mesh_device, reset_seeds, batch):
     """WIDTH_SHARDED input — the program-factory / reader kernel the model actually uses.
 
     Input contract (device_operation.cpp:55-66): WIDTH_SHARDED, ROW_MAJOR, shard[0] ==
     padded_batch. We place the full QKV width on a single core (canonical
-    max-width-shard, test_nlp_create_qkv_heads_decode.py:106-137) so batch=1 fits the
+    max-width-shard, test_create_qkv_heads_decode.py:106-137) so batch=1 fits the
     emulator; the model's default output config is L1_HEIGHT_SHARDED (attention_1d.py:1723).
     """
     mesh = ttnn_mesh_device
@@ -109,7 +109,7 @@ def test_nlp_create_qkv_heads_decode_sharded(ttnn_mesh_device, reset_seeds, batc
     )
     xqkv_fused = ttnn.to_device(xqkv_host, mesh, memory_config=in_memcfg)
 
-    q_heads, k_heads, v_heads = ttnn.experimental.nlp_create_qkv_heads_decode(
+    q_heads, k_heads, v_heads = ttnn.experimental.create_qkv_heads_decode(
         xqkv_fused,
         num_heads=U.N_HEADS,
         num_kv_heads=U.N_KV_HEADS,

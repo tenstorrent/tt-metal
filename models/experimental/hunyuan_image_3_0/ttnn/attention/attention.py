@@ -8,12 +8,12 @@
 #  Step | PyTorch                                  | TTNN
 #  -----+------------------------------------------+----------------------------------
 #   1   | qkv_proj linear                          | ttnn.linear
-#   2   | reshape + split Q/K/V                    | ttnn.experimental.nlp_create_qkv_heads
+#   2   | reshape + split Q/K/V                    | ttnn.experimental.create_qkv_heads
 #   3   | apply_rotary_pos_emb(q, k, cos, sin)     | HunyuanTtRoPE2D.forward (split-half RoPE)
 #   4   | query_layernorm / key_layernorm (per-head)| ttnn.rms_norm per head via reshape
 #   5   | repeat_kv  (GQA expansion)               | slice + concat (interleaved KV repeat)
 #   6   | F.scaled_dot_product_attention           | ttnn.transformer.scaled_dot_product_attention
-#   7   | concat heads                             | ttnn.experimental.nlp_concat_heads
+#   7   | concat heads                             | ttnn.experimental.concat_heads
 #   8   | o_proj linear                            | ttnn.linear
 #
 # References
@@ -185,7 +185,7 @@ class HunyuanTtAttention(LightweightModule):
         # Hunyuan ships an interleaved GQA layout; we reorder into per-TP-shard
         # contiguous [Q_local | K_local | V_local] blocks so that a plain contiguous
         # column split across tp_axis lands a balanced head set on each device and
-        # nlp_create_qkv_heads(num_heads=local, num_kv_heads=local) pairs them right.
+        # create_qkv_heads(num_heads=local, num_kv_heads=local) pairs them right.
         # For tp_factor==1 this is exactly [Q_all | K_all | V_all] as before.
         # ------------------------------------------------------------------
         grp = num_heads // num_kv_heads
@@ -317,7 +317,7 @@ class HunyuanTtAttention(LightweightModule):
                 attn_mc = ttnn.DRAM_MEMORY_CONFIG
         # Decode: the query is a single row, so resid_mem_config(x.shape[1]=1) always
         # picks L1 no matter how long the *context* has grown. At long recaption contexts
-        # the L1-resident intermediates + nlp_concat_heads' static CBs overflow core (0,0)
+        # the L1-resident intermediates + concat_heads' static CBs overflow core (0,0)
         # (CB-clash TT_THROW). Gate on the context (KV) length — the mask's last dim — so
         # we spill to DRAM past the same bound the prefill path uses.
         elif decode_step and attention_mask is not None and int(attention_mask.shape[-1]) >= RESID_L1_MAX_SEQ:
@@ -330,7 +330,7 @@ class HunyuanTtAttention(LightweightModule):
         # (tests/perf/test_matmul_shard_sweep.py). allow_width_shard=False installs
         # decode_mm via l1_sharded_linear; auto alone is ~93us on this shape.
         # Write the QKV matmul output straight into attn_mc's memory space. At small Sd
-        # the interleaved nlp_create_qkv_heads runs on a SINGLE core (num_blocks =
+        # the interleaved create_qkv_heads runs on a SINGLE core (num_blocks =
         # Sd/32 = 1 tile-row) and reads/writes one tile at a time, so it is latency-bound
         # on ~192 serial tile round-trips. Its output already lands in L1 (attn_mc is L1
         # for Sd < RESID_L1_MAX_SEQ); landing the matmul output (its input) in L1 too
@@ -347,16 +347,16 @@ class HunyuanTtAttention(LightweightModule):
         xqkv = to_interleaved_if_sharded(xqkv, memory_config=attn_mc)
 
         # ---- 2. Split into Q / K / V heads (GQA-aware) ---------------------
-        # nlp_create_qkv_heads expects [B, 1, S, QKV_dim] (4D).
+        # create_qkv_heads expects [B, 1, S, QKV_dim] (4D).
         # xqkv from linear is [B, S, QKV_dim] (3D), so unsqueeze dim 1.
         # ttnn.reshape returns a view (same buffer); deallocate xqkv_4d only after
-        # nlp_create_qkv_heads — never deallocate xqkv before xqkv_4d is consumed.
+        # create_qkv_heads — never deallocate xqkv before xqkv_4d is consumed.
         xqkv_4d = ttnn.reshape(xqkv, [xqkv.shape[0], 1, xqkv.shape[1], xqkv.shape[2]])
         # Output shapes:
         #   q: [B, num_heads,    S, head_dim]
         #   k: [B, num_kv_heads, S, head_dim]
         #   v: [B, num_kv_heads, S, head_dim]
-        q, k, v = ttnn.experimental.nlp_create_qkv_heads(
+        q, k, v = ttnn.experimental.create_qkv_heads(
             xqkv_4d,
             num_heads=self.num_heads,
             num_kv_heads=self.num_kv_heads,
@@ -515,7 +515,7 @@ class HunyuanTtAttention(LightweightModule):
 
         # ---- 7. Merge heads -------------------------------------------------
         # [B, num_heads, S, head_dim] → [B, S, hidden_size]
-        attn_out = ttnn.experimental.nlp_concat_heads(
+        attn_out = ttnn.experimental.concat_heads(
             attn_out,
             memory_config=attn_mc,
         )

@@ -9,7 +9,7 @@ All performance optimizations are active:
   - ttnn.layer_norm         (final layer)
   - minimal_matmul          (attention + MLP projections, pre-transposed weights)
   - minimal_matmul_split    (fused Q/K/V in one kernel)
-  - nlp_create_qkv_heads    (fused V head-reshape)
+  - create_qkv_heads    (fused V head-reshape)
   - CCLManager async CCL    (reduce_scatter_minimal_async + all_gather_async)
 
 4-way tensor parallelism, (1,4) MeshDevice, 8 heads/device.
@@ -233,7 +233,7 @@ class ZImageTransformerTTNN(LightweightModule):
     # ── Optimized attention ────────────────────────────────────────────────────
 
     def _attention(self, x, seq_len, block_prefix, is_caption=False):
-        """Attention with fused QKV (minimal_matmul_split) + nlp_create_qkv_heads for V."""
+        """Attention with fused QKV (minimal_matmul_split) + create_qkv_heads for V."""
         x_2d = ttnn.reshape(x, [seq_len, HIDDEN_DIM], memory_config=ttnn.DRAM_MEMORY_CONFIG)
         N = HEADS_PER_DEV * HEAD_DIM  # 1024
 
@@ -272,13 +272,13 @@ class ZImageTransformerTTNN(LightweightModule):
         k = self._apply_rope(k_normed, seq_len, HEADS_PER_DEV, is_caption=is_caption)
         ttnn.deallocate(k_normed, False)
 
-        # V: nlp_create_qkv_heads handles head-reshape in one fused op
+        # V: create_qkv_heads handles head-reshape in one fused op
         v_reshaped = ttnn.reshape(v_2d, [1, 1, seq_len, N], memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(v_2d, False)
         v_tiled = self._ensure_tile(v_reshaped)
         if v_tiled is not v_reshaped:
             ttnn.deallocate(v_reshaped, False)
-        v, _, _ = ttnn.experimental.nlp_create_qkv_heads(
+        v, _, _ = ttnn.experimental.create_qkv_heads(
             v_tiled,
             num_heads=HEADS_PER_DEV,
             num_kv_heads=0,

@@ -355,7 +355,7 @@ class TtDFlashDrafter:
         transpose_k_heads=False keeps [.., heads, seq, head_dim] (NOT the QKᵀ transpose).
         head_dim + seq are inferred from the tensor width/shape.
         """
-        heads, _, _ = ttnn.experimental.nlp_create_qkv_heads(
+        heads, _, _ = ttnn.experimental.create_qkv_heads(
             proj,
             num_heads=self.kv_heads_local,
             num_kv_heads=0,

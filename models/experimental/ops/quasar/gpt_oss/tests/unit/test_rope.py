@@ -767,7 +767,7 @@ def test_rotary_embedding_llama_kernel_with_scaled_values(
     grid_size = ttnn.CoreCoord(8, 8)  # Safe limit: max 8 per dimension to avoid Galaxy hangs
     batch_grid = ttnn.num_cores_to_corerangeset(batch_size, grid_size, row_wise=True)
 
-    # Input memory config: HEIGHT_SHARDED (matching nlp_create_qkv_heads_decode output)
+    # Input memory config: HEIGHT_SHARDED (matching create_qkv_heads_decode output)
     input_mem_config = ttnn.create_sharded_memory_config(
         shape=(num_heads, head_dim),
         core_grid=batch_grid,

@@ -346,7 +346,7 @@ class TtSWA(LightweightModule):
         q = ttnn.rms_norm(q, weight=self.q_a_norm_weight, epsilon=self.rms_norm_eps)
         q = ttnn.linear(q, self.wq_b, memory_config=self.memory_config)
 
-        q, _, _ = ttnn.experimental.nlp_create_qkv_heads(
+        q, _, _ = ttnn.experimental.create_qkv_heads(
             q,
             num_heads=num_heads_local,
             num_kv_heads=0,
@@ -409,7 +409,7 @@ class TtSWA(LightweightModule):
         groups_local = self.o_groups // self.tp_factor
 
         x = ttnn.reshape(attn, [groups_local, attn.shape[1] // groups_local, seq_len, self.head_dim])
-        x = ttnn.experimental.nlp_concat_heads(x, memory_config=self.memory_config)
+        x = ttnn.experimental.concat_heads(x, memory_config=self.memory_config)
         x = ttnn.reshape(x, [batch, groups_local, seq_len, in_per_group])
 
         grouped = ttnn.linear(x, self.wo_a, memory_config=self.memory_config)

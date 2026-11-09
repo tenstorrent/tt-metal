@@ -223,7 +223,7 @@ def test_kv_cache_uses_two_writes_not_the_fused_one():
 
 
 def test_flow_model_hand_rolls_the_head_split_and_keeps_sdpa():
-    """The flow model splits heads with nine L1-pinned ops, faster than nlp_create_qkv_heads, and
+    """The flow model splits heads with nine L1-pinned ops, faster than create_qkv_heads, and
     attends with sdpa."""
     import inspect
 
@@ -242,7 +242,7 @@ def test_flow_model_hand_rolls_the_head_split_and_keeps_sdpa():
     if ast.get_docstring(fn):
         fn.body = fn.body[1:]
     code = ast.unparse(fn)
-    assert "nlp_create_qkv_heads" not in code, "the fused split is back, and it is slower"
+    assert "create_qkv_heads" not in code, "the fused split is back, and it is slower"
     assert (
         code.count("memory_config=_L1") == 2
     ), "both the slice and the permute must pin _L1: DRAM outputs are slower and silently undo the L1 placement"

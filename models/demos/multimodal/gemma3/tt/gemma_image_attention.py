@@ -225,7 +225,7 @@ class TtGemmaImageAttention(LightweightModule):
 
         # Reshape required:
         # ttnn.embedding returns [b, s, d]
-        # ttnn.nlp_create_qkv_heads expects [b, 1, s, d]
+        # ttnn.create_qkv_heads expects [b, 1, s, d]
         if len(x_11SH.shape) == 3:
             x_11SH = ttnn.reshape(x_11SH, (batch_size, 1, seq_len, -1))
 
@@ -247,7 +247,7 @@ class TtGemmaImageAttention(LightweightModule):
             xqkv_fused = ttnn.add(xqkv_fused, self.bqkv, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(x_11SH)
 
-        q_heads_1QSD, k_heads_1KSD, v_heads_1VSD = ttnn.experimental.nlp_create_qkv_heads(
+        q_heads_1QSD, k_heads_1KSD, v_heads_1VSD = ttnn.experimental.create_qkv_heads(
             xqkv_fused,
             num_heads=self.n_local_heads,
             num_kv_heads=self.n_local_kv_heads,
@@ -279,7 +279,7 @@ class TtGemmaImageAttention(LightweightModule):
         ###
         # Output matmul
         ###
-        attn_output_11SH = ttnn.experimental.nlp_concat_heads(
+        attn_output_11SH = ttnn.experimental.concat_heads(
             attn_output_1QSD,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )

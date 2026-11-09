@@ -337,7 +337,7 @@ class TtXttsGptBlock(LightweightModule):
         )
         b, s, three_h = qkv.shape
         qkv = ttnn.reshape(qkv, (b, 1, s, three_h))
-        q, k, v = ttnn.experimental.nlp_create_qkv_heads(
+        q, k, v = ttnn.experimental.create_qkv_heads(
             qkv, num_heads=NUM_HEADS, transpose_k_heads=False, memory_config=L1
         )
         ttnn.deallocate(qkv)

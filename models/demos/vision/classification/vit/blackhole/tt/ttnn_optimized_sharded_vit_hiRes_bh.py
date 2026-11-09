@@ -286,7 +286,7 @@ def vit_attention(
     )
     query_key_value = ttnn.to_memory_config(query_key_value, ttnn.L1_MEMORY_CONFIG)
 
-    query, key, value = ttnn.experimental.nlp_create_qkv_heads(
+    query, key, value = ttnn.experimental.create_qkv_heads(
         query_key_value,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         num_heads=num_heads,

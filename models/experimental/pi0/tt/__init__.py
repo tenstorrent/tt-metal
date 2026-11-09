@@ -11,7 +11,7 @@ This is a pure TTNN implementation (no PyTorch fallbacks) with the
 following optimizations:
     - Fused QKV projection
     - Native TTNN RoPE (ttnn.experimental.rotary_embedding)
-    - Native head operations (nlp_create_qkv_heads, nlp_concat_heads)
+    - Native head operations (create_qkv_heads, concat_heads)
     - Pre-computed attention masks and timesteps
     - Denoising loop stays entirely on device
 

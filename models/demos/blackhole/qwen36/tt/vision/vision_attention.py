@@ -9,7 +9,7 @@ Mirrors the LLM TP convention from `tt_transformers.tt.attention`:
 
   in:  replicated x_11SH (the wrapping DistributedLayerNorm produced this)
   ──▶ column-sharded W_qkv (head-fractured) ──▶ per-device n_local_heads
-  ──▶ SDPA → nlp_concat_heads
+  ──▶ SDPA → concat_heads
   ──▶ row-sharded W_o ──▶ partial sums
   ──▶ tt_all_reduce(dim=3)  -> on T3K/QB2 this is a reduce_scatter
   out: fractured along dim=3 (each device owns dim/TP)
@@ -323,7 +323,7 @@ class VisionAttention(LightweightModule):
             q_heads_1QSD_pre_rot,
             k_heads_1KSD_pre_rot,
             v_heads_1VSD,
-        ) = ttnn.experimental.nlp_create_qkv_heads(
+        ) = ttnn.experimental.create_qkv_heads(
             xqkv_fused,
             num_heads=self.n_local_heads,
             num_kv_heads=self.n_local_kv_heads,
@@ -395,7 +395,7 @@ class VisionAttention(LightweightModule):
         attn_output_1QSD = ttnn.reshape(attn_output_84SD, [1, self.n_local_heads, -1, self.padded_head_dim])
 
         # ---- WO matmul (row sharded along contraction) ----------------------------
-        attn_output_11SH = ttnn.experimental.nlp_concat_heads(
+        attn_output_11SH = ttnn.experimental.concat_heads(
             attn_output_1QSD,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )

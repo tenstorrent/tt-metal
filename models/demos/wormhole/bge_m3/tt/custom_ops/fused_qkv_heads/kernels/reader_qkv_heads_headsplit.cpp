@@ -2,9 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 //
-// BGE-M3 head-split reader for nlp_create_qkv_heads.
+// BGE-M3 head-split reader for create_qkv_heads.
 //
-// Adapted from Qwen3-Embedding's reader_tm_tile_layout_nlp_create_qkv_heads_head_split.cpp
+// Adapted from Qwen3-Embedding's reader_tm_tile_layout_create_qkv_heads_head_split.cpp
 // (PR: ign/qwen3_0.6b_optimization).
 //
 // Difference vs Track A (batched): Track A processes one (batch, seq_tile) per

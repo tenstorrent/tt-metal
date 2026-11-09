@@ -452,7 +452,7 @@ class VisionAttention(Module):
         qkv = self.qkv.forward(hidden_states)
 
         qkv = ttnn.reshape(qkv, (1, 1, seq_len, 3 * self.local_inner))
-        q, k, v = ttnn.experimental.nlp_create_qkv_heads(
+        q, k, v = ttnn.experimental.create_qkv_heads(
             qkv,
             num_heads=self.num_local_heads,
             num_kv_heads=self.num_local_heads,
@@ -525,7 +525,7 @@ class VisionAttention(Module):
                 compute_kernel_config=self._sdpa_compute_kernel_config,
                 cu_window_seqlens=cu_window,
             )
-        attn = ttnn.experimental.nlp_concat_heads(attn, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        attn = ttnn.experimental.concat_heads(attn, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         attn = ttnn.reshape(attn, (seq_len, self.local_inner))
         return row_parallel_seq_forward(self.proj, attn, self._p)
 

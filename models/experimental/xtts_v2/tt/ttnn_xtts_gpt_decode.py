@@ -162,7 +162,7 @@ class TTNNGPTTracedDecoder(TTNNGPTCore):
             for _ in range(cfg.n_layer)
         ]
         # paged_fused_update_cache does K+V in one kernel but needs them on non-overlapping cores;
-        # nlp_create_qkv_heads_decode places both K and V on core (0,0), so move V to core (1,0) first.
+        # create_qkv_heads_decode places both K and V on core (0,0), so move V to core (1,0) first.
         self._v_cfg1 = ttnn.MemoryConfig(
             ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
             ttnn.BufferType.L1,
@@ -194,7 +194,7 @@ class TTNNGPTTracedDecoder(TTNNGPTCore):
             qkv = self._linear(self._layer_norm(x, b["ln_1"]), b["c_attn"], prg=self._prg["c_attn"])
             # Fused per-head Q/K/V split: outputs are height-sharded in L1 (K/V feed the cache-update
             # directly, Q feeds sdpa_decode) -- replaces 3 slice + 3 reshape + 2 interleaved_to_sharded.
-            q, k, v = ttnn.experimental.nlp_create_qkv_heads_decode(
+            q, k, v = ttnn.experimental.create_qkv_heads_decode(
                 ttnn.reshape(qkv, (1, 1, 1, 3 * cfg.n_embd)), num_heads=cfg.n_head, num_kv_heads=cfg.n_head
             )
             # Fused K+V cache write in one kernel (V moved to core (1,0) so K/V don't overlap).
@@ -256,7 +256,7 @@ class TTNNGPTTracedDecoder(TTNNGPTCore):
             # multi-token pass -> interleaved LayerNorm (the width-sharded decode path is single-token only)
             h = b["ln_1"](x, sharded=False, compute_kernel_config=self.compute_kernel_config)
             qkv = self._linear(h, b["c_attn"])  # [1, P, 3*E]
-            q, k, v = ttnn.experimental.nlp_create_qkv_heads(
+            q, k, v = ttnn.experimental.create_qkv_heads(
                 ttnn.reshape(qkv, (1, 1, P, 3 * E)),
                 num_heads=nh,
                 num_kv_heads=nh,
@@ -278,7 +278,7 @@ class TTNNGPTTracedDecoder(TTNNGPTCore):
             attn = ttnn.transformer.scaled_dot_product_attention(
                 q, k, v, is_causal=True, scale=self.scale, compute_kernel_config=self.compute_kernel_config
             )
-            attn = ttnn.reshape(ttnn.experimental.nlp_concat_heads(attn), (1, P, E))  # fused head-merge
+            attn = ttnn.reshape(ttnn.experimental.concat_heads(attn), (1, P, E))  # fused head-merge
             x = ttnn.add(x, self._linear(attn, b["attn_proj"]))
             x = ttnn.add(x, self._mlp(b["ln_2"](x, sharded=False, compute_kernel_config=self.compute_kernel_config), b))
 

@@ -222,9 +222,9 @@ class Attention(LightweightModule):
         # For ring topology we can use all gather matmul for wo
         self.use_fused_all_gather_matmul = self.model_config["USE_FUSED_ALL_GATHER_MATMUL"]
 
-        # FIXME: workaround until nlp_concat_heads correctly supports sub-tile head dims
+        # FIXME: workaround until concat_heads correctly supports sub-tile head dims
         # We are going to pad the input dim of the output weights with zeros in the places
-        # that nlp_concat_heads inserts garbage values
+        # that concat_heads inserts garbage values
         if self.head_dim != self.padded_head_dim:
             # note that torch weights are already transposed to have input in last dim
             pt_wo_t = self.state_dict[f"{wo_str}.weight"]
@@ -424,7 +424,7 @@ class Attention(LightweightModule):
             q_heads_pre_rot_1BQD,
             k_heads_pre_rot_1BKD,
             v_heads_1BKD,
-        ) = ttnn.experimental.nlp_create_qkv_heads_decode(
+        ) = ttnn.experimental.create_qkv_heads_decode(
             xqkv_fused,
             num_heads=self.n_local_heads,
             num_kv_heads=self.n_local_kv_heads,
@@ -511,7 +511,7 @@ class Attention(LightweightModule):
             attn_output_1G4D,
             memory_config=self.model_config["SCORES_BATCHED_MM_OUTPUT_MEMCFG"](self.batch_size_per_device_group),
         )
-        attn_output_cat = ttnn.experimental.nlp_concat_heads_decode(
+        attn_output_cat = ttnn.experimental.concat_heads_decode(
             attn_output_11BH,
             num_heads=self.n_local_heads,
         )
@@ -661,7 +661,7 @@ class Attention(LightweightModule):
             q_heads_1QSD_pre_rot,
             k_heads_1KSD_pre_rot,
             v_heads_1VSD,
-        ) = ttnn.experimental.nlp_create_qkv_heads(
+        ) = ttnn.experimental.create_qkv_heads(
             xqkv_fused,
             num_heads=self.n_local_heads,
             num_kv_heads=self.n_local_kv_heads,
@@ -798,7 +798,7 @@ class Attention(LightweightModule):
         ###
         # Output matmul
         ###
-        attn_output_11SH = ttnn.experimental.nlp_concat_heads(
+        attn_output_11SH = ttnn.experimental.concat_heads(
             attn_output_1QSD,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )

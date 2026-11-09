@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 """``QkvNormRope``: the decode per-head q/k/v RMSNorm (gamma on q and k, none on v) and the q/k RoPE as one program
-on the height-sharded head tensors ``nlp_create_qkv_heads_decode`` produces.
+on the height-sharded head tensors ``create_qkv_heads_decode`` produces.
 
 ``q`` ``[1, B, Hq, D]``, ``k`` / ``v`` ``[1, B, Hkv, D]`` (bf16, TILE, L1 HEIGHT_SHARDED: one user per core, shard
 ``[32, D]`` with the heads on the rows, padded to the tile), ``gq`` / ``gk`` the norm gammas ``[1, 1, 1, D]`` (bf16,

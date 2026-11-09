@@ -2,13 +2,13 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Per-op test: ``ttnn.experimental.nlp_concat_heads`` (prefill head concat).
+Per-op test: ``ttnn.experimental.concat_heads`` (prefill head concat).
 
 Model call site (modules/attention/attention_1d.py):
   * L588  prefill_forward STAGE 11 — concatenates the per-head SDPA output back
           into a single hidden dimension before the WO matmul:
 
-            attn_output_concat = ttnn.experimental.nlp_concat_heads(
+            attn_output_concat = ttnn.experimental.concat_heads(
                 attn_output, memory_config=ttnn.DRAM_MEMORY_CONFIG
             )
 
@@ -22,7 +22,7 @@ No simple torch reference — assert output shape / dtype / finiteness.
 import pytest
 
 import ttnn
-from models.experimental.llama32_1b_quasar.tests.ops import op_utils as U
+from models.experimental.llama32_1b_quasar.tests.prototype_ops import op_utils as U
 
 
 @U.with_default_mesh()
@@ -30,14 +30,14 @@ from models.experimental.llama32_1b_quasar.tests.ops import op_utils as U
     "seq",
     [pytest.param(seq, id=f"prefill-seq{seq}") for seq in U.PREFILL_SEQ_LENS],
 )
-def test_nlp_concat_heads(ttnn_mesh_device, reset_seeds, seq):
+def test_concat_heads(ttnn_mesh_device, reset_seeds, seq):
     mesh = ttnn_mesh_device
 
     # Per-head attention output: [1, n_heads, seq, head_dim].
     attn_torch = U.torch_rand((1, U.N_HEADS, seq, U.HEAD_DIM))
     attn_output = U.to_tt(attn_torch, mesh, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
-    attn_output_concat = ttnn.experimental.nlp_concat_heads(attn_output, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    attn_output_concat = ttnn.experimental.concat_heads(attn_output, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
     # Concatenated hidden dim: [1, 1, seq, n_heads*head_dim] == [1, 1, seq, Q_DIM].
     U.assert_shape_dtype(

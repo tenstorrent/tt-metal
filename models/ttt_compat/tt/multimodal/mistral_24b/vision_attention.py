@@ -179,7 +179,7 @@ class TtMistralImageAttention(LightweightModule):
             q_heads_1QSD,
             k_heads_1KSD,
             v_heads_1VSD,
-        ) = ttnn.experimental.nlp_create_qkv_heads(
+        ) = ttnn.experimental.create_qkv_heads(
             xqkv_fused,
             num_heads=self.n_local_heads,
             num_kv_heads=self.n_local_kv_heads,
@@ -212,7 +212,7 @@ class TtMistralImageAttention(LightweightModule):
         ###
         # Output matmul
         ###
-        attn_output_11SH = ttnn.experimental.nlp_concat_heads(
+        attn_output_11SH = ttnn.experimental.concat_heads(
             attn_output_1QSD,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )

@@ -398,7 +398,7 @@ class WanAttention(Module):
         )
 
         def create_heads(inp):
-            out, _, _ = ttnn.experimental.nlp_create_qkv_heads(
+            out, _, _ = ttnn.experimental.create_qkv_heads(
                 inp,
                 num_heads=self.n_local_heads,
                 num_kv_heads=0,

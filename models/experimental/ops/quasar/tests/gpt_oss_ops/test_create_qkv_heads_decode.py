@@ -9,7 +9,7 @@
 # Source capture: generated/ttnn/reports/gpt_oss_demo_aug28_1452/graph_capture.python_io.slim.json
 # ---------------------------------------------------------------------------
 """
-Per-op test: ``ttnn.experimental.nlp_create_qkv_heads_decode`` — every distinct call the model made, as captured.
+Per-op test: ``ttnn.experimental.create_qkv_heads_decode`` — every distinct call the model made, as captured.
 
 Captured 192 call(s) to this op; 1 distinct signature(s) covering 192 of them.
 
@@ -26,12 +26,12 @@ import pytest
 import ttnn
 from models.experimental.ops.quasar.tests.gpt_oss_ops import graph_case as G
 
-_OP = ttnn.experimental.nlp_create_qkv_heads_decode
+_OP = ttnn.experimental.create_qkv_heads_decode
 
 CASES = [
     {
         "id": "00_1x5120_bf16_int-dram",
-        "op": "ttnn.experimental.nlp_create_qkv_heads_decode",
+        "op": "ttnn.experimental.create_qkv_heads_decode",
         "count": 192,
         "args": [
             {
@@ -88,5 +88,5 @@ CASES = [
 
 @G.with_default_mesh()
 @pytest.mark.parametrize("case", CASES, ids=[c["id"] for c in CASES])
-def test_nlp_create_qkv_heads_decode(ttnn_mesh_device, reset_seeds, case):
+def test_create_qkv_heads_decode(ttnn_mesh_device, reset_seeds, case):
     G.run_case(_OP, case, ttnn_mesh_device)

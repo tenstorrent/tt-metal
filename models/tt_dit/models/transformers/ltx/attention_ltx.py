@@ -680,7 +680,7 @@ class LTXAttention(Module):
         k_BHNE = self.norm_k(k_1BNF, num_heads_per_device=self.n_local_heads)
 
         def create_heads(inp):
-            out, _, _ = ttnn.experimental.nlp_create_qkv_heads(
+            out, _, _ = ttnn.experimental.create_qkv_heads(
                 inp, num_heads=self.n_local_heads, num_kv_heads=0, transpose_k_heads=False
             )
             return out

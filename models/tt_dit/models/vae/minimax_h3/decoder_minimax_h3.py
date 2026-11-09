@@ -203,7 +203,7 @@ class MiniMaxH3ViTAttention(Module):
         # both use this op. transpose_k_heads=False because SDPA wants K as [B,H,S,D], and
         # the layout it expects, [Q all heads | K all heads | V all heads], is exactly what
         # _prepare_torch_state's cat([q, k, v], dim=0) already produces.
-        query, key, value = ttnn.experimental.nlp_create_qkv_heads(
+        query, key, value = ttnn.experimental.create_qkv_heads(
             ttnn.reshape(qkv, (batch, 1, seq_len, qkv.shape[-1])),
             num_heads=self.num_heads,
             num_kv_heads=self.num_heads,

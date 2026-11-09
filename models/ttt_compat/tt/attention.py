@@ -924,7 +924,7 @@ class Attention(LightweightModule):
                 memory_config=self.args.get_attn_create_head_input_mem_config(Mode.DECODE),
             )
         else:
-            # bfloat16 is required by nlp_create_qkv_heads_decode
+            # bfloat16 is required by create_qkv_heads_decode
             if self.prefetcher is None:
                 xqkv_fused = ttnn.sharded_to_interleaved(xqkv_fused_sharded, ttnn.L1_MEMORY_CONFIG, ttnn.bfloat16)
                 ttnn.deallocate(xqkv_fused_sharded)
@@ -943,7 +943,7 @@ class Attention(LightweightModule):
             q_heads_pre_rot_1BQD,
             k_heads_pre_rot_1BKD,
             v_heads_1BKD,
-        ) = ttnn.experimental.nlp_create_qkv_heads_decode(
+        ) = ttnn.experimental.create_qkv_heads_decode(
             xqkv_fused,
             num_heads=self.n_local_heads,
             num_kv_heads=self.n_local_kv_heads,
@@ -1035,7 +1035,7 @@ class Attention(LightweightModule):
             ),
         )
 
-        attn_output_cat = ttnn.experimental.nlp_concat_heads_decode(
+        attn_output_cat = ttnn.experimental.concat_heads_decode(
             attn_output_11BH,
             num_heads=self.n_local_heads,
             sub_core_grids=self.prefetcher.all_worker_cores_range_set if self.prefetcher is not None else None,
@@ -1254,7 +1254,7 @@ class Attention(LightweightModule):
             q_heads_1QSD_pre_rot,
             k_heads_1KSD_pre_rot,
             v_heads_1VSD,
-        ) = ttnn.experimental.nlp_create_qkv_heads(
+        ) = ttnn.experimental.create_qkv_heads(
             xqkv_fused,
             num_heads=self.n_local_heads,
             num_kv_heads=self.n_local_kv_heads,
@@ -1418,8 +1418,8 @@ class Attention(LightweightModule):
         ttnn.deallocate(k_heads_1KSD_8b)
         ttnn.deallocate(v_heads_1VSD_8b)
 
-        # For single-user prefill, reshape to expected format for nlp_concat_heads
-        # For batched prefill (batch_size > 1), skip this reshape - nlp_concat_heads handles [B, H, S, D]
+        # For single-user prefill, reshape to expected format for concat_heads
+        # For batched prefill (batch_size > 1), skip this reshape - concat_heads handles [B, H, S, D]
         # IMPORTANT: Reshaping [B, H, S, D] to [1, H, B*S, D] BEFORE concat_heads would scramble data
         # because batch and sequence dimensions are separated by heads. Must reshape AFTER concat_heads.
         if batch_size == 1:
@@ -1430,15 +1430,15 @@ class Attention(LightweightModule):
         ###
         # Output matmul
         ###
-        attn_output_11SH = ttnn.experimental.nlp_concat_heads(
+        attn_output_11SH = ttnn.experimental.concat_heads(
             attn_output_1QSD,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         ttnn.deallocate(attn_output_1QSD)
 
         # For batched prefill, reshape to concatenate batch dimension into sequence
-        # This MUST happen AFTER nlp_concat_heads to preserve correct data layout
-        # nlp_concat_heads outputs [B, 1, S_per_user, H*D], reshape to [1, 1, B*S, H*D]
+        # This MUST happen AFTER concat_heads to preserve correct data layout
+        # concat_heads outputs [B, 1, S_per_user, H*D], reshape to [1, 1, B*S, H*D]
         if batch_size > 1:
             attn_output_11SH = ttnn.reshape(attn_output_11SH, [1, 1, seq_len, -1])
 

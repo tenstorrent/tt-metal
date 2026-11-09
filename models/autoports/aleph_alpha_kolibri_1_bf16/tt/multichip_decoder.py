@@ -753,7 +753,7 @@ class MultichipDecoder(OptimizedDecoder):
         s = x.shape[-2]
         packed = self._input_projection(x)
         packed = ttnn.to_memory_config(packed, DRAM)
-        q, k, v = ttnn.experimental.nlp_create_qkv_heads(packed, num_heads=12, num_kv_heads=1, transpose_k_heads=False)
+        q, k, v = ttnn.experimental.create_qkv_heads(packed, num_heads=12, num_kv_heads=1, transpose_k_heads=False)
         q, k, v = [ttnn.slice(t, (0, 0, 0, 0), (1, h, s, 128)) for t, h in [(q, 12), (k, 1), (v, 1)]]
         q = self._norm(q, "self_attn.q_norm")
         k = self._norm(k, "self_attn.k_norm")
@@ -862,7 +862,7 @@ class MultichipDecoder(OptimizedDecoder):
             (32, 128), shard_grid, ttnn.ShardStrategy.HEIGHT, use_height_and_width_as_shard_shape=True
         )
         packed = self._input_projection(hidden_states)
-        q, k, v = ttnn.experimental.nlp_create_qkv_heads_decode(packed, num_heads=12, num_kv_heads=1, memory_config=mem)
+        q, k, v = ttnn.experimental.create_qkv_heads_decode(packed, num_heads=12, num_kv_heads=1, memory_config=mem)
         q = self._norm(ttnn.to_memory_config(q, DRAM), "self_attn.q_norm")
         k = self._norm(ttnn.to_memory_config(k, DRAM), "self_attn.k_norm")
         if self.sliding:

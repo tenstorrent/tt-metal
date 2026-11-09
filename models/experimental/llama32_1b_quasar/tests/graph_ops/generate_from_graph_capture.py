@@ -547,7 +547,7 @@ def build_cases(capture: Path, verbose=False):
         args = [spec for _, spec in sorted(args)]
 
         # One spec per returned tensor, positionally aligned with what the op
-        # returns — nlp_create_qkv_heads records three ids (Q, K, V) and each gets
+        # returns — create_qkv_heads records three ids (Q, K, V) and each gets
         # its own shape/dtype check. An entry is None when that output is never
         # consumed again in the capture, so its spec was never observed; the entry
         # is kept anyway so the list length still pins the op's output count.

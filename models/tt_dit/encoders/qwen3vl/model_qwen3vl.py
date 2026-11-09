@@ -607,7 +607,7 @@ class Qwen3VlAttention(Module):
     ) -> ttnn.Tensor:
         x = self.qkv_proj.forward(x)
 
-        q, k, v = ttnn.experimental.nlp_create_qkv_heads(
+        q, k, v = ttnn.experimental.create_qkv_heads(
             ttnn.unsqueeze(x, 1),
             num_heads=self._num_local_heads,
             num_kv_heads=self._num_local_kv_heads,

@@ -9,7 +9,7 @@
 # Source capture: generated/ttnn/reports/qwen3_vl_demo_aug27_1509/graph_capture.python_io.slim.json
 # ---------------------------------------------------------------------------
 """
-Per-op test: ``ttnn.experimental.nlp_create_qkv_heads`` — every distinct call the model made, as captured.
+Per-op test: ``ttnn.experimental.create_qkv_heads`` — every distinct call the model made, as captured.
 
 Captured 144 call(s) to this op; 2 distinct signature(s) covering 144 of them.
 
@@ -26,12 +26,12 @@ import pytest
 import ttnn
 from models.experimental.ops.quasar.tests.qwen3_vl_ops import graph_case as G
 
-_OP = ttnn.experimental.nlp_create_qkv_heads
+_OP = ttnn.experimental.create_qkv_heads
 
 CASES = [
     {
         "id": "00_12288x3072_bf16_int-dram",
-        "op": "ttnn.experimental.nlp_create_qkv_heads",
+        "op": "ttnn.experimental.create_qkv_heads",
         "count": 72,
         "args": [
             {
@@ -74,7 +74,7 @@ CASES = [
     },
     {
         "id": "01_4096x6144_bf16_int-dram",
-        "op": "ttnn.experimental.nlp_create_qkv_heads",
+        "op": "ttnn.experimental.create_qkv_heads",
         "count": 72,
         "args": [
             {
@@ -120,5 +120,5 @@ CASES = [
 
 @G.with_default_mesh()
 @pytest.mark.parametrize("case", CASES, ids=[c["id"] for c in CASES])
-def test_nlp_create_qkv_heads(ttnn_mesh_device, reset_seeds, case):
+def test_create_qkv_heads(ttnn_mesh_device, reset_seeds, case):
     G.run_case(_OP, case, ttnn_mesh_device)

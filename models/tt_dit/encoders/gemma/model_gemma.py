@@ -171,7 +171,7 @@ class GemmaAttention(Module):
             col_kwargs["ccl_manager"] = ccl_manager
 
         # Fused QKV: one matmul instead of three, laid out per-TP-shard [q|k|v] heads so the
-        # fused output splits cleanly with nlp_create_qkv_heads (GQA: num_kv_heads < num_heads).
+        # fused output splits cleanly with create_qkv_heads (GQA: num_kv_heads < num_heads).
         qkv_out = (self.num_heads + 2 * self.num_kv_heads) * self.head_dim
         self.wqkv = ColParallelLinear(self.hidden_size, qkv_out, **col_kwargs)
         # o_proj carries the ccl_manager so its head-input all_gather can fuse into the matmul on
@@ -237,7 +237,7 @@ class GemmaAttention(Module):
         # Fused QKV projection + fused head split.
         qkv = self.wqkv(hidden_states, compute_kernel_config=self.compute_config)
         qkv = ttnn.reshape(qkv, (qkv.shape[0], 1, qkv.shape[1], qkv.shape[2]))  # (B,1,seq,(H+2KV)*D)
-        q, k, v = ttnn.experimental.nlp_create_qkv_heads(
+        q, k, v = ttnn.experimental.create_qkv_heads(
             qkv,
             num_heads=self.num_local_heads,
             num_kv_heads=self.num_local_kv_heads,

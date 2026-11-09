@@ -8,7 +8,7 @@ This module implements Gemma 2B style transformer layers using TTNN operations:
     - RMSNorm (using native ttnn.rms_norm)
     - Multi-Query Attention (MQA) with fused QKV and native RoPE
     - GeGLU MLP (gated GELU activation)
-    - Native head operations (nlp_create_qkv_heads, nlp_concat_heads)
+    - Native head operations (create_qkv_heads, concat_heads)
 
 Architecture configurations:
     - Gemma 2B (VLM): width=2048, depth=18, mlp_dim=16384, heads=8, kv_heads=1
@@ -16,9 +16,9 @@ Architecture configurations:
 
 Optimizations over baseline:
     1. Fused QKV projection (1 linear instead of 3)
-    2. Native ttnn.experimental.nlp_create_qkv_heads
+    2. Native ttnn.experimental.create_qkv_heads
     3. Native ttnn.experimental.rotary_embedding (split-half pattern)
-    4. Native ttnn.experimental.nlp_concat_heads for output
+    4. Native ttnn.experimental.concat_heads for output
     5. Native ttnn.rms_norm (single fused kernel)
     6. Pure TTNN RoPE precomputation
 """
@@ -162,9 +162,9 @@ class GemmaAttentionTTNN:
 
     OPTIMIZED:
     1. Fused QKV projection (1 linear instead of 3)
-    2. Native ttnn.experimental.nlp_create_qkv_heads
+    2. Native ttnn.experimental.create_qkv_heads
     3. Native ttnn.experimental.rotary_embedding (split-half pattern)
-    4. Native ttnn.experimental.nlp_concat_heads for output
+    4. Native ttnn.experimental.concat_heads for output
     """
 
     def __init__(
@@ -236,9 +236,9 @@ class GemmaAttentionTTNN:
 
         Key optimizations:
         1. Single fused QKV linear (3x fewer linear ops)
-        2. Native ttnn.experimental.nlp_create_qkv_heads
+        2. Native ttnn.experimental.create_qkv_heads
         3. Native ttnn.experimental.rotary_embedding (split-half pattern)
-        4. Native ttnn.experimental.nlp_concat_heads for output
+        4. Native ttnn.experimental.concat_heads for output
 
         Args:
             hidden_states: TTNN tensor (batch, seq_len, hidden_dim)
@@ -254,7 +254,7 @@ class GemmaAttentionTTNN:
         batch_size = hidden_states.shape[0]
         seq_len = hidden_states.shape[1]
 
-        # Reshape to 4D for nlp_create_qkv_heads: [batch, 1, seq, hidden]
+        # Reshape to 4D for create_qkv_heads: [batch, 1, seq, hidden]
         if len(hidden_states.shape) == 3:
             hidden_states = ttnn.reshape(hidden_states, (batch_size, 1, seq_len, -1))
 
@@ -270,13 +270,13 @@ class GemmaAttentionTTNN:
             compute_kernel_config=self.compute_kernel_config_hifi2,
         )
 
-        # Convert back to interleaved for nlp_create_qkv_heads
+        # Convert back to interleaved for create_qkv_heads
         xqkv = ttnn.to_memory_config(xqkv, ttnn.L1_MEMORY_CONFIG)
 
         # OPTIMIZATION 2: Native TTNN head splitting (no PyTorch transfers!)
         # This splits the fused QKV into separate Q, K, V with proper head layout
         # Output shapes: q=[batch, num_heads, seq, head_dim], k/v=[batch, num_kv_heads, seq, head_dim]
-        q, k, v = ttnn.experimental.nlp_create_qkv_heads(
+        q, k, v = ttnn.experimental.create_qkv_heads(
             xqkv,
             num_heads=self.num_heads,
             num_kv_heads=self.num_kv_heads,
@@ -323,7 +323,7 @@ class GemmaAttentionTTNN:
 
         # OPTIMIZATION 4: Native TTNN head concatenation (no PyTorch transfers!)
         # attn_output: [batch, num_heads, seq, head_dim] -> [batch, 1, seq, num_heads * head_dim]
-        attn_concat = ttnn.experimental.nlp_concat_heads(
+        attn_concat = ttnn.experimental.concat_heads(
             attn_output,
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )

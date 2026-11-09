@@ -23,7 +23,7 @@ Differences from the Gemma3 demo (Gemma4-specific):
     reported steady-state perf (matching the benchmark warmup convention).
 
 All model-level optimizations (BFP8 weights via precision_overrides.json,
-width-sharded RMSNorm, row-major RoPE caches, nlp_concat_heads_decode) are
+width-sharded RMSNorm, row-major RoPE caches, concat_heads_decode) are
 applied automatically because they live in the shared model code that
 ``Gemma4Generator.from_pretrained`` builds.
 

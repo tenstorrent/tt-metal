@@ -437,7 +437,7 @@ class TtTalkerCachedDecoder:
             # Fused per-head split. Emits [1, 1, heads, head_dim] height-sharded in L1, which
             # is exactly the layout flash decode and the cache update want, so no permutes
             # appear in the step at all. It replaces 3 slices, 3 reshapes and 3 permutes.
-            query, key, value = ttnn.experimental.nlp_create_qkv_heads_decode(
+            query, key, value = ttnn.experimental.create_qkv_heads_decode(
                 ttnn.reshape(qkv, (1, 1, 1, qkv.shape[-1])), num_heads=self.heads, num_kv_heads=self.kv_heads
             )
             # QK-norm cannot read height-sharded input, so Q and K come back interleaved for
@@ -468,7 +468,7 @@ class TtTalkerCachedDecoder:
                 compute_kernel_config=self.compute_config,
             )
             # Fused head merge instead of permute + reshape.
-            attended = ttnn.reshape(ttnn.experimental.nlp_concat_heads(attended), (1, 1, self.heads * self.head_dim))
+            attended = ttnn.reshape(ttnn.experimental.concat_heads(attended), (1, 1, self.heads * self.head_dim))
             x = ttnn.add(
                 x,
                 ttnn.linear(

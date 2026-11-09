@@ -4,28 +4,27 @@
 """Gemma4 context-parallel prefill attention with local and packed global ring caches."""
 
 import ttnn
-
 from models.demos.gemma4_d_p.tt.ccl import ccl_reduce_scatter_rows
 from models.demos.gemma4_d_p.tt.prefill_metadata import PrefillLanes
 
-from .weights import load_attention_weights
-from .ring_prefill import init_global_ring_kv_cache, init_sliding_ring_kv_cache
-
 from .global_kv_cache import GLOBAL_HEAD_DIM, GLOBAL_ROTARY_DIM, pack_global_kv_device
 from .operations import (
-    apply_per_head_norm,
     apply_output_projection,
+    apply_per_head_norm,
     apply_qkv_projection,
     prefill_short_lived_memcfg,
     split_qkv_heads_prefill,
 )
 from .ring_prefill import (
     global_ring_prefill_attention,
+    init_global_ring_kv_cache,
+    init_sliding_ring_kv_cache,
     lane_buffer_key,
     sliding_ring_prefill_attention,
     write_chunk_to_global_ring_cache,
     write_chunk_to_sliding_ring_cache,
 )
+from .weights import load_attention_weights
 
 # One buffer pair for each of the five sliding layers between global layers.
 NUM_SWA_HALO_BUFFER_PAIRS = 5
@@ -231,7 +230,7 @@ class Gemma4Attention:
             tt_sdpa = self._cache_and_attention(tt_q, tt_k, tt_v, metadata, chunk_offset, packed_global_rope)
 
         # Concat heads + apply out proj + all_reduce
-        tt_out = ttnn.experimental.nlp_concat_heads(tt_sdpa, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        tt_out = ttnn.experimental.concat_heads(tt_sdpa, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         projected = apply_output_projection(tt_out, self.weights, fidelity_rows=fidelity_rows)
         tt_out.deallocate(True)
         tt_out = ccl_reduce_scatter_rows(projected, self.mesh_config, self.ccl_manager)

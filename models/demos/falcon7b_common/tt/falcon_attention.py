@@ -218,7 +218,7 @@ class TtFalconAttentionPrefill(nn.Module):
         ###########
         ### TMs ###
         ###########
-        query_layer, key_layer, value_layer = ttnn.experimental.nlp_create_qkv_heads_falcon7b(
+        query_layer, key_layer, value_layer = ttnn.experimental.create_qkv_heads_falcon7b(
             fused_query_key_value,
             memory_config=self.model_config["CREATE_QKV_HEADS_OUTPUT_MEMCFG"],
         )
@@ -300,7 +300,7 @@ class TtFalconAttentionPrefill(nn.Module):
         #########################
         ### ATTENTION SELFOUT ###
         #########################
-        attn_output = ttnn.experimental.nlp_concat_heads(
+        attn_output = ttnn.experimental.concat_heads(
             attn_output,
             memory_config=self.model_config["CONCAT_HEADS_OUTPUT_MEMCFG"],
         )
@@ -351,7 +351,7 @@ class TtFalconAttentionPrefill(nn.Module):
         ###########
         ### TMs ###
         ###########
-        query_layer, key_layer, value_layer = ttnn.experimental.nlp_create_qkv_heads_falcon7b(
+        query_layer, key_layer, value_layer = ttnn.experimental.create_qkv_heads_falcon7b(
             fused_query_key_value,
             memory_config=self.model_config["CREATE_QKV_HEADS_OUTPUT_MEMCFG"],
         )
@@ -459,7 +459,7 @@ class TtFalconAttentionPrefill(nn.Module):
 
         layer_present = layer_past if use_cache else None
 
-        attn_outputs = ttnn.experimental.nlp_concat_heads(
+        attn_outputs = ttnn.experimental.concat_heads(
             attention_outputs_concatenated,
             memory_config=self.model_config["CONCAT_HEADS_OUTPUT_MEMCFG"],
         )
@@ -594,7 +594,7 @@ class TtFalconAttentionDecode(nn.Module):
         ###########
         ### TMs ###
         ###########
-        query_layer, key_layer, value_layer = ttnn.experimental.nlp_create_qkv_heads_falcon7b(
+        query_layer, key_layer, value_layer = ttnn.experimental.create_qkv_heads_falcon7b(
             fused_query_key_value,
             memory_config=self.model_config["CREATE_QKV_HEADS_OUTPUT_MEMCFG"],
         )
@@ -815,7 +815,7 @@ class TtFalconAttentionDecode(nn.Module):
         #########################
         ### ATTENTION SELFOUT ###
         #########################
-        attn_output = ttnn.experimental.nlp_concat_heads(
+        attn_output = ttnn.experimental.concat_heads(
             attn_output,
             memory_config=self.model_config["CONCAT_HEADS_OUTPUT_MEMCFG"],
         )

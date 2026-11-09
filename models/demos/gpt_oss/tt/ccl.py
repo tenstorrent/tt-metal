@@ -163,7 +163,7 @@ class CCLManager:
 
     def get_decode_qkv_heads(self, num_heads, num_kv_heads, head_dim):
         """BF16 Q / K / V head tensors ([1, 1, heads, head_dim], head h in row h; Q and V on core (0, 0), K on (1, 0):
-        the one-user layout nlp_create_qkv_heads_decode(overlap_qk_coregrid=False) produces), written by the streamed
+        the one-user layout create_qkv_heads_decode(overlap_qk_coregrid=False) produces), written by the streamed
         QKV of every layer (padding head rows stay zero)."""
         key = ("qkv_heads", num_heads, num_kv_heads, head_dim)
         if key not in self._decode_stream_buffers:

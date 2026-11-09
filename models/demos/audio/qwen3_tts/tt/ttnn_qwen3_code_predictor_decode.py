@@ -446,7 +446,7 @@ class TtCodePredictorCachedDecoder:
         x = self._widen(project(x, self.p, self.compute_config))
         for index, layer in enumerate(self.p["layers"]):
             qkv = self._qkv(self._norm(x, layer, "input_layernorm"), layer, "qkv")
-            query, key, value = ttnn.experimental.nlp_create_qkv_heads_decode(
+            query, key, value = ttnn.experimental.create_qkv_heads_decode(
                 ttnn.reshape(qkv, (1, 1, 1, qkv.shape[-1])), num_heads=self.heads, num_kv_heads=self.kv_heads
             )
             query = ttnn.sharded_to_interleaved(query)
@@ -474,9 +474,7 @@ class TtCodePredictorCachedDecoder:
                     scale=self.scale,
                     compute_kernel_config=self.compute_config,
                 )
-                attended = ttnn.reshape(
-                    ttnn.experimental.nlp_concat_heads(attended), (1, 1, self.heads * self.head_dim)
-                )
+                attended = ttnn.reshape(ttnn.experimental.concat_heads(attended), (1, 1, self.heads * self.head_dim))
             x = self._residual(x, self._o_proj(attended, layer, "o_proj"))
             x = self._residual(x, self._mlp(self._norm(x, layer, "post_attention_layernorm"), layer))
         final = {"norm": self.p["norm"], "norm_wide": getattr(self, "_final_norm_wide", None)}

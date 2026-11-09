@@ -546,7 +546,7 @@ class FusedAttention(DecodeAttention):
             orientation=ttnn.ShardOrientation.ROW_MAJOR,
             use_height_and_width_as_shard_shape=True,
         )
-        combined = ttnn.experimental.nlp_concat_heads_decode(
+        combined = ttnn.experimental.concat_heads_decode(
             ttnn.to_memory_config(attention, memory),
             num_heads=cfg.num_attention_heads,
         )

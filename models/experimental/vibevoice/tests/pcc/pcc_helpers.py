@@ -305,7 +305,7 @@ def tt_decoder_layer_decode_forward(
 
 
 # Decoder-layer decode numeric floors (seed-0 random hiddens, positions 0…9).
-# Historical baseline (pre nlp_create_qkv_heads / pre flash-decode): min PCC≈0.999985.
+# Historical baseline (pre create_qkv_heads / pre flash-decode): min PCC≈0.999985.
 # Current BH production path (fused or fp32 RoPE + bf16 flash-decode / fp32 manual) measures
 # min PCC≈0.9982, max|Δ|≈0.20, rel-Frob≈0.060 on this random-hidden probe. Floors track that
 # with headroom; e2e/decode PCC cover end-to-end quality.

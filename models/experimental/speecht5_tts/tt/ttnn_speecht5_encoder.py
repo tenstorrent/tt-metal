@@ -301,7 +301,7 @@ class TTNNSpeechT5Attention:
             compute_kernel_config=self.linear_compute_config,
         )
 
-        # Add batch dimension for nlp_create_qkv_heads: [batch, 1, seq_len, 3*hidden_size]
+        # Add batch dimension for create_qkv_heads: [batch, 1, seq_len, 3*hidden_size]
         if len(qkv_states.shape) == 3:
             qkv_states = ttnn.unsqueeze(qkv_states, dim=1)
 
@@ -314,7 +314,7 @@ class TTNNSpeechT5Attention:
             query_states,
             key_states_t,
             value_states,
-        ) = ttnn.experimental.nlp_create_qkv_heads(
+        ) = ttnn.experimental.create_qkv_heads(
             qkv_states,
             memory_config=ttnn.L1_MEMORY_CONFIG,
             num_heads=self.num_heads,
@@ -404,7 +404,7 @@ class TTNNSpeechT5Attention:
 
         # Use optimized head concatenation: replaces permute + reshape with single op
         # [batch, heads, seq, head_dim] -> [batch, 1, seq, hidden]
-        attn_output = ttnn.experimental.nlp_concat_heads(attn_output, memory_config=ttnn.L1_MEMORY_CONFIG)
+        attn_output = ttnn.experimental.concat_heads(attn_output, memory_config=ttnn.L1_MEMORY_CONFIG)
 
         # Remove the extra dimension: [batch, 1, seq, hidden] -> [batch, seq, hidden]
         attn_output = ttnn.squeeze(attn_output, dim=1)

@@ -26,7 +26,7 @@ What a case run does
 3. call the op;
 4. check every returned tensor against its captured output spec — shape, dtype,
    layout and memory config (so a relayout op that hands back its input untouched
-   fails), plus finiteness. A multi-output op such as ``nlp_create_qkv_heads`` has
+   fails), plus finiteness. A multi-output op such as ``create_qkv_heads`` has
    all of Q, K and V checked. Where the capture never observed an output, what the
    call itself pins down is used instead (``_derived_spec``), and ops whose result
    metadata cannot show they did anything get an explicit ``POSTCONDITION``;
@@ -735,8 +735,8 @@ def _ref_view(inputs, kwargs, case):
 
 
 # The head ops below mirror the references the hand-written tests/ops suite verified
-# on hardware — test_nlp_create_qkv_heads.py:57-60, test_nlp_create_qkv_heads_decode.py:110-113,
-# test_nlp_concat_heads.py:51 — so a permutation or a mis-split of the fused QKV is
+# on hardware — test_create_qkv_heads.py:57-60, test_create_qkv_heads_decode.py:110-113,
+# test_concat_heads.py:51 — so a permutation or a mis-split of the fused QKV is
 # caught here too, instead of only shape/dtype. Each returns None if the captured
 # shapes do not match the layout it models, so an unfamiliar capture falls back to the
 # structural checks rather than failing against a reference that does not apply.
@@ -849,10 +849,10 @@ GOLDEN = {
     "ttnn.embedding": _ref_embedding,
     "ttnn.reshape": _ref_view,
     "ttnn.unsqueeze_to_4D": _ref_view,
-    "ttnn.experimental.nlp_create_qkv_heads": _ref_create_qkv_heads,
-    "ttnn.experimental.nlp_create_qkv_heads_decode": _ref_create_qkv_heads_decode,
-    "ttnn.experimental.nlp_concat_heads": _ref_concat_heads,
-    "ttnn.experimental.nlp_concat_heads_decode": _ref_concat_heads_decode,
+    "ttnn.experimental.create_qkv_heads": _ref_create_qkv_heads,
+    "ttnn.experimental.create_qkv_heads_decode": _ref_create_qkv_heads_decode,
+    "ttnn.experimental.concat_heads": _ref_concat_heads,
+    "ttnn.experimental.concat_heads_decode": _ref_concat_heads_decode,
 }
 
 
@@ -1156,7 +1156,7 @@ def _check_output(out, case, mesh_device, op_name):
     """Check every returned tensor against its captured spec, then its values.
 
     ``case["outs"]`` holds one spec per tensor the op returned in the capture, in
-    order — multi-output ops (``nlp_create_qkv_heads``: Q, K, V) get all of theirs
+    order — multi-output ops (``create_qkv_heads``: Q, K, V) get all of theirs
     checked, not just the first. An entry is None when that output was never
     consumed again in the capture, so its spec was never observed; the entry is
     still present, which is what makes the output *count* checkable, and the checks
@@ -1296,7 +1296,7 @@ def run_case(op, case, mesh_device, *, op_name=None, pcc=None, rtol=None):
         # so let them propagate there instead of masking them as a skip. Gate on _is_quasar (not grid size):
         # the emulator misreports its grid, and Quasar today is only the emulator/sim.
         _too_small = _is_quasar(mesh_device) and (
-            "Target number of cores" in msg  # e.g. nlp_concat_heads_decode num_heads(32) > device cores
+            "Target number of cores" in msg  # e.g. concat_heads_decode num_heads(32) > device cores
             or "must not contain more cores than the device" in msg  # SDPA program-config grid > device
             or "exceeds grid size" in msg
             or "Out of Memory" in msg  # e.g. concat output/intermediate L1 > 2-bank capacity

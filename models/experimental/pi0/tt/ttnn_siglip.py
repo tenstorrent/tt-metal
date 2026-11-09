@@ -15,8 +15,8 @@ SigLIP Architecture:
 Optimizations over baseline:
     1. Unfold + TTNN linear for patch embedding (from Gemma3)
     2. Fused QKV projection (single linear instead of 3)
-    3. Native ttnn.experimental.nlp_create_qkv_heads
-    4. Native ttnn.experimental.nlp_concat_heads for output
+    3. Native ttnn.experimental.create_qkv_heads
+    4. Native ttnn.experimental.concat_heads for output
 """
 
 import math
@@ -357,8 +357,8 @@ class SigLIPAttentionTTNN:
 
         Key optimizations:
         1. Single fused QKV linear (3x fewer linear ops)
-        2. Native ttnn.experimental.nlp_create_qkv_heads
-        3. Native ttnn.experimental.nlp_concat_heads
+        2. Native ttnn.experimental.create_qkv_heads
+        3. Native ttnn.experimental.concat_heads
 
         Args:
             hidden_states: TTNN tensor (batch_size, seq_len, hidden_size)
@@ -369,7 +369,7 @@ class SigLIPAttentionTTNN:
         batch_size = hidden_states.shape[0]
         seq_len = hidden_states.shape[1]
 
-        # Reshape to 4D for nlp_create_qkv_heads: [batch, 1, seq, hidden]
+        # Reshape to 4D for create_qkv_heads: [batch, 1, seq, hidden]
         if len(hidden_states.shape) == 3:
             hidden_states = ttnn.reshape(hidden_states, (batch_size, 1, seq_len, -1))
 
@@ -387,7 +387,7 @@ class SigLIPAttentionTTNN:
 
         # OPTIMIZATION 2: Native TTNN head splitting
         # This splits the fused QKV into separate Q, K, V with proper head layout
-        q_heads, k_heads, v_heads = ttnn.experimental.nlp_create_qkv_heads(
+        q_heads, k_heads, v_heads = ttnn.experimental.create_qkv_heads(
             xqkv_fused,
             num_heads=self.num_heads,
             num_kv_heads=self.num_heads,  # SigLIP uses MHA, not MQA
@@ -425,7 +425,7 @@ class SigLIPAttentionTTNN:
 
         # OPTIMIZATION 3: Native TTNN head concatenation
         # This concatenates heads back to [batch, 1, seq, num_heads * padded_head_dim]
-        attn_concat = ttnn.experimental.nlp_concat_heads(
+        attn_concat = ttnn.experimental.concat_heads(
             attn_output,
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )

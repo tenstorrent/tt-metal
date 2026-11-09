@@ -53,11 +53,11 @@ def decode_forward(
         raise ValueError(f"Decode mode requires seq_len=1, got {seq_len}")
 
     # QKV projection. With TP>1 the per-device QKV is small enough to fit in
-    # an L1 width-sharded layout that nlp_create_qkv_heads_decode consumes
+    # an L1 width-sharded layout that create_qkv_heads_decode consumes
     # directly. With TP=1 (e.g. single Blackhole card) the per-device QKV is
     # TP× larger and overflows the per-core CB if width-sharded, so we use
     # DRAM interleaved instead. The kernel-side aligned-read fix in
-    # nlp_create_qkv_heads_decode (PR #43292) handles the BH NOC alignment
+    # create_qkv_heads_decode (PR #43292) handles the BH NOC alignment
     # constraint for DRAM-interleaved inputs; before that fix this path
     # produced silent corruption (every odd Q/K/V head returned the previous
     # user's row).
@@ -70,7 +70,7 @@ def decode_forward(
     num_local_kv_heads = mesh_config.shard_size(config.num_kv_heads)
     head_dim = config.head_dim
 
-    tt_q, tt_k, tt_v = ttnn.experimental.nlp_create_qkv_heads_decode(
+    tt_q, tt_k, tt_v = ttnn.experimental.create_qkv_heads_decode(
         xqkv_fused,
         num_heads=num_local_heads,
         num_kv_heads=num_local_kv_heads,
@@ -161,7 +161,7 @@ def decode_forward(
     tt_q.deallocate(True)
 
     # Concat heads and apply output projection
-    tt_sdpa_out = ttnn.experimental.nlp_concat_heads_decode(tt_sdpa_tensor, num_heads=num_local_heads)
+    tt_sdpa_out = ttnn.experimental.concat_heads_decode(tt_sdpa_tensor, num_heads=num_local_heads)
     tt_sdpa_tensor.deallocate(True)
 
     tt_out = ttnn.linear(

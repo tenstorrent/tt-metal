@@ -1458,7 +1458,7 @@ class Qwen36Model:
         )
         assert len(warm_positions) == B, f"warm_positions needs one position per user ({B})"
         rows = B * T
-        # One decode tile carries every row of every user: the hard cap on B*(K+1) (nlp_create /
+        # One decode tile carries every row of every user: the hard cap on B*(K+1) (create /
         # concat_heads_decode cap at 32 users, and every decode matmul config is a single tile row).
         assert rows <= ttnn.TILE_SIZE, f"verify bucket {B} users x T={T} = {rows} rows exceeds one tile"
         # The TILE_SIZE bucket runs the DECODE matmul config so every layer takes the DRAM-sharded

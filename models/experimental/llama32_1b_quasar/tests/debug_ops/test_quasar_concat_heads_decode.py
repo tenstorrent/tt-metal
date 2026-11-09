@@ -1,18 +1,18 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Standalone repro for the Quasar nlp_concat_heads_decode NUM_HEADS-core requirement (llama32_1b decode STAGE 9).
+"""Standalone repro for the Quasar concat_heads_decode NUM_HEADS-core requirement (llama32_1b decode STAGE 9).
 
 The llama decode path merges the per-head SDPA output back into the hidden dim with
-``ttnn.experimental.nlp_concat_heads_decode(attn_output_sharded, num_heads=32)`` (attention_1d.py:732).
+``ttnn.experimental.concat_heads_decode(attn_output_sharded, num_heads=32)`` (attention_1d.py:732).
 Its output is HEIGHT_SHARDED with **one head-column per core**, so
 ``compute_output_specs`` builds the output grid via
 ``num_cores_to_corerangeset(num_heads, device->compute_with_storage_grid_size())``
-(nlp_concat_heads_decode_device_operation.cpp:27) and even the sub-core path requires
+(concat_heads_decode_device_operation.cpp:27) and even the sub-core path requires
 ``sub_core_grids.num_cores() >= num_heads`` (line 65). So the op needs **num_heads (=32) cores** regardless of
 batch.
 
-This is the crucial contrast with ``nlp_create_qkv_heads_decode``, which needs only ``num_users`` (= batch = 1)
+This is the crucial contrast with ``create_qkv_heads_decode``, which needs only ``num_users`` (= batch = 1)
 cores -- which is why the llama decode gets *past* create_qkv (STAGE 4) but FATALs at concat (STAGE 9) on the
 2-compute-node emulator:
 
@@ -28,7 +28,7 @@ it SKIPS on a device with < num_heads cores today (the emulator), and PASSES on 
 
 Run (Quasar sim, FULL grid -- do NOT clamp with TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE):
     TTSIM_QSR_TC_LEGACY_TRUNCATION_ALIAS=0 TT_METAL_SIMULATOR=~/sim/libttsim.so MESH_DEVICE=N150 \
-        pytest models/experimental/llama32_1b_quasar/tests/debug_ops/test_quasar_nlp_concat_heads_decode.py
+        pytest models/experimental/llama32_1b_quasar/tests/debug_ops/test_quasar_concat_heads_decode.py
 """
 
 import pytest
@@ -47,7 +47,7 @@ def _batch_height_sharded(attn_torch, mesh_device, batch):
     """Per-head decode SDPA output -> HEIGHT_SHARDED over `batch` cores, shard (N_HEADS, HEAD_DIM).
 
     Mirrors decode_scores_memcfg (attention_1d.py:1727-1734) and the op's input contract
-    (nlp_concat_heads_decode_device_operation.cpp: HEIGHT_SHARDED, shard[0]==padded_heads, num_cores==num_users).
+    (concat_heads_decode_device_operation.cpp: HEIGHT_SHARDED, shard[0]==padded_heads, num_cores==num_users).
     Built via RM upload + quasar.tilize (from_torch(TILE) hangs on the sim), then interleaved_to_sharded."""
     rm = ttnn.from_torch(
         attn_torch,
@@ -75,8 +75,8 @@ def _pcc(a, b):
 
 
 @pytest.mark.parametrize("batch", [1], ids=["decode-batch1"])
-def test_nlp_concat_heads_decode(mesh_device, batch):
-    """Stock nlp_concat_heads_decode. Needs num_heads (=32) cores for its output grid, so it fits ONLY on a
+def test_concat_heads_decode(mesh_device, batch):
+    """Stock concat_heads_decode. Needs num_heads (=32) cores for its output grid, so it fits ONLY on a
     device exposing >= 32 compute cores.
 
     NOTE the dispatch-mode dependency of the grid: with TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="3,2",
@@ -91,7 +91,7 @@ def test_nlp_concat_heads_decode(mesh_device, batch):
     ncores = int(grid.x) * int(grid.y)
     if ncores < N_HEADS:
         pytest.skip(
-            f"nlp_concat_heads_decode needs num_heads={N_HEADS} cores for its output grid; device has "
+            f"concat_heads_decode needs num_heads={N_HEADS} cores for its output grid; device has "
             f"{grid.x}x{grid.y}={ncores}. This is the emulator FATAL (work_split.cpp:99). Fix target: a "
             f"grid-agnostic device head-merge that fits <= {ncores} cores (not a host fallback)."
         )
@@ -100,7 +100,7 @@ def test_nlp_concat_heads_decode(mesh_device, batch):
     attn = torch.randn(1, batch, N_HEADS, HEAD_DIM, dtype=torch.bfloat16)
     attn_sharded = _batch_height_sharded(attn, mesh_device, batch)
 
-    out = ttnn.experimental.nlp_concat_heads_decode(attn_sharded, num_heads=N_HEADS)
+    out = ttnn.experimental.concat_heads_decode(attn_sharded, num_heads=N_HEADS)
     ttnn.synchronize_device(mesh_device)
     o = ttnn.to_torch(out)
     padded_batch = ((batch + 31) // 32) * 32
@@ -126,7 +126,7 @@ def _grid_agnostic_head_merge(attn_torch, mesh_device, batch):
     In ROW_MAJOR that is a contiguous reshape (same flat order), so upload row-major DRAM-interleaved, reshape to
     merge the (n_heads, head_dim) axes into the hidden dim, then quasar.tilize to the WO-matmul input layout.
     None of these steps shard by head, so this fits ANY grid -- including the 2-compute-node emulator where the
-    stock nlp_concat_heads_decode (num_heads cores) FATALs. This is the model-side fix candidate for Quasar."""
+    stock concat_heads_decode (num_heads cores) FATALs. This is the model-side fix candidate for Quasar."""
     rm = ttnn.from_torch(
         attn_torch,
         dtype=ttnn.bfloat16,
@@ -146,8 +146,8 @@ def _grid_agnostic_head_merge(attn_torch, mesh_device, batch):
 
 
 @pytest.mark.parametrize("batch", [1], ids=["decode-batch1"])
-def test_nlp_concat_heads_decode_grid_agnostic(mesh_device, batch):
-    """Grid-agnostic device equivalent of nlp_concat_heads_decode (fits <= 2 cores, NO num_heads-core
+def test_concat_heads_decode_grid_agnostic(mesh_device, batch):
+    """Grid-agnostic device equivalent of concat_heads_decode (fits <= 2 cores, NO num_heads-core
     requirement, NO host fallback). PASSES on the 2-compute-node emulator (unlike the stock op, which SKIPS
     there). Validates it matches the torch head-merge reference -- this is the model-side fix candidate: route
     the decode concat through this device path on Quasar small grids."""
@@ -190,7 +190,7 @@ def _grid_agnostic_head_merge_device(x, batch):
 
 
 @pytest.mark.parametrize("batch", [1], ids=["decode-batch1"])
-def test_nlp_concat_heads_decode_grid_agnostic_sharded(mesh_device, batch):
+def test_concat_heads_decode_grid_agnostic_sharded(mesh_device, batch):
     """Grid-agnostic merge from the REAL decode SDPA layout: a HEIGHT_SHARDED input (via _batch_height_sharded),
     run through the same deshard -> untilize -> reshape -> pad -> tilize the e2e helper installs. Covers the
     x.is_sharded()/sharded_to_interleaved + untilize branch that the host-row-major variant above bypasses, so

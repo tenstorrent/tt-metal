@@ -565,7 +565,7 @@ class Ideogram4TransformerBlock(Module):
             trans_mat=self.rope_trans_mat,
             per_head_norm=True,
         )
-        v, _, _ = ttnn.experimental.nlp_create_qkv_heads(
+        v, _, _ = ttnn.experimental.create_qkv_heads(
             v_f, num_heads=self.n_local_heads, num_kv_heads=0, transpose_k_heads=False
         )
 

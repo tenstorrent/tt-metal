@@ -10,7 +10,7 @@ No Meta-format weight conversion needed. No transformation matrices needed.
 Handles:
 - Per-head RMSNorm (q_norm, k_norm, v_norm) via reshape trick
 - Partial RoPE for global layers (split, rotate, concat)
-- K=V tying (fused Q+K+K weight, standard nlp_create_qkv_heads split)
+- K=V tying (fused Q+K+K weight, standard create_qkv_heads split)
 - No bias on any projection
 - scaling=1.0 (no 1/sqrt(d_k))
 """
@@ -140,7 +140,7 @@ def split_qkv_heads_prefill(
     memory_config selects storage for the resulting activations."""
     num_local_heads = config.num_attention_heads // tp
     num_local_kv_heads = 1 if kv_replicated else config.num_key_value_heads // tp
-    return ttnn.experimental.nlp_create_qkv_heads(
+    return ttnn.experimental.create_qkv_heads(
         xqkv_fused,
         num_heads=num_local_heads,
         num_kv_heads=num_local_kv_heads,

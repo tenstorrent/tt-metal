@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 //
-// BGE-M3 head-split writer for nlp_create_qkv_heads.
+// BGE-M3 head-split writer for create_qkv_heads.
 //
 // Companion to reader_qkv_heads_headsplit.cpp. Writes (heads_per_group) Q heads
 // + (heads_per_group) K heads + same V heads per work unit, with the destination

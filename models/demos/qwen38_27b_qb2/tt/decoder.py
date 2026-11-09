@@ -655,7 +655,7 @@ class Qwen38Decoder(LightweightModule):
                     ttnn.ShardOrientation.ROW_MAJOR,
                 ),
             )
-            q, k, v = ttnn.experimental.nlp_create_qkv_heads_decode(
+            q, k, v = ttnn.experimental.create_qkv_heads_decode(
                 ttnn.reshape(packed[:, :, : q_width + 2 * kv_width], [1, 1, b, q_width + 2 * kv_width]),
                 num_heads=c.num_attention_heads,
                 num_kv_heads=c.num_key_value_heads,
@@ -738,7 +738,7 @@ class Qwen38Decoder(LightweightModule):
         if compact_attention:
             packed = ttnn.to_memory_config(packed, ttnn.L1_MEMORY_CONFIG)
         qkv_width = (c.num_attention_heads + 2 * c.num_key_value_heads) * c.head_dim
-        q, k, v = ttnn.experimental.nlp_create_qkv_heads_decode(
+        q, k, v = ttnn.experimental.create_qkv_heads_decode(
             ttnn.reshape(packed[..., :qkv_width], [1, 1, b, qkv_width]),
             num_heads=c.num_attention_heads,
             num_kv_heads=c.num_key_value_heads,

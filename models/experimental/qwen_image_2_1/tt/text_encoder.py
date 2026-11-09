@@ -184,7 +184,7 @@ class Qwen3VLTextEncoder:
             ttnn.deallocate(x)
             if len(qkv.shape) != 4:
                 qkv = ttnn.reshape(qkv, [1, 1, Sp, -1])
-            q, k, v = ttnn.experimental.nlp_create_qkv_heads(
+            q, k, v = ttnn.experimental.create_qkv_heads(
                 qkv,
                 num_heads=c.heads,
                 num_kv_heads=c.kv_heads,

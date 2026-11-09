@@ -518,7 +518,7 @@ class AttentionOutputProjection:
 
     def __call__(self, heads):
         self._validate_input(heads)
-        concatenated = ttnn.experimental.nlp_concat_heads(heads, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        concatenated = ttnn.experimental.concat_heads(heads, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         partial = ttnn.matmul(
             concatenated,
             self.o_weight,

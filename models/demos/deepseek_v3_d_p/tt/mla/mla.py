@@ -322,7 +322,7 @@ class ttMLA:
             )
             if use_gate:
                 # Kimi-K3 output gate. mapper_tp1 N-shards the 12288 onto the same contiguous head
-                # ranges q_b_proj uses, so the gate multiply after nlp_concat_heads needs no reshape.
+                # ranges q_b_proj uses, so the gate multiply after concat_heads needs no reshape.
                 result["g_proj"] = ttnn.as_tensor(
                     g_proj,
                     device=device,
@@ -1579,7 +1579,7 @@ class ttMLA:
             ttnn.deallocate(qr)
 
         # The Q stem uses interleaved head creation. Write the two channel regions directly.
-        tt_q_nope, tt_q_rope = ttnn.experimental.nlp_create_q_heads_split(
+        tt_q_nope, tt_q_rope = ttnn.experimental.create_q_heads_split(
             tt_q,
             num_heads=num_heads_local,
             split_head_dim=self.qk_nope_head_dim,
@@ -1982,12 +1982,12 @@ class ttMLA:
     def _o_proj_epilogue(
         self, attn_out: ttnn.Tensor, seq_len_local: int, hidden_states: Optional[ttnn.Tensor] = None
     ) -> ttnn.Tensor:
-        """Shared nlp_concat_heads -> (K3 gate) -> o_proj -> TP reduce-scatter epilogue.
+        """Shared concat_heads -> (K3 gate) -> o_proj -> TP reduce-scatter epilogue.
 
-        The gate multiply sits after nlp_concat_heads so g needs no head split, and cannot move before
+        The gate multiply sits after concat_heads so g needs no head split, and cannot move before
         wkv_b2: it acts in v_head_dim space, and g*(attn @ W_b2) != (g*attn) @ W_b2.
         """
-        v_out = ttnn.experimental.nlp_concat_heads(attn_out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        v_out = ttnn.experimental.concat_heads(attn_out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         if self._use_gate:
             assert hidden_states is not None, "gated MLA needs hidden_states to compute g_proj"
             g = self._output_gate(hidden_states, seq_len_local)

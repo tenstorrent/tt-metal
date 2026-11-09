@@ -111,7 +111,7 @@ class _Case:
         )
 
     def sharded_mem(self):
-        """The loop's one-user-per-core layout (``nlp_create_qkv_heads_decode``'s output spec: B cores, [32, D])."""
+        """The loop's one-user-per-core layout (``create_qkv_heads_decode``'s output spec: B cores, [32, D])."""
         cores = core_range_set(row_major_cores(compute_grid(self.device), self.B))
         return ttnn.MemoryConfig(
             ttnn.TensorMemoryLayout.HEIGHT_SHARDED,

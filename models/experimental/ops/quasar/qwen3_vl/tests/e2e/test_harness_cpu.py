@@ -637,7 +637,7 @@ def test_concat_heads_decode_workaround_only_on_grids_smaller_than_heads():
     from models.experimental.ops.quasar.qwen3_vl.tests.e2e import op_overrides as O
 
     wa = next(w for w in O.WORKAROUNDS if w.name == "concat_heads_decode_small_grid")
-    assert wa.target == "ttnn.experimental.nlp_concat_heads_decode"
+    assert wa.target == "ttnn.experimental.concat_heads_decode"
     assert wa.applies((_FakeTensor(2, 1),), {"num_heads": 32})
     assert not wa.applies((_FakeTensor(8, 8),), {"num_heads": 32})
     assert not wa.applies((_FakeTensor(2, 1),), {})  # no head count: leave the op alone

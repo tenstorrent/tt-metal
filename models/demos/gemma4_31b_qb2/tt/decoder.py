@@ -721,7 +721,7 @@ class Decoder:
         raise ValueError("No configured full-attention SDPA Q chunk fits Blackhole L1")
 
     def _concat_heads(self, attn):
-        return ttnn.experimental.nlp_concat_heads(attn, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        return ttnn.experimental.concat_heads(attn, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
     def _decode_rope(self, x, cos, sin):
         # The native single-user RoPE path exposes its 32 padded head rows.
@@ -733,7 +733,7 @@ class Decoder:
     def _prefill_qkv(self, x, start):
         tied = not self.sliding
         fused = self._pref_linear(self._input_norm(x, "input_layernorm", False), "qk" if tied else "qkv")
-        q, k, v = ttnn.experimental.nlp_create_qkv_heads(
+        q, k, v = ttnn.experimental.create_qkv_heads(
             fused,
             num_heads=8,
             num_kv_heads=self.kv_heads,
@@ -970,7 +970,7 @@ class Decoder:
         fused = self._dlinear(normalized, "qkv")
         spec = fused.memory_config().shard_spec
         assert spec.shape[1] * spec.grid.num_cores() == fused.shape[-1], "QKV head reader requires exact output shards"
-        q, k, v = ttnn.experimental.nlp_create_qkv_heads_decode(
+        q, k, v = ttnn.experimental.create_qkv_heads_decode(
             fused, num_heads=8, num_kv_heads=self.kv_heads, memory_config=ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG
         )
         ttnn.deallocate(fused)
@@ -1078,7 +1078,7 @@ class Decoder:
             ttnn.ShardOrientation.ROW_MAJOR,
             use_height_and_width_as_shard_shape=True,
         )
-        joined = ttnn.experimental.nlp_concat_heads_decode(ttnn.to_memory_config(attn, mem), num_heads=8)
+        joined = ttnn.experimental.concat_heads_decode(ttnn.to_memory_config(attn, mem), num_heads=8)
         joined = ttnn.reshape(
             joined, ttnn.Shape([1, 1, batch, joined.shape[3]]), ttnn.Shape([1, 1, 32, joined.shape[3]])
         )

@@ -15,9 +15,9 @@ Source capture: `generated/ttnn/reports/qwen3_vl_demo_aug27_1509/graph_capture.j
 | `RotaryEmbeddingLlamaDeviceOperation` | 28800 | `ttnn::experimental::prim::RotaryEmbeddingLlamaMultiCoreSharded` | 28798 (100%) |
 | `RotaryEmbeddingLlamaDeviceOperation` | 288 | `ttnn::experimental::prim::RotaryEmbeddingLlamaMultiCore` | 285 (99%) |
 | `PagedUpdateCacheDeviceOperation` | 28800 | `ttnn::experimental::prim::PagedUpdateCacheProgramFactory` | 28799 (100%) |
-| `NLPCreateQKVHeadsDecodeDeviceOperation` | 14400 | `ttnn::experimental::prim::NLPCreateQKVHeadsDecodeInterleavedProgramFactory` | 14399 (100%) |
+| `CreateQKVHeadsDecodeDeviceOperation` | 14400 | `ttnn::experimental::prim::CreateQKVHeadsDecodeInterleavedProgramFactory` | 14399 (100%) |
 | `SdpaDecodeDeviceOperation` | 14400 | `ttnn::device_operation::MeshDeviceOperationAdapter<ttnn::prim::SdpaDecodeDeviceOperation>::DirectDescriptorFactory` | 14399 (100%) |
-| `NLPConcatHeadsDecodeDeviceOperation` | 14400 | `ttnn::experimental::prim::NLPConcatHeadsDecodeProgramFactory` | 14399 (100%) |
+| `ConcatHeadsDecodeDeviceOperation` | 14400 | `ttnn::experimental::prim::ConcatHeadsDecodeProgramFactory` | 14399 (100%) |
 | `UntilizeCodegenDeviceOperation` | 2431 | `ttnn::prim::UntilizeCodegenProgramFactory` | 2425 (100%) |
 | `SliceDeviceOperation` | 1758 | `ttnn::prim::SliceTileProgramFactory` | 1751 (100%) |
 | `EmbeddingsDeviceOperation` | 800 | `ttnn::prim::EmbeddingsRMProgramFactory` | 799 (100%) |
@@ -30,9 +30,9 @@ Source capture: `generated/ttnn/reports/qwen3_vl_demo_aug27_1509/graph_capture.j
 | `TypecastDeviceOperation` | 448 | `ttnn::prim::TypecastProgramFactory` | 438 (98%) |
 | `CopyDeviceOperation` | 400 | `ttnn::prim::CopyDeviceOperation::DefaultTilized` | 399 (100%) |
 | `ArgMaxDeviceOperation` | 400 | `ttnn::prim::ArgMaxMultiCoreProgramFactory` | 399 (100%) |
-| `NlpCreateHeadsDeviceOperation` | 144 | `ttnn::operations::experimental::transformer::NlpCreateHeadsDeviceOperation::Interleaved` | 142 (99%) |
+| `CreateHeadsDeviceOperation` | 144 | `ttnn::operations::experimental::transformer::CreateHeadsDeviceOperation::Interleaved` | 142 (99%) |
 | `SDPAOperation` | 144 | `ttnn::prim::SDPAOperation::SDPAProgramFactory` | 142 (99%) |
-| `NLPConcatHeadsDeviceOperation` | 144 | `ttnn::experimental::prim::NLPConcatHeadsProgramFactory` | 142 (99%) |
+| `ConcatHeadsDeviceOperation` | 144 | `ttnn::experimental::prim::ConcatHeadsProgramFactory` | 142 (99%) |
 | `MinimalMatmulDeviceOperation` | 144 | `ttnn::experimental::prim::MinimalMatmulProgramFactory` | 142 (99%) |
 | `PagedFillCacheDeviceOperation` | 144 | `ttnn::experimental::prim::PagedFillCacheProgramFactory` | 143 (99%) |
 | `UnaryDeviceOperation` | 86 | `ttnn::operations::unary::UnaryDeviceOperation::ProgramFactory` | 84 (98%) |

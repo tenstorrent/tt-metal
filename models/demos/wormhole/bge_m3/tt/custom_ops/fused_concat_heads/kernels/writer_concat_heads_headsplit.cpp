@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 //
-// BGE-M3 head-split writer for nlp_concat_heads.
+// BGE-M3 head-split writer for concat_heads.
 //
 // Output layout is [B, 1, S, num_heads * head_dim] in TILE_LAYOUT, with tiles
 // ordered along the inner (num_heads*head_dim) axis first, then S, then B.

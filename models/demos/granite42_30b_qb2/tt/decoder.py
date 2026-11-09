@@ -441,7 +441,7 @@ class GraniteDecoder(LightweightModule):
         n = self.projection_input(x)
         fused = self.linear(n, self.qkv)
         fused = ttnn.to_memory_config(fused, self.qkv_shards)
-        q, k, v = ttnn.experimental.nlp_create_qkv_heads_decode(
+        q, k, v = ttnn.experimental.create_qkv_heads_decode(
             fused, num_heads=8, num_kv_heads=2, memory_config=self.split_head_memory, overlap_qk_coregrid=False
         )
         q = ttnn.experimental.rotary_embedding_hf(q, cos, sin, is_decode_mode=True)
@@ -470,7 +470,7 @@ class GraniteDecoder(LightweightModule):
             compute_kernel_config=self.attention_compute,
         )
         a = ttnn.to_memory_config(a, q.memory_config())
-        a = ttnn.experimental.nlp_concat_heads_decode(a, num_heads=8, sub_core_grids=self.worker_grid)
+        a = ttnn.experimental.concat_heads_decode(a, num_heads=8, sub_core_grids=self.worker_grid)
         a = ttnn.reshape(a, [1, 1, x.shape[2], 1024], list(a.padded_shape))
         return self.finish(x, a)
 
@@ -479,7 +479,7 @@ class GraniteDecoder(LightweightModule):
     ):
         """Prepared 128/256/512/1024 bucket; logical lengths use prepare_prefill."""
         n = self.projection_input(x)
-        q, k, v = ttnn.experimental.nlp_create_qkv_heads(
+        q, k, v = ttnn.experimental.create_qkv_heads(
             self.linear(n, self.qkv),
             num_heads=8,
             num_kv_heads=2,
@@ -514,7 +514,7 @@ class GraniteDecoder(LightweightModule):
             ),
             compute_kernel_config=self.prefill_attention_compute,
         )
-        return self.finish(x, ttnn.experimental.nlp_concat_heads(a))
+        return self.finish(x, ttnn.experimental.concat_heads(a))
 
     def _prepare_ccl_buffers(self):
         dtype = getattr(ttnn, self.policy["ccl_dtype"])

@@ -8,7 +8,7 @@ Structure mirrors `reference/audio_encoder_ref.py` (validated PCC=1.0 vs golden)
 `encode_mel`: ttnn.conv2d frontend (on device) -> + sinusoidal PE -> 24 pre-LN transformer
 layers (full bidirectional attention via fused SDPA) -> ln_post -> proj1 -> GELU -> proj2.
 
-Speed: q/k/v fused into one matmul + `nlp_create_qkv_heads`; attention is the fused
+Speed: q/k/v fused into one matmul + `create_qkv_heads`; attention is the fused
 flash kernel `ttnn.transformer.scaled_dot_product_attention`; FFN keeps activations
 in L1 with fused matmul+GELU (`ttnn.linear(..., activation="gelu")`). HiFi4 for the
 norms/projection to hold PCC. conv2d uses config_tensors_in_dram + deallocate_activation
@@ -185,7 +185,7 @@ def _layer(x, lp, device):
     h = ttnn.layer_norm(x, weight=lp["ln1_w"], bias=lp["ln1_b"], epsilon=LN_EPS, compute_kernel_config=HIFI4)
     qkv = ttnn.linear(h, lp["qkv_w"], bias=lp["qkv_b"], core_grid=core, compute_kernel_config=HIFI4)  # (1,1,S,3D)
     ttnn.deallocate(h)
-    q, k, v = ttnn.experimental.nlp_create_qkv_heads(
+    q, k, v = ttnn.experimental.create_qkv_heads(
         qkv,
         num_heads=N_HEADS,
         num_kv_heads=N_HEADS,
@@ -203,7 +203,7 @@ def _layer(x, lp, device):
     ttnn.deallocate(q)
     ttnn.deallocate(k)
     ttnn.deallocate(v)
-    concat = ttnn.experimental.nlp_concat_heads(attn, memory_config=ttnn.L1_MEMORY_CONFIG)
+    concat = ttnn.experimental.concat_heads(attn, memory_config=ttnn.L1_MEMORY_CONFIG)
     ttnn.deallocate(attn)  # free the SDPA output (don't rely on GC)
     o = ttnn.linear(concat, lp["o_w"], bias=lp["o_b"], core_grid=core, compute_kernel_config=HIFI4)
     ttnn.deallocate(concat)

@@ -67,11 +67,11 @@ projections run `minimal_matmul`, and measure 0.999991 to 0.999996, max-abs
 
 | aten | TTNN | PCC | max-abs |
 |---|---|---|---|
-| `view` + `select` + `permute` | `ttnn.experimental.nlp_create_qkv_heads` | 0.999999 | 1.48e-02 |
+| `view` + `select` + `permute` | `ttnn.experimental.create_qkv_heads` | 0.999999 | 1.48e-02 |
 | `cat` + `neg` + `split` + `mul` | `ttnn.experimental.rotary_embedding_hf` | 0.999994 | 4.29e-02 |
 | `bmm` + `mul` + `_safe_softmax` + `bmm` | `ttnn.transformer.scaled_dot_product_attention` | 0.999758 | 1.73e-02 |
 | same, 25% padding, kept rows | same, additive mask | 0.999756 | 2.02e-02 |
-| `permute` + `reshape` | `ttnn.experimental.nlp_concat_heads` | 0.999999 | 1.53e-02 |
+| `permute` + `reshape` | `ttnn.experimental.concat_heads` | 0.999999 | 1.53e-02 |
 
 ### Dense FFN
 
@@ -146,7 +146,7 @@ All 42 inventory rows are accounted for by this table and section 1, over 41 dis
 | `ttnn.linear` | A fused bias rounds every fp32 output, not only the biased ones: a zero bias on the router's 8 experts moved their logits by up to 3e-3. The router adds its padding row with its own `ttnn.add`, which is exact. |
 | `ttnn.slice` | A column at a non-tile-aligned offset goes through untilize, a row-major slice and tilize: 49 us for column 1 of a `(4096, 2)` top-k output, against 2 to 5 us at offset 0. |
 | `ttnn.experimental.rotary_embedding_hf` | Prefill mode needs a leading batch of 1, so `(B, A, S, D)` is folded to `(1, B*A, S, D)`. cos/sin are `(1, 1, S, D)` and broadcast over heads. |
-| `ttnn.experimental.nlp_create_qkv_heads` | Takes `(B, 1, S, 3H)` and returns all three heads at once. `transpose_k_heads=False`, since SDPA wants K as `(B, A, S, D)`. |
+| `ttnn.experimental.create_qkv_heads` | Takes `(B, 1, S, 3H)` and returns all three heads at once. `transpose_k_heads=False`, since SDPA wants K as `(B, A, S, D)`. |
 
 ## 4. Shape, dtype and layout constraints
 

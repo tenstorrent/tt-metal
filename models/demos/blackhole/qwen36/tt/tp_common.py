@@ -1056,7 +1056,7 @@ def prepare_attn_qkv_deint(q_w, k_w, v_w, nh_local, hd, kv_per, tp):
         q_rows = [q_w[base + h * hd2 : base + h * hd2 + hd, :] for h in range(nh_local)]
         g_rows = [q_w[base + h * hd2 + hd : base + h * hd2 + hd2, :] for h in range(nh_local)]
         # Per-device layout [all_q | k | v | all_gate]: q/k/v contiguous so _make_heads* can hand
-        # the fused q|k|v block straight to nlp_create_qkv_heads (no re-concat); gate trails, applied
+        # the fused q|k|v block straight to create_qkv_heads (no re-concat); gate trails, applied
         # post-SDPA. (Column perm only; numerically identical to [q|gate|k|v].)
         parts.append(torch.cat(q_rows, dim=0))  # all_q
         parts.append(k_w[d * kv_per : (d + 1) * kv_per, :])

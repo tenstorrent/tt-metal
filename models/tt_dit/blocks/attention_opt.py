@@ -527,7 +527,7 @@ class Attention(Module):
 
         def _split_heads(x: ttnn.Tensor) -> ttnn.Tensor:
             # V only — Q/K head-split is fused inside DistributedRMSNorm.
-            out, _, _ = ttnn.experimental.nlp_create_qkv_heads(
+            out, _, _ = ttnn.experimental.create_qkv_heads(
                 ttnn.unsqueeze(x, 0), num_heads=self.n_local_heads, num_kv_heads=0, transpose_k_heads=False
             )
             return out

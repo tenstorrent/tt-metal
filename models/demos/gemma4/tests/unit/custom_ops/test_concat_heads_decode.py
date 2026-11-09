@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
-"""ConcatHeadsDecode (custom op) vs the shipped reshard + nlp_concat_heads_decode + sharded_to_interleaved."""
+"""ConcatHeadsDecode (custom op) vs the shipped reshard + concat_heads_decode + sharded_to_interleaved."""
 
 import os
 

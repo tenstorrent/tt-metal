@@ -277,7 +277,7 @@ class TtVoxtralGPT:
         """Pre-norm + fused QKV + RoPE. -> (q,k,v) as [1, heads, S, head_dim], v un-rotated."""
         h = self._norm(x, w["an"])
         qkv = ttnn.linear(h, w["wqkv"], compute_kernel_config=COMPUTE_CONFIG)
-        qh, kh, vh = ttnn.experimental.nlp_create_qkv_heads(
+        qh, kh, vh = ttnn.experimental.create_qkv_heads(
             ttnn.reshape(qkv, [1, 1, S, _QKV_WIDTH]),
             num_heads=N_HEADS,
             num_kv_heads=N_KV_HEADS,
@@ -299,7 +299,7 @@ class TtVoxtralGPT:
         a = ttnn.softmax(s, dim=-1, numeric_stable=True, compute_kernel_config=COMPUTE_CONFIG)
         a = ttnn.matmul(a, vr, compute_kernel_config=COMPUTE_CONFIG)
         # bit-identical to permute(0,2,1,3) + reshape, in one dispatch
-        return ttnn.reshape(ttnn.experimental.nlp_concat_heads(a), [1, S, Q_WIDTH])
+        return ttnn.reshape(ttnn.experimental.concat_heads(a), [1, S, Q_WIDTH])
 
     def _mlp(self, x, h, w, mc, prg=None):
         """Residual + SwiGLU over an already-normed `h`; `prg` is decode_prg on decode, None on
@@ -356,7 +356,7 @@ class TtVoxtralGPT:
             compute_kernel_config=COMPUTE_CONFIG,
         )
         qkv = ttnn.to_memory_config(ttnn.reshape(qkv, [1, 1, 1, _QKV_WIDTH]), _QKV_SHARD)
-        qh, kh, vh = ttnn.experimental.nlp_create_qkv_heads_decode(qkv, num_heads=N_HEADS, num_kv_heads=N_KV_HEADS)
+        qh, kh, vh = ttnn.experimental.create_qkv_heads_decode(qkv, num_heads=N_HEADS, num_kv_heads=N_KV_HEADS)
         qh = ttnn.experimental.rotary_embedding_hf(
             qh, cos, sin, is_decode_mode=True, compute_kernel_config=COMPUTE_CONFIG
         )

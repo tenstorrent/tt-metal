@@ -2,11 +2,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 # ---------------------------------------------------------------------------
-# MANUAL companion to the generated test_nlp_concat_heads_decode.py — do NOT
+# MANUAL companion to the generated test_concat_heads_decode.py — do NOT
 # regenerate this file from a capture.
 #
 # The captured case (num_heads=32) width-shards its output one head per core, so
-# it needs 32 compute cores (nlp_concat_heads_decode_device_operation.cpp: the
+# it needs 32 compute cores (concat_heads_decode_device_operation.cpp: the
 # output grid is num_cores_to_corerangeset(num_heads, grid)). On a 2-compute-core
 # device it FATALs in work_split.cpp:98 (target_num_cores 32 > 2 available).
 #
@@ -17,19 +17,19 @@
 # (0,0),(1,0) => [[0,0,1,0]] on any grid >= 2 cores, so this also passes on a full
 # grid unchanged.
 # ---------------------------------------------------------------------------
-"""Small-grid smoke test for ``ttnn.experimental.nlp_concat_heads_decode`` (num_heads=2)."""
+"""Small-grid smoke test for ``ttnn.experimental.concat_heads_decode`` (num_heads=2)."""
 
 import pytest
 
 import ttnn
 from models.experimental.llama32_1b_quasar.tests.graph_ops import graph_case as G
 
-_OP = ttnn.experimental.nlp_concat_heads_decode
+_OP = ttnn.experimental.concat_heads_decode
 
 CASES = [
     {
         "id": "small_2heads_2x64_bf16_hs-l1",
-        "op": "ttnn.experimental.nlp_concat_heads_decode",
+        "op": "ttnn.experimental.concat_heads_decode",
         "count": 1,
         "args": [
             {
@@ -66,5 +66,5 @@ CASES = [
 
 @G.with_default_mesh()
 @pytest.mark.parametrize("case", CASES, ids=[c["id"] for c in CASES])
-def test_nlp_concat_heads_decode_small_grid(ttnn_mesh_device, reset_seeds, case):
+def test_concat_heads_decode_small_grid(ttnn_mesh_device, reset_seeds, case):
     G.run_case(_OP, case, ttnn_mesh_device)

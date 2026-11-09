@@ -5,10 +5,10 @@
 
     x (B, 1, S, H)
       Wqkv                    -> (B, 1, S, 3H)   three-major: [q | k | v]
-      nlp_create_qkv_heads    -> three (B, A, S, D)
+      create_qkv_heads    -> three (B, A, S, D)
       rotary_embedding_hf     -> q and k rotated, v untouched
       SDPA, is_causal=False   -> (B, A, S, D)
-      nlp_concat_heads        -> (B, 1, S, H)
+      concat_heads        -> (B, 1, S, H)
       out_proj                -> (B, 1, S, H)
 
 The rotary tables and the additive mask come from the caller, not from here: both depend only on
@@ -292,7 +292,7 @@ class TtNomicBertAttention(LightweightModule):
         # Three-major, heads contiguous inside each of q, k and v. transpose_k_heads stays False
         # because SDPA wants K as (B, A, S, D), not pre-transposed. qkv may sit in L1
         # (dense_linear); the heads are placed explicitly rather than inherit that.
-        query, key, value = ttnn.experimental.nlp_create_qkv_heads(
+        query, key, value = ttnn.experimental.create_qkv_heads(
             qkv,
             num_heads=self.num_heads,
             num_kv_heads=self.num_heads,
@@ -323,7 +323,7 @@ class TtNomicBertAttention(LightweightModule):
         for tensor in (rotated_query, rotated_key, value):
             ttnn.deallocate(tensor)
 
-        concatenated = ttnn.experimental.nlp_concat_heads(context, memory_config=heads_memory)
+        concatenated = ttnn.experimental.concat_heads(context, memory_config=heads_memory)
         ttnn.deallocate(context)
 
         out = dense_linear(concatenated, self.out_weight, self.out_bias, OpGroup.ATTN_OUT, self.tt_config)

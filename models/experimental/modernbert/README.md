@@ -368,7 +368,7 @@ tile-rows over more cores means splitting the width, which buys parallelism the
 shape does not contain and pays a cross-core reduction for it.
 
 No head-creation op exposes a core grid to Python in any case —
-`nlp_create_qkv_heads` and `create_qkv_heads_sharded` take `input`, `input_kv`,
+`create_qkv_heads` and `create_qkv_heads_sharded` take `input`, `input_kv`,
 `num_heads`, `num_kv_heads`, `transpose_k_heads`, `memory_config` and
 `output_tensors`, and nothing else. The experimental op was benchmarked against
 the shipped one regardless: 47.8 against 47.8 us at b1s256, 62.4 against 62.7 at

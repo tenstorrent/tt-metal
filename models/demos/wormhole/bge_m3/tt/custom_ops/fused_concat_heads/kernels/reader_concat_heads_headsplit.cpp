@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 //
-// BGE-M3 head-split reader for nlp_concat_heads.
+// BGE-M3 head-split reader for concat_heads.
 //
 // Adapted from the Qwen3-Embedding head-split concat reader: each work unit
 // processes a single (batch, seq_tile, head_group), reading

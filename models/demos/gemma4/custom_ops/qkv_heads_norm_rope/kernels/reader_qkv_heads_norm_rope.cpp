@@ -4,7 +4,7 @@
 // per core when the grid holds 3 B cores, the three in sequence otherwise): gathers user u's row of every head
 // of each tensor from the fused QKV projection output ([1, 1, B, N] bf16 TILE, L1 interleaved: row u =
 // user u, column tiles [q heads | k heads | v heads] x (D / 32)) into the head-row tiles of the norm + RoPE
-// compute (row h of CB tile c = user u's columns of head h, column tile c: the nlp_create_qkv_heads_decode
+// compute (row h of CB tile c = user u's columns of head h, column tile c: the create_qkv_heads_decode
 // layout without that program); then the tensor's gamma column tiles (q / k) and the user's cos / sin row (row 0
 // of a tile per column) as reader_qkv_norm_rope.cpp. 32-byte face-row reads: L1 sources only (a DRAM source
 // trips the Blackhole DRAM-read alignment rule, tt-metal #16667). A tile row r lives in faces (r/16)*2 (columns

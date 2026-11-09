@@ -206,7 +206,7 @@ class BgeM3Attention(LightweightModule):
                 out_memcfg=self.config.create_heads_memcfg,
             )
         else:
-            q, k, v = ttnn.experimental.nlp_create_qkv_heads(
+            q, k, v = ttnn.experimental.create_qkv_heads(
                 qkv_fused,
                 num_heads=self.config.num_heads,
                 num_kv_heads=self.config.num_heads,
@@ -285,7 +285,7 @@ class BgeM3Attention(LightweightModule):
                 context, head_groups=concat_head_groups, out_memcfg=self.config.output_memcfg
             )
         else:
-            context = ttnn.experimental.nlp_concat_heads(context, memory_config=self.config.output_memcfg)
+            context = ttnn.experimental.concat_heads(context, memory_config=self.config.output_memcfg)
 
         if seq_len > _MAX_WO_MM_CHUNK_SEQ_LEN:
             if seq_len % _MAX_WO_MM_CHUNK_SEQ_LEN != 0:

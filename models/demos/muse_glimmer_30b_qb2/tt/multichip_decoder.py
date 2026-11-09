@@ -751,7 +751,7 @@ class MultichipDecoder(OptimizedDecoder):
             )
         if packed.dtype != ttnn.bfloat16:
             packed = ttnn.typecast(packed, ttnn.bfloat16)
-        q, k, v = ttnn.experimental.nlp_create_qkv_heads_decode(
+        q, k, v = ttnn.experimental.create_qkv_heads_decode(
             packed if self.policy.get("sharded_heads") else ttnn.to_memory_config(packed, ttnn.DRAM_MEMORY_CONFIG),
             num_heads=8,
             num_kv_heads=1,
@@ -827,7 +827,7 @@ class MultichipDecoder(OptimizedDecoder):
         attn = ttnn.to_memory_config(attn, mem)
         # A partial input row selects the subgrid kernel, which requires an
         # explicit 32-core destination grid before output allocation.
-        attn = ttnn.experimental.nlp_concat_heads_decode(
+        attn = ttnn.experimental.concat_heads_decode(
             attn, num_heads=8, sub_core_grids=heads_mem.shard_spec.grid if partial_row else None
         )
         if not self.policy.get("keep_attn_l1"):

@@ -865,7 +865,7 @@ class TtIndexerBase:
         )  # [1,1,S/(sp*tp),H_idx*D_idx] — all heads, only this TP rank's query rows
         if qr_local is not qr:
             ttnn.deallocate(qr_local)
-        q, _, _ = ttnn.experimental.nlp_create_qkv_heads(
+        q, _, _ = ttnn.experimental.create_qkv_heads(
             q, num_heads=a.index_n_heads, num_kv_heads=0, transpose_k_heads=False, memory_config=ttnn.DRAM_MEMORY_CONFIG
         )  # [1,H_idx,S/(sp*tp),D_idx] — all heads resident
         # Reuse the SP-sharded tables. The op preserves their original slab stride and adds this TP
@@ -1468,7 +1468,7 @@ class TtCsaIndexer(TtIndexerBase):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             dtype=ttnn.bfloat16,
         )
-        q, _, _ = ttnn.experimental.nlp_create_qkv_heads(
+        q, _, _ = ttnn.experimental.create_qkv_heads(
             q,
             num_heads=self.index_args.index_n_heads,
             num_kv_heads=0,

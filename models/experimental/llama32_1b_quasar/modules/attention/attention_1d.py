@@ -471,7 +471,7 @@ class Attention1D(LightweightModule):
         ttnn.deallocate(x)
 
         # --- STAGE 4: Create QKV Heads ---
-        q_heads_pre_rot, k_heads_pre_rot, v_heads = ttnn.experimental.nlp_create_qkv_heads(
+        q_heads_pre_rot, k_heads_pre_rot, v_heads = ttnn.experimental.create_qkv_heads(
             xqkv_fused,
             num_heads=n_local_heads,
             num_kv_heads=n_local_kv_heads,
@@ -585,14 +585,14 @@ class Attention1D(LightweightModule):
         # --- STAGE 11: Reshape and Concat Heads ---
         # Single-user: [1, n_heads, S, hd]. Batched: keep [B, n_heads, S, hd] — reshaping to
         # [1, n_heads, B*S, hd] before concat would scramble data across the head axis (TTTv1
-        # attention.py L1112-1119). nlp_concat_heads handles the real batch axis natively.
+        # attention.py L1112-1119). concat_heads handles the real batch axis natively.
         if batch_size == 1:
             attn_output = ttnn.reshape(attn_output, [1, n_local_heads, -1, cfg.head_dim])
 
-        attn_output_concat = ttnn.experimental.nlp_concat_heads(attn_output, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        attn_output_concat = ttnn.experimental.concat_heads(attn_output, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(attn_output)
 
-        # Batched: nlp_concat_heads emits [B, 1, S, n_heads*hd]; refold the batch axis back into the
+        # Batched: concat_heads emits [B, 1, S, n_heads*hd]; refold the batch axis back into the
         # sequence ([1, 1, B*S, n_heads*hd]) so the WO matmul runs as one long-sequence matmul. This
         # MUST happen after concat_heads to preserve layout (TTTv1 attention.py L1130-1134).
         if batch_size > 1:
@@ -686,7 +686,7 @@ class Attention1D(LightweightModule):
         xqkv_fused = ttnn.reshape(xqkv_fused, (1, 1, cfg.max_batch_size, fqkv_shape[3]), (1, 1, 32, fqkv_shape[3]))
 
         # --- STAGE 3: Create QKV Heads ---
-        q_heads_pre_rot, k_heads_pre_rot, v_heads = ttnn.experimental.nlp_create_qkv_heads_decode(
+        q_heads_pre_rot, k_heads_pre_rot, v_heads = ttnn.experimental.create_qkv_heads_decode(
             xqkv_fused,
             num_heads=n_local_heads,
             num_kv_heads=n_local_kv_heads,
@@ -733,7 +733,7 @@ class Attention1D(LightweightModule):
         )
 
         # --- STAGE 9: Concat Heads ---
-        attn_output_cat = ttnn.experimental.nlp_concat_heads_decode(attn_output_sharded, num_heads=n_local_heads)
+        attn_output_cat = ttnn.experimental.concat_heads_decode(attn_output_sharded, num_heads=n_local_heads)
         ttnn.deallocate(attn_output_sharded)
         ttnn.deallocate(attn_output)
 
@@ -1099,7 +1099,7 @@ class Attention1D(LightweightModule):
         We just need to convert from sharded to interleaved (matches TTTv1 non-TG path).
         """
         # All 1D topologies: convert L1_WIDTH_SHARDED to L1 interleaved (matches TTTv1)
-        # bfloat16 is required by nlp_create_qkv_heads_decode
+        # bfloat16 is required by create_qkv_heads_decode
         return ttnn.sharded_to_interleaved(xqkv, ttnn.L1_MEMORY_CONFIG, ttnn.bfloat16)
 
     def _all_reduce_output_decode(self, output: ttnn.Tensor) -> ttnn.Tensor:

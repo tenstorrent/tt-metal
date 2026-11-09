@@ -135,7 +135,7 @@ def from_tt(tt_tensor: ttnn.Tensor, mesh_device=None) -> torch.Tensor:
 def height_sharded_batch_memcfg(mesh_device, num_cores, shard_shape, *, start_core=None):
     """HEIGHT_SHARDED L1 memory config over ``num_cores`` cores (one shard/core, row-major).
 
-    The decode attention ops (nlp_concat_heads_decode, paged_update_cache,
+    The decode attention ops (concat_heads_decode, paged_update_cache,
     rotary_embedding_llama_fused_qk) require HEIGHT_SHARDED inputs laid out one
     *user* per core over a batch-core grid. This mirrors the model's config
     resolver — e.g. ``decode_scores_memcfg``

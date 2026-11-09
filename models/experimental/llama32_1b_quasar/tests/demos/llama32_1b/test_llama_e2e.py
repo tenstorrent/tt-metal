@@ -68,7 +68,7 @@ def _qsr_capped_grid_xy(dev, max_cores=None):
 def _quasar_upload_tile_heads_padded(t, dev):
     """Upload a torch [1, batch, n_heads, head_dim] tensor as a TILE DRAM ttnn tensor, padding the heads dim
     (dim -2) up to a multiple of TILE_HEIGHT (32) so quasar.tilize accepts it. This mirrors what the real
-    nlp_create_qkv_heads_decode produces: k/v have num_kv_heads=8 in the tile-height slot, tile-padded to 32.
+    create_qkv_heads_decode produces: k/v have num_kv_heads=8 in the tile-height slot, tile-padded to 32.
     Consumers here read the head count from elsewhere (paged_update_cache uses the CACHE's head count; host SDPA
     uses q's real n_heads=32), so the trailing zero-padded head rows are never read. RM-tilize path avoids the
     from_torch(TILE) hang; head_dim (64) is already tile-aligned."""
@@ -414,8 +414,8 @@ def _install_quasar_host_embedding(monkeypatch):
 def _install_quasar_host_create_qkv_heads(monkeypatch):
     """Split the fused QKV projection into Q/K/V heads on the HOST on Quasar (a pure reshape, no compute).
 
-    ``ttnn.experimental.nlp_create_qkv_heads_decode`` picks a factory by input layout. Under force-interleaved
-    the fused xqkv is DRAM-interleaved, so the picker selects NLPCreateQKVHeadsDecodeInterleavedProgramFactory,
+    ``ttnn.experimental.create_qkv_heads_decode`` picks a factory by input layout. Under force-interleaved
+    the fused xqkv is DRAM-interleaved, so the picker selects CreateQKVHeadsDecodeInterleavedProgramFactory,
     whose reader self-loops the ``reader_scratch`` DFB (PRODUCER+CONSUMER in one DM kernel) -> Gen2
     ValidateProgramSpec FATAL "Self-loop DFBs not supported for DM kernels on Gen2". The Sharded factory is
     Gen2-clean but needs a per-head shard the tiny Quasar device can't allocate (built for the 8x8 model grid).
@@ -426,7 +426,7 @@ def _install_quasar_host_create_qkv_heads(monkeypatch):
     Single-device only; multi-device falls back to the device op. (RoPE consumes these next and needs
     HEIGHT_SHARDED, so it will be the next sidestep -- leaving these interleaved is fine here.)"""
 
-    orig = getattr(ttnn.experimental, "nlp_create_qkv_heads_decode", None)
+    orig = getattr(ttnn.experimental, "create_qkv_heads_decode", None)
     if orig is None:
         return
 
@@ -460,7 +460,7 @@ def _install_quasar_host_create_qkv_heads(monkeypatch):
             logger.warning(f"[llama-e2e][quasar] host create_qkv_heads failed ({e}); falling back to device op")
             return orig(input_tensor, *args, **kwargs)
 
-    monkeypatch.setattr(ttnn.experimental, "nlp_create_qkv_heads_decode", _host_create)
+    monkeypatch.setattr(ttnn.experimental, "create_qkv_heads_decode", _host_create)
 
 
 def _install_quasar_update_cache_reshard(monkeypatch):
@@ -936,7 +936,7 @@ def _install_quasar_device_sdpa_split(monkeypatch, mesh_device):
 
 
 def _install_quasar_concat_heads_grid_agnostic(monkeypatch, mesh_device):
-    """Replace decode nlp_concat_heads_decode with a GRID-AGNOSTIC device head-merge when the device has fewer
+    """Replace decode concat_heads_decode with a GRID-AGNOSTIC device head-merge when the device has fewer
     than num_heads compute cores (the 2-compute-node emulator under slow dispatch).
 
     The stock op places one head-column per core, so it needs num_heads (=32) cores
@@ -944,14 +944,14 @@ def _install_quasar_concat_heads_grid_agnostic(monkeypatch, mesh_device):
     concat is just a per-user flatten of the (num_heads, head_dim) block: input[0,b,h,d] -> output[0,0,b,h*hd+d].
     In ROW_MAJOR that is a contiguous reshape, so do it grid-agnostically on device: deshard -> untilize ->
     reshape (merge heads into the hidden dim) -> pad the user/batch axis to a tile -> tilize. None of those shard
-    by head, so it fits ANY grid. Validated standalone (test_quasar_nlp_concat_heads_decode.py::
-    test_nlp_concat_heads_decode_grid_agnostic). On a >= num_heads-core device (WH/BH), the stock op is used
+    by head, so it fits ANY grid. Validated standalone (test_quasar_concat_heads_decode.py::
+    test_concat_heads_decode_grid_agnostic). On a >= num_heads-core device (WH/BH), the stock op is used
     unchanged. Single-device only; falls back to orig on any error. NOT a host fallback -- the whole merge runs
     on device. The durable fix is the op enhancement (pack heads/core); this unblocks the emulator now."""
     tr_exp = getattr(ttnn, "experimental", None)
-    orig = getattr(tr_exp, "nlp_concat_heads_decode", None) if tr_exp is not None else None
+    orig = getattr(tr_exp, "concat_heads_decode", None) if tr_exp is not None else None
     if orig is None:
-        logger.warning("[llama-e2e][quasar] no ttnn.experimental.nlp_concat_heads_decode; concat patch skipped")
+        logger.warning("[llama-e2e][quasar] no ttnn.experimental.concat_heads_decode; concat patch skipped")
         return
 
     q = getattr(ttnn.experimental, "quasar", None)
@@ -993,9 +993,9 @@ def _install_quasar_concat_heads_grid_agnostic(monkeypatch, mesh_device):
         return _f
 
     try:
-        monkeypatch.setattr(ttnn.experimental, "nlp_concat_heads_decode", _wrap(orig))
+        monkeypatch.setattr(ttnn.experimental, "concat_heads_decode", _wrap(orig))
     except Exception as e:
-        logger.warning(f"[llama-e2e][quasar] could not patch nlp_concat_heads_decode ({e})")
+        logger.warning(f"[llama-e2e][quasar] could not patch concat_heads_decode ({e})")
 
 
 def _install_quasar_concat_l1_overflow_to_dram(monkeypatch, mesh_device):
@@ -1329,11 +1329,11 @@ def test_llama_e2e(mesh_device, optimizations, monkeypatch):  # noqa: F811 — m
             _install_quasar_device_sdpa_split(monkeypatch, mesh_device)
         else:
             _install_quasar_host_sdpa(monkeypatch)
-        # Decode concat-heads (STAGE 9): nlp_concat_heads_decode needs num_heads(=32) cores (one head-column per
+        # Decode concat-heads (STAGE 9): concat_heads_decode needs num_heads(=32) cores (one head-column per
         # core), so it FATALs on the 2-node emulator (work_split.cpp:99 "32 > 2"). On a < num_heads-core grid,
         # replace it with a grid-agnostic device head-merge (deshard->untilize->reshape->pad->tilize); >=
         # num_heads-core grids (WH/BH) keep the stock op. On device, not a host fallback. The durable fix is the
-        # op enhancement (pack heads/core) -- see debug_ops/test_quasar_nlp_concat_heads_decode.py.
+        # op enhancement (pack heads/core) -- see debug_ops/test_quasar_concat_heads_decode.py.
         _install_quasar_concat_heads_grid_agnostic(monkeypatch, mesh_device)
         # lm_head concat: the full-vocab [1,1,32,128256] logits (47 splits) use an L1 output memcfg (~8MB), which
         # overflows L1 on the 2-node emulator (4MB/bank > 3.88MB). Route oversized L1 concat outputs to DRAM.

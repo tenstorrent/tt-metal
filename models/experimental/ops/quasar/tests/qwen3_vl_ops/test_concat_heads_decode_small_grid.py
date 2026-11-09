@@ -2,11 +2,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 # ---------------------------------------------------------------------------
-# MANUAL companion to the generated test_nlp_concat_heads_decode.py — do NOT
+# MANUAL companion to the generated test_concat_heads_decode.py — do NOT
 # regenerate this file from a capture.
 #
 # The captured case (num_heads=32) width-shards its output one head per core, so
-# it needs 32 compute cores (nlp_concat_heads_decode_device_operation.cpp: the
+# it needs 32 compute cores (concat_heads_decode_device_operation.cpp: the
 # output grid is num_cores_to_corerangeset(num_heads, grid)); graph_case skips it
 # on a smaller device. These cases keep Qwen3-VL's head_dim=128 and the captured
 # [1,1,32,128] HEIGHT_SHARDED input layout but set num_heads to 1 and 2, so the
@@ -15,14 +15,14 @@
 # requires input_shape[2] >= num_heads, and the derived output grid starts at
 # (0,0) on any grid, so these also pass unchanged on a full grid.
 # ---------------------------------------------------------------------------
-"""Small-grid tests for ``ttnn.experimental.nlp_concat_heads_decode`` (num_heads=1 and 2)."""
+"""Small-grid tests for ``ttnn.experimental.concat_heads_decode`` (num_heads=1 and 2)."""
 
 import pytest
 
 import ttnn
 from models.experimental.ops.quasar.tests.qwen3_vl_ops import graph_case as G
 
-_OP = ttnn.experimental.nlp_concat_heads_decode
+_OP = ttnn.experimental.concat_heads_decode
 
 _HEAD_DIM = 128  # Qwen3-VL head_dim, as in the captured case
 
@@ -30,7 +30,7 @@ _HEAD_DIM = 128  # Qwen3-VL head_dim, as in the captured case
 def _case(num_heads):
     return {
         "id": f"small_{num_heads}heads_32x{_HEAD_DIM}_bf16_hs-l1",
-        "op": "ttnn.experimental.nlp_concat_heads_decode",
+        "op": "ttnn.experimental.concat_heads_decode",
         "count": 1,
         "args": [
             {
@@ -74,5 +74,5 @@ CASES = [_case(1), _case(2)]
 
 @G.with_default_mesh()
 @pytest.mark.parametrize("case", CASES, ids=[c["id"] for c in CASES])
-def test_nlp_concat_heads_decode_small_grid(ttnn_mesh_device, reset_seeds, case):
+def test_concat_heads_decode_small_grid(ttnn_mesh_device, reset_seeds, case):
     G.run_case(_OP, case, ttnn_mesh_device)

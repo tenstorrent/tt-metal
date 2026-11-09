@@ -1,13 +1,13 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Standalone repro for the Quasar nlp_create_qkv_heads_decode INTERLEAVED-factory self-loop.
+"""Standalone repro for the Quasar create_qkv_heads_decode INTERLEAVED-factory self-loop.
 
 The llama32_1b decode splits the fused QKV projection into heads with
-``ttnn.experimental.nlp_create_qkv_heads_decode``. Its factory is picked by input layout
+``ttnn.experimental.create_qkv_heads_decode``. Its factory is picked by input layout
 (device_operation.cpp:16-24):
-  - input SHARDED (WIDTH_SHARDED)  -> NLPCreateQKVHeadsDecodeShardedProgramFactory  (Gen2-clean)
-  - input INTERLEAVED              -> NLPCreateQKVHeadsDecodeInterleavedProgramFactory
+  - input SHARDED (WIDTH_SHARDED)  -> CreateQKVHeadsDecodeShardedProgramFactory  (Gen2-clean)
+  - input INTERLEAVED              -> CreateQKVHeadsDecodeInterleavedProgramFactory
 
 The Interleaved factory's `reader` data-movement kernel self-loops its `reader_scratch` DataflowBuffer (bound
 PRODUCER *and* CONSUMER), which Gen2/Quasar rejects:
@@ -90,7 +90,7 @@ def _skip_if_small(mesh_device):
 
 
 def _call(xqkv, mesh_device):
-    return ttnn.experimental.nlp_create_qkv_heads_decode(
+    return ttnn.experimental.create_qkv_heads_decode(
         xqkv,
         num_heads=N_Q_HEADS,
         num_kv_heads=N_KV_HEADS,

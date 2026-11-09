@@ -856,7 +856,7 @@ def test_decoder(
         sin_meta, device=setup["mesh_device"], mesh_mapper=mesh_mapper, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16
     )
 
-    # For decode mode, convert cos/sin to HEIGHT_SHARDED to match Q/K/V from nlp_create_qkv_heads_decode
+    # For decode mode, convert cos/sin to HEIGHT_SHARDED to match Q/K/V from create_qkv_heads_decode
     if mode == "decode":
         grid_size = ttnn.CoreCoord(8, 8)  # Safe limit: max 8 per dimension to avoid Galaxy hangs
         batch_grid = ttnn.num_cores_to_corerangeset(local_batch_size, grid_size, row_wise=True)

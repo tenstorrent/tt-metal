@@ -5,13 +5,13 @@
 # GENERATED FILE - do not edit by hand.
 # Regenerate with:
 #   python models/experimental/llama32_1b_quasar/tests/graph_ops/generate_from_graph_capture.py \
-#       --capture generated/ttnn/reports/gpt_oss_demo_aug28_1452/graph_capture.python_io.slim.json --out models/experimental/ops/quasar/tests/gpt_oss_ops
-# Source capture: generated/ttnn/reports/gpt_oss_demo_aug28_1452/graph_capture.python_io.slim.json
+#       --capture generated/ttnn/reports/qwen3_vl_demo_aug27_1509/graph_capture.python_io.slim.json --out models/experimental/ops/quasar/tests/qwen3_vl_ops
+# Source capture: generated/ttnn/reports/qwen3_vl_demo_aug27_1509/graph_capture.python_io.slim.json
 # ---------------------------------------------------------------------------
 """
-Per-op test: ``ttnn.experimental.nlp_concat_heads_decode`` — every distinct call the model made, as captured.
+Per-op test: ``ttnn.experimental.concat_heads_decode`` — every distinct call the model made, as captured.
 
-Captured 192 call(s) to this op; 1 distinct signature(s) covering 192 of them.
+Captured 14400 call(s) to this op; 1 distinct signature(s) covering 14400 of them.
 
 Fidelity notes for this op:
   * the output has more elements than all inputs combined (a batch-padded decode tensor), so the op cannot write all of it; finiteness is asserted over the portion the inputs can account for
@@ -27,30 +27,31 @@ no compute_kernel_config).
 import pytest
 
 import ttnn
-from models.experimental.ops.quasar.tests.gpt_oss_ops import graph_case as G
+from models.experimental.ops.quasar.tests.qwen3_vl_ops import graph_case as G
 
-_OP = ttnn.experimental.nlp_concat_heads_decode
+_OP = ttnn.experimental.concat_heads_decode
 
 CASES = [
     {
-        "id": "00_64x64_bf16_hs-l1",
-        "op": "ttnn.experimental.nlp_concat_heads_decode",
-        "count": 192,
+        "id": "00_32x128_bf16_hs-l1",
+        "op": "ttnn.experimental.concat_heads_decode",
+        "count": 14400,
         "args": [
             {
                 "k": "t",
-                "shape": [1, 1, 64, 64],
+                "shape": [1, 1, 32, 128],
                 "dtype": "BFLOAT16",
                 "layout": "TILE",
                 "mem": {
                     "layout": "HEIGHT_SHARDED",
                     "buffer": "L1",
-                    "shard": {"grid": [[0, 0, 0, 0]], "shape": [64, 64], "orientation": "ROW_MAJOR"},
+                    "shard": {"grid": [[0, 0, 0, 0]], "shape": [32, 128], "orientation": "ROW_MAJOR"},
                 },
             },
         ],
         "kwargs": {
-            "num_heads": {"k": "lit", "v": 64},
+            "num_heads": {"k": "lit", "v": 32},
+            "sub_core_grids": {"k": "lit", "v": None},
         },
         "outs": [
             {
@@ -60,7 +61,7 @@ CASES = [
                 "mem": {
                     "buffer": "L1",
                     "layout": "WIDTH_SHARDED",
-                    "shard": {"grid": [[0, 0, 10, 4], [0, 5, 8, 5]], "orientation": "ROW_MAJOR", "shape": [32, 64]},
+                    "shard": {"grid": [[0, 0, 7, 3]], "orientation": "ROW_MAJOR", "shape": [32, 128]},
                 },
                 "shape": [1, 1, 32, 4096],
             },
@@ -71,5 +72,5 @@ CASES = [
 
 @G.with_default_mesh()
 @pytest.mark.parametrize("case", CASES, ids=[c["id"] for c in CASES])
-def test_nlp_concat_heads_decode(ttnn_mesh_device, reset_seeds, case):
+def test_concat_heads_decode(ttnn_mesh_device, reset_seeds, case):
     G.run_case(_OP, case, ttnn_mesh_device)
