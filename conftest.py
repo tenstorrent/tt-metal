@@ -482,6 +482,27 @@ def device(request, device_params):
 # Reset fabric config to DISABLED if not None, and do nothing otherwise
 # Temporarily require previous state to be passed in as even setting it to DISABLED might be unstable
 # This is to ensure that we don't propagate the instability to the rest of CI
+def _full_mesh_submesh_plan(mesh_shape, system_mesh_size, env=None):
+    """QWEN36_TEST_FULL_MESH=1 (default off): plan for opening the full 32-chip Galaxy and testing on a submesh.
+
+    Returns None (normal behaviour) unless the switch is on, the system mesh has 32 chips and the requested shape
+    is a 1xN row with N in {1, 2, 4, 8}. Otherwise (parent_shape, sub_shape, sub_idx, fabric): parent_shape is the
+    4x8 row view the vLLM server and create_submeshes use, sub_shape the requested shape, sub_idx
+    QWEN36_TEST_SUBMESH (default 0), fabric the config used when the test asked for none or FABRIC_1D
+    (QWEN36_TEST_FULL_MESH_FABRIC, default FABRIC_1D_RING, as the server uses).
+    """
+    import ttnn
+
+    env = os.environ if env is None else env
+    if env.get("QWEN36_TEST_FULL_MESH", "0") != "1":
+        return None
+    rows, cols = int(mesh_shape[0]), int(mesh_shape[1])
+    if system_mesh_size != 32 or rows != 1 or cols not in (1, 2, 4, 8):
+        return None
+    fabric = getattr(ttnn.FabricConfig, env.get("QWEN36_TEST_FULL_MESH_FABRIC", "FABRIC_1D_RING"))
+    return (4, 8), (1, cols), int(env.get("QWEN36_TEST_SUBMESH", "0")), fabric
+
+
 def reset_fabric(fabric_config):
     import ttnn
 
@@ -658,6 +679,36 @@ def mesh_device(request, silicon_arch_name, device_params):
     reliability_mode = updated_device_params.pop("reliability_mode", None)
     fabric_manager = updated_device_params.pop("fabric_manager", None)
     fabric_router_config = updated_device_params.pop("fabric_router_config", None)
+
+    full = _full_mesh_submesh_plan(tuple(param) if isinstance(param, tuple) else (1, param), system_mesh_size)
+    if full is not None:
+        # QWEN36_TEST_FULL_MESH=1: open the whole Galaxy like the vLLM server does (4x8 row view, ring fabric
+        # over every chip) and hand the test one submesh of the requested shape. Opening only a 1xN sub-cluster
+        # leaves the fabric routers of its edge chips handshaking with chips whose routers never start, which
+        # times out ("Fabric Router Sync ... ethernet handshake") on some Galaxy hosts.
+        parent_shape, sub_shape, sub_idx, full_fabric = full
+        if fabric_config in (None, ttnn.FabricConfig.FABRIC_1D):
+            fabric_config = full_fabric
+        logger.info(
+            f"QWEN36_TEST_FULL_MESH: opening {parent_shape} with {fabric_config}, test gets submesh {sub_idx} {sub_shape}"
+        )
+        set_fabric(fabric_config, reliability_mode, fabric_tensix_config, fabric_manager, fabric_router_config)
+        parent = ttnn.open_mesh_device(mesh_shape=ttnn.MeshShape(*parent_shape), **updated_device_params)
+        submeshes = parent.create_submeshes(ttnn.MeshShape(*sub_shape))
+        assert 0 <= sub_idx < len(submeshes), f"QWEN36_TEST_SUBMESH={sub_idx} out of range ({len(submeshes)})"
+        mesh_device = submeshes[sub_idx]
+        from tests.tests_common.cache_entries_counter import CacheEntriesCounter
+
+        mesh_device.cache_entries_counter = CacheEntriesCounter(mesh_device)
+        yield mesh_device
+
+        for submesh in parent.get_submeshes():
+            ttnn.close_mesh_device(submesh)
+        ttnn.close_mesh_device(parent)
+        reset_fabric(fabric_config)
+        del mesh_device, parent
+        return
+
     set_fabric(fabric_config, reliability_mode, fabric_tensix_config, fabric_manager, fabric_router_config)
     mesh_device = ttnn.open_mesh_device(mesh_shape=mesh_shape, **updated_device_params)
 
