@@ -90,12 +90,13 @@ read. Its `ArgIndex` says which index:
 | --- | --- | --- |
 | `NONE` | Nothing: the name has no `{}` | `EDM_STATUS_PTR_ADDR` |
 | `COMPACT` | The channel's index over this router's own channel counts, as most per-channel arguments are indexed | `SENDER_CH_{}_IS_INJECTION` |
+| `VC` | The channel's VC, for an argument the builder emits once per VC | `DISABLE_RX_CH{}_FORWARDING` |
 | `FABRIC_POSITION` | The channel's index over the fabric's maximum counts, as the free-slots stream table is indexed | `SENDER_CHANNEL_{}_FREE_SLOTS_STREAM_ID` |
 | `VC_AND_EDGE` | The edge's VC, then its edge number | `VC{}_FREE_SLOTS_FROM_DOWNSTREAM_EDGE_{}_STREAM_ID` |
 
-A `NamedArg` also says when the builder emits it (`Emitted`): `ALWAYS`, `FABRIC_2D` (only with 2D routing on), or
-`CHANNEL_TRIMMING_CAPTURE` (only with the channel trimming capture on). A field whose argument isn't emitted on this
-run is left out.
+A `NamedArg` also says when the builder emits it (`Emitted`): `ALWAYS`, `FABRIC_2D` (only with 2D routing on),
+`CHANNEL_TRIMMING_CAPTURE` (only with the channel trimming capture on), or `DEADLOCK_AVOIDANCE` (only with deadlock
+avoidance on). A field whose argument isn't emitted on this run is left out.
 
 ### Category
 

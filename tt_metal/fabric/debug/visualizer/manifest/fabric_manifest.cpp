@@ -294,11 +294,7 @@ json make_credit_counters_json(const manifest::L1CreditCounters& counters) {
 // ============ Channels ============
 
 // A counter element names its array by its path within the router, e.g. "credit_counters/to_sender_ack".
-json make_credit_ref_json(const manifest::CreditRef& credit) {
-    if (const auto* stream = std::get_if<std::optional<manifest::content::StreamReg>>(&credit)) {
-        return stream->has_value() ? make_stream_reg_json(**stream) : json(nullptr);
-    }
-    const auto& counter = std::get<manifest::CounterRef>(credit);
+json make_credit_ref_json(const manifest::CounterRef& counter) {
     json out;
     out["array"] = fmt::format("credit_counters/{}", lower_enum_name(counter.array));
     out["index"] = counter.index;
@@ -460,6 +456,7 @@ json make_eriscs_json(const std::vector<manifest::Erisc>& eriscs) {
         json& erisc = out[fmt::format("erisc{}", risc_id)];
         erisc["processor"] = lower_enum_name(eriscs[risc_id].processor);
         erisc["physical_erisc"] = eriscs[risc_id].physical_erisc;
+        erisc["opt_level"] = lower_enum_name(eriscs[risc_id].opt_level);
     }
     return out;
 }

@@ -10,7 +10,7 @@
 #include <string>
 #include <unordered_map>
 #include <vector>
-#include <tt-metalium/kernel_types.hpp>                                 // DataMovementProcessor
+#include <tt-metalium/kernel_types.hpp>                                 // DataMovementProcessor, KernelBuildOptLevel
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>               // RoutingDirection
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>         // Topology
 #include <hostdevcommon/fabric_common.h>                                // chan_id_t
@@ -70,6 +70,8 @@ struct KernelCreationContext {
 struct KernelInputs {
     tt::tt_metal::DataMovementProcessor processor;
     tt::tt_metal::NOC noc;
+    // The level the kernel is compiled and linked at (EthernetConfig::opt_level).
+    tt::tt_metal::KernelBuildOptLevel opt_level;
     std::vector<uint32_t> compile_args;
     std::unordered_map<std::string, uint32_t> named_compile_args;
     std::map<std::string, std::string> defines;

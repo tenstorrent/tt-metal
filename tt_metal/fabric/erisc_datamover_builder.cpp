@@ -786,18 +786,16 @@ FabricEriscDatamoverBuilder::FabricEriscDatamoverBuilder(
     const auto& receiver_counts =
         actual_receiver_channels_per_vc.value_or(this->config.num_used_receiver_channels_per_vc);
 
-    bool is_mux_mode =
-        has_tensix_extension && (fabric_context.get_fabric_tensix_config() == tt::tt_fabric::FabricTensixConfig::MUX);
-
     size_t num_riscv_cores = this->config.risc_configs.size();
     for (size_t risc_id = 0; risc_id < num_riscv_cores; ++risc_id) {
         this->is_sender_channel_serviced_[risc_id].fill(false);
         this->is_receiver_channel_serviced_[risc_id].fill(false);
 
-        if (is_mux_mode) {
-            // MUX mode: Only worker channel serviced for senders
-            uint32_t worker_channel = get_worker_connected_sender_channel();
-            this->is_sender_channel_serviced_[risc_id][worker_channel] = true;
+        if (this->is_mux_mode()) {
+            // MUX mode: the router services only the sender channels the mux doesn't carry (the worker channel)
+            for (size_t channel = 0; channel < builder_config::num_max_sender_channels; ++channel) {
+                this->is_sender_channel_serviced_[risc_id][channel] = !this->is_sender_channel_carried_by_mux(channel);
+            }
 
             // All receiver channels serviced in MUX mode
             size_t receiver_offset = 0;
@@ -2056,6 +2054,15 @@ void FabricEriscDatamoverBuilder::set_firmware_context_switch_type(FabricEriscDa
 
 void FabricEriscDatamoverBuilder::set_eth_txq_seq_update_timeout(uint32_t cycles) {
     this->eth_txq_seq_update_timeout = cycles;
+}
+
+bool FabricEriscDatamoverBuilder::is_mux_mode() const {
+    return this->has_tensix_extension &&
+           this->fabric_context_.get_fabric_tensix_config() == tt::tt_fabric::FabricTensixConfig::MUX;
+}
+
+bool FabricEriscDatamoverBuilder::is_sender_channel_carried_by_mux(size_t channel) const {
+    return this->is_mux_mode() && channel != get_worker_connected_sender_channel();
 }
 
 void FabricEriscDatamoverBuilder::apply_channel_trimming_overrides(const ChannelTrimmingOverrides& overrides) {

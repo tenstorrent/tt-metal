@@ -1025,6 +1025,7 @@ void ComputeMeshRouterBuilder::create_kernel(tt::tt_metal::Program& program, con
         kernel_inputs_by_erisc_.push_back({
             .processor = proc,
             .noc = noc,
+            .opt_level = opt_level,
             .compile_args = ct_args,
             .named_compile_args = named_ct_args,
             .defines = program.impl().get_kernel(kernel)->defines(),

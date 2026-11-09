@@ -146,10 +146,6 @@ struct CounterRef {
     uint32_t index = 0;
 };
 
-// Credits are held in a stream register or in an element of an L1 counter array. The register is null when the
-// builder did not allocate one, which the kernel is fed as k_unused_stream_id.
-using CreditRef = std::variant<std::optional<content::StreamReg>, CounterRef>;
-
 // A router on the same chip and routing plane, named by the direction it faces.
 struct SiblingRouterRef {
     eth_chan_directions direction = eth_chan_directions::EAST;
@@ -247,8 +243,8 @@ struct Field {
 // The credits a sender channel receives back from the peer's receiver, as one ERISC is told to read them.
 struct SenderChannelCredits {
     // Only on VC0, on an ERISC with bubble flow control.
-    std::optional<CreditRef> acked;
-    CreditRef completed;
+    std::optional<CounterRef> acked;
+    CounterRef completed;
 };
 
 // A field table's fields as each ERISC's arguments give them. Indexed by ERISC id.
@@ -312,6 +308,8 @@ struct Erisc {
     tt::tt_metal::DataMovementProcessor processor = tt::tt_metal::DataMovementProcessor::RISCV_0;
     // The ERISC on the Ethernet core that the processor runs on, which indexes CoreRegisters::reset_masks.
     uint32_t physical_erisc = 0;
+    // The level the builder compiled and linked the kernel at (get_kernel_opt_level).
+    tt::tt_metal::KernelBuildOptLevel opt_level = tt::tt_metal::KernelBuildOptLevel::O3;
 };
 
 // Information about a router.
@@ -548,6 +546,7 @@ inline constexpr std::tuple k_vocabulary_lists{
     VocabularyList<Content>{"field_kind"},
     VocabularyList<ChannelStatus>{"channel_status"},
     VocabularyList<tt::tt_metal::DataMovementProcessor>{"erisc_processor"},
+    VocabularyList<tt::tt_metal::KernelBuildOptLevel>{"kernel_opt_level"},
     VocabularyList<IntermeshVCMode>{"intermesh_vc_mode"},
 };
 

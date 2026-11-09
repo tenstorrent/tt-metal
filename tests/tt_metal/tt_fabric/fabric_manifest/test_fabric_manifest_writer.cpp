@@ -190,7 +190,10 @@ TEST(ManifestWriter, WritesEachEriscsValuesUnderItsOwnKey) {
     auto facts = make_facts();
     auto& router = facts.meshes.at(0).chips.at(0).routers.at(0);
     router.shape.num_active_eriscs = 2;
-    router.eriscs.push_back(Erisc{.processor = tt::tt_metal::DataMovementProcessor::RISCV_1, .physical_erisc = 1});
+    router.eriscs.push_back(Erisc{
+        .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
+        .physical_erisc = 1,
+        .opt_level = tt::tt_metal::KernelBuildOptLevel::Os});
     router.fields_by_erisc.push_back({Field{
         .key = "speedy_vc0", .category = FieldCategory::KERNEL_PARAMS, .content = content::Flag{.value = true}}});
     auto& sender = router.channels.senders.at(0).at(0);
@@ -209,6 +212,8 @@ TEST(ManifestWriter, WritesEachEriscsValuesUnderItsOwnKey) {
     const auto& forwards_on = router_json.at("channels").at("receivers").at("vc0").at("ch0").at("forwards_on");
     EXPECT_EQ(forwards_on, json::parse(R"({"erisc0": "vc0", "erisc1": null})"));
     EXPECT_FALSE(router_json.at("eriscs").at("erisc1").contains("fields"));
+    EXPECT_EQ(router_json.at("eriscs").at("erisc0").at("opt_level"), "o3");
+    EXPECT_EQ(router_json.at("eriscs").at("erisc1").at("opt_level"), "os");
 }
 
 // Two fields with one key would leave readers one of them, so the writer refuses.

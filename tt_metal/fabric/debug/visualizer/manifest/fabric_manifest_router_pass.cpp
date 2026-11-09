@@ -159,6 +159,7 @@ std::string get_arg_name(const manifest::NamedArg& arg, const FieldIndex& index)
     switch (arg.index) {
         case manifest::ArgIndex::NONE: return std::string(arg.name);
         case manifest::ArgIndex::COMPACT: return fmt::format(fmt::runtime(arg.name), index.compact);
+        case manifest::ArgIndex::VC: return fmt::format(fmt::runtime(arg.name), index.vc);
         case manifest::ArgIndex::FABRIC_POSITION: return fmt::format(fmt::runtime(arg.name), index.fabric_position);
         case manifest::ArgIndex::VC_AND_EDGE: return fmt::format(fmt::runtime(arg.name), index.vc, index.edge);
     }
@@ -219,12 +220,14 @@ manifest::Field make_field(const ManifestRouterInputs& inputs, const manifest::R
 struct Emission {
     bool is_2d_fabric = false;
     bool channel_trimming_capture = false;
+    bool deadlock_avoidance = false;
 };
 
 Emission read_emission(const RouterArgs& args, uint32_t erisc) {
     return {
         .is_2d_fabric = args.read_erisc_arg(erisc, "IS_2D_FABRIC") != 0,
         .channel_trimming_capture = args.read_erisc_arg(erisc, "ENABLE_CHANNEL_TRIMMING_RESOURCE_USAGE_CAPTURE") != 0,
+        .deadlock_avoidance = args.read_erisc_arg(erisc, "ENABLE_DEADLOCK_AVOIDANCE") != 0,
     };
 }
 
@@ -233,6 +236,7 @@ bool is_emitted(manifest::Emitted emitted, const Emission& emission) {
         case manifest::Emitted::ALWAYS: return true;
         case manifest::Emitted::FABRIC_2D: return emission.is_2d_fabric;
         case manifest::Emitted::CHANNEL_TRIMMING_CAPTURE: return emission.channel_trimming_capture;
+        case manifest::Emitted::DEADLOCK_AVOIDANCE: return emission.deadlock_avoidance;
     }
     TT_THROW("Fabric manifest: unknown emission {}", static_cast<int>(emitted));
 }
@@ -305,25 +309,11 @@ struct ChannelContext {
     const ManifestRouterInputs& inputs;
     const manifest::RouterShape& shape;
     const FabricStaticSizedChannelsAllocator& allocator;
-    const builder::RouterProducerSlots producer_slots;
     const bool is_2d_fabric;
     // The channel trimming profile the builder applied to this router, if any.
     const std::optional<ChannelTrimmingOverrides>& trimming;
     const uint32_t channel_buffer_size;
 };
-
-// The stream register stream `stream_id`'s credits come back on, or null when the builder gave the credit the unused
-// stream id.
-std::optional<manifest::content::StreamReg> describe_credit_stream(
-    const ManifestRouterInputs& inputs, uint32_t stream_id) {
-    if (stream_id == k_unused_stream_id) {
-        return std::nullopt;
-    }
-    return describe_stream_register(
-        inputs.hal,
-        stream_id,
-        manifest::register_stream_region<uint32_t>(manifest::StreamRegister::BUF_SPACE_AVAILABLE));
-}
 
 // The kernel runs VC1's channel steps only under FABRIC_2D_VC1_SERVICED, and VC2's only under FABRIC_2D_VC2_SERVICED.
 bool is_vc_run_by_kernel(const ManifestRouterInputs& inputs, uint32_t vc) {
@@ -369,11 +359,13 @@ manifest::ChannelStatus collect_status(
         channel);
 }
 
-// The worker channel is fed by the local worker, or in mux mode by the tensix mux. A sibling producer comes from the
-// edge that lands on the channel, which the topology pass sets.
+// A worker channel (SENDER_CH_<c>_IS_WORKER_CHANNEL) is fed by the local worker, or in mux mode by the tensix mux. A
+// sibling producer comes from the edge that lands on the channel, which the topology pass sets.
 std::optional<manifest::SenderChannelProducer> collect_local_producer(
     const ChannelContext& ctx, const SenderChannelIndex& index) {
-    if (ctx.producer_slots.worker_channel(index.vc) != index.channel) {
+    const bool is_worker_channel =
+        ctx.inputs.args.read_router_arg(fmt::format("SENDER_CH_{}_IS_WORKER_CHANNEL", index.compact)) != 0;
+    if (!is_worker_channel) {
         return std::nullopt;
     }
     if (ctx.shape.has_tensix_extension && index.vc == 0) {
@@ -382,21 +374,13 @@ std::optional<manifest::SenderChannelProducer> collect_local_producer(
     return manifest::LocalWorker{};
 }
 
-// A sender channel's credits as each ERISC is told to read them. A VC whose credits use L1 counters
-// (VC<v>_USES_COUNTER_CREDITS) reads the channel's element of the to_sender counter arrays; otherwise the credits come
-// back on the TO_SENDER_<c>_PKTS_* stream registers, by compact index. First-level acks come back only where the ERISC
-// is fed ENABLE_FIRST_LEVEL_ACK_VC<v> set. The builder feeds it for VC0 and VC1, and clears VC0's wherever it picks the
-// speedy step, which has no acks; VC2's step is always the speedy one, so VC2 gets no flag.
+// A sender channel's credits as each ERISC is told to read them: the channel's element of the to_sender counter arrays,
+// by compact index.
 std::vector<manifest::SenderChannelCredits> collect_sender_credits(
     const ChannelContext& ctx, const SenderChannelIndex& index) {
     const RouterArgs& args = ctx.inputs.args;
-    const bool vc_uses_counters = args.read_router_arg(fmt::format("VC{}_USES_COUNTER_CREDITS", index.vc)) != 0;
-    const auto credit = [&](manifest::CreditCounterArray array, const char* stream_name) -> manifest::CreditRef {
-        if (vc_uses_counters) {
-            return manifest::CounterRef{.array = array, .index = index.compact};
-        }
-        return describe_credit_stream(
-            ctx.inputs, args.read_router_arg(fmt::format(fmt::runtime(stream_name), index.compact)));
+    const auto credit = [&](manifest::CreditCounterArray array) {
+        return manifest::CounterRef{.array = array, .index = index.compact};
     };
 
     const std::string first_level_ack = fmt::format("ENABLE_FIRST_LEVEL_ACK_VC{}", index.vc);
@@ -405,10 +389,10 @@ std::vector<manifest::SenderChannelCredits> collect_sender_credits(
     credits_by_erisc.reserve(args.num_eriscs());
     for (uint32_t erisc = 0; erisc < args.num_eriscs(); ++erisc) {
         manifest::SenderChannelCredits credits{
-            .completed = credit(manifest::CreditCounterArray::TO_SENDER_COMPLETION, "TO_SENDER_{}_PKTS_COMPLETED_ID"),
+            .completed = credit(manifest::CreditCounterArray::TO_SENDER_COMPLETION),
         };
-        if (args.find_erisc_arg(erisc, first_level_ack).value_or(0) != 0) {
-            credits.acked = credit(manifest::CreditCounterArray::TO_SENDER_ACK, "TO_SENDER_{}_PKTS_ACKED_ID");
+        if (args.read_erisc_arg(erisc, first_level_ack) != 0) {
+            credits.acked = credit(manifest::CreditCounterArray::TO_SENDER_ACK);
         }
         credits_by_erisc.push_back(credits);
     }
@@ -427,7 +411,7 @@ manifest::SenderChannel collect_sender_channel(const ChannelContext& ctx, const 
         index.vc,
         index.channel,
         sender.serviced_by,
-        ctx.shape.has_tensix_extension && index.vc == 0 && ctx.producer_slots.worker_channel(0) != index.channel,
+        inputs.erisc_builder.is_sender_channel_carried_by_mux(c),
         ctx.trimming.has_value() && !ctx.trimming->is_sender_channel_used(c));
     sender.producer = collect_local_producer(ctx, index);
     sender.ring_buffer = describe_ring_buffer(
@@ -441,9 +425,7 @@ manifest::SenderChannel collect_sender_channel(const ChannelContext& ctx, const 
     return sender;
 }
 
-// The VC whose downstream edges each ERISC gives the receiver's step: its own, except that receiver 0 gets VC1's under
-// FABRIC_2D_VC0_CROSSOVER_TO_VC1. Null on an ERISC that doesn't run the step, and for the speedy steps, which are given
-// none: VC2's always, and VC0's on an ERISC in speedy mode (its ENABLE_SPEEDY_VC0).
+// The VC whose downstream edges each ERISC gives the receiver's step.
 std::vector<std::optional<uint32_t>> collect_forwards_on(
     const ChannelContext& ctx, uint32_t vc, const std::vector<uint32_t>& serviced_by) {
     const RouterArgs& args = ctx.inputs.args;
@@ -451,14 +433,19 @@ std::vector<std::optional<uint32_t>> collect_forwards_on(
     forwards_on_by_erisc.reserve(args.num_eriscs());
     for (uint32_t erisc = 0; erisc < args.num_eriscs(); ++erisc) {
         const bool runs_step = std::ranges::find(serviced_by, erisc) != serviced_by.end();
-        const bool speedy_vc0 = args.read_erisc_arg(erisc, "ENABLE_SPEEDY_VC0") != 0;
-        if (!runs_step || vc == 2 || (vc == 0 && speedy_vc0)) {
+        const bool forwarding_disabled = args.read_erisc_arg(erisc, fmt::format("DISABLE_RX_CH{}_FORWARDING", vc)) != 0;
+        if (!runs_step || forwarding_disabled) {
             forwards_on_by_erisc.emplace_back(std::nullopt);
-        } else if (vc == 0 && args.has_define("FABRIC_2D_VC0_CROSSOVER_TO_VC1")) {
-            forwards_on_by_erisc.emplace_back(1);
-        } else {
-            forwards_on_by_erisc.emplace_back(vc);
+            continue;
         }
+        bool crosses_over_to_vc1 = false;
+        if (vc == 0) {
+            crosses_over_to_vc1 = args.has_define("FABRIC_2D_VC0_CROSSOVER_TO_VC1");
+        } else if (vc == 2) {
+            crosses_over_to_vc1 = args.read_erisc_arg(erisc, "VC2_CROSSOVER_TO_VC1") != 0;
+        }
+        forwards_on_by_erisc.emplace_back(
+            static_cast<uint32_t>(receiver_channel_forwards_on_vc(vc, crosses_over_to_vc1)));
     }
     return forwards_on_by_erisc;
 }
@@ -483,7 +470,8 @@ manifest::ReceiverChannel collect_receiver_channel(const ChannelContext& ctx, co
         ctx.allocator.get_receiver_channel_base_address(index.vc, index.channel),
         ctx.allocator.get_receiver_channel_number_of_slots(index.vc, index.channel),
         ctx.channel_buffer_size);
-    receiver.fields_by_erisc = collect_fields_by_erisc(inputs, manifest::k_receiver_channel_fields, {.compact = c});
+    receiver.fields_by_erisc =
+        collect_fields_by_erisc(inputs, manifest::k_receiver_channel_fields, {.compact = c, .vc = index.vc});
     return receiver;
 }
 
@@ -496,8 +484,6 @@ ChannelContext make_channel_context(const ManifestRouterInputs& inputs, const ma
         .inputs = inputs,
         .shape = shape,
         .allocator = *allocator,
-        .producer_slots = builder::RouterProducerSlots(
-            builder::routing_direction_to_eth_direction(inputs.location.direction), shape.senders_per_vc),
         .is_2d_fabric = inputs.args.read_router_arg("IS_2D_FABRIC") != 0,
         .trimming = builder.get_channel_trimming_overrides(),
         .channel_buffer_size = inputs.args.read_router_arg("CHANNEL_BUFFER_SIZE"),
@@ -628,6 +614,7 @@ manifest::Router collect_manifest_router(const ManifestRouterInputs& inputs) {
         eriscs.push_back({
             .processor = processor,
             .physical_erisc = inputs.hal.get_active_eth_physical_erisc(static_cast<uint32_t>(processor)),
+            .opt_level = erisc_inputs.opt_level,
         });
     }
     return {

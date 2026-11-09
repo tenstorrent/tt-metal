@@ -183,6 +183,7 @@ what the label is:
 | `field_category`, `field_kind` | A field's `category` and `kind` |
 | `channel_status` | A channel's `status` |
 | `erisc_processor` | An ERISC's `processor` |
+| `kernel_opt_level` | An ERISC's `opt_level` |
 | `intermesh_vc_mode` | `fabric.intermesh_vc.mode` |
 
 An `enum` field isn't a label: it writes its enumerator's name next to its value (`value_name`), so it has no list here.
@@ -231,7 +232,7 @@ An `enum` field isn't a label: it writes its enumerator's name next to its value
 | `channels` | `senders` and `receivers`, each keyed `vc<v>` then `ch<c>`. VCs with no channels of that kind are left out |
 | `intra_chip_downstream_edges` | Keyed `vc<v>` then `edge<n>`. VCs with no edges are left out |
 | `fields` | The router's fields, keyed by ERISC |
-| `eriscs` | Keyed `erisc<r>`, in RISC order: each with its `processor` and `physical_erisc` |
+| `eriscs` | Keyed `erisc<r>`, in RISC order: each with its `processor`, `physical_erisc` and `opt_level` (the level its kernel was compiled at, `o3` or `os`) |
 | `leftover_l1` | The L1 from the end of what the router places to the end of the L1 the router may load into, as `byte`, or null when there is none |
 
 ### Channels
@@ -250,7 +251,7 @@ A sender channel also has:
 | Key | Value |
 | --- | --- |
 | `producer` | What feeds it: `"worker"`, `"tensix_mux"`, a sibling router's path, or null |
-| `credits` | Keyed by ERISC: `completed`, and on VC0, on an ERISC whose `vc0_bubble_flow_control` is set, `acked`. Each is a stream register, null when unallocated, or `{ array, index }` into the router's credit counters |
+| `credits` | Keyed by ERISC: `completed`, and on VC0, on an ERISC whose `vc0_bubble_flow_control` is set, `acked`. Each is `{ array, index }` into the router's credit counters, where the router takes every VC's credits |
 
 A receiver channel also has:
 
@@ -313,8 +314,8 @@ One router from a Blackhole 2D mock manifest, trimmed:
                 "vc0_bubble_flow_control": { "category": "kernel_params", "kind": "flag", "value": false }, ... },
     "erisc1": { ... }
   },
-  "eriscs": { "erisc0": { "processor": "riscv_0", "physical_erisc": 0 },
-              "erisc1": { "processor": "riscv_1", "physical_erisc": 1 } },
+  "eriscs": { "erisc0": { "processor": "riscv_0", "physical_erisc": 0, "opt_level": "o3" },
+              "erisc1": { "processor": "riscv_1", "physical_erisc": 1, "opt_level": "o3" } },
   "leftover_l1": { "address": 451200, "num_elements": 4064, "element_size": 1, "type": "byte" },
   ...
 }

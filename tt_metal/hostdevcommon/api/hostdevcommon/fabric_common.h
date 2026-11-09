@@ -1244,6 +1244,16 @@ static constexpr uint32_t FABRIC_CONNECTION_OBJECT_OFFSET = 8;
 // Size reserved for WorkerToFabricEdmSender object (verified by static_assert in tt_fabric_udm_impl.hpp)
 static constexpr uint32_t FABRIC_CONNECTION_OBJECT_SIZE = 128;
 
+// ============================================================================
+// Virtual channels
+// ============================================================================
+
+// The VC that a router's receiver channel on `vc` forwards to.
+constexpr std::size_t receiver_channel_forwards_on_vc(std::size_t vc, bool crosses_over_to_vc1) {
+    constexpr std::size_t intermesh_vc = 1;
+    return crosses_over_to_vc1 ? intermesh_vc : vc;
+}
+
 }  // namespace tt::tt_fabric
 
 #if defined(KERNEL_BUILD) || defined(FW_BUILD)

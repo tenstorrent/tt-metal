@@ -76,7 +76,7 @@ or fabric (TYPE_REGISTRY.md's "Where regions are registered"):
 
 | Area | From |
 | --- | --- |
-| `heartbeat` | The word the router writes `magic \| iteration count` to every `period_iters` main-loop iterations, from `fabric_common.h`, with its `magic`, `magic_mask` and `period_iters`. On Blackhole it's base firmware's own heartbeat word, which the router writes over while it runs. The address is picked by arch, copying the kernel's `#if ARCH_BLACKHOLE` (`fabric_erisc_router.cpp`), since no input carries it |
+| `heartbeat` | The word the router writes `magic \| iteration count` to every `period_iters` main-loop iterations, from `fabric_common.h`, with its `magic`, `magic_mask` and `period_iters`. On Blackhole it's base firmware's own heartbeat word, which the router writes over while it runs. The address is picked by arch, copying the kernel's `heartbeat_addr` (`router_common.hpp`), since no input carries it |
 | `fabric_telemetry` | The HAL's `FABRIC_TELEMETRY` area, as a `FabricTelemetry`. `arch.fabric_telemetry_version` is `FABRIC_TELEMETRY_VERSION` (`fabric_telemetry_msgs.h`), which layout of the struct it holds |
 | `routing_table` | The HAL's `ROUTING_TABLE` area, as a `routing_l1_info_t` |
 | `eth_fw_mailbox` | The HAL's `ETH_FW_MAILBOX` area, as `uint32_t`s. Null where the HAL has no Ethernet firmware mailbox |
@@ -103,7 +103,8 @@ senders' credits travel. The topology pass calls `describe_credit_transport` for
 builder's own decision: the credit transport plan the builder context made for the mesh (`CreditTransportPlan`), which
 has one flag per VC (`vc0_uses_counters`, `vc1_uses_counters`, `vc2_uses_counters`).
 
-A sender channel's credits point into the counter arrays or at a stream register to match
+The router takes every VC's credits through L1 counters (`router_sender.hpp` `static_assert`s it), so with this router
+every VC with senders is `l1_counter`, and a sender channel's credits point into the counter arrays
 ([ROUTER_PASS.md](ROUTER_PASS.md)).
 
 ## Adding a fact stated once

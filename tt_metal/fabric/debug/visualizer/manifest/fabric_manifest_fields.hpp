@@ -34,6 +34,8 @@ enum class ArgIndex : uint8_t {
     NONE,
     // Over this router's own counts, as most per-channel tables are indexed.
     COMPACT,
+    // The channel's VC, for an argument the builder emits once per VC.
+    VC,
     // Over the fabric's maximum counts, as the free-slots stream table is indexed (StreamAssignment).
     FABRIC_POSITION,
     // The edge's VC in the first {}, and its edge number in the second.
@@ -57,6 +59,8 @@ enum class Emitted : uint8_t {
     FABRIC_2D,
     // Only with the channel trimming capture on (ENABLE_CHANNEL_TRIMMING_RESOURCE_USAGE_CAPTURE).
     CHANNEL_TRIMMING_CAPTURE,
+    // Only with deadlock avoidance on (ENABLE_DEADLOCK_AVOIDANCE): VC0 runs bubble flow control.
+    DEADLOCK_AVOIDANCE,
 };
 
 // A named compile-time argument, e.g. "EDM_STATUS_PTR_ADDR", or "SENDER_CH_{}_IS_INJECTION" for each channel.
@@ -188,14 +192,6 @@ inline constexpr auto k_router_fields = [] {
 
         // Flow control
         RouterField{
-            .key = "vc2_receiver_free_slots",
-            .source = "VC2_RECEIVER_FREE_SLOTS_STREAM_ID",
-            .category = FLOW_CONTROL,
-            .content = register_stream_region<uint32_t>(StreamRegister::BUF_SPACE_AVAILABLE),
-            .description = "The register reserved for the VC2 receiver's free slots. Null when the router has no VC2. "
-                           "The router kernel declares it but does not read it.",
-        },
-        RouterField{
             .key = "notify_worker_src",
             .source = "NOTIFY_WORKER_OF_READ_COUNTER_UPDATE_SRC_ADDR",
             .category = FLOW_CONTROL,
@@ -246,14 +242,6 @@ inline constexpr auto k_router_fields = [] {
                            "route, and then starts counting again.",
         },
         RouterField{
-            .key = "txq_spin_wait_send_data",
-            .source = "ETH_TXQ_SPIN_WAIT_SEND_NEXT_DATA",
-            .category = KERNEL_PARAMS,
-            .content = content::Flag{},
-            .description = "Whether a data send spins until the Ethernet TX queue is free, instead of skipping the "
-                           "send while it is busy.",
-        },
-        RouterField{
             .key = "txq_spin_wait_completion_ack",
             .source = "ETH_TXQ_SPIN_WAIT_RECEIVER_SEND_COMPLETION_ACK",
             .category = KERNEL_PARAMS,
@@ -267,6 +255,14 @@ inline constexpr auto k_router_fields = [] {
             .content = content::Number{},
             .description = "How many packets each Ethernet TX queue accepts before the earlier ones are sent. "
                            "Written to both queues' ETH_TXQ_DATA_PACKET_ACCEPT_AHEAD register at startup.",
+        },
+        RouterField{
+            .key = "txq_seq_update_timeout",
+            .source = "ETH_TXQ_SEQ_UPDATE_TIMEOUT",
+            .category = KERNEL_PARAMS,
+            .content = content::Number{},
+            .description = "The Ethernet TX queues' keepalive period while the router runs, in cycles: how long an "
+                           "idle queue waits before it sends its paired RX queue's acknowledgements.",
         },
         RouterField{
             .key = "risc_cpu_data_cache",
@@ -285,28 +281,26 @@ inline constexpr auto k_router_fields = [] {
                            "VC0 senders then also get credits back when the peer receives a packet (acked).",
         },
         RouterField{
+            .key = "injection_min_free_slots",
+            .source =
+                NamedArg{
+                    "BUBBLE_FLOW_CONTROL_INJECTION_SENDER_CHANNEL_MIN_FREE_SLOTS",
+                    ArgIndex::NONE,
+                    Emitted::DEADLOCK_AVOIDANCE},
+            .category = FLOW_CONTROL,
+            .content = content::Number{},
+            .description = "With bubble flow control, the free slots an injection channel needs in the peer's VC0 "
+                           "receiver before it sends.",
+        },
+        RouterField{
             .key = "speedy_vc0",
             .source = "ENABLE_SPEEDY_VC0",
             .category = KERNEL_PARAMS,
             .content = content::Flag{},
-            .description = "Whether VC0 runs the speedy path: worker-only steps that pass credits in batches, so a "
-                           "credit count can lag the packet count by up to a batch.",
-        },
-        RouterField{
-            .key = "sender_credit_amortization",
-            .source = "SENDER_CREDIT_AMORTIZATION_FREQUENCY",
-            .category = KERNEL_PARAMS,
-            .content = content::Number{},
-            .description = "Speedy VC0 only: the sender reads completions once this many packets are outstanding, "
-                           "and returns credits to its producer once this many have completed.",
-        },
-        RouterField{
-            .key = "receiver_credit_amortization",
-            .source = "RECEIVER_CREDIT_AMORTIZATION_FREQUENCY",
-            .category = KERNEL_PARAMS,
-            .content = content::Number{},
-            .description = "Speedy VC0 only: the receiver acks completions to the peer's sender in batches of at "
-                           "least this many packets.",
+            .description = "Whether the builder made VC0 a speedy router: a worker-only VC0 whose receiver only "
+                           "delivers to this chip, with no bubble flow control or first-level acks. The kernel doesn't "
+                           "act on this flag: the builder applies the choice by setting VC0's receiver "
+                           "forwarding_disabled and turning vc0_bubble_flow_control off.",
         },
 
         // Diagnostics
@@ -369,25 +363,6 @@ inline constexpr auto k_router_fields = [] {
             .description = "Whether this ERISC hands control back to base firmware.",
         },
         RouterField{
-            .key = "services_sender_channels",
-            .source = "RISC_SERVICES_SENDER_CHANNELS",
-            .category = LIFECYCLE,
-            .content = content::Flag{},
-            .description = "Whether this ERISC has the sender role, so it sets up the sender channels' worker "
-                           "interfaces at startup, and its sender-side TXQ1 state in multi-TXQ mode. On Blackhole with "
-                           "two ERISCs only ERISC0 has it, and otherwise every ERISC does. Channel trimming doesn't "
-                           "change it.",
-        },
-        RouterField{
-            .key = "services_receiver_channels",
-            .source = "RISC_SERVICES_RECEIVER_CHANNELS",
-            .category = LIFECYCLE,
-            .content = content::Flag{},
-            .description = "Whether this ERISC has the receiver role, so it sets up its TXQ1 state at startup in "
-                           "multi-TXQ mode. On Blackhole with two ERISCs only ERISC1 has it, and otherwise every ERISC "
-                           "does. Channel trimming doesn't change it.",
-        },
-        RouterField{
             .key = "opens_vc0_downstream_connections",
             .source = "OPEN_DOWNSTREAM_VC0_CONNECTIONS",
             .category = LIFECYCLE,
@@ -402,16 +377,8 @@ inline constexpr auto k_router_fields = [] {
             .content = content::Flag{},
             .description = "Whether this ERISC opens the router's VC1 connections to its downstream routers at "
                            "startup: set when it runs receiver 0's step on a router that crosses VC0 traffic over to "
-                           "VC1, or receiver 1's step on a router that services VC1. The kernel reads it only with "
-                           "FABRIC_2D_VC1_ACTIVE.",
-        },
-        RouterField{
-            .key = "interrupts_enabled",
-            .source = "ENABLE_INTERRUPTS",
-            .category = KERNEL_PARAMS,
-            .content = content::Flag{},
-            .description = "Whether this ERISC is configured with interrupts on. The router kernel declares it but "
-                           "does not read it.",
+                           "VC1, or receiver 1's step on a router that services VC1. The kernel reads it only on a "
+                           "router with VC1 senders (ACTUAL_VC1_SENDER_CHANNELS > 0).",
         },
         RouterField{
             .key = "teardown_check_iterations",
@@ -502,14 +469,6 @@ inline constexpr auto k_router_fields = [] {
             .content = content::Number{},
             .description = "The mesh's rows, which bound the router's 2D route table.",
         },
-        RouterField{
-            .key = "remote_worker_sender_channel",
-            .source = "REMOTE_WORKER_SENDER_CHANNEL",
-            .category = CONTROL_INFO,
-            .content = content::Number{},
-            .description = "The peer router's worker sender channel. In mux mode the router writes it as the source "
-                           "channel of the packets it receives. 0 when the router has no peer.",
-        },
     };
 }();
 
@@ -531,7 +490,9 @@ inline constexpr auto k_sender_channel_fields = [] {
             .content = register_stream_region<uint32_t>(StreamRegister::BUF_SPACE_AVAILABLE),
             .description = "The channel's slots not holding a packet waiting to be sent: the producer takes one per "
                            "packet it writes, and the router returns it as soon as it sends the packet over Ethernet. "
-                           "The producer gets its credit back later, at the ack or the completion.",
+                           "The producer gets its credit back later: at the peer receiver's first-level ack, or when "
+                           "the packet's completion group there completes (the peer receiver's "
+                           "completion_group_size).",
         },
         RouterField{
             .key = "producer_credit_return_noc",
@@ -606,12 +567,10 @@ inline constexpr auto k_receiver_channel_fields = [] {
     return std::array{
         RouterField{
             .key = "forwarding_disabled",
-            .source = NamedArg{"DISABLE_RX_CH{}_FORWARDING", ArgIndex::COMPACT},
+            .source = NamedArg{"DISABLE_RX_CH{}_FORWARDING", ArgIndex::VC},
             .category = KERNEL_PARAMS,
             .content = content::Flag{},
-            .description = "Whether the receiver's step skips handing its packets on, to siblings or the local chip. "
-                           "Set for the speedy VC0 and VC2 steps, which hand packets on themselves, and when a channel "
-                           "trimming capture saw the channel do neither.",
+            .description = "Whether the receiver forwards nothing to sibling routers: it only delivers to this chip. "
         },
         RouterField{
             .key = "intermesh_ingress",
@@ -665,7 +624,35 @@ inline constexpr auto k_receiver_channel_fields = [] {
             .content = register_stream_region<uint32_t>(StreamRegister::BUF_SPACE_AVAILABLE),
             .description = "The packets the peer's sender has sent the channel that the receiver has not taken yet: "
                            "the peer adds one per packet it sends over Ethernet, and the receiver takes one when it "
-                           "acks the packet with first-level ack, or else once it has forwarded or delivered it.",
+                           "acks the packet with first-level ack, or else once it has issued the packet's forward or "
+                           "local write. The peer's sender gets the slot back later, through the credit counters: at "
+                           "the ack, or when the slot's completion group completes (completion_group_size).",
+        },
+        // Transaction IDs
+        RouterField{
+            .key = "completion_group_size",
+            .source = NamedArg{"RX_CH_{}_COMPLETION_GROUP_SIZE", ArgIndex::COMPACT},
+            .category = FLOW_CONTROL,
+            .content = content::Number{},
+            .description = "How many slots the receiver returns credits for (to the upstream sender) at once. It "
+                           "returns a group's credits once no NoC command with the group's transaction ID is in "
+                           "flight.",
+        },
+        RouterField{
+            .key = "num_trids",
+            .source = NamedArg{"RX_CH_{}_NUM_TRIDS", ArgIndex::COMPACT},
+            .category = KERNEL_PARAMS,
+            .content = content::Number{},
+            .description = "# of NoC transaction IDs that a receiver channel uses. Each completion group uses an id, "
+                           "and if more groups exist than ids, trids are shared across groups.",
+        },
+        RouterField{
+            .key = "trid_start",
+            .source = NamedArg{"RX_CH_{}_TRID_START", ArgIndex::COMPACT},
+            .category = KERNEL_PARAMS,
+            .content = content::Number{},
+            .description = "The channel's first transaction ID. The range of trids used for this channel is "
+                           "[trid_start, trid_start + num_trids).",
         },
     };
 }();
@@ -679,8 +666,9 @@ inline constexpr auto k_downstream_edge_fields = [] {
             .category = FLOW_CONTROL,
             .content = register_stream_region<uint32_t>(StreamRegister::BUF_SPACE_AVAILABLE),
             .description = "The router's view of the free slots in the sender channel the edge lands on: the router "
-                           "takes one per packet it forwards, and the sibling returns it when the packet is acked with "
-                           "first-level ack, or else when it completes.",
+                           "takes one per packet it forwards, and the sibling returns it once its peer receiver acks "
+                           "the packet with first-level ack, or else once the packet's completion group there "
+                           "completes (that receiver's completion_group_size).",
         },
         RouterField{
             .key = "teardown_sem",
@@ -702,6 +690,7 @@ constexpr size_t num_placeholders(ArgIndex index) {
     switch (index) {
         case ArgIndex::NONE: return 0;
         case ArgIndex::COMPACT:
+        case ArgIndex::VC:
         case ArgIndex::FABRIC_POSITION: return 1;
         case ArgIndex::VC_AND_EDGE: return 2;
     }
@@ -781,16 +770,15 @@ inline constexpr auto k_router_pass_args = std::to_array<std::string_view>({
     "LOCAL_RECEIVER_COMPLETION_COUNTERS_BASE_ADDR",
     "IS_2D_FABRIC",
     "ENABLE_CHANNEL_TRIMMING_RESOURCE_USAGE_CAPTURE",
-    "ENABLE_SPEEDY_VC0",
     "FABRIC_TENSIX_EXTENSION_MUX_MODE",
     "CHANNEL_BUFFER_SIZE",
     "VC{}_FABRIC_POSITION_START",
     "IS_SENDER_CHANNEL_{}_SERVICED",
     "IS_RECEIVER_CHANNEL_{}_SERVICED",
-    "VC{}_USES_COUNTER_CREDITS",
-    "TO_SENDER_{}_PKTS_COMPLETED_ID",
-    "TO_SENDER_{}_PKTS_ACKED_ID",
+    "SENDER_CH_{}_IS_WORKER_CHANNEL",
     "ENABLE_FIRST_LEVEL_ACK_VC{}",
+    "DISABLE_RX_CH{}_FORWARDING",
+    "VC2_CROSSOVER_TO_VC1",
     "NUM_DOWNSTREAM_SENDERS_VC{}",
 });
 
@@ -808,6 +796,16 @@ struct Unrecorded {
 };
 
 inline constexpr std::string_view k_not_yet_described = "Not yet described.";
+inline constexpr std::string_view k_not_read_by_router = "Not read by the router.";
+inline constexpr std::string_view k_erisc_role_unused =
+    "Not read by the router: an ERISC's roles come from the channels it services (is_sender_role and is_receiver_role "
+    "in router_common.hpp), which each channel's serviced_by shows.";
+inline constexpr std::string_view k_stream_credits_unused =
+    "A stream register for the channel's credits, which the router doesn't read: it takes every VC's credits through "
+    "L1 counters (the router's credit_counters).";
+inline constexpr std::string_view k_amortization_unused =
+    "Not read by the router: the kernel only checks it is nonzero on a speedy router "
+    "(fabric_erisc_router_ct_args.hpp).";
 inline constexpr std::string_view k_link_sync =
     "The streaming profiler's link sync, fed on Blackhole when the profiler is on "
     "(link_sync::add_router_compile_args). Not yet described.";
@@ -820,26 +818,43 @@ inline constexpr auto k_unrecorded_args = std::to_array<Unrecorded>({
     {"MY_ERISC_ID", "The ERISC's index in the router's eriscs, which the manifest lists in RISC order."},
     {"NUM_RECEIVER_CHANNELS",
      "The router's receiver count. The manifest lists the receivers from the builder's VC shape."},
+    {"VC{}_WORKER_CONNECTION_SEMAPHORE_ADDR",
+     "The worker channel's connection semaphore, fed for VC0 and VC2 only. The same L1 word as the sender's connection "
+     "field, which reads it from the router's runtime args."},
 
     // The same on every router
     {"MAX_NUM_SENDER_CHANNELS", "builder_config::num_max_sender_channels."},
     {"MAX_NUM_RECEIVER_CHANNELS", "builder_config::num_max_receiver_channels."},
     {"MAX_NUM_VCS", "builder_config::MAX_NUM_VCS."},
-    {"NUM_ETH_PORTS", "The SoC's Ethernet channel count, which sizes the kernel's port_direction_table."},
 
     // Not read by the kernel, or carried by another input
     {"SKIP_SRC_CH_ID_UPDATE",
      "Not read: the kernel derives the flag from FABRIC_TENSIX_EXTENSION_MUX_MODE (fabric_erisc_router_ct_args.hpp)."},
     {"PACKED_DOWNSTREAM_VC{}_SENDER_CHANNEL_IDS",
      "The edges' landing channels, packed; fed only in 2D with channel trimming capture. Each edge records its own."},
+    {"VC{}_USES_COUNTER_CREDITS",
+     "Set wherever the VC has senders, and indicates whether a vc credit mechanism is through counters in l1."},
+    {"TO_SENDER_{}_PKTS_COMPLETED_ID", k_stream_credits_unused},
+    {"TO_SENDER_{}_PKTS_ACKED_ID", k_stream_credits_unused},
+    {"SENDER_CREDIT_AMORTIZATION_FREQUENCY", k_amortization_unused},
+    {"RECEIVER_CREDIT_AMORTIZATION_FREQUENCY", k_amortization_unused},
+    {"RISC_SERVICES_SENDER_CHANNELS", k_erisc_role_unused},
+    {"RISC_SERVICES_RECEIVER_CHANNELS", k_erisc_role_unused},
+    {"REMOTE_WORKER_SENDER_CHANNEL",
+     "Not read by the router: in mux mode it takes the source channel of the packets it receives as 0."},
+    {"ETH_TXQ_SPIN_WAIT_SEND_NEXT_DATA", "Not read by the router. The host requires 0 (validate_router_config)."},
+    {"ENABLE_INTERRUPTS", k_not_read_by_router},
+    {"VC2_RECEIVER_FREE_SLOTS_STREAM_ID", k_not_read_by_router},
+    {"NUM_DOWNSTREAM_CHANNELS", k_not_read_by_router},
+    {"FUSE_RECEIVER_FLUSH_AND_COMPLETION_PTR",
+     "Not read by the router beyond a static_assert that it is 1 (fabric_erisc_router_ct_args.hpp)."},
+    {"NUM_ETH_PORTS", k_not_read_by_router},
 
     // Not yet described
     {"MY_ETH_CHANNEL", k_not_yet_described},
     {"NUM_SENDER_CHANNELS", k_not_yet_described},
-    {"NUM_DOWNSTREAM_CHANNELS", k_not_yet_described},
     {"NUM_DS_OR_LOCAL_TENSIX_CONNECTIONS", k_not_yet_described},
     {"VC{}_DOWNSTREAM_EDM_SIZE", k_not_yet_described},
-    {"FUSE_RECEIVER_FLUSH_AND_COMPLETION_PTR", k_not_yet_described},
     {"EDM_NOC_VC", k_not_yet_described},
     {"FORCE_ALL_PATHS_TO_USE_SAME_NOC", k_not_yet_described},
     {"UDM_MODE", k_not_yet_described},
@@ -857,7 +872,6 @@ inline constexpr std::string_view k_fabric_wide_define =
 
 inline constexpr auto k_unrecorded_defines = std::to_array<Unrecorded>({
     {"FABRIC_2D", "The same fact as IS_2D_FABRIC: both come from is_2D_routing_enabled."},
-    {"FABRIC_2D_VC1_ACTIVE", "The same fact as ACTUAL_VC1_SENDER_CHANNELS > 0: set when the router has VC1 senders."},
     {"ROUTING_MODE", k_fabric_wide_define},
     {"UDM_MODE", k_fabric_wide_define},
     {"FABRIC_1D_PKT_HDR_EXTENSION_WORDS", k_fabric_wide_define},

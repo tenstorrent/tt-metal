@@ -296,8 +296,8 @@ void check_peers_are_symmetric(const json& manifest, const std::vector<RouterEnt
     }
 }
 
-// Every VC some router of a local mesh has senders on has a credit transport entry, so each sender's credits can be
-// read by the backing its VC names.
+// Every VC some router of a local mesh has senders on has a credit transport entry, backed by L1 counters: the router
+// takes every VC's credits through them (router_sender.hpp static_asserts it), and each sender's credits name them.
 void check_credit_transport(const json& manifest, const std::vector<RouterEntry>& routers) {
     for (const auto& [m_key, mesh] : manifest.at("meshes").items()) {
         if (!mesh.contains("credit_transport")) {
@@ -316,7 +316,14 @@ void check_credit_transport(const json& manifest, const std::vector<RouterEntry>
                 }
             }
         }
-        EXPECT_TRUE(std::ranges::includes(keys_of(mesh.at("credit_transport")), vcs_with_senders));
+        const auto& transport = mesh.at("credit_transport");
+        EXPECT_TRUE(std::ranges::includes(keys_of(transport), vcs_with_senders));
+        for (const auto& vc_key : vcs_with_senders) {
+            if (transport.contains(vc_key)) {
+                EXPECT_EQ(transport.at(vc_key).at("backing"), lower_enum_name(manifest::CreditBacking::L1_COUNTER))
+                    << vc_key;
+            }
+        }
     }
 }
 
@@ -336,27 +343,9 @@ void check_intermesh_vc(const json& manifest, const std::vector<RouterEntry>& ro
     }
 }
 
-// A stream register the builder did not allocate is null.
-void expect_stream(const json& stream, bool must_be_allocated) {
-    if (stream.is_null()) {
-        EXPECT_FALSE(must_be_allocated);
-    }
-}
-
-// On L1 counters, a credit is the sender's own element of the router's counter array, which is indexed by the router's
-// sender compact index and must be long enough for it. On stream registers, it is a register.
-void expect_credit(
-    const json& credit,
-    const json& router,
-    manifest::CreditCounterArray array,
-    bool uses_counters,
-    uint32_t compact,
-    bool serviced) {
-    if (!uses_counters) {
-        ASSERT_FALSE(credit.contains("array")) << credit;
-        expect_stream(credit, serviced);
-        return;
-    }
+// A credit is the sender's own element of the router's counter array, which is indexed by the router's sender compact
+// index and must be long enough for it.
+void expect_credit(const json& credit, const json& router, manifest::CreditCounterArray array, uint32_t compact) {
     ASSERT_TRUE(credit.is_object() && credit.contains("array")) << credit;
     EXPECT_EQ(credit.at("array"), fmt::format("credit_counters/{}", lower_enum_name(array)));
     EXPECT_EQ(credit.at("index"), compact);
@@ -461,8 +450,8 @@ void expect_ring_buffer(const json& ring, uint32_t channel_buffer_size, const js
 // A router's sender channels, over its shape. Each one's producer is the chip's worker on a VC's first channel (the
 // tensix mux on VC0 in mux mode), or a different router on the same chip and routing plane, feeding at most one
 // channel per VC; in 1D a router and its producer feed each other. Nothing feeds a channel the mux carries. Only the
-// worker channel has a producer cursor (buffer_index_sem): a sibling router keeps none. Each credit is on the backing
-// the mesh's credit transport names for its VC. A router has trimmed channels only when a trimming profile is set.
+// worker channel has a producer cursor (buffer_index_sem): a sibling router keeps none. Each credit is the channel's
+// element of the router's to_sender counter arrays. A router has trimmed channels only when a trimming profile is set.
 void check_router_senders(const json& manifest, const std::vector<RouterEntry>& routers) {
     const bool is_2d = manifest.at("fabric").at("is_2d_routing").get<bool>();
     const auto channel_buffer_size = manifest.at("fabric").at("channel_buffer_size_bytes").get<uint32_t>();
@@ -473,7 +462,6 @@ void check_router_senders(const json& manifest, const std::vector<RouterEntry>& 
         const auto& router = *entry.router;
         const auto& shape = router.at("shape");
         const auto& senders = router.at("channels").at("senders");
-        const auto& transport = manifest.at("meshes").at(mesh_key(entry.node.mesh_id)).at("credit_transport");
         const auto chip_prefix = entry.path.substr(0, entry.path.rfind('/') + 1);
         if (!has_trimming_profile) {
             EXPECT_FALSE(shape.at("channel_trimming_overrides_applied").get<bool>());
@@ -490,8 +478,6 @@ void check_router_senders(const json& manifest, const std::vector<RouterEntry>& 
             expected_vc_keys.insert(vc_key);
             ASSERT_TRUE(senders.contains(vc_key));
             ASSERT_EQ(senders.at(vc_key).size(), count);
-            ASSERT_TRUE(transport.contains(vc_key));
-            const bool uses_counters = transport.at(vc_key).at("backing") == "l1_counter";
 
             std::set<std::string> producers;
             for (uint32_t ch = 0; ch < count; ++ch, ++compact) {
@@ -499,7 +485,6 @@ void check_router_senders(const json& manifest, const std::vector<RouterEntry>& 
                 SCOPED_TRACE(fmt::format("senders/{}/{}", vc_key, ch_key));
                 ASSERT_TRUE(senders.at(vc_key).contains(ch_key));
                 const auto& sender = senders.at(vc_key).at(ch_key);
-                const bool serviced = !sender.at("serviced_by").empty();
 
                 const auto& producer = sender.at("producer");
                 if (sender.at("status") == lower_enum_name(manifest::ChannelStatus::MUX)) {
@@ -543,20 +528,10 @@ void check_router_senders(const json& manifest, const std::vector<RouterEntry>& 
                     EXPECT_EQ(credits.contains("acked"), vc == 0 && bubble_flow_control);
                     if (credits.contains("acked")) {
                         expect_credit(
-                            credits.at("acked"),
-                            router,
-                            manifest::CreditCounterArray::TO_SENDER_ACK,
-                            uses_counters,
-                            compact,
-                            serviced);
+                            credits.at("acked"), router, manifest::CreditCounterArray::TO_SENDER_ACK, compact);
                     }
                     expect_credit(
-                        credits.at("completed"),
-                        router,
-                        manifest::CreditCounterArray::TO_SENDER_COMPLETION,
-                        uses_counters,
-                        compact,
-                        serviced);
+                        credits.at("completed"), router, manifest::CreditCounterArray::TO_SENDER_COMPLETION, compact);
                 }
             }
         }
@@ -611,9 +586,10 @@ void check_router_edges(const json& manifest, const std::vector<RouterEntry>& ro
     }
 }
 
-// Whether `field`'s argument is emitted on this fabric: a 2D-only argument is not emitted in 1D, and a capture-only
-// argument only when the builder allocated the channel trimming capture.
-bool is_emitted(const manifest::RouterField& field, bool is_2d) {
+// Whether `field`'s argument is emitted on this fabric: a 2D-only argument is not emitted in 1D, a capture-only
+// argument only when the builder allocated the channel trimming capture, and a deadlock-avoidance argument only on an
+// ERISC with deadlock avoidance on.
+bool is_emitted(const manifest::RouterField& field, bool is_2d, bool deadlock_avoidance) {
     const auto* arg = std::get_if<manifest::NamedArg>(&field.source);
     if (arg == nullptr) {
         return true;
@@ -623,17 +599,22 @@ bool is_emitted(const manifest::RouterField& field, bool is_2d) {
         case manifest::Emitted::FABRIC_2D: return is_2d;
         case manifest::Emitted::CHANNEL_TRIMMING_CAPTURE:
             return builder_context().get_telemetry_and_metadata_buffer_map().channel_trimming_capture.is_enabled();
+        case manifest::Emitted::DEADLOCK_AVOIDANCE: return deadlock_avoidance;
     }
     return false;
 }
 
 // `fields` holds exactly `table`'s fields emitted on this fabric, and only an L1 or stream field, a buffer or register
 // the builder did not allocate, is null. Emission is worked out from the fabric and the builder's buffer map, not from
-// the kernel arguments the router pass reads.
+// the kernel arguments the router pass reads, except deadlock avoidance: the builder decides it per router, partly from
+// the trimming fast path, so a deadlock-avoidance field is expected exactly where the ERISC's own
+// vc0_bubble_flow_control field is set.
 void expect_fields(const json& fields, std::span<const manifest::RouterField> table, bool is_2d) {
+    const bool deadlock_avoidance =
+        fields.contains("vc0_bubble_flow_control") && fields.at("vc0_bubble_flow_control").at("value").get<bool>();
     std::set<std::string> expected_keys;
     for (const auto& field : table) {
-        if (!is_emitted(field, is_2d)) {
+        if (!is_emitted(field, is_2d, deadlock_avoidance)) {
             continue;
         }
         const std::string key(field.key.value);
@@ -681,6 +662,10 @@ void check_router_fields(const json& manifest, const std::vector<RouterEntry>& r
                 fields.at("my_direction").at("value").get<uint32_t>(),
                 static_cast<uint32_t>(control_plane().get_eth_chan_direction(entry.node, entry.eth_chan)))
                 << risc_key;
+            // Bubble flow control's injection floor is the bubble's two slots, at least.
+            if (fields.contains("injection_min_free_slots")) {
+                EXPECT_GE(fields.at("injection_min_free_slots").at("value").get<uint32_t>(), 2u) << risc_key;
+            }
         }
         expect_channel_fields(router.at("channels").at("senders"), manifest::k_sender_channel_fields);
         expect_channel_fields(router.at("channels").at("receivers"), manifest::k_receiver_channel_fields);
@@ -949,6 +934,7 @@ TEST(ManifestArgs, KernelInputsAccounted) {
     const std::vector<KernelInputs> kernel = {{
         .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
         .noc = tt::tt_metal::NOC::NOC_0,
+        .opt_level = tt::tt_metal::KernelBuildOptLevel::O3,
         .compile_args = {},
         .named_compile_args =
             {

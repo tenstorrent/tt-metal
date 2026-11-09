@@ -213,7 +213,9 @@ constexpr bool runs_vc(size_t vc) {
 }
 
 // The VC of the downstream connections VC's receiver channel forwards on: its own, or VC1 where it crosses over.
-constexpr size_t forwards_on_vc_of(size_t vc) { return is_vc_crossover_to_vc1[vc] ? 1 : vc; }
+constexpr size_t forwards_on_vc_of(size_t vc) {
+    return receiver_channel_forwards_on_vc(vc, is_vc_crossover_to_vc1[vc]);
+}
 
 // Whether a receiver channel this router runs forwards on VC vc's downstream connections. About the connections, not
 // vc's traffic: where VC0 crosses over, its packets go on VC1's downstreams, so any_forwards_on_vc(0) is false and

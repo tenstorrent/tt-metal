@@ -175,7 +175,6 @@ or from several arguments, and registers them with it:
 | `describe_ring_buffer` | A channel's ring buffer, as the run's packet header type with one element per slot | The channel allocator's base address and slot count, and `CHANNEL_BUFFER_SIZE` as the slot size |
 | `describe_l1_array<T>` | The four credit counter arrays, as `uint32_t` | Each array's base address argument, with the size taken from the spacing between them |
 | `collect_leftover_l1` | Leftover L1, as `std::byte` | From the builder's `get_allocated_l1_end_address` to `max_l1_loading_size` |
-| `read_fed_stream` | A credit on stream registers, as `uint32_t` | The `TO_SENDER_<c>_PKTS_COMPLETED_ID` or `TO_SENDER_<c>_PKTS_ACKED_ID` argument, through `describe_stream_register` |
 
 ```cpp
 // describe_ring_buffer: the allocator's address and slot count, and the channel's slot size, typed as the header

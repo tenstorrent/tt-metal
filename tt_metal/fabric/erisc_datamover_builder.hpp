@@ -514,6 +514,8 @@ public:
     const std::optional<ChannelTrimmingOverrides>& get_channel_trimming_overrides() const {
         return channel_trimming_overrides_;
     }
+    // Whether the fabric's Tensix mux carries sender channel `channel` (its flat index) instead of this router.
+    bool is_sender_channel_carried_by_mux(size_t channel) const;
 
     //    protected:
     const FabricContext& fabric_context_;
@@ -582,6 +584,9 @@ private:
     // Per-RISC channel servicing flags [risc_id][channel_id]
     std::array<std::array<bool, builder_config::num_max_sender_channels>, builder_config::MAX_NUM_VCS> is_sender_channel_serviced_{};
     std::array<std::array<bool, builder_config::num_max_receiver_channels>, builder_config::MAX_NUM_VCS> is_receiver_channel_serviced_{};
+
+    // Whether the router runs in Tensix mux mode: the fabric's mux feeds its worker channel and takes its forwards.
+    bool is_mux_mode() const;
 
     // Apply channel trimming overrides: disables unused sender/receiver channels
     // and stores overrides for compile-time arg generation (RX forwarding disable flags).

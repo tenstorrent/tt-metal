@@ -25,6 +25,7 @@ KernelInputs make_erisc_inputs(
     return {
         .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
         .noc = tt::tt_metal::NOC::NOC_0,
+        .opt_level = tt::tt_metal::KernelBuildOptLevel::O3,
         .compile_args = {},
         .named_compile_args = std::move(named_compile_args),
         .defines = std::move(defines),

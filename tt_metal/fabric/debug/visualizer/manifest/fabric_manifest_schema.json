@@ -200,12 +200,13 @@
         "field_kind": { "type": "array", "items": { "$ref": "#/$defs/field_kind" }, "uniqueItems": true },
         "channel_status": { "type": "array", "items": { "$ref": "#/$defs/channel_status" }, "uniqueItems": true },
         "erisc_processor": { "$ref": "#/$defs/name_list" },
+        "kernel_opt_level": { "$ref": "#/$defs/name_list" },
         "intermesh_vc_mode": { "$ref": "#/$defs/name_list" }
       },
       "required": [
         "arch", "fabric_config", "reliability_mode", "tensix_config", "udm_mode", "fabric_manager_mode",
         "fabric_topology", "credit_backing", "z_port_role", "edge_capability", "credit_counter_indexed_by",
-        "field_category", "field_kind", "channel_status", "erisc_processor",
+        "field_category", "field_kind", "channel_status", "erisc_processor", "kernel_opt_level",
         "intermesh_vc_mode"
       ],
       "additionalProperties": false
@@ -500,9 +501,10 @@
             "type": "object",
             "properties": {
               "processor": { "$ref": "#/$defs/name" },
-              "physical_erisc": { "$ref": "#/$defs/count" }
+              "physical_erisc": { "$ref": "#/$defs/count" },
+              "opt_level": { "$ref": "#/$defs/name" }
             },
-            "required": ["processor", "physical_erisc"],
+            "required": ["processor", "physical_erisc", "opt_level"],
             "additionalProperties": false
           }
         },
@@ -525,23 +527,17 @@
     "serviced_by": { "type": "array", "items": { "type": "string", "pattern": "^erisc[0-9]+$" }, "uniqueItems": true },
 
     "credit_ref": {
-      "description": "A stream register, null when the builder did not allocate one, or an element of a credit counter array.",
-      "oneOf": [
-        { "type": "null" },
-        { "$ref": "#/$defs/stream_reg" },
-        {
-          "type": "object",
-          "properties": {
-            "array": {
-              "type": "string",
-              "pattern": "^credit_counters/(to_sender_ack|to_sender_completion|receiver_ack|receiver_completion)$"
-            },
-            "index": { "$ref": "#/$defs/count" }
-          },
-          "required": ["array", "index"],
-          "additionalProperties": false
-        }
-      ]
+      "description": "An element of one of the router's credit counter arrays, where the router takes every VC's credits.",
+      "type": "object",
+      "properties": {
+        "array": {
+          "type": "string",
+          "pattern": "^credit_counters/(to_sender_ack|to_sender_completion|receiver_ack|receiver_completion)$"
+        },
+        "index": { "$ref": "#/$defs/count" }
+      },
+      "required": ["array", "index"],
+      "additionalProperties": false
     },
 
     "sender_channel": {
