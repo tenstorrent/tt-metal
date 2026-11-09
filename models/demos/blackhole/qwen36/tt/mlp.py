@@ -63,7 +63,7 @@ def mlp_decode_dshard_active(args, num_devices, use_gateup_agmm=True):
     return (
         num_devices == 4
         and use_gateup_agmm
-        and not tpc.use_small_m_mlp(args, 1)
+        and not tpc.use_small_m(args, 1)
         and tpc.mlp_gateup_agmm_enabled(num_devices)
         and args is not None
         and getattr(args, "num_devices", None) == 4
@@ -290,7 +290,7 @@ class Qwen36MLP:
         self.compute_kernel_config_agmm = ttnn.WormholeComputeKernelConfig(
             math_fidelity=fid,
             fp32_dest_acc_en=True,
-            packer_l1_acc=_l1acc and os.environ.get("QWEN36_MLP_L1ACC_AGMM", "1") == "1",
+            packer_l1_acc=_l1acc,
         )
         self.compute_kernel_config_decode = ttnn.WormholeComputeKernelConfig(
             math_fidelity=fid, fp32_dest_acc_en=True, packer_l1_acc=True
@@ -338,7 +338,7 @@ class Qwen36MLP:
         _hidden_done = False
         # Prefill: x is K-sharded (ff_norm skipped AG); fused AG + [gate|up] + SwiGLU
         _fused_gu = self._fuse_gateup_agmm and x.shape[-2] > ttnn.TILE_SIZE and w.w_gate_up is not None
-        if _fused_gu and self._mlp_1d_decode and tpc.use_small_m_mlp(args, x.shape[-2]):
+        if _fused_gu and self._mlp_1d_decode and tpc.use_small_m(args, x.shape[-2]):
             # Short S (args.prefill_small_m_max): the fused AGMM has a ~100 us floor, a separate all-gather + two 1D-mcast
             # matmuls (SILU fused into the gate one, as the decode path; w1/w3 are interleaved under mlp_1d_decode) +
             # mul is faster. `hidden` matches the AGMM swiglu output: [1,1,S,hidden/tp] bf16 DRAM. x stays the

@@ -23,10 +23,7 @@ DRAM_GRID = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoo
 
 # Compute kernel configs
 COMPUTE_HIFI2 = ttnn.WormholeComputeKernelConfig(
-    # QWEN36_PROJ_HIFI4=1: the prefill projections / SDPA config at HiFi4 (session 5d precision study)
-    math_fidelity=ttnn.MathFidelity.HiFi4
-    if os.environ.get("QWEN36_PROJ_HIFI4", "0") == "1"
-    else ttnn.MathFidelity.HiFi2,
+    math_fidelity=ttnn.MathFidelity.HiFi2,
     math_approx_mode=True,
     fp32_dest_acc_en=True,
     packer_l1_acc=True,
@@ -42,33 +39,6 @@ COMPUTE_LOFI = ttnn.WormholeComputeKernelConfig(
 
 
 FABRIC_PAYLOAD_ENV = "QWEN36_FABRIC_PAYLOAD_BYTES"
-
-
-def norm_exact_enabled():
-    """QWEN36_NORM_EXACT=1: every RMSNorm of the qwen36 stack (layer / final norms, the fused distributed norm, attention
-    q/k norms, the GDN gated norm) computes at HiFi4 with fp32 dest accumulation. The models/common RMSNorm default
-    (HiFi2 + fp32 acc) truncates x*x and biases sum(x^2): 0.88% rel error vs fp32 on real layer inputs (mean x^2 ~ 1e-4),
-    HiFi4 + fp32 0.29% (= bf16 output rounding); ttnn.rms_norm without a config is worse (2.8%). Session 5d, WORST_LOG.
-    """
-    return os.environ.get("QWEN36_NORM_EXACT", "0") == "1"
-
-
-def norm_compute_cfg():
-    return ttnn.WormholeComputeKernelConfig(
-        math_fidelity=ttnn.MathFidelity.HiFi4, math_approx_mode=False, fp32_dest_acc_en=True, packer_l1_acc=False
-    )
-
-
-if norm_exact_enabled() and not getattr(ttnn, "_qwen36_norm_exact", False):
-    # ttnn.rms_norm call sites without (or with a lower) compute config: route through HiFi4 + fp32 acc
-    _rms_norm_orig = ttnn.rms_norm
-
-    def _rms_norm_exact(*a, **kw):
-        kw["compute_kernel_config"] = norm_compute_cfg()
-        return _rms_norm_orig(*a, **kw)
-
-    ttnn.rms_norm = _rms_norm_exact
-    ttnn._qwen36_norm_exact = True
 
 
 def fabric_router_config():
@@ -832,7 +802,7 @@ def fused_distributed_rmsnorm(x, weight, eps, tt_ccl, topology, compute_cfg, mem
         persistent_output_buffer=stats,
         num_preferred_links=FUSED_NORM_LINKS,
         memory_config=memory_config,
-        compute_kernel_config=norm_compute_cfg() if norm_exact_enabled() else compute_cfg,
+        compute_kernel_config=compute_cfg,
     )
 
 
@@ -1010,12 +980,6 @@ def use_small_m(args, S):
     the fused all-gather-matmul: args.prefill_small_m_max > 0 and S <= it (default 0 = off, also when the attribute is
     absent)."""
     return 0 < getattr(args, "prefill_small_m_max", 0) and S <= args.prefill_small_m_max
-
-
-def use_small_m_mlp(args, S):
-    """use_small_m for the dense TP MLP: args.prefill_small_m_mlp_max (defaults to prefill_small_m_max)."""
-    m = getattr(args, "prefill_small_m_mlp_max", getattr(args, "prefill_small_m_max", 0))
-    return 0 < m and S <= m
 
 
 def tp_all_gather(x, tt_ccl, dim=3, memory_config=ttnn.DRAM_MEMORY_CONFIG, topology=ttnn.Topology.Ring):

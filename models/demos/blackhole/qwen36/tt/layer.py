@@ -19,10 +19,8 @@ from models.tt_transformers.tt.common import Mode
 
 
 def pg_batched_attn(pg):
-    """Grouped prefill attention batched over the rows (cos_cat / sin_cat given), unless QWEN36_GROUP_ATTN_PER_ROW=1."""
-    import os
-
-    return pg.get("cos_cat") is not None and os.environ.get("QWEN36_GROUP_ATTN_PER_ROW", "0") != "1"
+    """Grouped prefill attention batched over the rows: the group carries the rows' rope tables back to back."""
+    return pg.get("cos_cat") is not None
 
 
 def tokpar_enabled():
@@ -57,10 +55,7 @@ def tokpar_a2a(x, to_tokens):
         out_dim=out_dim,
         num_links=2,
         topology=ttnn.Topology.Ring,
-        # QWEN36_TOKPAR_A2A_L1=1: the all-to-all outputs in L1
-        memory_config=ttnn.L1_MEMORY_CONFIG
-        if os.environ.get("QWEN36_TOKPAR_A2A_L1", "0") == "1"
-        else ttnn.DRAM_MEMORY_CONFIG,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
 
 
@@ -83,11 +78,8 @@ def _load_tokpar_mlp(mesh, mlp_state, cache_dir):
     return {"w1": load("gate_proj"), "w3": load("up_proj"), "w2": load("down_proj")}
 
 
-def _TBW():
-    """QWEN36_TOKPAR_BW: in0_block_w of the token-parallel matmuls (default 8; 4 fits bf16 weights)."""
-    import os
-
-    return int(os.environ.get("QWEN36_TOKPAR_BW", "8"))
+# in0_block_w of the token-parallel matmuls (bf8 weights)
+_TOKPAR_BW = 8
 
 
 def _tokpar_pc(m, k, n, bw, act=None, lim=4, prefer_h=False):
@@ -378,13 +370,7 @@ class Qwen36DecoderLayer:
             )
             ttnn.deallocate(xs)
             out = ttnn.sharded_to_interleaved(
-                n,
-                (
-                    ttnn.L1_MEMORY_CONFIG
-                    if os.environ.get("QWEN36_TOKPAR_NORM_L1", "0") == "1"
-                    else ttnn.DRAM_MEMORY_CONFIG
-                ),
-                **({"output_dtype": dtype} if dtype is not None else {}),
+                n, ttnn.DRAM_MEMORY_CONFIG, **({"output_dtype": dtype} if dtype is not None else {})
             )
             ttnn.deallocate(n)
             return out
@@ -408,22 +394,14 @@ class Qwen36DecoderLayer:
         w = self._tokpar
         M, K = x.shape[-2], x.shape[-1]
         F = w["w1"].shape[-1]
-        _fid = {"lofi": ttnn.MathFidelity.LoFi, "hifi2": ttnn.MathFidelity.HiFi2, "hifi4": ttnn.MathFidelity.HiFi4}
-        _gu, _dn = os.environ.get("QWEN36_TOKPAR_MLP_FID_GU"), os.environ.get("QWEN36_TOKPAR_MLP_FID_DOWN")
         ck = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=_fid[_gu] if _gu else tpc.mlp_fidelity(getattr(self.args, "mlp_math_fidelity", None)),
+            math_fidelity=tpc.mlp_fidelity(getattr(self.args, "mlp_math_fidelity", None)),
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
         )
-        # QWEN36_TOKPAR_MLP_FID_GU / _DOWN (lofi | hifi2 | hifi4): per-matmul fidelity of the token-parallel MLP
-        ck_dn = (
-            ttnn.WormholeComputeKernelConfig(math_fidelity=_fid[_dn], fp32_dest_acc_en=True, packer_l1_acc=True)
-            if _dn
-            else None
-        )
         dram = ttnn.DRAM_MEMORY_CONFIG
         x8 = x
-        if os.environ.get("QWEN36_TOKPAR_MLP_BF8", "1") == "1" and x.dtype != ttnn.bfloat8_b:
+        if x.dtype != ttnn.bfloat8_b:
             x8 = ttnn.typecast(x, ttnn.bfloat8_b, memory_config=dram)
         # QWEN36_TOKPAR_MLP_L1=1: gate / up / hidden in L1 (interleaved); QWEN36_TOKPAR_SILU_MUL=1: SiLU applied by the
         # multiply (input activation) instead of the gate matmul's packer
@@ -442,7 +420,7 @@ class Qwen36DecoderLayer:
             compute_kernel_config=ck,
             memory_config=act_mc,
             program_config=_tokpar_pc(
-                M, K, F, _TBW(), act=None if silu_mul else ttnn.UnaryOpType.SILU, lim=8 if cfg2 else 4
+                M, K, F, _TOKPAR_BW, act=None if silu_mul else ttnn.UnaryOpType.SILU, lim=8 if cfg2 else 4
             ),
         )
         up = ttnn.linear(
@@ -450,7 +428,7 @@ class Qwen36DecoderLayer:
             w["w3"],
             compute_kernel_config=ck,
             memory_config=act_mc,
-            program_config=_tokpar_pc(M, K, F, _TBW(), lim=8 if cfg2 else 4),
+            program_config=_tokpar_pc(M, K, F, _TOKPAR_BW, lim=8 if cfg2 else 4),
         )
         if x8 is not x:
             ttnn.deallocate(x8)
@@ -474,14 +452,10 @@ class Qwen36DecoderLayer:
         out = ttnn.linear(
             hidden,
             w["w2"],
-            compute_kernel_config=ck_dn or ck,
-            memory_config=(
-                ttnn.L1_MEMORY_CONFIG
-                if os.environ.get("QWEN36_TOKPAR_MLP_OUT_L1", "0") == "1"
-                else ttnn.DRAM_MEMORY_CONFIG
-            ),
+            compute_kernel_config=ck,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
             program_config=pc_d,
-        )  # QWEN36_TOKPAR_MLP_OUT_L1: the MLP output in L1
+        )
         ttnn.deallocate(hidden)
         return out
 
@@ -547,12 +521,8 @@ class Qwen36DecoderLayer:
                 compute_kernel_config=(
                     tpc.COMPUTE_LOFI if os.environ.get("QWEN36_TOKPAR_OUT_LOFI", "0") == "1" else tpc.COMPUTE_HIFI2
                 ),
-                memory_config=(
-                    ttnn.L1_MEMORY_CONFIG
-                    if os.environ.get("QWEN36_TOKPAR_OUTP_L1", "0") == "1"
-                    else ttnn.DRAM_MEMORY_CONFIG
-                ),  # QWEN36_TOKPAR_OUTP_L1
-                program_config=_tokpar_pc(M, K, self._tokpar["wo"].shape[-1], _TBW()),
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                program_config=_tokpar_pc(M, K, self._tokpar["wo"].shape[-1], _TOKPAR_BW),
             )
             ttnn.deallocate(a8)
         # QWEN36_TOKPAR_RES_L1=1: the [S/tp, dim] residual stream lives in L1 (interleaved, ~46 KB/core at S/tp=672)
@@ -561,8 +531,7 @@ class Qwen36DecoderLayer:
         )
         h = ttnn.add(x, at, memory_config=res_mc)
         ttnn.deallocate(at)
-        _mlp_bf8 = os.environ.get("QWEN36_TOKPAR_MLP_BF8", "1") == "1"
-        ff = self._tokpar_norm(h, self.ffn_norm, dtype=ttnn.bfloat8_b if _mlp_bf8 else None)
+        ff = self._tokpar_norm(h, self.ffn_norm, dtype=ttnn.bfloat8_b)
         f = self._tokpar_mlp(ff)
         ttnn.deallocate(ff)
         out = ttnn.add(h, f, memory_config=res_mc)
