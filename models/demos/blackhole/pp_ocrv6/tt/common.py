@@ -171,7 +171,12 @@ class LargeStem:
         self.stem1 = cbn(stem.stem1, stride=2, activation=RELU)
         self.stem2a = cbn(stem.stem2a, padding=(0, 1, 0, 1), activation=RELU)
         self.stem2b = cbn(stem.stem2b, padding=(0, 1, 0, 1), activation=RELU)
-        self.stem3 = cbn(stem.stem3, stride=2, activation=RELU)
+        # stem3 runs on concat([pool, stem2b]); split its weights by input channel instead,
+        # conv(cat(p, a)) = conv_p(p) + conv_a(a), which skips a slow row-major concat.
+        w3, b3 = fold_bn(stem.stem3.convolution.weight, None, stem.stem3.normalization)
+        pool_channels = stem.stem1.convolution.weight.shape[0]
+        self.stem3_pool = Conv(device, w3[:, :pool_channels], b3, stride=2)
+        self.stem3_branch = Conv(device, w3[:, pool_channels:], torch.zeros_like(b3), stride=2)
         self.stem4 = Linear(device, *fold_bn(stem.stem4.convolution.weight, None, stem.stem4.normalization), "relu")
 
     def __call__(self, x, batch, h, w):
@@ -192,8 +197,9 @@ class LargeStem:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             applied_shard_scheme=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         )
-        x = ttnn.concat([to_row_major(p), to_row_major(a)], dim=-1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        x, h, w = self.stem3(x, batch, h1, w1)
+        x, h, w = self.stem3_pool(p, batch, h1, w1)
+        y, _, _ = self.stem3_branch(a, batch, h1, w1)
+        x = ttnn.relu(ttnn.add(x, y))
         return self.stem4(x), h, w
 
 

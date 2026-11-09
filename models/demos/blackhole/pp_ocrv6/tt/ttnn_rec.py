@@ -159,7 +159,6 @@ class TtPPOCRv6SmallRec:
             return ttnn.softmax(logits, dim=-1, numeric_stable=True)
         best = ttnn.max(logits, dim=-1, keepdim=True)
         hit = ttnn.typecast(ttnn.eq(logits, best), ttnn.float32)
-        miss_penalty = ttnn.multiply(ttnn.rsub(hit, 1.0), 1e9)
-        index = ttnn.min(ttnn.add(ttnn.multiply(hit, self.class_index), miss_penalty), dim=-1, keepdim=True)
+        index = ttnn.min(ttnn.where(hit, self.class_index, 1e9), dim=-1, keepdim=True)
         confidence = ttnn.reciprocal(ttnn.sum(ttnn.exp(ttnn.subtract(logits, best)), dim=-1, keepdim=True))
         return index, confidence

@@ -35,6 +35,12 @@ Gains below are estimates until measured; a Tracy profile ranks the on-device it
 
 ## 2. Detector on device (manual; tt-opt has no conv2d config sweeps)
 
+Tracy (current code): detector 5.94 ms kernel, recognizer batch 8 5.05 ms. Data movement dominates:
+concats, DRAM -> L1 reshards before convs, untilizes; convs + matmuls are ~30%.
+Done: stem concat split (conv(cat(p, a)) = conv_p(p) + conv_a(a)), -1.1 ms in each model.
+Tried, no gain: padding the 3-channel input to 4 / 8 / 16 channels; reshape output in L1 breaks a
+downstream fused-ReLU matmul. Next: 2x2 space-to-depth fold of the input on the host.
+
 | # | Strategy | Notes |
 |---|----------|-------|
 | 2.1 | **L1-sharded activations** instead of DRAM, height-sharded for the early high-resolution layers (stem at 320x320, stage 1 at 160x160) | Largest expected on-device win; tune `act_block_h`, enable activation / weight double buffering |

@@ -78,15 +78,18 @@ bf16, HiFi4, activations in DRAM. Traced with two command queues; packed input c
 the recognizer decodes on device (argmax index + confidence). Per call, including
 host <-> device transfers. "Kernel" is the Tracy kernel sum from the tt-opt baselines.
 
-| Stage | Untraced, first bring-up | Traced | + packed input, tiled decode | Kernel |
-|-------|------:|------:|------:|------:|
-| Detector, 640x640 | 16.9 ms | 20.3 ms | 9.3 ms | 6.7 ms |
-| Recognizer, 1 line | 8.3 ms | 3.1 ms | 2.6 ms | |
-| Recognizer, batch 2 | - | 4.4 ms | 3.5 ms | |
-| Recognizer, batch 4 | - | 6.8 ms | 4.6 ms | |
-| Recognizer, batch 8 | 24.1 ms | 12.5 ms | 8.3 ms (1.0 per line) | 7.5 ms before tiled decode |
-| Full pipeline, 1 line (host pre/post included) | ~33 ms | ~26 ms | **~14 ms** | |
-| Same pipeline, torch on 24-core CPU | ~77 ms | | | |
+| Stage | Untraced, first bring-up | Traced | + packed input, tiled decode | + stem concat split, `where` decode | Kernel now |
+|-------|------:|------:|------:|------:|------:|
+| Detector, 640x640 | 16.9 ms | 20.3 ms | 9.3 ms | 8.0 ms | 5.94 ms (was 7.02) |
+| Recognizer, 1 line | 8.3 ms | 3.1 ms | 2.6 ms | 2.4 ms | |
+| Recognizer, batch 2 | - | 4.4 ms | 3.5 ms | 3.2 ms | |
+| Recognizer, batch 4 | - | 6.8 ms | 4.6 ms | 3.8 ms | |
+| Recognizer, batch 8 | 24.1 ms | 12.5 ms | 8.3 ms | 6.9 ms (0.9 per line) | 5.05 ms (was 6.55) |
+| Full pipeline, 1 line (host pre/post included) | ~33 ms | ~26 ms | ~14 ms | **~13 ms** | |
+| Same pipeline, torch on 24-core CPU | ~77 ms | | | | |
+
+Detector at batch 2 / 4 (640x640, per image): 8.8 / 7.8 ms per call with transfers, 6.5 / 6.1 ms
+replay, against 9.3 / 7.3 ms at batch 1. Batching helps the detector far less than the recognizer.
 
 What moved the numbers:
 - **Packed input copy.** NHWC row-major with 3 channels makes every page one pixel (6 bytes);
@@ -95,7 +98,12 @@ What moved the numbers:
   before `from_torch` cut host conversion from 2.7 to 0.25 ms.
 - **Tiled decode.** max, compare, then min over the matching 1-based class indices (fp32, exact)
   instead of softmax + row-major argmax over 18,710 classes: 7.53 -> 6.59 ms traced at batch 8,
-  same indices. Confidence is 1 / sum(exp(logit - max)).
+  same indices. Confidence is 1 / sum(exp(logit - max)). One `where` instead of
+  multiply/rsub/add saves another 0.4 ms.
+- **Stem concat split.** stem3 ran on a row-major DRAM concat of the pool and stem2b
+  outputs (0.90 ms in the detector, 0.37 ms in the recognizer, plus a 0.64 ms reshard in the
+  recognizer). Its weights are split by input channel instead:
+  conv(cat(p, a)) = conv_p(p) + conv_a(a). About -1.1 ms kernel time in each model.
 
 Inside the ~16 ms per request budget for det + rec of one line; YOLO11-small is not counted yet.
 
@@ -123,6 +131,9 @@ Updated at each milestone.
 Full list with estimates: [optimization_strategies.md](optimization_strategies.md).
 - [ ] tt-opt detector run: harness, gate and baseline done (6.7 ms kernel); experiments blocked while outbound internet is closed (security incident)
 - [ ] Review tt-opt recognizer keeps (branch `tt-opt/pp_ocrv6_rec/decode-20261107-181455`, 7.46 -> 7.13 ms kernel at batch 8). Batch-8 shape guards only; port the general ones (SiLU fused into fc1, HiFi2) by hand
+- [ ] Detector first conv: the 3-channel input reshard costs 0.72 ms (recognizer 0.22 ms). Padding to 4/8/16 channels does not help; try a host-side 2x2 space-to-depth fold (12 channels, 320x320) with stem1 rewritten as a 2x2 conv
+- [ ] Neck concat (0.40 ms) and its two untilizes (0.22 ms each): split into the DB head conv, or concat in L1
+- [ ] Keep conv outputs sharded in L1 between consecutive convs (DRAM -> L1 reshards are still ~1.2 ms in the detector)
 - [ ] Smaller detector input on YOLO crops (320x320 or size buckets)
 - [ ] Normalization folded into the first detector conv
 - [ ] Recognizer width bucket 160 for short lines
@@ -160,3 +171,5 @@ Full list with estimates: [optimization_strategies.md](optimization_strategies.m
 - [x] tt-opt recognizer run, 20 experiments, 11 keeps (on the tool's branch, not merged)
 - [x] Packed host-to-device input copy and bf16 host cast (pipeline ~26 -> ~17 ms)
 - [x] Tiled on-device decode instead of softmax + argmax (pipeline ~14 ms, recognizer batch 8 8.3 ms)
+- [x] Tracy op breakdown of both models (data movement dominates: concats, reshards, untilizes)
+- [x] Stem concat split into two convs; `where`-based decode (pipeline ~13 ms, kernel det 5.94 / rec b8 5.05 ms)
