@@ -2163,6 +2163,139 @@ def agmm_tuned_config(rows, weight, k_local, swiglu, mesh_device):
     return cfg, num_links, workers, transpose
 
 
+# ---------------------------------------------------------------------------------------------
+# QWEN36_PREFILL_SHORT_DECODE_MM (default off): short prefill calls (TILE_SIZE < rows <= cap) skip the fused
+# all_gather_minimal_matmul_async and run a plain all_gather_async (dim 3) + the decode-style 1D mcast_in0 matmul on
+# the SAME interleaved prefill weight, with per_core_M = rows / 32. The AGMM pays ~156 us fixed per call at 128 rows
+# (178 calls = ~28 of the ~54 ms kernel time of a 128-row prefill, device profile 2026-10-29) while the 1D matmul on
+# these weights is DRAM-bound (~24-36 us at 32 rows). Value: "1" = cap 256, or an explicit row cap (multiple of 32,
+# 64..256). QWEN36_PREFILL_SHORT_DECODE_MM_SITES (default "inproj,gateup"): which AGMM funnels take it --
+#   inproj : all_gather_matmul_prefill (attention QKV+gate, GDN QKVZAB in-projection, GDN col-parallel out-proj).
+#            Same weight, same compute config; the accumulation runs over the same K order, so outputs are expected to
+#            match the AGMM bit for bit (unverified on device: test_prefill_short_decode_mm.py checks it).
+#   gateup : all_gather_swiglu_prefill. 1D matmul on the pair-interleaved [gate|up] weight + the split-SwiGLU kernel
+#            (tt/mlp_swiglu.py, as QWEN36_MLP_GU_FUSED decode). NOT bit-identical: SiLU runs on the bf16-rounded gate
+#            (one bf16 rounding; see mlp_swiglu.py) -> needs the GPQA / length gate.
+# Rows outside (TILE_SIZE, cap] keep the AGMM. The choice depends only on the static row count, so traced prefill
+# buckets capture one path per bucket. KV / GDN state flows are untouched (only the projection op changes).
+# ---------------------------------------------------------------------------------------------
+PREFILL_SHORT_DECODE_MM_ENV = "QWEN36_PREFILL_SHORT_DECODE_MM"
+PREFILL_SHORT_DECODE_MM_SITES_ENV = "QWEN36_PREFILL_SHORT_DECODE_MM_SITES"
+_SHORT_MM_SITES = ("inproj", "gateup")
+_SHORT_MM_CORE_CAP = 84
+_SHORT_MM_IBW = 8
+_short_mm_progcfgs = {}
+_short_swiglu = {}
+
+
+def prefill_short_decode_mm_cap():
+    """QWEN36_PREFILL_SHORT_DECODE_MM -> row cap (0 = off). "1"/"on" -> 256; else an int multiple of 32 in 64..256."""
+    raw = os.environ.get(PREFILL_SHORT_DECODE_MM_ENV, "0").strip().lower()
+    if raw in ("", "0", "off", "false"):
+        return 0
+    if raw in ("1", "on", "true"):
+        return 256
+    cap = int(raw)
+    if cap % TILE_SIZE or not (2 * TILE_SIZE <= cap <= 256):
+        raise ValueError(f"{PREFILL_SHORT_DECODE_MM_ENV}={raw!r}: expected 0/1 or a multiple of 32 in 64..256")
+    return cap
+
+
+def prefill_short_decode_mm_sites():
+    raw = os.environ.get(PREFILL_SHORT_DECODE_MM_SITES_ENV, ",".join(_SHORT_MM_SITES))
+    sites = frozenset(s.strip() for s in raw.split(",") if s.strip())
+    bad = sites - set(_SHORT_MM_SITES)
+    if bad:
+        raise ValueError(f"{PREFILL_SHORT_DECODE_MM_SITES_ENV}: unknown site(s) {sorted(bad)}; valid {_SHORT_MM_SITES}")
+    return sites
+
+
+def short_decode_mm_ok(rows, site):
+    """True when a prefill AGMM of `rows` rows at `site` takes the all-gather + 1D matmul path instead."""
+    cap = prefill_short_decode_mm_cap()
+    return cap > 0 and TILE_SIZE < int(rows) <= cap and site in prefill_short_decode_mm_sites()
+
+
+def short_decode_mm_progcfg(rows, k, n, grid_w, fused_activation=None):
+    """1D mcast_in0 progcfg for a short prefill: per_core_M = rows/32, N spread over <= 84 cores (one or two output
+    tiles per core at the Qwen3.8 TP8 widths), in0_block_w <= 8 (L1: 8 M-tiles x 8 K-tiles x 2 bufs = 256 KB)."""
+    key = (int(rows), int(k), int(n), int(grid_w), fused_activation)
+    pc = _short_mm_progcfgs.get(key)
+    if pc is None:
+        n_tiles = math.ceil(n / TILE_SIZE)
+        pc = create_matmul_1d_decode_progcfg(
+            rows,
+            k,
+            n,
+            num_cores=min(n_tiles, _SHORT_MM_CORE_CAP),
+            fused_activation=fused_activation,
+            grid_w=grid_w,
+            max_in0_block_w=_SHORT_MM_IBW,
+        )
+        _short_mm_progcfgs[key] = pc
+    return pc
+
+
+def _short_gather(x4, tt_ccl, topology, cluster_axis):
+    """all_gather_async(dim=3) of the K-sharded short activation -> [1,1,S,K] L1 interleaved (S <= 256: <= 2.6 MB).
+    Same call shape as DecodeResidualAllReduce.enter (the replicated-residual model entry, validated on the (1, 8) TP
+    row with the ring topology): whole-submesh gather, no cluster_axis (the TP submesh is one row). `cluster_axis` is
+    accepted for the AGMM signature only."""
+    del cluster_axis
+    return ttnn.experimental.all_gather_async(
+        x4,
+        persistent_output_buffer=None,
+        dim=3,
+        multi_device_global_semaphore=tt_ccl.get_and_cycle_ag_semaphore_handles(),
+        num_links=1,
+        topology=topology,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+        barrier_semaphore=tt_ccl.get_and_cycle_barrier_semaphore_handle(),
+        chunks_per_sync=10,
+        num_workers_per_link=2,
+        num_buffers_per_channel=2,
+    )
+
+
+def _grid_w(mesh_device):
+    try:
+        return int(mesh_device.compute_with_storage_grid_size().x)
+    except Exception:  # noqa: BLE001 (host tests / stubs)
+        return 8
+
+
+def short_decode_mm_prefill(x4, weight, tt_ccl, compute_cfg, topology, cluster_axis, fused_activation, out_memory_config):
+    """all_gather + 1D matmul replacement for all_gather_matmul_prefill on a short (<= cap rows) prefill."""
+    xg = _short_gather(x4, tt_ccl, topology, cluster_axis)
+    S, K = xg.shape[-2], xg.shape[-1]
+    pc = short_decode_mm_progcfg(S, K, weight.shape[-1], _grid_w(tt_ccl.mesh_device), fused_activation)
+    out = ttnn.linear(
+        xg, weight, program_config=pc, compute_kernel_config=compute_cfg, memory_config=out_memory_config, dtype=ttnn.bfloat16
+    )
+    ttnn.deallocate(xg)
+    return out
+
+
+def short_decode_swiglu_prefill(x4, weight, tt_ccl, compute_cfg, topology, cluster_axis, out_memory_config):
+    """all_gather + 1D [gate|up] matmul + split-SwiGLU replacement for all_gather_swiglu_prefill (not bit-identical)."""
+    from models.demos.blackhole.qwen36.tt.mlp_swiglu import SwiGLUSplit
+
+    mesh = tt_ccl.mesh_device
+    xg = _short_gather(x4, tt_ccl, topology, cluster_axis)
+    S, K = xg.shape[-2], xg.shape[-1]
+    pc = short_decode_mm_progcfg(S, K, weight.shape[-1], _grid_w(mesh))
+    gu = ttnn.linear(
+        xg, weight, program_config=pc, compute_kernel_config=compute_cfg, memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat16
+    )
+    ttnn.deallocate(xg)
+    split = _short_swiglu.get(id(mesh))
+    if split is None:
+        split = _short_swiglu[id(mesh)] = SwiGLUSplit(mesh, pair=True)
+    hidden = split(gu, memory_config=out_memory_config)
+    ttnn.deallocate(gu)
+    return hidden
+
+
 def all_gather_matmul_prefill(
     x,
     weight,
@@ -2184,6 +2317,10 @@ def all_gather_matmul_prefill(
     (agmm_gather_buffer); None lets the op allocate one per call."""
     S, K_local = x.shape[-2], x.shape[-1]
     x4 = ttnn.reshape(x, (1, 1, S, K_local))
+    if short_decode_mm_ok(S, "inproj"):  # QWEN36_PREFILL_SHORT_DECODE_MM
+        return short_decode_mm_prefill(
+            x4, weight, tt_ccl, compute_cfg, topology, cluster_axis, fused_activation, out_memory_config
+        )
     tuned = agmm_tuned_config(S, weight, K_local, False, tt_ccl.mesh_device)  # QWEN36_PREFILL_AGMM_TUNED
     if tuned is not None:
         cfg, num_links, workers, transpose = tuned
@@ -2236,6 +2373,8 @@ def all_gather_swiglu_prefill(
     x: K-sharded [.,S,K/tp]; weight: tile-pair-interleaved [gate|up] [K, 2N/tp]. Emits silu(gate)*up of width N/tp."""
     S, K_local = x.shape[-2], x.shape[-1]
     x4 = ttnn.reshape(x, (1, 1, S, K_local))
+    if short_decode_mm_ok(S, "gateup"):  # QWEN36_PREFILL_SHORT_DECODE_MM
+        return short_decode_swiglu_prefill(x4, weight, tt_ccl, compute_cfg, topology, cluster_axis, out_memory_config)
     tuned = agmm_tuned_config(S, weight, K_local, True, tt_ccl.mesh_device)  # QWEN36_PREFILL_AGMM_TUNED
     if tuned is not None:
         cfg, num_links, workers, transpose = tuned
