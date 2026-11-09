@@ -151,4 +151,19 @@ inline RouterKey parse_router_key(std::string_view key) {
     };
 }
 
+// An ASIC id as a hex string, "0x" and 16 digits: the value exceeds what JSON numbers represent exactly.
+inline std::string make_asic_id_text(uint64_t asic_id) { return fmt::format("0x{:016x}", asic_id); }
+
+// The ASIC id make_asic_id_text wrote as `text`, or nullopt for any other text.
+inline std::optional<uint64_t> parse_asic_id_text(std::string_view text) {
+    const std::string_view digits = text.substr(std::min<size_t>(2, text.size()));
+    uint64_t asic_id = 0;
+    const auto [end, error] = std::from_chars(digits.data(), digits.data() + digits.size(), asic_id, 16);
+    if (!text.starts_with("0x") || digits.size() != 16 || error != std::errc{} ||
+        end != digits.data() + digits.size()) {
+        return std::nullopt;
+    }
+    return asic_id;
+}
+
 }  // namespace tt::tt_fabric::manifest

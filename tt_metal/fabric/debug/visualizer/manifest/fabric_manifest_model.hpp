@@ -441,6 +441,19 @@ struct CoreRegisters {
     uint32_t wall_clock_high = 0;
 };
 
+// One core register: its name in the manifest, and its member of CoreRegisters.
+struct CoreRegisterLayout {
+    std::string_view name;
+    uint32_t CoreRegisters::* address;
+};
+
+// The core registers in the order they're read, which is the order the manifest lists them in.
+inline constexpr std::array<CoreRegisterLayout, 3> k_core_registers{{
+    {"soft_reset", &CoreRegisters::soft_reset},
+    {"wall_clock_low", &CoreRegisters::wall_clock_low},
+    {"wall_clock_high", &CoreRegisters::wall_clock_high},
+}};
+
 // The whole L1 of the Ethernet core a router runs on: size_bytes bytes from address.
 struct EthCoreL1 {
     uint32_t address = 0;

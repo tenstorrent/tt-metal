@@ -167,7 +167,7 @@ id). A field the builder doesn't emit in this configuration, such as a 2D-only f
 | `name` | The architecture, such as `wormhole_b0` |
 | `l1` | The whole L1 of the Ethernet core a router runs on: `size_bytes` bytes from `address`. Every L1 region the manifest names lies inside it |
 | `l1_areas` | L1 regions the architecture fixes on every router core: `heartbeat` (with its `magic`, `magic_mask` and `period_iters`), `fabric_telemetry`, `routing_table`, `eth_fw_mailbox`, and base firmware's link status words `base_fw_port_status`, `base_fw_train_status`, `base_fw_retrain_count`, `base_fw_rx_link_up` and `base_fw_postcode`. An area the architecture doesn't have is null |
-| `core_registers` | An array, in read order: `soft_reset` (with `reset_masks`, each physical ERISC's reset bit), `wall_clock_low` and `wall_clock_high`, each with its `name`, `address` and `type`. Reading the low wall clock word latches the high word |
+| `core_registers` | An array, in read order: `soft_reset` (with `reset_masks`, each physical ERISC's reset bit), `wall_clock_low` and `wall_clock_high`, each with its `name`, `address` and `type`. Reading the low wall clock word latches the high word. The model's `k_core_registers` holds this order, which the writer and the reader follow |
 | `fabric_telemetry_version` | `FABRIC_TELEMETRY_VERSION`: which layout of `FabricTelemetry` the `fabric_telemetry` area holds |
 
 ## vocabulary

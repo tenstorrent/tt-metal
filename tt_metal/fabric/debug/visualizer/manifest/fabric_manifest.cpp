@@ -26,7 +26,6 @@
 
 #include <algorithm>
 #include <array>
-#include <charconv>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
@@ -56,7 +55,9 @@ using manifest::chip_key;
 using manifest::downstream_channel_path;
 using manifest::kind_name;
 using manifest::lower_enum_name;
+using manifest::make_asic_id_text;
 using manifest::mesh_key;
+using manifest::parse_asic_id_text;
 using manifest::router_key;
 using manifest::router_path;
 using manifest::sibling_router_path;
@@ -186,21 +187,20 @@ json make_heartbeat_json(const manifest::Heartbeat& heartbeat) {
     return out;
 }
 
-// An array, in the order the registers are read.
+// An array, in the order the registers are read (k_core_registers).
 json make_core_registers_json(const manifest::CoreRegisters& registers) {
-    const auto entry = [](const char* name, uint32_t address) {
-        json out;
-        out["name"] = name;
-        out["address"] = address;
-        out["type"] = std::string(manifest::get_manifest_type_name<uint32_t>());
-        return out;
-    };
-    json soft_reset = entry("soft_reset", registers.soft_reset);
-    soft_reset["reset_masks"] = registers.reset_masks;
-    return json::array(
-        {std::move(soft_reset),
-         entry("wall_clock_low", registers.wall_clock_low),
-         entry("wall_clock_high", registers.wall_clock_high)});
+    json out = json::array();
+    for (const auto& [name, address] : manifest::k_core_registers) {
+        json entry;
+        entry["name"] = std::string(name);
+        entry["address"] = registers.*address;
+        entry["type"] = std::string(manifest::get_manifest_type_name<uint32_t>());
+        if (address == &manifest::CoreRegisters::soft_reset) {
+            entry["reset_masks"] = registers.reset_masks;
+        }
+        out.push_back(std::move(entry));
+    }
+    return out;
 }
 
 // What the architecture fixes on every router core: its L1, L1 areas at the HAL's addresses, and the register blocks.
@@ -546,9 +546,6 @@ json make_chip_routers_json(const manifest::Chip& chip, FieldsWriter& fields_wri
     return routers;
 }
 
-// An ASIC id as a hex string, "0x" and 16 digits: the value exceeds what JSON numbers represent exactly.
-std::string make_asic_id_text(uint64_t asic_id) { return fmt::format("0x{:016x}", asic_id); }
-
 // A remote chip has only its coordinates, and nulls for the ids this rank cannot read.
 json make_chip_json(const manifest::Chip& chip, FieldsWriter& fields_writer) {
     json out;
@@ -669,14 +666,11 @@ tt::tt_metal::CoreCoord read_core(const JsonValueReader& value) {
 // An ASIC id as make_asic_id_text writes it.
 uint64_t read_asic_id(const JsonValueReader& value) {
     const std::string text = value.read<std::string>();
-    const std::string_view digits = std::string_view(text).substr(std::min<size_t>(2, text.size()));
-    uint64_t asic_id = 0;
-    const auto [end, error] = std::from_chars(digits.data(), digits.data() + digits.size(), asic_id, 16);
-    if (!text.starts_with("0x") || digits.size() != 16 || error != std::errc{} ||
-        end != digits.data() + digits.size()) {
+    const std::optional<uint64_t> asic_id = parse_asic_id_text(text);
+    if (!asic_id.has_value()) {
         value.fail("is \"{}\", not an ASIC id written as 0x and 16 hex digits", text);
     }
-    return asic_id;
+    return *asic_id;
 }
 
 // ============ Reading run, fabric and arch ============
@@ -751,31 +745,27 @@ manifest::FabricInfo read_fabric(JsonObjectReader& block) {
     return fabric;
 }
 
-// The array make_core_registers_json writes: each register in the order it's read, each named, and each a word.
+// The array make_core_registers_json writes: each register in the order it's read (k_core_registers), each named, and
+// each a word.
 manifest::CoreRegisters read_core_registers(const JsonValueReader& value) {
     manifest::CoreRegisters registers;
-    const std::array<std::pair<std::string_view, uint32_t*>, 3> addresses{{
-        {"soft_reset", &registers.soft_reset},
-        {"wall_clock_low", &registers.wall_clock_low},
-        {"wall_clock_high", &registers.wall_clock_high},
-    }};
     size_t index = 0;
     value.read_array([&](const JsonValueReader& entry) {
-        if (index == addresses.size()) {
-            entry.fail("is a register past the {} the manifest has", addresses.size());
+        if (index == manifest::k_core_registers.size()) {
+            entry.fail("is a register past the {} the manifest has", manifest::k_core_registers.size());
         }
-        const auto [name, address] = addresses[index++];
+        const auto [name, address] = manifest::k_core_registers[index++];
         entry.read_object([&](JsonObjectReader& register_json) {
             register_json.check("name", std::string(name));
-            *address = register_json.take<uint32_t>("address");
+            registers.*address = register_json.take<uint32_t>("address");
             register_json.check("type", std::string(manifest::get_manifest_type_name<uint32_t>()));
-            if (address == &registers.soft_reset) {
+            if (address == &manifest::CoreRegisters::soft_reset) {
                 registers.reset_masks = register_json.take("reset_masks").read_array_of<uint32_t>();
             }
         });
     });
-    if (index != addresses.size()) {
-        value.fail("holds {} registers, not {}", index, addresses.size());
+    if (index != manifest::k_core_registers.size()) {
+        value.fail("holds {} registers, not {}", index, manifest::k_core_registers.size());
     }
     return registers;
 }
