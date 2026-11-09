@@ -156,7 +156,7 @@ case "${MODEL}" in
     export PIPELINE_DIR="${PREFILL_SUMMARIES/prefill_summaries/kimi_k3_1_prefill_runner_kv}"
     MANIFEST="${MANIFEST_DIR}/kimi_k3_1.json"
     SC1_NUM_LAYERS=24
-    SC1_MAX_SEQ_LEN="${PREFILL_SC1_MAX_SEQ_LEN:-262144}"
+    SC1_MAX_SEQ_LEN="${PREFILL_SC1_MAX_SEQ_LEN:-245760}"
     SC1_REQUEST_LEN="${PREFILL_SC1_REQUEST_LEN:-${GOLDEN_LEN}}"
     PRODUCER_CHECK_PCC=0
     RUNNER_ENV="export PREFILL_HF_MODEL=/mnt/weka/model-weights/llm/moonshotai/Kimi-K3.1-Pro-dequantized; \
