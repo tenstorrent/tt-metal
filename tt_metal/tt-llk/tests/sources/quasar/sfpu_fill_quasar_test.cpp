@@ -8,6 +8,7 @@
 #include "ckernel.h"
 #include "llk_defs.h"
 #include "llk_memory_checks.h"
+#include "quasar_test_common.h"
 #include "sfpu_stub.h"
 
 using namespace ckernel;
@@ -64,14 +65,18 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const auto bfd_unpack = ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Unp0>(
         ckernel::tensor_shape_from_num_faces(TEST_FACE_R_DIM, num_faces), L1_ADDRESS(buffer_A[0]), formats.unpack_A_src);
 
-    // Configure unpacker → init unpack-to-dest path → unpack the TILE_CNT tiles from L1 into DEST tiles [0, TILE_CNT).
+    // Configure unpacker → init unpack-to-dest path → unpack the TILE_CNT tiles from L1 into DEST, one section at a time.
     _llk_unpack_configure_unary_<UNPACKER_ENGINE_SEL>(static_cast<DataFormat>(formats.unpack_A_dst));
     _llk_unpack_dest_init_();
     _llk_unpack_unary_operand_to_dest_init_(bfd_unpack);
-    _llk_unpack_unary_operand_to_dest_block_(0 /*l1_tile_idx*/, 0 /*dst_tile_idx*/, TILE_CNT);
-
-    // Release DEST section to the SFPU consumer.
-    _llk_unpack_dest_dvalid_section_done_<dest_sync>();
+    const std::uint32_t section_tiles = tiles_per_dest_section<dest_sync, is_fp32_dest_acc_en>(TILE_CNT);
+    const std::uint32_t num_sections  = dest_section_count(TILE_CNT, section_tiles);
+    for (std::uint32_t section = 0; section < num_sections; ++section)
+    {
+        _llk_unpack_unary_operand_to_dest_block_(section * section_tiles /*l1_tile_idx*/, 0 /*dst_tile_idx*/, section_tiles);
+        // Release DEST section to the SFPU consumer.
+        _llk_unpack_dest_dvalid_section_done_<dest_sync>();
+    }
 }
 
 #endif
@@ -108,31 +113,31 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     _llk_math_eltwise_sfpu_init_();
 
-    if (is_int_fill)
+    const std::uint32_t section_tiles = tiles_per_dest_section<dest_sync, is_fp32_dest_acc_en>(TILE_CNT);
+    const std::uint32_t num_sections  = dest_section_count(TILE_CNT, section_tiles);
+    for (std::uint32_t section = 0; section < num_sections; ++section)
     {
-        // Int path: _calculate_fill_int_ writes 5 to every element of Dest
-        // via SFPLOADI + SFPSTORE; the SFPMEM store mode is selected by FILL_INT_FORMAT
-        // at compile time (no runtime dispatch).
-        // Fill every DEST lane in each tile with integer value 5.
-        for (std::uint32_t i = 0; i < TILE_CNT; ++i)
+        if (is_int_fill)
         {
-            SFPU_UNARY_CALL(
-                dest_sync, is_fp32_dest_acc_en, _calculate_fill_int_, (FILL_INT_FORMAT, SFPU_ITERATIONS), DST_INDEX + i, VectorMode::RC, 5 /*value*/);
+            // FILL_INT_FORMAT selects the SFPMEM store mode at compile time.
+            for (std::uint32_t i = 0; i < section_tiles; ++i)
+            {
+                SFPU_UNARY_CALL(
+                    dest_sync, is_fp32_dest_acc_en, _calculate_fill_int_, (FILL_INT_FORMAT, SFPU_ITERATIONS), DST_INDEX + i, VectorMode::RC, 5 /*value*/);
+            }
         }
-    }
-    else
-    {
-        // Float path: _calculate_fill_ uses SFPU DEFAULT store mode, which supports
-        // all float formats (Float16, Float16_b, Float32).
-        // Walk every tile in DEST starting at DST_INDEX, filling all lanes with 5.0f.
-        for (std::uint32_t i = 0; i < TILE_CNT; i++)
+        else
         {
-            SFPU_UNARY_CALL(dest_sync, is_fp32_dest_acc_en, _calculate_fill_, (SFPU_ITERATIONS), DST_INDEX + i, VectorMode::RC, 5.0f /*value*/);
+            // The DEFAULT store mode covers Float16, Float16_b and Float32.
+            for (std::uint32_t i = 0; i < section_tiles; i++)
+            {
+                SFPU_UNARY_CALL(dest_sync, is_fp32_dest_acc_en, _calculate_fill_, (SFPU_ITERATIONS), DST_INDEX + i, VectorMode::RC, 5.0f /*value*/);
+            }
         }
-    }
 
-    // Hand DEST off to PACK.
-    _llk_math_set_dvalid_<p_cleardvalid::SFPU, dest_sync>();
+        // Hand DEST off to PACK.
+        _llk_math_set_dvalid_<p_cleardvalid::SFPU, dest_sync>();
+    }
 
     // Drain SFPU/FPU/MOP queues before this thread returns.
     wait_sfpu_idle();
@@ -172,10 +177,15 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const auto bfd_pack = ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Pack0>(
         ckernel::tensor_shape_from_num_faces(TEST_FACE_R_DIM, num_faces), L1_ADDRESS(buffer_Res[0]), formats.pack_dst);
 
-    // Configure pack engine 0 → init → pack tile from DST_INDEX into buffer_Res → release section.
+    // Configure pack engine 0 → init → per section: pack tiles from DST_INDEX into buffer_Res → release section.
     _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(static_cast<DataFormat>(formats.pack_src), ckernel::ReluConfig::none());
-    _llk_pack_init_(bfd_pack, ckernel::DEFAULT_TENSOR_SHAPE, TILE_CNT);
-    _llk_pack_(DST_INDEX, 0 /*start_l1_tile_idx*/, ckernel::DEFAULT_TENSOR_SHAPE);
-    _llk_pack_dest_dvalid_section_done_<dest_sync, is_fp32_dest_acc_en>();
+    const std::uint32_t section_tiles = tiles_per_dest_section<dest_sync, is_fp32_dest_acc_en>(TILE_CNT);
+    const std::uint32_t num_sections  = dest_section_count(TILE_CNT, section_tiles);
+    _llk_pack_init_(bfd_pack, ckernel::DEFAULT_TENSOR_SHAPE, section_tiles);
+    for (std::uint32_t section = 0; section < num_sections; ++section)
+    {
+        _llk_pack_(DST_INDEX, section * section_tiles /*start_l1_tile_idx*/, ckernel::DEFAULT_TENSOR_SHAPE);
+        _llk_pack_dest_dvalid_section_done_<dest_sync, is_fp32_dest_acc_en>();
+    }
 }
 #endif
