@@ -159,6 +159,9 @@ void PagedUpdateCacheDeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(page_table_val.layout() == Layout::ROW_MAJOR, "Expect page table to have memory layout in ROW MAJOR");
 
         if (page_table_val.is_sharded()) {
+            TT_FATAL(
+                page_table_val.memory_config().shard_spec().has_value(),
+                "Paged update cache: sharded page_table must have a legacy shard_spec (ND_SHARDED is not supported)");
             uint32_t num_cores = page_table_val.memory_config().shard_spec()->grid.num_cores();
             uint32_t page_table_shard_height = page_table_val.padded_shape()[0] / num_cores;
             TT_FATAL(
