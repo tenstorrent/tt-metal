@@ -77,7 +77,7 @@ def test_producer_cmd_budget_and_drain():
         "PREFILL_PRODUCER_DRAIN_ACKS=1",
         "PREFILL_SEND_SHUTDOWN=1",
         "PREFILL_PRODUCER_CHUNKS=2",
-        "PREFILL_MAX_SEQ_LEN=10240",
+        "PREFILL_MAX_SEQ_LEN=40960",
         "PREFILL_H2D_SERVICE_ID=quad_screen",
     ):
         assert f"export {kv};" in inner

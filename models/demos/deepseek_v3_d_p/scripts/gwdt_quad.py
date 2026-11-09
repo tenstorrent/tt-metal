@@ -42,7 +42,10 @@ TORUS, MESH = "2d_torus_xy", "2d"
 SERVICE_ID = "quad_screen"
 CHUNK_SIZE = 5120
 CHUNKS = 2
-MAX_SEQ_LEN = CHUNK_SIZE * CHUNKS
+REQUEST_LEN = CHUNK_SIZE * CHUNKS
+# Per-user cache: a whole number of chunks, and with the KV striped over all 32 chips every slot must start on DRAM
+# bank 0, which needs a multiple of 8192 (kv_bank_alignment). 40960 is the smallest that is both.
+MAX_SEQ_LEN = 40960
 LAYERS_PER_STAGE = 2
 UNBOUNDED_REQUESTS = 10**9
 TCP_INTERFACE = os.environ.get("PREFILL_TCP_INTERFACE", "ens5f0np0")
@@ -300,7 +303,7 @@ def run_once(
     reset = reset_hosts(ctx.repo, hosts, d / "reset")
     if reset.status != Status.PASS:
         return reset
-    tokens = write_tokens(d / "tokens", MAX_SEQ_LEN, vocab_size(ctx.repo))
+    tokens = write_tokens(d / "tokens", REQUEST_LEN, vocab_size(ctx.repo))
     runner_log, producer_log = d / "runner.log", d / "producer.log"
     state.log = str(runner_log)
     runner = producer = None

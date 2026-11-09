@@ -70,7 +70,7 @@ Date: 2026-11-09. Branch: `mbezulj/quad-prefill-runner-tests` (off `mbezulj/pref
 - Both: `load_hf_config()` reads the in-repo K2.7 config (`reference/kimi_k2_7`).
 - Both: `prefill_trace_default = ""`; producer gets a synthetic trace dir.
 - Manifests: `tt/runners/manifests/quad_block_random.json`, `quad_passthrough.json`.
-- Manifest env: `PREFILL_NUM_USERS=1`, `PREFILL_MAX_SEQ_LEN=10240`, `PREFILL_USE_TRACE=0`,
+- Manifest env: `PREFILL_NUM_USERS=1`, `PREFILL_MAX_SEQ_LEN=40960`, `PREFILL_USE_TRACE=0`,
   `PREFILL_LAYER_ACK_D2H=0`, `PREFILL_TP_SHARD_KV=1`.
 - `PREFILL_NUM_LAYERS = 2 x ranks`, set by the launcher.
 
@@ -191,7 +191,7 @@ Date: 2026-11-09. Branch: `mbezulj/quad-prefill-runner-tests` (off `mbezulj/pref
 
 - Stage 0 swaps tokens for the `block-random` hidden; no embedding layer.
 - No norm / LM head anywhere.
-- `PREFILL_MAX_SEQ_LEN=10240` (2 chunks); `block-random` uses a 56320 cache.
+- `PREFILL_MAX_SEQ_LEN=40960` (2 chunks); `block-random` uses a 56320 cache.
 - KV cache not compared; output covers compute, next chunk reads KV.
 - Passthrough failure blocks the block-random tests.
 - Fallback runs on any FAIL/HANG, not only bring-up failures.
