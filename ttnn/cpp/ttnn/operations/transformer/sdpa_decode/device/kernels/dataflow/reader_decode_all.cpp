@@ -217,7 +217,12 @@ void kernel_main() {
     constexpr uint32_t v_tile_bytes = get_tile_size(cb_v_in);
     constexpr uint32_t mask_tile_bytes = get_tile_size(cb_mask_in);
     constexpr uint32_t attention_sink_tile_bytes = get_tile_size(cb_attention_sink);
+#ifdef SDPA_READ_BARRIER_MULT
+    // TT_SDPA_DECODE_READ_MULT: more one-tile K/V reads in flight per core before each drain (pacing only).
+    constexpr uint32_t barrier_threshold = get_barrier_read_threshold<q_tile_bytes, num_cores>() * SDPA_READ_BARRIER_MULT;
+#else
     constexpr uint32_t barrier_threshold = get_barrier_read_threshold<q_tile_bytes, num_cores>();
+#endif
     uint32_t barrier_count = 0;
 
     // Read Q entirely - always read into cb_q_in

@@ -8,6 +8,7 @@
 #include <climits>
 #include <cmath>
 #include <cstdint>
+#include <cstdlib>
 #include <map>
 #include <optional>
 #include <string>
@@ -968,6 +969,17 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
         };
         reader_desc.defines = pack_defines;
         writer_desc.defines = pack_defines;
+    }
+    // TT_SDPA_DECODE_READ_MULT (default unset = today's kernels, byte for byte): multiplies the reader's
+    // outstanding-read budget (get_barrier_read_threshold, 4-8 one-tile reads per core at 64-110 cores) so each core
+    // keeps more K/V tile reads in flight before draining. Only the read pacing changes, never which tiles land where,
+    // so outputs are bit-identical. Read once per process; NOT part of the program hash -- set it before the first
+    // SDPA decode call and keep it fixed (same contract as TT_DSMC_MC_TUNE).
+    if (const char* m = std::getenv("TT_SDPA_DECODE_READ_MULT"); m != nullptr && *m != '\0') {
+        const int mult = std::atoi(m);
+        if (mult > 1) {
+            reader_desc.defines.emplace_back("SDPA_READ_BARRIER_MULT", std::to_string(mult));
+        }
     }
 
     KernelDescriptor compute_desc;
