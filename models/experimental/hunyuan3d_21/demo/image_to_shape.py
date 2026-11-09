@@ -10,7 +10,7 @@ and dense volume decoder are replaced by the TT modules. The latents stay on dev
 the grid decoder. Prints per-stage times as JSON.
 
 usage: python image_to_shape.py --repo HY3DSHAPE --weights HY3D_WEIGHTS --image IMG --out DIR [--steps 30] [--octree 256]
-       [--seed 0] [--runs 1] [--extra-path P ...]
+       [--seed 0] [--runs 1] [--extra-path P ...] [--dense-volume] [--dense-moe] [--mm-fidelity HiFi4]
 """
 
 import argparse
@@ -33,6 +33,11 @@ def main():
     ap.add_argument("--runs", type=int, default=1)
     ap.add_argument("--chunk", type=int, default=32768)
     ap.add_argument("--dit-cache", default=None)
+    ap.add_argument(
+        "--dense-volume", action="store_true", help="every grid point (default: coarse-to-fine, hierarchical.py)"
+    )
+    ap.add_argument("--dense-moe", action="store_true", help="all 8 experts on every row (default: routed rows only)")
+    ap.add_argument("--mm-fidelity", default="HiFi4", help="DiT block matmul fidelity (HiFi4 / HiFi2 / LoFi)")
     ap.add_argument("--extra-path", action="append", default=[])
     a = ap.parse_args()
     for p in a.extra_path + [a.repo]:
@@ -42,7 +47,7 @@ def main():
     import ttnn
     from hy3dshape.pipelines import Hunyuan3DDiTFlowMatchingPipeline
     from models.experimental.hunyuan3d_21.reference import dit_host as host
-    from models.experimental.hunyuan3d_21.tt.dit import TtHunyuanDiT
+    from models.experimental.hunyuan3d_21.tt.dit import Precision, TtHunyuanDiT
     from models.experimental.hunyuan3d_21.tt.vae import TtShapeVAEDecoder
 
     os.makedirs(a.out, exist_ok=True)
@@ -56,7 +61,9 @@ def main():
     mesh_dev = ttnn.open_mesh_device(ttnn.MeshShape(1, 1))
     try:
         t0 = time.time()
-        dit = TtHunyuanDiT(mesh_device=mesh_dev)
+        dit = TtHunyuanDiT(
+            mesh_device=mesh_dev, precision=Precision(routed_moe=not a.dense_moe, mm_fidelity=a.mm_fidelity)
+        )
         dit.load_torch_state_dict(
             host.load_dit_state(f"{d}/model.fp16.ckpt", a.dit_cache or f"{a.out}/dit_model.safetensors")
         )
@@ -91,7 +98,7 @@ def main():
 
         def vol_hook(latents, geo_decoder, octree_resolution=None, **kw):
             s = time.time()
-            g = vae.grid_logits(st["latents_dev"], octree_resolution, chunk=a.chunk)
+            g = vae.grid_logits(st["latents_dev"], octree_resolution, chunk=a.chunk, hierarchical=not a.dense_volume)
             st["volume_decode_s"] = time.time() - s
             return g.unsqueeze(0)
 

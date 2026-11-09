@@ -9,8 +9,9 @@ Upstream prepends the timestep token, but the model has no positional embedding 
 attention over all tokens, so its position only matters where the final layer drops it; keeping it at the tile-aligned
 row 4096 avoids any non-aligned concat. Self-attention keeps padding out with SDPA windows [0, 4097, 4608]; the 1370
 DINOv2 context tokens are padded to 1536 and masked. CFG runs as batch 2 (cond, uncond). The timestep MLP runs on the
-host (one vector per call). MoE: all 8 experts run densely and are combined with the top-2 softmax weights (gate in
-fp32); a routed version replaces this once the dense one matches.
+host (one vector per call). MoE: the top-2 experts per row are combined with their softmax weights (gate in fp32);
+each expert runs only on the rows routed to it (Precision.routed_moe), or, as the reference path, all 8 experts on
+every row.
 """
 
 from __future__ import annotations
@@ -57,6 +58,15 @@ class Precision:
     # bf16 floor at step 15
     host_topk: bool = True
     sdpa_k_chunk: int = 512
+    # MoE: run each expert only on the rows routed to it (gathered with ttnn.embedding, row count rounded up to
+    # `moe_bucket` so the programs are reused across calls) instead of all 8 experts on every row; needs host_topk.
+    # Same G1 error as dense (0.765x vs 0.761x the bf16 floor), 0.956 vs 1.150 s per call.
+    routed_moe: bool = True
+    moe_bucket: int = 256
+    # fidelity of the block matmuls (attention projections, MLPs, experts, skip linears); the gate, the input
+    # embedder and the final linear stay HiFi4. HiFi2 is 0.86 s per call but its G1 error is 1.31x the bf16 floor
+    # (limit 1.5x); LoFi fails G1 (8.2x)
+    mm_fidelity: str = "HiFi4"
 
 
 def _bf16(x: ttnn.Tensor) -> ttnn.Tensor:
@@ -180,6 +190,9 @@ class MoE(Module):
         self.shared_experts = FeedForward(mesh_device=mesh_device)
         self.fp32_gate = precision.fp32_gate
         self.host_topk = precision.host_topk
+        self.routed = precision.routed_moe
+        self.bucket = precision.moe_bucket
+        assert not self.routed or self.host_topk, "routed MoE needs the host top-k"
         self.mesh_device = mesh_device
         gdt = ttnn.float32 if precision.fp32_gate else ttnn.bfloat16
         # 8 gate rows padded to 32 output columns; the padding gets MASK_VALUE so softmax gives it 0
@@ -196,6 +209,7 @@ class MoE(Module):
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
         xin = ttnn.typecast(x, ttnn.float32) if self.fp32_gate else x
         scores = ttnn.softmax(self.gate(xin, dtype=ttnn.float32 if self.fp32_gate else None), dim=-1)
+        top_i = None
         if self.host_topk:
             s = ttnn.to_torch(scores).float()
             top_v, top_i = s[..., : host.NUM_EXPERTS].topk(host.MOE_TOP_K, dim=-1)
@@ -210,9 +224,46 @@ class MoE(Module):
         xb = _bf16(x)
         y = self.shared_experts(xb)
         y = ttnn.typecast(y, ttnn.float32)
+        if self.routed:
+            return self._routed(xb, y, top_i, w)
         for e, expert in enumerate(self.experts):
             we = ttnn.slice(w, [0, 0, 0, e], [w.shape[0], w.shape[1], w.shape[2], e + 1])
             y = ttnn.add(y, ttnn.multiply(ttnn.typecast(expert(xb), ttnn.float32), we))
+        return y
+
+    def _routed(self, xb: ttnn.Tensor, y: ttnn.Tensor, top_i: torch.Tensor, w: ttnn.Tensor) -> ttnn.Tensor:
+        """y + sum_e w_e * expert_e(x), each expert on its routed rows only. Padding rows (>= N_REAL) are not routed.
+        Gather in: rows of x by index (embedding over x as a row-major table). Scatter back: for every row, the
+        expert output row that holds it, or a padding row of the expert output (weight 0 there)."""
+        dev = self.mesh_device
+        b, _, n, d = xb.shape
+        rows = b * n
+        table = ttnn.to_layout(ttnn.reshape(xb, (1, 1, rows, d)), ttnn.ROW_MAJOR_LAYOUT)
+        sel = top_i[:, 0, :N_REAL]  # [b, N_REAL, k]
+        flat = (torch.arange(b)[:, None] * n + torch.arange(N_REAL)[None]).reshape(-1)
+        sel = sel.reshape(-1, sel.shape[-1])
+        for e, expert in enumerate(self.experts):
+            mine = flat[(sel == e).any(-1)]
+            cap = -(-(mine.numel() + 1) // self.bucket) * self.bucket  # at least one padding row
+            ids = torch.zeros(1, cap, dtype=torch.int32)
+            ids[0, : mine.numel()] = mine
+            xg = ttnn.embedding(
+                ttnn.from_torch(ids, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=dev),
+                table,
+                layout=ttnn.TILE_LAYOUT,
+            )
+            ye = expert(ttnn.reshape(xg, (1, 1, cap, d)))
+            back = torch.full((1, rows), cap - 1, dtype=torch.int32)
+            back[0, mine] = torch.arange(mine.numel(), dtype=torch.int32)
+            ye = ttnn.to_layout(ye, ttnn.ROW_MAJOR_LAYOUT)
+            yb = ttnn.embedding(
+                ttnn.from_torch(back, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=dev),
+                ye,
+                layout=ttnn.TILE_LAYOUT,
+            )
+            yb = ttnn.reshape(yb, (b, 1, n, d))
+            we = ttnn.slice(w, [0, 0, 0, e], [w.shape[0], w.shape[1], w.shape[2], e + 1])
+            y = ttnn.add(y, ttnn.multiply(ttnn.typecast(yb, ttnn.float32), we))
         return y
 
 
@@ -267,9 +318,29 @@ class TtHunyuanDiT(Module):
         self.blocks = ModuleList(Block(i, mesh_device=mesh_device, precision=precision) for i in range(host.DEPTH))
         self.final_norm = LayerNorm(host.HIDDEN, norm_eps=host.NORM_EPS, mesh_device=mesh_device)
         self.final_linear = Linear(host.HIDDEN, host.IN_CHANNELS, mesh_device=mesh_device, compute_kernel_config=mm)
+        if precision.mm_fidelity != "HiFi4":
+            self._set_block_fidelity(getattr(ttnn.MathFidelity, precision.mm_fidelity))
         self._host: dict[str, torch.Tensor] = {}
         self._consts: dict[int, tuple] = {}
         self.collect: list | None = None  # debug: per-block outputs copied to the host when a list
+
+    def _set_block_fidelity(self, fidelity) -> None:
+        cfg = ttnn.init_device_compute_kernel_config(
+            self.mesh_device.arch(),
+            math_fidelity=fidelity,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=True,
+        )
+
+        def walk(m: Module) -> None:
+            for name, child in m.named_children():
+                if isinstance(child, Linear) and name != "gate":
+                    child.compute_config = cfg
+                else:
+                    walk(child)
+
+        walk(self.blocks)
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         state.update(host.fix_qkv_layout({k: v for k, v in state.items() if ".attn" in k}))
