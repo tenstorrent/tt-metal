@@ -41,7 +41,9 @@ manifest_env() {
 
 MGD="${MGD_DIR}/${CONFIG}_mgd.textproto"
 
-CHUNK_SIZE=5120
+# Experiment: half the production 5120-token chunk. Must equal PREFILL_CHUNK_TOKENS in
+# models/demos/deepseek_v3_d_p/utils/chunk_config.py (the KV chunk-address table asserts it).
+CHUNK_SIZE=2560
 WARMUP_CHUNKS=10
 PCC_THRESHOLD=0.85
 GOLDEN_LEN=56320

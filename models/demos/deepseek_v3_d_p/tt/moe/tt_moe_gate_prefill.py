@@ -26,7 +26,6 @@ from models.demos.deepseek_v3_d_p.reference.mistral_small_4_config import Mistra
 from models.demos.deepseek_v3_d_p.tt.mla.utils import rotated_chip_real_token_counts
 from models.demos.deepseek_v3_d_p.tt.moe.debug_logging import DEBUG_LOGGING_ENABLED
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_tt_ccl
-from models.demos.deepseek_v3_d_p.utils.chunk_config import PREFILL_CHUNK_TOKENS_PER_CHIP
 
 # The noaux_tc correction bias only ranks experts (score + bias); the routing weights use the raw scores. Some
 # checkpoints put it on a large per-layer offset with a small spread (GLM-5.3: ~34 +- 0.14 at layer 3), and bf16's
@@ -119,7 +118,9 @@ def assert_gate_mode_matches_adapter(variant, gate_fallback_mode: GateComputeMod
 
 # Per-chip prefill sequence the production deployment runs at, and the depth the MoE/gate tests
 # drive. Every tuned matmul entry is keyed to it; other depths fall back to TTNN's default tiling.
-GATE_PRODUCTION_SP_DIM = PREFILL_CHUNK_TOKENS_PER_CHIP
+# Pinned to the 5120-token chunk's 640 rows per chip: these entries were tuned at that shape, so a
+# smaller experimental chunk (chunk_config.py) falls back to default tiling rather than reusing them.
+GATE_PRODUCTION_SP_DIM = 640
 
 
 def gate_mm_config_key(sp_dim: int, per_device_emb_dim: int, n_routed_experts: int) -> tuple[int, int, int]:
