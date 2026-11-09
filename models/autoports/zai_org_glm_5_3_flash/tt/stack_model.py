@@ -968,13 +968,21 @@ class StackBackend(ModelBackend):
         (mk_stack.AllocPool: request i of a shape in ANY build = the same tensor), so every layer reuses one L1 set and
         nothing is allocated or freed per layer or per capture (the per-call churn fragmented the L1 top and drifted the
         floor ~4 KB per layer under the t = 16 MoE program's static CBs: 2026-11-06 census). The MLA and MoE programs
-        build under the step's pool (kv.extra["pool"], the KDA stacks' intermediates): the three programs' same-shape
-        intermediates alias (they run one after another). s1 -- the MLA -> MoE hand-off -- comes from pool.child(),
-        the persistent-hand-off pool no build intermediate aliases (a MoE request of s1's shape would otherwise
-        take its buffer). -> the pool, or None (the per-call allocations + keep= frees)"""
+        build under ONE pool of their own (kv.extra["dsa_pool"]; alias mode follows the step's pool: a narrow width's
+        requests are views of the chunk width's tensors): the two programs' same-shape intermediates alias (they run
+        one after another). NOT the KDA stacks' pool (kv.extra["pool"]): the DSA shapes in its lists changed the
+        prefix-alias bases its narrow builds pick ("prefix base (1, 1, 8, 512) already handed", 2026-11-08). s1 -- the
+        MLA -> MoE hand-off -- comes from dsa_pool.child(), the persistent-hand-off pool no build intermediate aliases
+        (a MoE request of s1's shape would otherwise take its buffer). -> the pool, or None (the per-call allocations
+        + keep= frees)"""
         if os.environ.get("GLM53_DSA_POOL", "1") != "1":  # default on (2026-11-08: ids identical, perf unchanged)
             return None
-        return kv.extra["pool"]
+        if "dsa_pool" not in kv.extra:
+            from models.autoports.zai_org_glm_5_3_flash.tt.mk_stack import AllocPool
+
+            kv.extra["dsa_pool"] = AllocPool()
+        kv.extra["dsa_pool"].alias = kv.extra["pool"].alias
+        return kv.extra["dsa_pool"]
 
     def _dsa_layer(self, e: dict, x, latent, pt, pos, *, t: int, dsa_state: dict, out, pools) -> None:
         """one sparse_dsa layer of a step: the MLA program (stack mode: reads / keeps the persistent residual) -> s1 ->
