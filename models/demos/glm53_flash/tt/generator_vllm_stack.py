@@ -91,6 +91,22 @@ def _fabric_capability() -> dict | None:
     return out
 
 
+def cache_defaults(env=os.environ) -> dict:
+    """The stack's caches under the serving launcher's per-model cache dir (tt-inference-server exports
+    ``TT_CACHE_PATH``): the reference-format tile cache ``glm53_tile_cache_v3`` (built on the first boot, read
+    afterwards: mk_sources.MkTileCacheSource) and the permuted expert copies ``glm53_fused_experts_cache``
+    (ep_experts under GLM53_EP_KEEP_PERMUTED) -- unless the environment names other locations; nothing without
+    TT_CACHE_PATH (the e2e test names its caches itself)."""
+    root = env.get("TT_CACHE_PATH")
+    if not root:
+        return {}
+    want = {
+        "GLM53_MK_TILE_CACHE_V3": str(Path(root) / "glm53_tile_cache_v3"),
+        "GLM53_FUSED_EXPERTS_CACHE": str(Path(root) / "glm53_fused_experts_cache"),
+    }
+    return {k: v for k, v in want.items() if not env.get(k)}
+
+
 def _snapshot_dir(hf_config, default_snapshot_dir) -> Path:
     """The checkpoint directory: the HF config's ``_name_or_path`` when it is a snapshot, else the default."""
     name = getattr(hf_config, "_name_or_path", "") or ""
@@ -217,6 +233,8 @@ class GLM53StackForCausalLM:
         B, seq = int(max_batch_size), int(max_seq_len)
         if not 1 <= B <= MAX_DECODE_SLOTS:
             raise ValueError(f"max_num_seqs {B} outside [1, {MAX_DECODE_SLOTS}] (the stack's decode slots)")
+        caches = cache_defaults()
+        os.environ.update(caches)  # before the stack modules are imported (their own defaults read the environment)
         from models.autoports.zai_org_glm_5_3_flash.tt import galaxy_defaults as GD
         from models.autoports.zai_org_glm_5_3_flash.tt.config import load_hf_text_config
         from models.autoports.zai_org_glm_5_3_flash.tt.generator import Glm53Generator
@@ -228,7 +246,10 @@ class GLM53StackForCausalLM:
         snapshot = _snapshot_dir(hf_config, default_snapshot_dir)
         shape = tuple(int(v) for v in list(mesh_device.shape))
         applied = GD.apply(shape, seq=seq)  # (its prefill buckets are the ones that fit `seq`)
-        logger.info(f"GLM53 stack vLLM: mesh {shape}, max_num_seqs {B}, max_model_len {seq}, galaxy defaults {applied}")
+        logger.info(
+            f"GLM53 stack vLLM: mesh {shape}, max_num_seqs {B}, max_model_len {seq}, galaxy defaults {applied}, "
+            f"caches {caches or 'from the environment'}"
+        )
         cfg = load_hf_text_config(str(snapshot))
         source = install_weight_source(snapshot, cfg)
         layers = list(range(int(n_layers) if n_layers else int(cfg.num_hidden_layers)))

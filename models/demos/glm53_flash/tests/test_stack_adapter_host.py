@@ -42,6 +42,7 @@ from models.demos.glm53_flash.tt import generator_vllm_stack as gvs
 from models.demos.glm53_flash.tt.generator_vllm_stack import (
     LATENT_DIM,
     GLM53StackForCausalLM,
+    cache_defaults,
     row_params,
     trim_page_rows,
 )
@@ -380,6 +381,19 @@ def test_kv_cache_spec_and_budget(monkeypatch):
     assert spec_calls == [dict(block_size=64, num_kv_heads=1, head_size=LATENT_DIM, dtype=torch.bfloat16)]
     with expect_error(ValueError, "must be 64"):
         GLM53StackForCausalLM.get_kv_cache_spec(SimpleNamespace(cache_config=SimpleNamespace(block_size=32)))
+
+
+def test_cache_defaults_under_tt_cache_path():
+    """The serving launcher's TT_CACHE_PATH places the tile cache and the permuted expert copies; an explicit
+    environment value wins; without TT_CACHE_PATH nothing is defaulted."""
+    assert cache_defaults({}) == {}
+    assert cache_defaults({"TT_CACHE_PATH": "/cache/glm"}) == {
+        "GLM53_MK_TILE_CACHE_V3": "/cache/glm/glm53_tile_cache_v3",
+        "GLM53_FUSED_EXPERTS_CACHE": "/cache/glm/glm53_fused_experts_cache",
+    }
+    assert cache_defaults({"TT_CACHE_PATH": "/cache/glm", "GLM53_MK_TILE_CACHE_V3": "/data/v3"}) == {
+        "GLM53_FUSED_EXPERTS_CACHE": "/cache/glm/glm53_fused_experts_cache",
+    }
 
 
 def test_initialize_refuses_data_parallel_and_bad_batch():

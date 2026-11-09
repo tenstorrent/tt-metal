@@ -829,23 +829,24 @@
   benchmark-timeout: 10
   mesh-device: TG
   arch: arch-blackhole
-  # The served 1 M profile of tt-inference-server (32 resident users): the 2D-torus fabric, the 512 MiB trace
-  # region, device sampling, chunked prefill aligned to the 256-row grid, eight decode steps between a prompt's
-  # chunks. The mesh weight cache is $TT_CACHE_PATH/glm53_mesh (built on the first run, mlperf write access).
-  tt-config: '{"fabric_config": "FABRIC_2D_TORUS_XY", "fabric_reliability_mode": "RELAXED_INIT", "trace_region_size": 536870912, "l1_small_size": 32768, "sample_on_device_mode": "all", "prefill_chunk_alignment": 256, "decode_interleave_enabled": true, "decode_interleave_prefill_steps": 1, "decode_interleave_decode_steps": 8}'
-  # No JSON-valued arguments here: the workflow embeds the matrix in a single-quoted bash literal, so quotes break
-  # it. The image request runs on vLLM's defaults (one image per prompt; a window over the tower's 1024-patch cap
-  # is encoded as row bands by the model).
-  additional-server-args: "--max-model-len 1048576 --max-num-seqs 32 --block-size 32 --max-num-batched-tokens 524288 --long-prefill-token-threshold 16384 --enable-prefix-caching --async-scheduling --reasoning-parser glm45"
+  # The persistent megakernel stack over all 32 chips (TP32 x EP32: models/autoports/zai_org_glm_5_3_flash/tt) through
+  # its vLLM adapter (models/demos/glm53_flash/tt/generator_vllm_stack.py): the 1D fabric, the 3 GiB trace region of the
+  # 128 K context, the stack's worker L1 budget, device greedy sampling (sampled rows on the host sampler), chunked
+  # prefill on the 128-row grid, 16 resident users at 128 K (the served 128 K profile of tt-inference-server). The
+  # caches live under $TT_CACHE_PATH (the adapter's default): the tile cache glm53_tile_cache_v3 is the e2e row's,
+  # built on its first run (mlperf write access); the permuted expert copies glm53_fused_experts_cache.
+  tt-config: '{"fabric_config": "FABRIC_1D", "fabric_reliability_mode": "RELAXED_INIT", "trace_region_size": 3221225472, "l1_small_size": 32768, "worker_l1_size": 1280896, "sample_on_device_mode": "all", "prefill_chunk_alignment": 128, "decode_interleave_enabled": false}'
+  # No JSON-valued arguments here: the workflow embeds the matrix in a single-quoted bash literal, so quotes break it.
+  additional-server-args: "--max-model-len 131072 --max-num-seqs 16 --block-size 64 --max-num-batched-tokens 8192 --no-enable-prefix-caching --reasoning-parser glm45"
   # The serving class by the plugin's generic override (tt-inference-server's catalog does the same): the test runs on
-  # the plugin's main, which has no GLM-5.3-Flash entry in its built-in model map (vllm-tt-plugin #263).
-  extra-env: "TT_MODEL_CLASS_OVERRIDES=Glm5NextForConditionalGeneration=models.demos.glm53_flash.tt.generator_vllm:GLM53FlashForConditionalGeneration,TTGlm5NextForConditionalGeneration=models.demos.glm53_flash.tt.generator_vllm:GLM53FlashForConditionalGeneration,Glm5NextForCausalLM=models.demos.glm53_flash.tt.generator_vllm:GLM53FlashForConditionalGeneration,TTGlm5NextForCausalLM=models.demos.glm53_flash.tt.generator_vllm:GLM53FlashForConditionalGeneration GLM53_MESH_SHAPE=8,4 GLM53_MODEL_TRACE_MB=512 GLM53_VLLM_IMAGES=1 GLM53_VLLM_VISION_RESIDENT=0 GLM53_VLLM_VISION_BATCH_PATCHES=1024 GLM53_VLLM_PREFIX_CACHING=1 GLM53_VLLM_APC_SNAPSHOTS=2 GLM53_VLLM_APC_WARMUP_ALLOWANCE_MIB=400 GLM53_VLLM_ROWS_INDEPENDENT=1 GLM53_RESIDENT_DECODE=1 GLM53_REGIONS_T=4096 GLM53_PAGED_SPARSE=1 GLM53_DECODE_SLOT_MASK=1 GLM53_DEVICE_SAMPLING=1 GLM53_VLLM_WARMUP_PREFILL=128,32768"
+  # the plugin's main, whose built-in model map registers GLM-5.3-Flash only once the stack registration PR lands.
+  extra-env: "TT_MODEL_CLASS_OVERRIDES=Glm5NextForConditionalGeneration=models.demos.glm53_flash.tt.generator_vllm_stack:GLM53StackForCausalLM,TTGlm5NextForConditionalGeneration=models.demos.glm53_flash.tt.generator_vllm_stack:GLM53StackForCausalLM,Glm5NextForCausalLM=models.demos.glm53_flash.tt.generator_vllm_stack:GLM53StackForCausalLM,TTGlm5NextForCausalLM=models.demos.glm53_flash.tt.generator_vllm_stack:GLM53StackForCausalLM"
   coherence-test: true
-  # the plugin's sampling suite over the device sampler (seeded draws, top-p / top-k, logprobs on host-sampled rows)
+  # the plugin's sampling suite: greedy rows on the stack's device argmax, sampled rows through the host sampler
   sampling-tests: true
   sampling-test-timeout: 15
-  # the chat API's image request (the tower at the 1024-patch window, device-sampled with top_k 10)
-  multimodal: true
+  # text only: the stack serves no image or video request
+  multimodal: false
   skus:
     bh_galaxy:
       timeout: 85
