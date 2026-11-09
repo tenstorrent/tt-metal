@@ -56,6 +56,7 @@ Everything device-side is a callback, so this module has no ttnn import and is t
 
 from __future__ import annotations
 
+import ctypes
 import hashlib
 import os
 from dataclasses import dataclass, field
@@ -106,18 +107,56 @@ class StoreEntry:
     stamp: int = 0
 
 
+try:
+    _LIBC = ctypes.CDLL("libc.so.6")
+except OSError:  # not glibc: no trim, eviction still bounds the store's own bytes
+    _LIBC = None
+
+# Evicted bytes between two malloc_trim(0) calls. The chunks' rows are many mid-size host tensors that land in the brk heap;
+# glibc returns only the heap's top to the OS on free, so an evicting store's freed holes stay resident and the runner's
+# RSS grows past the budget (G53F-0256, 11-09: heap 130 GB at a 64 GiB budget after ~2,000 evictions -> host 30 out of
+# RAM). malloc_trim(0) releases every free page in every arena (madvise), at a cost of a heap walk.
+TRIM_EVERY_BYTES = 2 << 30
+
+
+def mem_available() -> Optional[int]:
+    """The host's MemAvailable in bytes (None where /proc/meminfo is unreadable)."""
+    try:
+        with open("/proc/meminfo") as f:
+            for line in f:
+                if line.startswith("MemAvailable:"):
+                    return int(line.split()[1]) * 1024
+    except OSError:
+        pass
+    return None
+
+
 class ChunkStore:
     """Host-RAM chunks of retained prompts: chain hash at the chunk's end -> its rows (opaque to this module) and, for
     a prompt's tip boundaries, the KDA carries there. LRU over conversations: ``touch`` stamps every chunk a prompt
     uses; eviction takes the oldest-stamped LEAF (no stored child) first and never a chunk of the prompt in flight."""
 
-    def __init__(self, budget_bytes: int, log: Callable[[str], None] = print):
+    def __init__(
+        self,
+        budget_bytes: int,
+        log: Callable[[str], None] = print,
+        reserve_bytes: int = 0,
+        available: Callable[[], Optional[int]] = mem_available,
+    ):
         self.budget = int(budget_bytes)
+        # Host-memory floor (0 = off): while the host's MemAvailable is below it, the store evicts down by the deficit
+        # and trims, whatever took the memory (the store's own heap overhead, /dev/shm, other processes). The budget
+        # alone bounds only the bytes the store counts (G53F-0256 11-09: a 64 GiB store was ~95 GB of runner heap).
+        self.reserve = int(reserve_bytes)
+        self.available = available
+        self.pressure_evictions = 0
         self.log = log
         self.entries: dict[bytes, StoreEntry] = {}
         self.bytes = 0
         self.evicted = 0
         self.inserted = 0
+        self.freed_since_trim = 0
+        self.trims = 0
 
     def get(self, h: Optional[bytes]) -> Optional[StoreEntry]:
         return None if h is None else self.entries.get(h)
@@ -149,18 +188,37 @@ class ChunkStore:
         return True
 
     def evict(self, protect_stamp: int) -> None:
-        """Drop least-recently-used leaves until the store fits its budget; chunks stamped ``protect_stamp`` (the
-        prompt in flight) stay even if that leaves the store over budget."""
-        while self.bytes > self.budget:
+        """Drop least-recently-used leaves until the store fits its budget -- or, while the host's MemAvailable is
+        under ``reserve``, its bytes less the deficit; chunks stamped ``protect_stamp`` (the prompt in flight) stay even
+        if that leaves the store over the target."""
+        target, pressed = self.budget, False
+        if self.reserve > 0:
+            avail = self.available()
+            if avail is not None and avail < self.reserve:
+                target, pressed = max(0, min(target, self.bytes - (self.reserve - avail))), True
+        while self.bytes > target:
             leaves = [e for e in self.entries.values() if e.children == 0 and e.stamp < protect_stamp]
             if not leaves:
-                return
+                break
             v = min(leaves, key=lambda e: (e.stamp, -e.start))
+            over_budget = self.bytes > self.budget
             del self.entries[v.h]
             if v.parent in self.entries:
                 self.entries[v.parent].children -= 1
             self.bytes -= v.nbytes + v.carries_nbytes
+            self.freed_since_trim += v.nbytes + v.carries_nbytes
             self.evicted += 1
+            self.pressure_evictions += 0 if over_budget else 1  # within budget: evicted for the host's memory
+        # Under pressure the freed pages must reach the OS now, or MemAvailable stays low and the next call evicts again.
+        if self.freed_since_trim >= TRIM_EVERY_BYTES or (pressed and self.freed_since_trim > 0):
+            self.trim()
+
+    def trim(self) -> None:
+        """Give the heap pages the evicted chunks freed back to the OS."""
+        self.freed_since_trim = 0
+        if _LIBC is not None:
+            _LIBC.malloc_trim(0)
+            self.trims += 1
 
 
 class CheckpointPool:
@@ -569,8 +627,8 @@ class PrefixRetention:
             f"writes {s.kda_slab_writes}, marked headers {s.marked_chunks}"
             + (
                 f"; store {len(self.store.entries)} chunk(s) {self.store.bytes / 2**30:.2f} GiB (evicted "
-                f"{self.store.evicted}), restored {s.restored_chunks} chunk(s), spills {s.spills}, host carries "
-                f"{s.host_carries_loaded}"
+                f"{self.store.evicted}, trims {self.store.trims}, pressure {self.store.pressure_evictions}), restored {s.restored_chunks} chunk(s), spills "
+                f"{s.spills}, host carries {s.host_carries_loaded}"
                 if self.store is not None
                 else ""
             )

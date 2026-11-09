@@ -268,3 +268,50 @@ def test_fuzz_interleaved_conversations_equal_cold(seed):
         restored += did.count("R")
         check_equal(dev, P, C, cut)
     assert pr.stats.computed_chunks > 0
+
+
+def test_evictions_trim_the_heap_every_trim_every_bytes(monkeypatch):
+    """Freed chunk rows stay resident in glibc's brk heap until malloc_trim (G53F-0256 11-09: 130 GB heap at a 64 GiB
+    budget). The store trims once per TRIM_EVERY_BYTES of evicted bytes, and not before."""
+    calls = []
+
+    class FakeLibc:
+        def malloc_trim(self, pad):
+            calls.append(pad)
+            return 1
+
+    monkeypatch.setattr(prefix_reuse, "_LIBC", FakeLibc())
+    monkeypatch.setattr(prefix_reuse, "TRIM_EVERY_BYTES", 3)
+    st = ChunkStore(2)
+    ids = torch.zeros(4, dtype=torch.int32)
+    for k in range(6):  # each put of 1 byte past the 2-byte budget evicts one leaf (1 byte freed)
+        st.put(bytes([k]), b"root", 4 * k, 4 * k + 4, ids, None, 1, stamp=k + 1)
+    assert st.evicted == 4
+    assert calls == [0] and st.trims == 1 and st.freed_since_trim == 1
+
+
+def test_low_host_memory_shrinks_the_store_by_the_deficit_and_trims(monkeypatch):
+    """The host-memory floor: while MemAvailable is under the reserve, the store evicts down by the deficit (within its
+    budget) and trims at once; with enough memory it keeps everything its budget allows."""
+    calls = []
+
+    class FakeLibc:
+        def malloc_trim(self, pad):
+            calls.append(pad)
+            return 1
+
+    monkeypatch.setattr(prefix_reuse, "_LIBC", FakeLibc())
+    avail = [100]
+    st = ChunkStore(10, reserve_bytes=50, available=lambda: avail[0])
+    ids = torch.zeros(4, dtype=torch.int32)
+    for k in range(6):
+        st.put(bytes([k]), b"root", 4 * k, 4 * k + 4, ids, None, 1, stamp=k + 1)
+    assert st.bytes == 6 and st.evicted == 0 and calls == []  # under budget, plenty of memory
+    avail[0] = 47  # 3 bytes short of the floor
+    st.put(bytes([9]), b"root", 40, 44, ids, None, 1, stamp=10)
+    assert st.bytes == 4 and st.evicted == 3 and st.pressure_evictions == 3
+    assert calls == [0]  # trimmed at once so the freed pages reach MemAvailable
+    assert bytes([9]) in st.entries  # the prompt in flight stays
+    avail[0] = None  # unreadable meminfo: the budget alone
+    st.put(bytes([10]), b"root", 44, 48, ids, None, 1, stamp=11)
+    assert st.bytes == 5 and st.evicted == 3

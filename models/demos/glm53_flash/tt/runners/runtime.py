@@ -497,7 +497,11 @@ class GLM53FlashPrefillRuntime:
                 )
                 assert not c.partition, "phase 2 needs GLM53_PARTITION_USERS=0 (one user, identity page table)"
             assert not (self._async and not self._async_pack), "phase 2 needs the sync or 'pack' export (rows read)"
-            store = prefix_reuse.ChunkStore(int(host_gb * 2**30), log=logger.info)
+            # host-memory floor (G53F-0256 11-09): the store gives memory back while the host has less than this free
+            reserve_gb = float(os.environ.get("GLM53F_PREFIX_HOST_RESERVE_GB", "32"))
+            store = prefix_reuse.ChunkStore(
+                int(host_gb * 2**30), log=logger.info, reserve_bytes=int(reserve_gb * 2**30)
+            )
         self._prefix = prefix_reuse.PrefixRetention(
             chunk=self.config.chunk_size,
             n_ckpts=n,
@@ -517,7 +521,8 @@ class GLM53FlashPrefillRuntime:
             logger.info(
                 f"[glm53f-prefix] phase 2 ON: host chunk store {host_gb:g} GiB (~"
                 f"{int(host_gb * 2**30 // (len(DSA_LAYERS) * self.config.chunk_size * (LATENT_DIM + POOL_WIDTH // POOL_RATIO) * 2))}"
-                f" chunks of {self.config.chunk_size} tokens), spill {self._prefix.spill_tips} tip(s) per prompt left"
+                f" chunks of {self.config.chunk_size} tokens), spill {self._prefix.spill_tips} tip(s) per prompt left, "
+                f"host floor {store.reserve / 2**30:g} GiB MemAvailable"
             )
         logger.info(
             f"[glm53f-prefix] prefix reuse ON: {n} checkpoint slot(s) x {len(kda)} KDA layers, {per:.2f} MiB per bank "
