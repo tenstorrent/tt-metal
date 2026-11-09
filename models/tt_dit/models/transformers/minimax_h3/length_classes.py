@@ -52,3 +52,9 @@ def uncovered_class_lengths(padded_lengths: Iterable[int], sp_factor: int) -> li
         if cls.name not in covered and lengths[0] < first < lengths[-1]:
             out.append(first)
     return out
+
+
+# all_gather_async workers per link on the dynamic-length path: the op's byte-based pick for every served
+# length (the audio gather clears its 256 KB/link threshold by 1.2 %), pinned so the program key cannot move
+# with the rows. The transformer's TP and SP gathers and the blocks' unfused-path (line topology) gathers share it.
+DYNAMIC_AG_WORKERS_PER_LINK = 4

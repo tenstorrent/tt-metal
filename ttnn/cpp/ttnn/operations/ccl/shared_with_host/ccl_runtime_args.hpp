@@ -50,7 +50,12 @@ struct ReduceScatterCommonArgs {
     static constexpr uint32_t semaphore_0 = 5;
     static constexpr uint32_t semaphore_1 = 6;
     static constexpr uint32_t ack = 7;
-    static constexpr uint32_t count = 8;
+    // Row words of the line reduce-scatter's row-free programs (reduce_scatter_minimal_async, scatter dim 3):
+    // the input's tile rows and half the intermediate's page count, re-applied on every cache hit like the
+    // addresses, so one program serves every row count of a width. The ring kernels leave them unread.
+    static constexpr uint32_t input_Ht = 8;
+    static constexpr uint32_t intermediate_half_pages = 9;
+    static constexpr uint32_t count = 10;
 };
 
 }  // namespace ttnn::ccl

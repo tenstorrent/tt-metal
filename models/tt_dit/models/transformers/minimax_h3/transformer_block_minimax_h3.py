@@ -22,6 +22,7 @@ from ....utils.substate import rename_substate
 from ....utils.tensor import bf16_tensor
 from .agmm_config import agmm_kwargs, agmm_pins
 from .attention_minimax_h3 import MiniMaxH3Attention
+from .length_classes import DYNAMIC_AG_WORKERS_PER_LINK
 from .mmrs_config import has_mmrs_config, pinned_mmrs_config, register_mmrs_config
 
 # Number of modalities the AdaLN table is indexed by: video (0), text (1), audio (2).
@@ -402,7 +403,13 @@ class MiniMaxH3TransformerBlock(Module):
         # ff1 gathers the TP-fractured input inside its matmul (all_gather_minimal_matmul_async) when
         # parallel_config is passed; ff2 is row-parallel and reduce-scatters back to TP-fractured.
         if not self.use_fused_agmm and self.tp_factor > 1:
-            normed = self.ccl_manager.all_gather(normed, dim=3, mesh_axis=self.tp_mesh_axis, use_hyperparams=False)
+            normed = self.ccl_manager.all_gather(
+                normed,
+                dim=3,
+                mesh_axis=self.tp_mesh_axis,
+                use_hyperparams=False,
+                num_workers_per_link=DYNAMIC_AG_WORKERS_PER_LINK if self.dynamic_length else None,
+            )
         # ff2's reduce-scatter and the gated residual after it fuse into a single
         # minimal_matmul_strided_reduce_scatter_async, computing residual + ff2(...) * gate in one op.
         #
