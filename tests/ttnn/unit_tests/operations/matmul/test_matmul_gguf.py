@@ -65,6 +65,24 @@ def test_decode_large(device, dtype, k, n):
     _run(device, dtype, (1, 1, 1), k, n)
 
 
+# K = 25600: the input of all K tiles does not fit L1, so bands of grid rows take shares of K. Every format with
+# --runslow; a few by default.
+@pytest.mark.parametrize("m", [1, 32])
+@pytest.mark.parametrize(
+    "dtype",
+    [
+        pytest.param(
+            d,
+            id=_name(d),
+            marks=() if d in (ttnn.gguf_q4_0, ttnn.gguf_q4_k, ttnn.gguf_iq2_xxs, ttnn.gguf_tq2_0) else pytest.mark.slow,
+        )
+        for d in ttnn.GGUF_DTYPES
+    ],
+)
+def test_decode_k_bands(device, dtype, m):
+    _run(device, dtype, (1, 1, m), 25600, 2048)
+
+
 @pytest.mark.parametrize("m", [1, 3])
 def test_decode_tq2_0_long_k(device, m):
     # 40 K groups: with one input row the scales apply per 16 K groups, and the cores' segments cross those windows.
@@ -142,6 +160,23 @@ def test_expanded_refusals(expect_error):
 @pytest.mark.parametrize("m, k, n", [(128, 4096, 4096), (200, 4096, 1056), (2048, 4096, 4096), (640, 12288, 4096)])
 def test_prefill_blockings(device, dtype, m, k, n):
     _run(device, dtype, (1, m), k, n)
+
+
+# 4748 N tiles: no blocking takes a core's N tiles at once, so the cores take them in passes. The prefill program must
+# take it (one program, not the 32-row blocks).
+@pytest.mark.parametrize("dtype", [ttnn.gguf_q4_k, pytest.param(ttnn.gguf_q6_k, marks=pytest.mark.slow)], ids=_name)
+@pytest.mark.parametrize("m, k", [(512, 256), pytest.param(128, 2048, marks=pytest.mark.slow)])
+def test_prefill_n_passes(device, dtype, m, k):
+    n = 151936
+    blocks = _blocks(dtype, k, n)
+    torch.manual_seed(0)
+    x = torch.randn(1, m, k).bfloat16()
+    w = ttnn.from_gguf(blocks, (k, n), dtype, device=device)
+    x_tt = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    entries = device.num_program_cache_entries()
+    out = ttnn.matmul(x_tt, w)
+    assert device.num_program_cache_entries() == entries + 1
+    _check(ttnn.to_torch(out), x, blocks, dtype, k, n)
 
 
 def test_leading_dims_and_bias(device):

@@ -49,10 +49,12 @@ bool prefill_format_supported(DataType dtype) {
 // band 1 the rest; band 1 sends its fp32 sums of each N tile, per unit of rows, to the core of band 0 that holds the
 // tile. A band's cores split N, nc[band] tiles each: bands of unequal rows with unequal K shares even out the cores'
 // work when the N tiles do not split evenly over one band. A band takes M in chunks of mc tiles and K in blocks of kb
-// tiles (whole groups); the input arrives in units of ur rows x kb tiles.
+// tiles (whole groups); the input arrives in units of ur rows x kb tiles. N passes (np > 0, no K split): a core takes
+// its N tiles np at a time, and its band's input streams once per pass.
 struct PrefillPlan {
     uint32_t mg = 0, ks = 1, rows0 = 0, kt0 = 0, mc = 0, kb = 0, ur = 1;
     std::array<uint32_t, 2> nc{};
+    uint32_t np = 0;
     double cost = 1e30;
 };
 
@@ -73,7 +75,7 @@ uint32_t prefill_fixed_l1(const GgufTraits& f) { return weight_reader_l1_bytes(f
 
 // The least modeled time within the L1 budget: per core, the decodes (once per M chunk), the multiplies, a fixed cost
 // per block and, on band 0 of a K split, the sums' exchange, against the band's input stream (measured multicast rates
-// per band count).
+// per band count). N passes only where no blocking takes a core's N tiles at once.
 std::optional<PrefillPlan> prefill_plan(
     const GgufTraits& f, uint32_t m_tiles, uint32_t k_tiles, uint32_t n_tiles, CoreCoord grid) {
     const uint32_t gt = f.group_tiles;
@@ -86,7 +88,8 @@ std::optional<PrefillPlan> prefill_plan(
     auto consider = [&](PrefillPlan plan, double core) {
         // Input bytes per cycle per band stream: ~30 for one band, ~40 for two or five, ~70 for ten.
         const double rate = plan.mg == 1 ? 30.0 : plan.mg < 10 ? 40.0 : 70.0;
-        const double input = double(m_tiles) * k_tiles * 2048 / rate;
+        const uint32_t passes = plan.np > 0 ? (plan.nc[0] + plan.np - 1) / plan.np : 1;
+        const double input = double(m_tiles) * k_tiles * 2048 * passes / rate;
         plan.cost = std::max(core, input) + 0.2 * std::min(core, input);
         if (plan.cost < best.cost) {
             best = plan;
@@ -139,6 +142,26 @@ std::optional<PrefillPlan> prefill_plan(
             }
         }
     }
+    const bool one_pass = best.mg != 0;
+    for (uint32_t mg = 1; !one_pass && mg <= grid.y; mg++) {
+        if (grid.y % mg || m_tiles % mg) {
+            continue;
+        }
+        const uint32_t nc = (n_tiles + grid.x * (grid.y / mg) - 1) / (grid.x * (grid.y / mg)), mb = m_tiles / mg;
+        for (uint32_t np = 1; np < nc; np++) {
+            const uint32_t passes = (nc + np - 1) / np;
+            for (uint32_t mc = 1; mc <= mb; mc++) {
+                const uint32_t ur = mc % 4 == 0 ? 4 : mc % 2 == 0 ? 2 : 1;
+                for (uint32_t kb = gt; mb % mc == 0 && kb <= k_tiles && kb <= 16; kb += gt) {
+                    if (k_tiles % kb == 0 && fits(mc, ur, kb, np, false)) {
+                        consider(
+                            {mg, 1, 0, 0, mc, kb, ur, {nc, nc}, np},
+                            core_cycles(nc, k_tiles, mb, mc, kb) + (passes - 1) * (mb / mc) * (k_tiles / kb) * 2000.0);
+                    }
+                }
+            }
+        }
+    }
     if (best.mg == 0) {
         return std::nullopt;
     }
@@ -175,7 +198,8 @@ GgufMatmulPrefillProgramFactory::cached_program_t GgufMatmulPrefillProgramFactor
     const std::optional<PrefillPlan> p = prefill_plan(f, m_tiles, k_tiles, n_tiles, grid);
     TT_FATAL(p.has_value(), "GGUF prefill matmul: no blocking fits ({} M tiles, {} K tiles)", m_tiles, k_tiles);
     const uint32_t mg = p->mg, mc = p->mc, kb = p->kb, ur = p->ur, ks = p->ks;
-    const uint32_t nc = std::max(p->nc[0], p->nc[1]);  // N tiles the circular buffers are sized for
+    const uint32_t nc = p->np > 0 ? p->np : std::max(p->nc[0], p->nc[1]);  // N tiles the circular buffers are sized for
+    const uint32_t passes = p->np > 0 ? (p->nc[0] + p->np - 1) / p->np : 1;
     const uint32_t mb = ks == 2 ? m_tiles : m_tiles / mg, mchunks = mb / mc;
     struct Band {
         uint32_t row0, rows, nc, k0, kt;
@@ -185,13 +209,13 @@ GgufMatmulPrefillProgramFactory::cached_program_t GgufMatmulPrefillProgramFactor
         bands = {{0, p->rows0, p->nc[0], 0, p->kt0}, {p->rows0, grid.y - p->rows0, p->nc[1], p->kt0, k_tiles - p->kt0}};
     } else {
         for (uint32_t band = 0; band < mg; band++) {
-            bands.push_back({band * (grid.y / mg), grid.y / mg, nc, 0, k_tiles});
+            bands.push_back({band * (grid.y / mg), grid.y / mg, p->nc[0], 0, k_tiles});
         }
     }
     log_debug(
         tt::LogOp,
-        "GGUF prefill: M {} K {} N {} tiles: bands {} K split {} (band 0: {} rows, {} K tiles) nc {} / {} mc {} kb {} "
-        "ur {}",
+        "GGUF prefill: M {} K {} N {} tiles: bands {} K split {} (band 0: {} rows, {} K tiles) nc {} / {} passes {} mc "
+        "{} kb {} ur {}",
         m_tiles,
         k_tiles,
         n_tiles,
@@ -201,6 +225,7 @@ GgufMatmulPrefillProgramFactory::cached_program_t GgufMatmulPrefillProgramFactor
         bands[0].kt,
         p->nc[0],
         p->nc[1],
+        passes,
         mc,
         kb,
         ur);
@@ -249,7 +274,9 @@ GgufMatmulPrefillProgramFactory::cached_program_t GgufMatmulPrefillProgramFactor
         senders,
         ur,
         partial_sem0,
-        partial_sem1};
+        partial_sem1,
+        nc,
+        passes};
     TensorAccessorArgs(*input.buffer()).append_to(writer_ct);
     TensorAccessorArgs(*output.buffer()).append_to(writer_ct);
 
@@ -285,7 +312,7 @@ GgufMatmulPrefillProgramFactory::cached_program_t GgufMatmulPrefillProgramFactor
             .math_fidelity = MathFidelity::HiFi2,
             .fp32_dest_acc_en = true,
             .dst_full_sync_en = false,
-            .compile_args = {f.format_id, mc, kb, mchunks, ur}});
+            .compile_args = {f.format_id, mc, kb, mchunks, ur, passes}});
 
     auto band_core = [&](uint32_t band, uint32_t j) { return CoreCoord(j % grid.x, bands[band].row0 + j / grid.x); };
     for (uint32_t band = 0; band < bands.size(); band++) {
@@ -334,12 +361,13 @@ GgufMatmulPrefillProgramFactory::cached_program_t GgufMatmulPrefillProgramFactor
                          (hi - lo) * ur});
                 }
             }
-            // Subblock: sh x sw tiles within half of DEST, sw dividing nc, sh dividing ur; the largest. With a K split,
-            // ur x 1, so that a unit of sums holds each N tile's rows together.
+            // Subblock: sh x sw tiles within half of DEST, sw dividing the N tiles of each pass, sh dividing ur; the
+            // largest. With a K split, ur x 1, so that a unit of sums holds each N tile's rows together.
             uint32_t sh = ks == 2 ? ur : 1, sw = 1;
             for (uint32_t w = 1; ks == 1 && w <= std::min(kPrefillDestTiles, std::max(my_nc, 1u)); w++) {
                 for (uint32_t h = 1; h * w <= kPrefillDestTiles; h++) {
-                    if (my_nc % w == 0 && ur % h == 0 && kPrefillOutTiles % (h * w) == 0 && h * w > sh * sw) {
+                    if (my_nc % w == 0 && (passes == 1 || nc % w == 0) && ur % h == 0 &&
+                        kPrefillOutTiles % (h * w) == 0 && h * w > sh * sw) {
                         sh = h;
                         sw = w;
                     }
@@ -355,7 +383,8 @@ GgufMatmulPrefillProgramFactory::cached_program_t GgufMatmulPrefillProgramFactor
                  my_nc,
                  bd.kt / f.group_tiles,
                  mchunks,
-                 bd.k0 / f.group_tiles});
+                 bd.k0 / f.group_tiles,
+                 nc});
             std::vector<uint32_t> writer_args = {
                 uint32_t(input.buffer()->address()),
                 uint32_t(output.buffer()->address()),
