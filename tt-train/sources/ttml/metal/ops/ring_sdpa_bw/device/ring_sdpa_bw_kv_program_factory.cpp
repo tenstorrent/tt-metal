@@ -14,28 +14,6 @@
 #include "ring_sdpa_bw_kv_device_operation_types.hpp"
 
 namespace ttml::metal::ops::ring_sdpa_bw::kv {
-
-namespace {
-
-// SDPA backward-KV inputs of one device at one ring step that depend on which query it uses:
-// the op's primary ones, or (RingSchedule::Striped, src > d) the shifted ones. K/V, u_scaler and
-// the dK/dV outputs are shared (dK/dV are in the K/V source's coordinates either way).
-struct KVDeviceTensors {
-    const ttnn::Tensor& grad_output;
-    const ttnn::Tensor& query;
-    const ttnn::Tensor& intermediates;
-};
-
-KVDeviceTensors select_device_tensors(bool shifted_query, const tensor_args_t& tensor_args) {
-    if (!shifted_query) {
-        return {tensor_args.grad_output, tensor_args.query, tensor_args.intermediates};
-    }
-    TT_FATAL(tensor_args.shifted.has_value(), "Device was assigned the shifted query but none was given");
-    const auto& shifted = tensor_args.shifted.value();
-    return {shifted.grad_output, shifted.query, shifted.intermediates};
-}
-
-}  // namespace
 // ============== Backward KV Program Factory ==============
 
 RingSDPABwKVProgramFactory::cached_mesh_workload_t RingSDPABwKVProgramFactory::create_mesh_workload(
@@ -45,10 +23,12 @@ RingSDPABwKVProgramFactory::cached_mesh_workload_t RingSDPABwKVProgramFactory::c
     std::tuple<ttnn::Tensor, ttnn::Tensor>& tensor_return_value) {
     namespace sdpa_kv = ttml::metal::ops::sdpa_bw::device::kv;
 
+    const auto& grad_output = tensor_args.grad_output;
     const auto& u_scaler = tensor_args.u_scaler;
     const auto& query = tensor_args.query;
     const auto& key = tensor_args.key;
     const auto& value = tensor_args.value;
+    const auto& intermediates = tensor_args.intermediates;
     auto& grad_key = std::get<0>(tensor_return_value);
     auto& grad_value = std::get<1>(tensor_return_value);
 
@@ -59,7 +39,7 @@ RingSDPABwKVProgramFactory::cached_mesh_workload_t RingSDPABwKVProgramFactory::c
     const uint32_t ring_axis = operation_attributes.ring_axis;
     const uint32_t ring_size = operation_attributes.ring_size;
     const uint32_t step = operation_attributes.step;
-    const auto mask_type = operation_attributes.mask_type;
+    const auto& step_masks = operation_attributes.step_masks;
     const auto ring_direction = operation_attributes.ring_direction;
 
     tt::tt_metal::distributed::MeshWorkload mesh_workload;
@@ -68,24 +48,21 @@ RingSDPABwKVProgramFactory::cached_mesh_workload_t RingSDPABwKVProgramFactory::c
     for (const auto& mesh_coord : ttnn::MeshCoordinateRange(mesh_shape)) {
         uint32_t device_ring_id = mesh_coord[ring_axis];
 
-        const auto work = get_ring_step_work(
-            device_ring_id, step, ring_size, mask_type, ring_direction, operation_attributes.schedule);
-        const auto effective_mask_type = work.mask_type;
-
-        if (!work.execute) {
+        const auto step_mask = get_ring_step_mask(device_ring_id, step, ring_size, ring_direction, step_masks);
+        if (!step_mask.has_value()) {
             continue;
         }
-        const auto io = select_device_tensors(work.shifted_query, tensor_args);
+        const auto effective_mask_type = step_mask.value();
 
         sdpa_kv::operation_attributes_t sdpa_attrs{.mask_type = effective_mask_type, .dropout_probability = 0.0F};
 
         sdpa_kv::tensor_args_t sdpa_tensor_args{
-            .grad_output = io.grad_output,
-            .query = io.query,
+            .grad_output = grad_output,
+            .query = query,
             .key = key,
             .value = value,
             .attn_mask = std::nullopt,
-            .intermediates = io.intermediates,
+            .intermediates = intermediates,
             .u_scaler = u_scaler,
             .preallocated_grad_key = grad_key,
             .preallocated_grad_value = grad_value};
@@ -112,6 +89,7 @@ RingSDPABwKVProgramFactory::cached_mesh_workload_t RingSDPABwKVProgramFactory::c
         shared_vars[single_coord_range] = std::move(ring_vars);
     }
 
+    TT_FATAL(!shared_vars.empty(), "Ring SDPA step {}: no device executes under these step masks", step);
     return cached_mesh_workload_t(std::move(mesh_workload), std::move(shared_vars));
 }
 
@@ -122,10 +100,12 @@ void RingSDPABwKVProgramFactory::override_runtime_arguments(
     std::tuple<ttnn::Tensor, ttnn::Tensor>& tensor_return_value) {
     namespace sdpa_kv = ttml::metal::ops::sdpa_bw::device::kv;
 
+    const auto& grad_output = tensor_args.grad_output;
     const auto& u_scaler = tensor_args.u_scaler;
     const auto& query = tensor_args.query;
     const auto& key = tensor_args.key;
     const auto& value = tensor_args.value;
+    const auto& intermediates = tensor_args.intermediates;
     auto& grad_key = std::get<0>(tensor_return_value);
     auto& grad_value = std::get<1>(tensor_return_value);
 
@@ -134,7 +114,7 @@ void RingSDPABwKVProgramFactory::override_runtime_arguments(
     const uint32_t ring_axis = operation_attributes.ring_axis;
     const uint32_t ring_size = operation_attributes.ring_size;
     const uint32_t step = operation_attributes.step;
-    const auto mask_type = operation_attributes.mask_type;
+    const auto& step_masks = operation_attributes.step_masks;
     const auto ring_direction = operation_attributes.ring_direction;
 
     for (auto& [coord_range, program] : cached_workload.workload.get_programs()) {
@@ -142,21 +122,19 @@ void RingSDPABwKVProgramFactory::override_runtime_arguments(
         const auto& start_coord = coord_range.start_coord();
 
         uint32_t device_ring_id = start_coord[ring_axis];
-        const auto work = get_ring_step_work(
-            device_ring_id, step, ring_size, mask_type, ring_direction, operation_attributes.schedule);
-        const auto effective_mask_type = work.mask_type;
-        TT_FATAL(work.execute, "Cached ring SDPA backward program found for a device that does not execute");
-        const auto io = select_device_tensors(work.shifted_query, tensor_args);
+        const auto step_mask = get_ring_step_mask(device_ring_id, step, ring_size, ring_direction, step_masks);
+        TT_FATAL(step_mask.has_value(), "Cached ring SDPA program found for a device that skips step {}", step);
+        const auto effective_mask_type = step_mask.value();
 
         sdpa_kv::operation_attributes_t sdpa_attrs{.mask_type = effective_mask_type, .dropout_probability = 0.0F};
 
         sdpa_kv::tensor_args_t sdpa_tensor_args{
-            .grad_output = io.grad_output,
-            .query = io.query,
+            .grad_output = grad_output,
+            .query = query,
             .key = key,
             .value = value,
             .attn_mask = std::nullopt,
-            .intermediates = io.intermediates,
+            .intermediates = intermediates,
             .u_scaler = u_scaler,
             .preallocated_grad_key = grad_key,
             .preallocated_grad_value = grad_value};

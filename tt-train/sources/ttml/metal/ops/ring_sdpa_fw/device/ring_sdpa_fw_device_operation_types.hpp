@@ -20,20 +20,9 @@ struct RingSDPAFwParams {
     uint32_t ring_size = 0;
     uint32_t ring_axis = 0;
     uint32_t step = 0;
-    ttml::metal::AttentionMaskType mask_type = ttml::metal::AttentionMaskType::None;
+    RingStepMasks step_masks = contiguous_ring_step_masks(ttml::metal::AttentionMaskType::None);
     RingDirection ring_direction =
         ttnn_fixed::distributed::RingShiftDirection::Backward;  // Direction K/V is shifting in the ring
-    RingSchedule schedule = RingSchedule::Contiguous;           // See RingSchedule in ring_sdpa_utils.hpp
-};
-
-// Shifted-query tensors for RingSchedule::Striped. Devices whose K/V source comes later in the
-// ring (src > d) read `query` (the primary query shifted up one row) with the op's K/V and write
-// their result into `output` and `intermediates`, in shifted row coordinates. The op's return
-// value always refers to the primary output and intermediates.
-struct RingSDPAFwShifted {
-    ttnn::Tensor query;
-    ttnn::Tensor output;
-    ttnn::Tensor intermediates;
 };
 
 struct RingSDPAFwInputs {
@@ -42,7 +31,6 @@ struct RingSDPAFwInputs {
     ttnn::Tensor value;
     std::optional<ttnn::Tensor> preallocated_output;         // Preallocated output buffer
     std::optional<ttnn::Tensor> preallocated_intermediates;  // Preallocated intermediates buffer
-    std::optional<RingSDPAFwShifted> shifted;                // Required iff schedule == Striped
 };
 
 using operation_attributes_t = RingSDPAFwParams;

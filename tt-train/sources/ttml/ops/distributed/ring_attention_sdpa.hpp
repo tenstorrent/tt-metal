@@ -58,6 +58,13 @@ autograd::TensorPtr ring_attention_sdpa(
 
 namespace detail {
 
+// Striped layout step masks: causal on the query for K/V from ranks <= d, causal on the query
+// shifted up one row for K/V from later ranks. Every device runs under exactly one of the two.
+inline constexpr ttml::metal::ops::RingStepMasks kStripedOnQuery{
+    .src_before = ttml::metal::AttentionMaskType::Causal, .src_self = ttml::metal::AttentionMaskType::Causal};
+inline constexpr ttml::metal::ops::RingStepMasks kStripedOnShiftedQuery{
+    .src_after = ttml::metal::AttentionMaskType::Causal};
+
 /**
  * Online-softmax merge of one ring step's partial attention result (exposed for testing).
  *

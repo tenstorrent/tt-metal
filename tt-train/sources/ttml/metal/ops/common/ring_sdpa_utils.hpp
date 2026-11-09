@@ -5,9 +5,12 @@
 #pragma once
 
 #include <cstdint>
+#include <initializer_list>
+#include <optional>
 #include <string_view>
 #include <tt-metalium/constants.hpp>
 #include <tt_stl/assert.hpp>
+#include <tt_stl/reflection.hpp>
 #include <utility>
 
 #include "metal/common/const_utils.hpp"
@@ -33,87 +36,61 @@ inline uint32_t get_ring_source_device(
     return (device_ring_id + ring_size - (step % ring_size)) % ring_size;
 }
 
-// Determine if a device should execute at this ring step and which mask type to use.
-// Shared by the ring_sdpa_fw and ring_sdpa_bw program factories, which must agree on
-// the schedule: the backward relies on skipping exactly the (device, step) pairs the
-// forward skipped.
-// Returns: (should_execute, mask_type_to_use)
-//
-// Causal logic on the source chunk (contiguous sharding):
-// - src == d: diagonal chunk, apply causal mask
-// - src < d:  earlier chunk, full attention (no mask)
-// - src > d:  later chunk, fully masked, skip
+// Mask a device applies at one ring step, keyed by where its current K/V came from
+// relative to it in the ring. std::nullopt means the device skips the step.
+struct RingStepMasks {
+    std::optional<AttentionMaskType> src_before = std::nullopt;  // src < d
+    std::optional<AttentionMaskType> src_self = std::nullopt;    // src == d
+    std::optional<AttentionMaskType> src_after = std::nullopt;   // src > d
+
+    bool operator==(const RingStepMasks&) const = default;
+
+    // Explicit so that a skip never hashes like AttentionMaskType::None.
+    ttsl::hash::hash_t to_hash() const {
+        const auto encode = [](const std::optional<AttentionMaskType>& mask) -> uint32_t {
+            return mask.has_value() ? 1U + static_cast<uint32_t>(mask.value()) : 0U;
+        };
+        return ttsl::hash::hash_objects(
+            ttsl::hash::hash_t{0}, encode(src_before), encode(src_self), encode(src_after));
+    }
+};
+
+// Contiguous sharding (rank d holds the d-th slice of the sequence). Causal: the diagonal
+// chunk is causal, earlier chunks are unmasked, later chunks are skipped. Any other mask
+// applies to every chunk.
+inline RingStepMasks contiguous_ring_step_masks(AttentionMaskType mask_type) {
+    if (mask_type == AttentionMaskType::Causal) {
+        return {.src_before = AttentionMaskType::None, .src_self = AttentionMaskType::Causal};
+    }
+    return {.src_before = mask_type, .src_self = mask_type, .src_after = mask_type};
+}
+
+// Mask a device applies at this ring step, or std::nullopt if it skips the step. Shared by
+// the ring_sdpa_fw and ring_sdpa_bw program factories, which must agree: the backward relies
+// on skipping exactly the (device, step) pairs the forward skipped.
+inline std::optional<AttentionMaskType> get_ring_step_mask(
+    uint32_t device_ring_id,
+    uint32_t step,
+    uint32_t ring_size,
+    ttnn_fixed::distributed::RingShiftDirection ring_direction,
+    const RingStepMasks& masks) {
+    const uint32_t src_device = get_ring_source_device(device_ring_id, step, ring_size, ring_direction);
+    if (src_device < device_ring_id) {
+        return masks.src_before;
+    }
+    return src_device == device_ring_id ? masks.src_self : masks.src_after;
+}
+
+// Contiguous schedule as (should_execute, mask_type_to_use).
 inline std::pair<bool, AttentionMaskType> get_device_execution_info(
     uint32_t device_ring_id,
     uint32_t step,
     uint32_t ring_size,
     AttentionMaskType mask_type,
     ttnn_fixed::distributed::RingShiftDirection ring_direction) {
-    if (mask_type != AttentionMaskType::Causal) {
-        // Non-causal: all devices execute with full attention
-        return {true, AttentionMaskType::None};
-    }
-
-    const uint32_t src_device = get_ring_source_device(device_ring_id, step, ring_size, ring_direction);
-
-    if (src_device == device_ring_id) {
-        return {true, AttentionMaskType::Causal};  // Diagonal: use causal mask
-    } else if (src_device < device_ring_id) {
-        return {true, AttentionMaskType::None};  // Earlier: full attention (no mask)
-    } else {
-        return {false, AttentionMaskType::None};  // Later: skip
-    }
-}
-
-// How the sequence is laid out across the ring, which sets each device's work per step. A new
-// schedule adds a value here, a case in get_ring_step_work and one in validate_ring_schedule.
-// - Contiguous: rank d holds a contiguous slice of the sequence (get_device_execution_info).
-// - Striped:    token p lives on rank p mod N (causal load balancing). Every step runs causal:
-//               on the query for src <= d, on the query shifted up one row for src > d.
-enum class RingSchedule : uint8_t { Contiguous = 0, Striped = 1 };
-
-// Work of one device at one ring step: whether it runs, with which mask, and whether it
-// reads the op's shifted-query tensors instead of the primary ones.
-struct RingStepWork {
-    bool execute = false;
-    AttentionMaskType mask_type = AttentionMaskType::None;
-    bool shifted_query = false;
-
-    bool operator==(const RingStepWork&) const = default;
-};
-
-inline RingStepWork get_striped_step_work(
-    uint32_t device_ring_id,
-    uint32_t step,
-    uint32_t ring_size,
-    AttentionMaskType mask_type,
-    ttnn_fixed::distributed::RingShiftDirection ring_direction) {
-    TT_FATAL(
-        mask_type == AttentionMaskType::Causal,
-        "The striped ring schedule is only defined for causal attention, got mask type {}",
-        static_cast<int>(mask_type));
-    const uint32_t src_device = get_ring_source_device(device_ring_id, step, ring_size, ring_direction);
-    return {.execute = true, .mask_type = AttentionMaskType::Causal, .shifted_query = src_device > device_ring_id};
-}
-
-// Per-schedule work, used by the ring program factories.
-inline RingStepWork get_ring_step_work(
-    uint32_t device_ring_id,
-    uint32_t step,
-    uint32_t ring_size,
-    AttentionMaskType mask_type,
-    ttnn_fixed::distributed::RingShiftDirection ring_direction,
-    RingSchedule schedule) {
-    switch (schedule) {
-        case RingSchedule::Contiguous: {
-            const auto [execute, effective_mask] =
-                get_device_execution_info(device_ring_id, step, ring_size, mask_type, ring_direction);
-            return {.execute = execute, .mask_type = effective_mask, .shifted_query = false};
-        }
-        case RingSchedule::Striped:
-            return get_striped_step_work(device_ring_id, step, ring_size, mask_type, ring_direction);
-    }
-    TT_THROW("Unknown ring schedule {}", static_cast<int>(schedule));
+    const auto mask =
+        get_ring_step_mask(device_ring_id, step, ring_size, ring_direction, contiguous_ring_step_masks(mask_type));
+    return {mask.has_value(), mask.value_or(AttentionMaskType::None)};
 }
 
 // Common attribute validation for the ring SDPA device operations. The ring factories
@@ -126,9 +103,11 @@ inline void validate_ring_attributes(const RingAttrs& attrs, const ttnn::Tensor&
     TT_FATAL(attrs.step < attrs.ring_size, "Step {} must be < ring_size {}", attrs.step, attrs.ring_size);
     // The ring path has no way to feed a mask tensor to the underlying SDPA kernels, so
     // Arbitrary would silently degrade to full attention.
-    TT_FATAL(
-        attrs.mask_type != AttentionMaskType::Arbitrary,
-        "Ring SDPA does not support Arbitrary attention masks, use None or Causal");
+    for (const auto& mask : {attrs.step_masks.src_before, attrs.step_masks.src_self, attrs.step_masks.src_after}) {
+        TT_FATAL(
+            mask != AttentionMaskType::Arbitrary,
+            "Ring SDPA does not support Arbitrary attention masks, use None or Causal");
+    }
 
     const auto mesh_shape = query.device()->shape();
     TT_FATAL(
@@ -142,42 +121,6 @@ inline void validate_ring_attributes(const RingAttrs& attrs, const ttnn::Tensor&
         attrs.ring_size,
         mesh_shape[attrs.ring_axis],
         attrs.ring_axis);
-}
-
-// Per-schedule input contract shared by the ring ops (which optional inputs the schedule needs).
-template <typename RingAttrs>
-inline void validate_ring_schedule(const RingAttrs& attrs, bool has_shifted) {
-    switch (attrs.schedule) {
-        case RingSchedule::Contiguous:
-            TT_FATAL(!has_shifted, "Shifted-query tensors were given but the ring schedule is Contiguous");
-            return;
-        case RingSchedule::Striped:
-            TT_FATAL(has_shifted, "The striped ring schedule requires the shifted-query tensors");
-            TT_FATAL(
-                attrs.mask_type == AttentionMaskType::Causal,
-                "The striped ring schedule requires a causal mask, got mask type {}",
-                static_cast<int>(attrs.mask_type));
-            return;
-    }
-    TT_THROW("Unknown ring schedule {}", static_cast<int>(attrs.schedule));
-}
-
-// A shifted-query tensor must have exactly the spec (shape, dtype, layout, memory config) of its
-// primary counterpart: each device's program is built from whichever set it uses, while the ring
-// program hash covers the primary tensors only.
-inline void validate_same_spec(const ttnn::Tensor& shifted, const ttnn::Tensor& primary, std::string_view name) {
-    TT_FATAL(
-        shifted.logical_shape() == primary.logical_shape() && shifted.dtype() == primary.dtype() &&
-            shifted.layout() == primary.layout() && shifted.memory_config() == primary.memory_config(),
-        "Shifted tensor '{}' ({}, {}, {}) must match its primary counterpart ({}, {}, {})",
-        name,
-        shifted.logical_shape(),
-        shifted.dtype(),
-        shifted.memory_config(),
-        primary.logical_shape(),
-        primary.dtype(),
-        primary.memory_config());
-    TT_FATAL(shifted.device() == primary.device(), "Shifted tensor '{}' must be on the same mesh device", name);
 }
 
 // Per-tensor device contract of the reused SDPA kernels: on device, allocated,

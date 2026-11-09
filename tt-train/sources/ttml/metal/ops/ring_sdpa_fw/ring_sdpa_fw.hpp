@@ -10,9 +10,7 @@
 
 namespace ttml::metal {
 
-// Returns [output, intermediates]. With RingSchedule::Striped the devices that use the shifted
-// query at this step write into shifted->output / shifted->intermediates instead (see
-// RingSchedule in metal/ops/common/ring_sdpa_utils.hpp).
+// Returns [output, intermediates]
 std::tuple<ttnn::Tensor, ttnn::Tensor> ring_sdpa_fw(
     const ttnn::Tensor& query,
     const ttnn::Tensor& key,
@@ -20,11 +18,9 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> ring_sdpa_fw(
     uint32_t ring_size,
     uint32_t ring_axis,
     uint32_t step,
-    AttentionMaskType mask_type = AttentionMaskType::None,
+    const ops::RingStepMasks& step_masks = ops::contiguous_ring_step_masks(AttentionMaskType::None),
     ops::ring_sdpa_fw::RingDirection ring_direction = ops::ring_sdpa_fw::RingDirection::Backward,
     const std::optional<ttnn::Tensor>& preallocated_output = std::nullopt,
-    const std::optional<ttnn::Tensor>& preallocated_intermediates = std::nullopt,
-    ops::RingSchedule schedule = ops::RingSchedule::Contiguous,
-    const std::optional<ops::ring_sdpa_fw::RingSDPAFwShifted>& shifted = std::nullopt);
+    const std::optional<ttnn::Tensor>& preallocated_intermediates = std::nullopt);
 
 }  // namespace ttml::metal

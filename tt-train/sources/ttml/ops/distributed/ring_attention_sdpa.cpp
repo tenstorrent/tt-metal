@@ -189,8 +189,6 @@ autograd::TensorPtr ring_attention_sdpa_striped(
     uint32_t ring_size,
     uint32_t cp_axis_value,
     tt::tt_metal::distributed::MeshDevice* mesh_device) {
-    using ttml::metal::AttentionMaskType;
-    using ttml::metal::ops::RingSchedule;
     constexpr auto kRingDirection = ttml::metal::ops::ring_sdpa_fw::RingDirection::Backward;
     constexpr float kNegInf = -std::numeric_limits<float>::infinity();
     // Running logsumexp of the shifted accumulator before anything was merged into it. It must
@@ -264,13 +262,23 @@ autograd::TensorPtr ring_attention_sdpa_striped(
             ring_size,
             cp_axis_value,
             step,
-            AttentionMaskType::Causal,
+            detail::kStripedOnQuery,
             kRingDirection,
             step_output[0],
-            step_intermediates[0],
-            RingSchedule::Striped,
-            ttml::metal::ops::ring_sdpa_fw::RingSDPAFwShifted{
-                .query = query_shifted, .output = step_output[1], .intermediates = step_intermediates[1]});
+            step_intermediates[0]);
+        if (step > 0U) {
+            ttml::metal::ring_sdpa_fw(
+                query_shifted,
+                k_current,
+                v_current,
+                ring_size,
+                cp_axis_value,
+                step,
+                detail::kStripedOnShiftedQuery,
+                kRingDirection,
+                step_output[1],
+                step_intermediates[1]);
+        }
 
         detail::merge_partial_into(accum[0], running_lse[0], step_output[0], step_intermediates[0]);
         if (step > 0U) {
@@ -349,18 +357,29 @@ autograd::TensorPtr ring_attention_sdpa_striped(
                 ring_size,
                 cp_axis_value,
                 step_idx,
-                AttentionMaskType::Causal,
+                detail::kStripedOnQuery,
                 ttml::metal::ops::ring_sdpa_bw::RingDirection::Backward,
                 grad_Q_step[0],
                 grad_K_step,
-                grad_V_step,
-                RingSchedule::Striped,
-                ttml::metal::RingSDPABwShifted{
-                    .grad_output = grad_output_shifted,
-                    .attn_output = attn_output_shifted,
-                    .query = query_shifted,
-                    .intermediates = intermediates_shifted,
-                    .grad_query = grad_Q_step[1]});
+                grad_V_step);
+            if (step_idx > 0U) {
+                // Runs on the devices the call above skipped, so they share the dK/dV step buffers.
+                ttml::metal::ring_sdpa_bw(
+                    grad_output_shifted,
+                    attn_output_shifted,
+                    query_shifted,
+                    k_current,
+                    v_current,
+                    intermediates_shifted,
+                    ring_size,
+                    cp_axis_value,
+                    step_idx,
+                    detail::kStripedOnShiftedQuery,
+                    ttml::metal::ops::ring_sdpa_bw::RingDirection::Backward,
+                    grad_Q_step[1],
+                    grad_K_step,
+                    grad_V_step);
+            }
 
             grad_Q_accum[0] = ttnn::add(grad_Q_accum[0], to_fp32(grad_Q_step[0]));
             if (step_idx > 0U) {
@@ -495,7 +514,7 @@ autograd::TensorPtr ring_attention_sdpa(
             ring_size,
             cp_axis_value,
             step,
-            mask_type,
+            ttml::metal::ops::contiguous_ring_step_masks(mask_type),
             ttml::metal::ops::ring_sdpa_fw::RingDirection::Backward,
             output_tensor,
             intermediate_tensor);
@@ -578,7 +597,7 @@ autograd::TensorPtr ring_attention_sdpa(
                 ring_size,
                 cp_axis_value,
                 step_idx,
-                mask_type,
+                ttml::metal::ops::contiguous_ring_step_masks(mask_type),
                 ttml::metal::ops::ring_sdpa_bw::RingDirection::Backward,
                 grad_Q_step,
                 grad_K_step,

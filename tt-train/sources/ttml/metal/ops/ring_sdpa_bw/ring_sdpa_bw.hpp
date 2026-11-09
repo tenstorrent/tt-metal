@@ -13,18 +13,7 @@ namespace ttml::metal {
 
 using RingDirection = ttml::metal::ops::ring_sdpa_bw::RingDirection;
 
-// Shifted-query tensors for RingSchedule::Striped (see metal/ops/common/ring_sdpa_utils.hpp).
-// Devices whose K/V source comes later in the ring (src > d) read the shifted inputs and write
-// grad_query in shifted row coordinates; K/V and the dK/dV outputs are shared with the primary set.
-struct RingSDPABwShifted {
-    ttnn::Tensor grad_output;
-    ttnn::Tensor attn_output;
-    ttnn::Tensor query;
-    ttnn::Tensor intermediates;
-    ttnn::Tensor grad_query;
-};
-
-// Returns [grad_Q, grad_K, grad_V] (grad_Q of the primary query)
+// Returns [grad_Q, grad_K, grad_V]
 std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_sdpa_bw(
     const ttnn::Tensor& grad_output,    // Gradient w.r.t. output
     const ttnn::Tensor& attn_output,    // sdpa forward output (needed for gradients)
@@ -35,12 +24,10 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_sdpa_bw(
     uint32_t ring_size,
     uint32_t ring_axis,
     uint32_t step,
-    AttentionMaskType mask_type = AttentionMaskType::None,
+    const ops::RingStepMasks& step_masks = ops::contiguous_ring_step_masks(AttentionMaskType::None),
     RingDirection ring_direction = RingDirection::Backward,
     const std::optional<ttnn::Tensor>& preallocated_grad_query = std::nullopt,
     const std::optional<ttnn::Tensor>& preallocated_grad_key = std::nullopt,
-    const std::optional<ttnn::Tensor>& preallocated_grad_value = std::nullopt,
-    ops::RingSchedule schedule = ops::RingSchedule::Contiguous,
-    const std::optional<RingSDPABwShifted>& shifted = std::nullopt);
+    const std::optional<ttnn::Tensor>& preallocated_grad_value = std::nullopt);
 
 }  // namespace ttml::metal
