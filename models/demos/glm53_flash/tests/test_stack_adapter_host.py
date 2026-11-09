@@ -7,8 +7,10 @@ mock. This tree carries no ``tests/mock_model.py`` (the reference workspace's), 
 on torch tensors with a deterministic model (next token = (token + 1) % V) and a per-slot ledger of the tokens each
 slot's state consumed. Covered: the plugin's zero-padded block tables (trimmed to the live blocks, grown block by
 block), chunked prefill (intermediate chunk host-routed, the continuation sliced out of the full history), a decode
-between two chunks, releases, the condensing slot remaps the plugin builds after a finish (a 2-cycle through the
-freed slot, a 3-chain), the host-sampled logits route, the async read, the teardown hooks and the refusals.
+between two chunks, releases, the condensing slot remaps the plugin builds after a finish -- absorbed into the
+adapter's plugin-slot -> generator-slot alias, so no state moves: a 2-cycle through the freed slot, a 3-chain and a
+4-cycle over a full batch (every slot live: what the generator's ``remap_slots`` refuses) -- the lowest-free admission,
+the host-sampled logits route, the async read, the teardown hooks and the refusals.
 
     PYTHONPATH=<worktree> <tt-metal>/python_env/bin/pytest --noconftest -p no:cacheprovider -q \\
         models/demos/glm53_flash/tests/test_stack_adapter_host.py
@@ -404,7 +406,8 @@ def test_allocate_kv_cache_enforces_the_block_size():
 def test_serving_flow_prefill_decode_remap_release():
     """The plugin's step sequence end to end: three admissions (one chunked by the mock's 128-token chunks),
     padded decode steps with block-by-block table growth, a chunked prefill with a decode in between its chunks,
-    the async read, releases and the condensing remaps (a 2-cycle through the freed slot, then a 3-chain)."""
+    the async read, releases and the condensing remaps absorbed into the slot alias (a 2-cycle through the freed
+    slot, a 3-chain, then two admissions into the lowest free generator slots and a 4-cycle over the full batch)."""
     ad, backend, gen, kv = _adapter()
     prompts = [_prompt(100, 5), _prompt(200, 11), _prompt(70, 40)]
     last = [p[-1] for p in prompts]
@@ -491,7 +494,7 @@ def test_serving_flow_prefill_decode_remap_release():
     assert got.reshape(-1).tolist() == [(t + 1) % VOCAB for t in cur]
     cur, pos = got.reshape(-1).tolist(), [p + 1 for p in pos]
     # ---- request 1 finishes: release, then the plugin condenses rows [0, 3, 2] -> remap [0, 3, 2, 1]
-    #      (a 2-cycle between slot 3 and the freed slot 1: only the live move 3 -> 1 reaches the generator)
+    #      (a 2-cycle between plugin slot 3 and the freed slot 1): the alias absorbs it, no state moves
     ad.release_request(1)
     assert backend.releases == [1] and gen.live_slots(kv) == [0, 2, 3]
     state3 = list(kv.state[3])
@@ -500,25 +503,95 @@ def test_serving_flow_prefill_decode_remap_release():
     rows = [_blocks(0, pos[0] + 1), _blocks(3, pos[3] + 1), _blocks(2, pos[2] + 1)]
     got = ad.process_decode_output_host(_decode(ad, kv, tokens, positions, rows, remap=[0, 3, 2, 1]), is_tokens=True)
     assert got.reshape(-1).tolist() == [(t + 1) % VOCAB for t in tokens[:3]] + [0]
-    assert kv.state[1] == state3 + [tokens[1]]  # the former slot 3 state decoded in slot 1
-    assert gen.live_slots(kv) == [0, 1, 2]
+    assert kv.state[3] == state3 + [tokens[1]]  # plugin row 1 decoded in generator slot 3, where its state is
+    assert ad._alias == [0, 3, 2, 1] and gen.live_slots(kv) == [0, 2, 3]
     ad.note_state_slots_moved({3: 1, 1: 3})  # the plugin's notification of the applied gather: a no-op
     cur = [got[0, 0].item(), got[1, 0].item(), got[2, 0].item()]
     pos = [positions[0] + 1, positions[1] + 1, positions[2] + 1]
-    # ---- request 0 finishes: rows [slot 1, slot 2] -> remap [1, 2, 0, 3]: the 3-chain 1 -> 0, 2 -> 1 (0 freed)
+    # ---- request 0 finishes: rows [plugin 1, plugin 2] -> remap [1, 2, 0, 3] (the 3-chain 1 -> 0, 2 -> 1, 0 freed)
     ad.release_request(0)
-    assert gen.live_slots(kv) == [1, 2]
-    state1, state2 = list(kv.state[1]), list(kv.state[2])
+    assert backend.releases == [1, 0] and gen.live_slots(kv) == [2, 3]
+    state3, state2 = list(kv.state[3]), list(kv.state[2])
     tokens = [cur[1], cur[2], 0, 0]
     positions = [pos[1], pos[2], -1, -1]
     rows = [_blocks(3, pos[1] + 1), _blocks(2, pos[2] + 1)]
     got = ad.process_decode_output_host(_decode(ad, kv, tokens, positions, rows, remap=[1, 2, 0, 3]), is_tokens=True)
     assert got.reshape(-1).tolist() == [(t + 1) % VOCAB for t in tokens[:2]] + [0, 0]
-    assert kv.state[0] == state1 + [tokens[0]] and kv.state[1] == state2 + [tokens[1]]
-    assert gen.live_slots(kv) == [0, 1]
+    assert kv.state[3] == state3 + [tokens[0]] and kv.state[2] == state2 + [tokens[1]]
+    assert ad._alias == [3, 2, 0, 1] and gen.live_slots(kv) == [2, 3]
+    cur, pos = [got[0, 0].item(), got[1, 0].item()], [positions[0] + 1, positions[1] + 1]
+    # ---- two admissions fill the batch (plugin slots 2, 3 -> the lowest free generator slots 0, 1), then the
+    #      plugin's gather is a 4-cycle over the full batch, remap [1, 2, 3, 0]: with every slot live the generator's
+    #      remap_slots refuses it ("cyclic slot_remap needs a free scratch slot": the first 4-user served step); the
+    #      alias absorbs it and every state decodes in place
+    fresh = [_prompt(40, 50), _prompt(30, 60)]
+    out = ad.prefill_forward(
+        _history(fresh),
+        page_table=_table([_blocks(1, 40), _blocks(0, 30)], 2),  # the freed requests' block pools
+        kv_cache=kv,
+        prompt_lens=[40, 30],
+        start_pos=[0, 0],
+        empty_slots=[2, 3],
+        sampling_params=_greedy(2),
+    )
+    assert backend.chunks[-2:] == [(0, 0, 40, "last", True), (1, 0, 30, "last", True)]
+    assert ad._alias == [3, 2, 0, 1] and gen.live_slots(kv) == [0, 1, 2, 3]
+    cur += [int(out[0][0, 0]), int(out[0][1, 0])]
+    pos += [40, 30]
+    blocks = [_blocks(3, pos[0] + 1), _blocks(2, pos[1] + 1), _blocks(1, pos[2] + 1), _blocks(0, pos[3] + 1)]
+    states = {s: list(kv.state[s]) for s in range(B)}
+    remap = [1, 2, 3, 0]
+    tokens, positions, rows = [cur[r] for r in remap], [pos[r] for r in remap], [blocks[r] for r in remap]
+    got = ad.process_decode_output_host(_decode(ad, kv, tokens, positions, rows, remap=remap), is_tokens=True)
+    assert got.reshape(-1).tolist() == [(t + 1) % VOCAB for t in tokens]
+    assert ad._alias == [2, 0, 1, 3] and gen.live_slots(kv) == [0, 1, 2, 3]
+    for r, g in zip(remap, [2, 0, 1, 3]):
+        assert kv.state[g] == states[g] + [cur[r]]
     # ---- teardown
     ad.release_persistent_capture()
     assert backend.released == backend.traces and ad.tt_supported_decode_batch_sizes == ()
+
+
+def test_admission_takes_the_lowest_free_generator_slot():
+    """A first chunk lands in the lowest free generator slot even when its plugin slot is aliased higher: the alias
+    entries of the two free plugin slots swap (invisible to the plugin); a continuation keeps its slot."""
+    ad, backend, gen, kv = _adapter()
+    prompts = [_prompt(20, 3), _prompt(20, 7)]
+    ad.prefill_forward(
+        _history(prompts),
+        page_table=_table([_blocks(i, 20) for i in range(2)], 2),
+        kv_cache=kv,
+        prompt_lens=[20, 20],
+        start_pos=[0, 0],
+        empty_slots=[0, 1],
+        sampling_params=_greedy(2),
+    )
+    assert gen.live_slots(kv) == [0, 1] and ad._alias == [0, 1, 2, 3]
+    ad._alias = [0, 1, 3, 2]  # a legal alias after gathers: the free plugin slots 2, 3 hold generator slots 3, 2
+    long = _prompt(200, 9)
+    ad.prefill_forward(
+        _history([long[:128]]),
+        page_table=_table([_blocks(2, 128)], 1),
+        kv_cache=kv,
+        prompt_lens=[128],
+        start_pos=[0],
+        empty_slots=[2],
+        sampling_params=None,
+    )
+    assert backend.chunks[-1] == (2, 0, 128, "last", False)  # generator slot 2, the lowest free one
+    assert ad._alias == [0, 1, 2, 3] and gen.live_slots(kv) == [0, 1, 2]
+    ad.prefill_forward(  # the continuation stays in generator slot 2
+        _history([long]),
+        page_table=_table([_blocks(2, 200)], 1),
+        kv_cache=kv,
+        prompt_lens=[200],
+        start_pos=[128],
+        empty_slots=[2],
+        sampling_params=_greedy(1),
+    )
+    assert backend.chunks[-1] == (2, 128, 72, "last", True) and kv.state[2] == long
+    ad.release_request(2)
+    assert backend.releases == [2] and gen.live_slots(kv) == [0, 1]
 
 
 def test_host_sampled_decode_route():
@@ -606,6 +679,9 @@ def test_refusals():
         ad.decode_forward(tokens, positions, sampling_params=_greedy(B), reset_batch=True, **kw)
     with expect_error(ValueError, "reload_inputs=False"):
         ad.decode_forward(tokens, positions, sampling_params=_greedy(B), reload_inputs=False, **kw)
+    with expect_error(ValueError, "permutation"):
+        ad.decode_forward(tokens, positions, sampling_params=_greedy(B), slot_remap=torch.tensor([0, 0, 2, 3]), **kw)
+    assert ad._alias == [0, 1, 2, 3]  # a refused gather leaves the alias alone
     with expect_error(ValueError, "sampled"):
         ad.decode_forward(
             tokens,

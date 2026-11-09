@@ -13,9 +13,15 @@ and the fabric from ``model_capabilities["fabric_config"]`` (worker.py:994-1010)
 32768`` and ``--block-size 64`` on the command line; ``galaxy_defaults.apply`` sets the remaining GLM53_* knobs at
 model construction (its GLM53_MODEL_TRACE_MB is dead here: the device is already open).
 
-Slot bookkeeping lives in the generator: the plugin's ``empty_slots`` / ``slot_remap`` ARE the generator's slots
-(``_CacheBinding.slots``) and vLLM's logical blocks travel ``pt_shadow -> OwnerBlockMap -> per-chip local tables``
-inside the generator / backend once the cache is allocated with ``null_block=0``.
+Slot aliasing: the plugin's ``empty_slots`` / ``slot_remap`` name PLUGIN slots, which the adapter maps onto the
+generator's slots (``_CacheBinding.slots``) through a bijection it keeps (``_alias``). The plugin's decode gather
+(model_runner.py:1366-1421: a full permutation of every slot after it condenses the rows) is absorbed into the alias
+instead of moving state: row ``i`` decodes in the generator slot its request was admitted to
+(``Glm53Generator.decode_forward(slots=...)``), so no ``remap_slots`` copies run and a gather that is a cycle over a
+full batch (every slot live: the generator's "cyclic slot_remap needs a free scratch slot" refusal, hit by the first
+4-user served step) is fine. A new request takes the lowest free generator slot. vLLM's logical blocks travel
+``pt_shadow -> OwnerBlockMap -> per-chip local tables`` inside the generator / backend once the cache is allocated
+with ``null_block=0``.
 """
 
 from __future__ import annotations
@@ -24,7 +30,6 @@ import os
 import sys
 import time
 from pathlib import Path
-from typing import Optional
 
 import torch
 from loguru import logger
@@ -186,6 +191,7 @@ class GLM53StackForCausalLM:
         self.source = source
         self.vocab_size = int(generator.vocab_size)
         self.kv_cache = None
+        self._alias = list(range(self.max_batch))  # plugin slot -> generator slot (identity until the first gather)
 
     # ================================================================================= construction
     @classmethod
@@ -290,6 +296,7 @@ class GLM53StackForCausalLM:
         self.kv_cache = self.gen.allocate_kv_cache(
             self.max_batch, self.max_seq_len, num_blocks=num_blocks, null_block=0
         )
+        self._alias = list(range(self.max_batch))  # a fresh cache: every generator slot is free
         return self.kv_cache
 
     def _kv(self, kv_cache):
@@ -341,10 +348,11 @@ class GLM53StackForCausalLM:
         **kwargs,
     ):
         """model_runner.py:4009-4063 / MODEL_EXECUTION.md:37-61: row ``i`` of ``tokens [B, T]`` (history from position
-        0) is the chunk ``tokens[i, start_pos[i]:prompt_lens[i]]`` of the request in state slot ``empty_slots[i]``
-        (allocated by the plugin: model_runner.py:1299-1364). The generator takes chunk-local tokens with their length
-        and the absolute start (a continuation at the slot's cached length, 64 / 128-aligned), page-table rows trimmed
-        to the live blocks. Returns ``(ids [B, 1], None)`` with ``sampling_params`` (device greedy: the first token
+        0) is the chunk ``tokens[i, start_pos[i]:prompt_lens[i]]`` of the request in plugin slot ``empty_slots[i]``
+        (allocated by the plugin: model_runner.py:1299-1364; a first chunk takes the lowest free generator slot, a
+        continuation keeps its slot: ``_admit``). The generator takes chunk-local tokens with their length and the
+        absolute start (a continuation at the slot's cached length, 64 / 128-aligned), page-table rows trimmed to the
+        live blocks. Returns ``(ids [B, 1], None)`` with ``sampling_params`` (device greedy: the first token
         sampled inside the prefill trace; every row must be greedy, which the plugin guarantees for
         ``max_device_top_k=1``) or ``logits [B, 1, V]`` fp32 for host sampling, which the plugin also selects when a
         row is an intermediate chunk (its head output is discarded)."""
@@ -392,7 +400,7 @@ class GLM53StackForCausalLM:
             page_table=rows,
             kv_cache=kv,
             prompt_lens=lens,
-            empty_slots=slots,
+            empty_slots=self._admit(kv, slots, starts),
             start_pos=starts,
             sampling_params=params,
         )
@@ -419,11 +427,11 @@ class GLM53StackForCausalLM:
         **kwargs,
     ):
         """async_decode.py:1335-1440: one decode step of ``tokens [B_pad, 1]`` / ``start_pos [B_pad]`` (-1 on padding
-        rows, ``B_pad`` = the declared width) where row ``i`` is state slot ``i`` once ``slot_remap`` (row ``i`` reads
-        slot ``remap[i]``, a full permutation: model_runner.py:1366-1421) is applied -- the generator applies it first
-        (``remap_slots``: SlotOps copies, page rows, sampler RNG), restricted to the slots holding a live request (a
-        freed slot inside the permutation would make it a cycle the generator refuses). ``reload_inputs`` is always
-        True for this adapter (async_decode.py:423-481: no ``supports_async_decode``), so tokens / positions /
+        rows, ``B_pad`` = the declared width) where row ``i`` is plugin slot ``i`` once ``slot_remap`` (row ``i`` reads
+        plugin slot ``remap[i]``, a full permutation: model_runner.py:1366-1421) is applied -- absorbed into the slot
+        alias (``_permuted``): every row decodes in the generator slot its request lives in (``slots=``), nothing is
+        copied, and the alias advances only once the generator accepted the step (the plugin commits its own map then:
+        ``note_decode_state_slots_settled``). ``reload_inputs`` is always True for this adapter (async_decode.py:423-481: no ``supports_async_decode``), so tokens / positions /
         page rows are restaged from the host (the generator writes only what changed). Device route (``sampling_params``
         given): ``read_from_device=False`` returns the generator's ``DecodeOutput`` handle (DP=1 always sends it:
         model_runner.py:4106-4108), ``True`` the ids ``[B_pad, 1]``. Host route (no ``sampling_params``): the logits
@@ -447,18 +455,20 @@ class GLM53StackForCausalLM:
         B = int(tokens.numel())
         if int(positions.numel()) != B:
             raise ValueError(f"tokens {B} rows vs start_pos {int(positions.numel())}")
+        if B > self.max_batch:
+            raise ValueError(f"{B} decode rows exceed the {self.max_batch} slots")
         rows = None
         if page_table is not None:
             rows = trim_page_rows(page_table)
             if int(rows.shape[0]) < B:
                 raise ValueError(f"page_table {int(rows.shape[0])} rows < {B} decode rows")
             rows = rows[:B]
-        moves = self._remap_moves(kv, slot_remap)
+        alias = self._permuted(slot_remap)
         common = dict(
             page_table=rows,
             kv_cache=kv,
+            slots=alias[:B],
             enable_trace=enable_trace,
-            slot_remap=moves,
             reload_inputs=True,
             reload_page_table=reload_page_table,
             reload_sampling_params=reload_sampling_params,
@@ -466,6 +476,7 @@ class GLM53StackForCausalLM:
         )
         if sampling_params is None:
             logits = self.gen.decode_forward(tokens, positions, sampling_params=None, read_from_device=True, **common)
+            self._alias = alias
             return logits.reshape(B, 1, -1).float(), None
         params = [row_params(sampling_params, i) for i in range(B)]
         bad = [i for i, p in enumerate(params) if not p.is_greedy and int(positions[i]) >= 0]
@@ -477,21 +488,62 @@ class GLM53StackForCausalLM:
         out = self.gen.decode_forward(
             tokens, positions, sampling_params=params, read_from_device=read_from_device, **common
         )
+        self._alias = alias
         if isinstance(out, DecodeOutput):
             return out
         return self.gen.process_decode_output_host(out, is_tokens=True).to(torch.int32)
 
-    def _remap_moves(self, kv, slot_remap) -> Optional[dict]:
-        """The plugin's full permutation (row ``i`` reads slot ``remap[i]``) as the generator's ``{src: dst}`` of the
-        moves whose source holds a live request. The plugin releases a finished request's slot
-        (``release_request``, model_runner.py:965-983) before the next decode condenses the rows, so a dead slot named
-        in the permutation only closes the cycle the live moves open; dropping it leaves the generator a chain into a
-        free slot (``remap_slots`` orders chains itself and refuses a cycle without a free scratch slot)."""
+    # ================================================================================= slot aliasing
+    def _permuted(self, slot_remap) -> list:
+        """The alias after the plugin's gather ``slot_remap`` (row ``i`` reads plugin slot ``remap[i]``: a full
+        permutation of the plugin's slots, model_runner.py:1366-1421; ``-1`` / ``i`` = unchanged; a ``{src: dst}``
+        dict = those moves, the overwritten free slots backfilling the emptied rows), the current alias without one.
+        Row ``i`` keeps the generator slot its request already decodes in, so no state moves."""
+        n = self.max_batch
         if slot_remap is None:
-            return None
+            return self._alias
+        if isinstance(slot_remap, dict):
+            moves = {int(s): int(d) for s, d in slot_remap.items()}
+            if any(not (0 <= s < n and 0 <= d < n) for s, d in moves.items()):
+                raise ValueError(f"slot_remap moves {moves} outside [0, {n})")
+            remap = list(range(n))
+            for s, d in moves.items():
+                remap[d] = s
+            lost = [d for d in sorted(moves.values()) if d not in moves]  # free slots a move overwrote
+            emptied = [s for s in sorted(moves) if s not in moves.values()]  # rows whose request moved away
+            for i, d in zip(emptied, lost):
+                remap[i] = d
+        else:
+            remap = [int(x) for x in torch.as_tensor(slot_remap).reshape(-1).tolist()]
+            if len(remap) > n:
+                raise ValueError(f"slot_remap names {len(remap)} rows for {n} slots")
+            remap = [i if v < 0 else v for i, v in enumerate(remap)] + list(range(len(remap), n))
+        if sorted(remap) != list(range(n)):
+            raise ValueError(f"slot_remap {remap} is not a permutation of the {n} slots")
+        return [self._alias[s] for s in remap]
+
+    def _admit(self, kv, slots: list, starts: list) -> list:
+        """The generator slots of a prefill batch's plugin slots. A new request (chunk start 0 in a plugin slot whose
+        generator slot holds none) takes the lowest free generator slot: its alias entry is swapped with the free
+        plugin slot that held that generator slot, invisible to the plugin, so the live generator slots stay as low as
+        the plugin's rows (the generator's decode width covers slots 0..max live). A continuation keeps its slot."""
+        n = self.max_batch
+        if any(not 0 <= s < n for s in slots):
+            raise ValueError(f"empty_slots {slots} outside [0, {n})")
         live = set(self.gen.live_slots(kv))
-        moves = {src: dst for src, dst in self.gen._remap_dict(slot_remap).items() if src in live}
-        return moves or None
+        alias, taken = list(self._alias), set(live)
+        for s, start in zip(slots, starts):
+            g = alias[s]
+            if g in live or start > 0:
+                taken.add(g)
+                continue
+            lowest = next(x for x in range(n) if x not in taken)
+            if lowest != g:
+                j = alias.index(lowest)
+                alias[s], alias[j] = lowest, g
+            taken.add(lowest)
+        self._alias = alias
+        return [alias[s] for s in slots]
 
     def read_decode_output(self, tt_out, async_read: bool = False, sample_rows=None):
         """async_decode.py:1474-1486 (the async read of a ``read_from_device=False`` submission): the generator
@@ -525,17 +577,17 @@ class GLM53StackForCausalLM:
 
     # ================================================================================= request lifecycle
     def release_request(self, slot: int) -> None:
-        """model_runner.py:965-983 / 2880: the request in state ``slot`` (its CURRENT slot, after every remap)
-        finished or was preempted -> ``Glm53Generator.release_slot``: the slot stops decoding, its page coverage and
-        (sharded pool) physical blocks are released, the backend's release hook runs once."""
+        """model_runner.py:965-983 / 2880: the request in plugin ``slot`` (its CURRENT slot, after every gather)
+        finished or was preempted -> ``Glm53Generator.release_slot`` on its generator slot: the slot stops decoding,
+        its page coverage and (sharded pool) physical blocks are released, the backend's release hook runs once."""
         if self.kv_cache is None or not 0 <= int(slot) < self.max_batch:
             logger.warning(f"GLM53 stack vLLM: release_request({slot}) before allocation or outside the slot range")
             return
-        self.gen.release_slot(self.kv_cache, int(slot))
+        self.gen.release_slot(self.kv_cache, self._alias[int(slot)])
 
     def note_state_slots_moved(self, moves) -> None:
         """model_runner.py:282 / MODEL_CAPABILITIES.md:73-75: the plugin's ``old -> new`` notification of the gather
-        ``decode_forward`` already applied through ``slot_remap`` -- nothing to do (the generator moved the state)."""
+        ``decode_forward`` already absorbed into the slot alias -- nothing to do (no state moved)."""
         return None
 
     def release_persistent_capture(self) -> None:
