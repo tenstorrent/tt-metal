@@ -308,7 +308,7 @@ def make_1d_mcast_prog_config_for_height_sharded(
         in0_block_w_tiles = _pick_divisor_at_most(K_tiles, min(4, K_tiles))
 
     if out_subblock_w is None:
-        out_subblock_w = min(4, per_core_N)
+        out_subblock_w = _pick_divisor_at_most(per_core_N, min(4, per_core_N))
 
     return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
         compute_with_storage_grid_size=compute_grid,

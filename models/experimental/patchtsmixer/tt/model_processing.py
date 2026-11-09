@@ -345,6 +345,34 @@ def preprocess_linear_head(state_dict, path: str, device):
     }
 
 
+def preprocess_model(
+    state_dict, path: str, device, *, num_layers, mode="common_channel", use_gated_attn=False, task="forecasting"
+):
+    """
+    Preprocess a whole PatchTSMixerModelForForecasting or PatchTSMixerForPretraining state dict
+    (the reference module's keys, which hf_state_dict_to_port produces from a Hugging Face checkpoint).
+    """
+    if task == "forecasting":
+        embed, pos, enc, head = "patch_embed", "pos_enc", "mixer_block", preprocess_forecast_head
+    else:
+        embed, pos, enc, head = "embedding", "pos_encoder", "encoder", preprocess_pretrain_head
+
+    def sub(prefix):
+        return {k[len(prefix) + 1 :]: v for k, v in state_dict.items() if k.startswith(prefix + ".")}
+
+    def at(name):
+        return f"{path}.{name}" if path else name
+
+    parameters = preprocess_embedding_proj(sub(embed), at(embed), device=device)
+    if f"{pos}.pe" in state_dict:
+        parameters.update(preprocess_positional_encoding(sub(pos), at(pos), device=device))
+    parameters.update(
+        preprocess_block(sub(enc), at(enc), device, num_layers=num_layers, mode=mode, use_gated_attn=use_gated_attn)
+    )
+    parameters.update(head(sub("head"), at("head"), device=device))
+    return parameters
+
+
 def preprocess_pretrain_head(state_dict, path: str, device):
     """
     Preprocess PatchTSMixerPretrainHead for pre-training.

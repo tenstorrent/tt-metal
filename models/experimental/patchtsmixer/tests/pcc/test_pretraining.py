@@ -12,6 +12,7 @@ from models.experimental.patchtsmixer.tt.patchtsmixer import TtPatchTSMixerForPr
 from models.experimental.patchtsmixer.tt.model_processing import (
     preprocess_block,
     preprocess_embedding_proj,
+    preprocess_model,
     preprocess_pretrain_head,
     preprocess_positional_encoding,
 )
@@ -53,7 +54,7 @@ def test_patchtsmixer_pretraining(device, reset_seeds, mode, use_gated_attn):
 
     # PyTorch forward
     with torch.no_grad():
-        torch_output = torch_model(past_values)
+        torch_output, _ = torch_model(past_values)
 
     # Preprocess parameters
     state_dict = torch_model.state_dict()
@@ -101,7 +102,7 @@ def test_patchtsmixer_pretraining(device, reset_seeds, mode, use_gated_attn):
 
     # TT forward
     tt_past_values = ttnn.from_torch(past_values, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
-    tt_output = tt_model(tt_past_values)
+    tt_output, _ = tt_model(tt_past_values)
     tt_torch_output = ttnn.to_torch(tt_output)
 
     # Expected shape: (B, C, Np, patch_length)
@@ -114,3 +115,71 @@ def test_patchtsmixer_pretraining(device, reset_seeds, mode, use_gated_attn):
 
     # Validate PCC
     assert_with_pcc(torch_output, tt_torch_output, pcc=0.99)
+
+
+@pytest.mark.parametrize("mask_type", ["random", "forecast"])
+def test_patchtsmixer_pretraining_masked(device, reset_seeds, mask_type):
+    """Pre-training as HF runs it: per-window scaling, no positional encoding, patches masked before the encoder."""
+    batch_size = 4
+    context_length = 512
+    patch_length = 16
+    patch_stride = 16
+    num_channels = 7
+    d_model = 48
+    num_layers = 2
+    num_patches = context_length // patch_stride
+
+    torch_model = PatchTSMixerForPretraining(
+        context_length=context_length,
+        patch_length=patch_length,
+        patch_stride=patch_stride,
+        num_channels=num_channels,
+        d_model=d_model,
+        num_layers=num_layers,
+        expansion=3,
+        dropout=0.0,
+        use_gated_attn=True,
+        head_dropout=0.0,
+        scaling="std",
+        use_positional_encoding=False,
+        mask_type=mask_type,
+    ).eval()
+
+    loc, scale = torch.linspace(-20, 40, num_channels), torch.linspace(0.5, 8, num_channels)
+    past_values = torch.randn(batch_size, context_length, num_channels) * scale + loc
+    with torch.no_grad():
+        torch_output, mask = torch_model(past_values)
+
+    # random: half the patches of every channel hidden, the same ones across channels; forecast: the last 2 patches
+    assert mask.shape == (batch_size, num_channels, num_patches)
+    masked_per_channel = num_patches - num_patches // 2 if mask_type == "random" else 2
+    assert torch.equal(mask.sum(-1), torch.full((batch_size, num_channels), masked_per_channel))
+    assert torch.equal(mask, mask[:, :1].expand_as(mask))
+    if mask_type == "forecast":
+        assert mask[..., -2:].all()
+
+    parameters = preprocess_model(
+        torch_model.state_dict(), "", device, num_layers=num_layers, use_gated_attn=True, task="pretraining"
+    )
+    tt_model = TtPatchTSMixerForPretraining(
+        device=device,
+        base_address="",
+        parameters=parameters,
+        context_length=context_length,
+        patch_length=patch_length,
+        patch_stride=patch_stride,
+        num_channels=num_channels,
+        d_model=d_model,
+        num_layers=num_layers,
+        expansion=3,
+        use_gated_attn=True,
+        scaling="std",
+        use_positional_encoding=False,
+        mask_type=mask_type,
+    )
+
+    tt_past_values = ttnn.from_torch(past_values, device=device, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT)
+    tt_output, tt_mask = tt_model(tt_past_values, mask=mask)
+
+    assert tt_mask is mask
+    assert_with_pcc(torch_output, ttnn.to_torch(tt_output), pcc=0.99)
