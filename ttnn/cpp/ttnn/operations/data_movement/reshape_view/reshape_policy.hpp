@@ -71,6 +71,10 @@ struct ReshapeCallRecord {
 
 std::ostream& operator<<(std::ostream& os, const ReshapeCallRecord& record);
 
+// False during trace capture and NO_DISPATCH graph capture, where compare mode cannot read outputs back and so
+// runs only the new implementation.
+bool compare_readback_allowed(const ttnn::Tensor& tensor);
+
 // Compare-mode check. Throws when the logical shape, dtype or any logical element differs bit for bit;
 // the message names the first mismatches by N-D index together with both specs and the request. Spec,
 // padded-shape and topology differences are logged, not thrown: those are where the new implementation

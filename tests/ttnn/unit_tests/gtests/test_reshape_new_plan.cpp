@@ -135,9 +135,10 @@ TEST(ReshapeNewPlan, PageCopyParams) {
     EXPECT_EQ(params.page_bytes, 2048u);
     EXPECT_EQ(params.chunks_per_page, 1u);
     EXPECT_EQ(params.num_units, 4u);
-    EXPECT_EQ(params.entry_bytes, 2048u);
-    EXPECT_EQ(params.units_per_batch, 8u);
-    EXPECT_EQ(params.num_entries, 16u);
+    EXPECT_EQ(params.alignment, 32u);
+    EXPECT_EQ(params.entry_bytes, 2048u + 32u);
+    EXPECT_EQ(params.units_per_batch, 7u);
+    EXPECT_EQ(params.num_entries, 14u);
 }
 
 TEST(ReshapeNewPlan, PageCopyParamsChunkWidePages) {
@@ -156,22 +157,62 @@ TEST(ReshapeNewPlan, PageCopyParamsChunkWidePages) {
 TEST(ReshapeNewPlan, GatherParamsChunkWideRows) {
     const auto in = spec(ttnn::Shape{4, 4096}, Layout::ROW_MAJOR);
     const auto out = spec(ttnn::Shape{2, 8192}, Layout::ROW_MAJOR);
-    const auto params = make_gather_params(in, out, 32);
+    const auto params = make_gather_params(in, out, 32, 64);
     EXPECT_FALSE(params.tiled);
     EXPECT_EQ(params.element_size, 2u);
     EXPECT_EQ(params.page_bytes, 16384u);
     EXPECT_EQ(params.unit_bytes, 4096u);
     EXPECT_EQ(params.chunks_per_page, 4u);
+    EXPECT_EQ(params.pages_per_unit, 1u);
     EXPECT_EQ(params.num_units, 8u);
     EXPECT_EQ(params.header_bytes % 16, 0u);
     EXPECT_GE(params.stage_data_bytes, params.unit_bytes);
-    EXPECT_EQ(params.stage_entry_bytes, params.header_bytes + params.stage_data_bytes);
+    EXPECT_EQ(params.stage_entry_bytes, params.header_bytes + params.stage_data_bytes + params.source_alignment);
+}
+
+TEST(ReshapeNewPlan, GatherParamsHonorDramAlignment) {
+    // Blackhole DRAM reads keep their source's offset modulo 64 in L1.
+    const auto in = spec(ttnn::Shape{4, 6}, Layout::ROW_MAJOR, ttnn::DRAM_MEMORY_CONFIG, DataType::UINT32);
+    const auto out = spec(ttnn::Shape{2, 12}, Layout::ROW_MAJOR, ttnn::DRAM_MEMORY_CONFIG, DataType::UINT32);
+    const auto gather = make_gather_params(in, out, 64, 64);
+    EXPECT_EQ(gather.source_alignment, 64u);
+    EXPECT_EQ(gather.header_bytes % 64, 0u);
+    EXPECT_EQ(gather.stage_data_bytes % 64, 0u);
+    EXPECT_EQ(gather.stage_entry_bytes % 64, 0u);
+
+    const auto page_copy = make_page_copy_params(
+        spec(ttnn::Shape{1, 3, 20}, Layout::ROW_MAJOR, ttnn::DRAM_MEMORY_CONFIG, DataType::UINT32),
+        spec(ttnn::Shape{3, 20}, Layout::ROW_MAJOR, ttnn::L1_MEMORY_CONFIG, DataType::UINT32),
+        64,
+        16);
+    EXPECT_EQ(page_copy.alignment, 64u);
+    EXPECT_EQ(page_copy.entry_bytes % 64, 0u);
+    EXPECT_GE(page_copy.entry_bytes, page_copy.chunk_bytes + 64u - 1u);
+}
+
+TEST(ReshapeNewPlan, GatherGroupsSmallRowMajorPages) {
+    // 24-byte output rows: one unit carries several whole pages instead of one tiny page each.
+    const auto in = spec(ttnn::Shape{64, 6}, Layout::ROW_MAJOR, ttnn::DRAM_MEMORY_CONFIG, DataType::UINT32);
+    const auto out = spec(ttnn::Shape{32, 12}, Layout::ROW_MAJOR, ttnn::DRAM_MEMORY_CONFIG, DataType::UINT32);
+    const auto params = make_gather_params(in, out, 32, 4);
+    EXPECT_EQ(params.page_bytes, 48u);
+    EXPECT_EQ(params.page_slot_bytes, 48u);
+    EXPECT_EQ(params.pages_per_unit, 8u);
+    EXPECT_EQ(params.unit_slot_bytes, 8u * 48u);
+    EXPECT_EQ(params.num_units, 4u);
+
+    // Pages at or above the small-page threshold keep one page per unit.
+    const auto wide_in = spec(ttnn::Shape{4, 256}, Layout::ROW_MAJOR);
+    const auto wide_out = spec(ttnn::Shape{2, 512}, Layout::ROW_MAJOR);
+    const auto wide = make_gather_params(wide_in, wide_out, 32, 4);
+    EXPECT_EQ(wide.pages_per_unit, 1u);
+    EXPECT_EQ(wide.num_units, 2u);
 }
 
 TEST(ReshapeNewPlan, GatherParamsTile) {
     const auto in = spec(ttnn::Shape{2, 30, 64}, Layout::TILE, ttnn::DRAM_MEMORY_CONFIG, DataType::FLOAT32);
     const auto out = spec(ttnn::Shape{60, 64}, Layout::TILE, ttnn::DRAM_MEMORY_CONFIG, DataType::FLOAT32);
-    const auto params = make_gather_params(in, out, 64);
+    const auto params = make_gather_params(in, out, 64, 64);
     EXPECT_TRUE(params.tiled);
     EXPECT_EQ(params.element_size, 4u);
     EXPECT_EQ(params.face_width, 16u);
@@ -183,7 +224,7 @@ TEST(ReshapeNewPlan, GatherParamsTile) {
 TEST(ReshapeNewPlan, GatherRejectsBlockFloat) {
     const auto in = spec(ttnn::Shape{64, 64}, Layout::TILE, ttnn::DRAM_MEMORY_CONFIG, DataType::BFLOAT8_B);
     const auto out = spec(ttnn::Shape{32, 128}, Layout::TILE, ttnn::DRAM_MEMORY_CONFIG, DataType::BFLOAT8_B);
-    EXPECT_ANY_THROW(make_gather_params(in, out, 32));
+    EXPECT_ANY_THROW(make_gather_params(in, out, 32, 64));
 }
 
 TEST(ReshapeNewPlan, PaddedOuterDimIsRejected) {

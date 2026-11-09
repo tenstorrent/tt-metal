@@ -8,6 +8,7 @@ import torch
 
 import ttnn
 from ttnn.tools import trace_allocation_tracker
+from tt_py_test_utils_common.utility_functions import torch_random
 
 from tests.ttnn.utils_for_testing import assert_with_pcc, assert_equal
 from tests.ttnn.unit_tests.operations.data_movement.docstring_support import (

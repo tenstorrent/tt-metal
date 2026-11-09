@@ -3,9 +3,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Reads work units [unit_begin, unit_end) of the input into the stage DFB, up to units_per_batch per barrier.
-// Unit u is chunk (u % chunks_per_page) of page (u / chunks_per_page).
+// Unit u is chunk (u % chunks_per_page) of page (u / chunks_per_page). A chunk lands on the first `alignment`
+// boundary of L1 in its entry: a DRAM read must keep its source's offset within that alignment (64 bytes on
+// Blackhole), and DFB entries are only NOC-word aligned.
 //
-// Compile-time args: page_bytes, chunk_bytes, chunks_per_page, entry_bytes, units_per_batch
+// Compile-time args: page_bytes, chunk_bytes, chunks_per_page, alignment, entry_bytes, units_per_batch
 // Runtime args:      unit_begin, unit_end
 // Bindings:          dfb::stage (producer), tensor::src
 
@@ -21,6 +23,7 @@ void kernel_main() {
     constexpr uint32_t page_bytes = get_arg(args::page_bytes);
     constexpr uint32_t chunk_bytes = get_arg(args::chunk_bytes);
     constexpr uint32_t chunks_per_page = get_arg(args::chunks_per_page);
+    constexpr uint32_t alignment = get_arg(args::alignment);
     constexpr uint32_t entry_bytes = get_arg(args::entry_bytes);
     constexpr uint32_t units_per_batch = get_arg(args::units_per_batch);
     const uint32_t unit_begin = get_arg(args::unit_begin);
@@ -35,11 +38,12 @@ void kernel_main() {
     for (uint32_t unit = unit_begin; unit < unit_end;) {
         const uint32_t batch = (unit_end - unit) < units_per_batch ? (unit_end - unit) : units_per_batch;
         stage.reserve_back(batch);
+        const uint32_t pad = (alignment - stage.get_write_ptr() % alignment) % alignment;
         for (uint32_t k = 0; k < batch; ++k) {
             const uint32_t offset = chunk * chunk_bytes;
             const uint32_t bytes = (page_bytes - offset) < chunk_bytes ? (page_bytes - offset) : chunk_bytes;
             noc.async_read(
-                src, stage, bytes, {.page_id = page, .offset_bytes = offset}, {.offset_bytes = k * entry_bytes});
+                src, stage, bytes, {.page_id = page, .offset_bytes = offset}, {.offset_bytes = pad + k * entry_bytes});
             if (++chunk == chunks_per_page) {
                 chunk = 0;
                 ++page;

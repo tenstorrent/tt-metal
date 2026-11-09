@@ -8,16 +8,17 @@
 
 // Layout of one stage DFB entry, shared by the gather reader (producer) and writer (consumer).
 //
-//   word 0          output page id of the unit
+//   word 0          output page id of the unit's first page
 //   word 1          byte offset of the unit within that page
-//   word 2          unit size in bytes
+//   word 2          bytes written per page
 //   word 3          flags (kFlag*)
 //   word 4          number of fragment records in this entry
-//   word 5          reserved
-//   word 6 + 3 * r  record r: {byte offset in the unit, byte offset of the staged bytes in this entry, size}
-//   header_bytes..  staged fragment bytes
+//   word 5          number of output pages in the unit, page_slot_bytes apart in the assembly slot
+//   word 6 + 3 * r  record r: {byte offset in the unit's slot, byte offset of the staged bytes in this entry, size}
+//   from the first source_alignment boundary of L1 past header_bytes: staged fragment bytes
 //
-// A unit spans one or more consecutive entries: the first carries kFlagFirst, the last kFlagLast.
+// A unit spans one or more consecutive entries: the first carries kFlagFirst, the last kFlagLast. Entries
+// alternate between the two stage buffers, starting with the first.
 // The host-side constants are kGatherHeaderWords / kGatherRecordWords in reshape_new_plan.hpp.
 namespace reshape_new {
 
@@ -26,6 +27,7 @@ constexpr uint32_t kHeaderPageOffset = 1;
 constexpr uint32_t kHeaderUnitBytes = 2;
 constexpr uint32_t kHeaderFlags = 3;
 constexpr uint32_t kHeaderCount = 4;
+constexpr uint32_t kHeaderPageCount = 5;
 constexpr uint32_t kHeaderWords = 6;
 constexpr uint32_t kRecordWords = 3;
 

@@ -32,6 +32,7 @@
 #include <tt_stl/reflection.hpp>
 
 #include "ttnn/distributed/api.hpp"
+#include "ttnn/graph/graph_processor.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 
@@ -146,8 +147,13 @@ std::vector<Shard> shards_of(const ttnn::Tensor& tensor) {
 }
 
 bool readback_is_illegal(const ttnn::Tensor& tensor) {
-    if (tt::tt_metal::GraphTracker::instance().get_hook() != nullptr) {
-        return true;
+    // NORMAL graph capture (which the Python operation decorator installs around every call) dispatches for
+    // real; only a blocking hook (NO_DISPATCH capture) or a hook of unknown kind makes readback unsafe.
+    if (const auto& hook = tt::tt_metal::GraphTracker::instance().get_hook(); hook != nullptr) {
+        const auto* processor_hooks = dynamic_cast<const ttnn::graph::ProcessorHooks*>(hook.get());
+        if (processor_hooks == nullptr || processor_hooks->get_block()) {
+            return true;
+        }
     }
     if (!is_device_tensor(tensor)) {
         return false;
@@ -289,6 +295,10 @@ ScopedReshapeExecutionPolicy::ScopedReshapeExecutionPolicy(ReshapeExecutionPolic
     previous_(std::exchange(CMAKE_UNIQUE_NAMESPACE::thread_policy(), policy)) {}
 
 ScopedReshapeExecutionPolicy::~ScopedReshapeExecutionPolicy() { CMAKE_UNIQUE_NAMESPACE::thread_policy() = previous_; }
+
+bool compare_readback_allowed(const ttnn::Tensor& tensor) {
+    return !CMAKE_UNIQUE_NAMESPACE::readback_is_illegal(tensor);
+}
 
 void compare_reshape_results(const ReshapeRequest& request, const ttnn::Tensor& legacy, const ttnn::Tensor& candidate) {
     using namespace CMAKE_UNIQUE_NAMESPACE;

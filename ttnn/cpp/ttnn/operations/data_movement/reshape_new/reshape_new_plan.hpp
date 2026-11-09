@@ -53,7 +53,8 @@ struct PageCopyParams {
     uint32_t chunk_bytes = 0;  // a multiple of both buffers' alignment, except when it is the whole page
     uint32_t chunks_per_page = 1;
     uint32_t num_units = 0;
-    uint32_t entry_bytes = 0;      // DFB entry: a chunk rounded up to both buffers' alignment
+    uint32_t alignment = 0;        // the larger buffer alignment; chunks are staged on this boundary of L1
+    uint32_t entry_bytes = 0;      // DFB entry: a chunk rounded up to `alignment`, plus `alignment` of slack
     uint32_t units_per_batch = 0;  // units moved per barrier
     uint32_t num_entries = 0;      // two batches in flight
 };
@@ -64,9 +65,10 @@ PageCopyParams make_page_copy_params(
     uint32_t input_alignment,
     uint32_t output_alignment);
 
-// Everything the Gather program needs. The work unit is one output tile (TILE) or one chunk of one output page
-// (ROW_MAJOR, where wide pages are split so the staging footprint stays bounded). The reader stages the input
-// fragments of a unit into `stage` entries of a fixed size, so the L1 footprint does not depend on the shapes.
+// Everything the Gather program needs. The work unit is one output tile (TILE), one chunk of one output page
+// (ROW_MAJOR, where wide pages are split so the staging footprint stays bounded), or a run of `pages_per_unit`
+// consecutive small ROW_MAJOR pages. The reader stages the input fragments of a unit into stage entries of a
+// fixed size, so the L1 footprint does not depend on the shapes.
 struct GatherParams {
     ReshapeSideGeometry in;
     ReshapeSideGeometry out;
@@ -77,15 +79,18 @@ struct GatherParams {
     uint32_t face_height = 1;
     uint32_t face_width = 1;
     uint32_t page_bytes = 0;       // one output page
-    uint32_t unit_bytes = 0;       // largest unit: a tile, or a ROW_MAJOR chunk
+    uint32_t unit_bytes = 0;       // bytes written per page of a unit: a tile, a ROW_MAJOR chunk, or a page
     uint32_t chunks_per_page = 1;  // ROW_MAJOR units per output page
+    uint32_t pages_per_unit = 1;   // ROW_MAJOR pages per unit (1 unless pages are small)
+    uint32_t page_slot_bytes = 0;  // assembly stride between the pages of a unit (unit_bytes, NOC-word aligned)
+    uint32_t unit_slot_bytes = 0;  // assembly footprint of one unit
     uint32_t num_units = 0;
-    uint32_t source_alignment = 0;  // reads start on this boundary of the input buffer
+    uint32_t source_alignment = 0;  // reads start on this boundary of the input buffer, and land on it in L1
     uint32_t records_per_entry = 0;
-    uint32_t header_bytes = 0;
-    uint32_t stage_data_bytes = 0;
-    uint32_t stage_entry_bytes = 0;
-    uint32_t num_stage_entries = 0;
+    uint32_t header_bytes = 0;       // a multiple of source_alignment
+    uint32_t stage_data_bytes = 0;   // a multiple of source_alignment
+    uint32_t stage_entry_bytes = 0;  // header, data, and one source_alignment of slack
+    uint32_t num_stage_entries = 0;  // per stage buffer; the reader alternates between two
 };
 
 // Number of uint32 words before the first fragment record in a stage entry, and words per record. Shared with
@@ -93,7 +98,11 @@ struct GatherParams {
 inline constexpr uint32_t kGatherHeaderWords = 6;
 inline constexpr uint32_t kGatherRecordWords = 3;
 
+// `num_cores` is the number of cores the units are split over; it bounds how many small pages share a unit.
 GatherParams make_gather_params(
-    const tt::tt_metal::TensorSpec& input, const tt::tt_metal::TensorSpec& output, uint32_t input_alignment);
+    const tt::tt_metal::TensorSpec& input,
+    const tt::tt_metal::TensorSpec& output,
+    uint32_t input_alignment,
+    uint32_t num_cores);
 
 }  // namespace ttnn::operations::data_movement::reshape_new

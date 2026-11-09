@@ -18,17 +18,20 @@ ttnn::device_operation::ProgramArtifacts ReshapeNewGatherProgramFactory::create_
     using namespace tt::tt_metal::experimental;
     namespace plan = ttnn::operations::data_movement::reshape_new;
     const auto& input = tensor_args.input;
+    const auto& sub_core_grid = operation_attributes.sub_core_grid;
+    const auto grid_size = output.device()->compute_with_storage_grid_size();
+    const uint32_t max_cores =
+        sub_core_grid.has_value() ? static_cast<uint32_t>(sub_core_grid->num_cores()) : grid_size.x * grid_size.y;
     const auto params =
-        plan::make_gather_params(input.tensor_spec(), output.tensor_spec(), input.mesh_buffer().alignment());
-    const auto split = split_reshape_units(output.device(), operation_attributes.sub_core_grid, params.num_units);
+        plan::make_gather_params(input.tensor_spec(), output.tensor_spec(), input.mesh_buffer().alignment(), max_cores);
+    const auto split = split_reshape_units(output.device(), sub_core_grid, params.num_units);
 
-    constexpr uint32_t kNocWordBytes = 16;
-    const uint32_t unit_slot_bytes = tt::round_up(params.unit_bytes, kNocWordBytes);
     const bool fill_padding = operation_attributes.fill_padding;
     // Two units being assembled (one is written out while the next one fills), plus the padding pattern.
-    const uint32_t scratch_bytes = (fill_padding ? 3 : 2) * unit_slot_bytes;
+    const uint32_t scratch_bytes = (fill_padding ? 3 : 2) * params.unit_slot_bytes;
 
-    const DFBSpecName STAGE{"stage"};
+    const DFBSpecName STAGE0{"stage0"};
+    const DFBSpecName STAGE1{"stage1"};
     const ScratchpadSpecName ASSEMBLY{"assembly"};
     const KernelSpecName READER{"reader"};
     const KernelSpecName WRITER{"writer"};
@@ -37,11 +40,13 @@ ttnn::device_operation::ProgramArtifacts ReshapeNewGatherProgramFactory::create_
 
     ProgramSpec spec;
     spec.name = "reshape_new_gather";
-    spec.dataflow_buffers.push_back(DataflowBufferSpec{
-        .unique_id = STAGE,
-        .entry_size = params.stage_entry_bytes,
-        .num_entries = params.num_stage_entries,
-    });
+    for (const auto& stage : {STAGE0, STAGE1}) {
+        spec.dataflow_buffers.push_back(DataflowBufferSpec{
+            .unique_id = stage,
+            .entry_size = params.stage_entry_bytes,
+            .num_entries = params.num_stage_entries,
+        });
+    }
     spec.scratchpads.push_back(ScratchpadSpec{.unique_id = ASSEMBLY, .size_per_node = scratch_bytes});
     spec.tensor_parameters.push_back(TensorParameter{.unique_id = SRC, .spec = input.tensor_spec()});
     spec.tensor_parameters.push_back(TensorParameter{.unique_id = DST, .spec = output.tensor_spec()});
@@ -51,8 +56,10 @@ ttnn::device_operation::ProgramArtifacts ReshapeNewGatherProgramFactory::create_
         .unique_id = READER,
         .source = "ttnn/cpp/ttnn/operations/data_movement/reshape_new/device/kernels/gather_reader.cpp",
         .compiler_options = {.opt_level = KernelBuildOptLevel::O3},
-        .dfb_bindings = {DFBBinding{
-            .dfb_spec_name = STAGE, .accessor_name = "stage", .endpoint_type = DFBEndpointType::PRODUCER}},
+        .dfb_bindings =
+            {DFBBinding{.dfb_spec_name = STAGE0, .accessor_name = "stage0", .endpoint_type = DFBEndpointType::PRODUCER},
+             DFBBinding{
+                 .dfb_spec_name = STAGE1, .accessor_name = "stage1", .endpoint_type = DFBEndpointType::PRODUCER}},
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = SRC, .accessor_name = "src"}},
         .compile_time_args =
             {
@@ -61,6 +68,8 @@ ttnn::device_operation::ProgramArtifacts ReshapeNewGatherProgramFactory::create_
                 {"page_bytes", params.page_bytes},
                 {"unit_bytes", params.unit_bytes},
                 {"chunks_per_page", params.chunks_per_page},
+                {"pages_per_unit", params.pages_per_unit},
+                {"page_slot_bytes", params.page_slot_bytes},
                 {"in_width", params.in.width},
                 {"in_height", params.in.height},
                 {"in_padded_height", params.in.padded_height},
@@ -71,6 +80,7 @@ ttnn::device_operation::ProgramArtifacts ReshapeNewGatherProgramFactory::create_
                 {"out_padded_height", params.out.padded_height},
                 {"out_page_width", params.out.page_width},
                 {"out_pages_per_row", params.out.pages_per_row},
+                {"out_num_pages", params.out.num_pages},
                 {"tile_height", params.tile_height},
                 {"tile_width", params.tile_width},
                 {"face_height", params.face_height},
@@ -87,13 +97,16 @@ ttnn::device_operation::ProgramArtifacts ReshapeNewGatherProgramFactory::create_
         .unique_id = WRITER,
         .source = "ttnn/cpp/ttnn/operations/data_movement/reshape_new/device/kernels/gather_writer.cpp",
         .compiler_options = {.opt_level = KernelBuildOptLevel::O3},
-        .dfb_bindings = {DFBBinding{
-            .dfb_spec_name = STAGE, .accessor_name = "stage", .endpoint_type = DFBEndpointType::CONSUMER}},
+        .dfb_bindings =
+            {DFBBinding{.dfb_spec_name = STAGE0, .accessor_name = "stage0", .endpoint_type = DFBEndpointType::CONSUMER},
+             DFBBinding{
+                 .dfb_spec_name = STAGE1, .accessor_name = "stage1", .endpoint_type = DFBEndpointType::CONSUMER}},
         .scratchpad_bindings = {ScratchpadBinding{.scratchpad_spec_name = ASSEMBLY, .accessor_name = "assembly"}},
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = DST, .accessor_name = "dst"}},
         .compile_time_args =
             {
-                {"unit_slot_bytes", unit_slot_bytes},
+                {"unit_slot_bytes", params.unit_slot_bytes},
+                {"page_slot_bytes", params.page_slot_bytes},
                 {"fill_padding", static_cast<uint32_t>(fill_padding)},
                 {"pad_bits", operation_attributes.pad_bits},
             },

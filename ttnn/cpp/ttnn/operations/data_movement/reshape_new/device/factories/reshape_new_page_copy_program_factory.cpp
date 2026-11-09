@@ -39,6 +39,7 @@ ttnn::device_operation::ProgramArtifacts ReshapeNewPageCopyProgramFactory::creat
         {"page_bytes", params.page_bytes},
         {"chunk_bytes", params.chunk_bytes},
         {"chunks_per_page", params.chunks_per_page},
+        {"alignment", params.alignment},
         {"entry_bytes", params.entry_bytes},
         {"units_per_batch", params.units_per_batch},
     };

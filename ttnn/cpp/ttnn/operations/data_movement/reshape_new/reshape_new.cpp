@@ -4,6 +4,7 @@
 
 #include "ttnn/operations/data_movement/reshape_new/reshape_new.hpp"
 
+#include <algorithm>
 #include <bit>
 #include <cstdint>
 #include <optional>
@@ -18,6 +19,7 @@
 #include <tt-metalium/experimental/tensor_layout_apis_with_custom_alignment.hpp>
 #include <tt-metalium/tensor/spec/tensor_spec.hpp>
 #include <tt_stl/assert.hpp>
+#include <tt_stl/small_vector.hpp>
 
 #include "ttnn/operations/copy/typecast/typecast.hpp"
 #include "ttnn/operations/core/core.hpp"
@@ -216,8 +218,9 @@ MemoryConfig derive_2d_sharded_config(
     }
     TT_FATAL(
         memory_config.shard_spec().has_value(),
-        "reshape: sharded output memory_config (layout={}) was supplied without a shard_spec, and the input has "
-        "none to derive one from. Provide a shard_spec or omit memory_config to inherit the input's.",
+        "ttnn.reshape: sharded output memory_config (layout={}) was supplied without a shard_spec, and no "
+        "input_shard_spec is available (input is likely interleaved). Either provide a shard_spec on memory_config "
+        "or omit memory_config to inherit it from the input tensor.",
         memory_config.memory_layout());
     const auto& source_shard_spec = *memory_config.shard_spec();
     const auto orientation = source_shard_spec.orientation;
@@ -282,6 +285,48 @@ MemoryConfig derive_2d_sharded_config(
                : output_spec.width_sharded(source_shard_spec.grid, orientation).memory_config();
 }
 
+// Elements of one shard, with the shard clipped to the tensor.
+uint64_t shard_volume(const ttnn::Shape& shard_shape, const ttnn::Shape& padded_shape) {
+    const auto shard = squeeze_or_unsqueeze_shape_to_ND(shard_shape, padded_shape.rank());
+    uint64_t volume = 1;
+    for (uint32_t d = 0; d < padded_shape.rank(); ++d) {
+        volume *= std::max(std::min(shard[d], padded_shape[d]), 1u);
+    }
+    return volume;
+}
+
+// An inherited ND shard spec for the output. Legacy's derivation keeps the per-dim shard counts, which multiplies
+// the shard size when the reshape moves volume between dims (#36172: (10, 4, 544, 544) sharded (10, 1, 32, 32) into
+// (10, 1156, 32, 32) gets 4 shards of 6 MB). When that grows the shard, the output shard instead fills the dims
+// from the innermost outward up to the input's shard volume, in whole tiles on the inner two dims of a TILE tensor.
+MemoryConfig derive_nd_output_config(
+    const MemoryConfig& memory_config, const Tensor& input, const ttnn::Shape& out_padded_shape) {
+    const bool tiled = input.layout() == Layout::TILE;
+    const MemoryConfig legacy =
+        derive_nd_shard_spec_for_reshaped_output(memory_config, input.padded_shape(), out_padded_shape, tiled);
+    const auto& nd_spec = *memory_config.nd_shard_spec();
+    const uint64_t budget = shard_volume(nd_spec.shard_shape, input.padded_shape());
+    if (shard_volume(legacy.nd_shard_spec()->shard_shape, out_padded_shape) <= budget) {
+        return legacy;
+    }
+    const auto tile = input.tensor_spec().tile().get_tile_shape();
+    const int rank = static_cast<int>(out_padded_shape.rank());
+    ttsl::SmallVector<uint32_t> shard(rank, 1);
+    uint64_t volume = 1;
+    for (int d = rank - 1; d >= 0; --d) {
+        const uint32_t grain = (tiled && rank >= 2 && d >= rank - 2) ? tile[d - (rank - 2)] : 1;
+        const uint32_t dim = std::max(out_padded_shape[d], 1u);
+        const uint64_t room = std::min<uint64_t>(dim, budget / volume);
+        const uint32_t size = std::max<uint32_t>(grain, static_cast<uint32_t>(room / grain * grain));
+        shard[d] = size;
+        volume *= size;
+        if (size < dim) {
+            break;
+        }
+    }
+    return MemoryConfig{memory_config.buffer_type(), nd_spec.with_shard_shape(ttnn::Shape(shard))};
+}
+
 // The output memory config when the output cannot be a view. An explicit config is used as given when it can
 // hold the output; otherwise (and for an inherited config) the shard spec is re-derived for the output shape the
 // way legacy does.
@@ -300,8 +345,7 @@ MemoryConfig resolve_output_memory_config(
         if (explicit_memory_config) {
             return memory_config;
         }
-        return derive_nd_shard_spec_for_reshaped_output(
-            memory_config, input.padded_shape(), interleaved_spec.padded_shape(), input.layout() == Layout::TILE);
+        return derive_nd_output_config(memory_config, input, interleaved_spec.padded_shape());
     }
     if (explicit_memory_config && memory_config.shard_spec().has_value() &&
         tt::tt_metal::can_shape_fits_shard_grid(
@@ -356,6 +400,16 @@ uint32_t pad_bits_for(DataType dtype, const PadValue& pad_value) {
 // Applies the #64322 placement relabeling to a view or host result.
 Tensor relabel(Tensor output, const Tensor& input) {
     const auto& topology = input.tensor_topology();
+    const auto& placements = topology.placements();
+    const bool has_shard = std::any_of(placements.begin(), placements.end(), [](const auto& placement) {
+        return std::holds_alternative<tt::tt_metal::distributed::MeshMapperConfig::Shard>(placement);
+    });
+    if (!has_shard) {
+        if (output.tensor_topology() != topology) {
+            output.update_tensor_topology(topology);
+        }
+        return output;
+    }
     auto remapped = remap_topology(topology, input.logical_shape(), output.logical_shape());
     if (remapped != output.tensor_topology()) {
         output.update_tensor_topology(remapped);
@@ -435,7 +489,7 @@ Tensor reshape(
                                input.padded_shape()[-1] == padded_request[-1];
         TT_FATAL(
             tile_view,
-            "reshape: cannot reshape {} elements into {} elements. {}",
+            "reshape: Attempting to reshape between two shapes with different volumes ({} elements into {}). {}",
             input.logical_volume(),
             logical_shape.volume(),
             describe(input, logical_shape, padded_request, memory_config));
@@ -465,6 +519,14 @@ Tensor reshape(
 
     // A view when the input's own buffer can be relabeled.
     if (same_config && !padded_shape.has_value()) {
+        // Interleaved pages carry no distribution, so whenever view_padded_shape keeps the input's page sequence
+        // the view needs no spec search.
+        if (input.logical_shape().rank() >= 2 &&
+            input.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED) {
+            if (const auto padded = view_padded_shape(input, logical_shape); padded.has_value()) {
+                return relabel(ttnn::experimental::view(input, logical_shape, *padded), input);
+            }
+        }
         if (const auto spec = view_spec(input, logical_shape); spec.has_value()) {
             return relabel(ttnn::experimental::view(input, spec->logical_shape(), spec->padded_shape()), input);
         }

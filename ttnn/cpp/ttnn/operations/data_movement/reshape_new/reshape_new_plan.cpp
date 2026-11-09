@@ -28,10 +28,13 @@ constexpr uint32_t kPageCopyBatchBytes = 16 * 1024;
 constexpr uint32_t kPageCopyMaxBatch = 16;
 // ROW_MAJOR output pages wider than this are split into chunks of this size (a multiple of 16 bytes).
 constexpr uint32_t kRowChunkBytes = 4 * 1024;
+// ROW_MAJOR output pages smaller than this are gathered several to a unit, up to kRowChunkBytes of them.
+constexpr uint32_t kSmallPageBytes = 512;
 // Per stage entry: fragment records and staged fragment bytes. A unit needing more spills into more entries.
 constexpr uint32_t kRecordsPerEntry = 128;
-constexpr uint32_t kStageDataBytes = 8 * 1024;
-constexpr uint32_t kNumStageEntries = 3;
+constexpr uint32_t kStageDataBytes = 16 * 1024;
+// Entries per stage buffer. The reader alternates between two stage buffers, so four entries are in use.
+constexpr uint32_t kNumStageEntries = 2;
 // L1 addresses written by the NOC from a byte-granular source must share the source's offset within 16 bytes.
 constexpr uint32_t kNocWordBytes = 16;
 
@@ -180,14 +183,19 @@ PageCopyParams make_page_copy_params(
         params.chunks_per_page = tt::div_up(params.page_bytes, params.chunk_bytes);
     }
     params.num_units = params.num_pages * params.chunks_per_page;
-    params.entry_bytes = tt::round_up(params.chunk_bytes, alignment);
+    params.alignment = alignment;
+    // One alignment of slack: the kernels start the data at the first aligned address of the entry.
+    params.entry_bytes = tt::round_up(params.chunk_bytes, alignment) + alignment;
     params.units_per_batch = std::clamp<uint32_t>(kPageCopyBatchBytes / params.entry_bytes, 1, kPageCopyMaxBatch);
     params.num_entries = 2 * params.units_per_batch;
     return params;
 }
 
 GatherParams make_gather_params(
-    const tt::tt_metal::TensorSpec& input, const tt::tt_metal::TensorSpec& output, uint32_t input_alignment) {
+    const tt::tt_metal::TensorSpec& input,
+    const tt::tt_metal::TensorSpec& output,
+    uint32_t input_alignment,
+    uint32_t num_cores) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
     GatherParams params;
     params.in = side_geometry(input);
@@ -232,17 +240,28 @@ GatherParams make_gather_params(
         }
         max_fragment_bytes = std::min(params.unit_bytes, params.in.page_width * params.element_size);
     }
-    params.num_units = params.out.num_pages * params.chunks_per_page;
+    params.page_slot_bytes = tt::round_up(params.unit_bytes, kNocWordBytes);
+    if (!params.tiled && params.page_bytes < kSmallPageBytes) {
+        // As many pages as keep every core busy, at most kRowChunkBytes of slots.
+        const uint32_t per_core = tt::div_up(params.out.num_pages, std::max(num_cores, 1u));
+        params.pages_per_unit = std::clamp(per_core, 1u, std::max(kRowChunkBytes / params.page_slot_bytes, 1u));
+    }
+    params.unit_slot_bytes = params.pages_per_unit * params.page_slot_bytes;
+    params.num_units = params.pages_per_unit > 1 ? tt::div_up(params.out.num_pages, params.pages_per_unit)
+                                                 : params.out.num_pages * params.chunks_per_page;
 
-    params.source_alignment = std::max(input_alignment, kNocWordBytes);
+    // Staged bytes start on source_alignment boundaries of L1: a DRAM read must land at its source's offset
+    // within that alignment (64 bytes on Blackhole).
+    const uint32_t alignment = std::max(input_alignment, kNocWordBytes);
+    params.source_alignment = alignment;
     params.records_per_entry = kRecordsPerEntry;
     params.header_bytes =
-        tt::round_up((kGatherHeaderWords + kGatherRecordWords * kRecordsPerEntry) * sizeof(uint32_t), kNocWordBytes);
-    // Worst case for one fragment: its bytes plus the misalignment of its source, rounded to a NOC word.
-    const uint32_t worst_fragment_span =
-        tt::round_up(max_fragment_bytes + params.source_alignment + kNocWordBytes, kNocWordBytes);
-    params.stage_data_bytes = std::max(kStageDataBytes, worst_fragment_span);
-    params.stage_entry_bytes = params.header_bytes + params.stage_data_bytes;
+        tt::round_up((kGatherHeaderWords + kGatherRecordWords * kRecordsPerEntry) * sizeof(uint32_t), alignment);
+    // Worst case for one fragment: its bytes plus the misalignment of its source, rounded to the alignment.
+    const uint32_t worst_fragment_span = tt::round_up(max_fragment_bytes + alignment, alignment);
+    params.stage_data_bytes = tt::round_up(std::max(kStageDataBytes, worst_fragment_span), alignment);
+    // One alignment of slack: the reader starts the data at the first aligned address after the header.
+    params.stage_entry_bytes = params.header_bytes + params.stage_data_bytes + alignment;
     params.num_stage_entries = kNumStageEntries;
     return params;
 }

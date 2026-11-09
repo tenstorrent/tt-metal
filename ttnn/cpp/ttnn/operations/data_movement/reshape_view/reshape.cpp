@@ -4,6 +4,7 @@
 
 #include <bit>
 #include <functional>
+#include <mutex>
 #include <type_traits>
 #include <utility>
 #include <variant>
@@ -936,11 +937,27 @@ ttnn::Tensor ttnn::reshape(
         case ReshapeExecutionPolicy::Legacy: output = run(reshape_legacy); break;
         case ReshapeExecutionPolicy::New: output = run(reshape_new); break;
         case ReshapeExecutionPolicy::Compare: {
+            if (!compare_readback_allowed(tensor)) {
+                static std::once_flag skipped_warned;
+                std::call_once(skipped_warned, [] {
+                    log_warning(
+                        tt::LogOp,
+                        "TT_METAL_EXECUTION_POLICY_RESHAPE=compare: outputs cannot be read back during trace capture "
+                        "or NO_DISPATCH graph capture; only the new implementation runs there. Emitted once per "
+                        "process.");
+                });
+                output = run(reshape_new);
+                break;
+            }
             // Legacy runs first so a new-path failure cannot hide behind it. A case legacy rejects is one the
             // new implementation is meant to add, so it is reported and the new result returned unchecked.
+            // Its output moves to host before new runs, so both never hold device memory at once.
             std::optional<ttnn::Tensor> legacy_output;
             try {
                 legacy_output = run(reshape_legacy);
+                if (is_device_tensor(*legacy_output)) {
+                    legacy_output = legacy_output->cpu();
+                }
             } catch (const std::exception& e) {
                 log_warning(
                     tt::LogOp,
