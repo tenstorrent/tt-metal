@@ -129,10 +129,9 @@ jobs:
         # Same fork gate as ccache: forks have no secrets so skip silently.
         # ctcache is writable from all non-fork refs (including PR branches)
         # so repeated commits to a branch benefit from cached clang-tidy results.
-        # TEMP: skipped on GitHub-hosted runners. It exports the in-cluster HTTP(S)_PROXY to
-        # every later step, which breaks all network access off-cluster. Without it the
-        # wrapper runs plain clang-tidy, as for fork PRs.
-        if: ${{ false && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false) }}
+        # S3 is optional: the ctcache/S3/proxy environment is exported only when Garage
+        # answers. Otherwise nothing is exported and clang-tidy runs uncached (slower).
+        if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false }}
         run: |
           # ctcache is not published on PyPI — install from pinned commit SHA (tag 1.2.0)
           # Pinned to SHA (not tag) to avoid supply-chain risk from mutable git tags
@@ -140,20 +139,6 @@ jobs:
 
           # Namespace encodes the clang-tidy version so a toolchain upgrade auto-invalidates
           CT_VERSION="23"
-          {
-            echo "CTCACHE_S3_BUCKET=ctcache"
-            echo "CTCACHE_S3_FOLDER=ct${CT_VERSION}"
-            echo "CTCACHE_KEEP_COMMENTS=1"
-            # Note: CTCACHE_SAVE_OUTPUT is intentionally NOT set — S3 store_in_cache_with_data
-            # is a TODO no-op in ctcache 1.2.0, so saving output would silently write nothing.
-            echo "AWS_ACCESS_KEY_ID=${{ secrets.GARAGE_S3_ACCESS_KEY }}"
-            echo "AWS_SECRET_ACCESS_KEY=${{ secrets.GARAGE_S3_SECRET_KEY }}"
-            echo "AWS_ENDPOINT_URL=http://garage.garage.svc.cluster.local:3900"
-            echo "AWS_DEFAULT_REGION=garage"
-            echo "HTTP_PROXY=http://proxy.restricted-proxy.svc.cluster.local:3128"
-            echo "HTTPS_PROXY=http://proxy.restricted-proxy.svc.cluster.local:3128"
-          } >> "$GITHUB_ENV"
-          echo "ctcache S3 folder: ct${CT_VERSION}"
           # Pre-resolve the ctcache binary once so the per-TU wrapper script
           # skips a repeated PATH scan across thousands of invocations.
           CTCACHE_BIN=$(command -v clang-tidy-cache || true)
@@ -166,14 +151,14 @@ jobs:
             -x "http://proxy.restricted-proxy.svc.cluster.local:3128" \
             http://garage.garage.svc.cluster.local:3900/ || echo "Garage root: curl failed (unreachable)"
 
-          # Verify connectivity — warn but don't fail if Garage is unreachable
-          AWS_ACCESS_KEY_ID="${{ secrets.GARAGE_S3_ACCESS_KEY }}" \
-          AWS_SECRET_ACCESS_KEY="${{ secrets.GARAGE_S3_SECRET_KEY }}" \
-          AWS_ENDPOINT_URL="http://garage.garage.svc.cluster.local:3900" \
-          AWS_DEFAULT_REGION="garage" \
-          HTTP_PROXY="http://proxy.restricted-proxy.svc.cluster.local:3128" \
-          HTTPS_PROXY="http://proxy.restricted-proxy.svc.cluster.local:3128" \
-          python3 - << 'PYEOF'
+          # Verify connectivity; export the S3 and proxy environment only if Garage answers.
+          if AWS_ACCESS_KEY_ID="${{ secrets.GARAGE_S3_ACCESS_KEY }}" \
+             AWS_SECRET_ACCESS_KEY="${{ secrets.GARAGE_S3_SECRET_KEY }}" \
+             AWS_ENDPOINT_URL="http://garage.garage.svc.cluster.local:3900" \
+             AWS_DEFAULT_REGION="garage" \
+             HTTP_PROXY="http://proxy.restricted-proxy.svc.cluster.local:3128" \
+             HTTPS_PROXY="http://proxy.restricted-proxy.svc.cluster.local:3128" \
+             python3 - << 'PYEOF'
           import boto3, botocore, os, sys
           print(f"Endpoint: {os.environ.get('AWS_ENDPOINT_URL', '')}")
           print(f"HTTP_PROXY: {os.environ.get('HTTP_PROXY', '(not set)')}")
@@ -187,20 +172,37 @@ jobs:
               )
               s3.list_objects_v2(Bucket="ctcache", MaxKeys=1)
               print("ctcache Garage S3 connection OK")
-              # Signal to downstream steps that S3 is reachable
-              with open(os.environ["GITHUB_ENV"], "a") as f:
-                  f.write("CTCACHE_S3_OK=1\n")
           except Exception as e:
               print(f"::warning::ctcache Garage S3 unreachable ({e}) — analysis will run without caching")
-              sys.exit(0)
+              sys.exit(1)
           PYEOF
+          then
+            {
+              echo "CTCACHE_S3_OK=1"
+              echo "CTCACHE_S3_BUCKET=ctcache"
+              echo "CTCACHE_S3_FOLDER=ct${CT_VERSION}"
+              echo "CTCACHE_KEEP_COMMENTS=1"
+              # Note: CTCACHE_SAVE_OUTPUT is intentionally NOT set — S3 store_in_cache_with_data
+              # is a TODO no-op in ctcache 1.2.0, so saving output would silently write nothing.
+              echo "AWS_ACCESS_KEY_ID=${{ secrets.GARAGE_S3_ACCESS_KEY }}"
+              echo "AWS_SECRET_ACCESS_KEY=${{ secrets.GARAGE_S3_SECRET_KEY }}"
+              echo "AWS_ENDPOINT_URL=http://garage.garage.svc.cluster.local:3900"
+              echo "AWS_DEFAULT_REGION=garage"
+              echo "HTTP_PROXY=http://proxy.restricted-proxy.svc.cluster.local:3128"
+              echo "HTTPS_PROXY=http://proxy.restricted-proxy.svc.cluster.local:3128"
+            } >> "$GITHUB_ENV"
+            echo "ctcache S3 folder: ct${CT_VERSION}"
+          else
+            echo "ctcache disabled for this run: S3/proxy environment not exported."
+          fi
 
       - name: Test S3 write+readback
         # The probe above only confirms S3 *reads* work; writes can fail silently
         # (IAM policy, ACL, proxy stripping PUT) with nothing to catch it. Writes,
         # reads back, and deletes a per-invocation sentinel object; warns (does not
         # fail the job) on error so a broken ctcache doesn't block clang-tidy analysis.
-        if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false }}
+        # Runs only when the probe above reached S3 (it also installs boto3).
+        if: ${{ env.CTCACHE_S3_OK == '1' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false) }}
         run: |
           python3 - << 'PYEOF'
           import os, sys, uuid
