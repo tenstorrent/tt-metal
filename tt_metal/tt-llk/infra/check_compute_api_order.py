@@ -45,7 +45,6 @@ import json
 import os
 import re
 import shutil
-import subprocess
 import sys
 import textwrap
 from pathlib import Path
@@ -2208,6 +2207,10 @@ def analyze_entry(entry: dict, table: RuleTable, cfg) -> tuple[Optional[Analyzer
 
 
 def _configure_libclang(explicit: Optional[str]):
+    # libclang cannot be re-pointed after it is loaded (e.g. calling main() twice
+    # in the same process); the first configuration wins.
+    if ci.Config.loaded:
+        return
     if explicit:
         ci.Config.set_library_file(explicit)
         return

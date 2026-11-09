@@ -15,7 +15,6 @@ import importlib.util
 import json
 import os
 import re
-import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -252,10 +251,10 @@ def test_cli_compile_db(checker, tmp_path):
         json.dumps([{"directory": str(REPO), "file": str(fixture), "arguments": args}])
     )
     out = tmp_path / "report.json"
-    proc = subprocess.run(
+    # Exercise the CLI argument path in-process: no OS command is constructed
+    # from the compile database or any other external input.
+    rc = checker.main(
         [
-            sys.executable,
-            str(CHECKER),
             "--compile-db",
             str(db),
             "--format",
@@ -264,12 +263,9 @@ def test_cli_compile_db(checker, tmp_path):
             str(out),
             "--sfpi",
             str(sfpi),
-        ],
-        cwd=REPO,
-        capture_output=True,
-        text=True,
+        ]
     )
-    assert proc.returncode == 0, proc.stderr
+    assert rc == 0
     payload = json.loads(out.read_text())
     assert payload["summary"]["by_rule"] == {"missing-init": 1}
     assert payload["units"] and payload["units"][0]["thread"] == "MATH"
