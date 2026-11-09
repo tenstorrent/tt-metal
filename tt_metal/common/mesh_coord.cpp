@@ -31,6 +31,9 @@ namespace {
 MeshCoordinate shape_back(const MeshShape& shape) {
     ttsl::SmallVector<uint32_t> coords;
     for (int i = 0; i < shape.dims(); i++) {
+        // An empty mesh has no last coordinate: shape[i] - 1 would wrap to 4294967295 and the
+        // inclusive range would claim to span four billion coordinates.
+        TT_FATAL(shape[i] > 0, "MeshShape dimension {} must be greater than zero, got {}", i, shape[i]);
         coords.push_back(shape[i] - 1);
     }
     return MeshCoordinate(coords);
