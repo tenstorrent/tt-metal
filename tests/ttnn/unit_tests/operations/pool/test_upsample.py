@@ -659,3 +659,120 @@ def test_upsample_nearest_float_rejects_uint32_overflow(device, expect_error):
     )
     with expect_error(RuntimeError, "overflows uint32"):
         ttnn.upsample(input_tensor, [1e10, 1.0], mode="nearest")
+
+
+@pytest.mark.parametrize("scale_factor", [(2, 2), (1.5, 1.5)], ids=["int_scale", "float_scale"])
+@pytest.mark.parametrize(
+    "direction",
+    ["sharded_to_dram", "sharded_to_l1", "dram_to_sharded", "l1_to_sharded", "sharded_2c_to_sharded_4c"],
+)
+def test_upsample_nearest_sharded_interleaved_memory_configs(device, scale_factor, direction):
+    torch.manual_seed(0)
+    batch_size, num_channels, height, width = 1, 64, 4, 4
+    input_nchw = torch.randn([batch_size, num_channels, height, width], dtype=torch.bfloat16)
+    input_nhwc = input_nchw.permute(0, 2, 3, 1)
+
+    torch_result = nn.functional.interpolate(input_nchw, scale_factor=scale_factor, mode="nearest").permute(0, 2, 3, 1)
+    out_h, out_w = torch_result.shape[1], torch_result.shape[2]
+
+    in_grid_2c = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0))})
+    out_grid_4c = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0))})
+
+    in_sharded_mc = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(in_grid_2c, (batch_size * height * width // 2, num_channels), ttnn.ShardOrientation.ROW_MAJOR),
+    )
+    out_sharded_2c_mc = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(
+            in_grid_2c,
+            (math.ceil(batch_size * out_h * out_w / 2), num_channels),
+            ttnn.ShardOrientation.ROW_MAJOR,
+        ),
+    )
+    out_sharded_4c_mc = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(
+            out_grid_4c,
+            (math.ceil(batch_size * out_h * out_w / 4), num_channels),
+            ttnn.ShardOrientation.ROW_MAJOR,
+        ),
+    )
+
+    if direction == "sharded_to_dram":
+        input_mc, output_mc = in_sharded_mc, ttnn.DRAM_MEMORY_CONFIG
+    elif direction == "sharded_to_l1":
+        input_mc, output_mc = in_sharded_mc, ttnn.L1_MEMORY_CONFIG
+    elif direction == "dram_to_sharded":
+        input_mc, output_mc = ttnn.DRAM_MEMORY_CONFIG, out_sharded_2c_mc
+    elif direction == "l1_to_sharded":
+        input_mc, output_mc = ttnn.L1_MEMORY_CONFIG, out_sharded_2c_mc
+    else:
+        input_mc, output_mc = in_sharded_mc, out_sharded_4c_mc
+
+    input_tensor = ttnn.from_torch(
+        input_nhwc, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=input_mc
+    )
+    output_tensor = ttnn.upsample(input_tensor, list(scale_factor), mode="nearest", memory_config=output_mc)
+    assert output_tensor.memory_config().memory_layout == output_mc.memory_layout
+    assert output_tensor.memory_config().buffer_type == output_mc.buffer_type
+
+    output_torch = ttnn.to_torch(output_tensor)
+    assert torch.equal(output_torch, torch_result)
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
+@pytest.mark.parametrize("num_channels", [64, 512])
+@pytest.mark.parametrize("target_output", ["dram", "l1", "sharded_4c"])
+def test_upsample_bilinear_sharded_input_with_output_memory_config(device, num_channels, target_output):
+    torch.manual_seed(0)
+    batch_size, height, width = 1, 4, 4
+    scale_h, scale_w = 2, 2
+    input_nhwc = torch.randn((batch_size, height, width, num_channels), dtype=torch.bfloat16)
+    torch_result = golden_upsample(input_tensor=input_nhwc, scale_factor=(scale_h, scale_w), mode="bilinear")
+
+    in_grid_2c = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0))})
+    in_sharded_mc = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(in_grid_2c, (batch_size * height * width // 2, num_channels), ttnn.ShardOrientation.ROW_MAJOR),
+    )
+
+    if target_output == "dram":
+        output_mc = ttnn.DRAM_MEMORY_CONFIG
+    elif target_output == "l1":
+        output_mc = ttnn.L1_MEMORY_CONFIG
+    else:
+        out_grid_4c = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0))})
+        out_sticks = batch_size * height * scale_h * width * scale_w
+        output_mc = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(out_grid_4c, (out_sticks // 4, num_channels), ttnn.ShardOrientation.ROW_MAJOR),
+        )
+
+    input_tensor = ttnn.from_torch(input_nhwc, device=device, memory_config=ttnn.L1_MEMORY_CONFIG)
+    input_tensor = ttnn.to_memory_config(input_tensor, memory_config=in_sharded_mc)
+
+    compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.LoFi,
+        math_approx_mode=False,
+        fp32_dest_acc_en=False,
+    )
+    output_tensor = ttnn.upsample(
+        input_tensor,
+        (scale_h, scale_w),
+        mode="bilinear",
+        memory_config=output_mc,
+        compute_kernel_config=compute_kernel_config,
+    )
+    assert output_tensor.memory_config().memory_layout == output_mc.memory_layout
+    assert output_tensor.memory_config().buffer_type == output_mc.buffer_type
+
+    output_torch = ttnn.to_torch(output_tensor)
+    passing, _ = check_with_pcc_without_tensor_printout(torch_result, output_torch, pcc=0.999)
+    assert passing
+    assert torch.allclose(output_torch, torch_result, atol=1e-1, rtol=5e-2)
