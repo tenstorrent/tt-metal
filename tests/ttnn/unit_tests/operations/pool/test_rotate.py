@@ -362,6 +362,85 @@ def test_uneven_height_sharded_memory(device, interpolation_mode, input_shape, n
     assert comparison_passed, f"{interpolation_mode} uneven height sharded test failed"
 
 
+@skip_for_blackhole("Incorrect result on BH: https://github.com/tenstorrent/tt-metal/issues/36263")
+@pytest.mark.parametrize("interpolation_mode", ["nearest", "bilinear"])
+@pytest.mark.parametrize("interleaved_buffer", ["DRAM", "L1"])
+@pytest.mark.parametrize(
+    "direction",
+    ["sharded_to_interleaved", "interleaved_to_sharded", "sharded_to_different_sharded"],
+)
+def test_rotate_mixed_sharded_and_interleaved_memory_configs(
+    device, interpolation_mode, interleaved_buffer, direction
+):
+    """Test transitions between HEIGHT_SHARDED and INTERLEAVED (or distinct HEIGHT_SHARDED) memory_configs."""
+    torch.manual_seed(0)
+
+    input_shape = (1, 10, 10, 64)
+    angle = 45.0
+    torch_input_nhwc = torch.randn(input_shape, dtype=torch.bfloat16)
+
+    golden_function = ttnn.get_golden_function(ttnn.rotate)
+    torch_output_nhwc = golden_function(torch_input_nhwc, angle=angle, interpolation_mode=interpolation_mode)
+
+    shard_spec_2cores = ttnn.ShardSpec(
+        ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0))}),
+        (64, input_shape[3]),
+        ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    sharded_cfg_2cores = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec_2cores
+    )
+
+    # 4-core grid where core 3 has 0 real sticks (100 sticks, shard_height=36 -> 3 active cores on a 4-core grid)
+    shard_spec_4cores = ttnn.ShardSpec(
+        ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0))}),
+        (36, input_shape[3]),
+        ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    sharded_cfg_4cores = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec_4cores
+    )
+
+    interleaved_cfg = ttnn.DRAM_MEMORY_CONFIG if interleaved_buffer == "DRAM" else ttnn.L1_MEMORY_CONFIG
+
+    if direction == "sharded_to_interleaved":
+        in_cfg, out_cfg = sharded_cfg_2cores, interleaved_cfg
+    elif direction == "interleaved_to_sharded":
+        in_cfg, out_cfg = interleaved_cfg, sharded_cfg_4cores
+    else:
+        in_cfg, out_cfg = sharded_cfg_2cores, sharded_cfg_4cores
+
+    ttnn_input = ttnn.from_torch(
+        torch_input_nhwc, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=in_cfg
+    )
+    ttnn_output = ttnn.rotate(
+        ttnn_input, angle=angle, interpolation_mode=interpolation_mode, memory_config=out_cfg
+    )
+    ttnn_output_torch = ttnn.to_torch(ttnn_output)
+
+    atol, rtol = get_rotate_tolerances(input_shape, angle, interpolation_mode)
+    assert torch.allclose(torch_output_nhwc, ttnn_output_torch, atol=atol, rtol=rtol)
+
+
+@pytest.mark.parametrize("interpolation_mode", ["nearest", "bilinear"])
+def test_rotate_rejects_non_height_sharded_output_memory_config(device, interpolation_mode, expect_error):
+    """Test that validate_inputs rejects WIDTH_SHARDED output memory_config."""
+    input_shape = (1, 8, 8, 64)
+    ttnn_input = ttnn.from_torch(
+        torch.randn(input_shape, dtype=torch.bfloat16), layout=ttnn.ROW_MAJOR_LAYOUT, device=device
+    )
+    width_shard_spec = ttnn.ShardSpec(
+        ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0))}),
+        (64, 32),
+        ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    width_sharded_cfg = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, width_shard_spec
+    )
+    with expect_error(RuntimeError, "Only height sharding is supported"):
+        ttnn.rotate(ttnn_input, angle=45.0, interpolation_mode=interpolation_mode, memory_config=width_sharded_cfg)
+
+
 # ============================================================================
 # Data Type Tests
 # ============================================================================
