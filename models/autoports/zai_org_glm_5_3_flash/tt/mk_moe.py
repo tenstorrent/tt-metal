@@ -31,6 +31,10 @@ from models.autoports.zai_org_glm_5_3_flash.tt.mk_readers import MMPhase, Reader
 BF16, FP32 = ttnn.bfloat16, ttnn.float32
 L1, DRAM = ttnn.L1_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG
 TILE = 32
+# the allocator before any AllocPool patches ttnn.empty (mk_stack.AllocPool binds a build's intermediates to pool
+# tensors): the persistent m must not come from the pool (a later layer takes it from `persist`, leaving the pool's
+# request of that key free for another same-shape intermediate of the build)
+_EMPTY = ttnn.empty
 # semaphores: owners + root 0..3 (mhc_pre); readers HN / M / TAIL (+ ReaderExperts' 10..14); owners LOGITS / GU / Y
 SEM_HN, SEM_LOGITS, SEM_GU, SEM_Y, SEM_M, SEM_TAIL = 4, 5, 6, 7, 8, 9
 SWI_CB0 = 18  # swiglu's CBs on the owners: 18..20 (mhc_pre 0..13, mhc_post 21..28, router tail 32..36)
@@ -125,7 +129,9 @@ class MkMoE:
         # whose post phase waited for every reader's y (the down readers read m before that) -- 10 x 2 KB per L1
         # bank under the 45-layer stack (the 8x4 sharded B = 16 floor: 2026-11-06 program.cpp CB / L1 clash by 640 B).
         mrows = -(-t // TILE) * TILE
-        m = self._persistent(("m", mrows), lambda: mk((1, 1, mrows, self.shared_i), BF16))
+        m = self._persistent(
+            ("m", mrows), lambda: _EMPTY((1, 1, mrows, self.shared_i), BF16, ttnn.TILE_LAYOUT, dev, L1)
+        )
         ids = mk((1, 1, t, self.experts.top_k), ttnn.uint16)
         scores = mk((1, 1, t, self.experts.e), BF16)
         # GLM53_MKX_RW (default on): the router tail computes the rows' routing weights (one [t, 8] bf16 row each, the

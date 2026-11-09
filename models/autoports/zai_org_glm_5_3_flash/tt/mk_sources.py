@@ -161,7 +161,36 @@ class MkTileCacheSource(TileCacheSource):
         if not os.path.isfile(mp):
             with open(mp, "w") as f:
                 json.dump({"tensors": {}, "tt_metal_sha": ""}, f)
-        return cls(cache_dir, mp, inner=inner)
+        src = cls(cache_dir, mp, inner=inner)
+        if inner is not None:
+            src._seed_head()
+        return src
+
+    HEAD = ("lm_head.weight", "norm.weight", "embed_tokens.weight")
+
+    def _seed_head(self) -> None:
+        """the head's entries (mk_head reads ``source.tensors[name]`` directly, never through ``_entry``): the ones the
+        manifest lacks are built from the HF source into the cache (what tools/tile_cache_build.py does from v2's
+        head.pt), so a first run on an empty cache does not die at the head load after building every layer"""
+        import hashlib
+
+        added = 0
+        for name in self.HEAD:
+            if name in self.tensors:
+                continue
+            e = self.inner.tensors[name]
+            h = self.inner._load(e)  # the host tensor in its cache dtype / TILE layout
+            rel = f"{name}.tensorbin"
+            full = os.path.join(self.cache_dir, rel)
+            ttnn.dump_tensor(full, h, mode=ttnn.DumpTensorMode.LOCAL)
+            self.tensors[name] = {"path": rel, "shape": [int(v) for v in h.shape],
+                                  "dtype": str(h.dtype).split(".")[-1].lower(), "layout": "TILE",
+                                  "sha256": hashlib.sha256(name.encode()).hexdigest(), "bytes": os.path.getsize(full)}  # fmt: skip
+            added += 1
+        if added:
+            self._added += added
+            self.save_manifest()
+            logger.info(f"MkTileCacheSource: {added} head tensors built from the HF source")
 
     def complete(self) -> None:
         """the manifest saved and COMPLETE written (a later run reads every tensor from the cache)"""
@@ -186,11 +215,15 @@ class MkTileCacheSource(TileCacheSource):
             full = os.path.join(self.cache_dir, rel)
             os.makedirs(os.path.dirname(full), exist_ok=True)
             ttnn.dump_tensor(full, h, mode=ttnn.DumpTensorMode.LOCAL)
+            # ("sha256" = the KEY's digest, as tools/tile_cache_build.py writes it: the reference format's identity field,
+            # not a checksum of the bytes)
             self.tensors[key] = {"path": rel, "shape": [int(v) for v in t.shape], "dtype": str(dt).split(".")[-1].lower(),
                                  "layout": "TILE", "sha256": hashlib.sha256(key.encode()).hexdigest(),
                                  "bytes": os.path.getsize(full)}  # fmt: skip
             self._added += 1
-            if self._added % 64 == 1 or name.endswith("down_proj") and ".experts.287." in name:
+            # BUILD mode: every 64 (and at the last expert of a layer), complete() saves the rest; READ mode (a COMPLETE
+            # cache extended by e.g. the MTP layer): every addition, since nothing else saves it
+            if self.ready or self._added % 64 == 1 or (name.endswith("down_proj") and ".experts.287." in name):
                 self.save_manifest()
             if self._added == 1:
                 logger.info(f"MkTileCacheSource: building layer {layer_idx} on demand from the HF source ({name} ...)")

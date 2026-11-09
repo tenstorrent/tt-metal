@@ -85,7 +85,8 @@ void kernel_main() {
     // ---- I5 coordinator
     invalidate_l1_cache();
     volatile tt_l1_ptr int32_t* pos_l1 = reinterpret_cast<volatile tt_l1_ptr int32_t*>(scr);
-    // CB_CSCR (512 B): cur_pos [0, POS_BYTES) (32 rows), the round message [POS_BYTES, + 64), the quotas after it
+    // CB_CSCR (512 B): cur_pos [0, POS_BYTES) (32 rows), the round message [POS_BYTES, + MSG_SLOT: 64 B, 128 on the
+    // 8x4 shard = QUOTA_SLOTS x MSG_BYTES), the quotas after it
     constexpr uint32_t MSG_OFF = mladsa::POS_BYTES;
 #if defined(MLA_DSA_SHARD)
     // the message slot holds the tie quotas of the NCHIPS merge helpers (dsa_shard.hpp QUOTA_SLOTS x 16 B: 32 at the

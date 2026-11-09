@@ -45,10 +45,11 @@ TP_ALLREDUCE_GATHER_ROWS = 32  # gather-mode all-reduce (GLM53_TP_ALLREDUCE=gath
 TP_ALLREDUCE_INPUT_ENV = "GLM53_TP_ALLREDUCE_INPUT"
 
 
-def mesh_device_params(rows: int, cols: int, **overrides) -> dict:
+def mesh_device_params(rows: int, cols: int, fabric: str | None = None, **overrides) -> dict:
     """``device_params`` for the pytest ``mesh_device`` fixture: fabric on for any multi-chip
     mesh (2D torus on the full Galaxy, plain 2D for a block), relaxed init, the architecture's
-    maximum fabric payload, an L1-small region for the composite collectives."""
+    maximum fabric payload, an L1-small region for the composite collectives. ``fabric``: an
+    explicit choice (torus | 2d | 1d | 1d_ring) ahead of GLM53_FABRIC and the default."""
     params: dict = {"l1_small_size": 32768}
     if rows * cols > 1:
         import os
@@ -65,7 +66,7 @@ def mesh_device_params(rows: int, cols: int, **overrides) -> dict:
             if os.environ.get("GLM53_MOE_LAYOUT", "hybrid") == "ep"
             else ("torus" if (rows, cols) == (8, 4) else "2d")
         )
-        fabric = os.environ.get("GLM53_FABRIC", default)
+        fabric = fabric or os.environ.get("GLM53_FABRIC", default)
         params["fabric_config"] = {
             "torus": ttnn.FabricConfig.FABRIC_2D_TORUS_XY,
             "2d": ttnn.FabricConfig.FABRIC_2D,

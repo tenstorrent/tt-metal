@@ -94,19 +94,22 @@ Prefill runs 3.0-3.7 K tok/s flat from 32 K to 1 M (the TP prefill path, unchang
 +7-8 ms per decode step at 4 K / 32 K against the unsharded TP32 (the optimisation item), and the per-user decode
 at 128 K x 8 (43.3 ms) is the first measurement of the sharded split-K at 8 token lanes on 32 helpers.
 
-## 7. Open: B = 16 (the L1 floor)
+## 7. The L1 floor (B = 16): closed
 
-`program.cpp validate_circular_buffer_region`: "Statically allocated circular buffers in program N clash with L1
-buffers on core range [0-1 - 0-7]. L1 buffer allocated at 1253248 and static circular buffer region ends at
-1253888" from `tp_dsa.TPMoE.__call__` (the MoE decode program at t = 16, `stack_model.prepare_decode`). The check
-compares every CB core range of the program against the mesh-wide lowest L1 buffer address, so the reported 640 B
-is the first clashing allocator, not the maximum. The unsharded TP32 B = 16 row built the same program; the shard
-adds the stream sync words (4 x 1.5 KB per row count, shared across layers: `GLM53_DSA_SHARD_SHARE_SYNC`) under the
-floor. The 2x4 sharded B = 16 row threw the same with the floor at 1245056. Diagnostic: `GLM53_MK_CB_REPORT=2` (the
-shard CB report, the L1 census with tensors, the MoE CB map of `TPMoE._cb_map`).
+`program.cpp validate_circular_buffer_region` ("Statically allocated circular buffers in program N clash with L1
+buffers ... 1253248 ... 1253888") came from the MoE decode program of `tp_dsa.TPMoE` -- its static CBs are the same
+961,920 B at every row count -- against a floor that every sparse_dsa layer build dragged ~4 KB lower (each layer's
+MLA / MoE call allocated and freed its own intermediates; the small ones fragmented the freed holes, the large ones
+landed below). The fix is in the allocation lifecycle, not the CBs:
 
-Fix (2026-11-06): the sparse_dsa layers share one shared-expert intermediate `m` (`GLM53_MOE_SHARE_M`, default on:
-10 x 2 KB per bank; the floor ended at 1275008 instead of 1253248 and the 32 K B = 16 row passed with identical B = 4
-ids). The remaining drift (2176 B per layer, a row-major per-layer tensor) and the per-call churn go away with
-`GLM53_MLA_SHARE_HANDOFF=1` (opt-in until validated): every layer's per-t MLA / MoE hand-offs come from the first
-layer's dict (MkMla / MkMoE persist), keyed by (t, call order, shape, dtype); keep= pops but never frees them.
+- `GLM53_MOE_SHARE_M` (default on, 0e928122d73): one shared-expert intermediate `m` per stack (10 x 2 KB per bank);
+- `GLM53_DSA_POOL` (default on, faa901ac4c2 .. bbe4485aeea): the sparse_dsa MLA / MoE programs build under an
+  `AllocPool` of their own (`stack_model._dsa_pools` / `_dsa_layer`; s1, the MLA -> MoE hand-off, from its child pool;
+  the alias mode mirrored from the step pool) -- one L1 set for every layer, nothing allocated or freed per layer or
+  capture; the floor sits flat at 1293248 (B = 4) / ~1261000 (B = 16) across all 11 layers.
+  Persisting the hand-offs in a dict (tried first) made the MoE build see the MLA set and clashed; sharing the KDA
+  stacks' pool changed its prefix-alias bases (the v1 two-pool B = 16 row drifted at id 7) -- both superseded.
+
+Validated at HEAD: 32 K x 4 ids identical (27.1 ms), 32 K x 16 (68.7 ms); the longer rows of section 6 were measured
+before the pool landed and are re-run at HEAD for the record. Section 6's 4 K row agrees with the 2x4 shard on the
+first 9 ids (the contract rows are the 32 K ones, identical 24/24).

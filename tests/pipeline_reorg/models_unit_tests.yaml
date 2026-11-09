@@ -2420,6 +2420,8 @@
     pytest --timeout 300 --noconftest models/demos/glm53_flash/tests/test_spec_commit_fused_host.py
     pytest --timeout 300 --noconftest models/demos/glm53_flash/tests/test_spec_commit_gated_host.py
     pytest --timeout 300 --noconftest models/demos/glm53_flash/tests/test_spec_decode_host.py
+    pytest --timeout 300 --noconftest models/demos/glm53_flash/tests/test_shard_plan_8x4.py
+    pytest --timeout 300 --noconftest models/demos/glm53_flash/tests/test_stack_adapter_host.py
   model: glm53-flash
   model_family: GLM
   skus:

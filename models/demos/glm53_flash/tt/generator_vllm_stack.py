@@ -65,7 +65,9 @@ def _fabric_capability() -> dict | None:
     already imported ttnn (the plugin does before it resolves the model class): importing this module stays ttnn-free.
     """
     if "ttnn" not in sys.modules:
-        return None
+        if "vllm" not in sys.modules:  # a host process (the host test keeps this module ttnn-free)
+            return None
+        import ttnn  # noqa: F401  (a vLLM process: the validated fabric must reach the plugin before it opens the mesh)
     try:
         from models.autoports.zai_org_glm_5_3_flash.tt.stack_model import serving_fabric_config
         from models.demos.glm53_flash.tt.mesh import mesh_device_params
@@ -219,16 +221,7 @@ class GLM53StackForCausalLM:
 
         snapshot = _snapshot_dir(hf_config, default_snapshot_dir)
         shape = tuple(int(v) for v in list(mesh_device.shape))
-        applied = GD.apply(shape, seq=seq)
-        if "GLM53_PREFILL_BUCKETS" in applied:
-            # apply's long-prompt buckets (2 K / 8 K) assume a cache that holds them: a shorter cache keeps the ones
-            # that fit (a cache below 2 K falls back to TPPrefill's 256 / 512 / 2048 default)
-            keep = [b for b in (int(v) for v in applied["GLM53_PREFILL_BUCKETS"].split(",")) if b <= seq]
-            if keep:
-                os.environ["GLM53_PREFILL_BUCKETS"] = ",".join(str(b) for b in keep)
-            else:
-                del os.environ["GLM53_PREFILL_BUCKETS"]
-            applied["GLM53_PREFILL_BUCKETS"] = os.environ.get("GLM53_PREFILL_BUCKETS")
+        applied = GD.apply(shape, seq=seq)  # (its prefill buckets are the ones that fit `seq`)
         logger.info(f"GLM53 stack vLLM: mesh {shape}, max_num_seqs {B}, max_model_len {seq}, galaxy defaults {applied}")
         cfg = load_hf_text_config(str(snapshot))
         source = install_weight_source(snapshot, cfg)
@@ -381,7 +374,10 @@ class GLM53StackForCausalLM:
             chunk[i, : lens[i]] = tokens[i, starts[i] : ends[i]].to(torch.int64)
         if page_table is None:
             raise ValueError("prefill_forward needs the rows' page table")
-        rows = trim_page_rows(page_table)[:B]
+        rows = trim_page_rows(page_table)
+        if len(rows) < B:
+            raise ValueError(f"prefill page_table has {len(rows)} rows for {B} prompts")
+        rows = rows[:B]
         params = None
         if sampling_params is not None:
             params = [row_params(sampling_params, i) for i in range(B)]
@@ -493,9 +489,8 @@ class GLM53StackForCausalLM:
         free slot (``remap_slots`` orders chains itself and refuses a cycle without a free scratch slot)."""
         if slot_remap is None:
             return None
-        remap = [int(v) for v in torch.as_tensor(slot_remap).reshape(-1).tolist()]
         live = set(self.gen.live_slots(kv))
-        moves = {src: dst for dst, src in enumerate(remap) if src != dst and src in live}
+        moves = {src: dst for src, dst in self.gen._remap_dict(slot_remap).items() if src in live}
         return moves or None
 
     def read_decode_output(self, tt_out, async_read: bool = False, sample_rows=None):

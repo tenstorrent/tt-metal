@@ -30,11 +30,12 @@ B = int(os.environ.get("GLM53_MK_B", "4"))
 ISL = int(os.environ.get("GLM53_MK_ISL", "128"))
 OSL = int(os.environ.get("GLM53_MK_OSL", "128"))
 SEQ = int(os.environ.get("GLM53_MK_SEQ", str(max(2048, 1 << (ISL + OSL + 64).bit_length()))))
+GALAXY = tuple(MESH) == GD.GALAXY
 # the validated 8x4 configuration (tt/galaxy_defaults.py: TP32 x EP32, the sequence-sharded DSA pool, the TP prefill with
-# the indexer, the pooled intermediates; the trace region / buckets / sparse ladder from SEQ): every knob an explicit
-# environment value does not already set -- before the mesh parameters below read GLM53_FABRIC
-DEFAULTS = GD.apply(MESH, SEQ, ISL)
-TRACE_MB = int(os.environ.get("GLM53_MODEL_TRACE_MB", "512"))
+# the indexer, the pooled intermediates; the trace region / buckets / sparse ladder from SEQ) is applied INSIDE the test
+# (never at collection: it would set every later-imported test's environment); the mesh parameters below take the
+# trace region and the fabric directly
+TRACE_MB = int(os.environ.get("GLM53_MODEL_TRACE_MB", str(GD.trace_mb(SEQ)) if GALAXY else "512"))
 # the reference's SERVED worker L1 (pmk_layer WORKER_L1_SERVED): 16 KB more allocatable L1 than the mk_dense note's
 # 1,264,512 -- the 45-layer stack sits at that floor (the sharded pool / the attached TP prefill clashed by 1 KB,
 # 2026-11-05: "static circular buffers clash with L1 buffers ... 1269248 ... 1270272")
@@ -82,7 +83,14 @@ def chat_prompt(tok, isl: int, user: int = 0) -> list[int]:
 @pytest.mark.timeout(7000)
 @pytest.mark.parametrize(
     "device_params",
-    [mesh_device_params(*MESH, trace_region_size=TRACE_MB << 20, worker_l1_size=WORKER_L1)],
+    [
+        mesh_device_params(
+            *MESH,
+            trace_region_size=TRACE_MB << 20,
+            worker_l1_size=WORKER_L1,
+            fabric=GD.KNOBS["GLM53_FABRIC"] if GALAXY else None,
+        )
+    ],
     indirect=True,
 )
 @pytest.mark.parametrize("mesh_device", [MESH], indirect=True)
@@ -91,6 +99,7 @@ def test_mk_e2e(mesh_device, monkeypatch):
     from models.autoports.zai_org_glm_5_3_flash.tt.stack_model import StackBackend
     from models.autoports.zai_org_glm_5_3_flash.tt.tokenizer_chat import load_tokenizer
 
+    DEFAULTS = GD.apply(MESH, SEQ, ISL)  # every knob an explicit environment value does not already set
     snapshot = default_snapshot_dir()
     cfg = load_hf_text_config(str(snapshot))
     tok = load_tokenizer(snapshot)
@@ -149,6 +158,17 @@ def test_mk_e2e(mesh_device, monkeypatch):
     logger.info(f"MK_E2E_TEXT: {text!r}")
     logger.info(f"MK_E2E counters: {gen.counters_report()}")
     assert n_gen >= 1
+    # the gates (a PASS means the numerics, not only the run): identical prompts decode identically across the users;
+    # GLM53_MK_EXPECT_IDS="785,1196,702,3267,..." = user 0's first ids of the validated row for this configuration;
+    # GLM53_MK_MIN_TOKS = the decode floor in tok/s per user (a regression below it fails the row)
+    if live > 1 and os.environ.get("GLM53_MK_DISTINCT", "0") != "1":
+        assert same, f"identical prompts, different outputs: {[o[:12] for o in outs]}"
+    expect = [int(v) for v in os.environ.get("GLM53_MK_EXPECT_IDS", "").split(",") if v.strip()]
+    if expect:
+        assert outs[0][: len(expect)] == expect, f"ids {outs[0][: len(expect)]} != the validated {expect}"
+    floor = float(os.environ.get("GLM53_MK_MIN_TOKS", "0") or 0)
+    if floor:
+        assert 1e3 / step_ms >= floor, f"decode {1e3 / step_ms:.1f} tok/s/u < the floor {floor}"
     if isinstance(source, TileCache) and not source.ready:
         source.complete()  # the e2e passed on the tiles it dumped: READ mode from the next run
     if isinstance(source, MkTileCacheSource) and source._added:

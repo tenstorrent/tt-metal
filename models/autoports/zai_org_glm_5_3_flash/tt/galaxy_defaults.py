@@ -49,7 +49,7 @@ def sparse_t(seq: int) -> str:
     seq = int(seq)
     if seq in SPARSE_T:
         return SPARSE_T[seq]
-    step = max(4096, seq // 4)
+    step = max(4096, (seq // 4) // 128 * 128)  # the pooled-key page grid (prefill_tp: t % 128 == 0)
     return ",".join(str(step * k) for k in range(1, 5) if step * k <= seq)
 
 
@@ -62,10 +62,10 @@ def apply(mesh_shape, seq: int, isl: int | None = None) -> dict:
     ladder = sparse_t(int(seq))
     if ladder:
         want["GLM53_PF_SPARSE_T"] = ladder
-    if (
-        isl is None or int(isl) >= 2048
-    ):  # the 2 K / 8 K prefill buckets (a 127-token prompt keeps the 256 / 512 / 2048 defaults)
-        want["GLM53_PREFILL_BUCKETS"] = "2048,8192"
+    # the 2 K / 8 K prefill buckets that fit the cache (a 127-token prompt keeps the 256 / 512 / 2048 defaults; a
+    # 4 K cache gets 2048 alone)
+    if (isl is None or int(isl) >= 2048) and int(seq) >= 2048:
+        want["GLM53_PREFILL_BUCKETS"] = ",".join(str(b) for b in (2048, 8192) if b <= int(seq))
     out = {}
     for k, v in want.items():
         if os.environ.get(k) is None:

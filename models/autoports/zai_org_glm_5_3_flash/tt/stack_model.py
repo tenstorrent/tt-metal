@@ -1010,10 +1010,10 @@ class StackBackend(ModelBackend):
         """a narrow width's step: the t = w embed into its stacked residual, the t = w stacks / sparse_dsa programs on
         the shared 32-row state (rows 0..w-1), the t = w head (top-K / sampling / position advance of rows < w)"""
         rw, masks, pool = kv.extra["nres"][w], kv.extra["nmasks"][w], kv.extra["pool"]
-        pools = self._dsa_pools(kv)
         embed, head = self._narrow_io(w)
         embed(self.head.topk_out, [rw])
         pool.alias = True
+        pools = self._dsa_pools(kv)  # (after the alias flag: the DSA pool mirrors it)
         try:
             for r, stk in kv.extra["nstacks"][w]:
                 if stk is None:
@@ -2100,8 +2100,8 @@ class StackBackend(ModelBackend):
         """the layers at native width w (rows 0..w-1) on the shared 32-row state; the embed / head stay 32-row (rows
         >= w are idle: never read)"""
         rw, masks, pool = kv.extra["wres"][w], kv.extra["wmasks"][w], kv.extra["pool"]
-        pools = self._dsa_pools(kv)
         pool.alias = True  # a width stack's first call builds its program: its intermediates alias the full width's
+        pools = self._dsa_pools(kv)  # (after the alias flag: the DSA pool mirrors it)
         try:
             for r, stk in kv.extra["wstacks"][w]:
                 if stk is None:
