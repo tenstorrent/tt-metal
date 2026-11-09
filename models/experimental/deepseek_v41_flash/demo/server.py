@@ -15,7 +15,9 @@ docstring), on the V4.1 decode model and :class:`DeepSeekV41PrefillModel` instea
   embedding, ``lm_head``, sockets and the Engram host lookup) with no CSA position bias to commit. By default it
   is KV-only (``--prefill-kv-only``): layers 0-20 on stages 0-4, which write all of the shared compressed KV, and
   the last 128 prompt tokens are replayed through decode, which fills the sliding windows of every layer and
-  gives the first token.
+  gives the first token. ``--prefill-all-stages`` (opt-in, KV-only) spreads layers 0-20 over all eight stages
+  instead (three on each of stages 0-4, two on each of stages 5-7), loading a second copy of the routed experts of
+  every layer it moves off its decode stage; to leave the DRAM for them, ``--num-users`` then defaults to 40.
 
 ``GET /models`` and ``GET /v1/models`` return DeepSeek's list-models record (:func:`model_record`).
 
@@ -32,7 +34,7 @@ or ``POST /v1/sessions/<user>/cancel``, and every running turn stops on the live
 
 What V4.1 imposes on the serving side:
 
-* Users. ``--num-users`` sessions (64 by default) stay open at once, each with its own ring and window slot and its
+* Users. ``--num-users`` sessions (64 by default, 40 with ``--prefill-all-stages``) stay open at once, each with its own ring and window slot and its
   own rows of the compressed-KV page tables; their compressed KV shares pools sized for ``--total-context`` tokens (default
   ``num_users * 204800``). At most ``--max-running`` (8, one per stage) generate at once, the rest parked
   or queued; see "Users & KV cache" in the V4 server's docstring. A step decodes one user, and switching users costs no device work: the step's packet
@@ -195,6 +197,10 @@ from models.experimental.deepseek_v4_flash.tt.weight_cache import WeightCache
 from models.experimental.deepseek_v4_flash.tt.weight_loader import DeepseekV4WeightLoader
 
 _NUM_USERS = 64  # default --num-users
+# Default --num-users with --prefill-all-stages. Its expert copies take ~5.7 GB more on each chip of stages 2-4
+# and ~3.8 GB on stages 1 and 5-7; stage 4 also holds the layer-20 pool, so 40 x 204800 tokens (~10.5 GB of
+# its ~17 GB free) leave them room.
+_NUM_USERS_ALL_STAGES = 40
 # Default --max-context (prompt + reply): what one user's page tables address, the model's full context.
 _MAX_CONTEXT = 1048576
 # Default --total-context is --num-users x this. The layer-20 pool costs ~1.25 KiB per token on each chip of
@@ -1127,6 +1133,11 @@ class V41ChatEngine(ChatEngine):
             raise ValueError(f"the vision stage {VISION_STAGE} is past the {num_stages} pipeline stages")
         self.vision = self.images = self.row_writer = None
         self.image_token_id = load_vision_config(loader.snapshot_dir).image_token_id
+        prefill_placement = None
+        if getattr(args, "prefill_all_stages", False):
+            kv_layers = max(i for i in config.kv_source_layer_ids if i < num_layers) + 1
+            prefill_placement = plan_layer_placement(kv_layers, num_stages, 1)
+            logger.info(f"KV-only prefill placement over {num_stages} stages: {prefill_placement}")
         self.model = DeepSeekV41Model(
             config,
             loader,
@@ -1142,6 +1153,7 @@ class V41ChatEngine(ChatEngine):
             layer_submesh_ids=plan_layer_placement(num_layers, num_stages, 1),
             image_rows=args.image_rows if vision else 0,
             vision_stage=VISION_STAGE if vision else None,
+            prefill_layer_submesh_ids=prefill_placement,
         )
         self.lm_head = DeepSeekV41LMHead(
             dequantized(loader, "lm_head.weight", translate=True),
@@ -1317,7 +1329,7 @@ class _V41Prefiller(_Prefiller):
     (the context when unset).
 
     With ``--prefill-kv-only`` (the default) the prefill model is layers 0-20 only (up to the last kv source, on
-    stages 0-4) with no head: they write all of the shared compressed KV. :meth:`aligned` leaves at least the last
+    stages 0-4, or on every stage with ``--prefill-all-stages``) with no head: they write all of the shared compressed KV. :meth:`aligned` leaves at least the last
     ``sliding_window`` (128) prompt tokens to decode, whose replay of them fills every layer's sliding window, the
     rings of layers 21-39 included, and gives the first token's logits.
     """
@@ -1427,7 +1439,7 @@ def parse_args(argv: list[str] | None = None):
         model_dir=str(DEFAULT_MODEL_DIR),
         model_id=os.environ.get("DEEPSEEK_V4_MODEL_ID", "deepseek-v4.1-flash"),
         num_layers=None,
-        num_users=_NUM_USERS,
+        num_users=None,  # _NUM_USERS, or _NUM_USERS_ALL_STAGES with --prefill-all-stages
         max_context=_MAX_CONTEXT,
         total_context=None,
         # None means "no reply cap": a request runs until EOS or the context is full.
@@ -1447,6 +1459,16 @@ def parse_args(argv: list[str] | None = None):
         help="traced prefill of layers 0-20 only (up to the last kv source, no head), the last 128 prompt tokens "
         "replayed through decode to fill the other layers' sliding windows (default: on); "
         "--no-prefill-kv-only prefills all 40 layers",
+    )
+    p.add_argument(
+        "--prefill-all-stages",
+        action=argparse.BooleanOptionalAction,
+        default=os.environ.get("DEEPSEEK_V41_PREFILL_ALL_STAGES", "0") == "1",
+        help="place the KV-only prefill's layers 0-20 evenly over every stage (3 on each of stages 0-4, 2 on each "
+        "of stages 5-7 at the default eight) rather than on their decode stages (0-4), loading a copy of the routed "
+        "experts of each layer moved off its decode stage; needs --prefill-kv-only, and --num-users then defaults "
+        f"to {_NUM_USERS_ALL_STAGES} (instead of {_NUM_USERS}) to leave them the DRAM "
+        "(default: off; DEEPSEEK_V41_PREFILL_ALL_STAGES=1 turns it on, as in tests/prefill/test_prefill_decode_demo.py)",
     )
     p.add_argument(
         "--vision",
@@ -1499,6 +1521,10 @@ def parse_args(argv: list[str] | None = None):
         args.l1_small_size = int(os.environ.get("DEEPSEEK_V4_L1_SMALL_SIZE", _L1_SMALL_SIZE))
     if args.max_new_tokens is None:
         args.max_new_tokens = args.max_context
+    if args.prefill_all_stages and not (args.prefill and args.prefill_kv_only):
+        p.error("--prefill-all-stages places the KV-only prefill: it needs --prefill and --prefill-kv-only")
+    if args.num_users is None:
+        args.num_users = _NUM_USERS_ALL_STAGES if args.prefill_all_stages else _NUM_USERS
     if args.total_context is None:
         args.total_context = max(args.num_users * _KV_TOKENS_PER_USER, args.max_context)
     return check_args(p, args, sys_cfg)

@@ -56,10 +56,23 @@ chunk), ``DEEPSEEK_V4_E2E_TEXT``, ``DEEPSEEK_V4_DECODE_LAYERS``, ``DEEPSEEK_V4_E
 ``DEEPSEEK_V4_MAX_INPUT_PREFILL_CHUNKS``, ``DEEPSEEK_V4_E2E_COMPARE`` (1: also run each prompt through decode only,
 before its prefill, and compare the next-token logits -- the check that the commit is right),
 ``DEEPSEEK_V4_PREFILL_MAX_LEN``, ``DEEPSEEK_V4_TRACE_REGION_SIZE``,
-``DEEPSEEK_V4_L1_SMALL_SIZE``, ``DEEPSEEK_V4_PREFETCHER``, ``DEEPSEEK_V4_GCB_HEADROOM``, ``DEEPSEEK_V4_LONGBENCH``,
+``DEEPSEEK_V4_L1_SMALL_SIZE``, ``DEEPSEEK_V4_PREFETCHER``, ``DEEPSEEK_V4_GCB_HEADROOM``, ``DEEPSEEK_V4_LONGBENCH``
+(default: ``zai-org/LongBench-v2``'s ``data.json`` in the Hugging Face cache, else V4's ``~/smanoj/data.json``),
 ``DEEPSEEK_V4_DEMO_COUNT``, ``DEEPSEEK_V4_LONGBENCH_INDICES``, ``DEEPSEEK_V4_E2E_CONTEXT`` (16384 +
 ``DEEPSEEK_V4_MAX_NEW_TOKENS``, prompt + new tokens), and ``DEEPSEEK_V4_NUM_STAGES`` (8; how many ``1 x 4``
 submeshes are carved from the full 8 x 4 mesh. ``DEEPSEEK_V4_PREFILL_STAGES`` still applies when the former is unset).
+
+``DEEPSEEK_V41_PREFILL_ALL_STAGES=1`` (opt-in) runs the server's KV-only prefill instead, spread over every stage: layers
+``0 .. max(kv_source_layer_ids)`` (0-20) placed by their own even split (``plan_layer_placement(21, 8, 1)``: three
+layers on each of stages 0-4, two on each of stages 5-7) rather than on their decode stages, each moved layer with a
+copy of its routed experts on its prefill stage (see ``DeepSeekV41Model(prefill_layer_submesh_ids=...)``). It has no
+head, so at least the last ``sliding_window`` (128) prompt tokens are replayed through decode, which fills the other
+layers' rings and gives the first token; ``DEEPSEEK_V4_E2E_COMPARE=1`` (a prefill logits check) does not apply.
+
+``DEEPSEEK_V41_PREFILL_HOST_TIMERS=1`` times the host side of every traced prefill chunk and logs, per prompt, each
+part's mean and max per chunk next to the chunk's wall time (see :class:`_HostTimers`): the Engram host lookup and the
+packet write (the run loop's thread), the trace dispatch of every stage (the replay thread) and the wait for the chunk's
+output (the run loop blocked on the device). Parts near the wall time are what bounds the pipeline.
 """
 
 from __future__ import annotations
@@ -67,11 +80,14 @@ from __future__ import annotations
 import contextlib
 import math
 import os
+import queue
 import time
+from pathlib import Path
 from typing import Callable, Optional
 
 import pytest
 import torch
+from huggingface_hub import try_to_load_from_cache
 from loguru import logger
 
 import ttnn
@@ -104,11 +120,15 @@ from models.experimental.deepseek_v41_flash.tt.engram_lookup import (
 )
 from models.experimental.deepseek_v41_flash.tt.model import DeepSeekV41Model
 from models.experimental.deepseek_v41_flash.tt.prefill.model import DeepSeekV41PrefillModel
-from models.experimental.deepseek_v4_flash.tests.prefill.test_full_model_prefill_demo import _Progress, _env_int
+from models.experimental.deepseek_v4_flash.tests.prefill.test_full_model_prefill_demo import (
+    _Progress,
+    _env_int,
+    _report,
+)
 from models.experimental.deepseek_v4_flash.tests.prefill.test_prefill_decode_demo import (
     _DECODE_REPLAY_AHEAD,
     _DEVICE_PARAMS,
-    _LONGBENCH_FILE,
+    _LONGBENCH_FILE as _V4_LONGBENCH_FILE,
     _Prompt,
     _Result,
     _compare_logits,
@@ -128,6 +148,17 @@ from models.experimental.deepseek_v4_flash.tt.weight_loader import DeepseekV4Wei
 # prefill share; the other rows stay idle.
 _NUM_STAGES = pipeline_stage_count()
 _MESH = (8, _TP_SIZE)
+# Opt-in: the KV-only prefill on a placement of its own over every stage (see the module docstring).
+_PREFILL_ALL_STAGES = os.environ.get("DEEPSEEK_V41_PREFILL_ALL_STAGES", "0") == "1"
+# Opt-in: per-chunk host timers of the traced prefill (see the module docstring).
+_HOST_TIMERS = os.environ.get("DEEPSEEK_V41_PREFILL_HOST_TIMERS", "0") == "1"
+# The LongBench v2 questions: DEEPSEEK_V4_LONGBENCH, else zai-org/LongBench-v2's data.json in the Hugging Face cache
+# (``huggingface-cli download zai-org/LongBench-v2 data.json --repo-type dataset``), else V4's default path.
+_LONGBENCH_FILE = _V4_LONGBENCH_FILE
+if "DEEPSEEK_V4_LONGBENCH" not in os.environ:
+    _cached = try_to_load_from_cache("zai-org/LongBench-v2", "data.json", repo_type="dataset")
+    if isinstance(_cached, str):
+        _LONGBENCH_FILE = Path(_cached)
 # LongBench indices of the ``length == "short"`` questions test_prefill_decode_demo answered correctly. Empty until a
 # full-model V4.1 run records them (V4's list does not carry over: those passages are past V4.1's 16384-token context).
 _KNOWN_CORRECT_LONGBENCH: list[int] = []
@@ -235,6 +266,8 @@ def _run(
     compare = os.environ.get("DEEPSEEK_V4_E2E_COMPARE", "0") == "1"
     if chunk_size <= 0 or chunk_size % ALIGNMENT:
         raise ValueError(f"DEEPSEEK_V4_E2E_CHUNK={chunk_size} must be a positive multiple of {ALIGNMENT}")
+    if compare and _PREFILL_ALL_STAGES:
+        raise ValueError("DEEPSEEK_V4_E2E_COMPARE=1 checks prefill's logits; the KV-only prefill has none")
 
     # --- tokenizer, config, prompts ----------------------------------------------------------------- #
     progress.step("[1/6] tokenizer, config and prompts")
@@ -281,6 +314,9 @@ def _run(
     for prompt in prompts:
         real_len = len(prompt.ids)
         aligned = real_len // ALIGNMENT * ALIGNMENT
+        if _PREFILL_ALL_STAGES:
+            # No head: decode's replay of the last window fills the later layers' rings and gives the first token.
+            aligned = max(real_len - config.sliding_window, 0) // ALIGNMENT * ALIGNMENT
         if prefill_max_len:
             aligned = min(aligned, prefill_max_len)
         results.append(_Result(prompt.name, real_len, aligned, expected=prompt.expected))
@@ -306,6 +342,17 @@ def _run(
         owned = [li for li, stage in enumerate(placement) if stage == k]
         spans.append(f"stage {k}: layers {owned[0]}-{owned[-1]}")
     logger.info(f"{num_layers}/{config.num_hidden_layers} layers over {len(spans)} stage(s): " + ", ".join(spans))
+    prefill_placement = None
+    if _PREFILL_ALL_STAGES:
+        kv_layers = max(i for i in config.kv_source_layer_ids if i < num_layers) + 1
+        prefill_placement = plan_layer_placement(kv_layers, _NUM_STAGES, 1)
+        prefill_spans = []
+        for k in dict.fromkeys(prefill_placement):
+            owned = [li for li, stage in enumerate(prefill_placement) if stage == k]
+            prefill_spans.append(f"stage {k}: layers {owned[0]}-{owned[-1]}")
+        logger.info(
+            f"KV-only prefill: {kv_layers} layers over {len(prefill_spans)} stage(s): " + ", ".join(prefill_spans)
+        )
     needed = max(r.tokens for r in results) + max_new  # decode is sized once, for the longest conversation
     max_seq = _traced_max_seq(config, needed, num_layers)
     if max_seq < needed:
@@ -330,6 +377,7 @@ def _run(
         submeshes=submeshes,
         use_prefetcher=use_prefetcher,
         layer_submesh_ids=placement,
+        prefill_layer_submesh_ids=prefill_placement,
     )
     _assert_decode_parallelism(decode, _TP_SIZE, _NUM_STAGES)
     assert decode.num_layers == num_layers, f"decode built {decode.num_layers} layers, prefill {num_layers}"
@@ -343,9 +391,9 @@ def _run(
     decode.activate_session(sid)
 
     # --- decode compile, then prefill compile and capture, with decode's pipes and L1 tensors released ----- #
-    prefill = None
+    prefill = host_timers = None
     build_seconds = prepare_seconds = 0.0
-    num_stages = len(spans)
+    num_stages = len(spans) if prefill_placement is None else len(set(prefill_placement))
     max_len = prefill_max_len or max(r.prefilled for r in results)
     # Prefill gathers its RoPE rows for every position up to ``max_len``; decode's table only spans its own ``max_seq``.
     prefill_rope = rope if max_len <= max_seq else _build_rope(config, loader.snapshot_dir, max_len)
@@ -365,6 +413,7 @@ def _run(
         prefill = decode.build_prefill(
             prefill_rope,
             lm_head=lm_head,
+            kv_only=_PREFILL_ALL_STAGES,
             cache=WeightCache(CACHE_DIR) if CACHE_DIR else None,
             weight_dtype=_ATTENTION_WEIGHT_DTYPE,
             progress=progress,
@@ -390,6 +439,7 @@ def _run(
         capture_seconds = time.perf_counter() - t0
         prepare_seconds += capture_seconds
         logger.info(f"traced prefill captured in {capture_seconds:.1f}s")
+        host_timers = _HostTimers(prefill._traced) if _HOST_TIMERS else None
         # The pipes (config pages in L1_SMALL) and the L1 tensors come back under prefill's buffers; restarts the
         # prefetcher, which then runs until teardown.
         decode.restore_prefetch_buffers()
@@ -412,18 +462,25 @@ def _run(
         row = states = None
         if result.prefilled:
             tag = f"[5/6] prefill {k + 1}/{len(prompts)} {prompt.name}"
-            row, states = _prefill_one(
-                prefill,
-                prompt,
-                result,
-                tag,
-                progress,
-                tokenizer,
-                chunk_size,
-                num_stages,
-                build_seconds,
-                prepare_seconds,
-            )
+            if _PREFILL_ALL_STAGES:
+                states = _prefill_kv_only(
+                    prefill, prompt, result, tag, progress, chunk_size, num_stages, build_seconds, prepare_seconds
+                )
+            else:
+                row, states = _prefill_one(
+                    prefill,
+                    prompt,
+                    result,
+                    tag,
+                    progress,
+                    tokenizer,
+                    chunk_size,
+                    num_stages,
+                    build_seconds,
+                    prepare_seconds,
+                )
+            if host_timers is not None:
+                host_timers.report(prompt.name, result.prefill_seconds)
             decode.reload_resident_state()
         tag = f"[6/6] decode {k + 1}/{len(prompts)} {prompt.name}"
         _decode_one(
@@ -455,6 +512,129 @@ def _run(
     _summary(results, prepare_seconds, decode.use_prefetcher)
     progress.step("done")
     return results
+
+
+class _TimedSocket:
+    """The traced prefill's packet socket with a timed ``write_tensor``; everything else goes to the socket. Installed
+    after the capture, so the traces keep the socket itself."""
+
+    def __init__(self, socket, write_tensor: Callable) -> None:
+        self._socket = socket
+        self.write_tensor = write_tensor
+
+    def __getattr__(self, name: str):
+        return getattr(self._socket, name)
+
+
+class _HostTimers:
+    """``DEEPSEEK_V41_PREFILL_HOST_TIMERS=1``: the host time of each traced prefill chunk, by part.
+
+    Wraps the methods of one :class:`DeepSeekV41TracedPrefill` instance (after its capture; the class is untouched):
+
+    * ``engram lookup``: ``_feed_engram``, the host n-gram lookup of every Engram layer, on the run loop's thread;
+    * ``packet write``: the packet socket's ``write_tensor``, on the run loop's thread;
+    * ``trace dispatch``: posting every stage's trace for one chunk, on the replay thread;
+    * ``output wait``: ``_read_logits``, the run loop blocked until a chunk's output (the "done" page) arrives.
+
+    The run loop is serial: lookup and packet write of chunk ``i`` sit between the reads of earlier chunks, so when
+    their sum nears the chunk's wall time (and the output wait nears 0), the host bounds the pipeline; when the
+    dispatch does, the replay thread does; when the output wait does, the device does.
+    """
+
+    NAMES = ("engram lookup", "packet write", "trace dispatch", "output wait")
+
+    def __init__(self, traced) -> None:
+        self.times: dict[str, list[float]] = {name: [] for name in self.NAMES}
+
+        def timed(name: str, fn: Callable) -> Callable:
+            times = self.times[name]
+
+            def call(*args, **kwargs):
+                t0 = time.perf_counter()
+                try:
+                    return fn(*args, **kwargs)
+                finally:
+                    times.append(time.perf_counter() - t0)
+
+            return call
+
+        dispatch = self.times["trace dispatch"]
+
+        # DeepSeekV41TracedPrefill._replay, with each chunk's dispatch timed.
+        def replay(chunks: queue.Queue) -> None:
+            try:
+                for fresh in iter(chunks.get, None):
+                    t0 = time.perf_counter()
+                    for stage in traced.stages:
+                        ttnn.execute_trace(stage.device, stage.traces[fresh], cq_id=0, blocking=False)
+                    dispatch.append(time.perf_counter() - t0)
+            except Exception:
+                logger.exception("[traced-prefill] replay thread failed; the host will wait on the sockets forever")
+                raise
+
+        traced._feed_engram = timed("engram lookup", traced._feed_engram)
+        traced._read_logits = timed("output wait", traced._read_logits)
+        traced._pkt_socket = _TimedSocket(traced._pkt_socket, timed("packet write", traced._pkt_socket.write_tensor))
+        traced._replay = replay
+
+    def report(self, name: str, seconds: float) -> None:
+        """Log one prompt's per-chunk times (its prefill took ``seconds``), then start over for the next."""
+        chunks = len(self.times["output wait"])
+        if not chunks:
+            return
+        parts = []
+        for part, times in self.times.items():
+            if times:
+                parts.append(
+                    f"{part} {1e3 * sum(times) / len(times):.1f} ms mean / {1e3 * max(times):.1f} ms max "
+                    f"({1e3 * sum(times):.0f} ms total)"
+                )
+            times.clear()
+        logger.info(
+            f"{name}: prefill host timers over {chunks} chunk(s), wall {1e3 * seconds / chunks:.1f} ms per chunk: "
+            + "; ".join(parts)
+        )
+
+
+def _prefill_kv_only(
+    prefill: DeepSeekV41PrefillModel,
+    prompt: _Prompt,
+    result: _Result,
+    tag: str,
+    progress: _Progress,
+    chunk_size: int,
+    num_stages: int,
+    build_seconds: float,
+    prepare_seconds: float,
+) -> list[PrefillAttentionState]:
+    """V4's ``_prefill_one`` for the KV-only prefill (``DEEPSEEK_V41_PREFILL_ALL_STAGES=1``): it has no head, so
+    returns only the per-layer states, still on device (commit them before the next decode or prefill replay)."""
+    aligned = result.prefilled
+    num_chunks = math.ceil(aligned / chunk_size)
+    progress.step(
+        f"{tag}: KV-only prefill of {aligned} tokens, {num_chunks} chunk(s) of up to {chunk_size} (through "
+        f"{num_stages} pipelined stage(s), traced; timed)"
+    )
+    ids = torch.tensor(prompt.ids[:aligned], dtype=torch.long).unsqueeze(0)
+    chunk_times: list[tuple[int, int, float]] = []
+
+    def on_chunk(index: int, start: int, end: int, seconds: float) -> None:
+        chunk_times.append((start, end, seconds))
+        tokens = end - start
+        fill = " (pipeline fill)" if index == 0 and num_chunks > 1 else ""
+        logger.info(
+            f"prefill chunk {index + 1}/{num_chunks} [{start}, {end}): {tokens} tokens, +{seconds:.3f}s{fill}, "
+            f"{tokens / seconds:.1f} tok/s"
+        )
+
+    t0 = time.perf_counter()
+    logits, states = prefill.prefill_traced(ids, on_chunk=on_chunk)
+    assert logits is None, "a KV-only prefill returns no logits"
+    result.prefill_seconds = time.perf_counter() - t0
+    _report(chunk_times, num_stages, result.prefill_seconds, build_seconds, prepare_seconds)
+    steady = chunk_times[1:] or chunk_times
+    result.pipelined_tps = sum(e - s for s, e, _ in steady) / sum(sec for _, _, sec in steady)
+    return states
 
 
 def _reference_logits(

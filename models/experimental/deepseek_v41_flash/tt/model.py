@@ -212,6 +212,15 @@ class DeepSeekV41Model(DeepSeekV4Model):
     ``layer_submesh_ids`` (one non-decreasing stage index per built layer) overrides V4's even
     :func:`plan_layer_placement`, e.g. with the prefill placement when a prefill model shares the stages.
 
+    ``prefill_layer_submesh_ids`` (opt-in; one non-decreasing stage index per layer of a KV-only prefill, i.e.
+    layers ``0 .. max(kv_source_layer_ids)``) places :meth:`build_prefill`'s ``kv_only`` model on stages of its own
+    instead of the decode layers' ones, e.g. ``plan_layer_placement(21, 8, 1)`` to spread layers 0-20 over all eight
+    stages. A layer whose prefill stage is not its decode stage gets a second copy of its routed experts on the
+    prefill stage (built with the decode ones, same dtype and layout), and an Engram layer its own rows sockets there
+    (opened with decode's, before the rings); the prefill state then moves between the stages through the host
+    (:meth:`commit_prefill_state`, :meth:`seed_prefill`). ``None`` (the default) keeps every prefill layer on its
+    decode layer's stage.
+
     ``verify_rows > 1`` builds every layer for DSpark's parallel verify (:meth:`decode_verify`), one step
     over ``verify_rows`` consecutive positions.
 
@@ -246,6 +255,7 @@ class DeepSeekV41Model(DeepSeekV4Model):
         vision_stage: Optional[int] = None,
         verify_rows: int = 1,
         balance_dram_banks: bool = True,
+        prefill_layer_submesh_ids: Optional[Sequence[int]] = None,
     ):
         self.config = config
         self.image_rows = image_rows
@@ -365,6 +375,38 @@ class DeepSeekV41Model(DeepSeekV4Model):
             for li in config.engram_layer_ids
             if li < n
         }
+        # The KV-only prefill's own placement, when given (see the class docstring): the layers it moves off their
+        # decode stage, and the rows sockets of the Engram layers among them.
+        self.prefill_layer_submesh_ids: Optional[list[int]] = None
+        self._prefill_engram_sockets: dict[int, list] = {}
+        prefill_experts_of: dict[int, list[int]] = {}  # prefill stage -> layers whose expert copy it builds
+        if prefill_layer_submesh_ids is not None:
+            kv_layers = max(i for i in config.kv_source_layer_ids if i < n) + 1
+            placement = list(prefill_layer_submesh_ids)
+            if len(placement) != kv_layers:
+                raise ValueError(
+                    f"got {len(placement)} prefill layer placements for the {kv_layers} layers of a KV-only prefill"
+                )
+            if placement != sorted(placement) or not all(0 <= s < self.num_submeshes for s in placement):
+                raise ValueError(
+                    f"prefill layer placement {placement} must be non-decreasing stage indices below "
+                    f"{self.num_submeshes}"
+                )
+            self.prefill_layer_submesh_ids = placement
+            for li in range(kv_layers):
+                if placement[li] != self.layer_submesh_ids[li]:
+                    prefill_experts_of.setdefault(placement[li], []).append(li)
+            rows_stages = {self.layer_submesh_ids[li] for li in engram_sockets}
+            for li in sorted(i for i in engram_sockets if i < kv_layers):
+                stage = placement[li]
+                if stage == self.layer_submesh_ids[li]:
+                    continue
+                if stage in rows_stages:
+                    raise NotImplementedError(
+                        f"Engram layer {li}'s prefill stage {stage} already holds an Engram layer's rows sockets"
+                    )
+                rows_stages.add(stage)
+                self._prefill_engram_sockets[li] = open_rows_sockets(self.submeshes[stage], rows_page_bytes(config))
         self.image_sockets: Optional[ImageSockets] = None
         if vision_stage is not None:
             if not image_rows:
@@ -392,8 +434,10 @@ class DeepSeekV41Model(DeepSeekV4Model):
         self.layer_devices: list[ttnn.MeshDevice] = [self.submeshes[s] for s in self.layer_submesh_ids[:n]]
 
         self.layers: list[DeepSeekV41DecoderLayer] = [None] * n
+        # Layer -> the copy of its routed experts on its prefill stage (prefill_layer_submesh_ids only).
+        self._prefill_experts: dict[int, DeepSeekV41PreloadedExperts] = {}
 
-        def build_stage(layer_ids: list[int]) -> None:
+        def build_stage(layer_ids: list[int], prefill_layer_ids: list[int]) -> None:
             for li in layer_ids:
                 current_device = self.layer_devices[li]
                 logger.info(f"Layer {li} is on device {self.layer_submesh_ids[li]}")
@@ -427,14 +471,32 @@ class DeepSeekV41Model(DeepSeekV4Model):
                     verify_rows=verify_rows,
                 )
                 _profile(current_device)
+            # After the stage's decode layers, so their allocations land where they do without the copies.
+            for li in prefill_layer_ids:
+                prefill_device = self.submeshes[self.prefill_layer_submesh_ids[li]]
+                logger.info(f"Layer {li}'s prefill experts are on device {self.prefill_layer_submesh_ids[li]}")
+                self._prefill_experts[li] = DeepSeekV41PreloadedExperts(
+                    config,
+                    expert_provider(loader, li),
+                    prefill_device,
+                    dtype=weight_dtype,
+                    cache=cache.sub(f"layers.{li}").sub("ffn"),
+                    tp_size=tp_size,
+                    balance_dram_banks=balance_dram_banks,
+                )
+                _profile(prefill_device)
 
         # Stages are disjoint submeshes (own allocator and command queues), so each builds on its own thread; a
         # stage's layers stay in order, keeping every device's allocation order (and addresses) as when serial.
         stage_layers: dict[int, list[int]] = {}
         for li in range(n):
             stage_layers.setdefault(self.layer_submesh_ids[li], []).append(li)
+        for stage in prefill_experts_of:
+            stage_layers.setdefault(stage, [])
         with ThreadPoolExecutor(max_workers=max(1, len(stage_layers)), thread_name_prefix="decode-build") as pool:
-            for stage in [pool.submit(build_stage, ids) for ids in stage_layers.values()]:
+            for stage in [
+                pool.submit(build_stage, ids, prefill_experts_of.get(s, [])) for s, ids in stage_layers.items()
+            ]:
                 stage.result()
         if self.layer_devices:
             self.last_device = self.layer_devices[-1]
@@ -1814,6 +1876,10 @@ class DeepSeekV41Model(DeepSeekV4Model):
         the shared compressed KV and the rings of those layers; the caller replays the last ``sliding_window``
         prompt tokens through decode to fill the other layers' rings and get the logits.
 
+        With ``prefill_layer_submesh_ids`` (see the class docstring) the ``kv_only`` model is placed by it instead:
+        a layer moved off its decode stage reads the copy of its routed experts and Engram rows sockets built
+        there, and the other layers share as above. It requires ``kv_only``.
+
         Call it after :meth:`prepare_static_decode` (which builds the Engram lookup) and before the decode
         traces are captured.
         """
@@ -1823,6 +1889,13 @@ class DeepSeekV41Model(DeepSeekV4Model):
         if kv_only:
             n = max(i for i in self.config.kv_source_layer_ids if i < self.num_layers) + 1
             lm_head = None
+        layer_devices = self.layer_devices[:n]
+        experts = [layer.mlp.experts for layer in self.layers[:n]]
+        if self.prefill_layer_submesh_ids is not None:
+            if not kv_only:
+                raise ValueError("the model was built with prefill_layer_submesh_ids, a KV-only prefill placement")
+            layer_devices = [self.submeshes[s] for s in self.prefill_layer_submesh_ids]
+            experts = [self._prefill_experts.get(li, experts[li]) for li in range(n)]
         self.prefill_model = DeepSeekV41PrefillModel(
             self.config,
             self.loader,
@@ -1830,9 +1903,9 @@ class DeepSeekV41Model(DeepSeekV4Model):
             rope,
             num_layers=n,
             tp_size=self.tp_size,
-            layer_devices=self.layer_devices[:n],
+            layer_devices=layer_devices,
             engram_lookup=self._engram_lookup,
-            experts=[layer.mlp.experts for layer in self.layers[:n]],
+            experts=experts,
             embedding_weight=self.embed_tokens.embedding_weight,
             lm_head=lm_head,
             kv_only=kv_only,
@@ -1846,7 +1919,9 @@ class DeepSeekV41Model(DeepSeekV4Model):
         }
         # Same for the Engram rows FIFOs (one per device of the stage, ~100 KB of a TP4 stage's L1 per layer).
         self.prefill_model.shared_engram_sockets = {
-            li: layer.engram.sockets for li, layer in enumerate(self.layers) if layer.engram is not None
+            li: self._prefill_engram_sockets.get(li, layer.engram.sockets)
+            for li, layer in enumerate(self.layers)
+            if layer.engram is not None
         }
         self.prefill_model.keep_decode_prefetcher = bool(self._prefetch_buffers_by_device)
         return self.prefill_model
@@ -1871,7 +1946,8 @@ class DeepSeekV41Model(DeepSeekV4Model):
         For a prompt of ``T`` tokens (a multiple of ``sliding_window``, so ring slot ``j`` holds token
         ``T - W + j``, and of every compress ratio, so no compressor window is half full):
 
-        * every layer: ``kv_tail`` -> the session's slot of its ring ``kv``;
+        * every layer: ``kv_tail`` -> the session's slot of its ring ``kv`` (through the host when
+          ``prefill_layer_submesh_ids`` put the prefill layer on another stage);
         * every stage holding a group's ``comp_kv`` (it has an index source of the group): the kv source's
           ``compressed_kv`` -> ``comp_kv`` and ``idx_keys`` -> ``idx_key_cache``, each logical block into the
           physical block the session's page-table row maps it to. A source on another stage is copied over
@@ -1922,12 +1998,17 @@ class DeepSeekV41Model(DeepSeekV4Model):
                 scache = sm["scaches"][li]
                 if li < len(states):
                     state = states[li]
-                    if list(state.kv_tail.device().get_device_ids()) != list(device.get_device_ids()):
-                        raise RuntimeError(f"prefill layer {li}'s state is not on its decode submesh")
+                    kv_tail = state.kv_tail
+                    if list(kv_tail.device().get_device_ids()) != list(device.get_device_ids()):
+                        if self.prefill_layer_submesh_ids is None:
+                            raise RuntimeError(f"prefill layer {li}'s state is not on its decode submesh")
+                        kv_tail = self._on_stage(kv_tail, device)
                     note(f"commit layer {li + 1}/{self.num_layers} on decode submesh {sm['index']}")
-                    ring = ttnn.to_layout(state.kv_tail, ttnn.TILE_LAYOUT)
+                    ring = ttnn.to_layout(kv_tail, ttnn.TILE_LAYOUT)
                     ttnn.fill_cache(scache.kv, ring, 0, update_idx=ring_row)
                     ttnn.deallocate(ring)
+                    if kv_tail is not state.kv_tail:
+                        ttnn.deallocate(kv_tail)
                 else:
                     note(f"zero the ring of layer {li + 1}/{self.num_layers} on decode submesh {sm['index']}")
                     dh = scache.kv.shape[3]
@@ -2078,7 +2159,9 @@ class DeepSeekV41Model(DeepSeekV4Model):
         which is the prefill ``tail`` as it stands after ``P`` tokens. A kv source's first ``P // rate``
         entries and index keys are gathered out of the paged pools of its stage into its ``entries`` /
         ``idx_keys``, and into each prefill stage's ``mirrors`` of them: from that stage's own pools when its
-        decode stage holds them, else copied over through the host. Reads only; the caches stay as they are.
+        decode stage holds them, else copied over through the host. With ``prefill_layer_submesh_ids`` a layer's ring
+        and a kv source's entries also go through the host when its prefill stage is not its decode stage. Reads
+        only; the caches stay as they are.
 
         ``tails=False`` skips the rings, for a bounded replay (``run(..., bounded_replay=True)`` from ``P - W``),
         which rebuilds the window itself and so also follows a :meth:`truncate_session`.
@@ -2122,15 +2205,24 @@ class DeepSeekV41Model(DeepSeekV4Model):
                     tail = ttnn.to_layout(ring, ttnn.ROW_MAJOR_LAYOUT)
                     if ring.buffer_address() != kv.buffer_address():  # a slice of the whole ring is kv itself
                         ttnn.deallocate(ring)
+                    if self.prefill_layer_submesh_ids is not None:
+                        moved = self._on_stage(tail, traced.model.layer_devices[li])
+                        if moved is not tail:
+                            ttnn.deallocate(tail)
+                        tail = moved
                     write_rows(traced.buffers[li].tail, tail)
                 if li in self.config.kv_source_layer_ids:
                     entries, keys = entries_of(sm, li)
                     sources[li] = (entries, keys)
                     bufs = traced.buffers[li]
                     for dst, rows in ((bufs.entries, entries), (bufs.idx_keys, keys)):
+                        if self.prefill_layer_submesh_ids is not None:
+                            rows = self._on_stage(rows, traced.model.layer_devices[li])
                         ttnn.experimental.slice_write(
                             rows, dst, [0, 0, 0, 0], [1, 1, rows.shape[2], dst.shape[3]], [1, 1, 1, 1]
                         )
+                        if rows is not entries and rows is not keys:
+                            ttnn.deallocate(rows)
         for stage in traced.stages:
             ids = list(stage.device.get_device_ids())
             sm = next(sm for sm in self.submeshes_io if list(sm["device"].get_device_ids()) == ids)
