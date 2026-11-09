@@ -579,7 +579,7 @@ int main(int argc, char **argv) {
     CachedHostData cached_data;
 
     std::function<BatchType(std::vector<DatasetSample> && samples)> collate_fn =
-        [sequence_length, device, &cached_data](std::vector<DatasetSample> &&samples) {
+        [sequence_length, device, cp_striped, &cached_data](std::vector<DatasetSample> &&samples) {
             auto start_timer = std::chrono::high_resolution_clock::now();
             const uint32_t batch_size = samples.size();
             std::vector<uint32_t> &data = cached_data.data;
