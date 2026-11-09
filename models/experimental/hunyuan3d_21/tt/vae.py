@@ -17,6 +17,7 @@ from __future__ import annotations
 import torch
 
 import ttnn
+from models.experimental.hunyuan3d_21.tt.hierarchical import hierarchical_grid
 from models.tt_dit.layers.linear import Linear
 from models.tt_dit.layers.module import Module, ModuleList, Parameter
 from models.tt_dit.layers.normalization import LayerNorm
@@ -94,16 +95,23 @@ def _heads(x, n=HEADS):
 
 
 class _AttnCore(Module):
-    def __init__(self, *, mesh_device, k_chunk: int) -> None:
+    def __init__(self, *, mesh_device, k_chunk: int, q_chunk: int = 128) -> None:
         super().__init__()
         self.q_norm = HeadLayerNorm(mesh_device=mesh_device)
         self.k_norm = HeadLayerNorm(mesh_device=mesh_device)
-        grid = mesh_device.compute_with_storage_grid_size()
+        self.mesh_device = mesh_device
+        self.set_sdpa(q_chunk, k_chunk, ttnn.MathFidelity.HiFi4)
+
+    def set_sdpa(self, q_chunk: int, k_chunk: int, fidelity) -> None:
+        dev = self.mesh_device
         self.sdpa_cfg = ttnn.SDPAProgramConfig(
-            compute_with_storage_grid_size=grid, q_chunk_size=128, k_chunk_size=k_chunk, exp_approx_mode=False
+            compute_with_storage_grid_size=dev.compute_with_storage_grid_size(),
+            q_chunk_size=q_chunk,
+            k_chunk_size=k_chunk,
+            exp_approx_mode=False,
         )
         self.sdpa_kernel = ttnn.init_device_compute_kernel_config(
-            mesh_device.arch(), math_fidelity=ttnn.MathFidelity.HiFi4, math_approx_mode=False, fp32_dest_acc_en=True
+            dev.arch(), math_fidelity=fidelity, math_approx_mode=False, fp32_dest_acc_en=True
         )
 
     def norm_q(self, q):
@@ -213,6 +221,18 @@ class GeoDecoder(Module):
             state["output_proj.weight"] = torch.nn.functional.pad(w, (0, 0, 0, 32 - w.shape[0]))
             state["output_proj.bias"] = torch.nn.functional.pad(b, (0, 32 - b.shape[0]))
 
+    def set_matmul_fidelity(self, fidelity) -> None:
+        """Override the HiFi4 default of the per-query matmuls (query_proj, c_q, c_proj, MLP, output_proj)."""
+        cfg = ttnn.init_device_compute_kernel_config(
+            self.c_q.mesh_device.arch(),
+            math_fidelity=fidelity,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=True,
+        )
+        for lin in (self.query_proj, self.c_q, self.c_proj, self.mlp.c_fc, self.mlp.c_proj, self.output_proj):
+            lin.compute_config = cfg
+
     def prepare_kv(self, latents):
         d = _bf16(self.ln_2(latents))
         return self.core.norm_k(self.to_k(d)), _heads(self.to_v(d))
@@ -259,18 +279,44 @@ class TtShapeVAEDecoder(Module):
             x = blk(x)
         return x
 
-    def grid_logits(
-        self, latents_dev: ttnn.Tensor, resolution: int, chunk: int = 32768, bound: float = 1.01
-    ) -> torch.Tensor:
-        """Dense grid SDF logits [(res+1)^3] for one mesh (VanillaVolumeDecoder), chunk queries per call."""
-        kv = self.geo.prepare_kv(latents_dev)
-        pts = dense_grid(resolution, bound)
+    def query_logits(self, kv, points: torch.Tensor, chunk: int = 32768, group: int = 32) -> torch.Tensor:
+        """SDF logits [N] at arbitrary points. The Fourier features of `group` chunks go up in one transfer and the
+        decoder runs chunk by chunk on device slices of it; outputs are read back once per group, so the host work
+        of the next group does not wait on each chunk."""
         out = []
-        for s in range(0, pts.shape[0], chunk):
-            p = pts[s : s + chunk]
+        span = chunk * group
+        for g0 in range(0, points.shape[0], span):
+            p = points[g0 : g0 + span]
             n = p.shape[0]
-            emb = torch.zeros(1, 1, chunk, QUERY_PAD)
+            npad = -(-n // chunk) * chunk
+            emb = torch.zeros(1, 1, npad, QUERY_PAD)
             emb[0, 0, :n, :QUERY_DIM] = fourier_embed(p)
-            o = self.geo(bf16_tensor(emb, device=self.mesh_device), kv)
-            out.append(ttnn.to_torch(o)[0, 0, :n, 0].float())
-        return torch.cat(out).reshape(resolution + 1, resolution + 1, resolution + 1)
+            emb_dev = bf16_tensor(emb, device=self.mesh_device)
+            res = []
+            for s in range(0, npad, chunk):
+                q = emb_dev if npad == chunk else ttnn.slice(emb_dev, [0, 0, s, 0], [1, 1, s + chunk, QUERY_PAD])
+                res.append(self.geo(q, kv))
+            vals = []
+            for r in res:
+                vals.append(ttnn.to_torch(r)[0, 0, :, 0].float())
+                ttnn.deallocate(r)
+            ttnn.deallocate(emb_dev)
+            out.append(torch.cat(vals)[:n])
+        return torch.cat(out)
+
+    def grid_logits(
+        self,
+        latents_dev: ttnn.Tensor,
+        resolution: int,
+        chunk: int = 32768,
+        bound: float = 1.01,
+        hierarchical: bool = True,
+        stats: dict | None = None,
+    ) -> torch.Tensor:
+        """SDF logits on the [(res+1)^3] grid for one mesh: every point (VanillaVolumeDecoder), or coarse-to-fine
+        near the surface (hierarchical.py; HierarchicalVolumeDecoding with a full grid out)."""
+        kv = self.geo.prepare_kv(latents_dev)
+        if hierarchical:
+            return hierarchical_grid(lambda p: self.query_logits(kv, p, chunk), resolution, bound=bound, stats=stats)
+        g = self.query_logits(kv, dense_grid(resolution, bound), chunk)
+        return g.reshape(resolution + 1, resolution + 1, resolution + 1)
