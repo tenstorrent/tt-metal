@@ -31,6 +31,8 @@ from models.demos.blackhole.qwen36.tt.model import serve_device_decode_env_enabl
 from models.demos.blackhole.qwen36.tt.spec_engine import rows_to_engine, slot_map_after_remap, slot_map_inverse
 from models.demos.blackhole.qwen36.tt.tp_common import (
     fabric_router_config,
+    spec_adaptive_k_enabled,
+    spec_adaptive_k_wide,
     spec_chain_enabled,
     spec_device_logprobs_enabled,
     spec_device_mask_enabled,
@@ -1121,6 +1123,14 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
 _MESH_TP = {"N150": 1, "N300": 2, "P150x4": 4, "N150x4": 4, "T3K": 8, "P150x8": 8, "BH-Galaxy": 8}
 
 
+def _spec_k_api(k, B=8):
+    """Draft columns of the runner block for engine K ``k``: k, or with QWEN36_SPEC_ADAPTIVE_K the wide family's K (the
+    larger; the base family runs k columns of it, SpecPlan.k_by_rows caps the drafts by live rows)."""
+    if spec_adaptive_k_enabled():
+        return max(int(k), spec_adaptive_k_wide(B)[1])
+    return int(k)
+
+
 def _mesh_tp(default=4):
     """Tensor-parallel degree from MESH_DEVICE ("P150x4" -> 4, "(1, 4)" -> 4)."""
     s = os.environ.get("MESH_DEVICE")
@@ -1250,6 +1260,20 @@ class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
                 " (K is fixed by QWEN36_SPEC_K)",
                 supported_k=tuple(x for x in cls._SUPPORTED_K if max_num_seqs * (x + 1) <= 32),
             )
+        k_by_rows = ()
+        if spec_adaptive_k_enabled():  # QWEN36_SPEC_ADAPTIVE_K: K_api columns, Kw drafts at <= b live rows, K above
+            try:
+                bw, kw = spec_adaptive_k_wide(max_num_seqs)
+            except ValueError as e:
+                return SpecReject(reason=str(e), supported_k=())
+            if kw <= k:
+                return SpecReject(reason=f"QWEN36_SPEC_ADAPTIVE_K_WIDE K={kw} must exceed QWEN36_SPEC_K={k}", supported_k=())
+            k_by_rows = ((bw, kw), (max_num_seqs, k))
+            if requested_k < kw:
+                return SpecReject(
+                    reason=f"requested_k={requested_k} < the adaptive-K block's {kw} drafts (num_speculative_tokens={kw})",
+                    supported_k=(kw,),
+                )
         if requested_k < k:
             return SpecReject(reason=f"requested_k={requested_k} < engine K={k}", supported_k=(k,))
         bs = getattr(getattr(vllm_config, "cache_config", None), "block_size", None)
@@ -1265,7 +1289,14 @@ class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
             tc = tc.get_text_config() if hasattr(tc, "get_text_config") else tc
             if int(getattr(tc, "mtp_num_hidden_layers", 0) or 0) < 1:
                 return SpecReject(reason="checkpoint has no MTP weights (mtp_num_hidden_layers < 1)", supported_k=())
-            costs = spec_memory_costs(tc, _mesh_tp(), max_num_seqs, k, max_seq_len=mc.max_model_len)
+            costs = spec_memory_costs(
+                tc,
+                _mesh_tp(),
+                max_num_seqs,
+                k,
+                max_seq_len=mc.max_model_len,
+                **({"ring_T": k_by_rows[0][1] + 1} if k_by_rows else {}),
+            )
             # costs are for the whole batch: per_seq scales with B, fixed is shared
             per_seq = math.ceil((costs["per_seq"]["total"] + costs["fixed"]["total"]) / max_num_seqs)
             per_token = int(costs["per_token"]["total"])
@@ -1284,7 +1315,7 @@ class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
         topk_m = verify_device_topk_m()
         topk_kw = {"topk_candidates": topk_m} if topk_m else {}
         return SpecPlan(
-            effective_k=k,
+            effective_k=max(kk for _, kk in k_by_rows) if k_by_rows else k,
             lanes_per_request=1,
             extra_bytes_per_seq=per_seq,
             extra_bytes_per_token=per_token,
@@ -1293,6 +1324,7 @@ class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
             + (("fused_sample",) if spec_fused_enabled() else ()),
             drafter_state="internal",
             supports_narrow_decode=True,
+            **({"k_by_rows": k_by_rows} if k_by_rows else {}),
             **topk_kw,
         )
 
@@ -1316,7 +1348,7 @@ class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
     def _table_width(self):
         from models.demos.blackhole.qwen36.tt.spec_engine import spec_table_width
 
-        return spec_table_width(self.model[0].args.max_seq_len, self._SPEC_K, _BLOCK_SIZE)
+        return spec_table_width(self.model[0].args.max_seq_len, _spec_k_api(self._SPEC_K), _BLOCK_SIZE)
 
     def _table(self, pt):
         """Zero-pad (or trim) a vLLM page table [rows, w] to the engine width; block 0 is vLLM's null block."""
@@ -1360,7 +1392,7 @@ class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
         pool = int(kv_cache[0][0].shape[0]) if kv_cache else w
         assert w <= pool, (
             f"vLLM KV pool too small: {pool} blocks < table width {w} (max_model_len + K + 1 = "
-            f"{self.model[0].args.max_seq_len} + {self._SPEC_K} + 1 tokens)"
+            f"{self.model[0].args.max_seq_len} + {_spec_k_api(self._SPEC_K)} + 1 tokens)"
         )
         # stay below the pool size: the last block is the MTP scratch block
         # (row u starts at a distinct block: the verify's KV-collision check at warm position 0)
@@ -1551,9 +1583,9 @@ class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
             if bool((accepted_counts[chain_rows] != -1).any()):
                 raise ValueError("a chain row must carry accepted_counts -1")
             counts_chk = torch.where(chain_rows, torch.ones_like(accepted_counts), accepted_counts)
-            check_spec_side_tensors(num_valid_drafts, counts_chk, B, self._SPEC_K)
+            check_spec_side_tensors(num_valid_drafts, counts_chk, B, _spec_k_api(self._SPEC_K))
         else:
-            check_spec_side_tensors(num_valid_drafts, accepted_counts, B, self._SPEC_K)
+            check_spec_side_tensors(num_valid_drafts, accepted_counts, B, _spec_k_api(self._SPEC_K))
         assert kwargs.get("page_tables_per_layer") is None, "per-layer page tables unsupported"
         spec_sampling = self._check_spec_sampling(kwargs.pop("spec_sampling", None), spec_mode, int(tokens.shape[0]))
         eng = self._ensure_ready()
@@ -1657,7 +1689,7 @@ class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
             return None
         if spec_mode != "fused_sample":
             raise ValueError(f"spec_sampling is only valid with spec_mode 'fused_sample', got {spec_mode!r}")
-        K = self._SPEC_K
+        K = _spec_k_api(self._SPEC_K)
         want = {
             "temperature": ((B,), torch.float32),
             "top_k": ((B,), torch.int32),
@@ -1789,11 +1821,11 @@ class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
         if ac is not None:
             from vllm_tt_plugin.spec_decode import check_spec_side_tensors
 
-            check_spec_side_tensors(torch.zeros(B, dtype=torch.int32), ac, B, self._SPEC_K, call="decode")
+            check_spec_side_tensors(torch.zeros(B, dtype=torch.int32), ac, B, _spec_k_api(self._SPEC_K), call="decode")
         # Contract 4d: an ordinary step after a multi-token commit carries the count; it picks the state slot.
         acc = torch.ones(B, dtype=torch.int32) if ac is None else torch.as_tensor(ac).reshape(B).to(torch.int32)
         assert kwargs.get("page_tables_per_layer") is None, "per-layer page tables unsupported"
-        K = self._SPEC_K
+        K = _spec_k_api(self._SPEC_K)  # the runner block's width (QWEN36_SPEC_ADAPTIVE_K: K_api; the engine cuts it to its family's)
         tok = torch.full((B, K + 1), -1, dtype=torch.int32)
         tok[:, 0] = torch.as_tensor(tokens).reshape(B).to(torch.int32)
         pos = torch.full((B, K + 1), -1, dtype=torch.int32)
@@ -1820,7 +1852,9 @@ class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
         from vllm_tt_plugin.spec_decode import DraftOutput, check_spec_side_tensors
 
         B = int(committed_tokens.shape[0])
-        check_spec_side_tensors(torch.zeros(B, dtype=torch.int32), accepted_counts, B, self._SPEC_K, call="propose")
+        check_spec_side_tensors(
+            torch.zeros(B, dtype=torch.int32), accepted_counts, B, _spec_k_api(self._SPEC_K), call="propose"
+        )
         res = self._engine().propose_draft_tokens(
             num_drafts, committed_tokens, committed_positions, accepted_counts, hidden=hidden
         )

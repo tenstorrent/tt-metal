@@ -120,7 +120,9 @@ def pack_ovr_host(
     return _wrap32(out)
 
 
-def chain_reference(res_c, drafts, fused_aux_prev, ovr, *, B, K, Nv, rope_rows, ctrl_words, rope_delta=None):
+def chain_reference(
+    res_c, drafts, fused_aux_prev, ovr, *, B, K, Nv, rope_rows, ctrl_words, rope_delta=None, state_B=None
+):
     """Pure-torch twin of CH. Returns (token_buf int32 [R] (uint32 words), vfy_aux int32 [3, W] (uint32 words),
     next_fused_aux int32 [7, W_aux]).
 
@@ -132,8 +134,11 @@ def chain_reference(res_c, drafts, fused_aux_prev, ovr, *, B, K, Nv, rope_rows, 
       row0 = p0' + j (model._vfy_row_positions, model.py:2309); row1 = rope_row_index (tp_common.py:156)
       row2 = spec_ctrl_page (gdn/tp.py:301): [parity, mi'[B], ((mi'*B+u)*Nv+h)[B*Nv]] zero padded to ctrl_words
       next aux = ovr rows 0..3,5 and OVR_DELTA (as aux row 6) with row 4 = p0' (spec_fused.fused_accept_aux_host layout)
-    ``fused_aux_prev`` (the step that made res_c; may be None) is only checked: its p0 row must equal RES_P0."""
+    ``fused_aux_prev`` (the step that made res_c; may be None) is only checked: its p0 row must equal RES_P0.
+    ``state_B`` (QWEN36_SPEC_ADAPTIVE_K wide family; None = B): the GDN state width the ctrl page is laid out at
+    (gdn_spec_step max_users): [parity, mi'[B], 0 x (state_B - B), ((mi'*state_B+u)*Nv+h)[B*Nv]]."""
     T, R = K + 1, B * (K + 1)
+    Bs = B if state_B is None else int(state_B)
     res = torch.as_tensor(res_c).to(torch.int64)
     ovr = torch.as_tensor(ovr).to(torch.int64)
     committed = res[RES_COMMITTED, :R].reshape(B, T)
@@ -163,11 +168,11 @@ def chain_reference(res_c, drafts, fused_aux_prev, ovr, *, B, K, Nv, rope_rows, 
         else [signed_rope_delta(w) for w in ovr[OVR_DELTA, :B].tolist()]
     )
     ridx = rope_row_index(pos, [d for d in row_d for _ in range(T)], rope_rows).to(torch.int64)
-    blk = ((min_ * B + torch.arange(B))[:, None] * Nv + torch.arange(Nv)[None, :]).reshape(-1)
+    blk = ((min_ * Bs + torch.arange(B))[:, None] * Nv + torch.arange(Nv)[None, :]).reshape(-1)
     ctrl = torch.zeros(ctrl_words, dtype=torch.int64)
     ctrl[0] = parity
     ctrl[1 : 1 + B] = min_
-    ctrl[1 + B : 1 + B + B * Nv] = blk
+    ctrl[1 + Bs : 1 + Bs + B * Nv] = blk
     token_buf = _wrap32(tokens.reshape(-1))
     vfy_aux = pack_u32_rows([pos, ridx, ctrl])
     w_aux = _align(max(B, 5))
@@ -269,19 +274,23 @@ class ChainDevice:
         draft_ins=None,
         tok_out=None,
         vaux_out=None,
+        state_B=None,
     ):
         """Persistent buffers; every ``*_in`` / ``*_out`` argument binds a LIVE engine tensor (shape / dtype / layout
-        checked), None allocates a standalone one."""
+        checked), None allocates a standalone one. ``state_B`` (QWEN36_SPEC_ADAPTIVE_K wide family; None = B): the GDN
+        state width the ctrl page is laid out at (see chain_reference)."""
         import ttnn
         from models.demos.blackhole.qwen36.tt.gdn.tp import spec_ctrl_words
 
         self = cls()
         self.mesh, self.B, self.K, self.Nv, self.T, self.R = mesh, B, K, Nv, K + 1, B * (K + 1)
-        R = self.R
+        self.Bs = B if state_B is None else int(state_B)
+        R, Bs = self.R, self.Bs
+        assert Bs >= B, f"state width {Bs} below the chain's {B} users"
         self.W_res, self.W_a = _align(max(R, B)), _align(max(B, 5))
-        self.W_o, self.ctrl_words = _align(max(R, B, 5)), spec_ctrl_words(B, Nv)
+        self.W_o, self.ctrl_words = _align(max(R, B, 5)), spec_ctrl_words(Bs, Nv)
         self.W_v = _align(max(R, self.ctrl_words))
-        assert 1 + B + B * Nv <= self.W_v and R <= self.W_res and self.W_a <= self.W_o
+        assert 1 + Bs + B * Nv <= self.W_v and R <= self.W_res and self.W_a <= self.W_o
         RM, TL, u32, i32, f32 = ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT, ttnn.uint32, ttnn.int32, ttnn.float32
         z = lambda *s: torch.zeros(*s, dtype=torch.int32)
         if result_in is not None:
@@ -312,6 +321,8 @@ class ChainDevice:
         self.c_iota_k = f(torch.arange(K).reshape(1, K))
         self.c_iota_h = f(torch.arange(Nv).reshape(1, Nv))
         self.c_u = f(torch.arange(B).reshape(B, 1))
+        if Bs > B:  # wide family only: the zero mi words of the state users past B (between mi and the ring blocks)
+            self.c_mi_pad = f(torch.zeros(1, Bs - B))
         if spec_chain_kernel_enabled():
             from models.demos.blackhole.qwen36.tt.spec_fused_kernels import attach_chain_kernel
 
@@ -388,10 +399,12 @@ class ChainDevice:
         # ---- verify aux [3, W_v]: kv positions, rope rows, GDN ctrl page
         pos = ttnn.add(p0n, self.c_iota_t)  # [B,T]
         ridx = ttnn.minimum(ttnn.relu(ttnn.add(pos, delta)), rows_m1)
-        blk = ttnn.add(ttnn.multiply(ttnn.add(ttnn.multiply(min_, float(B)), self.c_u), float(Nv)), self.c_iota_h)
-        ctrl = cat([parity, ttnn.transpose(min_, 0, 1), ttnn.reshape(blk, (1, B * Nv))], 1)  # [1, 1+B+B*Nv]
+        Bs = getattr(self, "Bs", B)  # the ring / ctrl layout width (QWEN36_SPEC_ADAPTIVE_K wide family: > B)
+        blk = ttnn.add(ttnn.multiply(ttnn.add(ttnn.multiply(min_, float(Bs)), self.c_u), float(Nv)), self.c_iota_h)
+        mi_words = [ttnn.transpose(min_, 0, 1)] + ([self.c_mi_pad] if Bs > B else [])  # c_mi_pad exists iff Bs > B
+        ctrl = cat([parity, *mi_words, ttnn.reshape(blk, (1, B * Nv))], 1)  # [1, 1+Bs+B*Nv]
         vaux = cat(
-            [padw(ttnn.reshape(pos, (1, R)), R), padw(ttnn.reshape(ridx, (1, R)), R), padw(ctrl, 1 + B + B * Nv)], 0
+            [padw(ttnn.reshape(pos, (1, R)), R), padw(ttnn.reshape(ridx, (1, R)), R), padw(ctrl, 1 + Bs + B * Nv)], 0
         )
         ttnn.copy(ttnn.to_layout(ttnn.typecast(vaux, ttnn.uint32), RM), self.vaux_out)
         # ---- next fused aux = ovr rows 0..3, 5, OVR_DELTA with row 4 = p0' (written over aux_prev_in: all reads are above)

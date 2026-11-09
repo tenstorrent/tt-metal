@@ -55,6 +55,11 @@ struct GdnSpecStepParams {
     // byte for byte). See GdnSpecStepKernelOpt; every bit keeps out, ring and window bit-identical to 0, except
     // kGdnSpecOptLazy (K4), which changes the arithmetic and the ring / ctrl contract. Part of the program hash.
     uint32_t kernel_opts = 0;
+    // mi_max (QWEN36_SPEC_ADAPTIVE_K): the reader clamps the ctrl page's mi to this instead of T - 1 (0 = T - 1, the
+    // original program byte for byte: no define). An engine that alternates T between verifies (a short T after a long
+    // one) hands this op an mi of the previous verify's T; its window (allocated for the longest T, L <= 32 rows) holds
+    // the carry rows mi+1 .. mi+K-1 the previous verify wrote. Part of the program hash.
+    uint32_t mi_max = 0;
 };
 
 // gdn_spec_step kernel_opts bits (fast_mode + fp32_state only; ignored -- masked to 0 -- otherwise)

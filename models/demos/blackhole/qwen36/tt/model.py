@@ -2420,8 +2420,6 @@ class Qwen36Model:
         ``rope_delta`` (default: each row's own delta): an int = every row the same; a list of one delta per engine row
         (each repeated for the row's T positions, user-major), as the fused / chain device bodies build it.
         """
-        from models.demos.blackhole.qwen36.tt.gdn.tp import spec_ctrl_page
-
         n = len(row_positions)
         segs = [
             row_positions,
@@ -2440,8 +2438,37 @@ class Qwen36Model:
                 _pars = {dn._spec_win_par for dn in self._vfy_gdn}
                 assert len(_pars) == 1, f"GDN window parities out of step: {sorted(_pars)}"
                 parity = _pars.pop()
-            segs.append(spec_ctrl_page(mi_prev, self._vfy_B, self._vfy_Nv, parity=parity).reshape(-1))
+            segs.append(Qwen36Model._vfy_ctrl_page(self, mi_prev, parity).reshape(-1))
         return pack_u32_rows(segs)
+
+    def _vfy_state_mi(self, mi_prev):
+        """(mi, state width): the ctrl page's users. A verify of fewer users than the GDN state width (the adaptive wide
+        family, QWEN36_SPEC_ADAPTIVE_K: _vfy_state_B > _vfy_B) lays its page out at the state width (gdn_spec_step's
+        max_users), the users past the verify's at mi 0 (never read: the op runs the verify's users only)."""
+        Bs = int(self.__dict__.get("_vfy_state_B") or self._vfy_B)
+        mi = [int(x) for x in mi_prev]
+        return (mi + [0] * (Bs - len(mi)) if Bs > len(mi) else mi), Bs
+
+    def _vfy_ctrl_page(self, mi_prev, parity):
+        """The verify's gdn_spec_step ctrl page (spec_ctrl_page) at the GDN state width. With fewer verify users than the
+        state width (QWEN36_SPEC_ADAPTIVE_K wide family) the words of the users past them are 0, mi and ring blocks alike
+        (what the chain device writes, ChainDevice state_B; the op never reads them). Flag off: spec_ctrl_page unchanged."""
+        from models.demos.blackhole.qwen36.tt.gdn.tp import spec_ctrl_page, spec_ctrl_prev_t_enabled
+
+        mi, Bs = Qwen36Model._vfy_state_mi(self, mi_prev)
+        page = spec_ctrl_page(mi, Bs, self._vfy_Nv, parity=parity)
+        B = len(mi_prev)
+        if Bs > B:
+            page = page.clone()
+            page[0, 1 + Bs + B * self._vfy_Nv : 1 + Bs + Bs * self._vfy_Nv] = 0
+        # K4 (QWEN36_SPEC_STEP_LAZY) + QWEN36_SPEC_ADAPTIVE_K: when the previous verify ran another T (a family switch),
+        # word 0 bits 8..15 carry it so the op replays that verify's stash rows at (u * T_prev) % 32 (0 = this T: the
+        # chain device's parity-only word 0 and every step with the flag off)
+        lt = self.__dict__.get("_lz_last_T")
+        if lt and int(lt) != int(self._vfy_T) and spec_ctrl_prev_t_enabled():
+            page = page.clone()
+            page[0, 0] = int(page[0, 0]) | (int(lt) << 8)
+        return page
 
     def _vfy_stage_aux(self, aux_host):
         """Copy the packed aux inputs to the device unless the device already holds exactly these words (the host copy
@@ -3265,6 +3292,21 @@ class Qwen36Model:
             f"QWEN36_KV_WRITE_MULTIROW=1 a tile shared at ANY two candidates collides; =0 restores the per-call rule)."
         )
 
+    # ---- QWEN36_SPEC_ADAPTIVE_K: the verify state of one draft-length family is every ``_vfy_*`` instance attribute
+    def vfy_family_stash(self):
+        """Remove and return every ``_vfy_*`` instance attribute (the live family's verify traces, buffers and host mirrors),
+        leaving the model as if no verify were prepared (MTPSpecEngine swaps families with this; spec_adaptive.py)."""
+        d = {k: v for k, v in self.__dict__.items() if k.startswith("_vfy_")}
+        for k in d:
+            del self.__dict__[k]
+        return d
+
+    def vfy_family_restore(self, d):
+        """Make the ``_vfy_*`` attributes of ``d`` (a vfy_family_stash result) the live ones."""
+        for k in [k for k in self.__dict__ if k.startswith("_vfy_")]:
+            del self.__dict__[k]
+        self.__dict__.update(d)
+
     def release_verify_trace(self):
         """Drop the captured verify trace. No-op when nothing is captured.
 
@@ -3354,7 +3396,7 @@ class Qwen36Model:
         self.prepare_verify_trace(page_tables, T, warm_positions)
         self.record_verify_trace()
 
-    def prepare_verify_trace(self, page_tables, T, warm_positions):
+    def prepare_verify_trace(self, page_tables, T, warm_positions, state_users=None):
         """Allocate and compile everything the verify trace needs without capturing (warmup phase 1);
         record_verify_trace captures it (phase 2); verify_traced replays it.
         Bucket is a fixed B x T (T = len([pending] + drafts) per user, B = max_batch_size users).
@@ -3366,9 +3408,11 @@ class Qwen36Model:
         Capture happens after prompt prefill (so those programs cannot clobber the parked trace), so
         point the writes past each user's prompt frontier; the first real verify overwrites them.
         Idempotent for the same (B, T, nb); a different key releases any live trace first.
+        ``state_users`` (QWEN36_SPEC_ADAPTIVE_K wide family; None = B): the GDN state width when the verify runs fewer users
+        (B < max_batch_size, ``page_tables`` has B rows): the ctrl page is laid out at that width (gdn_spec_step max_users).
         """
         from models.demos.blackhole.qwen36.tt.attention.tp import KV_GROUP_WRITE_OK
-        from models.demos.blackhole.qwen36.tt.gdn.tp import spec_conv_sel, spec_ctrl_page, spec_state_blk_idx
+        from models.demos.blackhole.qwen36.tt.gdn.tp import spec_conv_sel, spec_state_blk_idx
 
         assert self.num_devices > 1, "traced verify is the TP path"
         assert self._paged_kv_caches is not None, "allocate_kv_caches first"
@@ -3377,10 +3421,16 @@ class Qwen36Model:
         nb = int(pt.shape[1])
         # B is the model's decode width, not a per-request choice: GDN's fused recurrent decode and
         # its batched state are both allocated at max_batch_size, and the verify shares them.
-        assert B == self.args.max_batch_size, (
-            f"verify runs the full decode width: page_tables has {B} rows, max_batch_size is "
-            f"{self.args.max_batch_size}"
-        )
+        if state_users is None:
+            assert B == self.args.max_batch_size, (
+                f"verify runs the full decode width: page_tables has {B} rows, max_batch_size is "
+                f"{self.args.max_batch_size}"
+            )
+        else:  # QWEN36_SPEC_ADAPTIVE_K wide family: B users of the max_batch_size-wide GDN state
+            assert int(state_users) == self.args.max_batch_size and 1 <= B <= int(state_users), (
+                f"wide-family verify: {B} users of a {state_users}-wide state (max_batch_size "
+                f"{self.args.max_batch_size})"
+            )
         assert len(warm_positions) == B, f"warm_positions needs one position per user ({B})"
         rows = B * T
         # One decode tile carries every row of every user: the hard cap on B*(K+1) (nlp_create /
@@ -3407,6 +3457,11 @@ class Qwen36Model:
         self.release_verify_trace()
         self._vfy_prepared_key = None
         self._vfy_T, self._vfy_B = T, B
+        if state_users is not None:  # QWEN36_SPEC_ADAPTIVE_K: only set when it differs from B's meaning (flag off: absent)
+            self._vfy_state_B = int(state_users)
+        _ta = getattr(self, "_spec_T_alloc", None)  # QWEN36_SPEC_ADAPTIVE_K: ring / window sized for the longest T
+        if _ta is not None:
+            self._vfy_mi_cap = max(int(T), int(_ta))  # mi of the previous verify may come from a longer T
         self._vfy_nb = nb
         self._vfy_setup_sharded_argmax(rows)
         self._vfy_setup_device_topk()
@@ -3532,13 +3587,17 @@ class Qwen36Model:
         # Allocate each GDN layer's spec-verify buffers (per-token state ring + conv window) before
         # the warmup pass: the trace bakes their addresses in, and nothing may allocate later.
         for dn in gdn:
-            dn.prepare_spec_verify(B, T)
+            _ta = getattr(self, "_spec_T_alloc", None)  # QWEN36_SPEC_ADAPTIVE_K (None: the call is unchanged)
+            if _ta is None:
+                dn.prepare_spec_verify(B, T)
+            else:
+                dn.prepare_spec_verify(B, T, T_alloc=int(_ta))
         if self._vfy_hostset:
             from models.demos.blackhole.qwen36.tt.gdn.tp import spec_ctrl_words
 
             if getattr(self, "_vfy_aux_buf", None) is not None:  # a re-capture: drop the previous buffer
                 ttnn.deallocate(self._vfy_aux_buf)
-            self._vfy_ctrl_words = spec_ctrl_words(B, Nv)
+            self._vfy_ctrl_words = spec_ctrl_words(int(self.__dict__.get("_vfy_state_B") or B), Nv)
             _aux = self._vfy_aux_host(warm, _mi0)
             self._vfy_aux_buf = ttnn.from_torch(
                 _aux, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=dev, mesh_mapper=rep
@@ -3552,7 +3611,7 @@ class Qwen36Model:
             _pars = {dn._spec_win_par for dn in gdn}
             assert len(_pars) == 1, f"GDN window parities out of step: {sorted(_pars)}"
             self._vfy_ctrl = ttnn.from_torch(
-                spec_ctrl_page(_mi0, B, Nv, parity=_pars.pop()),
+                self._vfy_ctrl_page(_mi0, _pars.pop()),
                 dtype=ttnn.uint32,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
                 device=dev,
@@ -4044,7 +4103,7 @@ class Qwen36Model:
         (the caller already synchronized the device). Exactly one of those must follow each call: the GDN window
         parity flips there, once per replay.
         """
-        from models.demos.blackhole.qwen36.tt.gdn.tp import spec_conv_sel, spec_ctrl_page, spec_state_blk_idx
+        from models.demos.blackhole.qwen36.tt.gdn.tp import spec_conv_sel, spec_state_blk_idx
 
         assert getattr(self, "_vfy_trace_id", None) is not None, "call record_verify_trace first"
         bk = None
@@ -4141,10 +4200,12 @@ class Qwen36Model:
             # window parity (the half holding E_prev; the op writes the other half). No HOLD: a row left out of a
             # step is parked on host by the engine (MTPSpecEngine.verify), and padding rows run at mi = 0 over the
             # null block like the composite path's.
-            # K4 (QWEN36_SPEC_STEP_LAZY=1): mi = T marks a FRESH row (slot 0 just seeded / restored: no replay)
+            # K4 (QWEN36_SPEC_STEP_LAZY=1): mi = FRESH marks a row whose slot 0 was just seeded / restored (no replay);
+            # FRESH = T, or T_alloc under QWEN36_SPEC_ADAPTIVE_K (lazy_ref.fresh_mi of the ring's T)
             from models.demos.blackhole.qwen36.tt.gdn.tp import gdn_spec_step_lazy_enabled
 
-            _mi_hi = T + 1 if gdn_spec_step_lazy_enabled() else T
+            _cap = int(self.__dict__.get("_vfy_mi_cap") or T)  # QWEN36_SPEC_ADAPTIVE_K: a longer previous T (else T)
+            _mi_hi = _cap + 1 if gdn_spec_step_lazy_enabled() else _cap
             assert all(
                 0 <= int(mi_prev[u]) < _mi_hi for u in range(B)
             ), f"mi_prev {list(mi_prev)} out of range [0,{_mi_hi})"
@@ -4152,7 +4213,7 @@ class Qwen36Model:
             assert len(_pars) == 1, f"GDN window parities out of step: {sorted(_pars)}"
             if not _hostset:
                 _h = ttnn.from_torch(
-                    spec_ctrl_page(mi_prev, B, self._vfy_Nv, parity=_pars.pop()),
+                    self._vfy_ctrl_page(mi_prev, _pars.pop()),
                     dtype=ttnn.uint32,
                     layout=ttnn.ROW_MAJOR_LAYOUT,
                     device=None,
@@ -4206,6 +4267,7 @@ class Qwen36Model:
         if flip_parity and _fused:
             for dn in self._vfy_gdn:
                 dn._spec_win_par ^= 1
+            self._lz_last_T = int(self._vfy_T)  # K4 + QWEN36_SPEC_ADAPTIVE_K: the T whose stash the next verify replays
         handle = VerifyHandle(
             rows=rows,
             B=B,
@@ -4299,6 +4361,7 @@ class Qwen36Model:
             # layer; flip them together (verify_win_cur / the next page follow).
             for dn in self._vfy_gdn:
                 dn._spec_win_par ^= 1
+            self._lz_last_T = int(self._vfy_T)  # K4 + QWEN36_SPEC_ADAPTIVE_K: the T whose stash the next verify replays
 
         # Replicated ids (the trace argmaxed the replicated logits): one replica is the whole answer,
         # and it is B*T uint32 instead of B*T x vocab floats.

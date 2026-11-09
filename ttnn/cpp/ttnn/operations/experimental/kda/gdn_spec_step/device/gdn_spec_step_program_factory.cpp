@@ -419,6 +419,9 @@ ttnn::device_operation::ProgramArtifacts GdnSpecStepProgramFactory::create_progr
     if (LAZY) {
         reader.compiler_options.defines.emplace("GDN_LAZY", "1");  // D from ring slot 0, the stash, FRESH window mi
     }
+    if (a.mi_max != 0) {  // QWEN36_SPEC_ADAPTIVE_K: the mi clamp of a T that alternates (0 = T - 1, no define)
+        reader.compiler_options.defines.emplace("GDN_MI_MAX", std::to_string(a.mi_max));
+    }
     for (const auto& d : reader_out) {
         reader.dfb_bindings.push_back(bind(d.name, EP::PRODUCER));
     }
@@ -499,6 +502,9 @@ ttnn::device_operation::ProgramArtifacts GdnSpecStepProgramFactory::create_progr
             bind("kt_out", EP::CONSUMER),
             bind("u_out", EP::CONSUMER)};
         writer.compiler_options.defines.emplace("GDN_LAZY", "1");
+        if (a.mi_max != 0) {  // QWEN36_SPEC_ADAPTIVE_K: FRESH at T_alloc = mi_max + 1, replay up to T_alloc rows
+            writer.compiler_options.defines.emplace("GDN_MI_MAX", std::to_string(a.mi_max));
+        }
         if (SFPU_GATE) {
             writer.dfb_bindings.push_back(bind("gt", EP::CONSUMER));
             writer.compiler_options.defines.emplace("GDN_SFPU_GATE", "1");

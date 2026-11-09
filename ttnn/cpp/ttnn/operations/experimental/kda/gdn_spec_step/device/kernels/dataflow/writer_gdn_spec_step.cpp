@@ -56,6 +56,12 @@
 #ifndef GDN_LAZY
 #define GDN_LAZY 0  // kernel_opts bit 8 (K4): coefficient tiles + S' / stash writes, no per-token ring stream
 #endif
+// the ctrl mi that marks a FRESH row under K4: T, or T_alloc = GDN_MI_MAX + 1 when QWEN36_SPEC_ADAPTIVE_K alternates T
+#ifdef GDN_MI_MAX
+#define LZ_FRESH_AT (GDN_MI_MAX + 1)
+#else
+#define LZ_FRESH_AT T
+#endif
 #if GDN_LAZY && !GDN_GATE_SCALARS
 #error "GDN_LAZY needs GDN_GATE_SCALARS"
 #endif
@@ -316,7 +322,7 @@ TT_KERNEL void writer(
     noc.async_read_barrier();
     uint32_t par, blk;
 #if GDN_LAZY
-    uint32_t mi_raw;
+    uint32_t mi_raw, tp_raw;
 #endif
     {
         auto lock = ctrl_w.scoped_write_lock(1);
@@ -324,6 +330,7 @@ TT_KERNEL void writer(
         par = p[0] & 1u;
 #if GDN_LAZY
         mi_raw = p[1 + u];
+        tp_raw = (p[0] >> 8) & 0xFFu;  // QWEN36_SPEC_ADAPTIVE_K: the previous verify's T when it differs (0 = this T)
 #endif
         blk = p[1 + M + bh];
     }
@@ -333,7 +340,13 @@ TT_KERNEL void writer(
     const bool hold = (blk == hold_sentinel);
 #if GDN_LAZY
     // replay count: the previous verify's accepted prefix mi + 1 (mi >= T: FRESH, nothing to replay; HOLD: discarded)
-    const uint32_t r_rep = (hold || mi_raw >= T) ? 0u : mi_raw + 1;
+    // QWEN36_SPEC_ADAPTIVE_K: the previous verify may have had another T (ctrl word 0 bits 8..15, 0 = this T): its
+    // stash rows sit at r0p = (u * Tp) % 32 and its accepted prefix may exceed T (up to LZ_FRESH_AT = T_alloc rows)
+    const uint32_t r0p = (tp_raw != 0u && tp_raw <= 32u) ? (u * tp_raw) % 32u : r0;
+    uint32_t r_rep = (hold || mi_raw >= LZ_FRESH_AT) ? 0u : mi_raw + 1;
+    if (r_rep > 32u - r0p) {
+        r_rep = 32u - r0p;  // ctrl contents are data: never read past the stash tile
+    }
     const uint32_t stash_rd = ((1 + par) * M + u) * Nv + h;        // the previous verify's stash block
     const uint32_t stash_wr = ((1 + (1 - par)) * M + u) * Nv + h;  // this verify's
     DataflowBuffer gnew(dfb::gnew);  // block 0: this verify's decay page, built with the gates, written with the stash
@@ -384,7 +397,7 @@ TT_KERNEL void writer(
     uint32_t beta_all[T], dec_all[T];  // the T gate pairs (fp32 bits) the coefficient tiles are built from
 #endif
 #if GDN_SFPU_GATE
-    float wrep[T];  // the replay weights / decay, from the previous stash's decay page (gate block)
+    float wrep[LZ_FRESH_AT];  // the replay weights / decay, from the previous stash's decay page (gate block)
     float crep = 1.0f;
 #endif
 #if GDN_GATE_SCALARS
@@ -463,7 +476,7 @@ TT_KERNEL void writer(
         gprev.reserve_back(1);
         if (r_rep > 0) {
 #if GDN_NARROW_GR
-            read_rows_at(ring_acc, gprev, noc, stash_rd * KV + Kt + Vt, 0, r0, r_rep, true, false, 4);
+            read_rows_at(ring_acc, gprev, noc, stash_rd * KV + Kt + Vt, 0, r0p, r_rep, true, false, 4);
 #else
             read_tiles_at(ring_acc, gprev, noc, stash_rd * KV + Kt + Vt, 1, 0);
 #endif
@@ -501,7 +514,7 @@ TT_KERNEL void writer(
             float acc = 1.0f;
             for (uint32_t i = r_rep; i-- > 0;) {
                 wrep[i] = acc;  // prod over j in (i, r)
-                acc = acc * f_from_bits(gp[tile_elem_index(r0 + i, 0)]);
+                acc = acc * f_from_bits(gp[tile_elem_index(r0p + i, 0)]);
             }
             crep = acc;
         }
@@ -600,7 +613,7 @@ TT_KERNEL void writer(
             }
             // replay of the previous verify's accepted prefix: c = prod dec_prev[0..r), w[i] = prod dec_prev[i+1..r)
 #if !GDN_SFPU_GATE  // (SFPU_GATE: computed above, before the gates)
-            float wrep[T];
+            float wrep[LZ_FRESH_AT];
             float crep = 1.0f;
             if (r_rep > 0) {
                 auto gp_lock = gprev.scoped_write_lock(1);
@@ -608,7 +621,7 @@ TT_KERNEL void writer(
                 float acc = 1.0f;
                 for (uint32_t i = r_rep; i-- > 0;) {
                     wrep[i] = acc;  // prod over j in (i, r)
-                    acc = acc * f_from_bits(gp[tile_elem_index(r0 + i, 0)]);
+                    acc = acc * f_from_bits(gp[tile_elem_index(r0p + i, 0)]);
                 }
                 crep = acc;
             }
@@ -640,13 +653,19 @@ TT_KERNEL void writer(
                     const uint32_t eb = bits_from_f(e_cum);
                     const uint32_t bb = beta_all[t];
                     const uint32_t nbe = bits_from_f(beta[t] * e_cum) ^ kSign;
-                    const uint32_t wb = (t < r_rep) ? bits_from_f(wrep[t]) : 0u;
                     for (uint32_t c = 0; c < 32; ++c) {
                         const uint32_t idx = tile_elem_index(row, c);
                         c32[kE + idx] = eb;
                         c32[kBeta + idx] = bb;
                         c32[kNBE + idx] = nbe;
-                        c32[kW + idx] = wb;
+                    }
+                }
+                // W: the replay weight of the previous verify's token i on its stash row r0p + i (r0p == r0 unless the
+                // previous verify had another T); the coefficient tiles were zeroed, so rows past r stay 0
+                for (uint32_t i = 0; i < r_rep; ++i) {
+                    const uint32_t wb = bits_from_f(wrep[i]);
+                    for (uint32_t c = 0; c < 32; ++c) {
+                        c32[kW + tile_elem_index(r0p + i, c)] = wb;
                     }
                 }
 #if !GDN_SFPU_GATE
@@ -804,7 +823,7 @@ TT_KERNEL void writer(
             }
             // replay of the previous verify's accepted prefix: c = prod dec_prev[0..r), w[i] = prod dec_prev[i+1..r)
 #if !GDN_SFPU_GATE  // (SFPU_GATE: computed above, before the gates)
-            float wrep[T];
+            float wrep[LZ_FRESH_AT];
             float crep = 1.0f;
             if (r_rep > 0) {
                 auto gp_lock = gprev.scoped_write_lock(1);
@@ -812,7 +831,7 @@ TT_KERNEL void writer(
                 float acc = 1.0f;
                 for (uint32_t i = r_rep; i-- > 0;) {
                     wrep[i] = acc;  // prod over j in (i, r)
-                    acc = acc * f_from_bits(gp[tile_elem_index(r0 + i, 0)]);
+                    acc = acc * f_from_bits(gp[tile_elem_index(r0p + i, 0)]);
                 }
                 crep = acc;
             }
@@ -844,13 +863,19 @@ TT_KERNEL void writer(
                     const uint32_t eb = bits_from_f(e_cum);
                     const uint32_t bb = beta_all[t];
                     const uint32_t nbe = bits_from_f(beta[t] * e_cum) ^ kSign;
-                    const uint32_t wb = (t < r_rep) ? bits_from_f(wrep[t]) : 0u;
                     for (uint32_t c = 0; c < 32; ++c) {
                         const uint32_t idx = tile_elem_index(row, c);
                         c32[kE + idx] = eb;
                         c32[kBeta + idx] = bb;
                         c32[kNBE + idx] = nbe;
-                        c32[kW + idx] = wb;
+                    }
+                }
+                // W: the replay weight of the previous verify's token i on its stash row r0p + i (r0p == r0 unless the
+                // previous verify had another T); the coefficient tiles were zeroed, so rows past r stay 0
+                for (uint32_t i = 0; i < r_rep; ++i) {
+                    const uint32_t wb = bits_from_f(wrep[i]);
+                    for (uint32_t c = 0; c < 32; ++c) {
+                        c32[kW + tile_elem_index(r0p + i, c)] = wb;
                     }
                 }
 #if !GDN_SFPU_GATE

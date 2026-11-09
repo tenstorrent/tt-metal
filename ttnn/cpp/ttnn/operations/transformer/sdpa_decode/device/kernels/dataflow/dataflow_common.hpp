@@ -642,6 +642,21 @@ void read_q(
     }
 }
 
+// Bounded K/V tail reads (KV_TAIL_CLAMP: the op's clamp_kv_tail, see SdpaDecodeParams::clamp_kv_tail). The last k-chunk
+// ends on a chunk boundary, so it can span tile rows past the tile that holds cur_pos (in spec mode: the group's largest
+// bound). Every such row is masked to -inf for every q row, so its K/V never reach the output. With the clamp those rows
+// read the cur_pos tile instead of resolving their own page-table entries, which may lie past the blocks the row holds:
+// with 64-row blocks and the spec 128-row chunk, a row only ceil((cur_pos + 1) / 64) entries wide is read one entry
+// past its end whenever that count is odd (a 256-row chunk: up to three), and that entry is the page's unwritten DRAM
+// padding (stale bytes, possibly a wild block id). kv_tail_clamp == false is the legacy read.
+template <bool kv_tail_clamp>
+FORCE_INLINE uint32_t kv_tail_tile_row(uint32_t tile_row, uint32_t kv_last_tile_row) {
+    if constexpr (kv_tail_clamp) {
+        return tile_row < kv_last_tile_row ? tile_row : kv_last_tile_row;
+    }
+    return tile_row;
+}
+
 // Multicast parameters for K streaming (vertical multicast along y, same x)
 struct KMcastParams {
     bool do_mcast;          // true = sender, false = receiver
@@ -662,6 +677,7 @@ template <
     bool is_page_table_sharded,
     bool use_mcast,
     uint32_t capacity_t,
+    bool kv_tail_clamp,
     typename KReaderType>
 uint32_t read_k(
     uint32_t k_chunk_tiles,
@@ -672,6 +688,7 @@ uint32_t read_k(
     volatile tt_l1_ptr uint16_t* page_table_ptr_u16,
     volatile tt_l1_ptr uint32_t* page_table_ptr_u32,
     uint32_t& barrier_count,
+    uint32_t kv_last_tile_row,
     const KMcastParams& mcast_params = {}) {
     Noc noc;
     CircularBuffer cb_k(cb_k_in);
@@ -684,7 +701,8 @@ uint32_t read_k(
         if (mcast_params.do_mcast) {
             for (uint32_t row = 0; row < Sk_chunk_t_dynamic; ++row) {
                 uint32_t k_write_ptr_col = k_write_ptr + row * k_tile_bytes;
-                uint32_t virtual_k_tile_row_num = k_chunk_start_row_num + row;
+                uint32_t virtual_k_tile_row_num =
+                    kv_tail_tile_row<kv_tail_clamp>(k_chunk_start_row_num + row, kv_last_tile_row);
                 uint32_t physical_k_tile_id =
                     (is_page_table_sharded) ? virtual_seq_tile_id_to_physical_tile_id<
                                                   uint16_t,
@@ -754,7 +772,8 @@ uint32_t read_k(
         // Non-multicast path: original transposed read
         for (uint32_t row = 0; row < Sk_chunk_t_dynamic; ++row) {
             uint32_t k_write_ptr_col = k_write_ptr + row * k_tile_bytes;
-            uint32_t virtual_k_tile_row_num = k_chunk_start_row_num + row;
+            uint32_t virtual_k_tile_row_num =
+                kv_tail_tile_row<kv_tail_clamp>(k_chunk_start_row_num + row, kv_last_tile_row);
             uint32_t physical_k_tile_id =
                 (is_page_table_sharded)
                     ? virtual_seq_tile_id_to_physical_tile_id<uint16_t, num_kv_heads, block_size_t, DHt, capacity_t>(
@@ -793,6 +812,7 @@ template <
     bool is_page_table_sharded,
     bool reuse_k,
     uint32_t capacity_t,
+    bool kv_tail_clamp,
     typename VReaderType>
 void read_v(
     uint32_t v_chunk_tiles,
@@ -803,6 +823,7 @@ void read_v(
     volatile tt_l1_ptr uint16_t* page_table_ptr_u16,
     volatile tt_l1_ptr uint32_t* page_table_ptr_u32,
     uint32_t& barrier_count,
+    uint32_t kv_last_tile_row,
     uint32_t k_base_read_ptr = 0,
     uint32_t k_tile_bytes = 0) {
     Noc noc;
@@ -835,7 +856,8 @@ void read_v(
         // V is an independent tensor with its own layout (width = vDHt, not DHt)
         barrier_count = 0;
         for (uint32_t row = 0; row < Sk_chunk_t_dynamic; ++row) {
-            uint32_t virtual_v_tile_row_num = k_chunk_start_row_num + row;
+            uint32_t virtual_v_tile_row_num =
+                kv_tail_tile_row<kv_tail_clamp>(k_chunk_start_row_num + row, kv_last_tile_row);
             // Use vDHt for V tensor's width since V is independent
             uint32_t physical_v_tile_id =
                 (is_page_table_sharded)

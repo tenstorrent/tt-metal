@@ -59,6 +59,10 @@ void bind_sdpa_decode(nb::module_& mod) {
             spec_pack_heads (int, optional): paged decode only, with `spec_multi_pos_tiles`. `nh` > 0 packs a group's `Tg`
                 candidates x `nh` valid q rows into one q tile (per-row causal mask); the valid output rows are
                 bit-identical to the unpacked call and the padding rows are not written. Defaults to `0`.
+            clamp_kv_tail (bool, optional): paged decode only. `True` reads the K/V tile that holds `cur_pos` in place of
+                every tile row of the last k-chunk past it (those rows are fully masked), so no page-table entry past the
+                block holding `cur_pos` is resolved. Output is bit-identical whenever the legacy read lands on finite
+                data. Defaults to `False`.
 
 
         Returns:
@@ -133,7 +137,13 @@ void bind_sdpa_decode(nb::module_& mod) {
         // per-row causal mask. Same KV chunking, core split and reduction order as the unpacked
         // call, so rows [0, NH) of every output row-tile are bit-identical to it; the padding
         // rows NH..31 are not written. Needs Tg * S <= 32 and an interleaved output.
-        nb::arg("spec_pack_heads") = 0u);
+        nb::arg("spec_pack_heads") = 0u,
+        // clamp_kv_tail (default false = the legacy reader): K/V tile rows of the last k-chunk
+        // past the tile holding cur_pos (masked for every q row) read that tile instead of
+        // resolving their own page-table entries, which a row sized to its request does not
+        // hold (the read lands on the page's unwritten DRAM padding). See
+        // SdpaDecodeParams::clamp_kv_tail.
+        nb::arg("clamp_kv_tail") = false);
 
     ttnn::bind_function<"flash_multi_latent_attention_decode", "ttnn.transformer.">(
         mod,

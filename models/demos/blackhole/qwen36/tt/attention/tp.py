@@ -69,6 +69,31 @@ def _probe_spec_sdpa_pack():
 SPEC_SDPA_PACK_SUPPORTED = _probe_spec_sdpa_pack()
 
 
+def _probe_sdpa_kv_clamp():
+    """Whether this ttnn build's paged SDPA decode takes ``clamp_kv_tail`` (QWEN36_SPEC_SDPA_KV_CLAMP). Probed at import
+    from the docstring, with no device, like _probe_spec_sdpa_pack."""
+    try:
+        return "clamp_kv_tail" in (ttnn.transformer.paged_scaled_dot_product_attention_decode.__doc__ or "")
+    except Exception:  # pragma: no cover
+        return False
+
+
+SDPA_KV_CLAMP_SUPPORTED = _probe_sdpa_kv_clamp()
+
+
+def sdpa_kv_clamp_kwargs():
+    """QWEN36_SPEC_SDPA_KV_CLAMP (tp_common.spec_sdpa_kv_clamp_enabled; on by default with QWEN36_SPEC_ADAPTIVE_K=1):
+    {"clamp_kv_tail": True} for every paged SDPA-decode call, or {} (today's call, byte for byte). Read per call; the
+    traces capture whatever it was at capture time, so set it before the engine is built."""
+    if not tpc.spec_sdpa_kv_clamp_enabled():
+        return {}
+    assert SDPA_KV_CLAMP_SUPPORTED, (
+        "QWEN36_SPEC_SDPA_KV_CLAMP (or QWEN36_SPEC_ADAPTIVE_K) needs a ttnn build whose paged SDPA decode takes "
+        "clamp_kv_tail; set QWEN36_SPEC_SDPA_KV_CLAMP=0 to run without it"
+    )
+    return {"clamp_kv_tail": True}
+
+
 def _free_unless_view(src, padded):
     """Free ``src`` after ``padded = ttnn.pad(src, ...)``, unless pad returned a view of it.
 
@@ -934,6 +959,10 @@ class TPAttention:
         if key not in self._spec_sdpa_cfg_cache:
             plan = None
             fit = self._SPEC_SDPA_L1_FIT.get(T)
+            if T > 4 and tpc.spec_adaptive_k_sdpa_one_group() and self.spec_sdpa_pack_heads(T):
+                # QWEN36_SPEC_ADAPTIVE_K (wide family T): all T candidates in one packed q tile -> one group per user,
+                # the T=4 entry's cap of 64 cores per group (flag off: never taken, the table's split as before)
+                fit = (1, 64, 0)
             if fit is not None:
                 groups, max_cores, k_chunk = fit
                 grid = self.mesh.compute_with_storage_grid_size()
@@ -1221,6 +1250,7 @@ class TPAttention:
                     memory_config=_L1,
                     spec_multi_pos_tiles=_spec_tiles,
                     **({"spec_pack_heads": _pack} if _pack else {}),
+                    **sdpa_kv_clamp_kwargs(),
                 )
                 ttnn.deallocate(q)
                 # Output is byte-identical to the legacy [1,B,32,HD]; view it back (same alias trick).
@@ -1238,6 +1268,7 @@ class TPAttention:
                     # change the SDPA reduction), before the wo matmul + all-reduce re-materialize to DRAM.
                     memory_config=_L1,
                     **self._decode_window_kw(),
+                    **sdpa_kv_clamp_kwargs(),
                 )
                 ttnn.deallocate(q)
         else:
@@ -1594,6 +1625,7 @@ class TPAttention:
             memory_config=_L1,
             spec_multi_pos_tiles=_spec_tiles,
             **({"spec_pack_heads": _pack} if _pack else {}),
+            **sdpa_kv_clamp_kwargs(),
         )
         ttnn.deallocate(q)
         attn_out = ttnn.reshape(attn_out, ttnn.Shape([1, B, NH, HD]), ttnn.Shape([1, B, ttnn.TILE_SIZE, HD]))
@@ -1720,6 +1752,7 @@ class TPAttention:
             program_config=sdpa_dec_cfg,
             memory_config=_L1,
             **self._decode_window_kw(),
+            **sdpa_kv_clamp_kwargs(),
         )
         ttnn.deallocate(q)
 

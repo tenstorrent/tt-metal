@@ -601,6 +601,84 @@ def spec_bucket_hold():
     return max(0, int(os.environ.get("QWEN36_SPEC_BUCKET_HOLD", "16")))
 
 
+def spec_adaptive_k_enabled():
+    """QWEN36_SPEC_ADAPTIVE_K (default "0"): per-step draft depth. Besides its base family (B users x K = QWEN36_SPEC_K
+    drafts), the spec engine prepares and captures a WIDE family (QWEN36_SPEC_ADAPTIVE_K_WIDE: b users x Kw drafts, b*(Kw+1)
+    <= 32 rows) that runs every step whose live engine rows all sit below b, so a small batch still fills the 32-row verify
+    tile with drafts. The runner-facing block is [B, 1 + max(K, Kw)] (vLLM num_speculative_tokens = max(K, Kw), the model's
+    SpecPlan.k_by_rows caps the drafts by live rows). "0": the engine and every trace are byte for byte the base family."""
+    return os.environ.get("QWEN36_SPEC_ADAPTIVE_K", "0") == "1"
+
+
+def spec_adaptive_k_wide(B=8):
+    """QWEN36_SPEC_ADAPTIVE_K_WIDE (default "4:5"): '<users>:<K>' of the adaptive wide family (see spec_adaptive_k_enabled).
+    ``users`` must be a row bucket below B (1, 2 or 4) and users * (K + 1) <= 32. Returns (users, K).
+
+    The default is measured, not the tile fill: each extra draft costs ~1.4 ms of drafter (one chained MTP step) + ~0.45 ms
+    of verify at <= 4 users and 32K (6.5% of the K = 3 step; ttsim-perf model within 1.3% of silicon), while the k-th draft
+    adds P(all k accepted) tokens, which falls ~0.7x per depth on real text. On the 32K production-loop harness 4:5 and 4:4
+    gain 1-5% over K = 3 at 1 / 2 / 4 users and 4:7 (the full 32-row tile) loses 1-5%; 4:7 pays only when the per-depth
+    acceptance stays above ~0.8 (tests/test_spec_adaptive_k_devidle.py; the "Cost model" note in tt/spec_adaptive.py)."""
+    text = os.environ.get("QWEN36_SPEC_ADAPTIVE_K_WIDE", "4:5").strip()
+    try:
+        b, k = (int(x) for x in text.split(":"))
+    except ValueError:
+        raise ValueError(f"QWEN36_SPEC_ADAPTIVE_K_WIDE must be '<users>:<K>', got {text!r}") from None
+    if b not in (1, 2, 4) or b >= B or k < 1 or b * (k + 1) > TILE_SIZE:
+        raise ValueError(
+            f"QWEN36_SPEC_ADAPTIVE_K_WIDE={text!r}: users must be a row bucket in (1, 2, 4) below B={B} and "
+            f"users * (K + 1) <= {TILE_SIZE}"
+        )
+    return b, k
+
+
+def spec_adaptive_k_sdpa_one_group():
+    """QWEN36_SPEC_ADAPTIVE_K_SDPA (default "1"; read only with QWEN36_SPEC_ADAPTIVE_K=1): the fused spec-verify SDPA of a
+    T > 4 verify (the wide family's T = Kw + 1) whose T candidates x NH local q heads fit ONE packed q tile
+    (QWEN36_SPEC_SDPA_PACKED: T * (NH + NH % 2) <= 32, T <= 8 at TP8) runs as one group of Tg = T per user, so each user's
+    KV streams out of DRAM once per layer, instead of the attention table's T / 4 groups of Tg = 4 (each re-reading the
+    user's KV). Not bit-identical to the split (the cores per group, so the KV chunk reduction tree, differ); "0" keeps the
+    split. Flag off (QWEN36_SPEC_ADAPTIVE_K=0): always False, every plan is the table's."""
+    return spec_adaptive_k_enabled() and os.environ.get("QWEN36_SPEC_ADAPTIVE_K_SDPA", "1") == "1"
+
+
+def spec_sdpa_kv_clamp_enabled():
+    """QWEN36_SPEC_SDPA_KV_CLAMP ("1" on, "0" off; unset = QWEN36_SPEC_ADAPTIVE_K): every paged SDPA-decode call (spec
+    verify, drafter, plain decode) passes clamp_kv_tail=True, so the K/V tile rows of the last k-chunk past the tile
+    holding the call's last position read that tile instead of their own page-table entries.
+
+    Why: the dynamic k-chunk is 128 rows (two 64-row blocks) from position 64 on, so a chunk can end one block past the
+    block holding the last candidate. The op resolves that block's page-table entry although every row of it is masked.
+    Inside a row that entry is block 0 or a stale valid block (finite K/V, masked to zero), but one entry past a row's end
+    it is the row-major page's unwritten DRAM padding, i.e. stale host command-queue bytes: a wild block id that can pull
+    Inf / NaN into the masked columns and turn the user's whole output into garbage on every chip
+    (test_spec_adaptive_k_sdpa.py's tight tables after an in-process mesh re-open). Production rows are
+    spec_table_width = ceil((262144 + K + 1) / 64) = 4097 entries, so r5 reaches past a row only when a verify window ends
+    at position >= 262144 (a request within K tokens of max_model_len 262144) or a drafter write does; the clamp closes
+    that too. With finite K/V under the masked columns the output is bit-identical (masked scores are -inf, P = 0).
+    Unset with QWEN36_SPEC_ADAPTIVE_K=0: the calls are r5's, byte for byte."""
+    v = os.environ.get("QWEN36_SPEC_SDPA_KV_CLAMP", "").strip()
+    if v == "":
+        return spec_adaptive_k_enabled()
+    return v == "1"
+
+
+def spec_adaptive_k_compact_enabled():
+    """QWEN36_SPEC_ADAPTIVE_K_COMPACT (default "1"; read only with QWEN36_SPEC_ADAPTIVE_K=1): when at most b users are live
+    but one of them sits at engine row >= b (rows free up anywhere; a new request takes the lowest free row), move the live
+    rows to rows 0..b-1 (one device slot remap of every GDN layer's state, ~0.3-0.5 s, after the HOLD steps) so the wide
+    family can run. "0": never move a live row; the wide family runs only while the live rows already fit."""
+    return os.environ.get("QWEN36_SPEC_ADAPTIVE_K_COMPACT", "1") == "1"
+
+
+def spec_adaptive_k_hold():
+    """QWEN36_SPEC_ADAPTIVE_K_HOLD (default QWEN36_SPEC_BUCKET_HOLD): consecutive steps whose live rows fit the wide family
+    before a chained step switches to it (the switch breaks the chain once); a step that breaks the chain anyway switches at
+    once. The switch back to the base family (a row at or above the wide width goes live) is always immediate."""
+    v = os.environ.get("QWEN36_SPEC_ADAPTIVE_K_HOLD")
+    return spec_bucket_hold() if v is None or not v.strip() else max(0, int(v))
+
+
 def engine_spec_buckets(B=8):
     """The engine's view of QWEN36_SPEC_BUCKETS: as spec_buckets, but an engine narrower than 8 (B < 8) keeps only the buckets
     <= B plus B itself, instead of raising; the warning is logged only when QWEN36_SPEC_BUCKETS is explicitly set (unset: clip

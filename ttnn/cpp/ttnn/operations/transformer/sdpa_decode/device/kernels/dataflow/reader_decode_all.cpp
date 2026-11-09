@@ -184,6 +184,16 @@ void kernel_main() {
         cur_pos = (cur_pos / original_block_size) * 32 + (cur_pos % original_block_size);
     }
 
+    // KV_TAIL_CLAMP (the op's clamp_kv_tail; a define so the off build is the legacy kernel): K/V tile rows of the last
+    // k-chunk past the tile holding cur_pos read that tile instead of their own page-table entries (kv_tail_tile_row).
+#ifdef KV_TAIL_CLAMP
+    constexpr bool kv_tail_clamp = true;
+    const uint32_t kv_last_tile_row = cur_pos / tt::constants::TILE_HEIGHT;
+#else
+    constexpr bool kv_tail_clamp = false;
+    constexpr uint32_t kv_last_tile_row = 0;
+#endif
+
     auto Sk_chunk_t_dynamic = get_dynamic_Sk_chunk_t<Sk_chunk_t, max_dynamic_chunk_size>(cur_pos);
     auto k_chunk_size_dynamic = Sk_chunk_t_dynamic * tt::constants::TILE_HEIGHT;
 
@@ -332,7 +342,8 @@ void kernel_main() {
                     barrier_threshold,
                     is_page_table_sharded,
                     use_k_mcast,
-                    capacity_t>(
+                    capacity_t,
+                    kv_tail_clamp>(
                     k_chunk_tiles,
                     cur_head,
                     Sk_chunk_t_dynamic,
@@ -341,6 +352,7 @@ void kernel_main() {
                     page_table_ptr_u16,
                     page_table_ptr_u32,
                     barrier_count,
+                    kv_last_tile_row,
                     k_mcast_params);
 
                 if constexpr (use_attention_mask) {
@@ -357,7 +369,8 @@ void kernel_main() {
                     barrier_threshold,
                     is_page_table_sharded,
                     reuse_k,
-                    capacity_t>(
+                    capacity_t,
+                    kv_tail_clamp>(
                     v_chunk_tiles,
                     cur_head,
                     Sk_chunk_t_dynamic,
@@ -366,6 +379,7 @@ void kernel_main() {
                     page_table_ptr_u16,
                     page_table_ptr_u32,
                     barrier_count,
+                    kv_last_tile_row,
                     k_base_read_ptr,
                     k_tile_bytes);
             }

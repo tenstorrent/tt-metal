@@ -46,6 +46,12 @@
 #ifndef GDN_LAZY
 #define GDN_LAZY 0  // kernel_opts bit 8 (K4): D from ring slot 0 + the previous verify's stash
 #endif
+// the ctrl mi that marks a FRESH row under K4: T, or T_alloc = GDN_MI_MAX + 1 when QWEN36_SPEC_ADAPTIVE_K alternates T
+#ifdef GDN_MI_MAX
+#define LZ_FRESH_AT (GDN_MI_MAX + 1)
+#else
+#define LZ_FRESH_AT T
+#endif
 #ifndef GDN_RING_SPLIT
 #define GDN_RING_SPLIT 0  // kernel_opts bit 18: this reader writes the odd tokens' post-token states to the ring (NoC 1)
 #endif
@@ -209,7 +215,7 @@ TT_KERNEL void reader(uint32_t u, uint32_t h, uint32_t b_idx, uint32_t s) {
 #if GDN_LAZY
     // no replay for HOLD or FRESH (the writer's r = 0): zero stash tiles, never the stale stash (the same rule as the
     // writer's r_rep)
-    const bool lazy_no_replay = (blk == hold_sentinel) || (mi >= T);
+    const bool lazy_no_replay = (blk == hold_sentinel) || (mi >= LZ_FRESH_AT);
 #endif
     const bool hold = (blk == hold_sentinel);  // RING_SPLIT: held heads skip their (odd tokens') ring writes too
     (void)hold;
@@ -220,17 +226,26 @@ TT_KERNEL void reader(uint32_t u, uint32_t h, uint32_t b_idx, uint32_t s) {
         mi = 0;
     }
 #if GDN_LAZY
-    // K4: the state is always D (slot 0); FRESH (mi >= T: a seeded / restored row, nothing to replay) rebuilds the conv
-    // window at mi 0 like any first verify of a row. The stash of the previous verify sits in slot 1 + par.
+    // K4: the state is always D (slot 0); FRESH (mi >= LZ_FRESH_AT: a seeded / restored row, nothing to replay)
+    // rebuilds the conv window at mi 0 like any first verify of a row. The stash of the previous verify sits in slot
+    // 1 + par. QWEN36_SPEC_ADAPTIVE_K (GDN_MI_MAX): a carried mi may come from a longer previous verify, so FRESH is
+    // marked at T_alloc = GDN_MI_MAX + 1 instead of T.
     blk = bh;
-    if (mi >= T) {
+    if (mi >= LZ_FRESH_AT) {
         mi = 0;
     }
     const uint32_t stash_blk = ((1 + par) * M + u) * Nv + h;
 #endif
+#ifdef GDN_MI_MAX
+    // QWEN36_SPEC_ADAPTIVE_K: the window holds the carry rows of a longer verify's mi (the host validated GDN_MI_MAX)
+    if (mi > GDN_MI_MAX) {
+        mi = GDN_MI_MAX;
+    }
+#else
     if (mi > T - 1) {
         mi = T - 1;  // ctrl contents are data (not validated by the host): an out-of-range mi is clamped, not reported
     }
+#endif
     // the initial state of this block: KVs tiles of ring block blk (VB = 1: the whole 16-tile block in one run)
     auto read_state = [&]() {
         if constexpr (VB == 1) {

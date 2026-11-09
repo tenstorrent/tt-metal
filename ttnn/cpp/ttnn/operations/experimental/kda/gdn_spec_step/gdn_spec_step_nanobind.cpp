@@ -50,6 +50,9 @@ void bind_gdn_spec_step(nb::module_& mod) {
                 64 = gate split (with 2 and value_blocks > 1: the head's blocks split the gate math); 128 = each value
                 block normalizes / gates only its own output columns. Out, ring and window stay bit-identical to
                 kernel_opts=0.
+            mi_max (int): default 0 (= T - 1). The value the reader clamps the ctrl page's mi to. An engine that
+                alternates T between verifies passes the longest T - 1 here (its window holds that many carry rows),
+                so a short-T verify can follow a long-T one. 0 keeps the original program (no define).
             With fast_mode=True, fp32_state=True a T = 1 call is bit-identical (out, state, window) to
             gdn_decode_step(..., fast_mode=True, fp32_state=True), and a T-step call equals T chained T = 1 calls.
         )doc",
@@ -83,7 +86,8 @@ void bind_gdn_spec_step(nb::module_& mod) {
         nb::arg("fp32_state") = false,
         nb::arg("max_users") = 0,
         nb::arg("value_blocks") = 1,
-        nb::arg("kernel_opts") = 0);
+        nb::arg("kernel_opts") = 0,
+        nb::arg("mi_max") = 0);
 }
 
 }  // namespace ttnn::operations::experimental::kda::gdn_spec_step::detail

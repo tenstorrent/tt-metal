@@ -161,6 +161,12 @@ void SdpaDecodeDeviceOperation::validate_on_program_cache_miss(
             operation_attributes.output_mem_config.memory_layout());
     }
 
+    // clamp_kv_tail bounds the page-table lookups of the K/V reads (SdpaDecodeParams::clamp_kv_tail).
+    TT_FATAL(
+        !operation_attributes.clamp_kv_tail ||
+            (operation_attributes.paged_attention && tensor_args.page_table_tensor.has_value()),
+        "clamp_kv_tail requires paged attention with a page_table tensor");
+
     // Input 0 must be sharded by height or DRAM interleaved. All other inputs must be in DRAM.
     const auto Q_memcfg = input_tensors.at(0).memory_config();
     if (input_tensors.at(0).is_sharded()) {
@@ -688,7 +694,8 @@ Tensor sdpa_decode(
     std::optional<ttnn::operations::transformer::PagedCacheGeometryOverride> paged_cache_geometry,
     std::optional<uint32_t> cache_position_modulo,
     uint32_t spec_multi_pos_tiles,
-    uint32_t spec_pack_heads) {
+    uint32_t spec_pack_heads,
+    bool clamp_kv_tail) {
     using OperationType = SdpaDecodeDeviceOperation;
     auto operation_attributes = OperationType::operation_attributes_t{
         .is_causal = is_causal,
@@ -708,6 +715,7 @@ Tensor sdpa_decode(
         .cache_position_modulo = cache_position_modulo,
         .spec_multi_pos_tiles = spec_multi_pos_tiles,
         .spec_pack_heads = spec_pack_heads,
+        .clamp_kv_tail = clamp_kv_tail,
     };
 
     auto tensor_args = OperationType::tensor_args_t{

@@ -43,7 +43,8 @@ ttnn::Tensor paged_scaled_dot_product_attention_decode(
     std::optional<operations::transformer::PagedCacheGeometryOverride> paged_cache_geometry = std::nullopt,
     std::optional<uint32_t> cache_position_modulo = std::nullopt,
     uint32_t spec_multi_pos_tiles = 0,
-    uint32_t spec_pack_heads = 0);
+    uint32_t spec_pack_heads = 0,
+    bool clamp_kv_tail = false);
 
 ttnn::Tensor flash_multi_latent_attention_decode(
     const ttnn::Tensor& input_tensor_q,

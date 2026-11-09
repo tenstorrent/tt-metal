@@ -30,6 +30,30 @@ def fresh_mi(T):
     return int(T)
 
 
+def fresh_at(T, mi_max=0):
+    """The ctrl mi from which the op treats a row as FRESH: T, or T_alloc = mi_max + 1 when QWEN36_SPEC_ADAPTIVE_K passes
+    gdn_spec_step(mi_max) (a carried mi of a longer previous verify is a real prefix, not FRESH)."""
+    return int(mi_max) + 1 if int(mi_max) else int(T)
+
+
+def ctrl_word0(parity, prev_T=0):
+    """Ctrl page word 0: the window parity (bit 0) and, under K4 + QWEN36_SPEC_ADAPTIVE_K, the previous verify's T in bits
+    8..15 when it differs from this verify's (0 = the same T: every chained step and every step with the flag off)."""
+    return (int(parity) & 1) | ((int(prev_T) & 0xFF) << 8)
+
+
+def ctrl_replay(word0, mi, u, T, mi_max=0, hold=False):
+    """(r0p, r, par): what writer_gdn_spec_step (GDN_LAZY) derives from the ctrl page -- the stash rows of the previous verify
+    start at r0p = (u * T_prev) % 32 (T_prev = word0 bits 8..15, 0 = T), it replays r = mi + 1 of them (0 for a FRESH
+    row, mi >= fresh_at(T, mi_max), or HOLD), never past the tile. Mirrors the kernel line by line (host tests only)."""
+    tp = (int(word0) >> 8) & 0xFF
+    r0 = (int(u) * int(T)) % TILE
+    r0p = (int(u) * tp) % TILE if 0 < tp <= TILE else r0
+    r = 0 if (hold or int(mi) >= fresh_at(T, mi_max)) else int(mi) + 1
+    r = min(r, TILE - r0p)
+    return r0p, r, int(word0) & 1
+
+
 def _tile(block, page, Vt):
     """[32, 32] view of tile page ``page`` of a [Dk, Dv] block (tile (i, j) = page i*Vt + j)."""
     i, j = divmod(int(page), int(Vt))

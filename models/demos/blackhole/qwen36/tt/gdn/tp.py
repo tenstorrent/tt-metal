@@ -145,6 +145,15 @@ def gdn_spec_step_lazy_sfpu_enabled():
     return os.environ.get("QWEN36_SPEC_STEP_LAZY_SFPU", "0").strip() == "1"
 
 
+def spec_ctrl_prev_t_enabled():
+    """K4 (QWEN36_SPEC_STEP_LAZY=1) with QWEN36_SPEC_ADAPTIVE_K=1: the ctrl page's word 0 carries the previous verify's T
+    in bits 8..15 when it differs from this verify's (a family switch), so gdn_spec_step replays the stash rows that
+    verify wrote at (u * T_prev) % 32. Off otherwise (word 0 = the parity, unchanged)."""
+    from models.demos.blackhole.qwen36.tt.tp_common import spec_adaptive_k_enabled
+
+    return gdn_spec_step_lazy_enabled() and spec_adaptive_k_enabled()
+
+
 def gdn_spec_step_lazy_enabled():
     """QWEN36_SPEC_STEP_LAZY (default "0" = off; K4): the fused spec verify (QWEN36_VERIFY_SPEC_STEP=1, fp32 state) runs
     gdn_spec_step with kernel_opts bit 8: the chunked (WY) token phase + lazy rollback. Per (user, head) one state read
@@ -3591,7 +3600,7 @@ class TPGatedDeltaNet:
     # under a captured trace, where a first-time allocation or host write would either TT_FATAL at
     # capture or bake a throwaway address into the replay.
 
-    def prepare_spec_verify(self, n_users, T):
+    def prepare_spec_verify(self, n_users, T, T_alloc=None):
         """Allocate the persistent buffers a batched spec verify reads and writes.
 
         n_users must be the full decode batch (the ring, the window and the row packing are all
@@ -3606,13 +3615,23 @@ class TPGatedDeltaNet:
 
         Call it eagerly, before the verify warmup pass, so the warmup compiles every program the
         captured body replays.
+
+        ``T_alloc`` (QWEN36_SPEC_ADAPTIVE_K; None = T): size the ring and the window for this longer T, so verifies of every
+        T <= T_alloc (the engine's base and wide families) share one ring / window pair. The ring stays B wide (the op's
+        max_users = B), so a user's accepted state block (mi*B + u) is the same under every T; a shorter-T verify after a
+        longer one reads its carry rows through gdn_spec_step(mi_max = T_alloc - 1). Rows of a T = T_alloc verify are at
+        most n_users * T_alloc <= 32 (a narrower family); this call only checks the B-wide T.
         """
         assert 1 <= n_users <= self.B, f"spec verify rows must be in 1..B: n_users={n_users}, B={self.B}"
         n_users = self.B  # the state buffers are always B wide; a b-row verify (b < B) runs on them
         assert T >= 1, f"T must be at least 1, got {T}"
-        assert (
-            n_users * T <= tpc.TILE_SIZE
-        ), f"{n_users} users x {T} rows = {n_users * T} exceeds the {tpc.TILE_SIZE}-row decode tile"
+        if T_alloc is not None:
+            T = max(T, int(T_alloc))  # QWEN36_SPEC_ADAPTIVE_K: one ring / window pair for every family's T
+            assert self.K - 1 + T <= tpc.TILE_SIZE, f"window K-1+T_alloc = {self.K - 1 + T} exceeds one tile"
+        else:
+            assert (
+                n_users * T <= tpc.TILE_SIZE
+            ), f"{n_users} users x {T} rows = {n_users * T} exceeds the {tpc.TILE_SIZE}-row decode tile"
         if self.conv_states is None:
             self.reset_state()
         if self._spec_shape == (n_users, T):
@@ -3705,7 +3724,7 @@ class TPGatedDeltaNet:
                 mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh),
             )
 
-    def _gdn_spec_step(self, qkvzab, win_a, win_b, ring, ctrl, T, B, max_users=None):
+    def _gdn_spec_step(self, qkvzab, win_a, win_b, ring, ctrl, T, B, max_users=None, mi_max=0):
         """The one fused dispatch (QWEN36_VERIFY_SPEC_STEP=1): raw [1, B*T, W] projection rows in, gated
         [1, B*T, Nv*Dv] bf16 (L1) out; ring / win[1-par] updated in place. Same call for the verify (ring =
         _spec_ring, the staged ctrl page) and the seed (ring = rec_state, the identity page, T = 1). dt_bias /
@@ -3726,6 +3745,8 @@ class TPGatedDeltaNet:
                 f"[gdn-spec-step] QWEN36_SPEC_STEP_VALUE_BLOCKS={_vb}: state columns split over up to {_vb} cores "
                 "per (user, head) (bit-identical; the op clamps to the grid per (B, T))",
             )
+        if mi_max:  # QWEN36_SPEC_ADAPTIVE_K: a short-T verify reads the carry rows of a longer one (prepare_spec_verify)
+            extra["mi_max"] = int(mi_max)
         _opts = gdn_spec_step_kernel_opts()
         if _opts and self._decode_step_fp32_state:  # the restructurings exist for the fast_mode + fp32_state program
             extra["kernel_opts"] = _opts
@@ -3880,7 +3901,10 @@ class TPGatedDeltaNet:
         B, R = n_users, n_users * T
         win = self._verify_win_pair
         # B rows (a bucket b <= self.B) run on the shared self.B-wide ring / ctrl page: max_users = the state width.
-        gated = self._gdn_spec_step(qkvzab, win[0], win[1], self._spec_ring, ctrl, T, B, max_users=self.B)
+        # QWEN36_SPEC_ADAPTIVE_K: a ring / window sized for a longer T (prepare_spec_verify T_alloc) -> mi_max = T_alloc - 1.
+        Ta = self._spec_shape[1] if self._spec_shape is not None else T
+        mx = {"mi_max": Ta - 1} if Ta > T else {}  # flag off: the call is unchanged
+        gated = self._gdn_spec_step(qkvzab, win[0], win[1], self._spec_ring, ctrl, T, B, max_users=self.B, **mx)
         ttnn.deallocate(qkvzab)
         return self._out_proj_tail(gated, R, bucket, decode_ar=decode_ar)
 
@@ -4284,7 +4308,10 @@ class TPGatedDeltaNet:
         assert 1 <= n_users <= self.B, f"spec verify rows must be in 1..B: n_users={n_users}, B={self.B}"
         assert valid_len % n_users == 0, f"valid_len {valid_len} is not {n_users} whole user row-groups"
         T = valid_len // n_users
-        assert self._spec_shape == (self.B, T), (
+        # QWEN36_SPEC_ADAPTIVE_K: buffers sized for a longer T_alloc serve every T <= T_alloc (prepare_spec_verify)
+        assert self._spec_shape == (self.B, T) or (
+            self._spec_shape is not None and self._spec_shape[0] == self.B and T < self._spec_shape[1]
+        ), (
             f"spec buffers are sized for {self._spec_shape}, verify asked for {(self.B, T)}; "
             "call prepare_spec_verify(n_users, T) before capture"
         )

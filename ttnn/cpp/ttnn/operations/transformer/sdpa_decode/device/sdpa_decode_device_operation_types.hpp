@@ -63,6 +63,20 @@ struct SdpaDecodeParams {
     // rows [0, NH) of each output row-tile are written (the padding rows NH..31 are left as
     // allocated). Requires Tg * S <= 32 and an interleaved output.
     uint32_t spec_pack_heads = 0;
+    // Bounded K/V tail reads, paged decode only. false = off (the legacy reader kernel, byte for byte).
+    // The last k-chunk of a batch row ends on a chunk boundary (the dynamic chunk: up to 4 tiles = 128 rows
+    // in spec mode, up to dst_size tiles otherwise), so it can reach past the block that holds cur_pos (spec
+    // mode: the group's largest bound). Those tile rows are masked to -inf for every q row, yet the legacy
+    // reader still resolves their page-table entries: with 64-row blocks and the spec 128-row chunk, a
+    // page-table row only ceil((cur_pos + 1) / 64) entries wide is read one entry past its end whenever
+    // that count is odd (a 256-row chunk reaches up to three entries past). That entry is the row-major
+    // page's unwritten DRAM padding (stale host command-queue bytes), so a wild block id can pull
+    // Inf / NaN K/V into the masked columns and corrupt the whole row's output. When true, the reader
+    // reads the tile that holds cur_pos in place of every tile row past it (kernel define
+    // KV_TAIL_CLAMP). Masked columns contribute exactly zero either way, so the output is
+    // bit-identical whenever the legacy read lands on finite data (e.g. rows wide enough to hold the
+    // last chunk).
+    bool clamp_kv_tail = false;
 };
 
 struct SdpaDecodeInputs {

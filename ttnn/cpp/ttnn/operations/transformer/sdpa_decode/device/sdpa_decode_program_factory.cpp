@@ -969,6 +969,11 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
         reader_desc.defines = pack_defines;
         writer_desc.defines = pack_defines;
     }
+    if (operation_attributes.clamp_kv_tail && is_paged_attention) {
+        // SdpaDecodeParams::clamp_kv_tail: a define (not a compile-time arg) so the reader builds exactly as before
+        // when it is off. Only the reader resolves page-table entries; the writer and compute are unchanged.
+        reader_desc.defines.emplace_back("KV_TAIL_CLAMP", "1");
+    }
 
     KernelDescriptor compute_desc;
     compute_desc.kernel_source = kernel_path + "compute/sdpa_flash_decode.cpp";

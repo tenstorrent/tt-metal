@@ -41,6 +41,7 @@ warm-up of a full chunk stays eager) and the spec short trace for its tail, and 
 per-slot slot-write trace. Same MTP KV semantics as the eager path: slot i = (post-norm base hidden h_i, token_{i+1})
 for every prompt chunk, slot Tp-1 written at the first verify (_warm_mtp_last)."""
 
+import contextlib
 import math
 import os
 import threading
@@ -57,6 +58,7 @@ from ttnn.tools import trace_allocation_tracker
 import ttnn
 from models.demos.blackhole.qwen36.tt import prefill_plan
 from models.demos.blackhole.qwen36.tt.mtp import draft_argmax
+from models.demos.blackhole.qwen36.tt.spec_adaptive import AdaptiveKMixin
 from models.demos.blackhole.qwen36.tt.spec_bucket import apply_row_swap, pick_bucket, plan_row_swap
 from models.demos.blackhole.qwen36.tt.spec_chain import (
     ChainDevice,
@@ -438,7 +440,7 @@ def parked_rows_host(ring, e_prev, s, T):
     return slot, e
 
 
-def parked_rows_host_lazy(ring, e_prev, par, s, T, row):
+def parked_rows_host_lazy(ring, e_prev, par, s, T, row, stash_T=None):
     """parked_rows_host under QWEN36_SPEC_STEP_LAZY (K4): the ring holds D (slot 0) and the last verify's stash
     (slot 1 + par, par = the window parity at park time), not the per-token states, so the committed state is D
     replayed s + 1 tokens on the host (fp32 torch, tt/gdn/lazy_ref.py; the device replay's math, not its bits). The
@@ -446,7 +448,10 @@ def parked_rows_host_lazy(ring, e_prev, par, s, T, row):
     from models.demos.blackhole.qwen36.tt.gdn.lazy_ref import TILE, parked_slot0_lazy
 
     Kt, Vt = ring.shape[-2] // TILE, ring.shape[-1] // TILE
-    slot = parked_slot0_lazy(ring, s, T, par, (int(row) * T) % TILE, Kt, Vt)
+    # T: the ring's slot count (QWEN36_SPEC_ADAPTIVE_K: T_alloc); stash_T: the T of the verify that wrote the stash (its
+    # rows sit at (row * stash_T) % 32; None = T)
+    sT = int(stash_T) if stash_T else int(T)
+    slot = parked_slot0_lazy(ring, s, T, par, (int(row) * sT) % TILE, Kt, Vt)
     e = torch.zeros_like(e_prev)
     e[:, : e_prev.shape[1] - s] = e_prev[:, s:]
     return slot, e
@@ -729,6 +734,7 @@ def spec_memory_costs(
     num_layers=None,
     mask_buckets=None,
     buckets=None,
+    ring_T=None,
 ):
     """PER-DEVICE bytes of the MTP spec-decode state beyond plain decode. Pure: HF text config + tp only.
 
@@ -746,6 +752,7 @@ def spec_memory_costs(
     ``buckets``: the verify/drafter row buckets (QWEN36_SPEC_BUCKETS; None reads the env, default "1,2,4,8" = on, "8" = off = none beyond B). Each bucket
     b < B adds to ``fixed.verify_io`` its persistent trace outputs (normed, logits TILE, RM copy, shard logits; b*T rows, TILE pads
     to 32) and to ``engine_buffers`` its anchor hidden [1,1,b,dim/tp]. Per-bucket page-table slices are not persistent.
+    ``ring_T`` (QWEN36_SPEC_ADAPTIVE_K): the GDN ring and conv windows are sized for this longer T (the wide family's).
     """
     tp, B, K = int(tp), int(batch_size), int(draft_len)
     T, rows = K + 1, B * (K + 1)
@@ -772,10 +779,11 @@ def spec_memory_costs(
     n_gdn = sum(1 for i in range(L) if types[i % len(types)] != "full_attention")
     bf, f32, i32 = 2, 4, 4
 
-    ring = n_gdn * B * _tile_bytes([T * nv_tp, dk, dv], f32)  # [T*B*Nv, Dk, Dv]
-    win_rows = [kconv - 1 + T, kconv] + ([T - 1] if T > 1 else [])  # _verify_win_buf, _conv_win_buf, _spec_win_pad
+    Tr = T if ring_T is None else max(T, int(ring_T))  # the ring / window T (QWEN36_SPEC_ADAPTIVE_K: the longest family's)
+    ring = n_gdn * B * _tile_bytes([Tr * nv_tp, dk, dv], f32)  # [T*B*Nv, Dk, Dv]
+    win_rows = [kconv - 1 + Tr, kconv] + ([Tr - 1] if Tr > 1 else [])  # _verify_win_buf, _conv_win_buf, _spec_win_pad
     if os.environ.get("QWEN36_VERIFY_SPEC_STEP", "1") == "1":  # gdn_spec_step keeps E_prev as a ping-pong pair
-        win_rows.append(kconv - 1 + T)
+        win_rows.append(kconv - 1 + Tr)
     windows = n_gdn * B * sum(_tile_bytes([r, C], bf) for r in win_rows)
     hidden = B * _tile_bytes([1, 1, 1, dim_frac], bf)
     per_seq = {"gdn_ring": ring, "gdn_conv_windows": windows, "drafter_hidden": hidden}
@@ -972,7 +980,7 @@ class _SnapRun:
         self.saved.append(p)
 
 
-class MTPSpecEngine:
+class MTPSpecEngine(AdaptiveKMixin):
     """MTP speculative decode engine over B users (see module docstring)."""
 
     # phase 3 defaults (class level: a test stub built without __init__ has them too)
@@ -1190,6 +1198,8 @@ class MTPSpecEngine:
         self._mtpw_pack = self._mtpw_pt = self._mtpw_trace = self._mtpw_rope = None
         self._mtpw_hidden, self._mtpw_phys = (), {}
         self.join_mtp_trace_replays = 0
+        # QWEN36_SPEC_ADAPTIVE_K (tt/spec_adaptive.py): the wide draft-length family; K_api, _B_state, _T_state (= K, B, T off)
+        self._ak_init()
 
     # --------------------------------------------------------------------- #
     # Host helpers
@@ -1661,13 +1671,13 @@ class MTPSpecEngine:
             self._stage_table(pt[u : u + 1].contiguous(), self._mtp_pt_rows[u], ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
 
     # --- per-engine-row M-RoPE deltas (multimodal rows keep their own delta; text rows 0) ---
-    def _row_deltas(self, default=None):
+    def _row_deltas(self, default=None, n=None):
         """The rows' M-RoPE deltas: a list [B] of ints (engine row u = device row u; what the prefill recorded with
         model.set_slot_rope_delta), or, for a model without the per-row vector (a test fake), the scalar
-        ``rope.rope_delta`` (``default`` when given), as before."""
+        ``rope.rope_delta`` (``default`` when given), as before. ``n``: that many rows instead of B."""
         f = getattr(self.model, "_spec_row_deltas", None)
         if f is not None:
-            return f(self.B)
+            return f(self.B if n is None else int(n))
         return int(self.model.rope.rope_delta if default is None else default)
 
     def _has_row_deltas(self):
@@ -1846,9 +1856,9 @@ class MTPSpecEngine:
             tokens,
             pt,
             phys,
-            self.B,
+            self._B_state,  # the trace's B physical rows (QWEN36_SPEC_ADAPTIVE_K: also inside the wide family)
             self._scratch_block,
-            self._row_deltas(self._mtpw_rope[0]),
+            self._row_deltas(self._mtpw_rope[0], n=self._B_state),
             self._mtpw_rope[1],
         )
         self._stage(pack, self._mtpw_pack, ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT)
@@ -2031,6 +2041,8 @@ class MTPSpecEngine:
         if self._dv_guard is not None:  # QWEN36_DRAFT_VOCAB_FALLBACK: the pruned programs warm as the pruned head
             self._dv_full_now = self.mtp._draft_full = False
         t0 = time.perf_counter()
+        if self._ak is not None:  # QWEN36_SPEC_ADAPTIVE_K: one GDN ring / window pair for the longest family T
+            model._spec_T_alloc = self._T_state
         # Compile the seed's programs (T = 1 forward, feed-row scatter and copy) before any capture.
         _, f = model.seed_spec_step([0] * B, [0] * B, self._prep_pt)
         r0, r1 = self._seed_rows(f), self._seed_rows(f)
@@ -2063,8 +2075,11 @@ class MTPSpecEngine:
             # and both taps routes, compiled now (the ring and window pair exist since prepare_verify_trace).
             from models.demos.blackhole.qwen36.tt.gdn.tp import fresh_row_mask, fresh_row_select
 
+            # the window geometry (QWEN36_SPEC_ADAPTIVE_K: the T_alloc window; flag off _B_state, _T_state = B, T)
             self._fj_sel = self._alloc_host_replicated(
-                fresh_row_select(range(B), B, T, self._kc), ttnn.bfloat16, ttnn.TILE_LAYOUT
+                fresh_row_select(range(self._B_state), self._B_state, self._T_state, self._kc),
+                ttnn.bfloat16,
+                ttnn.TILE_LAYOUT,
             )
             if self._gdn and spec_join_trace_enabled():
                 # QWEN36_SPEC_JOIN_TRACE: the mask buffer (shared by every layer, so every layer must agree on Nv, Dk);
@@ -2199,6 +2214,7 @@ class MTPSpecEngine:
                 self._prepare_fused()
 
         ttnn.synchronize_device(self.mesh)
+        self._ak_prepare_wide()  # QWEN36_SPEC_ADAPTIVE_K: the wide family, before any capture (no-op flag off)
         self.prepared = True
         logger.info(
             f"[spec_engine] decode prepared in {time.perf_counter() - t0:.1f}s "
@@ -2254,6 +2270,8 @@ class MTPSpecEngine:
             )
             return
         kw = dict(aux_prev_in=fa.aux_in, tok_out=model._vfy_token_buf, vaux_out=model._vfy_aux_buf)
+        if self._B_state != self.B:  # QWEN36_SPEC_ADAPTIVE_K wide family: ctrl pages at the GDN state width
+            kw["state_B"] = self._B_state
         Nv = int(model._vfy_Nv)
         ch_g = ch_s = None
         try:
@@ -2636,6 +2654,7 @@ class MTPSpecEngine:
                 self._capture_seed_traces()  # last: every earlier trace keeps its allocation layout
                 self._log_trace_memory("seed")
                 self._check_shared_addrs(snap, "after every capture")
+                self._ak_capture_wide(snap)  # QWEN36_SPEC_ADAPTIVE_K: the wide family's traces (no-op flag off)
                 self._zero_shared_outputs()
                 self._addr_snap = snap
         finally:
@@ -2749,6 +2768,7 @@ class MTPSpecEngine:
         if self._shadow is not None and self._shadow.steps:
             logger.info(self._shadow.line())  # S8 probe: the final counters
         logger.info("[spec_engine] shutdown: releasing traces")
+        self._ak_shutdown_wide()  # QWEN36_SPEC_ADAPTIVE_K: the wide family's traces and buffers (no-op flag off)
         model.release_verify_trace()
         model._vfy_prepared_key = None
         model.__dict__.pop("_vfy_mem_log", None)  # the next prepare / capture logs its memory from zero
@@ -3108,8 +3128,8 @@ class MTPSpecEngine:
             self._def_last.chainable = False
             if not self._def_last.device and self._def_last.fin is None:
                 # a fallback step ran on the host: its propose runs the drafter over the page table of its own step, which the new
-                # request may reuse; finish it now, as the drained order does
-                self._def_finish_any(self._def_last)
+                # request may reuse; finish it now, as the drained order does (QWEN36_SPEC_ADAPTIVE_K: in its own family)
+                self._ak_finish_any(self._def_last)
         if len(getattr(self, "_buckets", None) or ()) > 1:  # QWEN36_SPEC_BUCKETS
             self._claim_low_row(slot)
         self._row_gens()[self._phys[int(slot)]] += 1
@@ -4046,7 +4066,8 @@ class MTPSpecEngine:
         tokens = self._ints(tokens, (B, T))
         start_pos = self._ints(start_pos, (B,))
         mi_prev = self._ints(accepted_counts, (B,)) - 1
-        assert bool(((mi_prev >= 0) & (mi_prev < T)).all()), f"accepted_counts must be in [1, {T}]"
+        # QWEN36_SPEC_ADAPTIVE_K: the previous verify may be the other family's (a count up to T_alloc; flag off _T_state = T)
+        assert bool(((mi_prev >= 0) & (mi_prev < self._T_state)).all()), f"accepted_counts must be in [1, {self._T_state}]"
         self._last_cap_blocks = int(torch.as_tensor(page_table).shape[-1])
         pt = self._fit(page_table)
         active = (
@@ -4065,9 +4086,12 @@ class MTPSpecEngine:
             self._def_ctx is None
         ):  # deferred serving decided the bucket in _decode_forward_deferred (before the chain reason)
             self._bucket_step(rows)
-        # contract 4e: a live row left out of a step keeps its GDN state on host until it returns
+        # contract 4e: a live row left out of a step keeps its GDN state on host until it returns (QWEN36_SPEC_ADAPTIVE_K wide
+        # family: the engine rows past its width too, which its replay does not run either; flag off _B_state = B)
         to_park = [
-            u for u in range(B) if not act[u] and u in self._active and u not in self._fresh and u not in self._parked
+            u
+            for u in range(self._B_state)
+            if not (u < B and act[u]) and u in self._active and u not in self._fresh and u not in self._parked
         ]
         if to_park:
             t0 = time.perf_counter()
@@ -4075,7 +4099,9 @@ class MTPSpecEngine:
             if self._lazy:
                 # K4: the stash of the row's last verify sits in ring slot 1 + (the parity the next verify reads)
                 par = self.model.vfy_gdn_parity()
-                saved = {u: [(r, e, par) for r, e in saved[u]] for u in saved}
+                # QWEN36_SPEC_ADAPTIVE_K: the T of the verify that wrote that stash (its rows sit at (row*T) % 32)
+                sT = int(self.model.__dict__.get("_lz_last_T") or self.T)
+                saved = {u: [(r, e, par, sT) for r, e in saved[u]] for u in saved}
             for u in to_park:
                 self._parked[u] = saved[u]
             self._park_note("park", t0)
@@ -4089,12 +4115,16 @@ class MTPSpecEngine:
             self._chain_ev = self._chain_ev or "unpark"
         if back:
             t0 = time.perf_counter()
+            # the parked ring keeps every slot of the GDN ring's own T (QWEN36_SPEC_ADAPTIVE_K: T_alloc); under K4 the
+            # replay reads the parked stash at the rows of the verify that wrote it (its T, saved at park time)
             states = [
                 {
                     u: (
-                        parked_rows_host_lazy(*self._parked[u][li], int(mi_prev[u]), T, u)
+                        parked_rows_host_lazy(
+                            *self._parked[u][li][:3], int(mi_prev[u]), self._T_state, u, stash_T=self._parked[u][li][3]
+                        )
                         if self._lazy
-                        else parked_rows_host(*self._parked[u][li], int(mi_prev[u]), T)
+                        else parked_rows_host(*self._parked[u][li], int(mi_prev[u]), self._T_state)
                     )
                     for u in back
                 }
@@ -4107,7 +4137,8 @@ class MTPSpecEngine:
             logger.info(f"[spec_engine] unparked slot(s) {back}, {self._park_last_ms:.1f} ms")
             # restored into ring slot 0: the returning row verifies from mi = 0 (K4: FRESH, nothing to replay)
             mi_prev = mi_prev.clone()
-            mi_prev[back] = T if self._lazy else 0  # T = lazy_ref.fresh_mi(T)
+            # (K4 FRESH = the ring's T: T, or T_alloc under QWEN36_SPEC_ADAPTIVE_K -- lazy_ref.fresh_mi(_T_state))
+            mi_prev[back] = self._T_state if self._lazy else 0
         if not bool(active.all()):
             pt = pt.clone()
             pt[~active] = 0  # vLLM null block
@@ -4121,17 +4152,20 @@ class MTPSpecEngine:
             self._last_cap_blocks, self.block_size
         ), "verify window past the paged KV capacity"
 
-        fresh_now = {u: Tp for u, Tp in self._fresh.items() if act[u]}
+        # (QWEN36_SPEC_ADAPTIVE_K wide family: a fresh row past its width is not in this step; flag off every row < B)
+        fresh_now = {u: Tp for u, Tp in self._fresh.items() if u < B and act[u]}
         if fresh_now:
             self._chain_ev = self._chain_ev or "fresh"
             # a row prefilled past its prompt (vLLM pad_spec_decode placeholders) is re-prefilled at the true length
-            fresh_now = self._reconcile_fresh_rows(fresh_now, start_pos)
+            # (QWEN36_SPEC_ADAPTIVE_K: a prefill is base-family work, whichever family this step runs in)
+            with self._ak_in(self._ak.base) if self._ak is not None else contextlib.nullcontext():
+                fresh_now = self._reconcile_fresh_rows(fresh_now, start_pos)
         if fresh_now and self.fast_join:
             # QWEN36_SPEC_FAST_JOIN=1: seed the fresh rows' ring slot 0 / E_prev in place, then verify them in THIS
             # replay as 0-draft rows at mi = 0 next to the running rows (one forward for the whole step).
             fresh = self._seed_fresh_rows(tokens, start_pos, pt, fresh_now, rows)
             mi_prev = mi_prev.clone()
-            mi_prev[fresh] = T if self._lazy else 0  # K4: slot 0 was just seeded -> FRESH (lazy_ref.fresh_mi)
+            mi_prev[fresh] = self._T_state if self._lazy else 0  # K4: slot 0 just seeded -> FRESH (fresh_mi(_T_state))
         elif fresh_now:
             if self._bucketed():
                 self._vb = self.B  # the eager seed / join runs the B-row traces
@@ -4139,7 +4173,7 @@ class MTPSpecEngine:
             self._fresh_dirty |= set(self._fresh) - set(fresh_now)
             for u in sorted(fresh_now):
                 if u in self._fresh_dirty:
-                    self._reprefill(u)
+                    self._reprefill(u)  # FAST_JOIN=0 only, which QWEN36_SPEC_ADAPTIVE_K refuses
             # Each fresh user's slot Tp-1 MTP KV, then the seed (its filler rows are never run).
             self._stage_mtp_tables(pt)
             for u, Tp in sorted(fresh_now.items()):
@@ -4207,7 +4241,8 @@ class MTPSpecEngine:
         normal verify replay with mi_prev = 0 (their tokens are [t_Tp, pad..] and the runner reads column 0)."""
         from models.demos.blackhole.qwen36.tt.gdn.tp import fresh_row_mask, fresh_row_select
 
-        B, T = self.B, self.T
+        # GDN state width and window T (QWEN36_SPEC_ADAPTIVE_K: the wide family runs with B = its width; flag off = B, T)
+        B, T = self._B_state, self._T_state
         if spec_join_fast_enabled():
             # QWEN36_SPEC_JOIN_FAST: only the fresh rows' tables, one batched warm call (note 55)
             for u, Tp in fresh_now.items():
@@ -4251,7 +4286,9 @@ class MTPSpecEngine:
             else:
                 fb = self.__dict__.setdefault("join_trace_fallbacks", {})
                 fb[why] = fb.get(why, 0) + 1
-                seed_rows = range(B) if set(fresh) == set(rows) else fresh
+                # the whole-slot write only when every engine row is in the step (QWEN36_SPEC_ADAPTIVE_K: a wide-family
+                # step does not run the rows past its width, which keep their ring slot 0)
+                seed_rows = range(B) if set(fresh) == set(rows) and (self._ak is None or len(rows) == B) else fresh
                 for dn in self._gdn:
                     dn.seed_spec_rows_select(seed_rows, self._fj_sel)
         return fresh
@@ -4430,7 +4467,25 @@ class MTPSpecEngine:
         synchronize, and return VerifyResult(handle=FusedHandle); ``chain_rows`` (bool [B], runner order) / ``chain_tip`` (the tip_id of the
         newest fused step): rows whose placeholder tokens (-1), provisional positions and counts (-1) the device replaces from that step.
         See _decode_forward_deferred. ``finishing_slots`` (runner slots, QWEN36 plugin contract): requests left out of this step
-        only because the step in flight ends them at max_tokens; freed without parking (see _apply_finishing)."""
+        only because the step in flight ends them at max_tokens; freed without parking (see _apply_finishing).
+        QWEN36_SPEC_ADAPTIVE_K: the block is [B, 1 + K_api] and the step runs in the base or the wide family
+        (AdaptiveKMixin._ak_decode_forward)."""
+        if not self._ak_inside():
+            return self._ak_decode_forward(
+                tokens,
+                start_pos,
+                num_valid_drafts=num_valid_drafts,
+                accepted_counts=accepted_counts,
+                page_table=page_table,
+                spec_mode=spec_mode,
+                slot_remap=slot_remap,
+                narrow_col0=narrow_col0,
+                spec_sampling=spec_sampling,
+                defer_read=defer_read,
+                chain_rows=chain_rows,
+                chain_tip=chain_tip,
+                finishing_slots=finishing_slots,
+            )
         if spec_mode not in SPEC_MODES:
             raise ValueError(f"spec_mode {spec_mode!r} not in {SPEC_MODES}")
         if self._split_pending is not None and not self._split_begin:
@@ -4737,6 +4792,7 @@ class MTPSpecEngine:
                 + self._masked_big_note_text()
                 + self._intrace_note_text()
                 + self._dv_note_text()
+                + self._ak_note_text()
             )
 
     def _join_trace_note_text(self):
@@ -5108,10 +5164,11 @@ class MTPSpecEngine:
         read = lambda t: ttnn.to_torch(ttnn.get_device_tensors(t)[0])
         self._chain_compare(expect, read(model._vfy_token_buf), read(model._vfy_aux_buf), read(fa.aux_in))
 
-    def _chain_compare(self, expect, tok_buf, aux_buf, fa_aux):
+    def _chain_compare(self, expect, tok_buf, aux_buf, fa_aux, geo=None):
         """Pure half of the chain audit: host copies of the device token buffer, packed aux buffer and fused aux against the
-        expected words (exp_tok, exp_aux, exp_fa). Raises RuntimeError naming the first differing word."""
-        B, T = self.B, self.T
+        expected words (exp_tok, exp_aux, exp_fa). Raises RuntimeError naming the first differing word. ``geo``: the (B, K, T)
+        of the step's family (QWEN36_SPEC_ADAPTIVE_K; default the engine's)."""
+        B, _, T = geo or (self.B, self.K, self.T)
         exp_tok, exp_aux, exp_fa = expect
         mask32 = 0xFFFFFFFF
         R = B * T
@@ -5206,8 +5263,8 @@ class MTPSpecEngine:
         rows = [u for u in range(self.B) if act[u]]
         if any(u not in self._active for u in rows):
             return "unknown_row"
-        for u in range(self.B):
-            if not act[u] and u in self._active and u not in self._fresh and u not in self._parked:
+        for u in range(self._B_state):  # QWEN36_SPEC_ADAPTIVE_K wide family: rows past its width too (flag off = B)
+            if not (u < self.B and act[u]) and u in self._active and u not in self._fresh and u not in self._parked:
                 return "park"
         if any(u in self._parked for u in rows):
             return "unpark"
@@ -5457,7 +5514,7 @@ class MTPSpecEngine:
         pt = self._fit(pt_rows)
         mi_prev = acc_rows - 1
         mi_prev = torch.where(active & ~cmask, mi_prev, torch.zeros_like(mi_prev))
-        assert bool(((mi_prev >= 0) & (mi_prev < T)).all()), f"accepted_counts must be in [1, {T}]"
+        assert bool(((mi_prev >= 0) & (mi_prev < self._T_state)).all()), f"accepted_counts must be in [1, {self._T_state}]"
         pt = pt.clone()
         pt[~active] = 0  # vLLM null block
         self._row_active = active.clone()
@@ -5701,6 +5758,8 @@ class MTPSpecEngine:
             h.skip = [bool(s) for s in propose_skip_plan(self._no_draft, B)[0]]
             h.cap = table_capacity(self._last_cap_blocks, self.block_size)
             h.perm = self._phys_perm
+            if self._ak is not None:  # QWEN36_SPEC_ADAPTIVE_K: the reader thread's checks use the handle's own family view
+                self._ak_handle_view(h)
             if self._bucketed():
                 h.bucket = self._vb
             if mask_buf is not None:  # the host tensors of the mask write stay alive until the step's event
@@ -5737,6 +5796,8 @@ class MTPSpecEngine:
         counts = torch.as_tensor(fz.counts).to(torch.int64).reshape(B)
         p0 = torch.as_tensor(start0).to(torch.int64).reshape(B).clone()
         h.active, h.perm = torch.as_tensor(active).bool().clone(), self._phys_perm
+        if self._ak is not None:  # QWEN36_SPEC_ADAPTIVE_K: the handle's family geometry
+            self._ak_handle_view(h)
         h._data = dict(committed=committed, counts=counts, p0=p0, steps=None, candidates=fz.candidates)
         h.exact = (p0, counts.clone())
         h._readout = self._def_readout(h, h._data)
@@ -5746,6 +5807,12 @@ class MTPSpecEngine:
     def _def_readout(self, h, d):
         """(accepted_token_ids [B, 1+K] int32, accepted_counts [B] int32, p0 [B] int32; negative on padding rows), runner slots."""
         p0 = torch.where(h.active, d["p0"], torch.full_like(d["p0"], -1))
+        if getattr(h, "ak_api", None) is not None:  # QWEN36_SPEC_ADAPTIVE_K: the runner block's [B, 1 + K_api] geometry
+            return (
+                self._ak_api_rows(h, d["committed"].to(torch.int32), PLACEHOLDER_TOKEN_ID, col0=0),
+                self._ak_api_rows(h, d["counts"].to(torch.int32), 1),
+                self._ak_api_rows(h, p0.to(torch.int32), -1),
+            )
         return tuple(
             self._perm_slots(x, h.perm)
             for x in (d["committed"].to(torch.int32), d["counts"].to(torch.int32), p0.to(torch.int32))
@@ -5805,8 +5872,13 @@ class MTPSpecEngine:
             h.prev = None  # the prediction needed it only for the checks
             return d
 
+    def _h_geo(self, h):
+        """(B, K, T) of the family handle ``h`` was made in (QWEN36_SPEC_ADAPTIVE_K; else the engine's own): the reader thread
+        never reads the engine's swappable attributes."""
+        return getattr(h, "geo", None) or (self.B, self.K, self.T)
+
     def _def_parse(self, h):
-        B, T = self.B, self.T
+        B, _, T = self._h_geo(h)
         res = ttnn.to_torch(h.res_t).reshape(h.res_rows, -1).to(torch.int64)
         d = dict(
             committed=res[0, : B * T].reshape(B, T).clone(),
@@ -5832,7 +5904,7 @@ class MTPSpecEngine:
 
     def _def_tokens(self, h, pd):
         """The verify token block the device ran this step with: host rows as staged, chain rows from the previous step's commit."""
-        B, K = self.B, self.K
+        B, K, _ = self._h_geo(h)
         tok = h.tokens.clone()
         if h.cmask is not None:
             committed, counts = pd["committed"], pd["counts"]
@@ -5846,7 +5918,7 @@ class MTPSpecEngine:
     def _def_check(self, h, d):
         """Debug checks of a deferred step, at read time: pure (host tensors only), raising RuntimeError on a mismatch.
         S1 greedy walk, S2 sampled audit, device p0 vs bounds and vs the previous step, deferred chain audit."""
-        B, T, K = self.B, self.T, self.K
+        B, K, T = self._h_geo(h)
         committed, counts, p0 = d["committed"], d["counts"], d["p0"]
         if d["overflow"] is not None and bool(d["overflow"].any()):
             raise RuntimeError(
@@ -5878,7 +5950,7 @@ class MTPSpecEngine:
                     f"host committed {w_c.tolist()} counts {w_n.tolist()}; ids {ids.tolist()} tokens {tokens.tolist()}"
                 )
         if ids is not None and h.kind == "s" and h.union is not None:
-            fs = self._fs
+            fs = getattr(h, "fs", None) or self._fs
             width = fs.TP * fs.M
             vals = ttnn.to_torch(h.union[0]).reshape(-1, width)[: B * T]
             idx = ttnn.to_torch(h.union[1]).reshape(-1, width)[: B * T]
@@ -5886,7 +5958,7 @@ class MTPSpecEngine:
             aux[AUX_P0, :B] = p0.to(torch.int32)
             d["n_s_audit"] = 1
             d["boundary"] = self._audit_sampled_core(
-                vals, idx, ids, committed, counts, tokens, h.nvv, h.pt, aux, h.sampling
+                vals, idx, ids, committed, counts, tokens, h.nvv, h.pt, aux, h.sampling, geo=(B, K, T), fs=fs
             )
         if h.audit is not None:
             d["n_chain_audit"] = 1
@@ -5931,19 +6003,30 @@ class MTPSpecEngine:
         """The deferred CHAIN audit: the token buffer, packed aux buffer and fused aux the chain trace wrote for THIS step (copied
         right behind it) against the words the host predicts from the previous step's commit, tokens, counts, p0 and drafts.
         """
-        B, T, model = self.B, self.T, self.model
+        B, K, T = self._h_geo(h)
+        model = self.model
         cm, act = h.cmask, h.active
         p0n = torch.where(cm, pd["p0"] + pd["counts"], h.start_host) * act
         min_ = torch.where(cm, pd["counts"] - 1, h.mi_host) * act
         exp_tok = self._def_tokens(h, pd).reshape(-1)
         delta = aux_row_deltas(h.aux, B)  # the per-row deltas this step's fused aux carries (row AUX_DELTA)
-        exp_aux = model._vfy_aux_host(
-            model._vfy_row_positions(p0n.tolist()), min_.tolist(), parity=h.parity, rope_delta=delta
-        )
+        mv = getattr(h, "mview", None)
+        if mv is not None:  # QWEN36_SPEC_ADAPTIVE_K: the model view of the handle's family (the live one may be swapped)
+            from models.demos.blackhole.qwen36.tt.model import Qwen36Model
+
+            exp_aux = Qwen36Model._vfy_aux_host(
+                mv, Qwen36Model._vfy_row_positions(mv, p0n.tolist()), min_.tolist(), parity=h.parity, rope_delta=delta
+            )
+        else:
+            exp_aux = model._vfy_aux_host(
+                model._vfy_row_positions(p0n.tolist()), min_.tolist(), parity=h.parity, rope_delta=delta
+            )
         exp_fa = h.aux.clone().to(torch.int64)
         exp_fa[AUX_P0, :B] = p0n
         read = lambda t: ttnn.to_torch(t)
-        self._chain_compare((exp_tok, exp_aux, exp_fa), read(h.audit["tok"]), read(h.audit["aux"]), read(h.audit["fa"]))
+        self._chain_compare(
+            (exp_tok, exp_aux, exp_fa), read(h.audit["tok"]), read(h.audit["aux"]), read(h.audit["fa"]), geo=(B, K, T)
+        )
 
     # ---- engine-thread bookkeeping
     def _deferred_finish(self, h):
@@ -5952,7 +6035,7 @@ class MTPSpecEngine:
         steps enqueued since then changed (page table, row map, skip set). Idempotent."""
         if h.draft_result is not None:
             return h.draft_result
-        B, K = self.B, self.K
+        B, K, _ = self._h_geo(h)  # (QWEN36_SPEC_ADAPTIVE_K: run in the handle's family; the same values then)
         d = self._def_data(h, engine_thread=True)
         committed, counts, p0 = d["committed"], d["counts"], d["p0"]
         c32, n32 = committed.to(torch.int32), counts.to(torch.int32)
@@ -5990,7 +6073,8 @@ class MTPSpecEngine:
             self._deferred_finish(h)
             return h.fin
         if h.fin is None:
-            committed, counts, p0 = h._readout
+            # QWEN36_SPEC_ADAPTIVE_K: the step's own family geometry and slots (_readout is the runner block's then)
+            committed, counts, p0 = h.__dict__.get("_readout_core") or h._readout
             cpos = self._committed_positions(torch.clamp(p0, min=0), p0 >= 0, committed, counts)
             if h.draft_result is None:
                 h.draft_result = self.propose_draft_tokens(self.K, committed, cpos, counts)
@@ -6595,14 +6679,18 @@ class MTPSpecEngine:
                 f"[spec_engine] fused sampled audit: float32 boundary difference users (total {self.fused_boundary_diffs})"
             )
 
-    def _audit_sampled_core(self, vals, idx, ids, committed, counts, tokens, nv, pt, aux, sampling, full_norm=None):
+    def _audit_sampled_core(
+        self, vals, idx, ids, committed, counts, tokens, nv, pt, aux, sampling, full_norm=None, geo=None, fs=None
+    ):
         """The check of _audit_sampled on host tensors (also the deferred read-time audit). Returns the number of users whose
         difference is a float32 boundary (explained); raises RuntimeError on any other difference. ``full_norm`` [B*T] (L_T):
         a certificate step's reference and boundary zone use it. ``sampling["mask"]`` (engine rows) is passed to the reference:
         the union read back is after the device edit, so it only adds the same edit and the ``kth > -1e20`` tie guard.
+        ``geo`` / ``fs``: the step's family geometry and sampled device (QWEN36_SPEC_ADAPTIVE_K deferred reads; default the
+        engine's).
         """
-        B, T, K = self.B, self.T, self.K
-        fs = self._fs
+        B, K, T = geo or (self.B, self.K, self.T)
+        fs = fs or self._fs
         tok_flat = torch.as_tensor(tokens).reshape(-1)
         ref = fused_sampled_reference(
             vals,
@@ -6797,8 +6885,14 @@ class MTPSpecEngine:
         return drafts
 
     def _drafts_from_steps(self, steps):
+        """steps[k][u] (the drafter readback, host ints) -> int32 [B, K]. Built through int64: rows a step did not write (a
+        bucketed step leaves the rows past its bucket as the buffer last held them; the QWEN36_SPEC_ADAPTIVE_K wide family
+        shares those buffers with the base family) can hold any 32-bit pattern, and a value >= 2**31 used to make the int32
+        cast raise before the callers zero those (declined / padding) rows. Out-of-range entries become 0; token ids (the
+        only values a written row holds) are unchanged."""
         B, K = self.B, self.K
-        if not spec_dr_readback_tolerant_enabled():
+        # QWEN36_SPEC_ADAPTIVE_K: always tolerant (a family's draft buffers hold the other family's / stale rows past its width)
+        if not (spec_dr_readback_tolerant_enabled() or self.__dict__.get("_ak") is not None):
             return torch.tensor([[steps[k][u] for k in range(K)] for u in range(B)], dtype=torch.int32)
         # QWEN36_SPEC_DR_READBACK_TOLERANT: built through int64. Rows a bucketed step did not write hold what the buffer last
         # held; any word outside int32 becomes 0 (the callers zero those declined / padding rows anyway). Written rows
@@ -6810,10 +6904,13 @@ class MTPSpecEngine:
             self._dr_readback_oob = n
             if n <= 8 or n % 1000 == 0:
                 rows = sorted({int(u) for u in bad.nonzero()[:, 0].tolist()})
+                try:  # diagnostics only (a host-test engine has no drafter buffers)
+                    where = f"width {self._ksp_width()}, dr_outs at {[hex(int(t.buffer_address())) for t in self._dr_outs]}"
+                except Exception:  # noqa: BLE001
+                    where = "no buffer info"
                 logger.warning(
-                    f"[spec_engine] draft readback #{n}: out-of-int32 words in rows {rows} (width {self._ksp_width()}, "
-                    f"steps {[list(map(int, st)) for st in steps]}, "
-                    f"dr_outs at {[hex(int(t.buffer_address())) for t in self._dr_outs]}); zeroed"
+                    f"[spec_engine] draft readback #{n}: out-of-int32 words in rows {rows} ({where}, "
+                    f"steps {[list(map(int, st)) for st in steps]}); zeroed"
                 )
             d = torch.where(bad, torch.zeros_like(d), d)
         return d.to(torch.int32)
@@ -6827,7 +6924,12 @@ class MTPSpecEngine:
         = _propose_plan + _propose_stage_and_enqueue + _propose_read + _propose_finish (``self.propose`` is the
         staged flow's engine-level hook). A fused step's DraftResult is returned as is when the plugin's commit equals the
         one it was made for. ``hidden`` a FusedHandle (deferred serving): the engine bookkeeping of that step on this (engine) thread
-        and its DraftResult, whether or not a later step was already enqueued."""
+        and its DraftResult, whether or not a later step was already enqueued.
+        QWEN36_SPEC_ADAPTIVE_K: [B, 1 + K_api] in, [B, K_api] out (AdaptiveKMixin._ak_propose)."""
+        if not self._ak_inside():
+            return self._ak_propose(
+                num_drafts, committed_tokens, committed_positions, accepted_counts, page_table=page_table, hidden=hidden
+            )
         if isinstance(hidden, FusedHandle):
             h, hidden = hidden, None
             if h.draft_result is not None:

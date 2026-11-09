@@ -93,6 +93,15 @@ void GdnSpecStepOperation::validate_on_program_cache_miss(const operation_attrib
     TT_FATAL(K >= 2 && K <= 4, "{}: conv_kernel must be in [2, 4] (got {})", kOp, K);
     const uint32_t Lw = K - 1 + T;
     TT_FATAL(Lw <= tt::constants::TILE_HEIGHT, "{}: window K-1+T = {} must fit one tile (<= 32)", kOp, Lw);
+    // mi_max (0 = T - 1): the carry rows mi+1 .. mi+K-1 the selector reads must lie in the window tile, and mi_max must
+    // not clamp a valid mi of this op's own T
+    TT_FATAL(
+        a.mi_max == 0 || (a.mi_max >= T - 1 && a.mi_max + K - 1 < tt::constants::TILE_HEIGHT),
+        "{}: mi_max ({}) must be 0 or in [T-1, 32-K] (T = {}, K = {})",
+        kOp,
+        a.mi_max,
+        T,
+        K);
     TT_FATAL(
         B * T <= tt::constants::TILE_HEIGHT || (tt::constants::TILE_HEIGHT % T == 0),
         "{}: a user's T rows must lie in one tile row (B*T <= 32 or 32 %% T == 0; T = {}, B = {})",
@@ -216,7 +225,8 @@ Tensor gdn_spec_step(
     bool fp32_state,
     uint32_t max_users,
     uint32_t value_blocks,
-    uint32_t kernel_opts) {
+    uint32_t kernel_opts,
+    uint32_t mi_max) {
     TT_FATAL(!fp32_state || fast_mode, "{}: fp32_state needs fast_mode", kOp);
     // K4 lazy changes the ring / ctrl contract: it must never be dropped silently by the fast_mode + fp32_state mask
     // below (the caller would then read the ring with the lazy layout under the original program)
@@ -262,6 +272,7 @@ Tensor gdn_spec_step(
             // the restructurings exist for the fast_mode + fp32_state arithmetic only: other modes keep opts 0 (and so
             // their original program and hash)
             .kernel_opts = (fast_mode && fp32_state) ? kernel_opts : 0u,
+            .mi_max = mi_max,
         },
         GdnSpecStepInputs{
             .qkvzab = qkvzab,
