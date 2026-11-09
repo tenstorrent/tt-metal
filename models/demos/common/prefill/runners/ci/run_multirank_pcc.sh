@@ -62,6 +62,8 @@ EVIDENCE_DIR="${PREFILL_SUMMARIES}/pcc/${RUN_NAME}"
 MTP_PCC_THRESHOLD=""
 DFLASH_PCC_THRESHOLD=""
 TABLE_WAIT_DEFAULT=3600
+# 0 for a model with no golden: the producer drives the request and the PCC gate is skipped.
+PRODUCER_CHECK_PCC=1
 VARIANT_MAX_SEQ_LEN=""
 MTP=0
 DFLASH=0
@@ -144,6 +146,24 @@ case "${MODEL}" in
       PRODUCER_ENV="export PREFILL_DFLASH_PCC=${DFLASH_PCC_THRESHOLD};"
       TABLE_WAIT_DEFAULT=7200
     fi
+    ;;
+  kimi_k3_1)
+    # Kimi-K3.1 = K3 + a DSA indexer on its 24 MLA layers. A smoke leg: K3.1 has no structured golden the
+    # producer can read back (its vLLM traces are raw streams, read by tests/sparse_mla/k31_trace.py), so the
+    # producer only drives the request and checks no KV. K3's trace supplies the prompt tokens. sc1 only:
+    # a multi-rank producer must verify (see prefill_producer), and there is nothing to verify against.
+    [ "${CONFIG}" = sc1 ] || { echo "${MODEL} runs sc1 only (no K3.1 golden for a multi-rank read-back)" >&2; exit 2; }
+    export PIPELINE_DIR="${PREFILL_SUMMARIES/prefill_summaries/kimi_k3_1_prefill_runner_kv}"
+    MANIFEST="${MANIFEST_DIR}/kimi_k3_1.json"
+    SC1_NUM_LAYERS=24
+    SC1_MAX_SEQ_LEN="${PREFILL_SC1_MAX_SEQ_LEN:-262144}"
+    SC1_REQUEST_LEN="${PREFILL_SC1_REQUEST_LEN:-${GOLDEN_LEN}}"
+    PRODUCER_CHECK_PCC=0
+    RUNNER_ENV="export PREFILL_HF_MODEL=/mnt/weka/model-weights/llm/moonshotai/Kimi-K3.1-Pro-dequantized; \
+      ${PREFILL_TTNN_CACHE:+export PREFILL_TTNN_CACHE='${PREFILL_TTNN_CACHE}';} \
+      export TT_METAL_SHM_TRACKING_DISABLED=1; export LOGURU_LEVEL=ERROR;"
+    PRODUCER_ENV="export PREFILL_TRACE_DIR=/mnt/weka/model-cache/stable/deepseek-prefill-cache/golden/k3_vllm_code_debug_1M;"
+    PERF_BASELINES=""
     ;;
   mistral4)
     export PIPELINE_DIR="${PREFILL_SUMMARIES/prefill_summaries/mistral4_pp4_kv}"
@@ -453,7 +473,7 @@ set +e
     export PREFILL_PRODUCER_WARMUP_CHUNKS=${WARMUP_CHUNKS}; \
     export PREFILL_MIGRATION_TABLE_PATH='${TABLE_PATH}'; \
     export PREFILL_PCC_SUMMARY_DIR='${PCC_DIR}'; \
-    export PREFILL_PRODUCER_CHECK_PCC=1; \
+    export PREFILL_PRODUCER_CHECK_PCC=${PRODUCER_CHECK_PCC}; \
     export PREFILL_SEND_SHUTDOWN=1; \
     export PREFILL_STANDALONE_CHUNKED_PCC=${PCC_THRESHOLD}; \
     export PREFILL_H2D_CONNECT_TIMEOUT=120; \
@@ -502,6 +522,9 @@ if [ "${REQUIRE_TPS}" = 1 ] || [ -n "${EXPECTED_TPS}" ] || [ -f "${PERF_BASELINE
 fi
 
 PCC_GATE_RC=0
+if [ "${PRODUCER_CHECK_PCC}" = 0 ]; then
+  echo "PCC GATE SKIPPED: ${RUN_NAME} has no golden; this leg only checks that prefill runs" | tee -a "${GATE_LOG}"
+else
 python3 - "${PCC_DIR}" "${EXPECTED_RANKS}" "${PCC_THRESHOLD}" "${PRODUCER_USERS}" "${MTP_PCC_THRESHOLD}" <<'PY' 2>&1 | tee -a "${GATE_LOG}" || PCC_GATE_RC=$?
 import glob, json, math, os, sys
 
@@ -564,6 +587,7 @@ if bad:
     sys.exit(1)
 print(f"PCC GATE PASS: {len(files)}/{expected} ranks ok, all caches >= threshold")
 PY
+fi
 
 if [ "${PROD_RC}" -ne 0 ]; then
   exit "${PROD_RC}"
