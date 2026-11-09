@@ -115,7 +115,7 @@ rmsnorm::RowSlicePlan make_row_slice_plan(const operation_attributes_t& args, co
     // Gated rows are single heads, already one work item per head.
     return rmsnorm::plan_row_slices(
         device->compute_with_storage_grid_size(),
-        shape[0] * shape[1] * (shape[-2] / tt::constants::TILE_HEIGHT),
+        num_tile_rows(input),
         shape[-1] / tt::constants::TILE_WIDTH,
         /* max_slices */ gated ? 1U : args.max_row_slices,
         [&](const uint32_t slice_tiles, const uint32_t num_slices) {

@@ -5,10 +5,11 @@
 #   python3 reverse_text/reverse_text_training_example.py
 
 training_config:
-  # Only max_sequence_length is read from here; the Qwen3 architecture comes
-  # from the HuggingFace config of the model source.
-  model_config: "${TT_METAL_RUNTIME_ROOT}/tt-train/configs/model_configs/qwen3_06b.yaml"
+  # Only max_sequence_length and runner_type are read from here; the Qwen3
+  # architecture comes from the HuggingFace config of the model source.
+  model_config: "${TT_METAL_RUNTIME_ROOT}/tt-train/configs/model_configs/qwen3_06b_memory_efficient.yaml"
   model_source: "PrimeIntellect/Qwen3-0.6B-Reverse-Text-SFT"
+  seed: 0
 
   optimizer:
     type: MorehAdamW
@@ -21,6 +22,7 @@ training_config:
     kahan_summation: false
 
   grpo_config:
+    rollout_backend: "ttml_in_process_sync"
     epsilon: 0.2
     per_device_train_batch_size: 16  # one prompt's group of 16 completions
     num_iterations: 1
