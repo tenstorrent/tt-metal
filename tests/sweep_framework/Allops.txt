@@ -110,7 +110,7 @@ ttnn.experimental.attn_matmul_from_cache
 ttnn.experimental.bias_gelu
 ttnn.experimental.concatenate_heads
 ttnn.experimental.convert_to_chw
-ttnn.experimental.create_qkv_heads
+ttnn.experimental.create_qkv_heads_sharded
 ttnn.experimental.create_qkv_heads_from_separate_tensors
 ttnn.experimental.div
 ttnn.experimental.dropout

@@ -46,8 +46,8 @@ def _nlp_create_qkv_heads_boltz_with_kv(device, **kwargs):
     )
 
 
-def _create_qkv_heads(device, **kwargs):
-    ttnn.experimental.create_qkv_heads(_tile(device, (1, 1, 32, 192)), **kwargs)
+def _create_qkv_heads_sharded(device, **kwargs):
+    ttnn.experimental.create_qkv_heads_sharded(_tile(device, (1, 1, 32, 192)), **kwargs)
 
 
 def _create_qkv_heads_from_separate_tensors(device, **kwargs):
@@ -112,9 +112,13 @@ def _all_reduce_create_qkv_heads(device, num_heads, **kwargs):
             "num_kv_heads must be greater than 0",
         ),
         (_nlp_create_qkv_heads_boltz_with_kv, {"num_heads": 1, "num_kv_heads": 2**31}, "exceeds the KV width"),
-        (_create_qkv_heads, {"num_heads": 0}, "num_q_heads must be greater than 0"),
-        (_create_qkv_heads, {"num_heads": 1, "num_kv_heads": 0}, "num_kv_heads must be greater than 0"),
-        (_create_qkv_heads, {"num_heads": 2, "num_kv_heads": _UINT32_MAX}, "exceeds the flattened hidden dimension"),
+        (_create_qkv_heads_sharded, {"num_heads": 0}, "num_q_heads must be greater than 0"),
+        (_create_qkv_heads_sharded, {"num_heads": 1, "num_kv_heads": 0}, "num_kv_heads must be greater than 0"),
+        (
+            _create_qkv_heads_sharded,
+            {"num_heads": 2, "num_kv_heads": _UINT32_MAX},
+            "exceeds the flattened hidden dimension",
+        ),
         (_create_qkv_heads_from_separate_tensors, {"num_heads": 0}, "num_q_heads must be greater than 0"),
         (
             _create_qkv_heads_from_separate_tensors,
@@ -166,9 +170,9 @@ def _all_reduce_create_qkv_heads(device, num_heads, **kwargs):
         "nlp_create_qkv_heads_boltz_wrap",
         "nlp_create_qkv_heads_boltz_with_kv_zero_kv",
         "nlp_create_qkv_heads_boltz_with_kv_wrap",
-        "create_qkv_heads_zero_q",
-        "create_qkv_heads_zero_kv",
-        "create_qkv_heads_wrap",
+        "create_qkv_heads_sharded_zero_q",
+        "create_qkv_heads_sharded_zero_kv",
+        "create_qkv_heads_sharded_wrap",
         "create_qkv_heads_from_separate_tensors_zero_q",
         "create_qkv_heads_from_separate_tensors_zero_kv",
         "create_qkv_heads_from_separate_tensors_wrap",

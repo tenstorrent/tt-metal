@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Program-cache regression tests for ttnn.experimental.create_qkv_heads
+Program-cache regression tests for ttnn.experimental.create_qkv_heads_sharded
 (CreateQKVHeadsDeviceOperation).
 
 Pins the cache-keying granularity so it can be verified BEFORE and AFTER
@@ -27,7 +27,7 @@ from tt_py_test_utils_common.utility_functions import comp_pcc, skip_for_blackho
 
 
 def run_cqkv(device, batch, seq_len, num_q_heads, num_kv_heads, head_dim, cores_h, cores_w, transpose_k, dtype):
-    """Build block-sharded QKV, run create_qkv_heads inside the cache counter; return pcc(q)."""
+    """Build block-sharded QKV, run create_qkv_heads_sharded inside the cache counter; return pcc(q)."""
     torch.manual_seed(1234)
     torch_dtype = torch.float32 if dtype == ttnn.float32 else torch.bfloat16
 
@@ -53,7 +53,7 @@ def run_cqkv(device, batch, seq_len, num_q_heads, num_kv_heads, head_dim, cores_
     in0_t = ttnn.Tensor(QKV_interleaved, dtype).to(ttnn.TILE_LAYOUT).to(device, in_mem_config)
 
     with device.cache_entries_counter.measure():
-        q, k, v = ttnn.experimental.create_qkv_heads(
+        q, k, v = ttnn.experimental.create_qkv_heads_sharded(
             in0_t,
             num_heads=num_q_heads,
             num_kv_heads=num_kv_heads,
@@ -64,10 +64,10 @@ def run_cqkv(device, batch, seq_len, num_q_heads, num_kv_heads, head_dim, cores_
     ref_q = torch.split(QKV, [num_q_heads * head_dim, num_kv_heads * head_dim, num_kv_heads * head_dim], dim=-1)[0]
     ref_q = torch.reshape(ref_q, [batch, seq_len, num_q_heads, head_dim]).transpose(-3, -2)
     passing, _ = comp_pcc(ref_q, tt2torch_tensor(q), 0.999)
-    assert passing, "create_qkv_heads Q output mismatch"
+    assert passing, "create_qkv_heads_sharded Q output mismatch"
 
 
-# A known-good block-sharded config from test_create_qkv_heads.py.
+# A known-good block-sharded config from test_create_qkv_heads_sharded.py.
 CFG = dict(batch=7, seq_len=224, num_q_heads=8, num_kv_heads=8, head_dim=64, cores_h=7, cores_w=8)
 
 

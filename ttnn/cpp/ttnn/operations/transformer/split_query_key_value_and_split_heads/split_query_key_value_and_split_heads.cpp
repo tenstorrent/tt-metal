@@ -8,7 +8,7 @@
 
 #include "ttnn/operations/experimental/transformer/nlp_create_qkv_heads/nlp_create_qkv_heads.hpp"
 #include "ttnn/operations/experimental/transformer/nlp_create_qkv_heads_falcon7b/nlp_create_qkv_heads_falcon7b.hpp"
-#include "ttnn/operations/experimental/transformer/create_qkv_heads/create_qkv_heads.hpp"
+#include "ttnn/operations/experimental/transformer/create_qkv_heads_sharded/create_qkv_heads_sharded.hpp"
 
 #include "ttnn/operations/experimental/reshape/view.hpp"
 
@@ -212,7 +212,7 @@ std::tuple<Tensor, Tensor, Tensor> split_query_key_value_and_split_heads(
         const auto input_tensor_4d = ttnn::experimental::view(
             input_tensor, ttnn::Shape{padded_input_shape[0], 1, padded_input_shape[1], padded_input_shape[2]});
         return ttnn::operations::transformer::detail::reshape_outputs_of_split_query_key_value_and_split_heads(
-            ttnn::experimental::create_qkv_heads(
+            ttnn::experimental::create_qkv_heads_sharded(
                 input_tensor_4d,
                 num_heads,
                 num_kv_heads.value_or(num_heads),

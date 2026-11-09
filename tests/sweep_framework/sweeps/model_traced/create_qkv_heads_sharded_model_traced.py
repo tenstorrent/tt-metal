@@ -25,7 +25,7 @@ TIMEOUT = 300
 # Load traced configurations from real model tests (V2 format)
 loader = MasterConfigLoader()
 # Default: Run exact traced configs from real models with all parameter values in vectors
-model_traced_params = loader.get_suite_parameters("create_qkv_heads")
+model_traced_params = loader.get_suite_parameters("create_qkv_heads_sharded")
 
 # Parameters provided to the test vector generator are defined here.
 parameters = {
@@ -131,7 +131,7 @@ def run(
             )
         else:
             # Regular single-device tensor
-            # Check if memory config is sharded - create_qkv_heads requires tile-aligned shard shapes
+            # Check if memory config is sharded - create_qkv_heads_sharded requires tile-aligned shard shapes
             is_input_sharded = False
 
             # Handle dict memory configs (from JSON deserialization in pipeline)

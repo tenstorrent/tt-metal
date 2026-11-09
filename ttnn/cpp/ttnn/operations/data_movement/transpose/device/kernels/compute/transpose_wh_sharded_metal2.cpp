@@ -7,7 +7,7 @@
 //   - cb_id_in / cb_id_out (legacy CB-index CTAs) -> dfb::in / dfb::out
 //   - NHtWt / HtWt / N / Ht / Wt (legacy RTAs 0-4) -> named RTAs
 // Forked (not modified in place) because the legacy copy is still bound by the
-// create_qkv_heads, create_qkv_heads_from_separate_tensors and
+// create_qkv_heads_sharded, create_qkv_heads_from_separate_tensors and
 // split_query_key_value_and_split_heads_sharded ops, which are not on Metal 2.0.
 
 #include <cstdint>

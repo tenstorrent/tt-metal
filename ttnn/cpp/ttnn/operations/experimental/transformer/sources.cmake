@@ -8,9 +8,9 @@ set(TTNN_OP_EXPERIMENTAL_TRANSFORMER_SRCS
     concatenate_heads/concatenate_heads.cpp
     concatenate_heads/device/concatenate_heads_device_operation.cpp
     concatenate_heads/device/concatenate_heads_program_factory.cpp
-    create_qkv_heads/create_qkv_heads.cpp
-    create_qkv_heads/device/create_qkv_heads_device_operation.cpp
-    create_qkv_heads/device/create_qkv_heads_program_factory.cpp
+    create_qkv_heads_sharded/create_qkv_heads_sharded.cpp
+    create_qkv_heads_sharded/device/create_qkv_heads_sharded_device_operation.cpp
+    create_qkv_heads_sharded/device/create_qkv_heads_sharded_program_factory.cpp
     create_qkv_heads_from_separate_tensors/create_qkv_heads_from_separate_tensors.cpp
     create_qkv_heads_from_separate_tensors/device/create_qkv_heads_from_separate_tensors_device_operation.cpp
     create_qkv_heads_from_separate_tensors/device/create_qkv_heads_from_separate_tensors_program_factory.cpp
@@ -103,7 +103,7 @@ set(TTNN_OP_EXPERIMENTAL_TRANSFORMER_API_HEADERS
 set(TTNN_OP_EXPERIMENTAL_TRANSFORMER_NANOBIND_SRCS
     all_reduce_create_qkv_heads/all_reduce_create_qkv_heads_nanobind.cpp
     concatenate_heads/concatenate_heads_nanobind.cpp
-    create_qkv_heads/create_qkv_heads_nanobind.cpp
+    create_qkv_heads_sharded/create_qkv_heads_sharded_nanobind.cpp
     create_qkv_heads_from_separate_tensors/create_qkv_heads_from_separate_tensors_nanobind.cpp
     nlp_concat_heads/nlp_concat_heads_nanobind.cpp
     nlp_concat_heads_decode/nlp_concat_heads_decode_nanobind.cpp

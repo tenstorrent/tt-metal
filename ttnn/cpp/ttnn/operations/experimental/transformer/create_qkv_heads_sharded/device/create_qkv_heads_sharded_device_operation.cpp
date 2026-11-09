@@ -2,9 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "create_qkv_heads_device_operation.hpp"
+#include "create_qkv_heads_sharded_device_operation.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
-#include "create_qkv_heads_program_factory.hpp"
+#include "create_qkv_heads_sharded_program_factory.hpp"
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/constants.hpp>
 #include "ttnn/device_operation.hpp"
@@ -136,7 +136,7 @@ CreateQKVHeadsResult CreateQKVHeadsDeviceOperation::create_output_tensors(
 
 namespace ttnn::prim {
 
-ttnn::experimental::prim::CreateQKVHeadsResult create_qkv_heads(
+ttnn::experimental::prim::CreateQKVHeadsResult create_qkv_heads_sharded(
     const Tensor& input_tensor,
     uint32_t num_q_heads,
     uint32_t num_kv_heads,

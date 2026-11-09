@@ -4,8 +4,8 @@
 
 #include <string>
 
-#include "create_qkv_heads_program_factory.hpp"
-#include "create_qkv_heads_device_operation.hpp"
+#include "create_qkv_heads_sharded_program_factory.hpp"
+#include "create_qkv_heads_sharded_device_operation.hpp"
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/program_descriptors.hpp>
@@ -56,7 +56,7 @@ ProgramDescriptor CreateQKVHeadsProgramFactory::create_descriptor(
         "Sequence length {} must divide evenly into Tiles of Tile Height {}",
         input_shape[2],
         TILE_HEIGHT);
-    TT_FATAL(input_tensor.shard_spec().has_value() == true, "Unsharded input is invalid for create_qkv_heads");
+    TT_FATAL(input_tensor.shard_spec().has_value() == true, "Unsharded input is invalid for create_qkv_heads_sharded");
 
     auto shard_spec = input_tensor.shard_spec().value();
     auto all_cores = shard_spec.grid;
@@ -144,7 +144,7 @@ ProgramDescriptor CreateQKVHeadsProgramFactory::create_descriptor(
 
     KernelDescriptor reader_desc;
     reader_desc.kernel_source =
-        "ttnn/cpp/ttnn/operations/experimental/transformer/create_qkv_heads/device/kernels/"
+        "ttnn/cpp/ttnn/operations/experimental/transformer/create_qkv_heads_sharded/device/kernels/"
         "reader_create_qkv_heads_sharded.cpp";
     reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     reader_desc.core_ranges = all_cores;

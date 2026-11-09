@@ -11,7 +11,7 @@ import torch
 import ttnn
 
 
-def run_create_qkv_heads_test(
+def run_create_qkv_heads_sharded_test(
     batch,
     seq_len,
     num_q_heads,
@@ -64,7 +64,7 @@ def run_create_qkv_heads_test(
 
     out_shard_spec = in0_shard_spec
     out_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, out_shard_spec)
-    q, k, v = ttnn.experimental.create_qkv_heads(
+    q, k, v = ttnn.experimental.create_qkv_heads_sharded(
         in0_t,
         num_heads=num_q_heads,
         num_kv_heads=num_kv_heads,
@@ -156,7 +156,7 @@ def test_nlp_create_qkv_heads_test(
     dtype,
     device,
 ):
-    run_create_qkv_heads_test(
+    run_create_qkv_heads_sharded_test(
         batch, seq_len, num_q_heads, num_kv_heads, head_dim, dtype, cores_h, cores_w, device, transpose_k
     )
 

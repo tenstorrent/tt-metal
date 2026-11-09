@@ -2,15 +2,15 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "create_qkv_heads.hpp"
+#include "create_qkv_heads_sharded.hpp"
 
 #include <utility>
-#include "device/create_qkv_heads_device_operation.hpp"
+#include "device/create_qkv_heads_sharded_device_operation.hpp"
 #include "ttnn/operations/core/core.hpp"
 
 namespace ttnn::experimental {
 
-std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> create_qkv_heads(
+std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> create_qkv_heads_sharded(
     const Tensor& input_tensor,
     const uint32_t num_q_heads,
     const std::optional<uint32_t> num_kv_heads,
@@ -43,7 +43,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> create_qkv_heads(
         preallocated_outputs = std::make_tuple(arr[0], arr[1], arr[2]);
     }
 
-    return ttnn::prim::create_qkv_heads(
+    return ttnn::prim::create_qkv_heads_sharded(
         input_tensor, num_q_heads, num_kv_heads_val, head_dim, transpose_k_heads, memory_config, preallocated_outputs);
 }
 

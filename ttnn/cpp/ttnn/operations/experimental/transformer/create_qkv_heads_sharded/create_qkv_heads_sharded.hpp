@@ -4,13 +4,13 @@
 
 #pragma once
 
-#include "device/create_qkv_heads_device_operation.hpp"
+#include "device/create_qkv_heads_sharded_device_operation.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/types.hpp"
 
 namespace ttnn::experimental {
 
-std::tuple<Tensor, Tensor, Tensor> create_qkv_heads(
+std::tuple<Tensor, Tensor, Tensor> create_qkv_heads_sharded(
     const Tensor& input_tensor,
     uint32_t num_q_heads,
     std::optional<uint32_t> num_kv_heads,

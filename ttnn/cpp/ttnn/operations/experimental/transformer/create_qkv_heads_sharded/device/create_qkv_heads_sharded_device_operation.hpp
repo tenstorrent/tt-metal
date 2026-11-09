@@ -7,8 +7,8 @@
 #include <optional>
 
 #include "ttnn/tensor/tensor.hpp"
-#include "create_qkv_heads_program_factory.hpp"
-#include "create_qkv_heads_device_operation_types.hpp"
+#include "create_qkv_heads_sharded_program_factory.hpp"
+#include "create_qkv_heads_sharded_device_operation_types.hpp"
 
 #include "ttnn/operation.hpp"
 #include "ttnn/operations/core/core.hpp"
@@ -33,7 +33,7 @@ struct CreateQKVHeadsDeviceOperation {
 }  // namespace ttnn::experimental::prim
 
 namespace ttnn::prim {
-ttnn::experimental::prim::CreateQKVHeadsResult create_qkv_heads(
+ttnn::experimental::prim::CreateQKVHeadsResult create_qkv_heads_sharded(
     const Tensor& input_tensor,
     uint32_t num_q_heads,
     uint32_t num_kv_heads,

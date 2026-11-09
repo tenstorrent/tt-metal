@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "create_qkv_heads_nanobind.hpp"
+#include "create_qkv_heads_sharded_nanobind.hpp"
 
 #include <array>
 #include <cstdint>
@@ -13,17 +13,17 @@
 #include <nanobind/stl/optional.h>
 
 #include "ttnn-nanobind/bind_function.hpp"
-#include "ttnn/operations/experimental/transformer/create_qkv_heads/create_qkv_heads.hpp"
+#include "ttnn/operations/experimental/transformer/create_qkv_heads_sharded/create_qkv_heads_sharded.hpp"
 
-namespace ttnn::operations::experimental::create_qkv_heads::detail {
+namespace ttnn::operations::experimental::create_qkv_heads_sharded::detail {
 
-void bind_create_qkv_heads(nb::module_& mod) {
-    ttnn::bind_function<"create_qkv_heads", "ttnn.experimental.">(
+void bind_create_qkv_heads_sharded(nb::module_& mod) {
+    ttnn::bind_function<"create_qkv_heads_sharded", "ttnn.experimental.">(
         mod,
         R"doc(
             Splits a [B, 1, Seq_len, H] fused qkv matrix (where H is num_kv_heads * (num_q_heads/num_kv_heads + 2) * head_dim) into a Q tensor [B, num_q_heads, Seq_len, head_dim], K tensor [B, num_kv_heads, Seq_len, head_dim] (with the last two dims transposed if applicable) and V tensor [B, num_kv_heads, Seq_len, head_dim].
         )doc",
-        &ttnn::experimental::create_qkv_heads,
+        &ttnn::experimental::create_qkv_heads_sharded,
         nb::arg("input").noconvert(),
         nb::kw_only(),
         nb::arg("num_heads").noconvert(),
@@ -33,4 +33,4 @@ void bind_create_qkv_heads(nb::module_& mod) {
         nb::arg("output_tensors").noconvert() = nb::none());
 }
 
-}  // namespace ttnn::operations::experimental::create_qkv_heads::detail
+}  // namespace ttnn::operations::experimental::create_qkv_heads_sharded::detail

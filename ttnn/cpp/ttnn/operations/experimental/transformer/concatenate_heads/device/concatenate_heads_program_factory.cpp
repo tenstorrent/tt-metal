@@ -47,7 +47,7 @@ ConcatenateHeadsDeviceOperation::ConcatenateHeadsProgramFactory::create_program_
     uint32_t per_core_tiles = (ashape[1] * ashape[3]) / TILE_WIDTH;
     uint32_t in0_h_tiles = ashape[2] / TILE_HEIGHT;
 
-    // These parameters are identical to out_* in multi_core_create_qkv_heads
+    // These parameters are identical to out_* in multi_core_create_qkv_heads_sharded
     uint32_t in0_w = 64;
     uint32_t in0_w_tiles = in0_w / TILE_WIDTH;
     uint32_t in0_c = per_core_tiles / in0_w_tiles;

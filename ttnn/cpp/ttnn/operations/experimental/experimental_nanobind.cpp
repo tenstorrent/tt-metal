@@ -22,7 +22,7 @@
 #include "ttnn/operations/experimental/ssm/prefix_scan/prefix_scan_nanobind.hpp"
 #include "ttnn/operations/experimental/ssm/repeat_and_interleave_eltwise_mul/repeat_and_interleave_eltwise_mul_nanobind.hpp"
 #include "ttnn/operations/experimental/transformer/concatenate_heads/concatenate_heads_nanobind.hpp"
-#include "ttnn/operations/experimental/transformer/create_qkv_heads/create_qkv_heads_nanobind.hpp"
+#include "ttnn/operations/experimental/transformer/create_qkv_heads_sharded/create_qkv_heads_sharded_nanobind.hpp"
 #include "ttnn/operations/experimental/transformer/create_qkv_heads_from_separate_tensors/create_qkv_heads_from_separate_tensors_nanobind.hpp"
 #include "ttnn/operations/experimental/transformer/nlp_concat_heads/nlp_concat_heads_nanobind.hpp"
 #include "ttnn/operations/experimental/transformer/nlp_concat_heads_decode/nlp_concat_heads_decode_nanobind.hpp"
@@ -153,7 +153,7 @@ void py_module(nb::module_& mod) {
     transformer::bind_rotary_embedding_llama_fused_qk(mod);
     transformer::bind_rotate_half(mod);
 
-    create_qkv_heads::detail::bind_create_qkv_heads(mod);
+    create_qkv_heads_sharded::detail::bind_create_qkv_heads_sharded(mod);
 
     reduction::detail::bind_fast_reduce_nc(mod);
     reduction::detail::bind_deepseek_moe_fast_reduce_nc(mod);

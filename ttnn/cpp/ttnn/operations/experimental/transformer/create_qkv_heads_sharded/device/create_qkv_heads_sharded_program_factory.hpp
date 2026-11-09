@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include "create_qkv_heads_device_operation_types.hpp"
+#include "create_qkv_heads_sharded_device_operation_types.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
 #include <tt-metalium/program_descriptors.hpp>
