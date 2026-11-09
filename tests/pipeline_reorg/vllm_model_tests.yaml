@@ -832,12 +832,12 @@
   # The persistent megakernel stack over all 32 chips (TP32 x EP32: models/autoports/zai_org_glm_5_3_flash/tt) through
   # its vLLM adapter (models/demos/glm53_flash/tt/generator_vllm_stack.py): the 1D fabric, the 3 GiB trace region of the
   # 128 K context, the stack's worker L1 budget, device greedy sampling (sampled rows on the host sampler), chunked
-  # prefill on the 128-row grid, 16 resident users at 128 K (the served 128 K profile of tt-inference-server). The
+  # prefill on the 8192-token bucket grid (one bucket plus a decode token per slot per step), 16 resident users at 128 K (the served 128 K profile of tt-inference-server). The
   # caches live under $TT_CACHE_PATH (the adapter's default): the tile cache glm53_tile_cache_v3 is the e2e row's,
   # built on its first run (mlperf write access); the permuted expert copies glm53_fused_experts_cache.
-  tt-config: '{"fabric_config": "FABRIC_1D", "fabric_reliability_mode": "RELAXED_INIT", "trace_region_size": 3221225472, "l1_small_size": 32768, "worker_l1_size": 1280896, "sample_on_device_mode": "all", "prefill_chunk_alignment": 128, "decode_interleave_enabled": false}'
+  tt-config: '{"fabric_config": "FABRIC_1D", "fabric_reliability_mode": "RELAXED_INIT", "trace_region_size": 3221225472, "l1_small_size": 32768, "worker_l1_size": 1280896, "sample_on_device_mode": "all", "prefill_chunk_alignment": 8192, "decode_interleave_enabled": false}'
   # No JSON-valued arguments here: the workflow embeds the matrix in a single-quoted bash literal, so quotes break it.
-  additional-server-args: "--max-model-len 131072 --max-num-seqs 16 --block-size 64 --max-num-batched-tokens 8192 --no-enable-prefix-caching --reasoning-parser glm45"
+  additional-server-args: "--max-model-len 131072 --max-num-seqs 16 --block-size 64 --max-num-batched-tokens 8208 --no-enable-prefix-caching --reasoning-parser glm45"
   # The serving class by the plugin's generic override (tt-inference-server's catalog does the same): the test runs on
   # the plugin's main, whose built-in model map registers GLM-5.3-Flash only once the stack registration PR lands.
   extra-env: "TT_MODEL_CLASS_OVERRIDES=Glm5NextForConditionalGeneration=models.demos.glm53_flash.tt.generator_vllm_stack:GLM53StackForCausalLM,TTGlm5NextForConditionalGeneration=models.demos.glm53_flash.tt.generator_vllm_stack:GLM53StackForCausalLM,Glm5NextForCausalLM=models.demos.glm53_flash.tt.generator_vllm_stack:GLM53StackForCausalLM,TTGlm5NextForCausalLM=models.demos.glm53_flash.tt.generator_vllm_stack:GLM53StackForCausalLM"
