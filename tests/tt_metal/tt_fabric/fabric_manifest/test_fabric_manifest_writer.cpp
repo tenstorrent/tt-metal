@@ -29,8 +29,8 @@ ManifestFacts make_facts() {
     const FabricNodeId remote_node{MeshId{0}, 1};
 
     Router router{
-        .identity = {.eth_chan = 0, .direction = eth_chan_directions::EAST, .routing_plane = 0},
-        .link = {.peer = RouterRef{.node = remote_node, .direction = eth_chan_directions::WEST, .routing_plane = 0}},
+        .identity = {.eth_chan = 0, .key = {.direction = eth_chan_directions::EAST, .routing_plane = 0}},
+        .link = {.peer = RouterRef{.node = remote_node, .key = {.direction = eth_chan_directions::WEST}}},
         .shape = {.num_vcs = 1, .senders_per_vc = {1, 0, 0}, .receivers_per_vc = {1, 0, 0}, .num_active_eriscs = 1},
         .credit_counters = {word_at(0x100), word_at(0x104), word_at(0x108), word_at(0x10c)},
         .channels =
@@ -54,11 +54,11 @@ ManifestFacts make_facts() {
                         .stream_id = 30,
                         .address = 0xffb5e000,
                         .value_bits = 24,
-                        .type = get_manifest_type_name<CoordinatedEriscContextSwitchState>()}},
+                        .type = std::string(get_manifest_type_name<CoordinatedEriscContextSwitchState>())}},
             Field{
                 .key = "my_direction",
                 .category = FieldCategory::KERNEL_PARAMS,
-                .content = content::Enum{.type = "eth_chan_directions", .value = 0, .value_name = "EAST"}},
+                .content = content::Enum{.value = 0, .value_name = "east"}},
             Field{.key = "perf_telemetry", .category = FieldCategory::DIAGNOSTICS, .content = std::nullopt},
         }},
         .eriscs = {Erisc{.processor = tt::tt_metal::DataMovementProcessor::RISCV_0, .physical_erisc = 0}},
@@ -72,8 +72,7 @@ ManifestFacts make_facts() {
         .asic_id = 0x1234,
         .local_sync =
             LocalSync{
-                .master_eth_chan = 0,
-                .master = RouterRef{.node = local_node, .direction = eth_chan_directions::EAST, .routing_plane = 0},
+                .master = RouterRef{.node = local_node, .key = {.direction = eth_chan_directions::EAST}},
                 .num_routers = 1,
                 .router_channels_mask = 1},
         .routers = {router},

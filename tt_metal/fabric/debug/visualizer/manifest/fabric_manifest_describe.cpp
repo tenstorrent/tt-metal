@@ -141,10 +141,10 @@ CoreRegisters describe_core_registers(const tt::tt_metal::Hal& hal) {
 
 // The registered name of the packet header type the run's routers use: the one the routing mode and its template
 // argument pick.
-std::string_view describe_packet_header(const FabricContext& fabric_context) {
+std::string describe_packet_header(const FabricContext& fabric_context) {
     return visit_packet_header_type(
         fabric_context.get_packet_header_config(),
-        []<typename Header>(std::type_identity<Header>) { return get_manifest_type_name<Header>(); });
+        []<typename Header>(std::type_identity<Header>) { return std::string(get_manifest_type_name<Header>()); });
 }
 
 // What fabric init zeroes in every router's L1 before launch.

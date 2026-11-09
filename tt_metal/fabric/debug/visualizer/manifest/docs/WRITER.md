@@ -51,6 +51,7 @@ direction letter and routing plane, such as `E0`. Channels, edges and ERISCs are
 - **Enum values** are written as their enumerator's name in lower case (`lower_enum_name`), such as `"fabric_2d"`. A
 value with no enumerator name, such as a bitmask combination, is written as its number.
 - **A router another part refers to** is written as its path, such as `M0/C7/E0` ([TOPOLOGY_PASS.md](TOPOLOGY_PASS.md)).
+`fabric_manifest_paths.hpp` writes each kind of path and parses it back.
 - **Something that isn't there** is `null` rather than left out, such as a link with no peer or a field the builder
 didn't allocate. Keys are left out only where they don't apply, such as `torus` on a 1D mesh or a field the builder
 doesn't emit on this run.
@@ -75,7 +76,7 @@ writer has nothing to look up or check. It writes the name as a string, next to 
 | A core register | `make_core_registers_json` | `name`, `address`, `type` |
 | The run's packet header | `make_fabric_json` | `fabric.packet_header`, the header type's name |
 
-A configuration enum field is different: no captured bytes hold it, so its type isn't registered. The writer writes its
+A configuration enum field is different: no captured bytes hold it, so its type isn't registered. The field holds its
 `value` and its enumerator's name in lower case (`value_name`), and leaves out the enum's own name.
 
 ## Vocabulary

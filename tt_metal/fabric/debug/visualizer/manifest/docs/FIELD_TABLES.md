@@ -61,7 +61,7 @@ RouterField{
     .key = "conn_info",
     .source = NamedArg{"LOCAL_SENDER_CH_{}_CONN_INFO_ADDR", ArgIndex::COMPACT},
     .category = CONTROL_INFO,
-    .content = register_l1_region<EDMChannelWorkerLocationInfo>(),
+    .content = register_l1_field<EDMChannelWorkerLocationInfo>(),
     .description = "Where the producer writes where it is, and the router its read counter.",
 },
 ```
@@ -116,8 +116,8 @@ The field's kind, in the JSON's `kind`:
 
 | Content | `kind` | The argument is | Notes |
 | --- | --- | --- | --- |
-| `register_l1_region<T>()` | `l1` | An L1 address holding a `T` | `null` when the address is 0. The router pass adds the address |
-| `register_stream_region<T>(register)` | `stream_reg` | A stream id. The entry says which of the stream's registers holds a `T` | `null` for the unused stream id. The router pass adds the register's address and how many of its bits hold the value, from the HAL |
+| `register_l1_field<T>()` | `l1` | An L1 address holding a `T` | `null` when the address is 0. The router pass adds the address |
+| `register_stream_field<T>(register)` | `stream_reg` | A stream id. The entry says which of the stream's registers holds a `T` | `null` for the unused stream id. The router pass adds the register's address and how many of its bits hold the value, from the HAL |
 | `content::Number{}` | `number` | A plain value | |
 | `content::Flag{}` | `flag` | 0 or 1 | Any other value fails |
 | `enum_of<E>()` | `enum` | A value of enum `E` | Written with its enumerator's name. A value that isn't one of `E`'s enumerators fails |

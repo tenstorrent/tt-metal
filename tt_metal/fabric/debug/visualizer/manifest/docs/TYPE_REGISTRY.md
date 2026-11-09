@@ -69,25 +69,34 @@ using RegisteredTypes = typename detail::concat_type_lists<
 | `are_template_arguments_named` | A registered type's name lost a template argument (see "Quirks" below) | "A registered type's name lost a template argument that equals its default" |
 | `are_trivially_copyable` | A registered type can't be copied from bytes | "Decode rebuilds a registered type from its bytes, so every registered type must be trivially copyable" |
 | `registers_every_packet_header` | A packet header type fabric can pick isn't in `PacketHeaderTypes` | "A packet header type fabric can pick isn't in PacketHeaderTypes" |
-| `register_stream_region<T>` | `T` doesn't fit in a stream register's word | "A stream register holds one word, so its value fits in a uint32_t" |
+| `register_stream_field<T>` | `T` doesn't fit in a stream register's word | "A stream register holds one word, so its value fits in a uint32_t" |
 
 All of these fail at compile time, so a type the manifest can't name never reaches a run.
 
 ## Registering a region
 
-A region is a piece of router state the manifest describes: an L1 region or a stream register. Two functions in
-`fabric_manifest_model.hpp` make one:
+A region is a piece of router state the manifest describes: an L1 region or a stream register. Code that knows the
+region's location registers it with `fabric_manifest_model.hpp`'s function, which returns the model's `content::L1`:
 
 ```cpp
 // An L1 region of num_elements Ts, element_size bytes apart from address.
 template <typename T>
-constexpr content::L1 register_l1_region(uint32_t address = 0, uint32_t num_elements = 1, uint32_t element_size = sizeof(T));
+content::L1 register_l1_region(uint32_t address, uint32_t num_elements = 1, uint32_t element_size = sizeof(T));
+```
+
+A field table entry is built before any router exists, so it doesn't know the location yet. It registers its region
+with `fabric_manifest_fields.hpp`'s functions, which return a table field the router pass completes:
+
+```cpp
+// An L1 region with no address yet: the router pass makes it a content::L1 at the address the kernel is fed.
+template <typename T>
+constexpr L1Field register_l1_field(uint32_t num_elements = 1, uint32_t element_size = sizeof(T));
 
 // A stream register holding a T. Every stream has the same set of registers, and `reg` picks one of them (such as
 // BUF_SPACE_AVAILABLE). The stream id isn't known yet, so neither is the address: the router pass reads the stream id
 // from the kernel's arguments and works out the address with describe_stream_register.
 template <typename T>
-constexpr StreamRegField register_stream_region(StreamRegister reg);
+constexpr StreamRegField register_stream_field(StreamRegister reg);
 ```
 
 Registering a region does two things, and nothing else:
@@ -121,18 +130,21 @@ RouterField{
     .key = "edm_status",
     .source = "EDM_STATUS_PTR_ADDR",              // the argument that holds the address
     .category = LIFECYCLE,
-    .content = register_l1_region<EDMStatus>(),   // one EDMStatus; the address is filled in later
+    .content = register_l1_field<EDMStatus>(),    // one EDMStatus; the address is filled in later
     .description = "How far the router has come through startup and teardown.",
 },
 ```
 
-For each router, the router pass reads the argument `source` names, and `make_field` copies the entry's region with
-the argument as its address. On a T3K, router `E0` on chip `C0` is fed `EDM_STATUS_PTR_ADDR = 98624`:
+For each router, the router pass reads the argument `source` names, and `make_field` makes the entry's region a
+`content::L1` with the argument as its address. On a T3K, router `E0` on chip `C0` is fed `EDM_STATUS_PTR_ADDR = 98624`:
 
 ```cpp
-[&](manifest::content::L1 l1) -> manifest::Content {
-    l1.address = arg;                                      // 0 -> 98624
-    return l1;
+[&](const manifest::L1Field& l1) -> manifest::Content {
+    return manifest::content::L1{
+        .address = arg,                                    // 98624
+        .num_elements = l1.num_elements,
+        .element_size = l1.element_size,
+        .type = std::string(l1.type)};
 },
 ```
 
@@ -152,7 +164,7 @@ RouterField{
     .key = "erisc_sync",
     .source = "MULTI_RISC_TEARDOWN_SYNC_STREAM_ID",
     .category = LIFECYCLE,
-    .content = register_stream_region<uint32_t>(StreamRegister::REMOTE_SRC),
+    .content = register_stream_field<uint32_t>(StreamRegister::REMOTE_SRC),
     ...
 },
 ```

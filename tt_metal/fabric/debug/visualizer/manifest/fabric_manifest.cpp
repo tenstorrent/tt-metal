@@ -19,6 +19,7 @@
 #include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_topology_pass.hpp"
 #include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_model.hpp"
 #include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_names.hpp"
+#include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_paths.hpp"
 #include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_type_registry.hpp"
 #include "tt_metal/llrt/rtoptions.hpp"
 
@@ -49,10 +50,13 @@ namespace {
 using json = nlohmann::ordered_json;
 
 using manifest::chip_key;
+using manifest::downstream_channel_path;
 using manifest::kind_name;
 using manifest::lower_enum_name;
 using manifest::mesh_key;
 using manifest::router_key;
+using manifest::router_path;
+using manifest::sibling_router_path;
 
 // ============ Contents ============
 
@@ -61,7 +65,7 @@ json make_l1_json(const manifest::content::L1& l1) {
     out["address"] = l1.address;
     out["num_elements"] = l1.num_elements;
     out["element_size"] = l1.element_size;
-    out["type"] = std::string(l1.type);
+    out["type"] = l1.type;
     return out;
 }
 
@@ -74,7 +78,7 @@ json make_stream_reg_json(const manifest::content::StreamReg& stream) {
     out["stream_id"] = stream.stream_id;
     out["address"] = stream.address;
     out["value_bits"] = stream.value_bits;
-    out["type"] = std::string(stream.type);
+    out["type"] = stream.type;
     return out;
 }
 
@@ -124,7 +128,7 @@ json make_fabric_json(const manifest::FabricInfo& fabric) {
     block["config"] = std::move(config);
     block["topology"] = lower_enum_name(fabric.topology);
     block["is_2d_routing"] = fabric.is_2d_routing;
-    block["packet_header"] = std::string(fabric.packet_header);
+    block["packet_header"] = fabric.packet_header;
     block["packet_header_size_bytes"] = fabric.packet_header_size_bytes;
     block["max_payload_size_bytes"] = fabric.max_payload_size_bytes;
     block["channel_buffer_size_bytes"] = fabric.channel_buffer_size_bytes;
@@ -215,24 +219,6 @@ json make_arch_json(const manifest::Arch& arch) {
     return out;
 }
 
-// ============ Paths ============
-
-// One part of the manifest refers to a router elsewhere by its path, e.g. "M0/C7/E0".
-std::string router_path(FabricNodeId node, eth_chan_directions direction, routing_plane_id_t routing_plane) {
-    return fmt::format(
-        "{}/{}/{}", mesh_key(node.mesh_id), chip_key(node.chip_id), router_key(direction, routing_plane));
-}
-
-std::string router_path(const manifest::RouterRef& router) {
-    return router_path(router.node, router.direction, router.routing_plane);
-}
-
-// A sibling is on the same chip and routing plane as the router that refers to it.
-std::string sibling_router_path(
-    FabricNodeId node, const manifest::RouterIdentity& identity, const manifest::SiblingRouterRef& sibling) {
-    return router_path(node, sibling.direction, identity.routing_plane);
-}
-
 // ============ Router ============
 
 json make_core_json(const tt::tt_metal::CoreCoord& core) { return json::array({core.x, core.y}); }
@@ -304,7 +290,7 @@ json make_credit_ref_json(const manifest::CounterRef& counter) {
 json make_fields_json(const std::vector<manifest::Field>& fields) {
     json out = json::object();
     for (const auto& field : fields) {
-        const std::string key(field.key);
+        const std::string& key = field.key;
         TT_FATAL(!out.contains(key), "Fabric manifest: two fields are keyed {}", key);
         if (!field.content.has_value()) {
             out[key] = nullptr;
@@ -321,7 +307,7 @@ json make_fields_json(const std::vector<manifest::Field>& fields) {
                 [&](const manifest::content::Flag& flag) { entry["value"] = flag.value; },
                 [&](const manifest::content::Enum& enumerator) {
                     entry["value"] = enumerator.value;
-                    entry["value_name"] = manifest::lower_name(enumerator.value_name);
+                    entry["value_name"] = enumerator.value_name;
                 },
             },
             *field.content);
@@ -433,11 +419,7 @@ json make_downstream_edges_json(const manifest::Router& router, FabricNodeId nod
         json vc_json;
         for (const auto& edge : edges) {
             json entry;
-            entry["downstream_channel"] = fmt::format(
-                "{}/channels/senders/vc{}/ch{}",
-                sibling_router_path(node, router.identity, edge.target),
-                vc,
-                edge.landing_channel);
+            entry["downstream_channel"] = downstream_channel_path(node, router.identity, vc, edge.downstream_channel);
             entry["through_tensix_mux"] = edge.through_tensix_mux;
             entry["fields"] = make_fields_by_erisc_json(edge.fields_by_erisc);
             vc_json[fmt::format("edge{}", edge.edge)] = std::move(entry);
@@ -525,7 +507,7 @@ json make_local_sync_json(const manifest::LocalSync& local_sync) {
 json make_chip_routers_json(const manifest::Chip& chip) {
     json routers = json::object();
     for (const auto& router : chip.routers) {
-        routers[router_key(router.identity.direction, router.identity.routing_plane)] =
+        routers[router_key(router.identity.key)] =
             make_router_json(router, chip.fabric_node_id);
     }
     return routers;

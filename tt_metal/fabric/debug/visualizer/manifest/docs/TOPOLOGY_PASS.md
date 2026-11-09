@@ -10,8 +10,9 @@ mesh graph and the cluster can say how everything connects. The topology pass jo
 
 The router pass describes one router at a time, while its builder exists ([ROUTER_PASS.md](ROUTER_PASS.md)). It knows
 each router by its Ethernet channel, and knows nothing about the rest of the chip or the fabric. Each chip's
-`FabricBuilder` publishes those routers, with a few chip-wide facts, to `PublishedChips`
-([BUILDER_HOOKS.md](BUILDER_HOOKS.md)).
+`FabricBuilder` publishes those routers to `PublishedChips` ([BUILDER_HOOKS.md](BUILDER_HOOKS.md)), with a few
+chip-wide facts and the two things it names routers by Ethernet channel: the local sync master, and the connections
+between the chip's routers. The topology pass resolves those to routers, so the model holds only the routers.
 
 The topology pass finishes what the router pass couldn't:
 
@@ -52,8 +53,8 @@ Two facts are the topology pass's own, because no object holds them directly. Ea
 
 - **`wrap`**: a link closes a torus axis when the peer is in the same mesh, the link's direction lies on an axis the
   mesh's `torus` wraps, and the two chips are at opposite ends of that axis.
-- **Sibling producers**: a sender channel's producer is the router whose edge lands on it. This reads the builder's
-  edges backwards, so it adds no rule of its own.
+- **Sibling producers**: a sender channel's producer is the router whose connection lands on it. This reads the
+  connections the builder recorded backwards, so it adds no rule of its own.
 
 ## Chips
 
@@ -75,17 +76,17 @@ A local chip whose builder published nothing has no routers.
 **1. Identities** (`resolve_router_identities`). Each router gets its routing plane, which with its direction makes its
 key, and its cores. Routers stay in the order they were published, by Ethernet channel.
 
-**2. Local sync master** (`get_master_router`). The master's channel, from the builder's `KernelCreationContext`,
-becomes the master router.
+**2. Local sync master** (`get_master_router`). The master's channel, which `FabricBuilder` publishes from its
+`KernelCreationContext`, becomes the master router.
 
 **3. Link peers** (`resolve_link_peer`). Each router's link gets its `peer`, `cross_host` and `wrap`. The peer is null
 when the link connects to nothing, or to a channel trimmed from the peer's routing planes. A peer can be on another
 chip, another mesh, or another host.
 
-**4. Sibling producers** (`resolve_sibling_producers`). Each downstream edge names the sibling it lands on, by its
-Ethernet channel, from the connection the builder recorded. A router's sender channel gets a sibling `producer` when a
-sibling's edge lands on it and doesn't end at this router's tensix mux. An edge landing past the router's sender
-channels on its VC feeds none. Each router writes only its own channels, and reads its siblings' edges.
+**4. Sibling producers** (`resolve_sibling_producers`). Each connection the builder recorded names its source and
+target routers by Ethernet channel, and the sender channel it lands on. The target's sender channel gets the source as
+its sibling `producer`, unless the connection ends at the target's tensix mux. A connection landing past the target's
+sender channels on its VC feeds none.
 
 ## Checks
 

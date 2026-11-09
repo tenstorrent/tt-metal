@@ -148,7 +148,7 @@ manifest::content::StreamReg describe_stream_register(
         .address = hal.get_noc_overlay_start_addr() + (stream_id * hal.get_noc_stream_reg_space_size()) +
                    static_cast<uint32_t>(reg_index * sizeof(uint32_t)),
         .value_bits = value_bits,
-        .type = stream_reg.type,
+        .type = std::string(stream_reg.type),
     };
 }
 
@@ -170,18 +170,21 @@ std::string get_arg_name(const manifest::NamedArg& arg, const FieldIndex& index)
 // address of 0 is a buffer the builder did not allocate (FabricRouterDiagnosticBufferMap::BufferRegion::is_enabled),
 // and k_unused_stream_id a stream register it did not allocate.
 manifest::Field make_field(const ManifestRouterInputs& inputs, const manifest::RouterField& field, uint32_t arg) {
-    const std::string_view key = field.key.value;
+    const std::string key(field.key.value);
     const bool unallocated =
-        (std::holds_alternative<manifest::content::L1>(field.content.value) && arg == 0) ||
+        (std::holds_alternative<manifest::L1Field>(field.content.value) && arg == 0) ||
         (std::holds_alternative<manifest::StreamRegField>(field.content.value) && arg == k_unused_stream_id);
     if (unallocated) {
         return {.key = key, .category = field.category.value, .content = std::nullopt};
     }
     manifest::Content content = std::visit(
         ttsl::overloaded{
-            [&](manifest::content::L1 l1) -> manifest::Content {
-                l1.address = arg;
-                return l1;
+            [&](const manifest::L1Field& l1) -> manifest::Content {
+                return manifest::content::L1{
+                    .address = arg,
+                    .num_elements = l1.num_elements,
+                    .element_size = l1.element_size,
+                    .type = std::string(l1.type)};
             },
             [&](const manifest::StreamRegField& stream) -> manifest::Content {
                 return describe_stream_register(inputs.hal, arg, stream);
@@ -195,17 +198,15 @@ manifest::Field make_field(const ManifestRouterInputs& inputs, const manifest::R
                 flag.value = arg != 0;
                 return flag;
             },
-            [&](manifest::content::Enum enumerator) -> manifest::Content {
-                const std::optional<std::string_view> value_name = enumerator.name_value(arg);
+            [&](const manifest::EnumField& enum_field) -> manifest::Content {
+                const std::optional<std::string_view> value_name = enum_field.name_value(arg);
                 TT_FATAL(
                     value_name.has_value(),
                     "Fabric manifest: field {} is {}, which is none of {}'s enumerators",
                     key,
                     arg,
-                    enumerator.type);
-                enumerator.value = arg;
-                enumerator.value_name = *value_name;
-                return enumerator;
+                    enum_field.type);
+                return manifest::content::Enum{.value = arg, .value_name = manifest::lower_name(*value_name)};
             },
         },
         field.content.value);
@@ -547,9 +548,11 @@ std::vector<manifest::DownstreamEdge> collect_downstream_edges(const ChannelCont
         mask |= 1u << slot;
         edges.push_back({
             .edge = slot + 1,
-            .target = {.direction = direction},
-            .target_eth_chan = connection.dest_eth_chan,
-            .landing_channel = connection.dest_vc_sender_channel,
+            .downstream_channel =
+                {
+                    .target = {.direction = direction},
+                    .landing_channel = connection.dest_vc_sender_channel,
+                },
             .through_tensix_mux = connection.dest_is_tensix,
         });
     }
@@ -621,7 +624,7 @@ manifest::Router collect_manifest_router(const ManifestRouterInputs& inputs) {
         .identity =
             {
                 .eth_chan = inputs.location.eth_chan,
-                .direction = builder::routing_direction_to_eth_direction(inputs.location.direction),
+                .key = {.direction = builder::routing_direction_to_eth_direction(inputs.location.direction)},
             },
         .link = collect_link(inputs),
         .shape = shape,

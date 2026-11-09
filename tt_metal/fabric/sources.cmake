@@ -57,6 +57,7 @@ set(FABRIC_SOURCES
     debug/visualizer/manifest/fabric_manifest.cpp
     debug/visualizer/manifest/fabric_manifest_describe.cpp
     debug/visualizer/manifest/fabric_manifest_kernel_inputs.cpp
+    debug/visualizer/manifest/fabric_manifest_paths.cpp
     debug/visualizer/manifest/fabric_manifest_published_chips.cpp
     debug/visualizer/manifest/fabric_manifest_router_pass.cpp
     debug/visualizer/manifest/fabric_manifest_topology_pass.cpp

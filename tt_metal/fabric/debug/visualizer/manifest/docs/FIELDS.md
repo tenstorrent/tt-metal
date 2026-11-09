@@ -102,7 +102,7 @@ The named arguments and defines the router kernel is fed that the manifest does 
 
 | Named argument | Reason |
 | --- | --- |
-| `LOCAL_HANDSHAKE_MASTER_ETH_CHAN` | The chip's local_sync master_eth_chan, from KernelCreationContext. |
+| `LOCAL_HANDSHAKE_MASTER_ETH_CHAN` | The local sync master's Ethernet channel, from KernelCreationContext. |
 | `NUM_LOCAL_EDMS` | The chip's local_sync num_routers, from KernelCreationContext. |
 | `EDM_CHANNELS_MASK` | The chip's local_sync router_channels_mask, from KernelCreationContext. |
 | `MY_ERISC_ID` | The ERISC's index in the router's eriscs, which the manifest lists in RISC order. |

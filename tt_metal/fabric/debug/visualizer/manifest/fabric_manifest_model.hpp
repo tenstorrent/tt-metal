@@ -45,7 +45,7 @@ struct L1 {
     // The number of bytes each element takes up.
     uint32_t element_size = 0;
     // The type's registered name (fabric_manifest_type_registry.hpp).
-    std::string_view type;
+    std::string type;
 };
 
 // A stream register's word. Its value is the word's low `value_bits` bits, read as `type`; the bits above can hold
@@ -57,7 +57,7 @@ struct StreamReg {
     // number of bits).
     uint32_t value_bits = 0;
     // The type's registered name (fabric_manifest_type_registry.hpp).
-    std::string_view type;
+    std::string type;
 };
 
 struct Number {
@@ -71,13 +71,9 @@ struct Flag {
 // A value of a configuration enum the kernel is given, such as a direction. No captured bytes hold it, so its type
 // isn't registered: the manifest writes the value and the name of its enumerator.
 struct Enum {
-    // The enum's name.
-    std::string_view type;
     uint32_t value = 0;
-    // The enumerator `value` names.
-    std::string_view value_name;
-    // Made for the field's enum by enum_of<E>: the enumerator `value` names, or nullopt when it names none.
-    std::optional<std::string_view> (*name_value)(uint32_t value) = nullptr;
+    // The enumerator `value` names, in lower case (lower_name), e.g. "east".
+    std::string value_name;
 };
 
 }  // namespace content
@@ -86,35 +82,12 @@ using Content = std::variant<content::L1, content::StreamReg, content::Number, c
 
 // Registers an L1 region of `num_elements` Ts, `element_size` bytes apart from `address`, under T's registered name.
 template <typename T>
-constexpr content::L1 register_l1_region(
-    uint32_t address = 0, uint32_t num_elements = 1, uint32_t element_size = sizeof(T)) {
+content::L1 register_l1_region(uint32_t address, uint32_t num_elements = 1, uint32_t element_size = sizeof(T)) {
     return {
         .address = address,
         .num_elements = num_elements,
         .element_size = element_size,
-        .type = get_manifest_type_name<T>()};
-}
-
-// Which register of its stream a stream field reads. The router pass turns the stream id the kernel is fed and the
-// register into the register's address.
-enum class StreamRegister : uint8_t {
-    // The increment-on-write credit or slot count.
-    BUF_SPACE_AVAILABLE,
-    // A plain read-write register.
-    REMOTE_SRC,
-};
-
-// A stream register before the router pass knows its stream id.
-struct StreamRegField {
-    StreamRegister reg = StreamRegister::BUF_SPACE_AVAILABLE;
-    std::string_view type;
-};
-
-// Registers a stream register `reg` whose value is a T.
-template <typename T>
-constexpr StreamRegField register_stream_region(StreamRegister reg) {
-    static_assert(sizeof(T) <= sizeof(uint32_t), "A stream register holds one word, so its value fits in a uint32_t");
-    return {.reg = reg, .type = get_manifest_type_name<T>()};
+        .type = std::string(get_manifest_type_name<T>())};
 }
 
 // One of a router's L1 credit counter arrays (L1CreditCounters).
@@ -151,11 +124,17 @@ struct SiblingRouterRef {
     eth_chan_directions direction = eth_chan_directions::EAST;
 };
 
+// What names a router on its chip, and makes its key in the chip's routers, such as "E0" (router_key).
+struct RouterKey {
+    // The direction the builder built the router facing.
+    eth_chan_directions direction = eth_chan_directions::EAST;
+    routing_plane_id_t routing_plane = 0;
+};
+
 // A router on any chip, named by its chip and its key there.
 struct RouterRef {
     FabricNodeId node{MeshId{0}, 0};
-    eth_chan_directions direction = eth_chan_directions::EAST;
-    routing_plane_id_t routing_plane = 0;
+    RouterKey key;
 };
 
 // The chip's local worker, as the producer of a sender channel.
@@ -194,9 +173,7 @@ struct L1CreditCounters {
 // High level information about a particular router.
 struct RouterIdentity {
     uint32_t eth_chan = 0;
-    // The direction the builder built the router facing
-    eth_chan_directions direction = eth_chan_directions::EAST;
-    routing_plane_id_t routing_plane = 0;
+    RouterKey key;
     tt::tt_metal::CoreCoord logical_core;
     tt::tt_metal::CoreCoord virtual_core;
 };
@@ -232,7 +209,7 @@ enum class FieldCategory : uint8_t {
 
 // A fact the router kernel is fed, read through the field tables (fabric_manifest_fields.hpp).
 struct Field {
-    std::string_view key;
+    std::string key;
     // Tag used for logical grouping of information in decode / visualizer.
     FieldCategory category = FieldCategory::LIFECYCLE;
     // Underlying content that the value the kernel is fed points to. Null when the field is a buffer or stream
@@ -287,17 +264,19 @@ struct RouterChannels {
     std::vector<std::vector<ReceiverChannel>> receivers;
 };
 
+// The sender channel a downstream edge lands on: a sibling's, on the edge's VC.
+struct DownstreamChannel {
+    SiblingRouterRef target;
+    uint32_t landing_channel = 0;
+};
+
 // A persistent connection on one VC from this router to a sender channel of a router on the same chip and routing
 // plane. The receivers forwarding on the VC write through it. In mux mode a VC0 edge into a sibling ends at the
 // sibling's tensix mux instead.
 struct DownstreamEdge {
     // The kernel's EDGE_<n>: the sibling's compact index among this router's other directions, plus one.
     uint32_t edge = 0;
-    SiblingRouterRef target;
-    // The Ethernet channel of the sibling it lands on.
-    uint32_t target_eth_chan = 0;
-    // On the edge's VC.
-    uint32_t landing_channel = 0;
+    DownstreamChannel downstream_channel;
     bool through_tensix_mux = false;
     FieldsByErisc fields_by_erisc;
 };
@@ -333,8 +312,7 @@ struct Router {
 // How the chip's routers sync at startup through their local_sync words, as the router kernels are fed it
 // (KernelCreationContext).
 struct LocalSync {
-    uint32_t master_eth_chan = 0;
-    // The router on master_eth_chan.
+    // The router that leads the sync.
     std::optional<RouterRef> master;
     uint32_t num_routers = 0;
     // Bit N is set for the router on Ethernet channel N.
@@ -494,7 +472,7 @@ struct FabricInfo {
     Topology topology = Topology::Linear;
     bool is_2d_routing = false;
     // The registered name of the packet header type the run's routers use (packet_header_types.hpp).
-    std::string_view packet_header;
+    std::string packet_header;
     // The bytes a packet's header takes: the type's size, plus the UDMControlFields that follow it in UDM mode.
     size_t packet_header_size_bytes = 0;
     size_t max_payload_size_bytes = 0;

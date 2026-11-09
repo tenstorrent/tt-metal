@@ -43,6 +43,7 @@
 #include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_fields.hpp"
 #include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_model.hpp"
 #include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_names.hpp"
+#include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_paths.hpp"
 #include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_type_registry.hpp"
 
 namespace tt::tt_fabric::fabric_router_tests {
@@ -73,7 +74,9 @@ std::set<std::string> keys_of(const json& object) {
 // The active channel ControlPlane keys as `key` on `node`, e.g. the plane-0 east channel for "E0".
 std::optional<chan_id_t> channel_for_key(FabricNodeId node, const std::string& key) {
     for (const auto& [chan, direction] : control_plane().get_active_fabric_eth_channels(node)) {
-        if (router_key(direction, control_plane().get_routing_plane_id(node, chan)) == key) {
+        const manifest::RouterKey chan_key{
+            .direction = direction, .routing_plane = control_plane().get_routing_plane_id(node, chan)};
+        if (router_key(chan_key) == key) {
             return chan;
         }
     }
@@ -566,7 +569,8 @@ void check_router_edges(const json& manifest, const std::vector<RouterEntry>& ro
                     ASSERT_TRUE(n >= 1 && n <= 4) << edge_key;
                     EXPECT_EQ(
                         key_of_path(target_router_path),
-                        router_key(builder::direction_from_compact_index(facing, n - 1), plane));
+                        router_key(
+                            {.direction = builder::direction_from_compact_index(facing, n - 1), .routing_plane = plane}));
                 } else {
                     EXPECT_EQ(n, 1u);
                     EXPECT_EQ(key_of_path(target_router_path).substr(1), entry.router_key.substr(1));
@@ -621,7 +625,7 @@ void expect_fields(const json& fields, std::span<const manifest::RouterField> ta
         expected_keys.insert(key);
         if (fields.contains(key) && fields.at(key).is_null()) {
             EXPECT_TRUE(
-                std::holds_alternative<manifest::content::L1>(field.content.value) ||
+                std::holds_alternative<manifest::L1Field>(field.content.value) ||
                 std::holds_alternative<manifest::StreamRegField>(field.content.value))
                 << key;
         }
@@ -889,11 +893,11 @@ void check_arch_core_registers(const json& manifest, const std::vector<RouterEnt
 TEST(ManifestNames, Spellings) {
     EXPECT_EQ(mesh_key(MeshId{0}), "M0");
     EXPECT_EQ(chip_key(7), "C7");
-    EXPECT_EQ(router_key(eth_chan_directions::EAST, 0), "E0");
-    EXPECT_EQ(router_key(eth_chan_directions::WEST, 1), "W1");
-    EXPECT_EQ(router_key(eth_chan_directions::NORTH, 2), "N2");
-    EXPECT_EQ(router_key(eth_chan_directions::SOUTH, 3), "S3");
-    EXPECT_EQ(router_key(eth_chan_directions::Z, 0), "Z0");
+    EXPECT_EQ(router_key({eth_chan_directions::EAST, 0}), "E0");
+    EXPECT_EQ(router_key({eth_chan_directions::WEST, 1}), "W1");
+    EXPECT_EQ(router_key({eth_chan_directions::NORTH, 2}), "N2");
+    EXPECT_EQ(router_key({eth_chan_directions::SOUTH, 3}), "S3");
+    EXPECT_EQ(router_key({eth_chan_directions::Z, 0}), "Z0");
 
     // An enumerator in lower case, and a value with no enumerator as its number.
     EXPECT_EQ(lower_enum_name(FabricConfig::FABRIC_2D), "fabric_2d");
@@ -904,17 +908,59 @@ TEST(ManifestNames, Spellings) {
     EXPECT_EQ(kind_name<manifest::content::StreamReg>(), "stream_reg");
 }
 
+// Each key and path parses back to what it was written from, and anything the writer wouldn't write fails.
+TEST(ManifestNames, KeysAndPathsParseBack) {
+    EXPECT_EQ(manifest::parse_mesh_key("M12"), MeshId{12});
+    EXPECT_EQ(manifest::parse_chip_key("C7"), 7u);
+    const manifest::RouterKey key = manifest::parse_router_key("S3");
+    EXPECT_EQ(key.direction, eth_chan_directions::SOUTH);
+    EXPECT_EQ(key.routing_plane, 3);
+    for (const std::string_view bad : {"", "M", "C7", "M07", "M-1", "M1x", "m1"}) {
+        EXPECT_ANY_THROW(manifest::parse_mesh_key(bad)) << bad;
+    }
+    EXPECT_ANY_THROW(manifest::parse_router_key("X0"));
+    EXPECT_ANY_THROW(manifest::parse_router_key("E256"));
+
+    const FabricNodeId node(MeshId{1}, 7);
+    const manifest::RouterRef router{.node = node, .key = {.direction = eth_chan_directions::WEST, .routing_plane = 2}};
+    EXPECT_EQ(manifest::router_path(router), "M1/C7/W2");
+    const manifest::RouterRef parsed = manifest::parse_router_path("M1/C7/W2");
+    EXPECT_EQ(parsed.node, router.node);
+    EXPECT_EQ(parsed.key.direction, router.key.direction);
+    EXPECT_EQ(parsed.key.routing_plane, router.key.routing_plane);
+    for (const std::string_view bad : {"M1/C7", "M1/C7/W2/", "/M1/C7/W2", "M1/C7/W2/E0"}) {
+        EXPECT_ANY_THROW(manifest::parse_router_path(bad)) << bad;
+    }
+
+    // A sibling is on the referring router's chip and routing plane.
+    const manifest::RouterIdentity identity{.key = {.direction = eth_chan_directions::EAST, .routing_plane = 2}};
+    const manifest::DownstreamChannel landing{
+        .target = {.direction = eth_chan_directions::NORTH}, .landing_channel = 3};
+    EXPECT_EQ(manifest::sibling_router_path(node, identity, landing.target), "M1/C7/N2");
+    EXPECT_EQ(manifest::parse_sibling_router_path("M1/C7/N2", node, identity).direction, eth_chan_directions::NORTH);
+    EXPECT_ANY_THROW(manifest::parse_sibling_router_path("M1/C7/N1", node, identity));
+    EXPECT_ANY_THROW(manifest::parse_sibling_router_path("M1/C6/N2", node, identity));
+
+    const std::string channel = manifest::downstream_channel_path(node, identity, 1, landing);
+    EXPECT_EQ(channel, "M1/C7/N2/channels/senders/vc1/ch3");
+    const auto parsed_channel = manifest::parse_downstream_channel_path(channel, node, identity, 1);
+    EXPECT_EQ(parsed_channel.target.direction, eth_chan_directions::NORTH);
+    EXPECT_EQ(parsed_channel.landing_channel, 3u);
+    EXPECT_ANY_THROW(manifest::parse_downstream_channel_path(channel, node, identity, 0));
+    EXPECT_ANY_THROW(manifest::parse_downstream_channel_path("M1/C7/N2/channels/receivers/vc1/ch3", node, identity, 1));
+}
+
 // A chip is published once, with every router its builder initialized, and only within the chips the context holds.
 // An unpublished chip can't be read.
 TEST(ManifestPublishedChips, RejectsWhatItCannotHold) {
     manifest::PublishedChips chips(2);
-    EXPECT_ANY_THROW(chips.publish(0, manifest::Chip{.routers = {manifest::Router{}}}, 2));
-    EXPECT_ANY_THROW(chips.publish(2, manifest::Chip{}, 0));
+    EXPECT_ANY_THROW(chips.publish(0, {.chip = {.routers = {manifest::Router{}}}}, 2));
+    EXPECT_ANY_THROW(chips.publish(2, {}, 0));
     EXPECT_FALSE(chips.has(0));
     EXPECT_ANY_THROW(chips.get(0));
-    chips.publish(0, manifest::Chip{}, 0);
+    chips.publish(0, {}, 0);
     EXPECT_TRUE(chips.has(0));
-    EXPECT_ANY_THROW(chips.publish(0, manifest::Chip{}, 0));
+    EXPECT_ANY_THROW(chips.publish(0, {}, 0));
     EXPECT_FALSE(chips.has(2));
     EXPECT_FALSE(chips.has(-1));
 }

@@ -352,28 +352,38 @@ std::unique_ptr<FabricBuildSession> create_fabric_build_session(FabricContext& f
 void FabricBuilder::publish_manifest_chip() const {
     const KernelCreationContext ctx = kernel_creation_context();
 
-    // Create the chip manifest
-    manifest::Chip chip{
-        .z_port_role = z_role_of(chip_facts_.per_direction_capabilities),
-        .local_sync =
-            manifest::LocalSync{
-                .master_eth_chan = ctx.master_router_chan,
-                .num_routers = static_cast<uint32_t>(ctx.num_local_fabric_routers),
-                .router_channels_mask = ctx.router_channels_mask,
+    TT_FATAL(
+        connection_registry_ != nullptr,
+        "Fabric manifest: chip {} recorded no router connections; FabricBuilder records them when the manifest is on",
+        device_->id());
+
+    // Create the chip manifest. The topology pass resolves the master's channel and the connections to routers.
+    manifest::PublishedChip published{
+        .chip =
+            {
+                .z_port_role = z_role_of(chip_facts_.per_direction_capabilities),
+                .local_sync =
+                    manifest::LocalSync{
+                        .num_routers = static_cast<uint32_t>(ctx.num_local_fabric_routers),
+                        .router_channels_mask = ctx.router_channels_mask,
+                    },
+                .routers = {},
             },
-        .routers = {},
+        .local_sync_master_eth_chan = ctx.master_router_chan,
+        .connections = connection_registry_->get_all_connections(),
     };
 
     // Add the routers to the manifest
-    chip.routers.reserve(routers_.size());
+    auto& routers = published.chip.routers;
+    routers.reserve(routers_.size());
     for (const auto& [eth_chan, router_builder] : routers_) {
-        chip.routers.push_back(router_builder->collect_manifest_router(chip_facts_));
+        routers.push_back(router_builder->collect_manifest_router(chip_facts_));
     }
-    std::sort(chip.routers.begin(), chip.routers.end(), [](const manifest::Router& a, const manifest::Router& b) {
+    std::sort(routers.begin(), routers.end(), [](const manifest::Router& a, const manifest::Router& b) {
         return a.identity.eth_chan < b.identity.eth_chan;
     });
     builder_context_.get_manifest_chips().publish(
-        device_->id(), std::move(chip), builder_context_.get_num_fabric_initialized_routers(device_->id()));
+        device_->id(), std::move(published), builder_context_.get_num_fabric_initialized_routers(device_->id()));
 }
 
 }  // namespace tt::tt_fabric

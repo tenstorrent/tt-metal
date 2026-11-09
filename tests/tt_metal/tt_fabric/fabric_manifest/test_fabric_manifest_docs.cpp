@@ -37,12 +37,17 @@ std::string cell(std::string_view text) {
     return out;
 }
 
-// The kind the manifest writes for a table entry: a stream entry becomes a content::StreamReg.
+// The kind the manifest writes for a table entry: the content the router pass makes of it.
 std::string content_kind(const manifest::FieldContent& content) {
-    if (std::holds_alternative<manifest::StreamRegField>(content)) {
-        return manifest::kind_name<manifest::content::StreamReg>();
-    }
-    return manifest::kind_name(content);
+    return std::visit(
+        ttsl::overloaded{
+            [](const manifest::L1Field&) { return manifest::kind_name<manifest::content::L1>(); },
+            [](const manifest::StreamRegField&) { return manifest::kind_name<manifest::content::StreamReg>(); },
+            [](const manifest::content::Number&) { return manifest::kind_name<manifest::content::Number>(); },
+            [](const manifest::content::Flag&) { return manifest::kind_name<manifest::content::Flag>(); },
+            [](const manifest::EnumField&) { return manifest::kind_name<manifest::content::Enum>(); },
+        },
+        content);
 }
 
 // The type an entry's value is read as: an L1 region's or stream register's registered type, or a configuration
@@ -50,7 +55,7 @@ std::string content_kind(const manifest::FieldContent& content) {
 std::string content_type(const manifest::FieldContent& content) {
     return std::visit(
         ttsl::overloaded{
-            [](const manifest::content::L1& l1) {
+            [](const manifest::L1Field& l1) {
                 return l1.num_elements == 1 ? fmt::format("`{}`", l1.type)
                                             : fmt::format("`{}` × {}", l1.type, l1.num_elements);
             },
@@ -59,7 +64,7 @@ std::string content_type(const manifest::FieldContent& content) {
             },
             [](const manifest::content::Number&) { return std::string(); },
             [](const manifest::content::Flag&) { return std::string(); },
-            [](const manifest::content::Enum& enumerator) { return fmt::format("`{}`", enumerator.type); },
+            [](const manifest::EnumField& enum_field) { return fmt::format("`{}`", enum_field.type); },
         },
         content);
 }
