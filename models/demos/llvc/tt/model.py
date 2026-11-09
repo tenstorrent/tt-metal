@@ -423,19 +423,26 @@ class LLVCModel:
             for i, piece in enumerate(chunks):
                 w0 = i * max_windows
                 w1 = min(w0 + max_windows, num_windows)
-                nw = w1 - w0
-                if B > 1 and nw > 1:
-                    # _build_windows stacks windows window-major on dim 0
-                    # ([w0_b0, w0_b1, w1_b0, ...]). Fold to batch-major before
-                    # collapsing windows into the time axis — a direct reshape
-                    # would interleave decoder frames across streams.
-                    piece = ttnn.reshape(piece, (nw, B, cs, cfg.dec_dim))
-                    piece = ttnn.permute(piece, (1, 0, 2, 3))
-                timed = ttnn.reshape(piece, (B, nw * cs, cfg.dec_dim))
+                timed = self._fold_windows_to_time(piece, B, w1 - w0)
                 tgt = timed if tgt is None else ops.concat_time(tgt, timed)
         if T != orig_T:
             tgt = ops.slice_time(tgt, 0, orig_T)
         return tgt
+
+    def _fold_windows_to_time(self, piece, batch: int, num_windows: int):
+        """Fold decoder windows ``[num_windows*B, cs, D]`` back to ``[B, num_windows*cs, D]``.
+
+        ``_build_windows`` stacks windows window-major on dim 0
+        (``[w0_b0, w0_b1, w1_b0, ...]``), so the rows are reordered batch-major
+        before collapsing windows into time; a direct reshape would interleave
+        decoder frames across streams.
+        """
+        cs = self.config.dec_chunk_size
+        d = self.config.dec_dim
+        if batch > 1 and num_windows > 1:
+            piece = ttnn.reshape(piece, (num_windows, batch, cs, d))
+            piece = ttnn.permute(piece, (1, 0, 2, 3))
+        return ttnn.reshape(piece, (batch, num_windows * cs, d))
 
     def _mask_gen(self, x, state: LLVCState):
         cfg = self.config
@@ -471,7 +478,7 @@ class LLVCModel:
         if self.convnet_taps:
             x_btc = self._cached_convnet(x_btc, state)
 
-        # in_conv (strided) downsamples to encoder frames, fused relu
+        # in_conv (strided) downsamples to encoder frames, then relu (separate op)
         x = self._run_conv1d(
             "in_conv",
             x_btc,

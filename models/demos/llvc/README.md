@@ -23,8 +23,10 @@ models/demos/llvc/
 │   ├── model.py                  # TTNN LLVCModel + streaming state + create_llvc()
 │   └── state_io.py               # KoeAI checkpoint / config.json loading
 ├── demo/demo.py                  # streaming + non-streaming demo, RTF/latency report
-├── tests/pcc/test_llvc.py        # TTNN-vs-reference PCC + streaming equivalence
-├── tests/perf/test_perf.py       # RTF / chunk-latency targets
+├── eval/evaluate.py              # quality + performance harness (convert / metrics stages)
+├── tests/pcc/test_llvc.py        # TTNN-vs-reference PCC, decoder + window-fold checks
+├── tests/perf/test_perf.py       # RTF / chunk-latency targets (small config)
+├── tests/perf/test_checkpoint_ci.py  # real KoeAI checkpoint: PCC, batched streams, RTF
 └── conftest.py                   # device fixture
 ```
 
@@ -33,8 +35,8 @@ models/demos/llvc/
 | LLVC block | Reference (`[B, C, T]`) | TTNN (`[B, T, C]`) |
 |---|---|---|
 | Cached conv prenet | 12 gated (`tanh·sigmoid`) residual `Conv1d(1,1,k=3)` with ring buffers | `ops.causal_window` + `ops.apply_taps` (shifted matmul-accumulate) per block |
-| Input conv | `Conv1d(1, enc_dim, k=3L, stride=L)` + ReLU | `ttnn.conv1d` with fused ReLU |
-| Dilated causal encoder | 8× depthwise-separable conv (`groups=enc_dim`, dilation 2ⁱ) + LN + ReLU, residual | depthwise `ttnn.conv1d(dilation=2ⁱ)` + `ttnn.layer_norm`; pointwise 1×1 as `ttnn.linear` |
+| Input conv | `Conv1d(1, enc_dim, k=3L, stride=L)` + ReLU | `ttnn.conv1d` followed by a separate `ttnn.relu` |
+| Dilated causal encoder | 8× depthwise-separable conv (`groups=enc_dim`, dilation 2ⁱ) + LN + ReLU, residual | depthwise conv as a shifted per-channel MAC (`ops.depthwise_causal_conv1d`; `ttnn.conv1d` cannot shard these layers) + `ttnn.layer_norm`; pointwise 1×1 as `ttnn.linear` |
 | e2d / d2e projections | grouped `Conv1d(k=1, groups=dec_dim)` + ReLU | `ttnn.conv1d(kernel=1, groups=…)` |
 | Causal transformer decoder | `nn.TransformerDecoderLayer` over unfolded chunks | `ttnn.transformer.scaled_dot_product_attention` + `ttnn.linear` FFN, windowed via slices |
 | Output synthesis ("vocoder") | `ConvTranspose1d(enc_dim,1,k=(out_buf_len+1)L,stride=L)` + `tanh` | `ttnn.conv_transpose2d` (singleton height) + `ttnn.tanh` |
@@ -72,7 +74,9 @@ python models/demos/llvc/demo/demo.py \
   --input test_wavs --out-dir converted_out --stream --chunk-factor 1
 ```
 
-Non-streaming (full-context) conversion: drop `--stream`.
+Without `--stream` the demo calls `LLVCModel(waveform)`, which runs the same
+causal chunked path as `stream(chunk_factor=1)` and only skips the RTF report;
+there is no separate full-context graph.
 
 `--chunk-factor 2` on the full-size checkpoint is the recommended real-time
 setting (RTF 0.217, ~34 ms latency on N300); `--chunk-factor 1` gives the lowest
@@ -86,17 +90,27 @@ pytest models/demos/llvc/tests/pcc/test_llvc.py -v -s
 
 # Performance: streaming RTF / per-chunk latency
 pytest models/demos/llvc/tests/perf/test_perf.py -v -s
+
+# Real KoeAI checkpoint (G_500000.pth from the HF cache): PCC vs reference_stream,
+# B=2 / chunk_factor=2 batched vs single streams, steady-state RTF / latency
+pytest models/demos/llvc/tests/perf/test_checkpoint_ci.py -v -s
 ```
 
 `create_llvc(config, device=..., checkpoint_path=...)` is the entry point;
 `LLVCModel.stream(waveform, chunk_factor=1)` returns `(audio, StreamMetrics)`
-and `LLVCModel(waveform)` does non-streaming conversion. Both accept `[T]`,
-`[B, T]`, or `[B, 1, T]`: `B > 1` is concurrent streams (independent ring
-buffers per row). PCC tests compare streaming output against the PyTorch
-reference under identical chunking (`eval/evaluate.py::reference_stream`),
-assert traced vs eager replay equivalence, and check batched vs sequential
-streams (including the multi-window `chunk_factor=2` case); both the manual
-and fused SDPA attention paths are covered.
+and `LLVCModel(waveform)` returns just the audio of `stream(chunk_factor=1)`.
+Both accept `[T]`, `[B, T]`, or `[B, 1, T]`: `B > 1` is concurrent streams
+(independent ring buffers per row).
+
+The PCC tests use a small random-weight config. They compare streaming output
+against the PyTorch reference under identical chunking
+(`eval/evaluate.py::reference_stream`), assert traced vs eager replay
+equivalence, and check batched vs sequential streams. With random weights the
+waveform barely depends on the decoder, so the decoder is also tested on its
+own: its output is compared per stream against `ref.mask_gen.decoder` over two
+windows (manual SDPA at head_dim 16, fused SDPA at head_dim 32), and an
+index-encoded tensor checks that the window fold keeps each stream's frames in
+order. `test_checkpoint_ci.py` covers the shipped full-size model.
 
 `StreamMetrics.rtf` / `.latency_ms` are **steady-state end-to-end** figures:
 each timed chunk includes host→device input upload and device→host output
@@ -172,7 +186,7 @@ Attach `llvc_eval_out/eval_report.md` and `eval_report.json` to the PR.
 | Metric | How it's computed | Needs |
 |---|---|---|
 | Decoder throughput (latent frames/s) | `sample_rate / (L · RTF)` vs the `sample_rate / L` real-time rate | always (pure torch) |
-| Token-level accuracy vs reference | per-frame PCC (hop = `L`) of non-streaming TTNN vs the PyTorch reference, plus % of frames > 0.9 | always (pure torch) |
+| Token-level accuracy vs reference | per-frame PCC (hop = `L`) of the TTNN `stream()` output vs the PyTorch reference run with identical chunking (`reference_stream`), plus % of frames > 0.9 | always (pure torch) |
 | Content preservation (WER) | Whisper transcribes source vs converted; `jiwer` WER between them | `openai-whisper`, `jiwer` |
 | Speaker similarity to target | cosine of converted vs `--target-ref` (speaker 8312) | `resemblyzer`, `--target-ref` |
 | Audio quality (DNSMOS) | non-intrusive MOS of the converted speech | `torchmetrics[audio]`, `onnxruntime`, `librosa` |
@@ -228,10 +242,17 @@ per-chunk host dispatch, with identical numerics.
   and tests share that constant.
 - **Concurrent streams (Stage 3, implemented):** `stream()` / `__call__` accept
   batch `B > 1` (`[B, T]` or `[B, 1, T]`). Each row is an independent stream
-  with its own ring buffers. `tests/pcc/test_llvc.py::test_batched_streams_match_sequential`
-  checks batched output against sequential `B=1`. This is **not** a claim of
+  with its own ring buffers. `TestLLVCDecoder` checks the multi-window fold per
+  stream, and `test_checkpoint_ci.py` checks B=2 / `chunk_factor=2` batched
+  against single streams on the real checkpoint. This is **not** a claim of
   10+ simultaneous real-time sessions or a pipelined encoder/decoder/vocoder
   schedule; those stretched Stage-3 throughput numbers are out of scope.
+- **Full-sequence PCC collapse (open, worked around)**: one `forward_chunk` over
+  a whole file, or a decoder mega-batch of every window, is size-sensitive on
+  TTNN; some lengths drop to ~0.1 PCC while neighbouring lengths match at
+  0.999. The root cause is not yet identified. `__call__` therefore runs the
+  chunked streaming path, and `_decoder` micro-batches at most `max_windows=64`
+  windows at a time, which leaves the math unchanged.
 - **Further opportunities** (not required to hit target; would bring
   `chunk_factor=1` under 0.3 too): fuse the encoder LN + ReLU, keep encoder
   activations sharded in L1 across layers, fold the output transpose-conv, and

@@ -2435,3 +2435,21 @@
   owner_id: U03PUAKE719 # Miguel Tairum Cruz (external bring-up by erertertet)
   team: models
   budget_type: unit
+
+# LLVC (KoeAI voice conversion). Reduced random-weight config built in-process.
+- name: LLVC unit tests
+  cmd: |
+    export TT_METAL_WATCHER=30
+    pytest --timeout 600 models/demos/llvc/tests/pcc/test_llvc.py -v
+  model: llvc
+  model_family: LLVC
+  skus:
+    wh_n150:
+      timeout: 10
+      tier: 3
+    bh_p150:
+      timeout: 10
+      tier: 3
+  owner_id: U03PUAKE719 # Miguel Tairum Cruz (external bring-up by samiyadev786)
+  team: models
+  budget_type: unit
