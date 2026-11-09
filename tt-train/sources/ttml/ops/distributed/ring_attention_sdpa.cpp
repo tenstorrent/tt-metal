@@ -281,8 +281,11 @@ autograd::TensorPtr ring_attention_sdpa_striped(
     // Move the shifted accumulator back to real rows (row r -> r + 1; its last row is the junk
     // row of Q' and drops out, real row 0 gets "no contribution") and merge it into the real one.
     const ttnn::Tensor shifted_back_output = shift_seq_one_row(accum[1], SeqShift::Down, 0.0F);
+    // Fill with the finite floor, not -inf: row-major ttnn::pad packs its fill value as a pair of bf16
+    // halves even for FP32 tensors, so -inf would come out as 0xFF80FF80 (NaN) and poison real row 0.
+    // kLseFloor survives that packing as a huge negative finite value, which merges with weight 0.
     const ttnn::Tensor shifted_back_intermediates =
-        shift_seq_one_row(pad_lse_to_intermediates_layout(running_lse[1]), SeqShift::Down, kNegInf);
+        shift_seq_one_row(pad_lse_to_intermediates_layout(running_lse[1]), SeqShift::Down, kLseFloor);
     detail::merge_partial_into(accum[0], running_lse[0], shifted_back_output, shifted_back_intermediates);
 
     auto out = autograd::create_tensor(ttnn::typecast(accum[0], query_tensor.dtype()));

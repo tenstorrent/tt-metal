@@ -381,6 +381,8 @@ static void TestRingAttention(
     }
 
     gathered_output = from_device_layout(gathered_output);
+    // xt::allclose does not reject NaN/inf on its own.
+    EXPECT_TRUE(xt::all(xt::isfinite(gathered_output))) << "Ring attention output has non-finite values";
     EXPECT_TRUE(xt::allclose(ref_result.output, gathered_output, rtol, atol))
         << "Ring attention output does not match reference SDPA output";
 
@@ -452,6 +454,10 @@ static void TestRingAttention(
             return "max_abs_diff=" + std::to_string(max_abs) + " max_rel_diff=" + std::to_string(max_rel) +
                    " ref_amax=" + std::to_string(ref_amax);
         };
+        EXPECT_TRUE(
+            xt::all(xt::isfinite(gathered_dQ)) && xt::all(xt::isfinite(gathered_dK)) &&
+            xt::all(xt::isfinite(gathered_dV)))
+            << "Ring attention gradients have non-finite values";
         EXPECT_TRUE(xt::allclose(ref_grads.dQ, gathered_dQ, bw_rtol, bw_atol))
             << "Ring attention dQ gradient does not match reference: " << report(ref_grads.dQ, gathered_dQ);
         EXPECT_TRUE(xt::allclose(ref_grads.dK, gathered_dK, bw_rtol, dk_atol))
