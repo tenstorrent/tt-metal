@@ -163,9 +163,6 @@ def image_to_uint8(image: ttnn.Tensor) -> ttnn.Tensor:
 
 
 class Flux3KleinPipeline:
-    # Reuse the per-layout device constants across requests (bit-identical; off = rebuild them every request).
-    cache_constants: bool = True
-
     def __init__(
         self,
         mesh_device: ttnn.MeshDevice,
@@ -418,11 +415,9 @@ class Flux3KleinPipeline:
             embedded = transformer.embed_text(tokens)
             ttnn.deallocate(tokens)
             key = (model, index, sp, tuple(sorted(lengths.items())), text_valid, _ids_digest(sample_ids))
-            plan = self._plan_cache.get(key) if self.cache_constants else None
+            plan = self._plan_cache.get(key)
             if plan is None:
-                plan = transformer.prepare_plan(layout, sample_ids, sample=index)
-                if self.cache_constants:
-                    self._plan_cache[key] = plan
+                plan = self._plan_cache[key] = transformer.prepare_plan(layout, sample_ids, sample=index)
             else:
                 # the plan keeps the logical_n buffers, not their values: another request may have written them since
                 transformer.write_logical_n(plan, sample=index)
@@ -439,13 +434,12 @@ class Flux3KleinPipeline:
             x = tensor.from_torch(
                 pad_rows(noise, rows_padded)[None], device=self._device, dtype=ttnn.float32, mesh_axes=image_axes
             )
-        mask = self._mask_cache.get((rows, rows_padded)) if self.cache_constants else None
+        mask = self._mask_cache.get((rows, rows_padded))
         if mask is None:
             mask = torch.zeros(1, rows_padded, IN_CHANNELS["image"])
             mask[:, :rows] = 1.0
             mask = tensor.from_torch(mask, device=self._device, dtype=ttnn.float32, mesh_axes=image_axes)
-            if self.cache_constants:
-                self._mask_cache[(rows, rows_padded)] = mask
+            self._mask_cache[(rows, rows_padded)] = mask
         guidance_tt = self._scalar(torch.tensor([[guidance]])) if guidance is not None else None
         dbcache = Flux3KleinDBCache(cache_config, self._device, num_branches=len(samples)) if cache_config else None
 
@@ -492,12 +486,8 @@ class Flux3KleinPipeline:
         if dbcache is not None:
             cached_steps = dbcache.context.num_cached_steps(0)
             dbcache.close()
-        for plan, embedded in samples:
-            if not any(plan is cached for cached in self._plan_cache.values()):
-                plan.deallocate()
+        for _, embedded in samples:
             ttnn.deallocate(embedded)
-        if not any(mask is cached for cached in self._mask_cache.values()):
-            ttnn.deallocate(mask)
         for t in (cond_embedded, guidance_tt):
             if t is not None:
                 ttnn.deallocate(t)
