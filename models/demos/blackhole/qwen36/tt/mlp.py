@@ -12,6 +12,18 @@ from dataclasses import dataclass
 import ttnn
 
 
+def _dsmc_in0_shard_ok(x, weight, args):
+    """QWEN36_GLUE=guin guard: the gate|up DRAM-sharded config's in0_block_w must divide x's width-shard width (the
+    pipeline steps whole in0 blocks through each in0 core's shard)."""
+    pc = getattr(args, "mlp_gu_dsmc_progcfg_bfp4", None) if weight.dtype == ttnn.bfloat4_b else None
+    pc = pc or getattr(args, "mlp_gu_dsmc_progcfg", None)
+    spec = x.memory_config().shard_spec
+    if pc is None or spec is None:
+        return False
+    shard_tiles = spec.shape[1] // ttnn.TILE_SIZE
+    return shard_tiles > 0 and spec.shape[1] % ttnn.TILE_SIZE == 0 and shard_tiles % pc.in0_block_w == 0
+
+
 @dataclass(frozen=True)
 class MLPWeights:
     w1: ttnn.Tensor  # gate_proj [in, out], bfloat8_b (bfloat4_b if QWEN36_MLP_GATEUP_BFP8=0, dense only)
@@ -559,7 +571,21 @@ class Qwen36MLP:
         w = self.weights
         args = self.args
         if self._gu_fused == "dsmc" and w.w_gu_dec is not None:
-            x_sh = x if x.memory_config() == args.act_shard_hidden else ttnn.to_memory_config(x, args.act_shard_hidden)
+            # QWEN36_GLUE=guin (default off): the RES40 ff-norm output is already a width shard of x; the DRAM-sharded
+            # pipeline multicasts in0 blocks from whichever cores hold them, so feed it as is (no reshard program).
+            _guin = (
+                decode_ar is not None
+                and tpc.glue_cut("guin")
+                and x.memory_config() == decode_ar.res_mem
+                and _dsmc_in0_shard_ok(x, w.w_gu_dec, args)
+            )
+            if _guin:
+                tpc.glue_note("guin", "gate|up dsmc in0 = RES40 shard (no reshard)")
+            x_sh = (
+                x
+                if (_guin or x.memory_config() == args.act_shard_hidden)
+                else ttnn.to_memory_config(x, args.act_shard_hidden)
+            )
             gu_pc = args.mlp_gu_dsmc_progcfg
             if w.w_gu_dec.dtype == ttnn.bfloat4_b and getattr(args, "mlp_gu_dsmc_progcfg_bfp4", None) is not None:
                 gu_pc = args.mlp_gu_dsmc_progcfg_bfp4  # QWEN36_BFP4_LAYOUT (gateup)

@@ -21,6 +21,12 @@ from models.demos.blackhole.qwen36.tt.attention.rope_tp import (
 from models.tt_transformers.tt.ccl import tt_all_reduce
 
 
+def NKV_ONE(attn):
+    """QWEN36_GLUE=kvt guard: the head transposes produce [1, R, NKV, HD]; with one KV head per device each row is one
+    32-row tile, the exact physical layout of the KV write's one-tile-per-row height shards."""
+    return getattr(attn, "NKV", None) == 1
+
+
 def _probe_kv_group_write():
     """Whether the grouped aliased KV write (``TPAttention._write_kv_aliased``) can be used.
 
@@ -423,6 +429,14 @@ class TPAttention:
             self.args.prefill_progcfg,
             self.args.dim,
         )
+
+    def _kvwo_res40_ok(self, x):
+        """QWEN36_GLUE=kvwo: the RES40-out matmul keeps the 84-core config's K blocking (in0_block_w = largest divisor
+        <= 8 of the K tiles in both) only when the K loop matches; else keep today's matmul."""
+        if not tpc.verify_out_res40_enabled() or x.shape[-2] > tpc.TILE_SIZE or x.is_sharded():
+            return False
+        pc = tpc.res40_out_progcfg(x.shape[-1], self.args.dim)
+        return pc is not None and pc.in0_block_w == self._wo_pair_pc.in0_block_w
 
     def _wo_res40_ok(self, x):
         """QWEN36_VERIFY_OUT_RES40 applies only where _wo_proj would take its 1D decode matmul (interleaved wo)."""
@@ -1409,7 +1423,7 @@ class TPAttention:
             if _t is not None:
                 ttnn.deallocate(_t)
 
-    def _write_kv_fused_multirow(self, k, v, cur_pos_tt, n, T, spec_user_page_table):
+    def _write_kv_fused_multirow(self, k, v, cur_pos_tt, n, T, spec_user_page_table, presharded=False):
         """Multi-row fused KV write (QWEN36_KV_WRITE_MULTIROW): ONE paged_fused_update_cache(rows_per_user=T) for K and V.
 
         k / v ([1, n*T, NKV, HD] TILE interleaved, row u*T + j = user u, candidate j; tile b = row b) are viewed as
@@ -1429,11 +1443,19 @@ class TPAttention:
             _v = ttnn.reshape(_t, _view, _view)
             _srcs.append((_v, None if tpc.aliases(_v, _t) else _t))
         (k_v, k_orig), (v_v, v_orig) = _srcs
-        k_sh = ttnn.to_memory_config(k_v, self._kv_rows_shard_cfg(n, n, T * _tile))
-        v_sh = ttnn.to_memory_config(v_v, self._kv_rows_shard_cfg(0, n, T * _tile))
-        for _t in (k_v, v_v, k_orig, v_orig):
-            if _t is not None:
-                ttnn.deallocate(_t)
+        if presharded:
+            # QWEN36_GLUE=kvt: k / v already sit in these height shards (the head transposes wrote them); the view is
+            # the same buffer, so nothing is copied and only the views' sources (if distinct objects) are released.
+            k_sh, v_sh = k_v, v_v
+            for _t in (k_orig, v_orig):
+                if _t is not None:
+                    ttnn.deallocate(_t)
+        else:
+            k_sh = ttnn.to_memory_config(k_v, self._kv_rows_shard_cfg(n, n, T * _tile))
+            v_sh = ttnn.to_memory_config(v_v, self._kv_rows_shard_cfg(0, n, T * _tile))
+            for _t in (k_v, v_v, k_orig, v_orig):
+                if _t is not None:
+                    ttnn.deallocate(_t)
         ttnn.experimental.paged_fused_update_cache(
             self.paged_k,
             k_sh,
@@ -1813,10 +1835,13 @@ class TPAttention:
         ttnn.deallocate(qkv)
         return qkv3, gate
 
-    def _kv_split_heads(self, qkv3, cos_tt, sin_tt, R):
+    def _kv_split_heads(self, qkv3, cos_tt, sin_tt, R, k_mem=None, v_mem=None):
         """_verify_qkv_dense for the pair's 2*NH q heads, stopping before q's transpose: returns q [1, 2NH, R, HD] L1
         (dense: head h's R rows in one tile-row, the layout the per-head row selection reads) and k / v [1, R, NKV, HD]
-        (the KV write's inputs). Same arithmetic per (row, head) as the unsplit dense heads. Consumes qkv3."""
+        (the KV write's inputs). Same arithmetic per (row, head) as the unsplit dense heads. Consumes qkv3.
+        k_mem / v_mem (QWEN36_GLUE=kvt; default None = L1 interleaved): the transposes write k / v straight into the KV
+        write's height-sharded input layout (one row-tile per user per core: the same bytes the to_memory_config after
+        them produces, ttsim bit-identical), so the write needs no interleaved-to-sharded program."""
         NH2, NKV, HD, rd = 2 * self.NH, self.NKV, self.HD, self.rope_dim
         NQK = NH2 + NKV
         _L1 = ttnn.L1_MEMORY_CONFIG
@@ -1849,9 +1874,9 @@ class TPAttention:
         q_h = ttnn.slice(qk, (0, 0, 0, 0), (1, NH2, R, HD), memory_config=_L1)
         k_h = ttnn.slice(qk, (0, NH2, 0, 0), (1, NQK, R, HD), memory_config=_L1)
         ttnn.deallocate(qk)
-        k = ttnn.transpose(k_h, 1, 2, memory_config=_L1)  # [1, R, NKV, HD]
+        k = ttnn.transpose(k_h, 1, 2, memory_config=k_mem or _L1)  # [1, R, NKV, HD]
         ttnn.deallocate(k_h)
-        vt = ttnn.transpose(v, 1, 2, memory_config=_L1)
+        vt = ttnn.transpose(v, 1, 2, memory_config=v_mem or _L1)
         ttnn.deallocate(v)
         return q_h, k, vt
 
@@ -1894,11 +1919,19 @@ class TPAttention:
         )
         ttnn.deallocate(full)
         ttnn.deallocate(gate)
-        wo_partial = tpc.matmul_1d_decode(
-            gated, self.tw["wo_pair"], self._wo_pair_pc, self.wo_cfg, out_memory_config=ttnn.DRAM_MEMORY_CONFIG
+        # QWEN36_GLUE=kvwo (default off): the pair o-projection straight into the all-reduce's RES40 layout (no DRAM
+        # partial + reshard program); None (flag off / shape) keeps the 84-core matmul to DRAM.
+        wo_partial = (
+            tpc.res40_out_matmul(gated, self.tw["wo_pair"], self.wo_cfg, decode_ar, site="attn_wo_pair")
+            if decode_ar is not None and tpc.glue_cut("kvwo") and self._kvwo_res40_ok(gated)
+            else None
         )
+        if wo_partial is None:
+            wo_partial = tpc.matmul_1d_decode(
+                gated, self.tw["wo_pair"], self._wo_pair_pc, self.wo_cfg, out_memory_config=ttnn.DRAM_MEMORY_CONFIG
+            )
+            wo_partial = ttnn.reshape(wo_partial, (1, 1, R, wo_partial.shape[-1]))
         ttnn.deallocate(gated)
-        wo_partial = ttnn.reshape(wo_partial, (1, 1, R, wo_partial.shape[-1]))
         if decode_ar is not None:
             return decode_ar.all_reduce(wo_partial)
         return tt_all_reduce(
@@ -1924,8 +1957,19 @@ class TPAttention:
         T = ctx["T"]
         c = ctx["consts"]
         qkv3, gate = self._kv_split_qkv(x)
-        q_h, k, v = self._kv_split_heads(qkv3, cos_tt, sin_tt, R)
-        self._write_kv_fused_groups(k, v, cur_pos_tt, n_users, spec_user_page_table, spec_pos_groups, R)
+        # QWEN36_GLUE=kvt: the transposes land k / v in the multi-row KV write's height shards (no reshard programs)
+        _kvt = tpc.glue_cut("kvt") and kv_multirow_write_ok() and R % n_users == 0 and NKV_ONE(self)
+        if _kvt:
+            _rows = (R // n_users) * ttnn.TILE_SIZE
+            _km, _vm = self._kv_rows_shard_cfg(n_users, n_users, _rows), self._kv_rows_shard_cfg(0, n_users, _rows)
+            tpc.glue_note("kvt", "verify KV write inputs sharded by the head transposes")
+            q_h, k, v = self._kv_split_heads(qkv3, cos_tt, sin_tt, R, k_mem=_km, v_mem=_vm)
+            self._write_kv_fused_multirow(
+                k, v, cur_pos_tt, n_users, R // n_users, spec_user_page_table, presharded=True
+            )
+        else:
+            q_h, k, v = self._kv_split_heads(qkv3, cos_tt, sin_tt, R)
+            self._write_kv_fused_groups(k, v, cur_pos_tt, n_users, spec_user_page_table, spec_pos_groups, R)
         q = self._kv_split_select_q(q_h, R, c)
         _cfg, _groups, _tiles = self._spec_sdpa_plan(T, c["n_own"])
         # The paged SDPA takes its batch from the page table's row count and checks nothing else: one own row per group.
@@ -1962,11 +2006,17 @@ class TPAttention:
         ctx = self._kv_split_ctx
         c = ctx["consts"]
         qkv3, gate = self._kv_split_qkv(x)
-        q_h, k, v = self._kv_split_heads(qkv3, cos_tt, sin_tt, B)
-        k_sh = ttnn.to_memory_config(k, self._kv_key_shard_cfg(B))
-        ttnn.deallocate(k)
-        v_sh = ttnn.to_memory_config(v, self._kv_shard_cfg(B))
-        ttnn.deallocate(v)
+        if tpc.glue_cut("kvt") and NKV_ONE(self):  # QWEN36_GLUE=kvt: the transposes write the fused update's shards
+            tpc.glue_note("kvt", "drafter KV write inputs sharded by the head transposes")
+            q_h, k_sh, v_sh = self._kv_split_heads(
+                qkv3, cos_tt, sin_tt, B, k_mem=self._kv_key_shard_cfg(B), v_mem=self._kv_shard_cfg(B)
+            )
+        else:
+            q_h, k, v = self._kv_split_heads(qkv3, cos_tt, sin_tt, B)
+            k_sh = ttnn.to_memory_config(k, self._kv_key_shard_cfg(B))
+            ttnn.deallocate(k)
+            v_sh = ttnn.to_memory_config(v, self._kv_shard_cfg(B))
+            ttnn.deallocate(v)
         ttnn.experimental.paged_fused_update_cache(
             self.paged_k, k_sh, self.paged_v, v_sh, update_idxs_tensor=cur_pos_tt, page_table=page_table
         )

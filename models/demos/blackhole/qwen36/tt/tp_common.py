@@ -2494,6 +2494,59 @@ def verify_out_res40_enabled():
     return os.environ.get(VERIFY_OUT_RES40_ENV, "0") == "1"
 
 
+# QWEN36_GLUE (r12r; default "" = off, today's graph byte for byte): comma list of decode-glue cuts. Each removes one
+# data-movement program per call site from the traced verify / drafter step; none changes the arithmetic.
+#   kvwo  QWEN36_ATTN_KV_SPLIT=user o-projection (wo_pair) written straight into the all-reduce's RES40 layout by the
+#         RES40-out 1D matmul (same in0_block_w, N split over the 10x4 grid; needs QWEN36_VERIFY_OUT_RES40=1) instead of
+#         the 84-core 1D matmul -> DRAM -> to_memory_config(RES40) inside the all-reduce (16 verify calls + drafter).
+#   guin  QWEN36_MLP_GU_FUSED=dsmc gate|up reads the RES40 ff-norm output as its in0 width shard (10x4, 4 K tiles per
+#         core) instead of resharding it to act_shard_hidden (32 cores, 5 tiles) first (64 verify calls). The pipeline's
+#         K loop walks the same in0_block_w blocks in the same order whatever core holds them.
+#   kvt   QWEN36_ATTN_KV_SPLIT=user: the k / v head transposes write the fused KV write's height-sharded inputs directly
+#         (one row-tile per user per core, NKV = 1), dropping its two interleaved-to-sharded programs per layer (verify
+#         multi-row write with QWEN36_KV_WRITE_MULTIROW=1, and the drafter's lean write).
+# Not a cut: feeding the RES40 shard straight into the 1D-mcast decode matmuls (GDN in-proj, attention qkv) -- ttsim
+# gives WRONG outputs with a sharded in0 (maxabs 3-8, on the prod grid and on the matched 10x4 grid alike), so those
+# keep the interleave. (Their K blocking is free, though: in0_block_w 4 vs 20 / 8 is bit-identical on interleaved in0.)
+GLUE_ENV = "QWEN36_GLUE"
+GLUE_CUTS = ("kvwo", "guin", "kvt")
+
+
+def glue_cuts():
+    """frozenset of the QWEN36_GLUE cuts that are on ('' / 0 / off -> none; 1 / all -> every cut)."""
+    raw = os.environ.get(GLUE_ENV, "").strip().lower()
+    if raw in ("", "0", "off", "none"):
+        return frozenset()
+    if raw in ("1", "all", "on"):
+        return frozenset(GLUE_CUTS)
+    cuts = frozenset(p.strip() for p in raw.split(",") if p.strip())
+    bad = cuts - frozenset(GLUE_CUTS)
+    if bad:
+        raise ValueError(f"{GLUE_ENV}={raw!r}: unknown cut(s) {sorted(bad)} (known: {', '.join(GLUE_CUTS)})")
+    return cuts
+
+
+_GLUE_ENGAGED = {}
+
+
+def glue_note(cut, detail):
+    """Record that QWEN36_GLUE cut `cut` ran (one log line the first time), so a harness log proves engagement."""
+    if cut not in _GLUE_ENGAGED:
+        logger.info(f"{GLUE_ENV} engaged: {cut} ({detail})")
+    _GLUE_ENGAGED[cut] = _GLUE_ENGAGED.get(cut, 0) + 1
+
+
+def glue_engaged():
+    return dict(_GLUE_ENGAGED)
+
+
+def glue_cut(name):
+    """Whether QWEN36_GLUE cut `name` (one of GLUE_CUTS) is on."""
+    if name not in GLUE_CUTS:
+        raise ValueError(f"{GLUE_ENV}: unknown cut {name!r}")
+    return name in glue_cuts()
+
+
 # QWEN36_VERIFY_OUT_RES40_DOWN (only read with QWEN36_VERIFY_OUT_RES40=1; r9 joint tuning with QWEN36_BFP4_LAYOUT):
 #   auto (default) the MLP down keeps the QWEN36_BFP4_LAYOUT dsmc pipeline when it has a decode twin (w2_dec) and its
 #                  width-sharded output is resharded straight into RES40 (one program instead of y -> L1 interleaved ->
