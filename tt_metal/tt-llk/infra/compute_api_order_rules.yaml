@@ -65,7 +65,6 @@ operations:
         uninit: [llk_unpack_A_uninit]
         match:
           template: [[0, 0], [1, 1], [2, 2], [3, 3]]
-          args: [[2, 0]]
       - architectures: [blackhole]
         init: llk_unpack_A_init_impl
         execute: [llk_unpack_A, llk_unpack_A_block]
@@ -86,7 +85,6 @@ operations:
         execute: [llk_unpack_AB]
         match:
           template: [[0, 0]]
-          args: [[0, 0], [1, 1]]
     citation: tt_metal/hw/ckernels/wormhole_b0/metal/llk_api/llk_unpack_AB_api.h:15 (init hook)
 
   - id: unpack.matmul
@@ -136,7 +134,7 @@ operations:
         execute: [llk_unpack_tilize]
         uninit: [llk_unpack_tilize_uninit]
         match:
-          args: [[0, 0], [1, 2]]
+          args: [[1, 2]]
       - architectures: [blackhole]
         init: llk_unpack_tilize_init_impl
         execute: [llk_unpack_tilize_impl]
@@ -155,8 +153,7 @@ operations:
       - init: llk_unpack_untilize_init
         execute: [llk_unpack_untilize]
         uninit: [llk_unpack_untilize_uninit]
-        match:
-          args: [[0, 0]]
+        match: {}
     citation: tt_metal/hw/inc/api/compute/untilize.h:20 (deprecated; uninit contract); llk_unpack_untilize_api.h is not modelled by the sanitizer (SAN_HOOK(unsupported))
 
   - id: unpack.fast_tilize
@@ -171,8 +168,7 @@ operations:
       - init: llk_unpack_fast_tilize_init
         execute: [llk_unpack_fast_tilize_block]
         uninit: [llk_unpack_fast_tilize_uninit]
-        match:
-          args: [[0, 0], [1, 1]]
+        match: {}
     citation: tt_metal/hw/ckernels/wormhole_b0/metal/llk_api/llk_unpack_tilize_api.h:292 (init hook)
 
   # -------------------------------------------------------------------- MATH
@@ -189,7 +185,6 @@ operations:
         execute: [llk_math_eltwise_binary]
         match:
           template: [[0, 0], [1, 1], [2, 3], [3, 4]]
-          args: [[0, 0], [1, 1]]
       - architectures: [blackhole]
         init: llk_math_eltwise_binary_init_impl
         execute: [llk_math_eltwise_binary]
@@ -278,6 +273,9 @@ operations:
     exu: Fpu
     thread: MATH
     requires_uninit: false
+    additive: true
+    # The LLK transpose-dest init has no sanitizer hook, so it does not displace
+    # the datacopy operation seated by transpose_init's datacopy init.
     invalidated_by: []
     transitions:
       - init: llk_math_transpose_dest_init

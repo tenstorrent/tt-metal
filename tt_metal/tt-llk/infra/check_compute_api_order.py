@@ -402,6 +402,19 @@ def _norm(text: str) -> str:
     return re.sub(r"\s+", "", text)
 
 
+def _is_primary(text: str) -> bool:
+    """True for a canonical expression that needs no outer parentheses."""
+    if text.startswith("#"):
+        return True
+    if re.fullmatch(r"[A-Za-z_]\w*", text):
+        return True
+    if re.fullmatch(r"[A-Za-z_]\w*\(.*\)", text):
+        return True
+    if re.fullmatch(r"[0-9]+", text):
+        return True
+    return False
+
+
 class ExprEval:
     """A small integer constant evaluator for kernel argument expressions."""
 
@@ -593,7 +606,7 @@ class Canonicalizer:
             if re.fullmatch(r"[A-Za-z_]\w*", tok):
                 repl = self.lookup(tok)
                 if repl is not None:
-                    out.append(repl if repl.startswith("#") else f"({repl})")
+                    out.append(repl if _is_primary(repl) else f"({repl})")
                     continue
             out.append(tok)
         text = _norm("".join(out))
@@ -1190,8 +1203,31 @@ class Analyzer:
         entry = state.clone()
         if init_child is not None:
             state, _ = self._walk_stmt(init_child, state)
+            # The induction variable's first-iteration value is known even
+            # though the variable is mutable; bind it so `if (x == 0)` resolves.
+            for decl in init_child.get_children():
+                if decl.kind != ci.CursorKind.VAR_DECL:
+                    continue
+                initializer = next(
+                    (
+                        c
+                        for c in decl.get_children()
+                        if c.kind
+                        not in (
+                            ci.CursorKind.TYPE_REF,
+                            ci.CursorKind.TEMPLATE_REF,
+                            ci.CursorKind.NAMESPACE_REF,
+                        )
+                    ),
+                    None,
+                )
+                if initializer is not None:
+                    canon, _ = self.canon.canonical(initializer)
+                    self.canon.bind(decl.spelling, canon)
+        cond_value = None
         if cond_child is not None:
             state = self._walk_expr(cond_child, state)
+            cond_value = self._constant_condition(cond_child)
 
         info = LoopInfo(variables=loop_vars, call_depth=len(self._call_stack))
         self._loop_stack.append(info)
@@ -1206,11 +1242,16 @@ class Analyzer:
         if cond_child is not None:
             state = self._walk_expr(cond_child, state)
 
-        merged = self._merge(entry, body_state if body is not None else state)
-        if cond_child is not None and self._constant_condition(cond_child) is not None:
-            # Constant loop condition: the body still ran at least once in the
-            # AST we just analysed; keep the merged state conservative.
-            pass
+        body_state = body_state if body is not None else state
+        if kind == ci.CursorKind.DO_STMT:
+            merged = body_state
+        elif cond_value is not None and cond_value != 0:
+            # A compile-time-true loop condition cannot take the zero-iteration
+            # path; keeping the entry state would drop an init that is required
+            # before a later operation (e.g. pack init before a fixed-trip loop).
+            merged = body_state
+        else:
+            merged = self._merge(entry, body_state)
         return merged, Flow.NORMAL
 
     def _merge(self, a: State, b: State) -> State:

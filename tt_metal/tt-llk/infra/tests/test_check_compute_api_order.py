@@ -122,6 +122,19 @@ def test_fixture(checker, fixture, arch, thread, expected):
     assert got == expected, "\n".join(str(f) for f in findings)
 
 
+def test_blackhole_fast_tilize_fallback_has_no_false_positives(checker):
+    """BH fast_tilize_init/uninit route through tilize_init/uninit in a runtime branch."""
+    kernel = (
+        REPO
+        / "models/demos/deepseek_v3/tests/fused_op_unit_tests/moe/tilize_16x32/kernels/tilize_16x32_kernel.cpp"
+    )
+    if not kernel.is_file():
+        pytest.skip("tilize_16x32 test kernel is not present")
+    for thread in ("UNPACK", "MATH", "PACK"):
+        findings = analyze(checker, kernel, "blackhole", thread)
+        assert not findings, "\n".join(str(f) for f in findings)
+
+
 def test_every_finding_names_the_earlier_call(checker):
     for f in analyze(checker, FIXTURES / "mismatch_math_init.cpp", "wormhole_b0", "MATH"):
         assert f.earlier or f.rule in ("missing-init", "deprecated-init", "loop-invariant-init")

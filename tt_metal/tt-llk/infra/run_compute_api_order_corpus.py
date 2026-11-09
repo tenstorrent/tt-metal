@@ -21,15 +21,16 @@ from __future__ import annotations
 
 import argparse
 import collections
-import concurrent.futures
 import datetime as dt
 import importlib.util
 import json
+import multiprocessing as mp
 import os
 import re
-import subprocess
+import signal
 import sys
-import tempfile
+import time
+from multiprocessing.connection import wait
 from pathlib import Path
 
 import yaml
@@ -39,10 +40,12 @@ REPO = HERE.parents[2]
 CHECKER = HERE / "check_compute_api_order.py"
 
 DISCOVER_ROOTS = ("ttnn", "models", "tests", "tt-train", "tt_metal")
-KERNEL_PATH_RE = re.compile(r"/(?:kernels|kernels_ng|kernels_dfb|unified_kernels)/")
+KERNEL_PATH_RE = re.compile(r"/(?:kernels|kernels_ng|kernels_dfb|unified_kernels|[^/]*_impl_kernels|kernels_qsr)/")
 COMPUTE_RE = re.compile(r"api/compute/|compute_kernel_hw_startup|compute_kernel_api")
 
 _CHECKER_MODULE = None
+_TABLE_CACHE = {}
+_SFPI_CACHE = None
 
 
 def _checker():
@@ -85,19 +88,45 @@ def _fingerprint(finding) -> str:
     return f"{finding.arch}|{finding.thread}|{finding.rule}|{finding.file}:{finding.line}|{finding.message}"
 
 
-def _run_one(task):
+def _triage_entry(finding, triage):
+    """Exact fingerprint, then rule|file:line, then a rule-wide default."""
+    for key in (
+        _fingerprint(finding),
+        f"{finding.rule}|{finding.file}:{finding.line}",
+        finding.rule,
+    ):
+        entry = triage.get(key)
+        if entry is not None:
+            return entry
+    return {}
+
+
+def _table(arch: str):
+    if arch not in _TABLE_CACHE:
+        _TABLE_CACHE[arch] = _checker().RuleTable.load(arch)
+    return _TABLE_CACHE[arch]
+
+
+def _sfpi_root():
+    global _SFPI_CACHE
+    if _SFPI_CACHE is None:
+        _SFPI_CACHE = _checker()._find_sfpi(os.environ.get("TT_METAL_SFPI_ROOT"))
+    return _SFPI_CACHE
+
+
+def _run_one(task, sfpi_root=None, max_paths=24):
     arch, thread, src = task
     cc = _checker()
-    sfpi = cc._find_sfpi(os.environ.get("TT_METAL_SFPI_ROOT"))
+    sfpi = Path(sfpi_root) if sfpi_root else _sfpi_root()
     if sfpi is None:
         return src, arch, thread, [], {}, "SFPI headers not found"
     args = cc.synth_args(src, arch, thread, sfpi)
     try:
-        analyzer = cc.Analyzer(args, thread, arch, cc.RuleTable.load(arch), src)
-        analyzer.analyze_paths()
+        analyzer = cc.Analyzer(args, thread, arch, _table(arch), src)
+        analyzer.analyze_paths(max_paths=max_paths)
     except Exception as exc:  # noqa: BLE001
         return src, arch, thread, [], {}, f"{type(exc).__name__}: {exc}"
-    return src, arch, thread, analyzer.findings, {
+    return src, arch, thread, [f.as_json() for f in analyzer.findings], {
         "entry": analyzer._entry_name,
         "parse_errors": len(analyzer.parse_errors),
     }, None
@@ -108,48 +137,160 @@ def _finding_from_json(d: dict):
     return cc.Finding(**d)
 
 
-def _run_subprocess(task):
-    """Run one unit in a child process so a libclang crash is a hole, not a lost run."""
-    arch, thread, src = task
-    cc = _checker()
-    with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as tmp:
-        out = tmp.name
-    cmd = [
-        sys.executable,
-        str(CHECKER),
-        "--kernel",
-        src,
-        "--arch",
-        arch,
-        "--thread",
-        thread,
-        "--format",
-        "json",
-        "--output",
-        out,
-        "--quiet",
-    ]
-    sfpi = os.environ.get("TT_METAL_SFPI_ROOT")
-    if sfpi:
-        cmd += ["--sfpi", sfpi]
+def _alarm_handler(signum, frame):
+    raise TimeoutError("unit exceeded the per-unit timeout")
+
+
+def _worker_main(conn, sfpi_root, unit_timeout, max_tasks, max_paths):
+    """Reuse one libclang environment for many units; recycle before memory grows."""
+    signal.signal(signal.SIGALRM, _alarm_handler)
+    done = 0
     try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
-        if proc.returncode != 0:
-            return src, arch, thread, [], {}, (proc.stderr.strip() or f"exit {proc.returncode}")[-500:]
-        payload = json.loads(Path(out).read_text())
-        findings = [_finding_from_json(d) for d in payload.get("findings", [])]
-        meta = {
-            "entry": (payload.get("units") or [{}])[0].get("entry"),
-            "parse_errors": (payload.get("units") or [{}])[0].get("parse_errors", 0),
-        }
-        return src, arch, thread, findings, meta, None
-    except Exception as exc:  # noqa: BLE001
-        return src, arch, thread, [], {}, f"{type(exc).__name__}: {exc}"
+        while True:
+            try:
+                task = conn.recv()
+            except EOFError:
+                break
+            if task is None:
+                break
+            if unit_timeout:
+                signal.setitimer(signal.ITIMER_REAL, unit_timeout)
+            try:
+                result = _run_one(task, sfpi_root, max_paths)
+            except Exception as exc:  # noqa: BLE001
+                result = (task[2], task[0], task[1], [], {}, f"{type(exc).__name__}: {exc}")
+            finally:
+                if unit_timeout:
+                    signal.setitimer(signal.ITIMER_REAL, 0)
+            done += 1
+            recycle = done >= max_tasks
+            try:
+                conn.send((*result, recycle))
+            except (BrokenPipeError, EOFError, OSError):
+                break
+            if recycle:
+                break
     finally:
         try:
-            os.unlink(out)
+            conn.close()
         except OSError:
             pass
+
+
+def _run_pool(tasks, jobs, sfpi_root, unit_timeout, max_tasks, max_paths, start_method="fork"):
+    """Supervised process pool: a crashed worker is a coverage hole, not a lost run."""
+    ctx = mp.get_context(start_method)
+    pending = collections.deque(tasks)
+    results = []
+    holes = []
+    workers = {}
+    next_wid = 0
+
+    def spawn():
+        nonlocal next_wid
+        parent_conn, child_conn = ctx.Pipe()
+        proc = ctx.Process(
+            target=_worker_main,
+            args=(child_conn, sfpi_root, unit_timeout, max_tasks, max_paths),
+            daemon=True,
+        )
+        proc.start()
+        child_conn.close()
+        wid = next_wid
+        next_wid += 1
+        workers[wid] = {"conn": parent_conn, "proc": proc, "task": None}
+        return wid
+
+    def retire(wid):
+        worker = workers.pop(wid, None)
+        if worker is None:
+            return
+        try:
+            worker["conn"].close()
+        except OSError:
+            pass
+        if worker["proc"].is_alive():
+            worker["proc"].join(timeout=2)
+        if worker["proc"].is_alive():
+            worker["proc"].terminate()
+            worker["proc"].join(timeout=2)
+
+    def assign(wid):
+        worker = workers.get(wid)
+        if worker is None:
+            return
+        if pending:
+            task = pending.popleft()
+            worker["task"] = task
+            try:
+                worker["conn"].send(task)
+            except (BrokenPipeError, EOFError, OSError):
+                holes.append(
+                    {
+                        "file": task[2],
+                        "arch": task[0],
+                        "thread": task[1],
+                        "error": "worker pipe closed before the task started",
+                    }
+                )
+                worker["task"] = None
+                retire(wid)
+                if pending:
+                    assign(spawn())
+        else:
+            worker["task"] = None
+            try:
+                worker["conn"].send(None)
+            except (BrokenPipeError, EOFError, OSError):
+                pass
+
+    def crash(wid, reason):
+        worker = workers.get(wid)
+        if worker is not None and worker["task"] is not None:
+            task = worker["task"]
+            holes.append({"file": task[2], "arch": task[0], "thread": task[1], "error": reason})
+        retire(wid)
+        if pending:
+            assign(spawn())
+
+    for _ in range(min(jobs, len(pending))):
+        assign(spawn())
+
+    try:
+        while workers:
+            conns = {worker["conn"]: wid for wid, worker in workers.items()}
+            ready = wait(list(conns), timeout=2.0)
+            if not ready:
+                for wid in list(workers):
+                    if not workers[wid]["proc"].is_alive():
+                        crash(wid, f"worker exited with code {workers[wid]['proc'].exitcode}")
+                continue
+            for conn in ready:
+                wid = conns[conn]
+                if wid not in workers:
+                    continue
+                try:
+                    item = conn.recv()
+                except (EOFError, OSError):
+                    crash(wid, f"worker exited with code {workers[wid]['proc'].exitcode}")
+                    continue
+                path, arch, thread, fjson, meta, error, recycle = item
+                results.append((path, arch, thread, fjson, meta, error))
+                if len(results) % 100 == 0:
+                    print(f"  {len(results)}/{len(tasks)} units", file=sys.stderr)
+                workers[wid]["task"] = None
+                if recycle:
+                    retire(wid)
+                    if pending:
+                        assign(spawn())
+                else:
+                    assign(wid)
+            while pending and len(workers) < jobs:
+                assign(spawn())
+    finally:
+        for wid in list(workers):
+            retire(wid)
+    return results, holes
 
 
 def main(argv=None) -> int:
@@ -162,7 +303,11 @@ def main(argv=None) -> int:
     parser.add_argument("--roots", nargs="+", default=list(DISCOVER_ROOTS))
     parser.add_argument("--arch", action="append", choices=("wormhole_b0", "blackhole"))
     parser.add_argument("--threads", nargs="+", default=["UNPACK", "MATH", "PACK"])
-    parser.add_argument("--jobs", type=int, default=max(1, min(6, (os.cpu_count() or 4) // 2)))
+    parser.add_argument("--jobs", type=int, default=max(1, min(8, (os.cpu_count() or 4) // 2)))
+    parser.add_argument("--worker-max-tasks", type=int, default=50, help="recycle each worker after N units")
+    parser.add_argument("--unit-timeout", type=float, default=600.0, help="per-unit timeout in seconds (0 disables)")
+    parser.add_argument("--max-paths", type=int, default=8, help="correlated condition paths explored per unit")
+    parser.add_argument("--start-method", choices=("fork", "spawn"), default="fork" if sys.platform.startswith("linux") else "spawn")
     parser.add_argument("--limit", type=int, help="analyse at most N kernel files (per arch)")
     parser.add_argument("--output", default="tt_metal/tt-llk/infra/compute_api_order_corpus.md")
     parser.add_argument("--json-output", help="write the raw findings JSON here")
@@ -186,10 +331,12 @@ def main(argv=None) -> int:
         findings = [_finding_from_json(d) for d in payload.get("findings", [])]
         holes = payload.get("holes", [])
         units = payload.get("units", [])
+        args.kernel_files = payload.get("kernel_files") or len({u.get("file") for u in units})
     elif args.discover:
         files = discover(args.roots)
         if args.limit:
             files = files[: args.limit]
+        args.kernel_files = len(files)
         tasks = [(arch, thread, str(f)) for arch in arches for f in files for thread in args.threads]
     else:
         cc = _checker()
@@ -199,6 +346,7 @@ def main(argv=None) -> int:
             else cc.entries_from_log(Path(args.log))
         )
         tasks = []
+        args.kernel_files = len({cc._entry_source(e) for e in entries})
         for entry in entries:
             arch, thread = cc.detect_from_args(entry.get("arguments", []), entry.get("file", ""))
             if arch is None:
@@ -208,24 +356,20 @@ def main(argv=None) -> int:
                 tasks.append((arch, thread or "MATH", cc._entry_source(entry)))
 
     if args.from_json:
-        executor = None
-        results = []
-        runner = None
+        pass
     elif args.jobs > 1:
-        executor = concurrent.futures.ThreadPoolExecutor(max_workers=args.jobs)
-        runner = _run_subprocess
-    else:
-        executor = None
-        runner = _run_one
-
-    if not args.from_json:
-        if executor is None:
-            results = map(runner, tasks)
-        else:
-            results = executor.map(runner, tasks)
-
-    try:
-        for i, (path, arch, thread, unit_findings, meta, error) in enumerate(results, 1):
+        results, pool_holes = _run_pool(
+            tasks,
+            args.jobs,
+            args.sfpi,
+            args.unit_timeout,
+            args.worker_max_tasks,
+            args.max_paths,
+            args.start_method,
+        )
+        holes.extend(pool_holes)
+        finding_dicts = []
+        for path, arch, thread, fjson, meta, error in results:
             if error:
                 holes.append({"file": path, "arch": arch, "thread": thread, "error": error})
             else:
@@ -236,25 +380,45 @@ def main(argv=None) -> int:
                         "thread": thread,
                         "entry": meta.get("entry"),
                         "parse_errors": meta.get("parse_errors", 0),
-                        "findings": len(unit_findings),
+                        "findings": len(fjson),
                     }
                 )
-                findings.extend(unit_findings)
-            if i % 50 == 0:
+                finding_dicts.extend(fjson)
+        findings = [_finding_from_json(d) for d in finding_dicts]
+    else:
+        finding_dicts = []
+        for i, task in enumerate(tasks, 1):
+            path, arch, thread, fjson, meta, error = _run_one(task, args.sfpi, args.max_paths)
+            if error:
+                holes.append({"file": path, "arch": arch, "thread": thread, "error": error})
+            else:
+                units.append(
+                    {
+                        "file": path,
+                        "arch": arch,
+                        "thread": thread,
+                        "entry": meta.get("entry"),
+                        "parse_errors": meta.get("parse_errors", 0),
+                        "findings": len(fjson),
+                    }
+                )
+                finding_dicts.extend(fjson)
+            if i % 100 == 0:
                 print(f"  {i}/{len(tasks)} units", file=sys.stderr)
-    finally:
-        if executor is not None:
-            executor.shutdown(wait=True)
+        findings = [_finding_from_json(d) for d in finding_dicts]
 
     if not (args.compile_db or args.log or args.discover or args.from_json):
         parser.error("one of --from-json, --compile-db, --log or --discover is required")
 
     findings.sort(key=lambda f: (f.file, f.line, f.thread, f.rule))
+    runtime_seconds = args.runtime_seconds
+    if runtime_seconds is None:
+        runtime_seconds = (dt.datetime.now(dt.timezone.utc) - started).total_seconds()
     triage = {}
     if args.triage:
         triage = yaml.safe_load(Path(args.triage).read_text()) or {}
 
-    report = render_report(arches, args, started, findings, holes, units, triage, args.runtime_seconds)
+    report = render_report(arches, args, started, findings, holes, units, triage, runtime_seconds)
     out = Path(args.output)
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(report)
@@ -262,6 +426,7 @@ def main(argv=None) -> int:
         Path(args.json_output).write_text(
             json.dumps(
                 {
+                    "kernel_files": getattr(args, "kernel_files", None),
                     "findings": [f.as_json() for f in findings],
                     "holes": holes,
                     "units": units,
@@ -278,7 +443,7 @@ def _count_triage(findings, triage):
     reviewed = 0
     false_positives = 0
     for f in findings:
-        entry = triage.get(_fingerprint(f)) or {}
+        entry = _triage_entry(f, triage)
         verdict = entry.get("true_positive")
         if verdict is True:
             counts["true_positive"] += 1
@@ -293,6 +458,7 @@ def _count_triage(findings, triage):
 
 
 def render_report(arches, args, started, findings, holes, units, triage, runtime_seconds=None) -> str:
+    analyzed_files = {u["file"] for u in units} - {h["file"] for h in holes}
     counts, reviewed, fps = _count_triage(findings, triage)
     error_findings = [f for f in findings if f.severity == "error"]
     _ec, error_reviewed, error_fps = _count_triage(error_findings, triage)
@@ -307,6 +473,18 @@ def render_report(arches, args, started, findings, holes, units, triage, runtime
             f"- Input: `{args.from_json or args.compile_db or args.log}`"
             if not args.discover
             else f"- Input: discovered kernels under {', '.join(args.roots)}"
+        ),
+        (
+            f"- Kernel files discovered: {getattr(args, 'kernel_files', '?')}"
+            if getattr(args, "kernel_files", None) is not None
+            else "- Kernel files discovered: not recorded"
+        ),
+        (
+            f"- Kernel files analysed: {len(analyzed_files)}/"
+            f"{getattr(args, 'kernel_files', '?')} "
+            f"({100.0 * len(analyzed_files) / args.kernel_files:.1f}%)"
+            if getattr(args, "kernel_files", None)
+            else f"- Kernel files analysed: {len(analyzed_files)}"
         ),
         f"- Units analysed: {len(units)}",
         f"- Units that could not be analysed: {len(holes)}",
@@ -326,12 +504,12 @@ def render_report(arches, args, started, findings, holes, units, triage, runtime
         tp = sum(
             1
             for f in findings
-            if f.rule == rule and (triage.get(_fingerprint(f)) or {}).get("true_positive") is True
+            if f.rule == rule and _triage_entry(f, triage).get("true_positive") is True
         )
         fp = sum(
             1
             for f in findings
-            if f.rule == rule and (triage.get(_fingerprint(f)) or {}).get("true_positive") is False
+            if f.rule == rule and _triage_entry(f, triage).get("true_positive") is False
         )
         lines.append(f"| `{rule}` | {n} | {tp} | {fp} | {n - tp - fp} |")
     lines += [
@@ -355,7 +533,7 @@ def render_report(arches, args, started, findings, holes, units, triage, runtime
         "| ---: | --- | --- | --- | --- | --- | --- |",
     ]
     for i, f in enumerate(findings, 1):
-        entry = triage.get(_fingerprint(f)) or {}
+        entry = _triage_entry(f, triage)
         verdict = entry.get("true_positive")
         mark = "true positive" if verdict is True else ("false positive" if verdict is False else "")
         note = entry.get("note", "")

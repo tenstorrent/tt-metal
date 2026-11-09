@@ -1,72 +1,77 @@
-# Compute-kernel API ordering: reviewed true positives
+# Compute-kernel API ordering: reviewed corpus findings
 
-These are the true positives from the bounded corpus run in
-`compute_api_order_corpus.md` (40 model kernels, both architectures). Each was
-reviewed against the source; the report keeps the line-level evidence.
+Corpus: **563 kernel files**, 3,378 units (2 architectures × 3 threads), **0 coverage
+holes**. The full report is `compute_api_order_corpus.md`; the exact verdict map is
+`compute_api_order_corpus_triage.yaml`.
 
-## 1. `copy_init` followed by `mul_binary_tile_init`, then `copy_tile`
+## True positives
 
-**Files**
+### Missing required uninit — 56 findings
 
-- `models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_rows_scan/kernels/compute.cpp`
-  (`recurrence`, MATH, kernel call sites 565)
-- `models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_step/kernels/compute.cpp`
-  (MATH, 557)
-- `models/demos/blackhole/qwen38_flash_next/ttnn/fused/router_tail/kernels/compute_router_tail.cpp`
-  (MATH, 181 and 212)
+The curated uninit contract (tilize, untilize, broadcast, fast tilize) is not met
+before the kernel ends or switches operation groups. Representative files:
 
-**Pattern**
+- `models/demos/blackhole/qwen38_flash_next/.../compute_qkv.cpp`,
+  `gdn_step/.../compute.cpp`, `gr_write/.../compute.cpp`,
+  `ple/.../gate_compute.cpp`, `shared_expert/.../compute_shared_eltwise.cpp`
+  (`unary_bcast_init` without `unary_bcast_uninit`);
+- `models/demos/deepseek_v3_b1/micro_ops/tilize_8x32/.../tilize_8x32_kernel.cpp`
+  (`tilize_init` without `tilize_uninit`);
+- `tt-train/.../cross_entropy_bw`, `cross_entropy_fw`, `layernorm_bw`,
+  `rmsnorm_bw`, `softmax` kernels (broadcast uninit);
+- `ttnn/.../eltwise_binary_*_row_col_bcast.cpp`,
+  `eltwise_where_sfpu_row_col_bcast.cpp` (broadcast uninit).
 
-```cpp
-copy_init(src);            // seats OperationFpuEltwiseUnaryDatacopy
-mul_binary_tile_init();    // seats OperationFpuEltwiseBinary instead
-...
-copy_tile(src, t, 0);      // llk_math_eltwise_unary_datacopy for the unseated op
-```
+Fix by calling the matching uninit (`unary_bcast_uninit`, `tilize_uninit`,
+`untilize_uninit`, `fast_tilize_uninit`) at the end of the operation group.
 
-The FPU holds one seated operation. `mul_binary_tile_init` replaces the datacopy
-init, so the later `copy_tile` runs the datacopy operation without its init. The
-LLK sanitizer reports the same condition as "execute was called for an Operation
-the Exu is not initialized for".
+### Missing init — 43 findings
 
-**Fix**
+The checker found operations with no matching init on the path. Representative
+files:
 
-Re-run `copy_init(src)` after `mul_binary_tile_init()` (or move the copy loop
-before the binary init, or use the binary op's destination-reuse path). The same
-pattern should be checked in the four sites above; the checker reports the
-kernel call line, the exact `copy_tile` line is in the inlined body.
+- `models/demos/gpt_oss/tt/fused_decode/kernels/lm_rescore_compute.cpp`,
+  `stream_*_compute.cpp`: pack-only kernels call `pack_tile` without
+  `compute_kernel_hw_startup` / `pack_init`;
+- `tt-train/.../sdpa_*_kernel.cpp`: `unary_bcast` without `unary_bcast_init`;
+- `ttnn/.../normalization/groupnorm` and `softmax` kernels: broadcast/reduce
+  helpers that reach the operation without the corresponding init on this path;
+- `ttnn/.../topk.cpp`, `gated_delta_attn.cpp`,
+  `eltwise_binary_row_bcast.cpp`: same pattern.
 
-## 2. `llk_unpack_A` acc-to-dest mismatch
+Each site should either call `compute_kernel_hw_startup` and the operation's init,
+or document why the path is unreachable.
 
-**Files** — the same four sites as above (UNPACK).
+### Init / operation argument mismatch — 12 findings
 
-The unpacker is initialized with `acc_to_dest=1` by a destination-reuse init and
-then `llk_unpack_A` runs with `acc_to_dest=0`. Re-initialize the unpacker for the
-copy (`copy_init`) after the destination-reuse init, or keep the unpack
-configuration consistent between the init and the copy.
+`tt-train/.../sdpa_bw_kv_compute_kernel.cpp`,
+`sdpa_bw_q_compute_kernel.cpp`, and `sdpa_fw_compute_kernel.cpp`.
 
-## 3. Missing `unary_bcast_uninit`
-
-**Files**
-
-- `gdn_pre_rows/kernels/compute_qkv.cpp:352,370`
-- `gdn_step/kernels/compute.cpp:554`
-- `gr_write/kernels/compute.cpp:43`
-- `ple/kernels/gate_compute.cpp:156`
-- `shared_expert/kernels/compute_shared_eltwise.cpp:103`
-
-`unary_bcast_init` arms unpack/math state that the operation group must
-uninitialize before switching to another op group. The kernels never call
-`unary_bcast_uninit`; this is the curated "broadcast requires an uninit" rule
-from `compute_api_order_rules.yaml`. Add the matching uninit at the end of the
-broadcast scope.
+The unpacker or datacopy init and its execute use different compile-time
+arguments (e.g. `acc_to_dest` / datacopy configuration). Re-initialize the engine
+for the execute's configuration or make the arguments agree.
 
 ## Triaged false positives
 
-- All 302 `loop-invariant-init` warnings: the init is intentionally re-run after
-  a reconfiguration or to restore per-iteration SFPU state; hoisting is not
-  valid in the general case. The rule is warning-only.
-- The `tilize_16x32_kernel.cpp` `missing-init`/`missing-uninit` findings: Blackhole
-  `fast_tilize_*` routes through `tilize_*` in a runtime-selected branch; the
-  checker's branch-correlation model does not yet follow that fallback. The
-  kernel does call `fast_tilize_uninit`.
+### `wrong-init` — 8 findings, `groupnorm_sharded_v2.cpp`
+
+`compute_kernel_lib::reduce` computes a helper-local `constexpr bool is_sfpu`
+through `is_sfpu_reduce_path<...>()`. The checker cannot evaluate that helper
+constexpr, so it follows the SFPU branch (`copy_init`) and later sees the FPU
+`reduce_tile`. This is a checker refinement (evaluate helper constexprs / treat
+unknown `if constexpr` as a must-analysis), not a kernel defect.
+
+### `loop-invariant-init` — 1,581 warnings, all advisory
+
+These are warning-only. The init is intentionally re-run after a reconfiguration
+or to restore per-iteration SFPU state; hoisting is not valid in the general case.
+They are excluded from the error false-positive rate.
+
+### Blackhole fast-tilize — the original 5 false positives
+
+The five findings in `tilize_16x32_kernel.cpp` were caused by condition keys that
+differed only by redundant parentheses: `full_dim == 1` and `block == 1` were
+treated as unrelated paths even though both call sites pass the same compile-time
+value. Canonicalisation now strips redundant grouping around primary expressions,
+so the conditions correlate and the five findings are gone. The regression is
+covered by `test_blackhole_fast_tilize_fallback_has_no_false_positives`.

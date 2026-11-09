@@ -75,13 +75,18 @@ Use ``--format json`` for machine-readable output and ``--output FILE`` to write
 the report.  ``--list-rules`` prints the operation table with citations.
 
 The corpus runner aggregates findings over discovery or a captured database and
-renders a Markdown report with triage and false-positive accounting:
+renders a Markdown report with coverage, triage, and false-positive accounting.
+It uses a supervised multiprocessing pool: workers reuse one libclang parse
+environment, recycle periodically to bound memory, and a worker crash is recorded
+as a coverage hole instead of losing the run.  The current discovery set is 563
+kernel files across ``ttnn``, ``models``, ``tests``, ``tt-train`` and ``tt_metal``.
 
 .. code-block:: bash
 
    python3 tt_metal/tt-llk/infra/run_compute_api_order_corpus.py \
-       --discover --limit 100 --arch wormhole_b0 --threads UNPACK MATH PACK \
-       --jobs 4 --output /tmp/compute_api_order_corpus.md
+       --discover --arch wormhole_b0 --arch blackhole \
+       --threads UNPACK MATH PACK --jobs 8 --max-paths 4 \
+       --output /tmp/compute_api_order_corpus.md
 
    python3 tt_metal/tt-llk/infra/run_compute_api_order_corpus.py \
        --log build.log --triage triage.yaml \
@@ -144,6 +149,9 @@ Limitations
   modes are unaffected.
 * Loop analysis is may-analysis: an init inside a loop is assumed not to cover the
   next iteration, and the loop-invariant check is advisory.
+* The corpus runner explores a bounded number of correlated condition paths per
+  translation unit (``--max-paths``, default 8) and recycles workers after 50
+  units by default; both bounds trade some recall for runtime and memory.
 * Quasar, dataflow (NoC) kernels, the folded LLK 2.0 execution APIs, and changes to
   the compute/LLK APIs are out of scope, matching the bounty terms.  The SFPU
   init/operation pairs are not modelled by the LLK sanitizer and are checked only
