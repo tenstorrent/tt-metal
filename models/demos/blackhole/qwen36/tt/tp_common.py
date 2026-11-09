@@ -2105,6 +2105,25 @@ def agmm_gather_buffer(tt_ccl, x, cluster_axis=1):
     return pair[idx]
 
 
+_PREFILL_AGMM_LINKS = None
+
+
+def prefill_agmm_links(default=2):
+    """QWEN36_PREFILL_AGMM_LINKS (default unset = 2 = today's num_links for every prefill fused all-gather + matmul):
+    ethernet links per direction the AGMM gather uses. Only useful when the fabric exposes more routing planes than 2
+    on the TP ring (the d30 logs say each neighbour pair has 4 eth channels but 2 routing planes). Workers per link
+    follow the same rule as today (ceil(sender axis / links)); the matmul's K order is unchanged, so outputs are
+    bit-identical to today's. Read once."""
+    global _PREFILL_AGMM_LINKS
+    if _PREFILL_AGMM_LINKS is None:
+        raw = os.environ.get("QWEN36_PREFILL_AGMM_LINKS", "").strip()
+        n = int(raw) if raw else 0
+        if n < 0 or n > 4:
+            raise ValueError(f"QWEN36_PREFILL_AGMM_LINKS={raw!r}: expected 1..4")
+        _PREFILL_AGMM_LINKS = n
+    return _PREFILL_AGMM_LINKS or default
+
+
 _PREFILL_AGMM_TUNED = None
 
 
@@ -2163,7 +2182,7 @@ def agmm_tuned_config(rows, weight, k_local, swiglu, mesh_device):
         return None
     if not transpose and rows > (key[2] // 2 if swiglu else key[2]):
         return None  # force_transpose=False only means "do not force": the op transposes M > N itself
-    num_links = 2
+    num_links = prefill_agmm_links()  # QWEN36_PREFILL_AGMM_LINKS (default 2)
     workers = -(-(gx if transpose else gy) // num_links)
     if key not in _AGMM_TUNED_LOGGED:
         _AGMM_TUNED_LOGGED.add(key)

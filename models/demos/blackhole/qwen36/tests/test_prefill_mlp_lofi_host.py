@@ -55,3 +55,17 @@ def test_prefill_ckc_off_is_identity(monkeypatch):
     s = SimpleNamespace(_prefill_lofi=None)
     c = object()
     assert mlp_mod.Qwen36MLP._prefill_ckc(s, c, _x(8192)) is c
+
+
+@pytest.mark.parametrize("raw,want", [("", 2), ("2", 2), ("4", 4), ("1", 1)])
+def test_agmm_links(monkeypatch, raw, want):
+    monkeypatch.setattr(tpc, "_PREFILL_AGMM_LINKS", None)
+    monkeypatch.setenv("QWEN36_PREFILL_AGMM_LINKS", raw)
+    assert tpc.prefill_agmm_links() == want
+
+
+def test_agmm_links_bad(monkeypatch):
+    monkeypatch.setattr(tpc, "_PREFILL_AGMM_LINKS", None)
+    monkeypatch.setenv("QWEN36_PREFILL_AGMM_LINKS", "8")
+    with pytest.raises(ValueError):
+        tpc.prefill_agmm_links()
