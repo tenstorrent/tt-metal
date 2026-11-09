@@ -1709,6 +1709,22 @@ def prefill_bfp4_lofi(weight_dtype):
     return raw == "1"
 
 
+PREFILL_MLP_LOFI_ENV = "QWEN36_PREFILL_MLP_LOFI"
+
+
+def prefill_mlp_lofi(weight_dtypes):
+    """QWEN36_PREFILL_MLP_LOFI (default 0): the PREFILL dense-MLP matmuls (fused gate|up SwiGLU AGMM, down MMRS,
+    2D fallback) in LoFi instead of QWEN36_MLP_FIDELITY (hifi2). Only when EVERY dense-MLP weight is bfloat4_b
+    (the GPTQ preset): LoFi then consumes every mantissa bit of the srcA weight, so the outputs are bit-identical to
+    HiFi2 at half the FPU passes (same property as QWEN36_PREFILL_BFP4_LOFI for the GDN projections). Any bfloat8_b
+    MLP weight -> False (LoFi would truncate it). Decode is untouched."""
+    raw = os.environ.get(PREFILL_MLP_LOFI_ENV, "0").strip().lower()
+    if raw not in ("0", "1"):
+        raise ValueError(f"{PREFILL_MLP_LOFI_ENV}={raw!r} invalid (0|1)")
+    dts = list(weight_dtypes)
+    return raw == "1" and len(dts) > 0 and all(d == ttnn.bfloat4_b for d in dts)
+
+
 def bfp4_layout(target, weight_dtype):
     """The decode config QWEN36_BFP4_LAYOUT picks for `target` (one of BFP4_LAYOUT_TARGETS) whose weight is stored as
     `weight_dtype`: None (today's config) unless the flag is on and the weight is bfloat4_b."""

@@ -309,12 +309,37 @@ class Qwen36MLP:
         self.compute_kernel_config_decode = ttnn.WormholeComputeKernelConfig(
             math_fidelity=fid, fp32_dest_acc_en=True, packer_l1_acc=True
         )
+        # QWEN36_PREFILL_MLP_LOFI: PREFILL dense-MLP matmuls (fused gate|up SwiGLU AGMM, down / MMRS, the 2D fallback)
+        # in LoFi when every MLP weight is bfloat4_b (bit-identical to HiFi2 there: LoFi consumes all 3 mantissa bits of
+        # the srcA weight). Decode keeps its own configs. Off, or any non-bf4 weight -> today's configs, byte for byte.
+        # Prefill picks the config today's code picks (by T), then swaps in the LoFi twin with the same packer_l1_acc.
+        self._prefill_lofi = None
+        if tpc.prefill_mlp_lofi(self._mlp_weight_dtypes()) and down_dtype is None:
+            mk = lambda pl1: ttnn.WormholeComputeKernelConfig(
+                math_fidelity=ttnn.MathFidelity.LoFi, fp32_dest_acc_en=True, packer_l1_acc=pl1
+            )
+            self._prefill_lofi = {
+                id(self.compute_kernel_config): mk(False),
+                id(self.compute_kernel_config_decode): mk(True),
+            }
+            self.compute_kernel_config_agmm = mk(False)
         # QWEN36_BFP4_LAYOUT_LOFI: decode matmuls on bfloat4_b weights in LoFi (bit-identical to HiFi2 there).
         self.compute_kernel_config_decode_bfp4 = (
             ttnn.WormholeComputeKernelConfig(math_fidelity=ttnn.MathFidelity.LoFi, fp32_dest_acc_en=True, packer_l1_acc=True)
             if tpc.bfp4_layout_lofi(ttnn.bfloat4_b) and down_dtype is None
             else None
         )
+
+    def _prefill_ckc(self, ckc, x):
+        """QWEN36_PREFILL_MLP_LOFI: the LoFi twin of `ckc` for a prefill call (more than one tile row), else `ckc`."""
+        if self._prefill_lofi is None or x.shape[-2] <= ttnn.TILE_SIZE:
+            return ckc
+        return self._prefill_lofi.get(id(ckc), ckc)
+
+    def _mlp_weight_dtypes(self):
+        """dtypes of every dense-MLP weight a prefill matmul can read (gate|up packed / w1 / w3, down w2)."""
+        w = self.weights
+        return [t.dtype for t in (getattr(w, "w_gate_up", None), w.w1, w.w3, w.w2) if t is not None]
 
     def forward(self, x, mode=None, decode_ar=None):
         # mode is unused (accepted only for a uniform signature with Qwen36MoE, which needs an
@@ -324,7 +349,7 @@ class Qwen36MLP:
             return self._forward_tp(x, decode_ar=decode_ar)
         w = self.weights
         T = x.shape[1] if len(x.shape) >= 3 else 1
-        ckc = self.compute_kernel_config_decode if T <= 1 else self.compute_kernel_config
+        ckc = self._prefill_ckc(self.compute_kernel_config_decode if T <= 1 else self.compute_kernel_config, x)
         mc = ttnn.L1_MEMORY_CONFIG if T <= 512 else ttnn.DRAM_MEMORY_CONFIG
         w1_out = ttnn.linear(x, w.w1, activation="silu", compute_kernel_config=ckc, memory_config=mc)
         w3_out = ttnn.linear(x, w.w3, compute_kernel_config=ckc, memory_config=mc)
@@ -352,7 +377,7 @@ class Qwen36MLP:
         w = self.weights
         args = self.args
         T = x.shape[1] if len(x.shape) >= 3 else 1
-        ckc = self.compute_kernel_config_decode if T <= 1 else self.compute_kernel_config
+        ckc = self._prefill_ckc(self.compute_kernel_config_decode if T <= 1 else self.compute_kernel_config, x)
 
         if self._gu_fused is not None and x.shape[-2] <= ttnn.TILE_SIZE:
             return self._forward_tp_gu_fused_decode(x, ckc, decode_ar)
