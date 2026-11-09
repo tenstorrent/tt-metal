@@ -541,12 +541,12 @@ class CCLManager:
         """The next of slot ``name``'s two global semaphores (used in turn; see the one-shot section comment)."""
         sems = self._oneshot_sems.get(name)
         if sems is None:
-            logger.warning(f"Gemma4 CCL one-shot slot {name!r} had no pre-created semaphores; creating them now")
-            grid = self.mesh_device.compute_with_storage_grid_size()
-            cores = ttnn.num_cores_to_corerangeset(grid.x * grid.y, grid, row_wise=True)
-            sems = [ttnn.create_global_semaphore(self.mesh_device, cores, 0) for _ in range(2)]
-            self._oneshot_sems[name] = sems
-            self._oneshot_idx[name] = 0
+            # the slots are created with the manager (ccl_oneshot_enabled at that time); a slot missing here means
+            # the knob changed after the manager was built, and creating semaphores now could land inside a trace
+            raise RuntimeError(
+                f"Gemma4 CCL one-shot slot {name!r} has no semaphores: the CCLManager was created with "
+                "GEMMA4_CCL_ONESHOT off; set the knob before the model is built"
+            )
         i = self._oneshot_idx[name]
         self._oneshot_idx[name] = (i + 1) % len(sems)
         return sems[i]

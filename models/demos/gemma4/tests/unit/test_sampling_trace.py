@@ -18,11 +18,13 @@ import torch
 
 import ttnn
 from models.common.sampling.generator import SamplingGenerator, SamplingParams, format_sampling_params
+from models.demos.gemma4.tt.generator import Gemma4Generator
 from models.demos.gemma4.tt.model import SAMPLING_TRACE_ENV, _compute_per_device_vocab, sampling_trace_default
 from models.tt_transformers.tt.ccl import TT_CCL
 
 from ...config import MeshConfig, ModeConfig
-from ...tests.test_factory import parametrize_mesh_with_fabric
+from ...tests.test_factory import TestFactory, _get_model_path, parametrize_mesh_with_fabric
+from .test_prefill_trace import _allocate_fresh_kv_cache, _create_page_table, _page_params
 
 VOCAB = 262144
 ROWS = 32
@@ -146,6 +148,103 @@ def test_sampling_trace_seeded_and_unseeded(mesh_device, device_params, reset_se
         assert set(d.tolist()) <= set(hot[:top_k]), f"replay drew outside the top-{top_k} set: {d.tolist()}"
     assert len({tuple(d.tolist()) for d in draws}) > 1, "every replay drew the same tokens (PRNG did not advance)"
     sampling.reset_trace()
+
+
+@pytest.mark.gemma4_prefill_trace  # loads the checkpoint: skipped under a config-only HF_MODEL (tests/conftest.py)
+@parametrize_mesh_with_fabric(mesh_shapes=[(1, 4)])
+def test_sampling_trace_buckets_through_generator(mesh_device, device_params, reset_seeds, monkeypatch):
+    """GEMMA4_SAMPLING_TRACE=1 through the generator: the 1-row and 32-row decode buckets each capture their own
+    sampling trace on first use, alternating between the buckets replays each against its own logits and feedback
+    buffers (every replay's tokens == the host argmax of the same step's logits), a release of the decode traces after
+    the warmup is declared complete re-captures the sampling traces from ``_g4_capture_sampling_traces`` at the next
+    decode capture, and the penalties / grammar keys keep the eager sampler."""
+    monkeypatch.setenv(SAMPLING_TRACE_ENV, "1")
+    hf_config = TestFactory.create_hf_config()
+    if int(getattr(hf_config, "hidden_size_per_layer_input", 0) or 0) > 0:
+        pytest.skip("PLI models restage their decode inputs from the host and keep the eager sampler")
+    batch, max_new = 32, 16
+    max_seq_len = 4096
+    paged_cfg = _page_params(batch, 128, max_new)
+    page_tables = {batch: _create_page_table(batch, paged_cfg)}
+    page_tables[1] = page_tables[batch][:1].clone()
+    generator, _kv, _tok = Gemma4Generator.from_pretrained(
+        mesh_device=mesh_device,
+        model_path=_get_model_path(),
+        max_batch_size=batch,
+        max_seq_len=max_seq_len,
+        paged_attention_config=paged_cfg,
+        bounded_sliding_kv_cache=False,
+    )
+    model = generator.model[0]
+    if model.sampling is None:
+        pytest.skip("no device sampler on this mesh")
+    assert not model._tt_disable_sampling_trace, "GEMMA4_SAMPLING_TRACE=1 did not enable the replayed sampling trace"
+    kv = [
+        _allocate_fresh_kv_cache(model, max_batch_size=batch, max_seq_len=max_seq_len, paged_attention_config=paged_cfg)
+    ]
+    greedy = SamplingParams(temperature=0.0, top_k=1, top_p=1.0)
+    gen = torch.Generator().manual_seed(7)
+    vocab = int(hf_config.vocab_size)
+
+    def step(rows, pos):
+        """One decode step of ``rows`` users at ``pos``: the host argmax of the logits (host-sampled key) and the
+        device sampler's tokens (its traced key) for the same inputs; the K/V write of the step is idempotent."""
+        tokens = torch.randint(10, vocab - 10, (rows, 1), generator=gen)
+        start = torch.full((rows,), pos, dtype=torch.long)
+        common = dict(
+            page_table=page_tables[rows],
+            kv_cache=kv,
+            enable_trace=True,
+            read_from_device=True,
+            reload_inputs=True,
+            reload_page_table=True,
+            reload_sampling_params=True,
+            reset_sampling_state=True,
+        )
+        logits = generator.decode_forward(tokens, start, sampling_params=None, **common)
+        logits = logits[0] if isinstance(logits, (list, tuple)) else logits
+        expect = torch.as_tensor(logits).float().reshape(rows, -1)[:, :vocab].argmax(-1)
+        out = generator.decode_forward(tokens, start, sampling_params=greedy, **common)
+        out = out[0] if isinstance(out, (list, tuple)) else out
+        sampled = torch.as_tensor(out).reshape(-1)[:rows].to(torch.int64)
+        return sampled, expect
+
+    def slot_id(bucket):
+        sampling = model.sampling
+        saved = sampling._active_trace_bucket
+        sampling.set_trace_bucket(bucket)
+        try:
+            _, slot = sampling._trace_slot(False, False, bool(sampling.tt_sampling.force_argmax_sampling), False)
+            return slot["id"]
+        finally:
+            sampling.set_trace_bucket(saved)
+
+    # each bucket captures its sampling trace on first use (the warmup is open: the shared lazy capture), and
+    # alternating between the buckets replays each one against its own logits buffer
+    for rows, pos in ((batch, 0), (1, 1), (batch, 2), (1, 3), (batch, 4)):
+        sampled, expect = step(rows, pos)
+        assert torch.equal(sampled, expect), f"bucket {rows} @ {pos}: replayed tokens != host argmax"
+        assert slot_id(rows) is not None, f"bucket {rows}: no sampling trace captured"
+    assert slot_id(batch) is not None and slot_id(1) is not None
+    # a release of the decode traces (the allocation guard, a page-table realloc) drops the sampling traces; once the
+    # warmup is complete the next decode capture re-binds each bucket's trace from _g4_capture_sampling_traces
+    generator._decode_warmup_complete = True
+    generator._g4_release_decode_traces("test: re-capture after the warmup")
+    assert slot_id(batch) is None and slot_id(1) is None, "the release should drop the sampling traces"
+    for rows, pos in ((batch, 5), (1, 6), (batch, 7), (1, 8)):
+        sampled, expect = step(rows, pos)
+        assert torch.equal(sampled, expect), f"bucket {rows} @ {pos} after the re-capture: tokens != host argmax"
+        assert slot_id(rows) is not None, f"bucket {rows}: not re-captured after the decode-trace release"
+    # keys outside the plain ones keep the eager sampler, whatever the bucket's trace state
+    sampling = model.sampling
+    sampling._penalties_active = True
+    try:
+        assert not generator._g4_sampling_trace_replay_ok(sampling, None)
+    finally:
+        sampling._penalties_active = False
+    assert not generator._g4_sampling_trace_replay_ok(sampling, object())  # a grammar mask
+    assert generator._g4_sampling_trace_replay_ok(sampling, None)
+    generator._g4_release_decode_traces("test: done")
 
 
 def test_sampling_trace_default_policy(monkeypatch):
