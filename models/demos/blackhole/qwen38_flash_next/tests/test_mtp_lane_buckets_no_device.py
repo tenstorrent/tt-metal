@@ -85,7 +85,7 @@ class _World:
     """A scripted lane chain: 8 lanes, width sets 2/4/8 whose trace ids are ``100 * width + {1: verify, 2: commit, 3: draft}``.
     ``log`` holds ``enqueue:<name>`` for every launched trace, the host writes and the readback."""
 
-    def __init__(self, monkeypatch, widths=(2, 4, 8), enqueue=True, positions=None):
+    def __init__(self, monkeypatch, widths=(2, 4, 8), enqueue=True, positions=None, contexts=(), allocated=32_768):
         self.calls: list[str] = []
         self.committed_counts: list[list[int]] = []
         self.writes: list[tuple[str, int]] = []
@@ -98,7 +98,7 @@ class _World:
         )
         self.positions = positions_row
         self.parent = SimpleNamespace(lanes=LANES, drafts=DRAFTS, rows=ROWS, positions=positions_row, _owner=owner)
-        self.model = SimpleNamespace(_state_owner=owner, allocated_context=32_768)
+        self.model = SimpleNamespace(_state_owner=owner, allocated_context=allocated)
         self.names: dict[int, str] = {}
 
         def traces(width):
@@ -117,6 +117,21 @@ class _World:
             )
         self.draft = SimpleNamespace(width=LANES)
         self.full_traces = traces(LANES)
+        # context sets: trace ids ``100 * width + 10 * (context // 32768) + {1: verify, 3: draft}``, the commit the base set's
+        self.context_sets = {}
+        for width in widths:
+            base = self.full_traces if width == LANES else self.sets[width].traces
+            for context in contexts:
+                ids = [100 * width + 10 * (context // 32_768) + step for step in (1, 2, 3)]
+                self.names[ids[0]], self.names[ids[2]] = f"verify{width}c{context}", f"draft{width}c{context}"
+                verify_ = self.parent if width == LANES else self.sets[width].verify
+                self.context_sets[(width, context)] = mtp_lanes.Qwen38TTNNMTPLaneWidthSet(
+                    width,
+                    verify_,
+                    self.draft if width == LANES else self.sets[width].draft,
+                    mtp_lanes.Qwen38TTNNMTPLaneTraces(ids[0], base.commit, ids[2]),
+                    context=context,
+                )
         self.readback_width: list[int] = []
         accepted_by_lane = (1, 0, 2, 3, 1, 0, 2, 1)
 
@@ -178,6 +193,7 @@ class _World:
             enqueue=launch if enqueue else None,
             next_tokens=held_blocks,
             width_sets=self.sets,
+            context_sets=self.context_sets,
         )
 
     def step(self, active, **kwargs):
@@ -402,7 +418,7 @@ class _Dram:
         }
 
 
-def _session(monkeypatch, free_values, widths=(2, 4, 8)):
+def _session(monkeypatch, free_values, widths=(2, 4, 8), contexts=False):
     released_traces, released_views = [], []
     monkeypatch.setattr(session_module, "_dram_view", _Dram(free_values))
     monkeypatch.setattr(session_module.ttnn, "synchronize_device", lambda mesh: None)
@@ -410,7 +426,11 @@ def _session(monkeypatch, free_values, widths=(2, 4, 8)):
     monkeypatch.setattr(
         session_module.mtp_lanes, "release_lane_width_view", lambda model, view: released_views.append(view.width)
     )
-    world = _World(monkeypatch, widths=widths)
+    world = (
+        _World(monkeypatch, widths=widths, contexts=(32_768, 65_536), allocated=131_072)
+        if contexts
+        else _World(monkeypatch, widths=widths)
+    )
     session = session_module.Qwen38LanesSession(lanes=LANES, drafts=DRAFTS, marker=lambda text: None)
     session.mesh, session.model = object(), world.model
     session.buckets = tuple(sorted(widths))
@@ -419,6 +439,12 @@ def _session(monkeypatch, free_values, widths=(2, 4, 8)):
         width_set.output = None
     session.width_sets = dict(world.sets)
     session.lane_chain = world.chain
+    if contexts:
+        monkeypatch.setattr(session_module.mtp_lanes, "release_lane_context_view", lambda model, view: None)
+        session.contexts = (32_768, 65_536)
+        session.context_sets = dict(world.context_sets)
+        for context_set in world.context_sets.values():
+            context_set.context_view, context_set.output = SimpleNamespace(), None
     return session, world, released_traces, released_views
 
 
@@ -604,9 +630,11 @@ def test_admission_with_a_stale_lane_releases_it_then_takes_the_lowest(monkeypat
 
 
 def test_the_driver_tells_the_session_which_lanes_hold_a_request(monkeypatch) -> None:
-    source = inspect.getsource(adapter_module.Qwen38VLLMMTPLanesDriver.verify)
+    source = inspect.getsource(adapter_module.Qwen38VLLMMTPLanesDriver.verify_enqueue)
     assert 'getattr(self.device, "set_held", None)' in source
-    assert source.index("set_held(") < source.index("self.device.set_active(") < source.index("self.device.step()")
+    assert (
+        source.index("set_held(") < source.index("self.device.set_active(") < source.index("self.device.step_enqueue(")
+    )
 
 
 def test_no_compaction_in_this_phase() -> None:
@@ -626,7 +654,7 @@ def test_flag_off_ple_rows_call_is_the_old_three_argument_call(monkeypatch) -> N
     world = _World(monkeypatch, widths=(8,))
     world.step(_mask(0))
     assert world.ple_views == [None]
-    source = inspect.getsource(mtp_lanes.Qwen38TTNNMTPLaneChain.step)
+    source = inspect.getsource(mtp_lanes.Qwen38TTNNMTPLaneChain.step_enqueue)
     assert "write_lane_ple_rows(self.model, self.verify, tokens))" in source
 
 
@@ -693,3 +721,307 @@ def test_write_lane_ple_rows_refuses_a_foreign_view(monkeypatch, expect_error) -
     with expect_error(ValueError, "width view of this verify state"):
         mtp_lanes.write_lane_ple_rows(model, parent, [[1] * ROWS] * LANES, view=view)
     assert ple.calls == [] and written == []
+
+
+# --------------------------------------------------------------------------- context-width sets
+
+CONTEXT_VARIABLE = "QWEN38_MTP_CONTEXT_BUCKETS"
+STEP = 32_768
+
+
+@pytest.mark.parametrize(
+    "allocated,paged,environ,expected",
+    (
+        (262_144, True, {}, (32_768, 65_536, 131_072)),
+        (262_144, True, {CONTEXT_VARIABLE: ""}, (32_768, 65_536, 131_072)),
+        (65_536, True, {}, (32_768,)),
+        (32_768, True, {}, ()),
+        (262_144, False, {}, ()),
+        (262_144, True, {CONTEXT_VARIABLE: "off"}, ()),
+        (262_144, True, {CONTEXT_VARIABLE: "0"}, ()),
+        (262_144, False, {CONTEXT_VARIABLE: "off"}, ()),
+        (262_144, True, {CONTEXT_VARIABLE: "65536"}, (65_536,)),
+        (262_144, True, {CONTEXT_VARIABLE: " 131072 , 32768,131072"}, (32_768, 131_072)),
+    ),
+)
+def test_context_buckets_from_env(allocated, paged, environ, expected) -> None:
+    assert mtp_lanes.mtp_context_buckets_from_env(allocated, paged, environ) == expected
+
+
+@pytest.mark.parametrize(
+    "allocated,paged,text",
+    (
+        (262_144, True, "40000"),  # not a multiple of the step
+        (262_144, True, "262144"),  # not below the allocation
+        (262_144, True, "524288"),
+        (262_144, True, "-32768"),
+        (262_144, True, "a,b"),
+        (262_144, True, "32768,"),
+        (262_144, False, "32768"),  # flat cache: no context sets
+    ),
+)
+def test_context_buckets_from_env_refuses_by_name(expect_error, allocated, paged, text) -> None:
+    with expect_error(ValueError, CONTEXT_VARIABLE):
+        mtp_lanes.mtp_context_buckets_from_env(allocated, paged, {CONTEXT_VARIABLE: text})
+
+
+def test_the_context_flag_name_and_margin_are_library_constants() -> None:
+    assert mtp_lanes.MTP_CONTEXT_BUCKETS_VARIABLE == CONTEXT_VARIABLE
+    assert session_module.mtp_context_buckets_from_env is mtp_lanes.mtp_context_buckets_from_env
+    assert mtp_lanes.LANE_CONTEXT_MARGIN == 256 and STEP % 32 == 0
+
+
+def _context_world(monkeypatch, positions, **kwargs):
+    return _World(monkeypatch, positions=positions, contexts=(STEP, 2 * STEP), allocated=4 * STEP, **kwargs)
+
+
+@pytest.mark.parametrize(
+    "positions,active,held,width,expected",
+    (
+        ([100] * 8, (0, 1), None, 2, STEP),
+        ([STEP - 256] * 8, (0,), None, 2, STEP),  # exactly the margin fits
+        ([STEP - 255] * 8, (0,), None, 2, 2 * STEP),
+        ([STEP] * 8, (0,), None, 2, 2 * STEP),
+        ([2 * STEP - 255] * 8, (0,), None, 2, 0),  # no context set covers it: the full width set
+        ([100, 100, 100, 100, 100, 100, 100, 2 * STEP], (0, 1), None, 8, STEP),  # an idle lane does not count
+        ([100, 100, 100, 100, 100, 100, 100, 2 * STEP], (0,), (7,), 8, 0),  # a held lane does
+        ([100, STEP, 100, 100, 100, 100, 100, 100], (0,), (1,), 4, 2 * STEP),
+        ([100, 100, 100, 100, 100, 100, 100, 100], (), None, 8, 0),  # no lane active or held
+        ([100, 100, 100, 100, 100, 100, 100, STEP], (0, 1), None, 2, STEP),  # a lane past the width is not looked at
+    ),
+)
+def test_context_for_covers_the_longest_active_or_held_lane(monkeypatch, positions, active, held, width, expected):
+    world = _context_world(monkeypatch, positions)
+    held_mask = None if held is None else _mask(*held)
+    assert world.chain.context_for(width, _mask(*active), held_mask) == expected
+    assert world.chain.contexts == (STEP, 2 * STEP)
+
+
+def test_context_for_without_context_sets_is_the_full_width_set(monkeypatch) -> None:
+    world = _World(monkeypatch)
+    assert world.chain.context_for(8, _mask(0)) == 0 and world.chain.contexts == ()
+
+
+def test_a_pass_runs_the_context_set_and_its_commit_is_the_base_sets(monkeypatch, expect_error) -> None:
+    world = _context_world(monkeypatch, [100] * 8)
+    record = world.step(_mask(0, 1))
+    assert world.launched() == ["commit8", "verify2c32768", "draft2c32768"]
+    assert (record.width, record.context) == (2, STEP)
+    record = world.step(_mask(0, 1))  # the commit after a context pass is the width's own commit trace
+    assert world.launched() == ["commit2", "verify2c32768", "draft2c32768"] and record.context == STEP
+    record = world.step(_mask(0, 1), force_context=2 * STEP)
+    assert world.launched() == ["commit2", "verify2c65536", "draft2c65536"] and record.context == 2 * STEP
+    record = world.step(_mask(0, 1), force_context=0)  # the full width set of the width
+    assert world.launched() == ["commit2", "verify2", "draft2"] and record.context == 0
+    with expect_error(ValueError, "no context set"):
+        world.step(_mask(0, 1), force_context=3 * STEP)
+
+
+def test_a_forced_context_below_the_need_is_refused(monkeypatch, expect_error) -> None:
+    world = _context_world(monkeypatch, [STEP - 100] * 8)
+    with expect_error(RuntimeError, "past the 32768 rows"):
+        world.step(_mask(0), force_context=STEP)
+    assert world.step(_mask(0), force_context=2 * STEP).context == 2 * STEP
+
+
+def test_a_long_lane_selects_the_full_width_set(monkeypatch) -> None:
+    world = _context_world(monkeypatch, [100, 3 * STEP, 100, 100, 100, 100, 100, 100])
+    record = world.step(_mask(0, 1))
+    assert world.launched() == ["commit8", "verify2", "draft2"] and record.context == 0
+
+
+def test_context_sets_are_validated_by_the_chain(monkeypatch, expect_error) -> None:
+    world = _context_world(monkeypatch, [100] * 8)
+    good = world.context_sets
+    for key, mutate, message in (
+        ((6, STEP), lambda s: s, "context set"),  # no width set 6
+        ((2, STEP), lambda s: setattr(s, "context", 2 * STEP), "context set"),
+        ((2, 4 * STEP), lambda s: setattr(s, "context", 4 * STEP), "context set"),  # not below the allocation
+        (
+            (2, STEP),
+            lambda s: setattr(s, "traces", mtp_lanes.Qwen38TTNNMTPLaneTraces(1, 999, 3)),
+            "context set",
+        ),  # another commit than the base's
+    ):
+        bad = mtp_lanes.Qwen38TTNNMTPLaneWidthSet(**{**good[(2, STEP)].__dict__})
+        mutate(bad)
+        with expect_error(ValueError, message):
+            mtp_lanes.Qwen38TTNNMTPLaneChain(
+                world.model,
+                world.parent,
+                world.draft,
+                world.full_traces,
+                replay=lambda tid: None,
+                width_sets=world.sets,
+                context_sets={key: bad},
+            )
+
+
+def test_dropping_a_width_drops_its_context_sets_and_a_context_set_can_go_alone(monkeypatch, expect_error) -> None:
+    world = _context_world(monkeypatch, [100] * 8)
+    chain = world.chain
+    dropped = chain.drop_context(2, STEP)
+    assert dropped.context == STEP and (2, STEP) not in chain.context_sets
+    with expect_error(ValueError, "no context set"):
+        chain.drop_context(2, STEP)
+    assert chain.drop_width(4).width == 4
+    assert all(width != 4 for width, _ in chain.context_sets) and (8, STEP) in chain.context_sets
+    world.step(_mask(0, 1))  # prev_set is now the 2-lane set of the pass
+    with expect_error(RuntimeError, "pending commit"):
+        chain.drop_width(2)
+    with expect_error(RuntimeError, "last pass"):
+        chain.drop_context(2, 2 * STEP)
+
+
+def test_the_session_drops_context_sets_before_widths_and_never_the_shared_commit(monkeypatch) -> None:
+    session, world, traces, views = _session(monkeypatch, [100 * MIB, 120 * MIB, 140 * MIB, 200 * MIB], contexts=True)
+    context_views = []
+    monkeypatch.setattr(
+        session_module.mtp_lanes, "release_lane_context_view", lambda model, view: context_views.append(view)
+    )
+    assert session.enforce_free_dram() == []  # three drops free enough: no width goes
+    assert session.dropped_contexts == [(2, 2 * STEP), (4, 2 * STEP), (2, STEP)]  # larger contexts first
+    assert len(context_views) == 3 and views == []
+    assert all(tid % 10 != 2 for tid in traces)  # a commit trace (..2) is never released with a context set
+    assert session.summary()["dropped_contexts"] == [f"w{w}_c{c}" for w, c in session.dropped_contexts]
+
+
+def test_warm_widths_replays_the_context_sets_the_active_lanes_fit(monkeypatch) -> None:
+    session, world, *_ = _session(monkeypatch, [200 * MIB], contexts=True)
+    world.chain.active = _mask(0, 1)
+    assert session.warm_widths() == [8, 4, 2]
+    contexts = [(record.width, record.context) for record in world.chain.records if record.context]
+    assert set(contexts) == set(world.chain.context_sets)
+    assert [record.width for record in world.chain.records][:4] == [8, 4, 2, 2]
+
+
+def test_warm_widths_skips_a_context_set_the_active_lanes_do_not_fit(monkeypatch) -> None:
+    session, world, *_ = _session(monkeypatch, [200 * MIB], contexts=True)
+    world.chain.active = _mask(0, 1)
+    world.positions.positions[1] = STEP + 5
+    session.warm_widths()
+    ran = {(record.width, record.context) for record in world.chain.records if record.context}
+    assert ran and all(context >= 2 * STEP for _, context in ran)
+
+
+def test_the_session_summary_lists_the_context_sets(monkeypatch) -> None:
+    session, world, *_ = _session(monkeypatch, [200 * MIB], contexts=True)
+    session.dram["before_captures"] = session.dram["after_captures"] = {"allocated_bytes_per_bank": 0}
+    session.dram["before_prepare"] = session.dram["after_prepare"] = {"allocated_bytes_per_bank": 0}
+    session.dram["after_captures_w8_c32768"] = {"allocated_bytes_per_bank": 0}
+    summary = session.summary()
+    assert summary["contexts"] == [STEP, 2 * STEP]
+    assert summary["context_sets"][:2] == ["w2_c32768", "w2_c65536"] and summary["dropped_contexts"] == []
+    assert session.width_sets_captured() == []  # a context set's dram key is not a width's
+
+
+def test_the_context_sets_are_built_captured_and_warmed_in_the_session_order() -> None:
+    prepare = inspect.getsource(session_module.Qwen38LanesSession.prepare)
+    capture = inspect.getsource(session_module.Qwen38LanesSession.capture)
+    assert "allocate_lane_context_view" in prepare and "mtp_context_buckets_from_env" in prepare
+    assert prepare.index("self._eager_passes_at(self.width_sets[width])") < prepare.index(
+        "self._eager_passes_at(context_set)"
+    )
+    assert prepare.index("self._eager_passes_at(context_set)") < prepare.index(
+        "mtp_lanes.write_lane_accepted(model, self.verify, [-1] * self.lanes)"
+    )
+    assert "context_sets=self.context_sets" in capture and "capture_commit_lanes" not in inspect.getsource(
+        session_module.Qwen38LanesSession._capture_context
+    )
+
+
+# --------------------------------------------------------------------------- step == finish(step_enqueue)
+
+
+def _async_read(monkeypatch, world) -> list[str]:
+    """The pass row read as the deferred form takes it: the copy and the event are logged, the parse is the world's scripted
+    readback."""
+
+    log: list[str] = []
+    scripted = mtp_lanes.read_lane_pass_row  # the world's fake (blocking form)
+
+    def enqueue(draft):
+        log.append("copy")
+        world.calls.append("readback_enqueue")
+        return "host", "event"
+
+    monkeypatch.setattr(mtp_lanes, "enqueue_lane_pass_row_read", enqueue)
+    monkeypatch.setattr(mtp_lanes, "parse_lane_pass_row", lambda verify_, values: scripted(verify_, None))
+    monkeypatch.setattr(mtp_lanes.ttnn, "to_torch", lambda host: host, raising=False)
+    monkeypatch.setattr(mtp_lanes.ttnn, "event_synchronize", lambda event: log.append(f"wait:{event}"), raising=False)
+    return log
+
+
+def test_step_is_finish_of_step_enqueue(monkeypatch) -> None:
+    import dataclasses
+
+    sync = _World(monkeypatch)
+    record = sync.step(_mask(0, 1, 2))
+    split = _World(monkeypatch)
+    log = _async_read(monkeypatch, split)
+    split.calls.clear()
+    split.chain.active = _mask(0, 1, 2)
+    split.chain.commit_mask = list(split.chain.active)
+    pending = split.chain.step_enqueue()
+    assert split.chain.pending is pending and log == ["copy"]
+    assert "readback" not in split.calls  # nothing is parsed before finish
+    assert split.launched() == ["commit8", "verify4", "draft4"]
+    landed = split.chain.finish(pending)
+    assert log == ["copy", "wait:event"] and split.chain.pending is None
+    for field in dataclasses.fields(record):
+        if field.name != "segments_ns":
+            assert getattr(landed, field.name) == getattr(record, field.name), field.name
+    assert {"readback", "readback_enqueue"} <= set(landed.segments_ns) and "readback" in record.segments_ns
+    assert sync.committed_counts == split.committed_counts and sync.launched() == ["commit8", "verify4", "draft4"]
+    assert split.chain.next_tokens == sync.chain.next_tokens
+
+
+def test_step_reads_the_pass_row_blocking(monkeypatch) -> None:
+    world = _World(monkeypatch)
+    log = _async_read(monkeypatch, world)
+    world.step(_mask(0))
+    assert log == [] and "readback" in world.calls  # the blocking read_lane_pass_row, no copy, no event
+
+
+def test_a_second_step_enqueue_while_one_is_pending_raises(monkeypatch, expect_error) -> None:
+    world = _World(monkeypatch)
+    _async_read(monkeypatch, world)
+    world.chain.active = _mask(0)
+    pending = world.chain.step_enqueue()
+    with expect_error(RuntimeError, "a lane pass is pending"):
+        world.chain.step_enqueue()
+    with expect_error(RuntimeError, "a lane pass is pending"):
+        world.chain.step()
+    with expect_error(RuntimeError, "a lane pass is pending"):
+        world.chain.next_tokens, held = None, world.chain.next_tokens
+        try:
+            world.chain.bootstrap([[1, 0, 0, 0]] * LANES)
+        finally:
+            world.chain.next_tokens = held
+    world.chain.finish(pending)
+    with expect_error(RuntimeError, "was it already finished"):
+        world.chain.finish(pending)
+    world.chain.step_enqueue()  # free again
+
+
+def test_the_pass_row_parser_is_the_blocking_readers_second_half(monkeypatch) -> None:
+    lanes, rows = 2, 3
+    verify = SimpleNamespace(lanes=lanes, rows=rows)
+    split = mtp_lanes.lane_readback_width(lanes)
+    readback = torch.zeros(split)
+    values = torch.cat(
+        [
+            readback,
+            torch.tensor([float(mtp_lanes.ZERO_EMBEDDING_TOKEN)] * (mtp_lanes.lane_pass_row_width(lanes) - split)),
+        ]
+    )
+    seen = []
+    monkeypatch.setattr(
+        mtp_lanes, "parse_lane_pass_row", lambda verify_, host_values: seen.append((verify_, host_values)) or "parsed"
+    )
+    monkeypatch.setattr(mtp_lanes.ttnn, "get_device_tensors", lambda tensor: ["shard"], raising=False)
+    monkeypatch.setattr(mtp_lanes.ttnn, "to_torch", lambda tensor: values, raising=False)
+    assert mtp_lanes.read_lane_pass_row(verify, SimpleNamespace(pass_row="row")) == "parsed"
+    assert seen == [(verify, values)]
+    source = inspect.getsource(mtp_lanes.enqueue_lane_pass_row_read)
+    assert "from_device(shard, blocking=False)" in source and "record_event(" in source and "cq_id=0" in source

@@ -1230,14 +1230,18 @@ class Qwen38ChatSession:
         token_ids: Sequence[int],
         should_stop: Callable[[], str | None] | None,
         before_last: Callable[[], None] | None = None,
+        *,
+        last_next: int | None = None,
     ) -> str | None:
         """Forced steps; at every event sync the hook may end the request (the row then holds an unconsumed token).
-        ``before_last`` runs before the last token's step (the prompt-end snapshot)."""
+        ``before_last`` runs before the last token's step (the prompt-end snapshot).  ``last_next`` is the token that
+        follows the last one when the host knows it (the MTP row of the last step consumes it); None: the step's own
+        argmax."""
 
         for index, token_id in enumerate(token_ids, start=1):
             if index == len(token_ids) and before_last is not None:
                 before_last()
-            self._forced_step(token_id, token_ids[index] if index < len(token_ids) else None)
+            self._forced_step(token_id, token_ids[index] if index < len(token_ids) else last_next)
             if index % PREFILL_EVENT_INTERVAL == 0:
                 # Bounds the host run-ahead and surfaces a device error at a known token.
                 self.chain.event_synchronize(self.chain.record_event())
@@ -1716,6 +1720,21 @@ class Qwen38ChatSession:
         self.committed = []
         self.snapshot = None
         self.ple_context = None
+        self.last_finish = None
+        self.row_unconsumed = False
+        self.row_token = None
+        self.committed_vision = ()
+
+    def restore_prefix(
+        self, start: int, token_ids: Sequence[int], layer_blocks: dict[int, tuple[Any, int]], block_size: int
+    ) -> None:
+        """The state at block boundary ``start`` from the GDN layers' blocks instead of ``reset``; the session then holds
+        ``token_ids[:start]`` as committed, with the PLE context the restore returns."""
+
+        context = self.chain.restore_prefix_state(start, token_ids, layer_blocks, block_size)
+        self.committed = list(token_ids[:start])
+        self.ple_context = context
+        self.snapshot = None
         self.last_finish = None
         self.row_unconsumed = False
         self.row_token = None
@@ -3058,6 +3077,7 @@ class Qwen38TracedChain:
             self.state, layer_blocks, block_size=block_size, position=position
         )
         if self.mtp is not None:
+            self.mtp.alignment.layer.reset_generic_state_inplace(self.mtp.alignment.generic_state)
             self.mtp.step_written = False
         ttnn.synchronize_device(self.mesh)
         device_position = self.state.position.read()

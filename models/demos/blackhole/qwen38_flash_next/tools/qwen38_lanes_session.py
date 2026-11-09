@@ -73,6 +73,7 @@ ADMISSION_SEGMENTS = ("tower", "chunks", "prefilled", "evicted")
 DROP_ORDER = (4, 2)
 FREE_DRAM_FLOOR_BYTES_PER_BANK = mtp_lanes.FREE_DRAM_FLOOR_BYTES_PER_BANK
 mtp_lane_buckets_from_env = mtp_lanes.mtp_lane_buckets_from_env
+mtp_context_buckets_from_env = mtp_lanes.mtp_context_buckets_from_env
 
 
 class Qwen38LanesSessionError(RuntimeError):
@@ -123,6 +124,11 @@ class Qwen38LanesSession:
     buckets: tuple[int, ...] = ()
     width_sets: dict[int, Any] = field(default_factory=dict)
     dropped_widths: list[int] = field(default_factory=list)
+    # The context-width sets (``QWEN38_MTP_CONTEXT_BUCKETS``; paged only): the narrower contexts and the sets by
+    # (width, context), each the width's states with the QSA constants rebuilt at that context.
+    contexts: tuple[int, ...] = ()
+    context_sets: dict[tuple[int, int], Any] = field(default_factory=dict)
+    dropped_contexts: list[tuple[int, int]] = field(default_factory=list)
     dram: dict[str, dict[str, int]] = field(default_factory=dict)
     capture_ms: dict[str, float] = field(default_factory=dict)
     warmup_ms: dict[str, float] = field(default_factory=dict)
@@ -196,6 +202,19 @@ class Qwen38LanesSession:
             )
             ttnn.synchronize_device(mesh)
             self.dram[f"after_view_w{width}"] = _dram_view(mesh)
+        self.contexts = mtp_context_buckets_from_env(model.allocated_context, paged, self.environ)
+        self.context_sets = {}
+        for (
+            width
+        ) in self.buckets:  # a context-width set per width and context: the width's states, narrower QSA constants
+            base = self if width == self.lanes else self.width_sets[width]
+            for narrow in self.contexts:
+                view = mtp_lanes.allocate_lane_context_view(model, base.verify, base.draft, narrow)
+                self.context_sets[(width, narrow)] = mtp_lanes.Qwen38TTNNMTPLaneWidthSet(
+                    width, view.verify, view.draft, None, context=narrow, context_view=view  # traces after the captures
+                )
+                ttnn.synchronize_device(mesh)
+                self.dram[f"after_ctx_w{width}_c{narrow}"] = _dram_view(mesh)
         ttnn.synchronize_device(mesh)
         self.dram["after_states"] = _dram_view(mesh)
         self.warmup_ms["allocate"] = (self.clock_ns() - started) / 1e6
@@ -231,6 +250,8 @@ class Qwen38LanesSession:
         started = self.clock_ns()
         for width in self.buckets[:-1]:
             self._eager_passes_at(self.width_sets[width])
+        for context_set in self.context_sets.values():  # the context sets' bodies, still before the full width's
+            self._eager_passes_at(context_set)
         mtp_lanes.write_lane_accepted(model, self.verify, [-1] * self.lanes)
         mtp_lanes.write_lane_active(model, self.verify, [1] * self.lanes, commit=[1] * self.lanes)
         tokens = [[WARM_TOKEN_ID] + [mtp_lanes.BOOTSTRAP_DRAFT_TOKEN] * self.drafts for _ in range(self.lanes)]
@@ -297,10 +318,14 @@ class Qwen38LanesSession:
 
     def _write_warm_page_table(self, base: int) -> None:
         """Every lane's row = its own blocks 1..n (block 0 is the null block), n covering the warm imports and the eager
-        passes past ``base``."""
+        passes past ``base``.  Lane 0 sits in every set and each set runs ``EAGER_PASSES`` eager passes that advance it
+        by up to ``rows`` (``drafts + 1``) tokens each: one set per (width, context) pair of the session (the full width
+        and the narrow widths, each at the model's context and at every narrower context), so the span past the imports
+        is ``sets * EAGER_PASSES * rows``."""
 
         paging = self.chain.paging
-        span = base + IMPORT_RESIDUES + EAGER_PASSES * self.verify.rows + 1
+        sets = len(self.buckets) * (1 + len(self.contexts))
+        span = base + IMPORT_RESIDUES + sets * EAGER_PASSES * self.verify.rows + 1
         blocks = max(1, -(-span // paging.page_size))
         if blocks > paging.max_blocks or 1 + self.lanes * blocks > paging.num_pages:
             raise Qwen38LanesSessionError(
@@ -400,9 +425,13 @@ class Qwen38LanesSession:
         # the narrow widths, descending, each its own verify_first / commit / draft
         for width in reversed(self.buckets[:-1]):
             self._capture_width(self.width_sets[width], guard)
+        for key in sorted(self.context_sets, key=lambda key: (-key[0], key[1])):  # the widths descending, as above
+            self._capture_context(self.context_sets[key], guard)
         trace_ids = [*chain.trace_ids(), verify_id, commit_id, draft_id]
         for width_set in self.width_sets.values():
             trace_ids += [width_set.traces.verify_first, width_set.traces.commit, width_set.traces.draft]
+        for context_set in self.context_sets.values():  # the commit is the base set's, already listed
+            trace_ids += [context_set.traces.verify_first, context_set.traces.draft]
         for trace_id in trace_ids:
             TraceAllocationTracker.verify_before_replay(mesh, trace_id)
         after = _dram_view(mesh)
@@ -422,6 +451,7 @@ class Qwen38LanesSession:
             enqueue=chain._enqueue,
             next_tokens=self.eager_next_tokens,
             width_sets=self.width_sets,
+            context_sets=self.context_sets,
         )
         self.lane_chain.set_active([0] * self.lanes)  # every lane parked until an admission
         ttnn.synchronize_device(mesh)
@@ -446,16 +476,58 @@ class Qwen38LanesSession:
         ttnn.synchronize_device(mesh)
         self.dram[f"after_captures_w{width}"] = _dram_view(mesh)
 
+    def _base_set_commit(self, width: int) -> int:
+        return self.traces.commit if width == self.lanes else self.width_sets[width].traces.commit
+
+    def _capture_context(self, context_set, guard) -> None:
+        """A context-width set's verify_first and draft traces; its commit is the base width set's."""
+
+        mesh, model = self.mesh, self.model
+        width, context = context_set.width, context_set.context
+        verify, draft = context_set.verify, context_set.draft
+        started = self.clock_ns()
+        verify_id, output = mtp_lanes.capture_verify_lanes(model, verify, catch_up=False, land_accept=True, guard=guard)
+        self.capture_ms[f"w{width}_c{context}_verify_first"] = (self.clock_ns() - started) / 1e6
+        started = self.clock_ns()
+        draft_id = mtp_lanes.capture_draft_lanes(model, verify, draft, output, guard=guard)
+        self.capture_ms[f"w{width}_c{context}_draft"] = (self.clock_ns() - started) / 1e6
+        context_set.traces = mtp_lanes.Qwen38TTNNMTPLaneTraces(
+            verify_first=verify_id, commit=self._base_set_commit(width), draft=draft_id
+        )
+        context_set.output = output
+        acknowledge_corruptible(output.readback)
+        ttnn.synchronize_device(mesh)
+        self.dram[f"after_captures_w{width}_c{context}"] = _dram_view(mesh)
+
     def free_dram_bytes_per_bank(self) -> int:
         return int(_dram_view(self.mesh)["free_bytes_per_bank"])
 
     def enforce_free_dram(self, floor: int = FREE_DRAM_FLOOR_BYTES_PER_BANK) -> list[int]:
-        """After the captures: log the free DRAM per bank; below ``floor`` drop the 4-lane width, then the 2-lane width
-        (their traces and views released, a warning logged), re-measuring after each.  The full width always stays.
-        Returns the widths dropped."""
+        """After the captures: log the free DRAM per bank; below ``floor`` drop the context sets (the narrow widths'
+        first, larger contexts first), then the 4-lane width, then the 2-lane width (their traces and views released,
+        a warning logged), re-measuring after each.  The full width always stays.  Returns the widths dropped."""
 
         free = self.free_dram_bytes_per_bank()
-        logger.info(f"mtp lanes: free DRAM after the captures {free / 2**20:.1f} MiB/bank, widths {self.buckets}")
+        logger.info(
+            f"mtp lanes: free DRAM after the captures {free / 2**20:.1f} MiB/bank, widths {self.buckets}, "
+            f"contexts {self.contexts}"
+        )
+        dropped_sets: list[tuple[int, int]] = []
+        for key in sorted(self.context_sets, key=lambda key: (key[0] == self.lanes, -key[1])):
+            if free >= floor:
+                break
+            logger.warning(
+                f"mtp lanes: {free / 2**20:.1f} MiB/bank free after the captures is below {floor / 2**20:.0f}: "
+                f"dropping the {key[0]}-lane width's {key[1]}-row context set"
+            )
+            self.drop_context(*key)
+            dropped_sets.append(key)
+            free = self.free_dram_bytes_per_bank()
+        if dropped_sets:
+            logger.warning(
+                f"mtp lanes: context sets {dropped_sets} dropped, serving contexts {sorted(self.context_sets)}, "
+                f"{free / 2**20:.1f} MiB/bank free"
+            )
         dropped: list[int] = []
         for width in DROP_ORDER:
             if free >= floor:
@@ -475,9 +547,36 @@ class Qwen38LanesSession:
             )
         return dropped
 
-    def drop_width(self, width: int) -> None:
-        """Release a narrow width's traces, output and views (the chain forgets it first)."""
+    def drop_context(self, width: int, context: int) -> None:
+        """Release a context set's verify_first and draft traces, its output and its view (the chain forgets it first).
+        The commit trace is the base width set's and stays."""
 
+        if self.lane_chain is not None:
+            context_set = self.lane_chain.drop_context(width, context)
+        else:
+            context_set = self.context_sets[(width, context)]
+        self.context_sets.pop((width, context), None)
+        self._release_context_set(context_set)
+        self.dropped_contexts.append((width, context))
+
+    def _release_context_set(self, context_set) -> None:
+        ttnn.synchronize_device(self.mesh)
+        if context_set.traces is not None:
+            for trace_id in (context_set.traces.verify_first, context_set.traces.draft):
+                ttnn.release_trace(self.mesh, trace_id)
+            context_set.traces = None
+        if context_set.output is not None and context_set.output.active:
+            context_set.output.release_tensors()
+        context_set.output = None
+        if context_set.context_view is not None:
+            mtp_lanes.release_lane_context_view(self.model, context_set.context_view)
+            context_set.context_view = None
+
+    def drop_width(self, width: int) -> None:
+        """Release a narrow width's context sets, traces, output and views (the chain forgets them first)."""
+
+        for key in [key for key in self.context_sets if key[0] == width]:
+            self.drop_context(*key)
         if self.lane_chain is not None:
             width_set = self.lane_chain.drop_width(width)
         else:
@@ -504,7 +603,8 @@ class Qwen38LanesSession:
         """Replay every width's verify_first / commit / draft once, so no first replay happens while serving: the passes
         run on the lanes that are active now (the warm requests) with the width forced, full width first then down to the
         smallest the active lanes fit, and once more at that width (each width's commit follows the pass at it).  The
-        caller releases the warm requests afterwards.  Returns the widths run."""
+        caller releases the warm requests afterwards.  Then every remaining context set whose width is run and that
+        covers the active lanes replays once (the chain would refuse one that does not).  Returns the widths run."""
 
         chain = self.lane_chain
         if chain is None:
@@ -513,6 +613,16 @@ class Qwen38LanesSession:
         widths = [width for width in reversed(chain.buckets) if width >= floor]
         for width in [*widths, widths[-1]]:
             chain.step(force_width=width)
+        run_contexts: list[tuple[int, int]] = []
+        for width, context in sorted(chain.context_sets, key=lambda key: (-key[0], key[1])):
+            if width < floor:
+                continue
+            need = chain._need_rows(width, chain.active, chain.held)
+            if need is not None and need > context:
+                continue  # the active lanes do not fit this context
+            chain.step(force_width=width, force_context=context)
+            run_contexts.append((width, context))
+        logger.info(f"mtp lanes: warm replays at widths {widths}, context sets {run_contexts}")
         return widths
 
     def growth_bytes_per_bank(self) -> dict[str, int]:
@@ -544,7 +654,11 @@ class Qwen38LanesSession:
         return out
 
     def width_sets_captured(self) -> list[int]:
-        return [int(key.rsplit("w", 1)[1]) for key in self.dram if key.startswith("after_captures_w")]
+        return [
+            int(key.rsplit("w", 1)[1])
+            for key in self.dram
+            if key.startswith("after_captures_w") and "_c" not in key  # not a context set's ``_w<W>_c<C>``
+        ]
 
     def summary(self) -> dict[str, Any]:
         return {
@@ -555,6 +669,9 @@ class Qwen38LanesSession:
             "traces": 0 if self.traces is None else 3,
             "buckets": list(self.buckets),
             "dropped_widths": list(self.dropped_widths),
+            "contexts": list(self.contexts),
+            "context_sets": [f"w{w}_c{c}" for w, c in sorted(self.context_sets)],
+            "dropped_contexts": [f"w{w}_c{c}" for w, c in self.dropped_contexts],
             "dram_growth_bytes_per_bank_by_width": self.growth_by_width(),
             "capture_ms": dict(self.capture_ms),
             "warmup_ms": dict(self.warmup_ms),
@@ -747,6 +864,15 @@ class Qwen38LanesSession:
     def step(self):
         return self.lane_chain.step()
 
+    def step_enqueue(self, defer_read: bool = True):
+        """The launch half of :meth:`step`; :meth:`finish` lands the pass.  ``defer_read`` False: the pass row is read
+        blocking in :meth:`finish`, as :meth:`step` reads it."""
+
+        return self.lane_chain.step_enqueue(defer_read=defer_read)
+
+    def finish(self, pending):
+        return self.lane_chain.finish(pending)
+
     def room(self, position: int) -> bool:
         return mtp_v2.verify_pass_fits(int(position), self.model.allocated_context)
 
@@ -760,7 +886,10 @@ class Qwen38LanesSession:
             return
         mesh = self.mesh
         ttnn.synchronize_device(mesh)
-        for width_set in list(self.width_sets.values()):  # the narrow widths first, before the parent they alias
+        for context_set in list(self.context_sets.values()):  # the context sets first, before the sets they share with
+            self._release_context_set(context_set)
+        self.context_sets = {}
+        for width_set in list(self.width_sets.values()):  # the narrow widths next, before the parent they alias
             self._release_width_set(width_set)
         self.width_sets = {}
         if self.traces is not None:

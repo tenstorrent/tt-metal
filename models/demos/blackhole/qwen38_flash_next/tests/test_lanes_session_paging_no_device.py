@@ -126,6 +126,7 @@ def test_close_keeps_the_chain_pools(monkeypatch) -> None:
     session = _session()
     session.mesh = "mesh"
     session.width_sets = {}
+    session.context_sets = {}
     session.traces = session.output = None
     pools = SimpleNamespace(kv="kv", index="index")
     session.chain = SimpleNamespace(pools=pools, mtp_paged_pools=pools)

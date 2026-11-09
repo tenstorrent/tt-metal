@@ -126,6 +126,10 @@ MTP_LANE_BUCKETS_VARIABLE = "QWEN38_MTP_LANE_BUCKETS"
 DEFAULT_LANE_BUCKETS = (2, 4, 8)
 VIEW_PARENT_LANES = 8  # the width buckets exist for 8-lane sessions only
 FREE_DRAM_FLOOR_BYTES_PER_BANK = 150 * 1024 * 1024  # below this after the captures the 4- and 2-lane widths are dropped
+# Rows a lane needs below a context-width set's context: the pass scores rows up to P + 2K - 1, plus the index window tile.
+LANE_CONTEXT_MARGIN = 256
+MTP_CONTEXT_BUCKETS_VARIABLE = "QWEN38_MTP_CONTEXT_BUCKETS"
+DEFAULT_CONTEXT_BUCKETS = (32768, 65536, 131072)
 
 
 def mtp_lane_buckets_from_env(lanes: int, drafts: int, environ: Mapping[str, str] | None = None) -> tuple[int, ...]:
@@ -161,6 +165,40 @@ def mtp_lane_buckets_from_env(lanes: int, drafts: int, environ: Mapping[str, str
             f"{MTP_LANE_BUCKETS_VARIABLE} widths {widths} x {drafts + 1} rows do not fit one {CHUNK_ROWS}-row tile"
         )
     return tuple(widths)
+
+
+def mtp_context_buckets_from_env(
+    allocated_context: int, paged: bool, environ: Mapping[str, str] | None = None
+) -> tuple[int, ...]:
+    """The narrower contexts of a session's context-width sets: ``QWEN38_MTP_CONTEXT_BUCKETS`` unset or empty = the
+    default contexts (``32768,65536,131072``) below ``allocated_context`` on shared pools, none on a flat cache; ``off``
+    or ``0`` = none; else a comma list of contexts, each a positive multiple of ``qsa.LANE_CONTEXT_STEP`` below
+    ``allocated_context`` (sorted here; a repeat is dropped), and only on shared pools.  Anything else is a ValueError
+    naming the variable."""
+
+    environ = os.environ if environ is None else environ
+    text = environ.get(MTP_CONTEXT_BUCKETS_VARIABLE, "").strip()
+    if text.lower() in ("off", "0"):
+        return ()
+    if not text:
+        return tuple(context for context in DEFAULT_CONTEXT_BUCKETS if context < allocated_context) if paged else ()
+    try:
+        contexts = [int(item.strip()) for item in text.split(",")]
+    except ValueError:
+        raise ValueError(
+            f"{MTP_CONTEXT_BUCKETS_VARIABLE} must be off, 0 or a comma list of contexts, got {text!r}"
+        ) from None
+    step = qsa_module.LANE_CONTEXT_STEP
+    if any(context <= 0 or context % step or context >= allocated_context for context in contexts):
+        raise ValueError(
+            f"{MTP_CONTEXT_BUCKETS_VARIABLE} contexts must be positive multiples of {step} below the allocated "
+            f"{allocated_context}, got {text!r}"
+        )
+    if not paged:
+        raise ValueError(
+            f"{MTP_CONTEXT_BUCKETS_VARIABLE} context sets need shared pools (a paged session), got {text!r}"
+        )
+    return tuple(sorted(set(contexts)))
 
 
 # The lane-state tensors with a lane per ROW of one 32-row tile (a width view's tile-granular write would also rewrite
@@ -2673,6 +2711,123 @@ def release_lane_width_view(model: Qwen38TTNNTextModel, view: Qwen38TTNNMTPLaneW
     _run_cleanup("lane width view", list(reversed(owned)))
 
 
+@dataclass(eq=False)
+class Qwen38TTNNMTPLaneContextView:
+    """A context-width copy of a lane verify / draft state pair: ``verify`` and ``draft`` are the states of the base
+    pair (a width view or the parent) with the QSA constants rebuilt at ``context``; ``owned`` is what releasing the
+    view frees (never the shared page tables or states)."""
+
+    context: int
+    verify: Qwen38TTNNMTPLaneVerifyState
+    draft: Qwen38TTNNMTPLaneDraftState
+    owned: list = field(repr=False)
+
+
+def allocate_lane_context_view(
+    model: Qwen38TTNNTextModel,
+    verify: Qwen38TTNNMTPLaneVerifyState,
+    draft: Qwen38TTNNMTPLaneDraftState,
+    context: int,
+) -> Qwen38TTNNMTPLaneContextView:
+    """The lane state pair ``verify`` / ``draft`` (a width view's or the parent's) scored at ``context`` rows per lane
+    instead of the model's allocation, so a pass over short lanes reads fewer compressed blocks and index windows.
+    Built per context: the QSA chunk constants (at ``context / 4`` compressed blocks), the rows = R and rows = 1 verify
+    constants, the QSA lane constants (a view of the base's, sharing its page table) and the two lane verify constants
+    (sharing the base's row page tables).  Shared with the base (the same objects in the copies): every lane state
+    and alias, the positions and their host mirror, the page tables, the token / draft / accept / active rows, the MoE
+    instances, the alignment state and the pass row.  The commit trace is the base set's (it reads no context-bound
+    constant); capture only the verify and draft traces on the view.  Shared pools only; allocate before any capture;
+    release with :func:`release_lane_context_view`."""
+
+    _validate_lane_draft_state(model, verify, draft)
+    if not lane_verify_paged(verify):
+        raise ValueError("a lane context view needs shared pools (paged lane constants)")
+    if not 0 < context < model.allocated_context or context % qsa_module.LANE_CONTEXT_STEP:
+        raise ValueError(
+            f"a lane context view takes a multiple of {qsa_module.LANE_CONTEXT_STEP} below the model's "
+            f"{model.allocated_context} rows, got {context!r}"
+        )
+    mesh_device, mesh_contract = model.mesh_device, model.mesh_contract
+    actions: list[tuple[str, Callable[[], Any]]] = []
+
+    def keep(label: str, value, release: Callable[[], Any]):
+        actions.append((label, release))
+        return value
+
+    try:
+        chunk = qsa_module.Qwen38TTNNQSAChunkConstants.build(
+            mesh_device, mesh_contract, context // qsa_module.COMPRESS_RATIO
+        )
+        keep("QSA chunk constants", chunk, chunk.deallocate)
+        verify_constants = qsa_module.Qwen38TTNNQSAVerifyConstants.build(
+            mesh_device, mesh_contract, chunk, rows=verify.rows
+        )
+        keep("QSA verify constants", verify_constants, verify_constants.deallocate)
+        draft_verify_constants = qsa_module.Qwen38TTNNQSAVerifyConstants.build(
+            mesh_device, mesh_contract, chunk, rows=1
+        )
+        keep("lane draft QSA verify constants", draft_verify_constants, draft_verify_constants.deallocate)
+        lane_constants = qsa_module.Qwen38TTNNQSALaneConstants.build_view(
+            mesh_device, mesh_contract, verify.qsa_lane_constants, lanes=verify.lanes, allocated_context=context
+        )
+        keep("QSA lane constants", lane_constants, lane_constants.deallocate)
+        paging = verify.qsa_lane_constants.paging
+        lane_verify_constants, release_verify_constants = _build_view_lane_verify_constants(
+            mesh_device,
+            mesh_contract,
+            verify.qsa_lane_verify_constants,
+            lanes=verify.lanes,
+            rows=verify.rows,
+            allocated_context=context,
+            storage_lanes=verify.stored_lanes,
+            paging=paging,
+        )
+        keep("QSA lane verify constants", lane_verify_constants, release_verify_constants)
+        draft_lane_verify_constants, release_draft_verify_constants = _build_view_lane_verify_constants(
+            mesh_device,
+            mesh_contract,
+            draft.qsa_lane_verify_constants,
+            lanes=verify.lanes,
+            rows=1,
+            allocated_context=context,
+            storage_lanes=verify.stored_lanes,
+            paging=paging,
+        )
+        keep("lane draft QSA lane verify constants", draft_lane_verify_constants, release_draft_verify_constants)
+        verify_ctx = replace(
+            verify,
+            qsa_chunk_constants=chunk,
+            qsa_verify_constants=verify_constants,
+            qsa_lane_constants=lane_constants,
+            qsa_lane_verify_constants=lane_verify_constants,
+        )
+        draft_ctx = replace(
+            draft,
+            qsa_chunk_constants=chunk,
+            qsa_verify_constants=draft_verify_constants,
+            qsa_lane_constants=lane_constants,
+            qsa_lane_verify_constants=draft_lane_verify_constants,
+        )
+        _validate_lane_verify_state(model, verify_ctx)
+        _validate_lane_draft_state(model, verify_ctx, draft_ctx)
+        return Qwen38TTNNMTPLaneContextView(context, verify_ctx, draft_ctx, list(actions))
+    except BaseException as error:
+        _run_cleanup("lane context view allocation", list(reversed(actions)), primary=error)
+        raise
+
+
+def release_lane_context_view(model: Qwen38TTNNTextModel, view: Qwen38TTNNMTPLaneContextView) -> None:
+    """Free what the context view owns (its rebuilt QSA constants).  The page tables, the states and every shared
+    buffer belong to the base pair and stay."""
+
+    if not isinstance(view, Qwen38TTNNMTPLaneContextView) or view.verify._owner is not model._state_owner:
+        raise ValueError("lane context view was not allocated by this model owner")
+    if not view.owned:
+        raise RuntimeError("lane context view was already released")
+    owned, view.owned = view.owned, []
+    _run_cleanup("lane context view", list(reversed(owned)))
+
+
 def forward_draft_history_lanes(
     model: Qwen38TTNNTextModel, verify: Qwen38TTNNMTPLaneVerifyState, draft: Qwen38TTNNMTPLaneDraftState
 ) -> None:
@@ -2874,15 +3029,15 @@ def capture_draft_lanes(
     return trace_id
 
 
-def read_lane_pass_row(
-    verify: Qwen38TTNNMTPLaneVerifyState, draft: Qwen38TTNNMTPLaneDraftState
+def parse_lane_pass_row(
+    verify: Qwen38TTNNMTPLaneVerifyState, host_values: torch.Tensor
 ) -> tuple[Qwen38TTNNLaneVerifyReadback, tuple[tuple[int, ...], ...]]:
-    """Host readback (outside any trace, after a lane verify and the draft that followed it) of the pass row from
-    coordinate 0: the verify's per-lane ``[a_u, t'_u, d_1'_u, argmaxes, alignment]`` and every lane's assembled next
-    verify tokens ``[t'_u, d_{u,1} .. d_{u,k}]`` (whose first two must be the verify's ``t'_u`` and ``d_1'_u``)."""
+    """The host side of :func:`read_lane_pass_row`: the pass row's values (coordinate 0) as the verify's per-lane
+    ``[a_u, t'_u, d_1'_u, argmaxes, alignment]`` and every lane's assembled next verify tokens ``[t'_u, d_{u,1} ..
+    d_{u,k}]`` (whose first two must be the verify's ``t'_u`` and ``d_1'_u``)."""
 
     lanes, rows = verify.lanes, verify.rows
-    values = ttnn.to_torch(ttnn.get_device_tensors(draft.pass_row)[0]).reshape(-1)
+    values = host_values.reshape(-1)
     width = lane_pass_row_width(lanes)
     if values.numel() != width:
         raise RuntimeError(f"lane pass row readback has {values.numel()} lanes, expected {width}")
@@ -2899,6 +3054,26 @@ def read_lane_pass_row(
         if block[:2] != expected:
             raise RuntimeError(f"lane {lane} pass row token lanes start {block[:2]}, its verify row says {expected}")
     return readback, tokens
+
+
+def read_lane_pass_row(
+    verify: Qwen38TTNNMTPLaneVerifyState, draft: Qwen38TTNNMTPLaneDraftState
+) -> tuple[Qwen38TTNNLaneVerifyReadback, tuple[tuple[int, ...], ...]]:
+    """Host readback (outside any trace, after a lane verify and the draft that followed it) of the pass row from
+    coordinate 0: the verify's per-lane ``[a_u, t'_u, d_1'_u, argmaxes, alignment]`` and every lane's assembled next
+    verify tokens ``[t'_u, d_{u,1} .. d_{u,k}]`` (whose first two must be the verify's ``t'_u`` and ``d_1'_u``)."""
+
+    return parse_lane_pass_row(verify, ttnn.to_torch(ttnn.get_device_tensors(draft.pass_row)[0]))
+
+
+def enqueue_lane_pass_row_read(draft: Qwen38TTNNMTPLaneDraftState) -> tuple[Any, Any]:
+    """The async form of :func:`read_lane_pass_row`'s copy (device 0's shard of the pass row): a non-blocking copy into
+    a fresh host tensor, then an event on cq 0 after it.  Returns ``(host, event)``; the caller waits the event
+    (``ttnn.event_synchronize``), then ``parse_lane_pass_row(verify, ttnn.to_torch(host))``."""
+
+    shard = ttnn.get_device_tensors(draft.pass_row)[0]
+    host = ttnn.from_device(shard, blocking=False)
+    return host, ttnn.record_event(draft.pass_row.device(), cq_id=0)
 
 
 # --------------------------------------------------------------------------- the pass loop
@@ -2934,6 +3109,21 @@ class Qwen38TTNNMTPLanePassRecord:
     next_tokens: tuple[tuple[int, ...], ...]
     segments_ns: dict[str, int]
     width: int = 0  # the lane width of the trace set that ran the pass (0: a record of a chain without width sets)
+    context: int = 0  # the scored context of that set (0: the model's allocation)
+
+
+@dataclass
+class Qwen38TTNNMTPLanePending:
+    """A lane pass launched by :meth:`Qwen38TTNNMTPLaneChain.step_enqueue` and not yet landed: the width set that runs
+    it, its verify tokens, the host-mirrored start positions, the segment walls so far, and the pass row's async read
+    (``host`` and ``event``; both None when the pass reads it blocking at :meth:`~Qwen38TTNNMTPLaneChain.finish`)."""
+
+    current: Qwen38TTNNMTPLaneWidthSet
+    tokens: Any
+    positions: tuple[int, ...]
+    segments: dict[str, int]
+    host: Any = None
+    event: Any = None
 
 
 @dataclass
@@ -2941,7 +3131,9 @@ class Qwen38TTNNMTPLaneWidthSet:
     """The device side of one lane width: the lane verify / draft states the traces were captured on (the parent's own
     for the full width, a width view's for a narrower one) and the captured traces.  ``view`` is the
     :class:`Qwen38TTNNMTPLaneWidthView` container of a narrow width (None for the full width); ``output`` the verify
-    trace's output (its readback tensor)."""
+    trace's output (its readback tensor).  ``context`` is the context the set scores (0: the model's allocation); a
+    context-width set holds the base width's states with the QSA constants rebuilt at ``context``
+    (``context_view``, a :class:`Qwen38TTNNMTPLaneContextView`) and shares the base set's commit trace."""
 
     width: int
     verify: Qwen38TTNNMTPLaneVerifyState
@@ -2949,6 +3141,8 @@ class Qwen38TTNNMTPLaneWidthSet:
     traces: Qwen38TTNNMTPLaneTraces
     view: Any = None
     output: Any = None
+    context: int = 0
+    context_view: Any = None
 
 
 class Qwen38TTNNMTPLaneChain:
@@ -2975,6 +3169,7 @@ class Qwen38TTNNMTPLaneChain:
         observer: Callable[[str], Any] | None = None,
         next_tokens: Sequence[Sequence[int]] | None = None,
         width_sets: Mapping[int, Qwen38TTNNMTPLaneWidthSet] | None = None,
+        context_sets: Mapping[tuple[int, int], Qwen38TTNNMTPLaneWidthSet] | None = None,
     ) -> None:
         _validate_lane_draft_state(model, verify, draft)
         if not isinstance(traces, Qwen38TTNNMTPLaneTraces) or not callable(replay):
@@ -2992,8 +3187,24 @@ class Qwen38TTNNMTPLaneChain:
             if width_set.width != width or width_set.verify.parent is not verify or not 1 < width < verify.lanes:
                 raise ValueError(f"width set {width} is not a width view of the {verify.lanes}-lane parent")
             self.width_sets[int(width)] = width_set
+        # The context-width sets by (width, context): a narrower scored context of a width's states.  The commit trace
+        # is the width's own (the commit reads no context-bound constant), so the commit after a pass of a context set
+        # is the base set's and a context set captures no commit.
+        self.context_sets: dict[tuple[int, int], Qwen38TTNNMTPLaneWidthSet] = {}
+        for (width, context), context_set in (context_sets or {}).items():
+            base = self.width_sets.get(width)
+            if (
+                base is None
+                or context_set.width != width
+                or context_set.context != context
+                or not 0 < context < model.allocated_context
+                or context_set.traces.commit != base.traces.commit
+            ):
+                raise ValueError(f"context set ({width}, {context}) is not a context set of a width set of this chain")
+            self.context_sets[(int(width), int(context))] = context_set
         self.prev_set: Qwen38TTNNMTPLaneWidthSet = full  # the pass before the first step is an 8-lane eager pass
         self.pass_set: Qwen38TTNNMTPLaneWidthSet = full  # the set of the pass in flight
+        self.pending: Qwen38TTNNMTPLanePending | None = None  # the pass step_enqueue launched and finish has not landed
         self.held: list[int] | None = None  # lanes holding a request (None: the active lanes)
         self.records: list[Qwen38TTNNMTPLanePassRecord] = []
         self.active: list[int] = [1] * verify.lanes  # the host's copy of the device masks (:meth:`set_active`)
@@ -3013,6 +3224,10 @@ class Qwen38TTNNMTPLaneChain:
     @property
     def buckets(self) -> tuple[int, ...]:
         return tuple(sorted(self.width_sets))
+
+    @property
+    def contexts(self) -> tuple[int, ...]:
+        return tuple(sorted({context for _, context in self.context_sets}))
 
     def set_held(self, held: Sequence[int] | None) -> None:
         """The lanes that hold a request (host mask; None: the active mask).  A pass runs on a width above every held
@@ -3036,15 +3251,53 @@ class Qwen38TTNNMTPLaneChain:
             top = max(top, max((lane for lane, flag in enumerate(held) if flag), default=-1))
         return next((width for width in self.buckets if width > top), self.buckets[-1])
 
+    def _need_rows(self, width: int, active: Sequence[int], held: Sequence[int] | None) -> int | None:
+        """The rows the longest active or held lane below ``width`` needs (its position plus
+        :data:`LANE_CONTEXT_MARGIN`); None when no lane is active or held."""
+
+        positions = self.verify.positions.positions
+        needs = [
+            positions[lane] + LANE_CONTEXT_MARGIN
+            for lane in range(min(width, self.verify.lanes))
+            if active[lane] or (held is not None and held[lane])
+        ]
+        return max(needs, default=None)
+
+    def context_for(self, width: int, active: Sequence[int] | None = None, held: Sequence[int] | None = None) -> int:
+        """The smallest context of a ``(width, context)`` set that covers the longest active or held lane below
+        ``width``; 0 (the full width set) when no context set covers it or no lane is active or held."""
+
+        need = self._need_rows(width, self.active if active is None else active, self.held if held is None else held)
+        if need is None:
+            return 0
+        return next((context for context in self.contexts_of(width) if need <= context), 0)
+
+    def contexts_of(self, width: int) -> tuple[int, ...]:
+        """The contexts of the context sets of ``width``, ascending."""
+
+        return tuple(sorted(context for set_width, context in self.context_sets if set_width == width))
+
     def drop_width(self, width: int) -> Qwen38TTNNMTPLaneWidthSet:
-        """Forget a narrow width's set (the session releases its traces and view).  Refused for the full width and for
-        the width of the pass whose commit is still to come."""
+        """Forget a narrow width's set and its context sets (the session releases their traces and views).  Refused
+        for the full width and for the width of the pass whose commit is still to come."""
 
         if width == self.verify.lanes or width not in self.width_sets:
             raise ValueError(f"cannot drop width {width} of {self.buckets}")
         if self.prev_set.width == width:
             raise RuntimeError(f"width {width} holds the pending commit of the last pass")
+        for key in [key for key in self.context_sets if key[0] == width]:
+            del self.context_sets[key]
         return self.width_sets.pop(width)
+
+    def drop_context(self, width: int, context: int) -> Qwen38TTNNMTPLaneWidthSet:
+        """Forget one context set (the session releases its traces and view).  Refused for the set of the pass whose
+        commit is still to come."""
+
+        if (width, context) not in self.context_sets:
+            raise ValueError(f"no context set ({width}, {context}) of {sorted(self.context_sets)}")
+        if self.prev_set is self.context_sets[(width, context)]:
+            raise RuntimeError(f"context set ({width}, {context}) is the set of the last pass")
+        return self.context_sets.pop((width, context))
 
     def _require_room(self) -> None:
         positions = self.verify.positions.positions
@@ -3095,7 +3348,7 @@ class Qwen38TTNNMTPLaneChain:
         )
         return padded, (*(tuple(block) for block in next_tokens), *held[width:])
 
-    def _select_set(self, force_width: int | None) -> Qwen38TTNNMTPLaneWidthSet:
+    def _select_set(self, force_width: int | None, force_context: int | None = None) -> Qwen38TTNNMTPLaneWidthSet:
         width = self.width_for() if force_width is None else force_width
         if width not in self.width_sets:
             raise ValueError(f"no trace set of width {width}: buckets {self.buckets}")
@@ -3104,19 +3357,40 @@ class Qwen38TTNNMTPLaneChain:
             top = max(top, max((lane for lane, flag in enumerate(self.held) if flag), default=-1))
         if top >= width:
             raise RuntimeError(f"lane {top} is active or held, outside the width {width} of this pass")
-        return self.width_sets[width]
+        context = self.context_for(width) if force_context is None else force_context
+        if not context:
+            return self.width_sets[width]
+        if (width, context) not in self.context_sets:
+            raise ValueError(f"no context set ({width}, {context}): contexts {self.contexts_of(width)}")
+        need = self._need_rows(width, self.active, self.held)
+        if need is not None and need > context:
+            raise RuntimeError(f"a lane needs {need} rows, past the {context} rows of the context set of this pass")
+        return self.context_sets[(width, context)]
 
-    def _finish_pass(self, tokens, segments: dict[str, int]) -> Qwen38TTNNMTPLanePassRecord:
-        lanes = self.verify.lanes
-        current = self.pass_set  # the width set the pass runs on (picked by step / bootstrap)
-        width = current.width
+    def _launch_pass(self, tokens, segments: dict[str, int], *, defer_read: bool) -> Qwen38TTNNMTPLanePending:
+        current = self.pass_set  # the width set the pass runs on (picked by step_enqueue / bootstrap)
         positions = tuple(self.verify.positions.positions)
         launch, form = (self.replay, "replay") if self.enqueue is None else (self.enqueue, "enqueue")
         self._timed(segments, f"verify_{form}", lambda: launch(current.traces.verify_first))
         self._timed(segments, f"draft_{form}", lambda: launch(current.traces.draft))
-        readback, next_tokens = self._timed(
-            segments, "readback", lambda: read_lane_pass_row(current.verify, current.draft)
-        )
+        host = event = None
+        if defer_read:
+            host, event = self._timed(segments, "readback_enqueue", lambda: enqueue_lane_pass_row_read(current.draft))
+        return Qwen38TTNNMTPLanePending(current, tokens, positions, segments, host, event)
+
+    def _land_pass(self, pending: Qwen38TTNNMTPLanePending) -> Qwen38TTNNMTPLanePassRecord:
+        lanes = self.verify.lanes
+        current, tokens, segments, positions = pending.current, pending.tokens, pending.segments, pending.positions
+        width = current.width
+        if pending.event is None:
+            read = lambda: read_lane_pass_row(current.verify, current.draft)  # noqa: E731
+        else:
+
+            def read():
+                ttnn.event_synchronize(pending.event)
+                return parse_lane_pass_row(current.verify, ttnn.to_torch(pending.host))
+
+        readback, next_tokens = self._timed(segments, "readback", read)
         if width < lanes:
             readback, next_tokens = self._pad_readback(readback, next_tokens, tokens, width)
         self.next_tokens = tuple(tuple(block) for block in next_tokens)
@@ -3145,12 +3419,20 @@ class Qwen38TTNNMTPLaneChain:
             next_tokens=self.next_tokens,
             segments_ns=segments,
             width=width,
+            context=current.context,
         )
         self.records.append(record)
         return record
 
+    def _finish_pass(self, tokens, segments: dict[str, int]) -> Qwen38TTNNMTPLanePassRecord:
+        return self._land_pass(self._launch_pass(tokens, segments, defer_read=False))
+
     def bootstrap(
-        self, tokens_by_lane: Sequence[Sequence[int]], *, force_width: int | None = None
+        self,
+        tokens_by_lane: Sequence[Sequence[int]],
+        *,
+        force_width: int | None = None,
+        force_context: int | None = None,
     ) -> Qwen38TTNNMTPLanePassRecord:
         """The first traced pass after the imports: host-written ``[t_u, d_1 .. d_k]`` per lane (the caller's drafts,
         any exact ids) and the PLE rows, the verify (``catch_up=False`` form: the accept rows hold -1, nothing
@@ -3158,22 +3440,36 @@ class Qwen38TTNNMTPLaneChain:
 
         if self.records or self.next_tokens is not None:
             raise RuntimeError("the lane chain was already bootstrapped (or continues an eager pass)")
+        if self.pending is not None:
+            raise RuntimeError("a lane pass is pending: finish it before the bootstrap")
         self._require_room()
-        current = self._select_set(force_width)
+        current = self._select_set(force_width, force_context)
         segments: dict[str, int] = {}
         self._timed(segments, "host_inputs", lambda: write_lane_verify_inputs(self.model, self.verify, tokens_by_lane))
         self.pass_set = current
         return self._finish_pass(tokens_by_lane, segments)
 
-    def step(self, *, force_width: int | None = None) -> Qwen38TTNNMTPLanePassRecord:
-        """One traced pass on the tokens the previous pass assembled: commit, PLE rows, verify, draft, readback.  The
-        commit replays at the width of the PREVIOUS pass (``prev_set``), the verify and draft at this pass's width
-        (:meth:`width_for`, or ``force_width``)."""
+    def step(self, *, force_width: int | None = None, force_context: int | None = None) -> Qwen38TTNNMTPLanePassRecord:
+        """One traced pass with a blocking readback: :meth:`finish` of :meth:`step_enqueue` (the pass row is read with
+        the blocking :func:`read_lane_pass_row`, not the async copy)."""
+
+        return self.finish(self.step_enqueue(force_width=force_width, force_context=force_context, defer_read=False))
+
+    def step_enqueue(
+        self, *, force_width: int | None = None, force_context: int | None = None, defer_read: bool = True
+    ) -> Qwen38TTNNMTPLanePending:
+        """The launch half of one traced pass on the tokens the previous pass assembled: commit, PLE rows, verify, draft,
+        then (``defer_read``) the non-blocking copy of the pass row and its event.  The commit replays at the width of
+        the PREVIOUS pass (``prev_set``), the verify and draft at this pass's width (:meth:`width_for`, or
+        ``force_width``) and context (:meth:`context_for`, or ``force_context``).  The pass lands in :meth:`finish`;
+        no other pass starts before it."""
 
         if self.next_tokens is None:
             raise RuntimeError("bootstrap the lane chain first")
+        if self.pending is not None:
+            raise RuntimeError("a lane pass is pending: finish it before the next step_enqueue")
         self._require_room()
-        current = self._select_set(force_width)
+        current = self._select_set(force_width, force_context)
         segments: dict[str, int] = {}
         tokens = self.next_tokens
         commit_trace = self.prev_set.traces.commit
@@ -3204,7 +3500,19 @@ class Qwen38TTNNMTPLaneChain:
         else:
             self._timed(segments, "ple_rows", lambda: write_lane_ple_rows(self.model, self.verify, tokens))
         self.pass_set = current
-        return self._finish_pass(tokens, segments)
+        self.pending = self._launch_pass(tokens, segments, defer_read=defer_read)
+        return self.pending
+
+    def finish(self, pending: Qwen38TTNNMTPLanePending) -> Qwen38TTNNMTPLanePassRecord:
+        """The landing half of a pass :meth:`step_enqueue` launched: wait the pass row's event, parse it, commit the host
+        mirrors, record the pass."""
+
+        if pending is not self.pending:
+            raise RuntimeError("finish needs the pending pass step_enqueue returned (was it already finished?)")
+        try:
+            return self._land_pass(pending)
+        finally:
+            self.pending = None
 
 
 # --------------------------------------------------------------------------- lifecycle: the MTP lane image

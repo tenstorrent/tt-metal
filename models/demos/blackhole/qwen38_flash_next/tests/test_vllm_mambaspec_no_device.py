@@ -7,7 +7,8 @@ Pinned: off = today's behaviour (no spec, uniform allocation, no-op block hooks,
 plugin parses, the attention page of 1088 x block_size bytes, the one MambaSpec of 905,216 bytes padded to it); the block-size
 refusals; ``allocate_kv_cache_per_layer`` (the slot maps from the layer-ordered entries, the chain open exactly as
 ``allocate_kv_cache`` opens it); the zero / copy hooks (every QSA layer's pools, pairs in list order split into runs the op
-takes, block 0 refused); the capabilities; ``start_pos > 0`` without the state on the chain.
+takes, padding pairs skipped, block 0 refused); the capabilities (the MTP class's follow the env); ``start_pos > 0`` without the
+state on the chain.
 The vLLM spec classes are replaced by fakes with the page-size rules of vLLM 0.30.
 """
 
@@ -63,6 +64,8 @@ class FakeMambaSpec:
     mamba_type: Any = None
     mamba_cache_mode: str = "none"
     num_speculative_blocks: int = 0
+    num_prefill_checkpoint_blocks: int = 0
+    prefill_checkpoint_alignment: int | None = None
 
     @property
     def page_size_bytes(self) -> int:
@@ -194,9 +197,14 @@ def test_off_refuses_non_uniform_per_layer_specs(monkeypatch, expect_error) -> N
         )
 
 
-def test_mtp_keeps_mamba_spec_off(on, fake_vllm) -> None:
+def test_mtp_follows_the_mamba_spec_env(monkeypatch, fake_vllm) -> None:
+    monkeypatch.delenv("QWEN38_MAMBA_SPEC", raising=False)
     assert Qwen38MTPForCausalLM.get_kv_cache_spec(_config()) is None
     assert Qwen38MTPForCausalLM.model_capabilities["supports_prefix_caching"] is False
+    monkeypatch.setenv("QWEN38_MAMBA_SPEC", "1")
+    specs = Qwen38MTPForCausalLM.get_kv_cache_spec(_config())
+    assert specs is not None and len(specs) == 48
+    assert Qwen38MTPForCausalLM.model_capabilities["supports_prefix_caching"] is True
 
 
 # -- the spec dict -----------------------------------------------------------------------------------------------------
@@ -220,12 +228,20 @@ def test_the_spec_dict(on, fake_vllm) -> None:
             assert 226304 * 4 == MAMBA_STATE_BYTES == 905_216
             assert spec.page_size_bytes == attention_page and spec.block_size == BLOCK
             assert spec.mamba_cache_mode == "align" and spec.num_speculative_blocks == 0 and spec.mamba_type == "gdn"
+            assert spec.num_prefill_checkpoint_blocks == 1 and spec.prefill_checkpoint_alignment == BLOCK
     assert len({id(spec) for spec in specs.values() if isinstance(spec, FakeMambaSpec)}) == 1
 
 
 def test_the_page_follows_a_larger_block(on, fake_vllm) -> None:
     specs = Qwen38ForCausalLM.get_kv_cache_spec(_config(2048))
     assert {spec.page_size_bytes for spec in specs.values()} == {1088 * 2048}
+    assert {spec.prefill_checkpoint_alignment for spec in specs.values() if isinstance(spec, FakeMambaSpec)} == {2048}
+
+
+def test_a_subclass_sets_the_speculative_blocks(on, fake_vllm, monkeypatch) -> None:
+    monkeypatch.setattr(Qwen38ForCausalLM, "_mamba_speculative_blocks", 3)
+    specs = Qwen38ForCausalLM.get_kv_cache_spec(_config())
+    assert {spec.num_speculative_blocks for spec in specs.values() if isinstance(spec, FakeMambaSpec)} == {3}
 
 
 @pytest.mark.parametrize("block_size", (128, 512))
@@ -304,6 +320,18 @@ def test_allocate_refusals(on, expect_error) -> None:
 # -- the open's warm hook ----------------------------------------------------------------------------------------------
 
 
+class FakePosition:
+    def __init__(self, value: int) -> None:
+        self.value = value
+
+    def read(self) -> int:
+        return self.value
+
+    def reset(self, position: int, rope_shift: int) -> None:
+        assert rope_shift == 0
+        self.value = position
+
+
 class WarmModel:
     def __init__(self, calls: list) -> None:
         self.calls = calls
@@ -313,11 +341,12 @@ class WarmModel:
 
     def restore_boundary_state(self, state, layer_blocks, *, block_size, position):
         self.calls.append(("restore", state, dict(layer_blocks), block_size, position))
+        state.position.reset(position, 0)  # the real restore ends the same way
 
 
-def _warm_chain(calls: list) -> FakeChain:
+def _warm_chain(calls: list, warm_position: int = 8) -> FakeChain:
     chain = FakeChain()
-    chain.state, chain.mesh = "state", "mesh"
+    chain.state, chain.mesh = SimpleNamespace(position=FakePosition(warm_position)), "mesh"
     chain.built_target = SimpleNamespace(model=WarmModel(calls))
     return chain
 
@@ -331,12 +360,21 @@ def test_the_warm_hook_compiles_every_block_program_once(on, pool_calls, monkeyp
     hook(chain)
     hook(chain)
     gdn = {layer: (f"kv{4 * (layer // 4) + 3}", 1) for layer in range(48) if layer % 4 != 3}
-    assert pool_calls[:2] == [("save", "state", gdn, BLOCK, 0), ("restore", "state", gdn, BLOCK, 0)]
+    assert pool_calls[:2] == [("save", chain.state, gdn, BLOCK, 0), ("restore", chain.state, gdn, BLOCK, 0)]
     rest = pool_calls[2:]
     assert rest[-1] == ("sync", "mesh") and len(rest) == 2 * 12 + 1
     for i, layer in enumerate(range(3, 48, 4)):
         assert rest[2 * i] == ("zero", f"kv{layer}", f"index{layer}", [1], BLOCK)
         assert rest[2 * i + 1] == ("copy", f"kv{layer}", f"index{layer}", [(1, 2)], BLOCK)
+
+
+def test_the_warm_hook_leaves_the_device_position_as_it_found_it(on, pool_calls, monkeypatch) -> None:
+    monkeypatch.setattr(vllm_module.ttnn, "synchronize_device", lambda mesh: None)
+    model, _, opened = _model()
+    model.allocate_kv_cache_per_layer(_entries())
+    chain = _warm_chain(pool_calls, warm_position=8)
+    opened[0][0](chain)
+    assert chain.state.position.read() == 8
 
 
 def test_the_warm_hook_is_absent_when_off(pool_calls) -> None:
@@ -374,6 +412,23 @@ def test_copy_hook_copies_in_every_pool_and_splits_overlapping_pairs(on, pool_ca
     assert pool_calls == [
         ("copy", f"kv{layer}", f"index{layer}", run, BLOCK) for run in runs for layer in range(3, 48, 4)
     ]
+
+
+def test_copy_hook_skips_padding_pairs_before_validation(on, pool_calls) -> None:
+    model, chain, _ = _open_model()
+    model.copy_kv_cache_blocks(kv_cache=None, copies=[(0, 0), (3, 3), (1, 2), (0, 0)])
+    assert pool_calls == [("copy", f"kv{layer}", f"index{layer}", [(1, 2)], BLOCK) for layer in range(3, 48, 4)]
+    pool_calls.clear()
+    model.copy_kv_cache_blocks(kv_cache=None, copies=[(0, 0), (NUM_BLOCKS + 5, NUM_BLOCKS + 5)])
+    assert pool_calls == []
+
+
+def test_copy_hook_still_refuses_another_pair_with_block_zero(on, pool_calls, expect_error) -> None:
+    model, _, _ = _open_model()
+    for pair in ((0, 2), (2, 0)):
+        with expect_error(ValueError, "null block"):
+            model.copy_kv_cache_blocks(kv_cache=None, copies=[(0, 0), pair])
+    assert pool_calls == []
 
 
 def test_split_block_copies() -> None:
@@ -449,17 +504,57 @@ def _state_model():
     return model, chain
 
 
-def _state_ids(base_id: int = 3, rows: int = 1):
-    """The plugin's state_block_ids_per_layer: one shared tensor per group, None for the attention layers.  Group g's
-    GDN layer 4j+g of one slot gets block ``base_id + g`` (rows count up)."""
-
-    tables = [torch.tensor([[base_id + g + 4 * row] for row in range(rows)], dtype=torch.int32) for g in range(3)]
-    return [None if layer % 4 == 3 else tables[layer % 4] for layer in range(48)]
+def _group_of_stride(layer: int) -> int:
+    return layer % 4  # group g holds GDN layers 4j+g
 
 
-def _expected_blocks(chain, base_id: int = 3, row: int = 0):
+def _group_of_run(layer: int) -> int:
+    return (layer - layer // 4) // 12  # vLLM's grouping: runs of 12 GDN layers in layer order
+
+
+def _mamba_state(
+    base_id: int = 3,
+    rows: int = 1,
+    group_of=_group_of_stride,
+    checkpoints: list[list[tuple[int, int]]] | None = None,
+    names=None,
+):
+    """The plugin's ``mamba_state`` for K = 0: three Mamba groups of 12 GDN layers (``layers.<i>.linear_attn`` names) whose
+    windows column 0 of row r is ``base_id + g + 4 r``.  ``checkpoints[r]``: row r's ``[(n, block base)]``; the group-g
+    checkpoint block is ``base + g``; ``None``: no checkpoint fields (``checkpoint_positions`` None)."""
+
+    layers = [[layer for layer in range(48) if layer % 4 != 3 and group_of(layer) == g] for g in range(3)]
+    width = 1 if checkpoints is None else max(1, *(len(row) for row in checkpoints))
+    groups = []
+    for g in range(3):
+        blocks = None
+        if checkpoints is not None:
+            blocks = torch.zeros(rows, width, dtype=torch.int32)
+            for r, row in enumerate(checkpoints):
+                for j, (_, base) in enumerate(row):
+                    blocks[r, j] = base + g
+        groups.append(
+            SimpleNamespace(
+                layer_names=tuple(
+                    names(layer) if names else f"model.layers.{layer}.linear_attn" for layer in layers[g]
+                ),
+                windows=torch.tensor([[base_id + g + 4 * row] for row in range(rows)], dtype=torch.int32),
+                checkpoint_blocks=blocks,
+                chain=None,
+            )
+        )
+    positions = None
+    if checkpoints is not None:
+        positions = torch.zeros(rows, width, dtype=torch.int32)
+        for r, row in enumerate(checkpoints):
+            for j, (n, _) in enumerate(row):
+                positions[r, j] = n
+    return SimpleNamespace(groups=tuple(groups), accepted_counts=None, checkpoint_positions=positions)
+
+
+def _expected_blocks(chain, base_id: int = 3, row: int = 0, group_of=_group_of_stride):
     return {
-        layer: (chain.pools[4 * (layer // 4) + 3].kv, base_id + layer % 4 + 4 * row)
+        layer: (chain.pools[4 * (layer // 4) + 3].kv, base_id + group_of(layer) + 4 * row)
         for layer in range(48)
         if layer % 4 != 3
     }
@@ -471,20 +566,74 @@ def _ids(length: int) -> list[int]:
 
 def test_mamba_layer_blocks_maps_layers_to_their_slots_pools(on) -> None:
     model, chain = _state_model()
-    assert model._mamba_layer_blocks(_state_ids(rows=2), 1) == _expected_blocks(chain, row=1)
+    assert model._mamba_layer_blocks(_mamba_state(rows=2), 1) == _expected_blocks(chain, row=1)
+
+
+def test_the_layer_names_group_three_runs_of_twelve_gdn_layers(on) -> None:
+    model, chain = _state_model()
+    state = _mamba_state(group_of=_group_of_run)
+    assert [len(group.layer_names) for group in state.groups] == [12, 12, 12]
+    assert state.groups[0].layer_names[:4] == (
+        "model.layers.0.linear_attn",
+        "model.layers.1.linear_attn",
+        "model.layers.2.linear_attn",
+        "model.layers.4.linear_attn",
+    )
+    assert model._mamba_layer_blocks(state, 0) == _expected_blocks(chain, group_of=_group_of_run)
+    assert [layers for _, layers in model._mamba_group_layers(state)][2][-1] == 46
+
+
+def test_bare_layer_names_group_too(on) -> None:
+    model, chain = _state_model()
+    state = _mamba_state(names=lambda layer: f"layers.{layer}")
+    assert model._mamba_layer_blocks(state, 0) == _expected_blocks(chain)
+
+
+def _grouping_error(model, mutate) -> str:
+    state = _mamba_state()
+    groups = [list(group.layer_names) for group in state.groups]
+    mutate(groups)
+    for group, names in zip(state.groups, groups):
+        group.layer_names = tuple(names)
+    try:
+        model._mamba_layer_blocks(state, 0)
+    except ValueError as error:
+        return str(error)
+    raise AssertionError("the malformed grouping was not refused")
+
+
+def test_a_malformed_grouping_is_refused(on, expect_error) -> None:
+    model, _ = _state_model()
+    assert "no Mamba group" in _grouping_error(model, lambda groups: groups[2].pop())
+    assert "is in groups 0 and 1" in _grouping_error(model, lambda groups: groups[1].append(groups[0][0]))
+    assert "not a GDN layer" in _grouping_error(model, lambda groups: groups[0].append("model.layers.3.self_attn"))
+    assert "no 'layers.<index>' part" in _grouping_error(model, lambda groups: groups[0].append("lm_head"))
+    assert "not a GDN layer" in _grouping_error(model, lambda groups: groups[0].append("model.layers.48.linear_attn"))
+    model_before_allocation, _, _ = _model()
+    with expect_error(ValueError, "slot maps are missing"):
+        model_before_allocation._mamba_layer_blocks(_mamba_state(), 0)
 
 
 def test_mamba_layer_blocks_validation(on, expect_error) -> None:
     model, _ = _state_model()
-    with expect_error(ValueError, "missing"):
+    with expect_error(ValueError, "mamba_state is missing"):
         model._mamba_layer_blocks(None, 0)
     for block, message in ((0, "null block"), (NUM_BLOCKS, "outside")):
-        ids = _state_ids()
-        ids[0] = torch.tensor([[block]], dtype=torch.int32)
+        state = _mamba_state()
+        state.groups[0].windows[0, 0] = block
         with expect_error(ValueError, message):
-            model._mamba_layer_blocks(ids, 0)
+            model._mamba_layer_blocks(state, 0)
     with expect_error(ValueError, "no row 1"):
-        model._mamba_layer_blocks(_state_ids(), 1)
+        model._mamba_layer_blocks(_mamba_state(), 1)
+
+
+def test_the_group_check_runs_once_per_grouping(on) -> None:
+    model, _ = _state_model()
+    model._mamba_layer_blocks(_mamba_state(), 0)
+    model._mamba_layer_blocks(_mamba_state(base_id=5), 0)
+    assert len(model._mamba_group_cache) == 1
+    model._mamba_layer_blocks(_mamba_state(group_of=_group_of_run), 0)
+    assert len(model._mamba_group_cache) == 2
 
 
 def test_a_start_of_zero_resets_and_never_restores(on) -> None:
@@ -582,11 +731,117 @@ def test_prefill_forward_passes_the_rows_blocks(on) -> None:
         start_pos=[1024],
         empty_slots=[0],
         sampling_params=None,
-        state_block_ids_per_layer=_state_ids(base_id=7),
+        mamba_state=_mamba_state(base_id=7),
     )
     blocks = _expected_blocks(chain, base_id=7)
     assert chain.restores[0][:1] + chain.restores[0][2:] == (1024, blocks, BLOCK)
     assert chain.saves == [(2048, blocks, BLOCK)]
+
+
+def _prefill_rows(model, ids, start, state):
+    return model.prefill_forward(
+        tokens=torch.tensor([ids], dtype=torch.int32),
+        page_table=torch.tensor(
+            [[5, 6, 7, 8] + [0] * (paged_table_width(ALLOCATED_CONTEXT, BLOCK) - 4)], dtype=torch.int32
+        ),
+        kv_cache=None,
+        enable_trace=True,
+        prompt_lens=[len(ids)],
+        start_pos=[start],
+        empty_slots=[0],
+        mamba_state=state,
+    )
+
+
+def test_prefill_forward_without_mamba_state_is_refused_when_a_block_is_needed(on, expect_error) -> None:
+    model, chain = _state_model()
+    with expect_error(ValueError, "mamba_state is missing"):
+        _prefill_rows(model, _ids(2048), 0, None)
+    assert chain.log == []
+
+
+def test_a_start_of_zero_never_reads_a_block(on) -> None:
+    model, chain = _state_model()
+    state = _mamba_state()
+    for group in state.groups:  # a block that would fail every check if the prefill read it
+        group.windows[0, 0] = 0
+    _prefill_rows(model, _ids(1500), 0, state)
+    assert chain.restores == [] and chain.saves == []
+
+
+def test_a_checkpoint_splits_the_chunk_in_order(on) -> None:
+    model, chain = _state_model()
+    ids = _ids(3072)
+    _prefill_rows(model, ids, 1024, _mamba_state(base_id=7, checkpoints=[[(2048, 9)]]))
+    window, checkpoint = _expected_blocks(chain, base_id=7), _expected_blocks(chain, base_id=9)
+    order = [e for e in chain.log if e.startswith(("restore", "chunk_prefill", "save", "feed"))]
+    # restore, chunk to n - 1, the forced token n - 1, save the checkpoint, chunk to E - 1, its forced token, save at E
+    assert order == [
+        "restore:1024",
+        "chunk_prefill:1023@1024",
+        f"feed:{ids[2047]}",
+        "save:2048",
+        "chunk_prefill:1023@2048",
+        f"feed:{ids[3071]}",
+        "save:3072",
+    ]
+    assert chain.saves == [(2048, checkpoint, BLOCK), (3072, window, BLOCK)]
+    assert [(r[0], r[2]) for r in chain.restores] == [(1024, window)]
+    assert len(model.slot.committed) == 3072 and not model.slot.failed
+
+
+def test_a_checkpoint_in_an_unaligned_chunk_saves_only_the_checkpoint(on) -> None:
+    model, chain = _state_model()
+    ids = _ids(2500)
+    _prefill_rows(model, ids, 0, _mamba_state(base_id=7, checkpoints=[[(2048, 9)]]))
+    assert chain.restores == []
+    assert chain.saves == [(2048, _expected_blocks(chain, base_id=9), BLOCK)]
+    assert chain.chunks[-1] == (tuple(ids[2048:2499]), 2048)
+    assert len(model.slot.committed) == 2500
+
+
+def test_a_start_of_zero_with_a_checkpoint_never_reads_the_window(on) -> None:
+    model, chain = _state_model()
+    state = _mamba_state(base_id=7, checkpoints=[[(1024, 9)]])
+    for group in state.groups:
+        group.windows[0, 0] = 0
+    _prefill_rows(model, _ids(1500), 0, state)
+    assert chain.restores == [] and chain.saves == [(1024, _expected_blocks(chain, base_id=9), BLOCK)]
+    assert chain.log[0] == f"reset:{base_tests.SEED_TOKEN_ID}"
+
+
+def test_two_checkpoints_save_in_position_order(on) -> None:
+    model, chain = _state_model()
+    _prefill_rows(model, _ids(3500), 0, _mamba_state(base_id=7, checkpoints=[[(2048, 9), (1024, 4)]]))
+    assert [save[0] for save in chain.saves] == [1024, 2048]
+    assert chain.saves[0][1] == _expected_blocks(chain, base_id=4)
+
+
+def test_unused_checkpoint_entries_are_ignored(on) -> None:
+    model, chain = _state_model()
+    _prefill_rows(model, _ids(1500), 0, _mamba_state(base_id=7, checkpoints=[[(0, 0)]]))
+    assert chain.saves == []
+
+
+@pytest.mark.parametrize("position, start, length", [(1500, 0, 3000), (1024, 1024, 3000), (3072, 0, 3072)])
+def test_a_misplaced_checkpoint_is_refused(position, start, length, on, expect_error) -> None:
+    model, chain = _state_model()
+    with expect_error(ValueError, "block boundary"):
+        _prefill_rows(model, _ids(length), start, _mamba_state(base_id=7, checkpoints=[[(position, 9)]]))
+    assert chain.log == []
+
+
+def test_a_checkpoint_without_blocks_is_refused(on, expect_error) -> None:
+    model, chain = _state_model()
+    state = _mamba_state(base_id=7, checkpoints=[[(1024, 9)]])
+    state.groups[1].checkpoint_blocks = None
+    with expect_error(ValueError, "without checkpoint blocks"):
+        _prefill_rows(model, _ids(1500), 0, state)
+    state = _mamba_state(base_id=7, checkpoints=[[(1024, 0)]])
+    state.groups[0].checkpoint_blocks[0, 0] = 0
+    with expect_error(ValueError, "null block"):
+        _prefill_rows(model, _ids(1500), 0, state)
+    assert chain.log == []
 
 
 # -- prefill: batch mode ----------------------------------------------------------------------------------------------
@@ -613,13 +868,19 @@ def batch_rig(monkeypatch, on):
 def test_a_batch_rows_second_chunk_restores_instead_of_raising(batch_rig) -> None:
     rig, chain = batch_rig, batch_rig.chain
     ids = _ids(2048)
-    rig.prefill([ids[:1024]], [2], [[5]], state_block_ids_per_layer=_state_ids(base_id=7))
+    rig.prefill([ids[:1024]], [2], [[5]], mamba_state=_mamba_state(base_id=7))
     assert chain.saves == [(1024, _expected_blocks(chain, base_id=7), BLOCK)] and chain.restores == []
-    rig.prefill([ids], [2], [[5, 6]], start_pos=torch.tensor([1024]), state_block_ids_per_layer=_state_ids(base_id=9))
+    rig.prefill([ids], [2], [[5, 6]], start_pos=torch.tensor([1024]), mamba_state=_mamba_state(base_id=9))
     blocks = _expected_blocks(chain, base_id=9)
     assert [(r[0], r[2], r[3]) for r in chain.restores] == [(1024, blocks, BLOCK)]
     assert chain.saves[-1] == (2048, blocks, BLOCK)
     assert chain.chunks[-1][1] == 1024
+
+
+def test_a_batch_row_saves_its_checkpoint_before_the_import(batch_rig) -> None:
+    rig, chain = batch_rig, batch_rig.chain
+    rig.prefill([_ids(2500)], [2], [[5, 6, 7]], mamba_state=_mamba_state(base_id=7, checkpoints=[[(2048, 9)]]))
+    assert chain.saves == [(2048, _expected_blocks(chain, base_id=9), BLOCK)]
 
 
 def test_a_batch_prefill_at_zero_with_an_unaligned_end_needs_no_blocks(batch_rig) -> None:
@@ -637,7 +898,7 @@ def test_a_hybrid_chain_continuation_does_not_restore(batch_rig) -> None:
         [0],
         [[5]],
         sampling_params=vllm_module.greedy_batch_sampling_params(1),
-        state_block_ids_per_layer=_state_ids(),
+        mamba_state=_mamba_state(),
     )
     assert rig.model.hybrid_slot == 0
     rig.prefill(
@@ -646,7 +907,7 @@ def test_a_hybrid_chain_continuation_does_not_restore(batch_rig) -> None:
         [[5, 6]],
         start_pos=torch.tensor([1024]),
         sampling_params=vllm_module.greedy_batch_sampling_params(1),
-        state_block_ids_per_layer=_state_ids(),
+        mamba_state=_mamba_state(),
     )
     assert chain.restores == []
 

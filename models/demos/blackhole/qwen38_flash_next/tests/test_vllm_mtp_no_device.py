@@ -20,6 +20,7 @@ from types import SimpleNamespace
 
 import pytest
 import torch
+from vllm_tt_plugin.spec_accept import AcceptResult
 
 from models.demos.blackhole.qwen38_flash_next.chat import TOKENIZER_SIZE, VOCAB_SIZE
 from models.demos.blackhole.qwen38_flash_next.tests import test_mtp_sampled_session_no_device as fakes
@@ -454,6 +455,9 @@ def test_capabilities_declare_the_contract_and_the_plain_class_does_not(monkeypa
     assert caps["supports_async_decode"] is False and caps["supports_async_spec_decode"] is False
     assert caps["supports_sample_on_device"] is False and caps["output_tokens_per_step"] == 1
     assert caps["supports_chunked_prefill"] is False and caps["supports_prefix_caching"] is False
+    assert not caps.get("accepts_intermediate_prefill_mask")
+    monkeypatch.setenv("QWEN38_VLLM_CHUNKED_PREFILL", "1")  # the plain class's opt-in does not apply to the MTP class
+    assert Qwen38MTPForCausalLM.model_capabilities["supports_chunked_prefill"] is False
     plain = Qwen38ForCausalLM.model_capabilities
     assert "supports_spec_decode" not in plain and "spec_requirements" not in plain
     assert plain["supports_sample_on_device"] is True
@@ -778,6 +782,8 @@ class FakeLanes(lane_fakes.FakeLanesDevice):
     def __init__(self, lanes: int):
         super().__init__(lanes)
         self.rows_log: list[list[int]] = []
+        self.enqueued: list[bool] = []
+        self.pending_record = None
 
     def admit(self, lane, ticket, between=None):
         self.calls.append(("admit", lane))
@@ -830,6 +836,19 @@ class FakeLanes(lane_fakes.FakeLanesDevice):
                 committed.append(())
             next_blocks.append(list(self.blocks[lane]) if self.blocks[lane] is not None else [0] * LROWS)
         return LaneRecord(positions, tokens, accepted, committed, argmaxes, next_blocks)
+
+    def step_enqueue(self, defer_read=True):
+        """The launch half: the fake runs the whole pass here (its effects are the device's), the record lands in finish."""
+
+        self.enqueued.append(defer_read)
+        assert self.pending_record is None, "a second pass was enqueued before the pending one landed"
+        self.pending_record = self.step()
+        return SimpleNamespace(record=self.pending_record)
+
+    def finish(self, pending):
+        assert pending.record is self.pending_record
+        self.pending_record = None
+        return pending.record
 
     def room(self, position):
         return (position & ~31) + 64 <= 8192
@@ -1114,6 +1133,22 @@ def test_a_live_lane_without_a_live_row_is_refused_by_name(monkeypatch, expect_e
     with expect_error(Qwen38ChatChainError, "hold requests but no live row"):
         runner.step()
     assert model.batch_failed
+
+
+def test_chain_mode_holds_a_lane_whose_row_is_missing_and_resumes_it(monkeypatch):
+    # async scheduling builds a step before the last one is applied: a lane's request may be missing from one step
+    model, device = _lanes_model(monkeypatch, 3)
+    model.lane_driver.hold_orphans = True
+    runner = LaneRunner(model, 3)
+    a = runner.join(0, [1, 2, 3], 20)
+    b = runner.join(1, [4, 5, 6], 20)
+    runner.step()
+    b.done = True  # b is left out of one step
+    runner.step()
+    assert not model.batch_failed
+    b.done = False  # and comes back
+    runner.run()
+    assert a.committed == _lane_stream(a.prompt, 20) and b.committed == _lane_stream(b.prompt, 20)
 
 
 def test_lane_prefill_and_decode_refusals(monkeypatch, expect_error):
@@ -1860,3 +1895,333 @@ def test_unpaged_lanes_make_no_page_calls(monkeypatch):
     _run_hybrid_steps(model, 3, 0, _prompt(6), 2)
     model.release_request(0)
     assert not hasattr(device, "set_lane_pages")
+
+
+# -- QWEN38_MTP_CHAIN: the plugin's chain mode over the lanes (fused_sample, deferred reads, chained rows) --------------------
+
+
+def _chain_model(monkeypatch, lanes: int = 4, hybrid: bool = False):
+    monkeypatch.setenv("QWEN38_MTP_CHAIN", "1")
+    if hybrid:
+        return _hybrid_model(monkeypatch, lanes, flag="1")
+    model, device = _lanes_model(monkeypatch, lanes)
+    return model, device
+
+
+def _fused_rows(model, lanes, rows, *, chained=False, remap=None, extra_position=0):
+    """The plugin's tensors for a verify of ``rows`` (``{row: (token, drafts, position, accepted)}``).  ``chained``: the rows
+    the plugin chained (placeholders in every column, accepted -1, a provisional position ``extra_position`` above)."""
+
+    tokens = torch.full((lanes, LROWS), PLACEHOLDER, dtype=torch.int32)
+    positions = torch.full((lanes, LROWS), -1, dtype=torch.int32)
+    valid = torch.zeros(lanes, dtype=torch.int32)
+    counts = torch.ones(lanes, dtype=torch.int32)
+    for row, (token, drafts, position, accepted) in rows.items():
+        n = len(drafts)
+        valid[row] = n
+        if chained:
+            counts[row] = -1
+            positions[row] = torch.tensor(
+                [position + extra_position + c if c <= n else -1 for c in range(LROWS)], dtype=torch.int32
+            )
+            continue
+        tokens[row, 0] = token
+        tokens[row, 1 : 1 + n] = torch.tensor(drafts, dtype=torch.int32)
+        counts[row] = accepted
+        positions[row] = torch.tensor([position + c if c <= n else -1 for c in range(LROWS)], dtype=torch.int32)
+    return {
+        "tokens": tokens,
+        "start_pos": positions,
+        "spec_mode": "fused_sample",
+        "num_valid_drafts": valid,
+        "accepted_counts": counts,
+        "slot_remap": None if remap is None else torch.tensor(remap, dtype=torch.int32),
+        "page_table": None,
+    }
+
+
+def _join_all(model, lanes, prompts):
+    runner = LaneRunner(model, lanes)
+    return runner, [runner.join(slot, prompt, 50) for slot, prompt in enumerate(prompts)]
+
+
+def _first_rows(requests):
+    return {r.slot: (r.committed[-1], [], r.position, 1) for r in requests}
+
+
+def test_chain_off_capabilities_and_plan_are_unchanged(monkeypatch, expect_error):
+    monkeypatch.delenv("QWEN38_MTP_CHAIN", raising=False)
+    capabilities = Qwen38MTPForCausalLM.model_capabilities
+    assert capabilities["supports_async_decode"] is False and capabilities["supports_async_spec_decode"] is False
+    monkeypatch.setenv("QWEN38_VLLM_MTP_K", "3")
+    assert Qwen38MTPForCausalLM.spec_plan(_config(), 4, 3).accept_modes == ("argmax_ids",)
+    monkeypatch.setenv("QWEN38_MTP_CHAIN", "0")
+    assert Qwen38MTPForCausalLM.model_capabilities["supports_async_spec_decode"] is False
+    model, device = _lanes_model(monkeypatch, 2)
+    with expect_error(ValueError, "answers spec_mode 'argmax_ids'"):
+        model.decode_forward(**_fused_rows(model, 2, {0: (1, [], 5, 1)}))
+    monkeypatch.setenv("QWEN38_MTP_CHAIN", "yes")
+    with expect_error(ValueError, "QWEN38_MTP_CHAIN"):
+        Qwen38MTPForCausalLM.model_capabilities
+
+
+def test_chain_on_declares_the_async_capabilities_and_the_fused_mode(monkeypatch):
+    monkeypatch.setenv("QWEN38_MTP_CHAIN", "1")
+    monkeypatch.setenv("QWEN38_VLLM_MTP_K", "3")
+    capabilities = Qwen38MTPForCausalLM.model_capabilities
+    assert capabilities["supports_async_decode"] is True and capabilities["supports_async_spec_decode"] is True
+    plan = Qwen38MTPForCausalLM.spec_plan(_config(), 4, 3)
+    assert plan.accept_modes == ("argmax_ids", "fused_sample")
+    assert Qwen38MTPForCausalLM.spec_plan(_config(), 1, 3).accept_modes == ("argmax_ids",)  # batch 1 is not chained
+
+
+def test_fused_step_returns_ids_counts_and_the_rows_in_plugin_order(monkeypatch):
+    lanes = 4
+    prompts = [_prompt(5, 100), _prompt(6, 300), _prompt(7, 500)]
+    reference, _ = _lanes_model(monkeypatch, lanes)
+    _, ref_requests = _join_all(reference, lanes, prompts)
+    reference_out = reference.decode_forward(
+        **{**_fused_rows(reference, lanes, _first_rows(ref_requests)), "spec_mode": "argmax_ids"}
+    )
+    model, device = _chain_model(monkeypatch, lanes)
+    _, requests = _join_all(model, lanes, prompts)
+    out = model.decode_forward(**_fused_rows(model, lanes, _first_rows(requests)))
+    assert out.spec_mode == "fused_sample" and out.handle is None and out.argmax_ids is None
+    assert out.accepted_token_ids.dtype == torch.int32 and out.accepted_counts.dtype == torch.int32
+    AcceptResult(out.accepted_token_ids, out.accepted_counts)  # the plugin's own walk check
+    for row in range(lanes):
+        if row >= len(prompts):  # the padding row
+            # a real column-0 id: the plugin's AcceptResult refuses a placeholder in any committed prefix
+            assert out.accepted_token_ids[row].tolist() == [0] + [PLACEHOLDER] * (LROWS - 1)
+            assert int(out.accepted_counts[row]) == 1
+            continue
+        lane = model.lane_of_slot[row]
+        run = model.lane_driver.runs[lane]
+        count = int(out.accepted_counts[row])
+        assert count == run.accepted + 1
+        assert out.accepted_token_ids[row, :count].tolist() == list(run.argmaxes[:count])
+        assert out.accepted_token_ids[row, :count].tolist() == reference_out.argmax_ids[row, :count].tolist()
+        assert out.accepted_token_ids[row, count:].tolist() == [PLACEHOLDER] * (LROWS - count)
+    assert device.enqueued == [False]  # no handle: the pass row is read blocking
+
+
+def test_fused_readout_follows_the_plugin_rows_under_slot_remap(monkeypatch):
+    lanes = 4
+    prompts = [_prompt(5, 100), _prompt(6, 300), _prompt(7, 500)]
+    model, device = _chain_model(monkeypatch, lanes)
+    _, requests = _join_all(model, lanes, prompts)
+    remap = [1, 0, 2, 3]  # row 0 reads the state of slot 1, row 1 the state of slot 0
+    lane_before = list(model.lane_of_slot)
+    rows = {
+        row: (requests[remap[row]].committed[-1], [], requests[remap[row]].position, 1) for row in range(len(prompts))
+    }
+    out = model.decode_forward(**{**_fused_rows(model, lanes, rows, remap=remap), "defer_read": True})
+    assert out.handle is not None and out.accepted_token_ids is None and out.accepted_counts is None
+    readout = model.read_decode_output(out.handle)
+    assert isinstance(readout, spec_decode.FusedReadout)
+    for row in range(len(prompts)):
+        run = model.lane_driver.runs[lane_before[remap[row]]]
+        count = int(readout.accepted_counts[row])
+        assert count == run.accepted + 1 and readout.accepted_token_ids[row, :count].tolist() == list(
+            run.argmaxes[:count]
+        )
+        assert readout.accepted_token_ids[row, count:].tolist() == [PLACEHOLDER] * (LROWS - count)
+        assert int(readout.p0[row]) == run.position == requests[remap[row]].position
+    padding = len(prompts)
+    assert readout.accepted_token_ids[padding].tolist() == [0] + [PLACEHOLDER] * (LROWS - 1)
+    assert int(readout.accepted_counts[padding]) == 1 and int(readout.p0[padding]) == -1
+    assert readout.accepted_counts.dtype == readout.p0.dtype == torch.int32
+    AcceptResult(readout.accepted_token_ids, readout.accepted_counts)  # the plugin's own walk check
+
+
+def test_deferred_step_is_not_landed_until_waited_and_finish_is_idempotent(monkeypatch):
+    model, device = _chain_model(monkeypatch, 4)
+    _, requests = _join_all(model, 4, [_prompt(5, 100), _prompt(6, 300)])
+    out = model.decode_forward(**{**_fused_rows(model, 4, _first_rows(requests)), "defer_read": True})
+    handle = out.handle
+    assert handle.tip_id == 1 and device.enqueued == [True] and device.pending_record is not None
+    assert not handle.finished and model.lane_driver.passes == 0
+    first = model.read_decode_output(handle)
+    assert handle.finished and device.pending_record is None and model.lane_driver.passes == 1
+    assert model.read_decode_output(handle) is first and handle.wait() is first
+    model._finish_pending()
+    assert model.lane_driver.passes == 1
+    other = torch.zeros(2, 1)
+    assert model.read_decode_output(other, async_read=True) == (other, [])  # not a handle: the parent's read
+
+
+def test_two_threads_waiting_the_same_handle_parse_once(expect_error):
+    import threading
+
+    parsed, release = [], threading.Event()
+
+    def finish():
+        parsed.append(threading.get_ident())
+        release.wait(5)
+        return object()
+
+    handle = mtp_module.Qwen38MTPFusedHandle(7, finish)
+    results = []
+    threads = [threading.Thread(target=lambda: results.append(handle.wait())) for _ in range(2)]
+    for thread in threads:
+        thread.start()
+    while not parsed:
+        pass
+    release.set()
+    for thread in threads:
+        thread.join(5)
+    assert len(parsed) == 1 and len(results) == 2 and results[0] is results[1]
+    failing = mtp_module.Qwen38MTPFusedHandle(8, lambda: (_ for _ in ()).throw(RuntimeError("readback broke")))
+    for _ in range(2):  # the error is kept and raised again, the landing does not run twice
+        with expect_error(RuntimeError, "readback broke"):
+            failing.wait()
+
+
+def test_chained_rows_take_tokens_and_position_from_the_lane_and_ignore_the_placeholders(monkeypatch, expect_error):
+    lanes = 4
+    model, device = _chain_model(monkeypatch, lanes)
+    _, requests = _join_all(model, lanes, [_prompt(5, 100), _prompt(6, 300)])
+    out1 = model.decode_forward(**{**_fused_rows(model, lanes, _first_rows(requests)), "defer_read": True})
+    # the plugin has not read step 1: it chains step 2 on provisional positions (an upper bound of the real ones)
+    chained = {r.slot: (PLACEHOLDER, [], r.position + 1, -1) for r in requests}
+    call = _fused_rows(model, lanes, chained, chained=True, extra_position=LROWS)
+    with expect_error(ValueError, "chain_tip"):
+        model.decode_forward(**call, defer_read=True, chain_rows=torch.tensor([True, True, False, False]), chain_tip=9)
+    assert model.batch_failed is False
+    call["num_valid_drafts"][:] = torch.tensor([LK, LK, 0, 0], dtype=torch.int32)
+    out2 = model.decode_forward(
+        **call, defer_read=True, chain_rows=torch.tensor([True, True, False, False]), chain_tip=out1.handle.tip_id
+    )
+    assert out1.handle.finished and out2.handle.tip_id == 2
+    runs1 = out1.handle.runs
+    runs2_before = {lane: model.lane_driver.runs[lane] for lane in runs1}
+    readout1 = model.read_decode_output(out1.handle)
+    readout2 = model.read_decode_output(out2.handle)
+    for row, request in enumerate(requests):
+        lane = model.lane_of_slot[request.slot]
+        first, second = runs1[lane], out2.handle.runs[lane]
+        assert second.tokens == first.next_tokens and second.position == first.next_position
+        assert int(readout2.p0[row]) == int(readout1.p0[row]) + int(readout1.accepted_counts[row])
+        assert PLACEHOLDER not in second.tokens
+    del runs2_before
+    # the drafts of step 1, proposed after step 2 was enqueued, are step 1's (num_valid K), not the live state's
+    block1 = readout1.accepted_token_ids
+    offered = model.propose_draft_tokens(
+        LK, block1, readout1.p0.unsqueeze(1) + 1, readout1.accepted_counts, hidden=out1.handle
+    )
+    for row, request in enumerate(requests):
+        lane = model.lane_of_slot[request.slot]
+        assert int(offered.num_valid[row]) == LK
+        assert offered.draft_token_ids[row].tolist() == list(runs1[lane].next_tokens[1:])
+    assert int(offered.num_valid[2]) == 0 and int(offered.num_valid[3]) == 0
+
+
+def test_chain_rows_checks_by_name(monkeypatch, expect_error):
+    lanes = 4
+    model, device = _chain_model(monkeypatch, lanes)
+    _, requests = _join_all(model, lanes, [_prompt(5, 100), _prompt(6, 300)])
+    out1 = model.decode_forward(**{**_fused_rows(model, lanes, _first_rows(requests)), "defer_read": True})
+    chained = {r.slot: (PLACEHOLDER, [], r.position + 1, -1) for r in requests}
+    call = _fused_rows(model, lanes, chained, chained=True, extra_position=LROWS)
+    mask = torch.tensor([True, True, False, False])
+    with expect_error(ValueError, "chain_tip without chain_rows"):
+        model.decode_forward(**call, defer_read=True, chain_tip=out1.handle.tip_id)
+    with expect_error(ValueError, "chain_rows must be bool"):
+        model.decode_forward(**call, defer_read=True, chain_rows=mask.int(), chain_tip=out1.handle.tip_id)
+    with expect_error(ValueError, "padding row"):
+        model.decode_forward(
+            **call, defer_read=True, chain_rows=torch.tensor([True, True, True, False]), chain_tip=out1.handle.tip_id
+        )
+    with expect_error(ValueError, "not the newest fused step"):
+        model.decode_forward(**call, defer_read=True, chain_rows=mask, chain_tip=None)
+    # a synchronous verify in between: nothing chains onto the step before it
+    sync, _ = _lanes_model(monkeypatch, lanes)
+    assert sync._tip_id is None
+    with expect_error(ValueError, "chain_rows on a verify that is not fused_sample"):
+        model.decode_forward(**{**call, "spec_mode": "argmax_ids"}, chain_rows=mask, chain_tip=out1.handle.tip_id)
+
+
+def test_lane_driver_chained_row_substitution_and_errors(expect_error):
+    lanes = 2
+    device = FakeLanes(lanes)
+    driver = Qwen38VLLMMTPLanesDriver(device, lanes, LK)
+    first = driver.admit(0, _prompt(5))
+    block = [first] + [PLACEHOLDER] * LK
+    driver.verify_finish(driver.verify_enqueue([VerifyRow(0, block, 5, 0, 1)]))
+    run = driver.runs[0]
+    chained = VerifyRow(0, [PLACEHOLDER] * LROWS, run.next_position + LROWS, LK, -1)
+    with expect_error(ValueError, "provisional position"):
+        driver.verify_enqueue([VerifyRow(0, [PLACEHOLDER] * LROWS, run.next_position - 1, LK, -1)], {0})
+    with expect_error(ValueError, "placeholder tokens"):
+        driver.verify_enqueue([VerifyRow(0, run.next_tokens, run.next_position, LK, -1)], {0})
+    with expect_error(ValueError, "accepted_counts -1"):
+        driver.verify_enqueue([VerifyRow(0, [PLACEHOLDER] * LROWS, run.next_position, LK, 2)], {0})
+    with expect_error(Qwen38ChatChainError, "not live rows"):
+        driver.verify_enqueue([chained], {1})
+    assert device.enqueued == [True]  # the bootstrap's only: every refusal came before any device work
+    pending = driver.verify_enqueue([chained], {0})
+    driver.verify_finish(pending)
+    second = driver.runs[0]
+    assert second.tokens == run.next_tokens and second.position == run.next_position
+    assert driver.resyncs == 0  # the plugin took what the device took
+    assert driver.chain_position(0, second.next_position + 5) == second.next_position
+    fresh = driver.admit(1, _prompt(6, 300))
+    with expect_error(Qwen38ChatChainError, "no pass to chain onto"):
+        driver.chain_position(1, 99)
+    del fresh
+
+
+def test_entry_points_land_the_pending_pass_first(monkeypatch):
+    import inspect
+
+    lanes = 4
+    model, device = _chain_model(monkeypatch, lanes)
+    _, requests = _join_all(model, lanes, [_prompt(5, 100), _prompt(6, 300)])
+    handle = model.decode_forward(**{**_fused_rows(model, lanes, _first_rows(requests)), "defer_read": True}).handle
+    assert not handle.finished and device.pending_record is not None
+    model.release_request(1)  # a request leaves while the pass is in flight
+    assert handle.finished and device.pending_record is None
+    assert model.lane_driver.holders == [model.lane_of_slot[0]]
+    for name in (
+        "prefill_forward",
+        "_release_lane",
+        "_take_lane",
+        "_move_hybrid_to_lane",
+        "_close_lanes",
+        "warmup_model_decode",
+    ):
+        assert "self._finish_pending()" in inspect.getsource(getattr(Qwen38MTPForCausalLM, name)), name
+
+
+def test_hybrid_single_chain_rows_and_deferred_handle_are_synchronous(monkeypatch, expect_error):
+    lanes = 3
+    reference, _, _ = _hybrid_model(monkeypatch, lanes, flag="1")
+    committed_ref, _, _, _ = _run_hybrid_steps(reference, lanes, 1, _prompt(6), 3)
+    model, device, chain = _chain_model(monkeypatch, lanes, hybrid=True)
+    prompt = _prompt(6)
+    out, _ = _hybrid_prefill(model, prompt, 1)
+    committed = [int(out[0, 0].argmax())]
+    rows = {1: (committed[-1], [], len(prompt), 1)}
+    first = model.decode_forward(**{**_fused_rows(model, lanes, rows), "defer_read": True})
+    assert model.mtp_hybrid_slot == 1 and first.handle.finished and first.handle.tip_id == 1
+    readout1 = model.read_decode_output(first.handle)
+    assert int(readout1.p0[1]) == len(prompt) and int(readout1.accepted_counts[1]) == model.driver.run.accepted + 1
+    real = len(prompt) + int(readout1.accepted_counts[1])
+    chained = {1: (PLACEHOLDER, [], real, -1)}
+    call = _fused_rows(model, lanes, chained, chained=True, extra_position=LROWS)
+    call["num_valid_drafts"][1] = LK
+    mask = torch.tensor([False, True, False])
+    with expect_error(ValueError, "below the real one"):
+        model.decode_forward(
+            **{**call, "start_pos": call["start_pos"] - LROWS - 1}, defer_read=True, chain_rows=mask, chain_tip=1
+        )
+    second = model.decode_forward(**call, defer_read=True, chain_rows=mask, chain_tip=1)
+    readout2 = model.read_decode_output(second.handle)
+    assert int(readout2.p0[1]) == real and second.handle.tip_id == 2
+    stream = committed + readout1.accepted_token_ids[1, : int(readout1.accepted_counts[1])].tolist()
+    stream += readout2.accepted_token_ids[1, : int(readout2.accepted_counts[1])].tolist()
+    assert stream[: len(committed_ref)] == committed_ref[: len(stream)]
+    drafts = model.propose_draft_tokens(
+        LK, readout1.accepted_token_ids, readout1.p0.unsqueeze(1) + 1, readout1.accepted_counts, hidden=first.handle
+    )
+    assert int(drafts.num_valid[1]) == LK

@@ -58,7 +58,12 @@ def _pools(num_pages=NUM_PAGES, page=PAGE):
 
 def _constants(paged=True):
     paging = qsa_module.Qwen38LanePaging(PAGE, NUM_PAGES, 8 * ((4096 + 128 + PAGE - 1) // PAGE // 8 + 1))
-    return SimpleNamespace(indexer_form="wide", paging=paging if paged else None, page_table=TABLE if paged else None)
+    return SimpleNamespace(
+        indexer_form="wide",
+        paging=paging if paged else None,
+        page_table=TABLE if paged else None,
+        allocated_context=4096,
+    )
 
 
 @pytest.fixture

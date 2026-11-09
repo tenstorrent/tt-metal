@@ -57,6 +57,7 @@ from __future__ import annotations
 
 import math
 import os
+import re
 import secrets
 import time
 from collections import deque
@@ -227,6 +228,7 @@ MAMBA_SPEC_VARIABLE = (
     "QWEN38_MAMBA_SPEC"  # "1": GDN layers are MambaSpec layers of vLLM's hybrid KV cache (default off)
 )
 BACKBONE_LAYERS = 48
+LAYER_NAME_RE = re.compile(r"(?:^|\.)layers\.(\d+)(?:\.|$)")  # the plugin's layer-name rule: ...layers.<index>...
 QSA_LAYER_PERIOD = 4  # layer i is a QSA layer when i % 4 == 3, else a GDN layer
 KV_ROW_BYTES = 1024  # one token's packed K/V row (512 bf16); the index pool adds 64 bytes per token
 QSA_SPEC_HEAD_SIZE = 272  # (1024 + 64) bytes per token / (2 x 2 bytes): the attention page is 1088 x block_size bytes
@@ -1252,6 +1254,7 @@ class Qwen38ForCausalLM:
     decode_input_update_contract = 1
     _paged_single_slot = True  # single slot: the chain runs on pools sized by vLLM, opened in allocate_kv_cache
     _mamba_spec_capable = True  # QWEN38_MAMBA_SPEC=1 turns it on; the MTP subclass keeps it off
+    _mamba_speculative_blocks = 0  # MambaSpec.num_speculative_blocks: the launch's draft length K (a subclass sets it)
 
     def __init__(
         self,
@@ -1305,6 +1308,7 @@ class Qwen38ForCausalLM:
         # MambaSpec mode: vLLM layer slot (tensor_idx) -> the QSA layer whose pools host it; GDN layer -> its slot
         self.slot_qsa_layer: dict[int, int] = {}
         self.gdn_slot: dict[int, int] = {}
+        self._mamba_group_cache: dict[tuple[tuple[str, ...], ...], tuple[tuple[int, ...], ...]] = {}
         self.lane_of_slot: list[int] = list(range(batch_lanes))  # slot -> lane (the lane holding that slot's state)
         # decode-width buckets (QWEN38_DECODE_BUCKETS; refused at start when bad): a step replays the smallest bucket that
         # holds the highest live lane, so a new request takes the lowest free lane (_take_lane)
@@ -1524,12 +1528,19 @@ class Qwen38ForCausalLM:
         return bool(cls._mamba_spec_capable) and mamba_spec_enabled()
 
     @classmethod
+    def _mamba_spec_speculative_blocks(cls) -> int:
+        """``MambaSpec.num_speculative_blocks``: the draft length K of the launch (0 for the plain class)."""
+
+        return cls._mamba_speculative_blocks
+
+    @classmethod
     def get_kv_cache_spec(cls, vllm_config: Any) -> dict[str, Any] | None:
         """None unless ``QWEN38_MAMBA_SPEC=1`` (vLLM's homogeneous spec).  On: one spec per layer, named ``layers.<i>`` (the
         plugin's index rule): a QSA layer (``i % 4 == 3``) a FullAttentionSpec whose page (K and V of ``block_size`` tokens,
         2 x 272 x 2 bytes each) is one block of the K/V row (1024 bytes per token) plus the index row (64 bytes per
         token) of one device; a GDN layer the one MambaSpec of the largest state (``MAMBA_STATE_BYTES`` as float32),
-        padded to the attention page.  Layer slot j (``tensor_idx``) is shared by QSA layer j and the GDN layers of
+        padded to the attention page, with one prefill checkpoint block (its position a multiple of ``block_size``: the chain
+        restores and saves states only at block boundaries).  Layer slot j (``tensor_idx``) is shared by QSA layer j and the GDN layers of
         each Mamba group at position j, so vLLM's block id b addresses the same bytes in all of them."""
 
         if not cls._mamba_spec_on():
@@ -1562,7 +1573,9 @@ class Qwen38ForCausalLM:
             dtypes=(torch.float32,),
             page_size_padded=page_size,
             mamba_cache_mode=mode,
-            num_speculative_blocks=0,
+            num_speculative_blocks=cls._mamba_spec_speculative_blocks(),
+            num_prefill_checkpoint_blocks=1,
+            prefill_checkpoint_alignment=block_size,
             **mamba_kwargs,
         )
         return {
@@ -1648,33 +1661,104 @@ class Qwen38ForCausalLM:
             if block < 0 or (num_blocks is not None and block >= num_blocks):
                 raise ValueError(f"block {block} is outside the {num_blocks} blocks")
 
-    def _mamba_layer_blocks(self, state_block_ids_per_layer: Any, row: int) -> dict[int, tuple[Any, int]]:
-        """MambaSpec mode: row ``row``'s state block of every GDN layer, ``{gdn layer: (K/V pool, block id)}`` for the
-        model's boundary copies.  The pool is the one of the QSA layer that backs the GDN layer's slot."""
+    def _mamba_group_layers(self, mamba_state: Any) -> list[tuple[Any, tuple[int, ...]]]:
+        """MambaSpec mode: ``[(group, its GDN layer indexes)]`` of the plugin's ``mamba_state``.  The layer names (vLLM's
+        ``KVCacheGroupSpec.layer_names``, e.g. ``model.layers.4.linear_attn``) map to layer indexes by the plugin's
+        ``layers.<index>`` rule; every allocated GDN layer must be in exactly one group and no other layer in any."""
 
-        if state_block_ids_per_layer is None:
-            raise ValueError("MambaSpec mode: the state block ids per layer (state_block_ids_per_layer) are missing")
-        if len(state_block_ids_per_layer) != BACKBONE_LAYERS or not self.gdn_slot:
-            raise ValueError(
-                f"MambaSpec mode: {BACKBONE_LAYERS} per-layer state block entries and the allocated slot maps expected"
-            )
+        if mamba_state is None:
+            raise ValueError("MambaSpec mode: the plugin's mamba_state is missing")
+        if not self.gdn_slot:
+            raise ValueError("MambaSpec mode: the slot maps are missing, allocate_kv_cache_per_layer runs first")
+        groups = tuple(mamba_state.groups)
+        key = tuple(tuple(group.layer_names) for group in groups)
+        layers_of = self._mamba_group_cache.get(key)
+        if layers_of is None:
+            seen: dict[int, int] = {}
+            parsed: list[tuple[int, ...]] = []
+            for g, names in enumerate(key):
+                layers = []
+                for name in names:
+                    match = LAYER_NAME_RE.search(name)
+                    if match is None:
+                        raise ValueError(f"MambaSpec mode: layer name {name!r} has no 'layers.<index>' part")
+                    layer = int(match.group(1))
+                    if layer not in self.gdn_slot:
+                        raise ValueError(f"MambaSpec mode: group {g} names layer {layer} ({name!r}), not a GDN layer")
+                    if layer in seen:
+                        raise ValueError(f"MambaSpec mode: GDN layer {layer} is in groups {seen[layer]} and {g}")
+                    seen[layer] = g
+                    layers.append(layer)
+                parsed.append(tuple(layers))
+            missing = sorted(set(self.gdn_slot) - set(seen))
+            if missing:
+                raise ValueError(f"MambaSpec mode: GDN layers {missing} are in no Mamba group")
+            layers_of = self._mamba_group_cache[key] = tuple(parsed)
+        return list(zip(groups, layers_of))
+
+    def _mamba_block_table(self, table: Any, row: int, what: str) -> torch.Tensor:
+        table = torch.as_tensor(table)
+        if table.dim() != 2 or table.shape[1] < 1 or not 0 <= row < table.shape[0]:
+            raise ValueError(f"MambaSpec mode: {what} {tuple(table.shape)} have no row {row}")
+        return table
+
+    def _mamba_layer_blocks(self, mamba_state: Any, row: int) -> dict[int, tuple[Any, int]]:
+        """MambaSpec mode: row ``row``'s running-state block (window column 0 of its group) for every GDN layer,
+        ``{gdn layer: (K/V pool, block id)}`` for the model's boundary copies.  The pool is the one of the QSA layer that
+        backs the GDN layer's slot."""
+
+        groups = self._mamba_group_layers(mamba_state)
         pools = None if self.chain is None else self.chain.pools
         if not pools:
             raise RuntimeError("the state blocks need the paged chain: allocate_kv_cache_per_layer runs first")
         out: dict[int, tuple[Any, int]] = {}
-        for layer, slot in sorted(self.gdn_slot.items()):
-            table = state_block_ids_per_layer[layer]
-            if table is None:
-                raise ValueError(f"MambaSpec mode: GDN layer {layer} has no state block ids")
-            table = torch.as_tensor(table)
-            if table.dim() != 2 or table.shape[1] < 1 or not 0 <= row < table.shape[0]:
-                raise ValueError(
-                    f"MambaSpec mode: layer {layer} state block ids {tuple(table.shape)} have no row {row}"
-                )
-            block = int(table[row, 0])
+        for group, layers in groups:
+            block = int(self._mamba_block_table(group.windows, row, "state windows")[row, 0])
             self._check_block_ids([block], self.num_blocks)
-            out[layer] = (pools[self.slot_qsa_layer[slot]].kv, block)
-        return out
+            for layer in layers:
+                out[layer] = (pools[self.slot_qsa_layer[self.gdn_slot[layer]]].kv, block)
+        return dict(sorted(out.items()))
+
+    def _mamba_checkpoints(
+        self, mamba_state: Any, row: int, start: int, length: int
+    ) -> list[tuple[int, dict[int, tuple[Any, int]]]]:
+        """MambaSpec mode: row ``row``'s prefill checkpoints ``[(n, {gdn layer: (K/V pool, block id)})]`` in order of ``n``,
+        the state after ``n`` tokens (``start < n < length``, a block boundary) into that block.  Empty without entries.
+        """
+
+        positions = None if mamba_state is None else mamba_state.checkpoint_positions
+        if positions is None:
+            return []
+        positions = self._mamba_block_table(positions, row, "checkpoint positions")
+        wanted = [(j, int(n)) for j, n in enumerate(positions[row].tolist()) if n > 0]
+        if not wanted:
+            return []
+        groups = self._mamba_group_layers(mamba_state)
+        pools = None if self.chain is None else self.chain.pools
+        if not pools:
+            raise RuntimeError("the state blocks need the paged chain: allocate_kv_cache_per_layer runs first")
+        out = []
+        for j, n in wanted:
+            if not start < n < length or n % self.block_size:
+                raise ValueError(
+                    f"MambaSpec mode: checkpoint position {n} must be a block boundary in ({start}, {length}) "
+                    f"(block size {self.block_size})"
+                )
+            blocks: dict[int, tuple[Any, int]] = {}
+            for group, layers in groups:
+                if group.checkpoint_blocks is None:
+                    raise ValueError("MambaSpec mode: checkpoint positions come without checkpoint blocks")
+                table = self._mamba_block_table(group.checkpoint_blocks, row, "checkpoint blocks")
+                if j >= table.shape[1]:
+                    raise ValueError(f"MambaSpec mode: checkpoint blocks {tuple(table.shape)} have no entry {j}")
+                block = int(table[row, j])
+                self._check_block_ids([block], self.num_blocks)
+                for layer in layers:
+                    blocks[layer] = (pools[self.slot_qsa_layer[self.gdn_slot[layer]]].kv, block)
+            out.append((n, dict(sorted(blocks.items()))))
+        if len({n for n, _ in out}) != len(out):
+            raise ValueError(f"MambaSpec mode: checkpoint positions {[n for n, _ in out]} repeat")
+        return sorted(out, key=lambda entry: entry[0])
 
     def _block_warm_hook(self) -> Callable[[Any], None] | None:
         """MambaSpec mode: the chain's warm hook that compiles every pool_blocks program (state save and restore of the
@@ -1696,6 +1780,8 @@ class Qwen38ForCausalLM:
                 layer: (pools[self.slot_qsa_layer[slot]].kv, WARM_BLOCKS[0])
                 for layer, slot in sorted(self.gdn_slot.items())
             }
+            # the restore resets the device position to 0; the MTP warm rounds after this hook check the warm pass's
+            warm_position = chain.state.position.read()
             # block ids 1 and 2: no request owns a block during the open; the chain's warm passes are done
             model.save_boundary_state(chain.state, layer_blocks, block_size=block_size, position=0)
             model.restore_boundary_state(chain.state, layer_blocks, block_size=block_size, position=0)
@@ -1703,6 +1789,7 @@ class Qwen38ForCausalLM:
                 pool_blocks.zero_blocks(pool.kv, pool.index, [WARM_BLOCKS[0]], block_size=block_size)
                 pool_blocks.copy_blocks(pool.kv, pool.index, [WARM_BLOCKS], block_size=block_size)
             ttnn.synchronize_device(chain.mesh)
+            chain.state.position.reset(warm_position, 0)
 
         return hook
 
@@ -1730,11 +1817,12 @@ class Qwen38ForCausalLM:
     def copy_kv_cache_blocks(self, kv_cache: Any = None, copies: Sequence[tuple[int, int]] = ()) -> None:
         """The plugin's hook: copy block ``src`` to ``dst`` (K/V rows and index block) in every QSA layer's pools, the
         pairs applied in list order (a pair the op rejects in one call, a dst that is another pair's src or dst, starts
-        a new call).  A no-op unless ``QWEN38_MAMBA_SPEC=1``."""
+        a new call).  Pairs with ``src == dst`` (the runner pads with ``(0, 0)``) copy nothing and are skipped.  A no-op unless ``QWEN38_MAMBA_SPEC=1``.
+        """
 
         if not self._mamba_spec_on():
             return
-        pairs = [(int(src), int(dst)) for src, dst in copies]
+        pairs = [(int(src), int(dst)) for src, dst in copies if int(src) != int(dst)]  # (0, 0) is the runner's padding
         if not pairs:
             return
         self._check_block_ids([block for pair in pairs for block in pair], self.num_blocks)
@@ -1848,7 +1936,7 @@ class Qwen38ForCausalLM:
                 start_pos=start_pos,
                 empty_slots=empty_slots,
                 sampling_params=sampling_params,
-                state_block_ids_per_layer=kwargs.get("state_block_ids_per_layer"),
+                mamba_state=kwargs.get("mamba_state"),
             )
         greedy_token = sampling_params is not None
         if greedy_token and not device_greedy_contract(sampling_params):
@@ -1872,11 +1960,18 @@ class Qwen38ForCausalLM:
         page_ids = None
         if self.paging is not None:
             page_ids = self._slot_page_ids(page_table, needed=-(-length // self.block_size), label="prefill")
+        mamba_state = kwargs.get("mamba_state")
         layer_blocks = None
         if self._needs_state_blocks(length, start):
-            layer_blocks = self._mamba_layer_blocks(kwargs.get("state_block_ids_per_layer"), 0)
+            layer_blocks = self._mamba_layer_blocks(mamba_state, 0)
+        checkpoints = self._mamba_checkpoints(mamba_state, 0, start, length) if self._mamba_spec_on() else []
         out = self._prefill_one(
-            ids, greedy_token=greedy_token, page_ids=page_ids, start=start, layer_blocks=layer_blocks
+            ids,
+            greedy_token=greedy_token,
+            page_ids=page_ids,
+            start=start,
+            layer_blocks=layer_blocks,
+            checkpoints=checkpoints,
         )
         return out, torch.zeros(1, dtype=torch.long)
 
@@ -1888,11 +1983,14 @@ class Qwen38ForCausalLM:
         page_ids: list[int] | None = None,
         start: int = 0,
         layer_blocks: dict[int, tuple[Any, int]] | None = None,
+        checkpoints: Sequence[tuple[int, dict[int, tuple[Any, int]]]] = (),
     ) -> torch.Tensor:
         """The B=1 chain prefill of ``ids`` (the single-slot path, and batch mode's per-row prefill before its import);
         ``page_ids`` (the paged single slot) go into the chain's page table.  ``start == 0``: into the reset state.
         ``start > 0``: the continuation of a chunked prefill, no reset; ``ids[:start]`` must be exactly what the
-        slot has committed.  Returns the device greedy token ``[1, 1]`` int32 or the masked full logits
+        slot has committed.  ``checkpoints`` (MambaSpec mode, ``start < n < len(ids)`` ascending): the prefill stops at each
+        ``n`` (ids[:n] ends on the forced step, like the chunk end) and saves the state into that entry's blocks.
+        Returns the device greedy token ``[1, 1]`` int32 or the masked full logits
         ``[1, 1, VOCAB_SIZE]``.  The state it leaves (``self.slot``, the chain's generic state) is the one request's."""
 
         restore = False
@@ -1918,8 +2016,17 @@ class Qwen38ForCausalLM:
         save = self._mamba_spec_on() and len(ids) % self.block_size == 0
         if (restore or save) and layer_blocks is None:
             raise ValueError("MambaSpec mode: this prefill reads or writes the state block, layer_blocks is missing")
-        head = ids[:-1]
-        new = head[start:]
+        stops = [n for n, _ in checkpoints]
+        if stops and (
+            not self._mamba_spec_on()
+            or stops != sorted(set(stops))
+            or not start < stops[0]
+            or stops[-1] >= len(ids)
+            or any(n % self.block_size for n in stops)
+        ):
+            raise ValueError(
+                f"checkpoints {stops} must be ascending block boundaries in ({start}, {len(ids)}) in MambaSpec mode"
+            )
         try:
             if start == 0:
                 self.chain.reset_and_seed(SEED_TOKEN_ID)
@@ -1930,32 +2037,43 @@ class Qwen38ForCausalLM:
             elif restore:
                 context = self.chain.restore_prefix_state(start, ids, layer_blocks, self.block_size)
                 self.slot = Qwen38VLLMSlot(committed=list(ids[:start]), ple_context=context)
-            if len(new) >= CHUNK_PREFILL_MIN_ROWS:
+            at = start
+            for target in [*stops, len(ids)]:
+                last = target == len(ids)
+                head_end = target - 1
+                new = ids[at:head_end]
+                if len(new) >= CHUNK_PREFILL_MIN_ROWS:
 
-                def forced_step(token_id: int, _context: tuple[int, int] | None) -> tuple[int, int] | None:
-                    self._step(token_id)  # the driver's alignment steps; none from a 32-aligned start
-                    return self.slot.ple_context
+                    def forced_step(token_id: int, _context: tuple[int, int] | None) -> tuple[int, int] | None:
+                        self._step(token_id)  # the driver's alignment steps; none from a 32-aligned start
+                        return self.slot.ple_context
 
-                result = self.chain.chunk_prefill(
-                    new, start_position=start, ple_context=self.slot.ple_context, forced_step=forced_step
-                )
-                if result.stopped is not None or result.position != len(head):
-                    raise Qwen38ChatChainError(
-                        f"chunk prefill ended at position {result.position} (stopped {result.stopped!r}), "
-                        f"expected {len(head)}"
+                    result = self.chain.chunk_prefill(
+                        new, start_position=at, ple_context=self.slot.ple_context, forced_step=forced_step
                     )
-                self.slot.committed = list(head)
-                self.slot.ple_context = result.ple_context
-            else:
+                    if result.stopped is not None or result.position != head_end:
+                        raise Qwen38ChatChainError(
+                            f"chunk prefill ended at position {result.position} (stopped {result.stopped!r}), "
+                            f"expected {head_end}"
+                        )
+                    self.slot.committed = list(ids[:head_end])
+                    self.slot.ple_context = result.ple_context
+                else:
+                    with self.chain.loop_guard():
+                        for token_id in new:
+                            self._step(token_id)
+                # The last token of the part is the first decode replay: teacher-forced under the guard, like every
+                # decode step.
                 with self.chain.loop_guard():
-                    for token_id in new:
-                        self._step(token_id)
-            # The last prompt token is the first decode replay: teacher-forced under the guard, like every decode step.
-            with self.chain.loop_guard():
-                residue = self._step(ids[-1])
-                out = self._greedy_token(residue) if greedy_token else self._read_logits(residue)
-            if save:
-                self.chain.save_prefix_state(len(ids), layer_blocks, self.block_size)
+                    residue = self._step(ids[head_end])
+                    if last:
+                        out = self._greedy_token(residue) if greedy_token else self._read_logits(residue)
+                if last:
+                    if save:
+                        self.chain.save_prefix_state(len(ids), layer_blocks, self.block_size)
+                else:
+                    self.chain.save_prefix_state(target, dict(checkpoints)[target], self.block_size)
+                at = target
         except BaseException:
             self.slot.failed = True
             raise
@@ -2879,7 +2997,7 @@ class Qwen38ForCausalLM:
         start_pos: Any,
         empty_slots: Any,
         sampling_params: Any,
-        state_block_ids_per_layer: Any = None,
+        mamba_state: Any = None,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """Each row alone: the B=1 chain prefill, then its import into the lane that owns ``empty_slots[i]`` with the
         row's vLLM blocks as its pages.  Returns ``(out, rope_deltas)``: with ``sampling_params`` the next tokens int32
@@ -2944,14 +3062,22 @@ class Qwen38ForCausalLM:
             self._demote_hybrid()  # before anything touches the chain: the prefill's reset_and_seed would destroy it
         self._require_serviceable(enable_trace, recovering=True)
         blocks: list[dict[int, tuple[Any, int]] | None] = [
-            self._mamba_layer_blocks(state_block_ids_per_layer, i)
-            if self._needs_state_blocks(len(prompts[i]), starts[i])
-            else None
+            self._mamba_layer_blocks(mamba_state, i) if self._needs_state_blocks(len(prompts[i]), starts[i]) else None
+            for i in range(rows)
+        ]
+        checkpoints = [
+            self._mamba_checkpoints(mamba_state, i, starts[i], len(prompts[i])) if self._mamba_spec_on() else []
             for i in range(rows)
         ]
         if hybrid_start or on_chain:
             out = self._prefill_row_chain(
-                slots[0], prompts[0], pages[0], policy, start=starts[0], layer_blocks=blocks[0]
+                slots[0],
+                prompts[0],
+                pages[0],
+                policy,
+                start=starts[0],
+                layer_blocks=blocks[0],
+                checkpoints=checkpoints[0],
             )
             return out, torch.zeros(rows, dtype=torch.long)
         if decoder.pack_enabled and not self._mamba_spec_on():
@@ -2960,9 +3086,14 @@ class Qwen38ForCausalLM:
         claimed: set[int] = set()  # the lanes this call hands out (not live until their row is imported)
         todo = list(range(rows))
         if decoder.pack_enabled:
-            # MambaSpec: the packed path has no state-block copies, so only a row that touches no state block (it starts
-            # at 0 and does not end on a block boundary) may be packed; every other row keeps the per-row path.
-            packable = [i for i in todo if starts[i] == 0 and not self._needs_state_blocks(len(prompts[i]), starts[i])]
+            # MambaSpec: the packed path has no state-block copies or prefill checkpoints, so only a row that touches no
+            # state block (it starts at 0 and does not end on a block boundary) and saves no checkpoint may be packed;
+            # every other row keeps the per-row path.
+            packable = [
+                i
+                for i in todo
+                if starts[i] == 0 and not checkpoints[i] and not self._needs_state_blocks(len(prompts[i]), starts[i])
+            ]
             if packable:
                 packed = self._prefill_batch_grouped(
                     [prompts[i] for i in packable],
@@ -2984,6 +3115,7 @@ class Qwen38ForCausalLM:
                 claimed,
                 start=starts[i],
                 layer_blocks=blocks[i],
+                checkpoints=checkpoints[i],
             )
         return torch.cat(outputs, dim=0), torch.zeros(rows, dtype=torch.long)
 
@@ -3017,6 +3149,7 @@ class Qwen38ForCausalLM:
         claimed: set[int] | None = None,
         start: int = 0,
         layer_blocks: dict[int, tuple[Any, int]] | None = None,
+        checkpoints: Sequence[tuple[int, dict[int, tuple[Any, int]]]] = (),
     ) -> torch.Tensor:
         """One row alone: the B=1 chain prefill (from ``start``, restoring the row's state block when ``start > 0``), its import into the lane of ``slot`` (a still-live lane is released first)
         and the row's output (the device greedy token, a host draw, or the host logits ``[1, 1, VOCAB_SIZE]``)."""
@@ -3024,7 +3157,12 @@ class Qwen38ForCausalLM:
         lane = self._take_lane(decoder, slot, set() if claimed is None else claimed)
         device_greedy = policy is not None and policy.greedy and not policy.penalized
         out = self._prefill_one(
-            prompt, greedy_token=device_greedy, page_ids=pages, start=start, layer_blocks=layer_blocks
+            prompt,
+            greedy_token=device_greedy,
+            page_ids=pages,
+            start=start,
+            layer_blocks=layer_blocks,
+            checkpoints=checkpoints,
         )
         try:
             decoder.import_lane(self, lane, len(prompt), self.slot.ple_context, pages)
@@ -3053,6 +3191,7 @@ class Qwen38ForCausalLM:
         policy: Qwen38HostSamplingPolicy | None,
         start: int = 0,
         layer_blocks: dict[int, tuple[Any, int]] | None = None,
+        checkpoints: Sequence[tuple[int, dict[int, tuple[Any, int]]]] = (),
     ) -> torch.Tensor:
         """Hybrid single: the one row's B=1 chain prefill, no import.  The request stays on the chain (``self.slot``
         holds its host state) with ``slot`` as its state slot and ``pages`` as its last page row.  Returns what
@@ -3062,7 +3201,12 @@ class Qwen38ForCausalLM:
         """
 
         out = self._prefill_one(
-            prompt, greedy_token=policy is not None, page_ids=pages, start=start, layer_blocks=layer_blocks
+            prompt,
+            greedy_token=policy is not None,
+            page_ids=pages,
+            start=start,
+            layer_blocks=layer_blocks,
+            checkpoints=checkpoints,
         )
         self.hybrid_slot = slot
         self.hybrid_pages = list(pages)

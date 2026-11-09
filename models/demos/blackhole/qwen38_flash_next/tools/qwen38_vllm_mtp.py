@@ -40,6 +40,15 @@ passed.  When a second request arrives (or a step carries another live row) the 
 pass committed and imported into its lane without a new prefill (``Qwen38VLLMMTPLanesDriver.admit_from_chain``); from then on
 everything runs on the lanes.  There is no move back to the chain.
 
+``QWEN38_MAMBA_SPEC=1`` (the plain adapter's MambaSpec contract: block size >= 1024, GDN state saved in and restored from the
+plugin's state blocks, ``num_speculative_blocks`` K) adds prefix caching and chunked prefill.  A prefill row is a chunk
+``[start_pos, prompt_lens)`` run alone on the chain (``Qwen38VLLMMTPDriver.prefill_range``): it restores the state from the
+row's block at a start past 0 (the MTP layer's alignment state is reset with it), saves it at every checkpoint and at a
+block-aligned end.  An intermediate chunk (``intermediate_prefill_mask``) takes no lane; the last chunk imports the chain's
+state into its lane (or stays on the chain as the hybrid single).  The MTP layer's pools are not state blocks: they hold the
+rows of the shared block ids, so a prefix hit reads the earlier request's MTP rows (the row before the hit consumed that
+request's next token: draft quality only, the target verifies every token).
+
 No narrow decode (``SpecPlan.supports_narrow_decode`` False): the MTP chain has no sampled tail, so every step is a verify
 and the plugin refuses a request with a temperature or a penalty when it arrives.
 """
@@ -47,8 +56,10 @@ and the plugin refuses a request with a temperature or a penalty when it arrives
 from __future__ import annotations
 
 import os
+import threading
 import time
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Collection, Mapping, Sequence
+from types import SimpleNamespace
 from typing import Any
 
 import torch
@@ -75,6 +86,7 @@ from models.demos.blackhole.qwen38_flash_next.tools.qwen38_vllm import (
     _ModelCapabilities,
     check_paged_block_size,
     device_greedy_contract,
+    mamba_spec_enabled,
     parse_slot_remap,
     prefill_form,
     resident_allocated_context,
@@ -91,8 +103,12 @@ MTP_HYBRID_SINGLE_VARIABLE = (
 MTP_LANE_BUCKETS_VARIABLE = (
     "QWEN38_MTP_LANE_BUCKETS"  # lane widths of an 8-lane session: unset "2,4,8", "off"/"0" one width
 )
+MTP_CHAIN_VARIABLE = "QWEN38_MTP_CHAIN"  # batch mode: "1" serves the plugin's chain mode (fused_sample verifies submitted over the pending one)
 DEFAULT_DRAFTS = 4
 PLACEHOLDER_TOKEN_ID = -1  # the plugin's candidate block pad (vllm_tt_plugin.spec_decode.PLACEHOLDER_TOKEN_ID)
+PADDING_ROW_TOKEN_ID = (
+    0  # a fused readout's padding row: count 1 with a real column-0 id (SPEC_DECODE_CONTRACT: "its column-0 argmax")
+)
 
 
 def mtp_drafts_from_env(environ: Mapping[str, str] | None = None) -> int:
@@ -131,11 +147,24 @@ def mtp_hybrid_single_from_env(environ: Mapping[str, str] | None = None) -> bool
     return text == "1"
 
 
+def mtp_chain_from_env(environ: Mapping[str, str] | None = None) -> bool:
+    """``QWEN38_MTP_CHAIN``: "1" declares the async and chain-mode capabilities and the ``fused_sample`` accept mode (batch
+    mode), unset or "0" (default) leaves the adapter as it is; anything else is refused by name."""
+
+    environ = os.environ if environ is None else environ
+    text = environ.get(MTP_CHAIN_VARIABLE, "0")
+    if text not in ("0", "1"):
+        raise ValueError(f"{MTP_CHAIN_VARIABLE} must be 0 or 1, got {text!r}")
+    return text == "1"
+
+
 class _MTPModelCapabilities:
     """The plain adapter's capabilities with the speculative keys; computed on first access like the plain ones."""
 
     def __get__(self, instance, owner) -> dict:
         capabilities = dict(_ModelCapabilities().__get__(instance, owner))
+        mamba_on = bool(owner._mamba_spec_capable) and mamba_spec_enabled()
+        chain_on = mtp_chain_from_env()
         capabilities.update(
             {
                 "supports_spec_decode": True,
@@ -143,16 +172,19 @@ class _MTPModelCapabilities:
                 "spec_requirements": ["device_propose"],
                 "spec_hidden_handoff": [],
                 "output_tokens_per_step": 1,
-                # every verify is synchronous: the platform turns async scheduling off with a warning
-                "supports_async_decode": False,
-                "supports_async_spec_decode": False,
+                # every verify is synchronous (the platform turns async scheduling off with a warning), unless
+                # QWEN38_MTP_CHAIN=1: the lane verifies then run as the plugin's chain mode
+                "supports_async_decode": chain_on,
+                "supports_async_spec_decode": chain_on,
                 # the chain has no sampled tail: prefill returns a logits row and the decode steps are verifies
                 "supports_sample_on_device": False,
                 "supports_device_penalties": False,
-                # its prefill takes position 0 only
-                "supports_chunked_prefill": False,
+                # its prefill takes position 0 only, unless the GDN state travels in MambaSpec blocks
+                "supports_chunked_prefill": mamba_on,
             }
         )
+        if mamba_on:
+            capabilities["accepts_intermediate_prefill_mask"] = True
         return capabilities
 
 
@@ -204,6 +236,70 @@ class Qwen38VLLMMTPDriver:
         with self.chain.loop_guard():
             session._prefill(suffix, None, None)
         token = int(self.chain.read_token_row())
+        if not 0 <= token < VOCAB_SIZE:
+            raise Qwen38ChatChainError(f"token row holds {token}, outside the vocabulary [0, {VOCAB_SIZE})")
+        return token
+
+    def prefill_range(
+        self,
+        ids: Sequence[int],
+        *,
+        start: int,
+        page_ids: Sequence[int] | None,
+        layer_blocks: dict[int, tuple[Any, int]] | None,
+        checkpoints: Sequence[tuple[int, dict[int, tuple[Any, int]]]],
+        block_size: int,
+        final: bool,
+    ) -> int | None:
+        """``ids[start:]`` (``ids`` end at the chunk end) as ``prefill`` prefills a prompt, on the state of ``start``: the reset
+        at 0, else the restore from ``layer_blocks`` (a block boundary).  ``checkpoints`` (``start < n < len(ids)``,
+        ascending): the prefill stops at each ``n`` and saves the state into that entry's blocks.  A chunk end on a block
+        boundary saves into ``layer_blocks``.  ``final``: returns the model's first token; else the chunk must end on a
+        block boundary and nothing is read (None)."""
+
+        ids = [int(token) for token in ids]
+        end = len(ids)
+        if start < 0 or start >= end or (start and (start % block_size or layer_blocks is None)):
+            raise Qwen38ChatChainError(
+                f"prefill range [{start}, {end}) must start at 0 or at a block boundary with the state blocks "
+                f"(block size {block_size})"
+            )
+        save_end = layer_blocks is not None and end % block_size == 0
+        if not final and not save_end:
+            raise Qwen38ChatChainError(
+                f"an intermediate chunk must end on a block boundary with the state blocks, ends at {end}"
+            )
+        self.close()
+        session, chain = self.session, self.chain
+        if start:
+            session.restore_prefix(start, ids, layer_blocks, block_size)
+        else:
+            session.reset()
+        if page_ids is not None:
+            chain.write_page_table(page_ids)
+        stops = dict(checkpoints)
+        at = start
+        for target in [*stops, end]:
+            head_end = target - 1
+            # the MTP row of the part's last token consumes ids[target]; at the chunk end that token is not in ``ids``
+            # (the runner's prefill tokens end there), so the step takes the model's own argmax
+            following = ids[target] if target < end else None
+            if session.chunk_prefill_rows(head_end - at) >= CHUNK_PREFILL_MIN_ROWS:
+                session.resolve_prefill_mode("chunked")  # refused by name when the chain has no chunk trace
+                session._prefill_chunked(ids[at:head_end], ids[head_end], None)
+                tail = ids[head_end:target]
+            else:
+                tail = ids[at:target]
+            with chain.loop_guard():
+                session._prefill(tail, None, None, last_next=following)
+            if target < end:
+                chain.save_prefix_state(target, stops[target], block_size)
+            elif save_end:
+                chain.save_prefix_state(end, layer_blocks, block_size)
+            at = target
+        if not final:
+            return None
+        token = int(chain.read_token_row())
         if not 0 <= token < VOCAB_SIZE:
             raise Qwen38ChatChainError(f"token row holds {token}, outside the vocabulary [0, {VOCAB_SIZE})")
         return token
@@ -300,12 +396,13 @@ class Qwen38VLLMMTPDriver:
 
     # -- propose ---------------------------------------------------------------------------------------------------
 
-    def propose(self, committed: Sequence[int], accepted: int) -> tuple[list[int], int]:
+    def propose(self, committed: Sequence[int], accepted: int, run: _Pass | None = None) -> tuple[list[int], int]:
         """The drafts the last pass left, with their count: ``(d_1 .. d_K, K)`` when the plugin committed what the device
-        accepted, else ``([0] * K, 0)`` (a decline: no pass is open, or the plugin cut the pass)."""
+        accepted, else ``([0] * K, 0)`` (a decline: no pass is open, or the plugin cut the pass).  ``run``: the pass of a
+        step already followed by another one (a chained step's handle keeps it); default the last pass."""
 
         k = self.drafts
-        run = self.run
+        run = self.run if run is None else run
         if run is None or accepted != run.accepted + 1:
             return [0] * k, 0
         if tuple(int(token) for token in committed[:accepted]) != run.argmaxes[:accepted]:
@@ -360,6 +457,19 @@ class _LaneRun:
         return self.position if self.fresh else self.position + self.device_rows
 
 
+_LIVE = object()  # ``Qwen38VLLMMTPLanesDriver.propose``: read the lane's live run
+
+
+class _LanePending:
+    """A lane pass enqueued and not yet landed: the device session's pending pass and the lanes of the live rows."""
+
+    __slots__ = ("device", "live")
+
+    def __init__(self, device: Any, live: frozenset[int]) -> None:
+        self.device = device
+        self.live = live
+
+
 class VerifyRow:
     """One live row of a verify call: the lane it runs in, the plugin's block, its position, its valid drafts and the tokens
     the plugin committed for the request in its previous step (1 after a prefill), and (paged lanes) the request's vLLM block
@@ -404,10 +514,13 @@ class Qwen38VLLMMTPLanesDriver:
     the active mask (the live rows).  The decision of acceptance stays on the device (greedy, fused); the plugin walks the same
     argmaxes, so both agree, and a disagreement (the plugin committed less, or trimmed drafts) is a per-lane resync."""
 
-    def __init__(self, device: Any, lanes: int, drafts: int, paged: bool = False) -> None:
+    def __init__(self, device: Any, lanes: int, drafts: int, paged: bool = False, hold_orphans: bool = False) -> None:
         lane_geometry(lanes, drafts)
         self.device = device
         self.paged = paged  # the lanes run on the chain's shared paged pools: the device owns lane page tables
+        # Async scheduling builds a step before the previous one is processed, so a lane's request can be missing from
+        # a step (its prefill's first token not yet applied, or it is finishing): such a lane is held, not an error.
+        self.hold_orphans = hold_orphans
         self.lanes = lanes
         self.drafts = drafts
         self.runs: list[_LaneRun | None] = [None] * lanes
@@ -526,12 +639,23 @@ class Qwen38VLLMMTPLanesDriver:
     def verify(self, rows: Sequence[VerifyRow]) -> dict[int, list[int]]:
         """One lane pass for the live rows of the plugin's verify call; returns lane -> its ``K + 1`` argmaxes."""
 
+        return self.verify_finish(self.verify_enqueue(rows, defer_read=False))
+
+    def verify_enqueue(
+        self, rows: Sequence[VerifyRow], chain_rows: Collection[int] | None = None, *, defer_read: bool = True
+    ) -> _LanePending:
+        """The launch half of :meth:`verify`: the checks, the resync writes and the lane pass enqueued (the device session's
+        ``step_enqueue``); the pass lands in :meth:`verify_finish`.  ``chain_rows``: the lanes of the rows the plugin chained
+        onto the pass in flight (placeholder tokens, accepted -1, a provisional position that is an upper bound of the real
+        one): they take the lane's own next block, position and accepted count (the last :meth:`verify_finish` must have
+        run).  ``defer_read`` False: the pass row is read blocking in :meth:`verify_finish`."""
+
         k = self.drafts
         live = {row.lane: row for row in rows}
         if not live or len(live) != len(rows):
             raise Qwen38ChatChainError(f"a verify needs distinct live rows, got lanes {[row.lane for row in rows]}")
         orphans = sorted(set(self.holders) - set(live))
-        if orphans:
+        if orphans and not self.hold_orphans:
             raise Qwen38ChatChainError(
                 f"contract error: lanes {orphans} hold requests but no live row of this verify maps to them "
                 f"(live lanes {sorted(live)}); a lane pass advances every active lane"
@@ -539,6 +663,14 @@ class Qwen38VLLMMTPLanesDriver:
         strangers = sorted(lane for lane in live if self.runs[lane] is None)
         if strangers:
             raise Qwen38ChatChainError(f"contract error: live rows map to lanes {strangers} with no prefilled request")
+        chained = sorted(set(chain_rows or ()))
+        outside = [lane for lane in chained if lane not in live]
+        if outside:
+            raise Qwen38ChatChainError(
+                f"contract error: chain rows {outside} are not live rows (live lanes {sorted(live)})"
+            )
+        for lane in chained:
+            live[lane] = self.chain_row(lane, live[lane])
         for lane, row in sorted(live.items()):
             self._plan(lane, row)
         if self.paged:
@@ -552,7 +684,14 @@ class Qwen38VLLMMTPLanesDriver:
         if set_held is not None:  # the width pick covers every lane that holds a request
             set_held([1 if run is not None else 0 for run in self.runs])
         self.device.set_active([1 if lane in live else 0 for lane in range(self.lanes)])
-        record = self.device.step()
+        return _LanePending(self.device.step_enqueue(defer_read=defer_read), frozenset(live))
+
+    def verify_finish(self, pending: _LanePending) -> dict[int, list[int]]:
+        """The landing half of :meth:`verify`: the pass's readback, the lanes' runs and counts; returns lane -> its ``K + 1``
+        argmaxes."""
+
+        k, live = self.drafts, pending.live
+        record = self.device.finish(pending.device)
         self.passes += 1
         out: dict[int, list[int]] = {}
         for lane in range(self.lanes):
@@ -581,6 +720,32 @@ class Qwen38VLLMMTPLanesDriver:
             self.accepted_drafts += run.accepted
             out[lane] = list(run.argmaxes)
         return out
+
+    def chain_position(self, lane: int, provisional: int) -> int:
+        """The real column-0 position of a chained row on ``lane`` (where its last pass leaves it); the plugin's
+        ``provisional`` one is an upper bound of it, a lower one is refused."""
+
+        run = self.runs[lane]
+        if run is None or run.fresh:
+            raise Qwen38ChatChainError(f"chain row on lane {lane}, which has no pass to chain onto")
+        if provisional < run.next_position:
+            raise ValueError(
+                f"chain row on lane {lane}: provisional position {provisional} is below the real one {run.next_position}"
+            )
+        return run.next_position
+
+    def chain_row(self, lane: int, row: VerifyRow) -> VerifyRow:
+        """A chained row as the lane's own state makes it: the placeholders are refused, the block, the position and the
+        accepted count come from the lane's last pass (the plugin took what the device took), the valid drafts are the
+        smaller of the plugin's bound and K."""
+
+        if any(token != PLACEHOLDER_TOKEN_ID for token in row.tokens):
+            raise ValueError(f"chain row on lane {lane} must carry placeholder tokens, got {row.tokens}")
+        if row.accepted != -1:
+            raise ValueError(f"chain row on lane {lane} must carry accepted_counts -1, got {row.accepted}")
+        position = self.chain_position(lane, row.position)
+        run = self.runs[lane]
+        return VerifyRow(lane, run.next_tokens, position, min(row.num_valid, self.drafts), run.device_rows, row.pages)
 
     def _sync_pages(self, live: Mapping[int, VerifyRow]) -> None:
         """Paged lanes: each live lane's page row from its verify row, the other lanes' rows zero, uploaded before the pass
@@ -656,17 +821,56 @@ class Qwen38VLLMMTPLanesDriver:
 
     # -- propose ---------------------------------------------------------------------------------------------------
 
-    def propose(self, lane: int, committed: Sequence[int], accepted: int) -> tuple[list[int], int]:
+    def propose(self, lane: int, committed: Sequence[int], accepted: int, run: Any = _LIVE) -> tuple[list[int], int]:
         """The drafts the lane's last pass left, with their count; ``([0] * K, 0)`` (decline) with no pass open or when the
-        plugin committed something else than the device accepted."""
+        plugin committed something else than the device accepted.  ``run``: the lane's pass of a step already followed by
+        another one (a chained step's handle keeps it; None: the lane held no row); default the lane's live run."""
 
         k = self.drafts
-        run = self.runs[lane]
+        run = self.runs[lane] if run is _LIVE else run
         if run is None or run.fresh or accepted != run.accepted + 1:
             return [0] * k, 0
         if tuple(int(token) for token in committed[:accepted]) != run.argmaxes[:accepted]:
             return [0] * k, 0
         return list(run.next_tokens[1:]), k
+
+
+class Qwen38MTPFusedHandle:
+    """The opaque handle of a deferred ``fused_sample`` verify (the plugin's chain mode): ``tip_id`` names the step for the
+    next step's ``chain_tip``; :meth:`wait` lands the step (the reader thread's ``read_decode_output``, or the engine thread's
+    ``_finish_pending``) and returns its ``FusedReadout``.  The landing runs once under the handle's lock, whichever thread
+    gets there first; the others wait for it and read the same readout (or the same error).  The snapshots (``runs``,
+    ``lane_of_slot``, ``hybrid_slot``, ``single_run``) are what ``propose_draft_tokens`` reads when a later step has already
+    changed the live state."""
+
+    def __init__(self, tip_id: int, finish: Callable[[], Any]) -> None:
+        self.tip_id = int(tip_id)
+        self._finish = finish
+        self._lock = threading.Lock()
+        self._readout: Any = None
+        self._error: BaseException | None = None
+        self.runs: dict[int, Any] = {}  # lane -> its _LaneRun of this step (set by the landing)
+        self.lane_of_slot: list[int] | None = None  # the slot -> lane map after this step's remap
+        self.hybrid_slot: int | None = None  # the chain's request slot when this step ran on the pass loop
+        self.single_run: Any = None  # that step's _Pass
+
+    @property
+    def finished(self) -> bool:
+        return self._readout is not None or self._error is not None
+
+    def wait(self, timeout: float | None = None):
+        """Land the step if no thread has, then return its ``FusedReadout`` (the landing's error is raised again)."""
+
+        del timeout  # the device event wait has no deadline; the plugin's own watchdog covers a hang
+        with self._lock:
+            if not self.finished:
+                try:
+                    self._readout = self._finish()
+                except BaseException as error:
+                    self._error = error
+            if self._error is not None:
+                raise self._error
+            return self._readout
 
 
 class Qwen38MTPForCausalLM(Qwen38ForCausalLM):
@@ -676,8 +880,13 @@ class Qwen38MTPForCausalLM(Qwen38ForCausalLM):
     model_capabilities = _MTPModelCapabilities()
     decode_input_update_contract = 0  # decode_forward is overridden and runs no reload command
     _paged_single_slot = True  # batch 1: the chain opens in allocate_kv_cache on vLLM's pools (lanes mode: flat caches)
-    _mamba_spec_capable = False  # QWEN38_MAMBA_SPEC applies to the plain class only
+    _mamba_spec_capable = True  # QWEN38_MAMBA_SPEC=1 turns it on
     _open_lanes = 1  # the lane count the chain opens for (set by initialize_vllm_model before the open)
+    _last_handle: Qwen38MTPFusedHandle | None = None  # the newest deferred fused step (chain mode)
+    _tip_id: int | None = (
+        None  # its tip: what the next chained step's chain_tip must name (None: nothing to chain onto)
+    )
+    _tip_count = 0  # the tips handed out
 
     def __init__(self, chain: Any, *, allocated_context: int, **kwargs: Any) -> None:
         lanes = kwargs.get("batch_lanes", 1)
@@ -706,6 +915,10 @@ class Qwen38MTPForCausalLM(Qwen38ForCausalLM):
         self.driver: Qwen38VLLMMTPDriver | None = None
         if chain is not None:  # a chain opened by the caller (flat); else allocate_kv_cache opens it, paged
             self._attach_chain()
+
+    @classmethod
+    def _mamba_spec_speculative_blocks(cls) -> int:
+        return mtp_drafts_from_env()
 
     def _attach_chain(self) -> None:
         """The pass-loop driver and the chat session over ``self.chain``."""
@@ -773,6 +986,7 @@ class Qwen38MTPForCausalLM(Qwen38ForCausalLM):
         drafts = mtp_drafts_from_env()  # refused by name before any library call
         mtp_ple_early_from_env()
         mtp_hybrid_single_from_env()
+        mtp_chain_from_env()
         if max_batch_size != 1:
             if not MIN_LANES <= max_batch_size <= MAX_LANES:
                 raise ValueError(
@@ -834,7 +1048,9 @@ class Qwen38MTPForCausalLM(Qwen38ForCausalLM):
             lanes_per_request=k + 1,
             extra_bytes_per_seq=0,  # not budgeted by the plugin yet; the chain's live admission checks the DRAM at open
             extra_bytes_per_token=0,
-            accept_modes=("argmax_ids",),
+            accept_modes=("argmax_ids", "fused_sample")
+            if mtp_chain_from_env() and max_num_seqs != 1
+            else ("argmax_ids",),
             drafter_state="internal",
             supports_narrow_decode=False,
         )
@@ -858,6 +1074,7 @@ class Qwen38MTPForCausalLM(Qwen38ForCausalLM):
         row ``[1, 1, VOCAB_SIZE]`` (the plugin's host argmax gives it; sampled requests never reach here) or, for a
         plain greedy ``sampling_params``, as int32 ``[1, 1]``; and the zero mrope delta."""
 
+        self._finish_pending()
         greedy_token = sampling_params is not None
         rows = int(tokens.shape[0]) if self.lanes_mode else None
         if greedy_token and not (
@@ -875,9 +1092,23 @@ class Qwen38MTPForCausalLM(Qwen38ForCausalLM):
                 start_pos=start_pos,
                 empty_slots=empty_slots,
                 greedy_token=greedy_token,
+                mamba_state=kwargs.get("mamba_state"),
+                intermediate=kwargs.get("intermediate_prefill_mask"),
             )
         if tokens.shape[0] != 1:
             raise ValueError(f"one resident slot: tokens must be [1, P], got {tuple(tokens.shape)}")
+        if self._mamba_spec_on():
+            return self._prefill_single_ranged(
+                tokens=tokens,
+                page_table=page_table,
+                enable_trace=enable_trace,
+                prompt_lens=prompt_lens,
+                start_pos=start_pos,
+                empty_slots=empty_slots,
+                greedy_token=greedy_token,
+                mamba_state=kwargs.get("mamba_state"),
+                intermediate=kwargs.get("intermediate_prefill_mask"),
+            )
         if int(start_pos[0]) != 0:
             raise ValueError(
                 f"prefill must start at position 0 (no prefix caching, no chunking), got {int(start_pos[0])}"
@@ -921,6 +1152,125 @@ class Qwen38MTPForCausalLM(Qwen38ForCausalLM):
             out[0, 0, token] = 1.0
         return out, torch.zeros(1, dtype=torch.long), token
 
+    def _ranged_row(
+        self,
+        tokens: torch.Tensor,
+        row: int,
+        *,
+        page_table: Any,
+        prompt_lens: Any,
+        start_pos: Any,
+        mamba_state: Any,
+        intermediate: Any,
+    ) -> dict[str, Any]:
+        """MambaSpec mode: row ``row``'s chunk ``[start, end)`` of the plugin's prefill as the arguments of
+        ``Qwen38VLLMMTPDriver.prefill_range`` (``ids``, ``start``, ``final``, the request's ``page_ids`` up to the chunk end, the
+        state blocks and the checkpoints).  Refused by name before any device call."""
+
+        start, end = int(start_pos[row]), int(prompt_lens[row])
+        if not 1 <= end <= min(self.context_limit, tokens.shape[1]):
+            raise ValueError(
+                f"prompt length {end} must be in [1, {self.context_limit}] and within tokens {tuple(tokens.shape)}"
+            )
+        if not 0 <= start < end:
+            raise ValueError(f"prefill start {start} must be in [0, {end})")
+        final = not (intermediate is not None and bool(intermediate[row]))
+        if start % self.block_size:
+            raise ValueError(
+                f"MambaSpec mode: a prefill that continues a request starts at a block boundary, got {start} with "
+                f"block size {self.block_size}"
+            )
+        if not final and end % self.block_size:
+            raise ValueError(
+                f"MambaSpec mode: an intermediate chunk ends at a block boundary, got {end} with block size "
+                f"{self.block_size}"
+            )
+        ids = tokens[row, :end].tolist()
+        if min(ids) < 0 or max(ids) >= TOKENIZER_SIZE:
+            raise ValueError(f"prompt ids must be in [0, {TOKENIZER_SIZE}), got {min(ids)}..{max(ids)}")
+        page_ids = None
+        if self.paging is not None:
+            needed = -(-end // self.block_size)
+            if self.lanes_mode:
+                page_ids = self._row_page_ids(page_table, row, needed=needed, label=f"prefill row {row}")
+            else:
+                page_ids = self._slot_page_ids(page_table, needed=needed, label="prefill")
+        layer_blocks = self._mamba_layer_blocks(mamba_state, row) if self._needs_state_blocks(end, start) else None
+        return dict(
+            ids=ids,
+            start=start,
+            final=final,
+            page_ids=page_ids,
+            layer_blocks=layer_blocks,
+            checkpoints=self._mamba_checkpoints(mamba_state, row, start, end),
+        )
+
+    def _run_range(self, row: dict[str, Any]) -> int | None:
+        """``prefill_range`` on the chain's pass-loop driver for one ``_ranged_row``; the first token (None: an intermediate
+        chunk)."""
+
+        return self.driver.prefill_range(
+            row["ids"],
+            start=row["start"],
+            page_ids=row["page_ids"],
+            layer_blocks=row["layer_blocks"],
+            checkpoints=row["checkpoints"],
+            block_size=self.block_size,
+            final=row["final"],
+        )
+
+    @staticmethod
+    def _first_token_rows(firsts: Sequence[int | None], greedy_token: bool) -> torch.Tensor:
+        """The prefill output of the rows' first tokens, as ``prefill_forward`` returns it; an intermediate chunk (None) is
+        a row the plugin drops: token 0 or the logits row of token 0."""
+
+        if greedy_token:
+            return torch.tensor([[0 if token is None else token] for token in firsts], dtype=torch.int32)
+        out = torch.zeros(len(firsts), 1, VOCAB_SIZE, dtype=torch.float32)
+        out[:, 0, TOKENIZER_SIZE:] = float("-inf")
+        for i, token in enumerate(firsts):
+            out[i, 0, 0 if token is None else token] = 1.0
+        return out
+
+    def _prefill_single_ranged(
+        self,
+        *,
+        tokens: torch.Tensor,
+        page_table: Any,
+        enable_trace: bool,
+        prompt_lens: Any,
+        start_pos: Any,
+        empty_slots: Any,
+        greedy_token: bool,
+        mamba_state: Any,
+        intermediate: Any,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Batch 1 in MambaSpec mode: the chunk ``[start_pos, prompt_lens)`` on the chain (a prefix-cache hit or a later chunk
+        restores its state from the blocks); an intermediate chunk returns a dummy row."""
+
+        if list(empty_slots) != [0]:
+            raise ValueError(f"one resident slot: empty_slots must be [0], got {list(empty_slots)}")
+        row = self._ranged_row(
+            tokens,
+            0,
+            page_table=page_table,
+            prompt_lens=prompt_lens,
+            start_pos=start_pos,
+            mamba_state=mamba_state,
+            intermediate=intermediate,
+        )
+        self._require_serviceable(enable_trace, recovering=True)
+        try:
+            token = self._run_range(row)
+        except BaseException:
+            self.slot.failed = True
+            raise
+        self.slot.failed = False
+        if token is not None and token >= TOKENIZER_SIZE:
+            self.slot.failed = True
+            raise Qwen38ChatChainError(f"the first token {token} is a padding row of the LM head")
+        return self._first_token_rows([token], greedy_token), torch.zeros(1, dtype=torch.long)
+
     def decode_forward(
         self,
         *,
@@ -934,11 +1284,13 @@ class Qwen38MTPForCausalLM(Qwen38ForCausalLM):
         **kwargs: Any,
     ):
         """The verify of the plugin's ``[1, 1+K]`` block: ``VerifyOutput(argmax_ids [1, 1+K])``.  Every decode step of a
-        speculative launch is a verify (no narrow decode), so a call without ``spec_mode`` is refused."""
+        speculative launch is a verify (no narrow decode), so a call without ``spec_mode`` is refused.  Batch mode with
+        ``QWEN38_MTP_CHAIN=1`` also answers ``fused_sample`` (see :meth:`_decode_lanes`)."""
 
         from vllm_tt_plugin.spec_decode import VerifyOutput, check_spec_side_tensors
 
         if self.lanes_mode:
+            chain = {name: kwargs.get(name) for name in ("defer_read", "chain_rows", "chain_tip")}
             return self._decode_lanes(
                 tokens=tokens,
                 start_pos=start_pos,
@@ -947,6 +1299,7 @@ class Qwen38MTPForCausalLM(Qwen38ForCausalLM):
                 accepted_counts=accepted_counts,
                 slot_remap=slot_remap,
                 page_table=page_table,
+                **chain,
             )
         if spec_mode is None:
             raise ValueError(
@@ -989,7 +1342,7 @@ class Qwen38MTPForCausalLM(Qwen38ForCausalLM):
 
         k = self.drafts
         if self.lanes_mode:
-            return self._propose_lanes(num_drafts, committed_tokens, accepted_counts)
+            return self._propose_lanes(num_drafts, committed_tokens, accepted_counts, hidden)
         if num_drafts != k:
             raise ValueError(f"the chain drafts {k} tokens per pass, the plugin asked for {num_drafts}")
         committed = torch.as_tensor(committed_tokens)
@@ -1001,6 +1354,24 @@ class Qwen38MTPForCausalLM(Qwen38ForCausalLM):
             draft_token_ids=torch.tensor([drafts], dtype=torch.int32),
             num_valid=torch.tensor([valid], dtype=torch.int32),
         )
+
+    def read_decode_output(self, tt_out: Any, async_read: bool = False, sample_rows: Any = None):
+        """The plugin's read of ``decode_forward``'s result: a deferred fused step's handle lands (blocking on its device
+        event) and returns its ``FusedReadout``; anything else is the plain adapter's read."""
+
+        if isinstance(tt_out, Qwen38MTPFusedHandle):
+            if async_read:
+                raise ValueError("a fused handle is read with read_decode_output(handle), not with async_read")
+            return tt_out.wait()
+        return super().read_decode_output(tt_out, async_read=async_read, sample_rows=sample_rows)
+
+    def _finish_pending(self) -> None:
+        """Land the deferred fused step in flight, if any (idempotent; the reader thread may have landed it).  Every entry
+        point that reads the host mirrors it updates or changes lane state outside a decode step calls it first."""
+
+        handle = self._last_handle
+        if handle is not None:
+            handle.wait()
 
     # -- lifecycle -------------------------------------------------------------------------------------------------
 
@@ -1038,6 +1409,7 @@ class Qwen38MTPForCausalLM(Qwen38ForCausalLM):
         """Phase 1 (``enable_trace`` False): checks.  Phase 2: a prefill, the bootstrap verify and one following verify on
         the drafts it left, under the closed miss guard, then the state back at the reset."""
 
+        self._finish_pending()
         self.warmup_model_prefill(enable_trace=enable_trace, kv_cache=kv_cache, can_sample_on_device=False)
         if self.lanes_mode:
             if max_batch_size != self.lanes:
@@ -1088,15 +1460,25 @@ class Qwen38MTPForCausalLM(Qwen38ForCausalLM):
 
         if not self.lanes_mode:
             return super().allocate_kv_cache(kv_cache_shape, dtype, num_layers)
+        shape = tuple(int(extent) for extent in kv_cache_shape)
+        if len(shape) != 4:
+            raise ValueError(f"kv_cache_shape must be (num_blocks, heads, block_size, head_size), got {shape}")
+        self._open_lanes_chain(num_blocks=shape[0], block_size=shape[2])
+        return None
+
+    def _open_batch(self, *, num_blocks: int, block_size: int) -> None:
+        self._open_lanes_chain(num_blocks=num_blocks, block_size=block_size)  # MambaSpec mode's per-layer allocation
+
+    def _open_lanes_chain(self, *, num_blocks: int, block_size: int) -> None:
+        """Open the chain on ``num_blocks`` pages of ``block_size`` rows (page id = vLLM block id, page 0 the scratch) with the
+        lanes' allocation as its warm hook (MambaSpec mode: then the block programs' warm), capture the lane traces."""
+
         if self.lanes_session is not None:
             raise RuntimeError("the lanes are already open: allocate_kv_cache runs once")
         from models.demos.blackhole.qwen38_flash_next.demo.mtp_demo import _lanes_warm_hook
         from models.demos.blackhole.qwen38_flash_next.tools.qwen38_lanes_session import Qwen38LanesSession
 
-        shape = tuple(int(extent) for extent in kv_cache_shape)
-        if len(shape) != 4:
-            raise ValueError(f"kv_cache_shape must be (num_blocks, heads, block_size, head_size), got {shape}")
-        num_blocks, block_size = shape[0], check_paged_block_size(shape[2])
+        block_size = check_paged_block_size(block_size)
         if num_blocks < 2:
             raise ValueError(f"vLLM num_blocks must be >= 2 (block 0 is the scratch), got {num_blocks}")
         paging = validate_index_paging(
@@ -1109,23 +1491,28 @@ class Qwen38MTPForCausalLM(Qwen38ForCausalLM):
         )
         long_chunks, slab_rows = prefill_form()
         lanes_session = Qwen38LanesSession(lanes=self.lanes, drafts=self.drafts, marker=logger.info)
+        self.paging, self.block_size, self.num_blocks = paging, block_size, num_blocks
+        block_warm = self._block_warm_hook()  # None when the mode is off
 
         def warm_hook(chain: Any) -> None:
             _lanes_warm_hook(chain.mesh, lanes_session, self.allocated_context, long_chunks or slab_rows is not None)(
                 chain
             )
+            if block_warm is not None:
+                block_warm(chain)
 
         logger.info(
             f"mtp lanes: {self.lanes} lanes x {self.drafts} drafts, context {self.allocated_context}, block size "
             f"{block_size}, {num_blocks} blocks, page table width {paging.max_blocks}"
         )
-        self.paging, self.block_size, self.num_blocks = paging, block_size, num_blocks
         self.chain = self.chain_opener(warm_hook, paging=paging)
         self.session = Qwen38ChatSession(self.chain, None, allocated_context=self.allocated_context)
         self.session.reset()
         lanes_session.capture(self.chain, self.session)
         self.lanes_session = lanes_session
-        self.lane_driver = Qwen38VLLMMTPLanesDriver(lanes_session, self.lanes, self.drafts, paged=True)
+        self.lane_driver = Qwen38VLLMMTPLanesDriver(
+            lanes_session, self.lanes, self.drafts, paged=True, hold_orphans=mtp_chain_from_env()
+        )
         self.driver = Qwen38VLLMMTPDriver(self.chain, self.session, self.drafts)  # the hybrid single's pass loop
         logger.info(f"mtp lanes ready: {lanes_session.summary()}")
         summary = lanes_session.summary()
@@ -1133,13 +1520,13 @@ class Qwen38MTPForCausalLM(Qwen38ForCausalLM):
             f"mtp lanes widths {summary['buckets']} ({MTP_LANE_BUCKETS_VARIABLE}), per-width DRAM growth per bank "
             f"{summary['dram_growth_bytes_per_bank_by_width']}"
         )
-        return None
 
     def _take_lane(self, slot: int) -> int:
         """The lane ``slot`` admits into: the LOWEST lane that holds no request, so the live lanes stay low and a narrow
         lane width serves them.  ``lane_of_slot`` stays a permutation: the slot that mapped to the chosen lane takes the
         lane ``slot`` gave up (that slot holds no request on the lanes: its lane is free).  Returns the lane."""
 
+        self._finish_pending()
         driver = self._require_lanes()
         lane = next((candidate for candidate in range(self.lanes) if driver.runs[candidate] is None), None)
         if lane is None:
@@ -1167,6 +1554,8 @@ class Qwen38MTPForCausalLM(Qwen38ForCausalLM):
         start_pos: Any,
         empty_slots: Any,
         greedy_token: bool,
+        mamba_state: Any = None,
+        intermediate: Any = None,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """Each row alone into the lane of its state slot (the lanes session's admission); the first tokens as int32
         ``[rows, 1]`` for a greedy contract or one-hot float32 logits ``[rows, 1, VOCAB_SIZE]``.  Paged lanes: row ``i``'s
@@ -1181,6 +1570,18 @@ class Qwen38MTPForCausalLM(Qwen38ForCausalLM):
         slots = [int(slot) for slot in empty_slots]
         if len(set(slots)) != rows or any(not 0 <= slot < self.lanes for slot in slots):
             raise ValueError(f"batch mode: empty_slots must be distinct slots in [0, {self.lanes}), got {slots}")
+        if self._mamba_spec_on():
+            return self._prefill_lanes_ranged(
+                tokens=tokens,
+                page_table=page_table,
+                enable_trace=enable_trace,
+                prompt_lens=prompt_lens,
+                start_pos=start_pos,
+                slots=slots,
+                greedy_token=greedy_token,
+                mamba_state=mamba_state,
+                intermediate=intermediate,
+            )
         prompts, pages = [], []
         for i in range(rows):
             if int(start_pos[i]) != 0:
@@ -1240,6 +1641,76 @@ class Qwen38MTPForCausalLM(Qwen38ForCausalLM):
                 out[i, 0, token] = 1.0
         return out, torch.zeros(rows, dtype=torch.long)
 
+    def _prefill_lanes_ranged(
+        self,
+        *,
+        tokens: torch.Tensor,
+        page_table: Any,
+        enable_trace: bool,
+        prompt_lens: Any,
+        start_pos: Any,
+        slots: list[int],
+        greedy_token: bool,
+        mamba_state: Any,
+        intermediate: Any,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """MambaSpec mode: each row's chunk ``[start_pos, prompt_lens)`` alone on the chain (``prefill_range``: the restore from
+        the state blocks at a start past 0, the saves at the checkpoints and a block-aligned end).  An intermediate chunk
+        takes no lane (a dummy row).  The last chunk imports the chain's state into the lane of its slot (no second prefill),
+        or, for a lone request with nothing on the lanes or the chain, stays on the chain's pass loop."""
+
+        driver = self._require_lanes()
+        rows = [
+            self._ranged_row(
+                tokens,
+                i,
+                page_table=page_table,
+                prompt_lens=prompt_lens,
+                start_pos=start_pos,
+                mamba_state=mamba_state,
+                intermediate=intermediate,
+            )
+            for i in range(len(slots))
+        ]
+        self._require_serviceable(enable_trace, recovering=True)
+        if self.mtp_hybrid_slot in slots:
+            logger.warning(f"prefill into slot {self.mtp_hybrid_slot} whose request still runs on the chain: released")
+            self._release_hybrid()
+        hybrid = self._hybrid_starts(len(rows)) and rows[0]["final"]
+        if self.mtp_hybrid_slot is not None:
+            self._move_hybrid_to_lane()  # before the chain is reset or restored
+        firsts: list[int | None] = []
+        try:
+            for slot, row in zip(slots, rows):
+                lane = self.lane_of_slot[slot]
+                if driver.runs[lane] is not None:
+                    logger.warning(f"prefill into slot {slot} whose lane {lane} still holds a request: released")
+                    driver.release(lane)
+                token = self._run_range(row)
+                firsts.append(token)
+                if token is None or hybrid:
+                    continue
+                if token >= TOKENIZER_SIZE:
+                    raise Qwen38ChatChainError(f"the first token {token} is a padding row of the LM head")
+                end = len(row["ids"])
+                if len(self.session.committed) != end or int(self.chain.position()) != end:
+                    raise Qwen38ChatChainError(
+                        f"chain prefill: committed {len(self.session.committed)} rows, device position "
+                        f"{int(self.chain.position())}, expected {end}"
+                    )
+                driver.admit_from_chain(self._take_lane(slot), end, token, 1, self.session.ple_context, row["page_ids"])
+        except BaseException:
+            self.batch_failed = self.slot.failed = True
+            raise
+        self.slot.failed = False
+        if hybrid:
+            if firsts[0] >= TOKENIZER_SIZE:
+                self.batch_failed = self.slot.failed = True
+                raise Qwen38ChatChainError(f"the first token {firsts[0]} is a padding row of the LM head")
+            self.mtp_hybrid_slot, self.mtp_hybrid_pending = slots[0], firsts[0]
+            self.mtp_hybrid_pages = rows[0]["page_ids"]
+        return self._first_token_rows(firsts, greedy_token), torch.zeros(len(rows), dtype=torch.long)
+
     def _decode_lanes(
         self,
         *,
@@ -1250,11 +1721,21 @@ class Qwen38MTPForCausalLM(Qwen38ForCausalLM):
         accepted_counts: Any,
         slot_remap: Any,
         page_table: Any = None,
+        defer_read: Any = None,
+        chain_rows: Any = None,
+        chain_tip: Any = None,
     ):
         """One lane pass for the live rows of the plugin's ``[lanes, 1+K]`` verify block.  Row ``i`` is live when
         ``start_pos[i, 0] >= 0`` and runs in lane ``lane_of_slot[slot_remap[i]]`` (the map the plain batch adapter keeps:
         ``slot_remap`` is applied to it once, no device move).  Returns ``VerifyOutput(argmax_ids [lanes, 1+K])``, padding
-        rows 0.  Paged lanes: row ``i``'s lane takes the blocks of ``_pass_blocks`` from ``page_table[i]``."""
+        rows 0.  Paged lanes: row ``i``'s lane takes the blocks of ``_pass_blocks`` from ``page_table[i]``.
+
+        ``QWEN38_MTP_CHAIN=1``: ``spec_mode="fused_sample"`` answers ``VerifyOutput(accepted_token_ids [lanes, 1+K]
+        (-1 past the count), accepted_counts [lanes])``, or with ``defer_read`` a ``VerifyOutput`` holding a
+        :class:`Qwen38MTPFusedHandle` whose read returns the ``FusedReadout``.  The deferred pass is enqueued and not landed:
+        the next decode call (and every other entry point that touches lane state) lands it first
+        (:meth:`_finish_pending`).  ``chain_rows`` (bool ``[lanes]``) marks the rows the plugin chained onto that pass: their
+        tokens, position and accepted count come from the lane's own state; ``chain_tip`` must name the pending step."""
 
         from vllm_tt_plugin.spec_decode import VerifyOutput, check_spec_side_tensors
 
@@ -1263,9 +1744,11 @@ class Qwen38MTPForCausalLM(Qwen38ForCausalLM):
                 "ordinary decode reached the MTP adapter: it declares no narrow decode (every step is a verify); "
                 "sampled and penalized requests are refused by the plugin at admission"
             )
-        if spec_mode != "argmax_ids":
+        fused = spec_mode == "fused_sample"
+        if spec_mode != "argmax_ids" and not (fused and mtp_chain_from_env()):
             raise ValueError(f"the MTP adapter answers spec_mode 'argmax_ids', got {spec_mode!r}")
         driver = self._require_lanes()
+        self._finish_pending()  # this step's host rows need the last step's tokens
         k, lanes = self.drafts, self.lanes
         tokens = torch.as_tensor(tokens)
         positions = torch.as_tensor(start_pos)
@@ -1274,24 +1757,52 @@ class Qwen38MTPForCausalLM(Qwen38ForCausalLM):
                 f"batch mode: the verify block is [{lanes}, {k + 1}], got tokens {tuple(tokens.shape)}, positions "
                 f"{tuple(positions.shape)}"
             )
-        if num_valid_drafts is None or accepted_counts is None:
+        if num_valid_drafts is None:
             raise ValueError("a verify carries num_valid_drafts and accepted_counts")
-        check_spec_side_tensors(num_valid_drafts, accepted_counts, lanes, k)
+        chained = self._chain_mask(chain_rows, chain_tip, fused, lanes)
+        if chain_rows is not None and (chain_tip is None or chain_tip != self._tip_id):
+            raise ValueError(f"chain_tip {chain_tip} is not the newest fused step {self._tip_id}")
+        if accepted_counts is None:
+            if not chained.any():
+                raise ValueError("a verify carries num_valid_drafts and accepted_counts")
+            accepted_counts = torch.full((lanes,), -1, dtype=torch.int32)
+        counts = accepted_counts.clone()
+        counts[chained] = 1  # a chained row's count is the lane's own (the plugin sends -1)
+        check_spec_side_tensors(num_valid_drafts, counts, lanes, k)
         remap = parse_slot_remap(slot_remap, lanes)
         new_map = [self.lane_of_slot[remap[row]] for row in range(lanes)]
         live_rows = [row for row in range(lanes) if int(positions[row, 0]) >= 0]
         if not live_rows:
             raise ValueError("batch mode: a verify needs a live row (start_pos >= 0)")
+        if any(bool(chained[row]) and row not in live_rows for row in range(lanes)):
+            raise ValueError(f"chain_rows marks a padding row: {chained.tolist()}")
         if self.mtp_hybrid_slot is not None:
             if [remap[row] for row in live_rows] == [self.mtp_hybrid_slot]:
                 return self._decode_hybrid(
-                    live_rows[0], tokens, positions, num_valid_drafts, accepted_counts, remap, new_map, page_table
+                    live_rows[0],
+                    tokens,
+                    positions,
+                    num_valid_drafts,
+                    accepted_counts,
+                    remap,
+                    new_map,
+                    page_table,
+                    fused=fused,
+                    defer_read=bool(defer_read),
+                    chained=bool(chained[live_rows[0]]),
                 )
         pages = {}
         if self.paging is not None:  # a refused table touches no device state
             pages = {
                 row: self._row_page_ids(
-                    page_table, row, needed=self._pass_blocks(int(positions[row, 0])), label=f"verify row {row}"
+                    page_table,
+                    row,
+                    needed=self._pass_blocks(
+                        driver.chain_position(new_map[row], int(positions[row, 0]))
+                        if chained[row]
+                        else int(positions[row, 0])
+                    ),
+                    label=f"verify row {row}",
                 )
                 for row in live_rows
             }
@@ -1303,13 +1814,19 @@ class Qwen38MTPForCausalLM(Qwen38ForCausalLM):
                 tokens[row].tolist(),
                 int(positions[row, 0]),
                 int(num_valid_drafts[row]),
-                int(accepted_counts[row]),
+                -1 if chained[row] else int(accepted_counts[row]),
                 pages.get(row),
             )
             for row in live_rows
         ]
+        deferred = fused and bool(defer_read)
         try:
-            by_lane = driver.verify(rows)
+            if fused:
+                pending = driver.verify_enqueue(
+                    rows, {new_map[row] for row in live_rows if chained[row]}, defer_read=deferred
+                )
+            else:
+                by_lane = driver.verify(rows)
         except BaseException:
             self.batch_failed = True
             raise
@@ -1317,12 +1834,89 @@ class Qwen38MTPForCausalLM(Qwen38ForCausalLM):
             {remap[row]: row for row in range(lanes) if remap[row] != row} if remap != list(range(lanes)) else None
         )
         self.lane_of_slot = new_map
-        out = torch.zeros(lanes, k + 1, dtype=torch.int32)
-        for row in live_rows:
-            out[row] = torch.tensor(by_lane[new_map[row]], dtype=torch.int32)
-        return VerifyOutput(spec_mode="argmax_ids", argmax_ids=out, hidden=None)
+        if not fused:
+            self._tip_id = None  # a synchronous verify: nothing chains onto it or onto the step before it
+            out = torch.zeros(lanes, k + 1, dtype=torch.int32)
+            for row in live_rows:
+                out[row] = torch.tensor(by_lane[new_map[row]], dtype=torch.int32)
+            return VerifyOutput(spec_mode="argmax_ids", argmax_ids=out, hidden=None)
+        snapshot_map = list(new_map)  # a later admission may swap lanes in ``lane_of_slot`` in place
 
-    def _propose_lanes(self, num_drafts: int, committed_tokens: Any, accepted_counts: Any):
+        def land():
+            try:
+                driver.verify_finish(pending)
+            except BaseException:
+                self.batch_failed = True
+                raise
+            handle.runs = {snapshot_map[row]: driver.runs[snapshot_map[row]] for row in live_rows}
+            return self._lane_readout(handle.runs, live_rows, snapshot_map)
+
+        if not deferred:
+            try:
+                driver.verify_finish(pending)
+            except BaseException:
+                self.batch_failed = True
+                raise
+            runs = {new_map[row]: driver.runs[new_map[row]] for row in live_rows}
+            readout = self._lane_readout(runs, live_rows, new_map)
+            self._tip_id = None  # no handle: the plugin cannot chain onto this step
+            return VerifyOutput(
+                spec_mode="fused_sample",
+                accepted_token_ids=readout.accepted_token_ids,
+                accepted_counts=readout.accepted_counts,
+            )
+        handle = self._new_handle(land)
+        handle.lane_of_slot = snapshot_map
+        return VerifyOutput(spec_mode="fused_sample", handle=handle)
+
+    @staticmethod
+    def _chain_mask(chain_rows: Any, chain_tip: Any, fused: bool, rows: int) -> torch.Tensor:
+        """``chain_rows`` as a bool ``[rows]`` tensor (all False without it); ``chain_tip`` goes with it (the caller checks it
+        against the newest step)."""
+
+        if chain_rows is None:
+            if chain_tip is not None:
+                raise ValueError("chain_tip without chain_rows")
+            return torch.zeros(rows, dtype=torch.bool)
+        if not fused:
+            raise ValueError("chain_rows on a verify that is not fused_sample")
+        mask = torch.as_tensor(chain_rows)
+        if mask.dtype != torch.bool or tuple(mask.shape) != (rows,):
+            raise ValueError(f"chain_rows must be bool [{rows}], got {chain_rows}")
+        return mask
+
+    def _new_handle(self, land: Callable[[], Any]) -> Qwen38MTPFusedHandle:
+        self._tip_count += 1
+        handle = Qwen38MTPFusedHandle(self._tip_count, land)
+        self._last_handle = handle
+        self._tip_id = handle.tip_id
+        return handle
+
+    def _lane_readout(self, runs: Mapping[int, Any], live_rows: Sequence[int], new_map: Sequence[int]):
+        """The ``FusedReadout`` of a landed lane pass in the plugin's row order: row ``i`` is the lane ``new_map[i]``'s pass
+        (its committed ids, ``accepted + 1`` of them, -1 past the count; the column-0 position the pass really started at);
+        a padding row has count 1, p0 -1 and a real column-0 id (token 0, the contract's "its column-0 argmax": the
+        plugin's AcceptResult refuses a placeholder inside any row's committed prefix), -1 past it."""
+
+        from vllm_tt_plugin.spec_decode import FusedReadout
+
+        k, lanes = self.drafts, self.lanes
+        ids = torch.full((lanes, k + 1), PLACEHOLDER_TOKEN_ID, dtype=torch.int32)
+        ids[:, 0] = PADDING_ROW_TOKEN_ID
+        counts = torch.ones(lanes, dtype=torch.int32)
+        p0 = torch.full((lanes,), -1, dtype=torch.int32)
+        for row in live_rows:
+            run = runs[new_map[row]]
+            count = run.accepted + 1
+            ids[row, :count] = torch.tensor(run.argmaxes[:count], dtype=torch.int32)
+            counts[row] = count
+            p0[row] = run.position
+        return FusedReadout(ids, counts, p0)
+
+    def _propose_lanes(self, num_drafts: int, committed_tokens: Any, accepted_counts: Any, hidden: Any = None):
+        """The drafts of the step ``hidden`` names (a fused handle: its own snapshots, a later step may already have changed
+        the live state), else of the last pass."""
+
         from vllm_tt_plugin.spec_decode import DraftOutput, check_spec_side_tensors
 
         driver = self._require_lanes()
@@ -1333,17 +1927,30 @@ class Qwen38MTPForCausalLM(Qwen38ForCausalLM):
         if tuple(committed.shape) != (lanes, k + 1):
             raise ValueError(f"batch mode: the committed block is [{lanes}, {k + 1}], got {tuple(committed.shape)}")
         check_spec_side_tensors(torch.zeros(lanes, dtype=torch.int32), accepted_counts, lanes, k, call="propose")
+        handle = hidden if isinstance(hidden, Qwen38MTPFusedHandle) else None
+        if handle is not None:
+            handle.wait()
+        hybrid_slot = self.mtp_hybrid_slot if handle is None else handle.hybrid_slot
+        lane_of_slot = self.lane_of_slot if handle is None else handle.lane_of_slot
         drafts = torch.zeros(lanes, k, dtype=torch.int32)
         valid = torch.zeros(lanes, dtype=torch.int32)
         for row in range(lanes):  # row ``row`` is state slot ``row`` after the verify's remap
-            if self.mtp_hybrid_slot is not None:
-                if row == self.mtp_hybrid_slot:
-                    row_drafts, count = self.driver.propose(committed[row].tolist(), int(accepted_counts[row]))
+            if hybrid_slot is not None:
+                if row == hybrid_slot:
+                    row_drafts, count = self.driver.propose(
+                        committed[row].tolist(),
+                        int(accepted_counts[row]),
+                        None if handle is None else handle.single_run,
+                    )
                     drafts[row] = torch.tensor(row_drafts, dtype=torch.int32)
                     valid[row] = count
                 continue
+            lane = lane_of_slot[row]
             row_drafts, count = driver.propose(
-                self.lane_of_slot[row], committed[row].tolist(), int(accepted_counts[row])
+                lane,
+                committed[row].tolist(),
+                int(accepted_counts[row]),
+                _LIVE if handle is None else handle.runs.get(lane),
             )
             drafts[row] = torch.tensor(row_drafts, dtype=torch.int32)
             valid[row] = count
@@ -1357,28 +1964,53 @@ class Qwen38MTPForCausalLM(Qwen38ForCausalLM):
         )
 
     def _decode_hybrid(
-        self, row: int, tokens, positions, num_valid_drafts, accepted_counts, remap, new_map, page_table=None
+        self,
+        row: int,
+        tokens,
+        positions,
+        num_valid_drafts,
+        accepted_counts,
+        remap,
+        new_map,
+        page_table=None,
+        *,
+        fused: bool = False,
+        defer_read: bool = False,
+        chained: bool = False,
     ):
         """The only live row is the chain's request: one chain pass (``Qwen38VLLMMTPDriver.verify``); the other rows are
         padding (0), as the lane path pads its idle rows.  The request's slot follows the row (``slot_remap``).  Paged: the
-        chain's table takes the row's blocks of ``_pass_blocks`` (as batch 1) before the pass."""
+        chain's table takes the row's blocks of ``_pass_blocks`` (as batch 1) before the pass.  A chained row takes its block,
+        position and accepted count from the pass loop's last pass.  ``fused``: the pass stays synchronous; with
+        ``defer_read`` the result is a :class:`Qwen38MTPFusedHandle` that is already landed."""
 
-        from vllm_tt_plugin.spec_decode import VerifyOutput
+        from vllm_tt_plugin.spec_decode import FusedReadout, VerifyOutput
 
         k, lanes = self.drafts, self.lanes
+        block, position_row = tokens[row].tolist(), positions[row].tolist()
+        accepted, num_valid = int(accepted_counts[row]), int(num_valid_drafts[row])
+        if chained:
+            run = self.driver.run
+            if run is None:
+                raise Qwen38ChatChainError("chain row on the hybrid single with no pass to chain onto")
+            real = run.position + run.accepted + 1
+            if any(token != PLACEHOLDER_TOKEN_ID for token in block) or accepted != -1:
+                raise ValueError(
+                    f"chain row {row} must carry placeholder tokens and accepted_counts -1, got {block}, {accepted}"
+                )
+            if position_row[0] < real:
+                raise ValueError(
+                    f"chain row {row}: provisional position {position_row[0]} is below the real one {real}"
+                )
+            block, position_row = list(run.next_tokens), [real + column for column in range(k + 1)]
+            accepted, num_valid = run.accepted + 1, min(num_valid, k)
         page_ids = None
         if self.paging is not None:  # a refused table touches no device state
             page_ids = self._row_page_ids(
-                page_table, row, needed=self._pass_blocks(int(positions[row, 0])), label=f"verify row {row}"
+                page_table, row, needed=self._pass_blocks(position_row[0]), label=f"verify row {row}"
             )
         try:
-            ids = self.driver.verify(
-                tokens[row].tolist(),
-                positions[row].tolist(),
-                int(num_valid_drafts[row]),
-                int(accepted_counts[row]),
-                page_ids,
-            )
+            ids = self.driver.verify(block, position_row, num_valid, accepted, page_ids)
         except BaseException:
             self.batch_failed = self.slot.failed = True
             raise
@@ -1388,15 +2020,35 @@ class Qwen38MTPForCausalLM(Qwen38ForCausalLM):
         )
         self.lane_of_slot = new_map
         self.mtp_hybrid_slot = row
-        out = torch.zeros(lanes, k + 1, dtype=torch.int32)
-        out[row] = torch.tensor(ids, dtype=torch.int32)
-        return VerifyOutput(spec_mode="argmax_ids", argmax_ids=out, hidden=None)
+        if not fused:
+            self._tip_id = None
+            out = torch.zeros(lanes, k + 1, dtype=torch.int32)
+            out[row] = torch.tensor(ids, dtype=torch.int32)
+            return VerifyOutput(spec_mode="argmax_ids", argmax_ids=out, hidden=None)
+        run = self.driver.run
+        count = run.accepted + 1
+        out = torch.full((lanes, k + 1), PLACEHOLDER_TOKEN_ID, dtype=torch.int32)
+        out[:, 0] = PADDING_ROW_TOKEN_ID  # the padding rows' committed column (see _lane_readout)
+        out[row, :count] = torch.tensor(ids[:count], dtype=torch.int32)
+        counts = torch.ones(lanes, dtype=torch.int32)
+        counts[row] = count
+        p0 = torch.full((lanes,), -1, dtype=torch.int32)
+        p0[row] = run.position
+        if not defer_read:
+            self._tip_id = None
+            return VerifyOutput(spec_mode="fused_sample", accepted_token_ids=out, accepted_counts=counts)
+        readout = FusedReadout(out, counts, p0)
+        handle = self._new_handle(lambda: readout)
+        handle.lane_of_slot, handle.hybrid_slot, handle.single_run = list(new_map), row, run
+        handle.wait()
+        return VerifyOutput(spec_mode="fused_sample", handle=handle)
 
     def _move_hybrid_to_lane(self) -> None:
         """The chain's request into its lane (no reverse move exists): the chain leaves verify mode at the rows its last pass
         committed (the rows ``propose`` answered for), the lane imports that state and starts on the plugin's block
         ``[t', d_1 .. d_K]``.  The chain is free for the next admission, which resets it."""
 
+        self._finish_pending()
         driver, single = self._require_lanes(), self.driver
         lane = self._take_lane(self.mtp_hybrid_slot)
         run = single.run
@@ -1433,6 +2085,7 @@ class Qwen38MTPForCausalLM(Qwen38ForCausalLM):
     def _release_lane(self, slot: int) -> None:
         if isinstance(slot, bool) or not isinstance(slot, int) or not 0 <= slot < self.lanes:
             raise ValueError(f"slot must be in [0, {self.lanes}), got {slot!r}")
+        self._finish_pending()
         driver = self._require_lanes()
         if slot == self.mtp_hybrid_slot:
             self._release_hybrid()
@@ -1445,6 +2098,10 @@ class Qwen38MTPForCausalLM(Qwen38ForCausalLM):
         if self.batch_failed:
             logger.warning("a lane call failed; the traces and states are left to the mesh close")
             return
+        try:
+            self._finish_pending()
+        except Exception as error:  # the mesh close frees the traces either way
+            logger.warning(f"landing the pending lane pass at shutdown failed: {error}")
         if self.mtp_hybrid_slot is not None:
             self.mtp_hybrid_slot = None
             try:
@@ -1516,10 +2173,61 @@ class Qwen38MTPForCausalLM(Qwen38ForCausalLM):
         warm_widths = getattr(self.lanes_session, "warm_widths", None)
         if warm_widths is not None:  # every lane width's traces replay once here (the two warm lanes are still live)
             logger.info(f"mtp lanes: warm replays at widths {warm_widths()}")
+        if self._mamba_spec_on():
+            self.release_request(slots[1])  # its lane takes the continuation chunk; the other warm lane stays live
+            self._warmup_prefix(slots[1])
         for slot in slots:
             self.release_request(slot)
         if self.mtp_hybrid_single:
             self._warmup_hybrid()
+
+    def _warmup_prefix(self, slot: int) -> None:
+        """MambaSpec mode, under the closed miss guard: an intermediate chunk of one block that saves its state block, then the
+        last chunk from that boundary that restores it (the chunk trace at a start past 0, the restore, the lane import).  The
+        state blocks follow the KV blocks of the warm table: state saved into a KV block would put float32 bytes into KV
+        rows."""
+
+        block_size = self.block_size
+        prompt = list(WARMUP_PROMPT_TOKEN_IDS)
+        length = block_size + len(prompt)
+        ids = (prompt * (-(-length // len(prompt))))[:length]
+        kv_blocks = -(-length // block_size)
+        by_slot: dict[int, list[int]] = {}
+        for layer, gdn in sorted(self.gdn_slot.items()):
+            by_slot.setdefault(gdn, []).append(layer)
+        groups = [
+            [layers[g] for layers in by_slot.values() if len(layers) > g]
+            for g in range(max(len(layers) for layers in by_slot.values()))
+        ]  # a block of a slot holds one state: the groups' layers of a slot take different blocks
+        first_state = 1 + kv_blocks
+        if first_state + len(groups) > self.num_blocks:
+            raise ValueError(
+                f"the prefix warm-up needs {first_state + len(groups)} blocks, the pool has {self.num_blocks}"
+            )
+        warm_table = self._warm_page_table(1, 1, length)
+        mamba_state = SimpleNamespace(
+            groups=tuple(
+                SimpleNamespace(
+                    layer_names=tuple(f"model.layers.{layer}.linear_attn" for layer in layers),
+                    windows=torch.tensor([[first_state + g]], dtype=torch.int32),
+                    checkpoint_blocks=None,
+                )
+                for g, layers in enumerate(groups)
+            ),
+            checkpoint_positions=None,
+        )
+        for start, end, last in ((0, block_size, False), (block_size, length, True)):
+            self.prefill_forward(
+                tokens=torch.tensor([ids[:end]], dtype=torch.int32),
+                page_table=warm_table,
+                kv_cache=None,
+                enable_trace=True,
+                prompt_lens=[end],
+                start_pos=[start],
+                empty_slots=[slot],
+                mamba_state=mamba_state,
+                intermediate_prefill_mask=[not last],
+            )
 
     def _warmup_hybrid(self) -> None:
         """One lone request through the hybrid path with the serving calls, under the closed miss guard: the prefill on the

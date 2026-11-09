@@ -1795,7 +1795,7 @@ def test_lane_draft_body_moves_ids_by_copy_and_orders_history_rows_and_assembly(
     assert "selectors=None" in body and "positions.row" in body and "verify.positions.write" not in body
     # The chain: commit, PLE rows, verify, draft, one readback; the sweep's split order.
     step = _segment(MTP_LANES_SOURCE, classes["Qwen38TTNNMTPLaneChain"])
-    order = ('"commit_enqueue"', '"ple_rows"', "return self._finish_pass(tokens, segments)")
+    order = ('"commit_enqueue"', '"ple_rows"', "self.pending = self._launch_pass(tokens, segments")
     indices = [step.index(text) for text in order]
     assert indices == sorted(indices), order
     finish = _segment(
@@ -1803,16 +1803,25 @@ def test_lane_draft_body_moves_ids_by_copy_and_orders_history_rows_and_assembly(
         next(
             n
             for n in classes["Qwen38TTNNMTPLaneChain"].body
-            if isinstance(n, ast.FunctionDef) and n.name == "_finish_pass"
+            if isinstance(n, ast.FunctionDef) and n.name == "_launch_pass"
+        ),
+    )
+    order = ('f"verify_{form}"', 'f"draft_{form}"', '"readback_enqueue"')
+    indices = [finish.index(text) for text in order]
+    assert indices == sorted(indices), order
+    land = _segment(
+        MTP_LANES_SOURCE,
+        next(
+            n
+            for n in classes["Qwen38TTNNMTPLaneChain"].body
+            if isinstance(n, ast.FunctionDef) and n.name == "_land_pass"
         ),
     )
     order = (
-        'f"verify_{form}"',
-        'f"draft_{form}"',
         '"readback"',
         "commit_lane_verify_host(self.model, self.verify, [len(block) for block in committed])",
     )
-    indices = [finish.index(text) for text in order]
+    indices = [land.index(text) for text in order]
     assert indices == sorted(indices), order
 
 

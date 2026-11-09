@@ -107,6 +107,8 @@ INDEX_HEAD_STRIDE = TP_SIZE // INDEX_QUERY_HEADS
 INDEX_KV_HEADS = 1
 INDEX_HEAD_DIM = 128
 COMPRESS_RATIO = 4
+# The step of a lane verify's narrower scored context (a context-width set): 8192 compressed blocks, one top-k segment
+LANE_CONTEXT_STEP = 32768
 TOKEN_BUDGET = 2048
 BLOCK_TOPK = TOKEN_BUDGET // COMPRESS_RATIO
 
@@ -2326,14 +2328,22 @@ class Qwen38TTNNQSALaneConstants:
         parent: "Qwen38TTNNQSALaneConstants",
         *,
         lanes: int,
+        allocated_context: int | None = None,
     ) -> "Qwen38TTNNQSALaneConstants":
         """Constants of a ``lanes``-lane bucket view over the paged 32-lane ``parent``.
 
         The view shares the parent's one page table (host writes to it reach every bucket) and does not own it; its
-        other constants are built at ``lanes`` lanes with the parent's context, indexer form and paging."""
+        other constants are built at ``lanes`` lanes with the parent's indexer form and paging, and the parent's context
+        or a narrower ``allocated_context`` (a context-width set, a whole number of ``LANE_CONTEXT_STEP``)."""
 
+        context = parent.allocated_context if allocated_context is None else allocated_context
         if parent.paging is None:
             raise ValueError("a QSA lane constants view needs a paged parent")
+        if context != parent.allocated_context and (context > parent.allocated_context or context % LANE_CONTEXT_STEP):
+            raise ValueError(
+                f"a QSA lane constants view context {context} must be a multiple of {LANE_CONTEXT_STEP} within the "
+                f"parent's {parent.allocated_context}"
+            )
         if parent.lanes > MAX_LANES:
             raise ValueError(
                 f"a QSA lane constants view needs a parent of at most {MAX_LANES} lanes, got {parent.lanes}"
@@ -2348,7 +2358,7 @@ class Qwen38TTNNQSALaneConstants:
                 mesh_device,
                 mesh_contract,
                 lanes=lanes,
-                allocated_context=parent.allocated_context,
+                allocated_context=context,
                 indexer_form=parent.indexer_form,
                 paging=parent.paging,
             )
@@ -3390,8 +3400,9 @@ def derive_qsa_lane_verify_inputs(
             f"QSA lane verify constants are {lane_verify.lanes} x {lane_verify.rows}, the verify constants have "
             f"{verify.rows} rows and the lane constants {lanes.lanes} lanes"
         )
-    if chunk.rows != CHUNK_ROWS or chunk.allocated_compressed_blocks != constants.allocated_compressed_blocks:
-        raise ValueError("QSA lane verify needs the 32-row chunk constants of the position constants' blocks")
+    # a context-width set's chunk constants are narrower than the position constants (only high27_mask is read here)
+    if chunk.rows != CHUNK_ROWS or chunk.allocated_compressed_blocks > constants.allocated_compressed_blocks:
+        raise ValueError("QSA lane verify needs 32-row chunk constants within the position constants' blocks")
     if lanes.allocated_context != lane_verify.allocated_context:
         raise ValueError("QSA lane and lane verify constants were built for different contexts")
     paged = lanes.page_table is not None
@@ -8524,11 +8535,12 @@ class Qwen38TTNNQSA:
         """The ``indexer_score_dsa`` page keywords over the shared Index pool (empty on the per-lane cache).  The
         logical k of the wide form is the flat view's ``[1, 1, users * (blocks + 32), 128]`` (the table's rows are the
         users; the wide callers pass the first ``count`` rows through ``_lane_wide_page_table``) and ``kv_len``
-        bounds it to the first ``count`` users; the per-lane form takes ``cache_batch_idx`` from its caller."""
+        bounds it to the first ``count`` users; the per-lane form takes ``cache_batch_idx`` from its caller.  The blocks
+        per user are the lane constants' context (a context-width set scores at most its own width)."""
 
         if not self._lane_index_paged(state, lane_constants):
             return {}
-        rows = self.allocated_compressed_blocks + ttnn.TILE_SIZE
+        rows = lane_constants.allocated_context // COMPRESS_RATIO + ttnn.TILE_SIZE
         kwargs = {
             "page_table": lane_constants.page_table,
             "paged_block_rows": lane_constants.paging.page_size // COMPRESS_RATIO,
@@ -9140,9 +9152,10 @@ class Qwen38TTNNQSA:
         """The wide indexer once over the lane-major query tile and the flat compressed cache (on shared pools: the
         Index pool through the lane page table, the table's users bounded to the first ``count``), row r windowed to
         lane_of(r)'s columns (the fused row windows, or the chain's slices), the score all-reduce and the per-row mask.
+        The width is the lane verify constants' context: a context-width set scores only the blocks below it.
         """
 
-        count, blocks = state.lanes, self.allocated_compressed_blocks
+        count, blocks = state.lanes, lane_verify.allocated_context // COMPRESS_RATIO
         rows = blocks + ttnn.TILE_SIZE
         if state.pools_shared:
             page_kwargs = self._lane_indexer_kwargs(state, lane_constants, count=count, wide=True)
@@ -9286,13 +9299,7 @@ class Qwen38TTNNQSA:
                 f"QSA lane verify inputs are for {inputs.lanes} lanes and the flat cache has {state.kv_scratch_rows} "
                 f"scratch rows; the redirect needs {2 * CACHE_WRITE_ROWS}"
             )
-        if constants.rows != CHUNK_ROWS or constants.allocated_compressed_blocks != self.allocated_compressed_blocks:
-            raise ValueError("QSA lane verify runs on the layer's 32-row chunk constants")
-        if (
-            lane_constants.allocated_context != self.allocated_context
-            or lane_verify.allocated_context != self.allocated_context
-        ):
-            raise ValueError("QSA lane constants were built for another context")
+        self._lane_verify_context(state, constants, lane_constants, lane_verify)
 
         full_hidden = self._all_gather_hidden_rows(hidden_rows, constants)
         index_query, raw_key = self._index_projection_rows(full_hidden, None, cos, sin, constants)
@@ -9310,6 +9317,28 @@ class Qwen38TTNNQSA:
         output = self._project_output_rows(local_attention, full_hidden, constants)
         _deallocate(full_hidden)
         return output
+
+    def _lane_verify_context(self, state, constants, lane_constants, lane_verify) -> int:
+        """The context a lane verify scores: the three constants' one context, the layer's own or, on shared pools, a
+        narrower whole number of ``LANE_CONTEXT_STEP`` (a context-width set: the lane tables stay the full-width ones,
+        so only the scored blocks shrink)."""
+
+        if constants.rows != CHUNK_ROWS:
+            raise ValueError("QSA lane verify runs on 32-row chunk constants")
+        context = constants.allocated_compressed_blocks * COMPRESS_RATIO
+        if lane_constants.allocated_context != context or lane_verify.allocated_context != context:
+            raise ValueError(
+                f"QSA lane verify constants disagree on the context: chunk {context}, lane "
+                f"{lane_constants.allocated_context}, lane verify {lane_verify.allocated_context}"
+            )
+        if context == self.allocated_context:
+            return context
+        if not state.pools_shared or context > self.allocated_context or context % LANE_CONTEXT_STEP:
+            raise ValueError(
+                f"a QSA lane verify context of {context} needs shared pools and a multiple of {LANE_CONTEXT_STEP} "
+                f"within the layer's {self.allocated_context}"
+            )
+        return context
 
     # ------------------------------------------------------------------ fused lane body (the six programs at B rows)
     # _forward_decode_lanes_fused is _forward_decode_generic_fused over B lanes: the same six ttnn/fused/qsa_block

@@ -471,7 +471,7 @@ def test_mambaspec_prefill_packs_only_the_rows_that_touch_no_state_block(monkeyp
         grouped_calls.append(([len(p) for p in prompts], list(slots), claimed))
         return torch.tensor([[len(p)] for p in prompts], dtype=torch.int32)
 
-    def single(decoder, slot, prompt, pages, policy, claimed=None, start=0, layer_blocks=None):
+    def single(decoder, slot, prompt, pages, policy, claimed=None, start=0, layer_blocks=None, checkpoints=()):
         single_calls.append((slot, len(prompt), start, layer_blocks))
         return torch.tensor([[len(prompt)]], dtype=torch.int32)
 
