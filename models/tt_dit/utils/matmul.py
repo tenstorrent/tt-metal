@@ -37,6 +37,7 @@ def _clear_config_caches() -> None:
     for cache in _config_caches:
         cache.clear()
 
+
 # Track unique warning signatures to avoid stdout spam
 _warned_matmul_signatures = set()
 _logged_m_per_core_signatures = set()
@@ -508,10 +509,21 @@ _BH_GALAXY_MIN_DEVICES = 32
 _BH_GALAXY_MAX_CORE_GRID = (11, 10)
 
 
+_is_blackhole_cached: bool | None = None
+
+
+def _is_blackhole() -> bool:
+    """The arch query (`ttnn.get_arch_name`, ~30 us), once per process."""
+    global _is_blackhole_cached
+    if _is_blackhole_cached is None:
+        _is_blackhole_cached = bool(ttnn.device.is_blackhole())
+    return _is_blackhole_cached
+
+
 def get_matmul_core_grid(mesh_device):
     """Return the compute core grid, clamped to 11x10 on Blackhole Galaxy (power constraint)."""
     core_grid = mesh_device.compute_with_storage_grid_size()
-    if ttnn.device.is_blackhole() and mesh_device.get_num_devices() >= _BH_GALAXY_MIN_DEVICES:
+    if _is_blackhole() and mesh_device.get_num_devices() >= _BH_GALAXY_MIN_DEVICES:
         core_grid = ttnn.CoreCoord(
             min(core_grid.x, _BH_GALAXY_MAX_CORE_GRID[0]),
             min(core_grid.y, _BH_GALAXY_MAX_CORE_GRID[1]),
@@ -691,6 +703,7 @@ def _lookup_nearest_blocking(M: int, K: int, N: int, grid_x: int, grid_y: int, t
     return (Mb, Kb, Nb, sb) if sb is not None else (Mb, Kb, Nb)
 
 
+@_per_shape_cache
 def get_matmul_config(M, K, N, core_grid, default_block_size=None, use_heuristic=False, num_k_shards=-1):
     """Get the matmul config for the given shape and core grid.
 
