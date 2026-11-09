@@ -12,8 +12,9 @@ read, and how the tables make sure nothing the kernel is fed goes unaccounted fo
 ## A field in the manifest
 
 A field is keyed by name, and says what kind of value it holds. Each ERISC a router runs on has its own fields, since
-the builder gives each ERISC its own arguments, so a `fields` object is keyed by ERISC first. One field of each kind,
-from ERISC0 of router `E0` on a T3K's chip `C0`:
+the builder gives each ERISC its own arguments, so a fields block is keyed by ERISC first. Each distinct block is
+written once, in the manifest's `field_sets`, and a router, channel or edge names its block there by id
+([FORMAT.md](FORMAT.md)). One field of each kind, from ERISC0 of router `E0` on a T3K's chip `C0`:
 
 ```json
 "edm_status":                      { "category": "lifecycle", "kind": "l1", "address": 98624, "num_elements": 1,
@@ -41,12 +42,14 @@ ERISC, from the arguments the builder gave that ERISC ([BUILDER_HOOKS.md](BUILDE
 recorded). Each ERISC's values are recorded as given: two ERISCs can differ, such as on which channels each runs, and
 nothing checks that they agree.
 
+Each table's fields make up the block that the `fields` id at its place names:
+
 | Table | Entries | Sits at |
 | --- | --- | --- |
-| `k_router_fields` | 37 | `routers.<key>.fields.erisc<r>` |
-| `k_sender_channel_fields` | 8 | `routers.<key>.channels.senders.vc<v>.ch<c>.fields.erisc<r>` |
-| `k_receiver_channel_fields` | 8 | `routers.<key>.channels.receivers.vc<v>.ch<c>.fields.erisc<r>` |
-| `k_downstream_edge_fields` | 2 | `routers.<key>.intra_chip_downstream_edges.vc<v>.edge<e>.fields.erisc<r>` |
+| `k_router_fields` | 37 | `routers.<key>.fields` |
+| `k_sender_channel_fields` | 8 | `routers.<key>.channels.senders.vc<v>.ch<c>.fields` |
+| `k_receiver_channel_fields` | 8 | `routers.<key>.channels.receivers.vc<v>.ch<c>.fields` |
+| `k_downstream_edge_fields` | 2 | `routers.<key>.intra_chip_downstream_edges.vc<v>.edge<e>.fields` |
 
 The router table includes what differs between a router's ERISCs by design, such as each one's role in the startup
 sync and which channels it services.

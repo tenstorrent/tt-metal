@@ -6,7 +6,7 @@ Every field the manifest records, with the named compile-time argument that feed
 
 ### Router fields
 
-`routers.<key>.fields.erisc<r>`
+Each `erisc<r>` of the `field_sets` block that `routers.<key>.fields` names.
 
 | Key | Kind | Type | Category | Fed as | Description |
 | --- | --- | --- | --- | --- | --- |
@@ -26,10 +26,10 @@ Every field the manifest records, with the named compile-time argument that feed
 | `handshake_context_switch_timeout` | number |  | kernel_params | `DEFAULT_HANDSHAKE_CONTEXT_SWITCH_TIMEOUT` | How many writes the handshake sender makes before it gives base firmware a turn to route, and then starts counting again. |
 | `txq_spin_wait_completion_ack` | flag |  | kernel_params | `ETH_TXQ_SPIN_WAIT_RECEIVER_SEND_COMPLETION_ACK` | The same, for a receiver's completion ack. |
 | `txq_accept_ahead` | number |  | kernel_params | `DEFAULT_NUM_ETH_TXQ_DATA_PACKET_ACCEPT_AHEAD` | How many packets each Ethernet TX queue accepts before the earlier ones are sent. Written to both queues' ETH_TXQ_DATA_PACKET_ACCEPT_AHEAD register at startup. |
-| `txq_seq_update_timeout` | number |  | kernel_params | `ETH_TXQ_SEQ_UPDATE_TIMEOUT` | The Ethernet TX queues' keepalive period while the router runs, in cycles: how long an idle queue waits before it sends its paired RX queue's acknowledgements, which one-way traffic waits on once the sender's window is full. The router's first ERISC writes it to both queues at startup and restores the firmware's value at teardown. 0 leaves the firmware's value (8000 cycles). |
+| `txq_seq_update_timeout` | number |  | kernel_params | `ETH_TXQ_SEQ_UPDATE_TIMEOUT` | The Ethernet TX queues' keepalive period while the router runs, in cycles: how long an idle queue waits before it sends its paired RX queue's acknowledgements. |
 | `risc_cpu_data_cache` | flag |  | kernel_params | `ENABLE_RISC_CPU_DATA_CACHE` | Whether the kernel treats the RISC's data cache as on, and so invalidates it before reading what other cores write to its L1. |
 | `vc0_bubble_flow_control` | flag |  | kernel_params | `ENABLE_DEADLOCK_AVOIDANCE` | Whether VC0 runs bubble flow control for deadlock avoidance, which adds first-level acks: VC0 senders then also get credits back when the peer receives a packet (acked). |
-| `injection_min_free_slots` | number |  | flow_control | `BUBBLE_FLOW_CONTROL_INJECTION_SENDER_CHANNEL_MIN_FREE_SLOTS` (with deadlock avoidance on) | With bubble flow control, the free slots an injection channel needs in the peer's VC0 receiver before it sends: 2 (the bubble), 3 on Wormhole where the receiver has 3 or more, plus the receiver's slots beyond the 16-packet occupancy cap. |
+| `injection_min_free_slots` | number |  | flow_control | `BUBBLE_FLOW_CONTROL_INJECTION_SENDER_CHANNEL_MIN_FREE_SLOTS` (with deadlock avoidance on) | With bubble flow control, the free slots an injection channel needs in the peer's VC0 receiver before it sends. |
 | `speedy_vc0` | flag |  | kernel_params | `ENABLE_SPEEDY_VC0` | Whether the builder made VC0 a speedy router: a worker-only VC0 whose receiver only delivers to this chip, with no bubble flow control or first-level acks. The kernel doesn't act on this flag: the builder applies the choice by setting VC0's receiver forwarding_disabled and turning vc0_bubble_flow_control off. |
 | `perf_telemetry` | l1 | `byte` × 32 | diagnostics | `PERF_TELEMETRY_BUFFER_ADDR` | Where the router records its bandwidth telemetry, when bandwidth telemetry is on. Allocated only then, except on Blackhole, which always allocates it. |
 | `code_profiling` | l1 | `CodeProfilingTimerResult` | diagnostics | `CODE_PROFILING_BUFFER_ADDR` | Where the router accumulates each code profiling timer's cycles and captures, one result per timer type. Allocated only with code profiling on. |
@@ -55,13 +55,13 @@ Every field the manifest records, with the named compile-time argument that feed
 
 ### Sender channel fields
 
-`routers.<key>.channels.senders.vc<v>.ch<c>.fields.erisc<r>`
+Each `erisc<r>` of the `field_sets` block that `routers.<key>.channels.senders.vc<v>.ch<c>.fields` names.
 
 | Key | Kind | Type | Category | Fed as | Description |
 | --- | --- | --- | --- | --- | --- |
 | `is_injection_channel` | flag |  | flow_control | `SENDER_CH_{}_IS_INJECTION` | Whether the channel injects traffic into the fabric. With deadlock avoidance on, an injection channel uses bubble flow control. |
 | `free_slots` | stream_reg | `unsigned int` in `buf_space_available` | flow_control | `SENDER_CHANNEL_{}_FREE_SLOTS_STREAM_ID` | The channel's slots not holding a packet waiting to be sent: the producer takes one per packet it writes, and the router returns it as soon as it sends the packet over Ethernet. The producer gets its credit back later: at the peer receiver's first-level ack, or when the packet's completion group there completes (the peer receiver's completion_group_size). |
-| `producer_credit_return_noc` | number |  | flow_control | `SENDER_CH_{}_ACK_NOC_ID` | The NoC the router returns the producer's credits on. The builder gives every channel the same NoC, and the router uses channel 0's for all of them. |
+| `producer_credit_return_noc` | number |  | flow_control | `SENDER_CH_{}_ACK_NOC_ID` | The NoC the router returns the producer's credits on. |
 | `producer_credit_return_cmd_buf` | enum | `NocCmdBuf` | flow_control | `SENDER_CH_{}_ACK_CMD_BUF_ID` | The NoC command buffer it returns them through. |
 | `connection` | l1 | `ConnectionValue` | control_info | a runtime argument | The state of the producer's connection: the producer writes open and close requested, and the router writes unused once it has torn the connection down. In the router's runtime args. |
 | `conn_info` | l1 | `EDMChannelWorkerLocationInfo` | control_info | `LOCAL_SENDER_CH_{}_CONN_INFO_ADDR` | Where the producer writes where it is, and the router its read counter. |
@@ -71,11 +71,11 @@ Every field the manifest records, with the named compile-time argument that feed
 
 ### Receiver channel fields
 
-`routers.<key>.channels.receivers.vc<v>.ch<c>.fields.erisc<r>`
+Each `erisc<r>` of the `field_sets` block that `routers.<key>.channels.receivers.vc<v>.ch<c>.fields` names.
 
 | Key | Kind | Type | Category | Fed as | Description |
 | --- | --- | --- | --- | --- | --- |
-| `forwarding_disabled` | flag |  | kernel_params | `DISABLE_RX_CH{}_FORWARDING` | Whether the receiver forwards nothing to sibling routers: it only delivers to this chip. Set for VC0 on a speedy router and for VC2 always, and where a channel trimming capture saw nothing on the VC. The builder emits it per VC, so it is indexed by the channel's VC. |
+| `forwarding_disabled` | flag |  | kernel_params | `DISABLE_RX_CH{}_FORWARDING` | Whether the receiver forwards nothing to sibling routers: it only delivers to this chip.  |
 | `intermesh_ingress` | flag |  | kernel_params | `IS_RECEIVER_CHANNEL_{}_INTERMESH_INGRESS` (2D only) | Whether the receiver's packets arrive from another mesh: the kernel re-encodes their route from this mesh's route table before deciding where they go. |
 | `forward_noc` | number |  | kernel_params | `RX_CH_{}_FWD_NOC_ID` | The NoC the receiver forwards packets to sibling routers on. |
 | `forward_data_cmd_buf` | enum | `NocCmdBuf` | kernel_params | `RX_CH_{}_FWD_DATA_CMD_BUF_ID` | The NoC command buffer it writes each forwarded packet through. |
@@ -89,7 +89,7 @@ Every field the manifest records, with the named compile-time argument that feed
 
 ### Downstream edge fields
 
-`routers.<key>.intra_chip_downstream_edges.vc<v>.edge<n>.fields.erisc<r>`
+Each `erisc<r>` of the `field_sets` block that `routers.<key>.intra_chip_downstream_edges.vc<v>.edge<n>.fields` names.
 
 | Key | Kind | Type | Category | Fed as | Description |
 | --- | --- | --- | --- | --- | --- |

@@ -15,8 +15,8 @@ changes the manifest format, so it goes with a change to `fabric_manifest_schema
 2. **Builds the facts.** `ManifestFacts` gets `run`, `fabric` and `arch` from the describe file
    ([DESCRIBE.md](DESCRIBE.md)), and `meshes` from the topology pass ([TOPOLOGY_PASS.md](TOPOLOGY_PASS.md)). The fabric
    routers must already be compiled, so the builder context exists.
-3. **Makes the JSON** with `make_manifest_json`.
-4. **Writes the file** to this rank's path in the run's folder, `<logs_dir>/generated/fabric_debug/runs/<run_id>/` (the path
+3. **Makes the JSON** with `make_manifest_json`, sharing fields blocks through `field_sets` (below).
+4. **Writes the file**, compactly, to this rank's path in the run's folder, `<logs_dir>/generated/fabric_debug/runs/<run_id>/` (the path
    helpers are in `common/fabric_visualizer_files.hpp`), under a temporary name, `<path>.tmp.<pid>`, then renames it
    into place, so a reader never sees a partial file. On a failure it removes the temporary file.
 
@@ -38,9 +38,25 @@ Each run writes into a folder of its own, so a manifest on disk always belongs t
 | `fabric`           | `make_fabric_json`        | `ManifestFacts::fabric`                                                             |
 | `arch`             | `make_arch_json`          | `ManifestFacts::arch`                                                               |
 | `vocabulary`       | `make_vocabulary_json`    | `k_vocabulary_lists` (below)                                                        |
+| `field_sets`       | `FieldsWriter`            | Every fields block `meshes` holds, each distinct one once (below)                   |
 | `meshes`           | `make_mesh_json` per mesh | `ManifestFacts::meshes`                                                             |
 
 The JSON keeps keys in the order the writer adds them.
+
+## Fields layouts
+
+`make_manifest_json` takes a `FieldsLayout`, which says how each fields block (a router's, a channel's or an edge's,
+keyed by ERISC) is written:
+
+| Layout | Writes |
+| --- | --- |
+| `SHARED`, the default | Each distinct block once, in `field_sets`, keyed `F<n>` in the order it was first written, and the block's id where it was. Manifests are written this way |
+| `PER_ROUTER` | Each block in full where it is, and no `field_sets`. The decoded file embeds the manifest this way, since each of its field entries holds its own router's value |
+
+Most blocks repeat: a run's routers mostly have the same fields as each other, and so do their channels and edges.
+On a 32-chip galaxy, 1,008 blocks are 11 distinct ones. The model is the same either way: every router, channel and
+edge keeps its own `fields_by_erisc`, and `FieldsWriter` does the sharing as it writes them. Two blocks are shared only
+when their JSON is the same, key order included.
 
 Each model struct has a `make_<name>_json` that writes it, such as `make_router_json` and `make_sender_channel_json`.
 They follow a few conventions:
@@ -55,7 +71,7 @@ value with no enumerator name, such as a bitmask combination, is written as its 
 - **Something that isn't there** is `null` rather than left out, such as a link with no peer or a field the builder
 didn't allocate. Keys are left out only where they don't apply, such as `torus` on a 1D mesh or a field the builder
 doesn't emit on this run.
-- **Values the builder gives each ERISC** are keyed `erisc<r>` (`make_by_erisc_json`): every `fields` object, a sender
+- **Values the builder gives each ERISC** are keyed `erisc<r>` (`make_by_erisc_json`): every fields block, a sender
 channel's `credits`, and a receiver channel's `forwards_on`.
 - **Two entries with one key** fail the writer, such as two fields keyed alike.
 - **Regions and registers are written as they are.** The writer copies what the passes worked out and computes nothing

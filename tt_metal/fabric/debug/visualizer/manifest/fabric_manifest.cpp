@@ -39,6 +39,7 @@
 #include <system_error>
 #include <tuple>
 #include <type_traits>
+#include <unordered_map>
 #include <variant>
 #include <vector>
 #include <unistd.h>
@@ -332,6 +333,35 @@ json make_fields_by_erisc_json(const manifest::FieldsByErisc& fields_by_erisc) {
         fields_by_erisc, [](const std::vector<manifest::Field>& fields) { return make_fields_json(fields); });
 }
 
+// Writes each fields block as `layout` says. Under SHARED it keeps each distinct block once, for field_sets.
+class FieldsWriter {
+public:
+    explicit FieldsWriter(FieldsLayout layout) : layout_(layout) {}
+
+    // The block for `fields_by_erisc`, or under SHARED the key of its entry in field_sets.
+    json write(const manifest::FieldsByErisc& fields_by_erisc) {
+        json block = make_fields_by_erisc_json(fields_by_erisc);
+        if (layout_ == FieldsLayout::PER_ROUTER) {
+            return block;
+        }
+        const auto [it, added] =
+            keys_by_block_.try_emplace(block.dump(), manifest::field_set_key(field_sets_.size()));
+        if (added) {
+            field_sets_[it->second] = std::move(block);
+        }
+        return it->second;
+    }
+
+    // Every distinct block written, keyed by its field_sets key, in the order each was first written.
+    json take_field_sets() { return std::move(field_sets_); }
+
+private:
+    FieldsLayout layout_;
+    // Each distinct block, as its compact JSON text, and its field_sets key.
+    std::unordered_map<std::string, std::string> keys_by_block_;
+    json field_sets_ = json::object();
+};
+
 json make_serviced_by_json(const std::vector<uint32_t>& risc_ids) {
     json out = json::array();
     for (const auto risc_id : risc_ids) {
@@ -358,7 +388,10 @@ json make_sender_producer_json(
 }
 
 json make_sender_channel_json(
-    const manifest::SenderChannel& sender, FabricNodeId node, const manifest::RouterIdentity& identity) {
+    const manifest::SenderChannel& sender,
+    FabricNodeId node,
+    const manifest::RouterIdentity& identity,
+    FieldsWriter& fields_writer) {
     json out;
     out["status"] = lower_enum_name(sender.status);
     out["serviced_by"] = make_serviced_by_json(sender.serviced_by);
@@ -372,11 +405,11 @@ json make_sender_channel_json(
         entry["completed"] = make_credit_ref_json(credits.completed);
         return entry;
     });
-    out["fields"] = make_fields_by_erisc_json(sender.fields_by_erisc);
+    out["fields"] = fields_writer.write(sender.fields_by_erisc);
     return out;
 }
 
-json make_receiver_channel_json(const manifest::ReceiverChannel& receiver) {
+json make_receiver_channel_json(const manifest::ReceiverChannel& receiver, FieldsWriter& fields_writer) {
     json out;
     out["status"] = lower_enum_name(receiver.status);
     out["serviced_by"] = make_serviced_by_json(receiver.serviced_by);
@@ -385,7 +418,7 @@ json make_receiver_channel_json(const manifest::ReceiverChannel& receiver) {
             return forwards_on.has_value() ? json(fmt::format("vc{}", *forwards_on)) : json(nullptr);
         });
     out["ring_buffer"] = make_optional_l1_json(receiver.ring_buffer);
-    out["fields"] = make_fields_by_erisc_json(receiver.fields_by_erisc);
+    out["fields"] = fields_writer.write(receiver.fields_by_erisc);
     return out;
 }
 
@@ -409,7 +442,7 @@ json make_channels_by_vc_json(const std::vector<std::vector<Channel>>& channels_
 
 // Keyed vc<N> then edge<N>, the kernel's EDGE_<N>. VCs without edges are left out. An edge names the sender channel
 // it lands on. In mux mode, the mux stands in for the sibling's VC0 channels other than the worker channel.
-json make_downstream_edges_json(const manifest::Router& router, FabricNodeId node) {
+json make_downstream_edges_json(const manifest::Router& router, FabricNodeId node, FieldsWriter& fields_writer) {
     json out = json::object();
     for (size_t vc = 0; vc < router.intra_chip_downstream_edges.size(); ++vc) {
         const auto& edges = router.intra_chip_downstream_edges[vc];
@@ -421,7 +454,7 @@ json make_downstream_edges_json(const manifest::Router& router, FabricNodeId nod
             json entry;
             entry["downstream_channel"] = downstream_channel_path(node, router.identity, vc, edge.downstream_channel);
             entry["through_tensix_mux"] = edge.through_tensix_mux;
-            entry["fields"] = make_fields_by_erisc_json(edge.fields_by_erisc);
+            entry["fields"] = fields_writer.write(edge.fields_by_erisc);
             vc_json[fmt::format("edge{}", edge.edge)] = std::move(entry);
         }
         out[fmt::format("vc{}", vc)] = std::move(vc_json);
@@ -473,7 +506,7 @@ json make_vocabulary_json() {
     return out;
 }
 
-json make_router_json(const manifest::Router& router, FabricNodeId node) {
+json make_router_json(const manifest::Router& router, FabricNodeId node, FieldsWriter& fields_writer) {
     json out;
     out["identity"] = make_router_identity_json(router.identity);
     out["link"] = make_eth_link_json(router.link);
@@ -481,12 +514,14 @@ json make_router_json(const manifest::Router& router, FabricNodeId node) {
     out["credit_counters"] = make_credit_counters_json(router.credit_counters);
     out["channels"]["senders"] = make_channels_by_vc_json(
         router.channels.senders,
-        [&](const manifest::SenderChannel& sender) { return make_sender_channel_json(sender, node, router.identity); });
+        [&](const manifest::SenderChannel& sender) {
+            return make_sender_channel_json(sender, node, router.identity, fields_writer);
+        });
     out["channels"]["receivers"] = make_channels_by_vc_json(
         router.channels.receivers,
-        [&](const manifest::ReceiverChannel& receiver) { return make_receiver_channel_json(receiver); });
-    out["intra_chip_downstream_edges"] = make_downstream_edges_json(router, node);
-    out["fields"] = make_fields_by_erisc_json(router.fields_by_erisc);
+        [&](const manifest::ReceiverChannel& receiver) { return make_receiver_channel_json(receiver, fields_writer); });
+    out["intra_chip_downstream_edges"] = make_downstream_edges_json(router, node, fields_writer);
+    out["fields"] = fields_writer.write(router.fields_by_erisc);
     out["eriscs"] = make_eriscs_json(router.eriscs);
     out["leftover_l1"] = make_optional_l1_json(router.leftover_l1);
     return out;
@@ -504,17 +539,16 @@ json make_local_sync_json(const manifest::LocalSync& local_sync) {
 }
 
 // The chip's routers keyed <direction><routing_plane>.
-json make_chip_routers_json(const manifest::Chip& chip) {
+json make_chip_routers_json(const manifest::Chip& chip, FieldsWriter& fields_writer) {
     json routers = json::object();
     for (const auto& router : chip.routers) {
-        routers[router_key(router.identity.key)] =
-            make_router_json(router, chip.fabric_node_id);
+        routers[router_key(router.identity.key)] = make_router_json(router, chip.fabric_node_id, fields_writer);
     }
     return routers;
 }
 
 // A remote chip has only its coordinates, and nulls for the ids this rank cannot read.
-json make_chip_json(const manifest::Chip& chip) {
+json make_chip_json(const manifest::Chip& chip, FieldsWriter& fields_writer) {
     json out;
     out["mesh_coord"] = chip.mesh_coord;
     out["host_rank"] = chip.host_rank.has_value() ? json(*chip.host_rank) : json(nullptr);
@@ -531,11 +565,11 @@ json make_chip_json(const manifest::Chip& chip) {
     out["is_local"] = true;
     out["z_port_role"] = lower_enum_name(chip.z_port_role);
     out["local_sync"] = chip.local_sync ? make_local_sync_json(*chip.local_sync) : json(nullptr);
-    out["routers"] = make_chip_routers_json(chip);
+    out["routers"] = make_chip_routers_json(chip, fields_writer);
     return out;
 }
 
-json make_mesh_json(const manifest::Mesh& mesh) {
+json make_mesh_json(const manifest::Mesh& mesh, FieldsWriter& fields_writer) {
     json out;
     out["shape"] = mesh.shape;
     if (mesh.torus.has_value()) {
@@ -550,7 +584,7 @@ json make_mesh_json(const manifest::Mesh& mesh) {
     }
     json chips = json::object();
     for (const auto& chip : mesh.chips) {
-        chips[chip_key(chip.fabric_node_id.chip_id)] = make_chip_json(chip);
+        chips[chip_key(chip.fabric_node_id.chip_id)] = make_chip_json(chip, fields_writer);
     }
     out["chips"] = std::move(chips);
     return out;
@@ -608,7 +642,8 @@ void serialize_fabric_manifest_to_file(
         std::ofstream out_file;
         out_file.exceptions(std::ios::badbit | std::ios::failbit);
         out_file.open(temporary_path);
-        out_file << manifest_json.dump(2) << '\n';
+        // dump() doesn't use indentation, as opposed to dump(2), and saves lots of space in the file
+        out_file << manifest_json.dump() << '\n';
         out_file.close();
         std::filesystem::rename(temporary_path, output_file_path);
     } catch (...) {
@@ -622,10 +657,11 @@ void serialize_fabric_manifest_to_file(
 
 }  // namespace
 
-json make_manifest_json(const manifest::ManifestFacts& facts) {
+json make_manifest_json(const manifest::ManifestFacts& facts, FieldsLayout fields_layout) {
+    FieldsWriter fields_writer(fields_layout);
     json meshes = json::object();
     for (const auto& mesh : facts.meshes) {
-        meshes[mesh_key(mesh.mesh_id)] = make_mesh_json(mesh);
+        meshes[mesh_key(mesh.mesh_id)] = make_mesh_json(mesh, fields_writer);
     }
 
     json out;
@@ -635,6 +671,11 @@ json make_manifest_json(const manifest::ManifestFacts& facts) {
     out["fabric"] = make_fabric_json(facts.fabric);
     out["arch"] = make_arch_json(facts.arch);
     out["vocabulary"] = make_vocabulary_json();
+    // field_sets only exists when we are using the shared layout. Otherwise, fields for routers / eriscs / chips
+    // exist local to each router / erisc / chip block.
+    if (fields_layout == FieldsLayout::SHARED) {
+        out["field_sets"] = fields_writer.take_field_sets();
+    }
     out["meshes"] = std::move(meshes);
     return out;
 }

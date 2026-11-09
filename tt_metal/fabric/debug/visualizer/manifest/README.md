@@ -36,6 +36,7 @@ opened (its local chips) also list their routers. The top level blocks are descr
 | `fabric`     | The fabric settings the run asked for (`config`), and what fabric derived from them: topology, routing mode, packet header type, packet sizes |
 | `arch`       | What the architecture fixes on every router core: its L1 range, L1 areas such as telemetry and the routing table, and core registers |
 | `vocabulary` | Every value each label can hold, such as every channel status                                                             |
+| `field_sets` | Each distinct fields block once. Routers, channels and edges name theirs by id, since most share the same fields          |
 | `meshes`     | Each mesh's shape, its chips, and each local chip's routers: their links, channels, credits, fields and L1 regions        |
 
 State on a router core is described by where its bytes are and the C++ type they hold, named by the type registry.
@@ -99,7 +100,8 @@ rank's file has its own name.
 
 - The file is written after the routers are compiled and launched, and before the host waits for router sync, so a
 run that hangs during bring-up still leaves a manifest. A file on disk doesn't mean the routers reached sync.
-- It's written to a temporary name and renamed into place, so a reader never sees a partial file.
+- It's written compactly, on one line, to a temporary name and renamed into place, so a reader never sees a partial
+file.
 - Mock clusters (`TT_METAL_MOCK_CLUSTER_DESC_PATH`) write manifests without hardware.
 - When the manifest code can't describe what fabric built, fabric init fails with `Failed to write fabric manifest ...`
   and a message starting with `Fabric manifest:` that names what to update (see "Changing fabric" below).

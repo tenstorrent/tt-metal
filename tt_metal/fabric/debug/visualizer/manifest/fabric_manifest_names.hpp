@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <cctype>
 #include <charconv>
+#include <cstddef>
 #include <cstdint>
 #include <string>
 #include <string_view>
@@ -83,6 +84,9 @@ inline char direction_letter(eth_chan_directions direction) {
 inline std::string router_key(const RouterKey& key) {
     return fmt::format("{}{}", direction_letter(key.direction), key.routing_plane);
 }
+
+// The field_sets key of the `index`th distinct fields block, e.g. "F0".
+inline std::string field_set_key(size_t index) { return fmt::format("F{}", index); }
 
 // The number in a key made of `prefix` and a number written as the writer writes it, such as 7 in "C7". Fails on any
 // other key, including one whose number has a leading zero, since the writer never writes one.

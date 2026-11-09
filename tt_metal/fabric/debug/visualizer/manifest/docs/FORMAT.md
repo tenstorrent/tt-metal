@@ -34,6 +34,7 @@ and readers depend on it and on `manifest_version`. The other docs say how each 
 | Region | Router state the manifest describes: an L1 region, or a stream register. It says where the bytes are and the type they hold |
 | Type name | A registered C++ type's name, such as `EDMStatus`, which decode maps back to the type ([TYPE_REGISTRY.md](TYPE_REGISTRY.md)) |
 | Field | One value a router's kernel was fed, keyed by name ([FIELD_TABLES.md](FIELD_TABLES.md)) |
+| Field set | One distinct fields block, which every router, channel or edge with those same fields names by its id, such as `F0` |
 | Tensix mux | A tensix core that carries VC0 traffic for a router's non-worker sender channels, in mux mode |
 | Channel trimming | A profile that turns off channels a workload doesn't use |
 | Bubble flow control | Deadlock avoidance on VC0, which adds first-level acks |
@@ -51,6 +52,7 @@ and readers depend on it and on `manifest_version`. The other docs say how each 
   "fabric":     { config: { ... }, topology, is_2d_routing, packet_header, ... },
   "arch":       { name, l1: { address, size_bytes }, l1_areas: { ... }, core_registers: [ ... ] },
   "vocabulary": { <list name>: [ <name>, ... ] },
+  "field_sets": { "F<n>": { erisc<r>: { ... } } },
   "meshes": {
     "M<mesh>": {
       shape, torus, express_routing, credit_transport,
@@ -60,9 +62,9 @@ and readers depend on it and on `manifest_version`. The other docs say how each 
           "routers": {
             "<key>": {
               identity, link, shape, credit_counters,
-              channels: { senders: { vc<v>: { ch<c>: { ... } } }, receivers: { ... } },
-              intra_chip_downstream_edges: { vc<v>: { edge<n>: { ... } } },
-              fields: { erisc<r>: { ... } }, eriscs: { erisc<r>: { ... } }, leftover_l1
+              channels: { senders: { vc<v>: { ch<c>: { ..., fields: "F<n>" } } }, receivers: { ... } },
+              intra_chip_downstream_edges: { vc<v>: { edge<n>: { ..., fields: "F<n>" } } },
+              fields: "F<n>", eriscs: { erisc<r>: { ... } }, leftover_l1
             }
           }
         }
@@ -73,7 +75,7 @@ and readers depend on it and on `manifest_version`. The other docs say how each 
 ```
 
 `manifest_version` is `1`, and changes when readers can't take the shape as it is. `file_kind` is always
-`"fabric_manifest"`, naming which of the visualizer's files this is.
+`"fabric_manifest"`, naming which of the visualizer's files this is. The file is written compactly, on one line.
 
 ## Shapes that repeat
 
@@ -98,8 +100,10 @@ without its namespaces, as the build that wrote the manifest spells it: `EDMStat
 `unsigned int` for `uint32_t`, `byte` for `std::byte`. Decode, built from the same commit, maps the name back to the
 type and reads the bytes into it. The manifest doesn't describe a type's members ([TYPE_REGISTRY.md](TYPE_REGISTRY.md)).
 
-**Fields**: a `fields` object is keyed by ERISC (`erisc<r>`), and each ERISC's entry holds that ERISC's fields, as the
-builder gave its compile-time arguments. ERISCs can differ, and nothing in the manifest checks that they agree.
+**Fields**: a fields block is keyed by ERISC (`erisc<r>`), and each ERISC's entry holds that ERISC's fields, as the
+builder gave its compile-time arguments. ERISCs can differ, and nothing in the manifest checks that they agree. Most
+routers, channels and edges have the same fields as many others, so each distinct block is written once, in
+`field_sets`, and a router's, channel's or edge's `fields` is the id of its block there.
 
 **Field**: `{ category, kind, ... }`, keyed by the field's name within an ERISC's fields. `category` is `lifecycle`,
 `kernel_params`, `flow_control`, `control_info` or `diagnostics`.
@@ -188,6 +192,20 @@ what the label is:
 
 An `enum` field isn't a label: it writes its enumerator's name next to its value (`value_name`), so it has no list here.
 
+## field_sets
+
+Each distinct fields block, keyed `F<n>` in the order the writer first wrote it. Every `fields` in `meshes` is one of
+these ids, and every block here is named by at least one. To read a router's, channel's or edge's fields, look its
+`fields` id up here.
+
+```json
+"field_sets": {
+  "F0": { "erisc0": { "conn_info": { "category": "control_info", "kind": "l1", ... }, ... }, "erisc1": { ... } },
+  "F1": { "erisc0": { "free_slots": { "category": "flow_control", "kind": "stream_reg", ... }, ... } },
+  ...
+}
+```
+
 ## meshes
 
 ### Mesh
@@ -231,7 +249,7 @@ An `enum` field isn't a label: it writes its enumerator's name next to its value
 | `credit_counters` | The four L1 credit counter arrays, `to_sender_ack`, `to_sender_completion`, `receiver_ack` and `receiver_completion`, each an L1 region plus `indexed_by`: `own_sender_channel` for the `to_sender` arrays, `peer_sender_channel` for the `receiver` arrays. Each element is one sender channel's, by its compact index |
 | `channels` | `senders` and `receivers`, each keyed `vc<v>` then `ch<c>`. VCs with no channels of that kind are left out |
 | `intra_chip_downstream_edges` | Keyed `vc<v>` then `edge<n>`. VCs with no edges are left out |
-| `fields` | The router's fields, keyed by ERISC |
+| `fields` | The id of the router's fields in `field_sets` |
 | `eriscs` | Keyed `erisc<r>`, in RISC order: each with its `processor`, `physical_erisc` and `opt_level` (the level its kernel was compiled at, `o3` or `os`) |
 | `leftover_l1` | The L1 from the end of what the router places to the end of the L1 the router may load into, as `byte`, or null when there is none |
 
@@ -244,7 +262,7 @@ Both kinds of channel have:
 | `status` | `active`, or why no ERISC runs it: `vc_not_serviced`, `mux` or `trimmed` |
 | `serviced_by` | The ERISCs that run it, as `erisc<r>` |
 | `ring_buffer` | Its packet slots, one element per slot (`element_size` is the slot size), typed as the run's packet header: each slot starts with one, and the payload after it is untyped. Null when it has none |
-| `fields` | Its fields, keyed by ERISC |
+| `fields` | The id of its fields in `field_sets` |
 
 A sender channel also has:
 
@@ -267,13 +285,13 @@ A receiver channel also has:
 | --- | --- |
 | `downstream_channel` | The path of the sibling's sender channel the edge lands on |
 | `through_tensix_mux` | Whether the edge lands at the sibling's tensix mux rather than the sibling itself |
-| `fields` | The edge's fields, keyed by ERISC: its free-slots stream and teardown semaphore |
+| `fields` | The id of the edge's fields in `field_sets`: its free-slots stream and teardown semaphore |
 
 `edge<n>` is the kernel's `EDGE_<n>`.
 
 ## Excerpt
 
-One router from a Blackhole 2D mock manifest, trimmed:
+One router from a Blackhole 2D mock manifest, trimmed and indented:
 
 ```json
 "E1": {
@@ -295,28 +313,34 @@ One router from a Blackhole 2D mock manifest, trimmed:
         "erisc0": { "completed": { "array": "credit_counters/to_sender_completion", "index": 0 } },
         "erisc1": { "completed": { "array": "credit_counters/to_sender_completion", "index": 0 } }
       },
-      "fields": { "erisc0": { ... }, "erisc1": { ... } }
+      "fields": "F0"
     }, ... } },
     "receivers": { "vc0": { "ch0": {
       "status": "active", "serviced_by": ["erisc1"], "forwards_on": { "erisc0": null, "erisc1": "vc0" }, ...
     } } }
   },
   "intra_chip_downstream_edges": { "vc0": { "edge3": {
-    "downstream_channel": "M0/C0/S1/channels/senders/vc0/ch1", "through_tensix_mux": false,
-    "fields": {
-      "erisc0": { "free_slots": { "category": "flow_control", "kind": "stream_reg", "stream_id": 7,
-                                  "address": 4290016420, "value_bits": 17, "type": "unsigned int" }, ... },
-      "erisc1": { ... }
-    }
+    "downstream_channel": "M0/C0/S1/channels/senders/vc0/ch1", "through_tensix_mux": false, "fields": "F2"
   }, ... } },
-  "fields": {
-    "erisc0": { "local_handshake_master": { "category": "lifecycle", "kind": "flag", "value": false },
-                "vc0_bubble_flow_control": { "category": "kernel_params", "kind": "flag", "value": false }, ... },
-    "erisc1": { ... }
-  },
+  "fields": "F3",
   "eriscs": { "erisc0": { "processor": "riscv_0", "physical_erisc": 0, "opt_level": "o3" },
               "erisc1": { "processor": "riscv_1", "physical_erisc": 1, "opt_level": "o3" } },
   "leftover_l1": { "address": 451200, "num_elements": 4064, "element_size": 1, "type": "byte" },
   ...
+}
+```
+
+And two of the blocks it names, from the same manifest's `field_sets`:
+
+```json
+"F2": {
+  "erisc0": { "free_slots": { "category": "flow_control", "kind": "stream_reg", "stream_id": 7,
+                              "address": 4290016420, "value_bits": 17, "type": "unsigned int" }, ... },
+  "erisc1": { ... }
+},
+"F3": {
+  "erisc0": { "local_handshake_master": { "category": "lifecycle", "kind": "flag", "value": false },
+              "vc0_bubble_flow_control": { "category": "kernel_params", "kind": "flag", "value": false }, ... },
+  "erisc1": { ... }
 }
 ```

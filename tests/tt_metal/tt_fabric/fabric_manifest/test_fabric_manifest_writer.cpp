@@ -37,7 +37,8 @@ ManifestFacts make_facts() {
             {.senders = {{SenderChannel{
                  .serviced_by = {0},
                  .producer = LocalWorker{},
-                 .credits_by_erisc = {SenderChannelCredits{.completed = std::optional<content::StreamReg>{}}},
+                 .credits_by_erisc = {SenderChannelCredits{
+                     .completed = CounterRef{.array = CreditCounterArray::TO_SENDER_COMPLETION, .index = 0}}},
              }}},
              .receivers = {{ReceiverChannel{.serviced_by = {0}, .forwards_on_by_erisc = {0}}}}},
         .intra_chip_downstream_edges = {},
@@ -83,7 +84,7 @@ ManifestFacts make_facts() {
         .run = {},
         .fabric =
             {.config = {.fabric_config = FabricConfig::FABRIC_1D},
-             .packet_header = get_manifest_type_name<LowLatencyPacketHeaderT<0>>(),
+             .packet_header = std::string(get_manifest_type_name<LowLatencyPacketHeaderT<0>>()),
              .packet_header_size_bytes = sizeof(LowLatencyPacketHeaderT<0>),
              .routing_1d_extension_words = 0,
              .host_clears = {{.address = 0x100, .size_bytes = 4}}},
@@ -119,15 +120,59 @@ TEST(ManifestWriter, RemoteChipHasOnlyItsPlace) {
             R"({"mesh_coord": [0, 1], "host_rank": 1, "physical_chip_id": null, "asic_id": null, "is_local": false})"));
 }
 
+// Each fields id in a SHARED manifest replaced by its block from field_sets, and field_sets dropped: the manifest as
+// PER_ROUTER writes it.
+json expand_field_sets(json manifest) {
+    const json field_sets = manifest.at("field_sets");
+    manifest.erase("field_sets");
+    const auto expand = [&](auto& self, json& node) -> void {
+        if (!node.is_object()) {
+            return;
+        }
+        for (auto& [key, value] : node.items()) {
+            if (key == "fields" && value.is_string()) {
+                value = field_sets.at(value.get<std::string>());
+            } else {
+                self(self, value);
+            }
+        }
+    };
+    expand(expand, manifest);
+    return manifest;
+}
+
+// SHARED writes each distinct fields block once, in field_sets, keyed in the order each is first written, and its id
+// where the block was. The sender and receiver channels here have the same (empty) fields, so they share one.
+TEST(ManifestWriter, SharedLayoutWritesEachDistinctBlockOnce) {
+    const auto facts = make_facts();
+    const auto manifest = make_manifest_json(facts);
+    const auto& router = router_e0(manifest);
+    EXPECT_EQ(router.at("channels").at("senders").at("vc0").at("ch0").at("fields"), "F0");
+    EXPECT_EQ(router.at("channels").at("receivers").at("vc0").at("ch0").at("fields"), "F0");
+    EXPECT_EQ(router.at("fields"), "F1");
+    const auto per_router = make_manifest_json(facts, FieldsLayout::PER_ROUTER);
+    EXPECT_EQ(
+        manifest.at("field_sets"),
+        json({{"F0", json::object()}, {"F1", router_e0(per_router).at("fields")}}));
+}
+
+// PER_ROUTER writes each block where it is, with no field_sets; otherwise the two layouts write the same manifest.
+TEST(ManifestWriter, LayoutsDifferOnlyInWhereFieldsAre) {
+    const auto facts = make_facts();
+    const auto per_router = make_manifest_json(facts, FieldsLayout::PER_ROUTER);
+    EXPECT_FALSE(per_router.contains("field_sets"));
+    EXPECT_TRUE(router_e0(per_router).at("fields").at("erisc0").contains("edm_status"));
+    EXPECT_EQ(expand_field_sets(make_manifest_json(facts)), per_router);
+}
+
 // Something the builder didn't allocate is null, and a key that doesn't apply to this run is left out.
 TEST(ManifestWriter, UnallocatedIsNullAndInapplicableIsLeftOut) {
-    const auto manifest = make_manifest_json(make_facts());
+    const auto manifest = make_manifest_json(make_facts(), FieldsLayout::PER_ROUTER);
     const auto& router = router_e0(manifest);
     EXPECT_TRUE(router.at("fields").at("erisc0").at("perf_telemetry").is_null());
     EXPECT_TRUE(router.at("leftover_l1").is_null());
     const auto& sender = router.at("channels").at("senders").at("vc0").at("ch0");
     EXPECT_TRUE(sender.at("ring_buffer").is_null());
-    EXPECT_TRUE(sender.at("credits").at("erisc0").at("completed").is_null());
     EXPECT_FALSE(sender.at("credits").at("erisc0").contains("acked"));
     EXPECT_FALSE(router.at("channels").at("senders").contains("vc1"));
     EXPECT_FALSE(router.at("intra_chip_downstream_edges").contains("vc0"));
@@ -143,12 +188,16 @@ TEST(ManifestWriter, ReferencesAndIds) {
     EXPECT_EQ(router_e0(manifest).at("link").at("peer"), "M0/C1/W0");
     EXPECT_EQ(chip.at("local_sync").at("master"), "M0/C0/E0");
     EXPECT_EQ(chip.at("asic_id"), "0x0000000000001234");
+    // A credit names its counter array by its path in the router.
+    EXPECT_EQ(
+        router_e0(manifest).at("channels").at("senders").at("vc0").at("ch0").at("credits").at("erisc0").at("completed"),
+        json({{"array", "credit_counters/to_sender_completion"}, {"index", 0}}));
 }
 
 // A region and a stream register name the registered type their bytes hold, and a configuration enum names its
 // enumerator. The manifest describes no type's members: decode gets the type back from its name.
 TEST(ManifestWriter, ContentsNameTheirType) {
-    const auto manifest = make_manifest_json(make_facts());
+    const auto manifest = make_manifest_json(make_facts(), FieldsLayout::PER_ROUTER);
     const auto& fields = router_e0(manifest).at("fields").at("erisc0");
     EXPECT_EQ(
         fields.at("edm_status"),
@@ -201,7 +250,7 @@ TEST(ManifestWriter, WritesEachEriscsValuesUnderItsOwnKey) {
         .completed = CounterRef{.array = CreditCounterArray::TO_SENDER_COMPLETION, .index = 0}});
     router.channels.receivers.at(0).at(0).forwards_on_by_erisc.emplace_back(std::nullopt);
 
-    const auto manifest = make_manifest_json(facts);
+    const auto manifest = make_manifest_json(facts, FieldsLayout::PER_ROUTER);
     const auto& router_json = router_e0(manifest);
     EXPECT_TRUE(router_json.at("fields").at("erisc0").contains("edm_status"));
     EXPECT_EQ(router_json.at("fields").at("erisc1").at("speedy_vc0").at("value"), true);

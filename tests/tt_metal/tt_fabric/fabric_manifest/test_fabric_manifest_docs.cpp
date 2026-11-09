@@ -89,7 +89,8 @@ std::string source_text(const manifest::Source& source) {
 }
 
 std::string fields_table(std::string_view title, std::string_view path, std::span<const manifest::RouterField> table) {
-    std::string out = fmt::format("### {}\n\n`{}`\n\n", title, path);
+    std::string out =
+        fmt::format("### {}\n\nEach `erisc<r>` of the `field_sets` block that `{}` names.\n\n", title, path);
     out += "| Key | Kind | Type | Category | Fed as | Description |\n";
     out += "| --- | --- | --- | --- | --- | --- |\n";
     for (const auto& field : table) {
@@ -107,21 +108,21 @@ std::string fields_table(std::string_view title, std::string_view path, std::spa
 
 std::string render_fields() {
     std::string out;
-    out += fields_table("Router fields", "routers.<key>.fields.erisc<r>", manifest::k_router_fields);
+    out += fields_table("Router fields", "routers.<key>.fields", manifest::k_router_fields);
     out += "\n";
     out += fields_table(
         "Sender channel fields",
-        "routers.<key>.channels.senders.vc<v>.ch<c>.fields.erisc<r>",
+        "routers.<key>.channels.senders.vc<v>.ch<c>.fields",
         manifest::k_sender_channel_fields);
     out += "\n";
     out += fields_table(
         "Receiver channel fields",
-        "routers.<key>.channels.receivers.vc<v>.ch<c>.fields.erisc<r>",
+        "routers.<key>.channels.receivers.vc<v>.ch<c>.fields",
         manifest::k_receiver_channel_fields);
     out += "\n";
     out += fields_table(
         "Downstream edge fields",
-        "routers.<key>.intra_chip_downstream_edges.vc<v>.edge<n>.fields.erisc<r>",
+        "routers.<key>.intra_chip_downstream_edges.vc<v>.edge<n>.fields",
         manifest::k_downstream_edge_fields);
     return out;
 }

@@ -22,6 +22,7 @@
 #include <regex>
 #include <set>
 #include <span>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <tuple>
@@ -96,6 +97,51 @@ const json* find_router(const json& manifest, const std::string& path) {
     return manifest.contains(pointer) ? &manifest.at(pointer) : nullptr;
 }
 
+// Calls f(where, holder) for every node on the manifest's local chips that holds a fields key, in the order they're in
+// the file: each router's sender and receiver channels, its downstream edges, then the router itself. `where` is the
+// holder's path, for messages.
+template <typename Manifest, typename F>
+void for_each_fields_holder(Manifest& manifest, F&& f) {
+    for (auto& [m_key, mesh] : manifest.at("meshes").items()) {
+        for (auto& [c_key, chip] : mesh.at("chips").items()) {
+            if (!chip.at("is_local").template get<bool>()) {
+                continue;
+            }
+            for (auto& [r_key, router] : chip.at("routers").items()) {
+                const std::string router_path = fmt::format("{}/{}/{}", m_key, c_key, r_key);
+                for (const char* kind : {"senders", "receivers"}) {
+                    for (auto& [vc_key, channels] : router.at("channels").at(kind).items()) {
+                        for (auto& [ch_key, channel] : channels.items()) {
+                            f(fmt::format("{}/channels/{}/{}/{}", router_path, kind, vc_key, ch_key), channel);
+                        }
+                    }
+                }
+                for (auto& [vc_key, edges] : router.at("intra_chip_downstream_edges").items()) {
+                    for (auto& [edge_key, edge] : edges.items()) {
+                        f(fmt::format("{}/intra_chip_downstream_edges/{}/{}", router_path, vc_key, edge_key), edge);
+                    }
+                }
+                f(router_path, router);
+            }
+        }
+    }
+}
+
+// `written` as its readers see it: each fields id replaced by its block from field_sets, and field_sets dropped.
+json expand_field_sets(const nlohmann::ordered_json& written) {
+    json manifest(written);
+    const json field_sets = manifest.at("field_sets");
+    manifest.erase("field_sets");
+    for_each_fields_holder(manifest, [&](const std::string& where, json& holder) {
+        const std::string id = holder.at("fields").get<std::string>();
+        if (!field_sets.contains(id)) {
+            throw std::runtime_error(fmt::format("{}'s fields {} isn't in field_sets", where, id));
+        }
+        holder["fields"] = field_sets.at(id);
+    });
+    return manifest;
+}
+
 // ============ Fixture ============
 
 // One router in the manifest, with what its key names.
@@ -164,7 +210,8 @@ protected:
         manifest_path_ = *run_directory / manifest_file_name;
         std::ifstream stream(manifest_path_);
         ASSERT_TRUE(stream.is_open()) << manifest_path_;
-        manifest_ = json::parse(stream);
+        written_manifest_ = nlohmann::ordered_json::parse(stream);
+        manifest_ = expand_field_sets(written_manifest_);
         index_routers(manifest_, routers_);
     }
 
@@ -173,6 +220,8 @@ protected:
     // When this suite started bringing up fabric. A manifest written before it is a stale one.
     inline static std::filesystem::file_time_type suite_start_;
     std::filesystem::path manifest_path_;
+    // The manifest as written, and with its field_sets expanded, which every check but FieldSets reads.
+    nlohmann::ordered_json written_manifest_;
     json manifest_;
     std::vector<RouterEntry> routers_;
 };
@@ -211,6 +260,33 @@ void check_top_level(
     for (const auto& entry : std::filesystem::directory_iterator(manifest_path.parent_path())) {
         EXPECT_FALSE(entry.path().filename().string().starts_with(temp_prefix)) << entry.path();
     }
+}
+
+// The manifest as written holds each distinct fields block once: every fields id names a block in field_sets, every
+// block is named, no two blocks are the same, and the blocks are keyed F0, F1, ... in the order they're first named.
+void check_field_sets(const nlohmann::ordered_json& written_manifest) {
+    const nlohmann::ordered_json& field_sets = written_manifest.at("field_sets");
+    std::vector<std::string> first_named;
+    std::set<std::string> named;
+    for_each_fields_holder(written_manifest, [&](const std::string& where, const nlohmann::ordered_json& holder) {
+        const std::string id = holder.at("fields").get<std::string>();
+        EXPECT_TRUE(field_sets.contains(id)) << where << "'s fields " << id << " isn't in field_sets";
+        if (named.insert(id).second) {
+            first_named.push_back(id);
+        }
+    });
+    std::vector<std::string> keys;
+    std::set<std::string> blocks;
+    for (const auto& [key, block] : field_sets.items()) {
+        keys.push_back(key);
+        EXPECT_TRUE(blocks.insert(block.dump()).second) << key << " is the same as an earlier block";
+    }
+    std::vector<std::string> expected_keys;
+    for (size_t index = 0; index < first_named.size(); ++index) {
+        expected_keys.push_back(manifest::field_set_key(index));
+    }
+    EXPECT_EQ(first_named, expected_keys);
+    EXPECT_EQ(keys, expected_keys);
 }
 
 // Every chip names the host rank that owns it. With one local mesh, the local chips are this process's: their host rank
@@ -1007,6 +1083,7 @@ TEST(ManifestArgs, KernelInputsAccounted) {
 // Every check, one test each, for `Fixture`.
 #define TEST_MANIFEST_CHECKS(Fixture)                                                                      \
     TEST_F(Fixture, TopLevel) { check_top_level(manifest_, manifest_path_, fabric_config, suite_start_); } \
+    TEST_F(Fixture, FieldSets) { check_field_sets(written_manifest_); }                                    \
     TEST_F(Fixture, ChipZPortRole) { check_chip_z_port_role(manifest_); }                                  \
     TEST_F(Fixture, ChipHostRanks) { check_chip_host_ranks(manifest_); }                                   \
     TEST_F(Fixture, RouterLink) { check_router_link(manifest_, routers_); }                                \

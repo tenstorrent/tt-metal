@@ -10,6 +10,12 @@
     "fabric": { "$ref": "#/$defs/fabric" },
     "arch": { "$ref": "#/$defs/arch" },
     "vocabulary": { "$ref": "#/$defs/vocabulary" },
+    "field_sets": {
+      "description": "Each distinct fields block once, keyed by the id every fields key that holds it gives, in the order the writer first wrote each.",
+      "type": "object",
+      "propertyNames": { "$ref": "#/$defs/field_set_key" },
+      "additionalProperties": { "$ref": "#/$defs/fields_by_erisc" }
+    },
     "meshes": {
       "type": "object",
       "minProperties": 1,
@@ -17,7 +23,7 @@
       "additionalProperties": { "$ref": "#/$defs/mesh" }
     }
   },
-  "required": ["manifest_version", "file_kind", "run", "fabric", "arch", "vocabulary", "meshes"],
+  "required": ["manifest_version", "file_kind", "run", "fabric", "arch", "vocabulary", "field_sets", "meshes"],
   "additionalProperties": false,
 
   "$defs": {
@@ -607,7 +613,14 @@
       "additionalProperties": false
     },
 
+    "field_set_key": { "type": "string", "pattern": "^F(0|[1-9][0-9]*)$" },
+
     "fields": {
+      "description": "The id of this router's, channel's or edge's fields block in field_sets.",
+      "$ref": "#/$defs/field_set_key"
+    },
+
+    "fields_by_erisc": {
       "description": "Keyed by ERISC: each ERISC's fields, as its compile-time arguments give them.",
       "type": "object",
       "minProperties": 1,
