@@ -65,14 +65,15 @@ inline std::pair<bool, AttentionMaskType> get_device_execution_info(
     }
 }
 
-// How the sequence is laid out across the ring, which sets each device's work per step.
+// How the sequence is laid out across the ring, which sets each device's work per step. A new
+// schedule adds a value here, a case in get_ring_step_work and one in validate_ring_schedule.
 // - Contiguous: rank d holds a contiguous slice of the sequence (get_device_execution_info).
 // - Striped:    token p lives on rank p mod N (causal load balancing). Every step runs causal:
 //               on the query for src <= d, on the query shifted up one row for src > d.
 enum class RingSchedule : uint8_t { Contiguous = 0, Striped = 1 };
 
 // Work of one device at one ring step: whether it runs, with which mask, and whether it
-// reads the op's shifted-query tensors instead of the primary ones (Striped, src > d).
+// reads the op's shifted-query tensors instead of the primary ones.
 struct RingStepWork {
     bool execute = false;
     AttentionMaskType mask_type = AttentionMaskType::None;
@@ -81,7 +82,21 @@ struct RingStepWork {
     bool operator==(const RingStepWork&) const = default;
 };
 
-// Schedule used by the ring program factories.
+inline RingStepWork get_striped_step_work(
+    uint32_t device_ring_id,
+    uint32_t step,
+    uint32_t ring_size,
+    AttentionMaskType mask_type,
+    ttnn_fixed::distributed::RingShiftDirection ring_direction) {
+    TT_FATAL(
+        mask_type == AttentionMaskType::Causal,
+        "The striped ring schedule is only defined for causal attention, got mask type {}",
+        static_cast<int>(mask_type));
+    const uint32_t src_device = get_ring_source_device(device_ring_id, step, ring_size, ring_direction);
+    return {.execute = true, .mask_type = AttentionMaskType::Causal, .shifted_query = src_device > device_ring_id};
+}
+
+// Per-schedule work, used by the ring program factories.
 inline RingStepWork get_ring_step_work(
     uint32_t device_ring_id,
     uint32_t step,
@@ -89,17 +104,16 @@ inline RingStepWork get_ring_step_work(
     AttentionMaskType mask_type,
     ttnn_fixed::distributed::RingShiftDirection ring_direction,
     RingSchedule schedule) {
-    if (schedule == RingSchedule::Contiguous) {
-        const auto [execute, effective_mask] =
-            get_device_execution_info(device_ring_id, step, ring_size, mask_type, ring_direction);
-        return {.execute = execute, .mask_type = effective_mask, .shifted_query = false};
+    switch (schedule) {
+        case RingSchedule::Contiguous: {
+            const auto [execute, effective_mask] =
+                get_device_execution_info(device_ring_id, step, ring_size, mask_type, ring_direction);
+            return {.execute = execute, .mask_type = effective_mask, .shifted_query = false};
+        }
+        case RingSchedule::Striped:
+            return get_striped_step_work(device_ring_id, step, ring_size, mask_type, ring_direction);
     }
-    TT_FATAL(
-        mask_type == AttentionMaskType::Causal,
-        "The striped ring schedule is only defined for causal attention, got mask type {}",
-        static_cast<int>(mask_type));
-    const uint32_t src_device = get_ring_source_device(device_ring_id, step, ring_size, ring_direction);
-    return {.execute = true, .mask_type = AttentionMaskType::Causal, .shifted_query = src_device > device_ring_id};
+    TT_THROW("Unknown ring schedule {}", static_cast<int>(schedule));
 }
 
 // Common attribute validation for the ring SDPA device operations. The ring factories
@@ -130,19 +144,22 @@ inline void validate_ring_attributes(const RingAttrs& attrs, const ttnn::Tensor&
         attrs.ring_axis);
 }
 
-// Shifted-query contract shared by the ring ops: the shifted tensors are given exactly when
-// the striped schedule is requested, and that schedule is only defined for causal attention.
+// Per-schedule input contract shared by the ring ops (which optional inputs the schedule needs).
 template <typename RingAttrs>
 inline void validate_ring_schedule(const RingAttrs& attrs, bool has_shifted) {
-    if (attrs.schedule == RingSchedule::Contiguous) {
-        TT_FATAL(!has_shifted, "Shifted-query tensors were given but the ring schedule is Contiguous");
-        return;
+    switch (attrs.schedule) {
+        case RingSchedule::Contiguous:
+            TT_FATAL(!has_shifted, "Shifted-query tensors were given but the ring schedule is Contiguous");
+            return;
+        case RingSchedule::Striped:
+            TT_FATAL(has_shifted, "The striped ring schedule requires the shifted-query tensors");
+            TT_FATAL(
+                attrs.mask_type == AttentionMaskType::Causal,
+                "The striped ring schedule requires a causal mask, got mask type {}",
+                static_cast<int>(attrs.mask_type));
+            return;
     }
-    TT_FATAL(has_shifted, "The striped ring schedule requires the shifted-query tensors");
-    TT_FATAL(
-        attrs.mask_type == AttentionMaskType::Causal,
-        "The striped ring schedule requires a causal mask, got mask type {}",
-        static_cast<int>(attrs.mask_type));
+    TT_THROW("Unknown ring schedule {}", static_cast<int>(attrs.schedule));
 }
 
 // A shifted-query tensor must have exactly the spec (shape, dtype, layout, memory config) of its
