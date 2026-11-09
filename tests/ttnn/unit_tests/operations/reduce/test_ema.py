@@ -66,3 +66,24 @@ def test_ema(device, T, B, C, cores_y, cores_x):
         atol=0.004,
         frobenius_threshold=0.003,
     )
+
+
+def test_ema_rejects_preallocated_output_with_different_shape(device, expect_error):
+    # The docstring requires the preallocated output to have the input's shape. The kernel writes
+    # the EMA stream by flat tile index, so accepting a same-volume output with different
+    # dimensions returned a wrongly shaped tensor.
+    torch_input = torch.rand((1, 2, 4, 64), dtype=torch.bfloat16)
+    input_tensor = ttnn.from_torch(
+        torch_input,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+    )
+    wrong_shape_output = ttnn.from_torch(
+        torch.zeros((1, 2, 64, 4), dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+    )
+    with expect_error(RuntimeError, "same logical shape"):
+        ttnn.ema(input_tensor, alpha=0.5, out=wrong_shape_output)
