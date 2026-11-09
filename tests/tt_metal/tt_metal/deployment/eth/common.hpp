@@ -246,7 +246,7 @@ static void track_eth_progress_timeout_cores(
 }
 
 template <typename FIXTURE>
-static std::map<std::shared_ptr<distributed::MeshDevice>, std::shared_ptr<distributed::MeshWorkload>> precompile(
+static void precompile(
     FIXTURE* fixture,
     std::span<struct core_setup> cores,
     std::map<std::shared_ptr<distributed::MeshDevice>, std::shared_ptr<tt_metal::Program>>& programs) {
@@ -262,8 +262,6 @@ static std::map<std::shared_ptr<distributed::MeshDevice>, std::shared_ptr<distri
     for (const auto& [dev, workload] : devices) {
         programs[dev]->impl().compile(dev.get());
     }
-
-    return devices;
 }
 
 template <typename FIXTURE>
@@ -276,8 +274,11 @@ static void wait_to_finish_eth_timeout_cores(
     /* ==================== */
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-    std::map<std::shared_ptr<distributed::MeshDevice>, std::shared_ptr<distributed::MeshWorkload>> devices =
-        precompile(fixture, cores, programs);
+    std::map<std::shared_ptr<distributed::MeshDevice>, std::shared_ptr<distributed::MeshWorkload>> devices;
+
+    for (const auto& [dev, _] : programs) {
+        devices[dev] = std::make_shared<distributed::MeshWorkload>();
+    }
 
     for (const auto& [dev, workload] : devices) {
         devices[dev]->add_program(device_range, std::move(*programs[dev]));
