@@ -1,3 +1,5 @@
+# test - safe to revert
+
 cmake_minimum_required(VERSION 3.25...4.2)
 
 # Forgetting to clone submodules is a common omission and results in a poor error message
