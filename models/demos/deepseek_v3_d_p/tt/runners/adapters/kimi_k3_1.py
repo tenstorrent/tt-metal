@@ -37,6 +37,10 @@ class KimiK31Adapter(KimiK3Adapter):
     model_config = KimiK31Config
     hf_model_default = "/mnt/weka/model-weights/llm/moonshotai/Kimi-K3.1-Pro-dequantized"
     ttnn_cache_default = "/mnt/weka/model-cache/scratch/moonshotai/Kimi-K3.1-Cache/Kimi-K3.1-Cache-prefill"
+    # K3's 1536 B l1_small pool (KimiK3Config.L1_SMALL_SIZE) is full once the indexer's sparse path runs: the first
+    # MLA layer's Q all-to-all then asked 16 B/bank more (sc1 smoke, job 189519). 2048 B is what GLM's sparse-MLA
+    # pipeline runs at; K3's note on the pool says 4096 B already starves MLA's static CBs, so stay well below it.
+    l1_small_size = 2048
     # K3's DSpark drafter is keyed to K3, not K3.1.
     supports_dflash = False
     dflash_model_default = None
