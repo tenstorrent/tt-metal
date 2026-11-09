@@ -58,7 +58,7 @@ class SwinV2PerformanceRunnerInfra:
         self.parameters = create_swinv2_model_parameters(self.torch_model, device=self.device)
 
         attn_mask_tuple = preprocess_attn_mask(
-            [self.batch_size, self.channels, resolution[0], resolution[1]], [4, 4], [8, 8], [3, 3], device
+            [self.batch_size, self.channels, resolution[0], resolution[1]], [4, 4], [8, 8], [4, 4], device
         )
         self.ttnn_swin_model = TtSwinTransformer(
             self.device,

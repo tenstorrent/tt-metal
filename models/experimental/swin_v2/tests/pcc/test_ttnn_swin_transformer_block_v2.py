@@ -3,6 +3,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
+from PIL import Image
+from torchvision import transforms
+from models.experimental.swin_v2.reference.swin_transformer import SwinTransformer
 from models.experimental.swin_v2.reference.swin_transformer_block_v2 import SwinTransformerBlockV2
 from models.experimental.swin_v2.reference.shifted_window_attention_v2 import ShiftedWindowAttentionV2
 from models.experimental.swin_v2.tt.tt_swin_transformer_block_v2 import TtSwinTransformerBlockV2
@@ -81,6 +84,29 @@ def preprocess_attn_mask(input_shape, patch_size, window_size, shift_size, devic
     return attn_mask_tuple
 
 
+def block_input_features(i, j, model_location_generator):
+    """The input features[i][j] sees for a 512 px image: the stem and every block before it, from the reference."""
+    torch_model = SwinTransformer(
+        patch_size=[4, 4], embed_dim=96, depths=[2, 2, 18, 2], num_heads=[3, 6, 12, 24], window_size=[8, 8]
+    )
+    torch_model = load_torch_model(torch_model=torch_model, model_location_generator=model_location_generator)
+    transform = transforms.Compose(
+        [
+            transforms.Resize(512),
+            transforms.CenterCrop(512),
+            transforms.ToTensor(),
+            transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+        ]
+    )
+    x = transform(Image.open("models/sample_data/huggingface_cat_image.jpg").convert("RGB")).unsqueeze(0)
+    with torch.no_grad():
+        for stage in range(i):
+            x = torch_model.features[stage](x)
+        for block in range(j):
+            x = torch_model.features[i][block](x)
+    return x
+
+
 def create_custom_preprocessor(device):
     def custom_preprocessor(torch_model, name, ttnn_module_args):
         parameters = {}
@@ -109,21 +135,18 @@ def create_custom_preprocessor(device):
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": SWIN_V2_L1_SMALL_SIZE}], indirect=True)
 @pytest.mark.parametrize(
-    "dim,shift_size,num_heads,i,j, attn_mask, input_shape",
+    "dim,shift_size,num_heads,i,j",
     [
-        (96, [0, 0], 3, 1, 0, [1, 256, 1, 64, 64], [1, 128, 128, 96]),
-        (96, [4, 4], 3, 1, 1, [1, 256, 1, 64, 64], [1, 128, 128, 96]),
-        (192, [0, 0], 6, 3, 0, [1, 64, 1, 64, 64], [1, 64, 64, 192]),
-        (192, [4, 4], 6, 3, 1, [1, 64, 1, 64, 64], [1, 64, 64, 192]),
-        (384, [0, 0], 12, 5, 0, [1, 16, 1, 64, 64], [1, 32, 32, 384]),
-        (384, [4, 4], 12, 5, 1, [1, 16, 1, 64, 64], [1, 32, 32, 384]),
+        (96, [0, 0], 3, 1, 0),
+        (96, [4, 4], 3, 1, 1),
+        (192, [0, 0], 6, 3, 0),
+        (192, [4, 4], 6, 3, 1),
+        (384, [0, 0], 12, 5, 0),
+        (384, [4, 4], 12, 5, 1),
     ],
 )
-def test_swin_transformer_block_v2(
-    device, dim, shift_size, num_heads, i, j, attn_mask, input_shape, reset_seeds, model_location_generator
-):
-    attn_mask = torch.rand(attn_mask)
-    torch_input_tensor = torch.rand(input_shape)
+def test_swin_transformer_block_v2(device, dim, shift_size, num_heads, i, j, reset_seeds, model_location_generator):
+    torch_input_tensor = block_input_features(i, j, model_location_generator)
     torch_model = SwinTransformerBlockV2(dim, num_heads, [8, 8], shift_size)
 
     torch_model = load_torch_model(
@@ -135,7 +158,7 @@ def test_swin_transformer_block_v2(
     parameters = preprocess_model_parameters(
         initialize_model=lambda: torch_model, custom_preprocessor=create_custom_preprocessor(device), device=device
     )
-    attn_mask = ttnn.from_torch(attn_mask, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    attn_mask = preprocess_attn_mask([1, 3, 512, 512], [4, 4], [8, 8], [4, 4], device)[i // 2]
     ttnn_model = TtSwinTransformerBlockV2(
         device=device,
         parameters=parameters,

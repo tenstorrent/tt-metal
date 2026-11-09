@@ -143,7 +143,7 @@ def test_swin_s_transformer(device, reset_seeds, model_location_generator):
         initialize_model=lambda: torch_model, custom_preprocessor=create_custom_preprocessor(device), device=device
     )
 
-    attn_mask_tuple = preprocess_attn_mask([1, 3, 512, 512], [4, 4], [8, 8], [3, 3], device)
+    attn_mask_tuple = preprocess_attn_mask([1, 3, 512, 512], [4, 4], [8, 8], [4, 4], device)
     ttnn_model = TtSwinTransformer(
         device,
         parameters,
