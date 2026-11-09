@@ -8,7 +8,9 @@
 #include <cstdint>
 #include <optional>
 #include <string_view>
+#include <tt-metalium/constants.hpp>
 #include <tt-metalium/work_split.hpp>
+#include <utility>
 #include <vector>
 
 #include "metal/common/program_utils.hpp"
@@ -125,6 +127,20 @@ RowSlicePlan plan_row_slices(
     return plan;
 }
 
+// plan_row_slices over a TILE-layout input's tile rows on its device's compute grid. Gated rows are single heads,
+// already one work item per head, so they are never sliced. create_descriptor() builds its cores from the plan, and
+// override_runtime_arguments() walks the same cores from it.
+template <typename SliceFitsInL1>
+RowSlicePlan make_row_slice_plan(
+    const ttnn::Tensor& input, const bool gated, const uint32_t max_row_slices, SliceFitsInL1&& slice_fits_in_l1) {
+    return plan_row_slices(
+        input.device()->compute_with_storage_grid_size(),
+        num_tile_rows(input),
+        input.padded_shape()[-1] / tt::constants::TILE_WIDTH,
+        /* max_slices */ gated ? 1U : max_row_slices,
+        std::forward<SliceFitsInL1>(slice_fits_in_l1));
+}
+
 // The cores of a plan made by plan_row_slices on the same grid: all of them, and those of each row-group size.
 inline RowSliceCores row_slice_cores(const RowSlicePlan& plan, const tt::tt_metal::CoreCoord grid) {
     RowSliceCores cores;
@@ -183,6 +199,38 @@ inline std::vector<uint32_t> row_slice_exchange_args(
         args.push_back(noc.y);
     }
     return args;
+}
+
+// The partial exchange's CBs, in fp32: this core's partial, and two rows of gathered partials, so a peer can send the
+// next row's partial while this core still sums the current row.
+constexpr uint32_t kNumSlicePartialTiles = 1U;
+
+// L1 the partial exchange of num_slices cores per row adds to each core; 0 without slicing.
+inline uint64_t row_slice_exchange_l1_bytes(const uint32_t num_slices) {
+    if (num_slices == 1U) {
+        return 0U;
+    }
+    return static_cast<uint64_t>(kNumSlicePartialTiles + 2U * num_slices) * tt::tile_size(tt::DataFormat::Float32);
+}
+
+// Adds the partial exchange's CBs and its semaphore, which starts at 0, to every core of the plan. Nothing without
+// slicing.
+inline void add_row_slice_exchange(
+    tt::tt_metal::ProgramDescriptor& desc,
+    const tt::tt_metal::CoreRangeSet& all_cores,
+    const uint32_t cb_partial,
+    const uint32_t cb_gathered,
+    const uint32_t sem_id,
+    const uint32_t num_slices) {
+    if (num_slices == 1U) {
+        return;
+    }
+    const uint32_t float32_single_tile_size_bytes = tt::tile_size(tt::DataFormat::Float32);
+    desc.cbs.push_back(make_cb_descriptor(
+        all_cores, cb_partial, tt::DataFormat::Float32, float32_single_tile_size_bytes, kNumSlicePartialTiles));
+    desc.cbs.push_back(make_cb_descriptor(
+        all_cores, cb_gathered, tt::DataFormat::Float32, float32_single_tile_size_bytes, 2U * num_slices));
+    desc.semaphores.push_back(make_semaphore_descriptor(sem_id, all_cores, 0U));
 }
 
 }  // namespace ttml::metal::ops::rmsnorm

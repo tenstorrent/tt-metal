@@ -56,7 +56,6 @@ constexpr auto kSlicePartialCbIndex = tt::CBIndex::c_12;
 constexpr auto kGatheredPartialsCbIndex = tt::CBIndex::c_13;
 
 constexpr uint32_t kNumMaskTiles = 1U;
-constexpr uint32_t kNumSlicePartialTiles = 1U;
 constexpr uint32_t kNumScalerTiles = 1U;
 constexpr uint32_t kNumRmsBeforeReductionTiles = 2U;
 constexpr uint32_t kNumRmsAfterReductionTiles = 2U;
@@ -98,27 +97,18 @@ uint64_t required_l1_bytes(
     const uint64_t block_memory = twice_block_size * (bfloat16_single_tile_size_bytes + float32_single_tile_size_bytes +
                                                       (gated ? bfloat16_single_tile_size_bytes : 0U));
     const uint64_t rms_output_memory = kNumRmsOutputTiles * bfloat16_single_tile_size_bytes;
-    const uint64_t partials_memory =
-        num_slices > 1U ? (kNumSlicePartialTiles + 2U * num_slices) * float32_single_tile_size_bytes : 0U;
-    return weight_memory + mask_scaler_eps_memory + rms_memory + block_memory + rms_output_memory + partials_memory;
+    return weight_memory + mask_scaler_eps_memory + rms_memory + block_memory + rms_output_memory +
+           rmsnorm::row_slice_exchange_l1_bytes(num_slices);
 }
 
-// The input's tile rows over the device's compute grid. create_descriptor() builds its cores from it, and
-// override_runtime_arguments() walks the same cores from it.
-rmsnorm::RowSlicePlan make_row_slice_plan(const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+// The forward's row split, with slices whose rows and gamma stay resident in L1.
+rmsnorm::RowSlicePlan make_plan(const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input = tensor_args.input;
     const bool gated = tensor_args.gate.has_value();
-    auto* device = input.device();
-    const auto& shape = input.padded_shape();
-    const uint64_t available_L1_in_bytes = available_l1_bytes(*device);
+    const uint64_t available_L1_in_bytes = available_l1_bytes(*input.device());
     const uint32_t input_single_tile_size_bytes = tt::tile_size(datatype_to_dataformat_converter(input.dtype()));
-    // Gated rows are single heads, already one work item per head.
-    return rmsnorm::plan_row_slices(
-        device->compute_with_storage_grid_size(),
-        num_tile_rows(input),
-        shape[-1] / tt::constants::TILE_WIDTH,
-        /* max_slices */ gated ? 1U : args.max_row_slices,
-        [&](const uint32_t slice_tiles, const uint32_t num_slices) {
+    return rmsnorm::make_row_slice_plan(
+        input, gated, args.max_row_slices, [&](const uint32_t slice_tiles, const uint32_t num_slices) {
             return required_l1_bytes(slice_tiles, num_slices, input_single_tile_size_bytes, gated) <=
                    available_L1_in_bytes;
         });
@@ -188,10 +178,9 @@ tt::tt_metal::ProgramDescriptor RMSNormForwardProgramFactory::create_descriptor(
     uint32_t mask_w = num_inner % tt::constants::TILE_WIDTH;
 
     const uint64_t available_L1_in_bytes = available_l1_bytes(*device);
-    const auto plan = make_row_slice_plan(args, tensor_args);
+    const auto plan = make_plan(args, tensor_args);
     const uint32_t St = plan.slice_tiles;
     const uint32_t num_slices = plan.num_slices;
-    const bool sliced = num_slices > 1U;
     const auto cores = rmsnorm::row_slice_cores(plan, compute_with_storage_grid_size);
     const auto& all_cores = cores.all_cores;
     const auto& core_group_1 = cores.core_group_1;
@@ -268,18 +257,8 @@ tt::tt_metal::ProgramDescriptor RMSNormForwardProgramFactory::create_descriptor(
             all_cores, kGateCbIndex, data_format, bfloat16_single_tile_size_bytes, twice_block_size));
     }
 
-    if (sliced) {
-        desc.cbs.push_back(make_cb_descriptor(
-            all_cores,
-            kSlicePartialCbIndex,
-            precise_data_format,
-            float32_single_tile_size_bytes,
-            kNumSlicePartialTiles));
-        // Two rows of partials: a peer can send the next row's partial while this core still sums the current row.
-        desc.cbs.push_back(make_cb_descriptor(
-            all_cores, kGatheredPartialsCbIndex, precise_data_format, float32_single_tile_size_bytes, 2U * num_slices));
-        desc.semaphores.push_back(make_semaphore_descriptor(kPartialsSemId, all_cores, 0U));
-    }
+    rmsnorm::add_row_slice_exchange(
+        desc, all_cores, kSlicePartialCbIndex, kGatheredPartialsCbIndex, kPartialsSemId, num_slices);
 
     // -------------------------------------------------------------------------
     // 3) Create reader/writer kernels
@@ -390,7 +369,7 @@ void RMSNormForwardProgramFactory::override_runtime_arguments(
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output,
     const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
-    const auto plan = make_row_slice_plan(operation_attributes, tensor_args);
+    const auto plan = make_plan(operation_attributes, tensor_args);
     const auto buffers = get_buffers(tensor_args, output);
 
     const uint32_t input_addr = buffers.input->address();
