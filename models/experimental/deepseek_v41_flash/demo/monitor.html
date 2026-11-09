@@ -279,7 +279,11 @@ function drawCards() {
     card("Queued", int(st.queued), "waiting for a seat"),
     card("Parked", int(st.parked), `${int(host.users)} in host RAM, ${int(st.empty)} empty`),
     card("Generated", int(totals.generated), "tokens, since start"),
-    card("Prefilled", int(totals.prefilled), `tokens, ${int(totals.turns)} turns done`),
+    card("Input", int(totals.input), `tokens, ${int(totals.turns)} turns done`),
+    card("Prefilled input", int(totals.prefilled),
+      totals.input ? `${fmt(100 * totals.prefilled / totals.input, 1)}% of input` : "tokens fed through prefill"),
+    card("Cached input", int(totals.cached),
+      totals.input ? `${fmt(100 * totals.cached / totals.input, 1)}% cache hit` : "tokens, already in KV"),
     card("Free KV cache", int(state.tokens_left), "tokens"),
     card("KV pages used", total ? fmt(100 * used / total, 1) + "%" : "–", `${int(used)} / ${int(total)} blocks`),
   ].join("");

@@ -209,6 +209,10 @@ class Monitor:
         last = ended[-1] if ended else {}
         generated = last.get("total_generated", 0) + sum(turn["generated"] for turn in live)
         prefilled = last.get("total_prefilled", 0) + sum(turn["prefilled"] for turn in live)
+        # The prompts, as usage reports them: every prompt token is either a cache hit (``cached_tokens``, already in
+        # the slot's KV at admission) or fed through prefill (``prompt_tokens``).
+        input_tokens = last.get("total_input", 0) + sum(turn["prompt_tokens"] + turn["cached_tokens"] for turn in live)
+        cached_tokens = last.get("total_cached", 0) + sum(turn["cached_tokens"] for turn in live)
 
         # Per turn: the live rates over the last few seconds.
         for turn in live:
@@ -291,7 +295,13 @@ class Monitor:
         self._prev = (snap, (generated, prefilled), counters, mono)
         snap.pop("log", None)
         snap["turns"] = live
-        snap["totals"] = {"generated": generated, "prefilled": prefilled, "turns": last.get("total_turns", 0)}
+        snap["totals"] = {
+            "generated": generated,
+            "prefilled": prefilled,
+            "input": input_tokens,
+            "cached": cached_tokens,
+            "turns": last.get("total_turns", 0),
+        }
         snap["runtime"] = runtime
         snap["counters"] = counters
         self.state = snap
