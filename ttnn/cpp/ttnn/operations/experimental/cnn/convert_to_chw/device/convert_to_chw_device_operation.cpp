@@ -26,6 +26,15 @@ void ConvertToCHWDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(C <= TILE_HEIGHT, "C must be less than or equal to 32 (was {})", C);
     TT_FATAL(HW % TILE_HEIGHT == 0, "HW must be divisible by tile size");
 
+    // The transpose runs through a bfloat16 tile and the writer copies 2-byte sticks
+    // (writer_convert_to_chw.cpp ELEMENT_SIZE_BYTES), so a 4-byte output is written with the wrong
+    // stick size and leaves half of every row untouched.
+    TT_FATAL(
+        args.dtype == DataType::BFLOAT16,
+        "convert_to_chw writes 2-byte sticks through a bfloat16 transpose tile, so only a BFLOAT16 "
+        "output is supported, got {}",
+        args.dtype);
+
     TT_FATAL(input.is_sharded(), "Input tensor must be sharded");
 
     const auto& input_shard_spec = input.memory_config().shard_spec().value();
