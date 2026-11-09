@@ -38,6 +38,13 @@ struct LinkError {
     DataMovementProcessor processor;
 };
 
+struct chip_core {
+    std::shared_ptr<distributed::MeshDevice> mesh_device;
+    IDevice* chip;
+    CoreCoord core;
+    int direction;
+};
+
 [[maybe_unused]]
 static inline void prepare_sender(
     tt::tt_metal::IDevice* const send_device,
@@ -862,7 +869,6 @@ static std::string read_eth_mac_str(IDevice* const device, const CoreCoord& core
         (mac >> 0) & 0xff);
 }
 
-[[maybe_unused]]
 static int get_eth_phys_id(IDevice* const device, const CoreCoord& core) {
     if (device->arch() != tt::ARCH::BLACKHOLE) {
         throw std::runtime_error("Requires blackhole");
@@ -881,12 +887,86 @@ static int get_eth_phys_id(IDevice* const device, const CoreCoord& core) {
     return std::distance(all_eth.begin(), it);
 }
 
-[[maybe_unused]]
 static std::string get_eth_unique_id(IDevice* const device, const CoreCoord& core) {
     std::string sn = get_asic_serial_string(device->id());
     int ethn = get_eth_phys_id(device, core);
 
     return fmt::format("{}/eth{:02}", sn, ethn);
+}
+
+[[maybe_unused]]
+static void delay_until_env() {
+    char* run_at_strp = getenv("RUN_AT");
+    if (run_at_strp) {
+        uint64_t timestamp = std::stoll(run_at_strp);
+        std::chrono::system_clock::time_point tp{std::chrono::seconds(timestamp)};
+
+        std::time_t now_time_t = std::chrono::system_clock::to_time_t(tp);
+
+        std::tm* utc_time = std::gmtime(&now_time_t);
+        std::stringstream ss;
+        ss << std::put_time(utc_time, "%Y-%m-%d %H:%M:%S");
+
+        log_info(tt::LogTest, "Run at UTC time: {}", ss.str());
+
+        std::this_thread::sleep_until(tp);
+    }
+}
+
+static std::map<std::string, struct chip_core> get_coreuid_to_core(
+    std::span<std::shared_ptr<distributed::MeshDevice>> devices_) {
+    /* =================== */
+    std::map<std::string, struct chip_core> ret;
+
+    for (const auto& mesh_device : devices_) {
+        auto* const chip = mesh_device->impl().get_devices()[0];
+        for (const auto& core : chip->get_active_ethernet_cores(true)) {
+            ret[get_eth_unique_id(chip, core)] = {
+                .mesh_device = mesh_device,
+                .chip = chip,
+                .core = core,
+            };
+        }
+    }
+
+    return ret;
+}
+
+[[maybe_unused]]
+static std::vector<struct chip_core> get_cores_to_test(std::span<std::shared_ptr<distributed::MeshDevice>> devices_) {
+    /* =================== */
+    std::vector<struct chip_core> ret;
+
+    std::map<std::string, struct chip_core> coreuid_to_core = get_coreuid_to_core(devices_);
+
+    char* endpointp = getenv("ETH_TEST_ENDPOINTS");
+    auto endpoints = std::string(endpointp ? endpointp : "");
+    std::vector<std::string> test_endpoints = split_string(endpoints, " ");
+
+    log_info(tt::LogTest, "endpoints:");
+    for (auto& e : test_endpoints) {
+        std::vector<std::string> pair = split_string(e, ",");
+
+        if (pair.size() != 2) {
+            throw std::runtime_error("Invalid format for the test link specification");
+        }
+
+        for (int i = 0; i < pair.size(); i++) {
+            if (coreuid_to_core.contains(pair[i])) {
+                auto& core = coreuid_to_core[pair[i]];
+                core.direction = i;
+                ret.push_back(core);
+                goto next;
+            }
+        }
+
+        throw std::runtime_error(fmt::format("Couldn't match a link to hardware: {}", pair));
+
+    next:
+        (void)0;
+    }
+
+    return ret;
 }
 
 [[maybe_unused]]
