@@ -131,7 +131,6 @@ def test_mesh_layer_perf(mesh_device):
     snapshot = default_snapshot_dir()
     raw = load_layer_raw(snapshot, LAYER, shard_headers(snapshot))
     cfg = GLM53FlashConfig.from_hf_config_json(snapshot / "config.json")
-    pre = torch.load(DUMP / f"layer{LAYER}_prefill.pt")
     U = ROWS * B
     try:
         ids = list(mesh_device.get_device_ids())
@@ -163,8 +162,16 @@ def test_mesh_layer_perf(mesh_device):
         ttnn.deallocate(latent)
         logger.info(f"layer {LAYER} ({kind}) seed-only: {B} slots x {rows} random latent rows per chip")
 
-    # ---- decode inputs: U distinct real token rows of the dump, row-sharded over the mesh rows
-    x_in = pre["x_in"][:, POS : POS + U]  # [1, U, 4, 4096]
+    # ---- decode inputs: U distinct token rows, row-sharded over the mesh rows: the reference dump's real rows when
+    # the checkout carries it (bringup/references, a developer's dump), else seed-only rows of the same shape and
+    # scale (CI has no reference activations; a perf harness needs none)
+    dump = DUMP / f"layer{LAYER}_prefill.pt"
+    if dump.is_file():
+        x_in = torch.load(dump)["x_in"][:, POS : POS + U]  # [1, U, 4, 4096] bf16
+    else:
+        g = torch.Generator().manual_seed(1)
+        x_in = (torch.randn(1, U, 4, getattr(cfg, "hidden_size", 4096), generator=g) * 0.5).to(torch.bfloat16)
+        logger.info(f"layer {LAYER}: no reference dump at {dump}, seed-only decode rows")
     x_dev = host_streams_to_device(x_in, mesh_device, pad_to=U, mesh=mesh)
     dp = dec.make_decode_positions([POS] * U)
 
