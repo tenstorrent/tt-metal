@@ -1191,6 +1191,12 @@ class MochiVAEDecoderAdapter:
 
         self.device = ccl_manager.mesh_device
         self._scaling_factor = torch_vae.config.scaling_factor
+        self._temporal_expansions = torch_vae.config.temporal_expansions
+        # Product of temporal expansion factors gives the temporal compression ratio.
+        # The first (ratio - 1) decoded frames are warm-up and must be discarded.
+        self._temporal_compression_ratio = 1
+        for t in self._temporal_expansions:
+            self._temporal_compression_ratio *= t
 
         latents_mean = torch_vae.config.latents_mean
         latents_std = torch_vae.config.latents_std
@@ -1254,9 +1260,16 @@ class MochiVAEDecoderAdapter:
             latents = latents / self._scaling_factor
 
         if self._torch_vae is not None:
-            return self._torch_vae.decode(latents, return_dict=False)[0]
+            output = self._torch_vae.decode(latents, return_dict=False)[0]
+        else:
+            tt_latents = self._decoder.prepare_input(latents)
+            forward = self._tracer if traced else self._decoder.forward
+            tt_output = forward(tt_latents)
+            output = self._decoder.postprocess_output(tt_output, latents.shape)
 
-        tt_latents = self._decoder.prepare_input(latents)
-        forward = self._tracer if traced else self._decoder.forward
-        tt_output = forward(tt_latents)
-        return self._decoder.postprocess_output(tt_output, latents.shape)
+        # Discard the first (temporal_compression_ratio - 1) warm-up frames
+        # produced by the causal VAE decoder's temporal upsampling.
+        warmup = self._temporal_compression_ratio - 1
+        if warmup > 0:
+            output = output[:, :, warmup:]
+        return output
