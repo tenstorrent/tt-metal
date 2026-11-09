@@ -62,6 +62,9 @@ void Conv3dDeviceOperation::validate_on_program_cache_hit(
         input_tensor_a.dtype());
 
     if (input_tensor_a.is_sharded()) {
+        TT_FATAL(
+            input_tensor_a.memory_config().shard_spec().has_value(),
+            "Conv3D: sharded activation must have a legacy shard_spec (ND_SHARDED is not supported)");
         const auto& shard_spec = input_tensor_a.memory_config().shard_spec().value();
         const uint32_t page_size_bytes = input_tensor_a.buffer()->page_size();
         const uint32_t alignment_requirement = hal::get_l1_alignment();
