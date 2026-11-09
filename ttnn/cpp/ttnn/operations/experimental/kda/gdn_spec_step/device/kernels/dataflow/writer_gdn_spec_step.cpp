@@ -322,7 +322,10 @@ TT_KERNEL void writer(
     noc.async_read_barrier();
     uint32_t par, blk;
 #if GDN_LAZY
-    uint32_t mi_raw, tp_raw;
+    uint32_t mi_raw;
+#ifdef GDN_MI_MAX
+    uint32_t tp_raw;
+#endif
 #endif
     {
         auto lock = ctrl_w.scoped_write_lock(1);
@@ -330,7 +333,9 @@ TT_KERNEL void writer(
         par = p[0] & 1u;
 #if GDN_LAZY
         mi_raw = p[1 + u];
+#ifdef GDN_MI_MAX
         tp_raw = (p[0] >> 8) & 0xFFu;  // QWEN36_SPEC_ADAPTIVE_K: the previous verify's T when it differs (0 = this T)
+#endif
 #endif
         blk = p[1 + M + bh];
     }
@@ -342,11 +347,17 @@ TT_KERNEL void writer(
     // replay count: the previous verify's accepted prefix mi + 1 (mi >= T: FRESH, nothing to replay; HOLD: discarded)
     // QWEN36_SPEC_ADAPTIVE_K: the previous verify may have had another T (ctrl word 0 bits 8..15, 0 = this T): its
     // stash rows sit at r0p = (u * Tp) % 32 and its accepted prefix may exceed T (up to LZ_FRESH_AT = T_alloc rows)
+#ifdef GDN_MI_MAX
     const uint32_t r0p = (tp_raw != 0u && tp_raw <= 32u) ? (u * tp_raw) % 32u : r0;
     uint32_t r_rep = (hold || mi_raw >= LZ_FRESH_AT) ? 0u : mi_raw + 1;
     if (r_rep > 32u - r0p) {
         r_rep = 32u - r0p;  // ctrl contents are data: never read past the stash tile
     }
+#else
+    // flag off (no GDN_MI_MAX): the prod r12 expressions, byte for byte
+    const uint32_t r0p = r0;
+    const uint32_t r_rep = (hold || mi_raw >= T) ? 0u : mi_raw + 1;
+#endif
     const uint32_t stash_rd = ((1 + par) * M + u) * Nv + h;        // the previous verify's stash block
     const uint32_t stash_wr = ((1 + (1 - par)) * M + u) * Nv + h;  // this verify's
     DataflowBuffer gnew(dfb::gnew);  // block 0: this verify's decay page, built with the gates, written with the stash
@@ -653,13 +664,20 @@ TT_KERNEL void writer(
                     const uint32_t eb = bits_from_f(e_cum);
                     const uint32_t bb = beta_all[t];
                     const uint32_t nbe = bits_from_f(beta[t] * e_cum) ^ kSign;
+#ifndef GDN_MI_MAX
+                    const uint32_t wb = (t < r_rep) ? bits_from_f(wrep[t]) : 0u;  // flag off: prod r12, byte for byte
+#endif
                     for (uint32_t c = 0; c < 32; ++c) {
                         const uint32_t idx = tile_elem_index(row, c);
                         c32[kE + idx] = eb;
                         c32[kBeta + idx] = bb;
                         c32[kNBE + idx] = nbe;
+#ifndef GDN_MI_MAX
+                        c32[kW + idx] = wb;
+#endif
                     }
                 }
+#ifdef GDN_MI_MAX
                 // W: the replay weight of the previous verify's token i on its stash row r0p + i (r0p == r0 unless the
                 // previous verify had another T); the coefficient tiles were zeroed, so rows past r stay 0
                 for (uint32_t i = 0; i < r_rep; ++i) {
@@ -668,6 +686,7 @@ TT_KERNEL void writer(
                         c32[kW + tile_elem_index(r0p + i, c)] = wb;
                     }
                 }
+#endif
 #if !GDN_SFPU_GATE
                 const uint32_t cb = bits_from_f(crep);
                 for (uint32_t i = 0; i < 1024; ++i) {
@@ -863,13 +882,20 @@ TT_KERNEL void writer(
                     const uint32_t eb = bits_from_f(e_cum);
                     const uint32_t bb = beta_all[t];
                     const uint32_t nbe = bits_from_f(beta[t] * e_cum) ^ kSign;
+#ifndef GDN_MI_MAX
+                    const uint32_t wb = (t < r_rep) ? bits_from_f(wrep[t]) : 0u;  // flag off: prod r12, byte for byte
+#endif
                     for (uint32_t c = 0; c < 32; ++c) {
                         const uint32_t idx = tile_elem_index(row, c);
                         c32[kE + idx] = eb;
                         c32[kBeta + idx] = bb;
                         c32[kNBE + idx] = nbe;
+#ifndef GDN_MI_MAX
+                        c32[kW + idx] = wb;
+#endif
                     }
                 }
+#ifdef GDN_MI_MAX
                 // W: the replay weight of the previous verify's token i on its stash row r0p + i (r0p == r0 unless the
                 // previous verify had another T); the coefficient tiles were zeroed, so rows past r stay 0
                 for (uint32_t i = 0; i < r_rep; ++i) {
@@ -878,6 +904,7 @@ TT_KERNEL void writer(
                         c32[kW + tile_elem_index(r0p + i, c)] = wb;
                     }
                 }
+#endif
 #if !GDN_SFPU_GATE
                 const uint32_t cb = bits_from_f(crep);
                 for (uint32_t i = 0; i < 1024; ++i) {

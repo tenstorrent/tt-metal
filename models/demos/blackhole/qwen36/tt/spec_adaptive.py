@@ -236,6 +236,54 @@ def ak_mask_to_k(mask, K):
     return m[:, : int(K) + 1].contiguous()
 
 
+def ak_mask_for_step(mask, wide, K, b, B, perm=None):
+    """The plugin's split-step grammar mask (decode_forward_finish: int32 [m, 1 + K_api, W], runner slots, m <= B users; rows
+    the plugin does not send are unconstrained) as the mask of the step's family: columns 0..K (ak_mask_to_k). The wide family
+    runs in rows mode on engine rows 0..b-1, so its mask is padded to B rows with -1 words (no constraint), gathered to engine
+    rows through the outer slot map ``perm`` ((phys, inv) or None = identity) and cut to b rows -- what _ak_run_wide does to
+    the step's other per-row tensors. Pure (host tensors)."""
+    m = ak_mask_to_k(mask, K)
+    if not wide:
+        return m
+    if int(m.shape[0]) < int(B):
+        pad = torch.full((int(B) - int(m.shape[0]),) + tuple(m.shape[1:]), -1, dtype=m.dtype)
+        m = torch.cat([m, pad], dim=0)
+    if perm is not None:
+        m = m[torch.as_tensor(perm[1])]
+    return m[: int(b)].contiguous()
+
+
+def ak_wide_sampling(ss, g, phys, K, b, B, perm=None):
+    """A wide-family step's ``spec_sampling`` (runner slots, [B] / [B, ...] host tensors) in engine rows 0..b-1: per-row
+    tensors through ``g`` (gather to engine rows, cut to b); ``mask`` ([m <= B, 1 + K_api, W]) through ak_mask_for_step;
+    ``penalties`` (a dict: repetition / frequency / presence [B], optional ``rebuild`` {runner slot: (prompt, output)})
+    per key, its ``rebuild`` keys mapped to engine rows (``phys``: runner slot -> engine row) and kept only below b.
+    Scalars / None pass through. (Calling ``g`` on the penalties dict or on a short mask raised before.)"""
+    out = {}
+    for k, v in ss.items():
+        if v is None:
+            out[k] = None
+        elif k == "mask":
+            out[k] = ak_mask_for_step(v, True, K, b, B, perm)
+        elif k == "penalties":
+            pen = {}
+            for pk, pv in v.items():
+                if pk == "rebuild":
+                    pen[pk] = (
+                        None
+                        if pv is None
+                        else {int(phys[int(s)]): x for s, x in pv.items() if int(phys[int(s)]) < int(b)}
+                    )
+                else:
+                    pen[pk] = None if pv is None else g(pv)
+            out[k] = pen
+        elif isinstance(v, torch.Tensor) and v.dim() >= 1 and int(v.shape[0]) == int(B):
+            out[k] = g(v)
+        else:
+            out[k] = v
+    return out
+
+
 def ak_choose(st, rows, spec_mode, narrow, chained, max_nv, compact_ok=True):
     """(family, compact) of a step (pure: reads and updates only ``st.streak``). The wide family when the step has at most
     b live rows (b = its width); ``compact`` when they do not all sit below b yet (the engine moves them down first,
@@ -442,6 +490,18 @@ class AdaptiveKMixin:
             else:
                 yield
 
+    def _ak_decode_forward_finish(self, handle, mask):
+        """decode_forward_finish with the flag on: the split step's second half runs in the family (and slot mode) its begin ran
+        in, with the plugin's [m, 1 + K_api, W] mask cut / gathered to that family's geometry (ak_mask_for_step). Without this the
+        post ran in whichever family was live after the begin returned (the base one) and with the runner block's mask width."""
+        st = self._ak
+        fam = getattr(handle, "ak_fam", None) or st.base
+        if mask is not None:
+            perm = (getattr(handle, "ak_api", None) or {}).get("perm")
+            mask = ak_mask_for_step(mask, fam is st.wide, fam.K, st.wide.B, st.base.B, perm)
+        with self._ak_handle_ctx(handle):
+            return self.decode_forward_finish(handle, mask)
+
     def _ak_finish_any(self, h):
         """_def_finish_any of ``h`` in its own family (flag off: the plain call)."""
         if self._ak is None:
@@ -463,13 +523,17 @@ class AdaptiveKMixin:
             return
         model = self.model
         if not (self.recorded_drafter and spec_hostset_trace_enabled()):
-            raise RuntimeError("QWEN36_SPEC_ADAPTIVE_K needs the recorded packed drafter (QWEN36_SPEC_HOSTSET, no EAGER_DRAFTER)")
+            raise RuntimeError(
+                "QWEN36_SPEC_ADAPTIVE_K needs the recorded packed drafter (QWEN36_SPEC_HOSTSET, no EAGER_DRAFTER)"
+            )
         if not (getattr(model, "_vfy_fused", False) and getattr(model, "_vfy_sharded", False)):
             raise RuntimeError(
                 "QWEN36_SPEC_ADAPTIVE_K needs the fused gdn_spec_step verify (QWEN36_VERIFY_SPEC_STEP=1) and the sharded argmax"
             )
         if not self.fast_join:
-            raise RuntimeError("QWEN36_SPEC_ADAPTIVE_K needs QWEN36_SPEC_FAST_JOIN=1 (the eager seed / join run B-row traces)")
+            raise RuntimeError(
+                "QWEN36_SPEC_ADAPTIVE_K needs QWEN36_SPEC_FAST_JOIN=1 (the eager seed / join run B-row traces)"
+            )
         t0 = time.perf_counter()
         W = st.wide
         with self._ak_in(W):
@@ -740,7 +804,9 @@ class AdaptiveKMixin:
             if prev.gen is not None and prev.gen[u] != gen[u]:
                 continue  # the row went to another request since the pending step (its output was dropped)
             if u >= int(counts.shape[0]):
-                raise RuntimeError(f"adaptive-K switch: chain row {s} (engine row {u}) is outside the pending step's rows")
+                raise RuntimeError(
+                    f"adaptive-K switch: chain row {s} (engine row {u}) is outside the pending step's rows"
+                )
             c = int(counts[u])
             n = min(int(nv[s]), int(dnv[u]) if u < int(dnv.shape[0]) else 0)
             t0 = int(committed[u, c - 1])
@@ -769,7 +835,9 @@ class AdaptiveKMixin:
         if ss is not None:
             ss = dict(ss)
             ss["uniforms"] = ak_uniforms_to_k(ss["uniforms"], K, Ka)
-            if ss.get("mask") is not None:  # device grammar mask [b, 1 + K_api, W]: the base step's 1 + K decision columns
+            if (
+                ss.get("mask") is not None
+            ):  # device grammar mask [b, 1 + K_api, W]: the base step's 1 + K decision columns
                 ss["mask"] = ak_mask_to_k(ss["mask"], K)
         with self._ak_in(st.base):
             return self.decode_forward(
@@ -790,7 +858,11 @@ class AdaptiveKMixin:
         b = st.wide.B
         g = lambda x: None if x is None else self._to_rows(torch.as_tensor(x))[0][:b].contiguous()  # noqa: E731
         tok_w, pos_w, nv_w, acc_w, pt_w = (g(x) for x in (tok, pos, nv, acc, page_table))
-        ss = None if spec_sampling is None else {k: g(v) for k, v in spec_sampling.items()}
+        ss = (
+            None
+            if spec_sampling is None
+            else ak_wide_sampling(spec_sampling, g, list(self._phys), st.wide.K, b, self.B, self._phys_perm)
+        )
         cr_w = g(cr)
         if cr_w is not None and not bool(cr_w.bool().any()):
             cr_w = None

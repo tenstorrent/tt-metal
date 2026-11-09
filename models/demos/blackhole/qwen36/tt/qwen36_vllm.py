@@ -1742,7 +1742,7 @@ class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
 
         if not self.model_capabilities.get("supports_spec_device_mask", False):
             raise ValueError("a token mask needs the supports_spec_device_mask capability (QWEN36_SPEC_DEVICE_MASK=1)")
-        K = self._SPEC_K
+        K = _spec_k_api(self._SPEC_K)  # QWEN36_SPEC_ADAPTIVE_K: the runner block is [B, 1 + K_api] (flag off = K)
         ok = isinstance(mask, torch.Tensor) and mask.dtype == torch.int32 and mask.dim() == 3
         if not (ok and mask.shape[1] == K + 1 and 1 <= mask.shape[0] <= B and 1 <= mask.shape[2] <= MASK_WORDS):
             got = (tuple(mask.shape), mask.dtype) if isinstance(mask, torch.Tensor) else type(mask).__name__

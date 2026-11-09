@@ -4702,6 +4702,8 @@ class MTPSpecEngine(AdaptiveKMixin):
         ``decode_forward`` returns for that mode: ``defer_read=True``: VerifyResult(handle=the same handle, now readable);
         ``defer_read=False``: the full VerifyResult (synchronizes). An empty mask row is not checked here (the adapter does).
         """
+        if not self._ak_inside():  # QWEN36_SPEC_ADAPTIVE_K: finish in the begin's family (flag off: never taken)
+            return self._ak_decode_forward_finish(handle, mask)
         if handle is not self._split_pending or not handle.pending:
             raise RuntimeError("decode_forward_finish: not the handle of the pending split step")
         tail = handle.sync_tail
