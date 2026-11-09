@@ -1,15 +1,14 @@
 # Fabric capture: reads a fabric run's router cores, where its manifest says they are, into a capture.
 #
 # fabric_capture_core is everything that needs no particular device: reading the manifest, matching it to the chips a
-# reader found, reading router cores through a DeviceReader, and hashing. It links no tt_metal, so it builds without
-# the runtime, and nothing in it can reach a MetalContext.
+# reader found, reading router cores through a DeviceReader, and hashing. It links tt_metal for the manifest's model and
+# its reader (parse_manifest_json), and starts none of the runtime.
 add_library(fabric_capture_core STATIC)
 target_sources(
     fabric_capture_core
     PRIVATE
         fabric_capture.cpp
         fabric_capture_files.cpp
-        fabric_capture_json.cpp
         fabric_capture_load.cpp
         fabric_capture_manifest.cpp
         fabric_capture_reads.cpp
@@ -21,14 +20,15 @@ target_include_directories(fabric_capture_core PUBLIC ${PROJECT_SOURCE_DIR})
 target_link_libraries(
     fabric_capture_core
     PUBLIC
+        tt_metal
         nlohmann_json::nlohmann_json
         TT::STL
     PRIVATE
+        fabric_visualizer_json_reader
         BLAKE3::blake3
 )
 
-# fabric_capture_umd is capture's only UMD code: the reader and the cluster facts for real chips. It links UMD and still
-# no tt_metal.
+# fabric_capture_umd is capture's only code that opens chips: the reader and the cluster facts, through UMD.
 add_library(fabric_capture_umd STATIC)
 target_sources(fabric_capture_umd PRIVATE fabric_capture_umd.cpp)
 target_link_libraries(fabric_capture_umd PUBLIC fabric_capture_core PRIVATE umd::tt-umd)

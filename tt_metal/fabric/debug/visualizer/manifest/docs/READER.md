@@ -3,7 +3,7 @@
 `parse_manifest_json` (`fabric_manifest.hpp`) reads a manifest's JSON back into the `ManifestFacts` the writer made
 it from ([WRITER.md](WRITER.md)). It sits beside `make_manifest_json` in `fabric_manifest.cpp`, so a change to the
 format changes both in one file, and every consumer that reads the manifest in C++ gets the same model the builders
-fill.
+fill. Capture reads it this way, and builds what it reads from the model (`collect_capture_plan`).
 
 The two are inverses: for any manifest the writer writes, in either fields layout,
 

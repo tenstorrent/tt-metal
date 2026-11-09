@@ -51,12 +51,14 @@ set_target_properties(
             ${PROJECT_BINARY_DIR}/test/tt_metal/tt_fabric
 )
 
-# Fabric capture's device-free tests. They link the capture library and gmock only, not tt_metal.
+# Fabric capture's device-free tests. They link the capture library and gmock, and test_common_libs for tt_metal's
+# include directories, which the manifest's model headers need.
 add_executable(fabric_capture_unit_tests ${UNIT_TESTS_FABRIC_CAPTURE_SRC})
 target_link_libraries(
     fabric_capture_unit_tests
     PRIVATE
         fabric_capture_core
+        test_common_libs
         gmock_main
 )
 set_target_properties(

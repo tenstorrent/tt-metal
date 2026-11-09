@@ -87,8 +87,9 @@ struct CaptureRecord {
 
 nlohmann::ordered_json make_capture_record_json(const CaptureRecord& record);
 
-// Reads a record back. Fails on another file kind or version, or a key that's missing or of the wrong type, naming the
-// key's JSON pointer.
+// Reads a record back with the visualizer's strict JSON reader, so that
+// make_capture_record_json(parse_capture_record(json)) == json. Fails on another file kind or version, a key it doesn't
+// read, or a key that's missing or of the wrong type, naming the key's JSON pointer.
 CaptureRecord parse_capture_record(const nlohmann::ordered_json& document);
 
 }  // namespace tt::tt_fabric::capture

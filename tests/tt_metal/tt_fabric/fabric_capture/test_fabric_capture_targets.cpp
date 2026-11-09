@@ -11,6 +11,8 @@
 #include <string>
 #include <vector>
 
+#include <tt-umd/types/arch.hpp>
+
 #include "tt_metal/fabric/debug/visualizer/capture/fabric_capture_device.hpp"
 #include "tt_metal/fabric/debug/visualizer/capture/fabric_capture_manifest.hpp"
 #include "tt_metal/fabric/debug/visualizer/capture/fabric_capture_targets.hpp"
@@ -26,7 +28,7 @@ PlannedRouter make_router(const std::string& path, uint32_t eth_chan, CoreXY vir
 // didn't find, and M0/C2 (0xc), which the reader found as another architecture.
 CapturePlan make_plan() {
     return CapturePlan{
-        .arch = "blackhole",
+        .arch = tt::ARCH::BLACKHOLE,
         .chips =
             {{.path = "M0/C0",
               .asic_id = 0xa,
@@ -49,9 +51,9 @@ ClusterFacts make_facts() {
         .chips =
             {{.chip = 0,
               .asic_id = 0xa,
-              .arch = "blackhole",
+              .arch = tt::ARCH::BLACKHOLE,
               .eth_cores_by_channel = {CoreXY{1, 1}, CoreXY{3, 1}, CoreXY{2, 1}, CoreXY{4, 1}, CoreXY{6, 1}}},
-             {.chip = 1, .asic_id = 0xc, .arch = "wormhole_b0", .eth_cores_by_channel = {CoreXY{1, 1}}}},
+             {.chip = 1, .asic_id = 0xc, .arch = tt::ARCH::WORMHOLE_B0, .eth_cores_by_channel = {CoreXY{1, 1}}}},
         .skipped_cores = {{.asic_id = 0xa, .core = {6, 1}, .reason = "heartbeat stalled"}},
     };
 }

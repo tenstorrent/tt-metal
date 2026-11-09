@@ -11,6 +11,8 @@
 #include <string>
 #include <vector>
 
+#include <tt-umd/types/arch.hpp>
+
 #include "tt_metal/fabric/debug/visualizer/capture/fabric_capture_utils.hpp"
 
 namespace tt::tt_fabric::capture {
@@ -21,8 +23,7 @@ struct FoundChip {
     int32_t chip = 0;
     // The chip's unique id, as the manifest's asic_id holds it.
     uint64_t asic_id = 0;
-    // The architecture, spelled as the manifest's arch.name, such as "blackhole".
-    std::string arch;
+    tt::ARCH arch = tt::ARCH::Invalid;
     // Each Ethernet channel's core, indexed by channel. Null for a channel the chip doesn't have.
     std::vector<std::optional<CoreXY>> eth_cores_by_channel;
 };

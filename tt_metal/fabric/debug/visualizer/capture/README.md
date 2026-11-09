@@ -17,8 +17,8 @@ its registers, its whole L1, and its registers again.
   read and why.
 
 Capture reads bytes and interprets nothing. Decode turns them into values, using the manifest. Capture runs as its own
-process, so it works on a run that has exited, been killed or is stuck, and it needs no tt_metal runtime: it links UMD
-and nothing of tt_metal.
+process, so it works on a run that has exited, been killed or is stuck, and it needs no tt_metal runtime: it links
+tt_metal only to read the manifest into its model, and opens the chips through UMD.
 
 ## Running it
 
@@ -108,17 +108,17 @@ flowchart LR
     identity --> record
 ```
 
-1. **Read the manifest.** `read_manifest_file` parses and hashes it into a `ManifestFile`, once. From it,
+1. **Read the manifest.** `read_manifest_file` reads it into the manifest's model with `parse_manifest_json`
+   ([READER.md](../manifest/docs/READER.md)) and hashes the same bytes, into a `ManifestFile`, once. From it,
 
    `collect_capture_plan` takes what to read, the `CapturePlan`:
    - the architecture, the L1 range, the heartbeat word's address, and the core registers (`CoreRegister`), which every
    router core shares;
    - the chips this rank owns (`PlannedChip`, by `asic_id`), each with its routers (`PlannedRouter`: path, Ethernet
-   channel, the core the run launched it on, and its stream registers' addresses).
+   channel, the core the run launched it on, and the address of every stream register its fields name).
 
     `collect_manifest_identity` takes which run it is from, the `ManifestIdentity`: run id, rank, world size, host, the
-    run's commit, and the file's hash. Then the parsed manifest is freed. A galaxy rank's manifest is tens of MB, and
-    nothing after this needs it.
+    run's commit, and the file's hash. Then the manifest is freed: nothing after this needs it.
 2. **See what's there.** `UmdDeviceReader` opens every chip this process can see through UMD, read only.
 
    `collect_umd_cluster_facts` turns what UMD found into `ClusterFacts`: each chip (`FoundChip`) with its unique id,
@@ -169,7 +169,7 @@ when it can't trust what it would write.
 | The chip has no core for the channel, or the manifest's core isn't an Ethernet core | Not read: a NOC read of a coordinate that isn't a core can hang the NOC | `channel_not_found` or `core_not_found` |
 | UMD's discovery skipped the core | Read as usual | `discovery_skipped` is true |
 | A read fails | Nothing more is read from that core, which bounds a remote read's timeout to one per core | The read has an `error` and no `bin_offset` |
-| The manifest is unreadable, of another kind or version, or missing a key | Fails, exit 2 | No files; the message names the key's JSON pointer |
+| The manifest is unreadable, or `parse_manifest_json` refuses it: another kind, version or build, or a key it doesn't read or can't find | Fails, exit 2 | No files; the message names the key's JSON pointer |
 | The manifest isn't in its run's folder | Fails: the capture's folder goes in the run's folder | No files |
 | The capture's files already exist | Fails before any chip is read | No files |
 | UMD doesn't open, or can't vouch for the chips' unique ids | Fails | No files |
@@ -235,7 +235,8 @@ The record is JSON, with chips keyed by path and routers by key, as in the manif
 - Each read's bytes are `size_bytes` bytes at `bin_offset` in the `.bin`, as the device holds them (little endian).
 A failed read has an `error` and no offset, and no bytes in the `.bin`.
 - `t_ns` is on the capture process's steady clock: only differences between them mean anything.
-- `capture.git_sha` beside `manifest.git_sha` shows whether capture was built from the run's commit.
+- `capture.git_sha` is the commit capture was built from. The manifest's reader takes only a manifest its own build
+wrote, so it's `manifest.git_sha`.
 
 ### Source
 
@@ -246,21 +247,22 @@ A failed read has an `error` and no offset, and no bytes in the `.bin`.
 | `fabric_capture_device.hpp` | What a reader gives capture: `DeviceReader`, `ClusterFacts` |
 | `fabric_capture_targets.{hpp,cpp}` | Matching the plan to the chips: `resolve_capture_targets` |
 | `fabric_capture_reads.{hpp,cpp}` | The reads: `collect_liveness_rounds`, `read_router_core`, `CaptureClock` |
-| `fabric_capture_record.{hpp,cpp}` | The record and its JSON, both ways |
+| `fabric_capture_record.{hpp,cpp}` | The record and its JSON, both ways: `make_capture_record_json` and `parse_capture_record`, on the strict JSON reader |
 | `fabric_capture_files.{hpp,cpp}` | Writing the files: their paths, `CaptureBinWriter`, `write_capture_record`, `make_capture_id` |
 | `fabric_capture_load.{hpp,cpp}` | Reading a capture back: `load_capture` |
-| `fabric_capture_json.{hpp,cpp}` | `JsonReader`, whose errors name the document and the key's JSON pointer |
 | `fabric_capture_utils.{hpp,cpp}` | `CoreXY` and BLAKE3 hashing |
 | `fabric_capture_umd.{hpp,cpp}` | The only UMD code: `UmdDeviceReader`, `collect_umd_cluster_facts` |
 | `fabric_capture_main.cpp` | The `fabric_capture` tool: options, finding the manifest, the exit status |
 
 What the stages share is in [`../common`](../common): the file kinds and versions, the names of the folders and files
-(`fabric_visualizer_files.hpp`), and the commit the build came from (`fabric_visualizer_build_identity`).
+(`fabric_visualizer_files.hpp`), the commit the build came from (`fabric_visualizer_build_identity`), and the strict
+JSON reader both the manifest's and the record's readers are built on (`fabric_visualizer_json_reader`,
+[JSON_READER.md](../common/docs/JSON_READER.md)).
 
 The code builds as three targets:
 
-- `fabric_capture_core`, everything but UMD. It links nlohmann_json, TT::STL and BLAKE3, so it builds and tests
-without devices and can't reach a `MetalContext`.
+- `fabric_capture_core`, everything but UMD. It links tt_metal for the manifest's model and reader, the strict JSON
+reader, nlohmann_json, TT::STL and BLAKE3. It starts nothing of the runtime, so it tests without devices.
 - `fabric_capture_umd`, the UMD backend, on top of the core.
 - `fabric_capture`, the tool, in `build/tools`.
 
@@ -281,8 +283,12 @@ doesn't matter how the devices are numbered or which are visible. Capture fails 
 ## Testing
 
 - `fabric_capture_unit_tests` (in `tests/tt_metal/tt_fabric/fabric_capture/`) are device-free and link only the
-core. They cover matching (every `ChipLocation` and `CoreLocation` case) and the files: each read's offset finds its
-bytes, a capture never replaces another, and an unfinished `.bin` leaves nothing behind.
+core. They cover:
+  - matching: every `ChipLocation` and `CoreLocation` case;
+  - the files: each read's offset finds its bytes, a capture never replaces another, and an unfinished `.bin` leaves
+  nothing behind;
+  - the record: one with every optional part reads back and writes again as the same JSON, and the reader fails on a
+  key it doesn't read, a key it can't find, another kind or version, and a spelling the writer wouldn't write.
 - **The manifest fixtures** (`Manifest*Fixture` in `fabric_unit_tests`) check capture against real manifests, on
 every mock cluster `tests/scripts/run_fabric_manifest_tests.sh` brings up:
   - `CapturePlan` reads each manifest through capture and checks the plan against the live fabric: ranks, the HAL's
@@ -291,7 +297,8 @@ every mock cluster `tests/scripts/run_fabric_manifest_tests.sh` brings up:
   - `Manifest1DFixture.CaptureRank*` run `capture_rank` end to end on a T3K's manifest, with a fake reader whose bytes
   come from each read's chip, core and address, and read the result back with `load_capture`. One checks that every
   read's bytes come back as read; the other drops a chip and fails a core's L1 read, and checks that the capture is
-  still written and says what's missing.
+  still written and says what's missing. Both read the record they wrote back and write it again, which must give
+  the same JSON.
 
   Mock chips don't read, so these use a fake `DeviceReader`. UMD's reads themselves need hardware, which these don't
   cover.

@@ -9,21 +9,21 @@
 #include <string>
 #include <vector>
 
-#include <nlohmann/json.hpp>
+#include <tt-umd/types/arch.hpp>
 
 #include "tt_metal/fabric/debug/visualizer/capture/fabric_capture_utils.hpp"
+#include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_model.hpp"
 
 namespace tt::tt_fabric::capture {
 
-// The manifest file a capture reads. We keep the JSON representation of the manifest in memory only to collect the plan
-// and identity. Afterwards, we let it go since we have taken all the information we need from it.
+// The manifest file a capture reads, read into the manifest's model.
 struct ManifestFile {
     // Path to manifest file
     std::filesystem::path path;
     // Hash of manifest file's bytes
     std::string blake3;
-    // Parsed manifest file in json
-    nlohmann::ordered_json json;
+    // The manifest, as parse_manifest_json reads it.
+    manifest::ManifestFacts facts;
 };
 
 // Reads a manifest file, hashing and parsing the same bytes.
@@ -45,7 +45,7 @@ struct ManifestIdentity {
 };
 
 // Collects which run a manifest is from.
-ManifestIdentity collect_manifest_identity(const ManifestFile& manifest);
+ManifestIdentity collect_manifest_identity(const ManifestFile& manifest_file);
 
 // A register every router core has, such as the wall clock.
 struct CoreRegister {
@@ -83,12 +83,12 @@ struct PlannedChip {
 // What a capture reads, from one rank's manifest: which cores, and where to read from in each core.
 struct CapturePlan {
     // The architecture the addresses below are for. A chip of another architecture isn't read.
-    std::string arch;
+    tt::ARCH arch = tt::ARCH::Invalid;
     // The L1 of the Ethernet core a router runs on: l1_size_bytes bytes from l1_address.
     uint64_t l1_address = 0;
     uint32_t l1_size_bytes = 0;
     uint64_t heartbeat_address = 0;
-    // In the manifest's order, which is the order they're read in: the low wall clock word latches the high one.
+    // In the order they're read (manifest::k_core_registers): the low wall clock word latches the high one.
     std::vector<CoreRegister> core_registers;
     // The chips this rank owns, in the manifest's order. Other ranks' chips are left out.
     std::vector<PlannedChip> chips;
@@ -96,8 +96,7 @@ struct CapturePlan {
     bool operator==(const CapturePlan&) const = default;
 };
 
-// Collects what a capture needs to read from hardware using the provided manifest. Fails on a manifest of another kind
-// or version, or one missing a key the plan needs, naming the key's JSON pointer.
-CapturePlan collect_capture_plan(const nlohmann::ordered_json& manifest);
+// Collects what a capture needs to read from hardware from a manifest's model.
+CapturePlan collect_capture_plan(const manifest::ManifestFacts& facts);
 
 }  // namespace tt::tt_fabric::capture

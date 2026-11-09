@@ -303,7 +303,7 @@ void check_field_sets(const nlohmann::ordered_json& written_manifest) {
 }
 
 // The first operations of the patch from `expected` to `actual`, each naming the pointer that differs.
-std::string describe_manifest_diff(const nlohmann::ordered_json& expected, const nlohmann::ordered_json& actual) {
+std::string describe_json_diff(const nlohmann::ordered_json& expected, const nlohmann::ordered_json& actual) {
     constexpr size_t k_max_operations = 20;
     const nlohmann::ordered_json patch = nlohmann::ordered_json::diff(expected, actual);
     std::string out = fmt::format("{} differences", patch.size());
@@ -324,13 +324,13 @@ void check_manifest_writer_parser_round_trip(const nlohmann::ordered_json& writt
     // Shared fields layout check
     const manifest::ManifestFacts facts = parse_manifest_json(written_manifest);
     const nlohmann::ordered_json rewritten = make_manifest_json(facts, FieldsLayout::SHARED);
-    EXPECT_TRUE(rewritten == written_manifest) << describe_manifest_diff(written_manifest, rewritten);
+    EXPECT_TRUE(rewritten == written_manifest) << describe_json_diff(written_manifest, rewritten);
 
     // Per-router fields layout check
     const nlohmann::ordered_json per_router = make_manifest_json(facts, FieldsLayout::PER_ROUTER);
     const nlohmann::ordered_json per_router_rewritten =
         make_manifest_json(parse_manifest_json(per_router), FieldsLayout::PER_ROUTER);
-    EXPECT_TRUE(per_router_rewritten == per_router) << describe_manifest_diff(per_router, per_router_rewritten);
+    EXPECT_TRUE(per_router_rewritten == per_router) << describe_json_diff(per_router, per_router_rewritten);
 }
 
 // Every chip names the host rank that owns it. With one local mesh, the local chips are this process's: their host rank
@@ -1116,7 +1116,7 @@ void check_capture_plan(
     const std::filesystem::path& manifest_path,
     const std::vector<RouterEntry>& routers) {
     const capture::ManifestFile file = capture::read_manifest_file(manifest_path);
-    const capture::CapturePlan plan = capture::collect_capture_plan(file.json);
+    const capture::CapturePlan plan = capture::collect_capture_plan(file.facts);
     const capture::ManifestIdentity identity = capture::collect_manifest_identity(file);
 
     // Validate mpi / distributed context
@@ -1128,7 +1128,7 @@ void check_capture_plan(
     const auto& hal = tt::tt_metal::MetalContext::instance().hal();
     using tt::tt_metal::HalL1MemAddrType;
     using tt::tt_metal::HalProgrammableCoreType;
-    EXPECT_EQ(plan.arch, lower_enum_name(hal.get_arch()));
+    EXPECT_EQ(plan.arch, hal.get_arch());
     EXPECT_EQ(plan.l1_address, hal.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::BASE));
     EXPECT_EQ(plan.l1_size_bytes, hal.get_dev_size(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::BASE));
     const std::vector<capture::CoreRegister> core_registers = {
@@ -1221,6 +1221,16 @@ public:
 private:
     std::optional<std::pair<int32_t, capture::CoreXY>> failing_l1_;
 };
+
+// The record capture_rank wrote reads back and writes again as the same JSON: the record's writer and reader agree on
+// every key and value a real capture has.
+void check_capture_record_writer_parser_round_trip(const std::filesystem::path& record_path) {
+    std::ifstream in(record_path);
+    const nlohmann::ordered_json written_record = nlohmann::ordered_json::parse(in);
+    const nlohmann::ordered_json rewritten =
+        capture::make_capture_record_json(capture::parse_capture_record(written_record));
+    EXPECT_TRUE(rewritten == written_record) << describe_json_diff(written_record, rewritten);
+}
 
 capture::CaptureRequest make_capture_request(
     const std::filesystem::path& manifest_path, const std::string& capture_id) {
@@ -1406,6 +1416,7 @@ TEST_F(Manifest1DFixture, CaptureRankWritesEveryRoutersReadsWhereTheRecordSays) 
     const capture::CaptureRecord& record = loaded.get_record();
     EXPECT_EQ(record.manifest.run_id, manifest_.at("run").at("run_id").get<std::string>());
     EXPECT_EQ(record.capture_id, "complete");
+    check_capture_record_writer_parser_round_trip(result.paths.record_path);
 
     size_t num_routers = 0;
     for (const capture::ChipRecord& chip : record.chips) {
@@ -1449,6 +1460,7 @@ TEST_F(Manifest1DFixture, CaptureRankRecordsWhatItCouldNotRead) {
         capture::capture_rank(make_capture_request(manifest_path_, "problems"), reader, facts, clock);
 
     EXPECT_EQ(result.outcome, capture::CaptureOutcome::PROBLEMS_RECORDED);
+    check_capture_record_writer_parser_round_trip(result.paths.record_path);
     const capture::LoadedCapture loaded = capture::load_capture(result.paths.record_path);
     const capture::CaptureRecord& record = loaded.get_record();
     size_t num_missing_chips = 0;

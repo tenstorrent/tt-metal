@@ -57,9 +57,9 @@ CaptureResult capture_rank(
     ManifestIdentity identity;
     {
         const ManifestFile manifest = read_manifest_file(request.manifest_path);
-        plan = collect_capture_plan(manifest.json);
+        plan = collect_capture_plan(manifest.facts);
         identity = collect_manifest_identity(manifest);
-    } // Let go of the manifest file as its large and we have taken what we need from it.
+    }  // Let go of the manifest file as its large and we have taken what we need from it.
     const std::filesystem::path run_directory = request.manifest_path.parent_path();
     TT_FATAL(
         run_directory.filename() == identity.run_id,

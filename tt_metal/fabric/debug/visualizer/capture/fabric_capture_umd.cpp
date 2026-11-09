@@ -41,7 +41,7 @@ ClusterFacts collect_umd_cluster_facts(tt::umd::Cluster& cluster) {
         FoundChip found{
             .chip = chip,
             .asic_id = descriptor.get_chip_unique_ids().at(chip),
-            .arch = tt::arch_to_str(descriptor.get_arch(chip)),
+            .arch = descriptor.get_arch(chip),
         };
         found.eth_cores_by_channel.reserve(soc.get_num_eth_channels());
         for (uint32_t channel = 0; channel < soc.get_num_eth_channels(); ++channel) {
