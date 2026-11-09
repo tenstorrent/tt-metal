@@ -31,6 +31,17 @@ void RingSDPABwQDeviceOperation::validate_on_program_cache_miss(
             tensor_args.query,
             tensor_args.query);
     }
+
+    validate_ring_schedule(attrs, tensor_args.shifted.has_value());
+    if (tensor_args.shifted.has_value()) {
+        const auto& shifted = tensor_args.shifted.value();
+        validate_sdpa_tensor(shifted.query, "Shifted query", tensor_args.query);
+        validate_same_spec(shifted.query, tensor_args.query, "query");
+        validate_output_like_tensor(shifted.grad_output, "Shifted grad output", shifted.query, tensor_args.value);
+        validate_output_like_tensor(shifted.attn_output, "Shifted attention output", shifted.query, tensor_args.value);
+        validate_intermediates_tensor(shifted.intermediates, shifted.query);
+        validate_grad_like_tensor(shifted.grad_query, "Shifted grad query", shifted.query, shifted.query);
+    }
 }
 
 RingSDPABwQDeviceOperation::spec_return_value_t RingSDPABwQDeviceOperation::compute_output_specs(
@@ -86,7 +97,9 @@ ttml::metal::ops::ring_sdpa_bw::q::RingSDPABwQDeviceOperation::tensor_return_val
     uint32_t step,
     ttml::metal::AttentionMaskType mask_type,
     ttml::metal::ops::ring_sdpa_bw::RingDirection ring_direction,
-    const std::optional<ttnn::Tensor>& preallocated_grad_query) {
+    const std::optional<ttnn::Tensor>& preallocated_grad_query,
+    ttml::metal::ops::RingSchedule schedule,
+    const std::optional<ttml::metal::ops::ring_sdpa_bw::q::RingSDPABwQShifted>& shifted) {
     using OperationType = ttml::metal::ops::ring_sdpa_bw::q::RingSDPABwQDeviceOperation;
 
     auto operation_attributes = OperationType::operation_attributes_t{
@@ -94,7 +107,8 @@ ttml::metal::ops::ring_sdpa_bw::q::RingSDPABwQDeviceOperation::tensor_return_val
         .ring_axis = ring_axis,
         .step = step,
         .mask_type = mask_type,
-        .ring_direction = ring_direction};
+        .ring_direction = ring_direction,
+        .schedule = schedule};
 
     auto tensor_args = OperationType::tensor_args_t{
         .grad_output = grad_output,
@@ -103,7 +117,8 @@ ttml::metal::ops::ring_sdpa_bw::q::RingSDPABwQDeviceOperation::tensor_return_val
         .key = key,
         .value = value,
         .intermediates = intermediates,
-        .preallocated_grad_query = preallocated_grad_query};
+        .preallocated_grad_query = preallocated_grad_query,
+        .shifted = shifted};
 
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }

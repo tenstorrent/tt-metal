@@ -49,6 +49,8 @@ ttml::metal::ops::ring_sdpa_bw::kv::RingSDPABwKVDeviceOperation::tensor_return_v
     ttml::metal::ops::ring_sdpa_bw::RingDirection ring_direction =
         ttml::metal::ops::ring_sdpa_bw::RingDirection::Backward,
     const std::optional<ttnn::Tensor>& preallocated_grad_key = std::nullopt,
-    const std::optional<ttnn::Tensor>& preallocated_grad_value = std::nullopt);
+    const std::optional<ttnn::Tensor>& preallocated_grad_value = std::nullopt,
+    ttml::metal::ops::RingSchedule schedule = ttml::metal::ops::RingSchedule::Contiguous,
+    const std::optional<ttml::metal::ops::ring_sdpa_bw::kv::RingSDPABwKVShifted>& shifted = std::nullopt);
 
 }  // namespace ttnn::prim

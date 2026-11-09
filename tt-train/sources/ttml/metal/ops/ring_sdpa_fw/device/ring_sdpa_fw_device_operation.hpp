@@ -43,6 +43,8 @@ ttml::metal::ops::ring_sdpa_fw::RingSDPAFwDeviceOperation::tensor_return_value_t
     ttml::metal::ops::ring_sdpa_fw::RingDirection ring_direction =
         ttml::metal::ops::ring_sdpa_fw::RingDirection::Backward,
     const std::optional<ttnn::Tensor>& preallocated_output = std::nullopt,
-    const std::optional<ttnn::Tensor>& preallocated_intermediates = std::nullopt);
+    const std::optional<ttnn::Tensor>& preallocated_intermediates = std::nullopt,
+    ttml::metal::ops::RingSchedule schedule = ttml::metal::ops::RingSchedule::Contiguous,
+    const std::optional<ttml::metal::ops::ring_sdpa_fw::RingSDPAFwShifted>& shifted = std::nullopt);
 
 }  // namespace ttnn::prim

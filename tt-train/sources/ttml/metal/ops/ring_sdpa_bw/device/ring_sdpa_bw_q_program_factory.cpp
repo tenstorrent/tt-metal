@@ -16,6 +16,36 @@
 
 namespace ttml::metal::ops::ring_sdpa_bw::q {
 
+namespace {
+
+// SDPA backward-Q tensors of one device at one ring step that depend on which query it uses:
+// the op's primary ones, or (RingSchedule::Striped, src > d) the shifted ones. K/V and the
+// u_scaler output are shared.
+struct QDeviceTensors {
+    const ttnn::Tensor& grad_output;
+    const ttnn::Tensor& attn_output;
+    const ttnn::Tensor& query;
+    const ttnn::Tensor& intermediates;
+    const ttnn::Tensor& grad_query;
+};
+
+QDeviceTensors select_device_tensors(
+    bool shifted_query, const tensor_args_t& tensor_args, const tensor_return_value_t& tensor_return_value) {
+    if (!shifted_query) {
+        return {
+            tensor_args.grad_output,
+            tensor_args.attn_output,
+            tensor_args.query,
+            tensor_args.intermediates,
+            std::get<0>(tensor_return_value)};
+    }
+    TT_FATAL(tensor_args.shifted.has_value(), "Device was assigned the shifted query but none was given");
+    const auto& shifted = tensor_args.shifted.value();
+    return {shifted.grad_output, shifted.attn_output, shifted.query, shifted.intermediates, shifted.grad_query};
+}
+
+}  // namespace
+
 // ============== Backward Q Program Factory ==============
 
 RingSDPABwQProgramFactory::cached_mesh_workload_t RingSDPABwQProgramFactory::create_mesh_workload(
@@ -25,13 +55,9 @@ RingSDPABwQProgramFactory::cached_mesh_workload_t RingSDPABwQProgramFactory::cre
     tensor_return_value_t& tensor_return_value) {
     namespace sdpa_q = ttml::metal::ops::sdpa_bw::device::q;
 
-    const auto& grad_output = tensor_args.grad_output;
-    const auto& attn_output = tensor_args.attn_output;
     const auto& query = tensor_args.query;
     const auto& key = tensor_args.key;
     const auto& value = tensor_args.value;
-    const auto& intermediates = tensor_args.intermediates;
-    auto& grad_query = std::get<0>(tensor_return_value);
 
     auto* mesh_device = query.device();
     TT_FATAL(mesh_device != nullptr, "Query tensor must be on a mesh device");
@@ -49,12 +75,14 @@ RingSDPABwQProgramFactory::cached_mesh_workload_t RingSDPABwQProgramFactory::cre
     for (const auto& mesh_coord : ttnn::MeshCoordinateRange(mesh_shape)) {
         uint32_t device_ring_id = mesh_coord[ring_axis];
 
-        auto [should_execute, effective_mask_type] =
-            get_device_execution_info(device_ring_id, step, ring_size, mask_type, ring_direction);
+        const auto work = get_ring_step_work(
+            device_ring_id, step, ring_size, mask_type, ring_direction, operation_attributes.schedule);
+        const auto effective_mask_type = work.mask_type;
 
-        if (!should_execute) {
+        if (!work.execute) {
             continue;
         }
+        const auto io = select_device_tensors(work.shifted_query, tensor_args, tensor_return_value);
 
         // Create SDPA backward Q with mask_type (no explicit mask tensor needed)
         sdpa_q::operation_attributes_t sdpa_attrs{.mask_type = effective_mask_type, .dropout_probability = 0.0F};
@@ -62,19 +90,19 @@ RingSDPABwQProgramFactory::cached_mesh_workload_t RingSDPABwQProgramFactory::cre
         auto& u_scaler = std::get<1>(tensor_return_value);
 
         sdpa_q::tensor_args_t sdpa_tensor_args{
-            .grad_output = grad_output,
-            .attn_output = attn_output,
-            .query = query,
+            .grad_output = io.grad_output,
+            .attn_output = io.attn_output,
+            .query = io.query,
             .key = key,
             .value = value,
             .attn_mask = std::nullopt,
-            .intermediates = intermediates,
-            .preallocated_grad_query = grad_query,
+            .intermediates = io.intermediates,
+            .preallocated_grad_query = io.grad_query,
             .preallocated_u_scaler = u_scaler,
             .gate = std::nullopt,
             .preallocated_grad_gate = std::nullopt};
 
-        sdpa_q::tensor_return_value_t sdpa_return_value{grad_query, u_scaler, std::nullopt, std::nullopt};
+        sdpa_q::tensor_return_value_t sdpa_return_value{io.grad_query, u_scaler, std::nullopt, std::nullopt};
 
         auto cached_program =
             sdpa_bw::device::SDPABackwardQProgramFactory::create(sdpa_attrs, sdpa_tensor_args, sdpa_return_value);
@@ -106,13 +134,9 @@ void RingSDPABwQProgramFactory::override_runtime_arguments(
     tensor_return_value_t& tensor_return_value) {
     namespace sdpa_q = ttml::metal::ops::sdpa_bw::device::q;
 
-    const auto& grad_output = tensor_args.grad_output;
-    const auto& attn_output = tensor_args.attn_output;
     const auto& query = tensor_args.query;
     const auto& key = tensor_args.key;
     const auto& value = tensor_args.value;
-    const auto& intermediates = tensor_args.intermediates;
-    auto& grad_query = std::get<0>(tensor_return_value);
     auto& u_scaler = std::get<1>(tensor_return_value);
 
     auto* mesh_device = query.device();
@@ -129,27 +153,29 @@ void RingSDPABwQProgramFactory::override_runtime_arguments(
 
         // Determine effective mask type for this device
         uint32_t device_ring_id = start_coord[ring_axis];
-        auto [should_execute, effective_mask_type] =
-            get_device_execution_info(device_ring_id, step, ring_size, mask_type, ring_direction);
-        (void)should_execute;  // Already filtered in create_mesh_workload
+        const auto work = get_ring_step_work(
+            device_ring_id, step, ring_size, mask_type, ring_direction, operation_attributes.schedule);
+        const auto effective_mask_type = work.mask_type;
+        TT_FATAL(work.execute, "Cached ring SDPA backward program found for a device that does not execute");
+        const auto io = select_device_tensors(work.shifted_query, tensor_args, tensor_return_value);
 
         // Create SDPA attributes and tensor args
         sdpa_q::operation_attributes_t sdpa_attrs{.mask_type = effective_mask_type, .dropout_probability = 0.0F};
 
         sdpa_q::tensor_args_t sdpa_tensor_args{
-            .grad_output = grad_output,
-            .attn_output = attn_output,
-            .query = query,
+            .grad_output = io.grad_output,
+            .attn_output = io.attn_output,
+            .query = io.query,
             .key = key,
             .value = value,
             .attn_mask = std::nullopt,
-            .intermediates = intermediates,
-            .preallocated_grad_query = grad_query,
+            .intermediates = io.intermediates,
+            .preallocated_grad_query = io.grad_query,
             .preallocated_u_scaler = u_scaler,
             .gate = std::nullopt,
             .preallocated_grad_gate = std::nullopt};
 
-        sdpa_q::tensor_return_value_t sdpa_return_value{grad_query, u_scaler, std::nullopt, std::nullopt};
+        sdpa_q::tensor_return_value_t sdpa_return_value{io.grad_query, u_scaler, std::nullopt, std::nullopt};
 
         // Convert our shared_variables to SDPA's shared_variables type
         sdpa_bw::device::SDPABackwardQProgramFactory::shared_variables_t sdpa_shared_vars{

@@ -5,6 +5,7 @@
 #pragma once
 
 #include "metal/common/const_utils.hpp"
+#include "metal/ops/common/ring_sdpa_utils.hpp"
 #include "metal/ttnn_all_includes.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn_fixed/distributed/ttnn_ops.hpp"
@@ -22,6 +23,16 @@ struct RingSDPABwKVParams {
     ttml::metal::AttentionMaskType mask_type = ttml::metal::AttentionMaskType::None;
     RingDirection ring_direction =
         ttnn_fixed::distributed::RingShiftDirection::Backward;  // Direction K/V is shifting in the ring
+    RingSchedule schedule = RingSchedule::Contiguous;           // See RingSchedule in ring_sdpa_utils.hpp
+};
+
+// Shifted-query tensors for RingSchedule::Striped (see ring_sdpa_utils.hpp). Devices whose K/V
+// source comes later in the ring (src > d) read these instead of the primary grad_output, query
+// and intermediates; dK/dV are in the K/V source's coordinates either way and share the outputs.
+struct RingSDPABwKVShifted {
+    ttnn::Tensor grad_output;
+    ttnn::Tensor query;
+    ttnn::Tensor intermediates;
 };
 
 struct RingSDPABwKVInputs {
@@ -33,6 +44,7 @@ struct RingSDPABwKVInputs {
     ttnn::Tensor intermediates;
     std::optional<ttnn::Tensor> preallocated_grad_key;    // Preallocated output buffer
     std::optional<ttnn::Tensor> preallocated_grad_value;  // Preallocated output buffer
+    std::optional<RingSDPABwKVShifted> shifted;           // Required iff schedule == Striped
 };
 
 using operation_attributes_t = RingSDPABwKVParams;

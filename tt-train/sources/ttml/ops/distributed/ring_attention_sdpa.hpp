@@ -10,6 +10,15 @@
 
 namespace ttml::ops::distributed {
 
+// How the global sequence is laid out across the CP ring.
+// - Contiguous: rank d holds tokens [d*S_local, (d+1)*S_local).
+// - Striped (causal load balancing): global token p lives on rank p mod N as local row p div N.
+//   Every rank runs one causal block of the same shape at every ring step: on its query for K/V
+//   from ranks <= itself, and on its query shifted up one row (strict causal) for later ranks.
+//   The caller (data loader, RoPE positions) must lay tokens out this way; this op only
+//   schedules the work.
+enum class RingAttentionLayout : uint8_t { Contiguous = 0, Striped = 1 };
+
 /**
  * Ring Attention SDPA for Context Parallelism.
  *
@@ -40,6 +49,8 @@ namespace ttml::ops::distributed {
  *             - Step 0: causal mask (local K/V)
  *             - Steps where source device < current device: full attention
  *             - Steps where source device > current device: skip (no computation)
+ * @param layout Sequence layout across the ring (see RingAttentionLayout). Striped requires a causal
+ *             mask.
  * @return Attention output tensor (B, H, S_local, D)
  *
  * Note: KV is passed in the ring (rather than Q) because in GQA, num_groups << num_heads,
@@ -50,7 +61,8 @@ autograd::TensorPtr ring_attention_sdpa(
     const autograd::TensorPtr& key,
     const autograd::TensorPtr& value,
     const std::optional<autograd::TensorPtr>& mask = std::nullopt,
-    const ttml::metal::AttentionMaskType mask_type = ttml::metal::AttentionMaskType::Causal);
+    const ttml::metal::AttentionMaskType mask_type = ttml::metal::AttentionMaskType::Causal,
+    RingAttentionLayout layout = RingAttentionLayout::Contiguous);
 
 namespace detail {
 

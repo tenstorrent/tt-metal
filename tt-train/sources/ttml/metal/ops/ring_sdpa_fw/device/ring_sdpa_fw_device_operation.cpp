@@ -24,6 +24,15 @@ void RingSDPAFwDeviceOperation::validate_on_program_cache_miss(
     if (tensor_args.preallocated_intermediates.has_value()) {
         validate_intermediates_tensor(tensor_args.preallocated_intermediates.value(), tensor_args.query);
     }
+
+    validate_ring_schedule(attrs, tensor_args.shifted.has_value());
+    if (tensor_args.shifted.has_value()) {
+        const auto& shifted = tensor_args.shifted.value();
+        validate_sdpa_tensor(shifted.query, "Shifted query", tensor_args.query);
+        validate_same_spec(shifted.query, tensor_args.query, "query");
+        validate_output_like_tensor(shifted.output, "Shifted output", shifted.query, tensor_args.value);
+        validate_intermediates_tensor(shifted.intermediates, shifted.query);
+    }
 }
 
 RingSDPAFwDeviceOperation::spec_return_value_t RingSDPAFwDeviceOperation::compute_output_specs(
@@ -77,6 +86,7 @@ ttsl::hash::hash_t RingSDPAFwDeviceOperation::compute_program_hash(
         attrs.step,
         attrs.mask_type,
         static_cast<int>(attrs.ring_direction),
+        static_cast<int>(attrs.schedule),
         tensor_args.query.logical_shape(),
         tensor_args.query.dtype(),
         tensor_args.key.logical_shape());
@@ -96,7 +106,9 @@ ttml::metal::ops::ring_sdpa_fw::RingSDPAFwDeviceOperation::tensor_return_value_t
     ttml::metal::AttentionMaskType mask_type,
     ttml::metal::ops::ring_sdpa_fw::RingDirection ring_direction,
     const std::optional<ttnn::Tensor>& preallocated_output,
-    const std::optional<ttnn::Tensor>& preallocated_intermediates) {
+    const std::optional<ttnn::Tensor>& preallocated_intermediates,
+    ttml::metal::ops::RingSchedule schedule,
+    const std::optional<ttml::metal::ops::ring_sdpa_fw::RingSDPAFwShifted>& shifted) {
     using OperationType = ttml::metal::ops::ring_sdpa_fw::RingSDPAFwDeviceOperation;
 
     auto operation_attributes = OperationType::operation_attributes_t{
@@ -104,14 +116,16 @@ ttml::metal::ops::ring_sdpa_fw::RingSDPAFwDeviceOperation::tensor_return_value_t
         .ring_axis = ring_axis,
         .step = step,
         .mask_type = mask_type,
-        .ring_direction = ring_direction};
+        .ring_direction = ring_direction,
+        .schedule = schedule};
 
     auto tensor_args = OperationType::tensor_args_t{
         .query = query,
         .key = key,
         .value = value,
         .preallocated_output = preallocated_output,
-        .preallocated_intermediates = preallocated_intermediates};
+        .preallocated_intermediates = preallocated_intermediates,
+        .shifted = shifted};
 
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
