@@ -12,37 +12,18 @@ from __future__ import annotations
 import json
 import os
 import socket
-import subprocess
-from pathlib import Path
-from typing import Optional
 
 SCHEMA_VERSION = 1
 PATH_ENV = "PREFILL_MODEL_DESCRIPTOR_PATH"
 
 
-def descriptor_path() -> str:
-    return os.environ.get(PATH_ENV, "")
-
-
-def process_started_at(pid: Optional[int] = None) -> float:
-    """When the process started, in unix seconds: /proc/<pid>/stat's start ticks after /proc/stat's btime."""
-    with open(f"/proc/{pid or os.getpid()}/stat") as fh:
+def process_started_at() -> float:
+    """When this process started, in unix seconds: /proc/self/stat's start ticks after /proc/stat's btime."""
+    with open("/proc/self/stat") as fh:
         ticks = int(fh.read().rsplit(")", 1)[1].split()[19])
     with open("/proc/stat") as fh:
         btime = next(int(line.split()[1]) for line in fh if line.startswith("btime"))
     return btime + ticks / os.sysconf("SC_CLK_TCK")
-
-
-def metal_version() -> str:
-    try:
-        out = subprocess.run(
-            ["git", "-C", str(Path(__file__).resolve().parent), "rev-parse", "--short=10", "HEAD"],
-            capture_output=True,
-            text=True,
-        )
-        return out.stdout.strip() or "unknown"
-    except OSError:
-        return "unknown"
 
 
 def prefill_descriptor(
@@ -65,7 +46,6 @@ def prefill_descriptor(
         "role": "prefill",
         "producer": {
             "name": "tt-metal-prefill",
-            "version": metal_version(),
             "host": socket.gethostname(),
             "pid": os.getpid(),
             "started_at": process_started_at(),
@@ -81,14 +61,6 @@ def prefill_descriptor(
         },
         "io": {"service_id": service_id, "ack_shm_name": ack_shm_name},
     }
-
-
-def discard(path: str) -> None:
-    """Remove an earlier run's descriptor, so a worker started before this run writes its own never reads it."""
-    try:
-        os.remove(path)
-    except FileNotFoundError:
-        pass
 
 
 def write(path: str, doc: dict) -> None:

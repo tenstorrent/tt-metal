@@ -1054,7 +1054,6 @@ def _print_config() -> None:
         ("PREFILL_TRACE_DIR", os.environ.get("PREFILL_TRACE_DIR", ADAPTER.prefill_trace_default)),
         ("PREFILL_ENABLE_MIGRATION", str(int(migration_publish_enabled()))),
         ("PREFILL_MIGRATION_TABLE_PATH", migration_table_path()),
-        (model_descriptor.PATH_ENV, model_descriptor.descriptor_path() or "<unset: not written>"),
         ("PREFILL_MIGRATION_WAIT_READY_MS", os.environ.get("PREFILL_MIGRATION_WAIT_READY_MS", "120000")),
         ("PREFILL_MIGRATION_EXPORT_TO_FILE", os.environ.get("PREFILL_MIGRATION_EXPORT_TO_FILE", "0")),
         (
@@ -1113,8 +1112,6 @@ def main() -> None:
     signal.signal(signal.SIGINT, _handle_sigterm)
 
     _print_config()
-    if model_descriptor.descriptor_path():
-        model_descriptor.discard(model_descriptor.descriptor_path())
 
     if not ttnn.distributed_context_is_initialized():
         ttnn.init_distributed_context()
@@ -1205,7 +1202,7 @@ def main() -> None:
 
 
 def _write_model_descriptor(hf_config, service_id: str, ack_shm_name: str) -> None:
-    path = model_descriptor.descriptor_path()
+    path = os.environ[model_descriptor.PATH_ENV]
     doc = model_descriptor.prefill_descriptor(
         model_id=os.environ.get("PREFILL_HF_MODEL", ADAPTER.hf_model_default),
         max_context_len=int(hf_config.max_position_embeddings),
@@ -1450,7 +1447,7 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
                 logger.info(f"[migration] drained {n_warm} D2H warm-up ack records from the trace capture")
             layer_ack_service.start()
 
-    if rank == master_rank and model_descriptor.descriptor_path():
+    if rank == master_rank and os.environ.get(model_descriptor.PATH_ENV):
         _write_model_descriptor(hf_config, service_id, ack_shm_name)
 
     logger.info(f"[pp rank {rank}] setup complete, entering request loop")

@@ -48,18 +48,3 @@ def test_write_replaces_the_file_in_one_rename(tmp_path):
     model_descriptor.write(str(path), model_descriptor.prefill_descriptor(**ARGS))
     assert json.loads(path.read_text())["prefill"]["chunk_size"] == 5120
     assert [p.name for p in tmp_path.iterdir()] == ["model.json"]
-
-
-def test_the_path_comes_from_the_environment(monkeypatch):
-    monkeypatch.delenv(model_descriptor.PATH_ENV, raising=False)
-    assert model_descriptor.descriptor_path() == ""
-    monkeypatch.setenv(model_descriptor.PATH_ENV, "/run/prefill.json")
-    assert model_descriptor.descriptor_path() == "/run/prefill.json"
-
-
-def test_discard_removes_an_earlier_descriptor(tmp_path):
-    path = tmp_path / "model.json"
-    path.write_text("{}")
-    model_descriptor.discard(str(path))
-    assert not path.exists()
-    model_descriptor.discard(str(path))
