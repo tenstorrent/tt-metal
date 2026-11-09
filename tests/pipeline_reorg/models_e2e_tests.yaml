@@ -2191,6 +2191,29 @@
   team: models
   budget_type: e2e
 
+- name: GLM-5.3-Flash 8x4 megakernel e2e (Galaxy)
+  cmd: |
+    export HF_MODEL=zai-org/GLM-5.3-Flash TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/zai-org/GLM-5.3-Flash
+    # The persistent-stack port on all 32 chips (TP32 x EP32, the sequence-sharded DSA pool: 1 M x 4 and 128 K x 16
+    # users resident; tt/galaxy_defaults.py). The reference-format tile cache lives beside the model's TT cache: the
+    # first run on a runner builds it from the checkpoint as the stack loads (mlperf write access, ~1 h), later runs
+    # load it in ~5 min; the permuted expert copies sit next to it.
+    export GLM53_MK_TILE_CACHE_V3=$TT_CACHE_PATH/glm53_tile_cache_v3 GLM53_FUSED_EXPERTS_CACHE=$TT_CACHE_PATH/glm53_fused_experts_cache
+    # 32 K x 4 users with one prompt (the users agree; ids 785 1196 702 3267 ... logged) and 1 M x 1 user (the resident
+    # capstone): the TP prefill, the traced decode step, TTFT and tok/s per user logged
+    GLM53_MK_B=4 GLM53_MK_ISL=32768 pytest --timeout 6000 models/demos/glm53_flash/tests/test_mk_e2e.py
+    GLM53_MK_B=1 GLM53_MK_ISL=1048448 pytest --timeout 3600 models/demos/glm53_flash/tests/test_mk_e2e.py
+  model: glm53-flash
+  model_family: GLM
+  skus:
+    bh_galaxy:
+      timeout: 180
+      tier: 1
+      release_ready: false
+  owner_id: U088413NP0Q # Ashai Reddy
+  team: models
+  budget_type: e2e
+
 - name: GLM-5.3-Flash e2e tests (Galaxy)
   cmd: |
     export HF_MODEL=zai-org/GLM-5.3-Flash TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/zai-org/GLM-5.3-Flash

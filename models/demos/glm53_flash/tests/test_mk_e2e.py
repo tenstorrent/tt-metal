@@ -20,6 +20,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.autoports.zai_org_glm_5_3_flash.tt import galaxy_defaults as GD
 from models.autoports.zai_org_glm_5_3_flash.tt import optimized_decoder as OD
 from models.autoports.zai_org_glm_5_3_flash.tt.config import load_hf_text_config
 from models.autoports.zai_org_glm_5_3_flash.tt.weights import TileCacheSource, cache_dtype
@@ -32,6 +33,10 @@ B = int(os.environ.get("GLM53_MK_B", "4"))
 ISL = int(os.environ.get("GLM53_MK_ISL", "128"))
 OSL = int(os.environ.get("GLM53_MK_OSL", "128"))
 SEQ = int(os.environ.get("GLM53_MK_SEQ", str(max(2048, 1 << (ISL + OSL + 64).bit_length()))))
+# the validated 8x4 configuration (tt/galaxy_defaults.py: TP32 x EP32, the sequence-sharded DSA pool, the TP prefill with
+# the indexer, the pooled intermediates; the trace region / buckets / sparse ladder from SEQ): every knob an explicit
+# environment value does not already set -- before the mesh parameters below read GLM53_FABRIC
+DEFAULTS = GD.apply(MESH, SEQ, ISL)
 TRACE_MB = int(os.environ.get("GLM53_MODEL_TRACE_MB", "512"))
 # the reference's SERVED worker L1 (pmk_layer WORKER_L1_SERVED): 16 KB more allocatable L1 than the mk_dense note's
 # 1,264,512 -- the 45-layer stack sits at that floor (the sharded pool / the attached TP prefill clashed by 1 KB,
@@ -90,6 +95,26 @@ class MkTileCacheSource(TileCacheSource):
         super().__init__(cache_dir, manifest_path)
         self.inner, self.manifest_path = inner, manifest_path
         self._added = 0
+        self.ready = os.path.isfile(os.path.join(cache_dir, "COMPLETE"))
+
+    @classmethod
+    def open(cls, cache_dir: str, inner) -> "MkTileCacheSource":
+        """the cache at cache_dir, complete or not: a missing manifest starts empty (the run builds every tensor the
+        stack asks for, then complete() marks it)"""
+        os.makedirs(cache_dir, exist_ok=True)
+        mp = os.path.join(cache_dir, "manifest.json")
+        if not os.path.isfile(mp):
+            with open(mp, "w") as f:
+                json.dump({"tensors": {}, "tt_metal_sha": ""}, f)
+        return cls(cache_dir, mp, inner=inner)
+
+    def complete(self) -> None:
+        """the manifest saved and COMPLETE written (a later run reads every tensor from the cache)"""
+        self.save_manifest()
+        with open(os.path.join(self.cache_dir, "COMPLETE"), "w") as f:
+            f.write(time.strftime("%Y-%m-%d %H:%M:%S\n"))
+        self.ready = True
+        logger.info(f"MkTileCacheSource {self.cache_dir}: COMPLETE ({len(self.tensors)} tensors, {self._added} built)")
 
     def _entry(self, layer_idx: int, name: str) -> dict:
         key = f"layers.{layer_idx}.{name}"
@@ -261,10 +286,15 @@ def test_mk_e2e(mesh_device, monkeypatch):
     snapshot = default_snapshot_dir()
     cfg = load_hf_text_config(str(snapshot))
     tok = load_tokenizer(snapshot)
+    if DEFAULTS:
+        logger.info(f"galaxy defaults applied: {DEFAULTS}")
     v3 = os.environ.get("GLM53_MK_TILE_CACHE_V3")
-    if v3 and os.path.isfile(os.path.join(v3, "COMPLETE")):  # the reference-format tile cache (MkTileCacheSource)
-        source = MkTileCacheSource(v3, os.path.join(v3, "manifest.json"), inner=HFSource(snapshot, cfg))
-        logger.info(f"MkTileCacheSource {v3}: {len(source.tensors)} entries")
+    if v3:  # the reference-format tile cache (MkTileCacheSource): READ when COMPLETE, else BUILT by this run (every
+        # tensor the stack asks for is dumped from the HF source as it loads: ~1 h on a cold runner) and marked COMPLETE
+        source = MkTileCacheSource.open(v3, inner=HFSource(snapshot, cfg))
+        logger.info(
+            f"MkTileCacheSource {v3}: {len(source.tensors)} entries, {'READ' if source.ready else 'BUILD'} mode"
+        )
     else:
         source = HFSource(snapshot, cfg)
         if os.environ.get("GLM53_MK_TILE_CACHE"):  # the dequantised per-layer torch files (see TileCache)
@@ -281,6 +311,8 @@ def test_mk_e2e(mesh_device, monkeypatch):
     backend = StackBackend(mesh_device, max_batch=B, layers=layers, hf_config=cfg, topk=1, sample=False, ep_weights=ep,
                            native_t=native, weight_cache=wcache)  # fmt: skip
     logger.info(f"StackBackend built in {time.perf_counter() - t0:.0f} s: mesh {MESH}, {len(layers)} layers, B {B}")
+    if isinstance(source, MkTileCacheSource) and not source.ready:
+        source.complete()
     gen = Glm53Generator(backend, tokenizer=tok, max_batch=B, max_seq_len=SEQ)
     t0 = time.perf_counter()
     gen.warmup(capture=True)

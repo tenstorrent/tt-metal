@@ -370,7 +370,7 @@ models:
     wh_galaxy_perf: 215
     bh_p150: 27
     bh_quietbox_2: 434
-    bh_galaxy: 90  # +12: GLM-5.3-Flash e2e 45 beside Qwen3-32B 15 + GPT-OSS 30 (PR #63440)
+    bh_galaxy: 270  # +180: GLM-5.3-Flash 8x4 megakernel e2e (the first run builds the tile cache) beside the GLM e2e 45, Qwen3-32B 15 + GPT-OSS 30
     bh_sc1: 180
     bh_sc1_high_power: 185
     bh_sc4: 75
