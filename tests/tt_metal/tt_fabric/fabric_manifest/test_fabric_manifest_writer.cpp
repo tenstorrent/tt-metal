@@ -2,16 +2,20 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// The manifest writer, from hand-built facts: the conventions readers rely on, which the fixtures only see through
-// whatever the fabric they bring up happens to produce. No device.
+// The manifest writer and reader, from hand-built facts: the conventions readers rely on, which the fixtures only see
+// through whatever the fabric they bring up happens to produce, and the reader's strictness. No device.
 
 #include <gtest/gtest.h>
 #include <nlohmann/json.hpp>
 
+#include <cstddef>
+#include <exception>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
+#include "tt_metal/fabric/debug/visualizer/common/fabric_visualizer_files.hpp"
 #include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest.hpp"
 #include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_model.hpp"
 #include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_type_registry.hpp"
@@ -81,7 +85,8 @@ ManifestFacts make_facts() {
     Chip remote_chip{.fabric_node_id = remote_node, .mesh_coord = {0, 1}, .host_rank = 1};
 
     return ManifestFacts{
-        .run = {},
+        // The reader reads only what this build wrote.
+        .run = {.build = visualizer::get_build_identity()},
         .fabric =
             {.config = {.fabric_config = FabricConfig::FABRIC_1D},
              .packet_header = std::string(get_manifest_type_name<LowLatencyPacketHeaderT<0>>()),
@@ -110,6 +115,8 @@ ManifestFacts make_facts() {
 const json& router_e0(const json& manifest) {
     return manifest.at("meshes").at("M0").at("chips").at("C0").at("routers").at("E0");
 }
+
+json& router_e0(json& manifest) { return manifest.at("meshes").at("M0").at("chips").at("C0").at("routers").at("E0"); }
 
 // A remote chip says only where it is in its mesh: the ids this rank can't read are null, and it has no routers.
 TEST(ManifestWriter, RemoteChipHasOnlyItsPlace) {
@@ -151,9 +158,7 @@ TEST(ManifestWriter, SharedLayoutWritesEachDistinctBlockOnce) {
     EXPECT_EQ(router.at("channels").at("receivers").at("vc0").at("ch0").at("fields"), "F0");
     EXPECT_EQ(router.at("fields"), "F1");
     const auto per_router = make_manifest_json(facts, FieldsLayout::PER_ROUTER);
-    EXPECT_EQ(
-        manifest.at("field_sets"),
-        json({{"F0", json::object()}, {"F1", router_e0(per_router).at("fields")}}));
+    EXPECT_EQ(manifest.at("field_sets"), json({{"F0", json::object()}, {"F1", router_e0(per_router).at("fields")}}));
 }
 
 // PER_ROUTER writes each block where it is, with no field_sets; otherwise the two layouts write the same manifest.
@@ -270,6 +275,136 @@ TEST(ManifestWriter, FailsOnTwoFieldsWithOneKey) {
     auto& fields = facts.meshes.at(0).chips.at(0).routers.at(0).fields_by_erisc.at(0);
     fields.push_back(fields.front());
     EXPECT_ANY_THROW(make_manifest_json(facts));
+}
+
+// ============ Model ============
+
+// A CounterRef's array resolves to its region, and each array says whose sender channel indexes it.
+TEST(ManifestModel, CreditCounterArraysResolve) {
+    const L1CreditCounters counters{word_at(0x100), word_at(0x104), word_at(0x108), word_at(0x10c)};
+    EXPECT_EQ(credit_counter_region(counters, CreditCounterArray::TO_SENDER_ACK).address, 0x100u);
+    EXPECT_EQ(credit_counter_region(counters, CreditCounterArray::TO_SENDER_COMPLETION).address, 0x104u);
+    EXPECT_EQ(credit_counter_region(counters, CreditCounterArray::RECEIVER_ACK).address, 0x108u);
+    EXPECT_EQ(credit_counter_region(counters, CreditCounterArray::RECEIVER_COMPLETION).address, 0x10cu);
+    EXPECT_EQ(
+        credit_counter_indexed_by(CreditCounterArray::TO_SENDER_COMPLETION),
+        CreditCounterIndexedBy::OWN_SENDER_CHANNEL);
+    EXPECT_EQ(credit_counter_indexed_by(CreditCounterArray::RECEIVER_ACK), CreditCounterIndexedBy::PEER_SENDER_CHANNEL);
+}
+
+// ============ Reader ============
+
+// make_facts with what it leaves out: a sub-context, a sibling producer, an acked credit, a downstream edge, and fields
+// of every kind.
+ManifestFacts make_facts_with_every_part() {
+    auto facts = make_facts();
+    facts.run.subcontext = Subcontext{.id = 1, .rank = 0, .size = 2};
+    auto& router = facts.meshes.at(0).chips.at(0).routers.at(0);
+    auto& sender = router.channels.senders.at(0).at(0);
+    sender.producer = SiblingRouterRef{.direction = eth_chan_directions::NORTH};
+    sender.credits_by_erisc.at(0).acked = CounterRef{.array = CreditCounterArray::TO_SENDER_ACK, .index = 0};
+    router.intra_chip_downstream_edges.resize(builder_config::MAX_NUM_VCS);
+    router.intra_chip_downstream_edges.at(0).push_back(DownstreamEdge{
+        .edge = 1,
+        .downstream_channel = {.target = {.direction = eth_chan_directions::NORTH}, .landing_channel = 0},
+        .fields_by_erisc = {{Field{
+            .key = "edge_count", .category = FieldCategory::FLOW_CONTROL, .content = content::Number{.value = 4}}}},
+    });
+    router.fields_by_erisc.at(0).push_back(
+        Field{.key = "speedy", .category = FieldCategory::KERNEL_PARAMS, .content = content::Flag{.value = true}});
+    router.leftover_l1 = register_l1_region<std::byte>(0x8000, 0x100, 1);
+    return facts;
+}
+
+// What reading `manifest` fails with, or empty when it doesn't fail.
+std::string parse_error(const json& manifest) {
+    try {
+        parse_manifest_json(manifest);
+    } catch (const std::exception& error) {
+        return error.what();
+    }
+    return {};
+}
+
+void expect_parse_fails_with(const json& manifest, std::string_view expected) {
+    const std::string message = parse_error(manifest);
+    EXPECT_FALSE(message.empty()) << "expected a failure with: " << expected;
+    EXPECT_NE(message.find(expected), std::string::npos) << message;
+}
+
+// Writing the facts, reading them back and writing again gives the same JSON, in each layout.
+TEST(ManifestReader, RoundTripsInEachLayout) {
+    for (const auto& facts : {make_facts(), make_facts_with_every_part()}) {
+        for (const FieldsLayout layout : {FieldsLayout::SHARED, FieldsLayout::PER_ROUTER}) {
+            const json written = make_manifest_json(facts, layout);
+            EXPECT_EQ(make_manifest_json(parse_manifest_json(written), layout), written);
+        }
+    }
+}
+
+// Either layout reads into the same facts.
+TEST(ManifestReader, ReadsEitherLayoutIntoTheSameFacts) {
+    const auto facts = make_facts_with_every_part();
+    const json per_router = make_manifest_json(facts, FieldsLayout::PER_ROUTER);
+    EXPECT_EQ(make_manifest_json(parse_manifest_json(make_manifest_json(facts)), FieldsLayout::PER_ROUTER), per_router);
+}
+
+// A key the writer writes that the reader doesn't read fails, named by its pointer, whatever its value.
+TEST(ManifestReader, FailsOnAKeyItDoesNotRead) {
+    json manifest = make_manifest_json(make_facts());
+    manifest["run"]["pid"] = 0;
+    expect_parse_fails_with(manifest, "Fabric manifest: /run has keys this reader doesn't read: /run/pid");
+}
+
+// A key the reader reads that the writer didn't write fails, named by its pointer.
+TEST(ManifestReader, FailsOnAMissingKey) {
+    json manifest = make_manifest_json(make_facts());
+    router_e0(manifest).at("shape").erase("num_vcs");
+    expect_parse_fails_with(manifest, "Fabric manifest: /meshes/M0/chips/C0/routers/E0/shape/num_vcs is missing");
+}
+
+TEST(ManifestReader, FailsOnAnotherFileKindVersionOrBuild) {
+    json capture = make_manifest_json(make_facts());
+    capture["file_kind"] = "fabric_capture";
+    expect_parse_fails_with(capture, R"(Fabric manifest: /file_kind is "fabric_capture", not "fabric_manifest")");
+
+    json newer = make_manifest_json(make_facts());
+    newer["manifest_version"] = visualizer::k_manifest_version + 1;
+    expect_parse_fails_with(newer, "Fabric manifest: /manifest_version is ");
+
+    json other_build = make_manifest_json(make_facts());
+    other_build["run"]["build"]["git_sha"] = "0000000";
+    expect_parse_fails_with(other_build, "Fabric manifest: /run/build is ");
+}
+
+// A type name this build doesn't register is one decode couldn't read bytes as.
+TEST(ManifestReader, FailsOnATypeThisBuildDoesNotRegister) {
+    json manifest = make_manifest_json(make_facts(), FieldsLayout::PER_ROUTER);
+    router_e0(manifest).at("fields").at("erisc0").at("edm_status").at("type") = "NotAType";
+    expect_parse_fails_with(
+        manifest,
+        R"(Fabric manifest: /meshes/M0/chips/C0/routers/E0/fields/erisc0/edm_status/type is "NotAType", a type this )"
+        "build doesn't register");
+}
+
+// A fields id names a block in field_sets, and in the PER_ROUTER layout there are no ids.
+TEST(ManifestReader, FailsOnAFieldsIdItCannotResolve) {
+    json shared = make_manifest_json(make_facts());
+    router_e0(shared).at("fields") = "F9";
+    expect_parse_fails_with(
+        shared, R"(Fabric manifest: /meshes/M0/chips/C0/routers/E0/fields is "F9", which field_sets doesn't have)");
+
+    json per_router = make_manifest_json(make_facts(), FieldsLayout::PER_ROUTER);
+    router_e0(per_router).at("fields") = "F0";
+    expect_parse_fails_with(
+        per_router, R"(Fabric manifest: /meshes/M0/chips/C0/routers/E0/fields is "F0", not an object)");
+}
+
+// A remote chip has only its place, and says so: is_local is whether the chip has this rank's ids.
+TEST(ManifestReader, FailsWhenIsLocalDisagreesWithTheIds) {
+    json manifest = make_manifest_json(make_facts());
+    manifest.at("meshes").at("M0").at("chips").at("C1").at("is_local") = true;
+    expect_parse_fails_with(manifest, "Fabric manifest: /meshes/M0/chips/C1/is_local is true, not false");
 }
 
 }  // namespace

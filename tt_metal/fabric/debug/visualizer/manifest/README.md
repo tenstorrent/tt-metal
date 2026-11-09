@@ -190,6 +190,11 @@ header type, the architecture's L1 areas and core registers, and each local mesh
 Turns `ManifestFacts` into the JSON. The writer is the one place that decides key names and shape. It writes each region
 and register as it is, with its type's name; it computes nothing.
 
+**Reader** ([docs/READER.md](docs/READER.md)).
+
+Reads the JSON back into `ManifestFacts`, beside the writer, for the stages that read the manifest in C++. It's strict:
+a key it doesn't read, or one it reads that's missing, fails, named by its JSON pointer.
+
 ## How it stays correct
 
 The manifest is only useful if it matches what ran. A few checks keep it that way, and each fails loudly rather than
@@ -203,6 +208,9 @@ types, so naming any other type fails the build. The registry also checks at com
 distinct, that each type can be rebuilt from its bytes, that every packet header type fabric can pick is registered,
 and that a stream register's type fits in its word.
 - **A chip publishes every router its builder initialized**, so a manifest never silently misses a router.
+- **The writer and reader agree on every key.** Each manifest fixture reads the manifest back and writes it again, in
+both fields layouts, and the two must match. The reader is strict, so a key either side has that the other doesn't
+fails even when its value is a default.
 - **The file is all or nothing.** It's written to a temporary name and renamed into place, and a failure fails fabric
 init.
 
@@ -223,8 +231,8 @@ fails, naming what to update:
 | Two registered types with one name in different namespaces | The build: "Two registered types have the same name without their namespaces" | A `manifest_type_name` specialization for one of them |
 | New field category, field kind, Z port role or channel status | The schema check, on the name in `vocabulary` | Its list in `fabric_manifest_schema.json` |
 | New label key (a key whose value is one of a fixed set of names) | Nothing | A list in `k_vocabulary_lists` (`fabric_manifest_model.hpp`), and the same name in the schema's `vocabulary` |
-| New computed fact | Nothing | The model, the router pass or topology pass, the writer, the tests, the schema, and that pass's doc |
-| A change to the JSON's shape | The schema check | `fabric_manifest_schema.json` and [docs/FORMAT.md](docs/FORMAT.md) |
+| New computed fact | `WriterParserRoundTrip`, once the writer writes it: "... has keys this reader doesn't read" | The model, the router pass or topology pass, the writer, the reader, the tests, the schema, and that pass's doc |
+| A change to the JSON's shape | The schema check, and `WriterParserRoundTrip` | `fabric_manifest_schema.json`, `parse_manifest_json` and [docs/FORMAT.md](docs/FORMAT.md) |
 | A field table or unrecorded list change | `ManifestDocs.UpToDate` | Regenerate [docs/FIELDS.md](docs/FIELDS.md) ([docs/FIELD_TABLES.md](docs/FIELD_TABLES.md) says how) |
 
 ## Testing

@@ -101,7 +101,8 @@ kernel's arguments (`TO_SENDER_REMOTE_ACK_COUNTERS_BASE_ADDR` and the other thre
 peer in one packet, so it relies on the arrays being back to back and the same size, and the size comes from that
 spacing. Each array is `uint32_t`s, one per sender channel, indexed by the channel's compact index. The `to_sender`
 arrays count this router's own sender channels, and the `receiver` arrays the sender channels of the router on the other
-end of the link. The writer records which as `indexed_by`.
+end of the link. The model's `k_credit_counter_arrays` says which, and where `L1CreditCounters` holds each array; the
+writer records which as `indexed_by`. `credit_counter_region` gives the region a `CounterRef` points into.
 
 **Leftover L1** (`leftover_l1`): the L1 from the end of what the router places (the builder's
 `get_allocated_l1_end_address`) to the end of the L1 the router may load into (`max_l1_loading_size`), as `std::byte`,

@@ -9,6 +9,7 @@
 #include <charconv>
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <system_error>
@@ -43,6 +44,24 @@ std::string lower_enum_name(E value) {
         return std::to_string(static_cast<std::underlying_type_t<E>>(value));
     }
     return lower_name(enumerator);
+}
+
+// The enum value `name` spells as lower_enum_name writes it, or nullopt when it spells none: an enumerator's
+// lower_name, or the number of a value with no enumerator name.
+template <typename E>
+std::optional<E> parse_lower_enum_name(std::string_view name) {
+    for (const auto value : enchantum::values<E>) {
+        if (lower_enum_name(value) == name) {
+            return value;
+        }
+    }
+    std::underlying_type_t<E> number{};
+    const auto [end, error] = std::from_chars(name.data(), name.data() + name.size(), number);
+    if (name.empty() || error != std::errc{} || end != name.data() + name.size() ||
+        !enchantum::to_string(static_cast<E>(number)).empty()) {
+        return std::nullopt;
+    }
+    return static_cast<E>(number);
 }
 
 // The manifest's spelling of a field kind: its content type's name in snake case, e.g. content::L1 is "l1".

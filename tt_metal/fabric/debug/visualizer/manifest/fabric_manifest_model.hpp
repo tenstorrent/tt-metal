@@ -5,6 +5,7 @@
 #pragma once
 
 #include <array>
+#include <cstddef>
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -14,6 +15,7 @@
 #include <variant>
 #include <vector>
 
+#include <enchantum/enchantum.hpp>
 #include <hostdevcommon/fabric_common.h>
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
@@ -160,15 +162,59 @@ enum class ChannelStatus : uint32_t {
     TRIMMED,
 };
 
-// A router's L1 credit counter arrays, shared by every VC that uses counter credits. The to_sender arrays are
-// indexed by this router's sender compact index, and the receiver arrays by the peer router's sender compact index
-// (the receiver counts credits for the peer's sender channels).
+// A router's L1 credit counter arrays, shared by every VC that uses counter credits. k_credit_counter_arrays says whose
+// sender channel indexes each.
 struct L1CreditCounters {
     content::L1 to_sender_ack;
     content::L1 to_sender_completion;
     content::L1 receiver_ack;
     content::L1 receiver_completion;
 };
+
+// One credit counter array: where L1CreditCounters holds it, and whose sender channel each element belongs to.
+struct CreditCounterArrayLayout {
+    CreditCounterArray array;
+    content::L1 L1CreditCounters::* member;
+    CreditCounterIndexedBy indexed_by;
+};
+
+// Every credit counter array, in CreditCounterArray's order. The to_sender arrays are indexed by this router's sender
+// compact index, and the receiver arrays by the peer router's (the receiver counts credits for the peer's sender
+// channels).
+inline constexpr std::array<CreditCounterArrayLayout, 4> k_credit_counter_arrays{{
+    {CreditCounterArray::TO_SENDER_ACK, &L1CreditCounters::to_sender_ack, CreditCounterIndexedBy::OWN_SENDER_CHANNEL},
+    {CreditCounterArray::TO_SENDER_COMPLETION,
+     &L1CreditCounters::to_sender_completion,
+     CreditCounterIndexedBy::OWN_SENDER_CHANNEL},
+    {CreditCounterArray::RECEIVER_ACK, &L1CreditCounters::receiver_ack, CreditCounterIndexedBy::PEER_SENDER_CHANNEL},
+    {CreditCounterArray::RECEIVER_COMPLETION,
+     &L1CreditCounters::receiver_completion,
+     CreditCounterIndexedBy::PEER_SENDER_CHANNEL},
+}};
+
+static_assert(
+    k_credit_counter_arrays.size() == enchantum::count<CreditCounterArray>,
+    "k_credit_counter_arrays lists every CreditCounterArray");
+static_assert(
+    [] {
+        for (size_t index = 0; index < k_credit_counter_arrays.size(); ++index) {
+            if (k_credit_counter_arrays[index].array != static_cast<CreditCounterArray>(index)) {
+                return false;
+            }
+        }
+        return true;
+    }(),
+    "k_credit_counter_arrays lists each CreditCounterArray at its own value");
+
+// The region `array` names in `counters`, such as the region a CounterRef's element is in.
+inline const content::L1& credit_counter_region(const L1CreditCounters& counters, CreditCounterArray array) {
+    return counters.*k_credit_counter_arrays.at(static_cast<size_t>(array)).member;
+}
+
+// Whose sender channel each element of `array` belongs to.
+inline CreditCounterIndexedBy credit_counter_indexed_by(CreditCounterArray array) {
+    return k_credit_counter_arrays.at(static_cast<size_t>(array)).indexed_by;
+}
 
 // High level information about a particular router.
 struct RouterIdentity {

@@ -35,6 +35,13 @@ enum class FieldsLayout : uint8_t {
 nlohmann::ordered_json make_manifest_json(
     const manifest::ManifestFacts& facts, FieldsLayout fields_layout = FieldsLayout::SHARED);
 
+// The facts `manifest_json` was made from. Returns make_manifest_json's inverse, so
+// make_manifest_json(parse_manifest_json(json), layout) == json. It's strict, and fails, naming the key by its JSON
+// pointer, on any key it doesn't read and any key it reads that's missing. It also fails on another file_kind or
+// manifest_version, on a manifest another build wrote, since the types it names are that build's, and on a type name
+// this build doesn't register.
+manifest::ManifestFacts parse_manifest_json(const nlohmann::ordered_json& manifest_json);
+
 // Writes this rank's fabric manifest, which includes facts about the fabric that are fixed for the run, into this run's
 // folder: <logs_dir>/generated/fabric_debug/runs/<run_id>/. Rank 0 makes the run id and broadcasts it, so every rank of
 // the fabric must call this. This requires the fabric routers to be compiled.

@@ -15,6 +15,7 @@
 #include "tt_metal/fabric/fabric_builder_context.hpp"
 #include "tt_metal/fabric/fabric_context.hpp"
 #include "tt_metal/fabric/debug/visualizer/common/fabric_visualizer_files.hpp"
+#include "tt_metal/fabric/debug/visualizer/common/fabric_visualizer_json_reader.hpp"
 #include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_describe.hpp"
 #include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_topology_pass.hpp"
 #include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_model.hpp"
@@ -25,6 +26,7 @@
 
 #include <algorithm>
 #include <array>
+#include <charconv>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
@@ -85,6 +87,18 @@ json make_stream_reg_json(const manifest::content::StreamReg& stream) {
 
 // ============ Run and fabric ============
 
+// The commit tt-metal was built from. A reader checks it against its own build, since the types the manifest names
+// are the writing build's.
+json make_build_json(const visualizer::BuildIdentity& build) {
+    json out;
+    out["git_sha"] = std::string(build.git_sha);
+    out["git_sha_short"] = std::string(build.git_sha_short);
+    out["version"] = std::string(build.version);
+    out["build_type"] = std::string(build.build_type);
+    out["git_dirty"] = build.git_dirty;
+    return out;
+}
+
 // This process and the build it runs: ranks, host, when the manifest was written, and the commit built from.
 json make_run_json(const manifest::RunInfo& run) {
     json out;
@@ -100,13 +114,7 @@ json make_run_json(const manifest::RunInfo& run) {
     }
     out["host_name"] = run.host_name;
     out["written_at"] = run.written_at;
-    json build;
-    build["git_sha"] = std::string(run.build.git_sha);
-    build["git_sha_short"] = std::string(run.build.git_sha_short);
-    build["version"] = std::string(run.build.version);
-    build["build_type"] = std::string(run.build.build_type);
-    build["git_dirty"] = run.build.git_dirty;
-    out["build"] = std::move(build);
+    out["build"] = make_build_json(run.build);
     return out;
 }
 
@@ -255,35 +263,25 @@ json make_router_shape_json(const manifest::RouterShape& shape) {
     return out;
 }
 
-// indexed_by says whose sender channel each element belongs to: the to_sender arrays are indexed by this router's
-// sender compact index, and the receiver arrays by the peer router's sender compact index.
+// Each array keyed by its name, in k_credit_counter_arrays' order, with whose sender channel indexes it.
 json make_credit_counters_json(const manifest::L1CreditCounters& counters) {
-    using manifest::CreditCounterArray;
-    using manifest::CreditCounterIndexedBy;
     json out;
-    const auto add = [&out](
-                         CreditCounterArray array, const manifest::content::L1& l1, CreditCounterIndexedBy indexed_by) {
-        json entry = make_l1_json(l1);
-        entry["indexed_by"] = lower_enum_name(indexed_by);
-        out[lower_enum_name(array)] = std::move(entry);
-    };
-    add(CreditCounterArray::TO_SENDER_ACK, counters.to_sender_ack, CreditCounterIndexedBy::OWN_SENDER_CHANNEL);
-    add(CreditCounterArray::TO_SENDER_COMPLETION,
-        counters.to_sender_completion,
-        CreditCounterIndexedBy::OWN_SENDER_CHANNEL);
-    add(CreditCounterArray::RECEIVER_ACK, counters.receiver_ack, CreditCounterIndexedBy::PEER_SENDER_CHANNEL);
-    add(CreditCounterArray::RECEIVER_COMPLETION,
-        counters.receiver_completion,
-        CreditCounterIndexedBy::PEER_SENDER_CHANNEL);
+    for (const auto& layout : manifest::k_credit_counter_arrays) {
+        json entry = make_l1_json(counters.*layout.member);
+        entry["indexed_by"] = lower_enum_name(layout.indexed_by);
+        out[lower_enum_name(layout.array)] = std::move(entry);
+    }
     return out;
 }
 
 // ============ Channels ============
 
 // A counter element names its array by its path within the router, e.g. "credit_counters/to_sender_ack".
+constexpr std::string_view k_credit_counters_path_prefix = "credit_counters/";
+
 json make_credit_ref_json(const manifest::CounterRef& counter) {
     json out;
-    out["array"] = fmt::format("credit_counters/{}", lower_enum_name(counter.array));
+    out["array"] = fmt::format("{}{}", k_credit_counters_path_prefix, lower_enum_name(counter.array));
     out["index"] = counter.index;
     return out;
 }
@@ -344,8 +342,7 @@ public:
         if (layout_ == FieldsLayout::PER_ROUTER) {
             return block;
         }
-        const auto [it, added] =
-            keys_by_block_.try_emplace(block.dump(), manifest::field_set_key(field_sets_.size()));
+        const auto [it, added] = keys_by_block_.try_emplace(block.dump(), manifest::field_set_key(field_sets_.size()));
         if (added) {
             field_sets_[it->second] = std::move(block);
         }
@@ -371,6 +368,9 @@ json make_serviced_by_json(const std::vector<uint32_t>& risc_ids) {
 }
 
 // A worker producer is "worker", the tensix mux is "tensix_mux", and a sibling router producer is that router's path.
+constexpr std::string_view k_local_worker_producer = "worker";
+constexpr std::string_view k_local_tensix_mux_producer = "tensix_mux";
+
 json make_sender_producer_json(
     const std::optional<manifest::SenderChannelProducer>& producer,
     FabricNodeId node,
@@ -379,10 +379,10 @@ json make_sender_producer_json(
         return nullptr;
     }
     if (std::holds_alternative<manifest::LocalWorker>(*producer)) {
-        return "worker";
+        return std::string(k_local_worker_producer);
     }
     if (std::holds_alternative<manifest::LocalTensixMux>(*producer)) {
-        return "tensix_mux";
+        return std::string(k_local_tensix_mux_producer);
     }
     return sibling_router_path(node, identity, std::get<manifest::SiblingRouterRef>(*producer));
 }
@@ -512,9 +512,8 @@ json make_router_json(const manifest::Router& router, FabricNodeId node, FieldsW
     out["link"] = make_eth_link_json(router.link);
     out["shape"] = make_router_shape_json(router.shape);
     out["credit_counters"] = make_credit_counters_json(router.credit_counters);
-    out["channels"]["senders"] = make_channels_by_vc_json(
-        router.channels.senders,
-        [&](const manifest::SenderChannel& sender) {
+    out["channels"]["senders"] =
+        make_channels_by_vc_json(router.channels.senders, [&](const manifest::SenderChannel& sender) {
             return make_sender_channel_json(sender, node, router.identity, fields_writer);
         });
     out["channels"]["receivers"] = make_channels_by_vc_json(
@@ -547,6 +546,9 @@ json make_chip_routers_json(const manifest::Chip& chip, FieldsWriter& fields_wri
     return routers;
 }
 
+// An ASIC id as a hex string, "0x" and 16 digits: the value exceeds what JSON numbers represent exactly.
+std::string make_asic_id_text(uint64_t asic_id) { return fmt::format("0x{:016x}", asic_id); }
+
 // A remote chip has only its coordinates, and nulls for the ids this rank cannot read.
 json make_chip_json(const manifest::Chip& chip, FieldsWriter& fields_writer) {
     json out;
@@ -560,8 +562,7 @@ json make_chip_json(const manifest::Chip& chip, FieldsWriter& fields_writer) {
     }
     TT_FATAL(chip.asic_id.has_value(), "Fabric manifest: local chip {} has no asic_id", chip.fabric_node_id);
     out["physical_chip_id"] = *chip.physical_chip_id;
-    // Hex string: the value exceeds what JSON numbers represent exactly.
-    out["asic_id"] = fmt::format("0x{:016x}", *chip.asic_id);
+    out["asic_id"] = make_asic_id_text(*chip.asic_id);
     out["is_local"] = true;
     out["z_port_role"] = lower_enum_name(chip.z_port_role);
     out["local_sync"] = chip.local_sync ? make_local_sync_json(*chip.local_sync) : json(nullptr);
@@ -588,6 +589,644 @@ json make_mesh_json(const manifest::Mesh& mesh, FieldsWriter& fields_writer) {
     }
     out["chips"] = std::move(chips);
     return out;
+}
+
+// ============ Reading ============
+//
+// Each read_<name> is the inverse of make_<name>_json, read with the strict reader: every key the writer writes is
+// taken, so a key either side has that the other doesn't fails, named by its JSON pointer.
+
+using visualizer::JsonObjectReader;
+using visualizer::JsonValueReader;
+
+// The enum value a lower_enum_name spelling names.
+template <typename E>
+E read_enum(const JsonValueReader& value) {
+    const std::string name = value.read<std::string>();
+    const std::optional<E> parsed = manifest::parse_lower_enum_name<E>(name);
+    if (!parsed.has_value()) {
+        value.fail("is \"{}\", which names no {}", name, enchantum::type_name<E>);
+    }
+    return *parsed;
+}
+
+template <typename E>
+E take_enum(JsonObjectReader& object, std::string_view key) {
+    return read_enum<E>(object.take(key));
+}
+
+// A registered type's name. A name this build doesn't register is one decode couldn't read bytes as.
+std::string take_type_name(JsonObjectReader& object, std::string_view key) {
+    const JsonValueReader value = object.take(key);
+    std::string name = value.read<std::string>();
+    if (!manifest::is_registered_type_name(name)) {
+        value.fail("is \"{}\", a type this build doesn't register", name);
+    }
+    return name;
+}
+
+// A key the writer makes from a prefix and a counter, such as ch0, ch1 and so on, which must be the next one.
+void check_key_in_sequence(std::string_view key, std::string_view prefix, size_t index, const JsonValueReader& value) {
+    if (key != fmt::format("{}{}", prefix, index)) {
+        value.fail("is out of order: the key here is {}{}", prefix, index);
+    }
+}
+
+// The keys make_l1_json writes, out of an object that may hold others.
+manifest::content::L1 take_l1_keys(JsonObjectReader& object) {
+    manifest::content::L1 l1;
+    l1.address = object.take<uint32_t>("address");
+    l1.num_elements = object.take<uint32_t>("num_elements");
+    l1.element_size = object.take<uint32_t>("element_size");
+    l1.type = take_type_name(object, "type");
+    return l1;
+}
+
+manifest::content::L1 read_l1(const JsonValueReader& value) { return value.read_object(take_l1_keys); }
+
+std::optional<manifest::content::L1> read_optional_l1(const JsonValueReader& value) {
+    return value.read_nullable_object(take_l1_keys);
+}
+
+// The keys make_stream_reg_json writes, out of an object that may hold others.
+manifest::content::StreamReg take_stream_reg_keys(JsonObjectReader& object) {
+    manifest::content::StreamReg stream;
+    stream.stream_id = object.take<uint32_t>("stream_id");
+    stream.address = object.take<uint32_t>("address");
+    stream.value_bits = object.take<uint32_t>("value_bits");
+    stream.type = take_type_name(object, "type");
+    return stream;
+}
+
+tt::tt_metal::CoreCoord read_core(const JsonValueReader& value) {
+    const auto coordinates = value.read_array_of<size_t>();
+    if (coordinates.size() != 2) {
+        value.fail("holds {} numbers, not an [x, y] pair", coordinates.size());
+    }
+    return {coordinates[0], coordinates[1]};
+}
+
+// An ASIC id as make_asic_id_text writes it.
+uint64_t read_asic_id(const JsonValueReader& value) {
+    const std::string text = value.read<std::string>();
+    const std::string_view digits = std::string_view(text).substr(std::min<size_t>(2, text.size()));
+    uint64_t asic_id = 0;
+    const auto [end, error] = std::from_chars(digits.data(), digits.data() + digits.size(), asic_id, 16);
+    if (!text.starts_with("0x") || digits.size() != 16 || error != std::errc{} ||
+        end != digits.data() + digits.size()) {
+        value.fail("is \"{}\", not an ASIC id written as 0x and 16 hex digits", text);
+    }
+    return asic_id;
+}
+
+// ============ Reading run, fabric and arch ============
+
+manifest::RunInfo read_run(JsonObjectReader& run_json) {
+    manifest::RunInfo run;
+    run.run_id = run_json.take<std::string>("run_id");
+    run.mpi_rank = run_json.take<uint32_t>("mpi_rank");
+    run.world_size = run_json.take<uint32_t>("world_size");
+    if (const auto subcontext = run_json.take_optional("subcontext")) {
+        run.subcontext = subcontext->read_object([](JsonObjectReader& subcontext_json) {
+            manifest::Subcontext out;
+            out.id = subcontext_json.take<uint32_t>("id");
+            out.rank = subcontext_json.take<uint32_t>("rank");
+            out.size = subcontext_json.take<uint32_t>("size");
+            return out;
+        });
+    }
+    run.host_name = run_json.take<std::string>("host_name");
+    run.written_at = run_json.take<std::string>("written_at");
+    // The types the manifest names are the writing build's, so only that build reads it.
+    run.build = visualizer::get_build_identity();
+    run_json.check("build", make_build_json(run.build));
+    return run;
+}
+
+manifest::FabricInfo read_fabric(JsonObjectReader& block) {
+    manifest::FabricInfo fabric;
+    fabric.config = block.take("config").read_object([](JsonObjectReader& config) {
+        manifest::FabricSettings settings;
+        settings.fabric_config = take_enum<FabricConfig>(config, "fabric_config");
+        settings.reliability_mode = take_enum<FabricReliabilityMode>(config, "reliability_mode");
+        settings.num_routing_planes = config.take("num_routing_planes").read_nullable<uint8_t>();
+        settings.tensix_config = take_enum<FabricTensixConfig>(config, "tensix_config");
+        settings.udm_mode = take_enum<FabricUDMMode>(config, "udm_mode");
+        settings.fabric_manager = take_enum<FabricManagerMode>(config, "fabric_manager");
+        settings.router_config.max_packet_payload_size_bytes =
+            config.take("router_config").read_object([](JsonObjectReader& router_config) {
+                return router_config.take("max_packet_payload_size_bytes").read_nullable<size_t>();
+            });
+        return settings;
+    });
+    fabric.topology = take_enum<Topology>(block, "topology");
+    fabric.is_2d_routing = block.take<bool>("is_2d_routing");
+    fabric.packet_header = take_type_name(block, "packet_header");
+    fabric.packet_header_size_bytes = block.take<size_t>("packet_header_size_bytes");
+    fabric.max_payload_size_bytes = block.take<size_t>("max_payload_size_bytes");
+    fabric.channel_buffer_size_bytes = block.take<size_t>("channel_buffer_size_bytes");
+    if (const auto route_buffer_size = block.take_optional("routing_2d_route_buffer_size")) {
+        fabric.routing_2d_route_buffer_size = route_buffer_size->read<uint32_t>();
+    }
+    if (const auto extension_words = block.take_optional("routing_1d_extension_words")) {
+        fabric.routing_1d_extension_words = extension_words->read<uint32_t>();
+    }
+    fabric.multi_txq = block.take<bool>("multi_txq");
+    block.take("host_clears").read_array([&fabric](const JsonValueReader& clear) {
+        fabric.host_clears.push_back(clear.read_object([](JsonObjectReader& clear_json) {
+            manifest::HostClear out;
+            out.address = clear_json.take<uint32_t>("address");
+            out.size_bytes = clear_json.take<uint32_t>("size_bytes");
+            return out;
+        }));
+    });
+    fabric.intermesh_vc = block.take("intermesh_vc").read_object([](JsonObjectReader& intermesh_vc) {
+        manifest::IntermeshVc out;
+        out.mode = take_enum<IntermeshVCMode>(intermesh_vc, "mode");
+        out.requires_vc1 = intermesh_vc.take<bool>("requires_vc1");
+        out.requires_vc2 = intermesh_vc.take<bool>("requires_vc2");
+        out.intermesh_vc_disabled = intermesh_vc.take<bool>("intermesh_vc_disabled");
+        return out;
+    });
+    return fabric;
+}
+
+// The array make_core_registers_json writes: each register in the order it's read, each named, and each a word.
+manifest::CoreRegisters read_core_registers(const JsonValueReader& value) {
+    manifest::CoreRegisters registers;
+    const std::array<std::pair<std::string_view, uint32_t*>, 3> addresses{{
+        {"soft_reset", &registers.soft_reset},
+        {"wall_clock_low", &registers.wall_clock_low},
+        {"wall_clock_high", &registers.wall_clock_high},
+    }};
+    size_t index = 0;
+    value.read_array([&](const JsonValueReader& entry) {
+        if (index == addresses.size()) {
+            entry.fail("is a register past the {} the manifest has", addresses.size());
+        }
+        const auto [name, address] = addresses[index++];
+        entry.read_object([&](JsonObjectReader& register_json) {
+            register_json.check("name", std::string(name));
+            *address = register_json.take<uint32_t>("address");
+            register_json.check("type", std::string(manifest::get_manifest_type_name<uint32_t>()));
+            if (address == &registers.soft_reset) {
+                registers.reset_masks = register_json.take("reset_masks").read_array_of<uint32_t>();
+            }
+        });
+    });
+    if (index != addresses.size()) {
+        value.fail("holds {} registers, not {}", index, addresses.size());
+    }
+    return registers;
+}
+
+manifest::ArchAreas read_arch_areas(JsonObjectReader& areas_json) {
+    manifest::ArchAreas areas;
+    areas.heartbeat = areas_json.take("heartbeat").read_object([](JsonObjectReader& heartbeat_json) {
+        manifest::Heartbeat heartbeat;
+        heartbeat.word = take_l1_keys(heartbeat_json);
+        heartbeat.magic = heartbeat_json.take<uint32_t>("magic");
+        heartbeat.magic_mask = heartbeat_json.take<uint32_t>("magic_mask");
+        heartbeat.period_iters = heartbeat_json.take<uint32_t>("period_iters");
+        return heartbeat;
+    });
+    areas.fabric_telemetry = read_l1(areas_json.take("fabric_telemetry"));
+    areas.routing_table = read_l1(areas_json.take("routing_table"));
+    areas.eth_fw_mailbox = read_optional_l1(areas_json.take("eth_fw_mailbox"));
+    areas.base_fw_port_status = read_optional_l1(areas_json.take("base_fw_port_status"));
+    areas.base_fw_train_status = read_optional_l1(areas_json.take("base_fw_train_status"));
+    areas.base_fw_retrain_count = read_optional_l1(areas_json.take("base_fw_retrain_count"));
+    areas.base_fw_rx_link_up = read_optional_l1(areas_json.take("base_fw_rx_link_up"));
+    areas.base_fw_postcode = read_optional_l1(areas_json.take("base_fw_postcode"));
+    return areas;
+}
+
+manifest::Arch read_arch(JsonObjectReader& block) {
+    manifest::Arch arch;
+    arch.arch = take_enum<tt::ARCH>(block, "name");
+    arch.l1 = block.take("l1").read_object([](JsonObjectReader& l1) {
+        manifest::EthCoreL1 out;
+        out.address = l1.take<uint32_t>("address");
+        out.size_bytes = l1.take<uint32_t>("size_bytes");
+        return out;
+    });
+    arch.areas = block.take("l1_areas").read_object(read_arch_areas);
+    arch.core_registers = read_core_registers(block.take("core_registers"));
+    arch.fabric_telemetry_version = block.take<uint32_t>("fabric_telemetry_version");
+    return arch;
+}
+
+// ============ Reading fields ============
+
+// The content keys of each field kind, out of a field entry that holds its category and kind as well.
+manifest::Content take_content_keys(JsonObjectReader& entry, std::type_identity<manifest::content::L1>) {
+    return take_l1_keys(entry);
+}
+
+manifest::Content take_content_keys(JsonObjectReader& entry, std::type_identity<manifest::content::StreamReg>) {
+    return take_stream_reg_keys(entry);
+}
+
+manifest::Content take_content_keys(JsonObjectReader& entry, std::type_identity<manifest::content::Number>) {
+    return manifest::content::Number{.value = entry.take<uint32_t>("value")};
+}
+
+manifest::Content take_content_keys(JsonObjectReader& entry, std::type_identity<manifest::content::Flag>) {
+    return manifest::content::Flag{.value = entry.take<bool>("value")};
+}
+
+manifest::Content take_content_keys(JsonObjectReader& entry, std::type_identity<manifest::content::Enum>) {
+    manifest::content::Enum enumerator;
+    enumerator.value = entry.take<uint32_t>("value");
+    enumerator.value_name = entry.take<std::string>("value_name");
+    return enumerator;
+}
+
+// The content of the kind `kind` names, or nullopt when it names none. Every alternative of Content needs a
+// take_content_keys, so a new kind doesn't compile until it has a reader.
+template <typename... Contents>
+std::optional<manifest::Content> take_content_of_kind(
+    std::string_view kind, JsonObjectReader& entry, std::type_identity<std::variant<Contents...>> /*content*/) {
+    std::optional<manifest::Content> content;
+    (void)((kind == manifest::kind_name<Contents>() &&
+            (content = take_content_keys(entry, std::type_identity<Contents>{}), true)) ||
+           ...);
+    return content;
+}
+
+// A null field keeps the model's default category: make_fields_json writes no category for it.
+std::vector<manifest::Field> read_fields(const JsonValueReader& value) {
+    std::vector<manifest::Field> fields;
+    value.read_object([&fields](JsonObjectReader& fields_json) {
+        fields_json.take_each([&fields](std::string_view key, const JsonValueReader& field_value) {
+            manifest::Field field{.key = std::string(key)};
+            if (!field_value.is_null()) {
+                field_value.read_object([&field](JsonObjectReader& entry) {
+                    field.category = take_enum<manifest::FieldCategory>(entry, "category");
+                    const JsonValueReader kind = entry.take("kind");
+                    const std::string kind_text = kind.read<std::string>();
+                    field.content = take_content_of_kind(kind_text, entry, std::type_identity<manifest::Content>{});
+                    if (!field.content.has_value()) {
+                        kind.fail("is \"{}\", which names no field kind", kind_text);
+                    }
+                });
+            }
+            fields.push_back(std::move(field));
+        });
+    });
+    return fields;
+}
+
+// The entries make_by_erisc_json writes, keyed erisc0, erisc1 and so on, each read by `read_entry`.
+template <typename ReadEntry>
+auto read_by_erisc(const JsonValueReader& value, ReadEntry read_entry) {
+    std::vector<std::invoke_result_t<ReadEntry&, const JsonValueReader&>> entries;
+    value.read_object([&](JsonObjectReader& by_erisc) {
+        by_erisc.take_each([&](std::string_view key, const JsonValueReader& entry) {
+            check_key_in_sequence(key, "erisc", entries.size(), entry);
+            entries.push_back(read_entry(entry));
+        });
+    });
+    return entries;
+}
+
+manifest::FieldsByErisc read_fields_by_erisc(const JsonValueReader& value) { return read_by_erisc(value, read_fields); }
+
+// Reads each fields block as make_manifest_json wrote it: an id into field_sets when the manifest has them (SHARED),
+// and the block itself otherwise (PER_ROUTER).
+class FieldsReader {
+public:
+    // Reads field_sets, when the manifest has them. They come before meshes, which name them.
+    void take_field_sets(JsonObjectReader& manifest_json) {
+        const auto field_sets = manifest_json.take_optional("field_sets");
+        if (!field_sets.has_value()) {
+            return;
+        }
+        auto& blocks = blocks_by_key_.emplace();
+        field_sets->read_object([&blocks](JsonObjectReader& sets) {
+            sets.take_each([&blocks](std::string_view key, const JsonValueReader& block) {
+                blocks.emplace(std::string(key), read_fields_by_erisc(block));
+            });
+        });
+    }
+
+    manifest::FieldsByErisc read(const JsonValueReader& value) const {
+        if (!blocks_by_key_.has_value()) {
+            return read_fields_by_erisc(value);
+        }
+        const std::string key = value.read<std::string>();
+        const auto block = blocks_by_key_->find(key);
+        if (block == blocks_by_key_->end()) {
+            value.fail("is \"{}\", which field_sets doesn't have", key);
+        }
+        return block->second;
+    }
+
+private:
+    // field_sets' blocks by key. Null when the manifest has no field_sets.
+    std::optional<std::unordered_map<std::string, manifest::FieldsByErisc>> blocks_by_key_;
+};
+
+// ============ Reading routers ============
+
+// An object keyed vc<N> as make_channels_by_vc_json and make_downstream_edges_json write it: VCs in rising order,
+// below MAX_NUM_VCS, with the ones that have nothing left out. Calls `read_vc(vc, value)` on each.
+template <typename ReadVc>
+void read_by_vc(const JsonValueReader& value, ReadVc read_vc) {
+    value.read_object([&](JsonObjectReader& by_vc) {
+        std::optional<uint32_t> previous_vc;
+        by_vc.take_each([&](std::string_view key, const JsonValueReader& vc_value) {
+            const uint32_t vc = manifest::parse_key_number(key, "vc");
+            if (vc >= builder_config::MAX_NUM_VCS || (previous_vc.has_value() && vc <= *previous_vc)) {
+                vc_value.fail("is out of order: VCs rise, below {}", builder_config::MAX_NUM_VCS);
+            }
+            previous_vc = vc;
+            read_vc(vc, vc_value);
+        });
+    });
+}
+
+// Indexed [vc][channel], over every VC, as the router pass fills them.
+template <typename Channel, typename ReadChannel>
+std::vector<std::vector<Channel>> read_channels_by_vc(const JsonValueReader& value, ReadChannel read_channel) {
+    std::vector<std::vector<Channel>> channels_by_vc(builder_config::MAX_NUM_VCS);
+    read_by_vc(value, [&](uint32_t vc, const JsonValueReader& vc_value) {
+        auto& channels = channels_by_vc[vc];
+        vc_value.read_object([&](JsonObjectReader& vc_json) {
+            vc_json.take_each([&](std::string_view key, const JsonValueReader& channel) {
+                check_key_in_sequence(key, "ch", channels.size(), channel);
+                channels.push_back(read_channel(channel));
+            });
+        });
+    });
+    return channels_by_vc;
+}
+
+std::vector<uint32_t> read_serviced_by(const JsonValueReader& value) {
+    std::vector<uint32_t> risc_ids;
+    value.read_array([&risc_ids](const JsonValueReader& risc) {
+        risc_ids.push_back(manifest::parse_key_number(risc.read<std::string>(), "erisc"));
+    });
+    return risc_ids;
+}
+
+manifest::CounterRef read_credit_ref(const JsonValueReader& value) {
+    return value.read_object([](JsonObjectReader& ref) {
+        const JsonValueReader array = ref.take("array");
+        const std::string path = array.read<std::string>();
+        const auto counter_array = path.starts_with(k_credit_counters_path_prefix)
+                                       ? manifest::parse_lower_enum_name<manifest::CreditCounterArray>(
+                                             std::string_view(path).substr(k_credit_counters_path_prefix.size()))
+                                       : std::nullopt;
+        if (!counter_array.has_value()) {
+            array.fail("is \"{}\", not a credit counter array such as credit_counters/to_sender_ack", path);
+        }
+        return manifest::CounterRef{.array = *counter_array, .index = ref.take<uint32_t>("index")};
+    });
+}
+
+manifest::SenderChannelProducer parse_sender_producer(
+    std::string_view producer, FabricNodeId node, const manifest::RouterIdentity& identity) {
+    if (producer == k_local_worker_producer) {
+        return manifest::LocalWorker{};
+    }
+    if (producer == k_local_tensix_mux_producer) {
+        return manifest::LocalTensixMux{};
+    }
+    return manifest::parse_sibling_router_path(producer, node, identity);
+}
+
+manifest::SenderChannel read_sender_channel(
+    const JsonValueReader& value,
+    FabricNodeId node,
+    const manifest::RouterIdentity& identity,
+    const FieldsReader& fields_reader) {
+    return value.read_object([&](JsonObjectReader& sender_json) {
+        manifest::SenderChannel sender;
+        sender.status = take_enum<manifest::ChannelStatus>(sender_json, "status");
+        sender.serviced_by = read_serviced_by(sender_json.take("serviced_by"));
+        if (const auto producer = sender_json.take("producer").read_nullable<std::string>()) {
+            sender.producer = parse_sender_producer(*producer, node, identity);
+        }
+        sender.ring_buffer = read_optional_l1(sender_json.take("ring_buffer"));
+        sender.credits_by_erisc = read_by_erisc(sender_json.take("credits"), [](const JsonValueReader& credits) {
+            return credits.read_object([](JsonObjectReader& credits_json) {
+                manifest::SenderChannelCredits out;
+                if (const auto acked = credits_json.take_optional("acked")) {
+                    out.acked = read_credit_ref(*acked);
+                }
+                out.completed = read_credit_ref(credits_json.take("completed"));
+                return out;
+            });
+        });
+        sender.fields_by_erisc = fields_reader.read(sender_json.take("fields"));
+        return sender;
+    });
+}
+
+manifest::ReceiverChannel read_receiver_channel(const JsonValueReader& value, const FieldsReader& fields_reader) {
+    return value.read_object([&](JsonObjectReader& receiver_json) {
+        manifest::ReceiverChannel receiver;
+        receiver.status = take_enum<manifest::ChannelStatus>(receiver_json, "status");
+        receiver.serviced_by = read_serviced_by(receiver_json.take("serviced_by"));
+        receiver.forwards_on_by_erisc =
+            read_by_erisc(receiver_json.take("forwards_on"), [](const JsonValueReader& forwards_on) {
+                const auto vc = forwards_on.read_nullable<std::string>();
+                return vc.has_value() ? std::optional<uint32_t>(manifest::parse_key_number(*vc, "vc")) : std::nullopt;
+            });
+        receiver.ring_buffer = read_optional_l1(receiver_json.take("ring_buffer"));
+        receiver.fields_by_erisc = fields_reader.read(receiver_json.take("fields"));
+        return receiver;
+    });
+}
+
+std::vector<std::vector<manifest::DownstreamEdge>> read_downstream_edges(
+    const JsonValueReader& value,
+    FabricNodeId node,
+    const manifest::RouterIdentity& identity,
+    const FieldsReader& fields_reader) {
+    std::vector<std::vector<manifest::DownstreamEdge>> edges_by_vc(builder_config::MAX_NUM_VCS);
+    read_by_vc(value, [&](uint32_t vc, const JsonValueReader& vc_value) {
+        vc_value.read_object([&](JsonObjectReader& vc_json) {
+            vc_json.take_each([&](std::string_view key, const JsonValueReader& edge_value) {
+                edges_by_vc[vc].push_back(edge_value.read_object([&](JsonObjectReader& edge_json) {
+                    manifest::DownstreamEdge edge;
+                    edge.edge = manifest::parse_key_number(key, "edge");
+                    edge.downstream_channel = manifest::parse_downstream_channel_path(
+                        edge_json.take<std::string>("downstream_channel"), node, identity, vc);
+                    edge.through_tensix_mux = edge_json.take<bool>("through_tensix_mux");
+                    edge.fields_by_erisc = fields_reader.read(edge_json.take("fields"));
+                    return edge;
+                }));
+            });
+        });
+    });
+    return edges_by_vc;
+}
+
+// The counts per VC, one for each of MAX_NUM_VCS.
+std::array<uint32_t, builder_config::MAX_NUM_VCS> read_counts_per_vc(const JsonValueReader& value) {
+    const auto counts = value.read_array_of<uint32_t>();
+    if (counts.size() != builder_config::MAX_NUM_VCS) {
+        value.fail("holds {} counts, not one for each of {} VCs", counts.size(), builder_config::MAX_NUM_VCS);
+    }
+    std::array<uint32_t, builder_config::MAX_NUM_VCS> out{};
+    std::ranges::copy(counts, out.begin());
+    return out;
+}
+
+manifest::RouterShape read_router_shape(JsonObjectReader& shape_json) {
+    manifest::RouterShape shape;
+    shape.num_vcs = shape_json.take<uint32_t>("num_vcs");
+    shape.senders_per_vc = read_counts_per_vc(shape_json.take("senders_per_vc"));
+    shape.receivers_per_vc = read_counts_per_vc(shape_json.take("receivers_per_vc"));
+    shape.num_active_eriscs = shape_json.take<uint32_t>("num_active_eriscs");
+    shape.channel_trimming_overrides_applied = shape_json.take<bool>("channel_trimming_overrides_applied");
+    shape.has_tensix_extension = shape_json.take<bool>("has_tensix_extension");
+    return shape;
+}
+
+manifest::EthLink read_eth_link(JsonObjectReader& link_json) {
+    manifest::EthLink link;
+    link.edge_capability = take_enum<EdgeCapability>(link_json, "edge_capability");
+    if (const auto peer = link_json.take("peer").read_nullable<std::string>()) {
+        link.peer = manifest::parse_router_path(*peer);
+    }
+    link.cross_host = link_json.take<bool>("cross_host");
+    link.wrap = link_json.take<bool>("wrap");
+    link.is_dispatch_link = link_json.take<bool>("dispatch_link");
+    return link;
+}
+
+manifest::L1CreditCounters read_credit_counters(JsonObjectReader& counters_json) {
+    manifest::L1CreditCounters counters;
+    for (const auto& layout : manifest::k_credit_counter_arrays) {
+        counters.*layout.member =
+            counters_json.take(lower_enum_name(layout.array)).read_object([&layout](JsonObjectReader& entry) {
+                manifest::content::L1 l1 = take_l1_keys(entry);
+                entry.check("indexed_by", lower_enum_name(layout.indexed_by));
+                return l1;
+            });
+    }
+    return counters;
+}
+
+manifest::Erisc read_erisc(const JsonValueReader& value) {
+    return value.read_object([](JsonObjectReader& erisc_json) {
+        manifest::Erisc erisc;
+        erisc.processor = take_enum<tt::tt_metal::DataMovementProcessor>(erisc_json, "processor");
+        erisc.physical_erisc = erisc_json.take<uint32_t>("physical_erisc");
+        erisc.opt_level = take_enum<tt::tt_metal::KernelBuildOptLevel>(erisc_json, "opt_level");
+        return erisc;
+    });
+}
+
+// The router `key` names on `node`.
+manifest::Router read_router(
+    const JsonValueReader& value,
+    FabricNodeId node,
+    const manifest::RouterKey& key,
+    const FieldsReader& fields_reader) {
+    return value.read_object([&](JsonObjectReader& router_json) {
+        manifest::Router router;
+        router.identity = router_json.take("identity").read_object([&key](JsonObjectReader& identity_json) {
+            manifest::RouterIdentity identity;
+            identity.eth_chan = identity_json.take<uint32_t>("eth_chan");
+            identity.key = key;
+            identity.logical_core = read_core(identity_json.take("logical_core"));
+            identity.virtual_core = read_core(identity_json.take("virtual_core"));
+            return identity;
+        });
+        router.link = router_json.take("link").read_object(read_eth_link);
+        router.shape = router_json.take("shape").read_object(read_router_shape);
+        router.credit_counters = router_json.take("credit_counters").read_object(read_credit_counters);
+        router_json.take("channels").read_object([&](JsonObjectReader& channels) {
+            router.channels.senders = read_channels_by_vc<manifest::SenderChannel>(
+                channels.take("senders"), [&](const JsonValueReader& sender) {
+                    return read_sender_channel(sender, node, router.identity, fields_reader);
+                });
+            router.channels.receivers = read_channels_by_vc<manifest::ReceiverChannel>(
+                channels.take("receivers"),
+                [&](const JsonValueReader& receiver) { return read_receiver_channel(receiver, fields_reader); });
+        });
+        router.intra_chip_downstream_edges = read_downstream_edges(
+            router_json.take("intra_chip_downstream_edges"), node, router.identity, fields_reader);
+        router.fields_by_erisc = fields_reader.read(router_json.take("fields"));
+        router.eriscs = read_by_erisc(router_json.take("eriscs"), read_erisc);
+        router.leftover_l1 = read_optional_l1(router_json.take("leftover_l1"));
+        return router;
+    });
+}
+
+// ============ Reading chips and meshes ============
+
+manifest::LocalSync read_local_sync(JsonObjectReader& local_sync_json) {
+    manifest::LocalSync local_sync;
+    local_sync.master = manifest::parse_router_path(local_sync_json.take<std::string>("master"));
+    local_sync.num_routers = local_sync_json.take<uint32_t>("num_routers");
+    local_sync.router_channels_mask = local_sync_json.take<uint32_t>("router_channels_mask");
+    return local_sync;
+}
+
+// The chip `node` names. A remote chip, one this rank has no ids for, has only its place.
+manifest::Chip read_chip(const JsonValueReader& value, FabricNodeId node, const FieldsReader& fields_reader) {
+    return value.read_object([&](JsonObjectReader& chip_json) {
+        manifest::Chip chip{.fabric_node_id = node};
+        chip.mesh_coord = chip_json.take("mesh_coord").read_array_of<uint32_t>();
+        chip.host_rank = chip_json.take("host_rank").read_nullable<uint32_t>();
+        chip.physical_chip_id = chip_json.take("physical_chip_id").read_nullable<ChipId>();
+        const JsonValueReader asic_id = chip_json.take("asic_id");
+        chip_json.check("is_local", chip.physical_chip_id.has_value());
+        if (!chip.physical_chip_id.has_value()) {
+            if (!asic_id.is_null()) {
+                asic_id.fail("is set on a remote chip");
+            }
+            return chip;
+        }
+        chip.asic_id = read_asic_id(asic_id);
+        chip.z_port_role = take_enum<ZPortRole>(chip_json, "z_port_role");
+        chip.local_sync = chip_json.take("local_sync").read_nullable_object(read_local_sync);
+        chip_json.take("routers").read_object([&](JsonObjectReader& routers) {
+            routers.take_each([&](std::string_view key, const JsonValueReader& router) {
+                chip.routers.push_back(read_router(router, node, manifest::parse_router_key(key), fields_reader));
+            });
+        });
+        return chip;
+    });
+}
+
+manifest::Mesh read_mesh(const JsonValueReader& value, MeshId mesh_id, const FieldsReader& fields_reader) {
+    return value.read_object([&](JsonObjectReader& mesh_json) {
+        manifest::Mesh mesh{.mesh_id = mesh_id};
+        mesh.shape = mesh_json.take("shape").read_array_of<uint32_t>();
+        if (const auto torus = mesh_json.take_optional("torus")) {
+            mesh.torus = torus->read_object([](JsonObjectReader& torus_json) {
+                manifest::MeshTorus out;
+                out.y = torus_json.take<bool>("y");
+                out.x = torus_json.take<bool>("x");
+                return out;
+            });
+        }
+        mesh.express_routing = mesh_json.take<bool>("express_routing");
+        if (const auto credit_transport = mesh_json.take_optional("credit_transport")) {
+            auto& transport = mesh.credit_transport.emplace();
+            read_by_vc(*credit_transport, [&transport](uint32_t vc, const JsonValueReader& entry) {
+                transport.push_back({
+                    .vc = vc,
+                    .backing = entry.read_object([](JsonObjectReader& entry_json) {
+                        return take_enum<manifest::CreditBacking>(entry_json, "backing");
+                    }),
+                });
+            });
+        }
+        mesh_json.take("chips").read_object([&](JsonObjectReader& chips) {
+            chips.take_each([&](std::string_view key, const JsonValueReader& chip) {
+                mesh.chips.push_back(
+                    read_chip(chip, FabricNodeId(mesh_id, manifest::parse_chip_key(key)), fields_reader));
+            });
+        });
+        return mesh;
+    });
 }
 
 // A new fabric run id: the UTC time to the second, then 8 random hex digits, such as "20261105T221500Z-1a2b3c4d". It
@@ -678,6 +1317,27 @@ json make_manifest_json(const manifest::ManifestFacts& facts, FieldsLayout field
     }
     out["meshes"] = std::move(meshes);
     return out;
+}
+
+manifest::ManifestFacts parse_manifest_json(const json& manifest_json) {
+    return visualizer::JsonValueReader(manifest_json, "Fabric manifest")
+        .read_object([](visualizer::JsonObjectReader& top) {
+            top.check("file_kind", std::string(visualizer::k_manifest_file_kind));
+            top.check("manifest_version", visualizer::k_manifest_version);
+            manifest::ManifestFacts facts;
+            facts.run = top.take("run").read_object(read_run);
+            facts.fabric = top.take("fabric").read_object(read_fabric);
+            facts.arch = top.take("arch").read_object(read_arch);
+            top.check("vocabulary", make_vocabulary_json());
+            FieldsReader fields_reader;
+            fields_reader.take_field_sets(top);
+            top.take("meshes").read_object([&](visualizer::JsonObjectReader& meshes) {
+                meshes.take_each([&](std::string_view key, const visualizer::JsonValueReader& mesh) {
+                    facts.meshes.push_back(read_mesh(mesh, manifest::parse_mesh_key(key), fields_reader));
+                });
+            });
+            return facts;
+        });
 }
 
 void write_fabric_manifest(const ControlPlane& control_plane, const tt::llrt::RunTimeOptions& rtoptions) {

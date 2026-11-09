@@ -93,6 +93,7 @@ target_link_libraries(
         protobuf::libprotobuf
         cadical::cadical
         fabric_visualizer_build_identity
+        fabric_visualizer_json_reader
 )
 
 tt_reuse_precompile_headers(fabric TT::CommonPCH)

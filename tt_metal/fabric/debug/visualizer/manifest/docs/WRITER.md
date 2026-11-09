@@ -109,7 +109,8 @@ list here.
 
 ## Changing the format
 
-1. Change the writer, and the names in `fabric_manifest_names.hpp` if a key's spelling changes.
+1. Change the writer and the reader beside it ([READER.md](READER.md)), and the names in `fabric_manifest_names.hpp` if
+   a key's spelling changes. Each fixture's `WriterParserRoundTrip` fails until they agree.
 2. Update `fabric_manifest_schema.json` and [FORMAT.md](FORMAT.md).
 3. If readers can't take the new shape as it is, bump `k_manifest_version` in `common/fabric_visualizer_files.hpp`,
    and the schema's `manifest_version` with it.

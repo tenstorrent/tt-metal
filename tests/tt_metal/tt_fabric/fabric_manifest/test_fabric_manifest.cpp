@@ -289,6 +289,37 @@ void check_field_sets(const nlohmann::ordered_json& written_manifest) {
     EXPECT_EQ(keys, expected_keys);
 }
 
+// The first operations of the patch from `expected` to `actual`, each naming the pointer that differs.
+std::string describe_manifest_diff(const nlohmann::ordered_json& expected, const nlohmann::ordered_json& actual) {
+    constexpr size_t k_max_operations = 20;
+    const nlohmann::ordered_json patch = nlohmann::ordered_json::diff(expected, actual);
+    std::string out = fmt::format("{} differences", patch.size());
+    for (size_t index = 0; index < std::min(patch.size(), k_max_operations); ++index) {
+        std::string operation = patch[index].dump();
+        if (operation.size() > 300) {
+            operation.resize(300);
+            operation += "...";
+        }
+        out += "\n  " + operation;
+    }
+    return out;
+}
+
+// Reading the manifest and writing it again gives back the same JSON, in each fields layout: the writer and the reader
+// agree on every key and value this run's fabric has.
+void check_manifest_writer_parser_round_trip(const nlohmann::ordered_json& written_manifest) {
+    // Shared fields layout check
+    const manifest::ManifestFacts facts = parse_manifest_json(written_manifest);
+    const nlohmann::ordered_json rewritten = make_manifest_json(facts, FieldsLayout::SHARED);
+    EXPECT_TRUE(rewritten == written_manifest) << describe_manifest_diff(written_manifest, rewritten);
+
+    // Per-router fields layout check
+    const nlohmann::ordered_json per_router = make_manifest_json(facts, FieldsLayout::PER_ROUTER);
+    const nlohmann::ordered_json per_router_rewritten =
+        make_manifest_json(parse_manifest_json(per_router), FieldsLayout::PER_ROUTER);
+    EXPECT_TRUE(per_router_rewritten == per_router) << describe_manifest_diff(per_router, per_router_rewritten);
+}
+
 // Every chip names the host rank that owns it. With one local mesh, the local chips are this process's: their host rank
 // is the one ControlPlane binds this process to.
 void check_chip_host_ranks(const json& manifest) {
@@ -646,7 +677,8 @@ void check_router_edges(const json& manifest, const std::vector<RouterEntry>& ro
                     EXPECT_EQ(
                         key_of_path(target_router_path),
                         router_key(
-                            {.direction = builder::direction_from_compact_index(facing, n - 1), .routing_plane = plane}));
+                            {.direction = builder::direction_from_compact_index(facing, n - 1),
+                             .routing_plane = plane}));
                 } else {
                     EXPECT_EQ(n, 1u);
                     EXPECT_EQ(key_of_path(target_router_path).substr(1), entry.router_key.substr(1));
@@ -1024,6 +1056,14 @@ TEST(ManifestNames, KeysAndPathsParseBack) {
     EXPECT_EQ(parsed_channel.landing_channel, 3u);
     EXPECT_ANY_THROW(manifest::parse_downstream_channel_path(channel, node, identity, 0));
     EXPECT_ANY_THROW(manifest::parse_downstream_channel_path("M1/C7/N2/channels/receivers/vc1/ch3", node, identity, 1));
+
+    // An enum's spelling parses back, and a number only where no enumerator names the value.
+    EXPECT_EQ(manifest::parse_lower_enum_name<FabricConfig>("fabric_2d"), FabricConfig::FABRIC_2D);
+    EXPECT_EQ(
+        manifest::parse_lower_enum_name<manifest::ChannelStatus>("200"), static_cast<manifest::ChannelStatus>(200));
+    EXPECT_EQ(manifest::parse_lower_enum_name<FabricConfig>("FABRIC_2D"), std::nullopt);
+    EXPECT_EQ(manifest::parse_lower_enum_name<manifest::ChannelStatus>("0"), std::nullopt);
+    EXPECT_EQ(manifest::parse_lower_enum_name<manifest::ChannelStatus>(""), std::nullopt);
 }
 
 // A chip is published once, with every router its builder initialized, and only within the chips the context holds.
@@ -1084,6 +1124,7 @@ TEST(ManifestArgs, KernelInputsAccounted) {
 #define TEST_MANIFEST_CHECKS(Fixture)                                                                      \
     TEST_F(Fixture, TopLevel) { check_top_level(manifest_, manifest_path_, fabric_config, suite_start_); } \
     TEST_F(Fixture, FieldSets) { check_field_sets(written_manifest_); }                                    \
+    TEST_F(Fixture, WriterParserRoundTrip) { check_manifest_writer_parser_round_trip(written_manifest_); } \
     TEST_F(Fixture, ChipZPortRole) { check_chip_z_port_role(manifest_); }                                  \
     TEST_F(Fixture, ChipHostRanks) { check_chip_host_ranks(manifest_); }                                   \
     TEST_F(Fixture, RouterLink) { check_router_link(manifest_, routers_); }                                \

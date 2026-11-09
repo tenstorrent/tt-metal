@@ -22,3 +22,20 @@ set_target_properties(
 if(TARGET tt_metal_version_header)
     add_dependencies(fabric_visualizer_build_identity tt_metal_version_header)
 endif()
+
+# The strict JSON reader the visualizer's stages read each other's files with.
+add_library(fabric_visualizer_json_reader STATIC)
+target_sources(fabric_visualizer_json_reader PRIVATE fabric_visualizer_json_reader.cpp)
+target_include_directories(fabric_visualizer_json_reader PUBLIC ${PROJECT_SOURCE_DIR})
+target_link_libraries(
+    fabric_visualizer_json_reader
+    PUBLIC
+        nlohmann_json::nlohmann_json
+        TT::STL
+)
+set_target_properties(
+    fabric_visualizer_json_reader
+    PROPERTIES
+        POSITION_INDEPENDENT_CODE
+            ON
+)

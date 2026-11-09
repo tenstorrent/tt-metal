@@ -26,5 +26,20 @@ TEST(ManifestTypeRegistry, NamesAPacketHeaderWithItsArgumentEvenWhenItIsTheDefau
     EXPECT_EQ(get_manifest_type_name<LowLatencyPacketHeaderT<3>>(), "LowLatencyPacketHeaderT<3>");
 }
 
+// A manifest read back names its types as text, which must be a registered type's name exactly.
+TEST(ManifestTypeRegistry, KnowsEachRegisteredNameAndNoOther) {
+    // A registered type, by the name the writer gives it: no namespaces.
+    EXPECT_TRUE(is_registered_type_name("EDMStatus"));
+    // A registered template, with its argument written out even though 0 is the default.
+    EXPECT_TRUE(is_registered_type_name("LowLatencyPacketHeaderT<0>"));
+    // The same template as the compiler spells it with the default argument dropped. The writer never writes this
+    // name, so a manifest holding it wasn't written by this build's writer.
+    EXPECT_FALSE(is_registered_type_name("LowLatencyPacketHeaderT<>"));
+    // A registered type with its namespaces: names match exactly, and the writer leaves namespaces out.
+    EXPECT_FALSE(is_registered_type_name("tt::tt_fabric::EDMStatus"));
+    // No type at all.
+    EXPECT_FALSE(is_registered_type_name(""));
+}
+
 }  // namespace
 }  // namespace tt::tt_fabric::manifest

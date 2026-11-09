@@ -134,6 +134,18 @@ constexpr std::string_view get_manifest_type_name() {
 namespace detail {
 
 template <typename... Ts>
+constexpr bool is_named_in(std::string_view name, TypeList<Ts...> /*types*/) {
+    return ((manifest_type_name<Ts> == name) || ...);
+}
+
+}  // namespace detail
+
+// Whether `name` is a registered type's name, as a manifest read back names it.
+constexpr bool is_registered_type_name(std::string_view name) { return detail::is_named_in(name, RegisteredTypes{}); }
+
+namespace detail {
+
+template <typename... Ts>
 consteval bool are_names_unique(TypeList<Ts...> /*types*/) {
     const std::array<std::string_view, sizeof...(Ts)> names{manifest_type_name<Ts>...};
     for (std::size_t i = 0; i < names.size(); ++i) {
