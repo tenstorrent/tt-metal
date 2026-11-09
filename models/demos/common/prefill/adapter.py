@@ -366,6 +366,9 @@ ADAPTER_PATHS = {
     "kimi_k2_7": "models.demos.deepseek_v3_d_p.tt.runners.adapters.kimi_k2_7:KimiK27Adapter",
     "kimi_k3": "models.demos.deepseek_v3_d_p.tt.runners.adapters.kimi_k3:KimiK3Adapter",
     "minimax_m3": "models.demos.minimax_m3.tt.runners.adapters.minimax_m3:MiniMaxM3PrefillAdapter",
+    # Weight-free quad hardware screen (gwdt --quad): K2.7-shaped stages, random or pass-through bodies.
+    "quad_block_random": "models.demos.deepseek_v3_d_p.tt.runners.adapters.quad_screen:QuadBlockRandomAdapter",
+    "quad_passthrough": "models.demos.deepseek_v3_d_p.tt.runners.adapters.quad_screen:QuadPassthroughAdapter",
     # Mistral-Small-4-119B: dense MLA + MoE; config hand-built (transformers 5.x rope_parameters).
     "mistral_small_4": "models.demos.deepseek_v3_d_p.tt.runners.adapters.mistral_small_4:MistralSmall4Adapter",
 }

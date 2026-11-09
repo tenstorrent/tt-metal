@@ -126,9 +126,20 @@ class MLAPrefillAdapter(PrefillModelAdapter):
         """Construct the MLA model and return the runtime. The runtime (TtPrefillRuntime)
         is stateless w.r.t. the KV cache — the engine allocates it (allocate_kv_cache) and
         passes it into each runtime call; the runtime knows the layout to read/write it."""
+        from models.demos.deepseek_v3_d_p.tt.tt_prefill_runtime import TtPrefillRuntime
+
+        return TtPrefillRuntime(
+            mesh_device=mesh_device,
+            hf_config=hf_config,
+            state_dict={},
+            config=self.runtime_config(params),
+        )
+
+    def runtime_config(self, params: PrefillRunParams):
+        """The TtPrefillRuntimeConfig for this rank, from the engine's resolved params."""
         from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
         from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
-        from models.demos.deepseek_v3_d_p.tt.tt_prefill_runtime import TtPrefillRuntime, TtPrefillRuntimeConfig
+        from models.demos.deepseek_v3_d_p.tt.tt_prefill_runtime import TtPrefillRuntimeConfig
 
         # Per-axis CCL topology derived from the opened fabric: Ring on a physically-wrapped axis
         # (FABRIC_2D_TORUS_{X,Y,XY}), Linear otherwise. Querying the active fabric keeps topology
@@ -136,7 +147,7 @@ class MLAPrefillAdapter(PrefillModelAdapter):
         topology = per_axis_topology()
         logger.info(f"Per-axis CCL topology (sp, tp) = {topology}")
 
-        runtime_config = TtPrefillRuntimeConfig(
+        return TtPrefillRuntimeConfig(
             num_layers=params.num_layers,
             max_seq_len=params.max_seq_len,
             mesh_shape=params.mesh_shape,
@@ -163,10 +174,4 @@ class MLAPrefillAdapter(PrefillModelAdapter):
             use_trace=params.use_trace,
             overlap_shared_expert_with_dispatch=params.overlap_shared_expert_with_dispatch,
             tp_shard_kv=True if self._dense_tp_shard_kv(params) else None,
-        )
-        return TtPrefillRuntime(
-            mesh_device=mesh_device,
-            hf_config=hf_config,
-            state_dict={},
-            config=runtime_config,
         )
