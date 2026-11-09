@@ -213,6 +213,42 @@ void ConcatDeviceOperation::validate_on_program_cache_miss(
                 memory_layout == TensorMemoryLayout::HEIGHT_SHARDED ||
                     memory_layout == TensorMemoryLayout::BLOCK_SHARDED,
                 "Only support width concat on height-sharded or block-sharded tensors.");
+            if (memory_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
+                // The height-sharded zero-copy factories alias one input shard per core and write a
+                // single input-shard-height row band into that core's output shard. Which logical
+                // rows that band lands in is decided by the OUTPUT shard's height: a taller output
+                // shard maps fewer shards onto the grid, so every band after the first lands in
+                // the wrong rows, the tail of each shard is left unwritten, and the input shards
+                // beyond the logical output's shard count are dropped. TensorSpec accepts such a
+                // spec whenever the shard count still fits the grid, so the copy would be silently
+                // wrong; reject it instead. BLOCK_SHARDED is exempt because its factory lays the
+                // copy out from the output shard spec and checks coverage explicitly.
+                // The one mismatch that stays correct is a tensor smaller than a single shard:
+                // every row is then on core 0 at offset 0 in both layouts, so an output shard
+                // taller than the input shard only adds padding. The output shard must still be
+                // big enough to hold the input shard's whole write band, or the copy would run
+                // past the end of it.
+                const auto& output_shard_spec = args.output_mem_config.shard_spec().value();
+                const uint32_t output_shard_height = output_shard_spec.shape[0];
+                const uint64_t flat_height = first_input.physical_volume() / first_input.padded_shape()[-1];
+                for (size_t i = 0; i < input_tensors.size(); i++) {
+                    const uint32_t input_shard_height = input_tensors[i].shard_spec().value().shape[0];
+                    const bool single_shard =
+                        flat_height <= input_shard_height && input_shard_height <= output_shard_height;
+                    TT_FATAL(
+                        single_shard || output_shard_height == input_shard_height,
+                        "Height-sharded width concat requires the output shard height to match the "
+                        "input shard heights (output shard is [{}, {}], input {} has shard height "
+                        "{}). Any other output shard height maps the per-core row bands to the "
+                        "wrong logical rows. Use an output shard of [{}, {}].",
+                        output_shard_height,
+                        output_shard_spec.shape[1],
+                        i,
+                        input_shard_height,
+                        input_shard_height,
+                        output_shard_spec.shape[1]);
+                }
+            }
         } else if (is_height_concat(rank, args.dim)) {
             TT_FATAL(
                 memory_layout == TensorMemoryLayout::WIDTH_SHARDED ||
