@@ -50,6 +50,12 @@ class Flux3KleinPromptEncoder:
         """`[1, L, 20480]` bf16 text tokens on device (replicated), their RoPE ids and the attended length (see
         `tokenize`)."""
         input_ids, attention_mask, valid = self.tokenize(prompt, length)
+        # run the layers on the attended rows only (rounded to 128) and zero-fill the bucket below: every kept row sees
+        # the same keys (causal + pad mask) and the dropped rows are masked keys in the DiT
+        bucket_rows = int(attention_mask.shape[-1])
+        rows = min(bucket_rows, -(-valid // 128) * 128)
+        if rows < bucket_rows:
+            input_ids, attention_mask = input_ids[:, :rows], attention_mask[:, :rows]
         real = int(attention_mask.sum())
         cache_key = (int(attention_mask.shape[-1]), real)
         cached = self._pos_cache.get(cache_key)
@@ -80,5 +86,9 @@ class Flux3KleinPromptEncoder:
         tokens = ttnn.concat(taps, dim=-1)
         for t in (*taps, tt_ids, tt_mask):
             ttnn.deallocate(t)
+        if tokens.shape[-2] < bucket_rows:
+            padded = ttnn.pad(tokens, [(0, 0), (0, bucket_rows - tokens.shape[-2]), (0, 0)], value=0.0)
+            ttnn.deallocate(tokens)
+            tokens = padded
 
         return tokens, text_ids(tokens.shape[-2]), valid
