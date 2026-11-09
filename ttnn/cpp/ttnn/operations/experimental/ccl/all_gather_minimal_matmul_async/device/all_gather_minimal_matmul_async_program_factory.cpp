@@ -786,6 +786,23 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory_helper(
         defines["CHUNK_TILE_OFFSETS"] = offsets_csv;
     }
 
+    // Fabric2D / TorusXY: the kernels route by fabric node (chip, mesh) with HybridMeshPacketHeader instead of
+    // by hop count. get_forward_backward_line_unicast_configuration already returns (mesh, chip) on 2D.
+    const bool fabric_2d = tt::tt_fabric::is_2d_fabric_config(tt::tt_fabric::GetFabricConfig());
+    if (fabric_2d) {
+        defines["FABRIC_2D"] = "1";
+        TT_FATAL(
+            topology == ttnn::ccl::Topology::Ring,
+            "all_gather_minimal_matmul_async on Fabric2D supports Ring only (Linear's N-1 hop wrap is a 1D route)");
+        TT_FATAL(!persistent_weight_buffer.has_value(), "all_gather_minimal_matmul_async: FSDP is not ported to Fabric2D");
+        // Direct push: every device sends its own K slice straight to each peer, so a ring of up to 4 needs the
+        // two neighbours plus the opposite device (2 hops on the torus), and one arrival counter per source.
+        TT_FATAL(ring_size <= 4, "all_gather_minimal_matmul_async on Fabric2D: direct push supports rings of up to 4");
+        TT_FATAL(
+            ring_size < 4 || semaphore.size() >= 3,
+            "all_gather_minimal_matmul_async on Fabric2D with a ring of 4 needs 3 semaphores (backward, forward, far)");
+    }
+
     in0_defines = defines;
     in0_defines["READ_FROM_LOCAL_INPUT"] = "1";
     in0_defines["IS_IN0"] = "1";
@@ -1313,6 +1330,32 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory_helper(
         }
         for (const auto& mm_output_tensor : mm_output_tensors) {
             in0_common_args.push_back(allocated_buffer(mm_output_tensor, "matmul output"));
+        }
+        if (tt::tt_fabric::is_2d_fabric_config(tt::tt_fabric::GetFabricConfig())) {
+            // Fabric2D: trailing args after the outputs (so the cache-hit output slots stay put): the opposite device
+            // of a ring of 4 (forward of forward) and its arrival counter, for direct push.
+            uint32_t far_sem = 0, far_mesh = 0, far_chip = 0;
+            if (ring_size == 4 && forward_coord.has_value()) {
+                // Two forward steps along the ring axis: the axis is the one on which the forward neighbour differs.
+                const auto& self = sender_device_coord;
+                const auto& fwd = forward_coord.value();
+                ttnn::MeshCoordinate far_coord = self;
+                const auto mesh_shape = device->shape();
+                for (size_t d = 0; d < self.dims(); ++d) {
+                    if (self[d] != fwd[d]) {
+                        const uint32_t n = mesh_shape[d];
+                        const uint32_t step = (fwd[d] + n - self[d]) % n;  // 1, or n - 1 when the ring runs backwards
+                        far_coord[d] = (self[d] + 2 * step) % n;
+                    }
+                }
+                const auto far_node = device->get_fabric_node_id(far_coord);
+                far_sem = static_cast<uint32_t>(semaphore.at(2).address());
+                far_mesh = *far_node.mesh_id;
+                far_chip = far_node.chip_id;
+            }
+            in0_common_args.push_back(far_sem);   // smuggled-rta-ok: semaphore, override
+            in0_common_args.push_back(far_mesh);  // smuggled-rta-ok: fabric node, override
+            in0_common_args.push_back(far_chip);  // smuggled-rta-ok: fabric node, override
         }
         desc.kernels[kIn0SenderKernelIdx].emplace_common_runtime_args(in0_common_args);
         desc.kernels[kIn0ReceiverFabricKernelIdx].emplace_common_runtime_args(in0_common_args);
@@ -1978,6 +2021,15 @@ void AllGatherMinimalMatmulAsyncProgramFactory::override_runtime_arguments(
         in0_receiver_no_fabric_common[in0_out_slot + offset] = addr;
         in1_sender_common[in1_out_slot + offset] = addr;
         in1_receiver_common[in1_out_slot + offset] = addr;
+    }
+    if (tt::tt_fabric::is_2d_fabric_config(tt::tt_fabric::GetFabricConfig()) && operation_attributes.semaphore.size() > 2) {
+        const uint32_t far_slot = in0_out_slot + last_offset + 1;  // first trailing Fabric2D arg
+        const uint32_t far_sem = operation_attributes.semaphore.at(2).address();
+        for (auto* common : {&in0_sender_common, &in0_receiver_fabric_common, &in0_receiver_no_fabric_common}) {
+            if (far_slot < common->size() && (*common)[far_slot] != 0) {
+                (*common)[far_slot] = far_sem;
+            }
+        }
     }
 
     auto& compute_common = tt::tt_metal::GetCommonRuntimeArgs(program, kComputeKernelIdx);

@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "agmm_fabric_mode.hpp"  // first: fabric headers depend on FABRIC_2D
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
@@ -112,6 +113,14 @@ void kernel_main() {
     size_t out_ready_sem_forward = get_common_arg_val<uint32_t>(cargidx++);
     const uint32_t barrier_sem = get_common_arg_val<uint32_t>(cargidx++);
     const uint32_t M_tiles = get_common_arg_val<uint32_t>(cargidx++);
+#ifdef FABRIC_2D
+#ifdef AGMM_DIRECT_PUSH  // experimental: push own slice to every peer (see notes); off by default
+    constexpr bool direct_push = !is_linear;
+#else
+    constexpr bool direct_push = false;
+#endif
+    static_assert(!direct_push || num_devices <= 4, "Fabric2D direct push supports rings of up to 4");
+#endif
 
 #ifdef FUSE_TERNARY
     const uint32_t ternary_a_addr = get_common_arg_val<uint32_t>(cargidx++);
@@ -121,6 +130,14 @@ void kernel_main() {
 
     // Output tensor addresses from common args
     const uint32_t out_addr_common_arg_start = cargidx;
+#ifdef FABRIC_2D
+    // Trailing Fabric2D args after the N_chunks output addresses: the opposite device of a ring of 4 (direct push).
+    const uint32_t out_ready_sem_far = get_common_arg_val<uint32_t>(out_addr_common_arg_start + N_chunks);
+    [[maybe_unused]] const uint16_t far_mesh_id =
+        static_cast<uint16_t>(get_common_arg_val<uint32_t>(out_addr_common_arg_start + N_chunks + 1));
+    [[maybe_unused]] const uint16_t far_chip_id =
+        static_cast<uint16_t>(get_common_arg_val<uint32_t>(out_addr_common_arg_start + N_chunks + 2));
+#endif
 
     // Load per-core runtime args
     uint32_t argidx = 0;
@@ -290,6 +307,40 @@ void kernel_main() {
 
     auto pkt_hdrs_forward = allocate_and_init_packet_headers(
         detail::valid_targets(0), unicast_route_info_forward, in0_reader, num_tiles_to_write_per_packet, in3_tile_size);
+#ifdef FABRIC_2D
+    // The opposite device of a ring of 4 is 2 hops either way; it goes out through the router the forward-index
+    // sender already uses (towards the backward neighbour).
+    const ccl_routing_utils::line_unicast_route_info_t unicast_route_info_far = {
+        .dst_mesh_id = far_mesh_id, .dst_chip_id = far_chip_id};
+    const bool sends_far = direct_push && num_devices == 4 && in0_core_order_index == forward_in0_core_order_index;
+    auto pkt_hdrs_far = allocate_and_init_packet_headers(
+        sends_far, unicast_route_info_far, in0_reader, num_tiles_to_write_per_packet, in3_tile_size);
+    const uint64_t out_ready_sem_injector_noc_addr_far_in_pkt =
+        safe_get_noc_addr(out_ready_sem_injector_noc0_x, out_ready_sem_injector_noc0_y, out_ready_sem_far, 0);
+    // Entry barrier, announce side: tell the injector of every peer this core writes into that we entered.
+    // A peer's injector reads no block (so none of its senders writes) until every writer has entered: without
+    // this a fast peer's next call lands in a gathered buffer this device is still reading (relay and push alike).
+    if constexpr (!is_linear && num_devices > 1) {
+        if (barrier_sem != 0) {
+            const uint64_t barrier_injector_noc_addr =
+                safe_get_noc_addr(out_ready_sem_injector_noc0_x, out_ready_sem_injector_noc0_y, barrier_sem, 0);
+            auto announce = [&](auto* handle, PacketHeaders& hdrs) {
+                fabric_unicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
+                    handle, hdrs.sem_inc_hdr, tt::tt_fabric::NocUnicastAtomicIncCommandHeader{barrier_injector_noc_addr, 0});
+            };
+            if (in0_core_order_index == forward_in0_core_order_index) {
+                announce(mux_connection_handle_forward, pkt_hdrs_backward);
+                if (direct_push && sends_far) {
+                    announce(mux_connection_handle_forward, pkt_hdrs_far);
+                }
+            }
+            if (in0_core_order_index == backward_in0_core_order_index) {
+                announce(mux_connection_handle_backward, pkt_hdrs_forward);
+            }
+            noc_obj.async_writes_flushed();
+        }
+    }
+#endif
 
     // A following gather may reuse DRAM owned by the preceding collective. Its
     // remote writes must wait until every rank has entered this program. Data
@@ -298,6 +349,7 @@ void kernel_main() {
     // Every in0 core on every rank runs it symmetrically: out_ready_sem_noc0_x/y are
     // this core's own coordinates, so each core signals its counterpart on the
     // num_devices - 1 peers and waits for exactly that many arrivals in its own L1.
+#ifndef FABRIC_2D  // hop-range multicast is a 1D route; Fabric2D runs without the entry barrier
     if constexpr (topology == Topology::Ring && num_devices > 1) {
         if (barrier_sem != 0) {
             auto* barrier_connection =
@@ -320,12 +372,40 @@ void kernel_main() {
             noc_obj.async_atomic_barrier();
         }
     }
+#endif  // !FABRIC_2D
 #endif
 
     /**
      * This is a Row-Major output block ordering.
      * It enables reuse of the last in0 block when striding the output block N dimension.
      */
+
+#ifdef FABRIC_2D
+    volatile tt_l1_ptr uint32_t* out_ready_sem_far_addr_ptr =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem_far);
+    // Arrivals into this device per block: from r+1 (forward), r-1 (backward) and, for 4, r+2 (far).
+    // Writers into this device: the two neighbours (relay), plus the opposite device of a ring of 4 (push).
+    constexpr uint32_t num_push_sources = (direct_push && num_devices == 4) ? 3 : 2;
+    if constexpr (!is_linear && num_devices > 1) {
+        if (is_injector_core && barrier_sem != 0) {
+            auto* barrier_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem);
+            noc_semaphore_wait_min(barrier_ptr, num_push_sources);
+            // Consume rather than reset: a faster peer's next-launch announcement may already be here.
+            noc_semaphore_inc(get_noc_addr(barrier_sem), uint32_t{0} - num_push_sources);
+            noc_obj.async_atomic_barrier();
+        }
+    }
+    // Source offset o = (source - my_rank) mod N -> its arrival counter. The left half of a K step d comes from
+    // r+d, the right half from r-d; for N == 2 both neighbours are the same device but arrive on two counters.
+    auto left_source_sem = [&](uint32_t o) {
+        return o == 1 ? out_ready_sem_forward_addr_ptr
+                      : (o == num_devices - 1 ? out_ready_sem_backward_addr_ptr : out_ready_sem_far_addr_ptr);
+    };
+    auto right_source_sem = [&](uint32_t o) {
+        return o == num_devices - 1 ? out_ready_sem_backward_addr_ptr
+                                    : (o == 1 ? out_ready_sem_forward_addr_ptr : out_ready_sem_far_addr_ptr);
+    };
+#endif
 
     bool k_forward = true;
     bool reuse_block = false;
@@ -439,7 +519,11 @@ void kernel_main() {
                     K_tiles_per_device,
                     num_devices,
                     k_forward,
+#ifdef FABRIC_2D
+                    !direct_push && n_block_iter == 0,
+#else
                     n_block_iter == 0,
+#endif
                     out_ready_sem_forward_addr_ptr,
                     out_ready_sem_backward_addr_ptr,
                     sem_target_forward,
@@ -449,6 +533,17 @@ void kernel_main() {
                     k_left_tiles,
                     k_block_left_tile,
                     k_block_right_tile);
+#ifdef FABRIC_2D
+                if constexpr (direct_push) {
+                    // Each source pushes a block as two halves (two increments) in K order, once per M block.
+                    const uint32_t step = actual_k_block / K_blocks_per_device;
+                    if (n_block_iter == 0 && is_injector_core && step > 0) {
+                        const uint32_t target = 2 * (m_block_iter * K_blocks_per_device + device_k_block_iter + 1);
+                        noc_semaphore_wait_min(left_source_sem(step), target);
+                        noc_semaphore_wait_min(right_source_sem(num_devices - step), target);
+                    }
+                }
+#endif
                 if constexpr (is_linear) {
                     // For Linear tail, the right half is pure zero-fill padding (no real tiles).
                     // Point past the logical K end so read_in0_block_sync's `j < logical_d1` check
@@ -578,7 +673,43 @@ void kernel_main() {
                         // Ring: relay each K-block both directions every iter. Skip the last
                         // K_blocks_per_device iterations — those K-blocks have already reached
                         // all devices via wrap-around relay.
-                        if (k_block_iter < (K_num_blocks - (K_num_blocks / num_devices))) {
+#ifdef FABRIC_2D
+                        // Direct push: only this device's own blocks go out, each straight to every peer.
+                        const bool relay = !direct_push;
+                        if (direct_push && actual_k_block < K_blocks_per_device) {
+                            auto push_block = [&](auto* handle, PacketHeaders& hdrs, uint64_t sem_addr) {
+                                forward_half_block_to_fabric_neighbor(
+                                    noc_obj, m_tile, k_block_left_tile, current_M_block_tiles, k_left_tiles,
+                                    k_right_tiles, num_tiles_to_write_per_packet, in0_start_address, K_tiles,
+                                    in0_reader, handle, hdrs, in0_tile_size, sem_addr, true, M_tiles, true);
+                                forward_half_block_to_fabric_neighbor(
+                                    noc_obj, m_tile, k_block_right_tile, current_M_block_tiles, k_left_tiles,
+                                    k_right_tiles, num_tiles_to_write_per_packet, in0_start_address, K_tiles,
+                                    in0_reader, handle, hdrs, in0_tile_size, sem_addr, false, M_tiles, true);
+                            };
+                            if (in0_core_order_index == forward_in0_core_order_index) {
+                                push_block(
+                                    mux_connection_handle_forward,
+                                    pkt_hdrs_backward,
+                                    out_ready_sem_injector_noc_addr_forward_in_pkt);
+                                if (sends_far) {
+                                    push_block(
+                                        mux_connection_handle_forward,
+                                        pkt_hdrs_far,
+                                        out_ready_sem_injector_noc_addr_far_in_pkt);
+                                }
+                            }
+                            if (in0_core_order_index == backward_in0_core_order_index) {
+                                push_block(
+                                    mux_connection_handle_backward,
+                                    pkt_hdrs_forward,
+                                    out_ready_sem_injector_noc_addr_backward_in_pkt);
+                            }
+                        }
+#else
+                        const bool relay = true;
+#endif
+                        if (relay && k_block_iter < (K_num_blocks - (K_num_blocks / num_devices))) {
                             if constexpr (num_targets_backward_direction > 0) {
                                 if (in0_core_order_index == forward_in0_core_order_index) {
                                     forward_half_block_to_fabric_neighbor(
@@ -771,4 +902,9 @@ void kernel_main() {
 
     noc_semaphore_set(out_ready_sem_backward_addr_ptr, 0);
     noc_semaphore_set(out_ready_sem_forward_addr_ptr, 0);
+#ifdef FABRIC_2D
+    if (out_ready_sem_far != 0) {
+        noc_semaphore_set(out_ready_sem_far_addr_ptr, 0);
+    }
+#endif
 }
