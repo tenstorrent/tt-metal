@@ -1419,11 +1419,13 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
                 dr.partial_tiles,
                 cb_num_pages * l1_scratch_cb_page_size_bytes);
             const uint32_t packet_tiles = std::max(1u, max_payload_size_bytes / dr.partial_tile_bytes);
+            TT_FATAL(dr.n_cores <= 64 * num_links, "Ring attention dense return: at most 64 SDPA cores per link");
             writer_args.push_back(static_cast<uint32_t>(sends.size()));
             writer_args.push_back(dr.staging);
             writer_args.push_back(dr.recv);
             writer_args.push_back(is_forward ? dr.ready_minus_addr : dr.ready_plus_addr);
-            writer_args.push_back(dr.arrival_addr);
+            // Sent toward tensor rank - 1, a partial arrives there from its + side.
+            writer_args.push_back(is_forward ? dr.arrival_plus_addr : dr.arrival_minus_addr);
             writer_args.push_back(dr.n_cores);
             writer_args.push_back(dr.cores_per_head);
             writer_args.push_back(dr.n_dense_blocks);

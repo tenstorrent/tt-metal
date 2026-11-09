@@ -259,10 +259,11 @@ void kernel_main() {
         }
     };
 
-    // Dense return block: [n_sends, staging, receive, ready semaphore, arrival semaphore, cores, units per core,
-    // cores with one more, grid x, grid y, receive side, units (padded to banks), link stride, link, tiles per partial,
-    // bytes per tile, DRAM banks, tiles per packet], the NoC x of each grid column, the NoC y of each grid row, then
-    // per send (owner record k, first unit, end unit).
+    // Dense return block: [n_sends, staging, receive, ready semaphore, the receivers' arrival semaphore (this
+    // direction's side), dense cores, cores per head, dense blocks per head, grid x, grid y, receive side, units
+    // (padded to banks), link stride, link, tiles per partial, bytes per tile, DRAM banks, tiles per packet], the NoC x
+    // of each grid column, the NoC y of each grid row, then per send (owner record k, its first block in a head, its
+    // blocks).
     [[maybe_unused]] const uint32_t dense_args = arg_idx;
     if constexpr (has_dense_return) {
         const uint32_t n_sends = get_arg_val<uint32_t>(arg_idx);
@@ -686,31 +687,37 @@ void kernel_main() {
         auto* pkt_hdr_arrival = reinterpret_cast<PACKET_HEADER_TYPE*>(cb_packet_header.get_write_ptr());
         cb_packet_header.push_back(1);
         ccl_routing_utils::fabric_set_line_unicast_route(pkt_hdr_arrival, unicast_route_info);
+        // Unit by unit as the cores stage them: owners in order, then unit rank r of every core of this link before
+        // rank r + 1, so a slow core does not hold back the others. Per core the units go in order: its ready word
+        // and the neighbour core's arrival word are running counts of them.
+        constexpr uint32_t kMaxCoresPerLink = 64;
+        uint32_t sent[kMaxCoresPerLink] = {};
         for (uint32_t sidx = 0; sidx < n_sends; ++sidx) {
-            const uint32_t k = get_arg_val<uint32_t>(sends + 3 * sidx);
             const uint32_t block_offset = get_arg_val<uint32_t>(sends + 3 * sidx + 1);
             const uint32_t n_blocks = get_arg_val<uint32_t>(sends + 3 * sidx + 2);
-            for (uint32_t c = link; c < n_cores; c += stride) {
-                // Core c's units (head c / cores_per_head) and the owner's run in that head.
-                const uint32_t h = c / cores_per_head;
-                const uint32_t ci = c % cores_per_head;
-                const uint32_t base = n_dense_blocks / cores_per_head;
-                const uint32_t extra = n_dense_blocks % cores_per_head;
-                const uint32_t c_start = h * n_dense_blocks + ci * base + (ci < extra ? ci : extra);
-                const uint32_t c_end = c_start + base + (ci < extra ? 1 : 0);
-                const uint32_t us = h * n_dense_blocks + block_offset;
-                const uint32_t lo = c_start > us ? c_start : us;
-                const uint32_t hi = c_end < us + n_blocks ? c_end : us + n_blocks;
-                if (lo >= hi) {
-                    continue;
-                }
-                volatile tt_l1_ptr uint32_t* word = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scratch);
-                do {
-                    noc_async_read(core_noc(c, ready_addr), scratch, sizeof(uint32_t));
-                    noc_async_read_barrier();
-                    invalidate_l1_cache();
-                } while (((*word >> (4 * k)) & 0xFu) == 0);
-                for (uint32_t u = lo; u < hi; ++u) {
+            for (uint32_t r = 0, more = 1; more != 0; ++r) {
+                more = 0;
+                for (uint32_t c = link, j = 0; c < n_cores; c += stride, ++j) {
+                    // Core c's units (head c / cores_per_head) and the owner's run in that head.
+                    const uint32_t h = c / cores_per_head;
+                    const uint32_t ci = c % cores_per_head;
+                    const uint32_t base = n_dense_blocks / cores_per_head;
+                    const uint32_t extra = n_dense_blocks % cores_per_head;
+                    const uint32_t c_start = h * n_dense_blocks + ci * base + (ci < extra ? ci : extra);
+                    const uint32_t c_end = c_start + base + (ci < extra ? 1 : 0);
+                    const uint32_t us = h * n_dense_blocks + block_offset;
+                    const uint32_t u = (c_start > us ? c_start : us) + r;
+                    if (u >= c_end || u >= us + n_blocks) {
+                        continue;
+                    }
+                    more = 1;
+                    volatile tt_l1_ptr uint32_t* word = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scratch);
+                    do {
+                        noc_async_read(core_noc(c, ready_addr), scratch, sizeof(uint32_t));
+                        noc_async_read_barrier();
+                        invalidate_l1_cache();
+                    } while (*word <= sent[j]);
+                    ++sent[j];
                     // One DRAM read for the unit, then packets of up to packet_tiles physically contiguous tiles.
                     noc_async_read(staging.get_noc_addr(unit_page(u)), scratch, partial_tiles * tile_bytes);
                     noc_async_read_barrier();
@@ -725,12 +732,12 @@ void kernel_main() {
                             scratch + t * tile_bytes,
                             n * tile_bytes);
                     }
+                    pkt_hdr_arrival->to_noc_unicast_atomic_inc(
+                        tt::tt_fabric::NocUnicastAtomicIncCommandHeader{core_noc(c, arrival_addr), 1u});
+                    fabric_direction_connection->wait_for_empty_write_slot();
+                    fabric_direction_connection->send_payload_flush_blocking_from_address(
+                        reinterpret_cast<uint32_t>(pkt_hdr_arrival), sizeof(PACKET_HEADER_TYPE));
                 }
-                pkt_hdr_arrival->to_noc_unicast_atomic_inc(
-                    tt::tt_fabric::NocUnicastAtomicIncCommandHeader{core_noc(c, arrival_addr), 1u << (4 * k)});
-                fabric_direction_connection->wait_for_empty_write_slot();
-                fabric_direction_connection->send_payload_flush_blocking_from_address(
-                    reinterpret_cast<uint32_t>(pkt_hdr_arrival), sizeof(PACKET_HEADER_TYPE));
             }
         }
         if (n_sends > 0) {

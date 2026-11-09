@@ -228,14 +228,14 @@ void kernel_main() {
     constexpr uint32_t dense_n_ranges = get_named_compile_time_arg_val("dense_n_ranges");
     constexpr bool dense_keys = get_named_compile_time_arg_val("dense_keys") == 1;
     const uint32_t dense_ranges_base = sparse_args_base + 6 + pooled_bias_gen::kTableWords;
-    // Dense units (dense_owners > 0): [first unit, end unit, arrival semaphore, dense-Q buffer, receive buffer], then
-    // one sparse_dense::Owner record per owner shard.
+    // Dense units (dense_owners > 0): [first unit, end unit, arrivals from the - side, dense-Q buffer, receive buffer,
+    // arrivals from the + side], then one sparse_dense::Owner record per owner shard.
     constexpr uint32_t dense_owners = get_named_compile_time_arg_val("dense_owners");
     constexpr bool dense_debug = get_named_compile_time_arg_val("dense_debug") == 1;
     constexpr bool res_remap = get_named_compile_time_arg_val("res_remap") == 1;
     const uint32_t dense_base = dense_ranges_base + 2 * dense_n_ranges;
     const uint32_t group_members_base =
-        dense_base + (dense_owners > 0 ? 5 + sparse_dense::kRecordWords * dense_owners : 0);
+        dense_base + (dense_owners > 0 ? 6 + sparse_dense::kRecordWords * dense_owners : 0);
     const auto dense_lo = [&](uint32_t r) { return get_arg_val<uint32_t>(dense_ranges_base + 2 * r); };
     const auto dense_hi = [&](uint32_t r) { return get_arg_val<uint32_t>(dense_ranges_base + 2 * r + 1); };
     const auto in_dense = [&](uint32_t g) {
@@ -1060,16 +1060,18 @@ void kernel_main() {
     }
 
     // Dense units, after every pass (every shard, and so every slab, has arrived): per batch the Q blocks, the plan
-    // and the local pieces (run_iteration), then each partial arriving from a neighbour, unit by unit, for compute to
-    // merge (not in dense_debug).
+    // and the local pieces (run_iteration), then each unit's arriving partials (- side, then + side) for compute to
+    // merge, each as soon as its side's running arrival count reaches it (not in dense_debug).
     if constexpr (dense_owners > 0) {
         constexpr uint32_t kPartialTiles = sparse_dense::partial_tiles<Sq_chunk_t, vDHt>();
         constexpr uint32_t cb_dense_in = get_named_compile_time_arg_val("cb_dense_in");
         constexpr uint32_t dense_units = get_named_compile_time_arg_val("dense_units");
-        const uint32_t arrival_addr = get_arg_val<uint32_t>(dense_base + 2);
+        // Running counts of partials arrived from the - and + side (one sender each, units in a fixed order) and
+        // consumed.
+        const uint32_t arrival_addr[2] = {get_arg_val<uint32_t>(dense_base + 2), get_arg_val<uint32_t>(dense_base + 5)};
+        uint32_t consumed[2] = {0, 0};
         const auto recv_reader = TensorAccessor(dense_recv_args, get_arg_val<uint32_t>(dense_base + 4));
         constexpr uint32_t partial_tile_bytes = get_tile_size(cb_dense_in);
-        bool any_arrivals = false;
         constexpr uint32_t n_dense_blocks = get_named_compile_time_arg_val("dense_blocks_total");
         // The K/V CBs back to their base with dummy entries (compute pops them the same way, by kv_pos), so the dense
         // groups' members, whose resident streams differed, are in pointer lockstep again; the dense groups count
@@ -1091,13 +1093,13 @@ void kernel_main() {
         }
         sparse_dense::for_each_batch(
             dense_owners,
-            dense_base + 5,
+            dense_base + 6,
             get_arg_val<uint32_t>(dense_base),
             get_arg_val<uint32_t>(dense_base + 1),
             n_dense_blocks,
             resident_slots,
             [](uint32_t a) { return get_arg_val<uint32_t>(a); },
-            [&](uint32_t k, const sparse_dense::Owner& o, uint32_t u0, uint32_t u1, bool first, bool) {
+            [&](uint32_t, const sparse_dense::Owner& o, uint32_t u0, uint32_t u1, bool, bool) {
                 DenseBatch db;
                 db.count = u1 - u0;
                 db.local = o.shard == ring_index;
@@ -1110,23 +1112,17 @@ void kernel_main() {
                 }
                 run_iteration(ring_index, 0, 0, &db);
                 if constexpr (!dense_debug) {
-                    if (o.n_up() == 0) {
-                        return;
-                    }
-                    any_arrivals = true;
-                    if (first) {
-                        // Arrival counts: 4 bits per owner record, one increment per arriving neighbour.
-                        auto* arrivals = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(arrival_addr);
-                        do {
-                            invalidate_l1_cache();
-                        } while (((*arrivals >> (4 * k)) & 0xFu) < o.n_up());
-                    }
                     CircularBuffer cb_in(cb_dense_in);
-                    for (uint32_t side = 0; side < 2; ++side) {
-                        if (((o.up_sides >> side) & 1u) == 0) {
-                            continue;
-                        }
-                        for (uint32_t u = u0; u < u1; ++u) {
+                    for (uint32_t u = u0; u < u1; ++u) {
+                        for (uint32_t side = 0; side < 2; ++side) {
+                            if (((o.up_sides >> side) & 1u) == 0) {
+                                continue;
+                            }
+                            auto* arrived = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(arrival_addr[side]);
+                            do {
+                                invalidate_l1_cache();
+                            } while (*arrived <= consumed[side]);
+                            ++consumed[side];
                             // The unit's pages are contiguous in one bank (sparse_dense::banked_page): one read.
                             constexpr uint32_t n_banks = get_named_compile_time_arg_val("dense_banks");
                             constexpr uint32_t units_padded = (dense_units + n_banks - 1) / n_banks * n_banks;
@@ -1143,8 +1139,10 @@ void kernel_main() {
                 }
             });
         if constexpr (!dense_debug) {
-            if (any_arrivals) {
-                *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(arrival_addr) = 0;
+            for (uint32_t side = 0; side < 2; ++side) {
+                if (consumed[side] != 0) {
+                    *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(arrival_addr[side]) = 0;
+                }
             }
         }
     }
