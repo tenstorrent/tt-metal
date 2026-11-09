@@ -729,14 +729,6 @@ def process_input(
         features = np.rot90(features, -1, axes=(1, 2)).copy()
         return features
 
-    def _scale_crop(image: Image.Image, scale: int, start_x: int, crop_x: int, start_y: int, crop_y: int) -> np.ndarray:
-        width, height = image.width // scale, image.height // scale
-        if scale != 1:
-            image = image.resize((width, height))
-        image_array = np.asarray(image)
-        cropped_image = image_array[start_y : start_y + crop_y, start_x : start_x + crop_x]
-        return cropped_image
-
     def _shift_x_scale_crop(image: Image.Image, scale: int, crop: tuple[int, int], crop_shift: int = 0) -> np.ndarray:
         crop_h, crop_w = crop
         width, height = int(image.width // scale), int(image.height // scale)
@@ -754,30 +746,14 @@ def process_input(
     rgb_path = os.path.join(data_root, "rgb", f"{frame}.png")
     if not os.path.exists(rgb_path):
         raise FileNotFoundError(f"RGB image not found: {rgb_path}")
+    # The dataset stores the three cameras as one 160x960 image; the model takes its centre 704 columns.
     rgb_image = Image.open(rgb_path).convert("RGB")
-    rgb_array = np.array(rgb_image)
-    rgb_bgr = cv2.cvtColor(rgb_array, cv2.COLOR_RGB2BGR)
-
-    rgb_cameras: list[np.ndarray] = []
-    for _ in ("left", "front", "right"):
-        rgb_pos = cv2.cvtColor(rgb_bgr[:, :, :3], cv2.COLOR_BGR2RGB)
-        rgb_pos = _scale_crop(
-            Image.fromarray(rgb_pos),
-            int(config.scale),
-            0,
-            int(config.img_resolution[1]),
-            0,
-            int(config.img_resolution[0]),
-        )
-        rgb_cameras.append(rgb_pos)
-
-    rgb_concatenated = np.concatenate(rgb_cameras, axis=1)
 
     image_degrees = []
     for degree in aug_degrees:
         crop_shift = degree / 60 * float(config.img_width)
         processed_image = _shift_x_scale_crop(
-            Image.fromarray(rgb_concatenated),
+            rgb_image,
             scale=int(config.scale),
             crop=(int(config.img_resolution[0]), int(config.img_resolution[1])),
             crop_shift=crop_shift,
@@ -810,8 +786,18 @@ def process_input(
     speed = measurements.get("speed", 0.0)
     velocity_tensor = torch.tensor([[speed]], dtype=torch.float32)
 
-    # Target point and target point image
-    target_point = torch.tensor([[0.0, 0.0]], dtype=torch.float32)
+    # Route target: the recorded command point in the ego frame
+    ego_theta = measurements["theta"]
+    rotation = np.array(
+        [
+            [np.cos(np.pi / 2 + ego_theta), -np.sin(np.pi / 2 + ego_theta)],
+            [np.sin(np.pi / 2 + ego_theta), np.cos(np.pi / 2 + ego_theta)],
+        ]
+    )
+    local_command_point = np.array(
+        [measurements["x_command"] - measurements["x"], measurements["y_command"] - measurements["y"]]
+    )
+    target_point = torch.tensor(rotation.T.dot(local_command_point), dtype=torch.float32).unsqueeze(0)
 
     def _draw_target_point(target_point_np: np.ndarray, color: tuple = (255, 255, 255)) -> np.ndarray:
         image = np.zeros((256, 256), dtype=np.uint8)
