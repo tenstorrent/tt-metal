@@ -304,8 +304,9 @@ protected:
         if (this->IsSkipped()) {
             return;
         }
-        if (fixture_device().arch() != tt::ARCH::WORMHOLE_B0) {
-            GTEST_SKIP() << "Requires Wormhole hardware";
+        // These tests use Gen1 kernels; Quasar coverage is in QuasarDFBPlacementHardwareTest.
+        if (fixture_device().arch() != tt::ARCH::WORMHOLE_B0 && fixture_device().arch() != tt::ARCH::BLACKHOLE) {
+            GTEST_SKIP() << "Requires Gen1 (Wormhole or Blackhole) hardware";
         }
         if (fixture_device().compute_with_storage_grid_size().x < 2) {
             GTEST_SKIP() << "Requires two worker columns";
