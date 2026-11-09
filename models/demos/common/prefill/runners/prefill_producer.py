@@ -1722,8 +1722,13 @@ def main() -> None:
 
     kv_table = _read_kv_chunk_table(timeout_s) if cfg.verify else None
 
-    # Without verification the completions are left to whatever consumer owns the channel.
-    completion_channel = connect_layer_completion_channel(timeout_s) if cfg.verify else None
+    # Without verification the completions are left to whatever consumer owns the channel, unless asked to drain
+    # them: a feeder that is the only consumer (the quad screen) must, or the runner blocks on a full ring.
+    drain_acks = os.environ.get("PREFILL_PRODUCER_DRAIN_ACKS", "0") == "1"
+    completion_channel = connect_layer_completion_channel(timeout_s) if cfg.verify or drain_acks else None
+    if drain_acks and completion_channel is None:
+        logger.error("[producer] PREFILL_PRODUCER_DRAIN_ACKS=1 but the LayerAck channel is missing.")
+        sys.exit(1)
     if cfg.verify and completion_channel is None:
         logger.error(
             "[producer] CHECK_PCC=1 but LayerAck channel missing — UMD read would race the runner's "
@@ -1731,7 +1736,7 @@ def main() -> None:
             "either the runner is not up yet or it died before wiring acks."
         )
         sys.exit(1)
-    if not cfg.verify:
+    if not cfg.verify and not drain_acks:
         logger.info(
             "[producer] CHECK_PCC off — skipping the KV table read and not consuming the completion "
             "channel (pure token feeder; the real consumer owns it). Some consumer must be attached, or "
@@ -1817,6 +1822,10 @@ def main() -> None:
             logger.info(f"[producer] rank={r}: ok={v}")
         verify_ok = all(verdicts)
 
+    if drain_acks and not cfg.verify and received_completions != expected_completions:
+        logger.error(f"[producer] layer completions: received {received_completions}/{expected_completions}")
+        verify_ok = False
+
     if os.environ.get("PREFILL_SEND_SHUTDOWN", "0") == "1":
         rows, mtp_rows, sentinel = _shutdown_payload()
         assert len(sentinel) == CHUNK_METADATA_SIZE_BYTES
@@ -1827,7 +1836,7 @@ def main() -> None:
     else:
         logger.info("[producer] exiting (the runner keeps its sync-op loop running).")
 
-    if cfg.verify and not verify_ok:
+    if (cfg.verify or drain_acks) and not verify_ok:
         sys.exit(1)
 
 
