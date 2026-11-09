@@ -113,3 +113,36 @@ def test_prod_dims_block_float(dim, npu_dtype, device):
     ref = torch.prod(torch_input, dim=dim)
     ref = ttnn.to_torch(ttnn.from_torch(ref, dtype=npu_dtype, layout=ttnn.TILE_LAYOUT, device=device))
     assert torch.allclose(out, ref, atol=1e-2), f"dim={dim} {npu_dtype}: expected {ref}, got {out}"
+
+
+def test_prod_preallocated_output_layout(device, expect_error):
+    """A matching TILE preallocated output is exact; a ROW_MAJOR one must be rejected.
+
+    prod_nc writes tile pages into the preallocated output. A ROW_MAJOR output of the same
+    padded shape used to pass validation and read back as a permutation of the result (and
+    wrote past the RM pages), so the layout is now checked next to the dtype check.
+    """
+    torch.manual_seed(2023)
+    torch_input = (torch.randint(0, 2, (2, TILE_HEIGHT, TILE_HEIGHT, TILE_HEIGHT)) * 2 - 1).to(torch.bfloat16).float()
+    tt_input = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+
+    # Products of +/-1 over 64 elements are exactly +/-1, so the control is exact.
+    ref = torch_input.prod(dim=0).prod(dim=0).reshape(1, 1, TILE_HEIGHT, TILE_WIDTH)
+
+    tt_out = ttnn.from_torch(
+        torch.zeros(1, 1, TILE_HEIGHT, TILE_WIDTH, dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+    )
+    ttnn.prod(input_tensor=tt_input, output_tensor=tt_out, dims=[0, 1])
+    assert torch.equal(ttnn.to_torch(tt_out).float(), ref), "TILE preallocated output must stay exact"
+
+    tt_out_rm = ttnn.from_torch(
+        torch.zeros(1, 1, TILE_HEIGHT, TILE_WIDTH, dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+    )
+    with expect_error(RuntimeError, "requires the preallocated output to be TILE layout"):
+        ttnn.prod(input_tensor=tt_input, output_tensor=tt_out_rm, dims=[0, 1])
