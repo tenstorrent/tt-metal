@@ -101,8 +101,9 @@ def runner_cmd(repo: Path, hosts: list[str], mode: str, fabric: str, results_dir
         "PREFILL_QUAD_RESULTS_DIR": str(results_dir),
         "PREFILL_NUM_LAYERS": str(LAYERS_PER_STAGE * len(hosts)),
         "PREFILL_NUM_USERS": str(SLOTS),
-        # A device hang raises in the rank instead of blocking forever, and the rank file records it.
-        "TT_METAL_OPERATION_TIMEOUT_SECONDS": "120",
+        # No device-op timeout, as in CI: a downstream rank legitimately waits on its inbound socket until upstream
+        # stages finish their first chunk. gwdt's own watchdog (STALL_S) decides what is a hang.
+        "TT_METAL_OPERATION_TIMEOUT_SECONDS": "0",
     }
     argv = [
         "python3",
@@ -124,9 +125,10 @@ def runner_cmd(repo: Path, hosts: list[str], mode: str, fabric: str, results_dir
 
 
 def producer_cmd(
-    repo: Path, rank0: str, mode: str, n_hosts: int, tokens_dir: Path, duration_s: int | None, max_requests: int | None
+    repo: Path, mode: str, n_hosts: int, tokens_dir: Path, duration_s: int | None, max_requests: int | None
 ) -> str:
-    """The H2D feeder runs on rank 0's host: it attaches to rank 0's H2D service and drains the ack ring."""
+    """The H2D feeder script. It must run on rank 0's host (it attaches to rank 0's H2D service and drains the ack
+    ring there); it is one plain process, so it goes over ssh rather than through MPI."""
     exports = _common_env(repo) | {
         "PREFILL_MODEL": f"quad_{mode}",
         "PREFILL_NUM_USERS": str(SLOTS),
@@ -143,10 +145,7 @@ def producer_cmd(
     }
     if duration_s is not None:
         exports["PREFILL_PRODUCER_DURATION_S"] = str(duration_s)
-    argv = ["mpirun", "-np", "1", "--host", f"{rank0}:1", "--bind-to", "none", "--tag-output"]
-    argv += ["-x", "PATH", "-x", "LD_LIBRARY_PATH", "bash", "-lc"]
-    argv.append(_bash(repo, exports, "python3 -m models.demos.common.prefill.runners.prefill_producer"))
-    return shlex.join(argv)
+    return _bash(repo, exports, "python3 -m models.demos.common.prefill.runners.prefill_producer")
 
 
 def vocab_size(repo: Path) -> int:
@@ -190,13 +189,47 @@ def ring_order(repo: Path, hosts: list[str]) -> list[str] | None:
         text=True,
     )
     try:
-        return json.loads(out.stdout)["ordered_hosts"]
+        ordered = json.loads(out.stdout)["ordered_hosts"]
     except (ValueError, KeyError, TypeError):
         return None
+    # The helper prints the order comma-joined.
+    return ordered.split(",") if isinstance(ordered, str) else list(ordered)
 
 
 def setup_ranks(log_text: str) -> set[int]:
     return {int(m.group(1)) for m in _SETUP.finditer(log_text)}
+
+
+class BringupWatch:
+    """Which ranks finished bring-up, and whether the wait since the last one is another process holding chips.
+    Only log text since the last rank got ready counts: a lock wait that cleared earlier is not a blocker."""
+
+    def __init__(self, n_ranks: int, now: float):
+        self.n_ranks, self.ready, self.last_ready, self.recent = n_ranks, set(), now, ""
+
+    def feed(self, text: str, now: float) -> None:
+        got = setup_ranks(text)
+        if got - self.ready:
+            self.ready |= got
+            self.last_ready = now
+            self.recent = text[list(_SETUP.finditer(text))[-1].end() :]
+        else:
+            self.recent = (self.recent + text)[-(1 << 20) :]
+
+    def blocker(self, now: float) -> str | None:
+        return bringup_blocker(self.recent) if now - self.last_ready > KMD_LOCK_S else None
+
+
+def bringup_rows(ready: set[int], hosts_by_rank: list[str], hung: bool, errors: dict | None = None):
+    """Per-stage rows when the run never got past bring-up: the ranks that did not get ready are the finding."""
+    rows = []
+    for k, host in enumerate(hosts_by_rank):
+        if k in ready:
+            rows.append((f"stage {k} {host}", Result(Status.PASS, "bring-up done")))
+            continue
+        why = (errors or {}).get(k) or "did not finish bring-up"
+        rows.append((f"stage {k} {host}", Result(Status.HANG if hung else Status.FAIL, f"galaxy {k} ({host}): {why}")))
+    return rows
 
 
 def bringup_blocker(log_text: str) -> str | None:
@@ -209,14 +242,18 @@ def bringup_blocker(log_text: str) -> str | None:
     return None
 
 
-def rank0_host(ttrun_cwd: Path, hosts: list[str]) -> str:
-    """tt-run's discovery decides which host is rank 0; its rankfile says so."""
+def rank_hosts(ttrun_cwd: Path, hosts: list[str]) -> list[str]:
+    """Host of each rank. tt-run's discovery assigns ranks to hosts, so its rankfile, not --hosts, says which."""
     rankfiles = sorted(ttrun_cwd.glob("generated/ttrun/*/rankfile"), key=lambda p: p.stat().st_mtime)
     if rankfiles:
-        m = re.search(r"^rank\s+0=(\S+)", rankfiles[-1].read_text(), re.M)
-        if m:
-            return m.group(1)
-    return hosts[0]
+        found = {int(r): h for r, h in re.findall(r"^rank\s+(\d+)=(\S+)", rankfiles[-1].read_text(), re.M)}
+        if sorted(found) == list(range(len(hosts))):
+            return [found[r] for r in range(len(hosts))]
+    return list(hosts)
+
+
+def rank0_host(ttrun_cwd: Path, hosts: list[str]) -> str:
+    return rank_hosts(ttrun_cwd, hosts)[0]
 
 
 def _is_local(host: str) -> bool:
@@ -242,8 +279,11 @@ def reset_hosts(repo: Path, hosts: list[str], d: Path) -> Result:
         for n in range(1, RESET_TRIES + 1):
             log = d / f"reset_{_short(host)}{'' if n == 1 else f'.retry{n}'}.log"
             with open(log, "w") as f:
-                if subprocess.run(_host_cmd(host, cmd), stdout=f, stderr=subprocess.STDOUT, timeout=900).returncode == 0:
-                    return
+                try:
+                    if subprocess.run(_host_cmd(host, cmd), stdout=f, stderr=subprocess.STDOUT, timeout=900).returncode == 0:
+                        return
+                except subprocess.TimeoutExpired:
+                    f.write("\nreset timed out after 900s\n")
         failed.append(host)
 
     threads = [threading.Thread(target=one, args=(h,)) for h in hosts]
@@ -317,16 +357,14 @@ def run_once(
     notes: list[str] = []
     try:
         runner = _spawn(runner_cmd(ctx.repo, hosts, mode, fabric, results), runner_log, ttrun_cwd, ctx.repo)
-        follow, ready, start = _Follower(runner_log), set(), time.time()
-        last_ready = start
+        follow, start = _Follower(runner_log), time.time()
+        watch = BringupWatch(len(hosts), start)
+        ready = watch.ready
         while len(ready) < len(hosts):
-            now_ready = ready | setup_ranks(follow.read())
-            if now_ready != ready:
-                ready, last_ready = now_ready, time.time()
-            blocker = bringup_blocker(follow.text) if time.time() - last_ready > KMD_LOCK_S else None
+            watch.feed(follow.read(), time.time())
+            blocker = watch.blocker(time.time())
             if blocker is not None:
-                r = Result(Status.FAIL, f"{blocker}; log {runner_log}")
-                return r
+                return Result(Status.FAIL, f"{blocker}; log {runner_log}")
             state.now = f"bring-up {len(ready)}/{len(hosts)} ranks ready ({fabric})"
             ctx.tick()
             if runner.poll() is not None:
@@ -338,8 +376,8 @@ def run_once(
                 break
             time.sleep(POLL_S)
         if len(ready) == len(hosts):
-            rank0 = rank0_host(ttrun_cwd, hosts)
-            cmd = producer_cmd(ctx.repo, rank0, mode, len(hosts), tokens, duration_s, max_requests)
+            script = producer_cmd(ctx.repo, mode, len(hosts), tokens, duration_s, max_requests)
+            cmd = shlex.join(_host_cmd(rank0_host(ttrun_cwd, hosts), script))
             producer = _spawn(cmd, producer_log, ttrun_cwd, ctx.repo)
             fed = time.time()
             while producer.poll() is None:
@@ -367,10 +405,21 @@ def run_once(
         _kill(runner)
 
     ranks = load_ranks(results, len(hosts))
+    by_rank = rank_hosts(ttrun_cwd, hosts)
+    if producer is None:
+        errors = {k: r["error"] for k, r in ranks.items() if r and r["error"]}
+        rows = bringup_rows(ready, by_rank, hung, errors)
+        r = overall(rows, hung)
+        if r.status == Status.PASS:
+            r = Result(Status.FAIL, "bring-up did not finish")
+        r.reason = f"{r.reason}; {'; '.join(notes)}" if notes else r.reason
+        r.details = [f"{label}: {res.reason}" for label, res in rows]
+        state.rows = [res for _, res in rows]
+        return r
     # A rank stuck short of its shutdown is a hang; every rank done but the job not exiting is teardown only.
     all_done = all(r is not None and r["done"] for r in ranks.values())
     hung = hung or (shutdown_stuck and not all_done)
-    rows = stage_verdicts(ranks, load_hashes(results, len(hosts)), hosts, hung)
+    rows = stage_verdicts(ranks, load_hashes(results, len(hosts)), by_rank, hung)
     r = overall(rows, hung)
     if r.status == Status.PASS and shutdown_stuck:
         r = Result(Status.WARN, "every stage passed; the runner hung in teardown")

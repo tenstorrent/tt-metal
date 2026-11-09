@@ -64,10 +64,7 @@ def test_mgd_by_host_count_and_fabric():
 
 
 def test_producer_cmd_budget_and_drain():
-    cmd = producer_cmd(REPO, "h2", "block_random", 4, Path("/r/tokens"), duration_s=300, max_requests=None)
-    argv = shlex.split(cmd)
-    assert argv[argv.index("--host") + 1] == "h2:1"
-    inner = _inner(cmd)
+    inner = producer_cmd(REPO, "block_random", 4, Path("/r/tokens"), duration_s=300, max_requests=None)
     for kv in (
         "PREFILL_MODEL=quad_block_random",
         "PREFILL_NUM_LAYERS=8",
@@ -81,9 +78,15 @@ def test_producer_cmd_budget_and_drain():
         "PREFILL_H2D_SERVICE_ID=quad_screen",
     ):
         assert f"export {kv};" in inner
-    fixed = _inner(producer_cmd(REPO, "h0", "passthrough", 1, Path("/t"), duration_s=None, max_requests=3))
+    assert "mpirun" not in inner
+    fixed = producer_cmd(REPO, "passthrough", 1, Path("/t"), duration_s=None, max_requests=3)
     assert "export PREFILL_PRODUCER_MAX_REQUESTS=3;" in fixed and "PREFILL_PRODUCER_DURATION_S" not in fixed
     assert "export PREFILL_NUM_LAYERS=2;" in fixed
+
+
+def test_producer_runs_on_rank0_host_over_ssh():
+    argv = gwdt_quad._host_cmd("far-host", "echo hi")
+    assert argv[0] == "ssh" and "far-host" in argv and argv[-1] == "bash -lc 'echo hi'"
 
 
 def test_write_tokens_deterministic(tmp_path):
@@ -108,7 +111,7 @@ def test_setup_ranks():
 def test_rank0_host_from_rankfile(tmp_path):
     d = tmp_path / "generated" / "ttrun" / "abc"
     d.mkdir(parents=True)
-    (d / "rankfile").write_text("rank 1=h0 slot=0\nrank 0=h3 slot=0\n")
+    (d / "rankfile").write_text("rank 1=h0 slot=0\nrank 0=h3 slot=0\nrank 2=h1 slot=0\nrank 3=h2 slot=0\n")
     assert rank0_host(tmp_path, HOSTS) == "h3"
     assert rank0_host(tmp_path / "none", HOSTS) == "h0"
 
@@ -209,7 +212,62 @@ def test_same_prompt_rotates_over_more_slots_than_chunks_in_flight():
     from gwdt_quad import CHUNKS, SLOTS
 
     run = _inner(runner_cmd(REPO, HOSTS, "passthrough", "2d_torus_xy", Path("/r")))
-    feed = _inner(producer_cmd(REPO, "h0", "passthrough", 4, Path("/t"), duration_s=None, max_requests=3))
+    feed = producer_cmd(REPO, "passthrough", 4, Path("/t"), duration_s=None, max_requests=3)
     assert f"export PREFILL_NUM_USERS={SLOTS};" in run and f"export PREFILL_NUM_USERS={SLOTS};" in feed
     # In flight on a quad: 8 forwards in the H2D FIFO, about two per stage in the D2D path, one being pushed.
     assert SLOTS * CHUNKS > 8 + 2 * 4 + 1
+
+
+def test_ring_order_parses_the_helpers_comma_joined_string(monkeypatch, tmp_path):
+    import subprocess
+
+    out = json.dumps({"status": "success", "ordered_hosts": "h1,h2,h3,h0", "checked_at": "x"})
+    monkeypatch.setattr(gwdt_quad, "DESCRIPTORS", tmp_path)
+    for f in ("cabling_descriptor.textproto", "deployment_descriptor.textproto"):
+        (tmp_path / f).write_text("")
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: subprocess.CompletedProcess(a, 0, stdout=out, stderr=""))
+    ring = gwdt_quad.ring_order(REPO, HOSTS)
+    assert ring == ["h1", "h2", "h3", "h0"]
+    assert chain_ok(HOSTS, ring)
+
+
+def test_reset_timeout_is_a_failure(monkeypatch, tmp_path):
+    import subprocess
+
+    def hang(*a, **k):
+        raise subprocess.TimeoutExpired(a[0], 900)
+
+    monkeypatch.setattr(subprocess, "run", hang)
+    r = gwdt_quad.reset_hosts(REPO, ["far-host"], tmp_path)
+    assert r.status == Status.FAIL and "far-host" in r.reason
+
+
+def test_rank_hosts_from_rankfile(tmp_path):
+    d = tmp_path / "generated" / "ttrun" / "abc"
+    d.mkdir(parents=True)
+    (d / "rankfile").write_text("rank 0=h2 slot=0\nrank 1=h0 slot=0\nrank 2=h1 slot=0\nrank 3=h3 slot=0\n")
+    assert gwdt_quad.rank_hosts(tmp_path, HOSTS) == ["h2", "h0", "h1", "h3"]
+    assert gwdt_quad.rank_hosts(tmp_path / "none", HOSTS) == HOSTS
+
+
+def test_bringup_rows_name_the_ranks_that_never_got_ready():
+    rows = gwdt_quad.bringup_rows({0, 1, 3}, ["h0", "h1", "h2", "h3"], hung=True)
+    assert [r.status for _, r in rows] == [Status.PASS, Status.PASS, Status.HANG, Status.PASS]
+    assert rows[2][0] == "stage 2 h2" and "bring-up" in rows[2][1].reason
+    rows = gwdt_quad.bringup_rows({0}, ["h0", "h1"], hung=False)
+    assert rows[1][1].status == Status.FAIL
+
+
+def test_old_kmd_lock_line_does_not_block_once_a_rank_got_ready():
+    w = gwdt_quad.BringupWatch(n_ranks=2, now=0)
+    w.feed("Waiting for KMD lock 20 on /dev/tenstorrent/0, which is currently held by another handle\n", now=10)
+    w.feed("[pp rank 0] setup complete, entering request loop\n", now=20)
+    assert w.blocker(now=20 + gwdt_quad.KMD_LOCK_S + 1) is None
+    w.feed("Waiting for KMD lock 3 on /dev/tenstorrent/1, which is currently held by another handle\n", now=30)
+    assert w.blocker(now=20 + gwdt_quad.KMD_LOCK_S + 1) is not None
+    assert w.ready == {0}
+
+
+def test_runner_has_no_device_op_timeout():
+    run = _inner(runner_cmd(REPO, HOSTS, "block_random", "2d_torus_xy", Path("/r")))
+    assert "export TT_METAL_OPERATION_TIMEOUT_SECONDS=0;" in run

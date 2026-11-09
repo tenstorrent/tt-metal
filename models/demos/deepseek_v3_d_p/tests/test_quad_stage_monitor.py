@@ -130,3 +130,13 @@ def test_fail_records_error(tmp_path):
     mon = _monitor(tmp_path)
     mon.fail("RuntimeError: boom")
     assert _doc(tmp_path)["error"] == "RuntimeError: boom"
+
+
+def test_one_dead_chip_in_baseline_fails(tmp_path):
+    mon = _monitor(tmp_path)
+    mon.check("input", 0, _shards(1))
+    out = _shards(2)
+    out[5] = torch.zeros_like(out[5])
+    mon.check("output", 0, out)
+    doc = _doc(tmp_path)
+    assert "all zeros" in doc["error"] and "(1,1)" in doc["error"]

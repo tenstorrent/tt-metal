@@ -105,11 +105,14 @@ class StageMonitor:
 
     def _set_baseline(self, key, it: int, shards: list[torch.Tensor]) -> None:
         # Bit-identity against an all-zero or non-finite baseline proves nothing.
-        floats = [s for s in shards if s.is_floating_point()]
-        if floats and not all(torch.isfinite(s).all() for s in floats):
-            self.fail(f"iteration {it} {key[0]} chunk {key[1]} is not finite")
-        elif not any(s.any() for s in shards):
-            self.fail(f"iteration {it} {key[0]} chunk {key[1]} is all zeros")
+        # Checked per device: one dead chip's zeros would otherwise become its baseline and then match forever.
+        coords = lambda idx: ",".join(f"({i // self.mesh_cols},{i % self.mesh_cols})" for i in idx)
+        bad = [i for i, s in enumerate(shards) if s.is_floating_point() and not torch.isfinite(s).all()]
+        zero = [i for i, s in enumerate(shards) if not s.any()]
+        if bad:
+            self.fail(f"iteration {it} {key[0]} chunk {key[1]} is not finite on chips {coords(bad)}")
+        elif zero:
+            self.fail(f"iteration {it} {key[0]} chunk {key[1]} is all zeros on chips {coords(zero)}")
         self.baseline[key] = [s.clone() for s in shards]
 
     def _compare(self, what: str, chunk: int, it: int, shards, ref) -> None:
