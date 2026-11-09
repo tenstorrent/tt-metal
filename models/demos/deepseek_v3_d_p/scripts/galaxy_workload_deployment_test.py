@@ -6,6 +6,7 @@
 """galaxy-workload-deployment-test: gates, matmul ND runs, then per-model block -> smoke -> soak on a Blackhole Galaxy.
 
 Usage: galaxy_workload_deployment_test.py [--co] [--skip KEY[,KEY] | --only KEY[,KEY]] [--models kimi_k2_7,glm53]
+       galaxy_workload_deployment_test.py --quad --hosts H0,H1,H2,H3 [--soak-minutes N] [--co] [--skip/--only KEYS]
 """
 
 import argparse
@@ -19,6 +20,7 @@ import time
 from datetime import datetime
 from pathlib import Path
 
+import gwdt_quad
 from gwdt_checks import TOOL_NAME, Result, Status, dur, layer_label, log_root, run_name
 from gwdt_steps import MODEL_ENV, MODEL_LABEL, MODEL_LAYERS, Ctx, Step, build_steps, run_all
 
@@ -49,6 +51,12 @@ COLOR = {
 def device_rows(r: Result) -> list[tuple[str, Result]]:
     rows = [d.partition(": ") for d in r.details]
     return [(label, Result(Status.FAIL, why)) for label, _, why in rows]
+
+
+def quad_rows(state) -> list[tuple[str, Result]]:
+    """Per-stage rows of a quad run: labels from the result's details, statuses from state.rows."""
+    labels = [d.partition(": ")[0] for d in state.result.details]
+    return [(label, r) for label, r in zip(labels, state.rows)]
 
 
 class Screen:
@@ -84,6 +92,17 @@ class Screen:
                 r = Result(f.result.status, f"{change}  {f.result.reason}".rstrip())
                 out.append(self.model_row(5, f"fallback {i}", r, f.start, f.end))
                 out += [self.model_row(7, label, r) for label, r in device_rows(f.result)]
+        quad = [s for s in self.steps if s.group == "quad"]
+        if quad:
+            out += ["", "QUAD PREFILL RUNNER"]
+        for s in quad:
+            out.append(self.model_row(3, s.title, s.state.result, s.state.start, s.state.end))
+            out += [self.model_row(5, label, r) for label, r in quad_rows(s.state)]
+            for i, f in enumerate(s.state.fallbacks, 1):
+                change = " ".join(f"{k}={v}" for k, v in f.env.items())
+                r = Result(f.result.status, f"{change}  {f.result.reason}".rstrip())
+                out.append(self.model_row(5, f"fallback {i}", r, f.start, f.end))
+                out += [self.model_row(7, label, r) for label, r in quad_rows(f)]
         models = list(dict.fromkeys(s.model for s in self.steps if s.model))
         if models:
             out += ["", "MODELS"]
@@ -210,15 +229,34 @@ def main(argv: list[str] | None = None) -> int:
     pick.add_argument("--skip", default="", help="comma-separated step keys, e.g. soak:kimi_k2_7,matmul:ff1")
     pick.add_argument("--only", default="", help="run exactly these step keys, e.g. reset,block:kimi_k2_7")
     ap.add_argument("--models", default=",".join(MODEL_ENV), help="comma-separated: " + ",".join(MODEL_ENV))
+    ap.add_argument(
+        "--quad",
+        action="store_true",
+        help="weight-free prefill-runner screen across galaxies (one pipeline stage per host) instead of the "
+        "single-galaxy steps; needs --hosts",
+    )
+    ap.add_argument("--hosts", default="", help="--quad: 1 or 4 hosts, comma-separated, in physical ring order")
+    ap.add_argument("--soak-minutes", type=int, default=15, help="--quad: block-random soak length (default 15)")
     args = ap.parse_args(argv)
 
     repo = Path(os.environ.get("TT_METAL_HOME") or Path(__file__).resolve().parents[4])
+    if args.quad:
+        hosts = [h for h in args.hosts.split(",") if h]
+        if len(hosts) not in (1, 4):
+            print("--quad needs --hosts with 1 or 4 hosts, in physical ring order")
+            return 2
+        ring = gwdt_quad.ring_order(repo, hosts) if len(hosts) > 1 else None
+        if ring is not None and not gwdt_quad.chain_ok(hosts, ring):
+            print(f"--hosts {args.hosts} is not in physical ring order; the cabling descriptors say: {','.join(ring)}")
+            return 2
+        if len(hosts) > 1 and ring is None:
+            print("note: no cabling descriptors to check the --hosts order; trusting it")
     commit = subprocess.run(
         ["git", "-C", str(repo), "rev-parse", "--short", "HEAD"], capture_output=True, text=True
     ).stdout.strip()
     host = socket.gethostname().split(".")[0]
     run = run_name(datetime.now(), host, commit or "nogit")
-    steps = build_steps(args.models.split(","))
+    steps = gwdt_quad.build_quad_steps(hosts, args.soak_minutes * 60) if args.quad else build_steps(args.models.split(","))
     try:
         skip = skipped_keys([s.key for s in steps], args.skip, args.only)
     except ValueError as e:
