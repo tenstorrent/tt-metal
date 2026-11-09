@@ -507,7 +507,8 @@ jobs:
       dev-docker-image: ${{ needs.build-docker-images.outputs.dev-tag }}
       force-scan: true
       post-pr-suggestions: ${{ github.event_name == 'pull_request' }}
-      check-harbor-runs-on: ${{ github.event_name == 'merge_group' && 'tt-ubuntu-light-prio' || 'tt-ubuntu-light' }}
+      # TEMP: GitHub-hosted; self-hosted runners are unavailable.
+      check-harbor-runs-on: ubuntu-latest
 
   # LLK PR Labeling — auto-apply labels based on which LLK directories changed
   llk-label-pr:

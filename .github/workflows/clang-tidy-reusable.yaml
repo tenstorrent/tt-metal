@@ -37,8 +37,8 @@ jobs:
   clang-tidy:
     name: 🤖 Clang Tidy ${{ inputs.scan-targets && format('({0})', inputs.scan-targets) || '' }}
     timeout-minutes: 240
-    # Prio runner pool is reserved for merge-queue traffic.
-    runs-on: ${{ github.event_name == 'merge_group' && 'tt-ubuntu-2204-large-prio-stable' || 'tt-ubuntu-2204-large-stable' }}
+    # TEMP: GitHub-hosted 32-core runner; self-hosted runners are unavailable.
+    runs-on: tt-gh-linux-32-core
     environment: ${{ github.ref == 'refs/heads/main' && 'mainline' || '' }}
     permissions:
       pull-requests: write
@@ -129,7 +129,10 @@ jobs:
         # Same fork gate as ccache: forks have no secrets so skip silently.
         # ctcache is writable from all non-fork refs (including PR branches)
         # so repeated commits to a branch benefit from cached clang-tidy results.
-        if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false }}
+        # TEMP: skipped on GitHub-hosted runners. It exports the in-cluster HTTP(S)_PROXY to
+        # every later step, which breaks all network access off-cluster. Without it the
+        # wrapper runs plain clang-tidy, as for fork PRs.
+        if: ${{ false && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false) }}
         run: |
           # ctcache is not published on PyPI — install from pinned commit SHA (tag 1.2.0)
           # Pinned to SHA (not tag) to avoid supply-chain risk from mutable git tags
