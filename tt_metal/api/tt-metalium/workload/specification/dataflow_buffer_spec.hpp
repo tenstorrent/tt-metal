@@ -51,8 +51,6 @@
 //
 // PLACEMENT: Derived — the DFB's effective node set is the union of its bound
 //   kernels' WorkUnitSpec target_nodes.
-//   Advanced users may restrict where backing memory is allocated through
-//   DFBAdvancedOptions::override_placement.
 //
 // HW RESOURCES: 1st-gen architectures (1xx; Wormhole and Blackhole) support a fixed
 //   number of DFBs per node. On 2nd-gen (2xx), the DFB-per-node-limit depends on the
