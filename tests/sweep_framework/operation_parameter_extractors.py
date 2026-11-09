@@ -806,8 +806,8 @@ class OperationParameterExtractors:
             return None
 
     @staticmethod
-    def _extract_nlp_concat_heads_decode_parameters(config: List) -> Optional[Dict]:
-        """Extract parameters for nlp_concat_heads_decode operation"""
+    def _extract_concat_heads_decode_parameters(config: List) -> Optional[Dict]:
+        """Extract parameters for concat_heads_decode operation"""
         try:
             num_heads = None
             for arg in config:
@@ -1943,17 +1943,27 @@ OperationParameterExtractors.register_extractor(
 )
 
 OperationParameterExtractors.register_extractor(
+    "concat_heads_decode",
+    extract_func=OperationParameterExtractors._extract_concat_heads_decode_parameters,
+)
+OperationParameterExtractors.register_extractor(
+    "experimental::concat_heads_decode",
+    extract_func=OperationParameterExtractors._extract_concat_heads_decode_parameters,
+)
+OperationParameterExtractors.register_extractor(
+    "ttnn::experimental::concat_heads_decode",
+    extract_func=OperationParameterExtractors._extract_concat_heads_decode_parameters,
+)
+# traces recorded before the rename carry the old name
+for _old_name in (
     "nlp_concat_heads_decode",
-    extract_func=OperationParameterExtractors._extract_nlp_concat_heads_decode_parameters,
-)
-OperationParameterExtractors.register_extractor(
     "experimental::nlp_concat_heads_decode",
-    extract_func=OperationParameterExtractors._extract_nlp_concat_heads_decode_parameters,
-)
-OperationParameterExtractors.register_extractor(
     "ttnn::experimental::nlp_concat_heads_decode",
-    extract_func=OperationParameterExtractors._extract_nlp_concat_heads_decode_parameters,
-)
+):
+    OperationParameterExtractors.register_extractor(
+        _old_name,
+        extract_func=OperationParameterExtractors._extract_concat_heads_decode_parameters,
+    )
 
 OperationParameterExtractors.register_extractor(
     "transpose",

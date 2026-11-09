@@ -478,6 +478,8 @@ if "ttnn.experimental" in sys.modules:
 
 # ttnn.operations registers its submodules under bare names, so importing ttnn.operations.unary here
 # would execute unary.py a second time and let its goldens override later registrations.
+import ttnn.experimental_renames  # old nlp_* names of the heads operations, deprecated
+
 from ttnn._ttnn.operations.unary import SigmoidMode, GeluVariant
 
 divide = ttnn.div

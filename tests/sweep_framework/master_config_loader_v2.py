@@ -699,6 +699,22 @@ def dict_to_memory_config(mem_cfg):
     return ttnn.MemoryConfig(layout, buffer_type_ttnn, shard_spec)
 
 
+# Operations renamed after traces were recorded: new name -> name in the traces.
+RENAMED_OPERATIONS = {
+    "concat_heads": "nlp_concat_heads",
+    "concat_heads_decode": "nlp_concat_heads_decode",
+    "concat_heads_boltz": "nlp_concat_heads_boltz",
+    "create_qkv_heads": "nlp_create_qkv_heads",
+    "create_q_heads_split": "nlp_create_q_heads_split",
+    "create_qkv_heads_decode": "nlp_create_qkv_heads_decode",
+    "create_qkv_heads_falcon7b": "nlp_create_qkv_heads_falcon7b",
+    "create_qkv_heads_vit": "nlp_create_qkv_heads_vit",
+    "create_qkv_heads_segformer": "nlp_create_qkv_heads_segformer",
+    "create_qkv_heads_boltz": "nlp_create_qkv_heads_boltz",
+    "kv_cache_load_slice": "nlp_kv_cache_load_slice",
+}
+
+
 class MasterConfigLoader:
     """Loads and converts master JSON configurations to sweep test parameters
 
@@ -897,7 +913,7 @@ class MasterConfigLoader:
         Handles common patterns like:
         - "add" matches ["add", "ttnn::add"]
         - "linear" matches ["linear", "ttnn::linear"]
-        - "nlp_create_qkv_heads" matches ["nlp_create_qkv_heads", "experimental::nlp_create_qkv_heads", "ttnn::experimental::nlp_create_qkv_heads"]
+        - "create_qkv_heads" matches ["create_qkv_heads", "experimental::create_qkv_heads", "ttnn::experimental::create_qkv_heads"]
 
         Args:
             operation_name: The operation name to check
@@ -914,7 +930,10 @@ class MasterConfigLoader:
             f"transformer::{base_name}",
             f"ttnn::transformer::{base_name}",
         ]
-        return operation_name in variants
+        if operation_name in variants:
+            return True
+        old_name = RENAMED_OPERATIONS.get(base_name)
+        return old_name is not None and self._matches_operation(operation_name, old_name)
 
     def __init__(self, master_file_path: str = None):
         """Initialize the MasterConfigLoader for V2 format.
@@ -973,6 +992,16 @@ class MasterConfigLoader:
                 self.master_data = {"operations": {}}
 
     def get_operation_configs(self, operation_name: str) -> List[List[Dict]]:
+        """Get all configurations for a specific operation, falling back to its pre-rename name"""
+        configs = self._get_operation_configs_by_name(operation_name)
+        if configs:
+            return configs
+        for new_name, old_name in RENAMED_OPERATIONS.items():
+            if operation_name == new_name or operation_name.endswith(("::" + new_name, "." + new_name)):
+                return self._get_operation_configs_by_name(operation_name[: -len(new_name)] + old_name)
+        return configs
+
+    def _get_operation_configs_by_name(self, operation_name: str) -> List[List[Dict]]:
         """Get all configurations for a specific operation"""
         self.load_master_data()
 
@@ -996,7 +1025,7 @@ class MasterConfigLoader:
                 configs = self.master_data["operations"][experimental_full_op_name].get("configurations", [])
                 return self._normalize_configs(configs)
 
-        # Try with experimental:: or experimental. namespace (e.g., experimental::nlp_concat_heads)
+        # Try with experimental:: or experimental. namespace (e.g., experimental::concat_heads)
         if operation_name.startswith("experimental::") or operation_name.startswith("experimental."):
             # Get the base name without experimental prefix
             if "::" in operation_name:
