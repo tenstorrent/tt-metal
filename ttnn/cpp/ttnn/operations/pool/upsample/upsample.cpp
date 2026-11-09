@@ -123,6 +123,16 @@ ttnn::Tensor upsample(
 
     // For bilinear mode, call halo preprocessing step before the upsample operation
     if (mode == "bilinear") {
+        // The halo config sizes its output as input_hw * scale, and it runs before prim::upsample
+        // validates the scale. A scale below 1 therefore truncates to a zero-sized halo output and
+        // segfaults while building shard boundaries. Reject it here, mirroring the scale check in
+        // UpsampleOperation::validate_on_program_cache_miss (upsample_device_operation.cpp:50).
+        TT_FATAL(
+            scale_h >= 1.0f && scale_w >= 1.0f,
+            "bilinear upsample requires scale factors >= 1, got ({}, {})",
+            scale_h,
+            scale_w);
+
         // Autoshard if needed
         ttnn::Tensor input_for_halo = input_tensor;
         tt::tt_metal::MemoryConfig output_mem_config_to_use = mem_config;
