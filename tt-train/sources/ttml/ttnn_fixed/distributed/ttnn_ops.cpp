@@ -4,6 +4,7 @@
 
 #include "ttnn_ops.hpp"
 
+#include <deque>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
@@ -193,8 +194,64 @@ ttnn::Tensor mesh_partition(const ttnn::Tensor& tensor, const int dim, const std
     return ttnn::mesh_partition(tensor, dim, cluster_axis, /* memory_config */ std::nullopt);
 }
 
-ttnn::Tensor ring_shift(
-    const ttnn::Tensor& tensor, const std::optional<uint32_t> cluster_axis, const RingShiftDirection direction) {
+namespace {
+
+// Socket connections of one ring shift. `ring` holds every device -> its neighbour; `even_to_odd` / `odd_to_even`
+// split them by the parity of the sender's ring position.
+struct RingShiftConnections {
+    core::distributed::IntraMeshParameters ring;
+    core::distributed::IntraMeshParameters even_to_odd;
+    core::distributed::IntraMeshParameters odd_to_even;
+};
+
+// Built once per (mesh shape, axis, direction): ring attention shifts with the same few settings every step.
+const RingShiftConnections& get_ring_shift_connections(
+    const tt::tt_metal::distributed::MeshShape& mesh_shape, const uint32_t cluster_axis, const bool forward) {
+    struct Entry {
+        tt::tt_metal::distributed::MeshShape mesh_shape;
+        uint32_t cluster_axis;
+        bool forward;
+        RingShiftConnections connections;
+    };
+    static std::deque<Entry> cache;  // a deque keeps the returned references valid as it grows
+    for (const auto& entry : cache) {
+        if (entry.mesh_shape == mesh_shape && entry.cluster_axis == cluster_axis && entry.forward == forward) {
+            return entry.connections;
+        }
+    }
+
+    const uint32_t ring_size = mesh_shape[cluster_axis];
+    const auto send_recv_core = tt::tt_metal::CoreCoord(0, 0);
+    RingShiftConnections connections;
+    for (const auto& sender_coord : ttnn::MeshCoordinateRange(mesh_shape)) {
+        const uint32_t idx = sender_coord[cluster_axis];
+        const uint32_t target_idx = forward ? (idx + 1) % ring_size : (idx + ring_size - 1) % ring_size;
+
+        tt::tt_fabric::MeshCoordinate recv_coord = sender_coord;
+        recv_coord[cluster_axis] = target_idx;
+
+        const tt::tt_metal::distributed::SocketConnection connection(
+            tt::tt_metal::distributed::MeshCoreCoord{sender_coord, send_recv_core},
+            tt::tt_metal::distributed::MeshCoreCoord{recv_coord, send_recv_core});
+        connections.ring.connections.push_back(connection);
+        auto& parity_connections = (idx % 2U == 0U) ? connections.even_to_odd : connections.odd_to_even;
+        parity_connections.connections.push_back(connection);
+    }
+    cache.push_back(Entry{mesh_shape, cluster_axis, forward, std::move(connections)});
+    return cache.back().connections;
+}
+
+// Bytes one device sends for `tensor`.
+uint64_t per_device_bytes(const ttnn::Tensor& tensor) {
+    return tensor.buffer()->aligned_size();
+}
+
+}  // namespace
+
+std::vector<ttnn::Tensor> ring_shift(
+    const std::vector<ttnn::Tensor>& tensors,
+    const std::optional<uint32_t> cluster_axis,
+    const RingShiftDirection direction) {
     auto& ctx = ttml::autograd::ctx();
     auto& socket_manager = ctx.get_socket_manager();
     auto distributed_ctx = ctx.get_distributed_context();
@@ -214,53 +271,67 @@ ttnn::Tensor ring_shift(
     TT_FATAL(ring_size % 2 == 0, "ring_shift requires an even number of devices in the ring, got {}", ring_size);
 
     if (ring_size <= 1U) {
-        return tensor;
+        return tensors;
     }
 
-    auto output_tensor = ttnn::empty_like(tensor);
+    const auto& connections =
+        get_ring_shift_connections(mesh_shape, cluster_axis_value, direction == RingShiftDirection::Forward);
 
-    const uint32_t num_devices = mesh_shape.mesh_size();
-
-    // Build connections for even->odd and odd->even transfers separately
-    // This two-phase approach avoids deadlock since send is blocking
-    const auto send_recv_core = tt::tt_metal::CoreCoord(0, 0);
-    std::vector<tt::tt_metal::distributed::SocketConnection> even_to_odd_connections;
-    std::vector<tt::tt_metal::distributed::SocketConnection> odd_to_even_connections;
-    even_to_odd_connections.reserve(num_devices / 2);
-    odd_to_even_connections.reserve(num_devices / 2);
-
-    const bool forward = (direction == RingShiftDirection::Forward);
-    for (const auto& sender_coord : ttnn::MeshCoordinateRange(mesh_shape)) {
-        const uint32_t idx = sender_coord[cluster_axis_value];
-        const uint32_t target_idx = forward ? (idx + 1) % ring_size : (idx + ring_size - 1) % ring_size;
-
-        tt::tt_fabric::MeshCoordinate recv_coord = sender_coord;
-        recv_coord[cluster_axis_value] = target_idx;
-
-        auto& target_connections = (idx % 2U == 0U) ? even_to_odd_connections : odd_to_even_connections;
-        target_connections.emplace_back(
-            tt::tt_metal::distributed::MeshCoreCoord{sender_coord, send_recv_core},
-            tt::tt_metal::distributed::MeshCoreCoord{recv_coord, send_recv_core});
+    std::vector<ttnn::Tensor> outputs;
+    outputs.reserve(tensors.size());
+    for (const auto& tensor : tensors) {
+        outputs.push_back(ttnn::empty_like(tensor));
     }
 
     // For intra-mesh, we use same distributed context and rank (same host)
     const core::distributed::InterHostParameters inter_host_params{distributed_ctx, distributed_ctx->rank()};
 
     // No host synchronization: each send/recv waits only on its peer, through the socket's flow-control state on
-    // device. This stays deadlock-free because every device issues the same socket ops in the same order (per shift,
-    // one send or recv per phase, phase 1 before phase 2), so a blocked op only ever waits on an op that is earlier in
-    // that order. Re-check this if the sends and recvs below are reordered.
-    // Phase 1: Even positions send, odd positions receive
-    const core::distributed::IntraMeshParameters even_to_odd_params{even_to_odd_connections};
-    socket_manager.send(tensor, inter_host_params, even_to_odd_params);
-    output_tensor = socket_manager.recv(output_tensor, inter_host_params, even_to_odd_params);
+    // device. Every device issues the same socket ops in the same order, and the tensors move in groups of two
+    // kinds:
+    // - A round, over the ring socket: every device sends its tensors of the round, then receives them. The round's
+    //   bytes fit in the receiver's FIFO, so a send waits only for its receiver to drain earlier groups, never for a
+    //   recv of its own round, and both parities transfer at once.
+    // - A tensor too large for a round, in two phases over the parity sockets: even positions send while odd ones
+    //   receive, then odd send while even receive. Here a send can wait for its receiver's recv in the same phase,
+    //   which is the receiver's next socket op.
+    // So a blocked op only ever waits on an earlier group, or, within a phase, on the receiver's next op. Re-check
+    // this if the sends and recvs below are reordered or the round budget is raised. Half the FIFO leaves room for
+    // the block alignment of each op.
+    const uint64_t round_budget = core::distributed::SocketManager::intra_mesh_fifo_size() / 2U;
+    size_t begin = 0;
+    while (begin < tensors.size()) {
+        uint64_t round_bytes = per_device_bytes(tensors[begin]);
+        if (round_bytes > round_budget) {
+            // Phase 1: Even positions send, odd positions receive
+            socket_manager.send(tensors[begin], inter_host_params, connections.even_to_odd);
+            outputs[begin] = socket_manager.recv(outputs[begin], inter_host_params, connections.even_to_odd);
+            // Phase 2: Odd positions send, even positions receive
+            socket_manager.send(tensors[begin], inter_host_params, connections.odd_to_even);
+            outputs[begin] = socket_manager.recv(outputs[begin], inter_host_params, connections.odd_to_even);
+            ++begin;
+            continue;
+        }
+        size_t end = begin + 1;
+        while (end < tensors.size() && round_bytes + per_device_bytes(tensors[end]) <= round_budget) {
+            round_bytes += per_device_bytes(tensors[end]);
+            ++end;
+        }
+        for (size_t i = begin; i < end; ++i) {
+            socket_manager.send(tensors[i], inter_host_params, connections.ring);
+        }
+        for (size_t i = begin; i < end; ++i) {
+            outputs[i] = socket_manager.recv(outputs[i], inter_host_params, connections.ring);
+        }
+        begin = end;
+    }
 
-    // Phase 2: Odd positions send, even positions receive
-    const core::distributed::IntraMeshParameters odd_to_even_params{odd_to_even_connections};
-    socket_manager.send(tensor, inter_host_params, odd_to_even_params);
-    output_tensor = socket_manager.recv(output_tensor, inter_host_params, odd_to_even_params);
+    return outputs;
+}
 
-    return output_tensor;
+ttnn::Tensor ring_shift(
+    const ttnn::Tensor& tensor, const std::optional<uint32_t> cluster_axis, const RingShiftDirection direction) {
+    return ring_shift(std::vector<ttnn::Tensor>{tensor}, cluster_axis, direction).front();
 }
 
 }  // namespace ttml::ttnn_fixed::distributed

@@ -67,6 +67,9 @@ public:
         const InterHostParameters& inter_host_params,
         const IntraMeshParameters& intra_mesh_params);
 
+    // FIFO size in bytes of each receiver of an intra-mesh socket.
+    [[nodiscard]] static uint32_t intra_mesh_fifo_size();
+
 private:
     std::unique_ptr<ISocket> create_socket(std::shared_ptr<DistributedContext> distributed_ctx, Rank rank);
     std::unique_ptr<ttnn::distributed::BidirectionalFabricSocket> create_intra_mesh_socket(

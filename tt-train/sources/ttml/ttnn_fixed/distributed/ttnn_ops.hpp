@@ -48,4 +48,13 @@ ttnn::Tensor ring_shift(
     const std::optional<uint32_t> cluster_axis = std::nullopt,
     const RingShiftDirection direction = RingShiftDirection::Forward);
 
+/**
+ * Ring shift of several tensors in one call, as if each were shifted by ring_shift above, in order.
+ * Returns the received tensors in the order of `tensors`.
+ */
+std::vector<ttnn::Tensor> ring_shift(
+    const std::vector<ttnn::Tensor>& tensors,
+    const std::optional<uint32_t> cluster_axis = std::nullopt,
+    const RingShiftDirection direction = RingShiftDirection::Forward);
+
 }  // namespace ttml::ttnn_fixed::distributed

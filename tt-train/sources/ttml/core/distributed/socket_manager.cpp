@@ -100,6 +100,10 @@ ttnn::Tensor SocketManager::recv(
     return tensor;
 }
 
+uint32_t SocketManager::intra_mesh_fifo_size() {
+    return _make_socket_mem_config().fifo_size;
+}
+
 ISocket* SocketManager::get_socket(
     const InterHostParameters& inter_host_params, const IntraMeshParameters& intra_mesh_params) {
     bool is_intra_mesh = (inter_host_params.distributed_ctx->rank() == inter_host_params.rank);

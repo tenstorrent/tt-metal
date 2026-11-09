@@ -172,10 +172,12 @@ autograd::TensorPtr ring_attention_sdpa(
         global_lse = new_lse;
 
         if (step < ring_size - 1) {
-            k_current = ttnn_fixed::distributed::ring_shift(
-                k_current, cp_axis_value, ttnn_fixed::distributed::RingShiftDirection::Backward);
-            v_current = ttnn_fixed::distributed::ring_shift(
-                v_current, cp_axis_value, ttnn_fixed::distributed::RingShiftDirection::Backward);
+            auto shifted = ttnn_fixed::distributed::ring_shift(
+                std::vector<ttnn::Tensor>{k_current, v_current},
+                cp_axis_value,
+                ttnn_fixed::distributed::RingShiftDirection::Backward);
+            k_current = std::move(shifted[0]);
+            v_current = std::move(shifted[1]);
         }
     }
 
@@ -260,17 +262,15 @@ autograd::TensorPtr ring_attention_sdpa(
             // K/V: replays the forward pass in reverse (gets K/V for previous step)
             // grad_K/V: routes accumulated gradients back to correct device
             if (step > 0) {
-                // Shift K/V forward to get position for next backward iteration
-                k_current = ttnn_fixed::distributed::ring_shift(
-                    k_current, cp_axis_value, ttnn_fixed::distributed::RingShiftDirection::Forward);
-                v_current = ttnn_fixed::distributed::ring_shift(
-                    v_current, cp_axis_value, ttnn_fixed::distributed::RingShiftDirection::Forward);
-
-                // Shift grad accumulators
-                grad_K_accum = ttnn_fixed::distributed::ring_shift(
-                    grad_K_accum, cp_axis_value, ttnn_fixed::distributed::RingShiftDirection::Forward);
-                grad_V_accum = ttnn_fixed::distributed::ring_shift(
-                    grad_V_accum, cp_axis_value, ttnn_fixed::distributed::RingShiftDirection::Forward);
+                // Shift K/V forward to get position for next backward iteration, and the grad accumulators with them
+                auto shifted = ttnn_fixed::distributed::ring_shift(
+                    std::vector<ttnn::Tensor>{k_current, v_current, grad_K_accum, grad_V_accum},
+                    cp_axis_value,
+                    ttnn_fixed::distributed::RingShiftDirection::Forward);
+                k_current = std::move(shifted[0]);
+                v_current = std::move(shifted[1]);
+                grad_K_accum = std::move(shifted[2]);
+                grad_V_accum = std::move(shifted[3]);
             }
         }
 

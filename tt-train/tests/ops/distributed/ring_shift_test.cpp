@@ -307,3 +307,66 @@ TEST_F(GalaxyRingShiftTest, ChainedShiftsLargerThanSocketFifoAlongColumns) {
     TestChainedRingShifts(
         1, 4 * 45056, 1024, /*cluster_axis=*/1, /*shard_dim=*/2, /*num_shifts=*/3, /*both_directions=*/false);
 }
+
+// Several tensors per ring_shift call, chained with no host sync. ring_shift moves them in rounds over one socket
+// for the whole ring while a round fits in half the 80 MiB FIFO, and moves a tensor larger than that in two phases.
+// Per device: 16 MiB bf16, 16 MiB fp32, 16 MiB bf16 (rounds of 32 + 16 MiB), then 48 MiB bf16 (two phases), then
+// 4 MiB fp32 (a round of its own). Every tensor must end where num_shifts single shifts would put it.
+static void TestBatchedRingShifts(const uint32_t cluster_axis, const uint32_t num_shifts) {
+    using namespace ttml;
+
+    auto* device = &autograd::ctx().get_device();
+    const auto mesh_shape = device->shape();
+    const uint32_t mesh_rows = mesh_shape[0];
+    const uint32_t mesh_cols = mesh_shape[1];
+    const uint32_t ring_size = mesh_shape[cluster_axis];
+    constexpr size_t hidden = 1024;
+
+    struct Spec {
+        size_t rows_per_device;
+        bool fp32;
+    };
+    const std::vector<Spec> specs = {{8192, false}, {4096, true}, {8192, false}, {24576, false}, {1024, true}};
+
+    auto& rng = autograd::ctx().get_generator();
+    const auto mapper = ttnn::distributed::shard_tensor_to_mesh_mapper(*device, /*dim=*/2, cluster_axis);
+    std::vector<ttnn::Tensor> tensors;
+    std::vector<std::vector<xt::xarray<float>>> originals;
+    for (const auto& spec : specs) {
+        const xt::xarray<float> data = ttml::test_utils::make_uniform_xarray<float>(
+            std::array<std::size_t, 4>{1UL, 1UL, spec.rows_per_device * ring_size, hidden}, -1.0F, 1.0F, rng());
+        tensors.push_back(
+            spec.fp32
+                ? core::from_xtensor<float, ttnn::DataType::FLOAT32>(data, device, ttnn::Layout::TILE, mapper.get())
+                : core::from_xtensor<float, ttnn::DataType::BFLOAT16>(data, device, ttnn::Layout::TILE, mapper.get()));
+        originals.push_back(core::to_xtensor<float>(tensors.back(), core::IdentityComposer{}));
+    }
+
+    for (uint32_t i = 0; i < num_shifts; ++i) {
+        tensors = ttnn_fixed::distributed::ring_shift(tensors, cluster_axis, RingShiftDirection::Forward);
+    }
+
+    const uint32_t k = num_shifts % ring_size;
+    for (size_t t = 0; t < tensors.size(); ++t) {
+        const auto out = core::to_xtensor<float>(tensors[t], core::IdentityComposer{});
+        for (uint32_t row = 0; row < mesh_rows; ++row) {
+            for (uint32_t col = 0; col < mesh_cols; ++col) {
+                const size_t device_idx = row * mesh_cols + col;
+                // Forward: device i ends with the data of device (i - k).
+                const uint32_t pos = cluster_axis == 0 ? row : col;
+                const uint32_t src = (pos + ring_size - k) % ring_size;
+                const size_t src_idx = cluster_axis == 0 ? src * mesh_cols + col : row * mesh_cols + src;
+                EXPECT_TRUE(xt::allclose(originals[t][src_idx], out[device_idx], 0.0F, 0.0F))
+                    << "Tensor " << t << " mismatch on device " << device_idx;
+            }
+        }
+    }
+}
+
+TEST_F(GalaxyRingShiftTest, BatchedShiftsAlongRowsNoHostSync) {
+    TestBatchedRingShifts(/*cluster_axis=*/0, /*num_shifts=*/3);
+}
+
+TEST_F(GalaxyRingShiftTest, BatchedShiftsAlongColumnsNoHostSync) {
+    TestBatchedRingShifts(/*cluster_axis=*/1, /*num_shifts=*/3);
+}
