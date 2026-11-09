@@ -67,15 +67,8 @@ inline std::pair<bool, AttentionMaskType> get_device_execution_info(
 
 // How the sequence is laid out across the ring, which sets each device's work per step.
 // - Contiguous: rank d holds a contiguous slice of the sequence (get_device_execution_info).
-// - Striped:    causal load balancing. Global token p lives on rank p mod N as local row
-//               p div N, so rank d's row l is global l*N + d. For the K/V of rank src, key m is
-//               visible to query l iff m*N + src <= l*N + d, i.e.
-//                 src <= d: m <= l, exactly the kernel's causal mask on the query;
-//                 src >  d: m <  l (strict), computed as causal on the query shifted up one row
-//                           (Q'[r] = Q[r + 1], last row zero): kernel row r is query r + 1 and
-//                           sees m <= r. Its outputs are in these shifted row coordinates.
-//               Every device runs a causal block of the same shape at every step, so no device
-//               idles and the causal critical path is balanced.
+// - Striped:    token p lives on rank p mod N (causal load balancing). Every step runs causal:
+//               on the query for src <= d, on the query shifted up one row for src > d.
 enum class RingSchedule : uint8_t { Contiguous = 0, Striped = 1 };
 
 // Work of one device at one ring step: whether it runs, with which mask, and whether it
