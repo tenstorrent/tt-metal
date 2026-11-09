@@ -157,6 +157,10 @@ static bool run_test_bandwidth_bidir(
         },
     };
     using namespace std::chrono_literals;
+    if (getenv("ETH_TEST_PRECOMPILE")) {
+        precompile(fixture, cores, programs);
+        return true;
+    }
     wait_to_finish_eth_timeout_cores(fixture, cores, programs, 100ms);
 
     double threshold = get_eth_bw() * 0.7;

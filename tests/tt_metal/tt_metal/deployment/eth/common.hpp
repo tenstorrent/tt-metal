@@ -246,12 +246,10 @@ static void track_eth_progress_timeout_cores(
 }
 
 template <typename FIXTURE>
-[[maybe_unused]]
-static void wait_to_finish_eth_timeout_cores(
+static std::map<std::shared_ptr<distributed::MeshDevice>, std::shared_ptr<distributed::MeshWorkload>> precompile(
     FIXTURE* fixture,
     std::span<struct core_setup> cores,
-    std::map<std::shared_ptr<distributed::MeshDevice>, std::shared_ptr<tt_metal::Program>>& programs,
-    const std::chrono::duration<uint64_t, std::milli>& poll_period = 10ms) {
+    std::map<std::shared_ptr<distributed::MeshDevice>, std::shared_ptr<tt_metal::Program>>& programs) {
     /* ==================== */
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
@@ -263,6 +261,25 @@ static void wait_to_finish_eth_timeout_cores(
 
     for (const auto& [dev, workload] : devices) {
         programs[dev]->impl().compile(dev.get());
+    }
+
+    return devices;
+}
+
+template <typename FIXTURE>
+[[maybe_unused]]
+static void wait_to_finish_eth_timeout_cores(
+    FIXTURE* fixture,
+    std::span<struct core_setup> cores,
+    std::map<std::shared_ptr<distributed::MeshDevice>, std::shared_ptr<tt_metal::Program>>& programs,
+    const std::chrono::duration<uint64_t, std::milli>& poll_period = 10ms) {
+    /* ==================== */
+    auto zero_coord = distributed::MeshCoordinate(0, 0);
+    auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
+    std::map<std::shared_ptr<distributed::MeshDevice>, std::shared_ptr<distributed::MeshWorkload>> devices =
+        precompile(fixture, cores, programs);
+
+    for (const auto& [dev, workload] : devices) {
         devices[dev]->add_program(device_range, std::move(*programs[dev]));
     }
 
