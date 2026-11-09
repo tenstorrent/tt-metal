@@ -102,6 +102,9 @@ def _stage(k: int, doc: dict | None, prev: dict | None, hashes: dict, hung: bool
         hit = _hash_link_mismatch(hashes[k - 1], hashes[k], mesh_cols)
         if hit is not None:
             h, devices = hit
+            upstream = (prev or {}).get("first_bad")
+            if upstream is not None and upstream["what"] == "output":
+                return Result(Status.FAIL, f"received != sent at {_where(h)}; follows stage {k - 1} output")
             return Result(Status.FAIL, f"{_link(k)}: received != sent at {_where(h)}, {chips(devices)}")
     if hung and not doc.get("done"):
         last_in, last_out = _pos(doc.get("last_in")), _pos(doc.get("last_out"))

@@ -164,3 +164,14 @@ def test_load_hashes_skips_torn_last_line(tmp_path):
     good = {"iter": 0, "chunk": 0, "in": ["a"], "out": ["b"]}
     (tmp_path / "rank0.hashes.jsonl").write_text(json.dumps(good) + "\n" + '{"iter": 0, "ch')
     assert load_hashes(tmp_path, 1) == {0: [good]}
+
+
+def test_hash_mismatch_after_upstream_output_mismatch_blames_upstream():
+    out = _bad("output", [[0, 1]], it=0, chunk=0)
+    hashes = {
+        0: [{"iter": 0, "chunk": 0, "in": ["t"] * 3, "out": ["aa", "bb", "cc"]}],
+        1: [{"iter": 0, "chunk": 0, "in": ["aa", "XX", "cc"], "out": ["aa", "bb", "cc"]}],
+    }
+    rows = stage_verdicts(_ranks({0: _rank(0, first_bad=out, mismatches=[out])}), hashes, HOSTS, hung=False)
+    assert "galaxy 0 (h0) compute" in rows[0][1].reason
+    assert "follows stage 0" in rows[1][1].reason and "link" not in rows[1][1].reason
