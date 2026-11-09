@@ -85,7 +85,7 @@ ttnn::device_operation::ProgramArtifacts moreh_nll_loss_unreduced_backward_impl_
     const auto& input_grad_spec = input_grad.tensor_spec();
     auto input_grad_shape = input_grad_spec.padded_shape();
     auto N = input_grad_shape[0];
-    uint32_t channel_size = input_grad_shape[1];
+    uint32_t channel_size = input_grad_spec.logical_shape()[1];
 
     const bool weight_has_value = weight.has_value();
 
@@ -145,7 +145,7 @@ ttnn::device_operation::ProgramArtifacts moreh_nll_loss_unreduced_backward_impl_
         .compiler_options = {.defines = std::move(reader_defines)},
         .runtime_arg_schema =
             {
-                .runtime_arg_names = {"ignore_index", "num_tiles_per_core", "start_id", "Nt", "Ct"},
+                .runtime_arg_names = {"ignore_index", "num_tiles_per_core", "start_id", "Nt", "C", "Ct"},
             },
         .hw_config = ttnn::create_reader_datamovement_config(),
     };
@@ -232,6 +232,7 @@ ttnn::device_operation::ProgramArtifacts moreh_nll_loss_unreduced_backward_impl_
                 {"num_tiles_per_core", units_per_core},
                 {"start_id", tile_offset},
                 {"Nt", Nt},
+                {"C", channel_size},
                 {"Ct", Ct},
             });
 
@@ -272,10 +273,10 @@ ttnn::device_operation::ProgramArtifacts moreh_nll_loss_unreduced_backward_impl_
     // input_grad: (N, C, W)
     const auto& input_grad_spec = input_grad.tensor_spec();
     auto input_grad_shape = input_grad_spec.padded_shape();
-    uint32_t channel_size = input_grad_shape[1];
+    uint32_t channel_size = input_grad_spec.logical_shape()[1];
 
     auto W = input_grad_shape[-1];
-    auto Ct = channel_size / tt::constants::TILE_HEIGHT;
+    auto Ct = tt::div_up(channel_size, tt::constants::TILE_HEIGHT);
     auto Wt = W / tt::constants::TILE_WIDTH;
 
     const bool weight_has_value = weight.has_value();
@@ -331,7 +332,7 @@ ttnn::device_operation::ProgramArtifacts moreh_nll_loss_unreduced_backward_impl_
         .compiler_options = {.defines = std::move(reader_defines)},
         .runtime_arg_schema =
             {
-                .runtime_arg_names = {"ignore_index", "num_tiles_per_core", "start_id", "Ct", "Wt"},
+                .runtime_arg_names = {"ignore_index", "num_tiles_per_core", "start_id", "C", "Ct", "Wt"},
             },
         .hw_config = ttnn::create_reader_datamovement_config(),
     };
@@ -416,6 +417,7 @@ ttnn::device_operation::ProgramArtifacts moreh_nll_loss_unreduced_backward_impl_
                 {"ignore_index", ignore_index},
                 {"num_tiles_per_core", units_per_core},
                 {"start_id", tile_offset},
+                {"C", channel_size},
                 {"Ct", Ct},
                 {"Wt", Wt},
             });
