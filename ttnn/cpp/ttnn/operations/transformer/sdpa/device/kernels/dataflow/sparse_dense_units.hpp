@@ -4,10 +4,10 @@
 
 // Dense rows split across devices by key shard (dense_blocks). Every device computes every dense unit (owner shard o,
 // head h, dense Q block b of o) against its own K/V shard. Units are head-major: u = h x n_dense_blocks + the block's
-// place in the shard-ordered list of every owner's dense blocks; split flat over the cores, most cores hold units of
-// one head, and those of a head share its local K/V pieces by group multicast; the raw partial states move toward the
-// owner one ring hop at a time, are merged on the way, and the owner normalizes them into its output. The reader,
-// compute and writer walk the same batches (dense_for_each_batch) and the program factory builds the same records.
+// place in the shard-ordered list of every owner's dense blocks; a core holds units of one head, so the cores of a head
+// can share its local K/V pieces by group multicast; the raw partial states move toward the owner one ring hop
+// at a time, are merged on the way, and the owner normalizes them into its output. The reader, compute and writer
+// walk the same batches (dense_for_each_batch) and the program factory builds the same records.
 
 #pragma once
 
@@ -96,9 +96,9 @@ uint32_t resident_block(uint32_t s, uint32_t c, uint32_t nb, uint32_t nb_pad, In
     return 0;
 }
 
-// The core's units [du_start, du_end) in batches of at most `slots`, never across owners or heads, owner by owner and,
-// within an owner, head by head (the order the forwarding writer sends them in): fn(k, owner, first unit, end unit,
-// first batch, last batch). Unit u is head u / n_dense_blocks, block u % n_dense_blocks - owner.block_offset.
+// The core's units [du_start, du_end), all of one head (the factory never splits a core across heads), in batches of
+// at most `slots`, never across owners: fn(k, owner, first unit, end unit, first batch of the owner, last batch of the
+// owner). Unit u is block u % n_dense_blocks - owner.block_offset of the owner, head u / n_dense_blocks.
 template <typename ReadArg, typename Fn>
 void for_each_batch(
     uint32_t n_owners,
@@ -109,16 +109,15 @@ void for_each_batch(
     uint32_t slots,
     ReadArg read_arg,
     Fn fn) {
+    const uint32_t base = du_start - du_start % n_dense_blocks;
     for (uint32_t k = 0; k < n_owners; ++k) {
         const Owner o = read_owner(records_base, k, read_arg);
-        for (uint32_t base = du_start - du_start % n_dense_blocks; base < du_end; base += n_dense_blocks) {
-            const uint32_t start = base + o.block_offset;
-            const uint32_t lo = du_start > start ? du_start : start;
-            const uint32_t hi = du_end < start + o.n_blocks ? du_end : start + o.n_blocks;
-            for (uint32_t u0 = lo; u0 < hi; u0 += slots) {
-                const uint32_t u1 = hi - u0 < slots ? hi : u0 + slots;
-                fn(k, o, u0, u1, u0 == lo, u1 == hi);
-            }
+        const uint32_t start = base + o.block_offset;
+        const uint32_t lo = du_start > start ? du_start : start;
+        const uint32_t hi = du_end < start + o.n_blocks ? du_end : start + o.n_blocks;
+        for (uint32_t u0 = lo; u0 < hi; u0 += slots) {
+            const uint32_t u1 = hi - u0 < slots ? hi : u0 + slots;
+            fn(k, o, u0, u1, u0 == lo, u1 == hi);
         }
     }
 }

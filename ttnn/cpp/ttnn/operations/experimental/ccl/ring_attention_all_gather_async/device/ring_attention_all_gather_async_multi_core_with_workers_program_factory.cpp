@@ -1427,7 +1427,7 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
             // Sent toward tensor rank - 1, a partial arrives there from its + side.
             writer_args.push_back(is_forward ? dr.arrival_plus_addr : dr.arrival_minus_addr);
             writer_args.push_back(dr.n_cores);
-            writer_args.push_back(dr.units_base);
+            writer_args.push_back(dr.cores_per_head);
             writer_args.push_back(dr.n_dense_blocks);
             writer_args.push_back(static_cast<uint32_t>(dr.core_x.size()));
             writer_args.push_back(static_cast<uint32_t>(dr.core_y.size()));
@@ -1439,7 +1439,6 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
             writer_args.push_back(dr.partial_tile_bytes);
             writer_args.push_back(dr.n_banks);
             writer_args.push_back(packet_tiles);
-            writer_args.push_back(dr.units_extra);
             for (const uint32_t x : dr.core_x) {
                 writer_args.push_back(x);
             }

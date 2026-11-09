@@ -1178,10 +1178,14 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
     // Dense builds: a dense batch takes up to all of a core's dense units and a step up to all of a batch's units (one
     // step per piece pays the step's fixed cost once), as far as that fits L1 next to the pass split's choice (the
     // same passes, K/V depth and pair steps): more slots first (fewer batches), then wider steps.
+    // Dense units: every head's n_dense_blocks units on dense_cores_per_head cores of their own (see dense_range).
+    const uint32_t n_dense_blocks = dense_units / NH;
+    const uint32_t dense_cores_per_head = dense_h ? num_cores / NH : 0;
+    TT_FATAL(!dense_h || dense_cores_per_head > 0, "SparseRingSDPA: dense_blocks need a core per head");
     uint32_t dense_slots = pass_slots;
     uint32_t step_members = kResidentGroup;
     if (dense_h) {
-        const uint32_t du_max = tt::div_up(dense_units, num_cores);
+        const uint32_t du_max = tt::div_up(n_dense_blocks, dense_cores_per_head);  // the most units on one core
         for (uint32_t n = std::min(kResidentMaxSlots, std::max(pass_slots, du_max)); n > pass_slots; --n) {
             if (cb_bytes_for_slots(n, kv_cb_pages, pair_steps) <= usable_l1) {
                 dense_slots = n;
@@ -1646,19 +1650,24 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
         }
     }
 
-    // Dense units: base or base + 1 per core over every core, in flat core order (the first dense_units_extra cores one
-    // more). Units are head-major, so most cores hold one head's units; a core across a head boundary holds two.
-    const uint32_t n_dense_blocks = dense_units / NH;
-    const uint32_t dense_units_base = dense_units / num_cores;
-    const uint32_t dense_units_extra = dense_units % num_cores;
+    // Dense units: every head's n_dense_blocks units on dense_cores_per_head cores of their own (cores h x that ..,
+    // base or base + 1 units each, the first ones one more), so a head's cores share its local pieces in one dense
+    // group; the cores past NH x dense_cores_per_head hold none. (A flat split over every core puts cores across head
+    // boundaries and unequal batches in a group, and their own K/V reads cost more than the cores save.)
     const auto dense_range = [&](uint32_t i) -> std::pair<uint32_t, uint32_t> {
-        const uint32_t start = i * dense_units_base + std::min(i, dense_units_extra);
-        return {start, start + dense_units_base + (i < dense_units_extra ? 1u : 0u)};
+        if (!dense_h || i >= NH * dense_cores_per_head) {
+            return {0, 0};
+        }
+        const uint32_t h = i / dense_cores_per_head;
+        const uint32_t c = i % dense_cores_per_head;
+        const uint32_t base = n_dense_blocks / dense_cores_per_head;
+        const uint32_t extra = n_dense_blocks % dense_cores_per_head;
+        const uint32_t start = h * n_dense_blocks + c * base + std::min(c, extra);
+        return {start, start + base + (c < extra ? 1u : 0u)};
     };
-    // Dense groups: the cores holding units of head h only, when each runs the same batches per owner
-    // (sparse_dense::for_each_batch over resident_slots): they stream identical piece sequences, and a batch waits for
-    // one owner's arrivals on every member, so the owners' hop chains stay independent. The others (a core across a
-    // head boundary, or members with other batches) read their own pieces.
+    // Dense groups: a head's cores with units, when each runs the same batches per owner (sparse_dense::for_each_batch
+    // over resident_slots): they stream identical piece sequences, and a batch waits for one owner's arrivals on every
+    // member, so the owners' hop chains stay independent. Else they read their own pieces.
     std::vector<std::vector<uint32_t>> dense_group_args(num_cores, std::vector<uint32_t>{0u, 0u, 0u, 0u, 0u});
     if (dense_sems.has_value()) {
         const auto n_batches = [&](uint32_t i) {
@@ -1674,9 +1683,8 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
         };
         for (uint32_t h = 0; h < NH; ++h) {
             std::vector<uint32_t> members;
-            for (uint32_t i = 0; i < num_cores; ++i) {
-                const auto [lo, hi] = dense_range(i);
-                if (lo < hi && lo / n_dense_blocks == h && (hi - 1) / n_dense_blocks == h) {
+            for (uint32_t i = h * dense_cores_per_head; i < (h + 1) * dense_cores_per_head; ++i) {
+                if (dense_range(i).second > dense_range(i).first) {
                     members.push_back(i);
                 }
             }
@@ -1931,9 +1939,8 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
         dr.ready_minus_addr = ready_minus_addr;
         dr.arrival_minus_addr = arrival_minus_addr;
         dr.arrival_plus_addr = arrival_plus_addr;
-        dr.n_cores = num_cores;
-        dr.units_base = dense_units_base;
-        dr.units_extra = dense_units_extra;
+        dr.n_cores = NH * dense_cores_per_head;  // the cores holding dense units, in flat order
+        dr.cores_per_head = dense_cores_per_head;
         dr.n_dense_blocks = n_dense_blocks;
         for (uint32_t x = 0; x < grid_size.x; ++x) {
             dr.core_x.push_back(mesh_device->worker_core_from_logical_core({x, 0}).x);
