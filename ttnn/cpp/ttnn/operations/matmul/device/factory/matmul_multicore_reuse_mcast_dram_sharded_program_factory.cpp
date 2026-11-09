@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <cstdlib>
+#include <string>
 #include "ttnn/operations/matmul/device/factory/matmul_multicore_reuse_mcast_dram_sharded_program_factory.hpp"
 #include "ttnn/operations/matmul/device/utilities/matmul_utilities.hpp"
 #include "ttnn/operations/matmul/device/config/matmul_program_config.hpp"
@@ -1277,6 +1279,57 @@ static ttnn::device_operation::ProgramArtifacts create_program_dram_sharded_spec
 // Everything per core derives from the work index, and the kernels run on the bounding rectangle of
 // the working cores with a one-byte role per logical core (a define): there are no per-core runtime
 // arguments.
+namespace {
+// Tuning overrides for the multi-core DRAM-sharded pipeline (unset = the defaults below). They only change scheduling
+// (stream split, read-ahead depth, lookahead), never which tiles are multiplied or in which K order.
+uint32_t dsmc_mc_env_u32(const char* name, uint32_t def, uint32_t lo, uint32_t hi) {
+    const char* env = std::getenv(name);
+    if (env == nullptr || *env == '\0') {
+        return def;
+    }
+    const long v = std::strtol(env, nullptr, 10);
+    TT_FATAL(v >= static_cast<long>(lo) && v <= static_cast<long>(hi), "{}={} must be {}..{}", name, env, lo, hi);
+    return static_cast<uint32_t>(v);
+}
+bool dsmc_mc_env_flag(const char* name) {
+    const char* env = std::getenv(name);
+    return env != nullptr && std::string(env) == "1";
+}
+// TT_DSMC_MC_TUNE="Kt:Nt:streams:depth[,Kt:Nt:streams:depth...]": per-shape stream count (1 = NOC_0 only, 2 = both
+// NOCs, Blackhole) and weight blocks in flight per stream, for calls whose K and N (in tiles) match. A matching entry
+// takes precedence over TT_DSMC_MC_ONE_STREAM / TT_DSMC_MC_DEPTH. Example (Qwen3.8 TP8 decode: gate|up, down):
+// "160:136:1:5,68:160:2:1".
+bool dsmc_mc_tune_lookup(uint32_t Kt, uint32_t Nt, uint32_t& streams, uint32_t& depth) {
+    const char* env = std::getenv("TT_DSMC_MC_TUNE");
+    if (env == nullptr || *env == '\0') {
+        return false;
+    }
+    std::string spec(env);
+    std::size_t pos = 0;
+    while (pos < spec.size()) {
+        const std::size_t end = std::min(spec.find(',', pos), spec.size());
+        const std::string item = spec.substr(pos, end - pos);
+        pos = end + 1;
+        uint32_t f[4];
+        std::size_t q = 0;
+        for (uint32_t i = 0; i < 4; i++) {
+            const std::size_t e = (i < 3) ? item.find(':', q) : item.size();
+            TT_FATAL(e != std::string::npos, "TT_DSMC_MC_TUNE entry '{}' must be Kt:Nt:streams:depth", item);
+            f[i] = static_cast<uint32_t>(std::stoul(item.substr(q, e - q)));
+            q = e + 1;
+        }
+        if (f[0] == Kt && f[1] == Nt) {
+            TT_FATAL(f[2] == 1 || f[2] == 2, "TT_DSMC_MC_TUNE entry '{}': streams must be 1 or 2", item);
+            TT_FATAL(f[3] >= 1 && f[3] <= 7, "TT_DSMC_MC_TUNE entry '{}': depth must be 1..7", item);
+            streams = f[2];
+            depth = f[3];
+            return true;
+        }
+    }
+    return false;
+}
+}  // namespace
+
 static ttnn::device_operation::ProgramArtifacts create_program_dram_sharded_multicore_spec(
     tt::tt_metal::distributed::MeshDevice& device,
     const tt::tt_metal::MeshTensor& in0_tensor,
@@ -1297,7 +1350,12 @@ static ttnn::device_operation::ProgramArtifacts create_program_dram_sharded_mult
     const auto arch = device.arch();
     // Blackhole: both data-movement RISCs read the weight. Wormhole: one NOC_0 stream (a second stream
     // over NOC_1 from the same core lowers the bank's bandwidth there).
-    const bool two_streams = arch == tt::ARCH::BLACKHOLE;
+    // TT_DSMC_MC_ONE_STREAM=1 (default unset = two streams on Blackhole): stream the weight on NOC_0 only, as on
+    // Wormhole, leaving NOC_1 to the activation gathers and output writes. Same blocks in the same order: identical.
+    uint32_t tune_streams = 0, tune_depth = 0;
+    const bool tuned = arch == tt::ARCH::BLACKHOLE && dsmc_mc_tune_lookup(Kt, Nt, tune_streams, tune_depth);
+    const bool two_streams =
+        arch == tt::ARCH::BLACKHOLE && (tuned ? tune_streams == 2 : !dsmc_mc_env_flag("TT_DSMC_MC_ONE_STREAM"));
     constexpr uint32_t dst_tiles = 8;  // tiles per column pass (full-sync Dest, fp32 or 16-bit)
     // fp32_dest_acc_en: the pass keeps its whole K in fp32 Dest. Otherwise the pass accumulates
     // l1acc_k_tiles K tiles at a time in 16-bit Dest and the packer adds them into a Float16_b
@@ -1306,8 +1364,14 @@ static ttnn::device_operation::ProgramArtifacts create_program_dram_sharded_mult
     const bool fp32_dest = compute_hw.enable_32_bit_dest;
     constexpr uint32_t l1acc_k_tiles = 8;
     const tt::DataFormat part_format = fp32_dest ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
-    const uint32_t depth = two_streams ? 3 : 5;  // weight blocks in flight per stream
-    constexpr uint32_t x_lookahead = 6;          // activation blocks in flight ahead of the weight stream
+    // TT_DSMC_MC_DEPTH (default unset = 3 on Blackhole, 5 on Wormhole): weight blocks in flight per stream (1..7,
+    // the stream's transaction ids 1..D). Only the read-ahead depth and the weight buffer size change; every block is
+    // still consumed in the same order, so the result is identical. Read once per program build (the value is part of
+    // the compile-time args, so a changed value builds a new kernel, but program-cache hits keep the depth they were
+    // built with).
+    const uint32_t depth = tuned ? tune_depth : dsmc_mc_env_u32("TT_DSMC_MC_DEPTH", two_streams ? 3 : 5, 1, 7);
+    // TT_DSMC_MC_XL (default 6, 1..8): activation blocks in flight ahead of the weight stream.
+    const uint32_t x_lookahead = dsmc_mc_env_u32("TT_DSMC_MC_XL", 6, 1, 8);
 
     const auto in1_shard_spec = in1_tensor.shard_spec().value();
     TT_FATAL(in1_shard_spec.orientation == ShardOrientation::ROW_MAJOR, "Only ROW_MAJOR sharding is supported");
