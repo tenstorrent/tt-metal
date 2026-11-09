@@ -81,7 +81,6 @@ const ScratchpadBindingHandle& ScratchpadBindingForTest(const Program& program, 
 namespace tt::tt_metal::experimental {
 namespace {
 
-using test_helpers::MakeMinimalGen2DMKernel;
 using test_helpers::MakeMinimalWorkUnit;
 using test_helpers::ProgramSpecTestGen1;
 using test_helpers::ProgramSpecTestQuasar;
