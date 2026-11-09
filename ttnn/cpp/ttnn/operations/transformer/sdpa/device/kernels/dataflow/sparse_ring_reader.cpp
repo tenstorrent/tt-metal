@@ -1059,9 +1059,9 @@ void kernel_main() {
         }
     }
 
-    // Dense units, after every pass (every shard, and so every slab, has arrived): per batch the Q blocks, the plan
-    // and the local pieces (run_iteration), then each unit's arriving partials (- side, then + side) for compute to
-    // merge, each as soon as its side's running arrival count reaches it (not in dense_debug).
+    // Dense units, after every pass (every shard has arrived; the dense-Q slabs may still be on their way): per batch
+    // the Q blocks, the plan and the local pieces (run_iteration), then each unit's arriving partials (- side, then +
+    // side) for compute to merge, each as soon as its side's running arrival count reaches it (not in dense_debug).
     if constexpr (dense_owners > 0) {
         constexpr uint32_t kPartialTiles = sparse_dense::partial_tiles<Sq_chunk_t, vDHt>();
         constexpr uint32_t cb_dense_in = get_named_compile_time_arg_val("cb_dense_in");
@@ -1091,6 +1091,10 @@ void kernel_main() {
             }
             res_group_pieces = 0;
         }
+        // The all-gather moves the dense-Q slabs after every K/V step, each signalled like a shard on its direction's
+        // semaphore, so the final counts are twice the ring loop's shards (the forward chain's also holds the
+        // local-slice signal, sent once). Before the first batch reading another owner's slab, wait for all of them.
+        bool dense_q_arrived = false;
         sparse_dense::for_each_batch(
             dense_owners,
             dense_base + 6,
@@ -1105,6 +1109,13 @@ void kernel_main() {
                 db.local = o.shard == ring_index;
                 db.q_row_offset = o.slab_out_row - o.slab_row_start;
                 db.q_row_end = o.slab_out_row + o.slab_rows;
+                if (!db.local && !dense_q_arrived) {
+                    const auto& r = fused_op_receiver;
+                    const uint32_t split = r.split_forwarding_enabled ? 1 : 0;
+                    Semaphore<>(r.signal_op_semaphore_ids[0]).wait_min(2 * (r.seq.expected[0] + split) + 1);
+                    Semaphore<>(r.signal_op_semaphore_ids[1]).wait_min(2 * r.seq.expected[1]);
+                    dense_q_arrived = true;
+                }
                 for (uint32_t u = u0; u < u1; ++u) {
                     db.heads[u - u0] = u / n_dense_blocks;
                     db.blocks[u - u0] = sparse_dense::dense_block(

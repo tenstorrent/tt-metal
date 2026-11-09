@@ -322,155 +322,9 @@ void kernel_main() {
         }
     };
 
-    uint32_t slice_writes = 0;
     constexpr uint32_t my_tensor_rank =
         ttnn::ring_attention_all_gather::tensor_rank_from_transport_rank<full_mesh_rank_mapping>(
             my_transport_rank, mesh_rows, mesh_cols, snake_orientation);
-
-    for (uint32_t input_idx = 0; input_idx < num_inputs; input_idx++) {
-        /**
-         * Write out the local slice to forward and backward devices
-         * Note that it is not copied to local output buffer. This is because
-         * the fused op (RingJointAttention) reads from the input buffer directly
-         * when accessing the local slice. This is a performance optimization
-         * to remove startup latency from the fused op.
-         */
-
-        const uint32_t input_pages_per_batch_head = input_tensor_Wt[input_idx] * input_tensor_Ht[input_idx];
-        const uint32_t output_pages_per_batch_head = output_tensor_Wt[input_idx] * output_tensor_Ht[input_idx];
-        if constexpr (output_bank_owned_schedule) {
-            uint32_t rank_page_base = 0;
-            uint32_t rank_pages = 0;
-            rank_slice(input_idx, my_tensor_rank, rank_page_base, rank_pages);
-            for (uint32_t bh_idx = 0; bh_idx < input_batch_head_count[input_idx]; ++bh_idx) {
-                const uint32_t output_page_base = bh_idx * output_pages_per_batch_head + rank_page_base;
-                if constexpr (num_targets_in_direction) {
-                    if constexpr (partial_readiness_enabled) {
-                        const uint32_t first_pages =
-                            ring_attention_all_gather::midpoint_prefix_pages(rank_pages, input_tensor_Wt[input_idx]);
-                        write_bank_owned_slices(
-                            cb_output,
-                            output_addrgens[input_idx],
-                            pkt_hdr,
-                            *fabric_direction_connection,
-                            output_page_base,
-                            first_pages,
-                            worker_link[input_idx],
-                            num_links);
-                        signal_output_ready();
-                        write_bank_owned_slices(
-                            cb_output,
-                            output_addrgens[input_idx],
-                            pkt_hdr,
-                            *fabric_direction_connection,
-                            output_page_base + first_pages,
-                            rank_pages - first_pages,
-                            worker_link[input_idx],
-                            num_links);
-                    } else {
-                        write_bank_owned_slices(
-                            cb_output,
-                            output_addrgens[input_idx],
-                            pkt_hdr,
-                            *fabric_direction_connection,
-                            output_page_base,
-                            rank_pages,
-                            worker_link[input_idx],
-                            num_links);
-                    }
-                } else {
-                    discard_bank_owned_slices(
-                        cb_output, output_page_base, rank_pages, worker_link[input_idx], num_links);
-                }
-            }
-        } else {
-            uint32_t tile_id_start = my_tensor_rank * input_tensor_Wt[input_idx];
-            uint32_t pages_read_in_row = input_tile_id_start[input_idx] % input_tensor_Wt[input_idx];
-            uint32_t row_offset =
-                (input_tile_id_start[input_idx] / input_tensor_Wt[input_idx]) * output_tensor_Wt[input_idx];
-            uint32_t tiles_read = input_tile_id_start[input_idx];
-            uint32_t tiles_to_read = input_tile_id_end[input_idx];
-            if (gather_dim == 3) {
-                tile_id_start = my_tensor_rank * input_tensor_Wt[input_idx];
-            } else {
-                tile_id_start = my_tensor_rank * input_pages_per_batch_head;
-            }
-
-            for (uint32_t bh_idx = 0; bh_idx < input_batch_head_count[input_idx]; bh_idx++) {
-                while (tiles_read < tiles_to_read) {
-                    uint32_t num_pages_to_read = std::min(tiles_to_read - tiles_read, packet_size_in_pages);
-                    cb_output.wait_front(packet_size_in_pages);
-                    size_t l1_read_addr = cb_output.get_read_ptr();
-
-                    uint32_t tile_id = tile_id_start + row_offset + pages_read_in_row;
-
-                    pages_read_in_row++;
-                    if (pages_read_in_row >= input_tensor_Wt[input_idx]) {
-                        row_offset += output_tensor_Wt[input_idx];
-                        pages_read_in_row = 0;
-                    }
-
-                    if (num_pages_to_read == 2) {
-                        uint32_t second_tile_id = tile_id_start + row_offset + pages_read_in_row;
-
-                        if constexpr (num_targets_in_direction) {
-                            scatter_fabric_write_unidir(
-                                tile_id,
-                                second_tile_id,
-                                output_addrgens[input_idx],
-                                pkt_hdr,
-                                *fabric_direction_connection,
-                                l1_read_addr,
-                                output_page_size);
-                        }
-
-                        pages_read_in_row++;
-                        if (pages_read_in_row >= input_tensor_Wt[input_idx]) {
-                            row_offset += output_tensor_Wt[input_idx];
-                            pages_read_in_row = 0;
-                        }
-                    } else {
-                        ASSERT(num_pages_to_read == 1);
-
-                        if constexpr (num_targets_in_direction) {
-                            fabric_write_unidir(
-                                tile_id,
-                                output_addrgens[input_idx],
-                                pkt_hdr,
-                                *fabric_direction_connection,
-                                l1_read_addr,
-                                output_page_size);
-                        }
-                    }
-
-                    tiles_read += num_pages_to_read;
-                    cb_output.pop_front(packet_size_in_pages);
-                }
-                tile_id_start += output_pages_per_batch_head;
-                tiles_read = input_tile_id_start[input_idx];
-                tiles_to_read = input_tile_id_end[input_idx];
-                pages_read_in_row = input_tile_id_start[input_idx] % input_tensor_Wt[input_idx];
-                row_offset =
-                    (input_tile_id_start[input_idx] / input_tensor_Wt[input_idx]) * output_tensor_Wt[input_idx];
-            }
-        }
-    }
-
-    noc_obj.async_write_barrier();
-    // increment locally
-    if constexpr (fuse_op && direction == 1) {
-        /**
-         * Synchronize and signal that the local tensor slice is available
-         *
-         * While the fused op will not wait on this "local write done" increment,
-         * the fused op signaler will account for it in future waits.
-         */
-        op_signaler_sender.synchronize_workers_and_signal_op(my_transport_rank);
-    }
-
-    // The completion marker is the only marker in the legacy protocol and the second marker in
-    // partial-readiness mode. num_hops=1 is correct for both supported Fabric topologies.
-    signal_output_ready();
 
     uint32_t writes_expected = 0;
     if constexpr (topology == Topology::Linear) {
@@ -493,161 +347,316 @@ void kernel_main() {
         writes_expected++;
     }
 
-    while (slice_writes < writes_expected) {
-        // Direction == backward
-        // Did I get something from my left to send to my right?
-        // In the linear case, I expect num_targets_backward_direction slices from the left, and check if I have a
-        // neighbor to the right
-        // In the ring case, I expect to write to the right num_forward_target times
-        // Direction == forward
-        // Did I get something from my right to send to my left?
-        // In the linear case, I expect num_targets_forward_direction slices from the right, and check if I have a
-        // neighbor to the left
-        // In the ring case, I expect to write to the left num_backward_target times
+    // The reader's phases: with rank slabs the rank-slab input after every ring step of the other inputs.
+    constexpr uint32_t num_phases = has_rank_slabs ? 2 : 1;
+    for (uint32_t phase = 0; phase < num_phases; ++phase) {
+        const uint32_t inputs_begin = phase == 0 ? 0 : num_inputs - 1;
+        const uint32_t inputs_end = has_rank_slabs && phase == 0 ? num_inputs - 1 : num_inputs;
+        for (uint32_t input_idx = inputs_begin; input_idx < inputs_end; input_idx++) {
+            /**
+             * Write out the local slice to forward and backward devices
+             * Note that it is not copied to local output buffer. This is because
+             * the fused op (RingJointAttention) reads from the input buffer directly
+             * when accessing the local slice. This is a performance optimization
+             * to remove startup latency from the fused op.
+             */
 
-        int slice_transport_rank_signed;
-        uint32_t slice_transport_rank;
-        if constexpr (direction == 1) {
-            slice_transport_rank_signed = my_transport_rank + slice_writes + 1;
-            slice_transport_rank = (slice_transport_rank_signed >= (int)ring_size)
-                                       ? slice_transport_rank_signed - ring_size
-                                       : slice_transport_rank_signed;
-        } else {
-            slice_transport_rank_signed = my_transport_rank - slice_writes - 1;
-            slice_transport_rank = (slice_transport_rank_signed < 0) ? ring_size + slice_transport_rank_signed
-                                                                     : slice_transport_rank_signed;
-        }
-        const bool is_split_forwarded_slice = split_forwarding_enabled && (slice_writes == writes_expected - 1);
-        const uint32_t slice_tensor_rank =
-            ttnn::ring_attention_all_gather::tensor_rank_from_transport_rank<full_mesh_rank_mapping>(
-                slice_transport_rank, mesh_rows, mesh_cols, snake_orientation);
-        for (uint32_t input_idx = 0; input_idx < num_inputs; input_idx++) {
             const uint32_t input_pages_per_batch_head = input_tensor_Wt[input_idx] * input_tensor_Ht[input_idx];
             const uint32_t output_pages_per_batch_head = output_tensor_Wt[input_idx] * output_tensor_Ht[input_idx];
             if constexpr (output_bank_owned_schedule) {
-                const uint32_t split_factor = is_split_forwarded_slice ? 2 : 1;
-                const uint32_t first_bank =
-                    worker_link[input_idx] + (is_split_forwarded_slice ? direction * num_links : 0);
-                const uint32_t bank_stride = num_links * split_factor;
                 uint32_t rank_page_base = 0;
                 uint32_t rank_pages = 0;
-                rank_slice(input_idx, slice_tensor_rank, rank_page_base, rank_pages);
+                rank_slice(input_idx, my_tensor_rank, rank_page_base, rank_pages);
                 for (uint32_t bh_idx = 0; bh_idx < input_batch_head_count[input_idx]; ++bh_idx) {
                     const uint32_t output_page_base = bh_idx * output_pages_per_batch_head + rank_page_base;
-                    if constexpr (partial_readiness_enabled) {
-                        const uint32_t first_pages =
-                            ring_attention_all_gather::midpoint_prefix_pages(rank_pages, input_tensor_Wt[input_idx]);
-                        write_bank_owned_slices(
-                            cb_output,
-                            output_addrgens[input_idx],
-                            pkt_hdr,
-                            *fabric_direction_connection,
-                            output_page_base,
-                            first_pages,
-                            first_bank,
-                            bank_stride);
-                        signal_output_ready();
-                        write_bank_owned_slices(
-                            cb_output,
-                            output_addrgens[input_idx],
-                            pkt_hdr,
-                            *fabric_direction_connection,
-                            output_page_base + first_pages,
-                            rank_pages - first_pages,
-                            first_bank,
-                            bank_stride);
+                    if constexpr (num_targets_in_direction) {
+                        if constexpr (partial_readiness_enabled) {
+                            const uint32_t first_pages = ring_attention_all_gather::midpoint_prefix_pages(
+                                rank_pages, input_tensor_Wt[input_idx]);
+                            write_bank_owned_slices(
+                                cb_output,
+                                output_addrgens[input_idx],
+                                pkt_hdr,
+                                *fabric_direction_connection,
+                                output_page_base,
+                                first_pages,
+                                worker_link[input_idx],
+                                num_links);
+                            signal_output_ready();
+                            write_bank_owned_slices(
+                                cb_output,
+                                output_addrgens[input_idx],
+                                pkt_hdr,
+                                *fabric_direction_connection,
+                                output_page_base + first_pages,
+                                rank_pages - first_pages,
+                                worker_link[input_idx],
+                                num_links);
+                        } else {
+                            write_bank_owned_slices(
+                                cb_output,
+                                output_addrgens[input_idx],
+                                pkt_hdr,
+                                *fabric_direction_connection,
+                                output_page_base,
+                                rank_pages,
+                                worker_link[input_idx],
+                                num_links);
+                        }
                     } else {
-                        write_bank_owned_slices(
-                            cb_output,
-                            output_addrgens[input_idx],
-                            pkt_hdr,
-                            *fabric_direction_connection,
-                            output_page_base,
-                            rank_pages,
-                            first_bank,
-                            bank_stride);
+                        discard_bank_owned_slices(
+                            cb_output, output_page_base, rank_pages, worker_link[input_idx], num_links);
                     }
                 }
             } else {
-                const uint32_t total_pages = input_tile_id_end[input_idx] - input_tile_id_start[input_idx];
-                const uint32_t num_packets = (total_pages + packet_size_in_pages - 1) / packet_size_in_pages;
-                const uint32_t first_half_pages = (num_packets / 2) * packet_size_in_pages;
-                uint32_t relay_start = input_tile_id_start[input_idx];
-                uint32_t relay_end = input_tile_id_end[input_idx];
-                if (is_split_forwarded_slice) {
-                    if constexpr (direction == 0) {
-                        relay_end = relay_start + first_half_pages;
-                    } else {
-                        relay_start += first_half_pages;
-                    }
-                }
-
-                uint32_t tiles_read = relay_start;
-                uint32_t tiles_to_read = relay_end;
-                uint32_t tile_id_start = slice_tensor_rank * input_tensor_Wt[input_idx];
-                const uint32_t slice_Wt = input_tensor_Wt[input_idx];
-                const uint32_t stride_Wt = output_tensor_Wt[input_idx];
-                uint32_t row_offset = (relay_start / slice_Wt) * stride_Wt;
-                uint32_t pages_read_in_row = relay_start % slice_Wt;
-
+                uint32_t tile_id_start = my_tensor_rank * input_tensor_Wt[input_idx];
+                uint32_t pages_read_in_row = input_tile_id_start[input_idx] % input_tensor_Wt[input_idx];
+                uint32_t row_offset =
+                    (input_tile_id_start[input_idx] / input_tensor_Wt[input_idx]) * output_tensor_Wt[input_idx];
+                uint32_t tiles_read = input_tile_id_start[input_idx];
+                uint32_t tiles_to_read = input_tile_id_end[input_idx];
                 if (gather_dim == 3) {
-                    tile_id_start = slice_tensor_rank * slice_Wt;
+                    tile_id_start = my_tensor_rank * input_tensor_Wt[input_idx];
                 } else {
-                    tile_id_start = slice_tensor_rank * input_pages_per_batch_head;
+                    tile_id_start = my_tensor_rank * input_pages_per_batch_head;
                 }
+
                 for (uint32_t bh_idx = 0; bh_idx < input_batch_head_count[input_idx]; bh_idx++) {
                     while (tiles_read < tiles_to_read) {
                         uint32_t num_pages_to_read = std::min(tiles_to_read - tiles_read, packet_size_in_pages);
                         cb_output.wait_front(packet_size_in_pages);
                         size_t l1_read_addr = cb_output.get_read_ptr();
-                        uint32_t first_tile_id = tile_id_start + row_offset + pages_read_in_row;
+
+                        uint32_t tile_id = tile_id_start + row_offset + pages_read_in_row;
+
                         pages_read_in_row++;
-                        if (pages_read_in_row >= slice_Wt) {
-                            row_offset += stride_Wt;
+                        if (pages_read_in_row >= input_tensor_Wt[input_idx]) {
+                            row_offset += output_tensor_Wt[input_idx];
                             pages_read_in_row = 0;
                         }
+
                         if (num_pages_to_read == 2) {
                             uint32_t second_tile_id = tile_id_start + row_offset + pages_read_in_row;
-                            pages_read_in_row++;
-                            if (pages_read_in_row >= slice_Wt) {
-                                row_offset += stride_Wt;
-                                pages_read_in_row = 0;
+
+                            if constexpr (num_targets_in_direction) {
+                                scatter_fabric_write_unidir(
+                                    tile_id,
+                                    second_tile_id,
+                                    output_addrgens[input_idx],
+                                    pkt_hdr,
+                                    *fabric_direction_connection,
+                                    l1_read_addr,
+                                    output_page_size);
                             }
 
-                            scatter_fabric_write_unidir(
-                                first_tile_id,
-                                second_tile_id,
-                                output_addrgens[input_idx],
-                                pkt_hdr,
-                                *fabric_direction_connection,
-                                l1_read_addr,
-                                output_page_size);
+                            pages_read_in_row++;
+                            if (pages_read_in_row >= input_tensor_Wt[input_idx]) {
+                                row_offset += output_tensor_Wt[input_idx];
+                                pages_read_in_row = 0;
+                            }
                         } else {
                             ASSERT(num_pages_to_read == 1);
-                            fabric_write_unidir(
-                                first_tile_id,
-                                output_addrgens[input_idx],
-                                pkt_hdr,
-                                *fabric_direction_connection,
-                                l1_read_addr,
-                                output_page_size);
+
+                            if constexpr (num_targets_in_direction) {
+                                fabric_write_unidir(
+                                    tile_id,
+                                    output_addrgens[input_idx],
+                                    pkt_hdr,
+                                    *fabric_direction_connection,
+                                    l1_read_addr,
+                                    output_page_size);
+                            }
                         }
 
                         tiles_read += num_pages_to_read;
                         cb_output.pop_front(packet_size_in_pages);
                     }
                     tile_id_start += output_pages_per_batch_head;
-                    tiles_read = relay_start;
-                    tiles_to_read = relay_end;
-                    row_offset = (relay_start / slice_Wt) * stride_Wt;
-                    pages_read_in_row = relay_start % slice_Wt;
+                    tiles_read = input_tile_id_start[input_idx];
+                    tiles_to_read = input_tile_id_end[input_idx];
+                    pages_read_in_row = input_tile_id_start[input_idx] % input_tensor_Wt[input_idx];
+                    row_offset =
+                        (input_tile_id_start[input_idx] / input_tensor_Wt[input_idx]) * output_tensor_Wt[input_idx];
                 }
             }
         }
 
+        noc_obj.async_write_barrier();
+        // increment locally
+        if constexpr (fuse_op && direction == 1) {
+            /**
+             * Synchronize and signal that the local tensor slice is available
+             *
+             * While the fused op will not wait on this "local write done" increment,
+             * the fused op signaler will account for it in future waits. Once: the
+             * rank-slab phase adds no local signal.
+             */
+            if (phase == 0) {
+                op_signaler_sender.synchronize_workers_and_signal_op(my_transport_rank);
+            }
+        }
+
+        // The completion marker is the only marker in the legacy protocol and the second marker in
+        // partial-readiness mode. num_hops=1 is correct for both supported Fabric topologies.
         signal_output_ready();
 
-        slice_writes++;
+        uint32_t slice_writes = 0;
+        while (slice_writes < writes_expected) {
+            // Direction == backward
+            // Did I get something from my left to send to my right?
+            // In the linear case, I expect num_targets_backward_direction slices from the left, and check if I have a
+            // neighbor to the right
+            // In the ring case, I expect to write to the right num_forward_target times
+            // Direction == forward
+            // Did I get something from my right to send to my left?
+            // In the linear case, I expect num_targets_forward_direction slices from the right, and check if I have a
+            // neighbor to the left
+            // In the ring case, I expect to write to the left num_backward_target times
+
+            int slice_transport_rank_signed;
+            uint32_t slice_transport_rank;
+            if constexpr (direction == 1) {
+                slice_transport_rank_signed = my_transport_rank + slice_writes + 1;
+                slice_transport_rank = (slice_transport_rank_signed >= (int)ring_size)
+                                           ? slice_transport_rank_signed - ring_size
+                                           : slice_transport_rank_signed;
+            } else {
+                slice_transport_rank_signed = my_transport_rank - slice_writes - 1;
+                slice_transport_rank = (slice_transport_rank_signed < 0) ? ring_size + slice_transport_rank_signed
+                                                                         : slice_transport_rank_signed;
+            }
+            const bool is_split_forwarded_slice = split_forwarding_enabled && (slice_writes == writes_expected - 1);
+            const uint32_t slice_tensor_rank =
+                ttnn::ring_attention_all_gather::tensor_rank_from_transport_rank<full_mesh_rank_mapping>(
+                    slice_transport_rank, mesh_rows, mesh_cols, snake_orientation);
+            for (uint32_t input_idx = inputs_begin; input_idx < inputs_end; input_idx++) {
+                const uint32_t input_pages_per_batch_head = input_tensor_Wt[input_idx] * input_tensor_Ht[input_idx];
+                const uint32_t output_pages_per_batch_head = output_tensor_Wt[input_idx] * output_tensor_Ht[input_idx];
+                if constexpr (output_bank_owned_schedule) {
+                    const uint32_t split_factor = is_split_forwarded_slice ? 2 : 1;
+                    const uint32_t first_bank =
+                        worker_link[input_idx] + (is_split_forwarded_slice ? direction * num_links : 0);
+                    const uint32_t bank_stride = num_links * split_factor;
+                    uint32_t rank_page_base = 0;
+                    uint32_t rank_pages = 0;
+                    rank_slice(input_idx, slice_tensor_rank, rank_page_base, rank_pages);
+                    for (uint32_t bh_idx = 0; bh_idx < input_batch_head_count[input_idx]; ++bh_idx) {
+                        const uint32_t output_page_base = bh_idx * output_pages_per_batch_head + rank_page_base;
+                        if constexpr (partial_readiness_enabled) {
+                            const uint32_t first_pages = ring_attention_all_gather::midpoint_prefix_pages(
+                                rank_pages, input_tensor_Wt[input_idx]);
+                            write_bank_owned_slices(
+                                cb_output,
+                                output_addrgens[input_idx],
+                                pkt_hdr,
+                                *fabric_direction_connection,
+                                output_page_base,
+                                first_pages,
+                                first_bank,
+                                bank_stride);
+                            signal_output_ready();
+                            write_bank_owned_slices(
+                                cb_output,
+                                output_addrgens[input_idx],
+                                pkt_hdr,
+                                *fabric_direction_connection,
+                                output_page_base + first_pages,
+                                rank_pages - first_pages,
+                                first_bank,
+                                bank_stride);
+                        } else {
+                            write_bank_owned_slices(
+                                cb_output,
+                                output_addrgens[input_idx],
+                                pkt_hdr,
+                                *fabric_direction_connection,
+                                output_page_base,
+                                rank_pages,
+                                first_bank,
+                                bank_stride);
+                        }
+                    }
+                } else {
+                    const uint32_t total_pages = input_tile_id_end[input_idx] - input_tile_id_start[input_idx];
+                    const uint32_t num_packets = (total_pages + packet_size_in_pages - 1) / packet_size_in_pages;
+                    const uint32_t first_half_pages = (num_packets / 2) * packet_size_in_pages;
+                    uint32_t relay_start = input_tile_id_start[input_idx];
+                    uint32_t relay_end = input_tile_id_end[input_idx];
+                    if (is_split_forwarded_slice) {
+                        if constexpr (direction == 0) {
+                            relay_end = relay_start + first_half_pages;
+                        } else {
+                            relay_start += first_half_pages;
+                        }
+                    }
+
+                    uint32_t tiles_read = relay_start;
+                    uint32_t tiles_to_read = relay_end;
+                    uint32_t tile_id_start = slice_tensor_rank * input_tensor_Wt[input_idx];
+                    const uint32_t slice_Wt = input_tensor_Wt[input_idx];
+                    const uint32_t stride_Wt = output_tensor_Wt[input_idx];
+                    uint32_t row_offset = (relay_start / slice_Wt) * stride_Wt;
+                    uint32_t pages_read_in_row = relay_start % slice_Wt;
+
+                    if (gather_dim == 3) {
+                        tile_id_start = slice_tensor_rank * slice_Wt;
+                    } else {
+                        tile_id_start = slice_tensor_rank * input_pages_per_batch_head;
+                    }
+                    for (uint32_t bh_idx = 0; bh_idx < input_batch_head_count[input_idx]; bh_idx++) {
+                        while (tiles_read < tiles_to_read) {
+                            uint32_t num_pages_to_read = std::min(tiles_to_read - tiles_read, packet_size_in_pages);
+                            cb_output.wait_front(packet_size_in_pages);
+                            size_t l1_read_addr = cb_output.get_read_ptr();
+                            uint32_t first_tile_id = tile_id_start + row_offset + pages_read_in_row;
+                            pages_read_in_row++;
+                            if (pages_read_in_row >= slice_Wt) {
+                                row_offset += stride_Wt;
+                                pages_read_in_row = 0;
+                            }
+                            if (num_pages_to_read == 2) {
+                                uint32_t second_tile_id = tile_id_start + row_offset + pages_read_in_row;
+                                pages_read_in_row++;
+                                if (pages_read_in_row >= slice_Wt) {
+                                    row_offset += stride_Wt;
+                                    pages_read_in_row = 0;
+                                }
+
+                                scatter_fabric_write_unidir(
+                                    first_tile_id,
+                                    second_tile_id,
+                                    output_addrgens[input_idx],
+                                    pkt_hdr,
+                                    *fabric_direction_connection,
+                                    l1_read_addr,
+                                    output_page_size);
+                            } else {
+                                ASSERT(num_pages_to_read == 1);
+                                fabric_write_unidir(
+                                    first_tile_id,
+                                    output_addrgens[input_idx],
+                                    pkt_hdr,
+                                    *fabric_direction_connection,
+                                    l1_read_addr,
+                                    output_page_size);
+                            }
+
+                            tiles_read += num_pages_to_read;
+                            cb_output.pop_front(packet_size_in_pages);
+                        }
+                        tile_id_start += output_pages_per_batch_head;
+                        tiles_read = relay_start;
+                        tiles_to_read = relay_end;
+                        row_offset = (relay_start / slice_Wt) * stride_Wt;
+                        pages_read_in_row = relay_start % slice_Wt;
+                    }
+                }
+            }
+
+            signal_output_ready();
+
+            slice_writes++;
+        }
     }
 
     if constexpr (has_dense_return) {
