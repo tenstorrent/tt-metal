@@ -72,7 +72,11 @@ def _reserve_prefetch_pipes(device, bank_to_receivers, ring_size: int, overlap_p
         overlap_program_l1=overlap_program_l1,
     )
     pipes = ttnn.experimental.create_prefetcher_pipes_for_tensor_prefetcher(space, bank_to_receivers)
-    _PIPE_RECIPES[id(pipes)] = (next(_PIPE_SERIAL), (device, bank_to_receivers, ring_size, pipes[0].buffer_address()))
+    from_arena = space.l1_source() == ttnn.experimental.PrefetcherPipeL1Source.PersistentArena
+    _PIPE_RECIPES[id(pipes)] = (
+        next(_PIPE_SERIAL),
+        (device, bank_to_receivers, ring_size, pipes[0].buffer_address(), from_arena),
+    )
     return pipes
 
 
@@ -92,12 +96,14 @@ def take_prefetch_pipes_recipe(pipes) -> tuple:
 def rebuild_prefetch_pipes(recipe: tuple) -> list:
     """Fresh pipes identical to the ones ``recipe`` (from :func:`take_prefetch_pipes_recipe`) described.
 
-    Built over the program cache (see :func:`_reserve_prefetch_pipes`), so the ring must come back where it
-    was: the cached decode programs placed their circular buffers just above it.
+    Built over the program cache (see :func:`_reserve_prefetch_pipes`). A persistent-arena ring must come back
+    where it was: the cached decode programs placed their circular buffers just above it, and nothing checks
+    them against the arena. A ring with DRAM senders is an ordinary L1 allocation instead, so it lands wherever
+    the allocator puts it, and every cached program's circular buffers are checked against it on each launch.
     """
-    device, bank_to_receivers, ring_size, ring_address = recipe
+    device, bank_to_receivers, ring_size, ring_address, from_arena = recipe
     pipes = _reserve_prefetch_pipes(device, bank_to_receivers, ring_size, overlap_program_l1=True)
-    if pipes[0].buffer_address() != ring_address:
+    if from_arena and pipes[0].buffer_address() != ring_address:
         raise RuntimeError(
             f"a rebuilt prefetch ring landed at {pipes[0].buffer_address():#x}, not at {ring_address:#x}: rebuild "
             "every released ring, in the order they were first built"

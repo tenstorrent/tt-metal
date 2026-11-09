@@ -572,7 +572,6 @@ def load_system_config(
     # 'p150x8_throughput' does not want it silently swapped for a variant.
     if variant and not profile and f"{name}_{variant}" in profiles:
         name = f"{name}_{variant}"
-    print(f"Loaded profile: {name}")
     cfg = _resolve_chain(name, profiles)
     if apply_env:
         cfg = _apply_env(cfg)
