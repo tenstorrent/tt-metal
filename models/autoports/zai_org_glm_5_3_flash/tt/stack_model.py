@@ -638,10 +638,11 @@ class StackBackend(ModelBackend):
                     moe = build(self.mesh, self.cfg, source, L, OptimizedDecoderConfig())
                     # (native widths > 4 run on the 32-row phases: tp_mla.fabric / tp_dsa._hooked fall back to them)
                     # (the weight cache: the row counts this construction runs -- the chunk, the narrow widths and the
-                    # spec verify width K + 1 -- not every t <= 4: each row count holds a fabric phase (2 x 896 B of
-                    # L1 sync words) and, on the shard, 4 stream syncs (4 x 1536 B) for the life of the stack)
+                    # spec step's (1, K + 1): the MTP layer shares the sparse_dsa layers' phases at those two -- not
+                    # every t <= 4: each row count holds a fabric phase (2 x 896 B of L1 sync words) and, on the shard,
+                    # 4 stream syncs (4 x 1536 B) for the life of the stack)
                     k_spec = int(os.environ.get("GLM53_SPEC_K", "0"))
-                    ts = (tuple(sorted({self.chunk} | set(self.narrow_widths) | ({k_spec + 1} if k_spec > 0 else set())))
+                    ts = (tuple(sorted({self.chunk} | set(self.narrow_widths) | ({1, k_spec + 1} if k_spec > 0 else set())))
                           if self.weight_cache is not None else (self.chunk,))  # fmt: skip
                     d = TPD.TPDsaLayer(self.mesh, self.cfg, L, source, OptimizedDecoderConfig(), moe=moe, ts=ts,
                                        share=dsa_share, dsa=self.dsa_decode, defer=self.dsa_defer,
