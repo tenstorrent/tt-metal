@@ -596,6 +596,46 @@ void kernel_main() {
         //   - cb_prev_max: local M (max of logits)
         //   - cb_prev_sum: local L (sum of exp)
         // Only receive from children that actually have data
+#ifdef SDPA_TREE_FAST
+        // Lean combine (TT_SDPA_DECODE_TREE_FAST): the same arithmetic in the same order as the path below,
+        // minus pure bf16->bf16 copies. correction_block only reads (copy_tile) and pops the child's L, so it
+        // reads cb_l_in directly; the child's O is scaled straight out of cb_out_o into the scratch CB; and the
+        // running max/sum ping-pong between the prev/cur CB pairs instead of being copied back every round.
+        if (num_active_children > 0) {
+            uint32_t run_max = cb_prev_max, run_sum = cb_prev_sum;  // hold the running M / L
+            uint32_t spare_max = cb_cur_max, spare_sum = cb_cur_sum;  // empty, receive the next M / L
+            for (uint32_t round = 0; round < num_active_rounds; ++round) {
+                if (active_children_per_round[round] != UINT32_MAX) {
+                    correction_block<scale_fp32, vector_mode>(
+                        cb_m_in,
+                        cb_l_in,
+                        spare_max,
+                        run_max,
+                        spare_sum,
+                        run_sum,
+                        cb_exp_max_diff,
+                        cb_exp_max_diff_2,
+                        Sq_chunk_t);
+                    // OUT_ACC_2 <- CHILD_OUT * EXP_MAX_DIFF_2 (pops cb_out_o and cb_exp_max_diff_2)
+                    mul_block_bcast_cols<Sq_chunk_t, vDHt, false, false>(
+                        cb_out_o, cb_exp_max_diff_2, cb_out_accumulate_im_2);
+                    // OUT_ACC *= EXP_MAX_DIFF
+                    mul_block_bcast_cols_inplace<Sq_chunk_t, vDHt>(cb_out_accumulate_im, cb_exp_max_diff);
+                    // OUT_ACC = OUT_ACC + OUT_ACC_2
+                    add_block_inplace<true>(cb_out_accumulate_im, cb_out_accumulate_im_2, out_chunk_tiles);
+                    CircularBuffer(run_max).pop_front(Sq_chunk_t);
+                    CircularBuffer(cb_m_in).pop_front(Sq_chunk_t);
+                    uint32_t t = run_max; run_max = spare_max; spare_max = t;
+                    t = run_sum; run_sum = spare_sum; spare_sum = t;
+                }
+            }
+            // The code below expects M / L in cb_prev_max / cb_prev_sum.
+            if (run_max != cb_prev_max) {
+                move_block_ool(run_max, cb_prev_max, Sq_chunk_t);
+                move_block_ool(run_sum, cb_prev_sum, Sq_chunk_t);
+            }
+        }
+#else
         if (num_active_children > 0) {
             // Iterate through each round and receive from child if one exists AND has data
             for (uint32_t round = 0; round < num_active_rounds; ++round) {
@@ -647,6 +687,8 @@ void kernel_main() {
                 }
             }
         }
+
+#endif  // SDPA_TREE_FAST
 
         // Finalize output based on tree role
         if (is_tree_root) {

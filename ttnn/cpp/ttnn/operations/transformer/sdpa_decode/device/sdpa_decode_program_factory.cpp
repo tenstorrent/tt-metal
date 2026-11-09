@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <cstdlib>
 #include "sdpa_decode_device_operation.hpp"
 
 #include <bit>
@@ -914,10 +915,24 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
         spec_multi_pos_tiles,
     };
 
+    // TT_SDPA_DECODE_TREE_FAST=1 (default off): leaner tree-reduction combine (no copy of the child's
+    // L / O into scratch CBs, ping-pong max/sum CBs instead of two copies per round) and one NOC barrier
+    // for the three child reads. Byte-identical results: only bf16->bf16 copies are removed.
+    // Read ONCE per process and NOT part of the program hash: set it before the first SDPA decode
+    // call and never change it within a process (a cached program keeps whichever variant it was built with).
+    static const bool tree_fast = [] {
+        const char* v = std::getenv("TT_SDPA_DECODE_TREE_FAST");
+        return v != nullptr && v[0] == '1';
+    }();
+
     // ========== Compute Defines ==========
     std::map<std::string, std::string> compute_defines;
     compute_defines["EXP_APPROX_MODE"] = std::to_string(exp_approx_mode);
     compute_defines["DHT_GRANULARITY"] = std::to_string(dht_granularity);
+
+    if (tree_fast) {
+        compute_defines["SDPA_TREE_FAST"] = "1";
+    }
 
     if (Sk_chunk_t > 0) {
         auto add_granularity = [&](const char* name, uint32_t value) {
@@ -968,6 +983,9 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
         };
         reader_desc.defines = pack_defines;
         writer_desc.defines = pack_defines;
+    }
+    if (tree_fast) {
+        writer_desc.defines.emplace_back("SDPA_TREE_FAST", "1");
     }
 
     KernelDescriptor compute_desc;

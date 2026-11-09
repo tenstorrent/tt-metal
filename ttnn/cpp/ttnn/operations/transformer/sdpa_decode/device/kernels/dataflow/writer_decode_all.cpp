@@ -322,6 +322,39 @@ void kernel_main() {
                     uint32_t intermed_l1_read_addr = cb_intermed.get_read_ptr() + block_offset;
                     UnicastEndpoint intermed_src;
 
+#ifdef SDPA_TREE_FAST
+                    // One barrier for the three reads (TT_SDPA_DECODE_TREE_FAST); same bytes, same CB order.
+                    {
+                        CircularBuffer cb_l(cb_l_in);
+                        CircularBuffer cb_m(cb_m_in);
+                        CircularBuffer cb_o(cb_out_o);
+                        cb_l.reserve_back(PNHt);
+                        cb_m.reserve_back(PNHt);
+                        cb_o.reserve_back(out_chunk_tiles);
+                        noc.async_read(
+                            intermed_src,
+                            CoreLocalMem<uint32_t>(cb_l.get_write_ptr()),
+                            ml_read_size,
+                            {.noc_x = my_noc_x, .noc_y = my_noc_y, .addr = intermed_l1_read_addr},
+                            {});
+                        noc.async_read(
+                            intermed_src,
+                            CoreLocalMem<uint32_t>(cb_m.get_write_ptr()),
+                            ml_read_size,
+                            {.noc_x = my_noc_x, .noc_y = my_noc_y, .addr = intermed_l1_read_addr + ml_read_size},
+                            {});
+                        noc.async_read(
+                            intermed_src,
+                            CoreLocalMem<uint32_t>(cb_o.get_write_ptr()),
+                            o_read_size,
+                            {.noc_x = my_noc_x, .noc_y = my_noc_y, .addr = intermed_l1_read_addr + 2 * ml_read_size},
+                            {});
+                        noc.async_read_barrier();
+                        cb_l.push_back(PNHt);
+                        cb_m.push_back(PNHt);
+                        cb_o.push_back(out_chunk_tiles);
+                    }
+#else
                     // Reserve space in CBs and read data
                     // Order: l, m, o (same as sender writes)
                     CircularBuffer cb_l(cb_l_in);
@@ -361,6 +394,7 @@ void kernel_main() {
                         {});
                     noc.async_read_barrier();
                     cb_o.push_back(out_chunk_tiles);
+#endif  // SDPA_TREE_FAST
                 }
             }
         }
