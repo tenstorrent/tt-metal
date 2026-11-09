@@ -70,7 +70,6 @@ from loguru import logger
 
 import ttnn
 from models.experimental.deepseek_v41_flash.tests.decode.test_full_model_decode_demo import (
-    _ENGRAM_RAM_MARGIN,
     _available_bytes,
     _build_rope,
     _checkpoint_available,
@@ -82,9 +81,11 @@ from models.experimental.deepseek_v41_flash.tt.config import (
     pipeline_stage_count,
 )
 from models.experimental.deepseek_v41_flash.tt.engram_lookup import (
+    ENGRAM_RAM_MARGIN,
     EngramHostLookup,
     engram_ram_needed,
     load_engram_table,
+    stage_engram_tables,
 )
 from models.experimental.deepseek_v41_flash.tt.prefill.model import DeepSeekV41PrefillModel
 from models.experimental.deepseek_v4_flash.tests.prefill.test_full_model_prefill_demo import (
@@ -160,7 +161,8 @@ def _run_demo(mesh_device, progress: _Progress, AutoTokenizer) -> None:
 
     engram_ids = [i for i in config.engram_layer_ids if i < num_layers]
     if engram_ids:
-        need = _ENGRAM_RAM_MARGIN * engram_ram_needed(loader, engram_ids)
+        stage_engram_tables(loader, engram_ids)
+        need = ENGRAM_RAM_MARGIN * engram_ram_needed(loader, engram_ids)
         available = _available_bytes()
         if available < need:
             pytest.skip(

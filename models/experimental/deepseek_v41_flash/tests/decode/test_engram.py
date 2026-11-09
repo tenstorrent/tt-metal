@@ -39,9 +39,11 @@ from models.experimental.deepseek_v41_flash.tests.reference import (
 from models.experimental.deepseek_v41_flash.tt.config import CACHE_DIR, DEFAULT_MODEL_DIR, engram_weights, load_config
 from models.experimental.deepseek_v41_flash.tt.decode.engram import DeepSeekV41Engram
 from models.experimental.deepseek_v41_flash.tt.engram_lookup import (
+    ENGRAM_RAM_MARGIN,
     EngramHostLookup,
     engram_ram_needed,
     load_engram_table,
+    stage_engram_tables,
 )
 from models.experimental.deepseek_v4_flash.tt.weight_cache import WeightCache
 from models.experimental.deepseek_v4_flash.tt.weight_loader import DeepseekV4WeightLoader, resolve_snapshot_dir
@@ -76,8 +78,10 @@ def _available_bytes():
 def tables():
     """Both Engram layers' tables in host RAM, shared by every case."""
     loader = DeepseekV4WeightLoader(_snapshot())
+    # Staged in tmpfs, so the cases map one copy instead of each reading ~203 GB of its own.
+    stage_engram_tables(loader, ENGRAM_LAYERS)
     nbytes = engram_ram_needed(loader, ENGRAM_LAYERS)
-    if _available_bytes() < 1.25 * nbytes:
+    if _available_bytes() < ENGRAM_RAM_MARGIN * nbytes:
         pytest.skip(f"needs {nbytes / 1e9:.0f} GB of free memory for the Engram tables")
     return {i: load_engram_table(loader, i) for i in ENGRAM_LAYERS}
 

@@ -56,8 +56,12 @@ What V4.1 imposes on the serving side:
   ``candidate_topk_blocks * candidate_block_size`` (16384) compressed entries the select is two-level, in the
   traced prefill and in decode, so a prompt prefills up to ``--prefill-max-len`` (by default the whole context, at
   most 131072 tokens, see :class:`_V41Prefiller`) and decode replays the rest.
-* Engram layers 1 and 14 read host n-gram tables (~101 GB each); the model refuses to build without that RAM free,
-  unless ``tools/stage_engram_tables.py`` has already put them in RAM.
+* Engram layers 1 and 14 read host n-gram tables (~101 GB each). Before the mesh is opened they are staged in
+  tmpfs (``STAGE_DIR``, ``DEEPSEEK_V41_ENGRAM_STAGE_DIR``, default ``/dev/shm/deepseek_v41_engram``) and mapped
+  from there, so one copy serves every run and process instead of each reading the checkpoint into RAM; the
+  model then refuses to build only if even the staged copy does not fit. ``--no-engram-staging`` (or
+  ``DEEPSEEK_V41_ENGRAM_STAGE=0``) keeps the old behaviour, and a startup with too little RAM names
+  ``tools/stage_engram_tables.py``, which stages ahead of time (and ``--remove`` drops the copies).
 * Images (``--vision``, on by default). A request's messages may carry up to 256 distinct images, as long as their rows
   fit ``--image-rows`` together (up to 1024 an image, fewer for a small one): an uploaded file (a
   ``file`` part with a ``file_id``) or inline base64 (a ``file`` part's ``file_data`` or an ``image_url``, holding a
@@ -151,6 +155,13 @@ from models.experimental.deepseek_v41_flash.tt.config import (
     load_config,
     load_vision_config,
     pipeline_stage_count,
+)
+from models.experimental.deepseek_v41_flash.tt.engram_lookup import (
+    ENGRAM_RAM_MARGIN,
+    STAGE_DIR,
+    engram_ram_needed,
+    host_mem_available,
+    stage_engram_tables,
 )
 from models.experimental.deepseek_v41_flash.tt.lm_head import DeepSeekV41LMHead
 from models.experimental.deepseek_v41_flash.tt.model import DeepSeekV41Model
@@ -1372,6 +1383,42 @@ class _V41Prefiller(_Prefiller):
         return self.engine.model.commit_prefill_state(states, user.sid, start=user.pos)
 
 
+def _stage_engram_tables(args) -> bool:
+    """Stage the Engram tables in ``STAGE_DIR`` (tmpfs) before the mesh is opened, and check that what is left
+    for the model to read or map fits in host RAM.
+
+    The build reads the tables into RAM itself otherwise (~203 GB, once per process), and a copy made here holds
+    the one copy every later run maps instead: startup then reads nothing, and two servers can serve from it at
+    once (see :func:`~..tt.engram_lookup.stage_engram_tables`). Do it with the card still free, since the copy
+    takes ~40 s from NVMe. ``--no-engram-staging`` (or ``DEEPSEEK_V41_ENGRAM_STAGE=0``) skips it, and then the
+    model's own RAM check is the only gate.
+    """
+    config = load_config(args.model_dir)
+    layers = min(args.num_layers or config.num_hidden_layers, config.num_hidden_layers)
+    ids = [i for i in config.engram_layer_ids if i < layers]
+    if not ids:
+        return True
+    loader = DeepseekV4WeightLoader(args.model_dir)
+    if args.engram_staging:
+        _, copied = stage_engram_tables(loader, ids)
+        if copied:
+            logger.info(f"Engram tables of layers {ids} staged in {STAGE_DIR}: {copied / 1e9:.0f} GB copied")
+    else:
+        logger.info("Engram staging off: each process reads the tables from the checkpoint")
+    need = engram_ram_needed(loader, ids)
+    available = host_mem_available()
+    if available < ENGRAM_RAM_MARGIN * need:
+        print(
+            f"Engram tables of layers {ids} need {ENGRAM_RAM_MARGIN * need / 1e9:.0f} GB of free RAM to load, "
+            f"and {available / 1e9:.0f} GB is available. Stage them once with\n"
+            f"  python models/experimental/deepseek_v41_flash/tools/stage_engram_tables.py\n"
+            f"to share one {STAGE_DIR} copy between runs instead of reading the checkpoint per process.",
+            file=sys.stderr,
+        )
+        return False
+    return True
+
+
 def parse_args(argv: list[str] | None = None):
     p, sys_cfg = build_parser(argv, description=__doc__)
     # The V4 parser's sizing defaults come from the machine profile, which is tuned for V4.
@@ -1416,6 +1463,14 @@ def parse_args(argv: list[str] | None = None):
         "tokens takes as many (~600 for a typical screenshot), and every image of a request, and of any "
         "conversation held, keeps its rows at once (default: 40960)",
     )
+    p.add_argument(
+        "--engram-staging",
+        action=argparse.BooleanOptionalAction,
+        default=os.environ.get("DEEPSEEK_V41_ENGRAM_STAGE", "1") not in ("0", "", "false", "False"),
+        help="stage the Engram n-gram tables (~203 GB) in tmpfs before opening the mesh, so one copy is mapped "
+        "by every run and process instead of each reading it into RAM (default: on; "
+        "DEEPSEEK_V41_ENGRAM_STAGE=0 turns it off)",
+    )
     for action in p._actions:
         if action.dest == "temperature":
             action.help = (
@@ -1449,8 +1504,14 @@ def parse_args(argv: list[str] | None = None):
 
 
 def main(argv: list[str] | None = None) -> int:
+    args = parse_args(argv)
+    if not Path(args.model_dir).expanduser().exists():
+        print(f"checkpoint not found: {args.model_dir}", file=sys.stderr)
+        return 1
+    if not _stage_engram_tables(args):
+        return 1
     return serve(
-        parse_args(argv),
+        args,
         engine_cls=V41ChatEngine,
         prefiller_cls=_V41Prefiller,
         num_stages=pipeline_stage_count(),

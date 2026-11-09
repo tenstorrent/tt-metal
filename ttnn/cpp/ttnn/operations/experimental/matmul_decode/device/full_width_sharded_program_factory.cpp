@@ -1714,6 +1714,7 @@ ProgramDescriptor create_descriptor_ring_gather_full(
             }
         }
         tt::tt_fabric::FabricMuxConfig mux_config(
+            *input_tensor_a.device(),
             /*num_full_size_channels=*/max_clients_per_mux,
             /*num_header_only_channels=*/0,
             /*num_buffers_full_size_channel=*/2,
@@ -1783,6 +1784,7 @@ ProgramDescriptor create_descriptor_ring_gather_full(
                     mux_kernel.runtime_args.emplace_back(
                         mux_core,
                         mux_config.get_fabric_mux_run_time_args(
+                            *input_tensor_a.device(),
                             input_tensor_a.device()->get_fabric_node_id(*mesh_dispatch_coordinate),
                             dst,
                             mux_links_by_dir[dir][mux_idx],

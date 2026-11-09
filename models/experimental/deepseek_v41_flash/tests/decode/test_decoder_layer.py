@@ -61,9 +61,11 @@ from models.experimental.deepseek_v41_flash.tt.decode.attention import build_dec
 from models.experimental.deepseek_v41_flash.tt.decode.decoder_layer import DeepSeekV41DecoderLayer
 from models.experimental.deepseek_v41_flash.tt.decode.moe import DeepSeekV41PreloadedExperts
 from models.experimental.deepseek_v41_flash.tt.engram_lookup import (
+    ENGRAM_RAM_MARGIN,
     EngramHostLookup,
     engram_ram_needed,
     load_engram_table,
+    stage_engram_tables,
 )
 from models.experimental.deepseek_v4_flash.tt.common import width_sharded_l1_config
 from models.experimental.deepseek_v4_flash.tt.decode.hyperconnection import _HC_COLLAPSE_CORES
@@ -121,9 +123,11 @@ def _available_bytes():
 
 
 def _engram_tables(loader, layer_ids) -> dict:
-    """The n-gram tables of ``layer_ids`` in host RAM; skips without 1.25x their size free."""
+    """The n-gram tables of ``layer_ids`` in host RAM, staged in tmpfs so every process maps one copy; skips
+    without 1.25x their size free."""
+    stage_engram_tables(loader, layer_ids)
     nbytes = engram_ram_needed(loader, layer_ids)
-    if _available_bytes() < 1.25 * nbytes:
+    if _available_bytes() < ENGRAM_RAM_MARGIN * nbytes:
         pytest.skip(f"needs {nbytes / 1e9:.0f} GB of free memory for the Engram tables")
     return {i: load_engram_table(loader, i) for i in layer_ids}
 

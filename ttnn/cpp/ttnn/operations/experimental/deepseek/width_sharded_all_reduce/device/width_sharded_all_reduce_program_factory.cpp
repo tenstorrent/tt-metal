@@ -402,6 +402,7 @@ WidthShardedAllReduceMeshWorkloadFactory::cached_program_t WidthShardedAllReduce
         writer_rt_args.push_back(forward_coord.has_value());
         if (forward_coord.has_value()) {
             tt::tt_fabric::append_fabric_connection_rt_args(
+                *mesh_device,
                 mesh_device->get_fabric_node_id(coord),
                 mesh_device->get_fabric_node_id(forward_coord.value()),
                 link,
@@ -412,6 +413,7 @@ WidthShardedAllReduceMeshWorkloadFactory::cached_program_t WidthShardedAllReduce
         writer_rt_args.push_back(backward_coord.has_value());
         if (backward_coord.has_value()) {
             tt::tt_fabric::append_fabric_connection_rt_args(
+                *mesh_device,
                 mesh_device->get_fabric_node_id(coord),
                 mesh_device->get_fabric_node_id(backward_coord.value()),
                 link,
