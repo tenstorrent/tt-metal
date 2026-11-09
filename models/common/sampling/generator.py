@@ -923,8 +923,9 @@ def scatter_sampling_params_to_slots(
     params in prefill order, which only coincides with the slot order when the
     slots happen to be ``range(len(empty_slots))``.
 
-    ``seed`` is left in prefill order: ``SeedManager.reset_seed`` takes the slot
-    list separately and does its own mapping. Rows no request occupies inherit the
+    ``seed``, ``enable_log_probs`` and ``num_logprobs`` are left in prefill order:
+    ``SeedManager.reset_seed`` and ``LogProbsCalculator.set_log_probs_mode`` take the
+    slot list separately and do their own mapping. Rows no request occupies inherit the
     last real request's values rather than the formatter's padding, so they stay
     valid instead of sampling from a default row. Does not mutate the input.
     """
@@ -951,7 +952,7 @@ def scatter_sampling_params_to_slots(
     kwargs = {}
     for f in fields(formatted_sampling_params):
         value = getattr(formatted_sampling_params, f.name)
-        kwargs[f.name] = value if f.name == "seed" else _scatter(value)
+        kwargs[f.name] = value if f.name in ("seed", "enable_log_probs", "num_logprobs") else _scatter(value)
     return SamplingParams(**kwargs)
 
 
