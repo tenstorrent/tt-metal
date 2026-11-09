@@ -358,7 +358,10 @@ def test_row_params_conversion():
     )
     assert row_params(sp, 2) == SamplingParams(temperature=0.9, top_k=None, top_p=0.95, seed=None)
     assert row_params(sp, 3) == SamplingParams(temperature=1.0, top_k=40, top_p=1.0, seed=None)
-    assert row_params(SimpleNamespace(), 5).is_greedy  # missing fields read as greedy
+    with expect_error(AttributeError, "temperature"):  # a missing field is a contract break, not a greedy row
+        row_params(SimpleNamespace(), 0)
+    with expect_error(IndexError, "out of range"):  # a short list likewise
+        row_params(sp, 5)
 
 
 def test_kv_cache_spec_and_budget(monkeypatch):
@@ -695,7 +698,18 @@ def test_refusals():
         ad.decode_forward(tokens, positions, sampling_params=_greedy(B), reload_inputs=False, **kw)
     with expect_error(ValueError, "permutation"):
         ad.decode_forward(tokens, positions, sampling_params=_greedy(B), slot_remap=torch.tensor([0, 0, 2, 3]), **kw)
+    with expect_error(ValueError, "full-width"):  # the plugin's gather names every slot
+        ad.decode_forward(tokens, positions, sampling_params=_greedy(B), slot_remap=torch.tensor([1, 0]), **kw)
     assert ad._alias == [0, 1, 2, 3]  # a refused gather leaves the alias alone
+    # the alias and the plugin's ownership map must agree: a fresh request into a live generator slot, a continuation
+    # into an idle one, are refused at the boundary
+    p2 = _prompt(100, 2)
+    with expect_error(RuntimeError, "still holds a live request"):
+        ad.prefill_forward(_history([p2]), page_table=_table([_blocks(1, 100)], 1), kv_cache=kv, prompt_lens=[100],
+                           start_pos=[0], empty_slots=[0], sampling_params=_greedy(1))  # fmt: skip
+    with expect_error(RuntimeError, "holds no live request"):
+        ad.prefill_forward(_history([p2]), page_table=_table([_blocks(1, 100)], 1), kv_cache=kv, prompt_lens=[100],
+                           start_pos=[64], empty_slots=[1], sampling_params=_greedy(1))  # fmt: skip
     with expect_error(ValueError, "sampled"):
         ad.decode_forward(
             tokens,
@@ -711,7 +725,8 @@ def test_refusals():
     with expect_error(TypeError, "expects a DecodeOutput"):
         ad.read_decode_output(object(), async_read=True)
     assert ad.process_decode_output_host(out, is_tokens=True).reshape(-1).tolist() == [(tok + 1) % VOCAB, 0, 0, 0]
-    ad.release_request(7)  # outside the slot range: logged, ignored
+    with expect_error(ValueError, "outside"):  # outside the slot range: a contract break, refused
+        ad.release_request(7)
     assert backend.releases == []
 
 

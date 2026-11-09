@@ -642,8 +642,11 @@ class StackBackend(ModelBackend):
                     # every t <= 4: each row count holds a fabric phase (2 x 896 B of L1 sync words) and, on the shard,
                     # 4 stream syncs (4 x 1536 B) for the life of the stack)
                     k_spec = int(os.environ.get("GLM53_SPEC_K", "0"))
-                    ts = (tuple(sorted({self.chunk} | set(self.narrow_widths) | ({1, k_spec + 1} if k_spec > 0 else set())))
-                          if self.weight_cache is not None else (self.chunk,))  # fmt: skip
+                    # (independent of the weight cache: the narrow widths are empty without one, the spec step's
+                    # row counts are needed whenever GLM53_SPEC_K is set -- the MTP layer asserts them in its fabrics)
+                    ts = tuple(
+                        sorted({self.chunk} | set(self.narrow_widths) | ({1, k_spec + 1} if k_spec > 0 else set()))
+                    )
                     d = TPD.TPDsaLayer(self.mesh, self.cfg, L, source, OptimizedDecoderConfig(), moe=moe, ts=ts,
                                        share=dsa_share, dsa=self.dsa_decode, defer=self.dsa_defer,
                                        shard=self.dsa_shard)  # fmt: skip

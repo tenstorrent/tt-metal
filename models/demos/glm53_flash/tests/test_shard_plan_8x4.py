@@ -10,6 +10,8 @@ over 32 candidate lists against the serial reference. The 2x4 plan is regression
 
 from __future__ import annotations
 
+import sys
+
 import pytest
 import torch
 
@@ -106,5 +108,49 @@ def test_lane_merge_32_lists(C, lanes):
     ref = SP.serial_merge(res["lists"], 0, k=512)
     assert res["T_g"] == ref["T_g"], (res["T_g"], ref["T_g"])
     assert res["core_quota"][0] == ref["core_quota"]
-    assert SP.lanes_reasons(16, 2, 64, 4, 1, nchips=C) == [] if C <= 32 else True
+    assert SP.lanes_reasons(16, 2, 64, 4, 1, nchips=C) == []
     assert SP.lanes_reasons(32, 4, 64, 4, 1, nchips=32) == ["32 merge helpers among 16 lane chunk cores"]
+
+
+def test_8x4_byte_formats_round_trip():
+    """The 8x4 compact formats mirrored from kernels/mla/dsa_shard.hpp: the 2-row q piece (lat_dm1.cpp's write ->
+    ix_dm1.cpp's 16-piece assembly = the whole tile, one page of 16 x 128 B), the round-1 8-row and round-2 2-row slice
+    ship -> land round trips (att_dsa_shard_dm1.cpp), the page / offset helpers and the slice chunk layouts."""
+    geo = SP.Geometry(8, 4)
+    assert (geo.piece_rows, geo.rs1_rows, geo.rs2_rows) == (2, 8, 2)
+    assert SP.piece_bytes(2) == 128 and SP.pieces_per_page(2) == 16  # "128 B x 16 tiles = ONE page"
+    assert SP.piece_bytes(8) == 512 and SP.pieces_per_page(8) == 4
+    assert SP.ag_pages(geo) == (SP.AG32_PPC, SP.AG32_QPAGES) == (6, 1)
+    T = 4
+    for d in range(16):
+        assert SP.agx_q_page(geo, T, 1, 2, d) == ((1 * T + 2) * 6 + d // 16, (d % 16) * 128)
+    assert SP.agx_q_page(geo, T, 0, 0, 16) == (1, 0)  # a 17th tile would start the next page
+    assert SP.agx_cand_page(geo, T, 1, 2, 5000) == ((1 * T + 2) * 6 + 1 + 5000 // SP.TB, 5000 % SP.TB)
+    assert SP.rs1_page(T, 3, 1) == (3 * T + 1) * SP.RS2_PPC and SP.rs2b_page(T, 3, 1) == (3 * T + 1) * SP.RS2B_PPC
+    # the 2-row q pieces of 16 chips assemble the tile: chip j's rows 0..1 land at rows 2 j, 2 j + 1
+    chips = [torch.arange(1024, dtype=torch.int32) + 10000 * j for j in range(16)]
+    pieces = [SP.q_piece_rows(SP.tile_to_faces(c.reshape(32, 32)), 2) for c in chips]
+    assert all(p.numel() == 64 for p in pieces)  # 128 B of bf16
+    got = SP.faces_to_tile(SP.assemble_q_tile_rows(pieces, 2))
+    want = torch.cat([chips[j].reshape(32, 32)[0:2] for j in range(16)])
+    assert torch.equal(got, want)
+    # the slice ship -> land round trips: 8-row (round 1) and 2-row (round 2) slices of a face-major tile
+    for rows in (8, 2):
+        src = torch.randn(32, 32)
+        faces = SP.tile_to_faces(src)
+        dst = torch.zeros(1024)
+        for j in range(32 // rows):
+            runs = SP.slice_runs_rows(faces, rows, j)
+            assert runs[0].numel() == runs[1].numel() == SP.slice_run(rows, 1024)
+            SP.land_slice_rows(dst, rows, j, runs)
+        assert torch.equal(SP.faces_to_tile(dst), src)
+    # the slice chunk layouts fit their pages: round 2 = 16 x 256 B + 2 x 256 B with fp32 O tiles (3 pages + pad)
+    lay = SP.rs_layout(2, otb=4096)
+    assert lay[-1][2] + 4096 * 2 // 32 == 16 * 256 + 2 * 256 <= SP.RS2B_PPC * SP.TB
+    assert SP.rs2_layout(4096) == SP.rs_layout(8, 4096)
+
+
+def test_zz_no_ttnn_was_imported_by_the_suite():
+    """The unit CI runs this file without the root conftest: a host suite must never pull ttnn in (it would open
+    every chip of the box beside a running mesh job)."""
+    assert "ttnn" not in sys.modules

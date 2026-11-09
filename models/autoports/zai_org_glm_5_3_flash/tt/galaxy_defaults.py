@@ -1,14 +1,11 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""The validated 8x4 Galaxy configuration of the persistent-stack port (l2-34, 2026-11-06 .. 08): TP32 x EP32 over the
-32 chips, the sequence-sharded DSA pool (1 M x 4 and 128 K x 16 users resident), the TP prefill with the DSA indexer,
-the hybrid expert layout, the pooled layer intermediates. `apply(mesh_shape, seq, isl)` sets every knob below with
+"""The validated 8x4 Galaxy configuration of the persistent-stack port: TP32 x EP32 over the 32 chips, the
+sequence-sharded DSA pool (1 M x 4 and 128 K x 16 users resident), the TP prefill with the DSA indexer, the hybrid
+expert layout, the pooled layer intermediates. `apply(mesh_shape, seq, isl)` sets every knob below with
 os.environ.setdefault when the mesh is the 8x4 (an explicit environment value always wins) and the per-context terms
--- the trace region, the prefill buckets, the TP prefill's sparse window ladder -- from the cache length `seq`.
-
-Measured (45 layers, OSL 128, tok/s per user / TTFT): 32 K x 4 37.1 / 35 s, 32 K x 16 14.6 / 142 s, 128 K x 8 23.1 /
-290 s, 128 K x 16 14.0 / 583 s, 512 K x 4 34.6 / 626 s, 1 M x 1 51.7 / 345 s, 1 M x 4 35.4 / 1,379 s
-(models/demos/glm53_flash/doc/perf/shard_8x4_design.md section 6)."""
+-- the trace region, the prefill buckets, the TP prefill's sparse window ladder -- from the cache length `seq`. The
+validated rows: models/demos/glm53_flash/doc/perf/shard_8x4_design.md section 6."""
 from __future__ import annotations
 
 import os

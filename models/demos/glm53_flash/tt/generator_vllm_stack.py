@@ -18,8 +18,9 @@ generator's slots (``_CacheBinding.slots``) through a bijection it keeps (``_ali
 (model_runner.py:1366-1421: a full permutation of every slot after it condenses the rows) is absorbed into the alias
 instead of moving state: row ``i`` decodes in the generator slot its request was admitted to
 (``Glm53Generator.decode_forward(slots=...)``), so no ``remap_slots`` copies run and a gather that is a cycle over a
-full batch (every slot live: the generator's "cyclic slot_remap needs a free scratch slot" refusal, hit by the first
-4-user served step) is fine. A new request takes the lowest free generator slot. vLLM's logical blocks travel
+full batch (every slot live: the generator's "cyclic slot_remap needs a free scratch slot" refusal) is fine. A new
+request takes the lowest free generator slot. The plugin references in this module (``worker.py:...``,
+``model_runner.py:...``, ``async_decode.py:...``) are to vllm-tt-plugin main at 042a948 (2026-11-09). vLLM's logical blocks travel
 ``pt_shadow -> OwnerBlockMap -> per-chip local tables`` inside the generator / backend once the cache is allocated
 with ``null_block=0``.
 """
@@ -73,17 +74,13 @@ def _fabric_capability() -> dict | None:
         if "vllm" not in sys.modules:  # a host process (the host test keeps this module ttnn-free)
             return None
         import ttnn  # noqa: F401  (a vLLM process: the validated fabric must reach the plugin before it opens the mesh)
-    try:
-        from models.autoports.zai_org_glm_5_3_flash.tt.stack_model import serving_fabric_config
-        from models.demos.glm53_flash.tt.mesh import mesh_device_params
+    # no fallback: a failure here must stop the launch (the plugin's hardware default on a Blackhole Galaxy is the 2D
+    # torus, a fabric the stack was never validated on), so the exception propagates
+    from models.autoports.zai_org_glm_5_3_flash.tt.stack_model import serving_fabric_config
+    from models.demos.glm53_flash.tt.mesh import mesh_device_params
 
-        out = dict(serving_fabric_config())
-        params = mesh_device_params(*_mesh_shape_from_env())
-    except Exception as exc:  # pragma: no cover - device library detail
-        logger.warning(
-            f"GLM53 stack vLLM: fabric capability not resolved ({exc}); the plugin's hardware default applies"
-        )
-        return None
+    out = dict(serving_fabric_config())
+    params = mesh_device_params(*_mesh_shape_from_env())
     if "reliability_mode" in params:
         out["reliability_mode"] = params["reliability_mode"]
     if "fabric_router_config" in params:
@@ -136,21 +133,15 @@ def row_params(sampling_params, r: int) -> SamplingParams:
     """Row ``r`` of the plugin's per-row lists (``TTSamplingParams``, model_input.py:69-84; on device-sampling calls
     the fields are lists, a None seed = vLLM gave none) -> the generator's ``SamplingParams``: temperature 0 or top_k 1
     is greedy (``is_greedy``: the head's argmax, the only device route of this adapter); vLLM's "no top-k" (0 / -1)
-    becomes None. A missing field reads as greedy / no top-k / top-p 1 / no seed."""
-
-    def val(name, default):
-        v = getattr(sampling_params, name, None)
-        if v is None or r >= len(v) or v[r] is None:
-            return default
-        return v[r]
-
-    t = float(val("temperature", 0.0))
-    k = int(val("top_k", 1))
-    seed = val("seed", None)
+    becomes None. Every field is a per-row list on the plugin's object and only ``seed`` carries None (vLLM gave no
+    seed), so a missing field or a short list is a contract break and raises (AttributeError / IndexError)."""
+    t = float(sampling_params.temperature[r])
+    k = int(sampling_params.top_k[r])
+    seed = sampling_params.seed[r]
     return SamplingParams(
         temperature=t,
         top_k=None if k <= 0 else k,
-        top_p=float(val("top_p", 1.0)),
+        top_p=float(sampling_params.top_p[r]),
         seed=None if seed is None or int(seed) < 0 else int(seed),
     )
 
@@ -390,9 +381,8 @@ class GLM53StackForCausalLM:
         ends = [int(v) for v in prompt_lens]
         starts = [0] * B if start_pos is None else [int(v) for v in torch.as_tensor(start_pos).reshape(-1).tolist()]
         slots = list(range(B)) if empty_slots is None else [int(s) for s in empty_slots]
-        if len(ends) != B or len(starts) < B or len(slots) < B:
+        if len(ends) != B or len(starts) != B or len(slots) != B:  # one entry per row (MODEL_EXECUTION.md "Prefill")
             raise ValueError(f"prefill rows {B} vs prompt_lens {len(ends)} start_pos {len(starts)} slots {len(slots)}")
-        starts, slots = starts[:B], slots[:B]
         lens = [e - s for s, e in zip(starts, ends)]
         if any(n < 1 for n in lens) or any(e > int(tokens.shape[1]) for e in ends):
             raise ValueError(
@@ -516,31 +506,16 @@ class GLM53StackForCausalLM:
 
     # ================================================================================= slot aliasing
     def _permuted(self, slot_remap) -> list:
-        """The alias after the plugin's gather ``slot_remap`` (row ``i`` reads plugin slot ``remap[i]``: a full
-        permutation of the plugin's slots, model_runner.py:1366-1421; ``-1`` / ``i`` = unchanged; a ``{src: dst}``
-        dict = those moves, the overwritten free slots backfilling the emptied rows), the current alias without one.
-        Row ``i`` keeps the generator slot its request already decodes in, so no state moves."""
+        """The alias after the plugin's gather ``slot_remap`` (row ``i`` reads plugin slot ``remap[i]``: the one
+        encoding the plugin sends, a full-width int tensor that permutes every slot, model_runner.py:1366-1421), the
+        current alias without one. Row ``i`` keeps the generator slot its request already decodes in, so no state
+        moves."""
         n = self.max_batch
         if slot_remap is None:
             return self._alias
-        if isinstance(slot_remap, dict):
-            moves = {int(s): int(d) for s, d in slot_remap.items()}
-            if any(not (0 <= s < n and 0 <= d < n) for s, d in moves.items()):
-                raise ValueError(f"slot_remap moves {moves} outside [0, {n})")
-            remap = list(range(n))
-            for s, d in moves.items():
-                remap[d] = s
-            lost = [d for d in sorted(moves.values()) if d not in moves]  # free slots a move overwrote
-            emptied = [s for s in sorted(moves) if s not in moves.values()]  # rows whose request moved away
-            for i, d in zip(emptied, lost):
-                remap[i] = d
-        else:
-            remap = [int(x) for x in torch.as_tensor(slot_remap).reshape(-1).tolist()]
-            if len(remap) > n:
-                raise ValueError(f"slot_remap names {len(remap)} rows for {n} slots")
-            remap = [i if v < 0 else v for i, v in enumerate(remap)] + list(range(len(remap), n))
-        if sorted(remap) != list(range(n)):
-            raise ValueError(f"slot_remap {remap} is not a permutation of the {n} slots")
+        remap = [int(x) for x in torch.as_tensor(slot_remap).reshape(-1).tolist()]
+        if len(remap) != n or sorted(remap) != list(range(n)):
+            raise ValueError(f"slot_remap {remap} is not a full-width permutation of the {n} slots")
         return [self._alias[s] for s in remap]
 
     def _admit(self, kv, slots: list, starts: list) -> list:
@@ -555,10 +530,27 @@ class GLM53StackForCausalLM:
         alias, taken = list(self._alias), set(live)
         for s, start in zip(slots, starts):
             g = alias[s]
-            if g in live or start > 0:
+            if (
+                start > 0
+            ):  # a continuation: its request already holds this generator slot (its first chunk made it live)
+                if g not in live:
+                    raise RuntimeError(
+                        f"prefill continuation at {start} in plugin slot {s}: generator slot {g} holds no live request "
+                        f"(alias {alias}, live {sorted(live)})"
+                    )
                 taken.add(g)
                 continue
-            lowest = next(x for x in range(n) if x not in taken)
+            if (
+                g in live
+            ):  # the plugin never hands a fresh request a held slot (model_runner._alloc_prefill_state_slots)
+                raise RuntimeError(
+                    f"new request in plugin slot {s}: generator slot {g} still holds a live request (alias {alias}, "
+                    f"live {sorted(live)}): the plugin's ownership map and the alias diverged"
+                )
+            free = [x for x in range(n) if x not in taken]
+            if not free:
+                raise RuntimeError(f"no free generator slot for the prefill batch {slots} (live {sorted(live)})")
+            lowest = free[0]
             if lowest != g:
                 j = alias.index(lowest)
                 alias[s], alias[j] = lowest, g
@@ -601,9 +593,10 @@ class GLM53StackForCausalLM:
         """model_runner.py:965-983 / 2880: the request in plugin ``slot`` (its CURRENT slot, after every gather)
         finished or was preempted -> ``Glm53Generator.release_slot`` on its generator slot: the slot stops decoding,
         its page coverage and (sharded pool) physical blocks are released, the backend's release hook runs once."""
-        if self.kv_cache is None or not 0 <= int(slot) < self.max_batch:
-            logger.warning(f"GLM53 stack vLLM: release_request({slot}) before allocation or outside the slot range")
-            return
+        if self.kv_cache is None:
+            raise RuntimeError("release_request before allocate_kv_cache")
+        if not 0 <= int(slot) < self.max_batch:
+            raise ValueError(f"release_request({slot}) outside the {self.max_batch} slots")
         self.gen.release_slot(self.kv_cache, self._alias[int(slot)])
 
     def note_state_slots_moved(self, moves) -> None:

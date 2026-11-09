@@ -3370,9 +3370,10 @@ class TPPrefill:
 
     def plan(self, chunk_start: int, n_valid: int):
         """(bucket, key window t) of a chunk: t = 0 (dense: no query past position 2,050, or no sparse_dsa layer) or the
-        smallest captured window >= chunk_start + bucket (GLM53_PF_SPARSE_T; else the next multiple of 2,048). The
-        bucket is the slice-boundary rule's (slice_choice): the natural one unless its geometry puts the last valid row
-        on a chip slice's first row and a larger captured bucket does not."""
+        smallest CAPTURED window >= chunk_start + bucket (GLM53_PF_SPARSE_T: the only windows sparse_keys compiles and
+        captures; a chunk past them raises, so _plan_ok / clamp_lengths split it at planning time instead of replay
+        failing on a key no trace holds). The bucket is the slice-boundary rule's (slice_choice): the natural one unless
+        its geometry puts the last valid row on a chip slice's first row and a larger captured bucket does not."""
         sparse = self._sparse(chunk_start, n_valid)
         nat, safe = self.slice_choice(chunk_start, n_valid)
         c = nat if safe is None else safe
@@ -3382,10 +3383,10 @@ class TPPrefill:
         for t in sorted(self.sparse_ts):
             if t >= need:
                 return c, t
-        t = -(-need // 2048) * 2048
-        if t > self.max_seq:
-            raise ValueError(f"chunk [{chunk_start}, {chunk_start + c}) past the cache ({self.max_seq} tokens)")
-        return c, t
+        raise ValueError(
+            f"chunk [{chunk_start}, {chunk_start + c}) past the captured sparse windows "
+            f"{sorted(self.sparse_ts) or 'none'} (GLM53_PF_SPARSE_T) of the {self.max_seq}-token cache"
+        )
 
     def sparse_keys(self, buckets=None):
         """(bucket, t) of every sparse trace: each sequence-parallel bucket x each window t >= bucket, t > 2,051"""

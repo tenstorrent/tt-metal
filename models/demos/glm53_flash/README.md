@@ -6,6 +6,8 @@ context, image input. Weights fp8 block-scaled on the hub, run as bfp8 experts /
 
 ## Design
 
+This section and "Performance" describe the TP4 x 8-row model (the served path until 2026-11-09); the persistent stack that now serves is in `doc/perf/shard_8x4_design.md` (results in its section 6) and in "Serving" below.
+
 | | |
 |---|---|
 | Mesh | 8x4 Blackhole Galaxy (32 x p150): tensor parallel 4 over the columns, 8 data-parallel rows (`GLM53_MESH_SHAPE=8,4`); every (2,4) block of the Galaxy runs the same code for bring-up |
@@ -119,18 +121,18 @@ Served on an 8x4 from the catalog entries (2026-11-09, 45 layers, OSL 128, one r
 |---|---|---|---|
 | 1 M (4 slots) | 128 tokens, 1 user | 4.1 s | greedy text identical to the e2e row's |
 | 1 M | 128 tokens, 4 identical / 4 distinct users | 5.6 s each | the 4 texts identical |
-| 1 M | 32 K tokens, 1 user / 4 users | 13.5 s / 42.9 s each | TTFT 39 s for 4 x 32 K; texts identical across 1 and 4 users and to the e2e row at the same cache length |
+| 1 M | 32 K tokens, 1 user / 4 users | 13.5 s / 42.9 s each | TTFT ~39 s for 4 x 32 K (wall minus 128 e2e decode steps); texts identical across 1 and 4 users and to the e2e row at the same cache length |
 | 1 M | 1,047,610 tokens, 1 user | 355.9 s | 95 thought + 33 answer tokens |
 | 1 M | 1,047,610 tokens, 4 identical / 4 distinct users | 1,404 s / 1,407 s each | vLLM prefills the four back to back (~345 s each: the e2e's 1,379 s TTFT), all four resident; the identical set's texts equal the lone request's |
 | 128 K (16 slots) | 128 tokens, 1 user / 16 identical / 16 distinct | 7.8 s / 15.2 s / 15.7 s each | 16 identical prompts: 1 text variant in one run, 3 in another (the two token lanes' reduction orders flip a near-tie) |
 | 128 K | 130,815 tokens, 1 user | 44.3 s | prefill ~3 K tok/s |
 | 128 K | 130,815 tokens, 16 identical / 16 distinct users | 583-600 s / 587-601 s each | the 16 prefills back to back (the e2e's 579 s TTFT), all 16 resident and coherent; identical prompts split into 6 text variants |
 
-Boot: ~11-12 min on a warm cache (the stack build ~5.5 min + the prefill-bucket and decode captures). Greedy outputs
-are deterministic for a given live count; a different live count (1 vs 16 users) or cache length (the e2e's 64 K
-default vs the served 1 M) can flip a near-tie later in the generation, so the served texts are compared with e2e rows
-of the same configuration; at 16 slots identical prompts in one batch split into several variants (two token lanes
-plus per-slot numerics), all coherent. Smoke: `_logs/mesh/serve_stack_catalog.sh` on the box (the catalog entry as-is, then
+Boot: ~11-12 min on a warm cache (the stack build ~5.5 min + the prefill-bucket and decode captures). Determinism: on
+the 4-slot profile the greedy text is identical across 1 and 4 live users and equal to the e2e row at the same cache
+length; a different cache length (the e2e's 64 K default vs the served 1 M) changes the sparse ladder and can flip a
+near-tie later in the text. On the 16-slot profile identical prompts in one batch split into several variants (two
+token lanes plus per-slot numerics; the e2e at 128 K x 16 shows the same, 14 of 16 users agreeing), all coherent. Smoke: `_logs/mesh/serve_stack_catalog.sh` on the box (the catalog entry as-is, then
 `serve_stack_client.py`: the e2e prompt greedy vs the reference text, N identical and N distinct concurrent users, one
 sampled request).
 

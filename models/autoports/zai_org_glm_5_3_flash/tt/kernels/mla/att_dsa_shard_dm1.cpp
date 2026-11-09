@@ -771,7 +771,10 @@ void kernel_main() {
             cb_push_back(CB_ARX, ST);
             cb_push_back(CB_ARXO, DT);
         };
-        noc_semaphore_wait_min(rsc, 1);  // the column scatter's waiter: every column peer's slices landed in y_rs1
+        // the column scatter's waiter: every column peer's slices landed in y_rs1. The row scatter signals the same
+        // semaphore later (wait_min 2 below): its waiter runs on the rs2 lane BRISC after that lane's sends, which wait
+        // on rs2_sem, raised by this root only past this wait -- so the count is ordinal (tp_dsa_shard.py, the streams)
+        noc_semaphore_wait_min(rsc, 1);
         MK_MARK();                       // probe 6: RS round 1 landed (8x4 root)
         for (uint32_t t = t0; t < t_rows; t += mlaatt::LANES) {
             land_rows(xrs2, mlashard::rs1_page(t_rows, ppos, t), mlashard::RS1_ROWS, j1);  // the own slice first

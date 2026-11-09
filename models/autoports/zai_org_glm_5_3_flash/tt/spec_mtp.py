@@ -64,9 +64,10 @@ def read_rows(mesh, t: ttnn.Tensor) -> torch.Tensor:
 
 
 @contextlib.contextmanager
-def verify_allocator(pool, w: int, enable: bool, mod=None):
+def verify_allocator(pool, w: int, enable: bool, mod=None, pools=()):
     """GLM53_SPEC_PC_DRAM for the verify's STACK BUILDS only: patches the pools' allocators (AllocPool.orig, the
-    pool and its child) with _pc_dram and, on exit, restores them AND the module's `empty` (ttnn.empty). The restore is
+    pool and its child, plus every pool in `pools` -- the sparse_dsa layers' DSA pool -- and their children) with
+    _pc_dram and, on exit, restores them AND the module's `empty` (ttnn.empty). The restore is
     needed because AllocPool.__exit__ sets ttnn.empty = pool.orig: a stack build under the patch leaves the patched
     allocator GLOBAL (it leaked into the plain decode: a later plain step at the verify's width allocated its post /
     comb tiles in DRAM = a new program key = a compile inside the trace capture: TT_FATAL).
@@ -74,11 +75,8 @@ def verify_allocator(pool, w: int, enable: bool, mod=None):
     each use restores exactly what it saw at entry, also on an exception. tests/s17/test_verify_allocator.py."""
     mod = ttnn if mod is None else mod
     saved = mod.empty
-    origs = (
-        [(o, o.orig) for o in (pool, getattr(pool, "_child", None)) if o is not None and hasattr(o, "orig")]
-        if enable
-        else []
-    )
+    targets = [q for p in (pool, *pools) for q in (p, getattr(p, "_child", None))]
+    origs = [(o, o.orig) for o in targets if o is not None and hasattr(o, "orig")] if enable else []
     for o, f in origs:  # (new allocations only: the first call builds the programs; later calls reuse the pool's)
         o.orig = _pc_dram(f, w)
 
@@ -759,6 +757,10 @@ class SpecMTP:
             if pool is None:
                 s1 = e["mla"](res, cache, pt, pos, t=t, keep=("s1",), stack=True, dsa_state=dsa_state)["s1"]
             else:
+                # a narrow row count (the verify's w, the draft's w and 1) is served as views of the full-width
+                # intermediates (alias), whatever the main pool's flag is at this moment (the draft runs outside
+                # _verify's window): otherwise the pool keys on the exact shape and allocates a second L1 set per width
+                pool.alias = self.be.chunk != t
                 with pool.child():  # s1 from the persistent-hand-off pool (never aliased by a build intermediate)
                     s1 = e["mla"].mk.s1_buffer(t)
                 with pool:
@@ -783,7 +785,9 @@ class SpecMTP:
         pool = kv.extra["pool"]
         pool.alias = be.chunk != w  # (see _build_verify_stacks)
         try:
-            with verify_allocator(pool, w, os.environ.get("GLM53_SPEC_PC_DRAM", "1") == "1") as va:
+            dsa_pool = kv.extra.get("dsa_pool")  # the sparse_dsa layers' pool: its post / comb tiles go to DRAM too
+            with verify_allocator(pool, w, os.environ.get("GLM53_SPEC_PC_DRAM", "1") == "1",
+                                  pools=() if dsa_pool is None else (dsa_pool,)) as va:  # fmt: skip
                 for r, stk in self.vstacks:
                     if stk is None:
                         self._dsa(be.seq[r[0]], self.R_v, kv.extra["latent"][r[0]], self.pt_v, self.pos_v, w, True,

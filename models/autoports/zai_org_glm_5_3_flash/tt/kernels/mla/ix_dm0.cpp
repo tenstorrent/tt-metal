@@ -173,8 +173,8 @@ void kernel_main() {
     // (SH0 + 3: the y_ag address, unused since rev 59's helper merge; the slot stays: fixed runtime-arg offsets)
     const uint32_t ag_x = get_arg_val<uint32_t>(SH0 + 4), ag_y = get_arg_val<uint32_t>(SH0 + 5);
     const uint32_t ag_sem = get_arg_val<uint32_t>(SH0 + 6), agc_sem = get_arg_val<uint32_t>(SH0 + 7);
-    ASSERT(t_rows <= mlashard::T_MAX && nchips <= 8);
-    ASSERT(nchips == mlashard::NCHIPS);
+    ASSERT(t_rows <= mlashard::T_MAX);
+    ASSERT(nchips == mlashard::NCHIPS);  // (2 on a pair, 8 on the 2x4, 32 on the 8x4)
     ASSERT(mlashard::lane_tokens(t_rows, t0) <= mlashard::TL);
     // scratch past the C histogram slots (the host sizes the tensor, tt/mk_mla.py shard_coord_words): the 64-B aligned
     // count header (+ the T_g probe words 8 + j, j < TL <= 8), the (quota, offset) pairs of the tie message (MAX_CHUNKS

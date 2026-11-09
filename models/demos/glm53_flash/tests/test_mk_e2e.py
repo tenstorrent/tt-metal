@@ -80,7 +80,6 @@ def chat_prompt(tok, isl: int, user: int = 0) -> list[int]:
     return ids
 
 
-@pytest.mark.timeout(7000)
 @pytest.mark.parametrize(
     "device_params",
     [

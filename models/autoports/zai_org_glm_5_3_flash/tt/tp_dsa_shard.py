@@ -177,11 +177,12 @@ class TPMlaShard(TPM.TPMla):
         if self.P > 2:  # 8x4 (doc/perf/shard_8x4_design.md): AG1 (the column of 8) -> AG2 (the row, 8-block bundles)
             # -> merge; RS1 = the column SCATTER of 8-row slices (the 2x4 round-2 format, x_rs1 block q = destination
             # position q) -> combine -> RS2 = the row scatter of 2-row slices (x_rs2b). The kernel's x_rs2 / y_rs2
-            # accessors carry round 1 here; x_rs / y_rs (the pair message) are unused: a small x_rs stands in for both.
+            # accessors carry round 1 here; x_rs / y_rs (the pair message) are unused: a one-chunk x_rs stands in for
+            # both (the kernel never reaches that path when PAIR > 2, only the accessor's address is passed).
             W32 = 32 * SP.AG32_PPC
             W2B = 32 * SP.RS2B_PPC
             x_ag = z(t * 32, W32)
-            x_rs = z(2 * rs_rows, W_RS)
+            x_rs = z(32, W_RS)
             x_rs1 = z(self.P * t * 32, W8)
             x_rs2b = z(self.L * t * 32, W2B)
             q_asm = z(2 * t * 32, HIDDEN)
@@ -192,6 +193,11 @@ class TPMlaShard(TPM.TPMla):
                                     y=ag1.y, wait=(MK.SEM_FSW, 1), cons=(MK.SEM_AGC, ix), link_base=0, after=MK.SEM_FSA)  # fmt: skip
             rs1 = FS.FabricStreamScatter(mesh, t * 32, W8, axis=geo.pair_axis, lanes=lane("rs1"), **sy("rs1"), wait=rs_wait,
                                          cons=(MK.SEM_RSC, roots), link_base=1, after=MK.SEM_FSA)  # fmt: skip
+            # both scatters signal the roots' SEM_RSC and the root reads it ordinally (wait_min 1 = round 1 landed,
+            # 2 = round 2 landed): sound because rs2's waiter is its own lane BRISC, which signals after that lane's
+            # sends, and those sends wait on rs2_sem, which the root raises only past its round-1 wait -- the second
+            # +1 cannot precede the first wait. A second rs2 lane core or a waiter off the sending RISC breaks this:
+            # give rs2 its own consumer semaphore then.
             rs2 = FS.FabricStreamScatter(mesh, t * 32, W2B, axis=geo.line_axis, lanes=lane("rs2"), **sy("rs2"), wait=rs_wait,
                                          cons=(MK.SEM_RSC, roots), link_base=1, after=MK.SEM_FSA)  # fmt: skip
             assert int(ag1.y.shape[-2]) == geo.n * t * 32 and int(rs1.y.shape[-2]) == self.P * t * 32

@@ -23,6 +23,7 @@ import torch
 
 import ttnn
 from models.autoports.zai_org_glm_5_3_flash.tt.mk_readers import reader_assignments
+from models.autoports.zai_org_glm_5_3_flash.tt.mk_stack import AllocPool
 
 BF16, FP32 = ttnn.bfloat16, ttnn.float32
 L1, DRAM = ttnn.L1_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG
@@ -203,6 +204,8 @@ class ReaderExperts:
         dev = self.device
         m = self._persistent(("m", self.m_tiles), lambda: ttnn.empty((1, 1, TILE, 2 * self.m_tiles * TILE),
                                                                      ttnn.bfloat8_b, ttnn.TILE_LAYOUT, dev, L1))  # fmt: skip
+        if isinstance(ttnn.empty, AllocPool):  # m came from the pool in an earlier build (request 0 of its key) and is
+            ttnn.empty.reserve(m)  # live in this one: never a prefix-view base for another intermediate (mk_stack)
         acc = lambda tt: list(ttnn.TensorAccessorArgs(tt).get_compile_time_args())
         dm = lambda proc, noc: ttnn.DataMovementConfigDescriptor(processor=proc, noc=noc)
         rt = lambda fn: {xy: [int(a) for a in fn(xy)] for xy in self.owned}

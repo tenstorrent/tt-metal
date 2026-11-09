@@ -200,7 +200,7 @@ class TPMla:
         persistent stacked residual)."""
         self.calls += 1
         if self.nofab:
-            return self.mk(x, cache, page_table, cur_pos, t=t, dsa_state=dsa_state, keep=keep, stack=stack)
+            return self.mk(x, cache, page_table, cur_pos, t=t, dsa_state=dsa_state, keep=keep, stack=stack, s1=s1)
         with _Capture() as cap:
             out = self.mk(x, cache, page_table, cur_pos, t=t, dsa_state=dsa_state, stack=stack, s1=s1)
         ((io, desc),) = cap.calls

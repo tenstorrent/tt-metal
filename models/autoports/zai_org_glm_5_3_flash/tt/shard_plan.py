@@ -45,8 +45,8 @@ UNIT, POOL_PAGE, TB, PPC = HDR["UNIT"], HDR["POOL_PAGE"], HDR["TB"], HDR["PPC"]
 REC_BYTES, REC_HDR, RS_CHUNKS, T_MAX, ST_TILES = (HDR[k] for k in ("REC_BYTES", "REC_HDR", "RS_CHUNKS", "T_MAX",
                                                                    "ST_TILES"))  # fmt: skip
 AG8_PPC, AG8_QPAGES, RS2_PPC, RS_PPC = HDR["AG8_PPC"], HDR["AG8_QPAGES"], HDR["RS2_PPC"], HDR["RS_PPC"]
-AG32_PPC, AG32_QPAGES = HDR.get("AG32_PPC", 6), HDR.get("AG32_QPAGES", 1)  # 8x4 (shard_8x4_design.md section 2)
-RS2B_PPC = HDR.get("RS2B_PPC", 4)  # 8x4 round 2: 2-row slices (16 x 256 B + 2 x 256 B = 4.5 KB -> 3 pages + pad)
+AG32_PPC, AG32_QPAGES = HDR["AG32_PPC"], HDR["AG32_QPAGES"]  # 8x4 (shard_8x4_design.md section 2)
+RS2B_PPC = HDR["RS2B_PPC"]  # 8x4 round 2: 2-row slices (16 x 256 B + 2 x 256 B = 4.5 KB -> 3 pages + pad)
 TL_MAX = HDR["TL_MAX"]  # rev 60: tokens per token lane (the lane-local mailbox / kept blocks / CB_ASEL pages)
 MAX_CHUNKS = 64  # dsa_common.hpp MAX_CHUNKS
 CAND_MAX = 512  # dsa_shard.hpp CAND_MAX = mladsa::TOPK (not a plain literal there)
@@ -72,7 +72,8 @@ def merge_scr_bytes() -> int:
     return CAND_PAGES * TB + 2 * CAND_MAX * 4 + 64 * 4
 
 
-PIECE_ROWS = 8  # TP8: q / o rows of one chip in a 32-head tile (dsa_shard.hpp PIECE_ROWS at LINE = 4)
+PIECE_ROWS = 8  # TP8: q / o rows of one chip in a 32-head tile (dsa_shard.hpp PIECE_ROWS at LINE = 4); a build's
+# own value is Geometry.piece_rows (2 on the 8x4): the `*_rows` mirrors below take it
 DT, ST = 16, 2  # O tiles (512 / 32) and stats tiles (m, l) of a partial (kernels/mla/att_common.hpp DT / STAT_TILES)
 PKT_HDRS_PER_RISC = 12  # Blackhole: NUM_PACKET_HEADERS (6 x 2 x 2) / 2 data-movement RISCs (dev_mem_map.h)
 FS_NHDR, FAR_NHDR = 4, 2 + 1  # fs_send.cpp NHDR per direction; lane_send.cpp NHDR + the flag header per direction
@@ -336,6 +337,75 @@ def audit_targets(entries: list, rank: int, peer: int, valid: set, extra: list) 
 
 
 # ------------------------------------------------------------------ kernel offset mirrors (kernels/mla/dsa_shard.hpp)
+# The compact q-piece / slice formats by the piece rows of the build (dsa_shard.hpp PIECE_RUN / PIECES_PER_PAGE /
+# slice_off_rows / slice_run / agx_q_page / agx_q_off / agx_cand_page / rs1_page / rs2b_page): rows = Geometry.piece_rows
+# (8 on the TP8 2x4, 2 on the 8x4). The TP8 names below (ag_q_page, slice_off, q_piece, ...) are the 8-row forms.
+def piece_bytes(rows: int) -> int:
+    """dsa_shard.hpp PIECE_BYTES: a tile's q piece = 2 runs of rows face rows (rows x 32 B each): 512 B / 128 B"""
+    return 2 * rows * 32
+
+
+def pieces_per_page(rows: int) -> int:
+    """dsa_shard.hpp PIECES_PER_PAGE: 4 at TP8, 16 at TP32"""
+    return TB // piece_bytes(rows)
+
+
+def ag_pages(geo) -> tuple:
+    """(AG_PPC, AG_QPAGES) of the build: the TP32 AG block (6 pages, 1 of q pieces), the TP8 one (10, 4)"""
+    if geo.P > 2:
+        return AG32_PPC, AG32_QPAGES
+    return AG8_PPC, AG8_QPAGES
+
+
+def agx_q_page(geo, T: int, blk: int, t: int, d: int) -> tuple:
+    """dsa_shard.hpp agx_q_page / agx_q_off: (page, byte offset) of q tile d's piece of token t of block blk"""
+    ppc, _ = ag_pages(geo)
+    n = pieces_per_page(geo.piece_rows)
+    return (blk * T + t) * ppc + d // n, (d % n) * piece_bytes(geo.piece_rows)
+
+
+def agx_cand_page(geo, T: int, blk: int, t: int, byte: int) -> tuple:
+    """dsa_shard.hpp agx_cand_page: (page, byte offset) of candidate byte `byte` of token t of block blk"""
+    ppc, qpages = ag_pages(geo)
+    return (blk * T + t) * ppc + qpages + byte // TB, byte % TB
+
+
+def slice_off_rows(rows: int, j: int, tb: int) -> int:
+    """dsa_shard.hpp slice_off_rows: run A of rows `rows` j .. in a tile of tb bytes (run B = + tb / 4); a face row is
+    tb / 64 bytes and faces 0 / 2 hold rows 0..15 / 16..31"""
+    r0 = rows * j
+    return (r0 // 16) * (tb // 2) + (r0 % 16) * (tb // 64)
+
+
+def slice_run(rows: int, tb: int) -> int:
+    """dsa_shard.hpp slice_run: bytes of one run of `rows` face rows"""
+    return rows * (tb // 64)
+
+
+def rs1_page(T: int, blk: int, t: int) -> int:
+    """dsa_shard.hpp rs1_page: the 8x4 round-1 slice chunk of (block = column position, token)"""
+    return (blk * T + t) * RS2_PPC  # RS1_PPC = RS2_PPC
+
+
+def rs2b_page(T: int, blk: int, t: int) -> int:
+    """dsa_shard.hpp rs2b_page: the 8x4 round-2 slice chunk of (block = row position, token)"""
+    return (blk * T + t) * RS2B_PPC
+
+
+def rs_layout(rows: int, otb: int, ptb: int = 4096) -> list:
+    """[(kind, index, byte offset in the slice chunk)] of one slice of `rows` rows: the DT O tiles then the ST stats
+    tiles, each tb x rows / 32 bytes (the two runs); the chunk is RS2_PPC pages for 8 rows, RS2B_PPC for 2"""
+    out, b = [], 0
+    for d in range(DT):
+        out.append(("o", d, b))
+        b += otb * rows // 32
+    for i in range(ST):
+        out.append(("s", i, b))
+        b += ptb * rows // 32
+    assert b <= (RS2B_PPC if rows == 2 else RS2_PPC) * TB, (rows, b)
+    return out
+
+
 def ag_q_page(L: int, T: int, blk: int, t: int, d: int) -> tuple:
     """(page, byte offset) of q tile d of token t of block blk in x_ag / y_ag (TP8: the 8-row piece, 512 B)"""
     if L > 1:
@@ -351,21 +421,12 @@ def ag_cand_page(L: int, T: int, blk: int, t: int, byte: int) -> tuple:
 
 def slice_off(j: int, tb: int) -> int:
     """run A of rows 8 j .. 8 j + 7 in a tile of tb bytes (run B = + tb / 4; tb / 8 bytes each)"""
-    return (j // 2) * (tb // 2) + (j % 2) * (tb // 8)
+    return slice_off_rows(PIECE_ROWS, j, tb)
 
 
 def rs2_layout(otb: int, ptb: int = 4096) -> list:
-    """[(kind, index, byte offset in the slice chunk)] of one x_rs2 / y_rs2 slice: the DT O tiles then the ST stats
-    tiles, tb / 4 bytes each (the two runs of the 8 rows)"""
-    out, b = [], 0
-    for d in range(DT):
-        out.append(("o", d, b))
-        b += otb // 4
-    for i in range(ST):
-        out.append(("s", i, b))
-        b += ptb // 4
-    assert b <= RS2_PPC * TB, b
-    return out
+    """the TP8 round-2 slice (8 rows): rs_layout(8, ...)"""
+    return rs_layout(PIECE_ROWS, otb, ptb)
 
 
 # ------------------------------------------------------------------ byte-level emulation of the q / slice formats
@@ -379,43 +440,64 @@ def faces_to_tile(v):
     return v.reshape(2, 2, 16, 16).permute(0, 2, 1, 3).reshape(32, 32)
 
 
-def q_piece(q_tile_faces):
-    """the latent core's TP8 q piece of one bf16 tile (face-major elements): rows 0..7 = face 0 rows 0..7 (256 B) + face
-    1 rows 0..7 (256 B) -> 256 elements = 512 B (lat_dm1.cpp)"""
+def q_piece_rows(q_tile_faces, rows: int):
+    """the latent core's q piece of one bf16 tile (face-major elements): rows 0 .. rows - 1 = face 0's first rows
+    (rows x 16 elements) + face 1's (lat_dm1.cpp): 2 runs = 2 x rows x 32 B (512 B at TP8, 128 B on the 8x4)"""
     import torch
 
-    return torch.cat([q_tile_faces[0:128], q_tile_faces[256:384]])
+    w = rows * 16
+    return torch.cat([q_tile_faces[0:w], q_tile_faces[256 : 256 + w]])
 
 
-def assemble_q_tile(pieces):
-    """the reader's q assembly (att_dsa_shard_dm0.cpp): 4 chips' pieces (each 256 elements: run A, run B) -> one tile
-    in face-major order; piece j -> rows 8 j .. 8 j + 7 (run A at slice_off(j, 2048) / 2 elements, run B at + 512 / 2)
-    """
+def assemble_q_tile_rows(pieces, rows: int):
+    """the reader's q assembly (att_dsa_shard_dm0.cpp / ix_dm1.cpp): 32 / rows chips' pieces (run A, run B) -> one
+    tile in face-major order; piece j -> rows rows j .. (run A at slice_off_rows(rows, j, 2048) / 2 elements, run B at
+    + 512 / 2)"""
     import torch
 
     out = torch.zeros(1024, dtype=pieces[0].dtype)
+    w = rows * 16
     for j, pc in enumerate(pieces):
-        a = slice_off(j, 2048) // 2
-        out[a : a + 128] = pc[:128]
-        out[a + 256 : a + 256 + 128] = pc[128:]
+        a = slice_off_rows(rows, j, 2048) // 2
+        out[a : a + w] = pc[:w]
+        out[a + 256 : a + 256 + w] = pc[w:]
     return out
+
+
+def slice_runs_rows(tile_faces, rows: int, j: int):
+    """rows `rows` j .. of a face-major tile (any element type): (run A, run B)"""
+    n = tile_faces.numel()
+    a = slice_off_rows(rows, j, n)  # (linear in the tile size: elements in, elements out)
+    w = slice_run(rows, n)
+    return tile_faces[a : a + w], tile_faces[a + n // 4 : a + n // 4 + w]
+
+
+def land_slice_rows(dst_faces, rows: int, j: int, runs):
+    n = dst_faces.numel()
+    a = slice_off_rows(rows, j, n)
+    w = slice_run(rows, n)
+    dst_faces[a : a + w] = runs[0]
+    dst_faces[a + n // 4 : a + n // 4 + w] = runs[1]
+    return dst_faces
+
+
+def q_piece(q_tile_faces):
+    """the TP8 q piece (8 rows, 512 B)"""
+    return q_piece_rows(q_tile_faces, PIECE_ROWS)
+
+
+def assemble_q_tile(pieces):
+    """the TP8 q assembly (4 pieces of 8 rows)"""
+    return assemble_q_tile_rows(pieces, PIECE_ROWS)
 
 
 def slice_runs(tile_faces, j: int):
     """rows 8 j .. 8 j + 7 of a face-major tile (any element type): (run A, run B)"""
-    n = tile_faces.numel()
-    a = slice_off(j, n)  # (slice_off is linear in the tile size: elements in, elements out)
-    w = n // 8
-    return tile_faces[a : a + w], tile_faces[a + n // 4 : a + n // 4 + w]
+    return slice_runs_rows(tile_faces, PIECE_ROWS, j)
 
 
 def land_slice(dst_faces, j: int, runs):
-    n = dst_faces.numel()
-    a = slice_off(j, n)
-    w = n // 8
-    dst_faces[a : a + w] = runs[0]
-    dst_faces[a + n // 4 : a + n // 4 + w] = runs[1]
-    return dst_faces
+    return land_slice_rows(dst_faces, PIECE_ROWS, j, runs)
 
 
 # ------------------------------------------------------------------ the exchange, emulated in fp32 (torch)

@@ -66,6 +66,11 @@ class _Capture:
         return False
 
 
+# the allocator before any AllocPool patches ttnn.empty: this module is imported before a pool can exist, so the
+# persistent (never re-requested) buffers of mk_moe / mk_experts take it instead of a pool slot
+REAL_EMPTY = ttnn.empty
+
+
 class AllocPool:
     """ttnn.empty during the layer builds of one or more stacks: request i of a given (shape, dtype, layout, memory
     config) in ANY build returns the same tensor (allocated on first use) -> every layer of a stack gets the same
@@ -192,6 +197,11 @@ class AllocPool:
 
     def tensors(self) -> list:
         return [t for lst in self.lists.values() for t in lst]
+
+    def reserve(self, tensor) -> None:
+        """a build hands this tensor to its programs without requesting it (a persistent buffer taken from this pool
+        in an earlier build): it is live in the build, so no prefix view may be served over it"""
+        self.used.add(id(tensor))
 
     def __enter__(self):  # one layer build
         self.counts, self.real = {}, {}

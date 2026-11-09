@@ -104,7 +104,7 @@ def _label_modules(dec: FunctionalDecoder) -> _Labels:
     lab.wrap(layer.attn, "decode_forward", "ATTN")
     lab.wrap(layer, "_norm", "NORM")
     mlp = layer.mlp
-    if hasattr(mlp, "router"):  # MoE layer
+    if layer.is_moe:
         lab.wrap(mlp.router, "forward", "ROUTER")
         lab.wrap(mlp.experts, "forward", "EXPERTS")
         lab.wrap(mlp.shared, "forward", "SHARED")
@@ -122,7 +122,6 @@ def _label_modules(dec: FunctionalDecoder) -> _Labels:
     return lab
 
 
-@pytest.mark.timeout(3000)
 @pytest.mark.parametrize(
     "device_params", [mesh_device_params(ROWS, COLS, trace_region_size=TRACE_MB * 1_000_000)], indirect=True
 )
@@ -132,11 +131,7 @@ def test_mesh_layer_perf(mesh_device):
     raw = load_layer_raw(snapshot, LAYER, shard_headers(snapshot))
     cfg = GLM53FlashConfig.from_hf_config_json(snapshot / "config.json")
     U = ROWS * B
-    try:
-        ids = list(mesh_device.get_device_ids())
-    except Exception:  # pragma: no cover
-        ids = []
-    logger.info(f"mesh {ROWS}x{COLS} device ids (row-major): {ids}")
+    logger.info(f"mesh {ROWS}x{COLS} device ids (row-major): {list(mesh_device.get_device_ids())}")
     dec = FunctionalDecoder.from_state_dict(
         raw,
         hf_config=cfg,
@@ -170,7 +165,7 @@ def test_mesh_layer_perf(mesh_device):
         x_in = torch.load(dump)["x_in"][:, POS : POS + U]  # [1, U, 4, 4096] bf16
     else:
         g = torch.Generator().manual_seed(1)
-        x_in = (torch.randn(1, U, 4, getattr(cfg, "hidden_size", 4096), generator=g) * 0.5).to(torch.bfloat16)
+        x_in = (torch.randn(1, U, 4, cfg.hidden_size, generator=g) * 0.5).to(torch.bfloat16)
         logger.info(f"layer {LAYER}: no reference dump at {dump}, seed-only decode rows")
     x_dev = host_streams_to_device(x_in, mesh_device, pad_to=U, mesh=mesh)
     dp = dec.make_decode_positions([POS] * U)

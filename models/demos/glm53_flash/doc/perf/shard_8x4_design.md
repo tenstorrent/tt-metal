@@ -94,7 +94,7 @@ Prefill runs 3.0-3.7 K tok/s flat from 32 K to 1 M (the TP prefill path, unchang
 +7-8 ms per decode step at 4 K / 32 K against the unsharded TP32 (the optimisation item), and the per-user decode
 at 128 K x 8 (43.3 ms) is the first measurement of the sharded split-K at 8 token lanes on 32 helpers.
 
-Re-validated at HEAD (the DSA `AllocPool` default, under the e2e numerics gates, 2026-11-09): 32 K x 4 27.3 ms = 36.7 tok/s/u (TTFT 35.4 s), 128 K x 16 distinct 72.0 ms = 13.9 (TTFT 579 s), 1 M x 1 19.0 ms = 52.7 (TTFT 345 s); the ids are those of the rows above.
+Re-validated on 2026-11-09 at fd64cbc8e88 .. 2482b4cf898 (the DSA `AllocPool` default; the TTFT column above is the batch's prefill back to back, as the e2e measures it): 32 K x 4 27.3 ms = 36.7 tok/s/u (TTFT 35.4 s, ids 24/24 = the table), 128 K x 16 distinct 72.0 ms = 13.9 (TTFT 583 s with the 262144 window ladder through the cache length; a 12 tok/s floor, no id gate at 16 distinct users), 1 M x 1 19.0 ms = 52.7 (TTFT 345 s, ids 24/24). 128 K x 8, 512 K x 4 and 1 M x 4 stand on the 2026-11-06 .. 08 measurements above (their HEAD re-runs: 50tok_plan.md). A 32 K x 4 row at the 1 M cache length (the served 1 M profile's: its 1 M ladder) gives 27.5 ms = 36.4, TTFT 38.2 s, ids 785 1196 702 3267 291 264 1293 57681 ... -- the reference for the served 32 K texts.
 
 ## 7. The L1 floor (B = 16): closed
 
@@ -112,6 +112,6 @@ landed below). The fix is in the allocation lifecycle, not the CBs:
   Persisting the hand-offs in a dict (tried first) made the MoE build see the MLA set and clashed; sharing the KDA
   stacks' pool changed its prefix-alias bases (the v1 two-pool B = 16 row drifted at id 7) -- both superseded.
 
-Validated at HEAD: 32 K x 4 ids identical (27.1 ms), 32 K x 16 (68.7 ms); the longer rows of section 6 were measured
-before the pool landed and are re-run at HEAD for the record. Section 6's 4 K row agrees with the 2x4 shard on the
+Validated at the pool-v3 commit bbe4485aeea (2026-11-09 01:41 / 01:57): 32 K x 4 ids identical (27.1 ms), 32 K x 16
+(68.7 ms); the later re-validation of the rows is in section 6. Section 6's 4 K row agrees with the 2x4 shard on the
 first 9 ids (the contract rows are the 32 K ones, identical 24/24).
