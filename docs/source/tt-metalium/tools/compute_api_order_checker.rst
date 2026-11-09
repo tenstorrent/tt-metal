@@ -103,7 +103,9 @@ It uses a supervised multiprocessing pool: workers reuse one libclang parse
 environment, recycle periodically to bound memory, and a worker crash is recorded
 as a coverage hole instead of losing the run.  The current discovery set is 758
 kernel files across ``ttnn``, ``models``, ``tests`` (including
-``test_kernels/``), ``tt-train`` and ``tt_metal``.
+``test_kernels/``), ``tt-train`` and ``tt_metal``.  The report keeps advisory
+warnings (currently ``loop-invariant-init``) in a separate table, so the error
+table's total and false-positive rate are not diluted by warning-only findings.
 
 .. code-block:: bash
 

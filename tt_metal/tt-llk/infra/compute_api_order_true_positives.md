@@ -6,8 +6,8 @@ holes**, **100%** of the discovered kernels analysed. The full report is
 `compute_api_order_corpus_triage.yaml`.
 
 Error findings: **237 reviewed, 231 true positives, 6 false positives (2.5%)**.
-The 1,734 `loop-invariant-init` warnings are advisory and are excluded from the
-error false-positive rate.
+The 1,734 `loop-invariant-init` warnings are advisory, are reported in a
+separate table, and are excluded from the error total and false-positive rate.
 
 ## True positives
 

@@ -11,6 +11,8 @@ or directly:
 
 from __future__ import annotations
 
+import argparse
+import datetime as dt
 import importlib.util
 import json
 import os
@@ -364,6 +366,64 @@ def test_cli_log_entry_translation(checker, tmp_path):
     assert any("-include" in " ".join(e["arguments"]) for e in entries) or entries[0]["file"].endswith(
         fixture.name
     )
+
+
+def test_corpus_report_separates_advisory_warnings(checker):
+    """Warning-only rules must not dilute the error table's total or FP rate."""
+    spec = importlib.util.spec_from_file_location(
+        "run_compute_api_order_corpus", INFRA / "run_compute_api_order_corpus.py"
+    )
+    runner = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(runner)
+    findings = [
+        checker.Finding(
+            rule="missing-init",
+            severity="error",
+            file="/repo/kernel.cpp",
+            line=1,
+            column=1,
+            thread="MATH",
+            arch="wormhole_b0",
+            message="missing init",
+        ),
+        checker.Finding(
+            rule="loop-invariant-init",
+            severity="warning",
+            file="/repo/kernel.cpp",
+            line=2,
+            column=1,
+            thread="MATH",
+            arch="wormhole_b0",
+            message="loop init",
+        ),
+    ]
+    args = argparse.Namespace(
+        threads=["MATH"],
+        discover=True,
+        roots=["ttnn"],
+        kernel_files=1,
+        from_json=None,
+        compile_db=None,
+        log=None,
+    )
+    triage = {
+        "missing-init": {"true_positive": True},
+        "loop-invariant-init": {"true_positive": False},
+    }
+    report = runner.render_report(
+        ["wormhole_b0"],
+        args,
+        dt.datetime.now(dt.timezone.utc),
+        findings,
+        [],
+        [{"file": "/repo/kernel.cpp"}],
+        triage,
+        1.0,
+    )
+    assert "## Error findings by rule" in report
+    assert "| **Total** | **1** | **1** | **0** | **0** |" in report
+    assert "## Advisory warnings (excluded from error totals)" in report
+    assert "| `loop-invariant-init` | 1 | 0 | 1 | 0 |" in report
 
 
 if __name__ == "__main__":

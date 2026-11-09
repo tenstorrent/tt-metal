@@ -465,12 +465,24 @@ def _count_triage(findings, triage):
     return counts, reviewed, false_positives
 
 
+def _rule_totals(findings, triage, rule) -> tuple[int, int, int, int]:
+    """Return (findings, true positives, false positives, unreviewed) for a rule."""
+    entries = [f for f in findings if f.rule == rule]
+    tp = sum(1 for f in entries if _triage_entry(f, triage).get("true_positive") is True)
+    fp = sum(1 for f in entries if _triage_entry(f, triage).get("true_positive") is False)
+    return len(entries), tp, fp, len(entries) - tp - fp
+
+
 def render_report(arches, args, started, findings, holes, units, triage, runtime_seconds=None) -> str:
     analyzed_files = {u["file"] for u in units} - {h["file"] for h in holes}
-    counts, reviewed, fps = _count_triage(findings, triage)
     error_findings = [f for f in findings if f.severity == "error"]
+    warning_findings = [f for f in findings if f.severity != "error"]
     _ec, error_reviewed, error_fps = _count_triage(error_findings, triage)
-    by_rule = collections.Counter(f.rule for f in findings)
+    error_by_rule = collections.Counter(f.rule for f in error_findings)
+    warning_by_rule = collections.Counter(f.rule for f in warning_findings)
+    error_tp = sum(1 for f in error_findings if _triage_entry(f, triage).get("true_positive") is True)
+    error_fp = sum(1 for f in error_findings if _triage_entry(f, triage).get("true_positive") is False)
+    error_unreviewed = len(error_findings) - error_tp - error_fp
     lines = [
         "# Compute-kernel API ordering corpus report",
         "",
@@ -496,49 +508,62 @@ def render_report(arches, args, started, findings, holes, units, triage, runtime
         ),
         f"- Units analysed: {len(units)}",
         f"- Units that could not be analysed: {len(holes)}",
+        f"- Error findings: {len(error_findings)}",
+        f"- Advisory warnings: {len(warning_findings)}",
         f"- Findings: {len(findings)}",
         (f"- Analysis wall time: {runtime_seconds:.1f}s" if runtime_seconds else "- Analysis wall time: not recorded for this replay"),
         "",
         "The checker is advisory. A finding is not a verdict: review the source and",
         "record the verdict in the triage file. Unreviewed findings are not counted as",
-        "false positives.",
+        "false positives. Advisory warnings are listed separately and are excluded from",
+        "the error totals.",
         "",
-        "## Findings by rule",
+        "## Error findings by rule",
         "",
         "| Rule | Findings | True positives | False positives | Unreviewed |",
         "| --- | ---: | ---: | ---: | ---: |",
     ]
-    for rule, n in sorted(by_rule.items()):
-        tp = sum(
-            1
-            for f in findings
-            if f.rule == rule and _triage_entry(f, triage).get("true_positive") is True
-        )
-        fp = sum(
-            1
-            for f in findings
-            if f.rule == rule and _triage_entry(f, triage).get("true_positive") is False
-        )
-        lines.append(f"| `{rule}` | {n} | {tp} | {fp} | {n - tp - fp} |")
+    for rule, _n in sorted(error_by_rule.items()):
+        n, tp, fp, unreviewed = _rule_totals(error_findings, triage, rule)
+        lines.append(f"| `{rule}` | {n} | {tp} | {fp} | {unreviewed} |")
+    lines.append(
+        f"| **Total** | **{len(error_findings)}** | **{error_tp}** | **{error_fp}** | "
+        f"**{error_unreviewed}** |"
+    )
     lines += [
         "",
         (
-            f"Reviewed: {reviewed}; false positives: {fps}; "
-            f"false-positive rate: {fps / reviewed:.1%}"
-            if reviewed
-            else "No findings triaged yet."
-        ),
-        (
-            f"Errors only (excludes advisory warnings): reviewed {error_reviewed}; "
-            f"false positives {error_fps}; false-positive rate {error_fps / error_reviewed:.1%}."
+            f"Error findings: reviewed {error_reviewed}; false positives {error_fps}; "
+            f"false-positive rate {error_fps / error_reviewed:.1%}."
             if error_reviewed
             else "No error findings triaged yet."
         ),
+    ]
+    if warning_findings:
+        lines += [
+            "",
+            "## Advisory warnings (excluded from error totals)",
+            "",
+            "| Rule | Findings | True positives | False positives | Unreviewed |",
+            "| --- | ---: | ---: | ---: | ---: |",
+        ]
+        for rule, _n in sorted(warning_by_rule.items()):
+            n, tp, fp, unreviewed = _rule_totals(warning_findings, triage, rule)
+            lines.append(f"| `{rule}` | {n} | {tp} | {fp} | {unreviewed} |")
+        warning_fp = sum(
+            1 for f in warning_findings if _triage_entry(f, triage).get("true_positive") is False
+        )
+        lines += [
+            "",
+            f"Advisory warnings: {len(warning_findings)} findings; triaged false positives "
+            f"{warning_fp}; not included in the error false-positive rate.",
+        ]
+    lines += [
         "",
         "## Findings",
         "",
-        "| # | Rule | Thread | Location | Message | Earlier call | Triage |",
-        "| ---: | --- | --- | --- | --- | --- | --- |",
+        "| # | Severity | Rule | Thread | Location | Message | Earlier call | Triage |",
+        "| ---: | --- | --- | --- | --- | --- | --- | --- |",
     ]
     for i, f in enumerate(findings, 1):
         entry = _triage_entry(f, triage)
@@ -550,7 +575,9 @@ def render_report(arches, args, started, findings, holes, units, triage, runtime
         loc = f"`{f.file.replace(str(REPO) + '/', '')}:{f.line}`"
         msg = f.message.replace("|", "\\|")
         earlier = (f.earlier or "").replace("|", "\\|").replace(str(REPO) + "/", "")
-        lines.append(f"| {i} | `{f.rule}` | {f.thread} | {loc} | {msg} | {earlier} | {mark} |")
+        lines.append(
+            f"| {i} | {f.severity} | `{f.rule}` | {f.thread} | {loc} | {msg} | {earlier} | {mark} |"
+        )
 
     if holes:
         lines += [
