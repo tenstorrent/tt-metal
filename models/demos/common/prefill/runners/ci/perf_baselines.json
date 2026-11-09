@@ -78,32 +78,32 @@
         "8kw": {
           "@2k": {
             "throughput_tok_s": 15942,
-            "chunk_time_ms": 1118
+            "chunk_time_ms": 1086
           },
           "@50k": {
             "throughput_tok_s": 12684,
             "ttft_s": 4.52,
-            "chunk_time_ms": 1522
+            "chunk_time_ms": 1454
           },
           "@100k": {
             "throughput_tok_s": 10445,
             "ttft_s": 9.01,
-            "chunk_time_ms": 1910
+            "chunk_time_ms": 1805
           },
           "@252k": {
             "throughput_tok_s": 6847,
             "ttft_s": 28.38,
-            "chunk_time_ms": 3246
+            "chunk_time_ms": 2978
           },
           "@512k": {
             "throughput_tok_s": 4457,
             "ttft_s": 77.56,
-            "chunk_time_ms": 5356
+            "chunk_time_ms": 5171
           },
           "@1M": {
             "throughput_tok_s": 2684,
             "ttft_s": 234.17,
-            "chunk_time_ms": 9082
+            "chunk_time_ms": 8946
           }
         }
       },
