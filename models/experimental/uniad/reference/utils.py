@@ -53,14 +53,7 @@ def multi_scale_deformable_attn_pytorch(
     # Normalize sampling locations to [-1, 1]
     sampling_grids = []
     for lvl in range(num_levels):
-        h_l, w_l = value_spatial_shapes[lvl]
-        h_l = int(h_l.item())
-        w_l = int(w_l.item())
-        grid = sampling_locations[:, :, :, lvl, :, :]
-        grid = grid.clone()
-        grid[..., 0] = grid[..., 0] / w_l * 2 - 1
-        grid[..., 1] = grid[..., 1] / h_l * 2 - 1
-        sampling_grids.append(grid)
+        sampling_grids.append(sampling_locations[:, :, :, lvl, :, :] * 2 - 1)
 
     # Perform sampling and attention
     output = torch.zeros(bs, num_queries, num_heads, head_dim, device=value.device)

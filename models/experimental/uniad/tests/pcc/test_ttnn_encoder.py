@@ -22,7 +22,7 @@ def test_uniad_encoder(
     reset_seeds,
     model_location_generator,
 ):
-    torch_model = encoder.BEVFormerEncoder(pc_range=[-15.0, -30.0, -2.0, 15.0, 30.0, 2.0])
+    torch_model = encoder.BEVFormerEncoder(pc_range=[-51.2, -51.2, -5.0, 51.2, 51.2, 3.0])
 
     torch_model = load_torch_model(
         torch_model=torch_model,
@@ -33,7 +33,7 @@ def test_uniad_encoder(
     parameter = create_uniad_model_parameters_encoder(torch_model, device=device)
 
     tt_model = ttnn_encoder.TtBEVFormerEncoder(
-        params=parameter, device=device, pc_range=[-15.0, -30.0, -2.0, 15.0, 30.0, 2.0]
+        params=parameter, device=device, pc_range=[-51.2, -51.2, -5.0, 51.2, 51.2, 3.0]
     )
 
     img_metas = [

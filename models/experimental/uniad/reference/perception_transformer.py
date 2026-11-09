@@ -31,7 +31,7 @@ class PerceptionTransformer(nn.Module):
         super(PerceptionTransformer, self).__init__(**kwargs)
         self.encoder = BEVFormerEncoder(
             num_layers=6,
-            pc_range=[-15.0, -30.0, -2.0, 15.0, 30.0, 2.0],
+            pc_range=[-51.2, -51.2, -5.0, 51.2, 51.2, 3.0],
             num_points_in_pillar=4,
             return_intermediate=False,
         )

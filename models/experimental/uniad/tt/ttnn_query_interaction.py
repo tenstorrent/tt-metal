@@ -52,10 +52,8 @@ class TtQueryInteractionModule:
 
         if q.shape[0] > 0 and k.shape[0] > 0:
             tgt2 = self.self_attn(q, k, value=value)[0]
-            # Pure ttnn slice instead of to_torch/from_torch round-trip.
-            # tgt is unchanged in this branch — the original code was a
-            # to_torch/from_torch no-op.
             tgt2 = tgt2[:, 0]
+            tgt = tgt + tgt2
 
             tgt = ttnn.layer_norm(
                 tgt,
@@ -67,6 +65,7 @@ class TtQueryInteractionModule:
             x = ttnn.linear(tgt, self.params.linear1.weight, bias=self.params.linear1.bias)
             x = ttnn.relu(x)
             tgt2 = ttnn.linear(x, self.params.linear2.weight, bias=self.params.linear2.bias)
+            tgt = tgt + tgt2
 
             tgt = ttnn.layer_norm(
                 tgt,
@@ -79,6 +78,7 @@ class TtQueryInteractionModule:
                 x = ttnn.linear(tgt, self.params.linear_pos1.weight, bias=self.params.linear_pos1.bias)
                 x = ttnn.relu(x)
                 query_pos2 = ttnn.linear(x, self.params.linear_pos2.weight, bias=self.params.linear_pos2.bias)
+                query_pos = query_pos + query_pos2
 
                 query_pos = ttnn.layer_norm(
                     query_pos,
@@ -95,6 +95,7 @@ class TtQueryInteractionModule:
             x = ttnn.linear(tgt, self.params.linear_feat1.weight, bias=self.params.linear_feat1.bias)
             x = ttnn.relu(x)
             query_feat2 = ttnn.linear(x, self.params.linear_feat2.weight, bias=self.params.linear_feat2.bias)
+            query_feat = query_feat + query_feat2
 
             query_feat = ttnn.layer_norm(
                 query_feat,
