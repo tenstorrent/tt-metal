@@ -40,7 +40,9 @@ REPO = HERE.parents[2]
 CHECKER = HERE / "check_compute_api_order.py"
 
 DISCOVER_ROOTS = ("ttnn", "models", "tests", "tt-train", "tt_metal")
-KERNEL_PATH_RE = re.compile(r"/(?:kernels|kernels_ng|kernels_dfb|unified_kernels|[^/]*_impl_kernels|kernels_qsr)/")
+KERNEL_PATH_RE = re.compile(
+    r"/(?:kernels|kernels_ng|kernels_dfb|unified_kernels|[^/]*_impl_kernels|kernels_qsr|test_kernels)/"
+)
 COMPUTE_RE = re.compile(r"api/compute/|compute_kernel_hw_startup|compute_kernel_api")
 
 _CHECKER_MODULE = None
@@ -90,11 +92,17 @@ def _fingerprint(finding) -> str:
 
 def _triage_entry(finding, triage):
     """Exact fingerprint, then rule|file:line, then a rule-wide default."""
-    for key in (
+    keys = [
         _fingerprint(finding),
         f"{finding.rule}|{finding.file}:{finding.line}",
-        finding.rule,
-    ):
+    ]
+    try:
+        relative = Path(finding.file).resolve().relative_to(REPO)
+        keys.append(f"{finding.rule}|{relative}:{finding.line}")
+    except ValueError:
+        pass
+    keys.append(finding.rule)
+    for key in keys:
         entry = triage.get(key)
         if entry is not None:
             return entry

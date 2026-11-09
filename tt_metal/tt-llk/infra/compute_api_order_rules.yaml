@@ -73,6 +73,11 @@ operations:
           template: [[0, 0], [1, 1], [2, 2], [3, 3]]
     citation: tt_metal/hw/ckernels/wormhole_b0/metal/llk_api/llk_unpack_A_api.h:24 (init hook); compute API doc tt_metal/hw/inc/api/compute/tile_move_copy.h:25
 
+  # The init/execute argument equality check below is the static form of the
+  # LLK_ASSERT unpack-configuration failures in #39184 and #39945: the init and
+  # the operation must agree on the configuration the unpacker was programmed
+  # with.  Runtime CB-descriptor mismatches remain host-data dependent and are
+  # reported by the LLK_ASSERT build, not guessed from a runtime value.
   - id: unpack.binary
     compared_fields: [BroadcastType]
     sanitizer_operation: OperationUnpackBinary
@@ -410,9 +415,37 @@ sfpu_extra_groups:
     execute: [negative_tile, negative_tile_int32]
     citation: ttnn/cpp/ttnn/operations/eltwise/unary/common/unary_op_utils.cpp:951
 
+# Sequence postconditions.  After the trigger init body has been followed, the
+# required operation must be seated with matching arguments.  require_args maps
+# trigger-argument index -> required-init argument index, compared as canonical
+# values.  This is how #52175 is kept from regressing: tilize_init must re-point
+# the packer at the OCB, otherwise a previous operation's geometry is reused.
+sequence_rules:
+  - id: tilize-packer-seated-wh
+    trigger: tilize_init
+    thread: PACK
+    architectures: [wormhole_b0]
+    require_init: pack.tile
+    # WH llk_pack_init takes the output operand first; compare it with
+    # tilize_init(icb, block, ocb) argument 2.
+    require_args: [[2, 0]]
+    message: "tilize_init did not re-initialize the packer for its output operand; the packer would use the previous operation's tile geometry"
+    citation: "tt_metal/hw/inc/api/compute/tilize.h:51; issue #52175"
+  - id: tilize-packer-seated-bh
+    trigger: tilize_init
+    thread: PACK
+    architectures: [blackhole]
+    require_init: pack.tile
+    # BH packs through llk_pack_init_impl, whose arguments are the resolved
+    # descriptor fields; freshness is the invariant, not the operand spelling.
+    require_args: []
+    message: "tilize_init did not re-initialize the packer for its output operand; the packer would use the previous operation's tile geometry"
+    citation: "tt_metal/hw/inc/api/compute/tilize.h:51; issue #52175"
+
 # Deprecated init APIs called out by .github/deprecations.json.  The checker also
-# reports any call whose C++ declaration carries [[deprecated]] and looks like an
-# init, so this list is only for deprecations tracked outside the headers.
+# reports any call whose C++ declaration carries [[deprecated]]: init-style
+# functions produce deprecated-init, everything else (e.g. acquire_dst) produces
+# deprecated-api.  This list is only for deprecations tracked outside the headers.
 # Keys must exist in .github/deprecations.json (checked by the tests).
 deprecated_init_apis: []
 

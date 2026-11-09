@@ -19,6 +19,7 @@ import sys
 import tempfile
 from pathlib import Path
 
+import clang.cindex as ci
 import pytest
 import yaml
 
@@ -92,7 +93,9 @@ CASES = [
     ("missing_bcast_uninit.cpp", "wormhole_b0", "UNPACK", {"missing-uninit": 1}),
     ("missing_bcast_uninit.cpp", "wormhole_b0", "MATH", {"missing-uninit": 1}),
     ("missing_pack_untilize_uninit.cpp", "wormhole_b0", "PACK", {"missing-uninit": 1}),
-    ("deprecated_untilize_init.cpp", "wormhole_b0", "MATH", {"deprecated-init": 1}),
+    ("deprecated_untilize_init.cpp", "wormhole_b0", "MATH", {"deprecated-init": 1, "deprecated-api": 1}),
+    ("legacy_reg_api.cpp", "wormhole_b0", "MATH", {"deprecated-api": 2}),
+    ("unpack_config_mismatch.cpp", "wormhole_b0", "UNPACK", {"init-arg-mismatch": 1}),
     ("loop_invariant_init.cpp", "wormhole_b0", "MATH", {"loop-invariant-init": 1}),
     # Blackhole uses the *_impl LLK entry points; run the same contract there.
     ("ok_binary.cpp", "blackhole", "MATH", {}),
@@ -107,7 +110,9 @@ CASES = [
     ("ok_bcast.cpp", "blackhole", "UNPACK", {}),
     ("missing_bcast_uninit.cpp", "blackhole", "MATH", {"missing-uninit": 1}),
     ("missing_pack_untilize_uninit.cpp", "blackhole", "PACK", {"missing-uninit": 1}),
-    ("deprecated_untilize_init.cpp", "blackhole", "MATH", {"deprecated-init": 1}),
+    ("deprecated_untilize_init.cpp", "blackhole", "MATH", {"deprecated-init": 1, "deprecated-api": 1}),
+    ("legacy_reg_api.cpp", "blackhole", "MATH", {"deprecated-api": 2}),
+    ("unpack_config_mismatch.cpp", "blackhole", "UNPACK", {"init-arg-mismatch": 1}),
     ("loop_invariant_init.cpp", "blackhole", "MATH", {"loop-invariant-init": 1}),
 ]
 
@@ -134,9 +139,62 @@ def test_blackhole_fast_tilize_fallback_has_no_false_positives(checker):
         assert not findings, "\n".join(str(f) for f in findings)
 
 
+def test_legacy_deprecated_calls_are_reported(checker):
+    """acquire_dst/release_dst are deprecated but are not init functions."""
+    kernel = REPO / "tests/tt_metal/tt_metal/test_kernels/compute/dfb_c2_pipeline_2_0.cpp"
+    if not kernel.is_file():
+        pytest.skip("dfb legacy test kernel is not present")
+    findings = analyze(checker, kernel, "wormhole_b0", "MATH")
+    deprecated = [f for f in findings if f.rule == "deprecated-api"]
+    assert {f.op for f in deprecated} == {"acquire_dst", "release_dst"}
+    assert len(deprecated) >= 4, "\n".join(str(f) for f in findings)
+
+
+def _find_call(cursor, name):
+    if cursor.kind == ci.CursorKind.CALL_EXPR and cursor.referenced is not None:
+        if cursor.referenced.spelling == name:
+            return cursor
+    for child in cursor.get_children():
+        found = _find_call(child, name)
+        if found is not None:
+            return found
+    return None
+
+
+def test_sequence_rule_reports_unseated_packer(checker):
+    """A tilize_init that does not freshly init the packer is a wrong-init (#52175)."""
+    kernel = FIXTURES / "ok_tilize.cpp"
+    table = checker.RuleTable.load("wormhole_b0")
+    args = checker.synth_args(str(kernel), "wormhole_b0", "PACK", _sfpi())
+    analyzer = checker.Analyzer(args, "PACK", "wormhole_b0", table, str(kernel))
+    call = _find_call(analyzer.tu.cursor, "tilize_init")
+    assert call is not None, "fixture does not call tilize_init"
+    analyzer._check_sequence_rules(table.sequence_rules["tilize_init"], call, checker.State(), 0)
+    assert any(f.rule == "wrong-init" for f in analyzer.findings)
+
+
+def test_helper_local_constexpr_reduce_path_has_no_false_positive(checker):
+    """groupnorm_sharded_v2 selects the FPU reduce through a helper-local constexpr."""
+    kernel = (
+        REPO
+        / "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/compute/groupnorm_sharded_v2.cpp"
+    )
+    if not kernel.is_file():
+        pytest.skip("groupnorm kernel is not present")
+    for arch in ("wormhole_b0", "blackhole"):
+        findings = analyze(checker, kernel, arch, "MATH")
+        wrong = [f for f in findings if f.rule == "wrong-init"]
+        assert not wrong, "\n".join(str(f) for f in wrong)
+
+
 def test_every_finding_names_the_earlier_call(checker):
     for f in analyze(checker, FIXTURES / "mismatch_math_init.cpp", "wormhole_b0", "MATH"):
-        assert f.earlier or f.rule in ("missing-init", "deprecated-init", "loop-invariant-init")
+        assert f.earlier or f.rule in (
+            "missing-init",
+            "deprecated-init",
+            "deprecated-api",
+            "loop-invariant-init",
+        )
         assert f.line > 0 and f.file
 
 
@@ -149,6 +207,10 @@ def test_all_rules_have_thread_and_citation(checker):
         assert entry.get("exu") in {"Unpack", "Fpu", "Sfpu", "Pack"}, entry["id"]
     for entry in raw.get("sfpu_extra_groups", []):
         assert entry.get("citation"), entry["id"]
+    for entry in raw.get("sequence_rules", []):
+        assert entry["thread"] in valid_threads, entry["id"]
+        assert entry.get("citation"), entry["id"]
+        assert entry["require_init"] in {op["id"] for op in raw["operations"]}, entry["id"]
 
 
 def test_sfpu_yaml_is_current():

@@ -199,6 +199,26 @@ class ExtraEvent:
     architectures: tuple[str, ...] = ()
 
 
+@dataclasses.dataclass(frozen=True)
+class SequenceRule:
+    """A postcondition between a trigger init and another operation's init.
+
+    The checker validates the condition after the trigger's body has been
+    followed, so it sees the initializations the compute/LLK helper performs
+    on the caller's behalf.  ``require_args`` maps a trigger argument index to
+    a required-init argument index; both are compared as canonical values.
+    """
+
+    id: str
+    trigger: str
+    thread: str
+    require_op: str
+    require_args: tuple[tuple[int, int], ...] = ()
+    message: str = ""
+    citation: str = ""
+    architectures: tuple[str, ...] = ()
+
+
 @dataclasses.dataclass
 class RuleTable:
     operations: dict[str, OperationRule]
@@ -209,6 +229,7 @@ class RuleTable:
     invalidators: dict[str, set[str]]  # function -> exu names
     deprecated_init_apis: set[str]
     sfpu_groups: dict[str, OperationRule]
+    sequence_rules: dict[str, list[SequenceRule]] = dataclasses.field(default_factory=dict)
 
     @classmethod
     def load(cls, arch: Optional[str]) -> "RuleTable":
@@ -289,6 +310,23 @@ class RuleTable:
             for fn in inv.get("functions", ()):
                 invalidators[fn].add(inv["exu"])
 
+        sequence_rules: dict[str, list[SequenceRule]] = collections.defaultdict(list)
+        for entry in raw.get("sequence_rules", []):
+            arches = tuple(entry.get("architectures", ()))
+            if arch and arches and arch not in arches:
+                continue
+            rule = SequenceRule(
+                id=entry["id"],
+                trigger=entry["trigger"],
+                thread=entry["thread"],
+                require_op=entry["require_init"],
+                require_args=tuple(tuple(x) for x in entry.get("require_args", ())),
+                message=entry.get("message", ""),
+                citation=entry.get("citation", ""),
+                architectures=arches,
+            )
+            sequence_rules[rule.trigger].append(rule)
+
         sfpu_groups: dict[str, OperationRule] = {}
         sfpu_entries = list(sfpu_raw.get("sfpu_groups", ())) + list(raw.get("sfpu_extra_groups", ()))
         for idx, entry in enumerate(sfpu_entries):
@@ -328,6 +366,7 @@ class RuleTable:
             invalidators=dict(invalidators),
             deprecated_init_apis=set(raw.get("deprecated_init_apis", ()) or ()),
             sfpu_groups=sfpu_groups,
+            sequence_rules=dict(sequence_rules),
         )
 
 
@@ -420,6 +459,11 @@ class ExprEval:
     def __init__(self):
         self._const_cache: dict[str, Optional[int]] = {}
         self._active: set[str] = set()
+        # Bindings for the constexpr function currently being folded.  This is
+        # deliberately separate from Canonicalizer's text bindings: these are
+        # integer values, not canonical source text.
+        self._fn_frames: list[dict[str, Optional[int]]] = []
+        self._fn_active: set = set()
         self.lookup = None  # set to Canonicalizer.lookup
 
     def eval(self, cursor: "ci.Cursor") -> Optional[int]:
@@ -440,9 +484,12 @@ class ExprEval:
                 tokens = "".join(t.spelling for t in cursor.get_tokens())
                 return 1 if tokens == "true" else 0
             if kind == ci.CursorKind.DECL_REF_EXPR:
+                ref_name = cursor.spelling or "".join(t.spelling for t in cursor.get_tokens())
+                for frame in reversed(self._fn_frames):
+                    if ref_name in frame:
+                        return frame[ref_name]
                 decl = cursor.referenced
                 if self.lookup is not None:
-                    ref_name = cursor.spelling or "".join(t.spelling for t in cursor.get_tokens())
                     bound = self.lookup(ref_name)
                     if bound and bound.startswith("#"):
                         try:
@@ -450,6 +497,10 @@ class ExprEval:
                         except ValueError:
                             return None
                 return self._eval_decl(decl)
+            if kind == ci.CursorKind.ARRAY_SUBSCRIPT_EXPR:
+                return self._eval_subscript(cursor)
+            if kind == ci.CursorKind.CALL_EXPR:
+                return self._eval_call(cursor)
             if kind in (
                 ci.CursorKind.PAREN_EXPR,
                 ci.CursorKind.CXX_STATIC_CAST_EXPR,
@@ -534,7 +585,8 @@ class ExprEval:
         if decl.kind != ci.CursorKind.VAR_DECL:
             return None
         key = decl.get_usr() or f"{decl.location.file}:{decl.location.line}:{decl.spelling}"
-        if key in self._const_cache:
+        local = self._is_function_local(decl)
+        if not local and key in self._const_cache:
             return self._const_cache[key]
         if key in self._active:
             return None
@@ -545,20 +597,189 @@ class ExprEval:
             is_const = "constexpr" in tokens or re.search(r"\bconst\b", tokens) is not None
             if is_const:
                 for child in decl.get_children():
-                    if child.kind == ci.CursorKind.INTEGER_LITERAL or child.kind in (
-                        ci.CursorKind.UNARY_OPERATOR,
-                        ci.CursorKind.BINARY_OPERATOR,
-                        ci.CursorKind.DECL_REF_EXPR,
-                        ci.CursorKind.PAREN_EXPR,
-                        ci.CursorKind.CXX_STATIC_CAST_EXPR,
+                    if child.kind in (
+                        ci.CursorKind.TYPE_REF,
+                        ci.CursorKind.TEMPLATE_REF,
+                        ci.CursorKind.NAMESPACE_REF,
                     ):
-                        value = self.eval(child)
-                        if value is not None:
-                            break
+                        continue
+                    value = self.eval(child)
+                    if value is not None:
+                        break
         finally:
             self._active.discard(key)
-        self._const_cache[key] = value
+        # A local constexpr can depend on template parameters, so its value is
+        # per-instantiation and must not be cached by declaration identity.
+        if not local:
+            self._const_cache[key] = value
         return value
+
+    @staticmethod
+    def _is_function_local(decl) -> bool:
+        function_kinds = {
+            getattr(ci.CursorKind, name)
+            for name in (
+                "FUNCTION_DECL",
+                "FUNCTION_TEMPLATE",
+                "CXX_METHOD",
+                "CONSTRUCTOR",
+                "DESTRUCTOR",
+                "LAMBDA_EXPR",
+            )
+            if hasattr(ci.CursorKind, name)
+        }
+        parent = getattr(decl, "semantic_parent", None)
+        while parent is not None:
+            if parent.kind in function_kinds:
+                return True
+            parent = getattr(parent, "semantic_parent", None)
+        return False
+
+    def _eval_subscript(self, cursor) -> Optional[int]:
+        children = list(cursor.get_children())
+        if len(children) < 2:
+            return None
+        index = self.eval(children[1])
+        if index is None:
+            return None
+        base = children[0]
+        while base is not None and base.kind in (
+            ci.CursorKind.PAREN_EXPR,
+            ci.CursorKind.UNEXPOSED_EXPR,
+        ):
+            base = next(iter(base.get_children()), None)
+        decl = base.referenced if base is not None and base.kind == ci.CursorKind.DECL_REF_EXPR else None
+        if decl is None or decl.kind != ci.CursorKind.VAR_DECL:
+            return None
+        initializer = next(
+            (c for c in decl.get_children() if c.kind == ci.CursorKind.INIT_LIST_EXPR),
+            None,
+        )
+        if initializer is None:
+            return None
+        elements = list(initializer.get_children())
+        if 0 <= index < len(elements):
+            return self.eval(elements[index])
+        return None
+
+    def _eval_call(self, cursor) -> Optional[int]:
+        """Fold a call to a constexpr function with compile-time-known arguments.
+
+        The checker analyses template definitions, where libclang cannot fold an
+        expression itself (the type is dependent).  A small statement
+        interpreter over the function body is enough for the helper predicates
+        used by the compute kernel library (``if constexpr`` plus ``return``).
+        """
+        ref = cursor.referenced
+        callee_expr = next(
+            (c for c in cursor.get_children() if c.kind == ci.CursorKind.DECL_REF_EXPR),
+            None,
+        )
+        if ref is None and callee_expr is not None:
+            ref = callee_expr.referenced
+        if ref is None or ref.kind not in (
+            ci.CursorKind.FUNCTION_DECL,
+            ci.CursorKind.FUNCTION_TEMPLATE,
+            ci.CursorKind.CXX_METHOD,
+        ):
+            return None
+        head = []
+        for token in ref.get_tokens():
+            if token.spelling == "{":
+                break
+            head.append(token.spelling)
+        if "constexpr" not in head:
+            return None
+        body = next((c for c in ref.get_children() if c.kind == ci.CursorKind.COMPOUND_STMT), None)
+        if body is None:
+            return None
+        tparams = [
+            c.spelling
+            for c in ref.get_children()
+            if c.kind
+            in (
+                ci.CursorKind.TEMPLATE_TYPE_PARAMETER,
+                ci.CursorKind.TEMPLATE_NON_TYPE_PARAMETER,
+                getattr(ci.CursorKind, "TEMPLATE_TEMPLATE_PARAMETER", ci.CursorKind.UNEXPOSED_DECL),
+            )
+        ]
+        targs = []
+        if callee_expr is not None:
+            targs = [
+                c
+                for c in callee_expr.get_children()
+                if c.kind != getattr(ci.CursorKind, "OVERLOADED_DECL_REF", ci.CursorKind.UNEXPOSED_DECL)
+            ]
+        bindings: dict[str, Optional[int]] = {}
+        for name, arg in zip(tparams, targs):
+            value = self.eval(arg)
+            if value is None:
+                return None
+            bindings[name] = value
+        params = [c for c in ref.get_children() if c.kind == ci.CursorKind.PARM_DECL]
+        for param, arg in zip(params, cursor.get_arguments()):
+            value = self.eval(arg)
+            if value is None:
+                return None
+            bindings[param.spelling] = value
+        key = (ref.get_usr(), tuple(bindings.get(name) for name in tparams))
+        if key in self._fn_active:
+            return None
+        self._fn_active.add(key)
+        self._fn_frames.append(bindings)
+        try:
+            value, returned = self._eval_constexpr_stmt(body)
+            return value if returned else None
+        finally:
+            self._fn_frames.pop()
+            self._fn_active.discard(key)
+
+    def _eval_constexpr_stmt(self, cursor) -> tuple[Optional[int], bool]:
+        kind = cursor.kind
+        if kind == ci.CursorKind.COMPOUND_STMT:
+            for child in cursor.get_children():
+                value, returned = self._eval_constexpr_stmt(child)
+                if returned:
+                    return value, True
+            return None, False
+        if kind == ci.CursorKind.DECL_STMT:
+            for child in cursor.get_children():
+                if child.kind != ci.CursorKind.VAR_DECL:
+                    continue
+                tokens = "".join(t.spelling for t in child.get_tokens())
+                if "constexpr" not in tokens and re.search(r"\bconst\b", tokens) is None:
+                    continue
+                initializer = next(
+                    (
+                        c
+                        for c in child.get_children()
+                        if c.kind
+                        not in (
+                            ci.CursorKind.TYPE_REF,
+                            ci.CursorKind.TEMPLATE_REF,
+                            ci.CursorKind.NAMESPACE_REF,
+                        )
+                    ),
+                    None,
+                )
+                if initializer is not None and self._fn_frames:
+                    self._fn_frames[-1][child.spelling] = self.eval(initializer)
+            return None, False
+        if kind == ci.CursorKind.IF_STMT:
+            children = list(cursor.get_children())
+            if not children:
+                return None, False
+            condition = self.eval(children[0])
+            if condition is None:
+                return None, False
+            branch = children[1] if condition else (children[2] if len(children) > 2 else None)
+            if branch is None:
+                return None, False
+            return self._eval_constexpr_stmt(branch)
+        if kind == ci.CursorKind.RETURN_STMT:
+            expression = next(iter(cursor.get_children()), None)
+            return (self.eval(expression) if expression is not None else None), True
+        return None, False
 
 
 class Canonicalizer:
@@ -637,6 +858,7 @@ class InitRecord:
     arg_values: tuple[Optional[int], ...] = ()
     unknown: bool = False
     invalidated_by: Optional[tuple[str, int]] = None
+    generation: int = 0
 
     @property
     def site(self) -> str:
@@ -714,6 +936,7 @@ class Analyzer:
         self._discovered_conditions: set[str] = set()
         self._condition_files: dict[str, str] = {}
         self._site_stack: list[tuple[str, int, int]] = []
+        self._init_generation = 0
 
         index = ci.Index.create()
         self.tu = index.parse(
@@ -1359,23 +1582,32 @@ class Analyzer:
             return state
 
         # Deprecated functions are reported even when we stop at the rule table.
+        # Init-style deprecations keep the historical ``deprecated-init`` rule;
+        # every other deprecated call (e.g. acquire_dst/release_dst in
+        # api/compute/reg_api.h) is a ``deprecated-api`` finding.  Both come
+        # from the C++ declaration, so a new [[deprecated]] annotation is
+        # covered without editing the rule table.
         if name in self.table.deprecated_init_apis or self._is_deprecated(ref):
-            if "_init" in name or name in self.table.init_by_function:
-                file, line, col = self._record_site(call)
-                self._add(
-                    Finding(
-                        rule="deprecated-init",
-                        severity="error",
-                        file=file,
-                        line=line,
-                        column=col,
-                        thread=self.thread,
-                        arch=self.arch,
-                        op=name,
-                        message=f"deprecated init API '{name}' is used",
-                        citation="[[deprecated]] declaration or .github/deprecations.json",
-                    )
+            is_init = "_init" in name or name in self.table.init_by_function
+            file, line, col = self._record_site(call)
+            self._add(
+                Finding(
+                    rule="deprecated-init" if is_init else "deprecated-api",
+                    severity="error",
+                    file=file,
+                    line=line,
+                    column=col,
+                    thread=self.thread,
+                    arch=self.arch,
+                    op=name,
+                    message=(
+                        f"deprecated init API '{name}' is used"
+                        if is_init
+                        else f"deprecated API '{name}' is used"
+                    ),
+                    citation="[[deprecated]] declaration or .github/deprecations.json",
                 )
+            )
 
         handled = False
         should_descend = False
@@ -1446,7 +1678,12 @@ class Analyzer:
                     bindings[p.spelling] = canon
                 else:
                     bindings[p.spelling] = None
-            return self._run_function(body, state, bindings=bindings)
+            generation = self._init_generation
+            state = self._run_function(body, state, bindings=bindings)
+            rules = self.table.sequence_rules.get(name)
+            if rules:
+                self._check_sequence_rules(rules, call, state, generation)
+            return state
 
         # Implementation-level LLK names (_llk_*) are below the rule table's
         # abstraction: they do not change the API-level seated operation.
@@ -1545,6 +1782,7 @@ class Analyzer:
         template = self._template_args(ref)
         args, values = self._canon_args(call, None)
         file, line, col = self._record_site(call)
+        self._init_generation += 1
         record = InitRecord(
             op_id=op.id,
             init_fn=name,
@@ -1555,6 +1793,7 @@ class Analyzer:
             template=template,
             args=args,
             arg_values=values,
+            generation=self._init_generation,
         )
         if op.additive:
             state.sfpu.setdefault(op.id, []).append(record)
@@ -1571,6 +1810,7 @@ class Analyzer:
         template = self._template_args(ref)
         args, values = self._canon_args(call, None)
         file, line, col = self._record_site(call)
+        self._init_generation += 1
         record = InitRecord(
             op_id=op.id,
             init_fn=ev.function,
@@ -1581,6 +1821,7 @@ class Analyzer:
             template=template,
             args=args,
             arg_values=values,
+            generation=self._init_generation,
         )
         state.seated[op.exu] = record
         if op.requires_uninit:
@@ -1804,6 +2045,64 @@ class Analyzer:
                 continue
             if fn in op.invalidated_by:
                 record.invalidated_by = (fn, loc[1])
+
+    def _check_sequence_rules(self, rules, call, state: State, generation: int):
+        """Postconditions expressed by a trigger init's effect on another engine.
+
+        Example (#52175): ``tilize_init(icb, block, ocb)`` must re-point the
+        packer at ``ocb``.  A tilize init that leaves a previous operation's
+        packer geometry in place silently packs the wrong tile shape.
+        """
+        args, values = self._canon_args(call, None)
+        for rule in rules:
+            if rule.thread != self.thread:
+                continue
+            required = self.table.operations.get(rule.require_op)
+            if required is None or required.thread != self.thread:
+                continue
+            records = (
+                state.sfpu.get(required.id, ())
+                if required.additive
+                else [state.seated.get(required.exu)]
+            )
+            record = next(
+                (r for r in reversed(records) if r is not None and r.op_id == required.id),
+                None,
+            )
+            bad = None
+            if record is None or record.generation <= generation:
+                # Presence alone is not enough: the packer may already have been
+                # seated before the trigger and simply survive the body.
+                bad = f"no fresh '{rule.require_op}' init followed it"
+            else:
+                for trigger_idx, required_idx in rule.require_args:
+                    if trigger_idx >= len(args) or required_idx >= len(record.args):
+                        continue
+                    if args[trigger_idx] != record.args[required_idx]:
+                        bad = (
+                            f"the required init uses '{record.args[required_idx]}', "
+                            f"not the operation's '{args[trigger_idx]}' operand"
+                        )
+                        break
+            if bad is None:
+                continue
+            file, line, col = self._record_site(call)
+            self._add(
+                Finding(
+                    rule="wrong-init",
+                    severity="error",
+                    file=file,
+                    line=line,
+                    column=col,
+                    thread=self.thread,
+                    arch=self.arch,
+                    op=rule.id,
+                    message=rule.message or f"'{rule.trigger}' is not self-contained: {bad}",
+                    earlier=record.site if record is not None else None,
+                    citation=rule.citation,
+                    detail={"sequence": rule.id, "reason": bad},
+                )
+            )
 
     # -- loop-invariant init --------------------------------------------
 

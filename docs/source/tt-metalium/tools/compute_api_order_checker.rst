@@ -35,12 +35,16 @@ What it reports
      - the init's compile-time arguments differ from the operation's
    * - ``wrong-init``
      - an init for a different operation (or a reconfiguration that invalidated the
-       init) sits between the init and its operation
+       init) sits between the init and its operation, or a sequence postcondition
+       between two inits does not hold
    * - ``missing-uninit``
      - a curated operation that arms persistent state is never uninitialised
    * - ``deprecated-init``
      - a deprecated init API is used (``[[deprecated]]`` or
        ``.github/deprecations.json``)
+   * - ``deprecated-api``
+     - any other deprecated API is used (for example the legacy
+       ``acquire_dst`` / ``release_dst`` pair)
    * - ``loop-invariant-init``
      - warning only: an init that does not depend on the loop variable is re-run
        every iteration
@@ -48,6 +52,25 @@ What it reports
 Every finding names the rule, the kernel source line, and the earlier call it
 conflicts with.  The checker is advisory: it exits 0 for findings unless
 ``--fail-on-findings`` is passed.  A run that cannot analyse an input exits 2.
+
+Deprecation is read from the called function's C++ declaration, so a new
+``[[deprecated]]`` annotation is reported without editing the rule table.
+``deprecated-init`` covers init-style functions; every other deprecated function
+is ``deprecated-api``.
+
+Sequence postconditions live in the ``sequence_rules`` table.  After following a
+trigger init body, the checker verifies that a required operation was seated with
+matching arguments.  For example, ``tilize_init(icb, block, ocb)`` must re-point
+the packer at ``ocb``; otherwise a previous operation's tile geometry is silently
+reused (issue #52175).  A reconfiguration that invalidates a seated init is the
+same mechanism in the other direction (issue #61146).
+
+Helper-local ``constexpr`` predicates are folded from the function body when all
+of their template arguments are compile-time known.  This resolves paths such as
+``constexpr bool is_sfpu = is_sfpu_reduce_path<...>()`` in the compute kernel
+library instead of assuming the unknown branch.
+
+
 
 Running it locally
 ------------------
@@ -78,8 +101,9 @@ The corpus runner aggregates findings over discovery or a captured database and
 renders a Markdown report with coverage, triage, and false-positive accounting.
 It uses a supervised multiprocessing pool: workers reuse one libclang parse
 environment, recycle periodically to bound memory, and a worker crash is recorded
-as a coverage hole instead of losing the run.  The current discovery set is 563
-kernel files across ``ttnn``, ``models``, ``tests``, ``tt-train`` and ``tt_metal``.
+as a coverage hole instead of losing the run.  The current discovery set is 758
+kernel files across ``ttnn``, ``models``, ``tests`` (including
+``test_kernels/``), ``tt-train`` and ``tt_metal``.
 
 .. code-block:: bash
 
@@ -156,6 +180,9 @@ Limitations
   the compute/LLK APIs are out of scope, matching the bounty terms.  The SFPU
   init/operation pairs are not modelled by the LLK sanitizer and are checked only
   from the host-side generator.
+* SFPU register-assignment order is not modelled.  The #50381 failure was an
+  API-internal per-op rewrite of a once-per-kernel SFPU config register, not a
+  kernel-level init/execute ordering mistake; the checker reports the latter.
 
 CI
 --
