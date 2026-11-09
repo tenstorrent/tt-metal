@@ -271,3 +271,8 @@ def test_old_kmd_lock_line_does_not_block_once_a_rank_got_ready():
 def test_runner_has_no_device_op_timeout():
     run = _inner(runner_cmd(REPO, HOSTS, "block_random", "2d_torus_xy", Path("/r")))
     assert "export TT_METAL_OPERATION_TIMEOUT_SECONDS=0;" in run
+
+
+def test_runner_waits_for_slow_inter_galaxy_handshake():
+    run = _inner(runner_cmd(REPO, HOSTS, "passthrough", "2d_torus_xy", Path("/r")))
+    assert "export TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_MS=300000;" in run

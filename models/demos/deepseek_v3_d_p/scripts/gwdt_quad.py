@@ -104,6 +104,8 @@ def runner_cmd(repo: Path, hosts: list[str], mode: str, fabric: str, results_dir
         # No device-op timeout, as in CI: a downstream rank legitimately waits on its inbound socket until upstream
         # stages finish their first chunk. gwdt's own watchdog (STALL_S) decides what is a hang.
         "TT_METAL_OPERATION_TIMEOUT_SECONDS": "0",
+        # Ranks reach fabric init up to a minute apart, so the 10 s default fails healthy inter-galaxy links.
+        "TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_MS": "300000",
     }
     argv = [
         "python3",
