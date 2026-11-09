@@ -39,7 +39,8 @@ Tracy (current code): detector 5.94 ms kernel, recognizer batch 8 5.05 ms. Data 
 concats, DRAM -> L1 reshards before convs, untilizes; convs + matmuls are ~30%.
 Done: stem concat split (conv(cat(p, a)) = conv_p(p) + conv_a(a)), -1.1 ms in each model.
 Tried, no gain: padding the 3-channel input to 4 / 8 / 16 channels; reshape output in L1 breaks a
-downstream fused-ReLU matmul. Next: 2x2 space-to-depth fold of the input on the host.
+downstream fused-ReLU matmul. Done since: neck concat split (-0.25 ms), 2x2 space-to-depth input fold (det -0.78, rec -0.22 ms).
+Now: detector 4.91 ms, recognizer batch 8 4.82 ms kernel.
 
 | # | Strategy | Notes |
 |---|----------|-------|

@@ -8,7 +8,7 @@ import torch
 
 import ttnn
 from models.demos.blackhole.pp_ocrv6.reference.det import STAGE_CONFIGS
-from models.demos.blackhole.pp_ocrv6.tt.common import RELU, Backbone, Conv, Linear, SqueezeExcite, fold_bn, to_row_major
+from models.demos.blackhole.pp_ocrv6.tt.common import Backbone, Conv, Linear, SqueezeExcite, fold_bn, to_row_major
 
 
 def _upsample(x, batch, h, w, scale):
@@ -45,9 +45,15 @@ class TtPPOCRv6SmallDet:
                 )
             )
 
-        self.conv_down = Conv(
-            device, *fold_bn(head.conv_down.convolution.weight, None, head.conv_down.norm), activation=RELU
-        )
+        # conv_down runs on concat(outs[::-1]); split its weights per neck output instead,
+        # conv(cat(o3, o2, o1, o0)) = sum of conv_i(o_i), which skips a row-major concat.
+        w_down, b_down = fold_bn(head.conv_down.convolution.weight, None, head.conv_down.norm)
+        part = w_down.shape[1] // len(neck.input_conv)
+        self.conv_down = []
+        for k in range(len(neck.input_conv)):
+            self.conv_down.append(
+                Conv(device, w_down[:, k * part : (k + 1) * part], b_down if k == 0 else torch.zeros_like(b_down))
+            )
 
         # ConvTranspose2d(k=2, s=2) == per-pixel matmul to 4 sub-pixels.
         up = head.conv_up.convolution
@@ -78,11 +84,14 @@ class TtPPOCRv6SmallDet:
         for i, ((dw, pw, se), f, (_, fh, fw)) in enumerate(zip(self.inp, fused, feats)):
             y, _, _ = dw(f, batch, fh, fw)
             y = se(pw(y), batch)
-            outs.append(_upsample(y, batch, fh, fw, 2**i) if i else to_row_major(y))
-        x = ttnn.concat(outs[::-1], dim=-1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            outs.append(_upsample(y, batch, fh, fw, 2**i) if i else y)
 
         _, h2, w2 = feats[0]
-        x, _, _ = self.conv_down(x, batch, h2, w2)
+        x = None
+        for conv, o in zip(self.conv_down, outs[::-1]):
+            y, _, _ = conv(o, batch, h2, w2)
+            x = y if x is None else ttnn.add(x, y)
+        x = ttnn.relu(x)
         x = self.up(x)
         x = ttnn.sigmoid(self.final(x))
         return to_row_major(x), h2, w2

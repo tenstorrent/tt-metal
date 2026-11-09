@@ -82,15 +82,18 @@ class TtnnBackend:
             self._capture_traces()
 
     def _host(self, x):
-        # One image row per page: an NHWC row-major tensor with C=3 has 6-byte pages,
-        # which makes the host-to-device copy ~60x slower. Unpacked on device by _nhwc.
+        # 2x2 space_to_depth (12 channels; the stem's first conv takes it as is), then one
+        # folded image row per page: NHWC row-major with few channels has tiny pages, which
+        # makes the host-to-device copy ~60x slower. Unpacked on device by _nhwc.
         # torch's own bf16 cast is ~10x faster than letting from_torch convert float32.
+        from models.demos.blackhole.pp_ocrv6.tt.common import space_to_depth
+
         b, c, h, w = x.shape
-        x = x.permute(0, 2, 3, 1).reshape(1, 1, b * h, w * c).to(torch.bfloat16)
+        x = space_to_depth(x.permute(0, 2, 3, 1)).reshape(1, 1, b * h // 2, w // 2 * 4 * c).to(torch.bfloat16)
         return self.ttnn.from_torch(x, dtype=self.ttnn.bfloat16)
 
     def _nhwc(self, t, b, h, w):
-        return self.ttnn.reshape(t, (b, h, w, 3))
+        return self.ttnn.reshape(t, (b, h // 2, w // 2, 12))
 
     def _det_fn(self, b, h, w):
         return lambda t: self.det(self._nhwc(t, b, h, w), b, h, w)[0]

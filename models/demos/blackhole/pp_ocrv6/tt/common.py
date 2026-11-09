@@ -34,6 +34,25 @@ def to_row_major(x):
     return ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
 
 
+def space_to_depth(x):
+    """torch NHWC [B, H, W, C] -> [B, H/2, W/2, 4C], channel order (row parity, column parity, c)."""
+    b, h, w, c = x.shape
+    return x.reshape(b, h // 2, 2, w // 2, 2, c).permute(0, 1, 3, 2, 4, 5).reshape(b, h // 2, w // 2, 4 * c)
+
+
+def folded_stride2_weight(weight):
+    """3x3 stride-2 padding-1 conv weight [O, C, 3, 3] -> equivalent 2x2 stride-1 conv weight [O, 4C, 2, 2]
+    on space_to_depth input, padded one block top and left. Kernel row 0 is block row i-1 (only its odd
+    row, tap 0); kernel row 1 is block row i (even row tap 1, odd row tap 2). Same for columns."""
+    o, c = weight.shape[:2]
+    taps = {(0, 1): 0, (1, 0): 1, (1, 1): 2}  # (kernel index, parity) -> original tap
+    folded = torch.zeros(o, 2, 2, c, 2, 2, dtype=weight.dtype)  # [O, a, b, C, ky, kx]
+    for (ky, a), dy in taps.items():
+        for (kx, b), dx in taps.items():
+            folded[:, a, b, :, ky, kx] = weight[:, :, dy, dx]
+    return folded.reshape(o, 4 * c, 2, 2)
+
+
 def _pair(v):
     return tuple(v) if isinstance(v, (tuple, list)) else (v, v)
 
@@ -169,6 +188,10 @@ class LargeStem:
             return Conv(device, *fold_bn(m.convolution.weight, None, m.normalization), **kw)
 
         self.stem1 = cbn(stem.stem1, stride=2, activation=RELU)
+        self.in_channels = stem.stem1.convolution.weight.shape[1]
+        # Same conv on a space_to_depth input: 4x fewer, 4x wider rows to move and reshard.
+        w1, b1 = fold_bn(stem.stem1.convolution.weight, None, stem.stem1.normalization)
+        self.stem1_folded = Conv(device, folded_stride2_weight(w1), b1, padding=(1, 0, 1, 0), activation=RELU)
         self.stem2a = cbn(stem.stem2a, padding=(0, 1, 0, 1), activation=RELU)
         self.stem2b = cbn(stem.stem2b, padding=(0, 1, 0, 1), activation=RELU)
         # stem3 runs on concat([pool, stem2b]); split its weights by input channel instead,
@@ -180,7 +203,11 @@ class LargeStem:
         self.stem4 = Linear(device, *fold_bn(stem.stem4.convolution.weight, None, stem.stem4.normalization), "relu")
 
     def __call__(self, x, batch, h, w):
-        s1, h1, w1 = self.stem1(x, batch, h, w, memory_config=ttnn.L1_MEMORY_CONFIG)
+        """x: NHWC [B, H, W, 3], or its space_to_depth [B, H/2, W/2, 12]; h, w are the image size."""
+        if x.shape[-1] == 4 * self.in_channels:
+            s1, h1, w1 = self.stem1_folded(x, batch, h // 2, w // 2, memory_config=ttnn.L1_MEMORY_CONFIG)
+        else:
+            s1, h1, w1 = self.stem1(x, batch, h, w, memory_config=ttnn.L1_MEMORY_CONFIG)
         a, _, _ = self.stem2a(s1, batch, h1, w1)
         a, _, _ = self.stem2b(a, batch, h1, w1)
         # Zero padding before the pool equals -inf padding here because s1 is post-ReLU.

@@ -13,6 +13,7 @@ from models.demos.blackhole.pp_ocrv6.common import (
     load_torch_det,
     synthetic_gate_image,
 )
+from models.demos.blackhole.pp_ocrv6.tt.common import space_to_depth
 from models.demos.blackhole.pp_ocrv6.tt.ttnn_det import TtPPOCRv6SmallDet, unshuffle_probability
 from tests.ttnn.utils_for_testing import check_with_pcc
 
@@ -20,7 +21,8 @@ from tests.ttnn.utils_for_testing import check_with_pcc
 @pytest.mark.parametrize("device_params", [DEVICE_PARAMS], indirect=True)
 @pytest.mark.parametrize("size", [640])
 @pytest.mark.parametrize("source", ["gate_image", "random"])
-def test_det(device, size, source):
+@pytest.mark.parametrize("folded", [False, True], ids=["nhwc", "space_to_depth"])
+def test_det(device, size, source, folded):
     torch.manual_seed(0)
     torch_model = load_torch_det()
     if source == "random":
@@ -31,12 +33,15 @@ def test_det(device, size, source):
         ref = torch_model(x)
 
     tt_model = TtPPOCRv6SmallDet(device, torch_model)
-    tt_x = ttnn.from_torch(x.permute(0, 2, 3, 1), dtype=ttnn.bfloat16)
+    x = x.permute(0, 2, 3, 1)
+    tt_x = ttnn.from_torch(space_to_depth(x) if folded else x, dtype=ttnn.bfloat16)
     out, h4, w4 = tt_model(tt_x, 1, size, size)
     prob = unshuffle_probability(ttnn.to_torch(out).float(), 1, h4, w4)
 
     passed, pcc = check_with_pcc(ref, prob, pcc=0.99)
     text_px = (ref > 0.2).float().mean().item()
     flips = ((prob > 0.2) != (ref > 0.2)).float().mean().item()
-    print(f"[{source}] PCC {pcc}  text pixels {text_px:.3%}  mask disagreement at 0.2 {flips:.4%}")
+    print(
+        f"[{source}{' folded' if folded else ''}] PCC {pcc}  text pixels {text_px:.3%}  mask disagreement at 0.2 {flips:.4%}"
+    )
     assert passed, pcc
