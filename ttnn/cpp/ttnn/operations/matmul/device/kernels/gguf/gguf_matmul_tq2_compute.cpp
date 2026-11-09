@@ -10,9 +10,10 @@
 // g % window collects group g's partial, and the epilogue multiplies by the window's scale tile (row g % window = the
 // d of group g, fp32) and sums the rows. With more rows, each group is a window: its partial is multiplied by its d,
 // broadcast over the rows, and added. Then as gguf_matmul_compute.cpp: a whole N tile packs bf16, a head or tail an
-// fp32 partial, a finish adds the partials. Compile args: K tiles, input tiles per chunk, one input row (0 / 1), K
-// groups per window. Runtime args: segments, then per segment its first and end K tile and its role (a finish has
-// the count of other cores' partials in place of its first K tile).
+// fp32 partial, a finish adds the partials. Compile args: K tiles of the band (c_1 holds those), input tiles per chunk,
+// one input row (0 / 1), K groups per window, the band's first K tile (a whole window). Runtime args: segments, then
+// per segment its first and end K tile and its role (a finish has the count of other cores' partials in place of its
+// first K tile).
 
 #include <cstdint>
 
@@ -38,6 +39,7 @@ void kernel_main() {
     constexpr uint32_t chunk = get_compile_time_arg_val(1);
     constexpr bool one_row = get_compile_time_arg_val(2) == 1;
     constexpr uint32_t window = get_compile_time_arg_val(3);
+    constexpr uint32_t k_first = get_compile_time_arg_val(4);
     constexpr uint32_t cb_w = tt::CBIndex::c_0, cb_in0 = tt::CBIndex::c_1, cb_scale = tt::CBIndex::c_3;
     constexpr uint32_t cb_out = gguf_matmul::cb_out, cb_own = gguf_matmul::cb_own;
     constexpr uint32_t record_pages = 33;               // c_0 pages of 64 B: eight 256-byte tiles, then the scales
@@ -93,7 +95,7 @@ void kernel_main() {
         const uint32_t k1 = get_arg_val<uint32_t>(2 + 3 * s);
         const uint32_t role = get_arg_val<uint32_t>(3 + 3 * s);
         if (role == finish) {
-            // k0 is the count of the other cores' partials. Always the last segment.
+            // k0 is the count of the other cores' partials. Finishes come last.
             srca_forced_exp_off();
             reconfig_data_format_srca(cb_w, cb_own);
             gguf_matmul::finish_segment(k0);
@@ -120,12 +122,12 @@ void kernel_main() {
                 const uint32_t row = g % window;
                 cb_wait_front(cb_w, record_pages);
                 for (uint32_t i = 0; i < 8; i++) {
-                    const uint32_t kt = 8 * g + i;
-                    if (kt >= in0_ready) {
-                        in0_ready = (kt / chunk + 1) * chunk < k_tiles ? (kt / chunk + 1) * chunk : k_tiles;
+                    const uint32_t in0 = 8 * g + i - k_first;
+                    if (in0 >= in0_ready) {
+                        in0_ready = (in0 / chunk + 1) * chunk < k_tiles ? (in0 / chunk + 1) * chunk : k_tiles;
                         cb_wait_front(cb_in0, in0_ready * in0_pages);
                     }
-                    matmul_tiles(cb_in0, cb_w, one_row ? in0_pages * kt - row : kt, 4 * i, part);
+                    matmul_tiles(cb_in0, cb_w, one_row ? in0_pages * in0 - row : in0, 4 * i, part);
                 }
                 cb_pop_front(cb_w, record_pages);
             }

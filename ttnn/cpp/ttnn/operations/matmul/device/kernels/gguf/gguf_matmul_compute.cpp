@@ -8,10 +8,11 @@
 // alternating per K tile. The pack thread decodes K tile k + 1 while the math thread multiplies tile k
 // (gguf_decode_overlap_*); the unpacker copies the next page into DEST meanwhile, before phase 2 where that phase's
 // stores are not arbitrated against it (MXFP4, IQ4_NL, IQ4_XS, Q2_K). The input arrives in chunks
-// (gguf_matmul_writer.cpp) and each K tile is waited for when first reached. Compile args: format id, K tiles, input
-// tiles per chunk, input rows the matmul computes (8, 16 or 32). Runtime args: segments, then per segment its first and
-// end K tile and its role (gguf_matmul_program_factory.cpp Role); a finish has the count of other cores' partials in
-// place of its first K tile. Codebook formats also look up part of each page's grid levels here (CodebookLookups).
+// (gguf_matmul_writer.cpp) and each K tile is waited for when first reached. Compile args: format id, K tiles of the
+// band (c_1 holds those), input tiles per chunk, input rows the matmul computes (8, 16 or 32), the band's first K tile.
+// Runtime args: segments, then per segment its first and end K tile and its role (gguf_matmul_program_factory.cpp
+// Role); a finish has the count of other cores' partials in place of its first K tile. Codebook formats also look up
+// part of each page's grid levels here (CodebookLookups).
 
 #include <cstdint>
 
@@ -223,6 +224,7 @@ void kernel_main() {
     constexpr uint32_t k_tiles = get_compile_time_arg_val(1);
     constexpr uint32_t chunk = get_compile_time_arg_val(2);
     constexpr uint32_t in0_rows = get_compile_time_arg_val(3);
+    constexpr uint32_t k_first = get_compile_time_arg_val(4);
     constexpr gguf::PageLayout L = gguf::page_layout<static_cast<gguf::Format>(fmt)>();
     constexpr bool group_step = gguf::group_scales<fmt>;
     constexpr auto pack = GgufDecodeThread::Pack;
@@ -248,7 +250,7 @@ void kernel_main() {
         const uint32_t k1 = get_arg_val<uint32_t>(2 + 3 * s);
         const uint32_t role = get_arg_val<uint32_t>(3 + 3 * s);
         if (role == finish) {
-            // k0 is the count of the other cores' partials. Always the last segment.
+            // k0 is the count of the other cores' partials. Finishes come last.
             dest_srca_mm_uninit();
             gguf_matmul::finish_segment(k0);
             continue;
@@ -298,11 +300,12 @@ void kernel_main() {
             gguf_decode_tile<fmt, pack>(out, t);
             gguf_decode_overlap_tile_done();
             lookups.tile_decoded();
-            if (kt >= in0_ready) {
-                in0_ready = (kt / chunk + 1) * chunk < k_tiles ? (kt / chunk + 1) * chunk : k_tiles;
+            const uint32_t in0 = kt - k_first;
+            if (in0 >= in0_ready) {
+                in0_ready = (in0 / chunk + 1) * chunk < k_tiles ? (in0 / chunk + 1) * chunk : k_tiles;
                 cb_wait_front(cb_in0, in0_ready);
             }
-            dest_srca_mm_unpack(cb_in0, kt);
+            dest_srca_mm_unpack(cb_in0, in0);
             if (next) {
                 if ((kt + 1) % L.page_tiles == 0) {
                     cb_pop_front(cb_page, 1);

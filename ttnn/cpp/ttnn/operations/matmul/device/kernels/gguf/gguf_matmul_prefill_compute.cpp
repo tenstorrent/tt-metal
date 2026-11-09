@@ -9,10 +9,11 @@
 // complete. Decode: per tile, the page is copied into DEST tile 1 and decoded into tile 0 on the math thread (MXFP4,
 // NVFP4: tiles 2 and 1), then packed. K split (krole): band 1 packs its sums to c_17 for the writer to send, band 0
 // adds the partners' (c_18); both in units of ur rows x the planned N tiles, the rows of each N tile together
-// (subblocks of ur x 1). Compile args: format id, mc, kb, M chunks, ur (sh divides it). Runtime args: N tiles of this
-// core (0: nothing to do), N tiles the circular buffers are sized for (c_4 and c_24 advance by whole blocks of that
-// width, so that c_24's L1 accumulation lands on the same tiles), sh, sw, krole (0: no K split, 1: send sums, 2: add
-// them), K blocks.
+// (subblocks of ur x 1). Compile args: format id, mc, kb, M chunks, ur (sh divides it), N passes (the core's N tiles in
+// passes of up to the width below; a pass without any only consumes the input). Runtime args: N tiles of this core
+// (0: nothing to do), N tiles the circular buffers are sized for (c_4 and c_24 advance by whole blocks of that width,
+// so that c_24's L1 accumulation lands on the same tiles), sh, sw, krole (0: no K split, 1: send sums, 2: add them),
+// K blocks.
 
 #include <cstdint>
 
@@ -36,6 +37,7 @@ void kernel_main() {
     constexpr uint32_t kb = get_compile_time_arg_val(2);
     constexpr uint32_t mchunks = get_compile_time_arg_val(3);
     constexpr uint32_t ur = get_compile_time_arg_val(4);  // input rows per unit (c_1 holds units of ur x kb tiles)
+    constexpr uint32_t passes = get_compile_time_arg_val(5);
     constexpr gguf::PageLayout L = gguf::page_layout<static_cast<gguf::Format>(fmt)>();
     constexpr bool group_step = gguf::group_scales<fmt>;
     constexpr uint32_t block_groups = kb / L.group_tiles;
@@ -49,16 +51,16 @@ void kernel_main() {
     constexpr uint32_t cb_page = tt::CBIndex::c_0, cb_in0 = tt::CBIndex::c_1, cb_w = tt::CBIndex::c_4;
     constexpr uint32_t cb_out = tt::CBIndex::c_16, cb_acc = tt::CBIndex::c_24;
     constexpr uint32_t cb_send = tt::CBIndex::c_17, cb_recv = tt::CBIndex::c_18;
-    const uint32_t nc = get_arg_val<uint32_t>(0);
+    const uint32_t core_nc = get_arg_val<uint32_t>(0);
     const uint32_t nca = get_arg_val<uint32_t>(1);
     const uint32_t sh = get_arg_val<uint32_t>(2);
     const uint32_t sw = get_arg_val<uint32_t>(3);
     const uint32_t krole = get_arg_val<uint32_t>(4);  // K split: 1 sends its sums (c_17), 2 adds the partner's (c_18)
     const uint32_t kblocks = get_arg_val<uint32_t>(5);
-    if (nc == 0) {
+    if (core_nc == 0) {
         return;
     }
-    const uint32_t sub = sh * sw, w_tiles = kb * nca, acc_tiles = mc * nc, acc_ring = mc * nca;
+    const uint32_t sub = sh * sw, w_tiles = kb * nca, acc_ring = mc * nca;
 
     compute_kernel_hw_startup(cb_page, cb_in0, cb_w);
     uint32_t srca = cb_page;  // the CB SrcA is configured for
@@ -69,7 +71,19 @@ void kernel_main() {
         }
     };
 
-    for (uint32_t chunk = 0; chunk < mchunks; chunk++) {
+    for (uint32_t chunk = 0; chunk < passes * mchunks; chunk++) {
+        const uint32_t pass = passes == 1 ? 0 : chunk / mchunks;
+        const uint32_t nc = passes == 1            ? core_nc
+                            : core_nc > pass * nca ? (core_nc - pass * nca < nca ? core_nc - pass * nca : nca)
+                                                   : 0;
+        const uint32_t acc_tiles = mc * nc;
+        if (passes > 1 && nc == 0) {
+            for (uint32_t unit = 0; unit < kblocks * (mc / ur); unit++) {
+                cb_wait_front(cb_in0, ur * kb);
+                cb_pop_front(cb_in0, ur * kb);
+            }
+            continue;
+        }
         for (uint32_t blk = 0; blk < kblocks; blk++) {
             // Decode the K block's weight tiles, in record order (per group, per N tile, per tile of the group).
             srca_to(cb_page);

@@ -14,14 +14,14 @@
 // output (c_16, subblocks of sh x sw tiles in compute order) is written to DRAM whenever this kernel would wait. K
 // split: band 1 sends its fp32 sums per unit of rows (c_17) to the one or two cores of band 0 holding its N tiles, into
 // their c_18, a ring of two units: each receiver grants a slot to its senders once its compute has freed it, and counts
-// the parts that landed, a partial semaphore per partner either way.
+// the parts that landed, a partial semaphore per partner either way. N passes: the blocks repeat per pass.
 // Compile args: K tiles, N tiles, mc, kb, M chunks, slots (<= 4), four slot ready semaphores, two block count
-// semaphores, a source semaphore, senders (1 or 2), ur, two partial semaphores, then the input's and the output's
-// TensorAccessorArgs. Runtime args: input address, output address, band rectangle (NoC x / y start, x / y end, in this
-// writer's NoC order), first M tile of the band, first N tile, N tiles (0: no output), sh, sw, role (0, or 1 + the
-// sender's index), the two senders' NoC x, y, first K tile of the band, K split role (0: none, 1: send sums, 2: add
-// the partners'), the plan's N tiles per core (a unit of sums is ur x that), K blocks, band cores, K split partners,
-// then six words per partner (below).
+// semaphores, a source semaphore, senders (1 or 2), ur, two partial semaphores, N tiles per pass, passes, then the
+// input's and the output's TensorAccessorArgs. Runtime args: input address, output address, band rectangle (NoC x / y
+// start, x / y end, in this writer's NoC order), first M tile of the band, first N tile, N tiles (0: no output), sh,
+// sw, role (0, or 1 + the sender's index), the two senders' NoC x, y, first K tile of the band, K split role (0: none,
+// 1: send sums, 2: add the partners'), the plan's N tiles per core (a unit of sums is ur x that), K blocks, band cores,
+// K split partners, then six words per partner (below).
 
 #include <cstdint>
 
@@ -46,8 +46,9 @@ void kernel_main() {
     constexpr uint32_t ur = get_compile_time_arg_val(14);
     // K split, per partner index: on band 0 the units of sums that landed from it, on band 1 the slots it granted.
     constexpr uint32_t partial_sems[2] = {get_compile_time_arg_val(15), get_compile_time_arg_val(16)};
+    constexpr uint32_t np = get_compile_time_arg_val(17), passes = get_compile_time_arg_val(18);
     static_assert(slots <= 4);
-    constexpr auto input_args = TensorAccessorArgs<17>();
+    constexpr auto input_args = TensorAccessorArgs<19>();
     constexpr auto output_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
     constexpr uint32_t tile_bytes = 2048, block_tiles = ur * kb, block_bytes = block_tiles * tile_bytes;
     constexpr uint32_t units = mc / ur;  // per M chunk per K block
@@ -77,7 +78,11 @@ void kernel_main() {
     const uint32_t k_base = get_arg_val<uint32_t>(16), krole = get_arg_val<uint32_t>(17);
     const uint32_t unit_tiles = ur * get_arg_val<uint32_t>(18), unit_bytes = unit_tiles * 4096;  // ur x the planned nc
     const uint32_t kblocks = get_arg_val<uint32_t>(19), band_cores = get_arg_val<uint32_t>(20);
-    const uint32_t blocks = mchunks * kblocks * units;
+    const uint32_t blocks = passes * mchunks * kblocks * units;
+    // N tiles of this core in pass `pass`.
+    auto pass_nc = [&](uint32_t pass) {
+        return passes == 1 ? nc : nc > pass * np ? (nc - pass * np < np ? nc - pass * np : np) : 0;
+    };
     // K split in two bands: band 1 (krole 1) sends its fp32 sums per unit of rows to the cores of band 0 (krole 2)
     // holding its N tiles, which add them. Per partner p: NoC x, y, this core's index among the partner's partners
     // (the partner's partial semaphore it counts in), and for a sender the tile offsets in its unit and in the
@@ -107,10 +112,10 @@ void kernel_main() {
     const uint32_t source_addr = get_semaphore(source_sem);
     volatile tt_l1_ptr uint32_t* source_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(source_addr);
 
-    // Output: subblocks in compute order (per M chunk, per row of subblocks, per subblock).
+    // Output: subblocks in compute order (per pass, per M chunk, per row of subblocks, per subblock).
     const uint32_t sub = sh * sw;
     const uint32_t subs_total = active && krole != 1 ? mchunks * (mc / sh) * (nc / sw) : 0;
-    uint32_t subs_done = 0, chunk = 0, row = 0, col = 0;
+    uint32_t subs_done = 0, chunk = 0, row = 0, col = 0;  // chunk counts over all passes
     auto drain = [&]() {
         if (krole == 1) {
             // A unit goes into ring slot units_sent % kRecvUnits of each partner's c_18 once every partner has
@@ -149,17 +154,18 @@ void kernel_main() {
         }
         while (subs_done < subs_total && cb_pages_available_at_front(cb_out, sub)) {
             uint32_t l1 = get_read_ptr(cb_out);
+            const uint32_t pass = passes == 1 ? 0 : chunk / mchunks;
             for (uint32_t h = 0; h < sh; h++) {
-                const uint32_t m = m_base + chunk * mc + row * sh + h;
+                const uint32_t m = m_base + (chunk - pass * mchunks) * mc + row * sh + h;
                 for (uint32_t w = 0; w < sw; w++) {
-                    noc_async_write(l1, output.get_noc_addr(m * n_tiles + n0 + col * sw + w), tile_bytes);
+                    noc_async_write(l1, output.get_noc_addr(m * n_tiles + n0 + pass * np + col * sw + w), tile_bytes);
                     l1 += tile_bytes;
                 }
             }
             noc_async_writes_flushed();
             cb_pop_front(cb_out, sub);
             subs_done++;
-            if (++col == nc / sw) {
+            if (++col == pass_nc(pass) / sw) {
                 col = 0;
                 if (++row == mc / sh) {
                     row = 0;
@@ -177,7 +183,8 @@ void kernel_main() {
                (!active || cb_pages_reservable_at_back(cb_in0, (read_next - b + 1) * block_tiles))) {
             const uint32_t j = read_next;
             read_next += senders;
-            const uint32_t m_first = m_base + (j / (kblocks * units)) * mc + (j % units) * ur;
+            const uint32_t chunk_of_j = passes == 1 ? j / (kblocks * units) : j / (kblocks * units) % mchunks;
+            const uint32_t m_first = m_base + chunk_of_j * mc + (j % units) * ur;
             const uint32_t k_first = k_base + (j / units) % kblocks * kb;
             uint32_t l1 = in0_base + (j % slots) * block_bytes;
             for (uint32_t h = 0; h < ur; h++) {

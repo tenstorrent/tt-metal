@@ -2,20 +2,21 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Input and output mover of the GGUF matmul. Every compute core holds the input row block (K tiles in c_1, at the same
-// L1 address on every core of the grid). The collector reads it chunk by chunk, multicasts each chunk to the grid and
-// then sets the chunk count in the grid's semaphore with a multicast ordered behind the data; the others push each
-// chunk once the count reaches it, so the matmul starts on chunk 0 while later chunks are in flight. Then, per segment
-// (gguf_matmul_program_factory.cpp Role): whole and finish write the bf16 output tile (c_16); a tail sends its fp32
-// partial (c_17) into its slot of the finishing core's c_18 and counts it on that core's semaphore; a head moves its
-// partial into this core's c_20; a finish first waits for its partials and hands them to the compute kernel. Codebook
-// formats: the writer also runs its part of the grid lookups of each record the reader asks for, between its own
-// waits. TQ2_0 with one input row (gguf_matmul_tq2_compute.cpp): the collector zeroes every row of each input tile but
-// row 0 before the multicast, and c_1 counts 32-byte pages. Compile args: K tiles, tiles per chunk, input semaphore,
-// partial semaphore, format id, the lookup request, answer and page address semaphores, one-row TQ2_0 (0 / 1), the
-// input's and the output's TensorAccessorArgs. Runtime args: collector, input address, output address, multicast
-// rectangle (NoC x / y start, x / y end, in this writer's NoC order), cores in it, segments, then per segment: tail:
-// slot, role, finishing core NoC x, y; else: N tile, role, partials, 0.
+// Input and output mover of the GGUF matmul. Every compute core holds its band's K tiles of the input row block (c_1,
+// at the same L1 address on every core of the grid). The band's collector reads them chunk by chunk, multicasts each
+// chunk to the band's rows and then sets the chunk count in their semaphore with a multicast ordered behind the data;
+// the others push each chunk once the count reaches it, so the matmul starts on chunk 0 while later chunks are in
+// flight. Then, per segment (gguf_matmul_program_factory.cpp Role): whole and finish write the bf16 output tile (c_16);
+// a tail sends its fp32 partial (c_17) into its slot of the finishing core's c_18 and counts it on that core's
+// semaphore; a head moves its partial into this core's c_20; the first finish waits for all of this core's partials,
+// and each hands its own to the compute kernel. Codebook formats: the writer also runs its part of the grid lookups of
+// each record the reader asks for, between its own waits. TQ2_0 with one input row (gguf_matmul_tq2_compute.cpp): the
+// collector zeroes every row of each input tile but row 0 before the multicast, and c_1 counts 32-byte pages. Compile
+// args: K tiles (c_1's; of the largest band), tiles per chunk, input semaphore, partial semaphore, format id, the
+// lookup request, answer and page address semaphores, one-row TQ2_0 (0 / 1), K bands (0 / 1), the input's and the
+// output's TensorAccessorArgs. Runtime args: collector, input address, output address, multicast rectangle (NoC x / y
+// start, x / y end, in this writer's NoC order), cores in it, segments, then per segment: tail: slot, role, finishing
+// core NoC x, y; else: N tile, role, partials, 0; with K bands, the band's first K tile and K tiles.
 
 #include <cstdint>
 
@@ -31,7 +32,7 @@ alignas(4) std::uint16_t table_copy[1024 / 2];  // local_level_table
 void kernel_main() {
     using namespace experimental::gguf;
     constexpr uint32_t whole = 0, tail = 1, head = 2;  // Role
-    constexpr uint32_t k_tiles = get_compile_time_arg_val(0);
+    constexpr uint32_t c1_tiles = get_compile_time_arg_val(0);
     constexpr uint32_t chunk = get_compile_time_arg_val(1);
     constexpr uint32_t input_sem = get_compile_time_arg_val(2);
     constexpr uint32_t partial_sem = get_compile_time_arg_val(3);
@@ -39,7 +40,8 @@ void kernel_main() {
     constexpr uint32_t request_sem = get_compile_time_arg_val(5), answer_sem = get_compile_time_arg_val(6);
     constexpr uint32_t address_sem = get_compile_time_arg_val(7);
     constexpr bool zero_rows = get_compile_time_arg_val(8) == 1;
-    constexpr auto input_args = TensorAccessorArgs<9>();
+    constexpr bool banded = get_compile_time_arg_val(9) == 1;
+    constexpr auto input_args = TensorAccessorArgs<10>();
     constexpr auto output_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
     constexpr uint32_t tile_bytes = 2048, partial_bytes = 4096;
     constexpr uint32_t in_pages = zero_rows ? tile_bytes / 32 : 1;  // c_1 pages per input tile
@@ -51,6 +53,9 @@ void kernel_main() {
     const uint32_t mc_x1 = get_arg_val<uint32_t>(5), mc_y1 = get_arg_val<uint32_t>(6);
     const uint32_t mc_dests = get_arg_val<uint32_t>(7) - 1;
     const uint32_t segments = get_arg_val<uint32_t>(8);
+    auto segment_arg = [](uint32_t s, uint32_t i) { return get_arg_val<uint32_t>(9 + 4 * s + i); };
+    const uint32_t k_first = banded ? get_arg_val<uint32_t>(9 + 4 * segments) : 0;
+    const uint32_t k_tiles = banded ? get_arg_val<uint32_t>(10 + 4 * segments) : c1_tiles;
 
     Noc noc;
     CircularBuffer in_cb(tt::CBIndex::c_1);
@@ -101,7 +106,8 @@ void kernel_main() {
     // Collector: chunk c + 1 is read while chunk c is multicast.
     auto read_chunk = [&](uint32_t k0) {
         for (uint32_t kt = k0; kt < k0 + chunk && kt < k_tiles; kt++) {
-            noc.async_read(input, CoreLocalMem<uint32_t>(base + kt * tile_bytes), tile_bytes, {.page_id = kt}, {});
+            noc.async_read(
+                input, CoreLocalMem<uint32_t>(base + kt * tile_bytes), tile_bytes, {.page_id = k_first + kt}, {});
         }
     };
     if (collector) {
@@ -150,11 +156,21 @@ void kernel_main() {
         in_cb.push_back(n * in_pages);
     }
 
+    // K bands: a core may finish several N tiles, and partials of a later finish may land first, so the first finish
+    // waits for all of them.
+    uint32_t all_parts = 0;
+    if constexpr (banded) {
+        for (uint32_t s = 0; s < segments; s++) {
+            if (segment_arg(s, 1) != tail) {
+                all_parts += segment_arg(s, 2);
+            }
+        }
+    }
     for (uint32_t s = 0; s < segments; s++) {
-        const uint32_t n = get_arg_val<uint32_t>(9 + 4 * s);
-        const uint32_t role = get_arg_val<uint32_t>(10 + 4 * s);
+        const uint32_t n = segment_arg(s, 0);
+        const uint32_t role = segment_arg(s, 1);
         if (role == tail) {
-            const uint32_t x = get_arg_val<uint32_t>(11 + 4 * s), y = get_arg_val<uint32_t>(12 + 4 * s);
+            const uint32_t x = segment_arg(s, 2), y = segment_arg(s, 3);
             while (!part_cb.pages_available_at_front(1)) {
                 serve();
             }
@@ -175,8 +191,8 @@ void kernel_main() {
             part_cb.pop_front(1);
         } else {
             if (role != whole) {
-                const uint32_t parts = get_arg_val<uint32_t>(11 + 4 * s);
-                while (partials.value() < parts) {
+                const uint32_t parts = segment_arg(s, 2);
+                while (partials.value() < (banded ? all_parts : parts)) {
                     serve();
                 }
                 remote_cb.reserve_back(parts);
