@@ -205,6 +205,11 @@ def create_l1_sharded_memory_config(
     )
 
 
+def _quick_gelu(x):
+    # HF OWL-ViT encoders use quick_gelu: x * sigmoid(1.702 * x).
+    return ttnn.multiply(x, ttnn.sigmoid(ttnn.multiply(x, 1.702)))
+
+
 def run_vision_encoder_layer(
     hidden_states: ttnn.Tensor,
     layer_params: Dict[str, Any],
@@ -291,7 +296,7 @@ def run_vision_encoder_layer(
         compute_kernel_config=compute_kernel_config,
     )
     ttnn.deallocate(hidden_states)
-    mlp_hidden = ttnn.gelu(mlp_hidden)
+    mlp_hidden = _quick_gelu(mlp_hidden)
 
     mlp_output = ttnn.linear(
         mlp_hidden,
@@ -438,7 +443,7 @@ def run_vision_encoder_layer_sharded(
         core_grid=full_grid,
     )
     ttnn.deallocate(hidden_states)
-    mlp_hidden = ttnn.gelu(mlp_hidden)
+    mlp_hidden = _quick_gelu(mlp_hidden)
 
     # MLP fc2
     mlp_output = ttnn.linear(
@@ -561,7 +566,7 @@ def run_text_encoder_layer(
     )
     ttnn.deallocate(hidden_states)
     # QuickGELU
-    mlp_hidden = ttnn.gelu(mlp_hidden)
+    mlp_hidden = _quick_gelu(mlp_hidden)
 
     mlp_output = ttnn.linear(
         mlp_hidden,
@@ -705,7 +710,7 @@ def run_text_encoder_layer_sharded(
         core_grid=full_grid,
     )
     ttnn.deallocate(hidden_states)
-    mlp_hidden = ttnn.gelu(mlp_hidden)
+    mlp_hidden = _quick_gelu(mlp_hidden)
 
     # MLP fc2
     mlp_output = ttnn.linear(
