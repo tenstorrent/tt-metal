@@ -484,7 +484,7 @@ class TtDPTHead:
 
     HF forward order:
         conv1(256→128, 3x3)
-        nearest-neighbor 2x upsample + slice (to patch_h*14 × patch_w*14)
+        bilinear resize, align_corners=True (to patch_h*14 × patch_w*14)
         conv2(128→32, 3x3)
         activation1 (ReLU)
         conv3(32→1, 1x1)
@@ -496,6 +496,42 @@ class TtDPTHead:
         self.device = device
         self.patch_size = patch_size
         self.max_depth = max_depth
+        self._resize_matrices = {}
+
+    def _resize_matrix(self, n_in, n_out):
+        # Transposed interpolation matrix of a bilinear resize with align_corners=True along one axis.
+        key = (n_in, n_out)
+        if key not in self._resize_matrices:
+            src = torch.arange(n_out, dtype=torch.float64) * (n_in - 1) / (n_out - 1)
+            i0 = src.floor().long().clamp(max=n_in - 1)
+            i1 = (i0 + 1).clamp(max=n_in - 1)
+            frac = src - i0
+            matrix = torch.zeros(n_out, n_in, dtype=torch.float64)
+            matrix[torch.arange(n_out), i0] += 1 - frac
+            matrix[torch.arange(n_out), i1] += frac
+            self._resize_matrices[key] = ttnn.from_torch(
+                matrix.T.contiguous().float()[None, None],
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.device,
+            )
+        return self._resize_matrices[key]
+
+    def _resize(self, x, h, w, target_h, target_w):
+        # Bilinear resize (align_corners=True) of x (B, C, h, w) as two matmuls, so the head stays on device.
+        compute_kernel_config = ttnn.init_device_compute_kernel_config(
+            self.device.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=False,
+        )
+        x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
+        x = ttnn.matmul(x, self._resize_matrix(w, target_w), compute_kernel_config=compute_kernel_config)
+        x = ttnn.transpose(x, -2, -1)
+        x = ttnn.matmul(x, self._resize_matrix(h, target_h), compute_kernel_config=compute_kernel_config)
+        x = ttnn.transpose(x, -2, -1)
+        return ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
 
     def __call__(self, x, patch_height=37, patch_width=37):
         batch_size, channels, h, w = x.shape
@@ -515,24 +551,10 @@ class TtDPTHead:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
-        # Upsample to full input resolution (patch_h * 14, patch_w * 14)
-        # On-device nearest-neighbor 2x upsample + slice to exact target.
-        # 296 -> 592 (2x nearest) -> slice to 518x518.
-        # This replaces the CPU bilinear round-trip to enable trace capture.
+        # Resize to the input resolution (patch_h * 14, patch_w * 14), 296 -> 518 for 518x518 inputs.
         target_h = patch_height * self.patch_size  # 518
         target_w = patch_width * self.patch_size  # 518
-        scale = int(math.ceil(target_h / h))  # ceil(518/296) = 2
-        x = ttnn_upsample(x, scale_factor=scale)
-        upsampled_h, upsampled_w = h * scale, w * scale
-
-        # Slice to exact target size (592 -> 518)
-        if upsampled_h != target_h or upsampled_w != target_w:
-            x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
-            x = ttnn.slice(
-                x,
-                (0, 0, 0, 0),
-                (batch_size, 128, target_h, target_w),
-            )
+        x = self._resize(x, h, w, target_h, target_w)
         h, w = target_h, target_w
 
         # Conv 2: 128 -> 32
