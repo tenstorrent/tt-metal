@@ -367,15 +367,14 @@ class StableDiffusion3Pipeline(PipelineAPIMixin):
     def _random_latents(self, *, batch_size: int, dtype: torch.dtype, seed: int) -> list[ttnn.Tensor]:
         torch.manual_seed(seed)
 
-        latents_shape = (
-            batch_size,
-            self._height // _VAE_SCALE_FACTOR,
-            self._width // _VAE_SCALE_FACTOR,
-            self._num_channels_latents,
-        )
-
-        latents = torch.randn(latents_shape, dtype=dtype)
-        latents = self.transformers[0].patchify(latents)
+        p = self.patch_size
+        latents_h = self._height // _VAE_SCALE_FACTOR
+        latents_w = self._width // _VAE_SCALE_FACTOR
+        # Generate noise directly in the patchified layout (1, B, seq_len, patch_dim)
+        # to match the reference diffusers implementation which draws noise token-by-token.
+        seq_len = (latents_h // p) * (latents_w // p)
+        patch_dim = p * p * self._num_channels_latents
+        latents = torch.randn(1, batch_size, seq_len, patch_dim, dtype=dtype)
         return from_torch_to_devices(
             latents,
             devices=self.submesh_devices,
