@@ -111,6 +111,14 @@ class TtConv2d:
         return output_tensor, out_h, out_w
 
 
+def _command_index(command):
+    if isinstance(command, (list, tuple)):
+        command = command[0]
+    if isinstance(command, ttnn.Tensor):
+        command = ttnn.to_torch(command)
+    return int(torch.as_tensor(command).reshape(-1)[0])
+
+
 class TtPlanningHeadSingleMode:
     def __init__(
         self,
@@ -204,7 +212,7 @@ class TtPlanningHeadSingleMode:
                 ),
             ]
 
-    def _prepare_traced_inputs(self, bev_embed, bev_pos, sdc_traj_query, sdc_track_query):
+    def _prepare_traced_inputs(self, bev_embed, bev_pos, sdc_traj_query, sdc_track_query, command):
         """Non-trace-friendly prep: mlp_fuser + bev_adapter (Conv2d).
 
         Returns the (plan_query, bev_feat) pair that feeds the trace-friendly
@@ -216,7 +224,8 @@ class TtPlanningHeadSingleMode:
         sdc_track_query = ttnn.unsqueeze(sdc_track_query, 1)
         sdc_track_query = ttnn.expand(sdc_track_query, (-1, P, -1))
 
-        navi_embed = self.navi_embed[:1, :]  # 1.0 if FP32 else 0.9999
+        command = _command_index(command)
+        navi_embed = self.navi_embed[command : command + 1, :]
 
         navi_embed = ttnn.unsqueeze(navi_embed, 0)
         navi_embed = ttnn.expand(navi_embed, (-1, P, -1))
@@ -296,13 +305,13 @@ class TtPlanningHeadSingleMode:
         sdc_traj_all = ttnn.unsqueeze(sdc_traj_all, 0)
         return sdc_traj_all
 
-    def forward_device(self, bev_embed, bev_pos, sdc_traj_query, sdc_track_query):
+    def forward_device(self, bev_embed, bev_pos, sdc_traj_query, sdc_track_query, command):
         """Full device-only forward: prep + traced inner forward."""
-        plan_query, bev_feat = self._prepare_traced_inputs(bev_embed, bev_pos, sdc_traj_query, sdc_track_query)
+        plan_query, bev_feat = self._prepare_traced_inputs(bev_embed, bev_pos, sdc_traj_query, sdc_track_query, command)
         return self._traced_forward(plan_query, bev_feat)
 
-    def __call__(self, bev_embed, occ_mask, bev_pos, sdc_traj_query, sdc_track_query, command=None):
-        sdc_traj_all = self.forward_device(bev_embed, bev_pos, sdc_traj_query, sdc_track_query)
+    def __call__(self, bev_embed, occ_mask, bev_pos, sdc_traj_query, sdc_track_query, command):
+        sdc_traj_all = self.forward_device(bev_embed, bev_pos, sdc_traj_query, sdc_track_query, command)
 
         sdc_traj_all = ttnn.to_torch(sdc_traj_all, dtype=torch.float32)
 
