@@ -49,6 +49,10 @@ init-arg-mismatch:
   true_positive: true
   note: init and operation expose different compile-time arguments (e.g. unpack acc_to_dest / datacopy configuration)
 
+# The former groupnorm_sharded_v2.cpp wrong-init findings are not retriaged
+# here because they no longer occur: ExprEval now folds the helper-local
+# is_sfpu_reduce_path<...>() constexpr and selects the FPU reduce branch.
+# See test_helper_local_constexpr_reduce_path_has_no_false_positive.
 wrong-init:
   true_positive: true
   note: a reconfigured or stale init is used, or a sequence postcondition such as tilize_init seating the packer does not hold
