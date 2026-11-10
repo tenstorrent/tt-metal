@@ -183,10 +183,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
 //   0 = none.
 //   1 = eltwise binary (ELWADD) init: reprograms ALL of ADDR_MOD_0..3 + the MOP — the
 //       full escape that reinit_short (reprogram MOP + reconfigure all addrmods) restores.
-//   2 = scramble ONLY ADDR_MOD_1/2/6, preserving ADDR_MOD_3 + the MOP — the narrow escape
-//       reinit_minimal expects (it restores 1/2/6 and relies on 3 + MOP being intact, as
+//   2 = scramble ONLY ADDR_MOD_1/2, preserving ADDR_MOD_3 + the MOP — the narrow escape
+//       reinit_minimal expects (it restores 1/2 and relies on 3 + MOP being intact, as
 //       the real SDPA predecessors matmul / sub_exp / copy_tile_custom leave them).
-//   3 = scramble ADDR_MOD_1/2/3/6 (every addrmod the reduce consumes), but preserve the MOP
+//   3 = scramble ADDR_MOD_1/2/3 (every addrmod the reduce consumes), but preserve the MOP
 //       and the replay buffer, which is the escape the addrmod-only reinit (mode 3) expects.
 //       Unlike clobber 2 this also destroys ADDR_MOD_3.
 static inline void clobber_reduce_config([[maybe_unused]] const ckernel::TensorShape& tensor_shape)
@@ -206,12 +206,11 @@ static inline void clobber_reduce_config([[maybe_unused]] const ckernel::TensorS
     }
     else if constexpr (CLOBBER_OP == 2)
     {
-        // Overwrite ADDR_MOD_1/2/6; leave ADDR_MOD_3 and the reduce MOP intact, matching
-        // reinit_minimal's contract. reinit_minimal must then restore 1/2/6 for the reduce
+        // Overwrite ADDR_MOD_1/2; leave ADDR_MOD_3 and the reduce MOP intact, matching
+        // reinit_minimal's contract. reinit_minimal must then restore 1/2 for the reduce
         // to produce the correct row-max.
         zeroed.set(ckernel::ADDR_MOD_1);
         zeroed.set(ckernel::ADDR_MOD_2);
-        zeroed.set(ckernel::ADDR_MOD_6);
     }
     else if constexpr (CLOBBER_OP == 3)
     {
@@ -219,7 +218,6 @@ static inline void clobber_reduce_config([[maybe_unused]] const ckernel::TensorS
         zeroed.set(ckernel::ADDR_MOD_1);
         zeroed.set(ckernel::ADDR_MOD_2);
         zeroed.set(ckernel::ADDR_MOD_3);
-        zeroed.set(ckernel::ADDR_MOD_6);
     }
 }
 
