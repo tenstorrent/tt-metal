@@ -79,7 +79,8 @@ class TtnnBackend:
         self.rec = TtPPOCRv6SmallRec(device, load_torch_rec())
         self.runners = {}
         if traced:
-            self._capture_traces()
+            self.prepare()
+            self.capture()
 
     def _host(self, x):
         # 2x2 space_to_depth (12 channels; the stem's first conv takes it as is), then one
@@ -101,18 +102,28 @@ class TtnnBackend:
     def _rec_fn(self, b):
         return lambda t: self.rec(self._nhwc(t, b, REC_HEIGHT, REC_WIDTH), b, REC_HEIGHT, REC_WIDTH, decode=True)
 
-    def _capture_traces(self):
-        from models.demos.blackhole.pp_ocrv6.tt.runner import TracedRunner
-
+    def _trace_shapes(self):
         shapes = {("det", 1, DET_SIZE, DET_SIZE): (self._det_fn(1, DET_SIZE, DET_SIZE), (1, 3, DET_SIZE, DET_SIZE))}
         for b in REC_BATCH_BUCKETS:
             shapes[("rec", b)] = (self._rec_fn(b), (b, 3, REC_HEIGHT, REC_WIDTH))
-        hosts = {key: self._host(torch.zeros(shape)) for key, (_, shape) in shapes.items()}
-        for key, (fn, _) in shapes.items():
-            fn(hosts[key])
+        return {key: (fn, self._host(torch.zeros(shape))) for key, (fn, shape) in shapes.items()}
+
+    def prepare(self):
+        """Run every traced shape once untraced, which prepares its conv weights on device.
+
+        Must happen before any trace is captured on the device, by this model or another one
+        sharing it: buffers allocated after a capture can land in that trace's scratch memory.
+        """
+        for fn, host in self._trace_shapes().values():
+            fn(host)
         self.ttnn.synchronize_device(self.device)
-        for key, (fn, _) in shapes.items():
-            self.runners[key] = TracedRunner(self.device, fn, hosts[key])
+
+    def capture(self):
+        from models.demos.blackhole.pp_ocrv6.tt.runner import TracedRunner
+
+        for key, (fn, host) in self._trace_shapes().items():
+            self.runners[key] = TracedRunner(self.device, fn, host)
+        self.traced = True
 
     def _run(self, key, fn, host):
         if key in self.runners:

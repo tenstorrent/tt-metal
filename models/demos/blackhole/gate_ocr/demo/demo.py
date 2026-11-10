@@ -1,0 +1,166 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+
+# SPDX-License-Identifier: Apache-2.0
+
+"""Gate OCR demo on 4096x4096 frames.
+
+python models/demos/blackhole/gate_ocr/demo/demo.py --images DIR --out DIR [--make-4k SRC_DIR]
+
+--make-4k builds the 4096x4096 inputs from smaller photos: each photo upscaled onto its own
+frame, plus one 2x2 collage so a frame holds several vehicles. Per frame it writes an annotated
+image, one JSON event (what would go to the yard management system) and the stage timings.
+"""
+
+import argparse
+import glob
+import json
+import os
+import time
+
+import cv2
+import numpy as np
+
+import ttnn
+from models.demos.blackhole.gate_ocr.pipeline import DEVICE_PARAMS, GateOCR
+
+FRAME = 4096
+PAD = (114, 114, 114)
+RUNS = 10
+
+
+def fit_on_frame(bgr, size):
+    scale = min(size / bgr.shape[0], size / bgr.shape[1])
+    r = cv2.resize(bgr, (round(bgr.shape[1] * scale), round(bgr.shape[0] * scale)), interpolation=cv2.INTER_CUBIC)
+    out = np.full((size, size, 3), PAD, np.uint8)
+    y, x = (size - r.shape[0]) // 2, (size - r.shape[1]) // 2
+    out[y : y + r.shape[0], x : x + r.shape[1]] = r
+    return out
+
+
+def make_4k_inputs(src_dir, dst_dir):
+    os.makedirs(dst_dir, exist_ok=True)
+    photos = sorted(p for p in glob.glob(os.path.join(src_dir, "*.jpg")) if "_result" not in p)
+    for p in photos:
+        name = os.path.splitext(os.path.basename(p))[0]
+        cv2.imwrite(
+            os.path.join(dst_dir, f"{name}_4096.jpg"),
+            fit_on_frame(cv2.imread(p), FRAME),
+            [cv2.IMWRITE_JPEG_QUALITY, 95],
+        )
+    tiles = [cv2.imread(p) for p in photos if "lithuania" not in p][:4]
+    half = FRAME // 2
+    collage = np.full((FRAME, FRAME, 3), PAD, np.uint8)
+    for i, t in enumerate(tiles):
+        y, x = (i // 2) * half, (i % 2) * half
+        collage[y : y + half, x : x + half] = fit_on_frame(t, half)
+    cv2.imwrite(os.path.join(dst_dir, "collage_4vehicles_4096.jpg"), collage, [cv2.IMWRITE_JPEG_QUALITY, 95])
+
+
+def draw(frame, result):
+    out = frame.copy()
+    for v in result.vehicles:
+        x1, y1, x2, y2 = map(int, v.box)
+        cv2.rectangle(out, (x1, y1), (x2, y2), (255, 0, 0), 12)
+        cv2.putText(
+            out, f"{v.label} {v.confidence:.2f}", (x1 + 10, y1 + 80), cv2.FONT_HERSHEY_SIMPLEX, 3, (255, 0, 0), 8
+        )
+        for line in v.lines:
+            pts = line.box.astype(np.int32).reshape(-1, 1, 2)
+            cv2.polylines(out, [pts], True, (0, 200, 0), 8)
+            tx, ty = int(line.box[:, 0].min()), int(line.box[:, 1].min()) - 15
+            cv2.putText(
+                out,
+                f"{line.text} {line.confidence:.2f}",
+                (tx, max(60, ty)),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                2.5,
+                (0, 0, 255),
+                7,
+            )
+    return cv2.resize(out, (FRAME // 2, FRAME // 2), interpolation=cv2.INTER_AREA)
+
+
+def median_timings(samples):
+    return {k: float(np.median([s[k] for s in samples])) for k in samples[0]}
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--images", required=True)
+    ap.add_argument("--out", required=True)
+    ap.add_argument("--make-4k", dest="make_4k")
+    args = ap.parse_args()
+    if args.make_4k:
+        make_4k_inputs(args.make_4k, args.images)
+    os.makedirs(args.out, exist_ok=True)
+    paths = sorted(glob.glob(os.path.join(args.images, "*.jpg")))
+
+    device = ttnn.open_device(device_id=0, **DEVICE_PARAMS)
+    try:
+        t0 = time.perf_counter()
+        gate = GateOCR(device)
+        print(f"setup (weights + traces for YOLO, det, rec): {time.perf_counter() - t0:.1f} s", flush=True)
+
+        rows = []
+        for path in paths:
+            name = os.path.splitext(os.path.basename(path))[0]
+            t_load = time.perf_counter()
+            frame = cv2.imread(path)
+            load_ms = (time.perf_counter() - t_load) * 1000
+
+            result = gate(frame)  # warm-up for this frame's host-side shapes
+            frames = [gate(frame) for _ in range(RUNS)]
+            result = frames[-1]
+            t = median_timings([f.timings_ms for f in frames])
+
+            event = {
+                "frame": os.path.basename(path),
+                "frame_size": [frame.shape[1], frame.shape[0]],
+                "reads": [
+                    {
+                        "vehicle": v.label,
+                        "vehicle_confidence": round(v.confidence, 3),
+                        "vehicle_box": [round(c) for c in v.box],
+                        "text": [{"text": l.text, "confidence": round(l.confidence, 3)} for l in v.lines],
+                    }
+                    for v in result.vehicles
+                ],
+                "latency_ms": {k: round(val, 2) for k, val in t.items()},
+                "jpeg_decode_ms": round(load_ms, 1),
+            }
+            with open(os.path.join(args.out, f"{name}.json"), "w") as f:
+                json.dump(event, f, indent=2)
+            cv2.imwrite(
+                os.path.join(args.out, f"{name}_result.jpg"), draw(frame, result), [cv2.IMWRITE_JPEG_QUALITY, 90]
+            )
+
+            crops = len(result.vehicles)
+            print(f"\n== {name} ({frame.shape[1]}x{frame.shape[0]}) ==", flush=True)
+            for v in result.vehicles:
+                texts = ", ".join(f"{l.text!r} {l.confidence:.2f}" for l in v.lines) or "-"
+                print(f"  {v.label} {v.confidence:.2f} box {[round(c) for c in v.box]}: {texts}", flush=True)
+                print(
+                    "    crop timings ms: " + ", ".join(f"{k} {val:.2f}" for k, val in v.timings_ms.items()), flush=True
+                )
+            print(
+                f"  frame ms (median of {RUNS}): YOLO pre {t['yolo_pre']:.2f}, YOLO {t['yolo']:.2f}, "
+                f"NMS {t['yolo_nms']:.2f}, OCR {crops} crop(s) {t['ocr_all_crops']:.2f}, total {t['total']:.2f}",
+                flush=True,
+            )
+            rows.append((name, crops, t, load_ms))
+
+        print("\n| frame | crops | YOLO pre | YOLO | NMS | OCR all crops | total | JPEG decode |", flush=True)
+        print("|---|---|---|---|---|---|---|---|", flush=True)
+        for name, crops, t, load_ms in rows:
+            print(
+                f"| {name} | {crops} | {t['yolo_pre']:.1f} | {t['yolo']:.1f} | {t['yolo_nms']:.1f} | "
+                f"{t['ocr_all_crops']:.1f} | {t['total']:.1f} | {load_ms:.0f} |",
+                flush=True,
+            )
+        gate.release()
+    finally:
+        ttnn.close_device(device)
+
+
+if __name__ == "__main__":
+    main()
