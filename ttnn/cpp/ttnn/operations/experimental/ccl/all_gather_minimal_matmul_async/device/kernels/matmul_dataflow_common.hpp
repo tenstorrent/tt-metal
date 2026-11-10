@@ -509,6 +509,43 @@ void read_in0_block_sync(
     noc.write_zeros_l1_barrier();
 }
 
+// Reads in1 rows [d0_start, d0_end) x columns [d1_start, d1_end) into L1 from dst_addr, row_tiles tiles apart per
+// row, without waiting for them. Columns past the tensor are skipped (their slots kept), rows past it zero-filled
+// (fill_zeros_async, addressed from cb's write pointer). Returns the L1 address after the last row.
+template <typename TensorAccessorType>
+FORCE_INLINE uint32_t read_in1_rows_async(
+    Noc noc,
+    const TensorAccessorType& tensor_accessor,
+    const TensorShape2D& shape,
+    CircularBuffer cb,
+    uint32_t tile_size_bytes,
+    uint32_t dst_addr,
+    uint32_t row_tiles,
+    uint32_t d0_start,
+    uint32_t d0_end,
+    uint32_t d1_start,
+    uint32_t d1_end) {
+    // Hot on the in1 injector (one read per tile): the per-row checks stay out of the tile loop.
+    const uint32_t d1_valid_end = d1_end < shape.logical_d1 ? d1_end : shape.logical_d1;
+    for (uint32_t i = d0_start; i < d0_end; i++) {
+        uint32_t dst = dst_addr;
+        if (i < shape.logical_d0) {
+            uint32_t page = i * shape.logical_d1 + d1_start;
+            for (uint32_t j = d1_start; j < d1_valid_end; j++) {
+                noc.async_read(tensor_accessor, CoreLocalMem<uint8_t>(dst), tile_size_bytes, {.page_id = page++}, {});
+                dst += tile_size_bytes;
+            }
+        } else {
+            for (uint32_t j = d1_start; j < d1_valid_end; j++) {
+                fill_zeros_async(noc, cb, tile_size_bytes, dst - cb.get_write_ptr());
+                dst += tile_size_bytes;
+            }
+        }
+        dst_addr += row_tiles * tile_size_bytes;
+    }
+    return dst_addr;
+}
+
 /**
  * Read a block of in1 from a potentially padded tensor.
  * Since this is for matmul, no need to read when N >= logical_N
@@ -531,44 +568,31 @@ void read_in1_block_sync(
     // Linear topology is unidirectional: the "right" (backward) half is legitimately empty.
     ASSERT(d0_end_right >= d0_start_right);
     ASSERT(d1_end > d1_start);
-    const uint32_t cb_base_write_ptr = cb.get_write_ptr();
-    uint32_t write_ptr = cb_base_write_ptr;
-    for (uint32_t i = d0_start_left; i < d0_end_left; i++) {
-        for (uint32_t j = d1_start; j < d1_end; j++) {
-            if (j >= shape.logical_d1) {
-                write_ptr += tile_size_bytes;
-                continue;
-            }
-            if (i < shape.logical_d0) {
-                uint32_t tile_id = i * shape.logical_d1 + j;
-                noc.async_read(
-                    tensor_accessor, CoreLocalMem<uint8_t>(write_ptr), tile_size_bytes, {.page_id = tile_id}, {});
-            } else {
-                fill_zeros_async(noc, cb, tile_size_bytes, write_ptr - cb_base_write_ptr);
-            }
-            write_ptr += tile_size_bytes;
-        }
-        // finish up incrementing write_ptr if (d1_end - d1_start) < N_block_tiles
-        write_ptr += (N_block_tiles - (d1_end - d1_start)) * tile_size_bytes;
-    }
-    for (uint32_t i = d0_start_right; i < d0_end_right; i++) {
-        for (uint32_t j = d1_start; j < d1_end; j++) {
-            if (j >= shape.logical_d1) {
-                write_ptr += tile_size_bytes;
-                continue;
-            }
-            if (i < shape.logical_d0) {
-                uint32_t tile_id = i * shape.logical_d1 + j;
-                noc.async_read(
-                    tensor_accessor, CoreLocalMem<uint8_t>(write_ptr), tile_size_bytes, {.page_id = tile_id}, {});
-            } else {
-                fill_zeros_async(noc, cb, tile_size_bytes, write_ptr - cb_base_write_ptr);
-            }
-            write_ptr += tile_size_bytes;
-        }
-        // finish up incrementing write_ptr if (d1_end - d1_start) < N_block_tiles
-        write_ptr += (N_block_tiles - (d1_end - d1_start)) * tile_size_bytes;
-    }
+    uint32_t write_ptr = cb.get_write_ptr();
+    write_ptr = read_in1_rows_async(
+        noc,
+        tensor_accessor,
+        shape,
+        cb,
+        tile_size_bytes,
+        write_ptr,
+        N_block_tiles,
+        d0_start_left,
+        d0_end_left,
+        d1_start,
+        d1_end);
+    read_in1_rows_async(
+        noc,
+        tensor_accessor,
+        shape,
+        cb,
+        tile_size_bytes,
+        write_ptr,
+        N_block_tiles,
+        d0_start_right,
+        d0_end_right,
+        d1_start,
+        d1_end);
     noc.async_read_barrier();
     noc.write_zeros_l1_barrier();
 }
@@ -731,7 +755,10 @@ void read_ternary_blocks_sync(
  * This write method is more granular, waiting on a row of output tiles
  * in the output CB before writing those out, rather than waiting on the entire block.
  */
-template <uint32_t M_block_tiles, uint32_t N_block_tiles, typename TensorAccessorType>
+// PIECE_W: the compute publishes the output PIECE_W tiles at a time (a whole row by default; a subblock with
+// compute.cpp's AGMM_OUT_PUSH_W). Each piece is written and released as soon as it lands, so a compute that reuses a
+// one-row output buffer rarely waits for this writer.
+template <uint32_t M_block_tiles, uint32_t N_block_tiles, uint32_t PIECE_W = N_block_tiles, typename TensorAccessorType>
 void write_block_sync_granular(
     Noc noc,
     const TensorAccessorType& tensor_accessor,
@@ -742,23 +769,31 @@ void write_block_sync_granular(
     uint32_t d0_end,
     uint32_t d1_start,
     uint32_t d1_end) {
+    static_assert(N_block_tiles % PIECE_W == 0, "a row is a whole number of pieces");
     for (uint32_t m_id = 0; m_id < M_block_tiles; m_id++) {
-        cb_out.wait_front(N_block_tiles);
-        uint32_t m_tile = d0_start + m_id;
-        if (m_tile < d0_end && m_tile < shape.logical_d0) {
-            uint32_t out_read_ptr = cb_out.get_read_ptr();
-            for (uint32_t n_tile_id = d1_start; n_tile_id < d1_end; n_tile_id++) {
-                if (n_tile_id >= shape.logical_d1) {
-                    break;
+        const uint32_t m_tile = d0_start + m_id;
+        const bool row_valid = m_tile < d0_end && m_tile < shape.logical_d0;
+        for (uint32_t p = 0; p < N_block_tiles; p += PIECE_W) {
+            cb_out.wait_front(PIECE_W);
+            if (row_valid) {
+                uint32_t out_read_ptr = cb_out.get_read_ptr();
+                for (uint32_t w = 0; w < PIECE_W; w++) {
+                    const uint32_t n_tile_id = d1_start + p + w;
+                    if (n_tile_id >= d1_end || n_tile_id >= shape.logical_d1) {
+                        break;
+                    }
+                    noc.async_write(
+                        CoreLocalMem<uint8_t>(out_read_ptr),
+                        tensor_accessor,
+                        tile_size_bytes,
+                        {},
+                        {.page_id = m_tile * shape.logical_d1 + n_tile_id});
+                    out_read_ptr += tile_size_bytes;
                 }
-                uint32_t tile_id = m_tile * shape.logical_d1 + n_tile_id;
-                noc.async_write(
-                    CoreLocalMem<uint8_t>(out_read_ptr), tensor_accessor, tile_size_bytes, {}, {.page_id = tile_id});
-                out_read_ptr += tile_size_bytes;
             }
+            noc.async_writes_flushed();
+            cb_out.pop_front(PIECE_W);
         }
-        noc.async_writes_flushed();
-        cb_out.pop_front(N_block_tiles);
     }
 }
 

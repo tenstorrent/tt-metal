@@ -23,6 +23,8 @@
 #include <vector>
 
 namespace {
+// Blackhole NOC: outstanding reads per transaction id (NOC_MAX_TRANSACTION_ID_COUNT).
+constexpr uint32_t NOC_MAX_TRANSACTION_ID_COUNT_HOST = 255;
 
 // Push order of desc.kernels. The FSDP mux kernel, when present, is last so these stay fixed.
 constexpr uint32_t kIn0SenderKernelIdx = 0;
@@ -478,6 +480,12 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory_helper(
     // SwiGLU writes half the N tiles per block (one per gate/up pair); the intermediate
     // still holds the full (2N) block.
     uint32_t out_cb_num_tiles = fuse_swiglu ? (out_block_num_tiles / 2) : out_block_num_tiles;  // single-buffered
+    // A core whose only output block is this one writes it row by row (write_block_sync_granular) and the compute
+    // packs it row by row, so one row is enough; frees M_block - 1 rows of L1 for larger K blocks.
+    if (!fuse_swiglu && !use_bias && !fused_ternary_scalar.has_value() && N_blocks_per_core == 1 &&
+        ttnn::experimental::prim::agmm_single_m_block(M_tiles, M_block_tiles, in0_parallel_axis_cores)) {
+        out_cb_num_tiles = N_block_tiles;
+    }
     uint32_t interm_cb_num_tiles = out_block_num_tiles;                                         // not double buffered
     uint32_t in2_cb_num_tiles = in2_block_num_tiles;                                            // not double buffered
 
@@ -780,6 +788,16 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory_helper(
     log_debug(tt::LogOp, "interm_cb_num_tiles: {}", interm_cb_num_tiles);
 
     std::map<std::string, std::string> defines;
+    // The last K block packs straight to the output over its reloaded FP32 partials (compute.cpp matmul_blocks<true>):
+    // for a plain matmul output (no fused bias, ternary, SwiGLU or activation) with one-tile-high subblocks and FP32
+    // partials, which unpack to DEST, and whole N blocks of whole subblocks (the output goes out in subblock pieces).
+    const bool direct_out = !fuse_swiglu && !use_bias && !use_fused_ternary && !fused_activation.has_value() &&
+                            subblock_h == 1 && fp32_dest_acc_en && K_blocks > 1 &&
+                            N_tiles_per_core % N_block_tiles == 0 && N_block_tiles % subblock_w == 0;
+    if (direct_out) {
+        // The compute publishes the output a subblock at a time; the output writers take it in those pieces.
+        defines["AGMM_OUT_PUSH_W"] = std::to_string(subblock_w);
+    }
     std::map<std::string, std::string> in0_defines;
     std::map<std::string, std::string> in0_injector_defines;
     std::map<std::string, std::string> in0_fabric_defines;
@@ -853,6 +871,22 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory_helper(
     auto in1_defines = defines;
     if (gather_senders) {
         in1_defines["AGMM_IN1_HW_MCAST"] = "1";  // in1 blocks multicast down each column (see the end of the factory)
+    }
+    // in1 in column chunks: the injector multicasts each K block chunk by chunk (one piecewise pipe round) and the
+    // compute starts on the first chunk while the rest is in flight. For one full N block per core (the chunk-major
+    // layout assumes it). A chunk is the widest whole number of subblocks that divides the block
+    // in at least two chunks and whose reads fit one transaction id's outstanding count: each chunk costs a multicast
+    // and a flag, so a few wide chunks beat many narrow ones.
+    uint32_t in1_chunk_w = 0;
+    if (gather_senders && N_blocks_per_core == 1 && N_tiles_per_core == N_block_tiles) {
+        for (uint32_t w = subblock_w; 2 * w <= N_block_tiles; w += subblock_w) {
+            if (N_block_tiles % w == 0 && w * K_block_tiles <= (NOC_MAX_TRANSACTION_ID_COUNT_HOST + 1) / 2) {
+                in1_chunk_w = w;
+            }
+        }
+    }
+    if (in1_chunk_w) {
+        in1_defines["AGMM_IN1_CHUNK_W"] = std::to_string(in1_chunk_w);
     }
     if (persistent_weight_buffer.has_value()) {
         in1_defines["FSDP_FUSED"] = "1";
@@ -1228,6 +1262,16 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory_helper(
         in0_parallel_axis_cores};
 
     auto compute_defines = defines;
+
+    std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode;
+    if (direct_out) {
+        compute_defines["AGMM_DIRECT_OUT"] = "1";
+        unpack_to_dest_mode.assign(NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
+        unpack_to_dest_mode[tt::CBIndex::c_3] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+    }
+    if (in1_chunk_w) {
+        compute_defines["AGMM_IN1_CHUNK_W"] = std::to_string(in1_chunk_w);
+    }
     if (topology == ttnn::ccl::Topology::Linear) {
         compute_defines["IS_LINEAR"] = "1";
     }
@@ -1264,6 +1308,7 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory_helper(
             .math_fidelity = math_fidelity,
             .fp32_dest_acc_en = fp32_dest_acc_en,
             .dst_full_sync_en = dst_full_sync_en,
+            .unpack_to_dest_mode = unpack_to_dest_mode,
             .math_approx_mode = math_approx_mode,
         };
         desc.kernels.push_back(std::move(compute_kernel));
