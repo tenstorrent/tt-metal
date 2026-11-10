@@ -528,11 +528,14 @@ TT_KERNEL void reader(uint32_t u, uint32_t h, uint32_t b_idx, uint32_t s) {
     // all users of head h, value block s: D_u (slot 0 block (u, h), this block's columns), the previous stash (K^T
     // tiles, this block's U tiles) or zeros (FRESH / HOLD), user-major. Needs only ring + ctrl: with GDN_STATE_FIRST
     // (engine GDN role) it is issued before the in_ready wait, i.e. while the previous layer's compute still runs.
-    auto rd_state_b = [&]() {
+    // GDN_ST_RING: users [u0, u1) only (the ring holds GDN_ST_RING users; the compute pops them in its replay, which
+    // comes after the knq transposes, so at most GDN_ST_RING users may go out before rd_pre); else all users, u0 / u1
+    // unused
+    auto rd_state_b = [&](uint32_t u0, uint32_t u1) {
         DeviceZoneScopedN("rd_state");
 #if GDN_ST_RING
         // GDN_ST_RING: one user at a time through a ring of GDN_ST_RING users (the compute pops per user)
-        for (uint32_t ub_ = 0; ub_ < nb; ++ub_) {
+        for (uint32_t ub_ = u0; ub_ < u1; ++ub_) {
             state_in.reserve_back(KVs);
             ktp_in.reserve_back(Kt);
             up_in.reserve_back(Vs);
@@ -554,6 +557,8 @@ TT_KERNEL void reader(uint32_t u, uint32_t h, uint32_t b_idx, uint32_t s) {
             up_in.push_back(Vs);
         }
 #else
+        (void)u0;
+        (void)u1;
         state_in.reserve_back(nb * KVs);
         ktp_in.reserve_back(nb * Kt);
         up_in.reserve_back(nb * Vs);
@@ -580,7 +585,7 @@ TT_KERNEL void reader(uint32_t u, uint32_t h, uint32_t b_idx, uint32_t s) {
 #if GDN_STATE_FIRST
     {
         DeviceZoneScopedN("rd_state_first");
-        rd_state_b();
+        rd_state_b(0, (GDN_ST_RING != 0 && GDN_ST_RING < nb) ? GDN_ST_RING : nb);
     }
 #endif
 #endif
@@ -625,7 +630,11 @@ TT_KERNEL void reader(uint32_t u, uint32_t h, uint32_t b_idx, uint32_t s) {
         // all users of head h, value block s: D_u (slot 0 block (u, h), this block's columns), the previous stash
         // (K^T tiles, this block's U tiles) or zeros (FRESH / HOLD), user-major; then the user masks
 #if !GDN_STATE_FIRST
-        rd_state_b();
+        rd_state_b(0, nb);
+#elif GDN_ST_RING
+        if (GDN_ST_RING < nb) {
+            rd_state_b(GDN_ST_RING, nb);  // the rest of the users, behind the compute's replay
+        }
 #endif
         // per-user masked operands: knq tiles with only user u's T rows (exact fp32 bits, +0 elsewhere; T consecutive rows
         // of one face pair = two contiguous T*64 B runs per tile, local NoC copies)

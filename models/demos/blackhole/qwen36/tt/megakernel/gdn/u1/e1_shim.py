@@ -266,7 +266,7 @@ def argblock_tensor(dev, cores, payloads, kind=AB_KIND_GDN):
 
 
 def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_eps, gen_dir, pre_s, sems, out_target,
-                 out_b16=True, kdir=None, st_ring=None):
+                 out_b16=True, kdir=None, st_ring=None, attn_n=0):
     """The GDN role's kernels / CBs / io for the engine program. layers: one tensor dict per GDN layer of the pass (keys
     as build's tens). sems: {in_ready, attn_kv, vb0, vb1, out_ready} L1 addresses; out_target: (noc x, noc y) of the
     core whose out_ready gets +1 per GDN core per layer. Core i of `cores` (row-major) = head i // VB, value block i % VB.
@@ -352,7 +352,9 @@ def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_ep
         f'    writer<{Kt}, {Vt}, {Nk}, {Nv}, {T}, 1, 1, {Lw}, {Ct}, {Nv * Vt}, {ctrl_bytes}, {hs}u, {VB}>('
         + ", ".join(f"g_ab[{OW + i}]" for i in range(11)) + ");\n  }\n"
         f'  noc_async_atomic_barrier();\n'
-        f'  // v1.33: the waiter drains and resets its device-local semaphores at program end (every target reached)\n'
+        f'  // v1.33: the waiter drains and resets its device-local semaphores at program end (every target reached);\n'
+        f'  // attn_kv: the engine raises it twice per attention layer (start, SDPA end), {attn_n} attention layers\n'
+        + (f'  noc_semaphore_wait_min((volatile tt_l1_ptr uint32_t*){S["attn_kv"]}, {2 * attn_n});\n' if attn_n else '')
         + "".join(f'  *(volatile tt_l1_ptr uint32_t*){S[k]} = 0;\n' for k in ("in_ready", "attn_kv", "vb0", "vb1"))
         + '}\n')
     tc = os.path.join(gen_dir, "g2_compute.cpp")

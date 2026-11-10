@@ -45,7 +45,7 @@ def _host(t):
 
 class GdnRole:
     def __init__(self, dev, cores, NG, B, sems, out_target, prod_cores, gen_dir, kdir=None, opt=4094, seed=901,
-                 hold_users=(), ref=True):
+                 hold_users=(), ref=True, attn_n=0):
         """ref=False: no stock-op reference (no priming step, check() skipped) -- the stock op's program does not fit
         the kernel config buffer with device-profiler zones compiled in; the checked step is then FRESH."""
         self.ref = ref
@@ -90,7 +90,8 @@ class GdnRole:
                         taps=ly["cE"].taps_d, dtb=ly["cE"].dtb_d, nea=ly["cE"].nea_d, weight=ly["cE"].w_d,
                         pre=ly["pre"], out=ly["outE"]) for ly in self.LY]
         self.role = e1_shim.build_engine(dev, self.cores, g, B, T, self.Kt, self.Vt, 4, self.tl, m.SCALE, m.L2_EPS,
-                                         m.NORM_EPS, gen_dir, self.S, sems, out_target, kdir=kdir)
+                                         m.NORM_EPS, gen_dir, self.S, sems, out_target, kdir=kdir,
+                                         attn_n=attn_n)
         # the window parity is a per-step input of the producers: the role's window tensors stay fixed (win_a / win_b),
         # the kernels pick by ctrl parity
 
