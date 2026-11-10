@@ -678,6 +678,11 @@ ProgramDescriptor MatmulReduceScatterPrefillProgramFactory::create_descriptor(
         .dst_full_sync_en = true,
         .math_approx_mode = attrs.math_approx_mode,
     };
+    // Blackhole row MOP (matmul.h): matmul_block_k runs one math MOP per inner-dim step instead of one per tile.
+    // Needs full 32x32 tiles, which validation guarantees (check_interleaved_tile). Bit-identical.
+    if (mesh->arch() == tt::ARCH::BLACKHOLE) {
+        compute.defines.emplace_back("MM_ROW_MOP", "1");
+    }
 
     KernelDescriptor writer;
     writer.kernel_source = mrs_kernel_path("matmul_reduce_scatter_prefill_writer.cpp");
