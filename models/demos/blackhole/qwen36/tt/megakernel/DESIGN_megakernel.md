@@ -359,3 +359,36 @@ on the laptop at .claude/tmp/r16/mega/si_mixed8/.
 - **u8 full pass from measured layers:** 13.58 ms at 18 µs AR stalls; ~13.19 ms at 15 µs on-path AR; ~14.05 ms at
   21.7 µs. The gate (13.7) needs AR ≤15 µs **plus** the GDN restructure (replaces the 64 µs stand-in, target
   ~-19 µs/layer ≈ -0.9 ms) and/or v0.5 streaming.
+
+## 12. AR / x-delivery layout pinned (v0.4) + the x-delivery problem (2026-11-10, AR track f5342c9cbd3)
+**Pinned layout:**
+- CB_X: un-normed residual, bf16 [32, 5120]. Chunk j = 10 tiles at offset j × 20 KB; owner j = (0,8)-(7,9),
+  row-major.
+- CB_RSTD: fp32 [16 owners][32 rows] at offset 0, P_j[r] = Σ_{c∈chunk j} x[r,c]² · 2^-12. The tag for owner j is at
+  2048 + 16·j and is set to SEQ+1.
+- Consumer: rstd' = rsqrt(Σ_j P_j + 1.25·eps) = rstd / NORM_FIX, so γ·NORM_FIX is folded into the weights.
+- Flags: 4 root x-flags (4-root mode).
+
+**Silicon (d26u02, 1x8 ring):**
+- The residual is bit-identical on all devices, and CB_X == residual on all 80 cores. Partials max relative error
+  8.2e-4.
+- AR alone 21.7 µs; AR + 1 chunk + partials 24.7 µs.
+- **x delivery (bf16, 320 KB to 80 cores) is multicast-throughput-bound:**
+  - one 20 KB multicast to 40 cores takes ~1.3-1.5 µs;
+  - 16 owners multicasting at once thrash: ~92-102 µs per call;
+  - serial or token-chained delivery: ~101-107 µs;
+  - 4 roots × 80 KB: ~96-102 µs in trace, 20 µs median per root multicast.
+- The practical floor is ~16-20 µs (theory 3.7 µs). **Replicated full-K x cannot be on the critical path.**
+
+**Options:**
+1. Overlap: K-ordered root flags so consumers start on chunk 0 (weights are resident), and start delivering each
+   chunk as soon as the all-gather lands it. Removes up to ~10 µs; delivery still ≥ AR tail.
+2. Fewer bytes: BFP8 x (≈½; numerics, so it needs the output-length gate); gate_up-only targets (68 cores) for
+   the MLP.
+3. **Proposed v0.6, split-K tiling (removes replication):** arrange the 80 STREAM cores as 8 K-rows × 10 N-columns.
+   Core (k, n) owns W[K-slice k, N-slice n]. x chunk k (40 KB) goes only to K-row k: 8 owners multicast to 8
+   *non-overlapping* row rectangles at once, ~40 KB per core instead of 320 KB, no thrash (~2-4 µs). Each N-column
+   then reduces its 8 partial outputs (32 × N/10, small) to the column's root before the nonlinearity (SwiGLU) or
+   the next consumer. Extra reduce traffic is ~2 MB/layer vs ~25 MB of x multicast. This changes fm11's gate|up/down
+   layout and the qkv/GDN in-proj layouts. Biggest remaining lever for the ≤15 µs on-path AR + delivery target.
+   Needs a sim prototype first (fused MLP v12).
