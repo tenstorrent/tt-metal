@@ -708,3 +708,14 @@ Only both flags together reach ~15 µs, and they need the output-length gate.
 - The u1 attention regression (+28 µs) is real DRAM time: the ext cores' 348 KB qkv slices total 13.9 MB of the 19.5 MB qkv per layer, read inside a DRAM-saturated SDPA window. Skipping those reads gives 231-233 µs; with them it is ~260. NoC splits and unthrottled tail reads are worse.
 - **Rule:** the ATTN-only ext cores sit idle during the 3 GDN-type layers before each attention layer, and those layers are chain-bound with DRAM slack. So the ext cores prefetch the NEXT attention layer's whole qkv slice into their 348 KB ring during the preceding GDN layers, throttled (~4.6 MB per GDN layer, 1-2 chunks in flight). Nothing reads in the SDPA window.
 - **Expected:** u1 attention returns to ~232 µs (−0.45 ms per pass vs 260, i.e. 16 × 28 µs), with no GDN-layer regression, to be confirmed.
+- *v0.8.1 measured bound (u1, 32K, mid-layer mean):*
+
+  | Where the slice reads go | u1 attention µs |
+  |---|---|
+  | In the KV loop | 260 |
+  | Tail, 16-page chunks × 2 in flight | 254.3 |
+  | Tail, 8 × 1 | 255.3 |
+  | Tail, 32 × 4 | 272.9 |
+  | Resident (PQSKIP) | **231-233** |
+
+  The attention agent is porting this to `anatarajan/qwen38-r16-mk-mixed3` (mixed2 + RQKV 9e81917a513 + PQ loop 0011c9aea48), with the ext reader filling during W-GDN. Validation: NL=8, AMASK 0x88, u8 and u1, reporting attention µs and the preceding GDN-layer µs.
