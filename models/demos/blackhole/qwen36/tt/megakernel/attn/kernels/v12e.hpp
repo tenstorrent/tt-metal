@@ -22,6 +22,25 @@ constexpr uint32_t V_TRID0 = 12;   // MLP slice read trids 12 / 13 (layer parity
 constexpr uint32_t VG_XA = 0, VG_XB = 1, VG_RS = 2, VG_H = 3, VG_P = 4, VG_MDONE = 5, VG_MGO = 6, VG_LA = 7, VG_LB = 8,
                    VG_BUSY = 9, NVG = 10;
 constexpr uint32_t V_FACE_B = 512, V_ROW_B = 32, V_XPK_SLOT_B = 10 * 2 * 16 * V_ROW_B;
+// spec §18 qkv split-K (MKA_QSK) through this unit: column c's N-list = qkv tiles first(c) .. + qsk_nt(c) - 1 (112 over
+// 10 columns: 12, 12, 11 x 8), slot M (CB_WM) = 20 K tiles x nt BFP8 pages, k-major; GDN-type layers read QSK_GK K tiles
+// (in-proj stand-in, ~5.9 MB over the 80 cores). The qkv RS shares VG_RS / VG_LA / VG_LB with the MLP RS: LA / LB carry
+// 2L + 1 (qkv) and 2L + 2 (MLP); an owner row's VG_RS count adds 7 per attention layer.
+#if defined(MKA_QSK)
+#if !defined(MK_RS_QKV)
+#error "MKA_QSK needs MK_RS_QKV (the owners' mixer x delivery, flag 2L + 1)"
+#endif
+#ifndef QSK_GK
+#define QSK_GK 6
+#endif
+constexpr uint32_t QSK_SLOT = 240, QSK_KPR = 20;
+FORCE_INLINE uint32_t qsk_nt(uint32_t col) { return col < 2 ? 12u : 11u; }
+#define V_LV(L) (2 * (L) + 2)
+#define V_NRS(L) ((L) + 1 + aidx(L) + (is_attn(L) ? 1u : 0u))
+#else
+#define V_LV(L) ((L) + 1)
+#define V_NRS(L) ((L) + 1)
+#endif
 
 FORCE_INLINE volatile tt_l1_ptr uint32_t* vw(uint32_t addr) { return reinterpret_cast<volatile tt_l1_ptr uint32_t*>(addr); }
 // R = 32: whole tiles; R <= 16: rows 0..R-1 = two face writes (face 0 at +0, face 1 at +512) per tile

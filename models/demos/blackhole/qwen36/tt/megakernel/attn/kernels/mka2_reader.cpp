@@ -139,7 +139,11 @@ void kernel_main() {
     for (uint32_t i = 0; i < V_NROW; ++i) vcy[i] = get_arg_val<uint32_t>(a++);
     const uint32_t vrsbuf = get_arg_val<uint32_t>(a++), vhbuf = get_arg_val<uint32_t>(a++);
     const uint32_t vobx = get_arg_val<uint32_t>(a++), voby = get_arg_val<uint32_t>(a++), vpbuf = get_arg_val<uint32_t>(a++);
+#if defined(MK_V12_RCT)   // R as a compile-time constant (fixed per deployment): the R < 32 face paths compile out
+    constexpr uint32_t vR = MK_V12_RCT; a++;
+#else
     const uint32_t vR = get_arg_val<uint32_t>(a++);
+#endif
     uint32_t vg[NVG];
     for (uint32_t i = 0; i < NVG; ++i) vg[i] = get_arg_val<uint32_t>(a++);
     // owner x delivery (AR stand-in) on NOC1: west inside the row, no wrap (the BRISC/NOC0 path wraps the torus and
@@ -207,7 +211,11 @@ void kernel_main() {
     const uint32_t La0 = is_attn(0) ? 0 : next_att(0);
     if (qrole == QR_EXT && La0 < NL && !(kPqGdn && gdn_run(La0) > 0)) {   // the first attention layer's slice up front
         cb_reserve_back(CB_PQ, QSL);
+#if defined(MKA_QSK)
+        noc_async_read(wow.get_noc_addr(rw_page + La0 * rw_pl), get_write_ptr(CB_PQ), rw_nt * WK * MWTB);
+#else
         noc_async_read(wq.get_noc_addr(pq_page + La0 * pq_layer), get_write_ptr(CB_PQ), QSL * MWTB);
+#endif
         noc_async_read_barrier();
         cb_push_back(CB_PQ, QSL);
     }
@@ -243,13 +251,19 @@ void kernel_main() {
             if (Ln < NL) {
                 DeviceZoneScopedN("R-PQGDN");
                 const uint32_t run = gdn_run(Ln), j = L - (Ln - run);
-                const uint32_t p0 = j * QSL / run, p1 = (j + 1) * QSL / run;
+#if defined(MKA_QSK)
+                const uint32_t pqn = rw_nt * WK;   // §18: the ext ring is free of qkv -> it carries the Wo slice (WORING-like)
+                const uint64_t src = wow.get_noc_addr(rw_page + Ln * rw_pl);
+#else
+                const uint32_t pqn = QSL;
+                const uint64_t src = wq.get_noc_addr(pq_page + Ln * pq_layer);
+#endif
+                const uint32_t p0 = j * pqn / run, p1 = (j + 1) * pqn / run;
                 if (L > 0) noc_semaphore_wait_min(l1w(gs[GS_XRDY]), L);   // layer L has started
 #if defined(MKA_PQDELAY)
                 spin_cycles(MKA_PQDELAY);
 #endif
                 if (j == 0) cb_reserve_back(CB_PQ, QSL);
-                const uint64_t src = wq.get_noc_addr(pq_page + Ln * pq_layer);
                 const uint32_t dst = get_write_ptr(CB_PQ);
                 noc_async_read_set_trid(TRID_PQ);
                 for (uint32_t p = p0, c = 0; p < p1; p += MKA_PQCH, ++c) {
@@ -313,6 +327,16 @@ void kernel_main() {
             noc_async_read_set_trid(0);
         }
 #endif
+#if defined(MKA_QSK)
+        if (att && vrole == 1) {   // spec §18: this core's qkv partial to the column rows above (NOC1); the writer does rows below
+            DeviceZoneScopedN("R-QRS");
+            cb_wait_front(CB_VA, V_NTM);
+            *vw(vg[VG_LA]) = 2 * L + 1;
+            v_rs_send(get_read_ptr(CB_VA), 0, vk, qsk_nt(vn), 1, vcy, vcx, vrsbuf, vk, vR, vg[VG_RS]);
+            noc_semaphore_wait_min(vw(vg[VG_LB]), 2 * L + 1);
+            cb_pop_front(CB_VA, V_NTM);
+        }
+#endif
 #if defined(MKA_RQKV) && defined(MKA_PQPOST)
         if (pq_pending) { noc_async_read_barrier_with_trid(TRID_PQ); cb_push_back(CB_PQ, QSL); pq_pending = false; }
 #endif
@@ -345,7 +369,11 @@ void kernel_main() {
 #else
             // in-window fill of the NEXT ATTENTION layer's slice (with MKA_PQGDN only when no GDN layer precedes it)
             const uint32_t Lq = next_att(L);
+#if defined(MKA_QSK)
+            const bool pq_go = false;
+#else
             const bool pq_go = qrole == QR_EXT && Lq < NL && !(kPqGdn && gdn_run(Lq) > 0);
+#endif
 #endif
             const uint32_t pq_g0 = ngrp > 2 ? 2 : (ngrp ? ngrp - 1 : 0);
             const uint32_t pq_ng = ngrp > pq_g0 ? ngrp - pq_g0 : 1;
@@ -357,8 +385,8 @@ void kernel_main() {
 #if defined(MKA_RWO)
 #if defined(MKA_RWOSKIP)
             const uint32_t wo_np = 0;   // DEBUG timing split: Wo slice not read (stale ring; wo PCC invalid)
-#elif defined(MKA_WORING)
-            const uint32_t wo_np = 0;   // filled during the GDN layers (own ring CB 31)
+#elif defined(MKA_WORING) || defined(MKA_QSK)
+            const uint32_t wo_np = 0;   // filled during the GDN layers (own ring CB 31; under QSK the ext ring CB_PQ)
 #else
             const uint32_t wo_np = rw_own;   // pages of this core's Wo slice it reads itself (rest: STREAM helpers)
 #endif
@@ -459,7 +487,7 @@ void kernel_main() {
                 cb_push_back(CB_PQ, QSL);
             }
 #endif
-#if defined(MKA_RWO) && !defined(MKA_WORING)
+#if defined(MKA_RWO) && !defined(MKA_WORING) && !defined(MKA_QSK)   // QSK: the slice was pushed in the GDN layers
             if (rw_nt) {
                 if (!wo_rsv) { cb_reserve_back(CB_PQ, QSL); wo_dst = get_write_ptr(CB_PQ); wo_rsv = true; }
                 if (wo_done < wo_np) {
@@ -595,9 +623,9 @@ void kernel_main() {
         v12_ox(L);   // owners, attention-type layers (after this core's SDPA work)
         if (vrole == 1) {   // v12 MLP, STREAM core (n, k): RS north, h north, down tiles of the first chunk -> its owner
             cb_wait_front(CB_VA, V_NTM);
-            *vw(vg[VG_LA]) = L + 1;
+            *vw(vg[VG_LA]) = V_LV(L);
             v_rs_send(get_read_ptr(CB_VA), 0, vk < vnn ? vk : vnn, vnn, 2, vcy, vcx, vrsbuf, vk, vR, vg[VG_RS]);   // rows above (NOC1)
-            noc_semaphore_wait_min(vw(vg[VG_LB]), L + 1);
+            noc_semaphore_wait_min(vw(vg[VG_LB]), V_LV(L));
             cb_pop_front(CB_VA, V_NTM);
             if (vk < vnn) {
                 cb_wait_front(CB_VHO2, 1);

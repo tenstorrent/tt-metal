@@ -63,6 +63,15 @@ constexpr uint32_t V_NNM = 7, V_NTM = 14, V_KTR = 20, V_OT = 10, V_NCOL = 10, V_
 // DST; bit-identical at LoFi / HiFi2). Own contribution: own_cb tiles own_off ..; sender s: rs_cb tiles s*V_RSO + m*ipt ..
 // (DEST_TO_SRCA reuse adds truncate: -3% on an 8-way sum, never use them for this).
 constexpr uint32_t V_RSO = 2;
+#if defined(MKA_QSK)
+#if !defined(MKA_RWO)
+#error "MKA_QSK needs MKA_RWO (owner first-tile arg qn0; the ext ring carries Wo)"
+#endif
+#ifndef QSK_GK
+#define QSK_GK 6
+#endif
+constexpr uint32_t QSK_SLOT = 240, QSK_PASS = 6;   // slot M pages; output tiles per DST pass
+#endif
 ALWI void v_rs_sum(uint32_t own_cb, uint32_t own_off, uint32_t rs_cb, uint32_t k, uint32_t m, uint32_t ipt, uint32_t d0) {
     reconfig_data_format(CB_VI, own_cb);
     matmul_block_init(own_cb, CB_VI, 0, 1, 1, 1);
@@ -235,6 +244,33 @@ void kernel_main() {
     const uint32_t vrole = vrole_rt;
 #endif
     const uint32_t vfirst = get_arg_val<uint32_t>(a++);
+    // rstd' from the CB 20 stand-in (same producer as the qkv PROJ): rsqrt(Σ partials / H + eps), col 0 -> CB_VRT
+    auto v_rstd = [&]() {
+        cb_wait_front(CB_VRSA, MKA_NOWN);
+        cb_reserve_back(CB_VRT, 1);
+        tile_regs_acquire();
+#if MKA_NOWN == 2
+        reconfig_data_format(CB_VRSA, CB_VRSA);
+        add_init(CB_VRSA, CB_VRSA);
+        add_tiles(CB_VRSA, CB_VRSA, 0, 1, 0);
+#else
+        reconfig_data_format_srca(CB_VRSA);
+        copy_init(CB_VRSA);
+        copy_tile(CB_VRSA, 0, 0);
+#endif
+        binop_with_scalar_tile_init();
+        mul_unary_tile(0, MKA_INVH_BITS);
+        add_unary_tile(0, MKA_EPS_BITS);
+        rsqrt_tile_init();
+        rsqrt_tile(0);
+        tile_regs_commit();
+        tile_regs_wait();
+        pack_reconfig_data_format(CB_VRT);
+        pack_tile(0, CB_VRT);
+        tile_regs_release();
+        cb_push_back(CB_VRT, 1);
+        cb_pop_front(CB_VRSA, MKA_NOWN);
+    };
     // owner: Σ of the 10 column down partials (P @ I, fp32 DST) [+ the x chunk while the AR is a stall] -> CB_VXO
     auto v12_osum = [&](uint32_t L) {
         if (vrole != 2) return;
@@ -271,6 +307,76 @@ void kernel_main() {
 #else
 #define V12_OSUM(L) do {} while (0)
 #endif
+#if defined(MKA_QSK)
+    // spec §18 split-K qkv on STREAM core (column c, K-row vk): partial = x[K-row] @ slot M over this column's N-list
+    // (qk0 = nt tiles, passes of <= 6 DST tiles), item-major into CB_VA (+ own items vk, vk + 8 into CB_VOWN). Slot M is
+    // popped BEFORE CB_VA is pushed (the writer refills it once the RS starts). Attention layers then sum the owned items
+    // over the 8 K-rows (P @ I, exact), scale by rstd (Rcol @ J), sigmoid the gate tiles and pack CB_QO (qnt = 1-2 tiles,
+    // first tile qn0, stride 8). GDN-type layers: QSK_GK K tiles, result discarded (in-proj stand-in).
+    auto qsk_mix = [&](bool att_layer) {
+        CZONE("C-QSK");
+        const uint32_t nt = qk0, nk = att_layer ? V_KTR : QSK_GK;
+        compute_kernel_hw_startup<SrcOrder::Reverse>(CB_XK, CB_WM, CB_VA);
+        cb_wait_front(CB_XK, V_KTR);
+        cb_wait_front(CB_WM, QSK_SLOT);
+        if (att_layer) { cb_reserve_back(CB_VA, V_NTM); cb_reserve_back(CB_VOWN, 2); }
+        reconfig_data_format(CB_WM, CB_XK);
+        pack_reconfig_data_format(CB_VA);
+        for (uint32_t j0 = 0; j0 < nt; j0 += QSK_PASS) {
+            const uint32_t nw = (nt - j0) < QSK_PASS ? (nt - j0) : QSK_PASS;
+            matmul_block_init(CB_XK, CB_WM, 0, nw, 1, V_KTR);
+            tile_regs_acquire();
+            for (uint32_t kl = 0; kl < nk; ++kl) matmul_block(CB_XK, CB_WM, kl, kl * nt + j0, 0, 0, nw, 1, V_KTR);
+            tile_regs_commit();
+            tile_regs_wait();
+            if (att_layer)
+                for (uint32_t jj = 0; jj < nw; ++jj) {
+                    const uint32_t j = j0 + jj;
+                    pack_tile<true>(jj, CB_VA, j);
+                    if (j == vk || j == vk + 8) pack_tile<true>(jj, CB_VOWN, j >= 8 ? 1 : 0);
+                }
+            tile_regs_release();
+        }
+        cb_pop_front(CB_WM, QSK_SLOT);
+        cb_pop_front(CB_XK, V_KTR);
+        if (!att_layer) return;
+        cb_push_back(CB_VA, V_NTM);
+        cb_push_back(CB_VOWN, 2);
+        v_rstd();
+        cb_wait_front(CB_VRT, 1);
+        cb_wait_front(CB_VOWN, 2);
+        cb_wait_front(CB_VRS, 16);
+        CZONE("C-QRS");
+        cb_reserve_back(CB_QO, QO_SLOT ? QO_SLOT : qnt);
+        tile_regs_acquire();
+        for (uint32_t m = 0; m < qnt; ++m) v_rs_sum(CB_VOWN, m, CB_VRS, vk, m, 1, m);
+        reconfig_data_format(CB_VJ, CB_VRT);
+        matmul_block_init(CB_VRT, CB_VJ, 0, 1, 1, 1);
+        matmul_block(CB_VRT, CB_VJ, 0, 0, 2, 0, 1, 1, 1);
+        mul_binary_tile_init();
+        for (uint32_t m = 0; m < qnt; ++m) mul_binary_tile(m, 2, m);
+        for (uint32_t m = 0; m < qnt; ++m) {   // gate tiles: sig = 1 / (1 + exp(-x))
+            if (qn0 + 8 * m < 64) continue;
+            binop_with_scalar_tile_init();
+            mul_unary_tile(m, 0xBF800000u);
+            exp_tile_init();
+            exp_tile(m);
+            binop_with_scalar_tile_init();
+            add_unary_tile(m, 0x3F800000u);
+            recip_tile_init();
+            recip_tile(m);
+        }
+        tile_regs_commit();
+        tile_regs_wait();
+        pack_reconfig_data_format(CB_QO);
+        for (uint32_t m = 0; m < qnt; ++m) pack_tile(m, CB_QO);
+        tile_regs_release();
+        cb_push_back(CB_QO, QO_SLOT ? QO_SLOT : qnt);
+        cb_pop_front(CB_VRS, 16);
+        cb_pop_front(CB_VOWN, 2);
+        cb_pop_front(CB_VRT, 1);
+    };
+#else
     // real qkv PROJ (spec v0.4): y = rstd ⊙ (x @ diag(γ)W); rstd = rsqrt(ΣΣx²/H + eps) from the AR owners' fp32 partials
     auto qkv_proj = [&](bool att_layer) {
         CZONE("C-QKV");
@@ -385,6 +491,7 @@ void kernel_main() {
         cb_pop_front(CB_QA, qnt);
         cb_pop_front(CB_RS, 1);
     };
+#endif  // MKA_QSK
 #endif
 #ifndef V12_OSUM
 #define V12_OSUM(L) do {} while (0)
@@ -398,6 +505,12 @@ void kernel_main() {
 #if defined(MKA_RQKV)
         // attention layers: the real qkv PROJ; GDN-type layers: the STREAM K-half matmul alone stands in for the GDN
         // in-proj (64 x 87 KB BFP8 = 5.6 MB, spec 5.9 MB), output discarded
+#if defined(MKA_QSK)
+        if (IS_STREAM) qsk_mix(att);
+#if defined(MKA_RQNR)
+        else if (is_head) head_norm_rope();   // ATTN-only cores reach here in attention layers only
+#endif
+#else
         if (IS_STREAM) {
             cb_wait_front(CB_X, KT);
             if (qrole && (att || gdn_on)) qkv_proj(att);
@@ -409,6 +522,7 @@ void kernel_main() {
             if (att && is_head) head_norm_rope();
 #endif
         }
+#endif  // MKA_QSK
         if (false) {
 #else
         if (IS_STREAM) {
@@ -629,31 +743,7 @@ void kernel_main() {
             if (own_h) cb_push_back(CB_VOWN, 2);
             cb_pop_front(CB_XK, V_KTR);
             if (own_h) {
-                // rstd' from the CB 20 stand-in (same producer as the qkv PROJ): rsqrt(Σ partials / H + eps), col 0
-                cb_wait_front(CB_VRSA, MKA_NOWN);
-                cb_reserve_back(CB_VRT, 1);
-                tile_regs_acquire();
-#if MKA_NOWN == 2
-                reconfig_data_format(CB_VRSA, CB_VRSA);
-                add_init(CB_VRSA, CB_VRSA);
-                add_tiles(CB_VRSA, CB_VRSA, 0, 1, 0);
-#else
-                reconfig_data_format_srca(CB_VRSA);
-                copy_init(CB_VRSA);
-                copy_tile(CB_VRSA, 0, 0);
-#endif
-                binop_with_scalar_tile_init();
-                mul_unary_tile(0, MKA_INVH_BITS);
-                add_unary_tile(0, MKA_EPS_BITS);
-                rsqrt_tile_init();
-                rsqrt_tile(0);
-                tile_regs_commit();
-                tile_regs_wait();
-                pack_reconfig_data_format(CB_VRT);
-                pack_tile(0, CB_VRT);
-                tile_regs_release();
-                cb_push_back(CB_VRT, 1);
-                cb_pop_front(CB_VRSA, MKA_NOWN);
+                v_rstd();
                 // h_k = silu(rstd ⊙ Σ_r gate_k[r]) * (rstd ⊙ Σ_r up_k[r]); sums as P @ I (exact, fp32 DST); rstd
                 // broadcast along the row as Rcol @ J (J: row 0 = 1)
                 cb_wait_front(CB_VRT, 1);
@@ -710,7 +800,9 @@ void kernel_main() {
             }
             cb_pop_front(CB_VH, V_NNM);
         }
+#if !defined(MKA_QSK)
         cb_pop_front(CB_X, KT);
+#endif
 #else
         cb_wait_front(CB_GO, 1);
         cb_pop_front(CB_GO, 1);

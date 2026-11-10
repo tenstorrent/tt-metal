@@ -113,9 +113,10 @@ def hs(r, w): return ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, t
 x = ttnn.from_torch(x_t.reshape(1, 1, M, H), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=dev, memory_config=ws(rect, XSW * TILE))
 xb = ttnn.to_torch(x).float().reshape(M, H)
 gold = (torch.nn.functional.silu(xb @ wgq) * (xb @ wuq)).bfloat16().float() @ wdq
-xbuf = ttnn.allocate_tensor_on_device(ttnn.Shape([1, 1, TILE * NC, H]), ttnn.bfloat16, ttnn.TILE_LAYOUT, dev, hs(rect, H))
+QSK = 'MKA_QSK=1' in os.environ.get('MK_DEFINES', '').split(',')
+xbuf = ttnn.allocate_tensor_on_device(ttnn.Shape([1, 1, TILE * NC, TILE if QSK else H]), ttnn.bfloat16, ttnn.TILE_LAYOUT, dev, hs(rect, TILE if QSK else H))
 XPRE = 1 if os.environ.get("FM_XPRE", "1") == "1" else 0
-if XPRE:
+if XPRE and not QSK:
     xbuf = ttnn.from_torch(xb.reshape(1, 1, M, H).bfloat16().float().repeat(1, 1, NC, 1), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=dev, memory_config=hs(rect, H))
 HDT = ttnn.bfloat8_b if os.environ.get('MK_H_BFP8') == '1' else ttnn.bfloat16  # -mk-tail: h broadcast in BFP8 halves its bytes
 print(f'[mk1] h dtype {HDT}', flush=True)
@@ -166,6 +167,11 @@ acc_wm = ttnn.TensorAccessorArgs(wm_all).get_compile_time_args()
 MKDEF = [tuple(kv.split('=', 1)) for kv in os.environ.get('MK_DEFINES', '').split(',') if kv]  # e.g. MKA_NOMLP=1  # -mk-tail: e.g. MK_DNPIPE=1,MK_FLAG_FLUSH=1
 AMASK = int(os.environ.get('MK_AMASK', '0xFFFFFFFF'), 0)   # mixed groups: bit L = attention-type layer
 S_GDN_US = float(os.environ.get('MK_SGDN_US', '0'))
+QSK = ('MKA_QSK', '1') in MKDEF   # spec §18: qkv split-K on STREAM through v12's unit (implies MK_V12 + MK_RS_QKV)
+if QSK:
+    for k_ in ('MK_V12', 'MK_RS_QKV', 'MKA_RQKV'):
+        if (k_, '1') not in MKDEF: MKDEF = MKDEF + [(k_, '1')]
+    QSK_GK = int(os.environ.get('QSK_GK', '6')); MKDEF = MKDEF + [('QSK_GK', str(QSK_GK))]
 MKDEF += [('MKA_AMASK', f'{AMASK & 0xFFFFFFFF}u'), ('MKA_S_GDN', str(int(S_GDN_US * 1350)))]
 print(f'[mk1] defines {MKDEF}', flush=True)
 def is_attn_layer(L): return (AMASK >> L) & 1
@@ -336,17 +342,28 @@ if RQKV:
     n_ext_tiles = 2 * len(ext_list); n_half = QN - n_ext_tiles
     assert n_half >= 0 and 2 * n_half <= len(stream_idx), (n_ext_tiles, n_half)
     for e, fi in enumerate(ext_list): QROLE[fi] = (3, 2 * e, 2, 0, KT, fi)
-    for i_ in range(2 * n_half):
+    for i_ in range(0 if QSK else 2 * n_half):
         fi = s_by_i[i_]; h_ = i_ % 2
         QROLE[fi] = (1 if h_ == 0 else 2, n_ext_tiles + i_ // 2, 1, h_ * QH, QH, s_by_i[i_ + 1] if h_ == 0 else s_by_i[i_ - 1])
     QDONE_N = sum(1 for v in QROLE.values() if v[0] in (1, 3))
+    if QSK:
+        import sys as _sys
+        _sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "engine"))
+        import layout_attn as LA_
+        QSL_ = LA_.qkv_splitk_slices()
+        for fi in ext_list: QROLE[fi] = (3, 0, 0, 0, 0, fi)   # ext ring user (Wo); no qkv on the ext cores
+        QSKEY = {fi: (fcores[fi].x, fcores[fi].y) for fi in stream_idx}
+        for fi, (c_, k_) in QSKEY.items():
+            sl_ = QSL_[(c_, k_)]
+            QROLE[fi] = (1, sl_.first + k_, 1 + (1 if k_ + 8 < sl_.nt else 0), sl_.nt, QSK_GK, fi)   # owner of items k, k + 8
+        QDONE_N = len(stream_idx)
     QSLOT = 2 * KT
     # bank-local slices: each qkv core's slice in its nearest bank (fcores logical coords vs the bank's preferred worker)
-    qcores = sorted(QROLE)
+    qcores = sorted(f_ for f_ in QROLE if not (QSK and QROLE[f_][0] == 3))
     # byte-balanced: each slice class (ext 348 KB, STREAM half 87 KB) is spread evenly over the banks, nearest bank
     # first within the class (a count-only cap put most ext slices on the banks next to the ext cores -> hot banks)
     q_bank = {}
-    for cls in ([fi for fi in qcores if QROLE[fi][0] == 3], [fi for fi in qcores if QROLE[fi][0] != 3]):
+    for cls in ([] if QSK else ([fi for fi in qcores if QROLE[fi][0] == 3], [fi for fi in qcores if QROLE[fi][0] != 3])):
         caps = [len(cls) // banks + (1 if b_ < len(cls) % banks else 0) for b_ in range(banks)]
         pairs = sorted(((abs(fcores[fi].x - bx) + abs(fcores[fi].y - by), fi, b_) for fi in cls for b_, (bx, by) in enumerate(BANK_LOC)))
         for d_, fi, b_ in pairs:
@@ -354,14 +371,19 @@ if RQKV:
             q_bank[fi] = b_; caps[b_] -= 1
     q_slot = {}   # bank-local page offset of each core's slice (slices packed per bank)
     _tot = [0] * banks
-    for fi in qcores:
-        b_ = q_bank[fi]; q_slot[fi] = _tot[b_]; _tot[b_] += QROLE[fi][2] * QROLE[fi][4]
-    PQL = max(_tot) * banks
+    if QSK:
+        _qb, _qo, PQL = LA_.splitk_bank_assign(QSL_, {key: key for key in QSL_}, BANK_LOC, banks)
+        for fi, key in QSKEY.items(): q_bank[fi], q_slot[fi] = _qb[key], _qo[key]
+    else:
+        for fi in qcores:
+            b_ = q_bank[fi]; q_slot[fi] = _tot[b_]; _tot[b_] += QROLE[fi][2] * QROLE[fi][4]
+        PQL = max(_tot) * banks
     torch.manual_seed(7)
     wq_t = torch.randn(H, QN * TILE) / math.sqrt(H)
     gam = 0.5 + torch.rand(H)
     wf_t = gam[:, None] * wq_t   # diag(γ) W, folded at load (spec v0.4; × NORM_FIX is part of γ here)
     def q_pages(scale):
+        if QSK: return LA_.pack_qkv_splitk_layer(wf_t, QSL_, _qb, _qo, banks, PQL, scale)
         pg = torch.zeros(PQL, TILE, TILE)
         for fi in qcores:
             ro, n0, nt, k0, nk, _ = QROLE[fi]; b_, j_ = q_bank[fi], q_slot[fi]
@@ -372,7 +394,13 @@ if RQKV:
     wq_all = ttnn.from_torch(torch.cat([q_pages(2.0 ** (L % 2)) for L in range(NL)]).reshape(1, 1, -1, TILE).bfloat16(), dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=dev, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     wqq = ttnn.to_torch(wq_all).float().reshape(NL, PQL, TILE, TILE)
     wfq = torch.zeros(NL, H, QN * TILE)   # dequantized folded weights as the device sees them, per layer
-    for fi in qcores:
+    if QSK:
+        for key, sl_ in QSL_.items():
+            for kl in range(sl_.pages // sl_.nt):
+                for jj in range(sl_.nt):
+                    k_, n_ = sl_.k0 + kl, sl_.first + jj
+                    wfq[:, k_ * TILE:(k_ + 1) * TILE, n_ * TILE:(n_ + 1) * TILE] = wqq[:, (_qo[key] + sl_.page_of(kl, jj)) * banks + _qb[key]]
+    for fi in ([] if QSK else qcores):
         ro, n0, nt, k0, nk, _ = QROLE[fi]; b_, j_ = q_bank[fi], q_slot[fi]
         for kl in range(nk):
             for jj in range(nt):
@@ -385,13 +413,16 @@ if RQKV:
     gold_qkv = [(rstd_g[:, None] * (xb.double() @ wfq[L].double())).float() for L in range(NL)]
     qkv_out = ttnn.from_torch(torch.zeros(1, 1, NL * TILE, QN * TILE).bfloat16(), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=dev, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     # x on every qkv core: shard x over the full grid (lockstep L1 address, same footprint as the 80-core shard)
-    ttnn.deallocate(xbuf)   # free the 80-core shard first so the full-grid one reuses its lockstep L1 range
-    xbuf = ttnn.from_torch(xb.reshape(1, 1, M, H).bfloat16().float().repeat(1, 1, len(ACT), 1), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=dev, memory_config=hs(kgrid, H))
+    if not QSK:
+      ttnn.deallocate(xbuf)   # free the 80-core shard first so the full-grid one reuses its lockstep L1 range
+      xbuf = ttnn.from_torch(xb.reshape(1, 1, M, H).bfloat16().float().repeat(1, 1, len(ACT), 1), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=dev, memory_config=hs(kgrid, H))
     EXTRA_T = EXTRA_TX = 0   # the qkv bytes are real now
     ext_crs = crs([fcores[fi] for fi in ext_list])
-    print(f"[rqkv] {QN} tiles: ext {len(ext_list)}x2 full-K, STREAM {2 * n_half} K-halves; producers {QDONE_N}; MB/bank {[round(sum(QROLE[f][2] * QROLE[f][4] for f in qcores if q_bank[f] == b_) * BF8TB / 1e6, 2) for b_ in range(banks)]}; {QN * KT * BF8TB / 1e6:.1f} MB/layer", flush=True)
+    if QSK: print(f"[qsk] split-K qkv: 80 STREAM owners, slot M {max(s_.pages for s_ in QSL_.values())} pages, PQL {PQL}, GDN stand-in {QSK_GK} K tiles", flush=True)
+    else: print(f"[rqkv] {QN} tiles: ext {len(ext_list)}x2 full-K, STREAM {2 * n_half} K-halves; producers {QDONE_N}; MB/bank {[round(sum(QROLE[f][2] * QROLE[f][4] for f in qcores if q_bank[f] == b_) * BF8TB / 1e6, 2) for b_ in range(banks)]}; {QN * KT * BF8TB / 1e6:.1f} MB/layer", flush=True)
 GDNIN = int(os.environ.get('MKA_GDNIN_CORES', '64'))   # GDN in-proj stand-in on the first 64 K-half cores (5.6 MB, spec 5.9),
 def gdn_on(fi):                                         # independent of how many K-half pairs the qkv split uses
+    if QSK: return 1 if fi in stream_idx else 0
     return 1 if (fi in stream_idx and stream_idx[fi] < GDNIN and QROLE.get(fi, (0,))[0] in (1, 2)) else 0
 # ================= MK_V12: fm12 split-K MLP phase (spec v0.6-v0.9) replacing the fm11 MLP =================
 V12 = ('MK_V12', '1') in MKDEF
@@ -406,6 +437,7 @@ if V12:
     V_RESID = ('MK_OWNER_RESID', '1') in MKDEF
     V_R = int(os.environ.get('V12_R', '32')); V_FIRST = int(os.environ.get('V12_FIRST', '1'))
     assert V_R == 32 or 1 <= V_R <= 16
+    if os.environ.get('MK_V12_RCT', '1') == '1': MKDEF = MKDEF + [('MK_V12_RCT', str(V_R))]   # compile-time R (text budget)
     def q4(w): return ttnn.to_torch(ttnn.from_torch(w, dtype=ttnn.bfloat4_b, layout=ttnn.TILE_LAYOUT)).float()
     vwg, vwu, vwd = q4(wg_t), q4(wu_t), q4(wd_t)   # BFP4 values are tile-local, so layout independent
     def vlayer(L): return vwg, vwu * (2.0 ** (L % 2)), vwd * (2.0 ** -(L % 3))   # distinct per layer, exact in BFP4
@@ -481,7 +513,7 @@ def tfk(fi):   # index of this core in its parent's child list (level-0 list or 
 def q_rargs(fi):
     if not RQKV: return []
     ro = QROLE.get(fi, (0,))[0]
-    return [ro, wq_all.buffer_address(), (q_slot[fi] * banks + q_bank[fi]) if ro else 0, PQL] + wo_rargs(fi)
+    return [ro, wq_all.buffer_address(), (q_slot.get(fi, 0) * banks + q_bank.get(fi, 0)) if ro else 0, PQL] + wo_rargs(fi)
 RWO = ('MKA_RWO', '1') in MKDEF
 assert not (('MKA_WORING', '1') in MKDEF and ('MKA_TREEFLAG', '1') in MKDEF), 'CB 31: WORING xor TREEFLAG'
 if RWO and ('MKA_LEAN_C', '1') not in MKDEF: MKDEF = MKDEF + [('MKA_LEAN_C', '1')]
@@ -655,7 +687,7 @@ def wo_wargs(fi):
     return [len(t_)] + (t_ + [0] * 5)[:5] + [1 if fi == WCC else 0, oc] + RECTS_E + [self_re(fi) if fi in WOT else 3] + \
         sum(([fphys[f_].x, fphys[f_].y] for f_ in owner_fi), []) + [wod.buffer_address()] + head_args_w(fi)
 WORING = ('MKA_WORING', '1') in MKDEF
-WOHELP = os.environ.get('MKA_WOHELP', '1') == '1' and not WORING
+WOHELP = os.environ.get('MKA_WOHELP', '1') == '1' and not WORING and not QSK   # QSK: Wo fills the ext ring in the GDN layers
 HLP = {}   # helper fi -> (ext fi, page offset, pages);  OWN[ext fi] = own pages
 OWN = {}
 if RWO:
@@ -679,7 +711,7 @@ def wo_rargs(fi):
 def build(out):
     cbs = [ttnn.cb_descriptor_from_sharded_tensor(0, xbuf), cbd(1, ttnn.bfloat4_b, (EVEN_T if GUPRE else 2 * GRP * KB * 2), rect), cbd(2, HDT, 1, rect),
            ttnn.cb_descriptor_from_sharded_tensor(3, hbuf), cbd(4, ttnn.bfloat4_b, 2 * HT * NDN, rect), cbd(5, ttnn.bfloat4_b, 2 * w2_tiles, rect),
-           ttnn.cb_descriptor_from_sharded_tensor(16, out), (cbd(6, ttnn.bfloat8_b, QH, rect) if RQKV else cbd(6, ttnn.bfloat4_b, KT * MIXN, rect)),
+           ttnn.cb_descriptor_from_sharded_tensor(16, out), (cbd(6, ttnn.bfloat8_b, 240 if QSK else QH, rect) if RQKV else cbd(6, ttnn.bfloat4_b, KT * MIXN, rect)),
            ttnn.cb_descriptor_from_sharded_tensor(7, ymix), cbd(8, ttnn.bfloat16, 1, rect),
            # ATTN working set (spec CBs 9-12 + scratch 24-29), full grid
            cbd(9, ttnn.bfloat16, QT_ if RQNR else 32, kgrid), cbd(10, KVDT, 8 * 2 * NBB, kgrid), cbd(11, KVDT, 8 * 2 * NBB, kgrid), cbd(12, ttnn.float32, 9, kgrid),
@@ -746,11 +778,11 @@ def build(out):
             b, s0 = dn_slot(i); selfr = 0 if c.x < split else 1
             mb, ms0 = mx_slot(i)
             r_mk = [wgu_all.buffer_address(), gp] + RECTS + [selfr, hbuf.buffer_address(), rk if rk >= 2 else 255, g_, PGU]
-            w_mk = [i] + RECTS + [selfr] + RXY + [hbuf.buffer_address(), wd_all.buffer_address(), s0 * banks + b, wgu_all.buffer_address(), gp, rk if rk < 2 else 255, g_, PGU, PDN, *((wq_all.buffer_address(), (q_slot[fi] * banks + q_bank[fi]) if fi in QROLE else 0, PQL) if RQKV else (wm_all.buffer_address(), ms0 * banks + mb, PWM))]
+            w_mk = [i] + RECTS + [selfr] + RXY + [hbuf.buffer_address(), wd_all.buffer_address(), s0 * banks + b, wgu_all.buffer_address(), gp, rk if rk < 2 else 255, g_, PGU, PDN, *((wq_all.buffer_address(), (q_slot.get(fi, 0) * banks + q_bank.get(fi, 0)) if fi in QROLE else 0, PQL) if RQKV else (wm_all.buffer_address(), ms0 * banks + mb, PWM))]
         else:
             g_ = 0; i = 0
             r_mk = [0, 0] + z10 + [0, 0, 255, 0, 0]
-            w_mk = [0] + z10 + [0] + [0] * 8 + [0] * 5 + [255] + [0] * 3 + ([wq_all.buffer_address(), q_slot[fi] * banks + q_bank[fi], PQL] if (RQKV and fi in QROLE) else [0] * 3)
+            w_mk = [0] + z10 + [0] + [0] * 8 + [0] * 5 + [255] + [0] * 3 + ([wq_all.buffer_address(), q_slot.get(fi, 0) * banks + q_bank.get(fi, 0), PQL] if (RQKV and fi in QROLE) else [0] * 3)
         selff = 0 if c.x < fsplit else (2 if (ARC and c.y >= _ay[0]) else 1)
         i_s = stream_idx.get(fi, 0)
         rd_w = (isS or EXT) and not WO_NOC0 and not RWO   # RWO: the wo bytes are real (ext ring)
