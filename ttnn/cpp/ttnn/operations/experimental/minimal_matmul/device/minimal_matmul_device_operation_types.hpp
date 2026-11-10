@@ -20,6 +20,8 @@ struct MinimalMatmulConfig {
     uint32_t subblock_w{};
 
     tt::tt_metal::CoreCoord compute_with_storage_grid_size = {0, 0};
+    // Logical core the grid starts at; the grid is [origin, origin + compute_with_storage_grid_size).
+    tt::tt_metal::CoreCoord compute_with_storage_origin = {0, 0};
 };
 
 struct MinimalMatmulParams {

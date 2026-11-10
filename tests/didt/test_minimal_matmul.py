@@ -69,6 +69,7 @@ def test_minimal_matmul(
     didt_workload_iterations,
     determinism_check_interval,
     grid_size,
+    grid_origin,
 ):
     M, K, N = 16384, 16384, 16384
 
@@ -81,7 +82,13 @@ def test_minimal_matmul(
                 f"--grid-size {grid_size[0]}x{grid_size[1]} exceeds the device grid {compute_grid.x}x{compute_grid.y}"
             )
         compute_with_storage_grid_size = grid_size
-    logger.info(f"Running on {compute_with_storage_grid_size} cores")
+    origin = grid_origin or (0, 0)
+    if origin[0] + compute_with_storage_grid_size[0] > compute_grid.x or origin[1] + compute_with_storage_grid_size[1] > compute_grid.y:
+        pytest.fail(
+            f"--grid-origin {origin[0]}x{origin[1]} + grid {compute_with_storage_grid_size[0]}x{compute_with_storage_grid_size[1]} "
+            f"exceeds the device grid {compute_grid.x}x{compute_grid.y}"
+        )
+    logger.info(f"Running on {compute_with_storage_grid_size} cores starting at logical {origin}")
 
     in0_shape = [M, K]
     in1_shape = [K, N]
@@ -118,6 +125,7 @@ def test_minimal_matmul(
         subblock_h=subblock_h,
         subblock_w=subblock_w,
         compute_with_storage_grid_size=core_grid,
+        compute_with_storage_origin=ttnn.CoreCoord(origin[0], origin[1]),
     )
 
     minimalMatmulTest = MinimalMatmulWorstCaseTest(
@@ -144,5 +152,6 @@ def test_minimal_matmul(
     minimalMatmulTest.nd_core_block = (32 * -(-(M // 32) // m_cores), 32 * -(-(N // 32) // n_cores))
     minimalMatmulTest.nd_core_transpose = transpose
     minimalMatmulTest.nd_core_grid_size = (grid_x, grid_y)
+    minimalMatmulTest.nd_core_origin = origin
 
     minimalMatmulTest.run_op_test()

@@ -208,6 +208,10 @@ ttnn::device_operation::ProgramArtifacts MinimalMatmulDeviceOperation::ProgramFa
         config.has_value() ? config.value().compute_with_storage_grid_size : device->compute_with_storage_grid_size();
     auto core_grid = CoreRange({0, 0}, {grid_size.x - 1, grid_size.y - 1});
     auto num_cores = core_grid.size();
+    // All indexing below is relative to the grid; the origin only moves where the grid is placed on the device.
+    const CoreCoord grid_origin = config.has_value() ? config.value().compute_with_storage_origin : CoreCoord{0, 0};
+    auto placed = [&](const CoreCoord& c) { return CoreCoord{c.x + grid_origin.x, c.y + grid_origin.y}; };
+    auto placed_range = [&](const CoreRange& r) { return CoreRange(placed(r.start_coord), placed(r.end_coord)); };
 
     bool use_bias = bias_tensor.has_value();
     bool use_fused_ternary = fused_ternary_input_a.has_value() && fused_ternary_input_b.has_value();
@@ -420,7 +424,7 @@ ttnn::device_operation::ProgramArtifacts MinimalMatmulDeviceOperation::ProgramFa
          }) {
         SemaphoreSpec sem{
             .unique_id = name,
-            .target_nodes = CoreRangeSet(core_grid),
+            .target_nodes = CoreRangeSet(placed_range(core_grid)),
         };
         sem.advanced_options.initial_value = is_quasar ? 0u : initial_value;
         spec.semaphores.push_back(std::move(sem));
@@ -870,7 +874,7 @@ ttnn::device_operation::ProgramArtifacts MinimalMatmulDeviceOperation::ProgramFa
         kernels.push_back(in1_kernel_for(in0_idx));
         kernels.push_back(K_COMPUTE);
         spec.work_units.push_back(
-            WorkUnitSpec{.name = name, .kernels = std::move(kernels), .target_nodes = CoreRangeSet(nodes)});
+            WorkUnitSpec{.name = name, .kernels = std::move(kernels), .target_nodes = CoreRangeSet(placed_range(nodes))});
     };
 
     // Representative (in0_idx, in1_idx) for each of the four regions, computed the same way the
@@ -967,10 +971,10 @@ ttnn::device_operation::ProgramArtifacts MinimalMatmulDeviceOperation::ProgramFa
         auto in1_prev_core = clamped_prev(in1_core_order, in1_core_order_index);
         auto in1_next_core = clamped_next(in1_core_order, in1_core_order_index);
 
-        auto in0_prev_core_physical = device->worker_core_from_logical_core(in0_prev_core);
-        auto in0_next_core_physical = device->worker_core_from_logical_core(in0_next_core);
-        auto in1_prev_core_physical = device->worker_core_from_logical_core(in1_prev_core);
-        auto in1_next_core_physical = device->worker_core_from_logical_core(in1_next_core);
+        auto in0_prev_core_physical = device->worker_core_from_logical_core(placed(in0_prev_core));
+        auto in0_next_core_physical = device->worker_core_from_logical_core(placed(in0_next_core));
+        auto in1_prev_core_physical = device->worker_core_from_logical_core(placed(in1_prev_core));
+        auto in1_next_core_physical = device->worker_core_from_logical_core(placed(in1_next_core));
 
         /**
          * NOTE: Some cores are doing unnecessary work, on blocks which are processed just to make
@@ -994,7 +998,7 @@ ttnn::device_operation::ProgramArtifacts MinimalMatmulDeviceOperation::ProgramFa
         auto& in0_rt = (in1_idx == 0 ? in0_sender_args : in0_receiver_args).runtime_arg_values;
         AddRuntimeArgsForNode(
             in0_rt,
-            core,
+            placed(core),
             {{"is_sink_core", static_cast<uint32_t>(is_in0_sink)},
              {"in0_dest_noc_x", (std::uint32_t)in0_next_core_physical.x},
              {"in0_dest_noc_y", (std::uint32_t)in0_next_core_physical.y},
@@ -1010,7 +1014,7 @@ ttnn::device_operation::ProgramArtifacts MinimalMatmulDeviceOperation::ProgramFa
         auto& in1_rt = (in0_idx == 0 ? in1_sender_args : in1_receiver_args).runtime_arg_values;
         AddRuntimeArgsForNode(
             in1_rt,
-            core,
+            placed(core),
             {{"is_sink_core", static_cast<uint32_t>(is_in1_sink)},
              {"in1_dest_noc_x", (std::uint32_t)in1_next_core_physical.x},
              {"in1_dest_noc_y", (std::uint32_t)in1_next_core_physical.y},
@@ -1025,20 +1029,20 @@ ttnn::device_operation::ProgramArtifacts MinimalMatmulDeviceOperation::ProgramFa
 
         AddRuntimeArgsForNode(
             compute_args.runtime_arg_values,
-            core,
+            placed(core),
             {{"M_start_tile", M_start_tile},
              {"M_end_tile", M_end_tile},
              {"N_start_tile", N_start_tile},
              {"N_end_tile", N_end_tile}});
 
         if (use_fused_ternary) {
-            AddRuntimeArgsForNode(in0_rt, core, {{"broadcast_ternary_b", ternary_b_broadcast}});
-            AddRuntimeArgsForNode(in1_rt, core, {{"broadcast_ternary_b", ternary_b_broadcast}});
+            AddRuntimeArgsForNode(in0_rt, placed(core), {{"broadcast_ternary_b", ternary_b_broadcast}});
+            AddRuntimeArgsForNode(in1_rt, placed(core), {{"broadcast_ternary_b", ternary_b_broadcast}});
             // fused_ternary_scalar is part of the program hash, so a cache hit guarantees this
             // value is unchanged; it does not need re-applying per dispatch.
             AddRuntimeArgsForNode(
                 compute_args.runtime_arg_values,
-                core,
+                placed(core),
                 {{"fused_ternary_scalar", std::bit_cast<uint32_t>(operation_attributes.fused_ternary_scalar.value())},
                  {"broadcast_ternary_b", ternary_b_broadcast}});
         }

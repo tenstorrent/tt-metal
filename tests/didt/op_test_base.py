@@ -95,8 +95,9 @@ class OpTestBase:
             if (x, y) in structures:
                 self.nd_core_structures.setdefault(device_idx, {}).setdefault((x, y), []).append(structures[(x, y)])
             translated = self.nd_translated(device_idx, x, y)
+            ax, ay = self.nd_abs(x, y)
             logger.info(
-                f"ND device {device_idx} logical core ({x},{y})"
+                f"ND device {device_idx} logical core ({ax},{ay})"
                 f"{f' translated=({translated[0]},{translated[1]})' if translated else ''}: "
                 f"{count}/{block[0] * block[1]} elements differ"
             )
@@ -106,11 +107,17 @@ class OpTestBase:
             f"{nd_core_map.classify(cores, getattr(self, 'nd_core_grid_size', None))}"
         )
 
+    # Core coordinates above are relative to the grid the op ran on; add the grid origin for device logical coords
+    def nd_abs(self, x, y):
+        ox, oy = getattr(self, "nd_core_origin", (0, 0))
+        return x + ox, y + oy
+
     def nd_translated(self, device_idx, x, y):
         key = (device_idx, x, y)
         if key not in self.nd_core_translated:
             try:
-                core = self.get_device(device_idx).worker_core_from_logical_core(ttnn.CoreCoord(x, y))
+                ax, ay = self.nd_abs(x, y)
+                core = self.get_device(device_idx).worker_core_from_logical_core(ttnn.CoreCoord(ax, ay))
                 self.nd_core_translated[key] = (core.x, core.y)
             except Exception:
                 self.nd_core_translated[key] = None
@@ -152,7 +159,8 @@ class OpTestBase:
             grid = getattr(self, "nd_core_grid_size", None)
             pattern = nd_core_map.classify(hits, grid) if hits else "no core mapping for this test"
             per_core = " ".join(
-                f"({x},{y})x{n}" for (x, y), n in sorted(hits.items(), key=lambda c: (-c[1], c[0][1], c[0][0]))
+                f"({self.nd_abs(x, y)[0]},{self.nd_abs(x, y)[1]})x{n}"
+                for (x, y), n in sorted(hits.items(), key=lambda c: (-c[1], c[0][1], c[0][0]))
             )
             where = locations.get(device_idx, "unknown")
             logger.info(
@@ -163,7 +171,7 @@ class OpTestBase:
                 summary = nd_core_map.summarize_structures(self.nd_core_structures.get(device_idx, {}).get((x, y), []))
                 translated = self.nd_translated(device_idx, x, y)
                 logger.info(
-                    f"ND summary device {device_idx} core ({x},{y})"
+                    f"ND summary device {device_idx} core ({self.nd_abs(x, y)[0]},{self.nd_abs(x, y)[1]})"
                     f"{f' translated=({translated[0]},{translated[1]})' if translated else ''}: "
                     f"failed {n}/{num_checks} checks; {nd_core_map.describe_summary(summary)}"
                 )

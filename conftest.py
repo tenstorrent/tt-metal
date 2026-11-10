@@ -1032,6 +1032,12 @@ def pytest_addoption(parser):
         default=None,
         help="Size of chip grid for the test to run on. Grid size is defined by number of cores in row x number of cores in column, e.g., 8x8",
     )
+    parser.addoption(
+        "--grid-origin",
+        action="store",
+        default=None,
+        help="Logical core (x by y, e.g. 6x0) the --grid-size grid starts at; default 0x0. Only minimal_matmul supports it.",
+    )
 
 
 @pytest.fixture
@@ -1048,6 +1054,19 @@ def grid_size(request):
             return (rows, cols)
         except ValueError:
             raise ValueError(f"Invalid grid size format: {grid_size_str}. Use format 'rows x cols'.")
+    return None
+
+
+@pytest.fixture
+def grid_origin(request):
+    """Logical (x, y) the --grid-size grid starts at, from --grid-origin XxY; None if not provided."""
+    origin_str = request.config.getoption("--grid-origin")
+    if origin_str:
+        try:
+            x, y = map(int, origin_str.split("x"))
+            return (x, y)
+        except ValueError:
+            raise ValueError(f"Invalid grid origin format: {origin_str}. Use format 'XxY', e.g. 6x0.")
     return None
 
 
