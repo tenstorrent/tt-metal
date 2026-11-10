@@ -22,7 +22,14 @@ def test_mk_weights_repack_lossless(mesh_device, monkeypatch):
         src = {"mlp": model.layers[0].feed_forward.weights.w_gate_up, "qkv": model.layers[3].attention.tw["wqkvg_pair"],
                "wo": model.layers[3].attention.tw["wo_pair"]}[kind]
         lays[kind] = wm.TileOrderLayout(kind, str(src.dtype).split(".")[-1].lower())
+    lays["gamma"] = None  # fixed layout (gamma_pages)
     rep = wm.repack(model, lays, only_layers=LAYERS)
+    g = wm.device_shards(rep.pop("gamma")["tensor"])
+    want_g = wm.gamma_pages(model).reshape(-1, wm.H).bfloat16().float()
+    assert all(torch.equal(x.reshape(-1, wm.H), want_g) for x in g), "gamma pages differ from the model norm weights"
+    l0 = model.layers[0]
+    assert torch.equal(want_g[0], wm.norm_gamma(l0.attention_norm.norm).bfloat16().float())
+    print(f"repack gamma: {want_g.shape[0] // wm.TILE} (layer, norm) rows x {len(g)} devices exact")
     for kind, r in rep.items():
         got = wm.device_shards(r["tensor"])
         for j, li in enumerate(r["layers"]):

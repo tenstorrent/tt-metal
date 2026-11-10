@@ -14,6 +14,7 @@ Three layers of code, so each track owns its own piece:
   2. packing (pure torch, per device per layer): LAYOUTS[kind](mats, ctx) -> pages [n, 32, 32]. These call the tracks'
      layout functions (engine/layout_mlp.py, engine/layout_attn.py, later layout_gdn / ar_phase).
   3. assembly: per kind, concatenate the layers, quantize per device on host and aggregate into one mesh tensor.
+  Plus kind 'gamma' (spec §19): the per-layer input / post-attention RMSNorm (1+w) gammas, replicated (gamma_pages).
 
 Host memory: one device's pages of one kind at a time (MLP at BFP4 ~1.1 GB per device for 64 layers).
 """
@@ -144,6 +145,32 @@ class TileOrderLayout:
         return torch.cat([self.tiles(m) for m in ms])
 
 
+def norm_gamma(norm):
+    """The full-width (1+w) RMSNorm gamma the DAR path uses (DecodeResidualAllReduce.rms_norm: ``norm.weight``), as a
+    float [H] host vector (replicated, so device 0's copy)."""
+    g = device_shards(norm.weight)[0].reshape(-1)
+    if g.numel() == TILE * H:  # tile-padded [32, H]: row 0 holds gamma
+        g = g.reshape(TILE, H)[0]
+    assert g.numel() == H, g.shape
+    return g
+
+
+def gamma_pages(model):
+    """kind 'gamma' (spec §19; the AR owner applies gamma at x delivery): per layer L and norm n (0 input_layernorm =
+    attention_norm, 1 post_attention_layernorm = ffn_norm) one tile row [32, H] bf16 with gamma in row 0 (rows 1-31
+    zero) -> page ((L * 2 + n) * 160 + chunk * 10 + t) = owner chunk ``chunk`` (16 x 10 tiles), tile t. Identical on
+    every device (each device reads its own owner chunks)."""
+    import torch
+
+    rows = []
+    for l in model.layers:
+        for norm in (l.attention_norm.norm, l.ffn_norm.norm):
+            r = torch.zeros(TILE, H)
+            r[0] = norm_gamma(norm)
+            rows.append(r)
+    return torch.cat(rows).reshape(1, 1, -1, H)
+
+
 # ---------------------------------------------------------------------------------------------------------------- #
 # 3. assembly
 # ---------------------------------------------------------------------------------------------------------------- #
@@ -165,7 +192,13 @@ def repack(model, layouts=None, kinds=None, only_layers=None):
 
     mesh = model.mesh_device
     out = {}
-    for kind in kinds or sorted(layouts):
+    if "gamma" in (kinds or layouts):  # replicated, bf16, its own fixed layout (gamma_pages)
+        t = ttnn.from_torch(gamma_pages(model).to(torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT,
+                            device=mesh, memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh))
+        out["gamma"] = dict(tensor=t, pages_per_layer=2 * (H // TILE), layers=list(range(len(model.layers))),
+                            dtype="bfloat16")
+    for kind in [k for k in (kinds or sorted(layouts)) if k != "gamma"]:
         lay = layouts[kind]
         want, extract = SOURCES[kind]
         idx = [i for i, l in enumerate(model.layers) if want(l) and (only_layers is None or i in only_layers)]
