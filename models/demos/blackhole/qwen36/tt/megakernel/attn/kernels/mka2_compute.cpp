@@ -18,6 +18,28 @@
 #include "api/compute/reg_api.h"
 #include "api/debug/kernel_profiler.hpp"
 #if defined(MK_V12)
+#if defined(MK_V12_LOFI) && MK_V12_LOFI
+// the engine's compute fidelity is HiFi2 (SDPA); the v12 gate|up / down matmuls on BFP4 weights run at LoFi like the
+// standalone fm12 / DSMC (numerics: 0.99996 standalone); the P @ I sums are exact either way
+namespace ckernel {
+ALWI void v_mm_init(uint32_t in0, uint32_t in1, uint32_t ct, uint32_t rt, uint32_t kt) {
+    state_configure(in1, in0, __builtin_LINE());
+    UNPACK((llk_unpack_AB_matmul_init(in0, in1, 0, ct, rt, kt)));
+    MATH((llk_math_matmul_init<MathFidelity::LoFi, MM_THROTTLE>(in0, in1, 0, ct, rt)));
+    MATH((throttled_mop_status = 0));
+}
+ALWI void v_mm(uint32_t in0, uint32_t in1, uint32_t i0, uint32_t i1, uint32_t idst, uint32_t ct, uint32_t rt, uint32_t kt) {
+    state_configure(in1, in0, __builtin_LINE());
+    UNPACK((llk_unpack_AB_matmul(in0, in1, i0, i1, ct, rt, kt)));
+    MATH((llk_math_matmul<MathFidelity::LoFi, MM_THROTTLE>(idst, ct, rt)));
+}
+}  // namespace ckernel
+#define V_MM_INIT(a, b, ct, rt, kt) v_mm_init(a, b, ct, rt, kt)
+#define V_MM(a, b, i0, i1, d, ct, rt, kt) v_mm(a, b, i0, i1, d, ct, rt, kt)
+#else
+#define V_MM_INIT(a, b, ct, rt, kt) matmul_block_init(a, b, 0, ct, rt, kt)
+#define V_MM(a, b, i0, i1, d, ct, rt, kt) matmul_block(a, b, i0, i1, d, 0, ct, rt, kt)
+#endif
 constexpr uint32_t CB_WV = 32, CB_XK = 33, CB_VA = 34, CB_VOWN = 35, CB_VRS = 36, CB_VH = 37, CB_VHO = 38, CB_VHO2 = 39;
 constexpr uint32_t CB_VDO = 40, CB_VDO2 = 41, CB_VI = 21, CB_VRSA = 22, CB_VRT = 23, CB_VJ = 30;
 constexpr uint32_t CB_VP = 3, CB_VXO = 4, CB_VX0 = 5;
@@ -385,9 +407,9 @@ void kernel_main() {
                 reconfig_data_format(CB_WV, CB_XK);
                 pack_reconfig_data_format(CB_VA);
                 for (uint32_t half = 0; half < 2; ++half) {
-                    matmul_block_init(CB_XK, CB_WV, 0, vnn, 1, V_KTR);
+                    V_MM_INIT(CB_XK, CB_WV, vnn, 1, V_KTR);
                     tile_regs_acquire();
-                    for (uint32_t kk = 0; kk < V_KTR; ++kk) matmul_block(CB_XK, CB_WV, kk, half * V_KTR * vnn + kk * vnn, 0, 0, vnn, 1, V_KTR);
+                    for (uint32_t kk = 0; kk < V_KTR; ++kk) V_MM(CB_XK, CB_WV, kk, half * V_KTR * vnn + kk * vnn, 0, vnn, 1, V_KTR);
                     tile_regs_commit();
                     tile_regs_wait();
                     for (uint32_t j = 0; j < vnn; ++j) pack_tile<true>(j, CB_VA, half * V_NNM + j);
@@ -471,7 +493,7 @@ void kernel_main() {
                 DeviceZoneScopedN("C-VDN");
                 reconfig_data_format(CB_WV, CB_VH);
                 pack_reconfig_data_format(CB_VDO);
-                matmul_block_init(CB_VH, CB_WV, 0, V_DSB, 1, vnn);
+                V_MM_INIT(CB_VH, CB_WV, V_DSB, 1, vnn);
                 for (uint32_t bi = 0; bi < 4; ++bi) {
                     // the first-finished chunk (per device, §15) -> CB_VDO2 (reader); the other -> CB_VDO (writer).
                     // CB_WV is popped before CB_VDO is pushed (the writer's next plan_layer reuses the slot).
@@ -479,7 +501,7 @@ void kernel_main() {
                     const uint32_t ocb = bi < 2 ? CB_VDO2 : CB_VDO;
                     if ((bi & 1) == 0) cb_reserve_back(ocb, 2 * V_DSB);
                     tile_regs_acquire();
-                    for (uint32_t j = 0; j < vnn; ++j) matmul_block(CB_VH, CB_WV, j, 2 * V_KTR * vnn + b * vnn * V_DSB + j * V_DSB, 0, 0, V_DSB, 1, vnn);
+                    for (uint32_t j = 0; j < vnn; ++j) V_MM(CB_VH, CB_WV, j, 2 * V_KTR * vnn + b * vnn * V_DSB + j * V_DSB, 0, V_DSB, 1, vnn);
                     tile_regs_commit();
                     tile_regs_wait();
                     for (uint32_t t = 0; t < V_DSB; ++t) pack_tile<true>(t, ocb, (b & 1) * V_DSB + t);
