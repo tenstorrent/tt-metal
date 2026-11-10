@@ -244,7 +244,26 @@ void kernel_main() {
                 if (!budget) issue_some(true);
             }
             const auto kv = TensorAccessor(kv_args, kv_addr[L], KVTB);
+#if defined(MKA_RQKV)
+            // STREAM_EXT: the writer's share of layer L + 1's slice (pages [0, PQ_WS)), spread over this core's V groups.
+            // Safe from group 0: qkv_tail(L) above waited this layer's qkv output, i.e. compute already popped CB_PQ.
+            const bool pqw_go = qrole == QR_EXT && L + 1 < NL && PQ_WS > 0;
+            const uint32_t pqw_ng = (vb1 - vb0 + NBB - 1) / NBB;
+            const uint32_t pqw_per = pqw_ng ? (PQ_WS + pqw_ng - 1) / pqw_ng : PQ_WS;
+            uint32_t pqw_done = 0;
+            const uint32_t pqw_dst = get_write_ptr(CB_PQ);   // 1-slot ring: the writer never moves its copy of the pointer
+            const uint64_t pqw_src = wm.get_noc_addr(wm_page + (L + 1) * pwm_layer);
+#endif
             for (uint32_t b = vb0; b < vb1; b += NBB) {
+#if defined(MKA_RQKV)
+                if (pqw_go && pqw_done < PQ_WS) {
+                    const uint32_t n = (PQ_WS - pqw_done) < pqw_per ? (PQ_WS - pqw_done) : pqw_per;
+                    noc_async_read_set_trid(9);
+                    noc_async_read(pqw_src + pqw_done * MWTB, pqw_dst + pqw_done * MWTB, n * MWTB);
+                    noc_async_read_set_trid(0);
+                    pqw_done += n;
+                }
+#endif
                 const uint32_t nb = (vb1 - b) < NBB ? (vb1 - b) : NBB;
 #if defined(MKA_SPREAD)
                 // spread the planned weight pieces evenly over this core's KV groups (at least `budget` per group):
@@ -275,6 +294,17 @@ void kernel_main() {
                 if (wr_v) cb_push_back(CB_V, NBB * DH);
             }
             if (IS_STREAM) issue_some(true);
+#if defined(MKA_RQKV)
+            if (pqw_go) {
+                if (pqw_done < PQ_WS) {
+                    noc_async_read_set_trid(9);
+                    noc_async_read(pqw_src + pqw_done * MWTB, pqw_dst + pqw_done * MWTB, (PQ_WS - pqw_done) * MWTB);
+                    noc_async_read_set_trid(0);
+                }
+                noc_async_read_barrier_with_trid(9);
+                *l1w(gs[GS_PQH]) = L + 1;   // core-local flag for the reader, which pushes CB_PQ
+            }
+#endif
         }
         if (!IS_STREAM) continue;
         {   // attention done (all 4 SDPA roots) -> wo stand-in + attention AR -> MLP go
@@ -341,5 +371,6 @@ void kernel_main() {
     // host synchronises, and the Q root never re-sends after NL - 2. QPART: every inc was awaited by its owner.
     *l1w(gs[GS_XRDY]) = 0;
     if (qrole == QR_OWNER) *l1w(gs[GS_QPART]) = 0;
+    // GS_PQH is reset by the reader after its last wait (see reader)
 #endif
 }

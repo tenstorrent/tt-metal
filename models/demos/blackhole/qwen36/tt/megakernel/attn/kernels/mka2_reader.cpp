@@ -64,6 +64,7 @@ void kernel_main() {
     const uint32_t qrole = get_arg_val<uint32_t>(a++), wq_addr = get_arg_val<uint32_t>(a++);
     const uint32_t pq_page = get_arg_val<uint32_t>(a++), pq_layer = get_arg_val<uint32_t>(a++);
     const auto wq = TensorAccessor(wq_args, wq_addr, MWTB);
+    bool pq_pending = false;
     if (qrole == QR_EXT) {   // layer 0's slice (bank-local, contiguous)
         cb_reserve_back(CB_PQ, QSL);
         noc_async_read(wq.get_noc_addr(pq_page), get_write_ptr(CB_PQ), QSL * MWTB);
@@ -101,6 +102,9 @@ void kernel_main() {
             noc_async_read_set_trid(0);
         }
 #endif
+#if defined(MKA_RQKV) && defined(MKA_PQPOST)
+        if (pq_pending) { noc_async_read_barrier_with_trid(TRID_PQ); cb_push_back(CB_PQ, QSL); pq_pending = false; }
+#endif
         {   // SDPA: K stream
             DeviceZoneScopedN("R-KV");
             const auto kv = TensorAccessor(kv_args, kv_addr[L], KVTB);
@@ -115,18 +119,26 @@ void kernel_main() {
 #if defined(MKA_RQKV)
             // STREAM_EXT: layer L + 1's slice streams in from the 3rd KV group on (by then compute has run layer L's
             // qkv, which precedes its SDPA, and freed CB_PQ), spread evenly over the remaining groups
+#if defined(MKA_PQPOST)
+            const bool pq_go = false;   // issued after this core's tree step instead (see below)
+#elif defined(MKA_PQSKIP)
+            const bool pq_go = false;
+            if (qrole == QR_EXT && L + 1 < NL) { cb_reserve_back(CB_PQ, QSL); cb_push_back(CB_PQ, QSL); }   // DEBUG: stale slice, no bytes
+#else
             const bool pq_go = qrole == QR_EXT && L + 1 < NL;
+#endif
             const uint32_t pq_g0 = ngrp > 2 ? 2 : (ngrp ? ngrp - 1 : 0);
             const uint32_t pq_ng = ngrp > pq_g0 ? ngrp - pq_g0 : 1;
-            const uint32_t pq_per = (QSL + pq_ng - 1) / pq_ng;   // pages per group
-            uint32_t pq_done = 0, gi = 0, pq_dst = 0;
+            const uint32_t pq_per = (QSL - PQ_WS + pq_ng - 1) / pq_ng;   // pages per group
+            uint32_t pq_done = PQ_WS, gi = 0, pq_dst = 0;
+            bool pq_rsv = false;
             const uint64_t pq_src = wq.get_noc_addr(pq_page + (L + 1) * pq_layer);
 #endif
             for (uint32_t b = b0; b < b1; b += NBB) {
                 const uint32_t nb = (b1 - b) < NBB ? (b1 - b) : NBB;
 #if defined(MKA_RQKV)
                 if (pq_go && gi >= pq_g0 && pq_done < QSL) {
-                    if (pq_done == 0) { cb_reserve_back(CB_PQ, QSL); pq_dst = get_write_ptr(CB_PQ); }
+                    if (!pq_rsv) { cb_reserve_back(CB_PQ, QSL); pq_dst = get_write_ptr(CB_PQ); pq_rsv = true; }
                     const uint32_t n = (QSL - pq_done) < pq_per ? (QSL - pq_done) : pq_per;
                     noc_async_read_set_trid(TRID_PQ);
                     noc_async_read(pq_src + pq_done * MWTB, pq_dst + pq_done * MWTB, n * MWTB);
@@ -170,13 +182,14 @@ void kernel_main() {
             noc_async_read_barrier_with_trid(TRID_WO);
 #if defined(MKA_RQKV)
             if (pq_go) {
-                if (pq_done == 0) { cb_reserve_back(CB_PQ, QSL); pq_dst = get_write_ptr(CB_PQ); }
+                if (!pq_rsv) { cb_reserve_back(CB_PQ, QSL); pq_dst = get_write_ptr(CB_PQ); pq_rsv = true; }
                 if (pq_done < QSL) {
                     noc_async_read_set_trid(TRID_PQ);
                     noc_async_read(pq_src + pq_done * MWTB, pq_dst + pq_done * MWTB, (QSL - pq_done) * MWTB);
                     noc_async_read_set_trid(0);
                 }
                 noc_async_read_barrier_with_trid(TRID_PQ);
+                if (PQ_WS) noc_semaphore_wait_min(l1w(gs[GS_PQH]), L + 1);   // the writer's share landed
                 cb_push_back(CB_PQ, QSL);
             }
 #endif
@@ -221,6 +234,32 @@ void kernel_main() {
             noc_async_read_set_trid(0);
         }
 #endif
+#if defined(MKA_RQKV) && defined(MKA_PQPOST)
+        // STREAM_EXT: issue layer L + 1's whole slice once this core's KV + tree work is done (the STREAM cores are then
+        // in wo / AR / MLP); it lands during that tail and is pushed at the start of layer L + 1
+        if (qrole == QR_EXT && L + 1 < NL) {
+            DeviceZoneScopedN("R-PQ");
+            cb_reserve_back(CB_PQ, QSL);
+            const uint64_t src = wq.get_noc_addr(pq_page + (L + 1) * pq_layer);
+            const uint32_t dst = get_write_ptr(CB_PQ);
+#if defined(MKA_PQCH)
+            // throttled: MKA_PQCH-page chunks, at most MKA_PQN chunks in flight (big single reads from 40 cores flood
+            // the NoC and stall the STREAM cores' tail multicasts)
+            noc_async_read_set_trid(TRID_PQ);
+            for (uint32_t p = 0, c = 0; p < QSL; p += MKA_PQCH, ++c) {
+                if (c && (c % MKA_PQN) == 0) { noc_async_read_barrier_with_trid(TRID_PQ); noc_async_read_set_trid(TRID_PQ); }
+                const uint32_t n = (QSL - p) < MKA_PQCH ? (QSL - p) : MKA_PQCH;
+                noc_async_read(src + p * MWTB, dst + p * MWTB, n * MWTB);
+            }
+            noc_async_read_set_trid(0);
+#else
+            noc_async_read_set_trid(TRID_PQ);
+            noc_async_read(src, dst, QSL * MWTB);
+            noc_async_read_set_trid(0);
+#endif
+            pq_pending = true;
+        }
+#endif
 #if defined(MKA_GUPRE)
         if (IS_STREAM && IS_GU) { noc_async_read_barrier_with_trid(TRID_GU); cb_push_back(CB_W, even_t); }
 #endif
@@ -256,4 +295,7 @@ void kernel_main() {
     // reset the tree's global semaphores for the next pass: every inc into them for layer NL - 1 happened before the
     // matching wait above returned, so nothing arrives after this point
     *l1w(gs[GS_LVL0]) = 0; *l1w(gs[GS_LVL1]) = 0; *l1w(gs[GS_DONE]) = 0;
+#if defined(MKA_RQKV)
+    if (qrole == QR_EXT && PQ_WS) *l1w(gs[GS_PQH]) = 0;   // the writer's last set (NL - 2) preceded our last wait
+#endif
 }

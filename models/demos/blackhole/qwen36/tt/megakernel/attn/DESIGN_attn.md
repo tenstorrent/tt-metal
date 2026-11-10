@@ -169,6 +169,21 @@ passes (FM_NL=5), as the mean of layers 1-3:
 The +15 µs (u1) splits as: qkv chain +5 µs (ext cores' 320-tile matmul + rstd, 10 µs after x vs the 5 µs stand-in),
 SDPA window +17 µs (a physical-x ramp in KV-loop time is back: 100 µs at x=1, 250 µs at x=15), tail -6 µs.
 
+### 6.4 Where the STREAM_EXT qkv slice reads go (u1, 32K, 5-layer mid mean)
+| ext slice (348 KB/core, 13.9 MB/layer) | u1 µs |
+|---|---|
+| reader, interleaved in the KV loop from group 2 (default) | 260 |
+| writer / NOC0 (`MKA_PQW=1`) | 292-295 |
+| half / half (`MKA_PQW=2`) | 273-284 |
+| after the tree, one 348 KB read (`MKA_PQPOST`) | 293 |
+| after the tree, 16-page chunks x2 in flight (`MKA_PQPOST,MKA_PQCH=16,MKA_PQN=2`) | 254 |
+| after the tree, 8 x1 / 32 x4 | 255 / 273 |
+| not read at all (`MKA_PQSKIP`, timing only: stale weights) | **231-233** |
+The slice bytes cost their full DRAM time when they land inside the attention layer: DRAM is saturated in the SDPA
+window, and big reads stall the tail's multicasts. Spec v0.8.1 therefore moves them to the preceding GDN-type layers
+(ext cores idle, DRAM slack), so the slice is resident before the attention layer. The attention-layer bound is the
+`MKA_PQSKIP` number. The GDN-side cost has to be measured in the mixed engine.
+
 ## 7. Spec v0.4 (DESIGN_megakernel §9): CB_X is the UN-NORMED residual
 The real qkv projection (it replaces the MIXN stand-in) must: (1) use qkv weights with input-norm γ (×NORM_FIX) folded
 into the rows (megakernel/weights.py), flag-gated until the output-length gate; (2) read the AR owners' fp32 Σx² partials

@@ -226,7 +226,7 @@ _den = NC + (NCF - NC) * EXTW
 WO_T120 = int(NC * WO_T / _den) if EXT else WO_T
 WO_TX = int(NC * WO_T * EXTW / _den) if EXT else 0
 wo_dummy = ttnn.from_torch(torch.zeros(1, 1, (NC * WO_T + 1024) * TILE, TILE).bfloat16(), dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=dev, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-GSEM = [ttnn.create_global_semaphore(dev, fgrid, 0) for _ in range(10)]
+GSEM = [ttnn.create_global_semaphore(dev, fgrid, 0) for _ in range(11)]
 GSA = [ttnn.get_global_semaphore_address(g) for g in GSEM]
 QROOT = 0; QRP = fphys[QROOT]
 print(f"[mka2] full grid {GXF}x{GYF} ({NCF} cores, {len(stream_idx)} STREAM) groups {[len(m) for m in members]} ctx {CTX} KV {KVDT} "
@@ -389,7 +389,7 @@ def build(out):
         else:
             g_ = 0; i = 0
             r_mk = [0, 0] + z10 + [0, 0, 255, 0, 0]
-            w_mk = [0] + z10 + [0] + [0] * 8 + [0] * 5 + [255] + [0] * 6
+            w_mk = [0] + z10 + [0] + [0] * 8 + [0] * 5 + [255] + [0] * 3 + ([wq_all.buffer_address(), q_slot[fi] * banks + q_bank[fi], PQL] if (RQKV and fi in QROLE) else [0] * 3)
         selff = 0 if c.x < fsplit else 1
         i_s = stream_idx.get(fi, 0)
         rd_w = (isS or EXT) and not WO_NOC0

@@ -14,6 +14,12 @@ constexpr uint32_t CB_ONE = 24, CB_P = 25, CB_R = 26, CB_D = 27, CB_OA = 28, CB_
 constexpr uint32_t CB_RS = 13, CB_QA = 14, CB_QO = 17, CB_QR = 18, CB_PQ = 19, CB_RSP = 20;
 // qkv roles: 0 none, 1 K-half owner (STREAM), 2 K-half partner (STREAM), 3 STREAM_EXT (2 tiles, full K)
 constexpr uint32_t QR_NONE = 0, QR_OWNER = 1, QR_PARTNER = 2, QR_EXT = 3;
+// STREAM_EXT ring split (MKA_PQW): the writer (NOC0) streams pages [0, PQ_WS) of the next layer's slice, the reader
+// (NOC1) [PQ_WS, 2 KT). 0 = all reader, 1 = all writer, 2 = half / half
+#ifndef MKA_PQW
+#define MKA_PQW 0
+#endif
+constexpr uint32_t PQ_QSL = 320, PQ_WS = MKA_PQW == 0 ? 0 : (MKA_PQW == 1 ? PQ_QSL : PQ_QSL / 2);
 #ifndef MKA_NU
 #define MKA_NU 4
 #endif
@@ -22,7 +28,7 @@ constexpr uint32_t QR_NONE = 0, QR_OWNER = 1, QR_PARTNER = 2, QR_EXT = 3;
 #endif
 constexpr uint32_t DH = 8, NO = DH + 1, QT = 8 * MKA_NU, FANOUT = MKA_FAN, NUSR = MKA_NU;   // own users per chip (u8: 4, u1: 1)
 // global-semaphore slots (index into the runtime-arg address array)
-constexpr uint32_t GS_QFLAG = 0, GS_LVL0 = 1, GS_LVL1 = 2, GS_DONE = 3, GS_MIXDONE = 4, GS_ADONE = 5, GS_ADFLAG = 6, GS_KVPROG = 7, GS_QPART = 8, GS_XRDY = 9, NGS = 10;   // KVPROG: core-local count of KV groups the reader pushed (kv_mode 2)
+constexpr uint32_t GS_QFLAG = 0, GS_LVL0 = 1, GS_LVL1 = 2, GS_DONE = 3, GS_MIXDONE = 4, GS_ADONE = 5, GS_ADFLAG = 6, GS_KVPROG = 7, GS_QPART = 8, GS_XRDY = 9, GS_PQH = 10, NGS = 11;   // KVPROG: core-local count of KV groups the reader pushed (kv_mode 2)
 FORCE_INLINE volatile tt_l1_ptr uint32_t* l1w(uint32_t addr) { return reinterpret_cast<volatile tt_l1_ptr uint32_t*>(addr); }
 FORCE_INLINE void spin_cycles(uint32_t cyc) {
     if (cyc == 0) return;
