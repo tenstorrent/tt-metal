@@ -63,6 +63,14 @@ void kernel_main() {
     const uint32_t sh = get_arg_val<uint32_t>(9), sw = get_arg_val<uint32_t>(10);
     const uint32_t role = get_arg_val<uint32_t>(11);  // 0: not a sender; s + 1: sender of blocks b % senders == s
     const uint32_t count_sem[2] = {count_sem0, count_sem1};
+    // Semaphores that other cores update over the NoC: read past the L1 data cache where it is on for this core (the
+    // invalidation is a fence, which costs the polling loops time otherwise).
+    auto l1_word = [](volatile tt_l1_ptr uint32_t* word) {
+#if defined(ENABLE_L1_DATA_CACHE)
+        invalidate_l1_cache();
+#endif
+        return *word;
+    };
     uint32_t count_addr[2];
     volatile tt_l1_ptr uint32_t* count_ptr[2];
     for (uint32_t s = 0; s < 2; s++) {
@@ -97,7 +105,7 @@ void kernel_main() {
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(partial_sems[1]))};
     auto all_counted = [&](uint32_t n) {
         for (uint32_t p = 0; p < partners; p++) {
-            if (*partial_ptr[p] <= n) {
+            if (l1_word(partial_ptr[p]) <= n) {
                 return false;
             }
         }
@@ -221,7 +229,7 @@ void kernel_main() {
         if (role == s + 1) {
             volatile tt_l1_ptr uint32_t* ready_ptr =
                 reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(ready_sems[slot]));
-            while (*ready_ptr < band_cores) {
+            while (l1_word(ready_ptr) < band_cores) {
                 drain();
                 signal_ahead(b);
                 read_ahead(b);
@@ -243,7 +251,7 @@ void kernel_main() {
             }
             *count_ptr[s] = n;
         } else {
-            while (*count_ptr[s] < n) {
+            while (l1_word(count_ptr[s]) < n) {
                 drain();
                 signal_ahead(b);
                 read_ahead(b);
