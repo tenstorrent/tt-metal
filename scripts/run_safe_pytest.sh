@@ -18,7 +18,7 @@
 #   50000; pre-existing env wins). On hang the watchdog _Exit(1)'s the child;
 #   we classify that as HANG and dump the watchdog message.
 #
-# Usage: scripts/run_safe_pytest.sh [--dev] [--run-all] [--profile] [--sim-workers N] [--precompile|--no-precompile] [--farm-min-programs N] [--jit-server[=host:port]|--no-jit-server] <test_path> [extra_pytest_args...]
+# Usage: scripts/run_safe_pytest.sh [--dev] [--run-all] [--profile [--no-py-zones]] [--sim-workers N] [--precompile|--no-precompile] [--farm-min-programs N] [--jit-server[=host:port]|--no-jit-server] <test_path> [extra_pytest_args...]
 #
 # Wrapper flags below are position-independent: they may appear before or after the test path and
 # may be interleaved with pytest args. Everything the wrapper does not recognize (the test path,
@@ -30,13 +30,18 @@
 #                    on hang with full triage + watcher log dump.
 #   --run-all        Run all tests instead of stopping on first failure (-x).
 #                    Useful for eval scoring where you need full pass/fail counts.
-#   --profile        Run under the Tracy device profiler (python -m tracy -r -p). Emits
+#   --profile        Run under the Tracy device profiler (python -m tracy -r). Emits
 #                    a per-op CSV (generated/profiler/reports/<ts>/ops_perf_results*.csv)
 #                    and prints its path as "SAFE_PYTEST: PROFILER CSV: <path>" next to
 #                    the result line. Requires a Tracy-enabled build. NOTE: the tracy
 #                    wrapper masks pytest's exit code, so a profiled run is reported
 #                    PASS as long as profiling completed, regardless of the underlying
 #                    test result. Hangs are still detected and still reset the device.
+#   --no-py-zones    With --profile: do not record a Tracy host zone for every Python
+#                    call (python -m tracy -r -p). The per-op CSV and the device log are
+#                    the same, and the run is ~3 s shorter. Leave it out only when you
+#                    want Python call zones in the Tracy GUI trace. No effect without
+#                    --profile.
 #   --sim-workers N  Sim only: pytest-xdist worker count. Each worker dlopens
 #                    its own libttsim (no shared device state). Default is 16.
 #                    Pass 1 to serialize (e.g. when DPRINT ordering matters or
@@ -165,6 +170,7 @@ PYTEST_STDOUT_LOG="/tmp/safe-pytest-stdout-$$.log"
 DEV_MODE=false
 FAIL_FAST=true
 PROFILE_MODE=false
+TRACY_PY_ZONES=true
 SIM_WORKERS=""
 SIM_WORKERS_GIVEN=false
 # Precompile runs INSIDE the real pytest session (tests/plugins/up_front_collect.py with
@@ -211,6 +217,11 @@ while [[ $# -gt 0 ]]; do
         --profile)
             # Run the real pytest under the Tracy device profiler (see PYTEST_CMD below).
             PROFILE_MODE=true
+            shift
+            ;;
+        --no-py-zones)
+            # With --profile: tracy -p, no host zone per Python call (see TRACY_FLAGS below).
+            TRACY_PY_ZONES=false
             shift
             ;;
         --sim-workers)
@@ -607,7 +618,7 @@ trap '_emit_device_timing; emit_missing_ttexalens_warning' EXIT
 #   * User args last means an explicit `--maxfail=N` still wins over our -x, as it did before.
 # pytest options are order-independent, so leading -x / -n behave exactly as trailing ones did.
 #
-# --profile: wrap pytest in the Tracy profiler. `python -m tracy -r -p` runs pytest
+# --profile: wrap pytest in the Tracy profiler. `python -m tracy -r` runs pytest
 #   as a child and post-processes results into ops_perf_results*.csv on pass or
 #   fail. Its exit-code masking is handled at the result check below.
 #
@@ -624,14 +635,15 @@ if [[ "${SAFE_PYTEST_WARM:-0}" == "1" && "$SIM_MODE" == false ]]; then
     WARM_MODE=true
 fi
 WARM_CLIENT=(python3 "$REPO_DIR/scripts/safe_pytest_warm.py" run)
-# --profile records only explicitly enabled host zones (tracy -p). Without -p, tracy installs sys.setprofile and
-# emits a host zone for EVERY Python call in the session (pytest, torch, harness, the precompile collect pass),
-# which costs ~3-4 s per run and changes nothing in the reports: the ops CSV (OP CODE, call counts, attributes,
-# host/device durations) and profile_log_device.csv come from the C++ op/device instrumentation either way.
-# SAFE_PYTEST_TRACY_PY_ZONES=1 restores per-function Python zones (only visible in the Tracy GUI trace).
-TRACY_FLAGS=(-r -p)
-if [[ "${SAFE_PYTEST_TRACY_PY_ZONES:-0}" == "1" ]]; then
-    TRACY_FLAGS=(-r)
+# --profile runs `python -m tracy -r`, as it always has: tracy installs sys.setprofile and emits a host zone for
+# EVERY Python call in the session (pytest, torch, harness, the precompile collect pass). Those zones are only
+# visible in the Tracy GUI trace and cost ~3-4 s per run.
+# --no-py-zones adds tracy's -p, which records only explicitly enabled host zones. The reports do not change:
+# the ops CSV (OP CODE, call counts, attributes, host/device durations) and profile_log_device.csv come from
+# the C++ op/device instrumentation either way.
+TRACY_FLAGS=(-r)
+if [[ "$TRACY_PY_ZONES" == false ]]; then
+    TRACY_FLAGS=(-r -p)
 fi
 if [[ "$PROFILE_MODE" == true ]]; then
     if [[ "$WARM_MODE" == true ]]; then
