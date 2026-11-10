@@ -496,9 +496,23 @@ void kernel_main() {
     if (IS_STREAM) qsk_start(0);
 #endif
     constexpr uint32_t TRID_V = 5;
+#if defined(MKA_GDN24)
+    // += 1 multicast to a device-local global sem on the 24 GDN cores (rows 8-9), from the Q root
+    auto gdn_inc = [&](uint32_t addr) {
+        constexpr uint32_t gr[2][5] = MKA_GDN_RECTS;
+        for (uint32_t i = 0; i < 2; ++i)
+            noc_semaphore_inc_multicast(get_noc_multicast_addr(gr[i][0], gr[i][1], gr[i][2], gr[i][3], addr), 1, gr[i][4]);
+        noc_async_atomic_barrier();
+    };
+#endif
     for (uint32_t L = 0; L < NL; ++L) {
         const bool att = is_attn(L);
         const uint32_t A = aidx(L);
+#if defined(MKA_GDN24) && defined(MKA_GDN_ATTNKV)
+        // attn_kv (GDN I/O schedule, modes 3 / 4): += 1 at attention-layer start (mode 4 starts the post-attention state
+        // prefetch) and += 1 at SDPA end (mode 3 releases its held writes) -> 2 per attention layer, cumulative
+        if (att && is_qroot) gdn_inc(MKA_GDN_ATTNKV);
+#endif
         if (!IS_STREAM && !att) { V12_OWNER(L); continue; }   // ATTN-only cores idle through GDN-type layers (owners: v12 MLP)
 #if defined(MKA_DBGSPIN)
         if (L > 0) spin_cycles(400000);
@@ -610,12 +624,7 @@ void kernel_main() {
 #if defined(MKA_GDN24)
             // GDN role (spec §17 / §20): this GDN-type layer's step may read its prefix input -> in_ready += 1 on the 24
             // GDN cores (rows 8-9), from the Q root (device-local global sem; the GDN cores wait >= g + 1, then reset)
-            if (is_qroot) {
-                constexpr uint32_t gr[2][5] = MKA_GDN_RECTS;
-                for (uint32_t i = 0; i < 2; ++i)
-                    noc_semaphore_inc_multicast(get_noc_multicast_addr(gr[i][0], gr[i][1], gr[i][2], gr[i][3], MKA_GDN_INREADY), 1, gr[i][4]);
-                noc_async_atomic_barrier();
-            }
+            if (is_qroot) gdn_inc(MKA_GDN_INREADY);
 #endif
 #if defined(MKA_MIXTRID) && MKA_MIXTRID
             // GDN-type layer: the MLP slots of layer L are pushed here (before plan_layer(L + 1) reserves the other slot)
@@ -846,6 +855,9 @@ void kernel_main() {
             DeviceZoneScopedN("W-WOAR");
             if (is_qroot) {
                 noc_semaphore_wait_min(l1w(gs[GS_ADONE]), NUSR * (A + 1));
+#if defined(MKA_GDN24) && defined(MKA_GDN_ATTNKV)
+                gdn_inc(MKA_GDN_ATTNKV);   // SDPA end (all roots done): attn_kv = 2A + 2
+#endif
 #if defined(MKA_RWO)
                 noc_semaphore_wait_min(l1w(gs[GS_WODONE]), 16 * (A + 1));   // every owner chunk of wo complete
 #endif
