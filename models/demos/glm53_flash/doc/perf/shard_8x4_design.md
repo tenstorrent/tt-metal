@@ -212,3 +212,14 @@ whose knob-off kernels equal this tree's. RS1_EARLY only moves send timing (the 
 lane skew: shard_plan.rs1_early_gates), yet rev 67 alone at 4 K x 16 distinct left the KPH run's user 0 at decode id 9
 (785 1196 702 3267 291 264 1467 429 374, then 7548 vs 16897); it stays opt-in until a knob-off run of the same tree at
 B 16 shows whether the KPH reference itself reproduces.
+
+## 11. Batch scaling at 1 M context per user (2026-11-10, galaxy defaults KPH + AGK)
+
+| users at 1 M each | 1 | 2 | 4 | 8 | 16 |
+|---|---|---|---|---|---|
+| decode step | 19.1 ms | 20.8 | 25.4 | 36.1 | 46.2 |
+| tok/s per user | 52.3 | 48.1 | 39.3 | 27.7 | 21.7 |
+| TTFT (all users back to back) | 345 s | 690 s | 1378 s | 2779 s | 5520 s |
+
+16 x 1 M is resident on one 8x4. The MoE x-row coalesce (`GLM53_MKX_XROWS_COAL`, default) adds -2.8 ms at 4 K x 16
+(40.8 -> 38.0 ms) and -0.8 ms at 32 K x 4 (ids identical).

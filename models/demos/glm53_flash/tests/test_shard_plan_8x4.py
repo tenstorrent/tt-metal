@@ -898,6 +898,7 @@ def test_galaxy_defaults_shard_tail(monkeypatch):
     from models.autoports.zai_org_glm_5_3_flash.tt import galaxy_defaults as GD
 
     assert GD.KNOBS["GLM53_DSA_SHARD_AGK"] == "1"
+    assert GD.KNOBS["GLM53_MKX_XROWS_COAL"] == "1"
     assert not {"GLM53_DSA_SHARD_RS1_EARLY", "GLM53_DSA_SHARD_COMB", "GLM53_DSA_SHARD_AGB"} & set(GD.KNOBS)
     keys = list(GD.KNOBS) + ["GLM53_MODEL_TRACE_MB", "GLM53_PF_SPARSE_T", "GLM53_PREFILL_BUCKETS"]
     keys += [v for v in KNOB_ENV.values() if v not in keys] + ["GLM53_DSA_SHARD_AGB"]

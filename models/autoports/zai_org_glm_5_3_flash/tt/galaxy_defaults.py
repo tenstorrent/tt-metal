@@ -25,6 +25,9 @@ KNOBS = {
     # composes). GLM53_DSA_SHARD_AGK: the key-packed all-gather -- AG1 ships each token's candidate keys in one page (2
     # pages per token instead of 6: a third of both AG rounds' bytes); 4 K x 16 42.6 -> 41.0 ms, 32 K x 4 ids identical
     "GLM53_DSA_SHARD_AGK": "1",
+    # the routed-expert phase reads x one tile face at a time instead of one 32-B row (kernels/mkx/xa.cpp; the same bytes
+    # at the same addresses): 4 K x 16 40.8 -> 38.0 ms, 32 K x 4 22.8 -> 22.0 ms with ids and text identical
+    "GLM53_MKX_XROWS_COAL": "1",
     # opt-in, not defaults: GLM53_DSA_SHARD_RS1_EARLY (pass 0's RS1 slices stream while pass 1 computes, two-field
     # gates of MLA_REV 67; 4 K x 16 42.6 -> 41.6 ms, but alone it moved user 0 off the KPH ids at decode id 9 -- out
     # until the knob-off control of the same tree decides), GLM53_DSA_SHARD_COMB (the fold combine on the lane roots:
