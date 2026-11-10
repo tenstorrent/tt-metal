@@ -14,7 +14,10 @@
 //   [0] txns lo [1] txns hi [2] mismatches [3] whole page stale [4] torn / other [5] unresolved
 //   [6] max re-reads [7] max cycles [8] timeouts [9] flag > 1 at wait [10] final flag != 0 [11] logged
 //   [12..15] page0 / page1 NoC address as read (lo, hi)
-//   [16 + 8 i] mismatch i (< 8): seq, page, w0, w1, flag at wait, re-reads, cycles, words not of seq
+//   [16 + 8 i] mismatch i (< 8): seq, page, w0, w1, flag at wait, re-reads (0xFFFFFFFF: never resolved),
+//              cycles from the first bad read to the good one (includes checking + re-read time: an upper
+//              bound, not the visibility lag), words not of seq | 0x80000000 if the whole page was seq - 2
+// A page that never resolves stops the stream (the writer then times out waiting for its credit).
 
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
@@ -38,6 +41,7 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* state = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_arg_val<uint32_t>(a++));
     volatile tt_l1_ptr uint32_t* res = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_arg_val<uint32_t>(a++));
     const uint32_t timeout = get_arg_val<uint32_t>(a++);
+    const uint32_t read_delay = get_arg_val<uint32_t>(a++);  // experiment: cycles between seeing the flag and the read
     const uint32_t num_stop = get_arg_val<uint32_t>(a++);  // hammer cores to release: (x, y)
     const uint32_t stop_w = get_arg_val<uint32_t>(a++);
     const uint32_t stop_r = get_arg_val<uint32_t>(a++);
@@ -50,18 +54,18 @@ void kernel_main() {
     const uint64_t credit_noc = get_noc_addr(send_x, send_y, credit_addr);
     const uint32_t base = *state;
 
-    auto pat = [](uint32_t seq, uint32_t i) {
-        return i == 0 ? seq : i == 1 ? ~seq : (seq * 0x9E3779B1u) ^ (i * 0x85EBCA77u);
+    auto pat = [](uint32_t seq, uint32_t page, uint32_t i) {
+        return i == 0 ? seq : i == 1 ? ~seq : i == 2 ? page : (seq * 0x9E3779B1u) ^ (i * 0x85EBCA77u);
     };
     auto read_page = [&](uint64_t addr) {
         noc_async_read(addr, buf, page_bytes);
         noc_async_read_barrier();
         invalidate_l1_cache();
     };
-    auto bad_words = [&](uint32_t seq) {
+    auto bad_words = [&](uint32_t seq, uint32_t page) {
         uint32_t b = 0;
         for (uint32_t i = 0; i < words; ++i) {
-            b += rw[i] != pat(seq, i) ? 1 : 0;
+            b += rw[i] != pat(seq, page, i) ? 1 : 0;
         }
         return b;
     };
@@ -84,32 +88,43 @@ void kernel_main() {
             break;
         }
         res[9] += fv > 1 ? 1 : 0;
+        if (read_delay) {
+            for (uint32_t s = get_timestamp_32b(); get_timestamp_32b() - s < read_delay;) {
+            }
+        }
 
         const uint32_t page = (seq & 1) ? page1 : page0;
         const uint64_t addr = src.get_noc_addr(page);  // for this kernel's NoC
         read_page(addr);
-        const uint32_t bad = bad_words(seq);
+        const uint32_t bad = bad_words(seq, page);
         if (bad != 0) {  // flag seen, data not visible
             const uint32_t w0 = rw[0], w1 = rw[1];
-            const bool whole_old = bad_words(seq - 2) == 0;  // the previous write to this page
+            const bool whole_old = bad_words(seq - 2, page) == 0;  // the previous write to this page
             const uint32_t t0 = get_timestamp_32b();
             uint32_t rr = 0;
-            while (rr < kMaxRereads && bad_words(seq) != 0) {
+            bool ok = false;
+            while (!ok && rr < kMaxRereads) {
                 for (uint32_t s = get_timestamp_32b(); get_timestamp_32b() - s < kDelay;) {
                 }
                 read_page(addr);
                 ++rr;
+                ok = bad_words(seq, page) == 0;
             }
             const uint32_t cyc = get_timestamp_32b() - t0;
             res[2] += 1;
             res[whole_old ? 3 : 4] += 1;
-            res[5] += rr == kMaxRereads ? 1 : 0;
+            res[5] += ok ? 0 : 1;
             max_to(6, rr);
             max_to(7, cyc);
             if (res[11] < kLog) {
                 volatile tt_l1_ptr uint32_t* r = res + 16 + 8 * res[11];
-                r[0] = seq, r[1] = page, r[2] = w0, r[3] = w1, r[4] = fv, r[5] = rr, r[6] = cyc, r[7] = bad;
+                r[0] = seq, r[1] = page, r[2] = w0, r[3] = w1, r[4] = fv, r[5] = ok ? rr : 0xFFFFFFFFu, r[6] = cyc;
+                r[7] = bad | (whole_old ? 0x80000000u : 0u);
                 res[11] += 1;
+            }
+            if (!ok) {  // keep the evidence: stop this stream here
+                timed_out = 1;
+                break;
             }
         }
         ++txn;
