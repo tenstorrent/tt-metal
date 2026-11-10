@@ -71,7 +71,7 @@ ProgramSpecAttributes make_program_spec_attributes(
             run_args != mesh_run_args.programs.end(),
             "generic_op: the MeshProgramRunArgs has no run args for mesh range {}",
             range);
-        attributes.programs.push_back({.range = range, .spec = &spec, .run_args = &run_args->second});
+        attributes.programs.emplace_back(range, spec, run_args->second);
     }
     return attributes;
 }

@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <functional>
 #include <tuple>
 #include <variant>
 #include <vector>
@@ -24,12 +25,12 @@ namespace ttnn::operations::generic {
 // programs to Metal unchanged and adds program caching, mesh dispatch and per-call argument checks.
 struct GenericProgramSpecDeviceOperation {
     struct operation_attributes_t {
-        // A program, the devices it runs on, and its run args. The program and run args point into the caller's
+        // A program, the devices it runs on, and its run args. The program and run args refer to the caller's
         // objects, which outlive the call.
         struct Program {
             ttnn::MeshCoordinateRange range;
-            const tt::tt_metal::experimental::ProgramSpec* spec = nullptr;
-            const tt::tt_metal::experimental::ProgramRunArgs* run_args = nullptr;
+            std::reference_wrapper<const tt::tt_metal::experimental::ProgramSpec> spec;
+            std::reference_wrapper<const tt::tt_metal::experimental::ProgramRunArgs> run_args;
         };
         std::vector<Program> programs;
         // The run args' PrefetcherPipes, which ttnn's framework rebinds on a cache hit. The ttnn::prim overloads fill

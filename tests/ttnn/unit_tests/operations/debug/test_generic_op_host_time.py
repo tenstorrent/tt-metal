@@ -24,7 +24,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tests.ttnn.utils_for_testing import assert_with_ulp
 
 E = ttnn.experimental
 UNARY_KERNELS = "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels"
@@ -180,8 +180,16 @@ def test_per_call_host_time_against_the_program_descriptor_form(device, cores):
     run_args = program_run_args(input_tensor, output_tensor, core_list)
 
     # Both forms compute the same output.
-    assert_with_pcc(torch.exp(torch_input), ttnn.to_torch(ttnn.generic_op(io_tensors, descriptor)), 0.999)
-    assert_with_pcc(torch.exp(torch_input), ttnn.to_torch(E.generic_op(io_tensors, spec, run_args)), 0.999)
+    assert_with_ulp(
+        expected_result=torch.exp(torch_input),
+        actual_result=ttnn.to_torch(ttnn.generic_op(io_tensors, descriptor)),
+        ulp_threshold=2,
+    )
+    assert_with_ulp(
+        expected_result=torch.exp(torch_input),
+        actual_result=ttnn.to_torch(E.generic_op(io_tensors, spec, run_args)),
+        ulp_threshold=2,
+    )
 
     times = {
         "ProgramDescriptor": per_call_us(device, lambda: ttnn.generic_op(io_tensors, descriptor)),
