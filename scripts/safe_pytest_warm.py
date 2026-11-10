@@ -909,7 +909,8 @@ def main() -> int:
             return client_run("pytest", None, rest[1:])
         if len(rest) >= 2 and rest[0] == "-m" and rest[1] in RUN_MODULES:
             return client_run("module", rest[1], rest[2:])
-        print(f"usage: safe_pytest_warm.py run (--pytest ARGS... | -m {'|'.join(RUN_MODULES)} ARGS...)", file=sys.stderr)
+        modules = "|".join(RUN_MODULES)
+        print(f"usage: safe_pytest_warm.py run (--pytest ARGS... | -m {modules} ARGS...)", file=sys.stderr)
         return 2
     print(f"unknown command {cmd!r}", file=sys.stderr)
     return 2
