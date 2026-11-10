@@ -578,3 +578,26 @@ gates**, with thin u1 margin. Persistent fabric connections add margin; BFP8 pay
   2. **Streaming reduce** (accumulate on arrival): required to fit the ~100 KB L1 budget at integration.
   3. Pipelined per-packet flush (rotating headers).
   4. BFP8 payload: flag only, gated.
+
+**RS started per down-chunk (AR track, -mk-ar @a17e60b0376; synthetic producer, bit-identical on 8 devices):**
+On-path = marginal per-iteration time − the 15δ release window.
+
+| Release order | δ 0 | 0.5 µs | 1 µs | 2 µs |
+|---|---|---|---|---|
+| Chunk index, same on every device | 18.13 | — | 16.7-17.6 | — |
+| **rot**: per device, farthest-owned chunks first, own chunks last | — | 11.08 | **8.97** | 8.70 |
+
+**Pinned contract (v0.7) for every AR producer (v12 down stage, attention wo):** on each device, owners complete
+their chunks in **descending ring distance from the chunk's owner device, the device's own chunks last**. This is a
+per-device permutation of the owner (column-sum) completion order. Equivalent if owners can't be reordered: rotate
+per device which K-row the down stage finishes first.
+
+**Result:** on-path AR ≈ 9 µs + 3.2 µs split-K delivery ≈ **12 µs**. Projection (§8e layers):
+
+| On-path AR | u8 (gate 13.7) | u1 (gate 9.4) | u1 + GDN_STEP_U1 |
+|---|---|---|---|
+| 12 µs | **12.23 ms** | **9.38 ms** (0.02 margin) | **~8.37 ms** |
+| 15 µs | 12.62 ms | 9.76 ✗ | ~8.75 ms |
+
+**Both gates pass at ~12 µs on-path AR. With GDN_STEP_U1, u1 has ~1 ms margin.** Remaining AR items: streaming reduce
+(L1), rotating packet headers.
