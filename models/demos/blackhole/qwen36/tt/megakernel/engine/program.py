@@ -6,6 +6,11 @@ bench is a thin wrapper and every engine flag behaves exactly as before. Step 2 
 (``weight_layouts`` / ``build_program`` of integ/DESIGN_integration.md §11): real weights from weights_mk.repack,
 the vLLM KV caches / page table / kvpos from per_replay, x_in / x_out instead of the synthetic x.
 
+Step 2 rules (spec v1.25): the runtime-arg region and the CB-config block (sized by the max CB index) are program-wide
+(dispatch.cpp), so every core pays for the largest and STREAM is ~40 B from the 70656 B kernel-config limit. Per-core
+tables (AR roles, v12 slot tables, GDN page maps, the phase table) therefore travel as per-kind "arg blocks": one
+sharded L1 (or DRAM) tensor per kind, its address in a single runtime arg, read once at kernel init. CB ids < 45.
+
 ``setup_bench(dev, MESH, mesh_identity)`` returns the setup's names (prog, the io tensors, golds, flags) as a dict.
 The caller (bench) must already have installed its mesh shims (ttnn.from_torch / to_torch / generic_op) when MESH.
 """
