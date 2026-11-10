@@ -17,6 +17,9 @@ constexpr uint32_t CB_RS = 13, CB_QA = 14, CB_QO = 17, CB_QR = 18, CB_PQ = 19, C
 constexpr uint32_t CB_TF = 31;
 // MKA_RWO (real wo, E'): A rows (48 bf16 tiles), sig(gate) (48 tiles, aliased in place by A (.) S), owner CB_XO (10 tiles)
 constexpr uint32_t CB_A = 15, CB_S = 21, CB_AS = 22, CB_XO = 23, WK = 48, WN = 160, WO_MAXT = 5;
+// MKA_WORING: the Wo slice gets its own ring (CB 31, a full 5 x 48-page slot) filled during the GDN-type layers before
+// its attention layer (spec §18 frees the qkv ring; this emulates it), so no Wo byte lands in the SDPA window
+constexpr uint32_t CB_WOR = 31, WOR_SLOT = WO_MAXT * WK;
 constexpr uint32_t NRF = 3;
 // KV cache addressing. MKA_KVPROD (prod vLLM): per layer TWO tensors paged_k / paged_v [num_blocks, n_kv_heads,
 // block_size, 256] TILE bf8, tile page of (block p, head h, pos-tile r, dim-tile c) = ((p * NKVH + h) * BS32 + r) * 8 + c.

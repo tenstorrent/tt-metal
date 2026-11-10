@@ -46,6 +46,11 @@ constexpr uint32_t QO_SLOT = 5;
 constexpr uint32_t QO_SLOT = 0;
 #endif
 constexpr uint32_t CB_A = 15, CB_S = 21, CB_AS = 22, WK = 48, PQ_QSL = 320;
+#if defined(MKA_WORING)
+constexpr uint32_t CB_WSL = 31, WSL_N = 5 * WK;   // own Wo ring
+#else
+constexpr uint32_t CB_WSL = CB_PQ, WSL_N = PQ_QSL;
+#endif
 #ifndef MKA_NU
 #define MKA_NU 4
 #endif
@@ -372,11 +377,11 @@ void kernel_main() {
             cb_pop_front(CB_A, WK);
             cb_pop_front(CB_S, WK);
             cb_wait_front(CB_AS, WK);
-            cb_wait_front(CB_PQ, PQ_QSL);
-            reconfig_data_format(CB_PQ, CB_AS);
-            matmul_block_init(CB_AS, CB_PQ, 0, wo_nt, 1, WK);
+            cb_wait_front(CB_WSL, WSL_N);
+            reconfig_data_format(CB_WSL, CB_AS);
+            matmul_block_init(CB_AS, CB_WSL, 0, wo_nt, 1, WK);
             tile_regs_acquire();
-            for (uint32_t k = 0; k < WK; ++k) matmul_block(CB_AS, CB_PQ, k, k * wo_nt, 0, 0, wo_nt, 1, WK);
+            for (uint32_t k = 0; k < WK; ++k) matmul_block(CB_AS, CB_WSL, k, k * wo_nt, 0, 0, wo_nt, 1, WK);
             tile_regs_commit();
             cb_reserve_back(CB_QO, QO_SLOT);
             tile_regs_wait();
@@ -385,7 +390,7 @@ void kernel_main() {
             tile_regs_release();
             cb_push_back(CB_QO, QO_SLOT);
             cb_pop_front(CB_AS, WK);
-            cb_pop_front(CB_PQ, PQ_QSL);
+            cb_pop_front(CB_WSL, WSL_N);
         }
 #endif
         if (!IS_STREAM) continue;

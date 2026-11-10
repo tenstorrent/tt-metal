@@ -398,6 +398,7 @@ def q_rargs(fi):
     ro = QROLE.get(fi, (0,))[0]
     return [ro, wq_all.buffer_address(), (q_slot[fi] * banks + q_bank[fi]) if ro else 0, PQL] + wo_rargs(fi)
 RWO = ('MKA_RWO', '1') in MKDEF
+assert not (('MKA_WORING', '1') in MKDEF and ('MKA_TREEFLAG', '1') in MKDEF), 'CB 31: WORING xor TREEFLAG'
 if RWO and ('MKA_LEAN_C', '1') not in MKDEF: MKDEF = MKDEF + [('MKA_LEAN_C', '1')]
 WOT, WOP, WOB = {}, {}, {}
 if RWO:
@@ -471,7 +472,8 @@ def wo_wargs(fi):
     oc = owner_fi.index(fi) if fi in owner_fi else 255
     return [len(t_)] + (t_ + [0] * 5)[:5] + [1 if fi == WCC else 0, oc] + RECTS_E + [self_re(fi) if fi in WOT else 3] + \
         sum(([fphys[f_].x, fphys[f_].y] for f_ in owner_fi), []) + [wod.buffer_address()]
-WOHELP = os.environ.get('MKA_WOHELP', '1') == '1'
+WORING = ('MKA_WORING', '1') in MKDEF
+WOHELP = os.environ.get('MKA_WOHELP', '1') == '1' and not WORING
 HLP = {}   # helper fi -> (ext fi, page offset, pages);  OWN[ext fi] = own pages
 OWN = {}
 if RWO:
@@ -511,6 +513,7 @@ def build(out):
         cbs = [c_ for c_ in cbs if not any(f_.buffer_index == 17 for f_ in c_.format_descriptors)]
         assert sum(1 for c_ in cbs for f_ in c_.format_descriptors if f_.buffer_index == 17) == 0
         cbs = cbs + [cbd(17, ttnn.bfloat16, 5, kgrid), cbd(15, ttnn.bfloat16, 48, ext_crs), cbd(23, ttnn.bfloat16, 10, ext_crs),
+                     *([cbd(31, ttnn.bfloat8_b, 5 * 48, ext_crs)] if WORING else []),
                      ttnn.CBDescriptor(total_size=48 * _p, core_ranges=ext_crs, format_descriptors=[
                          ttnn.CBFormatDescriptor(buffer_index=21, data_format=ttnn.bfloat16, page_size=_p),
                          ttnn.CBFormatDescriptor(buffer_index=22, data_format=ttnn.bfloat16, page_size=_p)])]

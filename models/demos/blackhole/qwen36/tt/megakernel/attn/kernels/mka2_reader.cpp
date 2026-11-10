@@ -119,6 +119,14 @@ void kernel_main() {
         noc_async_read_barrier();
         cb_push_back(CB_PQ, QSL);
     }
+#if defined(MKA_RWO) && defined(MKA_WORING)
+    if (rw_nt && La0 < NL && !(kPqGdn && gdn_run(La0) > 0)) {
+        cb_reserve_back(CB_WOR, WOR_SLOT);
+        noc_async_read(wow.get_noc_addr(rw_page + La0 * rw_pl), get_write_ptr(CB_WOR), rw_nt * WK * MWTB);
+        noc_async_read_barrier();
+        cb_push_back(CB_WOR, WOR_SLOT);
+    }
+#endif
 #endif
     const auto wo = TensorAccessor(wo_args, wo_addr, WOTB);
     const uint32_t scr = get_write_ptr(CB_SCR);
@@ -157,6 +165,23 @@ void kernel_main() {
                 noc_async_read_set_trid(0);
                 noc_async_read_barrier_with_trid(TRID_PQ);
                 if (j + 1 == run) cb_push_back(CB_PQ, QSL);
+#if defined(MKA_RWO) && defined(MKA_WORING)
+                if (rw_nt) {   // the next attention layer's Wo slice, same share / throttle (ring popped by the last wo)
+                    const uint32_t wn = rw_nt * WK, w0 = j * wn / run, w1 = (j + 1) * wn / run;
+                    if (j == 0) cb_reserve_back(CB_WOR, WOR_SLOT);
+                    const uint64_t wsrc = wow.get_noc_addr(rw_page + Ln * rw_pl);
+                    const uint32_t wdst = get_write_ptr(CB_WOR);
+                    noc_async_read_set_trid(TRID_PQ);
+                    for (uint32_t p = w0, c = 0; p < w1; p += MKA_PQCH, ++c) {
+                        if (c && (c % MKA_PQN) == 0) { noc_async_read_barrier_with_trid(TRID_PQ); noc_async_read_set_trid(TRID_PQ); }
+                        const uint32_t n = (w1 - p) < MKA_PQCH ? (w1 - p) : MKA_PQCH;
+                        noc_async_read(wsrc + p * MWTB, wdst + p * MWTB, n * MWTB);
+                    }
+                    noc_async_read_set_trid(0);
+                    noc_async_read_barrier_with_trid(TRID_PQ);
+                    if (j + 1 == run) cb_push_back(CB_WOR, WOR_SLOT);
+                }
+#endif
             }
             continue;
         }
@@ -226,6 +251,8 @@ void kernel_main() {
 #if defined(MKA_RWO)
 #if defined(MKA_RWOSKIP)
             const uint32_t wo_np = 0;   // DEBUG timing split: Wo slice not read (stale ring; wo PCC invalid)
+#elif defined(MKA_WORING)
+            const uint32_t wo_np = 0;   // filled during the GDN layers (own ring CB 31)
 #else
             const uint32_t wo_np = rw_own;   // pages of this core's Wo slice it reads itself (rest: STREAM helpers)
 #endif
@@ -326,7 +353,7 @@ void kernel_main() {
                 cb_push_back(CB_PQ, QSL);
             }
 #endif
-#if defined(MKA_RWO)
+#if defined(MKA_RWO) && !defined(MKA_WORING)
             if (rw_nt) {
                 if (!wo_rsv) { cb_reserve_back(CB_PQ, QSL); wo_dst = get_write_ptr(CB_PQ); wo_rsv = true; }
                 if (wo_done < wo_np) {
