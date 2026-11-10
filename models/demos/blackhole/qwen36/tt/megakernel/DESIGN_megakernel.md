@@ -484,3 +484,28 @@ layers are pessimistic; rebase onto 1d559f26341 before the next mixed run.
   phases. L1 on these cores: AR buffers ≤~100 KB (CB 17-20) + EXT ring + SDPA working set must fit, so check the
   budget at integration.
 - **The AR track must move its owner coordinates** from (0..7, 8..9) to (10..11, 0..7).
+
+## 8e. Projection of record, updated with in-engine u1 GDN (2026-11-10, -mk-mixed2 @746a7169b44, d27u08)
+Mixed NL=8 (2 × [G,G,G,A]), 32K, BFP8 KV, with EXT + bank fix + tail port (DNPIPE, FLAG_FLUSH, MIXTRID). All PCCs as
+before (mixer 0.99999, SDPA 0.99998, MLP 0.99998). CSVs are on the laptop at .claude/tmp/r16/mega/si_mx2_{u8,u1}/.
+
+| Layer (µs, middle means, with 2 × 18 AR stalls) | u8 | u1 |
+|---|---|---|
+| GDN-type (5 middle layers; GDN step stand-in 64) | 138.0 (136.8 / 140.0 / 135.1 / 141.1 / 137.2) | 142.3 (150.3 / 136.5 / 145.8 / 134.0 / 145.0) |
+| Attention-type (L3 middle) | 367.3 | 242.0 |
+
+- Non-AR per layer: u8 GDN 102.0 (incl. the 64 µs stand-in), attention 331.3.
+- u1 GDN 84.3 (the 64 µs stand-in replaced by r15's u1 GDN step of 42), attention 206.0.
+- **The u1 GDN layer is 84.3 µs non-AR, not the assumed 74.75.**
+
+| On-path µs per AR | 12 | **15** | 18 | 21.7 | 25 | break-even |
+|---|---|---|---|---|---|---|
+| u8 (gate 13.7) | 12.23 | **12.62 ✓** | 13.00 | 13.48 | 13.90 ✗ | 23.4 µs |
+| u1 (gate 9.4) | 9.38 ✓ | **9.76 ✗** | 10.15 | 10.62 | 11.04 | **12.2 µs** |
+
+**u1 is the binding gate: on-path AR ≤ ~12 µs, or ~0.4 ms of other u1 savings.** With split-K and in-row owners, x
+delivery is ~4.4-7.8 µs, so the on-path AR ≈ AR core (21.7 today; part of its in-chip gather is now done by the down
+stage's owner sums) + the unoverlapped delivery. u1 levers:
+- AR core speed (the dominant one);
+- the u1 attention post-SDPA chain (fold wo into the tree tail; overlap the attention AR with the gate|up K-stream);
+- the u1 GDN step (42 µs; the prefix split does not help at u1, which has one user per head).
