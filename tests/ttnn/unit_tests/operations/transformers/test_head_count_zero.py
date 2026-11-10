@@ -56,6 +56,27 @@ def _create_qkv_heads_from_separate_tensors(device, **kwargs):
     )
 
 
+def _nlp_create_qkv_heads_decode(device, **kwargs):
+    ttnn.experimental.nlp_create_qkv_heads_decode(_tile(device, (1, 1, 32, 192)), **kwargs)
+
+
+# The head-count checks run before anything that needs more than one device.
+def _all_reduce_create_qkv_heads(device, num_heads, **kwargs):
+    grid = device.compute_with_storage_grid_size()
+    cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))})
+    batch_offset = ttnn.from_torch(torch.zeros(1, dtype=torch.int32), device=device)
+    ttnn.experimental.all_reduce_create_qkv_heads(
+        _tile(device, (1, 1, 32, 192)),
+        _tile(device, (1, 1, 32, 192)),
+        batch_offset,
+        1,
+        device,
+        ttnn.create_global_semaphore(device, cores, 0),
+        num_heads,
+        **kwargs,
+    )
+
+
 @pytest.mark.parametrize(
     "run, kwargs, message",
     [
@@ -105,6 +126,28 @@ def _create_qkv_heads_from_separate_tensors(device, **kwargs):
             {"num_heads": 1, "num_kv_heads": 2**31},
             "exceeds the KV hidden dimension",
         ),
+        (_nlp_create_qkv_heads_decode, {"num_heads": 0}, "num_heads .* and num_kv_heads .* must be greater than 0"),
+        (
+            _nlp_create_qkv_heads_decode,
+            {"num_heads": 1, "num_kv_heads": 0},
+            "num_heads .* and num_kv_heads .* must be greater than 0",
+        ),
+        (
+            _nlp_create_qkv_heads_decode,
+            {"num_heads": 2, "num_kv_heads": 2**31 - 1},
+            "exceeds the fused width",
+        ),
+        (_all_reduce_create_qkv_heads, {"num_heads": 0}, "num_heads .* and num_kv_heads .* must be greater than 0"),
+        (
+            _all_reduce_create_qkv_heads,
+            {"num_heads": 1, "num_kv_heads": 0},
+            "num_heads .* and num_kv_heads .* must be greater than 0",
+        ),
+        (
+            _all_reduce_create_qkv_heads,
+            {"num_heads": 2, "num_kv_heads": 2**31 - 1},
+            "exceeds the fused width",
+        ),
     ],
     ids=[
         "split_qkv_zero_q",
@@ -129,6 +172,12 @@ def _create_qkv_heads_from_separate_tensors(device, **kwargs):
         "create_qkv_heads_from_separate_tensors_zero_q",
         "create_qkv_heads_from_separate_tensors_zero_kv",
         "create_qkv_heads_from_separate_tensors_wrap",
+        "nlp_create_qkv_heads_decode_zero_q",
+        "nlp_create_qkv_heads_decode_zero_kv",
+        "nlp_create_qkv_heads_decode_wrap",
+        "all_reduce_create_qkv_heads_zero_q",
+        "all_reduce_create_qkv_heads_zero_kv",
+        "all_reduce_create_qkv_heads_wrap",
     ],
 )
 def test_head_count_rejected(device, expect_error, run, kwargs, message):

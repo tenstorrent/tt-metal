@@ -667,10 +667,11 @@ FORCE_INLINE void noc_async_read_set_state(uint64_t src_noc_addr, uint8_t noc = 
  * | inc_num_issued (template argument)| Whether issued read counter should be increment    | uint32_t  | Any uint32_t number | False    |
  * | skip_cmdbuf_chk (template arg)    | Skip the cmd buf ready poll on the first burst     | bool      | true or false       | False    |
  *
- * Only set skip_cmdbuf_chk on the first call after \a noc_async_read_set_state or
- * \a noc_async_read_set_pcie_state. Those wait for read_cmd_buf and then write registers that do not make
- * it busy again, so the poll here is guaranteed to pass. On any later call the previous one wrote
- * NOC_CMD_CTRL and the poll is required, so skipping it corrupts the transaction already in flight.
+ * Set skip_cmdbuf_chk only when read_cmd_buf is known to be ready: on the first call after
+ * \a noc_async_read_set_state or \a noc_async_read_set_pcie_state (those wait for read_cmd_buf and then write
+ * registers that do not make it busy again), or after the caller's own noc_cmd_buf_ready returned true with nothing
+ * issued on read_cmd_buf since. Otherwise the previous call wrote NOC_CMD_CTRL and the poll is required: skipping it
+ * corrupts the transaction already in flight.
  */
 // clang-format on
 template <bool inc_num_issued = true, bool skip_cmdbuf_chk = false>
@@ -1077,10 +1078,11 @@ FORCE_INLINE void noc_async_write_set_state(
  * | update_counter (template argument)  | Whether to increment write counters                | bool      | true or false       | False    |
  * | skip_cmdbuf_chk (template argument) | Skip the cmd buf ready poll on the first burst     | bool      | true or false       | False    |
  *
- * Only set skip_cmdbuf_chk on the first call after \a noc_async_write_set_state or
- * \a noc_async_write_set_pcie_state. Those wait for write_cmd_buf and then write registers that do not make
- * it busy again, so the poll here is guaranteed to pass. On any later call the previous one wrote
- * NOC_CMD_CTRL and the poll is required, so skipping it corrupts the transaction already in flight.
+ * Set skip_cmdbuf_chk only when write_cmd_buf is known to be ready: on the first call after
+ * \a noc_async_write_set_state or \a noc_async_write_set_pcie_state (those wait for write_cmd_buf and then write
+ * registers that do not make it busy again), or after the caller's own noc_cmd_buf_ready returned true with nothing
+ * issued on write_cmd_buf since. Otherwise the previous call wrote NOC_CMD_CTRL and the poll is required: skipping it
+ * corrupts the transaction already in flight.
  */
 // clang-format on
 template <bool posted = false, bool update_counter = true, bool skip_cmdbuf_chk = false>
@@ -2173,6 +2175,12 @@ void noc_semaphore_set(volatile tt_l1_ptr uint32_t* sem_addr, uint32_t val) {
 
     // set semaphore value to val
     (*sem_addr) = val;
+#if defined(ARCH_QUASAR)
+    // Quasar: the NOC is driven by RoCC instructions and reads L1 directly, so nothing orders this store before a
+    // later NOC command that reads the same word (e.g. set_multicast of this semaphore). Without the fence the
+    // multicast can send the old value.
+    asm volatile("fence" ::: "memory");
+#endif
 }
 
 // clang-format off
@@ -2315,12 +2323,25 @@ FORCE_INLINE void noc_inline_dw_write_set_state(
     noc_inline_dw_write_set_state_impl<posted, set_val>(addr, val, be, cmd_buf, noc, vc);
 }
 
+#ifdef ARCH_BLACKHOLE
+// Issue https://github.com/tenstorrent/tt-metal/issues/28758: always update counter for blackhole as a temporary
+// workaround for avoiding hangs in fabric router, as counters will be checked inside the
+// noc_fast_spoof_write_dw_inline, will remove this restriction once all inline write change to stream reg write.
+template <bool update_counter>
+inline constexpr bool inline_dw_write_with_state_updates_counter = true;
+#else
+template <bool update_counter>
+inline constexpr bool inline_dw_write_with_state_updates_counter = update_counter;
+#endif
+
 // clang-format off
 /**
  * Initiates an inline write of a 32-bit value to a NOC destination.
  * This function must be preceded by a call to \a noc_inline_dw_write_set_state.
  * This function is used to issue the actual write request after the state has been set up.
- * The 32-bit value and part of the destination address can also be set in this API (Only either hi or lo address should be getting updated).
+ * The 32-bit value and part of the destination address can also be set in this API. This form updates one half of the
+ * address from \a addr: the low address (update_addr_lo) or the node (update_addr_hi). To update both, use the form
+ * that also takes \a dst_noc_addr.
  * \a noc_inline_dw_write can be used instead if the state preservation is not
  * needed. Also, see \a noc_async_write_barrier.
  *
@@ -2331,18 +2352,19 @@ FORCE_INLINE void noc_inline_dw_write_set_state(
  *
  * Return value: None
  *
- * | Argument                                   | Description                                            | Data type | Valid range   | required |
- * |--------------------------------------------|--------------------------------------------------------|-----------|---------------|----------|
- * | val                                        | The value to be written                                | uint32_t  | Any uint32_t  | True     |
- * | addr                                       | The local address to write to (if not set in state)    | uint32_t  | 0..1MB        | False    |
- * | cmd_buf                                    | Command buffer to use for the transaction              | uint8_t   | 0-3           | False    |
- * | noc                                        | NOC to use for the transaction                         | uint8_t   | 0 or 1        | False    |
- * | update_addr_lo (template parameter)        | Whether to update the lower 32 bits of the address     | bool      | true or false | False    |
- * | update_counter (template parameter)        | Whether to update the write counters                   | bool      | true or false | False    |
- * | posted (template parameter)                | Whether the call is posted (i.e. ack requirement)      | bool      | true or false | False    |
- * | update_addr_hi (template parameter)        | Whether to update the upper 32 bits of the address     | bool      | true or false | False    |
- * | update_val (template parameter)            | Whether to set the value to be written                 | bool      | true or false | False    |
- * | dst_type (template parameter)              | Whether the write is targeting L1 or a Stream Register | InlineWriteDst| DEFAULT, L1, REG | False    |
+ * | Argument                             | Description                                                     | Data type      | Valid range      | required |
+ * |--------------------------------------|-----------------------------------------------------------------|----------------|------------------|----------|
+ * | val                                  | The value to be written                                         | uint32_t       | Any uint32_t     | True     |
+ * | addr                                 | The low address (update_addr_lo) or the node (update_addr_hi)   | uint32_t       | 0..1MB, or node: noc_addr >> NOC_ADDR_COORD_SHIFT | False |
+ * | cmd_buf                              | Command buffer to use for the transaction                       | uint8_t        | 0-3              | False    |
+ * | noc                                  | NOC to use for the transaction                                  | uint8_t        | 0 or 1           | False    |
+ * | update_addr_lo (template parameter)  | Whether to update the lower 32 bits of the address              | bool           | true or false    | False    |
+ * | update_counter (template parameter)  | Whether to update the write counters                            | bool           | true or false    | False    |
+ * | posted (template parameter)          | Whether the call is posted (i.e. ack requirement)               | bool           | true or false    | False    |
+ * | update_addr_hi (template parameter)  | Whether to update the upper 32 bits of the address (the node)   | bool           | true or false    | False    |
+ * | update_val (template parameter)      | Whether to set the value to be written                          | bool           | true or false    | False    |
+ * | dst_type (template parameter)        | Whether the write is targeting L1 or a Stream Register          | InlineWriteDst | DEFAULT, L1, REG | False    |
+ * | skip_cmdbuf_chk (template parameter) | Whether to skip the command buffer wait (caller saw it ready)   | bool           | true or false    | False    |
  */
 // clang-format on
 template <
@@ -2351,18 +2373,10 @@ template <
     bool posted = false,
     bool update_addr_hi = false,
     bool update_val = false,
-    InlineWriteDst dst_type = InlineWriteDst::DEFAULT>
+    InlineWriteDst dst_type = InlineWriteDst::DEFAULT,
+    bool skip_cmdbuf_chk = false>
 FORCE_INLINE void noc_inline_dw_write_with_state(
     uint32_t val, uint32_t addr = 0, uint8_t cmd_buf = write_at_cmd_buf, uint8_t noc = noc_index) {
-#ifdef ARCH_BLACKHOLE
-    // Issue https://github.com/tenstorrent/tt-metal/issues/28758: always update counter for blackhole as a temporary
-    // workaround for avoiding hangs in fabric router, as counters will be checked inside the
-    // noc_fast_spoof_write_dw_inline, will remove this restriction once all inline write change to stream reg write.
-    constexpr bool update_counter_in_callee = true;
-#else
-    constexpr bool update_counter_in_callee = update_counter;
-#endif
-
     WAYPOINT("NWIW");
     noc_fast_write_dw_inline_with_state<
         noc_mode,
@@ -2370,8 +2384,34 @@ FORCE_INLINE void noc_inline_dw_write_with_state(
         update_addr_hi,
         update_val,
         posted,
-        update_counter_in_callee,
-        dst_type>(noc, cmd_buf, val, addr);
+        inline_dw_write_with_state_updates_counter<update_counter>,
+        dst_type,
+        skip_cmdbuf_chk>(noc, cmd_buf, val, addr);
+    WAYPOINT("NWID");
+}
+
+// The same, updating both halves of the address: the low address from \a addr and the node from \a dst_noc_addr
+// (noc_addr >> NOC_ADDR_COORD_SHIFT). Both update_addr_lo and update_addr_hi must be set.
+template <
+    bool update_addr_lo = false,
+    bool update_counter = true,
+    bool posted = false,
+    bool update_addr_hi = false,
+    bool update_val = false,
+    InlineWriteDst dst_type = InlineWriteDst::DEFAULT,
+    bool skip_cmdbuf_chk = false>
+FORCE_INLINE void noc_inline_dw_write_with_state(
+    uint32_t val, uint32_t addr, uint8_t cmd_buf, uint8_t noc, uint32_t dst_noc_addr) {
+    WAYPOINT("NWIW");
+    noc_fast_write_dw_inline_with_state<
+        noc_mode,
+        update_addr_lo,
+        update_addr_hi,
+        update_val,
+        posted,
+        inline_dw_write_with_state_updates_counter<update_counter>,
+        dst_type,
+        skip_cmdbuf_chk>(noc, cmd_buf, val, addr, dst_noc_addr);
     WAYPOINT("NWID");
 }
 
