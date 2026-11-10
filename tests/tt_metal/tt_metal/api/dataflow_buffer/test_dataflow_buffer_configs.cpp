@@ -2424,11 +2424,57 @@ TEST_F(UnitMeshFixture, DFBConfigSerializationPreservesGappedDeviceSlots) {
     EXPECT_EQ(read_word(3, 3), wide_dfb->config.entry_size);
 }
 
+// Quasar counterpart: the coordinator's slots are {0, 3}; the two unused ones are in no participation mask.
+TEST_F(UnitMeshFixture, DfbSerializeGlobalHeaderGappedDeviceSlots) {
+    if (this->device().arch() != ARCH::QUASAR) {
+        GTEST_SKIP() << "Quasar-only DFB config layout";
+    }
+
+    const CoreCoord grid = this->device().compute_with_storage_grid_size();
+    if (grid.x < 2) {
+        GTEST_SKIP() << "Needs at least two worker cores in a row";
+    }
+
+    const CoreCoord coordinator(0, 0);
+    const CoreCoord worker(1, 0);
+    const CoreRange all_cores(coordinator, worker);
+    Program program = CreateProgram();
+    const auto config = make_minimal_dfb_config();
+
+    for (int i = 0; i < 3; i++) {
+        experimental::dfb::CreateDataflowBuffer(program, CoreRangeSet(CoreRange(worker)), config);
+    }
+    const uint32_t coordinator_id =
+        experimental::dfb::CreateDataflowBuffer(program, CoreRangeSet(CoreRange(coordinator)), config);
+    const uint32_t wide_id = experimental::dfb::CreateDataflowBuffer(program, CoreRangeSet(all_cores), config);
+
+    program.impl().finalize_dataflow_buffer_configs();
+    program.impl().allocate_dataflow_buffers(this->device().get_devices()[0]);
+
+    const auto& impl = program.impl();
+    EXPECT_EQ(impl.get_dataflow_buffer(coordinator_id)->device_slot, 0u);
+    EXPECT_EQ(impl.get_dataflow_buffer(wide_id)->device_slot, 3u);
+
+    const auto dfbs = impl.dataflow_buffers_on_core(coordinator);
+    ASSERT_EQ(dfbs.size(), 2u);
+    std::vector<uint8_t> buf(8192, 0);
+    const size_t nbytes = experimental::dfb::detail::serialize_dfb_config_for_core(coordinator, dfbs, buf);
+    ASSERT_GT(nbytes, 0u);
+
+    const auto* ghdr = reinterpret_cast<const dfb_global_header_t*>(buf.data());
+    EXPECT_EQ(ghdr->num_dfbs, 2u);
+    constexpr uint32_t slots_0_and_3 = 0b1001;
+    EXPECT_EQ(ghdr->participation_mask[0], slots_0_and_3);  // producer_risc_mask 0x1
+    EXPECT_EQ(ghdr->participation_mask[1], slots_0_and_3);  // consumer_risc_mask 0x2
+    for (uint8_t h = 2; h < ::dfb::NUM_PARTICIPATING_HARTIDS; ++h) {
+        EXPECT_EQ(ghdr->participation_mask[h], 0u) << "hart " << static_cast<int>(h);
+    }
+}
+
 // The per-core slot limit is on how many DFBs share a core, not on how many exist in the program:
 // DFBs on disjoint cores all fit at slot 0.
 TEST_F(UnitMeshFixture, DFBDeviceSlotLimitIsPerCoreNotPerProgram) {
-    const bool is_quasar = this->device().arch() == ARCH::QUASAR;
-    const uint32_t max_slots = is_quasar ? static_cast<uint32_t>(::dfb::NUM_DFBS) : hal::get_num_dataflow_buffers();
+    const uint32_t max_slots = hal::get_num_dataflow_buffers();
     const CoreCoord grid = this->device().compute_with_storage_grid_size();
     const uint32_t num_dfbs = max_slots + 4;
     if (grid.x * grid.y < num_dfbs) {

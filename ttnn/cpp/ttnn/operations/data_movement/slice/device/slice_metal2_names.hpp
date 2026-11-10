@@ -33,8 +33,6 @@ inline const tt::tt_metal::experimental::ScratchpadSpecName RM_ID_PER_DIM{"rm_id
 
 // SliceRmShardedProgramFactory
 inline const tt::tt_metal::experimental::KernelSpecName SHARDED_READER{"sharded_reader"};
-inline const tt::tt_metal::experimental::DFBSpecName SHARDED_IN{"sharded_in"};
-inline const tt::tt_metal::experimental::DFBSpecName SHARDED_OUT{"sharded_out"};
 
 // SliceRmStrideProgramFactory
 inline const tt::tt_metal::experimental::KernelSpecName STRIDE_READER{"stride_reader"};
@@ -51,7 +49,7 @@ inline const tt::tt_metal::experimental::ScratchpadSpecName TILE_ID_PER_DIM{"til
 inline const tt::tt_metal::experimental::KernelSpecName TA_READER{"ta_reader"};
 inline const tt::tt_metal::experimental::KernelSpecName TA_WRITER{"ta_writer"};
 inline const tt::tt_metal::experimental::DFBSpecName TA_IN{"ta_in"};
-inline const tt::tt_metal::experimental::DFBSpecName TA_TENSOR{"ta_tensor"};
+inline const tt::tt_metal::experimental::ScratchpadSpecName TA_TENSOR{"ta_tensor"};
 inline const tt::tt_metal::experimental::ScratchpadSpecName TA_ID_PER_DIM{"ta_id_per_dim"};
 
 }  // namespace ttnn::prim::slice_metal2

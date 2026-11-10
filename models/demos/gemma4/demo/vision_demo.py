@@ -21,7 +21,7 @@ Usage:
 
     # Override the prompt / image / generation length:
     HF_MODEL=google/gemma-4-31B-it GEMMA4_VISION_PROMPT="Describe this image." \\
-        GEMMA4_VISION_IMAGE=models/tt_transformers/demo/sample_prompts/llama_models/dog.jpg \\
+        GEMMA4_VISION_IMAGE=models/ttt_compat/demo/sample_prompts/llama_models/dog.jpg \\
         pytest models/demos/gemma4/demo/vision_demo.py -k "1x8" -sv
 """
 
@@ -40,7 +40,7 @@ from models.demos.utils.llm_demo_utils import create_benchmark_data
 from models.perf.benchmarking_utils import BenchmarkProfiler
 from models.tt_transformers.tt.common import PagedAttentionConfig
 
-IMG_PATH = Path("models/tt_transformers/demo/sample_prompts/llama_models").resolve()
+IMG_PATH = Path("models/ttt_compat/demo/sample_prompts/llama_models").resolve()
 
 
 def _model_path():

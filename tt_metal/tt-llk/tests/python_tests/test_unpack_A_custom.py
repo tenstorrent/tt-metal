@@ -18,7 +18,6 @@
 # Instead we sweep formats and multiple tile counts, exercising the per-tile
 # source L1 base-address programming inside _llk_unpack_A_custom_.
 
-import torch
 from conftest import skip_for_quasar, skip_for_wormhole
 from helpers.format_config import DataFormat, is_dest_acc_needed
 from helpers.golden_generators import (
@@ -26,7 +25,7 @@ from helpers.golden_generators import (
     DataCopyGolden,
     get_golden_generator,
 )
-from helpers.llk_params import DestAccumulation, DestSync, format_dict
+from helpers.llk_params import DestAccumulation, DestSync
 from helpers.param_config import (
     get_num_blocks_and_num_tiles_in_block,
     input_output_formats,
@@ -41,7 +40,7 @@ from helpers.test_variant_parameters import (
     NUM_TILES_IN_BLOCK,
     TILE_COUNT,
 )
-from helpers.utils import passed_test
+from helpers.utils import passed_test, result_tensor
 
 # _llk_unpack_A_custom_ always unpacks a full 4-face 32x32 tile: it hardcodes
 # TTI_SETADCXX(p_setadc::UNP_A, 1023, 0x0) (llk_unpack_A_custom.h), i.e. 1024 datums =
@@ -120,12 +119,7 @@ def test_unpack_A_custom(
     outcome = configuration.run()
     res_from_L1 = outcome.result
 
-    assert len(res_from_L1) == len(
-        golden_tensor
-    ), f"Result length {len(res_from_L1)} != golden length {len(golden_tensor)}"
-
-    torch_format = format_dict[formats.output_format]
-    res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
+    res_tensor = result_tensor(res_from_L1, formats.output_format, golden_tensor)
 
     assert passed_test(
         golden_tensor, res_tensor, formats.output_format

@@ -7,16 +7,13 @@
 #include <enchantum/enchantum.hpp>
 #include <tt-metalium/allocator.hpp>
 #include "allocator_state.hpp"
-#include <limits>
 #include <string>
-#include <string_view>
 #include <utility>
 #include <algorithm>
 
 #include "allocator/algorithms/allocator_algorithm.hpp"
 #include <tt_stl/assert.hpp>
 #include "buffer_types.hpp"
-#include "impl/context/metal_context.hpp"
 #include <tt-logger/tt-logger.hpp>
 #include "tt_metal/impl/allocator/algorithms/free_list_opt.hpp"
 

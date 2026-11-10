@@ -4,7 +4,6 @@
 
 #include "tt_metal/fabric/builder/connection_writer_adapter.hpp"
 #include "tt_metal/fabric/builder/fabric_builder_helpers.hpp"
-#include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include "tt_metal/fabric/fabric_context.hpp"
 #include "tt_metal/fabric/fabric_builder_context.hpp"
 #include "tt_metal/fabric/fabric_tensix_builder.hpp"
@@ -67,6 +66,16 @@ void StaticSizedChannelConnectionWriterAdapter::add_downstream_connection(
             adapter_spec.buffer_index_semaphore_id;
     }
 
+    // The router keeps one downstream buffer count per VC (router_downstream.hpp, DownstreamTraits::num_slots): every
+    // sender channel this VC forwards into must have the same number of buffers.
+    const size_t vc_num_buffers = this->downstream_sender_channels_num_buffers.at(inbound_vc_idx);
+    TT_FATAL(
+        vc_num_buffers == 0 || vc_num_buffers == adapter_spec.num_buffers_per_channel,
+        "VC{} forwards into downstream sender channels of {} and {} buffers, but the router keeps one downstream buffer "
+        "count per VC: every forwarding channel of a VC must have the same number of buffers",
+        inbound_vc_idx,
+        vc_num_buffers,
+        adapter_spec.num_buffers_per_channel);
     this->downstream_sender_channels_num_buffers.at(inbound_vc_idx) = adapter_spec.num_buffers_per_channel;
     this->downstream_edms_connected_by_vc_set.insert(inbound_vc_idx);
 }
