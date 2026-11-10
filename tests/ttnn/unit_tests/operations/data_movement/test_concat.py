@@ -522,6 +522,50 @@ def test_dram_sharded_concat_groups_rejected(device, expect_error, groups, shape
         ttnn.concat(input_tensors, dim=3, memory_config=ttnn.DRAM_MEMORY_CONFIG, groups=groups)
 
 
+@pytest.mark.parametrize("width, groups", [(96, 4), (160, 4)])
+def test_height_sharded_width_concat_groups_must_fill_faces(device, expect_error, width, groups):
+    """A group that cuts a tile face used to interleave the groups in the wrong order.
+
+    The tiled height-sharded width concat moves each group as one contiguous burst, so the group
+    width has to be a whole number of 16-column faces. A group width of 24 (96 columns, 4 groups)
+    is at least one face, so the old "at least 16" check accepted it, but the columns came back in
+    a different order than the golden.
+    """
+    height = 32
+    core_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
+
+    def mem(w):
+        return ttnn.create_sharded_memory_config(
+            (height, w),
+            core_grid=core_grid,
+            strategy=ttnn.ShardStrategy.HEIGHT,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+
+    torch_inputs = [random_torch_tensor(ttnn.bfloat16, (1, 1, height, width)) for _ in range(2)]
+    tt_inputs = [
+        ttnn.from_torch(t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=mem(width))
+        for t in torch_inputs
+    ]
+
+    with expect_error(RuntimeError, "Group size must be a multiple of 16"):
+        ttnn.concat(tt_inputs, dim=3, memory_config=mem(2 * width), groups=groups)
+
+    # A face-aligned group width keeps working and still matches the golden.
+    aligned_width, aligned_groups = 64, 2
+    torch_aligned = [random_torch_tensor(ttnn.bfloat16, (1, 1, height, aligned_width)) for _ in range(2)]
+    tt_aligned = [
+        ttnn.from_torch(
+            t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=mem(aligned_width)
+        )
+        for t in torch_aligned
+    ]
+    expected = ttnn.concat.golden_function(torch_aligned, 3, aligned_groups)
+    result = ttnn.concat(tt_aligned, dim=3, memory_config=mem(2 * aligned_width), groups=aligned_groups)
+    assert_equal(expected, ttnn.to_torch(result))
+
+
 @pytest.mark.parametrize("dim", [0, 1, 2, 3])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.int32, ttnn.uint32])
 def test_concat_5d(device, dim, dtype):
