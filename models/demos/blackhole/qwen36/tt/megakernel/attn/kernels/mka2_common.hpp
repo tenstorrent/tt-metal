@@ -14,7 +14,8 @@ constexpr uint32_t CB_ONE = 24, CB_P = 25, CB_R = 26, CB_D = 27, CB_OA = 28, CB_
 constexpr uint32_t CB_RS = 13, CB_QA = 14, CB_QO = 17, CB_QR = 18, CB_PQ = 19, CB_RSP = 20;
 // MKA_TREEFLAG: per-child arrival flags (2 x FANOUT words) at a uniform L1 address, so a parent pulls each child as
 // soon as THAT child is done instead of after the slowest one
-constexpr uint32_t CB_TF = 31;   // ATTN scratch range 24-31 (spec)
+constexpr uint32_t CB_TF = 31;
+constexpr uint32_t NRF = 3;   // full-grid multicast rectangles (left block, right block rows 0-7, right block rows 8-9 minus AR corner)   // ATTN scratch range 24-31 (spec)
 // qkv roles: 0 none, 1 K-half owner (STREAM), 2 K-half partner (STREAM), 3 STREAM_EXT (2 tiles, full K)
 constexpr uint32_t QR_NONE = 0, QR_OWNER = 1, QR_PARTNER = 2, QR_EXT = 3;
 // STREAM_EXT ring split (MKA_PQW): the writer (NOC0) streams pages [0, PQ_WS) of the next layer's slice, the reader
@@ -39,9 +40,11 @@ FORCE_INLINE void spin_cycles(uint32_t cyc) {
     while ((uint32_t)(reg_read(RISCV_DEBUG_REG_WALL_CLOCK_L) - t0) < cyc) {}
 }
 // multicast an L1 word holding `val` to the same address on up to 2 rects (loopback on self_rect)
+// NR: number of rectangles in rc (full grid: 3, since spec v0.9.1 cuts the AR sender corner out of the right block)
+template <uint32_t NR = 2>
 FORCE_INLINE void mcast_word(uint32_t addr, uint32_t val, const uint32_t (*rc)[5], uint32_t self_rect, uint8_t noc) {
     *l1w(addr) = val;
-    for (uint32_t i = 0; i < 2; ++i) {
+    for (uint32_t i = 0; i < NR; ++i) {
         if (rc[i][4] == 0) continue;
         const uint64_t m = noc == 0 ? get_noc_multicast_addr(rc[i][0], rc[i][1], rc[i][2], rc[i][3], addr, noc)
                                     : get_noc_multicast_addr(rc[i][2], rc[i][3], rc[i][0], rc[i][1], addr, noc);

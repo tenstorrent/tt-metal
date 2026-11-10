@@ -54,8 +54,8 @@ void kernel_main() {
     uint32_t gs[NGS];
     for (uint32_t i = 0; i < NGS; ++i) gs[i] = get_arg_val<uint32_t>(a++);
     const uint32_t is_qroot = get_arg_val<uint32_t>(a++), q_addr = get_arg_val<uint32_t>(a++);
-    uint32_t rf[2][5], rs[2][5];
-    for (uint32_t i = 0; i < 2; ++i) for (uint32_t k = 0; k < 5; ++k) rf[i][k] = get_arg_val<uint32_t>(a++);
+    uint32_t rf[NRF][5], rs[2][5];
+    for (uint32_t i = 0; i < NRF; ++i) for (uint32_t k = 0; k < 5; ++k) rf[i][k] = get_arg_val<uint32_t>(a++);
     const uint32_t self_rf = get_arg_val<uint32_t>(a++);
     for (uint32_t i = 0; i < 2; ++i) for (uint32_t k = 0; k < 5; ++k) rs[i][k] = get_arg_val<uint32_t>(a++);
     uint32_t kv_addr[NL];
@@ -263,7 +263,7 @@ void kernel_main() {
             spin_cycles(MKA_S_GDN);
             spin_cycles(S_AR);
 #if defined(MKA_RQKV)
-            if (is_qroot && L + 1 < NL) mcast_word(gs[GS_XRDY], L + 1, rf, self_rf, 0);   // layer boundary -> STREAM_EXT
+            if (is_qroot && L + 1 < NL) mcast_word<NRF>(gs[GS_XRDY], L + 1, rf, self_rf, 0);   // layer boundary -> STREAM_EXT
 #endif
             cb_reserve_back(CB_GO, 1);
             cb_push_back(CB_GO, 1);
@@ -278,14 +278,14 @@ void kernel_main() {
                 noc_semaphore_wait_min(l1w(gs[GS_ADONE]), NUSR * A);
                 for (uint32_t t = 0; t < QT; ++t) noc_async_read(qacc.get_noc_addr(L * QT + t), qdst + t * QTB, QTB);
                 noc_async_read_barrier();
-                for (uint32_t i = 0; i < 2; ++i) {
+                for (uint32_t i = 0; i < NRF; ++i) {
                     if (rf[i][4] == 0) continue;
                     const uint64_t m = get_noc_multicast_addr(rf[i][0], rf[i][1], rf[i][2], rf[i][3], qdst);
                     if (i == self_rf) noc_async_write_multicast_loopback_src(qdst, m, QT * QTB, rf[i][4], false);
                     else noc_async_write_multicast(qdst, m, QT * QTB, rf[i][4], false);
                 }
                 noc_async_writes_flushed();
-                mcast_word(gs[GS_QFLAG], A + 1, rf, self_rf, 0);
+                mcast_word<NRF>(gs[GS_QFLAG], A + 1, rf, self_rf, 0);
                 noc_async_write_barrier();
             }
             noc_semaphore_wait_min(l1w(gs[GS_QFLAG]), A + 1);
@@ -410,7 +410,7 @@ void kernel_main() {
         cb_pop_front(CB_OUT, NDN);
         { DeviceZoneScopedN("W-ARSTALL"); spin_cycles(S_AR); }
 #if defined(MKA_RQKV)
-        if (is_qroot && L + 1 < NL) mcast_word(gs[GS_XRDY], L + 1, rf, self_rf, 0);   // x of layer L + 1 -> STREAM_EXT
+        if (is_qroot && L + 1 < NL) mcast_word<NRF>(gs[GS_XRDY], L + 1, rf, self_rf, 0);   // x of layer L + 1 -> STREAM_EXT
 #endif
         for (uint32_t i = 0; i < NROOT; ++i) noc_semaphore_inc(get_noc_addr(rx[i], ry[i], get_semaphore(SEM_DONE0 + i)), 1);
     }

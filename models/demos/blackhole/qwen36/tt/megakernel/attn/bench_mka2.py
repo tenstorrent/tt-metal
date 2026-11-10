@@ -181,7 +181,7 @@ def frect(lx0, lx1):
     return [a_.x, a_.y, b_.x, b_.y, (lx1 - lx0 + 1) * GYF]
 pxf = [dev.worker_core_from_logical_core(ttnn.CoreCoord(i, 0)).x for i in range(GXF)]
 fsplit = next((i for i in range(1, GXF) if pxf[i] != pxf[i - 1] + 1), GXF)
-RECTS_F = frect(0, fsplit - 1) + frect(fsplit, GXF - 1)
+RECTS_F = frect(0, fsplit - 1) + frect(fsplit, GXF - 1) + [0, 0, 0, 0, 0]   # 3 full-grid multicast rects (see below)
 NU, NQH, T, DHD = int(os.environ.get('MKA_NU', '4')), 6, 4, 256
 CTX = int(os.environ.get("MKA_CTX", "32768")); NBK = CTX // TILE; NBB = int(os.environ.get("MKA_NBB", "1"))   # 1 beats 2 by ~6 µs/layer (less NoC/DRAM congestion); 3 overflows STREAM L1 with GUPRE
 KVDT = {"bfp8": ttnn.bfloat8_b, "bfp4": ttnn.bfloat4_b}[os.environ.get("MKA_KVDT", "bfp8")]
@@ -198,13 +198,28 @@ if os.environ.get('MKA_EXT', '0') == '1':
     EXTRA_T, EXTRA_TX = int(EXTRA_T * NC / _d), int(EXTRA_T * NC * _w / _d)
 S_WO = int(float(os.environ.get("MKA_SWO_US", "10")) * MHZ)
 # MKA_ARCORES="fi,fi,...": AR-only cores (spec: the AR's 4 fabric link-sender cores) - no MKA2 kernel, no KV, no qkv
-ARC = set(int(v) for v in os.environ.get('MKA_ARCORES', '').split(',') if v)
+_arc = os.environ.get('MKA_ARCORES', '106,107,118,119')   # default ON (spec v0.9.1); 'none' disables
+ARC = set() if _arc in ('', 'none') else set(int(v) for v in _arc.split(','))
 ACT = [i for i in range(NCF) if i not in ARC]
 grp = [0] * NCF
 for j_, i_ in enumerate(ACT): grp[i_] = j_ * NU // len(ACT)
 members = [[i for i in ACT if grp[i] == u] for u in range(NU)]
 if os.environ.get('MKA_MREV') == '1': members = [m_[::-1] for m_ in members]   # rank 0 / first KV blocks at the far end of each user's rows
 rank = {i: members[grp[i]].index(i) for i in ACT}
+kgrid = crs([fcores[i] for i in ACT]) if ARC else fgrid
+GSEM = [ttnn.create_global_semaphore(dev, kgrid, 0) for _ in range(11)]
+GSA = [ttnn.get_global_semaphore_address(g) for g in GSEM]
+if ARC:
+    # spec v0.9.1: the AR sender cores are not in ANY mka2 range (kernels, CBs, sharded L1 tensors, global semaphores,
+    # multicasts). Full-grid multicasts: left block, right block above the AR corner, right block beside the AR corner.
+    _ax = sorted({fcores[i].x for i in ARC}); _ay = sorted({fcores[i].y for i in ARC})
+    assert _ax[-1] == GXF - 1 and _ay[-1] == GYF - 1 and len(ARC) == len(_ax) * len(_ay), "AR corner must be the bottom-right block"
+    def _prect(lx0, ly0, lx1, ly1):
+        if lx1 < lx0 or ly1 < ly0: return [0, 0, 0, 0, 0]
+        a_ = dev.worker_core_from_logical_core(ttnn.CoreCoord(lx0, ly0)); b_ = dev.worker_core_from_logical_core(ttnn.CoreCoord(lx1, ly1))
+        return [a_.x, a_.y, b_.x, b_.y, (lx1 - lx0 + 1) * (ly1 - ly0 + 1)]
+    RECTS_F = (_prect(0, 0, fsplit - 1, GYF - 1) + _prect(fsplit, 0, GXF - 1, _ay[0] - 1) + _prect(fsplit, _ay[0], _ax[0] - 1, GYF - 1))
+if ARC: print(f'[mka2] AR-only cores {sorted(ARC)} (phys {[(fphys[i].x, fphys[i].y) for i in sorted(ARC)]}): {len(ACT)} MKA2 cores', flush=True)
 stream_idx = {}   # full-grid core -> STREAM index (mk1 numbering, x + 10*y on the 10x8 rect)
 for i, c in enumerate(fcores):
     if c.x < GX and c.y < GY: stream_idx[i] = c.x + GX * c.y
@@ -235,11 +250,10 @@ _den = NC + (NCF - NC) * EXTW
 WO_T120 = int(NC * WO_T / _den) if EXT else WO_T
 WO_TX = int(NC * WO_T * EXTW / _den) if EXT else 0
 wo_dummy = ttnn.from_torch(torch.zeros(1, 1, (NC * WO_T + 1024) * TILE, TILE).bfloat16(), dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=dev, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-GSEM = [ttnn.create_global_semaphore(dev, fgrid, 0) for _ in range(11)]
-GSA = [ttnn.get_global_semaphore_address(g) for g in GSEM]
+
 QROOT = 0; QRP = fphys[QROOT]
 print(f"[mka2] full grid {GXF}x{GYF} ({NCF} cores, {len(stream_idx)} STREAM) groups {[len(m) for m in members]} ctx {CTX} KV {KVDT} "
-      f"({NU*NBK*16*KVTB/1e6:.1f} MB/layer) NBB {NBB} budget {BUDGET} S_WO {S_WO} qkv-extra {EXTRA_T} tiles/core gsem {GSA}", flush=True)
+      f"({NU*NBK*16*KVTB/1e6:.1f} MB/layer) NBB {NBB} budget {BUDGET} S_WO {S_WO} qkv-extra {EXTRA_T} tiles/core", flush=True)
 # KV share per core: STREAM cores carry the weight stream (~47 MB/layer on their writers + gate|up on their readers),
 # so ATTN-only cores take MKA_WNS x the blocks of a STREAM core (every core >= 1 block)
 WNS = float(os.environ.get("MKA_WNS", "1"))
@@ -336,13 +350,13 @@ if RQKV:
     ss = torch.stack([(xb[:, o * (H // NOWN):(o + 1) * (H // NOWN)].double() ** 2).sum(-1) for o in range(NOWN)])   # [NOWN, M]
     rsp_t = torch.zeros(TILE, NOWN * TILE)
     for o in range(NOWN): rsp_t[:, o * TILE] = ss[o].float()
-    rsp = ttnn.from_torch(rsp_t.repeat(NCF, 1).reshape(1, 1, NCF * TILE, NOWN * TILE), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=dev, memory_config=hs(fgrid, NOWN * TILE))
+    rsp = ttnn.from_torch(rsp_t.repeat(len(ACT), 1).reshape(1, 1, len(ACT) * TILE, NOWN * TILE), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=dev, memory_config=hs(kgrid, NOWN * TILE))
     rstd_g = 1.0 / torch.sqrt(ss.sum(0) / H + EPS)   # [M]
     gold_qkv = [(rstd_g[:, None] * (xb.double() @ wfq[L].double())).float() for L in range(NL)]
     qkv_out = ttnn.from_torch(torch.zeros(1, 1, NL * TILE, QN * TILE).bfloat16(), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=dev, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     # x on every qkv core: shard x over the full grid (lockstep L1 address, same footprint as the 80-core shard)
     ttnn.deallocate(xbuf)   # free the 80-core shard first so the full-grid one reuses its lockstep L1 range
-    xbuf = ttnn.from_torch(xb.reshape(1, 1, M, H).bfloat16().float().repeat(1, 1, NCF, 1), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=dev, memory_config=hs(fgrid, H))
+    xbuf = ttnn.from_torch(xb.reshape(1, 1, M, H).bfloat16().float().repeat(1, 1, len(ACT), 1), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=dev, memory_config=hs(kgrid, H))
     EXTRA_T = EXTRA_TX = 0   # the qkv bytes are real now
     ext_crs = crs([fcores[fi] for fi in ext_list])
     print(f"[rqkv] {QN} tiles: ext {len(ext_list)}x2 full-K, STREAM {2 * n_half} K-halves; producers {QDONE_N}; MB/bank {[round(sum(QROLE[f][2] * QROLE[f][4] for f in qcores if q_bank[f] == b_) * BF8TB / 1e6, 2) for b_ in range(banks)]}; {QN * KT * BF8TB / 1e6:.1f} MB/layer", flush=True)
@@ -359,21 +373,19 @@ def q_rargs(fi):
     if not RQKV: return []
     ro = QROLE.get(fi, (0,))[0]
     return [ro, wq_all.buffer_address(), (q_slot[fi] * banks + q_bank[fi]) if ro else 0, PQL]
-kgrid = crs([fcores[i] for i in ACT]) if ARC else fgrid
-if ARC: print(f'[mka2] AR-only cores {sorted(ARC)} (phys {[(fphys[i].x, fphys[i].y) for i in sorted(ARC)]}): {len(ACT)} MKA2 cores', flush=True)
 def build(out):
     cbs = [ttnn.cb_descriptor_from_sharded_tensor(0, xbuf), cbd(1, ttnn.bfloat4_b, (EVEN_T if GUPRE else 2 * GRP * KB * 2), rect), cbd(2, HDT, 1, rect),
            ttnn.cb_descriptor_from_sharded_tensor(3, hbuf), cbd(4, ttnn.bfloat4_b, 2 * HT * NDN, rect), cbd(5, ttnn.bfloat4_b, 2 * w2_tiles, rect),
            ttnn.cb_descriptor_from_sharded_tensor(16, out), (cbd(6, ttnn.bfloat8_b, QH, rect) if RQKV else cbd(6, ttnn.bfloat4_b, KT * MIXN, rect)),
            ttnn.cb_descriptor_from_sharded_tensor(7, ymix), cbd(8, ttnn.bfloat16, 1, rect),
            # ATTN working set (spec CBs 9-12 + scratch 24-29), full grid
-           cbd(9, ttnn.bfloat16, 32, fgrid), cbd(10, KVDT, 8 * 2 * NBB, fgrid), cbd(11, KVDT, 8 * 2 * NBB, fgrid), cbd(12, ttnn.float32, 9, fgrid),
-           cbd(24, ttnn.bfloat16, 1, fgrid), cbd(25, ttnn.bfloat16, 2 * NBB, fgrid), cbd(26, ttnn.float32, 18, fgrid), cbd(27, ttnn.float32, 1, fgrid),
-           cbd(28, ttnn.bfloat16, 8, fgrid), cbd(29, ttnn.bfloat8_b, 8, fgrid)]
+           cbd(9, ttnn.bfloat16, 32, kgrid), cbd(10, KVDT, 8 * 2 * NBB, kgrid), cbd(11, KVDT, 8 * 2 * NBB, kgrid), cbd(12, ttnn.float32, 9, kgrid),
+           cbd(24, ttnn.bfloat16, 1, kgrid), cbd(25, ttnn.bfloat16, 2 * NBB, kgrid), cbd(26, ttnn.float32, 18, kgrid), cbd(27, ttnn.float32, 1, kgrid),
+           cbd(28, ttnn.bfloat16, 8, kgrid), cbd(29, ttnn.bfloat8_b, 8, kgrid)]
     if RQKV:   # STREAM_EXT weight ring FIRST (lowest CB addresses on the ext cores), then the full-grid qkv CBs
-        cbs = [cbd(19, ttnn.bfloat8_b, 2 * KT, ext_crs)] + cbs + [cbd(13, ttnn.float32, 1, fgrid), cbd(14, ttnn.float32, 2, fgrid),
-               cbd(17, ttnn.bfloat16, 2, fgrid), cbd(18, ttnn.float32, 1, fgrid), ttnn.cb_descriptor_from_sharded_tensor(20, rsp)]
-    if TREEFLAG: cbs = cbs + [cbd(31, ttnn.bfloat16, 1, fgrid)]
+        cbs = [cbd(19, ttnn.bfloat8_b, 2 * KT, ext_crs)] + cbs + [cbd(13, ttnn.float32, 1, kgrid), cbd(14, ttnn.float32, 2, kgrid),
+               cbd(17, ttnn.bfloat16, 2, kgrid), cbd(18, ttnn.float32, 1, kgrid), ttnn.cb_descriptor_from_sharded_tensor(20, rsp)]
+    if TREEFLAG: cbs = cbs + [cbd(31, ttnn.bfloat16, 1, kgrid)]
     sems = [ttnn.SemaphoreDescriptor(id=i, core_ranges=rect, initial_value=0) for i in range(12)]
     rrt, wrt, crt = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
     z10 = [0] * 10
@@ -407,7 +419,7 @@ def build(out):
             g_ = 0; i = 0
             r_mk = [0, 0] + z10 + [0, 0, 255, 0, 0]
             w_mk = [0] + z10 + [0] + [0] * 8 + [0] * 5 + [255] + [0] * 3 + ([wq_all.buffer_address(), q_slot[fi] * banks + q_bank[fi], PQL] if (RQKV and fi in QROLE) else [0] * 3)
-        selff = 0 if c.x < fsplit else 1
+        selff = 0 if c.x < fsplit else (2 if (ARC and c.y >= _ay[0]) else 1)
         i_s = stream_idx.get(fi, 0)
         rd_w = (isS or EXT) and not WO_NOC0
         # stand-in bank spread: the reader reads 8-tile runs from page wo_page + 8k, which all sit in bank wo_page % 8.
