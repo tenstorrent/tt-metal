@@ -79,6 +79,13 @@ void kernel_main() {
         cb_push_back(CB_ONE, 1);
     }
 
+#if defined(MKA_MIXTRID) && MKA_MIXTRID
+    // gdnext: the mixer slice gets its own transaction ids (6/7 by layer parity), so the mixer is released as soon as
+    // ITS slice landed instead of after the layer's whole mixer + gate|up + down (~26 MB) read.
+    constexpr uint32_t MIX_TRID0 = 6;
+#else
+    constexpr uint32_t MIX_TRID0 = 1;   // same trid as the layer's MLP slices (original behaviour)
+#endif
     // ---- next-layer weight issue as a list of chunks (spec v0.3 prefetch budget) ----
     struct Piece { uint64_t src; uint32_t dst, bytes, trid; };
     constexpr uint32_t MAXP = 96, CHB = 16384;
@@ -98,7 +105,7 @@ void kernel_main() {
         const uint32_t trid = 1 + (L & 1);
         if (with_mix) {
             cb_reserve_back(CB_WM, MIXT);
-            add(wm.get_noc_addr(wm_page + L * pwm_layer), get_write_ptr(CB_WM), MIXT * WTB, trid, false);
+            add(wm.get_noc_addr(wm_page + L * pwm_layer), get_write_ptr(CB_WM), MIXT * WTB, MIX_TRID0 + (L & 1), false);
         }
         if (IS_GU) {
             cb_reserve_back(CB_W2, w2_tiles);
@@ -120,7 +127,11 @@ void kernel_main() {
     auto issue_some = [&](bool all) {
         // throttled: the previous KV group's interval drained the earlier chunks (wait on the weight trids), then issue
         // at most `budget` bytes for this interval; `all` issues everything left
-        if (!all && budget) { for (uint32_t t = 1; t <= 3; ++t) noc_async_read_barrier_with_trid(t); outstanding = 0; }
+        if (!all && budget) {
+            for (uint32_t t = 1; t <= 3; ++t) noc_async_read_barrier_with_trid(t);
+            if (MIX_TRID0 != 1) { noc_async_read_barrier_with_trid(MIX_TRID0); noc_async_read_barrier_with_trid(MIX_TRID0 + 1); }
+            outstanding = 0;
+        }
         while (ip < npc) {
             const Piece& p = pcs[ip];
             if (!all && budget && outstanding > 0 && outstanding + p.bytes > budget) break;
@@ -144,16 +155,32 @@ void kernel_main() {
             DeviceZoneScopedN("W-MIX");
             cb_reserve_back(CB_X, KT);   // producer-fed x (XPRE): re-expose it to compute for this layer
             cb_push_back(CB_X, KT);
+#if defined(MKA_MIXTRID) && MKA_MIXTRID
+            noc_async_read_barrier_with_trid(MIX_TRID0 + (L & 1));   // layer L's mixer slice landed
+            cb_push_back(CB_WM, MIXT);
+            if (att) {   // attention layers: plan_layer(L + 1) runs in SDPA, after the MLP slots are pushed here
+                noc_async_read_barrier_with_trid(1 + (L & 1));
+                if (IS_GU) cb_push_back(CB_W2, w2_tiles);
+                cb_push_back(CB_WD, DN_TILES);
+            }
+#else
             noc_async_read_barrier_with_trid(1 + (L & 1));   // layer L's mixer + MLP weights landed
             cb_push_back(CB_WM, MIXT);
             if (IS_GU) cb_push_back(CB_W2, w2_tiles);
             cb_push_back(CB_WD, DN_TILES);
+#endif
             cb_wait_front(CB_YM, MIXT / KT);
             cb_pop_front(CB_YM, MIXT / KT);
             if (att) noc_semaphore_inc(get_noc_addr(qr_x, qr_y, gs[GS_MIXDONE]), 1);
         }
         if (!att) {   // GDN-type layer: next layer's weights stream during the GDN stand-in stall (GDN step + out-proj + AR)
             DeviceZoneScopedN("W-GDN");
+#if defined(MKA_MIXTRID) && MKA_MIXTRID
+            // GDN-type layer: the MLP slots of layer L are pushed here (before plan_layer(L + 1) reserves the other slot)
+            noc_async_read_barrier_with_trid(1 + (L & 1));
+            if (IS_GU) cb_push_back(CB_W2, w2_tiles);
+            cb_push_back(CB_WD, DN_TILES);
+#endif
             npc = ip = outstanding = 0;
             if (L + 1 < NL) plan_layer(L + 1, true);
             issue_some(true);
