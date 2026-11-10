@@ -74,7 +74,7 @@ jobs:
       - name: Configure S3 ccache storage
         # Failing internal jobs draws attention immediately so we can fix them and make them fast.
         # Forks will never have secrets; don't fail the job for them, they'll just run slower
-        if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false }}
+        if: false # ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false }}
         run: |
           if [ -z "${{ secrets.GARAGE_S3_ACCESS_KEY }}" ] || [ -z "${{ secrets.GARAGE_S3_SECRET_KEY }}" ]; then
             echo "Garage S3 credentials are missing. Did you forget 'secrets: inherit'?"

@@ -72,7 +72,7 @@ jobs:
       - name: Configure S3 ccache storage
         # Failing internal jobs draws attention immediately so we can fix them and make them fast.
         # Forks will never have secrets; don't fail the job for them, they'll just run slower
-        if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false }}
+        if: false # ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false }}
         run: |
           if [ -z "${{ secrets.GARAGE_S3_ACCESS_KEY }}" ] || [ -z "${{ secrets.GARAGE_S3_SECRET_KEY }}" ]; then
             echo "Garage S3 credentials are missing. Did you forget 'secrets: inherit'?"
@@ -97,7 +97,7 @@ jobs:
         # cache as a soft dependency (remote errors degrade to local misses), so a
         # transient Garage hiccup must not turn into a hard build failure. We warn
         # and continue rather than `exit 1`. The probe is purely diagnostic.
-        if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false }}
+        if: false # ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false }}
         run: |
           # Use a per-job unique key so concurrent jobs (this is a reusable workflow
           # invoked by many pipelines against the same bucket/prefix) don't clobber
@@ -131,7 +131,7 @@ jobs:
         # so repeated commits to a branch benefit from cached clang-tidy results.
         # S3 is optional: the ctcache/S3/proxy environment is exported only when Garage
         # answers. Otherwise nothing is exported and clang-tidy runs uncached (slower).
-        if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false }}
+        if: false # ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false }}
         run: |
           # ctcache is not published on PyPI — install from pinned commit SHA (tag 1.2.0)
           # Pinned to SHA (not tag) to avoid supply-chain risk from mutable git tags

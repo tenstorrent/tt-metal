@@ -492,7 +492,7 @@ jobs:
       - name: Configure S3 ccache storage
         # Failing internal jobs draws attention immediately so we can fix them and make them fast.
         # Forks will never have secrets; don't fail the job for them, they'll just run slower
-        if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false }}
+        if: false # ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false }}
         run: |
           if [ -z "${{ secrets.GARAGE_S3_ACCESS_KEY }}" ] || [ -z "${{ secrets.GARAGE_S3_SECRET_KEY }}" ]; then
             echo "Garage S3 credentials are missing. Did you forget 'secrets: inherit'?"
@@ -517,7 +517,7 @@ jobs:
         # cache as a soft dependency (remote errors degrade to local misses), so a
         # transient Garage hiccup must not turn into a hard build failure. We warn
         # and continue rather than `exit 1`. The probe is purely diagnostic.
-        if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false }}
+        if: false # ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false }}
         run: |
           # Use a per-job unique key so concurrent jobs (this is a reusable workflow
           # invoked by many pipelines against the same bucket/prefix) don't clobber
@@ -614,7 +614,7 @@ jobs:
         id: cpm-cache
         # Same fork guard as the ccache S3 steps: forks have no secrets, so skip S3
         # and let CMake configure fetch CPM sources from scratch.
-        if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false }}
+        if: false # ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false }}
         env:
           CACHE_KEY: ${{ steps.cpm-key.outputs.key }}
         run: |
@@ -689,17 +689,13 @@ jobs:
         # Only pack when we can actually save. For fork PRs the restore step is
         # skipped (no secrets), so 'hit' is unset and would otherwise trigger a
         # pointless zstd compression that never gets uploaded.
-        if: >-
-          steps.cpm-cache.outputs.hit != 'true' &&
-          (github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false)
+        if: false # ${{ steps.cpm-cache.outputs.hit != 'true' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false) }}
         run: |
           [ -d .cpmcache ] && tar -I 'zstd -T0 --long -9 -v' -cf .cpmcache.tar.zst .cpmcache || true
 
       - name: 📦 Save CPM source cache (Garage S3)
         # Only upload on a miss, and only where we have S3 creds (same fork guard).
-        if: >-
-          steps.cpm-cache.outputs.hit != 'true' &&
-          (github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false)
+        if: false # ${{ steps.cpm-cache.outputs.hit != 'true' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false) }}
         env:
           CACHE_KEY: ${{ steps.cpm-key.outputs.key }}
         run: |
