@@ -1794,8 +1794,12 @@ class _Scheduler:
     def _serve(self) -> None:
         while True:
             with self._wake:
+                idle = not self._active
                 while not self._stop and not self._new and not self._chores and not self._active:
                     self._wake.wait()
+                if idle:
+                    # The rate window starts with the work, not with the idle time before it.
+                    self._reset_window()
                 if self._stop:
                     # No trace may be left parked on in-trace recv when the device closes.
                     self._settle()
@@ -2279,6 +2283,9 @@ class _Scheduler:
                     else ""
                 )
             )
+        self._reset_window()
+
+    def _reset_window(self) -> None:
         self._window_t0 = time.perf_counter()
         self._window_steps = 0
         self._window_dispatch = 0.0
