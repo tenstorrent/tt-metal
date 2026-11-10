@@ -39,4 +39,19 @@ SystemMemoryCQInterface::SystemMemoryCQInterface(
     this->completion_fifo_rd_toggle = false;
 }
 
+SystemMemoryCQInterface::SystemMemoryCQInterface(
+    uint8_t cq_id, uint32_t region_offset, uint32_t issue_size_B, uint32_t completion_size_B) :
+    command_completion_region_size(completion_size_B),
+    command_issue_region_size(issue_size_B),
+    id(cq_id),
+    issue_fifo_size(issue_size_B >> 4),
+    issue_fifo_limit((region_offset + issue_size_B) >> 4),
+    offset(region_offset),
+    completion_fifo_size(completion_size_B >> 4),
+    completion_fifo_limit(issue_fifo_limit + completion_fifo_size) {
+    TT_ASSERT(issue_size_B > 0 and completion_size_B > 0, "CQ {} needs issue and completion queue space", cq_id);
+    this->issue_fifo_wr_ptr = this->offset >> 4;  // In 16B words
+    this->completion_fifo_rd_ptr = this->issue_fifo_limit;
+}
+
 }  // namespace tt::tt_metal
