@@ -439,7 +439,10 @@ if V12:
     assert V_R == 32 or 1 <= V_R <= 16
     def q4(w): return ttnn.to_torch(ttnn.from_torch(w, dtype=ttnn.bfloat4_b, layout=ttnn.TILE_LAYOUT)).float()
     vwg, vwu, vwd = q4(wg_t), q4(wu_t), q4(wd_t)   # BFP4 values are tile-local, so layout independent
-    def vlayer(L): return vwg, vwu * (2.0 ** (L % 2)), vwd * (2.0 ** -(L % 3))   # distinct per layer, exact in BFP4
+    # MK_REAL_AR at R = 32: the MLP input is the evolving residual (x + ring x MLP per layer, with the CB 20 rstd stand-in
+    # instead of a real norm), which overflows bf16 within a few layers; 2^-6 on the down weights keeps it bounded
+    _vds = 2.0 ** -6 if (('MK_REAL_AR', '1') in MKDEF and V_R == 32) else 1.0
+    def vlayer(L): return vwg, vwu * (2.0 ** (L % 2)), vwd * (2.0 ** -(L % 3)) * _vds   # distinct per layer, exact in BFP4
     s_xy = [(i % GX, i // GX) for i in range(NC)]
     v_bank, v_rank, v_nsb = LM.assign_banks(s_xy, BANK_LOC)
     PVL = LM.pages_per_layer(v_nsb, banks)
@@ -500,6 +503,40 @@ if V12:
         r_ = [0] * 5 + [0] * 8 + [0] * 6 + VGA + [0] * 15
         return w_, r_, [0, 0, 0, 0]
 
+# MK_REAL_AR=1 (AR integration v1, spec v0.9.2 / §18 option a): the real MLP all-reduce on the 1x8 ring replaces the MLP
+# AR stall. Owners (10..11, 0..7) run AR_RECV (mkar::Recv) on the writer after the v12 release and mkar::Reduce on the
+# compute after C-OSUM; the 4 AR-only cores run AR_SEND. x of layer L + 1 lands in the K-rows' v_xk / v_xpk slot with its
+# own flag pair (MK_AR_XF0 / XF1: the stand-in v12_ox keeps feeding the MLP after the attention / GDN AR stall); each
+# STREAM core waits its row's two flags instead of the stall, the Q root waits all 16 deliveries (MK_AR_XCNT) before XRDY.
+REAL_AR = ('MK_REAL_AR', '1') in MKDEF
+if REAL_AR:
+    assert MESH and V12, "MK_REAL_AR needs MK_MESH=1 and MK_V12=1"
+    assert ('MK_OWNER_RESID', '0') in MKDEF, "MK_REAL_AR: the AR adds the residual (MK_OWNER_RESID=0)"
+    from models.demos.blackhole.qwen36.tt.megakernel.ar_phase import ArPhase
+    AR_XF = [ttnn.create_global_semaphore(dev, fgrid, 0) for _ in range(2)]
+    AR_XCNT = ttnn.create_global_semaphore(dev, kgrid, 0)
+    MKDEF = MKDEF + [('MK_AR_XF0', str(ttnn.get_global_semaphore_address(AR_XF[0]))), ('MK_AR_XF1', str(ttnn.get_global_semaphore_address(AR_XF[1]))),
+                     ('MK_AR_XCNT', str(ttnn.get_global_semaphore_address(AR_XCNT)))]
+    # own_cb (R = 32): no own slot in the AR's RS slot CB; the reduce reads this device's partial from CB_VXO (CB 4)
+    AR = ArPhase(dev, n_ar=NL, rows=0 if V_R == 32 else V_R, stats=False, own_cb=4 if os.environ.get('MK_AR_NOOWN', '1') == '1' else None,
+                 x_targets=dict(xk=v_xk.buffer_address(), xpk=v_xpk.buffer_address(), xflag=[ttnn.get_global_semaphore_address(g) for g in AR_XF], rstd=0))
+    AR_PT = AR.pt
+    _ow = AR.owners_grid()
+    def _arw(tiles): return ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, ttnn.ShardSpec(_ow, [TILE, tiles * TILE], ttnn.ShardOrientation.ROW_MAJOR))
+    # the RS slot region (ring x PT tiles per owner, 160 KB at R = 32) is a plain program CB on owners + senders, not an L1
+    # tensor: the L1 allocator is lockstep over every core, and 160 KB below the tensors would overrun the STREAM cores'
+    # CB region (the senders address their own copy via get_write_ptr; v_xo is only the descriptor's placeholder)
+    ar_buf = v_xo
+    # residual stream (AR output = next AR's residual, in place). R = 32: it IS v_x0 (owner j: x tiles 10j.., unused by the
+    # owner sum with MK_OWNER_RESID=0), so the stand-in x delivery feeds each MLP the real residual stream and no extra
+    # lockstep L1 is spent (the owners' CB region is ~50 KB short otherwise); R < 32: a packed residual of its own
+    ar_out = v_x0 if AR_PT == 10 else ttnn.from_torch(torch.zeros(TILE, 16 * AR_PT * TILE), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=dev, memory_config=_arw(AR_PT))
+    AR_SEQ = AR_PT == 10   # the MLP input is the evolving residual: sequential golds (x_{L+1} = x_L + ring * mlp_L(x_L))
+    _xres = xb.clone()
+    _snd = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(*c_), ttnn.CoreCoord(*c_)) for c_ in ((10, 8), (11, 8), (10, 9), (11, 9))])
+    ar_sem = ttnn.create_global_semaphore(dev, _ow.merge(_snd), 0)
+    print(f"[ar] real MLP AR: ring {AR.ring} rows {AR.rows} PT {AR_PT} buf {ar_buf.buffer_address()} out {ar_out.buffer_address()} xf {[ttnn.get_global_semaphore_address(g) for g in AR_XF]} xcnt {ttnn.get_global_semaphore_address(AR_XCNT)}", flush=True)
+
 def q_wargs(fi):
     if not RQKV: return []
     ro, n0, nt, k0, nk, peer = QROLE.get(fi, (0, 0, 0, 0, 0, fi))
@@ -514,7 +551,9 @@ def q_rargs(fi):
     ro = QROLE.get(fi, (0,))[0]
     return [ro, wq_all.buffer_address(), (q_slot[fi] * banks + q_bank[fi]) if ro else 0, PQL] + wo_rargs(fi)
 RWO = ('MKA_RWO', '1') in MKDEF
-if RWO and ('MKA_LEAN_C', '1') not in MKDEF: MKDEF = MKDEF + [('MKA_LEAN_C', '1')]
+# MK_REAL_AR: the AR's CB ids (50-55) grow every core's CB-config block in the kernel config buffer; the u8 STREAM program
+# was then 192 B past 70656 B with the compute zones in
+if (RWO or ('MK_REAL_AR', '1') in MKDEF) and ('MKA_LEAN_C', '1') not in MKDEF: MKDEF = MKDEF + [('MKA_LEAN_C', '1')]
 WOT, WOP, WOB = {}, {}, {}
 if RWO:
     assert RQKV and ('MKA_PQGDN', '1') in MKDEF, "MKA_RWO needs MKA_RQKV and MKA_PQGDN (the ext ring holds Wo after qkv)"
@@ -590,7 +629,7 @@ def wo_rargs(fi):
     if not RWO: return []
     cc = fphys[WCC]
     return [len(WOT.get(fi, [])), (WOP[fi] * banks + WOB[fi]) if fi in WOT else 0, WOPL, wo_all.buffer_address(), cc.x, cc.y]
-def build(out):
+def build(out, coord=None):
     cbs = [ttnn.cb_descriptor_from_sharded_tensor(0, xbuf), cbd(1, ttnn.bfloat4_b, (EVEN_T if GUPRE else 2 * GRP * KB * 2), rect), cbd(2, HDT, 1, rect),
            ttnn.cb_descriptor_from_sharded_tensor(3, hbuf), cbd(4, ttnn.bfloat4_b, 2 * HT * NDN, rect), cbd(5, ttnn.bfloat4_b, 2 * w2_tiles, rect),
            ttnn.cb_descriptor_from_sharded_tensor(16, out), (cbd(6, ttnn.bfloat8_b, QH, rect) if RQKV else cbd(6, ttnn.bfloat4_b, KT * MIXN, rect)),
@@ -626,8 +665,14 @@ def build(out):
             cbd(39, ttnn.bfloat16, 1, rect), cbd(40, ttnn.bfloat16, 10, rect), cbd(41, ttnn.bfloat16, 10, rect), ttnn.cb_descriptor_from_sharded_tensor(42, v_id),
             ttnn.cb_descriptor_from_sharded_tensor(43, rsp), cbd(44, ttnn.float32, 1, rect), ttnn.cb_descriptor_from_sharded_tensor(30, v_j),
             ttnn.cb_descriptor_from_sharded_tensor(3, v_pbuf), ttnn.cb_descriptor_from_sharded_tensor(4, v_xo), ttnn.cb_descriptor_from_sharded_tensor(5, v_x0),
-            cbd(16, ttnn.bfloat16, 10, O_CRS)]
+            cbd(16, ttnn.bfloat16, 10 if V_R < 32 else 1, O_CRS)]   # CB_VPK: the stand-in's packing scratch (R < 32 only)
     sems = [ttnn.SemaphoreDescriptor(id=i, core_ranges=rect, initial_value=0) for i in range(12)]
+    if REAL_AR:   # this device's AR parts: sender kernels / CBs / fabric semaphores, the shared RS slot CB, owner CBs
+        arp = AR.engine_parts(coord, v_xo, ar_buf, ar_out, ar_out, ar_sem)
+        assert dict(arp['recv_defines']).get('MKAR_DELIVER', '0') != '0', "MK_REAL_AR: the AR must deliver x (STREAM waits its flags)"
+        sems = sems + arp['semaphores']
+        _red = [ttnn.CBDescriptor(total_size=d_.total_size, core_ranges=d_.core_ranges, format_descriptors=list(d_.format_descriptors)) for d_ in arp['shared_cbs']]
+        cbs = cbs + arp['sender_cbs'] + _red + arp['owner_cbs']
     rrt, wrt, crt = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
     RS = os.environ.get('MKA_ROLESPLIT', '1') == '1'   # per-role binaries (spec v0.9.17)
     rta = {k_: (ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()) for k_ in ('s', 'e')}
@@ -677,21 +722,31 @@ def build(out):
         if V12:   # v12 arg tails (appended after every other arg)
             vw_, vr_, vc_ = v_args(fi, c)
             _wa = wrt[c.x][c.y] = list(_wa) + vw_; _ra = rrt[c.x][c.y] = list(_ra) + vr_; _ca = crt[c.x][c.y] = list(_ca) + vc_
+        if REAL_AR and not isS:   # AR tails (EXT binary): writer [ar_on, n_ready, (xy, READY) x n, common, role], compute [has_work, ring, PT]
+            _k = (c.x, c.y)
+            if _k in arp['recv_args']:
+                _rt = arp['ready_targets'][_k]
+                _wa = list(_wa) + [1, len(_rt)] + [v_ for t_ in _rt for v_ in t_] + arp['recv_args'][_k]; _ca = list(_ca) + arp['comp_args'][_k]
+            else:
+                _wa = list(_wa) + [0]; _ca = list(_ca) + [0, 0, 0]
         _r3 = rta['s' if isS else 'e']; _r3[0][c.x][c.y] = _ra; _r3[1][c.x][c.y] = _wa; _r3[2][c.x][c.y] = _ca
     acc_kv = ttnn.TensorAccessorArgs(kvs[0]).get_compile_time_args(); acc_o = ttnn.TensorAccessorArgs(outs).get_compile_time_args()
     acc_q = ttnn.TensorAccessorArgs(qten).get_compile_time_args(); acc_wo = ttnn.TensorAccessorArgs(wo_dummy).get_compile_time_args()
     acc_wq = ttnn.TensorAccessorArgs(wq_all).get_compile_time_args() if RQKV else []; acc_qo = ttnn.TensorAccessorArgs(qkv_out).get_compile_time_args() if RQKV else []
-    def _ks(rng, defs, rr, ww, cc):
+    def _ks(rng, defs, rr, ww, cc, wdefs=(), cdefs=()):
         return [ttnn.KernelDescriptor(kernel_source=f"{KD}/mka2_reader.cpp", core_ranges=rng, defines=MKDEF + defs, compile_time_args=[KT, KB, WTB, GRP, HCH, XTB, NL, NC, KVTB, OTB, QTB, NBB, WOTB] + acc_gu + acc_kv + acc_o + acc_wo + (acc_wq if RQKV else []),
                                 runtime_args=rr, config=ttnn.DataMovementConfigDescriptor(processor=ttnn.DataMovementProcessor.RISCV_1, noc=ttnn.NOC.NOC_1)),
-          ttnn.KernelDescriptor(kernel_source=f"{KD}/mka2_writer.cpp", core_ranges=rng, defines=MKDEF + defs, compile_time_args=[XTB, NGU, NDN, KT, HT, WTB, KB, GRP, HCH, NL, NC, QH if RQKV else KT * MIXN, S_WO, S_AR, KVTB, QTB, NBB, WOTB] + acc_dn + acc_gu + (acc_wq if RQKV else acc_wm) + acc_q + acc_kv + acc_wo + (acc_qo if RQKV else []) + (ttnn.TensorAccessorArgs(wv_all).get_compile_time_args() if V12 else []),
+          ttnn.KernelDescriptor(kernel_source=f"{KD}/mka2_writer.cpp", core_ranges=rng, defines=MKDEF + defs + list(wdefs), compile_time_args=[XTB, NGU, NDN, KT, HT, WTB, KB, GRP, HCH, NL, NC, QH if RQKV else KT * MIXN, S_WO, S_AR, KVTB, QTB, NBB, WOTB] + acc_dn + acc_gu + (acc_wq if RQKV else acc_wm) + acc_q + acc_kv + acc_wo + (acc_qo if RQKV else []) + (ttnn.TensorAccessorArgs(wv_all).get_compile_time_args() if V12 else []),
                                 runtime_args=ww, config=ttnn.DataMovementConfigDescriptor(processor=ttnn.DataMovementProcessor.RISCV_0, noc=ttnn.NOC.NOC_0)),
-          ttnn.KernelDescriptor(kernel_source=f"{KD}/mka2_compute.cpp", core_ranges=rng, defines=MKDEF + defs, compile_time_args=[KT, KB, HT, NDN, GRP, NL, MIXN, NBB], runtime_args=cc,
+          ttnn.KernelDescriptor(kernel_source=f"{KD}/mka2_compute.cpp", core_ranges=rng, defines=MKDEF + defs + list(cdefs), compile_time_args=[KT, KB, HT, NDN, GRP, NL, MIXN, NBB], runtime_args=cc,
                                 config=ttnn.ComputeConfigDescriptor(math_fidelity=ttnn.MathFidelity.HiFi2, fp32_dest_acc_en=True, dst_full_sync_en=True, math_approx_mode=False))]
     if RS:
         _srng = crs([fcores[i] for i in ACT if i in stream_idx]); _erng = crs([fcores[i] for i in ACT if i not in stream_idx])
-        ks = _ks(_srng, [('MKA_ROLE_STREAM', '1')], *rta['s']) + _ks(_erng, [('MKA_ROLE_EXT', '1')], *rta['e'])
+        _ard = (arp['recv_defines'] + [('MKAR_NCOMMON', str(arp['recv_ncommon']))], arp['comp_defines']) if REAL_AR else ((), ())
+        ks = _ks(_srng, [('MKA_ROLE_STREAM', '1')], *rta['s']) + _ks(_erng, [('MKA_ROLE_EXT', '1')], *rta['e'], *_ard)
+        if REAL_AR: ks = ks + arp['sender_kernels']
     else:
+        assert not REAL_AR, "MK_REAL_AR needs the per-role binaries (MKA_ROLESPLIT=1)"
         ks = _ks(kgrid, [], rrt, wrt, crt)
     if RWO:   # placement: a CB on kgrid sits above BOTH the STREAM-rect and the ext CBs; ext-only CBs listed FIRST land
         # at low addresses on the ext cores (beside the STREAM rect's own CBs, which they never share a core with)
@@ -705,15 +760,33 @@ if os.environ.get("MK_L1DUMP") == "1":  # debug: every live L1 tensor's address
         for _i, _t in enumerate(_v if isinstance(_v, list) else [_v]):
             if isinstance(_t, ttnn.Tensor) and _t.storage_type() == ttnn.StorageType.DEVICE and _t.memory_config().buffer_type == ttnn.BufferType.L1:
                 print(f"[l1dump] {_n}[{_i}] addr {_t.buffer_address()} shape {list(_t.shape)}", flush=True)
-prog = build(out_t)
+if REAL_AR:   # per-device programs (fabric connections, owner / gather roles differ by ring position)
+    _pcache = {}
+    def PROG_PER_DEV(co):
+        k_ = (co[0], co[1])
+        if k_ not in _pcache: _pcache[k_] = build(out_t, co)
+        return _pcache[k_]
+    prog = PROG_PER_DEV(ttnn.MeshCoordinate(0, 0))
+else:
+    prog = build(out_t)
 def pcc_of(t, g): v = ttnn.to_torch(t).float().reshape(M, H); return torch.corrcoef(torch.stack([v.flatten(), g.flatten()]))[0, 1].item(), (v - g).abs().max().item()
 for it in range(ITERS):
-    t1 = time.time(); y = ttnn.generic_op([x, wgu_all, wd_all, wm_all, xbuf, hbuf, ymix, qten, outs, wo_dummy] + kvs + kvvs + ([wq_all, rsp, qkv_out] if RQKV else []) + ([wo_all, wod] if RWO else []) + ([wv_all, v_xk, v_rs, v_h7, v_xpk, v_pbuf, v_xo, v_x0, v_id, v_j] if V12 else []) + [out_t], prog); ttnn.synchronize_device(dev)
+    t1 = time.time(); y = ttnn.generic_op([x, wgu_all, wd_all, wm_all, xbuf, hbuf, ymix, qten, outs, wo_dummy] + kvs + kvvs + ([wq_all, rsp, qkv_out] if RQKV else []) + ([wo_all, wod] if RWO else []) + ([wv_all, v_xk, v_rs, v_h7, v_xpk, v_pbuf, v_xo, v_x0, v_id, v_j] if V12 else []) + ([ar_out] if REAL_AR else []) + [out_t], prog); ttnn.synchronize_device(dev)
+    if REAL_AR and AR_SEQ:   # this pass's golds from the residual the previous pass left (rstd stays the CB 20 stand-in)
+        for L_ in range(NL):
+            _g, _u, _d = vlayer(L_)
+            _xn = (rstd_g[:, None] * _xres.double()).float()
+            _pL = (torch.nn.functional.silu(_xn @ _g) * (_xn @ _u)).bfloat16().float() @ _d
+            _xres = (_xres + AR.ring * _pL).bfloat16().float()
+        v_gold = _pL
     if V12:
         _v = ttnn.to_torch(v_xo).float().reshape(TILE, H)[:V_R]; _g2 = v_gold[:V_R]
         if os.environ.get('V12_SAVE') and it == 0: torch.save(ttnn.to_torch(v_xo), os.environ['V12_SAVE'])
         _bad = [j_ for j_ in range(16) if torch.corrcoef(torch.stack([_v[:, j_*320:(j_+1)*320].flatten(), _g2[:, j_*320:(j_+1)*320].flatten()]))[0, 1].item() < 0.999]
         print(f"[v12] iter {it} last-layer MLP (owner xo) pcc {torch.corrcoef(torch.stack([_v.flatten(), _g2.flatten()]))[0, 1].item():.5f} max|err| {(_v - _g2).abs().max().item():.4f} |gold|max {_g2.abs().max().item():.3f} bad owner chunks {_bad}", flush=True)
+    if REAL_AR and AR_SEQ:   # (R < 32: packed residual, not checked here) the residual stream after this pass
+        _ar = ttnn.to_torch(ar_out).float().reshape(TILE, H); _arg = _xres
+        print(f"[ar] iter {it} residual pcc {torch.corrcoef(torch.stack([_ar.flatten(), _arg.flatten()]))[0, 1].item():.6f} max|err| {(_ar - _arg).abs().max().item():.4f} |gold|max {_arg.abs().max().item():.3f} mesh identity {mesh_identity(ar_out):.3e}", flush=True)
     p, e = pcc_of(y, gold_last)
     if os.environ.get("FM_DIAG") == "1":
         v = ttnn.to_torch(y).float().reshape(M, H)
