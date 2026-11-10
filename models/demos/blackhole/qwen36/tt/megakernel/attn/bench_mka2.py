@@ -12,7 +12,38 @@ TILE, H, I, M = 32, 5120, 2176, 32
 KT, HT = H // TILE, I // TILE   # 160, 68
 GX, GY = 10, 8; NC = GX * GY; NGU = HT; NDN = KT // NC; XSW = KT // NC
 KB = 16; GRP = int(os.environ.get("FM_GRP", "2")); ITERS = int(os.environ.get("FM_ITERS", "2"))
-dev = ttnn.open_device(device_id=int(os.environ.get('FM_DEV', '0')), trace_region_size=64 << 20)
+# MK_MESH=1 (AR integration, stage 0): run the same per-device program on a 1x8 FABRIC_1D_RING column (TT_VISIBLE_DEVICES
+# order = ring order), replicated inputs; the mesh shims below keep the rest of this file device-agnostic.
+MESH = os.environ.get('MK_MESH', '0') == '1'
+if MESH:
+    _rcfg = ttnn.FabricRouterConfig(); _rcfg.max_packet_payload_size_bytes = int(os.environ.get('QWEN36_FABRIC_PAYLOAD_BYTES', '8192'))
+    ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D_RING, ttnn.FabricReliabilityMode.STRICT_INIT, None,
+                           ttnn.FabricTensixConfig.DISABLED, ttnn.FabricUDMMode.DISABLED, ttnn.FabricManagerMode.DEFAULT, _rcfg)
+    dev = ttnn.open_mesh_device(ttnn.MeshShape(1, int(os.environ.get('MK_MESH_N', '8'))), trace_region_size=64 << 20)
+    _from_torch, _to_torch, _generic_op = ttnn.from_torch, ttnn.to_torch, ttnn.generic_op
+    def _ft(*a, **k):
+        if k.get('device') is not None and 'mesh_mapper' not in k: k['mesh_mapper'] = ttnn.ReplicateTensorToMesh(dev)
+        return _from_torch(*a, **k)
+    def _tt(t, *a, **k):  # device 0's copy (mesh_identity() checks the other devices)
+        return _to_torch(ttnn.get_device_tensors(t)[0], *a, **k) if t.storage_type() == ttnn.StorageType.DEVICE else _to_torch(t, *a, **k)
+    PROG_PER_DEV = None  # optional callable(coord) -> ProgramDescriptor (per-device AR args); else the same program everywhere
+    def _go(io, prog):
+        if isinstance(prog, ttnn.ProgramDescriptor):
+            mp = ttnn.MeshProgramDescriptor()
+            for r in range(dev.shape[0]):
+                for c_ in range(dev.shape[1]):
+                    co = ttnn.MeshCoordinate(r, c_)
+                    mp[ttnn.MeshCoordinateRange(co, co)] = PROG_PER_DEV(co) if PROG_PER_DEV else prog
+            prog = mp
+        return _generic_op(io, prog)
+    ttnn.from_torch, ttnn.to_torch, ttnn.generic_op = _ft, _tt, _go
+    ttnn.close_device = ttnn.close_mesh_device
+    def mesh_identity(t):  # max |device d - device 0| over the mesh
+        ds = [_to_torch(d).float() for d in ttnn.get_device_tensors(t)]
+        return max((d_ - ds[0]).abs().max().item() for d_ in ds)
+else:
+    dev = ttnn.open_device(device_id=int(os.environ.get('FM_DEV', '0')), trace_region_size=64 << 20)
+    def mesh_identity(t): return 0.0
 banks = dev.dram_grid_size().x
 cores = [ttnn.CoreCoord(i % GX, i // GX) for i in range(NC)]
 rect = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(GX - 1, GY - 1))])
@@ -116,6 +147,7 @@ gold = (torch.nn.functional.silu(xb @ wgq) * (xb @ wuq)).bfloat16().float() @ wd
 xbuf = ttnn.allocate_tensor_on_device(ttnn.Shape([1, 1, TILE * NC, H]), ttnn.bfloat16, ttnn.TILE_LAYOUT, dev, hs(rect, H))
 XPRE = 1 if os.environ.get("FM_XPRE", "1") == "1" else 0
 if XPRE:
+    if MESH: ttnn.deallocate(xbuf)  # mesh tensors are not freed on rebinding
     xbuf = ttnn.from_torch(xb.reshape(1, 1, M, H).bfloat16().float().repeat(1, 1, NC, 1), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=dev, memory_config=hs(rect, H))
 HDT = ttnn.bfloat8_b if os.environ.get('MK_H_BFP8') == '1' else ttnn.bfloat16  # -mk-tail: h broadcast in BFP8 halves its bytes
 print(f'[mk1] h dtype {HDT}', flush=True)
@@ -377,6 +409,7 @@ if RQKV:
     qkv_out = ttnn.from_torch(torch.zeros(1, 1, NL * TILE, QN * TILE).bfloat16(), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=dev, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     # x on every qkv core: shard x over the full grid (lockstep L1 address, same footprint as the 80-core shard)
     ttnn.deallocate(xbuf)   # free the 80-core shard first so the full-grid one reuses its lockstep L1 range
+    if MESH and xbuf is not None: ttnn.deallocate(xbuf)  # mesh tensors are not freed on rebinding
     xbuf = ttnn.from_torch(xb.reshape(1, 1, M, H).bfloat16().float().repeat(1, 1, len(ACT), 1), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=dev, memory_config=hs(kgrid, H))
     EXTRA_T = EXTRA_TX = 0   # the qkv bytes are real now
     ext_crs = crs([fcores[fi] for fi in ext_list])
@@ -660,6 +693,11 @@ def build(out):
     print('[cbs] ' + ' '.join(f'{f_.buffer_index}:{c_.total_size // 1024}K' for c_ in cbs for f_ in c_.format_descriptors), flush=True)
     return ttnn.ProgramDescriptor(kernels=ks, semaphores=sems, cbs=cbs)
 out_t = ttnn.allocate_tensor_on_device(ttnn.Shape([1, 1, M, H]), ttnn.bfloat16, ttnn.TILE_LAYOUT, dev, ws(rect, NDN * TILE))
+if os.environ.get("MK_L1DUMP") == "1":  # debug: every live L1 tensor's address
+    for _n, _v in sorted(globals().items()):
+        for _i, _t in enumerate(_v if isinstance(_v, list) else [_v]):
+            if isinstance(_t, ttnn.Tensor) and _t.storage_type() == ttnn.StorageType.DEVICE and _t.memory_config().buffer_type == ttnn.BufferType.L1:
+                print(f"[l1dump] {_n}[{_i}] addr {_t.buffer_address()} shape {list(_t.shape)}", flush=True)
 prog = build(out_t)
 def pcc_of(t, g): v = ttnn.to_torch(t).float().reshape(M, H); return torch.corrcoef(torch.stack([v.flatten(), g.flatten()]))[0, 1].item(), (v - g).abs().max().item()
 for it in range(ITERS):
@@ -712,6 +750,8 @@ for it in range(ITERS):
             pw_ = torch.corrcoef(torch.stack([wv_[L][rows_].flatten(), gold_wo[L][rows_].flatten()]))[0, 1].item()
             print(f"[rwo] iter {it} layer {L} wo pcc {pw_:.5f} max|err| {(wv_[L][rows_] - gold_wo[L][rows_]).abs().max().item():.4f} |gold|max {gold_wo[L].abs().max().item():.3f}", flush=True)
     print(f"[fm11] iter {it} wall {time.time()-t1:.2f}s last-layer pcc {p:.5f} max|err| {e:.4f} |gold|max {gold_last.abs().max().item():.3f}", flush=True)
+    if MESH:
+        print(f"[mesh] iter {it} devices {dev.get_num_devices()}: max |dev d - dev 0| out {mesh_identity(y):.3e} ymix {mesh_identity(ymix):.3e} sdpa {mesh_identity(outs):.3e}", flush=True)
 ttnn.ReadDeviceProfiler(dev)
 print('[fm11] profiler read', flush=True)
 ttnn.close_device(dev)
