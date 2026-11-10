@@ -28,7 +28,7 @@ _2x4sp0tp1nl1_line_is_fsdp1 = pytest.param(
 _2x4sp1tp0nl1_line_is_fsdp1 = pytest.param(
     (2, 4), 1, 0, 1, _line, ttnn.Topology.Linear, True, id="2x4sp1tp0nl1_line_is_fsdp1"
 )
-# is_fsdp=False mirrors production BH 2x4 (dynamic_load path, not per-layer FSDP gathers)
+# is_fsdp=False mirrors production BH 2x4 (offload_weights path, not per-layer FSDP gathers)
 _2x4sp1tp0nl2_line_is_fsdp0 = pytest.param(
     (2, 4), 1, 0, 2, _line, ttnn.Topology.Linear, False, id="2x4sp1tp0nl2_line_is_fsdp0"
 )
@@ -58,21 +58,21 @@ LTX_PIPELINE_MESH_PARAMS = [
 ]
 
 
-def _with_dynamic_load(param, dynamic_load):
+def _with_offload_weights(param, offload_weights):
     """Append dynamic_node arg to a 7-field mesh param, yielding the pipeline signature
-    (mesh_device, sp_axis, tp_axis, num_links, device_params, topology, is_fsdp, dynamic_load).
-    Some tests use 7-field mesh_device params, some need an 8th dynamic_load. This function
+    (mesh_device, sp_axis, tp_axis, num_links, device_params, topology, is_fsdp, offload_weights).
+    Some tests use 7-field mesh_device params, some need an 8th offload_weights. This function
     allows us concatenate them together"""
     v = param.values  # (mesh_shape, sp, tp, num_links, device_params, topology, is_fsdp)
     assert len(v) == 7, f"expected a 7-field mesh param, got {len(v)}: {param.id}"
-    return pytest.param(*v, dynamic_load, marks=param.marks, id=param.id)
+    return pytest.param(*v, offload_weights, marks=param.marks, id=param.id)
 
 
-# dynamic_load=True only for the 2x4 (BH-like) configs — mirrors production, where 2x4 pages
-# weights in/out (dynamic_load path) to avoid init-time DRAM OOM rather than per-layer FSDP gathers.
+# offload_weights=True only for the 2x4 (BH-like) configs, which page weights in and out to avoid
+# init-time DRAM OOM rather than per-layer FSDP gathers. A pipeline that offloads weights runs eager.
 _PIPELINE_DL_TRUE = {"2x4sp0tp1nl1_line_is_fsdp1", "2x4sp1tp0nl2_line_is_fsdp0"}
 
-LTX_PIPELINE_MESH_PARAMS_DL = [_with_dynamic_load(p, p.id in _PIPELINE_DL_TRUE) for p in LTX_PIPELINE_MESH_PARAMS]
+LTX_PIPELINE_MESH_PARAMS_DL = [_with_offload_weights(p, p.id in _PIPELINE_DL_TRUE) for p in LTX_PIPELINE_MESH_PARAMS]
 
 
 def _override_base_device_params(base, device_params, *, id=None):
@@ -101,8 +101,8 @@ LTX_TWO_STAGES_MESH_PARAMS_DL = LTX_ONE_STAGE_MESH_PARAMS_DL
 # ---------------------------------------------------------------------------
 # Distilled AV pipeline mesh params. Same geometry as the pipeline configs, but the audio
 # decode chain needs bigger device pools on a few configs, and the WH 4x8 ring config runs
-# dynamic_load. Reuse the shared building blocks for geometry (single-sourced); override
-# device_params only where audio decode diverges, then append the distilled dynamic_load.
+# offload_weights. Reuse the shared building blocks for geometry (single-sourced); override
+# device_params only where audio decode diverges, then append the distilled offload_weights.
 # ---------------------------------------------------------------------------
 # Override device_params for the audio decode chain. Each dict augments the base line/ring
 # params only with the pool(s) that config actually needs:
@@ -121,21 +121,20 @@ _line_trace = {**_line, "trace_region_size": 500_000_000, "l1_small_size": 32768
 _ring_trace = {**ring_params_8k_req_exact_devices, "trace_region_size": 500_000_000, "l1_small_size": 32768}
 
 LTX_DISTILLED_MESH_PARAMS_DL = [
-    _with_dynamic_load(_2x2sp0tp1nl2_line_is_fsdp1, False),
-    _with_dynamic_load(_2x4sp0tp1nl1_line_is_fsdp1, True),
-    # BH on 2x4 (production loudbox): L1_SMALL scratch for the vocoder conv taps + trace region for the traced
-    # decode -- the same device params the I2V and audio lists already give this id, so the distilled e2e runs
-    # the served (traced) path here too.
-    _with_dynamic_load(_override_base_device_params(_2x4sp1tp0nl2_line_is_fsdp0, _line_trace), True),
+    _with_offload_weights(_2x2sp0tp1nl2_line_is_fsdp1, False),
+    _with_offload_weights(_2x4sp0tp1nl1_line_is_fsdp1, True),
+    # BH on 2x4: L1_SMALL scratch for the vocoder conv taps. It offloads weights, so it runs eager and its
+    # trace region stays unused -- the same device params the I2V and audio lists give this id.
+    _with_offload_weights(_override_base_device_params(_2x4sp1tp0nl2_line_is_fsdp0, _line_trace), True),
     # WH (ring) on 4x8: bigger worker L1 for RingAttention.
-    _with_dynamic_load(_override_base_device_params(_4x8sp1tp0nl4_ring_is_fsdp1, _ring_worker_l1), True),
+    _with_offload_weights(_override_base_device_params(_4x8sp1tp0nl4_ring_is_fsdp1, _ring_worker_l1), True),
     # BH (linear) on 4x8: L1_SMALL for the vocoder conv taps (without it every tap filter OOMs on the
     # L1_SMALL pool and falls through to the MAC path, ~13x slower audio) + trace region for the traced
     # decode -- the same device params the ring row and the I2V/Pro lists already give this id.
-    _with_dynamic_load(_override_base_device_params(_4x8sp1tp0nl2_line_is_fsdp0, _line_trace), False),
+    _with_offload_weights(_override_base_device_params(_4x8sp1tp0nl2_line_is_fsdp0, _line_trace), False),
     # BH (ring) on 4x8: trace region + L1_SMALL for the traced decode.
-    _with_dynamic_load(_override_base_device_params(_4x8sp1tp0nl2_ring_is_fsdp0, _ring_trace), False),
-    _with_dynamic_load(_4x32sp1tp0nl2_ring_is_fsdp0, False),
+    _with_offload_weights(_override_base_device_params(_4x8sp1tp0nl2_ring_is_fsdp0, _ring_trace), False),
+    _with_offload_weights(_4x32sp1tp0nl2_ring_is_fsdp0, False),
 ]
 
 # I2V chained t2v->i2v; both configs are traced (trace region + L1_SMALL). 4x8 Galaxy (ring):
@@ -143,8 +142,8 @@ LTX_DISTILLED_MESH_PARAMS_DL = [
 # so the VAE encoder fold + even-shard padding must handle non-mesh-aligned dims here — the 2x4
 # loudbox shards evenly and never hits this, so it's kept as a distinct id.
 LTX_DISTILLED_I2V_MESH_PARAMS_DL = [
-    _with_dynamic_load(_override_base_device_params(_2x4sp1tp0nl2_line_is_fsdp0, _line_trace), True),
-    _with_dynamic_load(
+    _with_offload_weights(_override_base_device_params(_2x4sp1tp0nl2_line_is_fsdp0, _line_trace), True),
+    _with_offload_weights(
         _override_base_device_params(_4x8sp1tp0nl2_ring_is_fsdp0, _ring_trace, id="i2v_4x8sp1tp0nl2_ring_is_fsdp0"),
         False,
     ),
@@ -158,8 +157,8 @@ LTX_TWO_STAGES_I2V_MESH_PARAMS_DL = LTX_DISTILLED_I2V_MESH_PARAMS_DL
 # Audio-decode-only profiling: both configs use the traced line params (trace region + L1_SMALL)
 # so LTX_TRACED=1 can capture the vocoder.
 LTX_DISTILLED_AUDIO_MESH_PARAMS_DL = [
-    _with_dynamic_load(_override_base_device_params(_2x4sp1tp0nl2_line_is_fsdp0, _line_trace), True),
-    _with_dynamic_load(_override_base_device_params(_4x8sp1tp0nl2_line_is_fsdp0, _line_trace), False),
+    _with_offload_weights(_override_base_device_params(_2x4sp1tp0nl2_line_is_fsdp0, _line_trace), True),
+    _with_offload_weights(_override_base_device_params(_4x8sp1tp0nl2_line_is_fsdp0, _line_trace), False),
 ]
 
 # No 1x1 config: real-grid shapes require SP padding, and video self-attention only masks
@@ -259,7 +258,7 @@ LTX_VAE_ENCODER_PROD_MESH_PARAMS = [
 
 # ---------------------------------------------------------------------------
 # Audio mesh params — (mesh_device, mesh_shape, sp_axis, tp_axis, num_links,
-#                       dynamic_load, device_params, topology, is_fsdp)
+#                       offload_weights, device_params, topology, is_fsdp)
 # Audio tests create a submesh from mesh_device using mesh_shape, hence the
 # duplicate shape field.
 # ---------------------------------------------------------------------------

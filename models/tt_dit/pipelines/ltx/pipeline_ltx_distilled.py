@@ -140,13 +140,13 @@ class LTXDistilledPipeline(LTXPipeline):
 
         # Allocate both stages' persistent trace I/O before any capture so all held inputs sit
         # below both traces' activation regions and neither replay overwrites the other's inputs.
-        if self._traced:
+        if self.trace:
             self._prealloc_trace_io("s1", num_frames=num_frames, height=height // 2, width=width // 2)
             self._prealloc_trace_io("s2", num_frames=num_frames, height=height, width=width)
 
         # Warm the encoder before any capture so its connector workspace isn't in a trace's
-        # activation region (zeroed on replay). dynamic_load reloads per request → warms last.
-        if self._traced and not self.dynamic_load:
+        # activation region (zeroed on replay). offload_weights reloads per request → warms last.
+        if self.trace:
             self.gemma_encoder_pair.ensure_loaded()
             self.encode_prompts(["warmup"], use_cache=False)
 
@@ -198,7 +198,7 @@ class LTXDistilledPipeline(LTXPipeline):
             self._warmup_decode(num_frames, height, width)
 
             # Programs are now compiled
-            if self._traced and self.vae_decoder is not None:
+            if self.trace and self.vae_decoder is not None:
                 self.vae_decoder._vae_traced = True
 
             # Warm the on-device audio decode eagerly at the real latent shape: compiles kernels,
@@ -219,8 +219,8 @@ class LTXDistilledPipeline(LTXPipeline):
             self._warmup_encode(height, width)
 
         # use_cache=False forces a real encode so the Gemma/connector kernels compile. traced-static
-        # already warmed before capture (above); dynamic_load / untraced warm last.
-        if self.dynamic_load or not self._traced:
+        # already warmed before capture (above); offload_weights / untraced warm last.
+        if not self.trace:
             self.gemma_encoder_pair.ensure_loaded()
             self.encode_prompts(["warmup"], use_cache=False)
 
@@ -648,7 +648,7 @@ class LTXDistilledPipeline(LTXPipeline):
                 logger.warning(f"{label}/{name}: {s['nonfinite']} non-finite elements in post-denoise latent")
 
     @cap_torch_threads_to_half_the_cpus()
-    def generate(
+    def _run(
         self,
         prompt: str,
         *,
@@ -684,13 +684,13 @@ class LTXDistilledPipeline(LTXPipeline):
 
         t0 = time.time()
         # A served request encodes a prompt nothing has seen, so a cache hit would drop the encoder
-        # out of the reported total and out of the traced path it belongs in. dynamic_load keeps the
+        # out of the reported total and out of the traced path it belongs in. offload_weights keeps the
         # cache: there the encoder is coresident-excluded from the DiT, so re-encoding every request
         # would reload it and evict the captured model state.
-        cached = self.dynamic_load and os.path.exists(self._device_embed_cache_path([prompt]))
+        cached = self.offload_weights and os.path.exists(self._device_embed_cache_path([prompt]))
         if not cached:
             self.gemma_encoder_pair.ensure_loaded()
-        enc = self.encode_prompts([prompt], use_cache=self.dynamic_load)
+        enc = self.encode_prompts([prompt], use_cache=self.offload_weights)
         v_embeds, a_embeds = enc[0][0].float(), enc[0][1].float()
         t_encode = time.time() - t0
         timings.append(("Encoder (cache)" if cached else "Encoder", t_encode))
@@ -726,7 +726,7 @@ class LTXDistilledPipeline(LTXPipeline):
 
         t0 = time.time()
         self._prepare_transformer(0)
-        if self.dynamic_load:
+        if self.offload_weights:
             logger.info(f"Transformer prepare: {time.time() - t0:.1f}s")
 
         logger.info(f"Stage 1: {s1_height}x{s1_width}, {len(DISTILLED_SIGMA_VALUES) - 1} steps")
@@ -741,7 +741,7 @@ class LTXDistilledPipeline(LTXPipeline):
             seed=seed,
             image_cond_latent=s1_cond_latent,
             image_cond_strength=cond_strength,
-            traced=self._traced,
+            traced=self.trace,
             trace_key="s1",
         )
         t_stage1 = time.time() - t0
@@ -776,7 +776,7 @@ class LTXDistilledPipeline(LTXPipeline):
             initial_audio_latent=s1_audio.unsqueeze(0) if s1_audio.dim() == 2 else s1_audio,
             image_cond_latent=full_cond_latent,
             image_cond_strength=cond_strength,
-            traced=self._traced,
+            traced=self.trace,
             trace_key="s2",
         )
         t_stage2 = time.time() - t0
@@ -788,7 +788,7 @@ class LTXDistilledPipeline(LTXPipeline):
 
         t0 = time.time()
         self._prepare_vae()
-        if self.dynamic_load:
+        if self.offload_weights:
             logger.info(f"VAE prepare: {time.time() - t0:.1f}s")
 
         latent_h, latent_w = height // SPATIAL_COMPRESSION, width // SPATIAL_COMPRESSION
@@ -822,6 +822,6 @@ class LTXDistilledPipeline(LTXPipeline):
         logger.info(f"Total (compute): {sum(s for _, s in timings):.1f}s | Output: {output_path}")
         # Every trace this pipeline takes is captured by now, so the encoder can start tracing: its
         # capture is last and nothing left will reclaim its activation region.
-        if self._traced and not self.dynamic_load:
+        if self.trace:
             self.gemma_encoder_pair.open_trace_gate()
         return output_path
