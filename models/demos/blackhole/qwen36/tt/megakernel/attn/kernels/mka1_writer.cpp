@@ -17,9 +17,8 @@ FORCE_INLINE volatile tt_l1_ptr uint32_t* sem(uint32_t id) {
 void kernel_main() {
     constexpr uint32_t QTB = get_compile_time_arg_val(0), PFTB = get_compile_time_arg_val(1), OTB = get_compile_time_arg_val(2);
     constexpr uint32_t OATB = get_compile_time_arg_val(3);
-    constexpr uint32_t VNOC0 = get_compile_time_arg_val(4), NBB = get_compile_time_arg_val(5);
-    constexpr uint32_t KVTB = PFTB;   // KV and the prefetch stand-in are both BFP4
-    constexpr auto q_args = TensorAccessorArgs<6>();
+    constexpr uint32_t VNOC0 = get_compile_time_arg_val(4), NBB = get_compile_time_arg_val(5), KVTB = get_compile_time_arg_val(6);   // KV tile bytes (BFP8 default, BFP4 optional)
+    constexpr auto q_args = TensorAccessorArgs<7>();
     constexpr auto pf_args = TensorAccessorArgs<q_args.next_compile_time_args_offset()>();
     constexpr auto out_args = TensorAccessorArgs<pf_args.next_compile_time_args_offset()>();
     constexpr auto kv_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();

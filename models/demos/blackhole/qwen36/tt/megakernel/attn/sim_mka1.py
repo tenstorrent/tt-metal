@@ -32,6 +32,7 @@ q_t[:, :NQH * T] = torch.randn(NU, NQH * T, DH) / math.sqrt(DH)
 k_t = torch.randn(NU, CTX, DH); v_t = torch.randn(NU, CTX, DH)
 # KV pages: row-tile ((u * NB + b) * 2 + kv), 8 col tiles each
 PLACE = 1 if os.environ.get("MKA_PLACE", "il") == "bank" else 0
+KVDT = {"bfp8": ttnn.bfloat8_b, "bfp4": ttnn.bfloat4_b}[os.environ.get("MKA_KVDT", "bfp8")]   # §8: BFP8 default, BFP4 optional
 NBANK = dev.dram_grid_size().x
 blk = torch.stack([k_t.reshape(NU, NB, TILE, DH), v_t.reshape(NU, NB, TILE, DH)], dim=2)   # [u, b, kv, 32, 256]
 BLOC = [(c.x, c.y) for c in dev.get_optimal_dram_bank_to_logical_worker_assignment(ttnn.NOC.NOC_1)]
@@ -79,13 +80,13 @@ else:
     kv_rows = blk.reshape(-1, DH)
 t0 = time.time()
 if PLACE:
-    kv = ttnn.from_torch(kv_rows.reshape(1, 1, -1, TILE).bfloat16(), dtype=ttnn.bfloat4_b, layout=ttnn.TILE_LAYOUT, device=dev, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    kv = ttnn.from_torch(kv_rows.reshape(1, 1, -1, TILE).bfloat16(), dtype=KVDT, layout=ttnn.TILE_LAYOUT, device=dev, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     pq = ttnn.to_torch(kv).float().reshape(-1, TILE, TILE)
     tq = torch.zeros(NU * NB, 16, TILE, TILE)
     for j in range(16): tq[:, j] = pq[(slot0 + j) * NBANK + bank]
     kvq = tq.reshape(NU, NB, 2, DH // TILE, TILE, TILE).permute(0, 1, 2, 4, 3, 5).reshape(NU, NB, 2, TILE, DH)
 else:
-    kv = ttnn.from_torch(kv_rows.reshape(1, 1, -1, DH).bfloat16(), dtype=ttnn.bfloat4_b, layout=ttnn.TILE_LAYOUT, device=dev, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    kv = ttnn.from_torch(kv_rows.reshape(1, 1, -1, DH).bfloat16(), dtype=KVDT, layout=ttnn.TILE_LAYOUT, device=dev, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     kvq = ttnn.to_torch(kv).float().reshape(NU, NB, 2, TILE, DH)
 kq, vq = kvq[:, :, 0].reshape(NU, CTX, DH), kvq[:, :, 1].reshape(NU, CTX, DH)
 del kv_rows
@@ -96,22 +97,22 @@ for u in range(NU):
     p = torch.exp(qq[u] @ kq[u].T)
     gold[u] = (p @ vq[u]) / p.sum(-1, keepdim=True)
 print(f"[mka1] tensors + golden {time.time()-t0:.1f}s, KV {kv.buffer().size()/1e6 if hasattr(kv,'buffer') else NU*NB*16*576/1e6:.1f}MB", flush=True)
-KVTB = ttnn.Tile([TILE, TILE]).get_tile_size(ttnn.bfloat4_b); QTB = ttnn.Tile([TILE, TILE]).get_tile_size(ttnn.bfloat16)
+KVTB = ttnn.Tile([TILE, TILE]).get_tile_size(KVDT); PFTB = ttnn.Tile([TILE, TILE]).get_tile_size(ttnn.bfloat4_b); QTB = ttnn.Tile([TILE, TILE]).get_tile_size(ttnn.bfloat16)
 OTB = ttnn.Tile([TILE, TILE]).get_tile_size(ttnn.float32)
 is_stream = [1 if (c.x < 10 and c.y < 8) else 0 for c in cores]
 NSTREAM = sum(is_stream)
-PFT = int(PF_KB * 1024 // KVTB)
+PFT = int(PF_KB * 1024 // PFTB)
 pf = ttnn.from_torch(torch.zeros(1, 1, max(1, NSTREAM * PFT) * TILE, TILE).bfloat16(), dtype=ttnn.bfloat4_b, layout=ttnn.TILE_LAYOUT, device=dev, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 out = ttnn.from_torch(torch.zeros(1, 1, NU * TILE, DH).bfloat16(), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=dev, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 def cbd(idx, dt, pages):
     page = ttnn.Tile([TILE, TILE]).get_tile_size(dt)
     return ttnn.CBDescriptor(total_size=pages * page, core_ranges=grid, format_descriptors=[ttnn.CBFormatDescriptor(buffer_index=idx, data_format=dt, page_size=page)])
-NBB = int(os.environ.get("MKA_NBB", "4")); DEPTH = 2 * NBB; VNOC0 = int(os.environ.get("MKA_VNOC0", "0"))
-cbs = [cbd(9, ttnn.bfloat16, 32), cbd(10, ttnn.bfloat4_b, 8 * DEPTH), cbd(11, ttnn.bfloat4_b, 8 * DEPTH), cbd(12, ttnn.float32, 9),
-       cbd(24, ttnn.bfloat16, 1), cbd(25, ttnn.bfloat16, 2 * NBB), cbd(26, ttnn.float32, 18), cbd(27, ttnn.float32, 1),
+NBB = int(os.environ.get("MKA_NBB", "4")); DEPTH = 2 * NBB; VNOC0 = int(os.environ.get("MKA_VNOC0", "1")); RSLOT = int(os.environ.get("MKA_RSLOT", "2"))
+cbs = [cbd(9, ttnn.bfloat16, 32), cbd(10, KVDT, 8 * DEPTH), cbd(11, KVDT, 8 * DEPTH), cbd(12, ttnn.float32, 9),
+       cbd(24, ttnn.bfloat16, 1), cbd(25, ttnn.bfloat16, 2 * NBB), cbd(26, ttnn.float32, 9 * RSLOT), cbd(27, ttnn.float32, 1),
        cbd(28, ttnn.bfloat16, 8), cbd(29, ttnn.bfloat4_b, 32)]
-l1_kb = (32 * QTB + 2 * 8 * DEPTH * KVTB + 9 * OTB + QTB + 2 * NBB * QTB + 18 * OTB + OTB + 8 * QTB + 32 * KVTB) / 1024
-print(f"[mka1] ATTN working set {l1_kb:.0f} KB/core (budget 300)", flush=True)
+l1_kb = (32 * QTB + 2 * 8 * DEPTH * KVTB + 9 * OTB + QTB + 2 * NBB * QTB + 9 * RSLOT * OTB + OTB + 8 * QTB + 32 * PFTB) / 1024
+print(f"[mka1] KV {KVDT} NBB {NBB} rslot {RSLOT} vnoc0 {VNOC0}: ATTN working set {l1_kb:.0f} KB/core (budget 300)", flush=True)
 sems = [ttnn.SemaphoreDescriptor(id=i, core_ranges=grid, initial_value=0) for i in range(12, 16)]
 rrt, wrt, crt = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
 si = 0
@@ -144,7 +145,7 @@ acc_kv = ttnn.TensorAccessorArgs(kv).get_compile_time_args()
 acc_q = ttnn.TensorAccessorArgs(q).get_compile_time_args(); acc_pf = ttnn.TensorAccessorArgs(pf).get_compile_time_args(); acc_o = ttnn.TensorAccessorArgs(out).get_compile_time_args()
 ks = [ttnn.KernelDescriptor(kernel_source=f"{KD}/mka1_reader.cpp", core_ranges=grid, compile_time_args=[KVTB, OTB, QTB, NBB, PLACE, NBANK, VNOC0] + acc_kv + acc_o, runtime_args=rrt,
                             config=ttnn.DataMovementConfigDescriptor(processor=ttnn.DataMovementProcessor.RISCV_1, noc=ttnn.NOC.NOC_1)),
-      ttnn.KernelDescriptor(kernel_source=f"{KD}/mka1_writer.cpp", core_ranges=grid, compile_time_args=[QTB, KVTB, OTB, QTB, VNOC0, NBB] + acc_q + acc_pf + acc_o + acc_kv,
+      ttnn.KernelDescriptor(kernel_source=f"{KD}/mka1_writer.cpp", core_ranges=grid, compile_time_args=[QTB, PFTB, OTB, QTB, VNOC0, NBB, KVTB] + acc_q + acc_pf + acc_o + acc_kv,
                             runtime_args=wrt, config=ttnn.DataMovementConfigDescriptor(processor=ttnn.DataMovementProcessor.RISCV_0, noc=ttnn.NOC.NOC_0)),
       ttnn.KernelDescriptor(kernel_source=f"{KD}/mka1_compute.cpp", core_ranges=grid, compile_time_args=[NBB], runtime_args=crt,
                             config=ttnn.ComputeConfigDescriptor(math_fidelity=getattr(ttnn.MathFidelity, os.environ.get("MKA_FID", "HiFi2")), fp32_dest_acc_en=True, dst_full_sync_en=True, math_approx_mode=False))]

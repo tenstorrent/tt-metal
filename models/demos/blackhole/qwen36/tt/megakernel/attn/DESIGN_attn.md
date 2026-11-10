@@ -57,3 +57,24 @@ DRAM bytes per attention layer ≈ 65.6 MB (+ the next layer's prefetched MLP we
 that is ~164 µs; plus the non-overlappable chain (qkv compute after its weights land ~5 µs, root extract/multicast,
 tree reduce, concat/gate/broadcast, wo compute) ≈ 20-30 µs → **~190-200 µs per attention layer vs ~314 today**
 (−~1.8-2.0 ms per pass over 16 layers), if the KV stream reaches ~400 GB/s while weights prefetch alongside.
+
+## 5. MKA1 results (2026-11-10; silicon = P150 chip 0 of d30u20, 120 cores; sim = ttsim-perf BH, 110 cores)
+SDPA phase only (4 own users, 6 q heads / 1 KV head, T=4), PCC 0.99998 in every configuration.
+| Config (32K unless noted) | Silicon span | Bytes | Aggregate |
+|---|---|---|---|
+| BFP4 KV, K+V on NOC1 only, no prefetch (v0) | 186 µs | 37.7 MB | 203 GB/s |
+| BFP4 KV, K NOC1 + V NOC0, NBB 4, no prefetch | 124 µs | 37.7 MB | ~330 GB/s (KV-bound) |
+| BFP4 KV, + 27 MB STREAM weight prefetch (role-weighted, NBB 8) | 195-205 µs | 64.9 MB | ~325-335 GB/s |
+| BFP4 KV 64K, + prefetch | 320 µs | 102 MB | ~320 GB/s |
+| **BFP8 KV (§8 default), NBB 2, no prefetch** | **166-175 µs** | 71.2 MB | **~410-430 GB/s** |
+| **BFP8 KV, NBB 2, + 27 MB prefetch** | **234-249 µs** | 98.4 MB | **~395-420 GB/s** |
+- Larger KV reads (BFP8 1088 B vs BFP4 576 B tiles) reach higher aggregate bandwidth: per-read overhead, not bytes, limits
+  BFP4. Multi-tile contiguous KV reads (page = whole 32-position block) would likely lift BFP4 too.
+- Bank-local KV placement was worse (220 µs: NoC distance dominates); a single NoC for all KV is the main limiter.
+- Compute is not the bound (LoFi = HiFi2); per-core compute median ~80-145 µs vs read-bound spans.
+- Sim vs silicon (final BFP4 config, +prefetch): 4K 34 vs 100 µs, 8K 48 vs 114 µs; no prefetch 8K 48 vs 59 µs. The sim
+  is 1.2x optimistic without contention and 2-3x with heavy concurrent DRAM traffic: use silicon for contention numbers.
+- L1: BFP8 NBB 2 = 288 KB; NBB 4 needs 1 reduce slot (328 KB, over the 300 KB region) and is slower anyway.
+- Today's prod verify SDPA at 32K u8 ≈ 190 µs (BFP4 KV, KV only). MKA1 with BFP8 KV does the KV + 27 MB of next-op
+  weights in ~240 µs, i.e. the next layer's wo + MLP weights stream for ~50-70 µs extra instead of ~68 µs at 400 GB/s
+  after it.
