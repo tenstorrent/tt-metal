@@ -59,8 +59,10 @@ struct KBand {
 // Each band's (N tile, K group) items in N-tile order, split evenly over at most its cores. The piece of an N tile
 // that starts at K group 0 holds the tile: whole when no other core has a piece of it, else a head whose finish adds
 // the other pieces' fp32 partials (tails). Per core, segments in compute order: heads (from the band's first K tile,
-// so they run while the input streams in), wholes, tails, finishes. A finish waits only for tails, which wait for
-// nothing, so no chain of waits forms across cores. Fewer cores until no N tile spans more than kMaxPartials + 1 cores.
+// so they run while the input streams in), wholes, tails by first K group (in a later band, a core's tails that start
+// at the band's first K tile run before the one that starts inside it), finishes. A finish waits only for tails,
+// which wait for nothing, so no chain of waits forms across cores. Fewer cores until no N tile spans more than
+// kMaxPartials + 1 cores.
 std::vector<std::vector<Segment>> plan_segments(uint32_t n_tiles, std::vector<KBand>& bands, uint32_t grid_x) {
     uint32_t most_cores = 0;
     for (const KBand& b : bands) {
@@ -112,6 +114,8 @@ std::vector<std::vector<Segment>> plan_segments(uint32_t n_tiles, std::vector<KB
                     slots += spans[s.n] - 1;
                 }
             }
+            std::stable_sort(
+                tails.begin(), tails.end(), [](const Segment& a, const Segment& b) { return a.g0 < b.g0; });
             for (const auto* group : {&heads, &wholes, &tails, &finishes}) {
                 plan[i].insert(plan[i].end(), group->begin(), group->end());
             }
