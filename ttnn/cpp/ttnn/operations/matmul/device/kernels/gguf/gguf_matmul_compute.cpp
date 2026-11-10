@@ -7,7 +7,7 @@
 // the Float32 accumulator (tile 0) and two sets of (decoded tile, page, decoder scratch), tiles 1-3 and 4-6,
 // alternating per K tile. The pack thread decodes K tile k + 1 while the math thread multiplies tile k
 // (gguf_decode_overlap_*); the unpacker copies the next page into DEST meanwhile, before phase 2 where that phase's
-// stores are not arbitrated against it (MXFP4, IQ4_NL, IQ4_XS, Q2_K). The input arrives in chunks
+// stores are not arbitrated against it (Q2_K). The input arrives in chunks
 // (gguf_matmul_writer.cpp) and each K tile is waited for when first reached. Compile args: format id, K tiles of the
 // band (c_1 holds those), input tiles per chunk, input rows the matmul computes (8, 16 or 32), the band's first K tile.
 // Runtime args: segments, then per segment its first and end K tile and its role (gguf_matmul_program_factory.cpp
@@ -230,10 +230,10 @@ void kernel_main() {
     constexpr auto pack = GgufDecodeThread::Pack;
     constexpr uint32_t cb_page = tt::CBIndex::c_0, cb_in0 = tt::CBIndex::c_1, cb_out = gguf_matmul::cb_out;
     const uint32_t segments = get_arg_val<uint32_t>(0);
-    // DEST tiles of the two sets: decoded tile, its page in the next tile, scratch past the page. MXFP4 and NVFP4:
-    // decoded tiles 3 and 5, pages 4 and 6; their block-float codes go to the 16-bit rows that the decoded tile's
-    // rows address (dest_srca_mm_page_unpack_codes), in tiles 1 and 2.
-    constexpr bool bfp = gguf::fp4_bfp<fmt>;
+    // DEST tiles of the two sets: decoded tile, its page in the next tile, scratch past the page. Block-float codes
+    // (MXFP4, NVFP4, IQ4_NL, IQ4_XS): decoded tiles 3 and 5, pages 4 and 6; the codes go to the 16-bit rows that the
+    // decoded tile's rows address (dest_srca_mm_page_unpack_codes), in tiles 1 and 2.
+    constexpr bool bfp = gguf::bfp_codes<fmt>;
     auto out_of = [](uint32_t set) -> uint32_t { return bfp ? (set ? 5 : 3) : (set ? 4 : 1); };
     auto page_of = [](uint32_t set) -> uint32_t { return bfp ? (set ? 6 : 4) : (set ? 5 : 2); };
 
@@ -267,10 +267,10 @@ void kernel_main() {
                 0,
                 page_of(0),
                 out_of(0),
-                gguf::FP4_CODES,
-                gguf::FP4_CODE_EXP,
+                gguf::BFP_CODES,
+                gguf::BFP_CODE_EXP,
                 L.scale_offset,
-                gguf::FP4_SCALE_WORDS);
+                gguf::bfp_scale_words<fmt>());
         } else {
             dest_srca_mm_page_to_dest(cb_page, 0, page_of(0));
         }
@@ -314,7 +314,7 @@ void kernel_main() {
                 }
                 if constexpr (bfp) {
                     dest_srca_mm_page_unpack_codes(
-                        cb_page, 0, gguf::FP4_CODES, gguf::FP4_CODE_EXP, L.scale_offset, gguf::FP4_SCALE_WORDS);
+                        cb_page, 0, gguf::BFP_CODES, gguf::BFP_CODE_EXP, L.scale_offset, gguf::bfp_scale_words<fmt>());
                 } else {
                     dest_srca_mm_page_unpack(cb_page, 0);
                 }
