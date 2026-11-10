@@ -48,6 +48,13 @@ constexpr uint32_t N_tiles_per_chunk = get_compile_time_arg_val(21);
 // Per-chunk tile widths + prefix-sum offsets (from CHUNK_TILE_WIDTHS/CHUNK_TILE_OFFSETS defines).
 constexpr uint32_t chunk_tile_widths[N_chunks] = {CHUNK_TILE_WIDTHS};
 constexpr uint32_t chunk_tile_offsets[N_chunks + 1] = {CHUNK_TILE_OFFSETS};
+#ifdef GROUPED_N
+// linear1: output-space chunk table (the SwiGLU chunk is half its weight width).
+constexpr uint32_t chunk_tile_widths_out[N_chunks] = {CHUNK_TILE_WIDTHS_OUT};
+constexpr uint32_t chunk_tile_offsets_out[N_chunks + 1] = {CHUNK_TILE_OFFSETS_OUT};
+// Physical weight column -> output column: group A unchanged, group B (SwiGLU pairs) halves.
+FORCE_INLINE uint32_t grp_out_n(uint32_t p) { return p < GRP_A_TILES ? p : GRP_A_TILES + (p - GRP_A_TILES) / 2; }
+#endif
 constexpr uint32_t K_tiles_per_device = get_compile_time_arg_val(22);
 constexpr uint32_t K_block_tail_tiles = get_compile_time_arg_val(23);
 constexpr uint32_t in0_parallel_axis_cores = get_compile_time_arg_val(24);
@@ -348,6 +355,11 @@ void kernel_main() {
         for (uint32_t n_block_iter = 0; n_block_iter < N_blocks_per_core; n_block_iter++) {
             uint32_t n_tile = N_start_tile + n_block_iter * N_block_tiles;
             uint32_t n_tile_end = std::min(n_tile + N_block_tiles, N_end_tile);
+#ifdef GROUPED_N
+            // Blocks never straddle the A / B boundary (host-checked), so the whole block maps contiguously.
+            n_tile_end = grp_phys_n(n_tile) + (n_tile_end - n_tile);
+            n_tile = grp_phys_n(n_tile);
+#endif
 
             for (uint32_t k_block_iter = 0; k_block_iter < K_num_blocks; k_block_iter++) {
                 if (defer_write && k_block_iter == defer_write_k_block) {
@@ -366,6 +378,38 @@ void kernel_main() {
                             defer_write_n_tile / 2,
                             defer_write_n_tile_end / 2);
                         cb_out.pop_front(out_block_num_tiles_swiglu);
+#elif defined(GROUPED_N)
+                        if (defer_write_n_tile >= GRP_A_TILES) {  // SwiGLU block: half width
+                            cb_out.wait_front(out_block_num_tiles / 2);
+                            write_block_sync_split<M_block_tiles, N_block_tiles / 2, N_chunks>(
+                                noc_obj,
+                                outputs_tuple,
+                                out0_shape,
+                                chunk_tile_widths_out,
+                                chunk_tile_offsets_out,
+                                cb_out.get_read_ptr(),
+                                out_tile_size,
+                                defer_write_m_tile,
+                                defer_write_m_tile_end,
+                                grp_out_n(defer_write_n_tile),
+                                grp_out_n(defer_write_n_tile_end));
+                            cb_out.pop_front(out_block_num_tiles / 2);
+                        } else {
+                            cb_out.wait_front(out_block_num_tiles);
+                            write_block_sync_split<M_block_tiles, N_block_tiles, N_chunks>(
+                                noc_obj,
+                                outputs_tuple,
+                                out0_shape,
+                                chunk_tile_widths_out,
+                                chunk_tile_offsets_out,
+                                cb_out.get_read_ptr(),
+                                out_tile_size,
+                                defer_write_m_tile,
+                                defer_write_m_tile_end,
+                                defer_write_n_tile,
+                                defer_write_n_tile_end);
+                            cb_out.pop_front(out_block_num_tiles);
+                        }
 #else
                         cb_out.wait_front(out_block_num_tiles);
                         uint32_t out_read_ptr = cb_out.get_read_ptr();
@@ -667,6 +711,7 @@ void kernel_main() {
             }
 #endif
 
+#ifndef K_FORWARD_ONLY
             if constexpr (!is_linear) {
                 k_forward = !k_forward;
             }
@@ -676,6 +721,7 @@ void kernel_main() {
             if constexpr (!is_linear) {
                 reuse_block = true;
             }
+#endif  // K_FORWARD_ONLY: every N block reads K forward from block 0 (no reuse), like Linear
 
             defer_write_m_tile = m_tile;
             defer_write_m_tile_end = m_tile_end;
@@ -701,6 +747,34 @@ void kernel_main() {
                         m_tile_end,
                         n_tile / 2,
                         n_tile_end / 2);
+#elif defined(GROUPED_N)
+                    if (n_tile >= GRP_A_TILES) {  // SwiGLU block: compute pushes N_block / 2 tiles per row
+                        write_block_sync_granular_split<M_block_tiles, N_block_tiles / 2, N_chunks>(
+                            noc_obj,
+                            outputs_tuple,
+                            out0_shape,
+                            chunk_tile_widths_out,
+                            chunk_tile_offsets_out,
+                            cb_out,
+                            out_tile_size,
+                            m_tile,
+                            m_tile_end,
+                            grp_out_n(n_tile),
+                            grp_out_n(n_tile_end));
+                    } else {
+                        write_block_sync_granular_split<M_block_tiles, N_block_tiles, N_chunks>(
+                            noc_obj,
+                            outputs_tuple,
+                            out0_shape,
+                            chunk_tile_widths_out,
+                            chunk_tile_offsets_out,
+                            cb_out,
+                            out_tile_size,
+                            m_tile,
+                            m_tile_end,
+                            n_tile,
+                            n_tile_end);
+                    }
 #else
                     // write_block_sync_granular_split is more generic (support multiple output tensors)
                     // But for N_chunks == 1 (non-split minimal_matmul), write_block_sync_granular should be faster
