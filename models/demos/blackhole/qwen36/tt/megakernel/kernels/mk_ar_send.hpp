@@ -88,6 +88,10 @@ struct SendReader {
     }
 
     FORCE_INLINE void iter(uint32_t it) const {
+#if defined(MKAR_ATYPE)   // engine (MK_REAL_AAR): bit it set = an attention AR, its input is the wo output CB on the owners
+        // (the CB also spans these sender cores, so its local address is the owners' address)
+        const uint32_t in_addr = ((static_cast<uint64_t>(MKAR_ATYPE) >> it) & 1) ? get_read_ptr(MKAR_CB_AIN) : this->in_addr;
+#endif
         CircularBuffer cb_rs(MKAR_S_CB_RS);
         auto* done_sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(MK_PS_SEM(MKAR_S_SEM_DONE));
         auto* ready_sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(MK_PS_SEM(MKAR_S_SEM_READY));
