@@ -26,7 +26,7 @@ Failure model (the device must never see two runs at once, and a killed run must
 Usage (from run_safe_pytest.sh):
 
   safe_pytest_warm.py run --pytest <pytest args...>       # like `pytest <args>`
-  safe_pytest_warm.py run -m <module> <args...>           # like `python -m <module> <args>`
+  safe_pytest_warm.py run -m tracy <args...>              # like `python -m tracy <args>`
   safe_pytest_warm.py stop                                # retire this repo's servers
   safe_pytest_warm.py serve --socket PATH --key KEY       # internal: the server itself
 
@@ -113,6 +113,8 @@ IDLE_TIMEOUT_S = int(os.environ.get("SAFE_PYTEST_WARM_IDLE_S", "3600"))
 START_TIMEOUT_S = 120
 CHILD_SETUP_TIMEOUT_S = 30
 SELF_PATH = os.path.realpath(__file__)
+# The only modules `run -m` accepts.
+RUN_MODULES = ("tracy",)
 REPO_DIR = os.path.dirname(os.path.dirname(SELF_PATH))
 MAX_MSG = 16 * 1024 * 1024
 MAX_FDS = 250  # SCM_RIGHTS limit is 253 per message
@@ -569,6 +571,8 @@ def run_child(req: dict) -> int:
     import runpy
 
     module = req["module"]
+    if module not in RUN_MODULES:
+        raise ValueError(f"module {module!r} is not one of {RUN_MODULES}")
     sys.argv = [module, *argv]
     sys.path.insert(0, os.getcwd())
     runpy.run_module(module, run_name="__main__", alter_sys=True)
@@ -769,7 +773,7 @@ def client_run(mode: str, module: str | None, argv: list[str]) -> int:
     env.pop("SAFE_PYTEST_WARM_JOB", None)
     parent_job = os.environ.get("SAFE_PYTEST_WARM_JOB")
     key = _server_key(env)
-    cur_umask = os.umask(0)
+    cur_umask = os.umask(0o077)
     os.umask(cur_umask)
     rlimits = {}
     for name in RLIMITS:
@@ -903,9 +907,9 @@ def main() -> int:
     if cmd == "run":
         if rest and rest[0] == "--pytest":
             return client_run("pytest", None, rest[1:])
-        if len(rest) >= 2 and rest[0] == "-m":
+        if len(rest) >= 2 and rest[0] == "-m" and rest[1] in RUN_MODULES:
             return client_run("module", rest[1], rest[2:])
-        print("usage: safe_pytest_warm.py run (--pytest ARGS... | -m MODULE ARGS...)", file=sys.stderr)
+        print(f"usage: safe_pytest_warm.py run (--pytest ARGS... | -m {'|'.join(RUN_MODULES)} ARGS...)", file=sys.stderr)
         return 2
     print(f"unknown command {cmd!r}", file=sys.stderr)
     return 2
