@@ -19,6 +19,7 @@ import pytest
 from loguru import logger
 from PIL import Image
 
+from ....pipelines.minimax_h3 import image_host_minimax_h3 as host
 from ....pipelines.minimax_h3.pipeline_minimax_h3_image import MiniMaxH3ImagePipeline
 from .common import MESH_4X8_RING
 
@@ -252,12 +253,22 @@ def test_served_envelope(mesh_device, guide_examples):
     failures = []
 
     def run(tag, **kwargs):
+        images = kwargs.get("images") or []
+        over = bool(images) and host.effective_reference_area([im.size for im in images]) > pipe.reference_area_limit
         try:
             result = pipe(**kwargs)
+        except host.ReferenceLimitError as err:
+            if not over:
+                failures.append(tag)
+            logger.info(f"RESULT envelope {tag}: {'rejected as expected' if over else 'FAIL rejected'}: {err}")
+            return
         except Exception as err:  # keep going: the matrix is the deliverable
             failures.append(tag)
             logger.info(f"RESULT envelope {tag}: FAIL {type(err).__name__}: {str(err)[:240]}")
             return
+        if over:
+            failures.append(tag)
+            logger.info(f"RESULT envelope {tag}: FAIL admitted over the reference limit")
         t = result.timings
         logger.info(
             f"RESULT envelope {tag}: ok {result.image.size[0]}x{result.image.size[1]} packed {result.packed_length} | "
@@ -272,7 +283,7 @@ def test_served_envelope(mesh_device, guide_examples):
         (1024, 1024, (1, 2, 4, 8, 16)),
         (3000, 2000, (1, 2, 4, 8, 16)),
         (2048, 2048, (8,)),
-        (8192, 2048, (16,)),  # MiniMax's limits: 8192 px a side, 4:1, 16 references -- over budget, shrunk
+        (8192, 2048, (2, 16)),  # MiniMax's 8192-px side at 4:1: 16.8 MP effective each; sixteen are rejected
     ):
         for count in counts:
             refs = [Image.new("RGB", (ref_w, ref_h), (40 + 13 * i, 90, 160 - 7 * i)) for i in range(count)]
@@ -307,3 +318,83 @@ def test_capacity_cost(mesh_device, guide_examples, capacity):
             f"RESULT capacity {capacity} {size}: total {sum(r.timings.total for r in results) / 2:.2f}s, "
             f"steady step {1e3 * sum(steps) / len(steps):.1f} ms"
         )
+
+
+def _tall_mix(limit: int) -> list[tuple[int, int]]:
+    """The densest request under `limit`: 4:1 references (each carries the most vision tokens, 4096, and one VAE row
+    per 1024 px). Up to sixteen 1024x4096; past sixteen, the area left grows references toward 2048x8192 (more rows,
+    the same vision tokens); under sixteen, one 1024-wide reference takes what is left."""
+    tall = 1024 * 4096
+    sizes = [(1024, 4096)] * min(host.MAX_REFERENCES, limit // tall)
+    rest = limit - tall * len(sizes)
+    if len(sizes) < host.MAX_REFERENCES:
+        width = rest // 1024 // 32 * 32
+        return sizes + [(1024, width)] if width >= 1024 else sizes
+    for i in range(len(sizes)):
+        side = min(2048, int(((tall + rest) / 4) ** 0.5) // 32 * 32)
+        rest -= side * 4 * side - tall
+        sizes[i] = (side, 4 * side)
+        if side < 2048:
+            break
+    return sizes
+
+
+@pytest.mark.timeout(4 * 3600)
+@pytest.mark.parametrize(("mesh_device", "device_params"), [MESH_4X8_RING], indirect=["mesh_device", "device_params"])
+@pytest.mark.parametrize("limit_mp", [32, 48, 64, 96], ids=["32mp", "48mp", "64mp", "96mp"])
+def test_reference_area_limit(mesh_device, guide_examples, limit_mp):
+    """One candidate per-request reference limit: build the pipeline sized for it, warm it, then run the worst
+    requests it admits at 4096^2 (densest mix, square 2048^2 copies, 16 references, a 4096-token prompt) and one just
+    over it. Reports warmup, t2i latency (does the capacity cost requests that do not need it?), each edit's latency
+    and program misses; fails on any miss, any admitted request that fails, or an over-limit request admitted."""
+    t2i, _, _ = guide_examples
+    limit = limit_mp * 1_000_000
+    pipe = MiniMaxH3ImagePipeline(mesh_device=mesh_device, weights_dir=_weights_dir(), reference_area_limit=limit)
+    c = pipe.arena_caps
+    logger.info(
+        f"RESULT limit {limit_mp}MP caps: prompt {c.prompt}, cond rows {c.condition_video_rows}, vision patches "
+        f"{pipe.vision_patch_cap}, max_sequence_length {pipe.max_sequence_length}"
+    )
+    logger.info(f"RESULT limit {limit_mp}MP warmup {pipe.warmup():.1f}s")
+    failures = []
+    filler = " ".join(["Keep every subject's identity, pose, lighting and colors exactly as in its reference."] * 400)
+
+    def run(tag, sizes, prompt_text, width=4096, height=4096):
+        refs = [Image.new("RGB", size, (40 + 9 * i, 90, 200 - 9 * i)) for i, size in enumerate(sizes)]
+        labels = " ".join(f"<Picture {i + 1}>" for i in range(len(refs)))
+        area = host.effective_reference_area(sizes) if sizes else 0
+        try:
+            result = pipe(f"Combine {labels} into one scene. {prompt_text}".strip(), width=width, height=height,
+                          seed=3, images=refs or None)
+        except host.ReferenceLimitError as err:
+            ok = area > limit
+            if not ok:
+                failures.append(tag)
+            logger.info(f"RESULT limit {limit_mp}MP {tag}: {'rejected as expected' if ok else 'FAIL rejected'}: {err}")
+            return
+        except Exception as err:
+            failures.append(tag)
+            logger.info(f"RESULT limit {limit_mp}MP {tag}: FAIL {type(err).__name__}: {str(err)[:300]}")
+            return
+        t = result.timings
+        misses = sum(t.program_misses.values())
+        if misses or area > limit:
+            failures.append(tag)
+        logger.info(
+            f"RESULT limit {limit_mp}MP {tag}: {len(sizes)} refs {area / 1e6:.1f} MP -> packed {result.packed_length} | "
+            f"{t.total:.2f}s (prompt {t.encode_prompt:.2f}, refs {t.encode_references:.2f}, denoise {t.denoise:.2f}, "
+            f"decode {t.decode:.2f}) | misses {misses} { {k: v for k, v in t.program_misses.items() if v} }"
+        )
+
+    run("t2i 4096^2", [], "")
+    run("t2i 4096^2 again", [], "")
+    tall = _tall_mix(limit)
+    run("densest mix", tall, filler)
+    run("densest mix, short prompt", tall, "")
+    run("2048^2 copies", [(2048, 2048)] * min(16, limit // 2048**2), filler)
+    run("16 x 1024^2", [(1024, 1024)] * 16, filler)
+    run("phone photos 4032x3024", [(4032, 3024)] * min(16, limit // (2731 * 2048)), "")
+    run("densest mix to 2K", tall, "", width=2048, height=2048)
+    over = tall + [(1024, 1024)] if len(tall) < 16 else tall[:-1] + [(2048, 8192)]
+    run("just over the limit", over, "")
+    assert not failures, f"{len(failures)} cases failed: {failures}"

@@ -34,12 +34,14 @@ DEFAULT_MIN_GENERATION_AREA = 2048 * 2048
 MIN_GENERATION_AREA_RANGE = (1024, 16777216)
 QWEN_REFERENCE_SHORT_EDGE = (1024, 1024)
 VAE_REFERENCE_SHORT_EDGE = (1024, 2048)
-# What one Galaxy carries across ALL references of a request (MiniMax's API allows 1-16 references of up to 8192 px a
-# side with no total budget). Under these the per-reference sizing above is exact; over them every copy of that kind
-# is shrunk by one common factor, keeping its aspect ratio: 32768 reference rows = eight 2048^2 VAE copies, 24576
-# vision tokens = sixteen 1536x1024 Qwen copies (and with a 4096-token prompt the presentation stays under 32768).
-REFERENCE_ROW_BUDGET = 32768
-VISION_TOKEN_BUDGET = 24576
+# The per-request reference limit (the served API's rule): the references' total EFFECTIVE area -- each image counted at
+# its VAE-copy size, i.e. after its short side is scaled into VAE_REFERENCE_SHORT_EDGE -- may not exceed this many
+# pixels. Every cap the image pipeline compiles for derives from it (see `reference_caps`); over it a request is
+# rejected, never shrunk (the release pipeline does not shrink references).
+REFERENCE_AREA_LIMIT = 48_000_000
+MAX_REFERENCES = 16
+MAX_REFERENCE_ASPECT = 4.0
+REFERENCE_SIDE_RANGE = (128, 8192)
 VAE_RATIO = 16
 LATENT_CHANNELS = 24
 PATCH = (1, 2, 2)
@@ -88,18 +90,77 @@ def load_reference_image(image: Image.Image) -> Image.Image:
     return out
 
 
-def bound_short_edge(image: Image.Image, lo: int, hi: int) -> Image.Image:
-    """Keep the original pixels when the short edge is in `[lo, hi]`, else LANCZOS it to `lo`/`hi` (sides to 32)."""
-    w, h = image.size
+def bounded_size(size: tuple[int, int], lo: int, hi: int) -> tuple[int, int]:
+    """`size` when its short edge is in `[lo, hi]`, else scaled so the short edge is `lo`/`hi` (sides to 32 px)."""
+    w, h = size
     short = min(w, h)
     if lo <= short <= hi:
+        return w, h
+    scale = (lo if short < lo else hi) / short
+    return (
+        max(CANVAS_GRID, int(round(w * scale / CANVAS_GRID)) * CANVAS_GRID),
+        max(CANVAS_GRID, int(round(h * scale / CANVAS_GRID)) * CANVAS_GRID),
+    )
+
+
+def bound_short_edge(image: Image.Image, lo: int, hi: int) -> Image.Image:
+    """Keep the original pixels when the short edge is in `[lo, hi]`, else LANCZOS it to `lo`/`hi` (sides to 32)."""
+    size = bounded_size(image.size, lo, hi)
+    if size == image.size:
         return image
-    bound = lo if short < lo else hi
-    scale = bound / short
-    new_w = max(CANVAS_GRID, int(round(w * scale / CANVAS_GRID)) * CANVAS_GRID)
-    new_h = max(CANVAS_GRID, int(round(h * scale / CANVAS_GRID)) * CANVAS_GRID)
-    image = image.convert("RGB")
-    return image if (new_w, new_h) == image.size else image.resize((new_w, new_h), Image.Resampling.LANCZOS)
+    return image.convert("RGB").resize(size, Image.Resampling.LANCZOS)
+
+
+def effective_reference_area(sizes: list[tuple[int, int]]) -> int:
+    """Total pixels of the references' VAE copies (`(width, height)` of each upright original): the API's measure."""
+    return sum(w * h for w, h in (bounded_size(size, *VAE_REFERENCE_SHORT_EDGE) for size in sizes))
+
+
+class ReferenceLimitError(ValueError):
+    """A request's references are over the per-request limit (the served API answers 400)."""
+
+
+def check_references(sizes: list[tuple[int, int]], area_limit: int = REFERENCE_AREA_LIMIT) -> int:
+    """Validate a request's references by their upright `(width, height)`; returns the effective area.
+
+    The rule: 1-16 references, each 128-8192 px a side with aspect ratio <= 4:1, whose total effective area (each
+    counted after its short side is scaled into 1024-2048 px) is at most `area_limit` pixels.
+    """
+    if not 1 <= len(sizes) <= MAX_REFERENCES:
+        raise ReferenceLimitError(f"between 1 and {MAX_REFERENCES} reference images are supported, got {len(sizes)}")
+    lo, hi = REFERENCE_SIDE_RANGE
+    for i, (w, h) in enumerate(sizes, 1):
+        if not (lo <= min(w, h) and max(w, h) <= hi):
+            raise ReferenceLimitError(f"reference image {i} is {w}x{h}: each side must be {lo}-{hi} px")
+        if max(w, h) > MAX_REFERENCE_ASPECT * min(w, h):
+            raise ReferenceLimitError(f"reference image {i} is {w}x{h}: aspect ratio over {MAX_REFERENCE_ASPECT:g}:1")
+    area = effective_reference_area(sizes)
+    if area > area_limit:
+        raise ReferenceLimitError(
+            f"reference images total {area / 1e6:.1f} MP effective area (each counted after scaling its short side "
+            f"into {VAE_REFERENCE_SHORT_EDGE[0]}-{VAE_REFERENCE_SHORT_EDGE[1]} px); the limit is {area_limit / 1e6:g} MP"
+        )
+    return area
+
+
+@dataclass(frozen=True)
+class ReferenceCaps:
+    """What the image pipeline must hold for references within `area_limit` (upper bounds, not estimates)."""
+
+    rows: int  # VAE reference rows: one per 32x32 px of VAE copy, so <= area / 1024
+    vision_tokens: int  # merged Qwen vision tokens across all copies
+    vision_patches: int  # unmerged patches (2x2 per token)
+
+
+def reference_caps(area_limit: int) -> ReferenceCaps:
+    """A Qwen copy has short side 1024 and a VAE copy >= 1024 at the same aspect, so a reference's vision tokens
+    (one per 32x32 px of Qwen copy) are at most its VAE rows, and at most 1024x4096 / 1024 = 4096 at 4:1 -- whatever
+    the limit, 16 references carry <= 65536. Rounding each side to the 32-px grid adds at most half a token per row
+    of the long side (<= 4096 / 32 / 2 = 64), per reference."""
+    rows = area_limit // 1024
+    per_ref = int(QWEN_REFERENCE_SHORT_EDGE[1] ** 2 * MAX_REFERENCE_ASPECT) // 1024
+    vision = min(rows, MAX_REFERENCES * per_ref) + MAX_REFERENCES * 64
+    return ReferenceCaps(rows=rows, vision_tokens=vision, vision_patches=4 * vision)
 
 
 def vae_reference_pixels(image: Image.Image) -> torch.Tensor:
@@ -144,25 +205,6 @@ def qwen_vision_tokens(qwen_image: Image.Image) -> int:
     """Merged vision tokens one Qwen reference copy adds (16-px patches, 2x2 merge: one token per 32x32 px)."""
     w, h = qwen_image.size
     return max(1, round(w / 32)) * max(1, round(h / 32))
-
-
-def fit_reference_budget(images: list[Image.Image], count, budget: int) -> tuple[list[Image.Image], float]:
-    """`images` unchanged when `sum(count(image))` fits `budget`; else every image shrunk by one common factor
-    (aspect kept, sides floored to the 32-px grid, LANCZOS) until it does. Returns the images and the factor."""
-    total = sum(count(im) for im in images)
-    if total <= budget:
-        return list(images), 1.0
-    scale = math.sqrt(budget / total)
-    while True:
-        out = []
-        for im in images:
-            w, h = im.size
-            size = (max(CANVAS_GRID, int(w * scale) // CANVAS_GRID * CANVAS_GRID),
-                    max(CANVAS_GRID, int(h * scale) // CANVAS_GRID * CANVAS_GRID))
-            out.append(im.convert("RGB").resize(size, Image.Resampling.LANCZOS))
-        if sum(count(im) for im in out) <= budget:
-            return out, scale
-        scale *= 0.97
 
 
 # ----------------------------------------------------------------------------------------------------- latents / RNG

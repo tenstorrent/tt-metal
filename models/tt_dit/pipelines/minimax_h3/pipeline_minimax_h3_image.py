@@ -56,22 +56,35 @@ MODEL_NAME_IMAGE = "minimax-h3-image"  # DiT + VAE cache namespace; the Qwen con
 # 4K edit ~20.8k (one 2048^2 ref), the 21:9 recommended size ~17k.
 IMAGE_BUCKET_LADDER_4X8 = (4608, 5376, 6656, 8192, 10240, 12800, 16384, 17920, 20480, 25600, 32768)
 
-# Qwen presentation: 4096 prompt tokens + ~1024 vision tokens per 1024-short-edge reference (more for wide ones).
-# Presentation cap: a 4096-token prompt plus `host.VISION_TOKEN_BUDGET` vision tokens (16 references) and labels.
-IMAGE_PROMPT_CAP = 32768
-IMAGE_VISION_PATCH_CAP = 4 * host.VISION_TOKEN_BUDGET  # unmerged patches across all references
+# Target rows: 6272x2688 (21:9) is 16464, 4096^2 is 16384.
+IMAGE_TARGET_ROWS = 17152
+# Qwen presentation = the prompt (<= host.MAX_PROMPT_TOKENS) + every reference's vision tokens + this much chat
+# template and "<Picture N>" / vision-delimiter tokens (~10 a reference).
+IMAGE_PRESENTATION_OVERHEAD = 1024
 # Presentation rungs (text + vision tokens) below the prompt arena cap: a short t2i prompt, a 1024^2 reference
-# (1024 vision tokens) plus text, two to four references, then up to sixteen.
-IMAGE_PRESENTATION_LADDER = (1024, 2048, 4096, 8192, 16384)
-# Vision-tower pad rungs, in unmerged patches: one 1024^2 Qwen copy is 4096; the top is the vision-token budget.
-IMAGE_VISION_PATCH_LADDER = (4096, 6144, 8192, 12288, 16384, 24576, 32768, 49152, 65536, IMAGE_VISION_PATCH_CAP)
-IMAGE_ARENA_CAPS = MiniMaxH3ArenaCaps(
-    prompt=IMAGE_PROMPT_CAP,
-    video_rows=17152,  # target rows: 6272x2688 (21:9) is 16464; 4096^2 is 16384
-    audio_rows=32,  # unused (audio-free); kept non-zero for MiniMaxH3ArenaCaps.validate
-    condition_video_rows=host.REFERENCE_ROW_BUDGET,  # all references' rows (eight 2048^2 copies)
-    condition_audio_rows=32,
-)
+# (1024 vision tokens) plus text, two to four references, then up to sixteen; the cap is always the top rung.
+IMAGE_PRESENTATION_LADDER = (1024, 2048, 4096, 8192, 16384, 32768)
+# Vision-tower pad rungs, in unmerged patches (one 1024^2 Qwen copy is 4096) below the patch cap, which tops it.
+IMAGE_VISION_PATCH_LADDER = (4096, 6144, 8192, 12288, 16384, 24576, 32768, 49152, 65536, 98304, 131072)
+
+
+def _round_up(value: int, multiple: int) -> int:
+    return -(-value // multiple) * multiple
+
+
+def image_arena_caps(reference_area_limit: int = host.REFERENCE_AREA_LIMIT) -> MiniMaxH3ArenaCaps:
+    """The arenas for any request whose references are within `reference_area_limit` effective pixels."""
+    refs = host.reference_caps(reference_area_limit)
+    return MiniMaxH3ArenaCaps(
+        prompt=_round_up(host.MAX_PROMPT_TOKENS + refs.vision_tokens + IMAGE_PRESENTATION_OVERHEAD, 1024),
+        video_rows=IMAGE_TARGET_ROWS,
+        audio_rows=32,  # unused (audio-free); kept non-zero for MiniMaxH3ArenaCaps.validate
+        condition_video_rows=_round_up(refs.rows, 1024),
+        condition_audio_rows=32,
+    )
+
+
+IMAGE_ARENA_CAPS = image_arena_caps()
 
 
 @dataclass
@@ -104,7 +117,8 @@ class MiniMaxH3ImagePipeline(MiniMaxH3Pipeline):
         mesh_device: ttnn.MeshDevice,
         weights_dir: str | Path,
         bucket_ladder: tuple[int, ...] = IMAGE_BUCKET_LADDER_4X8,
-        arena_caps: MiniMaxH3ArenaCaps = IMAGE_ARENA_CAPS,
+        reference_area_limit: int = host.REFERENCE_AREA_LIMIT,
+        arena_caps: MiniMaxH3ArenaCaps | None = None,
         num_links: int | None = None,
         topology: ttnn.Topology | None = None,
         tp_axis: int | None = None,
@@ -112,7 +126,7 @@ class MiniMaxH3ImagePipeline(MiniMaxH3Pipeline):
         dit_fsdp: bool = False,
         load_dit: bool = True,
         dynamic_length: bool | None = None,
-        max_sequence_length: int = IMAGE_PROMPT_CAP + host.REFERENCE_ROW_BUDGET + 17152,  # = the arena caps
+        max_sequence_length: int | None = None,
         precompute_adaln: bool = True,
         use_persistent_ccl_buffers: bool = True,
         device_latents: bool = True,
@@ -121,7 +135,17 @@ class MiniMaxH3ImagePipeline(MiniMaxH3Pipeline):
         word, a request pads only to SP * TILE rows, and every length within a length class reuses one program set --
         no bucket ladder and no JIT compile on the serving path once each class is warm. `max_sequence_length` sizes
         the fused norms' worker split and the ring attention's K/V gather pair. `dynamic_length=False` falls back to
-        the bucket ladder (eager, one program set per rung)."""
+        the bucket ladder (eager, one program set per rung).
+
+        `reference_area_limit` is the per-request reference limit (`host.check_references`): the arenas, the
+        presentation and vision-tower ladders and `max_sequence_length` (default: the arenas' sum) all derive from
+        it, so every request it admits fits and is warmed."""
+        self.reference_area_limit = int(reference_area_limit)
+        self.reference_caps = host.reference_caps(self.reference_area_limit)
+        if arena_caps is None:
+            arena_caps = image_arena_caps(self.reference_area_limit)
+        if max_sequence_length is None:
+            max_sequence_length = arena_caps.prompt + arena_caps.condition_video_rows + arena_caps.video_rows
         # Deliberately not super().__init__: that builds the audio VAE and the video presets. Only the attributes the
         # reused helpers read are set here.
         self.mesh_device = mesh_device
@@ -166,7 +190,11 @@ class MiniMaxH3ImagePipeline(MiniMaxH3Pipeline):
         self.presentation_ladder = tuple(r for r in IMAGE_PRESENTATION_LADDER if r < self.arena_caps.prompt) + (
             self.arena_caps.prompt,
         )
-        self.vision_patch_ladder = IMAGE_VISION_PATCH_LADDER  # the tower pads its patches to a warmed rung
+        # The tower pads its patches to a warmed rung; the top one holds every admitted request's references.
+        self.vision_patch_cap = _round_up(self.reference_caps.vision_patches, 4096)
+        self.vision_patch_ladder = tuple(r for r in IMAGE_VISION_PATCH_LADDER if r < self.vision_patch_cap) + (
+            self.vision_patch_cap,
+        )
         self._force_bucket = self._force_prompt_pad = self._force_vision_pad = None
         self._log_generation = True
         # Each SP device gathers only its own rows, so forward skips `mesh_partition` -- the one op whose program was
@@ -324,7 +352,7 @@ class MiniMaxH3ImagePipeline(MiniMaxH3Pipeline):
                     sequence_parallel=ParallelFactor(mesh_axis=self.sp_axis, factor=self.sp_factor),
                 ),
                 ccl_manager=self.encoder_ccl_manager,
-                kv_gather_capacity=padded_sequence_length(IMAGE_VISION_PATCH_CAP, self.sp_factor),
+                kv_gather_capacity=padded_sequence_length(self.vision_patch_cap, self.sp_factor),
                 use_persistent_ccl_buffers=self.use_persistent_ccl_buffers,
             )
         return self._vision_tower
@@ -390,7 +418,7 @@ class MiniMaxH3ImagePipeline(MiniMaxH3Pipeline):
         width: int,
         height: int,
         seed: int = 0,
-        images: Sequence[Image.Image] = (),
+        images: Sequence[Image.Image] | None = None,
         min_generation_area: int | None = host.DEFAULT_MIN_GENERATION_AREA,
     ) -> ImageResult:
         timings = ImageRequestTimings()
@@ -399,16 +427,11 @@ class MiniMaxH3ImagePipeline(MiniMaxH3Pipeline):
         cw, ch = canvas
         lh, lw = ch // host.VAE_RATIO, cw // host.VAE_RATIO
 
-        refs_rgb = [host.load_reference_image(image) for image in images]
+        refs_rgb = [host.load_reference_image(image) for image in images or ()]
+        if refs_rgb:  # over the limit is rejected (the served API answers 422 first), never shrunk
+            host.check_references([im.size for im in refs_rgb], self.reference_area_limit)
         qwen_refs = [host.bound_short_edge(im, *host.QWEN_REFERENCE_SHORT_EDGE) for im in refs_rgb]
         vae_refs = [host.bound_short_edge(im, *host.VAE_REFERENCE_SHORT_EDGE) for im in refs_rgb]
-        qwen_refs, q_scale = host.fit_reference_budget(qwen_refs, host.qwen_vision_tokens, host.VISION_TOKEN_BUDGET)
-        vae_refs, v_scale = host.fit_reference_budget(vae_refs, host.vae_reference_rows, host.REFERENCE_ROW_BUDGET)
-        if q_scale < 1 or v_scale < 1:
-            self._log(
-                f"{len(refs_rgb)} references over the per-request budget: Qwen copies x{q_scale:.2f}, VAE copies "
-                f"x{v_scale:.2f}"
-            )
         geometry = [host.reference_geometry(im) for im in vae_refs]
         noise = host.draw_request_noise(seed, canvas, geometry)
 
