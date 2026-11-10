@@ -552,3 +552,29 @@ arrival) is required.
 **Gate arithmetic with GDN_STEP_U1 (§14, −21 µs per u1 GDN layer):** u1 break-even AR rises from 12.2 to **~20.0 µs**;
 u8 break-even stays 23.4 µs. So **~19 µs on-path AR (today's in-megakernel estimate) plus GDN_STEP_U1 passes both
 gates**, with thin u1 margin. Persistent fabric connections add margin; BFP8 payload stays gated.
+
+**Persistent AR on silicon (AR track, -mk-ar @4229b02c43f, after reset; bit-identical at every N):**
+
+| ARs per program | µs per program | µs per AR |
+|---|---|---|
+| 1 | 23.4 | 23.4 |
+| 2 | 41.4 | 20.7 |
+| 4 | 77.6 | 19.4 |
+| 8 | 149.9 | 18.7 |
+
+- Marginal **18.07 µs per AR**; launch + setup ~5.3 µs.
+- The earlier hang was the CB-wrap bug, now fixed. The single-AR sanity pass is clean, so this was not hardware.
+- Per-iteration profile at N=8:
+  - RS send ~8 µs (~9 GB/s per link-direction worker);
+  - owners wait 15.7 µs for the 7 RS chunks; reduce 1.5 µs;
+  - AG send ~2 µs; x ready at 17.8 µs.
+- **On-path AR ≈ 18 + 3.2 split-K delivery ≈ 21 µs.** u8 passes (break-even 23.4). u1 with GDN_STEP_U1 is
+  ~1 µs over its ~20 µs break-even.
+- **AR work order (decided):**
+  1. **Start the RS per down-chunk, under the MLP tail.** In v12 the owners sum column partials chunk by chunk, so
+     each owner can start its RS as soon as its chunk is complete. That hides up to ~8 µs of RS send with no numerics
+     change. Prototype now with a synthetic progressive producer (chunks released at the measured down cadence); same
+     idea for the attention AR after wo.
+  2. **Streaming reduce** (accumulate on arrival): required to fit the ~100 KB L1 budget at integration.
+  3. Pipelined per-packet flush (rotating headers).
+  4. BFP8 payload: flag only, gated.
