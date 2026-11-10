@@ -197,6 +197,16 @@ class DevEngramRows:
         self.g_cores = allc[:ncores]
         self.g_inst = 2 * len(self.g_cores)
         self.g_per = -(-self.NROWS // self.g_inst)
+        import os
+
+        self.check = os.environ.get("DSV41_DEV_ENGRAM_CHECK") == "1"  # debug: persistent copy of the rows (spec_model compares them with the host path every round)
+        self.dbg_rows = (
+            ttnn.allocate_tensor_on_device(
+                ttnn.Shape([1, 1, self.T, self.NL * K * 256]), bf16, ttnn.ROW_MAJOR_LAYOUT, self.mesh, ttnn.DRAM_MEMORY_CONFIG
+            )
+            if self.check
+            else None
+        )
         self.ids = ttnn.allocate_tensor_on_device(
             ttnn.Shape([self.TTOT, 64]), i32, ttnn.ROW_MAJOR_LAYOUT, self.mesh, ttnn.DRAM_MEMORY_CONFIG
         )
@@ -315,4 +325,7 @@ class DevEngramRows:
         ar = ttnn.all_reduce(rs, cluster_axis=1, num_links=self.num_links, topology=topo)
         if tiled:
             ar = ttnn.to_layout(ar, ttnn.ROW_MAJOR_LAYOUT)
-        return ttnn.reshape(ar, [1, 1, self.T, self.NL * K * 256])
+        out = ttnn.reshape(ar, [1, 1, self.T, self.NL * K * 256])
+        if self.check:
+            ttnn.copy(out, self.dbg_rows)
+        return out
