@@ -63,10 +63,12 @@ FORCE_INLINE void fabric_atomic_inc(
     conn.send_payload_flush_blocking_from_address((uint32_t)header, sizeof(PACKET_HEADER_TYPE));
 }
 
-// Point a packet header at chip `chip_id` of mesh `mesh_id`. 2D fabric only.
-FORCE_INLINE void set_route(volatile tt_l1_ptr PACKET_HEADER_TYPE* header, uint32_t chip_id, uint32_t mesh_id) {
+// Point a packet header at chip `chip_id` of mesh `mesh_id`. 2D fabric only. A template so the check
+// fires only where a kernel routes by chip id: the sender includes this header on any fabric.
+template <typename Header>
+FORCE_INLINE void set_route(volatile tt_l1_ptr Header* header, uint32_t chip_id, uint32_t mesh_id) {
     static_assert(
-        std::is_same_v<PACKET_HEADER_TYPE, tt::tt_fabric::HybridMeshPacketHeader>,
+        std::is_same_v<Header, tt::tt_fabric::HybridMeshPacketHeader>,
         "D2D relay mode needs a 2D fabric (HybridMeshPacketHeader)");
     fabric_set_unicast_route(header, chip_id, mesh_id);
 }
@@ -80,6 +82,9 @@ FORCE_INLINE bool terminated(uint32_t termination_addr, uint32_t terminate_value
     invalidate_l1_cache();
     return reinterpret_cast<volatile tt_l1_ptr uint32_t*>(termination_addr)[0] == terminate_value;
 }
+
+// The host's packed_slot_bytes caps groups at the same chunk count (kMaxPagesPerPacket).
+static_assert(NOC_SCATTER_WRITE_MAX_CHUNKS == 4, "keep kMaxPagesPerPacket in d2d_stream_service.cpp in sync");
 
 // Pages per fabric packet: the most that fit both MaxPayload and one ring slot (SlotBytes), capped
 // by the scatter chunk limit, as a power of 2. Per-packet router and flush costs dominate small
@@ -219,11 +224,11 @@ FORCE_INLINE void stream_pages(
 }
 
 // Extra segments (D2DStreamConfig::extra_tensors) ride with the primary tensor in every copy.
-// Their CT args follow the primary accessor's at CtOffset: kExtraSegmentCtArgs words per segment
+// Their CT args follow the primary accessor's at CtOffset: kRelayExtraSegmentCtArgs words per segment
 // [page_size, half_pages, total_pages], then one accessor block shared by all of them (they are
 // DRAM interleaved). The caller's RT args at addr_arg hold a (src, dst) address pair per segment.
 // The lanes split each segment like the primary: the master takes [0, half) when there are two.
-constexpr uint32_t kExtraSegmentCtArgs = 3;
+constexpr uint32_t kRelayExtraSegmentCtArgs = 3;
 
 // NumExtra is a template parameter so that `if constexpr` defers the accessor block: with no
 // extra segments it would sit past the last CT arg.
@@ -237,9 +242,9 @@ FORCE_INLINE void stream_extra_segments(
     bool two_lanes,
     volatile tt_l1_ptr PACKET_HEADER_TYPE* header) {
     if constexpr (NumExtra > 0) {
-        constexpr auto seg_args = TensorAccessorArgs<CtOffset + (kExtraSegmentCtArgs * NumExtra)>();
+        constexpr auto seg_args = TensorAccessorArgs<CtOffset + (kRelayExtraSegmentCtArgs * NumExtra)>();
         for (uint32_t s = 0; s < NumExtra; ++s) {
-            const uint32_t ct = CtOffset + (kExtraSegmentCtArgs * s);
+            const uint32_t ct = CtOffset + (kRelayExtraSegmentCtArgs * s);
             const uint32_t seg_page_size = kernel_compile_time_args[ct];
             const uint32_t half = kernel_compile_time_args[ct + 1];
             const uint32_t total = kernel_compile_time_args[ct + 2];

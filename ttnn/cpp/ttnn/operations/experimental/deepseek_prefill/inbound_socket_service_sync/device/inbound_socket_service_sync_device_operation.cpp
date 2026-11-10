@@ -273,6 +273,12 @@ std::vector<ttnn::Tensor> inbound_socket_service_sync_impl(
             attrs.extra_num_pages.push_back(static_cast<uint32_t>(extra_backing.buffer()->num_pages()));
         }
     }
+    // launch() builds the outputs before it validates, and create_output_tensors indexes extras_out.
+    TT_FATAL(
+        extras_out.empty() || extras_out.size() == extra_backings.size(),
+        "inbound_socket_service_sync: extras_out needs one destination per extra segment, got {} for {}",
+        extras_out.size(),
+        extra_backings.size());
     attrs.scratch_cb_index = 0;
     attrs.metadata_size_bytes = metadata_size_bytes;
     attrs.metadata_l1_addr = metadata_size_bytes > 0 ? static_cast<uint32_t>(service.get_metadata_addr()) : 0;

@@ -1574,7 +1574,8 @@ constexpr tt::CBIndex kPacketHeaderCbIndex = tt::CBIndex::c_1;
 // two lanes consume 2*kSenderReadRingSlots trids, which must fit the 0..15 id space.
 constexpr uint32_t kSenderReadRingSlots = 4;
 
-// A fabric scatter write carries at most this many chunks (NOC_SCATTER_WRITE_MAX_CHUNKS).
+// A fabric scatter write carries at most this many chunks: NOC_SCATTER_WRITE_MAX_CHUNKS, which
+// d2d_relay_common.hpp asserts. Its header is device-only, so the host keeps a copy.
 constexpr uint32_t kMaxPagesPerPacket = 4;
 
 // Bytes of one read-ring slot: the largest page, or the largest group of pages packed into one
@@ -2615,6 +2616,7 @@ struct RelayCoordWords {
 
 uint32_t relay_slot_bytes(const CommonPlan& common) {
     std::vector<uint32_t> page_sizes;
+    page_sizes.reserve(common.segments.size());
     for (const auto& seg : common.segments) {
         page_sizes.push_back(seg.page_size);
     }
