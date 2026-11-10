@@ -17,6 +17,12 @@
 #include "api/compute/cb_api.h"
 #include "api/compute/reg_api.h"
 #include "api/debug/kernel_profiler.hpp"
+#if defined(MK_V12)
+constexpr uint32_t CB_WV = 32, CB_XK = 33, CB_VA = 34, CB_VOWN = 35, CB_VRS = 36, CB_VH = 37, CB_VHO = 38, CB_VHO2 = 39;
+constexpr uint32_t CB_VDO = 40, CB_VDO2 = 41, CB_VI = 21, CB_VRSA = 22, CB_VRT = 23, CB_VJ = 30;
+constexpr uint32_t CB_VP = 3, CB_VXO = 4, CB_VX0 = 5;
+constexpr uint32_t V_NNM = 7, V_NTM = 14, V_KTR = 20, V_OT = 10, V_NCOL = 10, V_SLOT = 420, V_DSB = 5;
+#endif
 #if defined(MKA_RQKV)
 #include "api/compute/bcast.h"
 #include "api/compute/eltwise_unary/binop_with_scalar.h"
@@ -40,13 +46,66 @@ void kernel_main() {
     constexpr uint32_t GRP = get_compile_time_arg_val(4), NL = get_compile_time_arg_val(5);
     constexpr uint32_t MIXN = get_compile_time_arg_val(6), NBB = get_compile_time_arg_val(7);
     uint32_t a = 0;
-    const uint32_t IS_STREAM = get_arg_val<uint32_t>(a++), IS_GU = get_arg_val<uint32_t>(a++);
+    const uint32_t IS_STREAM_RT = get_arg_val<uint32_t>(a++), IS_GU = get_arg_val<uint32_t>(a++);
+#if defined(MK_ROLE_STREAM)
+    constexpr uint32_t IS_STREAM = 1;   // role-split build (kernel text per core group, 69 KB config buffer)
+#elif defined(MK_ROLE_EXT)
+    constexpr uint32_t IS_STREAM = 0;
+#else
+    const uint32_t IS_STREAM = IS_STREAM_RT;
+#endif
     const uint32_t u = get_arg_val<uint32_t>(a++), nblk = get_arg_val<uint32_t>(a++);
     const uint32_t nrecv = get_arg_val<uint32_t>(a++), is_root = get_arg_val<uint32_t>(a++);
     const uint32_t qoff = u * DH;
 #if defined(MKA_RQKV)
     const uint32_t qrole = get_arg_val<uint32_t>(a++), qk0 = get_arg_val<uint32_t>(a++), qnk = get_arg_val<uint32_t>(a++);
     const uint32_t qnt = get_arg_val<uint32_t>(a++);
+#if defined(MK_V12)
+    const uint32_t vrole_rt = get_arg_val<uint32_t>(a++), vnn = get_arg_val<uint32_t>(a++), vk = get_arg_val<uint32_t>(a++);
+#if defined(MK_ROLE_STREAM)
+    constexpr uint32_t vrole = 1;
+#elif defined(MK_ROLE_EXT)
+    const uint32_t vrole = vrole_rt == 2 ? 2u : 0u;
+#else
+    const uint32_t vrole = vrole_rt;
+#endif
+    const uint32_t vfirst = get_arg_val<uint32_t>(a++);
+    // owner: Σ of the 10 column down partials (P @ I, fp32 DST) [+ the x chunk while the AR is a stall] -> CB_VXO
+    auto v12_osum = [&](uint32_t L) {
+        if (vrole != 2) return;
+        if (L == 0) cb_wait_front(CB_VI, 1);
+        compute_kernel_hw_startup<SrcOrder::Reverse>(CB_VP, CB_VI, CB_VXO);
+        cb_wait_front(CB_VP, V_NCOL * V_OT);
+#if defined(MK_OWNER_RESID) && MK_OWNER_RESID
+        if (L == 0) cb_wait_front(CB_VX0, V_OT);
+#endif
+        cb_reserve_back(CB_VXO, V_OT);
+        DeviceZoneScopedN("C-OSUM");
+        pack_reconfig_data_format(CB_VXO);
+        for (uint32_t b = 0; b < 2; ++b) {
+            tile_regs_acquire();
+            reconfig_data_format(CB_VI, CB_VP);
+            matmul_block_init(CB_VP, CB_VI, 0, 1, 1, 1);
+            for (uint32_t n = 0; n < V_NCOL; ++n)
+                for (uint32_t t = 0; t < 5; ++t) matmul_block(CB_VP, CB_VI, n * V_OT + b * 5 + t, 0, t, 0, 1, 1, 1);
+#if defined(MK_OWNER_RESID) && MK_OWNER_RESID
+            reconfig_data_format(CB_VI, CB_VX0);
+            matmul_block_init(CB_VX0, CB_VI, 0, 1, 1, 1);
+            for (uint32_t t = 0; t < 5; ++t) matmul_block(CB_VX0, CB_VI, b * 5 + t, 0, t, 0, 1, 1, 1);
+#endif
+            tile_regs_commit();
+            tile_regs_wait();
+            for (uint32_t t = 0; t < 5; ++t) pack_tile<true>(t, CB_VXO, b * 5 + t);
+            tile_regs_release();
+        }
+        cb_push_back(CB_VXO, V_OT);
+        cb_pop_front(CB_VP, V_NCOL * V_OT);
+        // AR reduce (real AR, spec v0.9.2) follows here on the owner TRISCs
+    };
+#define V12_OSUM(L) v12_osum(L)
+#else
+#define V12_OSUM(L) do {} while (0)
+#endif
     // real qkv PROJ (spec v0.4): y = rstd ⊙ (x @ diag(γ)W); rstd = rsqrt(ΣΣx²/H + eps) from the AR owners' fp32 partials
     auto qkv_proj = [&](bool att_layer) {
         DeviceZoneScopedN("C-QKV");
@@ -145,12 +204,15 @@ void kernel_main() {
         cb_pop_front(CB_RS, 1);
     };
 #endif
+#ifndef V12_OSUM
+#define V12_OSUM(L) do {} while (0)
+#endif
     if (IS_STREAM) compute_kernel_hw_startup<SrcOrder::Reverse>(CB_X, CB_W, CB_HL);
     else compute_kernel_hw_startup<SrcOrder::Reverse>(CB_Q, CB_K, CB_P);
     cb_wait_front(CB_ONE, 1);
     for (uint32_t L = 0; L < NL; ++L) {
         const bool att = ((uint32_t)(MKA_AMASK) >> L) & 1u;
-        if (!IS_STREAM && !att) continue;
+        if (!IS_STREAM && !att) { V12_OSUM(L); continue; }
 #if defined(MKA_RQKV)
         // attention layers: the real qkv PROJ; GDN-type layers: the STREAM K-half matmul alone stands in for the GDN
         // in-proj (64 x 87 KB BFP8 = 5.6 MB, spec 5.9 MB), output discarded
@@ -303,10 +365,133 @@ void kernel_main() {
                 cb_pop_front(CB_O, NO);
             }
         }
-        if (!IS_STREAM) continue;
+        if (!IS_STREAM) { V12_OSUM(L); continue; }
 #if defined(MKA_NOMLP)
         cb_wait_front(CB_GO, 1); cb_pop_front(CB_GO, 1); cb_pop_front(CB_X, KT); continue;
 #endif
+#if defined(MK_V12)
+        cb_wait_front(CB_GO, 1);
+        cb_pop_front(CB_GO, 1);
+        if (vrole == 1) {
+            const bool own_h = vk < vnn;
+            if (L == 0) { cb_wait_front(CB_VI, 1); cb_wait_front(CB_VJ, 1); }
+            compute_kernel_hw_startup<SrcOrder::Reverse>(CB_XK, CB_WV, CB_VA);
+            cb_wait_front(CB_WV, V_SLOT);
+            cb_wait_front(CB_XK, V_KTR);
+            cb_reserve_back(CB_VA, V_NTM);
+            if (own_h) cb_reserve_back(CB_VOWN, 2);
+            {
+                DeviceZoneScopedN("C-VGU");
+                reconfig_data_format(CB_WV, CB_XK);
+                pack_reconfig_data_format(CB_VA);
+                for (uint32_t half = 0; half < 2; ++half) {
+                    matmul_block_init(CB_XK, CB_WV, 0, vnn, 1, V_KTR);
+                    tile_regs_acquire();
+                    for (uint32_t kk = 0; kk < V_KTR; ++kk) matmul_block(CB_XK, CB_WV, kk, half * V_KTR * vnn + kk * vnn, 0, 0, vnn, 1, V_KTR);
+                    tile_regs_commit();
+                    tile_regs_wait();
+                    for (uint32_t j = 0; j < vnn; ++j) pack_tile<true>(j, CB_VA, half * V_NNM + j);
+                    if (own_h) pack_tile<true>(vk, CB_VOWN, half);
+                    tile_regs_release();
+                }
+            }
+            cb_push_back(CB_VA, V_NTM);
+            if (own_h) cb_push_back(CB_VOWN, 2);
+            cb_pop_front(CB_XK, V_KTR);
+            if (own_h) {
+                // rstd' from the CB 20 stand-in (same producer as the qkv PROJ): rsqrt(Σ partials / H + eps), col 0
+                cb_wait_front(CB_VRSA, MKA_NOWN);
+                cb_reserve_back(CB_VRT, 1);
+                tile_regs_acquire();
+#if MKA_NOWN == 2
+                reconfig_data_format(CB_VRSA, CB_VRSA);
+                add_init(CB_VRSA, CB_VRSA);
+                add_tiles(CB_VRSA, CB_VRSA, 0, 1, 0);
+#else
+                reconfig_data_format_srca(CB_VRSA);
+                copy_init(CB_VRSA);
+                copy_tile(CB_VRSA, 0, 0);
+#endif
+                binop_with_scalar_tile_init();
+                mul_unary_tile(0, MKA_INVH_BITS);
+                add_unary_tile(0, MKA_EPS_BITS);
+                rsqrt_tile_init();
+                rsqrt_tile(0);
+                tile_regs_commit();
+                tile_regs_wait();
+                pack_reconfig_data_format(CB_VRT);
+                pack_tile(0, CB_VRT);
+                tile_regs_release();
+                cb_push_back(CB_VRT, 1);
+                cb_pop_front(CB_VRSA, MKA_NOWN);
+                // h_k = silu(rstd ⊙ Σ_r gate_k[r]) * (rstd ⊙ Σ_r up_k[r]); sums as P @ I (exact, fp32 DST); rstd
+                // broadcast along the row as Rcol @ J (J: row 0 = 1)
+                cb_wait_front(CB_VRT, 1);
+                cb_wait_front(CB_VOWN, 2);
+                cb_wait_front(CB_VRS, 16);
+                DeviceZoneScopedN("C-VRS");
+                cb_reserve_back(CB_VHO, 1);
+                cb_reserve_back(CB_VHO2, 1);
+                tile_regs_acquire();
+                reconfig_data_format(CB_VI, CB_VOWN);
+                matmul_block_init(CB_VOWN, CB_VI, 0, 1, 1, 1);
+                matmul_block(CB_VOWN, CB_VI, 0, 0, 0, 0, 1, 1, 1);
+                matmul_block(CB_VOWN, CB_VI, 1, 0, 1, 0, 1, 1, 1);
+                reconfig_data_format(CB_VI, CB_VRS);
+                matmul_block_init(CB_VRS, CB_VI, 0, 1, 1, 1);
+                for (uint32_t r = 0; r < 8; ++r) {
+                    if (r == vk) continue;
+                    matmul_block(CB_VRS, CB_VI, 2 * r, 0, 0, 0, 1, 1, 1);
+                    matmul_block(CB_VRS, CB_VI, 2 * r + 1, 0, 1, 0, 1, 1, 1);
+                }
+                reconfig_data_format(CB_VJ, CB_VRT);
+                matmul_block_init(CB_VRT, CB_VJ, 0, 1, 1, 1);
+                matmul_block(CB_VRT, CB_VJ, 0, 0, 2, 0, 1, 1, 1);
+                mul_binary_tile_init();
+                mul_binary_tile(0, 2, 0);
+                mul_binary_tile(1, 2, 1);
+                silu_tile_init();
+                silu_tile(0);
+                mul_binary_tile_init();
+                mul_binary_tile(0, 1, 0);
+                tile_regs_commit();
+                tile_regs_wait();
+                pack_reconfig_data_format(CB_VHO);
+                pack_tile(0, CB_VHO);
+                pack_tile(0, CB_VHO2);
+                tile_regs_release();
+                cb_push_back(CB_VHO, 1);
+                cb_push_back(CB_VHO2, 1);
+                cb_pop_front(CB_VRS, 16);
+                cb_pop_front(CB_VOWN, 2);
+                cb_pop_front(CB_VRT, 1);
+            }
+            cb_wait_front(CB_VH, V_NNM);
+            {
+                DeviceZoneScopedN("C-VDN");
+                reconfig_data_format(CB_WV, CB_VH);
+                pack_reconfig_data_format(CB_VDO);
+                matmul_block_init(CB_VH, CB_WV, 0, V_DSB, 1, vnn);
+                for (uint32_t bi = 0; bi < 4; ++bi) {
+                    // the first-finished chunk (per device, §15) -> CB_VDO2 (reader); the other -> CB_VDO (writer).
+                    // CB_WV is popped before CB_VDO is pushed (the writer's next plan_layer reuses the slot).
+                    const uint32_t b = (bi + 2 * vfirst) & 3;
+                    const uint32_t ocb = bi < 2 ? CB_VDO2 : CB_VDO;
+                    if ((bi & 1) == 0) cb_reserve_back(ocb, 2 * V_DSB);
+                    tile_regs_acquire();
+                    for (uint32_t j = 0; j < vnn; ++j) matmul_block(CB_VH, CB_WV, j, 2 * V_KTR * vnn + b * vnn * V_DSB + j * V_DSB, 0, 0, V_DSB, 1, vnn);
+                    tile_regs_commit();
+                    tile_regs_wait();
+                    for (uint32_t t = 0; t < V_DSB; ++t) pack_tile<true>(t, ocb, (b & 1) * V_DSB + t);
+                    tile_regs_release();
+                    if (bi == 1) cb_push_back(CB_VDO2, 2 * V_DSB);
+                    if (bi == 3) { cb_pop_front(CB_WV, V_SLOT); cb_push_back(CB_VDO, 2 * V_DSB); }
+                }
+            }
+            cb_pop_front(CB_VH, V_NNM);
+        }
+        cb_pop_front(CB_X, KT);
+#else
         cb_wait_front(CB_GO, 1);
         cb_pop_front(CB_GO, 1);
         if (IS_GU) {
@@ -365,5 +550,6 @@ void kernel_main() {
         cb_push_back(CB_OUT, NDN);
         cb_pop_front(CB_WD, HT * NDN);
         cb_pop_front(CB_H, HT);
+#endif
     }
 }

@@ -4,9 +4,9 @@
 set -u
 export KUBECONFIG=~/.kube/yyz2-cloud-kubeconfig.yaml; NS=ttop-q38-test; P=$1; TAG=$2; NLV=$3; AM=$4; CTXV=${5:-32768}; shift 5 2>/dev/null; EXTRA="$*"
 D=$(cd "$(dirname "$0")/.." && pwd)
-tar -C $(dirname $D) -czf /tmp/mk_mixed_push.tgz megakernel
+TGZ=$(mktemp -t mkpush).tgz; tar -C $(dirname $D) -czf $TGZ megakernel
 kubectl -n $NS exec $P -c inference-server -- mkdir -p /tmp/mk2
-kubectl -n $NS cp /tmp/mk_mixed_push.tgz $P:/tmp/mk2/mk.tgz -c inference-server
+kubectl -n $NS cp $TGZ $P:/tmp/mk2/mk.tgz -c inference-server; rm -f $TGZ
 kubectl -n $NS exec $P -c inference-server -- bash -c "cd /tmp/mk2 && rm -rf megakernel && tar xzf mk.tgz && \
   bash megakernel/attn/run_si_mka2.sh $TAG FM_NL=$NLV MK_AMASK=$AM MK_SGDN_US=64 MK_SAR_US=18 MKA_SWO_US=10 MKA_CTX=$CTXV \
   MKA_KVDT=bfp8 MKA_NBB=1 MKA_BUDGET=16384 FM_ITERS=2 MKA_EXT=1 MK_DEFINES=MKA_GUPRE=1,MK_DNPIPE=1,MK_FLAG_FLUSH=1,MKA_MIXTRID=1 $EXTRA; \
