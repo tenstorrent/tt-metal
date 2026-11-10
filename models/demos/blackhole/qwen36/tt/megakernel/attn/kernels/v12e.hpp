@@ -17,6 +17,7 @@ constexpr uint32_t CB_VDO = 40, CB_VDO2 = 41, CB_VI = 42, CB_VRSA = 43, CB_VRT =
 constexpr uint32_t CB_VP = 3, CB_VXO = 4, CB_VX0 = 5, CB_VPK = 16;   // 15/21-23 are MKA_RWO's (A, S, AS, XO)
 constexpr uint32_t V_NNM = 7, V_NTM = 14, V_KTR = 20, V_OT = 10, V_NROW = 8, V_NCOL = 10, V_PTB = 2048;
 constexpr uint32_t V_SLOT = 3 * V_KTR * V_NNM;   // 420 tiles
+constexpr uint32_t V_TRID0 = 12;   // MLP slice read trids 12 / 13 (layer parity)
 // v12 global words (index into the v12 address array)
 constexpr uint32_t VG_XA = 0, VG_XB = 1, VG_RS = 2, VG_H = 3, VG_P = 4, VG_MDONE = 5, VG_MGO = 6, VG_LA = 7, VG_LB = 8,
                    VG_BUSY = 9, NVG = 10;
