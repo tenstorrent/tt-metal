@@ -174,6 +174,47 @@ class ArPhase(OneShotARP):
         return ttnn.from_torch(t, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.mesh, memory_config=mc,
                                mesh_mapper=ttnn.ShardTensorToMesh(self.mesh, dim=0))
 
+    # ---------------------------------------------------------------- hosting AR_SEND in another role binary
+    # sender-reader / -writer compile-arg index -> MKAR_S_* macro (mk_ps_reader_h.cpp / mk_ps_writer_h.cpp layout)
+    _RD_CT = {0: "MKAR_S_CB_RS", 1: "MKAR_S_CB_AG", 2: "MKAR_S_IN_PAGE", 3: "MKAR_S_OUT_PAGE", 4: "MKAR_S_CHUNK_TILES",
+              5: "MKAR_S_BATCH", 6: "MKAR_S_SEM_AG_READY", 7: "MKAR_ITERS", 8: "MKAR_S_SEM_DONE", 9: "MKAR_S_NOUT",
+              10: "MKAR_S_PROG", 11: "MKAR_S_SEM_READY", 12: "MKAR_S_SEM_GO", 13: "MKAR_S_ROWS", 15: "MKAR_S_INPK",
+              16: "MKAR_S_READYP", **{17 + i: f"MKAR_S_READYP{i}" for i in range(8)}}
+    _WR_CT = {0: "MKAR_S_MY_CHIP", 1: "MKAR_S_CB_HDR", 2: "MKAR_S_CB_RS", 3: "MKAR_S_CB_AG", 4: "MKAR_S_IN_PAGE",
+              5: "MKAR_S_OUT_PAGE", 6: "MKAR_S_CHUNK_TILES", 7: "MKAR_S_IN_PPP", 8: "MKAR_S_OUT_PPP", 9: "MKAR_S_CB_RED",
+              10: "MKAR_ITERS", 11: "MKAR_S_PROG"}
+    _WR_FIXED = [("MKAR_S_BATCH", "1")] + [(n, "0") for n in (
+        "MKAR_S_SEM_AG_READY", "MKAR_S_SEM_DONE", "MKAR_S_SEM_READY", "MKAR_S_SEM_GO", "MKAR_S_NOUT", "MKAR_S_ROWS",
+        "MKAR_S_INPK", "MKAR_S_READYP", *[f"MKAR_S_READYP{i}" for i in range(8)])]
+
+    def sender_parts(self, parts):
+        """AR_SEND as phases for a host binary on the 4 AR sender cores (e.g. the GDN role kernels). parts: this device's
+        engine_parts(...). Returns dict:
+          rd_defines / wr_defines   MKAR_S_* (+ MK_PS_GSEM / EPOCH / ATYPE ...) for mkar::SendReader (NCRISC, NOC1) /
+                                    mkar::SendWriter (BRISC, NOC0; a kernel_main local, alive for the whole pass)
+          rd_args[core] / wr_args[core]   [common block (rd_ncommon / wr_ncommon words), role block] runtime words
+                                    (MKAR_ALL_RT=1: init(cbase=offset, rbase=offset + ncommon)); the writer's role
+                                    block ends with the fabric-connection args from setup_fabric_connection
+          cbs                       the sender CBs (RS / AG staging per core, packet headers) + the shared RS-slot CB
+                                    (owners + senders; the writer addresses remote slots via its local get_write_ptr)
+          semaphores                the fabric-connection program semaphores (per sender core; ids from
+                                    find_available_semaphore_id: avoid them or re-run setup on your descriptor)
+        Loop: init once; iter(it) for it = 0 .. MKAR_ITERS - 1 in program order (one per AR of the pass); fini once
+        (reader: fini(MKAR_ITERS)). Each iter blocks on its owners' READY words, then RS + AG for that AR."""
+        rd, wr = parts["sender_kernels"]
+        rct, wct = list(rd.compile_time_args), list(wr.compile_time_args)
+        rd_def = [(n, str(int(rct[i]))) for i, n in self._RD_CT.items() if i < len(rct)] + list(rd.defines) + [("MKAR_ALL_RT", "1")]
+        wr_def = [(n, str(int(wct[i]))) for i, n in self._WR_CT.items()] + self._WR_FIXED + list(wr.defines) + [("MKAR_ALL_RT", "1")]
+        rc, wc = list(rd.common_runtime_args), list(wr.common_runtime_args)
+        rd_args, wr_args = {}, {}
+        for c in [ttnn.CoreCoord(*xy) for xy in OneShotARSK.SK_SENDERS]:
+            rd_args[(c.x, c.y)] = rc + list(rd.runtime_args[c.x][c.y])
+            wr_args[(c.x, c.y)] = wc + list(wr.runtime_args[c.x][c.y])
+        red = [ttnn.CBDescriptor(total_size=d.total_size, core_ranges=d.core_ranges, format_descriptors=list(d.format_descriptors))
+               for d in parts["shared_cbs"]]
+        return dict(rd_defines=rd_def, wr_defines=wr_def, rd_args=rd_args, wr_args=wr_args, rd_ncommon=len(rc),
+                    wr_ncommon=len(wc), cbs=list(parts["sender_cbs"]) + red, semaphores=list(parts["semaphores"]))
+
     def owners_grid(self):
         return ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(10, 0), ttnn.CoreCoord(11, 7))])
 
