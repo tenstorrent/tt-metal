@@ -2784,7 +2784,7 @@ class DeepSeekV41Model(DeepSeekV4Model):
         d = self.dspark
         d.set_block(token, frontier)
         if seed is not None:
-            d.refresh_uniforms(seed)
+            d.refresh_uniforms(seed, accept=False)
         ttnn.execute_trace(d.device, self._spec_tids["draft"], cq_id=0, blocking=False)
         return self._read_draft(logits)
 

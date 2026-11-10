@@ -103,6 +103,10 @@ DSPARK_RING_PAGES = 2
 # Rows of the target's logits ring (one per decode step, at pos % LOGIT_ROWS): a whole tile, so the
 # accept's one-hot gather has no padded K, and a divisor of ring_rows, so the slot follows from the ring's.
 LOGIT_ROWS = 32
+# The draft's Markov steps hold a vocabulary row as [MARKOV_GROUPS, V / MARKOV_GROUPS] (row-major in vocabulary
+# order) rather than a [1, V] TILE row padded to 32 rows: each step's bias add, noise, untilize and argmax touch
+# 1/32 of the tiles. The head writes the bias in that layout itself, from a block-diagonal copy of the embedding.
+MARKOV_GROUPS = ttnn.TILE_SIZE
 # DeepInfer's residual penalty: the residual keeps at least 1 - exp(-penalty) mass, so a rejection can draw.
 DRAFT_PROB_PENALTY = 5e-5
 # The uniforms' clamp, so both logs of a Gumbel draw stay finite (and 0 * Gumbel is 0 when greedy).
@@ -631,8 +635,26 @@ class DeepSeekV41DSpark(DeepSeekV4Module):
             cache_file_name=markov_file,
             layout=ttnn.ROW_MAJOR_LAYOUT,
         )
-        self.markov_head = Linear(
-            last["markov_head.head.weight"], device, head_cache.file("markov_head.head"), dtype=ttnn.bfloat16
+        # [V, rank] -> [groups * rank, V / groups]: row c * rank + k holds column k for vocabulary slice c, so
+        # the block-diagonal embedding [groups, groups * rank] times it is the bias as [groups, V / groups].
+        groups, rank, vocab = MARKOV_GROUPS, self.markov_embed.shape[-1], config.vocab_size
+        if vocab % groups:
+            raise ValueError(f"the Markov head splits V = {vocab} into {groups} rows")
+        head_file = head_cache.file("markov_head.head.groups")
+        head = _materialize(last["markov_head.head.weight"], head_file, ttnn.bfloat16)
+        self.markov_head = _load_weight(
+            None
+            if head is None
+            else head.reshape(groups, vocab // groups, rank).transpose(1, 2).reshape(-1, vocab // groups),
+            device,
+            cache_file_name=head_file,
+        )
+        self.markov_blocks = ttnn.from_torch(
+            torch.kron(torch.eye(groups), torch.ones(1, rank)).reshape(1, 1, groups, groups * rank),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            mesh_mapper=replicate,
         )
         conf = _memo(last["confidence_head.proj.weight"])  # [1, D + rank]
         self.conf_hidden = Linear(
@@ -712,8 +734,10 @@ class DeepSeekV41DSpark(DeepSeekV4Module):
         self.inputs.update(
             {
                 "round": zeros((1, 1, 1, round_w), ttnn.int32, ttnn.ROW_MAJOR_LAYOUT),
-                # Rows [0, T) Gumbel the draft, [T, 2T) race the residual draws, [2T, 3T) column 0 the accepts.
-                "uniform": zeros((1, 1, 3 * t, vocab), ttnn.float32),
+                # The draft's Gumbel noise, in the Markov steps' layout.
+                "draft_uniform": zeros((1, t, MARKOV_GROUPS, vocab // MARKOV_GROUPS), ttnn.float32),
+                # Rows [0, T) race the residual draws, [T, 2T) column 0 the accepts.
+                "uniform": zeros((1, 1, 2 * t, vocab), ttnn.float32),
                 "temp": zeros((1, 1, 1, 1), ttnn.float32),
                 "inv_temp": zeros((1, 1, 1, 1), ttnn.float32),
             }
@@ -828,12 +852,16 @@ class DeepSeekV41DSpark(DeepSeekV4Module):
         for name, value in (("temp", temperature), ("inv_temp", inv)):
             host_to_device(torch.full((1, 1, 1, 1), value), self.inputs[name])
 
-    def refresh_uniforms(self, seed: int) -> None:
-        """Queue a fresh draw of the uniforms the next draft or accept samples with, in place on device (an
-        eager op: a trace would replay one seed). ``seed`` must be nonzero; every rank draws the same."""
-        if seed == 0:
-            raise ValueError("ttnn.uniform takes seed 0 as 'pick one per core on the host'")
-        ttnn.uniform(self.inputs["uniform"], 0.0, 1.0, seed)
+    def refresh_uniforms(self, seed: int, accept: bool = True) -> None:
+        """Queue a fresh draw of the uniforms the next draft and (with ``accept``) accept sample with, in place
+        on device (eager ops: a trace would replay one seed). ``seed`` must be in ``[1, 2**31 - 1)``; every rank
+        draws the same."""
+        if not 0 < seed < 2**31 - 1:
+            raise ValueError(f"seed {seed} is not in [1, 2**31 - 1): ttnn.uniform takes 0 as 'pick one per core'")
+        ttnn.uniform(self.inputs["draft_uniform"], 0.0, 1.0, seed)
+        if accept:
+            # A Lehmer step of the seed: nonzero, and a stream apart from the draft's.
+            ttnn.uniform(self.inputs["uniform"], 0.0, 1.0, seed * 48271 % (2**31 - 1))
 
     # ------------------------------------------------------------------ device side (traceable)
     def _block_inputs(
@@ -954,10 +982,10 @@ class DeepSeekV41DSpark(DeepSeekV4Module):
             one_hot = ttnn.eq(consts["vocab_cols"], drafted)
             q_d = ttnn.sum(ttnn.multiply(q, one_hot), dim=-1, keepdim=True)
             p_d = ttnn.sum(ttnn.multiply(p, one_hot), dim=-1, keepdim=True)
-            u = ttnn.slice(inp["uniform"], [0, 0, 2 * t, 0], [1, 1, 3 * t, 1])
+            u = ttnn.slice(inp["uniform"], [0, 0, t, 0], [1, 1, 2 * t, 1])
             hits = ttnn.multiply(ttnn.lt(ttnn.multiply(u, p_d), q_d), ttnn.gtz(p_d))
             residual = ttnn.relu(ttnn.subtract(q, ttnn.multiply(p, math.exp(-DRAFT_PROB_PENALTY))))
-            race = _exponentials(ttnn.slice(inp["uniform"], [0, 0, t, 0], [1, 1, 2 * t, vocab]))
+            race = _exponentials(ttnn.slice(inp["uniform"], [0, 0, 0, 0], [1, 1, t, vocab]))
             score = ttnn.multiply(residual, ttnn.reciprocal(race))
         else:
             score = target
@@ -1014,17 +1042,26 @@ class DeepSeekV41DSpark(DeepSeekV4Module):
         logits = self.lm_head(_rms(x, self.norm, self.eps))
 
         rank, vocab = self.markov_embed.shape[-1], logits.shape[-1]
-        gumbel = ttnn.neg(ttnn.log(_exponentials(ttnn.slice(inp["uniform"], [0, 0, 0, 0], [1, 1, t, vocab]))))
-        noise = ttnn.multiply(gumbel, inp["temp"])
+        groups, wide = MARKOV_GROUPS, vocab // MARKOV_GROUPS
+        grouped = ttnn.to_layout(
+            ttnn.reshape(ttnn.to_layout(logits, ttnn.ROW_MAJOR_LAYOUT), [1, t, groups, wide]), ttnn.TILE_LAYOUT
+        )
+        noise = ttnn.multiply(ttnn.neg(ttnn.log(_exponentials(inp["draft_uniform"]))), inp["temp"])
         ids, embeds, rows = [], [], []
         for i in range(t):
             embed = ttnn.reshape(ttnn.embedding(token, self.markov_embed), [1, 1, 1, rank])
             embeds.append(embed)
-            row = ttnn.slice(logits, [0, 0, i, 0], [1, 1, i + 1, vocab])
-            row = ttnn.add(row, self.markov_head(ttnn.to_layout(embed, ttnn.TILE_LAYOUT)))
+            blocks = ttnn.to_layout(ttnn.repeat(embed, ttnn.Shape([1, 1, 1, groups])), ttnn.TILE_LAYOUT)
+            bias = ttnn.matmul(
+                ttnn.multiply(self.markov_blocks, blocks), self.markov_head, compute_kernel_config=_HIFI4
+            )
+            row = ttnn.add(ttnn.slice(grouped, [0, i, 0, 0], [1, i + 1, groups, wide]), bias)
             rows.append(row)
-            noisy = ttnn.add(ttnn.typecast(row, ttnn.float32), ttnn.slice(noise, [0, 0, i, 0], [1, 1, i + 1, vocab]))
-            best = ttnn.argmax(ttnn.to_layout(noisy, ttnn.ROW_MAJOR_LAYOUT), dim=-1)
+            noisy = ttnn.add(
+                ttnn.typecast(row, ttnn.float32), ttnn.slice(noise, [0, i, 0, 0], [1, i + 1, groups, wide])
+            )
+            # Over the whole [groups, wide] row: its flat index is the vocabulary id.
+            best = ttnn.argmax(ttnn.to_layout(noisy, ttnn.ROW_MAJOR_LAYOUT))
             ids.append(ttnn.reshape(best, [1, 1, 1]))
             token = ttnn.reshape(best, [1, 1])
         markov = ttnn.to_layout(ttnn.concat(embeds, dim=2), ttnn.TILE_LAYOUT)
@@ -1036,7 +1073,7 @@ class DeepSeekV41DSpark(DeepSeekV4Module):
         for name, value in (
             ("ids", ttnn.concat(ids, dim=-1)),
             ("conf", conf),
-            ("rows", ttnn.to_layout(ttnn.concat(rows, dim=2), ttnn.ROW_MAJOR_LAYOUT)),
+            ("rows", ttnn.reshape(ttnn.to_layout(ttnn.concat(rows, dim=1), ttnn.ROW_MAJOR_LAYOUT), [1, 1, t, vocab])),
         ):
             ttnn.copy(ttnn.to_memory_config(value, ttnn.DRAM_MEMORY_CONFIG), out[name])
         return out["ids"], out["conf"], out["rows"]
