@@ -1029,16 +1029,16 @@ class DeepSeekV41DSpark(DeepSeekV4Module):
         for stage in self.stages:
             streams, pre_mix = stage.forward(streams, pre_mix, rope, bias_row)
 
-        streams_f = ttnn.typecast(streams, ttnn.float32)
-        weights = ttnn.typecast(pre_mix, ttnn.float32)
-        collapsed = None
-        for j in range(self.hc):
-            term = ttnn.multiply(
-                ttnn.slice(streams_f, [0, 0, j, 0], [1, t, j + 1, self.hidden]),
-                ttnn.slice(weights, [0, 0, 0, j], [1, t, 1, j + 1]),
-            )
-            collapsed = term if collapsed is None else ttnn.add(collapsed, term)
-        x = rows_from_tokens(ttnn.typecast(collapsed, ttnn.bfloat16))
+        # pre_mix [1, T, 1, hc] @ streams [1, T, hc, D] per token, over hc padded to a tile with real zeros:
+        # the matmul reads the tiles' padding, which other ops leave unspecified.
+        pad = ttnn.TILE_SIZE - self.hc
+        collapsed = ttnn.matmul(
+            ttnn.pad(pre_mix, [(0, 0), (0, 0), (0, 0), (0, pad)], 0.0),
+            ttnn.pad(streams, [(0, 0), (0, 0), (0, pad), (0, 0)], 0.0),
+            dtype=ttnn.bfloat16,
+            compute_kernel_config=_HIFI4,
+        )
+        x = rows_from_tokens(collapsed)
         logits = self.lm_head(_rms(x, self.norm, self.eps))
 
         rank, vocab = self.markov_embed.shape[-1], logits.shape[-1]
