@@ -5,6 +5,7 @@
 import os
 import shlex
 import signal
+import socket
 import subprocess
 from pathlib import Path
 import pandas as pd
@@ -53,6 +54,33 @@ def post_process_ops_log(output_logs_subdir, columns=None, sum_vals=True, op_nam
     return results
 
 
+_TRACY_DEFAULT_PORT = 5000
+
+
+def _port_is_free(port):
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        try:
+            s.bind(("0.0.0.0", port))
+        except OSError:
+            return False
+    return True
+
+
+def _tracy_port():
+    """The port tracy-capture and the profiled process talk on.
+
+    5000 when free. If something else already listens there (e.g. a docker-proxy'd registry), tracy-capture
+    connects to that service instead of the profiled process and waits until its 120 s capture timeout, so
+    pick the first free port above it instead.
+    """
+    for port in range(_TRACY_DEFAULT_PORT, _TRACY_DEFAULT_PORT + 500):
+        if _port_is_free(port):
+            if port != _TRACY_DEFAULT_PORT:
+                logger.warning(f"Tracy port {_TRACY_DEFAULT_PORT} is in use; using {port}")
+            return str(port)
+    raise RuntimeError(f"No free port for tracy in [{_TRACY_DEFAULT_PORT}, {_TRACY_DEFAULT_PORT + 500})")
+
+
 def _build_profiler_cmd(
     command,
     output_profiler_dir,
@@ -83,7 +111,7 @@ def _build_profiler_cmd(
         assert type(capture_perf_counters_groups) == list
         cmd.append("--profiler-capture-perf-counters=" + ",".join(capture_perf_counters_groups))
         cmd.append("--perf-counter-multipass")
-    cmd += ["-t", "5000"]
+    cmd += ["-t", _tracy_port()]
 
     if is_command_binary_exe:
         # The caller hands over a shell-style command line (e.g. `-m 'pytest x.py -k "a and b"'`); split it the way

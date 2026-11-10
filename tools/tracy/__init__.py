@@ -103,18 +103,16 @@ def run_report_setup(verbose, outputFolder, binFolder, port):
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
-        options = ""
+        # No shell: terminate() must reach tracy-capture itself. Through `sh -c` it only killed the shell and
+        # left tracy-capture running, still connected to the port.
+        captureCommand = [str(capture_exe), "-o", str(logsFolder / TRACY_FILE_NAME), "-f"]
         if port:
-            options += f"-p {port}"
-
-        captureCommand = (f"{capture_exe} -o {logsFolder / TRACY_FILE_NAME} -f {options}",)
+            captureCommand += ["-p", str(port)]
         if verbose:
-            logger.info(f"Capture command: {captureCommand}")
-            captureProcess = subprocess.Popen(captureCommand, shell=True)
+            logger.info(f"Capture command: {' '.join(captureCommand)}")
+            captureProcess = subprocess.Popen(captureCommand)
         else:
-            captureProcess = subprocess.Popen(
-                captureCommand, shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
-            )
+            captureProcess = subprocess.Popen(captureCommand, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     else:
         logger.error(f"Tracy tools were not found. Please make sure you are on a Tracy-enabled build (default).")
         sys.exit(1)
