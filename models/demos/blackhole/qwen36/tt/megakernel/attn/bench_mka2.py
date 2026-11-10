@@ -182,15 +182,20 @@ def frect(lx0, lx1):
 pxf = [dev.worker_core_from_logical_core(ttnn.CoreCoord(i, 0)).x for i in range(GXF)]
 fsplit = next((i for i in range(1, GXF) if pxf[i] != pxf[i - 1] + 1), GXF)
 RECTS_F = frect(0, fsplit - 1) + frect(fsplit, GXF - 1)
-NU, NQH, T, DHD = 4, 6, 4, 256
+NU, NQH, T, DHD = int(os.environ.get('MKA_NU', '4')), 6, 4, 256
 CTX = int(os.environ.get("MKA_CTX", "32768")); NBK = CTX // TILE; NBB = int(os.environ.get("MKA_NBB", "1"))   # 1 beats 2 by ~6 µs/layer (less NoC/DRAM congestion); 3 overflows STREAM L1 with GUPRE
 KVDT = {"bfp8": ttnn.bfloat8_b, "bfp4": ttnn.bfloat4_b}[os.environ.get("MKA_KVDT", "bfp8")]
 KVTB = ttnn.Tile([TILE, TILE]).get_tile_size(KVDT); QTB = ttnn.Tile([TILE, TILE]).get_tile_size(ttnn.bfloat16)
 OTB = ttnn.Tile([TILE, TILE]).get_tile_size(ttnn.float32); WOTB = ttnn.Tile([TILE, TILE]).get_tile_size(ttnn.bfloat8_b)
-BUDGET = int(os.environ.get("MKA_BUDGET", "0")); FAN = 6
+BUDGET = int(os.environ.get("MKA_BUDGET", "0")); FAN = 6 if NU >= 4 else 11   # 2-level tree: group <= FAN*FAN cores
+MKDEF = MKDEF + [("MKA_NU", str(NU)), ("MKA_FAN", str(FAN))]
 # qkv (wqkvg_pair) is 19.5 MB BFP8 per chip; the MIXN mixer stand-in streams NC*KT*MIXN BFP4 tiles. The rest is read as
 # extra scratch tiles per STREAM core during SDPA (next layer's qkv) so the per-layer DRAM bytes stay faithful.
 EXTRA_T = max(0, int((19.5e6 - NC * KT * MIXN * WTB) / NC / ttnn.Tile([TILE, TILE]).get_tile_size(ttnn.bfloat8_b)))
+EXTRA_TX = 0
+if os.environ.get('MKA_EXT', '0') == '1':
+    _w = float(os.environ.get('MKA_EXTW', '1')); _d = NC + (NCF - NC) * _w
+    EXTRA_T, EXTRA_TX = int(EXTRA_T * NC / _d), int(EXTRA_T * NC * _w / _d)
 S_WO = int(float(os.environ.get("MKA_SWO_US", "10")) * MHZ)
 grp = [i * NU // NCF for i in range(NCF)]; members = [[i for i in range(NCF) if grp[i] == u] for u in range(NU)]
 if os.environ.get('MKA_MREV') == '1': members = [m_[::-1] for m_ in members]   # rank 0 / first KV blocks at the far end of each user's rows
@@ -217,8 +222,15 @@ for L in range(NL):
 qten = ttnn.from_torch(torch.cat(qs_all).reshape(1, 1, NL * NU * TILE, DHD).bfloat16(), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=dev, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 outs = ttnn.from_torch(torch.zeros(1, 1, NL * NU * TILE, DHD).bfloat16(), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=dev, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 WO_T = 48 * 2   # wo_pair slice per STREAM core: K = 1536 / 32 = 48 tiles x 2 output tiles, BFP8 (8.4 MB per chip)
-wo_dummy = ttnn.from_torch(torch.zeros(1, 1, NC * WO_T * TILE, TILE).bfloat16(), dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=dev, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-GSEM = [ttnn.create_global_semaphore(dev, fgrid, 0) for _ in range(7)]
+# MKA_EXT=1 (spec v0.5 STEP 1 stand-in): the projection bytes not covered by the 80-core MIXN mixer (qkv remainder + wo)
+# are read by all 120 cores (STREAM + STREAM_EXT), each core's share = 80/120 of a STREAM core's v0.4 share
+EXT = os.environ.get('MKA_EXT', '0') == '1'
+EXTW = float(os.environ.get('MKA_EXTW', '1'))   # STREAM_EXT share / STREAM share of the projection bytes
+_den = NC + (NCF - NC) * EXTW
+WO_T120 = int(NC * WO_T / _den) if EXT else WO_T
+WO_TX = int(NC * WO_T * EXTW / _den) if EXT else 0
+wo_dummy = ttnn.from_torch(torch.zeros(1, 1, (NC * WO_T + 1024) * TILE, TILE).bfloat16(), dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=dev, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+GSEM = [ttnn.create_global_semaphore(dev, fgrid, 0) for _ in range(8)]
 GSA = [ttnn.get_global_semaphore_address(g) for g in GSEM]
 QROOT = 0; QRP = fphys[QROOT]
 print(f"[mka2] full grid {GXF}x{GYF} ({NCF} cores, {len(stream_idx)} STREAM) groups {[len(m) for m in members]} ctx {CTX} KV {KVDT} "
@@ -227,9 +239,14 @@ print(f"[mka2] full grid {GXF}x{GYF} ({NCF} cores, {len(stream_idx)} STREAM) gro
 # so ATTN-only cores take MKA_WNS x the blocks of a STREAM core (every core >= 1 block)
 WNS = float(os.environ.get("MKA_WNS", "1"))
 GUPRE = ('MKA_GUPRE', '1') in MKDEF
-# MKA_SWAP: per-core K/V NoC swap policy ('none' | 'x<thr>' = cores with phys x >= thr | 'y<thr>' = phys y >= thr)
-_sw = os.environ.get('MKA_SWAP', 'none')
+# per-core kv_mode (0 split K/NOC1 V/NOC0, 1 swapped, 2 K+V on NOC1 (reader), 3 K+V on NOC0 (writer)).
+# MKA_SWAP: 'none' | 'x<thr>' / 'y<thr>' (mode 1 at phys x/y >= thr) | 'stream' | 'attn' (mode 1 on that role)
+# MKA_KVHALF='<lo>,<hi>[,<thr>]': mode <lo> for phys x < thr (default 9), mode <hi> otherwise, e.g. '3,2' or '2,3'
+_sw = os.environ.get('MKA_SWAP', 'none'); _kh = os.environ.get('MKA_KVHALF', '')
 def SWAP(fi):
+    if _kh:
+        p_ = [int(v) for v in _kh.split(',')]; thr = p_[2] if len(p_) > 2 else 9
+        return p_[0] if fphys[fi].x < thr else p_[1]
     if _sw.startswith('x'): return 1 if fphys[fi].x >= int(_sw[1:]) else 0
     if _sw.startswith('y'): return 1 if fphys[fi].y >= int(_sw[1:]) else 0
     if _sw == 'stream': return 1 if fi in stream_idx else 0
@@ -297,7 +314,11 @@ def build(out):
             w_mk = [0] + z10 + [0] + [0] * 8 + [0] * 5 + [255] + [0] * 6
         selff = 0 if c.x < fsplit else 1
         i_s = stream_idx.get(fi, 0)
-        rrt[c.x][c.y] = [1 if isS else 0] + r_mk + GSA + sdpa_r + [wo_dummy.buffer_address(), i_s * WO_T, WO_T if (isS and not WO_NOC0) else 0, EXTRA_T if (isS and not WO_NOC0) else 0, SWAP(fi)]
+        rd_w = (isS or EXT) and not WO_NOC0
+        # stand-in bank spread: the reader reads 8-tile runs from page wo_page + 8k, which all sit in bank wo_page % 8.
+        # With wo_page = i * 96 every core hammered bank 0 (and cores near it won). MKA_WOBANK=1 (default) puts core i on bank i % 8.
+        wob = (fi % 8) if os.environ.get('MKA_WOBANK', '1') == '1' else 0
+        rrt[c.x][c.y] = [1 if isS else 0] + r_mk + GSA + sdpa_r + [wo_dummy.buffer_address(), ((fi * WO_T120) if EXT else (i_s * WO_T)) + wob, (WO_T120 if isS else WO_TX) if rd_w else 0, (EXTRA_T if isS else EXTRA_TX) if rd_w else 0, SWAP(fi)]
         wrt[c.x][c.y] = [1 if isS else 0] + w_mk + GSA + [1 if fi == QROOT else 0, qten.buffer_address()] + RECTS_F + [selff] + RECTS + \
             [kv.buffer_address() for kv in kvs] + [u, sb0, sb1, NBK, wo_dummy.buffer_address(), (i * WO_T) if isS else 0, WO_T if isS else 0, BUDGET, len(stream_idx), QRP.x, QRP.y, EXTRA_T if isS else 0, SWAP(fi)]
         nrecv = len(ch0) + len(ch1)
