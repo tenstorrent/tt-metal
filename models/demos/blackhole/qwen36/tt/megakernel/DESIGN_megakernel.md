@@ -679,3 +679,22 @@ Gate sensitivity (128 ARs per pass, ≈0.13 ms per µs of on-path AR):
 
 - **Break-evens:** u8 AR ≤ 22.0 µs. u1 AR ≤ 17.8 µs if STEP_U1 is 21 µs on silicon; AR ≤ 14.6 µs if STEP_U1 is 29.4 µs (1.4× sim).
 - **Note:** each µs recovered by the x-ramp fix on the 16 attention layers is worth 0.016 ms, i.e. 8 µs of attention ≈ 1 µs of AR.
+
+**BFP8 AR results (v0.7.9, 9dd6427740e, both flags default off):**
+
+| Variant | µs per call | Δ | x PCC | x max err | In-megakernel estimate |
+|---|---|---|---|---|---|
+| bf16 | 28.4 | — | 0.999998 | 0.086 | 20.8 |
+| AG BFP8 | 26.1 | −2.3 | 0.999971 | 0.109 | ~18.5 |
+| RS BFP8 | 25.2 | −3.2 | 0.999973 | 0.118 | ~17.6 |
+| both | 22.7 | −5.7 | 0.999944 | 0.167 | ~15.1 |
+
+Only both flags together reach ~15 µs, and they need the output-length gate.
+
+**v0.8 row-compact activations (R = 4·users).** A u1 verify pass carries R = 4 valid rows out of each 32-row tile (u8 = 32). Today every activation transfer moves full tiles, so at u1, 7/8 of the AR fabric bytes are padding, on a byte-bound path.
+- **Rule:** when R < 32, every activation transfer moves only rows 0..R-1. For R ≤ 16 that is R×32 B at tile offsets 0 and 512 (bf16 faces 0 and 1).
+  - Covered: AR RS partials, AG, owner → K-row multicast, and later the h column multicast and the down-stage column partials.
+  - Senders pack these runs contiguously (a 10-tile chunk is 2.5 KB instead of 20 KB at R=4); receivers unpack into tile layout.
+  - Rows ≥R are don't-care, and Σx² is taken over rows <R. The numerics are exact.
+- **Expected:** the u1 AR becomes latency-bound at ~8-10 µs (to be measured). At a 10 µs u1 AR, u1 + STEP_U1@21 ≈ 8.40 ms, and STEP_U1's silicon budget widens to ≤~41 µs.
+- **Consequence:** u1 is no longer AR-bound. u8 stays at 13.55 ms (0.15 margin) on the exact bf16 AR; the pipelined K=2 chain is the exact u8 lever, and BFP8 is the gated one.
