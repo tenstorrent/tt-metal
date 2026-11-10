@@ -210,6 +210,7 @@ inline void _llk_pack_untilize_init_(
     _llk_pack_untilize_configure_addrmod_();
 
     _llk_pack_untilize_mop_config_<block_ct_dim, narrow_row, dense>(face_r_dim, num_faces);
+    LLK_PACK_OTHER_PROGRAM_SET();
 
     // Set CH0 Zstride = 2x16x16 faces, .z_src = {.incr = 1} jumps 2 faces
     std::uint32_t x_stride       = datum_size_in_bytes(pack_src_format);

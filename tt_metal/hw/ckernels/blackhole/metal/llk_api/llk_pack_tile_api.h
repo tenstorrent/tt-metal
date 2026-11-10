@@ -466,6 +466,12 @@ constexpr std::uint32_t llk_pack_src32_mask(const std::uint32_t first) {
 // A 32 bit CB next to a 32 bit DEST may unpack to DEST, where the unpacker bounds the loop and a block pack steals its L1 reads: those kernels take the forms no sweep read slower, the others the datacopy tables.
 template <bool is_fp32_dest_acc_en>
 inline constexpr bool llk_pack_src32_family = is_fp32_dest_acc_en && (llk_pack_src32_mask(0) != 0 || llk_pack_src32_mask(32) != 0);
+// Whether a CB of the kernel unpacks to DEST (the JIT defines LLK_UNPACK_TO_DEST_ANY); without it one may. A kernel that unpacks to SrcA only takes the datacopy tables.
+#if defined(LLK_UNPACK_TO_DEST_ANY)
+inline constexpr bool llk_pack_unpack_to_dest = LLK_UNPACK_TO_DEST_ANY != 0;
+#else
+inline constexpr bool llk_pack_unpack_to_dest = true;
+#endif
 
 // Form of a block per tile count (above 16: the entry of 16): T per-tile packs, B the block that programs the output, W the block with the W offset, where no cell of the row read slower in the tt-llk sweeps.
 // Columns: half sync 16 and 32 bit DEST, full sync 16 and 32 bit DEST; the first block of an output takes the init or the reconfigure table, the blocks that continue it the next table. The _dc tables hold the rows of the datacopy family.
@@ -542,7 +548,7 @@ constexpr char llk_pack_next_form_dc[10][4][17] = {
     {"BBBWWWWWWWWWWWWW", "TWWWWWWWWWWWWWWW", "BBBWWWWWWWWWWWWW", "WWWWWWWWWWWWWWWW"},  // other
 };
 
-// Behind matmul math a block can read slower than per tile in cells the sweeps measured, or a W offset block faster than the form of the table: bit (column * 16 + n - 1) of a mask forbids the block (no_block) or the W offset (no_w) at n tiles,
+// Behind matmul math a block can read slower than per tile in cells the sweeps measured, or a W offset block faster than the form of the table: bit (column * 16 + n - 1) of a mask forbids the W offset (no_w: the block instead), then the block (no_block) at n tiles,
 // or, with the K given, takes the W offset (take_w) or the block (take_b). Rows: LoFi K not given, K 1, K above 1, HiFi2 to HiFi4 together (take_w without the first); one entry per row of the form tables.
 constexpr std::uint64_t llk_pack_mm_no_block[2][4][10] = {
     {  // datacopy family
@@ -552,35 +558,35 @@ constexpr std::uint64_t llk_pack_mm_no_block[2][4][10] = {
         {0x00000000000E00FE, 0x00000000000A00AA, 0x00000000000A00EA, 0x00000000000E00CE, 0x00000000000E00EE, 0x0000000000020062, 0x0000000000020022, 0x0000000000000022, 0x0000000000000040, 0},  // HiFi
     },
     {  // 32 bit input family
-        {0x0020002000000020, 0x00000000000C00D8, 0, 0x0000000000040020, 0x0000000000080000, 0x00000000000E00A8, 0x0000000000080028, 0x00000000000000E8, 0x0000000000000080, 0x00000000000000A0},  // LoFi, K not given
+        {0x0020002000000020, 0x00000000000C00D8, 0, 0x0000000000040020, 0x00000000000C0000, 0x00000000000E00A8, 0x0000000000080028, 0x00000000000000E8, 0x0000000000000080, 0x00000000000000A0},  // LoFi, K not given
         {0, 0, 0, 0, 0, 0x0000000000080000, 0, 0, 0, 0},  // LoFi, K 1
-        {0x0020002000000020, 0x00000000000C00D8, 0, 0x0000000000040020, 0x0000000000080000, 0x00000000000E00A8, 0x0000000000080028, 0x00000000000000E8, 0x0000000000000080, 0x00000000000000A0},  // LoFi, K above 1
-        {0x00000000000E00FE, 0x00000000000E00AA, 0x00000000000E00EA, 0x00000000000E00CE, 0x00000000000E00EE, 0x0000000000020062, 0x0000000000020022, 0x0000000000000022, 0x0000000000000040, 0},  // HiFi
+        {0x0020002000000020, 0x00000000000C00D8, 0, 0x0000000000040020, 0x00000000000C0000, 0x00000000000E00A8, 0x0000000000080028, 0x00000000000000E8, 0x0000000000000080, 0x00000000000000A0},  // LoFi, K above 1
+        {0x00000000000E00FE, 0x00000000000E00AA, 0x00000000000E00EA, 0x00000000000E00CE, 0x00000000000E00EE, 0x0000000000060062, 0x0000000000020022, 0x0000000000000022, 0x0000000000000040, 0},  // HiFi
     },
 };
 constexpr std::uint64_t llk_pack_mm_no_w[2][4][10] = {
     {  // datacopy family
-        {0x002E002E00000020, 0x00000000000800D8, 0, 0x0000000000000060, 0x0002000000000080, 0x0000000A000800B8, 0x0002000A00080028, 0x00000002000000E8, 0x0000000000000080, 0x00000000000000A0},  // LoFi, K not given
+        {0x000E000E00000020, 0x0000000000000090, 0, 0x0000000000000060, 0x0002000000000080, 0x0000000A000800B8, 0x0002000A00080028, 0x00000002000000E8, 0, 0x00000000000000A0},  // LoFi, K not given
         {0x0002000200000000, 0, 0, 0, 0x0002000000000000, 0, 0, 0, 0, 0},  // LoFi, K 1
-        {0x002E002E00000020, 0x00000000000800D8, 0, 0x0000000000000060, 0x0002000000000080, 0x0000000A000800B8, 0x0002000A00080028, 0x00000002000000E8, 0x0000000000000080, 0x00000000000000A0},  // LoFi, K above 1
-        {0x00020000000E00FE, 0x00000000000E00AE, 0x00000000000A00EA, 0x00000000000E00CE, 0x00000000000E00EE, 0x0000000000020062, 0x0000000000020022, 0x0000000000000022, 0x0000000000000040, 0x0000000000020002},  // HiFi
+        {0x000E000E00000020, 0x0000000000000090, 0, 0x0000000000000060, 0x0002000000000080, 0x0000000A000800B8, 0x0002000A00080028, 0x00000002000000E8, 0, 0x00000000000000A0},  // LoFi, K above 1
+        {0x00020000000E00EE, 0x00000000000E00AE, 0x00000000000A00EA, 0x00000000000E00CE, 0x00000000000E00AE, 0x0000000000020062, 0x0000000000020022, 0x0000000000000022, 0x0000000000000040, 0x0000000000020002},  // HiFi
     },
     {  // 32 bit input family
-        {0x002E002E00000020, 0x00000000000C00D8, 0x0000000000040000, 0x0000000000040060, 0x0002000000080080, 0x0000000A000E00B8, 0x0002000A00080028, 0x00000002000000E8, 0x00000000000A0080, 0x00000000000200A0},  // LoFi, K not given
-        {0x0002000200000000, 0, 0, 0, 0x0002000000000000, 0x0000000000080000, 0x0000000000080000, 0, 0, 0},  // LoFi, K 1
-        {0x002E002E00000020, 0x00000000000C00D8, 0x0000000000040000, 0x0000000000040060, 0x0002000000080080, 0x0000000A000E00B8, 0x0002000A00080028, 0x00000002000000E8, 0x00000000000A0080, 0x00000000000200A0},  // LoFi, K above 1
-        {0x00020000000E00FE, 0x00000000000E00AE, 0x00000000000E00EA, 0x00000000000E00CE, 0x00020000000E00EE, 0x00000000000E0062, 0x0000000000020022, 0x0000000000000022, 0x0000000000000040, 0x0000000000020002},  // HiFi
+        {0x000E000E00000020, 0x00000000000C0090, 0x0000000000040000, 0x0000000000000060, 0x0002000000080080, 0x0000000A000A00B8, 0x0002000A000A0028, 0x00000002000000E8, 0x00000000000A0000, 0x00000000000200A0},  // LoFi, K not given
+        {0x0002000200000000, 0, 0, 0, 0x0002000000000000, 0x00000000000A0000, 0x00020000000A0000, 0, 0, 0},  // LoFi, K 1
+        {0x000E000E00000020, 0x00000000000C0090, 0x0000000000040000, 0x0000000000000060, 0x0002000000080080, 0x0000000A000A00B8, 0x0002000A000A0028, 0x00000002000000E8, 0x00000000000A0000, 0x00000000000200A0},  // LoFi, K above 1
+        {0x00020000000E00EE, 0x00000000000E00AE, 0x00000000000E00EA, 0x00000000000E00CE, 0x00020000000E00AE, 0x00000000000E0062, 0x0002000000020022, 0x0000000000000022, 0x0000000000000040, 0x0000000000020002},  // HiFi
     },
 };
 constexpr std::uint64_t llk_pack_mm_take_w[2][3][10] = {
     {  // datacopy family
         {0x00F8FF7800000000, 0x00F807F800000010, 0x00F8FF3800000000, 0x00F8FF3800000000, 0x0078FF3800000000, 0x00000000000C003C, 0x00000000000C000C, 0x000000000000000C, 0x00000000000000F0, 0x0000000600000006},  // LoFi, K 1
-        {0x0000D00000000000, 0x00F807F800000000, 0x00F8FF3800000000, 0x00F8FF3800000000, 0x0078FF3800000000, 0x0000000000040004, 0, 0x0000000000000004, 0x0000000000000070, 0x0000000600000000},  // LoFi, K above 1
+        {0x0020D02000000000, 0x00F807F800000000, 0x00F8FF3800000000, 0x00F8FF3800000000, 0x0078FF3800000000, 0x0000000000040004, 0, 0x0000000000000004, 0x00000000000000F0, 0x0000000600000000},  // LoFi, K above 1
         {0x00F8FF7800000000, 0x00F807F800000000, 0x00F8FF3800000000, 0x00F8FF3800000000, 0x0078FF3800000000, 0x00000000000C001C, 0, 0, 0x00000000000000B0, 0x0000000600000004},  // HiFi
     },
     {  // 32 bit input family
         {0x00F8FF7800000000, 0x00F807F800000010, 0x00F8FF3800000000, 0x00F8FF3800000000, 0x0078FF3800000000, 0x000000000000003C, 0x000200000006000C, 0x000000000000000C, 0x00000000000A00F0, 0x00000006000E0006},  // LoFi, K 1
-        {0x00C0D00000000000, 0x00F807F800000000, 0x00F8FF3800000000, 0x00F8FF3800000000, 0x0078FF3800000000, 0x0000000000000004, 0x0000000000060000, 0x0000000000000004, 0x0000000000000070, 0x00000006000C0000},  // LoFi, K above 1
+        {0x00E0D02000000000, 0x00F807F800000000, 0x00F8FF3800000000, 0x00F8FF3800000000, 0x0078FF3800000000, 0x0000000000020004, 0x0000000000060000, 0x0000000000000004, 0x00000000000000F0, 0x00000006000C0000},  // LoFi, K above 1
         {0x00F8FF7800000000, 0x00F807F800000000, 0x00F8FF3800000000, 0x00F8FF3800000000, 0x0078FF3800000000, 0x000000000000001C, 0x0002000000000000, 0, 0x00000000000A00B0, 0x00000006000C0004},  // HiFi
     },
 };
@@ -610,10 +616,11 @@ inline char llk_pack_block_form(const std::uint32_t output_id, const std::uint32
     constexpr std::uint32_t group = MATH_FIDELITY != MathFidelity::LoFi ? 3 : (matmul_kt == 0 ? 0 : (matmul_kt == 1 ? 1 : 2));
     const std::uint32_t bit = column * 16 + count;
     char out = form;
-    if (out != 'T' && ((llk_pack_mm_no_block[family][group][row] >> bit) & 1) != 0) {
-        out = 'T';
-    } else if (out == 'W' && ((llk_pack_mm_no_w[family][group][row] >> bit) & 1) != 0) {
+    if (out == 'W' && ((llk_pack_mm_no_w[family][group][row] >> bit) & 1) != 0) {
         out = 'B';
+    }
+    if (out == 'B' && ((llk_pack_mm_no_block[family][group][row] >> bit) & 1) != 0) {
+        out = 'T';
     }
     if constexpr (matmul_kt != 0) {
         if (next && out != 'W' && ((llk_pack_mm_take_w[family][group - 1][row] >> bit) & 1) != 0) {
@@ -628,7 +635,7 @@ inline char llk_pack_block_form(const std::uint32_t output_id, const std::uint32
 
 template <bool is_fp32_dest_acc_en>
 inline const char (*llk_pack_form_table(const char (*u)[4][17], const char (*dc)[4][17]))[4][17] {
-    return llk_pack_src32_family<is_fp32_dest_acc_en> ? u : dc;
+    return llk_pack_src32_family<is_fp32_dest_acc_en> && llk_pack_unpack_to_dest ? u : dc;
 }
 
 // The per-tile packs of a block that takes none of the block forms: main's loop.
@@ -665,6 +672,13 @@ __attribute__((always_inline)) inline void llk_pack_block(std::uint32_t start_ti
         StateVal<Operand<Exu::Pack>::NumFaces>(get_output_num_faces(output_id)),
         StateDiscard<std::uint32_t>(start_tile_index),
         StateDiscard<std::uint32_t>(ntiles)));
+
+    // The block forms run the default pack program: after a tilize, untilize or pack rows init, main's per-tile packs. So too while the packer
+    // accumulates in L1 under half sync, where a block behind matmul math reads up to 64 cycles slower (full sync: faster).
+    if (LLK_PACK_OTHER_PROGRAM_ACTIVE() || (DST_SYNC_MODE == DstSync::SyncHalf && LLK_PACK_L1_ACC_ACTIVE())) {
+        llk_pack_block_per_tile<is_fp32_dest_acc_en>(start_tile_index, output_id, ntiles);
+        return;
+    }
 
 #ifdef LLK_PACK_W_OFFSET
     const bool first_block = pack_w_last != output_id;

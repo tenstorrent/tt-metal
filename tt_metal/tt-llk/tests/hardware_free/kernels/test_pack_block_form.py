@@ -90,9 +90,9 @@ NEXT_FORM_DC = {
     "narrow": ["BBBWWWWWWWWWWWWW", "TWWWWWWWWWWWWWWW", "BBBWWWWWWWWWWWWW", "WWWWWWWWWWWWWWWW"],
 }
 # Matmul masks: bit column * 16 + n - 1 at n tiles. [family][group][class]: family 0 datacopy, 1 32 bit input; groups LoFi K not given, LoFi K 1, LoFi K above 1, HiFi2 to HiFi4 (TAKE_W without the first group).
-MM_NO_BLOCK = [[[9007336693694496, 524504, 0, 32, 0, 524456, 524328, 232, 128, 160], [0, 0, 0, 0, 0, 0, 0, 0, 0, 0], [9007336693694496, 524504, 0, 32, 0, 524456, 524328, 232, 128, 160], [917758, 655530, 655594, 917710, 917742, 131170, 131106, 34, 64, 0]], [[9007336693694496, 786648, 0, 262176, 524288, 917672, 524328, 232, 128, 160], [0, 0, 0, 0, 0, 524288, 0, 0, 0, 0], [9007336693694496, 786648, 0, 262176, 524288, 917672, 524328, 232, 128, 160], [917758, 917674, 917738, 917710, 917742, 131170, 131106, 34, 64, 0]]]
-MM_NO_W = [[[12948046497185824, 524504, 0, 96, 562949953421440, 42950197432, 562992903618600, 8589934824, 128, 160], [562958543355904, 0, 0, 0, 562949953421312, 0, 0, 0, 0, 0], [12948046497185824, 524504, 0, 96, 562949953421440, 42950197432, 562992903618600, 8589934824, 128, 160], [562949954339070, 917678, 655594, 917710, 917742, 131170, 131106, 34, 64, 131074]], [[12948046497185824, 786648, 262144, 262240, 562949953945728, 42950590648, 562992903618600, 8589934824, 655488, 131232], [562958543355904, 0, 0, 0, 562949953421312, 524288, 524288, 0, 0, 0], [12948046497185824, 786648, 262144, 262240, 562949953945728, 42950590648, 562992903618600, 8589934824, 655488, 131232], [562949954339070, 917678, 917738, 917710, 562949954339054, 917602, 131106, 34, 64, 131074]]]
-MM_TAKE_W = [[[70086685085401088, 69814555957526544, 70086410207494144, 70086410207494144, 34057613188530176, 786492, 786444, 12, 240, 25769803782], [228698418577408, 69814555957526528, 70086410207494144, 70086410207494144, 34057613188530176, 262148, 0, 4, 112, 25769803776], [70086685085401088, 69814555957526528, 70086410207494144, 70086410207494144, 34057613188530176, 786460, 0, 0, 176, 25769803780]], [[70086685085401088, 69814555957526544, 70086410207494144, 70086410207494144, 34057613188530176, 60, 562949953814540, 12, 655600, 25770721286], [54271893947023360, 69814555957526528, 70086410207494144, 70086410207494144, 34057613188530176, 4, 393216, 4, 112, 25770590208], [70086685085401088, 69814555957526528, 70086410207494144, 70086410207494144, 34057613188530176, 28, 562949953421312, 0, 655536, 25770590212]]]
+MM_NO_BLOCK = [[[9007336693694496, 524504, 0, 32, 0, 524456, 524328, 232, 128, 160], [0, 0, 0, 0, 0, 0, 0, 0, 0, 0], [9007336693694496, 524504, 0, 32, 0, 524456, 524328, 232, 128, 160], [917758, 655530, 655594, 917710, 917742, 131170, 131106, 34, 64, 0]], [[9007336693694496, 786648, 0, 262176, 786432, 917672, 524328, 232, 128, 160], [0, 0, 0, 0, 0, 524288, 0, 0, 0, 0], [9007336693694496, 786648, 0, 262176, 786432, 917672, 524328, 232, 128, 160], [917758, 917674, 917738, 917710, 917742, 393314, 131106, 34, 64, 0]]]
+MM_NO_W = [[[3940709803491360, 144, 0, 96, 562949953421440, 42950197432, 562992903618600, 8589934824, 0, 160], [562958543355904, 0, 0, 0, 562949953421312, 0, 0, 0, 0, 0], [3940709803491360, 144, 0, 96, 562949953421440, 42950197432, 562992903618600, 8589934824, 0, 160], [562949954339054, 917678, 655594, 917710, 917678, 131170, 131106, 34, 64, 131074]], [[3940709803491360, 786576, 262144, 96, 562949953945728, 42950328504, 562992903749672, 8589934824, 655360, 131232], [562958543355904, 0, 0, 0, 562949953421312, 655360, 562949954076672, 0, 0, 0], [3940709803491360, 786576, 262144, 96, 562949953945728, 42950328504, 562992903749672, 8589934824, 655360, 131232], [562949954339054, 917678, 917738, 917710, 562949954338990, 917602, 562949953552418, 34, 64, 131074]]]
+MM_TAKE_W = [[[70086685085401088, 69814555957526544, 70086410207494144, 70086410207494144, 34057613188530176, 786492, 786444, 12, 240, 25769803782], [9236035112271872, 69814555957526528, 70086410207494144, 70086410207494144, 34057613188530176, 262148, 0, 4, 240, 25769803776], [70086685085401088, 69814555957526528, 70086410207494144, 70086410207494144, 34057613188530176, 786460, 0, 0, 176, 25769803780]], [[70086685085401088, 69814555957526544, 70086410207494144, 70086410207494144, 34057613188530176, 60, 562949953814540, 12, 655600, 25770721286], [63279230640717824, 69814555957526528, 70086410207494144, 70086410207494144, 34057613188530176, 131076, 393216, 4, 240, 25770590208], [70086685085401088, 69814555957526528, 70086410207494144, 70086410207494144, 34057613188530176, 28, 562949953421312, 0, 655536, 25770590212]]]
 MM_TAKE_B = [[[0, 0, 0, 0, 0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0, 0, 0, 0, 0]], [[0, 0, 0, 0, 0, 0, 0, 0, 0, 524288], [0, 0, 0, 0, 0, 0, 0, 0, 0, 524288], [0, 0, 0, 0, 0, 524288, 0, 0, 0, 524288]]]
 FORM_NAMES = {"T": "per_tile", "B": "block", "W": "w_offset"}
 BFP_8 = ("Bfp8_b", "Bfp8")
@@ -115,13 +115,14 @@ def output_class(dst_format, num_faces=4, face_r_dim=16):
     return "wide" if dst_format in WIDE else "narrow"
 
 
-def pack_block_form(ntiles, dst_format, state, fp32_dest=False, full_sync=False, hifi=False, num_faces=4, face_r_dim=16, matmul_kt=0, src32=False):
+def pack_block_form(ntiles, dst_format, state, fp32_dest=False, full_sync=False, hifi=False, num_faces=4, face_r_dim=16, matmul_kt=0, src32=False, u2d=True):
     """Form of one llk_pack_block call; state is init (first block after a pack init or another output), reconf (first block after a packer reconfigure) or next (the block continues the output).
-    src32: a Float32, Int32 or UInt32 CB sits in the kernel's CB list (the output's own CB counts, for its unpack source format is its format)."""
+    src32: a Float32, Int32 or UInt32 CB sits in the kernel's CB list (the output's own CB counts, for its unpack source format is its format).
+    u2d: a CB of the kernel unpacks to DEST (LLK_UNPACK_TO_DEST_ANY); the form tables of the 32 bit input family need it, the masks do not."""
     if not fp32_dest and dst_format in ("Int8", "UInt8"):
         return FORM_NAMES["T"]
     family = 1 if (fp32_dest and (src32 or dst_format in ("Float32", "Int32", "UInt32"))) else 0
-    table = {"init": (INIT_FORM_DC, INIT_FORM), "reconf": (RECONF_FORM_DC, RECONF_FORM), "next": (NEXT_FORM_DC, NEXT_FORM)}[state][family]
+    table = {"init": (INIT_FORM_DC, INIT_FORM), "reconf": (RECONF_FORM_DC, RECONF_FORM), "next": (NEXT_FORM_DC, NEXT_FORM)}[state][family if u2d else 0]
     column = (2 if full_sync else 0) + (1 if fp32_dest else 0)
     cls = output_class(dst_format, num_faces, face_r_dim)
     row = CLASSES.index(cls)
@@ -129,15 +130,21 @@ def pack_block_form(ntiles, dst_format, state, fp32_dest=False, full_sync=False,
     bit = column * 16 + count
     form = table[cls][column][count]
     group = 3 if hifi else (0 if matmul_kt == 0 else (1 if matmul_kt == 1 else 2))
-    if form != "T" and (MM_NO_BLOCK[family][group][row] >> bit) & 1:
-        form = "T"
-    elif form == "W" and (MM_NO_W[family][group][row] >> bit) & 1:
+    if form == "W" and (MM_NO_W[family][group][row] >> bit) & 1:
         form = "B"
+    if form == "B" and (MM_NO_BLOCK[family][group][row] >> bit) & 1:
+        form = "T"
     if matmul_kt != 0 and state == "next" and form != "W" and (MM_TAKE_W[family][group - 1][row] >> bit) & 1:
         form = "W"
     if matmul_kt != 0 and state == "next" and form == "T" and (MM_TAKE_B[family][group - 1][row] >> bit) & 1:
         form = "B"
     return FORM_NAMES[form]
+
+
+def test_unpack_to_srca_takes_datacopy_tables():
+    """A 32 bit CB without unpack to DEST (Float32 to SrcA) takes the datacopy rows: the Float32 input sweep to SrcA reads every block form faster than per tile."""
+    assert pack_block_form(4, "Float16_b", "init", fp32_dest=True, src32=True, u2d=True) == "per_tile"
+    assert pack_block_form(4, "Float16_b", "init", fp32_dest=True, src32=True, u2d=False) != "per_tile"
 
 
 def test_mirror_cells():
@@ -165,7 +172,7 @@ def test_mirror_cells():
     assert pack_block_form(5, 'Float16_b', 'next', num_faces=2, face_r_dim=8) == 'w_offset'
     assert pack_block_form(3, 'Bfp8_b', 'next', fp32_dest=True) == 'block'
     assert pack_block_form(4, 'Bfp8_b', 'next', fp32_dest=True) == 'per_tile'
-    assert pack_block_form(3, 'Bfp8_b', 'next', fp32_dest=True, src32=True) == 'per_tile'
+    assert pack_block_form(3, 'Bfp8_b', 'next', fp32_dest=True, src32=True) == 'w_offset'
     assert pack_block_form(4, 'Bfp8_b', 'next', fp32_dest=True, src32=True) == 'per_tile'
     assert pack_block_form(5, 'Float16_b', 'next', hifi=True, matmul_kt=0) == 'w_offset'
     assert pack_block_form(6, 'Bfp8_b', 'next', hifi=True, matmul_kt=0) == 'per_tile'
@@ -214,12 +221,14 @@ def test_header_logic_matches_mirror():
     assert "constexpr std::uint32_t family = llk_pack_src32_family<is_fp32_dest_acc_en> ? 1 : 0;" in src
     assert "inline constexpr bool llk_pack_src32_family = is_fp32_dest_acc_en && (llk_pack_src32_mask(0) != 0 || llk_pack_src32_mask(32) != 0);" in src
     assert "constexpr std::uint32_t group = MATH_FIDELITY != MathFidelity::LoFi ? 3 : (matmul_kt == 0 ? 0 : (matmul_kt == 1 ? 1 : 2));" in src
-    assert "if (out != 'T' && ((llk_pack_mm_no_block[family][group][row] >> bit) & 1) != 0) { out = 'T'; } else if (out == 'W' && ((llk_pack_mm_no_w[family][group][row] >> bit) & 1) != 0) { out = 'B'; }" in src
+    assert "if (out == 'W' && ((llk_pack_mm_no_w[family][group][row] >> bit) & 1) != 0) { out = 'B'; } if (out == 'B' && ((llk_pack_mm_no_block[family][group][row] >> bit) & 1) != 0) { out = 'T'; }" in src
     assert "if (next && out != 'W' && ((llk_pack_mm_take_w[family][group - 1][row] >> bit) & 1) != 0) { out = 'W'; }" in src
     assert "if (next && out == 'T' && ((llk_pack_mm_take_b[family][group - 1][row] >> bit) & 1) != 0) { out = 'B'; }" in src
     assert "if (get_output_num_faces(output_id) != 4 || rows != FACE_R_DIM) { if (rows == FACE_R_DIM) { return get_output_num_faces(output_id) == 1 ? 0 : 1; } return rows >= 8 ? 2 : (rows >= 4 ? 3 : 4); }" in src
     assert "return llk_pack_dst_is_wide(output_id) ? 8 : 9;" in src
     assert "first_block ? (pack_reconfigured ? llk_pack_form_table<is_fp32_dest_acc_en>(llk_pack_reconf_form, llk_pack_reconf_form_dc)" in src
+    assert "return llk_pack_src32_family<is_fp32_dest_acc_en> && llk_pack_unpack_to_dest ? u : dc;" in src
+    assert "#if defined(LLK_UNPACK_TO_DEST_ANY) inline constexpr bool llk_pack_unpack_to_dest = LLK_UNPACK_TO_DEST_ANY != 0; #else inline constexpr bool llk_pack_unpack_to_dest = true; #endif" in src
     assert "closed_pays" not in src and "closed_loses" not in src and "LLK_PACK_BLOCK_MIN_TILES" not in src
 
 
