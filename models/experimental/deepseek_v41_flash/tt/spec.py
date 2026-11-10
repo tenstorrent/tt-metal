@@ -230,13 +230,17 @@ class DSparkSpeculator:
         # pipelined steps' logits (the parallel verify sends none), and no top-p / top-k, which it does not apply.
         if device_accept and not (
             model.dspark is not None
+            and model.spec_device_accept
             and propose is None
             and not parallel_verify
             and top_p == 1.0
             and top_k == -1
             and drafts < model.dspark.block
         ):
-            raise ValueError("device_accept needs the drafter, pipelined verify, no top-p / top-k and drafts < block")
+            raise ValueError(
+                "device_accept needs the drafter prepared with device_accept, pipelined verify, no top-p / top-k "
+                "and drafts < block"
+            )
         self.device_accept = device_accept
         self.streaming = not parallel_verify and not device_accept and not model._eager_decode
         if model.dspark is not None and propose is None:
@@ -248,6 +252,8 @@ class DSparkSpeculator:
         self._proposals: list[int] = []
         # The drafter's logits [k, V] for the proposals, when it sampled them; None for one-hot proposals.
         self._proposal_logits: Optional[torch.Tensor] = None
+        # A streamed round reads those logits only once its verify is dispatched, while the pipeline runs it.
+        self._logits_pending = False
         self._rejected: list[int] = []
         # A streamed round's first row (``self._next`` at ``self._pos``) is already in the pipeline, with the
         # fixup of the round before it: the previous round dispatched it at its reject, ahead of its draft.
@@ -264,7 +270,10 @@ class DSparkSpeculator:
         if self._propose is not None:
             return list(self._propose(token, frontier))[: self.drafts]
         host_accept = self.temperature > 0 and not self.device_accept
-        ids, _, logits = self.model.spec_draft(token, frontier, self._seed(), logits=host_accept)
+        self._logits_pending = host_accept and self.streaming
+        ids, _, logits = self.model.spec_draft(
+            token, frontier, self._seed(), logits=host_accept and not self._logits_pending
+        )
         if logits is not None:
             self._proposal_logits = logits[: self.drafts]
         return ids[: self.drafts]
@@ -360,7 +369,7 @@ class DSparkSpeculator:
         """One verify round; returns the tokens it emits (1 to ``drafts + 1``).
 
         ``budget`` (tokens the caller still wants) and ``stop_ids`` say which round is the caller's last: a
-        streamed round that is not dispatches the next round's first row at its reject (see :meth:`_streamed`).
+        streamed round that is not dispatches the next round's first row at its reject (see the module docstring).
         """
         model, k = self.model, self.drafts
         t0 = time.perf_counter()
@@ -409,6 +418,13 @@ class DSparkSpeculator:
             finally:
                 self._stall.cancel()
             self._row0_dispatched = False
+            if self._logits_pending:
+                self._stall.enter(f"round p={p}: read the draft's logits")
+                try:
+                    self._proposal_logits = model.spec_draft_logits()[:k]
+                finally:
+                    self._stall.cancel()
+                self._logits_pending = False
             for m in range(k + 1):
                 if held:
                     self._stall.enter(f"round p={p}: release_writes(row {m})")
