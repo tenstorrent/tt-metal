@@ -146,6 +146,29 @@ passes (FM_NL=5), as the mean of layers 1-3:
   u1 EXT is now DRAM-bound in the SDPA window: ~64.5 MB in ~160 µs ≈ 400 GB/s, plus a ~74 µs chain (wo + S_WO stand-in,
   2 × 18 µs AR stalls, MLP). 240 µs is still 10 µs over the v0.5 target of ≤230 µs.
 
+### 6.3 Real qkv PROJ on 120 cores (`MKA_RQKV=1`, spec v0.4 + v0.5 step 1; 2026-11-10, d27u08 chip 0)
+- 112 qkv output tiles (q 0-47, k 48-55, v 56-63, gate 64-111), BFP8, γ folded into the rows (diag(γ)W, flag-gated):
+  - 40 STREAM_EXT cores: 2 tiles each at full K (348 KB ring CB 19, streamed during the previous layer's KV loop from
+    the 3rd group on);
+  - 64 STREAM cores: 32 tiles as K-halves (87 KB in the old mixer CB 6). The partner ships its fp32 partial to the owner
+    (CB 18, global sem QPART).
+  - rstd = rsqrt(ΣΣx²/5120 + eps) from 2 fp32 AR-owner partials (CB 20, column 0 per row); rows are scaled at pack
+    (bcast-cols).
+  - x is sharded over all 120 cores in the same lockstep L1 range; STREAM_EXT cores get x per layer on the Q root's
+    XRDY multicast after the MLP AR.
+- Correct: qkv PCC 0.99999 on every layer and every tile, SDPA 0.99998, MLP 0.99998.
+- Bank placement must be **byte**-balanced (each slice class spread evenly, 2.44 MB/bank). A count-only cap put most
+  348 KB ext slices next to the ext cores: u1 290 µs / u8 401 µs.
+- New CBs 13/14/17/18/19 (and 20 = CB_RSTD per spec); global sems 8 (QPART) and 9 (XRDY).
+
+| 32K BFP8, EXT, GUPRE, NBB 1, budget 16 KB | stand-in (EXT) | real qkv (RQKV, balanced) |
+|---|---|---|
+| u1 middle-layer mean | 244.7 | 256.1 / 261.3 / 262.0 → **~260** |
+| u8 middle-layer mean | ~369 | 381.4 / 381.4 → **~381** |
+
+The +15 µs (u1) splits as: qkv chain +5 µs (ext cores' 320-tile matmul + rstd, 10 µs after x vs the 5 µs stand-in),
+SDPA window +17 µs (a physical-x ramp in KV-loop time is back: 100 µs at x=1, 250 µs at x=15), tail -6 µs.
+
 ## 7. Spec v0.4 (DESIGN_megakernel §9): CB_X is the UN-NORMED residual
 The real qkv projection (it replaces the MIXN stand-in) must: (1) use qkv weights with input-norm γ (×NORM_FIX) folded
 into the rows (megakernel/weights.py), flag-gated until the output-length gate; (2) read the AR owners' fp32 Σx² partials

@@ -18,6 +18,11 @@ void kernel_main() {
     constexpr auto kv_args = TensorAccessorArgs<wgu_args.next_compile_time_args_offset()>();
     constexpr auto out_args = TensorAccessorArgs<kv_args.next_compile_time_args_offset()>();
     constexpr auto wo_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
+#if defined(MKA_RQKV)
+    constexpr auto wq_args = TensorAccessorArgs<wo_args.next_compile_time_args_offset()>();
+    constexpr uint32_t MWTB = MKA_MWTB, QSL = 2 * KT;   // STREAM_EXT slice: 2 output tiles x full K, BFP8
+    constexpr uint32_t TRID_PQ = 9;
+#endif
     uint32_t a = 0;
     const uint32_t IS_STREAM = get_arg_val<uint32_t>(a++);
     const uint32_t wgu_addr = get_arg_val<uint32_t>(a++), gu_page = get_arg_val<uint32_t>(a++);
@@ -55,6 +60,17 @@ void kernel_main() {
     const uint32_t kv_mode = get_arg_val<uint32_t>(a++);
     const bool rd_k = kv_mode == 0 || kv_mode == 2, rd_v = kv_mode == 1 || kv_mode == 2;
     uint32_t kv_groups = 0;
+#if defined(MKA_RQKV)
+    const uint32_t qrole = get_arg_val<uint32_t>(a++), wq_addr = get_arg_val<uint32_t>(a++);
+    const uint32_t pq_page = get_arg_val<uint32_t>(a++), pq_layer = get_arg_val<uint32_t>(a++);
+    const auto wq = TensorAccessor(wq_args, wq_addr, MWTB);
+    if (qrole == QR_EXT) {   // layer 0's slice (bank-local, contiguous)
+        cb_reserve_back(CB_PQ, QSL);
+        noc_async_read(wq.get_noc_addr(pq_page), get_write_ptr(CB_PQ), QSL * MWTB);
+        noc_async_read_barrier();
+        cb_push_back(CB_PQ, QSL);
+    }
+#endif
     const auto wo = TensorAccessor(wo_args, wo_addr, WOTB);
     const uint32_t scr = get_write_ptr(CB_SCR);
     constexpr uint32_t TRID_WO = 7;
@@ -96,8 +112,29 @@ void kernel_main() {
             const uint32_t ngrp = (b1 - b0 + NBB - 1) / NBB;
             const uint32_t wper = ngrp ? (wtot + ngrp - 1) / ngrp : wtot;   // weight tiles per K group, spread evenly
             uint32_t wdone = 0;
+#if defined(MKA_RQKV)
+            // STREAM_EXT: layer L + 1's slice streams in from the 3rd KV group on (by then compute has run layer L's
+            // qkv, which precedes its SDPA, and freed CB_PQ), spread evenly over the remaining groups
+            const bool pq_go = qrole == QR_EXT && L + 1 < NL;
+            const uint32_t pq_g0 = ngrp > 2 ? 2 : (ngrp ? ngrp - 1 : 0);
+            const uint32_t pq_ng = ngrp > pq_g0 ? ngrp - pq_g0 : 1;
+            const uint32_t pq_per = (QSL + pq_ng - 1) / pq_ng;   // pages per group
+            uint32_t pq_done = 0, gi = 0, pq_dst = 0;
+            const uint64_t pq_src = wq.get_noc_addr(pq_page + (L + 1) * pq_layer);
+#endif
             for (uint32_t b = b0; b < b1; b += NBB) {
                 const uint32_t nb = (b1 - b) < NBB ? (b1 - b) : NBB;
+#if defined(MKA_RQKV)
+                if (pq_go && gi >= pq_g0 && pq_done < QSL) {
+                    if (pq_done == 0) { cb_reserve_back(CB_PQ, QSL); pq_dst = get_write_ptr(CB_PQ); }
+                    const uint32_t n = (QSL - pq_done) < pq_per ? (QSL - pq_done) : pq_per;
+                    noc_async_read_set_trid(TRID_PQ);
+                    noc_async_read(pq_src + pq_done * MWTB, pq_dst + pq_done * MWTB, n * MWTB);
+                    noc_async_read_set_trid(0);
+                    pq_done += n;
+                }
+                ++gi;
+#endif
                 if (wdone < wtot) {   // previous group's weight reads landed? (they had a whole K group to complete)
                     noc_async_read_barrier_with_trid(TRID_WO);
                     noc_async_read_set_trid(TRID_WO);
@@ -131,6 +168,18 @@ void kernel_main() {
                 if (kv_mode == 2) *l1w(gs[GS_KVPROG]) = ++kv_groups;   // paces the writer's weight issue (it has no KV)
             }
             noc_async_read_barrier_with_trid(TRID_WO);
+#if defined(MKA_RQKV)
+            if (pq_go) {
+                if (pq_done == 0) { cb_reserve_back(CB_PQ, QSL); pq_dst = get_write_ptr(CB_PQ); }
+                if (pq_done < QSL) {
+                    noc_async_read_set_trid(TRID_PQ);
+                    noc_async_read(pq_src + pq_done * MWTB, pq_dst + pq_done * MWTB, (QSL - pq_done) * MWTB);
+                    noc_async_read_set_trid(0);
+                }
+                noc_async_read_barrier_with_trid(TRID_PQ);
+                cb_push_back(CB_PQ, QSL);
+            }
+#endif
         }
         {   // SDPA: tree reduce (pull), cumulative global semaphores
             DeviceZoneScopedN("R-RED");

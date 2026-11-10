@@ -27,6 +27,12 @@ void kernel_main() {
     constexpr auto q_args = TensorAccessorArgs<wm_args.next_compile_time_args_offset()>();
     constexpr auto kv_args = TensorAccessorArgs<q_args.next_compile_time_args_offset()>();
     constexpr auto wo_args = TensorAccessorArgs<kv_args.next_compile_time_args_offset()>();
+#if defined(MKA_RQKV)
+    constexpr auto qo_args = TensorAccessorArgs<wo_args.next_compile_time_args_offset()>();
+    constexpr uint32_t MWTB = MKA_MWTB, QOTB = 2048, QN = 112;   // qkv weight page (BFP8), output page (bf16), output tiles
+#else
+    constexpr uint32_t MWTB = WTB;
+#endif
     uint32_t a = 0;
     const uint32_t IS_STREAM = get_arg_val<uint32_t>(a++);
     const uint32_t idx = get_arg_val<uint32_t>(a++);
@@ -63,8 +69,35 @@ void kernel_main() {
     const uint32_t kv_mode = get_arg_val<uint32_t>(a++);   // see reader
     const bool wr_k = kv_mode == 1 || kv_mode == 3, wr_v = kv_mode == 0 || kv_mode == 3;
     uint32_t kv_groups = 0;
-
-    const auto wm = TensorAccessor(wm_args, wm_addr, WTB);
+#if defined(MKA_RQKV)
+    const uint32_t qrole = get_arg_val<uint32_t>(a++), qn = get_arg_val<uint32_t>(a++), qnt = get_arg_val<uint32_t>(a++);
+    const uint32_t q_ox = get_arg_val<uint32_t>(a++), q_oy = get_arg_val<uint32_t>(a++), qo_addr = get_arg_val<uint32_t>(a++);
+    const auto qo = TensorAccessor(qo_args, qo_addr, QOTB);
+    constexpr uint32_t QATB = 4096;   // fp32 partial tile
+    // the qkv tail of layer L on this core: ship / receive the K-half partial, write the rstd-scaled output tiles
+    auto qkv_tail = [&](uint32_t L) {
+        if (qrole == QR_PARTNER) {
+            cb_wait_front(CB_QA, 1);
+            noc_async_write(get_read_ptr(CB_QA), get_noc_addr(q_ox, q_oy, get_write_ptr(CB_QR)), QATB);
+            noc_async_write_barrier();
+            noc_semaphore_inc(get_noc_addr(q_ox, q_oy, gs[GS_QPART]), 1);
+            cb_pop_front(CB_QA, 1);
+            return;
+        }
+        if (qrole == QR_OWNER) {
+            noc_semaphore_wait_min(l1w(gs[GS_QPART]), L + 1);
+            cb_reserve_back(CB_QR, 1);   // the partner wrote the page in place (1-page CB: write pointer fixed)
+            cb_push_back(CB_QR, 1);
+        }
+        if (qrole == QR_NONE) return;
+        cb_wait_front(CB_QO, qnt);
+        for (uint32_t j = 0; j < qnt; ++j) noc_async_write(get_read_ptr(CB_QO) + j * QOTB, qo.get_noc_addr(L * QN + qn + j), QOTB);
+        noc_async_write_barrier();
+        cb_pop_front(CB_QO, qnt);
+        noc_semaphore_inc(get_noc_addr(qr_x, qr_y, gs[GS_MIXDONE]), 1);
+    };
+#endif
+    const auto wm = TensorAccessor(wm_args, wm_addr, MWTB);
     const auto wd = TensorAccessor(wd_args, wd_addr, WTB);
     const auto wgu = TensorAccessor(wgu_args, wgu_addr, WTB);
     const auto qacc = TensorAccessor(q_args, q_addr, QTB);
@@ -97,9 +130,13 @@ void kernel_main() {
         // popped by the MLP), at the write pointer. (MK1 issued L + 1 before pushing L, hence its 2-slot reserve; doing
         // that here deadlocks, since layer L's slot is only popped by the MLP after this SDPA.)
         const uint32_t trid = 1 + (L & 1);
+#if defined(MKA_RQKV)
+        if (with_mix && (qrole == QR_OWNER || qrole == QR_PARTNER)) {
+#else
         if (with_mix) {
+#endif
             cb_reserve_back(CB_WM, MIXT);
-            add(wm.get_noc_addr(wm_page + L * pwm_layer), get_write_ptr(CB_WM), MIXT * WTB, trid, false);
+            add(wm.get_noc_addr(wm_page + L * pwm_layer), get_write_ptr(CB_WM), MIXT * MWTB, trid, false);
         }
         if (IS_GU) {
             cb_reserve_back(CB_W2, w2_tiles);
@@ -143,6 +180,27 @@ void kernel_main() {
 #if defined(MKA_DBGSPIN)
         if (L > 0) spin_cycles(400000);
 #endif
+#if defined(MKA_RQKV)
+        if (IS_STREAM) {
+            DeviceZoneScopedN("W-MIX");
+            cb_reserve_back(CB_X, KT);   // producer-fed x (XPRE): re-expose it to compute for this layer
+            cb_push_back(CB_X, KT);
+            if (qrole == QR_OWNER) { cb_reserve_back(CB_RSP, MKA_NOWN); cb_push_back(CB_RSP, MKA_NOWN); }   // partners skip the norm
+            noc_async_read_barrier_with_trid(1 + (L & 1));   // layer L's qkv half + MLP weights landed
+            if (qrole) cb_push_back(CB_WM, MIXT);
+            if (IS_GU) cb_push_back(CB_W2, w2_tiles);
+            cb_push_back(CB_WD, DN_TILES);
+            qkv_tail(L);
+        } else if (qrole == QR_EXT) {   // STREAM_EXT: x of layer L is there once the previous layer's MLP AR is done
+            DeviceZoneScopedN("W-XQKV");
+            if (L > 0) noc_semaphore_wait_min(l1w(gs[GS_XRDY]), L);
+            cb_reserve_back(CB_X, KT);
+            cb_push_back(CB_X, KT);
+            cb_reserve_back(CB_RSP, MKA_NOWN);
+            cb_push_back(CB_RSP, MKA_NOWN);
+            qkv_tail(L);
+        }
+#else
         if (IS_STREAM) {
             DeviceZoneScopedN("W-MIX");
             cb_reserve_back(CB_X, KT);   // producer-fed x (XPRE): re-expose it to compute for this layer
@@ -155,6 +213,7 @@ void kernel_main() {
             cb_pop_front(CB_YM, MIXT / KT);
             noc_semaphore_inc(get_noc_addr(qr_x, qr_y, gs[GS_MIXDONE]), 1);
         }
+#endif
         {   // SDPA: Q (Q root reads + multicasts, flag = L + 1), then the V stream with the throttled weight issue
             DeviceZoneScopedN("W-SDPA");
             cb_reserve_back(CB_Q, QT);
@@ -254,6 +313,9 @@ void kernel_main() {
         cb_wait_front(CB_OUT, NDN);
         cb_pop_front(CB_OUT, NDN);
         { DeviceZoneScopedN("W-ARSTALL"); spin_cycles(S_AR); }
+#if defined(MKA_RQKV)
+        if (is_qroot && L + 1 < NL) mcast_word(gs[GS_XRDY], L + 1, rf, self_rf, 0);   // x of layer L + 1 -> STREAM_EXT
+#endif
         for (uint32_t i = 0; i < NROOT; ++i) noc_semaphore_inc(get_noc_addr(rx[i], ry[i], get_semaphore(SEM_DONE0 + i)), 1);
     }
     noc_async_atomic_barrier();
@@ -273,4 +335,11 @@ void kernel_main() {
     }
     if (is_qroot) { *l1w(gs[GS_MIXDONE]) = 0; *l1w(gs[GS_ADONE]) = 0; }
     if (kv_mode == 2) *l1w(gs[GS_KVPROG]) = 0;   // the reader's last write preceded our last wait
+#if defined(MKA_RQKV)
+    // XRDY: every STREAM_EXT core awaited the last multicast (NL - 1) before its last qkv, which precedes this point
+    // only on that core; the reset of a late remote copy is covered by the next pass starting from 0 only after the
+    // host synchronises, and the Q root never re-sends after NL - 2. QPART: every inc was awaited by its owner.
+    *l1w(gs[GS_XRDY]) = 0;
+    if (qrole == QR_OWNER) *l1w(gs[GS_QPART]) = 0;
+#endif
 }
