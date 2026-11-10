@@ -303,7 +303,9 @@ are the closest templates. No video eval exists anywhere.
 ## Serving image with the shared KV store (2026-11-09)
 
 `ghcr.io/tenstorrent/tt-shield/vllm-tt-metal-src-dev-ubuntu-22.04-amd64:0.26.1-ec294657718ee4133bbd28ae8215b8799dbfa09c-88e5ca8-mm-kvstore`
-(private; index digest `sha256:99f0f9084be52edbd97c0a3fd636cc4853014fd1931f06b96d8fbff67807ea0b`, 21.8 GB, vLLM 0.30.0).
+(private; index digest `sha256:967ca1cae048117bf94a445305f751cc52c907770fbc42c5d53182f8da8ba562` with the package
+description as an `org.opencontainers.image.description` index annotation, amd64 manifest
+`sha256:b9cce638027b03a92490f43d2e3a2ac7edf05151ec34abe493d008f2c444ac1d`, 21.8 GB, vLLM 0.30.0).
 Built on bhg2 with `scripts/build_single_docker.sh --build --ubuntu-version 22.04 --kvstore-bin <ttserve-kvstore>` from
 tt-metal `mimo-v2.6/multimodal` ec294657718, vllm-tt-plugin `mimo-v2.6-flash/multimodal` 88e5ca8 and
 tt-inference-server `mimo-v2.6-flash/multimodal` 29be1ec3c; `ttserve-kvstore` is a release build of
