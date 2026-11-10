@@ -1,0 +1,369 @@
+diff --git a/blaze/kv_chunk_migration_check.py b/blaze/kv_chunk_migration_check.py
+index 94665f61..799ff8b7 100644
+--- a/blaze/kv_chunk_migration_check.py
++++ b/blaze/kv_chunk_migration_check.py
+@@ -16,6 +16,7 @@ from blaze.kv_migration_spec import SOURCE_PREFILL, migration_layer_id
+ from blaze.kv_chunk_migration_helpers import (
+     allgather_layer_stage_kwargs,
+     connect_with_migration_worker,
++    is_snapshot,
+     migration_device_map_path,
+     migration_file_export_enabled,
+     plain_pcc,
+@@ -451,10 +452,10 @@ def _check_synthetic_axis_extent(table, spec, cfg, config_id, source, *, prompt_
+     """Require the same populated extent on both sides of a synthetic position axis (e.g. one window per KDA
+     state version). Returns whether the config is on such an axis; sequence-indexed configs return False.
+ 
+-    The prefill table aliases its one state across its own windows and a copy names decode's window, so a
+-    different version count resumes decode from a window prefill does not hold. The populated rows decide,
+-    not the capacity: a table may pad its capacity past the last window (``build_kv_table`` sizes every config
+-    to at least the MLA context). ``layers`` are the ones decode holds this config for; without them the first
++    A different version count resumes decode from a window the source does not hold. A ``Snapshot`` config
++    (K3's KDA state) must span exactly decode's extent, since the KV Manager refuses a Snapshot copy whose
++    extents differ. Otherwise the populated rows decide, not the capacity, which ``build_kv_table`` pads to at
++    least the MLA context. ``layers`` are the ones decode holds this config for; without them the first
+     populated row stands in, so an empty config is not checked here."""
+     if spec.migration_position_range is None:
+         return False
+@@ -470,6 +471,11 @@ def _check_synthetic_axis_extent(table, spec, cfg, config_id, source, *, prompt_
+         return False
+     extent = spec.seq_len_for_layer(layer, cfg)
+     capacity = source.max_sequence_length
++    if is_snapshot(cfg) and capacity != extent:
++        # The KV Manager refuses a Snapshot copy whose two sides' extents differ, padded or not.
++        raise ValueError(
++            f"Prefill config {config_id} (layer {layer}) is a Snapshot of {capacity} positions, decode's spans {extent}"
++        )
+     held = capacity >= extent and table.lookup(layer, extent - cfg.chunk_n_tokens, src_slot, config_id).noc_addr
+     more = capacity > extent and table.lookup(layer, extent, src_slot, config_id).noc_addr
+     if not held or more:
+@@ -505,6 +511,11 @@ def validate_migration_source_table(table, spec, *, prompt_len, src_slot=0, conf
+             )
+         if source.chunk_n_tokens != cfg.chunk_n_tokens or source.chunk_size_bytes != cfg.chunk_size_bytes:
+             raise ValueError(f"Prefill config {config_id} cache format/chunk geometry does not match decode")
++        tag = cfg.tensor_type if cfg.tensor_type is not None else ttnn.experimental.disaggregation.KvChunkTensorType.Kv
++        # The KV Manager refuses a copy between configs tagged differently; an untagged table is ``Kv``.
++        got = getattr(source, "tensor_type", ttnn.experimental.disaggregation.KvChunkTensorType.Kv)
++        if got != tag:
++            raise ValueError(f"Prefill config {config_id} is tagged {got}, decode {tag}")
+         if prompt_len < 1:
+             raise ValueError(f"Prefill config {config_id} cannot cover prompt_len={prompt_len}")
+         owned = sorted((config_layers or {}).get(cfg.name, ()))
+diff --git a/blaze/kv_chunk_migration_helpers.py b/blaze/kv_chunk_migration_helpers.py
+index 1a629fb2..86456012 100644
+--- a/blaze/kv_chunk_migration_helpers.py
++++ b/blaze/kv_chunk_migration_helpers.py
+@@ -1070,6 +1070,13 @@ def kv_chunk_address(
+     return encoded, dram_bank_id, sp_idx
+ 
+ 
++def is_snapshot(cfg) -> bool:
++    """Whether ``cfg`` (a :class:`~blaze.kv_migration_spec.KvCacheConfig`) is tagged ``Snapshot``."""
++    return (
++        cfg.tensor_type is not None and cfg.tensor_type == ttnn.experimental.disaggregation.KvChunkTensorType.Snapshot
++    )
++
++
+ def build_kv_table(
+     *,
+     spec,
+@@ -1139,12 +1146,15 @@ def build_kv_table(
+             return []
+         return [lid for lid in cfg_rows[cfg.name].values() if cfg_addr.get(layer_id_to_stage_key.get(lid), 0)]
+ 
+-    cfg_capacity = {
+-        cfg.name: max(
+-            [spec.geometry(cfg).max_seq_len, *(spec.seq_len_for_layer(lid, cfg) for lid in _populated_layers(cfg))]
+-        )
+-        for cfg in spec.configs
+-    }
++    def _capacity(cfg):
++        """The config's ``max_sequence_length``. A ``Snapshot`` config spans exactly its layers' extent: the KV
++        Manager refuses a Snapshot copy whose two sides' extents differ, so it must not be padded to the context."""
++        extents = [spec.seq_len_for_layer(lid, cfg) for lid in _populated_layers(cfg)]
++        if extents and is_snapshot(cfg):
++            return max(extents)
++        return max([spec.geometry(cfg).max_seq_len, *extents])
++
++    cfg_capacity = {cfg.name: _capacity(cfg) for cfg in spec.configs}
+ 
+     def _table_config(cfg):
+         g = spec.geometry(cfg)
+@@ -1162,6 +1172,8 @@ def build_kv_table(
+         c.num_slots = g.num_slots
+         c.chunk_n_tokens = cfg.chunk_n_tokens
+         c.chunk_size_bytes = cfg.chunk_size_bytes
++        if cfg.tensor_type is not None:
++            c.tensor_type = cfg.tensor_type
+         return c
+ 
+     def _num_position_chunks(cfg):
+diff --git a/blaze/kv_migration_spec.py b/blaze/kv_migration_spec.py
+index 5e347623..b9be713e 100644
+--- a/blaze/kv_migration_spec.py
++++ b/blaze/kv_migration_spec.py
+@@ -123,6 +123,11 @@ class KvCacheConfig:
+     # A callable ``layer -> period`` gives each layer's row its own period, for a config whose layers
+     # use different layouts; the build samples and verifies each row at its layer's period.
+     period_chunks: int | Callable[[int], int] | None = None
++    # Optional: the table's tensor type for this config (``ttnn.experimental.disaggregation.KvChunkTensorType``);
++    # None leaves the table's default, ``Kv``. The KV Manager moves a ``Snapshot`` config whole, whatever position
++    # range a migration names, and refuses a copy unless both sides tag the config alike and, for a ``Snapshot``,
++    # with the same extent (tt-d-gen#1955). A recurrent state that has no token axis is a ``Snapshot``.
++    tensor_type: Any = None
+ 
+     def period_for_layer(self, layer: int) -> int | None:
+         """The period of this config's row on ``layer``, in chunks (None: no period declared)."""
+diff --git a/blaze/models/kimi_k3/cache_migration.py b/blaze/models/kimi_k3/cache_migration.py
+index 0b3e80cf..3d77d4c4 100644
+--- a/blaze/models/kimi_k3/cache_migration.py
++++ b/blaze/models/kimi_k3/cache_migration.py
+@@ -498,6 +498,7 @@ def k3_migration_spec(*, max_seq_len, num_slots, blaze_config, grids=None, kda_m
+         chunk_size_bytes=k3_kda_state_chunk_size_bytes(),
+         locate=_state_locate,
+         device_tensor=kda_state_device_tensor,
++        tensor_type=ttnn.experimental.disaggregation.KvChunkTensorType.Snapshot,
+     )
+     conv_cfg = KvCacheConfig(
+         name="2",
+@@ -507,6 +508,7 @@ def k3_migration_spec(*, max_seq_len, num_slots, blaze_config, grids=None, kda_m
+         chunk_size_bytes=k3_kda_conv_chunk_size_bytes(conv_cache),
+         locate=_conv_locate,
+         device_tensor=kda_conv_device_tensor,
++        tensor_type=ttnn.experimental.disaggregation.KvChunkTensorType.Snapshot,
+     )
+     return KvMigrationSpec(
+         configs=(kv_cfg, state_cfg, conv_cfg),
+diff --git a/docs/guides/adding-kv-migration.md b/docs/guides/adding-kv-migration.md
+index 3a17b93a..7841bb40 100644
+--- a/docs/guides/adding-kv-migration.md
++++ b/docs/guides/adding-kv-migration.md
+@@ -268,9 +268,13 @@ dest   (decode):   position = version * WINDOW + k * stride
+ migrate(src=[0, WINDOW), dst=[v*WINDOW, (v+1)*WINDOW))
+ ```
+ 
+-That is the prefill source (`source="prefill"`). tt-metal's K3 prefill table repeats its one state
+-in every window, so its driver may also send `[v*WINDOW, (v+1)*WINDOW)` on both sides; the bytes
+-are the same. Between two decode slots (the CLI loopback and `DecodeMigrationDriver`, where decode
++That is the prefill source (`source="prefill"`). K3's KDA configs are tagged `Snapshot`
++(`KvCacheConfig.tensor_type`, copied into the table by `build_kv_table`). The KV Manager moves a
++`Snapshot` config's whole extent whatever range a migration names, and refuses the copy unless both
++sides tag the config alike and with the same extent (tt-d-gen#1955). tt-metal's K3 prefill publishes
++one window, so a decode that receives from prefill runs at one KDA state slot per user
++(`TT_K3_KDA_STATE_SLOTS=1`), whose extent is that one window; `tests/blaze/migration/test_k3_migration_spec.py`
++pins prefill's tag, extent, strides and chunk sizes. Between two decode slots (the CLI loopback and `DecodeMigrationDriver`, where decode
+ prefilled the source slot itself) the source has decode's layout, so `source="decode"` reads the
+ live version on both sides. Window zero there is stale: after 32 tokens with 8 versions it was last
+ written at position 24. Only the caller knows who wrote the source, so `source` is a required
+diff --git a/docs/models/kimi-k3/README.md b/docs/models/kimi-k3/README.md
+index a5aac3cc..eba54dbc 100644
+--- a/docs/models/kimi-k3/README.md
++++ b/docs/models/kimi-k3/README.md
+@@ -32,7 +32,7 @@ Related: [environment variables](../../env-vars.md), [models](../../architecture
+ |---|---|---|---|---|
+ | `KIMI_K3_MODEL` | directory (unset: `/MLPerf/kimi_k3/Kimi-K3-Dequant`) | Default dequantized checkpoint for the weight providers and the tests. Read at import. | `blaze/weights/kimi_k3/provider.py`, `DEFAULT_MODEL_PATH` | |
+ | `KIMI_K3_DSPARK` | directory (unset: `Kimi-K3-DSpark` next to the model checkpoint) | DSpark drafter checkpoint, whose `model.safetensors` holds the `fc.weight` the fc layers read. | `blaze/weights/kimi_k3/provider.py`, `DEFAULT_DSPARK_PATH`; `blaze/models/kimi_k3/kimi_k3_blaze_config.py`, `make_weight_provider` | |
+-| `TT_K3_KDA_STATE_SLOTS` | integer >= 1 (unset: 8) | KDA recurrent-state slots per user in the decode stages' S and conv caches. `1` keeps one slot per user, read and rewritten in place every step, for decode without speculative decode; a re-run position then advances the state instead of reproducing it. 8 leaves room for speculative decode to roll back. An explicit `kda_slots` argument wins. | `blaze/models/kimi_k3/kimi_k3_blaze_config.py`, `kda_state_slots` | |
++| `TT_K3_KDA_STATE_SLOTS` | integer >= 1 (unset: 8) | KDA recurrent-state slots per user in the decode stages' S and conv caches. `1` keeps one slot per user, read and rewritten in place every step, for decode without speculative decode; a re-run position then advances the state instead of reproducing it. 8 leaves room for speculative decode to roll back. A decode that receives migrated state from prefill needs `1`: its KDA configs are one-window Snapshots, like prefill's, and the KV Manager refuses a copy between Snapshots of different extents. An explicit `kda_slots` argument wins. | `blaze/models/kimi_k3/kimi_k3_blaze_config.py`, `kda_state_slots` | |
+ | `TT_K3_MAX_SEQ_LEN` | positive multiple of 8192 (unset: 1,048,576) | MLA cache length per user, for example a smaller KV chunk table for a migration export. It is also the runtime bound on every cache position. Other values raise, since they alias one user's KV onto another's. | `blaze/models/kimi_k3/mla_layer_build.py`, `k3_max_seq_len` | [decode migration](../../tools/decode-migration.md#kimi-k3-specifics) |
+ 
+ ### Real-weight test harnesses
+diff --git a/docs/tools/decode-migration.md b/docs/tools/decode-migration.md
+index 660af6df..3b72de2c 100644
+--- a/docs/tools/decode-migration.md
++++ b/docs/tools/decode-migration.md
+@@ -204,7 +204,9 @@ window into the version its resume position reads (`migration_position_range`, s
+ [adding KV migration](../guides/adding-kv-migration.md)).
+ The KDA layers therefore go in separate `migrate()` calls from the MLA layers. With one KDA slot per user
+ (`TT_K3_KDA_STATE_SLOTS=1`, no speculative decode) each config holds one window, and every resume position
+-migrates window 0 into window 0; prefill must then publish one window too.
++migrates window 0 into window 0. That is the P/D setting: both configs are tagged `Snapshot`, and the KV Manager
++copies them only from a prefill that publishes the same one window (section 3 of
++[adding KV migration](../guides/adding-kv-migration.md)).
+ 
+ #### Decode-only handoff
+ 
+diff --git a/tests/blaze/migration/test_k3_migration_spec.py b/tests/blaze/migration/test_k3_migration_spec.py
+index b968feb3..5b4c912e 100644
+--- a/tests/blaze/migration/test_k3_migration_spec.py
++++ b/tests/blaze/migration/test_k3_migration_spec.py
+@@ -552,6 +552,98 @@ def test_build_kv_table_leaves_the_other_kind_empty(spec):
+     assert table.lookup(1, 0, 0, ids["0"]).size_bytes == kv.chunk_size_bytes
+ 
+ 
++#: What K3 prefill's table publishes for its KDA configs (tt-metal ``kv_chunk_table.py``, tt-metal#63958): one
++#: Snapshot window, strides 96 / 64, and the state's segment sizes. The KV Manager refuses a copy unless decode's
++#: configs match, so a change on either side has to change both.
++_PREFILL_KDA = {"1": (36_864, 96, 16_384), "2": (36_864, 64, 384)}
++
++
++def test_kda_configs_are_snapshots_and_kvpe_is_a_token_cache(spec):
++    """The KV Manager moves a Snapshot config whole, whatever range a migration names, and refuses a copy unless
++    prefill and decode tag a config alike (tt-d-gen#1955)."""
++    import ttnn
++
++    tags = {c.name: c.tensor_type for c in spec.configs}
++    snapshot = ttnn.experimental.disaggregation.KvChunkTensorType.Snapshot
++    assert tags == {"0": None, "1": snapshot, "2": snapshot}
++
++
++def _k3_table(cfg, *, depth, kda_max_length, tags=True):
++    """K3's table over one KDA layer and one MLA layer, each on its own mesh, at MLA depth ``depth``."""
++    from blaze.kv_chunk_migration_helpers import build_kv_table
++
++    spec1 = km.k3_migration_spec(max_seq_len=depth, num_slots=1, blaze_config=cfg, kda_max_length=kda_max_length)
++    kv, state, cv = spec1.configs
++    if not tags:
++        state, cv = replace(state, tensor_type=None), replace(cv, tensor_type=None)
++    kda, mla = _kinds(cfg)
++    table = build_kv_table(
++        spec=replace(
++            spec1,
++            configs=(
++                replace(kv, mesh_id_to_addr={1: 0x1000}),
++                replace(state, mesh_id_to_addr={0: 0x2000}),
++                replace(cv, mesh_id_to_addr={0: 0x3000}),
++            ),
++        ),
++        num_layers=max(kda[0], mla[0]) + 1,
++        layer_id_to_stage_key={kda[0]: 0, mla[0]: 1},
++        stage_key_to_devices={0: [(c, c) for c in range(8)], 1: [(c, c) for c in range(8)]},
++        stage_key_to_host={0: 0xA, 1: 0xB},
++        layer_indexed=True,
++    )
++    return spec1, table
++
++
++#: MLA depths a deployment runs: the smallest (one quantum), the reduced 144K context and the full 1M.
++_DEPTHS = [8192, 147_456, 1_048_576]
++
++
++@pytest.mark.parametrize("depth", _DEPTHS)
++def test_one_slot_decode_table_matches_k3_prefill(cfg, tmp_path, depth):
++    """At one KDA state slot per user (``TT_K3_KDA_STATE_SLOTS=1``), the table decode exports carries, for configs
++    "1" and "2", the tag, extent, stride and chunk size prefill publishes, whatever the MLA depth: a Snapshot is not
++    padded to the context. "0" stays a ``Kv`` token cache. Checked on the protobuf the KV Manager loads."""
++    import ttnn
++
++    disagg = ttnn.experimental.disaggregation
++    spec1, table = _k3_table(cfg, depth=depth, kda_max_length=1)
++    disagg.export_to_protobuf_file(table, str(tmp_path / "decode.pb"))
++    loaded = disagg.import_from_protobuf_file(str(tmp_path / "decode.pb"))
++    ids = {c.name: i for i, c in enumerate(spec1.configs)}
++    assert loaded.config(ids["0"]).tensor_type == disagg.KvChunkTensorType.Kv
++    assert loaded.config(ids["0"]).max_sequence_length == depth
++    for name, (extent, stride, chunk_bytes) in _PREFILL_KDA.items():
++        got = loaded.config(ids[name])
++        assert got.tensor_type == disagg.KvChunkTensorType.Snapshot, name
++        geometry = (got.max_sequence_length, got.chunk_n_tokens, got.chunk_size_bytes)
++        assert geometry == (extent, stride, chunk_bytes), (name, depth)
++
++
++def test_source_table_validation_follows_the_kv_manager(cfg):
++    """``validate_migration_source_table`` refuses what the KV Manager refuses: KDA configs tagged ``Kv`` against
++    decode's ``Snapshot``, and a Snapshot of another extent (eight windows). A one-window Snapshot passes."""
++    from blaze.kv_chunk_migration_check import validate_migration_source_table
++
++    depth = 147_456
++    spec1, good = _k3_table(cfg, depth=depth, kda_max_length=1)
++    kda, mla = _kinds(cfg)
++    layers = {"0": [mla[0]], "1": [kda[0]], "2": [kda[0]]}
++    validate_migration_source_table(good, spec1, prompt_len=100, config_layers=layers)
++    _, untagged = _k3_table(cfg, depth=depth, kda_max_length=1, tags=False)
++    with pytest.raises(ValueError, match="tagged"):
++        validate_migration_source_table(untagged, spec1, prompt_len=100, config_layers=layers)
++    _, eight = _k3_table(cfg, depth=depth, kda_max_length=8)
++    with pytest.raises(ValueError, match="Snapshot of"):
++        validate_migration_source_table(eight, spec1, prompt_len=100, config_layers=layers)
++
++
++def test_eight_slot_decode_table_does_not_match_k3_prefill(spec, n_dev):
++    """Eight KDA state slots span eight windows: the KV Manager refuses a Snapshot copy from one-window prefill,
++    so P/D decode runs at one slot."""
++    assert km.kda_position_extent(n_dev, _ML) == _ML * _PREFILL_KDA["1"][0]
++
++
+ def test_table_capacity_covers_the_lengthened_kda_extent(spec, cfg):
+     """Capacity must come from the largest per-layer extent: ``geom.max_seq_len`` is smaller than the KDA one."""
+     kda, mla = _kinds(cfg)
+@@ -823,11 +915,11 @@ def test_sub_quantum_capacity_aliases_users(cfg):
+ 
+ 
+ class _SourceTable:
+-    """Prefill table stub: each config populated on its own layer kind, ``versions`` KDA windows populated.
++    """Prefill table stub: each config populated on its own layer kind, ``versions`` KDA windows populated, each
++    config tagged as the spec tags it (KDA ``Snapshot``, kvpe ``Kv``).
+ 
+-    ``kda_capacity`` (unset: exactly the populated windows) pads the KDA configs' capacity past them, as
+-    ``build_kv_table`` does; ``mla_seq`` is the kvpe context. ``missing`` ({config id: layers}) leaves those
+-    rows empty."""
++    ``kda_capacity`` (unset: exactly the populated windows) pads the KDA configs' capacity past them;
++    ``mla_seq`` is the kvpe context. ``missing`` ({config id: layers}) leaves those rows empty."""
+ 
+     def __init__(self, spec, kda, mla, *, versions, window, kda_capacity=None, mla_seq=_MAX_SEQ, missing=None):
+         self._spec, self._kda, self._mla = spec, set(kda), set(mla)
+@@ -843,8 +935,11 @@ class _SourceTable:
+         return f"{i:02d}"
+ 
+     def config(self, i):
++        import ttnn
++
+         c = self._spec.configs[i]
+         return SimpleNamespace(
++            tensor_type=c.tensor_type or ttnn.experimental.disaggregation.KvChunkTensorType.Kv,
+             num_slots=_SLOTS,
+             num_layers=_PROD_LAYERS,
+             chunk_n_tokens=c.chunk_n_tokens,
+@@ -862,7 +957,7 @@ class _SourceTable:
+         return SimpleNamespace(noc_addr=0x1000 if owned else 0, size_bytes=self._spec.configs[i].chunk_size_bytes)
+ 
+ 
+-#: The MLA context ``build_kv_table`` pads every config to at K3's default 1M context.
++#: K3's default 1M MLA context, the capacity a source would pad its KDA configs to.
+ _PADDED = 1 << 20
+ 
+ 
+@@ -872,8 +967,8 @@ _PADDED = 1 << 20
+         (_ML, None, True),
+         (4, None, False),
+         (16, None, False),
+-        # A padded capacity hides nothing: the populated windows decide.
+-        (_ML, _PADDED, True),
++        # The KV Manager refuses a Snapshot whose extent differs from decode's, padding included.
++        (_ML, _PADDED, False),
+         (4, _PADDED, False),
+         (16, _PADDED, False),
+     ],
+@@ -888,11 +983,11 @@ def test_source_table_with_another_kda_version_count_is_refused(cfg, n_dev, spec
+     if ok:
+         validate_migration_source_table(table, spec, prompt_len=128)
+     else:
+-        with pytest.raises(ValueError, match="different number of state versions"):
++        with pytest.raises(ValueError, match="Snapshot of"):
+             validate_migration_source_table(table, spec, prompt_len=128)
+ 
+ 
+-@pytest.mark.parametrize("kda_capacity", [None, _PADDED])
++@pytest.mark.parametrize("kda_capacity", [None])
+ def test_prompt_longer_than_the_kda_axis_is_accepted(cfg, n_dev, kda_capacity):
+     # The KDA axis counts state versions, not tokens, so a prompt past it must not read as uncovered.
+     from blaze.kv_chunk_migration_check import validate_migration_source_table
+@@ -1044,13 +1139,12 @@ def test_tail_handoff_validates_the_source_at_prefill_len(tmp_path, monkeypatch,
+     kda, mla = _kinds(cfg)
+     window = km.kda_window(n_dev)
+     table = _SourceTable(spec, kda, mla, versions=_ML, window=window)
+-    monkeypatch.setattr(
+-        chk,
+-        "ttnn",
+-        SimpleNamespace(
+-            experimental=SimpleNamespace(disaggregation=SimpleNamespace(import_from_protobuf_file=lambda _: table))
+-        ),
++    import ttnn
++
++    disagg = SimpleNamespace(
++        import_from_protobuf_file=lambda _: table, KvChunkTensorType=ttnn.experimental.disaggregation.KvChunkTensorType
+     )
++    monkeypatch.setattr(chk, "ttnn", SimpleNamespace(experimental=SimpleNamespace(disaggregation=disagg)))
+     validated = []
+     real = chk.validate_migration_source_table
+     monkeypatch.setattr(

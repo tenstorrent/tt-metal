@@ -1,0 +1,58 @@
+diff --git a/blaze/models/kimi_k3/kimi_k3_blaze_config.py b/blaze/models/kimi_k3/kimi_k3_blaze_config.py
+index fc20577e..d012173c 100644
+--- a/blaze/models/kimi_k3/kimi_k3_blaze_config.py
++++ b/blaze/models/kimi_k3/kimi_k3_blaze_config.py
+@@ -87,14 +87,12 @@ def make_weight_provider(
+ def kda_state_slots(slots: int | None = None) -> int:
+     """KDA recurrent-state slots per user in the decode caches (S and the conv window).
+ 
+-    8 (``KdaStateGridNOC0.DEFAULT_MAX_LENGTH``) leaves room for speculative decode to roll back.
+     1 is one slot per user, read and rewritten in place every step, for decode without
+-    speculation. ``None`` reads ``TT_K3_KDA_STATE_SLOTS`` and falls back to 8.
++    speculation. 8 (``KdaStateGridNOC0.DEFAULT_MAX_LENGTH``) leaves room for speculative decode
++    to roll back. ``None`` reads ``TT_K3_KDA_STATE_SLOTS`` and falls back to 1.
+     """
+     if slots is None:
+-        from blaze.ops.kda import KdaStateGridNOC0
+-
+-        slots = int(os.environ.get("TT_K3_KDA_STATE_SLOTS", KdaStateGridNOC0.DEFAULT_MAX_LENGTH))
++        slots = int(os.environ.get("TT_K3_KDA_STATE_SLOTS", "1"))
+     if slots < 1:
+         raise ValueError(f"KDA state slots per user must be >= 1, got {slots}")
+     return int(slots)
+diff --git a/docs/models/kimi-k3/README.md b/docs/models/kimi-k3/README.md
+index eba54dbc..c2ca0dc1 100644
+--- a/docs/models/kimi-k3/README.md
++++ b/docs/models/kimi-k3/README.md
+@@ -32,7 +32,7 @@ Related: [environment variables](../../env-vars.md), [models](../../architecture
+ |---|---|---|---|---|
+ | `KIMI_K3_MODEL` | directory (unset: `/MLPerf/kimi_k3/Kimi-K3-Dequant`) | Default dequantized checkpoint for the weight providers and the tests. Read at import. | `blaze/weights/kimi_k3/provider.py`, `DEFAULT_MODEL_PATH` | |
+ | `KIMI_K3_DSPARK` | directory (unset: `Kimi-K3-DSpark` next to the model checkpoint) | DSpark drafter checkpoint, whose `model.safetensors` holds the `fc.weight` the fc layers read. | `blaze/weights/kimi_k3/provider.py`, `DEFAULT_DSPARK_PATH`; `blaze/models/kimi_k3/kimi_k3_blaze_config.py`, `make_weight_provider` | |
+-| `TT_K3_KDA_STATE_SLOTS` | integer >= 1 (unset: 8) | KDA recurrent-state slots per user in the decode stages' S and conv caches. `1` keeps one slot per user, read and rewritten in place every step, for decode without speculative decode; a re-run position then advances the state instead of reproducing it. 8 leaves room for speculative decode to roll back. A decode that receives migrated state from prefill needs `1`: its KDA configs are one-window Snapshots, like prefill's, and the KV Manager refuses a copy between Snapshots of different extents. An explicit `kda_slots` argument wins. | `blaze/models/kimi_k3/kimi_k3_blaze_config.py`, `kda_state_slots` | |
++| `TT_K3_KDA_STATE_SLOTS` | integer >= 1 (unset: 1) | KDA recurrent-state slots per user in the decode stages' S and conv caches. `1` keeps one slot per user, read and rewritten in place every step, for decode without speculative decode; a re-run position then advances the state instead of reproducing it. 8 leaves room for speculative decode to roll back. A decode that receives migrated state from prefill needs `1`: its KDA configs are one-window Snapshots, like prefill's, and the KV Manager refuses a copy between Snapshots of different extents. An explicit `kda_slots` argument wins. | `blaze/models/kimi_k3/kimi_k3_blaze_config.py`, `kda_state_slots` | |
+ | `TT_K3_MAX_SEQ_LEN` | positive multiple of 8192 (unset: 1,048,576) | MLA cache length per user, for example a smaller KV chunk table for a migration export. It is also the runtime bound on every cache position. Other values raise, since they alias one user's KV onto another's. | `blaze/models/kimi_k3/mla_layer_build.py`, `k3_max_seq_len` | [decode migration](../../tools/decode-migration.md#kimi-k3-specifics) |
+ 
+ ### Real-weight test harnesses
+diff --git a/tests/blaze/fused_ops/kda/test_kda_single_slot.py b/tests/blaze/fused_ops/kda/test_kda_single_slot.py
+index d2a65c26..34e54472 100644
+--- a/tests/blaze/fused_ops/kda/test_kda_single_slot.py
++++ b/tests/blaze/fused_ops/kda/test_kda_single_slot.py
+@@ -87,15 +87,15 @@ def test_kda_state_slots_default_env_and_bounds(monkeypatch):
+     from blaze.models.kimi_k3.kimi_k3_blaze_config import kda_state_slots
+ 
+     monkeypatch.delenv("TT_K3_KDA_STATE_SLOTS", raising=False)
+-    assert kda_state_slots() == SG.DEFAULT_MAX_LENGTH
+-    monkeypatch.setenv("TT_K3_KDA_STATE_SLOTS", "1")
+     assert kda_state_slots() == 1
++    monkeypatch.setenv("TT_K3_KDA_STATE_SLOTS", str(SG.DEFAULT_MAX_LENGTH))
++    assert kda_state_slots() == SG.DEFAULT_MAX_LENGTH
+     assert kda_state_slots(4) == 4, "an explicit value wins over the environment"
+     with pytest.raises(ValueError, match=">= 1"):
+         kda_state_slots(0)
+ 
+ 
+-@pytest.mark.parametrize("slots, env, want", [(1, None, 1), (None, "1", 1), (None, None, SG.DEFAULT_MAX_LENGTH)])
++@pytest.mark.parametrize("slots, env, want", [(1, None, 1), (None, "8", 8), (None, None, 1)])
+ def test_stage_factories_pass_slots_to_dense_and_sparse(monkeypatch, slots, env, want):
+     """``make_stage_harness_factories`` hands the same slot count to the dense and the sparse KDA harness."""
+     from blaze.models import blaze_tests_namespace

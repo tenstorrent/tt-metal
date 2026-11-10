@@ -1,0 +1,463 @@
+From 6aad40c3a12b4dbed03ebc9c2632352193b3c5d3 Mon Sep 17 00:00:00 2001
+From: Bazyli Klockiewicz <bklockiewicz@tenstorrent.com>
+Date: Tue, 3 Nov 2026 11:53:52 +0000
+Subject: [PATCH] Kimi K3 reload ring: KV migration from prefill
+
+The ring's HandOff now writes K3's KV chunk table: MLA kvpe "0", KDA S "1" and conv "2".
+
+- The K3 decoder harnesses (sparse KDA, dense KDA, MLA) declare "kv_migration" pins, the same
+  kda_transients / mla_transients dicts the spec's hooks read in the regular pipeline, so
+  ReloadPipeline records each layer's caches at capture.
+- reload_launch: drop the "no KV migration" contract and describe what the table carries; the KDA
+  version count is TT_K3_KDA_STATE_SLOTS, not a fixed eight.
+- tests/blaze/infra/test_reload_k3_kv_table.py: HandOff's export over three ranks (one with no
+  layer) at one and at eight KDA state slots, every layer's rows on its own chips at its own base up
+  to its config's extent; mismatched version counts and too few KDA users fail every rank; from_env
+  takes K3's hooks; the harnesses declare their pins. Replaces test_hand_off_refuses_a_kv_table_for_k3.
+- adding-kv-migration.md: K3's pins and launcher.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ blaze/models/kimi_k3/reload_launch.py         |  18 +-
+ docs/guides/adding-kv-migration.md            |   7 +-
+ .../blaze/fused_ops/kda/kda_dense_harness.py  |  20 +-
+ .../blaze/fused_ops/kda/kda_sparse_harness.py |  20 +-
+ tests/blaze/fused_ops/mla/harness.py          |   5 +
+ tests/blaze/infra/test_reload_k3_kv_table.py  | 230 ++++++++++++++++++
+ .../pipeline_builder/test_kimi_k3_ring_cpu.py |  15 --
+ 7 files changed, 272 insertions(+), 43 deletions(-)
+ create mode 100644 tests/blaze/infra/test_reload_k3_kv_table.py
+
+diff --git a/blaze/models/kimi_k3/reload_launch.py b/blaze/models/kimi_k3/reload_launch.py
+index 14a17d4c..3decf1a6 100644
+--- a/blaze/models/kimi_k3/reload_launch.py
++++ b/blaze/models/kimi_k3/reload_launch.py
+@@ -48,15 +48,21 @@ Driver contract, beside HandOff's ring info (``kv_slots``, ``kv_depth``, ``ring_
+   last (:mod:`blaze.reload.batching`). Several packets of one slot in a batch are consecutive positions in
+   order; each sees the KV and KDA state the previous one wrote (prefill as decode, tt-d-gen #1523).
+ * Every page for a live slot is that slot's next position. A page at any other position overwrites one of the
+-  slot's KDA state versions, which the slot reads later. main's lockstep writer does that (filler pages
++  slot's KDA state versions (``TT_K3_KDA_STATE_SLOTS``: eight by default, one without speculative decode),
++  which the slot reads later. main's lockstep writer does that (filler pages
+   at ``kv_depth - 1`` on slots without a real page); tt-d-gen #1523's batched writer sends a placeholder only
+   for a slot it is tearing down.
+ * A new conversation starts at position 0: that is what resets the slot's KDA state (the KDA state and
+   conv reads zero-fill at position 0). MLA needs nothing: a slot overwrites its rows from 0 up and attends
+   only to rows at or below its position.
+-* No prefix reuse, slot copy or KV migration: a slot resumed at P > 0 from someone else's prefix reads KDA
+-  state the slot does not hold. The ring's images declare no KV-migration pins, so the launcher refuses
+-  ``BLAZE_RELOAD_KV_TABLE_PATH``.
++* No prefix reuse or slot copy: a slot resumed at P > 0 from someone else's prefix reads KDA state the slot
++  does not hold.
++* KV migration from prefill: with ``BLAZE_RELOAD_KV_TABLE_PATH`` set, HandOff writes the ring's KV chunk table
++  for the KV manager (``entry.kv_migration_spec``; every decoder harness declares its caches under
++  ``"kv_migration"``). The table carries all three configs: MLA kvpe ``"0"`` and KDA S ``"1"`` and conv
++  ``"2"``, at the KDA stages' live version count. The driver's first page for a migrated slot is the first
++  position prefill did not apply: the KDA state applies each token once, so a repeated position corrupts it
++  (tt-d-gen #1856).
+ """
+ 
+ from __future__ import annotations
+@@ -142,10 +148,6 @@ def _check_environment() -> None:
+         problems.append(f"TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_MS >= {FABRIC_ROUTER_SYNC_TIMEOUT_MS} (got {timeout!r})")
+     if os.environ.get("BLAZE_L1_ALLOCATOR", "minimalloc") != "minimalloc":
+         problems.append("BLAZE_L1_ALLOCATOR=minimalloc (K3's stages require MiniMalloc)")
+-    if os.environ.get("BLAZE_RELOAD_KV_TABLE_PATH"):
+-        # K3 defines kv_migration_spec, but the hand-off reads each layer's caches from the pins its image
+-        # declares under "kv_migration", and the K3 images declare none.
+-        problems.append("BLAZE_RELOAD_KV_TABLE_PATH unset (the K3 ring's images declare no KV-migration pins)")
+     if problems:
+         raise SystemExit(f"{MODEL_NAME} reload ring needs " + "; ".join(problems))
+ 
+diff --git a/docs/guides/adding-kv-migration.md b/docs/guides/adding-kv-migration.md
+index 463c5e38..3a17b93a 100644
+--- a/docs/guides/adding-kv-migration.md
++++ b/docs/guides/adding-kv-migration.md
+@@ -405,7 +405,9 @@ run and several host ranks share one fabric mesh. `connect_with_migration_worker
+    `ReloadPipeline` records every image's entry in `ReloadContext.kv_migration` at capture. The M3
+    reload harness (`tests/blaze/fused_ops/minimax_m3_decoder_layer_stage/reload_harness.py`) is the
+    worked example; the DeepSeek/Kimi one (`tests/blaze/fused_ops/dsv3_kimi2_6_decoder/reload_harness.py`)
+-   declares `{"scratch": scratch}`, which is where the MLA hooks find the cache and its SP layout.
++   declares `{"scratch": scratch}`, which is where the MLA hooks find the cache and its SP layout. Kimi K3's
++   harnesses declare `{"scratch": {"kda_transients": ...}}` on KDA layers and `{"scratch": {"mla_transients":
++   ...}}` on MLA layers; `tests/blaze/infra/test_reload_k3_kv_table.py` exports K3's three configs from them.
+ 2. **Hand the launched ring off** with `ReloadPipeline.run(..., after_launch=HandOff.from_env(model=<registry
+    key>, kv_slots=<slots>, kv_depth=<allocated depth>, ring_capacity=<packets>))`
+    (`blaze/models/pipeline_hand_off/hand_off.py`). It resolves the spec
+@@ -417,7 +419,8 @@ run and several host ranks share one fabric mesh. `connect_with_migration_worker
+    (`BLAZE_RELOAD_RING_INFO_PATH`) and keeps the ring up until `BLAZE_RELOAD_DONE_FILE` exists.
+    `blaze/models/minimax_m3/reload_launch.py` (`python -m blaze.models.minimax_m3.reload_launch` under
+    tt-run) is the worked example; `blaze/models/kimi_k2_7_code/reload_launch.py` runs the same ring on one
+-   galaxy (four stages) or an SC4 pod (sixteen), one stage per tt-run rank.
++   galaxy (four stages) or an SC4 pod (sixteen), one stage per tt-run rank, and
++   `blaze/models/kimi_k3/reload_launch.py` runs Kimi K3 on a quad's sixteen-stage ring.
+ 
+ The driver injects batches: every image is compiled for one iteration and firmware re-runs it per packet
+ while the packet's `reload_ctrl.reuse_current_kernel` bit is set (`blaze/reload/batching.py`). A batch is K
+diff --git a/tests/blaze/fused_ops/kda/kda_dense_harness.py b/tests/blaze/fused_ops/kda/kda_dense_harness.py
+index 4088f2d9..ba84d3bb 100644
+--- a/tests/blaze/fused_ops/kda/kda_dense_harness.py
++++ b/tests/blaze/fused_ops/kda/kda_dense_harness.py
+@@ -588,20 +588,20 @@ class KimiK3KdaDenseLayerStageHarness(TestHarness):
+             f"({self.input_size_bytes()} B in, {self.output_sizes_bytes(mesh_device)[0]} B out)"
+         )
+         output_coord, output_core, _ = sender.extract_output_info()
++        # KV migration cache discovery; same contract as the sparse KDA harness.
++        kda_transients = {
++            "s_cache": setup.state.tensors.get("s_cache"),
++            "conv_cache": setup.state.tensors.get("conv_cache"),
++            "max_num_users": setup.state.max_num_users,
++            "max_length": setup.state.max_length,
++        }
+         return program, {
+             # Restore set: L1 weights and host-set constants, as a list (the restore walk skips dicts).
+             # The setup keeps the DRAM caches alive.
+             "weights": list(resident_weights(setup.tensors).values()),
+-            "scratch": {
+-                "setup": setup,
+-                # KV migration cache discovery; same contract as the sparse KDA harness.
+-                "kda_transients": {
+-                    "s_cache": setup.state.tensors.get("s_cache"),
+-                    "conv_cache": setup.state.tensors.get("conv_cache"),
+-                    "max_num_users": setup.state.max_num_users,
+-                    "max_length": setup.state.max_length,
+-                },
+-            },
++            "scratch": {"setup": setup, "kda_transients": kda_transients},
++            # Per-layer pins for a reload ring; see the sparse KDA harness.
++            "kv_migration": {"layer_id": DENSE_LAYER, "pins": {"scratch": {"kda_transients": kda_transients}}},
+             # For the reload runner's output tap.
+             "output": setup.final_out,
+             "output_coord": tuple(output_coord),
+diff --git a/tests/blaze/fused_ops/kda/kda_sparse_harness.py b/tests/blaze/fused_ops/kda/kda_sparse_harness.py
+index 633e41ba..8d6f7180 100644
+--- a/tests/blaze/fused_ops/kda/kda_sparse_harness.py
++++ b/tests/blaze/fused_ops/kda/kda_sparse_harness.py
+@@ -1105,6 +1105,14 @@ class KimiK3KdaSparseLayerStageHarness(TestHarness):
+                 bundle.transients[name] = compiler._tensor_dict[f"{self._prefix}.{name}"]
+         logger.info(f"[kimi-k3] layer {self._layer_index}: socket program built " f"({self.input_size_bytes()} B/page)")
+         output_coord, output_core, _ = sender.extract_output_info()
++        # KV migration cache discovery (like GLM's `dsa_transients`). The sizes give the table's slot
++        # axis and version count, which the flat cache shape cannot.
++        kda_transients = {
++            "s_cache": bundle.state.tensors.get("s_cache"),
++            "conv_cache": bundle.state.tensors.get("conv_cache"),
++            "max_num_users": bundle.state.max_num_users,
++            "max_length": bundle.state.max_length,
++        }
+         return program, {
+             # Restore set: L1 weights and host-set constants, as a list (the restore walk skips dicts).
+             # The bundle keeps the expert bank and the S and conv caches (DRAM) alive.
+@@ -1114,15 +1122,11 @@ class KimiK3KdaSparseLayerStageHarness(TestHarness):
+                 "keepalive": list(bundle.weights.keepalive)
+                 + list(getattr(self, "_override_tables", ()))
+                 + ([self._routing_save_table] if self._routing_save_table is not None else []),
+-                # KV migration cache discovery (like GLM's `dsa_transients`). The sizes give the
+-                # table's slot axis and version count, which the flat cache shape cannot.
+-                "kda_transients": {
+-                    "s_cache": bundle.state.tensors.get("s_cache"),
+-                    "conv_cache": bundle.state.tensors.get("conv_cache"),
+-                    "max_num_users": bundle.state.max_num_users,
+-                    "max_length": bundle.state.max_length,
+-                },
++                "kda_transients": kda_transients,
+             },
++            # A reload stage holds many layers and stops exposing this bundle after capture, so the ring
++            # records these pins per layer (ReloadPipeline._record_kv_migration).
++            "kv_migration": {"layer_id": self._layer_index, "pins": {"scratch": {"kda_transients": kda_transients}}},
+             # For the reload runner's output tap.
+             "output": bundle.transients["up_output"],
+             "output_coord": tuple(output_coord),
+diff --git a/tests/blaze/fused_ops/mla/harness.py b/tests/blaze/fused_ops/mla/harness.py
+index 44df6068..4e997298 100644
+--- a/tests/blaze/fused_ops/mla/harness.py
++++ b/tests/blaze/fused_ops/mla/harness.py
+@@ -401,6 +401,11 @@ class KimiK3MlaStageHarness(TestHarness):
+             # K3's KV migration finds the MLA cache through `scratch["mla_transients"]`; without it config "0"
+             # is not migrated.
+             "scratch": {"built": built, "mla_transients": built["mla_transients"]},
++            # Per-layer pins for a reload ring; see the sparse KDA harness.
++            "kv_migration": {
++                "layer_id": self._layer_index,
++                "pins": {"scratch": {"mla_transients": built["mla_transients"]}},
++            },
+             # For the reload runner's output tap.
+             "output": built["ttnn_up_out"],
+             "output_coord": tuple(output_coord),
+diff --git a/tests/blaze/infra/test_reload_k3_kv_table.py b/tests/blaze/infra/test_reload_k3_kv_table.py
+new file mode 100644
+index 00000000..32828e48
+--- /dev/null
++++ b/tests/blaze/infra/test_reload_k3_kv_table.py
+@@ -0,0 +1,230 @@
++# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
++# SPDX-License-Identifier: Apache-2.0
++"""Kimi-K3 on a reload ring: HandOff exports its three cache configs -- device-free.
++
++What K3 adds over M3 (``test_reload_kv_table.py``): MLA kvpe on some layers and KDA state and conv on the
++rest, KDA rows whose synthetic position extent is not the MLA context, and a spec that takes each stage's live
++KDA allocation (``kv_migration_spec_stage_kwargs``). The ranks run as threads over one all-gather; ttnn must
++be importable for the KvChunkAddressTable binding.
++"""
++
++import pathlib
++import threading
++from dataclasses import replace
++from types import SimpleNamespace
++
++import pytest
++
++try:
++    import ttnn
++
++    from blaze.models.kimi_k3 import cache_migration as km
++    from blaze.models.kimi_k3 import entry as k3
++    from blaze.models.kimi_k3.entry import MODEL_NAME
++    from blaze.models.kimi_k3.kimi_k3_blaze_config import KIMI_K3_DIMS
++    from blaze.models.pipeline_hand_off.hand_off import HandOff
++except Exception as e:  # pragma: no cover - environment dependent (ttnn build)
++    pytest.skip(f"reload hand-off unavailable: {e}", allow_module_level=True)
++
++pytestmark = [pytest.mark.device("cpu"), pytest.mark.level("infra")]
++
++DEPTH = 8192  # the smallest valid MLA depth (K3_MLA_SEQ_LEN_QUANTUM)
++SLOTS = 2
++N_DEV = 8
++KVPE = 576
++#: One fabric mesh over three ranks: an embedding rank with no layer, then two with several layers each.
++RANK_LAYERS = [(), (0, 1, 2, 3), (4, 5, 6, 7)]
++LAYERS = range(8)
++
++
++HOST = 0x0C0FFEE0
++
++
++def _rank_chips(rank):
++    """Rank ``rank``'s eight chips on fabric mesh 0, as ``(unique id, mesh, chip)``; rank 0 holds none."""
++    return [(0xA000 + rank * 8 + i, 0, rank * 8 + i) for i in range(8) if rank]
++
++
++class _Ring:
++    """The ring's ranks as threads over one all-gather, as MPI runs them (``test_reload_kv_table._Ring``)."""
++
++    def __init__(self, n):
++        self._barrier, self._slots, self._local = threading.Barrier(n, timeout=20), [0] * n, threading.local()
++
++    def _allgather(self, value):
++        self._slots[self._local.rank] = int(value)
++        self._barrier.wait()
++        out = list(self._slots)
++        self._barrier.wait()
++        return out
++
++    def run(self, monkeypatch, fns):
++        from blaze import kv_chunk_migration_helpers as helpers
++
++        monkeypatch.setattr(ttnn, "distributed_context_allgather_int", self._allgather)
++        monkeypatch.setattr(ttnn, "distributed_context_get_rank", lambda: self._local.rank)
++        monkeypatch.setattr(ttnn, "distributed_context_get_size", lambda: len(fns))
++        monkeypatch.setattr(ttnn, "distributed_context_barrier", lambda: self._barrier.wait())
++        monkeypatch.setattr(helpers, "_host_tag_int", lambda: HOST)
++        monkeypatch.setattr(helpers, "_enumerate_decode_devices", lambda device: device)
++        results, errors = [None] * len(fns), [None] * len(fns)
++
++        def body(rank, fn):
++            self._local.rank = rank
++            try:
++                results[rank] = fn()
++            except BaseException as exc:  # noqa: BLE001
++                errors[rank] = exc
++
++        threads = [threading.Thread(target=body, args=(rank, fn)) for rank, fn in enumerate(fns)]
++        for t in threads:
++            t.start()
++        for t in threads:
++            t.join()
++        return results, errors
++
++
++class _Cache:
++    """A live cache as the export reads it: its base and its shape (rank 4 for kvpe, rank 3 for KDA)."""
++
++    def __init__(self, addr, shape):
++        self.addr, self.shape = addr, shape
++
++    def buffer_address(self):
++        return self.addr
++
++
++def _is_mla(layer):
++    return KIMI_K3_DIMS.is_mla_layer(layer)
++
++
++def _base(layer, config):
++    return 0x100000 * (layer + 1) + 0x1000 * int(config)
++
++
++def _kda_transients(layer, *, users=SLOTS, versions=1):
++    return {
++        "s_cache": _Cache(_base(layer, "1"), (1, 1, 64)),
++        "conv_cache": _Cache(_base(layer, "2"), (1, 1, 64)),
++        "max_num_users": users,
++        "max_length": versions,
++    }
++
++
++def _mla_transients(layer):
++    return {"ttnn_kv_cache": _Cache(_base(layer, "0"), (SLOTS, 1, DEPTH // N_DEV, KVPE))}
++
++
++def _pins(layer, **kda):
++    """What K3's harnesses declare under ``"kv_migration"``: the dict their spec hooks read."""
++    if _is_mla(layer):
++        return {"scratch": {"mla_transients": _mla_transients(layer)}}
++    return {"scratch": {"kda_transients": _kda_transients(layer, **kda)}}
++
++
++def _export(monkeypatch, tmp_path, pins_by_rank, *, expected_layers=LAYERS):
++    table, device_map = tmp_path / "table.pb", tmp_path / "device_map.txt"
++
++    def rank_fn(rank):
++        ctx = SimpleNamespace(
++            kv_migration=pins_by_rank[rank], submesh=_rank_chips(rank), pipeline=SimpleNamespace(my_mesh_id=0)
++        )
++        hand_off = HandOff(
++            io_socket_prefix="p",
++            kv_slots=SLOTS,
++            kv_depth=DEPTH,
++            ring_capacity=7,
++            spec_factory=k3.kv_migration_spec,
++            spec_stage_kwargs=k3.kv_migration_spec_stage_kwargs,
++            kv_table_path=str(table),
++            device_map_path=str(device_map),
++            ring_info_path=str(tmp_path / "ring.json"),
++            expected_layers=expected_layers,
++        )
++        return lambda: hand_off._export_kv_table(ctx)
++
++    _, errors = _Ring(len(pins_by_rank)).run(monkeypatch, [rank_fn(r) for r in range(len(pins_by_rank))])
++    return table, errors
++
++
++def test_the_ring_holds_both_kinds():
++    kinds = {_is_mla(layer) for layers in RANK_LAYERS for layer in layers}
++    assert kinds == {True, False}, "the ring under test must mix MLA and KDA layers"
++
++
++def test_the_stage_hook_reads_kda_geometry_and_zeros_elsewhere():
++    from blaze.kv_chunk_migration_helpers import _PinnedView
++
++    hook = k3.kv_migration_spec_stage_kwargs
++    kda_layer = next(layer for layer in LAYERS if not _is_mla(layer))
++    mla_layer = next(layer for layer in LAYERS if _is_mla(layer))
++    assert hook(_PinnedView(_pins(kda_layer, versions=1))) == {"kda_max_num_users": SLOTS, "kda_max_length": 1}
++    assert hook(_PinnedView(_pins(mla_layer))) == {"kda_max_num_users": 0, "kda_max_length": 0}
++    # A rank past its own layer count joins the gather with empty pins and the same keys.
++    assert hook(_PinnedView({})) == {"kda_max_num_users": 0, "kda_max_length": 0}
++
++
++@pytest.mark.parametrize("versions", [1, 8], ids=["one_kda_slot", "eight_kda_versions"])
++def test_hand_off_exports_k3s_three_configs(monkeypatch, tmp_path, versions):
++    """Every layer's rows land on its own rank's chips at its own base: kvpe up to the MLA depth, KDA S and conv
++    up to the KDA extent of ``versions`` state slots, the other kind's rows empty."""
++    pins = [{layer: _pins(layer, versions=versions) for layer in layers} for layers in RANK_LAYERS]
++    table_path, errors = _export(monkeypatch, tmp_path, pins)
++    assert errors == [None] * 3
++    table = ttnn.experimental.disaggregation.import_from_protobuf_file(str(table_path))
++    spec = k3.kv_migration_spec(max_seq_len=DEPTH, num_slots=SLOTS, kda_max_length=versions)
++    extent = km.kda_position_extent(N_DEV, versions)
++    for rank, layers in enumerate(RANK_LAYERS):
++        own = {chip for _, _, chip in _rank_chips(rank)}
++        for layer in layers:
++            for cfg_id, cfg in enumerate(spec.configs):
++                if (cfg.name == "0") != _is_mla(layer):
++                    assert table.lookup(layer, 0, 1, cfg_id).size_bytes == 0, (layer, cfg.name)
++                    continue
++                last = (DEPTH if _is_mla(layer) else extent) - cfg.chunk_n_tokens
++                for pos in (0, last):
++                    loc = table.lookup(layer, pos, 1, cfg_id)
++                    assert loc.size_bytes == cfg.chunk_size_bytes, (layer, cfg.name, pos)
++                    group = table.get_device_group(loc.device_group_index)
++                    assert {int(f.chip_id) for f in group.fabric_node_ids} <= own, (layer, cfg.name)
++                    # kvpe has its own geometry (CP8 over the 4x2 mesh as 8x1); KDA uses the spec's.
++                    geom = replace(cfg.geom or spec.geom, max_seq_len=DEPTH)
++                    want = cfg.locate(pos, 1, _base(layer, cfg.name), geom, layer)
++                    assert loc.noc_addr == want.noc_addr, (layer, cfg.name, pos)
++
++
++def test_kda_stages_that_disagree_on_the_version_count_fail_every_rank(monkeypatch, tmp_path):
++    # One table addresses every KDA layer with one max_length.
++    pins = [{layer: _pins(layer, versions=1) for layer in layers} for layers in RANK_LAYERS]
++    pins[2][4] = _pins(4, versions=8)
++    _, errors = _export(monkeypatch, tmp_path, pins)
++    assert all(isinstance(e, BaseException) for e in errors), errors
++    assert any("different version counts" in str(e) for e in errors)
++
++
++def test_kda_stages_with_fewer_users_than_slots_fail_every_rank(monkeypatch, tmp_path):
++    pins = [{layer: _pins(layer, users=SLOTS - 1) for layer in layers} for layers in RANK_LAYERS]
++    _, errors = _export(monkeypatch, tmp_path, pins)
++    assert all(isinstance(e, BaseException) for e in errors), errors
++    assert any("max_num_users" in str(e) for e in errors)
++
++
++def test_hand_off_from_env_takes_k3s_hooks(monkeypatch, tmp_path):
++    monkeypatch.setenv("BLAZE_RELOAD_KV_TABLE_PATH", str(tmp_path / "t.pb"))
++    hand_off = HandOff.from_env(model=MODEL_NAME, kv_slots=15, kv_depth=1_048_576, ring_capacity=47)
++    assert hand_off.spec_factory is k3.kv_migration_spec
++    assert hand_off.spec_stage_kwargs is k3.kv_migration_spec_stage_kwargs
++
++
++def test_k3_harnesses_declare_their_reload_pins():
++    """Every K3 decoder harness declares "kv_migration" pins holding the dict its spec hooks read in the regular
++    pipeline. Checked on the source: building a harness needs a device."""
++    root = pathlib.Path(__file__).resolve().parents[1] / "fused_ops"
++    for rel, key, value in (
++        ("kda/kda_sparse_harness.py", "kda_transients", "kda_transients"),
++        ("kda/kda_dense_harness.py", "kda_transients", "kda_transients"),
++        ("mla/harness.py", "mla_transients", 'built["mla_transients"]'),
++    ):
++        src = (root / rel).read_text()
++        assert '"kv_migration": {' in src, rel
++        assert f'"pins": {{"scratch": {{"{key}": {value}}}}}' in src, rel
+diff --git a/tests/pipeline_builder/test_kimi_k3_ring_cpu.py b/tests/pipeline_builder/test_kimi_k3_ring_cpu.py
+index c0b2dfc8..ac614afd 100644
+--- a/tests/pipeline_builder/test_kimi_k3_ring_cpu.py
++++ b/tests/pipeline_builder/test_kimi_k3_ring_cpu.py
+@@ -13,13 +13,11 @@ ttnn = pytest.importorskip("ttnn")
+ 
+ from blaze.models.kimi_k3 import reload_launch as rl  # noqa: E402
+ from blaze.models.kimi_k3 import ring as k3  # noqa: E402
+-from blaze.models.kimi_k3.entry import MODEL_NAME  # noqa: E402
+ from blaze.models.kimi_k3.kimi_k3_blaze_config import (  # noqa: E402
+     KIMI_K3_BLAZE_CONFIG,
+     MLA_WORKER_L1_SIZE,
+     WORKER_L1_SIZE,
+ )
+-from blaze.models.pipeline_hand_off.hand_off import HandOff  # noqa: E402
+ from blaze.reload import RingPlan  # noqa: E402
+ from blaze.reload.batching import ring_capacity  # noqa: E402
+ from blaze.reload.ring import build_ring_stages  # noqa: E402
+@@ -229,19 +227,6 @@ def test_launcher_checks_the_allocator_and_the_fabric_timeout(monkeypatch):
+         rl._check_environment()
+ 
+ 
+-def test_launcher_refuses_a_kv_table(monkeypatch):
+-    """K3 defines kv_migration_spec, but the ring's images declare no KV-migration pins for the hand-off to
+-    read, so the launcher refuses a KV table before any device opens."""
+-    monkeypatch.setenv("TT_METAL_SLOW_DISPATCH_MODE", "1")
+-    monkeypatch.setenv("TT_METAL_ALLOCATOR_MODE_HYBRID", "1")
+-    monkeypatch.setenv("TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_MS", str(rl.FABRIC_ROUTER_SYNC_TIMEOUT_MS))
+-    monkeypatch.setenv("BLAZE_RELOAD_KV_TABLE_PATH", "/tmp/k3_kv_table.json")
+-    with pytest.raises(SystemExit, match="BLAZE_RELOAD_KV_TABLE_PATH unset"):
+-        rl.main(["--weights", "synthetic"])
+-    # The hand-off alone would accept it now that the model has a spec.
+-    assert HandOff.from_env(model=MODEL_NAME, kv_slots=15, kv_depth=8192, ring_capacity=47).kv_table_path
+-
+-
+ def _fake_world(monkeypatch, size):
+     """What tt-run gives each rank: an MPI world of ``size`` ranks (firmware environment taken as checked)."""
+     monkeypatch.setattr(rl.ttnn, "distributed_context_is_initialized", lambda: True)
+-- 
+2.34.1
+
