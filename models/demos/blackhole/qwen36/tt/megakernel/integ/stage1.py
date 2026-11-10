@@ -92,6 +92,37 @@ def per_replay_inputs(model, in_body):
     return d
 
 
+def l1_dump(tag, prog=None, limit=60):
+    """Debug (QWEN36_R16_MK_L1DUMP=1): every live device L1 tensor (address, shape, layout, shard grid), lowest address
+    first, marking the engine's own setup tensors -- to see what sits inside the engine's static CB region."""
+    import gc
+
+    import ttnn
+    from loguru import logger
+
+    eng = {}
+    S = getattr(getattr(prog, "program", None), "setup", None) or {}
+    for k, v in S.items():
+        for t in (v if isinstance(v, list) else [v]):
+            if isinstance(t, ttnn.Tensor):
+                eng[id(t)] = k
+    rows = []
+    for o in gc.get_objects():
+        try:
+            if isinstance(o, ttnn.Tensor) and o.storage_type() == ttnn.StorageType.DEVICE and o.is_allocated():
+                mc = o.memory_config()
+                if mc.buffer_type == ttnn.BufferType.L1:
+                    sg = mc.shard_spec.grid if mc.shard_spec is not None else None
+                    rows.append((o.buffer_address(), tuple(o.shape), str(o.dtype).split(".")[-1], str(mc.memory_layout).split(".")[-1],
+                                 str(sg), eng.get(id(o), "model")))
+        except Exception:  # noqa: BLE001
+            pass
+    rows.sort()
+    logger.info(f"[mk-l1] {tag}: {len(rows)} live L1 tensors (engine-owned {sum(r[5] != 'model' for r in rows)})")
+    for r in rows[:limit]:
+        logger.info(f"[mk-l1]   addr {r[0]:>8} {r[5]:>10} {r[2]:>9} {r[3]:>15} shape {r[1]} grid {r[4][:120]}")
+
+
 class Stage1Verify:
     def __init__(self, model):
         self.model = model
@@ -157,6 +188,8 @@ class Stage1Verify:
         x_in = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
         if x_in is not x:
             ttnn.deallocate(x)
+        if os.environ.get("QWEN36_R16_MK_L1DUMP") == "1":
+            l1_dump(f"engine launch bucket {n_users}", prog)
         prog.launch(x_in, x_out, per_replay_inputs(self.model, in_body))
         ttnn.deallocate(x_in)
         return ttnn.to_memory_config(x_out, mc)

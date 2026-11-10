@@ -117,6 +117,10 @@ class MkEngine(EngineProgram):
             raise NotImplementedError("kind mk needs the repacked weights (weights_mk.repack with weight_layouts)")
         self.program = program.build_program(mesh, n_users, T, layer_types, weights, kv_desc, gdn_desc)
         self.info = getattr(self.program, "info", None)
+        if os.environ.get("QWEN36_R16_MK_L1DUMP") == "1":
+            from models.demos.blackhole.qwen36.tt.megakernel.integ.stage1 import l1_dump
+
+            l1_dump(f"after engine setup bucket {n_users}", self)
 
     def launch(self, x_in, x_out, per_replay):
         import ttnn
