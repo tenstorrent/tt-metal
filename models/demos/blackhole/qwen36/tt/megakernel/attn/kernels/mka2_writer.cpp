@@ -283,7 +283,7 @@ void kernel_main() {
 #if defined(MK_V12)
         if (vrole == 1 && L == 0) {   // later layers: issued by the MLP of the previous layer (single-slot CB_WV, L1)
             cb_reserve_back(CB_WV, V_SLOT);
-            add(wv.get_noc_addr(vwv_page + L * vpvl), get_write_ptr(CB_WV), vnt * WTB, trid, false);
+            add(wv.get_noc_addr(vwv_page + L * vpvl), get_write_ptr(CB_WV), vnt * WTB, V_TRID0 + (L & 1), false);
         }
         if (false) {
 #else
@@ -308,10 +308,26 @@ void kernel_main() {
     // GDN-type layers after plan_layer(L + 1)'s mixer pieces in W-GDN (it lands during the GDN + AR stall),
     // attention layers with the SDPA phase's throttled weight issue. Queued straight after the previous MLP it
     // stalled the next layer's mixer issue behind 242 KB per core of reads (W-GDN +35 us on some cores).
+    // Attention-type layers get their slice from the PREVIOUS layer's MLP tail instead (v12_prefetch_attn): inside the
+    // SDPA window it competed with the KV stream (+27-36 us per attention layer). MLP slices use their own trids
+    // (V_TRID0 + parity) so the SDPA throttle's per-group barriers on trids 1-3 never wait for them.
+    // non-blocking prefetch of the next attention layer's MLP slice: one 16 KB read whenever the read command buffer is
+    // free, pumped through the post-MLP AR stall and the SDPA weight-issue points; drained before that MLP's barrier
+    // (issued in one go it held the writer ~40-60 us: GDN layers before an attention layer went 125 -> 165 us)
+    uint64_t vp_src = 0; uint32_t vp_dst = 0, vp_rem = 0, vp_trid = 0;
+    auto v_pump = [&]() {
+        if (vp_rem && noc_cmd_buf_ready(noc_index, read_cmd_buf)) {
+            const uint32_t sz = vp_rem < 16384 ? vp_rem : 16384;
+            noc_async_read_set_trid(vp_trid);
+            noc_async_read(vp_src, vp_dst, sz);
+            noc_async_read_set_trid(0);
+            vp_src += sz; vp_dst += sz; vp_rem -= sz;
+        }
+    };
     auto v12_plan_mlp = [&](uint32_t L) {
-        if (vrole != 1 || L == 0) return;   // layer 0: plan_layer(0)
+        if (vrole != 1 || L == 0 || is_attn(L)) return;   // layer 0: plan_layer(0)
         cb_reserve_back(CB_WV, V_SLOT);
-        add(wv.get_noc_addr(vwv_page + L * vpvl), get_write_ptr(CB_WV), vnt * WTB, 1 + (L & 1), false);
+        add(wv.get_noc_addr(vwv_page + L * vpvl), get_write_ptr(CB_WV), vnt * WTB, V_TRID0 + (L & 1), false);
     };
 #endif
     auto plan_wo = [&]() {   // layer L's wo slice + the next layer's uncovered qkv bytes (real bytes into a scratch region)
@@ -517,6 +533,9 @@ void kernel_main() {
                 }
                 noc_async_read_set_trid(0);
                 if (IS_STREAM) issue_some(false, minp);   // one budget's worth (or the even share) of weight chunks per KV group
+#if defined(MK_V12)
+                v_pump(); v_pump();
+#endif
                 noc_async_read_barrier_with_trid(TRID_V);
                 if (wr_k) cb_push_back(CB_K, NBB * DH);
                 if (wr_v) cb_push_back(CB_V, NBB * DH);
@@ -607,7 +626,8 @@ void kernel_main() {
                 noc_semaphore_inc(get_noc_addr(vgo1x, vgo1y, vg[VG_MGO]), 1);
             }
             const bool own_h = vk < vnn;
-            { noc_async_read_barrier_with_trid(1 + (L & 1)); }   // layer L's MLP slice landed
+            while (vp_rem) v_pump();
+            { noc_async_read_barrier_with_trid(V_TRID0 + (L & 1)); }   // layer L's MLP slice landed
             cb_push_back(CB_WV, V_SLOT);
             if (own_h) { cb_reserve_back(CB_VRSA, MKA_NOWN); cb_push_back(CB_VRSA, MKA_NOWN); }
             { DeviceZoneScopedN("W-VX"); noc_semaphore_wait_min(vw(vg[VG_XA]), L + 1); noc_semaphore_wait_min(vw(vg[VG_XB]), L + 1); }
@@ -645,8 +665,17 @@ void kernel_main() {
             }
             cb_pop_front(CB_VDO, V_OT);
             { DeviceZoneScopedN("W-VMD"); noc_semaphore_wait_min(vw(vg[VG_MDONE]), 2 * (L + 1)); }   // both row owners summed
+            if (L + 1 < NL && is_attn(L + 1)) {   // the next (attention) layer's slice: the slot is free (popped before CB_VDO)
+                cb_reserve_back(CB_WV, V_SLOT);
+                vp_src = wv.get_noc_addr(vwv_page + (L + 1) * vpvl); vp_dst = get_write_ptr(CB_WV);
+                vp_rem = vnt * WTB; vp_trid = V_TRID0 + ((L + 1) & 1);
+            }
         }
-        { DeviceZoneScopedN("W-ARSTALL"); spin_cycles(S_AR); }
+        {
+            DeviceZoneScopedN("W-ARSTALL");
+            const uint32_t t0 = reg_read(RISCV_DEBUG_REG_WALL_CLOCK_L);
+            while ((uint32_t)(reg_read(RISCV_DEBUG_REG_WALL_CLOCK_L) - t0) < (uint32_t)S_AR) v_pump();
+        }
 #if defined(MKA_RQKV)
         if (is_qroot && L + 1 < NL) mcast_word(gs[GS_XRDY], L + 1, rf, self_rf, 0);   // x of layer L + 1 -> STREAM_EXT
 #endif
