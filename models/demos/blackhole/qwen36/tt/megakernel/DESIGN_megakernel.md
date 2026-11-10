@@ -159,3 +159,11 @@ Rule: a block may use the shared working region only during its own phases. Weig
 **Block contract:** a block's input is CB_X on its cores once wait-sem ≥ seq+1. Its output goes to CB_OUT (per-core
 shard), and it raises signal-sem. The AR track turns CB_OUT (all chips) into the next CB_X (+ residual, + norm).
 Blocks never call launch-level ops. They must be trace-capturable (no host round trips inside the pass).
+
+## 7. Release bundle (user decision 2026-11-10: ships with the megakernel ≥50% release, not standalone)
+- Multi-image, up to 4 images: tt-metal anatarajan/qwen38-r13-mm @c8c90fe (QWEN36_MM_MAX_IMAGES), merged into
+  this base branch (merge 80b077432f1). Every megakernel test runs with multi-image available.
+- Vision-embedding cache: anatarajan/qwen38-r16-mm-vcache @8c2faf2ec95 (QWEN36_MM_VISION_CACHE; repeat 3-image
+  turns 2.0 → 1.0 s). To merge into the base before release.
+- Router image-cost routing; VLLM_ROUTER_MAX_IMAGES=4 at release.
+- Shippable set: flag batch + QWEN36_R16_KV_BFP4 + multi-user SDPA cores 16 (−8.3 % step u8; acceptance unchanged).
