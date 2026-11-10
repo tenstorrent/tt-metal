@@ -104,18 +104,33 @@ Stack: stock vLLM 0.31.0 + `vllm-tt-plugin` (the model is registered in the plug
 `arg/glm53_stack_registration`; a plugin without it selects the adapter through the generic
 `TT_MODEL_CLASS_OVERRIDES=Glm5NextForConditionalGeneration=models.demos.glm53_flash.tt.generator_vllm_stack:GLM53StackForCausalLM,...`),
 transformers 5.20.2. tt-inference-server catalog (branch `arg/glm53_stack_galaxy`, BLACKHOLE_GALAXY only): profiles
-`glm53_flash` = 1 M context x 4 resident users (the default) and `glm53_flash_128k` = 128 K x 16. Text only; greedy
-requests sample on the device (the head's argmax inside the traced decode step), sampled requests (temperature /
-top-p) on the host from the returned logits (~32 ms per step at 4 slots, ~50 ms at 16); no prefix cache, synchronous
-scheduling, chunked prefill on the stack's 8192-token bucket grid (`prefill_chunk_alignment 8192`,
-`max_num_batched_tokens` = one bucket + one decode token per slot). The device is opened before the model, so the
+`glm53_flash` = 1 M context x 4 resident users (the default) and `glm53_flash_128k` = 128 K x 16. Text only; every
+request samples on the device (the head's top-10 sampler inside the traced decode step: greedy, temperature / top-p,
+top-k <= 10); no prefix cache; vLLM async scheduling over the adapter's resident-input chain (`supports_async_decode`:
+steady steps restage nothing from the host; a reload step re-seats the batch); chunked prefill on the stack's
+8192-token bucket grid (`prefill_chunk_alignment 8192`, `max_num_batched_tokens` = one bucket + one decode token per
+slot) with one prefill chunk per 8 decode steps while users decode (`decode_interleave` 1:8). The device is opened before the model, so the
 catalog carries the 1D fabric, the per-context trace region (8 GiB / 3 GiB), `worker_l1_size 1280896`,
 `l1_small_size 32768` and `--block-size 64`; the adapter applies the validated Galaxy knobs (`tt/galaxy_defaults.py`)
 and places its caches under `TT_CACHE_PATH` (the reference-format tile cache, built on the first boot, and the permuted
 expert copies). `max_num_seqs` must equal the stack's construction width (every served user is resident for the whole
 context); the plugin's slot gathers are absorbed into a plugin-slot to generator-slot alias (no state copies).
 
-Served on an 8x4 from the catalog entries (2026-11-09, 45 layers, OSL 128, one request = prefill + 128 tokens):
+Served decode vs the e2e at the same construction (2026-11-10, vLLM 0.31 async, the tt-inference-server benchmark
+argv, sampled at GLM's defaults; the decode-step comparable is the median ITL: the mean TPOT at concurrency carries the
+other users' interleaved prefill chunks):
+
+| profile | point | e2e decode step | served |
+|---|---|---|---|
+| 1 M (4 slots) | 128 / 128 x 1 | 24.4 ms = 41.0 tok/s/u | TPOT 24.2 ms = 41.3 tok/s/u, TTFT 0.49 s |
+| 1 M | 128 / 128 x 4 | 24.3 ms | median ITL 25.2 ms |
+| 1 M | 8 K / 128 x 4 | 26.9 ms | median ITL 27.7 ms, TTFT 4.4 s |
+| 128 K (16 slots) | 128 / 128 x 16 | 67.4 ms (4 K x 16) | median ITL 57.7 ms = 15.6 tok/s/u, 135 tok/s |
+
+Synchronous scheduling served 28.4-32.1 ms per step at the 1 M points (the host restaged every step's inputs).
+
+Served on an 8x4 from the catalog entries (2026-11-09, synchronous scheduling, 45 layers, OSL 128, one request =
+prefill + 128 tokens):
 
 | profile | request | wall | note |
 |---|---|---|---|
