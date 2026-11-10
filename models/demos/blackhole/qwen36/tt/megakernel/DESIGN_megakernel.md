@@ -450,3 +450,20 @@ silicon, down stage and persistence by the -mk-v12 agent; sim by the coordinator
   AR 12: 8.99. Break-even 15.2 µs per AR. With split-K (v0.6) removing the x gather, the on-path AR should approach
   the 21.7 µs AR-alone or below, so u1 also needs the AR itself ≤~13 µs, or a shorter post-SDPA chain (fold wo into
   the tree tail, overlap the attention AR with the MLP's gate|up K-stream).
+
+## 8d. Projection of record (2026-11-10), all measured in-engine on silicon except the u1 GDN layer
+Inputs (32K, BFP8 KV):
+- GDN-type layer u8 145.1 µs (mixed checkpoint) − 2.25 µs (DNPIPE+MIXTRID port) → non-AR 106.85 µs.
+- Attention layer u8 370.0 µs, u1 239.8 µs (v0.5 step 1 STREAM_EXT, MKA_WOBANK bank fix) → non-AR 334 / 203.8 µs.
+- u1 GDN non-AR is assumed 77 − 2.25 = 74.75 µs (not yet measured in-engine at u1).
+- +0.5 ms LM head/MTP; 2 ARs per layer.
+
+| On-path µs per AR | 21.7 | 18 | **15** | 13 | 12 | break-even |
+|---|---|---|---|---|---|---|
+| u8 (gate 13.7) | 13.75 ✗ | 13.28 | **12.89 (0.8 margin)** | 12.64 | 12.51 | 21.3 µs |
+| u1 (gate 9.4) | 10.13 ✗ | 9.65 ✗ | **9.27 (0.13 margin)** | 9.01 | 8.88 | 16.0 µs |
+
+Still stand-ins: the GDN step (64 µs; prefix split targets ~−19 µs/layer ≈ −0.9 ms), real qkv/wo PROJ phases
+(attention track), and the AR itself (split-K v0.6 removes x replication; the AR alone is 21.7 µs today, so the AR core
+must also drop to ≤15 µs, or overlap). The mixed-engine numbers predate the bank-0 fix (MKA_WOBANK), so its attention
+layers are pessimistic; rebase onto 1d559f26341 before the next mixed run.
