@@ -119,12 +119,6 @@ void kernel_main() {
     uint32_t ow_x[16], ow_y[16];
     for (uint32_t i = 0; i < 16; ++i) { ow_x[i] = get_arg_val<uint32_t>(a++); ow_y[i] = get_arg_val<uint32_t>(a++); }
     const uint32_t wod_addr = get_arg_val<uint32_t>(a++);
-#if defined(MKA_RQNR)
-    const uint32_t head_id = get_arg_val<uint32_t>(a++);   // 0-5 q heads, 6 k head, 255 none
-    uint32_t hd_x[NHEAD], hd_y[NHEAD];
-    for (uint32_t i = 0; i < NHEAD; ++i) { hd_x[i] = get_arg_val<uint32_t>(a++); hd_y[i] = get_arg_val<uint32_t>(a++); }
-    const uint32_t kd_addr = get_arg_val<uint32_t>(a++);   // DRAM debug copy of the k head output
-#endif
     const auto wod = TensorAccessor(qo_args, wod_addr, 2048);   // debug copy of every owner's CB_XO (bf16 tiles)
     auto mcast_ext = [&](uint32_t src, uint32_t dst, uint32_t bytes) {
         for (uint32_t i = 0; i < 3; ++i) {
@@ -143,6 +137,18 @@ void kernel_main() {
         noc_async_write_barrier();
     }
 #endif
+#if defined(MKA_RQNR)   // q/k head-norm cores (independent of MKA_RWO since the GDN24 decouple)
+    const uint32_t head_id = get_arg_val<uint32_t>(a++);   // 0-5 q heads, 6 k head, 255 none
+    uint32_t hd_x[NHEAD], hd_y[NHEAD];
+    for (uint32_t i = 0; i < NHEAD; ++i) { hd_x[i] = get_arg_val<uint32_t>(a++); hd_y[i] = get_arg_val<uint32_t>(a++); }
+    const uint32_t kd_addr = get_arg_val<uint32_t>(a++);   // DRAM debug copy of the k head output
+#if !defined(MKA_RWO)
+    if (head_id == 0) {   // no concat core without RWO: head core 0 publishes the (uniform) CB_A address
+        mcast_word<NRF>(gs[GS_AADDR], get_write_ptr(CB_A), rf, self_rf, 0);
+        noc_async_write_barrier();
+    }
+#endif
+#endif
     const auto qo = TensorAccessor(qo_args, qo_addr, QOTB);
     constexpr uint32_t QATB = 4096;   // fp32 partial tile
     // the qkv tail of layer L on this core: ship / receive the K-half partial, write the rstd-scaled output tiles
@@ -157,8 +163,6 @@ void kernel_main() {
     auto qkv_route = [&](uint32_t L) {
         { DeviceZoneScopedN("W-QO"); cb_wait_front(CB_QO, QO_SLOT ? QO_SLOT : qnt); }
         const uint32_t qsrc = get_read_ptr(CB_QO);
-#if defined(MKA_RWO)
-        uint32_t n_gate = 0;
 #if defined(MKA_RQNR)
         noc_semaphore_wait_min(l1w(gs[GS_AADDR]), 1);
         const uint32_t a_base = *l1w(gs[GS_AADDR]);
@@ -171,6 +175,8 @@ void kernel_main() {
             ++hcnt[n / 8];
         }
 #endif
+#if defined(MKA_RWO)
+        uint32_t n_gate = 0;
         if (qn + (qnt - 1) * QST >= 64) {   // sig(gate) tiles -> the concat core's CB_S slot n - 64 (it multicasts S after its V loop)
             noc_semaphore_wait_min(l1w(gs[GS_SADDR]), 1);
             const uint32_t s_base = *l1w(gs[GS_SADDR]);
@@ -179,10 +185,12 @@ void kernel_main() {
                 if (n >= 64) { noc_async_write(qsrc + j * QOTB, get_noc_addr(ow_x[0], ow_y[0], s_base + (n - 64) * QOTB), QOTB); ++n_gate; }
             }
         }
+#endif
         noc_async_write_barrier();
 #if defined(MKA_RQNR)
         for (uint32_t i = 0; i < NHEAD; ++i) if (hcnt[i]) noc_semaphore_inc(get_noc_addr(hd_x[i], hd_y[i], gs[GS_HCNT]), hcnt[i]);
 #endif
+#if defined(MKA_RWO)
         if (n_gate) noc_semaphore_inc(get_noc_addr(ow_x[0], ow_y[0], gs[GS_SCNT]), n_gate);
 #endif
         noc_semaphore_inc(get_noc_addr(qr_x, qr_y, gs[GS_MIXDONE]), 1);

@@ -100,7 +100,10 @@ void kernel_main() {
     const uint32_t rw_own = get_arg_val<uint32_t>(a++), rw_hlp = get_arg_val<uint32_t>(a++);
     const uint32_t h_x = get_arg_val<uint32_t>(a++), h_y = get_arg_val<uint32_t>(a++), h_page = get_arg_val<uint32_t>(a++);
     const uint32_t h_np = get_arg_val<uint32_t>(a++), h_off = get_arg_val<uint32_t>(a++);
-#if defined(MKA_RQNR)
+    const auto wow = TensorAccessor(wq_args, wo_addr2, MWTB);   // Wo pages: same BFP8 interleaved layout as wq
+    constexpr uint32_t TRID_WOR = 10;
+#endif
+#if defined(MKA_RQNR)   // head constants / mask tile (independent of MKA_RWO since the GDN24 decouple)
     {   // head constants (gamma x 8, cos, sin): 10 bf16 tiles from DRAM, once per pass
         const uint32_t hg_addr = get_arg_val<uint32_t>(a++), hg_page = get_arg_val<uint32_t>(a++);
         const uint32_t mk_addr = get_arg_val<uint32_t>(a++), mk_page = get_arg_val<uint32_t>(a++);
@@ -118,9 +121,6 @@ void kernel_main() {
             cb_push_back(CB_HG, 11);
         }
     }
-#endif
-    const auto wow = TensorAccessor(wq_args, wo_addr2, MWTB);   // Wo pages: same BFP8 interleaved layout as wq
-    constexpr uint32_t TRID_WOR = 10;
 #endif
     bool pq_pending = false;
 #if defined(MK_V12)
@@ -197,7 +197,7 @@ void kernel_main() {
     // next attention layer after L (NL if none) and the length of the GDN-type run right before attention layer La
     auto next_att = [](uint32_t L) { uint32_t n = L + 1; while (n < NL && !is_attn(n)) ++n; return n; };
     auto gdn_run = [](uint32_t La) { uint32_t r = 0; while (r < La && !is_attn(La - 1 - r)) ++r; return r; };
-#if defined(MKA_PQGDN)
+#if defined(MKA_PQGDN) && !(defined(MKA_QSK) && !defined(MKA_RWO))   // QSK without RWO: the ext ring carries nothing
     constexpr bool kPqGdn = true;    // spec v0.8.1: the slice is streamed during the GDN-type layers before its layer
 #else
     constexpr bool kPqGdn = false;
@@ -209,10 +209,15 @@ void kernel_main() {
 #define MKA_PQN 2
 #endif
     const uint32_t La0 = is_attn(0) ? 0 : next_att(0);
+#if defined(MKA_QSK) && !defined(MKA_RWO)
+    if (false) {
+#else
     if (qrole == QR_EXT && La0 < NL && !(kPqGdn && gdn_run(La0) > 0)) {   // the first attention layer's slice up front
+#endif
         cb_reserve_back(CB_PQ, QSL);
-#if defined(MKA_QSK)
+#if defined(MKA_QSK) && defined(MKA_RWO)
         noc_async_read(wow.get_noc_addr(rw_page + La0 * rw_pl), get_write_ptr(CB_PQ), rw_nt * WK * MWTB);
+#elif defined(MKA_QSK)
 #else
         noc_async_read(wq.get_noc_addr(pq_page + La0 * pq_layer), get_write_ptr(CB_PQ), QSL * MWTB);
 #endif
@@ -251,7 +256,10 @@ void kernel_main() {
             if (Ln < NL) {
                 DeviceZoneScopedN("R-PQGDN");
                 const uint32_t run = gdn_run(Ln), j = L - (Ln - run);
-#if defined(MKA_QSK)
+#if defined(MKA_QSK) && !defined(MKA_RWO)
+                const uint32_t pqn = 0;   // unreachable (kPqGdn is false)
+                const uint64_t src = 0;
+#elif defined(MKA_QSK)
                 const uint32_t pqn = rw_nt * WK;   // §18: the ext ring is free of qkv -> it carries the Wo slice (WORING-like)
                 const uint64_t src = wow.get_noc_addr(rw_page + Ln * rw_pl);
 #else
