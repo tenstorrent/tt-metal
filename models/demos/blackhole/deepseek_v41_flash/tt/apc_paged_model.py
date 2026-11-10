@@ -192,6 +192,7 @@ class PagedApc:
             == "1",  # M3: cross-row copy of the blocks of a busy row (default off)
             xrow_min=int(os.environ.get("DSV41_APC_PAGED_XROW_MIN", "2048")),
             xrow_max=int(os.environ.get("DSV41_APC_PAGED_XROW_MAX", "65536")),
+            loss_log=self.log if os.environ.get("DSV41_APC_LOSS_LOG", "0") == "1" else None,
         )
         self.rid = {}  # user -> bound request id
         self.auto = set()  # users whose request is anonymous (no commits)
