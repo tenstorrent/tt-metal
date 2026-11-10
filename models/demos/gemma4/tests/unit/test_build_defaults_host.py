@@ -544,6 +544,7 @@ def test_the_bfp8_ceiling_applies_on_the_mesh_it_was_measured_on(monkeypatch):
     monkeypatch.delenv("GEMMA4_BFP8_MAX_CONTEXT", raising=False)
     o = Gemma4Precision.load("/x/gemma-4-31B-it", (1, 8), max_seq_len=262144)
     assert o.get("shared_mlp") == ttnn.bfloat8_b
+    assert o.get("lm_head") == ttnn.bfloat8_b  # the (1,8) entry: the lm_head in bfp8 (2K prose gate neutral)
     monkeypatch.setenv("GEMMA4_BFP8_MAX_CONTEXT", "131072")
     o = Gemma4Precision.load("/x/gemma-4-31B-it", (1, 8), max_seq_len=262144)
     assert o.get("shared_mlp") == ttnn.bfloat16
@@ -557,6 +558,7 @@ def test_the_bfp8_ceiling_does_not_apply_on_a_mesh_where_bf16_will_not_fit():
     with no entry keeps bfp8, i.e. main's behaviour."""
     o = Gemma4Precision.load("/x/gemma-4-31B-it", (1, 4), max_seq_len=262144)
     assert o.get("shared_mlp") == ttnn.bfloat8_b
+    assert o.get("lm_head", ttnn.bfloat16) == ttnn.bfloat16  # the bfp8 lm_head is the (1,8) entry only
 
 
 def test_below_the_ceiling_bfp8_is_kept_on_the_measured_mesh():
