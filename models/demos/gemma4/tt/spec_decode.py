@@ -723,25 +723,56 @@ def serving_ring_window_table(table, positions, P, ring, block_size):
     t = torch.as_tensor(table).to(torch.int64)
     if t.dim() != 2:
         raise ValueError(f"table must be [rows, blocks], got shape {tuple(t.shape)}")
-    ring, bs, P = int(ring), int(block_size), int(P)
+    if len(positions) != int(t.shape[0]):
+        raise ValueError(f"{len(positions)} positions for a {int(t.shape[0])}-row table")
+    return serving_ring_window_gather(t, serving_ring_window_index(positions, P, ring, block_size, int(t.shape[1])))
+
+
+def serving_ring_window_index(positions, P, ring, block_size, cols):
+    """``[B, ring // block_size]`` int64 absolute block index of every ring column (``serving_ring_window_table``),
+    -1 for a column whose positions precede the sequence. It depends on the replay's positions only, so a replay
+    builds it once and gathers every sliding slot's table through it (``serving_ring_window_gather``)."""
+    ring, bs, P, cols = int(ring), int(block_size), int(P), int(cols)
     if ring % bs or ring < bs:
         raise ValueError(f"ring {ring} is not a positive multiple of the block size {bs}")
-    B, cols = int(t.shape[0]), int(t.shape[1])
-    if len(positions) != B:
-        raise ValueError(f"{len(positions)} positions for a {B}-row table")
-    ncol = ring // bs
-    k = torch.arange(ncol, dtype=torch.int64)
-    out = torch.zeros(B, ncol, dtype=torch.int64)
+    k = torch.arange(ring // bs, dtype=torch.int64)
+    out = torch.empty(len(positions), ring // bs, dtype=torch.int64)
     for b, c in enumerate(positions):
         top = int(c) + P - 1
         if top >= cols * bs:
             raise ValueError(f"row {b}: position {top} is past its {cols}-block table")
         tm = top % ring
         start = (top - tm) + k * bs - (k * bs > tm).to(torch.int64) * ring
-        blk = torch.div(start, bs, rounding_mode="floor")
-        ok = blk >= 0
-        out[b, ok] = t[b, blk[ok]]
+        out[b] = torch.div(start, bs, rounding_mode="floor").clamp_(min=-1)
     return out
+
+
+def serving_ring_window_gather(table, index):
+    """The ring table of ``table`` ``[B, cols]`` through ``index`` (``serving_ring_window_index``): block 0 where the
+    index is -1 (the ring mask hides those slots)."""
+    t = torch.as_tensor(table).to(torch.int64)
+    if tuple(index.shape[:1]) != tuple(t.shape[:1]):
+        raise ValueError(f"index rows {tuple(index.shape)} for a table of shape {tuple(t.shape)}")
+    return torch.where(index >= 0, torch.gather(t, 1, index.clamp(min=0)), torch.zeros((), dtype=torch.int64))
+
+
+def serving_virtual_rings(pv_ring, window, block_sizes, shapes, widths, lanes, enabled):
+    """``{layer_type: ring}`` of the serving verify's sliding span rings (``serving_sliding_span_ring``): only an
+    UNBOUNDED sliding pool (``pv_ring[lt] is None``) on a single-lane engine with GEMMA4_SPEC_SLIDING_SPAN_RING on
+    (``enabled``), and only when the ring is narrower than the narrowest verify rung; a bounded pool keeps its own
+    ring and the lane engine its rung-wide tables (its uploads read ``_pv_ring``)."""
+    if not enabled or int(lanes) > 1 or not window:
+        return {}
+    max_p = max(int(K) + 1 for _B, K in shapes)
+    narrowest = min(int(w) for ws in widths.values() for w in ws)
+    rings = {}
+    for lt, ring in pv_ring.items():
+        if lt != "sliding_attention" or ring is not None:
+            continue
+        span = serving_sliding_span_ring(window, max_p, block_sizes[lt])
+        if span < narrowest:
+            rings[lt] = span
+    return rings
 
 
 def serving_mask_padded_bytes(shape, width, elem_bytes=2):
@@ -2734,16 +2765,9 @@ class SpeculativeDecoder:
             self._srv_slot_types.setdefault(slot, layer_types[i])
         # The sliding span of the verify records: an unbounded sliding pool attends a window-sized virtual ring
         # (serving_sliding_span_ring) when it is narrower than the smallest rung; a bounded pool keeps its own ring.
-        self._srv_vring = {}
-        if sliding_span_ring_enabled() and self._srv_lanes <= 1 and self._pv_window:
-            max_p = max(int(K) + 1 for _B, K in shapes)
-            narrowest = min(int(w) for ws in widths.values() for w in ws)
-            for lt, ring in self._pv_ring.items():
-                if lt != "sliding_attention" or ring is not None:
-                    continue
-                span = serving_sliding_span_ring(self._pv_window, max_p, self._pv_bs_t[lt])
-                if span < narrowest:
-                    self._srv_vring[lt] = span
+        self._srv_vring = serving_virtual_rings(
+            self._pv_ring, self._pv_window, self._pv_bs_t, shapes, widths, self._srv_lanes, sliding_span_ring_enabled()
+        )
         if self._srv_vring:
             _lg.info(
                 f"[spec-serving] sliding verify span: a {self._srv_vring['sliding_attention']}-slot ring over the "
@@ -3341,10 +3365,7 @@ class SpeculativeDecoder:
         span_rings = {lt: self._srv_span_ring(lt) for lt in self._pv_ring}
         widths = serving_verify_table_widths(s_k, self._pv_bs_t, span_rings, self._srv_blocks)
         slots = self._srv_slots
-        layer_types = self._srv_layer_types()
-        slot_type = {}
-        for i, slot in enumerate(slots):
-            slot_type.setdefault(slot, layer_types[i])
+        slot_type = self._srv_slot_types  # serving_prepare: the type of each KV group slot
         v_ptl_slots = [
             self._srv_from_torch(torch.zeros(B, widths[slot_type[slot]], dtype=torch.int32), ttnn.int32, lane_dim=0)
             for slot in range(self._srv_n_slots)
@@ -3951,6 +3972,7 @@ class SpeculativeDecoder:
                 "bounded sliding target: serving_refresh_page_tables(per-layer tables) must run before the first "
                 "reseed/replay, or the sliding layers would read the flat table instead of their ring pool"
             )
+        ring_index = {}  # (ring, block) -> the replay's ring column index, shared by every sliding slot
         for slot in range(self._srv_n_slots):
             d_host = self._srv_slot_table(slot, rows, pt)
             d_host = serving_select_rows(d_host, list(range(B)), B, self._srv_blocks, allow_clip=False)
@@ -3970,9 +3992,10 @@ class SpeculativeDecoder:
                 # hold this replay (the KV writes address it through cache_position_modulo = the ring)
                 if positions is None:
                     raise ValueError(f"shape {shape}: the sliding span ring needs the replay's positions")
-                v_host = serving_ring_window_table(
-                    v_host, positions, S["P"], vring, self._pv_bs_t[self._srv_slot_types[slot]]
-                )
+                key = (vring, self._pv_bs_t[self._srv_slot_types[slot]])
+                if key not in ring_index:
+                    ring_index[key] = serving_ring_window_index(positions, S["P"], vring, key[1], int(v_host.shape[1]))
+                v_host = serving_ring_window_gather(v_host, ring_index[key])
                 if int(v_host.shape[1]) != width:
                     raise ValueError(
                         f"shape {shape}: ring table {tuple(v_host.shape)} for a {width}-column verify table"
@@ -4289,6 +4312,7 @@ class SpeculativeDecoder:
         sharded over the lane axis; the frame is lane-major, so ``v_pos`` / ``v_pos_rows`` keep each column's
         packed-row order. ``plan``: the replay's ``LaneSamplingPlan`` under GEMMA4_SPEC_SAMPLED_VERIFY (the
         greedy frame when None)."""
+        assert not self._srv_vring, "the lane engine keeps rung-wide sliding tables (serving_virtual_rings)"
         shape = rec["shape"]
         S = self._srv_shape_bufs[shape]
         B, P = S["B"], S["P"]
@@ -4329,6 +4353,7 @@ class SpeculativeDecoder:
         rows are selected from the installed per-layer tables by their GLOBAL ids (the engine's host tables span
         every lane's slots), the lane's padding rows mirror its row 0 and an idle lane stays on block 0, its own
         null block."""
+        assert not self._srv_vring, "the lane engine keeps rung-wide sliding tables (serving_virtual_rings)"
         S = self._srv_shape_bufs[shape]
         B = S["B"]
         lanes = self._srv_lanes

@@ -50,6 +50,7 @@ from models.demos.gemma4.tt.spec_decode import (
     serving_sliding_span_ring,
     serving_trace_projection,
     serving_verify_table_widths,
+    serving_virtual_rings,
     serving_width_for,
     serving_width_ladder,
     spec_capture_shapes,
@@ -1578,6 +1579,16 @@ def test_the_ring_mask_spans_ring_slots_with_the_pv_host_inputs_rule():
     # position's KV write (slot x mod R through the same table) lands on its own block.
     bs, W = 64, _W
     assert serving_sliding_span_ring(W, 6, bs) == 1152  # window + P - 1 + one block, on the 64 grid
+    # which pools take the ring (serving_prepare): only an unbounded sliding pool, one lane, the knob on, and a ring
+    # narrower than the narrowest rung; the bounded pool, the lane engine, the knob off and a narrow rung keep theirs
+    rings = {"sliding_attention": None, "full_attention": None}
+    sizes = {"sliding_attention": bs, "full_attention": bs}
+    shapes, widths = [(1, 5), (5, 3)], {(1, 5): [2048, 8192], (5, 3): [2048, 8192]}
+    assert serving_virtual_rings(rings, W, sizes, shapes, widths, 1, True) == {"sliding_attention": 1152}
+    assert serving_virtual_rings({**rings, "sliding_attention": 2048}, W, sizes, shapes, widths, 1, True) == {}
+    assert serving_virtual_rings(rings, W, sizes, shapes, widths, 4, True) == {}
+    assert serving_virtual_rings(rings, W, sizes, shapes, widths, 1, False) == {}
+    assert serving_virtual_rings(rings, W, sizes, shapes, {(1, 5): [1024, 8192]}, 1, True) == {}
     assert serving_sliding_span_ring(W, 4, 128) == 1280  # rounded to the block
     gen = torch.Generator().manual_seed(5)
     cols = 4096 // bs + 2
@@ -2005,7 +2016,8 @@ def _rail_allocates_nothing_after_capture(
 
     def packed_verify(x, **kw):
         sharded = bool(kw.get("keep_logits_sharded", False))
-        verify_kw.append(sharded)
+        # the sliding KV writes of the body address the ring tables through cache_position_modulo = the ring
+        verify_kw.append((sharded, kw.get("kv_modulo_sliding")))
         rows = int(x.host.shape[-1])
         logits = columns(rows, vocab_padded // tp if sharded else vocab_padded)
         return logits, op(torch.zeros(1, 1, rows, backbone), fake.bfloat16)
@@ -2055,7 +2067,7 @@ def _rail_allocates_nothing_after_capture(
     n_bodies = len(shapes) * len(ladder)
     # every body asked the packed verify for the shards exactly under the knob, and the shared logits buffer took
     # the chip's slice width (the readback concatenates tp of them) or the gathered width
-    assert verify_kw == [sharded_verify] * n_bodies
+    assert verify_kw == [(sharded_verify, spec._srv_vring.get("sliding_attention"))] * n_bodies
     assert spec._srv_logits.shape[-1] == (vocab_padded // tp if sharded_verify else vocab_padded)
     if sharded_verify:
         assert sharded_calls == [(B * (K + 1), vocab_padded // tp, True) for B, K in shapes for _w in ladder]
