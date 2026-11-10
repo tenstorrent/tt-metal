@@ -987,7 +987,8 @@ def test_every_config_fits_the_device_grid(device_grid, heads, head_dim):
     gx, gy = _grid(pc)
     assert gx * gy <= device_grid[0] * device_grid[1] and gx <= device_grid[0] and gy <= device_grid[1]
     if head_dim >= 512:
-        assert (gx, gy) == (min(8, device_grid[0]), min(4, device_grid[1])) and pc.q_chunk_size == 128
+        expect = tuple(device_grid) if is_blackhole() else (min(8, device_grid[0]), min(4, device_grid[1]))
+        assert (gx, gy) == expect and pc.q_chunk_size == 128
     elif heads >= ops.PREFILL_SDPA_WIDE_MIN_HEADS and is_blackhole() and device_grid[0] * device_grid[1] > 64:
         assert (gx, gy) == (min(12, device_grid[0]), min(10, device_grid[1])) and pc.q_chunk_size == 128  # wide
     else:
@@ -1017,6 +1018,12 @@ def test_wide_on_the_galaxy_grid_and_the_12b_defaults(monkeypatch):
         monkeypatch.setenv("GEMMA4_PREFILL_SDPA_PROGCFG", "1")  # opt back in to the fixed config
         pc = ops.prefill_sdpa_program_config(256, 2048, sliding_window=None, num_heads=4, device_grid=(13, 10))
     assert _grid(pc) == (8, 8) and (pc.q_chunk_size, pc.k_chunk_size) == (256, 128)
+    pc = ops.prefill_sdpa_program_config(512, 4096, sliding_window=None, num_heads=4, device_grid=(12, 10))
+    assert _grid(pc) == ((12, 10) if is_blackhole() else (8, 4)) and (pc.q_chunk_size, pc.k_chunk_size) == (128, 128)
+    monkeypatch.setenv("GEMMA4_PREFILL_SDPA_WIDE", "0")  # the fixed (8,4) global config
+    pc = ops.prefill_sdpa_program_config(512, 4096, sliding_window=None, num_heads=4, device_grid=(12, 10))
+    assert _grid(pc) == (8, 4) and (pc.q_chunk_size, pc.k_chunk_size) == (128, 128)
+    monkeypatch.delenv("GEMMA4_PREFILL_SDPA_WIDE")
     monkeypatch.setenv("GEMMA4_PREFILL_SDPA_PROGCFG", "0")  # the op defaults everywhere
     assert ops.prefill_sdpa_program_config(256, 2048, sliding_window=None, num_heads=8, device_grid=(13, 10)) is None
 

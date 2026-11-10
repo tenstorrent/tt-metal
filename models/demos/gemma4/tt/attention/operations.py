@@ -326,8 +326,9 @@ def prefill_sdpa_program_config(head_dim, seq_len, sliding_window=None, num_head
     (tenstorrent/tt-metal#51911) — up to ~3.7x slower on Gemma4 prefill shapes.
     Explicit larger chunks cut per-chunk launch + softmax-reduction overhead.
 
-    head_dim=512 (global) layers need the smaller (8,4) grid + 128 chunks to fit
-    L1 (q=k=256 overflows there); head_dim<=256 (sliding) layers run the full
+    head_dim=512 (global) layers take q=k=128 chunks (q=256 overflows L1) on the
+    device's whole grid on Blackhole ((8,4) elsewhere, or with
+    ``GEMMA4_PREFILL_SDPA_WIDE=0``); head_dim<=256 (sliding) layers run the full
     (8,8) grid with larger chunks. When ``sliding_window`` is set, cap
     ``k_chunk`` at ``window//2`` so the K loop does not walk mostly-masked
     chunks (#51911). Chunks are multiples of 32 and clamped to ``seq_len``.
@@ -353,7 +354,14 @@ def prefill_sdpa_program_config(head_dim, seq_len, sliding_window=None, num_head
     ):
         return None  # narrow chips (the 12B): the op defaults
     if head_dim >= 512:
-        grid = ttnn.CoreCoord(*_fit((8, 4), device_grid))
+        # The SDPA parallelises over (head, q-chunk) units and each unit walks the whole K on one core, so the grid
+        # only distributes work (the result is the same per unit). The (8,4) grid ran a 4-head chip's 4096-token
+        # chunk on 32 cores; the whole Blackhole grid, measured 2026-11-10 on a Galaxy chip (12x10; 4 Q / 1 KV heads,
+        # bfp8 paged K/V, one 4096-token chunk): 3.3 -> 1.7 ms at position 0, 101 -> 51 ms after a 64K cached prefix,
+        # 199 -> 101 ms after 128K, PCC unchanged. k stays 128: the chunked op needs every chunk start on a k-chunk
+        # multiple (chunk_start % k_chunk) and served cache hits are 128-aligned (SDPA_CHUNK_ALIGN).
+        wide = is_blackhole() and device_grid is not None and os.environ.get("GEMMA4_PREFILL_SDPA_WIDE", "1") != "0"
+        grid = ttnn.CoreCoord(*(_fit(device_grid, device_grid) if wide else _fit((8, 4), device_grid)))
         dq, dk = 128, 128
     else:
         # head_dim<=256: q=k=512 (~3.5 MB) and even q=k=256 (~1.58 MB) overflow
