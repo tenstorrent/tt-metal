@@ -8,7 +8,9 @@ profile the modules keep the old paths. No device, no ttnn import.
 """
 from __future__ import annotations
 
+import json
 import math
+import os
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -20,6 +22,7 @@ import models.common.utility_functions as uf
 import ttnn
 from models.demos.gemma4.tt import ccl as ccl_mod
 from models.demos.gemma4.tt import mesh_orientation as mo
+from models.demos.gemma4.tt import precision as precision_mod
 from models.demos.gemma4.tt.attention.operations import (
     PREFILL_SDPA_HARD_MAX,
     PREFILL_SDPA_MAX_SEQ,
@@ -512,6 +515,14 @@ SNAPSHOT_PATH = (
 )
 
 
+@pytest.fixture(autouse=True)
+def _no_precision_env(monkeypatch):
+    """The precision tests read the shipped table: no GEMMA4_PRECISION_* / GEMMA4_BFP8_MAX_CONTEXT from the shell (a run
+    with GEMMA4_PRECISION_LM_HEAD=bfp8 exported resolved the unknown model to {lm_head: bfp8})."""
+    for name in [k for k in os.environ if k.startswith("GEMMA4_PRECISION_")] + ["GEMMA4_BFP8_MAX_CONTEXT"]:
+        monkeypatch.delenv(name, raising=False)
+
+
 def test_repo_id_resolves_overrides():
     p = Gemma4Precision.load("google/gemma-4-31B-it", (1, 4))
     assert p.get("shared_mlp") == ttnn.bfloat8_b
@@ -543,27 +554,47 @@ def test_the_bfp8_ceiling_applies_on_the_mesh_it_was_measured_on(monkeypatch):
     downgrades a bfp8 module above it when one is set (GEMMA4_BFP8_MAX_CONTEXT)."""
     monkeypatch.delenv("GEMMA4_BFP8_MAX_CONTEXT", raising=False)
     o = Gemma4Precision.load("/x/gemma-4-31B-it", (1, 8), max_seq_len=262144)
-    assert o.get("shared_mlp") == ttnn.bfloat8_b
-    assert o.get("lm_head") == ttnn.bfloat8_b  # the (1,8) entry: the lm_head in bfp8 (2K prose gate neutral)
+    # "default" (shared_mlp, attention) merged with the (1,8) entry (lm_head, 2K prose gate neutral)
+    assert o._overrides == {"shared_mlp": ttnn.bfloat8_b, "attention": ttnn.bfloat8_b, "lm_head": ttnn.bfloat8_b}
+    assert Gemma4Precision.load("/x/gemma-4-31B-it", (8, 1), max_seq_len=262144)._overrides == o._overrides
     monkeypatch.setenv("GEMMA4_BFP8_MAX_CONTEXT", "131072")
     o = Gemma4Precision.load("/x/gemma-4-31B-it", (1, 8), max_seq_len=262144)
     assert o.get("shared_mlp") == ttnn.bfloat16
 
 
-def test_the_bfp8_ceiling_does_not_apply_on_a_mesh_where_bf16_will_not_fit():
+def _ceiling_table(tmp_path, monkeypatch):
+    """A table whose 31B entry declares the mesh-scoped ceiling form (no shipped entry declares one today)."""
+    table = {
+        "gemma-4-31B-it": {
+            "default": {"shared_mlp": "bfp8", "attention": "bfp8"},
+            "bfp8_max_context": {"1x8": {"shared_mlp": 131072}},
+        }
+    }
+    path = tmp_path / "precision_overrides.json"
+    path.write_text(json.dumps(table))
+    monkeypatch.setattr(precision_mod, "_PATH", str(path))
+    monkeypatch.delenv("GEMMA4_BFP8_MAX_CONTEXT", raising=False)
+
+
+def test_the_bfp8_ceiling_does_not_apply_on_a_mesh_where_bf16_will_not_fit(tmp_path, monkeypatch):
     """The downgrade DOUBLES those weights, so it may only be declared where
     bf16 fits. Applying it to every mesh hung Gemma4-31B on bh_quietbox_2
     (1x4) in model init -- 31B shared_mlp in bf16 at 262144 does not fit on
-    four chips, and the leg passed on main, which had no ceiling at all. A mesh
-    with no entry keeps bfp8, i.e. main's behaviour."""
+    four chips. A mesh-scoped ceiling applies on its mesh (and the transpose) only;
+    a mesh with no entry keeps bfp8."""
+    _ceiling_table(tmp_path, monkeypatch)
+    assert Gemma4Precision.load("/x/gemma-4-31B-it", (1, 8), max_seq_len=262144).get("shared_mlp") == ttnn.bfloat16
+    assert Gemma4Precision.load("/x/gemma-4-31B-it", (8, 1), max_seq_len=262144).get("shared_mlp") == ttnn.bfloat16
     o = Gemma4Precision.load("/x/gemma-4-31B-it", (1, 4), max_seq_len=262144)
-    assert o.get("shared_mlp") == ttnn.bfloat8_b
-    assert o.get("lm_head", ttnn.bfloat16) == ttnn.bfloat16  # the bfp8 lm_head is the (1,8) entry only
+    assert o.get("shared_mlp") == ttnn.bfloat8_b and o.get("attention") == ttnn.bfloat8_b
 
 
-def test_below_the_ceiling_bfp8_is_kept_on_the_measured_mesh():
-    o = Gemma4Precision.load("/x/gemma-4-31B-it", (1, 8), max_seq_len=131072)
-    assert o.get("shared_mlp") == ttnn.bfloat8_b
+def test_below_the_ceiling_bfp8_is_kept_on_the_measured_mesh(tmp_path, monkeypatch):
+    _ceiling_table(tmp_path, monkeypatch)
+    assert Gemma4Precision.load("/x/gemma-4-31B-it", (1, 8), max_seq_len=131072).get("shared_mlp") == ttnn.bfloat8_b
+    # the shipped table: the 4-chip meshes keep the bf16 lm_head (the bfp8 lm_head is the (1,8) entry only)
+    monkeypatch.undo()
+    assert Gemma4Precision.load("/x/gemma-4-31B-it", (1, 4)).get("lm_head", ttnn.bfloat16) == ttnn.bfloat16
 
 
 def test_column_mesh_takes_the_transposed_entry():

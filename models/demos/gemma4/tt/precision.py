@@ -103,8 +103,10 @@ class Gemma4Precision:
         # under the bf16 cache identity with no log line.
         model_entry = table.get(model_key) or {}
 
-        # Mesh-specific override wins over "default"
-        raw = model_entry.get(mesh_key) or model_entry.get(transposed_key) or model_entry.get("default") or {}
+        # "default" holds the variant's modules on every mesh; a mesh-shape key (the exact shape, else the transposed
+        # one) overrides it module by module, so a mesh entry lists only what differs on that mesh.
+        mesh_entry = model_entry.get(mesh_key) or model_entry.get(transposed_key) or {}
+        raw = {**(model_entry.get("default") or {}), **mesh_entry}
         resolved = {}
         for k, v in raw.items():
             if k not in KNOWN_MODULES:
@@ -116,20 +118,19 @@ class Gemma4Precision:
                 )
             resolved[k] = _DTYPE_BY_NAME[v]
 
-        # Per-module context ceiling for bfp8. bfp8 error accumulates with
-        # sequence length, but NOT uniformly across modules -- MEASURED on 31B /
-        # tp=8 at a true 261,944-token prompt (same commit, build and prompt;
-        # only the override differs):
+        # Per-module context ceiling for bfp8 (``bfp8_max_context``). No table entry declares one today: the 31B
+        # ceiling was dropped after a re-measurement on the Galaxy (1,8) engine (2026-11-10, current tree: bfp8
+        # shared_mlp passes 248K needles on every row, a 255K verbatim echo and 247K free generation). The mechanism
+        # stays for a variant or mesh that needs it. HISTORY, the measurement the ceiling came from, on an older tree
+        # (31B, tp=8, a true 261,944-token prompt; same commit, build and prompt; only the override differs):
         #
         #     attention + shared_mlp bfp8 : degenerate ("...laught laught...")
         #     shared_mlp bfp8 only        : degenerate ("...la la la la...")
         #     attention  bfp8 only        : COHERENT, 16.98 tok/s/u
         #     all bf16                    : COHERENT, 16.15 tok/s/u
         #
-        # So shared_mlp is the module that cannot hold bfp8 at very long context,
-        # and attention can -- keeping it quantized is both faster and closer to
-        # the <=128k configuration. 128k is coherent with BOTH in bfp8, so the
-        # ceiling sits between 131072 and 262144.
+        # On that tree shared_mlp could not hold bfp8 at very long context and attention could; 128k was coherent
+        # with both in bfp8.
         #
         # This was invisible for months because a path-resolution bug (fixed in
         # a73264153281) made snapshot-style model paths miss the override table
@@ -171,8 +172,8 @@ class Gemma4Precision:
                 detail = ", ".join(f"{m} (>{l})" for m, l in sorted(downgraded))
                 logger.warning(
                     f"Gemma4 precision: max_seq_len={served} exceeds the bfp8 context ceiling for "
-                    f"{model_key}; downgrading {detail} bfp8 -> bf16 (bfp8 degenerates at very long "
-                    "context). Costs memory/throughput; set GEMMA4_BFP8_MAX_CONTEXT=0 to disable."
+                    f"{model_key}; downgrading {detail} bfp8 -> bf16 (the declared "
+                    "context ceiling). Costs memory/throughput; set GEMMA4_BFP8_MAX_CONTEXT=0 to disable."
                 )
         # Per-module env override (``GEMMA4_PRECISION_EXPERTS=bfp8``, ``GEMMA4_PRECISION_ATTENTION=bf16``, ...):
         # applied last, so it wins over the table and the context ceiling. Unset -> no change. The value lands

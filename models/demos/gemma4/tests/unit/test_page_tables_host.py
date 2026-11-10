@@ -15,6 +15,7 @@ import torch.nn.functional as F
 
 import models.demos.gemma4.tt.ccl as ccl_module
 import models.demos.gemma4.tt.model as model_module
+import ttnn
 from models.common.utility_functions import is_blackhole
 from models.demos.gemma4.tests.hf_reference_cache import hf_reference_cache_dir, hf_reference_key, hf_reference_logits
 from models.demos.gemma4.tt.async_decode import merge_async_ahead_decode_tokens
@@ -27,6 +28,7 @@ from models.demos.gemma4.tt.capacity import (
     max_cores_for_queue_depth,
     reads_in_flight,
 )
+from models.demos.gemma4.tt.compute_config import global_prefill_sdpa_fidelity
 from models.demos.gemma4.tt.dram_sharded import prefill_row_chunks
 from models.demos.gemma4.tt.generator import (
     _BLACKHOLE_MAX_BATCHED_PREFILL_USERS,
@@ -948,6 +950,8 @@ KNOBS = (
     "GEMMA4_PREFILL_SDPA_GRID",
     "GEMMA4_PREFILL_SDPA_EXP_APPROX",
     "GEMMA4_PREFILL_SDPA_PROGCFG",
+    "GEMMA4_PREFILL_SDPA_NARROW",
+    "GEMMA4_PREFILL_SDPA_GLOBAL_FIDELITY",
     "GEMMA4_TEST_GRID",
 )
 
@@ -1024,6 +1028,25 @@ def test_wide_on_the_galaxy_grid_and_the_12b_defaults(monkeypatch):
     pc = ops.prefill_sdpa_program_config(512, 4096, sliding_window=None, num_heads=4, device_grid=(12, 10))
     assert _grid(pc) == (8, 4) and (pc.q_chunk_size, pc.k_chunk_size) == (128, 128)
     monkeypatch.delenv("GEMMA4_PREFILL_SDPA_WIDE")
+    # GEMMA4_PREFILL_SDPA_NARROW=wide (opt-in): the narrow chips take the whole grid at q 128, k capped by the window
+    monkeypatch.delenv("GEMMA4_PREFILL_SDPA_PROGCFG", raising=False)  # the narrow rule, not the fixed configs
+    monkeypatch.setenv("GEMMA4_PREFILL_SDPA_NARROW", "wide")
+    pc = ops.prefill_sdpa_program_config(256, 4096, sliding_window=1024, num_heads=4, device_grid=(12, 10))
+    if is_blackhole():
+        assert _grid(pc) == (12, 10) and (pc.q_chunk_size, pc.k_chunk_size) == (128, 128)
+        pc = ops.prefill_sdpa_program_config(256, 4096, sliding_window=128, num_heads=4, device_grid=(12, 10))
+        assert (pc.q_chunk_size, pc.k_chunk_size) == (128, 64)
+    monkeypatch.delenv("GEMMA4_PREFILL_SDPA_NARROW")
+    # GEMMA4_PREFILL_SDPA_GLOBAL_FIDELITY (opt-in): hifi4 by default (an empty value too), hifi2, anything else refused
+    assert global_prefill_sdpa_fidelity() == ttnn.MathFidelity.HiFi4
+    monkeypatch.setenv("GEMMA4_PREFILL_SDPA_GLOBAL_FIDELITY", "")
+    assert global_prefill_sdpa_fidelity() == ttnn.MathFidelity.HiFi4
+    monkeypatch.setenv("GEMMA4_PREFILL_SDPA_GLOBAL_FIDELITY", "HiFi2")
+    assert global_prefill_sdpa_fidelity() == ttnn.MathFidelity.HiFi2
+    monkeypatch.setenv("GEMMA4_PREFILL_SDPA_GLOBAL_FIDELITY", "lofi")
+    with pytest.raises(ValueError):  # allow-pytest.raises (pure)
+        global_prefill_sdpa_fidelity()
+    monkeypatch.delenv("GEMMA4_PREFILL_SDPA_GLOBAL_FIDELITY")
     monkeypatch.setenv("GEMMA4_PREFILL_SDPA_PROGCFG", "0")  # the op defaults everywhere
     assert ops.prefill_sdpa_program_config(256, 2048, sliding_window=None, num_heads=8, device_grid=(13, 10)) is None
 

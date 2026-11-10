@@ -27,6 +27,7 @@ from models.common.sampling.generator import SamplingGenerator
 from models.common.utility_functions import is_blackhole
 from models.demos.gemma4.config import gemma4_kv_bfp8_enabled
 from models.demos.gemma4.tt.attention import Gemma4AttentionConfig, flush_deferred_bounded_fills
+from models.demos.gemma4.tt.compute_config import global_prefill_sdpa_fidelity
 from models.demos.gemma4.tt.generator_trace import short_prefill_stash_skipped
 from models.demos.gemma4.tt.layer import Gemma4DecoderLayer
 from models.demos.gemma4.tt.mesh_orientation import decode_flag, set_decode_fusion_profile
@@ -511,6 +512,7 @@ class Gemma4Model:
         router_dtype = precision.get("router", dtype)
         embedding_dtype = precision.get("embedding", dtype)
         lm_head_dtype = precision.get("lm_head", dtype)
+        global_prefill_sdpa_fidelity()  # GEMMA4_PREFILL_SDPA_GLOBAL_FIDELITY: a bad value fails at build
 
         # KV sharing map: layers after (full_n_layers - num_kv_shared_layers) share KV
         # from the last non-shared layer of the same type

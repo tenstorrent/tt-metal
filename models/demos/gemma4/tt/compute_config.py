@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Gemma4 compute helpers — production defaults only (no A/B precision knobs).
+"""Gemma4 compute helpers — production defaults, plus one opt-in A/B knob (GEMMA4_PREFILL_SDPA_GLOBAL_FIDELITY).
 
 GeLU: ``ttnn.GeluVariant.Accurate`` (exact SFPU path). Prefer this over
 ``Tanh`` / FastLut for accuracy; HF uses ``gelu_pytorch_tanh``, but Accurate
@@ -60,8 +60,9 @@ def global_prefill_sdpa_fidelity():
     """Math fidelity of the global-layer (head_dim 512) prefill SDPA: ``GEMMA4_PREFILL_SDPA_GLOBAL_FIDELITY`` =
     ``hifi4`` (default) or ``hifi2``. One Galaxy chip, 4 Q / 1 KV heads, bfp8 paged K/V, a 4096-token chunk on the
     whole grid (2026-11-10): 51 -> 36 ms after a 64K cached prefix, 101 -> 71 ms after 128K, PCC against torch
-    0.99964 -> 0.99958 and 0.99928 -> 0.99923. Read at call time."""
-    name = os.environ.get(GLOBAL_PREFILL_SDPA_FIDELITY_ENV, "hifi4").strip().lower()
+    0.99964 -> 0.99958 and 0.99928 -> 0.99923; HiFi2 failed the 2K prose gate on the 31B, so it stays opt-in. Read at call
+    time (an unset or empty value is hifi4); the model build calls it once so a bad value fails at load."""
+    name = (os.environ.get(GLOBAL_PREFILL_SDPA_FIDELITY_ENV) or "hifi4").strip().lower() or "hifi4"
     if name not in _SDPA_FIDELITIES:
         raise ValueError(f"{GLOBAL_PREFILL_SDPA_FIDELITY_ENV}={name!r}: expected one of {sorted(_SDPA_FIDELITIES)}")
     return _SDPA_FIDELITIES[name]

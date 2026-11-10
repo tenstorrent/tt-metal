@@ -705,9 +705,11 @@ def decode_forward(
     batch_size = tt_q.shape[1]
     device_grid = mesh_device.compute_with_storage_grid_size()
     if config.head_dim >= 512 and batch_size == 1 and k_cache.dtype != ttnn.bfloat8_b:
-        # Single-user global layers over a bf16 cache: smaller grid — head_dim=512 needs more L1 per core. A bfp8
-        # cache takes the whole grid (one BH chip, 4 Q / 1 KV heads, 32 cores per head: 0.493 -> 0.453 ms per
-        # global layer at 131K, 0.175 -> 0.164 at 32K, same output; 2026-11-10).
+        # Single-user global layers over a bf16 cache keep the (8,4) grid: only the bfp8 cache was measured on the
+        # whole grid. The cores per head are min(grid, max_cores_per_head_batch) on both grids (16 by default, 32
+        # under GEMMA4_SDPA_MAX_CORES_PER_HEAD=32), so the grid only spreads the same cores; one BH chip, 4 Q / 1 KV
+        # heads, bfp8 cache, 32 cores per head: 0.493 -> 0.453 ms per global layer at 131K, 0.175 -> 0.164 at 32K,
+        # same output (2026-11-10).
         sdpa_grid = ttnn.CoreCoord(8, 4)
     else:
         # Sliding layers, and all batched decode: use the full device compute grid.
@@ -825,9 +827,9 @@ def decode_forward(
 
 
 def _packed_sdpa_grid(config, mesh_device):
-    """SDPA grid for the packed verify — mirrors the single-token decode's
-    choice: small grid for global layers (head_dim=512 needs more L1/core),
-    full device grid for sliding layers."""
+    """SDPA grid for the packed verify: the (8,4) grid for global layers (head_dim 512, the planner sizes its L1 per
+    core against that grid), the full device grid for sliding layers. The single-token decode's batch-1 global layers
+    take the whole grid over a bfp8 cache; the packed verify has not been measured there."""
     if config.head_dim >= 512:
         return ttnn.CoreCoord(8, 4)
     device_grid = mesh_device.compute_with_storage_grid_size()

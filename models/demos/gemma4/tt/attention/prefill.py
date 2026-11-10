@@ -2181,7 +2181,10 @@ def prefill_forward(
     # (forced-FP32 reduce accumulation removed).
     sdpa_compute_kernel_config = ttnn.init_device_compute_kernel_config(
         tt_q.device().arch(),
-        math_fidelity=sdpa_math_fidelity(ttnn.MathFidelity.HiFi4),
+        # global layers take GEMMA4_PREFILL_SDPA_GLOBAL_FIDELITY as the single-user paths do (hifi4 unless set)
+        math_fidelity=global_prefill_sdpa_fidelity()
+        if not config.is_sliding
+        else sdpa_math_fidelity(ttnn.MathFidelity.HiFi4),
         math_approx_mode=False,
         fp32_dest_acc_en=sdpa_fp32_dest_acc_en(True),
         packer_l1_acc=False,
