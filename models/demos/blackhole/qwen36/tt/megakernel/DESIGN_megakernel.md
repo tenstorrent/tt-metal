@@ -286,3 +286,18 @@ critical path.
 Overlappable candidates: the MLP AR send starts per down chunk (DNPIPE publication), hiding part of the
 reduce-scatter under the down tail. The gather multicast for the next phase can overlap the consumer's γ-folded
 weight prefetch, which is already resident. Target on-path **≤ 15 µs** for a real margin at both u8 and u1.
+
+## 8c. Correction: steady attention layer = 377 µs (2026-11-10)
+The attention track's true steady figure is the mean of the middle layers of a 5-layer pass: **377 µs** (GUPRE,
+NBB=1, 16 KB budget). The earlier 368 µs was a last layer, which is 40-60 µs cheaper because it has no next-layer
+prefetch. Non-AR per layer at u8: GDN 102, attention 341. The u1 attention is not yet measured in the engine; the
+last row assumes it grows like u8 (+55 µs).
+
+| On-path µs per AR | 21.7 | 18 | 15 | 12 | break-even |
+|---|---|---|---|---|---|
+| u8 (gate 13.7) | **13.63** (0.07 margin) | 13.16 | **12.77** | 12.39 | 22.2 µs |
+| u1 (gate 9.4) | 9.20 | 8.72 | **8.34** | 7.96 | 23.3 µs |
+| u1 if attention +55 µs | 10.08 ✗ | 9.60 ✗ | **9.22** | 8.84 | 16.4 µs |
+
+**The ≤15 µs on-path AR target is now REQUIRED, not optional.** At 21.7 µs, u8 has essentially no margin, and u1 fails
+if its attention layer grows like u8's. At 15 µs: u8 12.77 (0.9 ms margin), u1 8.34-9.22.
