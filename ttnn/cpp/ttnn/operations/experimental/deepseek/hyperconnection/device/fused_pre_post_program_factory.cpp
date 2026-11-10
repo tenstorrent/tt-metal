@@ -58,15 +58,20 @@ FusedPrePostProgramFactory::cached_program_t FusedPrePostProgramFactory::create(
     const auto& fused_w = tensor_args.fused_w;
     const auto& pre_bias = tensor_args.pre_bias;
     const auto& post_bias = tensor_args.post_bias;
-    const auto& hidden_streams = tensor_args.hidden_streams;
-    auto& post_out = tensor_return_value[0];
-    auto& collapsed_out = tensor_return_value[1];
-    auto& comb_w_mat_out = tensor_return_value[2];
+    // Without hidden_streams there is no collapse: outputs are {post, comb_w_mat, pre}.
+    const bool collapse = tensor_args.hidden_streams.has_value();
     const bool use_pre_mix = tensor_args.pre_mix.has_value();
+    const bool emit_pre = use_pre_mix || !collapse;
+    auto& post_out = tensor_return_value[0];
+    auto& comb_w_mat_out = tensor_return_value[collapse ? 2 : 1];
+    const Buffer* hidden_buffer = collapse ? tensor_args.hidden_streams->buffer() : nullptr;
+    const uint32_t hidden_addr = collapse ? hidden_buffer->address() : 0u;
+    const Buffer* collapsed_buffer = collapse ? tensor_return_value[1].buffer() : nullptr;
+    const uint32_t collapsed_addr = collapse ? collapsed_buffer->address() : 0u;
     const Buffer* pre_mix_buffer = use_pre_mix ? tensor_args.pre_mix->buffer() : nullptr;
     const uint32_t pre_mix_addr = use_pre_mix ? pre_mix_buffer->address() : 0u;
-    const Buffer* pre_out_buffer = use_pre_mix ? tensor_return_value[3].buffer() : nullptr;
-    const uint32_t pre_out_addr = use_pre_mix ? pre_out_buffer->address() : 0u;
+    const Buffer* pre_out_buffer = emit_pre ? tensor_return_value[collapse ? 3 : 2].buffer() : nullptr;
+    const uint32_t pre_out_addr = emit_pre ? pre_out_buffer->address() : 0u;
 
     const uint32_t hc = operation_attributes.num_streams;
 
@@ -81,7 +86,7 @@ FusedPrePostProgramFactory::cached_program_t FusedPrePostProgramFactory::create(
     // one tile per token; hidden_streams contributes d_tiles per token (H <= 32, so a token's [H,D] slab is a single
     // tile row) and collapsed the same.
     const uint32_t fused_w_row_tiles = fused_w.padded_shape()[-1] / constants::TILE_WIDTH;
-    const uint32_t d_tiles = hidden_streams.padded_shape()[-1] / constants::TILE_WIDTH;
+    const uint32_t d_tiles = collapse ? tensor_args.hidden_streams->padded_shape()[-1] / constants::TILE_WIDTH : 0u;
     const uint32_t num_tokens = static_cast<uint32_t>(fused_w.logical_shape()[2]);
 
     // Tokens are fully independent here, so they are the unit of work: one core per token up
@@ -107,14 +112,16 @@ FusedPrePostProgramFactory::cached_program_t FusedPrePostProgramFactory::create(
     make_cb(kCbPostW, tile_buffering);
     make_cb(kCbPreBias, 1);
     make_cb(kCbPostBias, 1);
-    make_cb(kCbHidden, d_tiles);
+    if (collapse) {
+        make_cb(kCbHidden, d_tiles);
+        make_cb(kCbCollapsed, d_tiles);
+    }
     make_cb(kCbPostOut, tile_buffering);
-    make_cb(kCbCollapsed, d_tiles);
     make_cb(kCbScratch, tile_buffering);
     make_cb(kCbPre, tile_buffering);
     make_cb(kCbCombW, tile_buffering);
     make_cb(kCbPostCol, 1);
-    if (use_pre_mix) {
+    if (emit_pre) {
         make_cb(kCbPreOut, tile_buffering);
         make_cb(kCbPreRow, 1);
     }
@@ -132,17 +139,26 @@ FusedPrePostProgramFactory::cached_program_t FusedPrePostProgramFactory::create(
         fused_w.buffer()->page_size(),
         kCbPre,
         use_pre_mix ? 1u : 0u,
+        collapse ? 1u : 0u,
     };
     TensorAccessorArgs(fused_w.buffer()).append_to(reader_compile_time_args);
     TensorAccessorArgs(pre_bias.buffer()).append_to(reader_compile_time_args);
     TensorAccessorArgs(post_bias.buffer()).append_to(reader_compile_time_args);
-    TensorAccessorArgs(hidden_streams.buffer()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(hidden_buffer).append_to(reader_compile_time_args);
     TensorAccessorArgs(pre_mix_buffer).append_to(reader_compile_time_args);
 
     std::vector<uint32_t> writer_compile_time_args = {
-        kCbPostOut, kCbCollapsed, kCbCombW, kCbPostCol, hc, use_pre_mix ? 1u : 0u, kCbPreOut, kCbPreRow};
+        kCbPostOut,
+        kCbCollapsed,
+        kCbCombW,
+        kCbPostCol,
+        hc,
+        emit_pre ? 1u : 0u,
+        kCbPreOut,
+        kCbPreRow,
+        collapse ? 1u : 0u};
     TensorAccessorArgs(post_out.buffer()).append_to(writer_compile_time_args);
-    TensorAccessorArgs(collapsed_out.buffer()).append_to(writer_compile_time_args);
+    TensorAccessorArgs(collapsed_buffer).append_to(writer_compile_time_args);
     TensorAccessorArgs(comb_w_mat_out.buffer()).append_to(writer_compile_time_args);
     TensorAccessorArgs(pre_out_buffer).append_to(writer_compile_time_args);
 
@@ -165,8 +181,9 @@ FusedPrePostProgramFactory::cached_program_t FusedPrePostProgramFactory::create(
         post_scale_bits,
         eps_bits,
         two_bits,
-        use_pre_mix ? 1u : 0u,
+        emit_pre ? 1u : 0u,
         kCbPreOut,
+        collapse ? 1u : 0u,
     };
 
     const KernelHandle reader_kernel_id =
@@ -202,7 +219,7 @@ FusedPrePostProgramFactory::cached_program_t FusedPrePostProgramFactory::create(
             {fused_w.buffer()->address(),
              pre_bias.buffer()->address(),
              post_bias.buffer()->address(),
-             hidden_streams.buffer()->address(),
+             hidden_addr,
              hc,
              fused_w_row_tiles,
              d_tiles,
@@ -214,7 +231,7 @@ FusedPrePostProgramFactory::cached_program_t FusedPrePostProgramFactory::create(
             writer_kernel_id,
             core,
             {post_out.buffer()->address(),
-             collapsed_out.buffer()->address(),
+             collapsed_addr,
              comb_w_mat_out.buffer()->address(),
              d_tiles,
              start_token,
@@ -244,12 +261,14 @@ void FusedPrePostProgramFactory::override_runtime_arguments(
     const uint32_t fused_w_addr = tensor_args.fused_w.buffer()->address();
     const uint32_t pre_bias_addr = tensor_args.pre_bias.buffer()->address();
     const uint32_t post_bias_addr = tensor_args.post_bias.buffer()->address();
-    const uint32_t hidden_addr = tensor_args.hidden_streams.buffer()->address();
+    const bool collapse = tensor_args.hidden_streams.has_value();
+    const bool emit_pre = tensor_args.pre_mix.has_value() || !collapse;
+    const uint32_t hidden_addr = collapse ? tensor_args.hidden_streams->buffer()->address() : 0u;
     const uint32_t pre_mix_addr = tensor_args.pre_mix.has_value() ? tensor_args.pre_mix->buffer()->address() : 0u;
     const uint32_t post_addr = tensor_return_value[0].buffer()->address();
-    const uint32_t collapsed_addr = tensor_return_value[1].buffer()->address();
-    const uint32_t comb_w_addr = tensor_return_value[2].buffer()->address();
-    const uint32_t pre_out_addr = tensor_args.pre_mix.has_value() ? tensor_return_value[3].buffer()->address() : 0u;
+    const uint32_t collapsed_addr = collapse ? tensor_return_value[1].buffer()->address() : 0u;
+    const uint32_t comb_w_addr = tensor_return_value[collapse ? 2 : 1].buffer()->address();
+    const uint32_t pre_out_addr = emit_pre ? tensor_return_value[collapse ? 3 : 2].buffer()->address() : 0u;
 
     auto& reader_args_by_core = GetRuntimeArgs(program, shared.reader_kernel_id);
     auto& writer_args_by_core = GetRuntimeArgs(program, shared.writer_kernel_id);

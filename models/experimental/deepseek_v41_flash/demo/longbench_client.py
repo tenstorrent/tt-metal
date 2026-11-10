@@ -25,7 +25,7 @@ template, as the server would, so the fit check errs on the long side against th
 
 Like the demo it takes the first ``--count`` (20) ``length == "short"`` questions of ``data.json`` in file order
 (``--indices`` picks exactly some, ``--seed`` draws at random), prefills each as one prompt and asks for the
-answer. The prompt is the demo's LongBench-v2 zero-shot user turn (:func:`_longbench_prompt`), rendered by the
+answer. ``--longest-first`` keeps that selection and asks it longest prompt first. The prompt is the demo's LongBench-v2 zero-shot user turn (:func:`_longbench_prompt`), rendered by the
 server from the chat messages, with ``thinking: true`` and ``reasoning_effort: "max"`` as
 ``_tokenize_chat(..., "thinking", "max")`` renders it in the demo; the letter is read out of the reply with the
 demo's patterns (:func:`_extract_choice`).
@@ -515,6 +515,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--indices", help="exactly these data.json indices, comma-separated (e.g. 1,6,21)")
     p.add_argument("--seed", type=int, default=None, help="draw the questions at random with this seed, not in order")
     p.add_argument(
+        "--longest-first",
+        action="store_true",
+        help="ask the selected questions longest prompt first (by counted prompt tokens, descending)",
+    )
+    p.add_argument(
         "--length",
         default="short",
         choices=("short", "medium", "long", "any"),
@@ -642,6 +647,8 @@ def main(argv: list[str] | None = None) -> int:
     if not asked:
         print(f"no question fits {client.base_url}", file=sys.stderr)
         return 1
+    if args.longest_first:
+        asked.sort(key=lambda question: question.prompt_tokens, reverse=True)
 
     if not args.thinking:
         mode = "thinking left to the server/API"
@@ -649,8 +656,9 @@ def main(argv: list[str] | None = None) -> int:
         mode = f"thinking as {args.model} defaults (the API takes no effort field)"
     else:
         mode = f"thinking at effort {args.reasoning_effort or 'the server default'}"
+    order = "longest prompt first" if args.longest_first else "in selection order"
     print(
-        f"\nasking {len(asked)} question(s), {mode}, up to {args.max_tokens} new tokens each, "
+        f"\nasking {len(asked)} question(s), {order}, {mode}, up to {args.max_tokens} new tokens each, "
         f"{args.concurrency} at a time",
         flush=True,
     )

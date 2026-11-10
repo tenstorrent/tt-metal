@@ -1920,6 +1920,7 @@ class DeepSeekV41Model(DeepSeekV4Model):
             lm_head=lm_head,
             kv_only=kv_only,
             image_rows=self.image_rows,
+            balance_dram_banks=self.balance_dram_banks,
             **kwargs,
         )
         # Each receiver FIFO is permanent L1 on its stage, so a second set would cost prefill's ops that room.

@@ -73,7 +73,9 @@ def test_engram_prefill(device, layer, seq_len):
     def to_device(t):
         return ttnn.from_torch(t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
 
-    out = ttnn.to_torch(engram(to_device(streams), to_device(rows.unsqueeze(0)))).float()
+    # The prefill streams are stream-major, [1, hc, T, D].
+    out = engram(to_device(streams.permute(0, 2, 1, 3).contiguous()), to_device(rows.unsqueeze(0)))
+    out = ttnn.to_torch(out).float().permute(0, 2, 1, 3)
     assert out.shape == expected.shape, (tuple(out.shape), tuple(expected.shape))
     what = f"layer {layer} T {seq_len}"
     _pcc(expected, out, PCC, what)

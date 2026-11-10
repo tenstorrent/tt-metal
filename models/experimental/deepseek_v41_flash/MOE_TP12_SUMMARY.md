@@ -126,11 +126,13 @@ cut into K-row pieces, so every expert's shard count is a multiple of 8:
   (shard id `k_shard * col_shards + col`), so the CB contents and the compute side are unchanged.
 - **Op:** the factory derives `gate_up_k_shards` from the tensor's shard shape and passes it to
   all three readers. The device op accepts any whole-tile divisor of K as the gate_up shard rows.
-- **Opt-in:** `balance_dram_banks=False` by default on `DeepSeekV4PreloadedExperts` and
-  `DeepSeekV41PreloadedExperts`.
-  - Prefill (`fused_experts_prefill`) reads the same expert tensors and still requires full-K
-    gate_up shards, so it would stop with an error on this layout.
-  - The full model keeps the whole-K layout until the prefill op supports K-pieces.
+- **Default:** `balance_dram_banks=True` on `DeepSeekV4PreloadedExperts` and
+  `DeepSeekV41PreloadedExperts`, which is what both models build (decode and prefill).
+  - It started out opt-in, because `fused_experts_prefill` required full-K gate_up shards and would
+    have stopped with an error on this layout. The prefill op now accepts K-pieces, so both models
+    keep the banked layout.
+  - Pass `False` to build the whole-K layout the block tests compare against (and
+    `--no-balance-dram-banks` to `tools/fill_expert_cache.py` to write those cache files).
 - **Weight cache:** the gate_up cache name gets a `.k<N>` tag. A cache hit restores the shard
   layout the tensor was saved with and ignores the requested `memory_config`. Without the tag, the
   first banked run silently loaded the whole-K layout.

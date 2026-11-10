@@ -131,8 +131,9 @@ def test_decoder_layer_prefill(device, layers, seq_len, chunk):
         shared = PrefillShared()
         for j, i in enumerate(layers):
             layer = decoder_layers[i]
+            # The prefill streams are stream-major, [1, hc, T, D].
             out, out_pre = layer(
-                _to_device(streams[j, start : start + chunk].unsqueeze(0), device),
+                _to_device(streams[j, start : start + chunk].transpose(0, 1).unsqueeze(0).contiguous(), device),
                 _to_device(pre_mixes[j, start : start + chunk].reshape(1, chunk, 1, hc), device),
                 states[i],
                 shared,
@@ -142,7 +143,7 @@ def test_decoder_layer_prefill(device, layers, seq_len, chunk):
                     else None
                 ),
             )
-            actual[i][0].append(ttnn.to_torch(out).reshape(chunk, hc, -1).float())
+            actual[i][0].append(ttnn.to_torch(out).reshape(hc, chunk, -1).transpose(0, 1).float())
             actual[i][1].append(ttnn.to_torch(out_pre).reshape(chunk, hc).float())
         for tensor in (shared.entry_idx, shared.candidates):
             if tensor is not None:

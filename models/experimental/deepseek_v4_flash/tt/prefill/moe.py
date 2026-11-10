@@ -35,7 +35,7 @@ The pieces, per call:
 
 Supported shapes:
 
-* ``T`` a multiple of 32. The routed op handles up to ``MAX_OP_TOKENS`` (512) tokens per call, so a
+* ``T`` a multiple of 32. The routed op handles up to ``MAX_OP_TOKENS`` tokens per call, so a
   longer chunk is fed to it in slices of that size; the router and the shared expert see all ``T``
   rows at once.
 * The routed op is built for the decode topology: ``D == 4096`` and a per-chip ``I_local == 512``
@@ -61,8 +61,10 @@ from ..decode.moe import (
 from ..weight_cache import WeightCache, _as_cache
 
 # Most token rows one ``fused_experts_prefill`` call takes (the op keeps every token's routing entry in
-# L1: ``kMaxTokens`` in ``fused_experts_prefill_types.hpp``).
-MAX_OP_TOKENS = 512
+# L1: ``kMaxTokens`` in ``fused_experts_prefill_types.hpp``). Mirrors the op; a chunk that fits in one call
+# is one call, and one call reads every expert's weights once, so this must not be smaller than the chunk
+# size the model runs (``DEEPSEEK_V4_PREFILL_CHUNK``, default 1024).
+MAX_OP_TOKENS = 1024
 # Token rows are tile aligned everywhere in this module.
 ALIGNMENT = 32
 

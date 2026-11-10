@@ -17,7 +17,6 @@ void validate_tensors(const FusedPrePostParams& attributes, const FusedPrePostIn
     const auto& fused_w = tensor_args.fused_w;
     const auto& pre_bias = tensor_args.pre_bias;
     const auto& post_bias = tensor_args.post_bias;
-    const auto& hidden_streams = tensor_args.hidden_streams;
 
     TT_FATAL(
         fused_w.storage_type() == StorageType::DEVICE, "fused_hyperconnection_pre_post: fused_w must be on device");
@@ -25,9 +24,6 @@ void validate_tensors(const FusedPrePostParams& attributes, const FusedPrePostIn
         pre_bias.storage_type() == StorageType::DEVICE, "fused_hyperconnection_pre_post: pre_bias must be on device");
     TT_FATAL(
         post_bias.storage_type() == StorageType::DEVICE, "fused_hyperconnection_pre_post: post_bias must be on device");
-    TT_FATAL(
-        hidden_streams.storage_type() == StorageType::DEVICE,
-        "fused_hyperconnection_pre_post: hidden_streams must be on device");
 
     TT_FATAL(
         fused_w.layout() == Layout::TILE || fused_w.layout() == Layout::ROW_MAJOR,
@@ -35,15 +31,10 @@ void validate_tensors(const FusedPrePostParams& attributes, const FusedPrePostIn
         fused_w.layout());
     TT_FATAL(pre_bias.layout() == Layout::TILE, "fused_hyperconnection_pre_post: pre_bias must be TILE layout");
     TT_FATAL(post_bias.layout() == Layout::TILE, "fused_hyperconnection_pre_post: post_bias must be TILE layout");
-    TT_FATAL(
-        hidden_streams.layout() == Layout::TILE, "fused_hyperconnection_pre_post: hidden_streams must be TILE layout");
 
     TT_FATAL(fused_w.dtype() == DataType::BFLOAT16, "fused_hyperconnection_pre_post: fused_w must be BFLOAT16");
     TT_FATAL(pre_bias.dtype() == DataType::BFLOAT16, "fused_hyperconnection_pre_post: pre_bias must be BFLOAT16");
     TT_FATAL(post_bias.dtype() == DataType::BFLOAT16, "fused_hyperconnection_pre_post: post_bias must be BFLOAT16");
-    TT_FATAL(
-        hidden_streams.dtype() == DataType::BFLOAT16,
-        "fused_hyperconnection_pre_post: hidden_streams must be BFLOAT16");
 
     TT_FATAL(
         pre_bias.logical_shape() == post_bias.logical_shape(),
@@ -52,7 +43,6 @@ void validate_tensors(const FusedPrePostParams& attributes, const FusedPrePostIn
     const uint32_t hc = attributes.num_streams;
     const auto& fused_shape = fused_w.logical_shape();
     const auto& bias_shape = pre_bias.logical_shape();
-    const auto& hidden_shape = hidden_streams.logical_shape();
 
     TT_FATAL(
         fused_shape.rank() == 4,
@@ -81,7 +71,24 @@ void validate_tensors(const FusedPrePostParams& attributes, const FusedPrePostIn
         "fused_hyperconnection_pre_post: pre_bias last dim must be H={}, got {}",
         hc,
         bias_shape[-1]);
+    TT_FATAL(hc <= 32, "fused_hyperconnection_pre_post: only H<=32 (single comb tile) is supported, got H={}", hc);
 
+    if (!tensor_args.hidden_streams.has_value()) {
+        TT_FATAL(
+            !tensor_args.pre_mix.has_value(),
+            "fused_hyperconnection_pre_post: pre_mix only applies to the collapse, which needs hidden_streams");
+        return;
+    }
+    const auto& hidden_streams = *tensor_args.hidden_streams;
+    TT_FATAL(
+        hidden_streams.storage_type() == StorageType::DEVICE,
+        "fused_hyperconnection_pre_post: hidden_streams must be on device");
+    TT_FATAL(
+        hidden_streams.layout() == Layout::TILE, "fused_hyperconnection_pre_post: hidden_streams must be TILE layout");
+    TT_FATAL(
+        hidden_streams.dtype() == DataType::BFLOAT16,
+        "fused_hyperconnection_pre_post: hidden_streams must be BFLOAT16");
+    const auto& hidden_shape = hidden_streams.logical_shape();
     TT_FATAL(
         hidden_shape.rank() == 4,
         "fused_hyperconnection_pre_post: hidden_streams must be rank-4 [B,S,H,D], got rank {}",
@@ -99,7 +106,6 @@ void validate_tensors(const FusedPrePostParams& attributes, const FusedPrePostIn
         "fused_hyperconnection_pre_post: hidden_streams stream dim ({}) must match H ({})",
         hidden_shape[2],
         hc);
-    TT_FATAL(hc <= 32, "fused_hyperconnection_pre_post: only H<=32 (single comb tile) is supported, got H={}", hc);
 
     if (tensor_args.pre_mix.has_value()) {
         const auto& pre_mix = *tensor_args.pre_mix;
@@ -138,7 +144,6 @@ void FusedPrePostDeviceOperation::validate_on_program_cache_hit(
 FusedPrePostDeviceOperation::spec_return_value_t FusedPrePostDeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& fused_w = tensor_args.fused_w;
-    const auto& hidden_streams = tensor_args.hidden_streams;
     const uint32_t hc = operation_attributes.num_streams;
     const auto output_layout = tt::tt_metal::TensorLayout(
         fused_w.dtype(), tt::tt_metal::PageConfig(Layout::TILE), operation_attributes.output_mem_config);
@@ -148,17 +153,23 @@ FusedPrePostDeviceOperation::spec_return_value_t FusedPrePostDeviceOperation::co
     //   collapsed = pre[1,H] @ hidden[H,D] -> [1,D].
     //   comb_w_mat = comb_w slice of fused_w, laid out as the [H,H] grid (one tile).
     // Tokens stay on dim 1 so the caller can split it back into [B,S,...] with a view reshape.
-    const auto& hidden_shape = hidden_streams.logical_shape();
     const uint32_t num_tokens = static_cast<uint32_t>(fused_w.logical_shape()[2]);
     const ttnn::Shape post_shape({1, num_tokens, hc, 1});
-    const ttnn::Shape collapsed_shape({1, num_tokens, 1, hidden_shape[-1]});
     const ttnn::Shape comb_shape({1, num_tokens, hc, hc});
+    const ttnn::Shape pre_shape({1, num_tokens, 1, hc});
+    if (!tensor_args.hidden_streams.has_value()) {
+        return {
+            tt::tt_metal::TensorSpec(post_shape, output_layout),
+            tt::tt_metal::TensorSpec(comb_shape, output_layout),
+            tt::tt_metal::TensorSpec(pre_shape, output_layout)};
+    }
+    const ttnn::Shape collapsed_shape({1, num_tokens, 1, tensor_args.hidden_streams->logical_shape()[-1]});
     spec_return_value_t specs = {
         tt::tt_metal::TensorSpec(post_shape, output_layout),
         tt::tt_metal::TensorSpec(collapsed_shape, output_layout),
         tt::tt_metal::TensorSpec(comb_shape, output_layout)};
     if (tensor_args.pre_mix.has_value()) {
-        specs.emplace_back(ttnn::Shape({1, num_tokens, 1, hc}), output_layout);
+        specs.emplace_back(pre_shape, output_layout);
     }
     return specs;
 }
@@ -181,7 +192,7 @@ std::vector<Tensor> fused_hyperconnection_pre_post(
     const Tensor& fused_w,
     const Tensor& pre_bias,
     const Tensor& post_bias,
-    const Tensor& hidden_streams,
+    const std::optional<Tensor>& hidden_streams,
     uint32_t num_streams,
     float pre_scale,
     float post_scale,

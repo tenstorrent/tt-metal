@@ -161,6 +161,12 @@ class DeepSeekV41PreloadedExperts(DeepSeekV4PreloadedExperts):
 
     ``provider(e) -> (gate_up [2I, D], down [D, I])`` is V4's contract, unpadded (see
     :func:`~...config.expert_provider`).
+
+    ``balance_dram_banks`` is on by default, which is what :class:`~..model.DeepSeekV41Model` builds: a
+    rank's gate_up columns alone leave some DRAM banks unused at V4.1's ``I``, so each column is cut into
+    K-row pieces that spread the shards over every bank. The decode and prefill ops both read that layout,
+    and its cache entry carries a ``.k<N>`` tag, so the two cannot be confused. Pass ``False`` only to build
+    the whole-K layout the block tests compare against.
     """
 
     def __init__(
@@ -172,7 +178,7 @@ class DeepSeekV41PreloadedExperts(DeepSeekV4PreloadedExperts):
         cache=None,
         system_config=None,
         tp_size: int = 1,
-        balance_dram_banks: bool = False,
+        balance_dram_banks: bool = True,
     ):
         fused_config, sys_cfg = fused_experts_config(config, system_config, tp_size)
         super().__init__(

@@ -55,4 +55,25 @@ Tensor mix_streams(
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
 
+// Hyper-connection stream mixing over a stream-major residual stack (DeepSeek V4.1 prefill).
+//
+// ``streams`` is [1, hc, T, D]: each stream is a dense [T, D] slab, so the stack carries no
+// per-token tile padding (the token-major [1, T, hc, D] pads hc up to 32 rows per token).
+// The per-token weights come straight from ``fused_hyperconnection``:
+//
+//   weights = comb [1, T, hc, hc], with post [1, T, hc, 1] and sublayer_out [1, 1, T, D]:
+//       out[:, i] = sum_j comb[t, j, i] * streams[:, j] + post[t, i] * sublayer_out     [1, hc, T, D]
+//   weights = pre [1, T, 1, hc], no post / sublayer_out (the collapse):
+//       out[:, 0] = sum_j pre[t, 0, j] * streams[:, j]                                 [1, 1, T, D]
+//
+// All inputs are BFLOAT16 TILE 32x32 interleaved; hc <= 16 and D a multiple of 32. Runs at HiFi4
+// with fp32 destination accumulation by default.
+Tensor stream_mix(
+    const Tensor& streams,
+    const Tensor& weights,
+    const std::optional<Tensor>& post = std::nullopt,
+    const std::optional<Tensor>& sublayer_out = std::nullopt,
+    const std::optional<MemoryConfig>& memory_config = std::nullopt,
+    std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
+
 }  // namespace ttnn::experimental::deepseek::mix_streams

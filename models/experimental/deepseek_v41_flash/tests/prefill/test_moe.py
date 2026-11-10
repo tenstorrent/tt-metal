@@ -8,7 +8,8 @@
   picks) and the shared expert (clamped like the routed ones). The routed weights are replaced by a stand-in
   that only reports the shape the block checks, so no experts are converted. Layer 39 has the largest router
   bias (~57), the one the bf16 ranking is most likely to get wrong.
-* ``test_moe_prefill`` -- the whole block over a chunk, the routed experts included
+* ``test_moe_prefill`` -- the whole block over a chunk, the routed experts included, on the model's own
+  configuration: TP4 on a 1x4 Galaxy submesh, bf4 experts, ``balance_dram_banks=True``
   (``tests/prefill/test_fused_experts_prefill.py`` covers that op alone at V4.1's shapes).
 
 The converted ttnn weights are cached under ``CACHE_DIR`` (``$DEEPSEEK_V4_CACHE_DIR``, default ``../cache``, per checkpoint).
@@ -43,6 +44,8 @@ SHARED_PCC = 0.99
 # Mean fraction of each token's 6 experts the bf16 ranking shares with the fp32 reference's.
 MIN_ROUTING_OVERLAP = 0.9
 PCC = 0.95
+# The model's configuration: TP4 on a 1x4 submesh of the Galaxy.
+_TP_SIZE = 4
 
 
 def _snapshot():
@@ -111,10 +114,21 @@ def test_moe_prefill_router_shared(device, layer, seq_len):
 
 @pytest.mark.skipif(_snapshot() is None, reason=f"V4.1-Flash checkpoint not found under {DEFAULT_MODEL_DIR}")
 @pytest.mark.timeout(7200)
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_XY}], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(8, _TP_SIZE)], indirect=True, ids=["galaxy_8x4"])
 @pytest.mark.parametrize("seq_len", (128, 512))
 @pytest.mark.parametrize("layer", (2, 39))
 @torch.no_grad()
-def test_moe_prefill(device, layer, seq_len):
+def test_moe_prefill(mesh_device, layer, seq_len):
+    """The whole block on the model's own configuration: TP4 on a 1x4 submesh, bf4 experts, balanced DRAM.
+
+    ``balance_dram_banks=True`` is spelled out rather than left to the constructor default, so this keeps
+    testing the layout :class:`~...tt.model.DeepSeekV41Model` (the server) builds if that default moves.
+    """
+    if tuple(mesh_device.shape) != (8, _TP_SIZE):
+        pytest.skip(f"need an 8x{_TP_SIZE} mesh, got {tuple(mesh_device.shape)}")
+    device = mesh_device.create_submesh(ttnn.MeshShape(1, _TP_SIZE), ttnn.MeshCoordinate(0, 0))
+
     snapshot = _snapshot()
     config = load_config(snapshot)
     loader = DeepseekV4WeightLoader(snapshot)
@@ -122,13 +136,30 @@ def test_moe_prefill(device, layer, seq_len):
 
     cache = WeightCache(CACHE_DIR).sub(f"layers.{layer}.ffn")
     experts = DeepSeekV41PreloadedExperts(
-        config, expert_provider(loader, layer), device, dtype=ttnn.bfloat4_b, cache=cache
+        config,
+        expert_provider(loader, layer),
+        device,
+        dtype=ttnn.bfloat4_b,
+        cache=cache,
+        tp_size=_TP_SIZE,
+        balance_dram_banks=True,
     )
-    moe = DeepSeekV41PrefillMoE(config, moe_weights(loader, layer), device, experts=experts, cache=cache)
+    moe = DeepSeekV41PrefillMoE(
+        config, moe_weights(loader, layer), device, experts=experts, cache=cache, tp_size=_TP_SIZE
+    )
 
     hidden = _hidden(config, seq_len)
     expected = reference(hidden.reshape(seq_len, 1, -1)).reshape(seq_len, -1)
-    out = ttnn.to_torch(moe(_to_device(hidden, device))).reshape(seq_len, -1).float()
+    x = ttnn.from_torch(
+        hidden.reshape(1, 1, seq_len, -1),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(device),
+    )
+    # The all-reduce replicates the residual; read one chip's copy.
+    out = ttnn.to_torch(moe(x), mesh_composer=ttnn.ConcatMeshToTensor(device, dim=0))[0]
+    out = out.reshape(seq_len, -1).float()
     passing, pcc = comp_pcc(expected, out, PCC)
     logger.info(f"layer {layer}: PCC {pcc}")
     assert passing, f"layer {layer}: PCC {pcc} < {PCC}"

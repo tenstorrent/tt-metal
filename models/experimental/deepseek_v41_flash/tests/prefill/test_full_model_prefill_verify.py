@@ -256,11 +256,11 @@ def _run(mesh_device, progress: _Progress, AutoTokenizer) -> None:
                 current = dev
             x = store.layer_input(i)[0, start:end].float()
             pre_in = store.pre_mix_input(i)[0, start:end].float()
-            x_dev = _upload_streams(x.unsqueeze(0), dev)
+            x_dev = _upload_streams(x.transpose(0, 1).unsqueeze(0).contiguous(), dev)  # stream-major [1, hc, T, D]
             pre_dev = _upload_streams(pre_in.reshape(1, t, 1, hc), dev)
             out, out_pre = layer(x_dev, pre_dev, states[i], shared, engram_rows=engram_rows.get(i))
             ref_out = store.layer_output(i)[0, start:end].float()
-            forced[i].add(model.to_host(out, dev)[0] - x, ref_out - x)
+            forced[i].add(model.to_host(out, dev)[0].transpose(0, 1) - x, ref_out - x)
             pre_err = (model.to_host(out_pre, dev).reshape(t, hc) - store.pre_mix_output(i)[0, start:end]).abs()
             forced_pre[i] = max(forced_pre[i], pre_err.max().item())
             for tensor in (x_dev, pre_dev, out, out_pre):
@@ -291,7 +291,7 @@ def _run(mesh_device, progress: _Progress, AutoTokenizer) -> None:
         model._tag = f"verify chunk {c + 1}/{num_chunks}"
 
         def on_layer(i: int, out: ttnn.Tensor, out_pre: ttnn.Tensor, dev) -> None:
-            e2e[i].add(model.to_host(out, dev)[0], store.layer_output(i)[0, start:end].float())
+            e2e[i].add(model.to_host(out, dev)[0].transpose(0, 1), store.layer_output(i)[0, start:end].float())
             pre_err = (
                 model.to_host(out_pre, dev).reshape(end - start, hc) - store.pre_mix_output(i)[0, start:end]
             ).abs()
@@ -301,14 +301,13 @@ def _run(mesh_device, progress: _Progress, AutoTokenizer) -> None:
         for r0 in range(start, end, _HEAD_ROWS):
             r1 = min(end, r0 + _HEAD_ROWS)
             rows = r1 - r0
-            part_streams = ttnn.slice(streams, [0, r0 - start, 0, 0], [1, r1 - start, hc, config.hidden_size])
+            part_streams = ttnn.slice(streams, [0, 0, r0 - start, 0], [1, hc, r1 - start, config.hidden_size])
             part_mix = ttnn.slice(pre_mix, [0, r0 - start, 0, 0], [1, r1 - start, 1, hc])
-            collapsed = model._collapse(part_streams, part_mix)  # [1, rows, 1, D]
-            flat = ttnn.reshape(collapsed, [1, 1, rows, config.hidden_size])
-            hidden = ttnn.rms_norm(flat, weight=model.norm_weight, epsilon=model.eps)
+            collapsed = ttnn.experimental.deepseek.stream_mix(part_streams, part_mix)  # [1, 1, rows, D]
+            hidden = ttnn.rms_norm(collapsed, weight=model.norm_weight, epsilon=model.eps)
             logits = model.lm_head(hidden)
             dev_logits = model.to_host(logits, model.head_device).reshape(rows, -1)[:, : config.vocab_size].float()
-            _free_distinct(part_streams, part_mix, collapsed, flat)
+            _free_distinct(part_streams, part_mix, collapsed)
             ttnn.deallocate(hidden)
             ttnn.deallocate(logits)
 
@@ -399,14 +398,13 @@ def _print_outputs(model, config, tokenizer, ids, spans, kinds, progress: _Progr
 
         streams, pre_mix = model._stack(ids[:, start:end], states, on_layer=on_layer)
         r0 = max(start, end - _HEAD_ROWS)
-        part_streams = ttnn.slice(streams, [0, r0 - start, 0, 0], [1, end - start, hc, config.hidden_size])
+        part_streams = ttnn.slice(streams, [0, 0, r0 - start, 0], [1, hc, end - start, config.hidden_size])
         part_mix = ttnn.slice(pre_mix, [0, r0 - start, 0, 0], [1, end - start, 1, hc])
-        collapsed = model._collapse(part_streams, part_mix)
-        flat = ttnn.reshape(collapsed, [1, 1, end - r0, config.hidden_size])
-        hidden = ttnn.rms_norm(flat, weight=model.norm_weight, epsilon=model.eps)
+        collapsed = ttnn.experimental.deepseek.stream_mix(part_streams, part_mix)  # [1, 1, rows, D]
+        hidden = ttnn.rms_norm(collapsed, weight=model.norm_weight, epsilon=model.eps)
         logits = model.lm_head(hidden)
         dev_logits = model.to_host(logits, model.head_device).reshape(end - r0, -1)[:, : config.vocab_size].float()
-        _free_distinct(part_streams, part_mix, collapsed, flat)
+        _free_distinct(part_streams, part_mix, collapsed)
         ttnn.deallocate(hidden)
         ttnn.deallocate(logits)
         ttnn.deallocate(streams)

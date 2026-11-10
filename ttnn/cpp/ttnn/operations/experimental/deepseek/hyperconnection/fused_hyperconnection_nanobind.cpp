@@ -70,6 +70,45 @@ void bind_fused_hyperconnection(nb::module_& mod) {
         nb::arg("eps"),
         nb::arg("memory_config") = std::nullopt,
         nb::arg("pre_mix") = std::nullopt);
+
+    ttnn::bind_function<"fused_hyperconnection_weights", "ttnn.experimental.deepseek.">(
+        mod,
+        R"doc(
+        ``fused_hyperconnection`` without the collapse, for stream-major residual stacks
+        ``[1, H, T, D]`` (DeepSeek V4.1 prefill) that the caller collapses itself with
+        ``ttnn.experimental.deepseek.stream_mix(streams, pre)``. Same ``pre`` / ``post`` /
+        ``comb`` math over the ``T`` tokens of ``fused_w``.
+
+        Keyword Args:
+            fused_w: Packed pre/post/comb projection output, [1, 1, T, (2+H)*H].
+            pre_bias: Bias row [1, 1, 1, H].
+            post_bias: Bias row [1, 1, 1, H].
+            comb_bias: Bias row [1, 1, 1, H*H].
+            num_streams: Number of parallel streams H (config.hc_mult).
+            sinkhorn_iters: Sinkhorn-Knopp iteration count (config.hc_sinkhorn_iters).
+            pre_scale: Learned scale for the pre projection.
+            post_scale: Learned scale for the post projection.
+            comb_scale: Learned scale for the comb projection.
+            eps: Stability epsilon added to pre / comb (config.hc_eps).
+            memory_config: Optional output memory config.
+
+        Returns:
+            List of [post [1,T,H,1], comb [1,T,H,H], pre [1,T,1,H]] (BFLOAT16 TILE, one
+            zero-padded tile per token).
+        )doc",
+        &ttnn::experimental::deepseek::hyperconnection::fused_hyperconnection_weights,
+        nb::kw_only(),
+        nb::arg("fused_w"),
+        nb::arg("pre_bias"),
+        nb::arg("post_bias"),
+        nb::arg("comb_bias"),
+        nb::arg("num_streams"),
+        nb::arg("sinkhorn_iters"),
+        nb::arg("pre_scale"),
+        nb::arg("post_scale"),
+        nb::arg("comb_scale"),
+        nb::arg("eps"),
+        nb::arg("memory_config") = std::nullopt);
 }
 
 }  // namespace ttnn::operations::experimental::deepseek::hyperconnection::detail

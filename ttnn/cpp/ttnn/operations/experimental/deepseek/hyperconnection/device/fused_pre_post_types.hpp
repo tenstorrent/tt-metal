@@ -24,13 +24,16 @@ struct FusedPrePostInputs {
     const Tensor& fused_w;         // [1,1,T,(2+H)*H] packed pre/post/comb projection.
     const Tensor& pre_bias;        // [1,1,1,H], shared by every token.
     const Tensor& post_bias;       // [1,1,1,H], shared by every token.
-    const Tensor& hidden_streams;  // [B,S,H,D] with B*S == T.
+    // [B,S,H,D] with B*S == T. Absent, the op skips the collapse (the caller collapses
+    // stream-major streams itself) and returns pre instead.
+    std::optional<Tensor> hidden_streams;
     // [B,S,1,H] TILE collapse weights (token t is tile t); replaces the pre computed from
     // fused_w when present.
     std::optional<Tensor> pre_mix;
 };
 
-// Returns {post [1,T,H,1], collapsed [1,T,1,D], comb_w_mat [1,T,H,H]}.
+// Without hidden_streams, returns {post [1,T,H,1], comb_w_mat [1,T,H,H], pre [1,T,1,H]}.
+// Otherwise returns {post [1,T,H,1], collapsed [1,T,1,D], comb_w_mat [1,T,H,H]}.
 // pre_w / post_w are split out of fused_w and consumed inside the kernel; comb_w is
 // split out, rearranged into the HxH grid layout, and returned as the third tensor.
 // post is emitted as a column ([H,1] per token) rather than the [1,H] row the compute

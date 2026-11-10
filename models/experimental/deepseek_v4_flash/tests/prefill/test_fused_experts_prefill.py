@@ -100,13 +100,17 @@ def _run_case(
     hidden: int = _HIDDEN,
     inter: int = _INTER,
     gate_up_k_shards: int = 1,
+    dram_banks: int = 0,
 ):
     """Run the op and compare tokens ``t % check_every == 0`` (and the last one) to torch, at hidden size
     ``hidden`` and per-rank intermediate size ``inter`` (the decode layout's shards are [H, 64] / [I, 64], or
-    with ``gate_up_k_shards > 1`` the bank-balanced decode layout's [H / gate_up_k_shards, 64] gate_up)."""
+    with ``gate_up_k_shards > 1`` the bank-balanced decode layout's [H / gate_up_k_shards, 64] gate_up).
+
+    ``dram_banks`` is the bank count the weights are sharded over; ``0`` takes the device's own DRAM grid.
+    Pass the model's ``system_config.moe.fused_dram_banks`` to build the layout the model builds."""
     rng = random.Random(0)
     torch.manual_seed(0)
-    dram_banks = device.dram_grid_size().x
+    dram_banks = dram_banks or device.dram_grid_size().x
 
     sel, scores = _make_routing(num_tokens, num_experts, top_k, list(hot), rng)
     x = (torch.randn(num_tokens, hidden) * x_scale).to(torch.bfloat16)

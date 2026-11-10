@@ -4,9 +4,13 @@
 """DeepSeek-V4.1-Flash prefill decoder layer, on top of the V4-Flash prefill block.
 
 The multi-token counterpart of :class:`~..decode.decoder_layer.DeepSeekV41DecoderLayer`: V4's block --
-hyper-connection -> attention -> mix -> hyper-connection -> MoE -> mix over ``hc`` residual streams
-``[1, T, hc, D]`` -- with V4.1's differences:
+hyper-connection -> attention -> mix -> hyper-connection -> MoE -> mix over ``hc`` residual streams -- with V4.1's
+differences:
 
+* The streams are stream-major, ``[1, hc, T, D]`` bf16 TILE: each stream a dense ``[T, D]`` slab, where V4's
+  token-major ``[1, T, hc, D]`` pads every token's ``hc`` rows to a tile. The hyper-connections are
+  :class:`~.hyperconnection.DeepSeekV41PrefillHyperConnection` and the mixes
+  ``ttnn.experimental.deepseek.stream_mix``; the sublayers see plain ``[1, 1, T, D]`` rows.
 * A sublayer collapses the streams with the ``pre`` its *predecessor's* hyper-connection computed: attention with
   the previous layer's FFN ``pre``, the FFN with this layer's attention ``pre``. :meth:`forward` therefore takes
   ``(streams, pre_mix)`` and returns the same pair for the next layer; the first layer starts from the one-hot
@@ -29,9 +33,11 @@ from models.experimental.deepseek_v41_flash.tt.prefill.attention import (
     PrefillStaticShared,
 )
 from models.experimental.deepseek_v41_flash.tt.prefill.engram import DeepSeekV41PrefillEngram
+from models.experimental.deepseek_v41_flash.tt.prefill.hyperconnection import DeepSeekV41PrefillHyperConnection
 from models.experimental.deepseek_v41_flash.tt.prefill.moe import DeepSeekV41PrefillMoE
 from models.experimental.deepseek_v4_flash.tt.decode.decoder_layer import _strip_prefix
 from models.experimental.deepseek_v4_flash.tt.prefill.attention import (
+    ALIGNMENT,
     PrefillAttentionState,
     PrefillStaticBuffers,
     PrefillStaticStep,
@@ -39,9 +45,7 @@ from models.experimental.deepseek_v4_flash.tt.prefill.attention import (
 from models.experimental.deepseek_v4_flash.tt.prefill.decoder_layer import (
     DeepSeekV4PrefillDecoderLayer,
     load_norm_gamma,
-    mix_streams,
 )
-from models.experimental.deepseek_v4_flash.tt.prefill.hyperconnection import DeepSeekV4PrefillHyperConnection
 from models.experimental.deepseek_v4_flash.tt.weight_cache import WeightCache, _as_cache
 
 
@@ -113,10 +117,10 @@ class DeepSeekV41PrefillDecoderLayer(DeepSeekV4PrefillDecoderLayer):
             weight_dtype=moe_weight_dtype,
             tp_size=tp_size,
         )
-        self.attn_hc = DeepSeekV4PrefillHyperConnection(
+        self.attn_hc = DeepSeekV41PrefillHyperConnection(
             config, _strip_prefix(weights, "attn_hc"), device, cache=cache.sub("hc_attn")
         )
-        self.ffn_hc = DeepSeekV4PrefillHyperConnection(
+        self.ffn_hc = DeepSeekV41PrefillHyperConnection(
             config, _strip_prefix(weights, "ffn_hc"), device, cache=cache.sub("hc_ffn")
         )
         self.input_layernorm_weight = load_norm_gamma(
@@ -135,7 +139,7 @@ class DeepSeekV41PrefillDecoderLayer(DeepSeekV4PrefillDecoderLayer):
         engram_rows: Optional[ttnn.Tensor] = None,
         image_mask: Optional[ttnn.Tensor] = None,
     ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
-        """The block over one prompt chunk: ``(streams [1, T, hc, D], pre_mix [1, T, 1, hc])`` -> the same pair
+        """The block over one prompt chunk: ``(streams [1, hc, T, D], pre_mix [1, T, 1, hc])`` -> the same pair
         for the next layer, both bf16 TILE. ``hidden_streams`` and ``pre_mix`` are left intact.
 
         ``state`` is this layer's attention state and ``shared`` the prompt's :class:`~.attention.PrefillShared`
@@ -178,24 +182,35 @@ class DeepSeekV41PrefillDecoderLayer(DeepSeekV4PrefillDecoderLayer):
             raise ValueError(f"layer {self.layer_idx}: engram_rows go to an Engram layer, and only to one")
 
         streams = hidden_streams if self.engram is None else self.engram(hidden_streams, engram_rows)
-        post, comb, collapsed, attn_pre = self.attn_hc(streams, pre_mix=pre_mix)
-        normed = self._norm(collapsed, self.input_layernorm_weight)
+        post, comb, collapsed, attn_pre = self.attn_hc(streams, pre_mix)
+        normed = ttnn.rms_norm(collapsed, weight=self.input_layernorm_weight, epsilon=self.eps)
         ttnn.deallocate(collapsed)
         attn_out = attend(normed)
         ttnn.deallocate(normed)
-        mixed = mix_streams(post, comb, attn_out, streams)
+        mixed = ttnn.experimental.deepseek.stream_mix(streams, comb, post, attn_out)
         for tensor in (post, comb, attn_out):
             ttnn.deallocate(tensor)
         if streams is not hidden_streams:
             ttnn.deallocate(streams)
 
-        post, comb, collapsed, ffn_pre = self.ffn_hc(mixed, pre_mix=attn_pre)
+        post, comb, collapsed, ffn_pre = self.ffn_hc(mixed, attn_pre)
         ttnn.deallocate(attn_pre)
-        normed = self._norm(collapsed, self.post_attention_layernorm_weight)
+        normed = ttnn.rms_norm(collapsed, weight=self.post_attention_layernorm_weight, epsilon=self.eps)
         ttnn.deallocate(collapsed)
         mlp_out = self.mlp(normed, image_mask=image_mask)
         ttnn.deallocate(normed)
-        out = mix_streams(post, comb, mlp_out, mixed)
+        out = ttnn.experimental.deepseek.stream_mix(mixed, comb, post, mlp_out)
         for tensor in (post, comb, mlp_out, mixed):
             ttnn.deallocate(tensor)
         return out, ffn_pre
+
+    def _check_chunk(self, hidden_streams: ttnn.Tensor, state: PrefillAttentionState, token_ids) -> None:
+        """Reject a chunk this version cannot process, before any device work: streams are stream-major."""
+        shape = tuple(hidden_streams.shape)
+        hc = self.attn_hc.hc
+        if len(shape) != 4 or shape[0] != 1 or shape[1] != hc or shape[3] != self.hidden:
+            raise ValueError(f"expected streams [1, {hc}, T, {self.hidden}], got {shape}")
+        if shape[2] == 0 or shape[2] % ALIGNMENT:
+            raise ValueError(f"chunk length {shape[2]} must be a positive multiple of {ALIGNMENT}")
+        if state.seq_len % ALIGNMENT:
+            raise ValueError(f"chunk start {state.seq_len} must be a multiple of {ALIGNMENT}")

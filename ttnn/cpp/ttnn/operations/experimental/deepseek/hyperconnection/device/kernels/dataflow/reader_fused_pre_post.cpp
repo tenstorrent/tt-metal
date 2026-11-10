@@ -50,8 +50,10 @@ void kernel_main() {
     // Given pre_mix, token t's tile of it goes straight into cb_pre (the collapse matmul's in0);
     // pre_w is still staged, for the pre the op returns.
     constexpr bool use_pre_mix = get_compile_time_arg_val(11) != 0;
+    // Without the collapse there are no hidden_streams to stage.
+    constexpr bool collapse = get_compile_time_arg_val(12) != 0;
 
-    constexpr auto fused_w_args = TensorAccessorArgs<12>();
+    constexpr auto fused_w_args = TensorAccessorArgs<13>();
     constexpr auto pre_bias_args = TensorAccessorArgs<fused_w_args.next_compile_time_args_offset()>();
     constexpr auto post_bias_args = TensorAccessorArgs<pre_bias_args.next_compile_time_args_offset()>();
     constexpr auto hidden_args = TensorAccessorArgs<post_bias_args.next_compile_time_args_offset()>();
@@ -167,19 +169,23 @@ void kernel_main() {
             noc.async_read(pre_mix, cb_p, cb_p.get_tile_size(), {.page_id = token}, {.offset_bytes = 0});
         }
         // H <= 32, so token `token` is tile row `token` of the flattened [T*H, D] hidden grid.
-        cb_h.reserve_back(d_tiles);
-        for (uint32_t n = 0; n < d_tiles; ++n) {
-            noc.async_read(
-                hidden,
-                cb_h,
-                hidden_tile_size,
-                {.page_id = token * d_tiles + n},
-                {.offset_bytes = n * hidden_tile_size});
+        if constexpr (collapse) {
+            cb_h.reserve_back(d_tiles);
+            for (uint32_t n = 0; n < d_tiles; ++n) {
+                noc.async_read(
+                    hidden,
+                    cb_h,
+                    hidden_tile_size,
+                    {.page_id = token * d_tiles + n},
+                    {.offset_bytes = n * hidden_tile_size});
+            }
         }
         noc.async_read_barrier();
         if constexpr (use_pre_mix) {
             cb_p.push_back(one_tile);
         }
-        cb_h.push_back(d_tiles);
+        if constexpr (collapse) {
+            cb_h.push_back(d_tiles);
+        }
     }
 }

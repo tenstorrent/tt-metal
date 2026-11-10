@@ -15,6 +15,8 @@
 #include "api/compile_time_args.h"
 #include "api/debug/kernel_profiler.hpp"
 
+#include "ttnn/operations/experimental/deepseek_prefill/fused_experts_prefill/device/kernels/fused_experts_prefill_routing_entry.hpp"
+
 // Reader (DRAM -> L1) for fused_experts_prefill. One instance per worker core; the cores of a group
 // walk the same experts in lock-step (expert e is owned by group e % num_groups and every core derives
 // the same routing, so the skip decisions agree).
@@ -24,7 +26,8 @@
 // token: the k selected experts are taken from the ids tile, or found by an ascending top-k scan of the
 // ranking row; ids >= E and repeats are dropped; the weights are scores / (sum + eps) * scaling rounded
 // to bf16 (exactly the decode `compute_expert_ids` arithmetic). For every selected expert owned by this
-// group the entry  token | slot << 9 | bf16(weight) << 16  is appended to that expert's list in cb_meta:
+// group the entry  token | slot << kSlotShift | bf16(weight) << 16  is appended to that expert's list in
+// cb_meta (the bit layout lives in fused_experts_prefill_routing_entry.hpp):
 //
 //   cb_meta (one page, pushed once, never popped):
 //     [0, hdr_words)                       counts[jl]   (jl = local expert index, expert g + jl * groups)
@@ -66,6 +69,10 @@
 //   then n gate_up addresses, then n down addresses (owned experts in ascending id order)
 
 namespace {
+
+using fused_experts_prefill_routing::pack;
+using fused_experts_prefill_routing::token_of;
+using fused_experts_prefill_routing::weight_bits_of;
 
 constexpr uint32_t kFaceBytes = 512;
 constexpr uint32_t kFaceRowBytes = 32;
@@ -443,7 +450,7 @@ void kernel_main() {
                         continue;
                     }
                     const uint32_t n = counts[jl];
-                    entries[jl * T + n] = token | (j << 9) | (word & 0xFFFF0000u);
+                    entries[jl * T + n] = pack(token, j, word);
                     counts[jl] = n + 1;
                 }
             }
@@ -487,7 +494,7 @@ void kernel_main() {
                 const uint32_t kc = kc0 + j;
                 auto issue = [&]() {
                     for (uint32_t rr = 0; rr < nvalid; ++rr) {
-                        const uint32_t token = entries[jl * T + first + rr] & 0x1FFu;
+                        const uint32_t token = token_of(entries[jl * T + first + rr]);
                         noc.async_read(
                             x_acc,
                             CoreLocalMem<uint32_t>(base + rr * seg_bytes),
@@ -524,7 +531,8 @@ void kernel_main() {
             const uint32_t first = (row_tile0 + m) * 32;
             for (uint32_t rr = 0; rr < 32; ++rr) {
                 const uint32_t idx = first + rr;
-                const uint16_t wb = idx < count ? static_cast<uint16_t>(entries[jl * T + idx] >> 16) : 0;
+                const uint16_t wb =
+                    idx < count ? static_cast<uint16_t>(weight_bits_of(entries[jl * T + idx]) >> 16) : 0;
                 for (uint32_t h = 0; h < 2; ++h) {
                     const uint32_t face = ((rr >> 4) << 1) + h;
                     const uint32_t base = m * (tile_bytes / 2) + face * 256 + (rr & 15u) * 16;

@@ -41,12 +41,13 @@ namespace ttnn::prim {
 //   collapsed   = (sigmoid(pre_w * pre_scale + pre_bias) + eps) @ hidden     [1,1,1,D]
 //   comb_w_mat  = comb_w slice of fused_w, laid out as the [1,1,H,H] comb matrix
 // With pre_mix, collapsed = pre_mix @ hidden instead, and the pre computed from pre_w is returned
-// as a fourth tensor [1,T,1,H].
+// as a fourth tensor [1,T,1,H]. Without hidden_streams there is no collapse and it returns
+// {post, comb_w_mat, pre}.
 std::vector<Tensor> fused_hyperconnection_pre_post(
     const Tensor& fused_w,
     const Tensor& pre_bias,
     const Tensor& post_bias,
-    const Tensor& hidden_streams,
+    const std::optional<Tensor>& hidden_streams,
     uint32_t num_streams,
     float pre_scale,
     float post_scale,

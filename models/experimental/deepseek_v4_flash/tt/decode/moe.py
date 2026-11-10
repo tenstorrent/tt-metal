@@ -948,7 +948,7 @@ class DeepSeekV4PreloadedExperts(DeepSeekV4Module):
         cache: Optional[WeightCache] = None,
         system_config=None,
         tp_size: int = 1,
-        balance_dram_banks: bool = False,
+        balance_dram_banks: bool = True,
     ):
         """Upload every expert once, as the op's DRAM ND-sharded weights.
 
@@ -956,10 +956,11 @@ class DeepSeekV4PreloadedExperts(DeepSeekV4Module):
         entirely. Gate_up lands as ``[D, 2*swiglu_cols]``-per-core interleaved shards, down as
         ``[I, D/num_cores]`` per core. Under TP the gate_up shards N (so the op runs the rank's
         ``I/TP`` slice) and down shards K, whose partials
-        :class:`DeepSeekV4SparseMoeBlock` all-reduces. ``balance_dram_banks`` cuts each gate_up
+        :class:`DeepSeekV4SparseMoeBlock` all-reduces. ``balance_dram_banks`` (on by default) cuts each gate_up
         shard into K-row pieces (see :func:`_gate_up_k_shards`) so an expert with fewer column
         shards than a multiple of the bank count still reads from every bank; the decode and
-        prefill ops both read that layout. ``system_config`` supplies the op geometry
+        prefill ops both read that layout, and the cache entry is tagged with the split, so the
+        two layouts cannot be confused. ``system_config`` supplies the op geometry
         (``moe.fused_num_cores`` / ``fused_dram_banks``), the L1 expert block size and
         ``routing_eps``; ``dtype`` defaults to the profile's weight dtype, and an explicit one
         wins. Raises if the config is not the fused layout this op is hard-wired to.

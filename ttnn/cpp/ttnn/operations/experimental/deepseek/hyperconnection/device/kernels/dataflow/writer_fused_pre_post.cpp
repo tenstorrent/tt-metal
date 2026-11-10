@@ -34,12 +34,13 @@ void kernel_main() {
     constexpr uint32_t cb_comb_w = get_compile_time_arg_val(2);
     constexpr uint32_t cb_post_col = get_compile_time_arg_val(3);
     constexpr uint32_t num_streams = get_compile_time_arg_val(4);
-    // Given pre_mix, the computed pre is returned too: [1,T,1,H], one tile per token.
+    // Given pre_mix (or without the collapse), the computed pre is returned: [1,T,1,H], one tile per token.
     constexpr bool use_pre_mix = get_compile_time_arg_val(5) != 0;
     constexpr uint32_t cb_pre_out = get_compile_time_arg_val(6);
     constexpr uint32_t cb_pre_row = get_compile_time_arg_val(7);
+    constexpr bool collapse = get_compile_time_arg_val(8) != 0;
 
-    constexpr auto post_out_args = TensorAccessorArgs<8>();
+    constexpr auto post_out_args = TensorAccessorArgs<9>();
     constexpr auto collapsed_args = TensorAccessorArgs<post_out_args.next_compile_time_args_offset()>();
     constexpr auto comb_w_args = TensorAccessorArgs<collapsed_args.next_compile_time_args_offset()>();
     constexpr auto pre_out_args = TensorAccessorArgs<comb_w_args.next_compile_time_args_offset()>();
@@ -91,14 +92,16 @@ void kernel_main() {
         noc.async_write(cb_pc, post_out, post_tile_size, {.offset_bytes = 0}, {.page_id = token});
 
         // collapsed [1,T,1,D] -> d_tiles tiles along the width, one row of the grid per token.
-        cb_col.wait_front(d_tiles);
-        for (uint32_t n = 0; n < d_tiles; ++n) {
-            noc.async_write(
-                cb_col,
-                collapsed,
-                col_tile_size,
-                {.offset_bytes = n * col_tile_size},
-                {.page_id = token * d_tiles + n});
+        if constexpr (collapse) {
+            cb_col.wait_front(d_tiles);
+            for (uint32_t n = 0; n < d_tiles; ++n) {
+                noc.async_write(
+                    cb_col,
+                    collapsed,
+                    col_tile_size,
+                    {.offset_bytes = n * col_tile_size},
+                    {.page_id = token * d_tiles + n});
+            }
         }
 
         // comb_w_mat [1,T,H,H] -> one tile per token (laid out by the reader).
@@ -120,7 +123,9 @@ void kernel_main() {
         noc.async_write_barrier();
 
         cb_post.pop_front(one_tile);
-        cb_col.pop_front(d_tiles);
+        if constexpr (collapse) {
+            cb_col.pop_front(d_tiles);
+        }
         cb_cw.pop_front(one_tile);
         if constexpr (use_pre_mix) {
             cb_p.pop_front(one_tile);

@@ -212,6 +212,24 @@ pytest models/experimental/deepseek_v41_flash/tests/prefill/test_full_model_pref
 
 ## Phase 2: stream-major streams (the main win; kernel work)
 
+> **Status: implemented. On device, `test_stream_mix_op`, `test_hyperconnection`, `test_engram` and
+> `test_decoder_layer` pass.** What was built differs from Tasks 5 to 8 below:
+>
+> - **Task 5:** a separate op, `ttnn.experimental.deepseek.stream_mix(streams, weights, post=None, sublayer_out=None)`,
+>   rather than a `stream_major=` flag on `mix_streams`. It takes `comb` / `post` / `pre` in the per-token tile
+>   layout `fused_hyperconnection` already returns, so there is no host reshape. The reader turns each row block's
+>   32 token weights into diagonal tiles, and the compute accumulates `diag(w) @ s_j` matmuls in fp32 dest.
+>   Kernels live under `mix_streams/device/kernels/*/…stream_mix.cpp`. The test is `tests/prefill/test_stream_mix_op.py`.
+> - **Task 6:** `ttnn.experimental.deepseek.fused_hyperconnection_weights(...)` returns `[post, comb, pre]`. In the
+>   pre/post device op, `hidden_streams` is now optional, and without it the op skips the collapse.
+>   `fused_hyperconnection` itself is unchanged.
+> - **Task 7:** `tt/prefill/hyperconnection.py` (`DeepSeekV41PrefillHyperConnection`):
+>   - `fn` is a batched per-stream matmul, summed in fp32, under the cache name `fn.prefill_sm`.
+>   - The norm feeding the sublayers is a plain `ttnn.rms_norm` on `[1, 1, T, D]`.
+>   - The Engram now works on dense `[1, hc, T, D]`: the key is a concat of `kv` column slices, and the gate weight
+>     is cached as `gate_weight.prefill_sm`.
+> - **Task 8:** not done. The traced hand-off still goes through ROW_MAJOR, now as `[1, hc, C, D]`.
+
 ### The layout
 
 Carry the residual streams as **`[1, hc, T, D]` TILE**: stream `j` of all tokens is a contiguous `[T, D]` block.
@@ -486,4 +504,51 @@ Task 9, Task 10 (after Task 7), Task 11 (after Task 3)
 
 ## Baseline
 
-_(Task 0 fills this in.)_
+TP4 1×4 submesh, chunk 1024, Phase 1 applied. Times are device kernel time summed over one layer's ops, taking the
+slowest of the 4 chips per op. Source: `generated/profiler/reports/2026_11_10_19_09_22/`.
+
+| Layer | Ops | Total | Streams layout* | MoE (`fused_experts_prefill`) | Engram gate |
+|---|---|---|---|---|---|
+| 0 window | 102 | 36.8 ms | 20.4 ms (55%) | 10.9 ms | - |
+| 1 window + Engram | 142 | 110.6 ms | 20.4 ms | 10.0 ms | **~73 ms** |
+| 2 ratio-2 source | 148 | 37.9 ms | 20.4 ms | 10.0 ms | - |
+| 20 ratio-1 source | 130 | 42.7 ms | 20.4 ms | 12.2 ms | - |
+
+\* Per layer, the streams-layout row adds up:
+- `mix_streams` ×2: 10.1 ms, about 5 ms each.
+- `fused_pre_post` ×2: 3.6 ms.
+- Untilize of a padded `[1,1024,32,5120]` ×4: 4.0 ms. Two come from `flatten_streams`, two from `rows_from_tokens`.
+- Smaller items: the flatten tilize and reshape, the `fn` matmul, and the RMS square and mean, about 2.4 ms.
+
+Attention is small by comparison: SDPA 0.7-1.8 ms, the indexer up to 2.6 ms, and the RoPE slice/concat about 0.6 ms.
+
+**Engram layers (1 and 14) are the pipeline bottleneck.** They sit on stages 0 and 2, so those stages take about
+75 ms more per chunk than the others. The gate runs 39 ops on padded fp32 `[1,1024,32,5120]` tensors:
+- BinaryNg: about 5 ms each.
+- Typecast: about 2.9 ms each.
+- Each `ttnn.mean`: a Clone (3.6 ms) plus a FillPad (3.6 ms) before the reduce.
+- `_split_copies` tilize-with-padding: 3.3 ms.
+
+This moves Task 10 ahead, and it has a model-only first step: Task 7's Engram change, on dense rows.
+
+## After Phase 2 (stream-major streams and the dense Engram)
+
+Same setup and method. Source: `generated/profiler/reports/2026_11_10_19_43_44/`.
+
+| Layer | Ops | Total (baseline) | Total now | MoE | Engram |
+|---|---|---|---|---|---|
+| 0 window | 118 | 36.8 ms | **19.1 ms** | 10.9 ms | - |
+| 1 window + Engram | 151 | 110.6 ms | **26.7 ms** | 10.0 ms | ~6.7 ms (`wkv` matmul 2.5 ms) |
+| 2 ratio-2 source | 164 | 37.9 ms | **20.2 ms** | 10.0 ms | - |
+| 20 ratio-1 source | 146 | 42.7 ms | **24.8 ms** | 12.2 ms | - |
+
+- Streams layout: about 20 ms per layer down to about 2.5 ms.
+  - `stream_mix`: 0.16 ms per collapse and 0.32 ms per residual mix, so 1.0 ms for the four calls. The old
+    `mix_streams` took 10.1 ms for two.
+  - Each hyper-connection: `fn` matmul 0.3 ms, `square` 0.22 ms, reduce 0.13 ms, `fused_pre_post` 0.05 ms,
+    sinkhorn 0.06 ms.
+- Engram gate: about 73 ms down to about 4.2 ms.
+  - It is now seven fp32 BinaryNg ops (0.5-0.65 ms each), three fp32 reduces (0.24 ms each) and four typecasts
+    (0.33-0.36 ms each).
+  - Task 10's fused gate would remove most of it, but this is no longer the bottleneck.
+- MoE is now about half of every layer.
