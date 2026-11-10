@@ -1482,3 +1482,27 @@ def test_scale_mask_softmax_scale_not_exact_in_float32(device, scale):
 
     assert torch.equal(output, expected)
     assert torch.allclose(output, torch_output, atol=1e-2)
+
+
+@pytest.mark.parametrize("mask_w", [32, 96, 128])
+def test_scale_mask_softmax_in_place_rejects_mask_width_mismatch(device, mask_w, expect_error):
+    """A TILE mask whose inner dim differs from the input's must be rejected like scale_mask_softmax does,
+    not read past the mask buffer (narrower) or silently truncated (wider)."""
+    torch.manual_seed(0)
+    x = torch.randn(1, 1, 64, 64).bfloat16()
+    mask = (torch.randn(1, 1, 1, mask_w) * 3).bfloat16()
+    x_tt = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    mask_tt = ttnn.from_torch(mask, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    with expect_error(RuntimeError, "inner dimensions must match"):
+        ttnn.scale_mask_softmax_in_place(x_tt, 0.5, mask_tt)
+
+
+def test_scale_mask_softmax_in_place_matching_mask_width(device):
+    torch.manual_seed(0)
+    x = torch.randn(1, 1, 64, 64).bfloat16()
+    mask = (torch.randn(1, 1, 1, 64) * 3).bfloat16()
+    x_tt = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    mask_tt = ttnn.from_torch(mask, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    ttnn.scale_mask_softmax_in_place(x_tt, 0.5, mask_tt)
+    ref = torch.softmax(x.float() * 0.5 + mask.float(), dim=-1)
+    assert (ttnn.to_torch(x_tt).float() - ref).abs().max().item() < 0.05
