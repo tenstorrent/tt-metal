@@ -47,8 +47,7 @@ inline std::uint8_t llk_unpack_program_bfd(const std::uint32_t operand_id) {
         static_cast<std::uint32_t>(unpack_src_format[operand_id]));
 }
 
-// Unpack-to-dest: the current DEST section was already released to math by llk_unpack_dest_handoff. thread_local per
-// Neo like unpack_math_seeded; defined in tt_metal/hw/firmware/src/tt-2xx/trisc.cc.
+// Unpack-to-dest: the current DEST section was already released to math by llk_unpack_dest_handoff
 extern thread_local bool unpack_dest_handed_off;
 
 /**

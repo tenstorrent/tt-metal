@@ -4,7 +4,7 @@
 //
 // Quasar section hand-off: every section copies one Float32 tile into DST[0] through unpack-to-dest, calls
 // tile_regs_handoff(), then runs num_src_tiles add_tiles through SrcA/SrcB into DST[1] (each add overwrites, so DST[1]
-// ends as the last pair's sum). num_src_tiles exceeds the two source banks: without the hand-off the unpacker stalls on
+// ends as the last pair's sum). num_src_tiles exceeds the two source banks without the hand-off the unpacker stalls on
 // the third src tile while math still waits for the section, and both threads hang.
 // HANDOFF_EVERY_SECTION: odd sections skip the copy but still call tile_regs_handoff(); their first add goes to DST[0]
 // instead, so every section packs DST[0] then DST[1] and consumes the same src tiles.
