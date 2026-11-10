@@ -977,6 +977,28 @@ def test_dense_blocks(runtime, geom, pooled, ranges, dense_keys):
     _check_dense_split(tag, case, dense, r["sparse"], r["ref"], out)
 
 
+@pytest.mark.parametrize("pooled", [False, True], ids=["kept_only", "pooled"])
+@pytest.mark.parametrize("geom", ["r1024k256", "r1184k256"])
+def test_dense_blocks_several_per_core(runtime, geom, pooled):
+    """Stage 3 with more dense blocks per head than the head's dense cores: a core's dense batch holds several units,
+    so res_dense_finish merges slot i > 0 after slots 0 .. i - 1 have left (production prefixes: 8-20 per head)."""
+    geo = GEOMETRIES[geom]
+    case = Case(runtime, geo)
+    cols, rows = runtime.sdpa_compute_grid
+    per_head = (cols * rows) // HEADS_PER_DEVICE  # dense cores per head (sparse_ring_sdpa_program_factory.cpp)
+    n = min(geo.nb() - 1, 2 * per_head + 1)  # every shard keeps a non-dense block
+    assert n > per_head, f"{geom}: {n} dense blocks cannot exceed {per_head} cores per head"
+    dense = [(0, n)]
+    mask = make_mask(geo, case.S, case.H, density=0.1, seed=34)
+    explicit = dense_blocks_mask(mask, geo, case.S, dense)
+    q, k, v = case.inputs(34)
+    r = case.run(q, k, v, explicit, want_dense=False, pooled=pooled)
+    out = case.run(q, k, v, mask, want_dense=False, want_ref=False, pooled=pooled, dense_blocks=dense)["sparse"]
+    tag = f"dense blocks {n} per head {_mode(pooled)} {geom}"
+    _check(tag, {**r, "sparse": out}, _density(explicit, geo, case.S), dense_min=None, ref_min=0.999)
+    _check_dense_split(tag, case, dense, r["sparse"], r["ref"], out)
+
+
 @pytest.mark.parametrize("ranges", ["start", "end", "two"])
 @pytest.mark.parametrize("pooled", [False, True], ids=["kept_only", "pooled"])
 @pytest.mark.parametrize("geom", ["r1024k256", "r1184k256"])

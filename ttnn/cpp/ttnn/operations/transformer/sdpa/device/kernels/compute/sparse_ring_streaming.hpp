@@ -1598,7 +1598,7 @@ static __attribute__((noinline, noclone)) void res_merge_slot(const uint32_t i) 
             cb_sum_in,
             0,
             side == 0 ? 0 : vDHt,
-            0);
+            i);  // reads at the front; writes at slot i (the write pointer stays at the slot CBs' base)
         PACK((llk_pack_reconfig_l1_acc(0)));
         if (side == 0) {
             sdpa_maybe_reconfig_data_format<cb_prev_out, cb_qkt_im, cb_exp_max_diff, cb_qkt_im>();
