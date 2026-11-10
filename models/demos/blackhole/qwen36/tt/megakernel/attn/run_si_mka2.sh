@@ -7,7 +7,7 @@ export MKA_KD=/tmp/mk2/megakernel/attn/kernels MK_MIXN=${MK_MIXN:-1}
 unset TT_METAL_SIMULATOR MESH_DEVICE TT_VISIBLE_DEVICES
 for kv in "$@"; do export "$kv"; done
 mkdir -p $TT_METAL_PROFILER_DIR; cd /tmp/mk2
-s=$(date +%s); timeout 600 $TM/python_env/bin/python /tmp/mk2/megakernel/attn/bench_mka2.py > /tmp/mk2/$TAG.log 2>&1; rc=$?
+s=$(date +%s); timeout ${MK_TIMEOUT:-600} $TM/python_env/bin/python /tmp/mk2/megakernel/attn/bench_mka2.py > /tmp/mk2/$TAG.log 2>&1; rc=$?
 echo "rc=$rc wall=$(( $(date +%s)-s ))s"; grep -E "\[mka2\]|\[mk1\] iter|\[fm11\] iter|TT_THROW|TT_FATAL|Error|Timeout" /tmp/mk2/$TAG.log | head -24
 CSV=$(find $TT_METAL_PROFILER_DIR -name profile_log_device.csv 2>/dev/null | head -1)
 [ -n "$CSV" ] && $TM/python_env/bin/python /tmp/mk2/megakernel/attn/mka_prof.py "$CSV" | tail -24
