@@ -3615,20 +3615,20 @@ class Qwen36Model:
         # QWEN36_SPEC_VFY_OUTS_PREALLOC: the warm outputs below are kept as the pre-capture destinations (sharded verify only)
         _pre = self._vfy_pre_reset() if (spec_vfy_outs_prealloc_enabled() and self._vfy_sharded) else None
         if _pre is not None:
-            self._vfy_pre_keep(_pre, "ids", outs[2])
-            self._vfy_pre_keep(_pre, "rows", outs[1])
+            self._vfy_pre_keep_mk(_pre, "ids", outs[2])
+            self._vfy_pre_keep_mk(_pre, "rows", outs[1])
         if self._vfy_sharded:
             # Compile the logits trace's programs too (cache misses are disallowed during capture).
             self._vfy_normed_out = outs[4]
             _lg = self._forward_verify_logits_body()
             self._vfy_warm_narrow(_lg[1])
             if _pre is not None:
-                self._vfy_pre_keep(_pre, "logits_rm", _lg[1])
+                self._vfy_pre_keep_mk(_pre, "logits_rm", _lg[1])
             for t in _lg:
                 if not self._vfy_pre_has(_pre, t):
                     ttnn.deallocate(t)
             if _pre is not None:
-                self._vfy_pre_keep(_pre, "normed", self._vfy_normed_out)
+                self._vfy_pre_keep_mk(_pre, "normed", self._vfy_normed_out)
             if not self._vfy_pre_has(_pre, self._vfy_normed_out):
                 ttnn.deallocate(self._vfy_normed_out)
             self._vfy_normed_out = None
@@ -3639,8 +3639,8 @@ class Qwen36Model:
                 self._vfy_specs["topk_vals"], self._vfy_specs["topk_ids"] = (self._tensor_spec(t) for t in _tk)
                 self._vfy_specs["shard_logits"] = self._tensor_spec(self._vfy_shard_logits_out)
                 if _pre is not None:
-                    self._vfy_pre_keep(_pre, "topk_vals", _tk[0])
-                    self._vfy_pre_keep(_pre, "topk_ids", _tk[1])
+                    self._vfy_pre_keep_mk(_pre, "topk_vals", _tk[0])
+                    self._vfy_pre_keep_mk(_pre, "topk_ids", _tk[1])
                 for t in _tk:
                     if not self._vfy_pre_has(_pre, t):
                         ttnn.deallocate(t)
@@ -3667,6 +3667,18 @@ class Qwen36Model:
             ttnn.deallocate(t)
         self._vfy_pre = {}
         return self._vfy_pre
+
+    def _vfy_pre_keep_mk(self, pre, name, t):
+        """_vfy_pre_keep, except in QWEN36_R16_MEGAKERNEL engine mode a ROW_MAJOR output with pages > 32 KB (logits_rm)
+        stays on the in-capture path: its hand-off ttnn.copy wants ~1 MB of static CBs (d27u08: CB end 1105280 on 30
+        cores), more than the L1 left under the engine's persistent tensors (spec §20). Flag off: unchanged."""
+        _mk1 = getattr(self, "_vfy_mk1", None)
+        if t is not None and _mk1 is not None and _mk1.ready and t.layout == ttnn.ROW_MAJOR_LAYOUT:
+            page = int(t.shape[-1]) * {ttnn.float32: 4, ttnn.uint32: 4, ttnn.int32: 4}.get(t.dtype, 2)
+            if page > 32768:
+                logger.info(f"[vfy_prealloc] {name}: engine mode, RM page {page} B > 32 KB: left on the in-capture path")
+                return
+        self._vfy_pre_keep(pre, name, t)
 
     @staticmethod
     def _vfy_pre_keep(pre, name, t):
@@ -3912,8 +3924,8 @@ class Qwen36Model:
         bk.narrow_ready = self._vfy_warm_narrow(_lg[1], b)
         bk.pre = {}
         if spec_vfy_outs_prealloc_enabled():  # QWEN36_SPEC_VFY_OUTS_PREALLOC: keep the lazily read outputs as destinations
-            self._vfy_pre_keep(bk.pre, "logits_rm", _lg[1])
-            self._vfy_pre_keep(bk.pre, "normed", bk.normed)
+            self._vfy_pre_keep_mk(bk.pre, "logits_rm", _lg[1])
+            self._vfy_pre_keep_mk(bk.pre, "normed", bk.normed)
             _mk1 = getattr(self, "_vfy_mk1", None)
             self._vfy_pre_warm(bk.pre, no_clone=bool(_mk1 is not None and _mk1.ready))
         for t in _lg:
