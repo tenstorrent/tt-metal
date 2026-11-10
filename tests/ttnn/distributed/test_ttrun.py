@@ -1271,8 +1271,7 @@ class TestLauncherSelection:
         """Opting into ULFM stays possible through --mpi-args."""
         import subprocess
 
-        with patch.object(subprocess, "run") as mock_subprocess:
-            mock_subprocess.return_value.returncode = 0
+        with patch("ttnn.distributed.ttrun.run_launcher", return_value=0) as mock_launch:
             result = runner.invoke(
                 main,
                 [
@@ -1286,7 +1285,7 @@ class TestLauncherSelection:
                 ],
             )
             assert result.exit_code == 0, result.output
-            launched = mock_subprocess.call_args[0][0]
+            launched = mock_launch.call_args[0][0]
             assert Path(launched[0]).name != "mpirun-ulfm"
             assert launched[launched.index("--with-ft") + 1] == "ulfm"
 
@@ -1333,3 +1332,67 @@ class TestRankFailurePropagation:
     def test_all_ranks_succeed_passes(self, runner, sample_rank_binding_yaml):
         result = self._run(runner, sample_rank_binding_yaml, "pass")
         assert result.exit_code == 0, result.output
+
+
+class TestJobOwnership:
+    """tt-run owns the job (teardown plan P5, P6, P7, P19): the wall clock on the mpirun line when asked for, signals
+    forwarded to the launcher, leftovers ended and reported."""
+
+    def test_job_clock_is_off_by_default_for_the_ranks(self):
+        from ttnn.distributed.ttrun import DEFAULT_JOB_TIMEOUT_S, DEFAULT_PHASE1_TIMEOUT_S
+
+        # tt-run adds no wall clock unless asked: both phases are off by default, turned on by env vars
+        assert DEFAULT_JOB_TIMEOUT_S == int(os.environ.get("TT_RUN_TIMEOUT", "0"))
+        assert DEFAULT_PHASE1_TIMEOUT_S == int(os.environ.get("TT_RUN_PHASE1_TIMEOUT", "0"))
+
+    def test_timeout_args_added_unless_given(self):
+        from ttnn.distributed.ttrun import job_timeout_mpi_args, mpi_args_specify_timeout
+
+        assert job_timeout_mpi_args(None, 100) == ["--timeout", "100", "--report-state-on-timeout"]
+        assert job_timeout_mpi_args(["--oversubscribe"], 100) == ["--timeout", "100", "--report-state-on-timeout"]
+        assert job_timeout_mpi_args(["--timeout", "5"], 100) == []
+        assert job_timeout_mpi_args(["--timeout=5"], 100) == []
+        assert job_timeout_mpi_args(None, 0) == []
+        assert mpi_args_specify_timeout(["--oversubscribe", "--timeout", "5"])
+        assert not mpi_args_specify_timeout(["--oversubscribe"])
+
+    def test_phase2_line_carries_the_clock(self, sample_rank_binding_yaml):
+        from ttnn.distributed.ttrun import build_mpi_command, parse_binding_config
+
+        config = parse_binding_config(sample_rank_binding_yaml)
+        cmd = build_mpi_command(config, ["echo"], mpi_args=["--oversubscribe"], job_timeout_s=42)
+        assert cmd[cmd.index("--timeout") + 1] == "42"
+        assert "--report-state-on-timeout" in cmd
+        cmd = build_mpi_command(config, ["echo"], mpi_args=["--timeout", "7"], job_timeout_s=42)
+        assert cmd.count("--timeout") == 1 and cmd[cmd.index("--timeout") + 1] == "7"
+        cmd = build_mpi_command(config, ["echo"], mpi_args=None, job_timeout_s=0)
+        assert "--timeout" not in cmd
+
+    def test_run_launcher_forwards_sigterm_and_reports_it(self):
+        import signal
+        import threading
+        import time
+
+        from ttnn.distributed.ttrun import run_launcher
+
+        # a launcher that would run for a long time; SIGTERM at tt-run must reach it and end the wait quickly
+        def later():
+            time.sleep(0.5)
+            os.kill(os.getpid(), signal.SIGTERM)
+
+        threading.Thread(target=later, daemon=True).start()
+        t0 = time.time()
+        rc = run_launcher(["sleep", "30"], cwd=Path.cwd())
+        assert time.time() - t0 < 5
+        assert rc == 128 + signal.SIGTERM
+
+    def test_run_launcher_ends_leftovers_and_fails_the_job(self):
+        import time
+
+        from ttnn.distributed.ttrun import run_launcher
+
+        # like PRRTE's ranks: a child that stays in the launcher's session (only the process group differs)
+        t0 = time.time()
+        rc = run_launcher(["bash", "-c", "sleep 30 & disown; sleep 0.2; exit 0"], cwd=Path.cwd())
+        assert rc != 0
+        assert time.time() - t0 < 10
