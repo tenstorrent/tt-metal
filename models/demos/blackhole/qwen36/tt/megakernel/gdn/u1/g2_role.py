@@ -130,8 +130,9 @@ class GdnRole:
                cbd(crsA, 5, b16, 1, 2048), cbd(crsA, 6, b16, 1, 2048), cbd(crsA, 24, f32, 1, 4096), cbd(crsA, 16, f32, 1, 4096)]
         rrt, wrt, crt = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
         hm = sum(1 << u for u in hold)
+        assert not (hold and B == 1), "tp producers: HOLD needs NB > 1 (arg 5 = the single user's mi otherwise)"
         for (kind, col, dst), c in zip(self.jobs, self.coresA):
-            rrt[c.x][c.y] = [win.buffer_address(), self.qkv.buffer_address(), cA.taps_d.buffer_address(), kind, col, 0,
+            rrt[c.x][c.y] = [win.buffer_address(), self.qkv.buffer_address(), cA.taps_d.buffer_address(), kind, col, mi_win[0],
                              winn.buffer_address(), 1, B] + mi_win + [Ct, hm]
             wrt[c.x][c.y] = [pre.buffer_address(), len(dst)] + dst + [0] * (3 - len(dst))
             crt[c.x][c.y] = [kind]
