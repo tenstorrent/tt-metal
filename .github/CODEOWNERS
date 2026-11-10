@@ -175,7 +175,7 @@ tt_metal/hw/inc/hostdev/streaming_profiler_common.h @mo-tenstorrent @yusufbashiT
 tt_metal/hw/inc/internal/ethernet/ @aliuTT @ubcheema
 tt_metal/hw/inc/internal/ethernet/eth_ptp.hpp @mo-tenstorrent @yusufbashiTT @aliuTT @ubcheema
 tt_metal/hw/inc/internal/tt-1xx/wormhole/eth_l1_address_map.h @aliuTT @ubcheema
-tt_metal/hw/inc/**/tensor/
+tt_metal/hw/inc/**/tensor/ @tenstorrent/metalium-developers-ttnn-core
 tt_metal/hw/inc/api/tensor/ @abhullar-tt @akerteszTT @riverwuTT
 tt_metal/hw/toolchain/ @jbaumanTT @nathan-TT
 tt_metal/hw/**/CMakeLists.txt @tenstorrent/metalium-developers-infra @jbaumanTT @nathan-TT
@@ -348,7 +348,7 @@ tests/didt/ @rtawfik01 @ttmtrajkovic @ctr-nradojevicTT @mbezuljTT @pavlepopovic
 tests/tt_metal/tt_metal/deployment/ @gsarabandoTT @tt-mnijjar @mgajewskiTT @ctr-nradojevicTT
 
 # TTNN
-/ttnn/ @tenstorrent/metalium-developers-ttnn-core
+ttnn/ @tenstorrent/metalium-developers-ttnn-core
 # nanobind
 ttnn/ttnn/distributed/ttrun.py @Riddy21 @p1-0tr
 ttnn/**/*nanobind* @tenstorrent/metalium-developers-ttnn-core @nsextonTT
@@ -390,7 +390,7 @@ ttnn/cpp/ttnn/operations/data_movement/**/CMakeLists.txt @tenstorrent/metalium-d
 ttnn/cpp/ttnn/operations/data_movement/fold/ @tenstorrent/metalium-developers-convolutions
 ttnn/cpp/ttnn/operations/data_movement/gather/ @aczajkowskiTT @sjameelTT @bbradelTT @mgajewskiTT @nsorabaTT
 ttnn/cpp/ttnn/operations/data_movement/scatter/ @aczajkowskiTT @sjameelTT @bbradelTT @nsorabaTT
-ttnn/cpp/ttnn/operations/data_movement/sharded/reshard/**/nd_reshard*
+ttnn/cpp/ttnn/operations/data_movement/sharded/reshard/**/nd_reshard* @tenstorrent/metalium-developers-ttnn-core
 ttnn/cpp/ttnn/operations/data_movement/sort/ @aczajkowskiTT @sjameelTT @bbradelTT @mgajewskiTT @nmauriceTT @nsorabaTT
 ttnn/cpp/ttnn/operations/kernel_helper_functions/ @tenstorrent/metalium-developers-mmfusedreduce
 ttnn/cpp/ttnn/operations/kernel_helper_functions/**/CMakeLists.txt @tenstorrent/metalium-developers-mmfusedreduce @tenstorrent/metalium-developers-infra
@@ -622,8 +622,8 @@ tests/ttnn/docs_examples/test_tensor_creation_examples.py
 tests/ttnn/distributed/ @tenstorrent/metalium-developers-ttnn-core
 ttnn/ttnn/distributed/ @tenstorrent/metalium-developers-ttnn-core
 
-# ttnn-core keeps the TTNN framework and steps back from code other teams build.
-# A path with no owner can be approved by anyone with write access; its developers can claim it.
+# ttnn-core keeps the TTNN framework and steps back from tests and bindings of code other teams build.
+# Code other teams build under ttnn/ stays with ttnn-core until its developers take it over.
 # TTNN framework tests stay with ttnn-core and the other tests/ttnn/ owners.
 tests/ttnn/unit_tests/base_functionality/ @tenstorrent/metalium-developers-ttnn-core @razorback3 @dongjin-na @bbradelTT
 tests/ttnn/unit_tests/tensor/ @tenstorrent/metalium-developers-ttnn-core @razorback3 @dongjin-na @bbradelTT
@@ -669,9 +669,6 @@ tests/ttnn/unit_tests/base_functionality/test_view.py @razorback3 @dongjin-na @b
 tests/ttnn/unit_tests/base_functionality/test_concat_issue.py @razorback3 @dongjin-na @bbradelTT
 tests/ttnn/unit_tests/base_functionality/test_bh_20_cores_sharding.py @razorback3 @dongjin-na @bbradelTT
 tests/ttnn/unit_tests/base_functionality/test_zero_shard_shape.py @razorback3 @dongjin-na @bbradelTT
-# Op tests in tests/ttnn/distributed/, which only ttnn-core owned.
-tests/ttnn/distributed/test_matmul_send_recv_pipeline.py
-tests/ttnn/distributed/test_distributed_layernorm_TG.py
 # Op infrastructure, the shared pieces every op builds on: ttnn-core joins the op leads as an owner.
 ttnn/cpp/ttnn/operations/cb_utils.hpp @tenstorrent/metalium-developers-ops-leads @tenstorrent/metalium-developers-ttnn-core
 ttnn/cpp/ttnn/operations/compute_throttle_utils.cpp @tenstorrent/metalium-developers-ops-leads @tenstorrent/metalium-developers-ttnn-core
@@ -696,53 +693,31 @@ tests/ttnn/unit_test_runner.py @tenstorrent/metalium-developers-ttnn-core @razor
 tests/ttnn/unit_tests/test_comparison_funcs.py @tenstorrent/metalium-developers-ttnn-core @razorback3 @dongjin-na @bbradelTT
 tests/ttnn/unit_tests/test_comp_pcc_fix.py @tenstorrent/metalium-developers-ttnn-core @razorback3 @dongjin-na @bbradelTT
 tests/ttnn/unit_tests/test_parametrize_id_stability.py @tenstorrent/metalium-developers-ttnn-core @razorback3 @dongjin-na @bbradelTT
-# Op code outside the op folders.
+# Op bindings outside the op folders.
 ttnn/cpp/ttnn-nanobind/operations/copy.* @nsextonTT
 ttnn/cpp/ttnn-nanobind/activation.* @nsextonTT
-ttnn/tt_lib/fused_ops/
-ttnn/tt_lib/fallback_ops/
-ttnn/ttnn/experimental_loader/golden_functions.py
-# Device and host streaming: D2D/H2D/D2H stream services, sockets and layer services.
-ttnn/core/tensor/*d2d_*
-ttnn/core/tensor/flatbuffer/*d2d_*
-ttnn/core/tensor/kernels/
-ttnn/core/tensor/stream_service_common.hpp
-ttnn/api/ttnn/tensor/*d2d_*
-ttnn/core/services/
-ttnn/api/ttnn/services/
+# Bindings and tests for device and host streaming.
 ttnn/cpp/ttnn-nanobind/*_stream_service.* @nsextonTT
 ttnn/cpp/ttnn-nanobind/hd_socket.* @nsextonTT
 ttnn/cpp/ttnn-nanobind/layer_ack_service.* @nsextonTT
 ttnn/cpp/ttnn-nanobind/layer_completion.* @nsextonTT
-ttnn/ttnn/_experimental/layer_completion.py
 tests/ttnn/unit_tests/gtests/tensor/kernels/ @razorback3 @dongjin-na @bbradelTT
 tests/ttnn/unit_tests/gtests/tensor/*stream_service* @razorback3 @dongjin-na @bbradelTT
 tests/ttnn/unit_tests/gtests/tensor/test_stream_pipeline.cpp @razorback3 @dongjin-na @bbradelTT
 tests/ttnn/unit_tests/base_functionality/*stream_service* @razorback3 @dongjin-na @bbradelTT
 tests/ttnn/unit_tests/base_functionality/test_d2d_pipeline_descriptor.py @razorback3 @dongjin-na @bbradelTT
 tests/ttnn/unit_tests/base_functionality/test_layer_* @razorback3 @dongjin-na @bbradelTT
-# Prefetcher and global circular buffers.
-ttnn/core/global_circular_buffer.cpp
-ttnn/api/ttnn/global_circular_buffer.hpp
-ttnn/core/prefetcher_pipe.cpp
-ttnn/api/ttnn/prefetcher_pipe.hpp
+# Bindings and tests for the prefetcher and global circular buffers.
 ttnn/cpp/ttnn-nanobind/global_circular_buffer.* @nsextonTT
 ttnn/cpp/ttnn-nanobind/prefetcher_pipe.* @nsextonTT
-ttnn/ttnn/_experimental/tensor_prefetcher_matmul.py
-ttnn/ttnn/_experimental/reload.py
 tests/ttnn/unit_tests/base_functionality/*prefetcher* @razorback3 @dongjin-na @bbradelTT
 tests/ttnn/unit_tests/base_functionality/test_global_circular_buffer.py @razorback3 @dongjin-na @bbradelTT
 tests/ttnn/unit_tests/base_functionality/test_reload_host_support.py @razorback3 @dongjin-na @bbradelTT
-# Fabric, mesh sockets and disaggregation.
+# Bindings and tests for fabric, mesh sockets and disaggregation.
 ttnn/cpp/ttnn-nanobind/fabric.* @nsextonTT
 ttnn/cpp/ttnn-nanobind/mesh_socket.* @nsextonTT
-ttnn/core/distributed/*socket*
-ttnn/api/ttnn/distributed/*socket*
-ttnn/ttnn/_experimental/fabric_mux.py
 tests/ttnn/unit_tests/base_functionality/*fabric* @razorback3 @dongjin-na @bbradelTT
-tests/ttnn/distributed/test_socket_perf.py
 ttnn/cpp/ttnn-nanobind/disaggregation.* @nsextonTT
-ttnn/cpp/ttnn/experimental/disaggregation/
 tests/ttnn/unit_tests/base_functionality/test_kv_chunk_table_strided_bindings.py @razorback3 @dongjin-na @bbradelTT
 # Bindings and tests for code other teams own.
 tests/ttnn/unit_tests/base_functionality/test_graph_report_device_tensors_unit.py @razorback3 @dongjin-na @bbradelTT
@@ -750,11 +725,15 @@ ttnn/cpp/ttnn-nanobind/pipeline_module_nanobind.* @nsextonTT
 ttnn/cpp/ttnn-nanobind/mcast_host.* @nsextonTT
 tests/ttnn/unit_tests/base_functionality/test_mcast_host_bindings.py @razorback3 @dongjin-na @bbradelTT
 ttnn/cpp/ttnn-nanobind/profiler.* @nsextonTT
-ttnn/cpp/tools/profiler/
-# Examples.
-ttnn/ttnn/examples/
-ttnn/examples/add/add.cpp
+# Outside ttnn-core's scope and rarely changed: no owner, so anyone with write access can approve.
+tests/ttnn/distributed/test_matmul_send_recv_pipeline.py
+tests/ttnn/distributed/test_distributed_layernorm_TG.py
+ttnn/tt_lib/fused_ops/
+ttnn/tt_lib/fallback_ops/
+ttnn/ttnn/_experimental/fabric_mux.py
+ttnn/cpp/ttnn/experimental/disaggregation/
 ttnn/examples/lab_*/lab_*.cpp
+ttnn/ttnn/download_sfpi.py
 
 # TTNN Graph Report
 tests/ttnn/unit_tests/base_functionality/test_graph_report.py @tenstorrent/thirdparty-lights-on-software
