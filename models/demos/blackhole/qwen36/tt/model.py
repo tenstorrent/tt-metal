@@ -3652,7 +3652,8 @@ class Qwen36Model:
             if t is not None and not self._vfy_pre_has(_pre, t):
                 ttnn.deallocate(t)
         if _pre is not None:
-            self._vfy_pre_warm(_pre)
+            _mk1 = getattr(self, "_vfy_mk1", None)
+            self._vfy_pre_warm(_pre, no_clone=bool(_mk1 is not None and _mk1.ready))
             self._vfy_pre_log("B-row", _pre)
         ttnn.synchronize_device(dev)
         self._vfy_att0 = _att0
@@ -3679,11 +3680,18 @@ class Qwen36Model:
         pre[name] = t
 
     @staticmethod
-    def _vfy_pre_warm(pre):
+    def _vfy_pre_warm(pre, no_clone=False):
         """Compile the in-capture hand-off copies (capture_decode forbids program-cache misses): one ttnn.copy into each
-        destination from a same-spec clone, outside any trace. The destinations keep their addresses and content."""
+        destination from a same-spec clone, outside any trace. The destinations keep their addresses and content.
+        ``no_clone`` (QWEN36_R16_MEGAKERNEL engine mode): the same-spec source is allocated and filled by ttnn.copy
+        (t -> tmp -> t: the same copy program both ways) instead of ttnn.clone, whose row-major program wants ~1 MB of
+        static CBs, more than the L1 left under the engine's persistent tensors (spec §20)."""
         for t in (pre or {}).values():
-            tmp = ttnn.clone(t, memory_config=t.memory_config())
+            if no_clone:
+                tmp = ttnn.allocate_tensor_on_device(t.shape, t.dtype, t.layout, t.device(), t.memory_config())
+                ttnn.copy(t, tmp)
+            else:
+                tmp = ttnn.clone(t, memory_config=t.memory_config())
             ttnn.copy(tmp, t)
             ttnn.deallocate(tmp)
 
@@ -3906,7 +3914,8 @@ class Qwen36Model:
         if spec_vfy_outs_prealloc_enabled():  # QWEN36_SPEC_VFY_OUTS_PREALLOC: keep the lazily read outputs as destinations
             self._vfy_pre_keep(bk.pre, "logits_rm", _lg[1])
             self._vfy_pre_keep(bk.pre, "normed", bk.normed)
-            self._vfy_pre_warm(bk.pre)
+            _mk1 = getattr(self, "_vfy_mk1", None)
+            self._vfy_pre_warm(bk.pre, no_clone=bool(_mk1 is not None and _mk1.ready))
         for t in _lg:
             if not self._vfy_pre_has(bk.pre, t):
                 ttnn.deallocate(t)
