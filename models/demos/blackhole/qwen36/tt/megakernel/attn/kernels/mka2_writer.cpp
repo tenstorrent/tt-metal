@@ -34,7 +34,13 @@ void kernel_main() {
     constexpr uint32_t MWTB = WTB;
 #endif
     uint32_t a = 0;
+#if defined(MKA_ROLE_STREAM)
+    constexpr uint32_t IS_STREAM = 1; a++;   // per-role binary (spec v0.9.17): EXT-only code compiles out
+#elif defined(MKA_ROLE_EXT)
+    constexpr uint32_t IS_STREAM = 0; a++;   // per-role binary: STREAM-only (MLP / mixer) code compiles out
+#else
     const uint32_t IS_STREAM = get_arg_val<uint32_t>(a++);
+#endif
     const uint32_t idx = get_arg_val<uint32_t>(a++);
     Rect r[2];
     for (uint32_t i = 0; i < 2; ++i) {
@@ -411,7 +417,7 @@ void kernel_main() {
 #endif
         }
 #if defined(MKA_RWO)
-        if (att && wo_nt) {
+        if (!IS_STREAM && att && wo_nt) {
             DeviceZoneScopedN("W-WO");
             cb_reserve_back(CB_S, WK);   // sig(gate) landed before QFLAG (producers barrier before MIXDONE)
             cb_push_back(CB_S, WK);

@@ -24,7 +24,13 @@ void kernel_main() {
     constexpr uint32_t TRID_PQ = 9;
 #endif
     uint32_t a = 0;
+#if defined(MKA_ROLE_STREAM)
+    constexpr uint32_t IS_STREAM = 1; a++;   // per-role binary (spec v0.9.17): EXT-only code compiles out
+#elif defined(MKA_ROLE_EXT)
+    constexpr uint32_t IS_STREAM = 0; a++;   // per-role binary: STREAM-only (MLP / mixer) code compiles out
+#else
     const uint32_t IS_STREAM = get_arg_val<uint32_t>(a++);
+#endif
     const uint32_t wgu_addr = get_arg_val<uint32_t>(a++), gu_page = get_arg_val<uint32_t>(a++);
     Rect r[2];
     for (uint32_t i = 0; i < 2; ++i) {

@@ -53,7 +53,14 @@ void kernel_main() {
     constexpr uint32_t GRP = get_compile_time_arg_val(4), NL = get_compile_time_arg_val(5);
     constexpr uint32_t MIXN = get_compile_time_arg_val(6), NBB = get_compile_time_arg_val(7);
     uint32_t a = 0;
-    const uint32_t IS_STREAM = get_arg_val<uint32_t>(a++), IS_GU = get_arg_val<uint32_t>(a++);
+#if defined(MKA_ROLE_STREAM)
+    constexpr uint32_t IS_STREAM = 1; a++;   // per-role binary (spec v0.9.17): EXT-only code compiles out
+#elif defined(MKA_ROLE_EXT)
+    constexpr uint32_t IS_STREAM = 0; a++;   // per-role binary: STREAM-only (MLP / mixer) code compiles out
+#else
+    const uint32_t IS_STREAM = get_arg_val<uint32_t>(a++);
+#endif
+    const uint32_t IS_GU = get_arg_val<uint32_t>(a++);
     const uint32_t u = get_arg_val<uint32_t>(a++), nblk = get_arg_val<uint32_t>(a++);
     const uint32_t nrecv = get_arg_val<uint32_t>(a++), is_root = get_arg_val<uint32_t>(a++);
     const uint32_t qoff = u * DH;
@@ -337,7 +344,7 @@ void kernel_main() {
             }
         }
 #if defined(MKA_RWO)
-        if (att && wo_nt) {   // real wo, split-N: A_g = A (.) sig(gate) in place over S, then A_g @ Wo slice (ext ring)
+        if (!IS_STREAM && att && wo_nt) {   // real wo, split-N: A_g = A (.) sig(gate) in place over S, then A_g @ Wo slice (ext ring)
             CZONE("C-WO");
             compute_kernel_hw_startup<SrcOrder::Reverse>(CB_A, CB_S, CB_AS);
             cb_wait_front(CB_A, WK);
