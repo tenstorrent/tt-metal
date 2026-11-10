@@ -311,6 +311,9 @@ def test_d2d_socket_sync_multi_tensor(mesh_device, metadata_words):
         del sender
 
 
+# 7168 is the model width; at 128 a per-shard page is 128 B, so the primary packs 4 pages per
+# packet and the last group splits so the fused increment rides alone.
+@pytest.mark.parametrize("hidden", [_HIDDEN, 128], ids=["model_pages", "packed_pages"])
 @pytest.mark.parametrize("extras", [False, True], ids=["one_tensor", "extra_tensors"])
 @pytest.mark.parametrize("relay", [False, True], ids=["direct", "relay"])
 @pytest.mark.parametrize(
@@ -325,7 +328,7 @@ def test_d2d_socket_sync_multi_tensor(mesh_device, metadata_words):
     ],
     indirect=["mesh_device", "device_params"],
 )
-def test_d2d_socket_sync_shared_links(mesh_device, relay, extras):
+def test_d2d_socket_sync_shared_links(mesh_device, relay, extras, hidden):
     """Share mode (as in the prefill runner): 3 transfers, checked bit for bit.
     With relay=True only the row-3 chips send across, like cable chips on a pod.
     With extras=True a sharded bf16 TILE tensor and replicated uint32 ids (odd page
@@ -340,7 +343,7 @@ def test_d2d_socket_sync_shared_links(mesh_device, relay, extras):
 
     g_tokens = half * _TOKENS_PER_ROW
     global_spec = ttnn.TensorSpec(
-        shape=ttnn.Shape([1, 1, g_tokens, _HIDDEN]),
+        shape=ttnn.Shape([1, 1, g_tokens, hidden]),
         dtype=ttnn.uint32,
         layout=ttnn.ROW_MAJOR_LAYOUT,
         buffer_type=ttnn.BufferType.DRAM,
@@ -375,11 +378,11 @@ def test_d2d_socket_sync_shared_links(mesh_device, relay, extras):
         extra_tensors=extra_tensors,
     )
 
-    numel = g_tokens * _HIDDEN
+    numel = g_tokens * hidden
     try:
         # 3 transfers: the relay slots and credits must be reused correctly after the first.
         for it in range(3):
-            torch_in = (torch.arange(numel, dtype=torch.int32) + it * 100_000).reshape(1, 1, g_tokens, _HIDDEN)
+            torch_in = (torch.arange(numel, dtype=torch.int32) + it * 100_000).reshape(1, 1, g_tokens, hidden)
             tt_in = _to_device(torch_in, sender_mesh, _shard_mapper(sender_mesh))
             md_torch = torch.tensor(metadata_words, dtype=torch.int32).reshape(1, 1, 1, -1) + it
             md_tensor = _to_device(md_torch, sender_mesh, _replicate_mapper(sender_mesh))
@@ -421,7 +424,7 @@ def test_d2d_socket_sync_shared_links(mesh_device, relay, extras):
                 assert len(drained) == 4
                 _assert_shards_equal(sent[1], drained[1], f"relay={relay} iter {it} bf16 tile")
                 _assert_shards_equal(sent[2], drained[2], f"relay={relay} iter {it} ids")
-            print(f"[d2d shared-links] relay={relay} extras={extras} iter {it}: {len(out_shards)} shards bit-exact")
+            print(f"[d2d shared-links] relay={relay} extras={extras} hidden={hidden} iter {it}: {len(out_shards)} shards bit-exact")
 
             for t in sent:
                 ttnn.deallocate(t)
