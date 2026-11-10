@@ -769,6 +769,75 @@ def test_rev68_agk_knob_and_layout(monkeypatch):
     assert hop * T * SP.AG32_PPC * SP.TB == 3 * hop * T * SP.AGK_PPC * SP.TB == 6094848  # 5.8 MB -> 1.9 MB at t 16
 
 
+# ------------------------------------------------------------------ the shard tail knobs compose; the 8x4 defaults
+KNOB_ENV = {"comb": "GLM53_DSA_SHARD_COMB", "rs1_early": "GLM53_DSA_SHARD_RS1_EARLY", "agk": "GLM53_DSA_SHARD_AGK"}
+
+
+def _knob_env(monkeypatch, on: dict) -> None:
+    """exactly the knobs of `on` set to 1, the others absent"""
+    for k, var in KNOB_ENV.items():
+        if on.get(k):
+            monkeypatch.setenv(var, "1")
+        else:
+            monkeypatch.delenv(var, raising=False)
+
+
+@pytest.mark.parametrize("t", [1, 4, 16])
+@pytest.mark.parametrize("bits", range(1 << len(KNOB_ENV)))
+def test_shard_knobs_compose(monkeypatch, bits, t):
+    """every subset of COMB / RS1_EARLY / AGK: each flag reads its own variable only (the 8x4 only), and every chip's
+    stream plan takes RS1_EARLY's destination order and AGK's packed AG independently -- RS1 early reorders the column
+    scatter's destinations and nothing else, the AG blocks / link holders / packet headers are the knob-off plan's;
+    AGK's key-packed y_ag keeps every page once and the q pieces where the merge / ix_dm1 read them"""
+    on = {k: bool(bits >> i & 1) for i, k in enumerate(KNOB_ENV)}
+    _knob_env(monkeypatch, on)
+    assert dict(comb=SP.shard_comb(8), rs1_early=SP.shard_rs1_early(8), agk=SP.shard_agk(8)) == on
+    assert not (SP.shard_comb(2) or SP.shard_rs1_early(2) or SP.shard_agk(2))  # the pair / the 2x4: none
+    g, early = SP.Geometry(8, 4), on["rs1_early"]
+    for r in range(8):
+        for c in range(4):
+            SP.audit_links(g.holders(r, c, t))
+            SP.audit_headers(g.header_budget(r, c, t))
+            for name in ("ag1", "ag2", "rs2"):
+                assert g.block(name, t, r, c, rs1_early=early) == g.block(name, t, r, c)
+            b, b0 = g.block("rs1", t, r, c, rs1_early=early), g.block("rs1", t, r, c)
+            assert sorted(b["dsts"]) == sorted(b0["dsts"])
+            assert {k: v for k, v in b.items() if k != "dsts"} == {k: v for k, v in b0.items() if k != "dsts"}
+            assert [d[0] for d in b["dsts"][:4]] == SP.rs1_early_first(r, 8) if early else b["dsts"] == b0["dsts"]
+    if on["agk"]:  # the packed y_ag: 32 blocks x t tokens x AGK_PPC pages, each page once; q pieces in page 0
+        pages = {SP.agk_key_page(t, blk, tok) for blk in range(32) for tok in range(t)}
+        pages |= {SP.agy_q_page(t, blk, tok, d)[0] for blk in range(32) for tok in range(t) for d in (0, 15)}
+        assert sorted(pages) == list(range(32 * t * SP.AGK_PPC))
+
+
+def _protect_env(monkeypatch, keys) -> None:
+    """keys absent, and restored (absent or not) after the test: galaxy_defaults.apply writes os.environ directly"""
+    for k in keys:
+        monkeypatch.setenv(k, "x")
+        monkeypatch.delenv(k)
+
+
+def test_galaxy_defaults_shard_tail(monkeypatch):
+    """tt/galaxy_defaults.py: the 8x4 default turns on AGK (validated: 32 K x 4 ids identical) and leaves RS1_EARLY
+    (4 K x 16 ids pending a knob-off control), COMB (ids move at a near-tie) and AGB (device run pending) opt-in; an
+    explicit environment value wins; other meshes get nothing"""
+    from models.autoports.zai_org_glm_5_3_flash.tt import galaxy_defaults as GD
+
+    assert GD.KNOBS["GLM53_DSA_SHARD_AGK"] == "1"
+    assert not {"GLM53_DSA_SHARD_RS1_EARLY", "GLM53_DSA_SHARD_COMB", "GLM53_DSA_SHARD_AGB"} & set(GD.KNOBS)
+    keys = list(GD.KNOBS) + ["GLM53_MODEL_TRACE_MB", "GLM53_PF_SPARSE_T", "GLM53_PREFILL_BUCKETS"]
+    keys += [v for v in KNOB_ENV.values() if v not in keys] + ["GLM53_DSA_SHARD_AGB"]
+    _protect_env(monkeypatch, keys)
+    assert GD.apply((2, 4), 4096) == {} and not SP.shard_agk(8)
+    got = GD.apply((8, 4), 4096, 4096)
+    assert got["GLM53_DSA_SHARD_AGK"] == "1" and "GLM53_DSA_SHARD_RS1_EARLY" not in got
+    assert SP.shard_agk(8) and not SP.shard_rs1_early(8) and not SP.shard_comb(8)
+    _protect_env(monkeypatch, keys)
+    monkeypatch.setenv("GLM53_DSA_SHARD_AGK", "0")  # an explicit value wins
+    got = GD.apply((8, 4), 4096, 4096)
+    assert "GLM53_DSA_SHARD_AGK" not in got and not SP.shard_agk(8)
+
+
 def test_zz_no_ttnn_was_imported_by_the_suite():
     """The unit CI runs this file without the root conftest: a host suite must never pull ttnn in (it would open
     every chip of the box beside a running mesh job)."""

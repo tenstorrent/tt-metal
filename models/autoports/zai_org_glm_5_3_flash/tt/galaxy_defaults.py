@@ -21,6 +21,15 @@ KNOBS = {
     "GLM53_DSA_SHARD_LANES_T4": "1",  # token lanes for the t <= 4 streams too
     "GLM53_DSA_SHARD_SHARE_SYNC": "1",  # one stream sync set per row count, shared by the layers
     "GLM53_DSA_SHARD_KPH": "auto",  # a merge helper holds 32 / helpers chips' lists: 4 token lanes at t 4, 8 at t 8-16
+    # the shard's AG / RS1 tail (doc/perf/shard_8x4_design.md section 10; each knob is its own define, any subset
+    # composes). GLM53_DSA_SHARD_AGK: the key-packed all-gather -- AG1 ships each token's candidate keys in one page (2
+    # pages per token instead of 6: a third of both AG rounds' bytes); 4 K x 16 42.6 -> 41.0 ms, 32 K x 4 ids identical
+    "GLM53_DSA_SHARD_AGK": "1",
+    # opt-in, not defaults: GLM53_DSA_SHARD_RS1_EARLY (pass 0's RS1 slices stream while pass 1 computes, two-field
+    # gates of MLA_REV 67; 4 K x 16 42.6 -> 41.6 ms, but alone it moved user 0 off the KPH ids at decode id 9 -- out
+    # until the knob-off control of the same tree decides), GLM53_DSA_SHARD_COMB (the fold combine on the lane roots:
+    # correct, but its fp32 order moves the ids at a near-tie -- fails the strict ids gate) and GLM53_DSA_SHARD_AGB (on
+    # AGK: one y_ag chunk per block; its device run is pending)
     "GLM53_EP_KEEP_PERMUTED": "1",  # the permuted gate_up copies stay under GLM53_FUSED_EXPERTS_CACHE
     "GLM53_DSA_POOL": "1",  # the sparse_dsa layers' intermediates from one AllocPool (stack_model._dsa_pools)
     "GLM53_MOE_SHARE_M": "1",  # one shared-expert intermediate per stack (mk_moe.MkMoE)
