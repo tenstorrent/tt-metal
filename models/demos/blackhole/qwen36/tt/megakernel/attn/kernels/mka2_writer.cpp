@@ -367,8 +367,24 @@ void kernel_main() {
             npc = ip = outstanding = 0;
             if (L + 1 < NL) plan_layer(L + 1, true);
             V12_PLAN_MLP(L);
+#if defined(MK_V12)
+            {   // pump the pieces through the GDN stall instead of blocking on the command buffer up front (a blocking
+                // issue_some held some writers ~20 us past the stall and delayed their MLP)
+                const uint32_t t0 = reg_read(RISCV_DEBUG_REG_WALL_CLOCK_L);
+                while ((uint32_t)(reg_read(RISCV_DEBUG_REG_WALL_CLOCK_L) - t0) < (uint32_t)MKA_S_GDN) {
+                    if (ip < npc && noc_cmd_buf_ready(noc_index, read_cmd_buf)) {
+                        const Piece& pc = pcs[ip++];
+                        noc_async_read_set_trid(pc.trid);
+                        noc_async_read(pc.src, pc.dst, pc.bytes);
+                        noc_async_read_set_trid(0);
+                    }
+                }
+                issue_some(true);
+            }
+#else
             issue_some(true);
             spin_cycles(MKA_S_GDN);
+#endif
             spin_cycles(S_AR);
 #if defined(MKA_RQKV)
             if (is_qroot && L + 1 < NL) mcast_word(gs[GS_XRDY], L + 1, rf, self_rf, 0);   // layer boundary -> STREAM_EXT
@@ -403,8 +419,8 @@ void kernel_main() {
 #if defined(MKA_WO_NOC0)
                 plan_wo();
 #endif
+                V12_PLAN_MLP(L);   // needed at the end of THIS layer: before the next layer's mixer pieces
                 if (L + 1 < NL) plan_layer(L + 1, true);
-                V12_PLAN_MLP(L);
                 if (!budget) issue_some(true);
             }
             const auto kv = TensorAccessor(kv_args, kv_addr[L], KVTB);
