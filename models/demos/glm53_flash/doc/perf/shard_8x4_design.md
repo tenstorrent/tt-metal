@@ -115,3 +115,23 @@ landed below). The fix is in the allocation lifecycle, not the CBs:
 Validated at the pool-v3 commit bbe4485aeea (2026-11-09 01:41 / 01:57): 32 K x 4 ids identical (27.1 ms), 32 K x 16
 (68.7 ms); the later re-validation of the rows is in section 6. Section 6's 4 K row agrees with the 2x4 shard on the
 first 9 ids (the contract rows are the 32 K ones, identical 24/24).
+
+## 8. Token lanes past 2: KPH chips per merge helper (2026-11-10, MLA_REV 64)
+
+Every token lane held NCHIPS = 32 merge helpers among its chunk cores, so 64 chunk cores gave 2 lanes and t = 16 ran
+8 tokens per lane in series (~4.4 ms per extra token per lane per step: the per-token select / merge handshakes and
+root combines are latency, not bandwidth). `GLM53_DSA_SHARD_KPH` (galaxy default `auto`): helper h holds chips
+h KPH .. h KPH + KPH - 1's candidate lists (2 staging pages, one histogram over the union per round, per-list tie
+counts), so a lane needs 32 / KPH helpers -- `auto` = KPH 1 / 1 / 2 / 4 at 1 / 2 / 4 / 8 lanes; T_g and the per-chip
+quotas equal KPH 1's. Lane-local slots TL = 4 when a lane holds <= 4 tokens keep the kept blocks / mailbox within the
+2-lane bytes (one rise: 1 M at t 4, 32.3 -> 34.2 KB per owner). 16 lanes need 16 free lane cores (14 today).
+
+| e2e (45 layers, greedy) | 2 lanes | KPH auto | ids |
+|---|---|---|---|
+| 4 K x 4 identical | 26.8 ms = 37.4 tok/s/u | 22.9 ms = 43.7 | identical |
+| 4 K x 8 distinct | 41.2 ms = 24.3 | 29.2 ms = 34.3 | user 0 identical |
+| 4 K x 16 distinct | 67.4 ms = 14.8 | 42.6 ms = 23.5 | user 0 equal through id 21, coherent |
+| 32 K x 4 identical | 27.3 ms = 36.7 | 22.8 ms = 43.8 | identical 24 / 24 |
+
+B 1 is unchanged (one lane: KPH 1; 4 K 18.9 ms = 52.8). At 4 K x 16 the unsharded TP32 pool runs 32.1 ms, so the shard
+now adds 10.5 ms (35.3 with 2 lanes).

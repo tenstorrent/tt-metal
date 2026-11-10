@@ -20,6 +20,7 @@ KNOBS = {
     "GLM53_DSA_SHARD": "1",  # the sequence-sharded DSA pool: unit u of a slot on chip u % 32 (tt/tp_dsa_shard.py)
     "GLM53_DSA_SHARD_LANES_T4": "1",  # token lanes for the t <= 4 streams too
     "GLM53_DSA_SHARD_SHARE_SYNC": "1",  # one stream sync set per row count, shared by the layers
+    "GLM53_DSA_SHARD_KPH": "auto",  # a merge helper holds 32 / helpers chips' lists: 4 token lanes at t 4, 8 at t 8-16
     "GLM53_EP_KEEP_PERMUTED": "1",  # the permuted gate_up copies stay under GLM53_FUSED_EXPERTS_CACHE
     "GLM53_DSA_POOL": "1",  # the sparse_dsa layers' intermediates from one AllocPool (stack_model._dsa_pools)
     "GLM53_MOE_SHARE_M": "1",  # one shared-expert intermediate per stack (mk_moe.MkMoE)
