@@ -719,3 +719,27 @@ Only both flags together reach ~15 µs, and they need the output-length gate.
   | Resident (PQSKIP) | **231-233** |
 
   The attention agent is porting this to `anatarajan/qwen38-r16-mk-mixed3` (mixed2 + RQKV 9e81917a513 + PQ loop 0011c9aea48), with the ext reader filling during W-GDN. Validation: NL=8, AMASK 0x88, u8 and u1, reporting attention µs and the preceding GDN-layer µs.
+
+**v0.8.2 row-compact AR measured (AR track, 3b2077cefab, exact, PCC 0.999996, identical on all 8 devices):**
+
+| R | AR only (µs) | t0 → x in CB_X |
+|---|---|---|
+| 4 | 10.14 | **11.05** (packed delivery) |
+| 8 | 11.10 | — |
+| 16 | 13.02 | — |
+| 32 | 17.59 | 20.22 (no regression) |
+
+The pipelined K=2 chain at R=32 was ~17.8 µs, a tie with one-shot. u8 stays on the exact bf16 one-shot (~20.2 µs).
+
+**Pinned u1 x layout ("packed stream").** When R < 32, CB_X slot (j % 2) holds chunk j as a stream of **[R,32] tiny tiles**. For tile t of the chunk, face 0 (rows 0..R-1, cols 0-15) is at byte t·2R·32 and face 1 (cols 16-31) is at (2t+1)·R·32. This is byte-identical to a ttnn [R,32] tile with two R×16 faces.
+- Consumers (MLP gate/up, GDN in-proj, attention qkv) take one of two options:
+  - (a) **Default:** the reader unpacks locally into 32-row tile layout (20 copies of R·32 B per chunk, est. 0.3-0.5 µs), rows ≥R stale.
+  - (b) **Flag MK_TINY_IN0:** the matmul reads in0 directly as [R,32] tiny tiles (LLK partial-face unpack). This has zero copy cost, is to be proven, and must stay exact vs (a).
+- Unpacking in place on the owner (40 tiny multicasts per chunk, 28.3 µs) is forbidden.
+- Σx² for R < 32 is computed on the owner from the packed stream (rows < R only), in parallel with the AG, budget ≤0.5 µs on path.
+
+**Projection at u1:** AR 11.05 µs, attention 232 µs (v0.8.1 resident bound), real qkv, unpack +0.5 µs per consumer phase.
+- With STEP_U1 at 21 µs: **u1 ≈ 8.1 ms** (1.3 ms margin).
+- Without STEP_U1 (GDN at 42 µs): ≈ 9.1 ms ✓ (0.3 margin).
+- So with row-compact AR + v0.8.1, **u1 no longer depends on STEP_U1**; STEP_U1 becomes margin.
+- u8: 13.47 ms at 20.2 µs AR (0.23 margin, exact). u8 is now the binding gate.
