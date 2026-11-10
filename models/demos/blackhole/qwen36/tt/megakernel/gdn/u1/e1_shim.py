@@ -320,7 +320,7 @@ def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_ep
     if GO:
         WOU = GO["wou_dir"]
         RP, MAXT = GO["wk"] * GO["maxt"], GO["maxt"]
-        CR_, CA_, CO_ = GO.get("cb", (41, 42, 43))   # ring, A, out slot (ids the role's table leaves free)
+        CR_, CA_, CO_ = GO.get("cb", (42, 43, 44))   # ring, A, out slot (ids the role's table leaves free)
         _used = {ids[n][0] for n in ids}
         assert not ({CR_, CA_, CO_} & _used), ("gdn_out CB ids clash with the GDN role's", sorted({CR_, CA_, CO_} & _used))
         go_inc = " ".join(f'noc_semaphore_inc(get_noc_addr({x}u, {y}u, {GO["gdna"]}u), 1);' for x, y in GO["gdn_xy"])

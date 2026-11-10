@@ -36,7 +36,11 @@ struct Reduce {
         return has_work || MKAR_STATS;
     }
 
-    FORCE_INLINE void iter() const {
+#if defined(MKAR_NOOWN)
+    FORCE_INLINE void iter(uint32_t own_cb = MKAR_CB_OWN) const {
+#else
+    FORCE_INLINE void iter(uint32_t own_cb = 0) const {
+#endif
         constexpr uint32_t cb_in0 = MKAR_CB_RED, cb_in1 = MKAR_CB_RED, cb_out0 = MKAR_CB_OUT;
         constexpr uint32_t max_dst_tiles = DST_ACCUM_MODE ? 4 : 8;
         CircularBuffer cb_in(cb_in0), cb_out(cb_out0), cb_res(MKAR_CB_RES);
@@ -67,9 +71,9 @@ struct Reduce {
                                   (block + 1) * block_tiles + p * max_dst_tiles + i, i);
                     }
                 }
-                add_init(cb_in0, MKAR_CB_OWN, true);
+                add_init(cb_in0, own_cb, true);
                 for (uint32_t i = 0; i < n; ++i) {
-                    add_tiles(cb_in0, MKAR_CB_OWN, (num_blocks - 1) * block_tiles + p * max_dst_tiles + i, p * max_dst_tiles + i, i);
+                    add_tiles(cb_in0, own_cb, (num_blocks - 1) * block_tiles + p * max_dst_tiles + i, p * max_dst_tiles + i, i);
                 }
 #else
                 if constexpr (MKAR_FUSE_RES) {

@@ -283,13 +283,26 @@ void kernel_main() {
     const uint32_t ar_on = vrole == 2 ? ar_blk[0] : 0;
     const uint32_t ar_nready = ar_on ? ar_blk[1] : 0;
     static mkar::Recv ar;
+    uint32_t ar_it = 0;   // running AR index of the pass (attention ARs and MLP ARs in program order)
     if (ar_on) ar.init(MK_AR_BLK_RECV, MK_AR_BLK_RECV + MKAR_NCOMMON);
+#if defined(MK_AR_PUB)   // GDN24: publish CB_RED (+ CB_AIN) owner addresses to the 4 hosted AR senders (corner cores)
+    if (vrole == 2) {
+        constexpr uint32_t pxy[4] = {MK_AR_PUBXY0, MK_AR_PUBXY1, MK_AR_PUBXY2, MK_AR_PUBXY3};
+        for (uint32_t i = 0; i < 4; ++i) {
+#if defined(MKAR_ATYPE)
+            noc_inline_dw_write(get_noc_addr(pxy[i] >> 16, pxy[i] & 0xFFFF, MK_AR_PUBA), get_read_ptr(MKAR_CB_AIN));
+#endif
+            noc_inline_dw_write(get_noc_addr(pxy[i] >> 16, pxy[i] & 0xFFFF, MK_AR_PUB), get_write_ptr(MKAR_CB_RED));
+        }
+        noc_async_write_barrier();
+    }
+#endif
 #endif
 #if defined(MK_REAL_AR) && defined(MKA_ROLE_EXT) && defined(MK_AR_GAMMA)
 #ifndef MK_AR_GTRID
 #define MK_AR_GTRID 14   // writer trids in use: 1-3, 5, 6-7, 9, 12-13
 #endif
-    auto ar_gamma_issue = [&](uint32_t L) {
+    auto ar_gamma_issue = [&](uint32_t gl, uint32_t gn) {   // γ of layer gl, norm gn (0 input_ln, 1 post_attn_ln)
         // spec §19: γ_next (layer L + 1's input_layernorm, row 0 of each tile, √1.25 folded) for this owner's chunk ->
         // pbuf+0 (dead from C-OSUM(L) until the next MLP's partials, which follow delivery(L); NOT across ARs: real wo
         // aliases A / S there). Issued at the AR start, it lands during the RS. R < 32: row 0 replicated into the
@@ -298,20 +311,33 @@ void kernel_main() {
             cb_reserve_back(MK_AR_CBG, MK_AR_GT);
             const uint32_t gd = get_write_ptr(MK_AR_CBG);
 #if MK_AR_GROWS == 0
-            const uint32_t gp = (((L + 1) % NL) * 2 + 0) * 160 + (2 * vk + voslot) * 10;
+            const uint32_t gp = (gl * 2 + gn) * 160 + (2 * vk + voslot) * 10;
             const auto gm = TensorAccessor(gm_args, ar_blk[MK_AR_BLK_GAMMA], 2048);   // address: AR arg table word 19
             noc_async_read_set_trid(MK_AR_GTRID);
             for (uint32_t t = 0; t < 10; ++t) noc_async_read(gm.get_noc_addr(gp + t), gd + t * 2048, 2048);
             noc_async_read_set_trid(0);
 #else
             // R < 32: the host-built packed table (one page per (layer, norm, chunk) = GT pseudo-tiles, γ row-replicated)
-            const uint32_t gp = (((L + 1) % NL) * 2 + 0) * 16 + (2 * vk + voslot);
+            const uint32_t gp = (gl * 2 + gn) * 16 + (2 * vk + voslot);
             const auto gm = TensorAccessor(gm_args, ar_blk[MK_AR_BLK_GAMMA], MK_AR_GT * 2048);
             noc_async_read_set_trid(MK_AR_GTRID);
             noc_async_read(gm.get_noc_addr(gp), gd, MK_AR_GT * 2048);
             noc_async_read_set_trid(0);
 #endif
         }
+    };
+#endif
+#if defined(MK_REAL_AR) && defined(MKA_ROLE_EXT) && defined(MK_AR_DBGADDR)
+    // MK_AR_DBG (validation, R = 32): after AR `it`, this owner's AR input chunk (page (2it)*160 + 10j + t) and the residual
+    // after the AR (page (2it + 1)*160 + 10j + t) -> DRAM; the bench checks res_it = res_{it-1} + ring * in_it per AR
+    auto ar_dbg = [&](uint32_t it, uint32_t in_l1) {
+        const auto db = TensorAccessor(qo_args, MK_AR_DBGADDR, 2048);
+        const uint32_t j = 2 * vk + voslot, ro = get_read_ptr(CB_VX0);
+        for (uint32_t t = 0; t < 10; ++t) {
+            noc_async_write(in_l1 + t * 2048, db.get_noc_addr((2 * it) * 160 + 10 * j + t), 2048);
+            noc_async_write(ro + t * 2048, db.get_noc_addr((2 * it + 1) * 160 + 10 * j + t), 2048);
+        }
+        noc_async_write_barrier();
     };
 #endif
     // owner phase of layer L (stand-in AR): x chunk to the K-row, then the column-partial sum and its release
@@ -321,7 +347,7 @@ void kernel_main() {
         // odd and delivers this layer's x after them, so raising busy earlier deadlocks (x -> partials -> clear)
         { DeviceZoneScopedN("W-OGO"); noc_semaphore_wait_min(vw(vg[VG_MGO]), L + 1); }
 #if defined(MK_REAL_AR) && defined(MKA_ROLE_EXT) && defined(MK_AR_GAMMA) && defined(MK_AR_GEARLY)
-        ar_gamma_issue(L);   // dedicated γ CB (not pbuf): issue at the MLP start, off the AR path
+        ar_gamma_issue((L + 1) % NL, 0);   // dedicated γ CB (not pbuf): issue at the MLP start, off the AR path
 #endif
         v_busy(vg[VG_BUSY], 2 * L + 1, vbmirror, vbrc);   // x delivery (stand-in) is on the reader (NOC1)
         { DeviceZoneScopedN("W-OP"); noc_semaphore_wait_min(vw(vg[VG_P]), V_NCOL * (L + 1)); }
@@ -347,16 +373,21 @@ void kernel_main() {
                 noc_semaphore_inc(get_noc_addr(xy >> 16, xy & 0xFFFF, ar_blk[3 + 2 * i]), 1);
             }
 #if defined(MK_AR_GAMMA) && !defined(MK_AR_GEARLY)
-            ar_gamma_issue(L);   // after READY: a stalled read issue under the weight pump delayed every device's RS
+            ar_gamma_issue((L + 1) % NL, 0);   // after READY: a stalled read issue under the weight pump delayed every device's RS
 #endif
-            ar.iter(L);   // the gather role returns after the AG wait; CB_VXO is read by then (RS done)
+            ar.iter(ar_it++);   // the gather role returns after the AG wait; CB_VXO is read by then (RS done)
+#if defined(MK_AR_DBGADDR)
+            ar_dbg(ar_it - 1, get_read_ptr(CB_VXO));
+#endif
 #if defined(MK_AR_GAMMA)
             // only the γ read (a plain barrier also waited on this writer's outstanding weight reads: +4-6 us in the
             // pre-attention window)
             noc_async_read_barrier_with_trid(MK_AR_GTRID);
             cb_push_back(MK_AR_CBG, MK_AR_GT);   // γ landed + the AR output is complete: the compute may scale it
 #endif
-#if !defined(MKAR_DLV_SIGNAL) && !defined(MKAR_DLV_NONE)
+#if defined(MKAR_DLV_NONE) && !defined(MK_AR_GAMMA)
+            *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(MK_AR_DLV) = L + 1;   // the NOC1 reader delivers (v12_ardlv)
+#elif !defined(MKAR_DLV_SIGNAL) && !defined(MKAR_DLV_NONE)
             noc_semaphore_inc(get_noc_addr(qr_x, qr_y, MK_AR_XCNT), 1);   // x of layer L + 1 delivered to this K-row
 #endif   // (MKAR_DLV_SIGNAL: the reader delivers on NOC1 and counts it, mka2_reader.cpp v12_ardlv)
         }
@@ -910,6 +941,31 @@ void kernel_main() {
             wou::scatter(CB_QO, QO_SLOT, wo_nt, wo_tile, ow_x, ow_y, xo, gs[GS_WOCNT]);   // rot order: farthest owner first
             if (own_chunk < 16) {   // owner: chunk complete -> READY (AR); bench: debug copy + WODONE on the Q root
                 noc_semaphore_wait_min(l1w(gs[GS_WOCNT]), MKA_WOCNT_AT(L, A));
+#if defined(MK_REAL_AAR) && defined(MKA_ROLE_EXT)
+                if (ar_on) {   // the real attention AR (spec §19): wo output CB_XO (CB 23) -> residual -> x of this layer's MLP
+                    MK_AR_ZONE("W-AAR");
+                    for (uint32_t i = 0; i < ar_nready; ++i) {
+                        const uint32_t xy = ar_blk[2 + 2 * i];
+                        noc_semaphore_inc(get_noc_addr(xy >> 16, xy & 0xFFFF, ar_blk[3 + 2 * i]), 1);
+                    }
+#if defined(MK_AR_GAMMA)
+                    ar_gamma_issue(L, 1);   // post_attention_layernorm γ -> pbuf+0: the owner's wo compute released A / S
+#endif
+                    ar.iter(ar_it++);   // CB_XO is read by the RS once this returns
+#if defined(MK_AR_DBGADDR)
+                    ar_dbg(ar_it - 1, get_read_ptr(CB_XO));
+#endif
+#if defined(MK_AR_GAMMA)
+                    noc_async_read_barrier_with_trid(MK_AR_GTRID);
+                    cb_push_back(MK_AR_CBG, MK_AR_GT);
+                    cb_wait_front(CB_VXO, V_OT);   // x_deliver (the compute, CB_VXO is empty between the MLP ARs' handoffs)
+                    *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(MK_AR_ADLV) = A + 1;
+                    cb_pop_front(CB_VXO, V_OT);
+#else
+                    *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(MK_AR_ADLV) = A + 1;   // the NOC1 reader delivers
+#endif
+                }
+#endif
                 noc_semaphore_inc(get_noc_addr(qr_x, qr_y, gs[GS_WODONE]), 1);   // READY first; the copy is bench-only
                 for (uint32_t i = 0; i < 10; ++i) noc_async_write(xo + i * 2048, wod.get_noc_addr(L * WN + own_chunk * 10 + i), 2048);
                 noc_async_write_barrier();
@@ -937,7 +993,9 @@ void kernel_main() {
 #if !defined(MKA_RWO)
             spin_cycles(S_WO);
 #endif
+#if !defined(MK_REAL_AAR)   // real attention AR: the MLP's W-VX waits its x flag (2L + 2) instead
             spin_cycles(S_AR);
+#endif
             cb_reserve_back(CB_GO, 1);
             cb_push_back(CB_GO, 1);
         }

@@ -230,7 +230,8 @@ def setup_bench(dev, MESH, mesh_identity):
     GDNC = []
     if GDN24:
         assert GXF == GX + 2 and GYF == GY + 2, "MKA_GDN24 assumes the 12 x 10 grid (rows 8-9 = the 24 GDN cores)"
-        assert ('MK_REAL_AR', '1') not in MKDEF, "MKA_GDN24: the AR corner is GDN-role during bring-up (no MK_REAL_AR yet)"
+        # MK_REAL_AR + GDN24: the AR corner (x 10-11, rows 8-9) runs the GDN role with the AR sender phases hosted in its
+        # reader / writer (see _gdn_host_ar below)
         GDNC = [i for i in range(NCF) if fcores[i].y >= GY]   # row-major: y 8 then 9, x 0..11
         ARC = set()
     RESV = ARC | set(GDNC)
@@ -570,14 +571,46 @@ def setup_bench(dev, MESH, mesh_identity):
         # MK_AR_DLVR=1 (default, spec v1.21): x delivery on the owner READER (NOC1) via a local handoff word
         AR_DLVR = os.environ.get('MK_AR_DLVR', '1') == '1'
         AR_DLV = ttnn.create_global_semaphore(dev, O_CRS, 0) if AR_DLVR else None
+        # MK_REAL_AAR=1 (spec §19): the real attention AR after each attention layer's wo (input: the wo unit's output CB
+        # 23 on the owners, which also spans the 4 sender cores so its local address is the owners'); it delivers the
+        # MLP's x (X2 flag 2L + 2) with γ_post_attn. ARs per pass: NL + attention layers, in program order.
+        REAL_AAR = ('MK_REAL_AAR', '1') in MKDEF
+        AR_NAR, AR_ATYPE = NL, 0
+        if REAL_AAR:
+            assert ('MKA_RWO', '1') in MKDEF and AR_DLVR, "MK_REAL_AAR needs MKA_RWO (the wo unit's CB_XO) and the reader-side delivery"
+            _k = 0
+            for L_ in range(NL):
+                if is_attn_layer(L_): AR_ATYPE |= 1 << _k; _k += 1
+                _k += 1
+            AR_NAR = _k
+            AR_ADLV = ttnn.create_global_semaphore(dev, O_CRS, 0); AR_ASRC = ttnn.create_global_semaphore(dev, O_CRS, 0)
+            MKDEF = MKDEF + [('MK_AR_ADLV', str(ttnn.get_global_semaphore_address(AR_ADLV))), ('MK_AR_ASRC', str(ttnn.get_global_semaphore_address(AR_ASRC))),
+                             ('MK_AR_CB_AIN', '23')]
+            print(f"[ar] attention AR on: {AR_NAR} ARs / pass, attention mask {AR_ATYPE:#x}", flush=True)
+        # MK_AR_DBG=1 (validation, R = 32): per-AR input / residual chunks -> DRAM (see mka2_writer.cpp ar_dbg)
+        AR_DBG = os.environ.get('MK_AR_DBG', '0') == '1' and V_R == 32
+        if AR_DBG:
+            ar_dbgt = ttnn.from_torch(torch.zeros(1, 1, TILE, AR_NAR * 2 * H).bfloat16(), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=dev, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            MKDEF = MKDEF + [('MK_AR_DBGADDR', str(ar_dbgt.buffer_address()))]
         if AR_DLVR: MKDEF = MKDEF + [('MK_AR_DLV', str(ttnn.get_global_semaphore_address(AR_DLV)))]
         MKDEF = MKDEF + [('MK_AR_XF0', str(ttnn.get_global_semaphore_address(AR_XF[0]))), ('MK_AR_XF1', str(ttnn.get_global_semaphore_address(AR_XF[1]))),
                          ('MK_AR_XCNT', str(ttnn.get_global_semaphore_address(AR_XCNT)))]
+        # GDN24 (AR sender hosted in the GDN role on the corner, spec v1.44): the corner cores do NOT span the owners' RS slot
+        # CB (CB_RED, 140-160 KB) or the wo output CB 23 (their GDN-role CB stack would be lifted above the owners' whole CB
+        # region). Owners publish both addresses at init into 2 words on the 4 corner cores (MK_AR_PUB / MK_AR_PUBA); the
+        # hosted SendWriter / SendReader wait for them non-zero; the reader zeroes them at fini (device-local).
+        AR_PUB = None
+        if GDN24:
+            _corner_crs = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(GX, GY), ttnn.CoreCoord(GX + 1, GY + 1))])
+            AR_PUB = [ttnn.create_global_semaphore(dev, _corner_crs, 0) for _ in range(2)]
+            _pxy = [dev.worker_core_from_logical_core(ttnn.CoreCoord(*xy_)) for xy_ in ((GX, GY), (GX + 1, GY), (GX, GY + 1), (GX + 1, GY + 1))]
+            AR_PUB_D = [('MK_AR_PUB', str(ttnn.get_global_semaphore_address(AR_PUB[0]))), ('MK_AR_PUBA', str(ttnn.get_global_semaphore_address(AR_PUB[1])))]
+            MKDEF = MKDEF + AR_PUB_D + [(f'MK_AR_PUBXY{i_}', f'{(c_.x << 16) | c_.y}u') for i_, c_ in enumerate(_pxy)]
         # own_cb (R = 32): no own slot in the AR's RS slot CB; the reduce reads this device's partial from CB_VXO (CB 4)
         # AR CB ids: v12 STREAM-only ids (free on the owners and the AR-only senders) so the program's max CB index stays 44
         # (each index above it costs every core 16 B of kernel config buffer); MK_AR_CBHI=1: the 50..60 block
         _arcb = None if os.environ.get('MK_AR_CBHI', '0') == '1' else [34, 35, 36, 37, 38, 39, 40, 41, 43, 44, 30]
-        AR = ArPhase(dev, n_ar=NL, rows=0 if V_R == 32 else V_R, stats=False, own_cb=4 if os.environ.get('MK_AR_NOOWN', '1') == '1' else None, cb_ids=_arcb, deliver_ext=AR_DLVR,
+        AR = ArPhase(dev, n_ar=AR_NAR, rows=0 if V_R == 32 else V_R, stats=False, own_cb=4 if os.environ.get('MK_AR_NOOWN', '1') == '1' else None, cb_ids=_arcb, deliver_ext=AR_DLVR,
                      x_targets=dict(xk=v_xk.buffer_address(), xpk=v_xpk.buffer_address(), xflag=[ttnn.get_global_semaphore_address(g) for g in AR_XF], rstd=0))
         AR_PT = AR.pt
         _ow = AR.owners_grid()
@@ -613,7 +646,7 @@ def setup_bench(dev, MESH, mesh_identity):
             MKDEF = MKDEF + [('MK_AR_CBG', '32'), ('MK_AR_GT', str(AR_GT)),
                              ('MK_AR_GROWS', '0' if AR_PT == 10 else str(V_R))]
             print(f"[ar] gamma: table {NL}x2x16x10 tiles at DRAM {ar_gam.buffer_address()}, CB 32 = pbuf+0 ({AR_GT} tiles)", flush=True)
-        AR_SEQ = AR_PT == 10   # the MLP input is the evolving residual: sequential golds (x_{L+1} = x_L + ring * mlp_L(x_L))
+        AR_SEQ = AR_PT == 10 and not REAL_AAR   # (attention ARs: no host gold of the chain; MK_AR_DBG checks each AR) the MLP input is the evolving residual: sequential golds (x_{L+1} = x_L + ring * mlp_L(x_L))
         _xres = xb.clone()
         _snd = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(*c_), ttnn.CoreCoord(*c_)) for c_ in ((10, 8), (11, 8), (10, 9), (11, 9))])
         ar_sem = ttnn.create_global_semaphore(dev, _ow.merge(_snd), 0)
@@ -895,9 +928,9 @@ def setup_bench(dev, MESH, mesh_identity):
                       gdn_xy=[(fphys[fi].x, fphys[fi].y) for fi in gcs], owners=[(fphys[f_].x, fphys[f_].y) for f_ in owner_fi],
                       cnt=GSA[13], nt=[len(GT[fi]) for fi in gcs], page=[GP[fi] * banks + GB[fi] for fi in gcs], tiles=[GT[fi] for fi in gcs],
                       dbg=gdbg, dbg_addr=gdbg.buffer_address(),
-                      # CB ids (ring, A, out) on the GDN cores: 41/42/43 reserved for gdn_out (spec v1.50) once the GDN role frees
+                      # CB ids (ring, A, out) on the GDN cores: 42/43/44 reserved for gdn_out (lean GDN table 0..41, -mk-int 80b43723a3f); before
                       # them; MKA_GDNOUT_CB=34,35,37 borrows the AR-sender ids for bring-up WITHOUT MK_REAL_AR
-                      cb=tuple(int(v_) for v_ in os.environ.get('MKA_GDNOUT_CB', '41,42,43').split(',')),
+                      cb=tuple(int(v_) for v_ in os.environ.get('MKA_GDNOUT_CB', '42,43,44').split(',')),
                       # LoFi matmul inside the HiFi4 GDN binary (== HiFi2 on BFP4 weights, the prod BFP4_LAYOUT_LOFI out-proj; MKA_GDNOUT_FID=hifi4: as compiled)
                       lofi=os.environ.get('MKA_GDNOUT_FID', 'lofi') != 'hifi4')
             assert not (set(GO['cb']) & {34, 35, 37, 39} and ('MK_REAL_AR', '1') in MKDEF), "MKA_GDNOUT_CB: 34/35/37/39 are the AR senders' ids"
@@ -924,6 +957,9 @@ def setup_bench(dev, MESH, mesh_identity):
         GDN_WAIT = os.environ.get('MKA_GDN_WAIT', '0') == '1'
         if _gdn_hook is not None and os.environ.get('MKA_GDN_HOOK', '1') == '1':
             import types
+            if REAL_AR:   # the hosted AR sender owns CB ids RS / RED / HDR / AG on the corner cores: the GDN step's DFBs skip
+                # them (e1_shim build_engine skip_cb_ids default (34, 35, 37, 39))
+                assert sorted(AR.cbids[i] for i in (0, 1, 3, 5)) == [34, 35, 37, 39], AR.cbids
             b_ = types.SimpleNamespace(dev=dev, mesh=dev if MESH else None, NL=NL, AMASK=AMASK, is_attn=is_attn_layer, NU=NU, CTX=CTX,
                                        gdn_layers=[L for L in range(NL) if not is_attn_layer(L)], fphys=lambda c_: dev.worker_core_from_logical_core(c_),
                                        cbd=cbd, crs=crs, sems=GDN_SA, out_ready_target=(QRP.x, QRP.y), out_rects=(RECTS_F[:10] if GDN_WAIT else None), per_replay={},
@@ -950,6 +986,61 @@ def setup_bench(dev, MESH, mesh_identity):
         else:
             assert not GDN_WAIT, "MKA_GDN_WAIT needs the GDN hook"
             print('[gdn24] no GDN hook: the 24 GDN cores stay idle', flush=True)
+    # ---- GDN24 + MK_REAL_AR: AR_SEND hosted in the GDN role's reader / writer on the 4 AR corner cores ----
+    def _gdn_host_ar(gks, sp):
+        """gks: the GDN role's [reader, writer, compute] over the 24 GDN cores; sp: AR.sender_parts(this device's parts).
+        The 20 other GDN cores keep the plain role kernels; the 4 corner cores get reader / writer sources generated from
+        the role's (same step code): the loop runs over ALL layers of the pass, GDN step on GDN-type layers, then that
+        layer's AR iterations (attention AR + MLP AR in program order); SendWriter is a kernel_main local (the fabric
+        connection is open for the whole pass). The sender's [common, role] words are the corner cores' runtime args
+        (the role has none)."""
+        import re as _re
+        corner = [ttnn.CoreCoord(*xy) for xy in ((10, 8), (11, 8), (10, 9), (11, 9))]
+        ck = {(c.x, c.y) for c in corner}
+        from models.demos.blackhole.qwen36.tt.megakernel.oneshot_ar import MKDIR as MKDIR_AR
+        _aar = ('MK_REAL_AAR', '1') in MKDEF   # the attention AR (its own branch): two ARs on attention layers
+        nar = [1 + (1 if _aar and is_attn_layer(L_) else 0) for L_ in range(NL)]
+        gmask = sum(1 << L_ for L_ in range(NL) if not is_attn_layer(L_))
+        a2 = sum(1 << L_ for L_ in range(NL) if nar[L_] == 2)
+        out = []
+        for kd in gks:
+            src = str(kd.kernel_source)
+            role = 'r' if src.endswith('g2_reader.cpp') else ('w' if src.endswith('g2_writer.cpp') else None)
+            if role is None:
+                out.append(kd); continue
+            cores = [c for c in ttnn.corerange_to_cores(kd.core_ranges) if (c.x, c.y) not in ck]
+            rest = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in cores])
+            base = dict(compile_time_args=list(kd.compile_time_args), common_runtime_args=list(kd.common_runtime_args), config=kd.config)
+            out.append(ttnn.KernelDescriptor(kernel_source=src, core_ranges=rest, defines=list(kd.defines), runtime_args=ttnn.RuntimeArgs(), **base))
+            txt = open(src).read()
+            hdr = 'mk_ar_send.hpp' if role == 'r' else 'mk_ar_sendw.hpp'
+            obj = 'static mkar::SendReader ar_s;' if role == 'r' else 'mkar::SendWriter ar_s;   // kernel_main local: the fabric connection'
+            loop = _re.search(r'\n  for \(uint32_t L = 0; L < (\d+); \+\+L\) \{\n', txt)
+            assert loop, src
+            end = txt.index('\n  }\n', loop.end())
+            body = txt[loop.end():end]
+            nc = sp['rd_ncommon'] if role == 'r' else sp['wr_ncommon']
+            new_loop = (f'\n  {obj}\n  ar_s.init(0, {nc});\n  uint32_t ar_it = 0, gL = 0;\n'
+                        f'  for (uint32_t LL = 0; LL < {NL}; ++LL) {{\n'
+                        f'   if (({gmask}u >> LL) & 1u) {{\n    const uint32_t L = gL++;\n' + body + '\n   }\n'
+                        f'   for (uint32_t k = 0; k < 1u + (({a2}u >> LL) & 1u); ++k) ar_s.iter(ar_it++);   // this layer\'s ARs\n'
+                        '  }\n' + ('  ar_s.fini(MKAR_ITERS);\n' if role == 'r' else '  ar_s.fini();\n'))
+            txt = txt[:loop.start()] + new_loop + txt[end + len('\n  }\n'):]
+            # the AR phase headers right after the first include (the role's DM_OPT pragma, if any, stays first)
+            inc = f'#include "{os.path.join(MKDIR_AR, hdr)}"\n'
+            i_ = txt.index('#include')
+            txt = txt[:i_] + inc + txt[i_:]
+            hsrc = src.replace('.cpp', '_ar.cpp')
+            open(hsrc, 'w').write(txt)
+            rt = ttnn.RuntimeArgs()
+            for c in corner:
+                rt[c.x][c.y] = (sp['rd_args'] if role == 'r' else sp['wr_args'])[(c.x, c.y)]
+            dfs = list(kd.defines) + list(sp['rd_defines'] if role == 'r' else sp['wr_defines'])
+            dfs = dfs + [('MKAR_S_PUB', dict(AR_PUB_D)['MK_AR_PUB']), ('MKAR_S_PUBA', dict(AR_PUB_D)['MK_AR_PUBA'])]
+            if os.environ.get('MKAR_SZONE', '0') == '1': dfs = dfs + [('MKAR_SZONE', '1')]   # hosted sender iteration zones (S-RIT / S-WIT)
+            out.append(ttnn.KernelDescriptor(kernel_source=hsrc, core_ranges=ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in corner]),
+                                             defines=dfs, runtime_args=rt, **base))
+        return out
     def build(out, coord=None):
         cbs = [ttnn.cb_descriptor_from_sharded_tensor(0, xbuf), cbd(1, ttnn.bfloat4_b, (EVEN_T if GUPRE else 2 * GRP * KB * 2), rect), cbd(2, HDT, 1, rect),
                ttnn.cb_descriptor_from_sharded_tensor(3, hbuf), cbd(4, ttnn.bfloat4_b, 2 * HT * NDN, rect), cbd(5, ttnn.bfloat4_b, 2 * w2_tiles, rect),
@@ -968,7 +1059,7 @@ def setup_bench(dev, MESH, mesh_identity):
             # (CB 26, the tree receive CB, keeps 2 slots on STREAM and 1 slot on the ext cores: see the ATTN set above)
             cbs = [c_ for c_ in cbs if not any(f_.buffer_index == 17 for f_ in c_.format_descriptors)]
             assert sum(1 for c_ in cbs for f_ in c_.format_descriptors if f_.buffer_index == 17) == 0
-            cbs = cbs + [cbd(17, ttnn.bfloat16, WO_MAXT_, kgrid), cbd(15, ttnn.bfloat16, 48, ext_crs), cbd(23, ttnn.bfloat16, 10, ext_crs),
+            cbs = cbs + [cbd(17, ttnn.bfloat16, WO_MAXT_, kgrid), cbd(15, ttnn.bfloat16, 48, ext_crs), cbd(23, ttnn.bfloat16, 10, ext_crs.merge(crs([fcores[i] for i in sorted(ARC)])) if (REAL_AR and REAL_AAR and ARC) else ext_crs),
                          *([cbd(31, ttnn.bfloat8_b, 5 * 48, ext_crs)] if WORING else []),
                          *([cbd(30, ttnn.bfloat16, 11, ext_crs)] if RQNR else []),
                          # S / A(.)S (bf16) and, under RQNR, the head-norm fp32 scratch CB 31 share one 96 KB region: the head
@@ -1000,7 +1091,7 @@ def setup_bench(dev, MESH, mesh_identity):
             arp = ARP[coord[1]]
             assert dict(arp['recv_defines']).get('MKAR_DELIVER', '0') != '0', "MK_REAL_AR: the AR must deliver x (STREAM waits its flags)"
             sems = sems + arp['semaphores']
-            _red = [ttnn.CBDescriptor(total_size=d_.total_size, core_ranges=d_.core_ranges, format_descriptors=list(d_.format_descriptors)) for d_ in arp['shared_cbs']]
+            _red = [ttnn.CBDescriptor(total_size=d_.total_size, core_ranges=(O_CRS if GDN24 else d_.core_ranges), format_descriptors=list(d_.format_descriptors)) for d_ in arp['shared_cbs']]
             cbs = cbs + arp['sender_cbs'] + _red + arp['owner_cbs']
             if AR_GAMMA and AR_GEARLY:   # MK_AR_GEARLY: a dedicated γ CB (owners' CB region), filled from the MLP start
                 cbs = cbs + [cbd(32, ttnn.bfloat16, AR_GT, O_CRS)]
@@ -1071,12 +1162,16 @@ def setup_bench(dev, MESH, mesh_identity):
                                     config=ttnn.ComputeConfigDescriptor(math_fidelity=ttnn.MathFidelity.HiFi2, fp32_dest_acc_en=True, dst_full_sync_en=True, math_approx_mode=False))]
         if RS:
             _srng = crs([fcores[i] for i in ACT if i in stream_idx]); _erng = crs([fcores[i] for i in ACT if i not in stream_idx])
-            _ard = (arp['recv_defines'] + [('MKAR_NCOMMON', str(arp['recv_ncommon'])), ('MKAR_ARGS_L1', str(ar_blk.buffer_address())), ('MKAR_TRID', '15')] + ([('MKAR_LEANZ', '1')] if ('MKA_LEAN_C', '1') in MKDEF else []) + ([('MKAR_DLV_NONE', '1')] if AR_GAMMA else [('MKAR_DLV_SIGNAL', str(ttnn.get_global_semaphore_address(AR_DLV)))] if AR_DLVR else []), arp['comp_defines']) if REAL_AR else ((), ())
+            _aar_d = [('MKAR_ATYPE', f'{AR_ATYPE}ull'), ('MKAR_CB_AIN', '23')] if (REAL_AR and REAL_AAR) else []
+            _ard = (arp['recv_defines'] + [('MKAR_NCOMMON', str(arp['recv_ncommon'])), ('MKAR_ARGS_L1', str(ar_blk.buffer_address())), ('MKAR_TRID', '15')] + ([('MKAR_LEANZ', '1')] if ('MKA_LEAN_C', '1') in MKDEF else []) + ([('MKAR_DLV_NONE', '1')] if AR_DLVR else []) + _aar_d, arp['comp_defines']) if REAL_AR else ((), ())
             # MK_EXT_DM_OS=1 (spec v1.5a: DM-only Os allowed after a timing check): the EXT (owner) reader / writer at -Os,
             # the text-sizing group once QSK + MK_REAL_AR land (compute stays O2)
             _dmo = ttnn._ttnn.operations.experimental.fabric_mux.KernelBuildOptLevel.Os if os.environ.get('MK_EXT_DM_OS', '0') == '1' else None
             ks = _ks(_srng, [('MKA_ROLE_STREAM', '1')], *rta['s']) + _ks(_erng, [('MKA_ROLE_EXT', '1')], *rta['e'], *_ard, dmopt=_dmo)
-            if REAL_AR: ks = ks + arp['sender_kernels']
+            if REAL_AR:
+                for kd_ in arp['sender_kernels']:   # attention ARs read the wo output CB (bit it of MKAR_ATYPE)
+                    if REAL_AAR and not any(k_ == 'MKAR_ATYPE' for k_, _ in kd_.defines): kd_.defines = list(kd_.defines) + _aar_d
+                if not GDN24: ks = ks + arp['sender_kernels']   # GDN24: hosted in the GDN role (corner cores, sender_parts)
         else:
             assert not REAL_AR, "MK_REAL_AR needs the per-role binaries (MKA_ROLESPLIT=1)"
             ks = _ks(kgrid, [], rrt, wrt, crt)
@@ -1090,9 +1185,15 @@ def setup_bench(dev, MESH, mesh_identity):
             # at low addresses on the ext cores (beside the STREAM rect's own CBs, which they never share a core with)
             _ext_only = lambda c_: c_.core_ranges == ext_crs
             cbs = [c_ for c_ in cbs if _ext_only(c_)] + [c_ for c_ in cbs if not _ext_only(c_)]
+        if REAL_AR and REAL_AAR:   # CB 23 (ext + the AR corner) FIRST: a multi-range CB lands at the max of its ranges' current
+            # tops, and the corner's AR CBs (RS / AG staging, RS slots) would otherwise push it ~100 KB up on the owners
+            _w23 = lambda c_: any(f_.buffer_index == 23 for f_ in c_.format_descriptors)
+            cbs = [c_ for c_ in cbs if _w23(c_)] + [c_ for c_ in cbs if not _w23(c_)]
         print('[cbs] ' + ' '.join(f'{f_.buffer_index}:{c_.total_size // 1024}K' for c_ in cbs for f_ in c_.format_descriptors), flush=True)
         if GDN24:
-            ks = ks + list(GDN_ROLE.get('kernels', [])); cbs = cbs + list(GDN_ROLE.get('cbs', []))
+            _gk = list(GDN_ROLE.get('kernels', []))
+            if REAL_AR: _gk = _gdn_host_ar(_gk, AR.sender_parts(arp))
+            ks = ks + _gk; cbs = cbs + list(GDN_ROLE.get('cbs', []))
             def _cbsum(lx, ly):
                 n_ = 0
                 for d_ in cbs:
