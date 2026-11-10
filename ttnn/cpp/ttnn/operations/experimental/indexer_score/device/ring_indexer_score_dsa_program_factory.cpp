@@ -20,6 +20,7 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <tt_stl/small_vector.hpp>
+#include <tt-metalium/mesh_workload.hpp>
 #include "hostdevcommon/kernel_structs.h"  // tt::CBIndex
 
 #include "ttnn/operations/transformer/sdpa/device/sdpa_subblock_utils.hpp"
@@ -750,6 +751,24 @@ operation_attributes_t resolve_full_mesh_route(const operation_attributes_t& arg
 }  // namespace CMAKE_UNIQUE_NAMESPACE
 }  // namespace
 
+std::vector<ttnn::PerDeviceRuntimeArgsWords> RingIndexerScoreDsaProgramFactory::per_device_runtime_args_words() {
+    using namespace CMAKE_UNIQUE_NAMESPACE;
+    namespace common = indexer_common;
+    constexpr uint32_t kGeometryWords = 3;  // ChunkStart, StraddleQ, StraddleJump
+    static_assert(common::writer::StraddleJump == common::writer::ChunkStart + kGeometryWords - 1);
+    static_assert(common::compute::StraddleJump == common::compute::ChunkStart + kGeometryWords - 1);
+    return {
+        {.kernel_index = kWriterKernelIndex,
+         .core = std::nullopt,
+         .first_word = common::writer::ChunkStart,
+         .num_words = kGeometryWords},
+        {.kernel_index = kComputeKernelIndex,
+         .core = std::nullopt,
+         .first_word = common::compute::ChunkStart,
+         .num_words = kGeometryWords},
+    };
+}
+
 tt::tt_metal::WorkloadDescriptor RingIndexerScoreDsaProgramFactory::create_workload_descriptor(
     const operation_attributes_t& unresolved_args,
     const tensor_args_t& tensors,
@@ -785,11 +804,13 @@ RingIndexerScoreDsaMeshWorkloadFactory::create_mesh_workload(
     for (auto& [range, program] : descriptor_cached.workload.get_programs()) {
         auto& shared = shared_variables[range];
         shared.descriptor = std::move(descriptor_cached.shared_variables.at(range));
-        shared.device_index = transport_to_tensor_rank(args, transport_rank_for(args, range.start_coord(), tensors.q));
-        shared.tp_index =
-            (args.tp_axis().has_value() && tensors.q.device_storage().get_coords().size() > 1)
-                ? ttnn::ccl::get_linearized_index_from_physical_coord(tensors.q, range.start_coord(), args.tp_axis())
-                : 0u;
+        for (const auto& coord : range) {
+            shared.device_indices.push_back(transport_to_tensor_rank(args, transport_rank_for(args, coord, tensors.q)));
+            shared.tp_indices.push_back(
+                (args.tp_axis().has_value() && tensors.q.device_storage().get_coords().size() > 1)
+                    ? ttnn::ccl::get_linearized_index_from_physical_coord(tensors.q, coord, args.tp_axis())
+                    : 0u);
+        }
         for (size_t index = 0; index < kernel_indices.size(); ++index) {
             auto& plan = shared.ag_plans[index];
             plan.kernel_idx = kernel_indices[index];
@@ -934,7 +955,7 @@ void RingIndexerScoreDsaMeshWorkloadFactory::override_runtime_arguments(
         }
     }
     for (auto& [range, program] : cached.workload.get_programs()) {
-        const auto& shared = cached.shared_variables.at(range);
+        auto& shared = cached.shared_variables.at(range);
 
         // Visit each AG kernel/core once for all of its changing scalars. The largest field
         // bounds-check implies every field in this fixed table fits; empty AG cores stay skipped.
@@ -978,8 +999,45 @@ void RingIndexerScoreDsaMeshWorkloadFactory::override_runtime_arguments(
             }
         };
         if (update_consumer) {
-            const auto geom = device_causal_geometry(args, shared.device_index, shared.tp_index, q.logical_shape()[2]);
             namespace common = indexer_common;
+            // The causal geometry of each device of the range: the program's own words when the range is one device,
+            // per-device runtime args (merged program) otherwise, set only when a device's value changed.
+            std::vector<uint32_t> geometry;
+            geometry.reserve(shared.device_indices.size() * 3);
+            for (size_t i = 0; i < shared.device_indices.size(); ++i) {
+                const auto geom =
+                    device_causal_geometry(args, shared.device_indices[i], shared.tp_indices[i], q.logical_shape()[2]);
+                geometry.insert(
+                    geometry.end(), {geom.chunk_start_tiles, geom.straddle_q_tile, geom.straddle_jump_tiles});
+            }
+            if (geometry != shared.geometry) {
+                if (shared.device_indices.size() == 1) {
+                    auto& compute_common = tt::tt_metal::GetCommonRuntimeArgs(program, kComputeKernelIndex);
+                    auto& writer_common = tt::tt_metal::GetCommonRuntimeArgs(program, kWriterKernelIndex);
+                    for (uint32_t w = 0; w < 3; ++w) {
+                        compute_common.at(common::compute::ChunkStart + w) = geometry[w];
+                        writer_common.at(common::writer::ChunkStart + w) = geometry[w];
+                    }
+                } else {
+                    tt::tt_metal::distributed::SetRuntimeArgsPerDevice(
+                        cached.workload,
+                        range,
+                        kComputeKernelIndex,
+                        std::nullopt,
+                        common::compute::ChunkStart,
+                        3,
+                        geometry);
+                    tt::tt_metal::distributed::SetRuntimeArgsPerDevice(
+                        cached.workload,
+                        range,
+                        kWriterKernelIndex,
+                        std::nullopt,
+                        common::writer::ChunkStart,
+                        3,
+                        geometry);
+                }
+                shared.geometry = std::move(geometry);
+            }
             auto& reader_common = tt::tt_metal::GetCommonRuntimeArgs(program, kReaderKernelIndex);
             reader_common.at(common::reader::BatchOffset) = pcache.k_batch_page_offset;
             reader_common.at(common::reader::KvLength) = pcache.kv_len_tiles;
@@ -988,14 +1046,8 @@ void RingIndexerScoreDsaMeshWorkloadFactory::override_runtime_arguments(
             reader_common.at(common::reader::LayerIndex) = args.index_cache_layer_idx;
             auto& compute_common = tt::tt_metal::GetCommonRuntimeArgs(program, kComputeKernelIndex);
             compute_common.at(common::compute::KvLength) = pcache.kv_len_tiles;
-            compute_common.at(common::compute::ChunkStart) = geom.chunk_start_tiles;
-            compute_common.at(common::compute::StraddleQ) = geom.straddle_q_tile;
-            compute_common.at(common::compute::StraddleJump) = geom.straddle_jump_tiles;
             auto& writer_common = tt::tt_metal::GetCommonRuntimeArgs(program, kWriterKernelIndex);
             writer_common.at(common::writer::KvLength) = pcache.kv_len_tiles;
-            writer_common.at(common::writer::ChunkStart) = geom.chunk_start_tiles;
-            writer_common.at(common::writer::StraddleQ) = geom.straddle_q_tile;
-            writer_common.at(common::writer::StraddleJump) = geom.straddle_jump_tiles;
         }
 
         // Semaphore rotation need not rewrite the unchanged extent or consumer geometry.

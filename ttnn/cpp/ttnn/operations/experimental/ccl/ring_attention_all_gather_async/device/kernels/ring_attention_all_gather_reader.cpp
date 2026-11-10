@@ -51,12 +51,14 @@ enum CompileTimeArg : uint32_t {
     kNumFixedCompileTimeArgs,
 };
 
-constexpr uint32_t my_transport_rank = get_compile_time_arg_val(kMyTransportRank);
+// Per-chip values (the transport rank, the target counts per direction) are common runtime args, not compile-time
+// args, so every chip of a mesh runs the same binary (one program for the whole mesh; see the program factory).
+uint32_t my_transport_rank;  // common arg 0
 constexpr uint32_t cb_output_id = get_compile_time_arg_val(kCbOutputId);
 constexpr uint32_t packet_size_in_pages = get_compile_time_arg_val(kPacketSizeInPages);
 constexpr uint32_t input_tensor_page_size = get_compile_time_arg_val(kInputTensorPageSize);
-constexpr uint32_t num_targets_forward_direction = get_compile_time_arg_val(kNumTargetsForwardDirection);
-constexpr uint32_t num_targets_backward_direction = get_compile_time_arg_val(kNumTargetsBackwardDirection);
+uint32_t num_targets_forward_direction;   // common arg 1
+uint32_t num_targets_backward_direction;  // common arg 2
 constexpr Topology topology = static_cast<Topology>(get_compile_time_arg_val(kTopology));
 constexpr uint32_t contig_pages_advanced = get_compile_time_arg_val(kContigPagesAdvanced);
 constexpr uint32_t num_inputs = get_compile_time_arg_val(kNumInputs);
@@ -81,9 +83,6 @@ static_assert(!partial_readiness_enabled || num_inputs == 1, "partial readiness 
 static_assert(
     !partial_readiness_enabled || !split_forwarding_enabled,
     "partial readiness and split forwarding are mutually exclusive");
-static_assert(
-    !partial_readiness_enabled || (num_targets_forward_direction > 0 && num_targets_backward_direction > 0),
-    "partial readiness requires both ring directions");
 
 // Prefetch: batch multiple packets of DRAM reads before a single barrier.
 // This keeps more reads in flight across interleaved DRAM banks, hiding latency.
@@ -129,6 +128,11 @@ FORCE_INLINE void prefetch_bank_owned_slices(
 }
 
 void kernel_main() {
+    my_transport_rank = get_common_arg_val<uint32_t>(0);
+    num_targets_forward_direction = get_common_arg_val<uint32_t>(1);
+    num_targets_backward_direction = get_common_arg_val<uint32_t>(2);
+    // partial readiness requires both ring directions
+    ASSERT(!partial_readiness_enabled || (num_targets_forward_direction > 0 && num_targets_backward_direction > 0));
     constexpr auto inputs_args = make_tensor_accessor_args_tuple<num_inputs, kNumFixedCompileTimeArgs + num_inputs>();
     constexpr auto outputs_args = make_tensor_accessor_args_tuple<
         num_inputs,
@@ -247,7 +251,7 @@ void kernel_main() {
 
     Noc noc_obj;
     CircularBuffer cb_output(cb_output_id);
-    constexpr uint32_t my_tensor_rank =
+    const uint32_t my_tensor_rank =
         ttnn::ring_attention_all_gather::tensor_rank_from_transport_rank<full_mesh_rank_mapping>(
             my_transport_rank, mesh_rows, mesh_cols, snake_orientation);
 
