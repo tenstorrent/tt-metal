@@ -395,6 +395,7 @@ ttsl::hash::hash_t SparseRingSDPADeviceOperation::compute_program_hash(
         args.all_gather_tensor_args,
         args.block_size,
         args.q_blocks_per_pass,
+        args.dense_q_blocks,
         tensor_args.pooled_k.has_value(),
         tensor_args.pooled_v.has_value(),
         tensor_args.block_counts.has_value(),
@@ -402,7 +403,9 @@ ttsl::hash::hash_t SparseRingSDPADeviceOperation::compute_program_hash(
         sparse_ring_dyn_split(),
         sparse_ring_q_perm_request(),
         sparse_ring_fast_pbias(),
-        sparse_ring_kv_pages_request());
+        sparse_ring_kv_pages_request(),
+        sparse_ring_member_rescale(),
+        sparse_ring_dyn_extra_pass());
 }
 
 tt::tt_metal::operation::OpPerformanceModelGeneral<Tensors> SparseRingSDPADeviceOperation::create_op_performance_model(
@@ -467,7 +470,8 @@ SparseRingSDPAResult sparse_ring_sdpa(
     const uint32_t block_size,
     const std::optional<uint32_t> q_blocks_per_pass,
     const std::optional<ttnn::Tensor>& block_counts,
-    const std::optional<ttnn::Tensor>& head_weights) {
+    const std::optional<ttnn::Tensor>& head_weights,
+    const std::vector<uint32_t>& dense_q_blocks) {
     using OperationType = ttnn::prim::SparseRingSDPADeviceOperation;
     TT_FATAL(
         pooled_k.has_value() == pooled_v.has_value(),
@@ -528,7 +532,8 @@ SparseRingSDPAResult sparse_ring_sdpa(
         std::move(all_gather_tensor_args),
         ccl_core_grid_offset,
         block_size,
-        q_blocks_per_pass);
+        q_blocks_per_pass,
+        dense_q_blocks);
 
     auto tensor_args = OperationType::tensor_args_t{
         .input_q = input_tensor_q,

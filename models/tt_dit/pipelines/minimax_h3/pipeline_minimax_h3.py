@@ -77,6 +77,7 @@ from ...models.audio_vae.minimax_h3.decoder_minimax_h3_audio import MiniMaxH3Aud
 from ...models.audio_vae.minimax_h3.encoder_minimax_h3_audio import MiniMaxH3AudioEncoder
 from ...models.transformers.minimax_h3.adaln_tilerow import DEFAULT_MAX_MIXED_TILES, tilerow_remap
 from ...models.transformers.minimax_h3.attention_minimax_h3 import prepare_rope_tables, to_out_weight_tag
+from ...models.transformers.minimax_h3 import prefix_spread
 from ...models.transformers.minimax_h3.lofi import weight_cache_tag as lofi_weight_cache_tag
 from ...models.transformers.minimax_h3.transformer_minimax_h3 import MiniMaxH3Transformer3DModel
 from ...models.vae.minimax_h3.vae_minimax_h3 import MiniMaxH3Vae, MiniMaxH3VaeConfig
@@ -1445,16 +1446,21 @@ class MiniMaxH3Pipeline:
     def patch_size(self) -> tuple[int, int, int]:
         return tuple(self.transformer_config["patch_size"])
 
-    def _device_metadata(self, layout: MiniMaxH3PackedSequence, padded_len: int) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+    def _device_metadata(
+        self, layout: MiniMaxH3PackedSequence, padded_len: int, *, row_perm: torch.Tensor | None = None
+    ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
         """Rotary tables for the padded global sequence, sharded on SP the way the model fractures it.
 
         Pad rows are excluded from attention by ring attention's `logical_n`, so their rotary values
         are arbitrary --- but they must exist, hence the zero tail rather than a shorter table.
+        `row_perm` (prefix spread): packed row -> logical row; the table follows the rows.
         """
         pad = padded_len - layout.sequence_length
         position_ids = layout.position_ids
         if pad:
             position_ids = torch.cat([position_ids, torch.zeros(pad, 3, dtype=position_ids.dtype)])
+        if row_perm is not None:
+            position_ids = position_ids[row_perm]
         cos, sin = build_rope_tables(position_ids, rope_freq_dim=self.rope_freq_dim, rope_theta=self.rope_theta)
         cos, sin = prepare_rope_tables(cos, sin, self.transformer_config["attention_head_dim"])
         rotary_dim = cos.shape[-1]
@@ -1618,10 +1624,13 @@ class MiniMaxH3Pipeline:
         a_len: int,
         v_len: int,
         rung: int,
+        *,
+        row_perm: torch.Tensor | None = None,
     ) -> ttnn.Tensor:
         """Source-table row of each packed row: `[text | condition blocks | audio | video | pad]`.
 
-        Pad rows point at source row 0 so the gathered content is finite.
+        Pad rows point at source row 0 so the gathered content is finite. `row_perm` (prefix spread): packed row ->
+        logical row; the packed rows take their logical rows' sources.
         """
         src = self._assembly_source_offsets(caps)
         indices = torch.zeros(rung, dtype=torch.int32)
@@ -1636,15 +1645,46 @@ class MiniMaxH3Pipeline:
         indices[pos : pos + a_len] = torch.arange(src["audio"], src["audio"] + a_len)
         pos += a_len
         indices[pos : pos + v_len] = torch.arange(src["video"], src["video"] + v_len)
+        if row_perm is not None:
+            indices = indices[row_perm]
         if self._shard_assembly_indices:
             return self._row_indices(indices, rung, gather=True)
         return self._replicated_indices(indices)
 
-    def _output_indices(self, start: int, count: int, capacity: int) -> ttnn.Tensor:
-        """Padded-global-sequence row of each target row of one modality, at the arena capacity."""
+    def _output_indices(
+        self, start: int, count: int, capacity: int, *, row_inv: torch.Tensor | None = None
+    ) -> ttnn.Tensor:
+        """Padded-global-sequence row of each target row of one modality, at the arena capacity. `row_inv` (prefix
+        spread): logical row -> packed row."""
         indices = torch.full((capacity,), start, dtype=torch.int32)
         indices[:count] = torch.arange(start, start + count)
+        if row_inv is not None:
+            indices = row_inv[indices.long()].to(torch.int32)
         return self._replicated_indices(indices)
+
+    def _prefix_spread_map(
+        self, transformer: MiniMaxH3Transformer3DModel, layout: MiniMaxH3PackedSequence, rung: int, prefix_rows: int
+    ) -> tuple[int, ...] | None:
+        """The prefix spread's block map for this request (prefix_spread.py), or None (switch off / nothing moves).
+
+        Sol's `separate` prefix mode recomputes the prefix rows at their packed positions, so it keeps the packed layout.
+        """
+        if not prefix_spread.spread_enabled() or self.sp_factor <= 1:
+            return None
+        attns = [block.attn for block in transformer.transformer_blocks]
+        if any(a.sol_attn and a.sol_prefix_mode == "separate" for a in attns):
+            self._log("prefix spread off for this request: Sol prefix mode 'separate' needs the packed layout")
+            return None
+        block_map = prefix_spread.prefix_spread_block_map(
+            rows=rung // self.sp_factor,
+            shards=self.sp_factor,
+            logical_n=layout.sequence_length,
+            prefix_rows=prefix_rows,
+        )
+        if block_map is not None:
+            moved = sum(g != lg for g, lg in enumerate(block_map))
+            self._log(f"prefix spread: {prefix_rows} prefix rows, {moved} blocks of 64 rows moved over {self.sp_factor} SP shards")
+        return block_map
 
     # ------------------------------------------------------------------ decode
 
@@ -2884,6 +2924,17 @@ class MiniMaxH3Pipeline:
         else:
             rung = padded_sequence_length(layout.sequence_length, self.sp_factor)
         self.last_seq_len = SeqLen(padded=rung, logical=layout.sequence_length)
+        # Prefix spread (MINIMAX_H3_SOL_PREFIX_SPREAD=1, prefix_spread.py): move whole 64-row prefix blocks onto the
+        # other SP chips so Sol's exact (`fused`) prefix query rows don't all land on the first chip. Host tables only:
+        # every per-row table below is permuted with `row_perm`, the output indices map through its inverse, and the
+        # attention modules get the block map for Sol's positional rules. Off: block_map None, every table unchanged.
+        block_map = self._prefix_spread_map(transformer, layout, rung, l_len + num_cond + num_cond_audio + a_target)
+        row_perm = prefix_spread.row_permutation(
+            block_map, rows=rung // self.sp_factor, shards=self.sp_factor, padded_len=rung
+        )
+        row_inv = prefix_spread.inverse(row_perm) if row_perm is not None else None
+        for block in transformer.transformer_blocks:
+            block.attn.sol_block_map = block_map
         self._log(
             f"packed sequence {layout.sequence_length} -> bucket {rung}, "
             f"{rung // self.sp_factor} rows/device, {num_cond} condition rows"
@@ -2915,13 +2966,14 @@ class MiniMaxH3Pipeline:
                 a_target,
                 v_target,
                 self._layout_digest(layout),
+                block_map,
             )
         reuse_layout = layout_key is not None and layout_key == self._last_layout_key
         self._last_layout_key = None
 
         t_rope = time.time()
         if not reuse_layout:
-            rope_cos, rope_sin = self._device_metadata(layout, rung)
+            rope_cos, rope_sin = self._device_metadata(layout, rung, row_perm=row_perm)
             state.rope_cos.update(rope_cos, traced=traced)
             state.rope_sin.update(rope_sin, traced=traced)
         t_rope = time.time() - t_rope
@@ -2951,7 +3003,7 @@ class MiniMaxH3Pipeline:
             if reuse_layout:
                 upload_latents()
                 return dict(self._last_tilerow_kwargs)
-            row_adaln = adaln_indices(layout.token_tags, row_slot)
+            row_adaln = prefix_spread.rows_in_packed_order(adaln_indices(layout.token_tags, row_slot), row_perm, rung)
             state.adaln.update(self._row_indices(row_adaln, rung, gather=True), traced=traced)
             tilerow_kwargs = {}
             padded_adaln = torch.cat([row_adaln, torch.zeros(rung - row_adaln.shape[0], dtype=row_adaln.dtype)])
@@ -2972,15 +3024,22 @@ class MiniMaxH3Pipeline:
                     "adaln_tile_map": state.adaln_tile_map.value,
                     "adaln_expanded_indices": state.adaln_expanded.value,
                 }
-            state.tsi.update(self._row_indices(row_slot, rung, gather=True), traced=traced)
+            state.tsi.update(
+                self._row_indices(prefix_spread.rows_in_packed_order(row_slot, row_perm, rung), rung, gather=True), traced=traced
+            )
             state.assembly_idx.update(
-                self._assembly_indices(condition_spec, caps, l_len, a_target, v_target, rung), traced=traced
+                self._assembly_indices(condition_spec, caps, l_len, a_target, v_target, rung, row_perm=row_perm),
+                traced=traced,
             )
             self._tt_logical_n.update(self._logical_length(layout.sequence_length), traced=traced)
             audio_start = l_len + num_cond + num_cond_audio
             video_start = audio_start + a_target
-            tt_video_out_idx.update(self._output_indices(video_start, v_target, video_cap), traced=traced)
-            self._tt_audio_out_idx.update(self._output_indices(audio_start, a_target, caps.audio_rows), traced=traced)
+            tt_video_out_idx.update(
+                self._output_indices(video_start, v_target, video_cap, row_inv=row_inv), traced=traced
+            )
+            self._tt_audio_out_idx.update(
+                self._output_indices(audio_start, a_target, caps.audio_rows, row_inv=row_inv), traced=traced
+            )
 
             upload_latents()
             self._last_tilerow_kwargs = dict(tilerow_kwargs)

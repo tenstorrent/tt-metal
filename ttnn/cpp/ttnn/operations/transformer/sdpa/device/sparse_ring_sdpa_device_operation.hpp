@@ -57,6 +57,7 @@ SparseRingSDPAResult sparse_ring_sdpa(
     uint32_t block_size = 64,
     std::optional<uint32_t> q_blocks_per_pass = std::nullopt,
     const std::optional<ttnn::Tensor>& block_counts = std::nullopt,
-    const std::optional<ttnn::Tensor>& head_weights = std::nullopt);
+    const std::optional<ttnn::Tensor>& head_weights = std::nullopt,
+    const std::vector<uint32_t>& dense_q_blocks = {});
 
 }  // namespace ttnn::prim

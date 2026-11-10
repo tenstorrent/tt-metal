@@ -477,6 +477,16 @@ static __attribute__((noinline, noclone)) void sdpa_resident_piece_step_compact(
         n_init += slot_init(g) ? 1u : 0u;
     }
     bool rescale = false;
+#if defined(SPARSE_MEMBER_RESCALE)
+    // TT_SPARSE_RING_MEMBER_RESCALE: bit g of rescale_mask = member g's own max grew past the threshold, and
+    // SPARSE_RS(g) = member g is rescaled this step. Without the define the expressions reduce to the per-step rule.
+    uint32_t rescale_mask = 0;
+#define SPARSE_RS(g) (((rescale_mask >> (g)) & 1u) != 0)
+#define SPARSE_RS_SKIP(g) (!slot_init(g) || !SPARSE_RS(g))
+#else
+#define SPARSE_RS(g) rescale
+#define SPARSE_RS_SKIP(g) (!slot_init(g))
+#endif
     CircularBuffer(cb_qkt_im).wait_front(qk_cap);
     {
         CircularBuffer(cb_max_scratch).reserve_back(stats_cap);
@@ -563,6 +573,32 @@ static __attribute__((noinline, noclone)) void sdpa_resident_piece_step_compact(
             PACK((t6_semaphore_post<p_stall::STALL_PACK>(semaphore::PACK_DONE)));
             UNPACK((t6_semaphore_wait_on_zero<p_stall::STALL_SYNC>(semaphore::PACK_DONE)));
             UNPACK((t6_semaphore_get<>(semaphore::PACK_DONE)));
+#if defined(SPARSE_MEMBER_RESCALE)
+            // Per member: the k-th initialized member's Sq_chunk_t d tiles (pages k * Sq_chunk_t ..) column-max-reduced
+            // into its own DEST tile, packed to page k. A batch's result pages lie below the d pages it reads and at or
+            // above those of the members already reduced, so no page is overwritten before it has been read.
+            for (uint32_t k = 0; k < n_init;) {
+                const uint32_t nk = n_init - k < kDst ? n_init - k : kDst;
+                tile_regs_acquire();
+                reduce_init<PoolType::MAX, ReduceDim::REDUCE_COL>(
+                    cb_exp_max_diff, cb_identity_scale_in, cb_exp_max_diff);
+                for (uint32_t kk = 0; kk < nk; ++kk) {
+                    for (uint32_t r = 0; r < Sq_chunk_t; ++r) {
+                        reduce_tile<PoolType::MAX, ReduceDim::REDUCE_COL>(
+                            cb_exp_max_diff, cb_identity_scale_in, (k + kk) * Sq_chunk_t + r, 0, kk);
+                    }
+                }
+                reduce_uninit();
+                tile_regs_commit();
+                tile_regs_wait();
+                configure_single_tile_pack(cb_exp_max_diff);
+                for (uint32_t kk = 0; kk < nk; ++kk) {
+                    sdpa_pack_tile_ooo(kk, cb_exp_max_diff, k + kk);
+                }
+                tile_regs_release();
+                k += nk;
+            }
+#else
             tile_regs_acquire();
             reduce_init<PoolType::MAX, ReduceDim::REDUCE_COL>(cb_exp_max_diff, cb_identity_scale_in, cb_exp_max_diff);
             for (uint32_t i = 0; i < nd; ++i) {
@@ -574,6 +610,7 @@ static __attribute__((noinline, noclone)) void sdpa_resident_piece_step_compact(
             configure_single_tile_pack(cb_exp_max_diff);
             sdpa_pack_tile_ooo(0, cb_exp_max_diff, 0);
             tile_regs_release();
+#endif
             PACK((t6_semaphore_post<p_stall::STALL_PACK>(semaphore::PACK_DONE)));
             UNPACK({
                 ckernel::tensix_sync();
@@ -582,8 +619,32 @@ static __attribute__((noinline, noclone)) void sdpa_resident_piece_step_compact(
                 t6_semaphore_get<>(semaphore::PACK_DONE);
                 invalidate_l1_cache();
             });
+#if defined(SPARSE_MEMBER_RESCALE)
+            // The unpack thread reads every initialized member's growth (element [0][0] of its page) and hands the
+            // mask to the math and pack threads (one mailbox word each, as read_tile_value does), so all three take
+            // the same per-member branches.
+            UNPACK({
+                uint32_t k = 0;
+                for (uint32_t g = 0; g < n_slots; ++g) {
+                    if (!slot_init(g)) {
+                        continue;
+                    }
+                    const uint32_t growth = reinterpret_cast<volatile uint32_t*>(
+                        ckernel::get_tile_l1_byte_address(get_operand_id(cb_exp_max_diff), k++))[0];
+                    if ((growth & 0xFFFFu) > kLazyThrBits) {
+                        rescale_mask |= 1u << g;
+                    }
+                }
+                ckernel::mailbox_write(ckernel::ThreadId::MathThreadId, rescale_mask);
+                ckernel::mailbox_write(ckernel::ThreadId::PackThreadId, rescale_mask);
+            });
+            MATH((rescale_mask = ckernel::mailbox_read(ckernel::ThreadId::UnpackThreadId)));
+            PACK((rescale_mask = ckernel::mailbox_read(ckernel::ThreadId::UnpackThreadId)));
+            rescale = rescale_mask != 0;
+#else
             const uint32_t growth = ckernel::read_tile_value(cb_exp_max_diff, 0, 0);
             rescale = (growth & 0xFFFFu) > kLazyThrBits;
+#endif
         }
 
         if (rescale) {
@@ -595,8 +656,8 @@ static __attribute__((noinline, noclone)) void sdpa_resident_piece_step_compact(
             uint32_t n_copy = 0;
             for (uint32_t gg = 0; gg < n_g; ++gg) {
                 const bool init = slot_init(g0 + gg);
-                n_alpha += (rescale && init) ? 1u : 0u;
-                n_copy += (rescale || !init) ? 1u : 0u;
+                n_alpha += (SPARSE_RS(g0 + gg) && init) ? 1u : 0u;
+                n_copy += (SPARSE_RS(g0 + gg) || !init) ? 1u : 0u;
             }
             if (n_copy == 0) {
                 continue;
@@ -606,7 +667,7 @@ static __attribute__((noinline, noclone)) void sdpa_resident_piece_step_compact(
                 sub_init(cb_max_in, cb_max_scratch);
                 uint32_t a = 0;
                 for (uint32_t gg = 0; gg < n_g; ++gg) {
-                    if (!slot_init(g0 + gg)) {
+                    if (SPARSE_RS_SKIP(g0 + gg)) {
                         continue;
                     }
                     const uint32_t row0 = slots[g0 + gg] * Sq_chunk_t;
@@ -621,7 +682,7 @@ static __attribute__((noinline, noclone)) void sdpa_resident_piece_step_compact(
             {
                 uint32_t c = 0;
                 for (uint32_t gg = 0; gg < n_g; ++gg) {
-                    if (!rescale && slot_init(g0 + gg)) {
+                    if (!SPARSE_RS(g0 + gg) && slot_init(g0 + gg)) {
                         continue;
                     }
                     for (uint32_t r = 0; r < Sq_chunk_t; ++r) {
@@ -640,7 +701,7 @@ static __attribute__((noinline, noclone)) void sdpa_resident_piece_step_compact(
                 configure_single_tile_pack(cb_exp_max_diff);
                 uint32_t a = 0;
                 for (uint32_t gg = 0; gg < n_g; ++gg) {
-                    if (!slot_init(g0 + gg)) {
+                    if (SPARSE_RS_SKIP(g0 + gg)) {
                         continue;
                     }
                     for (uint32_t r = 0; r < Sq_chunk_t; ++r) {
@@ -653,7 +714,7 @@ static __attribute__((noinline, noclone)) void sdpa_resident_piece_step_compact(
             {
                 uint32_t c = 0;
                 for (uint32_t gg = 0; gg < n_g; ++gg) {
-                    if (!rescale && slot_init(g0 + gg)) {
+                    if (!SPARSE_RS(g0 + gg) && slot_init(g0 + gg)) {
                         continue;
                     }
                     for (uint32_t r = 0; r < Sq_chunk_t; ++r) {
@@ -670,7 +731,7 @@ static __attribute__((noinline, noclone)) void sdpa_resident_piece_step_compact(
 
         if (rescale) {
             for (uint32_t g = 0; g < n_slots; ++g) {
-                if (!slot_init(g)) {
+                if (SPARSE_RS_SKIP(g)) {
                     continue;
                 }
                 salad_correct_fused<Sq_chunk_t, vDHt, kDst>(
@@ -679,6 +740,8 @@ static __attribute__((noinline, noclone)) void sdpa_resident_piece_step_compact(
         }
     }
 
+#undef SPARSE_RS
+#undef SPARSE_RS_SKIP
     exp_packthread_tile_init<true, scale_fp32, InputClamping::None>();
     CircularBuffer(cb_sum_identity).wait_front(1);
     {

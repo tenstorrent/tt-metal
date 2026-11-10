@@ -135,8 +135,14 @@ def build_constants(
     force_first_chunk: bool,
     scale: float,
     dense_prefix_queries: bool = True,
+    block_map: tuple[int, ...] | None = None,
 ) -> dict:
     """Host-built constant matrices (torch fp32) for the device pre-pass; all tile-padded.
+
+    ``block_map`` (prefix spread, prefix_spread.py; None = identity, the constants are unchanged): the logical global
+    block index (shard * nb + b) of each packed block. The band and the sink / dense-prefix rows follow the blocks'
+    logical identity; lengths, validity and the forced block 0 of each shard stay per position (only equal, full,
+    non-first blocks move).
 
     The bias is in pre-scale logit units: the SDPA compute kernel evaluates exp((QK + bias - max) * scale),
     so a column bias of ln(len)/scale weights the pooled column by exactly `len`.
@@ -144,6 +150,17 @@ def build_constants(
     S, nb, nbp, nbg = geo.shards, geo.nb, geo.nb_pad, geo.n_blocks_pad
     lengths = geo.block_lengths()
     sink_m = sink_block_mask(geo, sink_tokens)
+    # Logical global block index (s * nb + b) of each packed block (identity without a block map).
+    logical = torch.arange(S * nb).view(S, nb)
+    if block_map is not None:
+        assert len(block_map) == S * nb, (len(block_map), S, nb)
+        logical = torch.tensor(block_map, dtype=torch.long).view(S, nb)
+        sink_logical = sink_m[:, :nb].reshape(-1).clone()
+        sink_m = sink_m.clone()
+        sink_m[:, :nb] = sink_logical[logical.reshape(-1)].view(S, nb)
+        moved = logical.reshape(-1) != torch.arange(S * nb)
+        assert (lengths[:, :nb].reshape(-1)[moved] >= geo.block).all(), "only full blocks move"
+        assert (logical[:, 0] == torch.arange(S) * nb).all(), "block 0 of every shard stays"
     pool_t = torch.zeros(S, 1, geo.rows, nbp)
     for s in range(S):
         for b in range(nb):
@@ -152,13 +169,13 @@ def build_constants(
                 pool_t[s, 0, b * geo.block : b * geo.block + length, b] = 1.0 / length
     gidx = torch.full((nbg,), -1)
     for s in range(S):
-        gidx[s * nbp : s * nbp + nb] = torch.arange(nb) + s * nb
+        gidx[s * nbp : s * nbp + nb] = logical[s]
     valid_row = (lengths.reshape(-1) > 0).float()
     full_row = (lengths.reshape(-1) >= geo.block).float()
     band_m = torch.zeros(S, 1, nbp, nbg)
     for s in range(S):
         qg = torch.full((nbp,), -(10**9))
-        qg[:nb] = torch.arange(nb) + s * nb
+        qg[:nb] = logical[s]
         band_m[s, 0] = ((qg[:, None] - gidx[None, :]).abs() <= band).float() * valid_row[None, :]
         if dense_prefix_queries:
             for b in range(nb):
@@ -341,8 +358,11 @@ class SolPrepass:
 
     _shared_consts: dict = {}
 
+    # Prefix spread (prefix_spread.py): the logical block of each packed block, set by the attention; None = identity.
+    block_map: tuple[int, ...] | None = None
+
     def prepare(self, geo: SolGeometry, sink_tokens: int, scale: float) -> None:
-        key = (geo, sink_tokens, scale)
+        key = (geo, sink_tokens, scale) if self.block_map is None else (geo, sink_tokens, scale, self.block_map)
         if key == self._key:
             return
         shared_key = (
@@ -364,6 +384,7 @@ class SolPrepass:
             geo,
             band=self.band,
             sink_tokens=sink_tokens,
+            block_map=self.block_map,
             force_first_chunk=self.force_first_chunk,
             scale=scale,
             dense_prefix_queries=self.dense_prefix_queries,

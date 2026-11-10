@@ -54,7 +54,14 @@ def _f32_bits(x: float) -> int:
 
 
 def build_fused_constants(
-    geo: SolGeometry, *, band: int, sink_tokens: int, force_first_chunk: bool, scale: float, dense_prefix_queries: bool
+    geo: SolGeometry,
+    *,
+    band: int,
+    sink_tokens: int,
+    force_first_chunk: bool,
+    scale: float,
+    dense_prefix_queries: bool,
+    block_map: tuple[int, ...] | None = None,
 ) -> dict:
     """Host constants of the route program (torch fp32), derived from sol_prepass.build_constants.
 
@@ -74,6 +81,7 @@ def build_fused_constants(
         force_first_chunk=force_first_chunk,
         scale=scale,
         dense_prefix_queries=dense_prefix_queries,
+        block_map=block_map,
     )
     S, nbp, nqcp = geo.shards, geo.nb_pad, geo.nqc_pad
     m = ((c["band"] + c["sink_row"]) > 0.5).float()
@@ -267,8 +275,11 @@ class SolPrepassFused:
                 self._upload(host, shard=shard, dtype=dtype, layout=layout, on_device=False), st[name]
             )
 
+    # Prefix spread (prefix_spread.py): the logical block of each packed block, set by the attention; None = identity.
+    block_map: tuple[int, ...] | None = None
+
     def prepare(self, geo: SolGeometry, sink_tokens: int, scale: float) -> None:
-        key = (geo, sink_tokens, scale)
+        key = (geo, sink_tokens, scale) if self.block_map is None else (geo, sink_tokens, scale, self.block_map)
         if key == self._key:
             return
         shared_key = (
@@ -298,6 +309,7 @@ class SolPrepassFused:
                 force_first_chunk=self.force_first_chunk,
                 scale=scale,
                 dense_prefix_queries=self.dense_prefix_queries,
+                block_map=self.block_map,
             )
             st = {
                 "geo": geo,

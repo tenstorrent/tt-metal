@@ -49,6 +49,23 @@ inline std::string sparse_ring_kv_pages_request() {
     return s == nullptr ? std::string() : std::string(s);
 }
 
+// TT_SPARSE_RING_MEMBER_RESCALE=1: the lazy-rescale test runs per resident Q block. A step rescales only the blocks whose
+// own row max grew past the threshold; the others keep their stored max (as every block does on a step that does not
+// rescale). Changes the order of the online-softmax updates, not the mask or the routed set. Default off.
+inline uint32_t sparse_ring_member_rescale() {
+    const char* s = std::getenv("TT_SPARSE_RING_MEMBER_RESCALE");
+    return (s != nullptr && std::atoi(s) > 0) ? 1u : 0u;
+}
+
+// TT_SPARSE_RING_DYN_EXTRA_PASS=1 (with TT_SPARSE_RING_DYN_SPLIT=on): the dynamic split's per-core cap
+// (ceil(N / floor(C / U)) Q blocks) may need one pass more than the even split; accept that plan instead of falling
+// back to the even split. The later pass replays the gathered K/V from DRAM (the ring gather runs once), and halving
+// the slots per pass leaves L1 for deeper K/V buffers. No effect when the cap fits the even split's passes. Default off.
+inline uint32_t sparse_ring_dyn_extra_pass() {
+    const char* s = std::getenv("TT_SPARSE_RING_DYN_EXTRA_PASS");
+    return (s != nullptr && std::atoi(s) > 0) ? 1u : 0u;
+}
+
 inline uint32_t sparse_ring_dyn_split() {
     const char* s = std::getenv("TT_SPARSE_RING_DYN_SPLIT");
     if (s == nullptr) {

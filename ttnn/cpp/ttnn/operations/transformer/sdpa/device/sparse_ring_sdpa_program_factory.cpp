@@ -788,6 +788,10 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
     if (fast_pbias) {
         defines["SPARSE_FAST_PBIAS"] = std::to_string(sparse_ring_fast_pbias());
     }
+    if (sparse_ring_member_rescale() > 0) {
+        defines["SPARSE_MEMBER_RESCALE"] = "1";
+        log_info(tt::LogOp, "SparseRingSDPA: per-block lazy rescale (TT_SPARSE_RING_MEMBER_RESCALE)");
+    }
     if (args.program_config.has_value() && args.program_config->matmul_math_fidelity.has_value()) {
         defines["SDPA_MATMUL_FIDELITY"] =
             std::to_string(static_cast<uint32_t>(*args.program_config->matmul_math_fidelity));
@@ -901,6 +905,11 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
     uint32_t dyn_min_q = 0;
     bool dyn_on = false;
     std::vector<uint32_t> dyn_xy_words;
+    // Dense Q blocks (dense_q_blocks, the prefix spread's exact prefix rows): this shard's local blocks, the weighted
+    // split's per-core cap, and the kept count of a dense row (every full key block). Dynamic split on only.
+    std::vector<uint32_t> dense_local;
+    uint32_t dense_cap = 0;
+    uint32_t dense_n_full = 0;
     bool dyn_all_grouped = false;
     if (dyn_mode_req == 2) {
         std::string why;
@@ -942,7 +951,19 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
             const uint32_t p_even = plan_passes(max_q_per_core);
             const uint32_t max_q_even_passes = p_even * plan_for(kResidentMaxSlots * p_even).second;
             const uint32_t cap = tt::div_up(num_q_chunks, num_cores / units);
-            if (cap > max_q_even_passes) {
+            // TT_SPARSE_RING_DYN_EXTRA_PASS: the cap may take one pass more than the even split.
+            const bool extra_pass_ok =
+                sparse_ring_dyn_extra_pass() > 0 && cap > max_q_even_passes && plan_passes(cap) <= p_even + 1;
+            if (extra_pass_ok) {
+                log_info(
+                    tt::LogOp,
+                    "SparseRingSDPA: TT_SPARSE_RING_DYN_EXTRA_PASS: the aligned cap of {} Q blocks per core takes {} "
+                    "pass(es) (the even split {}); later passes replay the gathered K/V from DRAM",
+                    cap,
+                    plan_passes(cap),
+                    p_even);
+            }
+            if (cap > max_q_even_passes && !extra_pass_ok) {
                 why = fmt::format(
                     "the aligned cap of {} Q blocks per core needs more passes than the even split's {} (at most {})",
                     cap,
@@ -1023,6 +1044,48 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
             dyn_on = true;
             q_split = std::move(placeholder);
             max_q_per_core = aligned_cap;
+            if (!args.dense_q_blocks.empty()) {
+                // Each unit's cores split it by cost (sparse_dyn_split.hpp weighted_range): a core holding a dense
+                // block takes fewer others, so the rest take more. Let them take up to min(dense blocks per unit,
+                // 3) more than the cap where L1 holds that in the same passes.
+                std::vector<uint32_t> per_shard(ring_size, 0);
+                for (const uint32_t g : args.dense_q_blocks) {
+                    const uint32_t sh = g / num_q_chunks;
+                    TT_FATAL(sh < ring_size, "SparseRingSDPA: dense Q block {} is beyond {} shards x {} blocks", g, ring_size, num_q_chunks);
+                    ++per_shard[sh];
+                    if (sh == transport_rank) {
+                        dense_local.push_back(g % num_q_chunks);
+                    }
+                }
+                const uint32_t d_max = *std::max_element(per_shard.begin(), per_shard.end());
+                TT_FATAL(
+                    d_max <= 8, "SparseRingSDPA: at most 8 dense Q blocks per shard are supported, got {}", d_max);
+                dense_cap = aligned_cap;
+                for (uint32_t extra = std::min(d_max, 3u); extra > 0; --extra) {
+                    if (aligned_cap + extra <= num_q_chunks && plan_passes(aligned_cap + extra) == aligned_passes) {
+                        dense_cap = aligned_cap + extra;
+                        break;
+                    }
+                }
+                max_q_per_core = dense_cap;
+                for (uint32_t sh = 0; sh < ring_size; ++sh) {
+                    for (uint32_t b = 0; b * block_tokens < kv_local_padded_N; ++b) {
+                        const uint64_t lo = uint64_t(sh) * kv_local_padded_N + uint64_t(b) * block_tokens;
+                        dense_n_full += ((b + 1) * block_tokens <= kv_local_padded_N && lo + block_tokens <= args.logical_n)
+                                            ? 1u
+                                            : 0u;
+                    }
+                }
+                log_info(
+                    tt::LogOp,
+                    "SparseRingSDPA: dense Q blocks (prefix spread): {} on this shard (at most {} per shard), split "
+                    "by cost, cap {} -> {} per core, a dense row keeps {} key blocks",
+                    dense_local.size(),
+                    d_max,
+                    aligned_cap,
+                    dense_cap,
+                    dense_n_full);
+            }
             log_info(
                 tt::LogOp,
                 "SparseRingSDPA: dynamic Q split (TT_SPARSE_RING_DYN_SPLIT=on): {} units x {} Q blocks over {} "
@@ -1123,6 +1186,20 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
             num_q_chunks,
             resident_slots,
             head);
+    }
+    // Dense Q blocks as positions within a unit: the reader splits positions (Q-table order), so invert the table.
+    const bool dyn_dense_on = dyn_on && !dense_local.empty();
+    std::vector<uint32_t> dyn_dense_words;
+    if (dyn_dense_on) {
+        dyn_dense_words = {static_cast<uint32_t>(dense_local.size()), dense_n_full};
+        for (const uint32_t b : dense_local) {
+            uint32_t p = b;
+            if (!q_perm.empty()) {
+                p = static_cast<uint32_t>(std::find(q_perm.begin(), q_perm.end(), b) - q_perm.begin());
+            }
+            dyn_dense_words.push_back(p);
+        }
+        std::sort(dyn_dense_words.begin() + 2, dyn_dense_words.end());
     }
     constexpr size_t kReaderQRemapArg = 20;
     constexpr size_t kWriterQRemapArg = 24;
@@ -1463,6 +1540,10 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
         {"dyn_gx", static_cast<uint32_t>(grid_size.x)},
         {"dyn_all_grouped", dyn_on && dyn_all_grouped ? 1u : 0u},
         {"dyn_range_offset", dyn_range_offset},
+        // Dense Q blocks: on (this shard has some), the weighted split's cap, the common-arg word of its list.
+        {"dyn_dense", dyn_dense_on ? 1u : 0u},
+        {"dyn_dense_cap", dense_cap},
+        {"dyn_dense_base", static_cast<uint32_t>(q_perm_words.size() + (dyn_on ? dyn_xy_words.size() : 0))},
         {"cb_block_counts", cb_block_counts},
         {"key_bias_tiles", key_bias_tiles},
         {"cb_key_bias", cb_key_bias},
@@ -1699,9 +1780,14 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
     }
 
     static_assert(kReaderKernelIndex == 0 && kWriterKernelIndex == 1 && kComputeKernelIndex == 2);
+    // Reader common args: the Q table, then (dynamic split) the cores' NoC coordinates in core order, then (dense Q
+    // blocks) n_dense, n_full and the dense positions within a unit.
     std::vector<uint32_t> reader_common_args = q_perm_words;
     if (dyn_on) {
         reader_common_args.insert(reader_common_args.end(), dyn_xy_words.begin(), dyn_xy_words.end());
+    }
+    if (dyn_dense_on) {
+        reader_common_args.insert(reader_common_args.end(), dyn_dense_words.begin(), dyn_dense_words.end());
     }
     if (!reader_common_args.empty()) {
         reader_kernel.common_runtime_args = reader_common_args;

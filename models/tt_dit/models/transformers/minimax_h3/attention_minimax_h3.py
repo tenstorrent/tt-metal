@@ -165,6 +165,11 @@ class MiniMaxH3Attention(Module):
         self.sol_active = False
         self._sol_logical_n: int | None = None
         self.sol_sink_tokens = 0
+        # Prefix spread (MINIMAX_H3_SOL_PREFIX_SPREAD, prefix_spread.py): the logical 64-token block of each packed
+        # block when the pipeline permuted the rows to spread the dense prefix query blocks over SP; None = identity.
+        # Set by the pipeline per request, with the row tables it permutes.
+        self.sol_block_map: tuple[int, ...] | None = None
+        self._sol_dense_cache: dict = {}  # _sol_dense_q_blocks, one entry
         self.sol_report_density = False
         self.sol_last_density: float | None = None
         self.sol_last_block_density: float | None = None
@@ -610,7 +615,37 @@ class MiniMaxH3Attention(Module):
         if self.sol_fused:
             self._sol_prepass.mask_reuse = int(self.sol_mask_reuse)
         scale = self.head_dim**-0.5
+        if self.sol_block_map is not None and self.sol_prefix_mode == "separate":
+            raise ValueError("the prefix spread (sol_block_map) needs sol_prefix_mode 'fused' or 'off', not 'separate'")
+        self._sol_prepass.block_map = self.sol_block_map
         self._sol_prepass.prepare(geo, self.sol_sink_tokens, scale)
+
+    def _sol_dense_q_blocks(self, rows: int) -> list[int]:
+        """Prefix-spread step 2 (MINIMAX_H3_SOL_PREFIX_WEIGHTS=1, `fused` prefix mode, dynamic split on): the sparse
+        op's dense Q blocks, global index shard * blocks per shard + local block, exactly the Q blocks Sol's `fused`
+        rule makes dense (a sink token in the block, by the block's logical identity under `sol_block_map`). The op
+        then splits each head's blocks over its cores by cost. Empty (the equal-count split) otherwise, or with more than 8 on
+        a shard (the op's limit)."""
+        if not (self._PREFIX_WEIGHTS and self.sol_prefix_mode == "fused" and self._DYN_SPLIT):
+            return []
+        key = (rows, repr(self.sol_sink_tokens), self.sol_logical_n, self.sol_block_map)
+        cached = self._sol_dense_cache.get(key)
+        if cached is not None:
+            return cached
+        sp = self.parallel_config.sequence_parallel.factor
+        geo = SolGeometry(shards=sp, rows=rows, logical_n=self.sol_logical_n, q_chunk=SOL_BLOCK, k_chunk=SOL_BLOCK)
+        nb = geo.nb
+        sink = sink_block_mask(geo, self.sol_sink_tokens)[:, :nb].reshape(-1)  # logical blocks holding a sink token
+        bmap = self.sol_block_map if self.sol_block_map is not None else range(sp * nb)
+        dense = [g for g, lg in enumerate(bmap) if bool(sink[lg])]
+        per_shard = [sum(1 for g in dense if g // nb == s) for s in range(sp)]
+        if max(per_shard, default=0) > 8:
+            from loguru import logger
+
+            logger.info(f"prefix weights off: {max(per_shard)} dense Q blocks on one shard (the op takes at most 8)")
+            dense = []
+        self._sol_dense_cache = {key: dense}
+        return dense
 
     def _sol_kwargs(self, out: dict) -> dict:
         if self.sol_report_density:
@@ -932,6 +967,9 @@ class MiniMaxH3Attention(Module):
     _BF8_NATIVE_QK = os.environ.get("MINIMAX_H3_BF8_NATIVE_QK", "0") == "1"
     _BF8_V_BEFORE_SPLIT = os.environ.get("MINIMAX_H3_BF8_V_BEFORE_SPLIT", "0") == "1"
     _BF8_POOLED_V = os.environ.get("MINIMAX_H3_BF8_POOLED_V", "0") == "1"
+    # Prefix spread step 2: pass the `fused` dense Q blocks to the sparse op, whose dynamic
+    # split then balances them by cost (sparse_dyn_split.hpp weighted_range). Off: the op's equal counts.
+    _PREFIX_WEIGHTS = os.environ.get("MINIMAX_H3_SOL_PREFIX_WEIGHTS", "0") == "1"
     _DYN_SPLIT = os.environ.get("TT_SPARSE_RING_DYN_SPLIT", "") == "on"
 
     def _bf8_native_path(self, rows: int) -> bool:
@@ -995,6 +1033,7 @@ class MiniMaxH3Attention(Module):
             use_column_major_ccl=True,
             block_size=SOL_BLOCK,
             **({"head_weights": sol_kwargs["sol_head_weights"]} if "sol_head_weights" in sol_kwargs else {}),
+            **({"dense_q_blocks": dense} if (dense := self._sol_dense_q_blocks(q.shape[2])) else {}),
         )
         for t in cast:
             ttnn.deallocate(t)

@@ -217,6 +217,20 @@ void kernel_main() {
             w[u] = 4 * kept[u] + 197 * dyn_n;
         }
         uint16_t c[dyn_units];
+        // Dense Q blocks (sparse_ring_sdpa dense_q_blocks, prefix spread): split each unit by cost. Common args at
+        // dyn_dense_base: n_dense, n_full, then the dense positions within a unit (Q-table order). Off: no code.
+        constexpr bool dyn_dense = get_named_compile_time_arg_val("dyn_dense") == 1;
+        [[maybe_unused]] sparse_dyn_split::Dense dn;
+        if constexpr (dyn_dense) {
+            constexpr uint32_t dyn_dense_base = get_named_compile_time_arg_val("dyn_dense_base");
+            dn.n_dense = get_common_arg_val<uint32_t>(dyn_dense_base);
+            dn.n_full = get_common_arg_val<uint32_t>(dyn_dense_base + 1);
+            dn.cap = get_named_compile_time_arg_val("dyn_dense_cap");
+            dn.n_dense = dn.n_dense < sparse_dyn_split::kMaxDense ? dn.n_dense : sparse_dyn_split::kMaxDense;
+            for (uint32_t i = 0; i < dn.n_dense; ++i) {
+                dn.pos[i] = get_common_arg_val<uint32_t>(dyn_dense_base + 2 + i);
+            }
+        }
         sparse_dyn_split::Entry e;
         for (uint32_t attempt = 0; attempt < 2; ++attempt) {
             if (attempt == 1) {
@@ -224,7 +238,11 @@ void kernel_main() {
                     w[u] = 1;
                 }
             }
-            e = sparse_dyn_split::entry(w, c, dyn_units, dyn_n, dyn_cores, dyn_max_q, dyn_min_q, dyn_core_index);
+            if constexpr (dyn_dense) {
+                e = sparse_dyn_split::entry(w, c, dyn_units, dyn_n, dyn_cores, dyn_max_q, dyn_min_q, dyn_core_index, &dn);
+            } else {
+                e = sparse_dyn_split::entry(w, c, dyn_units, dyn_n, dyn_cores, dyn_max_q, dyn_min_q, dyn_core_index);
+            }
             if (e.ok) {
                 break;
             }
@@ -269,7 +287,14 @@ void kernel_main() {
                         const uint32_t nc = phys(e.first + j + 1);
                         head_cfg.next_physical_x = nc & 0xFFFFu;
                         head_cfg.next_physical_y = nc >> 16;
-                        head_cfg.next_core_q_chunks = sparse_dyn_split::unit_count(dyn_n, n, j + 1);
+                        if constexpr (dyn_dense) {
+                            uint32_t ns = 0;
+                            uint32_t nc_count = 0;
+                            sparse_dyn_split::weighted_range(dyn_n, n, j + 1, w[e.unit], dyn_min_q, dn, ns, nc_count);
+                            head_cfg.next_core_q_chunks = nc_count;
+                        } else {
+                            head_cfg.next_core_q_chunks = sparse_dyn_split::unit_count(dyn_n, n, j + 1);
+                        }
                     }
                 }
             }

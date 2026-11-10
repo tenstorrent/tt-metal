@@ -203,7 +203,8 @@ ttnn::Tensor sparse_ring_sdpa_wrapper(
     uint32_t block_size,
     std::optional<uint32_t> q_blocks_per_pass,
     const std::optional<ttnn::Tensor>& block_counts,
-    const std::optional<ttnn::Tensor>& head_weights) {
+    const std::optional<ttnn::Tensor>& head_weights,
+    const std::vector<uint32_t>& dense_q_blocks) {
     return ttnn::transformer::sparse_ring_sdpa(
         input_tensor_q,
         input_tensor_k,
@@ -230,7 +231,8 @@ ttnn::Tensor sparse_ring_sdpa_wrapper(
         block_size,
         q_blocks_per_pass,
         block_counts,
-        head_weights);
+        head_weights,
+        dense_q_blocks);
 }
 
 std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> exp_ring_joint_scaled_dot_product_attention_wrapper(
@@ -934,6 +936,10 @@ void bind_sdpa(nb::module_& mod) {
                 pre-pass's per-call kept-block counts per (head, shard, Q tile row) (SolPrepassFused head_weights=True,
                 out["head_weights"]). Read only with TT_SPARSE_RING_DYN_SPLIT (the dynamic head-aligned Q split).
                 Defaults to None.
+            dense_q_blocks (List[int], optional): global Q-block indices (shard * Q blocks per shard + local block)
+                whose mask rows keep every full key block (Sol's exact prefix rows, spread over the shards). With the
+                dynamic split on, each head's cores split its blocks by cost instead of by count, and the per-core
+                cap may grow by up to 3 blocks where L1 allows it in the same passes. Defaults to [] (the equal-count split).
 
         Returns:
             ttnn.Tensor: [1, H, N/ring_size, D], same layout as input_tensor_q.
@@ -964,7 +970,8 @@ void bind_sdpa(nb::module_& mod) {
         nb::arg("block_size") = 64,
         nb::arg("q_blocks_per_pass") = nb::none(),
         nb::arg("block_counts").noconvert() = nb::none(),
-        nb::arg("head_weights").noconvert() = nb::none());
+        nb::arg("head_weights").noconvert() = nb::none(),
+        nb::arg("dense_q_blocks") = std::vector<uint32_t>{});
 
     const auto* const ring_mla_doc = R"doc(
         Causal Ring MLA attention over a single KV tensor.

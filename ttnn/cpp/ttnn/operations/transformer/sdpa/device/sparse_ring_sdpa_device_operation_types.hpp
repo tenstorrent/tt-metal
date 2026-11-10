@@ -31,6 +31,10 @@ struct SparseRingSDPAParams {
     CoreCoord ccl_core_grid_offset;
     uint32_t block_size = 64;
     std::optional<uint32_t> q_blocks_per_pass = std::nullopt;
+    // Dense Q blocks (prefix spread, Sol's exact prefix rows): global Q-block indices shard * Q blocks per shard + local
+    // block whose mask rows keep every full key block. With the dynamic split on, each unit's cores split it by cost
+    // (sparse_dyn_split.hpp weighted_range). Empty: the equal counts. Part of the program hash.
+    std::vector<uint32_t> dense_q_blocks;
 
     SparseRingSDPAParams(
         std::optional<float> scale,
@@ -43,7 +47,8 @@ struct SparseRingSDPAParams {
         experimental::prim::RingAttentionAllGatherAsyncInputs all_gather_tensor_args,
         CoreCoord ccl_core_grid_offset,
         uint32_t block_size,
-        std::optional<uint32_t> q_blocks_per_pass) :
+        std::optional<uint32_t> q_blocks_per_pass,
+        std::vector<uint32_t> dense_q_blocks = {}) :
         scale(scale),
         logical_n(logical_n),
         ring_size(ring_size),
@@ -54,7 +59,8 @@ struct SparseRingSDPAParams {
         all_gather_tensor_args(std::move(all_gather_tensor_args)),
         ccl_core_grid_offset(ccl_core_grid_offset),
         block_size(block_size),
-        q_blocks_per_pass(q_blocks_per_pass) {}
+        q_blocks_per_pass(q_blocks_per_pass),
+        dense_q_blocks(std::move(dense_q_blocks)) {}
 
     std::uint32_t get_q_chunk_size() const { return program_config.has_value() ? program_config->q_chunk_size : 32; }
 
@@ -72,7 +78,8 @@ struct SparseRingSDPAParams {
         "all_gather_operation_attributes",
         "all_gather_tensor_args",
         "block_size",
-        "q_blocks_per_pass");
+        "q_blocks_per_pass",
+        "dense_q_blocks");
     auto attribute_values() const {
         return std::make_tuple(
             std::cref(scale),
@@ -84,7 +91,8 @@ struct SparseRingSDPAParams {
             std::cref(all_gather_operation_attributes),
             std::cref(all_gather_tensor_args),
             std::cref(block_size),
-            std::cref(q_blocks_per_pass));
+            std::cref(q_blocks_per_pass),
+            std::cref(dense_q_blocks));
     }
 };
 

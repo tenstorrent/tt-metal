@@ -735,6 +735,7 @@ class MiniMaxH3Transformer3DModel(Module):
                         attn.sol_mask_reuse,
                         attn.sol_logical_n,
                         repr(attn.sol_sink_tokens),
+                        attn.sol_block_map,
                         attn._SOL_RESIDENT_PASSES,
                         attn._SOL_RESIDENT_K_CHUNK,
                     )
