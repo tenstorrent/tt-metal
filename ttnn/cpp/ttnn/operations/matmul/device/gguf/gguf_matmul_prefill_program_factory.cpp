@@ -60,7 +60,7 @@ struct PrefillPlan {
 
 // K split: every core sends to or receives from at most two cores of the other band.
 bool prefill_partners_fit(uint32_t n_tiles, uint32_t nc0, uint32_t nc1) {
-    for (const auto [mine, other] : {std::pair{nc0, nc1}, std::pair{nc1, nc0}}) {
+    for (const auto& [mine, other] : {std::pair{nc0, nc1}, std::pair{nc1, nc0}}) {
         for (uint32_t first = 0; first < n_tiles; first += mine) {
             const uint32_t last = std::min(n_tiles, first + mine) - 1;
             if (last / other - first / other > 1) {
