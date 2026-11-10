@@ -636,7 +636,12 @@ void kernel_main() {
             const bool own_h = vk < vnn;
             v_slot_ready(CB_WV, V_SLOT, V_TRID0 + (L & 1));   // layer L's MLP slice landed
             if (own_h) { cb_reserve_back(CB_VRSA, MKA_NOWN); cb_push_back(CB_VRSA, MKA_NOWN); }
-            { DeviceZoneScopedN("W-VX"); noc_semaphore_wait_min(vw(vg[VG_XA]), L + 1); noc_semaphore_wait_min(vw(vg[VG_XB]), L + 1); }
+#if defined(MK_V12_X2) || defined(MK_RS_QKV)
+            const uint32_t vxv = 2 * L + 2;   // two x deliveries per layer: mixer, MLP
+#else
+            const uint32_t vxv = L + 1;
+#endif
+            { DeviceZoneScopedN("W-VX"); noc_semaphore_wait_min(vw(vg[VG_XA]), vxv); noc_semaphore_wait_min(vw(vg[VG_XB]), vxv); }
             cb_reserve_back(CB_XK, 2 * V_OT);
             if (vR < 32) {   // unpack the two packed chunks (v0.8.2) into tile layout
                 DeviceZoneScopedN("W-VXU");

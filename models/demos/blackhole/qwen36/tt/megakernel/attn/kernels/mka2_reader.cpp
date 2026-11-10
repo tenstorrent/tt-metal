@@ -114,9 +114,15 @@ void kernel_main() {
     uint32_t vorc[2][5];
     for (uint32_t i = 0; i < 2; ++i) for (uint32_t k = 0; k < 5; ++k) vorc[i][k] = get_arg_val<uint32_t>(a++);
     const uint32_t vmyx = get_arg_val<uint32_t>(a++), vmyy = get_arg_val<uint32_t>(a++);
-    auto v12_ox = [&](uint32_t L) {
+    // x deliveries per layer (stand-in for the real AR's K-row delivery): MLP only (flag L + 1), or with MK_V12_X2 /
+    // MK_RS_QKV two (spec §18: the split-K mixer reads x from CB_XK too): mixer x at layer start (flag 2L + 1, after
+    // XRDY = the previous layer's MLP AR) and MLP x at MGO (flag 2L + 2). Consumers wait the flag of their phase.
+#if defined(MK_RS_QKV) && !defined(MK_V12_X2)
+#define MK_V12_X2 1
+#endif
+    auto v12_ox_to = [&](uint32_t wait_addr, uint32_t wait_val, uint32_t flag_val) {
         if (vrole != 2) return;
-        noc_semaphore_wait_min(vw(vg[VG_MGO]), L + 1);
+        noc_semaphore_wait_min(vw(wait_addr), wait_val);
         DeviceZoneScopedN("R-OX");
         const uint32_t sp = get_read_ptr(CB_VX0);
         if (vR >= 32) {
@@ -132,9 +138,15 @@ void kernel_main() {
                 if (vorc[i][4]) noc_async_write_multicast(pk, v_mc_addr(vorc[i], voxpk, 1), 2 * V_OT * vR * V_ROW_B, vorc[i][4], false);
         }
         noc_async_writes_flushed();
-        v_mcast_word(vg[VG_XA + voslot], L + 1, vorc, 1);
+        v_mcast_word(vg[VG_XA + voslot], flag_val, vorc, 1);
         noc_async_write_barrier();
     };
+#if defined(MK_V12_X2)
+    auto v12_ox = [&](uint32_t L) { v12_ox_to(vg[VG_MGO], L + 1, 2 * L + 2); };                    // MLP x
+    auto v12_ox_mix = [&](uint32_t L) { v12_ox_to(gs[GS_XRDY], L, 2 * L + 1); };                   // mixer x
+#else
+    auto v12_ox = [&](uint32_t L) { v12_ox_to(vg[VG_MGO], L + 1, L + 1); };
+#endif
 #if !defined(MK_NOBUSYGATE)
     // spec v0.8.9 busy gate: the non-owner ext cores hold their PQGDN chunks while the MLP owners are busy (odd)
     // owner cores never gate on their own word: this RISC delivers the owner's x after its PQ chunks, so a self-gate
@@ -177,6 +189,9 @@ void kernel_main() {
     constexpr uint32_t TRID_K = 6;
     for (uint32_t L = 0; L < NL; ++L) {
         const bool att = is_attn(L);
+#if defined(MK_V12) && defined(MK_V12_X2)
+        v12_ox_mix(L);   // owners: this layer's mixer x (the AR stand-in, at the layer boundary)
+#endif
         const uint32_t A = aidx(L);
 #if defined(MKA_RQKV)
         if (!IS_STREAM && !att && kPqGdn && qrole == QR_EXT) {
