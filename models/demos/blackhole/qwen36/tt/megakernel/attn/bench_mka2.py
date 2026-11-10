@@ -72,7 +72,9 @@ for it in range(ITERS):
             _rprev = _res
         print(f"[ar] iter {it} per-AR check (res = prev + ring*in): min pcc {min(_worst)} all {[w[0] for w in _worst]}", flush=True)
     if REAL_AR and AR_SEQ:   # this pass's golds from the residual the previous pass left (rstd stays the CB 20 stand-in)
+        _xin_seq = {}
         for L_ in range(NL):
+            _xin_seq[L_] = _xres.clone()   # layer L_'s mixer x (delivered by the previous MLP AR)
             _g, _u, _d = vlayer(L_)
             _xn = (rstd_g[:, None] * _xres.double()).float()
             _pL = (torch.nn.functional.silu(_xn @ _g) * (_xn @ _u)).bfloat16().float() @ _d
@@ -104,14 +106,26 @@ for it in range(ITERS):
         print(f"[fm11] diag bad cores {len(bad)}: {bad[:40]}", flush=True)
     pm, em = pcc_mix = (lambda v, g: (torch.corrcoef(torch.stack([v.flatten(), g.flatten()]))[0, 1].item(), (v - g).abs().max().item()))(ttnn.to_torch(ymix).float().reshape(M, -1), gold_mix)
     print(f"[mk1] iter {it} mixer pcc {pm:.5f} max|err| {em:.4f}", flush=True)
+    if REAL_AR and RQKV:   # qkv / k / SDPA / wo golds from the x the AR actually delivered to each attention layer (not the static x)
+        _xin = {}
+        if AR_DBG:   # residual after every AR of this pass (owner dumps); program order: [attention AR], MLP AR per layer
+            _k = 0
+            for L_ in range(NL):
+                if is_attn_layer(L_) and _k > 0: _xin[L_] = _db[:, 2 * (_k - 1) + 1]
+                _k += 1 + (1 if (REAL_AAR and is_attn_layer(L_)) else 0)
+        elif AR_SEQ:
+            _xin = {L_: x_ for L_, x_ in _xin_seq.items() if is_attn_layer(L_) and L_ > 0}
+        for L_, x_ in _xin.items():
+            attn_regold(L_, (rstd_g[:, None] * (x_.double() @ wfq[L_].double())).float())
+        print(f"[ar] iter {it} qkv/SDPA golds from the AR-delivered x for layers {sorted(_xin)}" if _xin else f"[ar] iter {it} qkv/SDPA golds: static x (no AR chain: MK_AR_DBG=1 at R = 32)", flush=True)
     if RQKV:
         qv = ttnn.to_torch(qkv_out).float().reshape(NL, M, QN * TILE)
         QRW = V_R if (QSK and V_R < 32) else M   # split-K at R < 32: only rows 0..R-1 of x / the partials travel (v12 faces)
         qv = qv[:, :QRW]
         for L in range(NL):
             if not is_attn_layer(L): continue
-            if RWO or QSK: gold_qkv[L][:, 64 * TILE:112 * TILE] = torch.sigmoid(gold_qkv[L][:, 64 * TILE:112 * TILE]) if it == 0 else gold_qkv[L][:, 64 * TILE:112 * TILE]
-            gq_ = gold_qkv[L][:QRW]
+            gq_ = gold_qkv[L][:QRW].clone()   # (no in-place sigmoid: attn_regold may replace gold_qkv[L] every pass)
+            if RWO or QSK: gq_[:, 64 * TILE:112 * TILE] = torch.sigmoid(gq_[:, 64 * TILE:112 * TILE])
             pq_ = torch.corrcoef(torch.stack([qv[L].flatten(), gq_.flatten()]))[0, 1].item()
             nan_ = [n for n in range(QN) if not torch.isfinite(qv[L][:, n*TILE:(n+1)*TILE]).all()]
             if nan_: print(f"[rqkv] iter {it} layer {L} non-finite tiles {nan_}", flush=True)

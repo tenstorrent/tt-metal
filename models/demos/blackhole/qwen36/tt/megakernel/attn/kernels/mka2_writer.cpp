@@ -173,7 +173,7 @@ void kernel_main() {
     // Critical-path writes first (head rows, sig(gate)), then the counters; the qkv_out debug copy goes to DRAM last: its
     // writes queued behind the SDPA K stream on the DRAM banks and held MIXDONE / HCNT 7-35 us (bench-only bytes)
     auto qkv_route = [&](uint32_t L) {
-        { DeviceZoneScopedN("W-QO"); cb_wait_front(CB_QO, QO_SLOT ? QO_SLOT : qnt); }
+        { MKZ("W-QO"); cb_wait_front(CB_QO, QO_SLOT ? QO_SLOT : qnt); }
         const uint32_t qsrc = get_read_ptr(CB_QO);
 #if defined(MKA_RQNR)
         noc_semaphore_wait_min(l1w(gs[GS_AADDR]), 1);
@@ -207,7 +207,7 @@ void kernel_main() {
 #endif
         noc_semaphore_inc(get_noc_addr(qr_x, qr_y, gs[GS_MIXDONE]), 1);
 #if !defined(MKA_NOQDBG)   // timing A/B: the bench-only qkv_out copy (qkv PCC check) off
-        DeviceZoneScopedN("W-QDBG");
+        MKZ("W-QDBG");
         for (uint32_t j = 0; j < qnt; ++j) noc_async_write(qsrc + j * QOTB, qo.get_noc_addr(L * QN + qn + j * QST), QOTB);
         noc_async_write_barrier();
 #endif
@@ -345,12 +345,12 @@ void kernel_main() {
         if (vrole != 2) return;
         // busy only from MGO on (the pre-MLP AR is done): the same core's reader holds its PQGDN chunks while busy is
         // odd and delivers this layer's x after them, so raising busy earlier deadlocks (x -> partials -> clear)
-        { DeviceZoneScopedN("W-OGO"); noc_semaphore_wait_min(vw(vg[VG_MGO]), L + 1); }
+        { MKZ("W-OGO"); noc_semaphore_wait_min(vw(vg[VG_MGO]), L + 1); }
 #if defined(MK_REAL_AR) && defined(MKA_ROLE_EXT) && defined(MK_AR_GAMMA) && defined(MK_AR_GEARLY)
         ar_gamma_issue((L + 1) % NL, 0);   // dedicated γ CB (not pbuf): issue at the MLP start, off the AR path
 #endif
         v_busy(vg[VG_BUSY], 2 * L + 1, vbmirror, vbrc);   // x delivery (stand-in) is on the reader (NOC1)
-        { DeviceZoneScopedN("W-OP"); noc_semaphore_wait_min(vw(vg[VG_P]), V_NCOL * (L + 1)); }
+        { MKZ("W-OP"); noc_semaphore_wait_min(vw(vg[VG_P]), V_NCOL * (L + 1)); }
         cb_reserve_back(CB_VP, V_NCOL * V_OT);
         cb_push_back(CB_VP, V_NCOL * V_OT);
         cb_wait_front(CB_VXO, V_OT);
@@ -525,10 +525,10 @@ void kernel_main() {
     };
     // K-row x (two owner chunks, flag >= xv) into CB_XK; unpack when R < 32 (v0.8.2)
     auto v_xk_push = [&](uint32_t xv) {
-        { DeviceZoneScopedN("W-VX"); noc_semaphore_wait_min(vw(vg[VG_XA]), xv); noc_semaphore_wait_min(vw(vg[VG_XB]), xv); }
+        { MKZ("W-VX"); noc_semaphore_wait_min(vw(vg[VG_XA]), xv); noc_semaphore_wait_min(vw(vg[VG_XB]), xv); }
         cb_reserve_back(CB_XK, 2 * V_OT);
         if (vR < 32) {
-            DeviceZoneScopedN("W-VXU");
+            MKZ("W-VXU");
             const uint32_t xd = get_write_ptr(CB_XK);
             for (uint32_t c = 0; c < 2; ++c)
                 for (uint32_t t = 0; t < V_OT; ++t)
@@ -616,7 +616,7 @@ void kernel_main() {
             // spec §18 split-K: partial over this K-row's x (CB_XK, owners' mixer delivery 2L + 1) x slot M; attention
             // layers then reduce-scatter down the column (rows below here, rows above from the reader) and route the
             // owned rows {k, k + 8} of the N-list; GDN-type layers: partial only (in-proj stand-in, discarded)
-            DeviceZoneScopedN("W-MIX");
+            MKZ("W-MIX");
             v_xk_push(2 * L + 1);
             v_slot_ready(sm, CB_WM, QSK_SLOT, 10 + (L & 1));
             if (att) { cb_reserve_back(CB_VRSA, MKA_NOWN); cb_push_back(CB_VRSA, MKA_NOWN); }
@@ -625,17 +625,17 @@ void kernel_main() {
                 noc_semaphore_wait_min(vw(vg[VG_LA]), 2 * L + 1);
                 v_rs_send(vabase, vk + 1, V_NROW, qsk_nt(vn), 1, vcy, vcx, vrsbuf, vk, vR, vg[VG_RS]);   // rows below (NOC0)
                 *vw(vg[VG_LB]) = 2 * L + 1;
-                { DeviceZoneScopedN("W-QRW"); noc_semaphore_wait_min(vw(vg[VG_RS]), (V_NROW - 1) * ((vk < vnn ? L : 0) + A + 1)); }
+                { MKZ("W-QRW"); noc_semaphore_wait_min(vw(vg[VG_RS]), (V_NROW - 1) * ((vk < vnn ? L : 0) + A + 1)); }
                 cb_reserve_back(CB_VRS, 2 * V_NROW);
                 cb_push_back(CB_VRS, 2 * V_NROW);
                 qkv_route(L);
             }
         } else if (qrole == QR_EXT) {
-            DeviceZoneScopedN("W-XQKV");
+            MKZ("W-XQKV");
 #elif defined(MKA_RQKV)
         if (IS_STREAM) {
             // attention layer: layer L's qkv K-half; GDN-type layer: the same K-half matmul is the GDN in-proj stand-in
-            DeviceZoneScopedN("W-MIX");
+            MKZ("W-MIX");
             cb_reserve_back(CB_X, KT);   // producer-fed x (XPRE): re-expose it to compute for this layer
             cb_push_back(CB_X, KT);
             if (att && qrole == QR_OWNER) { cb_reserve_back(CB_RSP, MKA_NOWN); cb_push_back(CB_RSP, MKA_NOWN); }   // partners skip the norm
@@ -652,7 +652,7 @@ void kernel_main() {
 #endif
             if (att) qkv_tail(L, A);
         } else if (qrole == QR_EXT) {   // STREAM_EXT: x of layer L is there once the previous layer's MLP AR is done
-            DeviceZoneScopedN("W-XQKV");
+            MKZ("W-XQKV");
 #endif
 #if defined(MKA_RQKV)
 #if !defined(MKA_QSK)
@@ -665,8 +665,8 @@ void kernel_main() {
 #endif
 #if defined(MKA_RQNR)
             if (head_id < NHEAD) {
-                DeviceZoneScopedN("W-HEAD");
-                { DeviceZoneScopedN("W-HCNT"); noc_semaphore_wait_min(l1w(gs[GS_HCNT]), 8 * (A + 1)); }
+                MKZ("W-HEAD");
+                { MKZ("W-HCNT"); noc_semaphore_wait_min(l1w(gs[GS_HCNT]), 8 * (A + 1)); }
                 cb_reserve_back(CB_A, WK);   // full slot, slots 0-7 valid
                 cb_push_back(CB_A, WK);
                 cb_wait_front(CB_XO, 10);
@@ -694,7 +694,7 @@ void kernel_main() {
         }
 #else
         if (IS_STREAM) {
-            DeviceZoneScopedN("W-MIX");
+            MKZ("W-MIX");
             cb_reserve_back(CB_X, KT);   // producer-fed x (XPRE): re-expose it to compute for this layer
             cb_push_back(CB_X, KT);
 #if defined(MKA_MIXTRID) && MKA_MIXTRID
@@ -714,7 +714,7 @@ void kernel_main() {
         }
 #endif
         if (!att) {   // GDN-type layer: next layer's weights stream during the GDN stand-in stall (GDN step + out-proj + AR)
-            DeviceZoneScopedN("W-GDN");
+            MKZ("W-GDN");
 #if defined(MKA_GDN24)
             // GDN role (spec §17 / §20): this GDN-type layer's step may read its prefix input -> in_ready += 1 on the 24
             // GDN cores (rows 8-9), from the Q root (device-local global sem; the GDN cores wait >= g + 1, then reset)
@@ -762,7 +762,7 @@ void kernel_main() {
             issue_some(true);
 #if defined(MKA_GDN_WAIT)
             {
-                DeviceZoneScopedN("W-GDNW");
+                MKZ("W-GDNW");
                 while (!MKA_GDN_STALL_DONE()) {
                 }
             }
@@ -779,7 +779,7 @@ void kernel_main() {
         }
         if (att) 
         {   // SDPA: Q (Q root reads + multicasts, flag = L + 1), then the V stream with the throttled weight issue
-            DeviceZoneScopedN("W-SDPA");
+            MKZ("W-SDPA");
             cb_reserve_back(CB_Q, QT);
             const uint32_t qdst = get_write_ptr(CB_Q);
             if (is_qroot) {
@@ -886,9 +886,9 @@ void kernel_main() {
         }
 #if defined(MKA_RWO)
         if (!IS_STREAM && att && wo_nt) {
-            DeviceZoneScopedN("W-WO");
+            MKZ("W-WO");
             if (is_concat) {   // S: all 48 sig(gate) tiles landed here at qkv time -> multicast (off the critical path)
-                DeviceZoneScopedN("W-CATS");
+                MKZ("W-CATS");
                 noc_semaphore_wait_min(l1w(gs[GS_SCNT]), WK * (A + 1));
                 mcast_ext(get_write_ptr(CB_S), get_write_ptr(CB_S), WK * 2048);
                 noc_async_write_barrier();
@@ -905,7 +905,7 @@ void kernel_main() {
             cb_reserve_back(CB_S, WK);
             cb_push_back(CB_S, WK);
             if (is_concat) {
-                DeviceZoneScopedN("W-CATA");
+                MKZ("W-CATA");
                 noc_semaphore_wait_min(l1w(gs[GS_ACNT]), NUSR * (A + 1));
                 mcast_ext(get_write_ptr(CB_A), get_write_ptr(CB_A), WK * 2048);
                 noc_async_write_barrier();
@@ -918,10 +918,10 @@ void kernel_main() {
                 }
                 noc_async_write_barrier();
             }
-            { DeviceZoneScopedN("W-AFL"); noc_semaphore_wait_min(l1w(gs[GS_AFLAG]), A + 1); }
+            { MKZ("W-AFL"); noc_semaphore_wait_min(l1w(gs[GS_AFLAG]), A + 1); }
             cb_reserve_back(CB_A, WK);
             cb_push_back(CB_A, WK);
-            { DeviceZoneScopedN("W-WOQO"); cb_wait_front(CB_QO, QO_SLOT); }   // A_g @ Wo slice (full slot, wo_nt valid)
+            { MKZ("W-WOQO"); cb_wait_front(CB_QO, QO_SLOT); }   // A_g @ Wo slice (full slot, wo_nt valid)
             const uint32_t xo = get_write_ptr(CB_XO);   // uniform on the ext cores
             wou::scatter(CB_QO, QO_SLOT, wo_nt, wo_tile, ow_x, ow_y, xo, gs[GS_WOCNT]);   // rot order: farthest owner first
             if (own_chunk < 16) {   // owner: chunk complete -> READY (AR); bench: debug copy + WODONE on the Q root
@@ -1003,30 +1003,30 @@ void kernel_main() {
             v_rs_send(vabase, vk + 1, vnn, vnn, 2, vcy, vcx, vrsbuf, vk, vR, vg[VG_RS]);   // rows below (NOC0)
             *vw(vg[VG_LB]) = V_LV(L);
             if (own_h) {
-                { DeviceZoneScopedN("W-VRW"); noc_semaphore_wait_min(vw(vg[VG_RS]), (V_NROW - 1) * V_NRS(L)); }
+                { MKZ("W-VRW"); noc_semaphore_wait_min(vw(vg[VG_RS]), (V_NROW - 1) * V_NRS(L)); }
                 cb_reserve_back(CB_VRS, 2 * V_NROW);
                 cb_push_back(CB_VRS, 2 * V_NROW);
                 cb_wait_front(CB_VHO, 1);
                 { v_hu_send(get_read_ptr(CB_VHO), vk, V_NROW, vcy, vcx, vhbuf + vk * V_PTB, vR, vg[VG_H]); }
                 cb_pop_front(CB_VHO, 1);
             }
-            { DeviceZoneScopedN("W-VH"); noc_semaphore_wait_min(vw(vg[VG_H]), vnn * (L + 1)); }
+            { MKZ("W-VH"); noc_semaphore_wait_min(vw(vg[VG_H]), vnn * (L + 1)); }
             cb_reserve_back(CB_VH, V_NNM);
             cb_push_back(CB_VH, V_NNM);
             cb_wait_front(CB_VDO, V_OT);
             {
-                DeviceZoneScopedN("W-VDN");
+                MKZ("W-VDN");
                 v_tile_write(get_read_ptr(CB_VDO), get_noc_addr(voax, voay, vpbuf + vn * V_OT * V_PTB), V_OT, vR);
                 noc_async_write_barrier();
                 noc_semaphore_inc(get_noc_addr(voax, voay, vg[VG_P]), 1);
             }
             cb_pop_front(CB_VDO, V_OT);
-            { DeviceZoneScopedN("W-VMD"); noc_semaphore_wait_min(vw(vg[VG_MDONE]), 2 * (L + 1)); }   // both row owners summed
+            { MKZ("W-VMD"); noc_semaphore_wait_min(vw(vg[VG_MDONE]), 2 * (L + 1)); }   // both row owners summed
             if (L + 1 < NL && is_attn(L + 1)) v_mlp_start(L + 1);   // slot V is free (popped before CB_VDO)
         }
 #if defined(MK_REAL_AR)
         {   // the real MLP AR: this K-row's two owners delivered x of layer L + 1 (flags = per-pass delivery count)
-            DeviceZoneScopedN("W-ARWAIT");
+            MKZ("W-ARWAIT");
 #if defined(MK_V12_X2) || defined(MK_RS_QKV)   // X2 (QSK): AR(L) delivers layer L + 1's mixer x, flag 2(L + 1) + 1
 #define MK_AR_XWAIT(L) (*vw(vg[VG_XA]) < 2 * (L) + 3 || *vw(vg[VG_XB]) < 2 * (L) + 3)
 #else
@@ -1051,7 +1051,7 @@ void kernel_main() {
         }
 #else
         {
-            DeviceZoneScopedN("W-ARSTALL");
+            MKZ("W-ARSTALL");
             const uint32_t t0 = reg_read(RISCV_DEBUG_REG_WALL_CLOCK_L);
             while ((uint32_t)(reg_read(RISCV_DEBUG_REG_WALL_CLOCK_L) - t0) < (uint32_t)S_AR) v_pump();
         }
@@ -1078,19 +1078,19 @@ void kernel_main() {
         // -mk-tail port: publish h root chunk by root chunk (fixed root order = landing-buffer order) so the down
         // projection starts on chunk 0 while chunks 1-3 are still in flight
         for (uint32_t i = 0; i < NROOT; ++i) {
-            DeviceZoneScopedN("W-HWAIT");
+            MKZ("W-HWAIT");
             noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(SEM_HFLG0 + i)), L + 1);
             cb_reserve_back(CB_H, HCH);
             cb_push_back(CB_H, HCH);
         }
 #else
-        { DeviceZoneScopedN("W-HWAIT"); wait_hflags(L); }
+        { MKZ("W-HWAIT"); wait_hflags(L); }
         cb_reserve_back(CB_H, HT);
         cb_push_back(CB_H, HT);
 #endif
         cb_wait_front(CB_OUT, NDN);
         cb_pop_front(CB_OUT, NDN);
-        { DeviceZoneScopedN("W-ARSTALL"); spin_cycles(S_AR); }
+        { MKZ("W-ARSTALL"); spin_cycles(S_AR); }
 #if defined(MKA_RQKV)
         if (is_qroot && L + 1 < NL) mcast_word<NRF>(gs[GS_XRDY], L + 1, rf, self_rf, 0);   // x of layer L + 1 -> STREAM_EXT
 #endif
