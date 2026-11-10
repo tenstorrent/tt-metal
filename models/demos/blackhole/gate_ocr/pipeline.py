@@ -6,6 +6,7 @@
 # full-resolution frame -> PP-OCRv6 small detector + recognizer -> text.
 # All three models are traced on the same device; pre/post-processing runs on the host.
 
+import threading
 import time
 from dataclasses import dataclass, field
 
@@ -15,7 +16,7 @@ import torch
 import ttnn
 from models.demos.blackhole.pp_ocrv6.common import DET_L1_SMALL_SIZE, TRACE_REGION_SIZE
 from models.demos.blackhole.pp_ocrv6.demo.pipeline import PPOCRv6Pipeline, TtnnBackend
-from models.demos.utils.common_demo_utils import non_max_suppression, preprocess, scale_boxes
+from models.demos.utils.common_demo_utils import letterbox, non_max_suppression, scale_boxes
 from models.demos.yolov11s.common import YOLOV11S_L1_SMALL_SIZE
 from models.demos.yolov11s.runner.performant_runner import YOLOv11sPerformantRunner
 
@@ -51,6 +52,9 @@ class GateOCR:
     def __init__(self, device, full_frame_fallback=True):
         self.device = device
         self.full_frame_fallback = full_frame_fallback
+        # One lock around every device call and its readback: frames can be processed on several
+        # threads, and the host work of one overlaps the device work of another.
+        self.lock = threading.Lock()
         # Both models' weights are prepared before either captures a trace (see TtnnBackend.prepare).
         backend = TtnnBackend(device, traced=False)
         backend.prepare()
@@ -58,15 +62,28 @@ class GateOCR:
             device, 1, act_dtype=ttnn.bfloat8_b, weight_dtype=ttnn.bfloat8_b, resolution=(YOLO_SIZE, YOLO_SIZE)
         )
         backend.capture()
+        backend.lock = self.lock
         self.ocr = PPOCRv6Pipeline(backend)
 
+    def _yolo_host_input(self, frame_bgr):
+        img = letterbox(frame_bgr, (YOLO_SIZE, YOLO_SIZE))
+        x = torch.from_numpy(np.ascontiguousarray(img[..., ::-1].transpose(2, 0, 1)))[None]
+        # torch's bf16 cast is much faster than from_torch converting float32.
+        x = (x.float() / 255).to(torch.bfloat16)
+        return ttnn.from_host_shards(
+            [ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)], self.device.shape
+        )
+
     def detect_vehicles(self, frame_bgr):
-        x = preprocess([frame_bgr], res=(YOLO_SIZE, YOLO_SIZE))
+        host = self._yolo_host_input(frame_bgr)
         t_pre = time.perf_counter()
-        preds = ttnn.to_torch(self.yolo.run(x), dtype=torch.float32)
+        with self.lock:
+            out = self.yolo.run(tt_inputs_host=host)
+            ttnn.event_synchronize(ttnn.record_event(self.device, 0))  # releases the GIL while waiting
+            preds = ttnn.to_torch(out, dtype=torch.float32)
         t_yolo = time.perf_counter()
         det = non_max_suppression(preds, YOLO_CONF, YOLO_IOU)[0]
-        det[:, :4] = scale_boxes(x.shape[2:], det[:, :4], frame_bgr.shape)
+        det[:, :4] = scale_boxes((YOLO_SIZE, YOLO_SIZE), det[:, :4], frame_bgr.shape)
         keep = [int(c) in VEHICLE_CLASSES for c in det[:, 5]]
         return det[keep], t_pre, t_yolo
 
@@ -77,7 +94,7 @@ class GateOCR:
         h, w = frame_bgr.shape[:2]
         x1, y1 = int(max(0, x1 - mx)), int(max(0, y1 - my))
         x2, y2 = int(min(w, x2 + mx)), int(min(h, y2 + my))
-        crop = np.ascontiguousarray(frame_bgr[y1:y2, x1:x2])
+        crop = frame_bgr[y1:y2, x1:x2]  # a view; cv2 reads row-strided arrays without a copy
         crop_ms = (time.perf_counter() - start) * 1000
         result = self.ocr(crop)
         for line in result.lines:

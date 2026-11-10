@@ -5,6 +5,7 @@
 # PP-OCRv6 small text pipeline: crop -> detector -> boxes -> recognizer -> text.
 # Pre/post-processing runs on the host; detector and recognizer run on the chosen backend.
 
+import contextlib
 import time
 from dataclasses import dataclass, field
 
@@ -75,6 +76,9 @@ class TtnnBackend:
         self.ttnn = ttnn
         self.device = device
         self.traced = traced
+        # Held around each device call and its readback; set to a shared lock when several
+        # threads or models use the device, so host work of one overlaps device work of another.
+        self.lock = contextlib.nullcontext()
         self.det = TtPPOCRv6SmallDet(device, load_torch_det())
         self.rec = TtPPOCRv6SmallRec(device, load_torch_rec())
         self.runners = {}
@@ -134,20 +138,31 @@ class TtnnBackend:
             )
         return fn(host)
 
+    def _wait(self):
+        # Waiting on an event releases the GIL; from_device inside to_torch would hold it.
+        self.ttnn.event_synchronize(self.ttnn.record_event(self.device, 0))
+
     def detect(self, x):
         from models.demos.blackhole.pp_ocrv6.tt.ttnn_det import unshuffle_probability
 
         b, _, h, w = x.shape
-        out = self._run(("det", b, h, w), self._det_fn(b, h, w), self._host(x))
-        return unshuffle_probability(self.ttnn.to_torch(out).float(), b, h // 4, w // 4)[0, 0]
+        host = self._host(x)
+        with self.lock:
+            out = self._run(("det", b, h, w), self._det_fn(b, h, w), host)
+            self._wait()
+            out = self.ttnn.to_torch(out)
+        return unshuffle_probability(out.float(), b, h // 4, w // 4)[0, 0]
 
     def recognize(self, x):
         """[B, 3, 48, W] -> (argmax indices [B, T], their probabilities [B, T])."""
         from models.demos.blackhole.pp_ocrv6.tt.ttnn_rec import rec_decode_to_torch
 
         b = x.shape[0]
-        idx, conf = self._run(("rec", b), self._rec_fn(b), self._host(x))
-        return rec_decode_to_torch(idx, conf, b, REC_WIDTH // 8)
+        host = self._host(x)
+        with self.lock:
+            idx, conf = self._run(("rec", b), self._rec_fn(b), host)
+            self._wait()
+            return rec_decode_to_torch(idx, conf, b, REC_WIDTH // 8)
 
 
 def letterbox(bgr, size=DET_SIZE):
@@ -192,10 +207,28 @@ def db_boxes(prob, thresh=DB_THRESH, box_thresh=DB_BOX_THRESH, unclip_ratio=DB_U
     return sorted(boxes, key=lambda b: (round(b[0, 1] / 10), b[0, 0]))
 
 
-def crop_text_line(bgr, box):
+def _box_size(box):
     tl, tr, br, bl = box
-    w = int(max(np.linalg.norm(tr - tl), np.linalg.norm(br - bl)))
-    h = int(max(np.linalg.norm(bl - tl), np.linalg.norm(br - tr)))
+    return max(np.linalg.norm(tr - tl), np.linalg.norm(br - bl)), max(np.linalg.norm(bl - tl), np.linalg.norm(br - tr))
+
+
+def crop_text_line(bgr, box, line_height=None):
+    """Perspective-crop one text line; tall boxes are rotated to horizontal.
+
+    With `line_height`, lines taller than twice that are area-downscaled first, so the warp
+    runs at about recognizer size instead of the source resolution.
+    """
+    w, h = _box_size(box)
+    text_height = w if h / max(w, 1) >= 1.5 else h
+    if line_height and text_height > 2 * line_height:
+        scale = 2 * line_height / text_height
+        x0, y0 = np.floor(box.min(0)).astype(int)
+        x1, y1 = np.ceil(box.max(0)).astype(int) + 1
+        bgr = cv2.resize(bgr[y0:y1, x0:x1], None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
+        box = ((box - np.array([x0, y0], np.float32)) * scale).astype(np.float32)
+        w, h = _box_size(box)
+    tl, tr, br, bl = box
+    w, h = int(w), int(h)
     dst = np.array([[0, 0], [w, 0], [w, h], [0, h]], np.float32)
     crop = cv2.warpPerspective(
         bgr, cv2.getPerspectiveTransform(box, dst), (w, h), borderMode=cv2.BORDER_REPLICATE, flags=cv2.INTER_CUBIC
@@ -230,7 +263,7 @@ class PPOCRv6Pipeline:
 
         boxes = db_boxes(prob)
         boxes = [np.clip(b / scale, 0, [bgr.shape[1] - 1, bgr.shape[0] - 1]).astype(np.float32) for b in boxes]
-        crops = [rec_normalize_bgr(crop_text_line(bgr, b)) for b in boxes]
+        crops = [rec_normalize_bgr(crop_text_line(bgr, b, REC_HEIGHT)) for b in boxes]
         t["det_post_rec_pre"] = time.perf_counter()
 
         steps = []

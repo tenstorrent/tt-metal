@@ -16,6 +16,7 @@ import glob
 import json
 import os
 import time
+from concurrent.futures import ThreadPoolExecutor
 
 import cv2
 import numpy as np
@@ -26,6 +27,7 @@ from models.demos.blackhole.gate_ocr.pipeline import DEVICE_PARAMS, GateOCR
 FRAME = 4096
 PAD = (114, 114, 114)
 RUNS = 10
+THROUGHPUT_FRAMES = 200
 
 
 def fit_on_frame(bgr, size):
@@ -80,6 +82,23 @@ def draw(frame, result):
     return cv2.resize(out, (FRAME // 2, FRAME // 2), interpolation=cv2.INTER_AREA)
 
 
+def throughput(gate, frames, workers, count):
+    """Frames per second and per-frame latency (p50, p99 ms) with `workers` frames in flight."""
+
+    def one(frame):
+        start = time.perf_counter()
+        gate(frame)
+        return (time.perf_counter() - start) * 1000
+
+    work = [frames[i % len(frames)] for i in range(count)]
+    with ThreadPoolExecutor(workers) as pool:
+        list(pool.map(one, work[: 2 * workers]))
+        start = time.perf_counter()
+        latencies = list(pool.map(one, work))
+        wall = time.perf_counter() - start
+    return count / wall, float(np.percentile(latencies, 50)), float(np.percentile(latencies, 99))
+
+
 def median_timings(samples):
     return {k: float(np.median([s[k] for s in samples])) for k in samples[0]}
 
@@ -89,6 +108,7 @@ def main():
     ap.add_argument("--images", required=True)
     ap.add_argument("--out", required=True)
     ap.add_argument("--make-4k", dest="make_4k")
+    ap.add_argument("--threads", type=int, nargs="*", help="also measure throughput with these worker counts")
     args = ap.parse_args()
     if args.make_4k:
         make_4k_inputs(args.make_4k, args.images)
@@ -101,7 +121,7 @@ def main():
         gate = GateOCR(device)
         print(f"setup (weights + traces for YOLO, det, rec): {time.perf_counter() - t0:.1f} s", flush=True)
 
-        rows = []
+        rows, with_vehicle = [], []
         for path in paths:
             name = os.path.splitext(os.path.basename(path))[0]
             t_load = time.perf_counter()
@@ -148,6 +168,8 @@ def main():
                 flush=True,
             )
             rows.append((name, crops, t, load_ms))
+            if not any(v.label.startswith("no vehicle") for v in result.vehicles):
+                with_vehicle.append((name, path))
 
         print("\n| frame | crops | YOLO pre | YOLO | NMS | OCR all crops | total | JPEG decode |", flush=True)
         print("|---|---|---|---|---|---|---|---|", flush=True)
@@ -157,6 +179,16 @@ def main():
                 f"{t['ocr_all_crops']:.1f} | {t['total']:.1f} | {load_ms:.0f} |",
                 flush=True,
             )
+
+        if args.threads:
+            # Frames with a vehicle only: an idle gate sends nothing.
+            loaded = [(n, cv2.imread(p)) for n, p in with_vehicle]
+            print(f"\nthroughput over {[n for n, _ in loaded]}, {THROUGHPUT_FRAMES} frames per run", flush=True)
+            print("| worker threads | frames/s | ms per frame p50 | p99 |", flush=True)
+            print("|---|---|---|---|", flush=True)
+            for n in args.threads:
+                fps, p50, p99 = throughput(gate, [f for _, f in loaded], n, THROUGHPUT_FRAMES)
+                print(f"| {n} | {fps:.1f} | {p50:.1f} | {p99:.1f} |", flush=True)
         gate.release()
     finally:
         ttnn.close_device(device)
