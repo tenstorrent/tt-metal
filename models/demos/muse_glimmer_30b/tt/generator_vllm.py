@@ -102,10 +102,12 @@ class MuseGlimmerDFlash2ForCausalLM:
         "supports_chunked_prefill": False,
     }
 
-    def __init__(self, engine, kv_handles=None):
+    # vllm_config / prefix: vLLM 0.31's registry inspection (is_vllm_model) rejects a class whose __init__ lacks a `vllm_config`
+    # keyword ("This model does not support --runner generate"); the plugin builds the adapter through initialize_vllm_model.
+    def __init__(self, engine=None, kv_handles=None, *, vllm_config=None, prefix=""):
         self.engine = engine
         self.kv_handles = kv_handles
-        self.n_slots = int(engine.max_users)
+        self.n_slots = int(engine.max_users) if engine is not None else 0
         self.phys = list(range(self.n_slots))  # plugin state slot -> engine slot (see the module docstring)
         self._outstanding = set()  # engine slots whose last verify is not committed yet
         self._last_drafts = {}  # engine slot -> (drafts, q) of the last propose (mismatch warning, rejection sampling)
