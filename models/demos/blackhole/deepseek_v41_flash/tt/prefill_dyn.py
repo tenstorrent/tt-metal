@@ -63,6 +63,7 @@ def memitem_report(tag=""):
 
 HEAD_DIM = 512
 WINDOW = 128
+ROPE_DIM = 64  # rotated columns (the last ROPE_DIM of HEAD_DIM); the others are cos 1 / sin 0
 
 
 LATENT_MASK_COLS = 32768  # column chunk of the [C, L] mask: one eltwise row wider than ~64k tiles' worth of columns needs more static L1 than exists (L > ~131k at ctx > 262144)
@@ -122,6 +123,7 @@ from models.demos.blackhole.deepseek_v41_flash.tt.prefill_single import slot_s0 
 
 
 class DynCtx:
+    pos_dev = False  # DSV41_PF_POS_DEV (instance attribute set by __init__)
     def __init__(self, md, C, S_pad, ratios, rope_src, per_row=False, U=1):
         """ratios: set of compress ratios present (0 = window only); rope_src: {compressed?: an attention object providing ``_rope_inputs``}."""
         self.md, self.C, self.S_pad = md, C, S_pad
@@ -148,12 +150,33 @@ class DynCtx:
                 mesh_mapper=self._shard if self.per_row else rep,
             )
 
+        # DSV41_PF_POS_DEV=1 (default OFF): the position tables are not uploaded at full width. The host sends the COMPACT rotated 64 columns (cos | sin | -sin) per kind and the first-chunk flag
+        # of every slot; the full-width RoPE tables [C, 512] (ones / zeros outside the rotated dims) and the window mask are built ON THE DEVICE inside the traced forward (``derive``, called by
+        # ``build_masks``) with copies / concats / selects only, so every value is bit-identical to the host-built tables of the default path (tests/test_prefill_pos_dev_cpu.py, test_prefill_pos_dev_device.py).
+        self.pos_dev = bool(self.per_row and os.environ.get("DSV41_PF_POS_DEV", "0") == "1" and self._pos_dev_ok())
         with memitem(md, "dyn_pos_tables(rope,mask,lim,off)"):
-            self.tabs = {k: tuple(mk([1, 1, C, HEAD_DIM]) for _ in range(3)) for k in rope_src}  # key: compressed?
-            self.lat_tabs = {
-                r: tuple(mk([1, 1, C // r, HEAD_DIM]) for _ in range(3)) for r in self.ratios if r > 1 and True
-            }
-            self.win_mask = mk([1, 1, C, WINDOW + C])
+            if self.pos_dev:
+                self.cpk = {k: mk([1, 1, C, 3 * ROPE_DIM]) for k in rope_src}  # key: compressed?
+                self.lpk = {r: mk([1, 1, C // r, 3 * ROPE_DIM]) for r in self.ratios if r > 1}
+                self.first = mk([1, 1, 1, 1])  # 1.0 where the slot's chunk starts at position 0 (no halo)
+                nrows = {C} | {C // r for r in self.lpk}
+                self.k_zeros = {n: mk([1, 1, n, HEAD_DIM - ROPE_DIM], fill=0.0) for n in nrows}  # (the ones are derived from it in the trace)
+                self.k_nzeros = {n: mk([1, 1, n, HEAD_DIM - ROPE_DIM]) for n in nrows}
+                for n, dev in self.k_nzeros.items():  # (-s of the host path is -0.0 off the rotated dims; a device op cannot make -0.0 (neg / multiply give +0.0): upload it, the sign bit survives a host-side conversion)
+                    h = self._host(torch.full((self.nslot, 1, n, HEAD_DIM - ROPE_DIM), -0.0), ttnn.bfloat16)
+                    ttnn.copy_host_to_device_tensor(h, dev)
+                self.win_m0 = mk([1, 1, C, WINDOW + C])  # the window mask of the chunk at position 0 / of every later chunk (constants)
+                self.win_m1 = mk([1, 1, C, WINDOW + C])
+                for dev, x in ((self.win_m0, 0), (self.win_m1, C)):
+                    h = self._host(self._win_values(x).repeat(self.nslot, 1, 1, 1), ttnn.bfloat16)
+                    ttnn.copy_host_to_device_tensor(h, dev)
+                self.tabs, self.lat_tabs, self.win_mask = {}, {}, None  # (built in the trace by ``derive``)
+            else:
+                self.tabs = {k: tuple(mk([1, 1, C, HEAD_DIM]) for _ in range(3)) for k in rope_src}  # key: compressed?
+                self.lat_tabs = {
+                    r: tuple(mk([1, 1, C // r, HEAD_DIM]) for _ in range(3)) for r in self.ratios if r > 1 and True
+                }
+                self.win_mask = mk([1, 1, C, WINDOW + C])
             self.lim = {r: mk([1, 1, C, 1], ttnn.float32) for r in self.ratios}
             self.off = {r: mk([1, 1, 1, 1], ttnn.float32) for r in self.ratios}
         with memitem(md, "pcol(arange L, fp32 tile)"):
@@ -179,6 +202,39 @@ class DynCtx:
         self.back = False
         self.p0 = None
 
+    def _pos_dev_ok(self):
+        """DSV41_PF_POS_DEV preconditions (else the default path): tile-aligned row counts, and every rope source builds its table as [ones | cos], [zeros | sin] from ``cos_tab`` / ``sin_tab``."""
+        C = self.C
+        ok = C % 32 == 0 and all((C // r) % 32 == 0 for r in self.ratios if r > 1)
+        for k, src in self.rope_src.items():
+            if not (hasattr(src, "cos_tab") and hasattr(src, "sin_tab")):
+                ok = False
+                continue
+            pos = torch.arange(8)
+            c, s = src._rope_inputs(pos)
+            ok = ok and bool(
+                (c[:, : HEAD_DIM - ROPE_DIM] == 1).all()
+                and (s[:, : HEAD_DIM - ROPE_DIM] == 0).all()
+                and torch.equal(c[:, HEAD_DIM - ROPE_DIM :], src.cos_tab[pos].to(c.dtype))
+                and torch.equal(s[:, HEAD_DIM - ROPE_DIM :], src.sin_tab[pos].to(s.dtype))
+            )
+        if not ok:
+            print("DSV41_PF_POS_DEV: preconditions not met, using the host-built position tables", flush=True)
+        return ok
+
+    def _win_values(self, s0):
+        """the additive band mask of the chunk [s0, s0 + C) as [1,1,C,128+C] fp32 (0 / NEG): depends on s0 only through ``kp >= 0``, i.e. s0 == 0 or not"""
+        C = self.C
+        pos = s0 + torch.arange(C)
+        t = pos.view(-1, 1)
+        kp = torch.cat([s0 - WINDOW + torch.arange(WINDOW), pos]).view(1, -1)
+        return torch.where((kp <= t) & (kp > t - WINDOW) & (kp >= 0), 0.0, NEG).reshape(1, 1, C, WINDOW + C)
+
+    def _compact(self, src, pos):
+        """cos | sin | -sin of the rotated columns, [len(pos), 192] fp32 (the rounding to bf16 happens in ``from_torch`` exactly as for the full-width tables)"""
+        cos, sin = src.cos_tab[pos].float(), src.sin_tab[pos].float()
+        return torch.cat([cos, sin, -sin], dim=-1)
+
     def _host(self, t, dtype):
         return ttnn.from_torch(
             t.contiguous(),
@@ -192,15 +248,25 @@ class DynCtx:
         C = self.C
         pos = s0 + torch.arange(C)
         out = {}
-        for k, src in self.rope_src.items():
-            c, s = src._rope_inputs(pos)
-            out[("tab", k)] = [t.reshape(1, 1, C, HEAD_DIM) for t in (c, s, -s)]
-        for r in self.lat_tabs:
-            c, s = self.rope_src[True]._rope_inputs(s0 + r * torch.arange(C // r))
-            out[("lat", r)] = [t.reshape(1, 1, C // r, HEAD_DIM) for t in (c, s, -s)]
-        t = pos.view(-1, 1)
-        kp = torch.cat([s0 - WINDOW + torch.arange(WINDOW), pos]).view(1, -1)
-        out["win"] = [torch.where((kp <= t) & (kp > t - WINDOW) & (kp >= 0), 0.0, NEG).reshape(1, 1, C, WINDOW + C)]
+        if self.pos_dev:  # compact: the rotated columns only, the first-chunk flag instead of the mask (see ``derive``)
+            assert s0 % C == 0, f"DSV41_PF_POS_DEV needs chunk starts that are multiples of C={C}, got {s0}"
+            for k, src in self.rope_src.items():
+                out[("tab", k)] = [self._compact(src, pos).reshape(1, 1, C, 3 * ROPE_DIM)]
+            for r in self.lpk:
+                out[("lat", r)] = [
+                    self._compact(self.rope_src[True], s0 + r * torch.arange(C // r)).reshape(
+                        1, 1, C // r, 3 * ROPE_DIM
+                    )
+                ]
+            out["first"] = [torch.full((1, 1, 1, 1), 1.0 if s0 == 0 else 0.0)]
+        else:
+            for k, src in self.rope_src.items():
+                c, s = src._rope_inputs(pos)
+                out[("tab", k)] = [t.reshape(1, 1, C, HEAD_DIM) for t in (c, s, -s)]
+            for r in self.lat_tabs:
+                c, s = self.rope_src[True]._rope_inputs(s0 + r * torch.arange(C // r))
+                out[("lat", r)] = [t.reshape(1, 1, C // r, HEAD_DIM) for t in (c, s, -s)]
+            out["win"] = [self._win_values(s0)]
         for r in self.ratios:
             out[("lim", r)] = [((pos + 1) // r).float().reshape(1, 1, C, 1)]
             out[("off", r)] = [torch.full((1, 1, 1, 1), float(self.L[r] - (s0 + C) // r))]
@@ -220,13 +286,20 @@ class DynCtx:
         else:
             assert not hasattr(s0, "__len__") or len(set(int(x) for x in s0)) == 1, "per-row chunk starts need per_row"
             vals = self._values(int(s0[0]) if hasattr(s0, "__len__") else int(s0))
-        for k in self.rope_src:
-            for t, dev in zip(vals[("tab", k)], self.tabs[k]):
-                out.append((self._host(t, ttnn.bfloat16), dev))
-        for r, tabs in self.lat_tabs.items():
-            for t, dev in zip(vals[("lat", r)], tabs):
-                out.append((self._host(t, ttnn.bfloat16), dev))
-        out.append((self._host(vals["win"][0], ttnn.bfloat16), self.win_mask))
+        if self.pos_dev:
+            for k in self.rope_src:
+                out.append((self._host(vals[("tab", k)][0], ttnn.bfloat16), self.cpk[k]))
+            for r in self.lpk:
+                out.append((self._host(vals[("lat", r)][0], ttnn.bfloat16), self.lpk[r]))
+            out.append((self._host(vals["first"][0], ttnn.bfloat16), self.first))
+        else:
+            for k in self.rope_src:
+                for t, dev in zip(vals[("tab", k)], self.tabs[k]):
+                    out.append((self._host(t, ttnn.bfloat16), dev))
+            for r, tabs in self.lat_tabs.items():
+                for t, dev in zip(vals[("lat", r)], tabs):
+                    out.append((self._host(t, ttnn.bfloat16), dev))
+            out.append((self._host(vals["win"][0], ttnn.bfloat16), self.win_mask))
         for r in self.ratios:
             out.append((self._host(vals[("lim", r)][0], ttnn.float32), self.lim[r]))
             out.append((self._host(vals[("off", r)][0], ttnn.float32), self.off[r]))
@@ -286,10 +359,32 @@ class DynCtx:
             hk(self, s0)
         self.t_hooks = getattr(self, "t_hooks", 0.0) + time.perf_counter() - t0
 
+    def _expand(self, pk, n):
+        """compact [U,1,n,192] (cos | sin | -sin) -> (cos, sin, -sin) full width [U,1,n,512] bf16: [ones | cos], [zeros | sin], [zeros | -sin]"""
+        R = ROPE_DIM
+        c, s, ns = (ttnn.slice(pk, [0, 0, 0, i * R], [pk.shape[0], 1, n, (i + 1) * R]) for i in range(3))
+        z = self.k_zeros[n]
+        one = ttnn.add(z, 1.0)
+        out = (ttnn.concat([one, c], dim=3), ttnn.concat([z, s], dim=3), ttnn.concat([self.k_nzeros[n], ns], dim=3))
+        ttnn.deallocate(one)
+        for t in (c, s, ns):
+            ttnn.deallocate(t)
+        return out
+
+    def derive(self):
+        """DSV41_PF_POS_DEV, inside the traced forward once per chunk (before every reader of ``tabs`` / ``lat_tabs`` / ``win_mask``): the full-width tables from the compact uploads. Copies, concats and a
+        select only: bit-identical to the host-built tables. The previous chunk's derived tensors are dropped when the new ones replace them."""
+        tabs = {k: self._expand(self.cpk[k], self.C) for k in self.cpk}
+        lat = {r: self._expand(self.lpk[r], self.C // r) for r in self.lpk}
+        win = ttnn.where(self.first, self.win_m0, self.win_m1)
+        self.tabs, self.lat_tabs, self.win_mask = tabs, lat, win
+
     def build_masks(self):
         """Inside the traced forward, once per chunk: the full additive masks [1,1,C,128+C+L] of every ratio that a DENSE attention layer reads. A ratio whose layers all run the sparse path
         (``sp_win`` holds the ratio: indexer top-512 + sparse_sdpa with its own visibility mask ``sp_vis``) never reads the dense mask, so it is not built (DSV41_PF_DENSE_MASKS=1 builds all of
         them as before); a dense layer of such a ratio still gets one on demand from ``mask_for``."""
+        if self.pos_dev:
+            self.derive()
         self.masks = (
             {}
         )  # per chunk (eager chunks rebuild; a trace captures the ops once): drop the previous chunk's masks as the old overwrite did

@@ -1275,9 +1275,19 @@ class DSV41PrefillSparse:
         pr = getattr(ctx, "per_row", False)
         s0s = PS.slot_s0(s0, ctx.rows * ctx.U if pr else 1)  # (one start per prefill slot)
         mp = ctx._shard if pr else ctx._rep
+        pos_dev = os.environ.get("DSV41_PF_POS_DEV", "0") == "1"  # (memoised host values: they depend on "first chunk or not" only)
+        memo = ctx.__dict__.setdefault("_upd_memo", {}) if pos_dev else None
+
+        def pt_(f):
+            if memo is None:
+                return perm_table(f)
+            if ("perm", bool(f)) not in memo:
+                memo[("perm", bool(f))] = perm_table(f)
+            return memo[("perm", bool(f))]
+
         h2d(
             ttnn.from_torch(
-                torch.cat([perm_table(x == 0) for x in s0s], dim=0),
+                torch.cat([pt_(x == 0) for x in s0s], dim=0),
                 dtype=ttnn.uint32,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
                 mesh_mapper=mp,
@@ -1287,7 +1297,7 @@ class DSV41PrefillSparse:
         if hasattr(ctx, "sp_perm_b"):  # layers >= REPLAY_BACK: "first chunk" = first replay chunk
             h2d(
                 ttnn.from_torch(
-                    torch.cat([perm_table(f) for f in ctx.first_b(s0s)], dim=0),
+                    torch.cat([pt_(f) for f in ctx.first_b(s0s)], dim=0),
                     dtype=ttnn.uint32,
                     layout=ttnn.ROW_MAJOR_LAYOUT,
                     mesh_mapper=mp,
@@ -1303,12 +1313,18 @@ class DSV41PrefillSparse:
             c = torch.arange(WINDOW).view(1, -1)
             parts = []
             for x in s0s:
+                mk_ = (r, x == 0)
+                if memo is not None and mk_ in memo:
+                    parts.append(memo[mk_])
+                    continue
                 if x == 0:
                     p = (i - (WINDOW - 1)).clamp(min=0) + c
                     rows = torch.where(p <= i, L + WINDOW + p, torch.full_like(p, SKIP))
                 else:
                     rows = (L + 1 + i + c).expand(C, WINDOW)
                 parts.append(rows.reshape(1, 1, C, WINDOW).to(torch.int64).to(torch.int32))
+                if memo is not None:
+                    memo[mk_] = parts[-1]
             host = ttnn.from_torch(
                 torch.cat(parts, dim=0), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=mp
             )
