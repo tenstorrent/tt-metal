@@ -139,10 +139,10 @@ def setup_bench(dev, MESH, mesh_identity):
         xbuf = ttnn.from_torch(xb.reshape(1, 1, M, H).bfloat16().float().repeat(1, 1, NC, 1), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=dev, memory_config=hs(rect, H))
     HDT = ttnn.bfloat8_b if os.environ.get('MK_H_BFP8') == '1' else ttnn.bfloat16  # -mk-tail: h broadcast in BFP8 halves its bytes
     print(f'[mk1] h dtype {HDT}', flush=True)
-    # MK_V12_CB: the fm11 h landing buffer (136 KB per core, unused by v12) never touches L1: freed later it left a 92 KB hole
-    # BELOW the v12 / attention tensors allocated after it, so the lowest L1 tensor (the CB floor on every core) sat 92 KB low
-    _V12CB0 = 'MK_V12_CB=1' in os.environ.get('MK_DEFINES', '').split(',')
-    hbuf = ttnn.allocate_tensor_on_device(ttnn.Shape([1, 1, TILE * NC, I]), HDT, ttnn.TILE_LAYOUT, dev, ttnn.DRAM_MEMORY_CONFIG if _V12CB0 else hs(rect, I))
+    # MK_V12: this fm11 hbuf is replaced by v12's placeholder below; in L1 it left a 136 KB hole above ymix / rsp / xbuf
+    # (engine-ON d27u08: persistent floor 1323328 vs bucket 8's CB end 1357696 on rows 8-9), so it goes to DRAM
+    _HB_DRAM = 'MK_V12=1' in os.environ.get('MK_DEFINES', '').split(',')
+    hbuf = ttnn.allocate_tensor_on_device(ttnn.Shape([1, 1, TILE * NC, I]), HDT, ttnn.TILE_LAYOUT, dev, ttnn.DRAM_MEMORY_CONFIG if _HB_DRAM else hs(rect, I))
     WTB = ttnn.Tile([TILE, TILE]).get_tile_size(ttnn.bfloat4_b); XTB = ttnn.Tile([TILE, TILE]).get_tile_size(HDT)
     def cbd(idx, dt, pages, r):
         page = ttnn.Tile([TILE, TILE]).get_tile_size(dt)
