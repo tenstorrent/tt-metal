@@ -266,7 +266,7 @@ def argblock_tensor(dev, cores, payloads, kind=AB_KIND_GDN):
 
 
 def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_eps, gen_dir, pre_s, sems, out_target,
-                 out_b16=True, kdir=None, st_ring=None, attn_n=0):
+                 out_b16=True, kdir=None, st_ring=None, attn_n=0, skip_cb_ids=(34, 35, 37, 39)):
     """The GDN role's kernels / CBs / io for the engine program. layers: one tensor dict per GDN layer of the pass (keys
     as build's tens). sems: {in_ready, attn_kv, vb0, vb1, out_ready} L1 addresses; out_target: (noc x, noc y) of the
     core whose out_ready gets +1 per GDN core per layer. Core i of `cores` (row-major) = head i // VB, value block i % VB.
@@ -282,9 +282,15 @@ def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_ep
     # st_ring: users per state / stash ring (GDN_ST_RING; 0 = all 8 resident, the full early-state prefetch). Default
     # E1_ST_RING env, else 0. 2 = -216 KB per GDN core (needed only below an ~1.06 MB L1 floor on the GDN rows; QSK: 1.19 MB)
     st_ring = int(os.environ.get("E1_ST_RING", "0")) if st_ring is None else st_ring
+    # GDN_EARLY_REPLAY (default on): the writer builds W / C_u before in_ready (its own in_ready wait, GDN_W_IN_WAIT),
+    # the compute replays before the prefix inputs
+    early = os.environ.get("E1_EARLY_REPLAY", "1") == "1"
     tab = dfb_table(Kt, Vt, T, VB, out_b16, True, st_ring)
-    ids = {n: (i, f) for i, (n, _, _, f) in enumerate(tab)}
-    assert len(tab) <= 45, len(tab)   # CB ids 0..44 (spec v1.25 MAX_CB_ID)
+    # CB ids 0..44 (spec v1.25 MAX_CB_ID), skipping the AR senders' ids on the corner cores (RS 34, RED 35, HDR 37,
+    # AG 39: ArPhase.sender_parts) -- one table on all 24 GDN cores
+    free_ids = [i for i in range(45) if i not in set(skip_cb_ids)]
+    assert len(tab) <= len(free_ids), (len(tab), len(free_ids))
+    ids = {n: (free_ids[i], f) for i, (n, _, _, f) in enumerate(tab)}
     for a, b in ALIAS.items():
         if a not in ids:
             ids[a] = ids[b]
@@ -345,11 +351,12 @@ def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_ep
         f'uint32_t gdn_loop_k() {{ return g_gdn_l + 1; }}\n'
         f'uint32_t gdn_xsem_addr(uint32_t i) {{ return i ? {S["vb1"]} : {S["vb0"]}; }}\n'
         f'void gdn_out_signal() {{ {osig} }}\n'
-        f'void kernel_main() {{\n  g_ab = {AB};\n  {CR}\n'
+        + (f'void gdn_in_wait() {{ noc_semaphore_wait_min((volatile tt_l1_ptr uint32_t*){S["in_ready"]}, g_gdn_l + 1); }}\n' if early else '')
+        + f'void kernel_main() {{\n  g_ab = {AB};\n  {CR}\n'
         f'  for (uint32_t L = 0; L < {NG}; ++L) {{\n    g_gdn_l = L;\n'
         f'    for (uint32_t t = 0; t < {nW}; ++t) crta[{CRTA0} + t] = g_ab[{OLW} + L * {nW} + t];\n'
-        f'    noc_semaphore_wait_min((volatile tt_l1_ptr uint32_t*){S["in_ready"]}, L + 1);\n'
-        f'    writer<{Kt}, {Vt}, {Nk}, {Nv}, {T}, 1, 1, {Lw}, {Ct}, {Nv * Vt}, {ctrl_bytes}, {hs}u, {VB}>('
+        + ('' if early else f'    noc_semaphore_wait_min((volatile tt_l1_ptr uint32_t*){S["in_ready"]}, L + 1);\n')
+        + f'    writer<{Kt}, {Vt}, {Nk}, {Nv}, {T}, 1, 1, {Lw}, {Ct}, {Nv * Vt}, {ctrl_bytes}, {hs}u, {VB}>('
         + ", ".join(f"g_ab[{OW + i}]" for i in range(11)) + ");\n  }\n"
         f'  noc_async_atomic_barrier();\n'
         f'  // v1.33: the waiter drains and resets its device-local semaphores at program end (every target reached);\n'
@@ -373,8 +380,9 @@ def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_ep
     d_w = [("GDN_LAZY", "1"), ("GDN_SFPU_GATE", "1"), ("GDN_GATE_SCALARS", "1"), ("GDN_AB_PAGE", str(ab_page)),
            ("GDN_W_TILES", str(W)), ("GDN_DTB_FP32", "1"), ("GDN_NEA_FP32", "1"), ("GDN_NARROW_GR", "1"),
            ("GDN_VSPLIT", "1"), ("GDN_PREFIXED", "1"), ("GDN_PREFIXED_GATES", "1"), ("GDN_PRE_W", str(pre_w)),
-           ("GDN_PRE_S", str(pre_s)), ("GDN_LOOP", "1"), ("GDN_EXT_SEM", "1"), ("GDN_OUT_SIGNAL", "1")] + common
-    d_c = [("GDN_BATCH", "1"), ("GDN_ST_RING", str(st_ring))] + [(k, "1") for k in ("GDN_FAST", "GDN_FP32_STATE", "GDN_GATE_SCALARS", "GDN_LAZY",
+           ("GDN_PRE_S", str(pre_s)), ("GDN_LOOP", "1"), ("GDN_EXT_SEM", "1"), ("GDN_OUT_SIGNAL", "1")] + common + (
+        [("GDN_EARLY_REPLAY", "1"), ("GDN_W_IN_WAIT", "1")] if early else [])
+    d_c = [("GDN_BATCH", "1"), ("GDN_ST_RING", str(st_ring))] + ([("GDN_EARLY_REPLAY", "1")] if early else []) + [(k, "1") for k in ("GDN_FAST", "GDN_FP32_STATE", "GDN_GATE_SCALARS", "GDN_LAZY",
                                                     "GDN_PREFIXED", "GDN_PREFIXED_GATES", "GDN_SFPU_GATE",
                                                     "GDN_SFPU_GATE_FACE", "GDN_VSPLIT", "GDN_VS_TAIL")]
     fphys = dev.worker_core_from_logical_core
@@ -413,5 +421,5 @@ def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_ep
     io = [abt] + [x for lt in layers for x in (lt["win_a"], lt["win_b"], lt["ring"], lt["ctrl"], lt["taps"], lt["dtb"],
                                                 lt["nea"], lt["weight"], lt["pre"], lt["out"])] + [layers[0]["qkv"]]
     info = dict(cb_ids=sorted({ids[n][0] for n, _, _, _ in tab}), cb_bytes=sum(e * nb for _, e, nb, _ in tab),
-                ab_words=len(payloads[0]), NG=NG, st_ring=st_ring)
+                ab_words=len(payloads[0]), NG=NG, st_ring=st_ring, early_replay=early)
     return dict(kernels=ks, cbs=cbs, io=io, info=info)
