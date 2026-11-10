@@ -451,6 +451,28 @@ class BlockIndex:
         self._busy.pop(req.user, None) if self._busy.get(req.user) == rid else None
         return req
 
+    @_locked
+    def peek_home(self, key_tokens, num_tokens, max_hit=None, salt=b"", finished_ids=()):
+        """READ-ONLY look for the bounded home-row hold of the scheduler: -> (deepest resident hit of any row, that row (-1 = none), free users per row). Nothing is planned, pinned, reserved, dropped or
+        counted (``plan_hit`` does all of that), so it can be asked on every scheduler step. ``finished_ids`` as in ``plan_hit``."""
+        fin_users = {r.user for r in (self._reqs.get(i) for i in finished_ids) if r is not None and r.state == "bound"}
+        num_tokens = int(num_tokens)
+        top = (
+            max(min(num_tokens - self.margin, int(max_hit) if max_hit is not None else 1 << 60), 0)
+            // self.chunk
+            * self.chunk
+        )
+        free = [len(self._free_users(ri, fin_users)) for ri in range(self.rows)]
+        if top <= 0 or not self.rows:
+            return 0, -1, free
+        digests = Chain(self.chunk, salt).extend(_as_i64(key_tokens), top).digests
+        best, home = 0, -1
+        for ri in range(self.rows):
+            hit, _path = self._lookup_row(ri, digests, num_tokens, max_hit)
+            if hit > best:
+                best, home = hit, ri
+        return best, home, free
+
     def _log_loss(self, req_id, num_tokens, top, digests, hit, ri, any_hit, depth, home, row_info):
         """one line for a plan whose deepest resident hit is lost (busy row), shortened by a missing halo, or whose chain was evicted (blocks that were resident earlier); lock held"""
         ev = 0
@@ -1125,6 +1147,16 @@ class ApcPagedHook:
             kt = tokens
         plan = self.index.plan_hit(request_id, kt, num_tokens, max_hit=max_hit, salt=salt, finished_ids=finished_ids)
         return plan.hit_tokens, plan.row
+
+    def peek_home(self, request_id, tokens, num_tokens, max_hit=None, mm=None, salt=b"", finished_ids=()):
+        """-> (resident hit tokens, home row, free users per row); read-only (the plugin's bounded home-row hold). Images never hold."""
+        if self.key_tokens_fn is not None:
+            kt = self.key_tokens_fn(tokens, mm)
+            if kt is None:
+                return 0, -1, []
+        else:
+            kt = tokens
+        return self.index.peek_home(kt, num_tokens, max_hit=max_hit, salt=salt, finished_ids=finished_ids)
 
     def cancel(self, request_id):
         self.index.cancel(request_id)
