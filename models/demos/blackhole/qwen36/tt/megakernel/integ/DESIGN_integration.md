@@ -173,3 +173,18 @@ layer loop, so the ident md5 equals flag-off only if the copy ran on every repla
   rows). Never wqkv_fused (own heads only). Lossless tile moves; the γ fold (QWEN36_R16_MK_GAMMA_FOLD) is the only
   re-quantization. GDN kinds join when layout_gdn lands.
 - Proof: tests/test_mk_weights_repack.py reads a tile-order repack back and compares it with the model weights.
+
+## 12. Engine-ON in the real verify trace: L1 budget (2026-11-10, d27u08, -mk-on)
+Allocator inventory (`QWEN36_R16_MK_L1DUMP=1`, ttnn reports get_buffers / get_buffer_pages; owner rect x10-11 y0-7):
+- Model persistent L1 before engine setup: 144 B on the owners. The only large buffer is the decode AR intermediate,
+  64 KB WIDTH_SHARDED @1480448 (DecodeResidualAllReduce, still used by the drafter and op-path buckets).
+- Each engine bucket used to hold its own L1 tensors: two buckets stacked to 506112 < the engine's own CB end 884608.
+  Fixed by the cross-bucket L1 pool (engine/program.py `_L1POOL`, spec v1.55). Rule: per-bucket constant data never
+  in L1 tensors (DRAM or CBs).
+- Ops that still run around the engine need big static CB regions on the full grid: the MTP drafter decode attention
+  to 1092288 (every step), the logits_rm hand-off ttnn.copy / clone to 1105280 (engine mode keeps logits_rm on the
+  in-capture path and warms without clone). So ALL persistent L1 (model + engine) must stay below ~480 KB from the
+  top, and below (L1 top - engine CB end) on the engine's cores (owners, batch 3b: 417920 B).
+- Measured engine persistent L1: baseline stand-in env ~580 KB (fails at the drafter); config B / 3b ~412 KB + model
+  67 KB (fails at the engine launch on the owners). MK_V12_CB (v12 landing buffers as CBs) brings it to ~110 KB.
+- Engine buckets get no KV-split verify variant (prod's gate would otherwise replay the op-by-op loop at >=10K / 24K).
