@@ -819,6 +819,11 @@ std::string generate_cluster_descriptor_from_fsd(
 
         // Build cluster descriptor for this host
         YAML::Node cluster_desc;
+        // Discovery names the host after cluster_id, and the FSD host filter joins on that name.
+        const std::string& hostname = fsd.hosts(host_idx).hostname();
+        if (!hostname.empty()) {
+            cluster_desc["cluster_id"] = hostname;
+        }
         cluster_desc["arch"] = YAML::Node(YAML::NodeType::Map);
         for (ChipId local_chip_id = 0; local_chip_id < total_local_chips; ++local_chip_id) {
             cluster_desc["arch"][local_chip_id] = arch_str;
