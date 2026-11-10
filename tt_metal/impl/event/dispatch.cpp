@@ -216,8 +216,7 @@ void read_events_from_completion_queue(
     uint16_t channel,
     uint8_t cq_id,
     SystemMemoryManager& sysmem_manager) {
-    // For mock devices, the sysmem_manager is a stubbed singleton
-    // Mock cluster.read_sysmem returns zeros, so validate that and handle gracefully
+    // Mock devices write no completion queue data, so the event counts as completed.
     if (sysmem_manager.env_impl().get_cluster().is_mock_or_emulated()) {
         sysmem_manager.set_last_completed_event(cq_id, event_descriptor.get_global_event_id());
         return;
