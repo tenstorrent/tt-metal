@@ -84,6 +84,9 @@ std::vector<ResolvedPerDeviceRuntimeArgsField> resolve_per_device_runtime_args(
 // As above, cached on `per_device_args` for the sequence's assembly and the fields' generation.
 const std::vector<ResolvedPerDeviceRuntimeArgsField>& resolve_per_device_runtime_args_cached(
     const PerDeviceRuntimeArgs& per_device_args, const ProgramCommandSequence& sequence);
+// A copy of the fields and their current values (trace nodes and command lists keep the values of their capture).
+std::shared_ptr<const PerDeviceRuntimeArgs> snapshot_per_device_runtime_args(
+    const PerDeviceRuntimeArgs& per_device_args);
 // The patches for the device at `coord_index`: each field's value on that device, or the sequence's own words.
 void per_device_runtime_args_patches(
     const std::vector<ResolvedPerDeviceRuntimeArgsField>& resolved,
@@ -151,7 +154,8 @@ private:
         KernelHandle kernel,
         const std::optional<CoreCoord>& core,
         uint32_t first_word,
-        uint32_t num_words);
+        uint32_t num_words,
+        bool metal2 = false);
     MeshCommandQueue* last_used_command_queue_ = nullptr;
 
     // Cached service-vs-normal classification (see EnqueueMeshWorkload), computed before normal finalization.
@@ -198,7 +202,26 @@ public:
         KernelHandle kernel,
         const std::optional<CoreCoord>& core,
         uint32_t first_word);
+    // Metal 2.0 (ProgramSpec) programs: the words of named run args, resolved by
+    // experimental::SetProgramRunArgsPerDevice. Same semantics as the legacy setter.
+    void set_per_device_named_runtime_args(
+        const MeshCoordinateRange& program_range,
+        const MeshCoordinate& device,
+        KernelHandle kernel,
+        const std::optional<CoreCoord>& core,
+        uint32_t first_word,
+        ttsl::Span<const uint32_t> values);
     bool has_per_device_runtime_args() const { return !per_device_runtime_args_.empty(); }
+    // The per-device runtime args of a range as they are, so a multi-field update can undo itself when a later field
+    // fails (restoring invalidates any cached resolution of them).
+    struct PerDeviceRuntimeArgsBackup {
+        std::shared_ptr<const PerDeviceRuntimeArgs> snapshot;  // null: the range had none
+        uint64_t generation = 0;
+        uint64_t values_version = 0;
+    };
+    PerDeviceRuntimeArgsBackup backup_per_device_runtime_args(const MeshCoordinateRange& program_range) const;
+    void restore_per_device_runtime_args(
+        const MeshCoordinateRange& program_range, const PerDeviceRuntimeArgsBackup& backup);
     // The per-device runtime args of the program at `program_range`, or null; fails if the program there is not the
     // one they were set for.
     const PerDeviceRuntimeArgs* per_device_runtime_args(const MeshCoordinateRange& program_range) const;

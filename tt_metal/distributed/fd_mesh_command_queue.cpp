@@ -452,12 +452,7 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
             // Snapshot the per-device runtime args with the node, as create_trace_node snapshots the program's own.
             std::shared_ptr<const PerDeviceRuntimeArgs> per_device_snapshot;
             if (const auto* per_device = mesh_workload.impl().per_device_runtime_args(device_range)) {
-                auto snapshot = std::make_shared<PerDeviceRuntimeArgs>();
-                snapshot->program_id = per_device->program_id;
-                for (const auto& field : per_device->fields) {
-                    snapshot->fields.push_back(std::make_unique<PerDeviceRuntimeArgsField>(*field));
-                }
-                per_device_snapshot = std::move(snapshot);
+                per_device_snapshot = snapshot_per_device_runtime_args(*per_device);
             }
             trace_node.per_device_runtime_args.push_back(std::move(per_device_snapshot));
         }
