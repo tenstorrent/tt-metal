@@ -43,6 +43,7 @@
 #include "impl/buffers/semaphore.hpp"
 #include "impl/kernels/kernel.hpp"
 #include "impl/lightmetal/host_api_capture_helpers.hpp"
+#include "llrt/tt_cluster.hpp"
 #include "sub_device_types.hpp"
 #include "tt_metal/impl/dispatch/device_command.hpp"
 
@@ -296,6 +297,7 @@ PerDeviceRuntimeArgsField& MeshWorkloadImpl::per_device_runtime_args_field(
     field->present.assign(num_coords, 0);
     per_device.fields.push_back(std::move(field));
     per_device.generation++;
+    per_device.values_version++;
     return *per_device.fields.back();
 }
 
@@ -313,6 +315,7 @@ void MeshWorkloadImpl::set_per_device_runtime_args(
     const uint32_t index = coordinate_index_in_range(program_range, device);
     std::copy(values.begin(), values.end(), field.values.begin() + static_cast<size_t>(index) * field.num_words);
     field.present[index] = 1;
+    per_device_runtime_args_.at(program_range).values_version++;
 }
 
 void MeshWorkloadImpl::set_per_device_runtime_args(
@@ -332,6 +335,7 @@ void MeshWorkloadImpl::set_per_device_runtime_args(
     auto& field = per_device_runtime_args_field(program_range, kernel, core, first_word, num_words);
     std::copy(values_in_range_order.begin(), values_in_range_order.end(), field.values.begin());
     std::fill(field.present.begin(), field.present.end(), 1);
+    per_device_runtime_args_.at(program_range).values_version++;
 }
 
 void MeshWorkloadImpl::clear_per_device_runtime_args(
@@ -347,6 +351,7 @@ void MeshWorkloadImpl::clear_per_device_runtime_args(
     for (auto& field : it->second.fields) {
         if (field->kernel == kernel && field->core == core && field->first_word == first_word) {
             field->present[coordinate_index_in_range(program_range, device)] = 0;
+            it->second.values_version++;
         }
     }
 }
@@ -790,6 +795,11 @@ void SetRuntimeArgsPerDevice(
     ttsl::Span<const uint32_t> values_in_range_order) {
     mesh_workload.impl().set_per_device_runtime_args(
         program_range, kernel, core, first_word, num_words, values_in_range_order);
+}
+
+bool PerDeviceRuntimeArgsSupported(MeshDevice& mesh_device, const MeshCoordinateRange& program_range) {
+    return !program_range.wraparound_shape().has_value() && !LightMetalCaptureContext::get().is_tracing() &&
+           mesh_device.impl().metal_env().get_cluster().get_target_device_type() != tt::TargetDevice::Emule;
 }
 
 void ClearRuntimeArgs(

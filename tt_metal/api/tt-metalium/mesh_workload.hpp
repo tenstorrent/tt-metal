@@ -101,6 +101,10 @@ void SetRuntimeArgsPerDevice(
     uint32_t first_word,
     uint32_t num_words,
     ttsl::Span<const uint32_t> values_in_range_order);
+// Whether per-device runtime args can be used for a program on `program_range` of `mesh_device`: false for a
+// wraparound range, during light-metal capture and on emulated devices. Callers that can fall back (one program per
+// device) check it first; the setters and enqueue fail otherwise.
+bool PerDeviceRuntimeArgsSupported(MeshDevice& mesh_device, const MeshCoordinateRange& program_range);
 // Drops one device's value of a field: it follows the program's own args again.
 void ClearRuntimeArgs(
     MeshWorkload& mesh_workload,

@@ -86,7 +86,8 @@ private:
         ProgramCommandSequence& program_cmd_seq,
         bool stall_first,
         bool stall_before_program,
-        const std::vector<ResolvedPerDeviceRuntimeArgsField>& per_device_runtime_args);
+        const PerDeviceRuntimeArgs& per_device_runtime_args,
+        const std::vector<ResolvedPerDeviceRuntimeArgsField>& resolved);
     // For a given MeshWorkload, a subgrid is unused if no programs are run on it. Dispatch sequences
     // must be sent to this subgrid to ensure consistent global state across the Virtual Mesh.
     // This function generates and writes dispatch commands forwarding go signal sequences to
