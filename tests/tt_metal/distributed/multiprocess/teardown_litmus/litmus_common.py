@@ -198,6 +198,23 @@ def mpi_cmd(ulfm: bool = True, extra: str = "", btl: str = "self,tcp", np: int =
     return cmd + [mpi_probe_path()]
 
 
+MPI_BINDING = HERE / "litmus_mpi_binding.yaml"
+
+
+def ttrun_mpi_cmd(mpi_extra: str = "", np: int = 3) -> list:
+    """Launch the raw C probe THROUGH tt-run (legacy mode, np local ranks), so the row tests tt-run's own teardown:
+    its exit code, signal handling and cleanup. tt-run picks the plain launcher and adds --mca btl self,tcp; extra
+    group-E settings (a transport, a component, an interface) go through --mpi-args."""
+    return [
+        TTRUN,
+        "--rank-binding",
+        str(MPI_BINDING),
+        "--mpi-args",
+        ("--allow-run-as-root --oversubscribe " + mpi_extra).strip(),
+        mpi_probe_path(),
+    ]
+
+
 def conflict_mapping(tmp: Path) -> Path:
     """The dual-galaxy mapping with rank 1's descriptor replaced by a T3K: two ranks that disagree about the machine."""
     text = MAPPING.read_text()
