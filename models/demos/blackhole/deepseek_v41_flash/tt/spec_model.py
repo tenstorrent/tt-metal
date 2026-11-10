@@ -254,6 +254,10 @@ class SpecRunner:
         )
         self.dec.enable_sampling(model.mc, model.ccl)
         self.dec.draft_on = draft
+        if getattr(model, "dev_engram_tabs", None) is not None:  # DSV41_DEV_ENGRAM=1
+            from models.demos.blackhole.deepseek_v41_flash.tt.engram_dev import DevEngramRows
+
+            self.dec.dev_rows = DevEngramRows(model.dev_engram_tabs, self.T, n)
         # in-trace sampling of every verify row (DSV41_INTRACE_SAMPLE=1): one sampler over the T = U * n block rows of a mesh row; params uploaded per round (``sample_cfg``), allocated before any trace
         self.dec.samp = self.samp = model._make_sampler(
             self.T, spec=True
@@ -293,6 +297,24 @@ class SpecRunner:
         """X [B, n] block tokens, base [B] position of column 0."""
         m, B, n = self.m, self.B, self.n
         rows_d = {}
+        if getattr(self.dec, "dev_rows", None) is not None:
+            # DSV41_DEV_ENGRAM=1: the host only writes the token history cache + the committed lookbacks into the widened ctrl; hash / gather / dequant / combine run in the verify trace
+            from models.demos.blackhole.deepseek_v41_flash.tt.engram_dev import fill_ctrl
+
+            dv = self.dec.dev_rows
+            if getattr(self, "_dev_st", None) is None:
+                self._dev_st = dict(
+                    cache=m.host_rows.engram.hash.cache.numpy(), tmap=dv.tabs.tmap, dead=dv.tabs.dead
+                )
+            pos = (base.reshape(B, 1) + torch.arange(n).reshape(1, n)).reshape(-1)
+            prepared = self.dec.prepare_packed_dev(
+                X.reshape(-1),
+                pos,
+                lambda c: fill_ctrl(c, X, base, self._dev_st, rows=self.phys, w=dv.W),
+                dv.CW,
+            )
+            self.dec.upload_packed_inputs(prepared)
+            return
         if (
             m.host_rows is not None
             and hostopt.on("ENGRAM")

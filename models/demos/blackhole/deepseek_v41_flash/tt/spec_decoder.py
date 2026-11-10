@@ -21,6 +21,15 @@ class SpecVerifier(DSV41Decoder):
     def _engram_rows(self, T):
         """Engram rows of every token row from the packed host upload (same layout as ``DSV41Decoder.forward``: v2 = one [T,Kin] tile block)."""
         self.rows, off = {}, 0
+        dev = getattr(self, "dev_rows", None)
+        if dev is not None:  # DSV41_DEV_ENGRAM=1: hash + gather + combine in the trace (tt/engram_dev.py)
+            self.engram_order = sorted(self.engram)
+            kin = {l: e.kin for l, e in self.engram.items()}
+            rc = dev.rows(self.ctrl)
+            for l in self.engram_order:
+                self.rows[l] = ttnn.to_layout(ttnn.slice(rc, [0, 0, 0, off], [1, 1, T, off + kin[l]]), ttnn.TILE_LAYOUT)
+                off += kin[l]
+            return
         if not self.engram or self.rows_cat is None:
             return
         kin = {l: e.kin for l, e in self.engram.items()}
