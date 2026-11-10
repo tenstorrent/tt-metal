@@ -27,9 +27,8 @@ void kernel_main() {
 #endif
 
     constexpr bool transpose = false;
-    constexpr bool split_acc = true;
-    constexpr bool dense_packing = false;
-    custom_mm_block_init<transpose, split_acc, dense_packing>(cb_in0, cb_w, cb_out);
+    constexpr auto dest_layout = CustomMmDestLayout::DefaultSplitAcc;
+    custom_mm_block_init<transpose, dest_layout>(cb_in0, cb_w, cb_out);
 
     uint32_t num_sel = 0;
     UNPACK(num_sel = ckernel::mailbox_read(ckernel::ThreadId::BriscThreadId));
@@ -43,9 +42,9 @@ void kernel_main() {
         cb_wait_front(wcb, cols * seg_tiles);
         for (uint32_t c = 0; c < ncols; ++c) {
             if (e + 1 == num_sel) {
-                custom_mm_block<true>(cb_in0, wcb, 0, c * seg_tiles, c, seg_tiles);
+                custom_mm_block<dest_layout>(cb_in0, wcb, 0, c * seg_tiles, c, seg_tiles);
             } else {
-                custom_mm_block<false>(cb_in0, wcb, 0, c * seg_tiles, c, seg_tiles);
+                custom_mm_block<dest_layout, false>(cb_in0, wcb, 0, c * seg_tiles, c, seg_tiles);
             }
         }
         cb_pop_front(wcb, cols * seg_tiles);
@@ -79,5 +78,5 @@ void kernel_main() {
         cb_push_back(cb_out, 1);
     }
     tile_regs_release();
-    custom_mm_block_uninit<dense_packing>();
+    custom_mm_block_uninit<dest_layout>(cb_out);
 }

@@ -52,7 +52,6 @@
 #endif
 #include "api/dataflow/noc.h"
 #include "api/dataflow/dataflow_buffer.h"
-#include "api/dataflow/noc_semaphore.h"
 #ifdef ENABLE_GLOBAL_CB
 #include "api/remote_circular_buffer.h"
 #endif
@@ -60,15 +59,38 @@
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
 #include "experimental/kernel_args.h"
+#include "ttnn/cpp/ttnn/kernel_lib/mcast/kernel/mcast_args_metal2.hpp"
 
 #ifdef ENABLE_PREFETCHER_PIPE
-// Pipe delivery reaches every worker directly, so in1 is never multicast; publish_in1_block_from_pipe
-// relies on that, publishing each K-block to compute in the same step that waits for it.
-#ifndef SKIP_MCAST
-#error "PrefetcherPipe in1 lands on every worker directly, so this kernel never multicasts it"
-#endif
 #include "ttnn/operations/matmul/device/kernels/dataflow/prefetcher_pipe_in1_window.hpp"
 #endif
+
+// Reads one in1 block (BLOCK_H x BLOCK_W tiles, of which the first block_w_to_read per row exist) from an
+// interleaved tensor. Kept out of line, with its inputs by value, so the per-tile loop is register-allocated on its
+// own: inlined into kernel_main it competes with the multicast and writer state and spills per tile.
+template <
+    uint32_t BLOCK_H,
+    uint32_t BLOCK_W,
+    uint32_t STRIDE_W,
+    uint32_t STRIDE_H,
+    uint32_t TILE_BYTES,
+    uint32_t ALIGNED_TILE_BYTES,
+    typename Accessor>
+__attribute__((noinline)) void read_in1_block(
+    const Noc noc, const Accessor s1, uint32_t l1_write_addr, uint32_t start_tile_id, uint32_t block_w_to_read) {
+    uint32_t row_start_tile_id = start_tile_id;
+    for (uint32_t h = 0; h < BLOCK_H; ++h) {
+        uint32_t tile_id = row_start_tile_id;
+        uint32_t tile_l1_addr = l1_write_addr;
+        for (uint32_t w = 0; w < block_w_to_read; ++w) {
+            noc.async_read(s1, CoreLocalMem<uint32_t>(tile_l1_addr), TILE_BYTES, {.page_id = tile_id}, {});
+            tile_l1_addr += ALIGNED_TILE_BYTES;
+            tile_id += STRIDE_W;
+        }
+        l1_write_addr += BLOCK_W * ALIGNED_TILE_BYTES;
+        row_start_tile_id += STRIDE_H;
+    }
+}
 
 void kernel_main() {
     // READER
@@ -77,11 +99,6 @@ void kernel_main() {
 #endif
     // in1 tensor args
     uint32_t in1_tensor_start_tile_id = get_arg(args::in1_tensor_start_tile_id);
-    // in1 mcast args
-    const uint32_t in1_mcast_dest_noc_start_x = get_arg(args::in1_mcast_dest_noc_start_x);
-    const uint32_t in1_mcast_dest_noc_start_y = get_arg(args::in1_mcast_dest_noc_start_y);
-    const uint32_t in1_mcast_dest_noc_end_x = get_arg(args::in1_mcast_dest_noc_end_x);
-    const uint32_t in1_mcast_dest_noc_end_y = get_arg(args::in1_mcast_dest_noc_end_y);
 
     // WRITER
     // out tensor args
@@ -115,9 +132,6 @@ void kernel_main() {
     constexpr auto num_blocks_w_dim = get_arg(args::num_blocks_w_dim);
     constexpr auto num_blocks_h_dim = get_arg(args::num_blocks_h_dim);
 
-    // in1 mcast args
-    constexpr auto in1_mcast_num_dests = get_arg(args::in1_mcast_num_dests);
-    constexpr auto in1_mcast_num_cores = get_arg(args::in1_mcast_num_cores);
     // batch args
     constexpr auto KtNt = get_arg(args::KtNt);
     constexpr auto batch = get_arg(args::batch);
@@ -143,7 +157,7 @@ void kernel_main() {
     // batch args
     constexpr auto MtNt = get_arg(args::MtNt);  // if 0
     // Don't need batch; same as batch from READER args
-    constexpr bool compact_output = get_arg(args::compact_output);
+    constexpr bool compact_output = get_arg(args::compact_output) != 0;
 
     // When sparsity is disabled, we just loop once
     constexpr uint32_t batchB_lim = batchB == 0 ? 1u : batchB;
@@ -165,8 +179,14 @@ void kernel_main() {
     const Noc noc;
     DataflowBuffer dfb_in1(dfb::in1);
     DataflowBuffer dfb_out(dfb::out);
-    Semaphore sender_sem(sem::in1_mcast_sender);
-    Semaphore receiver_sem(sem::in1_mcast_receiver);
+    // The host attaches an absent channel when in1 is not multicast.
+    constexpr auto in1_mcast = MCAST_ARGS(in1_mcast);
+    auto sender = in1_mcast.optional_sender(noc);
+#if defined(ENABLE_PREFETCHER_PIPE) || defined(ENABLE_GLOBAL_CB)
+    // Pipe and global-CB delivery reach every worker directly; publish_in1_block_from_pipe relies on that,
+    // publishing each K-block to compute in the same step that waits for it.
+    static_assert(!in1_mcast.active, "in1 lands on every worker directly, so this kernel never multicasts it");
+#endif
 
 #ifdef FUSE_BIAS
     // in3 mcast args
@@ -286,16 +306,9 @@ void kernel_main() {
     const auto s_sparsity = TensorAccessor(tensor::sparsity);
 #endif  // SPARSITY
 
-#ifndef SKIP_MCAST
-    // Set ur local VALID value, to be mcasted to destinations flag address after the data has been mcasted
-    receiver_sem.set(VALID);
-    // local address that will be atomically incremented by mcast receivers, to know when all receivers are ready
-    // to receive the mcast
-
 #ifdef IN1_SHARDED
     uint64_t in1_start_address = dfb_in1.get_write_ptr();
 #endif  // IN1_SHARDED
-#endif  // SKIP_MCAST
 
 #ifdef SPARSITY
     uint32_t l1_write_addr_sparsity = 0;
@@ -397,6 +410,9 @@ void kernel_main() {
 #endif  // IN1_DRAM_WIDTH_SHARDED
 
                     for (uint32_t block = 0; block < num_blocks_inner_dim; ++block) {
+#ifndef IN1_SHARDED
+                        uint64_t in1_start_address = 0;
+#endif
 #ifdef FUSE_OP_ALL_GATHER
                         fused_op_receiver.update_current_block_start_tile_id(
                             block, in1_tensor_current_inner_dim_block_start_tile_id, in1_batch_tile_id);
@@ -414,7 +430,7 @@ void kernel_main() {
                         // Operand 1 - DRAM width sharded
                         dfb_in1.reserve_back(in1_block_num_tiles);
 
-                        uint64_t in1_start_address =
+                        in1_start_address =
                             dfb_in1.get_write_ptr();  // copy start address of block, to be used for mcasting
 
                         uint32_t l1_write_addr_in1_offset = 0;
@@ -468,8 +484,7 @@ void kernel_main() {
                         dfb_in1.reserve_back(in1_block_num_tiles);
 
                         uint32_t l1_write_addr_in1 = dfb_in1.get_write_ptr();
-                        uint64_t in1_start_address =
-                            l1_write_addr_in1;  // copy start address of block, to be used for mcasting
+                        in1_start_address = l1_write_addr_in1;  // copy start address of block, to be used for mcasting
 
                         // Read in1 block from the correct DRAM bank
                         // Tile layout within a batch: row-major [K, N], same strides as interleaved
@@ -499,77 +514,34 @@ void kernel_main() {
 #elif !defined(IN1_SHARDED)
                         // Operand 1 - interleaved
                         dfb_in1.reserve_back(in1_block_num_tiles);
-                        uint32_t in1_write_offset = 0;
-                        const uint64_t in1_start_address =
+                        in1_start_address =
                             dfb_in1.get_write_ptr();  // copy start address of block, to be used for mcasting
 
                         // Copy in1 block into the buffer, as the default kernel
-                        uint32_t in1_tensor_row_start_tile_id = in1_tensor_current_inner_dim_block_start_tile_id;
-                        for (uint32_t h = 0; h < in1_block_h; ++h) {
-                            uint32_t in1_tensor_tile_id = in1_tensor_row_start_tile_id;
-                            for (uint32_t w = 0; w < in1_block_w; ++w) {
-                                if (bw < num_blocks_w_dim - 1 || w < last_block_w) {
-                                    noc.async_read(
-                                        s1,
-                                        dfb_in1,
-                                        in1_single_tile_size_bytes,
-                                        {.page_id = in1_tensor_tile_id},
-                                        {.offset_bytes = in1_write_offset});
-                                }
-                                in1_write_offset += in1_aligned_tile_size_bytes;
-                                in1_tensor_tile_id += in1_tensor_stride_w;
-                            }
-                            in1_tensor_row_start_tile_id += in1_tensor_stride_h;
-                        }
+                        read_in1_block<
+                            in1_block_h,
+                            in1_block_w,
+                            in1_tensor_stride_w,
+                            in1_tensor_stride_h,
+                            in1_single_tile_size_bytes,
+                            in1_aligned_tile_size_bytes>(
+                            noc,
+                            s1,
+                            static_cast<uint32_t>(in1_start_address),
+                            in1_tensor_current_inner_dim_block_start_tile_id,
+                            bw < num_blocks_w_dim - 1 ? in1_block_w : last_block_w);
                         in1_tensor_current_inner_dim_block_start_tile_id += in1_tensor_next_block_stride;
 
                         // Barrier! make sure the reads are done
                         noc.async_read_barrier();
 #endif  // ENABLE_PREFETCHER_PIPE / ENABLE_GLOBAL_CB / IN1_DRAM_WIDTH_SHARDED / IN1_DRAM_HEIGHT_SHARDED / IN1_SHARDED
 
-#ifndef SKIP_MCAST
-                        // wait until all in1 mcast destinations have atomically incremented the in1 semaphore_addr
-                        // (i.e. its value should be in0_mcast_num_dests), then reset the semaphore_addr value back to
-                        // zero for the next block
-                        sender_sem.wait(in1_mcast_num_dests);
-                        sender_sem.set(0);
-
-                        // Now we have the block in the buffer's address, we can mcast to dests!
-                        const MulticastEndpoint mcast_dst;
-                        // num_dests must not include source, since we are NOT really doing a local copy!
-                        noc.async_write_multicast(
-                            CoreLocalMem<uint32_t>(static_cast<uint32_t>(in1_start_address)),
-                            mcast_dst,
-                            in1_block_size_bytes,
-                            in1_mcast_num_cores,
-                            {},
-                            {.noc_x_start = in1_mcast_dest_noc_start_x,
-                             .noc_y_start = in1_mcast_dest_noc_start_y,
-                             .noc_x_end = in1_mcast_dest_noc_end_x,
-                             .noc_y_end = in1_mcast_dest_noc_end_y,
-                             .addr = static_cast<uint32_t>(in1_start_address)},
-                            true);
-
-                        // Note: no need for write barrier, since these two multicasts are done on the same noc id and
-                        // same vc even though cmd bufs are different Also, this only works because we are setting VCs
-                        // statically (using NOC_CMD_STATIC_VC).
-#ifdef ARCH_BLACKHOLE
-                        // On Blackhole the flush is needed because NoC latency is higher than L1 <-> RISCV latency
-                        // which means data could be changed before
-                        //  write is issued.
-                        noc.async_writes_flushed();
-#endif  // ARCH_BLACKHOLE
-
-                        // We should also multicast the flag to destinations
-                        // num_dests must not include source, since we are NOT really doing a local copy!
-                        receiver_sem.set_multicast(
-                            noc,
-                            in1_mcast_dest_noc_start_x,
-                            in1_mcast_dest_noc_start_y,
-                            in1_mcast_dest_noc_end_x,
-                            in1_mcast_dest_noc_end_y,
-                            in1_mcast_num_cores);
-#endif  // SKIP_MCAST
+                        if constexpr (in1_mcast.active) {
+                            sender->send(
+                                static_cast<uint32_t>(in1_start_address),
+                                static_cast<uint32_t>(in1_start_address),
+                                in1_block_size_bytes);
+                        }
 
 #if !defined(ENABLE_PREFETCHER_PIPE) && !defined(IN1_SHARDED)
                         dfb_in1.push_back(in1_block_num_tiles);
@@ -673,48 +645,12 @@ void kernel_main() {
                         noc.async_read_barrier();
 #endif  // IN1_DRAM_WIDTH_SHARDED
 
-#ifndef SKIP_MCAST
-
-                        // wait until all in1 mcast destinations have atomically incremented the in1 semaphore_addr
-                        // (i.e. its value should be in0_mcast_num_dests), then reset the semaphore_addr value back to
-                        // zero for the next block
-                        sender_sem.wait(in1_mcast_num_dests);
-                        sender_sem.set(0);
-
-                        // Now we have the block in the buffer's address, we can mcast to dests!
-                        const MulticastEndpoint mcast_dst;
-                        // num_dests must not include source, since we are NOT really doing a local copy!
-                        noc.async_write_multicast(
-                            CoreLocalMem<uint32_t>(static_cast<uint32_t>(in3_start_address)),
-                            mcast_dst,
-                            in3_block_size_bytes,
-                            in1_mcast_num_cores,
-                            {},
-                            {.noc_x_start = in1_mcast_dest_noc_start_x,
-                             .noc_y_start = in1_mcast_dest_noc_start_y,
-                             .noc_x_end = in1_mcast_dest_noc_end_x,
-                             .noc_y_end = in1_mcast_dest_noc_end_y,
-                             .addr = static_cast<uint32_t>(in3_start_address)},
-                            true);
-                        // Note: no need for write barrier, since these two multicasts are done on the same noc id, same
-                        // vc, same cmd_buf Also, this only works because we are setting VCs statically (using
-                        // NOC_CMD_STATIC_VC).
-#ifdef ARCH_BLACKHOLE
-                        // On Blackhole the flush is needed because NoC latency is higherthan L1 <-> RISCV
-                        // latency which means data could be changed before write is issued.
-                        noc.async_writes_flushed();
-#endif  // ARCH_BLACKHOLE
-
-                        // We should also multicast the flag to destinations
-                        // num_dests must not include source, since we are NOT really doing a local copy!
-                        receiver_sem.set_multicast(
-                            noc,
-                            in1_mcast_dest_noc_start_x,
-                            in1_mcast_dest_noc_start_y,
-                            in1_mcast_dest_noc_end_x,
-                            in1_mcast_dest_noc_end_y,
-                            in1_mcast_num_cores);
-#endif  // SKIP_MCAST
+                        if constexpr (in1_mcast.active) {
+                            sender->send(
+                                static_cast<uint32_t>(in3_start_address),
+                                static_cast<uint32_t>(in3_start_address),
+                                in3_block_size_bytes);
+                        }
 
                         dfb_in3.push_back(in1_block_w);
 #else
@@ -818,8 +754,11 @@ void kernel_main() {
     }
 
 #ifdef OUT_SHARDED
-    const uint16_t out_num_tiles = static_cast<uint16_t>(
-        batch * out_num_nonzero_subblocks_h * out_num_nonzero_subblocks_w * out_subblock_w * out_subblock_h);
+    // Compute pushes out_block_num_tiles tiles for each of the num_blocks_h_dim * num_blocks_w_dim output
+    // blocks per batch, so this kernel pops the same number.
+    constexpr auto out_block_num_tiles = get_arg(args::out_block_num_tiles);
+    const uint16_t out_num_tiles =
+        static_cast<uint16_t>(batch * num_blocks_h_dim * num_blocks_w_dim * out_block_num_tiles);
     dfb_out.wait_front(out_num_tiles);
     // Pop the same number of tiles that were waited for.
     dfb_out.pop_front(out_num_tiles);

@@ -37,7 +37,9 @@ Coverage (Blackhole + Wormhole B0):
 
 import pytest
 import torch
+from conftest import blackhole_only
 from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
+from helpers.data_format_inference import dest_acc_for
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import ReduceBlockMaxRowGolden, get_golden_generator
 from helpers.llk_params import DestAccumulation, PerfRunType
@@ -57,7 +59,7 @@ from helpers.test_variant_parameters import (
     USE_RUNTIME,
 )
 from helpers.tile_constants import MAX_FACE_R_DIM, MAX_NUM_FACES_C_DIM
-from helpers.tilize_untilize import tilize, untilize
+from helpers.tilize_untilize import tilize_block, untilize_block
 
 # Tiles are 32 columns wide: 32x32 (4 faces) or a 16x32 tiny tile (2 faces, one face-row).
 TILE_DIM = 32
@@ -92,14 +94,6 @@ _CLOBBER_FOR_REINIT = {
 }
 
 
-def _dest_acc(output_format):
-    return (
-        DestAccumulation.Yes
-        if output_format == DataFormat.Float32
-        else DestAccumulation.No
-    )
-
-
 def block_max_num_faces(formats):
     """Face counts for one block-max format.
 
@@ -107,7 +101,7 @@ def block_max_num_faces(formats):
     16x32 (2 faces) is Blackhole-only: Wormhole unpack still hardcodes ``y_dim = 4``
     and strides a full 32x32 tile between block tiles.
     """
-    if _dest_acc(formats.output_format) == DestAccumulation.Yes:
+    if dest_acc_for(formats.output_format) == DestAccumulation.Yes:
         return [4]
     if get_chip_architecture() != ChipArchitecture.BLACKHOLE:
         return [4]
@@ -160,7 +154,7 @@ def _run_reduce_block_max(
             "the pack thread posts those semaphores once"
         )
 
-    dest_acc = _dest_acc(formats.output_format)
+    dest_acc = dest_acc_for(formats.output_format)
     num_faces_r_dim = num_faces // MAX_NUM_FACES_C_DIM
     tile_rows = MAX_FACE_R_DIM * num_faces_r_dim
     tile_dimensions = [tile_rows, TILE_DIM]
@@ -187,19 +181,13 @@ def _run_reduce_block_max(
     )
 
     # Device operand is tilized per tile (the layout the C++ reads from L1).
-    src_A = torch.cat(
-        [
-            tilize(
-                src_A_rowmajor.reshape(tile_rows, block_ct_dim * TILE_DIM)[
-                    :, t * TILE_DIM : (t + 1) * TILE_DIM
-                ].reshape(-1),
-                formats.input_format,
-                num_faces=num_faces,
-                tile_dimensions=tile_dimensions,
-            )
-            for t in range(block_ct_dim)
-        ]
-    )
+    src_A = tilize_block(
+        src_A_rowmajor,
+        dimensions,
+        formats.input_format,
+        num_faces=num_faces,
+        tile_dimensions=tile_dimensions,
+    ).flatten()
     # Scaler B: a single tile of 1.0 (F0 holds the scaler; the op multiplies by it).
     src_B = torch.ones(elements_per_tile, dtype=torch.bfloat16)
 
@@ -262,11 +250,13 @@ def _run_reduce_block_max(
     golden_rowmajor = golden_flat.reshape(tile_rows, block_ct_dim * TILE_DIM)
 
     # Untilize the device output tile to row-major so both sides share layout.
-    res = untilize(
+    res = untilize_block(
         torch.tensor(res_from_L1, dtype=torch.float32),
         formats.output_format,
+        dimensions=tile_dimensions,
         tile_dimensions=tile_dimensions,
-    ).reshape(tile_rows, TILE_DIM)
+        num_faces=num_faces,
+    )
 
     # Only column [0] of each physical row is defined (the row-max); the packer's
     # REDUCE_ROW mask leaves every other lane unspecified. The stimulus is an integer
@@ -321,6 +311,8 @@ def test_reduce_block_max_runtime(formats, block_ct_dim, num_faces):
     _run_reduce_block_max(formats, block_ct_dim, use_runtime=True, num_faces=num_faces)
 
 
+# compile-time reduce_block_max_row reinit is a Blackhole-only lib path
+@blackhole_only
 @parametrize(
     formats=FORMATS,
     block_ct_dim=[2, 4],
@@ -339,10 +331,6 @@ def test_reduce_block_max_reinit(formats, block_ct_dim, reinit):
 
     Compile-time short/minimal reinit lib fns are Blackhole-only; skip on WH.
     """
-    if get_chip_architecture() != ChipArchitecture.BLACKHOLE:
-        pytest.skip(
-            "compile-time reduce_block_max_row reinit is a Blackhole-only lib path"
-        )
     _run_reduce_block_max(
         formats, block_ct_dim, reinit=reinit, clobber=_CLOBBER_FOR_REINIT[reinit]
     )

@@ -8,14 +8,13 @@
 #include <numeric>
 #include <string>
 #include <string_view>
-#include <tt-logger/tt-logger.hpp>
-#include <tt-umd/utils/semver.hpp>
 
 #include "blackhole/bh_hal.hpp"
 #include "rtoptions.hpp"
 #include "dev_mem_map.h"
 #include "eth_fw_api.h"
 #include "hal_types.hpp"
+#include "hostdev/l1_ecc_halt_constants.h"
 #include "llrt/hal.hpp"
 #include "noc/noc_overlay_parameters.h"
 #include "noc/noc_parameters.h"
@@ -176,6 +175,11 @@ public:
     std::vector<std::string> defines(const Params& params) const override {
         auto defines = HalJitBuildQueryBase::defines(params);
         defines.push_back("ARCH_BLACKHOLE");
+        // ttsim does not model every config register (PACK_GLOBAL_CFG_CTL). UMD picks ttsim over RTL emulation by
+        // the same .so test.
+        if (params.rtoptions.get_simulator_path().extension() == ".so") {
+            defines.push_back("TT_METAL_TTSIM");
+        }
         // Push back the physical erisc id
         if (params.core_type == HalProgrammableCoreType::ACTIVE_ETH) {
             if (enable_2_erisc_mode_) {
@@ -247,9 +251,7 @@ public:
     }
 
     std::string rvv_compile_flags(const Params& params) const override {
-        // Only the pack TRISC (TRISC2) fronts the Tensix vector unit on Blackhole.
-        if (!(params.core_type == HalProgrammableCoreType::TENSIX &&
-              params.processor_class == HalProcessorClassType::COMPUTE && params.processor_id == 2)) {
+        if (!hal_.get_supports_rvv(params.core_type, params.processor_class, params.processor_id)) {
             return {};
         }
         // -march is the exact ISA string -mcpu=tt-bh-tensix resolves to (per
@@ -428,8 +430,14 @@ void Hal::initialize_bh(
             ((addr >= NOC0_REGS_START_ADDR) && (addr < NOC0_REGS_START_ADDR + 0x1000)) ||
             ((addr >= NOC1_REGS_START_ADDR) && (addr < NOC1_REGS_START_ADDR + 0x1000)) ||
             (addr == RISCV_DEBUG_REG_SOFT_RESET_0) ||
+            (addr == RISCV_DEBUG_REG_ECC_CTRL || addr == RISCV_DEBUG_REG_ECC_STATUS ||
+             addr == reinterpret_cast<uintptr_t>(RISC_PIC_BRISC_INT_NO) ||
+             addr == RISCV_DEBUG_REG_WDT_CNTL) ||  // L1 ECC halt checks
+            // Releasing a latched BRISC at init
+            ((addr >= reinterpret_cast<uintptr_t>(RISC_PIC_INT_PCS)) &&
+             (addr < reinterpret_cast<uintptr_t>(RISC_PIC_INT_PCS + pic_num_sw_ints + pic_num_hw_ints))) ||
             (addr == RISCV_DEBUG_REG_WALL_CLOCK_L ||
-             addr == RISCV_DEBUG_REG_WALL_CLOCK_H) ||                // read by the streaming profiler's clock sync
+             addr == RISCV_DEBUG_REG_WALL_CLOCK_H) ||  // read by the streaming profiler's clock sync
             (addr == IERISC_RESET_PC ||
              addr == SUBORDINATE_IERISC_RESET_PC) ||                // used to program start addr for eth FW
             (addr == DRISC_RESET_PC) ||                             // used to program start addr for DRAM FW
@@ -516,6 +524,7 @@ void Hal::initialize_bh(
     this->virtualizes_non_worker_cores_ = true;
     this->tensix_harvest_axis_ = static_cast<HalTensixHarvestAxis>(tensix_harvest_axis);
     this->has_tile_counter_registers_ = false;
+    this->num_dataflow_buffers_ = NUM_CIRCULAR_BUFFERS;
     this->supports_implicit_dfb_sync_ = false;
 
     this->eps_ = EPS_BH;
@@ -528,6 +537,9 @@ void Hal::initialize_bh(
     this->pcie_addr_lower_bound_ = 0x0000000000000000ULL;
     this->pcie_addr_upper_bound_ = 0x13FF'FFFF'FFFF'FFFFULL;
     this->supports_64_bit_pcie_addressing_ = true;
+    // The top 512 MiB of the PCIe tile's NoC address space is its SerDes, PCIe controller and NIU configuration
+    // (same document as above).
+    this->pcie_tile_local_noc_addr_base_ = 0xFFFF'FFFF'E000'0000ULL;
 
     this->noc_x_id_translate_table_ = {
         NOC_CFG(NOC_X_ID_TRANSLATE_TABLE_0),

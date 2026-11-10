@@ -5,10 +5,12 @@
 #include "ttnn/operations/creation/creation.hpp"
 #include "ttnn/operations/reduction/generic/generic_reductions.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
+#include "ttnn/operations/copy/typecast/typecast.hpp"
 #include "ttnn/operations/data_movement/clone/clone.hpp"
 #include "ttnn/operations/data_movement/fill_pad/fill_pad.hpp"
 #include "ttnn/operations/data_movement/transpose/transpose.hpp"
 #include "ttnn/operations/data_movement/slice/slice.hpp"
+#include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/eltwise/ternary/ternary.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/experimental/reduction/fast_reduce_nc/fast_reduce_nc.hpp"
@@ -29,7 +31,7 @@
 
 namespace ttnn::operations::reduction {
 
-// Does not support ReduceType::Prod (handled separately in prod.cpp).
+// Does not support ReduceType::Prod (handled separately in prod.cpp) or ReduceType::Std/Var (handled by std_var_impl).
 template <reduction_common::ReduceType reduce_type>
 Tensor reduce(
     const Tensor& input_tensor_arg,
@@ -38,7 +40,6 @@ Tensor reduce(
     const std::optional<MemoryConfig>& memory_config_arg = std::nullopt,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt,
     float scalar = 1.0f,
-    bool correction = true,
     const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,
     bool fast_and_approximate_mode = false,
     const std::optional<Layout>& output_layout = std::nullopt);
@@ -253,7 +254,8 @@ static Tensor reduce_impl(
         if (dim.size() == 1 || linear_type) {
             output_tensor = reduce_nd_loop(/*use_reduce_type=*/true, scalar);
         } else if constexpr (reduce_type == reduction_common::ReduceType::Mean) {
-            int reduced_volume = 1;
+            // 64-bit, as in the single-step path below: an int overflows from 2^31 elements and flips the mean's sign.
+            uint64_t reduced_volume = 1;
             for (int axis : dim) {
                 reduced_volume *= input_shape[axis];
             }
@@ -349,14 +351,16 @@ static Tensor reduce_impl(
 template <reduction_common::ReduceType reduce_type>
 static Tensor std_var_impl(
     const Tensor& input_tensor_arg,
-    const ttsl::SmallVector<int>& dim,
+    const std::optional<std::variant<int, int64_t, ttsl::SmallVector<int>>>& dim_arg,
     const bool keepdim,
     const std::optional<MemoryConfig>& memory_config_arg,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config,
     float scalar,
-    const ttsl::SmallVector<int>& non_height_width_dims,
     bool correction,
     const std::optional<CoreRangeSet>& sub_core_grids) {
+    ttsl::SmallVector<int> dim = reduction_common::generate_reduce_dim(input_tensor_arg, dim_arg);
+    // Std/Var never pre-reduce non-H/W dims, so there is nothing for adjust_shape to compensate for.
+    const ttsl::SmallVector<int> non_height_width_dims{};
     auto input_shape = input_tensor_arg.logical_shape();
     auto rank = input_shape.size();
     auto memory_config = memory_config_arg.value_or(input_tensor_arg.memory_config());
@@ -551,7 +555,6 @@ Tensor reduce(
     const std::optional<MemoryConfig>& memory_config_arg,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config,
     float scalar,
-    bool correction,
     const std::optional<CoreRangeSet>& sub_core_grids,
     bool fast_and_approximate_mode,
     const std::optional<Layout>& output_layout) {
@@ -561,24 +564,53 @@ Tensor reduce(
         TT_FATAL(
             dt != DataType::INT32 && dt != DataType::UINT32, "ttnn.mean does not support integer inputs - got {}.", dt);
     }
+
+    // UINT32 has no exact reduce path of its own. Sum/Max/Min typecast UINT32 -> INT32, reduce and typecast back.
+    // Since the typecast keeps the bits, values >= 2^31 are read as negative. So int32 addition wraps mod 2^32.
+    // Min XORs the sign bit. That maps the unsigned order onto the signed order.
+    // Max XORs every bit except the sign bit. That maps the unsigned order onto the reversed signed order.
+    // Max then runs as an INT32 Min. UINT32 0 becomes INT32_MAX, which is the Min pad value.
+    // An INT32 Max would not work here. UINT32 0 would become INT32_MIN, below the Max pad value INT32_MIN + 1.
+    // A padded row of zeros would then return 1.
+    // UINT32 requires scalar == 1 since XOR cannot undo a multiply and the INT32 path multiplies in float32.
+    if constexpr (
+        reduce_type == reduction_common::ReduceType::Sum || reduce_type == reduction_common::ReduceType::Max ||
+        reduce_type == reduction_common::ReduceType::Min) {
+        if (input_tensor_arg.dtype() == DataType::UINT32) {
+            TT_FATAL(scalar == 1.0f, "UINT32 sum/max/min do not support scalar != 1, got {}.", scalar);
+            constexpr bool flip_bits = reduce_type != reduction_common::ReduceType::Sum;
+            constexpr auto int32_reduce_type =
+                flip_bits ? reduction_common::ReduceType::Min : reduction_common::ReduceType::Sum;
+            constexpr int32_t xor_mask = reduce_type == reduction_common::ReduceType::Max
+                                             ? std::numeric_limits<int32_t>::max()
+                                             : std::numeric_limits<int32_t>::min();
+            Tensor as_int32 =
+                ttnn::typecast(input_tensor_arg, DataType::INT32, std::nullopt, std::nullopt, sub_core_grids);
+            if constexpr (flip_bits) {
+                as_int32 =
+                    ttnn::bitwise_xor(as_int32, xor_mask, std::nullopt, std::nullopt, {}, {}, {}, sub_core_grids);
+            }
+            Tensor result = reduce<int32_reduce_type>(
+                as_int32,
+                dim_arg,
+                keepdim,
+                memory_config_arg,
+                compute_kernel_config,
+                scalar,
+                sub_core_grids,
+                fast_and_approximate_mode,
+                output_layout);
+            if constexpr (flip_bits) {
+                result = ttnn::bitwise_xor(result, xor_mask, std::nullopt, std::nullopt, {}, {}, {}, sub_core_grids);
+            }
+            return ttnn::typecast(result, DataType::UINT32, std::nullopt, std::nullopt, sub_core_grids);
+        }
+    }
+
     ttsl::SmallVector<int> dim = reduction_common::generate_reduce_dim(input_tensor_arg, dim_arg);
     float pad_value = get_pad_value(reduce_type, input_tensor_arg.dtype());
     // TODO: generalize to support all types, parameters, and formats. Issue #18566
     ttsl::SmallVector<int> non_height_width_dims{}, height_width_dims{};
-
-    if constexpr (
-        reduce_type == reduction_common::ReduceType::Std || reduce_type == reduction_common::ReduceType::Var) {
-        return std_var_impl<reduce_type>(
-            input_tensor_arg,
-            dim,
-            keepdim,
-            memory_config_arg,
-            compute_kernel_config,
-            scalar,
-            non_height_width_dims,
-            correction,
-            sub_core_grids);
-    }
 
     bool is_tiled = input_tensor_arg.layout() == TILE_LAYOUT;
     // For INT32 the pad sentinel is carried as a raw bit pattern (see get_pad_value); pass it through
@@ -587,12 +619,31 @@ Tensor reduce(
                                               ? ttnn::PadValue{std::bit_cast<uint32_t>(pad_value)}
                                               : ttnn::PadValue{pad_value};
     auto input_tensor = input_tensor_arg;
-    if (is_tiled &&
-        (input_tensor.logical_shape()[-2] % tt::constants::TILE_HEIGHT != 0 ||
-         input_tensor.logical_shape()[-1] % tt::constants::TILE_WIDTH != 0)) {
+    // MX (Quasar) inputs run the tiled H / W reduce kernels like bf16 (the unpacker expands MX to Float16_b).
+    // What is not wired for MX tiles is rejected here: fill_implicit_tile_padding (the fill kernel does not know
+    // the MX layout) and the N / C axes (they go through transpose / permute, which have not been run on MX).
+    if (tt::tt_metal::is_mx(input_tensor_arg.dtype())) {
+        TT_FATAL(is_tiled, "MX reductions need TILE layout input, got {}", input_tensor_arg.layout());
+        TT_FATAL(
+            input_tensor_arg.logical_shape()[-2] % tt::constants::TILE_HEIGHT == 0 &&
+                input_tensor_arg.logical_shape()[-1] % tt::constants::TILE_WIDTH == 0,
+            "MX reductions need tile-aligned H and W (no implicit tile padding), got shape {}",
+            input_tensor_arg.logical_shape());
+        const int rank = static_cast<int>(input_tensor_arg.logical_shape().rank());
+        for (const int d : dim) {
+            const int axis = d < 0 ? d + rank : d;
+            TT_FATAL(
+                axis == (rank - 1) || axis == (rank - 2), "MX reductions support the H and W axes only, got dim {}", d);
+        }
+        TT_FATAL(keepdim, "MX reductions need keepdim=True (the squeezing reshape is not wired for MX tiles)");
+    }
+    if (is_tiled && (input_tensor.logical_shape()[-2] % tt::constants::TILE_HEIGHT != 0 ||
+                     input_tensor.logical_shape()[-1] % tt::constants::TILE_WIDTH != 0)) {
         // fill_pad writes in place. A reduction must not rewrite its caller's tensor.
-        input_tensor = ttnn::clone(input_tensor, std::nullopt, std::nullopt, std::nullopt);
-        input_tensor = ttnn::fill_implicit_tile_padding(input_tensor, fill_pad_value);
+        // Both ops stay on sub_core_grids: on the full grid they can land in another sub-device,
+        // where nothing orders them against the producer of the input or the reduce.
+        input_tensor = ttnn::clone(input_tensor, std::nullopt, std::nullopt, std::nullopt, sub_core_grids);
+        input_tensor = ttnn::fill_implicit_tile_padding(input_tensor, fill_pad_value, std::nullopt, sub_core_grids);
     }
 
     // bf16 multi-axis Sum/Mean precision chain: carry FP32 between stages and pack bf16
@@ -699,7 +750,6 @@ Tensor sum(
     const std::optional<MemoryConfig>& memory_config_arg,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config,
     float scalar,
-    bool correction,
     const std::optional<CoreRangeSet>& sub_core_grids,
     bool fast_and_approximate_mode,
     const std::optional<Layout>& output_layout) {
@@ -711,7 +761,6 @@ Tensor sum(
             memory_config_arg,
             compute_kernel_config,
             scalar,
-            correction,
             sub_core_grids,
             fast_and_approximate_mode,
             output_layout),
@@ -725,7 +774,6 @@ Tensor mean(
     const std::optional<MemoryConfig>& memory_config_arg,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config,
     float scalar,
-    bool correction,
     const std::optional<CoreRangeSet>& sub_core_grids,
     bool fast_and_approximate_mode,
     const std::optional<Layout>& output_layout) {
@@ -737,7 +785,6 @@ Tensor mean(
             memory_config_arg,
             compute_kernel_config,
             scalar,
-            correction,
             sub_core_grids,
             fast_and_approximate_mode,
             output_layout),
@@ -751,7 +798,6 @@ Tensor max(
     const std::optional<MemoryConfig>& memory_config_arg,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config,
     float scalar,
-    bool correction,
     const std::optional<CoreRangeSet>& sub_core_grids,
     bool fast_and_approximate_mode) {
     /* Scaling is applied after reduction, so flip the op for negative scalars:
@@ -764,7 +810,6 @@ Tensor max(
             memory_config_arg,
             compute_kernel_config,
             scalar,
-            correction,
             sub_core_grids,
             fast_and_approximate_mode);
     }
@@ -775,7 +820,6 @@ Tensor max(
         memory_config_arg,
         compute_kernel_config,
         scalar,
-        correction,
         sub_core_grids,
         fast_and_approximate_mode);
 }
@@ -787,7 +831,6 @@ Tensor min(
     const std::optional<MemoryConfig>& memory_config_arg,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config,
     float scalar,
-    bool correction,
     const std::optional<CoreRangeSet>& sub_core_grids,
     bool fast_and_approximate_mode) {
     TT_FATAL(
@@ -805,7 +848,6 @@ Tensor min(
             memory_config_arg,
             compute_kernel_config,
             scalar,
-            correction,
             sub_core_grids,
             fast_and_approximate_mode);
     }
@@ -816,7 +858,6 @@ Tensor min(
         memory_config_arg,
         compute_kernel_config,
         scalar,
-        correction,
         sub_core_grids,
         fast_and_approximate_mode);
 }
@@ -830,7 +871,7 @@ Tensor std(
     float scalar,
     bool correction,
     const std::optional<CoreRangeSet>& sub_core_grids) {
-    return operations::reduction::reduce<reduction_common::ReduceType::Std>(
+    return operations::reduction::std_var_impl<reduction_common::ReduceType::Std>(
         input_tensor_arg,
         dim_arg,
         keepdim,
@@ -850,7 +891,7 @@ Tensor var(
     float scalar,
     bool correction,
     const std::optional<CoreRangeSet>& sub_core_grids) {
-    return operations::reduction::reduce<reduction_common::ReduceType::Var>(
+    return operations::reduction::std_var_impl<reduction_common::ReduceType::Var>(
         input_tensor_arg,
         dim_arg,
         keepdim,
