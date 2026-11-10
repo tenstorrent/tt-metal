@@ -22,6 +22,10 @@ namespace fused_msda_tile_layout {
 // within-face row stride is 32 B.
 constexpr uint32_t FACE_NBYTES = 512;
 constexpr uint32_t WITHIN_FACE_ROW_STRIDE = 32;
+// One face row: half a tile row. Face rows are unpadded, so its size is the stride.
+constexpr uint32_t FACE_ROW_COLS = 16;
+constexpr uint32_t FACE_ROW_NBYTES = FACE_ROW_COLS * sizeof(uint16_t);
+static_assert(FACE_ROW_NBYTES == WITHIN_FACE_ROW_STRIDE);
 constexpr uint32_t TILE_NBYTES = 2048;
 constexpr uint32_t TILE_MAX_ROWS = 32;
 
@@ -69,6 +73,11 @@ inline uint32_t tile_col0_offset_fp32(uint32_t r) {
 }
 
 inline uint32_t tile_col16_offset_fp32(uint32_t r) { return tile_col0_offset_fp32(r) + FP32_FACE_NBYTES; }
+
+// Byte offset of element (r, c) of a float32 tile.
+inline uint32_t tile_elem_offset_fp32(uint32_t r, uint32_t c) {
+    return (c < 16 ? tile_col0_offset_fp32(r) : tile_col16_offset_fp32(r)) + (c % 16) * 4;
+}
 
 // Byte offset of element (r, c) of a bf16 tile.
 inline uint32_t tile_elem_offset(uint32_t r, uint32_t c) {

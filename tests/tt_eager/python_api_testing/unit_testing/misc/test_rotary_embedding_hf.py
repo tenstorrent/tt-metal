@@ -815,3 +815,49 @@ def test_rotary_embedding_hf_prefill_rejects_cos_seq_smaller_than_input_seq(inpu
             is_decode_mode=False,
             compute_kernel_config=rope_cfg,
         )
+
+
+@pytest.mark.parametrize(
+    "head_dim, expected_msg",
+    [
+        # 72, 80 and 96 pad to 96, and 160 pads to 160: both are multiples of 32 but not 64, so the
+        # pre-existing padded-width check already rejects them with its own message.
+        (72, "rotate_half midpoint must align"),
+        (80, "rotate_half midpoint must align"),
+        (96, "rotate_half midpoint must align"),
+        (160, "rotate_half midpoint must align"),
+        # 100 pads to 128, which IS a multiple of 64, so the pre-existing check passes and the head
+        # would be rotated at element 64 instead of 50 (11,421 of 12,800 values wrong). This is the
+        # case the implicit-tile-padding check adds.
+        (100, "implicit tile padding"),
+    ],
+)
+def test_rotary_embedding_hf_rejects_sub_tile_head_dim(head_dim, expected_msg, device, expect_error):
+    """Sub-tile head dims must be rejected instead of rotating at the padded midpoint.
+
+    The rotate_half midpoint is derived from the padded width
+    (Wt = padded_shape()[-1] / TILE_WIDTH, half_Wt = Wt / 2), so a head_dim whose padded width
+    differs from its logical width is rotated at the wrong element and returns silently wrong
+    values. Head dims whose padded width is already a multiple of 32 but not 64 are caught by the
+    pre-existing padded-width check.
+    """
+    torch.manual_seed(0)
+    num_heads = 8
+    input_seq = 64
+    x = torch.randn([1, num_heads, input_seq, head_dim]).bfloat16().float()
+    cos = torch.randn([1, 1, input_seq, head_dim]).bfloat16().float()
+    sin = torch.randn([1, 1, input_seq, head_dim]).bfloat16().float()
+
+    xt = ttnn.Tensor(x, ttnn.bfloat16).to(ttnn.TILE_LAYOUT).to(device)
+    cost = ttnn.Tensor(cos, ttnn.bfloat16).to(ttnn.TILE_LAYOUT).to(device)
+    sint = ttnn.Tensor(sin, ttnn.bfloat16).to(ttnn.TILE_LAYOUT).to(device)
+
+    rope_cfg = _hf_rope_compute_kernel_config()
+    with expect_error(RuntimeError, expected_msg):
+        ttnn.experimental.rotary_embedding_hf(
+            xt,
+            cost,
+            sint,
+            is_decode_mode=False,
+            compute_kernel_config=rope_cfg,
+        )

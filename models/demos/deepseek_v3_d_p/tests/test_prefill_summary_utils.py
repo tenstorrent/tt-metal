@@ -5,6 +5,9 @@
 """Hardware-independent unit tests for the prefill CI summary utility (rank gating, file emission,
 table rendering). No device / ttnn dependency, so these run in a plain CPU job."""
 
+import json
+import os
+
 import pytest
 
 from models.demos.deepseek_v3_d_p.utils import prefill_summary_utils as psu
@@ -77,3 +80,56 @@ def test_summary_dir_uses_env(monkeypatch, tmp_path):
     d = psu.summary_dir("pcc")
     assert d == tmp_path.resolve() / "pcc"
     assert d.is_dir()
+
+
+def test_emit_perf_metrics_writes_json_and_summary(monkeypatch, tmp_path, capsys):
+    monkeypatch.setenv("PREFILL_SUMMARIES", str(tmp_path))
+    path = psu.emit_perf_metrics("run_a", "Layer perf", {"median_ms": 1.5, "samples_ms": [1.4, 1.6]})
+
+    assert path == tmp_path.resolve() / "perf_json" / "run_a.json"
+    assert json.loads(path.read_text()) == {
+        "name": "run_a",
+        "kind": "test_perf",
+        "median_ms": 1.5,
+        "samples_ms": [1.4, 1.6],
+    }
+    summary = (tmp_path / "perf" / "run_a.md").read_text()
+    assert "median_ms" in summary and "samples_ms" not in summary
+    assert "Layer perf" in capsys.readouterr().out
+
+
+def test_emit_perf_metrics_record_cannot_override_name_or_kind(monkeypatch, tmp_path):
+    # scaling_summary.py skips kind="test_perf"; a record must not be able to opt back in.
+    monkeypatch.setenv("PREFILL_SUMMARIES", str(tmp_path))
+    path = psu.emit_perf_metrics("run_a", "Layer perf", {"name": "other", "kind": "disagg", "median_ms": 1.5})
+
+    rec = json.loads(path.read_text())
+    assert (rec["name"], rec["kind"]) == ("run_a", "test_perf")
+
+
+def test_summaries_root_without_passwd_entry(monkeypatch):
+    # Containers can run as a uid with no passwd entry and no USER/LOGNAME; getuser() then raises.
+    monkeypatch.delenv("PREFILL_SUMMARIES", raising=False)
+
+    def no_user():
+        raise KeyError("getpwuid(): uid not found")
+
+    monkeypatch.setattr(psu.getpass, "getuser", no_user)
+    assert psu.summaries_root().name == f"prefill_summaries_{os.getuid()}"
+
+
+def test_emit_perf_metrics_non_primary_is_noop(monkeypatch, tmp_path):
+    monkeypatch.setenv("PREFILL_SUMMARIES", str(tmp_path))
+    monkeypatch.setenv("OMPI_COMM_WORLD_RANK", "1")
+
+    assert psu.emit_perf_metrics("run_a", "Layer perf", {"median_ms": 1.5}) is None
+    assert not (tmp_path / "perf_json").exists()
+
+
+def test_scaling_summary_skips_test_perf_records(tmp_path):
+    from models.demos.common.prefill.runners.ci.scaling_summary import _load
+
+    (tmp_path / "disagg.json").write_text(json.dumps({"model": "kimi_k3", "config": "sc4"}))
+    (tmp_path / "layer.json").write_text(json.dumps({"model": "kimi_k3", "config": "sc1", "kind": "test_perf"}))
+
+    assert _load(tmp_path) == {"kimi_k3": {"sc4": {"model": "kimi_k3", "config": "sc4"}}}

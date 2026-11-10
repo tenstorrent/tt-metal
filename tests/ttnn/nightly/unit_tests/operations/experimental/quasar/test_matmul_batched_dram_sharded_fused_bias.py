@@ -10,6 +10,11 @@ import torch
 import ttnn
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
+# Every test in this module takes the function-scoped `device` fixture without
+# parametrizing device_params, so the device is opened once per module rather than
+# once per test.
+pytestmark = pytest.mark.use_module_device
+
 # Program-config types are bound on the C++ submodule, not ttnn.experimental.quasar.
 qsr = ttnn._ttnn.operations.experimental.quasar
 

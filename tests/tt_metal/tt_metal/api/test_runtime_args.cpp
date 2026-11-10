@@ -306,7 +306,7 @@ std::pair<distributed::MeshWorkload, tt::tt_metal::KernelHandle> initialize_prog
     distributed::MeshWorkload workload;
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-    tt::tt_metal::Program program = tt_metal::CreateProgram();
+    tt::tt_metal::Program program = tt_metal::CreateProgram(*mesh_device);
 
     auto kernel_id =
         initialize_program_compute(mesh_device, program, core_range_set, num_unique_rt_args, num_common_rt_args);
@@ -323,7 +323,7 @@ initialize_program_compute_multi_range_sets(
     distributed::MeshWorkload workload;
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-    tt::tt_metal::Program program = tt_metal::CreateProgram();
+    tt::tt_metal::Program program = tt_metal::CreateProgram(*mesh_device);
     std::vector<tt::tt_metal::KernelHandle> kernel_ids;
 
     kernel_ids.reserve(core_range_sets.size());
@@ -880,7 +880,7 @@ TEST_F(MeshDeviceFixture, ActiveEthIllegalTooManyRuntimeArgs) {
         auto zero_coord = distributed::MeshCoordinate(0, 0);
         auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
         distributed::MeshWorkload workload;
-        tt::tt_metal::Program program = tt_metal::CreateProgram();
+        tt::tt_metal::Program program = tt_metal::CreateProgram(*mesh_device);
 
         // Create kernel on first active ethernet core
         CoreCoord eth_core = *active_eth_cores.begin();
@@ -907,7 +907,7 @@ TEST_F(MeshDeviceFixture, ActiveEthIllegalTooManyRuntimeArgs) {
 
         // Try to set too many common runtime args (should fail)
         // Create a new kernel for this test since common args can only be set once
-        tt::tt_metal::Program program_common_test = tt_metal::CreateProgram();
+        tt::tt_metal::Program program_common_test = tt_metal::CreateProgram(*mesh_device);
         auto kernel_common_test = tt_metal::CreateKernel(
             program_common_test,
             "tests/tt_metal/tt_metal/test_kernels/misc/add_two_ints.cpp",
@@ -925,7 +925,7 @@ TEST_F(MeshDeviceFixture, ActiveEthIllegalTooManyRuntimeArgs) {
         // Verify that setting exactly max active eth unique runtime args works (should not throw)
         // However, we can't do this now because common args are already set to max, and unique+common must <= max
         // So we create a new program/kernel for this test
-        tt::tt_metal::Program program2 = tt_metal::CreateProgram();
+        tt::tt_metal::Program program2 = tt_metal::CreateProgram(*mesh_device);
         auto kernel2 = tt_metal::CreateKernel(
             program2,
             "tests/tt_metal/tt_metal/test_kernels/misc/add_two_ints.cpp",
@@ -965,7 +965,7 @@ TEST_F(MeshDeviceFixture, IdleEthIllegalTooManyRuntimeArgs) {
         auto zero_coord = distributed::MeshCoordinate(0, 0);
         auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
         distributed::MeshWorkload workload;
-        tt::tt_metal::Program program = tt_metal::CreateProgram();
+        tt::tt_metal::Program program = tt_metal::CreateProgram(*mesh_device);
 
         // Create kernel on first idle ethernet core
         CoreCoord eth_core = *idle_eth_cores.begin();
@@ -992,7 +992,7 @@ TEST_F(MeshDeviceFixture, IdleEthIllegalTooManyRuntimeArgs) {
 
         // Try to set too many common runtime args (should fail)
         // Create a new kernel for this test since common args can only be set once
-        tt::tt_metal::Program program_common_test = tt_metal::CreateProgram();
+        tt::tt_metal::Program program_common_test = tt_metal::CreateProgram(*mesh_device);
         auto kernel_common_test = tt_metal::CreateKernel(
             program_common_test,
             "tests/tt_metal/tt_metal/test_kernels/misc/add_two_ints.cpp",
@@ -1010,7 +1010,7 @@ TEST_F(MeshDeviceFixture, IdleEthIllegalTooManyRuntimeArgs) {
         // Verify that setting exactly max idle eth unique runtime args works (should not throw)
         // However, we can't do this now because common args are already set to max, and unique+common must <= max
         // So we create a new program/kernel for this test
-        tt::tt_metal::Program program2 = tt_metal::CreateProgram();
+        tt::tt_metal::Program program2 = tt_metal::CreateProgram(*mesh_device);
         auto kernel2 = tt_metal::CreateKernel(
             program2,
             "tests/tt_metal/tt_metal/test_kernels/misc/add_two_ints.cpp",

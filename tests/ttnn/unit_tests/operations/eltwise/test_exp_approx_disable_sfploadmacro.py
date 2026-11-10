@@ -21,7 +21,7 @@ import pytest
 import torch
 
 import ttnn
-from models.common.utility_functions import is_wormhole_b0
+from tt_py_test_utils_common.utility_functions import is_wormhole_b0
 
 KERNEL = "tests/tt_metal/tt_metal/test_kernels/compute/eltwise_sfpu.cpp"
 UNARY_DATAFLOW = "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow"
