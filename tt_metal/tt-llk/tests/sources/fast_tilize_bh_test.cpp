@@ -154,7 +154,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
         {
             // Each unit produces 4 dvalids regardless of unit_dim
-            _perf_unpack_loop_set_valid<true, false>(units_per_row * 4 * LOOP_FACTOR);
+            _perf_unpack_stream_set_valid<true, false, PERF_RUN_TYPE>(units_per_row * 4 * LOOP_FACTOR);
         }
         else
         {
@@ -215,7 +215,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             _llk_math_pack_sync_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
             _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
             _llk_math_eltwise_unary_datacopy_init_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, false, PackMode::Tilize>(
-                4 /* num_faces */, formats.math);
+                ckernel::DEFAULT_TENSOR_SHAPE, formats.math);
         }
         {
             START_PERF_MEASURE("TILE_LOOP")
@@ -223,7 +223,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             {
                 _llk_math_wait_for_dest_available_<DstSync::SyncHalf>();
                 _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DstSync::SyncHalf, is_fp32_dest_acc_en>(
-                    0 /* dst_index */, formats.math, formats.math, 4 /* num_faces */);
+                    0 /* dst_index */, formats.math, formats.math, ckernel::DEFAULT_TENSOR_SHAPE);
                 _llk_math_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
             }
         }
@@ -245,9 +245,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             // Intentionally empty: MATH_PACK SEMINITs to max 2, so posting one credit per unit hangs pack
         }
-        else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
+        else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE)
         {
-            _perf_math_loop_clear_valid<true, false>(units_per_row * 4 * LOOP_FACTOR);
+            _perf_math_stream_clear_valid<true, false, PERF_RUN_TYPE>(units_per_row * 4 * LOOP_FACTOR);
         }
         else
         {
@@ -292,7 +292,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     std::uint32_t unit_dims[MAX_UNITS_PER_ROW];
     std::uint32_t units_per_row = decompose_row(BLOCK_CT_DIM, unit_dims);
 
-    constexpr bool pack_free_runs = (PERF_RUN_TYPE == PerfRunType::L1_CONGESTION || PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE);
+    constexpr bool pack_free_runs = (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE);
 
     const std::uint32_t total_tiles = BLOCK_CT_DIM;
     const std::uint32_t tile_bytes  = GET_L1_HEADERLESS_TILE_SIZE(formats.pack_dst) << 4;

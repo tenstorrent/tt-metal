@@ -127,7 +127,7 @@ ttnn::device_operation::ProgramArtifacts UntilizeWithHaloProgramFactory::create_
     const bool is_height_sharded = output_tensor.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED;
     const bool is_width_sharded = input_tensor.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED;
 
-    TT_ASSERT(output_tensor.buffer() != nullptr, "Output buffer should be allocated on device!");
+    TT_ASSERT(output_tensor.is_allocated(), "Output buffer should be allocated on device!");
 
     const bool skip_untilize = input_tensor.layout() == Layout::ROW_MAJOR;
     const bool is_in_tiled = input_tensor.layout() == Layout::TILE;
@@ -157,8 +157,8 @@ ttnn::device_operation::ProgramArtifacts UntilizeWithHaloProgramFactory::create_
     // Calculate aligned stick size - used for both input and output since channels don't change
     const uint32_t stick_nbytes = output_shard_shape[1] * out_nbytes;
     uint32_t aligned_stick_nbytes = stick_nbytes;
-    if (stick_nbytes % input_tensor.buffer()->alignment() != 0) {
-        aligned_stick_nbytes = tt::round_up(stick_nbytes, input_tensor.buffer()->alignment());
+    if (stick_nbytes % input_tensor.mesh_buffer().alignment() != 0) {
+        aligned_stick_nbytes = tt::round_up(stick_nbytes, input_tensor.mesh_buffer().alignment());
     }
     const uint32_t out_tile_size = tt::tile_size(out_df);
 

@@ -43,11 +43,13 @@ class _TestCase:
 
 _PERFORMANCE_MARGIN = 0.05
 _PRODUCTION_OUTPUT_BF16_MASK = 0x26
-_PRODUCTION_EXPECTED_DURATION_NS = 176_000
+_PRODUCTION_EXPECTED_DURATION_NS = 165_095
 _T_INV_MAX_ABS = 0.01
 _UNIT_TEST_CASE = _TestCase("unit-h2-n4-k32-v64", 2, 4, 32, 64)
 # Kimi-K3 on Galaxy SP8xTP4: one device's 640 tokens of 24 heads.
 _PRODUCTION_CASE = _TestCase("h24-n20-k128-v128", 24, 20, 128, 128)
+# Keys wider than one FP32 DST acquire (four tiles), so the gate's prefix sum runs in column groups.
+_WIDE_KEY_CASE = _TestCase("wide-h2-n2-k160-v32", 2, 2, 160, 32)
 
 
 def _prepare_chunk_recurrence_ops(
@@ -202,7 +204,7 @@ def _oracle(
     kd = beta * k * decay
     q_decay = q * decay
     k_dec_t = (k * torch.exp(final_g.unsqueeze(2) - cumulative_g)).transpose(-1, -2)
-    final_decay = torch.exp(final_g).unsqueeze(-1)
+    final_decay = torch.expm1(final_g).unsqueeze(-1)
     k_fp64 = k.double()
     cumulative_g_fp64 = cumulative_g.double()
     anchor_g = cumulative_g_fp64[:, :, -1:].mul(0.5)
@@ -356,7 +358,7 @@ def _assert_t_inv_strict_lower_accurate(
 
 @pytest.mark.parametrize(
     "case",
-    [_UNIT_TEST_CASE, _PRODUCTION_CASE],
+    [_UNIT_TEST_CASE, _PRODUCTION_CASE, _WIDE_KEY_CASE],
     ids=lambda case: case.case_id,
 )
 def test_prepare_chunk_recurrence_contract_accuracy_and_determinism(
@@ -485,6 +487,60 @@ def test_prepare_chunk_recurrence_gate_scale_matches_prescaled_gate(device: ttnn
         ttnn.deallocate(tensor)
 
 
+def test_prepare_chunk_recurrence_gate_exponent_error_is_one_anchor_rounding(device: ttnn.Device) -> None:
+    """The decay factors' exponent error is the anchor's TF32 rounding, nothing from G or G - a.
+
+    Gate: BF16 g_0 = -1.2578125 (= -(1 + 33/128), exact in BF16), g_1..31 = -1, in every key column; scale 1.
+    Then every prefix sum G_i is a multiple of 2^-7 below 33 in magnitude, so the centered-mask product
+    G - a = s/2 * (sum_{j<=i} g_j - sum_{j>i} g_j) is exact in FP32 DST, and its exponential carries only SFPU error.
+    The anchor a = G_last / 2 = -16.12890625 = -(16 + 8.25 * 2^-6). The anchor's exponential still reads a from L1
+    through SrcA, i.e. rounded to TF32 (10 explicit mantissa bits; ulp 2^-6 on [16, 32)). Rounding to nearest and
+    truncation both give -(16 + 8 * 2^-6), so the anchor error is delta = 2^-8 exactly, whichever the unpacker does.
+    kd, q_decay and k_dec_t are exp(+-(G - a)) * exp(+-a~) times the normalised q or k (and beta), so each carries a
+    relative error of about delta. final_decay = expm1(2 * a~) is about -1 + 1e-14 here, so the anchor error moves it
+    by far less than its own rounding; test_prepare_chunk_recurrence_final_decay_keeps_small_decay owns its precision.
+    `budget` covers the SFPU exponential of an exact FP32 exponent and the TF32 rounding of FP32 operands in the
+    downstream FPU products: four half-ulps, 4 * 2^-11 = 2^-9.
+    Before the exponent was kept in DST, G and G - a were each rounded to TF32 (ulp up to 2^-5 at |G_last| = 32.26),
+    which exceeds these bounds: kd, q_decay and k_dec_t err by 9.8e-3 to 1.5e-2 on this input.
+    """
+    key_dim = value_dim = CHUNK_SIZE
+    g = torch.full((1, CHUNK_SIZE, key_dim), -1.0)
+    g[:, 0, :] = -1.2578125
+    q = torch.full((1, CHUNK_SIZE, key_dim), 0.5)
+    k = torch.full((1, CHUNK_SIZE, key_dim), 0.5)
+    v = torch.full((1, CHUNK_SIZE, value_dim), 0.25)
+    beta_logits = torch.zeros((1, CHUNK_SIZE, 1))
+    host_inputs = (q, k, v, g, beta_logits)
+    for tensor in host_inputs:
+        assert torch.equal(tensor, tensor.to(torch.bfloat16).float()), "inputs must be exact in BF16"
+    anchor = float(g[0, :, 0].sum()) / 2
+    assert anchor == -(16 + 8.25 * 2**-6)
+
+    delta = 2**-8
+    budget = 2**-9
+    bounds = {
+        "kd": delta + budget,
+        "q_decay": delta + budget,
+        "k_dec_t": delta + budget,
+    }
+    expected = _oracle(host_inputs, 1, 0)
+    inputs = _device_inputs(host_inputs, device)
+    outputs = _run(inputs, 1, compute_kernel_config=_production_compute_config(device))
+    failures = []
+    for name, bound in bounds.items():
+        index = OUTPUT_NAMES.index(name)
+        actual = ttnn.to_torch(outputs[index]).double()
+        assert torch.isfinite(actual).all(), f"{name} contains nonfinite values"
+        relative = (actual / expected[index].double() - 1).abs().max().item()
+        logger.info(f"gate exponent {name}: max relative error {relative:.3e}, bound {bound:.3e}")
+        if relative > bound:
+            failures.append(f"{name} {relative:.3e} > {bound:.3e}")
+    assert not failures, "decay factors exceed the anchor-rounding bound: " + ", ".join(failures)
+    for tensor in (*outputs, *inputs):
+        ttnn.deallocate(tensor)
+
+
 @pytest.mark.parametrize("beta_offset", [32, 64])
 @pytest.mark.parametrize("start_row", [0, 32, 48], ids=["start0", "chunk-aligned-start", "mid-chunk-start"])
 def test_prepare_chunk_recurrence_beta_logits_column_window(
@@ -604,16 +660,27 @@ def test_prepare_chunk_recurrence_precise_math_uses_distinct_accurate_program(de
     )
 
 
+@pytest.mark.parametrize(
+    ("math_fidelity", "packer_l1_acc", "message"),
+    [
+        pytest.param(ttnn.MathFidelity.HiFi4, True, "packer_l1_acc=true is unsupported", id="packer-l1-acc"),
+        pytest.param(ttnn.MathFidelity.HiFi3, False, "math_fidelity must be HiFi4", id="hifi3"),
+    ],
+)
 def test_prepare_chunk_recurrence_rejects_unsupported_compute_config(
-    device: ttnn.Device, expect_error: Callable
+    device: ttnn.Device,
+    expect_error: Callable,
+    math_fidelity: ttnn.MathFidelity,
+    packer_l1_acc: bool,
+    message: str,
 ) -> None:
     case = _UNIT_TEST_CASE
     inputs = _device_inputs(_case_host_inputs(case, seed=819), device)
     unsupported_config = ttnn.types.BlackholeComputeKernelConfig(
-        math_fidelity=ttnn.MathFidelity.HiFi4,
-        packer_l1_acc=True,
+        math_fidelity=math_fidelity,
+        packer_l1_acc=packer_l1_acc,
     )
-    with expect_error(RuntimeError, "packer_l1_acc=true is unsupported"):
+    with expect_error(RuntimeError, message):
         _run(inputs, case.num_heads, compute_kernel_config=unsupported_config)
 
 
@@ -783,7 +850,7 @@ def test_prepare_chunk_recurrence_scratch_wrap(device: ttnn.Device, output_bf16_
     chunk = _t_inv_numerical_stress_inputs()
     inputs = tuple(x.repeat(1, chunks, 1) for x in chunk)
     key_dim = chunk[3].shape[-1]
-    expected = torch.exp(chunk[3].sum(dim=1)).reshape(1, 1, key_dim, 1).repeat(1, chunks, 1, 1)
+    expected = torch.expm1(chunk[3].sum(dim=1)).reshape(1, 1, key_dim, 1).repeat(1, chunks, 1, 1)
     if output_bf16_mask & (1 << 5):
         expected = expected.to(torch.bfloat16).float()
     outputs = _run(
@@ -799,3 +866,60 @@ def test_prepare_chunk_recurrence_scratch_wrap(device: ttnn.Device, output_bf16_
     # adjacent storage, which surfaced here as a final_decay mismatch.
     assert torch.isfinite(actual).all()
     torch.testing.assert_close(actual, expected, rtol=0, atol=0.004)
+
+
+@pytest.mark.parametrize("output_bf16_mask", [0x00, 0x20], ids=["fp32", "decay-bf16"])
+def test_prepare_chunk_recurrence_final_decay_keeps_small_decay(device: ttnn.Device, output_bf16_mask: int) -> None:
+    """A tiny G_last gives final_decay = expm1(G_last) to relative precision, not exp(G_last) - 1 or zero."""
+    num_heads, num_chunks, key_dim, value_dim = 2, 2, 64, 32
+    q, k, v, g, beta = _host_inputs(num_heads, num_chunks, key_dim, value_dim)
+    # Per-token gates exact in BF16, whose 32 tokens sum exactly: G_last = -2^-12 on channels 0 mod 4 and
+    # G_last = -2^-26 on channels 1 mod 4. The other channels keep their random gates.
+    g = g.reshape(1, num_chunks * CHUNK_SIZE, num_heads, key_dim)
+    g[..., 0::4] = -(2.0**-17)
+    g[..., 1::4] = -(2.0**-31)
+    g = g.reshape(1, num_chunks * CHUNK_SIZE, num_heads * key_dim)
+    outputs = _run(
+        _device_inputs((q, k, v, g, beta), device),
+        num_heads,
+        output_bf16_mask=output_bf16_mask,
+        compute_kernel_config=_production_compute_config(device),
+    )
+    final_decay = ttnn.to_torch(outputs[5]).float()[..., 0]
+    bf16 = bool(output_bf16_mask & (1 << 5))
+
+    # expm1(-2^-26) is -2^-26 in FP32 and BF16, while exp(-2^-26) rounds to 1 in FP32, so exp - 1 would give 0.
+    tiny = final_decay[:, :, 1::4]
+    torch.testing.assert_close(tiny, torch.full_like(tiny, -(2.0**-26)), rtol=0, atol=0)
+
+    # expm1(-2^-12) = -2.441108e-4. The kernel transposes final_decay from a row to a column through source A, which
+    # truncates it to TF32 (a 10-bit mantissa) before it is stored, so FP32 output is within 2^-10 of it relatively.
+    # In BF16 that truncated value still rounds to -2^-12, the BF16 rounding of expm1(-2^-12).
+    small = final_decay[:, :, 0::4]
+    expected = torch.expm1(torch.tensor(-(2.0**-12), dtype=torch.float64)).item()
+    if bf16:
+        torch.testing.assert_close(small, torch.full_like(small, -(2.0**-12)), rtol=0, atol=0)
+    else:
+        torch.testing.assert_close(small, torch.full_like(small, expected), rtol=2.0**-10, atol=0)
+
+
+@pytest.mark.parametrize("work_items_per_core,short", [(4, 1), (8, 13), (32, 61)])
+@pytest.mark.parametrize("output_bf16_mask", [0x00, 0x26], ids=["all-fp32", "production"])
+def test_prepare_chunk_recurrence_uneven_split_inverse(
+    device: ttnn.Device, work_items_per_core: int, short: int, output_bf16_mask: int
+) -> None:
+    """Cores with fewer work items than the largest share still invert in whole-buffer transactions."""
+    grid = device.compute_with_storage_grid_size()
+    chunks = grid.x * grid.y * work_items_per_core - short
+    chunk = _t_inv_numerical_stress_inputs()
+    outputs = _run(
+        _device_inputs(tuple(x.repeat(1, chunks, 1) for x in chunk), device),
+        1,
+        output_bf16_mask=output_bf16_mask,
+        compute_kernel_config=_production_compute_config(device),
+    )
+    # Every chunk has the same inputs, so every chunk's T_inv must match the first: an inverse transaction that
+    # crossed a ring end corrupted the items of the cores with a smaller share.
+    t_inv = ttnn.to_torch(outputs[6]).float().reshape(chunks, -1)
+    assert torch.isfinite(t_inv).all()
+    torch.testing.assert_close(t_inv, t_inv[:1].expand_as(t_inv), rtol=0, atol=0)

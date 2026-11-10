@@ -12,12 +12,14 @@ shared wide schema (DB_SCHEMA), that columns a test did not emit become NULL
 import pandas as pd
 import pyarrow.parquet as pq
 import pytest
+from helpers.chip_architecture import ChipArchitecture
 from helpers.metrics import export_metrics
 from helpers.perf.parquet import (
     align_to_schema,
     arrow_schema,
     build_run_batch,
     convert_csvs_to_parquet,
+    legacy_column_aliases,
     parquet_to_csvs,
     stamp_provenance,
     to_table,
@@ -396,3 +398,34 @@ def test_round_trip_parquet_csv_parquet(tmp_path):
     d1 = t1.to_pandas().sort_values(key).reset_index(drop=True)
     d2 = t2.to_pandas().sort_values(key)[d1.columns].reset_index(drop=True)
     pd.testing.assert_frame_equal(d1, d2)
+
+
+def test_convert_keeps_both_columns_when_legacy_and_current_present(tmp_path):
+    # perf_sfpu_binop_scalar renamed mathop -> binop_mathop; mathop is still a wide-schema column.
+    df = pd.DataFrame(
+        {
+            "marker": ["INIT"],
+            "tile_cnt": [4],
+            "mathop": ["ADD"],
+            "binop_mathop": ["MUL"],
+        }
+    )
+    p = _write_csv(tmp_path, "perf_sfpu_binop_scalar.csv", df)
+
+    diag = convert_csvs_to_parquet(
+        [p], tmp_path / "out.parquet", strict=True, **_RUN_PROV
+    )
+
+    table = pq.read_table(tmp_path / "out.parquet").to_pandas()
+    assert table["binop_mathop"].tolist() == ["MUL"]
+    assert table["mathop"].tolist() == ["ADD"]
+    assert diag["renamed_columns"] == {}
+
+
+def test_legacy_column_aliases_resolve_a_previous_test_name():
+    # perf_eltwise_typecast is a previous name of perf_eltwise_unary_typecast.
+    assert (
+        legacy_column_aliases(ChipArchitecture.WORMHOLE, "perf_eltwise_typecast")
+        == PERF_TEST_SCHEMAS["perf_eltwise_unary_typecast"]["aliases"]
+    )
+    assert legacy_column_aliases(ChipArchitecture.WORMHOLE, "no_such_test") == {}

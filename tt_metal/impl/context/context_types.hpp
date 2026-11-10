@@ -7,7 +7,6 @@
 #include <cstddef>
 #include <tt_stl/strong_type.hpp>
 #include <tt-metalium/device.hpp>
-#include <tt-metalium/mesh_device.hpp>
 
 namespace tt::tt_metal {
 
@@ -28,7 +27,5 @@ constexpr size_t MAX_CONTEXT_COUNT = 32;
 // TODO: Remove these extract_context_id functions once all child objects have MetalEnv and MetalContext references
 // passed in
 ContextId extract_context_id(const IDevice* device);
-
-ContextId extract_context_id(const distributed::MeshDevice* mesh_device);
 
 }  // namespace tt::tt_metal

@@ -29,10 +29,7 @@ target_link_libraries(
         Taskflow::Taskflow
     PRIVATE
         BLAKE3::blake3
-        Metalium::Metal::Hardware
         Tracy::TracyClient
-        TT::Metalium::HostDevCommon
         yaml-cpp::yaml-cpp
-        Boost::asio
         tt-logger::tt-logger
 )

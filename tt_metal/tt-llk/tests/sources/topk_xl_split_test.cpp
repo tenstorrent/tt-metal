@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 //
-// topk_xl_test.cpp's fused K = 512, 1024 and 2048 rows with each chunk split across MATH and PACK (helpers/include/topk_xl_split.h);
+// topk_xl_test.cpp's fused K = 512, 1024 and 2048 rows with each chunk split across MATH and PACK (sfpu/experimental/ckernel_sfpu_topk_xl_split.h);
 // it must pack the same result bit for bit. It reads TOPK_XL_K, FUSED_E2E, NUM_CHUNKS, TAIL_ELEMENTS, NUM_ROWS, SEG_BASE and ASCENDING (the
 // direction of the last chunk's rebuild); the other TOPK_XL parameters must stay at their defaults. Blackhole only.
 
@@ -88,8 +88,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "llk_math_eltwise_unary_sfpu_params.h"
 #include "llk_sfpu/ckernel_sfpu_fill.h"
 #include "sfpu/experimental/ckernel_sfpu_topk_xl.h"
+#include "sfpu/experimental/ckernel_sfpu_topk_xl_split.h"
 #include "topk_xl_scrub_dest.h"
-#include "topk_xl_split.h"
 
 using namespace ckernel;
 
@@ -138,7 +138,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "llk_lib_pack_wrappers.h"
 #include "llk_pack_common.h"
 #include "sfpu/experimental/ckernel_sfpu_topk_xl.h"
-#include "topk_xl_split.h"
+#include "sfpu/experimental/ckernel_sfpu_topk_xl_split.h"
 
 void run_kernel(RUNTIME_PARAMETERS params)
 {
@@ -149,12 +149,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
         formats.pack_src, formats.pack_dst, 16 * 16 * 4 /* tile_size */, FACE_R_DIM, TILE_C_DIM, TILE_NUM_FACES);
     _llk_pack_init_wrapper_<PackMode::Default, false /* zero_output */>(formats.pack_dst, FACE_R_DIM, TILE_C_DIM, TILE_NUM_FACES);
     _llk_pack_dest_init_<dest_sync, is_fp32_dest_acc_en>();
-    topk_xl_split::wait_start<TOPK_XL_K>();
+    topk_xl_split::wait_start();
 
     for (std::uint32_t r = 0; r < TOPK_XL_NUM_ROWS; r++)
     {
-        topk_xl_split::pack_row<TOPK_XL_K, TOPK_XL_ASCENDING>(TOPK_XL_NUM_CHUNKS);
-        topk_xl_split::split_indices<TOPK_XL_K>(TOPK_XL_SEG_BASE);
+        topk_xl_split::pack_row<TOPK_XL_K>(
+            TOPK_XL_NUM_CHUNKS, TOPK_XL_ASCENDING /*mirror_last*/, [] { topk_xl_split::split_indices<TOPK_XL_K, true /*stall_after*/>(TOPK_XL_SEG_BASE); });
         _llk_packer_wait_for_math_done_();
         _llk_pack_mop_config_<PackMode::Default, false /* zero_output */>(FACE_R_DIM, TILE_C_DIM, TILE_NUM_FACES, 1 /* num_tiles */);
         for (std::uint32_t t = 0; t < 2 * TILES_PER_SEQ; t++)
