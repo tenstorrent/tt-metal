@@ -177,3 +177,13 @@ def test_resident_untraced_pipeline_says_so_once(offload_weights: bool, trace: b
         logger.remove(sink)
     expected = ["_FakePipeline: static mesh, running untraced (offload_weights=False, trace=False)\n"]
     assert [m for m in messages if "running untraced" in m] == (expected if logged else [])
+
+
+@pytest.mark.parametrize("flag", ["traced", "vae_traced"])
+def test_subclass_cannot_default_a_trace_flag_to_on(flag: str) -> None:
+    namespace: dict = {}
+    exec(f"def _run(self, *, {flag}=True): pass", namespace)  # noqa: S102
+    with pytest.raises(TypeError, match=f"must not default {flag} to True"):
+        type("_Widening", (Pipeline,), {"_run": namespace["_run"]})
+    exec(f"def _run(self, *, {flag}=None): pass", namespace)  # noqa: S102
+    type("_Narrowing", (Pipeline,), {"_run": namespace["_run"]})
