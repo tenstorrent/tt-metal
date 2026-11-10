@@ -151,10 +151,12 @@ def test_ttrun_sigterm():
 # ---------------------------------------------------------------------------------------------------------------
 def test_ttrun_abort_ends():
     """A rank aborts (SIGABRT, the TT_FATAL shape). With the plain launcher tt-run ends the job quickly once the
-    rank is reaped; it must not stall for the length of a core dump (P8)."""
+    rank is reaped, and the OTHER ranks are torn down with it: the job exits non-zero and nothing is left alive on
+    any host. It must not stall for the length of a core dump (P8)."""
     r = run_case("ttrun_abort", {**NP, "PROBE_SCENARIO": "victim_abort"}, DEADLINE_END, cmd=ttrun_mpi_cmd())
     ended(r)
     nonzero(r)
+    clean(r)  # every surviving rank is gone, nothing left on any host
     assert r.wall_s < 30, f"tt-run stalled on the aborting rank: {r}"
 
 
