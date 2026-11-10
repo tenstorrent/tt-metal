@@ -2185,6 +2185,9 @@ class MATMUL_PACK_BLOCK(TemplateParameter):
         state = os.environ.get("LLK_MATMUL_PACK_STATE")
         if state in ("1", "2"):
             out += f"\n#define MATMUL_PACK_STATE {state}"
+        # LLK_MATMUL_PACK_NOK=1: the block pack takes no K (pack_block's default matmul_kt 0)
+        if os.environ.get("LLK_MATMUL_PACK_NOK") == "1":
+            out += "\n#define MATMUL_PACK_NOK 1"
         return out
 
 
