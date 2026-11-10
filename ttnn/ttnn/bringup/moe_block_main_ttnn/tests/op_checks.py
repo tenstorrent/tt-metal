@@ -26,10 +26,10 @@ from tests.ttnn.profiling.realtime_profiler_utils import profile_realtime_progra
 
 # the MoE block's ops, each by a path its program's kernel sources contain
 BLOCK_OPS = {
-    "fused_head": "moe_block/fused_head/device/kernels",
-    "sparse_dispatch_2d": "moe_block/sparse_dispatch_2d/device/kernels",
-    "routed_experts_combine": "moe_block/routed_experts_combine/device/kernels",
-    "fused_tail": "moe_block/fused_tail/device/kernels",
+    "fused_head": "moe_block_main_ttnn/fused_head/device/kernels",
+    "sparse_dispatch_2d": "moe_block_main_ttnn/sparse_dispatch_2d/device/kernels",
+    "routed_experts_combine": "moe_block_main_ttnn/routed_experts_combine/device/kernels",
+    "fused_tail": "moe_block_main_ttnn/fused_tail/device/kernels",
 }
 
 
