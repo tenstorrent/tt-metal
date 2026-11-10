@@ -187,9 +187,6 @@ def test_mpi_killed_job_shm():
     assert not r.shm_leaked, f"R3: /dev/shm segments leaked: {r.shm_leaked}"
 
 
-@known(
-    "P15: every bare mpirun (one not started by tt-run) must carry --mca btl self,tcp, the line tt-run uses; run_dual_t3k_tests.sh launches with the default transports"
-)
 def test_scripts_tcp_only():
     """Static: each mpirun launch in tests/scripts/multihost/*.sh carries the tcp-only transport, on the line or
     through the argument variable the script builds with it."""
