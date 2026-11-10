@@ -1207,11 +1207,8 @@ def setup_bench(dev, MESH, mesh_identity):
     else:
         prog = build(out_t)
     if ('MK_V12_CBCHK', '1') in MKDEF:   # every (core, CB) address of the program on device vs the host plan; raises on a mismatch
-        if REAL_AR:   # per-device programs: identical CB lists (same plan) on every ring position
-            _p0 = CBP.plan(list(prog.cbs))
-            for c_ in range(1, AR.ring):
-                assert CBP.plan(list(PROG_PER_DEV(ttnn.MeshCoordinate(0, c_)).cbs)) == _p0, f"[cbplan] device {c_} CB plan differs from device 0"
-        CBP.verify(dev, prog, tag=' v12cb')
+        # per-device programs (MK_REAL_AR ring roles): each device's probe runs its own CB list
+        CBP.verify(dev, [PROG_PER_DEV(ttnn.MeshCoordinate(0, c_)) for c_ in range(AR.ring)] if REAL_AR else prog, tag=' v12cb')
     if GDN24:   # GDN-core CB headroom (spec rule): every L1 tensor reserves its range on ALL cores, CBs grow from the bottom
         _l1 = []
         for _n, _v in list(locals().items()):
