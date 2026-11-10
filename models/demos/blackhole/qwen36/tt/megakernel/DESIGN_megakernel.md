@@ -128,7 +128,9 @@ says, in pass order. Weight prefetch (DM RISCs) runs ahead of compute, up to dep
 | 9 | signal sem id (output ready) |
 | 10 | stall cycles (STALL / sim stand-ins) |
 | 11 | flags (bit 0 last-in-layer, bit 1 residual add, bit 2 norm folded) |
-| 12-15 | block-private (attention/GDN tracks define) |
+| 12 | block-private |
+| 13 | **engine: prefetch budget** = max weight bytes in flight on STREAM writers during this phase (0 = unlimited). SDPA phases set it so the STREAM cores' V reads aren't starved |
+| 14-15 | block-private (attention/GDN tracks define) |
 
 **CB ids (fixed across tracks):**
 0 CB_X (32×5120 bf16 activation, replicated on STREAM cores) · 1 CB_W (even weight groups, NOC1) ·
@@ -162,6 +164,11 @@ into overlapping rectangles at once (fused MLP v1/v2: 150 µs stalls on silicon)
 | AR buffers | 100 |
 | slack | ~90 |
 Rule: a block may use the shared working region only during its own phases. Weight prefetch must never touch it.
+
+**Prefetch throttle (v0.3, attention track request):** during a phase with word 13 > 0, the engine issues next-phase
+weight reads in chunks and keeps at most that many bytes outstanding (trid-ring waits), interleaving one weight chunk
+per KV group. Why: unthrottled, the STREAM cores' NOC0 V reads finish last (~190 µs on top-row cores vs ~60 µs on
+ATTN-only cores), which binds the SDPA phase. Role-weighting the KV shares helped only ~5%.
 
 **MLP tail rules (v0.3, from the -mk-tail track, silicon d27u08; MKTAIL_RESULTS.md):**
 1. CB_H is published per root chunk (HT/4) in fixed root order, so consumers start down on chunk i (MK_DNPIPE).
