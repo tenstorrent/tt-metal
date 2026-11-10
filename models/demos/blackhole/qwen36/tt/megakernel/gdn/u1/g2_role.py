@@ -59,14 +59,29 @@ class GdnRole:
         self.opt, self.hold_users = opt, list(hold_users)
         assert len(self.cores) == self.Nv * 4, len(self.cores)
         T, Nv = self.T, self.Nv
-        mkz = lambda shp, dt: ttnn.from_torch(torch.zeros(*shp), dtype=dt, layout=ttnn.TILE_LAYOUT, device=dev,
-                                              memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        mkz = lambda shp, dt, mc=ttnn.DRAM_MEMORY_CONFIG: ttnn.from_torch(torch.zeros(*shp), dtype=dt,
+                                                                           layout=ttnn.TILE_LAYOUT, device=dev, memory_config=mc)
         self.qkv = mkz((1, 32, g.W), b16)
         ctrl0 = m._ctrl_lazy(g, B, [T] * B, 0, [])
-        mkc = lambda: ttnn.from_torch(ctrl0, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=dev)
+        # MKA_GDN_L1 (G2 lever 2): the role's per-layer I/O tensors in L1 (interleaved over every L1 bank) instead of
+        # DRAM -- `pre` (the prefix output the role reads), `out` (gdn_out, the wo input) and the ctrl page. A comma list of
+        # pre / out / ctrl (default: none = DRAM). The kernels read / write them through TensorAccessor either way.
+        l1 = set(x for x in os.environ.get("MKA_GDN_L1", "").split(",") if x)
+        assert l1 <= {"pre", "out", "ctrl"}, l1
+        mc = lambda k: ttnn.L1_MEMORY_CONFIG if k in l1 else ttnn.DRAM_MEMORY_CONFIG
+        mkc = lambda: ttnn.from_torch(ctrl0, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=dev,
+                                      memory_config=mc("ctrl"))
         self.LY = [dict(cA=m.LazyCase(dev, g, B, T, seed=seed + 7 * l), cE=m.LazyCase(dev, g, B, T, seed=seed + 7 * l),
-                        pre=mkz((1, 1, 32, Nv * self.S * 32), f32), outE=mkz((1, 32, Nv * m.Dv), b16), ctrl=mkc())
+                        pre=mkz((1, 1, 32, Nv * self.S * 32), f32, mc("pre")), outE=mkz((1, 32, Nv * m.Dv), b16, mc("out")),
+                        ctrl=mkc())
                    for l in range(NG)]
+        if l1:
+            lo = min(ly[k].buffer_address() for ly in self.LY for k, kk in (("pre", "pre"), ("outE", "out"), ("ctrl", "ctrl"))
+                     if kk in l1)
+            kb = sum((ly[k].buffer().size() if hasattr(ly[k], "buffer") and hasattr(ly[k].buffer(), "size") else 0)
+                     for ly in self.LY for k, kk in (("pre", "pre"), ("outE", "out"), ("ctrl", "ctrl")) if kk in l1) // 1024
+            print(f"[g2] MKA_GDN_L1={sorted(l1)}: lowest L1 address of the role's L1 tensors {lo} ({kb} KB total over all "
+                  f"banks); role CB end must stay below the floor", flush=True)
         # producer placement (separate programs, run before the engine pass): any cores off the GDN rows
         self._jobs()
         nA, nB, nG = len(self.jobs), 4, Nv
