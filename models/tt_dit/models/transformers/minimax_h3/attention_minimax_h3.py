@@ -23,6 +23,10 @@ from ....utils.tensor import bf16_tensor
 from .agmm_config import agmm_block_size
 from .vsa_prepass import MiniMaxH3VSAConfig, VSAPrepass, _timed
 
+# The sparse op's K piece, and the most pieces it takes per shard: VSA covers at most their product of rows per device.
+VSA_K_CHUNK = 256
+VSA_MAX_K_PIECES = 64
+
 
 def rope_channel_permutation(head_dim: int, rotary_dim: int) -> torch.Tensor:
     """Reorder a head's channels from MiniMax-H3's half-split RoPE layout to the interleaved one.
@@ -478,7 +482,7 @@ class MiniMaxH3Attention(Module):
 
     # ------------------------------------------------------------------ vsa
 
-    def set_vsa_prepass(self, prepass: VSAPrepass) -> None:
+    def set_vsa_prepass(self, prepass: VSAPrepass | None) -> None:
         assert self.vsa_config is not None, "set_vsa_prepass requires the attention to be built with vsa_config"
         self.vsa_prepass = prepass
 
@@ -488,7 +492,7 @@ class MiniMaxH3Attention(Module):
         return ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=ttnn.CoreCoord(*self.sdpa_worker_grid),
             q_chunk_size=VSA_TILE_TOKENS,
-            k_chunk_size=256,
+            k_chunk_size=VSA_K_CHUNK,
             exp_approx_mode=False,
         )
 

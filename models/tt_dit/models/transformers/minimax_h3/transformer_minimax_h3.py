@@ -331,6 +331,15 @@ class MiniMaxH3Transformer3DModel(Module):
         )
         self.proj_out = Linear(hidden_size, video_patch_dim, bias=True, mesh_device=mesh_device)
         self.audio_proj_out = Linear(hidden_size, audio_in_channels, bias=True, mesh_device=mesh_device)
+        # A plain tuple, not child modules, so the per-step heads stay out of the weight cache.
+        self._output_projections: tuple[Linear, Linear] | None = None
+
+    def set_output_projections(self, projections: tuple[Linear, Linear] | None) -> None:
+        """Run the next forwards with these `(proj_out, audio_proj_out)`; None restores the loaded ones.
+
+        Outside the traced `run_blocks`, so a swap between steps needs no recapture.
+        """
+        self._output_projections = projections
 
     def prepare_static_sources(
         self,
@@ -539,8 +548,9 @@ class MiniMaxH3Transformer3DModel(Module):
         if self.tp_factor > 1:
             hidden = self.ccl_manager.all_gather(hidden, dim=3, mesh_axis=self.tp_mesh_axis, use_hyperparams=False)
 
-        video_all = self.proj_out(hidden)
-        audio_all = self.audio_proj_out(hidden)
+        proj_out, audio_proj_out = self._output_projections or (self.proj_out, self.audio_proj_out)
+        video_all = proj_out(hidden)
+        audio_all = audio_proj_out(hidden)
         if self.sp_factor > 1:
             video_all = self.ccl_manager.all_gather(
                 video_all, dim=2, mesh_axis=self.sp_mesh_axis, use_hyperparams=False
@@ -586,8 +596,8 @@ class MiniMaxH3Transformer3DModel(Module):
             ttnn.deallocate(tilerow[1])
         return hidden
 
-    def set_vsa_prepass(self, prepass: VSAPrepass) -> None:
-        """Bind one geometry's VSA pre-pass to every block: its constants are shared across layers."""
+    def set_vsa_prepass(self, prepass: VSAPrepass | None) -> None:
+        """Bind one geometry's VSA pre-pass to every block (its constants are shared across layers); None is dense."""
         for block in self.transformer_blocks:
             block.attn.set_vsa_prepass(prepass)
 
