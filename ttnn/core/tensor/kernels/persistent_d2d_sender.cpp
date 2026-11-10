@@ -56,7 +56,7 @@
 #include "api/dataflow/circular_buffer.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
-#include "ttnn/core/tensor/kernels/d2d_relay_common.hpp"
+#include "d2d_relay_common.hpp"
 
 // CT-arg layout (must stay in sync with build_sender_program in
 // ttnn/core/tensor/d2d_stream_service.cpp). The SAME full layout is passed to both

@@ -14,7 +14,7 @@
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
 #include "api/core_local_mem.h"
-#include "ttnn/core/tensor/kernels/d2d_relay_common.hpp"
+#include "d2d_relay_common.hpp"
 
 constexpr uint32_t terminate_value = get_named_compile_time_arg_val("terminate_value");
 constexpr uint32_t termination_addr = get_named_compile_time_arg_val("termination_addr");
