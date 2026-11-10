@@ -197,9 +197,14 @@ if os.environ.get('MKA_EXT', '0') == '1':
     _w = float(os.environ.get('MKA_EXTW', '1')); _d = NC + (NCF - NC) * _w
     EXTRA_T, EXTRA_TX = int(EXTRA_T * NC / _d), int(EXTRA_T * NC * _w / _d)
 S_WO = int(float(os.environ.get("MKA_SWO_US", "10")) * MHZ)
-grp = [i * NU // NCF for i in range(NCF)]; members = [[i for i in range(NCF) if grp[i] == u] for u in range(NU)]
+# MKA_ARCORES="fi,fi,...": AR-only cores (spec: the AR's 4 fabric link-sender cores) - no MKA2 kernel, no KV, no qkv
+ARC = set(int(v) for v in os.environ.get('MKA_ARCORES', '').split(',') if v)
+ACT = [i for i in range(NCF) if i not in ARC]
+grp = [0] * NCF
+for j_, i_ in enumerate(ACT): grp[i_] = j_ * NU // len(ACT)
+members = [[i for i in ACT if grp[i] == u] for u in range(NU)]
 if os.environ.get('MKA_MREV') == '1': members = [m_[::-1] for m_ in members]   # rank 0 / first KV blocks at the far end of each user's rows
-rank = {i: members[grp[i]].index(i) for i in range(NCF)}
+rank = {i: members[grp[i]].index(i) for i in ACT}
 stream_idx = {}   # full-grid core -> STREAM index (mk1 numbering, x + 10*y on the 10x8 rect)
 for i, c in enumerate(fcores):
     if c.x < GX and c.y < GY: stream_idx[i] = c.x + GX * c.y
@@ -270,7 +275,7 @@ for u in range(NU):
     for k_, i in enumerate(m_):
         RNG[i] = (ed[k_], max(ed[k_ + 1], ed[k_] + 1))
     RNG[m_[-1]] = (RNG[m_[-1]][0], NBK)
-print(f"[mka2] KV share weight non-STREAM x{WNS}: blocks STREAM {RNG[0][1]-RNG[0][0]} / ATTN-only {RNG[max(i for i in range(NCF) if i not in stream_idx)][1]-RNG[max(i for i in range(NCF) if i not in stream_idx)][0]}", flush=True)
+print(f"[mka2] KV share weight non-STREAM x{WNS}: blocks STREAM {RNG[0][1]-RNG[0][0]} / ATTN-only {RNG[max(i for i in ACT if i not in stream_idx)][1]-RNG[max(i for i in ACT if i not in stream_idx)][0]}", flush=True)
 
 # ================= MKA_RQKV: real qkv PROJ on the full grid (spec v0.4 deferred norm, v0.5 STREAM_EXT) =================
 RQKV = ('MKA_RQKV', '1') in MKDEF
@@ -282,7 +287,7 @@ if RQKV:
     f2u = lambda v: struct.unpack('<I', struct.pack('<f', v))[0]
     BF8TB = ttnn.Tile([TILE, TILE]).get_tile_size(ttnn.bfloat8_b)
     MKDEF = MKDEF + [("MKA_MWTB", str(BF8TB)), ("MKA_NOWN", str(NOWN)), ("MKA_INVH_BITS", f"{f2u(1.0 / H)}u"), ("MKA_EPS_BITS", f"{f2u(EPS)}u")]
-    ext_list = [fi for fi in range(NCF) if fi not in stream_idx]
+    ext_list = [fi for fi in range(NCF) if fi not in stream_idx and fi not in ARC]
     s_by_i = {i_: fi for fi, i_ in stream_idx.items()}
     n_ext_tiles = 2 * len(ext_list); n_half = QN - n_ext_tiles
     assert n_half >= 0 and 2 * n_half <= len(stream_idx), (n_ext_tiles, n_half)
@@ -346,10 +351,16 @@ def q_wargs(fi):
     ro, n0, nt, k0, nk, peer = QROLE.get(fi, (0, 0, 0, 0, 0, fi))
     pp_ = fphys[peer]
     return [ro, n0, nt, pp_.x, pp_.y, qkv_out.buffer_address()]
+TREEFLAG = ('MKA_TREEFLAG', '1') in MKDEF
+def tfk(fi):   # index of this core in its parent's child list (level-0 list or the root's level-1 list)
+    r_ = rank[fi]
+    return (r_ % FAN - 1) if r_ % FAN else (r_ // FAN - 1 if r_ else 0)
 def q_rargs(fi):
     if not RQKV: return []
     ro = QROLE.get(fi, (0,))[0]
     return [ro, wq_all.buffer_address(), (q_slot[fi] * banks + q_bank[fi]) if ro else 0, PQL]
+kgrid = crs([fcores[i] for i in ACT]) if ARC else fgrid
+if ARC: print(f'[mka2] AR-only cores {sorted(ARC)} (phys {[(fphys[i].x, fphys[i].y) for i in sorted(ARC)]}): {len(ACT)} MKA2 cores', flush=True)
 def build(out):
     cbs = [ttnn.cb_descriptor_from_sharded_tensor(0, xbuf), cbd(1, ttnn.bfloat4_b, (EVEN_T if GUPRE else 2 * GRP * KB * 2), rect), cbd(2, HDT, 1, rect),
            ttnn.cb_descriptor_from_sharded_tensor(3, hbuf), cbd(4, ttnn.bfloat4_b, 2 * HT * NDN, rect), cbd(5, ttnn.bfloat4_b, 2 * w2_tiles, rect),
@@ -362,10 +373,12 @@ def build(out):
     if RQKV:   # STREAM_EXT weight ring FIRST (lowest CB addresses on the ext cores), then the full-grid qkv CBs
         cbs = [cbd(19, ttnn.bfloat8_b, 2 * KT, ext_crs)] + cbs + [cbd(13, ttnn.float32, 1, fgrid), cbd(14, ttnn.float32, 2, fgrid),
                cbd(17, ttnn.bfloat16, 2, fgrid), cbd(18, ttnn.float32, 1, fgrid), ttnn.cb_descriptor_from_sharded_tensor(20, rsp)]
+    if TREEFLAG: cbs = cbs + [cbd(31, ttnn.bfloat16, 1, fgrid)]
     sems = [ttnn.SemaphoreDescriptor(id=i, core_ranges=rect, initial_value=0) for i in range(12)]
     rrt, wrt, crt = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
     z10 = [0] * 10
     for fi, c in enumerate(fcores):
+        if fi in ARC: continue
         u, r, n = grp[fi], rank[fi], len(members[grp[fi]])
         sb0, sb1 = RNG[fi]
         m = members[u]
@@ -400,7 +413,7 @@ def build(out):
         # stand-in bank spread: the reader reads 8-tile runs from page wo_page + 8k, which all sit in bank wo_page % 8.
         # With wo_page = i * 96 every core hammered bank 0 (and cores near it won). MKA_WOBANK=1 (default) puts core i on bank i % 8.
         wob = (fi % 8) if os.environ.get('MKA_WOBANK', '1') == '1' else 0
-        rrt[c.x][c.y] = [1 if isS else 0] + r_mk + GSA + sdpa_r + [wo_dummy.buffer_address(), ((fi * WO_T120) if EXT else (i_s * WO_T)) + wob, (WO_T120 if isS else WO_TX) if rd_w else 0, (EXTRA_T if isS else EXTRA_TX) if rd_w else 0, SWAP(fi)] + q_rargs(fi)
+        rrt[c.x][c.y] = [1 if isS else 0] + r_mk + GSA + sdpa_r + [wo_dummy.buffer_address(), ((fi * WO_T120) if EXT else (i_s * WO_T)) + wob, (WO_T120 if isS else WO_TX) if rd_w else 0, (EXTRA_T if isS else EXTRA_TX) if rd_w else 0, SWAP(fi)] + ([tfk(fi)] if TREEFLAG else []) + q_rargs(fi)
         wrt[c.x][c.y] = [1 if isS else 0] + w_mk + GSA + [1 if fi == QROOT else 0, qten.buffer_address()] + RECTS_F + [selff] + RECTS + \
             [kv.buffer_address() for kv in kvs] + [u, sb0, sb1, NBK, wo_dummy.buffer_address(), (i * WO_T) if isS else 0, WO_T if isS else 0, BUDGET, QDONE_N, QRP.x, QRP.y, EXTRA_T if isS else 0, SWAP(fi)] + q_wargs(fi)
         nrecv = len(ch0) + len(ch1)
@@ -408,11 +421,11 @@ def build(out):
     acc_kv = ttnn.TensorAccessorArgs(kvs[0]).get_compile_time_args(); acc_o = ttnn.TensorAccessorArgs(outs).get_compile_time_args()
     acc_q = ttnn.TensorAccessorArgs(qten).get_compile_time_args(); acc_wo = ttnn.TensorAccessorArgs(wo_dummy).get_compile_time_args()
     acc_wq = ttnn.TensorAccessorArgs(wq_all).get_compile_time_args() if RQKV else []; acc_qo = ttnn.TensorAccessorArgs(qkv_out).get_compile_time_args() if RQKV else []
-    ks = [ttnn.KernelDescriptor(kernel_source=f"{KD}/mka2_reader.cpp", core_ranges=fgrid, defines=MKDEF, compile_time_args=[KT, KB, WTB, GRP, HCH, XTB, NL, NC, KVTB, OTB, QTB, NBB, WOTB] + acc_gu + acc_kv + acc_o + acc_wo + (acc_wq if RQKV else []),
+    ks = [ttnn.KernelDescriptor(kernel_source=f"{KD}/mka2_reader.cpp", core_ranges=kgrid, defines=MKDEF, compile_time_args=[KT, KB, WTB, GRP, HCH, XTB, NL, NC, KVTB, OTB, QTB, NBB, WOTB] + acc_gu + acc_kv + acc_o + acc_wo + (acc_wq if RQKV else []),
                                 runtime_args=rrt, config=ttnn.DataMovementConfigDescriptor(processor=ttnn.DataMovementProcessor.RISCV_1, noc=ttnn.NOC.NOC_1)),
-          ttnn.KernelDescriptor(kernel_source=f"{KD}/mka2_writer.cpp", core_ranges=fgrid, defines=MKDEF, compile_time_args=[XTB, NGU, NDN, KT, HT, WTB, KB, GRP, HCH, NL, NC, QH if RQKV else KT * MIXN, S_WO, S_AR, KVTB, QTB, NBB, WOTB] + acc_dn + acc_gu + (acc_wq if RQKV else acc_wm) + acc_q + acc_kv + acc_wo + (acc_qo if RQKV else []),
+          ttnn.KernelDescriptor(kernel_source=f"{KD}/mka2_writer.cpp", core_ranges=kgrid, defines=MKDEF, compile_time_args=[XTB, NGU, NDN, KT, HT, WTB, KB, GRP, HCH, NL, NC, QH if RQKV else KT * MIXN, S_WO, S_AR, KVTB, QTB, NBB, WOTB] + acc_dn + acc_gu + (acc_wq if RQKV else acc_wm) + acc_q + acc_kv + acc_wo + (acc_qo if RQKV else []),
                                 runtime_args=wrt, config=ttnn.DataMovementConfigDescriptor(processor=ttnn.DataMovementProcessor.RISCV_0, noc=ttnn.NOC.NOC_0)),
-          ttnn.KernelDescriptor(kernel_source=f"{KD}/mka2_compute.cpp", core_ranges=fgrid, defines=MKDEF, compile_time_args=[KT, KB, HT, NDN, GRP, NL, MIXN, NBB], runtime_args=crt,
+          ttnn.KernelDescriptor(kernel_source=f"{KD}/mka2_compute.cpp", core_ranges=kgrid, defines=MKDEF, compile_time_args=[KT, KB, HT, NDN, GRP, NL, MIXN, NBB], runtime_args=crt,
                                 config=ttnn.ComputeConfigDescriptor(math_fidelity=ttnn.MathFidelity.HiFi2, fp32_dest_acc_en=True, dst_full_sync_en=True, math_approx_mode=False))]
     return ttnn.ProgramDescriptor(kernels=ks, semaphores=sems, cbs=cbs)
 out_t = ttnn.allocate_tensor_on_device(ttnn.Shape([1, 1, M, H]), ttnn.bfloat16, ttnn.TILE_LAYOUT, dev, ws(rect, NDN * TILE))

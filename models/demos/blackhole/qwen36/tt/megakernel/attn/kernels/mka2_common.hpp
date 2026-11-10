@@ -12,6 +12,9 @@ constexpr uint32_t CB_ONE = 24, CB_P = 25, CB_R = 26, CB_D = 27, CB_OA = 28, CB_
 // MKA_RQKV (real qkv PROJ, spec v0.4 deferred norm + v0.5 STREAM_EXT): rstd tile, fp32 partial/acc, bf16 output,
 // partner partial receive slot, STREAM_EXT weight ring, AR owners' Σx² partials (CB 20 = CB_RSTD)
 constexpr uint32_t CB_RS = 13, CB_QA = 14, CB_QO = 17, CB_QR = 18, CB_PQ = 19, CB_RSP = 20;
+// MKA_TREEFLAG: per-child arrival flags (2 x FANOUT words) at a uniform L1 address, so a parent pulls each child as
+// soon as THAT child is done instead of after the slowest one
+constexpr uint32_t CB_TF = 31;   // ATTN scratch range 24-31 (spec)
 // qkv roles: 0 none, 1 K-half owner (STREAM), 2 K-half partner (STREAM), 3 STREAM_EXT (2 tiles, full K)
 constexpr uint32_t QR_NONE = 0, QR_OWNER = 1, QR_PARTNER = 2, QR_EXT = 3;
 // STREAM_EXT ring split (MKA_PQW): the writer (NOC0) streams pages [0, PQ_WS) of the next layer's slice, the reader

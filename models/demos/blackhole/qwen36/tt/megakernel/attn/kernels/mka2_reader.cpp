@@ -58,6 +58,11 @@ void kernel_main() {
     // kv_mode: 0 reader K (NOC1) + writer V (NOC0); 1 reader V + writer K; 2 reader K and V (all KV on NOC1);
     // 3 writer K and V (all KV on NOC0)
     const uint32_t kv_mode = get_arg_val<uint32_t>(a++);
+#if defined(MKA_TREEFLAG)
+    const uint32_t tf_k = get_arg_val<uint32_t>(a++);   // this core's index in its parent's child list
+    const uint32_t tfl = get_write_ptr(CB_TF);
+    for (uint32_t i = 0; i < 2 * FANOUT; ++i) l1w(tfl)[i] = 0;
+#endif
     const bool rd_k = kv_mode == 0 || kv_mode == 2, rd_v = kv_mode == 1 || kv_mode == 2;
     uint32_t kv_groups = 0;
 #if defined(MKA_RQKV)
@@ -245,10 +250,15 @@ void kernel_main() {
         }
         if (att) {   // SDPA: tree reduce (pull), cumulative global semaphores (over attention layers: A)
             DeviceZoneScopedN("R-RED");
-            auto pull = [&](uint32_t sem_addr, uint32_t n, const uint32_t* cx, const uint32_t* cy) {
+            auto pull = [&](uint32_t lvl, uint32_t sem_addr, uint32_t n, const uint32_t* cx, const uint32_t* cy) {
                 if (n == 0) return;
+#if !defined(MKA_TREEFLAG)
                 noc_semaphore_wait_min(l1w(sem_addr), n * (A + 1));
+#endif
                 for (uint32_t i = 0; i < n; ++i) {
+#if defined(MKA_TREEFLAG)
+                    noc_semaphore_wait_min(l1w(tfl + 4 * (lvl * FANOUT + i)), A + 1);   // child i alone
+#endif
                     cb_reserve_back(CB_R, NO);
                     noc_async_read(get_noc_addr(cx[i], cy[i], o_base), get_write_ptr(CB_R), NO * OTB);
                     noc_async_read_barrier();
@@ -256,11 +266,15 @@ void kernel_main() {
                     noc_semaphore_inc(get_noc_addr(cx[i], cy[i], gs[GS_DONE]), 1);
                 }
             };
-            pull(gs[GS_LVL0], nc0, c0x, c0y);
-            pull(gs[GS_LVL1], nc1, c1x, c1y);
+            pull(0, gs[GS_LVL0], nc0, c0x, c0y);
+            pull(1, gs[GS_LVL1], nc1, c1x, c1y);
             if (has_parent) {
                 cb_wait_front(CB_O, NO);
+#if defined(MKA_TREEFLAG)
+                noc_inline_dw_write(get_noc_addr(par_x, par_y, tfl + 4 * (par_lvl * FANOUT + tf_k)), A + 1);
+#else
                 noc_semaphore_inc(get_noc_addr(par_x, par_y, par_lvl ? gs[GS_LVL1] : gs[GS_LVL0]), 1);
+#endif
                 noc_semaphore_wait_min(l1w(gs[GS_DONE]), A + 1);
                 cb_pop_front(CB_O, NO);
             }
