@@ -17,7 +17,7 @@ import pytest
 import torch
 
 import ttnn
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tests.ttnn.utils_for_testing import assert_with_pcc, assert_with_ulp
 
 E = ttnn.experimental
 
@@ -26,6 +26,11 @@ UNARY_KERNELS = "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels"
 MATMUL_KERNELS = "ttnn/cpp/ttnn/operations/matmul/device/kernels"
 SEMAPHORE_KERNELS = "tests/tt_metal/tt_metal/test_kernels/dataflow"
 TILE_BYTES = 2 * 32 * 32  # one bfloat16 tile
+
+
+def assert_close(expected, actual):
+    """For the elementwise kernels: each output element must be within 2 bfloat16 ULPs of torch's."""
+    assert_with_ulp(expected_result=expected, actual_result=actual, ulp_threshold=2)
 
 
 @pytest.fixture(autouse=True)
@@ -178,7 +183,7 @@ def test_mul(device, shape):
     expected, a, b, out = inputs(device, shape)
     spec, run_args = mul_program(a, b, out)
     result = E.generic_op([a, b, out], spec, run_args)
-    assert_with_pcc(expected, ttnn.to_torch(result), 0.9999)
+    assert_close(expected, ttnn.to_torch(result))
 
 
 def test_add(device):
@@ -189,7 +194,7 @@ def test_add(device):
     kernels[1].compiler_options = E.KernelSpec.CompilerOptions(defines={"BINARY_ADD": "1"})
     spec.kernels = kernels
     result = E.generic_op([a, b, out], spec, run_args)
-    assert_with_pcc(ttnn.to_torch(a) + ttnn.to_torch(b), ttnn.to_torch(result), 0.9999)
+    assert_close(ttnn.to_torch(a) + ttnn.to_torch(b), ttnn.to_torch(result))
 
 
 def test_matmul(device):
@@ -380,7 +385,7 @@ def test_exp_from_the_design_example(device, expect_error):
     torch_input, input_tensor, output_tensor = exp_inputs(device, 8)
     spec, run_args = exp_program(input_tensor, output_tensor)
     result = E.generic_op([input_tensor, output_tensor], spec, run_args)
-    assert_with_pcc(torch.exp(torch_input), ttnn.to_torch(result), 0.999)
+    assert_close(torch.exp(torch_input), ttnn.to_torch(result))
 
     # A tensor bound to two parameters must be listed twice, so io_tensors holding only the output is rejected.
     in_place_run_args = E.ProgramRunArgs(
@@ -397,7 +402,7 @@ def test_exp_from_the_design_example(device, expect_error):
     spec.kernels = kernels
     in_place_run_args.tensor_args = {"tensor": input_tensor}
     result = E.generic_op([input_tensor], spec, in_place_run_args)
-    assert_with_pcc(torch.exp(torch_input), ttnn.to_torch(result), 0.999)
+    assert_close(torch.exp(torch_input), ttnn.to_torch(result))
 
 
 def test_two_compute_threads_on_quasar(device):
@@ -408,7 +413,7 @@ def test_two_compute_threads_on_quasar(device):
     spec, run_args = exp_program(input_tensor, output_tensor, compute_threads=2)
     for _ in range(2):
         result = E.generic_op([input_tensor, output_tensor], spec, run_args)
-        assert_with_pcc(torch.exp(torch_input), ttnn.to_torch(result), 0.999)
+        assert_close(torch.exp(torch_input), ttnn.to_torch(result))
 
 
 def test_sharded_typecast_on_borrowed_buffers(device):
@@ -521,7 +526,7 @@ def test_array_args_and_aliased_buffers(device):
     shape = (1, 1, 96, 64)
     expected, a, b, out = inputs(device, shape)
     spec, run_args = mul_program(a, b, out, array_args=True, aliased_buffer=True)
-    assert_with_pcc(expected, ttnn.to_torch(E.generic_op([a, b, out], spec, run_args)), 0.9999)
+    assert_close(expected, ttnn.to_torch(E.generic_op([a, b, out], spec, run_args)))
 
     # A cache hit with new tensors and one tile fewer for the same cores, as in
     # test_later_calls_reuse_the_program_with_new_tensors_and_values: the last tile keeps the output's starting value
@@ -533,7 +538,7 @@ def test_array_args_and_aliased_buffers(device):
     entries = device.num_program_cache_entries()
     result = tile_order(ttnn.to_torch(E.generic_op([a2, b2, out2], spec, run_args2)))
     assert device.num_program_cache_entries() == entries
-    assert_with_pcc(tile_order(expected)[: 5 * 1024], result[: 5 * 1024], 0.9999)
+    assert_close(tile_order(expected)[: 5 * 1024], result[: 5 * 1024])
     assert torch.equal(result[5 * 1024 :], tile_order(initial)[5 * 1024 :])
 
 
@@ -588,7 +593,7 @@ def test_later_calls_reuse_the_program_with_new_tensors_and_values(device):
     assert E.compute_program_spec_hash(spec2) == E.compute_program_spec_hash(spec)
     result = tile_order(ttnn.to_torch(E.generic_op([a2, b2, out2], spec2, run_args2)))
     assert device.num_program_cache_entries() == entries
-    assert_with_pcc(tile_order(expected)[: 3 * 1024], result[: 3 * 1024], 0.9999)
+    assert_close(tile_order(expected)[: 3 * 1024], result[: 3 * 1024])
     assert torch.equal(result[3 * 1024 :], tile_order(initial)[3 * 1024 :])
 
 
@@ -623,7 +628,7 @@ def test_later_calls_write_new_common_runtime_args(device):
     counts = set(kernel_run_args(run_args, "compute").runtime_arg_values["num_tiles"].values())
     assert len(counts) == 1
     num_tiles_as_a_common_runtime_arg(spec, run_args, counts.pop())
-    assert_with_pcc(expected, ttnn.to_torch(E.generic_op([a, b, out], spec, run_args)), 0.9999)
+    assert_close(expected, ttnn.to_torch(E.generic_op([a, b, out], spec, run_args)))
     entries = device.num_program_cache_entries()
 
     # A cache hit with no tiles for any core: the output keeps its starting value only if the new value reached the
@@ -656,7 +661,7 @@ def test_other_array_lengths_compile_a_program_of_their_own(device):
         replace_kernel_run_args(run_args, kernel, args)
     result = E.generic_op([a, b, out], spec, run_args)
     assert device.num_program_cache_entries() == entries + 2
-    assert_with_pcc(expected, ttnn.to_torch(result), 0.9999)
+    assert_close(expected, ttnn.to_torch(result))
 
 
 def test_dfb_run_overrides_stay_in_effect_on_later_calls(device, expect_error):
@@ -664,14 +669,14 @@ def test_dfb_run_overrides_stay_in_effect_on_later_calls(device, expect_error):
     spec, run_args = mul_program(a, b, out, aliased_buffer=True)
     # Buffers that share memory keep one total size, so Metal rejects a call that resizes only one of them.
     run_args.dfb_run_overrides = [E.DFBRunOverrides(dfb=name, num_entries=4) for name in ("in_a", "in_a_view")]
-    assert_with_pcc(expected, ttnn.to_torch(E.generic_op([a, b, out], spec, run_args)), 0.9999)
+    assert_close(expected, ttnn.to_torch(E.generic_op([a, b, out], spec, run_args)))
     run_args.dfb_run_overrides = []
-    assert_with_pcc(expected, ttnn.to_torch(E.generic_op([a, b, out], spec, run_args)), 0.9999)
+    assert_close(expected, ttnn.to_torch(E.generic_op([a, b, out], spec, run_args)))
 
     # The sizes stayed: in_a alone can take the size it already has, but not its original size, which in_a_view no
     # longer has.
     run_args.dfb_run_overrides = [E.DFBRunOverrides(dfb="in_a", num_entries=4)]
-    assert_with_pcc(expected, ttnn.to_torch(E.generic_op([a, b, out], spec, run_args)), 0.9999)
+    assert_close(expected, ttnn.to_torch(E.generic_op([a, b, out], spec, run_args)))
     run_args.dfb_run_overrides = [E.DFBRunOverrides(dfb="in_a", num_entries=2)]
     with expect_error(RuntimeError, "was not overridden in alias group"):
         E.generic_op([a, b, out], spec, run_args)
@@ -696,7 +701,7 @@ def test_dfb_run_overrides_are_checked_on_every_call(device, overrides, message,
     with expect_error(RuntimeError, message):
         E.generic_op([a, b, out], spec, run_args)
     run_args.dfb_run_overrides = []
-    assert_with_pcc(expected, ttnn.to_torch(E.generic_op([a, b, out], spec, run_args)), 0.9999)
+    assert_close(expected, ttnn.to_torch(E.generic_op([a, b, out], spec, run_args)))
 
 
 def test_prepare_fills_the_program_cache(device):
@@ -707,7 +712,7 @@ def test_prepare_fills_the_program_cache(device):
     assert device.num_program_cache_entries() == entries + 1
     result = E.generic_op([a, b, out], spec, run_args)
     assert device.num_program_cache_entries() == entries + 1
-    assert_with_pcc(expected, ttnn.to_torch(result), 0.9999)
+    assert_close(expected, ttnn.to_torch(result))
 
 
 def test_a_compilation_failure_leaves_the_program_cache_unchanged(device, expect_error):
@@ -727,7 +732,7 @@ def test_a_compilation_failure_leaves_the_program_cache_unchanged(device, expect
     # The same spec with a kernel that compiles still runs.
     kernels[1].source = str(MUL_KERNELS / "compute.cpp")
     spec.kernels = kernels
-    assert_with_pcc(expected, ttnn.to_torch(E.generic_op([a, b, out], spec, run_args)), 0.9999)
+    assert_close(expected, ttnn.to_torch(E.generic_op([a, b, out], spec, run_args)))
     assert device.num_program_cache_entries() == entries + 1
 
 
@@ -744,7 +749,7 @@ def test_dynamic_shape_relaxation_reuses_the_program(device):
     spec2, run_args2 = mul_program(a2, b2, out2, relaxations=relaxations, cores_for_tiles=4)
     result = E.generic_op([a2, b2, out2], spec2, run_args2)
     assert device.num_program_cache_entries() == entries
-    assert_with_pcc(expected, ttnn.to_torch(result), 0.9999)
+    assert_close(expected, ttnn.to_torch(result))
 
 
 def test_a_tensor_bound_to_two_parameters_is_listed_twice(device, expect_error):
@@ -755,7 +760,7 @@ def test_a_tensor_bound_to_two_parameters_is_listed_twice(device, expect_error):
     spec, run_args = mul_program(a, a, out)
     for _ in range(2):  # the first call and a cache hit
         result = E.generic_op([a, a, out], spec, run_args)
-        assert_with_pcc(torch_a * torch_a, ttnn.to_torch(result), 0.9999)
+        assert_close(torch_a * torch_a, ttnn.to_torch(result))
     with expect_error(RuntimeError, "needs its own io_tensors entry"):
         E.generic_op([a, out], spec, run_args)
 
@@ -950,7 +955,7 @@ def test_a_core_left_out_of_a_later_call(device, validate, array_args, expect_er
             E.generic_op([a, b, out], spec, run_args)
     else:
         # The left-out core keeps the values from the first call.
-        assert_with_pcc(expected, ttnn.to_torch(E.generic_op([a, b, out], spec, run_args)), 0.9999)
+        assert_close(expected, ttnn.to_torch(E.generic_op([a, b, out], spec, run_args)))
 
 
 # ---------------------------------------------------------------------------------------------------------- mesh form
@@ -993,7 +998,7 @@ def test_mesh_form(device):
     mesh_spec = E.MeshProgramSpec(programs=[(mesh_range(device), spec)])
     mesh_run_args = E.MeshProgramRunArgs(programs=[(mesh_range(device), run_args)])
     assert mesh_run_args.programs[0][1].tensor_args["a"] is a
-    assert_with_pcc(expected, ttnn.to_torch(E.generic_op([a, b, out], mesh_spec, mesh_run_args)), 0.9999)
+    assert_close(expected, ttnn.to_torch(E.generic_op([a, b, out], mesh_spec, mesh_run_args)))
 
     # A cache hit with new tensors and one tile fewer, as in
     # test_later_calls_reuse_the_program_with_new_tensors_and_values.
@@ -1005,7 +1010,7 @@ def test_mesh_form(device):
     entries = device.num_program_cache_entries()
     result = tile_order(ttnn.to_torch(E.generic_op([a2, b2, out2], mesh_spec, mesh_run_args)))
     assert device.num_program_cache_entries() == entries
-    assert_with_pcc(tile_order(expected)[: 3 * 1024], result[: 3 * 1024], 0.9999)
+    assert_close(tile_order(expected)[: 3 * 1024], result[: 3 * 1024])
     assert torch.equal(result[3 * 1024 :], tile_order(initial)[3 * 1024 :])
 
     E.prepare_generic_op([a2, b2, out2], mesh_spec, mesh_run_args)
@@ -1024,7 +1029,7 @@ def test_the_two_forms_share_a_cache_entry(device):
         E.MeshProgramRunArgs(programs=[(mesh_range(device), run_args)]),
     )
     assert device.num_program_cache_entries() == entries + 1
-    assert_with_pcc(expected, ttnn.to_torch(result), 0.9999)
+    assert_close(expected, ttnn.to_torch(result))
 
 
 def test_a_mesh_run_args_subclass_setattr_cannot_drop_the_tensors(device):

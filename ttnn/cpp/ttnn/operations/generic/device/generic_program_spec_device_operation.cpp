@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <cstddef>
 #include <functional>
+#include <iterator>
 #include <memory>
 #include <string>
 #include <string_view>
@@ -45,11 +46,7 @@ bool nodes_contain(const m2::Nodes& nodes, const m2::NodeCoord& node) {
 // The nodes a kernel runs on: those of every work unit that lists it.
 std::unordered_set<m2::NodeCoord> nodes_of_kernel(const m2::ProgramSpec& spec, const m2::KernelSpecName& kernel) {
     std::unordered_set<m2::NodeCoord> nodes;
-    const auto add_range = [&nodes](const m2::NodeRange& range) {
-        for (const auto& node : range) {
-            nodes.insert(node);
-        }
-    };
+    const auto add_range = [&nodes](const m2::NodeRange& range) { nodes.insert(range.begin(), range.end()); };
     for (const auto& work_unit : spec.work_units) {
         if (std::ranges::find(work_unit.kernels, kernel) == work_unit.kernels.end()) {
             continue;
@@ -93,9 +90,7 @@ template <typename Value>
 std::vector<std::string> names_of(const m2::Table<std::string, Value>& values) {
     std::vector<std::string> names;
     names.reserve(values.size());
-    for (const auto& [name, value] : values) {
-        names.push_back(name);
-    }
+    std::ranges::transform(values, std::back_inserter(names), [](const auto& entry) { return entry.first; });
     return names;
 }
 
@@ -300,14 +295,14 @@ void check_prefetcher_pipe_args(const m2::ProgramSpec& spec, const m2::ProgramRu
 // capacity limit, Quasar's ring limits, and whether a borrowed DFB fits its tensor.
 void check_dfb_run_overrides(const m2::ProgramSpec& spec, const m2::ProgramRunArgs& run_args) {
     const auto& overrides = run_args.dfb_run_overrides;
-    for (auto entry = overrides.begin(); entry != overrides.end(); ++entry) {
+    for (auto entry = overrides.cbegin(); entry != overrides.cend(); ++entry) {
         const auto dfb = std::ranges::find(spec.dataflow_buffers, entry->dfb, &m2::DataflowBufferSpec::unique_id);
         TT_FATAL(
             dfb != spec.dataflow_buffers.end(),
             "generic_op: run_args.dfb_run_overrides names DFB '{}', which the ProgramSpec does not declare",
             entry->dfb);
         TT_FATAL(
-            std::ranges::find(overrides.begin(), entry, entry->dfb, &m2::DFBRunOverrides::dfb) == entry,
+            std::ranges::find(overrides.cbegin(), entry, entry->dfb, &m2::DFBRunOverrides::dfb) == entry,
             "generic_op: run_args.dfb_run_overrides lists DFB '{}' more than once",
             entry->dfb);
         TT_FATAL(
@@ -380,9 +375,7 @@ void check_tensors_on_program_devices(const SpecAttributes& attributes, const te
     // with the other tensors only by count, so every tensor is checked against every one of these devices here.
     std::vector<ttnn::MeshCoordinate> coords;
     for (const auto& program : attributes.programs) {
-        for (const auto& coord : program.range) {
-            coords.push_back(coord);
-        }
+        std::ranges::copy(program.range, std::back_inserter(coords));
     }
     for (std::size_t i = 0; i < tensor_args.io_tensors.size(); ++i) {
         const auto& coords_of_tensor = tensor_args.io_tensors[i].device_storage().get_coords();
@@ -419,9 +412,8 @@ ttsl::hash::hash_t hash_compile_time_array_values(const m2::ProgramSpec& spec) {
     for (const auto& kernel : spec.kernels) {
         std::vector<const std::pair<const std::string, m2::ArrayArgValue>*> arrays;
         arrays.reserve(kernel.compile_time_array_args.size());
-        for (const auto& array : kernel.compile_time_array_args) {
-            arrays.push_back(&array);
-        }
+        std::ranges::transform(
+            kernel.compile_time_array_args, std::back_inserter(arrays), [](const auto& array) { return &array; });
         std::ranges::sort(arrays, {}, [](const auto* array) { return std::string_view(array->first); });
         hash = ttsl::hash::hash_objects(hash, arrays.size());
         for (const auto* array : arrays) {
@@ -488,7 +480,7 @@ void GenericProgramSpecDeviceOperation::validate_on_program_cache_miss(
     check_tensors_on_program_devices(operation_attributes, tensor_args);
     // SetProgramRunArgs checks the nodes too, but only after the kernels compile.
     for (const auto& program : operation_attributes.programs) {
-        check_program(*program.spec, *program.run_args, tensor_args.io_tensors, /*check_nodes=*/true);
+        check_program(program.spec, program.run_args, tensor_args.io_tensors, /*check_nodes=*/true);
     }
 }
 
@@ -497,7 +489,7 @@ void GenericProgramSpecDeviceOperation::validate_on_program_cache_hit(
     check_tensors_on_program_devices(operation_attributes, tensor_args);
     const bool check_nodes = ttnn::CONFIG.get<"validate_program_args">();
     for (const auto& program : operation_attributes.programs) {
-        check_program(*program.spec, *program.run_args, tensor_args.io_tensors, check_nodes);
+        check_program(program.spec, program.run_args, tensor_args.io_tensors, check_nodes);
     }
 }
 
@@ -510,7 +502,7 @@ ttsl::hash::hash_t GenericProgramSpecDeviceOperation::compute_program_hash(
     // never reused.
     ttsl::hash::hash_t hash = 0;
     for (const auto& program : operation_attributes.programs) {
-        hash = ttsl::hash::hash_objects(hash, program.range, compute_program_spec_hash(*program.spec));
+        hash = ttsl::hash::hash_objects(hash, program.range, compute_program_spec_hash(program.spec));
     }
     return hash;
 }
@@ -523,7 +515,8 @@ GenericProgramSpecDeviceOperation::ProgramFactory::create_mesh_workload_artifact
     const ttnn::MeshCoordinateRangeSet& /*tensor_coords*/) {
     ttnn::device_operation::MeshWorkloadArtifacts artifacts;
     for (const auto& program : operation_attributes.programs) {
-        artifacts.programs.push_back({.range = program.range, .spec = *program.spec, .run_params = *program.run_args});
+        artifacts.programs.push_back(
+            {.range = program.range, .spec = program.spec.get(), .run_params = program.run_args.get()});
     }
     return artifacts;
 }
@@ -536,7 +529,7 @@ GenericProgramSpecDeviceOperation::ProgramFactory::override_runtime_arguments(
     const ttnn::MeshCoordinateRange& range) {
     for (const auto& program : operation_attributes.programs) {
         if (program.range == range) {
-            return *program.run_args;
+            return program.run_args.get();
         }
     }
     TT_THROW("generic_op: no run args for mesh range {}", range);
@@ -593,7 +586,7 @@ GenericProgramSpecOperation::operation_attributes_t program_spec_attributes(
     GenericProgramSpecOperation::operation_attributes_t attributes;
     const auto ranges = tensor_ranges(tensor_args);
     for (const auto& range : ranges.ranges()) {
-        attributes.programs.push_back({.range = range, .spec = &spec, .run_args = &run_args});
+        attributes.programs.emplace_back(range, spec, run_args);
     }
     return attributes;
 }
@@ -605,8 +598,8 @@ GenericProgramSpecOperation::operation_attributes_t with_prefetcher_pipes(
     GenericProgramSpecOperation::operation_attributes_t attributes) {
     attributes.prefetcher_pipes.clear();
     for (const auto& program : attributes.programs) {
-        const auto& pipes = program.run_args->advanced_options.prefetcher_pipe_args;
-        for (const auto& parameter : program.spec->advanced_options.prefetcher_pipe_parameters) {
+        const auto& pipes = program.run_args.get().advanced_options.prefetcher_pipe_args;
+        for (const auto& parameter : program.spec.get().advanced_options.prefetcher_pipe_parameters) {
             // A missing pipe fails the call's checks, which name it.
             if (const auto pipe = pipes.find(parameter.unique_id); pipe != pipes.end()) {
                 // An empty owner: the entry points at the caller's pipe without owning it.
