@@ -60,39 +60,6 @@ static bool eth_core_connects_within_cluster(IDevice* device, const CoreCoord& l
 }
 
 [[maybe_unused]]
-static std::vector<struct link> get_links(std::span<std::shared_ptr<distributed::MeshDevice>> devices) {
-    std::vector<struct link> links;
-    for (const auto& sender_mesh_device : devices) {
-        auto* const sender_device = sender_mesh_device->impl().get_devices()[0];
-        for (const auto& receiver_mesh_device : devices) {
-            auto* const receiver_device = receiver_mesh_device->impl().get_devices()[0];
-            for (const auto& sender_core : sender_device->get_active_ethernet_cores(true)) {
-                if (!eth_core_connects_within_cluster(sender_device, sender_core)) {
-                    continue;
-                }
-                auto [device_id, receiver_core] = sender_device->get_connected_ethernet_core(sender_core);
-                if (receiver_device->id() != device_id) {
-                    continue;
-                }
-
-                links.push_back((struct link){{
-                                                  .mesh_device = sender_mesh_device,
-                                                  .chip = sender_device,
-                                                  .core = sender_core,
-                                              },
-                                              {
-                                                  .mesh_device = receiver_mesh_device,
-                                                  .chip = receiver_device,
-                                                  .core = receiver_core,
-                                              }});
-            }
-        }
-    }
-
-    return links;
-}
-
-[[maybe_unused]]
 static inline void prepare_sender(
     tt::tt_metal::IDevice* const send_device,
     const CoreCoord& send_core,
@@ -965,8 +932,70 @@ static std::map<std::string, struct chip_core> get_coreuid_to_core(
     return ret;
 }
 
+static std::vector<struct link> get_links_to_test(std::span<std::shared_ptr<distributed::MeshDevice>> devices_) {
+    /* =================== */
+    std::vector<struct link> ret;
+
+    std::map<std::string, struct chip_core> coreuid_to_core = get_coreuid_to_core(devices_);
+
+    char* endpointp = getenv("ETH_TEST_ENDPOINTS");
+    auto endpoints = std::string(endpointp ? endpointp : "");
+    std::vector<std::string> test_endpoints = split_string(endpoints, " ");
+
+    log_info(tt::LogTest, "endpoints:");
+    for (auto& e : test_endpoints) {
+        std::vector<std::string> pair = split_string(e, ",");
+
+        if (pair.size() != 2) {
+            throw std::runtime_error("Invalid format for the test link specification");
+        }
+
+        ret.emplace_back(coreuid_to_core.at(pair[0]), coreuid_to_core.at(pair[1]));
+    }
+
+    return ret;
+}
+
 [[maybe_unused]]
-static std::vector<struct chip_core> get_cores_to_test(std::span<std::shared_ptr<distributed::MeshDevice>> devices_) {
+static std::vector<struct link> get_links(std::span<std::shared_ptr<distributed::MeshDevice>> devices) {
+    std::vector<struct link> links = get_links_to_test(devices);
+    if (links.size()) {
+        return links;
+    }
+
+    for (const auto& sender_mesh_device : devices) {
+        auto* const sender_device = sender_mesh_device->impl().get_devices()[0];
+        for (const auto& receiver_mesh_device : devices) {
+            auto* const receiver_device = receiver_mesh_device->impl().get_devices()[0];
+            for (const auto& sender_core : sender_device->get_active_ethernet_cores(true)) {
+                if (!eth_core_connects_within_cluster(sender_device, sender_core)) {
+                    continue;
+                }
+                auto [device_id, receiver_core] = sender_device->get_connected_ethernet_core(sender_core);
+                if (receiver_device->id() != device_id) {
+                    continue;
+                }
+
+                links.push_back((struct link){{
+                                                  .mesh_device = sender_mesh_device,
+                                                  .chip = sender_device,
+                                                  .core = sender_core,
+                                              },
+                                              {
+                                                  .mesh_device = receiver_mesh_device,
+                                                  .chip = receiver_device,
+                                                  .core = receiver_core,
+                                              }});
+            }
+        }
+    }
+
+    return links;
+}
+
+[[maybe_unused]]
+static std::vector<struct chip_core> get_dist_cores_to_test(
+    std::span<std::shared_ptr<distributed::MeshDevice>> devices_) {
     /* =================== */
     std::vector<struct chip_core> ret;
 

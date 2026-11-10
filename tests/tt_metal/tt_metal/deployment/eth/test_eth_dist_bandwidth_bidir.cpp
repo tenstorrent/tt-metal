@@ -106,7 +106,7 @@ TEST_F(MeshDispatchFixture, TensixDeploymentEthernetDist02BandwidthBidir) {
 
     delay_until_env();
 
-    for (auto& core : get_cores_to_test(devices_)) {
+    for (auto& core : get_dist_cores_to_test(devices_)) {
         log_info(tt::LogTest, "running {}", core);
         const auto processor = static_cast<DataMovementProcessor>(0);
 
