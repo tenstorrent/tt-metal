@@ -244,9 +244,17 @@ def copy_side_files(src: str, out: str) -> None:
         shutil.copytree(os.path.join(src, name), os.path.join(out, name), dirs_exist_ok=True)
 
 
-if __name__ == "__main__":
-    src, out = sys.argv[1], sys.argv[2]
-    what = sys.argv[3] if len(sys.argv) > 3 else "all"
+def is_release_snapshot(path: str) -> bool:
+    """A MiniMax-H3-Image release snapshot as published (fused PDD heads beside an unconverted transformer/)."""
+    return os.path.isfile(os.path.join(path, "pdd_fused_heads.safetensors")) and not is_converted(path)
+
+
+def is_converted(path: str) -> bool:
+    """A snapshot this script wrote (the per-step heads live under transformer/ only after conversion)."""
+    return os.path.isfile(os.path.join(path, "transformer", "pdd_heads.safetensors"))
+
+
+def convert(src: str, out: str, what: str = "all") -> None:
     os.makedirs(out, exist_ok=True)
     if what in ("vae", "all"):
         convert_vae(src, out)
@@ -256,3 +264,7 @@ if __name__ == "__main__":
     if what.startswith("transformer-layers="):  # e.g. transformer-layers=2
         convert_transformer(src, out, max_layers=int(what.split("=", 1)[1]))
     print("ok", out)
+
+
+if __name__ == "__main__":
+    convert(sys.argv[1], sys.argv[2], sys.argv[3] if len(sys.argv) > 3 else "all")
