@@ -112,7 +112,21 @@ What moved the numbers:
   detector 5.69 -> 4.91 ms, recognizer batch 8 5.04 -> 4.82 ms. The model still accepts plain
   NHWC 3-channel input.
 
-Inside the ~16 ms per request budget for det + rec of one line; YOLO11-small is not counted yet.
+With YOLO11-small (3.05 ms per frame, measured standalone) a one-line request is ~15 ms,
+just inside the ~16 ms budget; the two models have not run together on one device yet.
+
+Smaller detector inputs (measurement only; the default stays 640x640), batch 1, traced:
+
+| Detector input | Full call | Device replay |
+|---|---|---|
+| 640x640 | 7.0 ms | 5.2 ms |
+| 480x480 | 5.6 ms | 4.4 ms |
+| 320x320 | 3.5 ms | 2.8 ms |
+| 256x256 | 3.0 ms | 2.3 ms |
+
+A tight crop around the number reads at every size down to 256x256. Wide container photos
+lose their smaller text at 320 and below, so the size depends on how tight the YOLO crop is
+and is chosen on customer images.
 
 Traced mode captures one trace per shape (detector 640x640, recognizer batch 1/2/4/8)
 when `TtnnBackend` is created. All shapes run once untraced before any capture, so
@@ -139,7 +153,7 @@ Full list with estimates: [optimization_strategies.md](optimization_strategies.m
 - [ ] tt-opt detector run: harness, gate and baseline done (6.7 ms kernel); experiments blocked while outbound internet is closed (security incident)
 - [ ] Review tt-opt recognizer keeps (branch `tt-opt/pp_ocrv6_rec/decode-20261107-181455`, 7.46 -> 7.13 ms kernel at batch 8). Batch-8 shape guards only; port the general ones (SiLU fused into fc1, HiFi2) by hand
 - [ ] Keep conv outputs sharded in L1 between consecutive convs (DRAM -> L1 reshards are still ~1.2 ms in the detector)
-- [ ] Smaller detector input on YOLO crops (320x320 or size buckets)
+- [ ] Smaller detector input on YOLO crops: measured (320x320 saves ~3.5 ms per crop); pick the size on customer crops
 - [ ] Normalization folded into the first detector conv
 - [ ] Recognizer width bucket 160 for short lines
 - [ ] L1-sharded activations for the detector convs (manual; tt-opt has no conv2d sweeps)
@@ -147,8 +161,10 @@ Full list with estimates: [optimization_strategies.md](optimization_strategies.m
 - [ ] Pipelining across requests (overlap det of frame N+1 with rec of frame N) for the throughput target
 
 ### 2. YOLO11-small
-- [ ] Confirm scope with Dalar / Michael
-- [ ] Bring up on device; report ms per frame at 640x640
+- [ ] Confirm with the customer how the 4K frame becomes the 640x640 input (full-frame resize, fixed lane region, larger input or tiles)
+- [x] Bring up on device (`models/demos/yolov11s`, from `sdawle/yolov8_bh`): PCC 0.99991, 3.05 ms per frame (328 fps) at 640x640
+- [ ] One device for both models: YOLO -> crop from the 4K frame -> det -> rec, all traced; ms per frame and per crop
+- [ ] Fine-tuned customer weights (their classes) once available
 
 ### 3. Real-world accuracy
 - [ ] Customer sample gate images (request via Dalar / Michael)
@@ -179,3 +195,5 @@ Full list with estimates: [optimization_strategies.md](optimization_strategies.m
 - [x] Tracy op breakdown of both models (data movement dominates: concats, reshards, untilizes)
 - [x] Stem concat split into two convs; `where`-based decode (pipeline ~13 ms, kernel det 5.94 / rec b8 5.05 ms)
 - [x] Neck concat split; space-to-depth input fold (pipeline ~12 ms, kernel det 4.91 / rec b8 4.82 ms)
+- [x] Detector input size sweep 640 / 480 / 320 / 256 (measurement only)
+- [x] YOLO11-small on device: PCC 0.99991, 3.05 ms per frame
