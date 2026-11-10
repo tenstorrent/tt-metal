@@ -2,11 +2,10 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""FLUX 3 Klein's ring joint SDPA at its served per-device shapes (Blackhole Galaxy, SP8 x TP4), on both compute paths:
-the compute_common.hpp path (fp32 dest, fp32 score block) and the streaming path with fp32 dest
-(SDPAProgramConfig.streaming_fp32_dest, bf16 score block), which Klein's attention selects. Checks: finite output,
-deterministic output (two calls, identical bytes), relative error and PCC against an fp64 reference on sampled query
-rows with the K tail masked at logical_n."""
+"""FLUX 3 Klein's ring joint SDPA at every per-device length of its chunk table (Blackhole Galaxy, SP8 x TP4), on the
+streaming compute path with fp32 dest, on the 12 x 9 grid and with the CCL row's cores added (116 cores). Checks: finite
+and deterministic output, error and PCC against an fp64 reference on sampled query rows with the K tail masked at
+logical_n, and byte-identical outputs on both grids."""
 
 from __future__ import annotations
 
@@ -16,7 +15,11 @@ from loguru import logger
 
 import ttnn
 
-from ....models.transformers.flux3_klein.transformer_block_flux3_klein import RING_SDPA_CHUNKS_STREAMING_BY_LOCAL_ROWS
+from ....models.transformers.flux3_klein.transformer_block_flux3_klein import (
+    RING_SDPA_CCL_ROW_START_X,
+    RING_SDPA_CHUNKS_BY_LOCAL_ROWS,
+    RING_SDPA_CHUNKS_STREAMING_BY_LOCAL_ROWS,
+)
 from ....parallel.manager import CCLManager
 from ....utils.tensor import bf16_tensor
 from ....utils.test import ring_params_8k
@@ -25,18 +28,13 @@ HEADS, HEAD_DIM, SP, TP = 24, 128, 8, 4
 VALID_TEXT = 320  # valid caption rows; the rest of the text bucket is the masked K tail
 Q_GAIN = 3.0  # peaked scores (std ~3), so the max / exp numerics matter
 SAMPLE_ROWS = 48
-
-# per-device rows, text bucket, (q, k) chunks as Klein's Flux3KleinAttention resolves them on the compute_common.hpp path
-# (the streaming path takes RING_SDPA_CHUNKS_STREAMING_BY_LOCAL_ROWS first); 4096 + 1 ref uses the 2048-row text bucket
-CASES = {
-    "2048": (2176, 1024, (128, 512)),
-    "2048_ref": (2688, 1024, (160, 512)),
-    "4096": (8320, 1024, (128, 640)),
-    "4096_ref": (8960, 2048, (128, 640)),
-}
-# measured (exp 11): compute_common.hpp path 4.0e-2 to 4.7e-2, streaming path 3.0e-2 to 3.1e-2
-MAX_REL_ERR = {False: 0.06, True: 0.045}
+MAX_REL_ERR = 0.045
 MIN_PCC = 0.998
+
+# per-device rows: text bucket (0: no text rows)
+TEXT_BUCKET_BY_ROWS = {2560: 4096, 2688: 1024, 2816: 2048, 3072: 4096, 8192: 0, 8320: 1024, 8960: 2048}
+# the chunks Klein's attention resolves on the streaming path: the streaming entry, else the shared table's
+CHUNKS = {**RING_SDPA_CHUNKS_BY_LOCAL_ROWS, **RING_SDPA_CHUNKS_STREAMING_BY_LOCAL_ROWS}
 
 
 def _reference(q, k, v, logical_n, rows_idx):
@@ -46,17 +44,14 @@ def _reference(q, k, v, logical_n, rows_idx):
     return torch.einsum("hrk,hkd->hrd", torch.softmax(s, dim=-1), vv)
 
 
-@pytest.mark.timeout(1800)
+@pytest.mark.timeout(2400)
 @pytest.mark.parametrize("device_params", [{**ring_params_8k, "l1_small_size": 65536}], indirect=True)
 @pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=True)
-@pytest.mark.parametrize("streaming_fp32_dest", [False, True], ids=["legacy", "streaming"])
-@pytest.mark.parametrize("case", list(CASES))
-def test_ring_sdpa_flux3_klein(*, mesh_device: ttnn.MeshDevice, case: str, streaming_fp32_dest: bool) -> None:
-    rows, text_bucket, chunks = CASES[case]
-    if streaming_fp32_dest:
-        chunks = RING_SDPA_CHUNKS_STREAMING_BY_LOCAL_ROWS.get(rows, chunks)
-    q_chunk, k_chunk = chunks
-    logical_n = rows * SP - (text_bucket - VALID_TEXT)
+@pytest.mark.parametrize("rows", sorted(CHUNKS))
+def test_ring_sdpa_flux3_klein(*, mesh_device: ttnn.MeshDevice, rows: int) -> None:
+    q_chunk, k_chunk = CHUNKS[rows]
+    bucket = TEXT_BUCKET_BY_ROWS[rows]
+    logical_n = rows * SP - (bucket - VALID_TEXT if bucket else 0)
 
     ccl = CCLManager(mesh_device=mesh_device, num_links=2, topology=ttnn.Topology.Ring)
     full = mesh_device.compute_with_storage_grid_size()
@@ -73,19 +68,19 @@ def test_ring_sdpa_flux3_klein(*, mesh_device: ttnn.MeshDevice, case: str, strea
         for t in host
     )
     empty = bf16_tensor(torch.zeros((1, HEADS // TP, 0, HEAD_DIM)), device=mesh_device)
-
-    program_config = ttnn.SDPAProgramConfig(
-        compute_with_storage_grid_size=grid,
-        q_chunk_size=q_chunk,
-        k_chunk_size=k_chunk,
-        exp_approx_mode=True,
-        streaming_fp32_dest=streaming_fp32_dest,
-    )
     compute_config = ttnn.init_device_compute_kernel_config(
         mesh_device.arch(), math_fidelity=ttnn.MathFidelity.HiFi2, math_approx_mode=False, fp32_dest_acc_en=True
     )
 
-    def call() -> torch.Tensor:
+    def call(ccl_row_start_x: int | None) -> torch.Tensor:
+        program_config = ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=grid,
+            q_chunk_size=q_chunk,
+            k_chunk_size=k_chunk,
+            exp_approx_mode=True,
+            streaming_fp32_dest=True,
+            ccl_row_sdpa_start_x=ccl_row_start_x,
+        )
         out = ttnn.transformer.ring_joint_scaled_dot_product_attention(
             q,
             k,
@@ -114,20 +109,18 @@ def test_ring_sdpa_flux3_klein(*, mesh_device: ttnn.MeshDevice, case: str, strea
             ttnn.deallocate(t)
         return result
 
-    first = call()
-    second = call()
-
-    assert torch.isfinite(first.float()).all(), "non-finite attention output"
-    assert torch.equal(first.view(torch.int16), second.view(torch.int16)), "two identical calls differ"
-
     rows_idx = torch.linspace(0, rows * SP - 1, SAMPLE_ROWS).long()
     ref = _reference(host[0], host[1], host[2], logical_n, rows_idx)
-    got = first[0][:, rows_idx].double()
-    rel = ((got - ref).norm() / ref.norm()).item()
-    pcc = torch.corrcoef(torch.stack([got.flatten(), ref.flatten()]))[0, 1].item()
-    logger.info(
-        f"klein ring SDPA {case} rows {rows} logical_n {logical_n} chunks ({q_chunk}, {k_chunk}) "
-        f"streaming_fp32_dest={streaming_fp32_dest}: rel err vs fp64 {rel:.3e}, PCC {pcc:.6f}"
-    )
-    assert rel <= MAX_REL_ERR[streaming_fp32_dest], f"rel err {rel:.3e} > {MAX_REL_ERR[streaming_fp32_dest]}"
-    assert pcc >= MIN_PCC, f"PCC {pcc:.6f} < {MIN_PCC}"
+    outputs = {}
+    for label, start_x in (("108", None), ("116", RING_SDPA_CCL_ROW_START_X)):
+        first, second = call(start_x), call(start_x)
+        assert torch.isfinite(first.float()).all(), f"{label}: non-finite attention output"
+        assert torch.equal(first.view(torch.int16), second.view(torch.int16)), f"{label}: two identical calls differ"
+        got = first[0][:, rows_idx].double()
+        rel = ((got - ref).norm() / ref.norm()).item()
+        pcc = torch.corrcoef(torch.stack([got.flatten(), ref.flatten()]))[0, 1].item()
+        logger.info(f"rows {rows} chunks ({q_chunk}, {k_chunk}) {label} cores: rel err {rel:.3e}, PCC {pcc:.6f}")
+        assert rel <= MAX_REL_ERR, f"{label}: rel err {rel:.3e} > {MAX_REL_ERR}"
+        assert pcc >= MIN_PCC, f"{label}: PCC {pcc:.6f} < {MIN_PCC}"
+        outputs[label] = first
+    assert torch.equal(outputs["108"].view(torch.int16), outputs["116"].view(torch.int16)), "116 != 108 cores"

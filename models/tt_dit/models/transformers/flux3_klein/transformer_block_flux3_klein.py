@@ -42,12 +42,15 @@ RING_SDPA_CHUNKS_BY_LOCAL_ROWS: dict[int, tuple[int, int]] = {
     8960: (128, 640),
 }
 
-# Streaming path only: its smaller score block fits q 160 x k 640 at 8320 rows (3 rounds of 160 instead of 4 of 128).
+# Streaming path on the 116-core grid (12 x 9 + the CCL row's 8 free cores): 2 rounds of q 224 at the 4096 rows,
+# 3 rounds of q 160 at 4096 + 1 reference (2048-row text bucket).
 RING_SDPA_CHUNKS_STREAMING_BY_LOCAL_ROWS: dict[int, tuple[int, int]] = {
-    8320: (160, 640),
-    # 4096x4096 + 1 reference, 2048-row text bucket: 2 rounds of q 256
-    8960: (256, 512),
+    8192: (224, 512),
+    8320: (224, 512),
+    8960: (160, 512),
 }
+# SDPA also runs on the CCL row's cores from this x (the all-gather keeps x < 4 with 2 links)
+RING_SDPA_CCL_ROW_START_X = 4
 
 
 class Flux3KleinAttention(Attention):
@@ -76,6 +79,7 @@ class Flux3KleinAttention(Attention):
                 )
             config = self.ring_sdpa_program_config[key]
         config.streaming_fp32_dest = self.ring_sdpa_streaming_fp32_dest
+        config.ccl_row_sdpa_start_x = RING_SDPA_CCL_ROW_START_X if self.ring_sdpa_streaming_fp32_dest else None
         return config
 
 
