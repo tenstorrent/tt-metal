@@ -360,18 +360,44 @@ class DSparkSpeculator:
             out = model.decode_prompt_traced(prompt, start_pos)
         finally:
             self._stall.cancel()
-        end = start_pos + len(prompt)
-        self._next = self._next_token(out)
-        self._pos = end
+        return self.start(self._next_token(out), start_pos + len(prompt))
+
+    def start(self, token: int, pos: int) -> int:
+        """Start from what plain decode left: every position before ``pos`` is in the caches and the drafter's
+        rings, and ``token`` (the target's pick from position ``pos - 1``) goes in at ``pos``. Drafts its
+        successors; returns ``token``. :meth:`prefill` ends here; a caller that fed the prompt itself (a server's
+        scheduler) starts here."""
+        self._next = token
+        self._pos = pos
         self._rejected = []
         self._row0_dispatched = False
-        self._stall.enter("prefill: draft")
+        self._stall.enter("start: draft")
         try:
-            self._proposals = self._draft(self._next, end - 1)
+            self._proposals = self._draft(token, pos - 1)
         finally:
             self._stall.cancel()
-        logger.info(f"[spec] prefilled to {self._pos}: first token {self._next}, drafts {self._proposals}")
-        return self._next
+        logger.info(f"[spec] started at {pos}: first token {token}, drafts {self._proposals}")
+        return token
+
+    def finish(self) -> None:
+        """Hand the model back to plain decode, which feeds the last returned token at :attr:`position` next:
+        drop the round's first row the last :meth:`step` dispatched ahead, if any, read every output still
+        unread and undo the rejected rows (:meth:`~.model.DeepSeekV41Model.spec_fixup`). A :meth:`start` (or
+        :meth:`prefill`) may follow."""
+        model = self.model
+        if self._row0_dispatched:
+            if model.dspark is not None:
+                model.spec_release_writes()
+            model.spec_discard_outputs(1)
+            self._rejected.append(self._pos)
+            self._row0_dispatched = False
+        self._stall.enter(f"finish at {self._pos}: drain_stale_outputs, spec_fixup({self._rejected})")
+        try:
+            model.drain_stale_outputs()
+            model.spec_fixup(self._rejected)
+        finally:
+            self._stall.cancel()
+        self._rejected = []
 
     def step(self, budget: Optional[int] = None, stop_ids: Sequence[int] = ()) -> list[int]:
         """One verify round; returns the tokens it emits (1 to ``drafts + 1``).
@@ -544,24 +570,38 @@ class DSparkSpeculator:
             _log_round(self, p, emitted, phases)
         return emitted
 
-    def generate(self, max_new_tokens: int, stop_ids: Sequence[int] = ()) -> list[int]:
-        """Rounds until ``max_new_tokens`` (beyond the first token :meth:`prefill` returned) or a stop id.
+    def generate(
+        self,
+        max_new_tokens: int,
+        stop_ids: Sequence[int] = (),
+        on_tokens: Optional[Callable[[list[int]], None]] = None,
+        should_stop: Optional[Callable[[], bool]] = None,
+    ) -> list[int]:
+        """Rounds until ``max_new_tokens`` (beyond the first token :meth:`prefill` returned), a stop id, or
+        ``should_stop()`` (asked before every round) is true; ``on_tokens`` gets each round's tokens.
 
-        A round cut short by either keeps only the tokens up to the cut: the rows it accepted past the
-        cut count as rejected, so :meth:`extend` can carry on from the last returned token. The streamed
-        verify's unwanted outputs are read off before it returns.
+        A round cut short by a stop id or the count keeps only the tokens up to the cut: the rows it accepted
+        past the cut count as rejected, so :meth:`extend` can carry on from the last returned token. The
+        streamed verify's unwanted outputs are read off before it returns. After ``should_stop`` the last round
+        may have dispatched the next one's first row, which :meth:`extend` and :meth:`finish` account for.
         """
         out: list[int] = []
         stop = set(stop_ids)
         done = self._next in stop
         while not done and len(out) < max_new_tokens:
+            if should_stop is not None and should_stop():
+                break
             emitted = self.step(max_new_tokens - len(out), stop)
+            kept = emitted
             for keep, token in enumerate(emitted, start=1):
                 out.append(token)
                 if token in stop or len(out) == max_new_tokens:
                     self._cut_round(emitted, keep)
+                    kept = emitted[:keep]
                     done = True
                     break
+            if on_tokens is not None:
+                on_tokens(kept)
             if _VERBOSE and (len(out) % 10 < len(emitted) or done):
                 logger.info(f"[spec] generate: {len(out)}/{max_new_tokens} tokens, pos {self._pos}")
         self._stall.enter("generate: drain_stale_outputs")
@@ -604,11 +644,7 @@ class DSparkSpeculator:
         and seed the drafter on them; returns the first token generated after them, as :meth:`prefill`."""
         start = self._pos
         logger.info(f"[spec] extend: {len(tokens)} tokens from {start}, next {self._next}, rejected {self._rejected}")
-        self._stall.enter(f"extend at {start}: spec_fixup({self._rejected})")
-        try:
-            self.model.spec_fixup(self._rejected)
-        finally:
-            self._stall.cancel()
+        self.finish()
         return self.prefill([self._next, *tokens], start)
 
     @property
