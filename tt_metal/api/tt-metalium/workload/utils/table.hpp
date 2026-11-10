@@ -74,13 +74,16 @@ private:
     // Small-vector backing: Tables typically hold only a handful of entries, so the inline storage
     // avoids a heap allocation in the common case. Larger Tables spill to the heap with identical
     // semantics, so correctness never depends on the inline capacity.
-    using Storage = ttsl::SmallVector<std::pair<K, V>, 8>;
+    static constexpr std::size_t kInlineStorageCapacity = 8;
+    using Storage = ttsl::SmallVector<std::pair<K, V>, kInlineStorageCapacity>;
 
     // Open-addressing hash index over entries_, with linear probing. A slot holds 0 when empty, or
     // p when it refers to entries_[p - 1]. The inline capacity holds the index of a full inline
     // Storage at the maximum load factor, so small Tables stay heap-free.
-    using Index = ttsl::SmallVector<std::uint32_t, 16>;
-    static constexpr std::size_t kMinIndexSlots = 16;
+    static constexpr std::size_t kInlineIndexCapacity = 2 * kInlineStorageCapacity;
+    static_assert(std::has_single_bit(kInlineIndexCapacity), "The index size must be a power of two");
+    using Index = ttsl::SmallVector<std::uint32_t, kInlineIndexCapacity>;
+    static constexpr std::size_t kMinIndexSlots = kInlineIndexCapacity;
 
 public:
     // Wraps a backing iterator and re-presents the stored pair it points at as the
