@@ -27,6 +27,7 @@ with ``null_block=0``.
 
 from __future__ import annotations
 
+import dataclasses
 import os
 import sys
 import time
@@ -76,6 +77,11 @@ def _device_top_k() -> int:
 
 
 DEVICE_TOP_K = _device_top_k()
+# the resident-input chain (DECODE_RELOAD_CONTRACT.md): a steady device-sampled decode keeps its tokens and positions on
+# device (reload_inputs=False), so vLLM's async scheduling builds step N + 1 while step N runs -- the server's host
+# input work (~3-5 ms per step at ISL 128, py-spy 2026-11-10) overlaps the device step instead of adding to it.
+# GLM53_STACK_ASYNC_DECODE=0: every decode reloads its inputs (no async scheduling)
+ASYNC_DECODE = DEVICE_TOP_K > 1 and os.environ.get("GLM53_STACK_ASYNC_DECODE", "1") == "1"
 
 
 def _fabric_capability() -> dict | None:
@@ -189,7 +195,7 @@ class GLM53StackForCausalLM:
         "device_top_k_unbounded_as": DEVICE_TOP_K if DEVICE_TOP_K > 1 else None,
         "supports_device_penalties": False,
         "supports_device_grammar": False,
-        "supports_async_decode": False,
+        "supports_async_decode": ASYNC_DECODE,
         "supports_async_spec_decode": False,
         "supports_compact_host_logits": False,
         "supports_selective_host_readback": False,
@@ -472,9 +478,22 @@ class GLM53StackForCausalLM:
                 "speculative decode is not declared by the stack adapter (supports_spec_decode False)"
             )
         if not reload_inputs:
-            raise ValueError(
-                "reload_inputs=False: the stack adapter declares no resident-input chain (supports_async_decode is "
-                "False), every decode reloads its inputs"
+            if not ASYNC_DECODE:
+                raise ValueError(
+                    "reload_inputs=False: the stack adapter declares no resident-input chain (supports_async_decode is "
+                    "False), every decode reloads its inputs"
+                )
+            if slot_remap is not None or reload_sampling_params or reset_sampling_state or sampling_params is None:
+                raise ValueError(
+                    "a resident chain step (reload_inputs=False) carries no slot remap and no sampling reload / reset, "
+                    "and is device-sampled (DECODE_RELOAD_CONTRACT.md: those come with reload_inputs)"
+                )
+            return self._chain_decode(
+                self._kv(kv_cache),
+                int(torch.as_tensor(tokens).numel()),
+                page_table if reload_page_table else None,
+                enable_trace,
+                read_from_device,
             )
         kv = self._kv(kv_cache)
         tokens = torch.as_tensor(tokens).reshape(-1).to(torch.int64)
@@ -521,6 +540,43 @@ class GLM53StackForCausalLM:
         if isinstance(out, DecodeOutput):
             return out
         return self.gen.process_decode_output_host(out, is_tokens=True).to(torch.int32)
+
+    def _chain_decode(self, kv, B: int, page_table, enable_trace: bool, read_from_device: bool):
+        """A resident chain step: every live generator slot decodes from its device-resident token and position
+        (``Glm53Generator.decode_forward(reload_inputs=False)``), in the generator's slot order. The plugin reads its
+        rows in its own order, so the output rows are the alias (plugin row ``i`` = generator slot ``alias[i]``; the
+        layout is the last reload step's: a chain step carries no remap); a page-table refresh
+        (``reload_page_table``) is reordered from plugin rows to the live slots the same way."""
+        b = self.gen._binding(kv)
+        live = [s for s in range(self.max_batch) if b.slots[s].active and not b.slots[s].finished]
+        pt = None
+        if page_table is not None:
+            rows = trim_page_rows(page_table)
+            row_of = {self._alias[i]: i for i in range(min(B, int(rows.shape[0])))}
+            missing = [s for s in live if s not in row_of]
+            if missing:
+                raise ValueError(f"page-table refresh without rows for the live generator slots {missing}")
+            pt = torch.stack([rows[row_of[s]] for s in live]) if live else None
+        empty = torch.zeros(0, dtype=torch.int64)
+        out = self.gen.decode_forward(
+            empty,
+            empty,
+            page_table=pt,
+            kv_cache=kv,
+            enable_trace=enable_trace,
+            sampling_params=[],
+            read_from_device=read_from_device,
+            reload_inputs=False,
+            reload_page_table=pt is not None,
+            reload_sampling_params=False,
+            reset_sampling_state=False,
+        )
+        order = self._alias[:B]
+        if isinstance(out, DecodeOutput):
+            return dataclasses.replace(out, rows=order)
+        by_slot = dict(zip(live, torch.as_tensor(out).reshape(-1).tolist()))
+        ids = torch.tensor([by_slot.get(s, 0) for s in order], dtype=torch.int32)
+        return ids.reshape(B, 1)
 
     # ================================================================================= slot aliasing
     def _permuted(self, slot_remap) -> list:

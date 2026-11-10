@@ -77,12 +77,11 @@ def test_module_imports_without_ttnn():
         caps["supports_sample_on_device"] is True and caps["max_device_top_k"] == gvs.DEVICE_TOP_K == 10
     )  # the 8x4 default
     assert caps["device_top_k_unbounded_as"] == 10  # GLM sets no top-k: default requests stay on the device
-    assert caps["supports_device_penalties"] is False
+    assert caps["supports_device_penalties"] is False and caps["supports_async_decode"] is True
     assert caps["fabric_config"] is None
     for key in (
         "supports_prefix_caching",
         "confirms_prefix_cache_hits",
-        "supports_async_decode",
         "supports_async_spec_decode",
         "supports_spec_decode",
         "supports_device_grammar",
@@ -659,6 +658,7 @@ def test_refusals(monkeypatch):
     """Undeclared routes fail loudly: sampled rows on the device route, selective readback, speculative kwargs, the
     legacy reload keyword, a resident-input chain, multimodal rows."""
     monkeypatch.setattr(gvs, "DEVICE_TOP_K", 1)  # the greedy-only construction (GLM53_STACK_DEVICE_SAMPLING=0)
+    monkeypatch.setattr(gvs, "ASYNC_DECODE", False)  # (it follows the device sampler)
     ad, backend, gen, kv = _adapter()
     p = _prompt(10, 1)
     sampled = SimpleNamespace(temperature=[0.8], top_k=[50], top_p=[0.9], seed=[None])
@@ -792,3 +792,69 @@ def test_device_top_k_follows_the_head_gather(monkeypatch):
     assert gvs._device_top_k() == 32
     monkeypatch.setenv("GLM53_STACK_DEVICE_SAMPLING", "0")
     assert gvs._device_top_k() == 1
+
+
+def test_resident_chain_decode_follows_the_reload_steps():
+    """The async contract: after a reload step, steady chain steps (reload_inputs=False: nothing staged from the host)
+    continue every live slot from its device-resident token, the rows come back in the plugin's order through the slot
+    alias, and a page-table-only refresh lets a slot cross a block boundary; a chain step that carries a remap is
+    refused."""
+    assert gvs.ASYNC_DECODE and GLM53StackForCausalLM.model_capabilities["supports_async_decode"] is True
+    ad, backend, gen, kv = _adapter()
+    prompts = [_prompt(60, 3), _prompt(62, 9)]
+    out = ad.prefill_forward(
+        _history(prompts),
+        page_table=_table([_blocks(i, len(p)) for i, p in enumerate(prompts)], 2),
+        kv_cache=kv,
+        prompt_lens=[len(p) for p in prompts],
+        start_pos=[0, 0],
+        empty_slots=[0, 1],
+        sampling_params=_greedy(2),
+    )
+    cur, pos = [int(v) for v in out[0].reshape(-1).tolist()], [60, 62]
+    # the reload step with a 2-cycle gather (plugin rows [1, 0]: the alias absorbs it)
+    remap = [1, 0, 2, 3]
+    rows = [_blocks(1, pos[1] + 1), _blocks(0, pos[0] + 1)]
+    got = ad.process_decode_output_host(
+        _decode(ad, kv, [cur[1], cur[0], 0, 0], [pos[1], pos[0], -1, -1], rows, remap=remap), is_tokens=True
+    )
+    assert got.reshape(-1).tolist()[:2] == [(cur[1] + 1) % VOCAB, (cur[0] + 1) % VOCAB]
+    nxt = got.reshape(-1).tolist()[:2]  # plugin row order: [request 1, request 0]
+    pos = [pos[0] + 1, pos[1] + 1]
+
+    def chain(page_rows=None):
+        kw = dict(
+            page_table=None if page_rows is None else _table(page_rows, B),
+            kv_cache=kv,
+            enable_trace=True,
+            read_from_device=False,
+            sampling_params=_greedy(B),
+            slot_remap=None,
+            reload_inputs=False,
+            reload_page_table=page_rows is not None,
+            reload_sampling_params=False,
+            reset_sampling_state=False,
+        )
+        h = ad.decode_forward(torch.zeros(B, 1, dtype=torch.int32), torch.full((B,), -1), **kw)
+        assert isinstance(h, DecodeOutput) and h.rows == ad._alias[:B]
+        return ad.process_decode_output_host(h, is_tokens=True).reshape(-1).tolist()[:2]
+
+    for _ in range(3):  # positions 61..63 / 63..65: request 1 crosses 64 -> its next block arrives by a page refresh
+        if pos[1] + 1 > 64:
+            res = chain([_blocks(1, pos[1] + 1), _blocks(0, pos[0] + 1)])
+        else:
+            res = chain()
+        assert res == [(t + 1) % VOCAB for t in nxt]
+        nxt, pos = res, [pos[0] + 1, pos[1] + 1]
+    for row in range(2):  # plugin row r decoded in generator slot alias[r]: its last input = its token before
+        assert kv.state[ad._alias[row]][-1] == (nxt[row] - 1) % VOCAB
+    with expect_error(ValueError, "resident chain step"):
+        ad.decode_forward(
+            torch.zeros(B, 1, dtype=torch.int32),
+            torch.full((B,), -1),
+            page_table=None,
+            kv_cache=kv,
+            sampling_params=_greedy(B),
+            slot_remap=torch.tensor(remap),
+            reload_inputs=False,
+        )
