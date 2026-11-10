@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import torch
+from loguru import logger
 
 import ttnn
 
@@ -14,6 +15,7 @@ from ....layers.module import Module
 from ....layers.normalization import DistributedLayerNorm
 from ....parallel.config import DiTParallelConfig
 from ....parallel.manager import CCLManager
+from ....utils.matmul import get_agmm_config
 from ....utils.tensor import prepare_weight_for_concatenated_input
 
 HIDDEN = 3072
@@ -47,6 +49,9 @@ RING_SDPA_CHUNKS_STREAMING_BY_LOCAL_ROWS: dict[int, tuple[int, int]] = {
 }
 # SDPA also runs on the CCL row's cores from this x (the all-gather keeps x < 4 with 2 links)
 RING_SDPA_CCL_ROW_START_X = 4
+LINEAR1_N_CORES = 9  # N cores of linear1's transposed grid
+LINEAR1_MIN_ROWS = 8192  # linear1 only at the 4096 row counts, where it is bit-identical to QKV + MLP-in
+_LINEAR1_K_BLOCK: dict[int, int | None] = {}  # rows -> the K block QKV and MLP-in share there (None: they differ)
 
 
 class Flux3KleinAttention(Attention):
@@ -164,6 +169,128 @@ class Flux3KleinTransformerBlock(Module):
         self._ccl_manager = ccl_manager
         self._parallel_config = parallel_config
         self._mesh_device = device
+        self._barrier_tile = None
+        self._l1_weight = None  # [W_qkv | W_mlp], built once from the loaded weights, outside the state dict
+        self._l1_disabled = False
+
+    def _tp_barrier(self) -> None:
+        """A one-tile all-gather over the TP axis: no device of the group gets past it before every device reached it."""
+        if self._barrier_tile is None:
+            self._barrier_tile = ttnn.from_torch(
+                torch.zeros(1, 1, 32, 32), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self._mesh_device
+            )
+        self._ccl_manager.all_gather(
+            self._barrier_tile,
+            dim=3,
+            mesh_axis=self._parallel_config.tensor_parallel.mesh_axis,
+            use_hyperparams=False,
+            use_persistent_buffer=True,
+        )
+
+    def _linear1_k_block(self, rows: int, n_qkv: int, n_mlp: int, full) -> int | None:
+        """The K block QKV and MLP-in resolve at this row count, or None if they differ. linear1 sums K in the same
+        blocks and order for every N block, so its outputs are bit-identical to the two separate ops."""
+        kb = _LINEAR1_K_BLOCK.get(rows)
+        if kb is None and rows not in _LINEAR1_K_BLOCK:
+            tp = self._parallel_config.tensor_parallel
+            grid = Attention.get_core_grid(rows, full)
+            common = {
+                "full_grid": full,
+                "cluster_size": tp.factor,
+                "num_links": self._ccl_manager.num_links,
+                "core_grid": grid,
+                "use_heuristic": True,
+            }
+            _, cfg_q, _ = get_agmm_config(rows, HIDDEN, n_qkv, **common)
+            _, cfg_m, _ = get_agmm_config(rows, HIDDEN, n_mlp, fuse_swiglu=self.proj_mlp.fuse_swiglu, **common)
+            kb = cfg_q.K_block_size if cfg_q.K_block_size == cfg_m.K_block_size else None
+            _LINEAR1_K_BLOCK[rows] = kb
+            logger.info(f"linear1 rows {rows}: K block QKV {cfg_q.K_block_size} / MLP-in {cfg_m.K_block_size}")
+        return kb
+
+    def _linear1(self, x_norm: ttnn.Tensor) -> list[ttnn.Tensor] | None:
+        """QKV + MLP-in as one all-gather-matmul over [W_qkv | W_mlp] per device (swiglu_chunk 3, grouped N split),
+        with QKV's blocking and grid and MLP-in's compute config. Returns [q, k, v, mlp]."""
+        attn = self.attn
+        if self._l1_weight is None:
+            self._l1_weight = ttnn.concat([attn.to_qkv.weight.data, self.proj_mlp.weight.data], dim=-1)
+        tp = self._parallel_config.tensor_parallel
+        n_qkv = attn.to_qkv.weight.data.padded_shape[-1]
+        n_mlp = self.proj_mlp.weight.data.padded_shape[-1]
+        full = self._mesh_device.compute_with_storage_grid_size()
+        # the grouped N split needs the 72 QKV / 144 MLP tiles per device to split evenly over the N cores
+        if full.y < LINEAR1_N_CORES:
+            raise RuntimeError(f"linear1 needs {LINEAR1_N_CORES} N cores, grid {full.x}x{full.y}")
+        grid = ttnn.CoreCoord(full.x, LINEAR1_N_CORES)
+        k_block = self._linear1_k_block(int(x_norm.padded_shape[-2]), n_qkv, n_mlp, full)
+        if k_block is None:
+            return None
+        _, cfg, workers = get_agmm_config(
+            x_norm.padded_shape[-2],
+            HIDDEN,
+            n_qkv,
+            full_grid=full,
+            cluster_size=tp.factor,
+            num_links=self._ccl_manager.num_links,
+            core_grid=grid,
+            use_heuristic=True,
+        )
+        if cfg.N_block_size not in (4, 8) or cfg.K_block_size != k_block:
+            cfg = ttnn.MinimalMatmulConfig(
+                M_block_size=cfg.M_block_size,
+                K_block_size=k_block,
+                N_block_size=cfg.N_block_size if cfg.N_block_size in (4, 8) else 8,
+                subblock_h=cfg.subblock_h,
+                subblock_w=min(cfg.subblock_w, 4),
+                compute_with_storage_grid_size=cfg.compute_with_storage_grid_size,
+            )
+        buf = self._ccl_manager.get_ag_ping_pong_buffer(x_norm.shape, -1, tp.mesh_axis, dtype=x_norm.get_dtype())
+        third = n_qkv // 3
+        return list(
+            ttnn.experimental.all_gather_minimal_matmul_async(
+                input_tensor=x_norm,
+                weight_tensor=self._l1_weight,
+                bias_tensor=None,
+                config=cfg,
+                compute_kernel_config=self.proj_mlp.compute_config,
+                persistent_output_buffer=buf,
+                multi_device_global_semaphore=self._ccl_manager.get_ag_ping_pong_semaphore(tp.mesh_axis),
+                num_links=self._ccl_manager.num_links,
+                topology=self._ccl_manager.topology,
+                cluster_axis=tp.mesh_axis,
+                barrier_semaphore=None,
+                force_transpose=True,
+                num_workers_per_link=workers,
+                num_buffers_per_channel=attn.to_qkv._ag_num_buffers_per_channel,
+                chunks=4,
+                chunk_sizes=[third, third, third, n_mlp],
+                swiglu_chunk=3,
+            )
+        )
+
+    def _forward_linear1(self, x, x_norm, rope, gate, logical_length) -> ttnn.Tensor | None:
+        try:
+            l1_out = self._linear1(x_norm)
+        except RuntimeError as err:
+            logger.warning(f"linear1 rejected for {tuple(x_norm.shape)} ({str(err)[:200]}); using QKV + MLP-in")
+            self._l1_disabled = True
+            if self._l1_weight is not None:
+                ttnn.deallocate(self._l1_weight)
+                self._l1_weight = None
+            return None
+        if l1_out is None:
+            return None
+        q, k, v, mlp = l1_out
+        attn, _ = self.attn.forward(
+            sequence_1=x_norm,
+            sequence_1_rope=rope,
+            sequence_1_length=logical_length,
+            precomputed_qkv_flat=(q, k, v),
+        )
+        # linear1 moved MLP-in's all-gather ahead of the attention: restore the TP ordering it gave before proj_out,
+        # and let proj_out's reduce-scatter handshake with its peers before writing into them
+        self._tp_barrier()
+        return self.proj_out.forward_fused_addcmul([attn, mlp], x, gate, scalar=1.0, rs_barrier=True)
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         for src, dst in (("q_proj", "attn.to_q"), ("k_proj", "attn.to_k"), ("v_proj", "attn.to_v")):
@@ -195,6 +322,15 @@ class Flux3KleinTransformerBlock(Module):
     ) -> ttnn.Tensor:
         shift, scale_plus_one, gate = mod
         x_norm = ttnn.squeeze(self.norm(ttnn.unsqueeze(x, 0), dynamic_weight=scale_plus_one, dynamic_bias=shift), 0)
+        if (
+            int(x_norm.padded_shape[-2]) >= LINEAR1_MIN_ROWS
+            and self._ccl_manager.topology == ttnn.Topology.Ring
+            and not self._l1_disabled
+            and rope is not None
+        ):
+            out = self._forward_linear1(x, x_norm, rope, gate, logical_length)
+            if out is not None:
+                return out
         attn, _ = self.attn.forward(sequence_1=x_norm, sequence_1_rope=rope, sequence_1_length=logical_length)
         mlp = self.proj_mlp(
             x_norm,

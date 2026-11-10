@@ -73,6 +73,10 @@ void bind_all_gather_minimal_matmul_async(nb::module_& mod) {
             for supported ops and parameters. Typical examples include relu/gelu/etc. If provided, it is applied
             after bias (if any) and before the tile is written out.
 
+        swiglu_chunk : int, default: -1
+            linear1 (QKV + MLP-in in one op): the last chunk's weight columns are a tile-pair-interleaved [gate|up]
+            block that gets the fused SwiGLU (output width halves); the chunks before it are plain. Each N core
+            computes an equal share of both groups. Needs explicit chunk_sizes and the transposed core grid. -1 = off.
         fuse_swiglu : bool, default: False
             If True, applies SwiGLU activation fused into the matmul: the weight tensor's N columns are
             interpreted as a tile-pair-interleaved [gate|up] layout — column tile 2p is the gate and 2p+1 is
@@ -253,7 +257,8 @@ void bind_all_gather_minimal_matmul_async(nb::module_& mod) {
             nb::arg("fsdp_topology") = nb::none(),
             nb::arg("fuse_swiglu") = false,
             nb::arg("chunk_sizes") = std::vector<uint32_t>{},
-            nb::arg("transpose_core_grid") = nb::none()});
+            nb::arg("transpose_core_grid") = nb::none(),
+            nb::arg("swiglu_chunk") = -1});
 }
 
 }  // namespace ttnn::operations::experimental::ccl

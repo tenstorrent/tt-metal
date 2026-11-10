@@ -16,7 +16,7 @@
 #include "api/dataflow/circular_buffer.h"
 #include "ttnn/operations/common/shared_with_host/runtime_length.hpp"
 
-#ifdef FUSE_SWIGLU
+#if defined(FUSE_SWIGLU) || defined(GROUPED_N)
 // Fused SwiGLU output stage. The matmul produced an interleaved gate/up block in `in_cb`:
 // within each M row, column tile 2p is the gate projection and 2p+1 the up projection (the
 // weight was tile-pair interleaved on the host). Each pair emits one output tile = silu(gate)*up,
@@ -69,7 +69,17 @@ void swiglu_block(uint32_t in_cb, uint32_t bias_cb, uint32_t out_cb, uint32_t M_
         cb_push_back(out_cb, out_N_block_tiles);
     }
 }
-#endif  // FUSE_SWIGLU
+#endif  // FUSE_SWIGLU || GROUPED_N
+
+#ifdef GROUPED_N
+// linear1 grouped N split (see matmul_dataflow_common.hpp grp_phys_n).
+inline uint32_t grp_phys_n(uint32_t v) {
+    constexpr uint32_t per_core = GRP_A_PER_CORE + GRP_B_PER_CORE;
+    const uint32_t c = v / per_core;
+    const uint32_t l = v - c * per_core;
+    return l < GRP_A_PER_CORE ? c * GRP_A_PER_CORE + l : GRP_A_TILES + c * GRP_B_PER_CORE + (l - GRP_A_PER_CORE);
+}
+#endif
 
 void copy_block(CircularBuffer& in_cb, CircularBuffer& out_cb, uint32_t M_block_tiles, uint32_t N_block_tiles) {
     copy_init(in_cb.get_cb_id());
@@ -471,6 +481,10 @@ void kernel_main() {
             uint32_t n_tile = N_start_tile + n_block_iter * N_block_tiles;
             uint32_t n_tile_end = std::min(n_tile + N_block_tiles, N_end_tile);
             current_N_block_tiles = n_tile_end - n_tile;
+#ifdef GROUPED_N
+            n_tile = grp_phys_n(n_tile);
+            n_tile_end = n_tile + current_N_block_tiles;
+#endif
             current_subblock_w = std::min(current_N_block_tiles, subblock_w);
 
             matmul_block_init(
@@ -507,7 +521,7 @@ void kernel_main() {
                      * fixed, so reusing would feed the previous iter's last K-block (=
                      * K_num_blocks-1) when the new iter wants K-block 0. Force fresh read.
                      */
-#ifndef IS_LINEAR
+#if !defined(IS_LINEAR) && !defined(K_FORWARD_ONLY)
                     if (n_block_iter < N_blocks_per_core - 1) {
                         // going to stride on N, so reuse in0
                         reuse_in0_block = true;
@@ -540,6 +554,21 @@ void kernel_main() {
             in2_cb.pop_front(N_block_tiles);
 #endif
             intermediate_cb.pop_front(out_block_num_tiles);
+
+#elif defined(GROUPED_N)
+            // linear1: group B blocks (gate / up pairs) -> SwiGLU at half width; group A: copied as is.
+            if (n_tile >= GRP_A_TILES) {
+                out_cb.reserve_back(out_block_num_tiles >> 1);
+                intermediate_cb.wait_front(out_block_num_tiles);
+                swiglu_block(
+                    intermediate_cb.get_cb_id(), in2_cb.get_cb_id(), out_cb.get_cb_id(), M_block_tiles, N_block_tiles);
+                intermediate_cb.pop_front(out_block_num_tiles);
+            } else {
+                out_cb.reserve_back(out_block_num_tiles);
+                intermediate_cb.wait_front(out_block_num_tiles);
+                copy_block(intermediate_cb, out_cb, M_block_tiles, N_block_tiles);
+                intermediate_cb.pop_front(out_block_num_tiles);
+            }
 
 #elif !defined(FUSE_TERNARY)
             out_cb.reserve_back(out_block_num_tiles);
