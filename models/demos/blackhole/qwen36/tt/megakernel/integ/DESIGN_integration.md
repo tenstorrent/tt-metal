@@ -132,3 +132,33 @@ build), that bucket runs op-by-op, with a logged reason (same pattern as `device
 - Final norm: `_spec_tail` applies the final RMSNorm. Under the deferred-norm contract the megakernel's output is
   the un-normed residual, which matches today's input to `_spec_tail`. OK.
 - Per-bucket programs × 8 buckets × kernel compile: check the JIT cache size and warm-up time at capture.
+
+## 10. Engine entry-point contract (agreed with the megakernel agent, spec v0.9.3)
+
+`engine/build.py` (integration track) — `build_engine(mesh, layer_types, n_users, weights_mk, kv_desc, gdn_desc, fabric_ctx, T=4)
+-> EngineProgram`:
+
+| member | meaning |
+|---|---|
+| `R` | rows per activation transfer: 4·n_users rounded up to {4, 8, 16, 32}; phase type 11 (GDN_STEP_U1) at n_users=1, else 4 |
+| `replaces_layers` | True: the program is the 64-layer stack. False: a stand-in; the op-by-op loop still runs on x_out |
+| `alloc_x_out()` | persistent replicated DRAM residual [1,1,n_users·T,5120] bf16 TILE; called in `prepare`, never inside a capture |
+| `launch(x_in, x_out, per_replay)` | one generic_op per pass, inside the trace; per_replay = the body's in-trace tensors (kvpos/ctrl/cos/sin/page tables) + GDN selectors, addresses only |
+
+- Residual: x_in = DRAM copy of the replicated RES40 x (un-normed). The engine prologue loads each device's 2 owned chunks,
+  computes layer-0 Σx² (no AR at entry). After the last layer's AG the owners write their chunk into x_out. The host converts
+  x_out back to RES40 for `_spec_tail` (a fresh tensor; x_out itself is never freed).
+- Fabric: the host guarantees a 1x8 FABRIC_1D_RING on axis 1 with 8 KB packets at device open and no other op on those links
+  during the generic_op. The engine opens/closes its 4 fabric connections inside the op and resets its monotonic global
+  semaphores at program end; the host never resets them.
+- Weights: the HF state dict through the model's transforms, packed ONCE into engine layouts (γ·NORM_FIX fold re-quantizes);
+  fallback = tile-granular repack of the model's TT tensors (lossless with γ unfolded). Layout functions:
+  `engine/layout_mlp.py` (v12), `engine/layout_attn.py` (mixed3 track, first cut at mk-mixed3 bbc60fc8345),
+  `engine/ar_phase.py` (AR).
+- KV: per attention layer paged BFP8 (MKA_KVDT=bfp8; BFP4 failed the output-length gate) + block size; page tables in
+  per_replay. GDN stays a stand-in until the GDN phases land.
+- Stage1 is active only on the DAR residual path (`_verify_dar` not None, rows ≤ 32) and never on kv-split variants.
+
+Kinds (`QWEN36_R16_MK_ENGINE_KIND`): `identity` (default until M3) copies x_in → x_out on 8 cores per device and keeps the
+layer loop, so the ident md5 equals flag-off only if the copy ran on every replay; `mixed3` raises until M3 (mixed3 attention
++ v12 MLP + MLP-AR), and Stage1Verify falls back op-by-op with the reason.
