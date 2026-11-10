@@ -9,6 +9,7 @@ from __future__ import annotations
 import gc
 
 import pytest
+from loguru import logger
 
 from ...pipelines.pipeline_api import Pipeline
 
@@ -161,3 +162,18 @@ def test_subclass_cannot_define_call() -> None:
         class _Bypass(Pipeline):
             def __call__(self) -> None:
                 pass
+
+
+@pytest.mark.parametrize(
+    ("offload_weights", "trace", "logged"), [(False, False, True), (False, True, False), (True, False, False)]
+)
+def test_resident_untraced_pipeline_says_so_once(offload_weights: bool, trace: bool, logged: bool) -> None:
+    messages: list[str] = []
+    sink = logger.add(messages.append, format="{message}")
+    try:
+        pipeline = _FakePipeline(offload_weights=offload_weights, trace=trace)
+        pipeline(prompts=["a"])
+    finally:
+        logger.remove(sink)
+    expected = ["_FakePipeline: static mesh, running untraced (offload_weights=False, trace=False)\n"]
+    assert [m for m in messages if "running untraced" in m] == (expected if logged else [])
