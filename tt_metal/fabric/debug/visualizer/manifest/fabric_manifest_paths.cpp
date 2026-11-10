@@ -48,6 +48,18 @@ std::string router_path(const RouterRef& router) {
         "{}/{}/{}", mesh_key(router.node.mesh_id), chip_key(router.node.chip_id), router_key(router.key));
 }
 
+std::string chip_path(FabricNodeId node) {
+    return fmt::format("{}/{}", mesh_key(node.mesh_id), chip_key(node.chip_id));
+}
+
+std::string chip_node_pointer(FabricNodeId node) {
+    return fmt::format("/meshes/{}/chips/{}", mesh_key(node.mesh_id), chip_key(node.chip_id));
+}
+
+std::string router_node_pointer(const RouterRef& router) {
+    return fmt::format("{}/routers/{}", chip_node_pointer(router.node), router_key(router.key));
+}
+
 RouterRef parse_router_path(std::string_view path) {
     const auto parts = split_path(path);
     TT_FATAL(parts.size() == 3, "Fabric manifest: {} is not a router path, such as M0/C7/E0", path);

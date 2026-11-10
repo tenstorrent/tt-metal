@@ -16,6 +16,12 @@
 namespace tt::tt_fabric::manifest {
 
 std::string router_path(const RouterRef& router);
+// A chip's path, e.g. "M0/C7": its router paths' first two parts.
+std::string chip_path(FabricNodeId node);
+// The JSON pointer text of a chip's and a router's node in the manifest, e.g. "/meshes/M0/chips/C7" and
+// "/meshes/M0/chips/C7/routers/E0".
+std::string chip_node_pointer(FabricNodeId node);
+std::string router_node_pointer(const RouterRef& router);
 RouterRef parse_router_path(std::string_view path);
 
 // A sibling is on the same chip and routing plane as the router `identity` on `node` that refers to it.

@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -607,6 +608,22 @@ struct ManifestFacts {
     Arch arch;
     std::vector<Mesh> meshes;
 };
+
+// The facts' mesh, or null when the manifest has none by that id.
+inline const Mesh* find_mesh(const ManifestFacts& facts, MeshId mesh_id) {
+    const auto mesh = std::ranges::find(facts.meshes, mesh_id, &Mesh::mesh_id);
+    return mesh == facts.meshes.end() ? nullptr : &*mesh;
+}
+
+// The facts' chip, or null when the manifest has none by that id.
+inline const Chip* find_chip(const ManifestFacts& facts, FabricNodeId node) {
+    const Mesh* mesh = find_mesh(facts, node.mesh_id);
+    if (mesh == nullptr) {
+        return nullptr;
+    }
+    const auto chip = std::ranges::find(mesh->chips, node, &Chip::fabric_node_id);
+    return chip == mesh->chips.end() ? nullptr : &*chip;
+}
 
 // ============ Vocabulary ============
 
