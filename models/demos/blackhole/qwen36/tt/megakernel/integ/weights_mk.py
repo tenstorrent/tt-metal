@@ -24,6 +24,7 @@ import os
 TILE = 32
 H = 5120
 QN = 112  # qkv(g) output tiles per chip (layout_attn.QN)
+NORM_FIX = 1.25 ** 0.5  # spec §19: stored pre-multiplied in the gamma table (fp32 product, one bf16 rounding)
 
 
 # ---------------------------------------------------------------------------------------------------------------- #
@@ -159,14 +160,15 @@ def gamma_pages(model):
     """kind 'gamma' (spec §19; the AR owner applies gamma at x delivery): per layer L and norm n (0 input_layernorm =
     attention_norm, 1 post_attention_layernorm = ffn_norm) one tile row [32, H] bf16 with gamma in row 0 (rows 1-31
     zero) -> page ((L * 2 + n) * 160 + chunk * 10 + t) = owner chunk ``chunk`` (16 x 10 tiles), tile t. Identical on
-    every device (each device reads its own owner chunks)."""
+    every device (each device reads its own owner chunks). Values: bf16(gamma * sqrt(1.25)), so the AR owner's bcast-rows
+mul (reads row 0) applies gamma and NORM_FIX at once."""
     import torch
 
     rows = []
     for l in model.layers:
         for norm in (l.attention_norm.norm, l.ffn_norm.norm):
             r = torch.zeros(TILE, H)
-            r[0] = norm_gamma(norm)
+            r[0] = norm_gamma(norm).float() * NORM_FIX  # fp32 here; the one bf16 rounding is at assembly
             rows.append(r)
     return torch.cat(rows).reshape(1, 1, -1, H)
 
