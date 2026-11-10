@@ -356,7 +356,7 @@ def run_model(
     if gate_fallback_mode is not None:
         block_kwargs["gate_fallback_mode"] = gate_fallback_mode
 
-    block = TtPrefillBlock(**block_kwargs)
+    block = TtPrefillBlock(**block_kwargs, moe_impl="ttmoe")  # (TtMoe: tt/moe_impl.py)
     ttnn.synchronize_device(mesh_device)
     profiler.end("tt_block_creation")
 
