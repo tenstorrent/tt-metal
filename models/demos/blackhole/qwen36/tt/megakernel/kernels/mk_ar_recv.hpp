@@ -218,7 +218,11 @@ struct Recv {
     }
 
     // one all-reduce (index it within the pass)
+#if defined(MKAR_ATYPE)   // engine MK_REAL_AAR: two call sites (MLP AR, attention AR) share one copy (EXT text budget)
+    __attribute__((noinline)) void iter(uint32_t it) {
+#else
     FORCE_INLINE void iter(uint32_t it) {
+#endif
         done_iters = it + 1;
         CircularBuffer cb_out(MKAR_CB_OUT);
         if (role != kRoleOwner) {
